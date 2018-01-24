@@ -2,6 +2,8 @@
 !> @version 1.0
 !> @author O. Desjardins
 program nga
+  use random, only: random_init,random_final
+  implicit none
   
   ! Code initialization ===================
   
