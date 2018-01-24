@@ -1,0 +1,4 @@
+f90EXE_sources += main.f90
+
+INCLUDE_LOCATIONS += $(NGA_HOME)/src/core
+VPATH_LOCATIONS   += $(NGA_HOME)/src/core

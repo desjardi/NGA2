@@ -1,0 +1,61 @@
+&PROBIN
+ dim_in = 2
+
+ prob_type = 1
+
+!!!! AMR
+
+! max_levs = 3
+! regrid_int = 2
+
+! n_cellx = 64
+! n_celly = 64
+! max_grid_size = 32
+ 
+! cluster_min_eff = 0.9d0
+! cluster_min_width = 4
+! cluster_blocking_factor = 4
+
+
+!!!! NON AMR
+! max_levs = 1
+
+! n_cellx = 64
+! n_celly = 64
+! max_grid_size = 32
+
+!!!! FIXED GRID
+
+ fixed_grids = 'grid_2d'
+
+ prob_lo_x = -0.5
+ prob_lo_y = -0.5
+
+ prob_hi_x = 0.5
+ prob_hi_y = 0.5
+
+ init_iter = 1
+ do_initial_projection = 1
+
+ max_step  = 500
+ plot_int  = 10
+ chk_int   = 100
+
+ stop_time = 2.5
+ cflfac = 0.9
+ init_shrink = 0.1
+
+ visc_coef = 0.001
+ diff_coef = 0.0
+
+ grav = -9.8d0
+
+ bcx_lo = 15
+ bcx_hi = 15
+ bcy_lo = 15
+ bcy_hi = 15
+
+ verbose = 1
+ mg_verbose = 1
+
+/

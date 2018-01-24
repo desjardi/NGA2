@@ -1,0 +1,235 @@
+###############################################################
+# Various definitions needed for compiling an NGA application #
+###############################################################
+
+# Check python version ########################################
+my_python_version := $(word 2, $(shell python --version 2>&1))
+ifneq ($(firstword $(sort 2.7 $(my_python_version))), 2.7)
+  $(error Python >= 2.7 required! Your version is $(my_python_version))
+endif
+###############################################################
+
+
+# Check for the presence of a ~ in NGA_HOME ###################
+ifneq (,$(findstring ~,$(NGA_HOME)))
+  $(warning *** NGA_HOME string constains ~ and make will not like it. So it is replaced.)
+  NGA_HOME := $(shell echo $(NGA_HOME))
+endif
+###############################################################
+
+
+# Obtain machine information ##################################
+include $(NGA_HOME)/tools/GNUMake/Make.machines
+###############################################################
+
+
+# Pre-process various compilation options here ################
+# Process PRECISION variable
+ifdef PRECISION
+  PRECISION := $(strip $(PRECISION))
+  PRECISION := $(shell echo $(PRECISION) | tr a-z A-Z)
+else
+  PRECISION := DOUBLE
+endif
+# Process PROFILE variable
+ifdef PROFILE
+  PROFILE := $(strip $(PROFILE))
+  PROFILE := $(shell echo $(PROFILE) | tr a-z A-Z)
+else
+  PROFILE := FALSE
+endif
+# Process DEBUG variable
+ifdef DEBUG
+  DEBUG := $(strip $(DEBUG))
+  DEBUG := $(shell echo $(DEBUG) | tr a-z A-Z)
+else
+  DEBUG := FALSE
+endif
+###############################################################
+
+
+# Extract NGA GIT version ####################################
+NGA_GIT_VERSION := $(shell cd $(NGA_HOME); git describe --abbrev=12 --dirty --always --tags)
+DEFINES += -DNGA_GIT_VERSION=\"$(NGA_GIT_VERSION)\"
+###############################################################
+
+
+# Various definitions #########################################
+# Link Fortran
+FORTLINK  	= UNDERSCORE
+# Fortran preprocessor
+FORT_CPP        = cpp -E -traditional-cpp -P
+# Scripts for building dependencies
+MKDEP		= perl $(NGA_HOME)/tools/scripts/mkdep
+MODDEP		= $(NGA_HOME)/tools/scripts/dep.py
+FORTPREP  	= perl $(NGA_HOME)/Tools/scripts/strip72 -c
+F90PREP  	= cat  # a placeholder in case we have to write something later
+CPP_PREFIX      = 
+CHECKFORT       = $(NGA_HOME)/tools/typechecker/typechecker.py
+MKCONFIG        = $(NGA_HOME)/tools/libamrex/mkconfig.py
+# Ranlib
+RANLIB          = ranlib
+# Object option
+EXE_OUTPUT_OPTION      = -o $(objBuildDir)/$*.o
+FORT_EXE_OUTPUT_OPTION = -o $(objBuildDir)/$*.o
+###############################################################
+
+
+# Load appropriate compiler information #######################
+lowercase_comp := $(shell echo $(COMP) | tr A-Z a-z)
+ifeq ($(lowercase_comp),$(filter $(lowercase_comp),gcc gnu g++ gfortran))
+  lowercase_comp = gnu
+  $(info Loading $(NGA_HOME)/tools/GNUMake/comps/gnu.mak...)
+  include        $(NGA_HOME)/tools/GNUMake/comps/gnu.mak
+else ifeq ($(lowercase_comp),$(filter $(lowercase_comp),intel ifort))
+  $(info Loading $(NGA_HOME)/tools/GNUMake/comps/intel.mak...)
+  include        $(NGA_HOME)/tools/GNUMake/comps/intel.mak
+else ifeq ($(lowercase_comp),cray)
+  $(info Loading $(NGA_HOME)/tools/GNUMake/comps/cray.mak...)
+  include        $(NGA_HOME)/tools/GNUMake/comps/cray.mak
+else ifeq ($(lowercase_comp),$(filter $(lowercase_comp),pgi pgf))
+  $(info Loading $(NGA_HOME)/tools/GNUMake/comps/pgi.mak...)
+  include        $(NGA_HOME)/tools/GNUMake/comps/pgi.mak
+else ifeq ($(lowercase_comp),$(filter $(lowercase_comp),ibm xlf))
+  $(info Loading $(NGA_HOME)/tools/GNUMake/comps/ibm.mak...)
+  include        $(NGA_HOME)/tools/GNUMake/comps/ibm.mak
+else ifeq ($(lowercase_comp),$(filter $(lowercase_comp),llvm clang clang++))
+  lowercase_comp = llvm
+  $(info Loading $(NGA_HOME)/tools/GNUMake/comps/llvm.mak...)
+  include        $(NGA_HOME)/tools/GNUMake/comps/llvm.mak
+else ifeq ($(lowercase_comp),nag)
+  $(info Loading $(NGA_HOME)/tools/GNUMake/comps/nag.mak...)
+  include        $(NGA_HOME)/tools/GNUMake/comps/nag.mak
+else
+  $(error Unknown compiler $(COMP). Supported compilers are gnu, intel, cray, pgi, ibm, llvm, and nag.)
+endif
+###############################################################
+
+
+# This is an example of target-dependent definition ###########
+#ifeq ($(MAKECMDGOALS),doc)
+#  ifneq ($(lowercase_comp),gnu)
+#    $(error make check_fortran only works with COMP=gnu)
+#  endif
+#endif
+###############################################################
+
+
+# List objects ################################################
+objStandalone	= 	$(CEXE_sources:%.cpp=%.o)	\
+			$(cEXE_sources:%.c=%.o)		\
+			$(fEXE_sources:%.f=%.o)		\
+			$(FEXE_sources:%.F=%.o)		\
+			$(f90EXE_sources:%.f90=%.o)	\
+			$(F90EXE_sources:%.F90=%.o)
+
+objForExecs	= $(addprefix $(objBuildDir)/, $(objStandalone))
+###############################################################
+
+
+
+# Compilation options #########################################
+fortran_fdecl_headers = $(filter %_f.H %_F.H,$(cEXE_headers) $(CEXE_headers) $(f90EXE_headers) $(F90EXE_headers) $(fEXE_headers) $(FEXE_headers))
+fortran_fdecl_headers_cppd = $(addprefix $(tmpBuildDir)/, $(fortran_fdecl_headers:%.H=%-cppd.h))
+
+includes	= -I. $(addprefix -I, $(INCLUDE_LOCATIONS))
+fincludes	= $(includes)
+fmoddir         = $(objBuildDir)
+
+libraries	= $(LIBRARIES) $(XTRALIBS)
+
+DEFINES		+= -DBL_FORT_USE_$(FORTLINK)			\
+                   -DBL_$(shell uname)
+CPPFLAGS	+= $(DEFINES)
+
+LDFLAGS		+= -L. $(addprefix -L, $(LIBRARY_LOCATIONS))
+###############################################################
+
+
+# Set the executable name here ################################
+ifeq ($(PRECISION),SINGLE)
+    PREC := sp
+else ifeq ($(PRECISION),DOUBLE)
+    PREC := dp
+else ifeq ($(PRECISION),QUADRUPLE)
+    PREC := qp
+else
+    $(error Unknown precision $(PRECISION). Supported precisions are single, double, quadruple.)
+endif
+PrecisionSuffix := $(PREC)
+
+ifeq ($(DEBUG),TRUE)
+    DebugSuffix := dbg
+else
+    DebugSuffix := opt
+endif
+
+CompilerSuffix := $(lowercase_comp)
+
+machineSuffix	= $(PrecisionSuffix).$(CompilerSuffix).$(DebugSuffix)
+optionsSuffix	= .$(machineSuffix)
+executable	= $(addsuffix $(optionsSuffix).exe, $(EXEBASE))
+###############################################################
+
+
+# For source code manipulation ################################
+CSRCALL		= $(CEXE_sources) $(CEXE_headers)
+cSRCALL		= $(cEXE_sources) $(cEXE_headers)
+fSRCALL		= $(fEXE_sources) $(fEXE_headers)
+FSRCALL		= $(FEXE_sources) $(FEXE_headers)
+f90SRCALL	= $(f90EXE_sources) $(f90EXE_headers)
+F90SRCALL	= $(F90EXE_sources) $(F90EXE_headers)
+allSources	= $(CSRCALL) $(FSRCALL) $(F90SRCALL) $(cSRCALL) $(fSRCALL) $(f90SRCALL)
+###############################################################
+
+
+# Define compilation directories ##############################
+BuildDir	= build
+depBuildDir	= $(BuildDir)/d/$(machineSuffix)
+objBuildDir	= $(BuildDir)/o/$(machineSuffix)
+f77BuildDir	= $(BuildDir)/f/$(machineSuffix)
+tmpBuildDir	= $(BuildDir)/t/$(machineSuffix)
+###############################################################
+
+
+# Define documentation directory ##############################
+ifeq ($(MAKECMDGOALS),doc)
+   ISDOXY := $(shell command -v doxygen)
+   ifndef ISDOXY
+      $(error Doxygen, available on http://www.doxygen.org, is not in your path: "make doc" will not work!)
+   endif
+endif
+docDir = doc
+doxyDir= $(NGA_HOME)/tools/doxy
+###############################################################
+
+
+# Load most appropriate machine file ##########################
+ifneq ("$(wildcard $(NGA_HOME)/tools/GNUMake/sites/Make.$(host_name))","")
+  $(info Loading $(NGA_HOME)/tools/GNUMake/sites/Make.$(host_name)...)
+  include        $(NGA_HOME)/tools/GNUMake/sites/Make.$(host_name)
+else
+  $(info Loading $(NGA_HOME)/tools/GNUMake/sites/Make.$(which_site)...)
+  include        $(NGA_HOME)/tools/GNUMake/sites/Make.$(which_site)
+endif
+###############################################################
+
+
+# Include libraries ###########################################
+ifeq ($(USE_CVODE),TRUE)
+  $(info Loading $(NGA_HOME)/tools/GNUMake/packages/Make.cvode...)
+  include        $(NGA_HOME)/tools/GNUMake/packages/Make.cvode
+endif
+ifeq ($(USE_HYPRE),TRUE)
+  $(info Loading $(NGA_HOME)/tools/GNUMake/packages/Make.hypre...)
+  include        $(NGA_HOME)/tools/GNUMake/packages/Make.hypre
+endif
+###############################################################
+
+
+# Load Make.local if present ##################################
+ifneq ("$(wildcard $(NGA_HOME)/tools/GNUMake/Make.local)","")
+  $(info Loading $(NGA_HOME)/tools/GNUMake/Make.local...)
+  include        $(NGA_HOME)/tools/GNUMake/Make.local
+endif
+###############################################################

@@ -1,0 +1,36 @@
+# Latex intermediates
+*.aux
+*.log
+*.dvi
+*.toc
+*.bbl
+*.blg
+*.lof
+*.lot
+*.idx
+*.ilg
+*.ind
+
+# Emacs temporaries
+*~
+\#*
+
+# Mac stuff
+.DS_Store
+
+# Executable
+nga.*.exe
+
+# Build stuff
+build/
+
+# Doc stuff
+doc/
+
+# Runtime files
+config*
+data*
+ensight-3D/
+stat/
+monitor/
+stat/

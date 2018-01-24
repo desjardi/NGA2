@@ -1,0 +1,275 @@
+#########################################
+# Compilation rules for NGA application #
+#########################################
+
+FINAL_VPATH_LOCATIONS = . $(VPATH_LOCATIONS)
+vpath %.f    $(FINAL_VPATH_LOCATIONS)
+vpath %.fi   $(FINAL_VPATH_LOCATIONS)
+vpath %.F    $(FINAL_VPATH_LOCATIONS)
+vpath %.f90  $(FINAL_VPATH_LOCATIONS)
+vpath %.F90  $(FINAL_VPATH_LOCATIONS)
+vpath %.c    $(FINAL_VPATH_LOCATIONS)
+vpath %.cpp  $(FINAL_VPATH_LOCATIONS)
+vpath %.h    $(FINAL_VPATH_LOCATIONS)
+vpath %.H    $(FINAL_VPATH_LOCATIONS)
+
+FINAL_CPPFLAGS := $(addprefix $(CPP_PREFIX), $(CPPFLAGS))
+
+
+# Suppress display of executed commands #
+SILENT =
+ifeq ($(VERBOSE),OFF)
+  SILENT = @
+else ifeq ($(VERBOSE),FALSE)
+  SILENT = @
+endif
+#########################################
+
+
+
+# Rules for building executable #########
+
+$(executable): $(objForExecs)
+	@echo Linking $@ ...
+	$(SILENT) $(F90) $(F90FLAGS) $(FINAL_CPPFLAGS) $(fincludes) $(LDFLAGS) -o $@ $^ $(libraries)
+
+
+clean::
+	@echo Cleaning...
+	$(SILENT) $(RM) $(f77BuildDir)/*.f $(f77BuildDir)/*.f90 $(objBuildDir)/*.o
+	$(SILENT) $(RM) $(f77BuildDir)/*.f $(f77BuildDir)/*.f90 $(objBuildDir)/*.o
+	$(SILENT) $(RM) $(tmpBuildDir)/*
+	$(SILENT) $(RM) *.optrpt $(objBuildDir)/*.optrpt
+	$(SILENT) $(RM) $(executable)
+	$(SILENT) $(RM) -r $(executable).dSYM
+
+
+realclean:: clean
+	@echo Cleaning ...
+	$(SILENT) $(RM) TAGS tags
+	$(SILENT) $(RM) -r $(BuildDir) *~
+	$(SILENT) $(RM) *.exe *.o
+	$(SILENT) $(RM) *.mod
+	$(SILENT) $(RM) -r $(docDir)
+
+
+file_locations:
+	$(NGA_HOME)/tools/scripts/find_files_vpath.py --vpath "$(FINAL_VPATH_LOCATIONS)" --files "$(CEXE_sources) $(FEXE_sources) $(cEXE_sources) $(fEXE_sources) $(f90EXE_sources) $(F90EXE_sources) $(CEXE_headers) $(cEXE_headers) $(fEXE_headers) $(FEXE_headers)"
+
+
+tags: $(allSources)
+	@echo ctags all sources ...
+	$(SILENT) ctags $(abspath $^)
+
+
+TAGS: $(allSources)
+	@echo etags all sources ...
+	$(SILENT) etags $(abspath $^)
+
+
+doc: $(allSources)
+	@echo Building doxygen doc ...
+	$(SILENT) ( cat $(doxyDir)/doxyfile;			\
+               echo "PROJECT_LOGO=$(doxyDir)/NGA_logo.png"; 	\
+	       echo "INPUT=$^";					\
+	       echo "OUTPUT_DIRECTORY=$(docDir)" ) | doxygen -
+
+
+# Specify phony targets
+.PHONY:	all clean realclean file_locations tags TAGS
+
+#########################################
+
+
+# Rules for objects #####################
+
+$(objBuildDir)/%.o: %.cpp
+	@echo Compiling $*.cpp ...
+	@if [ ! -d $(objBuildDir) ]; then mkdir -p $(objBuildDir); fi
+	$(SILENT) $(CCACHE) $(CXX) $(CXXFLAGS) $(CPPFLAGS) $(includes) -c $< $(EXE_OUTPUT_OPTION)
+
+$(objBuildDir)/%.o: %.c
+	@echo Compiling $*.c ...
+	@if [ ! -d $(objBuildDir) ]; then mkdir -p $(objBuildDir); fi
+	$(SILENT) $(CCACHE) $(CC) $(CFLAGS) -DBL_LANG_C $(CPPFLAGS) $(includes) -c $< $(EXE_OUTPUT_OPTION)
+
+$(objBuildDir)/%.o: %.f
+	@echo Compiling $*.f ...
+	@if [ ! -d $(objBuildDir) ]; then mkdir -p $(objBuildDir); fi
+	$(SILENT) $(F90CACHE) $(FC) $(FFLAGS) $(fincludes) -c $< $(FORT_EXE_OUTPUT_OPTION)
+
+$(objBuildDir)/%.o: %.F
+	@echo Compiling $*.F ...
+	@if [ ! -d $(objBuildDir) ]; then mkdir -p $(objBuildDir); fi
+	@if [ ! -d $(f77BuildDir) ]; then mkdir -p $(f77BuildDir); fi
+	$(SILENT) $(FORT_CPP) -DBL_LANG_FORT $(CPPFLAGS) $(fincludes) $< | $(FORTPREP) > $(f77BuildDir)/$*.f
+	$(SILENT) $(F90CACHE) $(FC) $(FFLAGS) $(fincludes) -c $(f77BuildDir)/$*.f $(FORT_EXE_OUTPUT_OPTION)
+
+$(objBuildDir)/%.o: %.f90
+	@echo Compiling $*.f90 ...
+	@if [ ! -d $(objBuildDir) ]; then mkdir -p $(objBuildDir); fi
+	$(SILENT) $(F90CACHE) $(F90) $(F90FLAGS) $(fincludes) -c $< $(FORT_EXE_OUTPUT_OPTION)
+
+$(objBuildDir)/%.o: %.F90
+	@echo Compiling $*.F90 ...
+	@if [ ! -d $(objBuildDir) ]; then mkdir -p $(objBuildDir); fi
+	$(SILENT) $(F90CACHE) $(F90) $(F90FLAGS) $(CPP_PREFIX)-DBL_LANG_FORT $(FINAL_CPPFLAGS) $(fincludes) -c $< $(FORT_EXE_OUTPUT_OPTION)
+
+#########################################
+
+
+# Rules for dependencies in bare object files
+
+
+#
+# The sed foo below:
+#
+# First it starts a shell that runs `$MKDEP` command on `$<`, the
+# first prerequisite of make rule, say `/path/to/y.H`.  The output
+# of `$MKDEP` are lines like `/path/to/x.o: /path/to/y.H`.
+#
+# It is then piped into two `sed` commands and then into the target
+# (i.e., `$(depBuildDir)/x.d`).  We need sed to modify the output
+# because we do not store `.o` files in where `.cpp` files live.
+# Instead, we put them in directory `$(objBuildDir)`.
+#
+# The command of `sed` needs to be inside a pair of `'`s.  But the
+# whole `sed -e '......'` is already inside a pair of `'`s for the
+# shell.  So we have to use escape, thus `'\''mycommand'\''`. 
+#
+# The sed command is search and replace, `s,X,Y` that replaces `X` by
+# `Y`. 
+#
+# In the first sed, `X` is `^[^:]*\/`.  This matches the beginning
+# of the line to the last `/` before `:`.  The `Y` contains nothing.
+# So the matched string is removed, and the line becomes `x.o: /path/to/x.xpp`. 
+#
+# In the second sed, we replace `x.o` with `$(objBuildDir)/o`.  Note
+# that `$*` is make variable set to `%` (i.e., `x` in our example).
+# `&` is sed variable meaning the whole matched string.  The
+# replacement string also includes the target of the make rule (i.e.,
+# `$(depBuildDir)/x.d`). 
+#
+# The final result is `$(objBuildDir)/x.o $(depBuildDir)/x.d: /path/to/y.H`.
+#
+
+$(depBuildDir)/%.d: %.cpp
+	@echo Depending $< ...
+	@if [ ! -d $(depBuildDir) ]; then mkdir -p $(depBuildDir); fi
+	@$(SHELL) -ec '$(MKDEP) $(includes) $< | \
+		sed -e '\''s,^[^:]*\/,,'\'' | \
+		sed -e '\''s,$*.o,$(objBuildDir)/& $@,'\'' > $@'
+
+$(depBuildDir)/%.d: %.c
+	@echo Depending $< ...
+	@if [ ! -d $(depBuildDir) ]; then mkdir -p $(depBuildDir); fi
+	@$(SHELL) -ec '$(MKDEP) $(includes) $< | \
+		sed -e '\''s,^[^:]*\/,,'\'' | \
+		sed -e '\''s,$*.o,$(objBuildDir)/& $@,'\'' > $@'
+
+$(depBuildDir)/%.d: %.F
+	@echo Depending $< ...
+	@if [ ! -d $(depBuildDir) ]; then mkdir -p $(depBuildDir); fi
+	@$(SHELL) -ec '$(MKDEP) -fortran $(fincludes) $< | \
+		sed -e '\''s,^[^:]*\/,,'\'' | \
+		sed -e '\''s,$*.o,$(objBuildDir)/& $@,'\'' > $@'
+
+$(depBuildDir)/%.d: %.f
+	@echo Depending $< ...
+	@if [ ! -d $(depBuildDir) ]; then mkdir -p $(depBuildDir); fi
+	@$(SHELL) -ec '$(MKDEP) -fortran $(fincludes) $< | \
+		sed -e '\''s,^[^:]*\/,,'\'' | \
+		sed -e '\''s,$*.o,$(objBuildDir)/& $@,'\'' > $@'
+
+DEP_CHECK_OPTS :=
+
+$(depBuildDir)/f90.depends: $(f90EXE_sources) $(F90EXE_sources)
+	@if [ ! -d $(objBuildDir) ]; then mkdir -p $(objBuildDir); fi
+	@if [ ! -d $(depBuildDir) ]; then mkdir -p $(depBuildDir); fi
+	@if [ ! -d $(f77BuildDir) ]; then mkdir -p $(f77BuildDir); fi
+	@echo "Building f90/F90 dependency File ..."
+	$(MODDEP) $(DEP_CHECK_OPTS) --prefix $(objBuildDir) \
+            --temp_dir $(f77BuildDir) \
+            --cpp "$(FORT_CPP)" \
+            --defines "-DBL_LANG_FORT $(CPPFLAGS) $(fincludes)" \
+            --f90_preprocess "$(F90PREP)" $^ > $(depBuildDir)/f90.depends 
+
+
+#
+# Now load/build the dependency files.
+#
+ifneq ($(MAKECMDGOALS),realclean)
+ifneq ($(MAKECMDGOALS),clean)
+ifneq ($(MAKECMDGOALS),uninstall)
+ifneq ($(MAKECMDGOALS),distclean)
+ifneq ($(findstring print-,$(MAKECMDGOALS)),print-)
+ifdef CEXE_sources
+-include $(CEXE_sources:%.cpp=$(depBuildDir)/%.d)
+endif
+
+ifdef cEXE_sources
+-include $(cEXE_sources:%.c=$(depBuildDir)/%.d)
+endif
+
+ifdef fEXE_sources
+-include $(fEXE_sources:%.f=$(depBuildDir)/%.d)
+endif
+
+ifdef FEXE_sources
+-include $(FEXE_sources:%.F=$(depBuildDir)/%.d)
+endif
+
+ifneq "$(strip $(f90EXE_sources) $(F90EXE_sources))" ""
+include $(depBuildDir)/f90.depends
+endif
+
+endif
+endif
+endif
+endif
+endif
+
+ifneq ($(MAKECMDGOALS),$(filter $(MAKECMDGOALS),clean realclean file_locations tags TAGS uninstall distclean))
+  ifdef has_compiler_mismatch
+    $(error $(has_compiler_mismatch))
+  endif
+endif
+
+#-----------------------------------------------------------------------------
+# for debugging.  To see the value of a Makefile variable,
+# e.g. libraries, simply do "make print-libraries".  This will
+# print out the value.
+print-%:
+	@echo $* is '$($*)'
+	@echo '    origin = $(origin $*)'
+	@echo '     value = $(value  $*)'
+
+.PHONY: help
+help:
+	@echo ""
+	@echo "The rule for compiling foo.cpp  is: \$$(CXX) \$$(CXXFLAGS) \$$(FINAL_CPPFLAGS) \$$(includes) -c foo.o foo.cpp"
+	@echo "The rule for compiling foo.c    is: \$$(CC) \$$(CFLAGS) \$$(FINAL_CPPFLAGS) \$$(includes) -c foo.o foo.c"
+	@echo "The rule for compiling foo.f90  is: \$$(F90) \$$(F90FLAGS) \$$(fincludes) -c foo.o foo.f90"
+	@echo "The rule for compiling foo.F90  is: \$$(F90) \$$(F90FLAGS) \$$(FINAL_CPPFLAGS) \$$(fincludes) -c foo.o foo.F90"
+	@echo "The rule for compiling foo.[fF] is: \$$(FC) \$$(FFLAGS) \$$(fincludes) -c foo.o foo.f"
+	@echo "    Note that .F files are preprocessed with cpp into .f files before being compiled."
+	@echo "The rule for linking            is: \$$(CXX) \$$(CXXFLAGS) \$$(FINAL_CPPFLAGS) \$$(includes) \$$(LDFLAGS) -o \$$(executable) *.o \$$(libraries)"
+	@echo ""
+	@echo "Here the variables are set to:"
+	@echo "    CXX        = $(CXX)"
+	@echo "    CC         = $(CC)"
+	@echo "    FC         = $(FC)"
+	@echo "    F90        = $(F90)"
+	@echo "    CPPFLAGS   = $(CPPFLAGS)"
+	@echo "    FINAL_CPPFLAGS   = $(FINAL_CPPFLAGS)"
+	@echo "    CXXFLAGS   = $(CXXFLAGS)"
+	@echo "    CFLAGS     = $(CFLAGS)"
+	@echo "    includes   = $(includes)"
+	@echo "    FFLAGS     = $(FFLAGS)"
+	@echo "    F90FLAGS   = $(F90FLAGS)"
+	@echo "    fincludes  = $(fincludes)"
+	@echo "    LDFLAGS    = $(LDFLAGS)"
+	@echo "    libraries  = $(libraries)"
+	@echo "    executable = $(executable)"
+	@echo ""
+	@echo "Read Tools/GNUMake/README.md for details on tweaking the make system."
