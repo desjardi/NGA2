@@ -3,14 +3,21 @@
 !> @author O. Desjardins
 program nga
   use random, only: random_init,random_final
+  use options, only: options_read,options_print
+  use parallel, only: parallel_init,parallel_final
   implicit none
   
   ! Code initialization ===================
   
   ! Initialize basic parallel environment
-  !call parallel_init
+  call parallel_init
   
-  ! Initialize various tools
+  ! Read in CL options
+  call options_read
+  call options_print
+  
+  
+  ! Initialize RNG
   call random_init
   !call monitor_init
   !call timing_init
@@ -46,7 +53,7 @@ program nga
   call random_final
   
   ! Terminate basic parallel environment
-  !call parallel_final
+  call parallel_final
   
   ! =======================================
   

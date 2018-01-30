@@ -55,7 +55,7 @@ ifeq ($(USE_MPI),TRUE)
 
   else
 
-    $(error Unknown mpi implementation.  You can try setting MPI stuff in amrex/Tools/GNUMake/Make.local and then compile with NO_MPI_CHECKING=TRUE.)
+    $(error Unknown mpi implementation.  You can try setting MPI stuff in NGA/tools/GNUMake/Make.local and then compile with NO_MPI_CHECKING=TRUE.)
 
   endif
 

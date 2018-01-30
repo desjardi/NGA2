@@ -3,6 +3,7 @@ NGA_HOME ?= ../..
 
 # Compilation parameters
 PRECISION = DOUBLE
+USE_MPI   = TRUE
 PROFILE   = FALSE
 DEBUG     = FALSE
 COMP      = gnu

@@ -31,6 +31,12 @@ ifdef PRECISION
 else
   PRECISION := DOUBLE
 endif
+# Process USE_MPI variable
+ifdef USE_MPI
+  USE_MPI := $(strip $(USE_MPI))
+else
+  USE_MPI := FALSE
+endif
 # Process PROFILE variable
 ifdef PROFILE
   PROFILE := $(strip $(PROFILE))
@@ -164,9 +170,15 @@ else
     DebugSuffix := opt
 endif
 
+ifeq ($(USE_MPI),TRUE)
+    MPISuffix   := mpi
+else
+    MPISuffix   :=
+endif
+
 CompilerSuffix := $(lowercase_comp)
 
-machineSuffix	= $(PrecisionSuffix).$(CompilerSuffix).$(DebugSuffix)
+machineSuffix	= $(PrecisionSuffix).$(CompilerSuffix).$(DebugSuffix).$(MPISuffix)
 optionsSuffix	= .$(machineSuffix)
 executable	= $(addsuffix $(optionsSuffix).exe, $(EXEBASE))
 ###############################################################
