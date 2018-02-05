@@ -1,5 +1,7 @@
 !> Module that handles the reading of command line options
 !> Expected format is: nga.exe [options] filename.
+!> @todo Deallocation/finalization
+!> @todo Capability to seek a value from stored command line options
 module options
   use string, only: str_medium,str_long
   implicit none
@@ -51,13 +53,15 @@ contains
        ! Check it fits in our string
        if (stat.ne.0) call die('Command line option '//trim(arg)//' is too long.')
        ! Check if the argument is a valid option
-       if (arg(1:1).eq.'-'.and.len_trim(arg).eq.2) then
+       if (len_trim(arg).eq.2.and.arg(1:1).eq.'-') then
           nopts=nopts+1
-       else if (arg(1:1).eq.'-'.and.len_trim(arg).gt.2.and.arg(2:2).eq.'-') then
+       else if (len_trim(arg).gt.2.and.arg(1:1).eq.'-'.and.arg(2:2).eq.'-') then
           nopts=nopts+1
+       else if (pos.eq.command_argument_count().and.arg(1:1).ne.'-') then
+          ! Input file
        else
           ! Increment remaining argument
-          if (pos.lt.command_argument_count()) nropts=nropts+1
+          nropts=nropts+1
        end if
     end do
     
@@ -71,13 +75,15 @@ contains
     pos=1
     nopts=0
     nropts=0
+    given_inputfile=.false.
     do while (pos.le.command_argument_count())
        
        ! Read the next argument
        call get_command_argument(pos,arg)
        
-       ! Check if the argument is a valid option
-       if (arg(1:1).eq.'-'.and.len_trim(arg).eq.2) then
+       ! Sort the argument
+       if (len_trim(arg).eq.2.and.arg(1:1).eq.'-') then
+          ! This is a valid short option
           
           ! Add it to our array
           nopts=nopts+1
@@ -87,7 +93,8 @@ contains
           opt(nopts)%val=''
           opt(nopts)%has_val=.false.
           
-          ! Check if option has an associated value (-1 accounts for input file)
+          ! Check if option has an associated value
+          ! Careful here about the input file, hence the -1
           if (pos.lt.command_argument_count()-1) then
              
              ! Move forward
@@ -106,7 +113,8 @@ contains
              
           end if
           
-       else if (arg(1:1).eq.'-'.and.len_trim(arg).gt.2.and.arg(2:2).eq.'-') then
+       else if (len_trim(arg).gt.2.and.arg(1:1).eq.'-'.and.arg(2:2).eq.'-') then
+          ! This is a valid long option
           
           ! Check if option has a value
           eqpos=scan(arg(3:),'=')
@@ -127,13 +135,19 @@ contains
              opt(nopts)%has_val=.true.
           end if
           
+       else if (pos.eq.command_argument_count().and.arg(1:1).ne.'-') then
+          ! This is the input file
+          
+          ! This argument should be the input file
+          given_inputfile=.true.
+          inputfile=trim(arg)
+          
        else
+          ! Everything else
           
           ! Add argument to remaining options
-          if (pos.lt.command_argument_count()) then
-             nropts=nropts+1
-             ropt(nropts)=trim(arg)
-          end if
+          nropts=nropts+1
+          ropt(nropts)=trim(arg)
           
        end if
        
@@ -141,19 +155,6 @@ contains
        pos=pos+1
        
     end do
-    
-    ! Finally, read in the input file
-    if (command_argument_count().lt.1) then
-       given_inputfile=.false.
-    else
-       call get_command_argument(command_argument_count(),arg)
-       if (arg(1:1).eq.'-') then
-          given_inputfile=.false.
-       else
-          given_inputfile=.true.
-          inputfile=trim(arg)
-       end if
-    end if
     
   end subroutine options_read
   
