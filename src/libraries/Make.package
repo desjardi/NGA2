@@ -1,4 +1,4 @@
-f90EXE_sources += random.f90 precision_$(PREC).f90 string.f90 errhandle.f90 options.f90 parallel.f90
+f90EXE_sources += random.f90 precision_$(PREC).f90 string.f90 errhandle.f90 option.f90 parallel.f90
 
 INCLUDE_LOCATIONS += $(NGA_HOME)/src/libraries
 VPATH_LOCATIONS   += $(NGA_HOME)/src/libraries

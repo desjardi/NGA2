@@ -5,7 +5,7 @@ NGA_HOME ?= ../..
 PRECISION = DOUBLE
 USE_MPI   = TRUE
 PROFILE   = FALSE
-DEBUG     = FALSE
+DEBUG     = TRUE
 COMP      = gnu
 EXEBASE   = nga
 

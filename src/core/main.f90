@@ -3,7 +3,7 @@
 !> @author O. Desjardins
 program nga
   use random, only: random_init,random_final
-  use options, only: options_read,options_print
+  use option, only: option_init,option_final
   use parallel, only: parallel_init,parallel_final
   implicit none
   
@@ -12,13 +12,13 @@ program nga
   ! Initialize basic parallel environment
   call parallel_init
   
-  ! Read in CL options
-  call options_read
-  call options_print
-  
+  ! Initialize command line options
+  call option_init
   
   ! Initialize RNG
   call random_init
+  
+  ! Initialization
   !call monitor_init
   !call timing_init
   !call parser_init
@@ -29,16 +29,18 @@ program nga
   !call data_init
   !call simulation_init
 
-  ! =======================================
 
   
-
+  ! =======================================
+  
+  
+  
   ! Run flow solver
   !call simulation_run
-
-
   
 
+  
+  
   ! Code termination ======================
   ! Terminate solvers, data, and geometry
   !call simulation_final
@@ -50,7 +52,12 @@ program nga
   !call parser_final
   !call timing_final
   !call monitor_final
+  
+  ! Clean up RNG
   call random_final
+  
+  ! Clean up options
+  call option_final
   
   ! Terminate basic parallel environment
   call parallel_final
