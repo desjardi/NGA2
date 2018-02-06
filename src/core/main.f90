@@ -4,24 +4,22 @@
 program nga
   use random  , only: random_init,random_final
   use option  , only: option_init,option_final,option_is_invoked,option_read,option_print
-  use parallel, only: parallel_init,parallel_final,rank,root
+  use parallel, only: parallel_init,parallel_final,amroot
   use, intrinsic :: iso_fortran_env, only: output_unit
   implicit none
-  integer :: verbose=0 !< Verbosity of this run
+  logical :: verbose !< Verbosity of this run
   logical :: is_there
   
   ! First initialize basic parallel environment
   call parallel_init
   
-  ! Code initialization ===================
-  
+  ! Framework initialization ==============
   ! Initialize command line options
   call option_init
-  
-  ! Check if help is required
+  ! Check if help option is invoked
   call option_is_invoked(is_there,shn='h',lgn='help')
   if (is_there) then
-     if (rank.eq.root) then
+     if (amroot) then
         write(output_unit,'(a)') ' ____________________________________________________________ '
         write(output_unit,'(a)') '|                    _   _  ____    _                        |'
         write(output_unit,'(a)') '|                   | \ | |/ ___|  / \                       |'
@@ -38,17 +36,16 @@ program nga
         write(output_unit,'(a)') '|                  |-- value is optional! --|                |'
         write(output_unit,'(a)') '|____________________________________________________________|'
      end if
-     stop
+     ! Clean exit
+     call parallel_final; stop
   end if
-  
   ! Check if we are verbose
-  call option_is_invoked(is_there,shn='v',lgn='verbose')
-  if (is_there) call option_read(verbose,shn='v',lgn='verbose',default=1)
-  if (verbose.gt.0.and.rank.eq.root) call option_print
+  call option_is_invoked(verbose,shn='v',lgn='verbose')
+  if (verbose.and.amroot) call option_print
   
   ! Initialize RNG
   call random_init
-
+  
   ! Initialization
   !call monitor_init
   !call timing_init

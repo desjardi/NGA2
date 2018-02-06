@@ -11,6 +11,8 @@ module parallel
   integer :: rank
   !> Rank of root process
   integer :: root
+  !> Am I the root process?
+  logical :: amroot
   !> This is our communicator
   integer :: comm
   !> These are MPI type for our precision
@@ -19,7 +21,7 @@ module parallel
 
   public :: parallel_max,parallel_min,parallel_sum,parallel_bc
   public :: parallel_init,parallel_final,parallel_time,parallel_kill
-  public :: nproc,rank,root,comm
+  public :: nproc,rank,root,comm,amroot
   
   !> Compute the global maximum of anything
   interface parallel_max
@@ -295,6 +297,9 @@ contains
     
     ! Create shorthand for MPI_COMM_WORLD
     comm=MPI_COMM_WORLD
+
+    ! Am I the root?
+    amroot=(rank.eq.root)
     
   end subroutine parallel_init
   

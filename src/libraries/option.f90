@@ -360,38 +360,41 @@ contains
     use, intrinsic :: iso_fortran_env, only: output_unit
     implicit none
     integer :: i
-    
+    character(len=str_medium) :: message
     ! Loop over all options and print then out
     if (nopts.eq.0) then
-       write(output_unit,'(a)') 'NGA was called without any options.'
+       write(output_unit,'(a)') '> NGA was called without any options.'
     else
-       write(output_unit,'(a,1x,i0,1x,a)') 'NGA was called with',nopts,'options:'
+       write(output_unit,'(a,1x,i0,1x,a)') '> NGA was called with',nopts,'options:'
        do i=1,nopts
           if (opt(i)%shn.eq.'') then
-             write(output_unit,'(3x,a,1x,"--",a)') 'Option: ',trim(opt(i)%lgn)
+             message='   - Option: --'//trim(opt(i)%lgn)
           else
-             write(output_unit,'(3x,a,1x," -",a)') 'Option: ',trim(opt(i)%shn)
+             message='   - Option:  -'//trim(opt(i)%shn)
           end if
           if (opt(i)%has_val) then
-             write(output_unit,'(10x,a,1x,a)') 'Value set to:',trim(opt(i)%val)
+             message(30:)='   |   Value = '//trim(opt(i)%val)
           else
-             write(output_unit,'(10x,a)')      'No corresponding value'
+             message(30:)='   |   No assigned value'
           end if
+          write(output_unit,'(4x,a)') adjustl(trim(message))
        end do
     end if
     
     ! Info on input file detected
     if (given_inputfile) then
-       write(output_unit,'(a,1x,a)') 'The following input file was provided:',trim(inputfile)
+       write(output_unit,'(a,1x,a)') '> The following input file was provided:',trim(inputfile)
     else
-       write(output_unit,'(a,1x,a)') 'No input file was provided.'
+       write(output_unit,'(a,1x,a)') '> No input file was provided.'
     end if
     
     ! Info on remaining arguments
-    if (nropts.gt.0) then
-       write(output_unit,'(a)') 'The following arguments were not recognized, and ignored:'
+    if (nropts.eq.0) then
+       if (nopts.gt.0) write(output_unit,'(a)') '> No option was found to violate the expected format.'
+    else
+       write(output_unit,'(a)') '> The following options do not follow the expected format and are ignored:'
        do i=1,nropts
-          write(output_unit,'(3x,a)') trim(ropt(i))
+          write(output_unit,'(a)') '   - Option: '//trim(ropt(i))
        end do
     end if
     
