@@ -7,7 +7,6 @@ module option
   
   public :: option_init,option_final
   public :: option_read,option_is_invoked,option_print
-  public :: verbose
   
   !> Type for command line options
   type clopt
@@ -29,9 +28,6 @@ module option
   logical :: given_inputfile
   character(len=str_medium) :: inputfile
   
-  !> Verbosity level
-  integer :: verbose
-  
   !> Obtain information about specific option
   interface option_read
      module procedure option_read_logical
@@ -50,8 +46,6 @@ contains
   !>   .
   subroutine option_init
     use errhandle, only: die
-    use parallel, only: rank,root
-    use, intrinsic :: iso_fortran_env, only: output_unit
     implicit none
     character(len=str_medium), save :: arg
     integer :: pos,eqpos
@@ -154,25 +148,6 @@ contains
        pos=pos+1
        
     end do
-
-    ! Check if help is needed
-    call option_is_invoked(is_there,shn='h',lgn='help')
-    if (is_there.and.rank.eq.root) then
-       write(output_unit,   '(a)') '------------------------------------------------------------'
-       write(output_unit,   '(a)') 'The following format is expected when calling NGA:'
-       write(output_unit,   '(a)') ' '
-       write(output_unit,'(4x,a)') 'Call: > nga.().exe  [-X value] [-XXX=value]    filename'
-       write(output_unit,'(4x,a)') '        executable | short and long options | input file'
-       write(output_unit,'(4x,a)') '                   |-- value is optional! --|'
-       write(output_unit,   '(a)') '------------------------------------------------------------'
-       call die('-h or --help option was invoked.')
-    end if
-    
-    ! Check if we are verbose
-    verbose=0
-    call option_is_invoked(is_there,shn='v',lgn='verbose')
-    if (is_there) call option_read(verbose,shn='v',lgn='verbose',default=1)
-    if (verbose.gt.0.and.rank.eq.root) call option_print
     
   end subroutine option_init
   
