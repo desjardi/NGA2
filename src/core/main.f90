@@ -3,21 +3,22 @@
 !> @author O. Desjardins
 program nga
   use random  , only: random_init,random_final
-  use option  , only: option_init,option_final,option_is_invoked,option_read,option_print
+  use option  , only: option_init,option_final,option_isinvoked,option_read,option_print
+  use parser  , only: parser_init,parser_final
   use parallel, only: parallel_init,parallel_final,amroot
   use, intrinsic :: iso_fortran_env, only: output_unit
   implicit none
   logical :: verbose !< Verbosity of this run
   logical :: is_there
   
-  ! First initialize basic parallel environment
+  ! First initialize a basic parallel environment
   call parallel_init
   
   ! Framework initialization ==============
-  ! Initialize command line options
+  ! Initialize command line parser
   call option_init
   ! Check if help option is invoked
-  call option_is_invoked(is_there,shn='h',lgn='help')
+  call option_isinvoked(is_there,shn='h',lgn='help')
   if (is_there) then
      if (amroot) then
         write(output_unit,'(a)') ' ____________________________________________________________ '
@@ -40,8 +41,11 @@ program nga
      call parallel_final; stop
   end if
   ! Check if we are verbose
-  call option_is_invoked(verbose,shn='v',lgn='verbose')
+  call option_isinvoked(verbose,shn='v',lgn='verbose')
   if (verbose.and.amroot) call option_print
+  
+  ! Initialize file parser
+  call parser_init
   
   ! Initialize RNG
   call random_init
@@ -77,19 +81,21 @@ program nga
   
   ! Terminate I/O, parser, timing, and monitor
   !call io_final
-  !call parser_final
   !call timing_final
   !call monitor_final
   
   ! Clean up RNG
   call random_final
+
+  ! Clean up file parser
+  call parser_final
   
   ! Clean up options
   call option_final
   
-  ! Terminate basic parallel environment
-  call parallel_final
-  
   ! =======================================
+  
+  ! Terminate the basic parallel environment
+  call parallel_final
   
 end program nga
