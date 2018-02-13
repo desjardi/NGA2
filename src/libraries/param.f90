@@ -13,7 +13,7 @@ module param
   integer :: verbose
   
   !> Type for storing parameters from command line and parser
-  type param_type
+  type :: param_type
      character(str_medium) :: tag !< Tag name for field
      character(str_long)   :: val !< Associated value
      character(str_medium) :: src !< Source of the parameter
@@ -40,15 +40,14 @@ contains
   
   !> Initialize the module handling user parameters
   subroutine param_init
-    use errhandle, only: die
+    use monitor, only: die
     implicit none
     character(len=str_long) :: arg,val
     character(len=str_medium), dimension(:), allocatable :: files
     integer :: pos,eqpos,i
     
     ! First ensure empty storage
-    nparams=0
-    if (allocated(params)) deallocate(params)
+    call param_final
     
     ! Start by parsing the command line
     pos=1
@@ -106,9 +105,8 @@ contains
        end do
     end if
     
-    ! Check verbosity
-    verbose=0
-    if (param_exists('verbose',short='v')) verbose=1
+    ! Check verbosity level
+    call param_read('verbose',verbose,short='v',default=1)
     if (verbose.gt.0) call param_print
     
   end subroutine param_init
@@ -116,7 +114,7 @@ contains
   
   !> Read & parse parameter files
   subroutine param_parsefile(input)
-    use errhandle, only: die
+    use monitor, only: die
     implicit none
     character(len=*) :: input !< This is the name of the file to be read and parsed.
     integer :: iunit,ierr,limiter,nlines,i,j,ntags,comment
@@ -194,7 +192,7 @@ contains
   !>   - if param has not been found yet, add it
   !>   .
   subroutine param_add(tag,val,src)
-    use errhandle, only: warn
+    use monitor, only: warn
     implicit none
     character(len=*), intent(in) :: tag
     character(len=*), intent(in) :: val
@@ -282,7 +280,7 @@ contains
   
   !> Get size of the parameter value for reading arrays
   function param_getsize(tag,short) result(count)
-    use errhandle, only: die
+    use monitor, only: die
     implicit none
     character(len=*), intent(in)           :: tag
     character(len=*), intent(in), optional :: short
@@ -319,7 +317,7 @@ contains
   
   !> Read integer value associated with parameter tag
   subroutine param_readint(tag,val,short,default)
-    use errhandle, only: die
+    use monitor, only: die
     implicit none
     character(len=*), intent(in)            :: tag
     integer         , intent(out)           :: val
@@ -362,7 +360,7 @@ contains
 
   !> Read logical value associated with parameter tag
   subroutine param_readlogical(tag,val,short,default)
-    use errhandle, only: die
+    use monitor, only: die
     implicit none
     character(len=*), intent(in)            :: tag
     logical         , intent(out)           :: val
@@ -405,7 +403,7 @@ contains
 
   !> Read real value associated with parameter tag
   subroutine param_readfloat(tag,val,short,default)
-    use errhandle, only: die
+    use monitor, only: die
     use precision, only: WP
     implicit none
     character(len=*), intent(in)            :: tag
@@ -449,7 +447,7 @@ contains
   
   !> Read character value associated with parameter tag
   subroutine param_readchar(tag,val,short,default)
-    use errhandle, only: die
+    use monitor, only: die
     implicit none
     character(len=*), intent(in)            :: tag
     character(len=*), intent(out)           :: val
@@ -492,7 +490,7 @@ contains
 
   !> Read integer array value associated with parameter tag
   subroutine param_readintarray(tag,val,short)
-    use errhandle, only: die
+    use monitor, only: die
     implicit none
     character(len=*), intent(in)            :: tag
     integer, dimension(:), intent(out)      :: val
@@ -522,7 +520,7 @@ contains
 
   !> Read float array value associated with parameter tag
   subroutine param_readfloatarray(tag,val,short)
-    use errhandle, only: die
+    use monitor, only: die
     use precision, only: WP
     implicit none
     character(len=*), intent(in)            :: tag
@@ -549,11 +547,11 @@ contains
     ! If still here, we have not found a value to read
     call die('[param_read] Did not find required parameter: '//trim(tag))
   end subroutine param_readfloatarray
-
-
+  
+  
   !> Read float 2D array value associated with parameter tag
   subroutine param_readfloatarray2D(tag,val,short)
-    use errhandle, only: die
+    use monitor, only: die
     use precision, only: WP
     implicit none
     character(len=*), intent(in)            :: tag
@@ -584,7 +582,7 @@ contains
 
   !> Read character array value associated with parameter tag
   subroutine param_readchararray(tag,val,short)
-    use errhandle, only: die
+    use monitor, only: die
     implicit none
     character(len=*), intent(in)                :: tag
     character(len=*), dimension(:), intent(out) :: val
@@ -648,24 +646,25 @@ contains
 
   !> Print all user-defined parameters if root
   subroutine param_print
-    use, intrinsic :: iso_fortran_env, only: output_unit
+    use monitor, only: log
     use parallel, only: amroot
     implicit none
     integer :: i
     integer, parameter :: colwidth=30
     character(len=colwidth) :: tag,val,src,sep
+    character(len=str_long) :: message
     ! Loop over all options and print then out
     if (amroot) then
        if (nparams.eq.0) then
-          write(output_unit,'(a)') '> NGA was called without any user-defined parameter.'
+          call log('NGA was called without any user-defined parameter.')
        else
-          write(output_unit,'(a,1x,i0,1x,a)') '> NGA was called with',nparams,'user-defined parameters:'
+          write(message,'(a,1x,i0,1x,a)') 'NGA was called with',nparams,'user-defined parameters:'; call log(message)
           do i=1,colwidth
              sep(i:i)='_'
           end do
-          write(output_unit,'(1x,"_",a,"___",a,"___",a,"_",1x)') sep,sep,sep
+          write(message,'(1x,"_",a,"___",a,"___",a,"_",1x)') sep,sep,sep; call log(message)
           tag='Parameter tag name'; val='Assigned value'; src='Source'
-          write(output_unit,'("| ",a," | ",a," | ",a," |")') tag,val,src
+          write(message,'("| ",a," | ",a," | ",a," |")') tag,val,src; call log(message)
           do i=1,nparams
              ! Check for truncation of strings
              if (len_trim(params(i)%tag).gt.colwidth) then
@@ -683,9 +682,9 @@ contains
              else
                 src=''; src=params(i)%src(1:len_trim(params(i)%src))
              end if
-             write(output_unit,'("| ",a," | ",a," | ",a," |")') tag,val,src
+             write(message,'("| ",a," | ",a," | ",a," |")') tag,val,src; call log(message)
           end do
-          write(output_unit,'("|_",a,"_|_",a,"_|_",a,"_|")') sep,sep,sep
+          write(message,'("|_",a,"_|_",a,"_|_",a,"_|")') sep,sep,sep; call log(message)
        end if
     end if
   end subroutine param_print
