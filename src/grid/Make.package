@@ -1,0 +1,4 @@
+f90EXE_sources += grid_class.f90
+
+INCLUDE_LOCATIONS += $(NGA_HOME)/src/grid
+VPATH_LOCATIONS   += $(NGA_HOME)/src/grid

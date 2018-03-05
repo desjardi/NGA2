@@ -7,10 +7,9 @@ module param
   
   public :: param_init,param_final,param_read
   public :: param_exists,param_getsize
-  public :: verbose
   
   !> Verbosity of this run
-  integer :: verbose
+  integer, public, protected :: verbose
   
   !> Type for storing parameters from command line and parser
   type :: param_type

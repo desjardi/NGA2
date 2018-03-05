@@ -1,5 +1,6 @@
 !> Module handling standard output to the screen
 !> or to text files for monitoring purposes.
+!> @todo Handle column type automatically via interfacing
 module monitor
   use precision, only: WP
   use string, only: str_medium,str_long
@@ -556,7 +557,7 @@ contains
     implicit none
     character(len=*), intent(in) :: error_text
     call log("<KILL> "//trim(error_text))
-    call parallel_kill(error_text)
+    call parallel_kill(trim(error_text))
   end subroutine die
   
   
@@ -564,7 +565,7 @@ contains
   subroutine warn(warn_text)
     implicit none
     character(len=*), intent(in) :: warn_text
-    call log("<WARN> "//trim(warn_text))
+    call log('<WARN> '//trim(warn_text))
   end subroutine warn
   
   

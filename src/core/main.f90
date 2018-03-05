@@ -2,24 +2,42 @@
 !> @version 1.0
 !> @author O. Desjardins
 program nga
-  use random, only: random_init,random_final
-  use param, only: param_init,param_final
+  use random,   only:   random_init
+  use param,    only:    param_init   ,param_final
   use parallel, only: parallel_init,parallel_final
-  use monitor, only: monitor_init,monitor_final,monitor_dump_timestep
+  use monitor,  only:  monitor_init, monitor_final
+  use geometry
   implicit none
+
   
-  ! First initialize a basic parallel environment
+  ! =======================================
+  ! Initialization sequence ===============
+  ! =======================================
+  ! Initialize parallel environment =======
   call parallel_init
-  
-  ! Framework initialization ==============
-  ! Monitoring tools
+  ! Initialize monitoring capabilities ====
   call monitor_init
-  
-  ! Initialize user-defined parameters
+  ! Initialize user interaction ===========
   call param_init
-  
-  ! Initialize RNG
+  ! Initialize random number generator ====
   call random_init
+  ! =======================================
+  
+  
+  
+  
+  ! =======================================
+  ! Setup the problem grid ================
+  ! =======================================
+  ! Initialize our grids ================== 
+  call geometry_init
+  ! =======================================
+  
+  
+  
+  
+  ! Initialize the grid
+  !call grid_init
   
   ! Initialization of I/O
   !call io_init
@@ -28,17 +46,16 @@ program nga
   !call geometry_init
   !call data_init
   !call simulation_init
-
-
+  
+  
   
   ! =======================================
   
   
-  call monitor_dump_timestep(1,12.0d0)
   ! Run flow solver
   !call simulation_run
   
-
+  
   
   
   ! Code termination ======================
@@ -50,18 +67,20 @@ program nga
   ! Terminate I/O, parser, timing, and monitor
   !call io_final
   
-  ! Clean up RNG
-  call random_final
   
-  ! Clean up user-defined parameters
-  call param_final
   
-  ! Clean up monitoring tools
-  call monitor_final
+  
   
   ! =======================================
-  
-  ! Terminate the basic parallel environment
+  ! Termination sequence ==================
+  ! =======================================
+  ! Clean up user parameters ==============
+  call param_final
+  ! Clean up monitoring tools =============
+  call monitor_final
+  ! Clean parallel exit ===================
   call parallel_final
+  ! =======================================
+  
   
 end program nga

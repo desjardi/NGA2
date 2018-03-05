@@ -28,6 +28,7 @@ build/
 doc/
 
 # Runtime files
+*.h5
 config*
 data*
 ensight-3D/

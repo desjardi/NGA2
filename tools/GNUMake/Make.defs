@@ -236,6 +236,12 @@ ifeq ($(USE_HYPRE),TRUE)
   $(info Loading $(NGA_HOME)/tools/GNUMake/packages/Make.hypre...)
   include        $(NGA_HOME)/tools/GNUMake/packages/Make.hypre
 endif
+ifdef HDF5_DIR
+  $(info Loading $(NGA_HOME)/tools/GNUMake/packages/Make.hdf5...)
+  include        $(NGA_HOME)/tools/GNUMake/packages/Make.hdf5
+else
+  $(error HDF5_DIR not defined, but it is currently required by NGA)
+endif
 ###############################################################
 
 
