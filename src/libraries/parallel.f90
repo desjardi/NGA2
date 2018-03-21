@@ -1,6 +1,7 @@
 !> Basic parallel environment - global communicator, rank, root...
-!> Fortran notation is used (rank goes from 1 to nproc)
+!> Standard notation is used (rank goes from 0 to nproc-1)
 module parallel
+  use mpi
   implicit none
   private
   
@@ -8,18 +9,16 @@ module parallel
   integer, public, protected :: nproc
   !> Rank of this processor
   integer, public, protected :: rank
-  !> Rank of root process
-  integer, public, protected :: root
   !> Am I the global root process?
   logical, public, protected :: amroot
   !> This is our global communicator
   integer, public, protected :: comm
+  !> This is our global group
+  integer, public, protected :: group
   
   !> These are MPI type for our precision
   integer, private, protected :: MPI_REAL_WP,MPI_REAL_SP,MPI_COMPLEX_WP
-  
-  include 'mpif.h'
-  
+    
   public :: parallel_init,parallel_final,parallel_time,parallel_kill
   
 contains
@@ -35,9 +34,8 @@ contains
     ! Initialize a first basic MPI environment
     call MPI_INIT(ierr)
     call MPI_COMM_RANK(MPI_COMM_WORLD,rank,ierr)
-    call MPI_COMM_SIZE(MPI_COMM_WORLD,nproc,ierr) 
-    rank=rank+1
-    root=1
+    call MPI_COMM_SIZE(MPI_COMM_WORLD,nproc,ierr)
+    call MPI_COMM_GROUP(MPI_COMM_WORLD,group,ierr)
     
     ! Set MPI working precision - WP
     call MPI_TYPE_SIZE(MPI_REAL,size_real,ierr)
@@ -76,7 +74,7 @@ contains
     comm=MPI_COMM_WORLD
     
     ! Am I the global root?
-    amroot=(rank.eq.root)
+    amroot=(rank.eq.0)
     
   end subroutine parallel_init
   
@@ -106,9 +104,9 @@ contains
     character(len=*), intent(in), optional :: error_text
     ! Specify who sends the abort signal and what it means
     if (present(error_text)) then
-       write(error_unit,'("[",i6,"] requested a general abort with message: ",a)') rank,trim(error_text)
+       write(error_unit,'("[",i0,"] requested a general abort with message: ",a)') rank,trim(error_text)
     else
-       write(error_unit,'("[",i6,"] requested a general abort with no message")') rank
+       write(error_unit,'("[",i0,"] requested a general abort with no message")') rank
     end if
     ! Call general abort
     call MPI_ABORT(MPI_COMM_WORLD,0,ierr)

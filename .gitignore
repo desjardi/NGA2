@@ -17,6 +17,7 @@
 
 # Mac stuff
 .DS_Store
+*.dSYM/
 
 # Executable
 nga.*.exe
