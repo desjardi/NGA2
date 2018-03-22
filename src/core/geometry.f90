@@ -32,18 +32,14 @@ contains
     allocate(grid(ngrid))
     grid(1)=bgrid(128,64,32)
     grid(2)=bgrid(32,16,8)
-    !do i=1,ngrid
-    !   call grid(i)%print
-    !end do
     
     ! We now try to group processors
-    n=1
-    range=[nproc/2,nproc-1,1]
+    n=1; range=[nproc/2,nproc-1,1]
     call MPI_GROUP_RANGE_INCL(group,n,range,grid_group,ierr)
     
     ! Create parallel grids from serial grids + processor group
     allocate(pargrid(ngrid))
-    pargrid(1)=pgrid(grid(1),grid_group,decomp=[2,1,1])
+    pargrid(1)=pgrid(grid(1),grid_group)
     call pargrid(1)%allprint
     
     ! Try to use HDF5 to create a file

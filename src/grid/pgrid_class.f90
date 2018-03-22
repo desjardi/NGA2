@@ -1,5 +1,6 @@
 !> Definition of a parallel grid class in NGA.
 !> @todo Optimize the information stored in the derived data type...
+!> @todo Add other parallelization strategies
 module pgrid_class
   use bgrid_class, only: bgrid
   use string, only: str_medium
@@ -10,8 +11,10 @@ module pgrid_class
   character(len=str_medium), parameter :: defstrat='fewest_dir'
   integer, parameter :: defmincell=4
   
+  
   ! Expose type/constructor/methods
   public :: pgrid
+
   
   !> Parallel grid type
   type, extends(bgrid) :: pgrid
@@ -34,13 +37,16 @@ module pgrid_class
      procedure :: allprint=>pgrid_allprint !< Output grid to screen - blocking and requires all procs...
      procedure :: print=>pgrid_print       !< Output grid to screen
   end type pgrid
+
   
   !> Declare parallel grid constructor
   interface pgrid
      procedure constructor
   end interface pgrid
-    
+  
+  
 contains
+
   
   !> Parallel grid constructor
   function constructor(grid,grp,strat,decomp) result(self)
@@ -69,7 +75,8 @@ contains
     
     ! Get group name, group size, and intracommunicator
     self%group=grp
-    call MPI_GROUP_SIZE(self%group,self%nproc,ierr) 
+    call MPI_GROUP_SIZE(self%group,self%nproc,ierr)
+    if (self%nproc.eq.0) call die('[pgrid constructor] Non-empty group is required!')
     call MPI_COMM_CREATE(comm,self%group,self%comm,ierr)
     
     ! Get rank and amin info
@@ -149,7 +156,7 @@ contains
        self%jmin_=self%jmin+(self%jproc-1)*self%ny_+r
     end if
     self%jmax_=self%jmin_+self%ny_-1
-
+    
     ! Perform decomposition in z
     q=self%nz/self%npz; r=mod(self%nz,self%npz)
     if (self%kproc.le.r) then
@@ -162,43 +169,62 @@ contains
     self%kmax_=self%kmin_+self%nz_-1
     
   contains
+
     
     !> Decomposition calculator: fewest direction strategy
     function fewest_dir_decomp(nc,nd) result(dec)
+      use monitor, only: warn
       integer, dimension(3) :: dec             !< Returned decomposition
       integer, dimension(3), intent(in) :: nc  !< Grid size in 3 directions
       integer, intent(in) :: nd                !< Number of domains
-      integer :: lmin,lmed,lmax,q,r,nd_max
+      integer :: i1,dir1,max1,q1,r1
+      integer :: i2,dir2,max2,q2,r2
+      integer :: i3,dir3,max3
       logical, dimension(3) :: mask
-      ! Order grid size
-      mask( 1:3)=.true. ; lmax=maxloc(nc,1,mask=mask)
-      mask(lmax)=.false.; lmed=maxloc(nc,1,mask=mask)
-      mask(lmed)=.false.; lmin=maxloc(nc,1,mask=mask)
-      ! Maximum number of domains in lmax direction
-      nd_max=nc(lmax)/defmincell
-      ! Eucledian division
-      q=nd/nd_max; r=mod(nd,nd_max)
-      if (q.eq.0) then
-         ! We're done
-         dec=1; dec(lmax)=r; return
-      else
-         ! Need zero remainder
-         do while (r.ne.0)
-            !q=q-1; r=nd-q*
-         end do
-         dec(lmax)=nd_max
-         
-      end if
-      
+      ! Order grid directions by size
+      mask( 1:3)=.true. ; dir3=maxloc(nc,1,mask=mask)
+      mask(dir3)=.false.; dir2=maxloc(nc,1,mask=mask)
+      mask(dir2)=.false.; dir1=maxloc(nc,1,mask=mask)
+      ! Maximum number of domains in each direction
+      max1=nc(dir1)/defmincell
+      max2=nc(dir2)/defmincell
+      max3=nc(dir3)/defmincell
+      ! Perform trial division in first direction
+      loop1: do i1=1,min(nd,max1)
+         ! Perform Euclidian division
+         q1=nd/i1; r1=mod(nd,i1)
+         ! Cycle if not an integer factor
+         if (r1.ne.0) cycle loop1
+         ! Perform trial division in second direction
+         loop2: do i2=1,min(q1,max2)
+            ! Perform Euclidian division
+            q2=q1/i2; r2=mod(q1,i2)
+            ! Cycle if not an integer factor
+            if (r2.ne.0) cycle loop2
+            ! Set decomposition in third direction
+            i3=q2
+            ! If it is valid, return
+            if (q2.le.max3) then
+               dec(dir1)=i1
+               dec(dir2)=i2
+               dec(dir3)=i3
+               return
+            end if
+         end do loop2
+      end do loop1
+      ! If we are still here, we have explored all options and failed
+      ! Return zero and a warning, as we may want to try another strategy
+      dec=0; call warn('[fewest_dir_decomp] Grid parallelization failed...')
     end function fewest_dir_decomp
     
   end function constructor
 
+  
   !> Print out parallel grid info to screen
   !> This is a slow and blocking routine for debugging only!
   subroutine pgrid_allprint(this)
     use, intrinsic :: iso_fortran_env, only: output_unit
-    use parallel
+    use parallel, only: rank
     implicit none
     class(pgrid), intent(in) :: this
     integer :: i,ierr
@@ -217,10 +243,10 @@ contains
     end do
   end subroutine pgrid_allprint
 
+  
   !> Cheap print of parallel grid info to screen
   subroutine pgrid_print(this)
     use, intrinsic :: iso_fortran_env, only: output_unit
-    use parallel, only: 
     implicit none
     class(pgrid), intent(in) :: this
     if (this%amroot) then
