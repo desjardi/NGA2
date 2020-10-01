@@ -113,7 +113,7 @@ contains
       ! Perform sanity check of the decomposition
       if (mydecomp(1)*mydecomp(2)*mydecomp(3).ne.self%nproc) call die('[pgrid constructor] Parallel decomposition is improper!')
       
-      ! Stpre decomposition on the grid
+      ! Store decomposition on the grid
       self%npx=mydecomp(1); self%npy=mydecomp(2); self%npz=mydecomp(3)
       
       ! Handle processors that are not part of the group
