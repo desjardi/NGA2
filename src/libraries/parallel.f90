@@ -10,7 +10,7 @@ module parallel
    !> Rank of this processor
    integer, public, protected :: rank
    !> Am I the global root process?
-   logical, public, protected :: amroot
+   logical, public, protected :: amRoot
    !> This is our global communicator
    integer, public, protected :: comm
    !> This is our global group
@@ -74,7 +74,7 @@ contains
       comm=MPI_COMM_WORLD
       
       ! Am I the global root?
-      amroot=(rank.eq.0)
+      amRoot=(rank.eq.0)
       
    end subroutine parallel_init
    

@@ -29,7 +29,7 @@ module bgrid_class
    !> Declare basic grid constructor
    interface bgrid
       module procedure constructor
-      end interface bgrid
+   end interface bgrid
       
    contains
       

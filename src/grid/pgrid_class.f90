@@ -23,8 +23,8 @@ module pgrid_class
       integer :: comm                       !< Grid communicator
       integer :: nproc                      !< Number of processors
       integer :: rank                       !< Processor grid rank
-      logical :: amroot                     !< Am I grid root?
-      logical :: amin                       !< Am I working in this grid?
+      logical :: amRoot                     !< Am I grid root?
+      logical :: amIn                       !< Am I working in this grid?
       integer :: npx,npy,npz                !< Number of processors per direction
       integer :: iproc,jproc,kproc          !< Coordinates location of processor
       ! Local grid size
@@ -81,7 +81,7 @@ contains
       
       ! Get rank and amin info
       call MPI_GROUP_RANK(self%group,self%rank,ierr)
-      self%amin=(self%rank.ne.MPI_UNDEFINED)
+      self%amIn=(self%rank.ne.MPI_UNDEFINED)
       
       ! Check if a decomposition was provided
       if (present(decomp)) then
@@ -117,8 +117,8 @@ contains
       self%npx=mydecomp(1); self%npy=mydecomp(2); self%npz=mydecomp(3)
       
       ! Handle processors that are not part of the group
-      if (.not.self%amin) then
-         self%amroot=.false.
+      if (.not.self%amIn) then
+         self%amRoot=.false.
          self%iproc=0; self%nx_=0; self%imin_=0; self%imax_=0
          self%jproc=0; self%ny_=0; self%jmin_=0; self%jmax_=0
          self%kproc=0; self%nz_=0; self%kmin_=0; self%kmax_=0
@@ -229,7 +229,7 @@ contains
       class(pgrid), intent(in) :: this
       integer :: i,ierr
       ! Return all non-involved procs
-      if (.not.this%amin) return
+      if (.not.this%amIn) return
       ! Root writes header
       call pgrid_print(this)
       ! Each proc provides info on his involvement in the grid
@@ -238,7 +238,8 @@ contains
          call MPI_BARRIER(this%comm,ierr)
          ! Output info
          if (this%rank.eq.i) then
-            write(output_unit,'(" >>> Rank ",i0,"(",i0,") -> [",i0,",",i0,",",i0,"] owns [",i0,",",i0,"]x[",i0,",",i0,"]x[",i0,",",i0,"]")') this%rank,rank,this%iproc,this%jproc,this%kproc,this%imin_,this%imax_,this%jmin_,this%jmax_,this%kmin_,this%kmax_
+            write(output_unit,'(" >>> Rank ",i0,"(",i0,") -> [",i0,",",i0,",",i0,"] owns [",i0,",",i0,"]x[",i0,",",i0,"]x[",i0,",",i0,"]")') &
+            this%rank,rank,this%iproc,this%jproc,this%kproc,this%imin_,this%imax_,this%jmin_,this%jmax_,this%kmin_,this%kmax_
          end if
       end do
    end subroutine pgrid_allprint
@@ -249,7 +250,7 @@ contains
       use, intrinsic :: iso_fortran_env, only: output_unit
       implicit none
       class(pgrid), intent(in) :: this
-      if (this%amroot) then
+      if (this%amRoot) then
          write(output_unit,'("Parallel grid ",a," on ",i0," processes")') trim(this%name),this%nproc
          write(output_unit,'(" >   size = ",i0,"x",i0,"x",i0)') this%nx,this%ny,this%nz
          write(output_unit,'(" > decomp = ",i0,"x",i0,"x",i0)') this%npx,this%npy,this%npz
