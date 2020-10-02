@@ -11,6 +11,8 @@ module config_class
    public :: config
    
    !> Config object definition
+   !> A "config" is essentially NGA's old config concept, but enhanced a bit.
+   !> Currently, it contains a pgrid, periodicity info, 
    type, extends(pgrid) :: config
       
       ! Metrics
