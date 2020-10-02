@@ -91,9 +91,9 @@ contains
       allocate(self%z(self%kmino:self%kmaxo+1)); allocate(self%zm(self%kmino:self%kmaxo))
       
       ! Store mesh position
-      self%x(imin:imax+1)=x
-      self%y(jmin:jmax+1)=y
-      self%z(kmin:kmax+1)=z
+      self%x(self%imin:self%imax+1)=x
+      self%y(self%jmin:self%jmax+1)=y
+      self%z(self%kmin:self%kmax+1)=z
       
       ! Extend mesh over the overlapping region - this is naive but sufficient
       do i=self%imin-1,self%imino,-1
