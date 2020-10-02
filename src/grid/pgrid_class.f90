@@ -64,10 +64,9 @@ contains
       
       integer, dimension(3) :: mydecomp
       character(len=str_medium) :: mystrat
-      integer :: ierr,q,r
+      integer :: ierr,q,r,d
       integer, parameter :: ndims=3
       logical, parameter :: reorder=.true.
-      logical, dimension(3) :: isper
       integer, dimension(3) :: coords
       
       ! Assign base grid data
@@ -120,22 +119,17 @@ contains
       if (.not.self%amIn) then
          self%amRoot=.false.
          self%iproc=0; self%nx_=0; self%imin_=0; self%imax_=0
-         self%jproc=0; self%ny_=0; self%jmin_=0; self%jmax_=0
-         self%kproc=0; self%nz_=0; self%kmin_=0; self%kmax_=0
          return
       end if
       
       ! Give cartesian layout to intracommunicator
-      isper=[.false.,.false.,.false.]
-      call MPI_CART_CREATE(self%comm,ndims,mydecomp,isper,reorder,self%comm,ierr)
+      call MPI_CART_CREATE(self%comm,ndims,mydecomp,[self%xper,self%yper,self%zper],reorder,self%comm,ierr)
       call MPI_COMM_RANK(self%comm,self%rank,ierr)
       call MPI_CART_COORDS(self%comm,self%rank,ndims,coords,ierr)
-      self%iproc=coords(1)+1
-      self%jproc=coords(2)+1
-      self%kproc=coords(3)+1
-      self%amroot=(self%rank.eq.0)
+      self%iproc=coords(1)+1; self%jproc=coords(2)+1; self%kproc=coords(3)+1
+      self%amRoot=(self%rank.eq.0)
       
-      ! Perform decomposition in x
+      ! Perform decomposition in all three directions
       q=self%nx/self%npx; r=mod(self%nx,self%npx)
       if (self%iproc.le.r) then
          self%nx_  =q+1
