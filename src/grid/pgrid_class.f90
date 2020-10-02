@@ -49,7 +49,7 @@ contains
    
    
    !> Parallel grid constructor
-   function constructor(grid,grp,strat,decomp) result(self)
+   function constructor(grid,grp,per,strat,decomp) result(self)
       use parallel
       use string, only: lowercase
       use monitor, only: die
@@ -59,6 +59,7 @@ contains
       type(pgrid) :: self                               !< Parallel grid
       type(bgrid), intent(in) :: grid                   !< Base grid
       integer, intent(in) :: grp                        !< Processor group for parallelization
+      logical, dimension(3), intent(in) :: per          !< Periodicity info needed for parallelization
       character(len=str_medium), optional :: strat      !< Requested parallelization strategy
       integer, dimension(3), optional :: decomp         !< Requested domain decomposition
       
@@ -119,11 +120,13 @@ contains
       if (.not.self%amIn) then
          self%amRoot=.false.
          self%iproc=0; self%nx_=0; self%imin_=0; self%imax_=0
+         self%jproc=0; self%ny_=0; self%jmin_=0; self%jmax_=0
+         self%kproc=0; self%nz_=0; self%kmin_=0; self%kmax_=0
          return
       end if
       
       ! Give cartesian layout to intracommunicator
-      call MPI_CART_CREATE(self%comm,ndims,mydecomp,[self%xper,self%yper,self%zper],reorder,self%comm,ierr)
+      call MPI_CART_CREATE(self%comm,ndims,mydecomp,per,reorder,self%comm,ierr)
       call MPI_COMM_RANK(self%comm,self%rank,ierr)
       call MPI_CART_COORDS(self%comm,self%rank,ndims,coords,ierr)
       self%iproc=coords(1)+1; self%jproc=coords(2)+1; self%kproc=coords(3)+1
