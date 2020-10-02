@@ -184,9 +184,9 @@ contains
       end do
       
       ! Compute total length and total volume
-      self%xL=self%x(imax+1)-self%x(imin)
-      self%yL=self%y(jmax+1)-self%y(jmin)
-      self%zL=self%z(kmax+1)-self%z(kmin)
+      self%xL=self%x(self%imax+1)-self%x(self%imin)
+      self%yL=self%y(self%jmax+1)-self%y(self%jmin)
+      self%zL=self%z(self%kmax+1)-self%z(self%kmin)
       self%vol_total=self%xL*self%yL*self%zL
       
       ! Give it a name if one was provided
