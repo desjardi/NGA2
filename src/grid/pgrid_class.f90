@@ -29,10 +29,16 @@ module pgrid_class
       integer :: iproc,jproc,kproc          !< Coordinates location of processor
       ! Local grid size
       integer :: nx_,ny_,nz_                !< Local grid size in x/y/z
+      ! Local grid size with overlap
+      integer :: nxo_,nyo_,nzo_             !< Local grid size in x/y/z with overlap
       ! Local index bounds
       integer :: imin_,imax_                !< Domain-decomposed index bounds in x
       integer :: jmin_,jmax_                !< Domain-decomposed index bounds in y
       integer :: kmin_,kmax_                !< Domain-decomposed index bounds in z
+      ! Local index bounds with overlap
+      integer :: imino_,imaxo_              !< Domain-decomposed index bounds in x with overlap
+      integer :: jmino_,jmaxo_              !< Domain-decomposed index bounds in y with overlap
+      integer :: kmino_,kmaxo_              !< Domain-decomposed index bounds in z with overlap
    contains
       procedure :: allprint=>pgrid_allprint !< Output grid to screen - blocking and requires all procs...
       procedure :: print=>pgrid_print       !< Output grid to screen
@@ -57,6 +63,7 @@ contains
       include 'mpif.h'
       
       type(pgrid) :: self                               !< Parallel grid
+      
       type(bgrid), intent(in) :: grid                   !< Base grid
       integer, intent(in) :: grp                        !< Processor group for parallelization
       logical, dimension(3), intent(in) :: per          !< Periodicity info needed for parallelization
@@ -119,20 +126,20 @@ contains
       ! Handle processors that are not part of the group
       if (.not.self%amIn) then
          self%amRoot=.false.
-         self%iproc=0; self%nx_=0; self%imin_=0; self%imax_=0
-         self%jproc=0; self%ny_=0; self%jmin_=0; self%jmax_=0
-         self%kproc=0; self%nz_=0; self%kmin_=0; self%kmax_=0
+         self%iproc=0; self%nx_=0; self%imin_=0; self%imax_=0; self%nxo_=0; self%imino_=0; self%imaxo_=0
+         self%jproc=0; self%ny_=0; self%jmin_=0; self%jmax_=0; self%nyo_=0; self%jmino_=0; self%jmaxo_=0
+         self%kproc=0; self%nz_=0; self%kmin_=0; self%kmax_=0; self%nzo_=0; self%kmino_=0; self%kmaxo_=0
          return
       end if
       
       ! Give cartesian layout to intracommunicator
       call MPI_CART_CREATE(self%comm,ndims,mydecomp,per,reorder,self%comm,ierr)
-      call MPI_COMM_RANK(self%comm,self%rank,ierr)
+      call MPI_COMM_RANK  (self%comm,self%rank,ierr)
       call MPI_CART_COORDS(self%comm,self%rank,ndims,coords,ierr)
       self%iproc=coords(1)+1; self%jproc=coords(2)+1; self%kproc=coords(3)+1
       self%amRoot=(self%rank.eq.0)
       
-      ! Perform decomposition in all three directions
+      ! Perform decomposition in x
       q=self%nx/self%npx; r=mod(self%nx,self%npx)
       if (self%iproc.le.r) then
          self%nx_  =q+1
@@ -141,8 +148,10 @@ contains
          self%nx_  =q
          self%imin_=self%imin+(self%iproc-1)*self%nx_+r
       end if
-      self%imax_=self%imin_+self%nx_-1
-      
+      self%imax_ =self%imin_+self%nx_-1
+      self%nxo_  =self%nx_+2*self%no
+      self%imino_=self%imin_-self%no
+      self%imaxo_=self%imax_+self%no
       ! Perform decomposition in y
       q=self%ny/self%npy; r=mod(self%ny,self%npy)
       if (self%jproc.le.r) then
@@ -152,7 +161,10 @@ contains
          self%ny_  =q
          self%jmin_=self%jmin+(self%jproc-1)*self%ny_+r
       end if
-      self%jmax_=self%jmin_+self%ny_-1
+      self%jmax_ =self%jmin_+self%ny_-1
+      self%nyo_  =self%ny_+2*self%no
+      self%jmino_=self%jmin_-self%no
+      self%jmaxo_=self%jmax_+self%no
       
       ! Perform decomposition in z
       q=self%nz/self%npz; r=mod(self%nz,self%npz)
@@ -163,7 +175,10 @@ contains
          self%nz_  =q
          self%kmin_=self%kmin+(self%kproc-1)*self%nz_+r
       end if
-      self%kmax_=self%kmin_+self%nz_-1
+      self%kmax_ =self%kmin_+self%nz_-1
+      self%nzo_  =self%nz_+2*self%no
+      self%kmino_=self%kmin_-self%no
+      self%kmaxo_=self%kmax_+self%no
       
    contains
       
@@ -249,10 +264,12 @@ contains
       class(pgrid), intent(in) :: this
       if (this%amRoot) then
          write(output_unit,'("Parallel grid ",a," on ",i0," processes")') trim(this%name),this%nproc
-         write(output_unit,'(" >   size = ",i0,"x",i0,"x",i0)') this%nx,this%ny,this%nz
-         write(output_unit,'(" > decomp = ",i0,"x",i0,"x",i0)') this%npx,this%npy,this%npz
-         write(output_unit,'(" > extent = [",es12.6,",",es12.6,"]x[",es12.6,",",es12.6,"]x[",es12.6,",",es12.6,"]")') &
+         write(output_unit,'(" > overlap = ",i0)') this%no
+         write(output_unit,'(" >    size = ",i0,"x",i0,"x",i0)') this%nx,this%ny,this%nz
+         write(output_unit,'(" >  decomp = ",i0,"x",i0,"x",i0)') this%npx,this%npy,this%npz
+         write(output_unit,'(" >  extent = [",es12.6,",",es12.6,"]x[",es12.6,",",es12.6,"]x[",es12.6,",",es12.6,"]")') &
          this%x(this%imin),this%x(this%imax+1),this%y(this%jmin),this%y(this%jmax+1),this%z(this%kmin),this%z(this%kmax+1)
+         write(output_unit,'(" >  volume = ",es12.6)') this%vol_total
       end if
    end subroutine pgrid_print
    
