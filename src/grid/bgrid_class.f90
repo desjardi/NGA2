@@ -33,19 +33,19 @@ module bgrid_class
 contains
    
    !> Constructor for a basic grid object
-   function constructor(nx,ny,nz,xper,yper,zper,name) result(self)
+   function constructor(n,per,name) result(self)
       use monitor, only: die
       implicit none
       type(bgrid) :: self
-      integer, intent(in) :: nx,ny,nz
-      logical, intent(in) :: xper,yper,zper
+      integer, dimension(3), intent(in) :: n
+      logical, dimension(3), intent(in) :: per
       character(len=*), optional :: name
       ! Check sizes
-      if (min(nx,ny,nz).le.0) call die('[bgrid constructor] Grid size has to be larger than zero')
+      if (minval(n).le.0) call die('[bgrid constructor] Grid size has to be larger than zero')
       ! Set sizes, periodicity, and bounds
-      self%nx=nx; self%xper=xper; self%imin=refindex; self%imax=self%imin+self%nx
-      self%ny=ny; self%yper=yper; self%jmin=refindex; self%jmax=self%jmin+self%ny
-      self%nz=nz; self%zper=zper; self%kmin=refindex; self%kmax=self%kmin+self%nz
+      self%nx=n(1); self%xper=per(1); self%imin=refindex; self%imax=self%imin+self%nx
+      self%ny=n(2); self%yper=per(2); self%jmin=refindex; self%jmax=self%jmin+self%ny
+      self%nz=n(3); self%zper=per(3); self%kmin=refindex; self%kmax=self%kmin+self%nz
       ! Allocate x/y/z arrays
       allocate(self%x(self%imin:self%imax+1),self%y(self%jmin:self%jmax+1),self%z(self%kmin:self%kmax+1))
       ! Give it a name if one was provided

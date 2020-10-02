@@ -37,6 +37,12 @@ ifdef USE_MPI
 else
   USE_MPI := FALSE
 endif
+# Process USE_HDF5 variable
+ifdef USE_HDF5
+  USE_HDF5 := $(strip $(USE_HDF5))
+else
+  USE_HDF5 := FALSE
+endif
 # Process PROFILE variable
 ifdef PROFILE
   PROFILE := $(strip $(PROFILE))
@@ -70,7 +76,7 @@ MKDEP		= perl $(NGA_HOME)/tools/scripts/mkdep
 MODDEP		= $(NGA_HOME)/tools/scripts/dep.py
 FORTPREP  	= perl $(NGA_HOME)/Tools/scripts/strip72 -c
 F90PREP  	= cat  # a placeholder in case we have to write something later
-CPP_PREFIX      = 
+CPP_PREFIX      =
 CHECKFORT       = $(NGA_HOME)/tools/typechecker/typechecker.py
 MKCONFIG        = $(NGA_HOME)/tools/libamrex/mkconfig.py
 # Ranlib
@@ -236,11 +242,9 @@ ifeq ($(USE_HYPRE),TRUE)
   $(info Loading $(NGA_HOME)/tools/GNUMake/packages/Make.hypre...)
   include        $(NGA_HOME)/tools/GNUMake/packages/Make.hypre
 endif
-ifdef HDF5_DIR
+ifeq ($(USE_HDF5),TRUE)
   $(info Loading $(NGA_HOME)/tools/GNUMake/packages/Make.hdf5...)
   include        $(NGA_HOME)/tools/GNUMake/packages/Make.hdf5
-else
-  $(error HDF5_DIR not defined, but it is currently required by NGA)
 endif
 ###############################################################
 

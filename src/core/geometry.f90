@@ -30,8 +30,8 @@ contains
       ! Create two test serial grids
       ngrid=2
       allocate(grid(ngrid))
-      grid(1)=bgrid(128,64,32)
-      grid(2)=bgrid(32,16,8)
+      grid(1)=bgrid([128,64,32],[.true.,.false.,.false.])
+      grid(2)=bgrid([32,16,8],[.true.,.true.,.true.])
       
       ! We now try to group processors
       n=1; range=[nproc/2,nproc-1,1]

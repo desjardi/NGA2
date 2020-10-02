@@ -6,4 +6,3 @@ ifdef HYPRE_DIR
   LIBRARY_LOCATIONS += $(HYPRE_DIR)/lib
   LIBRARIES += -lHYPRE
 endif
-
