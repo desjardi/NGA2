@@ -64,7 +64,7 @@ contains
       
       integer, dimension(3) :: mydecomp
       character(len=str_medium) :: mystrat
-      integer :: ierr,q,r,d
+      integer :: ierr,q,r
       integer, parameter :: ndims=3
       logical, parameter :: reorder=.true.
       integer, dimension(3) :: coords
