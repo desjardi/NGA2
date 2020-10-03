@@ -54,9 +54,11 @@ contains
       
       ! Create parallel grids from serial grids + processor group
       allocate(pg(ngrid))
+      
       pg(1)=pgrid(grid(1),grid_group,[.true.,.false.,.true.])
-      pg(2)=pgrid(grid(2),group,[.false.,.false.,.false.])
       call pg(1)%allprint
+      
+      pg(2)=pgrid(grid(2),group,[.false.,.false.,.false.])
       call pg(2)%allprint
       
       ! Try to use HDF5 to create a file

@@ -41,6 +41,8 @@ module bgrid_class
       ! Total length
       real(WP) :: xL,yL,zL                             !< Total domain size
       real(WP) :: vol_total                            !< Total domain volume
+      ! Mesh uniformity
+      logical :: uniform_x,uniform_y,uniform_z         !< Mesh uniformity in x/y/z
    contains
       procedure :: print=>bgrid_print               !< Output grid to screen
       !> Will need to learn to read and write bgrid!
@@ -193,6 +195,11 @@ contains
       self%zL=self%z(self%kmax+1)-self%z(self%kmin)
       self%vol_total=self%xL*self%yL*self%zL
       
+      ! Check mesh uniformity - using 10*epsilon to test equality here
+      self%uniform_x=.false.; if (abs(maxval(self%dx)-minval(self%dx)).lt.10.0_WP*epsilon(maxval(self%dx))) self%uniform_x=.true.
+      self%uniform_y=.false.; if (abs(maxval(self%dy)-minval(self%dy)).lt.10.0_WP*epsilon(maxval(self%dy))) self%uniform_y=.true.
+      self%uniform_z=.false.; if (abs(maxval(self%dz)-minval(self%dz)).lt.10.0_WP*epsilon(maxval(self%dz))) self%uniform_z=.true.
+      
       ! Give it a name if one was provided
       if (present(name)) then
          self%name=trim(adjustl(name))
@@ -212,6 +219,7 @@ contains
          write(output_unit,'(" >    size = ",i0,"x",i0,"x",i0)') this%nx,this%ny,this%nz
          write(output_unit,'(" >  extent = [",es12.6,",",es12.6,"]x[",es12.6,",",es12.6,"]x[",es12.6,",",es12.6,"]")') &
          this%x(this%imin),this%x(this%imax+1),this%y(this%jmin),this%y(this%jmax+1),this%z(this%kmin),this%z(this%kmax+1)
+         write(output_unit,'(" > uniform = ",l1,"x",l1,"x",l1)') this%uniform_x,this%uniform_y,this%uniform_z
          write(output_unit,'(" >  volume = ",es12.6)') this%vol_total
       end if
    end subroutine bgrid_print

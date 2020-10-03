@@ -267,6 +267,7 @@ contains
          write(output_unit,'(" >  decomp = ",i0,"x",i0,"x",i0)') this%npx,this%npy,this%npz
          write(output_unit,'(" >  extent = [",es12.6,",",es12.6,"]x[",es12.6,",",es12.6,"]x[",es12.6,",",es12.6,"]")') &
          this%x(this%imin),this%x(this%imax+1),this%y(this%jmin),this%y(this%jmax+1),this%z(this%kmin),this%z(this%kmax+1)
+         write(output_unit,'(" > uniform = ",l1,"x",l1,"x",l1)') this%uniform_x,this%uniform_y,this%uniform_z
          write(output_unit,'(" >  volume = ",es12.6)') this%vol_total
       end if
    end subroutine pgrid_print
