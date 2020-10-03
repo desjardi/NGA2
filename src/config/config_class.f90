@@ -80,6 +80,9 @@ contains
       end do
       self%min_meshsize=parallel_min(self%meshsize,self%comm)
       
+      ! Allocate wall geometry - assume all fluid until told otherwise
+      allocate(self%mask(self%imino_:self%imaxo_,self%jmino_:self%jmaxo_,self%kmino_:self%kmaxo_)); self%mask=0
+      
    end function construct_from_bgrid
    
    
