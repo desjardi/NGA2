@@ -54,19 +54,23 @@ module bgrid_class
 contains
    
    !> Constructor for a basic grid object
-   function constructor(no,nx,x,ny,y,nz,z,name) result(self)
+   function constructor(no,x,y,z,name) result(self)
       use monitor, only: die
       implicit none
       
       type(bgrid) :: self
       
-      integer,  intent(in) :: no,nx,ny,nz
-      real(WP), intent(in), dimension(nx+1) :: x
-      real(WP), intent(in), dimension(ny+1) :: y
-      real(WP), intent(in), dimension(nz+1) :: z
+      integer,  intent(in) :: no
+      real(WP), dimension(:), intent(in) :: x
+      real(WP), dimension(:), intent(in) :: y
+      real(WP), dimension(:), intent(in) :: z
       character(len=*), optional :: name
       
+      integer :: nx,ny,nz
       integer :: i,j,k
+      
+      ! Obtain sizes from arrays
+      nx=size(x)-1; ny=size(y)-1; nz=size(z)-1
       
       ! Check sizes
       if (min(nx,ny,nz).le.0) call die('[bgrid constructor] Grid size has to be larger than zero')
@@ -76,9 +80,9 @@ contains
       self%no=no
       
       ! Set index sizes and bounds
-      self%nx=nx; self%imin=refindex; self%imax=self%imin+self%nx
-      self%ny=ny; self%jmin=refindex; self%jmax=self%jmin+self%ny
-      self%nz=nz; self%kmin=refindex; self%kmax=self%kmin+self%nz
+      self%nx=nx; self%imin=refindex; self%imax=self%imin+self%nx-1
+      self%ny=ny; self%jmin=refindex; self%jmax=self%jmin+self%ny-1
+      self%nz=nz; self%kmin=refindex; self%kmax=self%kmin+self%nz-1
       
       ! Set extended index sizes and bounds
       self%nxo=self%nx+2*self%no; self%imino=self%imin-self%no; self%imaxo=self%imax+self%no

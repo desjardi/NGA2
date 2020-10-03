@@ -2,6 +2,7 @@
 !> @todo Provide a flexible multi-grid environment
 !> @todo Provide a flexible parallelization strategy
 module geometry
+   use precision  , only: WP
    use bgrid_class, only: bgrid
    use pgrid_class, only: pgrid
    implicit none
@@ -10,7 +11,7 @@ module geometry
    !> Array of grids
    integer :: ngrid
    type(bgrid), dimension(:), allocatable :: grid
-   type(pgrid), dimension(:), allocatable :: pargrid
+   type(pgrid), dimension(:), allocatable :: pg
    
    public :: geometry_init
    
@@ -19,28 +20,44 @@ contains
    
    !> Initialization of problem geometry
    subroutine geometry_init
-      use string, only: str_medium
-      use param, only: param_read
+      use string,   only: str_medium
+      use param,    only: param_read
       use parallel, only: group,nproc
       implicit none
       integer :: i,ierr,n,grid_group
       integer, dimension(3) :: range
-      character(len=str_medium) :: fgeom
+      !character(len=str_medium) :: fgeom
       
-      ! Create two test serial grids
+      real(WP), dimension(:), allocatable :: x,y,z
+      
+      ! Give ourselves a couple of 1D meshes
+      allocate(x(101),y(51),z(33))
+      do i=1,101
+         x(i)=real(i-1,WP)*10.0_WP/100.0_WP
+      end do
+      do i=1,51
+         y(i)=real(i-1,WP)*5.0_WP/50.0_WP
+      end do
+      do i=1,33
+         z(i)=real(i-1,WP)*1.0_WP/32.0_WP
+      end do
+      
+      ! Create two test grids
       ngrid=2
       allocate(grid(ngrid))
-      grid(1)=bgrid([128,64,32],[.true.,.false.,.false.])
-      grid(2)=bgrid([32,16,8],[.true.,.true.,.true.])
+      grid(1)=bgrid(2,x,y,z,'test1')
+      grid(2)=bgrid(3,x,x,x,'box')
       
       ! We now try to group processors
       n=1; range=[nproc/2,nproc-1,1]
       call MPI_GROUP_RANGE_INCL(group,n,range,grid_group,ierr)
       
       ! Create parallel grids from serial grids + processor group
-      allocate(pargrid(ngrid))
-      pargrid(1)=pgrid(grid(1),grid_group)
-      call pargrid(1)%allprint
+      allocate(pg(ngrid))
+      pg(1)=pgrid(grid(1),grid_group,[.true.,.false.,.true.])
+      pg(2)=pgrid(grid(2),group,[.false.,.false.,.false.])
+      call pg(1)%allprint
+      call pg(2)%allprint
       
       ! Try to use HDF5 to create a file
       !call param_read('Grid file to read',fgeom,short='g'); call geometry_write_to_file(fgeom)

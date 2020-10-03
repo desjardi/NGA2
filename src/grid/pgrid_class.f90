@@ -3,7 +3,7 @@
 !> @todo Add other parallelization strategies
 module pgrid_class
    use bgrid_class, only: bgrid
-   use string, only: str_medium
+   use string,      only: str_medium
    implicit none
    private
    
@@ -11,10 +11,8 @@ module pgrid_class
    character(len=str_medium), parameter :: defstrat='fewest_dir'
    integer, parameter :: defmincell=4
    
-   
    ! Expose type/constructor/methods
    public :: pgrid
-   
    
    !> Parallel grid type
    type, extends(bgrid) :: pgrid
@@ -56,9 +54,9 @@ contains
    
    !> Parallel grid constructor
    function constructor(grid,grp,per,strat,decomp) result(self)
-      use parallel
-      use string, only: lowercase
-      use monitor, only: die
+      use parallel, only: comm
+      use string  , only: lowercase
+      use monitor , only: die
       implicit none
       include 'mpif.h'
       
