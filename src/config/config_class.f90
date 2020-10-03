@@ -26,7 +26,7 @@ module config_class
       integer :: nbound                                        !< Number of boundary conditions
       type(bcond), dimension(:), pointer :: bc                 !< Storage array for boundary conditions
    contains
-      procedure :: print=>config_print     !< Output configuration information to the screen
+      procedure :: print=>config_print                         !< Output configuration information to the screen
    end type config
    
    
@@ -47,6 +47,7 @@ contains
       type(bgrid), intent(in) :: grid
       ! Create a parallel grid with our entire group
       self%pgrid=pgrid(grid,group)
+      ! 
    end function construct_from_bgrid
    
    
