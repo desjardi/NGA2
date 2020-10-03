@@ -22,7 +22,7 @@ module config_class
       ! Wall geometry - mask=0 is fluid, mask=1 is wall
       !integer,  dimension(:,:,:), allocatable :: mask          !< Masking info
       ! Boundary conditions
-      integer :: xper,yper,zper                                !< Periodicity in x/y/z
+      logical :: xper,yper,zper                                !< Periodicity in x/y/z
       !integer :: nbound                                        !< Number of boundary conditions
       !type(bcond), dimension(:), pointer :: bc                 !< Storage array for boundary conditions
    contains
@@ -45,7 +45,7 @@ contains
       type(config) :: self
       type(bgrid), intent(in) :: grid
       integer, intent(in) :: grp
-      integer, dimension(3), intent(in) :: per
+      logical, dimension(3), intent(in) :: per
       integer :: i,j,k
       
       ! Create a parallel grid with the provided group
