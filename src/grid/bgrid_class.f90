@@ -15,7 +15,7 @@ module bgrid_class
    !> Contains grid size, index extent, and actual mesh - all global 1D info
    type :: bgrid
       ! Grid name
-      character(len=str_medium) :: name='UNDEF'        !< Grid name (default=UNDEF)
+      character(len=str_medium) :: name='UNNAMED_GRID' !< Grid name (default=UNDEF)
       ! Mesh dimensions
       integer :: nx,ny,nz                              !< Grid size in x/y/z
       integer :: imin,imax                             !< Domain index bounds in x

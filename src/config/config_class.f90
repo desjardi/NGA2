@@ -12,19 +12,16 @@ module config_class
    
    !> Config object definition
    !> A "config" is essentially NGA's old config concept, but enhanced a bit.
-   !> Currently, it contains a pgrid, periodicity info, more metrics, case name,
-   !> geometry info, and boundary conditions
+   !> Currently, it contains a pgrid, periodicity, more metrics, case name, geometry info.
    type, extends(pgrid) :: config
       ! Some more metrics
       real(WP), dimension(:,:,:), allocatable :: vol           !< Local cell volume
       real(WP), dimension(:,:,:), allocatable :: meshsize      !< Local effective cell size
       real(WP) :: min_meshsize                                 !< Global minimum mesh size
-      ! Wall geometry - mask=0 is fluid, mask=1 is wall
-      integer,  dimension(:,:,:), allocatable :: mask          !< Masking info
-      ! Boundary conditions
+      ! Wall geometry
+      integer,  dimension(:,:,:), allocatable :: mask          !< Masking info (mask=0 is fluid, mask=1 is wall)
+      ! Periodicity
       logical :: xper,yper,zper                                !< Periodicity in x/y/z
-      integer :: nbound                                        !< Number of boundary conditions
-      !type(bcond), dimension(:), pointer :: bc                 !< Storage array for boundary conditions
    contains
       procedure :: print=>config_print                         !< Output configuration information to the screen
    end type config
@@ -86,7 +83,7 @@ contains
    end function construct_from_bgrid
    
    
-   !> Cheap print of sgconfig info to screen
+   !> Cheap print of config info to screen
    subroutine config_print(this)
       use, intrinsic :: iso_fortran_env, only: output_unit
       implicit none
