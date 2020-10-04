@@ -2,6 +2,7 @@
 !> @todo Optimize the information stored in the derived data type...
 !> @todo Add other parallelization strategies
 module pgrid_class
+   use precision,   only: WP
    use bgrid_class, only: bgrid
    use string,      only: str_medium
    implicit none
@@ -38,8 +39,10 @@ module pgrid_class
       integer :: jmino_,jmaxo_              !< Domain-decomposed index bounds in y with overlap
       integer :: kmino_,kmaxo_              !< Domain-decomposed index bounds in z with overlap
    contains
-      procedure :: allprint=>pgrid_allprint !< Output grid to screen - blocking and requires all procs...
-      procedure :: print=>pgrid_print       !< Output grid to screen
+      procedure, private :: init_mpi=>pgrid_init_mpi           !< Prepare the MPI environment for the pgrid
+      procedure, private :: domain_decomp=>pgrid_domain_decomp !< Perform the domain decomposition
+      procedure :: allprint=>pgrid_allprint                    !< Output grid to screen - blocking and requires all procs...
+      procedure :: print=>pgrid_print                          !< Output grid to screen
    end type pgrid
    
    
@@ -48,90 +51,56 @@ module pgrid_class
       procedure constructor
    end interface pgrid
    
+   !> Interface for parallel grid synchronization
+   interface pgrid_sync
+      procedure pgrid_sync_realWP
+   end interface pgrid_sync
    
 contains
    
    
-   !> Parallel grid constructor
-   function constructor(grid,grp,per,strat,decomp) result(self)
+   !> Prepares the MPI environment for the pgrid
+   subroutine pgrid_init_mpi(self)
       use parallel, only: comm
-      use string  , only: lowercase
       use monitor , only: die
       implicit none
       include 'mpif.h'
-      
-      type(pgrid) :: self                               !< Parallel grid
-      
-      type(bgrid), intent(in) :: grid                   !< Base grid
-      integer, intent(in) :: grp                        !< Processor group for parallelization
-      logical, dimension(3), intent(in) :: per          !< Periodicity info needed for parallelization
-      character(len=str_medium), optional :: strat      !< Requested parallelization strategy
-      integer, dimension(3), optional :: decomp         !< Requested domain decomposition
-      
-      integer, dimension(3) :: mydecomp
-      character(len=str_medium) :: mystrat
-      integer :: ierr,q,r
-      integer, parameter :: ndims=3
-      logical, parameter :: reorder=.true.
-      integer, dimension(3) :: coords
-      
-      ! Assign base grid data
-      self%bgrid=grid
-      
-      ! Get group name, group size, and intracommunicator
-      self%group=grp
+      class(pgrid) :: self
+      integer :: ierr
+      ! Get group size, and intracommunicator
       call MPI_GROUP_SIZE(self%group,self%nproc,ierr)
-      if (self%nproc.eq.0) call die('[pgrid constructor] Non-empty group is required!')
+      if (self%nproc.eq.0) call die('[pgrid_init_mpi] Non-empty group is required!')
       call MPI_COMM_CREATE(comm,self%group,self%comm,ierr)
-      
-      ! Get rank and amin info
+      ! Get rank and amIn info
       call MPI_GROUP_RANK(self%group,self%rank,ierr)
       self%amIn=(self%rank.ne.MPI_UNDEFINED)
-      
-      ! Check if a decomposition was provided
-      if (present(decomp)) then
-         ! Check if a decomposition strategy was provided
-         if (present(strat)) then
-            mystrat=trim(lowercase(strat))
-            if (mystrat.ne.'imposed') call die('[pgrid constructor] If decomp is provided, strat=imposed is expected')
-         else
-            mystrat='imposed'
-         end if
-         ! Set the decomposition
-         mydecomp=decomp
-      else
-         ! Check if a decomposition strategy was provided
-         if (present(strat)) then
-            mystrat=trim(lowercase(strat))
-            if (mystrat.eq.'imposed') call die('[pgrid constructor] If strat=imposed, decomp is expected')
-         else
-            mystrat=defstrat
-         end if
-         ! Compute decomposition
-         select case (mystrat)
-         case ('imposed');    ! Handled elsewhere
-         case ('fewest_dir'); mydecomp=fewest_dir_decomp([self%nx,self%ny,self%nz],self%nproc)
-         case default;        call die('[pgrid constructor] Unknown parallel decomposition strategy: '//trim(mystrat))
-         end select
-      end if
-      
-      ! Perform sanity check of the decomposition
-      if (mydecomp(1)*mydecomp(2)*mydecomp(3).ne.self%nproc) call die('[pgrid constructor] Parallel decomposition is improper!')
-      
-      ! Store decomposition on the grid
-      self%npx=mydecomp(1); self%npy=mydecomp(2); self%npz=mydecomp(3)
-      
       ! Handle processors that are not part of the group
       if (.not.self%amIn) then
          self%amRoot=.false.
          self%iproc=0; self%nx_=0; self%imin_=0; self%imax_=0; self%nxo_=0; self%imino_=0; self%imaxo_=0
          self%jproc=0; self%ny_=0; self%jmin_=0; self%jmax_=0; self%nyo_=0; self%jmino_=0; self%jmaxo_=0
          self%kproc=0; self%nz_=0; self%kmin_=0; self%kmax_=0; self%nzo_=0; self%kmino_=0; self%kmaxo_=0
-         return
       end if
+   end subroutine pgrid_init_mpi
+   
+   
+   !> Prepares the domain decomposition of the pgrid
+   subroutine pgrid_domain_decomp(self,per)
+      use monitor , only: die
+      implicit none
+      include 'mpif.h'
+      class(pgrid) :: self
+      logical, dimension(3), intent(in) :: per
+      integer :: ierr,q,r
+      integer, parameter :: ndims=3
+      logical, parameter :: reorder=.true.
+      integer, dimension(3) :: coords
+      
+      ! Perform sanity check of the decomposition
+      if (self%npx*self%npy*self%npz.ne.self%nproc) call die('[pgrid constructor] Parallel decomposition is improper!')
       
       ! Give cartesian layout to intracommunicator
-      call MPI_CART_CREATE(self%comm,ndims,mydecomp,per,reorder,self%comm,ierr)
+      call MPI_CART_CREATE(self%comm,ndims,[self%npx,self%npy,self%npz],per,reorder,self%comm,ierr)
       call MPI_COMM_RANK  (self%comm,self%rank,ierr)
       call MPI_CART_COORDS(self%comm,self%rank,ndims,coords,ierr)
       self%iproc=coords(1)+1; self%jproc=coords(2)+1; self%kproc=coords(3)+1
@@ -150,6 +119,7 @@ contains
       self%nxo_  =self%nx_+2*self%no
       self%imino_=self%imin_-self%no
       self%imaxo_=self%imax_+self%no
+      
       ! Perform decomposition in y
       q=self%ny/self%npy; r=mod(self%ny,self%npy)
       if (self%jproc.le.r) then
@@ -178,8 +148,71 @@ contains
       self%kmino_=self%kmin_-self%no
       self%kmaxo_=self%kmax_+self%no
       
-   contains
+   end subroutine pgrid_domain_decomp
+   
+   
+   !> Parallel grid constructor
+   function constructor(grid,grp,per,strat,decomp) result(self)
+      use string  , only: lowercase
+      use monitor , only: die
+      implicit none
+      include 'mpif.h'
       
+      type(pgrid) :: self                               !< Parallel grid
+      
+      type(bgrid), intent(in) :: grid                   !< Base grid
+      integer, intent(in) :: grp                        !< Processor group for parallelization
+      logical, dimension(3), intent(in) :: per          !< Periodicity info needed for parallelization
+      character(len=str_medium), optional :: strat      !< Requested parallelization strategy
+      integer, dimension(3), optional :: decomp         !< Requested domain decomposition
+      
+      integer, dimension(3) :: mydecomp
+      character(len=str_medium) :: mystrat
+      
+      ! Initialize MPI environment
+      self%group=grp
+      call self%init_mpi
+      
+      ! Nothing more to do if the processor is not inside
+      if (.not.self%amIn) return
+      
+      ! Assign base grid data
+      self%bgrid=grid
+      
+      ! Check if a decomposition was provided
+      if (present(decomp)) then
+         ! Check if a decomposition strategy was provided
+         if (present(strat)) then
+            mystrat=trim(lowercase(strat))
+            if (mystrat.ne.'imposed') call die('[pgrid constructor] If decomp is provided, strat=imposed is expected')
+         else
+            mystrat='imposed'
+         end if
+         ! Set the decomposition
+         mydecomp=decomp
+      else
+         ! Check if a decomposition strategy was provided
+         if (present(strat)) then
+            mystrat=trim(lowercase(strat))
+            if (mystrat.eq.'imposed') call die('[pgrid constructor] If strat=imposed, decomp is expected')
+         else
+            mystrat=defstrat
+         end if
+         ! Compute decomposition
+         select case (mystrat)
+         case ('imposed');    ! Handled elsewhere
+         case ('fewest_dir'); mydecomp=fewest_dir_decomp([self%nx,self%ny,self%nz],self%nproc)
+         case default;        call die('[pgrid constructor] Unknown parallel decomposition strategy: '//trim(mystrat))
+         end select
+      end if
+      
+      ! Store decomposition on the grid
+      self%npx=mydecomp(1); self%npy=mydecomp(2); self%npz=mydecomp(3)
+      
+      ! Perform actual domain decomposition of grid
+      call self%domain_decomp(per)
+      
+   contains
       
       !> Decomposition calculator: fewest direction strategy
       function fewest_dir_decomp(nc,nd) result(dec)
@@ -228,6 +261,20 @@ contains
       end function fewest_dir_decomp
       
    end function constructor
+   
+   
+   !> Perform parallel synchronization of a real(WP) data field living on pgrid
+   subroutine pgrid_sync_realWP(this,data)
+      use, intrinsic :: iso_fortran_env, only: output_unit
+      implicit none
+      class(pgrid), intent(in) :: this
+      real(WP), dimension(this%imino_:this%imaxo_,this%jmino_:this%jmaxo_,this%kmino_:this%kmaxo_) :: data
+      integer :: ierr
+      ! Return all non-involved procs
+      if (.not.this%amIn) return
+      ! Peform communication between neighbors
+      
+   end subroutine pgrid_sync_realWP
    
    
    !> Print out parallel grid info to screen

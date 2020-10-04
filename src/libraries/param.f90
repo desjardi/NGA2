@@ -645,15 +645,15 @@ contains
    
    !> Print all user-defined parameters if root
    subroutine param_print
-      use monitor, only: log
-      use parallel, only: amroot
+      use monitor,  only: log
+      use parallel, only: amRoot
       implicit none
       integer :: i
       integer, parameter :: colwidth=30
       character(len=colwidth) :: tag,val,src,sep
       character(len=str_long) :: message
       ! Loop over all options and print then out
-      if (amroot) then
+      if (amRoot) then
          if (nparams.eq.0) then
             call log('NGA was called without any user-defined parameter.')
          else

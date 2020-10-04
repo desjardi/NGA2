@@ -30,6 +30,7 @@ module config_class
    !> Declare single-grid config constructor
    interface config
       procedure construct_from_bgrid
+      procedure construct_from_file
    end interface config
    
    
@@ -81,6 +82,37 @@ contains
       allocate(self%mask(self%imino_:self%imaxo_,self%jmino_:self%jmaxo_,self%kmino_:self%kmaxo_)); self%mask=0
       
    end function construct_from_bgrid
+   
+   
+   !> Single-grid config constructor from backward-compatible NGA config file
+   function construct_from_file(file,grp,decomp) result(self)
+      use parallel, only: parallel_min
+      implicit none
+      type(config) :: self
+      character(*), intent(in) :: file
+      integer, intent(in) :: grp
+      integer, dimension(3), intent(in) :: decomp
+      
+      ! Initialize MPI environment
+      self%group=grp
+      call self%init_mpi
+      
+      ! Nothing more to do if the processor is not inside
+      if (.not.self%amIn) return
+      
+      ! Root process reads the config file provided to build the base grid
+      if (self%amRoot) then
+         
+         self%bgrid=grid
+      end if
+      
+      ! Store decomposition on the grid
+      self%npx=decomp(1); self%npy=decomp(2); self%npz=decomp(3)
+      
+      ! Perform actual domain decomposition of grid
+      call self%domain_decomp(mydecomp,per)
+      
+   end function construct_from_file
    
    
    !> Cheap print of config info to screen

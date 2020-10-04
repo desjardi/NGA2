@@ -1,21 +1,22 @@
-!> Definition of a basic grid in NGA
-module bgrid_class
+!> Definition of a serial grid in NGA - this is essentially a OOP remaster of NGA's original config concept
+module sgrid_class
    use precision, only: WP
    use string, only: str_medium
    implicit none
    private
    
    ! Expose type/constructor/methods
-   public :: bgrid
+   public :: sgrid
    
    ! Reference index
    integer, parameter :: refindex=1
    
-   !> Basic grid type
-   !> Contains grid size, index extent, and actual mesh - all global 1D info
-   type :: bgrid
+   !> Serial grid type:
+   !> Contains grid size, index extent, overlap and periodicity,
+   !> as well as the actual 1D mesh along with 1D metrics
+   type :: sgrid
       ! Grid name
-      character(len=str_medium) :: name='UNNAMED_GRID' !< Grid name (default=UNDEF)
+      character(len=str_medium) :: name='UNNAMED_GRID' !< Grid name (default=UNNAMED_GRID)
       ! Mesh dimensions
       integer :: nx,ny,nz                              !< Grid size in x/y/z
       integer :: imin,imax                             !< Domain index bounds in x
@@ -43,29 +44,54 @@ module bgrid_class
       real(WP) :: vol_total                            !< Total domain volume
       ! Mesh uniformity
       logical :: uniform_x,uniform_y,uniform_z         !< Mesh uniformity in x/y/z
+      ! Grid periodicity
+      logical :: xper,yper,zper                        !< Periodicity in x/y/z
    contains
-      procedure :: print=>bgrid_print               !< Output grid to screen
-      !> Will need to learn to read and write bgrid!
-   end type bgrid
+      procedure :: print=>sgrid_print                  !< Output grid to screen
+   end type sgrid
    
    !> Declare basic grid constructor
-   interface bgrid
-      module procedure constructor
-   end interface bgrid
+   interface sgrid
+      module procedure construct_from_file
+      module procedure construct_from_args
+   end interface sgrid
    
 contains
    
-   !> Constructor for a basic grid object
-   function constructor(no,x,y,z,name) result(self)
+   
+   !> Constructor for a serial grid object
+   function construct_from_file(no,file,name) result(self)
       use monitor, only: die
       implicit none
+      type(sgrid) :: self
+      integer,  intent(in) :: no
+      character(len=*), optional :: file
+      character(len=*), optional :: name
+      real(WP), dimension(:), allocatable :: x
+      real(WP), dimension(:), allocatable :: y
+      real(WP), dimension(:), allocatable :: z
+      logical :: xper,yper,zper
+      integer :: nx,ny,nz
       
-      type(bgrid) :: self
+      ! Open the file and read all info
       
+      
+      ! Use other constructor now that all info are known
+      self=construct_from_args(no,x,y,z,xper,yper,zper,name)
+      
+   end function construct_from_file
+   
+   
+   !> Constructor for a serial grid object
+   function construct_from_args(no,x,y,z,xper,yper,zper,name) result(self)
+      use monitor, only: die
+      implicit none
+      type(sgrid) :: self
       integer,  intent(in) :: no
       real(WP), dimension(:), intent(in) :: x
       real(WP), dimension(:), intent(in) :: y
       real(WP), dimension(:), intent(in) :: z
+      logical, intent(in) :: xper,yper,zper
       character(len=*), optional :: name
       
       integer :: nx,ny,nz
@@ -80,6 +106,14 @@ contains
       ! Set overlap size if it is appropriate
       if (no.lt.0) call die('[bgrid constructor] Overlap size cannot be negative')
       self%no=no
+      
+      ! Store periodicity
+      self%xper=xper; self%yper=yper; self%zper=zper
+      
+      ! Give it a name if one was provided
+      if (present(name)) then
+         self%name=trim(adjustl(name))
+      end if
       
       ! Set index sizes and bounds
       self%nx=nx; self%imin=refindex; self%imax=self%imin+self%nx-1
@@ -200,28 +234,24 @@ contains
       self%uniform_y=.false.; if (abs(maxval(self%dy)-minval(self%dy)).lt.10.0_WP*epsilon(maxval(self%dy))) self%uniform_y=.true.
       self%uniform_z=.false.; if (abs(maxval(self%dz)-minval(self%dz)).lt.10.0_WP*epsilon(maxval(self%dz))) self%uniform_z=.true.
       
-      ! Give it a name if one was provided
-      if (present(name)) then
-         self%name=trim(adjustl(name))
-      end if
-      
-   end function constructor
+   end function construct_from_args
    
-   !> Print out a basic grid to screen
-   subroutine bgrid_print(this)
+   !> Print out a serial grid to screen
+   subroutine sgrid_print(this)
       use, intrinsic :: iso_fortran_env, only: output_unit
       use parallel, only: amRoot
       implicit none
-      class(bgrid), intent(in) :: this
+      class(sgrid), intent(in) :: this
       if (amRoot) then
-         write(output_unit,'("Basic grid ",a)') trim(this%name)
-         write(output_unit,'(" > overlap = ",i0)') this%no
-         write(output_unit,'(" >    size = ",i0,"x",i0,"x",i0)') this%nx,this%ny,this%nz
-         write(output_unit,'(" >  extent = [",es12.6,",",es12.6,"]x[",es12.6,",",es12.6,"]x[",es12.6,",",es12.6,"]")') &
+         write(output_unit,'("Serial grid ",a)') trim(this%name)
+         write(output_unit,'(" >   overlap = ",i0)') this%no
+         write(output_unit,'(" >      size = ",i0,"x",i0,"x",i0)') this%nx,this%ny,this%nz
+         write(output_unit,'(" >    extent = [",es12.6,",",es12.6,"]x[",es12.6,",",es12.6,"]x[",es12.6,",",es12.6,"]")') &
          this%x(this%imin),this%x(this%imax+1),this%y(this%jmin),this%y(this%jmax+1),this%z(this%kmin),this%z(this%kmax+1)
-         write(output_unit,'(" > uniform = ",l1,"x",l1,"x",l1)') this%uniform_x,this%uniform_y,this%uniform_z
-         write(output_unit,'(" >  volume = ",es12.6)') this%vol_total
+         write(output_unit,'(" >   uniform = ",l1,"x",l1,"x",l1)') this%uniform_x,this%uniform_y,this%uniform_z
+         write(output_unit,'(" >  periodic = ",l1,"x",l1,"x",l1)') this%xper,this%yper,this%zper
+         write(output_unit,'(" >    volume = ",es12.6)') this%vol_total
       end if
-   end subroutine bgrid_print
+   end subroutine sgrid_print
    
-end module bgrid_class
+end module sgrid_class

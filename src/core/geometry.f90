@@ -2,9 +2,10 @@
 !> @todo Provide a flexible multi-grid environment
 !> @todo Provide a flexible parallelization strategy
 module geometry
-   use precision  , only: WP
-   use bgrid_class, only: bgrid
-   use pgrid_class, only: pgrid
+   use precision,    only: WP
+   use bgrid_class,  only: bgrid
+   use pgrid_class,  only: pgrid
+   use config_class, only: config
    implicit none
    private
    
@@ -12,6 +13,9 @@ module geometry
    integer :: ngrid
    type(bgrid), dimension(:), allocatable :: grid
    type(pgrid), dimension(:), allocatable :: pg
+   
+   !> Main config
+   type(config) :: cfg
    
    public :: geometry_init
    
@@ -26,7 +30,7 @@ contains
       implicit none
       integer :: i,ierr,n,grid_group
       integer, dimension(3) :: range
-      !character(len=str_medium) :: fgeom
+      character(len=str_medium) :: fconfig
       
       real(WP), dimension(:), allocatable :: x,y,z
       
@@ -61,6 +65,13 @@ contains
       pg(2)=pgrid(grid(2),group,[.false.,.false.,.false.])
       call pg(2)%allprint
       
+      ! Create a config from a config file
+      call param_read('Config file to read',fconfig,short='c')
+      cfg=config(group,fconfig)
+      
+      
+      
+      
       ! Try to use HDF5 to create a file
       !call param_read('Grid file to read',fgeom,short='g'); call geometry_write_to_file(fgeom)
       
@@ -70,6 +81,41 @@ contains
       !print*,'fgeom file =',fgeom
       
    end subroutine geometry_init
+   
+   
+end module geometry
+
+
+
+
+   
+   
+   
+   
+   
+   
+   
+   
+   
+   
+   
+   
+   
+   
+   
+   
+   
+   
+   
+   
+   
+   
+   
+   
+   
+   
+   
+   
    
    
    ! !> Read in geometry file
@@ -201,4 +247,3 @@ contains
    
    
    
-end module geometry
