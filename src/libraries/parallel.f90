@@ -17,15 +17,9 @@ module parallel
    integer, public, protected :: group
    
    !> These are MPI type for our precision
-   integer, private, protected :: MPI_REAL_WP,MPI_REAL_SP,MPI_COMPLEX_WP
+   integer, public, protected :: MPI_REAL_WP,MPI_REAL_SP,MPI_COMPLEX_WP
    
    public :: parallel_init,parallel_final,parallel_time,parallel_kill
-   public :: parallel_min
-   
-   ! Interface for parallel_min
-   interface parallel_min
-      module procedure parallel_min_realWP3d_comm
-   end interface parallel_min
    
 contains
    
@@ -118,16 +112,5 @@ contains
       call MPI_ABORT(MPI_COMM_WORLD,0,ierr)
    end subroutine parallel_kill
    
-   
-   ! MPI MIN
-   function parallel_min_realWP3d_comm(A,my_comm) result(res)
-      use precision, only: WP
-      implicit none
-      real(WP) :: res
-      real(WP), dimension(:,:,:), intent(in) :: A
-      integer, intent(in) :: my_comm
-      integer :: ierr
-      call MPI_ALLREDUCE(minval(A),res,1,MPI_REAL_WP,MPI_MIN,my_comm,ierr)
-   end function parallel_min_realWP3d_comm
    
 end module parallel

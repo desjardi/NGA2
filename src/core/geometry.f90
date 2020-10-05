@@ -4,15 +4,15 @@
 module geometry
    use precision,    only: WP
    use sgrid_class,  only: sgrid,cartesian
-   !use pgrid_class,  only: pgrid
+   use pgrid_class,  only: pgrid
    !use config_class, only: config
    implicit none
    private
    
    !> Array of grids
    integer :: ngrid
-   type(sgrid), dimension(:), allocatable :: grid
-   !type(pgrid), dimension(:), allocatable :: pg
+   type(sgrid) :: grid
+   type(pgrid), dimension(:), allocatable :: pg
    
    !> Main config
    !type(config) :: cfg
@@ -30,46 +30,20 @@ contains
       implicit none
       integer :: i,ierr,n,grid_group
       integer, dimension(3) :: range
-      character(len=str_medium) :: fconfig
+      character(len=str_medium) :: fgrid
       
-      real(WP), dimension(:), allocatable :: x,y,z
+      ! Create a config from a grid file
+      call param_read('Grid file to read',fgrid,short='g')
+      grid=sgrid(3,fgrid)
       
-      ! Give ourselves a couple of 1D meshes
-      allocate(x(101),y(51),z(33))
-      do i=1,101
-         x(i)=real(i-1,WP)*10.0_WP/100.0_WP
-      end do
-      do i=1,51
-         y(i)=real(i-1,WP)*5.0_WP/50.0_WP
-      end do
-      do i=1,33
-         z(i)=real(i-1,WP)*1.0_WP/32.0_WP
-      end do
+      ! Allocate two partitioned grids for testing
+      allocate(pg(2))
       
-      ! Create two test grids
-      ngrid=2
-      allocate(grid(ngrid))
-      grid(1)=sgrid(cartesian,2,x,y,z,.false.,.false.,.false.,'test1')
+      ! First one based on sgrid
+      pg(1)=pgrid(grid,group)
       
-      ! We now try to group processors
-      !n=1; range=[nproc/2,nproc-1,1]
-      !call MPI_GROUP_RANGE_INCL(group,n,range,grid_group,ierr)
-      
-      ! Create parallel grids from serial grids + processor group
-      !allocate(pg(ngrid))
-      
-      !pg(1)=pgrid(grid(1),grid_group,[.true.,.false.,.true.])
-      !call pg(1)%allprint
-      
-      !pg(2)=pgrid(grid(2),group,[.false.,.false.,.false.])
-      !call pg(2)%allprint
-      
-      ! Create a config from a config file
-      call param_read('Config file to read',fconfig,short='c')
-      grid(2)=sgrid(3,fconfig)
-      
-      call param_read('output',fconfig)
-      call grid(2)%write(fconfig)
+      ! Second one based on grid file
+      pg(2)=pgrid(2,fgrid,group,[2,1,2])
       
       ! Try to use HDF5 to create a file
       !call param_read('Grid file to read',fgeom,short='g'); call geometry_write_to_file(fgeom)

@@ -12,9 +12,9 @@ module sgrid_class
    integer, parameter :: refindex=1
    
    ! Coordinate systems
-   integer, parameter, public :: cartesian=0
+   integer, parameter, public :: cartesian  =0
    integer, parameter, public :: cylindrical=1
-   integer, parameter, public :: spherical=2
+   integer, parameter, public :: spherical  =2
    
    !> Serial grid type:
    !> Contains grid size, index extent, overlap and periodicity,
@@ -73,8 +73,8 @@ contains
       use monitor, only: die
       implicit none
       type(sgrid) :: self
-      integer,  intent(in) :: no
-      character(len=*), optional :: file
+      integer, intent(in) :: no
+      character(len=*), intent(in) :: file
       character(len=*), optional :: name
       integer :: iunit,ierr
       character(len=str_medium) :: simu_name
@@ -108,7 +108,7 @@ contains
       use monitor, only: die
       implicit none
       type(sgrid) :: self
-      integer,  intent(in) :: no
+      integer, intent(in) :: no
       character(len=*), optional :: file
       character(len=*), optional :: name
       integer :: iunit,ierr
@@ -320,8 +320,8 @@ contains
       self%uniform_z=.false.; if (abs(maxval(self%dz)-minval(self%dz)).lt.10.0_WP*epsilon(maxval(self%dz))) self%uniform_z=.true.
       
       ! If verbose run, log and or print grid
-      if (verbose.gt.0) call self%log
-      if (verbose.gt.1) call self%print
+      if (verbose.gt.2) call self%log
+      if (verbose.gt.3) call self%print
       
    end function construct_from_args
    
