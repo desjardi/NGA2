@@ -29,7 +29,7 @@ contains
       integer, dimension(3) :: partition
       
       ! Create a config from a grid file
-      call param_read('Grid file to read',fgrid,short='g')
+      call param_read('Grid file',fgrid)
       call param_read('Partition',partition,short='p')
       cfg=config(3,fgrid,group,partition)
       
