@@ -56,7 +56,7 @@ module sgrid_class
    contains
       procedure :: print=>sgrid_print                  !< Output grid to screen
       procedure :: log=>sgrid_log                      !< Output grid to log file
-      procedure :: write=>sgrid_write                  !< Output grid to config file
+      procedure :: write=>sgrid_write                  !< Output grid to grid file
    end type sgrid
    
    !> Declare basic grid constructor
