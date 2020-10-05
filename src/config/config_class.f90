@@ -20,6 +20,7 @@ module config_class
    contains
       procedure :: print=>config_print                         !< Output configuration information to the screen
       procedure, private :: prep=>config_prep                  !< Finish preparing config after the partitioned grid is loaded
+      procedure :: write=>config_write                         !< Write out config files: grid and geometry
    end type config
    
    
@@ -109,5 +110,18 @@ contains
       class(config), intent(in) :: this
       call this%print
    end subroutine config_print
+   
+   
+   !> Output a config object to a file
+   subroutine config_write(this,file)
+      implicit none
+      class(config) :: this
+      character(len=*), intent(in) :: file
+      ! Write out the grid
+      call this%pgrid%write(trim(adjustl(file))//".grid")
+      ! Write out the geometry
+      !call this%pgrid%write(trim(adjustl(file))//".geom")
+   end subroutine config_write
+   
    
 end module config_class

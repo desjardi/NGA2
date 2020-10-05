@@ -4,15 +4,12 @@
 module geometry
    use precision,    only: WP
    use sgrid_class,  only: sgrid,cartesian
-   use pgrid_class,  only: pgrid
-   !use config_class, only: config
+   use config_class, only: config
    implicit none
    private
    
-   !> Array of grids
-   integer :: ngrid
-   type(sgrid) :: grid
-   type(pgrid), dimension(:), allocatable :: pg
+   !> Single config
+   type(config) :: cfg
    
    !> Main config
    !type(config) :: cfg
@@ -26,24 +23,18 @@ contains
    subroutine geometry_init
       use string,   only: str_medium
       use param,    only: param_read
-      use parallel, only: group,nproc
+      use parallel, only: group
       implicit none
-      integer :: i,ierr,n,grid_group
-      integer, dimension(3) :: range
       character(len=str_medium) :: fgrid
+      integer, dimension(3) :: partition
       
       ! Create a config from a grid file
       call param_read('Grid file to read',fgrid,short='g')
-      grid=sgrid(3,fgrid)
+      call param_read('Partition',partition,short='p')
+      cfg=config(3,fgrid,group,partition)
       
-      ! Allocate two partitioned grids for testing
-      allocate(pg(2))
-      
-      ! First one based on sgrid
-      pg(1)=pgrid(grid,group,[1,1,4])
-      
-      ! Second one based on grid file
-      pg(2)=pgrid(2,fgrid,group,[2,1,2])
+      ! Print it back out
+      call cfg%write('test')
       
       ! Try to use HDF5 to create a file
       !call param_read('Grid file to read',fgeom,short='g'); call geometry_write_to_file(fgeom)
