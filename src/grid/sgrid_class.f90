@@ -52,14 +52,15 @@ module sgrid_class
    
    !> Declare basic grid constructor
    interface sgrid
-      module procedure construct_from_file
+      module procedure construct_from_oldngafile
       module procedure construct_from_args
    end interface sgrid
    
 contains
    
    
-   !> Constructor for a serial grid object
+   !> Constructor for a serial grid object based on NGA's old config file
+   !> We do not pay attention to parallelism here!
    function construct_from_file(no,file,name) result(self)
       use monitor, only: die
       implicit none
@@ -67,14 +68,30 @@ contains
       integer,  intent(in) :: no
       character(len=*), optional :: file
       character(len=*), optional :: name
+      integer :: iunit,ierr
+      character(len=str_medium) :: simu_name
+      integer :: icyl,ixper,iyper,izper,nx,ny,nz
       real(WP), dimension(:), allocatable :: x
       real(WP), dimension(:), allocatable :: y
       real(WP), dimension(:), allocatable :: z
       logical :: xper,yper,zper
-      integer :: nx,ny,nz
       
-      ! Open the file and read all info
+      ! Open the file
+      open(newunit=iunit,file=trim(file),form='unformatted',status='old',access='stream',iostat=ierr)
+      if (ierr.ne.0) call die('[sgrid-construct_from_file] Could not open file: '//trim(file))
       
+      ! Read grid parameters
+      read(iunit) simu_name,icyl,xper,yper,zper,nx,ny,nz
+      
+      ! Simple check
+      if (icyl.ne.0) call die('[sgrid-construct_from_file] Config file is cylindrical - this is not supported yet')
+      
+      ! Convert periodicity
+      xper=
+      
+      ! Allocate 1D meshes and read them
+      allocate(x(1:nx+1),y(1:ny+1),z(1:nz+1))
+      read(iunit) x,y,z
       
       ! Use other constructor now that all info are known
       self=construct_from_args(no,x,y,z,xper,yper,zper,name)
