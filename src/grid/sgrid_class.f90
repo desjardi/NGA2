@@ -11,12 +11,19 @@ module sgrid_class
    ! Reference index
    integer, parameter :: refindex=1
    
+   ! Coordinate systems
+   integer, parameter, public :: cartesian=0
+   integer, parameter, public :: cylindrical=1
+   integer, parameter, public :: spherical=2
+   
    !> Serial grid type:
    !> Contains grid size, index extent, overlap and periodicity,
    !> as well as the actual 1D mesh along with 1D metrics
    type :: sgrid
       ! Grid name
       character(len=str_medium) :: name='UNNAMED_GRID' !< Grid name (default=UNNAMED_GRID)
+      ! Coordinate system
+      integer :: coordsys                              !< Coordinate system
       ! Mesh dimensions
       integer :: nx,ny,nz                              !< Grid size in x/y/z
       integer :: imin,imax                             !< Domain index bounds in x
@@ -48,6 +55,8 @@ module sgrid_class
       logical :: xper,yper,zper                        !< Periodicity in x/y/z
    contains
       procedure :: print=>sgrid_print                  !< Output grid to screen
+      procedure :: log=>sgrid_log                      !< Output grid to log file
+      procedure :: write=>sgrid_write                  !< Output grid to config file
    end type sgrid
    
    !> Declare basic grid constructor
@@ -59,8 +68,7 @@ module sgrid_class
 contains
    
    
-   !> Constructor for a serial grid object based on NGA's old config file
-   !> We do not pay attention to parallelism here!
+   !> Constructor for a serial grid object based on NGA2 new grid file
    function construct_from_file(no,file,name) result(self)
       use monitor, only: die
       implicit none
@@ -70,24 +78,66 @@ contains
       character(len=*), optional :: name
       integer :: iunit,ierr
       character(len=str_medium) :: simu_name
-      integer :: icyl,ixper,iyper,izper,nx,ny,nz
+      integer :: nx,ny,nz,coord
+      real(WP), dimension(:), allocatable :: x
+      real(WP), dimension(:), allocatable :: y
+      real(WP), dimension(:), allocatable :: z
+      logical :: xper,yper,zper
+      
+      ! Open the file, read grid info, close the file
+      open(newunit=iunit,file=trim(adjustl(file)),form='unformatted',status='old',access='stream',iostat=ierr)
+      if (ierr.ne.0) call die('[sgrid constructor] Could not open file: '//trim(file))
+      read(iunit) simu_name,coord,xper,yper,zper,nx,ny,nz
+      allocate(x(1:nx+1),y(1:ny+1),z(1:nz+1)); read(iunit) x,y,z
+      close(iunit)
+      
+      ! Update name if another one was provided
+      if (present(name)) simu_name=trim(adjustl(name))
+      
+      ! Use arg-based constructor now that all info are known
+      self=construct_from_args(coord,no,x,y,z,xper,yper,zper,trim(simu_name))
+      
+      ! Deallocate 1D arrays
+      deallocate(x,y,z)
+      
+   end function construct_from_file
+   
+   
+   !> Constructor for a serial grid object based on NGA's old config file
+   function construct_from_file_oldngaconfig(no,file,name) result(self)
+      use monitor, only: die
+      implicit none
+      type(sgrid) :: self
+      integer,  intent(in) :: no
+      character(len=*), optional :: file
+      character(len=*), optional :: name
+      integer :: iunit,ierr
+      character(len=str_medium) :: simu_name
+      integer :: icyl,ixper,iyper,izper,nx,ny,nz,coord
       real(WP), dimension(:), allocatable :: x
       real(WP), dimension(:), allocatable :: y
       real(WP), dimension(:), allocatable :: z
       logical :: xper,yper,zper
       
       ! Open the file
-      open(newunit=iunit,file=trim(file),form='unformatted',status='old',access='stream',iostat=ierr)
-      if (ierr.ne.0) call die('[sgrid-construct_from_file] Could not open file: '//trim(file))
+      open(newunit=iunit,file=trim(adjustl(file)),form='unformatted',status='old',access='stream',iostat=ierr)
+      if (ierr.ne.0) call die('[sgrid constructor] Could not open file: '//trim(file))
       
       ! Read grid parameters
       read(iunit) simu_name,icyl,ixper,iyper,izper,nx,ny,nz
       
-      ! Simple check
-      if (icyl.ne.0) call die('[sgrid-construct_from_file] Config file is cylindrical - this is not supported yet')
+      ! Convert coordinate system
+      select case (icyl)
+      case (0); coord=cartesian
+      case (1); coord=cylindrical
+      case default; call die('[sgrid constructor] Config file provided unexpected value for icyl')
+      end select
       
       ! Convert periodicity
       xper=(ixper.eq.1); yper=(iyper.eq.1); zper=(izper.eq.1)
+      
+      ! Update name if another one was provided
+      if (present(name)) simu_name=trim(adjustl(name))
       
       ! Allocate 1D meshes and read them
       allocate(x(1:nx+1),y(1:ny+1),z(1:nz+1))
@@ -96,17 +146,22 @@ contains
       ! Close file
       close(iunit)
       
-      ! Use other constructor now that all info are known
-      self=construct_from_args(no,x,y,z,xper,yper,zper,name)
+      ! Use arg-based constructor now that all info are known
+      self=construct_from_args(coord,no,x,y,z,xper,yper,zper,trim(adjustl(simu_name)))
       
-   end function construct_from_file
+      ! Deallocate 1D arrays
+      deallocate(x,y,z)
+      
+   end function construct_from_file_oldngaconfig
    
    
    !> Constructor for a serial grid object
-   function construct_from_args(no,x,y,z,xper,yper,zper,name) result(self)
+   function construct_from_args(coord,no,x,y,z,xper,yper,zper,name) result(self)
       use monitor, only: die
+      use param,   only: verbose
       implicit none
       type(sgrid) :: self
+      integer,  intent(in) :: coord
       integer,  intent(in) :: no
       real(WP), dimension(:), intent(in) :: x
       real(WP), dimension(:), intent(in) :: y
@@ -117,14 +172,24 @@ contains
       integer :: nx,ny,nz
       integer :: i,j,k
       
-      ! Obtain sizes from arrays
+      ! Obtain sizes from arrays and check them
       nx=size(x)-1; ny=size(y)-1; nz=size(z)-1
+      if (min(nx,ny,nz).le.0) call die('[sgrid constructor] Grid size has to be larger than zero')
       
-      ! Check sizes
-      if (min(nx,ny,nz).le.0) call die('[bgrid constructor] Grid size has to be larger than zero')
+      ! Check coordinate system
+      select case (coord)
+      case (cartesian)
+         self%coordsys=cartesian
+      case (cylindrical)
+         self%coordsys=cylindrical; call die('[sgrid constructor] Cylindrical coordinates are not implemented yet')
+      case (spherical)
+         self%coordsys=spherical; call die('[sgrid constructor] Spherical coordinates are not implemented yet')
+      case default
+         call die('[sgrid constructor] The coordinate system is unknown')
+      end select
       
       ! Set overlap size if it is appropriate
-      if (no.lt.0) call die('[bgrid constructor] Overlap size cannot be negative')
+      if (no.lt.0) call die('[sgrid constructor] Overlap size cannot be negative')
       self%no=no
       
       ! Store periodicity
@@ -206,9 +271,9 @@ contains
       end do
       
       ! Check that the mesh is proper
-      if (minval(self%dx).le.0.0_WP) call die('[bgrid constructor] Mesh in x is not monotonically increasing')
-      if (minval(self%dy).le.0.0_WP) call die('[bgrid constructor] Mesh in y is not monotonically increasing')
-      if (minval(self%dz).le.0.0_WP) call die('[bgrid constructor] Mesh in z is not monotonically increasing')
+      if (minval(self%dx).le.0.0_WP) call die('[sgrid constructor] Mesh in x is not monotonically increasing')
+      if (minval(self%dy).le.0.0_WP) call die('[sgrid constructor] Mesh in y is not monotonically increasing')
+      if (minval(self%dz).le.0.0_WP) call die('[sgrid constructor] Mesh in z is not monotonically increasing')
       
       ! Prepare the inverse of cell size
       do i=self%imino,self%imaxo
@@ -254,7 +319,12 @@ contains
       self%uniform_y=.false.; if (abs(maxval(self%dy)-minval(self%dy)).lt.10.0_WP*epsilon(maxval(self%dy))) self%uniform_y=.true.
       self%uniform_z=.false.; if (abs(maxval(self%dz)-minval(self%dz)).lt.10.0_WP*epsilon(maxval(self%dz))) self%uniform_z=.true.
       
+      ! If verbose run, log and or print grid
+      if (verbose.gt.0) call self%log
+      if (verbose.gt.1) call self%print
+      
    end function construct_from_args
+   
    
    !> Print out a serial grid to screen
    subroutine sgrid_print(this)
@@ -263,15 +333,63 @@ contains
       implicit none
       class(sgrid), intent(in) :: this
       if (amRoot) then
-         write(output_unit,'("Serial grid ",a)') trim(this%name)
+         select case (this%coordsys)
+         case (cartesian);   write(output_unit,'("Serial cartesian grid [",a,"]")') trim(this%name)
+         case (cylindrical); write(output_unit,'("Serial cylindrical grid [",a,"]")') trim(this%name)
+         case (spherical);   write(output_unit,'("Serial spherical grid [",a,"]")') trim(this%name)
+         end select
          write(output_unit,'(" >   overlap = ",i0)') this%no
          write(output_unit,'(" >      size = ",i0,"x",i0,"x",i0)') this%nx,this%ny,this%nz
-         write(output_unit,'(" >    extent = [",es12.6,",",es12.6,"]x[",es12.6,",",es12.6,"]x[",es12.6,",",es12.6,"]")') &
-         this%x(this%imin),this%x(this%imax+1),this%y(this%jmin),this%y(this%jmax+1),this%z(this%kmin),this%z(this%kmax+1)
+         write(output_unit,'(" >    extent = [",es12.5,",",es12.5,"]x[",es12.5,",",es12.5,"]x[",es12.5,",",es12.5,"]")') this%x(this%imin),this%x(this%imax+1),this%y(this%jmin),this%y(this%jmax+1),this%z(this%kmin),this%z(this%kmax+1)
          write(output_unit,'(" >   uniform = ",l1,"x",l1,"x",l1)') this%uniform_x,this%uniform_y,this%uniform_z
          write(output_unit,'(" >  periodic = ",l1,"x",l1,"x",l1)') this%xper,this%yper,this%zper
-         write(output_unit,'(" >    volume = ",es12.6)') this%vol_total
+         write(output_unit,'(" >    volume = ",es12.5)') this%vol_total
       end if
    end subroutine sgrid_print
+   
+   
+   !> Print out a serial grid to log
+   subroutine sgrid_log(this)
+      use parallel, only: amRoot
+      use monitor,  only: log
+      use string,   only: str_long
+      implicit none
+      class(sgrid), intent(in) :: this
+      character(len=str_long) :: message
+      if (amRoot) then
+         select case (this%coordsys)
+         case (cartesian);   write(message,'("Serial cartesian grid [",a,"]")') trim(this%name); call log(message)
+         case (cylindrical); write(message,'("Serial cylindrical grid [",a,"]")') trim(this%name); call log(message)
+         case (spherical);   write(message,'("Serial spherical grid [",a,"]")') trim(this%name); call log(message)
+         end select
+         write(message,'(" >   overlap = ",i0)') this%no; call log(message)
+         write(message,'(" >      size = ",i0,"x",i0,"x",i0)') this%nx,this%ny,this%nz; call log(message)
+         write(message,'(" >    extent = [",es12.5,",",es12.5,"]x[",es12.5,",",es12.5,"]x[",es12.5,",",es12.5,"]")') this%x(this%imin),this%x(this%imax+1),this%y(this%jmin),this%y(this%jmax+1),this%z(this%kmin),this%z(this%kmax+1); call log(message)
+         write(message,'(" >   uniform = ",l1,"x",l1,"x",l1)') this%uniform_x,this%uniform_y,this%uniform_z; call log(message)
+         write(message,'(" >  periodic = ",l1,"x",l1,"x",l1)') this%xper,this%yper,this%zper; call log(message)
+         write(message,'(" >    volume = ",es12.5)') this%vol_total; call log(message)
+      end if
+   end subroutine sgrid_log
+   
+   
+   !> Output a serial grid object to a file
+   subroutine sgrid_write(this,file)
+      use monitor, only: die,log
+      use param,   only: verbose
+      implicit none
+      class(sgrid) :: this
+      character(len=*), intent(in) :: file
+      integer :: iunit,ierr
+      
+      ! Open the file, write grid info, close the file
+      open(newunit=iunit,file=trim(adjustl(file)),form='unformatted',status='replace',access='stream',iostat=ierr)
+      if (ierr.ne.0) call die('[sgrid write] Could not open file: '//trim(adjustl(file)))
+      write(iunit) this%name,this%coordsys,this%xper,this%yper,this%zper,this%nx,this%ny,this%nz,this%x(this%imin:this%imax+1),this%y(this%jmin:this%jmax+1),this%z(this%kmin:this%kmax+1)
+      close(iunit)
+      
+      ! Log the action
+      if (verbose.gt.0) call log('Grid file written: '//trim(adjustl(file)))
+      
+   end subroutine sgrid_write
    
 end module sgrid_class

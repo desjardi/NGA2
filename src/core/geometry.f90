@@ -3,7 +3,7 @@
 !> @todo Provide a flexible parallelization strategy
 module geometry
    use precision,    only: WP
-   use sgrid_class,  only: sgrid
+   use sgrid_class,  only: sgrid,cartesian
    !use pgrid_class,  only: pgrid
    !use config_class, only: config
    implicit none
@@ -49,8 +49,7 @@ contains
       ! Create two test grids
       ngrid=2
       allocate(grid(ngrid))
-      grid(1)=sgrid(2,x,y,z,.false.,.false.,.false.,'test1')
-      call grid(1)%print
+      grid(1)=sgrid(cartesian,2,x,y,z,.false.,.false.,.false.,'test1')
       
       ! We now try to group processors
       !n=1; range=[nproc/2,nproc-1,1]
@@ -69,8 +68,8 @@ contains
       call param_read('Config file to read',fconfig,short='c')
       grid(2)=sgrid(3,fconfig)
       
-      call grid(2)%print
-      
+      call param_read('output',fconfig)
+      call grid(2)%write(fconfig)
       
       ! Try to use HDF5 to create a file
       !call param_read('Grid file to read',fgeom,short='g'); call geometry_write_to_file(fgeom)
