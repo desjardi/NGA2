@@ -40,7 +40,7 @@ contains
       allocate(pg(2))
       
       ! First one based on sgrid
-      pg(1)=pgrid(grid,group)
+      pg(1)=pgrid(grid,group,[1,1,4])
       
       ! Second one based on grid file
       pg(2)=pgrid(2,fgrid,group,[2,1,2])

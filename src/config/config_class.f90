@@ -1,8 +1,7 @@
-!> Single-grid config concept is defined here.
-!> The intention is to have a concept that mimics the original NGA
+!> Single-grid config concept is defined here: this is a partitioned grid
+!> as well as geometry (i.e., masks, Gib, or similar)
 module config_class
    use precision,   only: WP
-   use bgrid_class, only: bgrid
    use pgrid_class, only: pgrid
    implicit none
    private
@@ -10,9 +9,7 @@ module config_class
    ! Expose type/constructor/methods
    public :: config
    
-   !> Config object definition
-   !> A "config" is essentially NGA's old config concept, but enhanced a bit.
-   !> Currently, it contains a pgrid, periodicity, more metrics, case name, geometry info.
+   !> Config object definition as an extension of pgrid
    type, extends(pgrid) :: config
       ! Some more metrics
       real(WP), dimension(:,:,:), allocatable :: vol           !< Local cell volume
@@ -20,16 +17,15 @@ module config_class
       real(WP) :: min_meshsize                                 !< Global minimum mesh size
       ! Wall geometry
       integer,  dimension(:,:,:), allocatable :: mask          !< Masking info (mask=0 is fluid, mask=1 is wall)
-      ! Periodicity
-      logical :: xper,yper,zper                                !< Periodicity in x/y/z
    contains
       procedure :: print=>config_print                         !< Output configuration information to the screen
+      procedure, private :: prep=>config_prep                  !< Finish preparing config after the partitioned grid is loaded
    end type config
    
    
    !> Declare single-grid config constructor
    interface config
-      procedure construct_from_bgrid
+      procedure construct_from_sgrid
       procedure construct_from_file
    end interface config
    
@@ -37,82 +33,73 @@ module config_class
 contains
    
    
-   !> Single-grid config constructor
-   function construct_from_bgrid(grid,grp,per) result(self)
-      use parallel, only: parallel_min
+   !> Single-grid config constructor from a serial grid
+   function construct_from_sgrid(grid,grp,decomp) result(self)
+      use sgrid_class, only: sgrid
+      use string,      only: str_medium
       implicit none
       type(config) :: self
-      type(bgrid), intent(in) :: grid
+      type(sgrid), intent(in) :: grid
       integer, intent(in) :: grp
-      logical, dimension(3), intent(in) :: per
-      integer :: i,j,k
+      integer, dimension(3), intent(in) :: decomp
+      ! Create a partitioned grid with the provided group and decomposition
+      self%pgrid=pgrid(grid,grp,decomp)
+      ! Finish preparing the config
+      call self%prep
+   end function construct_from_sgrid
+   
+   
+   !> Single-grid config constructor from NGA grid file
+   function construct_from_file(no,file,grp,decomp) result(self)
+      implicit none
+      type(config) :: self
+      character(*), intent(in) :: file
+      integer, intent(in) :: grp,no
+      integer, dimension(3), intent(in) :: decomp
+      ! Create a partitioned grid with the provided group and decomposition
+      self%pgrid=pgrid(no,file,grp,decomp)
+      ! Finish preparing the config
+      call self%prep
+   end function construct_from_file
+   
+   
+   !> Prepare a config once the pgrid is set
+   subroutine config_prep(this)
+      use mpi
+      use parallel, only: MPI_REAL_WP
+      implicit none
+      class(config) :: this
+      integer :: i,j,k,ierr
       integer :: powx,powy,powz
       
-      ! Create a parallel grid with the provided group
-      self%pgrid=pgrid(grid,grp,per)
-      
-      ! Store periodicity
-      self%xper=per(1); self%yper=per(2); self%zper=per(3)
-      
       ! Prepare cell volume
-      allocate(self%vol(self%imino_:self%imaxo_,self%jmino_:self%jmaxo_,self%kmino_:self%kmaxo_))
-      do k=self%kmino_,self%kmaxo_
-         do j=self%jmino_,self%jmaxo_
-            do i=self%imino_,self%imaxo_
-               self%vol(i,j,k)=self%dx(i)*self%dy(j)*self%dz(k)
+      allocate(this%vol(this%imino_:this%imaxo_,this%jmino_:this%jmaxo_,this%kmino_:this%kmaxo_))
+      do k=this%kmino_,this%kmaxo_
+         do j=this%jmino_,this%jmaxo_
+            do i=this%imino_,this%imaxo_
+               this%vol(i,j,k)=this%dx(i)*this%dy(j)*this%dz(k)
             end do
          end do
       end do
       
       ! Prepare cell size and small cell size
-      powx=1; if (self%nx.eq.1) powx=0
-      powy=1; if (self%ny.eq.1) powy=0
-      powz=1; if (self%nz.eq.1) powz=0
-      allocate(self%meshsize(self%imino_:self%imaxo_,self%jmino_:self%jmaxo_,self%kmino_:self%kmaxo_))
-      do k=self%kmino_,self%kmaxo_
-         do j=self%jmino_,self%jmaxo_
-            do i=self%imino_,self%imaxo_
-               self%meshsize(i,j,k)=(self%dx(i)**powx*self%dy(j)**powy*self%dz(k)**powz)**(1.0_WP/real(powx+powy+powz,WP))
+      powx=1; if (this%nx.eq.1) powx=0
+      powy=1; if (this%ny.eq.1) powy=0
+      powz=1; if (this%nz.eq.1) powz=0
+      allocate(this%meshsize(this%imino_:this%imaxo_,this%jmino_:this%jmaxo_,this%kmino_:this%kmaxo_))
+      do k=this%kmino_,this%kmaxo_
+         do j=this%jmino_,this%jmaxo_
+            do i=this%imino_,this%imaxo_
+               this%meshsize(i,j,k)=(this%dx(i)**powx*this%dy(j)**powy*this%dz(k)**powz)**(1.0_WP/real(powx+powy+powz,WP))
             end do
          end do
       end do
-      self%min_meshsize=parallel_min(self%meshsize,self%comm)
+      call MPI_ALLREDUCE(minval(this%meshsize(this%imin_:this%imax_,this%jmin_:this%jmax_,this%kmin_:this%kmax_)),this%min_meshsize,1,MPI_REAL_WP,MPI_MIN,this%comm,ierr)
       
       ! Allocate wall geometry - assume all fluid until told otherwise
-      allocate(self%mask(self%imino_:self%imaxo_,self%jmino_:self%jmaxo_,self%kmino_:self%kmaxo_)); self%mask=0
+      allocate(this%mask(this%imino_:this%imaxo_,this%jmino_:this%jmaxo_,this%kmino_:this%kmaxo_)); this%mask=0
       
-   end function construct_from_bgrid
-   
-   
-   !> Single-grid config constructor from backward-compatible NGA config file
-   function construct_from_file(file,grp,decomp) result(self)
-      use parallel, only: parallel_min
-      implicit none
-      type(config) :: self
-      character(*), intent(in) :: file
-      integer, intent(in) :: grp
-      integer, dimension(3), intent(in) :: decomp
-      
-      ! Initialize MPI environment
-      self%group=grp
-      call self%init_mpi
-      
-      ! Nothing more to do if the processor is not inside
-      if (.not.self%amIn) return
-      
-      ! Root process reads the config file provided to build the base grid
-      if (self%amRoot) then
-         
-         self%bgrid=grid
-      end if
-      
-      ! Store decomposition on the grid
-      self%npx=decomp(1); self%npy=decomp(2); self%npz=decomp(3)
-      
-      ! Perform actual domain decomposition of grid
-      call self%domain_decomp(mydecomp,per)
-      
-   end function construct_from_file
+   end subroutine config_prep
    
    
    !> Cheap print of config info to screen

@@ -124,11 +124,8 @@ contains
       ! Deallocate
       deallocate(x,y,z)
       
-      ! Store decomposition on the grid
-      self%npx=decomp(1); self%npy=decomp(2); self%npz=decomp(3)
-      
       ! Perform actual domain decomposition of grid
-      call self%domain_decomp()
+      call self%domain_decomp(decomp)
       
       ! If verbose run, log and or print grid
       if (verbose.gt.0) call self%log
@@ -139,7 +136,7 @@ contains
    
    
    !> Partitioned grid constructor from sgrid
-   function construct_pgrid_from_sgrid(grid,grp,strat,decomp) result(self)
+   function construct_pgrid_from_sgrid(grid,grp,decomp) result(self)
       use string,  only: lowercase
       use monitor, only: die
       use param,   only: verbose
@@ -150,11 +147,7 @@ contains
       
       type(sgrid), intent(in) :: grid                   !< Base grid
       integer, intent(in) :: grp                        !< Processor group for parallelization
-      character(len=str_medium), optional :: strat      !< Requested parallelization strategy
-      integer, dimension(3), optional :: decomp         !< Requested domain decomposition
-      
-      integer, dimension(3) :: mydecomp
-      character(len=str_medium) :: mystrat
+      integer, dimension(3) :: decomp                   !< Requested domain decomposition
       
       ! Initialize MPI environment
       self%group=grp; call self%init_mpi
@@ -165,91 +158,13 @@ contains
       ! Assign base grid data
       self%sgrid=grid
       
-      ! Check if a decomposition was provided
-      if (present(decomp)) then
-         ! Check if a decomposition strategy was provided
-         if (present(strat)) then
-            mystrat=trim(lowercase(strat))
-            if (mystrat.ne.'imposed') call die('[pgrid constructor] If decomp is provided, strat=imposed is expected')
-         else
-            mystrat='imposed'
-         end if
-         ! Set the decomposition
-         mydecomp=decomp
-      else
-         ! Check if a decomposition strategy was provided
-         if (present(strat)) then
-            mystrat=trim(lowercase(strat))
-            if (mystrat.eq.'imposed') call die('[pgrid constructor] If strat=imposed, decomp is expected')
-         else
-            mystrat=defstrat
-         end if
-         ! Compute decomposition
-         select case (mystrat)
-         case ('imposed');    ! Handled elsewhere
-         case ('fewest_dir'); mydecomp=fewest_dir_decomp([self%nx,self%ny,self%nz],self%nproc)
-         case default;        call die('[pgrid constructor] Unknown parallel decomposition strategy: '//trim(mystrat))
-         end select
-      end if
-      
-      ! Store decomposition on the grid
-      self%npx=mydecomp(1); self%npy=mydecomp(2); self%npz=mydecomp(3)
-      
       ! Perform actual domain decomposition of grid
-      call self%domain_decomp()
+      call self%domain_decomp(decomp)
       
       ! If verbose run, log and or print grid
       if (verbose.gt.0) call self%log
       if (verbose.gt.1) call self%print
       if (verbose.gt.2) call self%allprint
-      
-   contains
-      
-      !> Decomposition calculator: fewest direction strategy
-      function fewest_dir_decomp(nc,nd) result(dec)
-         use monitor, only: warn
-         integer, dimension(3) :: dec             !< Returned decomposition
-         integer, dimension(3), intent(in) :: nc  !< Grid size in 3 directions
-         integer, intent(in) :: nd                !< Number of domains
-         integer :: i1,dir1,max1,q1,r1
-         integer :: i2,dir2,max2,q2,r2
-         integer :: i3,dir3,max3
-         logical, dimension(3) :: mask
-         ! Order grid directions by size
-         mask( 1:3)=.true. ; dir3=maxloc(nc,1,mask=mask)
-         mask(dir3)=.false.; dir2=maxloc(nc,1,mask=mask)
-         mask(dir2)=.false.; dir1=maxloc(nc,1,mask=mask)
-         ! Maximum number of domains in each direction
-         max1=nc(dir1)/defmincell
-         max2=nc(dir2)/defmincell
-         max3=nc(dir3)/defmincell
-         ! Perform trial division in first direction
-         loop1: do i1=1,min(nd,max1)
-            ! Perform Euclidian division
-            q1=nd/i1; r1=mod(nd,i1)
-            ! Cycle if not an integer factor
-            if (r1.ne.0) cycle loop1
-            ! Perform trial division in second direction
-            loop2: do i2=1,min(q1,max2)
-               ! Perform Euclidian division
-               q2=q1/i2; r2=mod(q1,i2)
-               ! Cycle if not an integer factor
-               if (r2.ne.0) cycle loop2
-               ! Set decomposition in third direction
-               i3=q2
-               ! If it is valid, return
-               if (q2.le.max3) then
-                  dec(dir1)=i1
-                  dec(dir2)=i2
-                  dec(dir3)=i3
-                  return
-               end if
-            end do loop2
-         end do loop1
-         ! If we are still here, we have explored all options and failed
-         ! Return zero and a warning, as we may want to try another strategy
-         dec=0; call warn('[fewest_dir_decomp] Grid parallelization failed...')
-      end function fewest_dir_decomp
       
    end function construct_pgrid_from_sgrid
    
@@ -258,8 +173,8 @@ contains
    subroutine pgrid_init_mpi(self)
       use parallel, only: comm
       use monitor , only: die
+      use mpi
       implicit none
-      include 'mpif.h'
       class(pgrid) :: self
       integer :: ierr
       ! Get group size, and intracommunicator
@@ -280,15 +195,19 @@ contains
    
    
    !> Prepares the domain decomposition of the pgrid
-   subroutine pgrid_domain_decomp(self)
+   subroutine pgrid_domain_decomp(self,decomp)
       use monitor , only: die
+      use mpi
       implicit none
-      include 'mpif.h'
       class(pgrid) :: self
+      integer, dimension(3), intent(in) :: decomp
       integer :: ierr,q,r
       integer, parameter :: ndims=3
       logical, parameter :: reorder=.true.
       integer, dimension(3) :: coords
+      
+      ! Store decomposition on the grid
+      self%npx=decomp(1); self%npy=decomp(2); self%npz=decomp(3)
       
       ! Perform sanity check of the decomposition
       if (self%npx*self%npy*self%npz.ne.self%nproc) call die('[pgrid constructor] Parallel decomposition is improper')
