@@ -52,7 +52,7 @@ module sgrid_class
    
    !> Declare basic grid constructor
    interface sgrid
-      module procedure construct_from_oldngafile
+      module procedure construct_from_file
       module procedure construct_from_args
    end interface sgrid
    
@@ -81,17 +81,20 @@ contains
       if (ierr.ne.0) call die('[sgrid-construct_from_file] Could not open file: '//trim(file))
       
       ! Read grid parameters
-      read(iunit) simu_name,icyl,xper,yper,zper,nx,ny,nz
+      read(iunit) simu_name,icyl,ixper,iyper,izper,nx,ny,nz
       
       ! Simple check
       if (icyl.ne.0) call die('[sgrid-construct_from_file] Config file is cylindrical - this is not supported yet')
       
       ! Convert periodicity
-      xper=
+      xper=(ixper.eq.1); yper=(iyper.eq.1); zper=(izper.eq.1)
       
       ! Allocate 1D meshes and read them
       allocate(x(1:nx+1),y(1:ny+1),z(1:nz+1))
       read(iunit) x,y,z
+      
+      ! Close file
+      close(iunit)
       
       ! Use other constructor now that all info are known
       self=construct_from_args(no,x,y,z,xper,yper,zper,name)

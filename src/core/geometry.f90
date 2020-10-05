@@ -3,19 +3,19 @@
 !> @todo Provide a flexible parallelization strategy
 module geometry
    use precision,    only: WP
-   use bgrid_class,  only: bgrid
-   use pgrid_class,  only: pgrid
-   use config_class, only: config
+   use sgrid_class,  only: sgrid
+   !use pgrid_class,  only: pgrid
+   !use config_class, only: config
    implicit none
    private
    
    !> Array of grids
    integer :: ngrid
-   type(bgrid), dimension(:), allocatable :: grid
-   type(pgrid), dimension(:), allocatable :: pg
+   type(sgrid), dimension(:), allocatable :: grid
+   !type(pgrid), dimension(:), allocatable :: pg
    
    !> Main config
-   type(config) :: cfg
+   !type(config) :: cfg
    
    public :: geometry_init
    
@@ -49,27 +49,27 @@ contains
       ! Create two test grids
       ngrid=2
       allocate(grid(ngrid))
-      grid(1)=bgrid(2,x,y,z,'test1')
-      grid(2)=bgrid(3,x,x,x,'box')
+      grid(1)=sgrid(2,x,y,z,.false.,.false.,.false.,'test1')
+      call grid(1)%print
       
       ! We now try to group processors
-      n=1; range=[nproc/2,nproc-1,1]
-      call MPI_GROUP_RANGE_INCL(group,n,range,grid_group,ierr)
+      !n=1; range=[nproc/2,nproc-1,1]
+      !call MPI_GROUP_RANGE_INCL(group,n,range,grid_group,ierr)
       
       ! Create parallel grids from serial grids + processor group
-      allocate(pg(ngrid))
+      !allocate(pg(ngrid))
       
-      pg(1)=pgrid(grid(1),grid_group,[.true.,.false.,.true.])
-      call pg(1)%allprint
+      !pg(1)=pgrid(grid(1),grid_group,[.true.,.false.,.true.])
+      !call pg(1)%allprint
       
-      pg(2)=pgrid(grid(2),group,[.false.,.false.,.false.])
-      call pg(2)%allprint
+      !pg(2)=pgrid(grid(2),group,[.false.,.false.,.false.])
+      !call pg(2)%allprint
       
       ! Create a config from a config file
       call param_read('Config file to read',fconfig,short='c')
-      cfg=config(group,fconfig)
+      grid(2)=sgrid(3,fconfig)
       
-      
+      call grid(2)%print
       
       
       ! Try to use HDF5 to create a file
