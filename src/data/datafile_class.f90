@@ -25,10 +25,12 @@ module datafile_class
       character(len=str_short), dimension(:), allocatable :: varname  !< Name of field variables
       real(WP), dimension(:,:,:,:), allocatable :: var                !< Variables
    contains
-      !procedure :: read=>datafile_read      !< Parallel read a datafile object to disk
-      !procedure :: write=>datafile_write    !< Parallel write a datafile object to disk
-      !procedure :: print=>datafile_print    !< Print out debugging info to screen
-      !procedure :: log=>datafile_log        !< Print out debugging info to log
+      procedure :: push=>datafile_push       !< Push data to datafile
+      procedure :: pull=>datafile_pull       !< Pull data from datafile
+      !procedure :: read =>datafile_read      !< Parallel read a datafile object to disk
+      !procedure :: write=>datafile_write     !< Parallel write a datafile object to disk
+      procedure :: print=>datafile_print     !< Print out debugging info to screen
+      procedure :: log=>datafile_log         !< Print out debugging info to log
    end type datafile
    
    
@@ -103,5 +105,38 @@ contains
       call MPI_FILE_CLOSE(ifile,ierr)
       
    end function datafile_from_file
+   
+   
+   !> Print datafile content to the screen
+   subroutine datafile_print(this)
+      use, intrinsic :: iso_fortran_env, only: output_unit
+      implicit none
+      class(datafile), intent(in) :: this
+      if (this%pg%amRoot) then
+         write(output_unit,'("Datafile [",a,"] for partitioned grid [",a,"]")') trim(this%filename),trim(this%pg%name)
+         write(output_unit,'(" >      nval = ",i0)') this%nval
+         write(output_unit,'(" > val names = ",1000(a,x))') this%valname
+         write(output_unit,'(" >      nvar = ",i0)') this%nvar
+         write(output_unit,'(" > var names = ",1000(a,x))') this%varname
+      end if
+   end subroutine datafile_print
+   
+   
+   !> Print datafile content to the log
+   subroutine datafile_log(this)
+      use monitor,  only: log
+      use string,   only: str_long
+      implicit none
+      class(datafile), intent(in) :: this
+      character(len=str_long) :: message
+      if (this%pg%amRoot) then
+         write(message,'("Datafile [",a,"] for partitioned grid [",a,"]")') trim(this%filename),trim(this%pg%name); call log(message)
+         write(message,'(" >      nval = ",i0)') this%nval; call log(message)
+         write(message,'(" > val names = ",1000(a,x))') this%valname; call log(message)
+         write(message,'(" >      nvar = ",i0)') this%nvar; call log(message)
+         write(message,'(" > var names = ",1000(a,x))') this%varname; call log(message)
+      end if
+   end subroutine datafile_log
+   
    
 end module datafile_class
