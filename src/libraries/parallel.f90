@@ -19,6 +19,9 @@ module parallel
    !> These are MPI type for our precision
    integer, public, protected :: MPI_REAL_WP,MPI_REAL_SP,MPI_COMPLEX_WP
    
+   !> I/O info
+   integer, public, protected :: mpi_info
+   
    public :: parallel_init,parallel_final,parallel_time,parallel_kill
    
 contains
@@ -75,6 +78,9 @@ contains
       
       ! Am I the global root?
       amRoot=(rank.eq.0)
+      
+      ! Also initialize I/O info
+      mpi_info=MPI_INFO_NULL
       
    end subroutine parallel_init
    

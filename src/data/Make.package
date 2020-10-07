@@ -1,0 +1,4 @@
+f90EXE_sources += datafile_class.f90
+
+INCLUDE_LOCATIONS += $(NGA_HOME)/src/data
+VPATH_LOCATIONS   += $(NGA_HOME)/src/data
