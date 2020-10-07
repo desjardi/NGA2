@@ -1,8 +1,9 @@
 !> Single-grid config concept is defined here: this is a partitioned grid
 !> as well as geometry (i.e., masks, Gib, or similar)
 module config_class
-   use precision,   only: WP
-   use pgrid_class, only: pgrid
+   use precision,      only: WP
+   use pgrid_class,    only: pgrid
+   use datafile_class, only: datafile,datafile_from_file
    implicit none
    private
    
@@ -15,8 +16,8 @@ module config_class
       real(WP), dimension(:,:,:), allocatable :: vol           !< Local cell volume
       real(WP), dimension(:,:,:), allocatable :: meshsize      !< Local effective cell size
       real(WP) :: min_meshsize                                 !< Global minimum mesh size
-      ! Wall geometry
-      integer,  dimension(:,:,:), allocatable :: mask          !< Masking info (mask=0 is fluid, mask=1 is wall)
+      ! Geometry
+      real(WP), dimension(:,:,:), allocatable :: mask          !< Masking info (mask=0 is fluid, mask=1 is wall)
    contains
       procedure :: print=>config_print                         !< Output configuration information to the screen
       procedure, private :: prep=>config_prep                  !< Finish preparing config after the partitioned grid is loaded
@@ -35,7 +36,7 @@ contains
    
    
    !> Single-grid config constructor from a serial grid
-   function construct_from_sgrid(grid,grp,decomp) result(self)
+   function construct_from_sgrid(grp,decomp,grid) result(self)
       use sgrid_class, only: sgrid
       use string,      only: str_medium
       implicit none
@@ -51,14 +52,14 @@ contains
    
    
    !> Single-grid config constructor from NGA grid file
-   function construct_from_file(no,file,grp,decomp) result(self)
+   function construct_from_file(grp,decomp,no,fgrid) result(self)
       implicit none
       type(config) :: self
-      character(*), intent(in) :: file
+      character(*), intent(in) :: fgrid
       integer, intent(in) :: grp,no
       integer, dimension(3), intent(in) :: decomp
       ! Create a partitioned grid with the provided group and decomposition
-      self%pgrid=pgrid(no,file,grp,decomp)
+      self%pgrid=pgrid(no,fgrid,grp,decomp)
       ! Finish preparing the config
       call self%prep
    end function construct_from_file
@@ -98,7 +99,8 @@ contains
       call MPI_ALLREDUCE(minval(this%meshsize(this%imin_:this%imax_,this%jmin_:this%jmax_,this%kmin_:this%kmax_)),this%min_meshsize,1,MPI_REAL_WP,MPI_MIN,this%comm,ierr)
       
       ! Allocate wall geometry - assume all fluid until told otherwise
-      allocate(this%mask(this%imino_:this%imaxo_,this%jmino_:this%jmaxo_,this%kmino_:this%kmaxo_)); this%mask=0
+      allocate(this%mask(this%imino_:this%imaxo_,this%jmino_:this%jmaxo_,this%kmino_:this%kmaxo_))
+      this%mask=0.0_WP
       
    end subroutine config_prep
    
@@ -119,8 +121,6 @@ contains
       character(len=*), intent(in) :: file
       ! Write out the grid
       call this%pgrid%write(trim(adjustl(file))//".grid")
-      ! Write out the geometry
-      !call this%pgrid%write(trim(adjustl(file))//".geom")
    end subroutine config_write
    
    

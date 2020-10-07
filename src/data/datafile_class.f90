@@ -8,7 +8,7 @@ module datafile_class
    private
    
    ! Expose type/constructor/methods
-   public :: datafile
+   public :: datafile,datafile_from_file
    
    !> Datafile object definition as an extension of pgrid
    type :: datafile
@@ -25,26 +25,60 @@ module datafile_class
       character(len=str_short), dimension(:), allocatable :: varname  !< Name of field variables
       real(WP), dimension(:,:,:,:), allocatable :: var                !< Variables
    contains
-      procedure :: push=>datafile_push       !< Push data to datafile
-      procedure :: pull=>datafile_pull       !< Pull data from datafile
-      !procedure :: read =>datafile_read      !< Parallel read a datafile object to disk
-      !procedure :: write=>datafile_write     !< Parallel write a datafile object to disk
-      procedure :: print=>datafile_print     !< Print out debugging info to screen
-      procedure :: log=>datafile_log         !< Print out debugging info to log
+      procedure :: findval                   !< Function that returns val index if name is found, zero otherwise
+      procedure :: findvar                   !< Function that returns var index if name is found, zero otherwise
+      procedure :: pushval=>datafile_pushval !< Push data to datafile
+      procedure :: pullval=>datafile_pullval !< Pull data from datafile
+      procedure :: pushvar=>datafile_pushvar !< Push data to datafile
+      procedure :: pullvar=>datafile_pullvar !< Pull data from datafile
+      procedure :: write  =>datafile_write   !< Parallel write a datafile object to disk
+      procedure :: print  =>datafile_print   !< Print out debugging info to screen
+      procedure :: log    =>datafile_log     !< Print out debugging info to log
    end type datafile
    
    
    !> Declare datafile constructor
    interface datafile
-      procedure datafile_from_file
+      procedure datafile_from_args
    end interface datafile
    
    
 contains
    
    
-   !> Constructor for a datafile object
+   !> Constructor for an empty datafile object
+   function datafile_from_args(pg,filename,nval,nvar) result(self)
+      use monitor,  only: die
+      implicit none
+      type(datafile) :: self
+      class(pgrid), target, intent(in) :: pg
+      character(len=*), intent(in) :: filename
+      integer, intent(in) :: nval,nvar
+      
+      ! Link the partitioned grid and store the filename
+      self%pg=>pg
+      self%filename=trim(adjustl(filename))
+      
+      ! Allocate storage and store names for vals
+      self%nval=nval
+      allocate(self%valname(self%nval))
+      self%valname=''
+      allocate(self%val(self%nval))
+      self%val=0.0_WP
+      
+      ! Allocate storage and store names for vars
+      self%nvar=nvar
+      allocate(self%varname(self%nvar))
+      self%varname=''
+      allocate(self%var(self%nvar,self%pg%imin_:self%pg%imax_,self%pg%jmin_:self%pg%jmax_,self%pg%kmin_:self%pg%kmax_))
+      self%var=0.0_WP
+      
+   end function datafile_from_args
+   
+   
+   !> Constructor for a datafile object based on an existing file
    function datafile_from_file(pg,fdata) result(self)
+      use param,    only: verbose
       use monitor,  only: die
       use parallel, only: mpi_info,MPI_REAL_WP
       use mpi
@@ -104,39 +138,197 @@ contains
       ! Close the file
       call MPI_FILE_CLOSE(ifile,ierr)
       
+      ! If verbose run, log and or print grid
+      if (verbose.gt.2) call self%log('Read')
+      if (verbose.gt.3) call self%print('Read')
+      
    end function datafile_from_file
    
    
+   !> Write a datafile object to a file
+   subroutine datafile_write(this,fdata)
+      use param,    only: verbose
+      use monitor,  only: die
+      use parallel, only: mpi_info,MPI_REAL_WP
+      use mpi
+      implicit none
+      class(datafile) :: this
+      character(len=*), optional :: fdata
+      integer :: ierr,ifile,n,data_size,view
+      integer, dimension(MPI_STATUS_SIZE) :: status
+      integer, dimension(5) :: dims
+      integer(kind=MPI_OFFSET_KIND) :: disp,full_size
+      logical :: file_is_there
+      
+      ! Update the filename
+      if (present(fdata)) this%filename=trim(adjustl(fdata))
+      
+      ! First open the file in parallel
+      inquire(file=trim(this%filename),exist=file_is_there)
+      if (file_is_there.and.this%pg%amRoot) call MPI_FILE_DELETE(trim(this%filename),mpi_info,ierr)
+      call MPI_FILE_OPEN(this%pg%comm,trim(this%filename),IOR(MPI_MODE_WRONLY,MPI_MODE_CREATE),mpi_info,ifile,ierr)
+      if (ierr.ne.0) call die('[datafile write] Problem encountered while reading data file: '//trim(this%filename))
+      
+      ! Read file header first
+      dims=[this%pg%nx,this%pg%ny,this%pg%nz,this%nval,this%nvar]
+      call MPI_FILE_WRITE_ALL(ifile,dims,5,MPI_INTEGER,status,ierr)
+      
+      ! Read the name and data for all the values
+      do n=1,this%nval
+         call MPI_FILE_WRITE_ALL(ifile,this%valname(n),str_short,MPI_CHARACTER,status,ierr)
+         call MPI_FILE_WRITE_ALL(ifile,this%val(n)    ,1        ,MPI_REAL_WP  ,status,ierr)
+      end do
+      
+      ! Size of local and full arrays
+      data_size=this%pg%nx_*this%pg%ny_*this%pg%nz_
+      full_size=int(this%pg%nx,MPI_OFFSET_KIND)*int(this%pg%ny,MPI_OFFSET_KIND)*int(this%pg%nz,MPI_OFFSET_KIND)
+      
+      ! Read the name and data for all the variables
+      do n=1,this%nvar
+         call MPI_FILE_WRITE_ALL(ifile,this%varname(n),str_short,MPI_CHARACTER,status,ierr)
+         disp=int(5*4+this%nval*(str_short+WP),MPI_OFFSET_KIND)+int(n-1,MPI_OFFSET_KIND)*(full_size+WP)
+         call MPI_FILE_SET_VIEW(ifile,disp,MPI_REAL_WP,view,'native',mpi_info,ierr)
+         call MPI_FILE_WRITE_ALL(ifile,this%var(n,:,:,:),data_size,MPI_REAL_WP,status,ierr)
+      end do
+      
+      ! Close the file
+      call MPI_FILE_CLOSE(ifile,ierr)
+      
+      ! If verbose run, log and or print grid
+      if (verbose.gt.1) call this%log('Wrote')
+      if (verbose.gt.2) call this%print('Wrote')
+      
+   end subroutine datafile_write
+   
+   
    !> Print datafile content to the screen
-   subroutine datafile_print(this)
+   subroutine datafile_print(this,text)
       use, intrinsic :: iso_fortran_env, only: output_unit
       implicit none
       class(datafile), intent(in) :: this
+      character(*), intent(in) :: text
       if (this%pg%amRoot) then
-         write(output_unit,'("Datafile [",a,"] for partitioned grid [",a,"]")') trim(this%filename),trim(this%pg%name)
+         write(output_unit,'(a," datafile [",a,"] for partitioned grid [",a,"]")') trim(text),trim(this%filename),trim(this%pg%name)
          write(output_unit,'(" >      nval = ",i0)') this%nval
-         write(output_unit,'(" > val names = ",1000(a,x))') this%valname
+         write(output_unit,'(" > val names = ",1000(a,1x))') this%valname
          write(output_unit,'(" >      nvar = ",i0)') this%nvar
-         write(output_unit,'(" > var names = ",1000(a,x))') this%varname
+         write(output_unit,'(" > var names = ",1000(a,1x))') this%varname
       end if
    end subroutine datafile_print
    
    
    !> Print datafile content to the log
-   subroutine datafile_log(this)
+   subroutine datafile_log(this,text)
       use monitor,  only: log
       use string,   only: str_long
       implicit none
       class(datafile), intent(in) :: this
+      character(*), intent(in) :: text
       character(len=str_long) :: message
       if (this%pg%amRoot) then
-         write(message,'("Datafile [",a,"] for partitioned grid [",a,"]")') trim(this%filename),trim(this%pg%name); call log(message)
+         write(message,'(a," datafile [",a,"] for partitioned grid [",a,"]")') trim(text),trim(this%filename),trim(this%pg%name); call log(message)
          write(message,'(" >      nval = ",i0)') this%nval; call log(message)
-         write(message,'(" > val names = ",1000(a,x))') this%valname; call log(message)
+         write(message,'(" > val names = ",1000(a,1x))') this%valname; call log(message)
          write(message,'(" >      nvar = ",i0)') this%nvar; call log(message)
-         write(message,'(" > var names = ",1000(a,x))') this%varname; call log(message)
+         write(message,'(" > var names = ",1000(a,1x))') this%varname; call log(message)
       end if
    end subroutine datafile_log
+   
+   
+   !> Index finding for val
+   function findval(this,name) result(ind)
+      implicit none
+      class(datafile) :: this
+      integer :: ind
+      character(len=*), intent(in) :: name
+      integer :: n
+      ind=0
+      do n=1,this%nval
+         if (this%valname(n).eq.name) ind=n
+      end do
+   end function findval
+   
+   
+   !> Push data to a val
+   subroutine datafile_pushval(this,name,val)
+      use monitor, only: die
+      implicit none
+      class(datafile) :: this
+      character(len=*), intent(in) :: name
+      real(WP), intent(in) :: val
+      integer :: n
+      n=this%findval(name)
+      if (n.gt.0) then
+         this%val(n)=val
+      else
+         call die('[datafile pushval] Val does not exist in the datafile: '//name)
+      end if
+   end subroutine datafile_pushval
+   
+   
+   !> Pull data from a val
+   subroutine datafile_pullval(this,name,val)
+      use monitor, only: die
+      implicit none
+      class(datafile) :: this
+      character(len=*), intent(in) :: name
+      real(WP), intent(out) :: val
+      integer :: n
+      n=this%findval(name)
+      if (n.gt.0) then
+         val=this%val(n)
+      else
+         call die('[datafile pullval] Val does not exist in the datafile: '//name)
+      end if
+   end subroutine datafile_pullval
+   
+   
+   !> Index finding for var
+   function findvar(this,name) result(ind)
+      implicit none
+      class(datafile) :: this
+      integer :: ind
+      character(len=*), intent(in) :: name
+      integer :: n
+      ind=0
+      do n=1,this%nvar
+         if (this%varname(n).eq.name) ind=n
+      end do
+   end function findvar
+   
+   
+   !> Push data to a var
+   subroutine datafile_pushvar(this,name,var)
+      use monitor, only: die
+      implicit none
+      class(datafile) :: this
+      character(len=*), intent(in) :: name
+      real(WP), dimension(:,:,:), intent(in) :: var
+      integer :: n
+      n=this%findvar(name)
+      if (n.gt.0) then
+         this%var(n,:,:,:)=var(:,:,:)
+      else
+         call die('[datafile pushvar] Var does not exist in the datafile: '//name)
+      end if
+   end subroutine datafile_pushvar
+   
+   
+   !> Pull data from a var
+   subroutine datafile_pullvar(this,name,var)
+      use monitor, only: die
+      implicit none
+      class(datafile) :: this
+      character(len=*), intent(in) :: name
+      real(WP), dimension(:,:,:), intent(out) :: var
+      integer :: n
+      n=this%findvar(name)
+      if (n.gt.0) then
+         var(:,:,:)=this%var(n,:,:,:)
+      else
+         call die('[datafile pullvar] Var does not exist in the datafile: '//name)
+      end if
+   end subroutine datafile_pullvar
    
    
 end module datafile_class

@@ -2,8 +2,6 @@
 !> @todo Provide a flexible multi-grid environment
 !> @todo Provide a flexible parallelization strategy
 module geometry
-   use precision,    only: WP
-   use sgrid_class,  only: sgrid,cartesian
    use config_class, only: config
    implicit none
    private
@@ -21,28 +19,85 @@ contains
    
    !> Initialization of problem geometry
    subroutine geometry_init
-      use string,   only: str_medium
-      use param,    only: param_read
-      use parallel, only: group
+      use precision,      only: WP
+      use string,         only: str_medium
+      use param,          only: param_read
+      use parallel,       only: group
+      use sgrid_class,    only: sgrid,cartesian
+      use datafile_class, only: datafile
       implicit none
-      character(len=str_medium) :: fgrid
+      ! Test case initialization
       integer, dimension(3) :: partition
+      type(sgrid) :: grid
+      integer :: i,j,k
+      integer :: nx,ny,nz
+      real(WP), dimension(:), allocatable :: x,y,z
+      real(WP) :: Lx,Ly,Lz,hole_size,hole_dist
+      ! We also test the creation of a datafile
+      type(datafile) :: geomfile
+      !character(len=str_medium) :: fgrid
+      !character(len=str_medium) :: fgeom
       
-      ! Create a config from a grid file
-      call param_read('Grid file',fgrid)
+      ! Create a grid from input params
+      call param_read('Lx',Lx); call param_read('nx',nx); allocate(x(nx+1))
+      call param_read('Ly',Ly); call param_read('ny',ny); allocate(y(ny+1))
+      call param_read('Lz',Lz); call param_read('nz',nz); allocate(z(nz+1))
+      do i=1,nx+1
+         x(i)=real(i-1,WP)/real(nx,WP)*Lx-0.5_WP*Lx
+      end do
+      do j=1,ny+1
+         y(j)=real(j-1,WP)/real(ny,WP)*Ly-0.5_WP*Ly
+      end do
+      do k=1,nz+1
+         z(k)=real(k-1,WP)/real(nz,WP)*Lz-0.5_WP*Lz
+      end do
+      grid=sgrid(cartesian,1,x,y,z,.true.,.false.,.true.,name='DropletSpreading')
+      
+      ! Create a config from that grid on our entire group
       call param_read('Partition',partition,short='p')
-      cfg=config(3,fgrid,group,partition)
+      cfg=config(group,partition,grid)
+      
+      ! Create masks for this config
+      call param_read('Hole size',hole_size)
+      call param_read('Hole dist',hole_dist)
+      do k=cfg%kmin_,cfg%kmax_
+         do j=cfg%jmin_,cfg%jmax_
+            do i=cfg%imin_,cfg%imax_
+               if (cfg%ym(j).gt.0.0_WP) then
+                  ! Above the plate
+                  cfg%mask(i,j,k)=0
+               else
+                  ! This is the plate
+                  cfg%mask(i,j,k)=1
+                  ! Now perforate it
+                  if (modulo(cfg%xm(j),hole_dist).lt.hole_size.and.modulo(cfg%zm(k),hole_dist).lt.hole_size) cfg%mask(i,j,k)=0
+               end if
+            end do
+         end do
+      end do
+      ! First attempt at communication!
+      call cfg%sync(cfg%mask)
+      
+      ! Create datafile for mask
+      geomfile=datafile(cfg%pgrid,'DropletSpreading',1,1)
+      geomfile%valname(1)='test'; call geomfile%pushval('test',-1.0001_WP)
+      geomfile%varname(1)='mask'; call geomfile%pushvar('mask',cfg%mask(cfg%imin_:cfg%imax_,cfg%jmin_:cfg%jmax_,cfg%kmin_:cfg%kmax_))
       
       ! Print it back out
       call cfg%write('test')
+      call geomfile%write('test.geom')
       
-      ! Try to use HDF5 to create a file
-      !call param_read('Grid file to read',fgeom,short='g'); call geometry_write_to_file(fgeom)
       
-      ! The logic here would be to either call some mesh creation, or read in a geometry file
-      ! Here, we'll start with reading a geometry file
-      !call param_read('Grid file to read',fgeom,short='g'); call geometry_read_from_file(fgeom)
-      !print*,'fgeom file =',fgeom
+      
+      ! Create a config from a grid file
+      !call param_read('Grid file',fgrid)
+      !call param_read('Geom file',fgeom)
+      !
+      
+      !cfg=config(group,partition,3,fgrid)
+      
+      
+      
       
    end subroutine geometry_init
    

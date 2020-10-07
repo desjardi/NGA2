@@ -37,6 +37,12 @@ module pgrid_class
       integer :: imino_,imaxo_              !< Domain-decomposed index bounds in x with overlap
       integer :: jmino_,jmaxo_              !< Domain-decomposed index bounds in y with overlap
       integer :: kmino_,kmaxo_              !< Domain-decomposed index bounds in z with overlap
+      
+      !> Communication buffers
+      real(WP), dimension(:,:,:), allocatable, private :: syncbuf_x1,syncbuf_x2
+      real(WP), dimension(:,:,:), allocatable, private :: syncbuf_y1,syncbuf_y2
+      real(WP), dimension(:,:,:), allocatable, private :: syncbuf_z1,syncbuf_z2
+      
    contains
       procedure, private :: init_mpi=>pgrid_init_mpi           !< Prepare the MPI environment for the pgrid
       procedure, private :: domain_decomp=>pgrid_domain_decomp !< Perform the domain decomposition
@@ -44,6 +50,7 @@ module pgrid_class
       procedure :: print=>pgrid_print                          !< Output grid to screen
       procedure :: log=>pgrid_log                              !< Output grid info to log
       procedure :: write=>pgrid_write                          !< Output grid to grid file
+      procedure :: sync=>pgrid_sync                            !< Commmunicate inner and periodic boundaries
    end type pgrid
    
    
@@ -201,7 +208,7 @@ contains
       implicit none
       class(pgrid) :: self
       integer, dimension(3), intent(in) :: decomp
-      integer :: ierr,q,r
+      integer :: ierr,q,r,tmp_comm
       integer, parameter :: ndims=3
       logical, parameter :: reorder=.true.
       integer, dimension(3) :: coords
@@ -213,7 +220,7 @@ contains
       if (self%npx*self%npy*self%npz.ne.self%nproc) call die('[pgrid constructor] Parallel decomposition is improper')
       
       ! Give cartesian layout to intracommunicator
-      call MPI_CART_CREATE(self%comm,ndims,[self%npx,self%npy,self%npz],[self%xper,self%yper,self%zper],reorder,self%comm,ierr)
+      call MPI_CART_CREATE(self%comm,ndims,[self%npx,self%npy,self%npz],[self%xper,self%yper,self%zper],reorder,tmp_comm,ierr); self%comm=tmp_comm
       call MPI_COMM_RANK  (self%comm,self%rank,ierr)
       call MPI_CART_COORDS(self%comm,self%rank,ndims,coords,ierr)
       self%iproc=coords(1)+1; self%jproc=coords(2)+1; self%kproc=coords(3)+1
@@ -260,6 +267,14 @@ contains
       self%nzo_  =self%nz_+2*self%no
       self%kmino_=self%kmin_-self%no
       self%kmaxo_=self%kmax_+self%no
+      
+      ! We also need to prepare communication buffers
+      allocate(self%syncbuf_x1(self%no,self%jmino_:self%jmaxo_,self%kmino_:self%kmaxo_))
+      allocate(self%syncbuf_x2(self%no,self%jmino_:self%jmaxo_,self%kmino_:self%kmaxo_))
+      allocate(self%syncbuf_y1(self%imino_:self%imaxo_,self%no,self%kmino_:self%kmaxo_))
+      allocate(self%syncbuf_y2(self%imino_:self%imaxo_,self%no,self%kmino_:self%kmaxo_))
+      allocate(self%syncbuf_z1(self%imino_:self%imaxo_,self%jmino_:self%jmaxo_,self%no))
+      allocate(self%syncbuf_z2(self%imino_:self%imaxo_,self%jmino_:self%jmaxo_,self%no))
       
    end subroutine pgrid_domain_decomp
    
@@ -345,6 +360,86 @@ contains
       character(len=*), intent(in) :: file
       call this%sgrid%write(file)
    end subroutine pgrid_write
+   
+   
+   !> Synchronization of overlap cells
+   subroutine pgrid_sync(this,A)
+      use mpi
+      use parallel, only: MPI_REAL_WP
+      implicit none
+      class(pgrid) :: this
+      real(WP), dimension(this%imino_:this%imaxo_,this%jmino_:this%jmaxo_,this%kmino_:this%kmaxo_), intent(inout) :: A
+      integer, dimension(MPI_STATUS_SIZE) :: status
+      integer :: isrc,idst,ierr
+      integer :: i,j,k
+      
+      ! Work in x - is it 2D or 3D?
+      if (this%nx.eq.1) then
+         ! Direct copy if 2D
+         do i=this%imax_+1,this%imaxo_
+            A(i,:,:)=A(this%imin_,:,:)
+         end do
+         do i=this%imino_,this%imin_-1
+            A(i,:,:)=A(this%imin_,:,:)
+         end do
+      else
+         ! Send left buffer to left neighbour
+         call MPI_CART_SHIFT(this%comm,0,-1,isrc,idst,ierr)
+         this%syncbuf_x1=A(this%imin_:this%imin_+this%no-1,:,:)
+         call MPI_SENDRECV(this%syncbuf_x1,this%no*this%nyo_*this%nzo_,MPI_REAL_WP,idst,0,this%syncbuf_x2,this%no*this%nyo_*this%nzo_,MPI_REAL_WP,isrc,0,this%comm,status,ierr)
+         if (isrc.ne.MPI_PROC_NULL) A(this%imax_+1:this%imaxo_,:,:)=this%syncbuf_x2
+         ! Send right buffer to right neighbour
+         call MPI_CART_SHIFT(this%comm,0,+1,isrc,idst,ierr)
+         this%syncbuf_x1=A(this%imax_-this%no+1:this%imax_,:,:)
+         call MPI_SENDRECV(this%syncbuf_x1,this%no*this%nyo_*this%nzo_,MPI_REAL_WP,idst,0,this%syncbuf_x2,this%no*this%nyo_*this%nzo_,MPI_REAL_WP,isrc,0,this%comm,status,ierr)
+         if (isrc.ne.MPI_PROC_NULL) A(this%imino_:this%imin_-1,:,:)=this%syncbuf_x2
+      end if
+      
+      ! Work in y - is it 2D or 3D?
+      if (this%ny.eq.1) then
+         ! Direct copy if 2D
+         do j=this%jmax_+1,this%jmaxo_
+            A(:,j,:)=A(:,this%jmin_,:)
+         end do
+         do j=this%jmino_,this%jmin_-1
+            A(:,j,:)=A(:,this%jmin_,:)
+         end do
+      else
+         ! Send left buffer to left neighbour
+         call MPI_CART_SHIFT(this%comm,1,-1,isrc,idst,ierr)
+         this%syncbuf_y1=A(:,this%jmin_:this%jmin_+this%no-1,:)
+         call MPI_SENDRECV(this%syncbuf_y1,this%no*this%nxo_*this%nzo_,MPI_REAL_WP,idst,0,this%syncbuf_y2,this%no*this%nxo_*this%nzo_,MPI_REAL_WP,isrc,0,this%comm,status,ierr)
+         if (isrc.ne.MPI_PROC_NULL) A(:,this%jmax_+1:this%jmaxo_,:)=this%syncbuf_y2
+         ! Send right buffer to right neighbour
+         call MPI_CART_SHIFT(this%comm,1,+1,isrc,idst,ierr)
+         this%syncbuf_y1=A(:,this%jmax_-this%no+1:this%jmax_,:)
+         call MPI_SENDRECV(this%syncbuf_y1,this%no*this%nxo_*this%nzo_,MPI_REAL_WP,idst,0,this%syncbuf_y2,this%no*this%nxo_*this%nzo_,MPI_REAL_WP,isrc,0,this%comm,status,ierr)
+         if (isrc.ne.MPI_PROC_NULL) A(:,this%jmino_:this%jmin_-1,:)=this%syncbuf_y2
+      end if
+      
+      ! Work in z - is it 2D or 3D?
+      if (this%nz.eq.1) then
+         ! Direct copy if 2D
+         do k=this%kmax_+1,this%kmaxo_
+            A(:,:,k)=A(:,:,this%kmin_)
+         end do
+         do j=this%kmino_,this%kmin_-1
+            A(:,:,k)=A(:,:,this%kmin_)
+         end do
+      else
+         ! Send left buffer to left neighbour
+         call MPI_CART_SHIFT(this%comm,2,-1,isrc,idst,ierr)
+         this%syncbuf_z1=A(:,:,this%kmin_:this%kmin_+this%no-1)
+         call MPI_SENDRECV(this%syncbuf_z1,this%no*this%nxo_*this%nyo_,MPI_REAL_WP,idst,0,this%syncbuf_z2,this%no*this%nxo_*this%nyo_,MPI_REAL_WP,isrc,0,this%comm,status,ierr)
+         if (isrc.ne.MPI_PROC_NULL) A(:,:,this%kmax_+1:this%kmaxo_)=this%syncbuf_z2
+         ! Send right buffer to right neighbour
+         call MPI_CART_SHIFT(this%comm,2,+1,isrc,idst,ierr)
+         this%syncbuf_z1=A(:,:,this%kmax_-this%no+1:this%kmax_)
+         call MPI_SENDRECV(this%syncbuf_z1,this%no*this%nxo_*this%nyo_,MPI_REAL_WP,idst,0,this%syncbuf_z2,this%no*this%nxo_*this%nyo_,MPI_REAL_WP,isrc,0,this%comm,status,ierr)
+         if (isrc.ne.MPI_PROC_NULL) A(:,:,this%kmino_:this%kmin_-1)=this%syncbuf_z2
+      end if
+      
+   end subroutine pgrid_sync
    
    
 end module pgrid_class
