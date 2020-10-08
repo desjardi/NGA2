@@ -41,10 +41,11 @@ contains
    function construct_from_sgrid(grp,decomp,grid) result(self)
       use sgrid_class, only: sgrid
       use string,      only: str_medium
+      use mpi_f08,     only: MPI_Group
       implicit none
       type(config) :: self
       type(sgrid), intent(in) :: grid
-      integer, intent(in) :: grp
+      type(MPI_Group), intent(in) :: grp
       integer, dimension(3), intent(in) :: decomp
       ! Create a partitioned grid with the provided group and decomposition
       self%pgrid=pgrid(grid,grp,decomp)
@@ -58,9 +59,10 @@ contains
    
    !> Single-grid config constructor from NGA grid file
    function construct_from_file(grp,decomp,no,fgrid,fgeom) result(self)
+      use mpi_f08,     only: MPI_Group
       implicit none
       type(config) :: self
-      integer, intent(in) :: grp
+      type(MPI_Group), intent(in) :: grp
       integer, dimension(3), intent(in) :: decomp
       integer, intent(in) :: no
       character(*), intent(in) :: fgrid
@@ -77,7 +79,7 @@ contains
    
    !> Prepare a config once the pgrid is set
    subroutine config_prep(this)
-      use mpi
+      use mpi_f08
       use parallel, only: MPI_REAL_WP
       implicit none
       class(config) :: this
@@ -119,7 +121,7 @@ contains
    subroutine maskupdate(this,mask)
       implicit none
       class(config) :: this
-      real(WP), dimension(this%imino_:this%imaxo_,this%jmino_:this%jmaxo_,this%kmino_:this%kmaxo_), intent(in) :: mask
+      real(WP), dimension(:,:,:), intent(in) :: mask !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       ! Store the masking data
       this%mask=mask
       ! Communicate it

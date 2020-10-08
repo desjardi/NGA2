@@ -1,7 +1,7 @@
 !> Basic parallel environment - global communicator, rank, root...
 !> Standard notation is used (rank goes from 0 to nproc-1)
 module parallel
-   use mpi
+   use mpi_f08
    implicit none
    private
    
@@ -12,15 +12,15 @@ module parallel
    !> Am I the global root process?
    logical, public, protected :: amRoot
    !> This is our global communicator
-   integer, public, protected :: comm
+   type(MPI_Comm), public, protected :: comm
    !> This is our global group
-   integer, public, protected :: group
+   type(MPI_Group), public, protected :: group
    
    !> These are MPI type for our precision
-   integer, public, protected :: MPI_REAL_WP,MPI_REAL_SP,MPI_COMPLEX_WP
+   type(MPI_Datatype), public, protected :: MPI_REAL_WP,MPI_REAL_SP,MPI_COMPLEX_WP
    
    !> I/O info
-   integer, public, protected :: mpi_info
+   type(MPI_Info), public, protected :: info_mpiio
    
    public :: parallel_init,parallel_final,parallel_time,parallel_kill
    
@@ -80,7 +80,7 @@ contains
       amRoot=(rank.eq.0)
       
       ! Also initialize I/O info
-      mpi_info=MPI_INFO_NULL
+      info_mpiio=MPI_INFO_NULL
       
    end subroutine parallel_init
    

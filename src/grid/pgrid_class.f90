@@ -4,6 +4,7 @@ module pgrid_class
    use precision,   only: WP
    use sgrid_class, only: sgrid
    use string,      only: str_medium
+   use mpi_f08,     only: MPI_COMM,MPI_GROUP
    implicit none
    private
    
@@ -17,8 +18,8 @@ module pgrid_class
    !> Partitioned grid type
    type, extends(sgrid) :: pgrid
       ! Parallelization information
-      integer :: group                      !< Grid group
-      integer :: comm                       !< Grid communicator
+      type(MPI_Group) :: group              !< Grid group
+      type(MPI_Comm) :: comm                !< Grid communicator
       integer :: nproc                      !< Number of processors
       integer :: rank                       !< Processor grid rank
       logical :: amRoot                     !< Am I grid root?
@@ -69,13 +70,13 @@ contains
       use monitor,  only: die
       use param,    only: verbose
       use parallel, only: MPI_REAL_WP
-      use mpi
+      use mpi_f08
       implicit none
       
       type(pgrid) :: self                               !< Parallel grid
       integer, intent(in) :: no                         !< Overlap size
       character(len=*), intent(in) :: file              !< Grid file
-      integer, intent(in) :: grp                        !< Processor group for parallelization
+      type(MPI_Group), intent(in) :: grp                !< Processor group for parallelization
       integer, dimension(3), intent(in) :: decomp       !< Desired decomposition
       integer :: ierr
       character(len=str_medium) :: simu_name
@@ -153,7 +154,7 @@ contains
       type(pgrid) :: self                               !< Parallel grid
       
       type(sgrid), intent(in) :: grid                   !< Base grid
-      integer, intent(in) :: grp                        !< Processor group for parallelization
+      type(MPI_Group), intent(in) :: grp                !< Processor group for parallelization
       integer, dimension(3) :: decomp                   !< Requested domain decomposition
       
       ! Initialize MPI environment
@@ -180,7 +181,7 @@ contains
    subroutine pgrid_init_mpi(self)
       use parallel, only: comm
       use monitor , only: die
-      use mpi
+      use mpi_f08
       implicit none
       class(pgrid) :: self
       integer :: ierr
@@ -204,11 +205,12 @@ contains
    !> Prepares the domain decomposition of the pgrid
    subroutine pgrid_domain_decomp(self,decomp)
       use monitor , only: die
-      use mpi
+      use mpi_f08
       implicit none
       class(pgrid) :: self
       integer, dimension(3), intent(in) :: decomp
-      integer :: ierr,q,r,tmp_comm
+      integer :: ierr,q,r
+      type(MPI_Comm) :: tmp_comm
       integer, parameter :: ndims=3
       logical, parameter :: reorder=.true.
       integer, dimension(3) :: coords
@@ -357,12 +359,12 @@ contains
    !> This routine assumes that the default overlap size is used
    !> It allows the use of pre-allocated buffers for speed
    subroutine pgrid_sync(this,A)
-      use mpi
+      use mpi_f08
       use parallel, only: MPI_REAL_WP
       implicit none
       class(pgrid) :: this
-      real(WP), dimension(this%imino_:this%imaxo_,this%jmino_:this%jmaxo_,this%kmino_:this%kmaxo_), intent(inout) :: A
-      integer, dimension(MPI_STATUS_SIZE) :: status
+      real(WP), dimension(this%imino_:,this%jmino_:,this%kmino_:), intent(inout) :: A !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      type(MPI_Status) :: status
       integer :: isrc,idst,ierr,isize,i,j,k
       
       ! Work in x - is it 2D or 3D?
@@ -440,13 +442,13 @@ contains
    !> Synchronization of overlap cells
    !> This version is capable of handling any overlap size
    subroutine pgrid_sync_no(this,A,no)
-      use mpi
+      use mpi_f08
       use parallel, only: MPI_REAL_WP
       implicit none
       class(pgrid) :: this
       integer, intent(in) :: no
-      real(WP), dimension(this%imin_-no:this%imax_+no,this%jmin_-no:this%jmax_+no,this%kmin_-no:this%kmax_+no), intent(inout) :: A
-      integer, dimension(MPI_STATUS_SIZE) :: status
+      real(WP), dimension(this%imin_-no:,this%jmin_-no:,this%kmin_-no:), intent(inout) :: A !< Needs to be (imin_-no:imax_+no,jmin_-no:jmax_+no,kmin_-no:kmax_+no)
+      type(MPI_Status) :: status
       integer :: isrc,idst,ierr,isize,i,j,k
       real(WP), dimension(:,:,:), allocatable :: buf1,buf2
       

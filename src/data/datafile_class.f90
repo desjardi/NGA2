@@ -71,7 +71,7 @@ contains
       self%nvar=nvar
       allocate(self%varname(self%nvar))
       self%varname=''
-      allocate(self%var(self%nvar,self%pg%imino_:self%pg%imaxo_,self%pg%jmino_:self%pg%jmaxo_,self%pg%kmino_:self%pg%kmaxo_))
+      allocate(self%var(self%pg%imino_:self%pg%imaxo_,self%pg%jmino_:self%pg%jmaxo_,self%pg%kmino_:self%pg%kmaxo_,self%nvar))
       self%var=0.0_WP
       
    end function datafile_from_args
@@ -81,14 +81,16 @@ contains
    function datafile_from_file(pg,fdata) result(self)
       use param,    only: verbose
       use monitor,  only: die
-      use parallel, only: mpi_info,MPI_REAL_WP
-      use mpi
+      use parallel, only: info_mpiio,MPI_REAL_WP
+      use mpi_f08
       implicit none
       type(datafile) :: self
       character(len=*), intent(in) :: fdata
       class(pgrid), target, intent(in) :: pg
-      integer :: ierr,ifile,n,data_size,view
-      integer, dimension(MPI_STATUS_SIZE) :: status
+      integer :: ierr,n,data_size
+      type(MPI_Datatype) :: view
+      type(MPI_File) :: ifile
+      type(MPI_Status) :: status
       integer, dimension(5) :: dims
       integer(kind=MPI_OFFSET_KIND) :: disp,full_size
       
@@ -97,7 +99,7 @@ contains
       self%filename=trim(adjustl(fdata))
       
       ! First open the file in parallel
-      call MPI_FILE_OPEN(self%pg%comm,trim(self%filename),MPI_MODE_RDONLY,mpi_info,ifile,ierr)
+      call MPI_FILE_OPEN(self%pg%comm,trim(self%filename),MPI_MODE_RDONLY,info_mpiio,ifile,ierr)
       if (ierr.ne.0) call die('[datafile constructor] Problem encountered while reading data file: '//trim(self%filename))
       
       ! Read file header first
@@ -116,7 +118,7 @@ contains
       
       ! Allocate necessary storage
       self%nval=dims(4); allocate(self%valname(self%nval)); allocate(self%val(self%nval)); self%val=0.0_WP
-      self%nvar=dims(5); allocate(self%varname(self%nvar)); allocate(self%var(self%nvar,self%pg%imino_:self%pg%imaxo_,self%pg%jmino_:self%pg%jmaxo_,self%pg%kmino_:self%pg%kmaxo_)); self%var=0.0_WP
+      self%nvar=dims(5); allocate(self%varname(self%nvar)); allocate(self%var(self%pg%imino_:self%pg%imaxo_,self%pg%jmino_:self%pg%jmaxo_,self%pg%kmino_:self%pg%kmaxo_,self%nvar)); self%var=0.0_WP
       
       ! Read the name and data for all the values
       do n=1,self%nval
@@ -132,8 +134,8 @@ contains
       do n=1,self%nvar
          call MPI_FILE_READ_ALL(ifile,self%varname(n),str_short,MPI_CHARACTER,status,ierr)
          disp=int(5*4+self%nval*(str_short+WP),MPI_OFFSET_KIND)+int(n-1,MPI_OFFSET_KIND)*(full_size+WP)
-         call MPI_FILE_SET_VIEW(ifile,disp,MPI_REAL_WP,view,'native',mpi_info,ierr)
-         call MPI_FILE_READ_ALL(ifile,self%var(n,self%pg%imin_:self%pg%imax_,self%pg%jmin_:self%pg%jmax_,self%pg%kmin_:self%pg%kmax_),data_size,MPI_REAL_WP,status,ierr)
+         call MPI_FILE_SET_VIEW(ifile,disp,MPI_REAL_WP,view,'native',info_mpiio,ierr)
+         call MPI_FILE_READ_ALL(ifile,self%var(self%pg%imin_:self%pg%imax_,self%pg%jmin_:self%pg%jmax_,self%pg%kmin_:self%pg%kmax_,n),data_size,MPI_REAL_WP,status,ierr)
       end do
       
       ! Close the file
@@ -150,13 +152,15 @@ contains
    subroutine datafile_write(this,fdata)
       use param,    only: verbose
       use monitor,  only: die
-      use parallel, only: mpi_info,MPI_REAL_WP
-      use mpi
+      use parallel, only: info_mpiio,MPI_REAL_WP
+      use mpi_f08
       implicit none
       class(datafile) :: this
       character(len=*), optional :: fdata
-      integer :: ierr,ifile,n,data_size,view
-      integer, dimension(MPI_STATUS_SIZE) :: status
+      integer :: ierr,n,data_size
+      type(MPI_Datatype) :: view
+      type(MPI_File) :: ifile
+      type(MPI_Status):: status
       integer, dimension(5) :: dims
       integer(kind=MPI_OFFSET_KIND) :: disp,full_size
       logical :: file_is_there
@@ -166,8 +170,8 @@ contains
       
       ! First open the file in parallel
       inquire(file=trim(this%filename),exist=file_is_there)
-      if (file_is_there.and.this%pg%amRoot) call MPI_FILE_DELETE(trim(this%filename),mpi_info,ierr)
-      call MPI_FILE_OPEN(this%pg%comm,trim(this%filename),IOR(MPI_MODE_WRONLY,MPI_MODE_CREATE),mpi_info,ifile,ierr)
+      if (file_is_there.and.this%pg%amRoot) call MPI_FILE_DELETE(trim(this%filename),info_mpiio,ierr)
+      call MPI_FILE_OPEN(this%pg%comm,trim(this%filename),IOR(MPI_MODE_WRONLY,MPI_MODE_CREATE),info_mpiio,ifile,ierr)
       if (ierr.ne.0) call die('[datafile write] Problem encountered while reading data file: '//trim(this%filename))
       
       ! Read file header first
@@ -188,8 +192,8 @@ contains
       do n=1,this%nvar
          call MPI_FILE_WRITE_ALL(ifile,this%varname(n),str_short,MPI_CHARACTER,status,ierr)
          disp=int(5*4+this%nval*(str_short+WP),MPI_OFFSET_KIND)+int(n-1,MPI_OFFSET_KIND)*(full_size+WP)
-         call MPI_FILE_SET_VIEW(ifile,disp,MPI_REAL_WP,view,'native',mpi_info,ierr)
-         call MPI_FILE_WRITE_ALL(ifile,this%var(n,this%pg%imin_:this%pg%imax_,this%pg%jmin_:this%pg%jmax_,this%pg%kmin_:this%pg%kmax_),data_size,MPI_REAL_WP,status,ierr)
+         call MPI_FILE_SET_VIEW(ifile,disp,MPI_REAL_WP,view,'native',info_mpiio,ierr)
+         call MPI_FILE_WRITE_ALL(ifile,this%var(this%pg%imin_:this%pg%imax_,this%pg%jmin_:this%pg%jmax_,this%pg%kmin_:this%pg%kmax_,n),data_size,MPI_REAL_WP,status,ierr)
       end do
       
       ! Close the file
@@ -304,11 +308,11 @@ contains
       implicit none
       class(datafile) :: this
       character(len=*), intent(in) :: name
-      real(WP), dimension(:,:,:), intent(in) :: var
+      real(WP), dimension(:,:,:), intent(in) :: var !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       integer :: n
       n=this%findvar(name)
       if (n.gt.0) then
-         this%var(n,:,:,:)=var
+         this%var(:,:,:,n)=var
       else
          call die('[datafile pushvar] Var does not exist in the datafile: '//name)
       end if
@@ -321,11 +325,11 @@ contains
       implicit none
       class(datafile) :: this
       character(len=*), intent(in) :: name
-      real(WP), dimension(this%pg%imino_:this%pg%imaxo_,this%pg%jmino_:this%pg%jmaxo_,this%pg%kmino_:this%pg%kmaxo_), intent(out) :: var
+      real(WP), dimension(:,:,:), intent(out) :: var !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       integer :: n
       n=this%findvar(name)
       if (n.gt.0) then
-         var=this%var(n,:,:,:)
+         var=this%var(:,:,:,n)
       else
          call die('[datafile pullvar] Var does not exist in the datafile: '//name)
       end if
