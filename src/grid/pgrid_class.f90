@@ -46,11 +46,11 @@ module pgrid_class
    contains
       procedure, private :: init_mpi=>pgrid_init_mpi           !< Prepare the MPI environment for the pgrid
       procedure, private :: domain_decomp=>pgrid_domain_decomp !< Perform the domain decomposition
+      
       procedure :: allprint=>pgrid_allprint                    !< Output grid to screen - blocking and requires all procs...
-      procedure :: print=>pgrid_print                          !< Output grid to screen
-      procedure :: log=>pgrid_log                              !< Output grid info to log
-      procedure :: write=>pgrid_write                          !< Output grid to grid file
-      procedure :: sync=>pgrid_sync,pgrid_sync_no              !< Commmunicate inner and periodic boundaries
+      procedure :: print   =>pgrid_print                       !< Output grid to screen
+      procedure :: log     =>pgrid_log                         !< Output grid info to log
+      procedure :: sync    =>pgrid_sync,pgrid_sync_no          !< Commmunicate inner and periodic boundaries
    end type pgrid
    
    
@@ -351,15 +351,6 @@ contains
          write(message,'(" >    volume = ",es12.5)') this%vol_total; call log(message)
       end if
    end subroutine pgrid_log
-   
-   
-   !> Output a partitioned grid object to a file
-   subroutine pgrid_write(this,file)
-      implicit none
-      class(pgrid) :: this
-      character(len=*), intent(in) :: file
-      call this%sgrid%write(file)
-   end subroutine pgrid_write
    
    
    !> Synchronization of overlap cells - uses full no

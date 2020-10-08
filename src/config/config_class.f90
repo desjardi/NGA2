@@ -3,6 +3,7 @@
 module config_class
    use precision,      only: WP
    use pgrid_class,    only: pgrid
+   use datafile_class, only: datafile
    implicit none
    private
    
@@ -16,11 +17,13 @@ module config_class
       real(WP), dimension(:,:,:), allocatable :: meshsize      !< Local effective cell size
       real(WP) :: min_meshsize                                 !< Global minimum mesh size
       ! Geometry
+      type(datafile) :: geom                                   !< Geometry datafile to facilitate the I/O of masking info
       real(WP), dimension(:,:,:), allocatable :: mask          !< Masking info (mask=0 is fluid, mask=1 is wall)
    contains
       procedure :: print=>config_print                         !< Output configuration information to the screen
-      procedure, private :: prep=>config_prep                  !< Finish preparing config after the partitioned grid is loaded
       procedure :: write=>config_write                         !< Write out config files: grid and geometry
+      procedure :: maskupdate                                  !< Takes in a mask array and updates the config consequently
+      procedure, private :: prep=>config_prep                  !< Finish preparing config after the partitioned grid is loaded
    end type config
    
    
@@ -47,20 +50,28 @@ contains
       self%pgrid=pgrid(grid,grp,decomp)
       ! Finish preparing the config
       call self%prep
+      ! Also prepare a datafile for mask
+      self%geom=datafile(self,trim(self%name),0,1)
+      self%geom%varname(1)='mask'
    end function construct_from_sgrid
    
    
    !> Single-grid config constructor from NGA grid file
-   function construct_from_file(grp,decomp,no,fgrid) result(self)
+   function construct_from_file(grp,decomp,no,fgrid,fgeom) result(self)
       implicit none
       type(config) :: self
-      character(*), intent(in) :: fgrid
-      integer, intent(in) :: grp,no
+      integer, intent(in) :: grp
       integer, dimension(3), intent(in) :: decomp
+      integer, intent(in) :: no
+      character(*), intent(in) :: fgrid
+      character(*), intent(in) :: fgeom
       ! Create a partitioned grid with the provided group and decomposition
       self%pgrid=pgrid(no,fgrid,grp,decomp)
       ! Finish preparing the config
       call self%prep
+      ! Read in the mask info and update the masks
+      self%geom=datafile(self,fgeom)
+      call self%maskupdate(self%geom%var(1,:,:,:))
    end function construct_from_file
    
    
@@ -104,6 +115,22 @@ contains
    end subroutine config_prep
    
    
+   !> Updates mask info for the config
+   subroutine maskupdate(this,mask)
+      implicit none
+      class(config) :: this
+      real(WP), dimension(this%imino_:this%imaxo_,this%jmino_:this%jmaxo_,this%kmino_:this%kmaxo_), intent(in) :: mask
+      ! Store the masking data
+      this%mask=mask
+      ! Communicate it
+      call this%sync(this%mask)
+      ! Apply Neumann in all non-periodic directions
+      
+      ! Also store in datafile
+      call this%geom%pushvar('mask',this%mask)
+   end subroutine maskupdate
+   
+   
    !> Cheap print of config info to screen
    subroutine config_print(this)
       use, intrinsic :: iso_fortran_env, only: output_unit
@@ -114,12 +141,15 @@ contains
    
    
    !> Output a config object to a file
+   !> Expect a parallel call here
    subroutine config_write(this,file)
       implicit none
       class(config) :: this
       character(len=*), intent(in) :: file
-      ! Write out the grid
-      call this%pgrid%write(trim(adjustl(file))//".grid")
+      ! Root process writes out the grid
+      if (this%amRoot) call this%sgrid%write(trim(adjustl(file))//'.grid')
+      ! All processes write out the geometry
+      !call this%geom%write(trim(adjustl(file))//'.geom')
    end subroutine config_write
    
    

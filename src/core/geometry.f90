@@ -33,10 +33,10 @@ contains
       integer :: nx,ny,nz
       real(WP), dimension(:), allocatable :: x,y,z
       real(WP) :: Lx,Ly,Lz,hole_size,hole_dist
-      ! We also test the creation of a datafile
-      type(datafile) :: geomfile
-      !character(len=str_medium) :: fgrid
-      !character(len=str_medium) :: fgeom
+      real(WP), dimension(:,:,:), allocatable :: mask
+      ! We also test the creation of a grid/geom file set
+      character(len=str_medium) :: fgrid
+      character(len=str_medium) :: fgeom
       
       ! Create a grid from input params
       call param_read('Lx',Lx); call param_read('nx',nx); allocate(x(nx+1))
@@ -58,6 +58,7 @@ contains
       cfg=config(group,partition,grid)
       
       ! Create masks for this config
+      allocate(mask(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
       call param_read('Hole size',hole_size)
       call param_read('Hole dist',hole_dist)
       do k=cfg%kmin_,cfg%kmax_
@@ -65,27 +66,21 @@ contains
             do i=cfg%imin_,cfg%imax_
                if (cfg%ym(j).gt.0.0_WP) then
                   ! Above the plate
-                  cfg%mask(i,j,k)=0
+                  mask(i,j,k)=0.0_WP
                else
                   ! This is the plate
-                  cfg%mask(i,j,k)=1
+                  mask(i,j,k)=1.0_WP
                   ! Now perforate it
-                  if (modulo(cfg%xm(j),hole_dist).lt.hole_size.and.modulo(cfg%zm(k),hole_dist).lt.hole_size) cfg%mask(i,j,k)=0
+                  if (modulo(cfg%xm(j),hole_dist).lt.hole_size.and.modulo(cfg%zm(k),hole_dist).lt.hole_size) mask(i,j,k)=0.0_WP
                end if
             end do
          end do
       end do
-      ! First attempt at communication!
-      call cfg%sync(cfg%mask)
-      
-      ! Create datafile for mask
-      geomfile=datafile(cfg%pgrid,'DropletSpreading',1,1)
-      geomfile%valname(1)='test'; call geomfile%pushval('test',-1.0001_WP)
-      geomfile%varname(1)='mask'; call geomfile%pushvar('mask',cfg%mask(cfg%imin_:cfg%imax_,cfg%jmin_:cfg%jmax_,cfg%kmin_:cfg%kmax_))
+      call cfg%maskupdate(mask)
+      deallocate(mask)
       
       ! Print it back out
       call cfg%write('test')
-      call geomfile%write('test.geom')
       
       
       

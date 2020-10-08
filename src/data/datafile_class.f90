@@ -8,7 +8,7 @@ module datafile_class
    private
    
    ! Expose type/constructor/methods
-   public :: datafile,datafile_from_file
+   public :: datafile
    
    !> Datafile object definition as an extension of pgrid
    type :: datafile
@@ -23,7 +23,7 @@ module datafile_class
       ! A datafile stores real(WP) variables pgrid-compatible size
       integer :: nvar                                                 !< Number of field variables
       character(len=str_short), dimension(:), allocatable :: varname  !< Name of field variables
-      real(WP), dimension(:,:,:,:), allocatable :: var                !< Variables
+      real(WP), dimension(:,:,:,:), allocatable :: var                !< Variables (with overlap!)
    contains
       procedure :: findval                   !< Function that returns val index if name is found, zero otherwise
       procedure :: findvar                   !< Function that returns var index if name is found, zero otherwise
@@ -40,6 +40,7 @@ module datafile_class
    !> Declare datafile constructor
    interface datafile
       procedure datafile_from_args
+      procedure datafile_from_file
    end interface datafile
    
    
@@ -70,7 +71,7 @@ contains
       self%nvar=nvar
       allocate(self%varname(self%nvar))
       self%varname=''
-      allocate(self%var(self%nvar,self%pg%imin_:self%pg%imax_,self%pg%jmin_:self%pg%jmax_,self%pg%kmin_:self%pg%kmax_))
+      allocate(self%var(self%nvar,self%pg%imino_:self%pg%imaxo_,self%pg%jmino_:self%pg%jmaxo_,self%pg%kmino_:self%pg%kmaxo_))
       self%var=0.0_WP
       
    end function datafile_from_args
@@ -114,8 +115,8 @@ contains
       if (dims(5).lt.0) call die('[datafile constructor] Number of variables cannot be negative')
       
       ! Allocate necessary storage
-      self%nval=dims(4); allocate(self%valname(self%nval)); allocate(self%val(self%nval))
-      self%nvar=dims(5); allocate(self%varname(self%nvar)); allocate(self%var(self%nvar,self%pg%imin_:self%pg%imax_,self%pg%jmin_:self%pg%jmax_,self%pg%kmin_:self%pg%kmax_))
+      self%nval=dims(4); allocate(self%valname(self%nval)); allocate(self%val(self%nval)); self%val=0.0_WP
+      self%nvar=dims(5); allocate(self%varname(self%nvar)); allocate(self%var(self%nvar,self%pg%imino_:self%pg%imaxo_,self%pg%jmino_:self%pg%jmaxo_,self%pg%kmino_:self%pg%kmaxo_)); self%var=0.0_WP
       
       ! Read the name and data for all the values
       do n=1,self%nval
@@ -132,7 +133,7 @@ contains
          call MPI_FILE_READ_ALL(ifile,self%varname(n),str_short,MPI_CHARACTER,status,ierr)
          disp=int(5*4+self%nval*(str_short+WP),MPI_OFFSET_KIND)+int(n-1,MPI_OFFSET_KIND)*(full_size+WP)
          call MPI_FILE_SET_VIEW(ifile,disp,MPI_REAL_WP,view,'native',mpi_info,ierr)
-         call MPI_FILE_READ_ALL(ifile,self%var(n,:,:,:),data_size,MPI_REAL_WP,status,ierr)
+         call MPI_FILE_READ_ALL(ifile,self%var(n,self%pg%imin_:self%pg%imax_,self%pg%jmin_:self%pg%jmax_,self%pg%kmin_:self%pg%kmax_),data_size,MPI_REAL_WP,status,ierr)
       end do
       
       ! Close the file
@@ -188,7 +189,7 @@ contains
          call MPI_FILE_WRITE_ALL(ifile,this%varname(n),str_short,MPI_CHARACTER,status,ierr)
          disp=int(5*4+this%nval*(str_short+WP),MPI_OFFSET_KIND)+int(n-1,MPI_OFFSET_KIND)*(full_size+WP)
          call MPI_FILE_SET_VIEW(ifile,disp,MPI_REAL_WP,view,'native',mpi_info,ierr)
-         call MPI_FILE_WRITE_ALL(ifile,this%var(n,:,:,:),data_size,MPI_REAL_WP,status,ierr)
+         call MPI_FILE_WRITE_ALL(ifile,this%var(n,this%pg%imin_:this%pg%imax_,this%pg%jmin_:this%pg%jmax_,this%pg%kmin_:this%pg%kmax_),data_size,MPI_REAL_WP,status,ierr)
       end do
       
       ! Close the file
@@ -307,7 +308,7 @@ contains
       integer :: n
       n=this%findvar(name)
       if (n.gt.0) then
-         this%var(n,:,:,:)=var(:,:,:)
+         this%var(n,:,:,:)=var
       else
          call die('[datafile pushvar] Var does not exist in the datafile: '//name)
       end if
@@ -320,11 +321,11 @@ contains
       implicit none
       class(datafile) :: this
       character(len=*), intent(in) :: name
-      real(WP), dimension(:,:,:), intent(out) :: var
+      real(WP), dimension(this%pg%imino_:this%pg%imaxo_,this%pg%jmino_:this%pg%jmaxo_,this%pg%kmino_:this%pg%kmaxo_), intent(out) :: var
       integer :: n
       n=this%findvar(name)
       if (n.gt.0) then
-         var(:,:,:)=this%var(n,:,:,:)
+         var=this%var(n,:,:,:)
       else
          call die('[datafile pullvar] Var does not exist in the datafile: '//name)
       end if
