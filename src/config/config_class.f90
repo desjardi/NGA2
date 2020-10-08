@@ -3,7 +3,6 @@
 module config_class
    use precision,      only: WP
    use pgrid_class,    only: pgrid
-   use datafile_class, only: datafile,datafile_from_file
    implicit none
    private
    

@@ -55,7 +55,7 @@ module sgrid_class
       logical :: xper,yper,zper                        !< Periodicity in x/y/z
    contains
       procedure :: print=>sgrid_print                  !< Output grid to screen
-      procedure :: log=>sgrid_log                      !< Output grid to log file
+      procedure :: log  =>sgrid_log                    !< Output grid to log file
       procedure :: write=>sgrid_write                  !< Output grid to grid file
    end type sgrid
    
