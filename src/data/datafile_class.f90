@@ -53,7 +53,10 @@ contains
    subroutine destructor(this)
       implicit none
       type(datafile) :: this
-      
+      if (allocated(this%valname)) deallocate(this%valname)
+      if (allocated(this%val    )) deallocate(this%val    )
+      if (allocated(this%varname)) deallocate(this%varname)
+      if (allocated(this%var    )) deallocate(this%var    )
    end subroutine destructor
    
    
@@ -81,7 +84,7 @@ contains
       self%nvar=nvar
       allocate(self%varname(self%nvar))
       self%varname=''
-      allocate(self%var(self%pg%imino_:self%pg%imaxo_,self%pg%jmino_:self%pg%jmaxo_,self%pg%kmino_:self%pg%kmaxo_,self%nvar))
+      allocate(self%var(self%pg%imin_:self%pg%imax_,self%pg%jmin_:self%pg%jmax_,self%pg%kmin_:self%pg%kmax_,self%nvar))
       self%var=0.0_WP
       
    end function datafile_from_args
@@ -127,8 +130,8 @@ contains
       if (dims(5).lt.0) call die('[datafile constructor] Number of variables cannot be negative')
       
       ! Allocate necessary storage
-      self%nval=dims(4); allocate(self%valname(self%nval)); allocate(self%val(self%nval)); self%val=0.0_WP
-      self%nvar=dims(5); allocate(self%varname(self%nvar)); allocate(self%var(self%pg%imino_:self%pg%imaxo_,self%pg%jmino_:self%pg%jmaxo_,self%pg%kmino_:self%pg%kmaxo_,self%nvar)); self%var=0.0_WP
+      self%nval=dims(4); allocate(self%valname(self%nval)); allocate(self%val(self%nval))
+      self%nvar=dims(5); allocate(self%varname(self%nvar)); allocate(self%var(self%pg%imin_:self%pg%imax_,self%pg%jmin_:self%pg%jmax_,self%pg%kmin_:self%pg%kmax_,self%nvar))
       
       ! Read the name and data for all the values
       do n=1,self%nval
@@ -145,7 +148,7 @@ contains
          call MPI_FILE_READ_ALL(ifile,self%varname(n),str_short,MPI_CHARACTER,status,ierr)
          disp=int(5*4+self%nval*(str_short+WP),MPI_OFFSET_KIND)+int(n-1,MPI_OFFSET_KIND)*(full_size+WP)
          call MPI_FILE_SET_VIEW(ifile,disp,MPI_REAL_WP,view,'native',info_mpiio,ierr)
-         call MPI_FILE_READ_ALL(ifile,self%var(self%pg%imin_:self%pg%imax_,self%pg%jmin_:self%pg%jmax_,self%pg%kmin_:self%pg%kmax_,n),data_size,MPI_REAL_WP,status,ierr)
+         call MPI_FILE_READ_ALL(ifile,self%var(:,:,:,n),data_size,MPI_REAL_WP,status,ierr)
       end do
       
       ! Close the file
@@ -203,7 +206,7 @@ contains
          call MPI_FILE_WRITE_ALL(ifile,this%varname(n),str_short,MPI_CHARACTER,status,ierr)
          disp=int(5*4+this%nval*(str_short+WP),MPI_OFFSET_KIND)+int(n-1,MPI_OFFSET_KIND)*(full_size+WP)
          call MPI_FILE_SET_VIEW(ifile,disp,MPI_REAL_WP,view,'native',info_mpiio,ierr)
-         call MPI_FILE_WRITE_ALL(ifile,this%var(this%pg%imin_:this%pg%imax_,this%pg%jmin_:this%pg%jmax_,this%pg%kmin_:this%pg%kmax_,n),data_size,MPI_REAL_WP,status,ierr)
+         call MPI_FILE_WRITE_ALL(ifile,this%var(:,:,:,n),data_size,MPI_REAL_WP,status,ierr)
       end do
       
       ! Close the file
@@ -318,11 +321,11 @@ contains
       implicit none
       class(datafile) :: this
       character(len=*), intent(in) :: name
-      real(WP), dimension(:,:,:), intent(in) :: var !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      real(WP), dimension(this%pg%imino_:,this%pg%jmino_:,this%pg%kmino_:), intent(in) :: var !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       integer :: n
       n=this%findvar(name)
       if (n.gt.0) then
-         this%var(:,:,:,n)=var
+         this%var(:,:,:,n)=var(this%pg%imin_:this%pg%imax_,this%pg%jmin_:this%pg%jmax_,this%pg%kmin_:this%pg%kmax_)
       else
          call die('[datafile pushvar] Var does not exist in the datafile: '//name)
       end if
@@ -335,11 +338,11 @@ contains
       implicit none
       class(datafile) :: this
       character(len=*), intent(in) :: name
-      real(WP), dimension(:,:,:), intent(out) :: var !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      real(WP), dimension(this%pg%imino_:,this%pg%jmino_:,this%pg%kmino_:), intent(out) :: var !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       integer :: n
       n=this%findvar(name)
       if (n.gt.0) then
-         var=this%var(:,:,:,n)
+         var(this%pg%imin_:this%pg%imax_,this%pg%jmin_:this%pg%jmax_,this%pg%kmin_:this%pg%kmax_)=this%var(:,:,:,n)
       else
          call die('[datafile pullvar] Var does not exist in the datafile: '//name)
       end if

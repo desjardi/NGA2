@@ -33,7 +33,6 @@ contains
       integer :: nx,ny,nz
       real(WP), dimension(:), allocatable :: x,y,z
       real(WP) :: Lx,Ly,Lz,hole_size,hole_dist
-      real(WP), dimension(:,:,:), allocatable :: mask
       ! We also test the creation of a grid/geom file set
       character(len=str_medium) :: fgrid
       character(len=str_medium) :: fgeom
@@ -58,7 +57,6 @@ contains
       cfg=config(group,partition,grid)
       
       ! Create masks for this config
-      allocate(mask(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
       call param_read('Hole size',hole_size)
       call param_read('Hole dist',hole_dist)
       do k=cfg%kmin_,cfg%kmax_
@@ -66,18 +64,17 @@ contains
             do i=cfg%imin_,cfg%imax_
                if (cfg%ym(j).gt.0.0_WP) then
                   ! Above the plate
-                  mask(i,j,k)=0.0_WP
+                  cfg%mask(i,j,k)=0.0_WP
                else
                   ! This is the plate
-                  mask(i,j,k)=1.0_WP
+                  cfg%mask(i,j,k)=1.0_WP
                   ! Now perforate it
-                  if (modulo(cfg%xm(j),hole_dist).lt.hole_size.and.modulo(cfg%zm(k),hole_dist).lt.hole_size) mask(i,j,k)=0.0_WP
+                  if (modulo(cfg%xm(j),hole_dist).lt.hole_size.and.modulo(cfg%zm(k),hole_dist).lt.hole_size) cfg%mask(i,j,k)=0.0_WP
                end if
             end do
          end do
       end do
-      call cfg%maskupdate(mask)
-      deallocate(mask)
+      call cfg%maskupdate()
       
       ! Print it back out
       call cfg%write('test')

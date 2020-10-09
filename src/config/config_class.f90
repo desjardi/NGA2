@@ -1,9 +1,9 @@
 !> Single-grid config concept is defined here: this is a partitioned grid
 !> as well as geometry (i.e., masks, Gib, or similar)
 module config_class
-   use precision,      only: WP
-   use pgrid_class,    only: pgrid
-   use datafile_class, only: datafile
+   use precision,   only: WP
+   use pgrid_class, only: pgrid
+   use mpi_f08,     only: MPI_Group
    implicit none
    private
    
@@ -17,7 +17,6 @@ module config_class
       real(WP), dimension(:,:,:), allocatable :: meshsize      !< Local effective cell size
       real(WP) :: min_meshsize                                 !< Global minimum mesh size
       ! Geometry
-      type(datafile) :: geom                                   !< Geometry datafile to facilitate the I/O of masking info
       real(WP), dimension(:,:,:), allocatable :: mask          !< Masking info (mask=0 is fluid, mask=1 is wall)
    contains
       procedure :: print=>config_print                         !< Output configuration information to the screen
@@ -41,7 +40,6 @@ contains
    function construct_from_sgrid(grp,decomp,grid) result(self)
       use sgrid_class, only: sgrid
       use string,      only: str_medium
-      use mpi_f08,     only: MPI_Group
       implicit none
       type(config) :: self
       type(sgrid), intent(in) :: grid
@@ -51,15 +49,11 @@ contains
       self%pgrid=pgrid(grid,grp,decomp)
       ! Finish preparing the config
       call self%prep
-      ! Also prepare a datafile for mask
-      self%geom=datafile(self)
-      call self%geom%addvar('mask',self%mask)
    end function construct_from_sgrid
    
    
    !> Single-grid config constructor from NGA grid file
    function construct_from_file(grp,decomp,no,fgrid,fgeom) result(self)
-      use mpi_f08,     only: MPI_Group
       implicit none
       type(config) :: self
       type(MPI_Group), intent(in) :: grp
@@ -72,14 +66,19 @@ contains
       ! Finish preparing the config
       call self%prep
       ! Read in the mask info and update the masks
-      self%geom=datafile(self,fgeom)
-      call self%maskupdate(self%geom%var(1,:,:,:))
+      read_mask: block
+         use datafile_class, only: datafile
+         type(datafile) :: geomfile
+         geomfile=datafile(self,fgeom)
+         call geomfile%pullvar('mask',self%mask)
+         call self%maskupdate()
+      end block read_mask
    end function construct_from_file
    
    
    !> Prepare a config once the pgrid is set
    subroutine config_prep(this)
-      use mpi_f08
+      use mpi_f08,  only: MPI_ALLREDUCE,MPI_MIN
       use parallel, only: MPI_REAL_WP
       implicit none
       class(config) :: this
@@ -118,18 +117,13 @@ contains
    
    
    !> Updates mask info for the config
-   subroutine maskupdate(this,mask)
+   subroutine maskupdate(this)
       implicit none
       class(config) :: this
-      real(WP), dimension(:,:,:), intent(in) :: mask !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
-      ! Store the masking data
-      this%mask=mask
-      ! Communicate it
+      ! Communicate mask data
       call this%sync(this%mask)
       ! Apply Neumann in all non-periodic directions
       
-      ! Also store in datafile
-      call this%geom%pushvar('mask',this%mask)
    end subroutine maskupdate
    
    
@@ -142,7 +136,7 @@ contains
    end subroutine config_print
    
    
-   !> Output a config object to a file
+   !> Output a config object to a file: both grid and geom
    !> Expect a parallel call here
    subroutine config_write(this,file)
       implicit none
@@ -151,7 +145,14 @@ contains
       ! Root process writes out the grid
       if (this%amRoot) call this%sgrid%write(trim(adjustl(file))//'.grid')
       ! All processes write out the geometry
-      !call this%geom%write(trim(adjustl(file))//'.geom')
+      write_mask: block
+         use datafile_class, only: datafile
+         type(datafile) :: geomfile
+         geomfile=datafile(this,trim(this%name),0,1)
+         geomfile%varname(1)='mask'
+         call geomfile%pushvar('mask',this%mask)
+         call geomfile%write(trim(adjustl(file))//'.geom')
+      end block write_mask
    end subroutine config_write
    
    
