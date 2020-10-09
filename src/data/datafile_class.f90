@@ -10,6 +10,7 @@ module datafile_class
    ! Expose type/constructor/methods
    public :: datafile
    
+   
    !> Datafile object definition as an extension of pgrid
    type :: datafile
       ! A datafile works in a partitioned grid
@@ -25,15 +26,16 @@ module datafile_class
       character(len=str_short), dimension(:), allocatable :: varname  !< Name of field variables
       real(WP), dimension(:,:,:,:), allocatable :: var                !< Variables (with overlap!)
    contains
-      procedure :: findval                   !< Function that returns val index if name is found, zero otherwise
-      procedure :: findvar                   !< Function that returns var index if name is found, zero otherwise
-      procedure :: pushval=>datafile_pushval !< Push data to datafile
-      procedure :: pullval=>datafile_pullval !< Pull data from datafile
-      procedure :: pushvar=>datafile_pushvar !< Push data to datafile
-      procedure :: pullvar=>datafile_pullvar !< Pull data from datafile
-      procedure :: write  =>datafile_write   !< Parallel write a datafile object to disk
-      procedure :: print  =>datafile_print   !< Print out debugging info to screen
-      procedure :: log    =>datafile_log     !< Print out debugging info to log
+      procedure :: findval                       !< Function that returns val index if name is found, zero otherwise
+      procedure :: findvar                       !< Function that returns var index if name is found, zero otherwise
+      procedure :: pushval=>datafile_pushval     !< Push data to datafile
+      procedure :: pullval=>datafile_pullval     !< Pull data from datafile
+      procedure :: pushvar=>datafile_pushvar     !< Push data to datafile
+      procedure :: pullvar=>datafile_pullvar     !< Pull data from datafile
+      procedure :: write  =>datafile_write       !< Parallel write a datafile object to disk
+      procedure :: print  =>datafile_print       !< Print out debugging info to screen
+      procedure :: log    =>datafile_log         !< Print out debugging info to log
+      final     :: destructor                    !< Destructor for datafile
    end type datafile
    
    
@@ -45,6 +47,14 @@ module datafile_class
    
    
 contains
+   
+   
+   !> Destructor for dtaafile object
+   subroutine destructor(this)
+      implicit none
+      type(datafile) :: this
+      
+   end subroutine destructor
    
    
    !> Constructor for an empty datafile object

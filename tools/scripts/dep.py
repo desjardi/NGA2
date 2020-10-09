@@ -11,8 +11,8 @@
 #      easily see them.  Usually this is a case of the regex not
 #      capturing how the module is defined
 #
-#   -- add `--debug` to the `dep.py` commandline (e.g., in 
-#      `C_mk/Make.rules`).  This will output a file called 
+#   -- add `--debug` to the `dep.py` commandline (e.g., in
+#      `C_mk/Make.rules`).  This will output a file called
 #      `dependencies.out` that shows details about what files are
 #      parsed, what modules they define, and what modules they require.
 #
@@ -38,7 +38,7 @@ import argparse
 import subprocess
 
 # modules to ignore in the dependencies
-IGNORES = ["iso_c_binding", "iso_fortran_env", "omp_lib", "mpi", "hdf5"]
+IGNORES = ["iso_c_binding", "iso_fortran_env", "omp_lib", "mpi", "mpi_f08", "hdf5"]
 
 # regular expression for "{}module{}name", where {} can be any number
 # of spaces.  We use 4 groups here, denoted by (), so the name of the
@@ -276,7 +276,7 @@ def doit(prefix, search_path, files, cpp, debug=False):
         for d in depends:
             try: provides_obj = module_files[d]
             except KeyError:
-                print("warning: module {} required by {} not found".format(d, sf.name), 
+                print("warning: module {} required by {} not found".format(d, sf.name),
                       file=sys.stderr)
                 print("$(warning module {} required by {} not found)".format(d, sf.name))
                 continue
@@ -352,4 +352,3 @@ if __name__ == "__main__":
     except:
         # something went wrong
         print("$(error something went wrong in dep.py.  Remake, adding the option 'DEP_CHECK_OPTS=--debug' to your make command and examine the 'dependencies.out' file)")
-

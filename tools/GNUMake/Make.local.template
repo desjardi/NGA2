@@ -15,9 +15,9 @@
 #   Wrappers for C++, C and Fortran compilers.
 CXX := mpicxx
 CC  := mpicc
-FC  := mpif90
-F90 := mpif90
-#   AMReX uses MPI in both C++ and Fortran.  Because CXX is used for linking, you MAY need to 
+FC  := mpifort
+F90 := mpifort
+#   AMReX uses MPI in both C++ and Fortran.  Because CXX is used for linking, you MAY need to
 #   provide path to MPI Fortran library.
 LIBRARIES += -lmpif90
 
@@ -52,13 +52,13 @@ quadmath_lib = -lquadmath
 
 
 # `make print-CXXFLAGS` shows "-O0" is used.  I would like to replace it with "-O2".
-# Note that `:=` is needed to avoid recursive references. 
+# Note that `:=` is needed to avoid recursive references.
 CXXFLAGS := $(subst -O0,-O2,$(CXXFLAGS))
 
 
 # I don't like the CFLAGS shown by `print-CFLAGS`.  So I am going to
 # completely replace it with my own flags.
-CFLAGS = MY_AWESOME_CFLAGS 
+CFLAGS = MY_AWESOME_CFLAGS
 
 
 # This compiler has a bug.  I have to remove an option from CXXFLAGS.

@@ -21,7 +21,7 @@ import os
 import argparse
 
 # modules to ignore in the dependencies
-IGNORES = ["iso_c_binding", "iso_fortran_env", "omp_lib", "mpi"]
+IGNORES = ["iso_c_binding", "iso_fortran_env", "omp_lib", "mpi", "mpi_f08"]
 
 # regular expression for "{}module{}name", where {} can be any number
 # of spaces.  We use 4 groups here, denoted by (), so the name of the
@@ -169,4 +169,3 @@ if __name__ == "__main__":
     #except:
     #    # something went wrong
     #    print("$(error something went wrong in f90cat.py.)")
-

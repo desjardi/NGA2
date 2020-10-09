@@ -52,8 +52,8 @@ contains
       ! Finish preparing the config
       call self%prep
       ! Also prepare a datafile for mask
-      self%geom=datafile(self,trim(self%name),0,1)
-      self%geom%varname(1)='mask'
+      self%geom=datafile(self)
+      call self%geom%addvar('mask',self%mask)
    end function construct_from_sgrid
    
    

@@ -9,8 +9,8 @@ ifeq ($(USE_MPI),TRUE)
 
   CXX := mpicxx
   CC  := mpicc
-  FC  := mpif90
-  F90 := mpif90
+  FC  := mpifort
+  F90 := mpifort
 
   # Link to MPI f90 library.
   ifneq ($(findstring mpich,$(shell $(F90) -show 2>&1 | tr A-Z a-z)),)
@@ -61,4 +61,3 @@ ifeq ($(USE_MPI),TRUE)
 
 endif
 endif
-
