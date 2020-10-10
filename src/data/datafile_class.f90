@@ -11,7 +11,8 @@ module datafile_class
    public :: datafile
    
    
-   !> Datafile object definition as an extension of pgrid
+   !> Datafile object definition as an array of values and variables
+   !> The choice is made here to *copy* the data to simplify reading.
    type :: datafile
       ! A datafile works in a partitioned grid
       type(pgrid), pointer :: pg                                      !< Partitioned grid for the data I/O
@@ -49,7 +50,7 @@ module datafile_class
 contains
    
    
-   !> Destructor for dtaafile object
+   !> Destructor for datafile object
    subroutine destructor(this)
       implicit none
       type(datafile) :: this
