@@ -61,6 +61,9 @@ contains
       ! Link to config
       self%cfg=>cfg
       
+      ! Store casename
+      self%casename=trim(adjustl(casename))
+      
       
       
    end function construct_ensight
