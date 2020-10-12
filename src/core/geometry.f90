@@ -2,12 +2,16 @@
 !> @todo Provide a flexible multi-grid environment
 !> @todo Provide a flexible parallelization strategy
 module geometry
-   use config_class, only: config
+   use config_class,  only: config
+   use ensight_class, only: ensight
    implicit none
    private
    
    !> Single config
    type(config) :: cfg
+   
+   !> Ensight output
+   type(ensight) :: ens_out
    
    !> Main config
    !type(config) :: cfg
@@ -79,7 +83,8 @@ contains
       ! Print it back out
       call cfg%write('test')
       
-      
+      ! Test ensight output!
+      ens_out=ensight(cfg,'test')
       
       ! Create a config from a grid file
       !call param_read('Grid file',fgrid)

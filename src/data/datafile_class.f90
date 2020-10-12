@@ -142,12 +142,13 @@ contains
       
       ! Size of local and full arrays
       data_size=self%pg%nx_*self%pg%ny_*self%pg%nz_
-      full_size=int(self%pg%nx,MPI_OFFSET_KIND)*int(self%pg%ny,MPI_OFFSET_KIND)*int(self%pg%nz,MPI_OFFSET_KIND)
+      !full_size=int(self%pg%nx,MPI_OFFSET_KIND)*int(self%pg%ny,MPI_OFFSET_KIND)*int(self%pg%nz,MPI_OFFSET_KIND)
       
       ! Read the name and data for all the variables
       do n=1,self%nvar
          call MPI_FILE_READ_ALL(ifile,self%varname(n),str_short,MPI_CHARACTER,status,ierr)
-         disp=int(5*4+self%nval*(str_short+WP),MPI_OFFSET_KIND)+int(n-1,MPI_OFFSET_KIND)*(full_size+WP)
+         !disp=int(5*4+self%nval*(str_short+WP),MPI_OFFSET_KIND)+int(n-1,MPI_OFFSET_KIND)*(full_size+WP)
+         call MPI_FILE_GET_POSITION(ifile,disp,ierr)
          call MPI_FILE_SET_VIEW(ifile,disp,MPI_REAL_WP,view,'native',info_mpiio,ierr)
          call MPI_FILE_READ_ALL(ifile,self%var(:,:,:,n),data_size,MPI_REAL_WP,status,ierr)
       end do
@@ -200,12 +201,13 @@ contains
       
       ! Size of local and full arrays
       data_size=this%pg%nx_*this%pg%ny_*this%pg%nz_
-      full_size=int(this%pg%nx,MPI_OFFSET_KIND)*int(this%pg%ny,MPI_OFFSET_KIND)*int(this%pg%nz,MPI_OFFSET_KIND)
+      !full_size=int(this%pg%nx,MPI_OFFSET_KIND)*int(this%pg%ny,MPI_OFFSET_KIND)*int(this%pg%nz,MPI_OFFSET_KIND)
       
       ! Read the name and data for all the variables
       do n=1,this%nvar
          call MPI_FILE_WRITE_ALL(ifile,this%varname(n),str_short,MPI_CHARACTER,status,ierr)
-         disp=int(5*4+this%nval*(str_short+WP),MPI_OFFSET_KIND)+int(n-1,MPI_OFFSET_KIND)*(full_size+WP)
+         !disp=int(5*4+this%nval*(str_short+WP),MPI_OFFSET_KIND)+int(n-1,MPI_OFFSET_KIND)*(full_size+WP)
+         call MPI_FILE_GET_POSITION(ifile,disp,ierr)
          call MPI_FILE_SET_VIEW(ifile,disp,MPI_REAL_WP,view,'native',info_mpiio,ierr)
          call MPI_FILE_WRITE_ALL(ifile,this%var(:,:,:,n),data_size,MPI_REAL_WP,status,ierr)
       end do
