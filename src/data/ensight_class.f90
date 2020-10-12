@@ -161,8 +161,7 @@ contains
       do k=k1,k2
          do j=j1,j2
             do i=i1,i2
-               iblank(i,j,k)=int(minval(this%cfg%mask(i-1:i,j-1:j,k-1:k)))
-               if (iblank(i,j,k).eq.0) then
+               if (int(minval(this%cfg%mask(i-1:i,j-1:j,k-1:k))).eq.0) then
                   iblank(i,j,k)=1
                else
                   iblank(i,j,k)=0
