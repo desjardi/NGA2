@@ -125,7 +125,7 @@ contains
          rbuff=real(this%cfg%y(this%cfg%jmin  ),SP); write(iunit) rbuff
          rbuff=real(this%cfg%y(this%cfg%jmax+1),SP); write(iunit) rbuff
          rbuff=real(this%cfg%z(this%cfg%kmin  ),SP); write(iunit) rbuff
-         rbuff=real(this%cfg%z(this%cfg%kmin+1),SP); write(iunit) rbuff
+         rbuff=real(this%cfg%z(this%cfg%kmax+1),SP); write(iunit) rbuff
          
          ! Part header
          cbuff='part'                              ; write(iunit) cbuff
