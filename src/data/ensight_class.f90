@@ -183,9 +183,11 @@ contains
       ! Only need to parallel write masks now
       call MPI_FILE_OPEN(this%cfg%comm,'ensight/geometry',IOR(MPI_MODE_WRONLY,MPI_MODE_APPEND),info_mpiio,ifile,ierr)
       if (ierr.ne.0) call die('[ensight write geom] Problem encountered while parallel writing geometry file')
-      call MPI_FILE_GET_POSITION(ifile,disp,ierr)
+      call MPI_FILE_GET_POSITION(ifile,disp,ierr); print*,'here1',disp
       call MPI_FILE_SET_VIEW(ifile,disp,MPI_INTEGER,view,'native',info_mpiio,ierr)
       call MPI_FILE_WRITE_ALL(ifile,iblank,datasize,MPI_INTEGER,status,ierr)
+      call MPI_FILE_GET_POSITION(ifile,disp,ierr); print*,'here2',disp
+      call MPI_FILE_GET_POSITION_SHARED(ifile,disp,ierr); print*,'here3',disp
       call MPI_FILE_CLOSE(ifile,ierr)
       
       ! Deallocate iblank array
