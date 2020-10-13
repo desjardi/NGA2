@@ -73,7 +73,7 @@ contains
                   ! This is the plate
                   cfg%mask(i,j,k)=1.0_WP
                   ! Now perforate it
-                  if (modulo(cfg%xm(j),hole_dist).lt.hole_size.and.modulo(cfg%zm(k),hole_dist).lt.hole_size) cfg%mask(i,j,k)=0.0_WP
+                  if (modulo(cfg%xm(i),hole_dist).lt.hole_size.and.modulo(cfg%zm(k),hole_dist).lt.hole_size) cfg%mask(i,j,k)=0.0_WP
                end if
             end do
          end do
