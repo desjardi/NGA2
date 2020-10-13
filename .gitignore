@@ -30,6 +30,6 @@ doc/
 
 # Runtime files
 *.h5
-ensight-3D/
+ensight/
 monitor/
 stat/
