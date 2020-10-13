@@ -102,7 +102,6 @@ contains
       character(len=*), intent(in) :: fdata
       class(pgrid), target, intent(in) :: pg
       integer :: ierr,n,data_size
-      type(MPI_Datatype) :: view
       type(MPI_File) :: ifile
       type(MPI_Status) :: status
       integer, dimension(5) :: dims
@@ -149,7 +148,7 @@ contains
          call MPI_FILE_READ_ALL(ifile,self%varname(n),str_short,MPI_CHARACTER,status,ierr)
          !disp=int(5*4+self%nval*(str_short+WP),MPI_OFFSET_KIND)+int(n-1,MPI_OFFSET_KIND)*(full_size+WP)
          call MPI_FILE_GET_POSITION(ifile,disp,ierr)
-         call MPI_FILE_SET_VIEW(ifile,disp,MPI_REAL_WP,view,'native',info_mpiio,ierr)
+         call MPI_FILE_SET_VIEW(ifile,disp,MPI_REAL_WP,self%pg%view,'native',info_mpiio,ierr)
          call MPI_FILE_READ_ALL(ifile,self%var(:,:,:,n),data_size,MPI_REAL_WP,status,ierr)
       end do
       
@@ -173,7 +172,6 @@ contains
       class(datafile) :: this
       character(len=*), optional :: fdata
       integer :: ierr,n,data_size
-      type(MPI_Datatype) :: view
       type(MPI_File) :: ifile
       type(MPI_Status):: status
       integer, dimension(5) :: dims
@@ -208,7 +206,7 @@ contains
          call MPI_FILE_WRITE_ALL(ifile,this%varname(n),str_short,MPI_CHARACTER,status,ierr)
          !disp=int(5*4+this%nval*(str_short+WP),MPI_OFFSET_KIND)+int(n-1,MPI_OFFSET_KIND)*(full_size+WP)
          call MPI_FILE_GET_POSITION(ifile,disp,ierr)
-         call MPI_FILE_SET_VIEW(ifile,disp,MPI_REAL_WP,view,'native',info_mpiio,ierr)
+         call MPI_FILE_SET_VIEW(ifile,disp,MPI_REAL_WP,this%pg%view,'native',info_mpiio,ierr)
          call MPI_FILE_WRITE_ALL(ifile,this%var(:,:,:,n),data_size,MPI_REAL_WP,status,ierr)
       end do
       

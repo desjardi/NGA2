@@ -4,7 +4,7 @@ module pgrid_class
    use precision,   only: WP
    use sgrid_class, only: sgrid
    use string,      only: str_medium
-   use mpi_f08,     only: MPI_COMM,MPI_GROUP
+   use mpi_f08,     only: MPI_COMM,MPI_GROUP,MPI_Datatype
    implicit none
    private
    
@@ -20,6 +20,7 @@ module pgrid_class
       ! Parallelization information
       type(MPI_Group) :: group              !< Grid group
       type(MPI_Comm) :: comm                !< Grid communicator
+      type(MPI_Datatype) :: view            !< Local to global array mapping info - real(WP)
       integer :: nproc                      !< Number of processors
       integer :: rank                       !< Processor grid rank
       logical :: amRoot                     !< Am I grid root?
@@ -205,6 +206,7 @@ contains
    !> Prepares the domain decomposition of the pgrid
    subroutine pgrid_domain_decomp(self,decomp)
       use monitor , only: die
+      use parallel, only: MPI_REAL_WP
       use mpi_f08
       implicit none
       class(pgrid) :: self
@@ -214,6 +216,7 @@ contains
       integer, parameter :: ndims=3
       logical, parameter :: reorder=.true.
       integer, dimension(3) :: coords
+      integer, dimension(3) :: gsizes,lsizes,lstart
       
       ! Store decomposition on the grid
       self%npx=decomp(1); self%npy=decomp(2); self%npz=decomp(3)
@@ -277,6 +280,13 @@ contains
       allocate(self%syncbuf_y2(self%imino_:self%imaxo_,self%no,self%kmino_:self%kmaxo_))
       allocate(self%syncbuf_z1(self%imino_:self%imaxo_,self%jmino_:self%jmaxo_,self%no))
       allocate(self%syncbuf_z2(self%imino_:self%imaxo_,self%jmino_:self%jmaxo_,self%no))
+      
+      ! Finally, we need to define a proper MPI-I/O view
+      gsizes=[self%nx ,self%ny ,self%nz ]
+      lsizes=[self%nx_,self%ny_,self%nz_]
+      lstart=[self%imin_-self%imin,self%jmin_-self%jmin,self%kmin_-self%kmin]
+      call MPI_TYPE_CREATE_SUBARRAY(3,gsizes,lsizes,lstart,MPI_ORDER_FORTRAN,MPI_REAL_WP,self%view,ierr)
+      call MPI_TYPE_COMMIT(self%view,ierr)
       
    end subroutine pgrid_domain_decomp
    
