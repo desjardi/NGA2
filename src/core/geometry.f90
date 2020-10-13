@@ -8,7 +8,7 @@ module geometry
    private
    
    !> Single config
-   type(config) :: cfg
+   type(config) :: cfg,cfg2
    
    !> Ensight output
    type(ensight) :: ens_out
@@ -83,17 +83,13 @@ contains
       ! Print it back out
       call cfg%write('test')
       
-      ! Test ensight output!
-      ens_out=ensight(cfg,'test')
+      ! Create a config from grid and config
+      call param_read('Grid file',fgrid)
+      call param_read('Geom file',fgeom)
+      cfg2=config(group,partition,1,fgrid,fgeom)
       
-      ! Create a config from a grid file
-      !call param_read('Grid file',fgrid)
-      !call param_read('Geom file',fgeom)
-      !
-      
-      !cfg=config(group,partition,3,fgrid)
-      
-      
+      ! Ensight output
+      ens_out=ensight(cfg2,'test')
       
       
    end subroutine geometry_init
