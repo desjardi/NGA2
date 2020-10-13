@@ -105,7 +105,7 @@ contains
       type(MPI_File) :: ifile
       type(MPI_Status) :: status
       integer, dimension(5) :: dims
-      integer(kind=MPI_OFFSET_KIND) :: disp,full_size
+      integer(kind=MPI_OFFSET_KIND) :: disp,disp_ref,full_size
       
       ! Link the partitioned grid and store the filename
       self%pg=>pg
@@ -144,9 +144,10 @@ contains
       full_size=int(self%pg%nx,MPI_OFFSET_KIND)*int(self%pg%ny,MPI_OFFSET_KIND)*int(self%pg%nz,MPI_OFFSET_KIND)
       
       ! Read the name and data for all the variables
+      call MPI_FILE_GET_POSITION(ifile,disp_ref,ierr)
       do n=1,self%nvar
          call MPI_FILE_READ_ALL(ifile,self%varname(n),str_short,MPI_CHARACTER,status,ierr)
-         disp=int(5*4+self%nval*(str_short+WP),MPI_OFFSET_KIND)+int(n-1,MPI_OFFSET_KIND)*(full_size+WP)
+         disp=disp_ref+int(n-1,MPI_OFFSET_KIND)*(full_size+int(str_short,MPI_OFFSET_KIND))
          call MPI_FILE_SET_VIEW(ifile,disp,MPI_REAL_WP,self%pg%view,'native',info_mpiio,ierr)
          call MPI_FILE_READ_ALL(ifile,self%var(:,:,:,n),data_size,MPI_REAL_WP,status,ierr)
       end do
@@ -174,7 +175,7 @@ contains
       type(MPI_File) :: ifile
       type(MPI_Status):: status
       integer, dimension(5) :: dims
-      integer(kind=MPI_OFFSET_KIND) :: disp,full_size
+      integer(kind=MPI_OFFSET_KIND) :: disp,disp_ref,full_size
       logical :: file_is_there
       
       ! Update the filename
@@ -201,9 +202,10 @@ contains
       full_size=int(this%pg%nx,MPI_OFFSET_KIND)*int(this%pg%ny,MPI_OFFSET_KIND)*int(this%pg%nz,MPI_OFFSET_KIND)
       
       ! Read the name and data for all the variables
+      call MPI_FILE_GET_POSITION(ifile,disp_ref,ierr)
       do n=1,this%nvar
          call MPI_FILE_WRITE_ALL(ifile,this%varname(n),str_short,MPI_CHARACTER,status,ierr)
-         disp=int(5*4+this%nval*(str_short+WP),MPI_OFFSET_KIND)+int(n-1,MPI_OFFSET_KIND)*(full_size+WP)
+         disp=disp_ref+int(n-1,MPI_OFFSET_KIND)*(full_size+int(str_short,MPI_OFFSET_KIND))
          call MPI_FILE_SET_VIEW(ifile,disp,MPI_REAL_WP,this%pg%view,'native',info_mpiio,ierr)
          call MPI_FILE_WRITE_ALL(ifile,this%var(:,:,:,n),data_size,MPI_REAL_WP,status,ierr)
       end do
