@@ -89,7 +89,7 @@ contains
    subroutine write_geom(this)
       use precision, only: SP
       use monitor,   only: die
-      use parallel,  only: info_mpiio,MPI_REAL_WP
+      use parallel,  only: info_mpiio,MPI_REAL_WP,MPI_REAL_SP
       use mpi_f08
       implicit none
       class(ensight) :: this
@@ -101,7 +101,8 @@ contains
       type(MPI_File) :: ifile
       type(MPI_Status):: status
       integer(kind=MPI_OFFSET_KIND) :: disp,full_size
-      integer, dimension(:,:,:), allocatable :: iblank
+      integer,  dimension(:,:,:), allocatable :: iblank
+      real(SP), dimension(:,:,:), allocatable :: xbuf,ybuf,zbuf
       integer :: i1,i2,j1,j2,k1,k2,datasize,i,j,k
       
       ! Root does most of the I/O at first
@@ -130,8 +131,9 @@ contains
          ! Part header
          cbuff='part'                              ; write(iunit) cbuff
          ibuff=1                                   ; write(iunit) ibuff
-         cbuff='Complete geometry'                 ; write(iunit) cbuff ! We have a single grid-cfg here
-         cbuff='block rectilinear iblanked'        ; write(iunit) cbuff
+         cbuff='Complete geometry'                 ; write(iunit) cbuff  ! We have a single grid-cfg here
+         !cbuff='block rectilinear iblanked'        ; write(iunit) cbuff ! Rectilinear masking seems to be bugged out
+         cbuff='block curvilinear iblanked'        ; write(iunit) cbuff
          
          ! Number of cells
          ibuff=this%cfg%nx+1                       ; write(iunit) ibuff
@@ -139,9 +141,9 @@ contains
          ibuff=this%cfg%nz+1                       ; write(iunit) ibuff
          
          ! Mesh
-         write(iunit) real(this%cfg%x(this%cfg%imin:this%cfg%imax+1),SP)
-         write(iunit) real(this%cfg%y(this%cfg%jmin:this%cfg%jmax+1),SP)
-         write(iunit) real(this%cfg%z(this%cfg%kmin:this%cfg%kmax+1),SP)
+         !write(iunit) real(this%cfg%x(this%cfg%imin:this%cfg%imax+1),SP) ! Commented out because
+         !write(iunit) real(this%cfg%y(this%cfg%jmin:this%cfg%jmax+1),SP) ! rectilinear masking seems
+         !write(iunit) real(this%cfg%z(this%cfg%kmin:this%cfg%kmax+1),SP) ! to be bugged out
          
          ! Close the file
          close(iunit)
@@ -154,18 +156,26 @@ contains
       k1=this%cfg%kmin_; k2=this%cfg%kmax_; if (this%cfg%kproc.eq.this%cfg%npz) k2=k2+1
       datasize=(i2-i1+1)*(j2-j1+1)*(k2-k1+1)
       
-      ! Allocate iblank array
+      ! Allocate iblank array and x/y/zbuf
       allocate(iblank(i1:i2,j1:j2,k1:k2))
+      allocate(xbuf(i1:i2,j1:j2,k1:k2))
+      allocate(ybuf(i1:i2,j1:j2,k1:k2))
+      allocate(zbuf(i1:i2,j1:j2,k1:k2))
       
-      ! Build the blanking info
+      ! Build the blanking info and x/y/zbuf
       do k=k1,k2
          do j=j1,j2
             do i=i1,i2
+               ! Blanking from mask
                if (int(minval(this%cfg%mask(i-1:i,j-1:j,k-1:k))).eq.0) then
                   iblank(i,j,k)=1
                else
                   iblank(i,j,k)=0
                end if
+               ! Position of nodes
+               xbuf(i,j,k)=real(this%cfg%x(i),SP)
+               ybuf(i,j,k)=real(this%cfg%y(j),SP)
+               zbuf(i,j,k)=real(this%cfg%z(k),SP)
             end do
          end do
       end do
@@ -174,12 +184,22 @@ contains
       call MPI_FILE_OPEN(this%cfg%comm,'ensight/geometry',IOR(MPI_MODE_WRONLY,MPI_MODE_APPEND),info_mpiio,ifile,ierr)
       if (ierr.ne.0) call die('[ensight write geom] Problem encountered while parallel writing geometry file')
       call MPI_FILE_GET_POSITION(ifile,disp,ierr)
+      call MPI_FILE_SET_VIEW(ifile,disp,MPI_REAL_SP,view,'native',info_mpiio,ierr)
+      call MPI_FILE_WRITE_ALL(ifile,xbuf,datasize,MPI_REAL_SP,status,ierr)
+      call MPI_FILE_GET_POSITION(ifile,disp,ierr)
+      call MPI_FILE_SET_VIEW(ifile,disp,MPI_REAL_SP,view,'native',info_mpiio,ierr)
+      call MPI_FILE_WRITE_ALL(ifile,ybuf,datasize,MPI_REAL_SP,status,ierr)
+      call MPI_FILE_GET_POSITION(ifile,disp,ierr)
+      call MPI_FILE_SET_VIEW(ifile,disp,MPI_REAL_SP,view,'native',info_mpiio,ierr)
+      call MPI_FILE_WRITE_ALL(ifile,zbuf,datasize,MPI_REAL_SP,status,ierr)
+      call MPI_FILE_GET_POSITION(ifile,disp,ierr)
       call MPI_FILE_SET_VIEW(ifile,disp,MPI_INTEGER,view,'native',info_mpiio,ierr)
       call MPI_FILE_WRITE_ALL(ifile,iblank,datasize,MPI_INTEGER,status,ierr)
       call MPI_FILE_CLOSE(ifile,ierr)
       
-      ! Deallocate iblank array
+      ! Deallocate iblank array and x/y/zbuf
       deallocate(iblank)
+      deallocate(xbuf,ybuf,zbuf)
       
    end subroutine write_geom
    
