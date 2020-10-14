@@ -33,3 +33,6 @@ doc/
 ensight/
 monitor/
 stat/
+*.geom
+*.grid
+*.data

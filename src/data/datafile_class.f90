@@ -101,11 +101,11 @@ contains
       type(datafile) :: self
       character(len=*), intent(in) :: fdata
       class(pgrid), target, intent(in) :: pg
-      integer :: ierr,n,data_size
+      integer :: ierr,n
       type(MPI_File) :: ifile
       type(MPI_Status) :: status
       integer, dimension(5) :: dims
-      integer(kind=MPI_OFFSET_KIND) :: disp,disp_ref,full_size
+      integer(kind=MPI_OFFSET_KIND) :: disp
       
       ! Link the partitioned grid and store the filename
       self%pg=>pg
@@ -139,25 +139,22 @@ contains
          call MPI_FILE_READ_ALL(ifile,self%val(n)    ,1        ,MPI_REAL_WP  ,status,ierr)
       end do
       
-      ! Size of local and full arrays
-      data_size=self%pg%nx_*self%pg%ny_*self%pg%nz_
-      full_size=int(self%pg%nx,MPI_OFFSET_KIND)*int(self%pg%ny,MPI_OFFSET_KIND)*int(self%pg%nz,MPI_OFFSET_KIND)
-      
       ! Read the name and data for all the variables
-      call MPI_FILE_GET_POSITION(ifile,disp_ref,ierr)
+      call MPI_FILE_GET_POSITION(ifile,disp,ierr)
       do n=1,self%nvar
          call MPI_FILE_READ_ALL(ifile,self%varname(n),str_short,MPI_CHARACTER,status,ierr)
-         disp=disp_ref+int(n-1,MPI_OFFSET_KIND)*(full_size+int(str_short,MPI_OFFSET_KIND))
+         disp=disp+int(str_short,MPI_OFFSET_KIND)
          call MPI_FILE_SET_VIEW(ifile,disp,MPI_REAL_WP,self%pg%view,'native',info_mpiio,ierr)
-         call MPI_FILE_READ_ALL(ifile,self%var(:,:,:,n),data_size,MPI_REAL_WP,status,ierr)
+         call MPI_FILE_READ_ALL(ifile,self%var(:,:,:,n),self%pg%nx_*self%pg%ny_*self%pg%nz_,MPI_REAL_WP,status,ierr)
+         disp=disp+int(self%pg%nx,MPI_OFFSET_KIND)*int(self%pg%ny,MPI_OFFSET_KIND)*int(self%pg%nz,MPI_OFFSET_KIND)*int(WP,MPI_OFFSET_KIND)
       end do
       
       ! Close the file
       call MPI_FILE_CLOSE(ifile,ierr)
       
       ! If verbose run, log and or print grid
-      if (verbose.gt.2) call self%log('Read')
-      if (verbose.gt.3) call self%print('Read')
+      if (verbose.gt.1) call self%log('Read')
+      if (verbose.gt.2) call self%print('Read')
       
    end function datafile_from_file
    
@@ -171,11 +168,11 @@ contains
       implicit none
       class(datafile) :: this
       character(len=*), optional :: fdata
-      integer :: ierr,n,data_size
+      integer :: ierr,n
       type(MPI_File) :: ifile
       type(MPI_Status):: status
       integer, dimension(5) :: dims
-      integer(kind=MPI_OFFSET_KIND) :: disp,disp_ref,full_size
+      integer(kind=MPI_OFFSET_KIND) :: disp
       logical :: file_is_there
       
       ! Update the filename
@@ -197,17 +194,14 @@ contains
          call MPI_FILE_WRITE_ALL(ifile,this%val(n)    ,1        ,MPI_REAL_WP  ,status,ierr)
       end do
       
-      ! Size of local and full arrays
-      data_size=this%pg%nx_*this%pg%ny_*this%pg%nz_
-      full_size=int(this%pg%nx,MPI_OFFSET_KIND)*int(this%pg%ny,MPI_OFFSET_KIND)*int(this%pg%nz,MPI_OFFSET_KIND)
-      
       ! Read the name and data for all the variables
-      call MPI_FILE_GET_POSITION(ifile,disp_ref,ierr)
+      call MPI_FILE_GET_POSITION(ifile,disp,ierr)
       do n=1,this%nvar
          call MPI_FILE_WRITE_ALL(ifile,this%varname(n),str_short,MPI_CHARACTER,status,ierr)
-         disp=disp_ref+int(n-1,MPI_OFFSET_KIND)*(full_size+int(str_short,MPI_OFFSET_KIND))
+         disp=disp+int(str_short,MPI_OFFSET_KIND)
          call MPI_FILE_SET_VIEW(ifile,disp,MPI_REAL_WP,this%pg%view,'native',info_mpiio,ierr)
-         call MPI_FILE_WRITE_ALL(ifile,this%var(:,:,:,n),data_size,MPI_REAL_WP,status,ierr)
+         call MPI_FILE_WRITE_ALL(ifile,this%var(:,:,:,n),this%pg%nx_*this%pg%ny_*this%pg%nz_,MPI_REAL_WP,status,ierr)
+         disp=disp+int(this%pg%nx,MPI_OFFSET_KIND)*int(this%pg%ny,MPI_OFFSET_KIND)*int(this%pg%nz,MPI_OFFSET_KIND)*int(WP,MPI_OFFSET_KIND)
       end do
       
       ! Close the file
