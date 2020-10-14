@@ -5,19 +5,26 @@ module itr_class
    use precision,   only: WP
    use string,      only: str_medium
    use pgrid_class, only: pgrid
+   use mpi_f08,     only: MPI_Comm
    implicit none
    private
    
    ! Expose type/constructor/methods
    public :: itr
    
-   !> Bcond object definition
-   !> A "bcond" is a type, direction and collection of cells indices
+   !> itr object definition
    type :: itr
+      ! Parallel info for the iterator
+      type(MPI_Comm) :: comm                              !< Communicator for the iterator
+      logical :: amIn                                     !< Am I working in this iterator?
+      ! This is our partitioned grid
+      class(pgrid), pointer :: pg                         !< This is the pgrid the iterator is build for
+      ! This is the name of the iterator
       character(len=str_medium) :: name='UNNAMED_ITR'     !< Iterator name (default=UNNAMED_ITR)
+      ! This is the unstructured mapping
       integer :: no_,n_                                   !< Total number of local cells in iterator, with and without overlap
       integer, dimension(:,:), allocatable :: map         !< This is our map for the iterator
-      class(pgrid), pointer :: pgrid                      !< This is the pgrid the iterator is build for
+      
    contains
       procedure :: print=>itr_print                       !< Output iterator to the screen
    end type itr
@@ -31,45 +38,87 @@ module itr_class
 contains
 
    !> Iterator constructor from a tester function
-   function construct_from_function(pg,name,tester) result(self)
+   function construct_from_function(pg,name,test_if_inside) result(self)
+      use mpi_f08, only: MPI_COMM_SPLIT,MPI_COMM_NULL,MPI_UNDEFINED
       implicit none
       type(itr) :: self
       class(pgrid), target, intent(in) :: pg
       character(len=*), intent(in) :: name
       interface
-         logical function tester(pargrid,ind1,ind2,ind3)
+         logical function test_if_inside(pargrid,ind1,ind2,ind3)
             use pgrid_class, only: pgrid
             class(pgrid), intent(in) :: pargrid
             integer, intent(in) :: ind1,ind2,ind3
-         end function tester
+         end function test_if_inside
       end interface
-      integer :: i,j,k
+      integer :: i,j,k,cnt
+      integer :: color,key,ierr
       
       ! Set the name for the iterator
       self%name=trim(adjustl(name))
       
       ! Point to pgrid object
-      self%pgrid=>pg
+      self%pg=>pg
       
-      ! Zero out counters
+      ! Loop over local domain with overlap to count iterator cells
       self%n_=0; self%no_=0
-      ! Loop over local domain with overlap to count bcond cells
-      do k=pg%kmino_,pg%kmaxo_
-         do j=pg%jmino_,pg%jmaxo_
-            do i=pg%imino_,pg%imaxo_
-               ! Apply condition for being in the bcond
-               if (tester(pg,i,j,k)) then
-                  ! Cell belongs in bcond, increment counter with overlap
+      do k=self%pg%kmino_,self%pg%kmaxo_
+         do j=self%pg%jmino_,self%pg%jmaxo_
+            do i=self%pg%imino_,self%pg%imaxo_
+               if (test_if_inside(self%pg,i,j,k)) then
                   self%no_=self%no_+1
-                  ! If it is not overlap, increment interior counter too
-                  !if () then
-                  !   self%n_=self%n_+1
-                  !end if
+                  if (i.ge.self%pg%imin_.and.i.le.self%pg%imax_.and.&
+                  &   j.ge.self%pg%jmin_.and.j.le.self%pg%jmax_.and.&
+                  &   k.ge.self%pg%kmin_.and.k.le.self%pg%kmax_) self%n_=self%n_+1
                end if
             end do
          end do
       end do
       
+      ! Create sub-communicator
+      if (self%no_.eq.0) then
+         color=MPI_UNDEFINED
+         key=0
+         self%amIn=.false.
+      else
+         color=0
+         key=0
+         self%amIn=.true.
+      end if
+      call MPI_COMM_SPLIT(self%pg%comm,color,key,self%comm,ierr)
+      
+      ! If we are not in the iterator, we are done
+      if (.not.self%amIn) return
+      
+      ! Create unstructured mapping to itr cells - first inside cells then overlap
+      allocate(self%map(1:3,1:self%no_))
+      cnt=0
+      do k=self%pg%kmin_,self%pg%kmax_
+         do j=self%pg%jmin_,self%pg%jmax_
+            do i=self%pg%imin_,self%pg%imax_
+               if (test_if_inside(self%pg,i,j,k)) then
+                  cnt=cnt+1
+                  self%map(1:3,cnt)=[i,j,k]
+               end if
+            end do
+         end do
+      end do
+      do k=self%pg%kmino_,self%pg%kmaxo_
+         do j=self%pg%jmino_,self%pg%jmaxo_
+            do i=self%pg%imino_,self%pg%imaxo_
+               ! Skip inside cells
+               if (i.ge.self%pg%imin_.and.i.le.self%pg%imax_.and.&
+               &   j.ge.self%pg%jmin_.and.j.le.self%pg%jmax_.and.&
+               &   k.ge.self%pg%kmin_.and.k.le.self%pg%kmax_) cycle
+               ! Only consider overlap cells
+               if (test_if_inside(self%pg,i,j,k)) then
+                  cnt=cnt+1
+                  self%map(1:3,cnt)=[i,j,k]
+               end if
+            end do
+         end do
+      end do
+            
    end function construct_from_function
    
    !> Basic printing of iterator
@@ -78,13 +127,13 @@ contains
       implicit none
       class(itr), intent(in) :: this
       integer :: i,ierr
-      if (this%pgrid%amRoot) write(output_unit,'("Iterator ",a," for pgrid ",a)') trim(this%name),trim(this%pgrid%name)
-      do i=0,this%pgrid%nproc-1
+      if (this%pg%amRoot) write(output_unit,'("Iterator ",a," for pgrid ",a)') trim(this%name),trim(this%pg%name)
+      do i=0,this%pg%nproc-1
          ! Block for clean output
-         call MPI_BARRIER(this%pgrid%comm,ierr)
+         call MPI_BARRIER(this%pg%comm,ierr)
          ! Output info
-         if (this%pgrid%rank.eq.i) then
-            write(output_unit,'(" >>> Rank ",i0," number of cells = ",i0)') this%no_
+         if (this%pg%rank.eq.i.and.this%amIn) then
+            write(output_unit,'(" >>> Rank ",i0," number of interior cells = ",i0," number of total cells = ",i0)') this%n_,this%no_
          end if
       end do
    end subroutine itr_print
