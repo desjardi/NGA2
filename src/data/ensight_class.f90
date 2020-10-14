@@ -90,7 +90,7 @@ contains
    subroutine write_geom(this)
       use precision, only: SP
       use monitor,   only: die
-      use parallel,  only: info_mpiio,MPI_REAL_WP,MPI_REAL_SP
+      use parallel,  only: info_mpiio
       use mpi_f08
       implicit none
       class(ensight) :: this
@@ -101,7 +101,7 @@ contains
       type(MPI_Datatype) :: view
       type(MPI_File) :: ifile
       type(MPI_Status):: status
-      integer(kind=MPI_OFFSET_KIND) :: disp,full_size
+      integer(kind=MPI_OFFSET_KIND) :: disp
       integer, dimension(:,:,:), allocatable :: iblank
       integer :: i,i1,i2,j,j1,j2,k,k1,k2,datasize
       integer, dimension(3) :: gsizes,lsizes,lstart

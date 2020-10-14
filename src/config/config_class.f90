@@ -148,10 +148,8 @@ contains
       write_mask: block
          use datafile_class, only: datafile
          type(datafile) :: geomfile
-         geomfile=datafile(this,trim(this%name),0,2)
-         geomfile%varname(1)='mask2'
-         call geomfile%pushvar('mask2',this%mask)
-         geomfile%varname(2)='mask'
+         geomfile=datafile(this,trim(this%name),0,1)
+         geomfile%varname(1)='mask'
          call geomfile%pushvar('mask',this%mask)
          call geomfile%write(trim(adjustl(file))//'.geom')
       end block write_mask

@@ -142,6 +142,7 @@ contains
       ! Read the name and data for all the variables
       call MPI_FILE_GET_POSITION(ifile,disp,ierr)
       do n=1,self%nvar
+         call MPI_FILE_SET_VIEW(ifile,disp,MPI_CHARACTER,MPI_CHARACTER,'native',info_mpiio,ierr)
          call MPI_FILE_READ_ALL(ifile,self%varname(n),str_short,MPI_CHARACTER,status,ierr)
          disp=disp+int(str_short,MPI_OFFSET_KIND)
          call MPI_FILE_SET_VIEW(ifile,disp,MPI_REAL_WP,self%pg%view,'native',info_mpiio,ierr)
@@ -197,6 +198,7 @@ contains
       ! Read the name and data for all the variables
       call MPI_FILE_GET_POSITION(ifile,disp,ierr)
       do n=1,this%nvar
+         call MPI_FILE_SET_VIEW(ifile,disp,MPI_CHARACTER,MPI_CHARACTER,'native',info_mpiio,ierr)
          call MPI_FILE_WRITE_ALL(ifile,this%varname(n),str_short,MPI_CHARACTER,status,ierr)
          disp=disp+int(str_short,MPI_OFFSET_KIND)
          call MPI_FILE_SET_VIEW(ifile,disp,MPI_REAL_WP,this%pg%view,'native',info_mpiio,ierr)
