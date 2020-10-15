@@ -16,7 +16,10 @@ module itr_class
    type :: itr
       ! Parallel info for the iterator
       type(MPI_Comm) :: comm                              !< Communicator for the iterator
+      integer :: nproc                                    !< Number of processes in that iterator
+      integer :: rank                                     !< Rank for that iterator
       logical :: amIn                                     !< Am I working in this iterator?
+      logical :: amRoot                                   !< Am I the root for this iterator
       ! This is our partitioned grid
       class(pgrid), pointer :: pg                         !< This is the pgrid the iterator is build for
       ! This is the name of the iterator
@@ -88,7 +91,17 @@ contains
       call MPI_COMM_SPLIT(self%pg%comm,color,key,self%comm,ierr)
       
       ! If we are not in the iterator, we are done
-      if (.not.self%amIn) return
+      if (.not.self%amIn) then
+         self%nproc=0
+         self%rank=0
+         self%amRoot=.false.
+         return
+      end if
+      
+      ! Get nproc, rank, and root
+      call MPI_COMM_SIZE(self%comm,self%nproc,ierr)
+      call MPI_COMM_RANK(self%comm,self%rank,ierr)
+      self%amRoot=(self%rank.eq.0)
       
       ! Create unstructured mapping to itr cells - first inside cells then overlap
       allocate(self%map(1:3,1:self%no_))
@@ -124,16 +137,35 @@ contains
    !> Basic printing of iterator
    subroutine itr_print(this)
       use, intrinsic :: iso_fortran_env, only: output_unit
+      use mpi_f08, only: MPI_ALLREDUCE,MPI_SUM,MPI_INTEGER,MPI_MIN,MPI_MAX
       implicit none
       class(itr), intent(in) :: this
-      integer :: i,ierr
-      if (this%pg%amRoot) write(output_unit,'("Iterator ",a," for pgrid ",a)') trim(this%name),trim(this%pg%name)
-      do i=0,this%pg%nproc-1
+      integer :: i,ierr,ntot,maxi,mini,maxj,minj,maxk,mink
+      
+      ! Return if not in
+      if (.not.this%amIn) return
+      
+      ! Do some processing on the iterator
+      call MPI_ALLREDUCE(       this%n_       ,ntot,1,MPI_INTEGER,MPI_SUM,this%comm,ierr)
+      call MPI_ALLREDUCE(minval(this%map(1,:)),mini,1,MPI_INTEGER,MPI_MIN,this%comm,ierr)
+      call MPI_ALLREDUCE(maxval(this%map(1,:)),maxi,1,MPI_INTEGER,MPI_MAX,this%comm,ierr)
+      call MPI_ALLREDUCE(minval(this%map(2,:)),minj,1,MPI_INTEGER,MPI_MIN,this%comm,ierr)
+      call MPI_ALLREDUCE(maxval(this%map(2,:)),maxj,1,MPI_INTEGER,MPI_MAX,this%comm,ierr)
+      call MPI_ALLREDUCE(minval(this%map(3,:)),mink,1,MPI_INTEGER,MPI_MIN,this%comm,ierr)
+      call MPI_ALLREDUCE(maxval(this%map(3,:)),maxk,1,MPI_INTEGER,MPI_MAX,this%comm,ierr)
+      
+      ! Output
+      if (this%amRoot) then
+         write(output_unit,'("Iterator [",a,"] for pgrid [",a,"]")') trim(this%name),trim(this%pg%name)
+         write(output_unit,'(" >>> Interior cells = ",i0)') ntot
+         write(output_unit,'(" >>> Index extent = [",i0,",",i0,"]x[",i0,",",i0,"]x[",i0,",",i0,"]")') mini,maxi,minj,maxj,mink,maxk
+      end if
+      do i=0,this%nproc-1
          ! Block for clean output
-         call MPI_BARRIER(this%pg%comm,ierr)
+         call MPI_BARRIER(this%comm,ierr)
          ! Output info
-         if (this%pg%rank.eq.i.and.this%amIn) then
-            write(output_unit,'(" >>> Rank ",i0," number of interior cells = ",i0," number of total cells = ",i0)') this%n_,this%no_
+         if (this%rank.eq.i) then
+            write(output_unit,'(" >>> Rank ",i0," local cells = ",i0," local cells with overlap = ",i0)') this%pg%rank,this%n_,this%no_
          end if
       end do
    end subroutine itr_print

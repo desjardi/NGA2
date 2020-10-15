@@ -20,6 +20,17 @@ module geometry
    
 contains
    
+   function sphere_locator(pg,i1,i2,i3) result(isIn)
+      use pgrid_class, only: pgrid
+      use precision,   only: WP
+      class(pgrid), intent(in) :: pg
+      integer, intent(in) :: i1,i2,i3
+      logical :: isIn
+      isIn=.false.
+      if (sqrt(pg%xm(i1)**2+pg%ym(i2)**2+pg%zm(i3)**2).lt.0.005_WP) then
+         if (pg%ym(i2).gt.0.0_WP) isIn=.true.
+      end if
+   end function sphere_locator
    
    !> Initialization of problem geometry
    subroutine geometry_init
@@ -90,6 +101,14 @@ contains
       
       ! Ensight output
       ens_out=ensight(cfg2,'test')
+      
+      ! Attempt to create an iterator of a sphere in the center
+      test_itr: block
+         use itr_class, only: itr
+         type(itr) :: sphere_itr
+         sphere_itr=itr(cfg,'sphere',sphere_locator)
+         call sphere_itr%print()
+      end block test_itr
       
       
    end subroutine geometry_init
