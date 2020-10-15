@@ -117,13 +117,57 @@ contains
    
    
    !> Updates mask info for the config
+   !> @todo Note that it could be desirable to allow for walls to be set at the domain ghost cells
    subroutine maskupdate(this)
       implicit none
       class(config) :: this
+      integer :: i,j,k
       ! Communicate mask data
       call this%sync(this%mask)
       ! Apply Neumann in all non-periodic directions
-      
+      if (.not.this%xper) then
+         if (this%iproc.eq.1) then
+            do i=this%imino,this%imin-1
+               this%mask(i,:,:)=this%mask(this%imin,:,:)
+            end do
+         else if (this%iproc.eq.this%npx) then
+            do i=this%imax+1,this%imaxo
+               this%mask(i,:,:)=this%mask(this%imax,:,:)
+            end do
+         end if
+      end if
+      if (.not.this%yper) then
+         if (this%jproc.eq.1) then
+            do j=this%jmino,this%jmin-1
+               this%mask(:,j,:)=this%mask(:,this%jmin,:)
+            end do
+         else if (this%jproc.eq.this%npy) then
+            do j=this%jmax+1,this%jmaxo
+               this%mask(:,j,:)=this%mask(:,this%jmax,:)
+            end do
+         end if
+      end if
+      if (.not.this%zper) then
+         if (this%kproc.eq.1) then
+            do k=this%kmino,this%kmin-1
+               this%mask(:,:,k)=this%mask(:,:,this%kmin)
+            end do
+         else if (this%kproc.eq.this%npz) then
+            do j=this%kmax+1,this%kmaxo
+               this%mask(:,:,k)=this%mask(:,:,this%kmax)
+            end do
+         end if
+      end if
+      ! Pass through all cells and set volumes to zero if masked
+      do k=this%kmino_,this%kmaxo_
+         do j=this%jmino_,this%jmaxo_
+            do i=this%imino_,this%imaxo_
+               if (nint(this%mask(i,j,k)).eq.1) then
+                  this%vol(i,j,k)=0.0_WP
+               end if
+            end do
+         end do
+      end do
    end subroutine maskupdate
    
    

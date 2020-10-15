@@ -164,7 +164,7 @@ contains
          do j=j1,j2
             do i=i1,i2
                ! Blanking from mask
-               if (int(minval(this%cfg%mask(i-1:i,j-1:j,k-1:k))).eq.0) then
+               if (nint(minval(this%cfg%mask(i-1:i,j-1:j,k-1:k))).eq.0) then
                   iblank(i,j,k)=1
                else
                   iblank(i,j,k)=0
