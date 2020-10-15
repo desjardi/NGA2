@@ -1,0 +1,4 @@
+f90EXE_sources += incomp_class.f90
+
+INCLUDE_LOCATIONS += $(NGA_HOME)/src/incomp
+VPATH_LOCATIONS   += $(NGA_HOME)/src/incomp
