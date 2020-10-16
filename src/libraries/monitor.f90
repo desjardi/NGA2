@@ -134,7 +134,7 @@ contains
    
    !> Dump the values to the files at each timestep
    subroutine monitor_dump_timestep(ntime,time)
-      use parallel, only: amroot
+      use parallel, only: amRoot
       implicit none
       integer,  intent(in) :: ntime
       real(WP), intent(in) :: time
@@ -148,7 +148,7 @@ contains
       end if
       call timer_monitor
       ! Only the root process does something
-      if (.not.amroot) return
+      if (.not.amRoot) return
       ! Loop over all files
       do i=1,nfiles
          ! Test if we need to dump the values
@@ -179,14 +179,14 @@ contains
    
    !> Dump the values to the files at each subiteration
    subroutine monitor_dump_iteration(ntime,time,niter)
-      use parallel, only: amroot
+      use parallel, only: amRoot
       implicit none
       integer,  intent(in) :: ntime,niter
       real(WP), intent(in) :: time
       integer :: icol,offset,i
       character(len=str_long) :: line
       ! Only the root process does something
-      if (.not.amroot) return
+      if (.not.amRoot) return
       ! Loop over all files
       do i=1,nfiles
          ! Test if we need to dump the values
@@ -218,14 +218,14 @@ contains
    
    !> Print some values to the screen
    subroutine monitor_dump_screen(ntime,time)
-      use parallel, only: amroot
+      use parallel, only: amRoot
       implicit none
       integer,  intent(in) :: ntime
       real(WP), intent(in) :: time
       integer :: icol,offset
       character(len=str_long) :: line
       ! Only the root process does something
-      if (.not.amroot) return
+      if (.not.amRoot) return
       ! Work only on last screen output defined
       if (mfiles(iscreen)%isnew) call monitor_first_dump(iscreen)
       ! Start the line to dump with time step and iteration info
@@ -250,13 +250,13 @@ contains
    
    !> Initialize the monitor module
    subroutine monitor_init
-      use parallel, only: amroot,parallel_time
+      use parallel, only: amRoot,parallel_time
       implicit none
       integer :: ierr
       ! Ensure everything is closed and empty
       nfiles=0; iscreen=0; ntimers=0
       ! Only the root process does the following
-      if (amroot) then
+      if (amRoot) then
          ! Create the monitor directory
          call execute_command_line('mkdir -p monitor')
          ! Open log file
@@ -270,7 +270,7 @@ contains
    
    !> Finalize monitoring by closing all files
    subroutine monitor_final
-      use parallel, only: amroot
+      use parallel, only: amRoot
       implicit none
       integer :: i
       do i=1,nfiles
@@ -279,11 +279,11 @@ contains
          if (allocated(mfiles(i)%col_type)) deallocate(mfiles(i)%col_type)
          if (allocated(mfiles(i)%val))      deallocate(mfiles(i)%val)
          ! Close files
-         if (amroot.and.i.ne.iscreen) close(mfiles(i)%iunit)
+         if (amRoot.and.i.ne.iscreen) close(mfiles(i)%iunit)
       end do
       ! Close logfiles
       call log('******************** NGA APPLICATION COMPLETE *******************')
-      if (amroot) close(logfile)
+      if (amRoot) close(logfile)
       ! Deallocate mfiles
       if (allocated(mfiles)) deallocate(mfiles)
       ! Zero files
@@ -297,8 +297,8 @@ contains
    
    !> Create a new file to monitor
    subroutine monitor_create_file(filename,ncol,type)
-      use parallel, only: amroot
-      use string, only: lowercase
+      use parallel, only: amRoot
+      use string,   only: lowercase
       use, intrinsic :: iso_fortran_env, only: output_unit
       implicit none
       character(len=*), intent(in) :: filename
@@ -334,10 +334,10 @@ contains
       select case (trim(mfiles(nfiles)%type))
       case ('screen')
          ! Set the unit to std out
-         if (amroot) mfiles(nfiles)%iunit=output_unit
+         if (amRoot) mfiles(nfiles)%iunit=output_unit
       case ('timestep','iteration')
          ! Open the file
-         if (amroot) open(newunit=mfiles(nfiles)%iunit,file='monitor/'//trim(mfiles(nfiles)%filename),form='formatted',iostat=ierr,status='REPLACE')
+         if (amRoot) open(newunit=mfiles(nfiles)%iunit,file='monitor/'//trim(mfiles(nfiles)%filename),form='formatted',iostat=ierr,status='REPLACE')
       case default
          call die('[monitor_create_file] Unknown type for file: '//trim(filename))
       end select
@@ -571,11 +571,11 @@ contains
    
    !> Monitor action in a log file
    subroutine log(text)
-      use parallel, only: amroot
+      use parallel, only: amRoot
       implicit none
       character(len=*), intent(in) :: text !< Text to be printed to the log file
       character(len=22) :: tstamp
-      if (amroot) then
+      if (amRoot) then
          call timestamp(tstamp)
          write(logfile,'(a22,1x,a2,1x,a)') tstamp,'=>',trim(text)
          call flush(logfile)

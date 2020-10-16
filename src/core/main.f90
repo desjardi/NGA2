@@ -2,11 +2,12 @@
 !> @version 1.0
 !> @author O. Desjardins
 program nga
-   use random,   only:   random_init
-   use param,    only:    param_init   ,param_final
-   use parallel, only: parallel_init,parallel_final
-   use monitor,  only:  monitor_init, monitor_final
-   use geometry
+   use random,     only: random_init
+   use param,      only: param_init,param_final
+   use parallel,   only: parallel_init,parallel_final
+   use monitor,    only: monitor_init,monitor_final
+   use geometry,   only: geometry_init
+   use simulation, only: simulation_init,simulation_run
    implicit none
    
    
@@ -29,31 +30,28 @@ program nga
    ! =======================================
    ! Setup the problem grid ================
    ! =======================================
-   ! Initialize our grids ==================
    call geometry_init
    ! =======================================
    
    
    
    
-   ! Initialize the grid
-   !call grid_init
    
-   ! Initialization of I/O
-   !call io_init
    
-   ! Initialize geometry, data, and solvers
-   !call geometry_init
-   !call data_init
-   !call simulation_init
+   ! =======================================
+   ! Setup the solver ======================
+   ! =======================================
+   call simulation_init
+   ! =======================================
+   
    
    
    
    ! =======================================
-   
-   
-   ! Run flow solver
-   !call simulation_run
+   ! Run the solver ========================
+   ! =======================================
+   call simulation_run
+   ! =======================================
    
    
    

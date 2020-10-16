@@ -1,6 +1,4 @@
-!> Various definitions and tools for handling NGA grids
-!> @todo Provide a flexible multi-grid environment
-!> @todo Provide a flexible parallelization strategy
+!> Various definitions and tools for initializing NGA2 config
 module geometry
    use config_class,  only: config
    use ensight_class, only: ensight
@@ -9,7 +7,7 @@ module geometry
    private
    
    !> Single config
-   type(config) :: cfg,cfg2
+   type(config), public :: cfg,cfg2
    
    public :: geometry_init
    
