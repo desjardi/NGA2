@@ -1,7 +1,7 @@
 !> Iterator concept is defined here.
 !> The intention is to have the ability to work in a sub-region of a pgrid.
 !> This is directly useful for boundary conditions, but probably for more.
-module itr_class
+module iterator_class
    use precision,   only: WP
    use string,      only: str_medium
    use pgrid_class, only: pgrid
@@ -10,10 +10,10 @@ module itr_class
    private
    
    ! Expose type/constructor/methods
-   public :: itr
+   public :: iterator
    
    !> itr object definition
-   type :: itr
+   type :: iterator
       ! Parallel info for the iterator
       type(MPI_Comm) :: comm                              !< Communicator for the iterator
       integer :: nproc                                    !< Number of processes in that iterator
@@ -29,14 +29,14 @@ module itr_class
       integer, dimension(:,:), allocatable :: map         !< This is our map for the iterator
       
    contains
-      procedure :: print=>itr_print                       !< Output iterator to the screen
-   end type itr
+      procedure :: print=>iterator_print                  !< Output iterator to the screen
+   end type iterator
    
    
    !> Declare single-grid iterator constructor
-   interface itr
+   interface iterator
       procedure construct_from_function
-   end interface itr
+   end interface iterator
    
 contains
 
@@ -44,7 +44,7 @@ contains
    function construct_from_function(pg,name,test_if_inside) result(self)
       use mpi_f08, only: MPI_COMM_SPLIT,MPI_COMM_NULL,MPI_UNDEFINED
       implicit none
-      type(itr) :: self
+      type(iterator) :: self
       class(pgrid), target, intent(in) :: pg
       character(len=*), intent(in) :: name
       interface
@@ -103,7 +103,7 @@ contains
       call MPI_COMM_RANK(self%comm,self%rank,ierr)
       self%amRoot=(self%rank.eq.0)
       
-      ! Create unstructured mapping to itr cells - first inside cells then overlap
+      ! Create unstructured mapping to iterator cells - first inside cells then overlap
       allocate(self%map(1:3,1:self%no_))
       cnt=0
       do k=self%pg%kmin_,self%pg%kmax_
@@ -135,11 +135,11 @@ contains
    end function construct_from_function
    
    !> Basic printing of iterator
-   subroutine itr_print(this)
+   subroutine iterator_print(this)
       use, intrinsic :: iso_fortran_env, only: output_unit
       use mpi_f08, only: MPI_ALLREDUCE,MPI_SUM,MPI_INTEGER,MPI_MIN,MPI_MAX
       implicit none
-      class(itr), intent(in) :: this
+      class(iterator), intent(in) :: this
       integer :: i,ierr,ntot,maxi,mini,maxj,minj,maxk,mink
       
       ! Return if not in
@@ -168,6 +168,6 @@ contains
             write(output_unit,'(" >>> Rank ",i0," local cells = ",i0," local cells with overlap = ",i0)') this%pg%rank,this%n_,this%no_
          end if
       end do
-   end subroutine itr_print
+   end subroutine iterator_print
    
-end module itr_class
+end module iterator_class

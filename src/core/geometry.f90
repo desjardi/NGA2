@@ -147,11 +147,11 @@ contains
       
       ! Attempt to create an iterator of a sphere in the center
       test_itr: block
-         use itr_class, only: itr
-         type(itr) :: sphere_itr
+         use iterator_class, only: iterator
+         type(iterator) :: sphere_itr
          
          ! Create an unstructured iterator and print it out
-         sphere_itr=itr(cfg,'sphere',sphere_locator)
+         sphere_itr=iterator(cfg,'sphere',sphere_locator)
          call sphere_itr%print()
          
       end block test_itr
