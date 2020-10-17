@@ -309,7 +309,7 @@ contains
          call MPI_BARRIER(this%comm,ierr)
          ! Output info
          if (this%rank.eq.i) then
-            write(output_unit,'(" >>> Rank ",i0,"(",i0,") -> [",i0,",",i0,",",i0,"] owns [",i0,",",i0,"]x[",i0,",",i0,"]x[",i0,",",i0,"]")') &
+            write(output_unit,'(" --> Rank ",i0,"(",i0,") -> [",i0,",",i0,",",i0,"] owns [",i0,",",i0,"]x[",i0,",",i0,"]x[",i0,",",i0,"]")') &
             this%rank,rank,this%iproc,this%jproc,this%kproc,this%imin_,this%imax_,this%jmin_,this%jmax_,this%kmin_,this%kmax_
          end if
       end do

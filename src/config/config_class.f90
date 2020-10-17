@@ -21,8 +21,9 @@ module config_class
    contains
       procedure :: print=>config_print                         !< Output configuration information to the screen
       procedure :: write=>config_write                         !< Write out config files: grid and geometry
-      procedure :: maskupdate                                  !< Takes in a mask array and updates the config consequently
+      procedure :: maskUpdate                                  !< Takes in a mask array and updates the config consequently
       procedure, private :: prep=>config_prep                  !< Finish preparing config after the partitioned grid is loaded
+      procedure :: maskExtend                                  !< Extend mask array into the non-periodic domain overlaps
    end type config
    
    
@@ -69,8 +70,15 @@ contains
       read_mask: block
          use datafile_class, only: datafile
          type(datafile) :: geomfile
+         ! Access the file
          geomfile=datafile(self,fgeom)
+         ! Get the mask array
          call geomfile%pullvar('mask',self%mask)
+         ! Sync up the mask array
+         call self%sync(self%mask)
+         ! Perform an extension in the overlap
+         call self%maskExtend()
+         ! Update volume
          call self%maskupdate()
       end block read_mask
    end function construct_from_file
@@ -116,15 +124,19 @@ contains
    end subroutine config_prep
    
    
-   !> Updates mask info for the config
-   !> @todo Note that it could be desirable to allow for walls to be set at the domain ghost cells
-   subroutine maskupdate(this)
+   !> Update vol in accordance to mask
+   subroutine maskUpdate(this)
+      implicit none
+      class(config) :: this
+      where(nint(this%mask).eq.1) this%vol=0.0_WP
+   end subroutine maskUpdate
+   
+   
+   !> Extend mask array into the non-periodic domain overlaps
+   subroutine maskExtend(this)
       implicit none
       class(config) :: this
       integer :: i,j,k
-      ! Communicate mask data
-      call this%sync(this%mask)
-      ! Apply Neumann in all non-periodic directions
       if (.not.this%xper) then
          if (this%iproc.eq.1) then
             do i=this%imino,this%imin-1
@@ -158,17 +170,7 @@ contains
             end do
          end if
       end if
-      ! Pass through all cells and set volumes to zero if masked
-      do k=this%kmino_,this%kmaxo_
-         do j=this%jmino_,this%jmaxo_
-            do i=this%imino_,this%imaxo_
-               if (nint(this%mask(i,j,k)).eq.1) then
-                  this%vol(i,j,k)=0.0_WP
-               end if
-            end do
-         end do
-      end do
-   end subroutine maskupdate
+   end subroutine maskExtend
    
    
    !> Cheap print of config info to screen

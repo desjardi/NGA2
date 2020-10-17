@@ -26,12 +26,14 @@ module incomp_class
       real(WP) :: visc                                    !< These is our constant fluid dynamic viscosity
       
       ! Boundary condition list
-      !type(bcond), pointer :: bc=NULL()                   !< 
+      !type(bcond), pointer :: bc=NULL()                   !<
       
       ! Metrics
       real(WP), dimension(:,:,:), allocatable :: div_u    !< Divergence for U
       real(WP), dimension(:,:,:), allocatable :: div_v    !< Divergence for V
       real(WP), dimension(:,:,:), allocatable :: div_w    !< Divergence for W
+      
+      
       
       ! Flow variables
       real(WP), dimension(:,:,:), allocatable :: U        !< U velocity array
@@ -67,7 +69,8 @@ contains
       ! Point to pgrid object
       self%cfg=>cfg
       
-      !
+      ! Prepare metrics
+      
       
       ! Allocate flow variables
       allocate(self%U(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%U=0.0_WP

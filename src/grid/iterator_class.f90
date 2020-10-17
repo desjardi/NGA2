@@ -157,15 +157,15 @@ contains
       ! Output
       if (this%amRoot) then
          write(output_unit,'("Iterator [",a,"] for pgrid [",a,"]")') trim(this%name),trim(this%pg%name)
-         write(output_unit,'(" >>> Interior cells = ",i0)') ntot
-         write(output_unit,'(" >>> Index extent = [",i0,",",i0,"]x[",i0,",",i0,"]x[",i0,",",i0,"]")') mini,maxi,minj,maxj,mink,maxk
+         write(output_unit,'(" > Interior cells = ",i0)') ntot
+         write(output_unit,'(" >   Index extent = [",i0,",",i0,"]x[",i0,",",i0,"]x[",i0,",",i0,"]")') mini,maxi,minj,maxj,mink,maxk
       end if
       do i=0,this%nproc-1
          ! Block for clean output
          call MPI_BARRIER(this%comm,ierr)
          ! Output info
          if (this%rank.eq.i) then
-            write(output_unit,'(" >>> Rank ",i0," local cells = ",i0," local cells with overlap = ",i0)') this%pg%rank,this%n_,this%no_
+            write(output_unit,'(" --> Rank ",i0," local cells = ",i0," local cells with overlap = ",i0)') this%pg%rank,this%n_,this%no_
          end if
       end do
    end subroutine iterator_print

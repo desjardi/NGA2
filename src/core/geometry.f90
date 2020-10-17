@@ -87,12 +87,15 @@ contains
          call param_read('Hole size',hole_size)
          call param_read('Hole dist',hole_dist)
          
-         ! Write mask array
-         do k=cfg%kmin_,cfg%kmax_
-            do j=cfg%jmin_,cfg%jmax_
-               do i=cfg%imin_,cfg%imax_
+         ! Write mask array - need to include the overlap!
+         do k=cfg%kmino_,cfg%kmaxo_
+            do j=cfg%jmino_,cfg%jmaxo_
+               do i=cfg%imino_,cfg%imaxo_
                   if (cfg%ym(j).gt.0.0_WP) then
                      ! Above the plate
+                     cfg%mask(i,j,k)=0.0_WP
+                  else if (cfg%ym(j).lt.-0.01_WP) then
+                     ! Below the plate
                      cfg%mask(i,j,k)=0.0_WP
                   else
                      ! This is the plate
@@ -105,7 +108,7 @@ contains
          end do
          
          ! Update the cfg with the new mask
-         call cfg%maskupdate()
+         call cfg%maskUpdate()
          
       end block create_walls
       
