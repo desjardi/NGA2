@@ -29,11 +29,15 @@ module incomp_class
       !type(bcond), pointer :: bc=NULL()                   !<
       
       ! Metrics
-      real(WP), dimension(:,:,:), allocatable :: div_u    !< Divergence for U
-      real(WP), dimension(:,:,:), allocatable :: div_v    !< Divergence for V
-      real(WP), dimension(:,:,:), allocatable :: div_w    !< Divergence for W
-      
-      
+      real(WP), dimension(:,:,:,:), allocatable :: itp_u_xm,itp_u_y ,itp_u_z   !< Interpolation for U
+      real(WP), dimension(:,:,:,:), allocatable :: itp_v_x ,itp_v_ym,itp_v_z   !< Interpolation for V
+      real(WP), dimension(:,:,:,:), allocatable :: itp_w_x ,itp_w_y ,itp_w_zm  !< Interpolation for W
+      real(WP), dimension(:,:,:,:), allocatable :: divu_x  ,divu_y  ,divu_z    !< Divergence for U-cell
+      real(WP), dimension(:,:,:,:), allocatable :: divv_x  ,divv_y  ,divv_z    !< Divergence for V-cell
+      real(WP), dimension(:,:,:,:), allocatable :: divp_x  ,divp_y  ,divp_z    !< Divergence for P-cell
+      real(WP), dimension(:,:,:,:), allocatable :: grad_u_x,grad_u_y,grad_u_z  !< Velocity gradient for U
+      real(WP), dimension(:,:,:,:), allocatable :: grad_v_x,grad_v_y,grad_v_z  !< Velocity gradient for V
+      real(WP), dimension(:,:,:,:), allocatable :: grad_w_x,grad_w_y,grad_w_z  !< Velocity gradient for W
       
       ! Flow variables
       real(WP), dimension(:,:,:), allocatable :: U        !< U velocity array

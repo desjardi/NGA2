@@ -125,6 +125,7 @@ contains
    
    
    !> Update vol in accordance to mask
+   !> @todo This needs to be revisited to not be needed...
    subroutine maskUpdate(this)
       implicit none
       class(config) :: this
