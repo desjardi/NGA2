@@ -167,7 +167,7 @@ contains
       use parallel, only: info_mpiio,MPI_REAL_WP
       use mpi_f08
       implicit none
-      class(datafile) :: this
+      class(datafile), intent(in) :: this
       character(len=*), optional :: fdata
       integer :: ierr,n
       type(MPI_File) :: ifile
@@ -175,15 +175,20 @@ contains
       integer, dimension(5) :: dims
       integer(kind=MPI_OFFSET_KIND) :: disp
       logical :: file_is_there
+      character(len=str_medium) :: filename
       
-      ! Update the filename
-      if (present(fdata)) this%filename=trim(adjustl(fdata))
+      ! Choose the filename
+      if (present(fdata)) then
+         filename=trim(adjustl(fdata))
+      else
+         filename=trim(adjustl(this%filename))
+      end if
       
       ! First open the file in parallel
-      inquire(file=trim(this%filename),exist=file_is_there)
-      if (file_is_there.and.this%pg%amRoot) call MPI_FILE_DELETE(trim(this%filename),info_mpiio,ierr)
-      call MPI_FILE_OPEN(this%pg%comm,trim(this%filename),IOR(MPI_MODE_WRONLY,MPI_MODE_CREATE),info_mpiio,ifile,ierr)
-      if (ierr.ne.0) call die('[datafile write] Problem encountered while reading data file: '//trim(this%filename))
+      inquire(file=trim(filename),exist=file_is_there)
+      if (file_is_there.and.this%pg%amRoot) call MPI_FILE_DELETE(trim(filename),info_mpiio,ierr)
+      call MPI_FILE_OPEN(this%pg%comm,trim(filename),IOR(MPI_MODE_WRONLY,MPI_MODE_CREATE),info_mpiio,ifile,ierr)
+      if (ierr.ne.0) call die('[datafile write] Problem encountered while reading data file: '//trim(filename))
       
       ! Read file header first
       dims=[this%pg%nx,this%pg%ny,this%pg%nz,this%nval,this%nvar]
@@ -253,7 +258,7 @@ contains
    !> Index finding for val
    function findval(this,name) result(ind)
       implicit none
-      class(datafile) :: this
+      class(datafile), intent(in) :: this
       integer :: ind
       character(len=*), intent(in) :: name
       integer :: n
@@ -268,7 +273,7 @@ contains
    subroutine datafile_pushval(this,name,val)
       use monitor, only: die
       implicit none
-      class(datafile) :: this
+      class(datafile), intent(inout) :: this
       character(len=*), intent(in) :: name
       real(WP), intent(in) :: val
       integer :: n
@@ -285,7 +290,7 @@ contains
    subroutine datafile_pullval(this,name,val)
       use monitor, only: die
       implicit none
-      class(datafile) :: this
+      class(datafile), intent(in) :: this
       character(len=*), intent(in) :: name
       real(WP), intent(out) :: val
       integer :: n
@@ -301,7 +306,7 @@ contains
    !> Index finding for var
    function findvar(this,name) result(ind)
       implicit none
-      class(datafile) :: this
+      class(datafile), intent(in) :: this
       integer :: ind
       character(len=*), intent(in) :: name
       integer :: n
@@ -316,7 +321,7 @@ contains
    subroutine datafile_pushvar(this,name,var)
       use monitor, only: die
       implicit none
-      class(datafile) :: this
+      class(datafile), intent(inout) :: this
       character(len=*), intent(in) :: name
       real(WP), dimension(this%pg%imino_:,this%pg%jmino_:,this%pg%kmino_:), intent(in) :: var !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       integer :: n
@@ -333,7 +338,7 @@ contains
    subroutine datafile_pullvar(this,name,var)
       use monitor, only: die
       implicit none
-      class(datafile) :: this
+      class(datafile), intent(in) :: this
       character(len=*), intent(in) :: name
       real(WP), dimension(this%pg%imino_:,this%pg%jmino_:,this%pg%kmino_:), intent(out) :: var !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       integer :: n

@@ -93,7 +93,7 @@ contains
       use parallel,  only: info_mpiio
       use mpi_f08
       implicit none
-      class(ensight) :: this
+      class(ensight), intent(in) :: this
       integer :: iunit,ierr
       character(len=80) :: cbuff
       real(SP) :: rbuff

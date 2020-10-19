@@ -184,7 +184,7 @@ contains
       use monitor , only: die
       use mpi_f08
       implicit none
-      class(pgrid) :: self
+      class(pgrid), intent(inout) :: self
       integer :: ierr
       ! Get group size, and intracommunicator
       call MPI_GROUP_SIZE(self%group,self%nproc,ierr)
@@ -209,7 +209,7 @@ contains
       use parallel, only: MPI_REAL_WP
       use mpi_f08
       implicit none
-      class(pgrid) :: self
+      class(pgrid), intent(inout) :: self
       integer, dimension(3), intent(in) :: decomp
       integer :: ierr,q,r
       type(MPI_Comm) :: tmp_comm
@@ -372,7 +372,7 @@ contains
       use mpi_f08
       use parallel, only: MPI_REAL_WP
       implicit none
-      class(pgrid) :: this
+      class(pgrid), intent(inout) :: this
       real(WP), dimension(this%imino_:,this%jmino_:,this%kmino_:), intent(inout) :: A !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       type(MPI_Status) :: status
       integer :: isrc,idst,ierr,isize,i,j,k
@@ -455,7 +455,7 @@ contains
       use mpi_f08
       use parallel, only: MPI_REAL_WP
       implicit none
-      class(pgrid) :: this
+      class(pgrid), intent(in) :: this
       integer, intent(in) :: no
       real(WP), dimension(this%imin_-no:,this%jmin_-no:,this%kmin_-no:), intent(inout) :: A !< Needs to be (imin_-no:imax_+no,jmin_-no:jmax_+no,kmin_-no:kmax_+no)
       type(MPI_Status) :: status

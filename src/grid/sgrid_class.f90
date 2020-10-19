@@ -377,7 +377,7 @@ contains
       use monitor, only: die,log
       use param,   only: verbose
       implicit none
-      class(sgrid) :: this
+      class(sgrid), intent(in) :: this
       character(len=*), intent(in) :: file
       integer :: iunit,ierr
       

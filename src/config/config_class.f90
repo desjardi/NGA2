@@ -89,7 +89,7 @@ contains
       use mpi_f08,  only: MPI_ALLREDUCE,MPI_MIN
       use parallel, only: MPI_REAL_WP
       implicit none
-      class(config) :: this
+      class(config), intent(inout) :: this
       integer :: i,j,k,ierr
       integer :: powx,powy,powz
       
@@ -128,7 +128,7 @@ contains
    !> @todo This needs to be revisited to not be needed...
    subroutine maskUpdate(this)
       implicit none
-      class(config) :: this
+      class(config), intent(inout) :: this
       where(nint(this%mask).eq.1) this%vol=0.0_WP
    end subroutine maskUpdate
    
@@ -136,7 +136,7 @@ contains
    !> Extend mask array into the non-periodic domain overlaps
    subroutine maskExtend(this)
       implicit none
-      class(config) :: this
+      class(config), intent(inout) :: this
       integer :: i,j,k
       if (.not.this%xper) then
          if (this%iproc.eq.1) then
@@ -187,7 +187,7 @@ contains
    !> Expect a parallel call here
    subroutine config_write(this,file)
       implicit none
-      class(config) :: this
+      class(config), intent(in) :: this
       character(len=*), intent(in) :: file
       ! Root process writes out the grid
       if (this%amRoot) call this%sgrid%write(trim(adjustl(file))//'.grid')
