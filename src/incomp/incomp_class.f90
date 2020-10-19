@@ -341,11 +341,48 @@ contains
             do i=this%cfg%imino_,this%cfg%imaxo_
                ! Check if [i,j,k] is a wall
                if (nint(this%cfg%mask(i,j,k)).eq.1) then
-                  
+                  ! Zero out gradients to [xm,ym,zm]
+                  if (i.lt.this%cfg%imaxo_) this%gradu_x(:,i,j,k)=0.0_WP
+                  if (j.lt.this%cfg%jmaxo_) this%gradv_y(:,i,j,k)=0.0_WP
+                  if (k.lt.this%cfg%kmaxo_) this%gradw_z(:,i,j,k)=0.0_WP
                end if
             end do
          end do
       end do
+      
+      
+      
+      ! Create gradient coefficients in x
+      do i=this%cfg%imino_+1,this%cfg%imaxo_
+         ! FD gradient from [xm,y,zm] to [x,y,zm]
+         this%gradv_x(-1,i,:,:)=-this%cfg%dxmi(i)
+         this%gradv_x( 0,i,:,:)=+this%cfg%dxmi(i)
+         ! FD gradient from [xm,ym,z] to [x,ym,z]
+         this%gradw_x(-1,i,:,:)=-this%cfg%dxmi(i)
+         this%gradw_x( 0,i,:,:)=+this%cfg%dxmi(i)
+      end do
+      
+      ! Create gradient coefficients in y
+      do j=this%cfg%jmino_+1,this%cfg%jmaxo_
+         ! FD gradient from [x,ym,zm] to [x,y,zm]
+         this%gradu_y(-1,:,j,:)=-this%cfg%dymi(j)
+         this%gradu_y( 0,:,j,:)=+this%cfg%dymi(j)
+         ! FD gradient from [xm,ym,z] to [xm,y,z]
+         this%gradw_y(-1,:,j,:)=-this%cfg%dymi(j)
+         this%gradw_y( 0,:,j,:)=+this%cfg%dymi(j)
+      end do
+      
+      ! Create gradient coefficients in z
+      do k=this%cfg%kmino_+1,this%cfg%kmaxo_
+         ! FD gradient from [x,ym,zm] to [x,ym,z]
+         this%gradu_z(-1,:,:,k)=-this%cfg%dzmi(k)
+         this%gradu_z( 0,:,:,k)=+this%cfg%dzmi(k)
+         ! FD gradient from [xm,y,zm] to [xm,y,z]
+         this%gradv_z(-1,:,:,k)=-this%cfg%dzmi(k)
+         this%gradv_z( 0,:,:,k)=+this%cfg%dzmi(k)
+      end do
+      
+      
       
    end subroutine mask_metrics
    
