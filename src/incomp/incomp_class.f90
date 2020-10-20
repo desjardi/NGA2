@@ -284,72 +284,107 @@ contains
       class(incomp), intent(inout) :: this
       integer :: i,j,k
       
-      ! Adjust velocity interpolation coefficients for walls
+      ! Loop over *extended* domain and look for walls
       do k=this%cfg%kmino_,this%cfg%kmaxo_
          do j=this%cfg%jmino_,this%cfg%jmaxo_
             do i=this%cfg%imino_,this%cfg%imaxo_
+               
                ! Check if [i,j,k] is a wall
                if (nint(this%cfg%mask(i,j,k)).eq.1) then
+                  
+                  ! =========================== !
+                  !    CELL-CENTERED OBJECTS    !
+                  ! Modifies itp, div, and grad !
+                  ! =========================== !
                   ! Zero out interpolators to [xm,ym,zm]
                   if (i.lt.this%cfg%imaxo_) this%itpu_x(:,i,j,k)=0.0_WP
                   if (j.lt.this%cfg%jmaxo_) this%itpv_y(:,i,j,k)=0.0_WP
                   if (k.lt.this%cfg%kmaxo_) this%itpw_z(:,i,j,k)=0.0_WP
-                  ! Zero out interpolators to [xm,y,z]
-                  if (j.gt.this%cfg%jmino_) this%itpw_y(:,i,j,k)=0.0_WP
-                  if (k.gt.this%cfg%kmino_) this%itpv_z(:,i,j,k)=0.0_WP
-                  ! Zero out interpolators to [x,ym,z]
-                  if (k.gt.this%cfg%kmino_) this%itpu_z(:,i,j,k)=0.0_WP
-                  if (i.gt.this%cfg%imino_) this%itpw_x(:,i,j,k)=0.0_WP
-                  ! Zero out interpolators to [x,y,zm]
-                  if (i.gt.this%cfg%imino_) this%itpv_x(:,i,j,k)=0.0_WP
-                  if (j.gt.this%cfg%jmino_) this%itpu_y(:,i,j,k)=0.0_WP
-               end if
-            end do
-         end do
-      end do
-      
-      ! Adjust divergence operators for walls
-      do k=this%cfg%kmino_,this%cfg%kmaxo_
-         do j=this%cfg%jmino_,this%cfg%jmaxo_
-            do i=this%cfg%imino_,this%cfg%imaxo_
-               ! Check if [i,j,k] is a wall
-               if (nint(this%cfg%mask(i,j,k)).eq.1) then
                   ! Zero out divergence to [xm,ym,zm]
                   if (i.lt.this%cfg%imaxo_) this%divp_x(:,i,j,k)=0.0_WP
                   if (j.lt.this%cfg%jmaxo_) this%divp_y(:,i,j,k)=0.0_WP
                   if (k.lt.this%cfg%kmaxo_) this%divp_z(:,i,j,k)=0.0_WP
-                  ! Zero out divergence to [x,ym,zm]
-                  if (i.gt.this%cfg%imino_) this%divu_x(:,i,j,k)=0.0_WP
-                  if (j.lt.this%cfg%jmaxo_) this%divu_y(:,i,j,k)=0.0_WP
-                  if (k.lt.this%cfg%kmaxo_) this%divu_z(:,i,j,k)=0.0_WP
-                  ! Zero out divergence to [xm,y,zm]
-                  if (i.lt.this%cfg%imaxo_) this%divv_x(:,i,j,k)=0.0_WP
-                  if (j.gt.this%cfg%jmino_) this%divv_y(:,i,j,k)=0.0_WP
-                  if (k.lt.this%cfg%kmaxo_) this%divv_z(:,i,j,k)=0.0_WP
-                  ! Zero out divergence to [xm,ym,z]
-                  if (i.lt.this%cfg%imaxo_) this%divw_x(:,i,j,k)=0.0_WP
-                  if (j.lt.this%cfg%jmaxo_) this%divw_y(:,i,j,k)=0.0_WP
-                  if (k.gt.this%cfg%kmino_) this%divw_z(:,i,j,k)=0.0_WP
-               end if
-            end do
-         end do
-      end do
-      
-      ! Adjust velocity gradient operators for walls
-      do k=this%cfg%kmino_,this%cfg%kmaxo_
-         do j=this%cfg%jmino_,this%cfg%jmaxo_
-            do i=this%cfg%imino_,this%cfg%imaxo_
-               ! Check if [i,j,k] is a wall
-               if (nint(this%cfg%mask(i,j,k)).eq.1) then
                   ! Zero out gradients to [xm,ym,zm]
                   if (i.lt.this%cfg%imaxo_) this%gradu_x(:,i,j,k)=0.0_WP
                   if (j.lt.this%cfg%jmaxo_) this%gradv_y(:,i,j,k)=0.0_WP
                   if (k.lt.this%cfg%kmaxo_) this%gradw_z(:,i,j,k)=0.0_WP
+                  
+                  ! =========================== !
+                  !    FACE-CENTERED OBJECTS    !
+                  ! Modifies only staggered div !
+                  ! All 6 faces are considered  !
+                  ! =========================== !
+                  ! Zero out divergence to [x,ym,zm] - 2 faces
+                  if (i  .gt.this%cfg%imino_) this%divu_x(:,i  ,j,k)=0.0_WP !< That enforces a Neumann on pressure
+                  if (i+1.le.this%cfg%imaxo_) this%divu_x(:,i+1,j,k)=0.0_WP !< That enforces a Neumann on pressure
+                  if (j  .lt.this%cfg%jmaxo_) this%divu_y(:,i,j  ,k)=0.0_WP
+                  if (j+1.lt.this%cfg%jmaxo_) this%divu_y(:,i,j+1,k)=0.0_WP
+                  if (k  .lt.this%cfg%kmaxo_) this%divu_z(:,i,j,k  )=0.0_WP
+                  if (k+1.lt.this%cfg%kmaxo_) this%divu_z(:,i,j,k+1)=0.0_WP
+                  ! Zero out divergence to [xm,y,zm] - 2 faces
+                  if (i  .lt.this%cfg%imaxo_) this%divv_x(:,i  ,j,k)=0.0_WP
+                  if (i+1.lt.this%cfg%imaxo_) this%divv_x(:,i+1,j,k)=0.0_WP
+                  if (j  .gt.this%cfg%jmino_) this%divv_y(:,i,j  ,k)=0.0_WP !< That enforces a Neumann on pressure
+                  if (j+1.le.this%cfg%jmaxo_) this%divv_y(:,i,j+1,k)=0.0_WP !< That enforces a Neumann on pressure
+                  if (k  .lt.this%cfg%kmaxo_) this%divv_z(:,i,j,k  )=0.0_WP
+                  if (k+1.lt.this%cfg%kmaxo_) this%divv_z(:,i,j,k+1)=0.0_WP
+                  ! Zero out divergence to [xm,ym,z] - 2 faces
+                  if (i  .lt.this%cfg%imaxo_) this%divw_x(:,i  ,j,k)=0.0_WP
+                  if (i+1.lt.this%cfg%imaxo_) this%divw_x(:,i+1,j,k)=0.0_WP
+                  if (j  .lt.this%cfg%jmaxo_) this%divw_y(:,i,j  ,k)=0.0_WP
+                  if (j+1.lt.this%cfg%jmaxo_) this%divw_y(:,i,j+1,k)=0.0_WP
+                  if (k  .gt.this%cfg%kmino_) this%divw_z(:,i,j,k  )=0.0_WP !< That enforces a Neumann on pressure
+                  if (k+1.le.this%cfg%kmaxo_) this%divw_z(:,i,j,k+1)=0.0_WP !< That enforces a Neumann on pressure
+                  
+                  ! =========================== !
+                  !    EDGE-CENTERED OBJECTS    !
+                  ! Modifies only itr and grad  !
+                  ! All 12 edges are considered !
+                  ! =========================== !
+                  ! Zero out the 2 interpolators to [xm,y,z] - 4 edges
+                  if (j  .gt.this%cfg%jmino_)                            this%itpw_y(:,i,j  ,k  )=0.0_WP
+                  if (j+1.le.this%cfg%jmaxo_)                            this%itpw_y(:,i,j+1,k  )=0.0_WP
+                  if (j  .gt.this%cfg%jmino_.and.k+1.le.this%cfg%kmaxo_) this%itpw_y(:,i,j  ,k+1)=0.0_WP
+                  if (j+1.le.this%cfg%jmaxo_.and.k+1.le.this%cfg%kmaxo_) this%itpw_y(:,i,j+1,k+1)=0.0_WP
+                  if (k  .gt.this%cfg%kmino_)                            this%itpv_z(:,i,j  ,k  )=0.0_WP
+                  if (k+1.le.this%cfg%kmaxo_)                            this%itpv_z(:,i,j  ,k+1)=0.0_WP
+                  if (k  .gt.this%cfg%kmino_.and.j+1.le.this%cfg%jmaxo_) this%itpv_z(:,i,j+1,k  )=0.0_WP
+                  if (k+1.le.this%cfg%kmaxo_.and.j+1.le.this%cfg%jmaxo_) this%itpv_z(:,i,j+1,k+1)=0.0_WP
+                  ! Zero out the 2 interpolators to [x,ym,z] - 4 edges
+                  if (k  .gt.this%cfg%kmino_)                            this%itpu_z(:,i  ,j,k  )=0.0_WP
+                  if (k+1.le.this%cfg%kmaxo_)                            this%itpu_z(:,i  ,j,k+1)=0.0_WP
+                  if (k  .gt.this%cfg%kmino_.and.i+1.le.this%cfg%imaxo_) this%itpu_z(:,i+1,j,k  )=0.0_WP
+                  if (k+1.le.this%cfg%kmaxo_.and.i+1.le.this%cfg%imaxo_) this%itpu_z(:,i+1,j,k+1)=0.0_WP
+                  if (i  .gt.this%cfg%imino_)                            this%itpw_x(:,i  ,j,k  )=0.0_WP
+                  if (i+1.le.this%cfg%imaxo_)                            this%itpw_x(:,i+1,j,k  )=0.0_WP
+                  if (i  .gt.this%cfg%imino_.and.k+1.le.this%cfg%kmaxo_) this%itpw_x(:,i  ,j,k+1)=0.0_WP
+                  if (i+1.le.this%cfg%imaxo_.and.k+1.le.this%cfg%kmaxo_) this%itpw_x(:,i+1,j,k+1)=0.0_WP
+                  ! Zero out the 2 interpolators to [x,y,zm] - 4 edges
+                  if (i  .gt.this%cfg%imino_)                            this%itpv_x(:,i  ,j  ,k)=0.0_WP
+                  if (i+1.le.this%cfg%imaxo_)                            this%itpv_x(:,i+1,j  ,k)=0.0_WP
+                  if (i  .gt.this%cfg%imino_.and.j+1.le.this%cfg%jmaxo_) this%itpv_x(:,i  ,j+1,k)=0.0_WP
+                  if (i+1.le.this%cfg%imaxo_.and.j+1.le.this%cfg%jmaxo_) this%itpv_x(:,i+1,j+1,k)=0.0_WP
+                  if (j  .gt.this%cfg%jmino_)                            this%itpu_y(:,i  ,j  ,k)=0.0_WP
+                  if (j+1.le.this%cfg%jmaxo_)                            this%itpu_y(:,i  ,j+1,k)=0.0_WP
+                  if (j  .gt.this%cfg%jmino_.and.i+1.le.this%cfg%imaxo_) this%itpu_y(:,i+1,j  ,k)=0.0_WP
+                  if (j+1.le.this%cfg%jmaxo_.and.i+1.le.this%cfg%imaxo_) this%itpu_y(:,i+1,j+1,k)=0.0_WP
+                  ! Modify the 2 gradients to [xm,y,z] - 4 edges
+                  this%gradw_y(-1,i,j,k)=this%gradw_y(-1,i,j,k)*()
+                  this%gradw_y( 0,i,j,k)=0.0_WP
+                  
+                  
+                  
+                  
+                  this%gradv_z(-1,:,:,k)=-this%cfg%dzmi(k)
+                  this%gradv_z( 0,:,:,k)=+this%cfg%dzmi(k)
+                  ! Modify the 2 gradients to [x,ym,z] - 4 edges
+                  
+                  ! Modify the 2 gradients to [x,y,zm] - 4 edges
+                  
                end if
             end do
          end do
       end do
-      
       
       
       ! Create gradient coefficients in x
