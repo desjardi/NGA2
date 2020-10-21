@@ -17,13 +17,12 @@ module config_class
       real(WP), dimension(:,:,:), allocatable :: meshsize      !< Local effective cell size
       real(WP) :: min_meshsize                                 !< Global minimum mesh size
       ! Geometry
-      real(WP), dimension(:,:,:), allocatable :: mask          !< Masking info (mask=0 is fluid, mask=1 is wall)
+      real(WP), dimension(:,:,:), allocatable :: VF            !< Volume fraction info (VF=1 is fluid, VF=0 is wall)
    contains
       procedure :: print=>config_print                         !< Output configuration information to the screen
       procedure :: write=>config_write                         !< Write out config files: grid and geometry
-      procedure :: maskUpdate                                  !< Takes in a mask array and updates the config consequently
       procedure, private :: prep=>config_prep                  !< Finish preparing config after the partitioned grid is loaded
-      procedure :: maskExtend                                  !< Extend mask array into the non-periodic domain overlaps
+      procedure :: VFExtend                                    !< Extend VF array into the non-periodic domain overlaps
    end type config
    
    
@@ -66,21 +65,19 @@ contains
       self%pgrid=pgrid(no,fgrid,grp,decomp)
       ! Finish preparing the config
       call self%prep
-      ! Read in the mask info and update the masks
-      read_mask: block
+      ! Read in the VF info
+      read_VF: block
          use datafile_class, only: datafile
          type(datafile) :: geomfile
          ! Access the file
          geomfile=datafile(self,fgeom)
-         ! Get the mask array
-         call geomfile%pullvar('mask',self%mask)
-         ! Sync up the mask array
-         call self%sync(self%mask)
+         ! Get the VF array
+         call geomfile%pullvar('VF',self%VF)
+         ! Sync up the VF array
+         call self%sync(self%VF)
          ! Perform an extension in the overlap
-         call self%maskExtend()
-         ! Update volume
-         call self%maskupdate()
-      end block read_mask
+         call self%VFExtend()
+      end block read_VF
    end function construct_from_file
    
    
@@ -118,60 +115,51 @@ contains
       call MPI_ALLREDUCE(minval(this%meshsize(this%imin_:this%imax_,this%jmin_:this%jmax_,this%kmin_:this%kmax_)),this%min_meshsize,1,MPI_REAL_WP,MPI_MIN,this%comm,ierr)
       
       ! Allocate wall geometry - assume all fluid until told otherwise
-      allocate(this%mask(this%imino_:this%imaxo_,this%jmino_:this%jmaxo_,this%kmino_:this%kmaxo_))
-      this%mask=0.0_WP
+      allocate(this%VF(this%imino_:this%imaxo_,this%jmino_:this%jmaxo_,this%kmino_:this%kmaxo_))
+      this%VF=1.0_WP
       
    end subroutine config_prep
    
    
-   !> Update vol in accordance to mask
-   !> @todo This needs to be revisited to not be needed...
-   subroutine maskUpdate(this)
-      implicit none
-      class(config), intent(inout) :: this
-      where(nint(this%mask).eq.1) this%vol=0.0_WP
-   end subroutine maskUpdate
-   
-   
-   !> Extend mask array into the non-periodic domain overlaps
-   subroutine maskExtend(this)
+   !> Extend VF array into the non-periodic domain overlaps
+   subroutine VFExtend(this)
       implicit none
       class(config), intent(inout) :: this
       integer :: i,j,k
       if (.not.this%xper) then
          if (this%iproc.eq.1) then
             do i=this%imino,this%imin-1
-               this%mask(i,:,:)=this%mask(this%imin,:,:)
+               this%VF(i,:,:)=this%VF(this%imin,:,:)
             end do
          else if (this%iproc.eq.this%npx) then
             do i=this%imax+1,this%imaxo
-               this%mask(i,:,:)=this%mask(this%imax,:,:)
+               this%VF(i,:,:)=this%VF(this%imax,:,:)
             end do
          end if
       end if
       if (.not.this%yper) then
          if (this%jproc.eq.1) then
             do j=this%jmino,this%jmin-1
-               this%mask(:,j,:)=this%mask(:,this%jmin,:)
+               this%VF(:,j,:)=this%VF(:,this%jmin,:)
             end do
          else if (this%jproc.eq.this%npy) then
             do j=this%jmax+1,this%jmaxo
-               this%mask(:,j,:)=this%mask(:,this%jmax,:)
+               this%VF(:,j,:)=this%VF(:,this%jmax,:)
             end do
          end if
       end if
       if (.not.this%zper) then
          if (this%kproc.eq.1) then
             do k=this%kmino,this%kmin-1
-               this%mask(:,:,k)=this%mask(:,:,this%kmin)
+               this%VF(:,:,k)=this%VF(:,:,this%kmin)
             end do
          else if (this%kproc.eq.this%npz) then
             do j=this%kmax+1,this%kmaxo
-               this%mask(:,:,k)=this%mask(:,:,this%kmax)
+               this%VF(:,:,k)=this%VF(:,:,this%kmax)
             end do
          end if
       end if
-   end subroutine maskExtend
+   end subroutine VFExtend
    
    
    !> Cheap print of config info to screen
@@ -190,16 +178,16 @@ contains
       class(config), intent(in) :: this
       character(len=*), intent(in) :: file
       ! Root process writes out the grid
-      if (this%amRoot) call this%sgrid%write(trim(adjustl(file))//'.grid')
+      if (this%amRoot) call this%pgrid%write(trim(adjustl(file))//'.grid')
       ! All processes write out the geometry
-      write_mask: block
+      write_VF: block
          use datafile_class, only: datafile
          type(datafile) :: geomfile
          geomfile=datafile(this,trim(this%name),0,1)
-         geomfile%varname(1)='mask'
-         call geomfile%pushvar('mask',this%mask)
+         geomfile%varname(1)='VF'
+         call geomfile%pushvar('VF',this%VF)
          call geomfile%write(trim(adjustl(file))//'.geom')
-      end block write_mask
+      end block write_VF
    end subroutine config_write
    
    

@@ -87,28 +87,25 @@ contains
          call param_read('Hole size',hole_size)
          call param_read('Hole dist',hole_dist)
          
-         ! Write mask array - need to include the overlap!
+         ! Write VF array - includes the overlap here
          do k=cfg%kmino_,cfg%kmaxo_
             do j=cfg%jmino_,cfg%jmaxo_
                do i=cfg%imino_,cfg%imaxo_
                   if (cfg%ym(j).gt.0.0_WP) then
                      ! Above the plate
-                     cfg%mask(i,j,k)=0.0_WP
+                     cfg%VF(i,j,k)=1.0_WP
                   else if (cfg%ym(j).lt.-0.01_WP) then
                      ! Below the plate
-                     cfg%mask(i,j,k)=0.0_WP
+                     cfg%VF(i,j,k)=1.0_WP
                   else
                      ! This is the plate
-                     cfg%mask(i,j,k)=1.0_WP
+                     cfg%VF(i,j,k)=0.0_WP
                      ! Now perforate it
-                     if (modulo(cfg%xm(i)-0.5_WP*hole_size,hole_dist).lt.hole_size.and.modulo(cfg%zm(k)-0.5_WP*hole_size,hole_dist).lt.hole_size) cfg%mask(i,j,k)=0.0_WP
+                     if (modulo(cfg%xm(i)-0.5_WP*hole_size,hole_dist).lt.hole_size.and.modulo(cfg%zm(k)-0.5_WP*hole_size,hole_dist).lt.hole_size) cfg%VF(i,j,k)=1.0_WP
                   end if
                end do
             end do
          end do
-         
-         ! Update the cfg with the new mask
-         call cfg%maskUpdate()
          
       end block create_walls
       

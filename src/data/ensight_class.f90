@@ -159,16 +159,11 @@ contains
       ! Allocate iblank array
       allocate(iblank(i1:i2,j1:j2,k1:k2))
       
-      ! Build the blanking info and x/y/zbuf
+      ! Build the blanking info from VF
       do k=k1,k2
          do j=j1,j2
             do i=i1,i2
-               ! Blanking from mask
-               if (nint(minval(this%cfg%mask(i-1:i,j-1:j,k-1:k))).eq.0) then
-                  iblank(i,j,k)=1
-               else
-                  iblank(i,j,k)=0
-               end if
+               iblank(i,j,k)=nint(maxval(this%cfg%VF(i-1:i,j-1:j,k-1:k)))
             end do
          end do
       end do
