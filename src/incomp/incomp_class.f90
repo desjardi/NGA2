@@ -31,6 +31,11 @@ module incomp_class
       real(WP), dimension(:,:,:), allocatable :: W        !< W velocity array
       real(WP), dimension(:,:,:), allocatable :: P        !< Pressure array
       
+      ! Old flow variables
+      real(WP), dimension(:,:,:), allocatable :: Uold     !< Uold velocity array
+      real(WP), dimension(:,:,:), allocatable :: Vold     !< Vold velocity array
+      real(WP), dimension(:,:,:), allocatable :: Wold     !< Wold velocity array
+      
       ! Metrics
       real(WP), dimension(:,:,:,:), allocatable :: itpu_x,itpu_y,itpu_z   !< Interpolation for U
       real(WP), dimension(:,:,:,:), allocatable :: itpv_x,itpv_y,itpv_z   !< Interpolation for V
@@ -51,6 +56,7 @@ module incomp_class
    contains
       procedure :: print=>incomp_print                    !< Output solver to the screen
       procedure :: init_metrics                           !< Initialize metrics
+      procedure :: get_dudt                               !< Calculate du/dt
    end type incomp
    
    
@@ -83,6 +89,11 @@ contains
       allocate(self%V(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%V=0.0_WP
       allocate(self%W(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%W=0.0_WP
       allocate(self%P(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%P=0.0_WP
+      
+      ! Allocate old flow variables
+      allocate(self%Uold(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%Uold=0.0_WP
+      allocate(self%Vold(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%Vold=0.0_WP
+      allocate(self%Wold(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%Wold=0.0_WP
       
    end function constructor
    
@@ -287,6 +298,35 @@ contains
       end do
       
    end subroutine init_metrics
+   
+   
+   !> Calculate the explicit velocity time derivative
+   subroutine get_dudt(this,resU,resV,resW)
+      implicit none
+      class(incomp), intent(inout) :: this
+      real(WP), dimension(this%pg%imino_:,this%pg%jmino_:,this%pg%kmino_:), intent(out) :: resU !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      real(WP), dimension(this%pg%imino_:,this%pg%jmino_:,this%pg%kmino_:), intent(out) :: resV !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      real(WP), dimension(this%pg%imino_:,this%pg%jmino_:,this%pg%kmino_:), intent(out) :: resW !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      integer :: i,j,k,ii,jj,kk
+      
+      ! U-momentum flux
+      do kk=kmin_,kmax_+1
+         do jj=jmin_,jmax_+1
+            do ii=imin_,imax_+1
+               i=ii-1; j=jj-1; k=kk-1;
+               
+               rhoUi(i,j,k) = sum(interp_Ju_xm(i,j,:)*rhoU(i-stc1:i+stc2,j,k))
+               
+               i = ii; j = jj; k = kk;
+               
+               rhoVi(i,j,k) = sum(interp_Jv_x(i,j,:)*rhoV(i-stc2:i+stc1,j,k))
+               rhoWi(i,j,k) = sum(interp_Jw_x(i,j,:)*rhoW(i-stc2:i+stc1,j,k))
+               
+            end do
+         end do
+      end do
+      
+   end subroutine get_dudt
    
    
    !> Print out info for incompressible flow solver
