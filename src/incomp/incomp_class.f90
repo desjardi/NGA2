@@ -92,6 +92,7 @@ contains
       implicit none
       class(incomp), intent(inout) :: this
       integer :: i,j,k
+      real(WP) :: delta
       
       ! Allocate finite difference velocity interpolation coefficients
       allocate(this%itpu_x( 0:+1,this%cfg%imino_+1:this%cfg%imaxo_-1,this%cfg%jmino_+1:this%cfg%jmaxo_-1,this%cfg%kmino_+1:this%cfg%kmaxo_-1)) !< Cell-centered
@@ -219,8 +220,22 @@ contains
       do k=this%cfg%kmino_  ,this%cfg%kmaxo_
          do j=this%cfg%jmino_+1,this%cfg%jmaxo_
             do i=this%cfg%imino_+1,this%cfg%imaxo_
-               this%grdu_y(:,i,j,k)=this%cfg%dymi(j)*[-1.0_WP,+1.0_WP] !< FD gradient in y of U from [x ,ym,zm]
-               this%grdv_x(:,i,j,k)=this%cfg%dxmi(i)*[-1.0_WP,+1.0_WP] !< FD gradient in x of V from [xm,y ,zm]
+               ! FD gradient in y of U from [x ,ym,zm]
+               delta=minval(this%cfg%VF(i-1:i,j  ,k))*(this%cfg%ym(j)-this%cfg%y (j  )) &
+               &    +minval(this%cfg%VF(i-1:i,j-1,k))*(this%cfg%y (j)-this%cfg%ym(j-1))
+               if (delta.gt.0.0_WP) then
+                  this%grdu_y(:,i,j,k)=[-minval(this%cfg%VF(i-1:i,j-1,k)),+minval(this%cfg%VF(i-1:i,j,k))]/delta
+               else
+                  this%grdu_y(:,i,j,k)=0.0_WP
+               end if
+               ! FD gradient in x of V from [xm,y ,zm]
+               delta=minval(this%cfg%VF(i  ,j-1:j,k))*(this%cfg%xm(i)-this%cfg%x (i  )) &
+               &    +minval(this%cfg%VF(i-1,j-1:j,k))*(this%cfg%x (i)-this%cfg%xm(i-1))
+               if (delta.gt.0.0_WP) then
+                  this%grdv_x(:,i,j,k)=[-minval(this%cfg%VF(i-1,j-1:j,k)),+minval(this%cfg%VF(i,j-1:j,k))]/delta
+               else
+                  this%grdv_x(:,i,j,k)=0.0_WP
+               end if
             end do
          end do
       end do
@@ -228,8 +243,22 @@ contains
       do k=this%cfg%kmino_+1,this%cfg%kmaxo_
          do j=this%cfg%jmino_+1,this%cfg%jmaxo_
             do i=this%cfg%imino_  ,this%cfg%imaxo_
-               this%grdv_z(:,i,j,k)=this%cfg%dzmi(k)*[-1.0_WP,1.0_WP] !< FD gradient in z of V from [xm,y ,zm]
-               this%grdw_y(:,i,j,k)=this%cfg%dymi(j)*[-1.0_WP,1.0_WP] !< FD gradient in y of W from [xm,ym,z ]
+               ! FD gradient in z of V from [xm,y ,zm]
+               delta=minval(this%cfg%VF(i,j-1:j,k  ))*(this%cfg%zm(k)-this%cfg%z (k  )) &
+               &    +minval(this%cfg%VF(i,j-1:j,k-1))*(this%cfg%z (k)-this%cfg%zm(k-1))
+               if (delta.gt.0.0_WP) then
+                  this%grdv_z(:,i,j,k)=[-minval(this%cfg%VF(i,j-1:j,k-1)),+minval(this%cfg%VF(i,j-1:j,k))]/delta
+               else
+                  this%grdv_z(:,i,j,k)=0.0_WP
+               end if
+               ! FD gradient in y of W from [xm,ym,z ]
+               delta=minval(this%cfg%VF(i,j  ,k-1:k))*(this%cfg%ym(j)-this%cfg%y (j  )) &
+               &    +minval(this%cfg%VF(i,j-1,k-1:k))*(this%cfg%y (j)-this%cfg%ym(j-1))
+               if (delta.gt.0.0_WP) then
+                  this%grdw_y(:,i,j,k)=[-minval(this%cfg%VF(i,j-1,k-1:k)),+minval(this%cfg%VF(i,j,k-1:k))]/delta
+               else
+                  this%grdw_y(:,i,j,k)=0.0_WP
+               end if
             end do
          end do
       end do
@@ -237,8 +266,22 @@ contains
       do k=this%cfg%kmino_+1,this%cfg%kmaxo_
          do j=this%cfg%jmino_  ,this%cfg%jmaxo_
             do i=this%cfg%imino_+1,this%cfg%imaxo_
-               this%grdw_x(:,i,j,k)=this%cfg%dxmi(i)*[-1.0_WP,1.0_WP] !< FD gradient in x of W from [xm,ym,z ]
-               this%grdu_z(:,i,j,k)=this%cfg%dzmi(k)*[-1.0_WP,1.0_WP] !< FD gradient in z of U from [x ,ym,zm]
+               ! FD gradient in x of W from [xm,ym,z ]
+               delta=minval(this%cfg%VF(i  ,j,k-1:k))*(this%cfg%xm(i)-this%cfg%x (i  )) &
+               &    +minval(this%cfg%VF(i-1,j,k-1:k))*(this%cfg%x (i)-this%cfg%xm(i-1))
+               if (delta.gt.0.0_WP) then
+                  this%grdw_x(:,i,j,k)=[-minval(this%cfg%VF(i-1,j,k-1:k)),+minval(this%cfg%VF(i,j,k-1:k))]/delta
+               else
+                  this%grdw_x(:,i,j,k)=0.0_WP
+               end if
+               ! FD gradient in z of U from [x ,ym,zm]
+               delta=minval(this%cfg%VF(i-1:i,j,k  ))*(this%cfg%zm(k)-this%cfg%z (k  )) &
+               &    +minval(this%cfg%VF(i-1:i,j,k-1))*(this%cfg%z (k)-this%cfg%zm(k-1))
+               if (delta.gt.0.0_WP) then
+                  this%grdu_z(:,i,j,k)=[-minval(this%cfg%VF(i-1:i,j,k-1)),+minval(this%cfg%VF(i-1:i,j,k))]/delta
+               else
+                  this%grdu_z(:,i,j,k)=0.0_WP
+               end if
             end do
          end do
       end do
