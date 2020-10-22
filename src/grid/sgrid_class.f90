@@ -103,58 +103,6 @@ contains
    end function construct_from_file
    
    
-   !> Constructor for a serial grid object based on NGA's old config file
-   function construct_from_file_oldngaconfig(no,file,name) result(self)
-      use monitor, only: die
-      implicit none
-      type(sgrid) :: self
-      integer, intent(in) :: no
-      character(len=*), optional :: file
-      character(len=*), optional :: name
-      integer :: iunit,ierr
-      character(len=str_medium) :: simu_name
-      integer :: icyl,ixper,iyper,izper,nx,ny,nz,coord
-      real(WP), dimension(:), allocatable :: x
-      real(WP), dimension(:), allocatable :: y
-      real(WP), dimension(:), allocatable :: z
-      logical :: xper,yper,zper
-      
-      ! Open the file
-      open(newunit=iunit,file=trim(adjustl(file)),form='unformatted',status='old',access='stream',iostat=ierr)
-      if (ierr.ne.0) call die('[sgrid constructor] Could not open file: '//trim(file))
-      
-      ! Read grid parameters
-      read(iunit) simu_name,icyl,ixper,iyper,izper,nx,ny,nz
-      
-      ! Convert coordinate system
-      select case (icyl)
-      case (0); coord=cartesian
-      case (1); coord=cylindrical
-      case default; call die('[sgrid constructor] Config file provided unexpected value for icyl')
-      end select
-      
-      ! Convert periodicity
-      xper=(ixper.eq.1); yper=(iyper.eq.1); zper=(izper.eq.1)
-      
-      ! Update name if another one was provided
-      if (present(name)) simu_name=trim(adjustl(name))
-      
-      ! Allocate 1D meshes and read them
-      allocate(x(1:nx+1),y(1:ny+1),z(1:nz+1))
-      read(iunit) x,y,z
-      
-      ! Close file
-      close(iunit)
-      
-      ! Use arg-based constructor now that all info are known
-      self=construct_from_args(coord,no,x,y,z,xper,yper,zper,trim(adjustl(simu_name)))
-      
-      ! Deallocate 1D arrays
-      deallocate(x,y,z)
-      
-   end function construct_from_file_oldngaconfig
-   
-   
    !> Constructor for a serial grid object
    function construct_from_args(coord,no,x,y,z,xper,yper,zper,name) result(self)
       use monitor, only: die

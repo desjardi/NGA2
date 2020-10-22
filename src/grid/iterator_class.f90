@@ -120,8 +120,8 @@ contains
          do j=self%pg%jmino_,self%pg%jmaxo_
             do i=self%pg%imino_,self%pg%imaxo_
                ! Skip inside cells
-               if (i.ge.self%pg%imin_.and.i.le.self%pg%imax_.and.&
-               &   j.ge.self%pg%jmin_.and.j.le.self%pg%jmax_.and.&
+               if (i.ge.self%pg%imin_.and.i.le.self%pg%imax_.and. &
+               &   j.ge.self%pg%jmin_.and.j.le.self%pg%jmax_.and. &
                &   k.ge.self%pg%kmin_.and.k.le.self%pg%kmax_) cycle
                ! Only consider overlap cells
                if (test_if_inside(self%pg,i,j,k)) then
@@ -131,7 +131,7 @@ contains
             end do
          end do
       end do
-            
+      
    end function construct_from_function
    
    !> Basic printing of iterator

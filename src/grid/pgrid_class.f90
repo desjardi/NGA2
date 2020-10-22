@@ -193,9 +193,10 @@ contains
       ! Get rank and amIn info
       call MPI_GROUP_RANK(self%group,self%rank,ierr)
       self%amIn=(self%rank.ne.MPI_UNDEFINED)
+      ! Get a root already
+      self%amRoot=(self%rank.eq.0)
       ! Handle processors that are not part of the group
       if (.not.self%amIn) then
-         self%amRoot=.false.
          self%iproc=0; self%nx_=0; self%imin_=0; self%imax_=0; self%nxo_=0; self%imino_=0; self%imaxo_=0
          self%jproc=0; self%ny_=0; self%jmin_=0; self%jmax_=0; self%nyo_=0; self%jmino_=0; self%jmaxo_=0
          self%kproc=0; self%nz_=0; self%kmin_=0; self%kmax_=0; self%nzo_=0; self%kmino_=0; self%kmaxo_=0

@@ -3,7 +3,6 @@
 module config_class
    use precision,   only: WP
    use pgrid_class, only: pgrid
-   use mpi_f08,     only: MPI_Group
    implicit none
    private
    
@@ -22,7 +21,7 @@ module config_class
       procedure :: print=>config_print                         !< Output configuration information to the screen
       procedure :: write=>config_write                         !< Write out config files: grid and geometry
       procedure, private :: prep=>config_prep                  !< Finish preparing config after the partitioned grid is loaded
-      procedure :: VFExtend                                    !< Extend VF array into the non-periodic domain overlaps
+      procedure :: VF_extend                                    !< Extend VF array into the non-periodic domain overlaps
    end type config
    
    
@@ -40,6 +39,7 @@ contains
    function construct_from_sgrid(grp,decomp,grid) result(self)
       use sgrid_class, only: sgrid
       use string,      only: str_medium
+      use mpi_f08,     only: MPI_Group
       implicit none
       type(config) :: self
       type(sgrid), intent(in) :: grid
@@ -54,6 +54,7 @@ contains
    
    !> Single-grid config constructor from NGA grid file
    function construct_from_file(grp,decomp,no,fgrid,fgeom) result(self)
+      use mpi_f08, only: MPI_Group
       implicit none
       type(config) :: self
       type(MPI_Group), intent(in) :: grp
@@ -76,7 +77,7 @@ contains
          ! Sync up the VF array
          call self%sync(self%VF)
          ! Perform an extension in the overlap
-         call self%VFExtend()
+         call self%VF_extend()
       end block read_VF
    end function construct_from_file
    
@@ -122,7 +123,7 @@ contains
    
    
    !> Extend VF array into the non-periodic domain overlaps
-   subroutine VFExtend(this)
+   subroutine VF_extend(this)
       implicit none
       class(config), intent(inout) :: this
       integer :: i,j,k
@@ -159,7 +160,7 @@ contains
             end do
          end if
       end if
-   end subroutine VFExtend
+   end subroutine VF_extend
    
    
    !> Cheap print of config info to screen

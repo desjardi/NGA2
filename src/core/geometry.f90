@@ -33,7 +33,7 @@ contains
       use param,       only: param_read
       implicit none
       type(sgrid) :: grid
-
+      
       
       ! Create a grid from input params
       create_grid: block
@@ -130,7 +130,7 @@ contains
          call param_read('Geom file',fgeom)
          
          ! Create the cfg by reading in the file
-         cfg2=config(group,partition,1,fgrid,fgeom)
+         cfg2=config(group,partition,2,fgrid,fgeom)
          
       end block create_cfg2
       
@@ -151,7 +151,7 @@ contains
          type(iterator) :: sphere_itr
          
          ! Create an unstructured iterator and print it out
-         sphere_itr=iterator(cfg,'sphere',sphere_locator)
+         sphere_itr=iterator(cfg2,'sphere',sphere_locator)
          call sphere_itr%print()
          
       end block test_itr
