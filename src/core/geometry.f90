@@ -94,7 +94,7 @@ contains
                   if (cfg%ym(j).gt.0.0_WP) then
                      ! Above the plate
                      cfg%VF(i,j,k)=1.0_WP
-                  else if (cfg%ym(j).lt.-0.01_WP) then
+                  else if (cfg%ym(j).lt.-0.018_WP) then
                      ! Below the plate
                      cfg%VF(i,j,k)=1.0_WP
                   else
