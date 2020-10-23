@@ -49,14 +49,14 @@ module incomp_class
       real(WP), dimension(:,:,:,:), allocatable :: grdw_x,grdw_y,grdw_z   !< Velocity gradient for W
       
       ! Boundary condition list
-      !type(bcond), pointer :: bc=NULL()                   !<
+      !type(bcond), pointer :: bc=NULL()                   !< This will come later...
       
       ! MAYBE SOME WORK ARRAYS TOO?
       
    contains
       procedure :: print=>incomp_print                    !< Output solver to the screen
       procedure :: init_metrics                           !< Initialize metrics
-      procedure :: get_dudt                               !< Calculate du/dt
+      procedure :: get_dmomdt                             !< Calculate dmom/dt
    end type incomp
    
    
@@ -300,33 +300,118 @@ contains
    end subroutine init_metrics
    
    
-   !> Calculate the explicit velocity time derivative
-   subroutine get_dudt(this,resU,resV,resW)
+   !> Calculate the explicit momentum time derivative based on U/V/W/P
+   subroutine get_dmomdt(this,drhoUdt,drhoVdt,drhoWdt)
       implicit none
       class(incomp), intent(inout) :: this
-      real(WP), dimension(this%pg%imino_:,this%pg%jmino_:,this%pg%kmino_:), intent(out) :: resU !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
-      real(WP), dimension(this%pg%imino_:,this%pg%jmino_:,this%pg%kmino_:), intent(out) :: resV !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
-      real(WP), dimension(this%pg%imino_:,this%pg%jmino_:,this%pg%kmino_:), intent(out) :: resW !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(out) :: drhoUdt !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(out) :: drhoVdt !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(out) :: drhoWdt !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       integer :: i,j,k,ii,jj,kk
+      real(WP), dimension(:,:,:), allocatable :: FX,FY,FZ
       
-      ! U-momentum flux
-      do kk=kmin_,kmax_+1
-         do jj=jmin_,jmax_+1
-            do ii=imin_,imax_+1
-               i=ii-1; j=jj-1; k=kk-1;
-               
-               rhoUi(i,j,k) = sum(interp_Ju_xm(i,j,:)*rhoU(i-stc1:i+stc2,j,k))
-               
-               i = ii; j = jj; k = kk;
-               
-               rhoVi(i,j,k) = sum(interp_Jv_x(i,j,:)*rhoV(i-stc2:i+stc1,j,k))
-               rhoWi(i,j,k) = sum(interp_Jw_x(i,j,:)*rhoW(i-stc2:i+stc1,j,k))
-               
+      ! Allocate flux arrays
+      allocate(FX(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
+      allocate(FY(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
+      allocate(FZ(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
+      
+      ! Flux of rhoU
+      do kk=this%cfg%kmin_,this%cfg%kmax_+1
+         do jj=this%cfg%jmin_,this%cfg%jmax_+1
+            do ii=this%cfg%imin_,this%cfg%imax_+1
+               ! Fluxes on x-face
+               i=ii-1; j=jj; k=kk
+               FX(i,j,k)=-this%rho * sum(this%itpu_x(:,i,j,k)*this%U(i:i+1,j,k))*sum(this%itpu_x(:,i,j,k)*this%U(i:i+1,j,k)) &
+               &         +this%visc*(sum(this%grdu_x(:,i,j,k)*this%U(i:i+1,j,k))+sum(this%grdu_x(:,i,j,k)*this%U(i:i+1,j,k)))&
+               &         -this%P(i,j,k)
+               ! Fluxes on y-face
+               i=ii  ; j=jj; k=kk
+               FY(i,j,k)=-this%rho * sum(this%itpu_y(:,i,j,k)*this%U(i,j-1:j,k))*sum(this%itpv_x(:,i,j,k)*this%V(i-1:i,j,k)) &
+               &         +this%visc*(sum(this%grdu_y(:,i,j,k)*this%U(i,j-1:j,k))+sum(this%grdv_x(:,i,j,k)*this%V(i-1:i,j,k)))
+               ! Fluxes on z-face
+               i=ii  ; j=jj; k=kk
+               FZ(i,j,k)=-this%rho * sum(this%itpu_z(:,i,j,k)*this%U(i,j,k-1:k))*sum(this%itpw_x(:,i,j,k)*this%W(i-1:i,j,k)) &
+               &         +this%visc*(sum(this%grdu_z(:,i,j,k)*this%U(i,j,k-1:k))+sum(this%grdw_x(:,i,j,k)*this%W(i-1:i,j,k)))
+            end do
+         end do
+      end do
+      ! Time derivative of rhoU
+      do k=this%cfg%kmin_,this%cfg%kmax_
+         do j=this%cfg%jmin_,this%cfg%jmax_
+            do i=this%cfg%imin_,this%cfg%imax_
+               drhoUdt(i,j,k)=sum(this%divu_x(:,i,j,k)*FX(i-1:i,j,k))+&
+               &              sum(this%divu_y(:,i,j,k)*FY(i,j:j+1,k))+&
+               &              sum(this%divu_z(:,i,j,k)*FZ(i,j,k:k+1))
             end do
          end do
       end do
       
-   end subroutine get_dudt
+      ! Flux of rhoV
+      do kk=this%cfg%kmin_,this%cfg%kmax_+1
+         do jj=this%cfg%jmin_,this%cfg%jmax_+1
+            do ii=this%cfg%imin_,this%cfg%imax_+1
+               ! Fluxes on x-face
+               i=ii; j=jj  ; k=kk
+               FX(i,j,k)=-this%rho * sum(this%itpv_x(:,i,j,k)*this%V(i-1:i,j,k))*sum(this%itpu_y(:,i,j,k)*this%U(i,j-1:j,k)) &
+               &         +this%visc*(sum(this%grdv_x(:,i,j,k)*this%V(i-1:i,j,k))+sum(this%grdu_y(:,i,j,k)*this%U(i,j-1:j,k)))
+               ! Fluxes on y-face
+               i=ii; j=jj-1; k=kk
+               FY(i,j,k)=-this%rho * sum(this%itpv_y(:,i,j,k)*this%V(i,j:j+1,k))*sum(this%itpv_y(:,i,j,k)*this%V(i,j:j+1,k)) &
+               &         +this%visc*(sum(this%grdv_y(:,i,j,k)*this%V(i,j:j+1,k))+sum(this%grdv_y(:,i,j,k)*this%V(i,j:j+1,k)))&
+               &         -this%P(i,j,k)
+               ! Fluxes on z-face
+               i=ii; j=jj  ; k=kk
+               FZ(i,j,k)=-this%rho * sum(this%itpv_z(:,i,j,k)*this%V(i,j,k-1:k))*sum(this%itpw_y(:,i,j,k)*this%W(i,j-1:j,k)) &
+               &         +this%visc*(sum(this%grdv_z(:,i,j,k)*this%V(i,j,k-1:k))+sum(this%grdw_y(:,i,j,k)*this%W(i,j-1:j,k)))
+            end do
+         end do
+      end do
+      ! Time derivative of rhoV
+      do k=this%cfg%kmin_,this%cfg%kmax_
+         do j=this%cfg%jmin_,this%cfg%jmax_
+            do i=this%cfg%imin_,this%cfg%imax_
+               drhoVdt(i,j,k)=sum(this%divv_x(:,i,j,k)*FX(i:i+1,j,k))+&
+               &              sum(this%divv_y(:,i,j,k)*FY(i,j-1:j,k))+&
+               &              sum(this%divv_z(:,i,j,k)*FZ(i,j,k:k+1))
+            end do
+         end do
+      end do
+      
+      ! Flux of rhoW
+      do kk=this%cfg%kmin_,this%cfg%kmax_+1
+         do jj=this%cfg%jmin_,this%cfg%jmax_+1
+            do ii=this%cfg%imin_,this%cfg%imax_+1
+               ! Fluxes on x-face
+               i=ii; j=jj; k=kk
+               FX(i,j,k)=-this%rho * sum(this%itpw_x(:,i,j,k)*this%W(i-1:i,j,k))*sum(this%itpu_z(:,i,j,k)*this%U(i,j,k-1:k)) &
+               &         +this%visc*(sum(this%grdw_x(:,i,j,k)*this%W(i-1:i,j,k))+sum(this%grdu_z(:,i,j,k)*this%U(i,j,k-1:k)))
+               ! Fluxes on y-face
+               i=ii; j=jj; k=kk
+               FY(i,j,k)=-this%rho * sum(this%itpw_y(:,i,j,k)*this%W(i,j-1:j,k))*sum(this%itpv_z(:,i,j,k)*this%V(i,j,k-1:k)) &
+               &         +this%visc*(sum(this%grdw_y(:,i,j,k)*this%W(i,j-1:j,k))+sum(this%grdv_z(:,i,j,k)*this%V(i,j,k-1:k)))
+               ! Fluxes on z-face
+               i=ii; j=jj; k=kk-1
+               FZ(i,j,k)=-this%rho * sum(this%itpw_z(:,i,j,k)*this%W(i,j,k:k+1))*sum(this%itpw_z(:,i,j,k)*this%W(i,j,k:k+1)) &
+               &         +this%visc*(sum(this%grdw_z(:,i,j,k)*this%W(i,j,k:k+1))+sum(this%grdw_z(:,i,j,k)*this%W(i,j,k:k+1)))&
+               &         -this%P(i,j,k)
+            end do
+         end do
+      end do
+      ! Time derivative of rhoW
+      do k=this%cfg%kmin_,this%cfg%kmax_
+         do j=this%cfg%jmin_,this%cfg%jmax_
+            do i=this%cfg%imin_,this%cfg%imax_
+               drhoWdt(i,j,k)=sum(this%divw_x(:,i,j,k)*FX(i:i+1,j,k))+&
+               &              sum(this%divw_y(:,i,j,k)*FY(i,j:j+1,k))+&
+               &              sum(this%divw_z(:,i,j,k)*FZ(i,j,k-1:k))
+            end do
+         end do
+      end do
+      
+      ! Deallocate flux arrays
+      deallocate(FX,FY,FZ)
+      
+   end subroutine get_dmomdt
    
    
    !> Print out info for incompressible flow solver
