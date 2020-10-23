@@ -57,6 +57,7 @@ module incomp_class
       procedure :: print=>incomp_print                    !< Output solver to the screen
       procedure :: init_metrics                           !< Initialize metrics
       procedure :: get_dmomdt                             !< Calculate dmom/dt
+      procedure :: get_divergence                         !< Calculate velocity divergence
    end type incomp
    
    
@@ -412,6 +413,24 @@ contains
       deallocate(FX,FY,FZ)
       
    end subroutine get_dmomdt
+   
+   
+   !> Calculate the velocity divergence based on U/V/W
+   subroutine get_divergence(this,div)
+      implicit none
+      class(incomp), intent(inout) :: this
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(out) :: div !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      integer :: i,j,k
+      do k=this%cfg%kmin_,this%cfg%kmax_
+         do j=this%cfg%jmin_,this%cfg%jmax_
+            do i=this%cfg%imin_,this%cfg%imax_
+               div(i,j,k)=sum(this%divp_x(:,i,j,k)*this%U(i:i+1,j,k))+&
+               &          sum(this%divp_y(:,i,j,k)*this%V(i,j:j+1,k))+&
+               &          sum(this%divp_z(:,i,j,k)*this%W(i,j,k:k+1))
+            end do
+         end do
+      end do
+   end subroutine get_divergence
    
    
    !> Print out info for incompressible flow solver
