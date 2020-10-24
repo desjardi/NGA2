@@ -16,7 +16,9 @@ contains
    
    !> Initialization of problem solver
    subroutine simulation_init
-      use param, only: param_read
+      use param,     only: param_read
+      use precision, only: WP
+      use ils_class, only: rbgs
       implicit none
       
       ! Create an incompressible flow solver
@@ -26,10 +28,16 @@ contains
          ! Assign constant fluid properties
          call param_read('Density',fs%rho)
          call param_read('Dynamic viscosity',fs%visc)
-         ! Prepare metrics
+         ! Configure pressure solver
+         fs%psolv%maxit=100
+         fs%psolv%acvg=1.0e-4_WP
+         fs%psolv%rcvg=1.0e-4_WP
+         fs%psolv%method=rbgs
          
-         ! Check solver object
+         ! Check solver objects
          call fs%print()
+         call fs%psolv%print()
+         
       end block create_solver
       
       

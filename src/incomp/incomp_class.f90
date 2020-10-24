@@ -6,6 +6,7 @@ module incomp_class
    use precision,    only: WP
    use string,       only: str_medium
    use config_class, only: config
+   use ils_class,    only: ils
    implicit none
    private
    
@@ -35,6 +36,9 @@ module incomp_class
       real(WP), dimension(:,:,:), allocatable :: Uold     !< Uold velocity array
       real(WP), dimension(:,:,:), allocatable :: Vold     !< Vold velocity array
       real(WP), dimension(:,:,:), allocatable :: Wold     !< Wold velocity array
+      
+      ! Pressure solver
+      type(ils) :: psolv                                  !< Iterative linear solver object for the pressure Poisson equation
       
       ! Metrics
       real(WP), dimension(:,:,:,:), allocatable :: itpu_x,itpu_y,itpu_z   !< Interpolation for U
@@ -95,6 +99,9 @@ contains
       allocate(self%Uold(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%Uold=0.0_WP
       allocate(self%Vold(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%Vold=0.0_WP
       allocate(self%Wold(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%Wold=0.0_WP
+      
+      ! Create pressure solver object
+      self%psolv=ils(self%cfg,"Pressure Poisson Solver")
       
    end function constructor
    
