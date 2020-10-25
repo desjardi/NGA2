@@ -49,7 +49,7 @@ contains
          ! Create Ensight output from cfg
          ens_out=ensight(cfg,'test')
          ! Add variables to output
-         !call ens_out%add_scalar('P',fs%P)
+         call ens_out%add_scalar('P',fs%P)
       end block create_ensight
       
       

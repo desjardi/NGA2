@@ -15,14 +15,14 @@ module ensight_class
    type :: scl
       type(scl), pointer :: next
       character(len=str_short) :: name
-      real(WP), dimension(:,:,:), pointer :: scl_ptr
+      real(WP), dimension(:,:,:), pointer :: ptr
    end type scl
    type :: vct
       type(vct), pointer :: next
       character(len=str_short) :: name
-      real(WP), dimension(:,:,:), pointer :: vctx_ptr
-      real(WP), dimension(:,:,:), pointer :: vcty_ptr
-      real(WP), dimension(:,:,:), pointer :: vctz_ptr
+      real(WP), dimension(:,:,:), pointer :: ptrx
+      real(WP), dimension(:,:,:), pointer :: ptry
+      real(WP), dimension(:,:,:), pointer :: ptrz
    end type vct
    
    !> Ensight object definition as list of pointers to arrays
@@ -39,6 +39,9 @@ module ensight_class
       type(vct), pointer :: first_vct                                 !< Vector list
    contains
       procedure :: write_geom                                         !< Write out geometry
+      procedure :: write_data                                         !< Write out data
+      procedure :: add_scalar                                         !< Add a new scalar field
+      procedure :: add_vector                                         !< Add a new vector field
    end type ensight
    
    
@@ -84,6 +87,55 @@ contains
       close(iunit)
       
    end function construct_ensight
+   
+   
+   !> Add a scalar field for output
+   subroutine add_scalar(this,name,scalar)
+      implicit none
+      class(ensight), intent(inout) :: this
+      character(len=*), intent(in) :: name
+      real(WP), dimension(:,:,:), target :: scalar
+      type(scl), target :: new_scl
+      ! Prepare new scalar
+      new_scl%name=trim(adjustl(name))
+      new_scl%ptr =>scalar
+      ! Insert it up front
+      new_scl%next=>this%first_scl
+      ! Point list to new object
+      this%first_scl=>new_scl
+   end subroutine add_scalar
+   
+   
+   !> Add a vector field for output
+   subroutine add_vector(this,name,vectx,vecty,vectz)
+      implicit none
+      class(ensight), intent(inout) :: this
+      character(len=*), intent(in) :: name
+      real(WP), dimension(:,:,:), target :: vectx
+      real(WP), dimension(:,:,:), target :: vecty
+      real(WP), dimension(:,:,:), target :: vectz
+      type(vct), target :: new_vct
+      ! Prepare new vector
+      new_vct%name=trim(adjustl(name))
+      new_vct%ptrx=>vectx
+      new_vct%ptry=>vecty
+      new_vct%ptrz=>vectz
+      ! Insert it up front
+      new_vct%next=>this%first_vct
+      ! Point list to new object
+      this%first_vct=>new_vct
+   end subroutine add_vector
+   
+   
+   !> Output all data in the object
+   subroutine write_data(this)
+      implicit none
+      class(ensight), intent(inout) :: this
+      
+      
+      
+   end subroutine write_data
+   
    
    
    !> Geometry output to a file in parallel
