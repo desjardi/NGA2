@@ -21,13 +21,14 @@ module ils_class
       type(config), pointer :: cfg                                    !< Config for the ILS
       ! An ILS has a filename
       character(len=str_medium) :: name                               !< Name of solver
-      ! An ILS stores the linear operator and rhs
-      real(WP), dimension(:,:,:,:), allocatable :: opr                !< Linear operator
-      real(WP), dimension(:,:,:),   allocatable :: rhs                !< RHS
       ! An ILS has a solution method
       integer  :: method                                              !< Solution method
       ! An ILS has a stencil size
       integer  :: nst                                                 !< Stencil size in 3D
+      integer, dimension(:,:), allocatable :: stc                     !< Stencil map in 3D
+      ! An ILS stores the linear operator and rhs
+      real(WP), dimension(:,:,:,:), allocatable :: opr                !< Linear operator
+      real(WP), dimension(:,:,:),   allocatable :: rhs                !< RHS
       ! An ILS has convergence criteria
       integer  :: maxit                                               !< Maximum number of iterators allowed
       real(WP) :: rcvg                                                !< Desired relative convergence criterion
@@ -55,6 +56,7 @@ contains
    subroutine destructor(this)
       implicit none
       type(ils) :: this
+      if (allocated(this%stc)) deallocate(this%stc)
       if (allocated(this%opr)) deallocate(this%opr)
       if (allocated(this%rhs)) deallocate(this%rhs)
    end subroutine destructor
@@ -73,12 +75,13 @@ contains
       self%cfg=>cfg
       self%name=trim(adjustl(name))
       
-      ! Set stencil size
+      ! Set up stencil size and map
       if (present(nst)) then
          self%nst=nst
       else
          self%nst=7
       end if
+      allocate(self%stc(1:nst,1:3)); self%stc=0
       
       ! Allocate operator and RHS arrays
       allocate(self%opr(self%nst,self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%opr=0.0_WP
