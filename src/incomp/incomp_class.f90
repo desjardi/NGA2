@@ -101,7 +101,7 @@ contains
       allocate(self%Wold(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%Wold=0.0_WP
       
       ! Create pressure solver object
-      self%psolv=ils(self%cfg,"Pressure Poisson Solver")
+      self%psolv=ils(self%cfg,"Pressure Poisson Solver",7)
       
    end function constructor
    
