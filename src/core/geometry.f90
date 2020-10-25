@@ -1,8 +1,7 @@
 !> Various definitions and tools for initializing NGA2 config
 module geometry
-   use config_class,  only: config
-   use ensight_class, only: ensight
-   use precision,     only: WP
+   use config_class, only: config
+   use precision,    only: WP
    implicit none
    private
    
@@ -133,16 +132,6 @@ contains
          cfg2=config(group,partition,2,fgrid,fgeom)
          
       end block create_cfg2
-      
-      
-      ! Test out Ensight output
-      create_ensight: block
-         type(ensight) :: ens_out
-         
-         ! Create Ensight output from cfg2
-         ens_out=ensight(cfg2,'test')
-         
-      end block create_ensight
       
       
       ! Attempt to create an iterator of a sphere in the center
