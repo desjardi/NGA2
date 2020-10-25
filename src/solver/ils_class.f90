@@ -39,6 +39,8 @@ module ils_class
       real(WP) :: aerr                                                !< Current absolute error
    contains
       procedure :: print=>ils_print                                   !< Print ILS object info
+      procedure :: scale_opr                                          !< Operator scaling
+      procedure :: scale_rhs                                          !< RHS scaling
       final     :: destructor                                         !< Destructor for ILS
    end type ils
    
@@ -78,16 +80,55 @@ contains
       ! Set up stencil size and map
       if (present(nst)) then
          self%nst=nst
+         allocate(self%stc(1:self%nst,1:3))
+         self%stc=0 ! Will have to be set by the user
       else
          self%nst=7
+         allocate(self%stc(1:self%nst,1:3))
+         self%stc(1,:)=[ 0, 0, 0]
+         self%stc(2,:)=[+1, 0, 0]
+         self%stc(3,:)=[-1, 0, 0]
+         self%stc(4,:)=[ 0,+1, 0]
+         self%stc(5,:)=[ 0,-1, 0]
+         self%stc(6,:)=[ 0, 0,+1]
+         self%stc(7,:)=[ 0, 0,-1]
       end if
-      allocate(self%stc(1:nst,1:3)); self%stc=0
       
       ! Allocate operator and RHS arrays
       allocate(self%opr(self%nst,self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%opr=0.0_WP
       allocate(self%rhs(         self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%rhs=0.0_WP
       
    end function ils_from_args
+   
+   
+   !> Scaling of operator - this is simple negative volume scaling here, but could easily be generalized
+   subroutine scale_opr(this)
+      implicit none
+      class(ils), intent(inout) :: this
+      integer :: i,j,k
+      do k=this%cfg%kmino_,this%cfg%kmaxo_
+         do j=this%cfg%jmino_,this%cfg%jmaxo_
+            do i=this%cfg%imino_,this%cfg%imaxo_
+               this%opr(:,i,j,k)=-this%opr(:,i,j,k)*this%cfg%vol(i,j,k)
+            end do
+         end do
+      end do
+   end subroutine scale_opr
+   
+   
+   !> Scaling of rhs - this is simple negative volume scaling here, but could easily be generalized
+   subroutine scale_rhs(this)
+      implicit none
+      class(ils), intent(inout) :: this
+      integer :: i,j,k
+      do k=this%cfg%kmino_,this%cfg%kmaxo_
+         do j=this%cfg%jmino_,this%cfg%jmaxo_
+            do i=this%cfg%imino_,this%cfg%imaxo_
+               this%rhs(i,j,k)=-this%rhs(i,j,k)*this%cfg%vol(i,j,k)
+            end do
+         end do
+      end do
+   end subroutine scale_rhs
    
    
    !> Print ILS info to the screen
