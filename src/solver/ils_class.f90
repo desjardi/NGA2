@@ -78,21 +78,8 @@ contains
       self%name=trim(adjustl(name))
       
       ! Set up stencil size and map
-      if (present(nst)) then
-         self%nst=nst
-         allocate(self%stc(1:self%nst,1:3))
-         self%stc=0 ! Will have to be set by the user
-      else
-         self%nst=7
-         allocate(self%stc(1:self%nst,1:3))
-         self%stc(1,:)=[ 0, 0, 0]
-         self%stc(2,:)=[+1, 0, 0]
-         self%stc(3,:)=[-1, 0, 0]
-         self%stc(4,:)=[ 0,+1, 0]
-         self%stc(5,:)=[ 0,-1, 0]
-         self%stc(6,:)=[ 0, 0,+1]
-         self%stc(7,:)=[ 0, 0,-1]
-      end if
+      self%nst=7; if (present(nst)) self%nst=nst
+      allocate(self%stc(1:self%nst,1:3)); self%stc=0
       
       ! Allocate operator and RHS arrays
       allocate(self%opr(self%nst,self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%opr=0.0_WP

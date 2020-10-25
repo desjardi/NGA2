@@ -79,6 +79,7 @@ contains
       type(incomp) :: self
       class(config), target, intent(in) :: cfg
       character(len=*), intent(in) :: name
+      integer :: i,j,k
       
       ! Set the name for the iterator
       self%name=trim(adjustl(name))
@@ -101,7 +102,39 @@ contains
       allocate(self%Wold(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%Wold=0.0_WP
       
       ! Create pressure solver object
-      self%psolv=ils(self%cfg,"Pressure Poisson Solver",7)
+      self%psolv=ils(self%cfg,"Pressure Poisson Solver")
+      
+      ! Set 7-pt stencil map
+      self%psolv%stc(1,:)=[ 0, 0, 0]
+      self%psolv%stc(2,:)=[+1, 0, 0]
+      self%psolv%stc(3,:)=[-1, 0, 0]
+      self%psolv%stc(4,:)=[ 0,+1, 0]
+      self%psolv%stc(5,:)=[ 0,-1, 0]
+      self%psolv%stc(6,:)=[ 0, 0,+1]
+      self%psolv%stc(7,:)=[ 0, 0,-1]
+      
+      ! Set the Laplacian operator from incomp metrics: lap(*)=div(grad(*))
+      do k=self%cfg%kmin_,self%cfg%kmax_
+         do j=self%cfg%jmin_,self%cfg%jmax_
+            do i=self%cfg%imin_,self%cfg%imax_
+               self%psolv%opr(1,i,j,k)=self%divp_x(1,i,j,k)*self%divu_x(-1,i+1,j,k)+&
+               &                       self%divp_x(0,i,j,k)*self%divu_x( 0,i  ,j,k)+&
+               &                       self%divp_y(1,i,j,k)*self%divv_y(-1,i,j+1,k)+&
+               &                       self%divp_y(0,i,j,k)*self%divv_y( 0,i,j  ,k)+&
+               &                       self%divp_z(1,i,j,k)*self%divw_z(-1,i,j,k+1)+&
+               &                       self%divp_z(0,i,j,k)*self%divw_z( 0,i,j,k  )
+               self%psolv%opr(2,i,j,k)=self%divp_x(1,i,j,k)*self%divu_x( 0,i+1,j,k)
+               self%psolv%opr(3,i,j,k)=self%divp_x(0,i,j,k)*self%divu_x(-1,i  ,j,k)
+               self%psolv%opr(4,i,j,k)=self%divp_y(1,i,j,k)*self%divv_y( 0,i,j+1,k)
+               self%psolv%opr(5,i,j,k)=self%divp_y(0,i,j,k)*self%divv_y(-1,i,j  ,k)
+               self%psolv%opr(6,i,j,k)=self%divp_z(1,i,j,k)*self%divw_z( 0,i,j,k+1)
+               self%psolv%opr(7,i,j,k)=self%divp_z(0,i,j,k)*self%divw_z(-1,i,j,k  )
+            end do
+         end do
+      end do
+      
+      ! Scale the operator
+      call self%psolv%scale_opr()
       
    end function constructor
    
