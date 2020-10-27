@@ -50,6 +50,8 @@ contains
          ens_out=ensight(cfg,'test')
          ! Add variables to output
          call ens_out%add_scalar('P',fs%P)
+         ! Try outputting ensight data
+         call ens_out%write_data(0.0_WP)
       end block create_ensight
       
       

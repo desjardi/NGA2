@@ -21,6 +21,7 @@ module pgrid_class
       type(MPI_Group) :: group              !< Grid group
       type(MPI_Comm) :: comm                !< Grid communicator
       type(MPI_Datatype) :: view            !< Local to global array mapping info - real(WP)
+      type(MPI_Datatype) :: SPview          !< Local to global array mapping info - real(SP)
       integer :: nproc                      !< Number of processors
       integer :: rank                       !< Processor grid rank
       logical :: amRoot                     !< Am I grid root?
@@ -207,7 +208,7 @@ contains
    !> Prepares the domain decomposition of the pgrid
    subroutine pgrid_domain_decomp(self,decomp)
       use monitor , only: die
-      use parallel, only: MPI_REAL_WP
+      use parallel, only: MPI_REAL_WP,MPI_REAL_SP
       use mpi_f08
       implicit none
       class(pgrid), intent(inout) :: self
@@ -288,6 +289,8 @@ contains
       lstart=[self%imin_-self%imin,self%jmin_-self%jmin,self%kmin_-self%kmin]
       call MPI_TYPE_CREATE_SUBARRAY(3,gsizes,lsizes,lstart,MPI_ORDER_FORTRAN,MPI_REAL_WP,self%view,ierr)
       call MPI_TYPE_COMMIT(self%view,ierr)
+      call MPI_TYPE_CREATE_SUBARRAY(3,gsizes,lsizes,lstart,MPI_ORDER_FORTRAN,MPI_REAL_SP,self%SPview,ierr)
+      call MPI_TYPE_COMMIT(self%SPview,ierr)
       
    end subroutine pgrid_domain_decomp
    

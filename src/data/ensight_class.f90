@@ -27,8 +27,8 @@ module ensight_class
    
    !> Ensight object definition as list of pointers to arrays
    type :: ensight
-      ! An ensight object has a case file
-      character(len=str_medium) :: casename                           !< Name of casefile to read/write
+      ! An ensight object has a name
+      character(len=str_medium) :: name                               !< Name of ensight directory to read/write
       ! An ensight object stores time values
       integer :: ntime                                                !< Number of scalar values
       real(WP), dimension(:), allocatable :: time                     !< Time values
@@ -40,6 +40,7 @@ module ensight_class
    contains
       procedure :: write_geom                                         !< Write out geometry
       procedure :: write_data                                         !< Write out data
+      procedure :: write_case                                         !< Write out case file
       procedure :: add_scalar                                         !< Add a new scalar field
       procedure :: add_vector                                         !< Add a new vector field
    end type ensight
@@ -54,12 +55,12 @@ module ensight_class
 contains
    
    !> Constructor for an empty ensight object
-   function construct_ensight(cfg,casename) result(self)
+   function construct_ensight(cfg,name) result(self)
       use monitor, only: die
       implicit none
       type(ensight) :: self
       class(config), target, intent(in) :: cfg
-      character(len=*), intent(in) :: casename
+      character(len=*), intent(in) :: name
       integer :: iunit,ierr
       
       ! Link to config
@@ -69,10 +70,13 @@ contains
       self%ntime=0
       
       ! Store casename
-      self%casename=trim(adjustl(casename))
+      self%name=trim(adjustl(name))
       
       ! Create directory
-      if (self%cfg%amRoot) call execute_command_line('mkdir -p ensight')
+      if (self%cfg%amRoot) then
+         call execute_command_line('mkdir -p ensight')
+         call execute_command_line('mkdir -p ensight/'//trim(self%name))
+      end if
       
       ! Write out the geometry
       call self%write_geom()
@@ -81,8 +85,8 @@ contains
       self%first_scl=>NULL()
       self%first_vct=>NULL()
       
-      ! Output a barebone case file
-      open(newunit=iunit,file='ensight/'//trim(adjustl(casename))//'.case',form='formatted',status='replace',access='stream',iostat=ierr)
+      ! Output a barebone case file with only the geometry
+      open(newunit=iunit,file='ensight/'//trim(self%name)//'/nga.case',form='formatted',status='replace',access='stream',iostat=ierr)
       write(iunit,'(4(a,/))') 'FORMAT','type: ensight gold','GEOMETRY','model: geometry'
       close(iunit)
       
@@ -94,15 +98,18 @@ contains
       implicit none
       class(ensight), intent(inout) :: this
       character(len=*), intent(in) :: name
-      real(WP), dimension(:,:,:), target :: scalar
-      type(scl), target :: new_scl
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), target :: scalar
+      type(scl), pointer :: new_scl
       ! Prepare new scalar
+      allocate(new_scl)
       new_scl%name=trim(adjustl(name))
       new_scl%ptr =>scalar
       ! Insert it up front
       new_scl%next=>this%first_scl
       ! Point list to new object
       this%first_scl=>new_scl
+      ! Also create the corresponding directory
+      if (this%cfg%amRoot) call execute_command_line('mkdir -p ensight/'//trim(this%name)//'/'//trim(new_scl%name))
    end subroutine add_scalar
    
    
@@ -111,11 +118,12 @@ contains
       implicit none
       class(ensight), intent(inout) :: this
       character(len=*), intent(in) :: name
-      real(WP), dimension(:,:,:), target :: vectx
-      real(WP), dimension(:,:,:), target :: vecty
-      real(WP), dimension(:,:,:), target :: vectz
-      type(vct), target :: new_vct
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), target :: vectx
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), target :: vecty
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), target :: vectz
+      type(vct), pointer :: new_vct
       ! Prepare new vector
+      allocate(new_vct)
       new_vct%name=trim(adjustl(name))
       new_vct%ptrx=>vectx
       new_vct%ptry=>vecty
@@ -124,18 +132,171 @@ contains
       new_vct%next=>this%first_vct
       ! Point list to new object
       this%first_vct=>new_vct
+      ! Also create the corresponding directory
+      if (this%cfg%amRoot) call execute_command_line('mkdir -p ensight/'//trim(this%name)//'/'//trim(new_vct%name))
    end subroutine add_vector
    
    
    !> Output all data in the object
-   subroutine write_data(this)
+   subroutine write_data(this,time)
+      use precision, only: SP
+      use monitor,   only: die
+      use parallel,  only: info_mpiio,MPI_REAL_SP
+      use mpi_f08
       implicit none
       class(ensight), intent(inout) :: this
+      real(WP), intent(in) :: time
+      character(len=str_medium) :: filename
+      integer :: iunit,ierr
+      integer :: ibuff
+      character(len=80) :: cbuff
+      type(MPI_File) :: ifile
+      integer(kind=MPI_OFFSET_KIND) :: disp
+      type(MPI_Status):: status
+      type(scl), pointer :: my_scl
+      type(vct), pointer :: my_vct
+      real(SP), dimension(:,:,:), allocatable :: spbuff
+      real(WP), dimension(:), allocatable :: temp_time
       
+      ! Increment time counter
+      this%ntime=this%ntime+1
+      allocate(temp_time(1:this%ntime))
+      temp_time(1:this%ntime-1)=this%time(1:this%ntime-1)
+      temp_time(this%ntime)=time
+      if (allocated(this%time)) deallocate(this%time)
+      allocate(this%time(1:this%ntime))
+      this%time=temp_time
+      deallocate(temp_time)
       
+      ! Prepare the SP buffer
+      allocate(spbuff(this%cfg%imin_:this%cfg%imax_,this%cfg%jmin_:this%cfg%jmax_,this%cfg%kmin_:this%cfg%kmax_))
+      
+      ! Traverse all datasets and print them all out - scalars first
+      my_scl=>this%first_scl
+      do while (associated(my_scl))
+         
+         ! Create filename
+         filename='ensight/'//trim(this%name)//'/'//trim(my_scl%name)//'/'//trim(my_scl%name)//'.'
+         write(filename(len_trim(filename)+1:len_trim(filename)+6),'(i6.6)') this%ntime
+         
+         ! Root process starts writing the file header
+         if (this%cfg%amRoot) then
+            ! Open the file
+            open(newunit=iunit,file=trim(filename),form='unformatted',status='replace',access='stream',iostat=ierr)
+            if (ierr.ne.0) call die('[ensight write data] Could not open file '//trim(filename))
+            ! Write the header
+            cbuff=trim(my_scl%name); write(iunit) cbuff
+            cbuff='part'           ; write(iunit) cbuff
+            ibuff=1                ; write(iunit) ibuff
+            cbuff='block'          ; write(iunit) cbuff
+            ! Close the file
+            close(iunit)
+         end if
+         
+         ! Now parallel-write the actual data
+         call MPI_FILE_OPEN(this%cfg%comm,trim(filename),IOR(MPI_MODE_WRONLY,MPI_MODE_APPEND),info_mpiio,ifile,ierr)
+         if (ierr.ne.0) call die('[ensight write data] Problem encountered while parallel writing data file '//trim(filename))
+         call MPI_FILE_GET_POSITION(ifile,disp,ierr)
+         call MPI_FILE_SET_VIEW(ifile,disp,MPI_REAL_SP,this%cfg%SPview,'native',info_mpiio,ierr)
+         spbuff(this%cfg%imin_:this%cfg%imax_,this%cfg%jmin_:this%cfg%jmax_,this%cfg%kmin_:this%cfg%kmax_)=real(my_scl%ptr(this%cfg%imin_:this%cfg%imax_,this%cfg%jmin_:this%cfg%jmax_,this%cfg%kmin_:this%cfg%kmax_),SP)
+         call MPI_FILE_WRITE_ALL(ifile,spbuff,this%cfg%nx_*this%cfg%ny_*this%cfg%nz_,MPI_REAL_SP,status,ierr)
+         call MPI_FILE_CLOSE(ifile,ierr)
+         
+         ! Continue on to the next scalar object
+         my_scl=>my_scl%next
+         
+      end do
+      
+      ! Traverse all datasets and print them all out - vectors second
+      my_vct=>this%first_vct
+      do while (associated(my_vct))
+         
+         ! Create filename
+         filename='ensight/'//trim(this%name)//'/'//trim(my_vct%name)//'/'//trim(my_vct%name)//'.'
+         write(filename(len_trim(filename)+1:len_trim(filename)+6),'(i6.6)') this%ntime
+         
+         ! Root process starts writing the file header
+         if (this%cfg%amRoot) then
+            ! Open the file
+            open(newunit=iunit,file=trim(filename),form='unformatted',status='replace',access='stream',iostat=ierr)
+            if (ierr.ne.0) call die('[ensight write data] Could not open file '//trim(filename))
+            ! Write the header
+            cbuff=trim(my_vct%name); write(iunit) cbuff
+            cbuff='part'           ; write(iunit) cbuff
+            ibuff=1                ; write(iunit) ibuff
+            cbuff='block'          ; write(iunit) cbuff
+            ! Close the file
+            close(iunit)
+         end if
+         
+         ! Now parallel-write the actual data
+         call MPI_FILE_OPEN(this%cfg%comm,trim(filename),IOR(MPI_MODE_WRONLY,MPI_MODE_APPEND),info_mpiio,ifile,ierr)
+         if (ierr.ne.0) call die('[ensight write data] Problem encountered while parallel writing data file '//trim(filename))
+         call MPI_FILE_GET_POSITION(ifile,disp,ierr)
+         call MPI_FILE_SET_VIEW(ifile,disp,MPI_REAL_SP,this%cfg%SPview,'native',info_mpiio,ierr)
+         spbuff(this%cfg%imin_:this%cfg%imax_,this%cfg%jmin_:this%cfg%jmax_,this%cfg%kmin_:this%cfg%kmax_)=real(my_vct%ptrx(this%cfg%imin_:this%cfg%imax_,this%cfg%jmin_:this%cfg%jmax_,this%cfg%kmin_:this%cfg%kmax_),SP)
+         call MPI_FILE_WRITE_ALL(ifile,spbuff,this%cfg%nx_*this%cfg%ny_*this%cfg%nz_,MPI_REAL_SP,status,ierr)
+         disp=disp+int(this%cfg%nx,MPI_OFFSET_KIND)*int(this%cfg%ny,MPI_OFFSET_KIND)*int(this%cfg%nz,MPI_OFFSET_KIND)*int(SP,MPI_OFFSET_KIND)
+         call MPI_FILE_SET_VIEW(ifile,disp,MPI_REAL_SP,this%cfg%SPview,'native',info_mpiio,ierr)
+         spbuff(this%cfg%imin_:this%cfg%imax_,this%cfg%jmin_:this%cfg%jmax_,this%cfg%kmin_:this%cfg%kmax_)=real(my_vct%ptry(this%cfg%imin_:this%cfg%imax_,this%cfg%jmin_:this%cfg%jmax_,this%cfg%kmin_:this%cfg%kmax_),SP)
+         call MPI_FILE_WRITE_ALL(ifile,spbuff,this%cfg%nx_*this%cfg%ny_*this%cfg%nz_,MPI_REAL_SP,status,ierr)
+         disp=disp+int(this%cfg%nx,MPI_OFFSET_KIND)*int(this%cfg%ny,MPI_OFFSET_KIND)*int(this%cfg%nz,MPI_OFFSET_KIND)*int(SP,MPI_OFFSET_KIND)
+         call MPI_FILE_SET_VIEW(ifile,disp,MPI_REAL_SP,this%cfg%SPview,'native',info_mpiio,ierr)
+         spbuff(this%cfg%imin_:this%cfg%imax_,this%cfg%jmin_:this%cfg%jmax_,this%cfg%kmin_:this%cfg%kmax_)=real(my_vct%ptrz(this%cfg%imin_:this%cfg%imax_,this%cfg%jmin_:this%cfg%jmax_,this%cfg%kmin_:this%cfg%kmax_),SP)
+         call MPI_FILE_WRITE_ALL(ifile,spbuff,this%cfg%nx_*this%cfg%ny_*this%cfg%nz_,MPI_REAL_SP,status,ierr)
+         call MPI_FILE_CLOSE(ifile,ierr)
+         
+         ! Continue on to the next vector object
+         my_vct=>my_vct%next
+         
+      end do
+      
+      ! Get rid of the SP buffer
+      deallocate(spbuff)
+      
+      ! Finally, re-write the case file
+      call this%write_case()
       
    end subroutine write_data
    
+   
+   !> Case description serial output to a text file
+   subroutine write_case(this)
+      implicit none
+      class(ensight), intent(in) :: this
+      integer :: iunit,ierr
+      type(scl), pointer :: my_scl
+      type(vct), pointer :: my_vct
+      
+      ! Only the root does this work
+      if (.not.this%cfg%amRoot) return
+      
+      ! Open the case file
+      open(newunit=iunit,file='ensight/'//trim(this%name)//'/nga.case',form='formatted',status='replace',access='stream',iostat=ierr)
+      
+      ! Write all the geometry information
+      write(iunit,'(a,/,a,/,/,a,/,a,/)') 'FORMAT','type: ensight gold','GEOMETRY','model: geometry'
+      
+      ! Write all the variable information
+      write(iunit,'(a)') 'VARIABLE'
+      my_scl=>this%first_scl
+      do while (associated(my_scl))
+         write(iunit,'(a)') 'scalar per element: 1 '//trim(my_scl%name)//' '//trim(my_scl%name)//'/'//trim(my_scl%name)//'.******'
+         my_scl=>my_scl%next
+      end do
+      my_vct=>this%first_vct
+      do while (associated(my_vct))
+         write(iunit,'(a)') 'vector per element: 1 '//trim(my_vct%name)//' '//trim(my_vct%name)//'/'//trim(my_vct%name)//'.******'
+         my_vct=>my_vct%next
+      end do
+      
+      ! Write the time information
+      write(iunit,'(/,a,/,a,/,a,i0,/,a,/,a,/,a,1000000(3(ES12.5,1x),/))') 'TIME','time set: 1','number of steps: ',this%ntime,'filename start number: 1','filename increment: 1','time values: ',this%time
+      
+      ! Close the case file
+      close(iunit)
+      
+   end subroutine
    
    
    !> Geometry output to a file in parallel
@@ -162,8 +323,8 @@ contains
       if (this%cfg%amRoot) then
          
          ! First create a new file
-         open(newunit=iunit,file='ensight/geometry',form='unformatted',status='replace',access='stream',iostat=ierr)
-         if (ierr.ne.0) call die('[ensight write geom] Could not open file: ensight/geometry')
+         open(newunit=iunit,file='ensight/'//trim(this%name)//'/geometry',form='unformatted',status='replace',access='stream',iostat=ierr)
+         if (ierr.ne.0) call die('[ensight write geom] Could not open file: ensight/'//trim(this%name)//'/geometry')
          
          ! General geometry header
          cbuff='C Binary'                          ; write(iunit) cbuff
@@ -228,7 +389,7 @@ contains
       call MPI_TYPE_COMMIT(view,ierr)
       
       ! Only need to parallel write masks now
-      call MPI_FILE_OPEN(this%cfg%comm,'ensight/geometry',IOR(MPI_MODE_WRONLY,MPI_MODE_APPEND),info_mpiio,ifile,ierr)
+      call MPI_FILE_OPEN(this%cfg%comm,'ensight/'//trim(this%name)//'/geometry',IOR(MPI_MODE_WRONLY,MPI_MODE_APPEND),info_mpiio,ifile,ierr)
       if (ierr.ne.0) call die('[ensight write geom] Problem encountered while parallel writing geometry file')
       call MPI_FILE_GET_POSITION(ifile,disp,ierr)
       call MPI_FILE_SET_VIEW(ifile,disp,MPI_INTEGER,view,'native',info_mpiio,ierr)
