@@ -64,17 +64,17 @@ contains
       class(config), target, intent(in) :: cfg
       character(len=*), intent(in) :: name
       character(len=str_medium) :: line
-      integer :: iunit,ierr
+      integer :: iunit,ierr,stat
       logical :: file_is_there,found
       
       ! Link to config
       self%cfg=>cfg
       
-      ! Initially, no time info
-      self%ntime=0
-      
       ! Store casename
       self%name=trim(adjustl(name))
+      
+      ! Start with no time stamps
+      self%ntime=0
       
       ! Create directory
       if (self%cfg%amRoot) then
@@ -85,33 +85,33 @@ contains
       ! Write out the geometry
       call self%write_geom()
       
-      ! Empty pointer lists for now
+      ! Empty pointer to lists for now
       self%first_scl=>NULL()
       self%first_vct=>NULL()
       
-      ! Check if a case file already exists - root only
+      ! Check if a case file exists already - root only
       if (self%cfg%amRoot) then
          inquire(file='ensight/'//trim(self%name)//'/nga.case',exist=file_is_there)
          if (file_is_there) then
             ! Open the case file
             open(newunit=iunit,file='ensight/'//trim(self%name)//'/nga.case',form='formatted',status='old',access='stream',iostat=ierr)
-            ! Read lines until we find time values
-            found=.false.
-            do while (.not.found)
-               read(iunit,'(a)') line
-               if (line(1:16).eq.'number of steps:') then
-                  found=.true.
-                  read(line(17:),'(i6)') self%ntime
-                  allocate(self%time(self%ntime))
-               end if
+            ! Read lines until we find time values section
+            stat=0; found=.false.
+            do while (.not.found.and..not.is_iostat_end(stat))
+               read(iunit,'(a)',iostat=stat) line
+               if (line(1:16).eq.'number of steps:') found=.true.
             end do
+            if (found) read(line(17:),'(i6)') self%ntime
             ! Now read the time values
-            found=.false.
-            do while (.not.found)
-               read(iunit,'(a)') line
-               if (line(1:12).eq.'time values:') found=.true.
-            end do
-            read(iunit,'(999999(es12.5,/))') self%time
+            if (self%ntime.gt.0) then
+               allocate(self%time(self%ntime))
+               found=.false.
+               do while (.not.found)
+                  read(iunit,'(a)') line
+                  if (line(1:12).eq.'time values:') found=.true.
+               end do
+               if (found) read(iunit,'(999999(es12.5,/))') self%time
+            end if
             ! Close the case file
             close(iunit)
          else
@@ -124,8 +124,10 @@ contains
       
       ! Communicate to all processors
       call MPI_BCAST(self%ntime,1,MPI_INTEGER,0,self%cfg%comm,ierr)
-      if (.not.self%cfg%amRoot) allocate(self%time(self%ntime))
-      call MPI_BCAST(self%time,self%ntime,MPI_REAL_WP,0,self%cfg%comm,ierr)
+      if (self%ntime.gt.0) then
+         if (.not.self%cfg%amRoot) allocate(self%time(self%ntime))
+         call MPI_BCAST(self%time,self%ntime,MPI_REAL_WP,0,self%cfg%comm,ierr)
+      end if
       
    end function construct_ensight
    
@@ -184,7 +186,7 @@ contains
       class(ensight), intent(inout) :: this
       real(WP), intent(in) :: time
       character(len=str_medium) :: filename
-      integer :: iunit,ierr,n
+      integer :: iunit,ierr,n,i
       integer :: ibuff
       character(len=80) :: cbuff
       type(MPI_File) :: ifile
@@ -199,15 +201,14 @@ contains
       if (this%ntime.eq.0) then
          ! First time stamp
          this%ntime=1
+         if (allocated(this%time)) deallocate(this%time)
          allocate(this%time(this%ntime))
          this%time(1)=time
       else
          ! There are time stamps already, check where to insert
-         print*,this%ntime,this%time
-
-         do while (time.le.this%time(n-1).and.n-1.gt.1)
-            print*,time,this%time(n-1),n-1
-            n=n-1
+         n=this%ntime+1
+         do i=this%ntime,1,-1
+            if (time.le.this%time(i)) n=n-1
          end do
          this%ntime=n; allocate(temp_time(1:this%ntime))
          temp_time=[this%time(1:this%ntime-1),time]
