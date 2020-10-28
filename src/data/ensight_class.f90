@@ -56,12 +56,16 @@ contains
    
    !> Constructor for an empty ensight object
    function construct_ensight(cfg,name) result(self)
-      use monitor, only: die
+      use monitor,  only: die
+      use mpi_f08,  only: MPI_BCAST,MPI_INTEGER
+      use parallel, only: MPI_REAL_WP
       implicit none
       type(ensight) :: self
       class(config), target, intent(in) :: cfg
       character(len=*), intent(in) :: name
+      character(len=str_medium) :: line
       integer :: iunit,ierr
+      logical :: file_is_there,found
       
       ! Link to config
       self%cfg=>cfg
@@ -85,10 +89,43 @@ contains
       self%first_scl=>NULL()
       self%first_vct=>NULL()
       
-      ! Output a barebone case file with only the geometry
-      open(newunit=iunit,file='ensight/'//trim(self%name)//'/nga.case',form='formatted',status='replace',access='stream',iostat=ierr)
-      write(iunit,'(4(a,/))') 'FORMAT','type: ensight gold','GEOMETRY','model: geometry'
-      close(iunit)
+      ! Check if a case file already exists - root only
+      if (self%cfg%amRoot) then
+         inquire(file='ensight/'//trim(self%name)//'/nga.case',exist=file_is_there)
+         if (file_is_there) then
+            ! Open the case file
+            open(newunit=iunit,file='ensight/'//trim(self%name)//'/nga.case',form='formatted',status='old',access='stream',iostat=ierr)
+            ! Read lines until we find time values
+            found=.false.
+            do while (.not.found)
+               read(iunit,'(a)') line
+               if (line(1:16).eq.'number of steps:') then
+                  found=.true.
+                  read(line(17:),'(i6)') self%ntime
+                  allocate(self%time(self%ntime))
+               end if
+            end do
+            ! Now read the time values
+            found=.false.
+            do while (.not.found)
+               read(iunit,'(a)') line
+               if (line(1:12).eq.'time values:') found=.true.
+            end do
+            read(iunit,'(999999(es12.5,/))') self%time
+            ! Close the case file
+            close(iunit)
+         else
+            ! Output a barebone case file with only the geometry
+            open(newunit=iunit,file='ensight/'//trim(self%name)//'/nga.case',form='formatted',status='replace',access='stream',iostat=ierr)
+            write(iunit,'(4(a,/))') 'FORMAT','type: ensight gold','GEOMETRY','model: geometry'
+            close(iunit)
+         end if
+      end if
+      
+      ! Communicate to all processors
+      call MPI_BCAST(self%ntime,1,MPI_INTEGER,0,self%cfg%comm,ierr)
+      if (.not.self%cfg%amRoot) allocate(self%time(self%ntime))
+      call MPI_BCAST(self%time,self%ntime,MPI_REAL_WP,0,self%cfg%comm,ierr)
       
    end function construct_ensight
    
@@ -147,7 +184,7 @@ contains
       class(ensight), intent(inout) :: this
       real(WP), intent(in) :: time
       character(len=str_medium) :: filename
-      integer :: iunit,ierr
+      integer :: iunit,ierr,n
       integer :: ibuff
       character(len=80) :: cbuff
       type(MPI_File) :: ifile
@@ -158,15 +195,26 @@ contains
       real(SP), dimension(:,:,:), allocatable :: spbuff
       real(WP), dimension(:), allocatable :: temp_time
       
-      ! Increment time counter
-      this%ntime=this%ntime+1
-      allocate(temp_time(1:this%ntime))
-      temp_time(1:this%ntime-1)=this%time(1:this%ntime-1)
-      temp_time(this%ntime)=time
-      if (allocated(this%time)) deallocate(this%time)
-      allocate(this%time(1:this%ntime))
-      this%time=temp_time
-      deallocate(temp_time)
+      ! Check provided time stamp and decide what to do
+      if (this%ntime.eq.0) then
+         ! First time stamp
+         this%ntime=1
+         allocate(this%time(this%ntime))
+         this%time(1)=time
+      else
+         ! There are time stamps already, check where to insert
+         print*,this%ntime,this%time
+
+         do while (time.le.this%time(n-1).and.n-1.gt.1)
+            print*,time,this%time(n-1),n-1
+            n=n-1
+         end do
+         this%ntime=n; allocate(temp_time(1:this%ntime))
+         temp_time=[this%time(1:this%ntime-1),time]
+         if (allocated(this%time)) deallocate(this%time)
+         allocate(this%time(1:this%ntime)); this%time=temp_time
+         deallocate(temp_time)
+      end if
       
       ! Prepare the SP buffer
       allocate(spbuff(this%cfg%imin_:this%cfg%imax_,this%cfg%jmin_:this%cfg%jmax_,this%cfg%kmin_:this%cfg%kmax_))
@@ -291,7 +339,8 @@ contains
       end do
       
       ! Write the time information
-      write(iunit,'(/,a,/,a,/,a,i0,/,a,/,a,/,a,1000000(3(ES12.5,1x),/))') 'TIME','time set: 1','number of steps: ',this%ntime,'filename start number: 1','filename increment: 1','time values: ',this%time
+      write(iunit,'(/,a,/,a,/,a,i0,/,a,/,a,/,a)') 'TIME','time set: 1','number of steps: ',this%ntime,'filename start number: 1','filename increment: 1','time values:'
+      write(iunit,'(999999(es12.5,/))') this%time
       
       ! Close the case file
       close(iunit)

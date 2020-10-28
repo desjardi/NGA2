@@ -49,9 +49,12 @@ contains
          ! Create Ensight output from cfg
          ens_out=ensight(cfg,'test')
          ! Add variables to output
-         call ens_out%add_scalar('P',fs%P)
+         call ens_out%add_scalar('Pressure',fs%P)
+         call ens_out%add_vector('Velocity',fs%U,fs%V,fs%W)
          ! Try outputting ensight data
          call ens_out%write_data(0.0_WP)
+         call ens_out%write_data(0.1_WP)
+         call ens_out%write_data(0.2_WP)
       end block create_ensight
       
       
