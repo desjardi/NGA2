@@ -22,7 +22,7 @@ contains
    subroutine simulation_init
       use param,     only: param_read
       use precision, only: WP
-      use ils_class, only: rbgs
+      use ils_class, only: rbgs,hypre_smg
       use ensight_class, only: ensight
       implicit none
       
@@ -37,7 +37,7 @@ contains
          fs%psolv%maxit=100
          fs%psolv%acvg=1.0e-4_WP
          fs%psolv%rcvg=1.0e-4_WP
-         fs%psolv%method=rbgs
+         fs%psolv%method=hypre_smg
          ! Check solver objects
          call fs%print()
          call fs%psolv%print()
@@ -52,25 +52,26 @@ contains
          call ens_out%add_scalar('Pressure',fs%P)
          call ens_out%add_vector('Velocity',fs%U,fs%V,fs%W)
          ! Try outputting ensight data
-         call ens_out%write_data(0.0_WP)
-         call ens_out%write_data(0.1_WP)
-         call ens_out%write_data(0.2_WP)
+         !call ens_out%write_data(0.0_WP)
       end block create_ensight
       
       
       ! Try to use the pressure solver
       test_pressure_solver: block
-         real(WP), dimension(:,:,:), allocatable :: rhs
-         ! Set Neumann top and bottom
-         
-         ! Create a RHS
-         allocate(rhs(fs%cfg%imino_:fs%cfg%imaxo_,fs%cfg%jmino_:fs%cfg%jmaxo_,fs%cfg%kmino_:fs%cfg%kmaxo_))
-         
-         !call fs%psolv%set_rhs(rhs)
+         ! Create a RHS and output it
+         fs%psolv%rhs=0.0_WP
+         if (fs%cfg%jproc.eq.         1) fs%psolv%rhs(:,fs%cfg%jmin_,:)=+1.0_WP
+         if (fs%cfg%jproc.eq.fs%cfg%npy) fs%psolv%rhs(:,fs%cfg%jmax_,:)=-1.0_WP
+         call fs%psolv%scale_rhs()
+         call ens_out%add_scalar('RHS',fs%psolv%rhs)
+         ! Set initial guess to zero
+         fs%psolv%sol=0.0_WP
          ! Call the solver
-         !call fs%psolv%solve(fs%P)
-         
-         
+         call fs%psolv%solve()
+         ! Copy back to pressure
+         fs%P=fs%psolv%sol
+         ! Output to ensight
+         call ens_out%write_data(0.0_WP)
       end block test_pressure_solver
       
       

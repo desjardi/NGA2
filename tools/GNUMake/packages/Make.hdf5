@@ -1,5 +1,5 @@
 # Add appropriate HDF5 includes and libraries
-ifdef HYPRE_DIR
+ifdef HDF5_DIR
   INCLUDE_LOCATIONS += $(HDF5_DIR)/include
   LIBRARY_LOCATIONS += $(HDF5_DIR)/lib
   LIBRARIES += -lhdf5 -lhdf5_fortran

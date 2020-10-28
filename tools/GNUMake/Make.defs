@@ -144,17 +144,17 @@ objForExecs	= $(addprefix $(objBuildDir)/, $(objStandalone))
 fortran_fdecl_headers = $(filter %_f.H %_F.H,$(cEXE_headers) $(CEXE_headers) $(f90EXE_headers) $(F90EXE_headers) $(fEXE_headers) $(FEXE_headers))
 fortran_fdecl_headers_cppd = $(addprefix $(tmpBuildDir)/, $(fortran_fdecl_headers:%.H=%-cppd.h))
 
-includes	= -I. $(addprefix -I, $(INCLUDE_LOCATIONS))
+includes	   = -I. $(addprefix -I, $(INCLUDE_LOCATIONS))
 fincludes	= $(includes)
-fmoddir         = $(objBuildDir)
+fmoddir     = $(objBuildDir)
 
 libraries	= $(LIBRARIES) $(XTRALIBS)
 
-DEFINES		+= -DBL_FORT_USE_$(FORTLINK)			\
-                   -DBL_$(shell uname)
-CPPFLAGS	+= $(DEFINES)
+DEFINES	  += -DBL_FORT_USE_$(FORTLINK)			\
+              -DBL_$(shell uname)
+CPPFLAGS	  += $(DEFINES)
 
-LDFLAGS		+= -L. $(addprefix -L, $(LIBRARY_LOCATIONS))
+LDFLAGS    += -L. $(addprefix -L, $(LIBRARY_LOCATIONS))
 ###############################################################
 
 

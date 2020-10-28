@@ -136,6 +136,9 @@ contains
       ! Scale the operator
       call self%psolv%scale_opr()
       
+      ! Prepare solver
+      call self%psolv%prep_solver()
+      
    end function constructor
    
    
@@ -337,6 +340,21 @@ contains
             end do
          end do
       end do
+      
+      ! Here, we assume that we need Neumann on pressure all around anyway,
+      ! so all peripheral velocities need to be given by BC:
+      if (.not.this%cfg%xper) then
+         if (this%cfg%iproc.eq.           1) this%divu_x(:,this%cfg%imin  ,:,:)=0.0_WP
+         if (this%cfg%iproc.eq.this%cfg%npx) this%divu_x(:,this%cfg%imax+1,:,:)=0.0_WP
+      end if
+      if (.not.this%cfg%yper) then
+         if (this%cfg%jproc.eq.           1) this%divv_y(:,:,this%cfg%jmin  ,:)=0.0_WP
+         if (this%cfg%jproc.eq.this%cfg%npy) this%divv_y(:,:,this%cfg%jmax+1,:)=0.0_WP
+      end if
+      if (.not.this%cfg%zper) then
+         if (this%cfg%kproc.eq.           1) this%divw_z(:,:,:,this%cfg%kmin  )=0.0_WP
+         if (this%cfg%kproc.eq.this%cfg%npz) this%divw_z(:,:,:,this%cfg%kmax+1)=0.0_WP
+      end if
       
    end subroutine init_metrics
    

@@ -1,8 +1,8 @@
-
-CPPFLAGS += -DAMREX_USE_HYPRE
-
+# Add appropriate HYPRE includes and libraries
 ifdef HYPRE_DIR
   INCLUDE_LOCATIONS += $(HYPRE_DIR)/include
   LIBRARY_LOCATIONS += $(HYPRE_DIR)/lib
-  LIBRARIES += -lHYPRE
+  LIBRARIES += -lhypre
+else
+  $(error HYPRE_DIR not defined, but it is currently required by NGA2)
 endif
