@@ -132,13 +132,11 @@ contains
          call HYPRE_IJVectorCreate       (this%cfg%comm,this%cfg%ind_min,this%cfg%ind_max,this%hypre_rhs,ierr)
          call HYPRE_IJVectorSetObjectType(this%hypre_rhs,hypre_ParCSR,ierr)
          call HYPRE_IJVectorInitialize   (this%hypre_rhs,ierr)
-         call HYPRE_IJVectorAssemble     (this%hypre_rhs,ierr)
          call HYPRE_IJVectorGetObject    (this%hypre_rhs,this%parse_rhs,ierr)
          ! Create a HYPRE solution vector
          call HYPRE_IJVectorCreate       (this%cfg%comm,this%cfg%ind_min,this%cfg%ind_max,this%hypre_sol,ierr)
          call HYPRE_IJVectorSetObjectType(this%hypre_sol,hypre_ParCSR,ierr)
          call HYPRE_IJVectorInitialize   (this%hypre_sol,ierr)
-         call HYPRE_IJVectorAssemble     (this%hypre_sol,ierr)
          call HYPRE_IJVectorGetObject    (this%hypre_sol,this%parse_sol,ierr)
          ! Create a HYPRE AMG solver
          call HYPRE_BoomerAMGCreate        (this%hypre_solver,ierr)
@@ -146,8 +144,6 @@ contains
          call HYPRE_BoomerAMGSetInterpType (this%hypre_solver,3,ierr)   ! interpolation
          call HYPRE_BoomerAMGSetCoarsenType(this%hypre_solver,6,ierr)   ! Falgout=6 (old default); PMIS=8 and HMIS=10 (recommended)
          call HYPRE_BoomerAMGSetRelaxType  (this%hypre_solver,8,ierr)   ! hybrid symmetric Gauss-Seidel/SOR
-         !call HYPRE_BoomerAMGSetSmoothType   (this%hypre_solver,        7, ierr)   ! Set complex smoother
-         !call HYPRE_BoomerAMGSetSmoothNumLvls(this%hypre_solver,      5, ierr)   ! Set complex smoother for 5 levels
          call HYPRE_BoomerAMGSetMaxIter    (this%hypre_solver,this%maxit,ierr)   ! maximum nbr of iter
          call HYPRE_BoomerAMGSetTol        (this%hypre_solver,this%rcvg ,ierr)   ! convergence tolerance
          
@@ -166,10 +162,9 @@ contains
       use monitor, only: die
       implicit none
       class(ils), intent(inout) :: this
-      integer :: i,j,k,count,st,ierr
-      integer,  dimension(:),   allocatable :: row,ncol
-      integer,  dimension(:,:), allocatable :: col
-      real(WP), dimension(:,:), allocatable :: val
+      integer :: i,j,k,count1,count2,st,ierr
+      integer,  dimension(:), allocatable :: row,ncol,col
+      real(WP), dimension(:), allocatable :: val
       
       ! Select appropriate solver
       select case (this%method)
@@ -178,25 +173,26 @@ contains
       case (amg)  ! Prepare the HYPRE-AMG solver here
          
          ! Allocate storage for transfer
-         allocate( row(this%cfg%ncell_))
-         allocate(ncol(this%cfg%ncell_))
-         allocate( col(this%nst,this%cfg%ncell_)); col=0
-         allocate( val(this%nst,this%cfg%ncell_)); val=0.0_WP
+         allocate( row(         this%cfg%ncell_))
+         allocate(ncol(         this%cfg%ncell_))
+         allocate( col(this%nst*this%cfg%ncell_))
+         allocate( val(this%nst*this%cfg%ncell_))
          
          ! Tranfer operator to HYPRE
-         count=0
+         count1=0; count2=0
          do k=this%cfg%kmin_,this%cfg%kmax_
             do j=this%cfg%jmin_,this%cfg%jmax_
                do i=this%cfg%imin_,this%cfg%imax_
                   if (this%cfg%ind(i,j,k).gt.0) then
-                     count=count+1
-                     row(count)=this%cfg%ind(i,j,k)
-                     ncol(count)=0
+                     count1=count1+1
+                     row (count1)=this%cfg%ind(i,j,k)
+                     ncol(count1)=0
                      do st=1,this%nst
                         if (this%cfg%ind(i+this%stc(st,1),j+this%stc(st,2),k+this%stc(st,3)).gt.0) then
-                           ncol(count)=ncol(count)+1
-                           col(ncol(count),count)=this%cfg%ind(i+this%stc(st,1),j+this%stc(st,2),k+this%stc(st,3))
-                           val(ncol(count),count)=this%opr(st,i,j,k)
+                           count2=count2+1
+                           ncol(count1)=ncol(count1)+1
+                           col (count2)=this%cfg%ind(i+this%stc(st,1),j+this%stc(st,2),k+this%stc(st,3))
+                           val (count2)=this%opr(st,i,j,k)
                         end if
                      end do
                   end if
