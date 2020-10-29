@@ -11,17 +11,26 @@ module config_class
    
    !> Config object definition as an extension of pgrid
    type, extends(pgrid) :: config
+      
       ! Some more metrics
       real(WP), dimension(:,:,:), allocatable :: vol           !< Local cell volume
       real(WP), dimension(:,:,:), allocatable :: meshsize      !< Local effective cell size
       real(WP) :: min_meshsize                                 !< Global minimum mesh size
+      
       ! Geometry
       real(WP), dimension(:,:,:), allocatable :: VF            !< Volume fraction info (VF=1 is fluid, VF=0 is wall)
+      
+      ! Unstructured mapping
+      integer,  dimension(:,:,:), allocatable :: ind           !< Unique global index
+      integer :: ind_min,ind_max                               !< Local min and max indices
+      integer :: ncell_,ncell                                  !< Total number of local and global cells
+      
    contains
       procedure :: print=>config_print                         !< Output configuration information to the screen
       procedure :: write=>config_write                         !< Write out config files: grid and geometry
       procedure, private :: prep=>config_prep                  !< Finish preparing config after the partitioned grid is loaded
-      procedure :: VF_extend                                    !< Extend VF array into the non-periodic domain overlaps
+      procedure :: umap_prep                                   !< This routine initializes an unstructured mapping
+      procedure :: VF_extend                                   !< Extend VF array into the non-periodic domain overlaps
    end type config
    
    
@@ -116,8 +125,10 @@ contains
       call MPI_ALLREDUCE(minval(this%meshsize(this%imin_:this%imax_,this%jmin_:this%jmax_,this%kmin_:this%kmax_)),this%min_meshsize,1,MPI_REAL_WP,MPI_MIN,this%comm,ierr)
       
       ! Allocate wall geometry - assume all fluid until told otherwise
-      allocate(this%VF(this%imino_:this%imaxo_,this%jmino_:this%jmaxo_,this%kmino_:this%kmaxo_))
-      this%VF=1.0_WP
+      allocate(this%VF(this%imino_:this%imaxo_,this%jmino_:this%jmaxo_,this%kmino_:this%kmaxo_)); this%VF=1.0_WP
+      
+      ! Allocate unstructed mapping
+      allocate(this%ind(this%imino_:this%imaxo_,this%jmino_:this%jmaxo_,this%kmino_:this%kmaxo_)); this%ind=-1
       
    end subroutine config_prep
    
@@ -161,6 +172,66 @@ contains
          end if
       end if
    end subroutine VF_extend
+   
+   
+   !> Creation of an unstructured mapping
+   subroutine umap_prep(this)
+      use mpi_f08, only: MPI_ALLREDUCE,MPI_SUM,MPI_INTEGER
+      implicit none
+      class(config), intent(inout) :: this
+      integer :: i,j,k,ierr,count
+      integer, dimension(:), allocatable :: ncell_per_proc
+      
+      ! Dump any existing mapping and recreate it
+      this%ncell =0
+      this%ncell_=0
+      this%ind_min=0
+      this%ind_max=0
+      this%ind=-1
+      
+      ! Count number of non-empty cells
+      do k=this%kmin_,this%kmax_
+         do j=this%jmin_,this%jmax_
+            do i=this%imin_,this%imax_
+               if (this%VF(i,j,k).gt.0.0_WP) this%ncell_=this%ncell_+1
+            end do
+         end do
+      end do
+      call MPI_ALLREDUCE(this%ncell_,this%ncell,1,MPI_INTEGER,MPI_SUM,this%comm,ierr)
+      
+      ! Create an array with ncell_ per cpu
+      allocate(ncell_per_proc(this%nproc))
+      call MPI_ALLGATHER(this%ncell_,1,MPI_INTEGER,ncell_per_proc,1,MPI_INTEGER,this%comm,ierr)
+      do i=2,this%nproc
+         ncell_per_proc(i)=ncell_per_proc(i)+ncell_per_proc(i-1)
+      end do
+      
+      ! Assign unique global index to all non-empty cells
+      count=0
+      if (this%rank.gt.0) count=ncell_per_proc(this%rank)
+      do k=this%kmin_,this%kmax_
+         do j=this%jmin_,this%jmax_
+            do i=this%imin_,this%imax_
+               if (this%VF(i,j,k).gt.0.0_WP) then
+                  count=count+1
+                  this%ind(i,j,k)=count
+               end if
+            end do
+         end do
+      end do
+      
+      ! Take care of periodicity and domain decomposition
+      call this%isync(this%ind)
+      
+      ! Get local min/max
+      this%ind_min=1
+      if (this%rank.gt.0) this%ind_min=ncell_per_proc(this%rank)+1
+      this%ind_max=ncell_per_proc(this%rank+1)
+      
+      ! Deallocate
+      deallocate(ncell_per_proc)
+      
+   end subroutine umap_prep
    
    
    !> Cheap print of config info to screen

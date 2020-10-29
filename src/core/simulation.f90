@@ -22,7 +22,7 @@ contains
    subroutine simulation_init
       use param,     only: param_read
       use precision, only: WP
-      use ils_class, only: rbgs,hypre_smg
+      use ils_class, only: rbgs,amg
       use ensight_class, only: ensight
       implicit none
       
@@ -37,7 +37,8 @@ contains
          fs%psolv%maxit=100
          fs%psolv%acvg=1.0e-4_WP
          fs%psolv%rcvg=1.0e-4_WP
-         fs%psolv%method=hypre_smg
+         ! Initialize solver
+         call fs%psolv%init_solver(amg)
          ! Check solver objects
          call fs%print()
          call fs%psolv%print()
@@ -66,8 +67,6 @@ contains
          call ens_out%add_scalar('RHS',fs%psolv%rhs)
          ! Set initial guess to zero
          fs%psolv%sol=0.0_WP
-         ! Prepare solver
-         call fs%psolv%prep_solver()
          ! Call the solver
          call fs%psolv%solve()
          ! Copy back to pressure

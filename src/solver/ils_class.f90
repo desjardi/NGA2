@@ -13,8 +13,10 @@ module ils_class
    
    ! List of known available methods
    integer, parameter, public :: rbgs=1
-   integer, parameter, public :: hypre_smg=2
+   integer, parameter, public :: amg =2
    
+   ! Hypre-related storage parameter
+   integer(kind=8), parameter :: hypre_ParCSR=5555
    
    !> ILS object definition
    type :: ils
@@ -43,17 +45,18 @@ module ils_class
       ! Private stuff for hypre
       integer(kind=8), private :: hypre_box              !< Grid
       integer(kind=8), private :: hypre_stc              !< Stencil
-      integer(kind=8), private :: hypre_mat              !< Matrix
-      integer(kind=8), private :: hypre_rhs              !< Right-hand side
-      integer(kind=8), private :: hypre_sol              !< Solution
+      integer(kind=8), private :: hypre_mat,parse_mat    !< Matrix
+      integer(kind=8), private :: hypre_rhs,parse_rhs    !< Right-hand side
+      integer(kind=8), private :: hypre_sol,parse_sol    !< Solution
       integer(kind=8), private :: hypre_solver           !< Solver
       
    contains
       procedure :: print=>ils_print                                   !< Print ILS object info
-      procedure :: prep_solver                                        !< Solver preparation
+      procedure :: init_solver                                        !< Solver initialization (at start-up)
+      procedure :: update_solver                                      !< Solver update (every time the operator changes)
       procedure :: solve                                              !< Equation solver
-      procedure :: solve_rbgs                                         !< Solve equation with RBGS
-      procedure :: solve_hypre_smg                                    !< Solve equation with hypre_smg
+      procedure :: solve_rbgs                                         !< Solve equation with rbgs
+      procedure :: solve_hypre_amg                                    !< Solve equation with amg
       final     :: destructor                                         !< Destructor for ILS
    end type ils
    
@@ -103,53 +106,118 @@ contains
    end function ils_from_args
    
    
-   !> Prepare solver
-   subroutine prep_solver(this)
+   !> Initialize solver - done at start-up (probably only once?)
+   subroutine init_solver(this,method)
       use monitor, only: die
       implicit none
       class(ils), intent(inout) :: this
-      integer :: ierr,st
-      integer, dimension(3) :: periodicity,offset
-      integer, dimension(6) :: ghosts
+      integer, intent(in) :: method
+      integer :: ierr
+      
+      ! Set solution method
+      this%method=method
       
       ! Select appropriate solver
       select case (this%method)
-      case (rbgs)                    ! Initialize the Red-Black Gauss-Seidel solver here
-         ! Nothing to do here
+      case (rbgs) ! Initialize the Red-Black Gauss-Seidel solver here
          
-      case (hypre_smg)               ! Initialize the HYPRE-SMG solver here
-         ! Create Hypre grid
-         call HYPRE_StructGridCreate(this%cfg%comm,3,this%hypre_box,ierr)
-         call HYPRE_StructGridSetExtents(this%hypre_box,[this%cfg%imin_,this%cfg%jmin_,this%cfg%kmin_],[this%cfg%imax_,this%cfg%jmax_,this%cfg%kmax_],ierr)
-         periodicity=0
-         if (this%cfg%xper) periodicity(1)=this%cfg%nx
-         if (this%cfg%yper) periodicity(2)=this%cfg%ny
-         if (this%cfg%zper) periodicity(3)=this%cfg%nz
-         call HYPRE_StructGridSetPeriodic(this%hypre_box,periodicity,ierr)
-         call HYPRE_StructGridAssemble(this%hypre_box,ierr)
-         ! Build Hypre stencil
-         call HYPRE_StructStencilCreate(3,this%nst,this%hypre_stc,ierr)
-         do st=1,this%nst
-            offset=this%stc(st,:)
-            call HYPRE_StructStencilSetElement(this%hypre_stc,st-1,offset,ierr)
-         end do
-         ! Build Hypre matrix
-         call HYPRE_StructMatrixCreate(this%cfg%comm,this%hypre_box,this%hypre_stc,this%hypre_mat,ierr)
-         !ghosts=maxval(abs(this%stc))
-         !call HYPRE_StructMatrixSetNumGhost(this%hypre_mat,ghosts,ierr)
-         call HYPRE_StructMatrixInitialize(this%hypre_mat,ierr)
-         ! Prepare Hypre RHS
-         call HYPRE_StructVectorCreate(this%cfg%comm,this%hypre_box,this%hypre_rhs,ierr)
-         call HYPRE_StructVectorInitialize(this%hypre_rhs,ierr)
-         ! Create Hypre solution vector
-         call HYPRE_StructVectorCreate(this%cfg%comm,this%hypre_box,this%hypre_sol,ierr)
-         call HYPRE_StructVectorInitialize(this%hypre_sol,ierr)
+      case (amg)  ! Initialize the HYPRE-AMG solver here
+         ! Prepare an unstructured mapping for our cfg
+         call this%cfg%umap_prep()
+         ! Create a HYPRE matrix
+         call HYPRE_IJMatrixCreate       (this%cfg%comm,this%cfg%ind_min,this%cfg%ind_max,this%cfg%ind_min,this%cfg%ind_max,this%hypre_mat,ierr)
+         call HYPRE_IJMatrixSetObjectType(this%hypre_mat,hypre_ParCSR,ierr)
+         call HYPRE_IJMatrixInitialize   (this%hypre_mat,ierr)
+         ! Create a HYPRE rhs vector
+         call HYPRE_IJVectorCreate       (this%cfg%comm,this%cfg%ind_min,this%cfg%ind_max,this%hypre_rhs,ierr)
+         call HYPRE_IJVectorSetObjectType(this%hypre_rhs,hypre_ParCSR,ierr)
+         call HYPRE_IJVectorInitialize   (this%hypre_rhs,ierr)
+         call HYPRE_IJVectorAssemble     (this%hypre_rhs,ierr)
+         call HYPRE_IJVectorGetObject    (this%hypre_rhs,this%parse_rhs,ierr)
+         ! Create a HYPRE solution vector
+         call HYPRE_IJVectorCreate       (this%cfg%comm,this%cfg%ind_min,this%cfg%ind_max,this%hypre_sol,ierr)
+         call HYPRE_IJVectorSetObjectType(this%hypre_sol,hypre_ParCSR,ierr)
+         call HYPRE_IJVectorInitialize   (this%hypre_sol,ierr)
+         call HYPRE_IJVectorAssemble     (this%hypre_sol,ierr)
+         call HYPRE_IJVectorGetObject    (this%hypre_sol,this%parse_sol,ierr)
+         ! Create a HYPRE AMG solver
+         call HYPRE_BoomerAMGCreate        (this%hypre_solver,ierr)
+         call HYPRE_BoomerAMGSetPrintLevel (this%hypre_solver,0,ierr)   ! print solve info + parameters
+         call HYPRE_BoomerAMGSetInterpType (this%hypre_solver,3,ierr)   ! interpolation
+         call HYPRE_BoomerAMGSetCoarsenType(this%hypre_solver,6,ierr)   ! Falgout=6 (old default); PMIS=8 and HMIS=10 (recommended)
+         call HYPRE_BoomerAMGSetRelaxType  (this%hypre_solver,8,ierr)   ! hybrid symmetric Gauss-Seidel/SOR
+         !call HYPRE_BoomerAMGSetSmoothType   (this%hypre_solver,        7, ierr)   ! Set complex smoother
+         !call HYPRE_BoomerAMGSetSmoothNumLvls(this%hypre_solver,      5, ierr)   ! Set complex smoother for 5 levels
+         call HYPRE_BoomerAMGSetMaxIter    (this%hypre_solver,this%maxit,ierr)   ! maximum nbr of iter
+         call HYPRE_BoomerAMGSetTol        (this%hypre_solver,this%rcvg ,ierr)   ! convergence tolerance
          
       case default
          call die('[ils prep solver] Unknown solution method')
       end select
       
-   end subroutine prep_solver
+      ! Finally, update the solver
+      call this%update_solver()
+      
+   end subroutine init_solver
+   
+   
+   !> Update solver - done everytime the operator changes
+   subroutine update_solver(this)
+      use monitor, only: die
+      implicit none
+      class(ils), intent(inout) :: this
+      integer :: i,j,k,count,st,ierr
+      integer,  dimension(:),   allocatable :: row,ncol
+      integer,  dimension(:,:), allocatable :: col
+      real(WP), dimension(:,:), allocatable :: val
+      
+      ! Select appropriate solver
+      select case (this%method)
+      case (rbgs) ! Prepare the Red-Black Gauss-Seidel solver here
+         
+      case (amg)  ! Prepare the HYPRE-AMG solver here
+         
+         ! Allocate storage for transfer
+         allocate( row(this%cfg%ncell_))
+         allocate(ncol(this%cfg%ncell_))
+         allocate( col(this%nst,this%cfg%ncell_)); col=0
+         allocate( val(this%nst,this%cfg%ncell_)); val=0.0_WP
+         
+         ! Tranfer operator to HYPRE
+         count=0
+         do k=this%cfg%kmin_,this%cfg%kmax_
+            do j=this%cfg%jmin_,this%cfg%jmax_
+               do i=this%cfg%imin_,this%cfg%imax_
+                  if (this%cfg%ind(i,j,k).gt.0) then
+                     count=count+1
+                     row(count)=this%cfg%ind(i,j,k)
+                     ncol(count)=0
+                     do st=1,this%nst
+                        if (this%cfg%ind(i+this%stc(st,1),j+this%stc(st,2),k+this%stc(st,3)).gt.0) then
+                           ncol(count)=ncol(count)+1
+                           col(ncol(count),count)=this%cfg%ind(i+this%stc(st,1),j+this%stc(st,2),k+this%stc(st,3))
+                           val(ncol(count),count)=this%opr(st,i,j,k)
+                        end if
+                     end do
+                  end if
+               end do
+            end do
+         end do
+         call HYPRE_IJMatrixSetValues(this%hypre_mat,this%cfg%ncell_,ncol,row,col,val,ierr)
+         call HYPRE_IJMatrixAssemble (this%hypre_mat,ierr)
+         call HYPRE_IJVectorGetObject(this%hypre_mat,this%parse_mat,ierr)
+         
+         ! Setup AMG solver
+         call HYPRE_BoomerAMGSetup(this%hypre_solver,this%parse_mat,this%parse_rhs,this%parse_sol,ierr)
+         
+         ! Deallocate
+         deallocate(row,ncol,col,val)
+         
+      case default
+         call die('[ils prep solver] Unknown solution method')
+      end select
+      
+   end subroutine update_solver
    
    
    !> Solve the linear system iteratively
@@ -161,8 +229,8 @@ contains
       select case (this%method)
       case (rbgs)
          call this%solve_rbgs()
-      case (hypre_smg)
-         call this%solve_hypre_smg()
+      case (amg)
+         call this%solve_hypre_amg()
       case default
          call die('[ils solve] Unknown solution method')
       end select
@@ -223,68 +291,59 @@ contains
    end subroutine solve_rbgs
    
    
-   !> Solve the linear system using hypre_smg
-   subroutine solve_hypre_smg(this)
+   !> Solve the linear system using hypre_amg
+   subroutine solve_hypre_amg(this)
       implicit none
       class(ils), intent(inout) :: this
-      integer :: i,j,k,st,ierr
+      integer :: i,j,k,count,ierr
       integer,  dimension(:), allocatable :: ind
-      real(WP), dimension(:), allocatable :: val
+      real(WP), dimension(:), allocatable :: rhs,sol
       
-      ! Preapre shit
-      allocate(ind(1:this%nst)); ind=[0,1,2,3,4,5,6]
-      allocate(val(1:this%nst))
-      
-      ! Build the problem
+      ! Transfer the rhs and initial guess to hypre
+      allocate(rhs(this%cfg%ncell_))
+      allocate(sol(this%cfg%ncell_))
+      allocate(ind(this%cfg%ncell_))
+      count=0
       do k=this%cfg%kmin_,this%cfg%kmax_
          do j=this%cfg%jmin_,this%cfg%jmax_
             do i=this%cfg%imin_,this%cfg%imax_
-               ! Transfer operator
-               !do st=1,this%nst
-               !   call HYPRE_StructMatrixSetValues(this%hypre_mat,[i,j,k],1,st-1,this%opr(st,i,j,k),ierr)
-               !end do
-               !if (abs(this%opr(1,i,j,k)).gt.0.0_WP) call HYPRE_StructMatrixSetValues(this%hypre_mat,[i,j,k],1,0,1.0_WP,ierr)
-               if (abs(this%opr(1,i,j,k)).gt.0.0_WP) then
-                  val=this%opr(:,i,j,k)
-               else
-                  val=0.0_WP; val(1)=1.0_WP
+               if (this%cfg%ind(i,j,k).gt.0) then
+                  count=count+1
+                  ind(count)=this%cfg%ind(i,j,k)
+                  rhs(count)=this%rhs(i,j,k)
+                  sol(count)=this%sol(i,j,k)
                end if
-               call HYPRE_StructMatrixSetValues(this%hypre_mat,[i,j,k],this%nst,ind,val,ierr)
-               ! Tranfer RHS
-               call HYPRE_StructVectorSetValues(this%hypre_rhs,[i,j,k],this%rhs(i,j,k),ierr)
-               ! Tranfer initial guess
-               call HYPRE_StructVectorSetValues(this%hypre_sol,[i,j,k],this%sol(i,j,k),ierr)
             end do
          end do
       end do
-      call HYPRE_StructMatrixAssemble(this%hypre_mat,ierr)
-      call HYPRE_StructVectorAssemble(this%hypre_rhs,ierr)
-      call HYPRE_StructVectorAssemble(this%hypre_sol,ierr)
-      print*,'here2'
-      ! Prepare the solver
-      call HYPRE_StructSMGCreate    (this%cfg%comm,this%hypre_solver,ierr)
-      call HYPRE_StructSMGSetMaxIter(this%hypre_solver,this%maxit,ierr)
-      call HYPRE_StructSMGSetTol    (this%hypre_solver,this%rcvg ,ierr)
-      call HYPRE_StructSMGSetLogging(this%hypre_solver,1         ,ierr)
-      call HYPRE_StructSMGSetup     (this%hypre_solver,this%hypre_mat,this%hypre_rhs,this%hypre_sol,ierr)
-      print*,'here3'
-      ! Solve
-      call HYPRE_StructSMGSolve           (this%hypre_solver,this%hypre_mat,this%hypre_rhs,this%hypre_sol,ierr)
-      call HYPRE_StructSMGGetNumIterations(this%hypre_solver,this%it  ,ierr)
-      call HYPRE_StructSMGGetFinalRelative(this%hypre_solver,this%rerr,ierr)
-      call HYPRE_StructSMGDestroy         (this%hypre_solver,ierr)
-      print*,'here4'
-      ! Get back solution
+      call HYPRE_IJVectorSetValues(this%hypre_rhs,this%cfg%ncell_,ind,rhs,ierr)
+      call HYPRE_IJVectorAssemble (this%hypre_rhs,ierr)
+      call HYPRE_IJVectorSetValues(this%hypre_sol,this%cfg%ncell_,ind,sol,ierr)
+      call HYPRE_IJVectorAssemble (this%hypre_sol,ierr)
+      
+      ! Call the solver
+      call HYPRE_BoomerAMGSolve(this%hypre_solver,this%parse_mat,this%parse_rhs,this%parse_sol,ierr)
+      call HYPRE_BoomerAMGGetNumIterations(this%hypre_solver,this%it  ,ierr)
+      call HYPRE_BoomerAMGGetFinalReltvRes(this%hypre_solver,this%rerr,ierr)
+      
+      ! Get the solution back
+      call HYPRE_IJVectorGetValues(this%hypre_sol,this%cfg%ncell_,ind,sol,ierr)
+      count=0
       do k=this%cfg%kmin_,this%cfg%kmax_
          do j=this%cfg%jmin_,this%cfg%jmax_
             do i=this%cfg%imin_,this%cfg%imax_
-               ! Transfer solution
-               call HYPRE_StructVectorGetValues(this%hypre_sol,[i,j,k],this%sol(i,j,k),ierr)
+               if (this%cfg%ind(i,j,k).gt.0) then
+                  count=count+1
+                  this%sol(i,j,k)=sol(count)
+               end if
             end do
          end do
       end do
-      print*,'here5'
-   end subroutine solve_hypre_smg
+      
+      ! Deallocate
+      deallocate(rhs,sol,ind)
+      
+   end subroutine solve_hypre_amg
    
    
    !> Print ILS info to the screen
