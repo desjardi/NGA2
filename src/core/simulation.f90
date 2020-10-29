@@ -58,14 +58,16 @@ contains
       
       ! Try to use the pressure solver
       test_pressure_solver: block
-         ! Create a RHS and output it
+         ! Create a scaled RHS and output it
          fs%psolv%rhs=0.0_WP
          if (fs%cfg%jproc.eq.         1) fs%psolv%rhs(:,fs%cfg%jmin_,:)=+1.0_WP
          if (fs%cfg%jproc.eq.fs%cfg%npy) fs%psolv%rhs(:,fs%cfg%jmax_,:)=-1.0_WP
-         call fs%psolv%scale_rhs()
+         fs%psolv%rhs=-fs%cfg%vol*fs%psolv%rhs
          call ens_out%add_scalar('RHS',fs%psolv%rhs)
          ! Set initial guess to zero
          fs%psolv%sol=0.0_WP
+         ! Prepare solver
+         call fs%psolv%prep_solver()
          ! Call the solver
          call fs%psolv%solve()
          ! Copy back to pressure

@@ -113,10 +113,11 @@ contains
       self%psolv%stc(6,:)=[ 0, 0,+1]
       self%psolv%stc(7,:)=[ 0, 0,-1]
       
-      ! Set the Laplacian operator from incomp metrics: lap(*)=div(grad(*))
+      ! Setup the scaled Laplacian operator from incomp metrics: lap(*)=-vol*div(grad(*))
       do k=self%cfg%kmin_,self%cfg%kmax_
          do j=self%cfg%jmin_,self%cfg%jmax_
             do i=self%cfg%imin_,self%cfg%imax_
+               ! Set Laplacian
                self%psolv%opr(1,i,j,k)=self%divp_x(1,i,j,k)*self%divu_x(-1,i+1,j,k)+&
                &                       self%divp_x(0,i,j,k)*self%divu_x( 0,i  ,j,k)+&
                &                       self%divp_y(1,i,j,k)*self%divv_y(-1,i,j+1,k)+&
@@ -129,15 +130,11 @@ contains
                self%psolv%opr(5,i,j,k)=self%divp_y(0,i,j,k)*self%divv_y(-1,i,j  ,k)
                self%psolv%opr(6,i,j,k)=self%divp_z(1,i,j,k)*self%divw_z( 0,i,j,k+1)
                self%psolv%opr(7,i,j,k)=self%divp_z(0,i,j,k)*self%divw_z(-1,i,j,k  )
+               ! Scale it by the cell volume
+               self%psolv%opr(:,i,j,k)=-self%psolv%opr(:,i,j,k)*self%cfg%vol(i,j,k)
             end do
          end do
       end do
-      
-      ! Scale the operator
-      call self%psolv%scale_opr()
-      
-      ! Prepare solver
-      call self%psolv%prep_solver()
       
    end function constructor
    

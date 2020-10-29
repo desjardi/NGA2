@@ -41,17 +41,15 @@ module ils_class
       real(WP) :: aerr                                                !< Current absolute error
       
       ! Private stuff for hypre
-      integer(kind=8), private :: hypre_grid             !< Grid
-      integer(kind=8), private :: hypre_stencil          !< Stencil
-      integer(kind=8), private :: hypre_matrix           !< Matrix
+      integer(kind=8), private :: hypre_box              !< Grid
+      integer(kind=8), private :: hypre_stc              !< Stencil
+      integer(kind=8), private :: hypre_mat              !< Matrix
       integer(kind=8), private :: hypre_rhs              !< Right-hand side
       integer(kind=8), private :: hypre_sol              !< Solution
       integer(kind=8), private :: hypre_solver           !< Solver
       
    contains
       procedure :: print=>ils_print                                   !< Print ILS object info
-      procedure :: scale_opr                                          !< Operator scaling
-      procedure :: scale_rhs                                          !< RHS scaling
       procedure :: prep_solver                                        !< Solver preparation
       procedure :: solve                                              !< Equation solver
       procedure :: solve_rbgs                                         !< Solve equation with RBGS
@@ -112,6 +110,7 @@ contains
       class(ils), intent(inout) :: this
       integer :: ierr,st
       integer, dimension(3) :: periodicity
+      integer, dimension(6) :: ghosts
       
       ! Select appropriate solver
       select case (this%method)
@@ -120,34 +119,35 @@ contains
          
       case (hypre_smg)               ! Initialize the HYPRE-SMG solver here
          ! Create Hypre grid
-         call HYPRE_StructGridCreate(this%cfg%comm,3,this%hypre_grid,ierr)
-         call HYPRE_StructGridSetExtents(this%hypre_grid,[this%cfg%imin_,this%cfg%jmin_,this%cfg%kmin_],[this%cfg%imax_,this%cfg%jmax_,this%cfg%kmax_],ierr)
+         call HYPRE_StructGridCreate(this%cfg%comm,3,this%hypre_box,ierr)
+         call HYPRE_StructGridSetExtents(this%hypre_box,[this%cfg%imin_,this%cfg%jmin_,this%cfg%kmin_],[this%cfg%imax_,this%cfg%jmax_,this%cfg%kmax_],ierr)
          periodicity=0
          if (this%cfg%xper) periodicity(1)=this%cfg%nx
          if (this%cfg%yper) periodicity(2)=this%cfg%ny
          if (this%cfg%zper) periodicity(3)=this%cfg%nz
-         call HYPRE_StructGridSetPeriodic(this%hypre_grid,periodicity,ierr)
-         call HYPRE_StructGridAssemble(this%hypre_grid,ierr)
+         call HYPRE_StructGridSetPeriodic(this%hypre_box,periodicity,ierr)
+         call HYPRE_StructGridAssemble(this%hypre_box,ierr)
          ! Build Hypre stencil
-         call HYPRE_StructStencilCreate(3,this%nst,this%hypre_stencil,ierr)
+         call HYPRE_StructStencilCreate(3,this%nst,this%hypre_stc,ierr)
          do st=1,this%nst
-            call HYPRE_StructStencilSetElement(this%hypre_stencil,st-1,[this%stc(st,1),this%stc(st,2),this%stc(st,3)],ierr)
+            call HYPRE_StructStencilSetElement(this%hypre_stc,st-1,[this%stc(st,1),this%stc(st,2),this%stc(st,3)],ierr)
          end do
          ! Build Hypre matrix
-         call HYPRE_StructMatrixCreate(this%cfg%comm,this%hypre_grid,this%hypre_stencil,this%hypre_matrix,ierr)
-         call HYPRE_StructMatrixSetNumGhost(this%hypre_matrix,maxval(abs(this%stc)),ierr)
-         call HYPRE_StructMatrixInitialize(this%hypre_matrix,ierr)
+         call HYPRE_StructMatrixCreate(this%cfg%comm,this%hypre_box,this%hypre_stc,this%hypre_mat,ierr)
+         ghosts=maxval(abs(this%stc))
+         call HYPRE_StructMatrixSetNumGhost(this%hypre_mat,ghosts,ierr)
+         call HYPRE_StructMatrixInitialize(this%hypre_mat,ierr)
          ! Prepare Hypre RHS
-         call HYPRE_StructVectorCreate(this%cfg%comm,this%hypre_grid,this%hypre_rhs,ierr)
+         call HYPRE_StructVectorCreate(this%cfg%comm,this%hypre_box,this%hypre_rhs,ierr)
          call HYPRE_StructVectorInitialize(this%hypre_rhs,ierr)
-         call HYPRE_StructVectorAssemble(this%hypre_rhs,ierr)
          ! Create Hypre solution vector
-         call HYPRE_StructVectorCreate(this%cfg%comm,this%hypre_grid,this%hypre_sol,ierr)
+         call HYPRE_StructVectorCreate(this%cfg%comm,this%hypre_box,this%hypre_sol,ierr)
          call HYPRE_StructVectorInitialize(this%hypre_sol,ierr)
-         call HYPRE_StructVectorAssemble(this%hypre_sol,ierr)
+         
       case default
          call die('[ils prep solver] Unknown solution method')
       end select
+      
    end subroutine prep_solver
    
    
@@ -226,40 +226,51 @@ contains
    subroutine solve_hypre_smg(this)
       implicit none
       class(ils), intent(inout) :: this
+      integer :: i,j,k,st,ierr
       
+      ! Build the problem
+      do k=this%cfg%kmin_,this%cfg%kmax_
+         do j=this%cfg%jmin_,this%cfg%jmax_
+            do i=this%cfg%imin_,this%cfg%imax_
+               ! Transfer operator
+               do st=1,this%nst
+                  call HYPRE_StructMatrixSetValues(this%hypre_mat,[i,j,k],1,st-1,this%opr(st,i,j,k),ierr)
+               end do
+               ! Tranfer RHS
+               call HYPRE_StructVectorSetValues(this%hypre_rhs,[i,j,k],this%rhs(i,j,k),ierr)
+               ! Tranfer initial guess
+               call HYPRE_StructVectorSetValues(this%hypre_sol,[i,j,k],this%sol(i,j,k),ierr)
+            end do
+         end do
+      end do
+      call HYPRE_StructMatrixAssemble(this%hypre_mat,ierr)
+      call HYPRE_StructVectorAssemble(this%hypre_rhs,ierr)
+      call HYPRE_StructVectorAssemble(this%hypre_sol,ierr)
       
-      
+      ! Prepare the solver
+      call HYPRE_StructSMGCreate    (this%cfg%comm,this%hypre_solver,ierr)
+      call HYPRE_StructSMGSetMaxIter(this%hypre_solver,this%maxit,ierr)
+      call HYPRE_StructSMGSetTol    (this%hypre_solver,this%rcvg ,ierr)
+      call HYPRE_StructSMGSetLogging(this%hypre_solver,1         ,ierr)
+      call HYPRE_StructSMGSetup     (this%hypre_solver,this%hypre_mat,this%hypre_rhs,this%hypre_sol,ierr)
+      print*,'here3'
+      ! Solve
+      call HYPRE_StructSMGSolve           (this%hypre_solver,this%hypre_mat,this%hypre_rhs,this%hypre_sol,ierr)
+      call HYPRE_StructSMGGetNumIterations(this%hypre_solver,this%it  ,ierr)
+      call HYPRE_StructSMGGetFinalRelative(this%hypre_solver,this%rerr,ierr)
+      call HYPRE_StructSMGDestroy         (this%hypre_solver,ierr)
+      print*,'here4'
+      ! Get back solution
+      do k=this%cfg%kmin_,this%cfg%kmax_
+         do j=this%cfg%jmin_,this%cfg%jmax_
+            do i=this%cfg%imin_,this%cfg%imax_
+               ! Transfer solution
+               call HYPRE_StructVectorGetValues(this%hypre_sol,[i,j,k],this%sol(i,j,k),ierr)
+            end do
+         end do
+      end do
+      print*,'here5'
    end subroutine solve_hypre_smg
-   
-   
-   !> Scaling of operator - this is simple negative volume scaling here, but could easily be generalized
-   subroutine scale_opr(this)
-      implicit none
-      class(ils), intent(inout) :: this
-      integer :: i,j,k
-      do k=this%cfg%kmino_,this%cfg%kmaxo_
-         do j=this%cfg%jmino_,this%cfg%jmaxo_
-            do i=this%cfg%imino_,this%cfg%imaxo_
-               this%opr(:,i,j,k)=-this%opr(:,i,j,k)*this%cfg%vol(i,j,k)
-            end do
-         end do
-      end do
-   end subroutine scale_opr
-   
-   
-   !> Scaling of rhs - this is simple negative volume scaling here, but could easily be generalized
-   subroutine scale_rhs(this)
-      implicit none
-      class(ils), intent(inout) :: this
-      integer :: i,j,k
-      do k=this%cfg%kmino_,this%cfg%kmaxo_
-         do j=this%cfg%jmino_,this%cfg%jmaxo_
-            do i=this%cfg%imino_,this%cfg%imaxo_
-               this%rhs(i,j,k)=-this%rhs(i,j,k)*this%cfg%vol(i,j,k)
-            end do
-         end do
-      end do
-   end subroutine scale_rhs
    
    
    !> Print ILS info to the screen
