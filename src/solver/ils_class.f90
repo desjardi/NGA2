@@ -109,7 +109,7 @@ contains
       implicit none
       class(ils), intent(inout) :: this
       integer :: ierr,st
-      integer, dimension(3) :: periodicity
+      integer, dimension(3) :: periodicity,offset
       integer, dimension(6) :: ghosts
       
       ! Select appropriate solver
@@ -130,12 +130,13 @@ contains
          ! Build Hypre stencil
          call HYPRE_StructStencilCreate(3,this%nst,this%hypre_stc,ierr)
          do st=1,this%nst
-            call HYPRE_StructStencilSetElement(this%hypre_stc,st-1,[this%stc(st,1),this%stc(st,2),this%stc(st,3)],ierr)
+            offset=this%stc(st,:)
+            call HYPRE_StructStencilSetElement(this%hypre_stc,st-1,offset,ierr)
          end do
          ! Build Hypre matrix
          call HYPRE_StructMatrixCreate(this%cfg%comm,this%hypre_box,this%hypre_stc,this%hypre_mat,ierr)
-         ghosts=maxval(abs(this%stc))
-         call HYPRE_StructMatrixSetNumGhost(this%hypre_mat,ghosts,ierr)
+         !ghosts=maxval(abs(this%stc))
+         !call HYPRE_StructMatrixSetNumGhost(this%hypre_mat,ghosts,ierr)
          call HYPRE_StructMatrixInitialize(this%hypre_mat,ierr)
          ! Prepare Hypre RHS
          call HYPRE_StructVectorCreate(this%cfg%comm,this%hypre_box,this%hypre_rhs,ierr)
@@ -227,15 +228,28 @@ contains
       implicit none
       class(ils), intent(inout) :: this
       integer :: i,j,k,st,ierr
+      integer,  dimension(:), allocatable :: ind
+      real(WP), dimension(:), allocatable :: val
+      
+      ! Preapre shit
+      allocate(ind(1:this%nst)); ind=[0,1,2,3,4,5,6]
+      allocate(val(1:this%nst))
       
       ! Build the problem
       do k=this%cfg%kmin_,this%cfg%kmax_
          do j=this%cfg%jmin_,this%cfg%jmax_
             do i=this%cfg%imin_,this%cfg%imax_
                ! Transfer operator
-               do st=1,this%nst
-                  call HYPRE_StructMatrixSetValues(this%hypre_mat,[i,j,k],1,st-1,this%opr(st,i,j,k),ierr)
-               end do
+               !do st=1,this%nst
+               !   call HYPRE_StructMatrixSetValues(this%hypre_mat,[i,j,k],1,st-1,this%opr(st,i,j,k),ierr)
+               !end do
+               !if (abs(this%opr(1,i,j,k)).gt.0.0_WP) call HYPRE_StructMatrixSetValues(this%hypre_mat,[i,j,k],1,0,1.0_WP,ierr)
+               if (abs(this%opr(1,i,j,k)).gt.0.0_WP) then
+                  val=this%opr(:,i,j,k)
+               else
+                  val=0.0_WP; val(1)=1.0_WP
+               end if
+               call HYPRE_StructMatrixSetValues(this%hypre_mat,[i,j,k],this%nst,ind,val,ierr)
                ! Tranfer RHS
                call HYPRE_StructVectorSetValues(this%hypre_rhs,[i,j,k],this%rhs(i,j,k),ierr)
                ! Tranfer initial guess
@@ -246,7 +260,7 @@ contains
       call HYPRE_StructMatrixAssemble(this%hypre_mat,ierr)
       call HYPRE_StructVectorAssemble(this%hypre_rhs,ierr)
       call HYPRE_StructVectorAssemble(this%hypre_sol,ierr)
-      
+      print*,'here2'
       ! Prepare the solver
       call HYPRE_StructSMGCreate    (this%cfg%comm,this%hypre_solver,ierr)
       call HYPRE_StructSMGSetMaxIter(this%hypre_solver,this%maxit,ierr)
