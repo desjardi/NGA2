@@ -201,7 +201,7 @@ contains
          end do
          call HYPRE_IJMatrixSetValues(this%hypre_mat,this%cfg%ncell_,ncol,row,col,val,ierr)
          call HYPRE_IJMatrixAssemble (this%hypre_mat,ierr)
-         call HYPRE_IJVectorGetObject(this%hypre_mat,this%parse_mat,ierr)
+         call HYPRE_IJMatrixGetObject(this%hypre_mat,this%parse_mat,ierr)
          
          ! Setup AMG solver
          call HYPRE_BoomerAMGSetup(this%hypre_solver,this%parse_mat,this%parse_rhs,this%parse_sol,ierr)
