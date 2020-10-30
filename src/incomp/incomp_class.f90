@@ -3,15 +3,30 @@
 !> implicit solver, and pressure solution
 !> Assumes constant viscosity and density.
 module incomp_class
-   use precision,    only: WP
-   use string,       only: str_medium
-   use config_class, only: config
-   use ils_class,    only: ils
+   use precision,      only: WP
+   use string,         only: str_medium
+   use config_class,   only: config
+   use ils_class,      only: ils
+   use iterator_class, only: iterator
    implicit none
    private
    
    ! Expose type/constructor/methods
    public :: incomp
+   
+   ! List of known available bcond for this solver
+   integer, parameter, public :: dirichlet=1
+   integer, parameter, public :: neumann  =2
+   
+   
+   !> Boundary conditions for the incompressible solver
+   type :: bcond
+      type(bcond), pointer :: next                        !< Linked list of bcs
+      character(len=str_medium) :: name='UNNAMED_BCOND'   !< Bcond name (default=UNNAMED_BCOND)
+      integer :: type                                     !< Boundary condition type
+      type(iterator) :: itr                               !< This is the iterator for the bcond
+   end type bcond
+   
    
    !> Incompressible solver object definition
    type :: incomp
@@ -25,6 +40,9 @@ module incomp_class
       ! Constant property fluid
       real(WP) :: rho                                     !< This is our constant fluid density
       real(WP) :: visc                                    !< These is our constant fluid dynamic viscosity
+      
+      ! Boundary condition list
+      type(bcond), pointer :: first_bc                    !< List of bcond for our solver
       
       ! Flow variables
       real(WP), dimension(:,:,:), allocatable :: U        !< U velocity array
@@ -52,13 +70,9 @@ module incomp_class
       real(WP), dimension(:,:,:,:), allocatable :: grdv_x,grdv_y,grdv_z   !< Velocity gradient for V
       real(WP), dimension(:,:,:,:), allocatable :: grdw_x,grdw_y,grdw_z   !< Velocity gradient for W
       
-      ! Boundary condition list
-      !type(bcond), pointer :: bc=NULL()                   !< This will come later...
-      
-      ! MAYBE SOME WORK ARRAYS TOO?
-      
    contains
       procedure :: print=>incomp_print                    !< Output solver to the screen
+      procedure :: add_bcond                              !< Add a boundary condition
       procedure :: init_metrics                           !< Initialize metrics
       procedure :: get_dmomdt                             !< Calculate dmom/dt
       procedure :: get_divergence                         !< Calculate velocity divergence
@@ -86,6 +100,9 @@ contains
       
       ! Point to pgrid object
       self%cfg=>cfg
+      
+      ! Nullify bcond list
+      self%first_bc=>NULL()
       
       ! Prepare metrics
       call self%init_metrics()
@@ -354,6 +371,34 @@ contains
       end if
       
    end subroutine init_metrics
+   
+   
+   !> Add a boundary condition
+   subroutine add_bcond(this,name,type,locator)
+      implicit none
+      class(incomp), intent(inout) :: this
+      character(len=*), intent(in) :: name
+      integer, intent(in) :: type
+      interface
+         logical function locator(pargrid,ind1,ind2,ind3)
+            use pgrid_class, only: pgrid
+            class(pgrid), intent(in) :: pargrid
+            integer, intent(in) :: ind1,ind2,ind3
+         end function locator
+      end interface
+      type(bcond), pointer :: new_bc
+      
+      ! Prepare new bcond
+      allocate(new_bc)
+      new_bc%name=trim(adjustl(name))
+      new_bc%type=type
+      new_bc%itr =iterator(this%cfg,new_bc%name,locator)
+      
+      ! Insert it up front
+      new_bc%next=>this%first_bc
+      this%first_bc=>new_bc
+      
+   end subroutine add_bcond
    
    
    !> Calculate the explicit momentum time derivative based on U/V/W/P

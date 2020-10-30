@@ -1,6 +1,6 @@
 !> Various definitions and tools for running an NGA2 simulation
 module simulation
-   use incomp_class,  only: incomp
+   use incomp_class,  only: incomp,dirichlet
    use geometry,      only: cfg
    use ensight_class, only: ensight
    implicit none
@@ -16,6 +16,15 @@ module simulation
    
 contains
    
+   !> Function that localizes the top of the domain
+   function yplus_locator(pg,i,j,k) result(isIn)
+      use pgrid_class, only: pgrid
+      class(pgrid), intent(in) :: pg
+      integer, intent(in) :: i,j,k
+      logical :: isIn
+      isIn=.false.
+      if (j.eq.pg%jmax+1) isIn=.true.
+   end function yplus_locator
    
    
    !> Initialization of problem solver
@@ -23,7 +32,7 @@ contains
       use param,     only: param_read
       use precision, only: WP
       use ils_class, only: rbgs,amg
-      use ensight_class, only: ensight
+      !use ensight_class, only: ensight
       implicit none
       
       ! Create an incompressible flow solver
@@ -76,6 +85,20 @@ contains
       end block test_pressure_solver
       
       
+      ! Initialize our velocity field
+      initialize_velocity: block
+         fs%U=0.0_WP
+         fs%V=0.0_WP
+         fs%W=0.0_WP
+      end block initialize_velocity
+      
+      
+      ! Initialize boundary conditions
+      initialize_bc: block
+         call fs%add_bcond('stokes',dirichlet,yplus_locator)
+      end block initialize_bc
+      
+      
    end subroutine simulation_init
    
    
@@ -83,9 +106,15 @@ contains
    !> Perform an NGA2 simulation
    subroutine simulation_run
       implicit none
+      !logical :: done
       
-      
-      
+      ! Implement an Euler explicit integration of NS
+      !do while (.not.done)
+         
+         
+         
+         
+      !end do
       
    end subroutine simulation_run
    

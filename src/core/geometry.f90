@@ -13,15 +13,15 @@ module geometry
 contains
    
    
-   !> Function that assists the create of sphere iterator
-   function sphere_locator(pg,i1,i2,i3) result(isIn)
+   !> Function that assists the creation of a sphere iterator
+   function sphere_locator(pg,i,j,k) result(isIn)
       use pgrid_class, only: pgrid
       class(pgrid), intent(in) :: pg
-      integer, intent(in) :: i1,i2,i3
+      integer, intent(in) :: i,j,k
       logical :: isIn
       isIn=.false.
-      if (sqrt(pg%xm(i1)**2+pg%ym(i2)**2+pg%zm(i3)**2).lt.0.005_WP) then
-         if (pg%ym(i2).gt.0.0_WP) isIn=.true.
+      if (sqrt(pg%xm(i)**2+pg%ym(j)**2+pg%zm(k)**2).lt.0.005_WP) then
+         if (pg%ym(j).gt.0.0_WP) isIn=.true.
       end if
    end function sphere_locator
    
