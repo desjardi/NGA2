@@ -105,16 +105,37 @@ contains
    
    !> Perform an NGA2 simulation
    subroutine simulation_run
+      use precision, only: WP
+      use time_info
       implicit none
-      !logical :: done
+      real(WP), dimension(:,:,:), allocatable :: dudt,dvdt,dwdt
       
-      ! Implement an Euler explicit integration of NS
-      !do while (.not.done)
-         
-         
-         
-         
-      !end do
+      ! Allocate work arrays
+      allocate(dudt(fs%cfg%imino_:fs%cfg%imaxo_,fs%cfg%jmino_:fs%cfg%jmaxo_,fs%cfg%kmino_:fs%cfg%kmaxo_))
+      allocate(dvdt(fs%cfg%imino_:fs%cfg%imaxo_,fs%cfg%jmino_:fs%cfg%jmaxo_,fs%cfg%kmino_:fs%cfg%kmaxo_))
+      allocate(dwdt(fs%cfg%imino_:fs%cfg%imaxo_,fs%cfg%jmino_:fs%cfg%jmaxo_,fs%cfg%kmino_:fs%cfg%kmaxo_))
+      
+      ! Some time stuff - unclear where to put this
+      ntime=1
+      time=0.0_WP
+      max_time=1.0_WP
+      dt=0.01_WP
+      
+      do while (time.lt.max_time)
+         ! Evaluate velocity rate of change
+         call fs%get_dmomdt(dudt,dvdt,dwdt)
+         ! Explicit Euler advancement
+         fs%U=fs%U+dt*dudt/fs%rho
+         fs%V=fs%V+dt*dvdt/fs%rho
+         fs%W=fs%W+dt*dwdt/fs%rho
+         ! Increment time
+         ntime=ntime+1
+         time = time+dt
+         print*,'time step',ntime,time
+      end do
+      
+      ! Deallocate work arrays
+      deallocate(dudt,dvdt,dwdt)
       
    end subroutine simulation_run
    

@@ -1,4 +1,4 @@
-f90EXE_sources += main.f90 geometry.f90 simulation.f90
+f90EXE_sources += main.f90 geometry.f90 simulation.f90 time_info.f90
 
 INCLUDE_LOCATIONS += $(NGA_HOME)/src/core
 VPATH_LOCATIONS   += $(NGA_HOME)/src/core
