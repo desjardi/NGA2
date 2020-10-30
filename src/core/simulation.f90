@@ -41,7 +41,6 @@ contains
          call fs%psolv%init_solver(amg)
          ! Check solver objects
          call fs%print()
-         call fs%psolv%print()
       end block create_solver
       
       
@@ -71,6 +70,7 @@ contains
          call fs%psolv%solve()
          ! Copy back to pressure
          fs%P=fs%psolv%sol
+         call fs%psolv%print()
          ! Output to ensight
          call ens_out%write_data(0.0_WP)
       end block test_pressure_solver

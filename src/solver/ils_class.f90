@@ -94,6 +94,9 @@ contains
       self%cfg=>cfg
       self%name=trim(adjustl(name))
       
+      ! Zero out some info
+      self%it=0; self%aerr=0.0_WP; self%rerr=0.0_WP
+      
       ! Set up stencil size and map
       self%nst=7; if (present(nst)) self%nst=nst
       allocate(self%stc(1:self%nst,1:3)); self%stc=0
@@ -140,9 +143,10 @@ contains
          call HYPRE_IJVectorGetObject    (this%hypre_sol,this%parse_sol,ierr)
          ! Create a HYPRE AMG solver
          call HYPRE_BoomerAMGCreate        (this%hypre_solver,ierr)
-         call HYPRE_BoomerAMGSetPrintLevel (this%hypre_solver,0,ierr)            ! print solve info + parameters
-         call HYPRE_BoomerAMGSetInterpType (this%hypre_solver,3,ierr)            ! interpolation
-         call HYPRE_BoomerAMGSetCoarsenType(this%hypre_solver,6,ierr)            ! Falgout=6 (old default); PMIS=8 and HMIS=10 (recommended)
+         call HYPRE_BoomerAMGSetPrintLevel (this%hypre_solver,0,ierr)            ! print solve info + parameters (3 from all, 0 for none)
+         call HYPRE_BoomerAMGSetInterpType (this%hypre_solver,6,ierr)            ! interpolation interp is 6
+         call HYPRE_BoomerAMGSetCoarsenType(this%hypre_solver,10,ierr)            ! Falgout=6 (old default); PMIS=8 and HMIS=10 (recommended)
+         call HYPRE_BoomerAMGSetStrongThrshld(this%hypre_solver,0.15_WP,ierr)    ! 0.25 is default
          call HYPRE_BoomerAMGSetRelaxType  (this%hypre_solver,8,ierr)            ! hybrid symmetric Gauss-Seidel/SOR
          call HYPRE_BoomerAMGSetMaxIter    (this%hypre_solver,this%maxit,ierr)   ! maximum nbr of iter
          call HYPRE_BoomerAMGSetTol        (this%hypre_solver,this%rcvg ,ierr)   ! convergence tolerance
@@ -318,7 +322,7 @@ contains
       call HYPRE_IJVectorAssemble (this%hypre_sol,ierr)
       
       ! Call the solver
-      call HYPRE_BoomerAMGSolve(this%hypre_solver,this%parse_mat,this%parse_rhs,this%parse_sol,ierr)
+      call HYPRE_BoomerAMGSolve           (this%hypre_solver,this%parse_mat,this%parse_rhs,this%parse_sol,ierr)
       call HYPRE_BoomerAMGGetNumIterations(this%hypre_solver,this%it  ,ierr)
       call HYPRE_BoomerAMGGetFinalReltvRes(this%hypre_solver,this%rerr,ierr)
       
@@ -352,12 +356,14 @@ contains
          select case (this%method)
          case (rbgs)
             write(output_unit,'(" > method = ",a)') 'RBGS'
+         case (amg)
+            write(output_unit,'(" > method = ",a)') 'HYPRE AMG'
          case default
             write(output_unit,'(" > method = ",a)') 'unknown'
          end select
-         write(output_unit,'(" >  maxit = ",i0)') this%maxit
-         write(output_unit,'(" >   acvg = ",es12.5)') this%acvg
-         write(output_unit,'(" >   rcvg = ",es12.5)') this%rcvg
+         write(output_unit,'(" >   it/maxit = ",i0,"/",i0)') this%it,this%maxit
+         write(output_unit,'(" >  aerr/acvg = ",es12.5,"/",es12.5)') this%aerr,this%acvg
+         write(output_unit,'(" >  rerr/rcvg = ",es12.5,"/",es12.5)') this%rerr,this%rcvg
       end if
    end subroutine ils_print
    
