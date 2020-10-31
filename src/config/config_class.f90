@@ -221,7 +221,7 @@ contains
       end do
       
       ! Take care of periodicity and domain decomposition
-      call this%isync(this%ind)
+      call this%sync(this%ind)
       
       ! Get local min/max
       this%ind_min=1

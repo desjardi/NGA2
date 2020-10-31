@@ -56,8 +56,9 @@ module pgrid_class
       procedure :: allprint=>pgrid_allprint                                     !< Output grid to screen - blocking and requires all procs...
       procedure :: print   =>pgrid_print                                        !< Output grid to screen
       procedure :: log     =>pgrid_log                                          !< Output grid info to log
-      procedure :: sync    =>pgrid_sync,pgrid_sync_no                           !< Commmunicate inner and periodic boundaries for real(WP)
-      procedure :: isync   =>pgrid_isync                                        !< Commmunicate inner and periodic boundaries for integer
+      generic :: sync=>pgrid_rsync,pgrid_rsync_no,pgrid_isync                    !< Commmunicate inner and periodic boundaries - generic
+      procedure, private :: pgrid_isync                                         !< Commmunicate inner and periodic boundaries for integer
+      procedure, private :: pgrid_rsync,pgrid_rsync_no                          !< Commmunicate inner and periodic boundaries for real(WP)
    end type pgrid
    
    
@@ -381,7 +382,7 @@ contains
    !> Synchronization of overlap cells - uses full no
    !> This routine assumes that the default overlap size is used
    !> It allows the use of pre-allocated buffers for speed
-   subroutine pgrid_sync(this,A)
+   subroutine pgrid_rsync(this,A)
       use mpi_f08
       use parallel, only: MPI_REAL_WP
       implicit none
@@ -459,7 +460,7 @@ contains
          if (isrc.ne.MPI_PROC_NULL) A(:,:,this%kmino_:this%kmin_-1)=this%syncbuf_z2
       end if
       
-   end subroutine pgrid_sync
+   end subroutine pgrid_rsync
    
    
    !> Synchronization of overlap cells - uses full no
@@ -547,7 +548,7 @@ contains
    
    !> Synchronization of overlap cells
    !> This version is capable of handling any overlap size
-   subroutine pgrid_sync_no(this,A,no)
+   subroutine pgrid_rsync_no(this,A,no)
       use mpi_f08
       use parallel, only: MPI_REAL_WP
       implicit none
@@ -639,7 +640,7 @@ contains
          deallocate(buf1,buf2)
       end if
       
-   end subroutine pgrid_sync_no
+   end subroutine pgrid_rsync_no
    
    
 end module pgrid_class

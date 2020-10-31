@@ -1,10 +1,11 @@
 !> Various definitions and tools for running an NGA2 simulation
 module simulation
-   use incomp_class,      only: incomp,dirichlet
    use geometry,          only: cfg
-   use ensight_class,     only: ensight
+   use incomp_class,      only: incomp,dirichlet
    use timetracker_class, only: timetracker
+   use ensight_class,     only: ensight
    use event_class,       only: event
+   use monitor_class,     only: monitor
    implicit none
    private
    
@@ -15,6 +16,9 @@ module simulation
    !> Ensight postprocessing
    type(ensight) :: ens_out
    type(event)   :: ens_evt
+   
+   !> Simulation monitor file
+   type(monitor) :: mfile
    
    public :: simulation_init,simulation_run
    
@@ -109,6 +113,18 @@ contains
          ! Output to ensight
          if (ens_evt%occurs()) call ens_out%write_data(time%t)
       end block test_pressure_solver
+      
+      
+      ! Create a monitor file
+      create_monitor: block
+         ! Create monitor
+         mfile=monitor('simulation',fs%cfg%amRoot)
+         ! Add time info first
+         call mfile%add_column(time%n,'Timestep')
+         call mfile%add_column(time%t,'Time')
+         ! Write it out
+         call mfile%write()
+      end block create_monitor
       
       
    end subroutine simulation_init

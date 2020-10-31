@@ -13,9 +13,9 @@ module monitor_class
    
    !> Preset some length and formats for the columns
    integer,          parameter :: col_len=14
-   character(len=*), parameter :: f1='( a12  )'
-   character(len=*), parameter :: f2='( i12  )'
-   character(len=*), parameter :: f3='(es12.5)'
+   character(len=*), parameter :: aformat='(a12)'
+   character(len=*), parameter :: iformat='(i12)'
+   character(len=*), parameter :: rformat='(es12.5)'
    
    
    !> Type for column list
@@ -29,6 +29,8 @@ module monitor_class
    
    !> Definition of monitor object
    type :: monitor
+      ! Assign a process responsible for writing
+      logical :: amRoot                                                  !< Root is in charge of writing
       ! Data to dump
       integer :: ncol                                                    !< Number of columns to output
       type(column), pointer :: first_col                                 !< Data to dump
@@ -38,7 +40,8 @@ module monitor_class
       ! First dump or not
       logical :: isfirst                                                 !< Is it our first time dumping this file?
    contains
-      procedure :: add_column=>add_column_real,add_column_integer        !< Add a column to the monitor file
+      generic :: add_column=>add_column_real,add_column_integer          !< Add a column to the monitor file
+      procedure, private :: add_column_real,add_column_integer
       procedure :: write                                                 !< Writes the content of the monitor object to a file
       !procedure :: write_header                                          !< Writes the header of the monitor object to a file
    end type monitor
@@ -54,15 +57,17 @@ contains
    
    
    !> Default constructor for monitor object
-   function constructor(name) result(self)
-      use parallel, only: amRoot
+   function constructor(name,amRoot) result(self)
       implicit none
       type(monitor) :: self
       character(len=*), intent(in) :: name
+      logical, intent(in) :: amRoot
       integer :: ierr
-      ! Set the name of the monitor file and root opens it
+      ! Set root process
+      self%amRoot=amRoot
+      ! Set the name of the monitor file and open it
       self%name=trim(adjustl(name))
-      if (amRoot) open(newunit=self%iunit,file='monitor/'//trim(self%name),form='formatted',iostat=ierr,status='replace')
+      if (self%amRoot) open(newunit=self%iunit,file='monitor/'//trim(self%name),form='formatted',iostat=ierr,status='replace')
       ! Set number of columns to zero for now
       self%ncol=0
       self%first_col=>NULL()
@@ -76,6 +81,11 @@ contains
       implicit none
       class(monitor), intent(inout) :: this
       type(column), pointer :: my_col
+      character(len=str_long) :: line
+      integer :: icol
+      
+      ! Only root works here
+      if (.not.this%amRoot) return
       
       ! Check if we need to write out the header
       if (this%isfirst) then
@@ -83,8 +93,24 @@ contains
          this%isfirst=.false.
       end if
       
-      ! Write out our data
+      ! Write out all columns to an temporary line
+      my_col=>this%first_col
+      icol=0
+      do while (associated(my_col))
+         ! Write that column - integer or real
+         if (associated(my_col%iptr)) write(line(1+icol*col_len:),iformat) my_col%iptr
+         if (associated(my_col%rptr)) write(line(1+icol*col_len:),rformat) my_col%rptr
+         ! Increment column counter
+         icol=icol+1
+         ! Move to the next column
+         my_col=>my_col%next
+      end do
       
+      ! Dump the line tp the file
+      write(this%iunit,'(a)') trim(line)
+      
+      ! Flush file
+      call flush(this%iunit)
       
    end subroutine write
    
