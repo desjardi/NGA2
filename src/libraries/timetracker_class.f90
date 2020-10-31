@@ -57,14 +57,13 @@ contains
    
    !> Time increment
    subroutine increment(this)
-      use mpi_f08,  only: MPI_WTIME
-      use parallel, only: wtinit
+      use parallel, only: wtinit,parallel_time
       implicit none
       class(timetracker), intent(inout) :: this
       this%told=this%t
       this%t=this%t+this%dt
       this%n=this%n+1
-      this%wt=MPI_WTIME()-wtinit
+      this%wt=parallel_time()-wtinit
    end subroutine increment
    
    
