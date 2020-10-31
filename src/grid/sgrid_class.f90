@@ -70,7 +70,7 @@ contains
    
    !> Constructor for a serial grid object based on NGA2 new grid file
    function construct_from_file(no,file,name) result(self)
-      use monitor, only: die
+      use messager, only: die
       implicit none
       type(sgrid) :: self
       integer, intent(in) :: no
@@ -105,8 +105,8 @@ contains
    
    !> Constructor for a serial grid object
    function construct_from_args(coord,no,x,y,z,xper,yper,zper,name) result(self)
-      use monitor, only: die
-      use param,   only: verbose
+      use messager, only: die
+      use param,    only: verbose
       implicit none
       type(sgrid) :: self
       integer,  intent(in) :: coord
@@ -299,7 +299,7 @@ contains
    !> Print out a serial grid to log
    subroutine sgrid_log(this)
       use parallel, only: amRoot
-      use monitor,  only: log
+      use messager, only: log
       use string,   only: str_long
       implicit none
       class(sgrid), intent(in) :: this
@@ -322,8 +322,8 @@ contains
    
    !> Output a serial grid object to a file
    subroutine sgrid_write(this,file)
-      use monitor, only: die,log
-      use param,   only: verbose
+      use messager, only: die,log
+      use param,    only: verbose
       implicit none
       class(sgrid), intent(in) :: this
       character(len=*), intent(in) :: file

@@ -63,7 +63,7 @@ contains
    
    !> Constructor for an empty datafile object
    function datafile_from_args(pg,filename,nval,nvar) result(self)
-      use monitor,  only: die
+      use messager, only: die
       implicit none
       type(datafile) :: self
       class(pgrid), target, intent(in) :: pg
@@ -94,7 +94,7 @@ contains
    !> Constructor for a datafile object based on an existing file
    function datafile_from_file(pg,fdata) result(self)
       use param,    only: verbose
-      use monitor,  only: die
+      use messager, only: die
       use parallel, only: info_mpiio,MPI_REAL_WP
       use mpi_f08
       implicit none
@@ -163,7 +163,7 @@ contains
    !> Write a datafile object to a file
    subroutine datafile_write(this,fdata)
       use param,    only: verbose
-      use monitor,  only: die
+      use messager, only: die
       use parallel, only: info_mpiio,MPI_REAL_WP
       use mpi_f08
       implicit none
@@ -239,7 +239,7 @@ contains
    
    !> Print datafile content to the log
    subroutine datafile_log(this,text)
-      use monitor,  only: log
+      use messager, only: log
       use string,   only: str_long
       implicit none
       class(datafile), intent(in) :: this
@@ -271,7 +271,7 @@ contains
    
    !> Push data to a val
    subroutine datafile_pushval(this,name,val)
-      use monitor, only: die
+      use messager, only: die
       implicit none
       class(datafile), intent(inout) :: this
       character(len=*), intent(in) :: name
@@ -288,7 +288,7 @@ contains
    
    !> Pull data from a val
    subroutine datafile_pullval(this,name,val)
-      use monitor, only: die
+      use messager, only: die
       implicit none
       class(datafile), intent(in) :: this
       character(len=*), intent(in) :: name
@@ -319,7 +319,7 @@ contains
    
    !> Push data to a var
    subroutine datafile_pushvar(this,name,var)
-      use monitor, only: die
+      use messager, only: die
       implicit none
       class(datafile), intent(inout) :: this
       character(len=*), intent(in) :: name
@@ -336,7 +336,7 @@ contains
    
    !> Pull data from a var
    subroutine datafile_pullvar(this,name,var)
-      use monitor, only: die
+      use messager, only: die
       implicit none
       class(datafile), intent(in) :: this
       character(len=*), intent(in) :: name

@@ -83,7 +83,7 @@ contains
    
    !> Constructor for an ILS object
    function ils_from_args(cfg,name,nst) result(self)
-      use monitor, only: die
+      use messager, only: die
       implicit none
       type(ils) :: self
       class(config), target, intent(in) :: cfg
@@ -111,7 +111,7 @@ contains
    
    !> Initialize solver - done at start-up (probably only once?)
    subroutine init_solver(this,method)
-      use monitor, only: die
+      use messager, only: die
       implicit none
       class(ils), intent(inout) :: this
       integer, intent(in) :: method
@@ -163,7 +163,7 @@ contains
    
    !> Update solver - done everytime the operator changes
    subroutine update_solver(this)
-      use monitor, only: die
+      use messager, only: die
       implicit none
       class(ils), intent(inout) :: this
       integer :: i,j,k,count1,count2,st,ierr
@@ -222,7 +222,7 @@ contains
    
    !> Solve the linear system iteratively
    subroutine solve(this)
-      use monitor, only: die
+      use messager, only: die
       implicit none
       class(ils), intent(inout) :: this
       ! Select appropriate solver

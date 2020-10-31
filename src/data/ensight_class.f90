@@ -56,7 +56,7 @@ contains
    
    !> Constructor for an empty ensight object
    function construct_ensight(cfg,name) result(self)
-      use monitor,  only: die
+      use messager, only: die
       use mpi_f08,  only: MPI_BCAST,MPI_INTEGER
       use parallel, only: MPI_REAL_WP
       implicit none
@@ -179,7 +179,7 @@ contains
    !> Output all data in the object
    subroutine write_data(this,time)
       use precision, only: SP
-      use monitor,   only: die
+      use messager,  only: die
       use parallel,  only: info_mpiio,MPI_REAL_SP
       use mpi_f08
       implicit none
@@ -350,7 +350,7 @@ contains
    !> Geometry output to a file in parallel
    subroutine write_geom(this)
       use precision, only: SP
-      use monitor,   only: die
+      use messager,  only: die
       use parallel,  only: info_mpiio
       use mpi_f08
       implicit none

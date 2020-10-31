@@ -39,7 +39,7 @@ contains
    
    !> Initialize the module handling user parameters
    subroutine param_init
-      use monitor, only: die
+      use messager, only: die
       implicit none
       character(len=str_long) :: arg,val
       character(len=str_medium), dimension(:), allocatable :: files
@@ -113,7 +113,7 @@ contains
    
    !> Read & parse parameter files
    subroutine param_parsefile(input)
-      use monitor, only: die
+      use messager, only: die
       implicit none
       character(len=*) :: input !< This is the name of the file to be read and parsed.
       integer :: iunit,ierr,limiter,nlines,i,j,ntags,comment
@@ -191,7 +191,7 @@ contains
    !>   - if param has not been found yet, add it
    !>   .
    subroutine param_add(tag,val,src)
-      use monitor, only: warn
+      use messager, only: warn
       implicit none
       character(len=*), intent(in) :: tag
       character(len=*), intent(in) :: val
@@ -279,7 +279,7 @@ contains
    
    !> Get size of the parameter value for reading arrays
    function param_getsize(tag,short) result(count)
-      use monitor, only: die
+      use messager, only: die
       implicit none
       character(len=*), intent(in)           :: tag
       character(len=*), intent(in), optional :: short
@@ -316,7 +316,7 @@ contains
    
    !> Read integer value associated with parameter tag
    subroutine param_readint(tag,val,short,default)
-      use monitor, only: die
+      use messager, only: die
       implicit none
       character(len=*), intent(in)            :: tag
       integer         , intent(out)           :: val
@@ -359,7 +359,7 @@ contains
    
    !> Read logical value associated with parameter tag
    subroutine param_readlogical(tag,val,short,default)
-      use monitor, only: die
+      use messager, only: die
       implicit none
       character(len=*), intent(in)            :: tag
       logical         , intent(out)           :: val
@@ -402,7 +402,7 @@ contains
    
    !> Read real value associated with parameter tag
    subroutine param_readfloat(tag,val,short,default)
-      use monitor, only: die
+      use messager,  only: die
       use precision, only: WP
       implicit none
       character(len=*), intent(in)            :: tag
@@ -446,7 +446,7 @@ contains
    
    !> Read character value associated with parameter tag
    subroutine param_readchar(tag,val,short,default)
-      use monitor, only: die
+      use messager, only: die
       implicit none
       character(len=*), intent(in)            :: tag
       character(len=*), intent(out)           :: val
@@ -489,7 +489,7 @@ contains
    
    !> Read integer array value associated with parameter tag
    subroutine param_readintarray(tag,val,short)
-      use monitor, only: die
+      use messager, only: die
       implicit none
       character(len=*), intent(in)            :: tag
       integer, dimension(:), intent(out)      :: val
@@ -519,7 +519,7 @@ contains
    
    !> Read float array value associated with parameter tag
    subroutine param_readfloatarray(tag,val,short)
-      use monitor, only: die
+      use messager,  only: die
       use precision, only: WP
       implicit none
       character(len=*), intent(in)            :: tag
@@ -550,7 +550,7 @@ contains
    
    !> Read float 2D array value associated with parameter tag
    subroutine param_readfloatarray2D(tag,val,short)
-      use monitor, only: die
+      use messager,  only: die
       use precision, only: WP
       implicit none
       character(len=*), intent(in)            :: tag
@@ -581,7 +581,7 @@ contains
    
    !> Read character array value associated with parameter tag
    subroutine param_readchararray(tag,val,short)
-      use monitor, only: die
+      use messager, only: die
       implicit none
       character(len=*), intent(in)                :: tag
       character(len=*), dimension(:), intent(out) :: val
@@ -645,7 +645,7 @@ contains
    
    !> Print all user-defined parameters if root
    subroutine param_print
-      use monitor,  only: log
+      use messager, only: log
       use parallel, only: amRoot
       implicit none
       integer :: i

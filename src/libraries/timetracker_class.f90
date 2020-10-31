@@ -82,8 +82,8 @@ contains
    
    !> Termination check
    logical function done(this)
-      use monitor, only: log
-      use string,  only: str_long
+      use messager, only: log
+      use string,   only: str_long
       implicit none
       class(timetracker), intent(inout) :: this
       character(len=str_long) :: message

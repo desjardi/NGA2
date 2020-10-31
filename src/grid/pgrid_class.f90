@@ -73,7 +73,7 @@ contains
    !> Partitioned grid constructor from file
    function construct_pgrid_from_file(no,file,grp,decomp) result(self)
       use string,   only: lowercase
-      use monitor,  only: die
+      use messager, only: die
       use param,    only: verbose
       use parallel, only: MPI_REAL_WP
       use mpi_f08
@@ -151,9 +151,9 @@ contains
    
    !> Partitioned grid constructor from sgrid
    function construct_pgrid_from_sgrid(grid,grp,decomp) result(self)
-      use string,  only: lowercase
-      use monitor, only: die
-      use param,   only: verbose
+      use string,   only: lowercase
+      use messager, only: die
+      use param,    only: verbose
       implicit none
       include 'mpif.h'
       
@@ -186,7 +186,7 @@ contains
    !> Prepares the MPI environment for the pgrid
    subroutine pgrid_init_mpi(self)
       use parallel, only: comm
-      use monitor , only: die
+      use messager, only: die
       use mpi_f08
       implicit none
       class(pgrid), intent(inout) :: self
@@ -211,7 +211,7 @@ contains
    
    !> Prepares the domain decomposition of the pgrid
    subroutine pgrid_domain_decomp(self,decomp)
-      use monitor , only: die
+      use messager, only: die
       use parallel, only: MPI_REAL_WP,MPI_REAL_SP
       use mpi_f08
       implicit none
@@ -355,7 +355,7 @@ contains
    
    !> Cheap print of partitioned grid info to log
    subroutine pgrid_log(this)
-      use monitor,     only: log
+      use messager,    only: log
       use string,      only: str_long
       use sgrid_class, only: cartesian,cylindrical,spherical
       implicit none
