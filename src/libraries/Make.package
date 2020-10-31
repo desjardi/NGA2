@@ -1,4 +1,4 @@
-f90EXE_sources += random.f90 precision_$(PREC).f90 string.f90 param.f90 monitor.f90 timetracker_class.f90
+f90EXE_sources += random.f90 precision_$(PREC).f90 string.f90 param.f90 monitor.f90 timetracker_class.f90 event_class.f90
 f90EXE_sources += parallel.f90
 
 INCLUDE_LOCATIONS += $(NGA_HOME)/src/libraries

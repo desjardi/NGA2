@@ -26,7 +26,7 @@ module timetracker_class
    contains
       procedure :: increment                           !< Default method for incrementing time
       procedure :: adjust_dt                           !< Default method for adjusting timestep size
-      procedure :: done                                !< Default terminal check for time integration
+      procedure :: done                                !< Default termination check for time integration
    end type timetracker
    
    
