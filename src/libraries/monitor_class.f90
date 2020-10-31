@@ -81,15 +81,67 @@ contains
       implicit none
       class(monitor), intent(inout) :: this
       type(column), pointer :: my_col
-      character(len=str_long) :: line
-      integer :: icol
+      character(len=str_long)   :: line
+      character(len=str_medium) :: buffer
+      character(len=col_len)    :: col
+      integer :: icol,index1
+      logical :: twolines
       
       ! Only root works here
       if (.not.this%amRoot) return
       
       ! Check if we need to write out the header
       if (this%isfirst) then
-         !call this%write_header()
+         ! Extract the first line, detect if a second line is needed
+         twolines=.false.
+         ! Loop over columns
+         my_col=>this%first_col
+         icol=0
+         do while (associated(my_col))
+            ! Read that column header - first line
+            read(my_col%name,'(a)') buffer
+            index1=index(trim(buffer),' ')
+            if (index1.ne.0.and.index1.lt.col_len-1) then
+               twolines=.true.
+               read(buffer(1:index1),aformat) col
+            else
+               read(buffer,aformat) col
+            end if
+            ! Write to buffer line
+            write(line(1+icol*col_len:),aformat) trim(col)
+            ! Increment column counter
+            icol=icol+1
+            ! Move to the next column
+            my_col=>my_col%next
+         end do
+         ! Dump the first line of header
+         write(this%iunit,'(a)') trim(line)
+         ! Dump second line if needed
+         if (twolines) then
+            line=''
+            ! Loop over columns
+            my_col=>this%first_col
+            icol=0
+            do while (associated(my_col))
+               ! Read that column header - 2nd line
+               read(my_col%name,'(a)') buffer
+               index1=index(trim(buffer),' ')
+               if (index1.ne.0.and.index1.lt.col_len-1) then
+                  read(buffer(index1+1:),aformat) col
+               else
+                  col=''
+               end if
+               ! Write to buffer line
+               write(line(1+icol*col_len:),aformat) trim(col)
+               ! Increment column counter
+               icol=icol+1
+               ! Move to the next column
+               my_col=>my_col%next
+            end do
+            ! Dump the first line of header
+            write(this%iunit,'(a)') trim(line)
+         end if
+         ! No need to dump header again in the future
          this%isfirst=.false.
       end if
       

@@ -153,8 +153,9 @@ contains
          fs%V=fs%V+time%dt*dvdt/fs%rho
          fs%W=fs%W+time%dt*dwdt/fs%rho
          ! Output to ensight
-         print*,'time stamp',time%n,time%t
          if (ens_evt%occurs()) call ens_out%write_data(time%t)
+         ! Write out monitor file
+         call mfile%write()
       end do
       
       ! Deallocate work arrays
