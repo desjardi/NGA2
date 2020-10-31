@@ -4,6 +4,7 @@ module simulation
    use geometry,          only: cfg
    use ensight_class,     only: ensight
    use timetracker_class, only: timetracker
+   use event_class,       only: event
    implicit none
    private
    
@@ -13,6 +14,7 @@ module simulation
    
    !> Ensight postprocessing
    type(ensight) :: ens_out
+   type(event)   :: ens_evt
    
    public :: simulation_init,simulation_run
    
@@ -35,6 +37,7 @@ contains
       use param,     only: param_read
       use ils_class, only: rbgs,amg
       implicit none
+      
       
       ! Create an incompressible flow solver
       create_solver: block
@@ -79,6 +82,9 @@ contains
       create_ensight: block
          ! Create Ensight output from cfg
          ens_out=ensight(cfg,'test')
+         ! Create event for Ensight output
+         ens_evt=event(time,'Ensight output')
+         call param_read('Ensight output period',ens_evt%tper)
          ! Add variables to output
          call ens_out%add_scalar('Pressure',fs%P)
          call ens_out%add_vector('Velocity',fs%U,fs%V,fs%W)
@@ -101,7 +107,7 @@ contains
          fs%P=fs%psolv%sol
          call fs%psolv%print()
          ! Output to ensight
-         call ens_out%write_data(0.0_WP)
+         if (ens_evt%occurs()) call ens_out%write_data(time%t)
       end block test_pressure_solver
       
       
@@ -130,6 +136,9 @@ contains
          fs%U=fs%U+time%dt*dudt/fs%rho
          fs%V=fs%V+time%dt*dvdt/fs%rho
          fs%W=fs%W+time%dt*dwdt/fs%rho
+         ! Output to ensight
+         print*,'time stamp',time%n,time%t
+         if (ens_evt%occurs()) call ens_out%write_data(time%t)
       end do
       
       ! Deallocate work arrays
