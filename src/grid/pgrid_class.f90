@@ -355,7 +355,6 @@ contains
    
    !> Cheap print of partitioned grid info to log
    subroutine pgrid_log(this)
-      use, intrinsic :: iso_fortran_env, only: output_unit
       use monitor,     only: log
       use string,      only: str_long
       use sgrid_class, only: cartesian,cylindrical,spherical

@@ -63,6 +63,7 @@ contains
       ! Initialize time tracker
       initialize_timetracker: block
          time=timetracker()
+         call param_read('Time step size',time%dt)
       end block initialize_timetracker
       
       
@@ -119,21 +120,16 @@ contains
       allocate(dvdt(fs%cfg%imino_:fs%cfg%imaxo_,fs%cfg%jmino_:fs%cfg%jmaxo_,fs%cfg%kmino_:fs%cfg%kmaxo_))
       allocate(dwdt(fs%cfg%imino_:fs%cfg%imaxo_,fs%cfg%jmino_:fs%cfg%jmaxo_,fs%cfg%kmino_:fs%cfg%kmaxo_))
       
-      ! Some time stuff - unclear where to put this
-      !ntime=1
-      !time=0.0_WP
-      !max_time=1.0_WP
-      !dt=0.01_WP
-      
-      do while (time%time.lt.time%max_time)
+      do while (.not.time%done())
+         ! Increment time
+         call time%adjust_dt()
+         call time%increment()
          ! Evaluate velocity rate of change
-         call fs%get_dmomdt(dudt,dvdt,dwdt)
+         !call fs%get_dmomdt(dudt,dvdt,dwdt)
          ! Explicit Euler advancement
          fs%U=fs%U+time%dt*dudt/fs%rho
          fs%V=fs%V+time%dt*dvdt/fs%rho
          fs%W=fs%W+time%dt*dwdt/fs%rho
-         ! Increment time
-         call time%increment()
       end do
       
       ! Deallocate work arrays

@@ -92,11 +92,11 @@ contains
       implicit none
       type(incomp) :: self
       class(config), target, intent(in) :: cfg
-      character(len=*), intent(in) :: name
+      character(len=*), optional :: name
       integer :: i,j,k
       
       ! Set the name for the iterator
-      self%name=trim(adjustl(name))
+      if (present(name)) self%name=trim(adjustl(name))
       
       ! Point to pgrid object
       self%cfg=>cfg

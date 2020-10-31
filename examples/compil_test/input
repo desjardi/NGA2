@@ -16,3 +16,6 @@ Hole dist : 0.004
 # Fluid properties
 Density :		1
 Dynamic viscosity :	0.01
+
+# Integration
+Time step size :	0.01
