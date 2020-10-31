@@ -18,20 +18,20 @@ module monitor_class
    character(len=*), parameter :: f3='(es12.5)'
    
    
-   !> Type for data list
-   type :: mdata
-      type(mdata), pointer :: next
+   !> Type for column list
+   type :: column
+      type(column), pointer :: next
       character(len=str_medium) :: name
       integer , pointer :: iptr
       real(WP), pointer :: rptr
-   end type mdata
+   end type column
    
    
    !> Definition of monitor object
    type :: monitor
       ! Data to dump
       integer :: ncol                                                    !< Number of columns to output
-      type(mdata), pointer :: first_data                                 !< Data to dump
+      type(column), pointer :: first_col                                 !< Data to dump
       ! File information
       integer :: iunit                                                   !< File handle
       character(len=str_medium) :: name                                  !< File name
@@ -39,8 +39,8 @@ module monitor_class
       logical :: isfirst                                                 !< Is it our first time dumping this file?
    contains
       procedure :: add_column=>add_column_real,add_column_integer        !< Add a column to the monitor file
-      !procedure :: write_data                                            !< Writes the content of the monitor object to a file
-      !procedure :: write_head                                            !< Writes the header of the monitor object to a file
+      procedure :: write                                                 !< Writes the content of the monitor object to a file
+      !procedure :: write_header                                          !< Writes the header of the monitor object to a file
    end type monitor
    
    
@@ -65,10 +65,28 @@ contains
       if (amRoot) open(newunit=self%iunit,file='monitor/'//trim(self%name),form='formatted',iostat=ierr,status='replace')
       ! Set number of columns to zero for now
       self%ncol=0
-      self%first_data=>NULL()
+      self%first_col=>NULL()
       ! We haven't yet dumped the file
       self%isfirst=.true.
    end function constructor
+   
+   
+   !> Write out monitor file
+   subroutine write(this)
+      implicit none
+      class(monitor), intent(inout) :: this
+      type(column), pointer :: my_col
+      
+      ! Check if we need to write out the header
+      if (this%isfirst) then
+         !call this%write_header()
+         this%isfirst=.false.
+      end if
+      
+      ! Write out our data
+      
+      
+   end subroutine write
    
    
    !> Add a column to the monitor file - real version
@@ -77,23 +95,23 @@ contains
       class(monitor), intent(inout) :: this
       real(WP), target, intent(in) :: value
       character(len=*), intent(in) :: name
-      type(mdata), pointer :: new_data,last_data
-      ! Create a new real data entry
-      allocate(new_data)
-      new_data%next=>NULL()
-      new_data%name=trim(adjustl(name))
-      new_data%iptr=>NULL()
-      new_data%rptr=>value
+      type(column), pointer :: new_col,last_col
+      ! Create a new real column entry
+      allocate(new_col)
+      new_col%next=>NULL()
+      new_col%name=trim(adjustl(name))
+      new_col%iptr=>NULL()
+      new_col%rptr=>value
       ! Add it to the end of the list
-      if (.not.associated(this%first_data)) then
-         this%first_data=>new_data
+      if (.not.associated(this%first_col)) then
+         this%first_col=>new_col
       else
          ! Move to the end of the list
-         last_data=>this%first_data
-         do while (associated(last_data%next))
-            last_data=>last_data%next
+         last_col=>this%first_col
+         do while (associated(last_col%next))
+            last_col=>last_col%next
          end do
-         last_data%next=>new_data
+         last_col%next=>new_col
       end if
       ! Increment list size
       this%ncol=this%ncol+1
@@ -106,23 +124,23 @@ contains
       class(monitor), intent(inout) :: this
       integer, target, intent(in) :: value
       character(len=*), intent(in) :: name
-      type(mdata), pointer :: new_data,last_data
-      ! Create a new real data entry
-      allocate(new_data)
-      new_data%next=>NULL()
-      new_data%name=trim(adjustl(name))
-      new_data%iptr=>value
-      new_data%rptr=>NULL()
+      type(column), pointer :: new_col,last_col
+      ! Create a new integer column entry
+      allocate(new_col)
+      new_col%next=>NULL()
+      new_col%name=trim(adjustl(name))
+      new_col%iptr=>value
+      new_col%rptr=>NULL()
       ! Add it to the end of the list
-      if (.not.associated(this%first_data)) then
-         this%first_data=>new_data
+      if (.not.associated(this%first_col)) then
+         this%first_col=>new_col
       else
          ! Move to the end of the list
-         last_data=>this%first_data
-         do while (associated(last_data%next))
-            last_data=>last_data%next
+         last_col=>this%first_col
+         do while (associated(last_col%next))
+            last_col=>last_col%next
          end do
-         last_data%next=>new_data
+         last_col%next=>new_col
       end if
       ! Increment list size
       this%ncol=this%ncol+1
