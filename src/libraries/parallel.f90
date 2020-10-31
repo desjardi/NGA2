@@ -1,10 +1,13 @@
 !> Basic parallel environment - global communicator, rank, root...
 !> Standard notation is used (rank goes from 0 to nproc-1)
 module parallel
+   use precision, only: WP
    use mpi_f08
    implicit none
    private
    
+   !> Start-up wallclock time
+   real(WP), public, protected :: wtstart
    !> Number of processors
    integer, public, protected :: nproc
    !> Rank of this processor
@@ -36,6 +39,7 @@ contains
       
       ! Initialize a first basic MPI environment
       call MPI_INIT(ierr)
+      call MPI_WTIME(wtstart,ierr)
       call MPI_COMM_RANK(MPI_COMM_WORLD,rank,ierr)
       call MPI_COMM_SIZE(MPI_COMM_WORLD,nproc,ierr)
       call MPI_COMM_GROUP(MPI_COMM_WORLD,group,ierr)

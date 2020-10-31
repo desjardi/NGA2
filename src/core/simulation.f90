@@ -1,13 +1,15 @@
 !> Various definitions and tools for running an NGA2 simulation
 module simulation
-   use incomp_class,  only: incomp,dirichlet
-   use geometry,      only: cfg
-   use ensight_class, only: ensight
+   use incomp_class,      only: incomp,dirichlet
+   use geometry,          only: cfg
+   use ensight_class,     only: ensight
+   use timetracker_class, only: timetracker
    implicit none
    private
    
-   !> Single flow solver
-   type(incomp), public :: fs
+   !> Single incompressible flow solver and corresponding time tracker
+   type(incomp),      public :: fs
+   type(timetracker), public :: time
    
    !> Ensight postprocessing
    type(ensight) :: ens_out
@@ -29,10 +31,9 @@ contains
    
    !> Initialization of problem solver
    subroutine simulation_init
-      use param,     only: param_read
       use precision, only: WP
+      use param,     only: param_read
       use ils_class, only: rbgs,amg
-      !use ensight_class, only: ensight
       implicit none
       
       ! Create an incompressible flow solver
@@ -53,6 +54,26 @@ contains
       end block create_solver
       
       
+      ! Initialize boundary conditions
+      initialize_bc: block
+         call fs%add_bcond('stokes',dirichlet,yplus_locator)
+      end block initialize_bc
+      
+      
+      ! Initialize time tracker
+      initialize_timetracker: block
+         time=timetracker()
+      end block initialize_timetracker
+      
+      
+      ! Initialize our velocity field
+      initialize_velocity: block
+         fs%U=0.0_WP
+         fs%V=0.0_WP
+         fs%W=0.0_WP
+      end block initialize_velocity
+      
+      
       ! Add Ensight output
       create_ensight: block
          ! Create Ensight output from cfg
@@ -60,8 +81,6 @@ contains
          ! Add variables to output
          call ens_out%add_scalar('Pressure',fs%P)
          call ens_out%add_vector('Velocity',fs%U,fs%V,fs%W)
-         ! Try outputting ensight data
-         !call ens_out%write_data(0.0_WP)
       end block create_ensight
       
       
@@ -85,20 +104,6 @@ contains
       end block test_pressure_solver
       
       
-      ! Initialize our velocity field
-      initialize_velocity: block
-         fs%U=0.0_WP
-         fs%V=0.0_WP
-         fs%W=0.0_WP
-      end block initialize_velocity
-      
-      
-      ! Initialize boundary conditions
-      initialize_bc: block
-         call fs%add_bcond('stokes',dirichlet,yplus_locator)
-      end block initialize_bc
-      
-      
    end subroutine simulation_init
    
    
@@ -106,7 +111,6 @@ contains
    !> Perform an NGA2 simulation
    subroutine simulation_run
       use precision, only: WP
-      use time_info
       implicit none
       real(WP), dimension(:,:,:), allocatable :: dudt,dvdt,dwdt
       
@@ -116,22 +120,20 @@ contains
       allocate(dwdt(fs%cfg%imino_:fs%cfg%imaxo_,fs%cfg%jmino_:fs%cfg%jmaxo_,fs%cfg%kmino_:fs%cfg%kmaxo_))
       
       ! Some time stuff - unclear where to put this
-      ntime=1
-      time=0.0_WP
-      max_time=1.0_WP
-      dt=0.01_WP
+      !ntime=1
+      !time=0.0_WP
+      !max_time=1.0_WP
+      !dt=0.01_WP
       
-      do while (time.lt.max_time)
+      do while (time%time.lt.time%max_time)
          ! Evaluate velocity rate of change
          call fs%get_dmomdt(dudt,dvdt,dwdt)
          ! Explicit Euler advancement
-         fs%U=fs%U+dt*dudt/fs%rho
-         fs%V=fs%V+dt*dvdt/fs%rho
-         fs%W=fs%W+dt*dwdt/fs%rho
+         fs%U=fs%U+time%dt*dudt/fs%rho
+         fs%V=fs%V+time%dt*dvdt/fs%rho
+         fs%W=fs%W+time%dt*dwdt/fs%rho
          ! Increment time
-         ntime=ntime+1
-         time = time+dt
-         print*,'time step',ntime,time
+         call time%increment()
       end do
       
       ! Deallocate work arrays
