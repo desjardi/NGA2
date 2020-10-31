@@ -137,7 +137,7 @@ contains
       implicit none
       class(ensight), intent(inout) :: this
       character(len=*), intent(in) :: name
-      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), target :: scalar
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), target, intent(in) :: scalar
       type(scl), pointer :: new_scl
       ! Prepare new scalar
       allocate(new_scl)
@@ -157,9 +157,9 @@ contains
       implicit none
       class(ensight), intent(inout) :: this
       character(len=*), intent(in) :: name
-      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), target :: vectx
-      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), target :: vecty
-      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), target :: vectz
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), target, intent(in) :: vectx
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), target, intent(in) :: vecty
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), target, intent(in) :: vectz
       type(vct), pointer :: new_vct
       ! Prepare new vector
       allocate(new_vct)
@@ -212,9 +212,7 @@ contains
          end do
          this%ntime=n; allocate(temp_time(1:this%ntime))
          temp_time=[this%time(1:this%ntime-1),time]
-         if (allocated(this%time)) deallocate(this%time)
-         allocate(this%time(1:this%ntime)); this%time=temp_time
-         deallocate(temp_time)
+         call move_alloc(temp_time,this%time)
       end if
       
       ! Prepare the SP buffer
