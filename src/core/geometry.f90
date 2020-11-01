@@ -79,12 +79,13 @@ contains
       
       ! Create masks for this config
       create_walls: block
-         real(WP) :: hole_size,hole_dist
+         real(WP) :: hole_size,hole_dist,hole_depth
          integer :: i,j,k
          
          ! Read in wall definitions
          call param_read('Hole size',hole_size)
          call param_read('Hole dist',hole_dist)
+         call param_read('Hole depth',hole_depth)
          
          ! Write VF array - includes the overlap here
          do k=cfg%kmino_,cfg%kmaxo_
@@ -93,14 +94,14 @@ contains
                   if (cfg%ym(j).gt.0.0_WP) then
                      ! Above the plate
                      cfg%VF(i,j,k)=1.0_WP
-                  else if (cfg%ym(j).lt.-0.018_WP) then
+                  else if (cfg%ym(j).lt.-hole_depth) then
                      ! Below the plate
                      cfg%VF(i,j,k)=1.0_WP
                   else
                      ! This is the plate
                      cfg%VF(i,j,k)=0.0_WP
                      ! Now perforate it
-                     if (modulo(cfg%xm(i)-0.5_WP*hole_size,hole_dist).lt.hole_size.and.modulo(cfg%zm(k)-0.5_WP*hole_size,hole_dist).lt.hole_size) cfg%VF(i,j,k)=1.0_WP
+                     if (abs(mod(cfg%xm(i),hole_dist)).lt.0.5_WP*hole_size.and.abs(mod(cfg%zm(k),hole_dist)).lt.0.5_WP*hole_size) cfg%VF(i,j,k)=1.0_WP
                   end if
                end do
             end do

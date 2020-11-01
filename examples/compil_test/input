@@ -10,12 +10,13 @@ ny :	100
 nz :	100
 
 # Wall geometry
-Hole size : 0.02	!0.002
-Hole dist : 10		!0.004
+Hole size : 0.01	!0.002
+Hole dist : 2		!0.004
+Hole depth: 0.01	!0.018
 
 # Fluid properties
 Density :		1
-Dynamic viscosity :	1e-5
+Dynamic viscosity :	1e-4
 
 # Integration
 Time step size :	1e-4
