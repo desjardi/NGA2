@@ -57,11 +57,11 @@ contains
    
    
    !> Default constructor for monitor object
-   function constructor(name,amRoot) result(self)
+   function constructor(amRoot,name) result(self)
       implicit none
       type(monitor) :: self
-      character(len=*), intent(in) :: name
       logical, intent(in) :: amRoot
+      character(len=*), intent(in) :: name
       integer :: ierr
       ! Set root process
       self%amRoot=amRoot

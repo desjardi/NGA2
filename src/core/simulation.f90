@@ -63,13 +63,13 @@ contains
       
       ! Initialize boundary conditions
       initialize_bc: block
-         call fs%add_bcond('stokes',dirichlet,yplus_locator)
+         call fs%add_bcond('inflow',dirichlet,yplus_locator)
       end block initialize_bc
       
       
       ! Initialize time tracker
       initialize_timetracker: block
-         time=timetracker()
+         time=timetracker(fs%cfg%amRoot)
          call param_read('Time step size',time%dt)
       end block initialize_timetracker
       
@@ -109,16 +109,15 @@ contains
          call fs%psolv%solve()
          ! Copy back to pressure
          fs%P=fs%psolv%sol
-         call fs%psolv%print()
          ! Output to ensight
-         if (ens_evt%occurs()) call ens_out%write_data(time%t)
+         !if (ens_evt%occurs()) call ens_out%write_data(time%t)
       end block test_pressure_solver
       
       
       ! Create a monitor file
       create_monitor: block
          ! Create monitor
-         mfile=monitor('simulation',fs%cfg%amRoot)
+         mfile=monitor(fs%cfg%amRoot,'simulation')
          ! Add time info first
          call mfile%add_column(time%n,'Timestep')
          call mfile%add_column(time%t,'Time')
@@ -142,6 +141,9 @@ contains
       allocate(dvdt(fs%cfg%imino_:fs%cfg%imaxo_,fs%cfg%jmino_:fs%cfg%jmaxo_,fs%cfg%kmino_:fs%cfg%kmaxo_))
       allocate(dwdt(fs%cfg%imino_:fs%cfg%imaxo_,fs%cfg%jmino_:fs%cfg%jmaxo_,fs%cfg%kmino_:fs%cfg%kmaxo_))
       
+      call ens_out%add_vector('dveldt',dudt,dvdt,dwdt)
+      
+      ! Perform explicit Euler time integration
       do while (.not.time%done())
          ! Increment time
          call time%adjust_dt()
@@ -153,10 +155,13 @@ contains
          fs%V=fs%V+time%dt*dvdt/fs%rho
          fs%W=fs%W+time%dt*dwdt/fs%rho
          ! Output to ensight
-         if (ens_evt%occurs()) call ens_out%write_data(time%t)
+         !if (ens_evt%occurs()) call ens_out%write_data(time%t)
+         call ens_out%write_data(time%t)
          ! Write out monitor file
          call mfile%write()
+         
          stop
+         
       end do
       
       ! Deallocate work arrays

@@ -16,6 +16,7 @@ module timetracker_class
    
    !> Timetracker object
    type :: timetracker
+      logical :: amRoot                                !< Timetracker needs to know who's the boss
       character(len=str_medium) :: name='UNNAMED_TIME' !< Name for timetracker
       integer  ::   n,  nmax                           !< Current and max timestep
       real(WP) ::   t,  tmax                           !< Current and max time
@@ -27,6 +28,8 @@ module timetracker_class
       procedure :: increment                           !< Default method for incrementing time
       procedure :: adjust_dt                           !< Default method for adjusting timestep size
       procedure :: done                                !< Default termination check for time integration
+      procedure :: print=>timetracker_print            !< Output timetracker info to screen
+      procedure :: log  =>timetracker_log              !< Output timetracker info to log
    end type timetracker
    
    
@@ -40,10 +43,12 @@ contains
    
    
    !> Constructor for timetracker object
-   function constructor(name) result(self)
+   function constructor(amRoot,name) result(self)
       implicit none
       type(timetracker) :: self
+      logical, intent(in) :: amRoot
       character(len=*), optional :: name
+      self%amRoot=amRoot
       if (present(name)) self%name=trim(adjustl(name))
       self%n  =0;        self%nmax=huge(  self%nmax)
       self%t  =0.0_WP;   self%tmax=huge(  self%tmax)
@@ -57,13 +62,18 @@ contains
    
    !> Time increment
    subroutine increment(this)
+      use param,    only: verbose
       use parallel, only: wtinit,parallel_time
       implicit none
       class(timetracker), intent(inout) :: this
+      ! Move to next time step
       this%told=this%t
       this%t=this%t+this%dt
       this%n=this%n+1
       this%wt=parallel_time()-wtinit
+      ! If verbose run, log and or print info
+      if (verbose.gt.0) call this%log
+      if (verbose.gt.1) call this%print
    end subroutine increment
    
    
@@ -103,6 +113,40 @@ contains
          write(message,'(" Timetracker [",a,"] reached maximum wallclock time allowed ")') trim(this%name); call log(message)
       end if
    end function done
+   
+   
+   !> Log timetracker info
+   subroutine timetracker_log(this)
+      use string,   only: str_long
+      use messager, only: log
+      implicit none
+      class(timetracker), intent(in) :: this
+      character(len=str_long) :: message
+      if (this%amRoot) then
+         write(message,'("Timetracker [",a,"] status")') trim(this%name); call log(message)
+         write(message,'(" >   n/  nmax = ",i0,"/",i0)')         this%n,this%nmax; call log(message)
+         write(message,'(" >   t/  tmax = ",es12.5,"/",es12.5)') this%t,this%tmax; call log(message)
+         write(message,'(" >  dt/ dtmax = ",es12.5,"/",es12.5)') this%dt,this%dtmax; call log(message)
+         write(message,'(" > cfl/cflmax = ",es12.5,"/",es12.5)') this%cfl,this%cflmax; call log(message)
+         write(message,'(" >  wt/ wtmax = ",es12.5,"/",es12.5)') this%wt,this%wtmax; call log(message)
+      end if
+   end subroutine timetracker_log
+   
+   
+   !> Print out timetracker info
+   subroutine timetracker_print(this)
+      use, intrinsic :: iso_fortran_env, only: output_unit
+      implicit none
+      class(timetracker), intent(in) :: this
+      if (this%amRoot) then
+         write(output_unit,'("Timetracker [",a,"] status")') trim(this%name)
+         write(output_unit,'(" >   n/  nmax = ",i0,"/",i0)')         this%n,this%nmax
+         write(output_unit,'(" >   t/  tmax = ",es12.5,"/",es12.5)') this%t,this%tmax
+         write(output_unit,'(" >  dt/ dtmax = ",es12.5,"/",es12.5)') this%dt,this%dtmax
+         write(output_unit,'(" > cfl/cflmax = ",es12.5,"/",es12.5)') this%cfl,this%cflmax
+         write(output_unit,'(" >  wt/ wtmax = ",es12.5,"/",es12.5)') this%wt,this%wtmax
+      end if
+   end subroutine timetracker_print
    
    
 end module timetracker_class

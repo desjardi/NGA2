@@ -52,6 +52,7 @@ module ils_class
       
    contains
       procedure :: print=>ils_print                                   !< Print ILS object info
+      procedure :: log  =>ils_log                                     !< Log ILS object info
       procedure :: init_solver                                        !< Solver initialization (at start-up)
       procedure :: update_solver                                      !< Solver update (every time the operator changes)
       procedure :: solve                                              !< Equation solver
@@ -223,6 +224,7 @@ contains
    !> Solve the linear system iteratively
    subroutine solve(this)
       use messager, only: die
+      use param,    only: verbose
       implicit none
       class(ils), intent(inout) :: this
       ! Select appropriate solver
@@ -234,6 +236,9 @@ contains
       case default
          call die('[ils solve] Unknown solution method')
       end select
+      ! If verbose run, log and or print info
+      if (verbose.gt.0) call this%log
+      if (verbose.gt.1) call this%print
    end subroutine solve
    
    
@@ -344,6 +349,30 @@ contains
       deallocate(rhs,sol,ind)
       
    end subroutine solve_hypre_amg
+   
+   
+   !> Log ILS info
+   subroutine ils_log(this)
+      use string,   only: str_long
+      use messager, only: log
+      implicit none
+      class(ils), intent(in) :: this
+      character(len=str_long) :: message
+      if (this%cfg%amRoot) then
+         write(message,'("Iterative Linear Solver [",a,"] for config [",a,"]")') trim(this%name),trim(this%cfg%name); call log(message)
+         select case (this%method)
+         case (rbgs)
+            write(message,'(" > method = ",a)') 'RBGS'; call log(message)
+         case (amg)
+            write(message,'(" > method = ",a)') 'HYPRE AMG'; call log(message)
+         case default
+            write(message,'(" > method = ",a)') 'unknown'; call log(message)
+         end select
+         write(message,'(" >   it/maxit = ",i0,"/",i0)') this%it,this%maxit; call log(message)
+         write(message,'(" >  aerr/acvg = ",es12.5,"/",es12.5)') this%aerr,this%acvg; call log(message)
+         write(message,'(" >  rerr/rcvg = ",es12.5,"/",es12.5)') this%rerr,this%rcvg; call log(message)
+      end if
+   end subroutine ils_log
    
    
    !> Print ILS info to the screen
