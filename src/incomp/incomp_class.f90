@@ -162,198 +162,222 @@ contains
       class(incomp), intent(inout) :: this
       integer :: i,j,k
       real(WP) :: delta
+      real(WP), dimension(:,:,:), allocatable :: VF
+      
+      ! Start by extending the VF array by one cell
+      allocate(VF(this%cfg%imino_-1:this%cfg%imaxo_+1,this%cfg%jmino_-1:this%cfg%jmaxo_+1,this%cfg%kmino_-1:this%cfg%kmaxo_+1))
+      VF(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_)=this%cfg%VF
+      call this%cfg%sync(VF,this%cfg%no+1)
+      if (.not.this%cfg%xper) then
+         if (this%cfg%iproc.eq.1           ) VF(this%cfg%imino-1,:,:)=VF(this%cfg%imino,:,:)
+         if (this%cfg%iproc.eq.this%cfg%npx) VF(this%cfg%imaxo+1,:,:)=VF(this%cfg%imaxo,:,:)
+      end if
+      if (.not.this%cfg%yper) then
+         if (this%cfg%jproc.eq.1           ) VF(:,this%cfg%jmino-1,:)=VF(:,this%cfg%jmino,:)
+         if (this%cfg%jproc.eq.this%cfg%npy) VF(:,this%cfg%jmaxo+1,:)=VF(:,this%cfg%jmaxo,:)
+      end if
+      if (.not.this%cfg%zper) then
+         if (this%cfg%kproc.eq.1           ) VF(:,:,this%cfg%kmino-1)=VF(:,:,this%cfg%kmino)
+         if (this%cfg%kproc.eq.this%cfg%npz) VF(:,:,this%cfg%kmaxo+1)=VF(:,:,this%cfg%kmaxo)
+      end if
       
       ! Allocate finite difference velocity interpolation coefficients
-      allocate(this%itpu_x( 0:+1,this%cfg%imino_+1:this%cfg%imaxo_-1,this%cfg%jmino_+1:this%cfg%jmaxo_-1,this%cfg%kmino_+1:this%cfg%kmaxo_-1)) !< Cell-centered
-      allocate(this%itpv_y( 0:+1,this%cfg%imino_+1:this%cfg%imaxo_-1,this%cfg%jmino_+1:this%cfg%jmaxo_-1,this%cfg%kmino_+1:this%cfg%kmaxo_-1)) !< Cell-centered
-      allocate(this%itpw_z( 0:+1,this%cfg%imino_+1:this%cfg%imaxo_-1,this%cfg%jmino_+1:this%cfg%jmaxo_-1,this%cfg%kmino_+1:this%cfg%kmaxo_-1)) !< Cell-centered
-      allocate(this%itpu_y(-1: 0,this%cfg%imino_+1:this%cfg%imaxo_  ,this%cfg%jmino_+1:this%cfg%jmaxo_  ,this%cfg%kmino_  :this%cfg%kmaxo_  )) !< Edge-centered (xy)
-      allocate(this%itpv_x(-1: 0,this%cfg%imino_+1:this%cfg%imaxo_  ,this%cfg%jmino_+1:this%cfg%jmaxo_  ,this%cfg%kmino_  :this%cfg%kmaxo_  )) !< Edge-centered (xy)
-      allocate(this%itpv_z(-1: 0,this%cfg%imino_  :this%cfg%imaxo_  ,this%cfg%jmino_+1:this%cfg%jmaxo_  ,this%cfg%kmino_+1:this%cfg%kmaxo_  )) !< Edge-centered (yz)
-      allocate(this%itpw_y(-1: 0,this%cfg%imino_  :this%cfg%imaxo_  ,this%cfg%jmino_+1:this%cfg%jmaxo_  ,this%cfg%kmino_+1:this%cfg%kmaxo_  )) !< Edge-centered (yz)
-      allocate(this%itpw_x(-1: 0,this%cfg%imino_+1:this%cfg%imaxo_  ,this%cfg%jmino_  :this%cfg%jmaxo_  ,this%cfg%kmino_+1:this%cfg%kmaxo_  )) !< Edge-centered (zx)
-      allocate(this%itpu_z(-1: 0,this%cfg%imino_+1:this%cfg%imaxo_  ,this%cfg%jmino_  :this%cfg%jmaxo_  ,this%cfg%kmino_+1:this%cfg%kmaxo_  )) !< Edge-centered (zx)
+      allocate(this%itpu_x( 0:+1,this%cfg%imino_  :this%cfg%imaxo_,this%cfg%jmino_  :this%cfg%jmaxo_,this%cfg%kmino_  :this%cfg%kmaxo_)) !< Cell-centered
+      allocate(this%itpv_y( 0:+1,this%cfg%imino_  :this%cfg%imaxo_,this%cfg%jmino_  :this%cfg%jmaxo_,this%cfg%kmino_  :this%cfg%kmaxo_)) !< Cell-centered
+      allocate(this%itpw_z( 0:+1,this%cfg%imino_  :this%cfg%imaxo_,this%cfg%jmino_  :this%cfg%jmaxo_,this%cfg%kmino_  :this%cfg%kmaxo_)) !< Cell-centered
+      allocate(this%itpv_x(-1: 0,this%cfg%imino_+1:this%cfg%imaxo_,this%cfg%jmino_  :this%cfg%jmaxo_,this%cfg%kmino_  :this%cfg%kmaxo_)) !< Edge-centered (xy)
+      allocate(this%itpw_x(-1: 0,this%cfg%imino_+1:this%cfg%imaxo_,this%cfg%jmino_  :this%cfg%jmaxo_,this%cfg%kmino_  :this%cfg%kmaxo_)) !< Edge-centered (zx)
+      allocate(this%itpu_y(-1: 0,this%cfg%imino_  :this%cfg%imaxo_,this%cfg%jmino_+1:this%cfg%jmaxo_,this%cfg%kmino_  :this%cfg%kmaxo_)) !< Edge-centered (xy)
+      allocate(this%itpw_y(-1: 0,this%cfg%imino_  :this%cfg%imaxo_,this%cfg%jmino_+1:this%cfg%jmaxo_,this%cfg%kmino_  :this%cfg%kmaxo_)) !< Edge-centered (yz)
+      allocate(this%itpu_z(-1: 0,this%cfg%imino_  :this%cfg%imaxo_,this%cfg%jmino_  :this%cfg%jmaxo_,this%cfg%kmino_+1:this%cfg%kmaxo_)) !< Edge-centered (zx)
+      allocate(this%itpv_z(-1: 0,this%cfg%imino_  :this%cfg%imaxo_,this%cfg%jmino_  :this%cfg%jmaxo_,this%cfg%kmino_+1:this%cfg%kmaxo_)) !< Edge-centered (yz)
       ! Create velocity interpolation coefficients to cell center [xm,ym,zm]
-      do k=this%cfg%kmino_+1,this%cfg%kmaxo_-1
-         do j=this%cfg%jmino_+1,this%cfg%jmaxo_-1
-            do i=this%cfg%imino_+1,this%cfg%imaxo_-1
-               this%itpu_x(:,i,j,k)=0.5_WP*this%cfg%VF(i,j,k)*[minval(this%cfg%VF(i-1:i,j,k)),minval(this%cfg%VF(i:i+1,j,k))] !< Linear interpolation in x of U from [x ,ym,zm]
-               this%itpv_y(:,i,j,k)=0.5_WP*this%cfg%VF(i,j,k)*[minval(this%cfg%VF(i,j-1:j,k)),minval(this%cfg%VF(i,j:j+1,k))] !< Linear interpolation in y of V from [xm,y ,zm]
-               this%itpw_z(:,i,j,k)=0.5_WP*this%cfg%VF(i,j,k)*[minval(this%cfg%VF(i,j,k-1:k)),minval(this%cfg%VF(i,j,k:k+1))] !< Linear interpolation in z of W from [xm,ym,z ]
+      do k=this%cfg%kmino_,this%cfg%kmaxo_
+         do j=this%cfg%jmino_,this%cfg%jmaxo_
+            do i=this%cfg%imino_,this%cfg%imaxo_
+               this%itpu_x(:,i,j,k)=0.5_WP*VF(i,j,k)*[minval(VF(i-1:i,j,k)),minval(VF(i:i+1,j,k))] !< Linear interpolation in x of U from [x ,ym,zm]
+               this%itpv_y(:,i,j,k)=0.5_WP*VF(i,j,k)*[minval(VF(i,j-1:j,k)),minval(VF(i,j:j+1,k))] !< Linear interpolation in y of V from [xm,y ,zm]
+               this%itpw_z(:,i,j,k)=0.5_WP*VF(i,j,k)*[minval(VF(i,j,k-1:k)),minval(VF(i,j,k:k+1))] !< Linear interpolation in z of W from [xm,ym,z ]
             end do
          end do
       end do
-      ! Create velocity interpolation coefficients to cell edge [x ,y ,zm]
+      ! Create velocity interpolation coefficients to cell edge in x
       do k=this%cfg%kmino_  ,this%cfg%kmaxo_
-         do j=this%cfg%jmino_+1,this%cfg%jmaxo_
-            do i=this%cfg%imino_+1,this%cfg%imaxo_
-               this%itpu_y(:,i,j,k)=minval(this%cfg%VF(i-1:i,j-1:j,k))*this%cfg%dymi(j)*[this%cfg%ym(j)-this%cfg%y(j),this%cfg%y(j)-this%cfg%ym(j-1)] !< Linear interpolation in y of U from [x ,ym,zm]
-               this%itpv_x(:,i,j,k)=minval(this%cfg%VF(i-1:i,j-1:j,k))*this%cfg%dxmi(i)*[this%cfg%xm(i)-this%cfg%x(i),this%cfg%x(i)-this%cfg%xm(i-1)] !< Linear interpolation in x of V from [xm,y ,zm]
-            end do
-         end do
-      end do
-      ! Create velocity interpolation coefficients to cell edge [xm,y ,z ]
-      do k=this%cfg%kmino_+1,this%cfg%kmaxo_
-         do j=this%cfg%jmino_+1,this%cfg%jmaxo_
-            do i=this%cfg%imino_  ,this%cfg%imaxo_
-               this%itpv_z(:,i,j,k)=minval(this%cfg%VF(i,j-1:j,k-1:k))*this%cfg%dzmi(k)*[this%cfg%zm(k)-this%cfg%z(k),this%cfg%z(k)-this%cfg%zm(k-1)] !< Linear interpolation in z of V from [xm,y ,zm]
-               this%itpw_y(:,i,j,k)=minval(this%cfg%VF(i,j-1:j,k-1:k))*this%cfg%dymi(j)*[this%cfg%ym(j)-this%cfg%y(j),this%cfg%y(j)-this%cfg%ym(j-1)] !< Linear interpolation in y of W from [xm,ym,z ]
-            end do
-         end do
-      end do
-      ! Create velocity interpolation coefficients to cell edge [x ,ym,z ]
-      do k=this%cfg%kmino_+1,this%cfg%kmaxo_
          do j=this%cfg%jmino_  ,this%cfg%jmaxo_
             do i=this%cfg%imino_+1,this%cfg%imaxo_
-               this%itpw_x(:,i,j,k)=minval(this%cfg%VF(i-1:i,j,k-1:k))*this%cfg%dxmi(i)*[this%cfg%xm(i)-this%cfg%x(i),this%cfg%x(i)-this%cfg%xm(i-1)] !< Linear interpolation in x of W from [xm,ym,z ]
-               this%itpu_z(:,i,j,k)=minval(this%cfg%VF(i-1:i,j,k-1:k))*this%cfg%dzmi(k)*[this%cfg%zm(k)-this%cfg%z(k),this%cfg%z(k)-this%cfg%zm(k-1)] !< Linear interpolation in z of U from [x ,ym,zm]
+               this%itpv_x(:,i,j,k)=minval(VF(i-1:i,j-1:j,k))*this%cfg%dxmi(i)*[this%cfg%xm(i)-this%cfg%x(i),this%cfg%x(i)-this%cfg%xm(i-1)] !< Linear interpolation in x of V from [xm,y ,zm]
+               this%itpw_x(:,i,j,k)=minval(VF(i-1:i,j,k-1:k))*this%cfg%dxmi(i)*[this%cfg%xm(i)-this%cfg%x(i),this%cfg%x(i)-this%cfg%xm(i-1)] !< Linear interpolation in x of W from [xm,ym,z ]
+            end do
+         end do
+      end do
+      ! Create velocity interpolation coefficients to cell edge in y
+      do k=this%cfg%kmino_  ,this%cfg%kmaxo_
+         do j=this%cfg%jmino_+1,this%cfg%jmaxo_
+            do i=this%cfg%imino_  ,this%cfg%imaxo_
+               this%itpu_y(:,i,j,k)=minval(VF(i-1:i,j-1:j,k))*this%cfg%dymi(j)*[this%cfg%ym(j)-this%cfg%y(j),this%cfg%y(j)-this%cfg%ym(j-1)] !< Linear interpolation in y of U from [x ,ym,zm]
+               this%itpw_y(:,i,j,k)=minval(VF(i,j-1:j,k-1:k))*this%cfg%dymi(j)*[this%cfg%ym(j)-this%cfg%y(j),this%cfg%y(j)-this%cfg%ym(j-1)] !< Linear interpolation in y of W from [xm,ym,z ]
+            end do
+         end do
+      end do
+      ! Create velocity interpolation coefficients to cell edge in z
+      do k=this%cfg%kmino_+1,this%cfg%kmaxo_
+         do j=this%cfg%jmino_  ,this%cfg%jmaxo_
+            do i=this%cfg%imino_  ,this%cfg%imaxo_
+               this%itpu_z(:,i,j,k)=minval(VF(i-1:i,j,k-1:k))*this%cfg%dzmi(k)*[this%cfg%zm(k)-this%cfg%z(k),this%cfg%z(k)-this%cfg%zm(k-1)] !< Linear interpolation in z of U from [x ,ym,zm]
+               this%itpv_z(:,i,j,k)=minval(VF(i,j-1:j,k-1:k))*this%cfg%dzmi(k)*[this%cfg%zm(k)-this%cfg%z(k),this%cfg%z(k)-this%cfg%zm(k-1)] !< Linear interpolation in z of V from [xm,y ,zm]
             end do
          end do
       end do
       
       ! Allocate finite volume divergence operators
-      allocate(this%divp_x( 0:+1,this%cfg%imino_+1:this%cfg%imaxo_-1,this%cfg%jmino_+1:this%cfg%jmaxo_-1,this%cfg%kmino_+1:this%cfg%kmaxo_-1)) !< Cell-centered
-      allocate(this%divp_y( 0:+1,this%cfg%imino_+1:this%cfg%imaxo_-1,this%cfg%jmino_+1:this%cfg%jmaxo_-1,this%cfg%kmino_+1:this%cfg%kmaxo_-1)) !< Cell-centered
-      allocate(this%divp_z( 0:+1,this%cfg%imino_+1:this%cfg%imaxo_-1,this%cfg%jmino_+1:this%cfg%jmaxo_-1,this%cfg%kmino_+1:this%cfg%kmaxo_-1)) !< Cell-centered
-      allocate(this%divu_x(-1: 0,this%cfg%imino_+1:this%cfg%imaxo_  ,this%cfg%jmino_  :this%cfg%jmaxo_  ,this%cfg%kmino_  :this%cfg%kmaxo_  )) !< Face-centered (x)
-      allocate(this%divu_y( 0:+1,this%cfg%imino_+1:this%cfg%imaxo_  ,this%cfg%jmino_  :this%cfg%jmaxo_  ,this%cfg%kmino_  :this%cfg%kmaxo_  )) !< Face-centered (x)
-      allocate(this%divu_z( 0:+1,this%cfg%imino_+1:this%cfg%imaxo_  ,this%cfg%jmino_  :this%cfg%jmaxo_  ,this%cfg%kmino_  :this%cfg%kmaxo_  )) !< Face-centered (x)
-      allocate(this%divv_x( 0:+1,this%cfg%imino_  :this%cfg%imaxo_  ,this%cfg%jmino_+1:this%cfg%jmaxo_  ,this%cfg%kmino_  :this%cfg%kmaxo_  )) !< Face-centered (y)
-      allocate(this%divv_y(-1: 0,this%cfg%imino_  :this%cfg%imaxo_  ,this%cfg%jmino_+1:this%cfg%jmaxo_  ,this%cfg%kmino_  :this%cfg%kmaxo_  )) !< Face-centered (y)
-      allocate(this%divv_z( 0:+1,this%cfg%imino_  :this%cfg%imaxo_  ,this%cfg%jmino_+1:this%cfg%jmaxo_  ,this%cfg%kmino_  :this%cfg%kmaxo_  )) !< Face-centered (y)
-      allocate(this%divw_x( 0:+1,this%cfg%imino_  :this%cfg%imaxo_  ,this%cfg%jmino_  :this%cfg%jmaxo_  ,this%cfg%kmino_+1:this%cfg%kmaxo_  )) !< Face-centered (z)
-      allocate(this%divw_y( 0:+1,this%cfg%imino_  :this%cfg%imaxo_  ,this%cfg%jmino_  :this%cfg%jmaxo_  ,this%cfg%kmino_+1:this%cfg%kmaxo_  )) !< Face-centered (z)
-      allocate(this%divw_z(-1: 0,this%cfg%imino_  :this%cfg%imaxo_  ,this%cfg%jmino_  :this%cfg%jmaxo_  ,this%cfg%kmino_+1:this%cfg%kmaxo_  )) !< Face-centered (z)
-      ! Create divergence operator to cell center [xm,ym,zm]
-      do k=this%cfg%kmino_+1,this%cfg%kmaxo_-1
-         do j=this%cfg%jmino_+1,this%cfg%jmaxo_-1
-            do i=this%cfg%imino_+1,this%cfg%imaxo_-1
-               this%divp_x(:,i,j,k)=this%cfg%VF(i,j,k)*this%cfg%dxi(i)*[-1.0_WP,+1.0_WP] !< FV divergence from [x ,ym,zm]
-               this%divp_y(:,i,j,k)=this%cfg%VF(i,j,k)*this%cfg%dyi(j)*[-1.0_WP,+1.0_WP] !< FV divergence from [xm,y ,zm]
-               this%divp_z(:,i,j,k)=this%cfg%VF(i,j,k)*this%cfg%dzi(k)*[-1.0_WP,+1.0_WP] !< FV divergence from [xm,ym,z ]
+      allocate(this%divp_x( 0:+1,this%cfg%imino_  :this%cfg%imaxo_,this%cfg%jmino_  :this%cfg%jmaxo_,this%cfg%kmino_  :this%cfg%kmaxo_)) !< Cell-centered
+      allocate(this%divp_y( 0:+1,this%cfg%imino_  :this%cfg%imaxo_,this%cfg%jmino_  :this%cfg%jmaxo_,this%cfg%kmino_  :this%cfg%kmaxo_)) !< Cell-centered
+      allocate(this%divp_z( 0:+1,this%cfg%imino_  :this%cfg%imaxo_,this%cfg%jmino_  :this%cfg%jmaxo_,this%cfg%kmino_  :this%cfg%kmaxo_)) !< Cell-centered
+      allocate(this%divu_x(-1: 0,this%cfg%imino_+1:this%cfg%imaxo_,this%cfg%jmino_  :this%cfg%jmaxo_,this%cfg%kmino_  :this%cfg%kmaxo_)) !< Face-centered (x)
+      allocate(this%divu_y( 0:+1,this%cfg%imino_  :this%cfg%imaxo_,this%cfg%jmino_  :this%cfg%jmaxo_,this%cfg%kmino_  :this%cfg%kmaxo_)) !< Face-centered (x)
+      allocate(this%divu_z( 0:+1,this%cfg%imino_  :this%cfg%imaxo_,this%cfg%jmino_  :this%cfg%jmaxo_,this%cfg%kmino_  :this%cfg%kmaxo_)) !< Face-centered (x)
+      allocate(this%divv_x( 0:+1,this%cfg%imino_  :this%cfg%imaxo_,this%cfg%jmino_  :this%cfg%jmaxo_,this%cfg%kmino_  :this%cfg%kmaxo_)) !< Face-centered (y)
+      allocate(this%divv_y(-1: 0,this%cfg%imino_  :this%cfg%imaxo_,this%cfg%jmino_+1:this%cfg%jmaxo_,this%cfg%kmino_  :this%cfg%kmaxo_)) !< Face-centered (y)
+      allocate(this%divv_z( 0:+1,this%cfg%imino_  :this%cfg%imaxo_,this%cfg%jmino_  :this%cfg%jmaxo_,this%cfg%kmino_  :this%cfg%kmaxo_)) !< Face-centered (y)
+      allocate(this%divw_x( 0:+1,this%cfg%imino_  :this%cfg%imaxo_,this%cfg%jmino_  :this%cfg%jmaxo_,this%cfg%kmino_  :this%cfg%kmaxo_)) !< Face-centered (z)
+      allocate(this%divw_y( 0:+1,this%cfg%imino_  :this%cfg%imaxo_,this%cfg%jmino_  :this%cfg%jmaxo_,this%cfg%kmino_  :this%cfg%kmaxo_)) !< Face-centered (z)
+      allocate(this%divw_z(-1: 0,this%cfg%imino_  :this%cfg%imaxo_,this%cfg%jmino_  :this%cfg%jmaxo_,this%cfg%kmino_+1:this%cfg%kmaxo_)) !< Face-centered (z)
+      ! Create divergence operator to cell center [xm,ym,zm] or tangent to cell face
+      do k=this%cfg%kmino_,this%cfg%kmaxo_
+         do j=this%cfg%jmino_,this%cfg%jmaxo_
+            do i=this%cfg%imino_,this%cfg%imaxo_
+               this%divp_x(:,i,j,k)=VF(i,j,k)*this%cfg%dxi(i)*[-1.0_WP,+1.0_WP] !< FV divergence from [x ,ym,zm]
+               this%divp_y(:,i,j,k)=VF(i,j,k)*this%cfg%dyi(j)*[-1.0_WP,+1.0_WP] !< FV divergence from [xm,y ,zm]
+               this%divp_z(:,i,j,k)=VF(i,j,k)*this%cfg%dzi(k)*[-1.0_WP,+1.0_WP] !< FV divergence from [xm,ym,z ]
+               
+               this%divu_y(:,i,j,k)=minval(VF(i-1:i,j,k))*this%cfg%dyi (j)*[-1.0_WP,+1.0_WP] !< FV divergence from [x ,y ,zm]
+               this%divu_z(:,i,j,k)=minval(VF(i-1:i,j,k))*this%cfg%dzi (k)*[-1.0_WP,+1.0_WP] !< FV divergence from [x ,ym,z ]
+               
+               this%divv_x(:,i,j,k)=minval(VF(i,j-1:j,k))*this%cfg%dxi (i)*[-1.0_WP,+1.0_WP] !< FV divergence from [x ,y ,zm]
+               this%divv_z(:,i,j,k)=minval(VF(i,j-1:j,k))*this%cfg%dzi (k)*[-1.0_WP,+1.0_WP] !< FV divergence from [xm,y ,z ]
+               
+               this%divw_x(:,i,j,k)=minval(VF(i,j,k-1:k))*this%cfg%dxi (i)*[-1.0_WP,+1.0_WP] !< FV divergence from [x ,ym,z ]
+               this%divw_y(:,i,j,k)=minval(VF(i,j,k-1:k))*this%cfg%dyi (j)*[-1.0_WP,+1.0_WP] !< FV divergence from [xm,y ,z ]
             end do
          end do
       end do
-      ! Create divergence operator to cell face [x ,ym,zm]
+      ! Create divergence operator perpendicular to cell face [x ,ym,zm]
       do k=this%cfg%kmino_  ,this%cfg%kmaxo_
          do j=this%cfg%jmino_  ,this%cfg%jmaxo_
             do i=this%cfg%imino_+1,this%cfg%imaxo_
-               this%divu_x(:,i,j,k)=minval(this%cfg%VF(i-1:i,j,k))*this%cfg%dxmi(i)*[-1.0_WP,+1.0_WP] !< FV divergence from [xm,ym,zm]
-               this%divu_y(:,i,j,k)=minval(this%cfg%VF(i-1:i,j,k))*this%cfg%dyi (j)*[-1.0_WP,+1.0_WP] !< FV divergence from [x ,y ,zm]
-               this%divu_z(:,i,j,k)=minval(this%cfg%VF(i-1:i,j,k))*this%cfg%dzi (k)*[-1.0_WP,+1.0_WP] !< FV divergence from [x ,ym,z ]
+               this%divu_x(:,i,j,k)=minval(VF(i-1:i,j,k))*this%cfg%dxmi(i)*[-1.0_WP,+1.0_WP] !< FV divergence from [xm,ym,zm]
             end do
          end do
       end do
-      ! Create divergence operator to cell face [xm,y ,zm]
+      ! Create divergence operator perpendicular to cell face [xm,y ,zm]
       do k=this%cfg%kmino_  ,this%cfg%kmaxo_
          do j=this%cfg%jmino_+1,this%cfg%jmaxo_
             do i=this%cfg%imino_  ,this%cfg%imaxo_
-               this%divv_x(:,i,j,k)=minval(this%cfg%VF(i,j-1:j,k))*this%cfg%dxi (i)*[-1.0_WP,+1.0_WP] !< FV divergence from [x ,y ,zm]
-               this%divv_y(:,i,j,k)=minval(this%cfg%VF(i,j-1:j,k))*this%cfg%dymi(j)*[-1.0_WP,+1.0_WP] !< FV divergence from [xm,ym,zm]
-               this%divv_z(:,i,j,k)=minval(this%cfg%VF(i,j-1:j,k))*this%cfg%dzi (k)*[-1.0_WP,+1.0_WP] !< FV divergence from [xm,y ,z ]
+               this%divv_y(:,i,j,k)=minval(VF(i,j-1:j,k))*this%cfg%dymi(j)*[-1.0_WP,+1.0_WP] !< FV divergence from [xm,ym,zm]
             end do
          end do
       end do
-      ! Create divergence operator to cell face [xm,ym,z ]
+      ! Create divergence operator perpendicular to cell face [xm,ym,z ]
       do k=this%cfg%kmino_+1,this%cfg%kmaxo_
          do j=this%cfg%jmino_  ,this%cfg%jmaxo_
             do i=this%cfg%imino_  ,this%cfg%imaxo_
-               this%divw_x(:,i,j,k)=minval(this%cfg%VF(i,j,k-1:k))*this%cfg%dxi (i)*[-1.0_WP,+1.0_WP] !< FV divergence from [x ,ym,z ]
-               this%divw_y(:,i,j,k)=minval(this%cfg%VF(i,j,k-1:k))*this%cfg%dyi (j)*[-1.0_WP,+1.0_WP] !< FV divergence from [xm,y ,z ]
-               this%divw_z(:,i,j,k)=minval(this%cfg%VF(i,j,k-1:k))*this%cfg%dzmi(k)*[-1.0_WP,+1.0_WP] !< FV divergence from [xm,ym,zm]
+               this%divw_z(:,i,j,k)=minval(VF(i,j,k-1:k))*this%cfg%dzmi(k)*[-1.0_WP,+1.0_WP] !< FV divergence from [xm,ym,zm]
             end do
          end do
       end do
       
       ! Allocate finite difference velocity gradient operators
-      allocate(this%grdu_x( 0:+1,this%cfg%imino_+1:this%cfg%imaxo_-1,this%cfg%jmino_+1:this%cfg%jmaxo_-1,this%cfg%kmino_+1:this%cfg%kmaxo_-1)) !< Cell-centered
-      allocate(this%grdv_y( 0:+1,this%cfg%imino_+1:this%cfg%imaxo_-1,this%cfg%jmino_+1:this%cfg%jmaxo_-1,this%cfg%kmino_+1:this%cfg%kmaxo_-1)) !< Cell-centered
-      allocate(this%grdw_z( 0:+1,this%cfg%imino_+1:this%cfg%imaxo_-1,this%cfg%jmino_+1:this%cfg%jmaxo_-1,this%cfg%kmino_+1:this%cfg%kmaxo_-1)) !< Cell-centered
-      allocate(this%grdu_y(-1: 0,this%cfg%imino_+1:this%cfg%imaxo_  ,this%cfg%jmino_+1:this%cfg%jmaxo_  ,this%cfg%kmino_  :this%cfg%kmaxo_  )) !< Edge-centered (xy)
-      allocate(this%grdv_x(-1: 0,this%cfg%imino_+1:this%cfg%imaxo_  ,this%cfg%jmino_+1:this%cfg%jmaxo_  ,this%cfg%kmino_  :this%cfg%kmaxo_  )) !< Edge-centered (xy)
-      allocate(this%grdv_z(-1: 0,this%cfg%imino_  :this%cfg%imaxo_  ,this%cfg%jmino_+1:this%cfg%jmaxo_  ,this%cfg%kmino_+1:this%cfg%kmaxo_  )) !< Edge-centered (yz)
-      allocate(this%grdw_y(-1: 0,this%cfg%imino_  :this%cfg%imaxo_  ,this%cfg%jmino_+1:this%cfg%jmaxo_  ,this%cfg%kmino_+1:this%cfg%kmaxo_  )) !< Edge-centered (yz)
-      allocate(this%grdw_x(-1: 0,this%cfg%imino_+1:this%cfg%imaxo_  ,this%cfg%jmino_  :this%cfg%jmaxo_  ,this%cfg%kmino_+1:this%cfg%kmaxo_  )) !< Edge-centered (zx)
-      allocate(this%grdu_z(-1: 0,this%cfg%imino_+1:this%cfg%imaxo_  ,this%cfg%jmino_  :this%cfg%jmaxo_  ,this%cfg%kmino_+1:this%cfg%kmaxo_  )) !< Edge-centered (zx)
+      allocate(this%grdu_x( 0:+1,this%cfg%imino_  :this%cfg%imaxo_,this%cfg%jmino_  :this%cfg%jmaxo_,this%cfg%kmino_  :this%cfg%kmaxo_)) !< Cell-centered
+      allocate(this%grdv_y( 0:+1,this%cfg%imino_  :this%cfg%imaxo_,this%cfg%jmino_  :this%cfg%jmaxo_,this%cfg%kmino_  :this%cfg%kmaxo_)) !< Cell-centered
+      allocate(this%grdw_z( 0:+1,this%cfg%imino_  :this%cfg%imaxo_,this%cfg%jmino_  :this%cfg%jmaxo_,this%cfg%kmino_  :this%cfg%kmaxo_)) !< Cell-centered
+      allocate(this%grdv_x(-1: 0,this%cfg%imino_+1:this%cfg%imaxo_,this%cfg%jmino_  :this%cfg%jmaxo_,this%cfg%kmino_  :this%cfg%kmaxo_)) !< Edge-centered (xy)
+      allocate(this%grdw_x(-1: 0,this%cfg%imino_+1:this%cfg%imaxo_,this%cfg%jmino_  :this%cfg%jmaxo_,this%cfg%kmino_  :this%cfg%kmaxo_)) !< Edge-centered (zx)
+      allocate(this%grdu_y(-1: 0,this%cfg%imino_  :this%cfg%imaxo_,this%cfg%jmino_+1:this%cfg%jmaxo_,this%cfg%kmino_  :this%cfg%kmaxo_)) !< Edge-centered (xy)
+      allocate(this%grdw_y(-1: 0,this%cfg%imino_  :this%cfg%imaxo_,this%cfg%jmino_+1:this%cfg%jmaxo_,this%cfg%kmino_  :this%cfg%kmaxo_)) !< Edge-centered (yz)
+      allocate(this%grdu_z(-1: 0,this%cfg%imino_  :this%cfg%imaxo_,this%cfg%jmino_  :this%cfg%jmaxo_,this%cfg%kmino_+1:this%cfg%kmaxo_)) !< Edge-centered (zx)
+      allocate(this%grdv_z(-1: 0,this%cfg%imino_  :this%cfg%imaxo_,this%cfg%jmino_  :this%cfg%jmaxo_,this%cfg%kmino_+1:this%cfg%kmaxo_)) !< Edge-centered (yz)
       ! Create gradient coefficients to cell center [xm,ym,zm]
-      do k=this%cfg%kmino_+1,this%cfg%kmaxo_-1
-         do j=this%cfg%jmino_+1,this%cfg%jmaxo_-1
-            do i=this%cfg%imino_+1,this%cfg%imaxo_-1
-               this%grdu_x(:,i,j,k)=this%cfg%VF(i,j,k)*this%cfg%dxi(i)*[-minval(this%cfg%VF(i-1:i,j,k)),+minval(this%cfg%VF(i:i+1,j,k))] !< FD gradient in x of U from [x ,ym,zm]
-               this%grdv_y(:,i,j,k)=this%cfg%VF(i,j,k)*this%cfg%dyi(i)*[-minval(this%cfg%VF(i,j-1:j,k)),+minval(this%cfg%VF(i,j:j+1,k))] !< FD gradient in y of V from [xm,y ,zm]
-               this%grdw_z(:,i,j,k)=this%cfg%VF(i,j,k)*this%cfg%dzi(i)*[-minval(this%cfg%VF(i,j,k-1:k)),+minval(this%cfg%VF(i,j,k:k+1))] !< FD gradient in z of W from [xm,ym,z ]
+      do k=this%cfg%kmino_,this%cfg%kmaxo_
+         do j=this%cfg%jmino_,this%cfg%jmaxo_
+            do i=this%cfg%imino_,this%cfg%imaxo_
+               this%grdu_x(:,i,j,k)=VF(i,j,k)*this%cfg%dxi(i)*[-minval(VF(i-1:i,j,k)),+minval(VF(i:i+1,j,k))] !< FD gradient in x of U from [x ,ym,zm]
+               this%grdv_y(:,i,j,k)=VF(i,j,k)*this%cfg%dyi(i)*[-minval(VF(i,j-1:j,k)),+minval(VF(i,j:j+1,k))] !< FD gradient in y of V from [xm,y ,zm]
+               this%grdw_z(:,i,j,k)=VF(i,j,k)*this%cfg%dzi(i)*[-minval(VF(i,j,k-1:k)),+minval(VF(i,j,k:k+1))] !< FD gradient in z of W from [xm,ym,z ]
             end do
          end do
       end do
-      ! Create gradient coefficients to cell edge [x ,y ,zm]
+      ! Create gradient coefficients to cell edge in x
       do k=this%cfg%kmino_  ,this%cfg%kmaxo_
-         do j=this%cfg%jmino_+1,this%cfg%jmaxo_
+         do j=this%cfg%jmino_  ,this%cfg%jmaxo_
             do i=this%cfg%imino_+1,this%cfg%imaxo_
-               ! FD gradient in y of U from [x ,ym,zm]
-               delta=minval(this%cfg%VF(i-1:i,j  ,k))*(this%cfg%ym(j)-this%cfg%y (j  )) &
-               &    +minval(this%cfg%VF(i-1:i,j-1,k))*(this%cfg%y (j)-this%cfg%ym(j-1))
-               if (delta.gt.0.0_WP) then
-                  this%grdu_y(:,i,j,k)=[-minval(this%cfg%VF(i-1:i,j-1,k)),+minval(this%cfg%VF(i-1:i,j,k))]/delta
-               else
-                  this%grdu_y(:,i,j,k)=0.0_WP
-               end if
                ! FD gradient in x of V from [xm,y ,zm]
-               delta=minval(this%cfg%VF(i  ,j-1:j,k))*(this%cfg%xm(i)-this%cfg%x (i  )) &
-               &    +minval(this%cfg%VF(i-1,j-1:j,k))*(this%cfg%x (i)-this%cfg%xm(i-1))
+               delta=minval(VF(i  ,j-1:j,k))*(this%cfg%xm(i)-this%cfg%x (i  )) &
+               &    +minval(VF(i-1,j-1:j,k))*(this%cfg%x (i)-this%cfg%xm(i-1))
                if (delta.gt.0.0_WP) then
-                  this%grdv_x(:,i,j,k)=[-minval(this%cfg%VF(i-1,j-1:j,k)),+minval(this%cfg%VF(i,j-1:j,k))]/delta
+                  this%grdv_x(:,i,j,k)=[-minval(VF(i-1,j-1:j,k)),+minval(VF(i,j-1:j,k))]/delta
                else
                   this%grdv_x(:,i,j,k)=0.0_WP
                end if
+               ! FD gradient in x of W from [xm,ym,z ]
+               delta=minval(VF(i  ,j,k-1:k))*(this%cfg%xm(i)-this%cfg%x (i  )) &
+               &    +minval(VF(i-1,j,k-1:k))*(this%cfg%x (i)-this%cfg%xm(i-1))
+               if (delta.gt.0.0_WP) then
+                  this%grdw_x(:,i,j,k)=[-minval(VF(i-1,j,k-1:k)),+minval(VF(i,j,k-1:k))]/delta
+               else
+                  this%grdw_x(:,i,j,k)=0.0_WP
+               end if
             end do
          end do
       end do
-      ! Create gradient coefficients to cell edge [xm,y ,z ]
-      do k=this%cfg%kmino_+1,this%cfg%kmaxo_
+      ! Create gradient coefficients to cell edge in y
+      do k=this%cfg%kmino_  ,this%cfg%kmaxo_
          do j=this%cfg%jmino_+1,this%cfg%jmaxo_
             do i=this%cfg%imino_  ,this%cfg%imaxo_
-               ! FD gradient in z of V from [xm,y ,zm]
-               delta=minval(this%cfg%VF(i,j-1:j,k  ))*(this%cfg%zm(k)-this%cfg%z (k  )) &
-               &    +minval(this%cfg%VF(i,j-1:j,k-1))*(this%cfg%z (k)-this%cfg%zm(k-1))
+               ! FD gradient in y of U from [x ,ym,zm]
+               delta=minval(VF(i-1:i,j  ,k))*(this%cfg%ym(j)-this%cfg%y (j  )) &
+               &    +minval(VF(i-1:i,j-1,k))*(this%cfg%y (j)-this%cfg%ym(j-1))
                if (delta.gt.0.0_WP) then
-                  this%grdv_z(:,i,j,k)=[-minval(this%cfg%VF(i,j-1:j,k-1)),+minval(this%cfg%VF(i,j-1:j,k))]/delta
+                  this%grdu_y(:,i,j,k)=[-minval(VF(i-1:i,j-1,k)),+minval(VF(i-1:i,j,k))]/delta
                else
-                  this%grdv_z(:,i,j,k)=0.0_WP
+                  this%grdu_y(:,i,j,k)=0.0_WP
                end if
                ! FD gradient in y of W from [xm,ym,z ]
-               delta=minval(this%cfg%VF(i,j  ,k-1:k))*(this%cfg%ym(j)-this%cfg%y (j  )) &
-               &    +minval(this%cfg%VF(i,j-1,k-1:k))*(this%cfg%y (j)-this%cfg%ym(j-1))
+               delta=minval(VF(i,j  ,k-1:k))*(this%cfg%ym(j)-this%cfg%y (j  )) &
+               &    +minval(VF(i,j-1,k-1:k))*(this%cfg%y (j)-this%cfg%ym(j-1))
                if (delta.gt.0.0_WP) then
-                  this%grdw_y(:,i,j,k)=[-minval(this%cfg%VF(i,j-1,k-1:k)),+minval(this%cfg%VF(i,j,k-1:k))]/delta
+                  this%grdw_y(:,i,j,k)=[-minval(VF(i,j-1,k-1:k)),+minval(VF(i,j,k-1:k))]/delta
                else
                   this%grdw_y(:,i,j,k)=0.0_WP
                end if
             end do
          end do
       end do
-      ! Create gradient coefficients to cell edge [x ,ym,z ]
+      ! Create gradient coefficients to cell edge in z
       do k=this%cfg%kmino_+1,this%cfg%kmaxo_
          do j=this%cfg%jmino_  ,this%cfg%jmaxo_
-            do i=this%cfg%imino_+1,this%cfg%imaxo_
-               ! FD gradient in x of W from [xm,ym,z ]
-               delta=minval(this%cfg%VF(i  ,j,k-1:k))*(this%cfg%xm(i)-this%cfg%x (i  )) &
-               &    +minval(this%cfg%VF(i-1,j,k-1:k))*(this%cfg%x (i)-this%cfg%xm(i-1))
-               if (delta.gt.0.0_WP) then
-                  this%grdw_x(:,i,j,k)=[-minval(this%cfg%VF(i-1,j,k-1:k)),+minval(this%cfg%VF(i,j,k-1:k))]/delta
-               else
-                  this%grdw_x(:,i,j,k)=0.0_WP
-               end if
+            do i=this%cfg%imino_  ,this%cfg%imaxo_
                ! FD gradient in z of U from [x ,ym,zm]
-               delta=minval(this%cfg%VF(i-1:i,j,k  ))*(this%cfg%zm(k)-this%cfg%z (k  )) &
-               &    +minval(this%cfg%VF(i-1:i,j,k-1))*(this%cfg%z (k)-this%cfg%zm(k-1))
+               delta=minval(VF(i-1:i,j,k  ))*(this%cfg%zm(k)-this%cfg%z (k  )) &
+               &    +minval(VF(i-1:i,j,k-1))*(this%cfg%z (k)-this%cfg%zm(k-1))
                if (delta.gt.0.0_WP) then
-                  this%grdu_z(:,i,j,k)=[-minval(this%cfg%VF(i-1:i,j,k-1)),+minval(this%cfg%VF(i-1:i,j,k))]/delta
+                  this%grdu_z(:,i,j,k)=[-minval(VF(i-1:i,j,k-1)),+minval(VF(i-1:i,j,k))]/delta
                else
                   this%grdu_z(:,i,j,k)=0.0_WP
+               end if
+               ! FD gradient in z of V from [xm,y ,zm]
+               delta=minval(VF(i,j-1:j,k  ))*(this%cfg%zm(k)-this%cfg%z (k  )) &
+               &    +minval(VF(i,j-1:j,k-1))*(this%cfg%z (k)-this%cfg%zm(k-1))
+               if (delta.gt.0.0_WP) then
+                  this%grdv_z(:,i,j,k)=[-minval(VF(i,j-1:j,k-1)),+minval(VF(i,j-1:j,k))]/delta
+               else
+                  this%grdv_z(:,i,j,k)=0.0_WP
                end if
             end do
          end do
       end do
+      
+      ! Deallocate extended VF array
+      deallocate(VF)
       
       ! Here, we assume that we need Neumann on pressure all around anyway,
       ! so all peripheral velocities need to be given by BC:
