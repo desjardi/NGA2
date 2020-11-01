@@ -11,7 +11,7 @@ nz :	100
 
 # Wall geometry
 Hole size : 0.01	!0.002
-Hole dist : 2		!0.004
+Hole dist : 1
 Hole depth: 0.01	!0.018
 
 # Fluid properties

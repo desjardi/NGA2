@@ -101,7 +101,8 @@ contains
                      ! This is the plate
                      cfg%VF(i,j,k)=0.0_WP
                      ! Now perforate it
-                     if (abs(mod(cfg%xm(i),hole_dist)).lt.0.5_WP*hole_size.and.abs(mod(cfg%zm(k),hole_dist)).lt.0.5_WP*hole_size) cfg%VF(i,j,k)=1.0_WP
+                     if ((0.5_WP*hole_dist-abs(modulo(cfg%xm(i),hole_dist)-0.5_WP*hole_dist)).lt.0.5_WP*hole_size.and.&
+                     &   (0.5_WP*hole_dist-abs(modulo(cfg%zm(k),hole_dist)-0.5_WP*hole_dist)).lt.0.5_WP*hole_size) cfg%VF(i,j,k)=1.0_WP
                   end if
                end do
             end do
