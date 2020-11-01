@@ -48,6 +48,13 @@ contains
       implicit none
       
       
+      ! Allocate work arrays
+      allocate(dudt(fs%cfg%imino_:fs%cfg%imaxo_,fs%cfg%jmino_:fs%cfg%jmaxo_,fs%cfg%kmino_:fs%cfg%kmaxo_))
+      allocate(dvdt(fs%cfg%imino_:fs%cfg%imaxo_,fs%cfg%jmino_:fs%cfg%jmaxo_,fs%cfg%kmino_:fs%cfg%kmaxo_))
+      allocate(dwdt(fs%cfg%imino_:fs%cfg%imaxo_,fs%cfg%jmino_:fs%cfg%jmaxo_,fs%cfg%kmino_:fs%cfg%kmaxo_))
+      allocate(div (fs%cfg%imino_:fs%cfg%imaxo_,fs%cfg%jmino_:fs%cfg%jmaxo_,fs%cfg%kmino_:fs%cfg%kmaxo_))
+      
+      
       ! Create an incompressible flow solver
       create_solver: block
          ! Create solver
@@ -87,12 +94,6 @@ contains
       end block initialize_velocity
       
       
-      ! Allocate work arrays
-      allocate(dudt(fs%cfg%imino_:fs%cfg%imaxo_,fs%cfg%jmino_:fs%cfg%jmaxo_,fs%cfg%kmino_:fs%cfg%kmaxo_))
-      allocate(dvdt(fs%cfg%imino_:fs%cfg%imaxo_,fs%cfg%jmino_:fs%cfg%jmaxo_,fs%cfg%kmino_:fs%cfg%kmaxo_))
-      allocate(dwdt(fs%cfg%imino_:fs%cfg%imaxo_,fs%cfg%jmino_:fs%cfg%jmaxo_,fs%cfg%kmino_:fs%cfg%kmaxo_))
-      allocate(div (fs%cfg%imino_:fs%cfg%imaxo_,fs%cfg%jmino_:fs%cfg%jmaxo_,fs%cfg%kmino_:fs%cfg%kmaxo_))
-      
       ! Add Ensight output
       create_ensight: block
          ! Create Ensight output from cfg
@@ -110,25 +111,6 @@ contains
       end block create_ensight
       
       
-      ! ! Try to use the pressure solver
-      ! test_pressure_solver: block
-      !    ! Create a scaled RHS and output it
-      !    fs%psolv%rhs=0.0_WP
-      !    if (fs%cfg%jproc.eq.         1) fs%psolv%rhs(:,fs%cfg%jmin_,:)=+1.0_WP
-      !    if (fs%cfg%jproc.eq.fs%cfg%npy) fs%psolv%rhs(:,fs%cfg%jmax_,:)=-1.0_WP
-      !    fs%psolv%rhs=-fs%cfg%vol*fs%psolv%rhs
-      !    call ens_out%add_scalar('RHS',fs%psolv%rhs)
-      !    ! Set initial guess to zero
-      !    fs%psolv%sol=0.0_WP
-      !    ! Call the solver
-      !    call fs%psolv%solve()
-      !    ! Copy back to pressure
-      !    fs%P=fs%psolv%sol
-      !    ! Output to ensight
-      !    !if (ens_evt%occurs()) call ens_out%write_data(time%t)
-      ! end block test_pressure_solver
-      
-      
       ! Create a monitor file
       create_monitor: block
          ! Create monitor
@@ -142,7 +124,6 @@ contains
       
       
    end subroutine simulation_init
-   
    
    
    !> Perform an NGA2 simulation

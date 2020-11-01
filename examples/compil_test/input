@@ -18,7 +18,7 @@ Density :		1
 Dynamic viscosity :	0.01
 
 # Integration
-Time step size :	0.01
+Time step size :	1e-6
 
 # Ensight ouput
-Ensight output period : 0.005
+Ensight output period : 1e-7
