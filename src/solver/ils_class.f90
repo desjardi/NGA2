@@ -144,10 +144,10 @@ contains
          call HYPRE_IJVectorGetObject    (this%hypre_sol,this%parse_sol,ierr)
          ! Create a HYPRE AMG solver
          call HYPRE_BoomerAMGCreate        (this%hypre_solver,ierr)
-         call HYPRE_BoomerAMGSetPrintLevel (this%hypre_solver,0,ierr)            ! print solve info + parameters (3 from all, 0 for none)
-         call HYPRE_BoomerAMGSetInterpType (this%hypre_solver,6,ierr)            ! interpolation interp is 6
-         call HYPRE_BoomerAMGSetCoarsenType(this%hypre_solver,10,ierr)            ! Falgout=6 (old default); PMIS=8 and HMIS=10 (recommended)
-         call HYPRE_BoomerAMGSetStrongThrshld(this%hypre_solver,0.15_WP,ierr)    ! 0.25 is default
+         call HYPRE_BoomerAMGSetPrintLevel (this%hypre_solver,3,ierr)            ! print solve info + parameters (3 from all, 0 for none)
+         call HYPRE_BoomerAMGSetInterpType (this%hypre_solver,6,ierr)            ! interpolation default is 6 (NGA=3)
+         call HYPRE_BoomerAMGSetCoarsenType(this%hypre_solver,6,ierr)           ! Falgout=6 (old default, NGA); PMIS=8 and HMIS=10 (recommended)
+         call HYPRE_BoomerAMGSetStrongThrshld(this%hypre_solver,0.25_WP,ierr)    ! 0.25 is default
          call HYPRE_BoomerAMGSetRelaxType  (this%hypre_solver,8,ierr)            ! hybrid symmetric Gauss-Seidel/SOR
          call HYPRE_BoomerAMGSetMaxIter    (this%hypre_solver,this%maxit,ierr)   ! maximum nbr of iter
          call HYPRE_BoomerAMGSetTol        (this%hypre_solver,this%rcvg ,ierr)   ! convergence tolerance

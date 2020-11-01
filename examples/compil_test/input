@@ -16,10 +16,13 @@ Hole depth: 0.01	!0.018
 
 # Fluid properties
 Density :		1
-Dynamic viscosity :	1e-4
+Dynamic viscosity :	1e-3
 
 # Integration
-Time step size :	1e-4
+Time step size :	5e-6
+Pressure tolerance : 	1e-6
+Pressure iteration : 	30
+
 
 # Ensight ouput
-Ensight output period : 1e-3
+Ensight output period : 1e-4

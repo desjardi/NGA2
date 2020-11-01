@@ -25,7 +25,7 @@ module simulation
    
    !> Private work arrays
    real(WP), dimension(:,:,:), allocatable :: dudt,dvdt,dwdt,div
-   
+   real(WP), dimension(:,:,:), allocatable :: Ui,Vi,Wi
    
 contains
    
@@ -56,9 +56,8 @@ contains
          call param_read('Density',fs%rho)
          call param_read('Dynamic viscosity',fs%visc)
          ! Configure pressure solver
-         fs%psolv%maxit=100
-         fs%psolv%acvg=1.0e-4_WP
-         fs%psolv%rcvg=1.0e-4_WP
+         call param_read('Pressure iteration',fs%psolv%maxit)
+         call param_read('Pressure tolerance',fs%psolv%acvg); fs%psolv%rcvg=fs%psolv%acvg
          ! Initialize solver
          call fs%psolv%init_solver(amg)
          ! Check solver objects
@@ -72,6 +71,9 @@ contains
          allocate(dvdt(fs%cfg%imino_:fs%cfg%imaxo_,fs%cfg%jmino_:fs%cfg%jmaxo_,fs%cfg%kmino_:fs%cfg%kmaxo_))
          allocate(dwdt(fs%cfg%imino_:fs%cfg%imaxo_,fs%cfg%jmino_:fs%cfg%jmaxo_,fs%cfg%kmino_:fs%cfg%kmaxo_))
          allocate(div (fs%cfg%imino_:fs%cfg%imaxo_,fs%cfg%jmino_:fs%cfg%jmaxo_,fs%cfg%kmino_:fs%cfg%kmaxo_))
+         allocate(Ui  (fs%cfg%imino_:fs%cfg%imaxo_,fs%cfg%jmino_:fs%cfg%jmaxo_,fs%cfg%kmino_:fs%cfg%kmaxo_))
+         allocate(Vi  (fs%cfg%imino_:fs%cfg%imaxo_,fs%cfg%jmino_:fs%cfg%jmaxo_,fs%cfg%kmino_:fs%cfg%kmaxo_))
+         allocate(Wi  (fs%cfg%imino_:fs%cfg%imaxo_,fs%cfg%jmino_:fs%cfg%jmaxo_,fs%cfg%kmino_:fs%cfg%kmaxo_))
       end block allocate_work_arrays
       
       
@@ -93,6 +95,9 @@ contains
          fs%U=0.0_WP
          fs%V=1.0_WP
          fs%W=0.0_WP
+         call fs%apply_bcond(time%t)
+         call fs%interp_vel(Ui,Vi,Wi)
+         call fs%get_div(div)
       end block initialize_velocity
       
       
@@ -105,7 +110,7 @@ contains
          call param_read('Ensight output period',ens_evt%tper)
          ! Add variables to output
          call ens_out%add_scalar('pressure',fs%P)
-         call ens_out%add_vector('velocity',fs%U,fs%V,fs%W)
+         call ens_out%add_vector('velocity',Ui,Vi,Wi)
          call ens_out%add_vector('dveldt',dudt,dvdt,dwdt)
          call ens_out%add_scalar('div',div)
          ! Output to ensight
@@ -139,6 +144,9 @@ contains
          call time%adjust_dt()
          call time%increment()
          
+         ! Apply BCs
+         call fs%apply_bcond(time%t)
+         
          ! Explicit Euler advancement of NS
          call fs%get_dmomdt(dudt,dvdt,dwdt)
          fs%U=fs%U+time%dt*dudt/fs%rho
@@ -157,6 +165,10 @@ contains
          fs%U=fs%U-time%dt*dudt/fs%rho
          fs%V=fs%V-time%dt*dvdt/fs%rho
          fs%W=fs%W-time%dt*dwdt/fs%rho
+         
+         ! Recompute interpolated velocity and divergence
+         call fs%interp_vel(Ui,Vi,Wi)
+         call fs%get_div(div)
          
          ! Output to ensight
          if (ens_evt%occurs()) call ens_out%write_data(time%t)
@@ -180,7 +192,7 @@ contains
       ! timetracker
       
       ! Deallocate work arrays
-      deallocate(dudt,dvdt,dwdt,div)
+      deallocate(dudt,dvdt,dwdt,div,Ui,Vi,Wi)
       
    end subroutine simulation_final
    

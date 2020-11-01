@@ -73,10 +73,12 @@ module incomp_class
    contains
       procedure :: print=>incomp_print                    !< Output solver to the screen
       procedure :: add_bcond                              !< Add a boundary condition
+      procedure :: apply_bcond                            !< Apply all boundary conditions
       procedure :: init_metrics                           !< Initialize metrics
       procedure :: get_dmomdt                             !< Calculate dmom/dt
       procedure :: get_div                                !< Calculate velocity divergence
       procedure :: get_pgrad                              !< Calculate pressure gradient
+      procedure :: interp_vel                             !< Calculate interpolated velocity
    end type incomp
    
    
@@ -426,6 +428,32 @@ contains
    end subroutine add_bcond
    
    
+   !> Enforce boundary condition
+   subroutine apply_bcond(this,time)
+      implicit none
+      class(incomp), intent(inout) :: this
+      real(WP), intent(in) :: time
+      integer :: i,j,k
+      
+      ! First enfore zero velocity at walls
+      do k=this%cfg%kmin_,this%cfg%kmax_
+         do j=this%cfg%jmin_,this%cfg%jmax_
+            do i=this%cfg%imin_,this%cfg%imax_
+               if (minval(this%cfg%VF(i-1:i,j,k)).lt.10.0_WP*epsilon(1.0_WP)) this%U(i,j,k)=0.0_WP
+               if (minval(this%cfg%VF(i,j-1:j,k)).lt.10.0_WP*epsilon(1.0_WP)) this%V(i,j,k)=0.0_WP
+               if (minval(this%cfg%VF(i,j,k-1:k)).lt.10.0_WP*epsilon(1.0_WP)) this%W(i,j,k)=0.0_WP
+            end do
+         end do
+      end do
+      
+      ! Sync fields
+      call this%cfg%sync(this%U)
+      call this%cfg%sync(this%V)
+      call this%cfg%sync(this%W)
+      
+   end subroutine apply_bcond
+   
+   
    !> Calculate the explicit momentum time derivative based on U/V/W/P
    subroutine get_dmomdt(this,drhoUdt,drhoVdt,drhoWdt)
       implicit none
@@ -589,6 +617,30 @@ contains
       call this%cfg%sync(Pgrady)
       call this%cfg%sync(Pgradz)
    end subroutine get_pgrad
+   
+   
+   !> Calculate the interpolated velocity
+   subroutine interp_vel(this,Ui,Vi,Wi)
+      implicit none
+      class(incomp), intent(inout) :: this
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(out) :: Ui !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(out) :: Vi !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(out) :: Wi !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      integer :: i,j,k
+      do k=this%cfg%kmin_,this%cfg%kmax_
+         do j=this%cfg%jmin_,this%cfg%jmax_
+            do i=this%cfg%imin_,this%cfg%imax_
+               Ui(i,j,k)=sum(this%itpu_x(:,i,j,k)*this%U(i:i+1,j,k))
+               Vi(i,j,k)=sum(this%itpv_y(:,i,j,k)*this%V(i,j:j+1,k))
+               Wi(i,j,k)=sum(this%itpw_z(:,i,j,k)*this%W(i,j,k:k+1))
+            end do
+         end do
+      end do
+      ! Sync it
+      call this%cfg%sync(Ui)
+      call this%cfg%sync(Vi)
+      call this%cfg%sync(Wi)
+   end subroutine interp_vel
    
    
    !> Print out info for incompressible flow solver
