@@ -75,7 +75,8 @@ module incomp_class
       procedure :: add_bcond                              !< Add a boundary condition
       procedure :: init_metrics                           !< Initialize metrics
       procedure :: get_dmomdt                             !< Calculate dmom/dt
-      procedure :: get_divergence                         !< Calculate velocity divergence
+      procedure :: get_div                                !< Calculate velocity divergence
+      procedure :: get_pgrad                              !< Calculate pressure gradient
    end type incomp
    
    
@@ -470,6 +471,8 @@ contains
             end do
          end do
       end do
+      ! Sync it
+      call this%cfg%sync(drhoUdt)
       
       ! Flux of rhoV
       do kk=this%cfg%kmin_,this%cfg%kmax_+1
@@ -501,6 +504,8 @@ contains
             end do
          end do
       end do
+      ! Sync it
+      call this%cfg%sync(drhoVdt)
       
       ! Flux of rhoW
       do kk=this%cfg%kmin_,this%cfg%kmax_+1
@@ -532,6 +537,8 @@ contains
             end do
          end do
       end do
+      ! Sync it
+      call this%cfg%sync(drhoWdt)
       
       ! Deallocate flux arrays
       deallocate(FX,FY,FZ)
@@ -540,7 +547,7 @@ contains
    
    
    !> Calculate the velocity divergence based on U/V/W
-   subroutine get_divergence(this,div)
+   subroutine get_div(this,div)
       implicit none
       class(incomp), intent(inout) :: this
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(out) :: div !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
@@ -554,7 +561,34 @@ contains
             end do
          end do
       end do
-   end subroutine get_divergence
+      ! Sync it
+      call this%cfg%sync(div)
+   end subroutine get_div
+   
+   
+   !> Calculate the pressure gradient based on P
+   subroutine get_pgrad(this,P,Pgradx,Pgrady,Pgradz)
+      implicit none
+      class(incomp), intent(inout) :: this
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in)  :: P      !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(out) :: Pgradx !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(out) :: Pgrady !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(out) :: Pgradz !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      integer :: i,j,k
+      do k=this%cfg%kmin_,this%cfg%kmax_
+         do j=this%cfg%jmin_,this%cfg%jmax_
+            do i=this%cfg%imin_,this%cfg%imax_
+               Pgradx(i,j,k)=sum(this%divu_x(:,i,j,k)*P(i-1:i,j,k))
+               Pgrady(i,j,k)=sum(this%divv_y(:,i,j,k)*P(i,j-1:j,k))
+               Pgradz(i,j,k)=sum(this%divw_z(:,i,j,k)*P(i,j,k-1:k))
+            end do
+         end do
+      end do
+      ! Sync it
+      call this%cfg%sync(Pgradx)
+      call this%cfg%sync(Pgrady)
+      call this%cfg%sync(Pgradz)
+   end subroutine get_pgrad
    
    
    !> Print out info for incompressible flow solver

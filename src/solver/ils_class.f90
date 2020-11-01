@@ -236,6 +236,8 @@ contains
       case default
          call die('[ils solve] Unknown solution method')
       end select
+      ! Sync the solution vector
+      call this%cfg%sync(this%sol)
       ! If verbose run, log and or print info
       if (verbose.gt.0) call this%log
       if (verbose.gt.1) call this%print

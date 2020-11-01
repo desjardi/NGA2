@@ -21,4 +21,4 @@ Dynamic viscosity :	0.01
 Time step size :	0.01
 
 # Ensight ouput
-Ensight output period : 0.05
+Ensight output period : 0.005

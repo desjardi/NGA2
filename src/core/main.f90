@@ -7,7 +7,7 @@ program nga
    use parallel,   only: parallel_init,parallel_final
    use messager,   only: messager_init,messager_final
    use geometry,   only: geometry_init
-   use simulation, only: simulation_init,simulation_run
+   use simulation, only: simulation_init,simulation_run,simulation_final
    implicit none
    
    
@@ -51,6 +51,15 @@ program nga
    ! Run the solver ========================
    ! =======================================
    call simulation_run
+   ! =======================================
+   
+   
+   
+   
+   ! =======================================
+   ! Finalize the solver ===================
+   ! =======================================
+   call simulation_final
    ! =======================================
    
    

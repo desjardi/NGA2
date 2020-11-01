@@ -1,5 +1,6 @@
 !> Various definitions and tools for running an NGA2 simulation
 module simulation
+   use precision,         only: WP
    use geometry,          only: cfg
    use incomp_class,      only: incomp,dirichlet
    use timetracker_class, only: timetracker
@@ -20,7 +21,11 @@ module simulation
    !> Simulation monitor file
    type(monitor) :: mfile
    
-   public :: simulation_init,simulation_run
+   public :: simulation_init,simulation_run,simulation_final
+   
+   !> Private work arrays
+   real(WP), dimension(:,:,:), allocatable :: dudt,dvdt,dwdt,div
+   
    
 contains
    
@@ -77,10 +82,16 @@ contains
       ! Initialize our velocity field
       initialize_velocity: block
          fs%U=0.0_WP
-         fs%V=0.0_WP
+         fs%V=1.0_WP
          fs%W=0.0_WP
       end block initialize_velocity
       
+      
+      ! Allocate work arrays
+      allocate(dudt(fs%cfg%imino_:fs%cfg%imaxo_,fs%cfg%jmino_:fs%cfg%jmaxo_,fs%cfg%kmino_:fs%cfg%kmaxo_))
+      allocate(dvdt(fs%cfg%imino_:fs%cfg%imaxo_,fs%cfg%jmino_:fs%cfg%jmaxo_,fs%cfg%kmino_:fs%cfg%kmaxo_))
+      allocate(dwdt(fs%cfg%imino_:fs%cfg%imaxo_,fs%cfg%jmino_:fs%cfg%jmaxo_,fs%cfg%kmino_:fs%cfg%kmaxo_))
+      allocate(div (fs%cfg%imino_:fs%cfg%imaxo_,fs%cfg%jmino_:fs%cfg%jmaxo_,fs%cfg%kmino_:fs%cfg%kmaxo_))
       
       ! Add Ensight output
       create_ensight: block
@@ -90,28 +101,32 @@ contains
          ens_evt=event(time,'Ensight output')
          call param_read('Ensight output period',ens_evt%tper)
          ! Add variables to output
-         call ens_out%add_scalar('Pressure',fs%P)
-         call ens_out%add_vector('Velocity',fs%U,fs%V,fs%W)
+         call ens_out%add_scalar('pressure',fs%P)
+         call ens_out%add_vector('velocity',fs%U,fs%V,fs%W)
+         call ens_out%add_vector('dveldt',dudt,dvdt,dwdt)
+         call ens_out%add_scalar('div',div)
+         ! Output to ensight
+         if (ens_evt%occurs()) call ens_out%write_data(time%t)
       end block create_ensight
       
       
-      ! Try to use the pressure solver
-      test_pressure_solver: block
-         ! Create a scaled RHS and output it
-         fs%psolv%rhs=0.0_WP
-         if (fs%cfg%jproc.eq.         1) fs%psolv%rhs(:,fs%cfg%jmin_,:)=+1.0_WP
-         if (fs%cfg%jproc.eq.fs%cfg%npy) fs%psolv%rhs(:,fs%cfg%jmax_,:)=-1.0_WP
-         fs%psolv%rhs=-fs%cfg%vol*fs%psolv%rhs
-         call ens_out%add_scalar('RHS',fs%psolv%rhs)
-         ! Set initial guess to zero
-         fs%psolv%sol=0.0_WP
-         ! Call the solver
-         call fs%psolv%solve()
-         ! Copy back to pressure
-         fs%P=fs%psolv%sol
-         ! Output to ensight
-         !if (ens_evt%occurs()) call ens_out%write_data(time%t)
-      end block test_pressure_solver
+      ! ! Try to use the pressure solver
+      ! test_pressure_solver: block
+      !    ! Create a scaled RHS and output it
+      !    fs%psolv%rhs=0.0_WP
+      !    if (fs%cfg%jproc.eq.         1) fs%psolv%rhs(:,fs%cfg%jmin_,:)=+1.0_WP
+      !    if (fs%cfg%jproc.eq.fs%cfg%npy) fs%psolv%rhs(:,fs%cfg%jmax_,:)=-1.0_WP
+      !    fs%psolv%rhs=-fs%cfg%vol*fs%psolv%rhs
+      !    call ens_out%add_scalar('RHS',fs%psolv%rhs)
+      !    ! Set initial guess to zero
+      !    fs%psolv%sol=0.0_WP
+      !    ! Call the solver
+      !    call fs%psolv%solve()
+      !    ! Copy back to pressure
+      !    fs%P=fs%psolv%sol
+      !    ! Output to ensight
+      !    !if (ens_evt%occurs()) call ens_out%write_data(time%t)
+      ! end block test_pressure_solver
       
       
       ! Create a monitor file
@@ -132,42 +147,59 @@ contains
    
    !> Perform an NGA2 simulation
    subroutine simulation_run
-      use precision, only: WP
       implicit none
-      real(WP), dimension(:,:,:), allocatable :: dudt,dvdt,dwdt
-      
-      ! Allocate work arrays
-      allocate(dudt(fs%cfg%imino_:fs%cfg%imaxo_,fs%cfg%jmino_:fs%cfg%jmaxo_,fs%cfg%kmino_:fs%cfg%kmaxo_))
-      allocate(dvdt(fs%cfg%imino_:fs%cfg%imaxo_,fs%cfg%jmino_:fs%cfg%jmaxo_,fs%cfg%kmino_:fs%cfg%kmaxo_))
-      allocate(dwdt(fs%cfg%imino_:fs%cfg%imaxo_,fs%cfg%jmino_:fs%cfg%jmaxo_,fs%cfg%kmino_:fs%cfg%kmaxo_))
-      
-      call ens_out%add_vector('dveldt',dudt,dvdt,dwdt)
       
       ! Perform explicit Euler time integration
       do while (.not.time%done())
+         
          ! Increment time
          call time%adjust_dt()
          call time%increment()
-         ! Evaluate velocity rate of change
+         
+         ! Explicit Euler advancement of NS
          call fs%get_dmomdt(dudt,dvdt,dwdt)
-         ! Explicit Euler advancement
          fs%U=fs%U+time%dt*dudt/fs%rho
          fs%V=fs%V+time%dt*dvdt/fs%rho
          fs%W=fs%W+time%dt*dwdt/fs%rho
+         
+         ! Solve Poisson equation
+         call fs%get_div(div)
+         fs%psolv%rhs=-fs%cfg%vol*div*fs%rho/time%dt
+         fs%psolv%sol=0.0_WP
+         call fs%psolv%solve()
+         
+         ! Correct velocity
+         call fs%get_pgrad(fs%psolv%sol,dudt,dvdt,dwdt)
+         fs%P=fs%P+fs%psolv%sol
+         fs%U=fs%U-time%dt*dudt/fs%rho
+         fs%V=fs%V-time%dt*dvdt/fs%rho
+         fs%W=fs%W-time%dt*dwdt/fs%rho
+         
          ! Output to ensight
-         !if (ens_evt%occurs()) call ens_out%write_data(time%t)
-         call ens_out%write_data(time%t)
+         if (ens_evt%occurs()) call ens_out%write_data(time%t)
+         
          ! Write out monitor file
          call mfile%write()
          
-         stop
-         
       end do
       
-      ! Deallocate work arrays
-      deallocate(dudt,dvdt,dwdt)
-      
    end subroutine simulation_run
+   
+   
+   !> Finalize the NGA2 simulation
+   subroutine simulation_final
+      implicit none
+      
+      ! Get rid of all objects - need destructors
+      ! monitor
+      ! ensight
+      ! bcond
+      ! timetracker
+      
+      ! Deallocate work arrays
+      deallocate(dudt,dvdt,dwdt,div)
+      
+   end subroutine simulation_final
    
    
 end module simulation
