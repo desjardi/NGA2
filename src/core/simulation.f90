@@ -147,7 +147,7 @@ contains
          call time%adjust_dt()
          call time%increment()
          ! Evaluate velocity rate of change
-         !call fs%get_dmomdt(dudt,dvdt,dwdt)
+         call fs%get_dmomdt(dudt,dvdt,dwdt)
          ! Explicit Euler advancement
          fs%U=fs%U+time%dt*dudt/fs%rho
          fs%V=fs%V+time%dt*dvdt/fs%rho
@@ -156,6 +156,7 @@ contains
          if (ens_evt%occurs()) call ens_out%write_data(time%t)
          ! Write out monitor file
          call mfile%write()
+         stop
       end do
       
       ! Deallocate work arrays
