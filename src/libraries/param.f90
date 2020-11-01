@@ -197,6 +197,7 @@ contains
       character(len=*), intent(in) :: val
       character(len=*), intent(in) :: src
       type(param_type), dimension(:), allocatable :: temp
+      integer :: i
       ! Check if parameter exists already
       if (param_exists(tag)) then
          ! Warn the user
@@ -210,34 +211,13 @@ contains
          ! Add parameter
          nparams=nparams+1
          params(nparams)%tag=adjustl(trim(tag))
-         params(nparams)%val=adjustl(trim(bcompress(val)))
+         params(nparams)%val=adjustl(trim(val))
          params(nparams)%src=adjustl(trim(src))
+         ! Remove unwanted characters from val string
+         do i=1,len_trim(params(nparams)%val)
+            if (ichar(params(nparams)%val(i:i)).eq.9.or.params(nparams)%val(i:i).eq.','.or.params(nparams)%val(i:i).eq.';') params(nparams)%val(i:i)=' '
+         end do
       end if
-   contains
-      !> Simple compression of blank spaces, commas, tabs, semi-colons
-      function bcompress(valin) result(valout)
-         character(len=*)               :: valin
-         character(len=len_trim(valin)) :: valout
-         integer :: i,k,n
-         ! Traverse valin and remove unwanted characters
-         do i=1,len_trim(valin)
-            if (ichar(valin(i:i)).eq.9.or.valin(i:i).eq.','.or.valin(i:i).eq.';') valin(i:i)=' '
-         end do
-         ! k is the index of last non-blank
-         n=0; k=len_trim(valin)
-         ! Zero size if possible
-         if (k.eq.0) return
-         ! Don't process last char yet
-         do i=1,k-1
-            n=n+1; valout(n:n)=valin(i:i)
-            ! Discard consecutive blank
-            if (valin(i:i+1).eq.'  ') n=n-1
-         end do
-         ! Last non-blank char output
-         n=n+1; valout(n:n)=valin(k:k)
-         ! Pad trailing blanks
-         if (n.lt.k) valout(n+1:)=' '
-      end function bcompress
    end subroutine param_add
    
    
