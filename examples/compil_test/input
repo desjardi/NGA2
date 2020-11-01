@@ -15,10 +15,10 @@ Hole dist : 0.004
 
 # Fluid properties
 Density :		1
-Dynamic viscosity :	0.01
+Dynamic viscosity :	1e-5
 
 # Integration
-Time step size :	1e-6
+Time step size :	1e-4
 
 # Ensight ouput
-Ensight output period : 1e-7
+Ensight output period : 1e-3
