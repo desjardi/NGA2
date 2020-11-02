@@ -2,7 +2,7 @@
 module simulation
    use precision,         only: WP
    use geometry,          only: cfg
-   use incomp_class,      only: incomp,dirichlet,convective,neumann
+   use incomp_class,      only: incomp,bcond,dirichlet,convective,neumann
    use timetracker_class, only: timetracker
    use ensight_class,     only: ensight
    use event_class,       only: event
@@ -88,8 +88,8 @@ contains
       initialize_bc: block
          real(WP), dimension(3) :: outward_normal
          ! Define inflow and outflow
-         outward_normal=[0.0_WP,-1.0_WP,0.0_WP]; call fs%add_bcond('inflow' ,dirichlet,outward_normal,bottom_locator)
-         outward_normal=[0.0_WP,+1.0_WP,0.0_WP]; call fs%add_bcond('outflow',neumann  ,outward_normal,   top_locator)
+         outward_normal=[0.0_WP,-1.0_WP,0.0_WP]; call fs%add_bcond('inflow' ,dirichlet ,outward_normal,bottom_locator)
+         outward_normal=[0.0_WP,+1.0_WP,0.0_WP]; call fs%add_bcond('outflow',convective,outward_normal,   top_locator)
          ! Modify metrics to reflect the BCs
          call fs%init_bcond()
       end block initialize_bc
@@ -106,12 +106,20 @@ contains
       
       ! Initialize our velocity field
       initialize_velocity: block
+         type(bcond), pointer :: inflow
+         integer :: n,i,j,k
          ! Zero initial field
-         fs%U=0.0_WP; fs%V=1.0_WP; fs%W=0.0_WP
+         fs%U=0.0_WP; fs%V=0.0_WP; fs%W=0.0_WP
          ! Apply Dirichlet at our inflow
-         
+         call fs%get_bcond('inflow',inflow)
+         do n=1,inflow%itr%no_
+            i=inflow%itr%map(1,n); j=inflow%itr%map(2,n); k=inflow%itr%map(3,n)
+            fs%U(i,j,k)=0.0_WP
+            fs%V(i,j,k)=1.0_WP
+            fs%W(i,j,k)=0.0_WP
+         end do
          ! Apply all other boundary conditions
-         !call fs%apply_bcond(time%t,time%dt)
+         call fs%apply_bcond(time%t,time%dt)
          call fs%interp_vel(Ui,Vi,Wi)
          call fs%get_div()
       end block initialize_velocity
@@ -187,7 +195,7 @@ contains
          fs%W=fs%W+time%dt*dwdt/fs%rho
          
          ! Apply other boundary conditions on the resulting fields
-         !call fs%apply_bcond(time%t,time%dt)
+         call fs%apply_bcond(time%t,time%dt)
          
          ! Solve Poisson equation
          !call fs%force_global_conservation()

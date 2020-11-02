@@ -12,7 +12,7 @@ module incomp_class
    private
    
    ! Expose type/constructor/methods
-   public :: incomp
+   public :: incomp,bcond
    
    ! List of known available bcond for this solver
    integer, parameter, public :: dirichlet=1      !< Dirichlet condition
@@ -84,6 +84,7 @@ module incomp_class
    contains
       procedure :: print=>incomp_print                    !< Output solver to the screen
       procedure :: add_bcond                              !< Add a boundary condition
+      procedure :: get_bcond                              !< Get a boundary condition
       procedure :: init_bcond                             !< Adjust metrics for boundary conditions
       procedure :: apply_bcond                            !< Apply all boundary conditions
       procedure :: init_metrics                           !< Initialize metrics
@@ -455,7 +456,6 @@ contains
          end function locator
       end interface
       type(bcond), pointer :: new_bc
-      integer :: n
       
       ! Prepare new bcond
       allocate(new_bc)
@@ -471,6 +471,20 @@ contains
    end subroutine add_bcond
    
    
+   !> Get a boundary condition
+   subroutine get_bcond(this,name,my_bc)
+      implicit none
+      class(incomp), intent(inout) :: this
+      character(len=*), intent(in) :: name
+      type(bcond), pointer, intent(out) :: my_bc
+      my_bc=>this%first_bc
+      search: do while (associated(my_bc))
+         if (trim(my_bc%name).eq.trim(name)) exit search
+         my_bc=>my_bc%next
+      end do search
+   end subroutine get_bcond
+   
+   
    !> Enforce boundary condition on the metrics
    subroutine init_bcond(this)
       implicit none
@@ -484,11 +498,16 @@ contains
    
    !> Enforce boundary condition
    subroutine apply_bcond(this,t,dt)
+      use messager, only: die
+      use mpi_f08,  only: MPI_MAX
+      use parallel, only: MPI_REAL_WP
       implicit none
       class(incomp), intent(inout) :: this
       real(WP), intent(in) :: t,dt
-      integer :: i,j,k
+      integer :: i,j,k,n
+      integer :: si,sj,sk,ierr
       type(bcond), pointer :: my_bc
+      real(WP), dimension(3) :: conv_vel,my_conv_vel
       
       ! First enfore zero velocity at walls
       do k=this%cfg%kmin_,this%cfg%kmax_
@@ -505,14 +524,75 @@ contains
       call this%cfg%sync(this%V)
       call this%cfg%sync(this%W)
       
-      ! Loop over bcond
-      
-      ! Apply Dirichlet conditions
-      ! This is done by the user directly
-      ! Unclear whether we want to do this within the solver...
-      
-      ! Apply Neumann conditions
-      
+      ! Traverse bcond list
+      my_bc=>this%first_bc
+      do while (associated(my_bc))
+         
+         ! Only processes inside the bcond work here
+         if (my_bc%itr%amIn) then
+            
+            ! Select appropriate action based on the bcond type
+            select case (my_bc%type)
+            case (dirichlet)   ! Apply Dirichlet conditions
+               
+               ! This is done by the user directly
+               ! Unclear whether we want to do this within the solver...
+               
+            case (neumann)     ! Apply Neumann condition
+               
+               ! Decide copy direction from outward normal vector
+               si=-nint(my_bc%norm(1)); sj=-nint(my_bc%norm(2)); sk=-nint(my_bc%norm(3))
+               ! Loop over all cells
+               do n=1,my_bc%itr%no_
+                  ! Get the indices
+                  i=my_bc%itr%map(1,n); j=my_bc%itr%map(2,n); k=my_bc%itr%map(3,n)
+                  ! Direct copy in the normal direction
+                  this%U(i,j,k)=this%U(i+si,j+sj,k+sk)
+                  this%V(i,j,k)=this%V(i+si,j+sj,k+sk)
+                  this%W(i,j,k)=this%W(i+si,j+sj,k+sk)
+               end do
+               
+            case (convective)   ! Apply convective condition
+               
+               ! Decide copy direction from outward normal vector
+               si=-nint(my_bc%norm(1)); sj=-nint(my_bc%norm(2)); sk=-nint(my_bc%norm(3))
+               
+               ! Get convective velocity
+               my_conv_vel=0.0_WP
+               do n=1,my_bc%itr%no_
+                  ! Get the indices
+                  i=my_bc%itr%map(1,n); j=my_bc%itr%map(2,n); k=my_bc%itr%map(3,n)
+                  ! Find maximum velocity
+                  my_conv_vel(1)=max(my_conv_vel(1),this%U(i+si,j+sj,k+sk))
+                  my_conv_vel(2)=max(my_conv_vel(2),this%V(i+si,j+sj,k+sk))
+                  my_conv_vel(3)=max(my_conv_vel(3),this%W(i+si,j+sj,k+sk))
+               end do
+               call MPI_ALLREDUCE(my_conv_vel,conv_vel,3,MPI_REAL_WP,MPI_MAX,my_bc%itr%comm,ierr)
+               
+               print*,'Convective velocity',this%cfg%rank,conv_vel
+               
+               ! Implement based on normal direction
+               select case (maxloc(abs(my_bc%norm),1))
+               case (1) ! Outflow in x
+                  ! Get convective velocity
+                  
+                  
+               case (2) ! Outflow in y
+                  
+               case (3) ! Outflow in z
+                  
+               end select
+               
+            case default
+               call die('[incomp apply_bcond] Unknown bcond type')
+            end select
+            
+         end if
+            
+         ! Move on to the next bcond
+         my_bc=>my_bc%next
+         
+      end do
       
    end subroutine apply_bcond
    
