@@ -36,7 +36,7 @@ contains
       integer, intent(in) :: i,j,k
       logical :: isIn
       isIn=.false.
-      if (j.eq.pg%jmax+1) isIn=.true.
+      if (j.eq.pg%jmax) isIn=.true.
    end function top_locator
    
    !> Function that localizes the bottom of the domain
@@ -86,10 +86,9 @@ contains
       
       ! Initialize boundary conditions
       initialize_bc: block
-         real(WP), dimension(3) :: outward_normal
          ! Define inflow and outflow
-         outward_normal=[0.0_WP,-1.0_WP,0.0_WP]; call fs%add_bcond('inflow' ,dirichlet ,outward_normal,bottom_locator)
-         outward_normal=[0.0_WP,+1.0_WP,0.0_WP]; call fs%add_bcond('outflow',convective,outward_normal,   top_locator)
+         call fs%add_bcond('inflow' ,dirichlet ,'-y',bottom_locator)
+         call fs%add_bcond('outflow',convective,'+y',   top_locator)
          ! Modify metrics to reflect the BCs
          call fs%init_bcond()
       end block initialize_bc
