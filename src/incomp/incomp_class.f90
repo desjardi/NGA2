@@ -70,6 +70,10 @@ module incomp_class
       real(WP), dimension(:,:,:,:), allocatable :: grdv_x,grdv_y,grdv_z   !< Velocity gradient for V
       real(WP), dimension(:,:,:,:), allocatable :: grdw_x,grdw_y,grdw_z   !< Velocity gradient for W
       
+      ! CFL numbers
+      real(WP) :: CFLc_x,CFLc_y,CFLc_z                                    !< Convective CFL numbers
+      real(WP) :: CFLv_x,CFLv_y,CFLv_z                                    !< Viscous CFL numbers
+      
    contains
       procedure :: print=>incomp_print                    !< Output solver to the screen
       procedure :: add_bcond                              !< Add a boundary condition
@@ -78,6 +82,7 @@ module incomp_class
       procedure :: get_dmomdt                             !< Calculate dmom/dt
       procedure :: get_div                                !< Calculate velocity divergence
       procedure :: get_pgrad                              !< Calculate pressure gradient
+      procedure :: get_cfl                                !< Calculate maximum CFL
       procedure :: interp_vel                             !< Calculate interpolated velocity
    end type incomp
    
@@ -641,6 +646,49 @@ contains
       call this%cfg%sync(Vi)
       call this%cfg%sync(Wi)
    end subroutine interp_vel
+   
+   
+   !> Calculate the CFL
+   subroutine get_cfl(this,dt,cfl)
+      use mpi_f08,  only: MPI_ALLREDUCE,MPI_MAX
+      use parallel, only: MPI_REAL_WP
+      implicit none
+      class(incomp), intent(inout) :: this
+      real(WP), intent(in)  :: dt
+      real(WP), intent(out) :: cfl
+      integer :: i,j,k,ierr
+      real(WP) :: my_CFLc_x,my_CFLc_y,my_CFLc_z,my_CFLv_x,my_CFLv_y,my_CFLv_z
+      
+      ! Set the CFLs to zero
+      my_CFLc_x=0.0_WP; my_CFLc_y=0.0_WP; my_CFLc_z=0.0_WP
+      my_CFLv_x=0.0_WP; my_CFLv_y=0.0_WP; my_CFLv_z=0.0_WP
+      do k=this%cfg%kmin_,this%cfg%kmax_
+         do j=this%cfg%jmin_,this%cfg%jmax_
+            do i=this%cfg%imin_,this%cfg%imax_
+               my_CFLc_x=max(my_CFLc_x,abs(this%U(i,j,k))*this%cfg%dxmi(i))
+               my_CFLc_y=max(my_CFLc_y,abs(this%V(i,j,k))*this%cfg%dymi(j))
+               my_CFLc_z=max(my_CFLc_z,abs(this%W(i,j,k))*this%cfg%dzmi(k))
+               my_CFLv_x=max(my_CFLv_x,4.0_WP*this%visc*this%cfg%dxi(i)**2/this%rho)
+               my_CFLv_y=max(my_CFLv_y,4.0_WP*this%visc*this%cfg%dyi(j)**2/this%rho)
+               my_CFLv_z=max(my_CFLv_z,4.0_WP*this%visc*this%cfg%dzi(k)**2/this%rho)
+            end do
+         end do
+      end do
+      my_CFLc_x=my_CFLc_x*dt; my_CFLc_y=my_CFLc_y*dt; my_CFLc_z=my_CFLc_z*dt
+      my_CFLv_x=my_CFLv_x*dt; my_CFLv_y=my_CFLv_y*dt; my_CFLv_z=my_CFLv_z*dt
+      
+      ! Get the parallel max
+      call MPI_ALLREDUCE(my_CFLc_x,this%CFLc_x,1,MPI_REAL_WP,MPI_MAX,this%cfg%comm,ierr)
+      call MPI_ALLREDUCE(my_CFLc_y,this%CFLc_y,1,MPI_REAL_WP,MPI_MAX,this%cfg%comm,ierr)
+      call MPI_ALLREDUCE(my_CFLc_z,this%CFLc_z,1,MPI_REAL_WP,MPI_MAX,this%cfg%comm,ierr)
+      call MPI_ALLREDUCE(my_CFLv_x,this%CFLv_x,1,MPI_REAL_WP,MPI_MAX,this%cfg%comm,ierr)
+      call MPI_ALLREDUCE(my_CFLv_y,this%CFLv_y,1,MPI_REAL_WP,MPI_MAX,this%cfg%comm,ierr)
+      call MPI_ALLREDUCE(my_CFLv_z,this%CFLv_z,1,MPI_REAL_WP,MPI_MAX,this%cfg%comm,ierr)
+      
+      ! Set global max
+      cfl=max(this%CFLc_x,this%CFLc_y,this%CFLc_z,this%CFLv_x,this%CFLv_y,this%CFLv_z)
+      
+   end subroutine get_cfl
    
    
    !> Print out info for incompressible flow solver

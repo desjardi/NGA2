@@ -86,7 +86,8 @@ contains
       ! Initialize time tracker
       initialize_timetracker: block
          time=timetracker(fs%cfg%amRoot)
-         call param_read('Time step size',time%dt)
+         call param_read('Time step size',time%dtmax)
+         time%dt=time%dtmax
       end block initialize_timetracker
       
       
@@ -123,8 +124,11 @@ contains
          ! Create monitor
          mfile=monitor(fs%cfg%amRoot,'simulation')
          ! Add time info first
-         call mfile%add_column(time%n,'Timestep')
+         call mfile%add_column(time%n,'Timestep number')
          call mfile%add_column(time%t,'Time')
+         call mfile%add_column(time%dt,'Timestep size')
+         call fs%get_cfl(time%dt,time%cfl)
+         call mfile%add_column(time%cfl,'Maximum CFL')
          ! Write it out
          call mfile%write()
       end block create_monitor
@@ -141,6 +145,7 @@ contains
       do while (.not.time%done())
          
          ! Increment time
+         call fs%get_cfl(time%dt,time%cfl)
          call time%adjust_dt()
          call time%increment()
          
