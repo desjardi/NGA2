@@ -132,6 +132,8 @@ contains
          call mfile%add_column(fs%Wmax,'Wmax')
          call mfile%add_column(fs%Pmax,'Pmax')
          call mfile%add_column(fs%divmax,'Maximum divergence')
+         call mfile%add_column(fs%psolv%it,'Pressure iteration')
+         call mfile%add_column(fs%psolv%rerr,'Pressure error')
          ! Write it out
          call fs%get_cfl(time%dt,time%cfl)
          call fs%get_max()
