@@ -55,6 +55,9 @@ module incomp_class
       real(WP), dimension(:,:,:), allocatable :: Vold     !< Vold velocity array
       real(WP), dimension(:,:,:), allocatable :: Wold     !< Wold velocity array
       
+      ! Flow divergence
+      real(WP), dimension(:,:,:), allocatable :: div      !< Divergence array
+      
       ! Pressure solver
       type(ils) :: psolv                                  !< Iterative linear solver object for the pressure Poisson equation
       
@@ -74,6 +77,9 @@ module incomp_class
       real(WP) :: CFLc_x,CFLc_y,CFLc_z                                    !< Convective CFL numbers
       real(WP) :: CFLv_x,CFLv_y,CFLv_z                                    !< Viscous CFL numbers
       
+      ! Monitoring quantities
+      real(WP) :: Umax,Vmax,Wmax,Pmax,divmax                              !< Maximum velocity, pressure, divergence
+      
    contains
       procedure :: print=>incomp_print                    !< Output solver to the screen
       procedure :: add_bcond                              !< Add a boundary condition
@@ -83,6 +89,7 @@ module incomp_class
       procedure :: get_div                                !< Calculate velocity divergence
       procedure :: get_pgrad                              !< Calculate pressure gradient
       procedure :: get_cfl                                !< Calculate maximum CFL
+      procedure :: get_max                                !< Calculate maximum field values
       procedure :: interp_vel                             !< Calculate interpolated velocity
    end type incomp
    
@@ -120,6 +127,9 @@ contains
       allocate(self%V(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%V=0.0_WP
       allocate(self%W(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%W=0.0_WP
       allocate(self%P(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%P=0.0_WP
+      
+      ! Allocate flow divergence
+      allocate(self%div(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%div=0.0_WP
       
       ! Allocate old flow variables
       allocate(self%Uold(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%Uold=0.0_WP
@@ -580,22 +590,21 @@ contains
    
    
    !> Calculate the velocity divergence based on U/V/W
-   subroutine get_div(this,div)
+   subroutine get_div(this)
       implicit none
       class(incomp), intent(inout) :: this
-      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(out) :: div !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       integer :: i,j,k
       do k=this%cfg%kmin_,this%cfg%kmax_
          do j=this%cfg%jmin_,this%cfg%jmax_
             do i=this%cfg%imin_,this%cfg%imax_
-               div(i,j,k)=sum(this%divp_x(:,i,j,k)*this%U(i:i+1,j,k))+&
-               &          sum(this%divp_y(:,i,j,k)*this%V(i,j:j+1,k))+&
-               &          sum(this%divp_z(:,i,j,k)*this%W(i,j,k:k+1))
+               this%div(i,j,k)=sum(this%divp_x(:,i,j,k)*this%U(i:i+1,j,k))+&
+               &               sum(this%divp_y(:,i,j,k)*this%V(i,j:j+1,k))+&
+               &               sum(this%divp_z(:,i,j,k)*this%W(i,j,k:k+1))
             end do
          end do
       end do
       ! Sync it
-      call this%cfg%sync(div)
+      call this%cfg%sync(this%div)
    end subroutine get_div
    
    
@@ -689,6 +698,39 @@ contains
       cfl=max(this%CFLc_x,this%CFLc_y,this%CFLc_z,this%CFLv_x,this%CFLv_y,this%CFLv_z)
       
    end subroutine get_cfl
+   
+   
+   !> Calculate the max of our fields
+   subroutine get_max(this)
+      use mpi_f08,  only: MPI_ALLREDUCE,MPI_MAX
+      use parallel, only: MPI_REAL_WP
+      implicit none
+      class(incomp), intent(inout) :: this
+      integer :: i,j,k,ierr
+      real(WP) :: my_Umax,my_Vmax,my_Wmax,my_Pmax,my_divmax
+      
+      ! Set all to zero
+      my_Umax=0.0_WP; my_Vmax=0.0_WP; my_Wmax=0.0_WP; my_Pmax=0.0_WP; my_divmax=0.0_WP
+      do k=this%cfg%kmin_,this%cfg%kmax_
+         do j=this%cfg%jmin_,this%cfg%jmax_
+            do i=this%cfg%imin_,this%cfg%imax_
+               my_Umax  =max(my_Umax  ,abs(this%U(i,j,k)  ))
+               my_Vmax  =max(my_Vmax  ,abs(this%V(i,j,k)  ))
+               my_Wmax  =max(my_Wmax  ,abs(this%W(i,j,k)  ))
+               my_Pmax  =max(my_Pmax  ,abs(this%P(i,j,k)  ))
+               my_divmax=max(my_divmax,abs(this%div(i,j,k)))
+            end do
+         end do
+      end do
+      
+      ! Get the parallel max
+      call MPI_ALLREDUCE(my_Umax  ,this%Umax  ,1,MPI_REAL_WP,MPI_MAX,this%cfg%comm,ierr)
+      call MPI_ALLREDUCE(my_Vmax  ,this%Vmax  ,1,MPI_REAL_WP,MPI_MAX,this%cfg%comm,ierr)
+      call MPI_ALLREDUCE(my_Wmax  ,this%Wmax  ,1,MPI_REAL_WP,MPI_MAX,this%cfg%comm,ierr)
+      call MPI_ALLREDUCE(my_Pmax  ,this%Pmax  ,1,MPI_REAL_WP,MPI_MAX,this%cfg%comm,ierr)
+      call MPI_ALLREDUCE(my_divmax,this%divmax,1,MPI_REAL_WP,MPI_MAX,this%cfg%comm,ierr)
+      
+   end subroutine get_max
    
    
    !> Print out info for incompressible flow solver

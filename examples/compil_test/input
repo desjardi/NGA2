@@ -21,7 +21,7 @@ Dynamic viscosity :	1e-3
 # Integration
 Time step size :	5e-6
 Pressure tolerance : 	1e-6
-Pressure iteration : 	30
+Pressure iteration : 	100
 
 
 # Ensight ouput

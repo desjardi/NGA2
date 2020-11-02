@@ -24,7 +24,7 @@ module simulation
    public :: simulation_init,simulation_run,simulation_final
    
    !> Private work arrays
-   real(WP), dimension(:,:,:), allocatable :: dudt,dvdt,dwdt,div
+   real(WP), dimension(:,:,:), allocatable :: dudt,dvdt,dwdt
    real(WP), dimension(:,:,:), allocatable :: Ui,Vi,Wi
    
 contains
@@ -70,7 +70,6 @@ contains
          allocate(dudt(fs%cfg%imino_:fs%cfg%imaxo_,fs%cfg%jmino_:fs%cfg%jmaxo_,fs%cfg%kmino_:fs%cfg%kmaxo_))
          allocate(dvdt(fs%cfg%imino_:fs%cfg%imaxo_,fs%cfg%jmino_:fs%cfg%jmaxo_,fs%cfg%kmino_:fs%cfg%kmaxo_))
          allocate(dwdt(fs%cfg%imino_:fs%cfg%imaxo_,fs%cfg%jmino_:fs%cfg%jmaxo_,fs%cfg%kmino_:fs%cfg%kmaxo_))
-         allocate(div (fs%cfg%imino_:fs%cfg%imaxo_,fs%cfg%jmino_:fs%cfg%jmaxo_,fs%cfg%kmino_:fs%cfg%kmaxo_))
          allocate(Ui  (fs%cfg%imino_:fs%cfg%imaxo_,fs%cfg%jmino_:fs%cfg%jmaxo_,fs%cfg%kmino_:fs%cfg%kmaxo_))
          allocate(Vi  (fs%cfg%imino_:fs%cfg%imaxo_,fs%cfg%jmino_:fs%cfg%jmaxo_,fs%cfg%kmino_:fs%cfg%kmaxo_))
          allocate(Wi  (fs%cfg%imino_:fs%cfg%imaxo_,fs%cfg%jmino_:fs%cfg%jmaxo_,fs%cfg%kmino_:fs%cfg%kmaxo_))
@@ -98,7 +97,7 @@ contains
          fs%W=0.0_WP
          call fs%apply_bcond(time%t)
          call fs%interp_vel(Ui,Vi,Wi)
-         call fs%get_div(div)
+         call fs%get_div()
       end block initialize_velocity
       
       
@@ -113,7 +112,7 @@ contains
          call ens_out%add_scalar('pressure',fs%P)
          call ens_out%add_vector('velocity',Ui,Vi,Wi)
          call ens_out%add_vector('dveldt',dudt,dvdt,dwdt)
-         call ens_out%add_scalar('div',div)
+         call ens_out%add_scalar('div',fs%div)
          ! Output to ensight
          if (ens_evt%occurs()) call ens_out%write_data(time%t)
       end block create_ensight
@@ -127,9 +126,15 @@ contains
          call mfile%add_column(time%n,'Timestep number')
          call mfile%add_column(time%t,'Time')
          call mfile%add_column(time%dt,'Timestep size')
-         call fs%get_cfl(time%dt,time%cfl)
          call mfile%add_column(time%cfl,'Maximum CFL')
+         call mfile%add_column(fs%Umax,'Umax')
+         call mfile%add_column(fs%Vmax,'Vmax')
+         call mfile%add_column(fs%Wmax,'Wmax')
+         call mfile%add_column(fs%Pmax,'Pmax')
+         call mfile%add_column(fs%divmax,'Maximum divergence')
          ! Write it out
+         call fs%get_cfl(time%dt,time%cfl)
+         call fs%get_max()
          call mfile%write()
       end block create_monitor
       
@@ -149,6 +154,11 @@ contains
          call time%adjust_dt()
          call time%increment()
          
+         ! Remember old velocity
+         fs%Uold=fs%U
+         fs%Vold=fs%V
+         fs%Wold=fs%W
+         
          ! Apply BCs
          call fs%apply_bcond(time%t)
          
@@ -159,8 +169,8 @@ contains
          fs%W=fs%W+time%dt*dwdt/fs%rho
          
          ! Solve Poisson equation
-         call fs%get_div(div)
-         fs%psolv%rhs=-fs%cfg%vol*div*fs%rho/time%dt
+         call fs%get_div()
+         fs%psolv%rhs=-fs%cfg%vol*fs%div*fs%rho/time%dt
          fs%psolv%sol=0.0_WP
          call fs%psolv%solve()
          
@@ -173,12 +183,13 @@ contains
          
          ! Recompute interpolated velocity and divergence
          call fs%interp_vel(Ui,Vi,Wi)
-         call fs%get_div(div)
+         call fs%get_div()
          
          ! Output to ensight
          if (ens_evt%occurs()) call ens_out%write_data(time%t)
          
-         ! Write out monitor file
+         ! Perform and output monitoring
+         call fs%get_max()
          call mfile%write()
          
       end do
@@ -197,7 +208,7 @@ contains
       ! timetracker
       
       ! Deallocate work arrays
-      deallocate(dudt,dvdt,dwdt,div,Ui,Vi,Wi)
+      deallocate(dudt,dvdt,dwdt,Ui,Vi,Wi)
       
    end subroutine simulation_final
    
