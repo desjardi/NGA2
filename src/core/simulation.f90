@@ -2,7 +2,7 @@
 module simulation
    use precision,         only: WP
    use geometry,          only: cfg
-   use incomp_class,      only: incomp,dirichlet
+   use incomp_class,      only: incomp,dirichlet,convective,neumann
    use timetracker_class, only: timetracker
    use ensight_class,     only: ensight
    use event_class,       only: event
@@ -30,14 +30,24 @@ module simulation
 contains
    
    !> Function that localizes the top of the domain
-   function yplus_locator(pg,i,j,k) result(isIn)
+   function top_locator(pg,i,j,k) result(isIn)
       use pgrid_class, only: pgrid
       class(pgrid), intent(in) :: pg
       integer, intent(in) :: i,j,k
       logical :: isIn
       isIn=.false.
       if (j.eq.pg%jmax+1) isIn=.true.
-   end function yplus_locator
+   end function top_locator
+   
+   !> Function that localizes the bottom of the domain
+   function bottom_locator(pg,i,j,k) result(isIn)
+      use pgrid_class, only: pgrid
+      class(pgrid), intent(in) :: pg
+      integer, intent(in) :: i,j,k
+      logical :: isIn
+      isIn=.false.
+      if (j.eq.pg%jmin) isIn=.true.
+   end function bottom_locator
    
    
    !> Initialization of problem solver
@@ -76,7 +86,12 @@ contains
       
       ! Initialize boundary conditions
       initialize_bc: block
-         call fs%add_bcond('inflow',dirichlet,'y-',yplus_locator)
+         real(WP), dimension(3) :: outward_normal
+         ! Define inflow and outflow
+         outward_normal=[0.0_WP,-1.0_WP,0.0_WP]; call fs%add_bcond('inflow' ,dirichlet,outward_normal,bottom_locator)
+         outward_normal=[0.0_WP,+1.0_WP,0.0_WP]; call fs%add_bcond('outflow',neumann  ,outward_normal,   top_locator)
+         ! Modify metrics to reflect the BCs
+         call fs%init_bcond()
       end block initialize_bc
       
       
@@ -91,10 +106,12 @@ contains
       
       ! Initialize our velocity field
       initialize_velocity: block
-         fs%U=0.0_WP
-         fs%V=1.0_WP
-         fs%W=0.0_WP
-         call fs%apply_bcond(time%t)
+         ! Zero initial field
+         fs%U=0.0_WP; fs%V=1.0_WP; fs%W=0.0_WP
+         ! Apply Dirichlet at our inflow
+         
+         ! Apply all other boundary conditions
+         !call fs%apply_bcond(time%t,time%dt)
          call fs%interp_vel(Ui,Vi,Wi)
          call fs%get_div()
       end block initialize_velocity
@@ -160,8 +177,8 @@ contains
          fs%Vold=fs%V
          fs%Wold=fs%W
          
-         ! Apply BCs
-         call fs%apply_bcond(time%t)
+         ! Apply time-varying Dirichlet conditions
+         ! This is where time-dpt Dirichlet would be enforced
          
          ! Explicit Euler advancement of NS
          call fs%get_dmomdt(dudt,dvdt,dwdt)
@@ -169,7 +186,11 @@ contains
          fs%V=fs%V+time%dt*dvdt/fs%rho
          fs%W=fs%W+time%dt*dwdt/fs%rho
          
+         ! Apply other boundary conditions on the resulting fields
+         !call fs%apply_bcond(time%t,time%dt)
+         
          ! Solve Poisson equation
+         !call fs%force_global_conservation()
          call fs%get_div()
          fs%psolv%rhs=-fs%cfg%vol*fs%div*fs%rho/time%dt
          fs%psolv%sol=0.0_WP

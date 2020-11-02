@@ -15,16 +15,16 @@ module incomp_class
    public :: incomp
    
    ! List of known available bcond for this solver
-   integer, parameter, public :: dirichlet =1
-   integer, parameter, public :: neumann   =2
-   integer, parameter, public :: convective=3
+   integer, parameter, public :: dirichlet=1      !< Dirichlet condition
+   integer, parameter, public :: neumann=2        !< Zero normal gradient
+   integer, parameter, public :: convective=3     !< Clipped convective outflow condition
    
    !> Boundary conditions for the incompressible solver
    type :: bcond
-      type(bcond), pointer :: next                        !< Linked list of bcs
+      type(bcond), pointer :: next                        !< Linked list of bconds
       character(len=str_medium) :: name='UNNAMED_BCOND'   !< Bcond name (default=UNNAMED_BCOND)
-      integer :: type                                     !< Boundary condition type
-      character(len=2) :: dir                             !< Direction of boundary condition
+      integer :: type                                     !< Bcond type
+      real(WP), dimension(3) :: norm                      !< Outward normal vector for the bcond
       type(iterator) :: itr                               !< This is the iterator for the bcond
    end type bcond
    
@@ -84,6 +84,7 @@ module incomp_class
    contains
       procedure :: print=>incomp_print                    !< Output solver to the screen
       procedure :: add_bcond                              !< Add a boundary condition
+      procedure :: init_bcond                             !< Adjust metrics for boundary conditions
       procedure :: apply_bcond                            !< Apply all boundary conditions
       procedure :: init_metrics                           !< Initialize metrics
       procedure :: get_dmomdt                             !< Calculate dmom/dt
@@ -265,9 +266,9 @@ contains
       do k=this%cfg%kmino_,this%cfg%kmaxo_
          do j=this%cfg%jmino_,this%cfg%jmaxo_
             do i=this%cfg%imino_,this%cfg%imaxo_
-               this%divp_x(:,i,j,k)=VF(i,j,k)*this%cfg%dxi(i)*[-1.0_WP,+1.0_WP] !< FV divergence from [x ,ym,zm]
-               this%divp_y(:,i,j,k)=VF(i,j,k)*this%cfg%dyi(j)*[-1.0_WP,+1.0_WP] !< FV divergence from [xm,y ,zm]
-               this%divp_z(:,i,j,k)=VF(i,j,k)*this%cfg%dzi(k)*[-1.0_WP,+1.0_WP] !< FV divergence from [xm,ym,z ]
+               this%divp_x(:,i,j,k)=VF(i,j,k)*this%cfg%dxi(i)*[-minval(VF(i-1:i,j,k)),+minval(VF(i:i+1,j,k))] !< FV divergence from [x ,ym,zm]
+               this%divp_y(:,i,j,k)=VF(i,j,k)*this%cfg%dyi(j)*[-minval(VF(i,j-1:j,k)),+minval(VF(i,j:j+1,k))] !< FV divergence from [xm,y ,zm]
+               this%divp_z(:,i,j,k)=VF(i,j,k)*this%cfg%dzi(k)*[-minval(VF(i,j,k-1:k)),+minval(VF(i,j,k:k+1))] !< FV divergence from [xm,ym,z ]
                
                this%divu_y(:,i,j,k)=minval(VF(i-1:i,j,k))*this%cfg%dyi (j)*[-1.0_WP,+1.0_WP] !< FV divergence from [x ,y ,zm]
                this%divu_z(:,i,j,k)=minval(VF(i-1:i,j,k))*this%cfg%dzi (k)*[-1.0_WP,+1.0_WP] !< FV divergence from [x ,ym,z ]
@@ -398,31 +399,54 @@ contains
       ! Deallocate extended VF array
       deallocate(VF)
       
-      ! Here, we assume that we need Neumann on pressure all around anyway,
-      ! so all peripheral velocities need to be given by BC:
+      ! Non-periodic domain boundaries are necessarily boundary conditions
       if (.not.this%cfg%xper) then
-         if (this%cfg%iproc.eq.           1) this%divu_x(:,this%cfg%imin  ,:,:)=0.0_WP
-         if (this%cfg%iproc.eq.this%cfg%npx) this%divu_x(:,this%cfg%imax+1,:,:)=0.0_WP
+         if (this%cfg%iproc.eq.           1) then
+            this%divu_x(:,this%cfg%imin  ,:,:)=0.0_WP
+            this%divu_y(:,this%cfg%imin  ,:,:)=0.0_WP
+            this%divu_z(:,this%cfg%imin  ,:,:)=0.0_WP
+         end if
+         if (this%cfg%iproc.eq.this%cfg%npx) then
+            this%divu_x(:,this%cfg%imax+1,:,:)=0.0_WP
+            this%divu_y(:,this%cfg%imax+1,:,:)=0.0_WP
+            this%divu_z(:,this%cfg%imax+1,:,:)=0.0_WP
+         end if
       end if
       if (.not.this%cfg%yper) then
-         if (this%cfg%jproc.eq.           1) this%divv_y(:,:,this%cfg%jmin  ,:)=0.0_WP
-         if (this%cfg%jproc.eq.this%cfg%npy) this%divv_y(:,:,this%cfg%jmax+1,:)=0.0_WP
+         if (this%cfg%jproc.eq.           1) then
+            this%divv_x(:,:,this%cfg%jmin  ,:)=0.0_WP
+            this%divv_y(:,:,this%cfg%jmin  ,:)=0.0_WP
+            this%divv_z(:,:,this%cfg%jmin  ,:)=0.0_WP
+         end if
+         if (this%cfg%jproc.eq.this%cfg%npy) then
+            this%divv_x(:,:,this%cfg%jmax+1,:)=0.0_WP
+            this%divv_y(:,:,this%cfg%jmax+1,:)=0.0_WP
+            this%divv_z(:,:,this%cfg%jmax+1,:)=0.0_WP
+         end if
       end if
       if (.not.this%cfg%zper) then
-         if (this%cfg%kproc.eq.           1) this%divw_z(:,:,:,this%cfg%kmin  )=0.0_WP
-         if (this%cfg%kproc.eq.this%cfg%npz) this%divw_z(:,:,:,this%cfg%kmax+1)=0.0_WP
+         if (this%cfg%kproc.eq.           1) then
+            this%divw_x(:,:,:,this%cfg%kmin  )=0.0_WP
+            this%divw_y(:,:,:,this%cfg%kmin  )=0.0_WP
+            this%divw_z(:,:,:,this%cfg%kmin  )=0.0_WP
+         end if
+         if (this%cfg%kproc.eq.this%cfg%npz) then
+            this%divw_x(:,:,:,this%cfg%kmax+1)=0.0_WP
+            this%divw_y(:,:,:,this%cfg%kmax+1)=0.0_WP
+            this%divw_z(:,:,:,this%cfg%kmax+1)=0.0_WP
+         end if
       end if
       
    end subroutine init_metrics
    
    
    !> Add a boundary condition
-   subroutine add_bcond(this,name,type,dir,locator)
+   subroutine add_bcond(this,name,type,norm,locator)
       implicit none
       class(incomp), intent(inout) :: this
       character(len=*), intent(in) :: name
-      integer, intent(in) :: type
-      character(len=2), intent(in) :: dir
+      integer,  intent(in) :: type
+      real(WP), dimension(3), intent(in) :: norm
       interface
          logical function locator(pargrid,ind1,ind2,ind3)
             use pgrid_class, only: pgrid
@@ -431,12 +455,13 @@ contains
          end function locator
       end interface
       type(bcond), pointer :: new_bc
+      integer :: n
       
       ! Prepare new bcond
       allocate(new_bc)
       new_bc%name=trim(adjustl(name))
       new_bc%type=type
-      new_bc%dir=dir
+      new_bc%norm=norm
       new_bc%itr=iterator(this%cfg,new_bc%name,locator)
       
       ! Insert it up front
@@ -446,12 +471,24 @@ contains
    end subroutine add_bcond
    
    
-   !> Enforce boundary condition
-   subroutine apply_bcond(this,time)
+   !> Enforce boundary condition on the metrics
+   subroutine init_bcond(this)
       implicit none
       class(incomp), intent(inout) :: this
-      real(WP), intent(in) :: time
+      
+      ! If the boundary condition is not at the domain frontier, we could still need to adjust metrics
+      ! We wait till we have such a case to look into how the metrics should be modified
+      
+   end subroutine init_bcond
+   
+   
+   !> Enforce boundary condition
+   subroutine apply_bcond(this,t,dt)
+      implicit none
+      class(incomp), intent(inout) :: this
+      real(WP), intent(in) :: t,dt
       integer :: i,j,k
+      type(bcond), pointer :: my_bc
       
       ! First enfore zero velocity at walls
       do k=this%cfg%kmin_,this%cfg%kmax_
@@ -463,11 +500,19 @@ contains
             end do
          end do
       end do
-      
       ! Sync fields
       call this%cfg%sync(this%U)
       call this%cfg%sync(this%V)
       call this%cfg%sync(this%W)
+      
+      ! Loop over bcond
+      
+      ! Apply Dirichlet conditions
+      ! This is done by the user directly
+      ! Unclear whether we want to do this within the solver...
+      
+      ! Apply Neumann conditions
+      
       
    end subroutine apply_bcond
    
