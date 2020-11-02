@@ -18,8 +18,11 @@ Hole depth: 0.01	!0.018
 Density :		1
 Dynamic viscosity :	1e-3
 
-# Integration
-Time step size :	5e-6
+# Time integration
+Max timestep size :	5e-6
+Max cfl number :	0.5
+
+# Pressure solver
 Pressure tolerance : 	1e-6
 Pressure iteration : 	100
 

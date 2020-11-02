@@ -15,15 +15,16 @@ module incomp_class
    public :: incomp
    
    ! List of known available bcond for this solver
-   integer, parameter, public :: dirichlet=1
-   integer, parameter, public :: neumann  =2
-   
+   integer, parameter, public :: dirichlet =1
+   integer, parameter, public :: neumann   =2
+   integer, parameter, public :: convective=3
    
    !> Boundary conditions for the incompressible solver
    type :: bcond
       type(bcond), pointer :: next                        !< Linked list of bcs
       character(len=str_medium) :: name='UNNAMED_BCOND'   !< Bcond name (default=UNNAMED_BCOND)
       integer :: type                                     !< Boundary condition type
+      character(len=2) :: dir                             !< Direction of boundary condition
       type(iterator) :: itr                               !< This is the iterator for the bcond
    end type bcond
    
@@ -416,11 +417,12 @@ contains
    
    
    !> Add a boundary condition
-   subroutine add_bcond(this,name,type,locator)
+   subroutine add_bcond(this,name,type,dir,locator)
       implicit none
       class(incomp), intent(inout) :: this
       character(len=*), intent(in) :: name
       integer, intent(in) :: type
+      character(len=2), intent(in) :: dir
       interface
          logical function locator(pargrid,ind1,ind2,ind3)
             use pgrid_class, only: pgrid
@@ -434,7 +436,8 @@ contains
       allocate(new_bc)
       new_bc%name=trim(adjustl(name))
       new_bc%type=type
-      new_bc%itr =iterator(this%cfg,new_bc%name,locator)
+      new_bc%dir=dir
+      new_bc%itr=iterator(this%cfg,new_bc%name,locator)
       
       ! Insert it up front
       new_bc%next=>this%first_bc

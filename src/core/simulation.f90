@@ -60,8 +60,6 @@ contains
          call param_read('Pressure tolerance',fs%psolv%acvg); fs%psolv%rcvg=fs%psolv%acvg
          ! Initialize solver
          call fs%psolv%init_solver(amg)
-         ! Check solver objects
-         call fs%print()
       end block create_solver
       
       
@@ -78,14 +76,15 @@ contains
       
       ! Initialize boundary conditions
       initialize_bc: block
-         call fs%add_bcond('inflow',dirichlet,yplus_locator)
+         call fs%add_bcond('inflow',dirichlet,'y-',yplus_locator)
       end block initialize_bc
       
       
       ! Initialize time tracker
       initialize_timetracker: block
          time=timetracker(fs%cfg%amRoot)
-         call param_read('Time step size',time%dtmax)
+         call param_read('Max timestep size',time%dtmax)
+         call param_read('Max cfl number',time%cflmax)
          time%dt=time%dtmax
       end block initialize_timetracker
       
