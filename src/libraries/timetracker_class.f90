@@ -18,6 +18,7 @@ module timetracker_class
    type :: timetracker
       logical :: amRoot                                !< Timetracker needs to know who's the boss
       character(len=str_medium) :: name='UNNAMED_TIME' !< Name for timetracker
+      integer  ::  it, itmax                           !< Current and max sub-iteration
       integer  ::   n,  nmax                           !< Current and max timestep
       real(WP) ::   t,  tmax                           !< Current and max time
       real(WP) ::  dt, dtmax                           !< Current and max timestep size
@@ -57,6 +58,7 @@ contains
       self%wt =0.0_WP;  self%wtmax=huge( self%wtmax)
       self%told=0.0_WP
       self%dtold=0.0_WP
+      self%it=1; self%itmax=1
    end function constructor
    
    
@@ -67,6 +69,7 @@ contains
       implicit none
       class(timetracker), intent(inout) :: this
       ! Move to next time step
+      this%it=1
       this%told=this%t
       this%t=this%t+this%dt
       this%n=this%n+1
@@ -124,6 +127,7 @@ contains
       character(len=str_long) :: message
       if (this%amRoot) then
          write(message,'("Timetracker [",a,"] status")') trim(this%name); call log(message)
+         write(message,'(" >  it/ itmax = ",i0,"/",i0)')         this%it,this%itmax; call log(message)
          write(message,'(" >   n/  nmax = ",i0,"/",i0)')         this%n,this%nmax; call log(message)
          write(message,'(" >   t/  tmax = ",es12.5,"/",es12.5)') this%t,this%tmax; call log(message)
          write(message,'(" >  dt/ dtmax = ",es12.5,"/",es12.5)') this%dt,this%dtmax; call log(message)
@@ -140,6 +144,7 @@ contains
       class(timetracker), intent(in) :: this
       if (this%amRoot) then
          write(output_unit,'("Timetracker [",a,"] status")') trim(this%name)
+         write(output_unit,'(" >  it/ itmax = ",i0,"/",i0)')         this%it,this%itmax
          write(output_unit,'(" >   n/  nmax = ",i0,"/",i0)')         this%n,this%nmax
          write(output_unit,'(" >   t/  tmax = ",es12.5,"/",es12.5)') this%t,this%tmax
          write(output_unit,'(" >  dt/ dtmax = ",es12.5,"/",es12.5)') this%dt,this%dtmax
