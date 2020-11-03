@@ -27,6 +27,7 @@ module incomp_class
       integer :: type                                     !< Bcond type
       integer :: dir                                      !< Bcond direction (1 to 6)
       integer :: si,sj,sk                                 !< Index shift in the outward normal direction
+      logical :: canCorrect                               !< Can this bcond be corrected for global conservation?
       type(iterator) :: itr                               !< This is the iterator for the bcond
    end type bcond
    
@@ -45,6 +46,10 @@ module incomp_class
       real(WP) :: visc                                    !< These is our constant fluid dynamic viscosity
       
       ! Boundary condition list
+      integer :: nbc                                      !< Number of bcond for our solver
+      real(WP), dimension(:), allocatable :: mfr          !< MFR through each bcond
+      real(WP), dimension(:), allocatable :: area         !< Area for each bcond
+      real(WP) :: correctable_area                        !< Area of bcond that can be corrected
       type(bcond), pointer :: first_bc                    !< List of bcond for our solver
       
       ! Flow variables
@@ -96,6 +101,8 @@ module incomp_class
       procedure :: get_cfl                                !< Calculate maximum CFL
       procedure :: get_max                                !< Calculate maximum field values
       procedure :: interp_vel                             !< Calculate interpolated velocity
+      procedure :: get_mfr                                !< Calculate outgoing MFR through each bcond
+      procedure :: correct_mfr                            !< Correct for mfr mismatch to ensure global conservation
    end type incomp
    
    
@@ -122,6 +129,7 @@ contains
       self%cfg=>cfg
       
       ! Nullify bcond list
+      self%nbc=0
       self%first_bc=>NULL()
       
       ! Prepare metrics
@@ -444,7 +452,7 @@ contains
    
    
    !> Add a boundary condition
-   subroutine add_bcond(this,name,type,dir,locator)
+   subroutine add_bcond(this,name,type,dir,canCorrect,locator)
       use string,   only: lowercase
       use messager, only: die
       implicit none
@@ -452,6 +460,7 @@ contains
       character(len=*), intent(in) :: name
       integer,  intent(in) :: type
       character(len=2), intent(in) :: dir
+      logical,  intent(in) :: canCorrect
       interface
          logical function locator(pargrid,ind1,ind2,ind3)
             use pgrid_class, only: pgrid
@@ -465,6 +474,7 @@ contains
       allocate(new_bc)
       new_bc%name=trim(adjustl(name))
       new_bc%type=type
+      new_bc%canCorrect=canCorrect
       select case (lowercase(dir))
       case ('+x','x+','xp','px')
          new_bc%dir=1
@@ -503,6 +513,9 @@ contains
       ! Insert it up front
       new_bc%next=>this%first_bc
       this%first_bc=>new_bc
+      
+      ! Increment bcond counter
+      this%nbc=this%nbc+1
       
    end subroutine add_bcond
    
@@ -1012,6 +1025,176 @@ contains
       call MPI_ALLREDUCE(my_divmax,this%divmax,1,MPI_REAL_WP,MPI_MAX,this%cfg%comm,ierr)
       
    end subroutine get_max
+   
+   
+   !> Compute MFR through all bcs
+   subroutine get_mfr(this)
+      use mpi_f08,  only: MPI_SUM
+      use parallel, only: MPI_REAL_WP
+      implicit none
+      class(incomp), intent(inout) :: this
+      integer :: i,j,k,n,ibc,ierr
+      type(bcond), pointer :: my_bc
+      real(WP), dimension(:), allocatable :: my_mfr,my_area
+      real(WP), dimension(:), allocatable :: canCorrect
+      
+      ! Ensure this%mfr is of proper size
+      if (size(this%mfr).ne.this%nbc) then
+         if (allocated(this%mfr)) deallocate(this%mfr)
+         allocate(this%mfr(this%nbc))
+      end if
+      
+      ! Ensure this%area is of proper size
+      if (size(this%area).ne.this%nbc) then
+         if (allocated(this%area)) deallocate(this%area)
+         allocate(this%area(this%nbc))
+      end if
+      
+      ! Allocate temp array for communication
+      allocate(my_mfr(this%nbc))
+      allocate(my_area(this%nbc))
+      allocate(canCorrect(this%nbc))
+      
+      ! Traverse bcond list and integrate local outgoing MFR
+      my_bc=>this%first_bc; ibc=1
+      do while (associated(my_bc))
+         
+         ! Set zero local MFR and area
+         my_mfr(ibc)=0.0_WP
+         my_area(ibc)=0.0_WP
+         if (my_bc%canCorrect) then
+            canCorrect(ibc)=1.0_WP
+         else
+            canCorrect(ibc)=0.0_WP
+         end if
+         
+         ! Only processes inside the bcond have a non-zero MFR
+         if (my_bc%itr%amIn) then
+            
+            ! Implement based on bcond direction, loop over interior only
+            select case (my_bc%dir)
+            case (1) ! BC in +x
+               do n=1,my_bc%itr%n_
+                  i=my_bc%itr%map(1,n); j=my_bc%itr%map(2,n); k=my_bc%itr%map(3,n)
+                  my_mfr(ibc)=my_mfr(ibc)+this%rho*this%U(i+1,j,k)*this%cfg%dy(j)*this%cfg%dz(k)
+                  my_area(ibc)=my_area(ibc)+this%cfg%dy(j)*this%cfg%dz(k)
+               end do
+            case (2) ! BC in -x
+               do n=1,my_bc%itr%n_
+                  i=my_bc%itr%map(1,n); j=my_bc%itr%map(2,n); k=my_bc%itr%map(3,n)
+                  my_mfr(ibc)=my_mfr(ibc)-this%rho*this%U(i  ,j,k)*this%cfg%dy(j)*this%cfg%dz(k)
+                  my_area(ibc)=my_area(ibc)+this%cfg%dy(j)*this%cfg%dz(k)
+               end do
+            case (3) ! BC in +y
+               do n=1,my_bc%itr%n_
+                  i=my_bc%itr%map(1,n); j=my_bc%itr%map(2,n); k=my_bc%itr%map(3,n)
+                  my_mfr(ibc)=my_mfr(ibc)+this%rho*this%V(i,j+1,k)*this%cfg%dx(i)*this%cfg%dz(k)
+                  my_area(ibc)=my_area(ibc)+this%cfg%dx(i)*this%cfg%dz(k)
+               end do
+            case (4) ! BC in -y
+               do n=1,my_bc%itr%n_
+                  i=my_bc%itr%map(1,n); j=my_bc%itr%map(2,n); k=my_bc%itr%map(3,n)
+                  my_mfr(ibc)=my_mfr(ibc)-this%rho*this%V(i,j  ,k)*this%cfg%dx(i)*this%cfg%dz(k)
+                  my_area(ibc)=my_area(ibc)+this%cfg%dx(i)*this%cfg%dz(k)
+               end do
+            case (5) ! BC in +z
+               do n=1,my_bc%itr%n_
+                  i=my_bc%itr%map(1,n); j=my_bc%itr%map(2,n); k=my_bc%itr%map(3,n)
+                  my_mfr(ibc)=my_mfr(ibc)+this%rho*this%W(i,j,k+1)*this%cfg%dy(j)*this%cfg%dx(i)
+                  my_area(ibc)=my_area(ibc)+this%cfg%dy(j)*this%cfg%dx(i)
+               end do
+            case (6) ! BC in -z
+               do n=1,my_bc%itr%n_
+                  i=my_bc%itr%map(1,n); j=my_bc%itr%map(2,n); k=my_bc%itr%map(3,n)
+                  my_mfr(ibc)=my_mfr(ibc)-this%rho*this%W(i,j,k  )*this%cfg%dy(j)*this%cfg%dx(i)
+                  my_area(ibc)=my_area(ibc)+this%cfg%dy(j)*this%cfg%dx(i)
+               end do
+            end select
+            
+         end if
+         
+         ! Move on to the next bcond
+         my_bc=>my_bc%next; ibc=ibc+1
+         
+      end do
+      
+      ! Sum up all values
+      call MPI_ALLREDUCE(my_mfr ,this%mfr ,this%nbc,MPI_REAL_WP,MPI_SUM,this%cfg%comm,ierr)
+      call MPI_ALLREDUCE(my_area,this%area,this%nbc,MPI_REAL_WP,MPI_SUM,this%cfg%comm,ierr)
+      
+      ! Compute the correctable area
+      this%correctable_area=sum(this%area*canCorrect)
+      
+      ! Deallocate temp array
+      deallocate(my_mfr,my_area,canCorrect)
+      
+   end subroutine get_mfr
+   
+   
+   !> Correct MFR through correctable bconds
+   subroutine correct_mfr(this)
+      use mpi_f08,  only: MPI_SUM
+      use parallel, only: MPI_REAL_WP
+      implicit none
+      class(incomp), intent(inout) :: this
+      real(WP) :: mfr_error,vel_correction
+      integer :: i,j,k,n
+      type(bcond), pointer :: my_bc
+      
+      ! Evaluate MFR mismatch and velocity correction
+      call this%get_mfr()
+      mfr_error=sum(this%mfr)
+      vel_correction=-mfr_error/(this%rho*this%correctable_area)
+      
+      ! Traverse bcond list and correct bcond MFR
+      my_bc=>this%first_bc
+      do while (associated(my_bc))
+         
+         ! Only processes inside correctable bcond need to work
+         if (my_bc%itr%amIn.and.my_bc%canCorrect) then
+            print*,'bc: ',trim(my_bc%name),my_bc%dir
+            ! Implement based on bcond direction, loop over all cell
+            select case (my_bc%dir)
+            case (1) ! BC in +x
+               do n=1,my_bc%itr%no_
+                  i=my_bc%itr%map(1,n); j=my_bc%itr%map(2,n); k=my_bc%itr%map(3,n)
+                  this%U(i+1,j,k)=this%U(i+1,j,k)+vel_correction
+               end do
+            case (2) ! BC in -x
+               do n=1,my_bc%itr%no_
+                  i=my_bc%itr%map(1,n); j=my_bc%itr%map(2,n); k=my_bc%itr%map(3,n)
+                  this%U(i,j,k)=this%U(i,j,k)-vel_correction
+               end do
+            case (3) ! BC in +y
+               do n=1,my_bc%itr%no_
+                  i=my_bc%itr%map(1,n); j=my_bc%itr%map(2,n); k=my_bc%itr%map(3,n)
+                  this%V(i,j+1,k)=this%V(i,j+1,k)+vel_correction
+               end do
+            case (4) ! BC in -y
+               do n=1,my_bc%itr%no_
+                  i=my_bc%itr%map(1,n); j=my_bc%itr%map(2,n); k=my_bc%itr%map(3,n)
+                  this%V(i,j,k)=this%V(i,j,k)-vel_correction
+               end do
+            case (5) ! BC in +z
+               do n=1,my_bc%itr%no_
+                  i=my_bc%itr%map(1,n); j=my_bc%itr%map(2,n); k=my_bc%itr%map(3,n)
+                  this%W(i,j,k+1)=this%W(i,j,k+1)+vel_correction
+               end do
+            case (6) ! BC in -z
+               do n=1,my_bc%itr%no_
+                  i=my_bc%itr%map(1,n); j=my_bc%itr%map(2,n); k=my_bc%itr%map(3,n)
+                  this%W(i,j,k)=this%W(i,j,k)-vel_correction
+               end do
+            end select
+            
+         end if
+         
+         ! Move on to the next bcond
+         my_bc=>my_bc%next
+         
+      end do
+      
+   end subroutine correct_mfr
    
    
    !> Print out info for incompressible flow solver

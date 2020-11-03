@@ -88,8 +88,8 @@ contains
       ! Initialize boundary conditions
       initialize_bc: block
          ! Define inflow and outflow
-         call fs%add_bcond('inflow' ,dirichlet ,'-y',bottom_locator)
-         call fs%add_bcond('outflow',neumann   ,'+y',   top_locator)
+         call fs%add_bcond(name='inflow' ,type=dirichlet ,dir='-y',canCorrect=.false.,locator=bottom_locator)
+         call fs%add_bcond(name='outflow',type=neumann   ,dir='+y',canCorrect=.true. ,locator=   top_locator)
          ! Modify metrics to reflect the BCs
          call fs%init_bcond()
       end block initialize_bc
@@ -122,6 +122,8 @@ contains
          call fs%apply_bcond(time%t,time%dt)
          call fs%interp_vel(Ui,Vi,Wi)
          call fs%get_div()
+         ! Compute MFR through all boundary conditions
+         call fs%get_mfr()
       end block initialize_velocity
       
       
@@ -198,7 +200,7 @@ contains
          call fs%apply_bcond(time%t,time%dt)
          
          ! Solve Poisson equation
-         !call fs%force_global_conservation()
+         call fs%correct_mfr()
          call fs%get_div()
          fs%psolv%rhs=-fs%cfg%vol*fs%div*fs%rho/time%dt
          fs%psolv%sol=0.0_WP

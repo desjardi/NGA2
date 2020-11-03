@@ -58,7 +58,7 @@ contains
          end do
          
          ! General serial grid object
-         grid=sgrid(cartesian,1,x,y,z,.true.,.false.,.true.,name='DropletSpreading')
+         grid=sgrid(coord=cartesian,no=1,x=x,y=y,z=z,xper=.true.,yper=.false.,zper=.true.,name='DropletSpreading')
          
       end block create_grid
       
