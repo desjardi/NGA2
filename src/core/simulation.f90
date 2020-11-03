@@ -101,6 +101,7 @@ contains
          call param_read('Max timestep size',time%dtmax)
          call param_read('Max cfl number',time%cflmax)
          time%dt=time%dtmax
+         time%itmax=2
       end block initialize_timetracker
       
       
@@ -190,28 +191,43 @@ contains
          ! Apply time-varying Dirichlet conditions
          ! This is where time-dpt Dirichlet would be enforced
          
-         ! Explicit Euler advancement of NS
-         call fs%get_dmomdt(dudt,dvdt,dwdt)
-         fs%U=fs%U+time%dt*dudt/fs%rho
-         fs%V=fs%V+time%dt*dvdt/fs%rho
-         fs%W=fs%W+time%dt*dwdt/fs%rho
-         
-         ! Apply other boundary conditions on the resulting fields
-         call fs%apply_bcond(time%t,time%dt)
-         
-         ! Solve Poisson equation
-         call fs%correct_mfr()
-         call fs%get_div()
-         fs%psolv%rhs=-fs%cfg%vol*fs%div*fs%rho/time%dt
-         fs%psolv%sol=0.0_WP
-         call fs%psolv%solve()
-         
-         ! Correct velocity
-         call fs%get_pgrad(fs%psolv%sol,dudt,dvdt,dwdt)
-         fs%P=fs%P+fs%psolv%sol
-         fs%U=fs%U-time%dt*dudt/fs%rho
-         fs%V=fs%V-time%dt*dvdt/fs%rho
-         fs%W=fs%W-time%dt*dwdt/fs%rho
+         ! Perform sub-iterations
+         do while (time%it.le.time%itmax)
+            
+            ! Build mid-time velocity
+            fs%U=0.5_WP*(fs%U+fs%Uold)
+            fs%V=0.5_WP*(fs%V+fs%Vold)
+            fs%W=0.5_WP*(fs%W+fs%Wold)
+            
+            ! Explicit calculation of drho*u/dt from NS
+            call fs%get_dmomdt(dudt,dvdt,dwdt)
+            
+            ! Increment directly (explicitly)
+            fs%U=fs%Uold+time%dt*dudt/fs%rho
+            fs%V=fs%Vold+time%dt*dvdt/fs%rho
+            fs%W=fs%Wold+time%dt*dwdt/fs%rho
+            
+            ! Apply other boundary conditions on the resulting fields
+            call fs%apply_bcond(time%t,time%dt)
+            
+            ! Solve Poisson equation
+            call fs%correct_mfr()
+            call fs%get_div()
+            fs%psolv%rhs=-fs%cfg%vol*fs%div*fs%rho/time%dt
+            fs%psolv%sol=0.0_WP
+            call fs%psolv%solve()
+            
+            ! Correct velocity
+            call fs%get_pgrad(fs%psolv%sol,dudt,dvdt,dwdt)
+            fs%P=fs%P+fs%psolv%sol
+            fs%U=fs%U-time%dt*dudt/fs%rho
+            fs%V=fs%V-time%dt*dvdt/fs%rho
+            fs%W=fs%W-time%dt*dwdt/fs%rho
+            
+            ! Increment sub-iteration counter
+            time%it=time%it+1
+            
+         end do
          
          ! Recompute interpolated velocity and divergence
          call fs%interp_vel(Ui,Vi,Wi)
