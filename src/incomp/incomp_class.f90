@@ -15,9 +15,10 @@ module incomp_class
    public :: incomp,bcond
    
    ! List of known available bcond for this solver
-   integer, parameter, public :: dirichlet=1      !< Dirichlet condition
-   integer, parameter, public :: neumann=2        !< Zero normal gradient
-   integer, parameter, public :: convective=3     !< Clipped convective outflow condition
+   integer, parameter, public :: dirichlet=1         !< Dirichlet condition
+   integer, parameter, public :: neumann=2           !< Zero normal gradient
+   integer, parameter, public :: convective=3        !< Convective outflow condition
+   integer, parameter, public :: clipped_neumann=4   !< Clipped Neumann condition (outflow only)
    
    !> Boundary conditions for the incompressible solver
    type :: bcond
@@ -568,12 +569,12 @@ contains
             ! Select appropriate action based on the bcond type
             select case (my_bc%type)
                
-            case (dirichlet)   ! Apply Dirichlet conditions
+            case (dirichlet)           ! Apply Dirichlet conditions
                
                ! This is done by the user directly
                ! Unclear whether we want to do this within the solver...
                
-            case (neumann)     ! Apply Neumann condition
+            case (neumann)             ! Apply Neumann condition
                
                ! Implement based on bcond direction
                select case (my_bc%dir)
@@ -621,6 +622,54 @@ contains
                   end do
                end select
                
+            case (clipped_neumann)     ! Apply clipped Neumann condition
+               
+               ! Implement based on bcond direction
+               select case (my_bc%dir)
+               case (1) ! Neumann in +x
+                  do n=1,my_bc%itr%n_
+                     i=my_bc%itr%map(1,n); j=my_bc%itr%map(2,n); k=my_bc%itr%map(3,n)
+                     this%U(i+1,j,k)=max(this%U(i,j,k),0.0_WP)
+                     this%V(i+1,j:j+1,k)=this%V(i,j:j+1,k)
+                     this%W(i+1,j,k:k+1)=this%W(i,j,k:k+1)
+                  end do
+               case (2) ! Neumann in -x
+                  do n=1,my_bc%itr%n_
+                     i=my_bc%itr%map(1,n); j=my_bc%itr%map(2,n); k=my_bc%itr%map(3,n)
+                     this%U(i,j,k)=min(this%U(i+1,j,k),0.0_WP)
+                     this%V(i-1,j:j+1,k)=this%V(i,j:j+1,k)
+                     this%W(i-1,j,k:k+1)=this%W(i,j,k:k+1)
+                  end do
+               case (3) ! Neumann in +y
+                  do n=1,my_bc%itr%n_
+                     i=my_bc%itr%map(1,n); j=my_bc%itr%map(2,n); k=my_bc%itr%map(3,n)
+                     this%U(i:i+1,j+1,k)=this%U(i:i+1,j,k)
+                     this%V(i,j+1,k)=max(this%V(i,j,k),0.0_WP)
+                     this%W(i,j+1,k:k+1)=this%W(i,j,k:k+1)
+                  end do
+               case (4) ! Neumann in -y
+                  do n=1,my_bc%itr%n_
+                     i=my_bc%itr%map(1,n); j=my_bc%itr%map(2,n); k=my_bc%itr%map(3,n)
+                     this%U(i:i+1,j-1,k)=this%U(i:i+1,j,k)
+                     this%V(i,j,k)=min(this%V(i,j+1,k),0.0_WP)
+                     this%W(i,j-1,k:k+1)=this%W(i,j,k:k+1)
+                  end do
+               case (5) ! Neumann in +z
+                  do n=1,my_bc%itr%n_
+                     i=my_bc%itr%map(1,n); j=my_bc%itr%map(2,n); k=my_bc%itr%map(3,n)
+                     this%U(i:i+1,j,k+1)=this%U(i:i+1,j,k)
+                     this%V(i,j:j+1,k+1)=this%V(i,j:j+1,k)
+                     this%W(i,j,k+1)=max(this%W(i,j,k),0.0_WP)
+                  end do
+               case (6) ! Neumann in -z
+                  do n=1,my_bc%itr%n_
+                     i=my_bc%itr%map(1,n); j=my_bc%itr%map(2,n); k=my_bc%itr%map(3,n)
+                     this%U(i:i+1,j,k-1)=this%U(i:i+1,j,k)
+                     this%V(i,j:j+1,k-1)=this%V(i,j:j+1,k)
+                     this%W(i,j,k)=min(this%W(i,j,k+1),0.0_WP)
+                  end do
+               end select
+            
             case (convective)   ! Apply convective condition
                
                ! Implement based on bcond direction
@@ -687,7 +736,12 @@ contains
             end select
             
          end if
-            
+         
+         ! Sync full fields after each bcond - this should be optimized
+         call this%cfg%sync(this%U)
+         call this%cfg%sync(this%V)
+         call this%cfg%sync(this%W)
+         
          ! Move on to the next bcond
          my_bc=>my_bc%next
          

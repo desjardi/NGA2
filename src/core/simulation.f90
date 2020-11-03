@@ -2,7 +2,8 @@
 module simulation
    use precision,         only: WP
    use geometry,          only: cfg
-   use incomp_class,      only: incomp,bcond,dirichlet,convective,neumann
+   use incomp_class,      only: incomp,bcond
+   use incomp_class,      only: dirichlet,convective,neumann,clipped_neumann
    use timetracker_class, only: timetracker
    use ensight_class,     only: ensight
    use event_class,       only: event
@@ -88,7 +89,7 @@ contains
       initialize_bc: block
          ! Define inflow and outflow
          call fs%add_bcond('inflow' ,dirichlet ,'-y',bottom_locator)
-         call fs%add_bcond('outflow',convective,'+y',   top_locator)
+         call fs%add_bcond('outflow',neumann   ,'+y',   top_locator)
          ! Modify metrics to reflect the BCs
          call fs%init_bcond()
       end block initialize_bc
