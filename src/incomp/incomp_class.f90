@@ -1253,7 +1253,7 @@ contains
             end do
          end do
       end do
-      call this%implicit%init_solver(amg)
+      call this%implicit%update_solver()
       this%implicit%rhs=resU
       this%implicit%sol=0.0_WP
       call this%implicit%solve()
@@ -1285,7 +1285,7 @@ contains
             end do
          end do
       end do
-      call this%implicit%init_solver(amg)
+      call this%implicit%update_solver()
       this%implicit%rhs=resV
       this%implicit%sol=0.0_WP
       call this%implicit%solve()
@@ -1317,7 +1317,7 @@ contains
             end do
          end do
       end do
-      call this%implicit%init_solver(amg)
+      call this%implicit%update_solver()
       this%implicit%rhs=resW
       this%implicit%sol=0.0_WP
       call this%implicit%solve()

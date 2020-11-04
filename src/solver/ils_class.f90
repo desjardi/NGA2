@@ -143,7 +143,7 @@ contains
          call HYPRE_IJVectorGetObject    (this%hypre_sol,this%parse_sol,ierr)
          ! Create a HYPRE AMG solver
          call HYPRE_BoomerAMGCreate        (this%hypre_solver,ierr)
-         call HYPRE_BoomerAMGSetPrintLevel (this%hypre_solver,3,ierr)            ! print solve info + parameters (3 from all, 0 for none)
+         call HYPRE_BoomerAMGSetPrintLevel (this%hypre_solver,0,ierr)            ! print solve info + parameters (3 from all, 0 for none)
          call HYPRE_BoomerAMGSetInterpType (this%hypre_solver,6,ierr)            ! interpolation default is 6 (NGA=3)
          call HYPRE_BoomerAMGSetCoarsenType(this%hypre_solver,6,ierr)           ! Falgout=6 (old default, NGA); PMIS=8 and HMIS=10 (recommended)
          call HYPRE_BoomerAMGSetStrongThrshld(this%hypre_solver,0.15_WP,ierr)    ! 0.25 is default
@@ -154,9 +154,6 @@ contains
       case default
          call die('[ils prep solver] Unknown solution method')
       end select
-      
-      ! Finally, update the solver
-      call this%update_solver()
       
    end subroutine init_solver
    

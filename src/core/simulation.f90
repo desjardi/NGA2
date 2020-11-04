@@ -71,10 +71,12 @@ contains
          call param_read('Pressure tolerance',fs%psolv%acvg)
          fs%psolv%rcvg=fs%psolv%acvg
          call fs%psolv%init_solver(amg)
+         call fs%psolv%update_solver()
          ! Configure implicit velocity solver
          call param_read('Implicit iteration',fs%implicit%maxit)
          call param_read('Implicit tolerance',fs%implicit%acvg)
          fs%implicit%rcvg=fs%implicit%acvg
+         call fs%implicit%init_solver(amg)
       end block create_solver
       
       
