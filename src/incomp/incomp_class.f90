@@ -1232,16 +1232,16 @@ contains
          do j=this%cfg%jmin_,this%cfg%jmax_
             do i=this%cfg%imin_,this%cfg%imax_
                ! Diagonal
-               this%implicit%opr(1,i,j,k)=this%rho-0.5_WP*dt*this%visc*(this%divu_x( 0,i,j,k)*this%grdu_x( 0,i  ,j,k)*2.0_WP+&
-               &                                                        this%divu_x(-1,i,j,k)*this%grdu_x(+1,i-1,j,k)*2.0_WP+&
+               this%implicit%opr(1,i,j,k)=this%rho-0.5_WP*dt*this%visc*(this%divu_x( 0,i,j,k)*this%grdu_x( 0,i  ,j,k)+&
+               &                                                        this%divu_x(-1,i,j,k)*this%grdu_x(+1,i-1,j,k)+&
                &                                                        this%divu_y(+1,i,j,k)*this%grdu_y(-1,i,j+1,k)+&
                &                                                        this%divu_y( 0,i,j,k)*this%grdu_y( 0,i,j  ,k)+&
                &                                                        this%divu_z(+1,i,j,k)*this%grdu_z(-1,i,j,k+1)+&
                &                                                        this%divu_z( 0,i,j,k)*this%grdu_z( 0,i,j,k  ))
                ! +x
-               this%implicit%opr(2,i,j,k)=         -0.5_WP*dt*this%visc*(this%divu_x( 0,i,j,k)*this%grdu_x(+1,i  ,j,k))*2.0_WP
+               this%implicit%opr(2,i,j,k)=         -0.5_WP*dt*this%visc*(this%divu_x( 0,i,j,k)*this%grdu_x(+1,i  ,j,k))
                ! -x
-               this%implicit%opr(3,i,j,k)=         -0.5_WP*dt*this%visc*(this%divu_x(-1,i,j,k)*this%grdu_x( 0,i-1,j,k))*2.0_WP
+               this%implicit%opr(3,i,j,k)=         -0.5_WP*dt*this%visc*(this%divu_x(-1,i,j,k)*this%grdu_x( 0,i-1,j,k))
                ! +y
                this%implicit%opr(4,i,j,k)=         -0.5_WP*dt*this%visc*(this%divu_y(+1,i,j,k)*this%grdu_y( 0,i,j+1,k))
                ! -y
@@ -1266,8 +1266,8 @@ contains
                ! Diagonal
                this%implicit%opr(1,i,j,k)=this%rho-0.5_WP*dt*this%visc*(this%divv_x(+1,i,j,k)*this%grdv_x(-1,i+1,j,k)+&
                &                                                        this%divv_x( 0,i,j,k)*this%grdv_x( 0,i  ,j,k)+&
-               &                                                        this%divv_y( 0,i,j,k)*this%grdv_y( 0,i,j  ,k)*2.0_WP+&
-               &                                                        this%divv_y(-1,i,j,k)*this%grdv_y(+1,i,j-1,k)*2.0_WP+&
+               &                                                        this%divv_y( 0,i,j,k)*this%grdv_y( 0,i,j  ,k)+&
+               &                                                        this%divv_y(-1,i,j,k)*this%grdv_y(+1,i,j-1,k)+&
                &                                                        this%divv_z(+1,i,j,k)*this%grdv_z(-1,i,j,k+1)+&
                &                                                        this%divv_z( 0,i,j,k)*this%grdv_z( 0,i,j,k  ))
                ! +x
@@ -1275,9 +1275,9 @@ contains
                ! -x
                this%implicit%opr(3,i,j,k)=         -0.5_WP*dt*this%visc*(this%divv_x( 0,i,j,k)*this%grdv_x(-1,i  ,j,k))
                ! +y
-               this%implicit%opr(4,i,j,k)=         -0.5_WP*dt*this%visc*(this%divv_y( 0,i,j,k)*this%grdv_y(+1,i,j  ,k))*2.0_WP
+               this%implicit%opr(4,i,j,k)=         -0.5_WP*dt*this%visc*(this%divv_y( 0,i,j,k)*this%grdv_y(+1,i,j  ,k))
                ! -y
-               this%implicit%opr(5,i,j,k)=         -0.5_WP*dt*this%visc*(this%divv_y(-1,i,j,k)*this%grdv_y( 0,i,j-1,k))*2.0_WP
+               this%implicit%opr(5,i,j,k)=         -0.5_WP*dt*this%visc*(this%divv_y(-1,i,j,k)*this%grdv_y( 0,i,j-1,k))
                ! +z
                this%implicit%opr(6,i,j,k)=         -0.5_WP*dt*this%visc*(this%divv_z(+1,i,j,k)*this%grdv_z( 0,i,j,k+1))
                ! -z
@@ -1300,8 +1300,8 @@ contains
                &                                                        this%divw_x( 0,i,j,k)*this%grdw_x( 0,i  ,j,k)+&
                &                                                        this%divw_y(+1,i,j,k)*this%grdw_y(-1,i,j+1,k)+&
                &                                                        this%divw_y( 0,i,j,k)*this%grdw_y( 0,i,j  ,k)+&
-               &                                                        this%divw_z( 0,i,j,k)*this%grdw_z( 0,i,j,k  )*2.0_WP+&
-               &                                                        this%divw_z(-1,i,j,k)*this%grdw_z(+1,i,j,k-1)*2.0_WP)
+               &                                                        this%divw_z( 0,i,j,k)*this%grdw_z( 0,i,j,k  )+&
+               &                                                        this%divw_z(-1,i,j,k)*this%grdw_z(+1,i,j,k-1))
                ! +x
                this%implicit%opr(2,i,j,k)=         -0.5_WP*dt*this%visc*(this%divw_x(+1,i,j,k)*this%grdw_x( 0,i+1,j,k))
                ! -x
@@ -1311,9 +1311,9 @@ contains
                ! -y
                this%implicit%opr(5,i,j,k)=         -0.5_WP*dt*this%visc*(this%divw_y( 0,i,j,k)*this%grdw_y(-1,i,j  ,k))
                ! +z
-               this%implicit%opr(6,i,j,k)=         -0.5_WP*dt*this%visc*(this%divw_z( 0,i,j,k)*this%grdw_z(+1,i,j,k  ))*2.0_WP
+               this%implicit%opr(6,i,j,k)=         -0.5_WP*dt*this%visc*(this%divw_z( 0,i,j,k)*this%grdw_z(+1,i,j,k  ))
                ! -z
-               this%implicit%opr(7,i,j,k)=         -0.5_WP*dt*this%visc*(this%divw_z(-1,i,j,k)*this%grdw_z( 0,i,j,k-1))*2.0_WP
+               this%implicit%opr(7,i,j,k)=         -0.5_WP*dt*this%visc*(this%divw_z(-1,i,j,k)*this%grdw_z( 0,i,j,k-1))
             end do
          end do
       end do
