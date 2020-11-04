@@ -42,6 +42,11 @@ module ils_class
       real(WP) :: rerr                                                !< Current relative error
       real(WP) :: aerr                                                !< Current absolute error
       
+      ! Unstructured mapping
+      integer,  dimension(:,:,:), allocatable :: ind     !< Unique global index
+      integer :: ind_min,ind_max                         !< Local min and max indices
+      integer :: ncell_,ncell                            !< Total number of local and global cells
+      
       ! Private stuff for hypre
       integer(kind=8), private :: hypre_box              !< Grid
       integer(kind=8), private :: hypre_stc              !< Stencil
@@ -58,6 +63,7 @@ module ils_class
       procedure :: solve                                              !< Equation solver
       procedure :: solve_rbgs                                         !< Solve equation with rbgs
       procedure :: solve_hypre_amg                                    !< Solve equation with amg
+      procedure :: prep_umap                                          !< Create unstructured mapping
       final     :: destructor                                         !< Destructor for ILS
    end type ils
    
@@ -79,6 +85,7 @@ contains
       if (allocated(this%opr)) deallocate(this%opr)
       if (allocated(this%rhs)) deallocate(this%rhs)
       if (allocated(this%sol)) deallocate(this%sol)
+      if (allocated(this%ind)) deallocate(this%ind)
    end subroutine destructor
    
    
@@ -111,6 +118,8 @@ contains
    
    
    !> Initialize solver - done at start-up (probably only once?)
+   !> When creating the solver, zero values of this%opr(1,:,:,:)
+   !> indicate cells that do not participate in the solver
    subroutine init_solver(this,method)
       use messager, only: die
       implicit none
@@ -127,17 +136,20 @@ contains
          
       case (amg)  ! Initialize the HYPRE-AMG solver here
          
+         ! Allocate and prepare unstructed mapping
+         call this%prep_umap()
+         
          ! Create a HYPRE matrix
-         call HYPRE_IJMatrixCreate       (this%cfg%comm,this%cfg%ind_min,this%cfg%ind_max,this%cfg%ind_min,this%cfg%ind_max,this%hypre_mat,ierr)
+         call HYPRE_IJMatrixCreate       (this%cfg%comm,this%ind_min,this%ind_max,this%ind_min,this%ind_max,this%hypre_mat,ierr)
          call HYPRE_IJMatrixSetObjectType(this%hypre_mat,hypre_ParCSR,ierr)
          call HYPRE_IJMatrixInitialize   (this%hypre_mat,ierr)
          ! Create a HYPRE rhs vector
-         call HYPRE_IJVectorCreate       (this%cfg%comm,this%cfg%ind_min,this%cfg%ind_max,this%hypre_rhs,ierr)
+         call HYPRE_IJVectorCreate       (this%cfg%comm,this%ind_min,this%ind_max,this%hypre_rhs,ierr)
          call HYPRE_IJVectorSetObjectType(this%hypre_rhs,hypre_ParCSR,ierr)
          call HYPRE_IJVectorInitialize   (this%hypre_rhs,ierr)
          call HYPRE_IJVectorGetObject    (this%hypre_rhs,this%parse_rhs,ierr)
          ! Create a HYPRE solution vector
-         call HYPRE_IJVectorCreate       (this%cfg%comm,this%cfg%ind_min,this%cfg%ind_max,this%hypre_sol,ierr)
+         call HYPRE_IJVectorCreate       (this%cfg%comm,this%ind_min,this%ind_max,this%hypre_sol,ierr)
          call HYPRE_IJVectorSetObjectType(this%hypre_sol,hypre_ParCSR,ierr)
          call HYPRE_IJVectorInitialize   (this%hypre_sol,ierr)
          call HYPRE_IJVectorGetObject    (this%hypre_sol,this%parse_sol,ierr)
@@ -145,7 +157,7 @@ contains
          call HYPRE_BoomerAMGCreate        (this%hypre_solver,ierr)
          call HYPRE_BoomerAMGSetPrintLevel (this%hypre_solver,0,ierr)            ! print solve info + parameters (3 from all, 0 for none)
          call HYPRE_BoomerAMGSetInterpType (this%hypre_solver,6,ierr)            ! interpolation default is 6 (NGA=3)
-         call HYPRE_BoomerAMGSetCoarsenType(this%hypre_solver,6,ierr)           ! Falgout=6 (old default, NGA); PMIS=8 and HMIS=10 (recommended)
+         call HYPRE_BoomerAMGSetCoarsenType(this%hypre_solver,6,ierr)            ! Falgout=6 (old default, NGA); PMIS=8 and HMIS=10 (recommended)
          call HYPRE_BoomerAMGSetStrongThrshld(this%hypre_solver,0.15_WP,ierr)    ! 0.25 is default
          call HYPRE_BoomerAMGSetRelaxType  (this%hypre_solver,8,ierr)            ! hybrid symmetric Gauss-Seidel/SOR
          call HYPRE_BoomerAMGSetMaxIter    (this%hypre_solver,this%maxit,ierr)   ! maximum nbr of iter
@@ -174,25 +186,25 @@ contains
       case (amg)  ! Prepare the HYPRE-AMG solver here
          
          ! Allocate storage for transfer
-         allocate( row(         this%cfg%ncell_))
-         allocate(ncol(         this%cfg%ncell_))
-         allocate( col(this%nst*this%cfg%ncell_))
-         allocate( val(this%nst*this%cfg%ncell_))
+         allocate( row(         this%ncell_))
+         allocate(ncol(         this%ncell_))
+         allocate( col(this%nst*this%ncell_))
+         allocate( val(this%nst*this%ncell_))
          
          ! Tranfer operator to HYPRE
          count1=0; count2=0
          do k=this%cfg%kmin_,this%cfg%kmax_
             do j=this%cfg%jmin_,this%cfg%jmax_
                do i=this%cfg%imin_,this%cfg%imax_
-                  if (this%cfg%ind(i,j,k).gt.0) then
+                  if (this%ind(i,j,k).gt.0) then
                      count1=count1+1
-                     row (count1)=this%cfg%ind(i,j,k)
+                     row (count1)=this%ind(i,j,k)
                      ncol(count1)=0
                      do st=1,this%nst
-                        if (this%cfg%ind(i+this%stc(st,1),j+this%stc(st,2),k+this%stc(st,3)).gt.0) then
+                        if (this%ind(i+this%stc(st,1),j+this%stc(st,2),k+this%stc(st,3)).gt.0) then
                            count2=count2+1
                            ncol(count1)=ncol(count1)+1
-                           col (count2)=this%cfg%ind(i+this%stc(st,1),j+this%stc(st,2),k+this%stc(st,3))
+                           col (count2)=this%ind(i+this%stc(st,1),j+this%stc(st,2),k+this%stc(st,3))
                            val (count2)=this%opr(st,i,j,k)
                         end if
                      end do
@@ -200,7 +212,7 @@ contains
                end do
             end do
          end do
-         call HYPRE_IJMatrixSetValues(this%hypre_mat,this%cfg%ncell_,ncol,row,col,val,ierr)
+         call HYPRE_IJMatrixSetValues(this%hypre_mat,this%ncell_,ncol,row,col,val,ierr)
          call HYPRE_IJMatrixAssemble (this%hypre_mat,ierr)
          call HYPRE_IJMatrixGetObject(this%hypre_mat,this%parse_mat,ierr)
          
@@ -305,25 +317,25 @@ contains
       real(WP), dimension(:), allocatable :: rhs,sol
       
       ! Transfer the rhs and initial guess to hypre
-      allocate(rhs(this%cfg%ncell_))
-      allocate(sol(this%cfg%ncell_))
-      allocate(ind(this%cfg%ncell_))
+      allocate(rhs(this%ncell_))
+      allocate(sol(this%ncell_))
+      allocate(ind(this%ncell_))
       count=0
       do k=this%cfg%kmin_,this%cfg%kmax_
          do j=this%cfg%jmin_,this%cfg%jmax_
             do i=this%cfg%imin_,this%cfg%imax_
-               if (this%cfg%ind(i,j,k).gt.0) then
+               if (this%ind(i,j,k).gt.0) then
                   count=count+1
-                  ind(count)=this%cfg%ind(i,j,k)
+                  ind(count)=this%ind(i,j,k)
                   rhs(count)=this%rhs(i,j,k)
                   sol(count)=this%sol(i,j,k)
                end if
             end do
          end do
       end do
-      call HYPRE_IJVectorSetValues(this%hypre_rhs,this%cfg%ncell_,ind,rhs,ierr)
+      call HYPRE_IJVectorSetValues(this%hypre_rhs,this%ncell_,ind,rhs,ierr)
       call HYPRE_IJVectorAssemble (this%hypre_rhs,ierr)
-      call HYPRE_IJVectorSetValues(this%hypre_sol,this%cfg%ncell_,ind,sol,ierr)
+      call HYPRE_IJVectorSetValues(this%hypre_sol,this%ncell_,ind,sol,ierr)
       call HYPRE_IJVectorAssemble (this%hypre_sol,ierr)
       
       ! Call the solver
@@ -332,12 +344,12 @@ contains
       call HYPRE_BoomerAMGGetFinalReltvRes(this%hypre_solver,this%rerr,ierr)
       
       ! Get the solution back
-      call HYPRE_IJVectorGetValues(this%hypre_sol,this%cfg%ncell_,ind,sol,ierr)
+      call HYPRE_IJVectorGetValues(this%hypre_sol,this%ncell_,ind,sol,ierr)
       count=0
       do k=this%cfg%kmin_,this%cfg%kmax_
          do j=this%cfg%jmin_,this%cfg%jmax_
             do i=this%cfg%imin_,this%cfg%imax_
-               if (this%cfg%ind(i,j,k).gt.0) then
+               if (this%ind(i,j,k).gt.0) then
                   count=count+1
                   this%sol(i,j,k)=sol(count)
                end if
@@ -349,6 +361,67 @@ contains
       deallocate(rhs,sol,ind)
       
    end subroutine solve_hypre_amg
+   
+   
+   !> Creation of an unstructured mapping
+   subroutine prep_umap(this)
+      use mpi_f08, only: MPI_ALLREDUCE,MPI_SUM,MPI_INTEGER
+      implicit none
+      class(ils), intent(inout) :: this
+      integer :: i,j,k,ierr,count
+      integer, dimension(:), allocatable :: ncell_per_proc
+      
+      ! Dump any existing mapping and recreate it
+      this%ncell =0
+      this%ncell_=0
+      this%ind_min=0
+      this%ind_max=0
+      if (.not.allocated(this%ind)) allocate(this%ind(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
+      this%ind=-1
+      
+      ! Count number of active cells
+      do k=this%cfg%kmin_,this%cfg%kmax_
+         do j=this%cfg%jmin_,this%cfg%jmax_
+            do i=this%cfg%imin_,this%cfg%imax_
+               if (abs(this%opr(1,i,j,k)).gt.10.0_WP*epsilon(1.0_WP)) this%ncell_=this%ncell_+1
+            end do
+         end do
+      end do
+      call MPI_ALLREDUCE(this%ncell_,this%ncell,1,MPI_INTEGER,MPI_SUM,this%cfg%comm,ierr)
+      
+      ! Create an array with ncell_ per cpu
+      allocate(ncell_per_proc(this%cfg%nproc))
+      call MPI_ALLGATHER(this%ncell_,1,MPI_INTEGER,ncell_per_proc,1,MPI_INTEGER,this%cfg%comm,ierr)
+      do i=2,this%cfg%nproc
+         ncell_per_proc(i)=ncell_per_proc(i)+ncell_per_proc(i-1)
+      end do
+      
+      ! Assign unique global index to all non-empty cells
+      count=0
+      if (this%cfg%rank.gt.0) count=ncell_per_proc(this%cfg%rank)
+      do k=this%cfg%kmin_,this%cfg%kmax_
+         do j=this%cfg%jmin_,this%cfg%jmax_
+            do i=this%cfg%imin_,this%cfg%imax_
+               if (abs(this%opr(1,i,j,k)).gt.10.0_WP*epsilon(1.0_WP)) then
+                  count=count+1
+                  this%ind(i,j,k)=count
+               end if
+            end do
+         end do
+      end do
+      
+      ! Take care of periodicity and domain decomposition
+      call this%cfg%sync(this%ind)
+      
+      ! Get local min/max
+      this%ind_min=1
+      if (this%cfg%rank.gt.0) this%ind_min=ncell_per_proc(this%cfg%rank)+1
+      this%ind_max=ncell_per_proc(this%cfg%rank+1)
+      
+      ! Deallocate
+      deallocate(ncell_per_proc)
+      
+   end subroutine prep_umap
    
    
    !> Log ILS info

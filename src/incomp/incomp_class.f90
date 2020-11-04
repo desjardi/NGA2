@@ -153,9 +153,6 @@ contains
       allocate(self%Vold(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%Vold=0.0_WP
       allocate(self%Wold(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%Wold=0.0_WP
       
-      ! Need to augment cfg with unstructured mapping for linear solvers
-      call self%cfg%umap_prep()
-      
       ! Create pressure solver object
       self%psolv=ils(cfg=self%cfg,name='Pressure Poisson Solver')
       
@@ -202,6 +199,9 @@ contains
       self%implicit%stc(5,:)=[ 0,-1, 0]
       self%implicit%stc(6,:)=[ 0, 0,+1]
       self%implicit%stc(7,:)=[ 0, 0,-1]
+      
+      ! Set the diagonal to 1 to make sure all cells participate in solver
+      self%implicit%opr(1,:,:,:)=1.0_WP
       
    end function constructor
    
@@ -1171,7 +1171,7 @@ contains
          
          ! Only processes inside correctable bcond need to work
          if (my_bc%itr%amIn.and.my_bc%canCorrect) then
-            print*,'bc: ',trim(my_bc%name),my_bc%dir
+            
             ! Implement based on bcond direction, loop over all cell
             select case (my_bc%dir)
             case (1) ! BC in +x
