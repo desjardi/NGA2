@@ -18,6 +18,8 @@ module ils_class
    integer, parameter, public :: pcg_parasail=4
    integer, parameter, public :: gmres=5
    integer, parameter, public :: gmres_pilut=6
+   integer, parameter, public :: smg=7
+   integer, parameter, public :: pfmg=8
    
    
    ! Hypre-related storage parameter
@@ -71,6 +73,8 @@ module ils_class
       procedure :: solve_hypre_amg                                    !< Solve equation with amg
       procedure :: solve_hypre_pcg                                    !< Solve equation with pcg (might be preconditioned)
       procedure :: solve_hypre_gmres                                  !< Solve equation with gmres (might be preconditioned)
+      procedure :: solve_hypre_smg                                    !< Solve equation with smg
+      procedure :: solve_hypre_pfmg                                   !< Solve equation with pfmg
       procedure :: prep_umap                                          !< Create unstructured mapping
       final     :: destructor                                         !< Destructor for ILS
    end type ils
@@ -133,7 +137,8 @@ contains
       implicit none
       class(ils), intent(inout) :: this
       integer, intent(in) :: method
-      integer :: ierr
+      integer :: ierr,st
+      integer, dimension(3) :: periodicity,offset
       
       ! Set solution method
       this%method=method
@@ -296,9 +301,74 @@ contains
          call HYPRE_ParCSRGMRESSetMaxIter(this%hypre_solver,this%maxit,ierr)
          call HYPRE_ParCSRGMRESSetTol    (this%hypre_solver,this%rcvg,ierr)
          call HYPRE_ParCSRGMRESSetLogging(this%hypre_solver,1,ierr)
-         
+         ! Create the PILUT preconditioner
          call HYPRE_ParCSRPilutCreate    (this%cfg%comm,this%hypre_precond,ierr)
          call HYPRE_ParCSRGMRESSetPrecond(this%hypre_solver,3,this%hypre_precond,ierr)
+         
+      case (smg) ! Initialize the HYPRE-SMG solver here
+         
+         ! Create Hypre grid
+         call HYPRE_StructGridCreate      (this%cfg%comm,3,this%hypre_box,ierr)
+         call HYPRE_StructGridSetExtents  (this%hypre_box,[this%cfg%imin_,this%cfg%jmin_,this%cfg%kmin_],[this%cfg%imax_,this%cfg%jmax_,this%cfg%kmax_],ierr)
+         periodicity=0
+         if (this%cfg%xper) periodicity(1)=this%cfg%nx
+         if (this%cfg%yper) periodicity(2)=this%cfg%ny
+         if (this%cfg%zper) periodicity(3)=this%cfg%nz
+         call HYPRE_StructGridSetPeriodic (this%hypre_box,periodicity,ierr)
+         call HYPRE_StructGridAssemble    (this%hypre_box,ierr)
+         ! Build Hypre stencil
+         call HYPRE_StructStencilCreate   (3,this%nst,this%hypre_stc,ierr)
+         do st=1,this%nst
+            offset=this%stc(st,:)
+            call HYPRE_StructStencilSetElement(this%hypre_stc,st-1,offset,ierr)
+         end do
+         ! Build Hypre matrix
+         call HYPRE_StructMatrixCreate    (this%cfg%comm,this%hypre_box,this%hypre_stc,this%hypre_mat,ierr)
+         call HYPRE_StructMatrixInitialize(this%hypre_mat,ierr)
+         ! Prepare Hypre RHS
+         call HYPRE_StructVectorCreate    (this%cfg%comm,this%hypre_box,this%hypre_rhs,ierr)
+         call HYPRE_StructVectorInitialize(this%hypre_rhs,ierr)
+         ! Create Hypre solution vector
+         call HYPRE_StructVectorCreate    (this%cfg%comm,this%hypre_box,this%hypre_sol,ierr)
+         call HYPRE_StructVectorInitialize(this%hypre_sol,ierr)
+         ! Prepare the solver
+         call HYPRE_StructSMGCreate       (this%cfg%comm,this%hypre_solver,ierr)
+         call HYPRE_StructSMGSetMaxIter   (this%hypre_solver,this%maxit,ierr)
+         call HYPRE_StructSMGSetTol       (this%hypre_solver,this%rcvg ,ierr)
+         call HYPRE_StructSMGSetLogging   (this%hypre_solver,1,ierr)
+         
+      case (pfmg) ! Initialize the HYPRE-PFMG solver here
+         
+         ! Create Hypre grid
+         call HYPRE_StructGridCreate      (this%cfg%comm,3,this%hypre_box,ierr)
+         call HYPRE_StructGridSetExtents  (this%hypre_box,[this%cfg%imin_,this%cfg%jmin_,this%cfg%kmin_],[this%cfg%imax_,this%cfg%jmax_,this%cfg%kmax_],ierr)
+         periodicity=0
+         if (this%cfg%xper) periodicity(1)=this%cfg%nx
+         if (this%cfg%yper) periodicity(2)=this%cfg%ny
+         if (this%cfg%zper) periodicity(3)=this%cfg%nz
+         call HYPRE_StructGridSetPeriodic (this%hypre_box,periodicity,ierr)
+         call HYPRE_StructGridAssemble    (this%hypre_box,ierr)
+         ! Build Hypre stencil
+         call HYPRE_StructStencilCreate   (3,this%nst,this%hypre_stc,ierr)
+         do st=1,this%nst
+            offset=this%stc(st,:)
+            call HYPRE_StructStencilSetElement(this%hypre_stc,st-1,offset,ierr)
+         end do
+         ! Build Hypre matrix
+         call HYPRE_StructMatrixCreate    (this%cfg%comm,this%hypre_box,this%hypre_stc,this%hypre_mat,ierr)
+         call HYPRE_StructMatrixInitialize(this%hypre_mat,ierr)
+         ! Prepare Hypre RHS
+         call HYPRE_StructVectorCreate    (this%cfg%comm,this%hypre_box,this%hypre_rhs,ierr)
+         call HYPRE_StructVectorInitialize(this%hypre_rhs,ierr)
+         ! Create Hypre solution vector
+         call HYPRE_StructVectorCreate    (this%cfg%comm,this%hypre_box,this%hypre_sol,ierr)
+         call HYPRE_StructVectorInitialize(this%hypre_sol,ierr)
+         ! Prepare the solver
+         call HYPRE_StructPFMGCreate       (this%cfg%comm,this%hypre_solver,ierr)
+         call HYPRE_StructPFMGSetRelaxType (this%hypre_solver,2,ierr)
+         call HYPRE_StructPFMGSetMaxIter   (this%hypre_solver,this%maxit,ierr)
+         call HYPRE_StructPFMGSetTol       (this%hypre_solver,this%rcvg ,ierr)
+         call HYPRE_StructPFMGSetLogging   (this%hypre_solver,1,ierr)
          
       case default
          call die('[ils prep solver] Unknown solution method')
@@ -437,6 +507,58 @@ contains
          ! Deallocate
          deallocate(row,ncol,col,val)
          
+      case (smg)  ! Prepare the HYPRE-SMG solver here
+         
+         ! Prepare local storage
+         allocate(row(1:this%nst))
+         do st=1,this%nst
+            row(st)=st-1
+         end do
+         allocate(val(1:this%nst))
+         
+         ! Transfer the operator
+         do k=this%cfg%kmin_,this%cfg%kmax_
+            do j=this%cfg%jmin_,this%cfg%jmax_
+               do i=this%cfg%imin_,this%cfg%imax_
+                  val=this%opr(:,i,j,k)
+                  call HYPRE_StructMatrixSetValues(this%hypre_mat,[i,j,k],this%nst,row,val,ierr)
+               end do
+            end do
+         end do
+         call HYPRE_StructMatrixAssemble(this%hypre_mat,ierr)
+         
+         ! Setup the solver
+         call HYPRE_StructSMGSetup(this%hypre_solver,this%hypre_mat,this%hypre_rhs,this%hypre_sol,ierr)
+         
+         ! Deallocate
+         deallocate(row,val)
+         
+      case (pfmg)  ! Prepare the HYPRE-PFMG solver here
+         
+         ! Prepare local storage
+         allocate(row(1:this%nst))
+         do st=1,this%nst
+            row(st)=st-1
+         end do
+         allocate(val(1:this%nst))
+         
+         ! Transfer the operator
+         do k=this%cfg%kmin_,this%cfg%kmax_
+            do j=this%cfg%jmin_,this%cfg%jmax_
+               do i=this%cfg%imin_,this%cfg%imax_
+                  val=this%opr(:,i,j,k)
+                  call HYPRE_StructMatrixSetValues(this%hypre_mat,[i,j,k],this%nst,row,val,ierr)
+               end do
+            end do
+         end do
+         call HYPRE_StructMatrixAssemble(this%hypre_mat,ierr)
+         
+         ! Setup the solver
+         call HYPRE_StructPFMGSetup(this%hypre_solver,this%hypre_mat,this%hypre_rhs,this%hypre_sol,ierr)
+         
+         ! Deallocate
+         deallocate(row,val)
+         
       case default
          call die('[ils prep solver] Unknown solution method')
       end select
@@ -462,6 +584,10 @@ contains
          call this%solve_hypre_pcg()
       case (gmres,gmres_pilut)
          call this%solve_hypre_gmres()
+      case (smg)
+         call this%solve_hypre_smg()
+      case (pfmg)
+         call this%solve_hypre_pfmg()
       case default
          call die('[ils solve] Unknown solution method')
       end select
@@ -692,6 +818,76 @@ contains
    end subroutine solve_hypre_gmres
    
    
+   !> Solve the linear system using hypre_smg
+   subroutine solve_hypre_smg(this)
+      implicit none
+      class(ils), intent(inout) :: this
+      integer :: i,j,k,ierr
+      
+      ! Transfer the rhs and initial guess to hypre
+      do k=this%cfg%kmin_,this%cfg%kmax_
+         do j=this%cfg%jmin_,this%cfg%jmax_
+            do i=this%cfg%imin_,this%cfg%imax_
+               call HYPRE_StructVectorSetValues(this%hypre_rhs,[i,j,k],this%rhs(i,j,k),ierr)
+               call HYPRE_StructVectorSetValues(this%hypre_sol,[i,j,k],this%sol(i,j,k),ierr)
+            end do
+         end do
+      end do
+      call HYPRE_StructVectorAssemble(this%hypre_rhs,ierr)
+      call HYPRE_StructVectorAssemble(this%hypre_sol,ierr)
+      
+      ! Solve
+      call HYPRE_StructSMGSolve           (this%hypre_solver,this%hypre_mat,this%hypre_rhs,this%hypre_sol,ierr)
+      call HYPRE_StructSMGGetNumIterations(this%hypre_solver,this%it  ,ierr)
+      call HYPRE_StructSMGGetFinalRelative(this%hypre_solver,this%rerr,ierr)
+      
+      ! Get the solution back
+      do k=this%cfg%kmin_,this%cfg%kmax_
+         do j=this%cfg%jmin_,this%cfg%jmax_
+            do i=this%cfg%imin_,this%cfg%imax_
+               call HYPRE_StructVectorGetValues(this%hypre_sol,[i,j,k],this%sol(i,j,k),ierr)
+            end do
+         end do
+      end do
+      
+   end subroutine solve_hypre_smg
+   
+   
+   !> Solve the linear system using hypre_pfmg
+   subroutine solve_hypre_pfmg(this)
+      implicit none
+      class(ils), intent(inout) :: this
+      integer :: i,j,k,ierr
+      
+      ! Transfer the rhs and initial guess to hypre
+      do k=this%cfg%kmin_,this%cfg%kmax_
+         do j=this%cfg%jmin_,this%cfg%jmax_
+            do i=this%cfg%imin_,this%cfg%imax_
+               call HYPRE_StructVectorSetValues(this%hypre_rhs,[i,j,k],this%rhs(i,j,k),ierr)
+               call HYPRE_StructVectorSetValues(this%hypre_sol,[i,j,k],this%sol(i,j,k),ierr)
+            end do
+         end do
+      end do
+      call HYPRE_StructVectorAssemble(this%hypre_rhs,ierr)
+      call HYPRE_StructVectorAssemble(this%hypre_sol,ierr)
+      
+      ! Solve
+      call HYPRE_StructPFMGSolve          (this%hypre_solver,this%hypre_mat,this%hypre_rhs,this%hypre_sol,ierr)
+      call HYPRE_StructPFMGGetNumIteration(this%hypre_solver,this%it  ,ierr)
+      call HYPRE_StructPFMGGetFinalRelativ(this%hypre_solver,this%rerr,ierr)
+      
+      ! Get the solution back
+      do k=this%cfg%kmin_,this%cfg%kmax_
+         do j=this%cfg%jmin_,this%cfg%jmax_
+            do i=this%cfg%imin_,this%cfg%imax_
+               call HYPRE_StructVectorGetValues(this%hypre_sol,[i,j,k],this%sol(i,j,k),ierr)
+            end do
+         end do
+      end do
+      
+   end subroutine solve_hypre_pfmg
+   
+   
    !> Creation of an unstructured mapping
    subroutine prep_umap(this)
       use mpi_f08, only: MPI_ALLREDUCE,MPI_SUM,MPI_INTEGER
@@ -762,16 +958,7 @@ contains
       character(len=str_long) :: message
       if (this%cfg%amRoot) then
          write(message,'("Iterative Linear Solver [",a,"] for config [",a,"]")') trim(this%name),trim(this%cfg%name); call log(message)
-         select case (this%method)
-         case (rbgs)
-            write(message,'(" > method = ",a)') 'RBGS'; call log(message)
-         case (amg)
-            write(message,'(" > method = ",a)') 'HYPRE AMG'; call log(message)
-         case (pcg_amg)
-            write(message,'(" > method = ",a)') 'HYPRE PCG AMG'; call log(message)
-         case default
-            write(message,'(" > method = ",a)') 'unknown'; call log(message)
-         end select
+         write(message,'(" >     method = ",i0)') this%method; call log(message)
          write(message,'(" >   it/maxit = ",i0,"/",i0)') this%it,this%maxit; call log(message)
          write(message,'(" >  aerr/acvg = ",es12.5,"/",es12.5)') this%aerr,this%acvg; call log(message)
          write(message,'(" >  rerr/rcvg = ",es12.5,"/",es12.5)') this%rerr,this%rcvg; call log(message)
@@ -786,16 +973,7 @@ contains
       class(ils), intent(in) :: this
       if (this%cfg%amRoot) then
          write(output_unit,'("Iterative Linear Solver [",a,"] for config [",a,"]")') trim(this%name),trim(this%cfg%name)
-         select case (this%method)
-         case (rbgs)
-            write(output_unit,'(" > method = ",a)') 'RBGS'
-         case (amg)
-            write(output_unit,'(" > method = ",a)') 'HYPRE AMG'
-         case (pcg_amg)
-            write(output_unit,'(" > method = ",a)') 'HYPRE PCG AMG'
-         case default
-            write(output_unit,'(" > method = ",a)') 'unknown'
-         end select
+         write(output_unit,'(" >     method = ",i0)') this%method
          write(output_unit,'(" >   it/maxit = ",i0,"/",i0)') this%it,this%maxit
          write(output_unit,'(" >  aerr/acvg = ",es12.5,"/",es12.5)') this%aerr,this%acvg
          write(output_unit,'(" >  rerr/rcvg = ",es12.5,"/",es12.5)') this%rerr,this%rcvg

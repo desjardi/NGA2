@@ -60,7 +60,7 @@ contains
       
       ! Create an incompressible flow solver
       create_solver: block
-         use ils_class, only: rbgs,amg,pcg_amg,pcg_parasail,gmres,gmres_pilut
+         use ils_class, only: rbgs,amg,pcg_amg,pcg_parasail,gmres,gmres_pilut,smg,pfmg
          ! Create solver
          fs=incomp(cfg,'Bob')
          ! Assign constant fluid properties
@@ -76,7 +76,7 @@ contains
          call param_read('Implicit iteration',fs%implicit%maxit)
          call param_read('Implicit tolerance',fs%implicit%acvg)
          fs%implicit%rcvg=fs%implicit%acvg
-         call fs%implicit%init_solver(gmres_pilut)
+         call fs%implicit%init_solver(pfmg)
       end block create_solver
       
       
