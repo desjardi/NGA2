@@ -55,12 +55,12 @@ contains
    subroutine simulation_init
       use precision, only: WP
       use param,     only: param_read
-      use ils_class, only: rbgs,amg
       implicit none
       
       
       ! Create an incompressible flow solver
       create_solver: block
+         use ils_class, only: rbgs,amg,pcg_amg,pcg_parasail,gmres,gmres_pilut
          ! Create solver
          fs=incomp(cfg,'Bob')
          ! Assign constant fluid properties
@@ -70,13 +70,13 @@ contains
          call param_read('Pressure iteration',fs%psolv%maxit)
          call param_read('Pressure tolerance',fs%psolv%acvg)
          fs%psolv%rcvg=fs%psolv%acvg
-         call fs%psolv%init_solver(amg)
+         call fs%psolv%init_solver(pcg_amg)
          call fs%psolv%update_solver()
          ! Configure implicit velocity solver
          call param_read('Implicit iteration',fs%implicit%maxit)
          call param_read('Implicit tolerance',fs%implicit%acvg)
          fs%implicit%rcvg=fs%implicit%acvg
-         call fs%implicit%init_solver(amg)
+         call fs%implicit%init_solver(gmres_pilut)
       end block create_solver
       
       

@@ -16,7 +16,7 @@ Hole depth: 0.01	!0.018
 
 # Fluid properties
 Density :		1
-Dynamic viscosity :	100
+Dynamic viscosity :	1	!0.01
 
 # Time integration
 Max timestep size :	1e-5
@@ -27,7 +27,7 @@ Pressure tolerance : 	1e-6
 Pressure iteration : 	100
 
 # Implicit velocity solver
-Implicit tolerance : 	1e-10
+Implicit tolerance : 	1e-6
 Implicit iteration : 	100
 
 # Ensight ouput
