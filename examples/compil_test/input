@@ -26,6 +26,9 @@ Max cfl number :	0.5
 Pressure tolerance : 	1e-6
 Pressure iteration : 	100
 
+# Implicit velocity solver
+Implicit tolerance : 	1e-6
+Implicit iteration : 	100
 
 # Ensight ouput
 Ensight output period : 1e-4

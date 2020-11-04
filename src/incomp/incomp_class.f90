@@ -69,6 +69,9 @@ module incomp_class
       ! Pressure solver
       type(ils) :: psolv                                  !< Iterative linear solver object for the pressure Poisson equation
       
+      ! Implicit velocity solver
+      type(ils) :: implicit                               !< Iterative linear solver object for an implicit prediction of the NS residual
+      
       ! Metrics
       real(WP), dimension(:,:,:,:), allocatable :: itpu_x,itpu_y,itpu_z   !< Interpolation for U
       real(WP), dimension(:,:,:,:), allocatable :: itpv_x,itpv_y,itpv_z   !< Interpolation for V
@@ -103,6 +106,7 @@ module incomp_class
       procedure :: interp_vel                             !< Calculate interpolated velocity
       procedure :: get_mfr                                !< Calculate outgoing MFR through each bcond
       procedure :: correct_mfr                            !< Correct for mfr mismatch to ensure global conservation
+      procedure :: solve_implicit                         !< Solve for the velocity residuals implicitly
    end type incomp
    
    
@@ -150,7 +154,7 @@ contains
       allocate(self%Wold(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%Wold=0.0_WP
       
       ! Create pressure solver object
-      self%psolv=ils(self%cfg,"Pressure Poisson Solver")
+      self%psolv=ils(cfg=self%cfg,name='Pressure Poisson Solver')
       
       ! Set 7-pt stencil map
       self%psolv%stc(1,:)=[ 0, 0, 0]
@@ -183,6 +187,18 @@ contains
             end do
          end do
       end do
+      
+      ! Create implicit velocity solver object
+      self%implicit=ils(cfg=self%cfg,name='Implicit NS residual')
+      
+      ! Set 7-pt stencil map
+      self%implicit%stc(1,:)=[ 0, 0, 0]
+      self%implicit%stc(2,:)=[+1, 0, 0]
+      self%implicit%stc(3,:)=[-1, 0, 0]
+      self%implicit%stc(4,:)=[ 0,+1, 0]
+      self%implicit%stc(5,:)=[ 0,-1, 0]
+      self%implicit%stc(6,:)=[ 0, 0,+1]
+      self%implicit%stc(7,:)=[ 0, 0,-1]
       
    end function constructor
    
@@ -1195,6 +1211,59 @@ contains
       end do
       
    end subroutine correct_mfr
+   
+   
+   !> Solve for implicit velocity residual
+   subroutine solve_implicit(this,dt,resU,resV,resW)
+      use ils_class, only: amg
+      implicit none
+      class(incomp), intent(inout) :: this
+      real(WP), intent(in) :: dt
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: resU !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: resV !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: resW !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      integer :: i,j,k
+      
+      ! Assemble U operator
+      do k=this%cfg%kmin_,this%cfg%kmax_
+         do j=this%cfg%jmin_,this%cfg%jmax_
+            do i=this%cfg%imin_,this%cfg%imax_
+               ! Diagonal
+               this%implicit%opr(1,i,j,k)=this%rho-0.5_WP*dt*this%visc*(this%divu_x( 0,i,j,k)*this%grdu_x( 0,i  ,j,k)*2.0_WP+&
+               &                                                        this%divu_x(-1,i,j,k)*this%grdu_x(+1,i-1,j,k)*2.0_WP+&
+               &                                                        this%divu_y(+1,i,j,k)*this%grdu_y(-1,i,j+1,k)+&
+               &                                                        this%divu_y( 0,i,j,k)*this%grdu_y( 0,i,j  ,k)+&
+               &                                                        this%divu_z(+1,i,j,k)*this%grdu_z(-1,i,j,k+1)+&
+               &                                                        this%divu_z( 0,i,j,k)*this%grdu_z( 0,i,j,k  ))
+               ! +x
+               this%implicit%opr(2,i,j,k)=         -0.5_WP*dt*this%visc*(this%divu_x( 0,i,j,k)*this%grdu_x(+1,i  ,j,k))*2.0_WP
+               ! -x
+               this%implicit%opr(3,i,j,k)=         -0.5_WP*dt*this%visc*(this%divu_x(-1,i,j,k)*this%grdu_x( 0,i-1,j,k))*2.0_WP
+               ! +y
+               this%implicit%opr(4,i,j,k)=         -0.5_WP*dt*this%visc*(this%divu_y(+1,i,j,k)*this%grdv_y( 0,i,j+1,k))
+               ! -y
+               this%implicit%opr(5,i,j,k)=         -0.5_WP*dt*this%visc*(this%divu_y( 0,i,j,k)*this%grdv_y(-1,i,j  ,k))
+               ! +z
+               this%implicit%opr(6,i,j,k)=         -0.5_WP*dt*this%visc*(this%divu_z(+1,i,j,k)*this%grdw_z( 0,i,j,k+1))
+               ! -z
+               this%implicit%opr(7,i,j,k)=         -0.5_WP*dt*this%visc*(this%divu_z( 0,i,j,k)*this%grdw_z(-1,i,j,k  ))
+            end do
+         end do
+      end do
+      
+      ! Setup the linearized problem and solve
+      call this%implicit%init_solver(amg)
+      this%implicit%rhs=resU
+      this%implicit%sol=0.0_WP
+      call this%implicit%solve()
+      resU=this%implicit%sol
+      
+      ! Sync up all residuals
+      call this%cfg%sync(resU)
+      call this%cfg%sync(resV)
+      call this%cfg%sync(resW)
+      
+   end subroutine solve_implicit
    
    
    !> Print out info for incompressible flow solver

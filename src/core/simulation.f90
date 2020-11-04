@@ -25,7 +25,7 @@ module simulation
    public :: simulation_init,simulation_run,simulation_final
    
    !> Private work arrays
-   real(WP), dimension(:,:,:), allocatable :: dudt,dvdt,dwdt
+   real(WP), dimension(:,:,:), allocatable :: resU,resV,resW
    real(WP), dimension(:,:,:), allocatable :: Ui,Vi,Wi
    
 contains
@@ -68,17 +68,21 @@ contains
          call param_read('Dynamic viscosity',fs%visc)
          ! Configure pressure solver
          call param_read('Pressure iteration',fs%psolv%maxit)
-         call param_read('Pressure tolerance',fs%psolv%acvg); fs%psolv%rcvg=fs%psolv%acvg
-         ! Initialize solver
+         call param_read('Pressure tolerance',fs%psolv%acvg)
+         fs%psolv%rcvg=fs%psolv%acvg
          call fs%psolv%init_solver(amg)
+         ! Configure implicit velocity solver
+         call param_read('Implicit iteration',fs%implicit%maxit)
+         call param_read('Implicit tolerance',fs%implicit%acvg)
+         fs%implicit%rcvg=fs%implicit%acvg
       end block create_solver
       
       
       ! Allocate work arrays
       allocate_work_arrays: block
-         allocate(dudt(fs%cfg%imino_:fs%cfg%imaxo_,fs%cfg%jmino_:fs%cfg%jmaxo_,fs%cfg%kmino_:fs%cfg%kmaxo_))
-         allocate(dvdt(fs%cfg%imino_:fs%cfg%imaxo_,fs%cfg%jmino_:fs%cfg%jmaxo_,fs%cfg%kmino_:fs%cfg%kmaxo_))
-         allocate(dwdt(fs%cfg%imino_:fs%cfg%imaxo_,fs%cfg%jmino_:fs%cfg%jmaxo_,fs%cfg%kmino_:fs%cfg%kmaxo_))
+         allocate(resU(fs%cfg%imino_:fs%cfg%imaxo_,fs%cfg%jmino_:fs%cfg%jmaxo_,fs%cfg%kmino_:fs%cfg%kmaxo_))
+         allocate(resV(fs%cfg%imino_:fs%cfg%imaxo_,fs%cfg%jmino_:fs%cfg%jmaxo_,fs%cfg%kmino_:fs%cfg%kmaxo_))
+         allocate(resW(fs%cfg%imino_:fs%cfg%imaxo_,fs%cfg%jmino_:fs%cfg%jmaxo_,fs%cfg%kmino_:fs%cfg%kmaxo_))
          allocate(Ui  (fs%cfg%imino_:fs%cfg%imaxo_,fs%cfg%jmino_:fs%cfg%jmaxo_,fs%cfg%kmino_:fs%cfg%kmaxo_))
          allocate(Vi  (fs%cfg%imino_:fs%cfg%imaxo_,fs%cfg%jmino_:fs%cfg%jmaxo_,fs%cfg%kmino_:fs%cfg%kmaxo_))
          allocate(Wi  (fs%cfg%imino_:fs%cfg%imaxo_,fs%cfg%jmino_:fs%cfg%jmaxo_,fs%cfg%kmino_:fs%cfg%kmaxo_))
@@ -138,7 +142,6 @@ contains
          ! Add variables to output
          call ens_out%add_scalar('pressure',fs%P)
          call ens_out%add_vector('velocity',Ui,Vi,Wi)
-         call ens_out%add_vector('dveldt',dudt,dvdt,dwdt)
          call ens_out%add_scalar('div',fs%div)
          ! Output to ensight
          if (ens_evt%occurs()) call ens_out%write_data(time%t)
@@ -200,12 +203,25 @@ contains
             fs%W=0.5_WP*(fs%W+fs%Wold)
             
             ! Explicit calculation of drho*u/dt from NS
-            call fs%get_dmomdt(dudt,dvdt,dwdt)
+            call fs%get_dmomdt(resU,resV,resW)
             
-            ! Increment directly (explicitly)
-            fs%U=fs%Uold+time%dt*dudt/fs%rho
-            fs%V=fs%Vold+time%dt*dvdt/fs%rho
-            fs%W=fs%Wold+time%dt*dwdt/fs%rho
+            ! Increment velocity explicitly
+            !fs%U=fs%Uold+time%dt*resU/fs%rho
+            !fs%V=fs%Vold+time%dt*resV/fs%rho
+            !fs%W=fs%Wold+time%dt*resW/fs%rho
+            
+            ! Assemble explicit residual
+            resU=-2.0_WP*(fs%rho*fs%U-fs%rho*fs%Uold)+time%dt*resU
+            resV=-2.0_WP*(fs%rho*fs%V-fs%rho*fs%Vold)+time%dt*resV
+            resW=-2.0_WP*(fs%rho*fs%W-fs%rho*fs%Wold)+time%dt*resW
+            
+            ! Form implicit residuals
+            !call fs%solve_implicit(time%dt,resU,resV,resW)
+            
+            ! Apply these residuals
+            fs%U=2.0_WP*fs%U-fs%Uold+resU
+            fs%V=2.0_WP*fs%V-fs%Vold+resV
+            fs%W=2.0_WP*fs%W-fs%Wold+resW
             
             ! Apply other boundary conditions on the resulting fields
             call fs%apply_bcond(time%t,time%dt)
@@ -218,11 +234,11 @@ contains
             call fs%psolv%solve()
             
             ! Correct velocity
-            call fs%get_pgrad(fs%psolv%sol,dudt,dvdt,dwdt)
+            call fs%get_pgrad(fs%psolv%sol,resU,resV,resW)
             fs%P=fs%P+fs%psolv%sol
-            fs%U=fs%U-time%dt*dudt/fs%rho
-            fs%V=fs%V-time%dt*dvdt/fs%rho
-            fs%W=fs%W-time%dt*dwdt/fs%rho
+            fs%U=fs%U-time%dt*resU/fs%rho
+            fs%V=fs%V-time%dt*resV/fs%rho
+            fs%W=fs%W-time%dt*resW/fs%rho
             
             ! Increment sub-iteration counter
             time%it=time%it+1
@@ -256,7 +272,7 @@ contains
       ! timetracker
       
       ! Deallocate work arrays
-      deallocate(dudt,dvdt,dwdt,Ui,Vi,Wi)
+      deallocate(resU,resV,resW,Ui,Vi,Wi)
       
    end subroutine simulation_final
    
