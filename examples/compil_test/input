@@ -20,7 +20,7 @@ Dynamic viscosity :	1	!0.01
 
 # Time integration
 Max timestep size :	1e-5
-Max cfl number :	2
+Max cfl number :	1000000
 
 # Pressure solver
 Pressure tolerance : 	1e-6
