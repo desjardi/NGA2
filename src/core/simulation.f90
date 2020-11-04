@@ -20,7 +20,7 @@ module simulation
    type(event)   :: ens_evt
    
    !> Simulation monitor file
-   type(monitor) :: mfile
+   type(monitor) :: mfile,cflfile
    
    public :: simulation_init,simulation_run,simulation_final
    
@@ -150,9 +150,11 @@ contains
       
       ! Create a monitor file
       create_monitor: block
-         ! Create monitor
+         ! Prepare some info about fields
+         call fs%get_cfl(time%dt,time%cfl)
+         call fs%get_max()
+         ! Create simulation monitor
          mfile=monitor(fs%cfg%amRoot,'simulation')
-         ! Add time info first
          call mfile%add_column(time%n,'Timestep number')
          call mfile%add_column(time%t,'Time')
          call mfile%add_column(time%dt,'Timestep size')
@@ -164,10 +166,18 @@ contains
          call mfile%add_column(fs%divmax,'Maximum divergence')
          call mfile%add_column(fs%psolv%it,'Pressure iteration')
          call mfile%add_column(fs%psolv%rerr,'Pressure error')
-         ! Write it out
-         call fs%get_cfl(time%dt,time%cfl)
-         call fs%get_max()
          call mfile%write()
+         ! Create CFL monitor
+         cflfile=monitor(fs%cfg%amRoot,'cfl')
+         call cflfile%add_column(time%n,'Timestep number')
+         call cflfile%add_column(time%t,'Time')
+         call cflfile%add_column(fs%CFLc_x,'Convective xCFL')
+         call cflfile%add_column(fs%CFLc_y,'Convective yCFL')
+         call cflfile%add_column(fs%CFLc_z,'Convective zCFL')
+         call cflfile%add_column(fs%CFLv_x,'Viscous xCFL')
+         call cflfile%add_column(fs%CFLv_y,'Viscous yCFL')
+         call cflfile%add_column(fs%CFLv_z,'Viscous zCFL')
+         call cflfile%write()
       end block create_monitor
       
       
@@ -205,18 +215,13 @@ contains
             ! Explicit calculation of drho*u/dt from NS
             call fs%get_dmomdt(resU,resV,resW)
             
-            ! Increment velocity explicitly
-            !fs%U=fs%Uold+time%dt*resU/fs%rho
-            !fs%V=fs%Vold+time%dt*resV/fs%rho
-            !fs%W=fs%Wold+time%dt*resW/fs%rho
-            
             ! Assemble explicit residual
             resU=-2.0_WP*(fs%rho*fs%U-fs%rho*fs%Uold)+time%dt*resU
             resV=-2.0_WP*(fs%rho*fs%V-fs%rho*fs%Vold)+time%dt*resV
             resW=-2.0_WP*(fs%rho*fs%W-fs%rho*fs%Wold)+time%dt*resW
             
             ! Form implicit residuals
-            !call fs%solve_implicit(time%dt,resU,resV,resW)
+            call fs%solve_implicit(time%dt,resU,resV,resW)
             
             ! Apply these residuals
             fs%U=2.0_WP*fs%U-fs%Uold+resU
@@ -255,6 +260,7 @@ contains
          ! Perform and output monitoring
          call fs%get_max()
          call mfile%write()
+         call cflfile%write()
          
       end do
       
