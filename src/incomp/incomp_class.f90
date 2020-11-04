@@ -153,6 +153,9 @@ contains
       allocate(self%Vold(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%Vold=0.0_WP
       allocate(self%Wold(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%Wold=0.0_WP
       
+      ! Need to augment cfg with unstructured mapping for linear solvers
+      call self%cfg%umap_prep()
+      
       ! Create pressure solver object
       self%psolv=ils(cfg=self%cfg,name='Pressure Poisson Solver')
       
@@ -1224,7 +1227,7 @@ contains
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: resW !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       integer :: i,j,k
       
-      ! Assemble U operator
+      ! Solve implicit U problem
       do k=this%cfg%kmin_,this%cfg%kmax_
          do j=this%cfg%jmin_,this%cfg%jmax_
             do i=this%cfg%imin_,this%cfg%imax_
@@ -1240,23 +1243,85 @@ contains
                ! -x
                this%implicit%opr(3,i,j,k)=         -0.5_WP*dt*this%visc*(this%divu_x(-1,i,j,k)*this%grdu_x( 0,i-1,j,k))*2.0_WP
                ! +y
-               this%implicit%opr(4,i,j,k)=         -0.5_WP*dt*this%visc*(this%divu_y(+1,i,j,k)*this%grdv_y( 0,i,j+1,k))
+               this%implicit%opr(4,i,j,k)=         -0.5_WP*dt*this%visc*(this%divu_y(+1,i,j,k)*this%grdu_y( 0,i,j+1,k))
                ! -y
-               this%implicit%opr(5,i,j,k)=         -0.5_WP*dt*this%visc*(this%divu_y( 0,i,j,k)*this%grdv_y(-1,i,j  ,k))
+               this%implicit%opr(5,i,j,k)=         -0.5_WP*dt*this%visc*(this%divu_y( 0,i,j,k)*this%grdu_y(-1,i,j  ,k))
                ! +z
-               this%implicit%opr(6,i,j,k)=         -0.5_WP*dt*this%visc*(this%divu_z(+1,i,j,k)*this%grdw_z( 0,i,j,k+1))
+               this%implicit%opr(6,i,j,k)=         -0.5_WP*dt*this%visc*(this%divu_z(+1,i,j,k)*this%grdu_z( 0,i,j,k+1))
                ! -z
-               this%implicit%opr(7,i,j,k)=         -0.5_WP*dt*this%visc*(this%divu_z( 0,i,j,k)*this%grdw_z(-1,i,j,k  ))
+               this%implicit%opr(7,i,j,k)=         -0.5_WP*dt*this%visc*(this%divu_z( 0,i,j,k)*this%grdu_z(-1,i,j,k  ))
             end do
          end do
       end do
-      
-      ! Setup the linearized problem and solve
       call this%implicit%init_solver(amg)
       this%implicit%rhs=resU
       this%implicit%sol=0.0_WP
       call this%implicit%solve()
       resU=this%implicit%sol
+      
+      ! Solve implicit V problem
+      do k=this%cfg%kmin_,this%cfg%kmax_
+         do j=this%cfg%jmin_,this%cfg%jmax_
+            do i=this%cfg%imin_,this%cfg%imax_
+               ! Diagonal
+               this%implicit%opr(1,i,j,k)=this%rho-0.5_WP*dt*this%visc*(this%divv_x(+1,i,j,k)*this%grdv_x(-1,i+1,j,k)+&
+               &                                                        this%divv_x( 0,i,j,k)*this%grdv_x( 0,i  ,j,k)+&
+               &                                                        this%divv_y( 0,i,j,k)*this%grdv_y( 0,i,j  ,k)*2.0_WP+&
+               &                                                        this%divv_y(-1,i,j,k)*this%grdv_y(+1,i,j-1,k)*2.0_WP+&
+               &                                                        this%divv_z(+1,i,j,k)*this%grdv_z(-1,i,j,k+1)+&
+               &                                                        this%divv_z( 0,i,j,k)*this%grdv_z( 0,i,j,k  ))
+               ! +x
+               this%implicit%opr(2,i,j,k)=         -0.5_WP*dt*this%visc*(this%divv_x(+1,i,j,k)*this%grdv_x( 0,i+1,j,k))
+               ! -x
+               this%implicit%opr(3,i,j,k)=         -0.5_WP*dt*this%visc*(this%divv_x( 0,i,j,k)*this%grdv_x(-1,i  ,j,k))
+               ! +y
+               this%implicit%opr(4,i,j,k)=         -0.5_WP*dt*this%visc*(this%divv_y( 0,i,j,k)*this%grdv_y(+1,i,j  ,k))*2.0_WP
+               ! -y
+               this%implicit%opr(5,i,j,k)=         -0.5_WP*dt*this%visc*(this%divv_y(-1,i,j,k)*this%grdv_y( 0,i,j-1,k))*2.0_WP
+               ! +z
+               this%implicit%opr(6,i,j,k)=         -0.5_WP*dt*this%visc*(this%divv_z(+1,i,j,k)*this%grdv_z( 0,i,j,k+1))
+               ! -z
+               this%implicit%opr(7,i,j,k)=         -0.5_WP*dt*this%visc*(this%divv_z( 0,i,j,k)*this%grdv_z(-1,i,j,k  ))
+            end do
+         end do
+      end do
+      call this%implicit%init_solver(amg)
+      this%implicit%rhs=resV
+      this%implicit%sol=0.0_WP
+      call this%implicit%solve()
+      resV=this%implicit%sol
+      
+      ! Solve implicit W problem
+      do k=this%cfg%kmin_,this%cfg%kmax_
+         do j=this%cfg%jmin_,this%cfg%jmax_
+            do i=this%cfg%imin_,this%cfg%imax_
+               ! Diagonal
+               this%implicit%opr(1,i,j,k)=this%rho-0.5_WP*dt*this%visc*(this%divw_x(+1,i,j,k)*this%grdw_x(-1,i+1,j,k)+&
+               &                                                        this%divw_x( 0,i,j,k)*this%grdw_x( 0,i  ,j,k)+&
+               &                                                        this%divw_y(+1,i,j,k)*this%grdw_y(-1,i,j+1,k)+&
+               &                                                        this%divw_y( 0,i,j,k)*this%grdw_y( 0,i,j  ,k)+&
+               &                                                        this%divw_z( 0,i,j,k)*this%grdw_z( 0,i,j,k  )*2.0_WP+&
+               &                                                        this%divw_z(-1,i,j,k)*this%grdw_z(+1,i,j,k-1)*2.0_WP)
+               ! +x
+               this%implicit%opr(2,i,j,k)=         -0.5_WP*dt*this%visc*(this%divw_x(+1,i,j,k)*this%grdw_x( 0,i+1,j,k))
+               ! -x
+               this%implicit%opr(3,i,j,k)=         -0.5_WP*dt*this%visc*(this%divw_x( 0,i,j,k)*this%grdw_x(-1,i  ,j,k))
+               ! +y
+               this%implicit%opr(4,i,j,k)=         -0.5_WP*dt*this%visc*(this%divw_y(+1,i,j,k)*this%grdw_y( 0,i,j+1,k))
+               ! -y
+               this%implicit%opr(5,i,j,k)=         -0.5_WP*dt*this%visc*(this%divw_y( 0,i,j,k)*this%grdw_y(-1,i,j  ,k))
+               ! +z
+               this%implicit%opr(6,i,j,k)=         -0.5_WP*dt*this%visc*(this%divw_z( 0,i,j,k)*this%grdw_z(+1,i,j,k  ))*2.0_WP
+               ! -z
+               this%implicit%opr(7,i,j,k)=         -0.5_WP*dt*this%visc*(this%divw_z(-1,i,j,k)*this%grdw_z( 0,i,j,k-1))*2.0_WP
+            end do
+         end do
+      end do
+      call this%implicit%init_solver(amg)
+      this%implicit%rhs=resW
+      this%implicit%sol=0.0_WP
+      call this%implicit%solve()
+      resW=this%implicit%sol
       
       ! Sync up all residuals
       call this%cfg%sync(resU)

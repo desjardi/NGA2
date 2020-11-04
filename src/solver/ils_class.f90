@@ -126,8 +126,7 @@ contains
       case (rbgs) ! Initialize the Red-Black Gauss-Seidel solver here
          
       case (amg)  ! Initialize the HYPRE-AMG solver here
-         ! Prepare an unstructured mapping for our cfg
-         call this%cfg%umap_prep()
+         
          ! Create a HYPRE matrix
          call HYPRE_IJMatrixCreate       (this%cfg%comm,this%cfg%ind_min,this%cfg%ind_max,this%cfg%ind_min,this%cfg%ind_max,this%hypre_mat,ierr)
          call HYPRE_IJMatrixSetObjectType(this%hypre_mat,hypre_ParCSR,ierr)
