@@ -1226,30 +1226,49 @@ contains
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: resV !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: resW !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       integer :: i,j,k
+      real(WP) :: rhoUp,rhoUm,rhoVp,rhoVm,rhoWp,rhoWm
       
       ! Solve implicit U problem
+      this%implicit%opr(1,:,:,:)=this%rho; this%implicit%opr(2:,:,:,:)=0.0_WP
       do k=this%cfg%kmin_,this%cfg%kmax_
          do j=this%cfg%jmin_,this%cfg%jmax_
             do i=this%cfg%imin_,this%cfg%imax_
-               ! Diagonal
-               this%implicit%opr(1,i,j,k)=this%rho-0.5_WP*dt*this%visc*(this%divu_x( 0,i,j,k)*this%grdu_x( 0,i  ,j,k)+&
-               &                                                        this%divu_x(-1,i,j,k)*this%grdu_x(+1,i-1,j,k)+&
-               &                                                        this%divu_y(+1,i,j,k)*this%grdu_y(-1,i,j+1,k)+&
-               &                                                        this%divu_y( 0,i,j,k)*this%grdu_y( 0,i,j  ,k)+&
-               &                                                        this%divu_z(+1,i,j,k)*this%grdu_z(-1,i,j,k+1)+&
-               &                                                        this%divu_z( 0,i,j,k)*this%grdu_z( 0,i,j,k  ))
-               ! +x
-               this%implicit%opr(2,i,j,k)=         -0.5_WP*dt*this%visc*(this%divu_x( 0,i,j,k)*this%grdu_x(+1,i  ,j,k))
-               ! -x
-               this%implicit%opr(3,i,j,k)=         -0.5_WP*dt*this%visc*(this%divu_x(-1,i,j,k)*this%grdu_x( 0,i-1,j,k))
-               ! +y
-               this%implicit%opr(4,i,j,k)=         -0.5_WP*dt*this%visc*(this%divu_y(+1,i,j,k)*this%grdu_y( 0,i,j+1,k))
-               ! -y
-               this%implicit%opr(5,i,j,k)=         -0.5_WP*dt*this%visc*(this%divu_y( 0,i,j,k)*this%grdu_y(-1,i,j  ,k))
-               ! +z
-               this%implicit%opr(6,i,j,k)=         -0.5_WP*dt*this%visc*(this%divu_z(+1,i,j,k)*this%grdu_z( 0,i,j,k+1))
-               ! -z
-               this%implicit%opr(7,i,j,k)=         -0.5_WP*dt*this%visc*(this%divu_z( 0,i,j,k)*this%grdu_z(-1,i,j,k  ))
+               rhoUp=this%rho*sum(this%itpu_x(:,i  ,j,k)*this%U(i  :i+1,j,k))*2.0_WP
+               rhoUm=this%rho*sum(this%itpu_x(:,i-1,j,k)*this%U(i-1:i  ,j,k))*2.0_WP
+               rhoVp=this%rho*sum(this%itpv_x(:,i,j+1,k)*this%V(i-1:i,j+1,k))
+               rhoVm=this%rho*sum(this%itpv_x(:,i,j  ,k)*this%V(i-1:i,j  ,k))
+               rhoWp=this%rho*sum(this%itpw_x(:,i,j,k+1)*this%W(i-1:i,j,k+1))
+               rhoWm=this%rho*sum(this%itpw_x(:,i,j,k  )*this%W(i-1:i,j,k  ))
+               this%implicit%opr(1,i,j,k)=this%implicit%opr(1,i,j,k)+0.5_WP*dt*(this%divu_x( 0,i,j,k)*this%itpu_x( 0,i  ,j,k)*rhoUp+&
+               &                                                                this%divu_x(-1,i,j,k)*this%itpu_x(+1,i-1,j,k)*rhoUm+&
+               &                                                                this%divu_y(+1,i,j,k)*this%itpu_y(-1,i,j+1,k)*rhoVp+&
+               &                                                                this%divu_y( 0,i,j,k)*this%itpu_y( 0,i,j  ,k)*rhoVm+&
+               &                                                                this%divu_z(+1,i,j,k)*this%itpu_z(-1,i,j,k+1)*rhoWp+&
+               &                                                                this%divu_z( 0,i,j,k)*this%itpu_z( 0,i,j,k  )*rhoWm)
+               this%implicit%opr(2,i,j,k)=this%implicit%opr(2,i,j,k)+0.5_WP*dt*(this%divu_x( 0,i,j,k)*this%itpu_x(+1,i  ,j,k)*rhoUp)
+               this%implicit%opr(3,i,j,k)=this%implicit%opr(3,i,j,k)+0.5_WP*dt*(this%divu_x(-1,i,j,k)*this%itpu_x( 0,i-1,j,k)*rhoUm)
+               this%implicit%opr(4,i,j,k)=this%implicit%opr(4,i,j,k)+0.5_WP*dt*(this%divu_y(+1,i,j,k)*this%itpu_y( 0,i,j+1,k)*rhoVp)
+               this%implicit%opr(5,i,j,k)=this%implicit%opr(5,i,j,k)+0.5_WP*dt*(this%divu_y( 0,i,j,k)*this%itpu_y(-1,i,j  ,k)*rhoVm)
+               this%implicit%opr(6,i,j,k)=this%implicit%opr(6,i,j,k)+0.5_WP*dt*(this%divu_z(+1,i,j,k)*this%itpu_z( 0,i,j,k+1)*rhoWp)
+               this%implicit%opr(7,i,j,k)=this%implicit%opr(7,i,j,k)+0.5_WP*dt*(this%divu_z( 0,i,j,k)*this%itpu_z(-1,i,j,k  )*rhoWm)
+            end do
+         end do
+      end do
+      do k=this%cfg%kmin_,this%cfg%kmax_
+         do j=this%cfg%jmin_,this%cfg%jmax_
+            do i=this%cfg%imin_,this%cfg%imax_
+               this%implicit%opr(1,i,j,k)=this%implicit%opr(1,i,j,k)-0.5_WP*dt*(this%divu_x( 0,i,j,k)*this%visc*this%grdu_x( 0,i  ,j,k)+&
+               &                                                                this%divu_x(-1,i,j,k)*this%visc*this%grdu_x(+1,i-1,j,k)+&
+               &                                                                this%divu_y(+1,i,j,k)*this%visc*this%grdu_y(-1,i,j+1,k)+&
+               &                                                                this%divu_y( 0,i,j,k)*this%visc*this%grdu_y( 0,i,j  ,k)+&
+               &                                                                this%divu_z(+1,i,j,k)*this%visc*this%grdu_z(-1,i,j,k+1)+&
+               &                                                                this%divu_z( 0,i,j,k)*this%visc*this%grdu_z( 0,i,j,k  ))
+               this%implicit%opr(2,i,j,k)=this%implicit%opr(2,i,j,k)-0.5_WP*dt*(this%divu_x( 0,i,j,k)*this%visc*this%grdu_x(+1,i  ,j,k))
+               this%implicit%opr(3,i,j,k)=this%implicit%opr(3,i,j,k)-0.5_WP*dt*(this%divu_x(-1,i,j,k)*this%visc*this%grdu_x( 0,i-1,j,k))
+               this%implicit%opr(4,i,j,k)=this%implicit%opr(4,i,j,k)-0.5_WP*dt*(this%divu_y(+1,i,j,k)*this%visc*this%grdu_y( 0,i,j+1,k))
+               this%implicit%opr(5,i,j,k)=this%implicit%opr(5,i,j,k)-0.5_WP*dt*(this%divu_y( 0,i,j,k)*this%visc*this%grdu_y(-1,i,j  ,k))
+               this%implicit%opr(6,i,j,k)=this%implicit%opr(6,i,j,k)-0.5_WP*dt*(this%divu_z(+1,i,j,k)*this%visc*this%grdu_z( 0,i,j,k+1))
+               this%implicit%opr(7,i,j,k)=this%implicit%opr(7,i,j,k)-0.5_WP*dt*(this%divu_z( 0,i,j,k)*this%visc*this%grdu_z(-1,i,j,k  ))
             end do
          end do
       end do
@@ -1260,28 +1279,46 @@ contains
       resU=this%implicit%sol
       
       ! Solve implicit V problem
+      this%implicit%opr(1,:,:,:)=this%rho; this%implicit%opr(2:,:,:,:)=0.0_WP
       do k=this%cfg%kmin_,this%cfg%kmax_
          do j=this%cfg%jmin_,this%cfg%jmax_
             do i=this%cfg%imin_,this%cfg%imax_
-               ! Diagonal
-               this%implicit%opr(1,i,j,k)=this%rho-0.5_WP*dt*this%visc*(this%divv_x(+1,i,j,k)*this%grdv_x(-1,i+1,j,k)+&
-               &                                                        this%divv_x( 0,i,j,k)*this%grdv_x( 0,i  ,j,k)+&
-               &                                                        this%divv_y( 0,i,j,k)*this%grdv_y( 0,i,j  ,k)+&
-               &                                                        this%divv_y(-1,i,j,k)*this%grdv_y(+1,i,j-1,k)+&
-               &                                                        this%divv_z(+1,i,j,k)*this%grdv_z(-1,i,j,k+1)+&
-               &                                                        this%divv_z( 0,i,j,k)*this%grdv_z( 0,i,j,k  ))
-               ! +x
-               this%implicit%opr(2,i,j,k)=         -0.5_WP*dt*this%visc*(this%divv_x(+1,i,j,k)*this%grdv_x( 0,i+1,j,k))
-               ! -x
-               this%implicit%opr(3,i,j,k)=         -0.5_WP*dt*this%visc*(this%divv_x( 0,i,j,k)*this%grdv_x(-1,i  ,j,k))
-               ! +y
-               this%implicit%opr(4,i,j,k)=         -0.5_WP*dt*this%visc*(this%divv_y( 0,i,j,k)*this%grdv_y(+1,i,j  ,k))
-               ! -y
-               this%implicit%opr(5,i,j,k)=         -0.5_WP*dt*this%visc*(this%divv_y(-1,i,j,k)*this%grdv_y( 0,i,j-1,k))
-               ! +z
-               this%implicit%opr(6,i,j,k)=         -0.5_WP*dt*this%visc*(this%divv_z(+1,i,j,k)*this%grdv_z( 0,i,j,k+1))
-               ! -z
-               this%implicit%opr(7,i,j,k)=         -0.5_WP*dt*this%visc*(this%divv_z( 0,i,j,k)*this%grdv_z(-1,i,j,k  ))
+               rhoUp=this%rho*sum(this%itpu_y(:,i+1,j,k)*this%U(i+1,j-1:j,k))
+               rhoUm=this%rho*sum(this%itpu_y(:,i  ,j,k)*this%U(i  ,j-1:j,k))
+               rhoVp=this%rho*sum(this%itpv_y(:,i,j  ,k)*this%V(i,j  :j+1,k))*2.0_WP
+               rhoVm=this%rho*sum(this%itpv_y(:,i,j-1,k)*this%V(i,j-1:j  ,k))*2.0_WP
+               rhoWp=this%rho*sum(this%itpw_y(:,i,j,k+1)*this%W(i,j-1:j,k+1))
+               rhoWm=this%rho*sum(this%itpw_y(:,i,j,k  )*this%W(i,j-1:j,k  ))
+               this%implicit%opr(1,i,j,k)=this%implicit%opr(1,i,j,k)+0.5_WP*dt*(this%divv_x(+1,i,j,k)*this%itpv_x(-1,i+1,j,k)*rhoUp+&
+               &                                                                this%divv_x( 0,i,j,k)*this%itpv_x( 0,i  ,j,k)*rhoUm+&
+               &                                                                this%divv_y( 0,i,j,k)*this%itpv_y( 0,i,j  ,k)*rhoVp+&
+               &                                                                this%divv_y(-1,i,j,k)*this%itpv_y(+1,i,j-1,k)*rhoVm+&
+               &                                                                this%divv_z(+1,i,j,k)*this%itpv_z(-1,i,j,k+1)*rhoWp+&
+               &                                                                this%divv_z( 0,i,j,k)*this%itpv_z( 0,i,j,k  )*rhoWm)
+               this%implicit%opr(2,i,j,k)=this%implicit%opr(2,i,j,k)+0.5_WP*dt*(this%divv_x(+1,i,j,k)*this%itpv_x( 0,i+1,j,k)*rhoUp)
+               this%implicit%opr(3,i,j,k)=this%implicit%opr(3,i,j,k)+0.5_WP*dt*(this%divv_x( 0,i,j,k)*this%itpv_x(-1,i  ,j,k)*rhoUm)
+               this%implicit%opr(4,i,j,k)=this%implicit%opr(4,i,j,k)+0.5_WP*dt*(this%divv_y( 0,i,j,k)*this%itpv_y(+1,i,j  ,k)*rhoVp)
+               this%implicit%opr(5,i,j,k)=this%implicit%opr(5,i,j,k)+0.5_WP*dt*(this%divv_y(-1,i,j,k)*this%itpv_y( 0,i,j-1,k)*rhoVm)
+               this%implicit%opr(6,i,j,k)=this%implicit%opr(6,i,j,k)+0.5_WP*dt*(this%divv_z(+1,i,j,k)*this%itpv_z( 0,i,j,k+1)*rhoWp)
+               this%implicit%opr(7,i,j,k)=this%implicit%opr(7,i,j,k)+0.5_WP*dt*(this%divv_z( 0,i,j,k)*this%itpv_z(-1,i,j,k  )*rhoWm)
+            end do
+         end do
+      end do
+      do k=this%cfg%kmin_,this%cfg%kmax_
+         do j=this%cfg%jmin_,this%cfg%jmax_
+            do i=this%cfg%imin_,this%cfg%imax_
+               this%implicit%opr(1,i,j,k)=this%implicit%opr(1,i,j,k)-0.5_WP*dt*(this%divv_x(+1,i,j,k)*this%visc*this%grdv_x(-1,i+1,j,k)+&
+               &                                                                this%divv_x( 0,i,j,k)*this%visc*this%grdv_x( 0,i  ,j,k)+&
+               &                                                                this%divv_y( 0,i,j,k)*this%visc*this%grdv_y( 0,i,j  ,k)+&
+               &                                                                this%divv_y(-1,i,j,k)*this%visc*this%grdv_y(+1,i,j-1,k)+&
+               &                                                                this%divv_z(+1,i,j,k)*this%visc*this%grdv_z(-1,i,j,k+1)+&
+               &                                                                this%divv_z( 0,i,j,k)*this%visc*this%grdv_z( 0,i,j,k  ))
+               this%implicit%opr(2,i,j,k)=this%implicit%opr(2,i,j,k)-0.5_WP*dt*(this%divv_x(+1,i,j,k)*this%visc*this%grdv_x( 0,i+1,j,k))
+               this%implicit%opr(3,i,j,k)=this%implicit%opr(3,i,j,k)-0.5_WP*dt*(this%divv_x( 0,i,j,k)*this%visc*this%grdv_x(-1,i  ,j,k))
+               this%implicit%opr(4,i,j,k)=this%implicit%opr(4,i,j,k)-0.5_WP*dt*(this%divv_y( 0,i,j,k)*this%visc*this%grdv_y(+1,i,j  ,k))
+               this%implicit%opr(5,i,j,k)=this%implicit%opr(5,i,j,k)-0.5_WP*dt*(this%divv_y(-1,i,j,k)*this%visc*this%grdv_y( 0,i,j-1,k))
+               this%implicit%opr(6,i,j,k)=this%implicit%opr(6,i,j,k)-0.5_WP*dt*(this%divv_z(+1,i,j,k)*this%visc*this%grdv_z( 0,i,j,k+1))
+               this%implicit%opr(7,i,j,k)=this%implicit%opr(7,i,j,k)-0.5_WP*dt*(this%divv_z( 0,i,j,k)*this%visc*this%grdv_z(-1,i,j,k  ))
             end do
          end do
       end do
@@ -1292,28 +1329,46 @@ contains
       resV=this%implicit%sol
       
       ! Solve implicit W problem
+      this%implicit%opr(1,:,:,:)=this%rho; this%implicit%opr(2:,:,:,:)=0.0_WP
       do k=this%cfg%kmin_,this%cfg%kmax_
          do j=this%cfg%jmin_,this%cfg%jmax_
             do i=this%cfg%imin_,this%cfg%imax_
-               ! Diagonal
-               this%implicit%opr(1,i,j,k)=this%rho-0.5_WP*dt*this%visc*(this%divw_x(+1,i,j,k)*this%grdw_x(-1,i+1,j,k)+&
-               &                                                        this%divw_x( 0,i,j,k)*this%grdw_x( 0,i  ,j,k)+&
-               &                                                        this%divw_y(+1,i,j,k)*this%grdw_y(-1,i,j+1,k)+&
-               &                                                        this%divw_y( 0,i,j,k)*this%grdw_y( 0,i,j  ,k)+&
-               &                                                        this%divw_z( 0,i,j,k)*this%grdw_z( 0,i,j,k  )+&
-               &                                                        this%divw_z(-1,i,j,k)*this%grdw_z(+1,i,j,k-1))
-               ! +x
-               this%implicit%opr(2,i,j,k)=         -0.5_WP*dt*this%visc*(this%divw_x(+1,i,j,k)*this%grdw_x( 0,i+1,j,k))
-               ! -x
-               this%implicit%opr(3,i,j,k)=         -0.5_WP*dt*this%visc*(this%divw_x( 0,i,j,k)*this%grdw_x(-1,i  ,j,k))
-               ! +y
-               this%implicit%opr(4,i,j,k)=         -0.5_WP*dt*this%visc*(this%divw_y(+1,i,j,k)*this%grdw_y( 0,i,j+1,k))
-               ! -y
-               this%implicit%opr(5,i,j,k)=         -0.5_WP*dt*this%visc*(this%divw_y( 0,i,j,k)*this%grdw_y(-1,i,j  ,k))
-               ! +z
-               this%implicit%opr(6,i,j,k)=         -0.5_WP*dt*this%visc*(this%divw_z( 0,i,j,k)*this%grdw_z(+1,i,j,k  ))
-               ! -z
-               this%implicit%opr(7,i,j,k)=         -0.5_WP*dt*this%visc*(this%divw_z(-1,i,j,k)*this%grdw_z( 0,i,j,k-1))
+               rhoUp=this%rho*sum(this%itpu_z(:,i+1,j,k)*this%U(i+1,j,k-1:k))
+               rhoUm=this%rho*sum(this%itpu_z(:,i  ,j,k)*this%U(i  ,j,k-1:k))
+               rhoVp=this%rho*sum(this%itpv_z(:,i,j+1,k)*this%V(i,j+1,k-1:k))
+               rhoVm=this%rho*sum(this%itpv_z(:,i,j  ,k)*this%V(i,j  ,k-1:k))
+               rhoWp=this%rho*sum(this%itpw_z(:,i,j,k  )*this%W(i,j,k  :k+1))*2.0_WP
+               rhoWm=this%rho*sum(this%itpw_z(:,i,j,k-1)*this%W(i,j,k-1:k  ))*2.0_WP
+               this%implicit%opr(1,i,j,k)=this%implicit%opr(1,i,j,k)+0.5_WP*dt*(this%divw_x(+1,i,j,k)*this%itpw_x(-1,i+1,j,k)*rhoUp+&
+               &                                                                this%divw_x( 0,i,j,k)*this%itpw_x( 0,i  ,j,k)*rhoUm+&
+               &                                                                this%divw_y(+1,i,j,k)*this%itpw_y(-1,i,j+1,k)*rhoVp+&
+               &                                                                this%divw_y( 0,i,j,k)*this%itpw_y( 0,i,j  ,k)*rhoVm+&
+               &                                                                this%divw_z( 0,i,j,k)*this%itpw_z( 0,i,j,k  )*rhoWp+&
+               &                                                                this%divw_z(-1,i,j,k)*this%itpw_z(+1,i,j,k-1)*rhoWm)
+               this%implicit%opr(2,i,j,k)=this%implicit%opr(2,i,j,k)+0.5_WP*dt*(this%divw_x(+1,i,j,k)*this%itpw_x( 0,i+1,j,k)*rhoUp)
+               this%implicit%opr(3,i,j,k)=this%implicit%opr(3,i,j,k)+0.5_WP*dt*(this%divw_x( 0,i,j,k)*this%itpw_x(-1,i  ,j,k)*rhoUm)
+               this%implicit%opr(4,i,j,k)=this%implicit%opr(4,i,j,k)+0.5_WP*dt*(this%divw_y(+1,i,j,k)*this%itpw_y( 0,i,j+1,k)*rhoVp)
+               this%implicit%opr(5,i,j,k)=this%implicit%opr(5,i,j,k)+0.5_WP*dt*(this%divw_y( 0,i,j,k)*this%itpw_y(-1,i,j  ,k)*rhoVm)
+               this%implicit%opr(6,i,j,k)=this%implicit%opr(6,i,j,k)+0.5_WP*dt*(this%divw_z( 0,i,j,k)*this%itpw_z(+1,i,j,k  )*rhoWp)
+               this%implicit%opr(7,i,j,k)=this%implicit%opr(7,i,j,k)+0.5_WP*dt*(this%divw_z(-1,i,j,k)*this%itpw_z( 0,i,j,k-1)*rhoWm)
+            end do
+         end do
+      end do
+      do k=this%cfg%kmin_,this%cfg%kmax_
+         do j=this%cfg%jmin_,this%cfg%jmax_
+            do i=this%cfg%imin_,this%cfg%imax_
+               this%implicit%opr(1,i,j,k)=this%implicit%opr(1,i,j,k)-0.5_WP*dt*(this%divw_x(+1,i,j,k)*this%visc*this%grdw_x(-1,i+1,j,k)+&
+               &                                                                this%divw_x( 0,i,j,k)*this%visc*this%grdw_x( 0,i  ,j,k)+&
+               &                                                                this%divw_y(+1,i,j,k)*this%visc*this%grdw_y(-1,i,j+1,k)+&
+               &                                                                this%divw_y( 0,i,j,k)*this%visc*this%grdw_y( 0,i,j  ,k)+&
+               &                                                                this%divw_z( 0,i,j,k)*this%visc*this%grdw_z( 0,i,j,k  )+&
+               &                                                                this%divw_z(-1,i,j,k)*this%visc*this%grdw_z(+1,i,j,k-1))
+               this%implicit%opr(2,i,j,k)=this%implicit%opr(2,i,j,k)-0.5_WP*dt*(this%divw_x(+1,i,j,k)*this%visc*this%grdw_x( 0,i+1,j,k))
+               this%implicit%opr(3,i,j,k)=this%implicit%opr(3,i,j,k)-0.5_WP*dt*(this%divw_x( 0,i,j,k)*this%visc*this%grdw_x(-1,i  ,j,k))
+               this%implicit%opr(4,i,j,k)=this%implicit%opr(4,i,j,k)-0.5_WP*dt*(this%divw_y(+1,i,j,k)*this%visc*this%grdw_y( 0,i,j+1,k))
+               this%implicit%opr(5,i,j,k)=this%implicit%opr(5,i,j,k)-0.5_WP*dt*(this%divw_y( 0,i,j,k)*this%visc*this%grdw_y(-1,i,j  ,k))
+               this%implicit%opr(6,i,j,k)=this%implicit%opr(6,i,j,k)-0.5_WP*dt*(this%divw_z( 0,i,j,k)*this%visc*this%grdw_z(+1,i,j,k  ))
+               this%implicit%opr(7,i,j,k)=this%implicit%opr(7,i,j,k)-0.5_WP*dt*(this%divw_z(-1,i,j,k)*this%visc*this%grdw_z( 0,i,j,k-1))
             end do
          end do
       end do
