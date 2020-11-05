@@ -971,13 +971,14 @@ contains
    
    
    !> Calculate the CFL
-   subroutine get_cfl(this,dt,cfl)
+   subroutine get_cfl(this,dt,cflc,cfl)
       use mpi_f08,  only: MPI_ALLREDUCE,MPI_MAX
       use parallel, only: MPI_REAL_WP
       implicit none
       class(incomp), intent(inout) :: this
       real(WP), intent(in)  :: dt
-      real(WP), intent(out) :: cfl
+      real(WP), intent(out) :: cflc
+      real(WP), optional :: cfl
       integer :: i,j,k,ierr
       real(WP) :: my_CFLc_x,my_CFLc_y,my_CFLc_z,my_CFLv_x,my_CFLv_y,my_CFLv_z
       
@@ -1007,8 +1008,11 @@ contains
       call MPI_ALLREDUCE(my_CFLv_y,this%CFLv_y,1,MPI_REAL_WP,MPI_MAX,this%cfg%comm,ierr)
       call MPI_ALLREDUCE(my_CFLv_z,this%CFLv_z,1,MPI_REAL_WP,MPI_MAX,this%cfg%comm,ierr)
       
-      ! Set global max
-      cfl=max(this%CFLc_x,this%CFLc_y,this%CFLc_z,this%CFLv_x,this%CFLv_y,this%CFLv_z)
+      ! Return the maximum convective CFL
+      cflc=max(this%CFLc_x,this%CFLc_y,this%CFLc_z)
+      
+      ! If asked for, also return the maximum overall CFL
+      if (present(CFL)) cfl =max(this%CFLc_x,this%CFLc_y,this%CFLc_z,this%CFLv_x,this%CFLv_y,this%CFLv_z)
       
    end subroutine get_cfl
    
