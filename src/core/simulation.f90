@@ -94,8 +94,8 @@ contains
       ! Initialize boundary conditions
       initialize_bc: block
          ! Define inflow and outflow
-         call fs%add_bcond(name='inflow' ,type=dirichlet ,dir='-y',canCorrect=.false.,locator=bottom_locator)
-         call fs%add_bcond(name='outflow',type=neumann   ,dir='+y',canCorrect=.true. ,locator=   top_locator)
+         call fs%add_bcond(name='inflow' ,type=dirichlet      ,dir='-y',canCorrect=.false.,locator=bottom_locator)
+         call fs%add_bcond(name='outflow',type=clipped_neumann,dir='+y',canCorrect=.true. ,locator=   top_locator)
          ! Modify metrics to reflect the BCs
          call fs%init_bcond()
       end block initialize_bc
