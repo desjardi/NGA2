@@ -347,8 +347,8 @@ contains
          do j=this%cfg%jmino_,this%cfg%jmaxo_
             do i=this%cfg%imino_,this%cfg%imaxo_
                this%grdu_x(:,i,j,k)=this%cfg%dxi(i)*[-1.0_WP,+1.0_WP] !< FD gradient in x of U from [x ,ym,zm]
-               this%grdv_y(:,i,j,k)=this%cfg%dyi(i)*[-1.0_WP,+1.0_WP] !< FD gradient in y of V from [xm,y ,zm]
-               this%grdw_z(:,i,j,k)=this%cfg%dzi(i)*[-1.0_WP,+1.0_WP] !< FD gradient in z of W from [xm,ym,z ]
+               this%grdv_y(:,i,j,k)=this%cfg%dyi(j)*[-1.0_WP,+1.0_WP] !< FD gradient in y of V from [xm,y ,zm]
+               this%grdw_z(:,i,j,k)=this%cfg%dzi(k)*[-1.0_WP,+1.0_WP] !< FD gradient in z of W from [xm,ym,z ]
             end do
          end do
       end do

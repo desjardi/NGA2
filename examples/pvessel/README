@@ -1,0 +1,2 @@
+This is an implementation of a pressurized vessel geometry. Inflow is internal, there is no outflow.
+Will need to use a variable density strategy, although we're running constant density at first.
