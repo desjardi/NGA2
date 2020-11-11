@@ -29,6 +29,7 @@ module incomp_class
       integer :: dir                                      !< Bcond direction (1 to 6)
       integer :: si,sj,sk                                 !< Index shift in the outward normal direction
       logical :: canCorrect                               !< Can this bcond be corrected for global conservation?
+      logical :: inBalance                                !< Is this bcond contributing to global conservation?
       type(iterator) :: itr                               !< This is the iterator for the bcond
    end type bcond
    
@@ -113,6 +114,7 @@ module incomp_class
       procedure :: interp_vel                             !< Calculate interpolated velocity
       procedure :: get_mfr                                !< Calculate outgoing MFR through each bcond
       procedure :: correct_mfr                            !< Correct for mfr mismatch to ensure global conservation
+      procedure :: shift_p                                !< Shift pressure to have zero average
       procedure :: solve_implicit                         !< Solve for the velocity residuals implicitly
    end type incomp
    
@@ -388,6 +390,27 @@ contains
       integer :: i,j,k
       real(WP) :: delta
       
+      ! Sync up u/v/wmasks
+      call this%cfg%sync(this%umask)
+      call this%cfg%sync(this%vmask)
+      call this%cfg%sync(this%wmask)
+      if (.not.this%cfg%xper.and.this%cfg%iproc.eq.1) this%umask(this%cfg%imino,:,:)=this%umask(this%cfg%imino+1,:,:)
+      if (.not.this%cfg%yper.and.this%cfg%jproc.eq.1) this%vmask(:,this%cfg%jmino,:)=this%vmask(:,this%cfg%jmino+1,:)
+      if (.not.this%cfg%zper.and.this%cfg%kproc.eq.1) this%wmask(:,:,this%cfg%kmino)=this%wmask(:,:,this%cfg%kmino+1)
+      
+      ! Loop over the domain and adjust divergence for P cell
+      do k=this%cfg%kmino_,this%cfg%kmaxo_
+         do j=this%cfg%jmino_,this%cfg%jmaxo_
+            do i=this%cfg%imino_,this%cfg%imaxo_
+               if (this%cfg%VF(i,j,k).eq.0.0_WP) then
+                  this%divp_x(:,i,j,k)=0.0_WP
+                  this%divp_y(:,i,j,k)=0.0_WP
+                  this%divp_z(:,i,j,k)=0.0_WP
+               end if
+            end do
+         end do
+      end do
+      
       ! Loop over the domain and apply masked conditions to U metrics
       do k=this%cfg%kmino_  ,this%cfg%kmaxo_
          do j=this%cfg%jmino_  ,this%cfg%jmaxo_
@@ -628,7 +651,7 @@ contains
    
    
    !> Add a boundary condition
-   subroutine add_bcond(this,name,type,dir,canCorrect,locator)
+   subroutine add_bcond(this,name,type,dir,canCorrect,locator,inBalance)
       use string,   only: lowercase
       use messager, only: die
       implicit none
@@ -644,6 +667,7 @@ contains
             integer, intent(in) :: ind1,ind2,ind3
          end function locator
       end interface
+      logical, optional :: inBalance
       type(bcond), pointer :: new_bc
       integer :: i,j,k,n
       
@@ -686,6 +710,11 @@ contains
       case default; call die('[incomp add_bcond] Unknown bcond direction')
       end select
       new_bc%itr=iterator(this%cfg,new_bc%name,locator)
+      if (present(inBalance)) then
+         new_bc%inBalance=inBalance
+      else
+         new_bc%inBalance=.true.
+      end if
       
       ! Insert it up front
       new_bc%next=>this%first_bc
@@ -702,18 +731,33 @@ contains
          case (1) ! +x
             do n=1,new_bc%itr%n_
                i=new_bc%itr%map(1,n); j=new_bc%itr%map(2,n); k=new_bc%itr%map(3,n)
-               !bcflag(i+1,j,k)=dirichlet
+               this%umask(i+1,j,k)=2
             end do
          case (2) ! -x
-            
+            do n=1,new_bc%itr%n_
+               i=new_bc%itr%map(1,n); j=new_bc%itr%map(2,n); k=new_bc%itr%map(3,n)
+               this%umask(i,j,k)=2
+            end do
          case (3) ! +y
-            
+            do n=1,new_bc%itr%n_
+               i=new_bc%itr%map(1,n); j=new_bc%itr%map(2,n); k=new_bc%itr%map(3,n)
+               this%vmask(i,j+1,k)=2
+            end do
          case (4) ! -y
-            
+            do n=1,new_bc%itr%n_
+               i=new_bc%itr%map(1,n); j=new_bc%itr%map(2,n); k=new_bc%itr%map(3,n)
+               this%vmask(i,j,k)=2
+            end do
          case (5) ! +z
-            
+            do n=1,new_bc%itr%n_
+               i=new_bc%itr%map(1,n); j=new_bc%itr%map(2,n); k=new_bc%itr%map(3,n)
+               this%wmask(i,j,k+1)=2
+            end do
          case (6) ! -z
-            
+            do n=1,new_bc%itr%n_
+               i=new_bc%itr%map(1,n); j=new_bc%itr%map(2,n); k=new_bc%itr%map(3,n)
+               this%wmask(i,j,k)=2
+            end do
          end select
          
       case (neumann)
@@ -1231,7 +1275,7 @@ contains
    
    !> Compute MFR through all bcs
    subroutine get_mfr(this)
-      use mpi_f08,  only: MPI_SUM
+      use mpi_f08,  only: MPI_SUM,MPI_ALLREDUCE
       use parallel, only: MPI_REAL_WP
       implicit none
       class(incomp), intent(inout) :: this
@@ -1241,13 +1285,13 @@ contains
       real(WP), dimension(:), allocatable :: canCorrect
       
       ! Ensure this%mfr is of proper size
-      if (size(this%mfr).ne.this%nbc) then
+      if (size(this%mfr).ne.this%nbc.or..not.allocated(this%mfr)) then
          if (allocated(this%mfr)) deallocate(this%mfr)
          allocate(this%mfr(this%nbc))
       end if
       
       ! Ensure this%area is of proper size
-      if (size(this%area).ne.this%nbc) then
+      if (size(this%area).ne.this%nbc.or..not.allocated(this%area)) then
          if (allocated(this%area)) deallocate(this%area)
          allocate(this%area(this%nbc))
       end if
@@ -1270,48 +1314,53 @@ contains
             canCorrect(ibc)=0.0_WP
          end if
          
-         ! Only processes inside the bcond have a non-zero MFR
-         if (my_bc%itr%amIn) then
+         ! Check that the bcond participates in volume balance
+         if (my_bc%inBalance) then
             
-            ! Implement based on bcond direction, loop over interior only
-            select case (my_bc%dir)
-            case (1) ! BC in +x
-               do n=1,my_bc%itr%n_
-                  i=my_bc%itr%map(1,n); j=my_bc%itr%map(2,n); k=my_bc%itr%map(3,n)
-                  my_mfr(ibc)=my_mfr(ibc)+this%rho*this%U(i+1,j,k)*this%cfg%dy(j)*this%cfg%dz(k)
-                  my_area(ibc)=my_area(ibc)+this%cfg%dy(j)*this%cfg%dz(k)
-               end do
-            case (2) ! BC in -x
-               do n=1,my_bc%itr%n_
-                  i=my_bc%itr%map(1,n); j=my_bc%itr%map(2,n); k=my_bc%itr%map(3,n)
-                  my_mfr(ibc)=my_mfr(ibc)-this%rho*this%U(i  ,j,k)*this%cfg%dy(j)*this%cfg%dz(k)
-                  my_area(ibc)=my_area(ibc)+this%cfg%dy(j)*this%cfg%dz(k)
-               end do
-            case (3) ! BC in +y
-               do n=1,my_bc%itr%n_
-                  i=my_bc%itr%map(1,n); j=my_bc%itr%map(2,n); k=my_bc%itr%map(3,n)
-                  my_mfr(ibc)=my_mfr(ibc)+this%rho*this%V(i,j+1,k)*this%cfg%dx(i)*this%cfg%dz(k)
-                  my_area(ibc)=my_area(ibc)+this%cfg%dx(i)*this%cfg%dz(k)
-               end do
-            case (4) ! BC in -y
-               do n=1,my_bc%itr%n_
-                  i=my_bc%itr%map(1,n); j=my_bc%itr%map(2,n); k=my_bc%itr%map(3,n)
-                  my_mfr(ibc)=my_mfr(ibc)-this%rho*this%V(i,j  ,k)*this%cfg%dx(i)*this%cfg%dz(k)
-                  my_area(ibc)=my_area(ibc)+this%cfg%dx(i)*this%cfg%dz(k)
-               end do
-            case (5) ! BC in +z
-               do n=1,my_bc%itr%n_
-                  i=my_bc%itr%map(1,n); j=my_bc%itr%map(2,n); k=my_bc%itr%map(3,n)
-                  my_mfr(ibc)=my_mfr(ibc)+this%rho*this%W(i,j,k+1)*this%cfg%dy(j)*this%cfg%dx(i)
-                  my_area(ibc)=my_area(ibc)+this%cfg%dy(j)*this%cfg%dx(i)
-               end do
-            case (6) ! BC in -z
-               do n=1,my_bc%itr%n_
-                  i=my_bc%itr%map(1,n); j=my_bc%itr%map(2,n); k=my_bc%itr%map(3,n)
-                  my_mfr(ibc)=my_mfr(ibc)-this%rho*this%W(i,j,k  )*this%cfg%dy(j)*this%cfg%dx(i)
-                  my_area(ibc)=my_area(ibc)+this%cfg%dy(j)*this%cfg%dx(i)
-               end do
-            end select
+            ! Only processes inside the bcond have a non-zero MFR
+            if (my_bc%itr%amIn) then
+               
+               ! Implement based on bcond direction, loop over interior only
+               select case (my_bc%dir)
+               case (1) ! BC in +x
+                  do n=1,my_bc%itr%n_
+                     i=my_bc%itr%map(1,n); j=my_bc%itr%map(2,n); k=my_bc%itr%map(3,n)
+                     my_mfr(ibc)=my_mfr(ibc)+this%rho*this%U(i+1,j,k)*this%cfg%dy(j)*this%cfg%dz(k)
+                     my_area(ibc)=my_area(ibc)+this%cfg%dy(j)*this%cfg%dz(k)
+                  end do
+               case (2) ! BC in -x
+                  do n=1,my_bc%itr%n_
+                     i=my_bc%itr%map(1,n); j=my_bc%itr%map(2,n); k=my_bc%itr%map(3,n)
+                     my_mfr(ibc)=my_mfr(ibc)-this%rho*this%U(i  ,j,k)*this%cfg%dy(j)*this%cfg%dz(k)
+                     my_area(ibc)=my_area(ibc)+this%cfg%dy(j)*this%cfg%dz(k)
+                  end do
+               case (3) ! BC in +y
+                  do n=1,my_bc%itr%n_
+                     i=my_bc%itr%map(1,n); j=my_bc%itr%map(2,n); k=my_bc%itr%map(3,n)
+                     my_mfr(ibc)=my_mfr(ibc)+this%rho*this%V(i,j+1,k)*this%cfg%dx(i)*this%cfg%dz(k)
+                     my_area(ibc)=my_area(ibc)+this%cfg%dx(i)*this%cfg%dz(k)
+                  end do
+               case (4) ! BC in -y
+                  do n=1,my_bc%itr%n_
+                     i=my_bc%itr%map(1,n); j=my_bc%itr%map(2,n); k=my_bc%itr%map(3,n)
+                     my_mfr(ibc)=my_mfr(ibc)-this%rho*this%V(i,j  ,k)*this%cfg%dx(i)*this%cfg%dz(k)
+                     my_area(ibc)=my_area(ibc)+this%cfg%dx(i)*this%cfg%dz(k)
+                  end do
+               case (5) ! BC in +z
+                  do n=1,my_bc%itr%n_
+                     i=my_bc%itr%map(1,n); j=my_bc%itr%map(2,n); k=my_bc%itr%map(3,n)
+                     my_mfr(ibc)=my_mfr(ibc)+this%rho*this%W(i,j,k+1)*this%cfg%dy(j)*this%cfg%dx(i)
+                     my_area(ibc)=my_area(ibc)+this%cfg%dy(j)*this%cfg%dx(i)
+                  end do
+               case (6) ! BC in -z
+                  do n=1,my_bc%itr%n_
+                     i=my_bc%itr%map(1,n); j=my_bc%itr%map(2,n); k=my_bc%itr%map(3,n)
+                     my_mfr(ibc)=my_mfr(ibc)-this%rho*this%W(i,j,k  )*this%cfg%dy(j)*this%cfg%dx(i)
+                     my_area(ibc)=my_area(ibc)+this%cfg%dy(j)*this%cfg%dx(i)
+                  end do
+               end select
+               
+            end if
             
          end if
          
@@ -1346,9 +1395,8 @@ contains
       ! Evaluate MFR mismatch and velocity correction
       call this%get_mfr()
       mfr_error=sum(this%mfr)
+      if (abs(mfr_error).lt.10.0_WP*epsilon(1.0_WP).or.abs(this%correctable_area).lt.10.0_WP*epsilon(1.0_WP)) return
       vel_correction=-mfr_error/(this%rho*this%correctable_area)
-      
-      print*,'before correction= ',this%mfr
       
       ! Traverse bcond list and correct bcond MFR
       my_bc=>this%first_bc
@@ -1398,9 +1446,45 @@ contains
          
       end do
       
-      call this%get_mfr(); print*,'after correction= ',this%mfr
-      
    end subroutine correct_mfr
+   
+   
+   !> Shift pressure to ensure zero average
+   subroutine shift_p(this,pressure)
+      use mpi_f08,  only: MPI_SUM,MPI_ALLREDUCE
+      use parallel, only: MPI_REAL_WP
+      implicit none
+      class(incomp), intent(in) :: this
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: pressure !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      real(WP) :: vol_tot,pressure_tot,my_vol_tot,my_pressure_tot
+      integer :: i,j,k,ierr
+      
+      ! Loop over domain and integrate volume and pressure
+      my_vol_tot=0.0_WP
+      my_pressure_tot=0.0_WP
+      do k=this%cfg%kmin_,this%cfg%kmax_
+         do j=this%cfg%jmin_,this%cfg%jmax_
+            do i=this%cfg%imin_,this%cfg%imax_
+               my_vol_tot     =my_vol_tot     +this%cfg%vol(i,j,k)*this%cfg%VF(i,j,k)
+               my_pressure_tot=my_pressure_tot+this%cfg%vol(i,j,k)*this%cfg%VF(i,j,k)*pressure(i,j,k)
+            end do
+         end do
+      end do
+      call MPI_ALLREDUCE(my_vol_tot     ,vol_tot     ,1,MPI_REAL_WP,MPI_SUM,this%cfg%comm,ierr)
+      call MPI_ALLREDUCE(my_pressure_tot,pressure_tot,1,MPI_REAL_WP,MPI_SUM,this%cfg%comm,ierr)
+      pressure_tot=pressure_tot/vol_tot
+      
+      ! Shift the pressure
+      do k=this%cfg%kmin_,this%cfg%kmax_
+         do j=this%cfg%jmin_,this%cfg%jmax_
+            do i=this%cfg%imin_,this%cfg%imax_
+               if (this%cfg%VF(i,j,k).gt.0.0_WP) pressure(i,j,k)=pressure(i,j,k)-pressure_tot
+            end do
+         end do
+      end do
+      call this%cfg%sync(pressure)
+      
+   end subroutine shift_p
    
    
    !> Solve for implicit velocity residual

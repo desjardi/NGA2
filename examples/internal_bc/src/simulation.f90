@@ -77,10 +77,23 @@ contains
       integer, intent(in) :: i,j,k
       logical :: isIn
       isIn=.false.
-      if (cfg%x(i+1).eq.0.0_WP.and.&
-      &   cfg%ym(j).gt.-0.1_WP.and.cfg%ym(j).lt.0.1_WP.and.&
-      &   cfg%zm(k).gt.-0.1_WP.and.cfg%zm(k).lt.0.1_WP) isIn=.true.
+      if (cfg%x(i+1).eq. 0.0_WP.and.&
+      &   cfg%ym(j) .gt.-0.08_WP.and.cfg%ym(j).lt.0.08_WP.and.&
+      &   cfg%zm(k) .gt.-0.08_WP.and.cfg%zm(k).lt.0.08_WP) isIn=.true.
    end function left_of_cube
+   
+   
+   !> Function that localizes the right face of the cube
+   function right_of_cube(pg,i,j,k) result(isIn)
+      use pgrid_class, only: pgrid
+      class(pgrid), intent(in) :: pg
+      integer, intent(in) :: i,j,k
+      logical :: isIn
+      isIn=.false.
+      if (abs(cfg%x(i)-0.2_WP).lt.10.0_WP*epsilon(1.0_WP) .and.&
+      &   cfg%ym(j).gt.-0.08_WP.and.cfg%ym(j)  .lt.0.08_WP.and.&
+      &   cfg%zm(k).gt.-0.08_WP.and.cfg%zm(k)  .lt.0.08_WP) isIn=.true.
+   end function right_of_cube
    
    
    !> Initialization of problem solver
@@ -102,9 +115,8 @@ contains
          !call fs%add_bcond(name='inflow2' ,type=dirichlet,dir='-z',canCorrect=.false.,locator=  back_locator)
          !call fs%add_bcond(name='outflow1',type=neumann  ,dir='+y',canCorrect=.true. ,locator=   top_locator)
          !call fs%add_bcond(name='outflow2',type=neumann  ,dir='-y',canCorrect=.true. ,locator=bottom_locator)
-         call fs%add_bcond(name='inflow' ,type=dirichlet,dir='+y',canCorrect=.false.,locator=   top_locator)
-         call fs%add_bcond(name='outflow',type=neumann  ,dir='-y',canCorrect=.true. ,locator=bottom_locator)
-         !call fs%add_bcond(name='inflow'  ,type=dirichlet,dir='-x',canCorrect=.false.,locator=  left_of_cube)
+         call fs%add_bcond(name='inflow' ,type=dirichlet,dir='+x',canCorrect=.false.,locator= left_of_cube)
+         call fs%add_bcond(name='outflow',type=neumann  ,dir='-x',canCorrect=.true. ,locator=right_of_cube)
          ! Configure pressure solver
          call param_read('Pressure iteration',fs%psolv%maxit)
          call param_read('Pressure tolerance',fs%psolv%rcvg)
@@ -112,7 +124,7 @@ contains
          call param_read('Implicit iteration',fs%implicit%maxit)
          call param_read('Implicit tolerance',fs%implicit%rcvg)
          ! Setup the solver
-         call fs%setup(pressure_ils=amg,implicit_ils=pfmg)
+         call fs%setup(pressure_ils=pcg_amg,implicit_ils=pfmg)
       end block create_solver
       
       
@@ -147,25 +159,8 @@ contains
          call fs%get_bcond('inflow',inflow)
          do n=1,inflow%itr%no_
             i=inflow%itr%map(1,n); j=inflow%itr%map(2,n); k=inflow%itr%map(3,n)
-            fs%V(i,j+1,k)=-1.0_WP
+            fs%U(i+1,j,k)=-1.0_WP
          end do
-         !call fs%get_bcond('inflow',inflow)
-         !do n=1,inflow%itr%no_
-         !   i=inflow%itr%map(1,n); j=inflow%itr%map(2,n); k=inflow%itr%map(3,n)
-         !   fs%U(i+1,j,k)=-1.0_WP
-         !end do
-         ! Apply Dirichlet at inflow1
-         !call fs%get_bcond('inflow1',inflow)
-         !do n=1,inflow%itr%no_
-         !   i=inflow%itr%map(1,n); j=inflow%itr%map(2,n); k=inflow%itr%map(3,n)
-         !   fs%W(i,j,k+1)=-1.0_WP
-         !end do
-         ! Apply Dirichlet at inflow2
-         !call fs%get_bcond('inflow2',inflow)
-         !do n=1,inflow%itr%no_
-         !   i=inflow%itr%map(1,n); j=inflow%itr%map(2,n); k=inflow%itr%map(3,n)
-         !   fs%W(i,j,k  )=+1.0_WP
-         !end do
          ! Apply all other boundary conditions
          call fs%apply_bcond(time%t,time%dt)
          call fs%interp_vel(Ui,Vi,Wi)
@@ -280,6 +275,7 @@ contains
             fs%psolv%rhs=-fs%cfg%vol*fs%div*fs%rho/time%dt
             fs%psolv%sol=0.0_WP
             call fs%psolv%solve()
+            call fs%shift_p(fs%psolv%sol)
             
             ! Correct velocity
             call fs%get_pgrad(fs%psolv%sol,resU,resV,resW)
