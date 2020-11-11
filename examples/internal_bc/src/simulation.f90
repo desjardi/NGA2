@@ -30,7 +30,27 @@ module simulation
    
 contains
    
-   !> Function that localizes the top of the domain
+   !> Function that localizes the front (z+) of the domain
+   function front_locator(pg,i,j,k) result(isIn)
+      use pgrid_class, only: pgrid
+      class(pgrid), intent(in) :: pg
+      integer, intent(in) :: i,j,k
+      logical :: isIn
+      isIn=.false.
+      if (k.eq.pg%kmax) isIn=.true.
+   end function front_locator
+   
+   !> Function that localizes the back (z-) of the domain
+   function back_locator(pg,i,j,k) result(isIn)
+      use pgrid_class, only: pgrid
+      class(pgrid), intent(in) :: pg
+      integer, intent(in) :: i,j,k
+      logical :: isIn
+      isIn=.false.
+      if (k.eq.pg%kmin) isIn=.true.
+   end function back_locator
+   
+   !> Function that localizes the top (y+) of the domain
    function top_locator(pg,i,j,k) result(isIn)
       use pgrid_class, only: pgrid
       class(pgrid), intent(in) :: pg
@@ -40,7 +60,7 @@ contains
       if (j.eq.pg%jmax) isIn=.true.
    end function top_locator
    
-   !> Function that localizes the bottom of the domain
+   !> Function that localizes the bottom (y-) of the domain
    function bottom_locator(pg,i,j,k) result(isIn)
       use pgrid_class, only: pgrid
       class(pgrid), intent(in) :: pg
@@ -49,6 +69,18 @@ contains
       isIn=.false.
       if (j.eq.pg%jmin) isIn=.true.
    end function bottom_locator
+   
+   !> Function that localizes the left face of the cube
+   function left_of_cube(pg,i,j,k) result(isIn)
+      use pgrid_class, only: pgrid
+      class(pgrid), intent(in) :: pg
+      integer, intent(in) :: i,j,k
+      logical :: isIn
+      isIn=.false.
+      if (cfg%x(i+1).eq.0.0_WP.and.&
+      &   cfg%ym(j).gt.-0.1_WP.and.cfg%ym(j).lt.0.1_WP.and.&
+      &   cfg%zm(k).gt.-0.1_WP.and.cfg%zm(k).lt.0.1_WP) isIn=.true.
+   end function left_of_cube
    
    
    !> Initialization of problem solver
@@ -66,8 +98,13 @@ contains
          call param_read('Density',fs%rho)
          call param_read('Dynamic viscosity',fs%visc)
          ! Define boundary conditions
-         call fs%add_bcond(name='inflow' ,type=dirichlet      ,dir='-y',canCorrect=.false.,locator=bottom_locator)
-         call fs%add_bcond(name='outflow',type=clipped_neumann,dir='+y',canCorrect=.true. ,locator=   top_locator)
+         !call fs%add_bcond(name='inflow1' ,type=dirichlet,dir='+z',canCorrect=.false.,locator= front_locator)
+         !call fs%add_bcond(name='inflow2' ,type=dirichlet,dir='-z',canCorrect=.false.,locator=  back_locator)
+         !call fs%add_bcond(name='outflow1',type=neumann  ,dir='+y',canCorrect=.true. ,locator=   top_locator)
+         !call fs%add_bcond(name='outflow2',type=neumann  ,dir='-y',canCorrect=.true. ,locator=bottom_locator)
+         call fs%add_bcond(name='inflow' ,type=dirichlet,dir='+y',canCorrect=.false.,locator=   top_locator)
+         call fs%add_bcond(name='outflow',type=neumann  ,dir='-y',canCorrect=.true. ,locator=bottom_locator)
+         !call fs%add_bcond(name='inflow'  ,type=dirichlet,dir='-x',canCorrect=.false.,locator=  left_of_cube)
          ! Configure pressure solver
          call param_read('Pressure iteration',fs%psolv%maxit)
          call param_read('Pressure tolerance',fs%psolv%rcvg)
@@ -75,7 +112,7 @@ contains
          call param_read('Implicit iteration',fs%implicit%maxit)
          call param_read('Implicit tolerance',fs%implicit%rcvg)
          ! Setup the solver
-         call fs%setup(pressure_ils=pcg_amg,implicit_ils=pfmg)
+         call fs%setup(pressure_ils=amg,implicit_ils=pfmg)
       end block create_solver
       
       
@@ -90,9 +127,9 @@ contains
       end block allocate_work_arrays
       
       
-      ! Initialize time tracker
+      ! Initialize time tracker with 2 subiterations
       initialize_timetracker: block
-         time=timetracker(fs%cfg%amRoot)
+         time=timetracker(amRoot=fs%cfg%amRoot)
          call param_read('Max timestep size',time%dtmax)
          call param_read('Max cfl number',time%cflmax)
          time%dt=time%dtmax
@@ -106,12 +143,29 @@ contains
          integer :: n,i,j,k
          ! Zero initial field
          fs%U=0.0_WP; fs%V=0.0_WP; fs%W=0.0_WP
-         ! Apply Dirichlet at our inflow
+         ! Apply Dirichlet at the cube
          call fs%get_bcond('inflow',inflow)
          do n=1,inflow%itr%no_
             i=inflow%itr%map(1,n); j=inflow%itr%map(2,n); k=inflow%itr%map(3,n)
-            fs%V(i,j,k)=1.0_WP
+            fs%V(i,j+1,k)=-1.0_WP
          end do
+         !call fs%get_bcond('inflow',inflow)
+         !do n=1,inflow%itr%no_
+         !   i=inflow%itr%map(1,n); j=inflow%itr%map(2,n); k=inflow%itr%map(3,n)
+         !   fs%U(i+1,j,k)=-1.0_WP
+         !end do
+         ! Apply Dirichlet at inflow1
+         !call fs%get_bcond('inflow1',inflow)
+         !do n=1,inflow%itr%no_
+         !   i=inflow%itr%map(1,n); j=inflow%itr%map(2,n); k=inflow%itr%map(3,n)
+         !   fs%W(i,j,k+1)=-1.0_WP
+         !end do
+         ! Apply Dirichlet at inflow2
+         !call fs%get_bcond('inflow2',inflow)
+         !do n=1,inflow%itr%no_
+         !   i=inflow%itr%map(1,n); j=inflow%itr%map(2,n); k=inflow%itr%map(3,n)
+         !   fs%W(i,j,k  )=+1.0_WP
+         !end do
          ! Apply all other boundary conditions
          call fs%apply_bcond(time%t,time%dt)
          call fs%interp_vel(Ui,Vi,Wi)
@@ -124,9 +178,9 @@ contains
       ! Add Ensight output
       create_ensight: block
          ! Create Ensight output from cfg
-         ens_out=ensight(cfg,'test')
+         ens_out=ensight(cfg=cfg,name='test')
          ! Create event for Ensight output
-         ens_evt=event(time,'Ensight output')
+         ens_evt=event(time=time,name='Ensight output')
          call param_read('Ensight output period',ens_evt%tper)
          ! Add variables to output
          call ens_out%add_scalar('pressure',fs%P)

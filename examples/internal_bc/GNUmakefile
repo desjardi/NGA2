@@ -6,12 +6,12 @@ PRECISION = DOUBLE
 USE_MPI   = TRUE
 USE_HYPRE = TRUE
 PROFILE   = FALSE
-DEBUG     = FALSE #TRUE
+DEBUG     = TRUE
 COMP      = gnu
 EXEBASE   = nga
 
 # Directories that contain user-defined code
-Udirs   := 
+Udirs   := src
 
 # Include user-defined sources
 Upack   += $(foreach dir, $(Udirs), $(wildcard $(dir)/Make.package))

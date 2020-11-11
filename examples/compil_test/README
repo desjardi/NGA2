@@ -1,1 +1,3 @@
-This is a first test of the build process for the new NGA.
+This is a first test of the build process for the new NGA2 code.
+This has morphed into a test of external boundary conditions and
+ability to simulate a turbulent square jet.

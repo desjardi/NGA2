@@ -15,10 +15,11 @@ module incomp_class
    public :: incomp,bcond
    
    ! List of known available bcond for this solver
-   integer, parameter, public :: dirichlet=1         !< Dirichlet condition
-   integer, parameter, public :: neumann=2           !< Zero normal gradient
-   integer, parameter, public :: convective=3        !< Convective outflow condition
-   integer, parameter, public :: clipped_neumann=4   !< Clipped Neumann condition (outflow only)
+   integer, parameter, public :: wall=1              !< Dirichlet at zero condition
+   integer, parameter, public :: dirichlet=2         !< Dirichlet condition
+   integer, parameter, public :: neumann=3           !< Zero normal gradient
+   integer, parameter, public :: convective=4        !< Convective outflow condition
+   integer, parameter, public :: clipped_neumann=5   !< Clipped Neumann condition (outflow only)
    
    !> Boundary conditions for the incompressible solver
    type :: bcond
@@ -84,6 +85,11 @@ module incomp_class
       real(WP), dimension(:,:,:,:), allocatable :: grdv_x,grdv_y,grdv_z   !< Velocity gradient for V
       real(WP), dimension(:,:,:,:), allocatable :: grdw_x,grdw_y,grdw_z   !< Velocity gradient for W
       
+      ! Masking info for metric modification
+      integer, dimension(:,:,:), allocatable :: umask                     !< Integer array used for modifying U metrics
+      integer, dimension(:,:,:), allocatable :: vmask                     !< Integer array used for modifying V metrics
+      integer, dimension(:,:,:), allocatable :: wmask                     !< Integer array used for modifying W metrics
+      
       ! CFL numbers
       real(WP) :: CFLc_x,CFLc_y,CFLc_z                                    !< Convective CFL numbers
       real(WP) :: CFLv_x,CFLv_y,CFLv_z                                    !< Viscous CFL numbers
@@ -93,11 +99,12 @@ module incomp_class
       
    contains
       procedure :: print=>incomp_print                    !< Output solver to the screen
+      procedure :: setup                                  !< Finish configuring the flow solver
       procedure :: add_bcond                              !< Add a boundary condition
       procedure :: get_bcond                              !< Get a boundary condition
-      procedure :: init_bcond                             !< Adjust metrics for boundary conditions
       procedure :: apply_bcond                            !< Apply all boundary conditions
       procedure :: init_metrics                           !< Initialize metrics
+      procedure :: adjust_metrics                         !< Adjust metrics
       procedure :: get_dmomdt                             !< Calculate dmom/dt
       procedure :: get_div                                !< Calculate velocity divergence
       procedure :: get_pgrad                              !< Calculate pressure gradient
@@ -136,9 +143,6 @@ contains
       self%nbc=0
       self%first_bc=>NULL()
       
-      ! Prepare metrics
-      call self%init_metrics()
-      
       ! Allocate flow variables
       allocate(self%U(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%U=0.0_WP
       allocate(self%V(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%V=0.0_WP
@@ -156,80 +160,70 @@ contains
       ! Create pressure solver object
       self%psolv=ils(cfg=self%cfg,name='Pressure Poisson Solver')
       
-      ! Set 7-pt stencil map
-      self%psolv%stc(1,:)=[ 0, 0, 0]
-      self%psolv%stc(2,:)=[+1, 0, 0]
-      self%psolv%stc(3,:)=[-1, 0, 0]
-      self%psolv%stc(4,:)=[ 0,+1, 0]
-      self%psolv%stc(5,:)=[ 0,-1, 0]
-      self%psolv%stc(6,:)=[ 0, 0,+1]
-      self%psolv%stc(7,:)=[ 0, 0,-1]
-      
-      ! Setup the scaled Laplacian operator from incomp metrics: lap(*)=-vol*div(grad(*))
-      do k=self%cfg%kmin_,self%cfg%kmax_
-         do j=self%cfg%jmin_,self%cfg%jmax_
-            do i=self%cfg%imin_,self%cfg%imax_
-               ! Set Laplacian
-               self%psolv%opr(1,i,j,k)=self%divp_x(1,i,j,k)*self%divu_x(-1,i+1,j,k)+&
-               &                       self%divp_x(0,i,j,k)*self%divu_x( 0,i  ,j,k)+&
-               &                       self%divp_y(1,i,j,k)*self%divv_y(-1,i,j+1,k)+&
-               &                       self%divp_y(0,i,j,k)*self%divv_y( 0,i,j  ,k)+&
-               &                       self%divp_z(1,i,j,k)*self%divw_z(-1,i,j,k+1)+&
-               &                       self%divp_z(0,i,j,k)*self%divw_z( 0,i,j,k  )
-               self%psolv%opr(2,i,j,k)=self%divp_x(1,i,j,k)*self%divu_x( 0,i+1,j,k)
-               self%psolv%opr(3,i,j,k)=self%divp_x(0,i,j,k)*self%divu_x(-1,i  ,j,k)
-               self%psolv%opr(4,i,j,k)=self%divp_y(1,i,j,k)*self%divv_y( 0,i,j+1,k)
-               self%psolv%opr(5,i,j,k)=self%divp_y(0,i,j,k)*self%divv_y(-1,i,j  ,k)
-               self%psolv%opr(6,i,j,k)=self%divp_z(1,i,j,k)*self%divw_z( 0,i,j,k+1)
-               self%psolv%opr(7,i,j,k)=self%divp_z(0,i,j,k)*self%divw_z(-1,i,j,k  )
-               ! Scale it by the cell volume
-               self%psolv%opr(:,i,j,k)=-self%psolv%opr(:,i,j,k)*self%cfg%vol(i,j,k)
-            end do
-         end do
-      end do
-      
       ! Create implicit velocity solver object
       self%implicit=ils(cfg=self%cfg,name='Implicit NS residual')
       
-      ! Set 7-pt stencil map
-      self%implicit%stc(1,:)=[ 0, 0, 0]
-      self%implicit%stc(2,:)=[+1, 0, 0]
-      self%implicit%stc(3,:)=[-1, 0, 0]
-      self%implicit%stc(4,:)=[ 0,+1, 0]
-      self%implicit%stc(5,:)=[ 0,-1, 0]
-      self%implicit%stc(6,:)=[ 0, 0,+1]
-      self%implicit%stc(7,:)=[ 0, 0,-1]
+      ! Prepare default metrics
+      call self%init_metrics()
       
-      ! Set the diagonal to 1 to make sure all cells participate in solver
-      self%implicit%opr(1,:,:,:)=1.0_WP
+      ! Prepare face mask for U
+      allocate(self%umask(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%umask=0
+      do k=self%cfg%kmino_  ,self%cfg%kmaxo_
+         do j=self%cfg%jmino_  ,self%cfg%jmaxo_
+            do i=self%cfg%imino_+1,self%cfg%imaxo_
+               if (minval(self%cfg%VF(i-1:i,j,k)).eq.0.0_WP) self%umask(i,j,k)=1
+            end do
+         end do
+      end do
+      call self%cfg%sync(self%umask)
+      if (.not.self%cfg%xper.and.self%cfg%iproc.eq.1) self%umask(self%cfg%imino,:,:)=self%umask(self%cfg%imino+1,:,:)
+      
+      ! Prepare face mask for V
+      allocate(self%vmask(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%vmask=0
+      do k=self%cfg%kmino_  ,self%cfg%kmaxo_
+         do j=self%cfg%jmino_+1,self%cfg%jmaxo_
+            do i=self%cfg%imino_  ,self%cfg%imaxo_
+               if (minval(self%cfg%VF(i,j-1:j,k)).eq.0.0_WP) self%vmask(i,j,k)=1
+            end do
+         end do
+      end do
+      call self%cfg%sync(self%vmask)
+      if (.not.self%cfg%yper.and.self%cfg%jproc.eq.1) self%vmask(:,self%cfg%jmino,:)=self%vmask(:,self%cfg%jmino+1,:)
+      
+      ! Prepare face mask for W
+      allocate(self%wmask(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%wmask=0
+      do k=self%cfg%kmino_+1,self%cfg%kmaxo_
+         do j=self%cfg%jmino_  ,self%cfg%jmaxo_
+            do i=self%cfg%imino_  ,self%cfg%imaxo_
+               if (minval(self%cfg%VF(i,j,k-1:k)).eq.0.0_WP) self%wmask(i,j,k)=1
+            end do
+         end do
+      end do
+      call self%cfg%sync(self%wmask)
+      if (.not.self%cfg%zper.and.self%cfg%kproc.eq.1) self%wmask(:,:,self%cfg%kmino)=self%wmask(:,:,self%cfg%kmino+1)
+      
+      ! Adjust face masks to reflect domain boundaries
+      if (.not.self%cfg%xper) then
+         if (self%cfg%iproc.eq.           1) self%umask(self%cfg%imin  ,:,:)=2
+         if (self%cfg%iproc.eq.self%cfg%npx) self%umask(self%cfg%imax+1,:,:)=2
+      end if
+      if (.not.self%cfg%yper) then
+         if (self%cfg%jproc.eq.           1) self%vmask(:,self%cfg%jmin  ,:)=2
+         if (self%cfg%jproc.eq.self%cfg%npy) self%vmask(:,self%cfg%jmax+1,:)=2
+      end if
+      if (.not.self%cfg%zper) then
+         if (self%cfg%kproc.eq.           1) self%wmask(:,:,self%cfg%kmin  )=2
+         if (self%cfg%kproc.eq.self%cfg%npz) self%wmask(:,:,self%cfg%kmax+1)=2
+      end if
       
    end function constructor
+      
    
-   
-   !> Metric initialization that accounts for VF
+   !> Metric initialization with now awareness of walls nor bcond
    subroutine init_metrics(this)
       implicit none
       class(incomp), intent(inout) :: this
       integer :: i,j,k
-      real(WP) :: delta
-      real(WP), dimension(:,:,:), allocatable :: VF
-      
-      ! Start by extending the VF array by one cell
-      allocate(VF(this%cfg%imino_-1:this%cfg%imaxo_+1,this%cfg%jmino_-1:this%cfg%jmaxo_+1,this%cfg%kmino_-1:this%cfg%kmaxo_+1))
-      VF(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_)=this%cfg%VF
-      call this%cfg%sync(VF,this%cfg%no+1)
-      if (.not.this%cfg%xper) then
-         if (this%cfg%iproc.eq.1           ) VF(this%cfg%imino-1,:,:)=VF(this%cfg%imino,:,:)
-         if (this%cfg%iproc.eq.this%cfg%npx) VF(this%cfg%imaxo+1,:,:)=VF(this%cfg%imaxo,:,:)
-      end if
-      if (.not.this%cfg%yper) then
-         if (this%cfg%jproc.eq.1           ) VF(:,this%cfg%jmino-1,:)=VF(:,this%cfg%jmino,:)
-         if (this%cfg%jproc.eq.this%cfg%npy) VF(:,this%cfg%jmaxo+1,:)=VF(:,this%cfg%jmaxo,:)
-      end if
-      if (.not.this%cfg%zper) then
-         if (this%cfg%kproc.eq.1           ) VF(:,:,this%cfg%kmino-1)=VF(:,:,this%cfg%kmino)
-         if (this%cfg%kproc.eq.this%cfg%npz) VF(:,:,this%cfg%kmaxo+1)=VF(:,:,this%cfg%kmaxo)
-      end if
       
       ! Allocate finite difference velocity interpolation coefficients
       allocate(this%itpu_x( 0:+1,this%cfg%imino_  :this%cfg%imaxo_,this%cfg%jmino_  :this%cfg%jmaxo_,this%cfg%kmino_  :this%cfg%kmaxo_)) !< Cell-centered
@@ -245,9 +239,9 @@ contains
       do k=this%cfg%kmino_,this%cfg%kmaxo_
          do j=this%cfg%jmino_,this%cfg%jmaxo_
             do i=this%cfg%imino_,this%cfg%imaxo_
-               this%itpu_x(:,i,j,k)=0.5_WP*VF(i,j,k)*[minval(VF(i-1:i,j,k)),minval(VF(i:i+1,j,k))] !< Linear interpolation in x of U from [x ,ym,zm]
-               this%itpv_y(:,i,j,k)=0.5_WP*VF(i,j,k)*[minval(VF(i,j-1:j,k)),minval(VF(i,j:j+1,k))] !< Linear interpolation in y of V from [xm,y ,zm]
-               this%itpw_z(:,i,j,k)=0.5_WP*VF(i,j,k)*[minval(VF(i,j,k-1:k)),minval(VF(i,j,k:k+1))] !< Linear interpolation in z of W from [xm,ym,z ]
+               this%itpu_x(:,i,j,k)=[+0.5_WP,+0.5_WP] !< Linear interpolation in x of U from [x ,ym,zm]
+               this%itpv_y(:,i,j,k)=[+0.5_WP,+0.5_WP] !< Linear interpolation in y of V from [xm,y ,zm]
+               this%itpw_z(:,i,j,k)=[+0.5_WP,+0.5_WP] !< Linear interpolation in z of W from [xm,ym,z ]
             end do
          end do
       end do
@@ -255,8 +249,8 @@ contains
       do k=this%cfg%kmino_  ,this%cfg%kmaxo_
          do j=this%cfg%jmino_  ,this%cfg%jmaxo_
             do i=this%cfg%imino_+1,this%cfg%imaxo_
-               this%itpv_x(:,i,j,k)=minval(VF(i-1:i,j-1:j,k))*this%cfg%dxmi(i)*[this%cfg%xm(i)-this%cfg%x(i),this%cfg%x(i)-this%cfg%xm(i-1)] !< Linear interpolation in x of V from [xm,y ,zm]
-               this%itpw_x(:,i,j,k)=minval(VF(i-1:i,j,k-1:k))*this%cfg%dxmi(i)*[this%cfg%xm(i)-this%cfg%x(i),this%cfg%x(i)-this%cfg%xm(i-1)] !< Linear interpolation in x of W from [xm,ym,z ]
+               this%itpv_x(:,i,j,k)=this%cfg%dxmi(i)*[this%cfg%xm(i)-this%cfg%x(i),this%cfg%x(i)-this%cfg%xm(i-1)] !< Linear interpolation in x of V from [xm,y ,zm]
+               this%itpw_x(:,i,j,k)=this%cfg%dxmi(i)*[this%cfg%xm(i)-this%cfg%x(i),this%cfg%x(i)-this%cfg%xm(i-1)] !< Linear interpolation in x of W from [xm,ym,z ]
             end do
          end do
       end do
@@ -264,8 +258,8 @@ contains
       do k=this%cfg%kmino_  ,this%cfg%kmaxo_
          do j=this%cfg%jmino_+1,this%cfg%jmaxo_
             do i=this%cfg%imino_  ,this%cfg%imaxo_
-               this%itpu_y(:,i,j,k)=minval(VF(i-1:i,j-1:j,k))*this%cfg%dymi(j)*[this%cfg%ym(j)-this%cfg%y(j),this%cfg%y(j)-this%cfg%ym(j-1)] !< Linear interpolation in y of U from [x ,ym,zm]
-               this%itpw_y(:,i,j,k)=minval(VF(i,j-1:j,k-1:k))*this%cfg%dymi(j)*[this%cfg%ym(j)-this%cfg%y(j),this%cfg%y(j)-this%cfg%ym(j-1)] !< Linear interpolation in y of W from [xm,ym,z ]
+               this%itpu_y(:,i,j,k)=this%cfg%dymi(j)*[this%cfg%ym(j)-this%cfg%y(j),this%cfg%y(j)-this%cfg%ym(j-1)] !< Linear interpolation in y of U from [x ,ym,zm]
+               this%itpw_y(:,i,j,k)=this%cfg%dymi(j)*[this%cfg%ym(j)-this%cfg%y(j),this%cfg%y(j)-this%cfg%ym(j-1)] !< Linear interpolation in y of W from [xm,ym,z ]
             end do
          end do
       end do
@@ -273,8 +267,8 @@ contains
       do k=this%cfg%kmino_+1,this%cfg%kmaxo_
          do j=this%cfg%jmino_  ,this%cfg%jmaxo_
             do i=this%cfg%imino_  ,this%cfg%imaxo_
-               this%itpu_z(:,i,j,k)=minval(VF(i-1:i,j,k-1:k))*this%cfg%dzmi(k)*[this%cfg%zm(k)-this%cfg%z(k),this%cfg%z(k)-this%cfg%zm(k-1)] !< Linear interpolation in z of U from [x ,ym,zm]
-               this%itpv_z(:,i,j,k)=minval(VF(i,j-1:j,k-1:k))*this%cfg%dzmi(k)*[this%cfg%zm(k)-this%cfg%z(k),this%cfg%z(k)-this%cfg%zm(k-1)] !< Linear interpolation in z of V from [xm,y ,zm]
+               this%itpu_z(:,i,j,k)=this%cfg%dzmi(k)*[this%cfg%zm(k)-this%cfg%z(k),this%cfg%z(k)-this%cfg%zm(k-1)] !< Linear interpolation in z of U from [x ,ym,zm]
+               this%itpv_z(:,i,j,k)=this%cfg%dzmi(k)*[this%cfg%zm(k)-this%cfg%z(k),this%cfg%z(k)-this%cfg%zm(k-1)] !< Linear interpolation in z of V from [xm,y ,zm]
             end do
          end do
       end do
@@ -296,18 +290,18 @@ contains
       do k=this%cfg%kmino_,this%cfg%kmaxo_
          do j=this%cfg%jmino_,this%cfg%jmaxo_
             do i=this%cfg%imino_,this%cfg%imaxo_
-               this%divp_x(:,i,j,k)=VF(i,j,k)*this%cfg%dxi(i)*[-minval(VF(i-1:i,j,k)),+minval(VF(i:i+1,j,k))] !< FV divergence from [x ,ym,zm]
-               this%divp_y(:,i,j,k)=VF(i,j,k)*this%cfg%dyi(j)*[-minval(VF(i,j-1:j,k)),+minval(VF(i,j:j+1,k))] !< FV divergence from [xm,y ,zm]
-               this%divp_z(:,i,j,k)=VF(i,j,k)*this%cfg%dzi(k)*[-minval(VF(i,j,k-1:k)),+minval(VF(i,j,k:k+1))] !< FV divergence from [xm,ym,z ]
+               this%divp_x(:,i,j,k)=this%cfg%dxi(i)*[-1.0_WP,+1.0_WP] !< FV divergence from [x ,ym,zm]
+               this%divp_y(:,i,j,k)=this%cfg%dyi(j)*[-1.0_WP,+1.0_WP] !< FV divergence from [xm,y ,zm]
+               this%divp_z(:,i,j,k)=this%cfg%dzi(k)*[-1.0_WP,+1.0_WP] !< FV divergence from [xm,ym,z ]
                
-               this%divu_y(:,i,j,k)=minval(VF(i-1:i,j,k))*this%cfg%dyi (j)*[-1.0_WP,+1.0_WP] !< FV divergence from [x ,y ,zm]
-               this%divu_z(:,i,j,k)=minval(VF(i-1:i,j,k))*this%cfg%dzi (k)*[-1.0_WP,+1.0_WP] !< FV divergence from [x ,ym,z ]
+               this%divu_y(:,i,j,k)=this%cfg%dyi(j)*[-1.0_WP,+1.0_WP] !< FV divergence from [x ,y ,zm]
+               this%divu_z(:,i,j,k)=this%cfg%dzi(k)*[-1.0_WP,+1.0_WP] !< FV divergence from [x ,ym,z ]
                
-               this%divv_x(:,i,j,k)=minval(VF(i,j-1:j,k))*this%cfg%dxi (i)*[-1.0_WP,+1.0_WP] !< FV divergence from [x ,y ,zm]
-               this%divv_z(:,i,j,k)=minval(VF(i,j-1:j,k))*this%cfg%dzi (k)*[-1.0_WP,+1.0_WP] !< FV divergence from [xm,y ,z ]
+               this%divv_x(:,i,j,k)=this%cfg%dxi(i)*[-1.0_WP,+1.0_WP] !< FV divergence from [x ,y ,zm]
+               this%divv_z(:,i,j,k)=this%cfg%dzi(k)*[-1.0_WP,+1.0_WP] !< FV divergence from [xm,y ,z ]
                
-               this%divw_x(:,i,j,k)=minval(VF(i,j,k-1:k))*this%cfg%dxi (i)*[-1.0_WP,+1.0_WP] !< FV divergence from [x ,ym,z ]
-               this%divw_y(:,i,j,k)=minval(VF(i,j,k-1:k))*this%cfg%dyi (j)*[-1.0_WP,+1.0_WP] !< FV divergence from [xm,y ,z ]
+               this%divw_x(:,i,j,k)=this%cfg%dxi(i)*[-1.0_WP,+1.0_WP] !< FV divergence from [x ,ym,z ]
+               this%divw_y(:,i,j,k)=this%cfg%dyi(j)*[-1.0_WP,+1.0_WP] !< FV divergence from [xm,y ,z ]
             end do
          end do
       end do
@@ -315,7 +309,7 @@ contains
       do k=this%cfg%kmino_  ,this%cfg%kmaxo_
          do j=this%cfg%jmino_  ,this%cfg%jmaxo_
             do i=this%cfg%imino_+1,this%cfg%imaxo_
-               this%divu_x(:,i,j,k)=minval(VF(i-1:i,j,k))*this%cfg%dxmi(i)*[-1.0_WP,+1.0_WP] !< FV divergence from [xm,ym,zm]
+               this%divu_x(:,i,j,k)=this%cfg%dxmi(i)*[-1.0_WP,+1.0_WP] !< FV divergence from [xm,ym,zm]
             end do
          end do
       end do
@@ -323,7 +317,7 @@ contains
       do k=this%cfg%kmino_  ,this%cfg%kmaxo_
          do j=this%cfg%jmino_+1,this%cfg%jmaxo_
             do i=this%cfg%imino_  ,this%cfg%imaxo_
-               this%divv_y(:,i,j,k)=minval(VF(i,j-1:j,k))*this%cfg%dymi(j)*[-1.0_WP,+1.0_WP] !< FV divergence from [xm,ym,zm]
+               this%divv_y(:,i,j,k)=this%cfg%dymi(j)*[-1.0_WP,+1.0_WP] !< FV divergence from [xm,ym,zm]
             end do
          end do
       end do
@@ -331,7 +325,7 @@ contains
       do k=this%cfg%kmino_+1,this%cfg%kmaxo_
          do j=this%cfg%jmino_  ,this%cfg%jmaxo_
             do i=this%cfg%imino_  ,this%cfg%imaxo_
-               this%divw_z(:,i,j,k)=minval(VF(i,j,k-1:k))*this%cfg%dzmi(k)*[-1.0_WP,+1.0_WP] !< FV divergence from [xm,ym,zm]
+               this%divw_z(:,i,j,k)=this%cfg%dzmi(k)*[-1.0_WP,+1.0_WP] !< FV divergence from [xm,ym,zm]
             end do
          end do
       end do
@@ -350,9 +344,9 @@ contains
       do k=this%cfg%kmino_,this%cfg%kmaxo_
          do j=this%cfg%jmino_,this%cfg%jmaxo_
             do i=this%cfg%imino_,this%cfg%imaxo_
-               this%grdu_x(:,i,j,k)=VF(i,j,k)*this%cfg%dxi(i)*[-minval(VF(i-1:i,j,k)),+minval(VF(i:i+1,j,k))] !< FD gradient in x of U from [x ,ym,zm]
-               this%grdv_y(:,i,j,k)=VF(i,j,k)*this%cfg%dyi(i)*[-minval(VF(i,j-1:j,k)),+minval(VF(i,j:j+1,k))] !< FD gradient in y of V from [xm,y ,zm]
-               this%grdw_z(:,i,j,k)=VF(i,j,k)*this%cfg%dzi(i)*[-minval(VF(i,j,k-1:k)),+minval(VF(i,j,k:k+1))] !< FD gradient in z of W from [xm,ym,z ]
+               this%grdu_x(:,i,j,k)=this%cfg%dxi(i)*[-1.0_WP,+1.0_WP] !< FD gradient in x of U from [x ,ym,zm]
+               this%grdv_y(:,i,j,k)=this%cfg%dyi(i)*[-1.0_WP,+1.0_WP] !< FD gradient in y of V from [xm,y ,zm]
+               this%grdw_z(:,i,j,k)=this%cfg%dzi(i)*[-1.0_WP,+1.0_WP] !< FD gradient in z of W from [xm,ym,z ]
             end do
          end do
       end do
@@ -360,22 +354,8 @@ contains
       do k=this%cfg%kmino_  ,this%cfg%kmaxo_
          do j=this%cfg%jmino_  ,this%cfg%jmaxo_
             do i=this%cfg%imino_+1,this%cfg%imaxo_
-               ! FD gradient in x of V from [xm,y ,zm]
-               delta=minval(VF(i  ,j-1:j,k))*(this%cfg%xm(i)-this%cfg%x (i  )) &
-               &    +minval(VF(i-1,j-1:j,k))*(this%cfg%x (i)-this%cfg%xm(i-1))
-               if (delta.gt.0.0_WP) then
-                  this%grdv_x(:,i,j,k)=[-minval(VF(i-1,j-1:j,k)),+minval(VF(i,j-1:j,k))]/delta
-               else
-                  this%grdv_x(:,i,j,k)=0.0_WP
-               end if
-               ! FD gradient in x of W from [xm,ym,z ]
-               delta=minval(VF(i  ,j,k-1:k))*(this%cfg%xm(i)-this%cfg%x (i  )) &
-               &    +minval(VF(i-1,j,k-1:k))*(this%cfg%x (i)-this%cfg%xm(i-1))
-               if (delta.gt.0.0_WP) then
-                  this%grdw_x(:,i,j,k)=[-minval(VF(i-1,j,k-1:k)),+minval(VF(i,j,k-1:k))]/delta
-               else
-                  this%grdw_x(:,i,j,k)=0.0_WP
-               end if
+               this%grdv_x(:,i,j,k)=this%cfg%dxmi(i)*[-1.0_WP,+1.0_WP] !< FD gradient in x of V from [xm,y ,zm]
+               this%grdw_x(:,i,j,k)=this%cfg%dxmi(i)*[-1.0_WP,+1.0_WP] !< FD gradient in x of W from [xm,ym,z ]
             end do
          end do
       end do
@@ -383,22 +363,8 @@ contains
       do k=this%cfg%kmino_  ,this%cfg%kmaxo_
          do j=this%cfg%jmino_+1,this%cfg%jmaxo_
             do i=this%cfg%imino_  ,this%cfg%imaxo_
-               ! FD gradient in y of U from [x ,ym,zm]
-               delta=minval(VF(i-1:i,j  ,k))*(this%cfg%ym(j)-this%cfg%y (j  )) &
-               &    +minval(VF(i-1:i,j-1,k))*(this%cfg%y (j)-this%cfg%ym(j-1))
-               if (delta.gt.0.0_WP) then
-                  this%grdu_y(:,i,j,k)=[-minval(VF(i-1:i,j-1,k)),+minval(VF(i-1:i,j,k))]/delta
-               else
-                  this%grdu_y(:,i,j,k)=0.0_WP
-               end if
-               ! FD gradient in y of W from [xm,ym,z ]
-               delta=minval(VF(i,j  ,k-1:k))*(this%cfg%ym(j)-this%cfg%y (j  )) &
-               &    +minval(VF(i,j-1,k-1:k))*(this%cfg%y (j)-this%cfg%ym(j-1))
-               if (delta.gt.0.0_WP) then
-                  this%grdw_y(:,i,j,k)=[-minval(VF(i,j-1,k-1:k)),+minval(VF(i,j,k-1:k))]/delta
-               else
-                  this%grdw_y(:,i,j,k)=0.0_WP
-               end if
+               this%grdu_y(:,i,j,k)=this%cfg%dymi(j)*[-1.0_WP,+1.0_WP] !< FD gradient in y of U from [x ,ym,zm]
+               this%grdw_y(:,i,j,k)=this%cfg%dymi(j)*[-1.0_WP,+1.0_WP] !< FD gradient in y of W from [xm,ym,z ]
             end do
          end do
       end do
@@ -406,68 +372,259 @@ contains
       do k=this%cfg%kmino_+1,this%cfg%kmaxo_
          do j=this%cfg%jmino_  ,this%cfg%jmaxo_
             do i=this%cfg%imino_  ,this%cfg%imaxo_
-               ! FD gradient in z of U from [x ,ym,zm]
-               delta=minval(VF(i-1:i,j,k  ))*(this%cfg%zm(k)-this%cfg%z (k  )) &
-               &    +minval(VF(i-1:i,j,k-1))*(this%cfg%z (k)-this%cfg%zm(k-1))
-               if (delta.gt.0.0_WP) then
-                  this%grdu_z(:,i,j,k)=[-minval(VF(i-1:i,j,k-1)),+minval(VF(i-1:i,j,k))]/delta
-               else
-                  this%grdu_z(:,i,j,k)=0.0_WP
-               end if
-               ! FD gradient in z of V from [xm,y ,zm]
-               delta=minval(VF(i,j-1:j,k  ))*(this%cfg%zm(k)-this%cfg%z (k  )) &
-               &    +minval(VF(i,j-1:j,k-1))*(this%cfg%z (k)-this%cfg%zm(k-1))
-               if (delta.gt.0.0_WP) then
-                  this%grdv_z(:,i,j,k)=[-minval(VF(i,j-1:j,k-1)),+minval(VF(i,j-1:j,k))]/delta
-               else
-                  this%grdv_z(:,i,j,k)=0.0_WP
+               this%grdu_z(:,i,j,k)=this%cfg%dzmi(k)*[-1.0_WP,+1.0_WP] !< FD gradient in z of U from [x ,ym,zm]
+               this%grdv_z(:,i,j,k)=this%cfg%dzmi(k)*[-1.0_WP,+1.0_WP] !< FD gradient in z of V from [xm,y ,zm]
+            end do
+         end do
+      end do
+      
+   end subroutine init_metrics
+   
+   
+   !> Metric adjustment accounting for bconds and walls
+   subroutine adjust_metrics(this)
+      implicit none
+      class(incomp), intent(inout) :: this
+      integer :: i,j,k
+      real(WP) :: delta
+      
+      ! Loop over the domain and apply masked conditions to U metrics
+      do k=this%cfg%kmino_  ,this%cfg%kmaxo_
+         do j=this%cfg%jmino_  ,this%cfg%jmaxo_
+            do i=this%cfg%imino_+1,this%cfg%imaxo_
+               if (this%umask(i,j,k).gt.0) then
+                  this%divu_x(:,i,j,k)=0.0_WP
+                  this%divu_y(:,i,j,k)=0.0_WP
+                  this%divu_z(:,i,j,k)=0.0_WP
                end if
             end do
          end do
       end do
       
-      ! Deallocate extended VF array
-      deallocate(VF)
+      ! Loop over the domain and apply masked conditions to V metrics
+      do k=this%cfg%kmino_  ,this%cfg%kmaxo_
+         do j=this%cfg%jmino_+1,this%cfg%jmaxo_
+            do i=this%cfg%imino_  ,this%cfg%imaxo_
+               if (this%vmask(i,j,k).gt.0) then
+                  this%divv_x(:,i,j,k)=0.0_WP
+                  this%divv_y(:,i,j,k)=0.0_WP
+                  this%divv_z(:,i,j,k)=0.0_WP
+               end if
+            end do
+         end do
+      end do
       
-      ! Non-periodic domain boundaries are necessarily boundary conditions
-      if (.not.this%cfg%xper) then
-         if (this%cfg%iproc.eq.           1) then
-            this%divu_x(:,this%cfg%imin  ,:,:)=0.0_WP
-            this%divu_y(:,this%cfg%imin  ,:,:)=0.0_WP
-            this%divu_z(:,this%cfg%imin  ,:,:)=0.0_WP
-         end if
-         if (this%cfg%iproc.eq.this%cfg%npx) then
-            this%divu_x(:,this%cfg%imax+1,:,:)=0.0_WP
-            this%divu_y(:,this%cfg%imax+1,:,:)=0.0_WP
-            this%divu_z(:,this%cfg%imax+1,:,:)=0.0_WP
-         end if
-      end if
-      if (.not.this%cfg%yper) then
-         if (this%cfg%jproc.eq.           1) then
-            this%divv_x(:,:,this%cfg%jmin  ,:)=0.0_WP
-            this%divv_y(:,:,this%cfg%jmin  ,:)=0.0_WP
-            this%divv_z(:,:,this%cfg%jmin  ,:)=0.0_WP
-         end if
-         if (this%cfg%jproc.eq.this%cfg%npy) then
-            this%divv_x(:,:,this%cfg%jmax+1,:)=0.0_WP
-            this%divv_y(:,:,this%cfg%jmax+1,:)=0.0_WP
-            this%divv_z(:,:,this%cfg%jmax+1,:)=0.0_WP
-         end if
-      end if
-      if (.not.this%cfg%zper) then
-         if (this%cfg%kproc.eq.           1) then
-            this%divw_x(:,:,:,this%cfg%kmin  )=0.0_WP
-            this%divw_y(:,:,:,this%cfg%kmin  )=0.0_WP
-            this%divw_z(:,:,:,this%cfg%kmin  )=0.0_WP
-         end if
-         if (this%cfg%kproc.eq.this%cfg%npz) then
-            this%divw_x(:,:,:,this%cfg%kmax+1)=0.0_WP
-            this%divw_y(:,:,:,this%cfg%kmax+1)=0.0_WP
-            this%divw_z(:,:,:,this%cfg%kmax+1)=0.0_WP
-         end if
-      end if
+      ! Loop over the domain and apply masked conditions to W metrics
+      do k=this%cfg%kmino_+1,this%cfg%kmaxo_
+         do j=this%cfg%jmino_  ,this%cfg%jmaxo_
+            do i=this%cfg%imino_  ,this%cfg%imaxo_
+               if (this%wmask(i,j,k).gt.0) then
+                  this%divw_x(:,i,j,k)=0.0_WP
+                  this%divw_y(:,i,j,k)=0.0_WP
+                  this%divw_z(:,i,j,k)=0.0_WP
+               end if
+            end do
+         end do
+      end do
       
-   end subroutine init_metrics
+      ! Adjust gradient coefficients to cell edge in x
+      do k=this%cfg%kmino_  ,this%cfg%kmaxo_
+         do j=this%cfg%jmino_  ,this%cfg%jmaxo_
+            do i=this%cfg%imino_+1,this%cfg%imaxo_
+               ! FD gradient in x of V from [xm,y ,zm]
+               if (maxval(this%vmask(i-1:i,j,k)).gt.0) then
+                  delta=0.0_WP
+                  if (this%vmask(i  ,j,k).eq.0) delta=delta+(this%cfg%xm(i)-this%cfg%x (i  ))
+                  if (this%vmask(i-1,j,k).eq.0) delta=delta+(this%cfg%x (i)-this%cfg%xm(i-1))
+                  if (delta.gt.0.0_WP) then
+                     this%grdv_x(:,i,j,k)=[-1.0_WP,+1.0_WP]/delta
+                  else
+                     this%grdv_x(:,i,j,k)=0.0_WP
+                  end if
+               end if
+               ! FD gradient in x of W from [xm,ym,z ]
+               if (maxval(this%wmask(i-1:i,j,k)).gt.0) then
+                  delta=0.0_WP
+                  if (this%wmask(i  ,j,k).eq.0) delta=delta+(this%cfg%xm(i)-this%cfg%x (i  ))
+                  if (this%wmask(i-1,j,k).eq.0) delta=delta+(this%cfg%x (i)-this%cfg%xm(i-1))
+                  if (delta.gt.0.0_WP) then
+                     this%grdw_x(:,i,j,k)=[-1.0_WP,+1.0_WP]/delta
+                  else
+                     this%grdw_x(:,i,j,k)=0.0_WP
+                  end if
+               end if
+            end do
+         end do
+      end do
+      
+      ! Adjust gradient coefficients to cell edge in y
+      do k=this%cfg%kmino_  ,this%cfg%kmaxo_
+         do j=this%cfg%jmino_+1,this%cfg%jmaxo_
+            do i=this%cfg%imino_  ,this%cfg%imaxo_
+               ! FD gradient in y of U from [x ,ym,zm]
+               if (maxval(this%umask(i,j-1:j,k)).gt.0) then
+                  delta=0.0_WP
+                  if (this%umask(i,j  ,k).eq.0) delta=delta+(this%cfg%ym(j)-this%cfg%y (j  ))
+                  if (this%umask(i,j-1,k).eq.0) delta=delta+(this%cfg%y (j)-this%cfg%ym(j-1))
+                  if (delta.gt.0.0_WP) then
+                     this%grdu_y(:,i,j,k)=[-1.0_WP,+1.0_WP]/delta
+                  else
+                     this%grdu_y(:,i,j,k)=0.0_WP
+                  end if
+               end if
+               ! FD gradient in y of W from [xm,ym,z ]
+               if (maxval(this%wmask(i,j-1:j,k)).gt.0) then
+                  delta=0.0_WP
+                  if (this%wmask(i,j  ,k).eq.0) delta=delta+(this%cfg%ym(j)-this%cfg%y (j  ))
+                  if (this%wmask(i,j-1,k).eq.0) delta=delta+(this%cfg%y (j)-this%cfg%ym(j-1))
+                  if (delta.gt.0.0_WP) then
+                     this%grdw_y(:,i,j,k)=[-1.0_WP,+1.0_WP]/delta
+                  else
+                     this%grdw_y(:,i,j,k)=0.0_WP
+                  end if
+               end if
+            end do
+         end do
+      end do
+      
+      ! Adjust gradient coefficients to cell edge in z
+      do k=this%cfg%kmino_+1,this%cfg%kmaxo_
+         do j=this%cfg%jmino_  ,this%cfg%jmaxo_
+            do i=this%cfg%imino_  ,this%cfg%imaxo_
+               ! FD gradient in z of U from [x ,ym,zm]
+               if (maxval(this%umask(i,j,k-1:k)).gt.0) then
+                  delta=0.0_WP
+                  if (this%umask(i,j,k  ).eq.0) delta=delta+(this%cfg%zm(k)-this%cfg%z (k  ))
+                  if (this%umask(i,j,k-1).eq.0) delta=delta+(this%cfg%z (k)-this%cfg%zm(k-1))
+                  if (delta.gt.0.0_WP) then
+                     this%grdu_z(:,i,j,k)=[-1.0_WP,+1.0_WP]/delta
+                  else
+                     this%grdu_z(:,i,j,k)=0.0_WP
+                  end if
+               end if
+               ! FD gradient in z of V from [xm,y ,zm]
+               if (maxval(this%vmask(i,j,k-1:k)).gt.0) then
+                  delta=0.0_WP
+                  if (this%vmask(i,j,k  ).eq.0) delta=delta+(this%cfg%zm(k)-this%cfg%z (k  ))
+                  if (this%vmask(i,j,k-1).eq.0) delta=delta+(this%cfg%z (k)-this%cfg%zm(k-1))
+                  if (delta.gt.0.0_WP) then
+                     this%grdv_z(:,i,j,k)=[-1.0_WP,+1.0_WP]/delta
+                  else
+                     this%grdv_z(:,i,j,k)=0.0_WP
+                  end if
+               end if
+            end do
+         end do
+      end do
+      
+      ! Adjust interpolation coefficients to cell edge in x
+      do k=this%cfg%kmino_  ,this%cfg%kmaxo_
+         do j=this%cfg%jmino_  ,this%cfg%jmaxo_
+            do i=this%cfg%imino_+1,this%cfg%imaxo_
+               ! Linear interpolation in x of V from [xm,y ,zm]
+               if (this%vmask(i,j,k).eq.0.and.this%vmask(i-1,j,k).gt.0) this%itpv_x(:,i,j,k)=[1.0_WP,0.0_WP]
+               if (this%vmask(i,j,k).gt.0.and.this%vmask(i-1,j,k).eq.0) this%itpv_x(:,i,j,k)=[0.0_WP,1.0_WP]
+               ! Linear interpolation in x of W from [xm,ym,z ]
+               if (this%wmask(i,j,k).eq.0.and.this%wmask(i-1,j,k).gt.0) this%itpw_x(:,i,j,k)=[1.0_WP,0.0_WP]
+               if (this%wmask(i,j,k).gt.0.and.this%wmask(i-1,j,k).eq.0) this%itpw_x(:,i,j,k)=[0.0_WP,1.0_WP]
+            end do
+         end do
+      end do
+      
+      ! Adjust interpolation coefficients to cell edge in y
+      do k=this%cfg%kmino_  ,this%cfg%kmaxo_
+         do j=this%cfg%jmino_+1,this%cfg%jmaxo_
+            do i=this%cfg%imino_  ,this%cfg%imaxo_
+               ! Linear interpolation in y of U from [x ,ym,zm]
+               if (this%umask(i,j,k).eq.0.and.this%umask(i,j-1,k).gt.0) this%itpu_y(:,i,j,k)=[1.0_WP,0.0_WP]
+               if (this%umask(i,j,k).gt.0.and.this%umask(i,j-1,k).eq.0) this%itpu_y(:,i,j,k)=[0.0_WP,1.0_WP]
+               ! Linear interpolation in y of W from [xm,ym,z ]
+               if (this%wmask(i,j,k).eq.0.and.this%wmask(i,j-1,k).gt.0) this%itpw_y(:,i,j,k)=[1.0_WP,0.0_WP]
+               if (this%wmask(i,j,k).gt.0.and.this%wmask(i,j-1,k).eq.0) this%itpw_y(:,i,j,k)=[0.0_WP,1.0_WP]
+            end do
+         end do
+      end do
+      
+      ! Adjust interpolation coefficients to cell edge in z
+      do k=this%cfg%kmino_+1,this%cfg%kmaxo_
+         do j=this%cfg%jmino_  ,this%cfg%jmaxo_
+            do i=this%cfg%imino_  ,this%cfg%imaxo_
+               ! Linear interpolation in z of U from [x ,ym,zm]
+               if (this%umask(i,j,k).eq.0.and.this%umask(i,j,k-1).gt.0) this%itpu_z(:,i,j,k)=[1.0_WP,0.0_WP]
+               if (this%umask(i,j,k).gt.0.and.this%umask(i,j,k-1).eq.0) this%itpu_z(:,i,j,k)=[0.0_WP,1.0_WP]
+               !  Linear interpolation in z of V from [xm,y ,zm]
+               if (this%vmask(i,j,k).eq.0.and.this%vmask(i,j,k-1).gt.0) this%itpv_z(:,i,j,k)=[1.0_WP,0.0_WP]
+               if (this%vmask(i,j,k).gt.0.and.this%vmask(i,j,k-1).eq.0) this%itpv_z(:,i,j,k)=[0.0_WP,1.0_WP]
+            end do
+         end do
+      end do
+      
+   end subroutine adjust_metrics
+   
+   
+   !> Finish setting up the flow solver now that bconds have been defined
+   subroutine setup(this,pressure_ils,implicit_ils)
+      implicit none
+      class(incomp), intent(inout) :: this
+      integer, intent(in) :: pressure_ils
+      integer, intent(in) :: implicit_ils
+      integer :: i,j,k
+      
+      ! Adjust metrics based on bcflag array
+      call this%adjust_metrics()
+      
+      ! Set 7-pt stencil map for the pressure solver
+      this%psolv%stc(1,:)=[ 0, 0, 0]
+      this%psolv%stc(2,:)=[+1, 0, 0]
+      this%psolv%stc(3,:)=[-1, 0, 0]
+      this%psolv%stc(4,:)=[ 0,+1, 0]
+      this%psolv%stc(5,:)=[ 0,-1, 0]
+      this%psolv%stc(6,:)=[ 0, 0,+1]
+      this%psolv%stc(7,:)=[ 0, 0,-1]
+      
+      ! Setup the scaled Laplacian operator from incomp metrics: lap(*)=-vol*div(grad(*))
+      do k=this%cfg%kmin_,this%cfg%kmax_
+         do j=this%cfg%jmin_,this%cfg%jmax_
+            do i=this%cfg%imin_,this%cfg%imax_
+               ! Set Laplacian
+               this%psolv%opr(1,i,j,k)=this%divp_x(1,i,j,k)*this%divu_x(-1,i+1,j,k)+&
+               &                       this%divp_x(0,i,j,k)*this%divu_x( 0,i  ,j,k)+&
+               &                       this%divp_y(1,i,j,k)*this%divv_y(-1,i,j+1,k)+&
+               &                       this%divp_y(0,i,j,k)*this%divv_y( 0,i,j  ,k)+&
+               &                       this%divp_z(1,i,j,k)*this%divw_z(-1,i,j,k+1)+&
+               &                       this%divp_z(0,i,j,k)*this%divw_z( 0,i,j,k  )
+               this%psolv%opr(2,i,j,k)=this%divp_x(1,i,j,k)*this%divu_x( 0,i+1,j,k)
+               this%psolv%opr(3,i,j,k)=this%divp_x(0,i,j,k)*this%divu_x(-1,i  ,j,k)
+               this%psolv%opr(4,i,j,k)=this%divp_y(1,i,j,k)*this%divv_y( 0,i,j+1,k)
+               this%psolv%opr(5,i,j,k)=this%divp_y(0,i,j,k)*this%divv_y(-1,i,j  ,k)
+               this%psolv%opr(6,i,j,k)=this%divp_z(1,i,j,k)*this%divw_z( 0,i,j,k+1)
+               this%psolv%opr(7,i,j,k)=this%divp_z(0,i,j,k)*this%divw_z(-1,i,j,k  )
+               ! Scale it by the cell volume
+               this%psolv%opr(:,i,j,k)=-this%psolv%opr(:,i,j,k)*this%cfg%vol(i,j,k)
+            end do
+         end do
+      end do
+      
+      ! Initialize the pressure Poisson solver
+      call this%psolv%init_solver(pressure_ils)
+      call this%psolv%update_solver()
+      
+      ! Set 7-pt stencil map for the velocity solver
+      this%implicit%stc(1,:)=[ 0, 0, 0]
+      this%implicit%stc(2,:)=[+1, 0, 0]
+      this%implicit%stc(3,:)=[-1, 0, 0]
+      this%implicit%stc(4,:)=[ 0,+1, 0]
+      this%implicit%stc(5,:)=[ 0,-1, 0]
+      this%implicit%stc(6,:)=[ 0, 0,+1]
+      this%implicit%stc(7,:)=[ 0, 0,-1]
+      
+      ! Set the diagonal to 1 to make sure all cells participate in solver
+      this%implicit%opr(1,:,:,:)=1.0_WP
+      
+      ! Initialize the implicit velocity solver
+      call this%implicit%init_solver(implicit_ils)
+      
+   end subroutine setup
    
    
    !> Add a boundary condition
@@ -488,6 +645,7 @@ contains
          end function locator
       end interface
       type(bcond), pointer :: new_bc
+      integer :: i,j,k,n
       
       ! Prepare new bcond
       allocate(new_bc)
@@ -536,6 +694,38 @@ contains
       ! Increment bcond counter
       this%nbc=this%nbc+1
       
+      ! Now adjust the metrics accordingly
+      select case (new_bc%type)
+      case (dirichlet)
+         ! Implement based on bcond direction
+         select case (new_bc%dir)
+         case (1) ! +x
+            do n=1,new_bc%itr%n_
+               i=new_bc%itr%map(1,n); j=new_bc%itr%map(2,n); k=new_bc%itr%map(3,n)
+               !bcflag(i+1,j,k)=dirichlet
+            end do
+         case (2) ! -x
+            
+         case (3) ! +y
+            
+         case (4) ! -y
+            
+         case (5) ! +z
+            
+         case (6) ! -z
+            
+         end select
+         
+      case (neumann)
+         ! Not yet implemented
+      case (clipped_neumann)
+         ! Not yet implemented
+      case (convective)
+         ! Not yet implemented
+      case default
+         call die('[incomp apply_bcond] Unknown bcond type')
+      end select
+   
    end subroutine add_bcond
    
    
@@ -553,17 +743,6 @@ contains
    end subroutine get_bcond
    
    
-   !> Enforce boundary condition on the metrics
-   subroutine init_bcond(this)
-      implicit none
-      class(incomp), intent(inout) :: this
-      
-      ! If the boundary condition is not at the domain frontier, we could still need to adjust metrics
-      ! We wait till we have such a case to look into how the metrics should be modified
-      
-   end subroutine init_bcond
-   
-   
    !> Enforce boundary condition
    subroutine apply_bcond(this,t,dt)
       use messager, only: die
@@ -576,20 +755,20 @@ contains
       type(bcond), pointer :: my_bc
       real(WP) :: conv_vel,my_conv_vel
       
-      ! First enfore zero velocity at walls
-      do k=this%cfg%kmin_,this%cfg%kmax_
-         do j=this%cfg%jmin_,this%cfg%jmax_
-            do i=this%cfg%imin_,this%cfg%imax_
-               if (minval(this%cfg%VF(i-1:i,j,k)).lt.10.0_WP*epsilon(1.0_WP)) this%U(i,j,k)=0.0_WP
-               if (minval(this%cfg%VF(i,j-1:j,k)).lt.10.0_WP*epsilon(1.0_WP)) this%V(i,j,k)=0.0_WP
-               if (minval(this%cfg%VF(i,j,k-1:k)).lt.10.0_WP*epsilon(1.0_WP)) this%W(i,j,k)=0.0_WP
-            end do
-         end do
-      end do
-      ! Sync fields
-      call this%cfg%sync(this%U)
-      call this%cfg%sync(this%V)
-      call this%cfg%sync(this%W)
+      ! ! First enfore zero velocity at walls
+      ! do k=this%cfg%kmin_,this%cfg%kmax_
+      !    do j=this%cfg%jmin_,this%cfg%jmax_
+      !       do i=this%cfg%imin_,this%cfg%imax_
+      !          if (minval(this%cfg%VF(i-1:i,j,k)).lt.10.0_WP*epsilon(1.0_WP)) this%U(i,j,k)=0.0_WP
+      !          if (minval(this%cfg%VF(i,j-1:j,k)).lt.10.0_WP*epsilon(1.0_WP)) this%V(i,j,k)=0.0_WP
+      !          if (minval(this%cfg%VF(i,j,k-1:k)).lt.10.0_WP*epsilon(1.0_WP)) this%W(i,j,k)=0.0_WP
+      !       end do
+      !    end do
+      ! end do
+      ! ! Sync fields
+      ! call this%cfg%sync(this%U)
+      ! call this%cfg%sync(this%V)
+      ! call this%cfg%sync(this%W)
       
       ! Traverse bcond list
       my_bc=>this%first_bc
@@ -1169,6 +1348,8 @@ contains
       mfr_error=sum(this%mfr)
       vel_correction=-mfr_error/(this%rho*this%correctable_area)
       
+      print*,'before correction= ',this%mfr
+      
       ! Traverse bcond list and correct bcond MFR
       my_bc=>this%first_bc
       do while (associated(my_bc))
@@ -1216,6 +1397,8 @@ contains
          my_bc=>my_bc%next
          
       end do
+      
+      call this%get_mfr(); print*,'after correction= ',this%mfr
       
    end subroutine correct_mfr
    

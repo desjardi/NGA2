@@ -56,8 +56,8 @@ module pgrid_class
       procedure :: allprint=>pgrid_allprint                                     !< Output grid to screen - blocking and requires all procs...
       procedure :: print   =>pgrid_print                                        !< Output grid to screen
       procedure :: log     =>pgrid_log                                          !< Output grid info to log
-      generic :: sync=>pgrid_rsync,pgrid_rsync_no,pgrid_isync                    !< Commmunicate inner and periodic boundaries - generic
-      procedure, private :: pgrid_isync                                         !< Commmunicate inner and periodic boundaries for integer
+      generic :: sync=>pgrid_rsync,pgrid_rsync_no,pgrid_isync,pgrid_isync_no    !< Commmunicate inner and periodic boundaries - generic
+      procedure, private :: pgrid_isync,pgrid_isync_no                          !< Commmunicate inner and periodic boundaries for integer
       procedure, private :: pgrid_rsync,pgrid_rsync_no                          !< Commmunicate inner and periodic boundaries for real(WP)
    end type pgrid
    
@@ -642,5 +642,100 @@ contains
       
    end subroutine pgrid_rsync_no
    
+   
+   !> Synchronization of overlap cells for integer
+   !> This version is capable of handling any overlap size
+   subroutine pgrid_isync_no(this,A,no)
+      use mpi_f08
+      implicit none
+      class(pgrid), intent(in) :: this
+      integer, intent(in) :: no
+      integer, dimension(this%imin_-no:,this%jmin_-no:,this%kmin_-no:), intent(inout) :: A !< Needs to be (imin_-no:imax_+no,jmin_-no:jmax_+no,kmin_-no:kmax_+no)
+      type(MPI_Status) :: status
+      integer :: isrc,idst,ierr,isize,i,j,k
+      integer, dimension(:,:,:), allocatable :: buf1,buf2
+      
+      ! Work in x - is it 2D or 3D?
+      if (this%nx.eq.1) then
+         ! Direct copy if 2D
+         do i=this%imax_+1,this%imax_+no
+            A(i,:,:)=A(this%imin_,:,:)
+         end do
+         do i=this%imin_-no,this%imin_-1
+            A(i,:,:)=A(this%imin_,:,:)
+         end do
+      else
+         isize=(no)*(this%ny_+2*no)*(this%nz_+2*no)
+         allocate(buf1(no,this%ny_+2*no,this%nz_+2*no))
+         allocate(buf2(no,this%ny_+2*no,this%nz_+2*no))
+         ! Send left buffer to left neighbour
+         call MPI_CART_SHIFT(this%comm,0,-1,isrc,idst,ierr)
+         buf1=A(this%imin_:this%imin_+no-1,:,:)
+         call MPI_SENDRECV(buf1,isize,MPI_INTEGER,idst,0,buf2,isize,MPI_INTEGER,isrc,0,this%comm,status,ierr)
+         if (isrc.ne.MPI_PROC_NULL) A(this%imax_+1:this%imax_+no,:,:)=buf2
+         ! Send right buffer to right neighbour
+         call MPI_CART_SHIFT(this%comm,0,+1,isrc,idst,ierr)
+         buf1=A(this%imax_-no+1:this%imax_,:,:)
+         call MPI_SENDRECV(buf1,isize,MPI_INTEGER,idst,0,buf2,isize,MPI_INTEGER,isrc,0,this%comm,status,ierr)
+         if (isrc.ne.MPI_PROC_NULL) A(this%imin_-no:this%imin_-1,:,:)=buf2
+         ! Deallocate
+         deallocate(buf1,buf2)
+      end if
+      
+      ! Work in y - is it 2D or 3D?
+      if (this%ny.eq.1) then
+         ! Direct copy if 2D
+         do j=this%jmax_+1,this%jmax_+no
+            A(:,j,:)=A(:,this%jmin_,:)
+         end do
+         do j=this%jmin_-no,this%jmin_-1
+            A(:,j,:)=A(:,this%jmin_,:)
+         end do
+      else
+         isize=(this%nx_+2*no)*(no)*(this%nz_+2*no)
+         allocate(buf1(this%nx_+2*no,no,this%nz_+2*no))
+         allocate(buf2(this%nx_+2*no,no,this%nz_+2*no))
+         ! Send left buffer to left neighbour
+         call MPI_CART_SHIFT(this%comm,1,-1,isrc,idst,ierr)
+         buf1=A(:,this%jmin_:this%jmin_+no-1,:)
+         call MPI_SENDRECV(buf1,isize,MPI_INTEGER,idst,0,buf2,isize,MPI_INTEGER,isrc,0,this%comm,status,ierr)
+         if (isrc.ne.MPI_PROC_NULL) A(:,this%jmax_+1:this%jmax_+no,:)=buf2
+         ! Send right buffer to right neighbour
+         call MPI_CART_SHIFT(this%comm,1,+1,isrc,idst,ierr)
+         buf1=A(:,this%jmax_-no+1:this%jmax_,:)
+         call MPI_SENDRECV(buf1,isize,MPI_INTEGER,idst,0,buf2,isize,MPI_INTEGER,isrc,0,this%comm,status,ierr)
+         if (isrc.ne.MPI_PROC_NULL) A(:,this%jmin_-no:this%jmin_-1,:)=buf2
+         ! Deallocate
+         deallocate(buf1,buf2)
+      end if
+      
+      ! Work in z - is it 2D or 3D?
+      if (this%nz.eq.1) then
+         ! Direct copy if 2D
+         do k=this%kmax_+1,this%kmax_+no
+            A(:,:,k)=A(:,:,this%kmin_)
+         end do
+         do j=this%kmin_-no,this%kmin_-1
+            A(:,:,k)=A(:,:,this%kmin_)
+         end do
+      else
+         isize=(this%nx_+2*no)*(this%ny_+2*no)*(no)
+         allocate(buf1(this%nx_+2*no,this%ny_+2*no,no))
+         allocate(buf2(this%nx_+2*no,this%ny_+2*no,no))
+         ! Send left buffer to left neighbour
+         call MPI_CART_SHIFT(this%comm,2,-1,isrc,idst,ierr)
+         buf1=A(:,:,this%kmin_:this%kmin_+no-1)
+         call MPI_SENDRECV(buf1,isize,MPI_INTEGER,idst,0,buf2,isize,MPI_INTEGER,isrc,0,this%comm,status,ierr)
+         if (isrc.ne.MPI_PROC_NULL) A(:,:,this%kmax_+1:this%kmax_+no)=buf2
+         ! Send right buffer to right neighbour
+         call MPI_CART_SHIFT(this%comm,2,+1,isrc,idst,ierr)
+         buf1=A(:,:,this%kmax_-no+1:this%kmax_)
+         call MPI_SENDRECV(buf1,isize,MPI_INTEGER,idst,0,buf2,isize,MPI_INTEGER,isrc,0,this%comm,status,ierr)
+         if (isrc.ne.MPI_PROC_NULL) A(:,:,this%kmin_-no:this%kmin_-1)=buf2
+         ! Deallocate
+         deallocate(buf1,buf2)
+      end if
+      
+   end subroutine pgrid_isync_no
    
 end module pgrid_class
