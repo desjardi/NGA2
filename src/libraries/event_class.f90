@@ -31,7 +31,7 @@ module event_class
 contains
    
    
-   !> Constructor for timetracker object
+   !> Constructor for event object
    function constructor(time,name) result(self)
       implicit none
       type(event) :: self
