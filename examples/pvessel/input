@@ -2,7 +2,7 @@
 Partition :	4 1 1
 
 # Mesh definition
-Lx :	2
+Lx :	2.6
 Ly :	1
 Lz :	1
 nx :	100
@@ -11,11 +11,11 @@ nz :	50
 
 # Wall geometry
 Vessel inner radius :	0.4
-Vessel length :		1.8
+Vessel length :		2.5
 
 # Fluid properties
 Density :		1
-Dynamic viscosity :	0.01
+Dynamic viscosity :	0.001
 
 # Time integration
 Max timestep size :	1e-2

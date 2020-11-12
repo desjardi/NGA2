@@ -77,9 +77,9 @@ contains
       integer, intent(in) :: i,j,k
       logical :: isIn
       isIn=.false.
-      if (cfg%x(i+1).eq. 0.0_WP.and.&
-      &   cfg%ym(j) .gt.-0.08_WP.and.cfg%ym(j).lt.0.08_WP.and.&
-      &   cfg%zm(k) .gt.-0.08_WP.and.cfg%zm(k).lt.0.08_WP) isIn=.true.
+      if (pg%x(i+1).eq. 0.0_WP.and.&
+      &   pg%ym(j) .gt.-0.08_WP.and.pg%ym(j).lt.0.08_WP.and.&
+      &   pg%zm(k) .gt.-0.08_WP.and.pg%zm(k).lt.0.08_WP) isIn=.true.
    end function left_of_cube
    
    
@@ -90,9 +90,9 @@ contains
       integer, intent(in) :: i,j,k
       logical :: isIn
       isIn=.false.
-      if (abs(cfg%x(i)-0.2_WP).lt.10.0_WP*epsilon(1.0_WP) .and.&
-      &   cfg%ym(j).gt.-0.08_WP.and.cfg%ym(j)  .lt.0.08_WP.and.&
-      &   cfg%zm(k).gt.-0.08_WP.and.cfg%zm(k)  .lt.0.08_WP) isIn=.true.
+      if (abs(pg%x(i)-0.2_WP).lt.10.0_WP*epsilon(1.0_WP) .and.&
+      &   pg%ym(j).gt.-0.08_WP.and.pg%ym(j)  .lt.0.08_WP.and.&
+      &   pg%zm(k).gt.-0.08_WP.and.pg%zm(k)  .lt.0.08_WP) isIn=.true.
    end function right_of_cube
    
    

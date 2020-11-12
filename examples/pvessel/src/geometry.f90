@@ -82,6 +82,15 @@ contains
                end do
             end do
          end do
+         ! Add a pipe-like wall at the bottom
+         do k=cfg%kmino_,cfg%kmaxo_
+            do j=cfg%jmino_,cfg%jmaxo_
+               do i=cfg%imino_,cfg%imaxo_
+                  r=sqrt((cfg%ym(j)+0.34_WP)**2+(cfg%zm(k))**2)
+                  if (cfg%xm(i).gt.-0.75_WP.and.cfg%xm(i).lt.+0.75_WP.and.r.lt.0.02_WP) cfg%VF(i,j,k)=0.0_WP
+               end do
+            end do
+         end do
       end block create_walls
       
       
