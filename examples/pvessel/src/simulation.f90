@@ -2,8 +2,7 @@
 module simulation
    use precision,         only: WP
    use geometry,          only: cfg
-   use incomp_class,      only: incomp,bcond
-   use incomp_class,      only: dirichlet,convective,neumann,clipped_neumann
+   use incomp_class,      only: incomp
    use timetracker_class, only: timetracker
    use ensight_class,     only: ensight
    use event_class,       only: event
@@ -52,7 +51,8 @@ contains
       
       ! Create an incompressible flow solver with bconds
       create_solver: block
-         use ils_class, only: rbgs,amg,pcg_amg,pcg_parasail,gmres,gmres_pilut,smg,pfmg
+         use ils_class,    only: rbgs,amg,pcg_amg,pcg_parasail,gmres,gmres_pilut,smg,pfmg
+         use incomp_class, only: dirichlet,convective,neumann,clipped_neumann
          ! Create flow solver
          fs=incomp(cfg=cfg,name='Incompressible NS')
          ! Set the flow properties
@@ -94,6 +94,7 @@ contains
       
       ! Initialize our velocity field
       initialize_velocity: block
+         use incomp_class, only: bcond
          type(bcond), pointer :: inflow
          integer :: n,i,j,k
          ! Zero initial field

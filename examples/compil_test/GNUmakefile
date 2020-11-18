@@ -11,7 +11,7 @@ COMP      = gnu
 EXEBASE   = nga
 
 # Directories that contain user-defined code
-Udirs   := 
+Udirs   :=
 
 # Include user-defined sources
 Upack   += $(foreach dir, $(Udirs), $(wildcard $(dir)/Make.package))
@@ -28,7 +28,7 @@ HYPRE_DIR = /Users/desjardi/Builds/hypre
 include $(NGA_HOME)/tools/GNUMake/Make.defs
 
 # Include NGA base code
-Bdirs   := core incomp data solver config grid libraries
+Bdirs   := core constant_density data solver config grid libraries
 Bpack   += $(foreach dir, $(Bdirs), $(NGA_HOME)/src/$(dir)/Make.package)
 include $(Bpack)
 

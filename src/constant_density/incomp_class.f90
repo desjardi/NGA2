@@ -135,7 +135,7 @@ contains
       character(len=*), optional :: name
       integer :: i,j,k
       
-      ! Set the name for the iterator
+      ! Set the name for the solver
       if (present(name)) self%name=trim(adjustl(name))
       
       ! Point to pgrid object
@@ -221,7 +221,7 @@ contains
    end function constructor
       
    
-   !> Metric initialization with now awareness of walls nor bcond
+   !> Metric initialization with no awareness of walls nor bcond
    subroutine init_metrics(this)
       implicit none
       class(incomp), intent(inout) :: this
