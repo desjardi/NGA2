@@ -79,9 +79,9 @@ module scalar_class
    contains
       procedure :: print=>scalar_print                    !< Output solver to the screen
       procedure :: setup                                  !< Finish configuring the scalar solver
-      !procedure :: add_bcond                              !< Add a boundary condition
-      !procedure :: get_bcond                              !< Get a boundary condition
-      !procedure :: apply_bcond                            !< Apply all boundary conditions
+      procedure :: add_bcond                              !< Add a boundary condition
+      procedure :: get_bcond                              !< Get a boundary condition
+      procedure :: apply_bcond                            !< Apply all boundary conditions
       procedure :: init_metrics                           !< Initialize metrics
       procedure :: adjust_metrics                         !< Adjust metrics
       procedure :: get_drhoSCdt                           !< Calculate drhoSC/dt
@@ -488,19 +488,18 @@ contains
    
    
    !> Solve for implicit scalar residual
-   subroutine solve_implicit(this,dt,resSC,rho,rhoU,rhoV,rhoW)
+   subroutine solve_implicit(this,dt,resSC,rhoU,rhoV,rhoW)
       implicit none
       class(scalar), intent(inout) :: this
       real(WP), intent(in) :: dt
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: resSC !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
-      real(WP), intent(in) :: rho
-      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in) :: rhoU !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
-      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in) :: rhoV !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
-      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in) :: rhoW !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in)    :: rhoU  !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in)    :: rhoV  !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in)    :: rhoW  !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       integer :: i,j,k,sti,std,st
       
       ! Prepare convective operator
-      this%implicit%opr(1,:,:,:)=rho; this%implicit%opr(2:,:,:,:)=0.0_WP
+      this%implicit%opr(1,:,:,:)=this%rho; this%implicit%opr(2:,:,:,:)=0.0_WP
       do k=this%cfg%kmin_,this%cfg%kmax_
          do j=this%cfg%jmin_,this%cfg%jmax_
             do i=this%cfg%imin_,this%cfg%imax_

@@ -3,6 +3,7 @@ module simulation
    use precision,         only: WP
    use geometry,          only: cfg
    use incomp_class,      only: incomp
+   use scalar_class,      only: scalar
    use timetracker_class, only: timetracker
    use ensight_class,     only: ensight
    use event_class,       only: event
@@ -12,6 +13,7 @@ module simulation
    
    !> Single incompressible flow solver and corresponding time tracker
    type(incomp),      public :: fs
+   type(scalar),      public :: sc
    type(timetracker), public :: time
    
    !> Ensight postprocessing
@@ -24,7 +26,7 @@ module simulation
    public :: simulation_init,simulation_run,simulation_final
    
    !> Private work arrays
-   real(WP), dimension(:,:,:), allocatable :: resU,resV,resW
+   real(WP), dimension(:,:,:), allocatable :: resU,resV,resW,resSC
    real(WP), dimension(:,:,:), allocatable :: Ui,Vi,Wi
    
 contains
@@ -39,7 +41,7 @@ contains
       real(WP) :: r
       isIn=.false.
       r=sqrt((pg%ym(j)+0.34_WP)**2+(pg%zm(k))**2)
-      if (abs(pg%x(i+1)+0.75_WP).lt.0.01_WP.and.r.lt.0.02_WP) isIn=.true.
+      if (abs(pg%x(i)+0.75_WP).lt.0.01_WP.and.r.lt.0.02_WP) isIn=.true.
    end function left_of_tube
    
    
@@ -59,7 +61,7 @@ contains
          call param_read('Density',fs%rho)
          call param_read('Dynamic viscosity',fs%visc)
          ! Define boundary conditions
-         call fs%add_bcond(name='inflow',type=dirichlet,dir='+x',canCorrect=.false.,locator= left_of_tube)
+         call fs%add_bcond(name='inflow',type=dirichlet,dir='-x',canCorrect=.false.,locator= left_of_tube)
          ! Configure pressure solver
          call param_read('Pressure iteration',fs%psolv%maxit)
          call param_read('Pressure tolerance',fs%psolv%rcvg)
@@ -71,14 +73,34 @@ contains
       end block create_solver
       
       
+      ! Create a scalar solver
+      create_scalar: block
+         use ils_class,    only: pfmg
+         use scalar_class, only: dirichlet,neumann,quick
+         ! Create scalar solver
+         sc=scalar(cfg=cfg,scheme=quick,name='Temperature')
+         ! Set the equation parameters based on flow solver
+         sc%rho=fs%rho; sc%diff=fs%visc
+         ! Define boundary conditions
+         call sc%add_bcond(name='scalar inflow',type=dirichlet,dir='+x',locator=left_of_tube)
+         ! Configure implicit scalar solver
+         sc%implicit%maxit=fs%implicit%maxit; sc%implicit%rcvg=fs%implicit%rcvg
+         ! Setup the solver
+         call sc%setup(implicit_ils=pfmg)
+      end block create_scalar
+      
+      
       ! Allocate work arrays
       allocate_work_arrays: block
+         ! Flow solver
          allocate(resU(fs%cfg%imino_:fs%cfg%imaxo_,fs%cfg%jmino_:fs%cfg%jmaxo_,fs%cfg%kmino_:fs%cfg%kmaxo_))
          allocate(resV(fs%cfg%imino_:fs%cfg%imaxo_,fs%cfg%jmino_:fs%cfg%jmaxo_,fs%cfg%kmino_:fs%cfg%kmaxo_))
          allocate(resW(fs%cfg%imino_:fs%cfg%imaxo_,fs%cfg%jmino_:fs%cfg%jmaxo_,fs%cfg%kmino_:fs%cfg%kmaxo_))
          allocate(Ui  (fs%cfg%imino_:fs%cfg%imaxo_,fs%cfg%jmino_:fs%cfg%jmaxo_,fs%cfg%kmino_:fs%cfg%kmaxo_))
          allocate(Vi  (fs%cfg%imino_:fs%cfg%imaxo_,fs%cfg%jmino_:fs%cfg%jmaxo_,fs%cfg%kmino_:fs%cfg%kmaxo_))
          allocate(Wi  (fs%cfg%imino_:fs%cfg%imaxo_,fs%cfg%jmino_:fs%cfg%jmaxo_,fs%cfg%kmino_:fs%cfg%kmaxo_))
+         ! Scalar solver
+         allocate(resSC(sc%cfg%imino_:sc%cfg%imaxo_,sc%cfg%jmino_:sc%cfg%jmaxo_,sc%cfg%kmino_:sc%cfg%kmaxo_))
       end block allocate_work_arrays
       
       
@@ -103,7 +125,7 @@ contains
          call fs%get_bcond('inflow',inflow)
          do n=1,inflow%itr%no_
             i=inflow%itr%map(1,n); j=inflow%itr%map(2,n); k=inflow%itr%map(3,n)
-            fs%U(i+1,j,k)=-1.0_WP
+            fs%U(i,j,k)=-1.0_WP
          end do
          ! Apply all other boundary conditions
          call fs%apply_bcond(time%t,time%dt)
@@ -112,6 +134,24 @@ contains
          ! Compute MFR through all boundary conditions
          call fs%get_mfr()
       end block initialize_velocity
+      
+      
+      ! Initialize our temprature field
+      initialize_scalar: block
+         use scalar_class, only: bcond
+         type(bcond), pointer :: inflow
+         integer :: n,i,j,k
+         ! Zero initial field
+         sc%SC=0.0_WP
+         ! Apply Dirichlet at the tube
+         call sc%get_bcond('inflow',inflow)
+         do n=1,inflow%itr%no_
+            i=inflow%itr%map(1,n); j=inflow%itr%map(2,n); k=inflow%itr%map(3,n)
+            sc%SC(i,j,k)=1.0_WP
+         end do
+         ! Apply all other boundary conditions
+         call sc%apply_bcond(time%t,time%dt)
+      end block initialize_scalar
       
       
       ! Add Ensight output
@@ -124,7 +164,8 @@ contains
          ! Add variables to output
          call ens_out%add_scalar('pressure',fs%P)
          call ens_out%add_vector('velocity',Ui,Vi,Wi)
-         call ens_out%add_scalar('div',fs%div)
+         call ens_out%add_scalar('divergence',fs%div)
+         call ens_out%add_scalar('temperature',sc%SC)
          ! Output to ensight
          if (ens_evt%occurs()) call ens_out%write_data(time%t)
       end block create_ensight
@@ -135,6 +176,7 @@ contains
          ! Prepare some info about fields
          call fs%get_cfl(time%dt,time%cfl)
          call fs%get_max()
+         call sc%get_max()
          ! Create simulation monitor
          mfile=monitor(fs%cfg%amRoot,'simulation')
          call mfile%add_column(time%n,'Timestep number')
@@ -145,6 +187,8 @@ contains
          call mfile%add_column(fs%Vmax,'Vmax')
          call mfile%add_column(fs%Wmax,'Wmax')
          call mfile%add_column(fs%Pmax,'Pmax')
+         call mfile%add_column(sc%SCmax,'Tmax')
+         call mfile%add_column(sc%SCmin,'Tmin')
          call mfile%add_column(fs%divmax,'Maximum divergence')
          call mfile%add_column(fs%psolv%it,'Pressure iteration')
          call mfile%add_column(fs%psolv%rerr,'Pressure error')
