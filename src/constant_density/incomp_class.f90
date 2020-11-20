@@ -33,6 +33,8 @@ module incomp_class
       type(iterator) :: itr                               !< This is the iterator for the bcond
    end type bcond
    
+   !> Bcond shift value
+   integer, dimension(3,6), parameter :: shift=reshape([+1,0,0,-1,0,0,0,+1,0,0,-1,0,0,0,+1,0,0,-1],shape(shift))
    
    !> Incompressible solver object definition
    type :: incomp
@@ -677,36 +679,12 @@ contains
       new_bc%type=type
       new_bc%canCorrect=canCorrect
       select case (lowercase(dir))
-      case ('+x','x+','xp','px')
-         new_bc%dir=1
-         new_bc%si=+1
-         new_bc%sj= 0
-         new_bc%sk= 0
-      case ('-x','x-','xm','mx')
-         new_bc%dir=2
-         new_bc%si=-1
-         new_bc%sj= 0
-         new_bc%sk= 0
-      case ('+y','y+','yp','py')
-         new_bc%dir=3
-         new_bc%si= 0
-         new_bc%sj=+1
-         new_bc%sk= 0
-      case ('-y','y-','ym','my')
-         new_bc%dir=4
-         new_bc%si= 0
-         new_bc%sj=-1
-         new_bc%sk= 0
-      case ('+z','z+','zp','pz')
-         new_bc%dir=5
-         new_bc%si= 0
-         new_bc%sj= 0
-         new_bc%sk=+1
-      case ('-z','z-','zm','mz')
-         new_bc%dir=6
-         new_bc%si= 0
-         new_bc%sj= 0
-         new_bc%sk=-1
+      case ('+x','x+','xp','px'); new_bc%dir=1
+      case ('-x','x-','xm','mx'); new_bc%dir=2
+      case ('+y','y+','yp','py'); new_bc%dir=3
+      case ('-y','y-','ym','my'); new_bc%dir=4
+      case ('+z','z+','zp','pz'); new_bc%dir=5
+      case ('-z','z-','zm','mz'); new_bc%dir=6
       case default; call die('[incomp add_bcond] Unknown bcond direction')
       end select
       new_bc%itr=iterator(this%cfg,new_bc%name,locator)

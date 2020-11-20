@@ -35,7 +35,8 @@ module ils_class
       integer  :: method                                              !< Solution method
       ! An ILS has a stencil size
       integer  :: nst                                                 !< Stencil size in 3D
-      integer, dimension(:,:), allocatable :: stc                     !< Stencil map in 3D
+      integer, dimension(:,:),   allocatable :: stc                   !< Stencil map in 3D (from stencil entry to i/j/k shift)
+      integer, dimension(:,:,:), allocatable :: stmap                 !< Inverse stencil map in 3D (from i,j,k shift to stencil entry)
       ! An ILS stores the linear operator and rhs
       real(WP), dimension(:,:,:,:), allocatable :: opr                !< Linear operator
       real(WP), dimension(:,:,:),   allocatable :: rhs                !< RHS
@@ -132,16 +133,26 @@ contains
    !> Initialize solver - done at start-up (probably only once?)
    !> When creating the solver, zero values of this%opr(1,:,:,:)
    !> indicate cells that do not participate in the solver
+   !> Only the stencil needs to be defined at this point
    subroutine init_solver(this,method)
       use messager, only: die
       implicit none
       class(ils), intent(inout) :: this
       integer, intent(in) :: method
-      integer :: ierr,st
+      integer :: ierr,st,stx1,stx2,sty1,sty2,stz1,stz2
       integer, dimension(3) :: periodicity,offset
       
       ! Set solution method
       this%method=method
+      
+      ! From the provided stencil, generate an inverse map
+      stx1=minval(this%stc(:,1)); stx2=maxval(this%stc(:,1))
+      sty1=minval(this%stc(:,2)); sty2=maxval(this%stc(:,2))
+      stz1=minval(this%stc(:,3)); stz2=maxval(this%stc(:,3))
+      allocate(this%stmap(stx1:stx2,sty1:sty2,stz1:stz2)); this%stmap=0
+      do st=1,this%nst
+         this%stmap(this%stc(st,1),this%stc(st,2),this%stc(st,3))=st
+      end do
       
       ! Select appropriate solver
       select case (this%method)
