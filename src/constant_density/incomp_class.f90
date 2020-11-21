@@ -753,6 +753,7 @@ contains
    
    !> Get a boundary condition
    subroutine get_bcond(this,name,my_bc)
+      use messager, only: die
       implicit none
       class(incomp), intent(inout) :: this
       character(len=*), intent(in) :: name
@@ -762,6 +763,7 @@ contains
          if (trim(my_bc%name).eq.trim(name)) exit search
          my_bc=>my_bc%next
       end do search
+      if (.not.associated(my_bc)) call die('[incomp get_bcond] Boundary condition was not found')
    end subroutine get_bcond
    
    

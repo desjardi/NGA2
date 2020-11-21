@@ -75,7 +75,7 @@ contains
       
       ! Create a scalar solver
       create_scalar: block
-         use ils_class,    only: pfmg
+         use ils_class,    only: gmres
          use scalar_class, only: dirichlet,neumann,quick
          ! Create scalar solver
          sc=scalar(cfg=cfg,scheme=quick,name='Temperature')
@@ -86,7 +86,7 @@ contains
          ! Configure implicit scalar solver
          sc%implicit%maxit=fs%implicit%maxit; sc%implicit%rcvg=fs%implicit%rcvg
          ! Setup the solver
-         call sc%setup(implicit_ils=pfmg)
+         call sc%setup(implicit_ils=gmres)
       end block create_scalar
       
       
@@ -144,7 +144,7 @@ contains
          ! Zero initial field
          sc%SC=0.0_WP
          ! Apply Dirichlet at the tube
-         call sc%get_bcond('inflow',inflow)
+         call sc%get_bcond('scalar inflow',inflow)
          do n=1,inflow%itr%no_
             i=inflow%itr%map(1,n); j=inflow%itr%map(2,n); k=inflow%itr%map(3,n)
             sc%SC(i,j,k)=1.0_WP
@@ -222,7 +222,8 @@ contains
          call time%adjust_dt()
          call time%increment()
          
-         ! Remember old velocity
+         ! Remember old velocity and scalar
+         sc%SCold=sc%SC
          fs%Uold=fs%U
          fs%Vold=fs%V
          fs%Wold=fs%W
@@ -233,6 +234,28 @@ contains
          ! Perform sub-iterations
          do while (time%it.le.time%itmax)
             
+            ! ============= SCALAR SOLVER =======================
+            ! Build mid-time scalar
+            sc%SC=0.5_WP*(sc%SC+sc%SCold)
+            
+            ! Explicit calculation of drhoSC/dt from scalar equation
+            call sc%get_drhoSCdt(resSC,fs%rho*fs%U,fs%rho*fs%V,fs%rho*fs%W)
+            
+            ! Assemble explicit residual
+            resSC=-2.0_WP*(sc%rho*sc%SC-sc%rho*sc%SCold)+time%dt*resSC
+            
+            ! Form implicit residual
+            call sc%solve_implicit(time%dt,resSC,fs%rho*fs%U,fs%rho*fs%V,fs%rho*fs%W)
+            
+            ! Apply this residual
+            sc%SC=2.0_WP*sc%SC-sc%SCold+resSC
+            
+            ! Apply other boundary conditions on the resulting field
+            call sc%apply_bcond(time%t,time%dt)
+            ! ===================================================
+            
+            
+            ! ============ VELOCITY SOLVER ======================
             ! Build mid-time velocity
             fs%U=0.5_WP*(fs%U+fs%Uold)
             fs%V=0.5_WP*(fs%V+fs%Vold)
@@ -271,6 +294,7 @@ contains
             fs%U=fs%U-time%dt*resU/fs%rho
             fs%V=fs%V-time%dt*resV/fs%rho
             fs%W=fs%W-time%dt*resW/fs%rho
+            ! ===================================================
             
             ! Increment sub-iteration counter
             time%it=time%it+1
@@ -286,6 +310,7 @@ contains
          
          ! Perform and output monitoring
          call fs%get_max()
+         call sc%get_max()
          call mfile%write()
          call cflfile%write()
          
@@ -305,7 +330,7 @@ contains
       ! timetracker
       
       ! Deallocate work arrays
-      deallocate(resU,resV,resW,Ui,Vi,Wi)
+      deallocate(resSC,resU,resV,resW,Ui,Vi,Wi)
       
    end subroutine simulation_final
    
