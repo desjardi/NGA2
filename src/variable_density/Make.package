@@ -1,0 +1,4 @@
+f90EXE_sources += vdscalar_class.f90 #lowmach_class.f90
+
+INCLUDE_LOCATIONS += $(NGA_HOME)/src/variable_density
+VPATH_LOCATIONS   += $(NGA_HOME)/src/variable_density
