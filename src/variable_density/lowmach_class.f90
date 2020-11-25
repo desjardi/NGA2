@@ -1,8 +1,8 @@
-!> Incompressible flow solver class:
+!> Low-Mach flow solver class:
 !> Provides support for various BC, RHS calculation,
 !> implicit solver, and pressure solution
-!> Assumes constant viscosity and density.
-module incomp_class
+!> Assumes variable viscosity and density.
+module lowmach_class
    use precision,      only: WP
    use string,         only: str_medium
    use config_class,   only: config
@@ -12,7 +12,7 @@ module incomp_class
    private
    
    ! Expose type/constructor/methods
-   public :: incomp,bcond
+   public :: lowmach,bcond
    
    ! List of known available bcond for this solver
    integer, parameter, public :: wall=1              !< Dirichlet at zero condition
@@ -21,7 +21,7 @@ module incomp_class
    integer, parameter, public :: convective=4        !< Convective outflow condition
    integer, parameter, public :: clipped_neumann=5   !< Clipped Neumann condition (outflow only)
    
-   !> Boundary conditions for the incompressible solver
+   !> Boundary conditions for the low Mach solver
    type :: bcond
       type(bcond), pointer :: next                        !< Linked list of bconds
       character(len=str_medium) :: name='UNNAMED_BCOND'   !< Bcond name (default=UNNAMED_BCOND)
@@ -36,18 +36,17 @@ module incomp_class
    !> Bcond shift value
    integer, dimension(3,6), parameter :: shift=reshape([+1,0,0,-1,0,0,0,+1,0,0,-1,0,0,0,+1,0,0,-1],shape(shift))
    
-   !> Incompressible solver object definition
-   type :: incomp
+   !> Low Mach solver object definition
+   type :: lowmach
       
       ! This is our config
       class(config), pointer :: cfg                       !< This is the config the solver is build for
       
       ! This is the name of the solver
-      character(len=str_medium) :: name='UNNAMED_INCOMP'  !< Solver name (default=UNNAMED_INCOMP)
+      character(len=str_medium) :: name='UNNAMED_LOWMACH' !< Solver name (default=UNNAMED_LOWMACH)
       
-      ! Constant property fluid
-      real(WP) :: rho                                     !< This is our constant fluid density
-      real(WP) :: visc                                    !< These is our constant fluid dynamic viscosity
+      ! Variable viscosity fluid
+      real(WP), dimension(:,:,:), allocatable :: visc     !< Dynamic viscosity array
       
       ! Boundary condition list
       integer :: nbc                                      !< Number of bcond for our solver
@@ -57,15 +56,21 @@ module incomp_class
       type(bcond), pointer :: first_bc                    !< List of bcond for our solver
       
       ! Flow variables
+      real(WP), dimension(:,:,:), allocatable :: rhoU     !< U momentum array
+      real(WP), dimension(:,:,:), allocatable :: rhoV     !< V momentum array
+      real(WP), dimension(:,:,:), allocatable :: rhoW     !< W momentum array
       real(WP), dimension(:,:,:), allocatable :: U        !< U velocity array
       real(WP), dimension(:,:,:), allocatable :: V        !< V velocity array
       real(WP), dimension(:,:,:), allocatable :: W        !< W velocity array
       real(WP), dimension(:,:,:), allocatable :: P        !< Pressure array
       
       ! Old flow variables
-      real(WP), dimension(:,:,:), allocatable :: Uold     !< Uold velocity array
-      real(WP), dimension(:,:,:), allocatable :: Vold     !< Vold velocity array
-      real(WP), dimension(:,:,:), allocatable :: Wold     !< Wold velocity array
+      real(WP), dimension(:,:,:), allocatable :: rhoUold  !< Old U momentum array
+      real(WP), dimension(:,:,:), allocatable :: rhoVold  !< Old V momentum array
+      real(WP), dimension(:,:,:), allocatable :: rhoWold  !< Old W momentum array
+      real(WP), dimension(:,:,:), allocatable :: Uold     !< Old U velocity array
+      real(WP), dimension(:,:,:), allocatable :: Vold     !< Old V velocity array
+      real(WP), dimension(:,:,:), allocatable :: Wold     !< Old W velocity array
       
       ! Flow divergence
       real(WP), dimension(:,:,:), allocatable :: div      !< Divergence array
@@ -77,6 +82,8 @@ module incomp_class
       type(ils) :: implicit                               !< Iterative linear solver object for an implicit prediction of the NS residual
       
       ! Metrics
+      real(WP), dimension(:,:,:,:,:), allocatable :: itp_xy,itp_yz,itp_xz !< Interpolation for viscosity
+      real(WP), dimension(:,:,:,:), allocatable :: itpr_x,itpr_y,itpr_z   !< Interpolation for density
       real(WP), dimension(:,:,:,:), allocatable :: itpu_x,itpu_y,itpu_z   !< Interpolation for U
       real(WP), dimension(:,:,:,:), allocatable :: itpv_x,itpv_y,itpv_z   !< Interpolation for V
       real(WP), dimension(:,:,:,:), allocatable :: itpw_x,itpw_y,itpw_z   !< Interpolation for W
@@ -101,7 +108,7 @@ module incomp_class
       real(WP) :: Umax,Vmax,Wmax,Pmax,divmax                              !< Maximum velocity, pressure, divergence
       
    contains
-      procedure :: print=>incomp_print                    !< Output solver to the screen
+      procedure :: print=>lowmach_print                   !< Output solver to the screen
       procedure :: setup                                  !< Finish configuring the flow solver
       procedure :: add_bcond                              !< Add a boundary condition
       procedure :: get_bcond                              !< Get a boundary condition
@@ -118,21 +125,21 @@ module incomp_class
       procedure :: correct_mfr                            !< Correct for mfr mismatch to ensure global conservation
       procedure :: shift_p                                !< Shift pressure to have zero average
       procedure :: solve_implicit                         !< Solve for the velocity residuals implicitly
-   end type incomp
+   end type lowmach
    
    
-   !> Declare incompressible solver constructor
-   interface incomp
+   !> Declare low Mach solver constructor
+   interface lowmach
       procedure constructor
-   end interface incomp
+   end interface lowmach
    
 contains
    
    
-   !> Default constructor for incompressible flow solver
+   !> Default constructor for low Mach flow solver
    function constructor(cfg,name) result(self)
       implicit none
-      type(incomp) :: self
+      type(lowmach) :: self
       class(config), target, intent(in) :: cfg
       character(len=*), optional :: name
       integer :: i,j,k
@@ -148,18 +155,27 @@ contains
       self%first_bc=>NULL()
       
       ! Allocate flow variables
-      allocate(self%U(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%U=0.0_WP
-      allocate(self%V(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%V=0.0_WP
-      allocate(self%W(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%W=0.0_WP
-      allocate(self%P(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%P=0.0_WP
+      allocate(self%rhoU(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%rhoU=0.0_WP
+      allocate(self%rhoV(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%rhoV=0.0_WP
+      allocate(self%rhoW(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%rhoW=0.0_WP
+      allocate(self%U   (self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%U=0.0_WP
+      allocate(self%V   (self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%V=0.0_WP
+      allocate(self%W   (self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%W=0.0_WP
+      allocate(self%P   (self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%P=0.0_WP
+      
+      ! Allocate old flow variables
+      allocate(self%rhoUold(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%rhoUold=0.0_WP
+      allocate(self%rhoVold(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%rhoVold=0.0_WP
+      allocate(self%rhoWold(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%rhoWold=0.0_WP
+      allocate(self%Uold   (self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%Uold=0.0_WP
+      allocate(self%Vold   (self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%Vold=0.0_WP
+      allocate(self%Wold   (self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%Wold=0.0_WP
       
       ! Allocate flow divergence
       allocate(self%div(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%div=0.0_WP
       
-      ! Allocate old flow variables
-      allocate(self%Uold(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%Uold=0.0_WP
-      allocate(self%Vold(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%Vold=0.0_WP
-      allocate(self%Wold(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%Wold=0.0_WP
+      ! Allocate fluid viscosity
+      allocate(self%visc(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%visc=0.0_WP
       
       ! Create pressure solver object
       self%psolv=ils(cfg=self%cfg,name='Pressure Poisson Solver')
@@ -226,8 +242,48 @@ contains
    !> Metric initialization with no awareness of walls nor bcond
    subroutine init_metrics(this)
       implicit none
-      class(incomp), intent(inout) :: this
-      integer :: i,j,k
+      class(lowmach), intent(inout) :: this
+      integer :: i,j,k,st1,st2
+      real(WP), dimension(-1:0) :: itpx,itpy,itpz
+      
+      ! Allocate finite difference density interpolation coefficients
+      allocate(this%itpr_x(-1:0,this%cfg%imin_:this%cfg%imax_+1,this%cfg%jmin_:this%cfg%jmax_+1,this%cfg%kmin_:this%cfg%kmax_+1)) !< X-face-centered
+      allocate(this%itpr_y(-1:0,this%cfg%imin_:this%cfg%imax_+1,this%cfg%jmin_:this%cfg%jmax_+1,this%cfg%kmin_:this%cfg%kmax_+1)) !< Y-face-centered
+      allocate(this%itpr_z(-1:0,this%cfg%imin_:this%cfg%imax_+1,this%cfg%jmin_:this%cfg%jmax_+1,this%cfg%kmin_:this%cfg%kmax_+1)) !< Z-face-centered
+      ! Create diffusivity interpolation coefficients to cell face
+      do k=this%cfg%kmin_,this%cfg%kmax_+1
+         do j=this%cfg%jmin_,this%cfg%jmax_+1
+            do i=this%cfg%imin_,this%cfg%imax_+1
+               this%itpr_x(:,i,j,k)=this%cfg%dxmi(i)*[this%cfg%xm(i)-this%cfg%x(i),this%cfg%x(i)-this%cfg%xm(i-1)] !< Linear interpolation in x from [xm,ym,zm] to [x,ym,zm]
+               this%itpr_y(:,i,j,k)=this%cfg%dymi(j)*[this%cfg%ym(j)-this%cfg%y(j),this%cfg%y(j)-this%cfg%ym(j-1)] !< Linear interpolation in y from [xm,ym,zm] to [xm,y,zm]
+               this%itpr_z(:,i,j,k)=this%cfg%dzmi(k)*[this%cfg%zm(k)-this%cfg%z(k),this%cfg%z(k)-this%cfg%zm(k-1)] !< Linear interpolation in z from [xm,ym,zm] to [xm,ym,z]
+            end do
+         end do
+      end do
+      
+      ! Allocate finite difference viscosity interpolation coefficients
+      allocate(this%itp_xy(-1:0,-1:0,this%cfg%imino_+1:this%cfg%imaxo_,this%cfg%jmino_+1:this%cfg%jmaxo_,this%cfg%kmino_+1:this%cfg%kmaxo_)) !< Edge-centered (xy)
+      allocate(this%itp_yz(-1:0,-1:0,this%cfg%imino_+1:this%cfg%imaxo_,this%cfg%jmino_+1:this%cfg%jmaxo_,this%cfg%kmino_+1:this%cfg%kmaxo_)) !< Edge-centered (yz)
+      allocate(this%itp_xz(-1:0,-1:0,this%cfg%imino_+1:this%cfg%imaxo_,this%cfg%jmino_+1:this%cfg%jmaxo_,this%cfg%kmino_+1:this%cfg%kmaxo_)) !< Edge-centered (zx)
+      ! Create viscosity interpolation coefficients to cell edge
+      do k=this%cfg%kmino_+1,this%cfg%kmaxo_
+         do j=this%cfg%jmino_+1,this%cfg%jmaxo_
+            do i=this%cfg%imino_+1,this%cfg%imaxo_
+               ! Prepare local 1D metrics
+               itpx=this%cfg%dxmi(i)*[this%cfg%xm(i)-this%cfg%x(i),this%cfg%x(i)-this%cfg%xm(i-1)]
+               itpy=this%cfg%dymi(j)*[this%cfg%ym(j)-this%cfg%y(j),this%cfg%y(j)-this%cfg%ym(j-1)]
+               itpz=this%cfg%dzmi(k)*[this%cfg%zm(k)-this%cfg%z(k),this%cfg%z(k)-this%cfg%zm(k-1)]
+               ! Combine for 2D interpolations
+               do st1=-1,0
+                  do st2=-1,0
+                     this%itp_xy(st1,st2,i,j,k)=itpx(st1)*itpy(st2)
+                     this%itp_yz(st1,st2,i,j,k)=itpy(st1)*itpz(st2)
+                     this%itp_xz(st1,st2,i,j,k)=itpx(st1)*itpz(st2)
+                  end do
+               end do
+            end do
+         end do
+      end do
       
       ! Allocate finite difference velocity interpolation coefficients
       allocate(this%itpu_x( 0:+1,this%cfg%imino_  :this%cfg%imaxo_,this%cfg%jmino_  :this%cfg%jmaxo_,this%cfg%kmino_  :this%cfg%kmaxo_)) !< Cell-centered
@@ -388,9 +444,9 @@ contains
    !> Metric adjustment accounting for bconds and walls
    subroutine adjust_metrics(this)
       implicit none
-      class(incomp), intent(inout) :: this
+      class(lowmach), intent(inout) :: this
       integer :: i,j,k
-      real(WP) :: delta
+      real(WP) :: delta,mysum
       
       ! Sync up u/v/wmasks
       call this%cfg%sync(this%umask)
@@ -399,6 +455,48 @@ contains
       if (.not.this%cfg%xper.and.this%cfg%iproc.eq.1) this%umask(this%cfg%imino,:,:)=this%umask(this%cfg%imino+1,:,:)
       if (.not.this%cfg%yper.and.this%cfg%jproc.eq.1) this%vmask(:,this%cfg%jmino,:)=this%vmask(:,this%cfg%jmino+1,:)
       if (.not.this%cfg%zper.and.this%cfg%kproc.eq.1) this%wmask(:,:,this%cfg%kmino)=this%wmask(:,:,this%cfg%kmino+1)
+      
+      ! I am assuming here that we do not really need to zero out wall cells
+      ! as they could be used for Dirichlet (then the density needs to be available! could be problematic if we do not have an explicit BC for scalars, e.g. for a Couette flow)
+      ! or outflow condition (then the density needs to be available but it should be directly calculated)
+      ! or used for a real no-slip wall (then density is always multiplied by zero)
+      ! Adjust density interpolation coefficients to cell faces in the presence of walls (only walls!)
+      !do k=this%cfg%kmin_,this%cfg%kmax_+1
+      !   do j=this%cfg%jmin_,this%cfg%jmax_+1
+      !      do i=this%cfg%imin_,this%cfg%imax_+1
+      !         ! Linear interpolation in x
+      !         if (this%cfg%VF(i,j,k).eq.0.0_WP.and.this%cfg%VF(i-1,j,k).gt.0.0_WP) this%itpr_x(:,i,j,k)=[1.0_WP,0.0_WP]
+      !         if (this%cfg%VF(i,j,k).gt.0.0_WP.and.this%cfg%VF(i-1,j,k).eq.0.0_WP) this%itpr_x(:,i,j,k)=[0.0_WP,1.0_WP]
+      !         ! Linear interpolation in y
+      !         if (this%cfg%VF(i,j,k).eq.0.0_WP.and.this%cfg%VF(i,j-1,k).gt.0.0_WP) this%itpr_y(:,i,j,k)=[1.0_WP,0.0_WP]
+      !         if (this%cfg%VF(i,j,k).gt.0.0_WP.and.this%cfg%VF(i,j-1,k).eq.0.0_WP) this%itpr_y(:,i,j,k)=[0.0_WP,1.0_WP]
+      !         ! Linear interpolation in z
+      !         if (this%cfg%VF(i,j,k).eq.0.0_WP.and.this%cfg%VF(i,j,k-1).gt.0.0_WP) this%itpr_z(:,i,j,k)=[1.0_WP,0.0_WP]
+      !         if (this%cfg%VF(i,j,k).gt.0.0_WP.and.this%cfg%VF(i,j,k-1).eq.0.0_WP) this%itpr_z(:,i,j,k)=[0.0_WP,1.0_WP]
+      !      end do
+      !   end do
+      !end do
+      
+      ! I am assuming here that we do not really need to zero out wall cells for viscosity - same reason as above
+      ! Adjust viscosity interpolation coefficients to cell edge in the presence of walls (only walls)
+      !do k=this%cfg%kmino_+1,this%cfg%kmaxo_
+      !   do j=this%cfg%jmino_+1,this%cfg%jmaxo_
+      !      do i=this%cfg%imino_+1,this%cfg%imaxo_
+      !         ! Zero out interpolation coefficients reaching in the walls
+      !         do st1=-1,0
+      !            do st2=-1,0
+      !               if (this%cfg%VF(i+st1,j+st2,k).eq.0.0_WP) this%itp_xy(st1,st2,i,j,k)=0.0_WP
+      !               if (this%cfg%VF(i,j+st1,k+st2).eq.0.0_WP) this%itp_yz(st1,st2,i,j,k)=0.0_WP
+      !               if (this%cfg%VF(i+st1,j,k+st2).eq.0.0_WP) this%itp_xz(st1,st2,i,j,k)=0.0_WP
+      !            end do
+      !         end do
+      !         ! Rescale to ensure sum(itp)=1
+      !         mysum=sum(this%itp_xy(:,:,i,j,k)); if (mysum.gt.0.0_WP) this%itp_xy(:,:,i,j,k)=this%itp_xy(:,:,i,j,k)/mysum
+      !         mysum=sum(this%itp_yz(:,:,i,j,k)); if (mysum.gt.0.0_WP) this%itp_yz(:,:,i,j,k)=this%itp_yz(:,:,i,j,k)/mysum
+      !         mysum=sum(this%itp_xz(:,:,i,j,k)); if (mysum.gt.0.0_WP) this%itp_xz(:,:,i,j,k)=this%itp_xz(:,:,i,j,k)/mysum
+      !      end do
+      !   end do
+      !end do
       
       ! Loop over the domain and adjust divergence for P cell
       do k=this%cfg%kmino_,this%cfg%kmaxo_
@@ -590,7 +688,7 @@ contains
    !> Finish setting up the flow solver now that bconds have been defined
    subroutine setup(this,pressure_ils,implicit_ils)
       implicit none
-      class(incomp), intent(inout) :: this
+      class(lowmach), intent(inout) :: this
       integer, intent(in) :: pressure_ils
       integer, intent(in) :: implicit_ils
       integer :: i,j,k
@@ -657,7 +755,7 @@ contains
       use string,   only: lowercase
       use messager, only: die
       implicit none
-      class(incomp), intent(inout) :: this
+      class(lowmach), intent(inout) :: this
       character(len=*), intent(in) :: name
       integer,  intent(in) :: type
       character(len=2), intent(in) :: dir
@@ -685,7 +783,7 @@ contains
       case ('-y','y-','ym','my'); new_bc%dir=4
       case ('+z','z+','zp','pz'); new_bc%dir=5
       case ('-z','z-','zm','mz'); new_bc%dir=6
-      case default; call die('[incomp add_bcond] Unknown bcond direction')
+      case default; call die('[lowmach add_bcond] Unknown bcond direction')
       end select
       new_bc%itr=iterator(this%cfg,new_bc%name,locator)
       if (present(inBalance)) then
@@ -745,7 +843,7 @@ contains
       case (convective)
          ! Not yet implemented
       case default
-         call die('[incomp apply_bcond] Unknown bcond type')
+         call die('[lowmach apply_bcond] Unknown bcond type')
       end select
    
    end subroutine add_bcond
@@ -755,7 +853,7 @@ contains
    subroutine get_bcond(this,name,my_bc)
       use messager, only: die
       implicit none
-      class(incomp), intent(inout) :: this
+      class(lowmach), intent(inout) :: this
       character(len=*), intent(in) :: name
       type(bcond), pointer, intent(out) :: my_bc
       my_bc=>this%first_bc
@@ -763,17 +861,17 @@ contains
          if (trim(my_bc%name).eq.trim(name)) exit search
          my_bc=>my_bc%next
       end do search
-      if (.not.associated(my_bc)) call die('[incomp get_bcond] Boundary condition was not found')
+      if (.not.associated(my_bc)) call die('[lowmach get_bcond] Boundary condition was not found')
    end subroutine get_bcond
    
    
-   !> Enforce boundary condition
+   !> Enforce boundary condition - acts on both U/V/W and rhoU/rhoV/rhoW
    subroutine apply_bcond(this,t,dt)
       use messager, only: die
       use mpi_f08,  only: MPI_MAX
       use parallel, only: MPI_REAL_WP
       implicit none
-      class(incomp), intent(inout) :: this
+      class(lowmach), intent(inout) :: this
       real(WP), intent(in) :: t,dt
       integer :: i,j,k,n,ierr
       type(bcond), pointer :: my_bc
@@ -819,6 +917,9 @@ contains
                      this%U(i+1,j,k)=this%U(i,j,k)
                      this%V(i+1,j:j+1,k)=this%V(i,j:j+1,k)
                      this%W(i+1,j,k:k+1)=this%W(i,j,k:k+1)
+                     this%rhoU(i+1,j,k)=this%rhoU(i,j,k)
+                     this%rhoV(i+1,j:j+1,k)=this%rhoV(i,j:j+1,k)
+                     this%rhoW(i+1,j,k:k+1)=this%rhoW(i,j,k:k+1)
                   end do
                case (2) ! Neumann in -x
                   do n=1,my_bc%itr%n_
@@ -826,6 +927,9 @@ contains
                      this%U(i,j,k)=this%U(i+1,j,k)
                      this%V(i-1,j:j+1,k)=this%V(i,j:j+1,k)
                      this%W(i-1,j,k:k+1)=this%W(i,j,k:k+1)
+                     this%rhoU(i,j,k)=this%rhoU(i+1,j,k)
+                     this%rhoV(i-1,j:j+1,k)=this%rhoV(i,j:j+1,k)
+                     this%rhoW(i-1,j,k:k+1)=this%rhoW(i,j,k:k+1)
                   end do
                case (3) ! Neumann in +y
                   do n=1,my_bc%itr%n_
@@ -833,6 +937,9 @@ contains
                      this%U(i:i+1,j+1,k)=this%U(i:i+1,j,k)
                      this%V(i,j+1,k)=this%V(i,j,k)
                      this%W(i,j+1,k:k+1)=this%W(i,j,k:k+1)
+                     this%rhoU(i:i+1,j+1,k)=this%rhoU(i:i+1,j,k)
+                     this%rhoV(i,j+1,k)=this%rhoV(i,j,k)
+                     this%rhoW(i,j+1,k:k+1)=this%rhoW(i,j,k:k+1)
                   end do
                case (4) ! Neumann in -y
                   do n=1,my_bc%itr%n_
@@ -840,6 +947,9 @@ contains
                      this%U(i:i+1,j-1,k)=this%U(i:i+1,j,k)
                      this%V(i,j,k)=this%V(i,j+1,k)
                      this%W(i,j-1,k:k+1)=this%W(i,j,k:k+1)
+                     this%rhoU(i:i+1,j+1,k)=this%rhoU(i:i+1,j,k)
+                     this%rhoV(i,j+1,k)=this%rhoV(i,j,k)
+                     this%rhoW(i,j+1,k:k+1)=this%rhoW(i,j,k:k+1)
                   end do
                case (5) ! Neumann in +z
                   do n=1,my_bc%itr%n_
@@ -847,6 +957,9 @@ contains
                      this%U(i:i+1,j,k+1)=this%U(i:i+1,j,k)
                      this%V(i,j:j+1,k+1)=this%V(i,j:j+1,k)
                      this%W(i,j,k+1)=this%W(i,j,k)
+                     this%rhoU(i:i+1,j+1,k)=this%rhoU(i:i+1,j,k)
+                     this%rhoV(i,j+1,k)=this%rhoV(i,j,k)
+                     this%rhoW(i,j+1,k:k+1)=this%rhoW(i,j,k:k+1)
                   end do
                case (6) ! Neumann in -z
                   do n=1,my_bc%itr%n_
@@ -854,6 +967,9 @@ contains
                      this%U(i:i+1,j,k-1)=this%U(i:i+1,j,k)
                      this%V(i,j:j+1,k-1)=this%V(i,j:j+1,k)
                      this%W(i,j,k)=this%W(i,j,k+1)
+                     this%rhoU(i:i+1,j+1,k)=this%rhoU(i:i+1,j,k)
+                     this%rhoV(i,j+1,k)=this%rhoV(i,j,k)
+                     this%rhoW(i,j+1,k:k+1)=this%rhoW(i,j,k:k+1)
                   end do
                end select
                
@@ -867,6 +983,9 @@ contains
                      this%U(i+1,j,k)=max(this%U(i,j,k),0.0_WP)
                      this%V(i+1,j:j+1,k)=this%V(i,j:j+1,k)
                      this%W(i+1,j,k:k+1)=this%W(i,j,k:k+1)
+                     this%rhoU(i+1,j,k)=max(this%rhoU(i,j,k),0.0_WP)
+                     this%rhoV(i+1,j:j+1,k)=this%rhoV(i,j:j+1,k)
+                     this%rhoW(i+1,j,k:k+1)=this%rhoW(i,j,k:k+1)
                   end do
                case (2) ! Neumann in -x
                   do n=1,my_bc%itr%n_
@@ -874,6 +993,9 @@ contains
                      this%U(i,j,k)=min(this%U(i+1,j,k),0.0_WP)
                      this%V(i-1,j:j+1,k)=this%V(i,j:j+1,k)
                      this%W(i-1,j,k:k+1)=this%W(i,j,k:k+1)
+                     this%rhoU(i,j,k)=min(this%rhoU(i+1,j,k),0.0_WP)
+                     this%rhoV(i-1,j:j+1,k)=this%rhoV(i,j:j+1,k)
+                     this%rhoW(i-1,j,k:k+1)=this%rhoW(i,j,k:k+1)
                   end do
                case (3) ! Neumann in +y
                   do n=1,my_bc%itr%n_
@@ -881,6 +1003,9 @@ contains
                      this%U(i:i+1,j+1,k)=this%U(i:i+1,j,k)
                      this%V(i,j+1,k)=max(this%V(i,j,k),0.0_WP)
                      this%W(i,j+1,k:k+1)=this%W(i,j,k:k+1)
+                     this%rhoU(i:i+1,j+1,k)=this%rhoU(i:i+1,j,k)
+                     this%rhoV(i,j+1,k)=max(this%rhoV(i,j,k),0.0_WP)
+                     this%rhoW(i,j+1,k:k+1)=this%rhoW(i,j,k:k+1)
                   end do
                case (4) ! Neumann in -y
                   do n=1,my_bc%itr%n_
@@ -888,6 +1013,9 @@ contains
                      this%U(i:i+1,j-1,k)=this%U(i:i+1,j,k)
                      this%V(i,j,k)=min(this%V(i,j+1,k),0.0_WP)
                      this%W(i,j-1,k:k+1)=this%W(i,j,k:k+1)
+                     this%rhoU(i:i+1,j-1,k)=this%rhoU(i:i+1,j,k)
+                     this%rhoV(i,j,k)=min(this%rhoV(i,j+1,k),0.0_WP)
+                     this%rhoW(i,j-1,k:k+1)=this%rhoW(i,j,k:k+1)
                   end do
                case (5) ! Neumann in +z
                   do n=1,my_bc%itr%n_
@@ -895,6 +1023,9 @@ contains
                      this%U(i:i+1,j,k+1)=this%U(i:i+1,j,k)
                      this%V(i,j:j+1,k+1)=this%V(i,j:j+1,k)
                      this%W(i,j,k+1)=max(this%W(i,j,k),0.0_WP)
+                     this%rhoU(i:i+1,j,k+1)=this%rhoU(i:i+1,j,k)
+                     this%rhoV(i,j:j+1,k+1)=this%rhoV(i,j:j+1,k)
+                     this%rhoW(i,j,k+1)=max(this%rhoW(i,j,k),0.0_WP)
                   end do
                case (6) ! Neumann in -z
                   do n=1,my_bc%itr%n_
@@ -902,69 +1033,15 @@ contains
                      this%U(i:i+1,j,k-1)=this%U(i:i+1,j,k)
                      this%V(i,j:j+1,k-1)=this%V(i,j:j+1,k)
                      this%W(i,j,k)=min(this%W(i,j,k+1),0.0_WP)
+                     this%rhoU(i:i+1,j,k-1)=this%rhoU(i:i+1,j,k)
+                     this%rhoV(i,j:j+1,k-1)=this%rhoV(i,j:j+1,k)
+                     this%rhoW(i,j,k)=min(this%rhoW(i,j,k+1),0.0_WP)
                   end do
                end select
             
             case (convective)   ! Apply convective condition
                
-               ! Implement based on bcond direction
-               select case (my_bc%dir)
-               case (1) ! Neumann in +x
-                  do n=1,my_bc%itr%n_
-                     i=my_bc%itr%map(1,n); j=my_bc%itr%map(2,n); k=my_bc%itr%map(3,n)
-                     this%U(i+1,j,k)=this%U(i,j,k)
-                     this%V(i+1,j:j+1,k)=this%V(i,j:j+1,k)
-                     this%W(i+1,j,k:k+1)=this%W(i,j,k:k+1)
-                  end do
-               case (2) ! Neumann in -x
-                  do n=1,my_bc%itr%n_
-                     i=my_bc%itr%map(1,n); j=my_bc%itr%map(2,n); k=my_bc%itr%map(3,n)
-                     this%U(i,j,k)=this%U(i+1,j,k)
-                     this%V(i-1,j:j+1,k)=this%V(i,j:j+1,k)
-                     this%W(i-1,j,k:k+1)=this%W(i,j,k:k+1)
-                  end do
-               case (3) ! Neumann in +y
-                  do n=1,my_bc%itr%n_
-                     i=my_bc%itr%map(1,n); j=my_bc%itr%map(2,n); k=my_bc%itr%map(3,n)
-                     this%U(i:i+1,j+1,k)=this%U(i:i+1,j,k)
-                     this%V(i,j+1,k)=this%V(i,j,k)
-                     this%W(i,j+1,k:k+1)=this%W(i,j,k:k+1)
-                  end do
-               case (4) ! Neumann in -y
-                  do n=1,my_bc%itr%n_
-                     i=my_bc%itr%map(1,n); j=my_bc%itr%map(2,n); k=my_bc%itr%map(3,n)
-                     this%U(i:i+1,j-1,k)=this%U(i:i+1,j,k)
-                     this%V(i,j,k)=this%V(i,j+1,k)
-                     this%W(i,j-1,k:k+1)=this%W(i,j,k:k+1)
-                  end do
-               case (5) ! Neumann in +z
-                  do n=1,my_bc%itr%n_
-                     i=my_bc%itr%map(1,n); j=my_bc%itr%map(2,n); k=my_bc%itr%map(3,n)
-                     this%U(i:i+1,j,k+1)=this%U(i:i+1,j,k)
-                     this%V(i,j:j+1,k+1)=this%V(i,j:j+1,k)
-                     this%W(i,j,k+1)=this%W(i,j,k)
-                  end do
-               case (6) ! Neumann in -z
-                  do n=1,my_bc%itr%n_
-                     i=my_bc%itr%map(1,n); j=my_bc%itr%map(2,n); k=my_bc%itr%map(3,n)
-                     this%U(i:i+1,j,k-1)=this%U(i:i+1,j,k)
-                     this%V(i,j:j+1,k-1)=this%V(i,j:j+1,k)
-                     this%W(i,j,k)=this%W(i,j,k+1)
-                  end do
-               end select
-               
-               ! ! Get convective velocity
-               ! my_conv_vel=0.0_WP
-               ! do n=1,my_bc%itr%no_
-               !    ! Get the indices
-               !    i=my_bc%itr%map(1,n); j=my_bc%itr%map(2,n); k=my_bc%itr%map(3,n)
-               !    ! Find maximum velocity
-               !    my_conv_vel(1)=max(my_conv_vel(1),this%U(i+si,j+sj,k+sk))
-               !    my_conv_vel(2)=max(my_conv_vel(2),this%V(i+si,j+sj,k+sk))
-               !    my_conv_vel(3)=max(my_conv_vel(3),this%W(i+si,j+sj,k+sk))
-               ! end do
-               ! call MPI_ALLREDUCE(my_conv_vel,conv_vel,3,MPI_REAL_WP,MPI_MAX,my_bc%itr%comm,ierr)
-               
+               ! Not done yet
                
             case default
                call die('[incomp apply_bcond] Unknown bcond type')
@@ -976,6 +1053,9 @@ contains
          call this%cfg%sync(this%U)
          call this%cfg%sync(this%V)
          call this%cfg%sync(this%W)
+         call this%cfg%sync(this%rhoU)
+         call this%cfg%sync(this%rhoV)
+         call this%cfg%sync(this%rhoW)
          
          ! Move on to the next bcond
          my_bc=>my_bc%next
@@ -985,10 +1065,10 @@ contains
    end subroutine apply_bcond
    
    
-   !> Calculate the explicit momentum time derivative based on U/V/W/P
+   !> Calculate the explicit momentum time derivative based on rhoU/rhoV/rhoW/U/V/W/P
    subroutine get_dmomdt(this,drhoUdt,drhoVdt,drhoWdt)
       implicit none
-      class(incomp), intent(inout) :: this
+      class(lowmach), intent(inout) :: this
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(out) :: drhoUdt !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(out) :: drhoVdt !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(out) :: drhoWdt !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
@@ -1006,17 +1086,18 @@ contains
             do ii=this%cfg%imin_,this%cfg%imax_+1
                ! Fluxes on x-face
                i=ii-1; j=jj; k=kk
-               FX(i,j,k)=-this%rho * sum(this%itpu_x(:,i,j,k)*this%U(i:i+1,j,k))*sum(this%itpu_x(:,i,j,k)*this%U(i:i+1,j,k)) &
-               &         +this%visc*(sum(this%grdu_x(:,i,j,k)*this%U(i:i+1,j,k))+sum(this%grdu_x(:,i,j,k)*this%U(i:i+1,j,k)))&
+               FX(i,j,k)=-sum(this%itpu_x(:,i,j,k)*this%U(i:i+1,j,k))*sum(this%itpu_x(:,i,j,k)*this%rhoU(i:i+1,j,k)) &
+               &         +this%visc(i,j,k)*(sum(this%grdu_x(:,i,j,k)*this%U(i:i+1,j,k))+sum(this%grdu_x(:,i,j,k)*this%U(i:i+1,j,k)) &
+               &         -2.0_WP/3.0_WP*(sum(this%divp_x(:,i,j,k)*this%U(i:i+1,j,k))+sum(this%divp_y(:,i,j,k)*this%V(i,j:j+1,k))+sum(this%divp_z(:,i,j,k)*this%W(i,j,k:k+1)))) &
                &         -this%P(i,j,k)
                ! Fluxes on y-face
                i=ii  ; j=jj; k=kk
-               FY(i,j,k)=-this%rho * sum(this%itpu_y(:,i,j,k)*this%U(i,j-1:j,k))*sum(this%itpv_x(:,i,j,k)*this%V(i-1:i,j,k)) &
-               &         +this%visc*(sum(this%grdu_y(:,i,j,k)*this%U(i,j-1:j,k))+sum(this%grdv_x(:,i,j,k)*this%V(i-1:i,j,k)))
+               FY(i,j,k)=-sum(this%itpu_y(:,i,j,k)*this%U(i,j-1:j,k))*sum(this%itpv_x(:,i,j,k)*this%rhoV(i-1:i,j,k)) &
+               &         +sum(this%itp_xy(:,:,i,j,k)*this%visc(i-1:i,j-1:j,k))*(sum(this%grdu_y(:,i,j,k)*this%U(i,j-1:j,k))+sum(this%grdv_x(:,i,j,k)*this%V(i-1:i,j,k)))
                ! Fluxes on z-face
                i=ii  ; j=jj; k=kk
-               FZ(i,j,k)=-this%rho * sum(this%itpu_z(:,i,j,k)*this%U(i,j,k-1:k))*sum(this%itpw_x(:,i,j,k)*this%W(i-1:i,j,k)) &
-               &         +this%visc*(sum(this%grdu_z(:,i,j,k)*this%U(i,j,k-1:k))+sum(this%grdw_x(:,i,j,k)*this%W(i-1:i,j,k)))
+               FZ(i,j,k)=-sum(this%itpu_z(:,i,j,k)*this%U(i,j,k-1:k))*sum(this%itpw_x(:,i,j,k)*this%rhoW(i-1:i,j,k)) &
+               &         +sum(this%itp_xz(:,:,i,j,k)*this%visc(i-1:i,j,k-1:k))*(sum(this%grdu_z(:,i,j,k)*this%U(i,j,k-1:k))+sum(this%grdw_x(:,i,j,k)*this%W(i-1:i,j,k)))
             end do
          end do
       end do
@@ -1039,17 +1120,18 @@ contains
             do ii=this%cfg%imin_,this%cfg%imax_+1
                ! Fluxes on x-face
                i=ii; j=jj  ; k=kk
-               FX(i,j,k)=-this%rho * sum(this%itpv_x(:,i,j,k)*this%V(i-1:i,j,k))*sum(this%itpu_y(:,i,j,k)*this%U(i,j-1:j,k)) &
-               &         +this%visc*(sum(this%grdv_x(:,i,j,k)*this%V(i-1:i,j,k))+sum(this%grdu_y(:,i,j,k)*this%U(i,j-1:j,k)))
+               FX(i,j,k)=-sum(this%itpv_x(:,i,j,k)*this%V(i-1:i,j,k))*sum(this%itpu_y(:,i,j,k)*this%rhoU(i,j-1:j,k)) &
+               &         +sum(this%itp_xy(:,:,i,j,k)*this%visc(i-1:i,j-1:j,k))*(sum(this%grdv_x(:,i,j,k)*this%V(i-1:i,j,k))+sum(this%grdu_y(:,i,j,k)*this%U(i,j-1:j,k)))
                ! Fluxes on y-face
                i=ii; j=jj-1; k=kk
-               FY(i,j,k)=-this%rho * sum(this%itpv_y(:,i,j,k)*this%V(i,j:j+1,k))*sum(this%itpv_y(:,i,j,k)*this%V(i,j:j+1,k)) &
-               &         +this%visc*(sum(this%grdv_y(:,i,j,k)*this%V(i,j:j+1,k))+sum(this%grdv_y(:,i,j,k)*this%V(i,j:j+1,k)))&
+               FY(i,j,k)=-sum(this%itpv_y(:,i,j,k)*this%V(i,j:j+1,k))*sum(this%itpv_y(:,i,j,k)*this%rhoV(i,j:j+1,k)) &
+               &         +this%visc(i,j,k)*(sum(this%grdv_y(:,i,j,k)*this%V(i,j:j+1,k))+sum(this%grdv_y(:,i,j,k)*this%V(i,j:j+1,k)) &
+               &         -2.0_WP/3.0_WP*(sum(this%divp_x(:,i,j,k)*this%U(i:i+1,j,k))+sum(this%divp_y(:,i,j,k)*this%V(i,j:j+1,k))+sum(this%divp_z(:,i,j,k)*this%W(i,j,k:k+1)))) &
                &         -this%P(i,j,k)
                ! Fluxes on z-face
                i=ii; j=jj  ; k=kk
-               FZ(i,j,k)=-this%rho * sum(this%itpv_z(:,i,j,k)*this%V(i,j,k-1:k))*sum(this%itpw_y(:,i,j,k)*this%W(i,j-1:j,k)) &
-               &         +this%visc*(sum(this%grdv_z(:,i,j,k)*this%V(i,j,k-1:k))+sum(this%grdw_y(:,i,j,k)*this%W(i,j-1:j,k)))
+               FZ(i,j,k)=-sum(this%itpv_z(:,i,j,k)*this%V(i,j,k-1:k))*sum(this%itpw_y(:,i,j,k)*this%rhoW(i,j-1:j,k)) &
+               &         +sum(this%itp_yz(:,:,i,j,k)*this%visc(i,j-1:j,k-1:k))*(sum(this%grdv_z(:,i,j,k)*this%V(i,j,k-1:k))+sum(this%grdw_y(:,i,j,k)*this%W(i,j-1:j,k)))
             end do
          end do
       end do
@@ -1072,16 +1154,17 @@ contains
             do ii=this%cfg%imin_,this%cfg%imax_+1
                ! Fluxes on x-face
                i=ii; j=jj; k=kk
-               FX(i,j,k)=-this%rho * sum(this%itpw_x(:,i,j,k)*this%W(i-1:i,j,k))*sum(this%itpu_z(:,i,j,k)*this%U(i,j,k-1:k)) &
-               &         +this%visc*(sum(this%grdw_x(:,i,j,k)*this%W(i-1:i,j,k))+sum(this%grdu_z(:,i,j,k)*this%U(i,j,k-1:k)))
+               FX(i,j,k)=-sum(this%itpw_x(:,i,j,k)*this%W(i-1:i,j,k))*sum(this%itpu_z(:,i,j,k)*this%rhoU(i,j,k-1:k)) &
+               &         +sum(this%itp_xz(:,:,i,j,k)*this%visc(i-1:i,j,k-1:k))*(sum(this%grdw_x(:,i,j,k)*this%W(i-1:i,j,k))+sum(this%grdu_z(:,i,j,k)*this%U(i,j,k-1:k)))
                ! Fluxes on y-face
                i=ii; j=jj; k=kk
-               FY(i,j,k)=-this%rho * sum(this%itpw_y(:,i,j,k)*this%W(i,j-1:j,k))*sum(this%itpv_z(:,i,j,k)*this%V(i,j,k-1:k)) &
-               &         +this%visc*(sum(this%grdw_y(:,i,j,k)*this%W(i,j-1:j,k))+sum(this%grdv_z(:,i,j,k)*this%V(i,j,k-1:k)))
+               FY(i,j,k)=-sum(this%itpw_y(:,i,j,k)*this%W(i,j-1:j,k))*sum(this%itpv_z(:,i,j,k)*this%rhoV(i,j,k-1:k)) &
+               &         +sum(this%itp_yz(:,:,i,j,k)*this%visc(i,j-1:j,k-1:k))*(sum(this%grdw_y(:,i,j,k)*this%W(i,j-1:j,k))+sum(this%grdv_z(:,i,j,k)*this%V(i,j,k-1:k)))
                ! Fluxes on z-face
                i=ii; j=jj; k=kk-1
-               FZ(i,j,k)=-this%rho * sum(this%itpw_z(:,i,j,k)*this%W(i,j,k:k+1))*sum(this%itpw_z(:,i,j,k)*this%W(i,j,k:k+1)) &
-               &         +this%visc*(sum(this%grdw_z(:,i,j,k)*this%W(i,j,k:k+1))+sum(this%grdw_z(:,i,j,k)*this%W(i,j,k:k+1)))&
+               FZ(i,j,k)=-sum(this%itpw_z(:,i,j,k)*this%W(i,j,k:k+1))*sum(this%itpw_z(:,i,j,k)*this%rhoW(i,j,k:k+1)) &
+               &         +this%visc(i,j,k)*(sum(this%grdw_z(:,i,j,k)*this%W(i,j,k:k+1))+sum(this%grdw_z(:,i,j,k)*this%W(i,j,k:k+1)) &
+               &         -2.0_WP/3.0_WP*(sum(this%divp_x(:,i,j,k)*this%U(i:i+1,j,k))+sum(this%divp_y(:,i,j,k)*this%V(i,j:j+1,k))+sum(this%divp_z(:,i,j,k)*this%W(i,j,k:k+1)))) &
                &         -this%P(i,j,k)
             end do
          end do
@@ -1105,17 +1188,17 @@ contains
    end subroutine get_dmomdt
    
    
-   !> Calculate the velocity divergence based on U/V/W
+   !> Calculate the velocity divergence based on rhoU/rhoV/rhoW - drhodt is excluded
    subroutine get_div(this)
       implicit none
-      class(incomp), intent(inout) :: this
+      class(lowmach), intent(inout) :: this
       integer :: i,j,k
       do k=this%cfg%kmin_,this%cfg%kmax_
          do j=this%cfg%jmin_,this%cfg%jmax_
             do i=this%cfg%imin_,this%cfg%imax_
-               this%div(i,j,k)=sum(this%divp_x(:,i,j,k)*this%U(i:i+1,j,k))+&
-               &               sum(this%divp_y(:,i,j,k)*this%V(i,j:j+1,k))+&
-               &               sum(this%divp_z(:,i,j,k)*this%W(i,j,k:k+1))
+               this%div(i,j,k)=sum(this%divp_x(:,i,j,k)*this%rhoU(i:i+1,j,k))+&
+               &               sum(this%divp_y(:,i,j,k)*this%rhoV(i,j:j+1,k))+&
+               &               sum(this%divp_z(:,i,j,k)*this%rhoW(i,j,k:k+1))
             end do
          end do
       end do
@@ -1127,7 +1210,7 @@ contains
    !> Calculate the pressure gradient based on P
    subroutine get_pgrad(this,P,Pgradx,Pgrady,Pgradz)
       implicit none
-      class(incomp), intent(inout) :: this
+      class(lowmach), intent(inout) :: this
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in)  :: P      !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(out) :: Pgradx !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(out) :: Pgrady !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
@@ -1152,7 +1235,7 @@ contains
    !> Calculate the interpolated velocity
    subroutine interp_vel(this,Ui,Vi,Wi)
       implicit none
-      class(incomp), intent(inout) :: this
+      class(lowmach), intent(inout) :: this
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(out) :: Ui !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(out) :: Vi !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(out) :: Wi !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
@@ -1174,12 +1257,13 @@ contains
    
    
    !> Calculate the CFL
-   subroutine get_cfl(this,dt,cflc,cfl)
+   subroutine get_cfl(this,dt,rho,cflc,cfl)
       use mpi_f08,  only: MPI_ALLREDUCE,MPI_MAX
       use parallel, only: MPI_REAL_WP
       implicit none
-      class(incomp), intent(inout) :: this
+      class(lowmach), intent(inout) :: this
       real(WP), intent(in)  :: dt
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in) :: rho !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       real(WP), intent(out) :: cflc
       real(WP), optional :: cfl
       integer :: i,j,k,ierr
@@ -1194,9 +1278,9 @@ contains
                my_CFLc_x=max(my_CFLc_x,abs(this%U(i,j,k))*this%cfg%dxmi(i))
                my_CFLc_y=max(my_CFLc_y,abs(this%V(i,j,k))*this%cfg%dymi(j))
                my_CFLc_z=max(my_CFLc_z,abs(this%W(i,j,k))*this%cfg%dzmi(k))
-               my_CFLv_x=max(my_CFLv_x,4.0_WP*this%visc*this%cfg%dxi(i)**2/this%rho)
-               my_CFLv_y=max(my_CFLv_y,4.0_WP*this%visc*this%cfg%dyi(j)**2/this%rho)
-               my_CFLv_z=max(my_CFLv_z,4.0_WP*this%visc*this%cfg%dzi(k)**2/this%rho)
+               my_CFLv_x=max(my_CFLv_x,4.0_WP*this%visc(i,j,k)*this%cfg%dxi(i)**2/rho(i,j,k))
+               my_CFLv_y=max(my_CFLv_y,4.0_WP*this%visc(i,j,k)*this%cfg%dyi(j)**2/rho(i,j,k))
+               my_CFLv_z=max(my_CFLv_z,4.0_WP*this%visc(i,j,k)*this%cfg%dzi(k)**2/rho(i,j,k))
             end do
          end do
       end do
@@ -1220,12 +1304,12 @@ contains
    end subroutine get_cfl
    
    
-   !> Calculate the max of our fields
+   !> Calculate the max of our U/V/W/P fields
    subroutine get_max(this)
       use mpi_f08,  only: MPI_ALLREDUCE,MPI_MAX
       use parallel, only: MPI_REAL_WP
       implicit none
-      class(incomp), intent(inout) :: this
+      class(lowmach), intent(inout) :: this
       integer :: i,j,k,ierr
       real(WP) :: my_Umax,my_Vmax,my_Wmax,my_Pmax,my_divmax
       
@@ -1258,7 +1342,7 @@ contains
       use mpi_f08,  only: MPI_SUM,MPI_ALLREDUCE
       use parallel, only: MPI_REAL_WP
       implicit none
-      class(incomp), intent(inout) :: this
+      class(lowmach), intent(inout) :: this
       integer :: i,j,k,n,ibc,ierr
       type(bcond), pointer :: my_bc
       real(WP), dimension(:), allocatable :: my_mfr,my_area
@@ -1305,37 +1389,37 @@ contains
                case (1) ! BC in +x
                   do n=1,my_bc%itr%n_
                      i=my_bc%itr%map(1,n); j=my_bc%itr%map(2,n); k=my_bc%itr%map(3,n)
-                     my_mfr(ibc)=my_mfr(ibc)+this%rho*this%U(i+1,j,k)*this%cfg%dy(j)*this%cfg%dz(k)
+                     my_mfr(ibc)=my_mfr(ibc)+this%rhoU(i+1,j,k)*this%cfg%dy(j)*this%cfg%dz(k)
                      my_area(ibc)=my_area(ibc)+this%cfg%dy(j)*this%cfg%dz(k)
                   end do
                case (2) ! BC in -x
                   do n=1,my_bc%itr%n_
                      i=my_bc%itr%map(1,n); j=my_bc%itr%map(2,n); k=my_bc%itr%map(3,n)
-                     my_mfr(ibc)=my_mfr(ibc)-this%rho*this%U(i  ,j,k)*this%cfg%dy(j)*this%cfg%dz(k)
+                     my_mfr(ibc)=my_mfr(ibc)-this%rhoU(i  ,j,k)*this%cfg%dy(j)*this%cfg%dz(k)
                      my_area(ibc)=my_area(ibc)+this%cfg%dy(j)*this%cfg%dz(k)
                   end do
                case (3) ! BC in +y
                   do n=1,my_bc%itr%n_
                      i=my_bc%itr%map(1,n); j=my_bc%itr%map(2,n); k=my_bc%itr%map(3,n)
-                     my_mfr(ibc)=my_mfr(ibc)+this%rho*this%V(i,j+1,k)*this%cfg%dx(i)*this%cfg%dz(k)
+                     my_mfr(ibc)=my_mfr(ibc)+this%rhoV(i,j+1,k)*this%cfg%dx(i)*this%cfg%dz(k)
                      my_area(ibc)=my_area(ibc)+this%cfg%dx(i)*this%cfg%dz(k)
                   end do
                case (4) ! BC in -y
                   do n=1,my_bc%itr%n_
                      i=my_bc%itr%map(1,n); j=my_bc%itr%map(2,n); k=my_bc%itr%map(3,n)
-                     my_mfr(ibc)=my_mfr(ibc)-this%rho*this%V(i,j  ,k)*this%cfg%dx(i)*this%cfg%dz(k)
+                     my_mfr(ibc)=my_mfr(ibc)-this%rhoV(i,j  ,k)*this%cfg%dx(i)*this%cfg%dz(k)
                      my_area(ibc)=my_area(ibc)+this%cfg%dx(i)*this%cfg%dz(k)
                   end do
                case (5) ! BC in +z
                   do n=1,my_bc%itr%n_
                      i=my_bc%itr%map(1,n); j=my_bc%itr%map(2,n); k=my_bc%itr%map(3,n)
-                     my_mfr(ibc)=my_mfr(ibc)+this%rho*this%W(i,j,k+1)*this%cfg%dy(j)*this%cfg%dx(i)
+                     my_mfr(ibc)=my_mfr(ibc)+this%rhoW(i,j,k+1)*this%cfg%dy(j)*this%cfg%dx(i)
                      my_area(ibc)=my_area(ibc)+this%cfg%dy(j)*this%cfg%dx(i)
                   end do
                case (6) ! BC in -z
                   do n=1,my_bc%itr%n_
                      i=my_bc%itr%map(1,n); j=my_bc%itr%map(2,n); k=my_bc%itr%map(3,n)
-                     my_mfr(ibc)=my_mfr(ibc)-this%rho*this%W(i,j,k  )*this%cfg%dy(j)*this%cfg%dx(i)
+                     my_mfr(ibc)=my_mfr(ibc)-this%rhoW(i,j,k  )*this%cfg%dy(j)*this%cfg%dx(i)
                      my_area(ibc)=my_area(ibc)+this%cfg%dy(j)*this%cfg%dx(i)
                   end do
                end select
@@ -1362,13 +1446,13 @@ contains
    end subroutine get_mfr
    
    
-   !> Correct MFR through correctable bconds
+   !> Correct MFR through correctable bconds - acts on rhoU only, U/V/W needs to be adjusted elsewhere
    subroutine correct_mfr(this)
       use mpi_f08,  only: MPI_SUM
       use parallel, only: MPI_REAL_WP
       implicit none
-      class(incomp), intent(inout) :: this
-      real(WP) :: mfr_error,vel_correction
+      class(lowmach), intent(inout) :: this
+      real(WP) :: mfr_error,mom_correction
       integer :: i,j,k,n
       type(bcond), pointer :: my_bc
       
@@ -1376,7 +1460,7 @@ contains
       call this%get_mfr()
       mfr_error=sum(this%mfr)
       if (abs(mfr_error).lt.10.0_WP*epsilon(1.0_WP).or.abs(this%correctable_area).lt.10.0_WP*epsilon(1.0_WP)) return
-      vel_correction=-mfr_error/(this%rho*this%correctable_area)
+      mom_correction=-mfr_error/(this%correctable_area)
       
       ! Traverse bcond list and correct bcond MFR
       my_bc=>this%first_bc
@@ -1390,32 +1474,32 @@ contains
             case (1) ! BC in +x
                do n=1,my_bc%itr%no_
                   i=my_bc%itr%map(1,n); j=my_bc%itr%map(2,n); k=my_bc%itr%map(3,n)
-                  this%U(i+1,j,k)=this%U(i+1,j,k)+vel_correction
+                  this%rhoU(i+1,j,k)=this%rhoU(i+1,j,k)+mom_correction
                end do
             case (2) ! BC in -x
                do n=1,my_bc%itr%no_
                   i=my_bc%itr%map(1,n); j=my_bc%itr%map(2,n); k=my_bc%itr%map(3,n)
-                  this%U(i,j,k)=this%U(i,j,k)-vel_correction
+                  this%rhoU(i,j,k)=this%rhoU(i,j,k)-mom_correction
                end do
             case (3) ! BC in +y
                do n=1,my_bc%itr%no_
                   i=my_bc%itr%map(1,n); j=my_bc%itr%map(2,n); k=my_bc%itr%map(3,n)
-                  this%V(i,j+1,k)=this%V(i,j+1,k)+vel_correction
+                  this%rhoV(i,j+1,k)=this%rhoV(i,j+1,k)+mom_correction
                end do
             case (4) ! BC in -y
                do n=1,my_bc%itr%no_
                   i=my_bc%itr%map(1,n); j=my_bc%itr%map(2,n); k=my_bc%itr%map(3,n)
-                  this%V(i,j,k)=this%V(i,j,k)-vel_correction
+                  this%rhoV(i,j,k)=this%rhoV(i,j,k)-mom_correction
                end do
             case (5) ! BC in +z
                do n=1,my_bc%itr%no_
                   i=my_bc%itr%map(1,n); j=my_bc%itr%map(2,n); k=my_bc%itr%map(3,n)
-                  this%W(i,j,k+1)=this%W(i,j,k+1)+vel_correction
+                  this%rhoW(i,j,k+1)=this%rhoW(i,j,k+1)+mom_correction
                end do
             case (6) ! BC in -z
                do n=1,my_bc%itr%no_
                   i=my_bc%itr%map(1,n); j=my_bc%itr%map(2,n); k=my_bc%itr%map(3,n)
-                  this%W(i,j,k)=this%W(i,j,k)-vel_correction
+                  this%rhoW(i,j,k)=this%rhoW(i,j,k)-mom_correction
                end do
             end select
             
@@ -1434,7 +1518,7 @@ contains
       use mpi_f08,  only: MPI_SUM,MPI_ALLREDUCE
       use parallel, only: MPI_REAL_WP
       implicit none
-      class(incomp), intent(in) :: this
+      class(lowmach), intent(in) :: this
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: pressure !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       real(WP) :: vol_tot,pressure_tot,my_vol_tot,my_pressure_tot
       integer :: i,j,k,ierr
@@ -1468,28 +1552,36 @@ contains
    
    
    !> Solve for implicit velocity residual
-   subroutine solve_implicit(this,dt,resU,resV,resW)
+   subroutine solve_implicit(this,dt,resU,resV,resW,rho)
       use ils_class, only: amg
       implicit none
-      class(incomp), intent(inout) :: this
+      class(lowmach), intent(inout) :: this
       real(WP), intent(in) :: dt
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: resU !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: resV !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: resW !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in)    :: rho  !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       integer :: i,j,k
       real(WP) :: rhoUp,rhoUm,rhoVp,rhoVm,rhoWp,rhoWm
       
       ! Solve implicit U problem
-      this%implicit%opr(1,:,:,:)=this%rho; this%implicit%opr(2:,:,:,:)=0.0_WP
       do k=this%cfg%kmin_,this%cfg%kmax_
          do j=this%cfg%jmin_,this%cfg%jmax_
             do i=this%cfg%imin_,this%cfg%imax_
-               rhoUp=this%rho*sum(this%itpu_x(:,i  ,j,k)*this%U(i  :i+1,j,k))*2.0_WP
-               rhoUm=this%rho*sum(this%itpu_x(:,i-1,j,k)*this%U(i-1:i  ,j,k))*2.0_WP
-               rhoVp=this%rho*sum(this%itpv_x(:,i,j+1,k)*this%V(i-1:i,j+1,k))
-               rhoVm=this%rho*sum(this%itpv_x(:,i,j  ,k)*this%V(i-1:i,j  ,k))
-               rhoWp=this%rho*sum(this%itpw_x(:,i,j,k+1)*this%W(i-1:i,j,k+1))
-               rhoWm=this%rho*sum(this%itpw_x(:,i,j,k  )*this%W(i-1:i,j,k  ))
+               this%implicit%opr(1,i,j,k)=sum(this%itpr_x(:,i,j,k)*rho(i-1:i,j,k))
+               this%implicit%opr(2:,i,j,k)=0.0_WP
+            end do
+         end do
+      end do
+      do k=this%cfg%kmin_,this%cfg%kmax_
+         do j=this%cfg%jmin_,this%cfg%jmax_
+            do i=this%cfg%imin_,this%cfg%imax_
+               rhoUp=sum(this%itpu_x(:,i  ,j,k)*this%rhoU(i  :i+1,j,k))*2.0_WP
+               rhoUm=sum(this%itpu_x(:,i-1,j,k)*this%rhoU(i-1:i  ,j,k))*2.0_WP
+               rhoVp=sum(this%itpv_x(:,i,j+1,k)*this%rhoV(i-1:i,j+1,k))
+               rhoVm=sum(this%itpv_x(:,i,j  ,k)*this%rhoV(i-1:i,j  ,k))
+               rhoWp=sum(this%itpw_x(:,i,j,k+1)*this%rhoW(i-1:i,j,k+1))
+               rhoWm=sum(this%itpw_x(:,i,j,k  )*this%rhoW(i-1:i,j,k  ))
                this%implicit%opr(1,i,j,k)=this%implicit%opr(1,i,j,k)+0.5_WP*dt*(this%divu_x( 0,i,j,k)*this%itpu_x( 0,i  ,j,k)*rhoUp+&
                &                                                                this%divu_x(-1,i,j,k)*this%itpu_x(+1,i-1,j,k)*rhoUm+&
                &                                                                this%divu_y(+1,i,j,k)*this%itpu_y(-1,i,j+1,k)*rhoVp+&
@@ -1508,18 +1600,18 @@ contains
       do k=this%cfg%kmin_,this%cfg%kmax_
          do j=this%cfg%jmin_,this%cfg%jmax_
             do i=this%cfg%imin_,this%cfg%imax_
-               this%implicit%opr(1,i,j,k)=this%implicit%opr(1,i,j,k)-0.5_WP*dt*(this%divu_x( 0,i,j,k)*this%visc*this%grdu_x( 0,i  ,j,k)+&
-               &                                                                this%divu_x(-1,i,j,k)*this%visc*this%grdu_x(+1,i-1,j,k)+&
-               &                                                                this%divu_y(+1,i,j,k)*this%visc*this%grdu_y(-1,i,j+1,k)+&
-               &                                                                this%divu_y( 0,i,j,k)*this%visc*this%grdu_y( 0,i,j  ,k)+&
-               &                                                                this%divu_z(+1,i,j,k)*this%visc*this%grdu_z(-1,i,j,k+1)+&
-               &                                                                this%divu_z( 0,i,j,k)*this%visc*this%grdu_z( 0,i,j,k  ))
-               this%implicit%opr(2,i,j,k)=this%implicit%opr(2,i,j,k)-0.5_WP*dt*(this%divu_x( 0,i,j,k)*this%visc*this%grdu_x(+1,i  ,j,k))
-               this%implicit%opr(3,i,j,k)=this%implicit%opr(3,i,j,k)-0.5_WP*dt*(this%divu_x(-1,i,j,k)*this%visc*this%grdu_x( 0,i-1,j,k))
-               this%implicit%opr(4,i,j,k)=this%implicit%opr(4,i,j,k)-0.5_WP*dt*(this%divu_y(+1,i,j,k)*this%visc*this%grdu_y( 0,i,j+1,k))
-               this%implicit%opr(5,i,j,k)=this%implicit%opr(5,i,j,k)-0.5_WP*dt*(this%divu_y( 0,i,j,k)*this%visc*this%grdu_y(-1,i,j  ,k))
-               this%implicit%opr(6,i,j,k)=this%implicit%opr(6,i,j,k)-0.5_WP*dt*(this%divu_z(+1,i,j,k)*this%visc*this%grdu_z( 0,i,j,k+1))
-               this%implicit%opr(7,i,j,k)=this%implicit%opr(7,i,j,k)-0.5_WP*dt*(this%divu_z( 0,i,j,k)*this%visc*this%grdu_z(-1,i,j,k  ))
+               this%implicit%opr(1,i,j,k)=this%implicit%opr(1,i,j,k)-0.5_WP*dt*(this%divu_x( 0,i,j,k)*4.0_WP/3.0_WP*               this%visc(i  ,j,k)       *this%grdu_x( 0,i  ,j,k)+&
+               &                                                                this%divu_x(-1,i,j,k)*4.0_WP/3.0_WP*               this%visc(i-1,j,k)       *this%grdu_x(+1,i-1,j,k)+&
+               &                                                                this%divu_y(+1,i,j,k)*sum(this%itp_xy(:,:,i,j+1,k)*this%visc(i-1:i,j:j+1,k))*this%grdu_y(-1,i,j+1,k)+&
+               &                                                                this%divu_y( 0,i,j,k)*sum(this%itp_xy(:,:,i,j  ,k)*this%visc(i-1:i,j-1:j,k))*this%grdu_y( 0,i,j  ,k)+&
+               &                                                                this%divu_z(+1,i,j,k)*sum(this%itp_xz(:,:,i,j,k+1)*this%visc(i-1:i,j,k:k+1))*this%grdu_z(-1,i,j,k+1)+&
+               &                                                                this%divu_z( 0,i,j,k)*sum(this%itp_xz(:,:,i,j,k  )*this%visc(i-1:i,j,k-1:k))*this%grdu_z( 0,i,j,k  ))
+               this%implicit%opr(2,i,j,k)=this%implicit%opr(2,i,j,k)-0.5_WP*dt*(this%divu_x( 0,i,j,k)*4.0_WP/3.0_WP*               this%visc(i  ,j,k)       *this%grdu_x(+1,i  ,j,k))
+               this%implicit%opr(3,i,j,k)=this%implicit%opr(3,i,j,k)-0.5_WP*dt*(this%divu_x(-1,i,j,k)*4.0_WP/3.0_WP*               this%visc(i-1,j,k)       *this%grdu_x( 0,i-1,j,k))
+               this%implicit%opr(4,i,j,k)=this%implicit%opr(4,i,j,k)-0.5_WP*dt*(this%divu_y(+1,i,j,k)*sum(this%itp_xy(:,:,i,j+1,k)*this%visc(i-1:i,j:j+1,k))*this%grdu_y( 0,i,j+1,k))
+               this%implicit%opr(5,i,j,k)=this%implicit%opr(5,i,j,k)-0.5_WP*dt*(this%divu_y( 0,i,j,k)*sum(this%itp_xy(:,:,i,j  ,k)*this%visc(i-1:i,j-1:j,k))*this%grdu_y(-1,i,j  ,k))
+               this%implicit%opr(6,i,j,k)=this%implicit%opr(6,i,j,k)-0.5_WP*dt*(this%divu_z(+1,i,j,k)*sum(this%itp_xz(:,:,i,j,k+1)*this%visc(i-1:i,j,k:k+1))*this%grdu_z( 0,i,j,k+1))
+               this%implicit%opr(7,i,j,k)=this%implicit%opr(7,i,j,k)-0.5_WP*dt*(this%divu_z( 0,i,j,k)*sum(this%itp_xz(:,:,i,j,k  )*this%visc(i-1:i,j,k-1:k))*this%grdu_z(-1,i,j,k  ))
             end do
          end do
       end do
@@ -1530,16 +1622,23 @@ contains
       resU=this%implicit%sol
       
       ! Solve implicit V problem
-      this%implicit%opr(1,:,:,:)=this%rho; this%implicit%opr(2:,:,:,:)=0.0_WP
       do k=this%cfg%kmin_,this%cfg%kmax_
          do j=this%cfg%jmin_,this%cfg%jmax_
             do i=this%cfg%imin_,this%cfg%imax_
-               rhoUp=this%rho*sum(this%itpu_y(:,i+1,j,k)*this%U(i+1,j-1:j,k))
-               rhoUm=this%rho*sum(this%itpu_y(:,i  ,j,k)*this%U(i  ,j-1:j,k))
-               rhoVp=this%rho*sum(this%itpv_y(:,i,j  ,k)*this%V(i,j  :j+1,k))*2.0_WP
-               rhoVm=this%rho*sum(this%itpv_y(:,i,j-1,k)*this%V(i,j-1:j  ,k))*2.0_WP
-               rhoWp=this%rho*sum(this%itpw_y(:,i,j,k+1)*this%W(i,j-1:j,k+1))
-               rhoWm=this%rho*sum(this%itpw_y(:,i,j,k  )*this%W(i,j-1:j,k  ))
+               this%implicit%opr(1,i,j,k)=sum(this%itpr_y(:,i,j,k)*rho(i,j-1:j,k))
+               this%implicit%opr(2:,i,j,k)=0.0_WP
+            end do
+         end do
+      end do
+      do k=this%cfg%kmin_,this%cfg%kmax_
+         do j=this%cfg%jmin_,this%cfg%jmax_
+            do i=this%cfg%imin_,this%cfg%imax_
+               rhoUp=sum(this%itpu_y(:,i+1,j,k)*this%rhoU(i+1,j-1:j,k))
+               rhoUm=sum(this%itpu_y(:,i  ,j,k)*this%rhoU(i  ,j-1:j,k))
+               rhoVp=sum(this%itpv_y(:,i,j  ,k)*this%rhoV(i,j  :j+1,k))*2.0_WP
+               rhoVm=sum(this%itpv_y(:,i,j-1,k)*this%rhoV(i,j-1:j  ,k))*2.0_WP
+               rhoWp=sum(this%itpw_y(:,i,j,k+1)*this%rhoW(i,j-1:j,k+1))
+               rhoWm=sum(this%itpw_y(:,i,j,k  )*this%rhoW(i,j-1:j,k  ))
                this%implicit%opr(1,i,j,k)=this%implicit%opr(1,i,j,k)+0.5_WP*dt*(this%divv_x(+1,i,j,k)*this%itpv_x(-1,i+1,j,k)*rhoUp+&
                &                                                                this%divv_x( 0,i,j,k)*this%itpv_x( 0,i  ,j,k)*rhoUm+&
                &                                                                this%divv_y( 0,i,j,k)*this%itpv_y( 0,i,j  ,k)*rhoVp+&
@@ -1558,18 +1657,18 @@ contains
       do k=this%cfg%kmin_,this%cfg%kmax_
          do j=this%cfg%jmin_,this%cfg%jmax_
             do i=this%cfg%imin_,this%cfg%imax_
-               this%implicit%opr(1,i,j,k)=this%implicit%opr(1,i,j,k)-0.5_WP*dt*(this%divv_x(+1,i,j,k)*this%visc*this%grdv_x(-1,i+1,j,k)+&
-               &                                                                this%divv_x( 0,i,j,k)*this%visc*this%grdv_x( 0,i  ,j,k)+&
-               &                                                                this%divv_y( 0,i,j,k)*this%visc*this%grdv_y( 0,i,j  ,k)+&
-               &                                                                this%divv_y(-1,i,j,k)*this%visc*this%grdv_y(+1,i,j-1,k)+&
-               &                                                                this%divv_z(+1,i,j,k)*this%visc*this%grdv_z(-1,i,j,k+1)+&
-               &                                                                this%divv_z( 0,i,j,k)*this%visc*this%grdv_z( 0,i,j,k  ))
-               this%implicit%opr(2,i,j,k)=this%implicit%opr(2,i,j,k)-0.5_WP*dt*(this%divv_x(+1,i,j,k)*this%visc*this%grdv_x( 0,i+1,j,k))
-               this%implicit%opr(3,i,j,k)=this%implicit%opr(3,i,j,k)-0.5_WP*dt*(this%divv_x( 0,i,j,k)*this%visc*this%grdv_x(-1,i  ,j,k))
-               this%implicit%opr(4,i,j,k)=this%implicit%opr(4,i,j,k)-0.5_WP*dt*(this%divv_y( 0,i,j,k)*this%visc*this%grdv_y(+1,i,j  ,k))
-               this%implicit%opr(5,i,j,k)=this%implicit%opr(5,i,j,k)-0.5_WP*dt*(this%divv_y(-1,i,j,k)*this%visc*this%grdv_y( 0,i,j-1,k))
-               this%implicit%opr(6,i,j,k)=this%implicit%opr(6,i,j,k)-0.5_WP*dt*(this%divv_z(+1,i,j,k)*this%visc*this%grdv_z( 0,i,j,k+1))
-               this%implicit%opr(7,i,j,k)=this%implicit%opr(7,i,j,k)-0.5_WP*dt*(this%divv_z( 0,i,j,k)*this%visc*this%grdv_z(-1,i,j,k  ))
+               this%implicit%opr(1,i,j,k)=this%implicit%opr(1,i,j,k)-0.5_WP*dt*(this%divv_x(+1,i,j,k)*sum(this%itp_xy(:,:,i+1,j,k)*this%visc(i:i+1,j-1:j,k))*this%grdv_x(-1,i+1,j,k)+&
+               &                                                                this%divv_x( 0,i,j,k)*sum(this%itp_xy(:,:,i  ,j,k)*this%visc(i-1:i,j-1:j,k))*this%grdv_x( 0,i  ,j,k)+&
+               &                                                                this%divv_y( 0,i,j,k)*4.0_WP/3.0_WP*               this%visc(i,j  ,k)       *this%grdv_y( 0,i,j  ,k)+&
+               &                                                                this%divv_y(-1,i,j,k)*4.0_WP/3.0_WP*               this%visc(i,j-1,k)       *this%grdv_y(+1,i,j-1,k)+&
+               &                                                                this%divv_z(+1,i,j,k)*sum(this%itp_yz(:,:,i,j,k+1)*this%visc(i,j-1:j,k:k+1))*this%grdv_z(-1,i,j,k+1)+&
+               &                                                                this%divv_z( 0,i,j,k)*sum(this%itp_yz(:,:,i,j,k  )*this%visc(i,j-1:j,k-1:k))*this%grdv_z( 0,i,j,k  ))
+               this%implicit%opr(2,i,j,k)=this%implicit%opr(2,i,j,k)-0.5_WP*dt*(this%divv_x(+1,i,j,k)*sum(this%itp_xy(:,:,i+1,j,k)*this%visc(i:i+1,j-1:j,k))*this%grdv_x( 0,i+1,j,k))
+               this%implicit%opr(3,i,j,k)=this%implicit%opr(3,i,j,k)-0.5_WP*dt*(this%divv_x( 0,i,j,k)*sum(this%itp_xy(:,:,i  ,j,k)*this%visc(i-1:i,j-1:j,k))*this%grdv_x(-1,i  ,j,k))
+               this%implicit%opr(4,i,j,k)=this%implicit%opr(4,i,j,k)-0.5_WP*dt*(this%divv_y( 0,i,j,k)*4.0_WP/3.0_WP*               this%visc(i,j  ,k)       *this%grdv_y(+1,i,j  ,k))
+               this%implicit%opr(5,i,j,k)=this%implicit%opr(5,i,j,k)-0.5_WP*dt*(this%divv_y(-1,i,j,k)*4.0_WP/3.0_WP*               this%visc(i,j-1,k)       *this%grdv_y( 0,i,j-1,k))
+               this%implicit%opr(6,i,j,k)=this%implicit%opr(6,i,j,k)-0.5_WP*dt*(this%divv_z(+1,i,j,k)*sum(this%itp_yz(:,:,i,j,k+1)*this%visc(i,j-1:j,k:k+1))*this%grdv_z( 0,i,j,k+1))
+               this%implicit%opr(7,i,j,k)=this%implicit%opr(7,i,j,k)-0.5_WP*dt*(this%divv_z( 0,i,j,k)*sum(this%itp_yz(:,:,i,j,k  )*this%visc(i,j-1:j,k-1:k))*this%grdv_z(-1,i,j,k  ))
             end do
          end do
       end do
@@ -1580,16 +1679,23 @@ contains
       resV=this%implicit%sol
       
       ! Solve implicit W problem
-      this%implicit%opr(1,:,:,:)=this%rho; this%implicit%opr(2:,:,:,:)=0.0_WP
       do k=this%cfg%kmin_,this%cfg%kmax_
          do j=this%cfg%jmin_,this%cfg%jmax_
             do i=this%cfg%imin_,this%cfg%imax_
-               rhoUp=this%rho*sum(this%itpu_z(:,i+1,j,k)*this%U(i+1,j,k-1:k))
-               rhoUm=this%rho*sum(this%itpu_z(:,i  ,j,k)*this%U(i  ,j,k-1:k))
-               rhoVp=this%rho*sum(this%itpv_z(:,i,j+1,k)*this%V(i,j+1,k-1:k))
-               rhoVm=this%rho*sum(this%itpv_z(:,i,j  ,k)*this%V(i,j  ,k-1:k))
-               rhoWp=this%rho*sum(this%itpw_z(:,i,j,k  )*this%W(i,j,k  :k+1))*2.0_WP
-               rhoWm=this%rho*sum(this%itpw_z(:,i,j,k-1)*this%W(i,j,k-1:k  ))*2.0_WP
+               this%implicit%opr(1,i,j,k)=sum(this%itpr_z(:,i,j,k)*rho(i,j,k-1:k))
+               this%implicit%opr(2:,i,j,k)=0.0_WP
+            end do
+         end do
+      end do
+      do k=this%cfg%kmin_,this%cfg%kmax_
+         do j=this%cfg%jmin_,this%cfg%jmax_
+            do i=this%cfg%imin_,this%cfg%imax_
+               rhoUp=sum(this%itpu_z(:,i+1,j,k)*this%rhoU(i+1,j,k-1:k))
+               rhoUm=sum(this%itpu_z(:,i  ,j,k)*this%rhoU(i  ,j,k-1:k))
+               rhoVp=sum(this%itpv_z(:,i,j+1,k)*this%rhoV(i,j+1,k-1:k))
+               rhoVm=sum(this%itpv_z(:,i,j  ,k)*this%rhoV(i,j  ,k-1:k))
+               rhoWp=sum(this%itpw_z(:,i,j,k  )*this%rhoW(i,j,k  :k+1))*2.0_WP
+               rhoWm=sum(this%itpw_z(:,i,j,k-1)*this%rhoW(i,j,k-1:k  ))*2.0_WP
                this%implicit%opr(1,i,j,k)=this%implicit%opr(1,i,j,k)+0.5_WP*dt*(this%divw_x(+1,i,j,k)*this%itpw_x(-1,i+1,j,k)*rhoUp+&
                &                                                                this%divw_x( 0,i,j,k)*this%itpw_x( 0,i  ,j,k)*rhoUm+&
                &                                                                this%divw_y(+1,i,j,k)*this%itpw_y(-1,i,j+1,k)*rhoVp+&
@@ -1608,18 +1714,18 @@ contains
       do k=this%cfg%kmin_,this%cfg%kmax_
          do j=this%cfg%jmin_,this%cfg%jmax_
             do i=this%cfg%imin_,this%cfg%imax_
-               this%implicit%opr(1,i,j,k)=this%implicit%opr(1,i,j,k)-0.5_WP*dt*(this%divw_x(+1,i,j,k)*this%visc*this%grdw_x(-1,i+1,j,k)+&
-               &                                                                this%divw_x( 0,i,j,k)*this%visc*this%grdw_x( 0,i  ,j,k)+&
-               &                                                                this%divw_y(+1,i,j,k)*this%visc*this%grdw_y(-1,i,j+1,k)+&
-               &                                                                this%divw_y( 0,i,j,k)*this%visc*this%grdw_y( 0,i,j  ,k)+&
-               &                                                                this%divw_z( 0,i,j,k)*this%visc*this%grdw_z( 0,i,j,k  )+&
-               &                                                                this%divw_z(-1,i,j,k)*this%visc*this%grdw_z(+1,i,j,k-1))
-               this%implicit%opr(2,i,j,k)=this%implicit%opr(2,i,j,k)-0.5_WP*dt*(this%divw_x(+1,i,j,k)*this%visc*this%grdw_x( 0,i+1,j,k))
-               this%implicit%opr(3,i,j,k)=this%implicit%opr(3,i,j,k)-0.5_WP*dt*(this%divw_x( 0,i,j,k)*this%visc*this%grdw_x(-1,i  ,j,k))
-               this%implicit%opr(4,i,j,k)=this%implicit%opr(4,i,j,k)-0.5_WP*dt*(this%divw_y(+1,i,j,k)*this%visc*this%grdw_y( 0,i,j+1,k))
-               this%implicit%opr(5,i,j,k)=this%implicit%opr(5,i,j,k)-0.5_WP*dt*(this%divw_y( 0,i,j,k)*this%visc*this%grdw_y(-1,i,j  ,k))
-               this%implicit%opr(6,i,j,k)=this%implicit%opr(6,i,j,k)-0.5_WP*dt*(this%divw_z( 0,i,j,k)*this%visc*this%grdw_z(+1,i,j,k  ))
-               this%implicit%opr(7,i,j,k)=this%implicit%opr(7,i,j,k)-0.5_WP*dt*(this%divw_z(-1,i,j,k)*this%visc*this%grdw_z( 0,i,j,k-1))
+               this%implicit%opr(1,i,j,k)=this%implicit%opr(1,i,j,k)-0.5_WP*dt*(this%divw_x(+1,i,j,k)*sum(this%itp_xz(:,:,i+1,j,k)*this%visc(i:i+1,j,k-1:k))*this%grdw_x(-1,i+1,j,k)+&
+               &                                                                this%divw_x( 0,i,j,k)*sum(this%itp_xz(:,:,i  ,j,k)*this%visc(i-1:i,j,k-1:k))*this%grdw_x( 0,i  ,j,k)+&
+               &                                                                this%divw_y(+1,i,j,k)*sum(this%itp_yz(:,:,i,j+1,k)*this%visc(i,j:j+1,k-1:k))*this%grdw_y(-1,i,j+1,k)+&
+               &                                                                this%divw_y( 0,i,j,k)*sum(this%itp_yz(:,:,i,j  ,k)*this%visc(i,j-1:j,k-1:k))*this%grdw_y( 0,i,j  ,k)+&
+               &                                                                this%divw_z( 0,i,j,k)*4.0_WP/3.0_WP*               this%visc(i,j,k  )       *this%grdw_z( 0,i,j,k  )+&
+               &                                                                this%divw_z(-1,i,j,k)*4.0_WP/3.0_WP*               this%visc(i,j,k-1)       *this%grdw_z(+1,i,j,k-1))
+               this%implicit%opr(2,i,j,k)=this%implicit%opr(2,i,j,k)-0.5_WP*dt*(this%divw_x(+1,i,j,k)*sum(this%itp_xz(:,:,i+1,j,k)*this%visc(i:i+1,j,k-1:k))*this%grdw_x( 0,i+1,j,k))
+               this%implicit%opr(3,i,j,k)=this%implicit%opr(3,i,j,k)-0.5_WP*dt*(this%divw_x( 0,i,j,k)*sum(this%itp_xz(:,:,i  ,j,k)*this%visc(i-1:i,j,k-1:k))*this%grdw_x(-1,i  ,j,k))
+               this%implicit%opr(4,i,j,k)=this%implicit%opr(4,i,j,k)-0.5_WP*dt*(this%divw_y(+1,i,j,k)*sum(this%itp_yz(:,:,i,j+1,k)*this%visc(i,j:j+1,k-1:k))*this%grdw_y( 0,i,j+1,k))
+               this%implicit%opr(5,i,j,k)=this%implicit%opr(5,i,j,k)-0.5_WP*dt*(this%divw_y( 0,i,j,k)*sum(this%itp_yz(:,:,i,j  ,k)*this%visc(i,j-1:j,k-1:k))*this%grdw_y(-1,i,j  ,k))
+               this%implicit%opr(6,i,j,k)=this%implicit%opr(6,i,j,k)-0.5_WP*dt*(this%divw_z( 0,i,j,k)*4.0_WP/3.0_WP*               this%visc(i,j,k  )       *this%grdw_z(+1,i,j,k  ))
+               this%implicit%opr(7,i,j,k)=this%implicit%opr(7,i,j,k)-0.5_WP*dt*(this%divw_z(-1,i,j,k)*4.0_WP/3.0_WP*               this%visc(i,j,k-1)       *this%grdw_z( 0,i,j,k-1))
             end do
          end do
       end do
@@ -1638,19 +1744,17 @@ contains
    
    
    !> Print out info for incompressible flow solver
-   subroutine incomp_print(this)
+   subroutine lowmach_print(this)
       use, intrinsic :: iso_fortran_env, only: output_unit
       implicit none
-      class(incomp), intent(in) :: this
+      class(lowmach), intent(in) :: this
       
       ! Output
       if (this%cfg%amRoot) then
-         write(output_unit,'("Incompressible solver [",a,"] for config [",a,"]")') trim(this%name),trim(this%cfg%name)
-         write(output_unit,'(" >   density = ",es12.5)') this%rho
-         write(output_unit,'(" > viscosity = ",es12.5)') this%visc
+         write(output_unit,'("Low-Mach solver [",a,"] for config [",a,"]")') trim(this%name),trim(this%cfg%name)
       end if
       
-   end subroutine incomp_print
+   end subroutine lowmach_print
    
    
-end module incomp_class
+end module lowmach_class
