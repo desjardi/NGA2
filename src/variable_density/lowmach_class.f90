@@ -118,6 +118,8 @@ module lowmach_class
       procedure :: get_dmomdt                             !< Calculate dmom/dt
       procedure :: get_div                                !< Calculate velocity divergence
       procedure :: get_pgrad                              !< Calculate pressure gradient
+      procedure :: rho_divide                             !< Form U from rhoU
+      procedure :: rho_multiply                           !< Form rhoU from U
       procedure :: get_cfl                                !< Calculate maximum CFL
       procedure :: get_max                                !< Calculate maximum field values
       procedure :: interp_vel                             !< Calculate interpolated velocity
@@ -1230,6 +1232,50 @@ contains
       call this%cfg%sync(Pgrady)
       call this%cfg%sync(Pgradz)
    end subroutine get_pgrad
+   
+   
+   !> Divide momentum by rho to form velocity
+   subroutine rho_divide(this,rho)
+      implicit none
+      class(lowmach), intent(inout) :: this
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in) :: rho  !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      integer :: i,j,k
+      do k=this%cfg%kmin_,this%cfg%kmax_
+         do j=this%cfg%jmin_,this%cfg%jmax_
+            do i=this%cfg%imin_,this%cfg%imax_
+               this%U(i,j,k)=this%rhoU(i,j,k)/sum(this%itpr_x(:,i,j,k)*rho(i-1:i,j,k))
+               this%V(i,j,k)=this%rhoV(i,j,k)/sum(this%itpr_y(:,i,j,k)*rho(i,j-1:j,k))
+               this%W(i,j,k)=this%rhoW(i,j,k)/sum(this%itpr_z(:,i,j,k)*rho(i,j,k-1:k))
+            end do
+         end do
+      end do
+      ! Sync it
+      call this%cfg%sync(this%U)
+      call this%cfg%sync(this%V)
+      call this%cfg%sync(this%W)
+   end subroutine rho_divide
+   
+   
+   !> Multiply velocity by rho to form momentum
+   subroutine rho_multiply(this,rho)
+      implicit none
+      class(lowmach), intent(inout) :: this
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in) :: rho  !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      integer :: i,j,k
+      do k=this%cfg%kmin_,this%cfg%kmax_
+         do j=this%cfg%jmin_,this%cfg%jmax_
+            do i=this%cfg%imin_,this%cfg%imax_
+               this%rhoU(i,j,k)=this%U(i,j,k)*sum(this%itpr_x(:,i,j,k)*rho(i-1:i,j,k))
+               this%rhoV(i,j,k)=this%V(i,j,k)*sum(this%itpr_y(:,i,j,k)*rho(i,j-1:j,k))
+               this%rhoW(i,j,k)=this%W(i,j,k)*sum(this%itpr_z(:,i,j,k)*rho(i,j,k-1:k))
+            end do
+         end do
+      end do
+      ! Sync it
+      call this%cfg%sync(this%rhoU)
+      call this%cfg%sync(this%rhoV)
+      call this%cfg%sync(this%rhoW)
+   end subroutine rho_multiply
    
    
    !> Calculate the interpolated velocity
