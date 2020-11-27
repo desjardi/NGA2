@@ -50,9 +50,11 @@ module vdscalar_class
       type(bcond), pointer :: first_bc                      !< List of bcond for our solver
       
       ! Scalar variable
+      real(WP), dimension(:,:,:), allocatable :: rho        !< Density array
       real(WP), dimension(:,:,:), allocatable :: SC         !< SC array
       
       ! Old scalar variable
+      real(WP), dimension(:,:,:), allocatable :: rhoold     !< Old density array
       real(WP), dimension(:,:,:), allocatable :: SCold      !< SCold array
       
       ! Implicit scalar solver
@@ -119,9 +121,11 @@ contains
       self%first_bc=>NULL()
       
       ! Allocate variables
-      allocate(self%SC   (self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%SC   =0.0_WP
-      allocate(self%SCold(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%SCold=0.0_WP
-      allocate(self%diff (self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%diff =0.0_WP
+      allocate(self%SC    (self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%SC    =0.0_WP
+      allocate(self%SCold (self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%SCold =0.0_WP
+      allocate(self%rho   (self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%rho   =0.0_WP
+      allocate(self%rhoold(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%rhoold=0.0_WP
+      allocate(self%diff  (self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%diff  =0.0_WP
       
       ! Prepare advection scheme
       self%scheme=scheme
@@ -523,19 +527,25 @@ contains
    
    
    !> Solve for implicit vdscalar residual
-   subroutine solve_implicit(this,dt,resSC,rho,rhoU,rhoV,rhoW)
+   subroutine solve_implicit(this,dt,resSC,rhoU,rhoV,rhoW)
       implicit none
       class(vdscalar), intent(inout) :: this
       real(WP), intent(in) :: dt
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: resSC !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
-      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in)    :: rho   !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in)    :: rhoU  !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in)    :: rhoV  !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in)    :: rhoW  !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       integer :: i,j,k,sti,std,st
       
       ! Prepare convective operator
-      this%implicit%opr(1,:,:,:)=rho; this%implicit%opr(2:,:,:,:)=0.0_WP
+      do k=this%cfg%kmin_,this%cfg%kmax_
+         do j=this%cfg%jmin_,this%cfg%jmax_
+            do i=this%cfg%imin_,this%cfg%imax_
+               this%implicit%opr(1 ,i,j,k)=this%rho(i,j,k)
+               this%implicit%opr(2:,i,j,k)=0.0_WP
+            end do
+         end do
+      end do
       do k=this%cfg%kmin_,this%cfg%kmax_
          do j=this%cfg%jmin_,this%cfg%jmax_
             do i=this%cfg%imin_,this%cfg%imax_

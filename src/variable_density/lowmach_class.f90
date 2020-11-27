@@ -56,6 +56,7 @@ module lowmach_class
       type(bcond), pointer :: first_bc                    !< List of bcond for our solver
       
       ! Flow variables
+      real(WP), dimension(:,:,:), allocatable :: rho      !< Density array
       real(WP), dimension(:,:,:), allocatable :: rhoU     !< U momentum array
       real(WP), dimension(:,:,:), allocatable :: rhoV     !< V momentum array
       real(WP), dimension(:,:,:), allocatable :: rhoW     !< W momentum array
@@ -65,6 +66,7 @@ module lowmach_class
       real(WP), dimension(:,:,:), allocatable :: P        !< Pressure array
       
       ! Old flow variables
+      real(WP), dimension(:,:,:), allocatable :: rhoold   !< Old density array
       real(WP), dimension(:,:,:), allocatable :: rhoUold  !< Old U momentum array
       real(WP), dimension(:,:,:), allocatable :: rhoVold  !< Old V momentum array
       real(WP), dimension(:,:,:), allocatable :: rhoWold  !< Old W momentum array
@@ -157,6 +159,7 @@ contains
       self%first_bc=>NULL()
       
       ! Allocate flow variables
+      allocate(self%rho (self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%rho =0.0_WP
       allocate(self%rhoU(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%rhoU=0.0_WP
       allocate(self%rhoV(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%rhoV=0.0_WP
       allocate(self%rhoW(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%rhoW=0.0_WP
@@ -166,6 +169,7 @@ contains
       allocate(self%P   (self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%P=0.0_WP
       
       ! Allocate old flow variables
+      allocate(self%rhoold (self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%rhoold =0.0_WP
       allocate(self%rhoUold(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%rhoUold=0.0_WP
       allocate(self%rhoVold(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%rhoVold=0.0_WP
       allocate(self%rhoWold(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%rhoWold=0.0_WP
@@ -1235,17 +1239,16 @@ contains
    
    
    !> Divide momentum by rho to form velocity
-   subroutine rho_divide(this,rho)
+   subroutine rho_divide(this)
       implicit none
       class(lowmach), intent(inout) :: this
-      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in) :: rho  !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       integer :: i,j,k
       do k=this%cfg%kmin_,this%cfg%kmax_
          do j=this%cfg%jmin_,this%cfg%jmax_
             do i=this%cfg%imin_,this%cfg%imax_
-               this%U(i,j,k)=this%rhoU(i,j,k)/sum(this%itpr_x(:,i,j,k)*rho(i-1:i,j,k))
-               this%V(i,j,k)=this%rhoV(i,j,k)/sum(this%itpr_y(:,i,j,k)*rho(i,j-1:j,k))
-               this%W(i,j,k)=this%rhoW(i,j,k)/sum(this%itpr_z(:,i,j,k)*rho(i,j,k-1:k))
+               this%U(i,j,k)=this%rhoU(i,j,k)/sum(this%itpr_x(:,i,j,k)*this%rho(i-1:i,j,k))
+               this%V(i,j,k)=this%rhoV(i,j,k)/sum(this%itpr_y(:,i,j,k)*this%rho(i,j-1:j,k))
+               this%W(i,j,k)=this%rhoW(i,j,k)/sum(this%itpr_z(:,i,j,k)*this%rho(i,j,k-1:k))
             end do
          end do
       end do
@@ -1257,17 +1260,16 @@ contains
    
    
    !> Multiply velocity by rho to form momentum
-   subroutine rho_multiply(this,rho)
+   subroutine rho_multiply(this)
       implicit none
       class(lowmach), intent(inout) :: this
-      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in) :: rho  !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       integer :: i,j,k
       do k=this%cfg%kmin_,this%cfg%kmax_
          do j=this%cfg%jmin_,this%cfg%jmax_
             do i=this%cfg%imin_,this%cfg%imax_
-               this%rhoU(i,j,k)=this%U(i,j,k)*sum(this%itpr_x(:,i,j,k)*rho(i-1:i,j,k))
-               this%rhoV(i,j,k)=this%V(i,j,k)*sum(this%itpr_y(:,i,j,k)*rho(i,j-1:j,k))
-               this%rhoW(i,j,k)=this%W(i,j,k)*sum(this%itpr_z(:,i,j,k)*rho(i,j,k-1:k))
+               this%rhoU(i,j,k)=this%U(i,j,k)*sum(this%itpr_x(:,i,j,k)*this%rho(i-1:i,j,k))
+               this%rhoV(i,j,k)=this%V(i,j,k)*sum(this%itpr_y(:,i,j,k)*this%rho(i,j-1:j,k))
+               this%rhoW(i,j,k)=this%W(i,j,k)*sum(this%itpr_z(:,i,j,k)*this%rho(i,j,k-1:k))
             end do
          end do
       end do
@@ -1303,13 +1305,12 @@ contains
    
    
    !> Calculate the CFL
-   subroutine get_cfl(this,dt,rho,cflc,cfl)
+   subroutine get_cfl(this,dt,cflc,cfl)
       use mpi_f08,  only: MPI_ALLREDUCE,MPI_MAX
       use parallel, only: MPI_REAL_WP
       implicit none
       class(lowmach), intent(inout) :: this
       real(WP), intent(in)  :: dt
-      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in) :: rho !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       real(WP), intent(out) :: cflc
       real(WP), optional :: cfl
       integer :: i,j,k,ierr
@@ -1324,9 +1325,9 @@ contains
                my_CFLc_x=max(my_CFLc_x,abs(this%U(i,j,k))*this%cfg%dxmi(i))
                my_CFLc_y=max(my_CFLc_y,abs(this%V(i,j,k))*this%cfg%dymi(j))
                my_CFLc_z=max(my_CFLc_z,abs(this%W(i,j,k))*this%cfg%dzmi(k))
-               my_CFLv_x=max(my_CFLv_x,4.0_WP*this%visc(i,j,k)*this%cfg%dxi(i)**2/rho(i,j,k))
-               my_CFLv_y=max(my_CFLv_y,4.0_WP*this%visc(i,j,k)*this%cfg%dyi(j)**2/rho(i,j,k))
-               my_CFLv_z=max(my_CFLv_z,4.0_WP*this%visc(i,j,k)*this%cfg%dzi(k)**2/rho(i,j,k))
+               my_CFLv_x=max(my_CFLv_x,4.0_WP*this%visc(i,j,k)*this%cfg%dxi(i)**2/this%rho(i,j,k))
+               my_CFLv_y=max(my_CFLv_y,4.0_WP*this%visc(i,j,k)*this%cfg%dyi(j)**2/this%rho(i,j,k))
+               my_CFLv_z=max(my_CFLv_z,4.0_WP*this%visc(i,j,k)*this%cfg%dzi(k)**2/this%rho(i,j,k))
             end do
          end do
       end do
@@ -1598,7 +1599,7 @@ contains
    
    
    !> Solve for implicit velocity residual
-   subroutine solve_implicit(this,dt,resU,resV,resW,rho)
+   subroutine solve_implicit(this,dt,resU,resV,resW)
       use ils_class, only: amg
       implicit none
       class(lowmach), intent(inout) :: this
@@ -1606,7 +1607,6 @@ contains
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: resU !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: resV !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: resW !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
-      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in)    :: rho  !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       integer :: i,j,k
       real(WP) :: rhoUp,rhoUm,rhoVp,rhoVm,rhoWp,rhoWm
       
@@ -1614,7 +1614,7 @@ contains
       do k=this%cfg%kmin_,this%cfg%kmax_
          do j=this%cfg%jmin_,this%cfg%jmax_
             do i=this%cfg%imin_,this%cfg%imax_
-               this%implicit%opr(1,i,j,k)=sum(this%itpr_x(:,i,j,k)*rho(i-1:i,j,k))
+               this%implicit%opr(1,i,j,k)=sum(this%itpr_x(:,i,j,k)*this%rho(i-1:i,j,k))
                this%implicit%opr(2:,i,j,k)=0.0_WP
             end do
          end do
@@ -1671,7 +1671,7 @@ contains
       do k=this%cfg%kmin_,this%cfg%kmax_
          do j=this%cfg%jmin_,this%cfg%jmax_
             do i=this%cfg%imin_,this%cfg%imax_
-               this%implicit%opr(1,i,j,k)=sum(this%itpr_y(:,i,j,k)*rho(i,j-1:j,k))
+               this%implicit%opr(1,i,j,k)=sum(this%itpr_y(:,i,j,k)*this%rho(i,j-1:j,k))
                this%implicit%opr(2:,i,j,k)=0.0_WP
             end do
          end do
@@ -1728,7 +1728,7 @@ contains
       do k=this%cfg%kmin_,this%cfg%kmax_
          do j=this%cfg%jmin_,this%cfg%jmax_
             do i=this%cfg%imin_,this%cfg%imax_
-               this%implicit%opr(1,i,j,k)=sum(this%itpr_z(:,i,j,k)*rho(i,j,k-1:k))
+               this%implicit%opr(1,i,j,k)=sum(this%itpr_z(:,i,j,k)*this%rho(i,j,k-1:k))
                this%implicit%opr(2:,i,j,k)=0.0_WP
             end do
          end do

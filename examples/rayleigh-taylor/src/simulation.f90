@@ -2,8 +2,8 @@
 module simulation
    use precision,         only: WP
    use geometry,          only: cfg
-   use incomp_class,      only: incomp
-   use scalar_class,      only: scalar
+   use lowmach_class,     only: lowmach
+   use vdscalar_class,    only: vdscalar
    use timetracker_class, only: timetracker
    use ensight_class,     only: ensight
    use event_class,       only: event
@@ -11,9 +11,9 @@ module simulation
    implicit none
    private
    
-   !> Single incompressible flow solver and corresponding time tracker
-   type(incomp),      public :: fs
-   type(scalar),      public :: sc
+   !> Single low Mach flow solver and scalar solver and corresponding time tracker
+   type(lowmach),     public :: fs
+   type(vdscalar),    public :: sc
    type(timetracker), public :: time
    
    !> Ensight postprocessing
@@ -31,19 +31,6 @@ module simulation
    
 contains
    
-      
-   !> Function that localizes the left end of the cube
-   function left_of_tube(pg,i,j,k) result(isIn)
-      use pgrid_class, only: pgrid
-      class(pgrid), intent(in) :: pg
-      integer, intent(in) :: i,j,k
-      logical :: isIn
-      real(WP) :: r
-      isIn=.false.
-      r=sqrt((pg%ym(j)+0.34_WP)**2+(pg%zm(k))**2)
-      if (abs(pg%x(i)+0.75_WP).lt.0.01_WP.and.r.lt.0.02_WP) isIn=.true.
-   end function left_of_tube
-   
    
    !> Initialization of problem solver
    subroutine simulation_init
@@ -53,15 +40,10 @@ contains
       
       ! Create an incompressible flow solver with bconds
       create_solver: block
-         use ils_class,    only: rbgs,amg,pcg_amg,pcg_parasail,gmres,gmres_pilut,smg,pfmg
-         use incomp_class, only: dirichlet,convective,neumann,clipped_neumann
+         use ils_class,     only: rbgs,amg,pcg_amg,pcg_parasail,gmres,gmres_pilut,smg,pfmg
+         use lowmach_class, only: dirichlet,convective,neumann,clipped_neumann
          ! Create flow solver
-         fs=incomp(cfg=cfg,name='Incompressible NS')
-         ! Set the flow properties
-         call param_read('Density',fs%rho)
-         call param_read('Dynamic viscosity',fs%visc)
-         ! Define boundary conditions
-         call fs%add_bcond(name='inflow',type=dirichlet,dir='-x',canCorrect=.false.,locator= left_of_tube)
+         fs=lowmach(cfg=cfg,name='Variable density low Mach NS')
          ! Configure pressure solver
          call param_read('Pressure iteration',fs%psolv%maxit)
          call param_read('Pressure tolerance',fs%psolv%rcvg)
@@ -75,14 +57,10 @@ contains
       
       ! Create a scalar solver
       create_scalar: block
-         use ils_class,    only: gmres
-         use scalar_class, only: dirichlet,neumann,quick
+         use ils_class,      only: gmres
+         use vdscalar_class, only: dirichlet,neumann,quick
          ! Create scalar solver
-         sc=scalar(cfg=cfg,scheme=quick,name='Temperature')
-         ! Set the equation parameters based on flow solver
-         sc%rho=fs%rho; sc%diff=fs%visc
-         ! Define boundary conditions
-         call sc%add_bcond(name='scalar inflow',type=dirichlet,dir='+x',locator=left_of_tube)
+         sc=vdscalar(cfg=cfg,scheme=quick,name='Temperature')
          ! Configure implicit scalar solver
          sc%implicit%maxit=fs%implicit%maxit; sc%implicit%rcvg=fs%implicit%rcvg
          ! Setup the solver
@@ -116,17 +94,11 @@ contains
       
       ! Initialize our velocity field
       initialize_velocity: block
-         use incomp_class, only: bcond
+         use lowmach_class, only: bcond
          type(bcond), pointer :: inflow
          integer :: n,i,j,k
          ! Zero initial field
-         fs%U=0.0_WP; fs%V=0.0_WP; fs%W=0.0_WP
-         ! Apply Dirichlet at the tube
-         call fs%get_bcond('inflow',inflow)
-         do n=1,inflow%itr%no_
-            i=inflow%itr%map(1,n); j=inflow%itr%map(2,n); k=inflow%itr%map(3,n)
-            fs%U(i,j,k)=-1.0_WP
-         end do
+         fs%U=0.0_WP; fs%V=0.0_WP; fs%W=0.0_WP; fs%rho=1.0_WP
          ! Apply all other boundary conditions
          call fs%apply_bcond(time%t,time%dt)
          call fs%interp_vel(Ui,Vi,Wi)
@@ -138,17 +110,11 @@ contains
       
       ! Initialize our temperature field
       initialize_scalar: block
-         use scalar_class, only: bcond
+         use vdscalar_class, only: bcond
          type(bcond), pointer :: inflow
          integer :: n,i,j,k
          ! Zero initial field
          sc%SC=0.0_WP
-         ! Apply Dirichlet at the tube
-         call sc%get_bcond('scalar inflow',inflow)
-         do n=1,inflow%itr%no_
-            i=inflow%itr%map(1,n); j=inflow%itr%map(2,n); k=inflow%itr%map(3,n)
-            sc%SC(i,j,k)=1.0_WP
-         end do
          ! Apply all other boundary conditions
          call sc%apply_bcond(time%t,time%dt)
       end block initialize_scalar
@@ -222,11 +188,15 @@ contains
          call time%adjust_dt()
          call time%increment()
          
-         ! Remember old velocity and scalar
-         sc%SCold=sc%SC
-         fs%Uold=fs%U
-         fs%Vold=fs%V
-         fs%Wold=fs%W
+         ! Remember old scalar
+         sc%rhoold=sc%rho
+         sc%SCold =sc%SC
+         
+         ! Remember old velocity and momentum
+         fs%rhoold=fs%rho
+         fs%Uold=fs%U; fs%rhoUold=fs%rhoU
+         fs%Vold=fs%V; fs%rhoVold=fs%rhoV
+         fs%Wold=fs%W; fs%rhoWold=fs%rhoW
          
          ! Apply time-varying Dirichlet conditions
          ! This is where time-dpt Dirichlet would be enforced
@@ -239,13 +209,13 @@ contains
             sc%SC=0.5_WP*(sc%SC+sc%SCold)
             
             ! Explicit calculation of drhoSC/dt from scalar equation
-            call sc%get_drhoSCdt(resSC,fs%rho*fs%U,fs%rho*fs%V,fs%rho*fs%W)
+            call sc%get_drhoSCdt(resSC,fs%rhoU,fs%rhoV,fs%rhoW)
             
             ! Assemble explicit residual
-            resSC=-2.0_WP*(sc%rho*sc%SC-sc%rho*sc%SCold)+time%dt*resSC
+            resSC=-2.0_WP*(sc%rho*sc%SC-sc%rhoold*sc%SCold)+time%dt*resSC
             
             ! Form implicit residual
-            call sc%solve_implicit(time%dt,resSC,fs%rho*fs%U,fs%rho*fs%V,fs%rho*fs%W)
+            call sc%solve_implicit(time%dt,resSC,fs%rhoU,fs%rhoV,fs%rhoW)
             
             ! Apply this residual
             sc%SC=2.0_WP*sc%SC-sc%SCold+resSC
@@ -254,20 +224,21 @@ contains
             call sc%apply_bcond(time%t,time%dt)
             ! ===================================================
             
+            ! SOMEWHERE WE NEED TO UPDATE THE DENSITY AND THE VISCOSITY AND THE DIFFUSIVITY
             
             ! ============ VELOCITY SOLVER ======================
-            ! Build mid-time velocity
-            fs%U=0.5_WP*(fs%U+fs%Uold)
-            fs%V=0.5_WP*(fs%V+fs%Vold)
-            fs%W=0.5_WP*(fs%W+fs%Wold)
+            ! Build mid-time velocity and momentum
+            fs%U=0.5_WP*(fs%U+fs%Uold); fs%rhoU=0.5_WP*(fs%rhoU+fs%rhoUold)
+            fs%V=0.5_WP*(fs%V+fs%Vold); fs%rhoV=0.5_WP*(fs%rhoV+fs%rhoVold)
+            fs%W=0.5_WP*(fs%W+fs%Wold); fs%rhoW=0.5_WP*(fs%rhoW+fs%rhoWold)
             
             ! Explicit calculation of drho*u/dt from NS
             call fs%get_dmomdt(resU,resV,resW)
             
             ! Assemble explicit residual
-            resU=-2.0_WP*(fs%rho*fs%U-fs%rho*fs%Uold)+time%dt*resU
-            resV=-2.0_WP*(fs%rho*fs%V-fs%rho*fs%Vold)+time%dt*resV
-            resW=-2.0_WP*(fs%rho*fs%W-fs%rho*fs%Wold)+time%dt*resW
+            resU=-2.0_WP*(fs%rhoU-fs%rhoUold)+time%dt*resU
+            resV=-2.0_WP*(fs%rhoV-fs%rhoVold)+time%dt*resV
+            resW=-2.0_WP*(fs%rhoW-fs%rhoWold)+time%dt*resW
             
             ! Form implicit residuals
             call fs%solve_implicit(time%dt,resU,resV,resW)
@@ -291,9 +262,9 @@ contains
             ! Correct velocity
             call fs%get_pgrad(fs%psolv%sol,resU,resV,resW)
             fs%P=fs%P+fs%psolv%sol
-            fs%U=fs%U-time%dt*resU/fs%rho
-            fs%V=fs%V-time%dt*resV/fs%rho
-            fs%W=fs%W-time%dt*resW/fs%rho
+            fs%rhoU=fs%rhoU-time%dt*resU
+            fs%rhoV=fs%rhoV-time%dt*resV
+            fs%rhoW=fs%rhoW-time%dt*resW
             ! ===================================================
             
             ! Increment sub-iteration counter
