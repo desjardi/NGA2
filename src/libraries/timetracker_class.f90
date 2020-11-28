@@ -24,7 +24,7 @@ module timetracker_class
       real(WP) ::  dt, dtmax                           !< Current and max timestep size
       real(WP) :: cfl,cflmax                           !< Current and max CFL
       real(WP) ::  wt, wtmax                           !< Current and max wallclock time
-      real(WP) :: told,dtold                           !< Old time and timestep size
+      real(WP) :: told,dtold,tmid,dtmid                !< Old/mid time and timestep size
    contains
       procedure :: increment                           !< Default method for incrementing time
       procedure :: adjust_dt                           !< Default method for adjusting timestep size
@@ -58,6 +58,8 @@ contains
       self%wt =0.0_WP;  self%wtmax=huge( self%wtmax)
       self%told=0.0_WP
       self%dtold=0.0_WP
+      self%tmid=0.0_WP
+      self%dtmid=0.0_WP
       self%it=1; self%itmax=1
    end function constructor
    
@@ -72,6 +74,8 @@ contains
       this%it=1
       this%told=this%t
       this%t=this%t+this%dt
+      this%tmid=0.5_WP*(this%t+this%told)
+      this%dtmid=0.5_WP*(this%dt+this%dtold)
       this%n=this%n+1
       this%wt=parallel_time()-wtinit
       ! If verbose run, log and or print info

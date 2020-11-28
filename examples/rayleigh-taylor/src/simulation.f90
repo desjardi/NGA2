@@ -212,7 +212,7 @@ contains
             call sc%get_drhoSCdt(resSC,fs%rhoU,fs%rhoV,fs%rhoW)
             
             ! Assemble explicit residual
-            resSC=-2.0_WP*(sc%rho*sc%SC-sc%rhoold*sc%SCold)+time%dt*resSC
+            resSC=time%dt*resSC-(2.0_WP*sc%rho*sc%SC-(sc%rho+sc%rhoold)*sc%SCold)
             
             ! Form implicit residual
             call sc%solve_implicit(time%dt,resSC,fs%rhoU,fs%rhoV,fs%rhoW)
@@ -224,9 +224,17 @@ contains
             call sc%apply_bcond(time%t,time%dt)
             ! ===================================================
             
-            ! SOMEWHERE WE NEED TO UPDATE THE DENSITY AND THE VISCOSITY AND THE DIFFUSIVITY
+            ! ============ UPDATE PROPERTIES ====================
+            ! UPDATE THE DENSITY
+            ! UPDATE THE VISCOSITY
+            ! UPDATE THE DIFFUSIVITY
+            ! ===================================================
             
             ! ============ VELOCITY SOLVER ======================
+            
+            ! Build n+1 density
+            fs%rho=0.5_WP*(sc%rho+sc%rhoold)
+            
             ! Build mid-time velocity and momentum
             fs%U=0.5_WP*(fs%U+fs%Uold); fs%rhoU=0.5_WP*(fs%rhoU+fs%rhoUold)
             fs%V=0.5_WP*(fs%V+fs%Vold); fs%rhoV=0.5_WP*(fs%rhoV+fs%rhoVold)
@@ -236,35 +244,38 @@ contains
             call fs%get_dmomdt(resU,resV,resW)
             
             ! Assemble explicit residual
-            resU=-2.0_WP*(fs%rhoU-fs%rhoUold)+time%dt*resU
-            resV=-2.0_WP*(fs%rhoV-fs%rhoVold)+time%dt*resV
-            resW=-2.0_WP*(fs%rhoW-fs%rhoWold)+time%dt*resW
+            resU=time%dtmid*resU-(2.0_WP*fs%rhoU-2.0_WP*fs%rhoUold)
+            resV=time%dtmid*resV-(2.0_WP*fs%rhoV-2.0_WP*fs%rhoVold)
+            resW=time%dtmid*resW-(2.0_WP*fs%rhoW-2.0_WP*fs%rhoWold)
             
             ! Form implicit residuals
-            call fs%solve_implicit(time%dt,resU,resV,resW)
+            call fs%solve_implicit(time%dtmid,resU,resV,resW)
             
             ! Apply these residuals
             fs%U=2.0_WP*fs%U-fs%Uold+resU
             fs%V=2.0_WP*fs%V-fs%Vold+resV
             fs%W=2.0_WP*fs%W-fs%Wold+resW
             
-            ! Apply other boundary conditions on the resulting fields
-            call fs%apply_bcond(time%t,time%dt)
+            ! Apply other boundary conditions and update momentum
+            call fs%apply_bcond(time%tmid,time%dtmid)
+            call fs%rho_multiply()
+            call fs%apply_bcond(time%tmid,time%dtmid)
             
             ! Solve Poisson equation
             call fs%correct_mfr()
             call fs%get_div()
-            fs%psolv%rhs=-fs%cfg%vol*fs%div*fs%rho/time%dt
+            fs%psolv%rhs=-fs%cfg%vol*fs%div*fs%rho/time%dtmid
             fs%psolv%sol=0.0_WP
             call fs%psolv%solve()
             call fs%shift_p(fs%psolv%sol)
             
-            ! Correct velocity
+            ! Correct momentum and rebuild velocity
             call fs%get_pgrad(fs%psolv%sol,resU,resV,resW)
             fs%P=fs%P+fs%psolv%sol
-            fs%rhoU=fs%rhoU-time%dt*resU
-            fs%rhoV=fs%rhoV-time%dt*resV
-            fs%rhoW=fs%rhoW-time%dt*resW
+            fs%rhoU=fs%rhoU-time%dtmid*resU
+            fs%rhoV=fs%rhoV-time%dtmid*resV
+            fs%rhoW=fs%rhoW-time%dtmid*resW
+            call fs%rho_divide
             ! ===================================================
             
             ! Increment sub-iteration counter
