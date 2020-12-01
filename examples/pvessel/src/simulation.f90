@@ -35,6 +35,7 @@ contains
    !> Function that localizes the left end of the cube
    function left_of_tube(pg,i,j,k) result(isIn)
       use pgrid_class, only: pgrid
+      implicit none
       class(pgrid), intent(in) :: pg
       integer, intent(in) :: i,j,k
       logical :: isIn

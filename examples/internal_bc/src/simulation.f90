@@ -32,6 +32,7 @@ contains
    !> Function that localizes the front (z+) of the domain
    function front_locator(pg,i,j,k) result(isIn)
       use pgrid_class, only: pgrid
+      implicit none
       class(pgrid), intent(in) :: pg
       integer, intent(in) :: i,j,k
       logical :: isIn
@@ -42,6 +43,7 @@ contains
    !> Function that localizes the back (z-) of the domain
    function back_locator(pg,i,j,k) result(isIn)
       use pgrid_class, only: pgrid
+      implicit none
       class(pgrid), intent(in) :: pg
       integer, intent(in) :: i,j,k
       logical :: isIn
@@ -52,6 +54,7 @@ contains
    !> Function that localizes the top (y+) of the domain
    function top_locator(pg,i,j,k) result(isIn)
       use pgrid_class, only: pgrid
+      implicit none
       class(pgrid), intent(in) :: pg
       integer, intent(in) :: i,j,k
       logical :: isIn
@@ -62,6 +65,7 @@ contains
    !> Function that localizes the bottom (y-) of the domain
    function bottom_locator(pg,i,j,k) result(isIn)
       use pgrid_class, only: pgrid
+      implicit none
       class(pgrid), intent(in) :: pg
       integer, intent(in) :: i,j,k
       logical :: isIn
@@ -72,6 +76,7 @@ contains
    !> Function that localizes the left face of the cube
    function left_of_cube(pg,i,j,k) result(isIn)
       use pgrid_class, only: pgrid
+      implicit none
       class(pgrid), intent(in) :: pg
       integer, intent(in) :: i,j,k
       logical :: isIn
@@ -85,6 +90,7 @@ contains
    !> Function that localizes the right face of the cube
    function right_of_cube(pg,i,j,k) result(isIn)
       use pgrid_class, only: pgrid
+      implicit none
       class(pgrid), intent(in) :: pg
       integer, intent(in) :: i,j,k
       logical :: isIn

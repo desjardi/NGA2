@@ -32,6 +32,7 @@ contains
    !> Function that localizes the top of the domain
    function top_locator(pg,i,j,k) result(isIn)
       use pgrid_class, only: pgrid
+      implicit none
       class(pgrid), intent(in) :: pg
       integer, intent(in) :: i,j,k
       logical :: isIn
@@ -42,6 +43,7 @@ contains
    !> Function that localizes the bottom of the domain
    function bottom_locator(pg,i,j,k) result(isIn)
       use pgrid_class, only: pgrid
+      implicit none
       class(pgrid), intent(in) :: pg
       integer, intent(in) :: i,j,k
       logical :: isIn

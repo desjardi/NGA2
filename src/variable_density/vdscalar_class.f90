@@ -77,6 +77,7 @@ module vdscalar_class
       
       ! Monitoring quantities
       real(WP) :: SCmax,SCmin                               !< Maximum and minimum scalar
+      real(WP) :: rhomax,rhomin                             !< Maximum and minimum density
       
    contains
       procedure :: print=>scalar_print                      !< Output solver to the screen
@@ -520,9 +521,11 @@ contains
       implicit none
       class(vdscalar), intent(inout) :: this
       integer :: i,j,k,ierr
-      real(WP) :: my_SCmax,my_SCmin
-      my_SCmax=maxval(this%SC); call MPI_ALLREDUCE(my_SCmax,this%SCmax,1,MPI_REAL_WP,MPI_MAX,this%cfg%comm,ierr)
-      my_SCmin=minval(this%SC); call MPI_ALLREDUCE(my_SCmin,this%SCmin,1,MPI_REAL_WP,MPI_MIN,this%cfg%comm,ierr)
+      real(WP) :: my_SCmax,my_SCmin,my_rhomax,my_rhomin
+      my_SCmax =maxval(this%SC);  call MPI_ALLREDUCE(my_SCmax ,this%SCmax ,1,MPI_REAL_WP,MPI_MAX,this%cfg%comm,ierr)
+      my_SCmin =minval(this%SC);  call MPI_ALLREDUCE(my_SCmin ,this%SCmin ,1,MPI_REAL_WP,MPI_MIN,this%cfg%comm,ierr)
+      my_rhomax=maxval(this%rho); call MPI_ALLREDUCE(my_rhomax,this%rhomax,1,MPI_REAL_WP,MPI_MAX,this%cfg%comm,ierr)
+      my_rhomin=minval(this%rho); call MPI_ALLREDUCE(my_rhomin,this%rhomin,1,MPI_REAL_WP,MPI_MIN,this%cfg%comm,ierr)
    end subroutine get_max
    
    

@@ -29,7 +29,27 @@ module simulation
    real(WP), dimension(:,:,:), allocatable :: resU,resV,resW,resSC
    real(WP), dimension(:,:,:), allocatable :: Ui,Vi,Wi
    
+   !> Equation of state
+   real(WP) :: rho_min,rho_max
+   
 contains
+   
+   
+   !> Define here our equation of state
+   subroutine get_rho(pg,rho,theta)
+      use pgrid_class, only: pgrid
+      class(pgrid), intent(in) :: pg
+      real(WP), dimension(pg%imino_:,pg%jmino_:,pg%kmino_:), intent(out) :: rho       !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      real(WP), dimension(pg%imino_:,pg%jmino_:,pg%kmino_:), intent(in)  :: theta     !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      integer :: i,j,k
+      do k=pg%kmino_,pg%kmaxo_
+         do j=pg%jmino_,pg%jmaxo_
+            do i=pg%imino_,pg%imaxo_
+               rho(i,j,k)=1.0_WP/(theta(i,j,k)*rho_min+(1.0_WP-theta(i,j,k))*rho_max)
+            end do
+         end do
+      end do
+   end subroutine get_rho
    
    
    !> Initialization of problem solver
@@ -37,13 +57,20 @@ contains
       use param, only: param_read
       implicit none
       
+      ! Read in the EOS info
+      call param_read('Min density',rho_min)
+      call param_read('Max density',rho_max)
       
       ! Create an incompressible flow solver with bconds
       create_solver: block
          use ils_class,     only: rbgs,amg,pcg_amg,pcg_parasail,gmres,gmres_pilut,smg,pfmg
          use lowmach_class, only: dirichlet,convective,neumann,clipped_neumann
+         real(WP) :: viscosity
          ! Create flow solver
          fs=lowmach(cfg=cfg,name='Variable density low Mach NS')
+         ! Assign constant viscosity
+         call param_read('Dynamic viscosity',viscosity)
+         fs%visc=viscosity
          ! Configure pressure solver
          call param_read('Pressure iteration',fs%psolv%maxit)
          call param_read('Pressure tolerance',fs%psolv%rcvg)
@@ -59,8 +86,12 @@ contains
       create_scalar: block
          use ils_class,      only: gmres
          use vdscalar_class, only: dirichlet,neumann,quick
+         real(WP) :: diffusivity
          ! Create scalar solver
          sc=vdscalar(cfg=cfg,scheme=quick,name='Temperature')
+         ! Assign constant diffusivity
+         call param_read('Dynamic diffusivity',diffusivity)
+         sc%diff=diffusivity
          ! Configure implicit scalar solver
          sc%implicit%maxit=fs%implicit%maxit; sc%implicit%rcvg=fs%implicit%rcvg
          ! Setup the solver
@@ -131,6 +162,7 @@ contains
          call ens_out%add_scalar('pressure',fs%P)
          call ens_out%add_vector('velocity',Ui,Vi,Wi)
          call ens_out%add_scalar('divergence',fs%div)
+         call ens_out%add_scalar('density',sc%rho)
          call ens_out%add_scalar('temperature',sc%SC)
          ! Output to ensight
          if (ens_evt%occurs()) call ens_out%write_data(time%t)
@@ -225,7 +257,7 @@ contains
             ! ===================================================
             
             ! ============ UPDATE PROPERTIES ====================
-            ! UPDATE THE DENSITY
+            call get_rho(sc%cfg,sc%rho,sc%SC)
             ! UPDATE THE VISCOSITY
             ! UPDATE THE DIFFUSIVITY
             ! ===================================================
@@ -263,7 +295,7 @@ contains
             
             ! Solve Poisson equation
             call fs%correct_mfr()
-            call fs%get_div()
+            call fs%get_div(); fs%div=(sc%rho-sc%rhoold)/time%dt+fs%div
             fs%psolv%rhs=-fs%cfg%vol*fs%div*fs%rho/time%dtmid
             fs%psolv%sol=0.0_WP
             call fs%psolv%solve()
@@ -285,7 +317,7 @@ contains
          
          ! Recompute interpolated velocity and divergence
          call fs%interp_vel(Ui,Vi,Wi)
-         call fs%get_div()
+         call fs%get_div(); fs%div=(sc%rho-sc%rhoold)/time%dt+fs%div
          
          ! Output to ensight
          if (ens_evt%occurs()) call ens_out%write_data(time%t)
@@ -315,6 +347,9 @@ contains
       deallocate(resSC,resU,resV,resW,Ui,Vi,Wi)
       
    end subroutine simulation_final
+   
+   
+   
    
    
 end module simulation
