@@ -187,6 +187,8 @@ contains
          call mfile%add_column(fs%Pmax,'Pmax')
          call mfile%add_column(sc%SCmax,'Tmax')
          call mfile%add_column(sc%SCmin,'Tmin')
+         call mfile%add_column(sc%rhomax,'RHOmax')
+         call mfile%add_column(sc%rhomin,'RHOmin')
          call mfile%add_column(fs%divmax,'Maximum divergence')
          call mfile%add_column(fs%psolv%it,'Pressure iteration')
          call mfile%add_column(fs%psolv%rerr,'Pressure error')
