@@ -30,22 +30,25 @@ module simulation
    real(WP), dimension(:,:,:), allocatable :: Ui,Vi,Wi
    
    !> Equation of state
-   real(WP) :: rho_min,rho_max
+   real(WP) :: Tmin,Tmax,fluid_mass
    
 contains
    
    
-   !> Define here our equation of state
-   subroutine get_rho(pg,rho,theta)
-      use pgrid_class, only: pgrid
-      class(pgrid), intent(in) :: pg
-      real(WP), dimension(pg%imino_:,pg%jmino_:,pg%kmino_:), intent(out) :: rho       !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
-      real(WP), dimension(pg%imino_:,pg%jmino_:,pg%kmino_:), intent(in)  :: theta     !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+   !> Define here our equation of state - rho(T,mass)
+   subroutine get_rho(mass)
+      implicit none
+      real(WP), intent(in) :: mass
       integer :: i,j,k
-      do k=pg%kmino_,pg%kmaxo_
-         do j=pg%jmino_,pg%jmaxo_
-            do i=pg%imino_,pg%imaxo_
-               rho(i,j,k)=1.0_WP/(theta(i,j,k)/rho_min+(1.0_WP-theta(i,j,k))/rho_max)
+      real(WP) :: one_over_T
+      ! Integrate 1/T
+      resSC=1.0_WP/sc%SC
+      call sc%cfg%integrate(resSC,integral=one_over_T)
+      ! Calculate density
+      do k=sc%cfg%kmino_,sc%cfg%kmaxo_
+         do j=sc%cfg%jmino_,sc%cfg%jmaxo_
+            do i=sc%cfg%imino_,sc%cfg%imaxo_
+               sc%rho(i,j,k)=mass/(sc%SC(i,j,k)*one_over_T)
             end do
          end do
       end do
@@ -58,8 +61,8 @@ contains
       implicit none
       
       ! Read in the EOS info
-      call param_read('Min density',rho_min)
-      call param_read('Max density',rho_max)
+      !call param_read('Min density',rho_min)
+      !call param_read('Max density',rho_max)
       
       ! Create an incompressible flow solver with bconds
       create_solver: block
@@ -126,12 +129,16 @@ contains
       ! Initialize our temperature field
       initialize_scalar: block
          integer :: j
+         ! Read in the temperature and mass
+         call param_read('Min temperature',Tmin)
+         call param_read('Max temperature',Tmax)
+         call param_read('Total mass',fluid_mass)
          ! Stratified initial field
          do j=fs%cfg%jmino_,fs%cfg%jmaxo_
-            sc%SC(:,j,:)=0.5_WP*tanh(-fs%cfg%ym(j)/0.05_WP)+0.5_WP
+            sc%SC(:,j,:)=Tmin+0.5_WP*(tanh(-fs%cfg%ym(j)/0.05_WP)+1.0_WP)*(Tmax-Tmin)
          end do
          ! Build corresponding density
-         call get_rho(sc%cfg,sc%rho,sc%SC)
+         call get_rho(mass=fluid_mass)
       end block initialize_scalar
       
       
@@ -273,9 +280,9 @@ contains
             ! Backup rhoSC
             resSC=sc%rho*sc%SC
             ! Update density
-            call get_rho(sc%cfg,sc%rho,sc%SC)
+            call get_rho(mass=fluid_mass)
             ! Rescale scalar for conservation
-            sc%SC=resSC/sc%rho
+            !sc%SC=resSC/sc%rho
             ! UPDATE THE VISCOSITY
             ! UPDATE THE DIFFUSIVITY
             ! ===================================================

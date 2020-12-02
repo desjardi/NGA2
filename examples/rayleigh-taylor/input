@@ -12,8 +12,9 @@ nz :	50
 # Fluid properties
 Dynamic viscosity :	0.001
 Dynamic diffusivity :	0.001
-Min density :	    	1
-Max density :		2
+Min temperature :	300
+Max temperature :	500
+Total mass :		1
 
 # Time integration
 Max timestep size :	5e-2
