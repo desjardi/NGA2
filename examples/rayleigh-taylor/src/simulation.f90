@@ -81,7 +81,9 @@ contains
          call param_read('Implicit iteration',fs%implicit%maxit)
          call param_read('Implicit tolerance',fs%implicit%rcvg)
          ! Setup the solver
-         call fs%setup(pressure_ils=pcg_amg,implicit_ils=pfmg)
+         !!!!!!!!
+         !!!! PCG_AMG
+         call fs%setup(pressure_ils=amg,implicit_ils=pfmg)
       end block create_solver
       
       
@@ -322,7 +324,7 @@ contains
             call fs%correct_mfr()
             call sc%get_drhodt(dt=time%dt,drhodt=resSC)
             call fs%get_div(drhodt=resSC)
-            fs%psolv%rhs=-fs%cfg%vol*fs%div*fs%rho/time%dtmid
+            fs%psolv%rhs=-fs%cfg%vol*fs%div/time%dtmid
             fs%psolv%sol=0.0_WP
             call fs%psolv%solve()
             call fs%shift_p(fs%psolv%sol)
