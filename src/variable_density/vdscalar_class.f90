@@ -76,8 +76,9 @@ module vdscalar_class
       integer, dimension(:,:,:), allocatable :: mask        !< Integer array used for modifying SC metrics
       
       ! Monitoring quantities
-      real(WP) :: SCmax,SCmin                               !< Maximum and minimum scalar
-      real(WP) :: rhomax,rhomin                             !< Maximum and minimum density
+      real(WP) :: SCmax,SCmin,SCint                         !< Maximum and minimum, integral scalar
+      real(WP) :: rhomax,rhomin,rhoint                      !< Maximum and minimum, integral density
+      real(WP) :: rhoSCint                                  !< Integral of rhoSC
       
    contains
       procedure :: print=>scalar_print                      !< Output solver to the screen
@@ -89,6 +90,8 @@ module vdscalar_class
       procedure :: adjust_metrics                           !< Adjust metrics
       procedure :: get_drhoSCdt                             !< Calculate drhoSC/dt
       procedure :: get_max                                  !< Calculate maximum field values
+      procedure :: get_int                                  !< Calculate integral field values
+      procedure :: get_drhodt                               !< Calculate drhodt
       procedure :: solve_implicit                           !< Solve for the scalar residuals implicitly
    end type vdscalar
    
@@ -150,14 +153,6 @@ contains
       
       ! Prepare mask for SC
       allocate(self%mask(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%mask=0
-      do k=self%cfg%kmino_,self%cfg%kmaxo_
-         do j=self%cfg%jmino_,self%cfg%jmaxo_
-            do i=self%cfg%imino_,self%cfg%imaxo_
-               if (self%cfg%VF(i,j,k).eq.0.0_WP) self%mask(i,j,k)=1
-            end do
-         end do
-      end do
-      call self%cfg%sync(self%mask)
       if (.not.self%cfg%xper) then
          if (self%cfg%iproc.eq.           1) self%mask(:self%cfg%imin-1,:,:)=2
          if (self%cfg%iproc.eq.self%cfg%npx) self%mask(self%cfg%imax+1:,:,:)=2
@@ -170,6 +165,14 @@ contains
          if (self%cfg%kproc.eq.           1) self%mask(:,:,:self%cfg%kmin-1)=2
          if (self%cfg%kproc.eq.self%cfg%npz) self%mask(:,:,self%cfg%kmax+1:)=2
       end if
+      do k=self%cfg%kmino_,self%cfg%kmaxo_
+         do j=self%cfg%jmino_,self%cfg%jmaxo_
+            do i=self%cfg%imino_,self%cfg%imaxo_
+               if (self%cfg%VF(i,j,k).eq.0.0_WP) self%mask(i,j,k)=1
+            end do
+         end do
+      end do
+      call self%cfg%sync(self%mask)
       
    end function constructor
       
@@ -514,19 +517,47 @@ contains
    end subroutine get_drhoSCdt
    
    
+   !> Calculate the time derivative of rho
+   subroutine get_drhodt(this,dt,drhodt)
+      implicit none
+      class(vdscalar), intent(inout) :: this
+      real(WP), intent(in) :: dt
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(out) :: drhodt !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      integer :: i,j,k
+      drhodt=(this%rho-this%rhoold)/dt
+   end subroutine get_drhodt
+   
+   
    !> Calculate the min and max of our SC field
    subroutine get_max(this)
       use mpi_f08,  only: MPI_ALLREDUCE,MPI_MAX,MPI_MIN
       use parallel, only: MPI_REAL_WP
       implicit none
       class(vdscalar), intent(inout) :: this
-      integer :: i,j,k,ierr
+      integer :: ierr
       real(WP) :: my_SCmax,my_SCmin,my_rhomax,my_rhomin
       my_SCmax =maxval(this%SC);  call MPI_ALLREDUCE(my_SCmax ,this%SCmax ,1,MPI_REAL_WP,MPI_MAX,this%cfg%comm,ierr)
       my_SCmin =minval(this%SC);  call MPI_ALLREDUCE(my_SCmin ,this%SCmin ,1,MPI_REAL_WP,MPI_MIN,this%cfg%comm,ierr)
       my_rhomax=maxval(this%rho); call MPI_ALLREDUCE(my_rhomax,this%rhomax,1,MPI_REAL_WP,MPI_MAX,this%cfg%comm,ierr)
       my_rhomin=minval(this%rho); call MPI_ALLREDUCE(my_rhomin,this%rhomin,1,MPI_REAL_WP,MPI_MIN,this%cfg%comm,ierr)
    end subroutine get_max
+   
+   
+   !> Calculate the integral of our SC field
+   subroutine get_int(this)
+      implicit none
+      class(vdscalar), intent(inout) :: this
+      real(WP), dimension(:,:,:), allocatable :: rhoSC
+      ! Integrate SC
+      call this%cfg%integrate(this%SC,integral=this%SCint)
+      ! Integrate rho
+      call this%cfg%integrate(this%rho,integral=this%rhoint)
+      ! Integrate rhoSC
+      allocate(rhoSC(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
+      rhoSC=this%SC*this%rho
+      call this%cfg%integrate(rhoSC,integral=this%rhoSCint)
+      deallocate(rhoSC)
+   end subroutine get_int
    
    
    !> Solve for implicit vdscalar residual

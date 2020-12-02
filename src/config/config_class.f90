@@ -25,6 +25,7 @@ module config_class
       procedure :: write=>config_write                         !< Write out config files: grid and geometry
       procedure, private :: prep=>config_prep                  !< Finish preparing config after the partitioned grid is loaded
       procedure :: VF_extend                                   !< Extend VF array into the non-periodic domain overlaps
+      procedure :: integrate                                   !< Integrate a variable on config while accounting for VF
    end type config
    
    
@@ -163,6 +164,32 @@ contains
          end if
       end if
    end subroutine VF_extend
+   
+   
+   !> Calculate the integral of a field on the config while accounting for VF
+   subroutine integrate(this,A,integral)
+      use mpi_f08,  only: MPI_ALLREDUCE,MPI_SUM
+      use parallel, only: MPI_REAL_WP
+      implicit none
+      class(config), intent(inout) :: this
+      real(WP), dimension(this%imino_:,this%jmino_:,this%kmino_:), intent(in) :: A      !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      real(WP), intent(out) :: integral
+      integer :: i,j,k,ierr
+      real(WP) :: my_int,my_vol,volume
+      my_int=0.0_WP
+      my_vol=0.0_WP
+      do k=this%kmin_,this%kmax_
+         do j=this%jmin_,this%jmax_
+            do i=this%imin_,this%imax_
+               my_int=my_int+this%vol(i,j,k)*this%VF(i,j,k)*A(i,j,k)
+               my_vol=my_vol+this%vol(i,j,k)*this%VF(i,j,k)
+            end do
+         end do
+      end do
+      call MPI_ALLREDUCE(my_int,integral,1,MPI_REAL_WP,MPI_SUM,this%comm,ierr)
+      call MPI_ALLREDUCE(my_vol,volume  ,1,MPI_REAL_WP,MPI_SUM,this%comm,ierr)
+      integral=integral/volume
+   end subroutine integrate
    
    
    !> Cheap print of config info to screen

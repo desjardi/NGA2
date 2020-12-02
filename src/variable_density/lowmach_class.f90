@@ -194,6 +194,10 @@ contains
       
       ! Prepare face mask for U
       allocate(self%umask(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%umask=0
+      if (.not.self%cfg%xper) then
+         if (self%cfg%iproc.eq.           1) self%umask(self%cfg%imin  ,:,:)=2
+         if (self%cfg%iproc.eq.self%cfg%npx) self%umask(self%cfg%imax+1,:,:)=2
+      end if
       do k=self%cfg%kmino_  ,self%cfg%kmaxo_
          do j=self%cfg%jmino_  ,self%cfg%jmaxo_
             do i=self%cfg%imino_+1,self%cfg%imaxo_
@@ -206,6 +210,10 @@ contains
       
       ! Prepare face mask for V
       allocate(self%vmask(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%vmask=0
+      if (.not.self%cfg%yper) then
+         if (self%cfg%jproc.eq.           1) self%vmask(:,self%cfg%jmin  ,:)=2
+         if (self%cfg%jproc.eq.self%cfg%npy) self%vmask(:,self%cfg%jmax+1,:)=2
+      end if
       do k=self%cfg%kmino_  ,self%cfg%kmaxo_
          do j=self%cfg%jmino_+1,self%cfg%jmaxo_
             do i=self%cfg%imino_  ,self%cfg%imaxo_
@@ -218,6 +226,10 @@ contains
       
       ! Prepare face mask for W
       allocate(self%wmask(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%wmask=0
+      if (.not.self%cfg%zper) then
+         if (self%cfg%kproc.eq.           1) self%wmask(:,:,self%cfg%kmin  )=2
+         if (self%cfg%kproc.eq.self%cfg%npz) self%wmask(:,:,self%cfg%kmax+1)=2
+      end if
       do k=self%cfg%kmino_+1,self%cfg%kmaxo_
          do j=self%cfg%jmino_  ,self%cfg%jmaxo_
             do i=self%cfg%imino_  ,self%cfg%imaxo_
@@ -227,20 +239,6 @@ contains
       end do
       call self%cfg%sync(self%wmask)
       if (.not.self%cfg%zper.and.self%cfg%kproc.eq.1) self%wmask(:,:,self%cfg%kmino)=self%wmask(:,:,self%cfg%kmino+1)
-      
-      ! Adjust face masks to reflect domain boundaries
-      if (.not.self%cfg%xper) then
-         if (self%cfg%iproc.eq.           1) self%umask(self%cfg%imin  ,:,:)=2
-         if (self%cfg%iproc.eq.self%cfg%npx) self%umask(self%cfg%imax+1,:,:)=2
-      end if
-      if (.not.self%cfg%yper) then
-         if (self%cfg%jproc.eq.           1) self%vmask(:,self%cfg%jmin  ,:)=2
-         if (self%cfg%jproc.eq.self%cfg%npy) self%vmask(:,self%cfg%jmax+1,:)=2
-      end if
-      if (.not.self%cfg%zper) then
-         if (self%cfg%kproc.eq.           1) self%wmask(:,:,self%cfg%kmin  )=2
-         if (self%cfg%kproc.eq.self%cfg%npz) self%wmask(:,:,self%cfg%kmax+1)=2
-      end if
       
    end function constructor
       
@@ -1194,17 +1192,18 @@ contains
    end subroutine get_dmomdt
    
    
-   !> Calculate the velocity divergence based on rhoU/rhoV/rhoW - drhodt is excluded
-   subroutine get_div(this)
+   !> Calculate the velocity divergence based on rhoU/rhoV/rhoW - drhodt is provided
+   subroutine get_div(this,drhodt)
       implicit none
       class(lowmach), intent(inout) :: this
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in) :: drhodt      !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       integer :: i,j,k
       do k=this%cfg%kmin_,this%cfg%kmax_
          do j=this%cfg%jmin_,this%cfg%jmax_
             do i=this%cfg%imin_,this%cfg%imax_
-               this%div(i,j,k)=sum(this%divp_x(:,i,j,k)*this%rhoU(i:i+1,j,k))+&
-               &               sum(this%divp_y(:,i,j,k)*this%rhoV(i,j:j+1,k))+&
-               &               sum(this%divp_z(:,i,j,k)*this%rhoW(i,j,k:k+1))
+               this%div(i,j,k)=drhodt(i,j,k)+sum(this%divp_x(:,i,j,k)*this%rhoU(i:i+1,j,k))+&
+               &                             sum(this%divp_y(:,i,j,k)*this%rhoV(i,j:j+1,k))+&
+               &                             sum(this%divp_z(:,i,j,k)*this%rhoW(i,j,k:k+1))
             end do
          end do
       end do

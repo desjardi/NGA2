@@ -21,7 +21,7 @@ module simulation
    type(event)   :: ens_evt
    
    !> Simulation monitor file
-   type(monitor) :: mfile,cflfile
+   type(monitor) :: mfile,cflfile,consfile
    
    public :: simulation_init,simulation_run,simulation_final
    
@@ -45,7 +45,7 @@ contains
       do k=pg%kmino_,pg%kmaxo_
          do j=pg%jmino_,pg%jmaxo_
             do i=pg%imino_,pg%imaxo_
-               rho(i,j,k)=1.0_WP/(theta(i,j,k)*rho_min+(1.0_WP-theta(i,j,k))*rho_max)
+               rho(i,j,k)=1.0_WP/(theta(i,j,k)/rho_min+(1.0_WP-theta(i,j,k))/rho_max)
             end do
          end do
       end do
@@ -123,32 +123,34 @@ contains
       end block initialize_timetracker
       
       
+      ! Initialize our temperature field
+      initialize_scalar: block
+         integer :: j
+         ! Stratified initial field
+         do j=fs%cfg%jmino_,fs%cfg%jmaxo_
+            sc%SC(:,j,:)=0.5_WP*tanh(-fs%cfg%ym(j)/0.05_WP)+0.5_WP
+         end do
+         ! Build corresponding density
+         call get_rho(sc%cfg,sc%rho,sc%SC)
+      end block initialize_scalar
+      
+      
       ! Initialize our velocity field
       initialize_velocity: block
-         use lowmach_class, only: bcond
-         type(bcond), pointer :: inflow
-         integer :: n,i,j,k
          ! Zero initial field
-         fs%U=0.0_WP; fs%V=0.0_WP; fs%W=0.0_WP; fs%rho=1.0_WP
+         fs%U=0.0_WP; fs%V=0.0_WP; fs%W=0.0_WP
+         ! Set density from scalar
+         fs%rho=sc%rho
+         ! Form momentum
+         call fs%rho_multiply
          ! Apply all other boundary conditions
          call fs%apply_bcond(time%t,time%dt)
          call fs%interp_vel(Ui,Vi,Wi)
-         call fs%get_div()
+         resSC=0.0_WP
+         call fs%get_div(drhodt=resSC)
          ! Compute MFR through all boundary conditions
          call fs%get_mfr()
       end block initialize_velocity
-      
-      
-      ! Initialize our temperature field
-      initialize_scalar: block
-         use vdscalar_class, only: bcond
-         type(bcond), pointer :: inflow
-         integer :: n,i,j,k
-         ! Zero initial field
-         sc%SC=0.0_WP
-         ! Apply all other boundary conditions
-         call sc%apply_bcond(time%t,time%dt)
-      end block initialize_scalar
       
       
       ! Add Ensight output
@@ -175,6 +177,7 @@ contains
          call fs%get_cfl(time%dt,time%cfl)
          call fs%get_max()
          call sc%get_max()
+         call sc%get_int()
          ! Create simulation monitor
          mfile=monitor(fs%cfg%amRoot,'simulation')
          call mfile%add_column(time%n,'Timestep number')
@@ -204,6 +207,14 @@ contains
          call cflfile%add_column(fs%CFLv_y,'Viscous yCFL')
          call cflfile%add_column(fs%CFLv_z,'Viscous zCFL')
          call cflfile%write()
+         ! Create conservation monitor
+         consfile=monitor(fs%cfg%amRoot,'conservation')
+         call consfile%add_column(time%n,'Timestep number')
+         call consfile%add_column(time%t,'Time')
+         call consfile%add_column(sc%SCint,'SC integral')
+         call consfile%add_column(sc%rhoint,'RHO integral')
+         call consfile%add_column(sc%rhoSCint,'rhoSC integral')
+         call consfile%write()
       end block create_monitor
       
       
@@ -259,7 +270,12 @@ contains
             ! ===================================================
             
             ! ============ UPDATE PROPERTIES ====================
+            ! Backup rhoSC
+            resSC=sc%rho*sc%SC
+            ! Update density
             call get_rho(sc%cfg,sc%rho,sc%SC)
+            ! Rescale scalar for conservation
+            sc%SC=resSC/sc%rho
             ! UPDATE THE VISCOSITY
             ! UPDATE THE DIFFUSIVITY
             ! ===================================================
@@ -297,7 +313,8 @@ contains
             
             ! Solve Poisson equation
             call fs%correct_mfr()
-            call fs%get_div(); fs%div=(sc%rho-sc%rhoold)/time%dt+fs%div
+            call sc%get_drhodt(dt=time%dt,drhodt=resSC)
+            call fs%get_div(drhodt=resSC)
             fs%psolv%rhs=-fs%cfg%vol*fs%div*fs%rho/time%dtmid
             fs%psolv%sol=0.0_WP
             call fs%psolv%solve()
@@ -319,7 +336,8 @@ contains
          
          ! Recompute interpolated velocity and divergence
          call fs%interp_vel(Ui,Vi,Wi)
-         call fs%get_div(); fs%div=(sc%rho-sc%rhoold)/time%dt+fs%div
+         call sc%get_drhodt(dt=time%dt,drhodt=resSC)
+         call fs%get_div(drhodt=resSC)
          
          ! Output to ensight
          if (ens_evt%occurs()) call ens_out%write_data(time%t)
@@ -327,8 +345,10 @@ contains
          ! Perform and output monitoring
          call fs%get_max()
          call sc%get_max()
+         call sc%get_int()
          call mfile%write()
          call cflfile%write()
+         call consfile%write()
          
       end do
       

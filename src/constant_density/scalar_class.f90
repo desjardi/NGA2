@@ -144,14 +144,6 @@ contains
       
       ! Prepare mask for SC
       allocate(self%mask(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%mask=0
-      do k=self%cfg%kmino_,self%cfg%kmaxo_
-         do j=self%cfg%jmino_,self%cfg%jmaxo_
-            do i=self%cfg%imino_,self%cfg%imaxo_
-               if (self%cfg%VF(i,j,k).eq.0.0_WP) self%mask(i,j,k)=1
-            end do
-         end do
-      end do
-      call self%cfg%sync(self%mask)
       if (.not.self%cfg%xper) then
          if (self%cfg%iproc.eq.           1) self%mask(:self%cfg%imin-1,:,:)=2
          if (self%cfg%iproc.eq.self%cfg%npx) self%mask(self%cfg%imax+1:,:,:)=2
@@ -164,6 +156,14 @@ contains
          if (self%cfg%kproc.eq.           1) self%mask(:,:,:self%cfg%kmin-1)=2
          if (self%cfg%kproc.eq.self%cfg%npz) self%mask(:,:,self%cfg%kmax+1:)=2
       end if
+      do k=self%cfg%kmino_,self%cfg%kmaxo_
+         do j=self%cfg%jmino_,self%cfg%jmaxo_
+            do i=self%cfg%imino_,self%cfg%imaxo_
+               if (self%cfg%VF(i,j,k).eq.0.0_WP) self%mask(i,j,k)=1
+            end do
+         end do
+      end do
+      call self%cfg%sync(self%mask)
       
    end function constructor
       
