@@ -74,6 +74,8 @@ contains
          ! Assign constant viscosity
          call param_read('Dynamic viscosity',viscosity)
          fs%visc=viscosity
+         ! Assign acceleration of gravity
+         call param_read('Gravity',fs%gravity)
          ! Configure pressure solver
          call param_read('Pressure iteration',fs%psolv%maxit)
          call param_read('Pressure tolerance',fs%psolv%rcvg)
@@ -301,6 +303,9 @@ contains
             
             ! Explicit calculation of drho*u/dt from NS
             call fs%get_dmomdt(resU,resV,resW)
+            
+            ! Add momentum source terms
+            call fs%addsrc_gravity(resU,resV,resW)
             
             ! Assemble explicit residual
             resU=time%dtmid*resU-(2.0_WP*fs%rhoU-2.0_WP*fs%rhoUold)

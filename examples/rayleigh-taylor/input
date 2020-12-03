@@ -10,6 +10,7 @@ ny :	50
 nz :	50
 
 # Fluid properties
+Gravity :		0 -10 0
 Dynamic viscosity :	0.001
 Dynamic diffusivity :	0.001
 Min temperature :	300
