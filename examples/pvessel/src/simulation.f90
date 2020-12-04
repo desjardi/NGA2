@@ -2,8 +2,8 @@
 module simulation
    use precision,         only: WP
    use geometry,          only: cfg
-   use incomp_class,      only: incomp
-   use scalar_class,      only: scalar
+   use lowmach_class,     only: lowmach
+   use vdscalar_class,    only: vdscalar
    use timetracker_class, only: timetracker
    use ensight_class,     only: ensight
    use event_class,       only: event
@@ -12,8 +12,8 @@ module simulation
    private
    
    !> Single incompressible flow solver and corresponding time tracker
-   type(incomp),      public :: fs
-   type(scalar),      public :: sc
+   type(lowmach),     public :: fs
+   type(vdscalar),    public :: sc
    type(timetracker), public :: time
    
    !> Ensight postprocessing
@@ -21,13 +21,16 @@ module simulation
    type(event)   :: ens_evt
    
    !> Simulation monitor file
-   type(monitor) :: mfile,cflfile
+   type(monitor) :: mfile,cflfile,consfile
    
    public :: simulation_init,simulation_run,simulation_final
    
    !> Private work arrays
    real(WP), dimension(:,:,:), allocatable :: resU,resV,resW,resSC
    real(WP), dimension(:,:,:), allocatable :: Ui,Vi,Wi
+   
+   !> Equation of state
+   real(WP) :: Tmin,Tmax,fluid_mass
    
 contains
    
@@ -46,6 +49,40 @@ contains
    end function left_of_tube
    
    
+   !> Function that localizes the right end of the cube
+   function right_of_tube(pg,i,j,k) result(isIn)
+      use pgrid_class, only: pgrid
+      implicit none
+      class(pgrid), intent(in) :: pg
+      integer, intent(in) :: i,j,k
+      logical :: isIn
+      real(WP) :: r
+      isIn=.false.
+      r=sqrt((pg%ym(j)+0.34_WP)**2+(pg%zm(k))**2)
+      if (abs(pg%x(i+1)-0.75_WP).lt.0.01_WP.and.r.lt.0.02_WP) isIn=.true.
+   end function right_of_tube
+   
+   
+   !> Define here our equation of state - rho(T,mass)
+   subroutine get_rho(mass)
+      implicit none
+      real(WP), intent(in) :: mass
+      integer :: i,j,k
+      real(WP) :: one_over_T
+      ! Integrate 1/T
+      resSC=1.0_WP/sc%SC
+      call sc%cfg%integrate(resSC,integral=one_over_T)
+      ! Calculate density
+      do k=sc%cfg%kmino_,sc%cfg%kmaxo_
+         do j=sc%cfg%jmino_,sc%cfg%jmaxo_
+            do i=sc%cfg%imino_,sc%cfg%imaxo_
+               sc%rho(i,j,k)=mass/(sc%SC(i,j,k)*one_over_T)
+            end do
+         end do
+      end do
+   end subroutine get_rho
+   
+   
    !> Initialization of problem solver
    subroutine simulation_init
       use param, only: param_read
@@ -54,15 +91,19 @@ contains
       
       ! Create an incompressible flow solver with bconds
       create_solver: block
-         use ils_class,    only: rbgs,amg,pcg_amg,pcg_parasail,gmres,gmres_pilut,smg,pfmg
-         use incomp_class, only: dirichlet,convective,neumann,clipped_neumann
+         use ils_class,     only: pcg_amg,pfmg
+         use lowmach_class, only: dirichlet
+         real(WP) :: viscosity
          ! Create flow solver
-         fs=incomp(cfg=cfg,name='Incompressible NS')
-         ! Set the flow properties
-         call param_read('Density',fs%rho)
-         call param_read('Dynamic viscosity',fs%visc)
+         fs=lowmach(cfg=cfg,name='Variable density low Mach NS')
          ! Define boundary conditions
-         call fs%add_bcond(name='inflow',type=dirichlet,dir='-x',canCorrect=.false.,locator= left_of_tube)
+         call fs%add_bcond(name= 'left inflow',type=dirichlet,dir='-x',canCorrect=.false.,locator= left_of_tube)
+         call fs%add_bcond(name='right inflow',type=dirichlet,dir='+x',canCorrect=.false.,locator=right_of_tube)
+         ! Assign constant viscosity
+         call param_read('Dynamic viscosity',viscosity)
+         fs%visc=viscosity
+         ! Assign acceleration of gravity
+         call param_read('Gravity',fs%gravity)
          ! Configure pressure solver
          call param_read('Pressure iteration',fs%psolv%maxit)
          call param_read('Pressure tolerance',fs%psolv%rcvg)
@@ -76,14 +117,17 @@ contains
       
       ! Create a scalar solver
       create_scalar: block
-         use ils_class,    only: gmres
-         use scalar_class, only: dirichlet,neumann,quick
+         use ils_class,      only: gmres
+         use vdscalar_class, only: dirichlet,quick
+         real(WP) :: diffusivity
          ! Create scalar solver
-         sc=scalar(cfg=cfg,scheme=quick,name='Temperature')
-         ! Set the equation parameters based on flow solver
-         sc%rho=fs%rho; sc%diff=fs%visc
+         sc=vdscalar(cfg=cfg,scheme=quick,name='Temperature')
          ! Define boundary conditions
-         call sc%add_bcond(name='scalar inflow',type=dirichlet,dir='+x',locator=left_of_tube)
+         call sc%add_bcond(name= 'left inflow',type=dirichlet,dir='-x',locator= left_of_tube)
+         call sc%add_bcond(name='right inflow',type=dirichlet,dir='+x',locator=right_of_tube)
+         ! Assign constant diffusivity
+         call param_read('Dynamic diffusivity',diffusivity)
+         sc%diff=diffusivity
          ! Configure implicit scalar solver
          sc%implicit%maxit=fs%implicit%maxit; sc%implicit%rcvg=fs%implicit%rcvg
          ! Setup the solver
@@ -115,44 +159,65 @@ contains
       end block initialize_timetracker
       
       
+      ! Initialize our temperature field
+      initialize_scalar: block
+         use vdscalar_class, only: bcond
+         type(bcond), pointer :: inflow
+         integer :: n,i,j,k
+         ! Read in the temperature and mass
+         call param_read('Min temperature',Tmin)
+         call param_read('Max temperature',Tmax)
+         call param_read('Total mass',fluid_mass)
+         ! Uniform initial field
+         sc%SC=Tmin
+         ! Apply Dirichlet at the tube
+         call sc%get_bcond( 'left inflow',inflow)
+         do n=1,inflow%itr%no_
+            i=inflow%itr%map(1,n); j=inflow%itr%map(2,n); k=inflow%itr%map(3,n)
+            sc%SC(i,j,k)=Tmax
+         end do
+         call sc%get_bcond('right inflow',inflow)
+         do n=1,inflow%itr%no_
+            i=inflow%itr%map(1,n); j=inflow%itr%map(2,n); k=inflow%itr%map(3,n)
+            sc%SC(i,j,k)=Tmax
+         end do
+         ! Apply all other boundary conditions
+         call sc%apply_bcond(time%t,time%dt)
+         ! Build corresponding density
+         call get_rho(mass=fluid_mass)
+      end block initialize_scalar
+      
+      
       ! Initialize our velocity field
       initialize_velocity: block
-         use incomp_class, only: bcond
+         use lowmach_class, only: bcond
          type(bcond), pointer :: inflow
          integer :: n,i,j,k
          ! Zero initial field
          fs%U=0.0_WP; fs%V=0.0_WP; fs%W=0.0_WP
          ! Apply Dirichlet at the tube
-         call fs%get_bcond('inflow',inflow)
+         call fs%get_bcond('left inflow',inflow)
          do n=1,inflow%itr%no_
             i=inflow%itr%map(1,n); j=inflow%itr%map(2,n); k=inflow%itr%map(3,n)
             fs%U(i,j,k)=-1.0_WP
          end do
+         call fs%get_bcond('right inflow',inflow)
+         do n=1,inflow%itr%no_
+            i=inflow%itr%map(1,n); j=inflow%itr%map(2,n); k=inflow%itr%map(3,n)
+            fs%U(i,j,k)=+1.0_WP
+         end do
+         ! Set density from scalar
+         fs%rho=sc%rho
+         ! Form momentum
+         call fs%rho_multiply
          ! Apply all other boundary conditions
          call fs%apply_bcond(time%t,time%dt)
          call fs%interp_vel(Ui,Vi,Wi)
-         call fs%get_div()
+         resSC=0.0_WP
+         call fs%get_div(drhodt=resSC)
          ! Compute MFR through all boundary conditions
          call fs%get_mfr()
       end block initialize_velocity
-      
-      
-      ! Initialize our temperature field
-      initialize_scalar: block
-         use scalar_class, only: bcond
-         type(bcond), pointer :: inflow
-         integer :: n,i,j,k
-         ! Zero initial field
-         sc%SC=0.0_WP
-         ! Apply Dirichlet at the tube
-         call sc%get_bcond('scalar inflow',inflow)
-         do n=1,inflow%itr%no_
-            i=inflow%itr%map(1,n); j=inflow%itr%map(2,n); k=inflow%itr%map(3,n)
-            sc%SC(i,j,k)=1.0_WP
-         end do
-         ! Apply all other boundary conditions
-         call sc%apply_bcond(time%t,time%dt)
-      end block initialize_scalar
       
       
       ! Add Ensight output
@@ -166,6 +231,7 @@ contains
          call ens_out%add_scalar('pressure',fs%P)
          call ens_out%add_vector('velocity',Ui,Vi,Wi)
          call ens_out%add_scalar('divergence',fs%div)
+         call ens_out%add_scalar('density',sc%rho)
          call ens_out%add_scalar('temperature',sc%SC)
          ! Output to ensight
          if (ens_evt%occurs()) call ens_out%write_data(time%t)
@@ -178,6 +244,7 @@ contains
          call fs%get_cfl(time%dt,time%cfl)
          call fs%get_max()
          call sc%get_max()
+         call sc%get_int()
          ! Create simulation monitor
          mfile=monitor(fs%cfg%amRoot,'simulation')
          call mfile%add_column(time%n,'Timestep number')
@@ -190,6 +257,8 @@ contains
          call mfile%add_column(fs%Pmax,'Pmax')
          call mfile%add_column(sc%SCmax,'Tmax')
          call mfile%add_column(sc%SCmin,'Tmin')
+         call mfile%add_column(sc%rhomax,'RHOmax')
+         call mfile%add_column(sc%rhomin,'RHOmin')
          call mfile%add_column(fs%divmax,'Maximum divergence')
          call mfile%add_column(fs%psolv%it,'Pressure iteration')
          call mfile%add_column(fs%psolv%rerr,'Pressure error')
@@ -205,10 +274,19 @@ contains
          call cflfile%add_column(fs%CFLv_y,'Viscous yCFL')
          call cflfile%add_column(fs%CFLv_z,'Viscous zCFL')
          call cflfile%write()
+         ! Create conservation monitor
+         consfile=monitor(fs%cfg%amRoot,'conservation')
+         call consfile%add_column(time%n,'Timestep number')
+         call consfile%add_column(time%t,'Time')
+         call consfile%add_column(sc%SCint,'SC integral')
+         call consfile%add_column(sc%rhoint,'RHO integral')
+         call consfile%add_column(sc%rhoSCint,'rhoSC integral')
+         call consfile%write()
       end block create_monitor
       
       
    end subroutine simulation_init
+   
    
    
    !> Perform an NGA2 simulation
@@ -223,11 +301,15 @@ contains
          call time%adjust_dt()
          call time%increment()
          
-         ! Remember old velocity and scalar
-         sc%SCold=sc%SC
-         fs%Uold=fs%U
-         fs%Vold=fs%V
-         fs%Wold=fs%W
+         ! Remember old scalar
+         sc%rhoold=sc%rho
+         sc%SCold =sc%SC
+         
+         ! Remember old velocity and momentum
+         fs%rhoold=fs%rho
+         fs%Uold=fs%U; fs%rhoUold=fs%rhoU
+         fs%Vold=fs%V; fs%rhoVold=fs%rhoV
+         fs%Wold=fs%W; fs%rhoWold=fs%rhoW
          
          ! Apply time-varying Dirichlet conditions
          ! This is where time-dpt Dirichlet would be enforced
@@ -240,13 +322,13 @@ contains
             sc%SC=0.5_WP*(sc%SC+sc%SCold)
             
             ! Explicit calculation of drhoSC/dt from scalar equation
-            call sc%get_drhoSCdt(resSC,fs%rho*fs%U,fs%rho*fs%V,fs%rho*fs%W)
+            call sc%get_drhoSCdt(resSC,fs%rhoU,fs%rhoV,fs%rhoW)
             
             ! Assemble explicit residual
-            resSC=-2.0_WP*(sc%rho*sc%SC-sc%rho*sc%SCold)+time%dt*resSC
+            resSC=time%dt*resSC-(2.0_WP*sc%rho*sc%SC-(sc%rho+sc%rhoold)*sc%SCold)
             
             ! Form implicit residual
-            call sc%solve_implicit(time%dt,resSC,fs%rho*fs%U,fs%rho*fs%V,fs%rho*fs%W)
+            call sc%solve_implicit(time%dt,resSC,fs%rhoU,fs%rhoV,fs%rhoW)
             
             ! Apply this residual
             sc%SC=2.0_WP*sc%SC-sc%SCold+resSC
@@ -255,46 +337,67 @@ contains
             call sc%apply_bcond(time%t,time%dt)
             ! ===================================================
             
+            ! ============ UPDATE PROPERTIES ====================
+            ! Backup rhoSC
+            resSC=sc%rho*sc%SC
+            ! Update density
+            call get_rho(mass=fluid_mass)
+            ! Rescale scalar for conservation
+            !sc%SC=resSC/sc%rho
+            ! UPDATE THE VISCOSITY
+            ! UPDATE THE DIFFUSIVITY
+            ! ===================================================
             
             ! ============ VELOCITY SOLVER ======================
-            ! Build mid-time velocity
-            fs%U=0.5_WP*(fs%U+fs%Uold)
-            fs%V=0.5_WP*(fs%V+fs%Vold)
-            fs%W=0.5_WP*(fs%W+fs%Wold)
+            
+            ! Build n+1 density
+            fs%rho=0.5_WP*(sc%rho+sc%rhoold)
+            
+            ! Build mid-time velocity and momentum
+            fs%U=0.5_WP*(fs%U+fs%Uold); fs%rhoU=0.5_WP*(fs%rhoU+fs%rhoUold)
+            fs%V=0.5_WP*(fs%V+fs%Vold); fs%rhoV=0.5_WP*(fs%rhoV+fs%rhoVold)
+            fs%W=0.5_WP*(fs%W+fs%Wold); fs%rhoW=0.5_WP*(fs%rhoW+fs%rhoWold)
             
             ! Explicit calculation of drho*u/dt from NS
             call fs%get_dmomdt(resU,resV,resW)
             
+            ! Add momentum source terms
+            call fs%addsrc_gravity(resU,resV,resW)
+            
             ! Assemble explicit residual
-            resU=-2.0_WP*(fs%rho*fs%U-fs%rho*fs%Uold)+time%dt*resU
-            resV=-2.0_WP*(fs%rho*fs%V-fs%rho*fs%Vold)+time%dt*resV
-            resW=-2.0_WP*(fs%rho*fs%W-fs%rho*fs%Wold)+time%dt*resW
+            resU=time%dtmid*resU-(2.0_WP*fs%rhoU-2.0_WP*fs%rhoUold)
+            resV=time%dtmid*resV-(2.0_WP*fs%rhoV-2.0_WP*fs%rhoVold)
+            resW=time%dtmid*resW-(2.0_WP*fs%rhoW-2.0_WP*fs%rhoWold)
             
             ! Form implicit residuals
-            call fs%solve_implicit(time%dt,resU,resV,resW)
+            call fs%solve_implicit(time%dtmid,resU,resV,resW)
             
             ! Apply these residuals
             fs%U=2.0_WP*fs%U-fs%Uold+resU
             fs%V=2.0_WP*fs%V-fs%Vold+resV
             fs%W=2.0_WP*fs%W-fs%Wold+resW
             
-            ! Apply other boundary conditions on the resulting fields
-            call fs%apply_bcond(time%t,time%dt)
+            ! Apply other boundary conditions and update momentum
+            call fs%apply_bcond(time%tmid,time%dtmid)
+            call fs%rho_multiply()
+            call fs%apply_bcond(time%tmid,time%dtmid)
             
             ! Solve Poisson equation
             call fs%correct_mfr()
-            call fs%get_div()
-            fs%psolv%rhs=-fs%cfg%vol*fs%div*fs%rho/time%dt
+            call sc%get_drhodt(dt=time%dt,drhodt=resSC)
+            call fs%get_div(drhodt=resSC)
+            fs%psolv%rhs=-fs%cfg%vol*fs%div/time%dtmid
             fs%psolv%sol=0.0_WP
             call fs%psolv%solve()
             call fs%shift_p(fs%psolv%sol)
             
-            ! Correct velocity
+            ! Correct momentum and rebuild velocity
             call fs%get_pgrad(fs%psolv%sol,resU,resV,resW)
             fs%P=fs%P+fs%psolv%sol
-            fs%U=fs%U-time%dt*resU/fs%rho
-            fs%V=fs%V-time%dt*resV/fs%rho
-            fs%W=fs%W-time%dt*resW/fs%rho
+            fs%rhoU=fs%rhoU-time%dtmid*resU
+            fs%rhoV=fs%rhoV-time%dtmid*resV
+            fs%rhoW=fs%rhoW-time%dtmid*resW
+            call fs%rho_divide
             ! ===================================================
             
             ! Increment sub-iteration counter
@@ -304,7 +407,8 @@ contains
          
          ! Recompute interpolated velocity and divergence
          call fs%interp_vel(Ui,Vi,Wi)
-         call fs%get_div()
+         call sc%get_drhodt(dt=time%dt,drhodt=resSC)
+         call fs%get_div(drhodt=resSC)
          
          ! Output to ensight
          if (ens_evt%occurs()) call ens_out%write_data(time%t)
@@ -312,8 +416,10 @@ contains
          ! Perform and output monitoring
          call fs%get_max()
          call sc%get_max()
+         call sc%get_int()
          call mfile%write()
          call cflfile%write()
+         call consfile%write()
          
       end do
       

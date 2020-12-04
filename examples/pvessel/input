@@ -14,8 +14,12 @@ Vessel inner radius :	0.4
 Vessel length :		2.5
 
 # Fluid properties
-Density :		1
-Dynamic viscosity :	0.0003
+Gravity :		0 -10 0
+Dynamic viscosity :	0.0005
+Dynamic diffusivity :	0.0005
+Min temperature :	300
+Max temperature :	500
+Total mass :		10
 
 # Time integration
 Max timestep size :	1e-2

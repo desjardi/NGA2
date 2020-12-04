@@ -83,9 +83,7 @@ contains
          call param_read('Implicit iteration',fs%implicit%maxit)
          call param_read('Implicit tolerance',fs%implicit%rcvg)
          ! Setup the solver
-         !!!!!!!!
-         !!!! PCG_AMG
-         call fs%setup(pressure_ils=amg,implicit_ils=pfmg)
+         call fs%setup(pressure_ils=pcg_amg,implicit_ils=pfmg)
       end block create_solver
       
       
