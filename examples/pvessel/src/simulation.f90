@@ -204,7 +204,7 @@ contains
          call fs%get_bcond('right inflow',inflow)
          do n=1,inflow%itr%no_
             i=inflow%itr%map(1,n); j=inflow%itr%map(2,n); k=inflow%itr%map(3,n)
-            fs%U(i,j,k)=+1.0_WP
+            fs%U(i+1,j,k)=+1.0_WP
          end do
          ! Set density from scalar
          fs%rho=sc%rho
@@ -300,6 +300,9 @@ contains
          call fs%get_cfl(time%dt,time%cfl)
          call time%adjust_dt()
          call time%increment()
+         
+         ! Increment fluid mass
+         fluid_mass=fluid_mass+sum(fs%mfr)*time%dt
          
          ! Remember old scalar
          sc%rhoold=sc%rho
