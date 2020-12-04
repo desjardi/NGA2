@@ -1,0 +1,4 @@
+f90EXE_sources += tpns_class.f90
+
+INCLUDE_LOCATIONS += $(NGA_HOME)/src/two_phase
+VPATH_LOCATIONS   += $(NGA_HOME)/src/two_phase
