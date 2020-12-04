@@ -19,7 +19,7 @@ Dynamic viscosity :	0.0005
 Dynamic diffusivity :	0.0005
 Min temperature :	300
 Max temperature :	500
-Total mass :		10
+Total mass :		5
 
 # Time integration
 Max timestep size :	1e-2
