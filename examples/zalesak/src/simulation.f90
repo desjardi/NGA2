@@ -23,18 +23,20 @@ module simulation
    
    public :: simulation_init,simulation_run,simulation_final
    
-   !> Private work arrays
+   !> Velocity arrays
    real(WP), dimension(:,:,:), allocatable :: U,V,W
+   real(WP), dimension(3) :: center
+   real(WP) :: radius,width,height
    
 contains
    
    
    !> Function that defines a level set function for Zalesak's notched circle problem
-   function levelset_zalesak(xyz,center,radius,width,height) result(G)
+   function levelset_zalesak(xyz,t) result(G)
       implicit none
+      real(WP), dimension(3),intent(in) :: xyz
+      real(WP), intent(in) :: t
       real(WP) :: G
-      real(WP), dimension(3), intent(in) :: xyz,center
-      real(WP), intent(in) :: radius,width,height
       real(WP) :: c,b,b1,b2,h1,h2
       c=radius-sqrt(sum((xyz-center)**2))
       b1=center(1)-0.5_WP*width; b2=center(1)+0.5_WP*width
@@ -67,22 +69,35 @@ contains
       
       ! Initialize our VOF
       initialize_vof: block
-         integer :: i,j,k,ii,jj
-         real(WP), dimension(3) :: xyz
-         integer, parameter :: nsub=20
+         use mms_geom, only: cube_refine_vol
+         integer :: i,j,k,n,si,sj,sk
+         real(WP), dimension(3,8) :: cube_vertex
+         real(WP), dimension(3) :: v_cent,a_cent
+         real(WP) :: vol,area
+         integer, parameter :: amr_ref_lvl=4
          ! Create a VOF solver
          vf=vfs(cfg=cfg,name='VOF')
          ! Initialize to Zalesak disk
+         center=[0.0_WP,0.25_WP,0.0_WP]
+         radius=0.15_WP
+         width =0.05_WP
+         height=0.25_WP
          do k=vf%cfg%kmino_,vf%cfg%kmaxo_
             do j=vf%cfg%jmino_,vf%cfg%jmaxo_
                do i=vf%cfg%imino_,vf%cfg%imaxo_
-                  vf%VF(i,j,k)=0.0_WP
-                  do jj=1,nsub
-                     do ii=1,nsub
-                        xyz=[vf%cfg%x(i)+real(ii,WP)*vf%cfg%dx(i)/real(nsub+1,WP),vf%cfg%y(j)+real(jj,WP)*vf%cfg%dy(j)/real(nsub+1,WP),0.0_WP]
-                        if (levelset_zalesak(xyz=xyz,center=[0.0_WP,0.25_WP,0.0_WP],radius=0.15_WP,width=0.05_WP,height=0.25_WP).gt.0.0_WP) vf%VF(i,j,k)=vf%VF(i,j,k)+1.0e-4_WP
+                  ! Set cube vertices
+                  n=0
+                  do sk=0,1
+                     do sj=0,1
+                        do si=0,1
+                           n=n+1; cube_vertex(:,n)=[vf%cfg%x(i+si),vf%cfg%y(j+sj),vf%cfg%z(k+sk)]
+                        end do
                      end do
                   end do
+                  ! Call adaptive refinement code to get volume recursively
+                  vol=0.0_WP; area=0.0_WP; v_cent=0.0_WP; a_cent=0.0_WP
+                  call cube_refine_vol(cube_vertex,vol,area,v_cent,a_cent,levelset_zalesak,0.0_WP,amr_ref_lvl)
+                  vf%VF(i,j,k)=vol/vf%cfg%vol(i,j,k)
                end do
             end do
          end do
@@ -142,7 +157,6 @@ contains
          call mfile%add_column(time%n,'Timestep number')
          call mfile%add_column(time%t,'Time')
          call mfile%add_column(time%dt,'Timestep size')
-         call mfile%add_column(time%cfl,'Maximum CFL')
          call mfile%add_column(vf%VFmax,'VOF maximum')
          call mfile%add_column(vf%VFmin,'VOF minimum')
          call mfile%add_column(vf%VFint,'VOF integral')

@@ -7,6 +7,7 @@ module mathtools
    public :: Pi,twoPi
    public :: fv_itp_build,fd_itp_build
    public :: inverse_matrix
+   public :: cross_product
    
    ! Trigonometric parameters
    real(WP), parameter :: Pi   =3.1415926535897932385_WP
@@ -21,6 +22,17 @@ module mathtools
    real(WP), dimension(0:9) :: by2=[0.332057384255589_WP,0.323007152241930_WP,0.266751564401387_WP,0.161360240845588_WP,0.06423404047594_WP,0.01590689966410_WP,0.00240199722109_WP,0.00022016340923_WP,0.00001224984692_WP,0.00000041090325_WP]
    
 contains
+   
+   
+   !> Returns cross product in 3 dimensions: z=cross(x,y)
+   pure function cross_product(x,y) result(z)
+      implicit none
+      real(WP), dimension(3), intent(in) :: x,y
+      real(WP), dimension(3) :: z
+      z(1)=x(2)*y(3)-x(3)*y(2)
+      z(2)=x(3)*y(1)-x(1)*y(3)
+      z(3)=x(1)*y(2)-x(2)*y(1)
+   end function cross_product
    
    
    !> Finite volume interpolation metric builder
