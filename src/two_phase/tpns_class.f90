@@ -50,6 +50,9 @@ module tpns_class
       real(WP) :: rho_l,rho_g                             !< These are our constant densities in liquid and gas
       real(WP) :: visc_l,visc_g                           !< These is our constant dynamic viscosities in liquid and gas
       
+      ! Gravitational acceleration
+      real(WP), dimension(3) :: gravity=0.0_WP            !< Acceleration of gravity
+      
       ! Boundary condition list
       integer :: nbc                                      !< Number of bcond for our solver
       real(WP), dimension(:), allocatable :: mfr          !< MFR through each bcond
@@ -58,14 +61,12 @@ module tpns_class
       type(bcond), pointer :: first_bc                    !< List of bcond for our solver
       
       ! Flow variables
-      real(WP), dimension(:,:,:), allocatable :: VOF      !< Volume-of-fluid array
       real(WP), dimension(:,:,:), allocatable :: U        !< U velocity array
       real(WP), dimension(:,:,:), allocatable :: V        !< V velocity array
       real(WP), dimension(:,:,:), allocatable :: W        !< W velocity array
       real(WP), dimension(:,:,:), allocatable :: P        !< Pressure array
       
       ! Old flow variables
-      real(WP), dimension(:,:,:), allocatable :: VOFold   !< Old volume-of-fluid array
       real(WP), dimension(:,:,:), allocatable :: Uold     !< Uold velocity array
       real(WP), dimension(:,:,:), allocatable :: Vold     !< Vold velocity array
       real(WP), dimension(:,:,:), allocatable :: Wold     !< Wold velocity array
@@ -97,6 +98,7 @@ module tpns_class
       integer, dimension(:,:,:), allocatable :: wmask                     !< Integer array used for modifying W metrics
       
       ! CFL numbers
+      real(WP) :: CFLst                                                   !< Surface tension CFL
       real(WP) :: CFLc_x,CFLc_y,CFLc_z                                    !< Convective CFL numbers
       real(WP) :: CFLv_x,CFLv_y,CFLv_z                                    !< Viscous CFL numbers
       

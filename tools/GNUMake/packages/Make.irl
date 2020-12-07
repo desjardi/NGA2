@@ -1,0 +1,8 @@
+# Add appropriate IRL includes and libraries
+ifdef IRL_DIR
+  INCLUDE_LOCATIONS += $(IRL_DIR)/include/irl_fortran
+  LIBRARY_LOCATIONS += $(IRL_DIR)/lib
+  LIBRARIES += -lirl_fortran -lirl_c -lirl
+else
+  $(error IRL_DIR not defined, but it is currently required by parts of NGA2)
+endif

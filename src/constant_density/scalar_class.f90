@@ -410,7 +410,7 @@ contains
                end do
                
             case default
-               call die('[incomp apply_bcond] Unknown bcond type')
+               call die('[scalar apply_bcond] Unknown bcond type')
             end select
             
          end if

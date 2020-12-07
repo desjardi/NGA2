@@ -443,7 +443,7 @@ contains
          do k=this%kmax_+1,this%kmaxo_
             A(:,:,k)=A(:,:,this%kmin_)
          end do
-         do j=this%kmino_,this%kmin_-1
+         do k=this%kmino_,this%kmin_-1
             A(:,:,k)=A(:,:,this%kmin_)
          end do
       else
@@ -526,7 +526,7 @@ contains
          do k=this%kmax_+1,this%kmaxo_
             A(:,:,k)=A(:,:,this%kmin_)
          end do
-         do j=this%kmino_,this%kmin_-1
+         do k=this%kmino_,this%kmin_-1
             A(:,:,k)=A(:,:,this%kmin_)
          end do
       else
@@ -619,7 +619,7 @@ contains
          do k=this%kmax_+1,this%kmax_+no
             A(:,:,k)=A(:,:,this%kmin_)
          end do
-         do j=this%kmin_-no,this%kmin_-1
+         do k=this%kmin_-no,this%kmin_-1
             A(:,:,k)=A(:,:,this%kmin_)
          end do
       else
@@ -715,7 +715,7 @@ contains
          do k=this%kmax_+1,this%kmax_+no
             A(:,:,k)=A(:,:,this%kmin_)
          end do
-         do j=this%kmin_-no,this%kmin_-1
+         do k=this%kmin_-no,this%kmin_-1
             A(:,:,k)=A(:,:,this%kmin_)
          end do
       else
