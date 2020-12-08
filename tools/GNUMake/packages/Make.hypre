@@ -2,7 +2,7 @@
 ifdef HYPRE_DIR
   INCLUDE_LOCATIONS += $(HYPRE_DIR)/include
   LIBRARY_LOCATIONS += $(HYPRE_DIR)/lib
-  LIBRARIES += -lhypre
+  LIBRARIES += -lHYPRE
 else
   $(error HYPRE_DIR not defined, but it is currently required by NGA2)
 endif

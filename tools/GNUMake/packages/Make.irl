@@ -2,7 +2,8 @@
 ifdef IRL_DIR
   INCLUDE_LOCATIONS += $(IRL_DIR)/include/irl_fortran
   LIBRARY_LOCATIONS += $(IRL_DIR)/lib
-  LIBRARIES += -lirl_fortran -lirl_c -lirl
+  ABSL_LIB = $(wildcard $(IRL_DIR)/absl/lib/*.a) -framework CoreFoundation
+  LIBRARIES += -lirl_fortran -lirl_c -lirl $(ABSL_LIB) -lstdc++
 else
   $(error IRL_DIR not defined, but it is currently required by parts of NGA2)
 endif

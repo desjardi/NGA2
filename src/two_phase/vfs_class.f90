@@ -6,6 +6,7 @@ module vfs_class
    use string,         only: str_medium
    use config_class,   only: config
    use iterator_class, only: iterator
+   use irl_fortran_interface
    implicit none
    private
    
@@ -16,6 +17,13 @@ module vfs_class
    integer, parameter, public :: dirichlet=2         !< Dirichlet condition
    integer, parameter, public :: neumann=3           !< Zero normal gradient
    
+   ! Default parameters for volume fraction solver
+   integer,  parameter :: max_interface_planes=2                  !< Maximum number of interfaces allowed (2 for R2P)
+   real(WP), parameter :: VFlo=1.0e-12_WP                         !< Minimum VF value considered
+   real(WP), parameter :: VFhi=1.0_WP-VFlo                        !< Maximum VF value considered
+   real(WP), parameter :: volume_epsilon_factor =1.0e-15_WP       !< Minimum volume  to consider for computational geometry (normalized by min_meshsize**3)
+   real(WP), parameter :: surface_epsilon_factor=1.0e-15_WP       !< Minimum surface to consider for computational geometry (normalized by min_meshsize**2)
+   real(WP), parameter :: iterative_distfind_tol=1.0e-12_WP       !< Tolerance for iterative plane distance finding
    
    !> Boundary conditions for the volume fraction solver
    type :: bcond
@@ -42,11 +50,22 @@ module vfs_class
       integer :: nbc                                      !< Number of bcond for our solver
       type(bcond), pointer :: first_bc                    !< List of bcond for our solver
       
-      ! Volume fraction variable
+      ! Volume fraction data
       real(WP), dimension(:,:,:), allocatable :: VF       !< VF array
-      
-      ! Old volume fraction variable
       real(WP), dimension(:,:,:), allocatable :: VFold    !< VFold array
+      
+      ! IRL objects
+      type(ObjServer_PlanarSep_type)  :: planar_separator_allocation
+      type(ObjServer_PlanarLoc_type)  :: planar_localizer_allocation
+      type(ObjServer_LocSepLink_type) :: localized_separator_link_allocation
+      type(ObjServer_LocLink_type)    :: localizer_link_allocation
+      type(PlanarLoc_type),   dimension(:,:,:),   allocatable :: localizer
+      type(PlanarSep_type),   dimension(:,:,:),   allocatable :: liquid_gas_interface
+      type(LocSepLink_type),  dimension(:,:,:),   allocatable :: localized_separator_link
+      type(ListVM_VMAN_type), dimension(:,:,:),   allocatable :: triangle_moments_storage
+      type(LocLink_type),     dimension(:,:,:),   allocatable :: localizer_link
+      type(Poly_type),        dimension(:,:,:,:), allocatable :: interface_polygon
+      type(SepVM_type),       dimension(:,:,:,:), allocatable :: face_flux
       
       ! Masking info for metric modification
       integer, dimension(:,:,:), allocatable :: mask      !< Integer array used for enforcing bconds
@@ -56,6 +75,7 @@ module vfs_class
       
    contains
       procedure :: print=>vfs_print                       !< Output solver to the screen
+      procedure :: initialize_irl                         !< Initialize the IRL objects
       procedure :: add_bcond                              !< Add a boundary condition
       procedure :: get_bcond                              !< Get a boundary condition
       procedure :: apply_bcond                            !< Apply all boundary conditions
@@ -95,6 +115,9 @@ contains
       allocate(self%VF   (self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%VF   =0.0_WP
       allocate(self%VFold(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%VFold=0.0_WP
       
+      ! Initialize IRL
+      call self%initialize_irl()
+      
       ! Prepare mask for VF
       allocate(self%mask(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%mask=0
       if (.not.self%cfg%xper) then
@@ -119,6 +142,131 @@ contains
       call self%cfg%sync(self%mask)
       
    end function constructor
+   
+   
+   !> Initialize the IRL representation of our interfaces
+   subroutine initialize_irl(this)
+      implicit none
+      class(vfs), intent(inout) :: this
+      integer :: i,j,k,n,tag
+      integer(IRL_LargeOffsetIndex_t) :: total_cells
+      
+      ! Transfer small constants to IRL
+      call setVFBounds(VFlo)
+      call setVFTolerance_IterativeDistanceFinding(iterative_distfind_tol)
+      call setMinimumVolToTrack(volume_epsilon_factor*this%cfg%min_meshsize**3)
+      call setMinimumSAToTrack(surface_epsilon_factor*this%cfg%min_meshsize**2)
+      
+      ! Allocate IRL arrays
+      allocate(this%localizer               (this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
+      allocate(this%liquid_gas_interface    (this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
+      allocate(this%localized_separator_link(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
+      allocate(this%triangle_moments_storage(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
+      allocate(this%localizer_link          (this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
+      allocate(this%interface_polygon(1:max_interface_planes,this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
+      
+      ! Work arrays for face fluxes
+      allocate(this%face_flux(1:3,this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
+      do k=this%cfg%kmino_,this%cfg%kmaxo_
+         do j=this%cfg%jmino_,this%cfg%jmaxo_
+            do i=this%cfg%imino_,this%cfg%imaxo_
+               do n=1,3
+                  call new(this%face_flux(n,i,j,k))
+               end do
+            end do
+         end do
+      end do
+      
+      ! Precomputed face correction velocities
+      !> allocate(face_correct_velocity(1:3,1:3,imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_))
+      
+      ! Initialize size for IRL
+      total_cells=int(this%cfg%nxo_,8)*int(this%cfg%nyo_,8)*int(this%cfg%nzo_,8)
+      call new(this%planar_localizer_allocation,total_cells)
+      call new(this%planar_separator_allocation,total_cells)
+      call new(this%localized_separator_link_allocation,total_cells)
+      call new(this%localizer_link_allocation,total_cells)
+      
+      ! Initialize arrays and setup linking
+      do k=this%cfg%kmino_,this%cfg%kmaxo_
+         do j=this%cfg%jmino_,this%cfg%jmaxo_
+            do i=this%cfg%imino_,this%cfg%imaxo_
+               ! Transfer cell to IRL
+               call new(this%localizer(i,j,k),this%planar_localizer_allocation)
+               call setFromRectangularCuboid(this%localizer(i,j,k),[this%cfg%x(i),this%cfg%y(j),this%cfg%z(k)],[this%cfg%x(i+1),this%cfg%y(j+1),this%cfg%z(k+1)])
+               ! PLIC interface(s)
+               call new(this%liquid_gas_interface(i,j,k),this%planar_separator_allocation)
+               ! PLIC+mesh with connectivity (i.e., link)
+               call new(this%localized_separator_link(i,j,k),this%localized_separator_link_allocation,this%localizer(i,j,k),this%liquid_gas_interface(i,j,k))
+               ! For transport surface
+               call new(this%triangle_moments_storage(i,j,k))
+               ! Mesh with connectivity
+               call new(this%localizer_link(i,j,k),this%localizer_link_allocation,this%localizer(i,j,k))
+            end do
+         end do
+      end do
+      
+      ! Polygonal representation of the surface
+      do k=this%cfg%kmino_,this%cfg%kmaxo_
+         do j=this%cfg%jmino_,this%cfg%jmaxo_
+            do i=this%cfg%imino_,this%cfg%imaxo_
+               do n=1,max_interface_planes
+                  call new(this%interface_polygon(n,i,j,k))
+               end do
+            end do
+         end do
+      end do
+      
+      ! Give each link a unique lexicographic tag (per processor)
+      do k=this%cfg%kmino_,this%cfg%kmaxo_
+         do j=this%cfg%jmino_,this%cfg%jmaxo_
+            do i=this%cfg%imino_,this%cfg%imaxo_
+               tag=(i-this%cfg%imino_)+(j-this%cfg%jmino_)*this%cfg%nxo_+(k-this%cfg%kmino_)*this%cfg%nxo_*this%cfg%nyo_
+               call setId(this%localized_separator_link(i,j,k),tag)
+               call setId(this%localizer_link(i,j,k),tag)
+            end do
+         end do
+      end do
+      
+      ! Set the connectivity
+      do k=this%cfg%kmino_,this%cfg%kmaxo_
+         do j=this%cfg%jmino_,this%cfg%jmaxo_
+            do i=this%cfg%imino_,this%cfg%imaxo_
+               ! In the x- direction
+               if (i.gt.this%cfg%imino_) then
+                  call setEdgeConnectivity(this%localized_separator_link(i,j,k),0,this%localized_separator_link(i-1,j,k))
+                  call setEdgeConnectivity(this%localizer_link(i,j,k),0,this%localizer_link(i-1,j,k))
+               end if
+               ! In the x+ direction
+               if (i.lt.this%cfg%imaxo_) then
+                  call setEdgeConnectivity(this%localized_separator_link(i,j,k),1,this%localized_separator_link(i+1,j,k))
+                  call setEdgeConnectivity(this%localizer_link(i,j,k),1,this%localizer_link(i+1,j,k))
+               end if
+               ! In the y- direction
+               if (j.gt.this%cfg%jmino_) then
+                  call setEdgeConnectivity(this%localized_separator_link(i,j,k),2,this%localized_separator_link(i,j-1,k))
+                  call setEdgeConnectivity(this%localizer_link(i,j,k),2,this%localizer_link(i,j-1,k))
+               end if
+               ! In the y+ direction
+               if (j.lt.this%cfg%jmaxo_) then
+                  call setEdgeConnectivity(this%localized_separator_link(i,j,k),3,this%localized_separator_link(i,j+1,k))
+                  call setEdgeConnectivity(this%localizer_link(i,j,k),3,this%localizer_link(i,j+1,k))
+               end if
+               ! In the z- direction
+               if (k.gt.this%cfg%kmino_) then
+                  call setEdgeConnectivity(this%localized_separator_link(i,j,k),4,this%localized_separator_link(i,j,k-1))
+                  call setEdgeConnectivity(this%localizer_link(i,j,k),4,this%localizer_link(i,j,k-1))
+               end if
+               ! In the z+ direction
+               if (k.lt.this%cfg%kmaxo_) then
+                  call setEdgeConnectivity(this%localized_separator_link(i,j,k),5,this%localized_separator_link(i,j,k+1))
+                  call setEdgeConnectivity(this%localizer_link(i,j,k),5,this%localizer_link(i,j,k+1))
+               end if
+            end do
+         end do
+      end do
+      
+   end subroutine initialize_irl
    
    
    !> Add a boundary condition
