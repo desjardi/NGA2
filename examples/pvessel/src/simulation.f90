@@ -30,7 +30,7 @@ module simulation
    real(WP), dimension(:,:,:), allocatable :: Ui,Vi,Wi
    
    !> Equation of state
-   real(WP) :: Tmin,Tmax,fluid_mass
+   real(WP) :: Tmin,Tmax,fluid_mass,fluid_mass_old
    
 contains
    
@@ -91,7 +91,7 @@ contains
       
       ! Create an incompressible flow solver with bconds
       create_solver: block
-         use ils_class,     only: pcg_amg,pfmg
+         use ils_class,     only: pcg_amg,gmres
          use lowmach_class, only: dirichlet
          real(WP) :: viscosity
          ! Create flow solver
@@ -111,13 +111,13 @@ contains
          call param_read('Implicit iteration',fs%implicit%maxit)
          call param_read('Implicit tolerance',fs%implicit%rcvg)
          ! Setup the solver
-         call fs%setup(pressure_ils=pcg_amg,implicit_ils=pfmg)
+         call fs%setup(pressure_ils=pcg_amg,implicit_ils=gmres)
       end block create_solver
       
       
       ! Create a scalar solver
       create_scalar: block
-         use ils_class,      only: gmres
+         use ils_class,      only: gmres,pfmg
          use vdscalar_class, only: dirichlet,quick
          real(WP) :: diffusivity
          ! Create scalar solver
@@ -301,8 +301,8 @@ contains
          call time%adjust_dt()
          call time%increment()
          
-         ! Increment fluid mass
-         fluid_mass=fluid_mass+sum(fs%mfr)*time%dt
+         ! Remember fluid mass
+         fluid_mass_old=fluid_mass
          
          ! Remember old scalar
          sc%rhoold=sc%rho
@@ -342,9 +342,10 @@ contains
             
             ! ============ UPDATE PROPERTIES ====================
             ! Backup rhoSC
-            resSC=sc%rho*sc%SC
+            !resSC=sc%rho*sc%SC
             ! Update density
-            call get_rho(mass=fluid_mass)
+            !call fs%get_mfr(); fluid_mass=fluid_mass_old+sum(fs%mfr)*time%dt
+            !call get_rho(mass=fluid_mass)
             ! Rescale scalar for conservation
             !sc%SC=resSC/sc%rho
             ! UPDATE THE VISCOSITY
@@ -386,7 +387,9 @@ contains
             call fs%apply_bcond(time%tmid,time%dtmid)
             
             ! Solve Poisson equation
-            call fs%correct_mfr()
+            call fs%correct_mfr()                          !< Now outlet so this gets the MFR imbalance
+            fluid_mass=fluid_mass_old+sum(fs%mfr)*time%dt  !< Update mass in system
+            call get_rho(mass=fluid_mass)                  !< Adjust rho in accordance
             call sc%get_drhodt(dt=time%dt,drhodt=resSC)
             call fs%get_div(drhodt=resSC)
             fs%psolv%rhs=-fs%cfg%vol*fs%div/time%dtmid

@@ -182,7 +182,7 @@ contains
          call HYPRE_BoomerAMGSetPrintLevel (this%hypre_solver,0,ierr)            ! print solve info + parameters (3 from all, 0 for none)
          call HYPRE_BoomerAMGSetInterpType (this%hypre_solver,6,ierr)            ! interpolation default is 6 (NGA=3)
          call HYPRE_BoomerAMGSetCoarsenType(this%hypre_solver,8,ierr)            ! Falgout=6 (old default, NGA); PMIS=8 and HMIS=10 (recommended)
-         call HYPRE_BoomerAMGSetStrongThrshld(this%hypre_solver,0.15_WP,ierr)    ! 0.25 is default
+         call HYPRE_BoomerAMGSetStrongThrshld(this%hypre_solver,0.5_WP,ierr)     ! 0.25 is default
          call HYPRE_BoomerAMGSetRelaxType  (this%hypre_solver,8,ierr)            ! hybrid symmetric Gauss-Seidel/SOR
          call HYPRE_BoomerAMGSetMaxIter    (this%hypre_solver,this%maxit,ierr)   ! maximum nbr of iter
          call HYPRE_BoomerAMGSetTol        (this%hypre_solver,this%rcvg ,ierr)   ! convergence tolerance
@@ -218,7 +218,7 @@ contains
          call HYPRE_BoomerAMGSetPrintLevel (this%hypre_precond,0,ierr)            ! print solve info + parameters (3 from all, 0 for none)
          call HYPRE_BoomerAMGSetInterpType (this%hypre_precond,6,ierr)            ! interpolation default is 6 (NGA=3)
          call HYPRE_BoomerAMGSetCoarsenType(this%hypre_precond,8,ierr)            ! Falgout=6 (old default, NGA); PMIS=8 and HMIS=10 (recommended)
-         call HYPRE_BoomerAMGSetStrongThrshld(this%hypre_precond,0.15_WP,ierr)    ! 0.25 is default
+         call HYPRE_BoomerAMGSetStrongThrshld(this%hypre_precond,0.5_WP,ierr)     ! 0.25 is default
          call HYPRE_BoomerAMGSetRelaxType  (this%hypre_precond,8,ierr)            ! hybrid symmetric Gauss-Seidel/SOR
          call HYPRE_BoomerAMGSetMaxIter    (this%hypre_precond,1,ierr)            ! maximum nbr of iter
          call HYPRE_BoomerAMGSetTol        (this%hypre_precond,0.0_WP,ierr)       ! convergence tolerance
@@ -377,9 +377,11 @@ contains
          ! Prepare the solver
          call HYPRE_StructPFMGCreate       (this%cfg%comm,this%hypre_solver,ierr)
          call HYPRE_StructPFMGSetRelaxType (this%hypre_solver,2,ierr)
+         call HYPRE_StructPFMGSetRAPType   (this%hypre_solver,1,ierr)
          call HYPRE_StructPFMGSetMaxIter   (this%hypre_solver,this%maxit,ierr)
          call HYPRE_StructPFMGSetTol       (this%hypre_solver,this%rcvg ,ierr)
          call HYPRE_StructPFMGSetLogging   (this%hypre_solver,1,ierr)
+         !call HYPRE_StructPFMGSetPrintLevel(this%hypre_solver,1,ierr)
          
       case default
          call die('[ils prep solver] Unknown solution method')
@@ -531,7 +533,8 @@ contains
          do k=this%cfg%kmin_,this%cfg%kmax_
             do j=this%cfg%jmin_,this%cfg%jmax_
                do i=this%cfg%imin_,this%cfg%imax_
-                  val=this%opr(:,i,j,k)
+                  val(1)=1.0_WP; val(2:)=0.0_WP
+                  if (abs(this%opr(1,i,j,k)).gt.0.0_WP) val=this%opr(:,i,j,k)
                   call HYPRE_StructMatrixSetValues(this%hypre_mat,[i,j,k],this%nst,row,val,ierr)
                end do
             end do
@@ -557,7 +560,8 @@ contains
          do k=this%cfg%kmin_,this%cfg%kmax_
             do j=this%cfg%jmin_,this%cfg%jmax_
                do i=this%cfg%imin_,this%cfg%imax_
-                  val=this%opr(:,i,j,k)
+                  val(1)=1.0_WP; val(2:)=0.0_WP
+                  if (abs(this%opr(1,i,j,k)).gt.0.0_WP) val=this%opr(:,i,j,k)
                   call HYPRE_StructMatrixSetValues(this%hypre_mat,[i,j,k],this%nst,row,val,ierr)
                end do
             end do
@@ -839,8 +843,13 @@ contains
       do k=this%cfg%kmin_,this%cfg%kmax_
          do j=this%cfg%jmin_,this%cfg%jmax_
             do i=this%cfg%imin_,this%cfg%imax_
-               call HYPRE_StructVectorSetValues(this%hypre_rhs,[i,j,k],this%rhs(i,j,k),ierr)
-               call HYPRE_StructVectorSetValues(this%hypre_sol,[i,j,k],this%sol(i,j,k),ierr)
+               if (abs(this%opr(1,i,j,k)).gt.0.0_WP) then
+                  call HYPRE_StructVectorSetValues(this%hypre_rhs,[i,j,k],this%rhs(i,j,k),ierr)
+                  call HYPRE_StructVectorSetValues(this%hypre_sol,[i,j,k],this%sol(i,j,k),ierr)
+               else
+                  call HYPRE_StructVectorSetValues(this%hypre_rhs,[i,j,k],0.0_WP,ierr)
+                  call HYPRE_StructVectorSetValues(this%hypre_sol,[i,j,k],0.0_WP,ierr)
+               end if
             end do
          end do
       end do
@@ -874,8 +883,13 @@ contains
       do k=this%cfg%kmin_,this%cfg%kmax_
          do j=this%cfg%jmin_,this%cfg%jmax_
             do i=this%cfg%imin_,this%cfg%imax_
-               call HYPRE_StructVectorSetValues(this%hypre_rhs,[i,j,k],this%rhs(i,j,k),ierr)
-               call HYPRE_StructVectorSetValues(this%hypre_sol,[i,j,k],this%sol(i,j,k),ierr)
+               if (abs(this%opr(1,i,j,k)).gt.0.0_WP) then
+                  call HYPRE_StructVectorSetValues(this%hypre_rhs,[i,j,k],this%rhs(i,j,k),ierr)
+                  call HYPRE_StructVectorSetValues(this%hypre_sol,[i,j,k],this%sol(i,j,k),ierr)
+               else
+                  call HYPRE_StructVectorSetValues(this%hypre_rhs,[i,j,k],0.0_WP,ierr)
+                  call HYPRE_StructVectorSetValues(this%hypre_sol,[i,j,k],0.0_WP,ierr)
+               end if
             end do
          end do
       end do
