@@ -21,6 +21,7 @@ module pgrid_class
       type(MPI_Group) :: group              !< Grid group
       type(MPI_Comm) :: comm                !< Grid communicator
       type(MPI_Datatype) :: view            !< Local to global array mapping info - real(WP)
+      type(MPI_Datatype) :: Iview           !< Local to global array mapping info - integer
       type(MPI_Datatype) :: SPview          !< Local to global array mapping info - real(SP)
       integer :: nproc                      !< Number of processors
       integer :: rank                       !< Processor grid rank
@@ -302,6 +303,8 @@ contains
       call MPI_TYPE_COMMIT(self%view,ierr)
       call MPI_TYPE_CREATE_SUBARRAY(3,gsizes,lsizes,lstart,MPI_ORDER_FORTRAN,MPI_REAL_SP,self%SPview,ierr)
       call MPI_TYPE_COMMIT(self%SPview,ierr)
+      call MPI_TYPE_CREATE_SUBARRAY(3,gsizes,lsizes,lstart,MPI_ORDER_FORTRAN,MPI_INTEGER,self%Iview,ierr)
+      call MPI_TYPE_COMMIT(self%Iview,ierr)
       
    end subroutine pgrid_domain_decomp
    

@@ -76,6 +76,8 @@ module vfs_class
    contains
       procedure :: print=>vfs_print                       !< Output solver to the screen
       procedure :: initialize_irl                         !< Initialize the IRL objects
+      procedure :: read_interface                         !< Read an IRL interface from a file
+      procedure :: write_interface                        !< Write an IRL interface to a file
       procedure :: add_bcond                              !< Add a boundary condition
       procedure :: get_bcond                              !< Get a boundary condition
       procedure :: apply_bcond                            !< Apply all boundary conditions
@@ -267,6 +269,94 @@ contains
       end do
       
    end subroutine initialize_irl
+   
+   
+   !> Read an IRL interface from a file
+   subroutine read_interface(this,filename)
+      use messager, only: die
+      use parallel, only: info_mpiio,MPI_REAL_WP
+      implicit none
+      class(vfs), intent(inout) :: this
+      character(len=*), intent(in) :: filename
+      integer :: i,j,k,ind,ierr,var
+      integer, dimension(3) :: gsizes,lsizes,start
+      type(MPI_File) :: ifile
+      type(MPI_Status) :: status
+      integer(kind=MPI_OFFSET_KIND) :: disp,size_to_read
+      integer, dimension(3) :: dims
+      integer                      , dimension(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_) :: number_of_planes
+      integer(kind=MPI_OFFSET_KIND), dimension(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_) :: offset_to_planes
+      integer                      , dimension(this%cfg%ny_*this%cfg%nz) :: array_of_block_lengths
+      integer(kind=MPI_OFFSET_KIND), dimension(this%cfg%ny_*this%cfg%nz_):: array_of_displacements
+      type(MPI_Datatype) :: MPI_OFFSET_ARRAY_TYPE
+      type(ByteBuffer_type) :: byte_buffer
+      
+      ! Open the file
+      call MPI_FILE_OPEN(this%cfg%comm,trim(adjustl(filename)),MPI_MODE_RDONLY,info_mpiio,ifile,ierr)
+      if (ierr.ne.0) call die('[vfs interface read] Problem encountered while reading IRL data file: '//trim(filename))
+      
+      ! Read dimensions from header
+      call MPI_FILE_READ_ALL(ifile,dims,4,MPI_INTEGER,status,ierr)
+      
+      ! Throw error if size mismatch
+      if ((dims(1).ne.this%cfg%nx).or.(dims(2).ne.this%cfg%ny).or.(dims(3).ne.this%cfg%nz)) then
+         if (this%cfg%amRoot) then
+            print*, '    grid size = ',this%cfg%nx,this%cfg%ny,this%cfg%nz
+            print*, 'IRL file size = ',dims(1),dims(2),dims(3)
+         end if
+         call die('[vfs interface read] The size of the interface file does not correspond to the grid')
+      end if
+      
+      ! Read in number of planes
+      call MPI_FILE_GET_POSITION(ifile,disp,ierr)
+      call MPI_FILE_SET_VIEW(ifile,disp,MPI_INTEGER,this%cfg%Iview,'native',info_mpiio,ierr)
+      call MPI_FILE_READ_ALL(ifile,number_of_planes(this%cfg%imin_:this%cfg%imax_,this%cfg%jmin_:this%cfg%jmax_,this%cfg%kmin_:this%cfg%kmax_),this%cfg%nx_*this%cfg%ny_*this%cfg%nz_,MPI_INTEGER,status,ierr)
+      
+      ! Fill in ghost cells for number of planes
+      call this%cfg%sync(number_of_planes)
+      
+      ! Calculate the offset to each plane, needed for reading
+      call calculate_offset_to_planes(number_of_planes,offset_to_planes)
+      
+      ! Make custom offset vector type for offsets
+      ind = 0
+      size_to_read = 0
+      do k=kmin_,kmax_
+         do j=jmin_,jmax_
+            ind = ind + 1
+            array_of_block_lengths(ind) = int((offset_to_planes(imax_,j,k)-offset_to_planes(imin_,j,k)),4) &
+            + int(4,4) + int(number_of_planes(imax_,j,k),4)*int(4,4)*int(8,4)+ int(8,4)
+            size_to_read = size_to_read + int(array_of_block_lengths(ind),8)
+            array_of_displacements(ind) = int(offset_to_planes(imin_,j,k),MPI_ADDRESS_KIND)
+         end do
+      end do
+      call MPI_TYPE_CREATE_HINDEXED(ny_*nz_,array_of_block_lengths,array_of_displacements,MPI_BYTE,MPI_OFFSET_ARRAY_TYPE,ierr)
+      call MPI_TYPE_COMMIT(MPI_OFFSET_ARRAY_TYPE,ierr)
+      
+      ! Read in the bytes and pack in to buffer, then loop through and unpack to PlanarSep
+      disp = disp + int(4,8)*int(nx,8)*int(ny,8)*int(nz,8)
+      call new(byte_buffer)
+      call setSize(byte_buffer,size_to_read)
+      call MPI_FILE_SET_VIEW(ifile,disp,MPI_BYTE,MPI_OFFSET_ARRAY_TYPE,"native",mpi_info,ierr)
+      call MPI_FILE_READ_ALL(ifile, dataPtr(byte_buffer),size_to_read, MPI_BYTE, status, ierr)
+      do k=kmin_,kmax_
+         do j=jmin_,jmax_
+            do i=imin_,imax_
+               call unpackAndStore(liquid_gas_interface(i,j,k),byte_buffer)
+            end do
+         end do
+      end do
+      
+      ! Close the file
+      call MPI_FILE_CLOSE(ifile,ierr)
+      
+      ! Free the type
+      call MPI_TYPE_FREE(MPI_OFFSET_ARRAY_TYPE,ierr)
+      
+      ! Communicate normals
+      call multiphase_boundary_norm
+      
+   end subroutine read_interface
    
    
    !> Add a boundary condition

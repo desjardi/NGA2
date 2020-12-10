@@ -65,20 +65,37 @@ contains
    
    !> Define here our equation of state - rho(T,mass)
    subroutine get_rho(mass)
+      use vdscalar_class, only: bcond
       implicit none
       real(WP), intent(in) :: mass
-      integer :: i,j,k
+      type(bcond), pointer :: inflow
+      integer :: i,j,k,n
       real(WP) :: one_over_T
       ! Integrate 1/T
       resSC=1.0_WP/sc%SC
       call sc%cfg%integrate(resSC,integral=one_over_T)
-      ! Calculate density
+      ! Update density in the domain
       do k=sc%cfg%kmino_,sc%cfg%kmaxo_
          do j=sc%cfg%jmino_,sc%cfg%jmaxo_
             do i=sc%cfg%imino_,sc%cfg%imaxo_
-               sc%rho(i,j,k)=mass/(sc%SC(i,j,k)*one_over_T)
+               if (sc%cfg%VF(i,j,k).gt.0.0_WP) then
+                  sc%rho(i,j,k)=mass/(sc%SC(i,j,k)*one_over_T)
+               else
+                  sc%rho(i,j,k)=1.0_WP
+               end if
             end do
          end do
+      end do
+      ! Also update the density in the bcond
+      call sc%get_bcond( 'left inflow',inflow)
+      do n=1,inflow%itr%no_
+         i=inflow%itr%map(1,n); j=inflow%itr%map(2,n); k=inflow%itr%map(3,n)
+         sc%rho(i,j,k)=mass/(sc%SC(i,j,k)*one_over_T)
+      end do
+      call sc%get_bcond('right inflow',inflow)
+      do n=1,inflow%itr%no_
+         i=inflow%itr%map(1,n); j=inflow%itr%map(2,n); k=inflow%itr%map(3,n)
+         sc%rho(i,j,k)=mass/(sc%SC(i,j,k)*one_over_T)
       end do
    end subroutine get_rho
    
@@ -199,17 +216,17 @@ contains
          call fs%get_bcond('left inflow',inflow)
          do n=1,inflow%itr%no_
             i=inflow%itr%map(1,n); j=inflow%itr%map(2,n); k=inflow%itr%map(3,n)
-            fs%U(i,j,k)=-1.0_WP
+            fs%rhoU(i,j,k)=-5.0_WP
          end do
          call fs%get_bcond('right inflow',inflow)
          do n=1,inflow%itr%no_
             i=inflow%itr%map(1,n); j=inflow%itr%map(2,n); k=inflow%itr%map(3,n)
-            fs%U(i+1,j,k)=+1.0_WP
+            fs%rhoU(i+1,j,k)=+5.0_WP
          end do
          ! Set density from scalar
          fs%rho=sc%rho
          ! Form momentum
-         call fs%rho_multiply
+         call fs%rho_divide
          ! Apply all other boundary conditions
          call fs%apply_bcond(time%t,time%dt)
          call fs%interp_vel(Ui,Vi,Wi)
@@ -317,40 +334,14 @@ contains
          ! Apply time-varying Dirichlet conditions
          ! This is where time-dpt Dirichlet would be enforced
          
+         ! ============ UPDATE PROPERTIES ====================
+         ! UPDATE THE VISCOSITY
+         ! UPDATE THE DIFFUSIVITY
+         ! ===================================================
+         
          ! Perform sub-iterations
          do while (time%it.le.time%itmax)
             
-            ! ============= SCALAR SOLVER =======================
-            ! Build mid-time scalar
-            sc%SC=0.5_WP*(sc%SC+sc%SCold)
-            
-            ! Explicit calculation of drhoSC/dt from scalar equation
-            call sc%get_drhoSCdt(resSC,fs%rhoU,fs%rhoV,fs%rhoW)
-            
-            ! Assemble explicit residual
-            resSC=time%dt*resSC-(2.0_WP*sc%rho*sc%SC-(sc%rho+sc%rhoold)*sc%SCold)
-            
-            ! Form implicit residual
-            call sc%solve_implicit(time%dt,resSC,fs%rhoU,fs%rhoV,fs%rhoW)
-            
-            ! Apply this residual
-            sc%SC=2.0_WP*sc%SC-sc%SCold+resSC
-            
-            ! Apply other boundary conditions on the resulting field
-            call sc%apply_bcond(time%t,time%dt)
-            ! ===================================================
-            
-            ! ============ UPDATE PROPERTIES ====================
-            ! Backup rhoSC
-            !resSC=sc%rho*sc%SC
-            ! Update density
-            !call fs%get_mfr(); fluid_mass=fluid_mass_old+sum(fs%mfr)*time%dt
-            !call get_rho(mass=fluid_mass)
-            ! Rescale scalar for conservation
-            !sc%SC=resSC/sc%rho
-            ! UPDATE THE VISCOSITY
-            ! UPDATE THE DIFFUSIVITY
-            ! ===================================================
             
             ! ============ VELOCITY SOLVER ======================
             
@@ -381,10 +372,25 @@ contains
             fs%V=2.0_WP*fs%V-fs%Vold+resV
             fs%W=2.0_WP*fs%W-fs%Wold+resW
             
-            ! Apply other boundary conditions and update momentum
+            ! Apply other boundary conditions and update momentum - we may want to skip divide/multiply for masked cells?
             call fs%apply_bcond(time%tmid,time%dtmid)
             call fs%rho_multiply()
             call fs%apply_bcond(time%tmid,time%dtmid)
+            mom_bcond: block
+               use lowmach_class, only: bcond
+               type(bcond), pointer :: inflow
+               integer :: n,i,j,k
+               call fs%get_bcond('left inflow',inflow)
+               do n=1,inflow%itr%no_
+                  i=inflow%itr%map(1,n); j=inflow%itr%map(2,n); k=inflow%itr%map(3,n)
+                  fs%rhoU(i,j,k)=-5.0_WP
+               end do
+               call fs%get_bcond('right inflow',inflow)
+               do n=1,inflow%itr%no_
+                  i=inflow%itr%map(1,n); j=inflow%itr%map(2,n); k=inflow%itr%map(3,n)
+                  fs%rhoU(i+1,j,k)=+5.0_WP
+               end do
+            end block mom_bcond
             
             ! Solve Poisson equation
             call fs%correct_mfr()                          !< Now outlet so this gets the MFR imbalance
@@ -405,6 +411,28 @@ contains
             fs%rhoW=fs%rhoW-time%dtmid*resW
             call fs%rho_divide
             ! ===================================================
+            
+            
+            ! ============= SCALAR SOLVER =======================
+            ! Build mid-time scalar
+            sc%SC=0.5_WP*(sc%SC+sc%SCold)
+            
+            ! Explicit calculation of drhoSC/dt from scalar equation
+            call sc%get_drhoSCdt(resSC,fs%rhoU,fs%rhoV,fs%rhoW)
+            
+            ! Assemble explicit residual - skip wall cells here since we're updating the density at Dirichlet boundaries
+            where (sc%cfg%VF.gt.0.0_WP) resSC=time%dt*resSC-(2.0_WP*sc%rho*sc%SC-(sc%rho+sc%rhoold)*sc%SCold)
+            
+            ! Form implicit residual
+            call sc%solve_implicit(time%dt,resSC,fs%rhoU,fs%rhoV,fs%rhoW)
+            
+            ! Apply this residual
+            sc%SC=2.0_WP*sc%SC-sc%SCold+resSC
+            
+            ! Apply other boundary conditions on the resulting field
+            call sc%apply_bcond(time%t,time%dt)
+            ! ===================================================
+            
             
             ! Increment sub-iteration counter
             time%it=time%it+1

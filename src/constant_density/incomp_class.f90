@@ -1235,8 +1235,8 @@ contains
                my_Umax  =max(my_Umax  ,abs(this%U(i,j,k)  ))
                my_Vmax  =max(my_Vmax  ,abs(this%V(i,j,k)  ))
                my_Wmax  =max(my_Wmax  ,abs(this%W(i,j,k)  ))
-               my_Pmax  =max(my_Pmax  ,abs(this%P(i,j,k)  ))
-               my_divmax=max(my_divmax,abs(this%div(i,j,k)))
+               if (this%cfg%VF(i,j,k).gt.0.0_WP) my_Pmax  =max(my_Pmax  ,abs(this%P(i,j,k)  ))
+               if (this%cfg%VF(i,j,k).gt.0.0_WP) my_divmax=max(my_divmax,abs(this%div(i,j,k)))
             end do
          end do
       end do
