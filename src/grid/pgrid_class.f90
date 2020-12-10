@@ -29,6 +29,10 @@ module pgrid_class
       logical :: amIn                       !< Am I working in this grid?
       integer :: npx,npy,npz                !< Number of processors per direction
       integer :: iproc,jproc,kproc          !< Coordinates location of processor
+      type(MPI_Comm) :: xcomm               !< 1D x-communicator
+      type(MPI_Comm) :: ycomm               !< 1D y-communicator
+      type(MPI_Comm) :: zcomm               !< 1D z-communicator
+      integer :: xrank,yrank,zrank          !< 1D ranks
       ! Local grid size
       integer :: nx_,ny_,nz_                !< Local grid size in x/y/z
       ! Local grid size with overlap
@@ -223,6 +227,7 @@ contains
       type(MPI_Comm) :: tmp_comm
       integer, parameter :: ndims=3
       logical, parameter :: reorder=.true.
+      logical, dimension(3) :: dir
       integer, dimension(3) :: coords
       integer, dimension(3) :: gsizes,lsizes,lstart
       
@@ -238,6 +243,17 @@ contains
       call MPI_CART_COORDS(self%comm,self%rank,ndims,coords,ierr)
       self%iproc=coords(1)+1; self%jproc=coords(2)+1; self%kproc=coords(3)+1
       self%amRoot=(self%rank.eq.0)
+      
+      ! Create 1D communicators
+      dir=[.true.,.false.,.false.]
+      call MPI_CART_SUB(self%comm,dir,self%xcomm,ierr)
+      call MPI_COMM_RANK(self%xcomm,self%xrank,ierr)
+      dir=[.false.,.true.,.false.]
+      call MPI_CART_SUB(self%comm,dir,self%ycomm,ierr)
+      call MPI_COMM_RANK(self%ycomm,self%yrank,ierr)
+      dir=[.false.,.false.,.true.]
+      call MPI_CART_SUB(self%comm,dir,self%zcomm,ierr)
+      call MPI_COMM_RANK(self%zcomm,self%zrank,ierr)
       
       ! Perform decomposition in x
       q=self%nx/self%npx; r=mod(self%nx,self%npx)

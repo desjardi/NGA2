@@ -76,8 +76,10 @@ module vfs_class
    contains
       procedure :: print=>vfs_print                       !< Output solver to the screen
       procedure :: initialize_irl                         !< Initialize the IRL objects
+      procedure :: sync_interface                         !< Synchronize the IRL objects
       procedure :: read_interface                         !< Read an IRL interface from a file
-      procedure :: write_interface                        !< Write an IRL interface to a file
+      procedure :: calculate_offset_to_planes             !< Helper routine for I/O
+      !procedure :: write_interface                        !< Write an IRL interface to a file
       procedure :: add_bcond                              !< Add a boundary condition
       procedure :: get_bcond                              !< Get a boundary condition
       procedure :: apply_bcond                            !< Apply all boundary conditions
@@ -273,6 +275,7 @@ contains
    
    !> Read an IRL interface from a file
    subroutine read_interface(this,filename)
+      use mpi_f08
       use messager, only: die
       use parallel, only: info_mpiio,MPI_REAL_WP
       implicit none
@@ -282,12 +285,13 @@ contains
       integer, dimension(3) :: gsizes,lsizes,start
       type(MPI_File) :: ifile
       type(MPI_Status) :: status
-      integer(kind=MPI_OFFSET_KIND) :: disp,size_to_read
+      integer(kind=MPI_OFFSET_KIND) :: disp,size_to_read_big
+      integer :: size_to_read
       integer, dimension(3) :: dims
-      integer                      , dimension(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_) :: number_of_planes
-      integer(kind=MPI_OFFSET_KIND), dimension(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_) :: offset_to_planes
-      integer                      , dimension(this%cfg%ny_*this%cfg%nz) :: array_of_block_lengths
-      integer(kind=MPI_OFFSET_KIND), dimension(this%cfg%ny_*this%cfg%nz_):: array_of_displacements
+      integer                       , dimension(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_) :: number_of_planes
+      integer(kind=MPI_OFFSET_KIND) , dimension(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_) :: offset_to_planes
+      integer                       , dimension(this%cfg%ny_*this%cfg%nz) :: array_of_block_lengths
+      integer(kind=MPI_ADDRESS_KIND), dimension(this%cfg%ny_*this%cfg%nz_):: array_of_displacements
       type(MPI_Datatype) :: MPI_OFFSET_ARRAY_TYPE
       type(ByteBuffer_type) :: byte_buffer
       
@@ -316,33 +320,34 @@ contains
       call this%cfg%sync(number_of_planes)
       
       ! Calculate the offset to each plane, needed for reading
-      call calculate_offset_to_planes(number_of_planes,offset_to_planes)
+      call this%calculate_offset_to_planes(number_of_planes,offset_to_planes)
       
       ! Make custom offset vector type for offsets
-      ind = 0
-      size_to_read = 0
-      do k=kmin_,kmax_
-         do j=jmin_,jmax_
-            ind = ind + 1
-            array_of_block_lengths(ind) = int((offset_to_planes(imax_,j,k)-offset_to_planes(imin_,j,k)),4) &
-            + int(4,4) + int(number_of_planes(imax_,j,k),4)*int(4,4)*int(8,4)+ int(8,4)
-            size_to_read = size_to_read + int(array_of_block_lengths(ind),8)
-            array_of_displacements(ind) = int(offset_to_planes(imin_,j,k),MPI_ADDRESS_KIND)
+      ind=0
+      size_to_read_big=0
+      do k=this%cfg%kmin_,this%cfg%kmax_
+         do j=this%cfg%jmin_,this%cfg%jmax_
+            ind=ind+1
+            array_of_block_lengths(ind)=int((offset_to_planes(this%cfg%imax_,j,k)-offset_to_planes(this%cfg%imin_,j,k)),4)+int(4,4)+int(number_of_planes(this%cfg%imax_,j,k),4)*int(4,4)*int(8,4)+int(8,4)
+            size_to_read_big=size_to_read_big+int(array_of_block_lengths(ind),MPI_OFFSET_KIND)
+            array_of_displacements(ind)=int(offset_to_planes(this%cfg%imin_,j,k),MPI_ADDRESS_KIND)
          end do
       end do
-      call MPI_TYPE_CREATE_HINDEXED(ny_*nz_,array_of_block_lengths,array_of_displacements,MPI_BYTE,MPI_OFFSET_ARRAY_TYPE,ierr)
+      call MPI_TYPE_CREATE_HINDEXED(this%cfg%ny_*this%cfg%nz_,array_of_block_lengths,array_of_displacements,MPI_BYTE,MPI_OFFSET_ARRAY_TYPE,ierr)
       call MPI_TYPE_COMMIT(MPI_OFFSET_ARRAY_TYPE,ierr)
       
       ! Read in the bytes and pack in to buffer, then loop through and unpack to PlanarSep
-      disp = disp + int(4,8)*int(nx,8)*int(ny,8)*int(nz,8)
+      disp=disp+int(4,MPI_OFFSET_KIND)*int(this%cfg%nx,MPI_OFFSET_KIND)*int(this%cfg%ny,MPI_OFFSET_KIND)*int(this%cfg%nz,MPI_OFFSET_KIND)
       call new(byte_buffer)
-      call setSize(byte_buffer,size_to_read)
-      call MPI_FILE_SET_VIEW(ifile,disp,MPI_BYTE,MPI_OFFSET_ARRAY_TYPE,"native",mpi_info,ierr)
-      call MPI_FILE_READ_ALL(ifile, dataPtr(byte_buffer),size_to_read, MPI_BYTE, status, ierr)
-      do k=kmin_,kmax_
-         do j=jmin_,jmax_
-            do i=imin_,imax_
-               call unpackAndStore(liquid_gas_interface(i,j,k),byte_buffer)
+      call setSize(byte_buffer,size_to_read_big)
+      if (size_to_read_big.gt.huge(size_to_read)) call die('[vfs read interface] Cannot read that much data using the current I/O strategy') !< I/O WILL CRASH FOR IRL DATA >2Go/PROCESS
+      size_to_read=int(size_to_read_big)
+      call MPI_FILE_SET_VIEW(ifile,disp,MPI_BYTE,MPI_OFFSET_ARRAY_TYPE,'native',info_mpiio,ierr)
+      call MPI_FILE_READ_ALL(ifile,dataPtr(byte_buffer),size_to_read,MPI_BYTE,status,ierr)
+      do k=this%cfg%kmin_,this%cfg%kmax_
+         do j=this%cfg%jmin_,this%cfg%jmax_
+            do i=this%cfg%imin_,this%cfg%imax_
+               call unpackAndStore(this%liquid_gas_interface(i,j,k),byte_buffer)
             end do
          end do
       end do
@@ -353,10 +358,141 @@ contains
       ! Free the type
       call MPI_TYPE_FREE(MPI_OFFSET_ARRAY_TYPE,ierr)
       
-      ! Communicate normals
-      call multiphase_boundary_norm
+      ! Communicate interfaces
+      call this%sync_interface()
       
    end subroutine read_interface
+   
+   
+   !> Find byte offset for I/O of interface
+   subroutine calculate_offset_to_planes(this,number_of_planes,offset_to_planes)
+      use mpi_f08
+      implicit none
+      class(vfs), intent(in) :: this
+      integer,                       dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in)  :: number_of_planes !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      integer(kind=MPI_OFFSET_KIND), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(out) :: offset_to_planes !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      integer :: i,j,k
+      integer(IRL_LargeOffsetIndex_t) :: nbytes
+      integer :: isrc,idst,ierr
+      type(MPI_Status) :: status
+      
+      ! Zero the offset to planes
+      offset_to_planes = int(0,MPI_OFFSET_KIND)
+      
+      ! Calculate offsets in x direction
+      isrc=this%cfg%xrank-1
+      idst=this%cfg%xrank+1
+      ! If leftmost processor, calculate offsets
+      if (this%cfg%iproc.eq.1) then
+         do k=this%cfg%kmin_,this%cfg%kmax_
+            do j=this%cfg%jmin_,this%cfg%jmax_
+               nbytes=0
+               do i=this%cfg%imin_,this%cfg%imax_+1
+                  offset_to_planes(i,j,k)=nbytes
+                  nbytes=nbytes+int(4,MPI_OFFSET_KIND)+int(number_of_planes(i,j,k),MPI_OFFSET_KIND)*int(4,MPI_OFFSET_KIND)*int(8,MPI_OFFSET_KIND)+int(8,MPI_OFFSET_KIND)
+               end do
+            end do
+         end do
+         if (this%cfg%iproc.ne.this%cfg%npx) call MPI_SEND(offset_to_planes(this%cfg%imax_+1,this%cfg%jmin_:this%cfg%jmax_,this%cfg%kmin_:this%cfg%kmax_),this%cfg%ny_*this%cfg%nz_,MPI_INTEGER8,idst,0,this%cfg%xcomm,ierr)
+      else
+         ! Receive from the left processor
+         call MPI_RECV(offset_to_planes(this%cfg%imin_-1,this%cfg%jmin_:this%cfg%jmax_,this%cfg%kmin_:this%cfg%kmax_),this%cfg%ny_*this%cfg%nz_,MPI_INTEGER8,isrc,0,this%cfg%xcomm,status,ierr)
+         ! Calculate my offsets now that I know where my neighbor ended
+         do k=this%cfg%kmin_,this%cfg%kmax_
+            do j=this%cfg%jmin_,this%cfg%jmax_
+               nbytes=offset_to_planes(this%cfg%imin_-1,j,k)
+               do i=this%cfg%imin_,this%cfg%imax_+1
+                  offset_to_planes(i,j,k)=nbytes
+                  nbytes=nbytes+int(4,MPI_OFFSET_KIND)+int(number_of_planes(i,j,k),MPI_OFFSET_KIND)*int(4,MPI_OFFSET_KIND)*int(8,MPI_OFFSET_KIND)+int(8,MPI_OFFSET_KIND)
+               end do
+            end do
+         end do
+         ! If not rightmost processor, send to next processor on the right
+         if (this%cfg%iproc.ne.this%cfg%npx) call MPI_SEND(offset_to_planes(this%cfg%imax_+1,this%cfg%jmin_:this%cfg%jmax_,this%cfg%kmin_:this%cfg%kmax_),this%cfg%ny_*this%cfg%nz_,MPI_INTEGER8,idst,0,this%cfg%xcomm,ierr)
+      end if
+      
+      ! Calculate offsets in y direction
+      if (this%cfg%iproc.eq.this%cfg%npx) then
+         isrc=this%cfg%yrank-1
+         idst=this%cfg%yrank+1
+         ! If bottom processor, calculate offsets
+         if (this%cfg%jproc.eq.1) then
+            do k=this%cfg%kmin_,this%cfg%kmax_
+               nbytes=0
+               do j=this%cfg%jmin_,this%cfg%jmax_
+                  offset_to_planes(this%cfg%imax_+1,j,k)=offset_to_planes(this%cfg%imax_+1,j,k)+nbytes
+                  nbytes=offset_to_planes(this%cfg%imax_+1,j,k)
+               end do
+            end do
+            if (this%cfg%jproc.ne.this%cfg%npy) call MPI_SEND(offset_to_planes(this%cfg%imax_+1,this%cfg%jmax_,this%cfg%kmin_:this%cfg%kmax_),this%cfg%nz_,MPI_INTEGER8,idst,0,this%cfg%ycomm,ierr)
+         else
+            ! Receive from the bottom processor
+            call MPI_RECV(offset_to_planes(this%cfg%imax_+1,this%cfg%jmin_-1,this%cfg%kmin_:this%cfg%kmax_),this%cfg%nz_,MPI_INTEGER8,isrc,0,this%cfg%ycomm,status,ierr)
+            ! Calculate my offsets now that I know where my neighbor ended
+            do k=this%cfg%kmin_,this%cfg%kmax_
+               nbytes=offset_to_planes(this%cfg%imax_+1,this%cfg%jmin_-1,k)
+               do j=this%cfg%jmin_,this%cfg%jmax_
+                  offset_to_planes(this%cfg%imax_+1,j,k)=offset_to_planes(this%cfg%imax_+1,j,k)+nbytes
+                  nbytes=offset_to_planes(this%cfg%imax_+1,j,k)
+               end do
+            end do
+            ! Send to the top processor, sent to next processor above
+            if (this%cfg%jproc.ne.this%cfg%npy) call MPI_SEND(offset_to_planes(this%cfg%imax_+1,this%cfg%jmax_,this%cfg%kmin_:this%cfg%kmax_),this%cfg%nz_,MPI_INTEGER8,idst,0,this%cfg%ycomm,ierr)
+         end if
+      end if
+      
+      ! Calculate offsets in z direction
+      if (this%cfg%iproc.eq.this%cfg%npx.and.this%cfg%jproc.eq.this%cfg%npy) then
+         isrc=this%cfg%zrank-1
+         idst=this%cfg%zrank+1
+         ! If first processor in z, calculate offsets
+         if (this%cfg%kproc.eq.1) then
+            nbytes=0
+            do k=this%cfg%kmin_,this%cfg%kmax_
+               offset_to_planes(this%cfg%imax_+1,this%cfg%jmax_,k)=offset_to_planes(this%cfg%imax_+1,this%cfg%jmax_,k)+nbytes
+               nbytes=offset_to_planes(this%cfg%imax_+1,this%cfg%jmax_,k)
+            end do
+            if (this%cfg%kproc.ne.this%cfg%npz) call MPI_SEND(offset_to_planes(this%cfg%imax_+1,this%cfg%jmax_,this%cfg%kmax_),1,MPI_INTEGER8,idst,0,this%cfg%zcomm,ierr)
+         else
+            ! Receive from the previous processor
+            call MPI_RECV(offset_to_planes(this%cfg%imax_+1,this%cfg%jmax_,this%cfg%kmin_-1),1,MPI_INTEGER8,isrc,0,this%cfg%zcomm,status,ierr)
+            ! Calculate my offsets now that I know where my neighbor ended
+            nbytes=offset_to_planes(this%cfg%imax_+1,this%cfg%jmax_,this%cfg%kmin_-1)
+            do k=this%cfg%kmin_,this%cfg%kmax_
+               offset_to_planes(this%cfg%imax_+1,this%cfg%jmax_,k)=offset_to_planes(this%cfg%imax_+1,this%cfg%jmax_,k)+nbytes
+               nbytes=offset_to_planes(this%cfg%imax_+1,this%cfg%jmax_,k)
+            end do
+            ! If not last processor in z, send to the next proc in z
+            if (this%cfg%kproc.ne.this%cfg%npz) call MPI_SEND(offset_to_planes(this%cfg%imax_+1,this%cfg%jmax_,this%cfg%kmax_),1,MPI_INTEGER8,idst,0,this%cfg%zcomm,ierr)
+         end if
+      end if
+      
+      ! Now need to unravel all this to update all of the offsets
+      ! Be informed and add the j-offsets
+      call MPI_BCAST(offset_to_planes(this%cfg%imax_+1,this%cfg%jmin_-1:this%cfg%jmax_,this%cfg%kmin_:this%cfg%kmax_),(this%cfg%ny_+1)*this%cfg%nz_,MPI_INTEGER8,this%cfg%npx-1,this%cfg%xcomm,ierr)
+      do k=this%cfg%kmin_,this%cfg%kmax_
+         nbytes=offset_to_planes(this%cfg%imax_+1,this%cfg%jmin_-1,k)
+         do j=this%cfg%jmin_,this%cfg%jmax_
+            do i=this%cfg%imin_,this%cfg%imax_
+               offset_to_planes(i,j,k)=offset_to_planes(i,j,k)+nbytes
+            end do
+            nbytes=offset_to_planes(this%cfg%imax_+1,j,k)
+         end do
+      end do
+      ! Be informed and add the z-offsets
+      if (this%cfg%jproc.eq.this%cfg%npy) call MPI_BCAST(offset_to_planes(this%cfg%imax_+1,this%cfg%jmax_,this%cfg%kmin_-1:this%cfg%kmax_),this%cfg%nz_+1,MPI_INTEGER8,this%cfg%npx-1,this%cfg%xcomm,ierr)
+      call MPI_BCAST(offset_to_planes(this%cfg%imax_+1,this%cfg%jmax_,this%cfg%kmin_-1:this%cfg%kmax_),this%cfg%nz_+1,MPI_INTEGER8,this%cfg%npy-1,this%cfg%ycomm,ierr)
+      nbytes=offset_to_planes(this%cfg%imax_+1,this%cfg%jmax_,this%cfg%kmin_-1)
+      do k=this%cfg%kmin_,this%cfg%kmax_
+         do j=this%cfg%jmin_,this%cfg%jmax_
+            do i=this%cfg%imin_,this%cfg%imax_
+               offset_to_planes(i,j,k)=offset_to_planes(i,j,k)+nbytes
+            end do
+         end do
+         nbytes=offset_to_planes(this%cfg%imax_+1,this%cfg%jmax_,k)
+      end do
+      
+   end subroutine calculate_offset_to_planes
    
    
    !> Add a boundary condition
