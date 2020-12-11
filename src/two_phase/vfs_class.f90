@@ -55,6 +55,8 @@ module vfs_class
       real(WP), dimension(:,:,:), allocatable :: VFold    !< VFold array
       
       ! IRL objects
+      type(ByteBuffer_type) :: send_byte_buffer
+      type(ByteBuffer_type) :: recv_byte_buffer
       type(ObjServer_PlanarSep_type)  :: planar_separator_allocation
       type(ObjServer_PlanarLoc_type)  :: planar_localizer_allocation
       type(ObjServer_LocSepLink_type) :: localized_separator_link_allocation
@@ -77,6 +79,8 @@ module vfs_class
       procedure :: print=>vfs_print                       !< Output solver to the screen
       procedure :: initialize_irl                         !< Initialize the IRL objects
       procedure :: sync_interface                         !< Synchronize the IRL objects
+      procedure, private :: sync_side                     !< Synchronize the IRL objects across one side
+      procedure, private :: sync_ByteBuffer               !< Communicate byte packets across one side
       procedure :: read_interface                         !< Read an IRL interface from a file
       procedure :: calculate_offset_to_planes             !< Helper routine for I/O
       !procedure :: write_interface                        !< Write an IRL interface to a file
@@ -269,6 +273,10 @@ contains
             end do
          end do
       end do
+      
+      ! Prepare byte storage for synchronization
+      call new(this%send_byte_buffer)
+      call new(this%recv_byte_buffer)
       
    end subroutine initialize_irl
    
@@ -493,6 +501,250 @@ contains
       end do
       
    end subroutine calculate_offset_to_planes
+   
+   
+   !> Synchronize IRL objects across processors
+   subroutine sync_interface(this)
+      implicit none
+      class(vfs), intent(inout) :: this
+      integer :: i,j,k,ni
+      real(WP), dimension(1:4) :: plane
+      integer , dimension(2,3) :: send_range,recv_range
+      ! Synchronize in x
+      if (this%cfg%nx.eq.1) then
+         do k=this%cfg%kmino_,this%cfg%kmaxo_
+            do j=this%cfg%jmino_,this%cfg%jmaxo_
+               do i=this%cfg%imino_,this%cfg%imaxo_
+                  call copy(this%liquid_gas_interface(i,j,k),this%liquid_gas_interface(this%cfg%imin,j,k))
+               end do
+            end do
+         end do
+      else
+         ! Send minus
+         send_range(1:2,1)=[this%cfg%imin_   ,this%cfg%imin_ +this%cfg%no-1]
+         send_range(1:2,2)=[this%cfg%jmino_  ,this%cfg%jmaxo_              ]
+         send_range(1:2,3)=[this%cfg%kmino_  ,this%cfg%kmaxo_              ]
+         recv_range(1:2,1)=[this%cfg%imax_ +1,this%cfg%imaxo_              ]
+         recv_range(1:2,2)=[this%cfg%jmino_  ,this%cfg%jmaxo_              ]
+         recv_range(1:2,3)=[this%cfg%kmino_  ,this%cfg%kmaxo_              ]
+         call this%sync_side(send_range,recv_range,0,-1)
+         ! Send plus
+         send_range(1:2,1)=[this%cfg%imax_ -this%cfg%no+1,this%cfg%imax_   ]
+         send_range(1:2,2)=[this%cfg%jmino_              ,this%cfg%jmaxo_  ]
+         send_range(1:2,3)=[this%cfg%kmino_              ,this%cfg%kmaxo_  ]
+         recv_range(1:2,1)=[this%cfg%imino_              ,this%cfg%imin_ -1]
+         recv_range(1:2,2)=[this%cfg%jmino_              ,this%cfg%jmaxo_  ]
+         recv_range(1:2,3)=[this%cfg%kmino_              ,this%cfg%kmaxo_  ]
+         call this%sync_side(send_range,recv_range,0,+1)
+      end if
+      ! Synchronize in y
+      if (this%cfg%ny.eq.1) then
+         do k=this%cfg%kmino_,this%cfg%kmaxo_
+            do j=this%cfg%jmino_,this%cfg%jmaxo_
+               do i=this%cfg%imino_,this%cfg%imaxo_
+                  call copy(this%liquid_gas_interface(i,j,k),this%liquid_gas_interface(i,this%cfg%jmin,k))
+               end do
+            end do
+         end do
+      else
+         ! Send minus side
+         send_range(1:2,1)=[this%cfg%imino_  ,this%cfg%imaxo_              ]
+         send_range(1:2,2)=[this%cfg%jmin_   ,this%cfg%jmin_ +this%cfg%no-1]
+         send_range(1:2,3)=[this%cfg%kmino_  ,this%cfg%kmaxo_              ]
+         recv_range(1:2,1)=[this%cfg%imino_  ,this%cfg%imaxo_              ]
+         recv_range(1:2,2)=[this%cfg%jmax_ +1,this%cfg%jmaxo_              ]
+         recv_range(1:2,3)=[this%cfg%kmino_  ,this%cfg%kmaxo_              ]
+         call this%sync_side(send_range,recv_range,1,-1)
+         ! Send plus side
+         send_range(1:2,1)=[this%cfg%imino_              ,this%cfg%imaxo_  ]
+         send_range(1:2,2)=[this%cfg%jmax_ -this%cfg%no+1,this%cfg%jmax_   ]
+         send_range(1:2,3)=[this%cfg%kmino_              ,this%cfg%kmaxo_  ]
+         recv_range(1:2,1)=[this%cfg%imino_              ,this%cfg%imaxo_  ]
+         recv_range(1:2,2)=[this%cfg%jmino_              ,this%cfg%jmin_ -1]
+         recv_range(1:2,3)=[this%cfg%kmino_              ,this%cfg%kmaxo_  ]
+         call this%sync_side(send_range,recv_range,1,+1)
+      end if
+      ! Synchronize in z
+      if (this%cfg%nz.eq.1) then
+         do k=this%cfg%kmino_,this%cfg%kmaxo_
+            do j=this%cfg%jmino_,this%cfg%jmaxo_
+               do i=this%cfg%imino_,this%cfg%imaxo_
+                  call copy(this%liquid_gas_interface(i,j,k),this%liquid_gas_interface(i,j,this%cfg%kmin))
+               end do
+            end do
+         end do
+      else
+         ! Send minus side
+         send_range(1:2,1)=[this%cfg%imino_  ,this%cfg%imaxo_              ]
+         send_range(1:2,2)=[this%cfg%jmino_  ,this%cfg%jmaxo_              ]
+         send_range(1:2,3)=[this%cfg%kmin_   ,this%cfg%kmin_ +this%cfg%no-1]
+         recv_range(1:2,1)=[this%cfg%imino_  ,this%cfg%imaxo_              ]
+         recv_range(1:2,2)=[this%cfg%jmino_  ,this%cfg%jmaxo_              ]
+         recv_range(1:2,3)=[this%cfg%kmax_ +1,this%cfg%kmaxo_              ]
+         call this%sync_side(send_range,recv_range,2,-1)
+         ! Send plus side
+         send_range(1:2,1)=[this%cfg%imino_              ,this%cfg%imaxo_  ]
+         send_range(1:2,2)=[this%cfg%jmino_              ,this%cfg%jmaxo_  ]
+         send_range(1:2,3)=[this%cfg%kmax_ -this%cfg%no+1,this%cfg%kmax_   ]
+         recv_range(1:2,1)=[this%cfg%imino_              ,this%cfg%imaxo_  ]
+         recv_range(1:2,2)=[this%cfg%jmino_              ,this%cfg%jmaxo_  ]
+         recv_range(1:2,3)=[this%cfg%kmino_              ,this%cfg%kmin_ -1]
+         call this%sync_side(send_range,recv_range,2,+1)
+      end if
+      ! Fix plane if we are periodic in X
+      if (this%cfg%xper.and.this%cfg%iproc.eq.1) then
+         do k=this%cfg%kmino_,this%cfg%kmaxo_
+            do j=this%cfg%jmino_,this%cfg%jmaxo_
+               do i=this%cfg%imino,this%cfg%imin-1
+                  do ni=0,getNumberOfPlanes(this%liquid_gas_interface(i,j,k))-1
+                     plane=getPlane(this%liquid_gas_interface(i,j,k),ni)
+                     plane(4)=plane(4)-plane(1)*this%cfg%xL
+                     call setPlane(this%liquid_gas_interface(i,j,k),ni,plane(1:3),plane(4))
+                  end do
+               end do
+            end do
+         end do
+      end if
+      if (this%cfg%xper.and.this%cfg%iproc.eq.this%cfg%npx) then
+         do k=this%cfg%kmino_,this%cfg%kmaxo_
+            do j=this%cfg%jmino_,this%cfg%jmaxo_
+               do i=this%cfg%imax+1,this%cfg%imaxo
+                  do ni=0,getNumberOfPlanes(this%liquid_gas_interface(i,j,k))-1
+                     plane=getPlane(this%liquid_gas_interface(i,j,k),ni)
+                     plane(4)=plane(4)+plane(1)*this%cfg%xL
+                     call setPlane(this%liquid_gas_interface(i,j,k),ni,plane(1:3),plane(4))
+                  end do
+               end do
+            end do
+         end do
+      end if
+      ! Fix plane if we are periodic in Y
+      if (this%cfg%yper.and.this%cfg%jproc.eq.1) then
+         do k=this%cfg%kmino_,this%cfg%kmaxo_
+            do j=this%cfg%jmino,this%cfg%jmin-1
+               do i=this%cfg%imino_,this%cfg%imaxo_
+                  do ni=0,getNumberOfPlanes(this%liquid_gas_interface(i,j,k))-1
+                     plane=getPlane(this%liquid_gas_interface(i,j,k),ni)
+                     plane(4)=plane(4)-plane(2)*this%cfg%yL
+                     call setPlane(this%liquid_gas_interface(i,j,k),ni,plane(1:3),plane(4))
+                  end do
+               end do
+            end do
+         end do
+      end if
+      if (this%cfg%yper.and.this%cfg%jproc.eq.this%cfg%npy) then
+         do k=this%cfg%kmino_,this%cfg%kmaxo_
+            do j=this%cfg%jmax+1,this%cfg%jmaxo
+               do i=this%cfg%imino_,this%cfg%imaxo_
+                  do ni=0,getNumberOfPlanes(this%liquid_gas_interface(i,j,k))-1
+                     plane=getPlane(this%liquid_gas_interface(i,j,k),ni)
+                     plane(4)=plane(4)+plane(2)*this%cfg%yL
+                     call setPlane(this%liquid_gas_interface(i,j,k),ni,plane(1:3),plane(4))
+                  end do
+               end do
+            end do
+         end do
+      end if
+      ! Fix plane if we are periodic in Z
+      if (this%cfg%zper.and.this%cfg%kproc.eq.1) then
+         do k=this%cfg%kmino,this%cfg%kmin-1
+            do j=this%cfg%jmino_,this%cfg%jmaxo_
+               do i=this%cfg%imino_,this%cfg%imaxo_
+                  do ni=0,getNumberOfPlanes(this%liquid_gas_interface(i,j,k))-1
+                     plane=getPlane(this%liquid_gas_interface(i,j,k),ni)
+                     plane(4)=plane(4)-plane(3)*this%cfg%zL
+                     call setPlane(this%liquid_gas_interface(i,j,k),ni,plane(1:3),plane(4))
+                  end do
+               end do
+            end do
+         end do
+      end if
+      if (this%cfg%zper.and.this%cfg%kproc.eq.this%cfg%npz) then
+         do k=this%cfg%kmax+1,this%cfg%kmaxo
+            do j=this%cfg%jmino_,this%cfg%jmaxo_
+               do i=this%cfg%imino_,this%cfg%imaxo_
+                  do ni=0,getNumberOfPlanes(this%liquid_gas_interface(i,j,k))-1
+                     plane=getPlane(this%liquid_gas_interface(i,j,k),ni)
+                     plane(4)=plane(4)+plane(3)*this%cfg%zL
+                     call setPlane(this%liquid_gas_interface(i,j,k),ni,plane(1:3),plane(4))
+                  end do
+               end do
+            end do
+         end do
+      end if
+   end subroutine sync_interface
+   
+   
+   !> Private procedure to perform communication across one boundary
+   subroutine sync_side(this,a_send_range,a_recv_range,a_dimension,a_direction)
+      implicit none
+      class(vfs), intent(inout) :: this
+      integer, dimension(2,3), intent(in) :: a_send_range
+      integer, dimension(2,3), intent(in) :: a_recv_range
+      integer, intent(in) :: a_dimension
+      integer, intent(in) :: a_direction
+      integer :: i,j,k
+      logical :: something_received
+      ! Pack the buffer
+      call resetBufferPointer(this%send_byte_buffer)
+      call setSize(this%send_byte_buffer,int(0,8))
+      do k=a_send_range(1,3),a_send_range(2,3)
+         do j=a_send_range(1,2),a_send_range(2,2)
+            do i=a_send_range(1,1),a_send_range(2,1)
+               call serializeAndPack(this%liquid_gas_interface(i,j,k),this%send_byte_buffer)
+            end do
+         end do
+      end do
+      ! Communicate
+      call this%sync_ByteBuffer(this%send_byte_buffer,a_dimension,a_direction,this%recv_byte_buffer,something_received)
+      ! If something was received, unpack it: traversal order is important and must be aligned with how the sent data was packed
+      if (something_received) then
+         call resetBufferPointer(this%recv_byte_buffer)
+         do k=a_recv_range(1,3),a_recv_range(2,3)
+            do j=a_recv_range(1,2),a_recv_range(2,2)
+               do i=a_recv_range(1,1),a_recv_range(2,1)
+                  call unpackAndStore(this%liquid_gas_interface(i,j,k),this%recv_byte_buffer)
+               end do
+            end do
+         end do
+      end if
+   end subroutine sync_side
+   
+   
+   !> Private procedure to communicate a package of bytes across one boundary
+   subroutine sync_ByteBuffer(this,a_send_buffer,a_dimension,a_direction,a_receive_buffer,a_received_something)
+      use mpi_f08
+      implicit none
+      class(vfs), intent(inout) :: this
+      type(ByteBuffer_type), intent(in)  :: a_send_buffer
+      integer, intent(in) :: a_dimension  !< Should be 0/1/2 for x/y/z
+      integer, intent(in) :: a_direction  !< Should be -1 for left or +1 for right
+      type(ByteBuffer_type), intent(out) :: a_receive_buffer
+      logical, intent(out) :: a_received_something
+      type(MPI_Status) :: status
+      integer :: isrc,idst,ierr
+      integer(IRL_LargeOffsetIndex_t) :: my_size
+      integer(IRL_LargeOffsetIndex_t) :: incoming_size
+      integer :: my_size_small,incoming_size_small
+      ! Figure out source and destination
+      call MPI_CART_SHIFT(this%cfg%comm,a_dimension,a_direction,isrc,idst,ierr)
+      ! Communicate sizes so that each processor knows what to expect in main communication
+      my_size=getSize(a_send_buffer)
+      call MPI_SENDRECV(my_size,1,MPI_INTEGER8,idst,0,incoming_size,1,MPI_INTEGER8,isrc,0,this%cfg%comm,status,ierr)
+      ! Set size of recv buffer to appropriate size and perform send-receive
+      if (isrc.ne.MPI_PROC_NULL) then
+         a_received_something=.true.
+         call setSize(a_receive_buffer,incoming_size)
+      else
+         a_received_something=.false.
+         incoming_size=0
+         call setSize(a_receive_buffer,int(1,8))
+      end if
+      ! Convert integers
+      my_size_small=int(my_size,4)
+      incoming_size_small=int(incoming_size,4)
+      call MPI_SENDRECV(dataPtr(a_send_buffer),my_size_small,MPI_BYTE,idst,0,dataPtr(a_receive_buffer),incoming_size_small,MPI_BYTE,isrc,0,this%cfg%comm,status,ierr)
+   end subroutine sync_ByteBuffer
    
    
    !> Add a boundary condition
