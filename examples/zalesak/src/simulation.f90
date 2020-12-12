@@ -70,13 +70,14 @@ contains
       ! Initialize our VOF
       initialize_vof: block
          use mms_geom, only: cube_refine_vol
+         use vfs_class, only: lvira
          integer :: i,j,k,n,si,sj,sk
          real(WP), dimension(3,8) :: cube_vertex
          real(WP), dimension(3) :: v_cent,a_cent
          real(WP) :: vol,area
          integer, parameter :: amr_ref_lvl=4
          ! Create a VOF solver
-         vf=vfs(cfg=cfg,name='VOF')
+         vf=vfs(cfg=cfg,reconstruction_method=lvira,name='VOF')
          ! Initialize to Zalesak disk
          center=[0.0_WP,0.25_WP,0.0_WP]
          radius=0.15_WP

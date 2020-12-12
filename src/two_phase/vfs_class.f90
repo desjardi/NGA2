@@ -17,6 +17,14 @@ module vfs_class
    integer, parameter, public :: dirichlet=2         !< Dirichlet condition
    integer, parameter, public :: neumann=3           !< Zero normal gradient
    
+   ! List of available interface reconstructions schemes for VF
+   integer, parameter, public :: lvira=1             !< LVIRA scheme
+   !integer, parameter, public :: elvira=2            !< ELVIRA scheme
+   !integer, parameter, public :: mof=3               !< MOF scheme
+   !integer, parameter, public :: r2p=4               !< R2P scheme
+   !integer, parameter, public :: swartz=5            !< Swartz scheme
+   
+   
    ! Default parameters for volume fraction solver
    integer,  parameter :: max_interface_planes=2                  !< Maximum number of interfaces allowed (2 for R2P)
    real(WP), parameter :: VFlo=1.0e-12_WP                         !< Minimum VF value considered
@@ -54,6 +62,13 @@ module vfs_class
       real(WP), dimension(:,:,:), allocatable :: VF       !< VF array
       real(WP), dimension(:,:,:), allocatable :: VFold    !< VFold array
       
+      ! Phase barycenter data
+      real(WP), dimension(:,:,:,:), allocatable :: Lbary  !< Liquid barycenter
+      real(WP), dimension(:,:,:,:), allocatable :: Gbary  !< Gas barycenter
+      
+      ! Interface reconstruction method
+      integer :: reconstruction_method                    !< Interface reconstruction method
+      
       ! IRL objects
       type(ByteBuffer_type) :: send_byte_buffer
       type(ByteBuffer_type) :: recv_byte_buffer
@@ -78,16 +93,19 @@ module vfs_class
    contains
       procedure :: print=>vfs_print                       !< Output solver to the screen
       procedure :: initialize_irl                         !< Initialize the IRL objects
-      procedure :: sync_interface                         !< Synchronize the IRL objects
-      procedure, private :: sync_side                     !< Synchronize the IRL objects across one side
-      procedure, private :: sync_ByteBuffer               !< Communicate byte packets across one side
-      procedure :: read_interface                         !< Read an IRL interface from a file
-      procedure :: calculate_offset_to_planes             !< Helper routine for I/O
-      procedure :: write_interface                        !< Write an IRL interface to a file
       procedure :: add_bcond                              !< Add a boundary condition
       procedure :: get_bcond                              !< Get a boundary condition
       procedure :: apply_bcond                            !< Apply all boundary conditions
+      procedure :: sync_interface                         !< Synchronize the IRL objects
+      procedure, private :: sync_side                     !< Synchronize the IRL objects across one side - another I/O helper
+      procedure, private :: sync_ByteBuffer               !< Communicate byte packets across one side - another I/O helper
+      procedure, private :: calculate_offset_to_planes    !< Helper routine for I/O
+      procedure :: read_interface                         !< Read an IRL interface from a file
+      procedure :: write_interface                        !< Write an IRL interface to a file
       procedure :: advance                                !< Advance VF to next step
+      procedure :: build_interface                        !< Reconstruct IRL interface from VF field
+      procedure :: build_lvira                            !< LVIRA reconstruction of the interface from VF field
+      !procedure :: reset_moments                          !< Reconstruct volume moments from IRL interfaces
       procedure :: get_max                                !< Calculate maximum field values
    end type vfs
    
@@ -101,11 +119,12 @@ contains
    
    
    !> Default constructor for volume fraction solver
-   function constructor(cfg,name) result(self)
+   function constructor(cfg,reconstruction_method,name) result(self)
       use messager, only: die
       implicit none
       type(vfs) :: self
       class(config), target, intent(in) :: cfg
+      integer, intent(in) :: reconstruction_method
       character(len=*), optional :: name
       integer :: i,j,k
       
@@ -120,8 +139,13 @@ contains
       self%first_bc=>NULL()
       
       ! Allocate variables
-      allocate(self%VF   (self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%VF   =0.0_WP
-      allocate(self%VFold(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%VFold=0.0_WP
+      allocate(self%VF   (  self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%VF   =0.0_WP
+      allocate(self%VFold(  self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%VFold=0.0_WP
+      allocate(self%Lbary(3,self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%Lbary=0.0_WP
+      allocate(self%Gbary(3,self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%Gbary=0.0_WP
+      
+      ! Set reconstruction method
+      self%reconstruction_method=reconstruction_method
       
       ! Initialize IRL
       call self%initialize_irl()
@@ -281,7 +305,116 @@ contains
    end subroutine initialize_irl
    
    
-   !> Wrtie an IRL interface to a file
+   !> Reconstruct an IRL interface from the VF field distribution
+   subroutine build_interface(this)
+      use messager, only: die
+      implicit none
+      class(vfs), intent(inout) :: this
+      
+      ! Reconstruct interface - will need to support various methods
+      select case (this%reconstruction_method)
+      case (lvira); call this%build_lvira()
+      case default; call die('[vfs build interface] Unknown interface reconstruction scheme')
+      end select
+      
+      ! Create polygon mesh based on IRL interface
+      !call multiphase_plic_poly
+      
+      ! Calculate distance from polygons field
+      !call multiphase_plic_distance
+      
+      ! Calculate subcell volume fractions
+      !call multiphase_plic_subcell
+      
+      ! Calculate curvature
+      !call multiphase_curvature_calc
+      
+   end subroutine build_interface
+   
+   
+   !> LVIRA reconstruction of a planar interface in mixed cells
+   subroutine build_lvira(this)
+      implicit none
+      class(vfs), intent(inout) :: this
+      integer(IRL_SignedIndex_t) :: i,j,k
+      integer :: ind,ii,jj,kk,icenter
+      type(LVIRANeigh_RectCub_type) :: neighborhood
+      type(RectCub_type), dimension(0:26) :: neighborhood_cells
+      real(IRL_double)  , dimension(0:26) :: liquid_volume_fraction
+      real(IRL_double), dimension(3) :: initial_normal
+      real(IRL_double) :: initial_distance
+      
+      ! Give ourselves an LVIRA neighborhood of 27 cells
+      call new(neighborhood)
+      do i=0,26
+         call new(neighborhood_cells(i))
+      end do
+      
+      ! Traverse domain and reconstruct interface
+      do k=this%cfg%kmin_,this%cfg%kmax_
+         do j=this%cfg%jmin_,this%cfg%jmax_
+            do i=this%cfg%imin_,this%cfg%imax_
+               
+               ! Skip wall/bcond cells - bconds need to be provided elsewhere directly!
+               if (this%mask(i,j,k).ne.0) cycle
+               
+               ! Handle full cells differently
+               if (this%VF(i,j,k).lt.VFlo.or.this%VF(i,j,k).gt.VFhi) then
+                  call setNumberOfPlanes(this%liquid_gas_interface(i,j,k),1)
+                  call setPlane(this%liquid_gas_interface(i,j,k),0,[0.0_WP,0.0_WP,0.0_WP],sign(1.0_WP,this%VF(i,j,k)-0.5_WP))
+                  cycle
+               end if
+               
+               ! Set neighborhood_cells and liquid_volume_fraction to current correct values
+               ind=0
+               do kk=k-1,k+1
+                  do jj=j-1,j+1
+                     do ii=i-1,i+1
+                        ! Skip true wall cells - bconds can be used here
+                        if (this%mask(ii,jj,kk).eq.1) cycle
+                        ! Add cell to neighborhood
+                        call addMember(neighborhood,neighborhood_cells(ind),liquid_volume_fraction(ind))
+                        ! Build the cell
+                        call construct_2pt(neighborhood_cells(ind),[this%cfg%x(ii),this%cfg%y(jj),this%cfg%z(kk)],[this%cfg%x(ii+1),this%cfg%y(jj+1),this%cfg%z(kk+1)])
+                        ! Assign volume fraction
+                        liquid_volume_fraction(ind)=this%cfg%VF(ii,jj,kk)
+                        ! Trap and set stencil center
+                        if (ii.eq.i.and.jj.eq.j.and.kk.eq.k) then
+                           icenter=ind
+                           call setCenterOfStencil(neighborhood,icenter)
+                        end if
+                        ! Increment counter
+                        ind=ind+1
+                     end do
+                  end do
+               end do
+               
+               ! Formulate initial guess
+               call setNumberOfPlanes(this%liquid_gas_interface(i,j,k),1)
+               initial_normal   = this%Gbary(:,i,j,k) - this%Lbary(:,i,j,k)
+               initial_distance = sqrt(sum(initial_normal**2.0_WP))
+               initial_normal   = initial_normal/(initial_distance+tiny(1.0_WP))
+               initial_distance = dot_product(initial_normal,[this%cfg%xm(i),this%cfg%ym(j),this%cfg%zm(k)])
+               call setPlane(this%liquid_gas_interface(i,j,k),0,initial_normal,initial_distance)
+               call matchVolumeFraction(neighborhood_cells(icenter),this%VF(i,j,k),this%liquid_gas_interface(i,j,k))
+               
+               ! Perform the reconstruction
+               call reconstructLVIRA3D(neighborhood,this%liquid_gas_interface(i,j,k))
+               
+               ! Clean up neighborhood
+               call emptyNeighborhood(neighborhood)
+               
+            end do
+         end do
+      end do
+      
+      ! Synchronize across boundaries
+      call this%sync_interface()
+      
+   end subroutine build_lvira
+   
+   
+   !> Write an IRL interface to a file
    subroutine write_interface(this,filename)
       use mpi_f08
       use messager, only: die
