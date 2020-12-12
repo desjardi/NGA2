@@ -188,7 +188,7 @@ contains
       inquire(file=trim(filename),exist=file_is_there)
       if (file_is_there.and.this%pg%amRoot) call MPI_FILE_DELETE(trim(filename),info_mpiio,ierr)
       call MPI_FILE_OPEN(this%pg%comm,trim(filename),IOR(MPI_MODE_WRONLY,MPI_MODE_CREATE),info_mpiio,ifile,ierr)
-      if (ierr.ne.0) call die('[datafile write] Problem encountered while reading data file: '//trim(filename))
+      if (ierr.ne.0) call die('[datafile write] Problem encountered while opening data file: '//trim(filename))
       
       ! Read file header first
       dims=[this%pg%nx,this%pg%ny,this%pg%nz,this%nval,this%nvar]

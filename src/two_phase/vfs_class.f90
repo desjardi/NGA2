@@ -83,7 +83,7 @@ module vfs_class
       procedure, private :: sync_ByteBuffer               !< Communicate byte packets across one side
       procedure :: read_interface                         !< Read an IRL interface from a file
       procedure :: calculate_offset_to_planes             !< Helper routine for I/O
-      !procedure :: write_interface                        !< Write an IRL interface to a file
+      procedure :: write_interface                        !< Write an IRL interface to a file
       procedure :: add_bcond                              !< Add a boundary condition
       procedure :: get_bcond                              !< Get a boundary condition
       procedure :: apply_bcond                            !< Apply all boundary conditions
@@ -279,6 +279,93 @@ contains
       call new(this%recv_byte_buffer)
       
    end subroutine initialize_irl
+   
+   
+   !> Wrtie an IRL interface to a file
+   subroutine write_interface(this,filename)
+      use mpi_f08
+      use messager, only: die
+      use parallel, only: info_mpiio,MPI_REAL_WP
+      implicit none
+      class(vfs), intent(inout) :: this
+      character(len=*), intent(in) :: filename
+      logical :: file_is_there
+      integer :: i,j,k,ind,ierr,var
+      integer, dimension(3) :: gsizes,lsizes,start
+      type(MPI_File) :: ifile
+      type(MPI_Status) :: status
+      integer(kind=MPI_OFFSET_KIND) :: disp
+      integer :: size_to_write
+      integer, dimension(3) :: dims
+      integer                       , dimension(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_) :: number_of_planes
+      integer(kind=MPI_OFFSET_KIND) , dimension(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_) :: offset_to_planes
+      integer                       , dimension(this%cfg%ny_*this%cfg%nz) :: array_of_block_lengths
+      integer(kind=MPI_ADDRESS_KIND), dimension(this%cfg%ny_*this%cfg%nz_):: array_of_displacements
+      type(MPI_Datatype) :: MPI_OFFSET_ARRAY_TYPE
+      type(ByteBuffer_type) :: byte_buffer
+      
+      ! Open the file
+      inquire(file=trim(filename),exist=file_is_there)
+      if (file_is_there.and.this%cfg%amRoot) call MPI_FILE_DELETE(trim(filename),info_mpiio,ierr)
+      call MPI_FILE_OPEN(this%cfg%comm,trim(adjustl(filename)),IOR(MPI_MODE_WRONLY,MPI_MODE_CREATE),info_mpiio,ifile,ierr)
+      if (ierr.ne.0) call die('[vfs interface write] Problem encountered while opening IRL data file: '//trim(filename))
+      
+      ! Write dimensions in header
+      if (this%cfg%amRoot) then
+         dims=[this%cfg%nx,this%cfg%ny,this%cfg%nz]
+         call MPI_FILE_WRITE(ifile,dims,3,MPI_INTEGER,status,ierr)
+      end if
+      
+      ! Calculate and store number of planes in each cell
+      do k=this%cfg%kmino_,this%cfg%kmaxo_
+         do j=this%cfg%jmino_,this%cfg%jmaxo_
+            do i=this%cfg%imino_,this%cfg%imaxo_
+               number_of_planes(i,j,k)=getNumberOfPlanes(this%liquid_gas_interface(i,j,k))
+            end do
+         end do
+      end do
+      
+      ! Write out number of planes in each cell
+      disp=int(4,8)*int(3,8) !< Only 3 int(4) - would need to more r(8) if we add time and dt
+      call MPI_FILE_SET_VIEW(ifile,disp,MPI_INTEGER,this%cfg%Iview,'native',info_mpiio,ierr)
+      call MPI_FILE_WRITE_ALL(ifile,number_of_planes(this%cfg%imin_:this%cfg%imax_,this%cfg%jmin_:this%cfg%jmax_,this%cfg%kmin_:this%cfg%kmax_),this%cfg%nx_*this%cfg%ny_*this%cfg%nz_,MPI_INTEGER,status,ierr)
+      
+      ! Calculate the offset to each plane, needed for reading
+      call this%calculate_offset_to_planes(number_of_planes,offset_to_planes)
+      
+      ! Make custom offset vector type for offsets
+      ind=0
+      do k=this%cfg%kmin_,this%cfg%kmax_
+         do j=this%cfg%jmin_,this%cfg%jmax_
+            ind=ind+1
+            array_of_block_lengths(ind)=int((offset_to_planes(this%cfg%imax_,j,k)-offset_to_planes(this%cfg%imin_,j,k)),4)+int(4,4)+int(number_of_planes(this%cfg%imax_,j,k),4)*int(4,4)*int(8,4)+int(8,4)
+            array_of_displacements(ind)=int(offset_to_planes(this%cfg%imin_,j,k),MPI_ADDRESS_KIND)
+         end do
+      end do
+      call MPI_TYPE_CREATE_HINDEXED(this%cfg%ny_*this%cfg%nz_,array_of_block_lengths,array_of_displacements,MPI_BYTE,MPI_OFFSET_ARRAY_TYPE,ierr)
+      call MPI_TYPE_COMMIT(MPI_OFFSET_ARRAY_TYPE,ierr)
+      
+      ! Write out the actual PlanarSeps as packed bytes
+      call new(byte_buffer)
+      do k=this%cfg%kmin_,this%cfg%kmax_
+         do j=this%cfg%jmin_,this%cfg%jmax_
+            do i=this%cfg%imin_,this%cfg%imax_
+               call serializeAndPack(this%liquid_gas_interface(i,j,k),byte_buffer)
+            end do
+         end do
+      end do
+      disp=disp+int(4,MPI_OFFSET_KIND)*int(this%cfg%nx,MPI_OFFSET_KIND)*int(this%cfg%ny,MPI_OFFSET_KIND)*int(this%cfg%nz,MPI_OFFSET_KIND)
+      call MPI_FILE_SET_VIEW(ifile,disp,MPI_BYTE,MPI_OFFSET_ARRAY_TYPE,'native',info_mpiio,ierr)
+      size_to_write=int(getSize(byte_buffer),4)
+      call MPI_FILE_WRITE_ALL(ifile,dataPtr(byte_buffer),size_to_write,MPI_BYTE,status,ierr)
+      
+      ! Close file
+      call MPI_FILE_CLOSE(ifile,ierr)
+      
+      ! Free the type
+      call MPI_TYPE_FREE(MPI_OFFSET_ARRAY_TYPE,ierr)
+      
+   end subroutine write_interface
    
    
    !> Read an IRL interface from a file
@@ -591,7 +678,7 @@ contains
          recv_range(1:2,3)=[this%cfg%kmino_              ,this%cfg%kmin_ -1]
          call this%sync_side(send_range,recv_range,2,+1)
       end if
-      ! Fix plane if we are periodic in X
+      ! Fix plane posistion if we are periodic in x
       if (this%cfg%xper.and.this%cfg%iproc.eq.1) then
          do k=this%cfg%kmino_,this%cfg%kmaxo_
             do j=this%cfg%jmino_,this%cfg%jmaxo_
@@ -618,7 +705,7 @@ contains
             end do
          end do
       end if
-      ! Fix plane if we are periodic in Y
+      ! Fix plane posistion if we are periodic in y
       if (this%cfg%yper.and.this%cfg%jproc.eq.1) then
          do k=this%cfg%kmino_,this%cfg%kmaxo_
             do j=this%cfg%jmino,this%cfg%jmin-1
@@ -645,7 +732,7 @@ contains
             end do
          end do
       end if
-      ! Fix plane if we are periodic in Z
+      ! Fix plane posistion if we are periodic in z
       if (this%cfg%zper.and.this%cfg%kproc.eq.1) then
          do k=this%cfg%kmino,this%cfg%kmin-1
             do j=this%cfg%jmino_,this%cfg%jmaxo_
