@@ -240,7 +240,6 @@ contains
       implicit none
       class(scalar), intent(inout) :: this
       integer :: i,j,k
-      real(WP) :: delta
       
       ! Sync up masks
       call this%cfg%sync(this%mask)
@@ -277,7 +276,7 @@ contains
       implicit none
       class(scalar), intent(inout) :: this
       integer, intent(in) :: implicit_ils
-      integer :: i,j,k,count,st
+      integer :: count,st
       
       ! Adjust metrics based on mask array
       call this%adjust_metrics()
@@ -482,7 +481,7 @@ contains
       use parallel, only: MPI_REAL_WP
       implicit none
       class(scalar), intent(inout) :: this
-      integer :: i,j,k,ierr
+      integer :: ierr
       real(WP) :: my_SCmax,my_SCmin
       my_SCmax=maxval(this%SC); call MPI_ALLREDUCE(my_SCmax,this%SCmax,1,MPI_REAL_WP,MPI_MAX,this%cfg%comm,ierr)
       my_SCmin=minval(this%SC); call MPI_ALLREDUCE(my_SCmin,this%SCmin,1,MPI_REAL_WP,MPI_MIN,this%cfg%comm,ierr)
@@ -498,7 +497,7 @@ contains
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in)    :: rhoU  !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in)    :: rhoV  !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in)    :: rhoW  !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
-      integer :: i,j,k,sti,std,st
+      integer :: i,j,k,sti,std
       
       ! Prepare convective operator
       this%implicit%opr(1,:,:,:)=this%rho; this%implicit%opr(2:,:,:,:)=0.0_WP

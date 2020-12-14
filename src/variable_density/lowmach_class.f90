@@ -46,7 +46,7 @@ module lowmach_class
       character(len=str_medium) :: name='UNNAMED_LOWMACH' !< Solver name (default=UNNAMED_LOWMACH)
       
       ! Variable viscosity fluid
-      real(WP), dimension(:,:,:), allocatable :: visc     !< Dynamic viscosity array
+      real(WP), dimension(:,:,:), allocatable :: visc     !< Dynamic viscosity array - needs to be provided by user
       
       ! Gravitational acceleration
       real(WP), dimension(3) :: gravity=0.0_WP            !< Acceleration of gravity
@@ -456,7 +456,7 @@ contains
       implicit none
       class(lowmach), intent(inout) :: this
       integer :: i,j,k
-      real(WP) :: delta,mysum
+      real(WP) :: delta
       
       ! Sync up u/v/wmasks
       call this%cfg%sync(this%umask)

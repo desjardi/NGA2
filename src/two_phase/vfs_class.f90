@@ -24,6 +24,10 @@ module vfs_class
    !integer, parameter, public :: r2p=4               !< R2P scheme
    !integer, parameter, public :: swartz=5            !< Swartz scheme
    
+   ! IRL cutting moment calculation method
+   integer, parameter, public :: recursive_simplex=0 !< Recursive simplex cutting
+   integer, parameter, public :: half_edge=1         !< Half-edge cutting
+   integer, parameter, public :: nonrecurs_simplex=2 !< Non-recursive simplex cutting
    
    ! Default parameters for volume fraction solver
    integer,  parameter :: max_interface_planes=2                  !< Maximum number of interfaces allowed (2 for R2P)
@@ -66,6 +70,9 @@ module vfs_class
       real(WP), dimension(:,:,:,:), allocatable :: Lbary  !< Liquid barycenter
       real(WP), dimension(:,:,:,:), allocatable :: Gbary  !< Gas barycenter
       
+      ! Surface density data
+      real(WP), dimension(:,:,:), allocatable :: SD       !< Surface density array
+      
       ! Interface reconstruction method
       integer :: reconstruction_method                    !< Interface reconstruction method
       
@@ -105,6 +112,7 @@ module vfs_class
       procedure :: advance                                !< Advance VF to next step
       procedure :: build_interface                        !< Reconstruct IRL interface from VF field
       procedure :: build_lvira                            !< LVIRA reconstruction of the interface from VF field
+      procedure :: polygonalize_interface                 !< Build a discontinuous polygonal representation of the IRL interface
       !procedure :: reset_moments                          !< Reconstruct volume moments from IRL interfaces
       procedure :: get_max                                !< Calculate maximum field values
    end type vfs
@@ -143,6 +151,7 @@ contains
       allocate(self%VFold(  self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%VFold=0.0_WP
       allocate(self%Lbary(3,self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%Lbary=0.0_WP
       allocate(self%Gbary(3,self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%Gbary=0.0_WP
+      allocate(self%SD   (  self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%SD   =0.0_WP
       
       ! Set reconstruction method
       self%reconstruction_method=reconstruction_method
@@ -188,6 +197,9 @@ contains
       call setVFTolerance_IterativeDistanceFinding(iterative_distfind_tol)
       call setMinimumVolToTrack(volume_epsilon_factor*this%cfg%min_meshsize**3)
       call setMinimumSAToTrack(surface_epsilon_factor*this%cfg%min_meshsize**2)
+      
+      ! Set IRL's moment calculation method
+      call getMoments_setMethod(half_edge)
       
       ! Allocate IRL arrays
       allocate(this%localizer               (this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
@@ -317,8 +329,8 @@ contains
       case default; call die('[vfs build interface] Unknown interface reconstruction scheme')
       end select
       
-      ! Create polygon mesh based on IRL interface
-      !call multiphase_plic_poly
+      ! Create discontinuous polygon mesh from IRL interface
+      call this%polygonalize_interface()
       
       ! Calculate distance from polygons field
       !call multiphase_plic_distance
@@ -414,17 +426,132 @@ contains
    end subroutine build_lvira
    
    
+   !> Polygonalization of the IRL interface (calculates SD at the same time)
+   subroutine polygonalize_interface(this)
+      implicit none
+      class(vfs), intent(inout) :: this
+      integer :: i,j,k,n
+      real(WP) :: tsd
+      type(RectCub_type) :: cell
+      real(WP), dimension(1:3,1:4) :: vert
+      real(WP), dimension(1:3) :: norm
+      
+      ! Create a cell object
+      call new(cell)
+      
+      ! Loop over full domain and form polygon
+      do k=this%cfg%kmino_,this%cfg%kmaxo_
+         do j=this%cfg%jmino_,this%cfg%jmaxo_
+            do i=this%cfg%imino_,this%cfg%imaxo_
+               ! Zero out the polygons
+               do n=1,max_interface_planes
+                  call zeroPolygon(this%interface_polygon(n,i,j,k))
+               end do
+               ! Skip wall/bcond cells - bconds need to be provided elsewhere directly!
+               if (this%mask(i,j,k).ne.0) cycle
+               ! Create polygons for cells with interfaces, zero for those without
+               if (this%VF(i,j,k).ge.VFlo.and.this%VF(i,j,k).le.VFhi) then
+                  call construct_2pt(cell,[this%cfg%x(i),this%cfg%y(j),this%cfg%z(k)],[this%cfg%x(i+1),this%cfg%y(j+1),this%cfg%z(k+1)])
+                  do n=1,getNumberOfPlanes(this%liquid_gas_interface(i,j,k))
+                     call getPoly(cell,this%liquid_gas_interface(i,j,k),n-1,this%interface_polygon(n,i,j,k))
+                  end do
+               end if
+            end do
+         end do
+      end do
+      
+      ! Find inferface between filled and empty cells on x-face
+      do k=this%cfg%kmino_,this%cfg%kmaxo_
+         do j=this%cfg%jmino_,this%cfg%jmaxo_
+            do i=this%cfg%imino_+1,this%cfg%imaxo_
+               if (this%VF(i,j,k).lt.VFlo.and.this%VF(i-1,j,k).gt.VFhi.or.this%VF(i,j,k).gt.VFhi.and.this%VF(i-1,j,k).lt.VFlo) then
+                  if (maxval(this%mask(i-1:i,j,k)).gt.0) cycle
+                  norm=[sign(1.0_WP,0.5_WP-this%VF(i,j,k)),0.0_WP,0.0_WP]
+                  call setNumberOfPlanes(this%liquid_gas_interface(i,j,k),1)
+                  call setPlane(this%liquid_gas_interface(i,j,k),0,norm,sign(1.0_WP,0.5_WP-this%VF(i,j,k))*this%cfg%x(i))
+                  vert(:,1)=[this%cfg%x(i),this%cfg%y(j  ),this%cfg%z(k  )]
+                  vert(:,2)=[this%cfg%x(i),this%cfg%y(j+1),this%cfg%z(k  )]
+                  vert(:,3)=[this%cfg%x(i),this%cfg%y(j+1),this%cfg%z(k+1)]
+                  vert(:,4)=[this%cfg%x(i),this%cfg%y(j  ),this%cfg%z(k+1)]
+                  call construct(this%interface_polygon(1,i,j,k),4,vert)
+                  call setPlaneOfExistence(this%interface_polygon(1,i,j,k),getPlane(this%liquid_gas_interface(i,j,k),0))
+                  if (this%VF(i,j,k).gt.VFhi) call reversePtOrdering(this%interface_polygon(1,i,j,k))
+               end if
+            end do
+         end do
+      end do
+      
+      ! Find inferface between filled and empty cells on y-face
+      do k=this%cfg%kmino_,this%cfg%kmaxo_
+         do j=this%cfg%jmino_+1,this%cfg%jmaxo_
+            do i=this%cfg%imino_,this%cfg%imaxo_
+               if (this%VF(i,j,k).lt.VFlo.and.this%VF(i,j-1,k).gt.VFhi.or.this%VF(i,j,k).gt.VFhi.and.this%VF(i,j-1,k).lt.VFlo) then
+                  if (maxval(this%mask(i,j-1:j,k)).gt.0) cycle
+                  norm=[0.0_WP,sign(1.0_WP,0.5_WP-this%VF(i,j,k)),0.0_WP]
+                  call setNumberOfPlanes(this%liquid_gas_interface(i,j,k),1)
+                  call setPlane(this%liquid_gas_interface(i,j,k),0,norm,sign(1.0_WP,0.5_WP-this%VF(i,j,k))*this%cfg%y(j))
+                  vert(:,1)=[this%cfg%x(i  ),this%cfg%y(j),this%cfg%z(k  )]
+                  vert(:,2)=[this%cfg%x(i  ),this%cfg%y(j),this%cfg%z(k+1)]
+                  vert(:,3)=[this%cfg%x(i+1),this%cfg%y(j),this%cfg%z(k+1)]
+                  vert(:,4)=[this%cfg%x(i+1),this%cfg%y(j),this%cfg%z(k  )]
+                  call construct(this%interface_polygon(1,i,j,k),4,vert)
+                  call setPlaneOfExistence(this%interface_polygon(1,i,j,k),getPlane(this%liquid_gas_interface(i,j,k),0))
+                  if (this%VF(i,j,k).gt.VFhi) call reversePtOrdering(this%interface_polygon(1,i,j,k))
+               end if
+            end do
+         end do
+      end do
+      
+      ! Find inferface between filled and empty cells on z-face
+      do k=this%cfg%kmino_+1,this%cfg%kmaxo_
+         do j=this%cfg%jmino_,this%cfg%jmaxo_
+            do i=this%cfg%imino_,this%cfg%imaxo_
+               if (this%VF(i,j,k).lt.VFlo.and.this%VF(i,j,k-1).gt.VFhi.or.this%VF(i,j,k).gt.VFhi.and.this%VF(i,j,k-1).lt.VFlo) then
+                  if (maxval(this%mask(i,j,k-1:k)).gt.0) cycle
+                  norm=[0.0_WP,0.0_WP,sign(1.0_WP,0.5_WP-this%VF(i,j,k))]
+                  call setNumberOfPlanes(this%liquid_gas_interface(i,j,k),1)
+                  call setPlane(this%liquid_gas_interface(i,j,k),0,norm,sign(1.0_WP,0.5_WP-this%VF(i,j,k))*this%cfg%z(k))
+                  vert(:,1)=[this%cfg%x(i  ),this%cfg%y(j  ),this%cfg%z(k)]
+                  vert(:,2)=[this%cfg%x(i+1),this%cfg%y(j  ),this%cfg%z(k)]
+                  vert(:,3)=[this%cfg%x(i+1),this%cfg%y(j+1),this%cfg%z(k)]
+                  vert(:,4)=[this%cfg%x(i  ),this%cfg%y(j+1),this%cfg%z(k)]
+                  call construct(this%interface_polygon(1,i,j,k),4,vert)
+                  call setPlaneOfExistence(this%interface_polygon(1,i,j,k),getPlane(this%liquid_gas_interface(i,j,k),0))
+                  if (this%VF(i,j,k).gt.VFhi) call reversePtOrdering(this%interface_polygon(1,i,j,k))
+               end if
+            end do
+         end do
+      end do
+      
+      ! Now compute surface area divided by cell volume
+      this%SD=0.0_WP
+      do k=this%cfg%kmino_,this%cfg%kmaxo_
+         do j=this%cfg%jmino_,this%cfg%jmaxo_
+            do i=this%cfg%imino_,this%cfg%imaxo_
+               if (this%mask(i,j,k).ne.0) cycle
+               tsd=0.0_WP
+               do n=1,getNumberOfPlanes(this%liquid_gas_interface(i,j,k))
+                  if (getNumberOfVertices(this%interface_polygon(n,i,j,k)).gt.0) then
+                     tsd=tsd+abs(calculateVolume(this%interface_polygon(n,i,j,k)))
+                  end if
+               end do
+               this%SD(i,j,k)=tsd/this%cfg%vol(i,j,k)
+            end do
+         end do
+      end do
+      
+   end subroutine polygonalize_interface
+   
    !> Write an IRL interface to a file
    subroutine write_interface(this,filename)
       use mpi_f08
       use messager, only: die
-      use parallel, only: info_mpiio,MPI_REAL_WP
+      use parallel, only: info_mpiio
       implicit none
       class(vfs), intent(inout) :: this
       character(len=*), intent(in) :: filename
       logical :: file_is_there
-      integer :: i,j,k,ind,ierr,var
-      integer, dimension(3) :: gsizes,lsizes,start
+      integer :: i,j,k,ind,ierr
       type(MPI_File) :: ifile
       type(MPI_Status) :: status
       integer(kind=MPI_OFFSET_KIND) :: disp
@@ -505,12 +632,11 @@ contains
    subroutine read_interface(this,filename)
       use mpi_f08
       use messager, only: die
-      use parallel, only: info_mpiio,MPI_REAL_WP
+      use parallel, only: info_mpiio
       implicit none
       class(vfs), intent(inout) :: this
       character(len=*), intent(in) :: filename
-      integer :: i,j,k,ind,ierr,var
-      integer, dimension(3) :: gsizes,lsizes,start
+      integer :: i,j,k,ind,ierr
       type(MPI_File) :: ifile
       type(MPI_Status) :: status
       integer(kind=MPI_OFFSET_KIND) :: disp,size_to_read_big

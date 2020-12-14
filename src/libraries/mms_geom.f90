@@ -300,7 +300,7 @@ contains
       real(WP), dimension(:,:), intent(in) :: vertex
       real(WP), intent(out) :: area
       real(WP), dimension(:), intent(out) :: centroid
-      integer :: npts,i,ivert
+      integer :: npts,i
       real(WP), dimension(3,3) :: tri_vertex
       real(WP) :: myArea
       npts = size(vertex,DIM=2)
@@ -320,7 +320,7 @@ contains
       real(WP), dimension(:,:), intent(in) :: vertex
       real(WP), intent(out) :: volume
       real(WP), dimension(:), intent(out) :: centroid
-      integer :: npts,i,ivert
+      integer :: npts,i
       real(WP), dimension(3,4) :: tet_vertex
       real(WP) :: myVolume
       npts = size(vertex,DIM=2)
@@ -505,9 +505,8 @@ contains
       real(WP), intent(out),dimension(3) :: v_cent,a_cent
       
       !--------------------------------------------------
-      integer :: i,j,k, cubeCase,ii
+      integer :: i,cubeCase
       real(WP), dimension(3) :: c_dxyz
-      real(WP) :: tmp
       
       ! initialize case
       cubeCase = 0
@@ -545,8 +544,8 @@ contains
          a_cent = a_cent + tet_gl%A_intersect*tet_gl%A_centroid
       end do
       
-      if(vol > 0.0_WP) v_cent = v_cent/vol
-      if(area> 0.0_WP) a_cent = a_cent/area
+      if (vol .gt.0.0_WP) v_cent = v_cent/vol
+      if (area.gt.0.0_WP) a_cent = a_cent/area
       
       return
    end subroutine marching_tets
@@ -570,7 +569,7 @@ contains
       end interface
       !--------------------------------------------------
       real(WP), dimension(3,8) :: sub_cube
-      integer :: i,j,k, cubeCase,ii
+      integer :: i,j,cubeCase
       real(WP), dimension(8) :: G
       real(WP), dimension(3) :: c_dxyz
       
@@ -660,7 +659,7 @@ contains
       !--------------------------------------------------
       real(WP), dimension(3,8) :: sub_cube
       real(WP), dimension(  8) :: G
-      integer :: i,j,k, cubeCase,ii
+      integer :: i,j,cubeCase
       real(WP), dimension(3) :: c_dxyz,c_cent
       real(WP) :: c_vol
       
@@ -747,7 +746,7 @@ contains
       !--------------------------------------------------
       real(WP), dimension(3,8) :: sub_cube
       real(WP), dimension(  8) :: G
-      integer :: i,j,k, cubeCase,ii
+      integer :: i,j,cubeCase
       real(WP), dimension(3) :: c_dxyz
       
       ! initialize case
@@ -916,7 +915,7 @@ contains
       !--------------------------------------------------
       real(WP), dimension(3,4,4) :: sub_rec
       real(WP), dimension(4) :: G
-      integer :: i, recCase,ii
+      integer :: i,recCase
       real(WP), dimension(3) :: my_cent
       real(WP) :: my_area
       ! initialize case
@@ -993,7 +992,7 @@ contains
       !--------------------------------------------------
       real(WP), dimension(3,4,4) :: sub_rec
       real(WP), dimension(4) :: G
-      integer :: i, recCase,ii
+      integer :: i,recCase
       real(WP), dimension(3) :: my_cent
       real(WP) :: my_area
       ! initialize case

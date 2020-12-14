@@ -264,7 +264,6 @@ contains
       implicit none
       class(vdscalar), intent(inout) :: this
       integer :: i,j,k
-      real(WP) :: delta
       
       ! Sync up masks
       call this%cfg%sync(this%mask)
@@ -318,7 +317,7 @@ contains
       implicit none
       class(vdscalar), intent(inout) :: this
       integer, intent(in) :: implicit_ils
-      integer :: i,j,k,count,st
+      integer :: count,st
       
       ! Adjust metrics based on mask array
       call this%adjust_metrics()
@@ -523,7 +522,6 @@ contains
       class(vdscalar), intent(inout) :: this
       real(WP), intent(in) :: dt
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(out) :: drhodt !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
-      integer :: i,j,k
       drhodt=(this%rho-this%rhoold)/dt
    end subroutine get_drhodt
    
@@ -569,7 +567,7 @@ contains
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in)    :: rhoU  !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in)    :: rhoV  !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in)    :: rhoW  !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
-      integer :: i,j,k,sti,std,st
+      integer :: i,j,k,sti,std
       
       ! Prepare convective operator
       do k=this%cfg%kmin_,this%cfg%kmax_
