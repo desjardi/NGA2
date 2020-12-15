@@ -70,8 +70,15 @@ module vfs_class
       real(WP), dimension(:,:,:,:), allocatable :: Lbary  !< Liquid barycenter
       real(WP), dimension(:,:,:,:), allocatable :: Gbary  !< Gas barycenter
       
+      ! Subcell VF fields
+      real(WP), dimension(:,:,:,:,:,:), allocatable :: Lvol   !< Subcell liquid volume
+      real(WP), dimension(:,:,:,:,:,:), allocatable :: Gvol   !< Subcell gas volume
+      
       ! Surface density data
       real(WP), dimension(:,:,:), allocatable :: SD       !< Surface density array
+      
+      ! Distance level set
+      real(WP), dimension(:,:,:), allocatable :: G        !< Distance level set array
       
       ! Interface reconstruction method
       integer :: reconstruction_method                    !< Interface reconstruction method
@@ -113,6 +120,8 @@ module vfs_class
       procedure :: build_interface                        !< Reconstruct IRL interface from VF field
       procedure :: build_lvira                            !< LVIRA reconstruction of the interface from VF field
       procedure :: polygonalize_interface                 !< Build a discontinuous polygonal representation of the IRL interface
+      !procedure :: distance_from_polygon                  !< Build a signed distance field from the polygonalized interface
+      procedure :: subcell_volume                         !< Build a subcell phasic volumes from reconstructed interface
       !procedure :: reset_moments                          !< Reconstruct volume moments from IRL interfaces
       procedure :: get_max                                !< Calculate maximum field values
    end type vfs
@@ -152,6 +161,11 @@ contains
       allocate(self%Lbary(3,self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%Lbary=0.0_WP
       allocate(self%Gbary(3,self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%Gbary=0.0_WP
       allocate(self%SD   (  self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%SD   =0.0_WP
+      allocate(self%G    (  self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%G    =0.0_WP
+      
+      ! Subcell phase volume data
+      allocate(self%Lvol(0:1,0:1,0:1,self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%Lvol=0.0_WP
+      allocate(self%Gvol(0:1,0:1,0:1,self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%Gvol=0.0_WP
       
       ! Set reconstruction method
       self%reconstruction_method=reconstruction_method
@@ -332,11 +346,11 @@ contains
       ! Create discontinuous polygon mesh from IRL interface
       call this%polygonalize_interface()
       
-      ! Calculate distance from polygons field
-      !call multiphase_plic_distance
+      ! Calculate distance from polygons
+      !call this%distance_from_polygon()
       
-      ! Calculate subcell volume fractions
-      !call multiphase_plic_subcell
+      ! Calculate subcell phasic volume
+      call this%subcell_volume()
       
       ! Calculate curvature
       !call multiphase_curvature_calc
@@ -427,6 +441,7 @@ contains
    
    
    !> Polygonalization of the IRL interface (calculates SD at the same time)
+   !> Here, only mask=1 is skipped (i.e., real walls), so bconds should be handled
    subroutine polygonalize_interface(this)
       implicit none
       class(vfs), intent(inout) :: this
@@ -447,8 +462,8 @@ contains
                do n=1,max_interface_planes
                   call zeroPolygon(this%interface_polygon(n,i,j,k))
                end do
-               ! Skip wall/bcond cells - bconds need to be provided elsewhere directly!
-               if (this%mask(i,j,k).ne.0) cycle
+               ! Skip wall cells only here
+               if (this%mask(i,j,k).eq.1) cycle
                ! Create polygons for cells with interfaces, zero for those without
                if (this%VF(i,j,k).ge.VFlo.and.this%VF(i,j,k).le.VFhi) then
                   call construct_2pt(cell,[this%cfg%x(i),this%cfg%y(j),this%cfg%z(k)],[this%cfg%x(i+1),this%cfg%y(j+1),this%cfg%z(k+1)])
@@ -465,7 +480,7 @@ contains
          do j=this%cfg%jmino_,this%cfg%jmaxo_
             do i=this%cfg%imino_+1,this%cfg%imaxo_
                if (this%VF(i,j,k).lt.VFlo.and.this%VF(i-1,j,k).gt.VFhi.or.this%VF(i,j,k).gt.VFhi.and.this%VF(i-1,j,k).lt.VFlo) then
-                  if (maxval(this%mask(i-1:i,j,k)).gt.0) cycle
+                  if (this%mask(i,j,k).eq.1.or.this%mask(i-1,j,k).eq.1) cycle
                   norm=[sign(1.0_WP,0.5_WP-this%VF(i,j,k)),0.0_WP,0.0_WP]
                   call setNumberOfPlanes(this%liquid_gas_interface(i,j,k),1)
                   call setPlane(this%liquid_gas_interface(i,j,k),0,norm,sign(1.0_WP,0.5_WP-this%VF(i,j,k))*this%cfg%x(i))
@@ -486,7 +501,7 @@ contains
          do j=this%cfg%jmino_+1,this%cfg%jmaxo_
             do i=this%cfg%imino_,this%cfg%imaxo_
                if (this%VF(i,j,k).lt.VFlo.and.this%VF(i,j-1,k).gt.VFhi.or.this%VF(i,j,k).gt.VFhi.and.this%VF(i,j-1,k).lt.VFlo) then
-                  if (maxval(this%mask(i,j-1:j,k)).gt.0) cycle
+                  if (this%mask(i,j,k).eq.1.or.this%mask(i,j-1,k).eq.1) cycle
                   norm=[0.0_WP,sign(1.0_WP,0.5_WP-this%VF(i,j,k)),0.0_WP]
                   call setNumberOfPlanes(this%liquid_gas_interface(i,j,k),1)
                   call setPlane(this%liquid_gas_interface(i,j,k),0,norm,sign(1.0_WP,0.5_WP-this%VF(i,j,k))*this%cfg%y(j))
@@ -507,7 +522,7 @@ contains
          do j=this%cfg%jmino_,this%cfg%jmaxo_
             do i=this%cfg%imino_,this%cfg%imaxo_
                if (this%VF(i,j,k).lt.VFlo.and.this%VF(i,j,k-1).gt.VFhi.or.this%VF(i,j,k).gt.VFhi.and.this%VF(i,j,k-1).lt.VFlo) then
-                  if (maxval(this%mask(i,j,k-1:k)).gt.0) cycle
+                  if (this%mask(i,j,k).eq.1.or.this%mask(i,j,k-1).eq.1) cycle
                   norm=[0.0_WP,0.0_WP,sign(1.0_WP,0.5_WP-this%VF(i,j,k))]
                   call setNumberOfPlanes(this%liquid_gas_interface(i,j,k),1)
                   call setPlane(this%liquid_gas_interface(i,j,k),0,norm,sign(1.0_WP,0.5_WP-this%VF(i,j,k))*this%cfg%z(k))
@@ -528,7 +543,7 @@ contains
       do k=this%cfg%kmino_,this%cfg%kmaxo_
          do j=this%cfg%jmino_,this%cfg%jmaxo_
             do i=this%cfg%imino_,this%cfg%imaxo_
-               if (this%mask(i,j,k).ne.0) cycle
+               if (this%mask(i,j,k).eq.1) cycle
                tsd=0.0_WP
                do n=1,getNumberOfPlanes(this%liquid_gas_interface(i,j,k))
                   if (getNumberOfVertices(this%interface_polygon(n,i,j,k)).gt.0) then
@@ -541,6 +556,70 @@ contains
       end do
       
    end subroutine polygonalize_interface
+   
+   
+   !> Calculate distance from polygonalized interface
+   !subroutine distance_from_polygon(this)
+   !   implicit none
+   !   class(vfs), intent(inout) :: this
+   !
+   !end subroutine distance_from_polygon
+   
+   
+   !> Calculate subcell phase volume from reconstructed interface
+   !> Here, only mask=1 is skipped (i.e., real walls), so bconds are handled
+   subroutine subcell_volume(this)
+      implicit none
+      class(vfs), intent(inout) :: this
+      integer :: i,j,k,ii,jj,kk
+      real(WP), dimension(0:2) :: subx,suby,subz
+      type(RectCub_type) :: cell
+      type(SepVM_type) :: separated_volume_moments
+      
+      ! Allocate IRL objects for moment calculation
+      call new(cell)
+      call new(separated_volume_moments)
+      
+      ! Compute subcell liquid and gas information
+      do k=this%cfg%kmino_,this%cfg%kmaxo_
+         do j=this%cfg%jmino_,this%cfg%jmaxo_
+            do i=this%cfg%imino_,this%cfg%imaxo_
+               ! Deal with walls only - we do compute inside bconds here
+               if (this%mask(i,j,k).eq.1) then
+                  this%Gvol(:,:,:,i,j,k)=0.0_WP
+                  this%Lvol(:,:,:,i,j,k)=0.0_WP
+                  cycle
+               end if
+               ! Deal with other cells
+               if (this%VF(i,j,k).gt.VFhi) then
+                  this%Lvol(:,:,:,i,j,k)=0.125_WP*this%cfg%vol(i,j,k)
+                  this%Gvol(:,:,:,i,j,k)=0.0_WP
+               else if (this%VF(i,j,k).lt.VFlo) then
+                  this%Lvol(:,:,:,i,j,k)=0.0_WP
+                  this%Gvol(:,:,:,i,j,k)=0.125_WP*this%cfg%vol(i,j,k)
+               else
+                  ! Prepare subcell extent
+                  subx=[this%cfg%x(i),this%cfg%xm(i),this%cfg%x(i+1)]
+                  suby=[this%cfg%y(j),this%cfg%ym(j),this%cfg%y(j+1)]
+                  subz=[this%cfg%z(k),this%cfg%zm(k),this%cfg%z(k+1)]
+                  ! Loop over sub-cells
+                  do kk=0,1
+                     do jj=0,1
+                        do ii=0,1
+                           call construct_2pt(cell,[subx(ii),suby(jj),subz(kk)],[subx(ii+1),suby(jj+1),subz(kk+1)])
+                           call getNormMoments(cell,this%liquid_gas_interface(i,j,k),separated_volume_moments)
+                           this%Lvol(ii,jj,kk,i,j,k)=getVolume(separated_volume_moments,0)
+                           this%Gvol(ii,jj,kk,i,j,k)=getVolume(separated_volume_moments,1)
+                        end do
+                     end do
+                  end do
+               end if
+            end do
+         end do
+      end do
+      
+   end subroutine subcell_volume
+   
    
    !> Write an IRL interface to a file
    subroutine write_interface(this,filename)
