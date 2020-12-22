@@ -120,7 +120,7 @@ module vfs_class
       procedure :: build_interface                        !< Reconstruct IRL interface from VF field
       procedure :: build_lvira                            !< LVIRA reconstruction of the interface from VF field
       procedure :: polygonalize_interface                 !< Build a discontinuous polygonal representation of the IRL interface
-      !procedure :: distance_from_polygon                  !< Build a signed distance field from the polygonalized interface
+      procedure :: distance_from_polygon                  !< Build a signed distance field from the polygonalized interface
       procedure :: subcell_volume                         !< Build a subcell phasic volumes from reconstructed interface
       !procedure :: reset_moments                          !< Reconstruct volume moments from IRL interfaces
       procedure :: get_max                                !< Calculate maximum field values
@@ -347,7 +347,7 @@ contains
       call this%polygonalize_interface()
       
       ! Calculate distance from polygons
-      !call this%distance_from_polygon()
+      call this%distance_from_polygon()
       
       ! Calculate subcell phasic volume
       call this%subcell_volume()
@@ -559,11 +559,58 @@ contains
    
    
    !> Calculate distance from polygonalized interface
-   !subroutine distance_from_polygon(this)
-   !   implicit none
-   !   class(vfs), intent(inout) :: this
-   !
-   !end subroutine distance_from_polygon
+   !> Done without band - unclear if it's too expensive?
+   subroutine distance_from_polygon(this)
+      implicit none
+      class(vfs), intent(inout) :: this
+      integer :: ni,i,j,k,ii,jj,kk
+      real(WP) :: clipdist
+      real(IRL_double), dimension(3) :: pos,nearest_pt
+      
+      ! First reset distance
+      this%G=huge(1.0_WP)
+      
+      ! Loop over domain
+      do k=this%cfg%kmin_,this%cfg%kmax_
+         do j=this%cfg%jmin_,this%cfg%jmax_
+            do i=this%cfg%imin_,this%cfg%imax_
+               ! Get cell centroid location
+               pos=[this%cfg%xm(i),this%cfg%ym(j),this%cfg%zm(k)]
+               ! Loop over neighboring polygons and compute distance
+               do kk=k-2,k+2
+                  do jj=j-2,j+2
+                     do ii=i-2,i+2
+                        do ni=1,getNumberOfPlanes(this%liquid_gas_interface(ii,jj,kk))
+                           if (getNumberOfVertices(this%interface_polygon(ni,ii,jj,kk)).ne.0) then
+                              nearest_pt=calculateNearestPtOnSurface(this%interface_polygon(ni,ii,jj,kk),pos)
+                              nearest_pt=pos-nearest_pt
+                              this%G(i,j,k)=min(this%G(i,j,k),dot_product(nearest_pt,nearest_pt))
+                           end if
+                        end do
+                     end do
+                  end do
+               end do
+               this%G(i,j,k)=sqrt(this%G(i,j,k))
+               ! Only need to consult planes in own cell to know sign
+               ! Even "empty" cells have one plane, which is really far away from it..
+               if (.not.isPtInt(pos,this%liquid_gas_interface(i,j,k))) this%G(i,j,k)=-this%G(i,j,k)
+            end do
+         end do
+      end do
+      
+      ! Clip distance field and sign it properly
+      do k=this%cfg%kmin_,this%cfg%kmax_
+         do j=this%cfg%jmin_,this%cfg%jmax_
+            do i=this%cfg%imin_,this%cfg%imax_
+               if (abs(this%G(i,j,k)).gt.clipdist) this%G(i,j,k)=sign(3.0_WP*this%cfg%min_meshsize,this%VF(i,j,k)-0.5_WP)
+            end do
+         end do
+      end do
+      
+      ! Sync boundaries
+      call this%cfg%sync(this%G)
+      
+   end subroutine distance_from_polygon
    
    
    !> Calculate subcell phase volume from reconstructed interface
