@@ -30,6 +30,7 @@ module vfs_class
    integer, parameter, public :: nonrecurs_simplex=2 !< Non-recursive simplex cutting
    
    ! Default parameters for volume fraction solver
+   integer,  parameter :: nband=5                                 !< Number of cells around the interfacial cells on which localized work is performed
    integer,  parameter :: max_interface_planes=2                  !< Maximum number of interfaces allowed (2 for R2P)
    real(WP), parameter :: VFlo=1.0e-12_WP                         !< Minimum VF value considered
    real(WP), parameter :: VFhi=1.0_WP-VFlo                        !< Maximum VF value considered
@@ -80,6 +81,11 @@ module vfs_class
       ! Distance level set
       real(WP), dimension(:,:,:), allocatable :: G        !< Distance level set array
       
+      ! Band strategy
+      integer, dimension(:,:,:), allocatable :: band      !< Band to localize workload around the interface
+      integer, dimension(:,:),   allocatable :: band_map  !< Unstructured band mapping
+      integer, dimension(nband) :: band_count             !< Number of cells per band value
+      
       ! Interface reconstruction method
       integer :: reconstruction_method                    !< Interface reconstruction method
       
@@ -110,6 +116,7 @@ module vfs_class
       procedure :: add_bcond                              !< Add a boundary condition
       procedure :: get_bcond                              !< Get a boundary condition
       procedure :: apply_bcond                            !< Apply all boundary conditions
+      procedure :: update_band                            !< Update the band info given the VF values
       procedure :: sync_interface                         !< Synchronize the IRL objects
       procedure, private :: sync_side                     !< Synchronize the IRL objects across one side - another I/O helper
       procedure, private :: sync_ByteBuffer               !< Communicate byte packets across one side - another I/O helper
@@ -166,6 +173,10 @@ contains
       ! Subcell phase volume data
       allocate(self%Lvol(0:1,0:1,0:1,self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%Lvol=0.0_WP
       allocate(self%Gvol(0:1,0:1,0:1,self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%Gvol=0.0_WP
+      
+      ! Prepare the band arrays
+      allocate(self%band(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%band=0
+      if (allocated(self%band_map)) deallocate(self%band_map)
       
       ! Set reconstruction method
       self%reconstruction_method=reconstruction_method
@@ -329,6 +340,105 @@ contains
       call new(this%recv_byte_buffer)
       
    end subroutine initialize_irl
+   
+   
+   !> Band update from VF dataset
+   subroutine update_band(this)
+      implicit none
+      class(vfs), intent(inout) :: this
+      integer :: i,j,k,ii,jj,kk,dir,n,index
+      integer, dimension(3) :: ind
+      integer :: ibmin_,ibmax_,jbmin_,jbmax_,kbmin_,kbmax_
+      integer, dimension(nband) :: band_size
+      
+      ! Loop extents
+      ibmin_=this%cfg%imin_; if (this%cfg%iproc.eq.1           .and.this%cfg%xper) ibmin_=this%cfg%imin-1
+      ibmax_=this%cfg%imax_; if (this%cfg%iproc.eq.this%cfg%npx.and.this%cfg%xper) ibmax_=this%cfg%imax+1
+      jbmin_=this%cfg%jmin_; if (this%cfg%jproc.eq.1           .and.this%cfg%yper) jbmin_=this%cfg%jmin-1
+      jbmax_=this%cfg%jmax_; if (this%cfg%jproc.eq.this%cfg%npy.and.this%cfg%yper) jbmax_=this%cfg%jmax+1
+      kbmin_=this%cfg%kmin_; if (this%cfg%kproc.eq.1           .and.this%cfg%zper) kbmin_=this%cfg%kmin-1
+      kbmax_=this%cfg%kmax_; if (this%cfg%kproc.eq.this%cfg%npz.and.this%cfg%zper) kbmax_=this%cfg%kmax+1
+      
+      ! Reset band
+      this%band=(nband+1)*int(sign(1.0_WP,this%VF-0.5_WP))
+      
+      ! First sweep to identify cells with interface
+      do k=kbmin_,kbmax_
+         do j=jbmin_,jbmax_
+            do i=ibmin_,ibmax_
+               ! Skip *real* wall cells
+               if (this%mask(i,j,k).eq.1) cycle
+               ! Identify cells with interface
+               if (this%VF(i,j,k).ge.VFlo.and.this%VF(i,j,k).le.VFhi) this%band(i,j,k)=int(sign(1.0_WP,this%VF(i,j,k)-0.5_WP))
+               ! Check if cell-face is an interface
+               do dir=1,3
+                  do n=-1,+1,2
+                     ind=[i,j,k]; ind(dir)=ind(dir)+n
+                     if (this%mask(ind(1),ind(2),ind(3)).ne.1) then
+                        if (this%VF(i,j,k).lt.VFlo.and.this%VF(ind(1),ind(2),ind(3)).gt.VFhi.or.&
+                        &   this%VF(i,j,k).gt.VFhi.and.this%VF(ind(1),ind(2),ind(3)).lt.VFlo) this%band(i,j,k)=int(sign(1.0_WP,this%VF(i,j,k)-0.5_WP))
+                     end if
+                  end do
+               end do
+            end do
+         end do
+      end do
+      call this%cfg%sync(this%band)
+      
+      ! Sweep to identify the bands up to nband
+      do n=2,nband
+         ! For each band
+         do k=kbmin_,kbmax_
+            do j=jbmin_,jbmax_
+               do i=ibmin_,ibmax_
+                  ! Skip wall cells
+                  if (this%mask(i,j,k).eq.1) cycle
+                  ! Work on one band at a time
+                  if (abs(this%band(i,j,k)).gt.n) then
+                     ! Loop over 26 neighbors
+                     do kk=k-1,k+1
+                        do jj=j-1,j+1
+                           do ii=i-1,i+1
+                              ! Skip wall cells
+                              if (this%mask(ii,jj,kk).eq.1) cycle
+                              ! Extend the band
+                              if (abs(this%band(ii,jj,kk)).eq.n-1) this%band(i,j,k)=int(sign(real(n,WP),this%VF(i,j,k)-0.5_WP))
+                           end do
+                        end do
+                     end do
+                  end if
+               end do
+            end do
+         end do
+         call this%cfg%sync(this%band)
+      end do
+      
+      ! Count the number of cells in each band value
+      band_size=0
+      do k=kbmin_,kbmax_
+         do j=jbmin_,jbmax_
+            do i=ibmin_,ibmax_
+               if (this%band(i,j,k).le.nband.and.this%band(i,j,k).ne.-nband-1) band_size(abs(this%band(i,j,k)))=band_size(abs(this%band(i,j,k)))+1
+            end do
+         end do
+      end do
+      
+      ! Rebuild the unstructured mapping
+      if (allocated(this%band_map)) deallocate(this%band_map); allocate(this%band_map(3,sum(band_size)))
+      this%band_count=0
+      do k=kbmin_,kbmax_
+         do j=jbmin_,jbmax_
+            do i=ibmin_,ibmax_
+               if (this%band(i,j,k).le.nband.and.this%band(i,j,k).ne.-nband-1) then
+                  this%band_count(abs(this%band(i,j,k)))=this%band_count(abs(this%band(i,j,k)))+1
+                  index=sum(band_size(1:abs(this%band(i,j,k))-1))+this%band_count(abs(this%band(i,j,k)))
+                  this%band_map(:,index)=[i,j,k]
+               end if
+            end do
+         end do
+      end do
+      
+   end subroutine update_band
    
    
    !> Reconstruct an IRL interface from the VF field distribution
@@ -558,44 +668,43 @@ contains
    end subroutine polygonalize_interface
    
    
-   !> Calculate distance from polygonalized interface
-   !> Done without band - unclear if it's too expensive?
+   !> Calculate distance from polygonalized interface inside the band
+   !> Domain edges are not done here
    subroutine distance_from_polygon(this)
       implicit none
       class(vfs), intent(inout) :: this
-      integer :: ni,i,j,k,ii,jj,kk
+      integer :: ni,i,j,k,ii,jj,kk,index
       real(WP) :: clipdist
       real(IRL_double), dimension(3) :: pos,nearest_pt
       
       ! First reset distance
       this%G=huge(1.0_WP)
       
-      ! Loop over domain
-      do k=this%cfg%kmin_,this%cfg%kmax_
-         do j=this%cfg%jmin_,this%cfg%jmax_
-            do i=this%cfg%imin_,this%cfg%imax_
-               ! Get cell centroid location
-               pos=[this%cfg%xm(i),this%cfg%ym(j),this%cfg%zm(k)]
-               ! Loop over neighboring polygons and compute distance
-               do kk=k-2,k+2
-                  do jj=j-2,j+2
-                     do ii=i-2,i+2
-                        do ni=1,getNumberOfPlanes(this%liquid_gas_interface(ii,jj,kk))
-                           if (getNumberOfVertices(this%interface_polygon(ni,ii,jj,kk)).ne.0) then
-                              nearest_pt=calculateNearestPtOnSurface(this%interface_polygon(ni,ii,jj,kk),pos)
-                              nearest_pt=pos-nearest_pt
-                              this%G(i,j,k)=min(this%G(i,j,k),dot_product(nearest_pt,nearest_pt))
-                           end if
-                        end do
-                     end do
+      ! Loop over 1/2-band
+      do index=1,sum(this%band_count(1:2))
+         i=this%band_map(1,index)
+         j=this%band_map(2,index)
+         k=this%band_map(3,index)
+         ! Get cell centroid location
+         pos=[this%cfg%xm(i),this%cfg%ym(j),this%cfg%zm(k)]
+         ! Loop over neighboring polygons and compute distance
+         do kk=k-2,k+2
+            do jj=j-2,j+2
+               do ii=i-2,i+2
+                  do ni=1,getNumberOfPlanes(this%liquid_gas_interface(ii,jj,kk))
+                     if (getNumberOfVertices(this%interface_polygon(ni,ii,jj,kk)).ne.0) then
+                        nearest_pt=calculateNearestPtOnSurface(this%interface_polygon(ni,ii,jj,kk),pos)
+                        nearest_pt=pos-nearest_pt
+                        this%G(i,j,k)=min(this%G(i,j,k),dot_product(nearest_pt,nearest_pt))
+                     end if
                   end do
                end do
-               this%G(i,j,k)=sqrt(this%G(i,j,k))
-               ! Only need to consult planes in own cell to know sign
-               ! Even "empty" cells have one plane, which is really far away from it..
-               if (.not.isPtInt(pos,this%liquid_gas_interface(i,j,k))) this%G(i,j,k)=-this%G(i,j,k)
             end do
          end do
+         this%G(i,j,k)=sqrt(this%G(i,j,k))
+         ! Only need to consult planes in own cell to know sign
+         ! Even "empty" cells have one plane, which is really far away from it..
+         if (.not.isPtInt(pos,this%liquid_gas_interface(i,j,k))) this%G(i,j,k)=-this%G(i,j,k)
       end do
       
       ! Clip distance field and sign it properly
