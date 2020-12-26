@@ -61,9 +61,12 @@ module pgrid_class
       procedure :: allprint=>pgrid_allprint                                     !< Output grid to screen - blocking and requires all procs...
       procedure :: print   =>pgrid_print                                        !< Output grid to screen
       procedure :: log     =>pgrid_log                                          !< Output grid info to log
-      generic :: sync=>pgrid_rsync,pgrid_rsync_no,pgrid_isync,pgrid_isync_no    !< Commmunicate inner and periodic boundaries - generic
+      generic :: sync=>pgrid_rsync,pgrid_rsync_array,pgrid_rsync_no,pgrid_isync,pgrid_isync_no    !< Commmunicate inner and periodic boundaries - generic
       procedure, private :: pgrid_isync,pgrid_isync_no                          !< Commmunicate inner and periodic boundaries for integer
       procedure, private :: pgrid_rsync,pgrid_rsync_no                          !< Commmunicate inner and periodic boundaries for real(WP)
+      procedure, private :: pgrid_rsync_array                                   !< Commmunicate inner and periodic boundaries for arrays of real(WP) of the form (:,i,j,k)
+      procedure :: get_indices                                                  !< Function that find closest mesh indices to a provided position
+      procedure :: get_ijk_from_lexico,get_lexico_from_ijk                      !< Functions that convert a lexicographic index to (i,j,k) and vice-versa
    end type pgrid
    
    
@@ -662,6 +665,105 @@ contains
    end subroutine pgrid_rsync_no
    
    
+   !> Synchronization of overlap cells
+   !> This version is capable of handling an array of the shape (:,i,j,k)
+   subroutine pgrid_rsync_array(this,A)
+      use mpi_f08
+      use parallel, only: MPI_REAL_WP
+      implicit none
+      class(pgrid), intent(in) :: this
+      real(WP), dimension(1:,this%imino_:,this%jmino_:,this%kmino_:), intent(inout) :: A !< Needs to be (imin_-no:imax_+no,jmin_-no:jmax_+no,kmin_-no:kmax_+no)
+      type(MPI_Status) :: status
+      integer :: isrc,idst,ierr,isize,i,j,k,dim
+      real(WP), dimension(:,:,:,:), allocatable :: buf1,buf2
+      
+      ! Get first dimension
+      dim=size(A,DIM=1)
+      
+      ! Work in x - is it 2D or 3D?
+      if (this%nx.eq.1) then
+         ! Direct copy if 2D
+         do i=this%imax_+1,this%imaxo_
+            A(:,i,:,:)=A(:,this%imin_,:,:)
+         end do
+         do i=this%imino_,this%imin_-1
+            A(:,i,:,:)=A(:,this%imin_,:,:)
+         end do
+      else
+         isize=dim*(this%no)*(this%nyo_)*(this%nzo_)
+         allocate(buf1(dim,this%no,this%nyo_,this%nzo_))
+         allocate(buf2(dim,this%no,this%nyo_,this%nzo_))
+         ! Send left buffer to left neighbour
+         call MPI_CART_SHIFT(this%comm,0,-1,isrc,idst,ierr)
+         buf1=A(:,this%imin_:this%imin_+this%no-1,:,:)
+         call MPI_SENDRECV(buf1,isize,MPI_REAL_WP,idst,0,buf2,isize,MPI_REAL_WP,isrc,0,this%comm,status,ierr)
+         if (isrc.ne.MPI_PROC_NULL) A(:,this%imax_+1:this%imaxo_,:,:)=buf2
+         ! Send right buffer to right neighbour
+         call MPI_CART_SHIFT(this%comm,0,+1,isrc,idst,ierr)
+         buf1=A(:,this%imax_-this%no+1:this%imax_,:,:)
+         call MPI_SENDRECV(buf1,isize,MPI_REAL_WP,idst,0,buf2,isize,MPI_REAL_WP,isrc,0,this%comm,status,ierr)
+         if (isrc.ne.MPI_PROC_NULL) A(:,this%imino_:this%imin_-1,:,:)=buf2
+         ! Deallocate
+         deallocate(buf1,buf2)
+      end if
+      
+      ! Work in y - is it 2D or 3D?
+      if (this%ny.eq.1) then
+         ! Direct copy if 2D
+         do j=this%jmax_+1,this%jmaxo_
+            A(:,:,j,:)=A(:,:,this%jmin_,:)
+         end do
+         do j=this%jmino_,this%jmin_-1
+            A(:,:,j,:)=A(:,:,this%jmin_,:)
+         end do
+      else
+         isize=dim*(this%nxo_)*(this%no)*(this%nzo_)
+         allocate(buf1(dim,this%nxo_,this%no,this%nzo_))
+         allocate(buf2(dim,this%nxo_,this%no,this%nzo_))
+         ! Send left buffer to left neighbour
+         call MPI_CART_SHIFT(this%comm,1,-1,isrc,idst,ierr)
+         buf1=A(:,:,this%jmin_:this%jmin_+this%no-1,:)
+         call MPI_SENDRECV(buf1,isize,MPI_REAL_WP,idst,0,buf2,isize,MPI_REAL_WP,isrc,0,this%comm,status,ierr)
+         if (isrc.ne.MPI_PROC_NULL) A(:,:,this%jmax_+1:this%jmaxo_,:)=buf2
+         ! Send right buffer to right neighbour
+         call MPI_CART_SHIFT(this%comm,1,+1,isrc,idst,ierr)
+         buf1=A(:,:,this%jmax_-this%no+1:this%jmax_,:)
+         call MPI_SENDRECV(buf1,isize,MPI_REAL_WP,idst,0,buf2,isize,MPI_REAL_WP,isrc,0,this%comm,status,ierr)
+         if (isrc.ne.MPI_PROC_NULL) A(:,:,this%jmino_:this%jmin_-1,:)=buf2
+         ! Deallocate
+         deallocate(buf1,buf2)
+      end if
+      
+      ! Work in z - is it 2D or 3D?
+      if (this%nz.eq.1) then
+         ! Direct copy if 2D
+         do k=this%kmax_+1,this%kmaxo_
+            A(:,:,:,k)=A(:,:,:,this%kmin_)
+         end do
+         do k=this%kmino_,this%kmin_-1
+            A(:,:,:,k)=A(:,:,:,this%kmin_)
+         end do
+      else
+         isize=dim*(this%nxo_)*(this%nyo_)*(this%no)
+         allocate(buf1(dim,this%nxo_,this%nyo_,this%no))
+         allocate(buf2(dim,this%nxo_,this%nyo_,this%no))
+         ! Send left buffer to left neighbour
+         call MPI_CART_SHIFT(this%comm,2,-1,isrc,idst,ierr)
+         buf1=A(:,:,:,this%kmin_:this%kmin_+this%no-1)
+         call MPI_SENDRECV(buf1,isize,MPI_REAL_WP,idst,0,buf2,isize,MPI_REAL_WP,isrc,0,this%comm,status,ierr)
+         if (isrc.ne.MPI_PROC_NULL) A(:,:,:,this%kmax_+1:this%kmaxo_)=buf2
+         ! Send right buffer to right neighbour
+         call MPI_CART_SHIFT(this%comm,2,+1,isrc,idst,ierr)
+         buf1=A(:,:,:,this%kmax_-this%no+1:this%kmax_)
+         call MPI_SENDRECV(buf1,isize,MPI_REAL_WP,idst,0,buf2,isize,MPI_REAL_WP,isrc,0,this%comm,status,ierr)
+         if (isrc.ne.MPI_PROC_NULL) A(:,:,:,this%kmino_:this%kmin_-1)=buf2
+         ! Deallocate
+         deallocate(buf1,buf2)
+      end if
+      
+   end subroutine pgrid_rsync_array
+   
+   
    !> Synchronization of overlap cells for integer
    !> This version is capable of handling any overlap size
    subroutine pgrid_isync_no(this,A,no)
@@ -756,5 +858,52 @@ contains
       end if
       
    end subroutine pgrid_isync_no
+   
+   
+   !> Returns the closest local indices to the provided position pos with initial guess indices_guess
+   function get_indices(this,pos,indices_guess) result(indices)
+      implicit none
+      class(pgrid), intent(in) :: this
+      real(WP), dimension(3), intent(in) :: pos
+      integer,  dimension(3), intent(in) :: indices_guess
+      integer,  dimension(3) :: indices
+      ! X direction
+      indices(1)=indices_guess(1)
+      do while (pos(1).gt.this%x(indices(1)+1).and.indices(1).lt.this%imaxo_); indices(1)=indices(1)+1; end do
+      do while (pos(1).lt.this%x(indices(1)  ).and.indices(1).gt.this%imino_); indices(1)=indices(1)-1; end do
+      ! Y direction
+      indices(2)=indices_guess(2)
+      do while (pos(2).gt.this%y(indices(2)+1).and.indices(2).lt.this%jmaxo_); indices(2)=indices(2)+1; end do
+      do while (pos(2).lt.this%y(indices(2)  ).and.indices(2).gt.this%jmino_); indices(2)=indices(2)-1; end do
+      ! Z direction
+      indices(3)=indices_guess(3)
+      do while (pos(3).gt.this%z(indices(3)+1).and.indices(3).lt.this%kmaxo_); indices(3)=indices(3)+1; end do
+      do while (pos(3).lt.this%z(indices(3)  ).and.indices(3).gt.this%kmino_); indices(3)=indices(3)-1; end do
+      return
+   end function get_indices
+   
+   
+   !> Function that returns an (i,j,k) index from a lexicographic index
+   pure function get_ijk_from_lexico(this,lexico) result(ijk)
+      implicit none
+      class(pgrid), intent(in) :: this
+      integer, intent(in) :: lexico
+      integer, dimension(3) :: ijk
+      ijk(3)=lexico/(this%nxo_*this%nyo_)
+      ijk(2)=(lexico-this%nxo_*this%nyo_*ijk(3))/this%nxo_
+      ijk(1)= lexico-this%nxo_*this%nyo_*ijk(3)-this%nxo_*ijk(2)
+      ijk=ijk+[this%imino_,this%jmino_,this%kmino_]
+   end function get_ijk_from_lexico
+   
+   
+   !> Function that returns a lexicographic index from an (i,j,k) index
+   pure function get_lexico_from_ijk(this,ijk) result(lexico)
+      implicit none
+      class(pgrid), intent(in) :: this
+      integer, dimension(3), intent(in) :: ijk
+      integer :: lexico
+      lexico=(ijk(1)-this%imino_)+(ijk(2)-this%jmino_)*this%nxo_+(ijk(3)-this%kmino_)*this%nxo_*this%nyo_
+   end function get_lexico_from_ijk
+   
    
 end module pgrid_class

@@ -8,6 +8,7 @@ module mathtools
    public :: fv_itp_build,fd_itp_build
    public :: inverse_matrix
    public :: cross_product
+   public :: normalize
    
    ! Trigonometric parameters
    real(WP), parameter :: Pi   =3.1415926535897932385_WP
@@ -118,6 +119,17 @@ contains
          end do
       end do
    end subroutine inverse_matrix
+   
+   
+   ! Returns normalized vector: w=v/|v|
+   pure function normalize(v) result(w)
+      implicit none
+      real(WP), dimension(3), intent(in) :: v
+      real(WP), dimension(3)             :: w
+      real(WP)                           :: norm
+      norm=sqrt(dot_product(v,v))
+      w=v/(norm+tiny(1.0_WP))
+   end function normalize
    
    
 end module mathtools
