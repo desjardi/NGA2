@@ -1,10 +1,11 @@
 !> Ensight class concept is defined here: given a config object,
 !> it provides parallel I/O access to an ensight file
 module ensight_class
-   use precision,    only: WP
-   use string,       only: str_short,str_medium
-   use config_class, only: config
-   use mpi_f08,      only: MPI_Datatype
+   use precision,      only: WP
+   use string,         only: str_medium
+   use config_class,   only: config
+   use mpi_f08,        only: MPI_Datatype
+   use surfmesh_class, only: surfmesh
    implicit none
    private
    
@@ -12,18 +13,23 @@ module ensight_class
    public :: ensight
    
    ! List types
-   type :: scl
+   type :: scl !< Scalar field
       type(scl), pointer :: next
-      character(len=str_short) :: name
+      character(len=str_medium) :: name
       real(WP), dimension(:,:,:), pointer :: ptr
    end type scl
-   type :: vct
+   type :: vct !< Vector field
       type(vct), pointer :: next
-      character(len=str_short) :: name
+      character(len=str_medium) :: name
       real(WP), dimension(:,:,:), pointer :: ptrx
       real(WP), dimension(:,:,:), pointer :: ptry
       real(WP), dimension(:,:,:), pointer :: ptrz
    end type vct
+   type :: srf !< Surface mesh
+      type(srf), pointer :: next
+      character(len=str_medium) :: name
+      type(surfmesh), pointer :: ptr
+   end type srf
    
    !> Ensight object definition as list of pointers to arrays
    type :: ensight
@@ -37,12 +43,14 @@ module ensight_class
       ! An ensight object stores lists of pointers to data
       type(scl), pointer :: first_scl                                 !< Scalar list
       type(vct), pointer :: first_vct                                 !< Vector list
+      type(srf), pointer :: first_srf                                 !< Surface list
    contains
       procedure :: write_geom                                         !< Write out geometry
       procedure :: write_data                                         !< Write out data
       procedure :: write_case                                         !< Write out case file
       procedure :: add_scalar                                         !< Add a new scalar field
       procedure :: add_vector                                         !< Add a new vector field
+      procedure :: add_surface                                        !< Add a new surface mesh
    end type ensight
    
    
@@ -88,6 +96,7 @@ contains
       ! Empty pointer to lists for now
       self%first_scl=>NULL()
       self%first_vct=>NULL()
+      self%first_srf=>NULL()
       
       ! Check if a case file exists already - root only
       if (self%cfg%amRoot) then
@@ -174,6 +183,26 @@ contains
       ! Also create the corresponding directory
       if (this%cfg%amRoot) call execute_command_line('mkdir -p ensight/'//trim(this%name)//'/'//trim(new_vct%name))
    end subroutine add_vector
+   
+   
+   !> Add a surface mesh for output
+   subroutine add_surface(this,name,surface)
+      implicit none
+      class(ensight), intent(inout) :: this
+      character(len=*), intent(in) :: name
+      type(surfmesh), target, intent(in) :: surface
+      type(srf), pointer :: new_srf
+      ! Prepare new surface
+      allocate(new_srf)
+      new_srf%name=trim(adjustl(name))
+      new_srf%ptr =>surface
+      ! Insert it up front
+      new_srf%next=>this%first_srf
+      ! Point list to new object
+      this%first_srf=>new_srf
+      ! Also create the corresponding directory
+      if (this%cfg%amRoot) call execute_command_line('mkdir -p ensight/'//trim(this%name)//'/'//trim(new_srf%name))
+   end subroutine add_surface
    
    
    !> Output all data in the object

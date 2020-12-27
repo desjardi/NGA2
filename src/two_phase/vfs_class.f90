@@ -6,6 +6,7 @@ module vfs_class
    use string,         only: str_medium
    use config_class,   only: config
    use iterator_class, only: iterator
+   use surfmesh_class, only: surfmesh
    use irl_fortran_interface
    implicit none
    private
@@ -109,6 +110,9 @@ module vfs_class
       type(Poly_type),        dimension(:,:,:,:), allocatable :: interface_polygon
       type(SepVM_type),       dimension(:,:,:,:), allocatable :: face_flux
       
+      ! More basic representation of the surface grid
+      type(surfmesh) :: surfgrid
+      
       ! Masking info for metric modification
       integer, dimension(:,:,:), allocatable :: mask      !< Integer array used for enforcing bconds
       
@@ -140,6 +144,7 @@ module vfs_class
       procedure :: distance_from_polygon                  !< Build a signed distance field from the polygonalized interface
       procedure :: subcell_volume                         !< Build a subcell phasic volumes from reconstructed interface
       procedure :: reset_volume_moments                   !< Reconstruct volume moments from IRL interfaces
+      procedure :: update_surface_mesh                    !< Create a simple surface mesh from the IRL polygons
       procedure :: get_curvature                          !< Compute curvature from IRL surface polygons
       procedure :: paraboloid_fit                         !< Perform local paraboloid fit of IRL surface
       procedure :: get_max                                !< Calculate maximum field values
@@ -196,6 +201,9 @@ contains
       
       ! Initialize IRL
       call self%initialize_irl()
+      
+      ! Also initialize a surface grid
+      self%surfgrid=surfmesh(name='plic')
       
       ! Prepare mask for VF
       allocate(self%mask(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%mask=0
@@ -1173,7 +1181,80 @@ contains
          end do
       end do
       
+      ! Finally, update the basic unstructured surface mesh representation of our polygons
+      call this%update_surface_mesh()
+      
    end subroutine polygonalize_interface
+   
+   
+   !> Create a basic surface mesh from our IRL polygons
+   subroutine update_surface_mesh(this)
+      implicit none
+      class(vfs), intent(inout) :: this
+      integer :: i,j,k,n,shape,nv,np,nplane
+      real(WP), dimension(3) :: tmp_vert
+      
+      ! Reset surface mesh storage
+      call this%surfgrid%reset()
+      
+      ! First pass to count how many vertices and polygones are inside our processor
+      nv=0; np=0
+      do k=this%cfg%kmin_,this%cfg%kmax_
+         do j=this%cfg%jmin_,this%cfg%jmax_
+            do i=this%cfg%imin_,this%cfg%imax_
+               do nplane=1,getNumberOfPlanes(this%liquid_gas_interface(i,j,k))
+                  shape=getNumberOfVertices(this%interface_polygon(nplane,i,j,k))
+                  if (shape.gt.0) then
+                     nv=nv+shape
+                     np=np+1
+                  end if
+               end do
+            end do
+         end do
+      end do
+      
+      ! Reallocate storage and fill out arrays
+      if (np.gt.0) then
+         call this%surfgrid%set_size(nvert=nv,npoly=np)
+         allocate(this%surfgrid%polyConn(this%surfgrid%nVert)) ! Also allocate naive connectivity
+         nv=0; np=0
+         do k=this%cfg%kmin_,this%cfg%kmax_
+            do j=this%cfg%jmin_,this%cfg%jmax_
+               do i=this%cfg%imin_,this%cfg%imax_
+                  do nplane=1,getNumberOfPlanes(this%liquid_gas_interface(i,j,k))
+                     shape=getNumberOfVertices(this%interface_polygon(nplane,i,j,k))
+                     if (shape.gt.0) then
+                        ! Increment polygon counter
+                        np=np+1
+                        this%surfgrid%polySize(np)=shape
+                        ! Loop over its vertices and add them
+                        do n=1,shape
+                           tmp_vert=getPt(this%interface_polygon(nplane,i,j,k),n-1)
+                           ! Increment node counter
+                           nv=nv+1
+                           this%surfgrid%xVert(nv)=tmp_vert(1)
+                           this%surfgrid%yVert(nv)=tmp_vert(2)
+                           this%surfgrid%zVert(nv)=tmp_vert(3)
+                           this%surfgrid%polyConn(nv)=nv
+                        end do
+                     end if
+                  end do
+               end do
+            end do
+         end do
+      else
+         ! Add a zero-area triangle if this proc doesn't have one
+         np=1; nv=3
+         call this%surfgrid%set_size(nvert=nv,npoly=np)
+         allocate(this%surfgrid%polyConn(this%surfgrid%nVert)) ! Also allocate naive connectivity
+         this%surfgrid%xVert(1:3)=this%cfg%x(this%cfg%imin)
+         this%surfgrid%yVert(1:3)=this%cfg%y(this%cfg%jmin)
+         this%surfgrid%zVert(1:3)=this%cfg%z(this%cfg%kmin)
+         this%surfgrid%polySize(1)=3
+         this%surfgrid%polyConn(1:3)=[1,2,3]
+      end if
+      
+   end subroutine update_surface_mesh
    
    
    !> Calculate distance from polygonalized interface inside the band
