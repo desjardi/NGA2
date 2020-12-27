@@ -48,6 +48,7 @@ module ensight_class
       procedure :: write_geom                                         !< Write out geometry
       procedure :: write_data                                         !< Write out data
       procedure :: write_case                                         !< Write out case file
+      procedure :: write_surf                                         !< Write out surface mesh file
       procedure :: add_scalar                                         !< Add a new scalar field
       procedure :: add_vector                                         !< Add a new vector field
       procedure :: add_surface                                        !< Add a new surface mesh
@@ -223,6 +224,7 @@ contains
       type(MPI_Status):: status
       type(scl), pointer :: my_scl
       type(vct), pointer :: my_vct
+      type(srf), pointer :: my_srf
       real(SP), dimension(:,:,:), allocatable :: spbuff
       real(WP), dimension(:), allocatable :: temp_time
       
@@ -333,6 +335,15 @@ contains
       ! Finally, re-write the case file
       call this%write_case()
       
+      ! Now output all surface meshes
+      my_srf=>this%first_srf
+      do while (associated(my_srf))
+         ! Output the surface mesh as a distinct directory
+         call this%write_surf(my_srf)
+         ! Continue on to the next surface mesh object
+         my_srf=>my_srf%next
+      end do
+      
    end subroutine write_data
    
    
@@ -373,7 +384,7 @@ contains
       ! Close the case file
       close(iunit)
       
-   end subroutine
+   end subroutine write_case
    
    
    !> Geometry output to a file in parallel
@@ -477,6 +488,105 @@ contains
       deallocate(iblank)
       
    end subroutine write_geom
+   
+   
+   !> Procedure that writes out a surface mesh in Ensight format
+   subroutine write_surf(this,surf)
+      use precision, only: SP
+      use messager,  only: die
+      use mpi_f08,   only: mpi_barrier
+      implicit none
+      class(ensight), intent(in) :: this
+      type(srf), pointer, intent(in) :: surf
+      character(len=str_medium) :: filename
+      integer :: iunit,ierr,rank
+      character(len=80) :: cbuff
+      real(SP) :: rbuff
+      integer :: ibuff
+      
+      ! Write the case file from scratch in ASCII format
+      if (this%cfg%amRoot) then
+         ! Open the case file
+         open(newunit=iunit,file='ensight/'//trim(this%name)//'/'//trim(surf%name)//'.case',form='formatted',status='replace',access='stream',iostat=ierr)
+         ! Write all the geometry information
+         write(iunit,'(a,/,a,/,/,a,/,a,/)') 'FORMAT','type: ensight gold','GEOMETRY','model: 1 '//trim(surf%name)//'/'//trim(surf%name)//'.******'
+         ! Write the time information
+         write(iunit,'(/,a,/,a,/,a,i0,/,a,/,a,/,a)') 'TIME','time set: 1','number of steps: ',this%ntime,'filename start number: 1','filename increment: 1','time values:'
+         write(iunit,'(999999(es12.5,/))') this%time
+         ! Close the case file
+         close(iunit)
+      end if
+      
+      ! Generate the surface geometry filename
+      filename='ensight/'//trim(this%name)//'/'//trim(surf%name)//'/'//trim(surf%name)//'.'
+      write(filename(len_trim(filename)+1:len_trim(filename)+6),'(i6.6)') this%ntime
+      
+      ! Write polygonal mesh in Ensight Gold 'nsided' format
+      do rank=0,this%cfg%nproc-1
+         if (rank.eq.this%cfg%rank) then
+            if (rank.eq.0) then
+               ! Open the file
+               open(newunit=iunit,file=trim(filename),form='unformatted',status='replace',access='stream',iostat=ierr)
+               if (ierr.ne.0) call die('[ensight write surf] Could not open file: '//trim(filename))
+               ! General geometry header
+               cbuff='C Binary'                          ; write(iunit) cbuff
+               cbuff='Ensight Gold Geometry File'        ; write(iunit) cbuff
+               cbuff=trim(adjustl(surf%ptr%name))        ; write(iunit) cbuff
+               cbuff='node id off'                       ; write(iunit) cbuff
+               cbuff='element id off'                    ; write(iunit) cbuff
+               ! Extents
+               cbuff='extents'                           ; write(iunit) cbuff
+               rbuff=real(this%cfg%x(this%cfg%imin  ),SP); write(iunit) rbuff
+               rbuff=real(this%cfg%x(this%cfg%imax+1),SP); write(iunit) rbuff
+               rbuff=real(this%cfg%y(this%cfg%jmin  ),SP); write(iunit) rbuff
+               rbuff=real(this%cfg%y(this%cfg%jmax+1),SP); write(iunit) rbuff
+               rbuff=real(this%cfg%z(this%cfg%kmin  ),SP); write(iunit) rbuff
+               rbuff=real(this%cfg%z(this%cfg%kmax+1),SP); write(iunit) rbuff
+               ! Part header
+               cbuff='part'                              ; write(iunit) cbuff
+               ibuff=rank+1                              ; write(iunit) ibuff
+               cbuff='Surface geometry per processor'    ; write(iunit) cbuff
+               ! Write out vertices
+               cbuff='coordinates'                       ; write(iunit) cbuff
+               ibuff=surf%ptr%nVert                      ; write(iunit) ibuff
+               write(iunit) real(surf%ptr%xVert,SP)
+               write(iunit) real(surf%ptr%yVert,SP)
+               write(iunit) real(surf%ptr%zVert,SP)
+               ! Write out polygons
+               cbuff='nsided'                            ; write(iunit) cbuff
+               ibuff=surf%ptr%nPoly                      ; write(iunit) ibuff
+               write(iunit) surf%ptr%polySize
+               write(iunit) surf%ptr%polyConn
+               ! Close the file
+               close(iunit)
+            else
+               ! Open the file
+               open(newunit=iunit,file=trim(filename),form='unformatted',status='old',access='stream',iostat=ierr)
+               if (ierr.ne.0) call die('[ensight write surf] Could not open file: '//trim(filename))
+               ! Part header
+               cbuff='part'                              ; write(iunit) cbuff
+               ibuff=rank+1                              ; write(iunit) ibuff
+               cbuff='Surface geometry per processor'    ; write(iunit) cbuff
+               ! Write out vertices
+               cbuff='coordinates'                       ; write(iunit) cbuff
+               ibuff=surf%ptr%nVert                      ; write(iunit) ibuff
+               write(iunit) real(surf%ptr%xVert,SP)
+               write(iunit) real(surf%ptr%yVert,SP)
+               write(iunit) real(surf%ptr%zVert,SP)
+               ! Write out polygons
+               cbuff='nsided'                            ; write(iunit) cbuff
+               ibuff=surf%ptr%nPoly                      ; write(iunit) ibuff
+               write(iunit) surf%ptr%polySize
+               write(iunit) surf%ptr%polyConn
+               ! Close the file
+               close(iunit)
+            end if
+         end if
+         ! Force synchronization
+         call MPI_BARRIER(this%cfg%comm,ierr)
+      end do
+      
+   end subroutine write_surf
    
    
 end module ensight_class

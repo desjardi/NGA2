@@ -144,7 +144,7 @@ module vfs_class
       procedure :: distance_from_polygon                  !< Build a signed distance field from the polygonalized interface
       procedure :: subcell_volume                         !< Build a subcell phasic volumes from reconstructed interface
       procedure :: reset_volume_moments                   !< Reconstruct volume moments from IRL interfaces
-      procedure :: update_surface_mesh                    !< Create a simple surface mesh from the IRL polygons
+      procedure :: update_surfgrid                        !< Create a simple surface mesh from the IRL polygons
       procedure :: get_curvature                          !< Compute curvature from IRL surface polygons
       procedure :: paraboloid_fit                         !< Perform local paraboloid fit of IRL surface
       procedure :: get_max                                !< Calculate maximum field values
@@ -792,12 +792,10 @@ contains
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: U     !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: V     !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: W     !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
-      integer :: i,j,k,ii,jj,kk,n,t,vt
+      integer :: i,j,k,ii,n,t,vt
       integer :: list_size,localizer_id
       type(TagAccListVM_VMAN_type) :: accumulated_moments_from_tri
       type(ListVM_VMAN_type) :: moments_list_from_tri
-      type(VMAN_type) :: volume_moments_and_normal
-      real(IRL_double), dimension(1:3) :: stored_normal
       type(DivPoly_type) :: divided_polygon
       type(Tri_type) :: triangle
       real(IRL_double), dimension(1:4) :: plane_data
@@ -1182,13 +1180,13 @@ contains
       end do
       
       ! Finally, update the basic unstructured surface mesh representation of our polygons
-      call this%update_surface_mesh()
+      call this%update_surfgrid()
       
    end subroutine polygonalize_interface
    
    
    !> Create a basic surface mesh from our IRL polygons
-   subroutine update_surface_mesh(this)
+   subroutine update_surfgrid(this)
       implicit none
       class(vfs), intent(inout) :: this
       integer :: i,j,k,n,shape,nv,np,nplane
@@ -1254,7 +1252,7 @@ contains
          this%surfgrid%polyConn(1:3)=[1,2,3]
       end if
       
-   end subroutine update_surface_mesh
+   end subroutine update_surfgrid
    
    
    !> Calculate distance from polygonalized interface inside the band
@@ -1456,7 +1454,7 @@ contains
       real(WP), intent(out) :: mycurv
       ! Variables used to process the polygonal surface
       real(WP), dimension(3) :: pref,nref,tref,sref
-      real(WP), dimension(3) :: ploc,nloc,tloc,sloc
+      real(WP), dimension(3) :: ploc,nloc
       real(WP), dimension(3) :: buf
       real(WP) :: surf,ww
       integer :: ii,jj,kk,ndata,info
