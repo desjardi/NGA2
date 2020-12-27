@@ -144,6 +144,8 @@ contains
          call param_read('Ensight output period',ens_evt%tper)
          ! Add variables to output
          call ens_out%add_scalar('VOF',vf%VF)
+         call ens_out%add_scalar('curvature',vf%curv)
+         call ens_out%add_surface('vofplic',vf%surfgrid)
          ! Output to ensight
          if (ens_evt%occurs()) call ens_out%write_data(time%t)
       end block create_ensight
