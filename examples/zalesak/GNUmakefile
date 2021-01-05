@@ -8,7 +8,7 @@ USE_HYPRE = TRUE
 USE_LAPACK= TRUE
 USE_IRL   = TRUE
 PROFILE   = FALSE
-DEBUG     = TRUE
+DEBUG     = FALSE
 COMP      = gnu
 EXEBASE   = nga
 
@@ -32,7 +32,7 @@ IRL_DIR   = /Users/desjardi/Builds/IRL
 include $(NGA_HOME)/tools/GNUMake/Make.defs
 
 # Include NGA base code
-Bdirs   := core two_phase variable_density constant_density data solver config grid libraries
+Bdirs   := core two_phase data solver config grid libraries
 Bpack   += $(foreach dir, $(Bdirs), $(NGA_HOME)/src/$(dir)/Make.package)
 include $(Bpack)
 

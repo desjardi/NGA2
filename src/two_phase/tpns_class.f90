@@ -153,7 +153,6 @@ contains
       self%first_bc=>NULL()
       
       ! Allocate flow variables
-      allocate(self%VOF(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%VOF=0.0_WP
       allocate(self%U  (self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%U=0.0_WP
       allocate(self%V  (self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%V=0.0_WP
       allocate(self%W  (self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%W=0.0_WP
@@ -163,7 +162,6 @@ contains
       allocate(self%div(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%div=0.0_WP
       
       ! Allocate old flow variables
-      allocate(self%VOFold(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%VOFold=0.0_WP
       allocate(self%Uold  (self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%Uold=0.0_WP
       allocate(self%Vold  (self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%Vold=0.0_WP
       allocate(self%Wold  (self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%Wold=0.0_WP
@@ -1242,8 +1240,8 @@ contains
                my_Umax  =max(my_Umax  ,abs(this%U(i,j,k)  ))
                my_Vmax  =max(my_Vmax  ,abs(this%V(i,j,k)  ))
                my_Wmax  =max(my_Wmax  ,abs(this%W(i,j,k)  ))
-               my_Pmax  =max(my_Pmax  ,abs(this%P(i,j,k)  ))
-               my_divmax=max(my_divmax,abs(this%div(i,j,k)))
+               if (this%cfg%VF(i,j,k).gt.0.0_WP) my_Pmax  =max(my_Pmax  ,abs(this%P(i,j,k)  ))
+               if (this%cfg%VF(i,j,k).gt.0.0_WP) my_divmax=max(my_divmax,abs(this%div(i,j,k)))
             end do
          end do
       end do
