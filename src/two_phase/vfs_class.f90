@@ -14,6 +14,9 @@ module vfs_class
    ! Expose type/constructor/methods
    public :: vfs,bcond
    
+   ! Also expose the min and max VF values
+   public :: VFhi,VFlo
+   
    ! List of known available bcond for this solver
    integer, parameter, public :: dirichlet=2         !< Dirichlet condition
    integer, parameter, public :: neumann=3           !< Zero normal gradient
@@ -31,7 +34,7 @@ module vfs_class
    integer, parameter, public :: nonrecurs_simplex=2 !< Non-recursive simplex cutting
    
    ! Default parameters for volume fraction solver
-   integer,  parameter :: nband=5                                 !< Number of cells around the interfacial cells on which localized work is performed
+   integer,  parameter :: nband=3                                 !< Number of cells around the interfacial cells on which localized work is performed
    integer,  parameter :: advect_band=2                           !< How far we do the transport
    integer,  parameter :: distance_band=2                         !< How far we build the distance
    integer,  parameter :: max_interface_planes=2                  !< Maximum number of interfaces allowed (2 for R2P)
@@ -82,6 +85,7 @@ module vfs_class
       real(WP), dimension(:,:,:), allocatable :: SD       !< Surface density array
       
       ! Distance level set
+      real(WP) :: Gclip                                   !< Min/max distance
       real(WP), dimension(:,:,:), allocatable :: G        !< Distance level set array
       
       ! Curvature
@@ -148,6 +152,7 @@ module vfs_class
       procedure :: get_curvature                          !< Compute curvature from IRL surface polygons
       procedure :: paraboloid_fit                         !< Perform local paraboloid fit of IRL surface
       procedure :: get_max                                !< Calculate maximum field values
+      procedure :: get_cfl                                !< Get CFL for the VF solver
    end type vfs
    
    
@@ -172,6 +177,9 @@ contains
       ! Set the name for the solver
       if (present(name)) self%name=trim(adjustl(name))
       
+      ! Check that we have at least 2 overlap cells
+      if (cfg%no.lt.2) call die('[vfs constructor] The config requires at least 2 overlap cells')
+      
       ! Point to pgrid object
       self%cfg=>cfg
       
@@ -187,6 +195,9 @@ contains
       allocate(self%SD   (  self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%SD   =0.0_WP
       allocate(self%G    (  self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%G    =0.0_WP
       allocate(self%curv (  self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%curv =0.0_WP
+      
+      ! Set clipping distance
+      self%Gclip=real(distance_band+1,WP)*self%cfg%min_meshsize
       
       ! Subcell phase volume data
       allocate(self%Lvol(0:1,0:1,0:1,self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%Lvol=0.0_WP
@@ -984,6 +995,7 @@ contains
    
    !> LVIRA reconstruction of a planar interface in mixed cells
    subroutine build_lvira(this)
+      use mathtools, only: normalize
       implicit none
       class(vfs), intent(inout) :: this
       integer(IRL_SignedIndex_t) :: i,j,k
@@ -991,8 +1003,8 @@ contains
       type(LVIRANeigh_RectCub_type) :: neighborhood
       type(RectCub_type), dimension(0:26) :: neighborhood_cells
       real(IRL_double)  , dimension(0:26) :: liquid_volume_fraction
-      real(IRL_double), dimension(3) :: initial_normal
-      real(IRL_double) :: initial_distance
+      real(IRL_double), dimension(3) :: initial_norm
+      real(IRL_double) :: initial_dist
       
       ! Give ourselves an LVIRA neighborhood of 27 cells
       call new(neighborhood)
@@ -1027,7 +1039,7 @@ contains
                         ! Build the cell
                         call construct_2pt(neighborhood_cells(ind),[this%cfg%x(ii),this%cfg%y(jj),this%cfg%z(kk)],[this%cfg%x(ii+1),this%cfg%y(jj+1),this%cfg%z(kk+1)])
                         ! Assign volume fraction
-                        liquid_volume_fraction(ind)=this%cfg%VF(ii,jj,kk)
+                        liquid_volume_fraction(ind)=this%VF(ii,jj,kk)
                         ! Trap and set stencil center
                         if (ii.eq.i.and.jj.eq.j.and.kk.eq.k) then
                            icenter=ind
@@ -1041,11 +1053,9 @@ contains
                
                ! Formulate initial guess
                call setNumberOfPlanes(this%liquid_gas_interface(i,j,k),1)
-               initial_normal   = this%Gbary(:,i,j,k) - this%Lbary(:,i,j,k)
-               initial_distance = sqrt(sum(initial_normal**2.0_WP))
-               initial_normal   = initial_normal/(initial_distance+tiny(1.0_WP))
-               initial_distance = dot_product(initial_normal,[this%cfg%xm(i),this%cfg%ym(j),this%cfg%zm(k)])
-               call setPlane(this%liquid_gas_interface(i,j,k),0,initial_normal,initial_distance)
+               initial_norm=normalize(this%Gbary(:,i,j,k)-this%Lbary(:,i,j,k))
+               initial_dist=dot_product(initial_norm,[this%cfg%xm(i),this%cfg%ym(j),this%cfg%zm(k)])
+               call setPlane(this%liquid_gas_interface(i,j,k),0,initial_norm,initial_dist)
                call matchVolumeFraction(neighborhood_cells(icenter),this%VF(i,j,k),this%liquid_gas_interface(i,j,k))
                
                ! Perform the reconstruction
@@ -1240,16 +1250,16 @@ contains
                end do
             end do
          end do
-      else
-         ! Add a zero-area triangle if this proc doesn't have one
-         np=1; nv=3
-         call this%surfgrid%set_size(nvert=nv,npoly=np)
-         allocate(this%surfgrid%polyConn(this%surfgrid%nVert)) ! Also allocate naive connectivity
-         this%surfgrid%xVert(1:3)=this%cfg%x(this%cfg%imin)
-         this%surfgrid%yVert(1:3)=this%cfg%y(this%cfg%jmin)
-         this%surfgrid%zVert(1:3)=this%cfg%z(this%cfg%kmin)
-         this%surfgrid%polySize(1)=3
-         this%surfgrid%polyConn(1:3)=[1,2,3]
+      !else
+      !   ! Add a zero-area triangle if this proc doesn't have one
+      !   np=1; nv=3
+      !   call this%surfgrid%set_size(nvert=nv,npoly=np)
+      !   allocate(this%surfgrid%polyConn(this%surfgrid%nVert)) ! Also allocate naive connectivity
+      !   this%surfgrid%xVert(1:3)=this%cfg%x(this%cfg%imin)
+      !   this%surfgrid%yVert(1:3)=this%cfg%y(this%cfg%jmin)
+      !   this%surfgrid%zVert(1:3)=this%cfg%z(this%cfg%kmin)
+      !   this%surfgrid%polySize(1)=3
+      !   this%surfgrid%polyConn(1:3)=[1,2,3]
       end if
       
    end subroutine update_surfgrid
@@ -1261,7 +1271,6 @@ contains
       implicit none
       class(vfs), intent(inout) :: this
       integer :: ni,i,j,k,ii,jj,kk,index
-      real(WP) :: clipdist
       real(IRL_double), dimension(3) :: pos,nearest_pt
       
       ! First reset distance
@@ -1298,7 +1307,7 @@ contains
       do k=this%cfg%kmin_,this%cfg%kmax_
          do j=this%cfg%jmin_,this%cfg%jmax_
             do i=this%cfg%imin_,this%cfg%imax_
-               if (abs(this%G(i,j,k)).gt.clipdist) this%G(i,j,k)=sign(3.0_WP*this%cfg%min_meshsize,this%VF(i,j,k)-0.5_WP)
+               if (abs(this%G(i,j,k)).gt.this%Gclip) this%G(i,j,k)=sign(this%Gclip,this%VF(i,j,k)-0.5_WP)
             end do
          end do
       end do
@@ -2163,7 +2172,7 @@ contains
             end do
          end do
       end if
-      ! Fix plane posistion if we are periodic in y
+      ! Fix plane position if we are periodic in y
       if (this%cfg%yper.and.this%cfg%jproc.eq.1) then
          do k=this%cfg%kmino_,this%cfg%kmaxo_
             do j=this%cfg%jmino,this%cfg%jmin-1
@@ -2261,10 +2270,10 @@ contains
       use mpi_f08
       implicit none
       class(vfs), intent(inout) :: this
-      type(ByteBuffer_type), intent(in)  :: a_send_buffer
+      type(ByteBuffer_type), intent(inout)  :: a_send_buffer !< Inout needed because it is preallocated
       integer, intent(in) :: a_dimension  !< Should be 0/1/2 for x/y/z
       integer, intent(in) :: a_direction  !< Should be -1 for left or +1 for right
-      type(ByteBuffer_type), intent(out) :: a_receive_buffer
+      type(ByteBuffer_type), intent(inout) :: a_receive_buffer !< Inout needed because it is preallocated
       logical, intent(out) :: a_received_something
       type(MPI_Status) :: status
       integer :: isrc,idst,ierr
@@ -2292,6 +2301,39 @@ contains
    end subroutine sync_ByteBuffer
    
    
+   !> Calculate the CFL
+   subroutine get_cfl(this,dt,U,V,W,cfl)
+      use mpi_f08,  only: MPI_ALLREDUCE,MPI_MAX
+      use parallel, only: MPI_REAL_WP
+      implicit none
+      class(vfs), intent(inout) :: this
+      real(WP), intent(in)  :: dt
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in) :: U     !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in) :: V     !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in) :: W     !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      real(WP), intent(out) :: cfl
+      integer :: i,j,k,ierr
+      real(WP) :: my_CFL
+      
+      ! Set the CFL to zero
+      my_CFL=0.0_WP
+      do k=this%cfg%kmin_,this%cfg%kmax_
+         do j=this%cfg%jmin_,this%cfg%jmax_
+            do i=this%cfg%imin_,this%cfg%imax_
+               my_CFL=max(my_CFL,abs(U(i,j,k))*this%cfg%dxmi(i))
+               my_CFL=max(my_CFL,abs(V(i,j,k))*this%cfg%dymi(j))
+               my_CFL=max(my_CFL,abs(W(i,j,k))*this%cfg%dzmi(k))
+            end do
+         end do
+      end do
+      my_CFL=my_CFL*dt
+      
+      ! Get the parallel max
+      call MPI_ALLREDUCE(my_CFL,cfl,1,MPI_REAL_WP,MPI_MAX,this%cfg%comm,ierr)
+      
+   end subroutine get_cfl
+   
+   
    !> Print out info for vf solver
    subroutine vfs_print(this)
       use, intrinsic :: iso_fortran_env, only: output_unit
@@ -2302,6 +2344,6 @@ contains
          write(output_unit,'("Volume fraction solver [",a,"] for config [",a,"]")') trim(this%name),trim(this%cfg%name)
       end if
    end subroutine vfs_print
-
+   
 
 end module vfs_class

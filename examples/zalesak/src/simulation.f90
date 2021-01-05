@@ -66,11 +66,10 @@ contains
       use param, only: param_read
       implicit none
       
-      
       ! Initialize our VOF
       initialize_vof: block
          use mms_geom, only: cube_refine_vol
-         use vfs_class, only: lvira
+         use vfs_class, only: lvira,VFhi,VFlo
          integer :: i,j,k,n,si,sj,sk
          real(WP), dimension(3,8) :: cube_vertex
          real(WP), dimension(3) :: v_cent,a_cent
@@ -95,13 +94,34 @@ contains
                         end do
                      end do
                   end do
-                  ! Call adaptive refinement code to get volume recursively
+                  ! Call adaptive refinement code to get volume and barycenters recursively
                   vol=0.0_WP; area=0.0_WP; v_cent=0.0_WP; a_cent=0.0_WP
                   call cube_refine_vol(cube_vertex,vol,area,v_cent,a_cent,levelset_zalesak,0.0_WP,amr_ref_lvl)
                   vf%VF(i,j,k)=vol/vf%cfg%vol(i,j,k)
+                  if (vf%VF(i,j,k).ge.VFlo.and.vf%VF(i,j,k).le.VFhi) then
+                     vf%Lbary(:,i,j,k)=v_cent
+                     vf%Gbary(:,i,j,k)=([vf%cfg%xm(i),vf%cfg%ym(j),vf%cfg%zm(k)]-vf%VF(i,j,k)*vf%Lbary(:,i,j,k))/(1.0_WP-vf%VF(i,j,k))
+                  else
+                     vf%Lbary(:,i,j,k)=[vf%cfg%xm(i),vf%cfg%ym(j),vf%cfg%zm(k)]
+                     vf%Gbary(:,i,j,k)=[vf%cfg%xm(i),vf%cfg%ym(j),vf%cfg%zm(k)]
+                  end if
                end do
             end do
          end do
+         ! Update the band
+         call vf%update_band()
+         ! Perform interface reconstruction from VOF field
+         call vf%build_interface()
+         ! Create discontinuous polygon mesh from IRL interface
+         call vf%polygonalize_interface()
+         ! Calculate distance from polygons
+         call vf%distance_from_polygon()
+         ! Calculate subcell phasic volume
+         call vf%subcell_volume()
+         ! Calculate curvature
+         call vf%get_curvature()
+         ! Reset moments to guarantee compatibility with interface reconstruction
+         call vf%reset_volume_moments()
       end block initialize_vof
       
       
@@ -166,7 +186,6 @@ contains
          call mfile%write()
       end block create_monitor
       
-      
    end subroutine simulation_init
    
    
@@ -178,6 +197,8 @@ contains
       do while (.not.time%done())
          
          ! Increment time
+         call vf%get_cfl(dt=time%dt,U=U,V=V,W=W,cfl=time%cfl)
+         call time%adjust_dt()
          call time%increment()
          
          ! Remember old VOF
@@ -187,13 +208,7 @@ contains
          do while (time%it.le.time%itmax)
             
             ! ================ VOF SOLVER =======================
-            
-            ! Time advance
             call vf%advance(dt=time%dt,U=U,V=V,W=W)
-            
-            ! Reconstruct interface
-            
-            
             ! ===================================================
             
             ! Increment sub-iteration counter

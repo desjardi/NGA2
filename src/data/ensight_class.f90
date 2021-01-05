@@ -521,31 +521,43 @@ contains
       filename='ensight/'//trim(this%name)//'/'//trim(surf%name)//'/'//trim(surf%name)//'.'
       write(filename(len_trim(filename)+1:len_trim(filename)+6),'(i6.6)') this%ntime
       
+      ! Write the file header for Ensight Gold unstructured geometry
+      if (this%cfg%amRoot) then
+         ! Open the file
+         open(newunit=iunit,file=trim(filename),form='unformatted',status='replace',access='stream',iostat=ierr)
+         if (ierr.ne.0) call die('[ensight write surf] Could not open file: '//trim(filename))
+         ! General geometry header
+         cbuff='C Binary'                          ; write(iunit) cbuff
+         cbuff='Ensight Gold Geometry File'        ; write(iunit) cbuff
+         cbuff=trim(adjustl(surf%ptr%name))        ; write(iunit) cbuff
+         cbuff='node id off'                       ; write(iunit) cbuff
+         cbuff='element id off'                    ; write(iunit) cbuff
+         ! Extents
+         cbuff='extents'                           ; write(iunit) cbuff
+         rbuff=real(this%cfg%x(this%cfg%imin  ),SP); write(iunit) rbuff
+         rbuff=real(this%cfg%x(this%cfg%imax+1),SP); write(iunit) rbuff
+         rbuff=real(this%cfg%y(this%cfg%jmin  ),SP); write(iunit) rbuff
+         rbuff=real(this%cfg%y(this%cfg%jmax+1),SP); write(iunit) rbuff
+         rbuff=real(this%cfg%z(this%cfg%kmin  ),SP); write(iunit) rbuff
+         rbuff=real(this%cfg%z(this%cfg%kmax+1),SP); write(iunit) rbuff
+         ! Close the file
+         close(iunit)
+      end if
+      
       ! Write polygonal mesh in Ensight Gold 'nsided' format
       do rank=0,this%cfg%nproc-1
          if (rank.eq.this%cfg%rank) then
-            if (rank.eq.0) then
-               ! Open the file
-               open(newunit=iunit,file=trim(filename),form='unformatted',status='replace',access='stream',iostat=ierr)
-               if (ierr.ne.0) call die('[ensight write surf] Could not open file: '//trim(filename))
-               ! General geometry header
-               cbuff='C Binary'                          ; write(iunit) cbuff
-               cbuff='Ensight Gold Geometry File'        ; write(iunit) cbuff
-               cbuff=trim(adjustl(surf%ptr%name))        ; write(iunit) cbuff
-               cbuff='node id off'                       ; write(iunit) cbuff
-               cbuff='element id off'                    ; write(iunit) cbuff
-               ! Extents
-               cbuff='extents'                           ; write(iunit) cbuff
-               rbuff=real(this%cfg%x(this%cfg%imin  ),SP); write(iunit) rbuff
-               rbuff=real(this%cfg%x(this%cfg%imax+1),SP); write(iunit) rbuff
-               rbuff=real(this%cfg%y(this%cfg%jmin  ),SP); write(iunit) rbuff
-               rbuff=real(this%cfg%y(this%cfg%jmax+1),SP); write(iunit) rbuff
-               rbuff=real(this%cfg%z(this%cfg%kmin  ),SP); write(iunit) rbuff
-               rbuff=real(this%cfg%z(this%cfg%kmax+1),SP); write(iunit) rbuff
-               ! Part header
-               cbuff='part'                              ; write(iunit) cbuff
-               ibuff=rank+1                              ; write(iunit) ibuff
-               cbuff='Surface geometry per processor'    ; write(iunit) cbuff
+            ! Open the file
+            open(newunit=iunit,file=trim(filename),form='unformatted',status='old',access='stream',position='append',iostat=ierr)
+            if (ierr.ne.0) call die('[ensight write surf] Could not open file: '//trim(filename))
+            ! Part header
+            cbuff='part'                              ; write(iunit) cbuff
+            ibuff=rank+1                              ; write(iunit) ibuff
+            cbuff='Surface geometry per processor #'
+            write(cbuff(len_trim(cbuff)+1:len_trim(cbuff)+6),'(i6.6)') this%cfg%rank
+            write(iunit) cbuff
+            ! Write part info if it exists on the processor
+            if (surf%ptr%nPoly.gt.0) then
                ! Write out vertices
                cbuff='coordinates'                       ; write(iunit) cbuff
                ibuff=surf%ptr%nVert                      ; write(iunit) ibuff
@@ -557,30 +569,9 @@ contains
                ibuff=surf%ptr%nPoly                      ; write(iunit) ibuff
                write(iunit) surf%ptr%polySize
                write(iunit) surf%ptr%polyConn
-               ! Close the file
-               close(iunit)
-            else
-               ! Open the file
-               open(newunit=iunit,file=trim(filename),form='unformatted',status='old',access='stream',iostat=ierr)
-               if (ierr.ne.0) call die('[ensight write surf] Could not open file: '//trim(filename))
-               ! Part header
-               cbuff='part'                              ; write(iunit) cbuff
-               ibuff=rank+1                              ; write(iunit) ibuff
-               cbuff='Surface geometry per processor'    ; write(iunit) cbuff
-               ! Write out vertices
-               cbuff='coordinates'                       ; write(iunit) cbuff
-               ibuff=surf%ptr%nVert                      ; write(iunit) ibuff
-               write(iunit) real(surf%ptr%xVert,SP)
-               write(iunit) real(surf%ptr%yVert,SP)
-               write(iunit) real(surf%ptr%zVert,SP)
-               ! Write out polygons
-               cbuff='nsided'                            ; write(iunit) cbuff
-               ibuff=surf%ptr%nPoly                      ; write(iunit) ibuff
-               write(iunit) surf%ptr%polySize
-               write(iunit) surf%ptr%polyConn
-               ! Close the file
-               close(iunit)
             end if
+            ! Close the file
+            close(iunit)
          end if
          ! Force synchronization
          call MPI_BARRIER(this%cfg%comm,ierr)
