@@ -1705,16 +1705,31 @@ contains
    
    !> Calculate the CFL
    subroutine get_cfl(this,dt,cflc,cfl)
-      use mpi_f08,  only: MPI_ALLREDUCE,MPI_MAX
-      use parallel, only: MPI_REAL_WP
+      use mpi_f08,   only: MPI_ALLREDUCE,MPI_MAX,MPI_MIN
+      use parallel,  only: MPI_REAL_WP
+      use mathtools, only: Pi
       implicit none
       class(tpns), intent(inout) :: this
       real(WP), intent(in)  :: dt
       real(WP), intent(out) :: cflc
       real(WP), optional :: cfl
       integer :: i,j,k,ierr
-      real(WP) :: my_CFLc_x,my_CFLc_y,my_CFLc_z,my_CFLv_x,my_CFLv_y,my_CFLv_z
+      real(WP) :: my_CFLc_x,my_CFLc_y,my_CFLc_z,my_CFLv_x,my_CFLv_y,my_CFLv_z,my_CFLst
       real(WP) :: max_nu
+      
+      ! Get surface tension CFL first
+      my_CFLst=huge(1.0_WP)
+      if (this%sigma.gt.0.0_WP) then
+         do k=this%cfg%kmin_,this%cfg%kmax_
+            do j=this%cfg%jmin_,this%cfg%jmax_
+               do i=this%cfg%imin_,this%cfg%imax_
+                  my_CFLst=min(my_CFLst,sqrt((this%rho_l+this%rho_g)*this%cfg%meshsize(i,j,k)**3.0_WP/(4.0_WP*Pi*this%sigma)))
+               end do
+            end do
+         end do
+      end if
+      call MPI_ALLREDUCE(my_CFLst,this%CFLst,1,MPI_REAL_WP,MPI_MIN,this%cfg%comm,ierr)
+      this%CFLst=dt/this%CFLst
       
       ! Get largest kinematic viscosity
       max_nu=max(this%visc_l/this%rho_l,this%visc_g/this%rho_g)
