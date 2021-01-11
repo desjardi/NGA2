@@ -22,6 +22,9 @@ module tpns_class
    integer, parameter, public :: convective=4        !< Convective outflow condition
    integer, parameter, public :: clipped_neumann=5   !< Clipped Neumann condition (outflow only)
    
+   ! List of available contact line models for this solver
+   integer, parameter, public :: static_contact=1    !< Static contact line model
+   
    ! Parameter for switching schemes around the interface
    real(WP), parameter :: rhoeps_coeff=1.0e-3_WP     !< Parameter for deciding when to switch to upwinded transport
    
@@ -85,6 +88,13 @@ module tpns_class
       real(WP), dimension(:,:,:), allocatable :: V        !< V velocity array
       real(WP), dimension(:,:,:), allocatable :: W        !< W velocity array
       real(WP), dimension(:,:,:), allocatable :: P        !< Pressure array
+      real(WP), dimension(:,:,:), allocatable :: Pjx      !< Pressure jump to add to -dP/dx
+      real(WP), dimension(:,:,:), allocatable :: Pjy      !< Pressure jump to add to -dP/dy
+      real(WP), dimension(:,:,:), allocatable :: Pjz      !< Pressure jump to add to -dP/dz
+      real(WP), dimension(:,:,:), allocatable :: dPjx     !< dPressure jump to add to -ddP/dx
+      real(WP), dimension(:,:,:), allocatable :: dPjy     !< dPressure jump to add to -ddP/dy
+      real(WP), dimension(:,:,:), allocatable :: dPjz     !< dPressure jump to add to -ddP/dz
+      
       
       ! Old flow variables
       real(WP), dimension(:,:,:), allocatable :: Uold     !< Uold velocity array
@@ -147,6 +157,7 @@ module tpns_class
       procedure :: get_dmomdt                             !< Calculate dmom/dt
       procedure :: get_div                                !< Calculate velocity divergence
       procedure :: get_pgrad                              !< Calculate pressure gradient
+      procedure :: update_laplacian                       !< Update the pressure Laplacian div(1/rho*grad(.))
       procedure :: get_cfl                                !< Calculate maximum CFL
       procedure :: get_max                                !< Calculate maximum field values
       procedure :: interp_vel                             !< Calculate interpolated velocity
@@ -157,7 +168,8 @@ module tpns_class
       procedure :: get_olddensity_from_subvf              !< Calculate old density fields from subcell volume fraction array (probably from a vfs object)
       procedure :: solve_implicit                         !< Solve for the velocity residuals implicitly
       
-      procedure :: addsrc_gravity                         !< Gravitational body force
+      procedure :: addsrc_gravity                         !< Add gravitational body force
+      procedure :: add_surface_tension_jump               !< Add surface tension jump
       
    end type tpns
    
@@ -193,6 +205,12 @@ contains
       allocate(self%V(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%V=0.0_WP
       allocate(self%W(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%W=0.0_WP
       allocate(self%P(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%P=0.0_WP
+      allocate(self%Pjx(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%Pjx=0.0_WP
+      allocate(self%Pjy(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%Pjy=0.0_WP
+      allocate(self%Pjz(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%Pjz=0.0_WP
+      allocate(self%dPjx(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%dPjx=0.0_WP
+      allocate(self%dPjy(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%dPjy=0.0_WP
+      allocate(self%dPjz(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%dPjz=0.0_WP
       allocate(self%rho_U(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%rho_U=0.0_WP
       allocate(self%rho_V(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%rho_V=0.0_WP
       allocate(self%rho_W(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%rho_W=0.0_WP
@@ -665,7 +683,6 @@ contains
       class(tpns), intent(inout) :: this
       integer, intent(in) :: pressure_ils
       integer, intent(in) :: implicit_ils
-      integer :: i,j,k
       
       ! Adjust metrics based on bcflag array
       call this%adjust_metrics()
@@ -678,29 +695,6 @@ contains
       this%psolv%stc(5,:)=[ 0,-1, 0]
       this%psolv%stc(6,:)=[ 0, 0,+1]
       this%psolv%stc(7,:)=[ 0, 0,-1]
-      
-      ! Setup the scaled Laplacian operator from incomp metrics: lap(*)=-vol*div(grad(*))
-      do k=this%cfg%kmin_,this%cfg%kmax_
-         do j=this%cfg%jmin_,this%cfg%jmax_
-            do i=this%cfg%imin_,this%cfg%imax_
-               ! Set Laplacian
-               this%psolv%opr(1,i,j,k)=this%divp_x(1,i,j,k)*this%divu_x(-1,i+1,j,k)+&
-               &                       this%divp_x(0,i,j,k)*this%divu_x( 0,i  ,j,k)+&
-               &                       this%divp_y(1,i,j,k)*this%divv_y(-1,i,j+1,k)+&
-               &                       this%divp_y(0,i,j,k)*this%divv_y( 0,i,j  ,k)+&
-               &                       this%divp_z(1,i,j,k)*this%divw_z(-1,i,j,k+1)+&
-               &                       this%divp_z(0,i,j,k)*this%divw_z( 0,i,j,k  )
-               this%psolv%opr(2,i,j,k)=this%divp_x(1,i,j,k)*this%divu_x( 0,i+1,j,k)
-               this%psolv%opr(3,i,j,k)=this%divp_x(0,i,j,k)*this%divu_x(-1,i  ,j,k)
-               this%psolv%opr(4,i,j,k)=this%divp_y(1,i,j,k)*this%divv_y( 0,i,j+1,k)
-               this%psolv%opr(5,i,j,k)=this%divp_y(0,i,j,k)*this%divv_y(-1,i,j  ,k)
-               this%psolv%opr(6,i,j,k)=this%divp_z(1,i,j,k)*this%divw_z( 0,i,j,k+1)
-               this%psolv%opr(7,i,j,k)=this%divp_z(0,i,j,k)*this%divw_z(-1,i,j,k  )
-               ! Scale it by the cell volume
-               this%psolv%opr(:,i,j,k)=-this%psolv%opr(:,i,j,k)*this%cfg%vol(i,j,k)
-            end do
-         end do
-      end do
       
       ! Initialize the pressure Poisson solver
       call this%psolv%init_solver(pressure_ils)
@@ -1450,7 +1444,7 @@ contains
             do i=this%cfg%imin_,this%cfg%imax_
                drhoUdt(i,j,k)=sum(this%divu_x(:,i,j,k)*this%FUX(i-1:i,j,k))+&
                &              sum(this%divu_y(:,i,j,k)*this%FUY(i,j:j+1,k))+&
-               &              sum(this%divu_z(:,i,j,k)*this%FUZ(i,j,k:k+1))
+               &              sum(this%divu_z(:,i,j,k)*this%FUZ(i,j,k:k+1))+this%Pjx(i,j,k)
             end do
          end do
       end do
@@ -1485,7 +1479,7 @@ contains
             do i=this%cfg%imin_,this%cfg%imax_
                drhoVdt(i,j,k)=sum(this%divv_x(:,i,j,k)*this%FVX(i:i+1,j,k))+&
                &              sum(this%divv_y(:,i,j,k)*this%FVY(i,j-1:j,k))+&
-               &              sum(this%divv_z(:,i,j,k)*this%FVZ(i,j,k:k+1))
+               &              sum(this%divv_z(:,i,j,k)*this%FVZ(i,j,k:k+1))+this%Pjy(i,j,k)
             end do
          end do
       end do
@@ -1520,7 +1514,7 @@ contains
             do i=this%cfg%imin_,this%cfg%imax_
                drhoWdt(i,j,k)=sum(this%divw_x(:,i,j,k)*this%FWX(i:i+1,j,k))+&
                &              sum(this%divw_y(:,i,j,k)*this%FWY(i,j:j+1,k))+&
-               &              sum(this%divw_z(:,i,j,k)*this%FWZ(i,j,k-1:k))
+               &              sum(this%divw_z(:,i,j,k)*this%FWZ(i,j,k-1:k))+this%Pjz(i,j,k)
             end do
          end do
       end do
@@ -1528,6 +1522,38 @@ contains
       call this%cfg%sync(drhoWdt)
       
    end subroutine get_dmomdt
+   
+   
+   !> Update pressure Poisson operator
+   subroutine update_laplacian(this)
+      implicit none
+      class(tpns), intent(inout) :: this
+      integer :: i,j,k
+      ! Setup the scaled Laplacian operator from  metrics: lap(*)=-vol.div(grad(*)/rho)
+      do k=this%cfg%kmin_,this%cfg%kmax_
+         do j=this%cfg%jmin_,this%cfg%jmax_
+            do i=this%cfg%imin_,this%cfg%imax_
+               ! Set Laplacian
+               this%psolv%opr(1,i,j,k)=this%divp_x(1,i,j,k)*this%divu_x(-1,i+1,j,k)/this%rho_U(i+1,j,k)+&
+               &                       this%divp_x(0,i,j,k)*this%divu_x( 0,i  ,j,k)/this%rho_U(i  ,j,k)+&
+               &                       this%divp_y(1,i,j,k)*this%divv_y(-1,i,j+1,k)/this%rho_V(i,j+1,k)+&
+               &                       this%divp_y(0,i,j,k)*this%divv_y( 0,i,j  ,k)/this%rho_V(i,j  ,k)+&
+               &                       this%divp_z(1,i,j,k)*this%divw_z(-1,i,j,k+1)/this%rho_W(i,j,k+1)+&
+               &                       this%divp_z(0,i,j,k)*this%divw_z( 0,i,j,k  )/this%rho_W(i,j,k  )
+               this%psolv%opr(2,i,j,k)=this%divp_x(1,i,j,k)*this%divu_x( 0,i+1,j,k)/this%rho_U(i+1,j,k)
+               this%psolv%opr(3,i,j,k)=this%divp_x(0,i,j,k)*this%divu_x(-1,i  ,j,k)/this%rho_U(i  ,j,k)
+               this%psolv%opr(4,i,j,k)=this%divp_y(1,i,j,k)*this%divv_y( 0,i,j+1,k)/this%rho_V(i,j+1,k)
+               this%psolv%opr(5,i,j,k)=this%divp_y(0,i,j,k)*this%divv_y(-1,i,j  ,k)/this%rho_V(i,j  ,k)
+               this%psolv%opr(6,i,j,k)=this%divp_z(1,i,j,k)*this%divw_z( 0,i,j,k+1)/this%rho_W(i,j,k+1)
+               this%psolv%opr(7,i,j,k)=this%divp_z(0,i,j,k)*this%divw_z(-1,i,j,k  )/this%rho_W(i,j,k  )
+               ! Scale it by the cell volume
+               this%psolv%opr(:,i,j,k)=-this%psolv%opr(:,i,j,k)*this%cfg%vol(i,j,k)
+            end do
+         end do
+      end do
+      ! Initialize the pressure Poisson solver
+      call this%psolv%update_solver()
+   end subroutine update_laplacian
    
    
    !> Calculate the velocity divergence based on U/V/W
@@ -1549,6 +1575,85 @@ contains
    end subroutine get_div
    
    
+   !> Add surface tension jump term using CSF
+   subroutine add_surface_tension_jump(this,dt,div,vf,contact_model)
+      use messager,  only: die
+      use vfs_class, only: vfs
+      implicit none
+      class(tpns), intent(inout) :: this
+      real(WP), intent(inout) :: dt     !< Timestep size over which to advance
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: div  !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      class(vfs), intent(in) :: vf
+      integer, intent(in), optional :: contact_model
+      integer :: i,j,k
+      real(WP) :: mycurv,mysurf
+      
+      ! Store old jump
+      this%DPjx=this%Pjx
+      this%DPjy=this%Pjy
+      this%DPjz=this%Pjz
+      
+      ! Calculate pressure jump
+      do k=this%cfg%kmin_,this%cfg%kmax_+1
+         do j=this%cfg%jmin_,this%cfg%jmax_+1
+            do i=this%cfg%imin_,this%cfg%imax_+1
+               ! X face
+               mysurf=sum(vf%SD(i-1:i,j,k)*this%cfg%vol(i-1:i,j,k))
+               if (mysurf.gt.0.0_WP) then
+                  mycurv=sum(vf%SD(i-1:i,j,k)*vf%curv(i-1:i,j,k)*this%cfg%vol(i-1:i,j,k))/mysurf
+               else
+                  mycurv=0.0_WP
+               end if
+               this%Pjx(i,j,k)=this%sigma*mycurv*sum(this%divu_x(:,i,j,k)*vf%VF(i-1:i,j,k))
+               ! Y face
+               mysurf=sum(vf%SD(i,j-1:j,k)*this%cfg%vol(i,j-1:j,k))
+               if (mysurf.gt.0.0_WP) then
+                  mycurv=sum(vf%SD(i,j-1:j,k)*vf%curv(i,j-1:j,k)*this%cfg%vol(i,j-1:j,k))/mysurf
+               else
+                  mycurv=0.0_WP
+               end if
+               this%Pjy(i,j,k)=this%sigma*mycurv*sum(this%divv_y(:,i,j,k)*vf%VF(i,j-1:j,k))
+               ! Z face
+               mysurf=sum(vf%SD(i,j,k-1:k)*this%cfg%vol(i,j,k-1:k))
+               if (mysurf.gt.0.0_WP) then
+                  mycurv=sum(vf%SD(i,j,k-1:k)*vf%curv(i,j,k-1:k)*this%cfg%vol(i,j,k-1:k))/mysurf
+               else
+                  mycurv=0.0_WP
+               end if
+               this%Pjz(i,j,k)=this%sigma*mycurv*sum(this%divw_z(:,i,j,k)*vf%VF(i,j,k-1:k))
+            end do
+         end do
+      end do
+      
+      ! Add wall contact force to pressure jump
+      if (present(contact_model)) then
+         select case (contact_model)
+         case (static_contact)
+            !call this%add_static_contact()
+         case default
+            call die('[tpns: add_surface_tension_jump] Unknown contact model!')
+         end select
+      end if
+      
+      ! Compute jump of DP
+      this%DPjx=this%Pjx-this%DPjx
+      this%DPjy=this%Pjy-this%DPjy
+      this%DPjz=this%Pjz-this%DPjz
+      
+      ! Add div(Pjump) to RP
+      do k=this%cfg%kmin_,this%cfg%kmax_
+         do j=this%cfg%jmin_,this%cfg%jmax_
+            do i=this%cfg%imin_,this%cfg%imax_
+               div(i,j,k)=div(i,j,k)+dt*(sum(this%divp_x(:,i,j,k)*this%DPjx(i:i+1,j,k)/this%rho_U(i:i+1,j,k))&
+               &                        +sum(this%divp_y(:,i,j,k)*this%DPjy(i,j:j+1,k)/this%rho_V(i,j:j+1,k))&
+               &                        +sum(this%divp_z(:,i,j,k)*this%DPjz(i,j,k:k+1)/this%rho_W(i,j,k:k+1)))
+            end do
+         end do
+      end do
+      
+   end subroutine add_surface_tension_jump
+   
+   
    !> Calculate the pressure gradient based on P
    subroutine get_pgrad(this,P,Pgradx,Pgrady,Pgradz)
       implicit none
@@ -1561,9 +1666,9 @@ contains
       do k=this%cfg%kmin_,this%cfg%kmax_
          do j=this%cfg%jmin_,this%cfg%jmax_
             do i=this%cfg%imin_,this%cfg%imax_
-               Pgradx(i,j,k)=sum(this%divu_x(:,i,j,k)*P(i-1:i,j,k))
-               Pgrady(i,j,k)=sum(this%divv_y(:,i,j,k)*P(i,j-1:j,k))
-               Pgradz(i,j,k)=sum(this%divw_z(:,i,j,k)*P(i,j,k-1:k))
+               Pgradx(i,j,k)=sum(this%divu_x(:,i,j,k)*P(i-1:i,j,k))-this%dPjx(i,j,k)
+               Pgrady(i,j,k)=sum(this%divv_y(:,i,j,k)*P(i,j-1:j,k))-this%dPjy(i,j,k)
+               Pgradz(i,j,k)=sum(this%divw_z(:,i,j,k)*P(i,j,k-1:k))-this%dPjz(i,j,k)
             end do
          end do
       end do
@@ -1897,6 +2002,7 @@ contains
    
    
    !> Solve for implicit velocity residual
+   !> NEED TO CHECK IMPLICITATION OF THE CONVECTIVE TERM ON THE DIAGONALS
    subroutine solve_implicit(this,dt,resU,resV,resW)
       use ils_class, only: amg
       implicit none

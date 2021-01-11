@@ -292,8 +292,10 @@ contains
             call fs%apply_bcond(time%t,time%dt)
             
             ! Solve Poisson equation
+            call fs%update_laplacian()
             call fs%correct_mfr()
             call fs%get_div()
+            call fs%add_surface_tension_jump(dt=time%dt,div=fs%div,vf=vf)
             fs%psolv%rhs=-fs%cfg%vol*fs%div/time%dt
             fs%psolv%sol=0.0_WP
             call fs%psolv%solve()
@@ -302,9 +304,9 @@ contains
             ! Correct velocity
             call fs%get_pgrad(fs%psolv%sol,resU,resV,resW)
             fs%P=fs%P+fs%psolv%sol
-            fs%U=fs%U-time%dt*resU
-            fs%V=fs%V-time%dt*resV
-            fs%W=fs%W-time%dt*resW
+            fs%U=fs%U-time%dt*resU/fs%rho_U
+            fs%V=fs%V-time%dt*resV/fs%rho_V
+            fs%W=fs%W-time%dt*resW/fs%rho_W
             
             ! Increment sub-iteration counter
             time%it=time%it+1
