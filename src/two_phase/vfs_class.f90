@@ -77,9 +77,8 @@ module vfs_class
       real(WP), dimension(:,:,:,:), allocatable :: Lbary  !< Liquid barycenter
       real(WP), dimension(:,:,:,:), allocatable :: Gbary  !< Gas barycenter
       
-      ! Subcell VF fields
-      real(WP), dimension(:,:,:,:,:,:), allocatable :: Lvol   !< Subcell liquid volume
-      real(WP), dimension(:,:,:,:,:,:), allocatable :: Gvol   !< Subcell gas volume
+      ! Subcell VF field
+      real(WP), dimension(:,:,:,:,:,:), allocatable :: subvf   !< Subcell liquid volume fraction
       
       ! Surface density data
       real(WP), dimension(:,:,:), allocatable :: SD       !< Surface density array
@@ -146,7 +145,7 @@ module vfs_class
       procedure :: build_lvira                            !< LVIRA reconstruction of the interface from VF field
       procedure :: polygonalize_interface                 !< Build a discontinuous polygonal representation of the IRL interface
       procedure :: distance_from_polygon                  !< Build a signed distance field from the polygonalized interface
-      procedure :: subcell_volume                         !< Build a subcell phasic volumes from reconstructed interface
+      procedure :: subcell_vf                             !< Build subcell volume fraction from reconstructed interface
       procedure :: reset_volume_moments                   !< Reconstruct volume moments from IRL interfaces
       procedure :: update_surfgrid                        !< Create a simple surface mesh from the IRL polygons
       procedure :: get_curvature                          !< Compute curvature from IRL surface polygons
@@ -199,9 +198,8 @@ contains
       ! Set clipping distance
       self%Gclip=real(distance_band+1,WP)*self%cfg%min_meshsize
       
-      ! Subcell phase volume data
-      allocate(self%Lvol(0:1,0:1,0:1,self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%Lvol=0.0_WP
-      allocate(self%Gvol(0:1,0:1,0:1,self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%Gvol=0.0_WP
+      ! Subcell volume fraction
+      allocate(self%subvf(0:1,0:1,0:1,self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%subvf=0.0_WP
       
       ! Prepare the band arrays
       allocate(self%band(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%band=0
@@ -681,8 +679,8 @@ contains
       ! Calculate distance from polygons
       call this%distance_from_polygon()
       
-      ! Calculate subcell phasic volume
-      call this%subcell_volume()
+      ! Calculate subcell volume fraction
+      call this%subcell_vf()
       
       ! Calculate curvature
       call this%get_curvature()
@@ -1318,9 +1316,9 @@ contains
    end subroutine distance_from_polygon
    
    
-   !> Calculate subcell phase volume from reconstructed interface
+   !> Calculate subcell volume fraction from reconstructed interface
    !> Here, only mask=1 is skipped (i.e., real walls), so bconds are handled
-   subroutine subcell_volume(this)
+   subroutine subcell_vf(this)
       implicit none
       class(vfs), intent(inout) :: this
       integer :: i,j,k,ii,jj,kk
@@ -1338,17 +1336,14 @@ contains
             do i=this%cfg%imino_,this%cfg%imaxo_
                ! Deal with walls only - we do compute inside bconds here
                if (this%mask(i,j,k).eq.1) then
-                  this%Gvol(:,:,:,i,j,k)=0.0_WP
-                  this%Lvol(:,:,:,i,j,k)=0.0_WP
+                  this%subvf(:,:,:,i,j,k)=0.0_WP
                   cycle
                end if
                ! Deal with other cells
                if (this%VF(i,j,k).gt.VFhi) then
-                  this%Lvol(:,:,:,i,j,k)=0.125_WP*this%cfg%vol(i,j,k)
-                  this%Gvol(:,:,:,i,j,k)=0.0_WP
+                  this%subvf(:,:,:,i,j,k)=1.0_WP
                else if (this%VF(i,j,k).lt.VFlo) then
-                  this%Lvol(:,:,:,i,j,k)=0.0_WP
-                  this%Gvol(:,:,:,i,j,k)=0.125_WP*this%cfg%vol(i,j,k)
+                  this%subvf(:,:,:,i,j,k)=0.0_WP
                else
                   ! Prepare subcell extent
                   subx=[this%cfg%x(i),this%cfg%xm(i),this%cfg%x(i+1)]
@@ -1360,8 +1355,7 @@ contains
                         do ii=0,1
                            call construct_2pt(cell,[subx(ii),suby(jj),subz(kk)],[subx(ii+1),suby(jj+1),subz(kk+1)])
                            call getNormMoments(cell,this%liquid_gas_interface(i,j,k),separated_volume_moments)
-                           this%Lvol(ii,jj,kk,i,j,k)=getVolume(separated_volume_moments,0)
-                           this%Gvol(ii,jj,kk,i,j,k)=getVolume(separated_volume_moments,1)
+                           this%subvf(ii,jj,kk,i,j,k)=8.0_WP*getVolume(separated_volume_moments,0)/this%cfg%vol(i,j,k)
                         end do
                      end do
                   end do
@@ -1370,7 +1364,7 @@ contains
          end do
       end do
       
-   end subroutine subcell_volume
+   end subroutine subcell_vf
    
    
    !> Reset volumetric moments based on reconstructed interface

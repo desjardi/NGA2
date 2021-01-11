@@ -22,6 +22,9 @@ module tpns_class
    integer, parameter, public :: convective=4        !< Convective outflow condition
    integer, parameter, public :: clipped_neumann=5   !< Clipped Neumann condition (outflow only)
    
+   ! Parameter for switching schemes around the interface
+   real(WP), parameter :: rhoeps_coeff=1.0e-3_WP     !< Parameter for deciding when to switch to upwinded transport
+   
    !> Boundary conditions for the tpns solver
    type :: bcond
       type(bcond), pointer :: next                        !< Linked list of bconds
@@ -47,6 +50,7 @@ module tpns_class
       character(len=str_medium) :: name='UNNAMED_TPNS'    !< Solver name (default=UNNAMED_TPNS)
       
       ! Constant property fluids
+      real(WP) :: sigma                                   !< This is our constant surface tension coefficient
       real(WP) :: rho_l,rho_g                             !< These are our constant densities in liquid and gas
       real(WP) :: visc_l,visc_g                           !< These is our constant dynamic viscosities in liquid and gas
       
@@ -59,6 +63,22 @@ module tpns_class
       real(WP), dimension(:), allocatable :: area         !< Area for each bcond
       real(WP) :: correctable_area                        !< Area of bcond that can be corrected
       type(bcond), pointer :: first_bc                    !< List of bcond for our solver
+      
+      ! Density fields
+      real(WP), dimension(:,:,:), allocatable :: rho_U    !< Density field array on U-cell
+      real(WP), dimension(:,:,:), allocatable :: rho_V    !< Density field array on V-cell
+      real(WP), dimension(:,:,:), allocatable :: rho_W    !< Density field array on W-cell
+      
+      ! Old density fields
+      real(WP), dimension(:,:,:), allocatable :: rho_Uold !< Old density field array on U-cell
+      real(WP), dimension(:,:,:), allocatable :: rho_Vold !< Old density field array on V-cell
+      real(WP), dimension(:,:,:), allocatable :: rho_Wold !< Old density field array on W-cell
+      
+      ! Viscosity fields
+      real(WP), dimension(:,:,:), allocatable :: visc     !< Viscosity field on P-cell
+      real(WP), dimension(:,:,:), allocatable :: visc_xy  !< Viscosity field on U-cell
+      real(WP), dimension(:,:,:), allocatable :: visc_yz  !< Viscosity field on V-cell
+      real(WP), dimension(:,:,:), allocatable :: visc_zx  !< Viscosity field on W-cell
       
       ! Flow variables
       real(WP), dimension(:,:,:), allocatable :: U        !< U velocity array
@@ -74,6 +94,11 @@ module tpns_class
       ! Flow divergence
       real(WP), dimension(:,:,:), allocatable :: div      !< Divergence array
       
+      ! Momentum fluxes
+      real(WP), dimension(:,:,:), allocatable :: FUX,FUY,FUZ !< U-momentum fluxes
+      real(WP), dimension(:,:,:), allocatable :: FVX,FVY,FVZ !< V-momentum fluxes
+      real(WP), dimension(:,:,:), allocatable :: FWX,FWY,FWZ !< W-momentum fluxes
+      
       ! Pressure solver
       type(ils) :: psolv                                  !< Iterative linear solver object for the pressure Poisson equation
       
@@ -81,9 +106,13 @@ module tpns_class
       type(ils) :: implicit                               !< Iterative linear solver object for an implicit prediction of the NS residual
       
       ! Metrics
-      real(WP), dimension(:,:,:,:), allocatable :: itpu_x,itpu_y,itpu_z   !< Interpolation for U
-      real(WP), dimension(:,:,:,:), allocatable :: itpv_x,itpv_y,itpv_z   !< Interpolation for V
-      real(WP), dimension(:,:,:,:), allocatable :: itpw_x,itpw_y,itpw_z   !< Interpolation for W
+      real(WP) :: RHOeps                                  !< Parameter for when to switch between centered and modified interpolation scheme
+      real(WP), dimension(:,:,:,:), allocatable :: itpu_x,itpu_y,itpu_z   !< Second order interpolation for U
+      real(WP), dimension(:,:,:,:), allocatable :: itpv_x,itpv_y,itpv_z   !< Second order interpolation for V
+      real(WP), dimension(:,:,:,:), allocatable :: itpw_x,itpw_y,itpw_z   !< Second order interpolation for W
+      real(WP), dimension(:,:,:,:), allocatable :: hybu_x,hybu_y,hybu_z   !< Hybrid interpolation for U
+      real(WP), dimension(:,:,:,:), allocatable :: hybv_x,hybv_y,hybv_z   !< Hybrid interpolation for V
+      real(WP), dimension(:,:,:,:), allocatable :: hybw_x,hybw_y,hybw_z   !< Hybrid interpolation for W
       real(WP), dimension(:,:,:,:), allocatable :: divp_x,divp_y,divp_z   !< Divergence for P-cell
       real(WP), dimension(:,:,:,:), allocatable :: divu_x,divu_y,divu_z   !< Divergence for U-cell
       real(WP), dimension(:,:,:,:), allocatable :: divv_x,divv_y,divv_z   !< Divergence for V-cell
@@ -113,6 +142,8 @@ module tpns_class
       procedure :: apply_bcond                            !< Apply all boundary conditions
       procedure :: init_metrics                           !< Initialize metrics
       procedure :: adjust_metrics                         !< Adjust metrics
+      procedure :: prepare_advection_semilag              !< Prepare new density and momentum fluxes using 1st order upwinding
+      procedure :: prepare_advection_upwind               !< Prepare new density and momentum fluxes using 2nd order semi-Lagrangian scheme
       procedure :: get_dmomdt                             !< Calculate dmom/dt
       procedure :: get_div                                !< Calculate velocity divergence
       procedure :: get_pgrad                              !< Calculate pressure gradient
@@ -122,7 +153,12 @@ module tpns_class
       procedure :: get_mfr                                !< Calculate outgoing MFR through each bcond
       procedure :: correct_mfr                            !< Correct for mfr mismatch to ensure global conservation
       procedure :: shift_p                                !< Shift pressure to have zero average
+      procedure :: get_viscosity_from_subvf               !< Calculate viscosity fields from subcell volume fraction array (probably from a vfs object)
+      procedure :: get_olddensity_from_subvf              !< Calculate old density fields from subcell volume fraction array (probably from a vfs object)
       procedure :: solve_implicit                         !< Solve for the velocity residuals implicitly
+      
+      procedure :: addsrc_gravity                         !< Gravitational body force
+      
    end type tpns
    
    
@@ -153,18 +189,39 @@ contains
       self%first_bc=>NULL()
       
       ! Allocate flow variables
-      allocate(self%U  (self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%U=0.0_WP
-      allocate(self%V  (self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%V=0.0_WP
-      allocate(self%W  (self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%W=0.0_WP
-      allocate(self%P  (self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%P=0.0_WP
+      allocate(self%U(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%U=0.0_WP
+      allocate(self%V(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%V=0.0_WP
+      allocate(self%W(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%W=0.0_WP
+      allocate(self%P(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%P=0.0_WP
+      allocate(self%rho_U(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%rho_U=0.0_WP
+      allocate(self%rho_V(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%rho_V=0.0_WP
+      allocate(self%rho_W(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%rho_W=0.0_WP
+      allocate(self%visc   (self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%visc   =0.0_WP
+      allocate(self%visc_xy(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%visc_xy=0.0_WP
+      allocate(self%visc_yz(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%visc_yz=0.0_WP
+      allocate(self%visc_zx(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%visc_zx=0.0_WP
       
       ! Allocate flow divergence
       allocate(self%div(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%div=0.0_WP
       
       ! Allocate old flow variables
-      allocate(self%Uold  (self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%Uold=0.0_WP
-      allocate(self%Vold  (self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%Vold=0.0_WP
-      allocate(self%Wold  (self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%Wold=0.0_WP
+      allocate(self%Uold(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%Uold=0.0_WP
+      allocate(self%Vold(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%Vold=0.0_WP
+      allocate(self%Wold(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%Wold=0.0_WP
+      allocate(self%rho_Uold(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%rho_Uold=0.0_WP
+      allocate(self%rho_Vold(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%rho_Vold=0.0_WP
+      allocate(self%rho_Wold(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%rho_Wold=0.0_WP
+      
+      ! Momentum fluxes need to be preallocated
+      allocate(self%FUX(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%FUX=0.0_WP
+      allocate(self%FUY(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%FUY=0.0_WP
+      allocate(self%FUZ(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%FUZ=0.0_WP
+      allocate(self%FVX(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%FVX=0.0_WP
+      allocate(self%FVY(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%FVY=0.0_WP
+      allocate(self%FVZ(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%FVZ=0.0_WP
+      allocate(self%FWX(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%FWX=0.0_WP
+      allocate(self%FWY(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%FWY=0.0_WP
+      allocate(self%FWZ(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%FWZ=0.0_WP
       
       ! Create pressure solver object
       self%psolv=ils(cfg=self%cfg,name='Pressure Poisson Solver')
@@ -231,6 +288,18 @@ contains
       implicit none
       class(tpns), intent(inout) :: this
       integer :: i,j,k
+      
+      ! Allocate hybrid interpolation coefficients - these are populated later
+      allocate(this%hybu_x( 0:+1,this%cfg%imino_  :this%cfg%imaxo_,this%cfg%jmino_  :this%cfg%jmaxo_,this%cfg%kmino_  :this%cfg%kmaxo_)); this%hybu_x=0.0_WP
+      allocate(this%hybv_y( 0:+1,this%cfg%imino_  :this%cfg%imaxo_,this%cfg%jmino_  :this%cfg%jmaxo_,this%cfg%kmino_  :this%cfg%kmaxo_)); this%hybv_y=0.0_WP
+      allocate(this%hybw_z( 0:+1,this%cfg%imino_  :this%cfg%imaxo_,this%cfg%jmino_  :this%cfg%jmaxo_,this%cfg%kmino_  :this%cfg%kmaxo_)); this%hybw_z=0.0_WP
+      allocate(this%hybv_x(-1: 0,this%cfg%imino_+1:this%cfg%imaxo_,this%cfg%jmino_  :this%cfg%jmaxo_,this%cfg%kmino_  :this%cfg%kmaxo_)); this%hybv_x=0.0_WP
+      allocate(this%hybw_x(-1: 0,this%cfg%imino_+1:this%cfg%imaxo_,this%cfg%jmino_  :this%cfg%jmaxo_,this%cfg%kmino_  :this%cfg%kmaxo_)); this%hybw_x=0.0_WP
+      allocate(this%hybu_y(-1: 0,this%cfg%imino_  :this%cfg%imaxo_,this%cfg%jmino_+1:this%cfg%jmaxo_,this%cfg%kmino_  :this%cfg%kmaxo_)); this%hybu_y=0.0_WP
+      allocate(this%hybw_y(-1: 0,this%cfg%imino_  :this%cfg%imaxo_,this%cfg%jmino_+1:this%cfg%jmaxo_,this%cfg%kmino_  :this%cfg%kmaxo_)); this%hybw_y=0.0_WP
+      allocate(this%hybu_z(-1: 0,this%cfg%imino_  :this%cfg%imaxo_,this%cfg%jmino_  :this%cfg%jmaxo_,this%cfg%kmino_+1:this%cfg%kmaxo_)); this%hybu_z=0.0_WP
+      allocate(this%hybv_z(-1: 0,this%cfg%imino_  :this%cfg%imaxo_,this%cfg%jmino_  :this%cfg%jmaxo_,this%cfg%kmino_+1:this%cfg%kmaxo_)); this%hybv_z=0.0_WP
+      
       
       ! Allocate finite difference velocity interpolation coefficients
       allocate(this%itpu_x( 0:+1,this%cfg%imino_  :this%cfg%imaxo_,this%cfg%jmino_  :this%cfg%jmaxo_,this%cfg%kmino_  :this%cfg%kmaxo_)) !< Cell-centered
@@ -988,7 +1057,363 @@ contains
    end subroutine apply_bcond
    
    
+   !> This routine semi-lagrangian-transports staggered densities, prepares
+   !> semi-lagrangian momentum fluxes using a provided volume fraction solver,
+   !> and zeros out the modified velocity interpolation to avoid double-calc later
+   subroutine prepare_advection_semilag(this,dt,vf)
+      use vfs_class, only: vfs
+      implicit none
+      class(tpns), intent(inout) :: this   !< The two-phase flow solver
+      class(vfs),  intent(inout) :: vf     !< The volume fraction solver
+      real(WP),    intent(inout) :: dt     !< Timestep size over which to advance
+      ! integer :: i,j,k,ii,jj,kk,index
+      ! real(IRL_double), dimension(3,9) :: face
+      ! type(CapDod_type) :: flux_polyhedron
+      ! real(WP) :: Lvolold,Gvolold
+      ! real(WP) :: Lvolinc,Gvolinc
+      ! real(WP) :: Lvolnew,Gvolnew
+      ! real(WP) :: vol_now,crude_VF
+      ! real(WP), dimension(3) :: ctr_now
+      ! real(WP), dimension(3,2) :: bounding_pts
+      ! integer, dimension(3,2) :: bb_indices
+      !
+      ! ! Reset fluxes to zero as they will be used as-is in dmomdt
+      ! this%FUX=0.0_WP; this%FUY=0.0_WP; this%FUZ=0.0_WP
+      ! this%FVX=0.0_WP; this%FVY=0.0_WP; this%FVZ=0.0_WP
+      ! this%FWX=0.0_WP; this%FWY=0.0_WP; this%FWZ=0.0_WP
+      !
+      ! ! Allocate
+      ! call new(flux_polyhedron)
+      !
+      ! ! Loop over the domain and compute fluxes using semi-Lagrangian algorithm
+      ! do kk=this%cfg%kmin_,this%cfg%kmax_+1
+      !    do jj=this%cfg%jmin_,this%cfg%jmax_+1
+      !       do ii=this%cfg%imin_,this%cfg%imax_+1
+      !
+      !          ! X flux
+      !          i=ii-1; j=jj-1; k=kk-1
+      !          if (minval(abs(this%band(i,j,k))).le.advect_band) then
+      !             ! Construct and project face
+      !             face(:,1)=[this%cfg%xm(i),this%cfg%y(j  ),this%cfg%z(k+1)]; face(:,5)=this%project(face(:,1),i,j,k,-dt,U,V,W)
+      !             face(:,2)=[this%cfg%xm(i),this%cfg%y(j  ),this%cfg%z(k  )]; face(:,6)=this%project(face(:,2),i,j,k,-dt,U,V,W)
+      !             face(:,3)=[this%cfg%xm(i),this%cfg%y(j+1),this%cfg%z(k  )]; face(:,7)=this%project(face(:,3),i,j,k,-dt,U,V,W)
+      !             face(:,4)=[this%cfg%xm(i),this%cfg%y(j+1),this%cfg%z(k+1)]; face(:,8)=this%project(face(:,4),i,j,k,-dt,U,V,W)
+      !             face(:,9)=0.25_WP*[sum(face(1,1:4)),sum(face(2,1:4)),sum(face(3,1:4))]
+      !             face(:,9)=this%project(face(:,9),i,j,k,-dt,U,V,W)
+      !             ! Form flux polyhedron
+      !             call construct(flux_polyhedron,face)
+      !             ! Add solenoidal correction
+      !             call adjustCapToMatchVolume(flux_polyhedron,dt*0.5_WP*sum(U(i:i+1,j,k))*this%cfg%dy(j)*this%cfg%dz(k))
+      !             ! Get bounds for flux polyhedron
+      !             call getBoundingPts(flux_polyhedron,bounding_pts(:,1),bounding_pts(:,2))
+      !             bb_indices(:,1)=this%cfg%get_indices(bounding_pts(:,1),[i,j,k])
+      !             bb_indices(:,2)=this%cfg%get_indices(bounding_pts(:,2),[i,j,k])
+      !             ! Crudely check phase information for flux polyhedron
+      !             crude_VF=this%crude_phase_test(bb_indices)
+      !             if (crude_VF.lt.0.0_WP) then
+      !                ! Need full geometric flux
+      !                call getMoments(flux_polyhedron,this%localized_separator_link(i,j,k),this%face_flux(1,i,j,k))
+      !             else
+      !                ! Simpler flux calculation
+      !                vol_now=calculateVolume(flux_polyhedron); ctr_now=calculateCentroid(flux_polyhedron)
+      !                call construct(this%face_flux(1,i,j,k),[crude_VF*vol_now,crude_VF*vol_now*ctr_now,(1.0_WP-crude_VF)*vol_now,(1.0_WP-crude_VF)*vol_now*ctr_now])
+      !             end if
+      !          end if
+      !
+      !          ! Y flux
+      !          i=ii; j=jj; k=kk
+      !          if (minval(abs(this%band(i,j-1:j,k))).le.advect_band) then
+      !             ! Construct and project face
+      !             face(:,1)=[this%cfg%x(i+1),this%cfg%y(j  ),this%cfg%z(k  )]; face(:,5)=this%project(face(:,1),i,j,k,-dt,U,V,W)
+      !             face(:,2)=[this%cfg%x(i  ),this%cfg%y(j  ),this%cfg%z(k  )]; face(:,6)=this%project(face(:,2),i,j,k,-dt,U,V,W)
+      !             face(:,3)=[this%cfg%x(i  ),this%cfg%y(j  ),this%cfg%z(k+1)]; face(:,7)=this%project(face(:,3),i,j,k,-dt,U,V,W)
+      !             face(:,4)=[this%cfg%x(i+1),this%cfg%y(j  ),this%cfg%z(k+1)]; face(:,8)=this%project(face(:,4),i,j,k,-dt,U,V,W)
+      !             face(:,9)=0.25_WP*[sum(face(1,1:4)),sum(face(2,1:4)),sum(face(3,1:4))]
+      !             face(:,9)=this%project(face(:,9),i,j,k,-dt,U,V,W)
+      !             ! Form flux polyhedron
+      !             call construct(flux_polyhedron,face)
+      !             ! Add solenoidal correction
+      !             call adjustCapToMatchVolume(flux_polyhedron,dt*V(i,j,k)*this%cfg%dx(i)*this%cfg%dz(k))
+      !             ! Get bounds for flux polyhedron
+      !             call getBoundingPts(flux_polyhedron,bounding_pts(:,1),bounding_pts(:,2))
+      !             bb_indices(:,1)=this%cfg%get_indices(bounding_pts(:,1),[i,j,k])
+      !             bb_indices(:,2)=this%cfg%get_indices(bounding_pts(:,2),[i,j,k])
+      !             ! Crudely check phase information for flux polyhedron
+      !             crude_VF=this%crude_phase_test(bb_indices)
+      !             if (crude_VF.lt.0.0_WP) then
+      !                ! Need full geometric flux
+      !                call getMoments(flux_polyhedron,this%localized_separator_link(i,j,k),this%face_flux(2,i,j,k))
+      !             else
+      !                ! Simpler flux calculation
+      !                vol_now=calculateVolume(flux_polyhedron); ctr_now=calculateCentroid(flux_polyhedron)
+      !                call construct(this%face_flux(2,i,j,k),[crude_VF*vol_now,crude_VF*vol_now*ctr_now,(1.0_WP-crude_VF)*vol_now,(1.0_WP-crude_VF)*vol_now*ctr_now])
+      !             end if
+      !          end if
+      !
+      !          ! Z flux
+      !          i=ii; j=jj; k=kk
+      !          if (minval(abs(this%band(i,j,k-1:k))).le.advect_band) then
+      !             ! Construct and project face
+      !             face(:,1)=[this%cfg%x(i  ),this%cfg%y(j+1),this%cfg%z(k  )]; face(:,5)=this%project(face(:,1),i,j,k,-dt,U,V,W)
+      !             face(:,2)=[this%cfg%x(i  ),this%cfg%y(j  ),this%cfg%z(k  )]; face(:,6)=this%project(face(:,2),i,j,k,-dt,U,V,W)
+      !             face(:,3)=[this%cfg%x(i+1),this%cfg%y(j  ),this%cfg%z(k  )]; face(:,7)=this%project(face(:,3),i,j,k,-dt,U,V,W)
+      !             face(:,4)=[this%cfg%x(i+1),this%cfg%y(j+1),this%cfg%z(k  )]; face(:,8)=this%project(face(:,4),i,j,k,-dt,U,V,W)
+      !             face(:,9)=0.25_WP*[sum(face(1,1:4)),sum(face(2,1:4)),sum(face(3,1:4))]
+      !             face(:,9)=this%project(face(:,9),i,j,k,-dt,U,V,W)
+      !             ! Form flux polyhedron
+      !             call construct(flux_polyhedron,face)
+      !             ! Add solenoidal correction
+      !             call adjustCapToMatchVolume(flux_polyhedron,dt*W(i,j,k)*this%cfg%dx(i)*this%cfg%dy(j))
+      !             ! Get bounds for flux polyhedron
+      !             call getBoundingPts(flux_polyhedron,bounding_pts(:,1),bounding_pts(:,2))
+      !             bb_indices(:,1)=this%cfg%get_indices(bounding_pts(:,1),[i,j,k])
+      !             bb_indices(:,2)=this%cfg%get_indices(bounding_pts(:,2),[i,j,k])
+      !             ! Crudely check phase information for flux polyhedron
+      !             crude_VF=this%crude_phase_test(bb_indices)
+      !             if (crude_VF.lt.0.0_WP) then
+      !                ! Need full geometric flux
+      !                call getMoments(flux_polyhedron,this%localized_separator_link(i,j,k),this%face_flux(3,i,j,k))
+      !             else
+      !                ! Simpler flux calculation
+      !                vol_now=calculateVolume(flux_polyhedron); ctr_now=calculateCentroid(flux_polyhedron)
+      !                call construct(this%face_flux(3,i,j,k),[crude_VF*vol_now,crude_VF*vol_now*ctr_now,(1.0_WP-crude_VF)*vol_now,(1.0_WP-crude_VF)*vol_now*ctr_now])
+      !             end if
+      !          end if
+      !
+      !       end do
+      !    end do
+      ! end do
+      !
+      ! ! Compute transported moments
+      ! do index=1,sum(this%band_count(1:advect_band))
+      !    i=this%band_map(1,index)
+      !    j=this%band_map(2,index)
+      !    k=this%band_map(3,index)
+      !
+      !    ! Old liquid and gas volumes
+      !    Lvolold=        this%VFold(i,j,k) *this%cfg%vol(i,j,k)
+      !    Gvolold=(1.0_WP-this%VFold(i,j,k))*this%cfg%vol(i,j,k)
+      !
+      !    ! Compute incoming liquid and gas volumes
+      !    Lvolinc=-getVolumePtr(this%face_flux(1,i+1,j,k),0)+getVolumePtr(this%face_flux(1,i,j,k),0) &
+      !    &       -getVolumePtr(this%face_flux(2,i,j+1,k),0)+getVolumePtr(this%face_flux(2,i,j,k),0) &
+      !    &       -getVolumePtr(this%face_flux(3,i,j,k+1),0)+getVolumePtr(this%face_flux(3,i,j,k),0)
+      !    Gvolinc=-getVolumePtr(this%face_flux(1,i+1,j,k),1)+getVolumePtr(this%face_flux(1,i,j,k),1) &
+      !    &       -getVolumePtr(this%face_flux(2,i,j+1,k),1)+getVolumePtr(this%face_flux(2,i,j,k),1) &
+      !    &       -getVolumePtr(this%face_flux(3,i,j,k+1),1)+getVolumePtr(this%face_flux(3,i,j,k),1)
+      !
+      !    ! Compute new liquid and gas volumes
+      !    Lvolnew=Lvolold+Lvolinc
+      !    Gvolnew=Gvolold+Gvolinc
+      !
+      !    ! Compute new liquid volume fraction
+      !    this%VF(i,j,k)=Lvolnew/(Lvolnew+Gvolnew)
+      !
+      !    ! Only work on higher order moments if VF is in [VFlo,VFhi]
+      !    if (this%VF(i,j,k).lt.VFlo) then
+      !       this%VF(i,j,k)=0.0_WP
+      !    else if (this%VF(i,j,k).gt.VFhi) then
+      !       this%VF(i,j,k)=1.0_WP
+      !    else
+      !       ! Compute old phase barycenters
+      !       this%Lbary(:,i,j,k)=(this%Lbary(:,i,j,k)*Lvolold-getCentroidPtr(this%face_flux(1,i+1,j,k),0)+getCentroidPtr(this%face_flux(1,i,j,k),0) &
+      !       &                                               -getCentroidPtr(this%face_flux(2,i,j+1,k),0)+getCentroidPtr(this%face_flux(2,i,j,k),0) &
+      !       &                                               -getCentroidPtr(this%face_flux(3,i,j,k+1),0)+getCentroidPtr(this%face_flux(3,i,j,k),0))/Lvolnew
+      !       this%Gbary(:,i,j,k)=(this%Gbary(:,i,j,k)*Gvolold-getCentroidPtr(this%face_flux(1,i+1,j,k),1)+getCentroidPtr(this%face_flux(1,i,j,k),1) &
+      !       &                                               -getCentroidPtr(this%face_flux(2,i,j+1,k),1)+getCentroidPtr(this%face_flux(2,i,j,k),1) &
+      !       &                                               -getCentroidPtr(this%face_flux(3,i,j,k+1),1)+getCentroidPtr(this%face_flux(3,i,j,k),1))/Gvolnew
+      !       ! Project forward in time
+      !       this%Lbary(:,i,j,k)=this%project(this%Lbary(:,i,j,k),i,j,k,dt,U,V,W)
+      !       this%Gbary(:,i,j,k)=this%project(this%Gbary(:,i,j,k),i,j,k,dt,U,V,W)
+      !    end if
+      ! end do
+   
+   end subroutine prepare_advection_semilag
+   
+   
+   !> This routine upwind-transports staggered densities, and prepares
+   !> a modified velocity interpolation scheme for calculating momentum fluxes
+   subroutine prepare_advection_upwind(this,dt)
+      implicit none
+      class(tpns), intent(inout) :: this   !< The two-phase flow solver
+      real(WP),    intent(inout) :: dt     !< Timestep size over which to advance
+      integer :: i,j,k,ii,jj,kk
+      real(WP) :: rhoeps,vel
+      
+      ! Parameter for switching to the upwind interpolation scheme
+      rhoeps=rhoeps_coeff*min(this%rho_l,this%rho_g)
+      
+      ! Initialize the hybrid interpolator to centered scheme
+      this%hybu_x=this%itpu_x; this%hybv_x=this%itpv_x; this%hybw_x=this%itpw_x
+      this%hybu_y=this%itpu_y; this%hybv_y=this%itpv_y; this%hybw_y=this%itpw_y
+      this%hybu_z=this%itpu_z; this%hybv_z=this%itpv_z; this%hybw_z=this%itpw_z
+      
+      ! Prepare hybrid interpolation scheme for mass and momentum
+      do kk=this%cfg%kmin_,this%cfg%kmax_+1
+         do jj=this%cfg%jmin_,this%cfg%jmax_+1
+            do ii=this%cfg%imin_,this%cfg%imax_+1
+               ! U-cell **********
+               ! Fluxes on x-face
+               i=ii-1; j=jj; k=kk
+               if (abs(this%rho_Uold(i+1,j,k)-this%rho_Uold(i,j,k)).gt.rhoeps) then
+                  vel=sum(this%itpu_x(:,i,j,k)*this%U(i:i+1,j,k))
+                  if (vel.ge.0.0_WP) then
+                     this%hybu_x(:,i,j,k)=[1.0_WP,0.0_WP]
+                  else
+                     this%hybu_x(:,i,j,k)=[0.0_WP,1.0_WP]
+                  end if
+               end if
+               ! Fluxes on y-face
+               i=ii  ; j=jj; k=kk
+               if (abs(this%rho_Uold(i,j,k)-this%rho_Uold(i,j-1,k)).gt.rhoeps) then
+                  vel=sum(this%itpv_x(:,i,j,k)*this%V(i-1:i,j,k))
+                  if (vel.ge.0.0_WP) then
+                     this%hybu_y(:,i,j,k)=[1.0_WP,0.0_WP]
+                  else
+                     this%hybu_y(:,i,j,k)=[0.0_WP,1.0_WP]
+                  end if
+               end if
+               ! Fluxes on z-face
+               i=ii  ; j=jj; k=kk
+               if (abs(this%rho_Uold(i,j,k)-this%rho_Uold(i,j,k-1)).gt.rhoeps) then
+                  vel=sum(this%itpw_x(:,i,j,k)*this%W(i-1:i,j,k))
+                  if (vel.ge.0.0_WP) then
+                     this%hybu_z(:,i,j,k)=[1.0_WP,0.0_WP]
+                  else
+                     this%hybu_z(:,i,j,k)=[0.0_WP,1.0_WP]
+                  end if
+               end if
+               ! V-cell **********
+               ! Fluxes on x-face
+               i=ii; j=jj  ; k=kk
+               if (abs(this%rho_Vold(i,j,k)-this%rho_Vold(i-1,j,k)).gt.rhoeps) then
+                  vel=sum(this%itpu_y(:,i,j,k)*this%U(i,j-1:j,k))
+                  if (vel.ge.0.0_WP) then
+                     this%hybv_x(:,i,j,k)=[1.0_WP,0.0_WP]
+                  else
+                     this%hybv_x(:,i,j,k)=[0.0_WP,1.0_WP]
+                  end if
+               end if
+               ! Fluxes on y-face
+               i=ii; j=jj-1; k=kk
+               if (abs(this%rho_Vold(i,j+1,k)-this%rho_Vold(i,j,k)).gt.rhoeps) then
+                  vel=sum(this%itpv_y(:,i,j,k)*this%V(i,j:j+1,k))
+                  if (vel.ge.0.0_WP) then
+                     this%hybv_y(:,i,j,k)=[1.0_WP,0.0_WP]
+                  else
+                     this%hybv_y(:,i,j,k)=[0.0_WP,1.0_WP]
+                  end if
+               end if
+               ! Fluxes on z-face
+               i=ii; j=jj  ; k=kk
+               if (abs(this%rho_Vold(i,j,k)-this%rho_Vold(i,j,k-1)).gt.rhoeps) then
+                  vel=sum(this%itpw_y(:,i,j,k)*this%W(i,j-1:j,k))
+                  if (vel.ge.0.0_WP) then
+                     this%hybv_z(:,i,j,k)=[1.0_WP,0.0_WP]
+                  else
+                     this%hybv_z(:,i,j,k)=[0.0_WP,1.0_WP]
+                  end if
+               end if
+               ! W-cell **********
+               ! Fluxes on x-face
+               i=ii; j=jj; k=kk-1
+               if (abs(this%rho_Wold(i,j,k)-this%rho_Wold(i-1,j,k)).gt.rhoeps) then
+                  vel=sum(this%itpu_z(:,i,j,k)*this%U(i,j,k-1:k))
+                  if (vel.ge.0.0_WP) then
+                     this%hybw_x(:,i,j,k)=[1.0_WP,0.0_WP]
+                  else
+                     this%hybw_x(:,i,j,k)=[0.0_WP,1.0_WP]
+                  end if
+               end if
+               ! Fluxes on y-face
+               i=ii; j=jj; k=kk
+               if (abs(this%rho_Wold(i,j,k)-this%rho_Wold(i,j-1,k)).gt.rhoeps) then
+                  vel=sum(this%itpv_z(:,i,j,k)*this%V(i,j,k-1:k))
+                  if (vel.ge.0.0_WP) then
+                     this%hybw_y(:,i,j,k)=[1.0_WP,0.0_WP]
+                  else
+                     this%hybw_y(:,i,j,k)=[0.0_WP,1.0_WP]
+                  end if
+               end if
+               ! Fluxes on z-face
+               i=ii; j=jj; k=kk
+               if (abs(this%rho_Wold(i,j,k+1)-this%rho_Wold(i,j,k)).gt.rhoeps) then
+                  vel=sum(this%itpw_z(:,i,j,k)*this%W(i,j,k:k+1))
+                  if (vel.ge.0.0_WP) then
+                     this%hybw_z(:,i,j,k)=[1.0_WP,0.0_WP]
+                  else
+                     this%hybw_z(:,i,j,k)=[0.0_WP,1.0_WP]
+                  end if
+               end if
+            end do
+         end do
+      end do
+      
+      ! Create density fluxes
+      do kk=this%cfg%kmin_,this%cfg%kmax_+1
+         do jj=this%cfg%jmin_,this%cfg%jmax_+1
+            do ii=this%cfg%imin_,this%cfg%imax_+1
+               ! U-cell **********
+               ! Fluxes on x-face
+               i=ii-1; j=jj; k=kk
+               this%FUX(i,j,k)=sum(this%hybu_x(:,i,j,k)*this%rho_Uold(i:i+1,j,k))*sum(this%itpu_x(:,i,j,k)*this%U(i:i+1,j,k))
+               ! Fluxes on y-face
+               i=ii  ; j=jj; k=kk
+               this%FUY(i,j,k)=sum(this%hybu_y(:,i,j,k)*this%rho_Uold(i,j-1:j,k))*sum(this%itpv_x(:,i,j,k)*this%V(i-1:i,j,k))
+               ! Fluxes on z-face
+               i=ii  ; j=jj; k=kk
+               this%FUZ(i,j,k)=sum(this%hybu_z(:,i,j,k)*this%rho_Uold(i,j,k-1:k))*sum(this%itpw_x(:,i,j,k)*this%W(i-1:i,j,k))
+               ! V-cell **********
+               ! Fluxes on x-face
+               i=ii; j=jj  ; k=kk
+               this%FVX(i,j,k)=sum(this%hybv_x(:,i,j,k)*this%rho_Vold(i-1:i,j,k))*sum(this%itpu_y(:,i,j,k)*this%U(i,j-1:j,k))
+               ! Fluxes on y-face
+               i=ii; j=jj-1; k=kk
+               this%FVY(i,j,k)=sum(this%hybv_y(:,i,j,k)*this%rho_Vold(i,j:j+1,k))*sum(this%itpv_y(:,i,j,k)*this%V(i,j:j+1,k))
+               ! Fluxes on z-face
+               i=ii; j=jj  ; k=kk
+               this%FVZ(i,j,k)=sum(this%hybv_z(:,i,j,k)*this%rho_Vold(i,j,k-1:k))*sum(this%itpw_y(:,i,j,k)*this%W(i,j-1:j,k))
+               ! W-cell **********
+               ! Fluxes on x-face
+               i=ii; j=jj; k=kk
+               this%FWX(i,j,k)=sum(this%hybw_x(:,i,j,k)*this%rho_Vold(i-1:i,j,k))*sum(this%itpu_z(:,i,j,k)*this%U(i,j,k-1:k))
+               ! Fluxes on y-face
+               i=ii; j=jj; k=kk
+               this%FWY(i,j,k)=sum(this%hybw_y(:,i,j,k)*this%rho_Vold(i,j-1:j,k))*sum(this%itpv_z(:,i,j,k)*this%V(i,j,k-1:k))
+               ! Fluxes on z-face
+               i=ii; j=jj; k=kk-1
+               this%FWZ(i,j,k)=sum(this%hybw_z(:,i,j,k)*this%rho_Vold(i,j,k:k+1))*sum(this%itpw_z(:,i,j,k)*this%W(i,j,k:k+1))
+            end do
+         end do
+      end do
+      
+      ! Update staggered density
+      do k=this%cfg%kmin_,this%cfg%kmax_
+         do j=this%cfg%jmin_,this%cfg%jmax_
+            do i=this%cfg%imin_,this%cfg%imax_
+               this%rho_U(i,j,k)=this%rho_Uold(i,j,k)-dt*(sum(this%divu_x(:,i,j,k)*this%FUX(i-1:i,j,k))+sum(this%divu_y(:,i,j,k)*this%FUY(i,j:j+1,k))+sum(this%divu_z(:,i,j,k)*this%FUZ(i,j,k:k+1)))
+               this%rho_V(i,j,k)=this%rho_Vold(i,j,k)-dt*(sum(this%divv_x(:,i,j,k)*this%FVX(i:i+1,j,k))+sum(this%divv_y(:,i,j,k)*this%FVY(i,j-1:j,k))+sum(this%divv_z(:,i,j,k)*this%FVZ(i,j,k:k+1)))
+               this%rho_W(i,j,k)=this%rho_Wold(i,j,k)-dt*(sum(this%divw_x(:,i,j,k)*this%FWX(i:i+1,j,k))+sum(this%divw_y(:,i,j,k)*this%FWY(i,j:j+1,k))+sum(this%divw_z(:,i,j,k)*this%FWZ(i,j,k-1:k)))
+            end do
+         end do
+      end do
+      
+      ! Synchronize boundaries
+      call this%cfg%sync(this%rho_U)
+      call this%cfg%sync(this%rho_V)
+      call this%cfg%sync(this%rho_W)
+      
+      ! Reset fluxes to zero as they will be used as-is in dmomdt
+      this%FUX=0.0_WP; this%FUY=0.0_WP; this%FUZ=0.0_WP
+      this%FVX=0.0_WP; this%FVY=0.0_WP; this%FVZ=0.0_WP
+      this%FWX=0.0_WP; this%FWY=0.0_WP; this%FWZ=0.0_WP
+      
+   end subroutine prepare_advection_upwind
+   
+   
    !> Calculate the explicit momentum time derivative based on U/V/W/P
+   !> This assumes that rho_[UVW] and hyb[uvw]_[xyz] have been precomputed, and F[UVW][XYZ] has been zeroed out
+   !> If hyb[uvw]_[xyz] is zeroed out locally, then F[UVW][XYZ] is needed too at these locations
    subroutine get_dmomdt(this,drhoUdt,drhoVdt,drhoWdt)
       implicit none
       class(tpns), intent(inout) :: this
@@ -996,12 +1421,6 @@ contains
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(out) :: drhoVdt !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(out) :: drhoWdt !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       integer :: i,j,k,ii,jj,kk
-      real(WP), dimension(:,:,:), allocatable :: FX,FY,FZ
-      
-      ! Allocate flux arrays
-      allocate(FX(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
-      allocate(FY(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
-      allocate(FZ(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
       
       ! Flux of rhoU
       do kk=this%cfg%kmin_,this%cfg%kmax_+1
@@ -1009,17 +1428,19 @@ contains
             do ii=this%cfg%imin_,this%cfg%imax_+1
                ! Fluxes on x-face
                i=ii-1; j=jj; k=kk
-               FX(i,j,k)=-this%rho * sum(this%itpu_x(:,i,j,k)*this%U(i:i+1,j,k))*sum(this%itpu_x(:,i,j,k)*this%U(i:i+1,j,k)) &
-               &         +this%visc*(sum(this%grdu_x(:,i,j,k)*this%U(i:i+1,j,k))+sum(this%grdu_x(:,i,j,k)*this%U(i:i+1,j,k)))&
-               &         -this%P(i,j,k)
+               this%FUX(i,j,k)=this%FUX(i,j,k)-this%P(i,j,k) &
+               &           -sum(this%hybu_x(:,i,j,k)*this%rho_Uold(i:i+1,j,k)*this%U(i:i+1,j,k))*sum(this%itpu_x(:,i,j,k)*this%U(i:i+1,j,k)) &
+               &               +this%visc   (i,j,k)*(sum(this%grdu_x(:,i,j,k)*this%U(i:i+1,j,k))+sum(this%grdu_x(:,i,j,k)*this%U(i:i+1,j,k)))
                ! Fluxes on y-face
                i=ii  ; j=jj; k=kk
-               FY(i,j,k)=-this%rho * sum(this%itpu_y(:,i,j,k)*this%U(i,j-1:j,k))*sum(this%itpv_x(:,i,j,k)*this%V(i-1:i,j,k)) &
-               &         +this%visc*(sum(this%grdu_y(:,i,j,k)*this%U(i,j-1:j,k))+sum(this%grdv_x(:,i,j,k)*this%V(i-1:i,j,k)))
+               this%FUY(i,j,k)=this%FUY(i,j,k) &
+               &           -sum(this%hybu_y(:,i,j,k)*this%rho_Uold(i,j-1:j,k)*this%U(i,j-1:j,k))*sum(this%itpv_x(:,i,j,k)*this%V(i-1:i,j,k)) &
+               &               +this%visc_xy(i,j,k)*(sum(this%grdu_y(:,i,j,k)*this%U(i,j-1:j,k))+sum(this%grdv_x(:,i,j,k)*this%V(i-1:i,j,k)))
                ! Fluxes on z-face
                i=ii  ; j=jj; k=kk
-               FZ(i,j,k)=-this%rho * sum(this%itpu_z(:,i,j,k)*this%U(i,j,k-1:k))*sum(this%itpw_x(:,i,j,k)*this%W(i-1:i,j,k)) &
-               &         +this%visc*(sum(this%grdu_z(:,i,j,k)*this%U(i,j,k-1:k))+sum(this%grdw_x(:,i,j,k)*this%W(i-1:i,j,k)))
+               this%FUZ(i,j,k)=this%FUZ(i,j,k) &
+               &           -sum(this%hybu_z(:,i,j,k)*this%rho_Uold(i,j,k-1:k)*this%U(i,j,k-1:k))*sum(this%itpw_x(:,i,j,k)*this%W(i-1:i,j,k)) &
+               &               +this%visc_zx(i,j,k)*(sum(this%grdu_z(:,i,j,k)*this%U(i,j,k-1:k))+sum(this%grdw_x(:,i,j,k)*this%W(i-1:i,j,k)))
             end do
          end do
       end do
@@ -1027,9 +1448,9 @@ contains
       do k=this%cfg%kmin_,this%cfg%kmax_
          do j=this%cfg%jmin_,this%cfg%jmax_
             do i=this%cfg%imin_,this%cfg%imax_
-               drhoUdt(i,j,k)=sum(this%divu_x(:,i,j,k)*FX(i-1:i,j,k))+&
-               &              sum(this%divu_y(:,i,j,k)*FY(i,j:j+1,k))+&
-               &              sum(this%divu_z(:,i,j,k)*FZ(i,j,k:k+1))
+               drhoUdt(i,j,k)=sum(this%divu_x(:,i,j,k)*this%FUX(i-1:i,j,k))+&
+               &              sum(this%divu_y(:,i,j,k)*this%FUY(i,j:j+1,k))+&
+               &              sum(this%divu_z(:,i,j,k)*this%FUZ(i,j,k:k+1))
             end do
          end do
       end do
@@ -1042,17 +1463,19 @@ contains
             do ii=this%cfg%imin_,this%cfg%imax_+1
                ! Fluxes on x-face
                i=ii; j=jj  ; k=kk
-               FX(i,j,k)=-this%rho * sum(this%itpv_x(:,i,j,k)*this%V(i-1:i,j,k))*sum(this%itpu_y(:,i,j,k)*this%U(i,j-1:j,k)) &
-               &         +this%visc*(sum(this%grdv_x(:,i,j,k)*this%V(i-1:i,j,k))+sum(this%grdu_y(:,i,j,k)*this%U(i,j-1:j,k)))
+               this%FVX(i,j,k)=this%FVX(i,j,k) &
+               &           -sum(this%hybv_x(:,i,j,k)*this%rho_Vold(i-1:i,j,k)*this%V(i-1:i,j,k))*sum(this%itpu_y(:,i,j,k)*this%U(i,j-1:j,k)) &
+               &               +this%visc_xy(i,j,k)*(sum(this%grdv_x(:,i,j,k)*this%V(i-1:i,j,k))+sum(this%grdu_y(:,i,j,k)*this%U(i,j-1:j,k)))
                ! Fluxes on y-face
                i=ii; j=jj-1; k=kk
-               FY(i,j,k)=-this%rho * sum(this%itpv_y(:,i,j,k)*this%V(i,j:j+1,k))*sum(this%itpv_y(:,i,j,k)*this%V(i,j:j+1,k)) &
-               &         +this%visc*(sum(this%grdv_y(:,i,j,k)*this%V(i,j:j+1,k))+sum(this%grdv_y(:,i,j,k)*this%V(i,j:j+1,k)))&
-               &         -this%P(i,j,k)
+               this%FVY(i,j,k)=this%FVY(i,j,k)-this%P(i,j,k) &
+               &           -sum(this%hybv_y(:,i,j,k)*this%rho_Vold(i,j:j+1,k)*this%V(i,j:j+1,k))*sum(this%itpv_y(:,i,j,k)*this%V(i,j:j+1,k)) &
+               &               +this%visc   (i,j,k)*(sum(this%grdv_y(:,i,j,k)*this%V(i,j:j+1,k))+sum(this%grdv_y(:,i,j,k)*this%V(i,j:j+1,k)))
                ! Fluxes on z-face
                i=ii; j=jj  ; k=kk
-               FZ(i,j,k)=-this%rho * sum(this%itpv_z(:,i,j,k)*this%V(i,j,k-1:k))*sum(this%itpw_y(:,i,j,k)*this%W(i,j-1:j,k)) &
-               &         +this%visc*(sum(this%grdv_z(:,i,j,k)*this%V(i,j,k-1:k))+sum(this%grdw_y(:,i,j,k)*this%W(i,j-1:j,k)))
+               this%FVZ(i,j,k)=this%FVZ(i,j,k) &
+               &           -sum(this%hybv_z(:,i,j,k)*this%rho_Vold(i,j,k-1:k)*this%V(i,j,k-1:k))*sum(this%itpw_y(:,i,j,k)*this%W(i,j-1:j,k)) &
+               &               +this%visc_yz(i,j,k)*(sum(this%grdv_z(:,i,j,k)*this%V(i,j,k-1:k))+sum(this%grdw_y(:,i,j,k)*this%W(i,j-1:j,k)))
             end do
          end do
       end do
@@ -1060,9 +1483,9 @@ contains
       do k=this%cfg%kmin_,this%cfg%kmax_
          do j=this%cfg%jmin_,this%cfg%jmax_
             do i=this%cfg%imin_,this%cfg%imax_
-               drhoVdt(i,j,k)=sum(this%divv_x(:,i,j,k)*FX(i:i+1,j,k))+&
-               &              sum(this%divv_y(:,i,j,k)*FY(i,j-1:j,k))+&
-               &              sum(this%divv_z(:,i,j,k)*FZ(i,j,k:k+1))
+               drhoVdt(i,j,k)=sum(this%divv_x(:,i,j,k)*this%FVX(i:i+1,j,k))+&
+               &              sum(this%divv_y(:,i,j,k)*this%FVY(i,j-1:j,k))+&
+               &              sum(this%divv_z(:,i,j,k)*this%FVZ(i,j,k:k+1))
             end do
          end do
       end do
@@ -1075,17 +1498,19 @@ contains
             do ii=this%cfg%imin_,this%cfg%imax_+1
                ! Fluxes on x-face
                i=ii; j=jj; k=kk
-               FX(i,j,k)=-this%rho * sum(this%itpw_x(:,i,j,k)*this%W(i-1:i,j,k))*sum(this%itpu_z(:,i,j,k)*this%U(i,j,k-1:k)) &
-               &         +this%visc*(sum(this%grdw_x(:,i,j,k)*this%W(i-1:i,j,k))+sum(this%grdu_z(:,i,j,k)*this%U(i,j,k-1:k)))
+               this%FWX(i,j,k)=this%FWX(i,j,k) &
+               &           -sum(this%hybw_x(:,i,j,k)*this%rho_Wold(i-1:i,j,k)*this%W(i-1:i,j,k))*sum(this%itpu_z(:,i,j,k)*this%U(i,j,k-1:k)) &
+               &               +this%visc_zx(i,j,k)*(sum(this%grdw_x(:,i,j,k)*this%W(i-1:i,j,k))+sum(this%grdu_z(:,i,j,k)*this%U(i,j,k-1:k)))
                ! Fluxes on y-face
                i=ii; j=jj; k=kk
-               FY(i,j,k)=-this%rho * sum(this%itpw_y(:,i,j,k)*this%W(i,j-1:j,k))*sum(this%itpv_z(:,i,j,k)*this%V(i,j,k-1:k)) &
-               &         +this%visc*(sum(this%grdw_y(:,i,j,k)*this%W(i,j-1:j,k))+sum(this%grdv_z(:,i,j,k)*this%V(i,j,k-1:k)))
+               this%FWY(i,j,k)=this%FWY(i,j,k) &
+               &           -sum(this%hybw_y(:,i,j,k)*this%rho_Wold(i,j-1:j,k)*this%W(i,j-1:j,k))*sum(this%itpv_z(:,i,j,k)*this%V(i,j,k-1:k)) &
+               &               +this%visc_yz(i,j,k)*(sum(this%grdw_y(:,i,j,k)*this%W(i,j-1:j,k))+sum(this%grdv_z(:,i,j,k)*this%V(i,j,k-1:k)))
                ! Fluxes on z-face
                i=ii; j=jj; k=kk-1
-               FZ(i,j,k)=-this%rho * sum(this%itpw_z(:,i,j,k)*this%W(i,j,k:k+1))*sum(this%itpw_z(:,i,j,k)*this%W(i,j,k:k+1)) &
-               &         +this%visc*(sum(this%grdw_z(:,i,j,k)*this%W(i,j,k:k+1))+sum(this%grdw_z(:,i,j,k)*this%W(i,j,k:k+1)))&
-               &         -this%P(i,j,k)
+               this%FWZ(i,j,k)=this%FWZ(i,j,k)-this%P(i,j,k) &
+               &           -sum(this%hybw_z(:,i,j,k)*this%rho_Wold(i,j,k:k+1)*this%W(i,j,k:k+1))*sum(this%itpw_z(:,i,j,k)*this%W(i,j,k:k+1)) &
+               &               +this%visc   (i,j,k)*(sum(this%grdw_z(:,i,j,k)*this%W(i,j,k:k+1))+sum(this%grdw_z(:,i,j,k)*this%W(i,j,k:k+1)))
             end do
          end do
       end do
@@ -1093,17 +1518,14 @@ contains
       do k=this%cfg%kmin_,this%cfg%kmax_
          do j=this%cfg%jmin_,this%cfg%jmax_
             do i=this%cfg%imin_,this%cfg%imax_
-               drhoWdt(i,j,k)=sum(this%divw_x(:,i,j,k)*FX(i:i+1,j,k))+&
-               &              sum(this%divw_y(:,i,j,k)*FY(i,j:j+1,k))+&
-               &              sum(this%divw_z(:,i,j,k)*FZ(i,j,k-1:k))
+               drhoWdt(i,j,k)=sum(this%divw_x(:,i,j,k)*this%FWX(i:i+1,j,k))+&
+               &              sum(this%divw_y(:,i,j,k)*this%FWY(i,j:j+1,k))+&
+               &              sum(this%divw_z(:,i,j,k)*this%FWZ(i,j,k-1:k))
             end do
          end do
       end do
       ! Sync it
       call this%cfg%sync(drhoWdt)
-      
-      ! Deallocate flux arrays
-      deallocate(FX,FY,FZ)
       
    end subroutine get_dmomdt
    
@@ -1187,6 +1609,10 @@ contains
       real(WP), optional :: cfl
       integer :: i,j,k,ierr
       real(WP) :: my_CFLc_x,my_CFLc_y,my_CFLc_z,my_CFLv_x,my_CFLv_y,my_CFLv_z
+      real(WP) :: max_nu
+      
+      ! Get largest kinematic viscosity
+      max_nu=max(this%visc_l/this%rho_l,this%visc_g/this%rho_g)
       
       ! Set the CFLs to zero
       my_CFLc_x=0.0_WP; my_CFLc_y=0.0_WP; my_CFLc_z=0.0_WP
@@ -1197,9 +1623,9 @@ contains
                my_CFLc_x=max(my_CFLc_x,abs(this%U(i,j,k))*this%cfg%dxmi(i))
                my_CFLc_y=max(my_CFLc_y,abs(this%V(i,j,k))*this%cfg%dymi(j))
                my_CFLc_z=max(my_CFLc_z,abs(this%W(i,j,k))*this%cfg%dzmi(k))
-               my_CFLv_x=max(my_CFLv_x,4.0_WP*this%visc*this%cfg%dxi(i)**2/this%rho)
-               my_CFLv_y=max(my_CFLv_y,4.0_WP*this%visc*this%cfg%dyi(j)**2/this%rho)
-               my_CFLv_z=max(my_CFLv_z,4.0_WP*this%visc*this%cfg%dzi(k)**2/this%rho)
+               my_CFLv_x=max(my_CFLv_x,4.0_WP*max_nu*this%cfg%dxi(i)**2)
+               my_CFLv_y=max(my_CFLv_y,4.0_WP*max_nu*this%cfg%dyi(j)**2)
+               my_CFLv_z=max(my_CFLv_z,4.0_WP*max_nu*this%cfg%dzi(k)**2)
             end do
          end do
       end do
@@ -1308,37 +1734,37 @@ contains
                case (1) ! BC in +x
                   do n=1,my_bc%itr%n_
                      i=my_bc%itr%map(1,n); j=my_bc%itr%map(2,n); k=my_bc%itr%map(3,n)
-                     my_mfr(ibc)=my_mfr(ibc)+this%rho*this%U(i+1,j,k)*this%cfg%dy(j)*this%cfg%dz(k)
+                     my_mfr(ibc)=my_mfr(ibc)+this%U(i+1,j,k)*this%cfg%dy(j)*this%cfg%dz(k)
                      my_area(ibc)=my_area(ibc)+this%cfg%dy(j)*this%cfg%dz(k)
                   end do
                case (2) ! BC in -x
                   do n=1,my_bc%itr%n_
                      i=my_bc%itr%map(1,n); j=my_bc%itr%map(2,n); k=my_bc%itr%map(3,n)
-                     my_mfr(ibc)=my_mfr(ibc)-this%rho*this%U(i  ,j,k)*this%cfg%dy(j)*this%cfg%dz(k)
+                     my_mfr(ibc)=my_mfr(ibc)-this%U(i  ,j,k)*this%cfg%dy(j)*this%cfg%dz(k)
                      my_area(ibc)=my_area(ibc)+this%cfg%dy(j)*this%cfg%dz(k)
                   end do
                case (3) ! BC in +y
                   do n=1,my_bc%itr%n_
                      i=my_bc%itr%map(1,n); j=my_bc%itr%map(2,n); k=my_bc%itr%map(3,n)
-                     my_mfr(ibc)=my_mfr(ibc)+this%rho*this%V(i,j+1,k)*this%cfg%dx(i)*this%cfg%dz(k)
+                     my_mfr(ibc)=my_mfr(ibc)+this%V(i,j+1,k)*this%cfg%dx(i)*this%cfg%dz(k)
                      my_area(ibc)=my_area(ibc)+this%cfg%dx(i)*this%cfg%dz(k)
                   end do
                case (4) ! BC in -y
                   do n=1,my_bc%itr%n_
                      i=my_bc%itr%map(1,n); j=my_bc%itr%map(2,n); k=my_bc%itr%map(3,n)
-                     my_mfr(ibc)=my_mfr(ibc)-this%rho*this%V(i,j  ,k)*this%cfg%dx(i)*this%cfg%dz(k)
+                     my_mfr(ibc)=my_mfr(ibc)-this%V(i,j  ,k)*this%cfg%dx(i)*this%cfg%dz(k)
                      my_area(ibc)=my_area(ibc)+this%cfg%dx(i)*this%cfg%dz(k)
                   end do
                case (5) ! BC in +z
                   do n=1,my_bc%itr%n_
                      i=my_bc%itr%map(1,n); j=my_bc%itr%map(2,n); k=my_bc%itr%map(3,n)
-                     my_mfr(ibc)=my_mfr(ibc)+this%rho*this%W(i,j,k+1)*this%cfg%dy(j)*this%cfg%dx(i)
+                     my_mfr(ibc)=my_mfr(ibc)+this%W(i,j,k+1)*this%cfg%dy(j)*this%cfg%dx(i)
                      my_area(ibc)=my_area(ibc)+this%cfg%dy(j)*this%cfg%dx(i)
                   end do
                case (6) ! BC in -z
                   do n=1,my_bc%itr%n_
                      i=my_bc%itr%map(1,n); j=my_bc%itr%map(2,n); k=my_bc%itr%map(3,n)
-                     my_mfr(ibc)=my_mfr(ibc)-this%rho*this%W(i,j,k  )*this%cfg%dy(j)*this%cfg%dx(i)
+                     my_mfr(ibc)=my_mfr(ibc)-this%W(i,j,k  )*this%cfg%dy(j)*this%cfg%dx(i)
                      my_area(ibc)=my_area(ibc)+this%cfg%dy(j)*this%cfg%dx(i)
                   end do
                end select
@@ -1379,7 +1805,7 @@ contains
       call this%get_mfr()
       mfr_error=sum(this%mfr)
       if (abs(mfr_error).lt.10.0_WP*epsilon(1.0_WP).or.abs(this%correctable_area).lt.10.0_WP*epsilon(1.0_WP)) return
-      vel_correction=-mfr_error/(this%rho*this%correctable_area)
+      vel_correction=-mfr_error/(this%correctable_area)
       
       ! Traverse bcond list and correct bcond MFR
       my_bc=>this%first_bc
@@ -1483,46 +1909,46 @@ contains
       real(WP) :: rhoUp,rhoUm,rhoVp,rhoVm,rhoWp,rhoWm
       
       ! Solve implicit U problem
-      this%implicit%opr(1,:,:,:)=this%rho; this%implicit%opr(2:,:,:,:)=0.0_WP
+      this%implicit%opr(1,:,:,:)=this%rho_U; this%implicit%opr(2:,:,:,:)=0.0_WP
       do k=this%cfg%kmin_,this%cfg%kmax_
          do j=this%cfg%jmin_,this%cfg%jmax_
             do i=this%cfg%imin_,this%cfg%imax_
-               rhoUp=this%rho*sum(this%itpu_x(:,i  ,j,k)*this%U(i  :i+1,j,k))*2.0_WP
-               rhoUm=this%rho*sum(this%itpu_x(:,i-1,j,k)*this%U(i-1:i  ,j,k))*2.0_WP
-               rhoVp=this%rho*sum(this%itpv_x(:,i,j+1,k)*this%V(i-1:i,j+1,k))
-               rhoVm=this%rho*sum(this%itpv_x(:,i,j  ,k)*this%V(i-1:i,j  ,k))
-               rhoWp=this%rho*sum(this%itpw_x(:,i,j,k+1)*this%W(i-1:i,j,k+1))
-               rhoWm=this%rho*sum(this%itpw_x(:,i,j,k  )*this%W(i-1:i,j,k  ))
-               this%implicit%opr(1,i,j,k)=this%implicit%opr(1,i,j,k)+0.5_WP*dt*(this%divu_x( 0,i,j,k)*this%itpu_x( 0,i  ,j,k)*rhoUp+&
-               &                                                                this%divu_x(-1,i,j,k)*this%itpu_x(+1,i-1,j,k)*rhoUm+&
-               &                                                                this%divu_y(+1,i,j,k)*this%itpu_y(-1,i,j+1,k)*rhoVp+&
-               &                                                                this%divu_y( 0,i,j,k)*this%itpu_y( 0,i,j  ,k)*rhoVm+&
-               &                                                                this%divu_z(+1,i,j,k)*this%itpu_z(-1,i,j,k+1)*rhoWp+&
-               &                                                                this%divu_z( 0,i,j,k)*this%itpu_z( 0,i,j,k  )*rhoWm)
-               this%implicit%opr(2,i,j,k)=this%implicit%opr(2,i,j,k)+0.5_WP*dt*(this%divu_x( 0,i,j,k)*this%itpu_x(+1,i  ,j,k)*rhoUp)
-               this%implicit%opr(3,i,j,k)=this%implicit%opr(3,i,j,k)+0.5_WP*dt*(this%divu_x(-1,i,j,k)*this%itpu_x( 0,i-1,j,k)*rhoUm)
-               this%implicit%opr(4,i,j,k)=this%implicit%opr(4,i,j,k)+0.5_WP*dt*(this%divu_y(+1,i,j,k)*this%itpu_y( 0,i,j+1,k)*rhoVp)
-               this%implicit%opr(5,i,j,k)=this%implicit%opr(5,i,j,k)+0.5_WP*dt*(this%divu_y( 0,i,j,k)*this%itpu_y(-1,i,j  ,k)*rhoVm)
-               this%implicit%opr(6,i,j,k)=this%implicit%opr(6,i,j,k)+0.5_WP*dt*(this%divu_z(+1,i,j,k)*this%itpu_z( 0,i,j,k+1)*rhoWp)
-               this%implicit%opr(7,i,j,k)=this%implicit%opr(7,i,j,k)+0.5_WP*dt*(this%divu_z( 0,i,j,k)*this%itpu_z(-1,i,j,k  )*rhoWm)
+               rhoUp=sum(this%hybu_x(:,i  ,j,k)*this%rho_Uold(i:i+1,j,k))*sum(this%itpu_x(:,i  ,j,k)*this%U(i  :i+1,j,k))!*2.0_WP
+               rhoUm=sum(this%hybu_x(:,i-1,j,k)*this%rho_Uold(i-1:i,j,k))*sum(this%itpu_x(:,i-1,j,k)*this%U(i-1:i  ,j,k))!*2.0_WP
+               rhoVp=sum(this%hybu_y(:,i,j+1,k)*this%rho_Uold(i,j:j+1,k))*sum(this%itpv_x(:,i,j+1,k)*this%V(i-1:i,j+1,k))
+               rhoVm=sum(this%hybu_y(:,i,j  ,k)*this%rho_Uold(i,j-1:j,k))*sum(this%itpv_x(:,i,j  ,k)*this%V(i-1:i,j  ,k))
+               rhoWp=sum(this%hybu_z(:,i,j,k+1)*this%rho_Uold(i,j,k:k+1))*sum(this%itpw_x(:,i,j,k+1)*this%W(i-1:i,j,k+1))
+               rhoWm=sum(this%hybu_z(:,i,j,k  )*this%rho_Uold(i,j,k-1:k))*sum(this%itpw_x(:,i,j,k  )*this%W(i-1:i,j,k  ))
+               this%implicit%opr(1,i,j,k)=this%implicit%opr(1,i,j,k)+0.5_WP*dt*(this%divu_x( 0,i,j,k)*this%hybu_x( 0,i  ,j,k)*rhoUp+&
+               &                                                                this%divu_x(-1,i,j,k)*this%hybu_x(+1,i-1,j,k)*rhoUm+&
+               &                                                                this%divu_y(+1,i,j,k)*this%hybu_y(-1,i,j+1,k)*rhoVp+&
+               &                                                                this%divu_y( 0,i,j,k)*this%hybu_y( 0,i,j  ,k)*rhoVm+&
+               &                                                                this%divu_z(+1,i,j,k)*this%hybu_z(-1,i,j,k+1)*rhoWp+&
+               &                                                                this%divu_z( 0,i,j,k)*this%hybu_z( 0,i,j,k  )*rhoWm)
+               this%implicit%opr(2,i,j,k)=this%implicit%opr(2,i,j,k)+0.5_WP*dt*(this%divu_x( 0,i,j,k)*this%hybu_x(+1,i  ,j,k)*rhoUp)
+               this%implicit%opr(3,i,j,k)=this%implicit%opr(3,i,j,k)+0.5_WP*dt*(this%divu_x(-1,i,j,k)*this%hybu_x( 0,i-1,j,k)*rhoUm)
+               this%implicit%opr(4,i,j,k)=this%implicit%opr(4,i,j,k)+0.5_WP*dt*(this%divu_y(+1,i,j,k)*this%hybu_y( 0,i,j+1,k)*rhoVp)
+               this%implicit%opr(5,i,j,k)=this%implicit%opr(5,i,j,k)+0.5_WP*dt*(this%divu_y( 0,i,j,k)*this%hybu_y(-1,i,j  ,k)*rhoVm)
+               this%implicit%opr(6,i,j,k)=this%implicit%opr(6,i,j,k)+0.5_WP*dt*(this%divu_z(+1,i,j,k)*this%hybu_z( 0,i,j,k+1)*rhoWp)
+               this%implicit%opr(7,i,j,k)=this%implicit%opr(7,i,j,k)+0.5_WP*dt*(this%divu_z( 0,i,j,k)*this%hybu_z(-1,i,j,k  )*rhoWm)
             end do
          end do
       end do
       do k=this%cfg%kmin_,this%cfg%kmax_
          do j=this%cfg%jmin_,this%cfg%jmax_
             do i=this%cfg%imin_,this%cfg%imax_
-               this%implicit%opr(1,i,j,k)=this%implicit%opr(1,i,j,k)-0.5_WP*dt*(this%divu_x( 0,i,j,k)*this%visc*this%grdu_x( 0,i  ,j,k)+&
-               &                                                                this%divu_x(-1,i,j,k)*this%visc*this%grdu_x(+1,i-1,j,k)+&
-               &                                                                this%divu_y(+1,i,j,k)*this%visc*this%grdu_y(-1,i,j+1,k)+&
-               &                                                                this%divu_y( 0,i,j,k)*this%visc*this%grdu_y( 0,i,j  ,k)+&
-               &                                                                this%divu_z(+1,i,j,k)*this%visc*this%grdu_z(-1,i,j,k+1)+&
-               &                                                                this%divu_z( 0,i,j,k)*this%visc*this%grdu_z( 0,i,j,k  ))
-               this%implicit%opr(2,i,j,k)=this%implicit%opr(2,i,j,k)-0.5_WP*dt*(this%divu_x( 0,i,j,k)*this%visc*this%grdu_x(+1,i  ,j,k))
-               this%implicit%opr(3,i,j,k)=this%implicit%opr(3,i,j,k)-0.5_WP*dt*(this%divu_x(-1,i,j,k)*this%visc*this%grdu_x( 0,i-1,j,k))
-               this%implicit%opr(4,i,j,k)=this%implicit%opr(4,i,j,k)-0.5_WP*dt*(this%divu_y(+1,i,j,k)*this%visc*this%grdu_y( 0,i,j+1,k))
-               this%implicit%opr(5,i,j,k)=this%implicit%opr(5,i,j,k)-0.5_WP*dt*(this%divu_y( 0,i,j,k)*this%visc*this%grdu_y(-1,i,j  ,k))
-               this%implicit%opr(6,i,j,k)=this%implicit%opr(6,i,j,k)-0.5_WP*dt*(this%divu_z(+1,i,j,k)*this%visc*this%grdu_z( 0,i,j,k+1))
-               this%implicit%opr(7,i,j,k)=this%implicit%opr(7,i,j,k)-0.5_WP*dt*(this%divu_z( 0,i,j,k)*this%visc*this%grdu_z(-1,i,j,k  ))
+               this%implicit%opr(1,i,j,k)=this%implicit%opr(1,i,j,k)-0.5_WP*dt*(this%divu_x( 0,i,j,k)*2.0_WP*this%visc   (i  ,j,k)*this%grdu_x( 0,i  ,j,k)+&
+               &                                                                this%divu_x(-1,i,j,k)*2.0_WP*this%visc   (i-1,j,k)*this%grdu_x(+1,i-1,j,k)+&
+               &                                                                this%divu_y(+1,i,j,k)*       this%visc_xy(i,j+1,k)*this%grdu_y(-1,i,j+1,k)+&
+               &                                                                this%divu_y( 0,i,j,k)*       this%visc_xy(i,j  ,k)*this%grdu_y( 0,i,j  ,k)+&
+               &                                                                this%divu_z(+1,i,j,k)*       this%visc_zx(i,j,k+1)*this%grdu_z(-1,i,j,k+1)+&
+               &                                                                this%divu_z( 0,i,j,k)*       this%visc_zx(i,j,k  )*this%grdu_z( 0,i,j,k  ))
+               this%implicit%opr(2,i,j,k)=this%implicit%opr(2,i,j,k)-0.5_WP*dt*(this%divu_x( 0,i,j,k)*2.0_WP*this%visc   (i  ,j,k)*this%grdu_x(+1,i  ,j,k))
+               this%implicit%opr(3,i,j,k)=this%implicit%opr(3,i,j,k)-0.5_WP*dt*(this%divu_x(-1,i,j,k)*2.0_WP*this%visc   (i-1,j,k)*this%grdu_x( 0,i-1,j,k))
+               this%implicit%opr(4,i,j,k)=this%implicit%opr(4,i,j,k)-0.5_WP*dt*(this%divu_y(+1,i,j,k)*       this%visc_xy(i,j+1,k)*this%grdu_y( 0,i,j+1,k))
+               this%implicit%opr(5,i,j,k)=this%implicit%opr(5,i,j,k)-0.5_WP*dt*(this%divu_y( 0,i,j,k)*       this%visc_xy(i,j  ,k)*this%grdu_y(-1,i,j  ,k))
+               this%implicit%opr(6,i,j,k)=this%implicit%opr(6,i,j,k)-0.5_WP*dt*(this%divu_z(+1,i,j,k)*       this%visc_zx(i,j,k+1)*this%grdu_z( 0,i,j,k+1))
+               this%implicit%opr(7,i,j,k)=this%implicit%opr(7,i,j,k)-0.5_WP*dt*(this%divu_z( 0,i,j,k)*       this%visc_zx(i,j,k  )*this%grdu_z(-1,i,j,k  ))
             end do
          end do
       end do
@@ -1533,46 +1959,46 @@ contains
       resU=this%implicit%sol
       
       ! Solve implicit V problem
-      this%implicit%opr(1,:,:,:)=this%rho; this%implicit%opr(2:,:,:,:)=0.0_WP
+      this%implicit%opr(1,:,:,:)=this%rho_V; this%implicit%opr(2:,:,:,:)=0.0_WP
       do k=this%cfg%kmin_,this%cfg%kmax_
          do j=this%cfg%jmin_,this%cfg%jmax_
             do i=this%cfg%imin_,this%cfg%imax_
-               rhoUp=this%rho*sum(this%itpu_y(:,i+1,j,k)*this%U(i+1,j-1:j,k))
-               rhoUm=this%rho*sum(this%itpu_y(:,i  ,j,k)*this%U(i  ,j-1:j,k))
-               rhoVp=this%rho*sum(this%itpv_y(:,i,j  ,k)*this%V(i,j  :j+1,k))*2.0_WP
-               rhoVm=this%rho*sum(this%itpv_y(:,i,j-1,k)*this%V(i,j-1:j  ,k))*2.0_WP
-               rhoWp=this%rho*sum(this%itpw_y(:,i,j,k+1)*this%W(i,j-1:j,k+1))
-               rhoWm=this%rho*sum(this%itpw_y(:,i,j,k  )*this%W(i,j-1:j,k  ))
-               this%implicit%opr(1,i,j,k)=this%implicit%opr(1,i,j,k)+0.5_WP*dt*(this%divv_x(+1,i,j,k)*this%itpv_x(-1,i+1,j,k)*rhoUp+&
-               &                                                                this%divv_x( 0,i,j,k)*this%itpv_x( 0,i  ,j,k)*rhoUm+&
-               &                                                                this%divv_y( 0,i,j,k)*this%itpv_y( 0,i,j  ,k)*rhoVp+&
-               &                                                                this%divv_y(-1,i,j,k)*this%itpv_y(+1,i,j-1,k)*rhoVm+&
-               &                                                                this%divv_z(+1,i,j,k)*this%itpv_z(-1,i,j,k+1)*rhoWp+&
-               &                                                                this%divv_z( 0,i,j,k)*this%itpv_z( 0,i,j,k  )*rhoWm)
-               this%implicit%opr(2,i,j,k)=this%implicit%opr(2,i,j,k)+0.5_WP*dt*(this%divv_x(+1,i,j,k)*this%itpv_x( 0,i+1,j,k)*rhoUp)
-               this%implicit%opr(3,i,j,k)=this%implicit%opr(3,i,j,k)+0.5_WP*dt*(this%divv_x( 0,i,j,k)*this%itpv_x(-1,i  ,j,k)*rhoUm)
-               this%implicit%opr(4,i,j,k)=this%implicit%opr(4,i,j,k)+0.5_WP*dt*(this%divv_y( 0,i,j,k)*this%itpv_y(+1,i,j  ,k)*rhoVp)
-               this%implicit%opr(5,i,j,k)=this%implicit%opr(5,i,j,k)+0.5_WP*dt*(this%divv_y(-1,i,j,k)*this%itpv_y( 0,i,j-1,k)*rhoVm)
-               this%implicit%opr(6,i,j,k)=this%implicit%opr(6,i,j,k)+0.5_WP*dt*(this%divv_z(+1,i,j,k)*this%itpv_z( 0,i,j,k+1)*rhoWp)
-               this%implicit%opr(7,i,j,k)=this%implicit%opr(7,i,j,k)+0.5_WP*dt*(this%divv_z( 0,i,j,k)*this%itpv_z(-1,i,j,k  )*rhoWm)
+               rhoUp=sum(this%hybv_x(:,i+1,j,k)*this%rho_Vold(i:i+1,j,k))*sum(this%itpu_y(:,i+1,j,k)*this%U(i+1,j-1:j,k))
+               rhoUm=sum(this%hybv_x(:,i  ,j,k)*this%rho_Vold(i-1:i,j,k))*sum(this%itpu_y(:,i  ,j,k)*this%U(i  ,j-1:j,k))
+               rhoVp=sum(this%hybv_y(:,i,j  ,k)*this%rho_Vold(i,j:j+1,k))*sum(this%itpv_y(:,i,j  ,k)*this%V(i,j  :j+1,k))!*2.0_WP
+               rhoVm=sum(this%hybv_y(:,i,j-1,k)*this%rho_Vold(i,j-1:j,k))*sum(this%itpv_y(:,i,j-1,k)*this%V(i,j-1:j  ,k))!*2.0_WP
+               rhoWp=sum(this%hybv_z(:,i,j,k+1)*this%rho_Vold(i,j,k:k+1))*sum(this%itpw_y(:,i,j,k+1)*this%W(i,j-1:j,k+1))
+               rhoWm=sum(this%hybv_z(:,i,j,k  )*this%rho_Vold(i,j,k-1:k))*sum(this%itpw_y(:,i,j,k  )*this%W(i,j-1:j,k  ))
+               this%implicit%opr(1,i,j,k)=this%implicit%opr(1,i,j,k)+0.5_WP*dt*(this%divv_x(+1,i,j,k)*this%hybv_x(-1,i+1,j,k)*rhoUp+&
+               &                                                                this%divv_x( 0,i,j,k)*this%hybv_x( 0,i  ,j,k)*rhoUm+&
+               &                                                                this%divv_y( 0,i,j,k)*this%hybv_y( 0,i,j  ,k)*rhoVp+&
+               &                                                                this%divv_y(-1,i,j,k)*this%hybv_y(+1,i,j-1,k)*rhoVm+&
+               &                                                                this%divv_z(+1,i,j,k)*this%hybv_z(-1,i,j,k+1)*rhoWp+&
+               &                                                                this%divv_z( 0,i,j,k)*this%hybv_z( 0,i,j,k  )*rhoWm)
+               this%implicit%opr(2,i,j,k)=this%implicit%opr(2,i,j,k)+0.5_WP*dt*(this%divv_x(+1,i,j,k)*this%hybv_x( 0,i+1,j,k)*rhoUp)
+               this%implicit%opr(3,i,j,k)=this%implicit%opr(3,i,j,k)+0.5_WP*dt*(this%divv_x( 0,i,j,k)*this%hybv_x(-1,i  ,j,k)*rhoUm)
+               this%implicit%opr(4,i,j,k)=this%implicit%opr(4,i,j,k)+0.5_WP*dt*(this%divv_y( 0,i,j,k)*this%hybv_y(+1,i,j  ,k)*rhoVp)
+               this%implicit%opr(5,i,j,k)=this%implicit%opr(5,i,j,k)+0.5_WP*dt*(this%divv_y(-1,i,j,k)*this%hybv_y( 0,i,j-1,k)*rhoVm)
+               this%implicit%opr(6,i,j,k)=this%implicit%opr(6,i,j,k)+0.5_WP*dt*(this%divv_z(+1,i,j,k)*this%hybv_z( 0,i,j,k+1)*rhoWp)
+               this%implicit%opr(7,i,j,k)=this%implicit%opr(7,i,j,k)+0.5_WP*dt*(this%divv_z( 0,i,j,k)*this%hybv_z(-1,i,j,k  )*rhoWm)
             end do
          end do
       end do
       do k=this%cfg%kmin_,this%cfg%kmax_
          do j=this%cfg%jmin_,this%cfg%jmax_
             do i=this%cfg%imin_,this%cfg%imax_
-               this%implicit%opr(1,i,j,k)=this%implicit%opr(1,i,j,k)-0.5_WP*dt*(this%divv_x(+1,i,j,k)*this%visc*this%grdv_x(-1,i+1,j,k)+&
-               &                                                                this%divv_x( 0,i,j,k)*this%visc*this%grdv_x( 0,i  ,j,k)+&
-               &                                                                this%divv_y( 0,i,j,k)*this%visc*this%grdv_y( 0,i,j  ,k)+&
-               &                                                                this%divv_y(-1,i,j,k)*this%visc*this%grdv_y(+1,i,j-1,k)+&
-               &                                                                this%divv_z(+1,i,j,k)*this%visc*this%grdv_z(-1,i,j,k+1)+&
-               &                                                                this%divv_z( 0,i,j,k)*this%visc*this%grdv_z( 0,i,j,k  ))
-               this%implicit%opr(2,i,j,k)=this%implicit%opr(2,i,j,k)-0.5_WP*dt*(this%divv_x(+1,i,j,k)*this%visc*this%grdv_x( 0,i+1,j,k))
-               this%implicit%opr(3,i,j,k)=this%implicit%opr(3,i,j,k)-0.5_WP*dt*(this%divv_x( 0,i,j,k)*this%visc*this%grdv_x(-1,i  ,j,k))
-               this%implicit%opr(4,i,j,k)=this%implicit%opr(4,i,j,k)-0.5_WP*dt*(this%divv_y( 0,i,j,k)*this%visc*this%grdv_y(+1,i,j  ,k))
-               this%implicit%opr(5,i,j,k)=this%implicit%opr(5,i,j,k)-0.5_WP*dt*(this%divv_y(-1,i,j,k)*this%visc*this%grdv_y( 0,i,j-1,k))
-               this%implicit%opr(6,i,j,k)=this%implicit%opr(6,i,j,k)-0.5_WP*dt*(this%divv_z(+1,i,j,k)*this%visc*this%grdv_z( 0,i,j,k+1))
-               this%implicit%opr(7,i,j,k)=this%implicit%opr(7,i,j,k)-0.5_WP*dt*(this%divv_z( 0,i,j,k)*this%visc*this%grdv_z(-1,i,j,k  ))
+               this%implicit%opr(1,i,j,k)=this%implicit%opr(1,i,j,k)-0.5_WP*dt*(this%divv_x(+1,i,j,k)*       this%visc_xy(i+1,j,k)*this%grdv_x(-1,i+1,j,k)+&
+               &                                                                this%divv_x( 0,i,j,k)*       this%visc_xy(i  ,j,k)*this%grdv_x( 0,i  ,j,k)+&
+               &                                                                this%divv_y( 0,i,j,k)*2.0_WP*this%visc   (i,j  ,k)*this%grdv_y( 0,i,j  ,k)+&
+               &                                                                this%divv_y(-1,i,j,k)*2.0_WP*this%visc   (i,j-1,k)*this%grdv_y(+1,i,j-1,k)+&
+               &                                                                this%divv_z(+1,i,j,k)*       this%visc_yz(i,j,k+1)*this%grdv_z(-1,i,j,k+1)+&
+               &                                                                this%divv_z( 0,i,j,k)*       this%visc_yz(i,j,k  )*this%grdv_z( 0,i,j,k  ))
+               this%implicit%opr(2,i,j,k)=this%implicit%opr(2,i,j,k)-0.5_WP*dt*(this%divv_x(+1,i,j,k)*       this%visc_xy(i+1,j,k)*this%grdv_x( 0,i+1,j,k))
+               this%implicit%opr(3,i,j,k)=this%implicit%opr(3,i,j,k)-0.5_WP*dt*(this%divv_x( 0,i,j,k)*       this%visc_xy(i  ,j,k)*this%grdv_x(-1,i  ,j,k))
+               this%implicit%opr(4,i,j,k)=this%implicit%opr(4,i,j,k)-0.5_WP*dt*(this%divv_y( 0,i,j,k)*2.0_WP*this%visc   (i,j  ,k)*this%grdv_y(+1,i,j  ,k))
+               this%implicit%opr(5,i,j,k)=this%implicit%opr(5,i,j,k)-0.5_WP*dt*(this%divv_y(-1,i,j,k)*2.0_WP*this%visc   (i,j-1,k)*this%grdv_y( 0,i,j-1,k))
+               this%implicit%opr(6,i,j,k)=this%implicit%opr(6,i,j,k)-0.5_WP*dt*(this%divv_z(+1,i,j,k)*       this%visc_yz(i,j,k+1)*this%grdv_z( 0,i,j,k+1))
+               this%implicit%opr(7,i,j,k)=this%implicit%opr(7,i,j,k)-0.5_WP*dt*(this%divv_z( 0,i,j,k)*       this%visc_yz(i,j,k  )*this%grdv_z(-1,i,j,k  ))
             end do
          end do
       end do
@@ -1583,46 +2009,46 @@ contains
       resV=this%implicit%sol
       
       ! Solve implicit W problem
-      this%implicit%opr(1,:,:,:)=this%rho; this%implicit%opr(2:,:,:,:)=0.0_WP
+      this%implicit%opr(1,:,:,:)=this%rho_W; this%implicit%opr(2:,:,:,:)=0.0_WP
       do k=this%cfg%kmin_,this%cfg%kmax_
          do j=this%cfg%jmin_,this%cfg%jmax_
             do i=this%cfg%imin_,this%cfg%imax_
-               rhoUp=this%rho*sum(this%itpu_z(:,i+1,j,k)*this%U(i+1,j,k-1:k))
-               rhoUm=this%rho*sum(this%itpu_z(:,i  ,j,k)*this%U(i  ,j,k-1:k))
-               rhoVp=this%rho*sum(this%itpv_z(:,i,j+1,k)*this%V(i,j+1,k-1:k))
-               rhoVm=this%rho*sum(this%itpv_z(:,i,j  ,k)*this%V(i,j  ,k-1:k))
-               rhoWp=this%rho*sum(this%itpw_z(:,i,j,k  )*this%W(i,j,k  :k+1))*2.0_WP
-               rhoWm=this%rho*sum(this%itpw_z(:,i,j,k-1)*this%W(i,j,k-1:k  ))*2.0_WP
-               this%implicit%opr(1,i,j,k)=this%implicit%opr(1,i,j,k)+0.5_WP*dt*(this%divw_x(+1,i,j,k)*this%itpw_x(-1,i+1,j,k)*rhoUp+&
-               &                                                                this%divw_x( 0,i,j,k)*this%itpw_x( 0,i  ,j,k)*rhoUm+&
-               &                                                                this%divw_y(+1,i,j,k)*this%itpw_y(-1,i,j+1,k)*rhoVp+&
-               &                                                                this%divw_y( 0,i,j,k)*this%itpw_y( 0,i,j  ,k)*rhoVm+&
-               &                                                                this%divw_z( 0,i,j,k)*this%itpw_z( 0,i,j,k  )*rhoWp+&
-               &                                                                this%divw_z(-1,i,j,k)*this%itpw_z(+1,i,j,k-1)*rhoWm)
-               this%implicit%opr(2,i,j,k)=this%implicit%opr(2,i,j,k)+0.5_WP*dt*(this%divw_x(+1,i,j,k)*this%itpw_x( 0,i+1,j,k)*rhoUp)
-               this%implicit%opr(3,i,j,k)=this%implicit%opr(3,i,j,k)+0.5_WP*dt*(this%divw_x( 0,i,j,k)*this%itpw_x(-1,i  ,j,k)*rhoUm)
-               this%implicit%opr(4,i,j,k)=this%implicit%opr(4,i,j,k)+0.5_WP*dt*(this%divw_y(+1,i,j,k)*this%itpw_y( 0,i,j+1,k)*rhoVp)
-               this%implicit%opr(5,i,j,k)=this%implicit%opr(5,i,j,k)+0.5_WP*dt*(this%divw_y( 0,i,j,k)*this%itpw_y(-1,i,j  ,k)*rhoVm)
-               this%implicit%opr(6,i,j,k)=this%implicit%opr(6,i,j,k)+0.5_WP*dt*(this%divw_z( 0,i,j,k)*this%itpw_z(+1,i,j,k  )*rhoWp)
-               this%implicit%opr(7,i,j,k)=this%implicit%opr(7,i,j,k)+0.5_WP*dt*(this%divw_z(-1,i,j,k)*this%itpw_z( 0,i,j,k-1)*rhoWm)
+               rhoUp=sum(this%hybw_x(:,i+1,j,k)*this%rho_Wold(i:i+1,j,k))*sum(this%itpu_z(:,i+1,j,k)*this%U(i+1,j,k-1:k))
+               rhoUm=sum(this%hybw_x(:,i  ,j,k)*this%rho_Wold(i-1:i,j,k))*sum(this%itpu_z(:,i  ,j,k)*this%U(i  ,j,k-1:k))
+               rhoVp=sum(this%hybw_y(:,i,j+1,k)*this%rho_Wold(i,j:j+1,k))*sum(this%itpv_z(:,i,j+1,k)*this%V(i,j+1,k-1:k))
+               rhoVm=sum(this%hybw_y(:,i,j  ,k)*this%rho_Wold(i,j-1:j,k))*sum(this%itpv_z(:,i,j  ,k)*this%V(i,j  ,k-1:k))
+               rhoWp=sum(this%hybw_z(:,i,j,k  )*this%rho_Wold(i,j,k:k+1))*sum(this%itpw_z(:,i,j,k  )*this%W(i,j,k  :k+1))!*2.0_WP
+               rhoWm=sum(this%hybw_z(:,i,j,k-1)*this%rho_Wold(i,j,k-1:k))*sum(this%itpw_z(:,i,j,k-1)*this%W(i,j,k-1:k  ))!*2.0_WP
+               this%implicit%opr(1,i,j,k)=this%implicit%opr(1,i,j,k)+0.5_WP*dt*(this%divw_x(+1,i,j,k)*this%hybw_x(-1,i+1,j,k)*rhoUp+&
+               &                                                                this%divw_x( 0,i,j,k)*this%hybw_x( 0,i  ,j,k)*rhoUm+&
+               &                                                                this%divw_y(+1,i,j,k)*this%hybw_y(-1,i,j+1,k)*rhoVp+&
+               &                                                                this%divw_y( 0,i,j,k)*this%hybw_y( 0,i,j  ,k)*rhoVm+&
+               &                                                                this%divw_z( 0,i,j,k)*this%hybw_z( 0,i,j,k  )*rhoWp+&
+               &                                                                this%divw_z(-1,i,j,k)*this%hybw_z(+1,i,j,k-1)*rhoWm)
+               this%implicit%opr(2,i,j,k)=this%implicit%opr(2,i,j,k)+0.5_WP*dt*(this%divw_x(+1,i,j,k)*this%hybw_x( 0,i+1,j,k)*rhoUp)
+               this%implicit%opr(3,i,j,k)=this%implicit%opr(3,i,j,k)+0.5_WP*dt*(this%divw_x( 0,i,j,k)*this%hybw_x(-1,i  ,j,k)*rhoUm)
+               this%implicit%opr(4,i,j,k)=this%implicit%opr(4,i,j,k)+0.5_WP*dt*(this%divw_y(+1,i,j,k)*this%hybw_y( 0,i,j+1,k)*rhoVp)
+               this%implicit%opr(5,i,j,k)=this%implicit%opr(5,i,j,k)+0.5_WP*dt*(this%divw_y( 0,i,j,k)*this%hybw_y(-1,i,j  ,k)*rhoVm)
+               this%implicit%opr(6,i,j,k)=this%implicit%opr(6,i,j,k)+0.5_WP*dt*(this%divw_z( 0,i,j,k)*this%hybw_z(+1,i,j,k  )*rhoWp)
+               this%implicit%opr(7,i,j,k)=this%implicit%opr(7,i,j,k)+0.5_WP*dt*(this%divw_z(-1,i,j,k)*this%hybw_z( 0,i,j,k-1)*rhoWm)
             end do
          end do
       end do
       do k=this%cfg%kmin_,this%cfg%kmax_
          do j=this%cfg%jmin_,this%cfg%jmax_
             do i=this%cfg%imin_,this%cfg%imax_
-               this%implicit%opr(1,i,j,k)=this%implicit%opr(1,i,j,k)-0.5_WP*dt*(this%divw_x(+1,i,j,k)*this%visc*this%grdw_x(-1,i+1,j,k)+&
-               &                                                                this%divw_x( 0,i,j,k)*this%visc*this%grdw_x( 0,i  ,j,k)+&
-               &                                                                this%divw_y(+1,i,j,k)*this%visc*this%grdw_y(-1,i,j+1,k)+&
-               &                                                                this%divw_y( 0,i,j,k)*this%visc*this%grdw_y( 0,i,j  ,k)+&
-               &                                                                this%divw_z( 0,i,j,k)*this%visc*this%grdw_z( 0,i,j,k  )+&
-               &                                                                this%divw_z(-1,i,j,k)*this%visc*this%grdw_z(+1,i,j,k-1))
-               this%implicit%opr(2,i,j,k)=this%implicit%opr(2,i,j,k)-0.5_WP*dt*(this%divw_x(+1,i,j,k)*this%visc*this%grdw_x( 0,i+1,j,k))
-               this%implicit%opr(3,i,j,k)=this%implicit%opr(3,i,j,k)-0.5_WP*dt*(this%divw_x( 0,i,j,k)*this%visc*this%grdw_x(-1,i  ,j,k))
-               this%implicit%opr(4,i,j,k)=this%implicit%opr(4,i,j,k)-0.5_WP*dt*(this%divw_y(+1,i,j,k)*this%visc*this%grdw_y( 0,i,j+1,k))
-               this%implicit%opr(5,i,j,k)=this%implicit%opr(5,i,j,k)-0.5_WP*dt*(this%divw_y( 0,i,j,k)*this%visc*this%grdw_y(-1,i,j  ,k))
-               this%implicit%opr(6,i,j,k)=this%implicit%opr(6,i,j,k)-0.5_WP*dt*(this%divw_z( 0,i,j,k)*this%visc*this%grdw_z(+1,i,j,k  ))
-               this%implicit%opr(7,i,j,k)=this%implicit%opr(7,i,j,k)-0.5_WP*dt*(this%divw_z(-1,i,j,k)*this%visc*this%grdw_z( 0,i,j,k-1))
+               this%implicit%opr(1,i,j,k)=this%implicit%opr(1,i,j,k)-0.5_WP*dt*(this%divw_x(+1,i,j,k)*       this%visc_zx(i+1,j,k)*this%grdw_x(-1,i+1,j,k)+&
+               &                                                                this%divw_x( 0,i,j,k)*       this%visc_zx(i  ,j,k)*this%grdw_x( 0,i  ,j,k)+&
+               &                                                                this%divw_y(+1,i,j,k)*       this%visc_yz(i,j+1,k)*this%grdw_y(-1,i,j+1,k)+&
+               &                                                                this%divw_y( 0,i,j,k)*       this%visc_yz(i,j  ,k)*this%grdw_y( 0,i,j  ,k)+&
+               &                                                                this%divw_z( 0,i,j,k)*2.0_WP*this%visc   (i,j,k  )*this%grdw_z( 0,i,j,k  )+&
+               &                                                                this%divw_z(-1,i,j,k)*2.0_WP*this%visc   (i,j,k-1)*this%grdw_z(+1,i,j,k-1))
+               this%implicit%opr(2,i,j,k)=this%implicit%opr(2,i,j,k)-0.5_WP*dt*(this%divw_x(+1,i,j,k)*       this%visc_zx(i+1,j,k)*this%grdw_x( 0,i+1,j,k))
+               this%implicit%opr(3,i,j,k)=this%implicit%opr(3,i,j,k)-0.5_WP*dt*(this%divw_x( 0,i,j,k)*       this%visc_zx(i  ,j,k)*this%grdw_x(-1,i  ,j,k))
+               this%implicit%opr(4,i,j,k)=this%implicit%opr(4,i,j,k)-0.5_WP*dt*(this%divw_y(+1,i,j,k)*       this%visc_yz(i,j+1,k)*this%grdw_y( 0,i,j+1,k))
+               this%implicit%opr(5,i,j,k)=this%implicit%opr(5,i,j,k)-0.5_WP*dt*(this%divw_y( 0,i,j,k)*       this%visc_yz(i,j  ,k)*this%grdw_y(-1,i,j  ,k))
+               this%implicit%opr(6,i,j,k)=this%implicit%opr(6,i,j,k)-0.5_WP*dt*(this%divw_z( 0,i,j,k)*2.0_WP*this%visc   (i,j,k  )*this%grdw_z(+1,i,j,k  ))
+               this%implicit%opr(7,i,j,k)=this%implicit%opr(7,i,j,k)-0.5_WP*dt*(this%divw_z(-1,i,j,k)*2.0_WP*this%visc   (i,j,k-1)*this%grdw_z( 0,i,j,k-1))
             end do
          end do
       end do
@@ -1638,6 +2064,90 @@ contains
       call this%cfg%sync(resW)
       
    end subroutine solve_implicit
+   
+   
+   !> Prepare viscosity arrays from subvf data
+   subroutine get_viscosity_from_subvf(this,subvf)
+      implicit none
+      class(tpns), intent(inout) :: this
+      real(WP), dimension(0:,0:,0:,this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in) :: subvf
+      integer :: i,j,k
+      real(WP) :: myVF
+      ! Compute harmonically-averaged staggered viscosities using subcell volume fractions
+      do k=this%cfg%kmino_+1,this%cfg%kmaxo_
+         do j=this%cfg%jmino_+1,this%cfg%jmaxo_
+            do i=this%cfg%imino_+1,this%cfg%imaxo_
+               ! visc at [xm,ym,zm] - direct sum in x/y/z
+               myVF=0.125_WP*sum(subvf(:,:,:,i,j,k))
+               this%visc(i,j,k)=this%visc_g*this%visc_l/(this%visc_g*myVF+this%visc_l*(1.0_WP-myVF))
+               ! visc_xy at [x,y,zm] - direct sum in z, staggered sum in x/y
+               myVF=0.125_WP*(sum(subvf(0,0,:,i,j,k))+sum(subvf(1,0,:,i-1,j,k))+sum(subvf(0,1,:,i,j-1,k))+sum(subvf(1,1,:,i-1,j-1,k)))
+               this%visc_xy(i,j,k)=this%visc_g*this%visc_l/(this%visc_g*myVF+this%visc_l*(1.0_WP-myVF))
+               ! visc_yz at [xm,y,z] - direct sum in x, staggered sum in y/z
+               myVF=0.125_WP*(sum(subvf(:,0,0,i,j,k))+sum(subvf(:,1,0,i,j-1,k))+sum(subvf(:,0,1,i,j,k-1))+sum(subvf(:,1,1,i,j-1,k-1)))
+               this%visc_yz(i,j,k)=this%visc_g*this%visc_l/(this%visc_g*myVF+this%visc_l*(1.0_WP-myVF))
+               ! visc_zx at [x,ym,z] - direct sum in y, staggered sum in z/x
+               myVF=0.125_WP*(sum(subvf(0,:,0,i,j,k))+sum(subvf(0,:,1,i,j,k-1))+sum(subvf(1,:,0,i-1,j,k))+sum(subvf(1,:,1,i-1,j,k-1)))
+               this%visc_zx(i,j,k)=this%visc_g*this%visc_l/(this%visc_g*myVF+this%visc_l*(1.0_WP-myVF))
+            end do
+         end do
+      end do
+      ! Synchronize boundaries - not really needed...
+      call this%cfg%sync(this%visc)
+      call this%cfg%sync(this%visc_xy)
+      call this%cfg%sync(this%visc_yz)
+      call this%cfg%sync(this%visc_zx)
+   end subroutine get_viscosity_from_subvf
+   
+   
+   !> Prepare old density arrays from subvf data
+   subroutine get_olddensity_from_subvf(this,subvf)
+      implicit none
+      class(tpns), intent(inout) :: this
+      real(WP), dimension(0:,0:,0:,this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in) :: subvf
+      integer :: i,j,k
+      real(WP) :: myVF
+      ! Calculate rho_U/V/Wold
+      do k=this%cfg%kmino_+1,this%cfg%kmax_
+         do j=this%cfg%jmino_+1,this%cfg%jmax_
+            do i=this%cfg%imino_+1,this%cfg%imax_
+               ! U-cell
+               myVF=0.125_WP*(sum(subvf(0,:,:,i,j,k))+sum(subvf(1,:,:,i-1,j,k)))
+               this%rho_Uold(i,j,k)=myVF*this%rho_l+(1.0_WP-myVF)*this%rho_g
+               ! V-cell
+               myVF=0.125_WP*(sum(subvf(:,0,:,i,j,k))+sum(subvf(:,1,:,i,j-1,k)))
+               this%rho_Vold(i,j,k)=myVF*this%rho_l+(1.0_WP-myVF)*this%rho_g
+               ! W-cell
+               myVF=0.125_WP*(sum(subvf(:,:,0,i,j,k))+sum(subvf(:,:,1,i,j,k-1)))
+               this%rho_Wold(i,j,k)=myVF*this%rho_l+(1.0_WP-myVF)*this%rho_g
+            end do
+         end do
+      end do
+      ! Synchronize boundaries - not really needed...
+      call this%cfg%sync(this%rho_Uold)
+      call this%cfg%sync(this%rho_Vold)
+      call this%cfg%sync(this%rho_Wold)
+   end subroutine get_olddensity_from_subvf
+   
+   
+   !> Add gravity source term - assumes that rho_[UVW] have been generated before
+   subroutine addsrc_gravity(this,resU,resV,resW)
+      implicit none
+      class(tpns), intent(inout) :: this
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: resU !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: resV !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: resW !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      integer :: i,j,k
+      do k=this%cfg%kmin_,this%cfg%kmax_
+         do j=this%cfg%jmin_,this%cfg%jmax_
+            do i=this%cfg%imin_,this%cfg%imax_
+               if (this%umask(i,j,k).eq.0) resU(i,j,k)=resU(i,j,k)+this%rho_U(i,j,k)*this%gravity(1)
+               if (this%vmask(i,j,k).eq.0) resV(i,j,k)=resV(i,j,k)+this%rho_V(i,j,k)*this%gravity(2)
+               if (this%wmask(i,j,k).eq.0) resW(i,j,k)=resW(i,j,k)+this%rho_W(i,j,k)*this%gravity(3)
+            end do
+         end do
+      end do
+   end subroutine addsrc_gravity
    
    
    !> Print out info for two-phase incompressible flow solver
