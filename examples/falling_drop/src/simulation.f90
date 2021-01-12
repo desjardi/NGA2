@@ -256,64 +256,64 @@ contains
          call fs%get_olddensity(vf=vf)
          ! ===================================================
          
-         ! ! Perform sub-iterations
-         ! do while (time%it.le.time%itmax)
-         !
-         !    ! Build mid-time velocity
-             fs%U=0.5_WP*(fs%U+fs%Uold)
-             fs%V=0.5_WP*(fs%V+fs%Vold)
-             fs%W=0.5_WP*(fs%W+fs%Wold)
-         !
-         !    ! Preliminary mass and momentum transport step at the interface
-         !    !call fs%prepare_advection_semilag(dt=time%dt,vf=vf)
-             call fs%prepare_advection_upwind(dt=time%dt)
-         !
-         !    ! VOF solver step
-             call vf%advance(dt=time%dt,U=fs%U,V=fs%V,W=fs%W)
-         !
-         !    ! Explicit calculation of drho*u/dt from NS
-         !    call fs%get_dmomdt(resU,resV,resW)
-         !
-         !    ! Add momentum source terms
-         !    call fs%addsrc_gravity(resU,resV,resW)
-         !
-         !    ! Assemble explicit residual
-         !    resU=-2.0_WP*(fs%rho_U*fs%U-fs%rho_Uold*fs%Uold)+time%dt*resU
-         !    resV=-2.0_WP*(fs%rho_V*fs%V-fs%rho_Vold*fs%Vold)+time%dt*resV
-         !    resW=-2.0_WP*(fs%rho_W*fs%W-fs%rho_Wold*fs%Wold)+time%dt*resW
-         !
-         !    ! Form implicit residuals
-         !    call fs%solve_implicit(time%dt,resU,resV,resW)
-         !
-         !    ! Apply these residuals
-         !    fs%U=2.0_WP*fs%U-fs%Uold+resU
-         !    fs%V=2.0_WP*fs%V-fs%Vold+resV
-         !    fs%W=2.0_WP*fs%W-fs%Wold+resW
-         !
-         !    ! Apply other boundary conditions
-         !    call fs%apply_bcond(time%t,time%dt)
-         !
-         !    ! Solve Poisson equation
-         !    call fs%update_laplacian()
-         !    call fs%correct_mfr()
-         !    call fs%get_div()
-         !    call fs%add_surface_tension_jump(dt=time%dt,div=fs%div,vf=vf)
-         !    fs%psolv%rhs=-fs%cfg%vol*fs%div/time%dt
-         !    fs%psolv%sol=0.0_WP
-         !    call fs%psolv%solve()
-         !    call fs%shift_p(fs%psolv%sol)
-         !
-         !    ! Correct velocity
-         !    call fs%get_pgrad(fs%psolv%sol,resU,resV,resW)
-         !    fs%P=fs%P+fs%psolv%sol
-         !    fs%U=fs%U-time%dt*resU/fs%rho_U
-         !    fs%V=fs%V-time%dt*resV/fs%rho_V
-         !    fs%W=fs%W-time%dt*resW/fs%rho_W
-         !
-         !    ! Increment sub-iteration counter
-         !    time%it=time%it+1
-         !
-         ! end do
+         ! Perform sub-iterations
+         do while (time%it.le.time%itmax)
+            
+            ! Build mid-time velocity
+            fs%U=0.5_WP*(fs%U+fs%Uold)
+            fs%V=0.5_WP*(fs%V+fs%Vold)
+            fs%W=0.5_WP*(fs%W+fs%Wold)
+            
+            ! Preliminary mass and momentum transport step at the interface
+            !call fs%prepare_advection_semilag(dt=time%dt,vf=vf)
+            call fs%prepare_advection_upwind(dt=time%dt)
+            
+            ! VOF solver step
+            call vf%advance(dt=time%dt,U=fs%U,V=fs%V,W=fs%W)
+            
+            ! Explicit calculation of drho*u/dt from NS
+            call fs%get_dmomdt(resU,resV,resW)
+            
+            ! Add momentum source terms
+            call fs%addsrc_gravity(resU,resV,resW)
+            
+            ! Assemble explicit residual
+            resU=-2.0_WP*(fs%rho_U*fs%U-fs%rho_Uold*fs%Uold)+time%dt*resU
+            resV=-2.0_WP*(fs%rho_V*fs%V-fs%rho_Vold*fs%Vold)+time%dt*resV
+            resW=-2.0_WP*(fs%rho_W*fs%W-fs%rho_Wold*fs%Wold)+time%dt*resW
+            
+            ! Form implicit residuals
+            call fs%solve_implicit(time%dt,resU,resV,resW)
+            
+            ! Apply these residuals
+            fs%U=2.0_WP*fs%U-fs%Uold+resU
+            fs%V=2.0_WP*fs%V-fs%Vold+resV
+            fs%W=2.0_WP*fs%W-fs%Wold+resW
+            
+            ! Apply other boundary conditions
+            call fs%apply_bcond(time%t,time%dt)
+            
+            ! Solve Poisson equation
+            call fs%update_laplacian()
+            call fs%correct_mfr()
+            call fs%get_div()
+            call fs%add_surface_tension_jump(dt=time%dt,div=fs%div,vf=vf)
+            fs%psolv%rhs=-fs%cfg%vol*fs%div/time%dt
+            fs%psolv%sol=0.0_WP
+            call fs%psolv%solve()
+            call fs%shift_p(fs%psolv%sol)
+            
+            ! Correct velocity
+            call fs%get_pgrad(fs%psolv%sol,resU,resV,resW)
+            fs%P=fs%P+fs%psolv%sol
+            fs%U=fs%U-time%dt*resU/fs%rho_U
+            fs%V=fs%V-time%dt*resV/fs%rho_V
+            fs%W=fs%W-time%dt*resW/fs%rho_W
+            
+            ! Increment sub-iteration counter
+            time%it=time%it+1
+            
+         end do
          
          ! Recompute interpolated velocity and divergence
          call fs%interp_vel(Ui,Vi,Wi)
