@@ -696,9 +696,11 @@ contains
       this%psolv%stc(6,:)=[ 0, 0,+1]
       this%psolv%stc(7,:)=[ 0, 0,-1]
       
+      ! Set the diagonal to VF to make sure all needed cells participate in solver
+      this%psolv%opr(1,:,:,:)=this%cfg%VF
+      
       ! Initialize the pressure Poisson solver
       call this%psolv%init_solver(pressure_ils)
-      call this%psolv%update_solver()
       
       ! Set 7-pt stencil map for the velocity solver
       this%implicit%stc(1,:)=[ 0, 0, 0]
@@ -1370,18 +1372,19 @@ contains
                ! W-cell **********
                ! Fluxes on x-face
                i=ii; j=jj; k=kk
-               this%FWX(i,j,k)=sum(this%hybw_x(:,i,j,k)*this%rho_Vold(i-1:i,j,k))*sum(this%itpu_z(:,i,j,k)*this%U(i,j,k-1:k))
+               this%FWX(i,j,k)=sum(this%hybw_x(:,i,j,k)*this%rho_Wold(i-1:i,j,k))*sum(this%itpu_z(:,i,j,k)*this%U(i,j,k-1:k))
                ! Fluxes on y-face
                i=ii; j=jj; k=kk
-               this%FWY(i,j,k)=sum(this%hybw_y(:,i,j,k)*this%rho_Vold(i,j-1:j,k))*sum(this%itpv_z(:,i,j,k)*this%V(i,j,k-1:k))
+               this%FWY(i,j,k)=sum(this%hybw_y(:,i,j,k)*this%rho_Wold(i,j-1:j,k))*sum(this%itpv_z(:,i,j,k)*this%V(i,j,k-1:k))
                ! Fluxes on z-face
                i=ii; j=jj; k=kk-1
-               this%FWZ(i,j,k)=sum(this%hybw_z(:,i,j,k)*this%rho_Vold(i,j,k:k+1))*sum(this%itpw_z(:,i,j,k)*this%W(i,j,k:k+1))
+               this%FWZ(i,j,k)=sum(this%hybw_z(:,i,j,k)*this%rho_Wold(i,j,k:k+1))*sum(this%itpw_z(:,i,j,k)*this%W(i,j,k:k+1))
             end do
          end do
       end do
       
       ! Update staggered density
+      this%rho_U=1.0_WP; this%rho_V=1.0_WP; this%rho_W=1.0_WP
       do k=this%cfg%kmin_,this%cfg%kmax_
          do j=this%cfg%jmin_,this%cfg%jmax_
             do i=this%cfg%imin_,this%cfg%imax_

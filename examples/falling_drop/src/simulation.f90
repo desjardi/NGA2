@@ -127,7 +127,7 @@ contains
       
       ! Create a two-phase flow solver without bconds
       create_and_initialize_flow_solver: block
-         use ils_class,  only: rbgs,amg,pcg_amg,pcg_parasail,gmres,gmres_pilut,smg,pfmg
+         use ils_class, only: pcg_amg,gmres,pfmg
          ! Create flow solver
          fs=tpns(cfg=cfg,name='Two-phase NS')
          ! Assign constant viscosity to each phase
