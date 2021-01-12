@@ -164,8 +164,8 @@ module tpns_class
       procedure :: get_mfr                                !< Calculate outgoing MFR through each bcond
       procedure :: correct_mfr                            !< Correct for mfr mismatch to ensure global conservation
       procedure :: shift_p                                !< Shift pressure to have zero average
-      procedure :: get_viscosity_from_subvf               !< Calculate viscosity fields from subcell volume fraction array (probably from a vfs object)
-      procedure :: get_olddensity_from_subvf              !< Calculate old density fields from subcell volume fraction array (probably from a vfs object)
+      procedure :: get_viscosity                          !< Calculate viscosity fields from subcell phasic volume data in a vfs object
+      procedure :: get_olddensity                         !< Calculate old density fields from subcell phasic volume data in a vfs object
       procedure :: solve_implicit                         !< Solve for the velocity residuals implicitly
       
       procedure :: addsrc_gravity                         !< Add gravitational body force
@@ -2187,29 +2187,42 @@ contains
    end subroutine solve_implicit
    
    
-   !> Prepare viscosity arrays from subvf data
-   subroutine get_viscosity_from_subvf(this,subvf)
+   !> Prepare viscosity arrays from vfs object
+   subroutine get_viscosity(this,vf)
+      use vfs_class, only: vfs
       implicit none
       class(tpns), intent(inout) :: this
-      real(WP), dimension(0:,0:,0:,this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in) :: subvf
+      class(vfs), intent(in) :: vf
       integer :: i,j,k
-      real(WP) :: myVF
-      ! Compute harmonically-averaged staggered viscosities using subcell volume fractions
+      real(WP) :: liq_vol,gas_vol,tot_vol
+      ! Compute harmonically-averaged staggered viscosities using subcell phasic volumes
       do k=this%cfg%kmino_+1,this%cfg%kmaxo_
          do j=this%cfg%jmino_+1,this%cfg%jmaxo_
             do i=this%cfg%imino_+1,this%cfg%imaxo_
-               ! visc at [xm,ym,zm] - direct sum in x/y/z
-               myVF=0.125_WP*sum(subvf(:,:,:,i,j,k))
-               this%visc(i,j,k)=this%visc_g*this%visc_l/(this%visc_g*myVF+this%visc_l*(1.0_WP-myVF))
-               ! visc_xy at [x,y,zm] - direct sum in z, staggered sum in x/y
-               myVF=0.125_WP*(sum(subvf(0,0,:,i,j,k))+sum(subvf(1,0,:,i-1,j,k))+sum(subvf(0,1,:,i,j-1,k))+sum(subvf(1,1,:,i-1,j-1,k)))
-               this%visc_xy(i,j,k)=this%visc_g*this%visc_l/(this%visc_g*myVF+this%visc_l*(1.0_WP-myVF))
-               ! visc_yz at [xm,y,z] - direct sum in x, staggered sum in y/z
-               myVF=0.125_WP*(sum(subvf(:,0,0,i,j,k))+sum(subvf(:,1,0,i,j-1,k))+sum(subvf(:,0,1,i,j,k-1))+sum(subvf(:,1,1,i,j-1,k-1)))
-               this%visc_yz(i,j,k)=this%visc_g*this%visc_l/(this%visc_g*myVF+this%visc_l*(1.0_WP-myVF))
-               ! visc_zx at [x,ym,z] - direct sum in y, staggered sum in z/x
-               myVF=0.125_WP*(sum(subvf(0,:,0,i,j,k))+sum(subvf(0,:,1,i,j,k-1))+sum(subvf(1,:,0,i-1,j,k))+sum(subvf(1,:,1,i-1,j,k-1)))
-               this%visc_zx(i,j,k)=this%visc_g*this%visc_l/(this%visc_g*myVF+this%visc_l*(1.0_WP-myVF))
+               ! VISC at [xm,ym,zm] - direct sum in x/y/z
+               liq_vol=sum(vf%Lvol(:,:,:,i,j,k))
+               gas_vol=sum(vf%Gvol(:,:,:,i,j,k))
+               tot_vol=gas_vol+liq_vol
+               this%visc(i,j,k)=0.0_WP
+               if (tot_vol.gt.0.0_WP) this%visc(i,j,k)=this%visc_g*this%visc_l/(this%visc_l*gas_vol/tot_vol+this%visc_g*liq_vol/tot_vol+epsilon(1.0_WP))
+               ! VISC_xy at [x,y,zm] - direct sum in z, staggered sum in x/y
+               liq_vol=sum(vf%Lvol(0,0,:,i,j,k))+sum(vf%Lvol(1,0,:,i-1,j,k))+sum(vf%Lvol(0,1,:,i,j-1,k))+sum(vf%Lvol(1,1,:,i-1,j-1,k))
+               gas_vol=sum(vf%Gvol(0,0,:,i,j,k))+sum(vf%Gvol(1,0,:,i-1,j,k))+sum(vf%Gvol(0,1,:,i,j-1,k))+sum(vf%Gvol(1,1,:,i-1,j-1,k))
+               tot_vol=gas_vol+liq_vol
+               this%visc_xy(i,j,k)=0.0_WP
+               if (tot_vol.gt.0.0_WP) this%visc_xy(i,j,k)=this%visc_g*this%visc_l/(this%visc_l*gas_vol/tot_vol+this%visc_g*liq_vol/tot_vol+epsilon(1.0_WP))
+               ! VISC_yz at [xm,y,z] - direct sum in x, staggered sum in y/z
+               liq_vol=sum(vf%Lvol(:,0,0,i,j,k))+sum(vf%Lvol(:,1,0,i,j-1,k))+sum(vf%Lvol(:,0,1,i,j,k-1))+sum(vf%Lvol(:,1,1,i,j-1,k-1))
+               gas_vol=sum(vf%Gvol(:,0,0,i,j,k))+sum(vf%Gvol(:,1,0,i,j-1,k))+sum(vf%Gvol(:,0,1,i,j,k-1))+sum(vf%Gvol(:,1,1,i,j-1,k-1))
+               tot_vol=gas_vol+liq_vol
+               this%visc_yz(i,j,k)=0.0_WP
+               if (tot_vol.gt.0.0_WP) this%visc_yz(i,j,k)=this%visc_g*this%visc_l/(this%visc_l*gas_vol/tot_vol+this%visc_g*liq_vol/tot_vol+epsilon(1.0_WP))
+               ! VISC_zx at [x,ym,z] - direct sum in y, staggered sum in z/x
+               liq_vol=sum(vf%Lvol(0,:,0,i,j,k))+sum(vf%Lvol(0,:,1,i,j,k-1))+sum(vf%Lvol(1,:,0,i-1,j,k))+sum(vf%Lvol(1,:,1,i-1,j,k-1))
+               gas_vol=sum(vf%Gvol(0,:,0,i,j,k))+sum(vf%Gvol(0,:,1,i,j,k-1))+sum(vf%Gvol(1,:,0,i-1,j,k))+sum(vf%Gvol(1,:,1,i-1,j,k-1))
+               tot_vol=gas_vol+liq_vol
+               this%visc_zx(i,j,k)=0.0_WP
+               if (tot_vol.gt.0.0_WP) this%visc_zx(i,j,k)=this%visc_g*this%visc_l/(this%visc_l*gas_vol/tot_vol+this%visc_g*liq_vol/tot_vol+epsilon(1.0_WP))
             end do
          end do
       end do
@@ -2218,29 +2231,39 @@ contains
       call this%cfg%sync(this%visc_xy)
       call this%cfg%sync(this%visc_yz)
       call this%cfg%sync(this%visc_zx)
-   end subroutine get_viscosity_from_subvf
+   end subroutine get_viscosity
    
    
-   !> Prepare old density arrays from subvf data
-   subroutine get_olddensity_from_subvf(this,subvf)
+   !> Prepare old density arrays from vfs object
+   subroutine get_olddensity(this,vf)
+      use vfs_class, only: vfs
       implicit none
       class(tpns), intent(inout) :: this
-      real(WP), dimension(0:,0:,0:,this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in) :: subvf
+      class(vfs), intent(in) :: vf
       integer :: i,j,k
-      real(WP) :: myVF
-      ! Calculate rho_U/V/Wold
-      do k=this%cfg%kmino_+1,this%cfg%kmax_
-         do j=this%cfg%jmino_+1,this%cfg%jmax_
-            do i=this%cfg%imino_+1,this%cfg%imax_
+      real(WP) :: liq_vol,gas_vol,tot_vol
+      ! Calculate rho_U/V/Wold using subcell phasic volumes
+      do k=this%cfg%kmino_+1,this%cfg%kmaxo_
+         do j=this%cfg%jmino_+1,this%cfg%jmaxo_
+            do i=this%cfg%imino_+1,this%cfg%imaxo_
                ! U-cell
-               myVF=0.125_WP*(sum(subvf(0,:,:,i,j,k))+sum(subvf(1,:,:,i-1,j,k)))
-               this%rho_Uold(i,j,k)=myVF*this%rho_l+(1.0_WP-myVF)*this%rho_g
+               liq_vol=sum(vf%Lvol(0,:,:,i,j,k))+sum(vf%Lvol(1,:,:,i-1,j,k))
+               gas_vol=sum(vf%Gvol(0,:,:,i,j,k))+sum(vf%Gvol(1,:,:,i-1,j,k))
+               tot_vol=gas_vol+liq_vol
+               this%rho_Uold(i,j,k)=1.0_WP
+               if (tot_vol.gt.0.0_WP) this%rho_Uold(i,j,k)=(liq_vol*this%rho_l+gas_vol*this%rho_g)/tot_vol
                ! V-cell
-               myVF=0.125_WP*(sum(subvf(:,0,:,i,j,k))+sum(subvf(:,1,:,i,j-1,k)))
-               this%rho_Vold(i,j,k)=myVF*this%rho_l+(1.0_WP-myVF)*this%rho_g
+               liq_vol=sum(vf%Lvol(:,0,:,i,j,k))+sum(vf%Lvol(:,1,:,i,j-1,k))
+               gas_vol=sum(vf%Gvol(:,0,:,i,j,k))+sum(vf%Gvol(:,1,:,i,j-1,k))
+               tot_vol=gas_vol+liq_vol
+               this%rho_Vold(i,j,k)=1.0_WP
+               if (tot_vol.gt.0.0_WP) this%rho_Vold(i,j,k)=(liq_vol*this%rho_l+gas_vol*this%rho_g)/tot_vol
                ! W-cell
-               myVF=0.125_WP*(sum(subvf(:,:,0,i,j,k))+sum(subvf(:,:,1,i,j,k-1)))
-               this%rho_Wold(i,j,k)=myVF*this%rho_l+(1.0_WP-myVF)*this%rho_g
+               liq_vol=sum(vf%Lvol(:,:,0,i,j,k))+sum(vf%Lvol(:,:,1,i,j,k-1))
+               gas_vol=sum(vf%Gvol(:,:,0,i,j,k))+sum(vf%Gvol(:,:,1,i,j,k-1))
+               tot_vol=gas_vol+liq_vol
+               this%rho_Wold(i,j,k)=1.0_WP
+               if (tot_vol.gt.0.0_WP) this%rho_Wold(i,j,k)=(liq_vol*this%rho_l+gas_vol*this%rho_g)/tot_vol
             end do
          end do
       end do
@@ -2248,7 +2271,7 @@ contains
       call this%cfg%sync(this%rho_Uold)
       call this%cfg%sync(this%rho_Vold)
       call this%cfg%sync(this%rho_Wold)
-   end subroutine get_olddensity_from_subvf
+   end subroutine get_olddensity
    
    
    !> Add gravity source term - assumes that rho_[UVW] have been generated before
