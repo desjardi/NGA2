@@ -228,7 +228,7 @@ contains
    end subroutine simulation_init
    
    
-   !> Perform an NGA2 simulation
+   !> Perform an NGA2 simulation - this mimicks NGA's old time integration for multiphase
    subroutine simulation_run
       implicit none
       
@@ -251,10 +251,14 @@ contains
          ! Apply time-varying Dirichlet conditions
          ! This is where time-dpt Dirichlet would be enforced
          
-         ! ============ UPDATE PROPERTIES ====================
-         call fs%get_viscosity(vf=vf)
+         ! Prepare old staggered density (at n)
          call fs%get_olddensity(vf=vf)
-         ! ===================================================
+         
+         ! VOF solver step
+         call vf%advance(dt=time%dt,U=fs%U,V=fs%V,W=fs%W)
+         
+         ! Prepare new staggered viscosity (at n+1)
+         call fs%get_viscosity(vf=vf)
          
          ! Perform sub-iterations
          do while (time%it.le.time%itmax)
@@ -265,11 +269,7 @@ contains
             fs%W=0.5_WP*(fs%W+fs%Wold)
             
             ! Preliminary mass and momentum transport step at the interface
-            !call fs%prepare_advection_semilag(dt=time%dt,vf=vf)
             call fs%prepare_advection_upwind(dt=time%dt)
-            
-            ! VOF solver step
-            call vf%advance(dt=time%dt,U=fs%U,V=fs%V,W=fs%W)
             
             ! Explicit calculation of drho*u/dt from NS
             call fs%get_dmomdt(resU,resV,resW)

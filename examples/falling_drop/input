@@ -10,7 +10,7 @@ ny :	50
 nz :	50
 
 # Fluid properties
-Gravity :		      0 -10 0
+Gravity :		      0 -1 0
 Liquid dynamic viscosity :    0.001
 Gas dynamic viscosity :       0.001
 Liquid density :              1000
@@ -18,8 +18,8 @@ Gas density :                 1
 Surface tension coefficient : 0.072
 
 # Time integration
-Max timestep size :	5e-2
-Max cfl number :	1
+Max timestep size :	1e-2
+Max cfl number :	0.9
 
 # Pressure solver
 Pressure tolerance : 	1e-6
