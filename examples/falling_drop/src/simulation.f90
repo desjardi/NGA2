@@ -174,8 +174,6 @@ contains
          ens_evt=event(time=time,name='Ensight output')
          call param_read('Ensight output period',ens_evt%tper)
          ! Add variables to output
-         call ens_out%add_vector('OldFaceDensity',fs%rho_Uold,fs%rho_Vold,fs%rho_Wold)
-         call ens_out%add_vector('NewFaceDensity',fs%rho_U,fs%rho_V,fs%rho_W)
          call ens_out%add_scalar('pressure',fs%P)
          call ens_out%add_vector('velocity',Ui,Vi,Wi)
          call ens_out%add_scalar('divergence',fs%div)
