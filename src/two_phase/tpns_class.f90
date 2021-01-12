@@ -1760,8 +1760,8 @@ contains
       call MPI_ALLREDUCE(my_CFLv_y,this%CFLv_y,1,MPI_REAL_WP,MPI_MAX,this%cfg%comm,ierr)
       call MPI_ALLREDUCE(my_CFLv_z,this%CFLv_z,1,MPI_REAL_WP,MPI_MAX,this%cfg%comm,ierr)
       
-      ! Return the maximum convective CFL
-      cflc=max(this%CFLc_x,this%CFLc_y,this%CFLc_z)
+      ! Return the maximum convective + surface tension CFL
+      cflc=max(this%CFLc_x,this%CFLc_y,this%CFLc_z,this%CFLst)
       
       ! If asked for, also return the maximum overall CFL
       if (present(CFL)) cfl =max(this%CFLc_x,this%CFLc_y,this%CFLc_z,this%CFLv_x,this%CFLv_y,this%CFLv_z,this%CFLst)
