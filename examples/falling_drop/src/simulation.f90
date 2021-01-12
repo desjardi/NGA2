@@ -42,11 +42,10 @@ contains
       real(WP), dimension(3),intent(in) :: xyz
       real(WP), intent(in) :: t
       real(WP) :: G
-      real(WP) :: c,b,b1,b2,h1,h2
       ! Create the droplet
       G=radius-sqrt(sum((xyz-center)**2))
       ! Add the pool
-      G=min(G,depth-xyz(2))
+      G=max(G,depth-xyz(2))
    end function levelset_falling_drop
    
    
@@ -81,7 +80,7 @@ contains
          vf=vfs(cfg=cfg,reconstruction_method=lvira,name='VOF')
          ! Initialize to Zalesak disk
          center=[0.0_WP,0.5_WP,0.0_WP]
-         radius=0.05_WP
+         radius=0.1_WP
          depth =0.2_WP
          do k=vf%cfg%kmino_,vf%cfg%kmaxo_
             do j=vf%cfg%jmino_,vf%cfg%jmaxo_
