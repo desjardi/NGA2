@@ -4,15 +4,15 @@ Partition :	4 1 1
 # Mesh definition
 Lx :	1
 Ly :	1
-Lz :	1
+Lz :	0.02
 nx :	50
 ny :	50
-nz :	50
+nz :	1
 
 # Fluid properties
 Gravity :		      0 -1 0
-Liquid dynamic viscosity :    0.001
-Gas dynamic viscosity :       0.001
+Liquid dynamic viscosity :    0.01
+Gas dynamic viscosity :       0.01
 Liquid density :              1000
 Gas density :                 1
 Surface tension coefficient : 0.072
