@@ -46,7 +46,8 @@ contains
          
          ! General serial grid object
          !grid=sgrid(coord=cartesian,no=3,x=x,y=y,z=z,xper=.false.,yper=.false.,zper=.false.,name='FallingDrop')
-         grid=sgrid(coord=cartesian,no=3,x=x,y=y,z=z,xper=.false.,yper=.false.,zper=.true.,name='FallingDrop')
+         !grid=sgrid(coord=cartesian,no=3,x=x,y=y,z=z,xper=.false.,yper=.false.,zper=.true.,name='FallingDrop')
+         grid=sgrid(coord=cartesian,no=3,x=x,y=y,z=z,xper=.true.,yper=.true.,zper=.true.,name='FallingDrop')
          
       end block create_grid
       
@@ -68,7 +69,7 @@ contains
       ! Create masks for this config
       create_walls: block
          ! Put walls all around
-         cfg%VF=0.0_WP
+         !cfg%VF=0.0_WP
          cfg%VF(cfg%imin_:cfg%imax_,cfg%jmin_:cfg%jmax_,cfg%kmin_:cfg%kmax_)=1.0_WP
          call cfg%sync(cfg%VF)
       end block create_walls

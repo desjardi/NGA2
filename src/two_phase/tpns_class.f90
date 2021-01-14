@@ -674,6 +674,35 @@ contains
          end do
       end do
       
+      ! Adjust metrics to account for lower dimensionality
+      if (this%cfg%nx.eq.1) then
+         this%divp_x=0.0_WP
+         this%divu_x=0.0_WP
+         this%divv_x=0.0_WP
+         this%divw_x=0.0_WP
+         this%grdu_x=0.0_WP
+         this%grdv_x=0.0_WP
+         this%grdw_x=0.0_WP
+      end if
+      if (this%cfg%ny.eq.1) then
+         this%divp_y=0.0_WP
+         this%divu_y=0.0_WP
+         this%divv_y=0.0_WP
+         this%divw_y=0.0_WP
+         this%grdu_y=0.0_WP
+         this%grdv_y=0.0_WP
+         this%grdw_y=0.0_WP
+      end if
+      if (this%cfg%nz.eq.1) then
+         this%divp_z=0.0_WP
+         this%divu_z=0.0_WP
+         this%divv_z=0.0_WP
+         this%divw_z=0.0_WP
+         this%grdu_z=0.0_WP
+         this%grdv_z=0.0_WP
+         this%grdw_z=0.0_WP
+      end if
+      
    end subroutine adjust_metrics
    
    
@@ -1786,9 +1815,9 @@ contains
       do k=this%cfg%kmin_,this%cfg%kmax_
          do j=this%cfg%jmin_,this%cfg%jmax_
             do i=this%cfg%imin_,this%cfg%imax_
-               my_Umax  =max(my_Umax  ,abs(this%U(i,j,k)  ))
-               my_Vmax  =max(my_Vmax  ,abs(this%V(i,j,k)  ))
-               my_Wmax  =max(my_Wmax  ,abs(this%W(i,j,k)  ))
+               my_Umax=max(my_Umax,abs(this%U(i,j,k)))
+               my_Vmax=max(my_Vmax,abs(this%V(i,j,k)))
+               my_Wmax=max(my_Wmax,abs(this%W(i,j,k)))
                if (this%cfg%VF(i,j,k).gt.0.0_WP) my_Pmax  =max(my_Pmax  ,abs(this%P(i,j,k)  ))
                if (this%cfg%VF(i,j,k).gt.0.0_WP) my_divmax=max(my_divmax,abs(this%div(i,j,k)))
             end do

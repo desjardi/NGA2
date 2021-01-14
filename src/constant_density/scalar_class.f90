@@ -268,6 +268,20 @@ contains
          end do
       end do
       
+      ! Adjust metrics to account for lower dimensionality
+      if (this%cfg%nx.eq.1) then
+         this%divsc_x=0.0_WP
+         this%grdsc_x=0.0_WP
+      end if
+      if (this%cfg%ny.eq.1) then
+         this%divsc_y=0.0_WP
+         this%grdsc_y=0.0_WP
+      end if
+      if (this%cfg%nz.eq.1) then
+         this%divsc_z=0.0_WP
+         this%grdsc_z=0.0_WP
+      end if
+      
    end subroutine adjust_metrics
    
    

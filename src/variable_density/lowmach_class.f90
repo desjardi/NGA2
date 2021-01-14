@@ -692,6 +692,35 @@ contains
          end do
       end do
       
+      ! Adjust metrics to account for lower dimensionality
+      if (this%cfg%nx.eq.1) then
+         this%divp_x=0.0_WP
+         this%divu_x=0.0_WP
+         this%divv_x=0.0_WP
+         this%divw_x=0.0_WP
+         this%grdu_x=0.0_WP
+         this%grdv_x=0.0_WP
+         this%grdw_x=0.0_WP
+      end if
+      if (this%cfg%ny.eq.1) then
+         this%divp_y=0.0_WP
+         this%divu_y=0.0_WP
+         this%divv_y=0.0_WP
+         this%divw_y=0.0_WP
+         this%grdu_y=0.0_WP
+         this%grdv_y=0.0_WP
+         this%grdw_y=0.0_WP
+      end if
+      if (this%cfg%nz.eq.1) then
+         this%divp_z=0.0_WP
+         this%divu_z=0.0_WP
+         this%divv_z=0.0_WP
+         this%divw_z=0.0_WP
+         this%grdu_z=0.0_WP
+         this%grdv_z=0.0_WP
+         this%grdw_z=0.0_WP
+      end if
+      
    end subroutine adjust_metrics
    
    

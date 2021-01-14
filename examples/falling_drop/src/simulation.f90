@@ -45,7 +45,7 @@ contains
       ! Create the droplet
       G=radius-sqrt(sum((xyz-center)**2))
       ! Add the pool
-      G=max(G,depth-xyz(2))
+      !G=max(G,depth-xyz(2))
    end function levelset_falling_drop
    
    
@@ -127,7 +127,7 @@ contains
       
       ! Create a two-phase flow solver without bconds
       create_and_initialize_flow_solver: block
-         use ils_class, only: pcg_amg,gmres,pfmg
+         use ils_class, only: amg,pcg_amg,gmres,pfmg,smg
          ! Create flow solver
          fs=tpns(cfg=cfg,name='Two-phase NS')
          ! Assign constant viscosity to each phase
@@ -147,9 +147,9 @@ contains
          call param_read('Implicit iteration',fs%implicit%maxit)
          call param_read('Implicit tolerance',fs%implicit%rcvg)
          ! Setup the solver
-         call fs%setup(pressure_ils=pcg_amg,implicit_ils=pfmg)
+         call fs%setup(pressure_ils=smg,implicit_ils=gmres)
          ! Zero initial field
-         fs%U=0.0_WP; fs%V=0.0_WP; fs%W=0.0_WP
+         fs%U=vf%VF; fs%V=0.0_WP; fs%W=0.0_WP
          ! Calculate cell-centered velocities and divergence
          call fs%interp_vel(Ui,Vi,Wi)
          call fs%get_div()
@@ -164,6 +164,26 @@ contains
          time%dt=time%dtmax
          time%itmax=2
       end block initialize_timetracker
+      
+      
+      ! Test Poisson
+      something_fishy: block
+         call fs%get_div()
+         print*,'Maximum divergence before:',maxval(fs%div)
+         print*,'Integral of divergence:',sum(fs%div)
+         fs%psolv%rhs=-fs%cfg%vol*fs%div/time%dt
+         fs%psolv%sol=0.0_WP
+         call fs%psolv%solve()
+         print*,'Pressure iteration:',fs%psolv%it
+         print*,'Pressure error:',fs%psolv%rerr
+         call fs%get_pgrad(fs%psolv%sol,resU,resV,resW)
+         fs%U=fs%U-time%dt*resU
+         fs%V=fs%V-time%dt*resV
+         fs%W=fs%W-time%dt*resW
+         call fs%get_div()
+         print*,'Maximum divergence after:',maxval(fs%div)
+         stop
+      end block something_fishy
       
       
       ! Add Ensight output
