@@ -10,7 +10,7 @@ ny :	10
 nz :	1
 
 # Fluid properties
-Gravity :		      0 -1 0
+Gravity :		      0 0 0 !0 -1 0
 Liquid dynamic viscosity :    0!.01
 Gas dynamic viscosity :       0!.01
 Liquid density :              1!000
@@ -22,7 +22,7 @@ Max timestep size :	1e-2
 Max cfl number :	0.9
 
 # Pressure solver
-Pressure tolerance : 	1e-6
+Pressure tolerance : 	1e-10
 Pressure iteration : 	100
 
 # Implicit velocity solver

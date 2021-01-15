@@ -2,6 +2,7 @@
 module simulation
    use precision,         only: WP
    use geometry,          only: cfg
+   use incomp_class,      only: incomp
    use tpns_class,        only: tpns
    use vfs_class,         only: vfs
    use timetracker_class, only: timetracker
@@ -33,6 +34,14 @@ module simulation
    real(WP), dimension(3) :: center
    real(WP) :: radius,depth
    
+   !> Incompressible solver for comparison
+   type(incomp), public :: fs2
+   type(ensight) :: ens_out2
+   type(monitor) :: mfile2
+   real(WP), dimension(:,:,:), allocatable :: resU2,resV2,resW2
+   real(WP), dimension(:,:,:), allocatable :: Ui2,Vi2,Wi2
+   
+   
 contains
    
    
@@ -57,14 +66,30 @@ contains
       
       ! Allocate work arrays
       allocate_work_arrays: block
-         ! Flow solver
          allocate(resU(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
          allocate(resV(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
          allocate(resW(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
          allocate(Ui  (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
          allocate(Vi  (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
          allocate(Wi  (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+         
+         allocate(resU2(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+         allocate(resV2(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+         allocate(resW2(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+         allocate(Ui2  (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+         allocate(Vi2  (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+         allocate(Wi2  (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
       end block allocate_work_arrays
+      
+      
+      ! Initialize time tracker with 2 subiterations
+      initialize_timetracker: block
+         time=timetracker(amRoot=cfg%amRoot)
+         call param_read('Max timestep size',time%dtmax)
+         call param_read('Max cfl number',time%cflmax)
+         time%dt=time%dtmax
+         time%itmax=2
+      end block initialize_timetracker
       
       
       ! Initialize our VOF solver and field
@@ -147,62 +172,65 @@ contains
          call param_read('Implicit iteration',fs%implicit%maxit)
          call param_read('Implicit tolerance',fs%implicit%rcvg)
          ! Setup the solver
-         call fs%setup(pressure_ils=amg,implicit_ils=gmres)
+         call fs%setup(pressure_ils=gmres,implicit_ils=gmres)
          ! Zero initial field
          fs%U=vf%VF; fs%V=0.0_WP; fs%W=0.0_WP
          ! Calculate cell-centered velocities and divergence
          call fs%interp_vel(Ui,Vi,Wi)
          call fs%get_div()
+         ! Make the flow field div-free
+         call fs%get_olddensity(vf=vf)
+         fs%rho_U=fs%rho_Uold
+         fs%rho_V=fs%rho_Vold
+         fs%rho_W=fs%rho_Wold
+         call fs%update_laplacian()
+         fs%psolv%rhs=-fs%cfg%vol*fs%div
+         fs%psolv%sol=0.0_WP
+         call fs%psolv%solve()
+         call fs%get_pgrad(fs%psolv%sol,resU,resV,resW)
+         fs%U=fs%U-resU/fs%rho_U
+         fs%V=fs%V-resV/fs%rho_V
+         fs%W=fs%W-resW/fs%rho_W
       end block create_and_initialize_flow_solver
       
       
-      ! Initialize time tracker with 2 subiterations
-      initialize_timetracker: block
-         time=timetracker(amRoot=fs%cfg%amRoot)
-         call param_read('Max timestep size',time%dtmax)
-         call param_read('Max cfl number',time%cflmax)
-         time%dt=time%dtmax
-         time%itmax=2
-      end block initialize_timetracker
-      
-      
-      ! Test incompressible Poisson solver
-      something_fishy: block
-         use incomp_class, only: incomp
+      ! Create an incomp flow solver without bconds
+      create_and_initialize_ic_solver: block
          use ils_class, only: amg,pcg_amg,gmres,pfmg,smg
-         type(incomp) :: ic
-         print*,'INCOMPRESSIBLE POISSON TEST'
-         ic=incomp(cfg=cfg,name='Single-phase NS')
-         call param_read('Gas dynamic viscosity',ic%visc)
-         call param_read('Gas density',ic%rho)
-         call param_read('Pressure iteration',ic%psolv%maxit)
-         call param_read('Pressure tolerance',ic%psolv%rcvg)
-         call param_read('Implicit iteration',ic%implicit%maxit)
-         call param_read('Implicit tolerance',ic%implicit%rcvg)
-         call ic%setup(pressure_ils=amg,implicit_ils=gmres)
-         ic%U=vf%VF
-         call ic%get_div()
-         print*,'Maximum divergence before:',maxval(ic%div)
-         print*,'Integral of divergence:',sum(ic%div)
-         ic%psolv%rhs=-ic%cfg%vol*ic%div/time%dt
-         ic%psolv%sol=0.0_WP
-         call ic%psolv%solve()
-         print*,'Pressure iteration:',ic%psolv%it
-         print*,'Pressure error:',ic%psolv%rerr
-         call ic%get_pgrad(ic%psolv%sol,resU,resV,resW)
-         ic%U=ic%U-time%dt*resU
-         ic%V=ic%V-time%dt*resV
-         ic%W=ic%W-time%dt*resW
-         call ic%get_div()
-         print*,'Maximum divergence after:',maxval(ic%div)
-         !stop
-      end block something_fishy
+         ! Create flow solver
+         fs2=incomp(cfg=cfg,name='Incomp NS')
+         ! Assign constant viscosity to each phase
+         call param_read('Gas dynamic viscosity',fs2%visc)
+         ! Assign constant density to each phase
+         call param_read('Gas density',fs2%rho)
+         ! Configure pressure solver
+         call param_read('Pressure iteration',fs2%psolv%maxit)
+         call param_read('Pressure tolerance',fs2%psolv%rcvg)
+         ! Configure implicit velocity solver
+         call param_read('Implicit iteration',fs2%implicit%maxit)
+         call param_read('Implicit tolerance',fs2%implicit%rcvg)
+         ! Setup the solver
+         call fs2%setup(pressure_ils=gmres,implicit_ils=gmres)
+         ! Zero initial field
+         fs2%U=vf%VF; fs2%V=0.0_WP; fs2%W=0.0_WP
+         ! Calculate cell-centered velocities and divergence
+         call fs2%interp_vel(Ui2,Vi2,Wi2)
+         call fs2%get_div()
+         ! Make the flow field div-free
+         fs2%psolv%rhs=-fs2%cfg%vol*fs2%div
+         fs2%psolv%sol=0.0_WP
+         call fs2%psolv%solve()
+         call fs2%get_pgrad(fs2%psolv%sol,resU2,resV2,resW2)
+         fs2%U=fs2%U-resU2
+         fs2%V=fs2%V-resV2
+         fs2%W=fs2%W-resW2
+      end block create_and_initialize_ic_solver
       
       
       ! Add Ensight output
       create_ensight: block
          ! Create Ensight output from cfg
-         ens_out=ensight(cfg=cfg,name='test')
+         ens_out=ensight(cfg=cfg,name='twophase')
          ! Create event for Ensight output
          ens_evt=event(time=time,name='Ensight output')
          call param_read('Ensight output period',ens_evt%tper)
@@ -216,6 +244,19 @@ contains
          ! Output to ensight
          if (ens_evt%occurs()) call ens_out%write_data(time%t)
       end block create_ensight
+      
+      
+      ! Add Ensight output
+      create_ensight2: block
+         ! Create Ensight output from cfg
+         ens_out2=ensight(cfg=cfg,name='incomp')
+         ! Add variables to output
+         call ens_out2%add_scalar('pressure',fs2%P)
+         call ens_out2%add_vector('velocity',Ui2,Vi2,Wi2)
+         call ens_out2%add_scalar('divergence',fs2%div)
+         ! Output to ensight
+         if (ens_evt%occurs()) call ens_out2%write_data(time%t)
+      end block create_ensight2
       
       
       ! Create a monitor file
@@ -256,6 +297,25 @@ contains
       end block create_monitor
       
       
+      ! Create a monitor file
+      create_monitor2: block
+         call fs2%get_max()
+         mfile2=monitor(fs2%cfg%amRoot,'simulation2')
+         call mfile2%add_column(time%n,'Timestep number')
+         call mfile2%add_column(time%t,'Time')
+         call mfile2%add_column(time%dt,'Timestep size')
+         call mfile2%add_column(time%cfl,'Maximum CFL')
+         call mfile2%add_column(fs2%Umax,'Umax')
+         call mfile2%add_column(fs2%Vmax,'Vmax')
+         call mfile2%add_column(fs2%Wmax,'Wmax')
+         call mfile2%add_column(fs2%Pmax,'Pmax')
+         call mfile2%add_column(fs2%divmax,'Maximum divergence')
+         call mfile2%add_column(fs2%psolv%it,'Pressure iteration')
+         call mfile2%add_column(fs2%psolv%rerr,'Pressure error')
+         call mfile2%write()
+      end block create_monitor2
+      
+      
    end subroutine simulation_init
    
    
@@ -279,6 +339,10 @@ contains
          fs%Vold=fs%V
          fs%Wold=fs%W
          
+         fs2%Uold=fs2%U
+         fs2%Vold=fs2%V
+         fs2%Wold=fs2%W
+         
          ! Apply time-varying Dirichlet conditions
          ! This is where time-dpt Dirichlet would be enforced
          
@@ -299,11 +363,17 @@ contains
             fs%V=0.5_WP*(fs%V+fs%Vold)
             fs%W=0.5_WP*(fs%W+fs%Wold)
             
+            fs2%U=0.5_WP*(fs2%U+fs2%Uold)
+            fs2%V=0.5_WP*(fs2%V+fs2%Vold)
+            fs2%W=0.5_WP*(fs2%W+fs2%Wold)
+            
             ! Preliminary mass and momentum transport step at the interface
             call fs%prepare_advection_upwind(dt=time%dt)
             
             ! Explicit calculation of drho*u/dt from NS
             call fs%get_dmomdt(resU,resV,resW)
+            
+            call fs2%get_dmomdt(resU2,resV2,resW2)
             
             ! Add momentum source terms
             call fs%addsrc_gravity(resU,resV,resW)
@@ -313,16 +383,28 @@ contains
             resV=-2.0_WP*(fs%rho_V*fs%V-fs%rho_Vold*fs%Vold)+time%dt*resV
             resW=-2.0_WP*(fs%rho_W*fs%W-fs%rho_Wold*fs%Wold)+time%dt*resW
             
+            resU2=-2.0_WP*(fs2%U-fs2%Uold)+time%dt*resU2
+            resV2=-2.0_WP*(fs2%V-fs2%Vold)+time%dt*resV2
+            resW2=-2.0_WP*(fs2%W-fs2%Wold)+time%dt*resW2
+            
             ! Form implicit residuals
             call fs%solve_implicit(time%dt,resU,resV,resW)
+            
+            call fs2%solve_implicit(time%dt,resU2,resV2,resW2)
             
             ! Apply these residuals
             fs%U=2.0_WP*fs%U-fs%Uold+resU
             fs%V=2.0_WP*fs%V-fs%Vold+resV
             fs%W=2.0_WP*fs%W-fs%Wold+resW
             
+            fs2%U=2.0_WP*fs2%U-fs2%Uold+resU2
+            fs2%V=2.0_WP*fs2%V-fs2%Vold+resV2
+            fs2%W=2.0_WP*fs2%W-fs2%Wold+resW2
+            
             ! Apply other boundary conditions
             call fs%apply_bcond(time%t,time%dt)
+            
+            call fs2%apply_bcond(time%t,time%dt)
             
             ! Solve Poisson equation
             call fs%update_laplacian()
@@ -334,12 +416,25 @@ contains
             call fs%psolv%solve()
             call fs%shift_p(fs%psolv%sol)
             
+            call fs2%correct_mfr()
+            call fs2%get_div()
+            fs2%psolv%rhs=-fs2%cfg%vol*fs2%div/time%dt
+            fs2%psolv%sol=0.0_WP
+            call fs2%psolv%solve()
+            call fs2%shift_p(fs2%psolv%sol)
+            
             ! Correct velocity
             call fs%get_pgrad(fs%psolv%sol,resU,resV,resW)
             fs%P=fs%P+fs%psolv%sol
             fs%U=fs%U-time%dt*resU/fs%rho_U
             fs%V=fs%V-time%dt*resV/fs%rho_V
             fs%W=fs%W-time%dt*resW/fs%rho_W
+            
+            call fs2%get_pgrad(fs2%psolv%sol,resU2,resV2,resW2)
+            fs2%P=fs2%P+fs2%psolv%sol
+            fs2%U=fs2%U-time%dt*resU2
+            fs2%V=fs2%V-time%dt*resV2
+            fs2%W=fs2%W-time%dt*resW2
             
             ! Increment sub-iteration counter
             time%it=time%it+1
@@ -350,14 +445,22 @@ contains
          call fs%interp_vel(Ui,Vi,Wi)
          call fs%get_div()
          
+         call fs2%interp_vel(Ui2,Vi2,Wi2)
+         call fs2%get_div()
+         
          ! Output to ensight
          if (ens_evt%occurs()) call ens_out%write_data(time%t)
+         
+         if (ens_evt%occurs()) call ens_out2%write_data(time%t)
          
          ! Perform and output monitoring
          call fs%get_max()
          call vf%get_max()
          call mfile%write()
          call cflfile%write()
+         
+         call fs2%get_max()
+         call mfile2%write()
          
       end do
       
@@ -376,6 +479,8 @@ contains
       
       ! Deallocate work arrays
       deallocate(resU,resV,resW,Ui,Vi,Wi)
+      
+      deallocate(resU2,resV2,resW2,Ui2,Vi2,Wi2)
       
    end subroutine simulation_final
    
