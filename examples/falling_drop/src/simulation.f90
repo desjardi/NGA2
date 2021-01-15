@@ -156,7 +156,7 @@ contains
          call param_read('Implicit iteration',fs%implicit%maxit)
          call param_read('Implicit tolerance',fs%implicit%rcvg)
          ! Setup the solver
-         call fs%setup(pressure_ils=pcg_amg,implicit_ils=pcg_amg)
+         call fs%setup(pressure_ils=pcg_amg,implicit_ils=gmres)
          ! Zero initial field
          fs%U=0.0_WP; fs%V=0.0_WP; fs%W=0.0_WP
          ! Calculate cell-centered velocities and divergence
