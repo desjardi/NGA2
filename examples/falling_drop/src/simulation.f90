@@ -45,7 +45,7 @@ contains
       ! Create the droplet
       G=radius-sqrt(sum((xyz-center)**2))
       ! Add the pool
-      !G=max(G,depth-xyz(2))
+      G=max(G,depth-xyz(2))
    end function levelset_falling_drop
    
    
@@ -158,26 +158,10 @@ contains
          ! Setup the solver
          call fs%setup(pressure_ils=pcg_amg,implicit_ils=pcg_amg)
          ! Zero initial field
-         fs%U=vf%VF; fs%V=0.0_WP; fs%W=0.0_WP
+         fs%U=0.0_WP; fs%V=0.0_WP; fs%W=0.0_WP
          ! Calculate cell-centered velocities and divergence
          call fs%interp_vel(Ui,Vi,Wi)
          call fs%get_div()
-         ! Make the flow field div-free
-         call fs%get_olddensity(vf=vf)
-         fs%rho_U=fs%rho_Uold
-         fs%rho_V=fs%rho_Vold
-         fs%rho_W=fs%rho_Wold
-         call fs%update_laplacian()
-         fs%psolv%rhs=-fs%cfg%vol*fs%div
-         fs%psolv%sol=0.0_WP
-         call fs%psolv%solve()
-         call fs%get_pgrad(fs%psolv%sol,resU,resV,resW)
-         fs%U=fs%U-resU/fs%rho_U
-         fs%V=fs%V-resV/fs%rho_V
-         fs%W=fs%W-resW/fs%rho_W
-         ! Calculate cell-centered velocities and divergence
-         call fs%get_div()
-         call fs%interp_vel(Ui,Vi,Wi)
       end block create_and_initialize_flow_solver
       
       
