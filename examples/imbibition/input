@@ -1,0 +1,42 @@
+# Parallelization
+Partition :	4 1 1
+
+# Mesh definition
+Lx :	2.5e-2
+Ly :	2.5e-2
+Lz :	2.5e-2
+nx :	50
+ny :	50
+nz :	50
+
+# Droplet properties
+Droplet radius :	5e-3
+Initial contact angle :	180
+
+# Source
+Gravity :		      0 0 0
+
+# Fluid properties
+Liquid dynamic viscosity :    0.9e-4
+Gas dynamic viscosity :       1.8e-5
+
+Liquid density :              997
+Gas density :                 1.15
+
+Surface tension coefficient : 0.072
+Static contact angle :	      30
+
+# Time integration
+Max timestep size :	1e-4
+Max cfl number :	0.9
+
+# Pressure solver
+Pressure tolerance : 	1e-6
+Pressure iteration : 	100
+
+# Implicit velocity solver
+Implicit tolerance : 	1e-6
+Implicit iteration : 	100
+
+# Ensight output
+Ensight output period : 1e-3

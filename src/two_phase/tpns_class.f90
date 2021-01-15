@@ -53,6 +53,7 @@ module tpns_class
       character(len=str_medium) :: name='UNNAMED_TPNS'    !< Solver name (default=UNNAMED_TPNS)
       
       ! Constant property fluids
+      real(WP) :: contact_angle                           !< This is our static contact angle
       real(WP) :: sigma                                   !< This is our constant surface tension coefficient
       real(WP) :: rho_l,rho_g                             !< These are our constant densities in liquid and gas
       real(WP) :: visc_l,visc_g                           !< These is our constant dynamic viscosities in liquid and gas
