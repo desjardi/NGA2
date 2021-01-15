@@ -4,14 +4,14 @@ Partition :	4 1 1
 # Mesh definition
 Lx :	2.5e-2
 Ly :	5.0e-2
-Lz :	0.0005	!2.5e-2
-nx :	50
-ny :	100
-nz :	1	!50
+Lz :	2.5e-2
+nx :	50	!100
+ny :	100	!200
+nz :	50	!100
 
 # Wall geometry
-Hole size : 0.002
-Hole dist : 0.004
+Hole size : 0.001
+Hole dist : 0.002
 Hole depth: 0.02
 
 # Droplet properties
