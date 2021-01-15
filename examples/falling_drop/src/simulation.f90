@@ -150,6 +150,42 @@ contains
       end block create_and_initialize_vof
       
       
+      ! Create an incomp flow solver without bconds
+      create_and_initialize_ic_solver: block
+         use ils_class, only: amg,pcg_amg,gmres,pfmg,smg
+         ! Create flow solver
+         fs2=incomp(cfg=cfg,name='Incomp NS')
+         ! Assign constant viscosity to each phase
+         call param_read('Gas dynamic viscosity',fs2%visc)
+         ! Assign constant density to each phase
+         call param_read('Gas density',fs2%rho)
+         ! Configure pressure solver
+         call param_read('Pressure iteration',fs2%psolv%maxit)
+         call param_read('Pressure tolerance',fs2%psolv%rcvg)
+         ! Configure implicit velocity solver
+         call param_read('Implicit iteration',fs2%implicit%maxit)
+         call param_read('Implicit tolerance',fs2%implicit%rcvg)
+         ! Setup the solver
+         call fs2%setup(pressure_ils=pcg_amg,implicit_ils=pcg_amg)
+         ! Zero initial field
+         fs2%U=vf%VF; fs2%V=0.0_WP; fs2%W=0.0_WP
+         ! Calculate cell-centered velocities and divergence
+         call fs2%interp_vel(Ui2,Vi2,Wi2)
+         call fs2%get_div()
+         ! Make the flow field div-free
+         fs2%psolv%rhs=-fs2%cfg%vol*fs2%div
+         fs2%psolv%sol=0.0_WP
+         call fs2%psolv%solve()
+         call fs2%get_pgrad(fs2%psolv%sol,resU2,resV2,resW2)
+         fs2%U=fs2%U-resU2
+         fs2%V=fs2%V-resV2
+         fs2%W=fs2%W-resW2
+         ! Calculate cell-centered velocities and divergence
+         call fs2%get_div()
+         call fs2%interp_vel(Ui2,Vi2,Wi2)
+      end block create_and_initialize_ic_solver
+      
+      
       ! Create a two-phase flow solver without bconds
       create_and_initialize_flow_solver: block
          use ils_class, only: amg,pcg_amg,gmres,pfmg,smg
@@ -172,7 +208,7 @@ contains
          call param_read('Implicit iteration',fs%implicit%maxit)
          call param_read('Implicit tolerance',fs%implicit%rcvg)
          ! Setup the solver
-         call fs%setup(pressure_ils=gmres,implicit_ils=gmres)
+         call fs%setup(pressure_ils=pcg_amg,implicit_ils=pcg_amg)
          ! Zero initial field
          fs%U=vf%VF; fs%V=0.0_WP; fs%W=0.0_WP
          ! Calculate cell-centered velocities and divergence
@@ -191,40 +227,10 @@ contains
          fs%U=fs%U-resU/fs%rho_U
          fs%V=fs%V-resV/fs%rho_V
          fs%W=fs%W-resW/fs%rho_W
-      end block create_and_initialize_flow_solver
-      
-      
-      ! Create an incomp flow solver without bconds
-      create_and_initialize_ic_solver: block
-         use ils_class, only: amg,pcg_amg,gmres,pfmg,smg
-         ! Create flow solver
-         fs2=incomp(cfg=cfg,name='Incomp NS')
-         ! Assign constant viscosity to each phase
-         call param_read('Gas dynamic viscosity',fs2%visc)
-         ! Assign constant density to each phase
-         call param_read('Gas density',fs2%rho)
-         ! Configure pressure solver
-         call param_read('Pressure iteration',fs2%psolv%maxit)
-         call param_read('Pressure tolerance',fs2%psolv%rcvg)
-         ! Configure implicit velocity solver
-         call param_read('Implicit iteration',fs2%implicit%maxit)
-         call param_read('Implicit tolerance',fs2%implicit%rcvg)
-         ! Setup the solver
-         call fs2%setup(pressure_ils=gmres,implicit_ils=gmres)
-         ! Zero initial field
-         fs2%U=vf%VF; fs2%V=0.0_WP; fs2%W=0.0_WP
          ! Calculate cell-centered velocities and divergence
-         call fs2%interp_vel(Ui2,Vi2,Wi2)
-         call fs2%get_div()
-         ! Make the flow field div-free
-         fs2%psolv%rhs=-fs2%cfg%vol*fs2%div
-         fs2%psolv%sol=0.0_WP
-         call fs2%psolv%solve()
-         call fs2%get_pgrad(fs2%psolv%sol,resU2,resV2,resW2)
-         fs2%U=fs2%U-resU2
-         fs2%V=fs2%V-resV2
-         fs2%W=fs2%W-resW2
-      end block create_and_initialize_ic_solver
+         call fs%get_div()
+         call fs%interp_vel(Ui,Vi,Wi)
+      end block create_and_initialize_flow_solver
       
       
       ! Add Ensight output
@@ -379,9 +385,9 @@ contains
             call fs%addsrc_gravity(resU,resV,resW)
             
             ! Assemble explicit residual
-            resU=-2.0_WP*(fs%rho_U*fs%U-fs%rho_Uold*fs%Uold)+time%dt*resU
-            resV=-2.0_WP*(fs%rho_V*fs%V-fs%rho_Vold*fs%Vold)+time%dt*resV
-            resW=-2.0_WP*(fs%rho_W*fs%W-fs%rho_Wold*fs%Wold)+time%dt*resW
+            resU=-2.0_WP*fs%rho_U*fs%U+(fs%rho_Uold+fs%rho_U)*fs%Uold+time%dt*resU
+            resV=-2.0_WP*fs%rho_V*fs%V+(fs%rho_Vold+fs%rho_V)*fs%Vold+time%dt*resV
+            resW=-2.0_WP*fs%rho_W*fs%W+(fs%rho_Wold+fs%rho_W)*fs%Wold+time%dt*resW
             
             resU2=-2.0_WP*(fs2%U-fs2%Uold)+time%dt*resU2
             resV2=-2.0_WP*(fs2%V-fs2%Vold)+time%dt*resV2

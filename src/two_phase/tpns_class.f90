@@ -1455,18 +1455,18 @@ contains
                ! Fluxes on x-face
                i=ii-1; j=jj; k=kk
                this%FUX(i,j,k)=this%FUX(i,j,k)-this%P(i,j,k) &
-               &           -sum(this%hybu_x(:,i,j,k)*this%rho_Uold(i:i+1,j,k)*this%U(i:i+1,j,k))*sum(this%itpu_x(:,i,j,k)*this%U(i:i+1,j,k)) &
-               &               +this%visc   (i,j,k)*(sum(this%grdu_x(:,i,j,k)*this%U(i:i+1,j,k))+sum(this%grdu_x(:,i,j,k)*this%U(i:i+1,j,k)))
+               &              -sum(this%hybu_x(:,i,j,k)*this%rho_Uold(i:i+1,j,k))*sum(this%hybu_x(:,i,j,k)*this%U(i:i+1,j,k))*sum(this%itpu_x(:,i,j,k)*this%U(i:i+1,j,k)) &
+               &              +this%visc   (i,j,k)*(sum(this%grdu_x(:,i,j,k)*this%U(i:i+1,j,k))+sum(this%grdu_x(:,i,j,k)*this%U(i:i+1,j,k)))
                ! Fluxes on y-face
                i=ii  ; j=jj; k=kk
                this%FUY(i,j,k)=this%FUY(i,j,k) &
-               &           -sum(this%hybu_y(:,i,j,k)*this%rho_Uold(i,j-1:j,k)*this%U(i,j-1:j,k))*sum(this%itpv_x(:,i,j,k)*this%V(i-1:i,j,k)) &
-               &               +this%visc_xy(i,j,k)*(sum(this%grdu_y(:,i,j,k)*this%U(i,j-1:j,k))+sum(this%grdv_x(:,i,j,k)*this%V(i-1:i,j,k)))
+               &              -sum(this%hybu_y(:,i,j,k)*this%rho_Uold(i,j-1:j,k))*sum(this%hybu_y(:,i,j,k)*this%U(i,j-1:j,k))*sum(this%itpv_x(:,i,j,k)*this%V(i-1:i,j,k)) &
+               &              +this%visc_xy(i,j,k)*(sum(this%grdu_y(:,i,j,k)*this%U(i,j-1:j,k))+sum(this%grdv_x(:,i,j,k)*this%V(i-1:i,j,k)))
                ! Fluxes on z-face
                i=ii  ; j=jj; k=kk
                this%FUZ(i,j,k)=this%FUZ(i,j,k) &
-               &           -sum(this%hybu_z(:,i,j,k)*this%rho_Uold(i,j,k-1:k)*this%U(i,j,k-1:k))*sum(this%itpw_x(:,i,j,k)*this%W(i-1:i,j,k)) &
-               &               +this%visc_zx(i,j,k)*(sum(this%grdu_z(:,i,j,k)*this%U(i,j,k-1:k))+sum(this%grdw_x(:,i,j,k)*this%W(i-1:i,j,k)))
+               &              -sum(this%hybu_z(:,i,j,k)*this%rho_Uold(i,j,k-1:k))*sum(this%hybu_z(:,i,j,k)*this%U(i,j,k-1:k))*sum(this%itpw_x(:,i,j,k)*this%W(i-1:i,j,k)) &
+               &              +this%visc_zx(i,j,k)*(sum(this%grdu_z(:,i,j,k)*this%U(i,j,k-1:k))+sum(this%grdw_x(:,i,j,k)*this%W(i-1:i,j,k)))
             end do
          end do
       end do
@@ -1490,18 +1490,18 @@ contains
                ! Fluxes on x-face
                i=ii; j=jj  ; k=kk
                this%FVX(i,j,k)=this%FVX(i,j,k) &
-               &           -sum(this%hybv_x(:,i,j,k)*this%rho_Vold(i-1:i,j,k)*this%V(i-1:i,j,k))*sum(this%itpu_y(:,i,j,k)*this%U(i,j-1:j,k)) &
-               &               +this%visc_xy(i,j,k)*(sum(this%grdv_x(:,i,j,k)*this%V(i-1:i,j,k))+sum(this%grdu_y(:,i,j,k)*this%U(i,j-1:j,k)))
+               &              -sum(this%hybv_x(:,i,j,k)*this%rho_Vold(i-1:i,j,k))*sum(this%hybv_x(:,i,j,k)*this%V(i-1:i,j,k))*sum(this%itpu_y(:,i,j,k)*this%U(i,j-1:j,k)) &
+               &              +this%visc_xy(i,j,k)*(sum(this%grdv_x(:,i,j,k)*this%V(i-1:i,j,k))+sum(this%grdu_y(:,i,j,k)*this%U(i,j-1:j,k)))
                ! Fluxes on y-face
                i=ii; j=jj-1; k=kk
                this%FVY(i,j,k)=this%FVY(i,j,k)-this%P(i,j,k) &
-               &           -sum(this%hybv_y(:,i,j,k)*this%rho_Vold(i,j:j+1,k)*this%V(i,j:j+1,k))*sum(this%itpv_y(:,i,j,k)*this%V(i,j:j+1,k)) &
-               &               +this%visc   (i,j,k)*(sum(this%grdv_y(:,i,j,k)*this%V(i,j:j+1,k))+sum(this%grdv_y(:,i,j,k)*this%V(i,j:j+1,k)))
+               &              -sum(this%hybv_y(:,i,j,k)*this%rho_Vold(i,j:j+1,k))*sum(this%hybv_y(:,i,j,k)*this%V(i,j:j+1,k))*sum(this%itpv_y(:,i,j,k)*this%V(i,j:j+1,k)) &
+               &              +this%visc   (i,j,k)*(sum(this%grdv_y(:,i,j,k)*this%V(i,j:j+1,k))+sum(this%grdv_y(:,i,j,k)*this%V(i,j:j+1,k)))
                ! Fluxes on z-face
                i=ii; j=jj  ; k=kk
                this%FVZ(i,j,k)=this%FVZ(i,j,k) &
-               &           -sum(this%hybv_z(:,i,j,k)*this%rho_Vold(i,j,k-1:k)*this%V(i,j,k-1:k))*sum(this%itpw_y(:,i,j,k)*this%W(i,j-1:j,k)) &
-               &               +this%visc_yz(i,j,k)*(sum(this%grdv_z(:,i,j,k)*this%V(i,j,k-1:k))+sum(this%grdw_y(:,i,j,k)*this%W(i,j-1:j,k)))
+               &              -sum(this%hybv_z(:,i,j,k)*this%rho_Vold(i,j,k-1:k))*sum(this%hybv_z(:,i,j,k)*this%V(i,j,k-1:k))*sum(this%itpw_y(:,i,j,k)*this%W(i,j-1:j,k)) &
+               &              +this%visc_yz(i,j,k)*(sum(this%grdv_z(:,i,j,k)*this%V(i,j,k-1:k))+sum(this%grdw_y(:,i,j,k)*this%W(i,j-1:j,k)))
             end do
          end do
       end do
@@ -1525,18 +1525,18 @@ contains
                ! Fluxes on x-face
                i=ii; j=jj; k=kk
                this%FWX(i,j,k)=this%FWX(i,j,k) &
-               &           -sum(this%hybw_x(:,i,j,k)*this%rho_Wold(i-1:i,j,k)*this%W(i-1:i,j,k))*sum(this%itpu_z(:,i,j,k)*this%U(i,j,k-1:k)) &
-               &               +this%visc_zx(i,j,k)*(sum(this%grdw_x(:,i,j,k)*this%W(i-1:i,j,k))+sum(this%grdu_z(:,i,j,k)*this%U(i,j,k-1:k)))
+               &              -sum(this%hybw_x(:,i,j,k)*this%rho_Wold(i-1:i,j,k))*sum(this%hybw_x(:,i,j,k)*this%W(i-1:i,j,k))*sum(this%itpu_z(:,i,j,k)*this%U(i,j,k-1:k)) &
+               &              +this%visc_zx(i,j,k)*(sum(this%grdw_x(:,i,j,k)*this%W(i-1:i,j,k))+sum(this%grdu_z(:,i,j,k)*this%U(i,j,k-1:k)))
                ! Fluxes on y-face
                i=ii; j=jj; k=kk
                this%FWY(i,j,k)=this%FWY(i,j,k) &
-               &           -sum(this%hybw_y(:,i,j,k)*this%rho_Wold(i,j-1:j,k)*this%W(i,j-1:j,k))*sum(this%itpv_z(:,i,j,k)*this%V(i,j,k-1:k)) &
-               &               +this%visc_yz(i,j,k)*(sum(this%grdw_y(:,i,j,k)*this%W(i,j-1:j,k))+sum(this%grdv_z(:,i,j,k)*this%V(i,j,k-1:k)))
+               &              -sum(this%hybw_y(:,i,j,k)*this%rho_Wold(i,j-1:j,k))*sum(this%hybw_y(:,i,j,k)*this%W(i,j-1:j,k))*sum(this%itpv_z(:,i,j,k)*this%V(i,j,k-1:k)) &
+               &              +this%visc_yz(i,j,k)*(sum(this%grdw_y(:,i,j,k)*this%W(i,j-1:j,k))+sum(this%grdv_z(:,i,j,k)*this%V(i,j,k-1:k)))
                ! Fluxes on z-face
                i=ii; j=jj; k=kk-1
                this%FWZ(i,j,k)=this%FWZ(i,j,k)-this%P(i,j,k) &
-               &           -sum(this%hybw_z(:,i,j,k)*this%rho_Wold(i,j,k:k+1)*this%W(i,j,k:k+1))*sum(this%itpw_z(:,i,j,k)*this%W(i,j,k:k+1)) &
-               &               +this%visc   (i,j,k)*(sum(this%grdw_z(:,i,j,k)*this%W(i,j,k:k+1))+sum(this%grdw_z(:,i,j,k)*this%W(i,j,k:k+1)))
+               &              -sum(this%hybw_z(:,i,j,k)*this%rho_Wold(i,j,k:k+1))*sum(this%hybw_z(:,i,j,k)*this%W(i,j,k:k+1))*sum(this%itpw_z(:,i,j,k)*this%W(i,j,k:k+1)) &
+               &              +this%visc   (i,j,k)*(sum(this%grdw_z(:,i,j,k)*this%W(i,j,k:k+1))+sum(this%grdw_z(:,i,j,k)*this%W(i,j,k:k+1)))
             end do
          end do
       end do
