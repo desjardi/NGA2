@@ -180,7 +180,7 @@ contains
    subroutine simulation_run
       implicit none
       
-      ! Perform explicit Euler time integration
+      ! Perform time integration
       do while (.not.time%done())
          
          ! Increment time

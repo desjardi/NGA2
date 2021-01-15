@@ -171,6 +171,7 @@ module tpns_class
       
       procedure :: addsrc_gravity                         !< Add gravitational body force
       procedure :: add_surface_tension_jump               !< Add surface tension jump
+      procedure :: add_static_contact                     !< Add static contact line model to surface tension jump
       
    end type tpns
    
@@ -1616,7 +1617,7 @@ contains
       class(tpns), intent(inout) :: this
       real(WP), intent(inout) :: dt     !< Timestep size over which to advance
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: div  !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
-      class(vfs), intent(in) :: vf
+      class(vfs), intent(inout) :: vf
       integer, intent(in), optional :: contact_model
       integer :: i,j,k
       real(WP) :: mycurv,mysurf
@@ -1662,7 +1663,7 @@ contains
       if (present(contact_model)) then
          select case (contact_model)
          case (static_contact)
-            !call this%add_static_contact()
+            call this%add_static_contact(vf=vf)
          case default
             call die('[tpns: add_surface_tension_jump] Unknown contact model!')
          end select
@@ -2325,6 +2326,135 @@ contains
          end do
       end do
    end subroutine addsrc_gravity
+   
+   
+   !> Add a static contact line model
+   subroutine add_static_contact(this,vf)
+      use vfs_class, only: vfs
+      use irl_fortran_interface, only: calculateNormal
+      implicit none
+      class(tpns), intent(inout) :: this
+      class(vfs),  intent(in) :: vf
+      integer :: i,j,k
+      real(WP), dimension(3) :: nw
+      real(WP) :: dd,mysurf
+      real(WP) :: cos_contact_angle
+      real(WP) :: sin_contact_angle
+      real(WP) :: tan_contact_angle
+      real(WP), dimension(:,:,:), allocatable :: GFM
+      real(WP), parameter :: cfactor=1.0_WP
+      
+      ! Allocate and zero out binarized VF for GFM-style jump distribution
+      allocate(GFM(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_)); GFM=0.0_WP
+      
+      ! Prepare a GFM-based strategy
+      GFM=real(nint(vf%VF),WP)
+      
+      ! Precalculate cos/sin/tan(contact angle)
+      cos_contact_angle=cos(this%contact_angle)
+      sin_contact_angle=sin(this%contact_angle)
+      tan_contact_angle=tan(this%contact_angle)
+      
+      ! Loop over domain and identify cells that require contact angle model in GFM style
+      do k=this%cfg%kmin_,this%cfg%kmax_+1
+         do j=this%cfg%jmin_,this%cfg%jmax_+1
+            do i=this%cfg%imin_,this%cfg%imax_+1
+               
+               ! Check if we have an interface on the x-face then check walls
+               mysurf=sum(vf%SD(i-1:i,j,k)*this%cfg%vol(i-1:i,j,k))
+               if (GFM(i,j,k).ne.GFM(i-1,j,k).and.mysurf.gt.0.0_WP) then
+                  if (this%umask(i,j-1,k).eq.1) then
+                     nw=[0.0_WP,+1.0_WP,0.0_WP]; dd=cfactor*this%cfg%dy(j)
+                     this%Pjx(i,j,k)=this%Pjx(i,j,k)+this%sigma*sum(this%divu_x(:,i,j,k)*GFM(i-1:i,j,k))/(dd*mysurf)*(&
+                     & vf%SD(i  ,j,k)*this%cfg%vol(i  ,j,k)*(dot_product(calculateNormal(vf%interface_polygon(1,i  ,j,k)),nw)-cos_contact_angle)+&
+                     & vf%SD(i-1,j,k)*this%cfg%vol(i-1,j,k)*(dot_product(calculateNormal(vf%interface_polygon(1,i-1,j,k)),nw)-cos_contact_angle))
+                  end if
+                  if (this%umask(i,j+1,k).eq.1) then
+                     nw=[0.0_WP,-1.0_WP,0.0_WP]; dd=cfactor*this%cfg%dy(j)
+                     this%Pjx(i,j,k)=this%Pjx(i,j,k)+this%sigma*sum(this%divu_x(:,i,j,k)*GFM(i-1:i,j,k))/(dd*mysurf)*(&
+                     & vf%SD(i  ,j,k)*this%cfg%vol(i  ,j,k)*(dot_product(calculateNormal(vf%interface_polygon(1,i  ,j,k)),nw)-cos_contact_angle)+&
+                     & vf%SD(i-1,j,k)*this%cfg%vol(i-1,j,k)*(dot_product(calculateNormal(vf%interface_polygon(1,i-1,j,k)),nw)-cos_contact_angle))
+                  end if
+                  if (this%umask(i,j,k-1).eq.1) then
+                     nw=[0.0_WP,0.0_WP,+1.0_WP]; dd=cfactor*this%cfg%dz(k)
+                     this%Pjx(i,j,k)=this%Pjx(i,j,k)+this%sigma*sum(this%divu_x(:,i,j,k)*GFM(i-1:i,j,k))/(dd*mysurf)*(&
+                     & vf%SD(i  ,j,k)*this%cfg%vol(i  ,j,k)*(dot_product(calculateNormal(vf%interface_polygon(1,i  ,j,k)),nw)-cos_contact_angle)+&
+                     & vf%SD(i-1,j,k)*this%cfg%vol(i-1,j,k)*(dot_product(calculateNormal(vf%interface_polygon(1,i-1,j,k)),nw)-cos_contact_angle))
+                  end if
+                  if (this%umask(i,j,k+1).eq.1) then
+                     nw=[0.0_WP,0.0_WP,-1.0_WP]; dd=cfactor*this%cfg%dz(k)
+                     this%Pjx(i,j,k)=this%Pjx(i,j,k)+this%sigma*sum(this%divu_x(:,i,j,k)*GFM(i-1:i,j,k))/(dd*mysurf)*(&
+                     & vf%SD(i  ,j,k)*this%cfg%vol(i  ,j,k)*(dot_product(calculateNormal(vf%interface_polygon(1,i  ,j,k)),nw)-cos_contact_angle)+&
+                     & vf%SD(i-1,j,k)*this%cfg%vol(i-1,j,k)*(dot_product(calculateNormal(vf%interface_polygon(1,i-1,j,k)),nw)-cos_contact_angle))
+                  end if
+               end if
+               
+               ! Check if we have an interface on the y-face then check walls
+               mysurf=sum(vf%SD(i,j-1:j,k)*this%cfg%vol(i,j-1:j,k))
+               if (GFM(i,j,k).ne.GFM(i,j-1,k).and.mysurf.gt.0.0_WP) then
+                  if (this%vmask(i-1,j,k).eq.1) then
+                     nw=[+1.0_WP,0.0_WP,0.0_WP]; dd=cfactor*this%cfg%dx(i)
+                     this%Pjy(i,j,k)=this%Pjy(i,j,k)+this%sigma*sum(this%divv_y(:,i,j,k)*GFM(i,j-1:j,k))/(dd*mysurf)*(&
+                     & vf%SD(i,j  ,k)*this%cfg%vol(i,j  ,k)*(dot_product(calculateNormal(vf%interface_polygon(1,i,j  ,k)),nw)-cos_contact_angle)+&
+                     & vf%SD(i,j-1,k)*this%cfg%vol(i,j-1,k)*(dot_product(calculateNormal(vf%interface_polygon(1,i,j-1,k)),nw)-cos_contact_angle))
+                  end if
+                  if (this%vmask(i+1,j,k).eq.1) then
+                     nw=[-1.0_WP,0.0_WP,0.0_WP]; dd=cfactor*this%cfg%dx(i)
+                     this%Pjy(i,j,k)=this%Pjy(i,j,k)+this%sigma*sum(this%divv_y(:,i,j,k)*GFM(i,j-1:j,k))/(dd*mysurf)*(&
+                     & vf%SD(i,j  ,k)*this%cfg%vol(i,j  ,k)*(dot_product(calculateNormal(vf%interface_polygon(1,i,j  ,k)),nw)-cos_contact_angle)+&
+                     & vf%SD(i,j-1,k)*this%cfg%vol(i,j-1,k)*(dot_product(calculateNormal(vf%interface_polygon(1,i,j-1,k)),nw)-cos_contact_angle))
+                  end if
+                  if (this%vmask(i,j,k-1).eq.1) then
+                     nw=[0.0_WP,0.0_WP,+1.0_WP]; dd=cfactor*this%cfg%dz(k)
+                     this%Pjy(i,j,k)=this%Pjy(i,j,k)+this%sigma*sum(this%divv_y(:,i,j,k)*GFM(i,j-1:j,k))/(dd*mysurf)*(&
+                     & vf%SD(i,j  ,k)*this%cfg%vol(i,j  ,k)*(dot_product(calculateNormal(vf%interface_polygon(1,i,j  ,k)),nw)-cos_contact_angle)+&
+                     & vf%SD(i,j-1,k)*this%cfg%vol(i,j-1,k)*(dot_product(calculateNormal(vf%interface_polygon(1,i,j-1,k)),nw)-cos_contact_angle))
+                  end if
+                  if (this%vmask(i,j,k+1).eq.1) then
+                     nw=[0.0_WP,0.0_WP,-1.0_WP]; dd=cfactor*this%cfg%dz(k)
+                     this%Pjy(i,j,k)=this%Pjy(i,j,k)+this%sigma*sum(this%divv_y(:,i,j,k)*GFM(i,j-1:j,k))/(dd*mysurf)*(&
+                     & vf%SD(i,j  ,k)*this%cfg%vol(i,j  ,k)*(dot_product(calculateNormal(vf%interface_polygon(1,i,j  ,k)),nw)-cos_contact_angle)+&
+                     & vf%SD(i,j-1,k)*this%cfg%vol(i,j-1,k)*(dot_product(calculateNormal(vf%interface_polygon(1,i,j-1,k)),nw)-cos_contact_angle))
+                  end if
+               end if
+               
+               ! Check if we have an interface on the z-face then check walls
+               mysurf=sum(vf%SD(i,j,k-1:k)*this%cfg%vol(i,j,k-1:k))
+               if (GFM(i,j,k).ne.GFM(i,j,k-1).and.mysurf.gt.0.0_WP) then
+                  if (this%wmask(i-1,j,k).eq.1) then
+                     nw=[+1.0_WP,0.0_WP,0.0_WP]; dd=cfactor*this%cfg%dx(i)
+                     this%Pjz(i,j,k)=this%Pjz(i,j,k)+this%sigma*sum(this%divw_z(:,i,j,k)*GFM(i,j,k-1:k))/(dd*mysurf)*(&
+                     & vf%SD(i,j,k  )*this%cfg%vol(i,j,k  )*(dot_product(calculateNormal(vf%interface_polygon(1,i,j,k  )),nw)-cos_contact_angle)+&
+                     & vf%SD(i,j,k-1)*this%cfg%vol(i,j,k-1)*(dot_product(calculateNormal(vf%interface_polygon(1,i,j,k-1)),nw)-cos_contact_angle))
+                  end if
+                  if (this%wmask(i+1,j,k).eq.1) then
+                     nw=[-1.0_WP,0.0_WP,0.0_WP]; dd=cfactor*this%cfg%dx(i)
+                     this%Pjz(i,j,k)=this%Pjz(i,j,k)+this%sigma*sum(this%divw_z(:,i,j,k)*GFM(i,j,k-1:k))/(dd*mysurf)*(&
+                     & vf%SD(i,j,k  )*this%cfg%vol(i,j,k  )*(dot_product(calculateNormal(vf%interface_polygon(1,i,j,k  )),nw)-cos_contact_angle)+&
+                     & vf%SD(i,j,k-1)*this%cfg%vol(i,j,k-1)*(dot_product(calculateNormal(vf%interface_polygon(1,i,j,k-1)),nw)-cos_contact_angle))
+                  end if
+                  if (this%wmask(i,j-1,k).eq.1) then
+                     nw=[0.0_WP,+1.0_WP,0.0_WP]; dd=cfactor*this%cfg%dy(j)
+                     this%Pjz(i,j,k)=this%Pjz(i,j,k)+this%sigma*sum(this%divw_z(:,i,j,k)*GFM(i,j,k-1:k))/(dd*mysurf)*(&
+                     & vf%SD(i,j,k  )*this%cfg%vol(i,j,k  )*(dot_product(calculateNormal(vf%interface_polygon(1,i,j,k  )),nw)-cos_contact_angle)+&
+                     & vf%SD(i,j,k-1)*this%cfg%vol(i,j,k-1)*(dot_product(calculateNormal(vf%interface_polygon(1,i,j,k-1)),nw)-cos_contact_angle))
+                  end if
+                  if (this%wmask(i,j+1,k).eq.1) then
+                     nw=[0.0_WP,-1.0_WP,0.0_WP]; dd=cfactor*this%cfg%dy(j)
+                     this%Pjz(i,j,k)=this%Pjz(i,j,k)+this%sigma*sum(this%divw_z(:,i,j,k)*GFM(i,j,k-1:k))/(dd*mysurf)*(&
+                     & vf%SD(i,j,k  )*this%cfg%vol(i,j,k  )*(dot_product(calculateNormal(vf%interface_polygon(1,i,j,k  )),nw)-cos_contact_angle)+&
+                     & vf%SD(i,j,k-1)*this%cfg%vol(i,j,k-1)*(dot_product(calculateNormal(vf%interface_polygon(1,i,j,k-1)),nw)-cos_contact_angle))
+                  end if
+               end if
+               
+            end do
+         end do
+      end do
+      
+      ! Deallocate array
+      deallocate(GFM)
+      
+   end subroutine add_static_contact
    
    
    !> Print out info for two-phase incompressible flow solver

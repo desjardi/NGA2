@@ -4,10 +4,10 @@ Partition :	4 1 1
 # Mesh definition
 Lx :	2.5e-2
 Ly :	2.5e-2
-Lz :	2.5e-2
+Lz :	0.0005	!2.5e-2
 nx :	50
 ny :	50
-nz :	50
+nz :	1	!50
 
 # Droplet properties
 Droplet radius :	5e-3
@@ -24,7 +24,7 @@ Liquid density :              997
 Gas density :                 1.15
 
 Surface tension coefficient : 0.072
-Static contact angle :	      30
+Static contact angle :	      60
 
 # Time integration
 Max timestep size :	1e-4

@@ -92,7 +92,7 @@ contains
          vf=vfs(cfg=cfg,reconstruction_method=lvira,name='VOF')
          ! Prepare the analytical calculation of a sphere on a wall
          call param_read('Droplet radius',Rdrop)
-         call param_read('Initial contact angle',contact)
+         call param_read('Initial contact angle',contact); contact=contact*Pi/180.0_WP
          if (vf%cfg%nz.eq.1) then ! 2D analytical drop shape
             Rdrop=Rdrop*sqrt(Pi/(2.0_WP*(contact-sin(contact)*cos(contact))))
          else ! 3D analytical drop shape
@@ -157,6 +157,7 @@ contains
       ! Create a two-phase flow solver without bconds
       create_and_initialize_flow_solver: block
          use ils_class, only: amg,pcg_amg,gmres,pfmg,smg
+         use mathtools, only: Pi
          ! Create flow solver
          fs=tpns(cfg=cfg,name='Two-phase NS')
          ! Assign constant viscosity to each phase
@@ -168,6 +169,7 @@ contains
          ! Read in surface tension coefficient and contact angle
          call param_read('Surface tension coefficient',fs%sigma)
          call param_read('Static contact angle',fs%contact_angle)
+         fs%contact_angle=fs%contact_angle*Pi/180.0_WP
          ! Assign acceleration of gravity
          call param_read('Gravity',fs%gravity)
          ! Configure pressure solver
@@ -251,7 +253,7 @@ contains
       use tpns_class, only: static_contact
       implicit none
       
-      ! Perform explicit Euler time integration
+      ! Perform time integration
       do while (.not.time%done())
          
          ! Increment time
