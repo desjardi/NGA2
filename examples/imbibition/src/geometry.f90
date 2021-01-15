@@ -38,7 +38,7 @@ contains
             x(i)=real(i-1,WP)/real(nx,WP)*Lx-0.5_WP*Lx
          end do
          do j=1,ny+1
-            y(j)=real(j-1,WP)/real(ny,WP)*Ly
+            y(j)=real(j-1,WP)/real(ny,WP)*Ly-0.5_WP*Ly
          end do
          do k=1,nz+1
             z(k)=real(k-1,WP)/real(nz,WP)*Lz-0.5_WP*Lz
@@ -66,9 +66,36 @@ contains
       
       ! Create masks for this config
       create_walls: block
-         ! Put walls all around
+         real(WP) :: hole_size,hole_dist,hole_depth
+         integer :: i,j,k
+         ! Read in wall definitions
+         call param_read('Hole size',hole_size)
+         call param_read('Hole dist',hole_dist)
+         call param_read('Hole depth',hole_depth)
+         ! Put walls all around first
          cfg%VF=0.0_WP
          cfg%VF(cfg%imin_:cfg%imax_,cfg%jmin_:cfg%jmax_,cfg%kmin_:cfg%kmax_)=1.0_WP
+         call cfg%sync(cfg%VF)
+         ! Add the perforated plate here
+         do k=cfg%kmin_,cfg%kmax_
+            do j=cfg%jmin_,cfg%jmax_
+               do i=cfg%imin_,cfg%imax_
+                  if (cfg%ym(j).gt.0.0_WP) then
+                     ! Above the plate
+                     cfg%VF(i,j,k)=1.0_WP
+                  else if (cfg%ym(j).lt.-hole_depth) then
+                     ! Below the plate
+                     cfg%VF(i,j,k)=1.0_WP
+                  else
+                     ! This is the plate
+                     cfg%VF(i,j,k)=0.0_WP
+                     ! Now perforate it
+                     if ((0.5_WP*hole_dist-abs(modulo(cfg%xm(i),hole_dist)-0.5_WP*hole_dist)).lt.0.5_WP*hole_size.and.&
+                     &   (0.5_WP*hole_dist-abs(modulo(cfg%zm(k),hole_dist)-0.5_WP*hole_dist)).lt.0.5_WP*hole_size) cfg%VF(i,j,k)=1.0_WP
+                  end if
+               end do
+            end do
+         end do
          call cfg%sync(cfg%VF)
       end block create_walls
       
