@@ -69,6 +69,7 @@ contains
          time=timetracker(amRoot=cfg%amRoot)
          call param_read('Max timestep size',time%dtmax)
          call param_read('Max cfl number',time%cflmax)
+         call param_read('Max time',time%tmax)
          time%dt=time%dtmax
          time%itmax=2
       end block initialize_timetracker

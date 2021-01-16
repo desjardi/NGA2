@@ -34,6 +34,7 @@ Static contact angle :	      60
 # Time integration
 Max timestep size :	1e-4
 Max cfl number :	0.9
+Max time : 		0.2
 
 # Pressure solver
 Pressure tolerance : 	1e-6
