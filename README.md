@@ -1,6 +1,6 @@
 # NGA2
 
-NGA2 is a CFD research library that provides a variety of finite volumes/finite difference solvers for typical fluid-related partial differential equations including:
+NGA2 is a high performance computing research library that provides a variety of finite volumes/finite difference solvers for typical fluid-related partial differential equations including:
 - incompressible Navier-Stokes
 - low-Mach number variable-density Navier-Stokes
 - two-phase Navier-Stokes
