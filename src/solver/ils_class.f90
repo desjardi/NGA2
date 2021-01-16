@@ -136,6 +136,7 @@ contains
       integer, intent(in) :: method
       integer :: ierr,st,stx1,stx2,sty1,sty2,stz1,stz2
       integer, dimension(3) :: periodicity,offset
+      integer, dimension(:), allocatable :: sizes
       
       ! Set solution method
       this%method=method
@@ -158,6 +159,9 @@ contains
          call this%prep_umap()
          ! Create a HYPRE matrix
          call HYPRE_IJMatrixCreate       (this%cfg%comm,this%ind_min,this%ind_max,this%ind_min,this%ind_max,this%hypre_mat,ierr)
+         allocate(sizes(this%ind_min:this%ind_max)); sizes=this%nst
+         call HYPRE_IJMatrixSetRowSizes  (this%hypre_mat,sizes,ierr)
+         deallocate(sizes)
          call HYPRE_IJMatrixSetObjectType(this%hypre_mat,hypre_ParCSR,ierr)
          call HYPRE_IJMatrixInitialize   (this%hypre_mat,ierr)
          ! Create a HYPRE rhs vector
@@ -345,9 +349,10 @@ contains
                end do
             end do
          end do
-         call HYPRE_IJMatrixSetValues(this%hypre_mat,this%ncell_,ncol,row,col,val,ierr)
-         call HYPRE_IJMatrixAssemble (this%hypre_mat,ierr)
-         call HYPRE_IJMatrixGetObject(this%hypre_mat,this%parse_mat,ierr)
+         call HYPRE_IJMatrixInitialize(this%hypre_mat,ierr)
+         call HYPRE_IJMatrixSetValues (this%hypre_mat,this%ncell_,ncol,row,col,val,ierr)
+         call HYPRE_IJMatrixAssemble  (this%hypre_mat,ierr)
+         call HYPRE_IJMatrixGetObject (this%hypre_mat,this%parse_mat,ierr)
          ! Deallocate storage
          deallocate(row,ncol,mycol,col,myval,val)
          ! For debugging - output the operator to a file
@@ -361,6 +366,7 @@ contains
          end do
          allocate(val(1:this%nst))
          ! Transfer the operator
+         call HYPRE_StructMatrixInitialize(this%hypre_mat,ierr)
          do k=this%cfg%kmin_,this%cfg%kmax_
             do j=this%cfg%jmin_,this%cfg%jmax_
                do i=this%cfg%imin_,this%cfg%imax_
@@ -431,11 +437,15 @@ contains
                end do
             end do
          end do
-         call HYPRE_IJVectorSetValues(this%hypre_rhs,this%ncell_,ind,rhs,ierr)
-         call HYPRE_IJVectorAssemble (this%hypre_rhs,ierr)
-         call HYPRE_IJVectorSetValues(this%hypre_sol,this%ncell_,ind,sol,ierr)
-         call HYPRE_IJVectorAssemble (this%hypre_sol,ierr)
+         call HYPRE_IJVectorInitialize(this%hypre_rhs,ierr)
+         call HYPRE_IJVectorSetValues (this%hypre_rhs,this%ncell_,ind,rhs,ierr)
+         call HYPRE_IJVectorAssemble  (this%hypre_rhs,ierr)
+         call HYPRE_IJVectorInitialize(this%hypre_sol,ierr)
+         call HYPRE_IJVectorSetValues (this%hypre_sol,this%ncell_,ind,sol,ierr)
+         call HYPRE_IJVectorAssemble  (this%hypre_sol,ierr)
       case (smg,pfmg) ! Prepare the struct vectors
+         call HYPRE_StructVectorInitialize(this%hypre_rhs,ierr)
+         call HYPRE_StructVectorInitialize(this%hypre_sol,ierr)
          do k=this%cfg%kmin_,this%cfg%kmax_
             do j=this%cfg%jmin_,this%cfg%jmax_
                do i=this%cfg%imin_,this%cfg%imax_
