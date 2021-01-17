@@ -27,7 +27,7 @@ module ils_class
    ! List of key solver parameters
    integer , parameter :: gmres_kdim=5                 !< Number of basis vectors between restarts
    real(WP), parameter :: amg_strong_threshold=0.25_WP !< Coarsening parameter (default is 0.25, 0.5 recommended in 3D)
-   integer , parameter :: amg_coarsen_type=10          !< Falgout=6 (old default); PMIS=8 and HMIS=10 (recommended)
+   integer , parameter :: amg_coarsen_type=8           !< Falgout=6 (old default); PMIS=8 and HMIS=10 (recommended)
    integer , parameter :: amg_interp=6                 !< 6=extended classical modified interpolation (default); 8=standard interpolation
    integer , parameter :: amg_printlvl=0               !< 0=none (default); 3=init and cvg history
    integer , parameter :: amg_relax=6                  !< 6=Hybrid symmetric Gauss-Seidel (default); 8=symmetric L1-Gauss-Seidel; 0=Weighted Jacobi
