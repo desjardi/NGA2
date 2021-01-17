@@ -335,26 +335,20 @@ contains
             ! Increment sub-iteration counter
             time%it=time%it+1
             
-            call fs%get_div()
-            call fs%get_max()
-            call vf%get_max()
-            call mfile%write()
-            call cflfile%write()
-            
          end do
          
          ! Recompute interpolated velocity and divergence
          call fs%interp_vel(Ui,Vi,Wi)
-         !call fs%get_div()
+         call fs%get_div()
          
          ! Output to ensight
          if (ens_evt%occurs()) call ens_out%write_data(time%t)
          
          ! Perform and output monitoring
-         !call fs%get_max()
-         !call vf%get_max()
-         !call mfile%write()
-         !call cflfile%write()
+         call fs%get_max()
+         call vf%get_max()
+         call mfile%write()
+         call cflfile%write()
          
       end do
       
