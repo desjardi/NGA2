@@ -20,7 +20,18 @@ module ils_class
    integer, parameter, public :: gmres_pilut=6
    integer, parameter, public :: smg=7
    integer, parameter, public :: pfmg=8
+   integer, parameter, public :: gmres_amg=9
+   integer, parameter, public :: bicgstab_amg=10
    
+   
+   ! List of key solver parameters
+   integer , parameter :: gmres_kdim=5                 !< Number of basis vectors between restarts
+   real(WP), parameter :: amg_strong_threshold=0.25_WP !< Coarsening parameter (default is 0.25, 0.5 recommended in 3D)
+   integer , parameter :: amg_coarsen_type=10          !< Falgout=6 (old default); PMIS=8 and HMIS=10 (recommended)
+   integer , parameter :: amg_interp=6                 !< 6=extended classical modified interpolation (default); 8=standard interpolation
+   integer , parameter :: amg_printlvl=0               !< 0=none (default); 3=init and cvg history
+   integer , parameter :: amg_relax=6                  !< 6=Hybrid symmetric Gauss-Seidel (default); 8=symmetric L1-Gauss-Seidel; 0=Weighted Jacobi
+   integer , parameter :: amg_relax_coarse=6           !< 9=Gauss elim; 99=GE w/ pivot; may be good to use same as above?
    
    ! Hypre-related storage parameter
    integer(kind=8), parameter :: hypre_ParCSR=5555
@@ -65,6 +76,7 @@ module ils_class
       integer(kind=8), private :: hypre_precond          !< Preconditioner
       
    contains
+      procedure :: print_short=>ils_print_short                       !< Short print of ILS object info
       procedure :: print=>ils_print                                   !< Print ILS object info
       procedure :: log  =>ils_log                                     !< Log ILS object info
       procedure :: init_solver                                        !< Solver initialization (at start-up)
@@ -154,15 +166,15 @@ contains
       select case (this%method)
       case (rbgs)
          ! Nothing needed
-      case (amg,pcg_amg,pcg_parasail,gmres,gmres_pilut)  ! Initialize a HYPRE IJ enviroment
+      case (amg,pcg_amg,pcg_parasail,gmres,gmres_pilut,gmres_amg,bicgstab_amg)  ! Initialize a HYPRE IJ enviroment
          ! Allocate and prepare unstructed mapping
          call this%prep_umap()
          ! Create a HYPRE matrix
          call HYPRE_IJMatrixCreate       (this%cfg%comm,this%ind_min,this%ind_max,this%ind_min,this%ind_max,this%hypre_mat,ierr)
+         call HYPRE_IJMatrixSetObjectType(this%hypre_mat,hypre_ParCSR,ierr)
          allocate(sizes(this%ind_min:this%ind_max)); sizes=this%nst
          call HYPRE_IJMatrixSetRowSizes  (this%hypre_mat,sizes,ierr)
          deallocate(sizes)
-         call HYPRE_IJMatrixSetObjectType(this%hypre_mat,hypre_ParCSR,ierr)
          call HYPRE_IJMatrixInitialize   (this%hypre_mat,ierr)
          ! Create a HYPRE rhs vector
          call HYPRE_IJVectorCreate       (this%cfg%comm,this%ind_min,this%ind_max,this%hypre_rhs,ierr)
@@ -210,13 +222,14 @@ contains
       case (amg)
          ! Create an AMG solver
          call HYPRE_BoomerAMGCreate        (this%hypre_solver,ierr)
-         call HYPRE_BoomerAMGSetPrintLevel (this%hypre_solver,0,ierr)            ! print solve info + parameters (3 from all, 0 for none)
-         call HYPRE_BoomerAMGSetInterpType (this%hypre_solver,6,ierr)            ! interpolation default is 6 (NGA=3)
-         call HYPRE_BoomerAMGSetCoarsenType(this%hypre_solver,8,ierr)            ! Falgout=6 (old default, NGA); PMIS=8 and HMIS=10 (recommended)
-         call HYPRE_BoomerAMGSetStrongThrshld(this%hypre_solver,0.5_WP,ierr)     ! 0.25 is default
-         call HYPRE_BoomerAMGSetRelaxType  (this%hypre_solver,8,ierr)            ! hybrid symmetric Gauss-Seidel/SOR
-         call HYPRE_BoomerAMGSetMaxIter    (this%hypre_solver,this%maxit,ierr)   ! maximum nbr of iter
-         call HYPRE_BoomerAMGSetTol        (this%hypre_solver,this%rcvg ,ierr)   ! convergence tolerance
+         call HYPRE_BoomerAMGSetPrintLevel (this%hypre_solver,amg_printlvl,ierr)
+         call HYPRE_BoomerAMGSetInterpType (this%hypre_solver,amg_interp,ierr)
+         call HYPRE_BoomerAMGSetCoarsenType(this%hypre_solver,amg_coarsen_type,ierr)
+         call HYPRE_BoomerAMGSetStrongThrshld(this%hypre_solver,amg_strong_threshold,ierr)
+         call HYPRE_BoomerAMGSetRelaxType  (this%hypre_solver,amg_relax,ierr)
+         call HYPRE_BoomerAMGSetCycleRelaxType(this%hypre_solver,amg_relax_coarse,3,ierr)
+         call HYPRE_BoomerAMGSetMaxIter    (this%hypre_solver,this%maxit,ierr)
+         call HYPRE_BoomerAMGSetTol        (this%hypre_solver,this%rcvg ,ierr)
       case (pcg_amg)
          ! Create a PCG solver
          call HYPRE_ParCSRPCGCreate        (this%cfg%comm,this%hypre_solver,ierr)
@@ -227,13 +240,14 @@ contains
          call HYPRE_ParCSRPCGSetLogging    (this%hypre_solver,1,ierr)
          ! Create an AMG preconditioner
          call HYPRE_BoomerAMGCreate        (this%hypre_precond,ierr)
-         call HYPRE_BoomerAMGSetPrintLevel (this%hypre_precond,0,ierr)            ! print solve info + parameters (3 from all, 0 for none)
-         call HYPRE_BoomerAMGSetInterpType (this%hypre_precond,6,ierr)            ! interpolation default is 6 (NGA=3)
-         call HYPRE_BoomerAMGSetCoarsenType(this%hypre_precond,8,ierr)            ! Falgout=6 (old default, NGA); PMIS=8 and HMIS=10 (recommended)
-         call HYPRE_BoomerAMGSetStrongThrshld(this%hypre_precond,0.5_WP,ierr)     ! 0.25 is default
-         call HYPRE_BoomerAMGSetRelaxType  (this%hypre_precond,8,ierr)            ! hybrid symmetric Gauss-Seidel/SOR
-         call HYPRE_BoomerAMGSetMaxIter    (this%hypre_precond,1,ierr)            ! maximum nbr of iter
-         call HYPRE_BoomerAMGSetTol        (this%hypre_precond,0.0_WP,ierr)       ! convergence tolerance
+         call HYPRE_BoomerAMGSetPrintLevel (this%hypre_precond,amg_printlvl,ierr)
+         call HYPRE_BoomerAMGSetInterpType (this%hypre_precond,amg_interp,ierr)
+         call HYPRE_BoomerAMGSetCoarsenType(this%hypre_precond,amg_coarsen_type,ierr)
+         call HYPRE_BoomerAMGSetStrongThrshld(this%hypre_precond,amg_strong_threshold,ierr)
+         call HYPRE_BoomerAMGSetRelaxType  (this%hypre_precond,amg_relax,ierr)
+         call HYPRE_BoomerAMGSetCycleRelaxType(this%hypre_precond,amg_relax_coarse,3,ierr)
+         call HYPRE_BoomerAMGSetMaxIter    (this%hypre_precond,1,ierr)
+         call HYPRE_BoomerAMGSetTol        (this%hypre_precond,0.0_WP,ierr)
          call HYPRE_BoomerAMGSetNumSweeps  (this%hypre_precond,1,ierr)
          ! Set AMG as preconditioner to PCG
          call HYPRE_ParCSRPCGSetPrecond    (this%hypre_solver,2,this%hypre_precond,ierr)
@@ -256,14 +270,34 @@ contains
       case (gmres)
          ! Create a GMRES solver
          call HYPRE_ParCSRGMRESCreate      (this%cfg%comm,this%hypre_solver,ierr)
-         call HYPRE_ParCSRGMRESSetKDim     (this%hypre_solver,5,ierr)
+         call HYPRE_ParCSRGMRESSetKDim     (this%hypre_solver,gmres_kdim,ierr)
          call HYPRE_ParCSRGMRESSetMaxIter  (this%hypre_solver,this%maxit,ierr)
          call HYPRE_ParCSRGMRESSetTol      (this%hypre_solver,this%rcvg,ierr)
          call HYPRE_ParCSRGMRESSetLogging  (this%hypre_solver,1,ierr)
+      case (gmres_amg)
+         ! Create a GMRES solver
+         call HYPRE_ParCSRGMRESCreate      (this%cfg%comm,this%hypre_solver,ierr)
+         call HYPRE_ParCSRGMRESSetKDim     (this%hypre_solver,gmres_kdim,ierr)
+         call HYPRE_ParCSRGMRESSetMaxIter  (this%hypre_solver,this%maxit,ierr)
+         call HYPRE_ParCSRGMRESSetTol      (this%hypre_solver,this%rcvg,ierr)
+         call HYPRE_ParCSRGMRESSetLogging  (this%hypre_solver,1,ierr)
+         ! Create an AMG preconditioner
+         call HYPRE_BoomerAMGCreate        (this%hypre_precond,ierr)
+         call HYPRE_BoomerAMGSetPrintLevel (this%hypre_precond,amg_printlvl,ierr)
+         call HYPRE_BoomerAMGSetInterpType (this%hypre_precond,amg_interp,ierr)
+         call HYPRE_BoomerAMGSetCoarsenType(this%hypre_precond,amg_coarsen_type,ierr)
+         call HYPRE_BoomerAMGSetStrongThrshld(this%hypre_precond,amg_strong_threshold,ierr)
+         call HYPRE_BoomerAMGSetRelaxType  (this%hypre_precond,amg_relax,ierr)
+         call HYPRE_BoomerAMGSetCycleRelaxType(this%hypre_precond,amg_relax_coarse,3,ierr)
+         call HYPRE_BoomerAMGSetMaxIter    (this%hypre_precond,1,ierr)
+         call HYPRE_BoomerAMGSetTol        (this%hypre_precond,0.0_WP,ierr)
+         call HYPRE_BoomerAMGSetNumSweeps  (this%hypre_precond,1,ierr)
+         ! Set AMG as preconditioner to GMRES
+         call HYPRE_ParCSRGMRESSetPrecond  (this%hypre_solver,2,this%hypre_precond,ierr)
       case (gmres_pilut)
          ! Create a GMRES solver
          call HYPRE_ParCSRGMRESCreate      (this%cfg%comm,this%hypre_solver,ierr)
-         call HYPRE_ParCSRGMRESSetKDim     (this%hypre_solver,5,ierr)
+         call HYPRE_ParCSRGMRESSetKDim     (this%hypre_solver,gmres_kdim,ierr)
          call HYPRE_ParCSRGMRESSetMaxIter  (this%hypre_solver,this%maxit,ierr)
          call HYPRE_ParCSRGMRESSetTol      (this%hypre_solver,this%rcvg,ierr)
          call HYPRE_ParCSRGMRESSetLogging  (this%hypre_solver,1,ierr)
@@ -271,6 +305,26 @@ contains
          call HYPRE_ParCSRPilutCreate      (this%cfg%comm,this%hypre_precond,ierr)
          ! Set PILUT as preconditioner to GMRES
          call HYPRE_ParCSRGMRESSetPrecond  (this%hypre_solver,3,this%hypre_precond,ierr)
+      case (bicgstab_amg)
+         ! Create a BiCGstab solver
+         call HYPRE_ParCSRBiCGSTABCreate    (this%cfg%comm,this%hypre_solver,ierr)
+         call HYPRE_ParCSRBiCGSTABSetPrintLev(this%hypre_solver,0,ierr)
+         call HYPRE_ParCSRBiCGSTABSetMaxIter(this%hypre_solver,this%maxit,ierr)
+         call HYPRE_ParCSRBiCGSTABSetTol    (this%hypre_solver,this%rcvg ,ierr)
+         call HYPRE_ParCSRBiCGSTABSetLogging(this%hypre_solver,1,ierr)
+         ! Create an AMG preconditioner
+         call HYPRE_BoomerAMGCreate        (this%hypre_precond,ierr)
+         call HYPRE_BoomerAMGSetPrintLevel (this%hypre_precond,amg_printlvl,ierr)
+         call HYPRE_BoomerAMGSetInterpType (this%hypre_precond,amg_interp,ierr)
+         call HYPRE_BoomerAMGSetCoarsenType(this%hypre_precond,amg_coarsen_type,ierr)
+         call HYPRE_BoomerAMGSetStrongThrshld(this%hypre_precond,amg_strong_threshold,ierr)
+         call HYPRE_BoomerAMGSetRelaxType  (this%hypre_precond,amg_relax,ierr)
+         call HYPRE_BoomerAMGSetCycleRelaxType(this%hypre_precond,amg_relax_coarse,3,ierr)
+         call HYPRE_BoomerAMGSetMaxIter    (this%hypre_precond,1,ierr)
+         call HYPRE_BoomerAMGSetTol        (this%hypre_precond,0.0_WP,ierr)
+         call HYPRE_BoomerAMGSetNumSweeps  (this%hypre_precond,1,ierr)
+         ! Set AMG as preconditioner to BiCGstab
+         call HYPRE_ParCSRBiCGSTABSetPrecond(this%hypre_solver,2,this%hypre_precond,ierr)
       case (smg)
          ! Create a SMG solver
          call HYPRE_StructSMGCreate        (this%cfg%comm,this%hypre_solver,ierr)
@@ -304,7 +358,7 @@ contains
       select case (this%method)
       case (rbgs)
          ! Nothing to do
-      case (amg,pcg_amg,pcg_parasail,gmres,gmres_pilut)  ! Prepare the IJ operator
+      case (amg,pcg_amg,pcg_parasail,gmres,gmres_pilut,gmres_amg,bicgstab_amg)  ! Prepare the IJ operator
          ! Allocate storage for transfer
          allocate(mycol(this%nst))
          allocate(myval(this%nst))
@@ -392,8 +446,10 @@ contains
          call HYPRE_BoomerAMGSetup  (this%hypre_solver,this%parse_mat,this%parse_rhs,this%parse_sol,ierr)
       case (pcg_amg,pcg_parasail)
          call HYPRE_ParCSRPCGSetup  (this%hypre_solver,this%parse_mat,this%parse_rhs,this%parse_sol,ierr)
-      case (gmres,gmres_pilut)
+      case (gmres,gmres_pilut,gmres_amg)
          call HYPRE_ParCSRGMRESSetup(this%hypre_solver,this%parse_mat,this%parse_rhs,this%parse_sol,ierr)
+      case (bicgstab_amg)
+         call HYPRE_ParCSRBiCGSTABSetup(this%hypre_solver,this%parse_mat,this%parse_rhs,this%parse_sol,ierr)
       case (smg)
          call HYPRE_StructSMGSetup  (this%hypre_solver,this%hypre_mat,this%hypre_rhs,this%hypre_sol,ierr)
       case (pfmg)
@@ -420,7 +476,7 @@ contains
       select case (this%method)
       case (rbgs)
          ! Nothing to do
-      case (amg,pcg_amg,pcg_parasail,gmres,gmres_pilut)  ! Prepare the IJ vectors
+      case (amg,pcg_amg,pcg_parasail,gmres,gmres_pilut,gmres_amg,bicgstab_amg)  ! Prepare the IJ vectors
          allocate(rhs(this%ncell_))
          allocate(sol(this%ncell_))
          allocate(ind(this%ncell_))
@@ -475,10 +531,14 @@ contains
          call HYPRE_ParCSRPCGSolve           (this%hypre_solver,this%parse_mat,this%parse_rhs,this%parse_sol,ierr)
          call HYPRE_ParCSRPCGGetNumIterations(this%hypre_solver,this%it  ,ierr)
          call HYPRE_ParCSRPCGGetFinalRelative(this%hypre_solver,this%rerr,ierr)
-      case (gmres,gmres_pilut)
+      case (gmres,gmres_pilut,gmres_amg)
          call HYPRE_ParCSRGMRESSolve         (this%hypre_solver,this%parse_mat,this%parse_rhs,this%parse_sol,ierr)
          call HYPRE_ParCSRGMRESGetNumIteratio(this%hypre_solver,this%it  ,ierr)
          call HYPRE_ParCSRGMRESGetFinalRelati(this%hypre_solver,this%rerr,ierr)
+      case (bicgstab_amg)
+         call HYPRE_ParCSRBiCGSTABSolve      (this%hypre_solver,this%parse_mat,this%parse_rhs,this%parse_sol,ierr)
+         call HYPRE_ParCSRBiCGSTABGetNumIter (this%hypre_solver,this%it  ,ierr)
+         call HYPRE_ParCSRBiCGSTABGetFinalRel(this%hypre_solver,this%rerr,ierr)
       case (smg)
          call HYPRE_StructSMGSolve           (this%hypre_solver,this%hypre_mat,this%hypre_rhs,this%hypre_sol,ierr)
          call HYPRE_StructSMGGetNumIterations(this%hypre_solver,this%it  ,ierr)
@@ -493,7 +553,7 @@ contains
       select case (this%method)
       case (rbgs)
          ! Nothing to do
-      case (amg,pcg_amg,pcg_parasail,gmres,gmres_pilut)  ! Retrieve the IJ vector
+      case (amg,pcg_amg,pcg_parasail,gmres,gmres_pilut,gmres_amg,bicgstab_amg)  ! Retrieve the IJ vector
          call HYPRE_IJVectorGetValues(this%hypre_sol,this%ncell_,ind,sol,ierr)
          count=0
          do k=this%cfg%kmin_,this%cfg%kmax_
@@ -522,7 +582,7 @@ contains
       
       ! If verbose run, log and or print info
       if (verbose.gt.0) call this%log
-      if (verbose.gt.1) call this%print
+      if (verbose.gt.1) call this%print_short
       
    end subroutine solve
    
@@ -663,6 +723,15 @@ contains
          write(output_unit,'(" >  rerr/rcvg = ",es12.5,"/",es12.5)') this%rerr,this%rcvg
       end if
    end subroutine ils_print
+   
+   
+   !> Short print of ILS info to the screen
+   subroutine ils_print_short(this)
+      use, intrinsic :: iso_fortran_env, only: output_unit
+      implicit none
+      class(ils), intent(in) :: this
+      if (this%cfg%amRoot) write(output_unit,'("Iterative Linear Solver [",a20,"] for config [",a20,"] -> it/maxit = ",i3,"/",i3," and rerr/rcvg = ",es12.5,"/",es12.5)') trim(this%name),trim(this%cfg%name),this%it,this%maxit,this%rerr,this%rcvg
+   end subroutine ils_print_short
    
    
 end module ils_class

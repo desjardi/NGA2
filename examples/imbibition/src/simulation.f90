@@ -157,7 +157,7 @@ contains
       
       ! Create a two-phase flow solver without bconds
       create_and_initialize_flow_solver: block
-         use ils_class, only: amg,pcg_amg,gmres,pfmg,smg
+         use ils_class, only: amg,pcg_amg,gmres,pfmg,smg,gmres_amg,bicgstab_amg
          use mathtools, only: Pi
          ! Create flow solver
          fs=tpns(cfg=cfg,name='Two-phase NS')
@@ -335,20 +335,26 @@ contains
             ! Increment sub-iteration counter
             time%it=time%it+1
             
+            call fs%get_div()
+            call fs%get_max()
+            call vf%get_max()
+            call mfile%write()
+            call cflfile%write()
+            
          end do
          
          ! Recompute interpolated velocity and divergence
          call fs%interp_vel(Ui,Vi,Wi)
-         call fs%get_div()
+         !call fs%get_div()
          
          ! Output to ensight
          if (ens_evt%occurs()) call ens_out%write_data(time%t)
          
          ! Perform and output monitoring
-         call fs%get_max()
-         call vf%get_max()
-         call mfile%write()
-         call cflfile%write()
+         !call fs%get_max()
+         !call vf%get_max()
+         !call mfile%write()
+         !call cflfile%write()
          
       end do
       
