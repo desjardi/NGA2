@@ -2,12 +2,12 @@ Grid file:	test.grid
 Geom file:	test.geom
 
 # Mesh definition
-Lx :	0.025
+Lx :	0.05
 Ly :	0.05
-Lz :	0.025
-nx :	50
+Lz :	0.05
+nx :	100
 ny :	100
-nz :	50
+nz :	100
 
 # Wall geometry
 Hole size : 0.01	!0.002
