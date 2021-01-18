@@ -29,9 +29,11 @@ module simulation
    real(WP), dimension(:,:,:), allocatable :: resU,resV,resW
    real(WP), dimension(:,:,:), allocatable :: Ui,Vi,Wi
    
-   !> Problem definition
+   !> Problem definition and post-processing
    real(WP), dimension(3) :: Cdrop
-   real(WP) :: Rdrop
+   real(WP) :: Rdrop,Vimb
+   type(monitor) :: ppfile
+   type(event) :: ppevt
    
 contains
    
@@ -45,6 +47,79 @@ contains
       ! Create the droplet
       G=Rdrop-sqrt(sum((xyz-Cdrop)**2))
    end function levelset_contact_drop
+   
+   
+   !> Specialized subroutine that computes the imbibed liquid volume
+   subroutine get_Vimb()
+      use mpi_f08,  only: MPI_ALLREDUCE,MPI_SUM
+      use parallel, only: MPI_REAL_WP
+      implicit none
+      integer :: i,j,k,ierr
+      real(WP) :: my_Vimb
+      my_Vimb=0.0_WP
+      do k=vf%cfg%kmin_,vf%cfg%kmax_
+         do j=vf%cfg%jmin_,vf%cfg%jmax_
+            do i=vf%cfg%imin_,vf%cfg%imax_
+               if (vf%cfg%ym(j).lt.0.0_WP) my_Vimb=my_Vimb+vf%VF(i,j,k)*vf%cfg%vol(i,j,k)*vf%cfg%VF(i,j,k)
+            end do
+         end do
+      end do
+      call MPI_ALLREDUCE(my_Vimb,Vimb,1,MPI_REAL_WP,MPI_SUM,vf%cfg%comm,ierr)
+   end subroutine get_Vimb
+   
+   
+   !> Specialized subroutine that outputs the vertical liquid distribution
+   subroutine postproc_data()
+      use mathtools, only: Pi
+      use string,    only: str_medium
+      use mpi_f08,   only: MPI_ALLREDUCE,MPI_SUM
+      use parallel,  only: MPI_REAL_WP
+      implicit none
+      integer :: iunit,ierr,i,j,k
+      real(WP), dimension(:), allocatable :: localvol,totalvol
+      real(WP), dimension(:), allocatable :: localvel,totalvel
+      real(WP), dimension(:), allocatable :: localpre,totalpre
+      character(len=str_medium) :: filename,timestamp
+      ! Allocate vertical line storage
+      allocate(localvol(vf%cfg%jmin:vf%cfg%jmax)); localvol=0.0_WP
+      allocate(localvel(vf%cfg%jmin:vf%cfg%jmax)); localvel=0.0_WP
+      allocate(localpre(vf%cfg%jmin:vf%cfg%jmax)); localpre=0.0_WP
+      allocate(totalvol(vf%cfg%jmin:vf%cfg%jmax)); totalvol=0.0_WP
+      allocate(totalvel(vf%cfg%jmin:vf%cfg%jmax)); totalvel=0.0_WP
+      allocate(totalpre(vf%cfg%jmin:vf%cfg%jmax)); totalpre=0.0_WP
+      ! Initialize local data to zero
+      localvol=0.0_WP; localvel=0.0_WP; localpre=0.0_WP
+      ! Integrate all data over x and z
+      do k=vf%cfg%kmin_,vf%cfg%kmax_
+         do j=vf%cfg%jmin_,vf%cfg%jmax_
+            do i=vf%cfg%imin_,vf%cfg%imax_
+               localvol(j)=localvol(j)+vf%VF(i,j,k)*vf%cfg%dx(i)*vf%cfg%dz(k)
+               localvel(j)=localvel(j)+vf%VF(i,j,k)*vf%cfg%dx(i)*vf%cfg%dz(k)*Vi(i,j,k)
+               localpre(j)=localpre(j)+vf%VF(i,j,k)*vf%cfg%dx(i)*vf%cfg%dz(k)*fs%P(i,j,k)
+            end do
+         end do
+      end do
+      ! All-reduce the data
+      call MPI_ALLREDUCE(localvol,totalvol,vf%cfg%ny,MPI_REAL_WP,MPI_SUM,vf%cfg%comm,ierr)
+      call MPI_ALLREDUCE(localvel,totalvel,vf%cfg%ny,MPI_REAL_WP,MPI_SUM,vf%cfg%comm,ierr)
+      call MPI_ALLREDUCE(localpre,totalpre,vf%cfg%ny,MPI_REAL_WP,MPI_SUM,vf%cfg%comm,ierr)
+      ! If root, print it out
+      if (vf%cfg%amRoot) then
+         call execute_command_line('mkdir -p radius')
+         filename='radius_'
+         write(timestamp,'(es12.5)') time%t
+         open(newunit=iunit,file='radius/'//trim(adjustl(filename))//trim(adjustl(timestamp)),form='formatted',status='replace',access='stream',iostat=ierr)
+         write(iunit,'(a12,3x,a12,3x,a12,3x,a12,3x,a12)') 'Height','Liq_Radius','Liq_Area','Liq_VFR','Liq_P'
+         do j=vf%cfg%jmin,vf%cfg%jmax
+            write(iunit,'(es12.5,3x,es12.5,3x,es12.5,3x,es12.5,3x,es12.5)') vf%cfg%ym(j),sqrt(totalvol(j)/Pi),totalvol(j),totalvel(j),totalpre(j)/(totalvol(j)+tiny(totalvol(j)))
+         end do
+         close(iunit)
+      end if
+      ! Deallocate work arrays
+      deallocate(localvol,totalvol)
+      deallocate(localvel,totalvel)
+      deallocate(localpre,totalpre)
+   end subroutine postproc_data
    
    
    !> Initialization of problem solver
@@ -246,6 +321,27 @@ contains
       end block create_monitor
       
       
+      ! Create a specialized post-processing file
+      create_postproc: block
+         ! Calculate imbibed volume
+         call get_Vimb()
+         ! Create monitor for liquid data
+         ppfile=monitor(fs%cfg%amRoot,'dropinfo')
+         call ppfile%add_column(time%n,'Timestep number')
+         call ppfile%add_column(time%t,'Time')
+         call ppfile%add_column(vf%VFmax,'VOF maximum')
+         call ppfile%add_column(vf%VFmin,'VOF minimum')
+         call ppfile%add_column(vf%VFint,'Total volume')
+         call ppfile%add_column(Vimb,'Imbibed volume')
+         call ppfile%write()
+         ! Create event for data postprocessing
+         ppevt=event(time=time,name='Postproc output')
+         call param_read('Postproc output period',ppevt%tper)
+         ! Perform the output
+         if (ppevt%occurs()) call postproc_data()
+      end block create_postproc
+      
+      
    end subroutine simulation_init
    
    
@@ -349,6 +445,10 @@ contains
          call vf%get_max()
          call mfile%write()
          call cflfile%write()
+         
+         ! Specialized post-processing
+         call get_Vimb(); call ppfile%write()
+         if (ppevt%occurs()) call postproc_data()
          
       end do
       

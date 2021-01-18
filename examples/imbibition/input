@@ -1,48 +1,51 @@
 # Parallelization
-Partition :	4 1 1
+Partition : 4 1 1
 
 # Mesh definition
-Lx :	2.5e-2
-Ly :	5.0e-2
-Lz :	2.5e-2
-nx :	50	!100
-ny :	100	!200
-nz :	50	!100
+Lx : 2.5e-2
+Ly : 5.0e-2
+Lz : 2.5e-2
+nx : 50	!100
+ny : 100	!200
+nz : 50	!100
 
 # Wall geometry
-Hole size : 0.001
-Hole dist : 0.002
-Hole depth: 0.02
+Hole size  : 0.001
+Hole dist  : 0.002
+Hole depth : 0.02
 
 # Droplet properties
-Droplet radius :	5e-3
-Initial contact angle :	180
+Droplet radius :        5e-3
+Initial contact angle : 180
 
 # Source
-Gravity :		      0 0 0
+Gravity : 0 0 0
 
 # Fluid properties
-Liquid dynamic viscosity :    0.9e-4
-Gas dynamic viscosity :       1.8e-5
+Liquid dynamic viscosity : 0.9e-4
+Gas dynamic viscosity :    1.8e-5
 
-Liquid density :              997
-Gas density :                 1.15
+Liquid density : 997
+Gas density :    1.15
 
 Surface tension coefficient : 0.072
-Static contact angle :	      60
+Static contact angle :        60
 
 # Time integration
-Max timestep size :	1e-4
-Max cfl number :	0.9
-Max time : 		0.2
+Max timestep size : 1e-4
+Max cfl number :    0.9
+Max time :          0.2
 
 # Pressure solver
-Pressure tolerance : 	1e-6
-Pressure iteration : 	100
+Pressure tolerance : 1e-6
+Pressure iteration : 100
 
 # Implicit velocity solver
-Implicit tolerance : 	1e-6
-Implicit iteration : 	100
+Implicit tolerance : 1e-6
+Implicit iteration : 100
 
 # Ensight output
 Ensight output period : 1e-3
+
+# Post-processing output
+Postproc output period : 1e-3
