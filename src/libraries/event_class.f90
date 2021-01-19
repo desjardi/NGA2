@@ -9,7 +9,7 @@ module event_class
    public :: event
    
    !> Safety coefficient to avoid barely missing an occurence due to round off
-   real(WP), parameter :: csafe=10.0_WP
+   real(WP), parameter :: csafe=100.0_WP
    
    !> Event object
    type :: event
