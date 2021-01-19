@@ -114,7 +114,7 @@ fig5.update_layout(width=800,height=600)
 fig5.update_xaxes(title_text='Capillary number',title_font_size=24,tickfont_size=24)
 fig5.update_yaxes(title_text='Cosine of contact angle',title_font_size=24,tickfont_size=24,range=[-1,+1])
 fig5.add_shape(type='line',x0=min(Cap),y0=math.cos(CA0/180*math.pi),x1=max(Cap),y1=math.cos(CA0/180*math.pi),line_color='red')
-fig5.add_annotation(x=0,y=math.cos(CA0/180*math.pi)+0.1,text='Static contact',showarrow=False,font_size=16,font_color='red')
+fig5.add_annotation(x=0.5*min(Cap),y=math.cos(CA0/180*math.pi)+0.1,text='Static contact',showarrow=False,font_size=16,font_color='red')
 
 # This is where we define the dashboard layout
 app = dash.Dash(__name__)
