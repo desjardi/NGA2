@@ -43,3 +43,4 @@ examples/*/*
 !examples/*/input
 !examples/*/README
 !examples/*/src
+!examples/*/*.py
