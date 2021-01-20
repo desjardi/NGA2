@@ -1,0 +1,6 @@
+This is a simplified model of the interior of the C2C bus that Cornell uses.
+The main features of this case are the numerous wall cells to represent seats
+and other objects on the bus and the several internal inlets and outlets that
+model the HVAC system.
+
+Created by M. Kuhn, 2019

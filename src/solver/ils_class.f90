@@ -29,9 +29,10 @@ module ils_class
    real(WP), parameter :: amg_strong_threshold=0.25_WP !< Coarsening parameter (default is 0.25, 0.5 recommended in 3D)
    integer , parameter :: amg_coarsen_type=8           !< Falgout=6 (old default); PMIS=8 and HMIS=10 (recommended)
    integer , parameter :: amg_interp=6                 !< 6=extended classical modified interpolation (default); 8=standard interpolation
-   integer , parameter :: amg_printlvl=0               !< 0=none (default); 3=init and cvg history
    integer , parameter :: amg_relax=6                  !< 6=Hybrid symmetric Gauss-Seidel (default); 8=symmetric L1-Gauss-Seidel; 0=Weighted Jacobi
    integer , parameter :: amg_relax_coarse=6           !< 9=Gauss elim; 99=GE w/ pivot; may be good to use same as above?
+   integer , parameter :: sprintlvl=0                  !< Solver  printing: 0=none (default); 3=init and cvg history
+   integer , parameter :: pprintlvl=0                  !< Precond printing: 0=none (default); 3=init and cvg history
    
    ! Hypre-related storage parameter
    integer(kind=8), parameter :: hypre_ParCSR=5555
@@ -222,7 +223,7 @@ contains
       case (amg)
          ! Create an AMG solver
          call HYPRE_BoomerAMGCreate        (this%hypre_solver,ierr)
-         call HYPRE_BoomerAMGSetPrintLevel (this%hypre_solver,amg_printlvl,ierr)
+         call HYPRE_BoomerAMGSetPrintLevel (this%hypre_solver,sprintlvl,ierr)
          call HYPRE_BoomerAMGSetInterpType (this%hypre_solver,amg_interp,ierr)
          call HYPRE_BoomerAMGSetCoarsenType(this%hypre_solver,amg_coarsen_type,ierr)
          call HYPRE_BoomerAMGSetStrongThrshld(this%hypre_solver,amg_strong_threshold,ierr)
@@ -233,14 +234,14 @@ contains
       case (pcg_amg)
          ! Create a PCG solver
          call HYPRE_ParCSRPCGCreate        (this%cfg%comm,this%hypre_solver,ierr)
-         call HYPRE_ParCSRPCGSetPrintLevel (this%hypre_solver,0,ierr)
+         call HYPRE_ParCSRPCGSetPrintLevel (this%hypre_solver,sprintlvl,ierr)
          call HYPRE_ParCSRPCGSetMaxIter    (this%hypre_solver,this%maxit,ierr)
          call HYPRE_ParCSRPCGSetTol        (this%hypre_solver,this%rcvg ,ierr)
          call HYPRE_ParCSRPCGSetTwoNorm    (this%hypre_solver,1,ierr)
          call HYPRE_ParCSRPCGSetLogging    (this%hypre_solver,1,ierr)
          ! Create an AMG preconditioner
          call HYPRE_BoomerAMGCreate        (this%hypre_precond,ierr)
-         call HYPRE_BoomerAMGSetPrintLevel (this%hypre_precond,amg_printlvl,ierr)
+         call HYPRE_BoomerAMGSetPrintLevel (this%hypre_precond,pprintlvl,ierr)
          call HYPRE_BoomerAMGSetInterpType (this%hypre_precond,amg_interp,ierr)
          call HYPRE_BoomerAMGSetCoarsenType(this%hypre_precond,amg_coarsen_type,ierr)
          call HYPRE_BoomerAMGSetStrongThrshld(this%hypre_precond,amg_strong_threshold,ierr)
@@ -254,7 +255,7 @@ contains
       case (pcg_parasail)
          ! Create a PCG solver
          call HYPRE_ParCSRPCGCreate        (this%cfg%comm,this%hypre_solver,ierr)
-         call HYPRE_ParCSRPCGSetPrintLevel (this%hypre_solver,0,ierr)
+         call HYPRE_ParCSRPCGSetPrintLevel (this%hypre_solver,sprintlvl,ierr)
          call HYPRE_ParCSRPCGSetMaxIter    (this%hypre_solver,this%maxit,ierr)
          call HYPRE_ParCSRPCGSetTol        (this%hypre_solver,this%rcvg ,ierr)
          call HYPRE_ParCSRPCGSetTwoNorm    (this%hypre_solver,1,ierr)
@@ -270,6 +271,7 @@ contains
       case (gmres)
          ! Create a GMRES solver
          call HYPRE_ParCSRGMRESCreate      (this%cfg%comm,this%hypre_solver,ierr)
+         call HYPRE_ParCSRGMRESSetPrintLevel(this%hypre_solver,sprintlvl,ierr)
          call HYPRE_ParCSRGMRESSetKDim     (this%hypre_solver,gmres_kdim,ierr)
          call HYPRE_ParCSRGMRESSetMaxIter  (this%hypre_solver,this%maxit,ierr)
          call HYPRE_ParCSRGMRESSetTol      (this%hypre_solver,this%rcvg,ierr)
@@ -277,13 +279,14 @@ contains
       case (gmres_amg)
          ! Create a GMRES solver
          call HYPRE_ParCSRGMRESCreate      (this%cfg%comm,this%hypre_solver,ierr)
+         call HYPRE_ParCSRGMRESSetPrintLevel(this%hypre_solver,sprintlvl,ierr)
          call HYPRE_ParCSRGMRESSetKDim     (this%hypre_solver,gmres_kdim,ierr)
          call HYPRE_ParCSRGMRESSetMaxIter  (this%hypre_solver,this%maxit,ierr)
          call HYPRE_ParCSRGMRESSetTol      (this%hypre_solver,this%rcvg,ierr)
          call HYPRE_ParCSRGMRESSetLogging  (this%hypre_solver,1,ierr)
          ! Create an AMG preconditioner
          call HYPRE_BoomerAMGCreate        (this%hypre_precond,ierr)
-         call HYPRE_BoomerAMGSetPrintLevel (this%hypre_precond,amg_printlvl,ierr)
+         call HYPRE_BoomerAMGSetPrintLevel (this%hypre_precond,pprintlvl,ierr)
          call HYPRE_BoomerAMGSetInterpType (this%hypre_precond,amg_interp,ierr)
          call HYPRE_BoomerAMGSetCoarsenType(this%hypre_precond,amg_coarsen_type,ierr)
          call HYPRE_BoomerAMGSetStrongThrshld(this%hypre_precond,amg_strong_threshold,ierr)
@@ -297,6 +300,7 @@ contains
       case (gmres_pilut)
          ! Create a GMRES solver
          call HYPRE_ParCSRGMRESCreate      (this%cfg%comm,this%hypre_solver,ierr)
+         call HYPRE_ParCSRGMRESSetPrintLevel(this%hypre_solver,sprintlvl,ierr)
          call HYPRE_ParCSRGMRESSetKDim     (this%hypre_solver,gmres_kdim,ierr)
          call HYPRE_ParCSRGMRESSetMaxIter  (this%hypre_solver,this%maxit,ierr)
          call HYPRE_ParCSRGMRESSetTol      (this%hypre_solver,this%rcvg,ierr)
@@ -308,13 +312,13 @@ contains
       case (bicgstab_amg)
          ! Create a BiCGstab solver
          call HYPRE_ParCSRBiCGSTABCreate    (this%cfg%comm,this%hypre_solver,ierr)
-         call HYPRE_ParCSRBiCGSTABSetPrintLev(this%hypre_solver,0,ierr)
+         call HYPRE_ParCSRBiCGSTABSetPrintLev(this%hypre_solver,sprintlvl,ierr)
          call HYPRE_ParCSRBiCGSTABSetMaxIter(this%hypre_solver,this%maxit,ierr)
          call HYPRE_ParCSRBiCGSTABSetTol    (this%hypre_solver,this%rcvg ,ierr)
          call HYPRE_ParCSRBiCGSTABSetLogging(this%hypre_solver,1,ierr)
          ! Create an AMG preconditioner
          call HYPRE_BoomerAMGCreate        (this%hypre_precond,ierr)
-         call HYPRE_BoomerAMGSetPrintLevel (this%hypre_precond,amg_printlvl,ierr)
+         call HYPRE_BoomerAMGSetPrintLevel (this%hypre_precond,pprintlvl,ierr)
          call HYPRE_BoomerAMGSetInterpType (this%hypre_precond,amg_interp,ierr)
          call HYPRE_BoomerAMGSetCoarsenType(this%hypre_precond,amg_coarsen_type,ierr)
          call HYPRE_BoomerAMGSetStrongThrshld(this%hypre_precond,amg_strong_threshold,ierr)
@@ -328,6 +332,7 @@ contains
       case (smg)
          ! Create a SMG solver
          call HYPRE_StructSMGCreate        (this%cfg%comm,this%hypre_solver,ierr)
+         call HYPRE_StructSMGSetPrintLevel (this%hypre_solver,sprintlvl,ierr)
          call HYPRE_StructSMGSetMaxIter    (this%hypre_solver,this%maxit,ierr)
          call HYPRE_StructSMGSetTol        (this%hypre_solver,this%rcvg ,ierr)
          call HYPRE_StructSMGSetLogging    (this%hypre_solver,1,ierr)
@@ -339,7 +344,7 @@ contains
          call HYPRE_StructPFMGSetMaxIter   (this%hypre_solver,this%maxit,ierr)
          call HYPRE_StructPFMGSetTol       (this%hypre_solver,this%rcvg ,ierr)
          call HYPRE_StructPFMGSetLogging   (this%hypre_solver,1,ierr)
-         call HYPRE_StructPFMGSetPrintLevel(this%hypre_solver,0,ierr)
+         call HYPRE_StructPFMGSetPrintLevel(this%hypre_solver,sprintlvl,ierr)
       end select
       
    end subroutine init_solver

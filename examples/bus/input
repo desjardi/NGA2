@@ -1,0 +1,28 @@
+# Parallelization
+Partition :	4 1 1
+
+# Mesh definition
+Grid resolution :	1
+
+# Wall geometry
+
+
+# Fluid properties
+Density :		1.2
+Dynamic viscosity :	1.83e-5
+
+# Time integration
+Max timestep size :	1e-3
+Max cfl number :	0.9
+Max simulation time :	200
+
+# Pressure solver
+Pressure tolerance : 	1e-6
+Pressure iteration : 	100
+
+# Implicit velocity solver
+Implicit tolerance : 	1e-6
+Implicit iteration : 	100
+
+# Ensight ouput
+Ensight output period : 1
