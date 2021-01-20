@@ -29,8 +29,18 @@ with open('input') as fobj:
             Rinit=float(line_data[1])
         if line_data[0].rstrip()=='Static contact angle':
             CA0=float(line_data[1])
+        if line_data[0].rstrip()=='Hole size':
+            hs=float(line_data[1])
+        if line_data[0].rstrip()=='Hole dist':
+            hd=float(line_data[1])
 # Compute Rayleigh time scale
 Tref=(rho_l*Rinit**3/sigma)**(1/2)
+# Compute porosity
+eps=hs**2/hd**2
+# Dry Cassie-Baxter angle
+DCB=(1-eps)*math.cos(CA0)-eps
+# Wet Cassie-Baxter angle
+WCB=(1-eps)*math.cos(CA0)+eps
 
 # Define imbibed volume figure
 df = pd.read_csv('monitor/dropinfo', delim_whitespace=True, header=None, skiprows=2, usecols=[1, 4, 5], names=['Time', 'Vtot', 'Vimb'])
@@ -113,8 +123,10 @@ fig5.add_trace(go.Scatter(x=wr['Cap'], y=wr['cosangle'],mode='lines+markers',sho
 fig5.update_layout(width=800,height=600)
 fig5.update_xaxes(title_text='Capillary number',title_font_size=24,tickfont_size=24)
 fig5.update_yaxes(title_text='Cosine of contact angle',title_font_size=24,tickfont_size=24,range=[-1,+1])
-fig5.add_shape(type='line',x0=min(Cap),y0=math.cos(CA0/180*math.pi),x1=max(Cap),y1=math.cos(CA0/180*math.pi),line_color='red')
-fig5.add_annotation(x=0.5*min(Cap),y=math.cos(CA0/180*math.pi)+0.1,text='Static contact',showarrow=False,font_size=16,font_color='red')
+fig5.add_shape(type='line',x0=min(Cap),y0=math.cos(CA0/180*math.pi),x1=max(Cap),y1=math.cos(CA0/180*math.pi),line_color='darkslategrey')
+#fig5.add_annotation(x=0.5*min(Cap),y=math.cos(CA0/180*math.pi)+0.1,text='Static contact',showarrow=False,font_size=16,font_color='darkslategrey')
+fig5.add_shape(type='line',x0=min(Cap),y0=math.cos(WCB),x1=max(Cap),y1=math.cos(WCB),line_color='blue')
+fig5.add_shape(type='line',x0=min(Cap),y0=math.cos(DCB),x1=max(Cap),y1=math.cos(DCB),line_color='red')
 
 # This is where we define the dashboard layout
 app = dash.Dash(__name__)
@@ -142,6 +154,7 @@ app.layout = html.Div(style={"margin-left": "15px"},children=[
     - Surface tension coefficient: \u03C3 = {sigma}
     - Droplet radius: R = {Rinit}
     - Static contact angle: CA = {CA0}
+    - Porosity of the plate: \u03B5 = {eps}
     
     The resulting Rayleigh time scale is T = {Tref}
     '''),
