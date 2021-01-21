@@ -22,6 +22,7 @@ module ils_class
    integer, parameter, public :: pfmg=8
    integer, parameter, public :: gmres_amg=9
    integer, parameter, public :: bicgstab_amg=10
+   integer, parameter, public :: pcg=11
    
    
    ! List of key solver parameters
@@ -29,8 +30,8 @@ module ils_class
    real(WP), parameter :: amg_strong_threshold=0.25_WP !< Coarsening parameter (default is 0.25, 0.5 recommended in 3D)
    integer , parameter :: amg_coarsen_type=8           !< Falgout=6 (old default); PMIS=8 and HMIS=10 (recommended)
    integer , parameter :: amg_interp=6                 !< 6=extended classical modified interpolation (default); 8=standard interpolation
-   integer , parameter :: amg_relax=6                  !< 6=Hybrid symmetric Gauss-Seidel (default); 8=symmetric L1-Gauss-Seidel; 0=Weighted Jacobi
-   integer , parameter :: amg_relax_coarse=6           !< 9=Gauss elim; 99=GE w/ pivot; may be good to use same as above?
+   integer , parameter :: amg_relax=8                  !< 6=Hybrid symmetric Gauss-Seidel (default); 8=symmetric L1-Gauss-Seidel; 0=Weighted Jacobi
+   integer , parameter :: amg_relax_coarse=8           !< 9=Gauss elim; 99=GE w/ pivot; may be good to use same as above?
    integer , parameter :: sprintlvl=0                  !< Solver  printing: 0=none (default); 3=init and cvg history
    integer , parameter :: pprintlvl=0                  !< Precond printing: 0=none (default); 3=init and cvg history
    
@@ -167,7 +168,7 @@ contains
       select case (this%method)
       case (rbgs)
          ! Nothing needed
-      case (amg,pcg_amg,pcg_parasail,gmres,gmres_pilut,gmres_amg,bicgstab_amg)  ! Initialize a HYPRE IJ enviroment
+      case (amg,pcg_amg,pcg_parasail,gmres,gmres_pilut,gmres_amg,bicgstab_amg,pcg)  ! Initialize a HYPRE IJ enviroment
          ! Allocate and prepare unstructed mapping
          call this%prep_umap()
          ! Create a HYPRE matrix
@@ -268,6 +269,16 @@ contains
          call HYPRE_ParaSailsSetLogging    (this%hypre_precond,1,ierr)
          ! Set PARASAIL as preconditioner to PCG
          call HYPRE_ParCSRPCGSetPrecond    (this%hypre_solver,4,this%hypre_precond,ierr)
+      case (pcg)
+         ! Create a PCG solver
+         call HYPRE_ParCSRPCGCreate        (this%cfg%comm,this%hypre_solver,ierr)
+         call HYPRE_ParCSRPCGSetPrintLevel (this%hypre_solver,sprintlvl,ierr)
+         call HYPRE_ParCSRPCGSetMaxIter    (this%hypre_solver,this%maxit,ierr)
+         call HYPRE_ParCSRPCGSetTol        (this%hypre_solver,this%rcvg ,ierr)
+         call HYPRE_ParCSRPCGSetTwoNorm    (this%hypre_solver,1,ierr)
+         call HYPRE_ParCSRPCGSetLogging    (this%hypre_solver,1,ierr)
+         ! Set Diagonal Scaling as preconditioner to PCG
+         call HYPRE_ParCSRPCGSetPrecond    (this%hypre_solver,1,this%hypre_precond,ierr)
       case (gmres)
          ! Create a GMRES solver
          call HYPRE_ParCSRGMRESCreate      (this%cfg%comm,this%hypre_solver,ierr)
@@ -276,6 +287,8 @@ contains
          call HYPRE_ParCSRGMRESSetMaxIter  (this%hypre_solver,this%maxit,ierr)
          call HYPRE_ParCSRGMRESSetTol      (this%hypre_solver,this%rcvg,ierr)
          call HYPRE_ParCSRGMRESSetLogging  (this%hypre_solver,1,ierr)
+         ! Set Diagonal Scaling as preconditioner to PCG
+         call HYPRE_ParCSRGMRESSetPrecond  (this%hypre_solver,1,this%hypre_precond,ierr)
       case (gmres_amg)
          ! Create a GMRES solver
          call HYPRE_ParCSRGMRESCreate      (this%cfg%comm,this%hypre_solver,ierr)
@@ -363,7 +376,7 @@ contains
       select case (this%method)
       case (rbgs)
          ! Nothing to do
-      case (amg,pcg_amg,pcg_parasail,gmres,gmres_pilut,gmres_amg,bicgstab_amg)  ! Prepare the IJ operator
+      case (amg,pcg_amg,pcg_parasail,gmres,gmres_pilut,gmres_amg,bicgstab_amg,pcg)  ! Prepare the IJ operator
          ! Allocate storage for transfer
          allocate(mycol(this%nst))
          allocate(myval(this%nst))
@@ -449,7 +462,7 @@ contains
          ! Nothing to do
       case (amg)
          call HYPRE_BoomerAMGSetup  (this%hypre_solver,this%parse_mat,this%parse_rhs,this%parse_sol,ierr)
-      case (pcg_amg,pcg_parasail)
+      case (pcg,pcg_amg,pcg_parasail)
          call HYPRE_ParCSRPCGSetup  (this%hypre_solver,this%parse_mat,this%parse_rhs,this%parse_sol,ierr)
       case (gmres,gmres_pilut,gmres_amg)
          call HYPRE_ParCSRGMRESSetup(this%hypre_solver,this%parse_mat,this%parse_rhs,this%parse_sol,ierr)
@@ -481,7 +494,7 @@ contains
       select case (this%method)
       case (rbgs)
          ! Nothing to do
-      case (amg,pcg_amg,pcg_parasail,gmres,gmres_pilut,gmres_amg,bicgstab_amg)  ! Prepare the IJ vectors
+      case (amg,pcg_amg,pcg_parasail,gmres,gmres_pilut,gmres_amg,bicgstab_amg,pcg)  ! Prepare the IJ vectors
          allocate(rhs(this%ncell_))
          allocate(sol(this%ncell_))
          allocate(ind(this%ncell_))
@@ -532,7 +545,7 @@ contains
          call HYPRE_BoomerAMGSolve           (this%hypre_solver,this%parse_mat,this%parse_rhs,this%parse_sol,ierr)
          call HYPRE_BoomerAMGGetNumIterations(this%hypre_solver,this%it  ,ierr)
          call HYPRE_BoomerAMGGetFinalReltvRes(this%hypre_solver,this%rerr,ierr)
-      case (pcg_amg,pcg_parasail)
+      case (pcg,pcg_amg,pcg_parasail)
          call HYPRE_ParCSRPCGSolve           (this%hypre_solver,this%parse_mat,this%parse_rhs,this%parse_sol,ierr)
          call HYPRE_ParCSRPCGGetNumIterations(this%hypre_solver,this%it  ,ierr)
          call HYPRE_ParCSRPCGGetFinalRelative(this%hypre_solver,this%rerr,ierr)
@@ -558,7 +571,7 @@ contains
       select case (this%method)
       case (rbgs)
          ! Nothing to do
-      case (amg,pcg_amg,pcg_parasail,gmres,gmres_pilut,gmres_amg,bicgstab_amg)  ! Retrieve the IJ vector
+      case (amg,pcg_amg,pcg_parasail,gmres,gmres_pilut,gmres_amg,bicgstab_amg,pcg)  ! Retrieve the IJ vector
          call HYPRE_IJVectorGetValues(this%hypre_sol,this%ncell_,ind,sol,ierr)
          count=0
          do k=this%cfg%kmin_,this%cfg%kmax_
@@ -735,7 +748,7 @@ contains
       use, intrinsic :: iso_fortran_env, only: output_unit
       implicit none
       class(ils), intent(in) :: this
-      if (this%cfg%amRoot) write(output_unit,'("Iterative Linear Solver [",a20,"] for config [",a20,"] -> it/maxit = ",i3,"/",i3," and rerr/rcvg = ",es12.5,"/",es12.5)') trim(this%name),trim(this%cfg%name),this%it,this%maxit,this%rerr,this%rcvg
+      if (this%cfg%amRoot) write(output_unit,'("Iterative Linear Solver [",a16,"] for config [",a16,"] -> it/maxit = ",i3,"/",i3," and rerr/rcvg = ",es12.5,"/",es12.5)') trim(this%name),trim(this%cfg%name),this%it,this%maxit,this%rerr,this%rcvg
    end subroutine ils_print_short
    
    

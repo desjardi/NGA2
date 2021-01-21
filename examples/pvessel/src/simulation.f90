@@ -35,7 +35,7 @@ module simulation
 contains
    
       
-   !> Function that localizes the left end of the cube
+   !> Function that localizes the left end of the tube
    function left_of_tube(pg,i,j,k) result(isIn)
       use pgrid_class, only: pgrid
       implicit none
@@ -49,8 +49,22 @@ contains
    end function left_of_tube
    
    
-   !> Function that localizes the right end of the cube
-   function right_of_tube(pg,i,j,k) result(isIn)
+   !> Function that localizes the right end of the tube - x-face (u-vel)
+   function right_of_tube_vel(pg,i,j,k) result(isIn)
+      use pgrid_class, only: pgrid
+      implicit none
+      class(pgrid), intent(in) :: pg
+      integer, intent(in) :: i,j,k
+      logical :: isIn
+      real(WP) :: r
+      isIn=.false.
+      r=sqrt((pg%ym(j)+0.34_WP)**2+(pg%zm(k))**2)
+      if (abs(pg%x(i)-0.75_WP).lt.0.01_WP.and.r.lt.0.02_WP) isIn=.true.
+   end function right_of_tube_vel
+   
+   
+   !> Function that localizes the right end of the tube - scalar
+   function right_of_tube_sc(pg,i,j,k) result(isIn)
       use pgrid_class, only: pgrid
       implicit none
       class(pgrid), intent(in) :: pg
@@ -60,7 +74,7 @@ contains
       isIn=.false.
       r=sqrt((pg%ym(j)+0.34_WP)**2+(pg%zm(k))**2)
       if (abs(pg%x(i+1)-0.75_WP).lt.0.01_WP.and.r.lt.0.02_WP) isIn=.true.
-   end function right_of_tube
+   end function right_of_tube_sc
    
    
    !> Define here our equation of state - rho(T,mass)
@@ -114,8 +128,8 @@ contains
          ! Create flow solver
          fs=lowmach(cfg=cfg,name='Variable density low Mach NS')
          ! Define boundary conditions
-         call fs%add_bcond(name= 'left inflow',type=dirichlet,dir='-x',canCorrect=.false.,locator= left_of_tube)
-         call fs%add_bcond(name='right inflow',type=dirichlet,dir='+x',canCorrect=.false.,locator=right_of_tube)
+         call fs%add_bcond(name= 'left inflow',type=dirichlet,locator= left_of_tube    ,face='x',dir=+1,canCorrect=.false.)
+         call fs%add_bcond(name='right inflow',type=dirichlet,locator=right_of_tube_vel,face='x',dir=-1,canCorrect=.false.)
          ! Assign constant viscosity
          call param_read('Dynamic viscosity',viscosity)
          fs%visc=viscosity
@@ -140,8 +154,8 @@ contains
          ! Create scalar solver
          sc=vdscalar(cfg=cfg,scheme=quick,name='Temperature')
          ! Define boundary conditions
-         call sc%add_bcond(name= 'left inflow',type=dirichlet,dir='-x',locator= left_of_tube)
-         call sc%add_bcond(name='right inflow',type=dirichlet,dir='+x',locator=right_of_tube)
+         call sc%add_bcond(name= 'left inflow',type=dirichlet,locator= left_of_tube   )
+         call sc%add_bcond(name='right inflow',type=dirichlet,locator=right_of_tube_sc)
          ! Assign constant diffusivity
          call param_read('Dynamic diffusivity',diffusivity)
          sc%diff=diffusivity
@@ -221,7 +235,7 @@ contains
          call fs%get_bcond('right inflow',inflow)
          do n=1,inflow%itr%no_
             i=inflow%itr%map(1,n); j=inflow%itr%map(2,n); k=inflow%itr%map(3,n)
-            fs%rhoU(i+1,j,k)=+5.0_WP
+            fs%rhoU(i,j,k)=+5.0_WP
          end do
          ! Set density from scalar
          fs%rho=sc%rho
@@ -388,13 +402,13 @@ contains
                call fs%get_bcond('right inflow',inflow)
                do n=1,inflow%itr%no_
                   i=inflow%itr%map(1,n); j=inflow%itr%map(2,n); k=inflow%itr%map(3,n)
-                  fs%rhoU(i+1,j,k)=+5.0_WP
+                  fs%rhoU(i,j,k)=+5.0_WP
                end do
             end block mom_bcond
             
             ! Solve Poisson equation
             call fs%correct_mfr()                          !< Now outlet so this gets the MFR imbalance
-            fluid_mass=fluid_mass_old+sum(fs%mfr)*time%dt  !< Update mass in system
+            fluid_mass=fluid_mass_old-sum(fs%mfr)*time%dt  !< Update mass in system
             call get_rho(mass=fluid_mass)                  !< Adjust rho in accordance
             call sc%get_drhodt(dt=time%dt,drhodt=resSC)
             call fs%get_div(drhodt=resSC)

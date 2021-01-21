@@ -9,7 +9,7 @@ Density :           1.2
 Dynamic viscosity : 5e-4
 
 # Time integration
-Max timestep size :   1e-2
+Max timestep size :   1e-3
 Max cfl number :      1.2
 Max simulation time : 200
 

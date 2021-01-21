@@ -30,46 +30,6 @@ module simulation
    
 contains
    
-   !> Function that localizes the front (z+) of the domain
-   function front_locator(pg,i,j,k) result(isIn)
-      use pgrid_class, only: pgrid
-      class(pgrid), intent(in) :: pg
-      integer, intent(in) :: i,j,k
-      logical :: isIn
-      isIn=.false.
-      if (k.eq.pg%kmax) isIn=.true.
-   end function front_locator
-   
-   !> Function that localizes the back (z-) of the domain
-   function back_locator(pg,i,j,k) result(isIn)
-      use pgrid_class, only: pgrid
-      class(pgrid), intent(in) :: pg
-      integer, intent(in) :: i,j,k
-      logical :: isIn
-      isIn=.false.
-      if (k.eq.pg%kmin) isIn=.true.
-   end function back_locator
-   
-   !> Function that localizes the top (y+) of the domain
-   function top_locator(pg,i,j,k) result(isIn)
-      use pgrid_class, only: pgrid
-      class(pgrid), intent(in) :: pg
-      integer, intent(in) :: i,j,k
-      logical :: isIn
-      isIn=.false.
-      if (j.eq.pg%jmax) isIn=.true.
-   end function top_locator
-   
-   !> Function that localizes the bottom (y-) of the domain
-   function bottom_locator(pg,i,j,k) result(isIn)
-      use pgrid_class, only: pgrid
-      class(pgrid), intent(in) :: pg
-      integer, intent(in) :: i,j,k
-      logical :: isIn
-      isIn=.false.
-      if (j.eq.pg%jmin) isIn=.true.
-   end function bottom_locator
-   
    !> Localizes the vertical vent near the front of the bus (facing -z)
    function vertical_vent(pg,i,j,k) result(isIn)
       use pgrid_class, only: pgrid
@@ -83,7 +43,7 @@ contains
       &   pg%y(j) .gt.bus%y_vvent.and.pg%y(j+1).lt.bus%y_vvent+bus%h_vvent.and.&
       &   pg%z(k) .le.bus%w_bus-bus%w_seatcol.and.pg%z(k+1).gt.bus%w_bus-bus%w_seatcol) isIn=.true.
    end function vertical_vent
-
+   
    !> Localizes the 3 floor vents near the front of the bus (facing +y)
    function front_floor_vents(pg,i,j,k) result(isIn)
       use pgrid_class, only: pgrid
@@ -102,10 +62,10 @@ contains
       &   pg%z(k+1).lt.bus%w_bus-bus%w_ventwindow+10.0_WP*epsilon(1.0_WP)).or. &
       &  (pg%z(k)  .gt.bus%w_bus-bus%w_ventwindow-bus%w_fventfront-bus%w_seatcol-10.0_WP*epsilon(1.0_WP).and.&
       &   pg%z(k+1).lt.bus%w_bus-bus%w_ventwindow-bus%w_seatcol+10.0_WP*epsilon(1.0_WP)))) isIn=.true.
-    end function front_floor_vents
-
-    !> Localizes the back floor vent driver's side (facing +y)
-    function back_floor_vent_driver(pg,i,j,k) result(isIn)
+   end function front_floor_vents
+   
+   !> Localizes the back floor vent driver's side (facing +y)
+   function back_floor_vent_driver(pg,i,j,k) result(isIn)
       use pgrid_class, only: pgrid
       use geometry, only: bus
       class(pgrid), intent(in) :: pg
@@ -116,10 +76,10 @@ contains
       &   pg%y(j)  .gt.-10.0_WP*epsilon(1.0_WP).and.pg%y(j+1).lt.bus%h_fventback+10.0_WP*epsilon(1.0_WP).and.&
       &   pg%z(k)  .le.bus%z_fventback+10.0_WP*epsilon(1.0_WP).and.&
       &   pg%z(k+1).gt.bus%z_fventback+10.0_WP*epsilon(1.0_WP)) isIn=.true.
-    end function back_floor_vent_driver
-
-    !> Localizes the back floor vent curb side (facing +y)
-    function back_floor_vent_curb(pg,i,j,k) result(isIn)
+   end function back_floor_vent_driver
+   
+   !> Localizes the back floor vent curb side (facing +y)
+   function back_floor_vent_curb(pg,i,j,k) result(isIn)
       use pgrid_class, only: pgrid
       use geometry, only: bus
       class(pgrid), intent(in) :: pg
@@ -131,10 +91,10 @@ contains
       &   pg%y(j)  .gt.-10.0_WP*epsilon(1.0_WP).and.pg%y(j+1).lt.bus%h_fventback+10.0_WP*epsilon(1.0_WP).and.&
       &   pg%z(k)  .le.bus%w_bus-bus%z_fventback+10.0_WP*epsilon(1.0_WP).and.&
       &   pg%z(k+1).gt.bus%w_bus-bus%z_fventback+10.0_WP*epsilon(1.0_WP)) isIn=.true.
-    end function back_floor_vent_curb
-
-    !> Localizes the vent(s) at the lavatory (facing +x)
-    function lavatory_vent(pg,i,j,k) result(isIn)
+   end function back_floor_vent_curb
+   
+   !> Localizes the vent(s) at the lavatory (facing +x)
+   function lavatory_vent(pg,i,j,k) result(isIn)
       use pgrid_class, only: pgrid
       use geometry, only: bus
       class(pgrid), intent(in) :: pg
@@ -147,10 +107,10 @@ contains
       &   pg%y(j+1).lt.bus%h_seat+bus%h_bseat+bus%h_ventlav+10.0_WP*epsilon(1.0_WP).and.&
       &   pg%z(k)  .gt.bus%w_bus-bus%w_seatcol+bus%w_seat-bus%w_ventlav.and.&
       &   pg%z(k+1).lt.bus%w_bus-bus%w_seatcol+bus%w_seat) isIn=.true.
-    end function lavatory_vent
-
-    !> Localizes the vents along the windows on both sides (facing +y)
-    function window_vents(pg,i,j,k) result(isIn)
+   end function lavatory_vent
+   
+   !> Localizes the vents along the windows on both sides (facing +y)
+   function window_vents(pg,i,j,k) result(isIn)
       use pgrid_class, only: pgrid
       use geometry, only: bus
       class(pgrid), intent(in) :: pg
@@ -171,77 +131,78 @@ contains
    
    !> Localizes the intake vents of the parcel rack (facing -y)
    function rackintake_vents(pg,i,j,k) result(isIn)
-     use pgrid_class, only: pgrid
-     use geometry, only: bus
-     class(pgrid), intent(in) :: pg
-     integer, intent(in) :: i,j,k
-     logical :: isIn
-     isIn=.false.
-     ! same for x and y, two regions for z
-     if (pg%x(i)  .gt.bus%x_vinrack-0.5_WP*bus%l_vinrack-100.0_WP*epsilon(1.0_WP).and.&
-     &   pg%x(i+1).lt.bus%x_vinrack+0.5_WP*bus%l_vinrack+100.0_WP*epsilon(1.0_WP).and.&
-     &   pg%y(j)  .le.bus%h_rack.and.pg%y(j+1).gt.bus%h_rack.and.&
-     & ((pg%z(k)  .gt.-10.0_WP*epsilon(1.0_WP).and.&
-     &   pg%z(k+1).lt. 10.0_WP*epsilon(1.0_WP)+bus%w_vinrack).or.&
-     &  (pg%z(k)  .gt.bus%w_bus-bus%w_vinrack-10.0_WP*epsilon(1.0_WP).and.&
-     &   pg%z(k+1).lt.bus%w_bus+10.0_WP*epsilon(1.0_WP)))) isIn=.true.
+      use pgrid_class, only: pgrid
+      use geometry, only: bus
+      class(pgrid), intent(in) :: pg
+      integer, intent(in) :: i,j,k
+      logical :: isIn
+      isIn=.false.
+      ! same for x and y, two regions for z
+      if (pg%x(i)  .gt.bus%x_vinrack-0.5_WP*bus%l_vinrack-100.0_WP*epsilon(1.0_WP).and.&
+      &   pg%x(i+1).lt.bus%x_vinrack+0.5_WP*bus%l_vinrack+100.0_WP*epsilon(1.0_WP).and.&
+      &   pg%y(j)  .le.bus%h_rack.and.pg%y(j+1).gt.bus%h_rack.and.&
+      & ((pg%z(k)  .gt.-10.0_WP*epsilon(1.0_WP).and.&
+      &   pg%z(k+1).lt. 10.0_WP*epsilon(1.0_WP)+bus%w_vinrack).or.&
+      &  (pg%z(k)  .gt.bus%w_bus-bus%w_vinrack-10.0_WP*epsilon(1.0_WP).and.&
+      &   pg%z(k+1).lt.bus%w_bus+10.0_WP*epsilon(1.0_WP)))) isIn=.true.
    end function rackintake_vents
-
+   
    !> Localizes the outlet vents of the parcel rack (facing -y)
    function rackoutlet_vents(pg,i,j,k) result(isIn)
-     use pgrid_class, only: pgrid
-     use geometry, only: bus
-     class(pgrid), intent(in) :: pg
-     integer, intent(in) :: i,j,k
-     integer :: n
-     logical :: isIn
-     real(WP):: x1face,adist
-     isIn=.false.
-     ! get factor to adjust spacing according to mesh
-     adist = real(mod(nint(bus%l_seatrow/bus%i2m),nint(bus%min_length/bus%gres/bus%i2m)),WP)*bus%i2m
-     ! same y
-     if (pg%y(j)  .le.bus%h_rack.and.pg%y(j+1).gt.bus%h_rack) isIn=.true.
-     ! continue if proper y location
-     if (isIn) then; isIn=.false.; else; return
-     end if
-     ! driver side, cycle through rows
-     x1face = bus%x_seatdriver+real(bus%nseat_driver-1,WP)*bus%l_seatrow+bus%th_seat
-     do n=1,bus%nseat_driver
-        if (pg%z(k)  .gt.bus%z_ventface1-100.0_WP*epsilon(1.0_WP).and.&
-        &   pg%z(k+1).lt.bus%z_ventface2+100.0_WP*epsilon(1.0_WP).and.&
-        &   pg%x(i)  .gt.x1face+bus%x_v2facedriver-1000.0_WP*epsilon(1.0_WP) &
-        &   -real(n-1,WP)*bus%l_ventrow+real(mod(n,2),WP)*adist .and.&
-        &   pg%x(i+1).lt.x1face+bus%x_v2facedriver+1000.0_WP*epsilon(1.0_WP) &
-        &   -real(n-1,WP)*bus%l_ventrow+real(mod(n,2),WP)*adist+bus%l_ventface) isIn=.true.
-     end do
-     ! curb side, front section
-     x1face = bus%x_seatcurb2+real(bus%nseat_curb2-1,WP)*bus%l_seatrow+bus%th_seat
-     do n=1,bus%nseat_curb2-1
-        if (pg%z(k)  .gt.bus%w_bus-bus%z_ventface2-100.0_WP*epsilon(1.0_WP).and.&
-        &   pg%z(k+1).lt.bus%w_bus-bus%z_ventface1+100.0_WP*epsilon(1.0_WP).and.&
-        &   pg%x(i)  .gt.x1face+bus%x_v2facecurb-1000.0_WP*epsilon(1.0_WP) &
-        &   -real(n-1,WP)*bus%l_ventrow+real(mod(n,2),WP)*adist.and.&
-        &   pg%x(i+1).lt.x1face+bus%x_v2facecurb+1000.0_WP*epsilon(1.0_WP) &
-        &   -real(n-1,WP)*bus%l_ventrow+real(mod(n,2),WP)*adist+bus%l_ventface) isIn=.true.
-     end do
-     ! curb side, backward seats
-     if (pg%z(k)  .gt.bus%w_bus-bus%z_ventface2-100.0_WP*epsilon(1.0_WP).and.&
-     &   pg%z(k+1).lt.bus%w_bus-bus%z_ventface1+100.0_WP*epsilon(1.0_WP).and.&
-     &   pg%x(i)  .gt.bus%x_seatcurb2+bus%l_seat-bus%th_seat-bus%x_v2facecurb &
-     &   -bus%l_ventface-1000.0_WP*epsilon(1.0_WP).and.  pg%x(i+1).lt.bus%x_seatcurb2 &
-     &   +bus%l_seat-bus%th_seat-bus%x_v2facecurb+1000.0_WP*epsilon(1.0_WP)) isIn=.true.
-     ! curb side, back section
-     x1face = bus%x_seatcurb+real(bus%nseat_curb1-1,WP)*bus%l_seatrow+bus%th_seat
-     do n=1,bus%nseat_curb1
-        if (pg%z(k)  .gt.bus%w_bus-bus%z_ventface2-100.0_WP*epsilon(1.0_WP).and.&
-        &   pg%z(k+1).lt.bus%w_bus-bus%z_ventface1+100.0_WP*epsilon(1.0_WP).and.&
-        &   pg%x(i)  .gt.x1face+bus%x_v2facecurb-1000.0_WP*epsilon(1.0_WP) &
-        &   -real(n-1,WP)*bus%l_ventrow+real(mod(n+1,2),WP)*adist.and.&
-        &   pg%x(i+1).lt.x1face+bus%x_v2facecurb+1000.0_WP*epsilon(1.0_WP) &
-        &   -real(n-1,WP)*bus%l_ventrow+real(mod(n+1,2),WP)*adist+bus%l_ventface) isIn=.true.
-     end do
+      use pgrid_class, only: pgrid
+      use geometry, only: bus
+      class(pgrid), intent(in) :: pg
+      integer, intent(in) :: i,j,k
+      integer :: n
+      logical :: isIn
+      real(WP):: x1face,adist
+      isIn=.false.
+      ! get factor to adjust spacing according to mesh
+      adist = real(mod(nint(bus%l_seatrow/bus%i2m),nint(bus%min_length/bus%gres/bus%i2m)),WP)*bus%i2m
+      ! same y
+      if (pg%y(j)  .le.bus%h_rack.and.pg%y(j+1).gt.bus%h_rack) isIn=.true.
+      ! continue if proper y location
+      if (isIn) then; isIn=.false.; else; return
+      end if
+      ! driver side, cycle through rows
+      x1face = bus%x_seatdriver+real(bus%nseat_driver-1,WP)*bus%l_seatrow+bus%th_seat
+      do n=1,bus%nseat_driver
+         if (pg%z(k)  .gt.bus%z_ventface1-100.0_WP*epsilon(1.0_WP).and.&
+         &   pg%z(k+1).lt.bus%z_ventface2+100.0_WP*epsilon(1.0_WP).and.&
+         &   pg%x(i)  .gt.x1face+bus%x_v2facedriver-1000.0_WP*epsilon(1.0_WP) &
+         &   -real(n-1,WP)*bus%l_ventrow+real(mod(n,2),WP)*adist .and.&
+         &   pg%x(i+1).lt.x1face+bus%x_v2facedriver+1000.0_WP*epsilon(1.0_WP) &
+         &   -real(n-1,WP)*bus%l_ventrow+real(mod(n,2),WP)*adist+bus%l_ventface) isIn=.true.
+      end do
+      ! curb side, front section
+      x1face = bus%x_seatcurb2+real(bus%nseat_curb2-1,WP)*bus%l_seatrow+bus%th_seat
+      do n=1,bus%nseat_curb2-1
+         if (pg%z(k)  .gt.bus%w_bus-bus%z_ventface2-100.0_WP*epsilon(1.0_WP).and.&
+         &   pg%z(k+1).lt.bus%w_bus-bus%z_ventface1+100.0_WP*epsilon(1.0_WP).and.&
+         &   pg%x(i)  .gt.x1face+bus%x_v2facecurb-1000.0_WP*epsilon(1.0_WP) &
+         &   -real(n-1,WP)*bus%l_ventrow+real(mod(n,2),WP)*adist.and.&
+         &   pg%x(i+1).lt.x1face+bus%x_v2facecurb+1000.0_WP*epsilon(1.0_WP) &
+         &   -real(n-1,WP)*bus%l_ventrow+real(mod(n,2),WP)*adist+bus%l_ventface) isIn=.true.
+      end do
+      ! curb side, backward seats
+      if (pg%z(k)  .gt.bus%w_bus-bus%z_ventface2-100.0_WP*epsilon(1.0_WP).and.&
+      &   pg%z(k+1).lt.bus%w_bus-bus%z_ventface1+100.0_WP*epsilon(1.0_WP).and.&
+      &   pg%x(i)  .gt.bus%x_seatcurb2+bus%l_seat-bus%th_seat-bus%x_v2facecurb &
+      &   -bus%l_ventface-1000.0_WP*epsilon(1.0_WP).and.  pg%x(i+1).lt.bus%x_seatcurb2 &
+      &   +bus%l_seat-bus%th_seat-bus%x_v2facecurb+1000.0_WP*epsilon(1.0_WP)) isIn=.true.
+      ! curb side, back section
+      x1face = bus%x_seatcurb+real(bus%nseat_curb1-1,WP)*bus%l_seatrow+bus%th_seat
+      do n=1,bus%nseat_curb1
+         if (pg%z(k)  .gt.bus%w_bus-bus%z_ventface2-100.0_WP*epsilon(1.0_WP).and.&
+         &   pg%z(k+1).lt.bus%w_bus-bus%z_ventface1+100.0_WP*epsilon(1.0_WP).and.&
+         &   pg%x(i)  .gt.x1face+bus%x_v2facecurb-1000.0_WP*epsilon(1.0_WP) &
+         &   -real(n-1,WP)*bus%l_ventrow+real(mod(n+1,2),WP)*adist.and.&
+         &   pg%x(i+1).lt.x1face+bus%x_v2facecurb+1000.0_WP*epsilon(1.0_WP) &
+         &   -real(n-1,WP)*bus%l_ventrow+real(mod(n+1,2),WP)*adist+bus%l_ventface) isIn=.true.
+      end do
    end function rackoutlet_vents
-
+   
+   
    !> Initialization of problem solver
    subroutine simulation_init
       use param, only: param_read
@@ -259,18 +220,18 @@ contains
          ! Define boundary conditions
          !! -- Main HVAC system -- !!
          ! Intakes (outflows of fluid domain)
-         !call fs%add_bcond(name='vertical vent',type=dirichlet,dir='-z',canCorrect=.false. ,locator=vertical_vent)
-         call fs%add_bcond(name='front floor vents',type=dirichlet,dir='-y',canCorrect=.false. ,locator=front_floor_vents)
-         !call fs%add_bcond(name='back vent driver',type=dirichlet,dir='-z',canCorrect=.false. ,locator=back_floor_vent_driver)
-         !call fs%add_bcond(name='back vent curb',type=dirichlet,dir='-z',canCorrect=.false. ,locator=back_floor_vent_curb)
-         call fs%add_bcond(name='lavatory vent',type=neumann,dir='-x',canCorrect=.true. ,locator=lavatory_vent)
+         call fs%add_bcond(name='vertical vent'    ,type=dirichlet,locator=vertical_vent         ,face='z',dir=+1,canCorrect=.false.)
+         call fs%add_bcond(name='front floor vents',type=dirichlet,locator=front_floor_vents     ,face='y',dir=-1,canCorrect=.false.)
+         call fs%add_bcond(name='back vent driver' ,type=dirichlet,locator=back_floor_vent_driver,face='z',dir=-1,canCorrect=.false.)
+         call fs%add_bcond(name='back vent curb'   ,type=dirichlet,locator=back_floor_vent_curb  ,face='z',dir=+1,canCorrect=.false.)
+         call fs%add_bcond(name='lavatory vent'    ,type=neumann  ,locator=lavatory_vent         ,face='x',dir=-1,canCorrect=.true. )
          ! Outputs (inflows of fluid domain)
-         call fs%add_bcond(name='window vents' ,type=dirichlet,dir='-y',canCorrect=.false.,locator=window_vents)
+         call fs%add_bcond(name='window vents'     ,type=dirichlet,locator=window_vents          ,face='y',dir=-1,canCorrect=.false.)
          !! -- Parcel rack system -- !!
          ! Intakes (outflows of fluid domain)
-         !call fs%add_bcond(name='rack intakes' ,type=dirichlet,dir='-y',canCorrect=.false.,locator=rackintake_vents)
+         call fs%add_bcond(name='rack intakes'     ,type=dirichlet,locator=rackintake_vents      ,face='y',dir=+1,canCorrect=.false.)
          ! Outputs (inflows of fluid domain)
-         !call fs%add_bcond(name='rack outlets' ,type=dirichlet,dir='-y',canCorrect=.false.,locator=rackoutlet_vents)
+         call fs%add_bcond(name='rack outlets'     ,type=dirichlet,locator=rackoutlet_vents      ,face='y',dir=+1,canCorrect=.false.)
          ! Configure pressure solver
          call param_read('Pressure iteration',fs%psolv%maxit)
          call param_read('Pressure tolerance',fs%psolv%rcvg)
@@ -307,55 +268,56 @@ contains
       ! Initialize our velocity field
       initialize_velocity: block
          use geometry, only: bus
-         type(bcond), pointer :: inflow
+         type(bcond), pointer :: my_bc
          integer :: n,i,j,k
          ! Zero initial field
          fs%U=0.0_WP; fs%V=0.0_WP; fs%W=0.0_WP
          ! Apply Dirichlet at the inflow vents and known outflow vents
-         ! call fs%get_bcond('vertical vent',inflow)
-         ! do n=1,inflow%itr%no_
-         !    i=inflow%itr%map(1,n); j=inflow%itr%map(2,n); k=inflow%itr%map(3,n)
-         !    fs%W(i,j,k)=bus%vel_vvent
-         ! end do
-         call fs%get_bcond('front floor vents',inflow)
-         do n=1,inflow%itr%no_
-            i=inflow%itr%map(1,n); j=inflow%itr%map(2,n); k=inflow%itr%map(3,n)
-            fs%V(i,j,k)=bus%vel_fventfront
-            ! experimental data differs between the vents, may need to separate
+         call fs%get_bcond('vertical vent',my_bc)
+         do n=1,my_bc%itr%no_
+            i=my_bc%itr%map(1,n); j=my_bc%itr%map(2,n); k=my_bc%itr%map(3,n)
+            fs%W(i,j,k)=bus%vel_vvent
          end do
-         ! call fs%get_bcond('back vent driver',inflow)
-         ! do n=1,inflow%itr%no_
-         !    i=inflow%itr%map(1,n); j=inflow%itr%map(2,n); k=inflow%itr%map(3,n)
-         !    fs%W(i,j,k)=bus%vel_fventdriver
-         ! end do
-         ! call fs%get_bcond('back vent curb',inflow)
-         ! do n=1,inflow%itr%no_
-         !    i=inflow%itr%map(1,n); j=inflow%itr%map(2,n); k=inflow%itr%map(3,n)
-         !    fs%W(i,j,k)=bus%vel_fventcurb
-         ! end do
-         call fs%get_bcond('window vents',inflow)
-         do n=1,inflow%itr%no_
-            i=inflow%itr%map(1,n); j=inflow%itr%map(2,n); k=inflow%itr%map(3,n)
-            fs%V(i,j,k)=bus%vel_ventwindow
-            ! this is an average value, the measurements vary significantly
+         call fs%get_bcond('front floor vents',my_bc)
+         do n=1,my_bc%itr%no_
+            i=my_bc%itr%map(1,n); j=my_bc%itr%map(2,n); k=my_bc%itr%map(3,n)
+            fs%V(i,j,k)=bus%vel_fventfront !< Experimental data differs between the vents, may need to separate
          end do
-         ! call fs%get_bcond('rack intakes',inflow)
-         ! do n=1,inflow%itr%no_
-         !    i=inflow%itr%map(1,n); j=inflow%itr%map(2,n); k=inflow%itr%map(3,n)
-         !    fs%V(i,j,k)=bus%vel_vinrack
-         ! end do
-         ! call fs%get_bcond('rack outlets',inflow)
-         ! do n=1,inflow%itr%no_
-         !    i=inflow%itr%map(1,n); j=inflow%itr%map(2,n); k=inflow%itr%map(3,n)
-         !    fs%V(i,j,k)=bus%vel_ventface
-         !    ! This value has been balanced with the rack intake flowrate
-         ! end do
+         call fs%get_bcond('back vent driver',my_bc)
+         do n=1,my_bc%itr%no_
+            i=my_bc%itr%map(1,n); j=my_bc%itr%map(2,n); k=my_bc%itr%map(3,n)
+            fs%W(i,j,k)=bus%vel_fventdriver
+         end do
+         call fs%get_bcond('back vent curb',my_bc)
+         do n=1,my_bc%itr%no_
+            i=my_bc%itr%map(1,n); j=my_bc%itr%map(2,n); k=my_bc%itr%map(3,n)
+            fs%W(i,j,k)=bus%vel_fventcurb
+         end do
+         call fs%get_bcond('window vents',my_bc)
+         do n=1,my_bc%itr%no_
+            i=my_bc%itr%map(1,n); j=my_bc%itr%map(2,n); k=my_bc%itr%map(3,n)
+            fs%V(i,j,k)=bus%vel_ventwindow !< This is an average value, the measurements vary significantly
+         end do
+         call fs%get_bcond('rack intakes',my_bc)
+         do n=1,my_bc%itr%no_
+            i=my_bc%itr%map(1,n); j=my_bc%itr%map(2,n); k=my_bc%itr%map(3,n)
+            fs%V(i,j,k)=bus%vel_vinrack
+         end do
+         call fs%get_bcond('rack outlets',my_bc)
+         do n=1,my_bc%itr%no_
+            i=my_bc%itr%map(1,n); j=my_bc%itr%map(2,n); k=my_bc%itr%map(3,n)
+            fs%V(i,j,k)=bus%vel_ventface !< This value has been balanced with the rack intake flowrate
+         end do
          ! Apply all other boundary conditions (just the lavatory is neumann)
          call fs%apply_bcond(time%t,time%dt)
-         call fs%interp_vel(Ui,Vi,Wi)
-         call fs%get_div()
          ! Compute MFR through all boundary conditions
          call fs%get_mfr()
+         ! Adjust MFR for global mass balance
+         call fs%correct_mfr()
+         ! Compute cell-centered velocity
+         call fs%interp_vel(Ui,Vi,Wi)
+         ! Compute divergence
+         call fs%get_div()
       end block initialize_velocity
       
       

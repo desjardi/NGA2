@@ -146,7 +146,7 @@ contains
       end select
       
       ! Create implicit scalar solver object
-      self%implicit=ils(cfg=self%cfg,name='Implicit vdscalar residual',nst=1+6*abs(self%stp1))
+      self%implicit=ils(cfg=self%cfg,name='Scalar',nst=1+6*abs(self%stp1))
       
       ! Prepare default metrics
       call self%init_metrics()
@@ -357,14 +357,13 @@ contains
    
    
    !> Add a boundary condition
-   subroutine add_bcond(this,name,type,dir,locator)
+   subroutine add_bcond(this,name,type,locator,dir)
       use string,   only: lowercase
       use messager, only: die
       implicit none
       class(vdscalar), intent(inout) :: this
       character(len=*), intent(in) :: name
       integer, intent(in) :: type
-      character(len=2), intent(in) :: dir
       interface
          logical function locator(pargrid,ind1,ind2,ind3)
             use pgrid_class, only: pgrid
@@ -372,6 +371,7 @@ contains
             integer, intent(in) :: ind1,ind2,ind3
          end function locator
       end interface
+      character(len=2), optional :: dir
       type(bcond), pointer :: new_bc
       integer :: i,j,k,n
       
@@ -379,15 +379,20 @@ contains
       allocate(new_bc)
       new_bc%name=trim(adjustl(name))
       new_bc%type=type
-      select case (lowercase(dir))
-      case ('+x','x+','xp','px'); new_bc%dir=1
-      case ('-x','x-','xm','mx'); new_bc%dir=2
-      case ('+y','y+','yp','py'); new_bc%dir=3
-      case ('-y','y-','ym','my'); new_bc%dir=4
-      case ('+z','z+','zp','pz'); new_bc%dir=5
-      case ('-z','z-','zm','mz'); new_bc%dir=6
-      case default; call die('[vdscalar add_bcond] Unknown bcond direction')
-      end select
+      if (present(dir)) then
+         select case (lowercase(dir))
+         case ('+x','x+','xp','px'); new_bc%dir=1
+         case ('-x','x-','xm','mx'); new_bc%dir=2
+         case ('+y','y+','yp','py'); new_bc%dir=3
+         case ('-y','y-','ym','my'); new_bc%dir=4
+         case ('+z','z+','zp','pz'); new_bc%dir=5
+         case ('-z','z-','zm','mz'); new_bc%dir=6
+         case default; call die('[vdscalar add_bcond] Unknown bcond direction')
+         end select
+      else
+         if (new_bc%type.eq.neumann) call die('[vdscalar apply_bcond] Neumann requires a direction')
+         new_bc%dir=0
+      end if
       new_bc%itr=iterator(this%cfg,new_bc%name,locator)
       
       ! Insert it up front
@@ -405,7 +410,7 @@ contains
             this%mask(i,j,k)=2
          end do
       case (neumann)
-         ! Not yet implemented
+         ! No modification - this assumes Neumann is only applied at walls or domain boundaries
       case default
          call die('[vdscalar apply_bcond] Unknown bcond type')
       end select

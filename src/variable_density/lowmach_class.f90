@@ -21,20 +21,17 @@ module lowmach_class
    integer, parameter, public :: convective=4        !< Convective outflow condition
    integer, parameter, public :: clipped_neumann=5   !< Clipped Neumann condition (outflow only)
    
-   !> Boundary conditions for the low Mach solver
+   !> Boundary conditions for the low-Mach solver
    type :: bcond
       type(bcond), pointer :: next                        !< Linked list of bconds
       character(len=str_medium) :: name='UNNAMED_BCOND'   !< Bcond name (default=UNNAMED_BCOND)
       integer :: type                                     !< Bcond type
-      integer :: dir                                      !< Bcond direction (1 to 6)
-      integer :: si,sj,sk                                 !< Index shift in the outward normal direction
+      type(iterator) :: itr                               !< This is the iterator for the bcond - this identifies the (i,j,k)
+      character(len=1) :: face                            !< Bcond face (x/y/z)
+      integer :: dir                                      !< Bcond direction (+1,-1,0 for interior)
+      real(WP) :: rdir                                    !< Bcond direction (real variable)
       logical :: canCorrect                               !< Can this bcond be corrected for global conservation?
-      logical :: inBalance                                !< Is this bcond contributing to global conservation?
-      type(iterator) :: itr                               !< This is the iterator for the bcond
    end type bcond
-   
-   !> Bcond shift value
-   integer, dimension(3,6), parameter :: shift=reshape([+1,0,0,-1,0,0,0,+1,0,0,-1,0,0,0,+1,0,0,-1],shape(shift))
    
    !> Low Mach solver object definition
    type :: lowmach
@@ -101,6 +98,7 @@ module lowmach_class
       real(WP), dimension(:,:,:,:), allocatable :: grdw_x,grdw_y,grdw_z   !< Velocity gradient for W
       
       ! Masking info for metric modification
+      integer, dimension(:,:,:), allocatable ::  mask                     !< Integer array used for modifying P metrics
       integer, dimension(:,:,:), allocatable :: umask                     !< Integer array used for modifying U metrics
       integer, dimension(:,:,:), allocatable :: vmask                     !< Integer array used for modifying V metrics
       integer, dimension(:,:,:), allocatable :: wmask                     !< Integer array used for modifying W metrics
@@ -190,13 +188,36 @@ contains
       allocate(self%visc(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%visc=0.0_WP
       
       ! Create pressure solver object
-      self%psolv=ils(cfg=self%cfg,name='Pressure Poisson Solver')
+      self%psolv   =ils(cfg=self%cfg,name='Pressure')
       
       ! Create implicit velocity solver object
-      self%implicit=ils(cfg=self%cfg,name='Implicit NS residual')
+      self%implicit=ils(cfg=self%cfg,name='Momentum')
       
       ! Prepare default metrics
       call self%init_metrics()
+      
+      ! Prepare P-cell masks
+      allocate(self%mask(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%mask=0
+      if (.not.self%cfg%xper) then
+         if (self%cfg%iproc.eq.           1) self%mask(:self%cfg%imin-1,:,:)=2
+         if (self%cfg%iproc.eq.self%cfg%npx) self%mask(self%cfg%imax+1:,:,:)=2
+      end if
+      if (.not.self%cfg%yper) then
+         if (self%cfg%jproc.eq.           1) self%mask(:,:self%cfg%jmin-1,:)=2
+         if (self%cfg%jproc.eq.self%cfg%npy) self%mask(:,self%cfg%jmax+1:,:)=2
+      end if
+      if (.not.self%cfg%zper) then
+         if (self%cfg%kproc.eq.           1) self%mask(:,:,:self%cfg%kmin-1)=2
+         if (self%cfg%kproc.eq.self%cfg%npz) self%mask(:,:,self%cfg%kmax+1:)=2
+      end if
+      do k=self%cfg%kmino_,self%cfg%kmaxo_
+         do j=self%cfg%jmino_,self%cfg%jmaxo_
+            do i=self%cfg%imino_,self%cfg%imaxo_
+               if (self%cfg%VF(i,j,k).eq.0.0_WP) self%mask(i,j,k)=1
+            end do
+         end do
+      end do
+      call self%cfg%sync(self%mask)
       
       ! Prepare face mask for U
       allocate(self%umask(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%umask=0
@@ -512,7 +533,7 @@ contains
       do k=this%cfg%kmino_,this%cfg%kmaxo_
          do j=this%cfg%jmino_,this%cfg%jmaxo_
             do i=this%cfg%imino_,this%cfg%imaxo_
-               if (this%cfg%VF(i,j,k).eq.0.0_WP) then
+               if (this%mask(i,j,k).gt.0) then
                   this%divp_x(:,i,j,k)=0.0_WP
                   this%divp_y(:,i,j,k)=0.0_WP
                   this%divp_z(:,i,j,k)=0.0_WP
@@ -790,15 +811,13 @@ contains
    
    
    !> Add a boundary condition
-   subroutine add_bcond(this,name,type,dir,canCorrect,locator,inBalance)
+   subroutine add_bcond(this,name,type,locator,face,dir,canCorrect)
       use string,   only: lowercase
       use messager, only: die
       implicit none
       class(lowmach), intent(inout) :: this
       character(len=*), intent(in) :: name
-      integer,  intent(in) :: type
-      character(len=2), intent(in) :: dir
-      logical,  intent(in) :: canCorrect
+      integer, intent(in) :: type
       interface
          logical function locator(pargrid,ind1,ind2,ind3)
             use pgrid_class, only: pgrid
@@ -806,7 +825,9 @@ contains
             integer, intent(in) :: ind1,ind2,ind3
          end function locator
       end interface
-      logical, optional :: inBalance
+      character(len=1), intent(in) :: face
+      integer, intent(in) :: dir
+      logical, intent(in) :: canCorrect
       type(bcond), pointer :: new_bc
       integer :: i,j,k,n
       
@@ -814,22 +835,21 @@ contains
       allocate(new_bc)
       new_bc%name=trim(adjustl(name))
       new_bc%type=type
-      new_bc%canCorrect=canCorrect
-      select case (lowercase(dir))
-      case ('+x','x+','xp','px'); new_bc%dir=1
-      case ('-x','x-','xm','mx'); new_bc%dir=2
-      case ('+y','y+','yp','py'); new_bc%dir=3
-      case ('-y','y-','ym','my'); new_bc%dir=4
-      case ('+z','z+','zp','pz'); new_bc%dir=5
-      case ('-z','z-','zm','mz'); new_bc%dir=6
-      case default; call die('[lowmach add_bcond] Unknown bcond direction')
+      select case (lowercase(face))
+      case ('x'); new_bc%face='x'
+      case ('y'); new_bc%face='y'
+      case ('z'); new_bc%face='z'
+      case default; call die('[lowmach add_bcond] Unknown bcond face - expecting x, y, or z')
       end select
-      new_bc%itr=iterator(this%cfg,new_bc%name,locator)
-      if (present(inBalance)) then
-         new_bc%inBalance=inBalance
-      else
-         new_bc%inBalance=.true.
-      end if
+      new_bc%itr=iterator(pg=this%cfg,name=new_bc%name,locator=locator,face=new_bc%face)
+      select case (dir) ! Outward-oriented
+      case (+1); new_bc%dir=+1
+      case (-1); new_bc%dir=-1
+      case ( 0); new_bc%dir= 0
+      case default; call die('[lowmach add_bcond] Unknown bcond dir - expecting -1, +1, or 0')
+      end select
+      new_bc%rdir=real(new_bc%dir,WP)
+      new_bc%canCorrect=canCorrect
       
       ! Insert it up front
       new_bc%next=>this%first_bc
@@ -840,47 +860,28 @@ contains
       
       ! Now adjust the metrics accordingly
       select case (new_bc%type)
-      case (dirichlet)
-         ! Implement based on bcond direction
-         select case (new_bc%dir)
-         case (1) ! +x
-            do n=1,new_bc%itr%n_
-               i=new_bc%itr%map(1,n); j=new_bc%itr%map(2,n); k=new_bc%itr%map(3,n)
-               this%umask(i+1,j,k)=2
-            end do
-         case (2) ! -x
+      case (dirichlet) !< Dirichlet is set one face (i.e., velocit component) at the time
+         select case (new_bc%face)
+         case ('x')
             do n=1,new_bc%itr%n_
                i=new_bc%itr%map(1,n); j=new_bc%itr%map(2,n); k=new_bc%itr%map(3,n)
                this%umask(i,j,k)=2
             end do
-         case (3) ! +y
-            do n=1,new_bc%itr%n_
-               i=new_bc%itr%map(1,n); j=new_bc%itr%map(2,n); k=new_bc%itr%map(3,n)
-               this%vmask(i,j+1,k)=2
-            end do
-         case (4) ! -y
+         case ('y')
             do n=1,new_bc%itr%n_
                i=new_bc%itr%map(1,n); j=new_bc%itr%map(2,n); k=new_bc%itr%map(3,n)
                this%vmask(i,j,k)=2
             end do
-         case (5) ! +z
-            do n=1,new_bc%itr%n_
-               i=new_bc%itr%map(1,n); j=new_bc%itr%map(2,n); k=new_bc%itr%map(3,n)
-               this%wmask(i,j,k+1)=2
-            end do
-         case (6) ! -z
+         case ('z')
             do n=1,new_bc%itr%n_
                i=new_bc%itr%map(1,n); j=new_bc%itr%map(2,n); k=new_bc%itr%map(3,n)
                this%wmask(i,j,k)=2
             end do
          end select
          
-      case (neumann)
-         ! Not yet implemented
+      case (neumann) !< Neumann has to be at existing wall or at domain boundary!
       case (clipped_neumann)
-         ! Not yet implemented
       case (convective)
-         ! Not yet implemented
       case default
          call die('[lowmach apply_bcond] Unknown bcond type')
       end select
@@ -907,14 +908,11 @@ contains
    !> Enforce boundary condition - acts on both U/V/W and rhoU/rhoV/rhoW
    subroutine apply_bcond(this,t,dt)
       use messager, only: die
-      use mpi_f08,  only: MPI_MAX
-      use parallel, only: MPI_REAL_WP
       implicit none
       class(lowmach), intent(inout) :: this
       real(WP), intent(in) :: t,dt
-      integer :: i,j,k,n,ierr
+      integer :: i,j,k,n,stag
       type(bcond), pointer :: my_bc
-      real(WP) :: conv_vel,my_conv_vel
       
       ! ! First enfore zero velocity at walls
       ! do k=this%cfg%kmin_,this%cfg%kmax_
@@ -941,149 +939,84 @@ contains
             ! Select appropriate action based on the bcond type
             select case (my_bc%type)
                
-            case (dirichlet)           ! Apply Dirichlet conditions
+            case (dirichlet)               !< Apply Dirichlet conditions
                
                ! This is done by the user directly
                ! Unclear whether we want to do this within the solver...
                
-            case (neumann)             ! Apply Neumann condition
-               
+            case (neumann,clipped_neumann) !< Apply Neumann condition to all three components
+               ! Handle index shift due to staggering
+               stag=min(my_bc%dir,0)
                ! Implement based on bcond direction
-               select case (my_bc%dir)
-               case (1) ! Neumann in +x
+               select case (my_bc%face)
+               case ('x')
+                  stag=min(my_bc%dir,0)
                   do n=1,my_bc%itr%n_
                      i=my_bc%itr%map(1,n); j=my_bc%itr%map(2,n); k=my_bc%itr%map(3,n)
-                     this%U(i+1,j,k)=this%U(i,j,k)
-                     this%V(i+1,j:j+1,k)=this%V(i,j:j+1,k)
-                     this%W(i+1,j,k:k+1)=this%W(i,j,k:k+1)
-                     this%rhoU(i+1,j,k)=this%rhoU(i,j,k)
-                     this%rhoV(i+1,j:j+1,k)=this%rhoV(i,j:j+1,k)
-                     this%rhoW(i+1,j,k:k+1)=this%rhoW(i,j,k:k+1)
+                     this%U(i     ,j    ,k    )=this%U(i-my_bc%dir     ,j    ,k    )
+                     this%V(i+stag,j:j+1,k    )=this%V(i-my_bc%dir+stag,j:j+1,k    )
+                     this%W(i+stag,j    ,k:k+1)=this%W(i-my_bc%dir+stag,j    ,k:k+1)
+                     this%rhoU(i     ,j    ,k    )=this%rhoU(i-my_bc%dir     ,j    ,k    )
+                     this%rhoV(i+stag,j:j+1,k    )=this%rhoV(i-my_bc%dir+stag,j:j+1,k    )
+                     this%rhoW(i+stag,j    ,k:k+1)=this%rhoW(i-my_bc%dir+stag,j    ,k:k+1)
                   end do
-               case (2) ! Neumann in -x
+               case ('y')
+                  stag=min(my_bc%dir,0)
                   do n=1,my_bc%itr%n_
                      i=my_bc%itr%map(1,n); j=my_bc%itr%map(2,n); k=my_bc%itr%map(3,n)
-                     this%U(i,j,k)=this%U(i+1,j,k)
-                     this%V(i-1,j:j+1,k)=this%V(i,j:j+1,k)
-                     this%W(i-1,j,k:k+1)=this%W(i,j,k:k+1)
-                     this%rhoU(i,j,k)=this%rhoU(i+1,j,k)
-                     this%rhoV(i-1,j:j+1,k)=this%rhoV(i,j:j+1,k)
-                     this%rhoW(i-1,j,k:k+1)=this%rhoW(i,j,k:k+1)
+                     this%U(i:i+1,j+stag,k    )=this%U(i:i+1,j-my_bc%dir+stag,k    )
+                     this%V(i    ,j     ,k    )=this%V(i    ,j-my_bc%dir     ,k    )
+                     this%W(i    ,j+stag,k:k+1)=this%W(i    ,j-my_bc%dir+stag,k:k+1)
+                     this%rhoU(i:i+1,j+stag,k    )=this%rhoU(i:i+1,j-my_bc%dir+stag,k    )
+                     this%rhoV(i    ,j     ,k    )=this%rhoV(i    ,j-my_bc%dir     ,k    )
+                     this%rhoW(i    ,j+stag,k:k+1)=this%rhoW(i    ,j-my_bc%dir+stag,k:k+1)
                   end do
-               case (3) ! Neumann in +y
+               case ('z')
+                  stag=min(my_bc%dir,0)
                   do n=1,my_bc%itr%n_
                      i=my_bc%itr%map(1,n); j=my_bc%itr%map(2,n); k=my_bc%itr%map(3,n)
-                     this%U(i:i+1,j+1,k)=this%U(i:i+1,j,k)
-                     this%V(i,j+1,k)=this%V(i,j,k)
-                     this%W(i,j+1,k:k+1)=this%W(i,j,k:k+1)
-                     this%rhoU(i:i+1,j+1,k)=this%rhoU(i:i+1,j,k)
-                     this%rhoV(i,j+1,k)=this%rhoV(i,j,k)
-                     this%rhoW(i,j+1,k:k+1)=this%rhoW(i,j,k:k+1)
-                  end do
-               case (4) ! Neumann in -y
-                  do n=1,my_bc%itr%n_
-                     i=my_bc%itr%map(1,n); j=my_bc%itr%map(2,n); k=my_bc%itr%map(3,n)
-                     this%U(i:i+1,j-1,k)=this%U(i:i+1,j,k)
-                     this%V(i,j,k)=this%V(i,j+1,k)
-                     this%W(i,j-1,k:k+1)=this%W(i,j,k:k+1)
-                     this%rhoU(i:i+1,j+1,k)=this%rhoU(i:i+1,j,k)
-                     this%rhoV(i,j+1,k)=this%rhoV(i,j,k)
-                     this%rhoW(i,j+1,k:k+1)=this%rhoW(i,j,k:k+1)
-                  end do
-               case (5) ! Neumann in +z
-                  do n=1,my_bc%itr%n_
-                     i=my_bc%itr%map(1,n); j=my_bc%itr%map(2,n); k=my_bc%itr%map(3,n)
-                     this%U(i:i+1,j,k+1)=this%U(i:i+1,j,k)
-                     this%V(i,j:j+1,k+1)=this%V(i,j:j+1,k)
-                     this%W(i,j,k+1)=this%W(i,j,k)
-                     this%rhoU(i:i+1,j+1,k)=this%rhoU(i:i+1,j,k)
-                     this%rhoV(i,j+1,k)=this%rhoV(i,j,k)
-                     this%rhoW(i,j+1,k:k+1)=this%rhoW(i,j,k:k+1)
-                  end do
-               case (6) ! Neumann in -z
-                  do n=1,my_bc%itr%n_
-                     i=my_bc%itr%map(1,n); j=my_bc%itr%map(2,n); k=my_bc%itr%map(3,n)
-                     this%U(i:i+1,j,k-1)=this%U(i:i+1,j,k)
-                     this%V(i,j:j+1,k-1)=this%V(i,j:j+1,k)
-                     this%W(i,j,k)=this%W(i,j,k+1)
-                     this%rhoU(i:i+1,j+1,k)=this%rhoU(i:i+1,j,k)
-                     this%rhoV(i,j+1,k)=this%rhoV(i,j,k)
-                     this%rhoW(i,j+1,k:k+1)=this%rhoW(i,j,k:k+1)
+                     this%U(i:i+1,j    ,k+stag)=this%U(i:i+1,j    ,k-my_bc%dir+stag)
+                     this%V(i    ,j:j+1,k+stag)=this%V(i    ,j:j+1,k-my_bc%dir+stag)
+                     this%W(i    ,j    ,k     )=this%W(i    ,j    ,k-my_bc%dir     )
+                     this%rhoU(i:i+1,j    ,k+stag)=this%rhoU(i:i+1,j    ,k-my_bc%dir+stag)
+                     this%rhoV(i    ,j:j+1,k+stag)=this%rhoV(i    ,j:j+1,k-my_bc%dir+stag)
+                     this%rhoW(i    ,j    ,k     )=this%rhoW(i    ,j    ,k-my_bc%dir     )
                   end do
                end select
-               
-            case (clipped_neumann)     ! Apply clipped Neumann condition
-               
-               ! Implement based on bcond direction
-               select case (my_bc%dir)
-               case (1) ! Neumann in +x
-                  do n=1,my_bc%itr%n_
-                     i=my_bc%itr%map(1,n); j=my_bc%itr%map(2,n); k=my_bc%itr%map(3,n)
-                     this%U(i+1,j,k)=max(this%U(i,j,k),0.0_WP)
-                     this%V(i+1,j:j+1,k)=this%V(i,j:j+1,k)
-                     this%W(i+1,j,k:k+1)=this%W(i,j,k:k+1)
-                     this%rhoU(i+1,j,k)=max(this%rhoU(i,j,k),0.0_WP)
-                     this%rhoV(i+1,j:j+1,k)=this%rhoV(i,j:j+1,k)
-                     this%rhoW(i+1,j,k:k+1)=this%rhoW(i,j,k:k+1)
-                  end do
-               case (2) ! Neumann in -x
-                  do n=1,my_bc%itr%n_
-                     i=my_bc%itr%map(1,n); j=my_bc%itr%map(2,n); k=my_bc%itr%map(3,n)
-                     this%U(i,j,k)=min(this%U(i+1,j,k),0.0_WP)
-                     this%V(i-1,j:j+1,k)=this%V(i,j:j+1,k)
-                     this%W(i-1,j,k:k+1)=this%W(i,j,k:k+1)
-                     this%rhoU(i,j,k)=min(this%rhoU(i+1,j,k),0.0_WP)
-                     this%rhoV(i-1,j:j+1,k)=this%rhoV(i,j:j+1,k)
-                     this%rhoW(i-1,j,k:k+1)=this%rhoW(i,j,k:k+1)
-                  end do
-               case (3) ! Neumann in +y
-                  do n=1,my_bc%itr%n_
-                     i=my_bc%itr%map(1,n); j=my_bc%itr%map(2,n); k=my_bc%itr%map(3,n)
-                     this%U(i:i+1,j+1,k)=this%U(i:i+1,j,k)
-                     this%V(i,j+1,k)=max(this%V(i,j,k),0.0_WP)
-                     this%W(i,j+1,k:k+1)=this%W(i,j,k:k+1)
-                     this%rhoU(i:i+1,j+1,k)=this%rhoU(i:i+1,j,k)
-                     this%rhoV(i,j+1,k)=max(this%rhoV(i,j,k),0.0_WP)
-                     this%rhoW(i,j+1,k:k+1)=this%rhoW(i,j,k:k+1)
-                  end do
-               case (4) ! Neumann in -y
-                  do n=1,my_bc%itr%n_
-                     i=my_bc%itr%map(1,n); j=my_bc%itr%map(2,n); k=my_bc%itr%map(3,n)
-                     this%U(i:i+1,j-1,k)=this%U(i:i+1,j,k)
-                     this%V(i,j,k)=min(this%V(i,j+1,k),0.0_WP)
-                     this%W(i,j-1,k:k+1)=this%W(i,j,k:k+1)
-                     this%rhoU(i:i+1,j-1,k)=this%rhoU(i:i+1,j,k)
-                     this%rhoV(i,j,k)=min(this%rhoV(i,j+1,k),0.0_WP)
-                     this%rhoW(i,j-1,k:k+1)=this%rhoW(i,j,k:k+1)
-                  end do
-               case (5) ! Neumann in +z
-                  do n=1,my_bc%itr%n_
-                     i=my_bc%itr%map(1,n); j=my_bc%itr%map(2,n); k=my_bc%itr%map(3,n)
-                     this%U(i:i+1,j,k+1)=this%U(i:i+1,j,k)
-                     this%V(i,j:j+1,k+1)=this%V(i,j:j+1,k)
-                     this%W(i,j,k+1)=max(this%W(i,j,k),0.0_WP)
-                     this%rhoU(i:i+1,j,k+1)=this%rhoU(i:i+1,j,k)
-                     this%rhoV(i,j:j+1,k+1)=this%rhoV(i,j:j+1,k)
-                     this%rhoW(i,j,k+1)=max(this%rhoW(i,j,k),0.0_WP)
-                  end do
-               case (6) ! Neumann in -z
-                  do n=1,my_bc%itr%n_
-                     i=my_bc%itr%map(1,n); j=my_bc%itr%map(2,n); k=my_bc%itr%map(3,n)
-                     this%U(i:i+1,j,k-1)=this%U(i:i+1,j,k)
-                     this%V(i,j:j+1,k-1)=this%V(i,j:j+1,k)
-                     this%W(i,j,k)=min(this%W(i,j,k+1),0.0_WP)
-                     this%rhoU(i:i+1,j,k-1)=this%rhoU(i:i+1,j,k)
-                     this%rhoV(i,j:j+1,k-1)=this%rhoV(i,j:j+1,k)
-                     this%rhoW(i,j,k)=min(this%rhoW(i,j,k+1),0.0_WP)
-                  end do
-               end select
+               ! If needed, clip
+               if (my_bc%type.eq.clipped_neumann) then
+                  select case (my_bc%face)
+                  case ('x')
+                     do n=1,my_bc%itr%n_
+                        i=my_bc%itr%map(1,n); j=my_bc%itr%map(2,n); k=my_bc%itr%map(3,n)
+                        if (this%U(i,j,k)*my_bc%rdir.lt.0.0_WP) then
+                           this%U(i,j,k)=0.0_WP
+                           this%rhoU(i,j,k)=0.0_WP
+                        end if
+                     end do
+                  case ('y')
+                     do n=1,my_bc%itr%n_
+                        i=my_bc%itr%map(1,n); j=my_bc%itr%map(2,n); k=my_bc%itr%map(3,n)
+                        if (this%V(i,j,k)*my_bc%rdir.lt.0.0_WP) then
+                           this%V(i,j,k)=0.0_WP
+                           this%rhoV(i,j,k)=0.0_WP
+                        end if
+                     end do
+                  case ('z')
+                     do n=1,my_bc%itr%n_
+                        i=my_bc%itr%map(1,n); j=my_bc%itr%map(2,n); k=my_bc%itr%map(3,n)
+                        if (this%W(i,j,k)*my_bc%rdir.lt.0.0_WP) then
+                           this%W(i,j,k)=0.0_WP
+                           this%rhoW(i,j,k)=0.0_WP
+                        end if
+                     end do
+                  end select
+               end if
             
-            case (convective)   ! Apply convective condition
-               
-               ! Not done yet
+            case (convective)   ! Not implemented yet!
                
             case default
-               call die('[incomp apply_bcond] Unknown bcond type')
+               call die('[lowmach apply_bcond] Unknown bcond type')
             end select
             
          end if
@@ -1459,53 +1392,30 @@ contains
             canCorrect(ibc)=0.0_WP
          end if
          
-         ! Check that the bcond participates in volume balance
-         if (my_bc%inBalance) then
+         ! Only processes inside the bcond have a non-zero MFR
+         if (my_bc%itr%amIn) then
             
-            ! Only processes inside the bcond have a non-zero MFR
-            if (my_bc%itr%amIn) then
-               
-               ! Implement based on bcond direction, loop over interior only
-               select case (my_bc%dir)
-               case (1) ! BC in +x
-                  do n=1,my_bc%itr%n_
-                     i=my_bc%itr%map(1,n); j=my_bc%itr%map(2,n); k=my_bc%itr%map(3,n)
-                     my_mfr(ibc)=my_mfr(ibc)+this%rhoU(i+1,j,k)*this%cfg%dy(j)*this%cfg%dz(k)
-                     my_area(ibc)=my_area(ibc)+this%cfg%dy(j)*this%cfg%dz(k)
-                  end do
-               case (2) ! BC in -x
-                  do n=1,my_bc%itr%n_
-                     i=my_bc%itr%map(1,n); j=my_bc%itr%map(2,n); k=my_bc%itr%map(3,n)
-                     my_mfr(ibc)=my_mfr(ibc)-this%rhoU(i  ,j,k)*this%cfg%dy(j)*this%cfg%dz(k)
-                     my_area(ibc)=my_area(ibc)+this%cfg%dy(j)*this%cfg%dz(k)
-                  end do
-               case (3) ! BC in +y
-                  do n=1,my_bc%itr%n_
-                     i=my_bc%itr%map(1,n); j=my_bc%itr%map(2,n); k=my_bc%itr%map(3,n)
-                     my_mfr(ibc)=my_mfr(ibc)+this%rhoV(i,j+1,k)*this%cfg%dx(i)*this%cfg%dz(k)
-                     my_area(ibc)=my_area(ibc)+this%cfg%dx(i)*this%cfg%dz(k)
-                  end do
-               case (4) ! BC in -y
-                  do n=1,my_bc%itr%n_
-                     i=my_bc%itr%map(1,n); j=my_bc%itr%map(2,n); k=my_bc%itr%map(3,n)
-                     my_mfr(ibc)=my_mfr(ibc)-this%rhoV(i,j  ,k)*this%cfg%dx(i)*this%cfg%dz(k)
-                     my_area(ibc)=my_area(ibc)+this%cfg%dx(i)*this%cfg%dz(k)
-                  end do
-               case (5) ! BC in +z
-                  do n=1,my_bc%itr%n_
-                     i=my_bc%itr%map(1,n); j=my_bc%itr%map(2,n); k=my_bc%itr%map(3,n)
-                     my_mfr(ibc)=my_mfr(ibc)+this%rhoW(i,j,k+1)*this%cfg%dy(j)*this%cfg%dx(i)
-                     my_area(ibc)=my_area(ibc)+this%cfg%dy(j)*this%cfg%dx(i)
-                  end do
-               case (6) ! BC in -z
-                  do n=1,my_bc%itr%n_
-                     i=my_bc%itr%map(1,n); j=my_bc%itr%map(2,n); k=my_bc%itr%map(3,n)
-                     my_mfr(ibc)=my_mfr(ibc)-this%rhoW(i,j,k  )*this%cfg%dy(j)*this%cfg%dx(i)
-                     my_area(ibc)=my_area(ibc)+this%cfg%dy(j)*this%cfg%dx(i)
-                  end do
-               end select
-               
-            end if
+            ! Implement based on bcond face and dir, loop over interior only
+            select case (my_bc%face)
+            case ('x')
+               do n=1,my_bc%itr%n_
+                  i=my_bc%itr%map(1,n); j=my_bc%itr%map(2,n); k=my_bc%itr%map(3,n)
+                  my_mfr(ibc)=my_mfr(ibc)+my_bc%rdir*this%rhoU(i,j,k)*this%cfg%dy(j)*this%cfg%dz(k)
+                  my_area(ibc)=my_area(ibc)+this%cfg%dy(j)*this%cfg%dz(k)
+               end do
+            case ('y')
+               do n=1,my_bc%itr%n_
+                  i=my_bc%itr%map(1,n); j=my_bc%itr%map(2,n); k=my_bc%itr%map(3,n)
+                  my_mfr(ibc)=my_mfr(ibc)+my_bc%rdir*this%rhoV(i,j,k)*this%cfg%dz(k)*this%cfg%dx(i)
+                  my_area(ibc)=my_area(ibc)+this%cfg%dz(k)*this%cfg%dx(i)
+               end do
+            case ('z')
+               do n=1,my_bc%itr%n_
+                  i=my_bc%itr%map(1,n); j=my_bc%itr%map(2,n); k=my_bc%itr%map(3,n)
+                  my_mfr(ibc)=my_mfr(ibc)+my_bc%rdir*this%rhoW(i,j,k)*this%cfg%dx(i)*this%cfg%dy(j)
+                  my_area(ibc)=my_area(ibc)+this%cfg%dx(i)*this%cfg%dy(j)
+               end do
+            end select
             
          end if
          
@@ -1529,8 +1439,7 @@ contains
    
    !> Correct MFR through correctable bconds - acts on rhoU only, U/V/W needs to be adjusted elsewhere
    subroutine correct_mfr(this)
-      use mpi_f08,  only: MPI_SUM
-      use parallel, only: MPI_REAL_WP
+      use mpi_f08, only: MPI_SUM
       implicit none
       class(lowmach), intent(inout) :: this
       real(WP) :: mfr_error,mom_correction
@@ -1551,36 +1460,21 @@ contains
          if (my_bc%itr%amIn.and.my_bc%canCorrect) then
             
             ! Implement based on bcond direction, loop over all cell
-            select case (my_bc%dir)
-            case (1) ! BC in +x
+            select case (my_bc%face)
+            case ('x')
                do n=1,my_bc%itr%no_
                   i=my_bc%itr%map(1,n); j=my_bc%itr%map(2,n); k=my_bc%itr%map(3,n)
-                  this%rhoU(i+1,j,k)=this%rhoU(i+1,j,k)+mom_correction
+                  this%rhoU(i,j,k)=this%rhoU(i,j,k)+my_bc%rdir*mom_correction
                end do
-            case (2) ! BC in -x
+            case ('y')
                do n=1,my_bc%itr%no_
                   i=my_bc%itr%map(1,n); j=my_bc%itr%map(2,n); k=my_bc%itr%map(3,n)
-                  this%rhoU(i,j,k)=this%rhoU(i,j,k)-mom_correction
+                  this%rhoV(i,j,k)=this%rhoV(i,j,k)+my_bc%rdir*mom_correction
                end do
-            case (3) ! BC in +y
+            case ('z')
                do n=1,my_bc%itr%no_
                   i=my_bc%itr%map(1,n); j=my_bc%itr%map(2,n); k=my_bc%itr%map(3,n)
-                  this%rhoV(i,j+1,k)=this%rhoV(i,j+1,k)+mom_correction
-               end do
-            case (4) ! BC in -y
-               do n=1,my_bc%itr%no_
-                  i=my_bc%itr%map(1,n); j=my_bc%itr%map(2,n); k=my_bc%itr%map(3,n)
-                  this%rhoV(i,j,k)=this%rhoV(i,j,k)-mom_correction
-               end do
-            case (5) ! BC in +z
-               do n=1,my_bc%itr%no_
-                  i=my_bc%itr%map(1,n); j=my_bc%itr%map(2,n); k=my_bc%itr%map(3,n)
-                  this%rhoW(i,j,k+1)=this%rhoW(i,j,k+1)+mom_correction
-               end do
-            case (6) ! BC in -z
-               do n=1,my_bc%itr%no_
-                  i=my_bc%itr%map(1,n); j=my_bc%itr%map(2,n); k=my_bc%itr%map(3,n)
-                  this%rhoW(i,j,k)=this%rhoW(i,j,k)-mom_correction
+                  this%rhoW(i,j,k)=this%rhoW(i,j,k)+my_bc%rdir*mom_correction
                end do
             end select
             

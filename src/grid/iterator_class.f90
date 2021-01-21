@@ -24,10 +24,11 @@ module iterator_class
       class(pgrid), pointer :: pg                         !< This is the pgrid the iterator is build for
       ! This is the name of the iterator
       character(len=str_medium) :: name='UNNAMED_ITR'     !< Iterator name (default=UNNAMED_ITR)
+      ! This is were the iterator lives
+      character(len=1) :: face                            !< Does the iterator identify a face (x/y/z) or the cell?
       ! This is the unstructured mapping
       integer :: no_,n_                                   !< Total number of local cells in iterator, with and without overlap
       integer, dimension(:,:), allocatable :: map         !< This is our map for the iterator
-      
    contains
       procedure :: print=>iterator_print                  !< Output iterator to the screen
    end type iterator
@@ -40,22 +41,26 @@ module iterator_class
    
 contains
 
-   !> Iterator constructor from a tester function
-   function construct_from_function(pg,name,test_if_inside) result(self)
-      use mpi_f08, only: MPI_COMM_SPLIT,MPI_COMM_NULL,MPI_UNDEFINED
+   !> Iterator constructor from a "locator" tester function
+   function construct_from_function(pg,name,locator,face) result(self)
+      use mpi_f08,  only: MPI_COMM_SPLIT,MPI_COMM_NULL,MPI_UNDEFINED
+      use string,   only: lowercase
+      use messager, only: die
       implicit none
       type(iterator) :: self
       class(pgrid), target, intent(in) :: pg
       character(len=*), intent(in) :: name
       interface
-         logical function test_if_inside(pargrid,ind1,ind2,ind3)
+         logical function locator(pargrid,ind1,ind2,ind3)
             use pgrid_class, only: pgrid
             class(pgrid), intent(in) :: pargrid
             integer, intent(in) :: ind1,ind2,ind3
-         end function test_if_inside
+         end function locator
       end interface
+      character(len=1), optional :: face
       integer :: i,j,k,cnt
       integer :: color,key,ierr
+      integer :: f_imax_,f_jmax_,f_kmax_
       
       ! Set the name for the iterator
       self%name=trim(adjustl(name))
@@ -63,16 +68,32 @@ contains
       ! Point to pgrid object
       self%pg=>pg
       
+      ! Check if a face has been specified
+      self%face=' '
+      if (present(face)) then
+         select case (lowercase(face))
+         case('x'); self%face='x'
+         case('y'); self%face='y'
+         case('z'); self%face='z'
+         case default; call die('[iterator constructor] Unknown face value - if provided, expecting x, y, or z')
+         end select
+      end if
+      
+      ! Modify iteration upper bounds to handle face-specific limits -> this considers more faces to be *inside* our domain
+      f_imax_=self%pg%imax_; if (.not.self%pg%xper.and.self%pg%iproc.eq.self%pg%npx.and.self%face.eq.'x') f_imax_=f_imax_+1
+      f_jmax_=self%pg%jmax_; if (.not.self%pg%yper.and.self%pg%jproc.eq.self%pg%npy.and.self%face.eq.'y') f_jmax_=f_jmax_+1
+      f_kmax_=self%pg%kmax_; if (.not.self%pg%zper.and.self%pg%kproc.eq.self%pg%npz.and.self%face.eq.'z') f_kmax_=f_kmax_+1
+      
       ! Loop over local domain with overlap to count iterator cells
       self%n_=0; self%no_=0
       do k=self%pg%kmino_,self%pg%kmaxo_
          do j=self%pg%jmino_,self%pg%jmaxo_
             do i=self%pg%imino_,self%pg%imaxo_
-               if (test_if_inside(self%pg,i,j,k)) then
+               if (locator(self%pg,i,j,k)) then
                   self%no_=self%no_+1
-                  if (i.ge.self%pg%imin_.and.i.le.self%pg%imax_.and.&
-                  &   j.ge.self%pg%jmin_.and.j.le.self%pg%jmax_.and.&
-                  &   k.ge.self%pg%kmin_.and.k.le.self%pg%kmax_) self%n_=self%n_+1
+                  if (i.ge.self%pg%imin_.and.i.le.f_imax_.and.&
+                  &   j.ge.self%pg%jmin_.and.j.le.f_jmax_.and.&
+                  &   k.ge.self%pg%kmin_.and.k.le.f_kmax_) self%n_=self%n_+1
                end if
             end do
          end do
@@ -106,10 +127,10 @@ contains
       ! Create unstructured mapping to iterator cells - first inside cells then overlap
       allocate(self%map(1:3,1:self%no_))
       cnt=0
-      do k=self%pg%kmin_,self%pg%kmax_
-         do j=self%pg%jmin_,self%pg%jmax_
-            do i=self%pg%imin_,self%pg%imax_
-               if (test_if_inside(self%pg,i,j,k)) then
+      do k=self%pg%kmin_,f_kmax_
+         do j=self%pg%jmin_,f_jmax_
+            do i=self%pg%imin_,f_imax_
+               if (locator(self%pg,i,j,k)) then
                   cnt=cnt+1
                   self%map(1:3,cnt)=[i,j,k]
                end if
@@ -120,11 +141,11 @@ contains
          do j=self%pg%jmino_,self%pg%jmaxo_
             do i=self%pg%imino_,self%pg%imaxo_
                ! Skip inside cells
-               if (i.ge.self%pg%imin_.and.i.le.self%pg%imax_.and. &
-               &   j.ge.self%pg%jmin_.and.j.le.self%pg%jmax_.and. &
-               &   k.ge.self%pg%kmin_.and.k.le.self%pg%kmax_) cycle
+               if (i.ge.self%pg%imin_.and.i.le.f_imax_.and. &
+               &   j.ge.self%pg%jmin_.and.j.le.f_jmax_.and. &
+               &   k.ge.self%pg%kmin_.and.k.le.f_kmax_) cycle
                ! Only consider overlap cells
-               if (test_if_inside(self%pg,i,j,k)) then
+               if (locator(self%pg,i,j,k)) then
                   cnt=cnt+1
                   self%map(1:3,cnt)=[i,j,k]
                end if
@@ -156,7 +177,8 @@ contains
       
       ! Output
       if (this%amRoot) then
-         write(output_unit,'("Iterator [",a,"] for pgrid [",a,"]")') trim(this%name),trim(this%pg%name)
+         write(output_unit,'("Iterator [",a,"] for pgrid [",a,"] ")') trim(this%name),trim(this%pg%name)
+         write(output_unit,'(" >           Face = ",a)') this%face
          write(output_unit,'(" > Interior cells = ",i0)') ntot
          write(output_unit,'(" >   Index extent = [",i0,",",i0,"]x[",i0,",",i0,"]x[",i0,",",i0,"]")') mini,maxi,minj,maxj,mink,maxk
       end if

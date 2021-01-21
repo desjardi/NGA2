@@ -37,7 +37,7 @@ contains
       integer, intent(in) :: i,j,k
       logical :: isIn
       isIn=.false.
-      if (j.eq.pg%jmax) isIn=.true.
+      if (j.eq.pg%jmax+1) isIn=.true.
    end function top_locator
    
    !> Function that localizes the bottom of the domain
@@ -68,8 +68,8 @@ contains
          call param_read('Density',fs%rho)
          call param_read('Dynamic viscosity',fs%visc)
          ! Define boundary conditions
-         call fs%add_bcond(name='inflow' ,type=dirichlet      ,dir='-y',canCorrect=.false.,locator=bottom_locator)
-         call fs%add_bcond(name='outflow',type=clipped_neumann,dir='+y',canCorrect=.true. ,locator=   top_locator)
+         call fs%add_bcond(name='inflow' ,type=dirichlet      ,locator=bottom_locator,face='y',dir=-1,canCorrect=.false.)
+         call fs%add_bcond(name='outflow',type=clipped_neumann,locator=   top_locator,face='y',dir=+1,canCorrect=.true. )
          ! Configure pressure solver
          call param_read('Pressure iteration',fs%psolv%maxit)
          call param_read('Pressure tolerance',fs%psolv%rcvg)
@@ -117,10 +117,12 @@ contains
          end do
          ! Apply all other boundary conditions
          call fs%apply_bcond(time%t,time%dt)
-         call fs%interp_vel(Ui,Vi,Wi)
-         call fs%get_div()
          ! Compute MFR through all boundary conditions
          call fs%get_mfr()
+         call fs%correct_mfr()
+         ! Compute interpolated velocity and divergence
+         call fs%interp_vel(Ui,Vi,Wi)
+         call fs%get_div()
       end block initialize_velocity
       
       
