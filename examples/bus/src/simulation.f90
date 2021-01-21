@@ -250,7 +250,7 @@ contains
       
       ! Create an incompressible flow solver with bconds
       create_solver: block
-         use ils_class, only: pcg_amg,gmres
+         use ils_class, only: pcg_amg,gmres,amg,pfmg
          ! Create flow solver
          fs=incomp(cfg=cfg,name='Incompressible NS')
          ! Set the flow properties
@@ -259,18 +259,18 @@ contains
          ! Define boundary conditions
          !! -- Main HVAC system -- !!
          ! Intakes (outflows of fluid domain)
-         call fs%add_bcond(name='vertical vent',type=dirichlet,dir='-z',canCorrect=.false. ,locator=vertical_vent)
+         !call fs%add_bcond(name='vertical vent',type=dirichlet,dir='-z',canCorrect=.false. ,locator=vertical_vent)
          call fs%add_bcond(name='front floor vents',type=dirichlet,dir='-y',canCorrect=.false. ,locator=front_floor_vents)
-         call fs%add_bcond(name='back vent driver',type=dirichlet,dir='-z',canCorrect=.false. ,locator=back_floor_vent_driver)
-         call fs%add_bcond(name='back vent curb',type=dirichlet,dir='-z',canCorrect=.false. ,locator=back_floor_vent_curb)
+         !call fs%add_bcond(name='back vent driver',type=dirichlet,dir='-z',canCorrect=.false. ,locator=back_floor_vent_driver)
+         !call fs%add_bcond(name='back vent curb',type=dirichlet,dir='-z',canCorrect=.false. ,locator=back_floor_vent_curb)
          call fs%add_bcond(name='lavatory vent',type=neumann,dir='-x',canCorrect=.true. ,locator=lavatory_vent)
          ! Outputs (inflows of fluid domain)
          call fs%add_bcond(name='window vents' ,type=dirichlet,dir='-y',canCorrect=.false.,locator=window_vents)
          !! -- Parcel rack system -- !!
          ! Intakes (outflows of fluid domain)
-         call fs%add_bcond(name='rack intakes' ,type=dirichlet,dir='-y',canCorrect=.false.,locator=rackintake_vents)
+         !call fs%add_bcond(name='rack intakes' ,type=dirichlet,dir='-y',canCorrect=.false.,locator=rackintake_vents)
          ! Outputs (inflows of fluid domain)
-         call fs%add_bcond(name='rack outlets' ,type=dirichlet,dir='-y',canCorrect=.false.,locator=rackoutlet_vents)
+         !call fs%add_bcond(name='rack outlets' ,type=dirichlet,dir='-y',canCorrect=.false.,locator=rackoutlet_vents)
          ! Configure pressure solver
          call param_read('Pressure iteration',fs%psolv%maxit)
          call param_read('Pressure tolerance',fs%psolv%rcvg)
@@ -278,7 +278,7 @@ contains
          call param_read('Implicit iteration',fs%implicit%maxit)
          call param_read('Implicit tolerance',fs%implicit%rcvg)
          ! Setup the solver
-         call fs%setup(pressure_ils=pcg_amg,implicit_ils=pcg_amg)
+         call fs%setup(pressure_ils=pcg_amg,implicit_ils=gmres)
       end block create_solver
       
       
@@ -312,44 +312,44 @@ contains
          ! Zero initial field
          fs%U=0.0_WP; fs%V=0.0_WP; fs%W=0.0_WP
          ! Apply Dirichlet at the inflow vents and known outflow vents
-         call fs%get_bcond('vertical vent',inflow)
-         do n=1,inflow%itr%no_
-            i=inflow%itr%map(1,n); j=inflow%itr%map(2,n); k=inflow%itr%map(3,n)
-            fs%W(i,j,k)=bus%vel_vvent
-         end do
+         ! call fs%get_bcond('vertical vent',inflow)
+         ! do n=1,inflow%itr%no_
+         !    i=inflow%itr%map(1,n); j=inflow%itr%map(2,n); k=inflow%itr%map(3,n)
+         !    fs%W(i,j,k)=bus%vel_vvent
+         ! end do
          call fs%get_bcond('front floor vents',inflow)
          do n=1,inflow%itr%no_
             i=inflow%itr%map(1,n); j=inflow%itr%map(2,n); k=inflow%itr%map(3,n)
             fs%V(i,j,k)=bus%vel_fventfront
             ! experimental data differs between the vents, may need to separate
          end do
-         call fs%get_bcond('back vent driver',inflow)
-         do n=1,inflow%itr%no_
-            i=inflow%itr%map(1,n); j=inflow%itr%map(2,n); k=inflow%itr%map(3,n)
-            fs%W(i,j,k)=bus%vel_fventdriver
-         end do
-         call fs%get_bcond('back vent curb',inflow)
-         do n=1,inflow%itr%no_
-            i=inflow%itr%map(1,n); j=inflow%itr%map(2,n); k=inflow%itr%map(3,n)
-            fs%W(i,j,k)=bus%vel_fventcurb
-         end do
+         ! call fs%get_bcond('back vent driver',inflow)
+         ! do n=1,inflow%itr%no_
+         !    i=inflow%itr%map(1,n); j=inflow%itr%map(2,n); k=inflow%itr%map(3,n)
+         !    fs%W(i,j,k)=bus%vel_fventdriver
+         ! end do
+         ! call fs%get_bcond('back vent curb',inflow)
+         ! do n=1,inflow%itr%no_
+         !    i=inflow%itr%map(1,n); j=inflow%itr%map(2,n); k=inflow%itr%map(3,n)
+         !    fs%W(i,j,k)=bus%vel_fventcurb
+         ! end do
          call fs%get_bcond('window vents',inflow)
          do n=1,inflow%itr%no_
             i=inflow%itr%map(1,n); j=inflow%itr%map(2,n); k=inflow%itr%map(3,n)
             fs%V(i,j,k)=bus%vel_ventwindow
             ! this is an average value, the measurements vary significantly
          end do
-         call fs%get_bcond('rack intakes',inflow)
-         do n=1,inflow%itr%no_
-            i=inflow%itr%map(1,n); j=inflow%itr%map(2,n); k=inflow%itr%map(3,n)
-            fs%V(i,j,k)=bus%vel_vinrack
-         end do
-         call fs%get_bcond('rack outlets',inflow)
-         do n=1,inflow%itr%no_
-            i=inflow%itr%map(1,n); j=inflow%itr%map(2,n); k=inflow%itr%map(3,n)
-            fs%V(i,j,k)=bus%vel_ventface
-            ! This value has been balanced with the rack intake flowrate
-         end do
+         ! call fs%get_bcond('rack intakes',inflow)
+         ! do n=1,inflow%itr%no_
+         !    i=inflow%itr%map(1,n); j=inflow%itr%map(2,n); k=inflow%itr%map(3,n)
+         !    fs%V(i,j,k)=bus%vel_vinrack
+         ! end do
+         ! call fs%get_bcond('rack outlets',inflow)
+         ! do n=1,inflow%itr%no_
+         !    i=inflow%itr%map(1,n); j=inflow%itr%map(2,n); k=inflow%itr%map(3,n)
+         !    fs%V(i,j,k)=bus%vel_ventface
+         !    ! This value has been balanced with the rack intake flowrate
+         ! end do
          ! Apply all other boundary conditions (just the lavatory is neumann)
          call fs%apply_bcond(time%t,time%dt)
          call fs%interp_vel(Ui,Vi,Wi)
