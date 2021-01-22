@@ -68,8 +68,13 @@ module bbmg_class
       integer, dimension(:,:,:), allocatable :: rank                  !< Cartesian rank information
       
       ! General grid information
-      integer :: no=1                                                 !< The overlap needs to be 1 at this point
+      integer :: no                                                   !< Size of the grid overlap
       logical :: xper,yper,zper                                       !< Periodicity info for the problem
+      
+      ! General operator information
+      integer :: nstx                                                 !< Number of diagonal in x
+      integer :: nsty                                                 !< Number of diagonal in y
+      integer :: nstz                                                 !< Number of diagonal in z
       
       ! Solver parameters
       logical  :: use_pcg                                             !< Use BBMG as a preconditioner to a PCG or directly
@@ -90,6 +95,10 @@ module bbmg_class
       procedure :: init_solver                                        !< Solver initialization (at start-up)
       procedure :: update_operator                                    !< Operator update (every time the operator changes)
       procedure :: solve                                              !< Solve the linear system
+      
+      procedure :: vsync                                              !< Synchronize boundaries for a vector at a given level
+      procedure :: msync                                              !< Synchronize boundaries for a matrix at a given level
+      
    end type bbmg
    
    
@@ -114,13 +123,25 @@ contains
    
    
    !> Constructor for a BBMG object - this sets the grid and storage
-   function bbmg_from_pgrid(pg,name) result(self)
+   function bbmg_from_pgrid(pg,name,nst) result(self)
       use messager,    only: die
       use pgrid_class, only: pgrid
       implicit none
       type(bbmg) :: self
       class(pgrid), intent(in) :: pg
       character(len=*), intent(in) :: name
+      integer, dimension(3), intent(in) :: nst
+      
+      ! Process the operator size
+      initialize_overlap: block
+         integer :: maxst
+         if (nst(1).ne.3.or.nst(2).ne.3.or.nst(3).ne.3) call die('[bbmg constructor] BBMG only supports 3x3x3 operators at this point')
+         self%nstx=nst(1); if (mod(self%nstx,2).eq.0) call die('[bbmg constructor] Operator size in x needs to be odd')
+         self%nsty=nst(2); if (mod(self%nsty,2).eq.0) call die('[bbmg constructor] Operator size in y needs to be odd')
+         self%nstz=nst(3); if (mod(self%nstz,2).eq.0) call die('[bbmg constructor] Operator size in z needs to be odd')
+         maxst=max(self%nstx,self%nsty,self%nstz)
+         self%no=(maxst-1)/2
+      end block initialize_overlap
       
       ! First build the hierarchy of grids
       initialize_grid: block
@@ -260,6 +281,33 @@ contains
             end if
          end do lvl_loop
       end block initialize_grid
+      
+      ! Now prepare operator storage
+      initialize_operator: block
+         integer :: n
+         do n=1,self%nlvl
+            ! Handle empty processors
+            if (self%lvl(n)%ncello_.eq.0) cycle
+            ! Prolongation operator (from lvl n+1 to lvl n)
+            if (n.lt.self%nlvl) then
+               allocate(self%lvl(n)%c2f   ( 0:1, 0:1, 0:1,self%lvl(n)%imino_:self%lvl(n)%imaxo_,self%lvl(n)%jmino_:self%lvl(n)%jmaxo_,self%lvl(n)%kmino_:self%lvl(n)%kmaxo_)); self%lvl(n)%c2f=0.0_WP
+            end if
+            ! Restriction operator (from lvl n-1 to lvl n)
+            if (n.gt.1) then
+               allocate(self%lvl(n)%f2c   (-1:1,-1:1,-1:1,self%lvl(n)%imino_:self%lvl(n)%imaxo_,self%lvl(n)%jmino_:self%lvl(n)%jmaxo_,self%lvl(n)%kmino_:self%lvl(n)%kmaxo_)); self%lvl(n)%f2c=0.0_WP
+            end if
+            ! Laplacian operator
+            allocate(self%lvl(n)%lap      (-1:1,-1:1,-1:1,self%lvl(n)%imino_:self%lvl(n)%imaxo_,self%lvl(n)%jmino_:self%lvl(n)%jmaxo_,self%lvl(n)%kmino_:self%lvl(n)%kmaxo_)); self%lvl(n)%lap=0.0_WP
+            ! Laplacian*Prolongation operator (from lvl n+1 to lvl n)
+            if (n.lt.self%nlvl) then
+               allocate(self%lvl(n)%lapc2f(-1:1,-1:1,-1:1,self%lvl(n)%imino_:self%lvl(n)%imaxo_,self%lvl(n)%jmino_:self%lvl(n)%jmaxo_,self%lvl(n)%kmino_:self%lvl(n)%kmaxo_)); self%lvl(n)%lapc2f=0.0_WP
+            end if
+            ! Allocate vectors
+            allocate(self%lvl(n)%v(self%lvl(n)%imino_:self%lvl(n)%imaxo_,self%lvl(n)%jmino_:self%lvl(n)%jmaxo_,self%lvl(n)%kmino_:self%lvl(n)%kmaxo_)); self%lvl(n)%v=0.0_WP
+            allocate(self%lvl(n)%f(self%lvl(n)%imino_:self%lvl(n)%imaxo_,self%lvl(n)%jmino_:self%lvl(n)%jmaxo_,self%lvl(n)%kmino_:self%lvl(n)%kmaxo_)); self%lvl(n)%f=0.0_WP
+            allocate(self%lvl(n)%r(self%lvl(n)%imino_:self%lvl(n)%imaxo_,self%lvl(n)%jmino_:self%lvl(n)%jmaxo_,self%lvl(n)%kmino_:self%lvl(n)%kmaxo_)); self%lvl(n)%r=0.0_WP
+         end do
+      end block initialize_operator
       
       ! Now prepare communication data
       initialize_comm: block
@@ -542,7 +590,347 @@ contains
       ! end do
    end subroutine smooth_rbgs
    
-   !
+   
+   !> Synchronization of overlap cells for a vector
+   subroutine vsync(this,A,n)
+      use parallel, only: MPI_REAL_WP
+      implicit none
+      class(bbmg), intent(inout) :: this
+      real(WP), dimension(:,:,:), intent(inout) :: A !< Needs to be (lvl(n)%nxo_,lvl(n)%nyo_,lvl(n)%nzo_)
+      integer, intent(in) :: n                       !< Level at which the sync is happening
+      real(WP), dimension(:,:,:), allocatable :: buf1,buf2
+      integer :: icount,count,dest,ierr
+      integer :: no,n1,n2,n3,ip,jp,kp
+      type(MPI_Request), dimension(:), allocatable :: request
+      ! Shortcut to sizes
+      no=this%no
+      n1=this%lvl(n)%nxo_; n2=this%lvl(n)%nyo_; n3=this%lvl(n)%nzo_
+      ! Communicate in X =======================================================
+      ! Initialize buffer and size
+      allocate(buf1(no,n2,n3),buf2(no,n2,n3)); icount=no*n2*n3
+      ! Allocate request
+      allocate(request(max(this%lvl(n)%nsend_xm,this%lvl(n)%nsend_xp)+1))
+      ! MINUS DIRECTION ------
+      ! Loop over potential destinations
+      count=0
+      do ip=1,this%npx
+         ! Test if I need to send
+         if (this%lvl(n)%send_xm(ip)) then
+            ! Get processor rank
+            dest=this%rank(ip,this%jproc,this%kproc)-1
+            ! Copy left buffer
+            buf1(:,:,:)=A(1+no:1+no+no-1,:,:)
+            ! Send left buffer to destination
+            count=count+1
+            call MPI_ISEND(buf1,icount,MPI_REAL_WP,dest,0,this%comm,request(count),ierr)
+         end if
+      end do
+      ! Receive from potential sender
+      count=count+1
+      call MPI_IRECV(buf2,icount,MPI_REAL_WP,this%lvl(n)%recv_xm,0,this%comm,request(count),ierr)
+      ! Wait for completion
+      call MPI_WAITALL(count,request(1:count),MPI_STATUSES_IGNORE,ierr)
+      ! Paste left buffer to right
+      if (this%lvl(n)%recv_xm.ne.MPI_PROC_NULL) A(n1-no+1:n1,:,:)=buf2(:,:,:)
+      ! PLUS DIRECTION ------
+      ! Loop over potential destinations
+      count=0
+      do ip=1,this%npx
+         ! Test if I need to send
+         if (this%lvl(n)%send_xp(ip)) then
+            ! Get processor rank
+            dest=this%rank(ip,this%jproc,this%kproc)-1
+            ! Copy right buffer
+            buf1(:,:,:)=A(n1-no-no+1:n1-no,:,:)
+            ! Send right buffer to destination
+            count=count+1
+            call MPI_ISEND(buf1,icount,MPI_REAL_WP,dest,0,this%comm,request(count),ierr)
+         end if
+      end do
+      ! Receive from potential sender
+      count=count+1
+      call MPI_IRECV(buf2,icount,MPI_REAL_WP,this%lvl(n)%recv_xp,0,this%comm,request(count),ierr)
+      ! Wait for completion
+      call MPI_WAITALL(count,request(1:count),MPI_STATUSES_IGNORE,ierr)
+      ! Paste left buffer to right
+      if (this%lvl(n)%recv_xp.ne.MPI_PROC_NULL) A(1:no,:,:)=buf2(:,:,:)
+      ! Deallocate
+      deallocate(buf1,buf2,request)
+      ! Communicate in Y =======================================================
+      ! Initialize buffer and size
+      allocate(buf1(n1,no,n3),buf2(n1,no,n3)); icount=n1*no*n3
+      ! Allocate request
+      allocate(request(max(this%lvl(n)%nsend_ym,this%lvl(n)%nsend_yp)+1))
+      ! MINUS DIRECTION ------
+      ! Loop over potential destinations
+      count=0
+      do jp=1,this%npy
+         ! Test if I need to send
+         if (this%lvl(n)%send_ym(jp)) then
+            ! Get processor rank
+            dest=this%rank(this%iproc,jp,this%kproc)-1
+            ! Copy left buffer
+            buf1(:,:,:)=A(:,1+no:1+no+no-1,:)
+            ! Send left buffer to destination
+            count=count+1
+            call MPI_ISEND(buf1,icount,MPI_REAL_WP,dest,0,this%comm,request(count),ierr)
+         end if
+      end do
+      ! Receive from potential sender
+      count=count+1
+      call MPI_IRECV(buf2,icount,MPI_REAL_WP,this%lvl(n)%recv_ym,0,this%comm,request(count),ierr)
+      ! Wait for completion
+      call MPI_WAITALL(count,request(1:count),MPI_STATUSES_IGNORE,ierr)
+      ! Paste left buffer to right
+      if (this%lvl(n)%recv_ym.ne.MPI_PROC_NULL) A(:,n2-no+1:n2,:)=buf2(:,:,:)
+      ! PLUS DIRECTION ------
+      ! Loop over potential destinations
+      count=0
+      do jp=1,this%npy
+         ! Test if I need to send
+         if (this%lvl(n)%send_yp(jp)) then
+            ! Get processor rank
+            dest=this%rank(this%iproc,jp,this%kproc)-1
+            ! Copy right buffer
+            buf1(:,:,:)=A(:,n2-no-no+1:n2-no,:)
+            ! Send right buffer to destination
+            count=count+1
+            call MPI_ISEND(buf1,icount,MPI_REAL_WP,dest,0,this%comm,request(count),ierr)
+         end if
+      end do
+      ! Receive from potential sender
+      count=count+1
+      call MPI_IRECV(buf2,icount,MPI_REAL_WP,this%lvl(n)%recv_yp,0,this%comm,request(count),ierr)
+      ! Wait for completion
+      call MPI_WAITALL(count,request(1:count),MPI_STATUSES_IGNORE,ierr)
+      ! Paste left buffer to right
+      if (this%lvl(n)%recv_yp.ne.MPI_PROC_NULL) A(:,1:no,:)=buf2(:,:,:)
+      ! Deallocate
+      deallocate(buf1,buf2,request)
+      ! Communicate in Z =======================================================
+      ! Initialize buffer and size
+      allocate(buf1(n1,n2,no),buf2(n1,n2,no)); icount=n1*n2*no
+      ! Allocate request
+      allocate(request(max(this%lvl(n)%nsend_zm,this%lvl(n)%nsend_zp)+1))
+      ! MINUS DIRECTION ------
+      ! Loop over potential destinations
+      count=0
+      do kp=1,this%npz
+         ! Test if I need to send
+         if (this%lvl(n)%send_zm(kp)) then
+            ! Get processor rank
+            dest=this%rank(this%iproc,this%jproc,kp)-1
+            ! Copy left buffer
+            buf1(:,:,:)=A(:,:,1+no:1+no+no-1)
+            ! Send left buffer to destination
+            count=count+1
+            call MPI_ISEND(buf1,icount,MPI_REAL_WP,dest,0,this%comm,request(count),ierr)
+         end if
+      end do
+      ! Receive from potential sender
+      count=count+1
+      call MPI_IRECV(buf2,icount,MPI_REAL_WP,this%lvl(n)%recv_zm,0,this%comm,request(count),ierr)
+      ! Wait for completion
+      call MPI_WAITALL(count,request(1:count),MPI_STATUSES_IGNORE,ierr)
+      ! Paste left buffer to right
+      if (this%lvl(n)%recv_zm.ne.MPI_PROC_NULL) A(:,:,n3-no+1:n3)=buf2(:,:,:)
+      ! PLUS DIRECTION ------
+      ! Loop over potential destinations
+      count=0
+      do kp=1,this%npz
+         ! Test if I need to send
+         if (this%lvl(n)%send_zp(kp)) then
+            ! Get processor rank
+            dest=this%rank(this%iproc,this%jproc,kp)-1
+            ! Copy right buffer
+            buf1(:,:,:)=A(:,:,n3-no-no+1:n3-no)
+            ! Send right buffer to destination
+            count=count+1
+            call MPI_ISEND(buf1,icount,MPI_REAL_WP,dest,0,this%comm,request(count),ierr)
+         end if
+      end do
+      ! Receive from potential sender
+      count=count+1
+      call MPI_IRECV(buf2,icount,MPI_REAL_WP,this%lvl(n)%recv_zp,0,this%comm,request(count),ierr)
+      ! Wait for completion
+      call MPI_WAITALL(count,request(1:count),MPI_STATUSES_IGNORE,ierr)
+      ! Paste left buffer to right
+      if (this%lvl(n)%recv_zp.ne.MPI_PROC_NULL) A(:,:,1:no)=buf2(:,:,:)
+      ! Deallocate
+      deallocate(buf1,buf2,request)
+   end subroutine vsync
+   
+   
+   !> Synchronization of overlap cells for a matrix
+   subroutine msync(this,A,n)
+      use parallel, only: MPI_REAL_WP
+      implicit none
+      class(bbmg), intent(inout) :: this
+      real(WP), dimension(:,:,:,:,:,:), intent(inout) :: A !< Needs to be (lvl(n)%nstx,lvl(n)%nsty,lvl(n)%nstz,lvl(n)%nxo_,lvl(n)%nyo_,lvl(n)%nzo_)
+      integer, intent(in) :: n                             !< Level at which the sync is happening
+      real(WP), dimension(:,:,:,:,:,:), allocatable :: buf1,buf2
+      integer :: icount,count,dest,ierr
+      integer :: no,n1,n2,n3,ip,jp,kp,nstx,nsty,nstz
+      type(MPI_Request), dimension(:), allocatable :: request
+      ! Shortcut to sizes
+      no=this%no; nstx=this%nstx; nsty=this%nsty; nstz=this%nstz
+      n1=this%lvl(n)%nxo_; n2=this%lvl(n)%nyo_; n3=this%lvl(n)%nzo_
+      ! Communicate in X =======================================================
+      ! Initialize buffer and size
+      allocate(buf1(nstx,nsty,nstz,no,n2,n3),buf2(nstx,nsty,nstz,no,n2,n3)); icount=nstx*nsty*nstz*no*n2*n3
+      ! Allocate request
+      allocate(request(max(this%lvl(n)%nsend_xm,this%lvl(n)%nsend_xp)+1))
+      ! MINUS DIRECTION ------
+      ! Loop over potential destinations
+      count=0
+      do ip=1,this%npx
+         ! Test if I need to send
+         if (this%lvl(n)%send_xm(ip)) then
+            ! Get processor rank
+            dest=this%rank(ip,this%jproc,this%kproc)-1
+            ! Copy left buffer
+            buf1(:,:,:,:,:,:)=A(:,:,:,1+no:1+no+no-1,:,:)
+            ! Send left buffer to destination
+            count=count+1
+            call MPI_ISEND(buf1,icount,MPI_REAL_WP,dest,0,this%comm,request(count),ierr)
+         end if
+      end do
+      ! Receive from potential sender
+      count=count+1
+      call MPI_IRECV(buf2,icount,MPI_REAL_WP,this%lvl(n)%recv_xm,0,this%comm,request(count),ierr)
+      ! Wait for completion
+      call MPI_WAITALL(count,request(1:count),MPI_STATUSES_IGNORE,ierr)
+      ! Paste left buffer to right
+      if (this%lvl(n)%recv_xm.ne.MPI_PROC_NULL) A(:,:,:,n1-no+1:n1,:,:)=buf2(:,:,:,:,:,:)
+      ! PLUS DIRECTION ------
+      ! Loop over potential destinations
+      count=0
+      do ip=1,this%npx
+         ! Test if I need to send
+         if (this%lvl(n)%send_xp(ip)) then
+            ! Get processor rank
+            dest=this%rank(ip,this%jproc,this%kproc)-1
+            ! Copy right buffer
+            buf1(:,:,:,:,:,:)=A(:,:,:,n1-no-no+1:n1-no,:,:)
+            ! Send right buffer to destination
+            count=count+1
+            call MPI_ISEND(buf1,icount,MPI_REAL_WP,dest,0,this%comm,request(count),ierr)
+         end if
+      end do
+      ! Receive from potential sender
+      count=count+1
+      call MPI_IRECV(buf2,icount,MPI_REAL_WP,this%lvl(n)%recv_xp,0,this%comm,request(count),ierr)
+      ! Wait for completion
+      call MPI_WAITALL(count,request(1:count),MPI_STATUSES_IGNORE,ierr)
+      ! Paste left buffer to right
+      if (this%lvl(n)%recv_xp.ne.MPI_PROC_NULL) A(:,:,:,1:no,:,:)=buf2(:,:,:,:,:,:)
+      ! Deallocate
+      deallocate(buf1,buf2,request)
+      ! Communicate in Y =======================================================
+      ! Initialize buffer and size
+      allocate(buf1(nstx,nsty,nstz,n1,no,n3),buf2(nstx,nsty,nstz,n1,no,n3)); icount=nstx*nsty*nstz*n1*no*n3
+      ! Allocate request
+      allocate(request(max(this%lvl(n)%nsend_ym,this%lvl(n)%nsend_yp)+1))
+      ! MINUS DIRECTION ------
+      ! Loop over potential destinations
+      count=0
+      do jp=1,this%npy
+         ! Test if I need to send
+         if (this%lvl(n)%send_ym(jp)) then
+            ! Get processor rank
+            dest=this%rank(this%iproc,jp,this%kproc)-1
+            ! Copy left buffer
+            buf1(:,:,:,:,:,:)=A(:,:,:,:,1+no:1+no+no-1,:)
+            ! Send left buffer to destination
+            count=count+1
+            call MPI_ISEND(buf1,icount,MPI_REAL_WP,dest,0,this%comm,request(count),ierr)
+         end if
+      end do
+      ! Receive from potential sender
+      count=count+1
+      call MPI_IRECV(buf2,icount,MPI_REAL_WP,this%lvl(n)%recv_ym,0,this%comm,request(count),ierr)
+      ! Wait for completion
+      call MPI_WAITALL(count,request(1:count),MPI_STATUSES_IGNORE,ierr)
+      ! Paste left buffer to right
+      if (this%lvl(n)%recv_ym.ne.MPI_PROC_NULL) A(:,:,:,:,n2-no+1:n2,:)=buf2(:,:,:,:,:,:)
+      ! PLUS DIRECTION ------
+      ! Loop over potential destinations
+      count=0
+      do jp=1,this%npy
+         ! Test if I need to send
+         if (this%lvl(n)%send_yp(jp)) then
+            ! Get processor rank
+            dest=this%rank(this%iproc,jp,this%kproc)-1
+            ! Copy right buffer
+            buf1(:,:,:,:,:,:)=A(:,:,:,:,n2-no-no+1:n2-no,:)
+            ! Send right buffer to destination
+            count=count+1
+            call MPI_ISEND(buf1,icount,MPI_REAL_WP,dest,0,this%comm,request(count),ierr)
+         end if
+      end do
+      ! Receive from potential sender
+      count=count+1
+      call MPI_IRECV(buf2,icount,MPI_REAL_WP,this%lvl(n)%recv_yp,0,this%comm,request(count),ierr)
+      ! Wait for completion
+      call MPI_WAITALL(count,request(1:count),MPI_STATUSES_IGNORE,ierr)
+      ! Paste left buffer to right
+      if (this%lvl(n)%recv_yp.ne.MPI_PROC_NULL) A(:,:,:,:,1:no,:)=buf2(:,:,:,:,:,:)
+      ! Deallocate
+      deallocate(buf1,buf2,request)
+      ! Communicate in Z =======================================================
+      ! Initialize buffer and size
+      allocate(buf1(nstx,nsty,nstz,n1,n2,no),buf2(nstx,nsty,nstz,n1,n2,no)); icount=nstx*nsty*nstz*n1*n2*no
+      ! Allocate request
+      allocate(request(max(this%lvl(n)%nsend_zm,this%lvl(n)%nsend_zp)+1))
+      ! MINUS DIRECTION ------
+      ! Loop over potential destinations
+      count=0
+      do kp=1,this%npz
+         ! Test if I need to send
+         if (this%lvl(n)%send_zm(kp)) then
+            ! Get processor rank
+            dest=this%rank(this%iproc,this%jproc,kp)-1
+            ! Copy left buffer
+            buf1(:,:,:,:,:,:)=A(:,:,:,:,:,1+no:1+no+no-1)
+            ! Send left buffer to destination
+            count=count+1
+            call MPI_ISEND(buf1,icount,MPI_REAL_WP,dest,0,this%comm,request(count),ierr)
+         end if
+      end do
+      ! Receive from potential sender
+      count=count+1
+      call MPI_IRECV(buf2,icount,MPI_REAL_WP,this%lvl(n)%recv_zm,0,this%comm,request(count),ierr)
+      ! Wait for completion
+      call MPI_WAITALL(count,request(1:count),MPI_STATUSES_IGNORE,ierr)
+      ! Paste left buffer to right
+      if (this%lvl(n)%recv_zm.ne.MPI_PROC_NULL) A(:,:,:,:,:,n3-no+1:n3)=buf2(:,:,:,:,:,:)
+      ! PLUS DIRECTION ------
+      ! Loop over potential destinations
+      count=0
+      do kp=1,this%npz
+         ! Test if I need to send
+         if (this%lvl(n)%send_zp(kp)) then
+            ! Get processor rank
+            dest=this%rank(this%iproc,this%jproc,kp)-1
+            ! Copy right buffer
+            buf1(:,:,:,:,:,:)=A(:,:,:,:,:,n3-no-no+1:n3-no)
+            ! Send right buffer to destination
+            count=count+1
+            call MPI_ISEND(buf1,icount,MPI_REAL_WP,dest,0,this%comm,request(count),ierr)
+         end if
+      end do
+      ! Receive from potential sender
+      count=count+1
+      call MPI_IRECV(buf2,icount,MPI_REAL_WP,this%lvl(n)%recv_zp,0,this%comm,request(count),ierr)
+      ! Wait for completion
+      call MPI_WAITALL(count,request(1:count),MPI_STATUSES_IGNORE,ierr)
+      ! Paste left buffer to right
+      if (this%lvl(n)%recv_zp.ne.MPI_PROC_NULL) A(:,:,:,:,:,1:no)=buf2(:,:,:,:,:,:)
+      ! Deallocate
+      deallocate(buf1,buf2,request)
+   end subroutine msync
+   
+   
    ! !> Log ILS info
    ! subroutine ils_log(this)
    !    use string,   only: str_long
