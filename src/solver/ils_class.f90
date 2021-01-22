@@ -30,8 +30,8 @@ module ils_class
    real(WP), parameter :: amg_strong_threshold=0.25_WP !< Coarsening parameter (default is 0.25, 0.5 recommended in 3D)
    integer , parameter :: amg_coarsen_type=8           !< Falgout=6 (old default); PMIS=8 and HMIS=10 (recommended)
    integer , parameter :: amg_interp=6                 !< 6=extended classical modified interpolation (default); 8=standard interpolation
-   integer , parameter :: amg_relax=8                  !< 6=Hybrid symmetric Gauss-Seidel (default); 8=symmetric L1-Gauss-Seidel; 0=Weighted Jacobi
-   integer , parameter :: amg_relax_coarse=8           !< 9=Gauss elim; 99=GE w/ pivot; may be good to use same as above?
+   integer , parameter :: amg_relax=6                  !< 6=Hybrid symmetric Gauss-Seidel (default); 8=symmetric L1-Gauss-Seidel; 0=Weighted Jacobi
+   integer , parameter :: amg_relax_coarse=6           !< 9=Gauss elim; 99=GE w/ pivot; may be good to use same as above?
    integer , parameter :: sprintlvl=0                  !< Solver  printing: 0=none (default); 3=init and cvg history
    integer , parameter :: pprintlvl=0                  !< Precond printing: 0=none (default); 3=init and cvg history
    
@@ -42,7 +42,7 @@ module ils_class
    type :: ils
       ! An iterative linear solver works for a config
       type(config), pointer :: cfg                                    !< Config for the ILS
-      ! An ILS has a filename
+      ! An ILS has a name
       character(len=str_medium) :: name                               !< Name of solver
       ! An ILS has a solution method
       integer  :: method                                              !< Solution method

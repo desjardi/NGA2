@@ -164,7 +164,6 @@ contains
       use messager, only: die
       use param,    only: verbose
       implicit none
-      include 'mpif.h'
       
       type(pgrid) :: self                               !< Parallel grid
       
