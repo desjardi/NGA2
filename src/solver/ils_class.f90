@@ -576,6 +576,8 @@ contains
          call this%solve_rbgs()
       case (bbox)
          call this%bbox%solve()
+         this%it  =this%bbox%my_ite
+         this%rerr=this%bbox%my_res
       case (amg)
          call HYPRE_BoomerAMGSolve           (this%hypre_solver,this%parse_mat,this%parse_rhs,this%parse_sol,ierr)
          call HYPRE_BoomerAMGGetNumIterations(this%hypre_solver,this%it  ,ierr)
