@@ -4,6 +4,7 @@ module ils_class
    use precision,    only: WP
    use config_class, only: config
    use string,       only: str_medium
+   use bbmg_class,   only: bbmg
    implicit none
    private
    
@@ -23,6 +24,7 @@ module ils_class
    integer, parameter, public :: gmres_amg=9
    integer, parameter, public :: bicgstab_amg=10
    integer, parameter, public :: pcg=11
+   integer, parameter, public :: bbox=12
    
    
    ! List of key solver parameters
@@ -76,6 +78,9 @@ module ils_class
       integer(kind=8), private :: hypre_sol,parse_sol    !< Solution
       integer(kind=8), private :: hypre_solver           !< Solver
       integer(kind=8), private :: hypre_precond          !< Preconditioner
+      
+      ! Private BBMG solver
+      type(bbmg), private :: bbox                        !< In-house Black-Box Multi-Grid solver
       
    contains
       procedure :: print_short=>ils_print_short                       !< Short print of ILS object info
@@ -168,6 +173,8 @@ contains
       select case (this%method)
       case (rbgs)
          ! Nothing needed
+      case (bbox) ! Initialize a black-box mg solver
+         this%bbox=bbmg(pg=this%cfg,name=trim(this%name),nst=[3,3,3])
       case (amg,pcg_amg,pcg_parasail,gmres,gmres_pilut,gmres_amg,bicgstab_amg,pcg)  ! Initialize a HYPRE IJ enviroment
          ! Allocate and prepare unstructed mapping
          call this%prep_umap()
@@ -221,6 +228,10 @@ contains
       select case (this%method)
       case (rbgs)
          ! Nothing needed
+      case (bbox)
+         ! Adjust parameters
+         this%bbox%max_ite=this%maxit
+         this%bbox%max_res=this%rcvg
       case (amg)
          ! Create an AMG solver
          call HYPRE_BoomerAMGCreate        (this%hypre_solver,ierr)
@@ -368,7 +379,7 @@ contains
       use messager, only: die
       implicit none
       class(ils), intent(inout) :: this
-      integer :: i,j,k,count1,count2,st,ierr,nn
+      integer :: i,j,k,ii,jj,kk,st,count1,count2,ierr,nn
       integer,  dimension(:), allocatable :: row,ncol,mycol,col
       real(WP), dimension(:), allocatable :: myval,val
       
@@ -376,6 +387,20 @@ contains
       select case (this%method)
       case (rbgs)
          ! Nothing to do
+      case (bbox)
+         do kk=this%cfg%kmin_,this%cfg%kmax_
+            do jj=this%cfg%jmin_,this%cfg%jmax_
+               do ii=this%cfg%imin_,this%cfg%imax_
+                  ! Shift indices to start at 1
+                  i=ii-this%cfg%no; j=jj-this%cfg%no; k=kk-this%cfg%no
+                  ! Transfer our operator
+                  this%bbox%lvl(1)%opr(:,:,:,i,j,k)=0.0_WP
+                  do st=1,this%nst
+                     this%bbox%lvl(1)%opr(this%stc(st,1),this%stc(st,2),this%stc(st,3),i,j,k)=this%bbox%lvl(1)%opr(this%stc(st,1),this%stc(st,2),this%stc(st,3),i,j,k)+this%opr(st,i,j,k)
+                  end do
+               end do
+            end do
+         end do
       case (amg,pcg_amg,pcg_parasail,gmres,gmres_pilut,gmres_amg,bicgstab_amg,pcg)  ! Prepare the IJ operator
          ! Allocate storage for transfer
          allocate(mycol(this%nst))
@@ -460,6 +485,8 @@ contains
       select case (this%method)
       case (rbgs)
          ! Nothing to do
+      case (bbox)
+         call this%bbox%update()
       case (amg)
          call HYPRE_BoomerAMGSetup  (this%hypre_solver,this%parse_mat,this%parse_rhs,this%parse_sol,ierr)
       case (pcg,pcg_amg,pcg_parasail)
@@ -483,7 +510,7 @@ contains
       use param,    only: verbose
       implicit none
       class(ils), intent(inout) :: this
-      integer :: i,j,k,count,ierr
+      integer :: i,j,k,ii,jj,kk,count,ierr
       integer,  dimension(:), allocatable :: ind
       real(WP), dimension(:), allocatable :: rhs,sol
       
@@ -494,6 +521,18 @@ contains
       select case (this%method)
       case (rbgs)
          ! Nothing to do
+      case (bbox)
+         do kk=this%cfg%kmin_,this%cfg%kmax_
+            do jj=this%cfg%jmin_,this%cfg%jmax_
+               do ii=this%cfg%imin_,this%cfg%imax_
+                  ! Shift indices to start at 1
+                  i=ii-this%cfg%no; j=jj-this%cfg%no; k=kk-this%cfg%no
+                  ! Transfer our vectors
+                  this%bbox%lvl(1)%f(i,j,k)=this%rhs(i,j,k)
+                  this%bbox%lvl(1)%v(i,j,k)=this%sol(i,j,k)
+               end do
+            end do
+         end do
       case (amg,pcg_amg,pcg_parasail,gmres,gmres_pilut,gmres_amg,bicgstab_amg,pcg)  ! Prepare the IJ vectors
          allocate(rhs(this%ncell_))
          allocate(sol(this%ncell_))
@@ -541,6 +580,8 @@ contains
       select case (this%method)
       case (rbgs)
          call this%solve_rbgs()
+      case (bbox)
+         call this%bbox%solve()
       case (amg)
          call HYPRE_BoomerAMGSolve           (this%hypre_solver,this%parse_mat,this%parse_rhs,this%parse_sol,ierr)
          call HYPRE_BoomerAMGGetNumIterations(this%hypre_solver,this%it  ,ierr)
@@ -571,6 +612,17 @@ contains
       select case (this%method)
       case (rbgs)
          ! Nothing to do
+      case (bbox)
+         do kk=this%cfg%kmin_,this%cfg%kmax_
+            do jj=this%cfg%jmin_,this%cfg%jmax_
+               do ii=this%cfg%imin_,this%cfg%imax_
+                  ! Shift indices to start at 1
+                  i=ii-this%cfg%no; j=jj-this%cfg%no; k=kk-this%cfg%no
+                  ! Transfer our solution
+                  this%rhs(i,j,k)=this%bbox%lvl(1)%v(i,j,k)
+               end do
+            end do
+         end do
       case (amg,pcg_amg,pcg_parasail,gmres,gmres_pilut,gmres_amg,bicgstab_amg,pcg)  ! Retrieve the IJ vector
          call HYPRE_IJVectorGetValues(this%hypre_sol,this%ncell_,ind,sol,ierr)
          count=0
