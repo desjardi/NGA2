@@ -379,7 +379,7 @@ contains
       use messager, only: die
       implicit none
       class(ils), intent(inout) :: this
-      integer :: i,j,k,ii,jj,kk,st,count1,count2,ierr,nn
+      integer :: i,j,k,st,count1,count2,ierr,nn
       integer,  dimension(:), allocatable :: row,ncol,mycol,col
       real(WP), dimension(:), allocatable :: myval,val
       
@@ -388,12 +388,9 @@ contains
       case (rbgs)
          ! Nothing to do
       case (bbox)
-         do kk=this%cfg%kmin_,this%cfg%kmax_
-            do jj=this%cfg%jmin_,this%cfg%jmax_
-               do ii=this%cfg%imin_,this%cfg%imax_
-                  ! Shift indices to start at 1
-                  i=ii-this%cfg%no; j=jj-this%cfg%no; k=kk-this%cfg%no
-                  ! Transfer our operator
+         do k=this%cfg%kmin_,this%cfg%kmax_
+            do j=this%cfg%jmin_,this%cfg%jmax_
+               do i=this%cfg%imin_,this%cfg%imax_
                   this%bbox%lvl(1)%opr(:,:,:,i,j,k)=0.0_WP
                   do st=1,this%nst
                      this%bbox%lvl(1)%opr(this%stc(st,1),this%stc(st,2),this%stc(st,3),i,j,k)=this%bbox%lvl(1)%opr(this%stc(st,1),this%stc(st,2),this%stc(st,3),i,j,k)+this%opr(st,i,j,k)
@@ -510,7 +507,7 @@ contains
       use param,    only: verbose
       implicit none
       class(ils), intent(inout) :: this
-      integer :: i,j,k,ii,jj,kk,count,ierr
+      integer :: i,j,k,count,ierr
       integer,  dimension(:), allocatable :: ind
       real(WP), dimension(:), allocatable :: rhs,sol
       
@@ -522,12 +519,9 @@ contains
       case (rbgs)
          ! Nothing to do
       case (bbox)
-         do kk=this%cfg%kmin_,this%cfg%kmax_
-            do jj=this%cfg%jmin_,this%cfg%jmax_
-               do ii=this%cfg%imin_,this%cfg%imax_
-                  ! Shift indices to start at 1
-                  i=ii-this%cfg%no; j=jj-this%cfg%no; k=kk-this%cfg%no
-                  ! Transfer our vectors
+         do k=this%cfg%kmin_,this%cfg%kmax_
+            do j=this%cfg%jmin_,this%cfg%jmax_
+               do i=this%cfg%imin_,this%cfg%imax_
                   this%bbox%lvl(1)%f(i,j,k)=this%rhs(i,j,k)
                   this%bbox%lvl(1)%v(i,j,k)=this%sol(i,j,k)
                end do
@@ -613,13 +607,10 @@ contains
       case (rbgs)
          ! Nothing to do
       case (bbox)
-         do kk=this%cfg%kmin_,this%cfg%kmax_
-            do jj=this%cfg%jmin_,this%cfg%jmax_
-               do ii=this%cfg%imin_,this%cfg%imax_
-                  ! Shift indices to start at 1
-                  i=ii-this%cfg%no; j=jj-this%cfg%no; k=kk-this%cfg%no
-                  ! Transfer our solution
-                  this%rhs(i,j,k)=this%bbox%lvl(1)%v(i,j,k)
+         do k=this%cfg%kmin_,this%cfg%kmax_
+            do j=this%cfg%jmin_,this%cfg%jmax_
+               do i=this%cfg%imin_,this%cfg%imax_
+                  this%sol(i,j,k)=this%bbox%lvl(1)%v(i,j,k)
                end do
             end do
          end do

@@ -232,10 +232,10 @@ contains
          allocate(self%lvl(self%nlvl))
          ! Generate hierarchy of grids in x from the pgrid
          self%lvl(1)%nx   =pg%nx
-         self%lvl(1)%imin =pg%imin -pg%no
-         self%lvl(1)%imax =pg%imax -pg%no
-         self%lvl(1)%imin_=pg%imin_-pg%no
-         self%lvl(1)%imax_=pg%imax_-pg%no
+         self%lvl(1)%imin =pg%imin !< This needs to be one, which it should be for NGA2
+         self%lvl(1)%imax =pg%imax
+         self%lvl(1)%imin_=pg%imin_
+         self%lvl(1)%imax_=pg%imax_
          self%lvl(1)%imino =self%lvl(1)%imin -self%no
          self%lvl(1)%imaxo =self%lvl(1)%imax +self%no
          self%lvl(1)%imino_=self%lvl(1)%imin_-self%no
@@ -261,10 +261,10 @@ contains
          end do
          ! Generate hierarchy of grids in y from the pgrid
          self%lvl(1)%ny   =pg%ny
-         self%lvl(1)%jmin =pg%jmin -pg%no
-         self%lvl(1)%jmax =pg%jmax -pg%no
-         self%lvl(1)%jmin_=pg%jmin_-pg%no
-         self%lvl(1)%jmax_=pg%jmax_-pg%no
+         self%lvl(1)%jmin =pg%jmin !< This needs to be one, which it should be for NGA2
+         self%lvl(1)%jmax =pg%jmax
+         self%lvl(1)%jmin_=pg%jmin_
+         self%lvl(1)%jmax_=pg%jmax_
          self%lvl(1)%jmino =self%lvl(1)%jmin -self%no
          self%lvl(1)%jmaxo =self%lvl(1)%jmax +self%no
          self%lvl(1)%jmino_=self%lvl(1)%jmin_-self%no
@@ -290,10 +290,10 @@ contains
          end do
          ! Generate hierarchy of grids in z from the pgrid
          self%lvl(1)%nz   =pg%nz
-         self%lvl(1)%kmin =pg%kmin -pg%no
-         self%lvl(1)%kmax =pg%kmax -pg%no
-         self%lvl(1)%kmin_=pg%kmin_-pg%no
-         self%lvl(1)%kmax_=pg%kmax_-pg%no
+         self%lvl(1)%kmin =pg%kmin !< This needs to be one, which it should be for NGA2
+         self%lvl(1)%kmax =pg%kmax
+         self%lvl(1)%kmin_=pg%kmin_
+         self%lvl(1)%kmax_=pg%kmax_
          self%lvl(1)%kmino =self%lvl(1)%kmin -self%no
          self%lvl(1)%kmaxo =self%lvl(1)%kmax +self%no
          self%lvl(1)%kmino_=self%lvl(1)%kmin_-self%no
