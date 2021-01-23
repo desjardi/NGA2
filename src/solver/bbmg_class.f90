@@ -76,6 +76,12 @@ module bbmg_class
       integer :: nsty                                                 !< Number of diagonal in y
       integer :: nstz                                                 !< Number of diagonal in z
       
+      ! Direct solver data
+      integer :: np                                                   !< Direct problem size
+      integer , dimension(:),   allocatable :: piv                    !< Pivoting data
+      real(WP), dimension(:),   allocatable :: myrhs,rhs              !< Local and assembled RHS
+      real(WP), dimension(:,:), allocatable :: myOP,OP                !< Local and assembled operator
+      
       ! Solver parameters
       logical  :: use_pcg                                             !< Use BBMG as a preconditioner to a PCG or directly
       real(WP) :: max_res                                             !< Maximum residual - the solver will attempt to converge below that value
@@ -93,22 +99,27 @@ module bbmg_class
       !procedure :: print_cvg                                          !< Print BBMG convergence history
       !procedure :: log_cvg                                            !< Log BBMG convergence history
       procedure :: init_solver                                        !< Solver initialization (at start-up)
-      procedure :: update_operator                                    !< Operator update (every time the operator changes)
+      procedure :: update                                             !< Operator update (every time the operator changes)
       procedure :: solve                                              !< Solve the linear system
       
       procedure :: recompute_prolongation                             !< Recompute the prolongation at a given level
       procedure :: recompute_restriction                              !< Recompute the restriction at a given level
       procedure :: recompute_operator                                 !< Recompute the operator at a given level
+      procedure :: recompute_direct                                   !< Recompute the direct problem at the final level
       
-      procedure :: vsync                                              !< Synchronize boundaries for a vector at a given level
-      procedure :: msync                                              !< Synchronize boundaries for a matrix at a given level
+      procedure :: get_residual                                       !< Compute the residual at a given level
+      procedure :: c2f                                                !< Prolongate from a level to the next finer level
+      procedure :: f2c                                                !< Restrict from a level to the next coarser level
+      procedure :: relax                                              !< Relax the problem at a given level
+      procedure :: direct_solve                                       !< Solve directly the problem at the final level
+      
+      generic :: sync=>vsync,msync                                    !< Synchronization at boundaries
+      procedure, private :: vsync                                     !< Synchronize boundaries for a vector at a given level
+      procedure, private :: msync                                     !< Synchronize boundaries for a matrix at a given level
       
       procedure :: pmodx,pmody,pmodz                                  !< Parity calculation that accounts for periodicity
       
    end type bbmg
-   
-   
-   
    
    
    !> Declare bbmg constructor
@@ -573,9 +584,162 @@ contains
    end subroutine solve
    
    
+   !> Application of the prolongation
+   subroutine c2f(this,Ac,nc,Af,nf)
+      use messager, only: die
+      implicit none
+      class(bbmg), intent(inout) :: this
+      integer, intent(in) :: nc,nf
+      real(WP), dimension(this%lvl(nc)%imino_:,this%lvl(nc)%jmino_:,this%lvl(nc)%kmino_:), intent(in ) :: Ac
+      real(WP), dimension(this%lvl(nf)%imino_:,this%lvl(nf)%jmino_:,this%lvl(nf)%kmino_:), intent(out) :: Af
+      integer :: fi,fj,fk
+      integer :: ci,cj,ck
+      ! Check levels
+      if (nc.ne.nf+1) call die('[bbmg c2f] Grid levels are incompatible with prolongation')
+      ! Apply prolongation
+      do fk=this%lvl(nf)%kmin_,this%lvl(nf)%kmax_
+         do fj=this%lvl(nf)%jmin_,this%lvl(nf)%jmax_
+            do fi=this%lvl(nf)%imin_,this%lvl(nf)%imax_
+               ci=(fi+1)/2; cj=(fj+1)/2; ck=(fk+1)/2
+               Af(fi,fj,fk)=sum(this%lvl(nf)%c2f(:,:,:,fi,fj,fk)*Ac(ci:ci+1,cj:cj+1,ck:ck+1))
+            end do
+         end do
+      end do
+      ! Synchronize vector
+      call this%sync(Af,nf)
+   end subroutine c2f
+   
+   
+   !> Application of the restriction
+   subroutine f2c(this,Af,nf,Ac,nc)
+      use messager, only: die
+      implicit none
+      class(bbmg), intent(inout) :: this
+      integer, intent(in) :: nf,nc
+      real(WP), dimension(this%lvl(nf)%imino_:,this%lvl(nf)%jmino_:,this%lvl(nf)%kmino_:), intent(in ) :: Af
+      real(WP), dimension(this%lvl(nc)%imino_:,this%lvl(nc)%jmino_:,this%lvl(nc)%kmino_:), intent(out) :: Ac
+      integer :: fi,fj,fk
+      integer :: ci,cj,ck
+      ! Check levels
+      if (nc.ne.nf+1) call die('[bbmg f2c] Grid levels are incompatible with restriction')
+      ! Apply restriction
+      do ck=this%lvl(nc)%kmin_,this%lvl(nc)%kmax_
+         do cj=this%lvl(nc)%jmin_,this%lvl(nc)%jmax_
+            do ci=this%lvl(nc)%imin_,this%lvl(nc)%imax_
+               fi=2*ci-1; fj=2*cj-1; fk=2*ck-1
+               Ac(ci,cj,ck)=sum(this%lvl(nc)%f2c(:,:,:,ci,cj,ck)*Af(fi-1:fi+1,fj-1:fj+1,fk-1:fk+1))
+            end do
+         end do
+      end do
+      ! Synchronize vector
+      call this%sync(Ac,nc)
+   end subroutine f2c
+   
+   
+   !> Get the residual
+   subroutine get_residual(this,n)
+      implicit none
+      class(bbmg), intent(inout) :: this
+      integer, intent(in) :: n
+      integer :: i,j,k
+      do k=this%lvl(n)%kmin_,this%lvl(n)%kmax_
+         do j=this%lvl(n)%jmin_,this%lvl(n)%jmax_
+            do i=this%lvl(n)%imin_,this%lvl(n)%imax_
+               this%lvl(n)%r(i,j,k)=this%lvl(n)%f(i,j,k)-sum(this%lvl(n)%opr(:,:,:,i,j,k)*this%lvl(n)%v(i-1:i+1,j-1:j+1,k-1:k+1))
+            end do
+         end do
+      end do
+      call this%sync(this%lvl(n)%r,n)
+   end subroutine get_residual
+   
+   
+   !> Relax the problem with an 8 color Gauss-Seidel
+   subroutine relax(this,A,B,n,dir)
+      use messager, only: die
+      implicit none
+      class(bbmg), intent(inout) :: this
+      integer, intent(in) :: n,dir
+      real(WP), dimension(this%lvl(n)%imino_:,this%lvl(n)%jmino_:,this%lvl(n)%kmino_:), intent(out) :: A
+      real(WP), dimension(this%lvl(n)%imino_:,this%lvl(n)%jmino_:,this%lvl(n)%kmino_:), intent(in ) :: B
+      integer :: col,colmin,colmax,coldir,i,j,k
+      ! Choose sweep direction
+      select case (dir)
+      case (+1)
+         ! Positive sweep
+         colmin=1
+         colmax=8
+         coldir=+1
+      case (-1)
+         ! Negative sweep
+         colmin=8
+         colmax=1
+         coldir=-1
+      case default
+         call die('[bbmg relax] GS sweep direction unknown')
+      end select
+      ! Loop over colors
+      do col=colmin,colmax,coldir
+         ! Loop over domain
+         do k=this%lvl(n)%kmin_+mod((col-1)/4,2),this%lvl(n)%kmax_,2
+            do j=this%lvl(n)%jmin_+mod((col-1)/2,2),this%lvl(n)%jmax_,2
+               do i=this%lvl(n)%imin_+mod((col-1)/1,2),this%lvl(n)%imax_,2
+                  ! Gauss-Seidel step
+                  A(i,j,k)=0.0_WP
+                  A(i,j,k)=sum(this%lvl(n)%opr(:,:,:,i,j,k)*A(i-1:i+1,j-1:j+1,k-1:k+1))
+                  A(i,j,k)=(B(i,j,k)-A(i,j,k))/(this%lvl(n)%opr(0,0,0,i,j,k)+epsilon(1.0_WP))
+               end do
+            end do
+         end do
+         ! Communicate solution
+         call this%sync(A,n)
+      end do
+   end subroutine relax
+   
+   
+   !> Solve directly the problem at the final level
+   subroutine direct_solve(this)
+      use parallel, only: MPI_REAL_WP
+      implicit none
+      class(bbmg), intent(inout) :: this
+      integer :: i,j,k,ind,ierr
+      real(WP) :: buf
+      ! Zero out my RHS
+      this%myrhs=0.0_WP
+      ! Loop over coarse domain
+      do k=this%lvl(this%nlvl)%kmin_,this%lvl(this%nlvl)%kmax_
+         do j=this%lvl(this%nlvl)%jmin_,this%lvl(this%nlvl)%jmax_
+            do i=this%lvl(this%nlvl)%imin_,this%lvl(this%nlvl)%imax_
+               ! Use lexicographic ordering
+               ind=i+(j-1)*this%lvl(this%nlvl)%nx+(k-1)*this%lvl(this%nlvl)%nx*this%lvl(this%nlvl)%ny
+               ! Set RHS entry
+               this%myrhs(ind)=this%lvl(this%nlvl)%f(i,j,k)
+            end do
+         end do
+      end do
+      ! Gather RHS on all processors
+      call MPI_allreduce(this%myrhs,this%rhs,this%np,MPI_REAL_WP,MPI_SUM,this%comm,ierr)
+      ! Run direct solver
+      this%myOP=this%OP
+      call DGESV(this%np,1,this%myOP,this%np,this%piv,this%rhs,this%np,ierr)
+      ! Scatter solution
+      do k=this%lvl(this%nlvl)%kmin_,this%lvl(this%nlvl)%kmax_
+         do j=this%lvl(this%nlvl)%jmin_,this%lvl(this%nlvl)%jmax_
+            do i=this%lvl(this%nlvl)%imin_,this%lvl(this%nlvl)%imax_
+               ! Use lexicographic ordering
+               ind=i+(j-1)*this%lvl(this%nlvl)%nx+(k-1)*this%lvl(this%nlvl)%nx*this%lvl(this%nlvl)%ny
+               ! Put solution back
+               this%lvl(this%nlvl)%v(i,j,k)=this%rhs(ind)
+            end do
+         end do
+      end do
+      ! Synchronize solution
+      call this%sync(this%lvl(this%nlvl)%v,this%nlvl)
+   end subroutine direct_solve
+   
+   
    !> Update of the operators across all levels
    !> This routine assumes that the level(1) opr has been populated in the interior
-   subroutine update_operator(this)
+   subroutine update(this)
       use messager, only: die
       implicit none
       class(bbmg), intent(inout) :: this
@@ -594,7 +758,7 @@ contains
             end do
          end do
       end do
-      call this%msync(A=this%lvl(1)%opr,n=1)
+      call this%sync(this%lvl(1)%opr,1)
       ! Loop over levels
       do n=2,this%nlvl
          ! Recompute prolongation
@@ -604,9 +768,9 @@ contains
          ! Recompute operator
          call this%recompute_operator(n)
       end do
-      ! Prepare direct solver
-      !call this%recompute_direct_operator
-   end subroutine update_operator
+      ! Recompute direct problem
+      call this%recompute_direct
+   end subroutine update
    
    
    !> Recompute prolongation
@@ -840,7 +1004,7 @@ contains
          end do
       end do
       ! Synchronize prolongation
-      call this%msync(this%lvl(n)%c2f,n)
+      call this%sync(this%lvl(n)%c2f,n)
    end subroutine recompute_prolongation
    
    
@@ -874,7 +1038,7 @@ contains
          end do
       end do
       ! Synchronize restriction
-      call this%msync(this%lvl(n)%f2c,n)
+      call this%sync(this%lvl(n)%f2c,n)
    end subroutine recompute_restriction
    
    
@@ -917,7 +1081,7 @@ contains
          end do
       end do
       ! Synchronize operator
-      call this%msync(this%lvl(n-1)%oprc2f,n-1)
+      call this%sync(this%lvl(n-1)%oprc2f,n-1)
       ! Zero out operator
       this%lvl(n)%opr=0.0_WP
       ! Loop over coarse cells
@@ -946,54 +1110,90 @@ contains
          end do
       end do
       ! Synchronize operator
-      call this%msync(this%lvl(n)%opr,n)
+      call this%sync(this%lvl(n)%opr,n)
    end subroutine recompute_operator
    
    
-   !> Solve the linear system using RBGS
-   subroutine smooth_rbgs(this)
+   ! Recompute direct problem
+   subroutine recompute_direct(this)
+      use parallel, only: MPI_REAL_WP
       implicit none
       class(bbmg), intent(inout) :: this
-      ! integer :: i,j,k,col,st
-      ! integer :: colmin,colmax,coldir
-      ! real(WP) :: val
-      ! ! Reset iteration and error
-      ! this%it=0
-      ! this%rerr=huge(1.0_WP)
-      ! this%aerr=huge(1.0_WP)
-      ! ! Loop until done
-      ! do while (this%it.lt.this%maxit.and.this%rerr.ge.this%rcvg.and.this%aerr.ge.this%acvg)
-      !    ! Increment counter
-      !    this%it=this%it+1
-      !    ! Alternate sweep direction
-      !    if (mod(this%it,2).eq.0) then
-      !       colmin=8; colmax=1; coldir=-1 !< Negative sweep
-      !    else
-      !       colmin=1; colmax=8; coldir=+1 !< Positive sweep
-      !    end if
-      !    ! Loop over colors
-      !    do col=colmin,colmax,coldir
-      !       ! Loop over domain
-      !       do k=this%cfg%kmin_+mod((col-1)/4,2),this%cfg%kmax_,2
-      !          do j=this%cfg%jmin_+mod((col-1)/2,2),this%cfg%jmax_,2
-      !             do i=this%cfg%imin_+mod((col-1)/1,2),this%cfg%imax_,2
-      !                ! Gauss-Seidel step
-      !                if (abs(this%opr(1,i,j,k)).gt.0.0_WP) then
-      !                   val=this%rhs(i,j,k)
-      !                   do st=2,this%nst
-      !                      val=val-this%opr(st,i,j,k)*this%sol(i+this%stc(st,1),j+this%stc(st,2),k+this%stc(st,3))
-      !                   end do
-      !                   this%sol(i,j,k)=val/this%opr(1,i,j,k)
-      !                end if
-      !             end do
-      !          end do
-      !       end do
-      !       ! Communicate solution
-      !       call this%cfg%sync(this%sol)
-      !    end do
-      ! end do
-   end subroutine smooth_rbgs
-   
+      integer :: i1,j1,k1,ind1
+      integer :: i2,j2,k2,ind2
+      integer :: si,sj,sk,ierr
+      ! Reset problem size based on value of nlvl
+      this%np=this%lvl(this%nlvl)%ncell
+      ! Deallocate data
+      if (allocated(this%piv  )) deallocate(this%piv  )
+      if (allocated(this%myrhs)) deallocate(this%myrhs)
+      if (allocated(this%rhs  )) deallocate(this%rhs  )
+      if (allocated(this%myOP )) deallocate(this%myOP )
+      if (allocated(this%OP   )) deallocate(this%OP   )
+      ! Reallocate at the right size
+      allocate(this%piv(this%np))
+      allocate(this%myrhs(this%np))
+      allocate(this%rhs(this%np))
+      allocate(this%myOP(this%np,this%np))
+      allocate(this%OP(this%np,this%np))
+      ! Zero operator
+      this%myOP=0.0_WP
+      ! Loop over coarse domain
+      do k1=this%lvl(this%nlvl)%kmin_,this%lvl(this%nlvl)%kmax_
+         do j1=this%lvl(this%nlvl)%jmin_,this%lvl(this%nlvl)%jmax_
+            do i1=this%lvl(this%nlvl)%imin_,this%lvl(this%nlvl)%imax_
+               ! Use lexicographic ordering
+               ind1=i1+(j1-1)*this%lvl(this%nlvl)%nx+(k1-1)*this%lvl(this%nlvl)%nx*this%lvl(this%nlvl)%ny
+               ! Loop over operator stencil
+               kloop: do sk=-1,+1
+                  ! Update index
+                  k2=k1+sk
+                  ! Handle periodicity
+                  if (k2.eq.this%lvl(this%nlvl)%kmaxo) then
+                     if (.not.this%zper) cycle kloop
+                     k2=this%lvl(this%nlvl)%kmin
+                  end if
+                  if (k2.eq.this%lvl(this%nlvl)%kmino) then
+                     if (.not.this%zper) cycle kloop
+                     k2=this%lvl(this%nlvl)%kmax
+                  end if
+                  jloop: do sj=-1,+1
+                     ! Update index
+                     j2=j1+sj
+                     ! Handle periodicity
+                     if (j2.eq.this%lvl(this%nlvl)%jmaxo) then
+                        if (.not.this%yper) cycle jloop
+                        j2=this%lvl(this%nlvl)%jmin
+                     end if
+                     if (j2.eq.this%lvl(this%nlvl)%jmino) then
+                        if (.not.this%yper) cycle jloop
+                        j2=this%lvl(this%nlvl)%jmax
+                     end if
+                     iloop: do si=-1,+1
+                        ! Update index
+                        i2=i1+si
+                        ! Handle periodicity
+                        if (i2.eq.this%lvl(this%nlvl)%imaxo) then
+                           if (.not.this%xper) cycle iloop
+                           i2=this%lvl(this%nlvl)%imin
+                        end if
+                        if (i2.eq.this%lvl(this%nlvl)%imino) then
+                           if (.not.this%xper) cycle iloop
+                           i2=this%lvl(this%nlvl)%imax
+                        end if
+                        ! Use lexicographic ordering
+                        ind2=i2+(j2-1)*this%lvl(this%nlvl)%nx+(k2-1)*this%lvl(this%nlvl)%nx*this%lvl(this%nlvl)%ny
+                        ! Set OP entry
+                        this%myOP(ind1,ind2)=this%myOP(ind1,ind2)+this%lvl(this%nlvl)%opr(si,sj,sk,i1,j1,k1)
+                     end do iloop
+                  end do jloop
+               end do kloop
+            end do
+         end do
+      end do
+      ! Gather operator
+      call MPI_allreduce(this%myOP,this%OP,this%np*this%np,MPI_REAL_WP,MPI_SUM,this%comm,ierr)
+   end subroutine recompute_direct
    
    !> Synchronization of overlap cells for a vector
    subroutine vsync(this,A,n)
