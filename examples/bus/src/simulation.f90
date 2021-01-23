@@ -41,8 +41,8 @@ contains
       if (pg%x(i) .gt.bus%l_bus-bus%x_kneecurb.and.&
       &   pg%x(i+1).lt.bus%l_bus-bus%x_kneecurb+bus%w_vvent.and.&
       &   pg%y(j) .gt.bus%y_vvent.and.pg%y(j+1).lt.bus%y_vvent+bus%h_vvent.and.&
-      &   pg%z(k) .gt.bus%w_bus-bus%w_seatcol-10.0_WP*epsilon(1.0_WP).and.&
-      &   pg%z(k) .lt.bus%w_bus-bus%w_seatcol+10.0_WP*epsilon(1.0_WP)) isIn=.true.
+      &   pg%z(k) .gt.bus%w_bus-bus%w_seatcol-100.0_WP*epsilon(1.0_WP).and.&
+      &   pg%z(k) .lt.bus%w_bus-bus%w_seatcol+100.0_WP*epsilon(1.0_WP)) isIn=.true.
    end function vertical_vent
    
    !> Localizes the 3 floor vents near the front of the bus (facing +y)
@@ -143,10 +143,10 @@ contains
       &   pg%x(i+1).lt.bus%x_vinrack+0.5_WP*bus%l_vinrack+100.0_WP*epsilon(1.0_WP).and.&
       &   pg%y(j)  .gt.bus%h_rack-10.0_WP*epsilon(1.0_WP).and.&
       &   pg%y(j)  .lt.bus%h_rack+10.0_WP*epsilon(1.0_WP).and.&
-      & ((pg%z(k)  .gt.-10.0_WP*epsilon(1.0_WP).and.&
-      &   pg%z(k+1).lt. 10.0_WP*epsilon(1.0_WP)+bus%w_vinrack).or.&
-      &  (pg%z(k)  .gt.bus%w_bus-bus%w_vinrack-10.0_WP*epsilon(1.0_WP).and.&
-      &   pg%z(k+1).lt.bus%w_bus+10.0_WP*epsilon(1.0_WP)))) isIn=.true.
+      & ((pg%z(k)  .gt.bus%min_length/real(bus%gres,WP)-10.0_WP*epsilon(1.0_WP).and.&
+      &   pg%z(k+1).lt.bus%min_length/real(bus%gres,WP)+10.0_WP*epsilon(1.0_WP)+bus%w_vinrack).or.&
+      &  (pg%z(k)  .gt.bus%w_bus-bus%w_vinrack-bus%min_length/real(bus%gres,WP)-10.0_WP*epsilon(1.0_WP).and.&
+      &   pg%z(k+1).lt.bus%w_bus-bus%min_length/real(bus%gres,WP)+10.0_WP*epsilon(1.0_WP)))) isIn=.true.
    end function rackintake_vents
    
    !> Localizes the outlet vents of the parcel rack (facing -y)
