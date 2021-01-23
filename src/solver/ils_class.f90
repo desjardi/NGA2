@@ -236,7 +236,7 @@ contains
          this%bbox%relax_pre =2
          this%bbox%relax_post=2
          this%bbox%use_direct_solve=.true.
-         this%bbox%ncell_coarsest=200
+         this%bbox%ncell_coarsest=300
          this%bbox%use_krylov=.false.
          ! Initialize solver
          call this%bbox%initialize()
@@ -247,7 +247,7 @@ contains
          this%bbox%relax_pre =2
          this%bbox%relax_post=2
          this%bbox%use_direct_solve=.true.
-         this%bbox%ncell_coarsest=200
+         this%bbox%ncell_coarsest=300
          this%bbox%use_krylov=.true.
          ! Initialize solver
          call this%bbox%initialize()
