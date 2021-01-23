@@ -42,7 +42,7 @@ contains
       &   pg%x(i+1).lt.bus%l_bus-bus%x_kneecurb+bus%w_vvent.and.&
       &   pg%y(j) .gt.bus%y_vvent.and.pg%y(j+1).lt.bus%y_vvent+bus%h_vvent.and.&
       &   pg%z(k) .gt.bus%w_bus-bus%w_seatcol-10.0_WP*epsilon(1.0_WP).and.&
-      &   pg%z(k-1).lt.bus%w_bus-bus%w_seatcol-10.0_WP*epsilon(1.0_WP)) isIn=.true.
+      &   pg%z(k) .lt.bus%w_bus-bus%w_seatcol+10.0_WP*epsilon(1.0_WP)) isIn=.true.
    end function vertical_vent
    
    !> Localizes the 3 floor vents near the front of the bus (facing +y)
@@ -91,7 +91,7 @@ contains
       &   pg%x(i+1).lt.bus%x_seatcurb+2.0_WP*bus%l_seatrow+bus%l_fventcurb.and.&
       &   pg%y(j)  .gt.-10.0_WP*epsilon(1.0_WP).and.pg%y(j+1).lt.bus%h_fventback+10.0_WP*epsilon(1.0_WP).and.&
       &   pg%z(k)  .gt.bus%w_bus-bus%z_fventback-10.0_WP*epsilon(1.0_WP).and.&
-      &   pg%z(k-1).lt.bus%w_bus-bus%z_fventback-10.0_WP*epsilon(1.0_WP)) isIn=.true.
+      &   pg%z(k)  .lt.bus%w_bus-bus%z_fventback+10.0_WP*epsilon(1.0_WP)) isIn=.true.
    end function back_floor_vent_curb
    
    !> Localizes the vent(s) at the lavatory (facing +x)
@@ -142,7 +142,7 @@ contains
       if (pg%x(i)  .gt.bus%x_vinrack-0.5_WP*bus%l_vinrack-100.0_WP*epsilon(1.0_WP).and.&
       &   pg%x(i+1).lt.bus%x_vinrack+0.5_WP*bus%l_vinrack+100.0_WP*epsilon(1.0_WP).and.&
       &   pg%y(j)  .gt.bus%h_rack-10.0_WP*epsilon(1.0_WP).and.&
-      &   pg%y(j-1).lt.bus%h_rack-10.0_WP*epsilon(1.0_WP).and.&
+      &   pg%y(j)  .lt.bus%h_rack+10.0_WP*epsilon(1.0_WP).and.&
       & ((pg%z(k)  .gt.-10.0_WP*epsilon(1.0_WP).and.&
       &   pg%z(k+1).lt. 10.0_WP*epsilon(1.0_WP)+bus%w_vinrack).or.&
       &  (pg%z(k)  .gt.bus%w_bus-bus%w_vinrack-10.0_WP*epsilon(1.0_WP).and.&
@@ -163,7 +163,7 @@ contains
       adist = real(mod(nint(bus%l_seatrow/bus%i2m),nint(bus%min_length/bus%gres/bus%i2m)),WP)*bus%i2m
       ! same y
       if (pg%y(j)  .gt.bus%h_rack-10.0_WP*epsilon(1.0_WP).and.&
-      &   pg%y(j-1).lt.bus%h_rack-10.0_WP*epsilon(1.0_WP)) isIn=.true.
+      &   pg%y(j)  .lt.bus%h_rack+10.0_WP*epsilon(1.0_WP)) isIn=.true.
       ! continue if proper y location
       if (isIn) then; isIn=.false.; else; return
       end if
