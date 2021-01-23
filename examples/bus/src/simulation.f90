@@ -38,10 +38,11 @@ contains
       integer, intent(in) :: i,j,k
       logical :: isIn
       isIn=.false.
-      if (pg%x(i) .gt.bus%l_bus-bus%x_kneecurb-10.0_WP*epsilon(1.0_WP).and.&
-      &   pg%x(i+1).lt.bus%l_bus-bus%x_kneecurb+bus%w_vvent+10.0_WP*epsilon(1.0_WP).and.&
+      if (pg%x(i) .gt.bus%l_bus-bus%x_kneecurb.and.&
+      &   pg%x(i+1).lt.bus%l_bus-bus%x_kneecurb+bus%w_vvent.and.&
       &   pg%y(j) .gt.bus%y_vvent.and.pg%y(j+1).lt.bus%y_vvent+bus%h_vvent.and.&
-      &   pg%z(k) .le.bus%w_bus-bus%w_seatcol.and.pg%z(k+1).gt.bus%w_bus-bus%w_seatcol) isIn=.true.
+      &   pg%z(k) .gt.bus%w_bus-bus%w_seatcol-10.0_WP*epsilon(1.0_WP).and.&
+      &   pg%z(k-1).lt.bus%w_bus-bus%w_seatcol-10.0_WP*epsilon(1.0_WP)) isIn=.true.
    end function vertical_vent
    
    !> Localizes the 3 floor vents near the front of the bus (facing +y)
@@ -74,8 +75,8 @@ contains
       isIn=.false.
       if (pg%x(i)  .gt.bus%x_seatdriver.and.pg%x(i+1).lt.bus%x_seatdriver+bus%l_fventdriver.and.&
       &   pg%y(j)  .gt.-10.0_WP*epsilon(1.0_WP).and.pg%y(j+1).lt.bus%h_fventback+10.0_WP*epsilon(1.0_WP).and.&
-      &   pg%z(k)  .le.bus%z_fventback+10.0_WP*epsilon(1.0_WP).and.&
-      &   pg%z(k+1).gt.bus%z_fventback+10.0_WP*epsilon(1.0_WP)) isIn=.true.
+      &   pg%z(k+1).gt.bus%z_fventback+10.0_WP*epsilon(1.0_WP).and.&
+      &   pg%z(k  ).lt.bus%z_fventback+10.0_WP*epsilon(1.0_WP)) isIn=.true.
    end function back_floor_vent_driver
    
    !> Localizes the back floor vent curb side (facing +y)
@@ -89,8 +90,8 @@ contains
       if (pg%x(i)  .gt.bus%x_seatcurb+2.0_WP*bus%l_seatrow.and.&
       &   pg%x(i+1).lt.bus%x_seatcurb+2.0_WP*bus%l_seatrow+bus%l_fventcurb.and.&
       &   pg%y(j)  .gt.-10.0_WP*epsilon(1.0_WP).and.pg%y(j+1).lt.bus%h_fventback+10.0_WP*epsilon(1.0_WP).and.&
-      &   pg%z(k)  .le.bus%w_bus-bus%z_fventback+10.0_WP*epsilon(1.0_WP).and.&
-      &   pg%z(k+1).gt.bus%w_bus-bus%z_fventback+10.0_WP*epsilon(1.0_WP)) isIn=.true.
+      &   pg%z(k)  .gt.bus%w_bus-bus%z_fventback-10.0_WP*epsilon(1.0_WP).and.&
+      &   pg%z(k-1).lt.bus%w_bus-bus%z_fventback-10.0_WP*epsilon(1.0_WP)) isIn=.true.
    end function back_floor_vent_curb
    
    !> Localizes the vent(s) at the lavatory (facing +x)
@@ -140,7 +141,8 @@ contains
       ! same for x and y, two regions for z
       if (pg%x(i)  .gt.bus%x_vinrack-0.5_WP*bus%l_vinrack-100.0_WP*epsilon(1.0_WP).and.&
       &   pg%x(i+1).lt.bus%x_vinrack+0.5_WP*bus%l_vinrack+100.0_WP*epsilon(1.0_WP).and.&
-      &   pg%y(j)  .le.bus%h_rack.and.pg%y(j+1).gt.bus%h_rack.and.&
+      &   pg%y(j)  .gt.bus%h_rack-10.0_WP*epsilon(1.0_WP).and.&
+      &   pg%y(j-1).lt.bus%h_rack-10.0_WP*epsilon(1.0_WP).and.&
       & ((pg%z(k)  .gt.-10.0_WP*epsilon(1.0_WP).and.&
       &   pg%z(k+1).lt. 10.0_WP*epsilon(1.0_WP)+bus%w_vinrack).or.&
       &  (pg%z(k)  .gt.bus%w_bus-bus%w_vinrack-10.0_WP*epsilon(1.0_WP).and.&
@@ -160,7 +162,8 @@ contains
       ! get factor to adjust spacing according to mesh
       adist = real(mod(nint(bus%l_seatrow/bus%i2m),nint(bus%min_length/bus%gres/bus%i2m)),WP)*bus%i2m
       ! same y
-      if (pg%y(j)  .le.bus%h_rack.and.pg%y(j+1).gt.bus%h_rack) isIn=.true.
+      if (pg%y(j)  .gt.bus%h_rack-10.0_WP*epsilon(1.0_WP).and.&
+      &   pg%y(j-1).lt.bus%h_rack-10.0_WP*epsilon(1.0_WP)) isIn=.true.
       ! continue if proper y location
       if (isIn) then; isIn=.false.; else; return
       end if

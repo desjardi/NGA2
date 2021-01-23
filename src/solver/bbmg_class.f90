@@ -777,7 +777,6 @@ contains
       implicit none
       class(bbmg), intent(inout) :: this
       integer :: i,j,k,ind,ierr
-      real(WP) :: buf
       ! Zero out my RHS
       this%myrhs=0.0_WP
       ! Loop over coarse domain
@@ -815,7 +814,6 @@ contains
    !> Update of the operators across all levels
    !> This routine assumes that the level(1) opr has been populated in the interior
    subroutine update(this)
-      use messager, only: die
       implicit none
       class(bbmg), intent(inout) :: this
       integer :: n,i,j,k
