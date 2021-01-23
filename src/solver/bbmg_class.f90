@@ -94,16 +94,24 @@ module bbmg_class
       integer  :: relax_pre =1                                        !< Number of pre-sweeps (default is 1)
       integer  :: relax_post=1                                        !< Number of post-sweeps (default is 1)
       integer  :: ncell_coarsest=0                                    !< Coarsest problem size allowed
-      logical  :: use_direct_solve=.false.                            !< Use direct solve at the coarsest level (default is no)
+      logical  :: use_direct_solve=.false.                            !< Use direct solve at the coarsest level (default is false)
+      logical  :: use_krylov=.true.                                   !< Use BBMG as a preconditioner to a CG (default is true)
       
       ! Level data management
       integer :: nlvl                                                 !< Number of multigrid levels created - by default all will be used. This can be reduced by the user.
       type(lvl_data), dimension(:), allocatable :: lvl                !< Entire data at each level
       
+      ! Krylov solver data
+      real(WP), dimension(:,:,:), allocatable :: res,pp,zz,Ap,sol     !< Krylov solver work vectors
+      real(WP) :: alpha,beta,rho1,rho2                                !< Krylov solver coefficients
+      
    contains
       
       procedure :: update                                             !< Operator update (every time the operator changes)
       procedure :: solve                                              !< Solve the linear system
+      procedure :: mgsolve                                            !< Solve the linear system with multigrid
+      procedure :: cgsolve                                            !< Solve the linear system with CG
+      procedure :: initialize                                         !< Initialize the solver
       
       procedure :: recompute_prolongation                             !< Recompute the prolongation at a given level
       procedure :: recompute_restriction                              !< Recompute the restriction at a given level
@@ -563,14 +571,41 @@ contains
    end function bbmg_from_pgrid
    
    
-   !> Solve the linear system iteratively
-   subroutine solve(this)
+   !> Initialize the solver
+   subroutine initialize(this)
       use messager, only: die
       use param,    only: verbose
       use parallel, only: MPI_REAL_WP
       implicit none
       class(bbmg), intent(inout) :: this
-      integer :: n,i,j,k,ierr
+      integer :: i
+      
+      ! Recompute the coarsest level
+      lvl_loop: do i=1,this%nlvl
+         if (this%lvl(i)%ncell.le.this%ncell_coarsest) then
+            this%nlvl=i
+            exit lvl_loop
+         end if
+      end do lvl_loop
+      
+      ! Initialize the CG if needed
+      if (this%use_krylov) then
+         allocate(this%sol(this%lvl(1)%imino_:this%lvl(1)%imaxo_,this%lvl(1)%jmino_:this%lvl(1)%jmaxo_,this%lvl(1)%kmino_:this%lvl(1)%kmaxo_)); this%sol=0.0_WP
+         allocate(this%res(this%lvl(1)%imino_:this%lvl(1)%imaxo_,this%lvl(1)%jmino_:this%lvl(1)%jmaxo_,this%lvl(1)%kmino_:this%lvl(1)%kmaxo_)); this%res=0.0_WP
+         allocate(this%Ap (this%lvl(1)%imino_:this%lvl(1)%imaxo_,this%lvl(1)%jmino_:this%lvl(1)%jmaxo_,this%lvl(1)%kmino_:this%lvl(1)%kmaxo_)); this%Ap =0.0_WP
+         allocate(this%pp (this%lvl(1)%imino_:this%lvl(1)%imaxo_,this%lvl(1)%jmino_:this%lvl(1)%jmaxo_,this%lvl(1)%kmino_:this%lvl(1)%kmaxo_)); this%pp =0.0_WP
+         allocate(this%zz (this%lvl(1)%imino_:this%lvl(1)%imaxo_,this%lvl(1)%jmino_:this%lvl(1)%jmaxo_,this%lvl(1)%kmino_:this%lvl(1)%kmaxo_)); this%zz =0.0_WP
+      end if
+      
+   end subroutine initialize
+   
+   
+   !> Solve the linear system
+   subroutine solve(this)
+      use parallel, only: MPI_REAL_WP
+      implicit none
+      class(bbmg), intent(inout) :: this
+      integer :: i,j,k,ierr
       real(WP) :: maxres
       ! Zero out ghost RHS and initial guess and synchronize them
       do k=this%lvl(1)%kmino_,this%lvl(1)%kmaxo_
@@ -596,6 +631,87 @@ contains
          this%my_ite=0; this%my_res=0.0_WP
          return
       end if
+      if (this%use_krylov) then
+         call this%cgsolve()
+      else
+         call this%mgsolve()
+      end if
+   end subroutine solve
+   
+   
+   !> Solve the linear system iteratively with CG
+   subroutine cgsolve(this)
+      use messager, only: die
+      use param,    only: verbose
+      use parallel, only: MPI_REAL_WP
+      implicit none
+      class(bbmg), intent(inout) :: this
+      integer :: n,i,j,k,ierr
+      real(WP) :: maxres
+      ! Transfer our data to CG
+      this%res=this%lvl(1)%r
+      this%sol=this%lvl(1)%v
+      ! Loop over cycles
+      cycle_loop: do n=1,this%max_ite
+         ! Preconditioner: M.zz=res
+         this%lvl(1)%f=this%res
+         call this%sync(this%lvl(1)%f,1)
+         this%lvl(1)%v=0.0_WP
+         call this%cycle(1)
+         this%zz=this%lvl(1)%v
+         ! (zz.res)
+         this%rho2=this%rho1
+         maxres=sum(this%zz (this%lvl(1)%imin_:this%lvl(1)%imax_,this%lvl(1)%jmin_:this%lvl(1)%jmax_,this%lvl(1)%kmin_:this%lvl(1)%kmax_)*&
+         &          this%res(this%lvl(1)%imin_:this%lvl(1)%imax_,this%lvl(1)%jmin_:this%lvl(1)%jmax_,this%lvl(1)%kmin_:this%lvl(1)%kmax_))
+         call MPI_ALLREDUCE(maxres,this%rho1,1,MPI_REAL_WP,MPI_SUM,this%comm,ierr)
+         ! beta=rho1/rho2
+         if (n.eq.1) then
+            this%beta=0.0_WP
+         else
+            this%beta=this%rho1/this%rho2
+         end if
+         ! pp=zz+beta.pp
+         this%pp=this%zz+this%beta*this%pp
+         ! Ap=A.pp
+         call this%sync(this%pp,1)
+         do k=this%lvl(1)%kmin_,this%lvl(1)%kmax_
+            do j=this%lvl(1)%jmin_,this%lvl(1)%jmax_
+               do i=this%lvl(1)%imin_,this%lvl(1)%imax_
+                  this%Ap(i,j,k)=sum(this%lvl(1)%opr(:,:,:,i,j,k)*this%pp(i-1:i+1,j-1:j+1,k-1:k+1))
+               end do
+            end do
+         end do
+         ! alpha=rho1/(pp.Ap)
+         maxres=sum(this%pp(this%lvl(1)%imin_:this%lvl(1)%imax_,this%lvl(1)%jmin_:this%lvl(1)%jmax_,this%lvl(1)%kmin_:this%lvl(1)%kmax_)*&
+         &          this%Ap(this%lvl(1)%imin_:this%lvl(1)%imax_,this%lvl(1)%jmin_:this%lvl(1)%jmax_,this%lvl(1)%kmin_:this%lvl(1)%kmax_))
+         call MPI_ALLREDUCE(maxres,this%alpha,1,MPI_REAL_WP,MPI_SUM,this%comm,ierr)
+         this%alpha=this%rho1/this%alpha
+         ! sol=sol+alpha.pp
+         this%sol=this%sol+this%alpha*this%pp
+         ! res=res-alpha.Ap
+         this%res=this%res-this%alpha*this%Ap
+         ! Check convergence
+         maxres=maxval(abs(this%res(this%lvl(1)%imin_:this%lvl(1)%imax_,this%lvl(1)%jmin_:this%lvl(1)%jmax_,this%lvl(1)%kmin_:this%lvl(1)%kmax_)))
+         call MPI_ALLREDUCE(maxres,this%my_res,1,MPI_REAL_WP,MPI_MAX,this%comm,ierr)
+         this%my_res=this%my_res/this%my_res0
+         this%my_ite=n
+         ! Check for termination
+         if (this%my_res.le.this%max_res) exit cycle_loop
+      end do cycle_loop
+      ! Put the solution back
+      this%lvl(1)%v=this%sol
+   end subroutine cgsolve
+   
+   
+   !> Solve the linear system iteratively with multigrid
+   subroutine mgsolve(this)
+      use messager, only: die
+      use param,    only: verbose
+      use parallel, only: MPI_REAL_WP
+      implicit none
+      class(bbmg), intent(inout) :: this
+      integer :: n,ierr
+      real(WP) :: maxres
       ! Loop over cycles
       cycle_loop: do n=1,this%max_ite
          ! Perform a multigrid cycle
@@ -609,7 +725,7 @@ contains
          ! Check for termination
          if (this%my_res.le.this%max_res) exit cycle_loop
       end do cycle_loop
-   end subroutine solve
+   end subroutine mgsolve
    
    
    !> Perform a multigrid cycle

@@ -25,6 +25,7 @@ module ils_class
    integer, parameter, public :: bicgstab_amg=10
    integer, parameter, public :: pcg=11
    integer, parameter, public :: bbox=12
+   integer, parameter, public :: pcg_bbox=13
    
    
    ! List of key solver parameters
@@ -173,7 +174,7 @@ contains
       select case (this%method)
       case (rbgs)
          ! Nothing needed
-      case (bbox) ! Initialize a black-box mg solver
+      case (bbox,pcg_bbox) ! Initialize a black-box mg solver
          this%bbox=bbmg(pg=this%cfg,name=trim(this%name),nst=[3,3,3])
       case (amg,pcg_amg,pcg_parasail,gmres,gmres_pilut,gmres_amg,bicgstab_amg,pcg)  ! Initialize a HYPRE IJ enviroment
          ! Allocate and prepare unstructed mapping
@@ -232,6 +233,24 @@ contains
          ! Adjust parameters
          this%bbox%max_ite=this%maxit
          this%bbox%max_res=this%rcvg
+         this%bbox%relax_pre =2
+         this%bbox%relax_post=2
+         this%bbox%use_direct_solve=.true.
+         this%bbox%ncell_coarsest=200
+         this%bbox%use_krylov=.false.
+         ! Initialize solver
+         call this%bbox%initialize()
+      case (pcg_bbox)
+         ! Adjust parameters
+         this%bbox%max_ite=this%maxit
+         this%bbox%max_res=this%rcvg
+         this%bbox%relax_pre =2
+         this%bbox%relax_post=2
+         this%bbox%use_direct_solve=.true.
+         this%bbox%ncell_coarsest=200
+         this%bbox%use_krylov=.true.
+         ! Initialize solver
+         call this%bbox%initialize()
       case (amg)
          ! Create an AMG solver
          call HYPRE_BoomerAMGCreate        (this%hypre_solver,ierr)
@@ -387,7 +406,7 @@ contains
       select case (this%method)
       case (rbgs)
          ! Nothing to do
-      case (bbox)
+      case (bbox,pcg_bbox)
          do k=this%cfg%kmin_,this%cfg%kmax_
             do j=this%cfg%jmin_,this%cfg%jmax_
                do i=this%cfg%imin_,this%cfg%imax_
@@ -482,7 +501,7 @@ contains
       select case (this%method)
       case (rbgs)
          ! Nothing to do
-      case (bbox)
+      case (bbox,pcg_bbox)
          call this%bbox%update()
       case (amg)
          call HYPRE_BoomerAMGSetup  (this%hypre_solver,this%parse_mat,this%parse_rhs,this%parse_sol,ierr)
@@ -518,7 +537,7 @@ contains
       select case (this%method)
       case (rbgs)
          ! Nothing to do
-      case (bbox)
+      case (bbox,pcg_bbox)
          do k=this%cfg%kmin_,this%cfg%kmax_
             do j=this%cfg%jmin_,this%cfg%jmax_
                do i=this%cfg%imin_,this%cfg%imax_
@@ -574,7 +593,7 @@ contains
       select case (this%method)
       case (rbgs)
          call this%solve_rbgs()
-      case (bbox)
+      case (bbox,pcg_bbox)
          call this%bbox%solve()
          this%it  =this%bbox%my_ite
          this%rerr=this%bbox%my_res
@@ -608,7 +627,7 @@ contains
       select case (this%method)
       case (rbgs)
          ! Nothing to do
-      case (bbox)
+      case (bbox,pcg_bbox)
          do k=this%cfg%kmin_,this%cfg%kmax_
             do j=this%cfg%jmin_,this%cfg%jmax_
                do i=this%cfg%imin_,this%cfg%imax_
