@@ -17,9 +17,9 @@ module bbmg_class
       
       ! Global sizes
       integer :: ncell,ncello
-      integer :: nx ,imin ,imax ,nxo ,imino ,imaxo
-      integer :: ny ,jmin ,jmax ,nyo ,jmino ,jmaxo
-      integer :: nz ,kmin ,kmax ,nzo ,kmino ,kmaxo
+      integer :: nx,imin,imax,nxo,imino,imaxo
+      integer :: ny,jmin,jmax,nyo,jmino,jmaxo
+      integer :: nz,kmin,kmax,nzo,kmino,kmaxo
       
       ! Local sizes
       integer :: ncell_,ncello_
@@ -82,23 +82,26 @@ module bbmg_class
       real(WP), dimension(:),   allocatable :: myrhs,rhs              !< Local and assembled RHS
       real(WP), dimension(:,:), allocatable :: myOP,OP                !< Local and assembled operator
       
-      ! Solver parameters
-      logical  :: use_pcg                                             !< Use BBMG as a preconditioner to a PCG or directly
+      ! Solver information
+      real(WP) :: my_res0                                             !< Initial L_infty norm of the residual
+      real(WP) :: my_res                                              !< Current L_infty norm of the residual
+      integer  :: my_ite                                              !< Current number of iterations
+      
+      ! Configurable solver parameters
       real(WP) :: max_res                                             !< Maximum residual - the solver will attempt to converge below that value
       integer  :: max_ite                                             !< Maximum number of iterations - the solver will not got past that value
-      integer  :: cycle=1                                             !< Cycle type: 1=V-cycle (default), 2=W-cycle, ...
+      integer  :: ncycle=1                                            !< Cycle type: 1=V-cycle (default), 2=W-cycle, ...
       integer  :: relax_pre =1                                        !< Number of pre-sweeps (default is 1)
       integer  :: relax_post=1                                        !< Number of post-sweeps (default is 1)
-      integer  :: ncell_direct=0                                      !< Coarse problem size below which a direct solver is employed (default is 0, i.e., no direct solve)
+      integer  :: ncell_coarsest=0                                    !< Coarsest problem size allowed
+      logical  :: use_direct_solve=.false.                            !< Use direct solve at the coarsest level (default is no)
       
       ! Level data management
       integer :: nlvl                                                 !< Number of multigrid levels created - by default all will be used. This can be reduced by the user.
       type(lvl_data), dimension(:), allocatable :: lvl                !< Entire data at each level
       
    contains
-      !procedure :: print_cvg                                          !< Print BBMG convergence history
-      !procedure :: log_cvg                                            !< Log BBMG convergence history
-      procedure :: init_solver                                        !< Solver initialization (at start-up)
+      
       procedure :: update                                             !< Operator update (every time the operator changes)
       procedure :: solve                                              !< Solve the linear system
       
@@ -112,6 +115,7 @@ module bbmg_class
       procedure :: f2c                                                !< Restrict from a level to the next coarser level
       procedure :: relax                                              !< Relax the problem at a given level
       procedure :: direct_solve                                       !< Solve directly the problem at the final level
+      procedure :: cycle                                              !< Perform a multigrid cycle
       
       generic :: sync=>vsync,msync                                    !< Synchronization at boundaries
       procedure, private :: vsync                                     !< Synchronize boundaries for a vector at a given level
@@ -320,9 +324,9 @@ contains
             self%lvl(i)%ncell_ =max(self%lvl(i)%nx_ ,0)*max(self%lvl(i)%ny_ ,0)*max(self%lvl(i)%nz_ ,0)
             self%lvl(i)%ncello_=max(self%lvl(i)%nxo_,0)*max(self%lvl(i)%nyo_,0)*max(self%lvl(i)%nzo_,0)
          end do
-         ! Find direct solve level
+         ! Find coarsest level
          lvl_loop: do i=1,self%nlvl
-            if (self%lvl(i)%ncell.le.self%ncell_direct) then
+            if (self%lvl(i)%ncell.le.self%ncell_coarsest) then
                self%nlvl=i
                exit lvl_loop
             end if
@@ -559,30 +563,101 @@ contains
    end function bbmg_from_pgrid
    
    
-   !> Initialization of BBMG object - this sets the solver parameters
-   subroutine init_solver(this)
-      use messager, only: die
-      implicit none
-      class(bbmg), intent(inout) :: this
-      
-      
-      
-   end subroutine init_solver
-   
-   
    !> Solve the linear system iteratively
    subroutine solve(this)
       use messager, only: die
       use param,    only: verbose
+      use parallel, only: MPI_REAL_WP
       implicit none
       class(bbmg), intent(inout) :: this
-      
-      
-      ! If verbose run, log and or print cvg history
-      !if (verbose.gt.2) call this%print_cvg
-      
+      integer :: n,i,j,k,ierr
+      real(WP) :: maxres
+      ! Zero out ghost RHS and initial guess and synchronize them
+      do k=this%lvl(1)%kmino_,this%lvl(1)%kmaxo_
+         do j=this%lvl(1)%jmino_,this%lvl(1)%jmaxo_
+            do i=this%lvl(1)%imino_,this%lvl(1)%imaxo_
+               ! Interior cells should have been properly set already
+               if (i.ge.this%lvl(1)%imin_.and.i.le.this%lvl(1)%imax_.and. &
+               &   j.ge.this%lvl(1)%jmin_.and.j.le.this%lvl(1)%jmax_.and. &
+               &   k.ge.this%lvl(1)%kmin_.and.k.le.this%lvl(1)%kmax_) cycle
+               this%lvl(1)%f(i,j,k)=0.0_WP
+               this%lvl(1)%v(i,j,k)=0.0_WP
+            end do
+         end do
+      end do
+      call this%sync(this%lvl(1)%f,1)
+      call this%sync(this%lvl(1)%v,1)
+      ! Store initial residual
+      call this%get_residual(1)
+      maxres=maxval(abs(this%lvl(1)%r(this%lvl(1)%imin_:this%lvl(1)%imax_,this%lvl(1)%jmin_:this%lvl(1)%jmax_,this%lvl(1)%kmin_:this%lvl(1)%kmax_)))
+      call MPI_ALLREDUCE(maxres,this%my_res0,1,MPI_REAL_WP,MPI_MAX,this%comm,ierr)
+      ! Handle zero residual case
+      if (this%my_res0.eq.0.0_WP) then
+         this%my_ite=0; this%my_res=0.0_WP
+         return
+      end if
+      ! Loop over cycles
+      cycle_loop: do n=1,this%max_ite
+         ! Perform a multigrid cycle
+         call this%cycle(1)
+         ! Check convergence
+         call this%get_residual(1)
+         maxres=maxval(abs(this%lvl(1)%r(this%lvl(1)%imin_:this%lvl(1)%imax_,this%lvl(1)%jmin_:this%lvl(1)%jmax_,this%lvl(1)%kmin_:this%lvl(1)%kmax_)))
+         call MPI_ALLREDUCE(maxres,this%my_res,1,MPI_REAL_WP,MPI_MAX,this%comm,ierr)
+         this%my_res=this%my_res/this%my_res0
+         this%my_ite=n
+         ! Check for termination
+         if (this%my_res.le.this%max_res) exit cycle_loop
+      end do cycle_loop
    end subroutine solve
    
+   
+   !> Perform a multigrid cycle
+   recursive subroutine cycle(this,n)
+      use messager, only: die
+      implicit none
+      class(bbmg), intent(inout) :: this
+      integer, intent(in) :: n
+      integer :: i,dir
+      ! Zero out error
+      if (n.gt.1) this%lvl(n)%v=0.0_WP
+      ! Treat last level
+      if (n.eq.this%nlvl) then
+         if (this%use_direct_solve) then
+            call this%direct_solve()
+         else
+            dir=1
+            do i=1,this%relax_pre+this%relax_post
+               call this%relax(this%lvl(n)%v,this%lvl(n)%f,n,dir)
+               dir=-dir
+            end do
+         end if
+         return
+      end if
+      ! Pre-relaxation
+      dir=1
+      do i=1,this%relax_pre
+         call this%relax(this%lvl(n)%v,this%lvl(n)%f,n,dir)
+         dir=-dir
+      end do
+      ! Compute residual
+      call this%get_residual(n)
+      ! Restrict residual
+      call this%f2c(this%lvl(n)%r,n,this%lvl(n+1)%f,n+1)
+      ! Cycle
+      do i=1,this%ncycle
+         call this%cycle(n+1)
+      end do
+      ! Prolongate solution
+      call this%c2f(this%lvl(n+1)%v,n+1,this%lvl(n)%r,n)
+      ! Correct solution
+      this%lvl(n)%v=this%lvl(n)%v+this%lvl(n)%r
+      ! Post-relaxation
+      do i=1,this%relax_post
+         call this%relax(this%lvl(n)%v,this%lvl(n)%f,n,dir)
+         dir=-dir
+      end do
+   end subroutine cycle
    
    !> Application of the prolongation
    subroutine c2f(this,Ac,nc,Af,nf)
@@ -1534,46 +1609,5 @@ contains
       deallocate(buf1,buf2,request)
    end subroutine msync
    
-   
-   ! !> Log ILS info
-   ! subroutine ils_log(this)
-   !    use string,   only: str_long
-   !    use messager, only: log
-   !    implicit none
-   !    class(ils), intent(in) :: this
-   !    character(len=str_long) :: message
-   !    if (this%cfg%amRoot) then
-   !       write(message,'("Iterative Linear Solver [",a,"] for config [",a,"]")') trim(this%name),trim(this%cfg%name); call log(message)
-   !       write(message,'(" >     method = ",i0)') this%method; call log(message)
-   !       write(message,'(" >   it/maxit = ",i0,"/",i0)') this%it,this%maxit; call log(message)
-   !       write(message,'(" >  aerr/acvg = ",es12.5,"/",es12.5)') this%aerr,this%acvg; call log(message)
-   !       write(message,'(" >  rerr/rcvg = ",es12.5,"/",es12.5)') this%rerr,this%rcvg; call log(message)
-   !    end if
-   ! end subroutine ils_log
-   !
-   !
-   ! !> Print ILS info to the screen
-   ! subroutine ils_print(this)
-   !    use, intrinsic :: iso_fortran_env, only: output_unit
-   !    implicit none
-   !    class(ils), intent(in) :: this
-   !    if (this%cfg%amRoot) then
-   !       write(output_unit,'("Iterative Linear Solver [",a,"] for config [",a,"]")') trim(this%name),trim(this%cfg%name)
-   !       write(output_unit,'(" >     method = ",i0)') this%method
-   !       write(output_unit,'(" >   it/maxit = ",i0,"/",i0)') this%it,this%maxit
-   !       write(output_unit,'(" >  aerr/acvg = ",es12.5,"/",es12.5)') this%aerr,this%acvg
-   !       write(output_unit,'(" >  rerr/rcvg = ",es12.5,"/",es12.5)') this%rerr,this%rcvg
-   !    end if
-   ! end subroutine ils_print
-   !
-   !
-   ! !> Short print of ILS info to the screen
-   ! subroutine ils_print_short(this)
-   !    use, intrinsic :: iso_fortran_env, only: output_unit
-   !    implicit none
-   !    class(ils), intent(in) :: this
-   !    if (this%cfg%amRoot) write(output_unit,'("Iterative Linear Solver [",a16,"] for config [",a16,"] -> it/maxit = ",i3,"/",i3," and rerr/rcvg = ",es12.5,"/",es12.5)') trim(this%name),trim(this%cfg%name),this%it,this%maxit,this%rerr,this%rcvg
-   ! end subroutine ils_print_short
-   !
    
 end module bbmg_class
