@@ -508,26 +508,25 @@ contains
       !   end do
       !end do
       
-      ! I am assuming here that we do not really need to zero out wall cells for viscosity - same reason as above
       ! Adjust viscosity interpolation coefficients to cell edge in the presence of walls (only walls)
-      !do k=this%cfg%kmino_+1,this%cfg%kmaxo_
-      !   do j=this%cfg%jmino_+1,this%cfg%jmaxo_
-      !      do i=this%cfg%imino_+1,this%cfg%imaxo_
-      !         ! Zero out interpolation coefficients reaching in the walls
-      !         do st1=-1,0
-      !            do st2=-1,0
-      !               if (this%cfg%VF(i+st1,j+st2,k).eq.0.0_WP) this%itp_xy(st1,st2,i,j,k)=0.0_WP
-      !               if (this%cfg%VF(i,j+st1,k+st2).eq.0.0_WP) this%itp_yz(st1,st2,i,j,k)=0.0_WP
-      !               if (this%cfg%VF(i+st1,j,k+st2).eq.0.0_WP) this%itp_xz(st1,st2,i,j,k)=0.0_WP
-      !            end do
-      !         end do
-      !         ! Rescale to ensure sum(itp)=1
-      !         mysum=sum(this%itp_xy(:,:,i,j,k)); if (mysum.gt.0.0_WP) this%itp_xy(:,:,i,j,k)=this%itp_xy(:,:,i,j,k)/mysum
-      !         mysum=sum(this%itp_yz(:,:,i,j,k)); if (mysum.gt.0.0_WP) this%itp_yz(:,:,i,j,k)=this%itp_yz(:,:,i,j,k)/mysum
-      !         mysum=sum(this%itp_xz(:,:,i,j,k)); if (mysum.gt.0.0_WP) this%itp_xz(:,:,i,j,k)=this%itp_xz(:,:,i,j,k)/mysum
-      !      end do
-      !   end do
-      !end do
+      do k=this%cfg%kmino_+1,this%cfg%kmaxo_
+         do j=this%cfg%jmino_+1,this%cfg%jmaxo_
+            do i=this%cfg%imino_+1,this%cfg%imaxo_
+               ! Zero out interpolation coefficients reaching in the walls
+               do st1=-1,0
+                  do st2=-1,0
+                     if (this%mask(i+st1,j+st2,k).eq.1) this%itp_xy(st1,st2,i,j,k)=0.0_WP
+                     if (this%mask(i,j+st1,k+st2).eq.1) this%itp_yz(st1,st2,i,j,k)=0.0_WP
+                     if (this%mask(i+st1,j,k+st2).eq.1) this%itp_xz(st1,st2,i,j,k)=0.0_WP
+                  end do
+               end do
+               ! Rescale to ensure sum(itp)=1
+               mysum=sum(this%itp_xy(:,:,i,j,k)); if (mysum.gt.0.0_WP) this%itp_xy(:,:,i,j,k)=this%itp_xy(:,:,i,j,k)/mysum
+               mysum=sum(this%itp_yz(:,:,i,j,k)); if (mysum.gt.0.0_WP) this%itp_yz(:,:,i,j,k)=this%itp_yz(:,:,i,j,k)/mysum
+               mysum=sum(this%itp_xz(:,:,i,j,k)); if (mysum.gt.0.0_WP) this%itp_xz(:,:,i,j,k)=this%itp_xz(:,:,i,j,k)/mysum
+            end do
+         end do
+      end do
       
       ! Loop over the domain and adjust divergence for P cell
       do k=this%cfg%kmino_,this%cfg%kmaxo_

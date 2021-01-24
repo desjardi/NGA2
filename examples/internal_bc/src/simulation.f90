@@ -29,49 +29,6 @@ module simulation
    
 contains
    
-   !> Function that localizes the front (z+) of the domain
-   function front_locator(pg,i,j,k) result(isIn)
-      use pgrid_class, only: pgrid
-      implicit none
-      class(pgrid), intent(in) :: pg
-      integer, intent(in) :: i,j,k
-      logical :: isIn
-      isIn=.false.
-      if (k.eq.pg%kmax) isIn=.true.
-   end function front_locator
-   
-   !> Function that localizes the back (z-) of the domain
-   function back_locator(pg,i,j,k) result(isIn)
-      use pgrid_class, only: pgrid
-      implicit none
-      class(pgrid), intent(in) :: pg
-      integer, intent(in) :: i,j,k
-      logical :: isIn
-      isIn=.false.
-      if (k.eq.pg%kmin) isIn=.true.
-   end function back_locator
-   
-   !> Function that localizes the top (y+) of the domain
-   function top_locator(pg,i,j,k) result(isIn)
-      use pgrid_class, only: pgrid
-      implicit none
-      class(pgrid), intent(in) :: pg
-      integer, intent(in) :: i,j,k
-      logical :: isIn
-      isIn=.false.
-      if (j.eq.pg%jmax) isIn=.true.
-   end function top_locator
-   
-   !> Function that localizes the bottom (y-) of the domain
-   function bottom_locator(pg,i,j,k) result(isIn)
-      use pgrid_class, only: pgrid
-      implicit none
-      class(pgrid), intent(in) :: pg
-      integer, intent(in) :: i,j,k
-      logical :: isIn
-      isIn=.false.
-      if (j.eq.pg%jmin) isIn=.true.
-   end function bottom_locator
    
    !> Function that localizes the left face of the cube
    function left_of_cube(pg,i,j,k) result(isIn)
@@ -111,11 +68,12 @@ contains
       create_solver: block
          use ils_class,    only: rbgs,amg,pcg_amg,pcg_parasail,gmres,gmres_pilut,smg,pfmg,pcg
          use incomp_class, only: dirichlet,convective,neumann,clipped_neumann
+         real(WP) :: visc
          ! Create flow solver
          fs=incomp(cfg=cfg,name='Incompressible NS')
          ! Set the flow properties
          call param_read('Density',fs%rho)
-         call param_read('Dynamic viscosity',fs%visc)
+         call param_read('Dynamic viscosity',visc); fs%visc=visc
          ! Define boundary conditions
          call fs%add_bcond(name='inflow' ,type=dirichlet,locator=right_of_cube,face='x',dir=+1,canCorrect=.false.)
          call fs%add_bcond(name='outflow',type=neumann  ,locator= left_of_cube,face='x',dir=-1,canCorrect=.true. )

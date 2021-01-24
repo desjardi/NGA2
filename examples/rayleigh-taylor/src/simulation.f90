@@ -68,12 +68,11 @@ contains
       create_solver: block
          use ils_class,     only: rbgs,amg,pcg_amg,pcg_parasail,gmres,gmres_pilut,smg,pfmg
          use lowmach_class, only: dirichlet,convective,neumann,clipped_neumann
-         real(WP) :: viscosity
+         real(WP) :: visc
          ! Create flow solver
          fs=lowmach(cfg=cfg,name='Variable density low Mach NS')
          ! Assign constant viscosity
-         call param_read('Dynamic viscosity',viscosity)
-         fs%visc=viscosity
+         call param_read('Dynamic viscosity',visc); fs%visc=visc
          ! Assign acceleration of gravity
          call param_read('Gravity',fs%gravity)
          ! Configure pressure solver

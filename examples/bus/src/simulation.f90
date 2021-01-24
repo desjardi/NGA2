@@ -28,6 +28,9 @@ module simulation
    real(WP), dimension(:,:,:), allocatable :: resU,resV,resW
    real(WP), dimension(:,:,:), allocatable :: Ui,Vi,Wi
    
+   !> Fluid viscosity
+   real(WP) :: visc
+   
 contains
    
    !> Localizes the vertical vent near the front of the bus (facing -z)
@@ -219,7 +222,7 @@ contains
          fs=incomp(cfg=cfg,name='Incompressible NS')
          ! Set the flow properties
          call param_read('Density',fs%rho)
-         call param_read('Dynamic viscosity',fs%visc)
+         call param_read('Dynamic viscosity',visc); fs%visc
          ! Define boundary conditions
          !! -- Main HVAC system -- !!
          ! Intakes (outflows of fluid domain)
@@ -395,6 +398,9 @@ contains
          
          ! Apply time-varying Dirichlet conditions
          ! This is where time-dpt Dirichlet would be enforced
+         
+         ! Reset here fluid properties
+         fs%visc=visc
          
          ! Perform sub-iterations
          do while (time%it.le.time%itmax)

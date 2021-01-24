@@ -124,15 +124,14 @@ contains
       create_solver: block
          use ils_class,     only: pcg_amg,gmres
          use lowmach_class, only: dirichlet
-         real(WP) :: viscosity
+         real(WP) :: visc
          ! Create flow solver
          fs=lowmach(cfg=cfg,name='Variable density low Mach NS')
          ! Define boundary conditions
          call fs%add_bcond(name= 'left inflow',type=dirichlet,locator= left_of_tube    ,face='x',dir=+1,canCorrect=.false.)
          call fs%add_bcond(name='right inflow',type=dirichlet,locator=right_of_tube_vel,face='x',dir=-1,canCorrect=.false.)
          ! Assign constant viscosity
-         call param_read('Dynamic viscosity',viscosity)
-         fs%visc=viscosity
+         call param_read('Dynamic viscosity',visc); fs%visc=visc
          ! Assign acceleration of gravity
          call param_read('Gravity',fs%gravity)
          ! Configure pressure solver

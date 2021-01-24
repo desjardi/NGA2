@@ -27,9 +27,13 @@ module simulation
    real(WP), dimension(:,:,:), allocatable :: resU,resV,resW
    real(WP), dimension(:,:,:), allocatable :: Ui,Vi,Wi
    
+   !> Fluid viscosity
+   real(WP) :: visc
+   
 contains
    
-   !> Function that localizes the top of the domain
+   
+   !> Function that localizes the top (y+) of the domain
    function top_locator(pg,i,j,k) result(isIn)
       use pgrid_class, only: pgrid
       implicit none
@@ -40,7 +44,8 @@ contains
       if (j.eq.pg%jmax+1) isIn=.true.
    end function top_locator
    
-   !> Function that localizes the bottom of the domain
+   
+   !> Function that localizes the bottom (y-) of the domain
    function bottom_locator(pg,i,j,k) result(isIn)
       use pgrid_class, only: pgrid
       implicit none
@@ -52,6 +57,19 @@ contains
    end function bottom_locator
    
    
+   !> Function that localizes the bottom (y-) of the domain
+   !> This version limits the zone to a small patch
+   function bottom_locator_small(pg,i,j,k) result(isIn)
+      use pgrid_class, only: pgrid
+      implicit none
+      class(pgrid), intent(in) :: pg
+      integer, intent(in) :: i,j,k
+      logical :: isIn
+      isIn=.false.
+      if (j.eq.pg%jmin.and.sqrt(pg%xm(i)**2+pg%zm(k)**2).le.pg%dx(i)) isIn=.true.
+   end function bottom_locator_small
+   
+   
    !> Initialization of problem solver
    subroutine simulation_init
       use param, only: param_read
@@ -60,17 +78,16 @@ contains
       
       ! Create an incompressible flow solver with bconds
       create_solver: block
-         use ils_class,    only: rbgs,amg,pcg_amg,pcg_parasail,gmres,gmres_pilut,smg,pfmg
+         use ils_class,    only: rbgs,amg,pcg_amg,pcg_parasail,gmres,gmres_pilut,smg,pfmg,pcg
          use incomp_class, only: dirichlet,convective,neumann,clipped_neumann
-         real(WP) :: visc
          ! Create flow solver
          fs=incomp(cfg=cfg,name='Incompressible NS')
          ! Set the flow properties
          call param_read('Density',fs%rho)
          call param_read('Dynamic viscosity',visc); fs%visc=visc
          ! Define boundary conditions
-         call fs%add_bcond(name='inflow' ,type=dirichlet      ,locator=bottom_locator,face='y',dir=-1,canCorrect=.false.)
-         call fs%add_bcond(name='outflow',type=clipped_neumann,locator=   top_locator,face='y',dir=+1,canCorrect=.true. )
+         call fs%add_bcond(name='outflow',type=dirichlet      ,locator=bottom_locator_small,face='y',dir=-1,canCorrect=.false.)
+         call fs%add_bcond(name='inflow' ,type=clipped_neumann,locator=   top_locator,face='y',dir=+1,canCorrect=.true. )
          ! Configure pressure solver
          call param_read('Pressure iteration',fs%psolv%maxit)
          call param_read('Pressure tolerance',fs%psolv%rcvg)
@@ -93,9 +110,9 @@ contains
       end block allocate_work_arrays
       
       
-      ! Initialize time tracker
+      ! Initialize time tracker with 2 subiterations
       initialize_timetracker: block
-         time=timetracker(fs%cfg%amRoot)
+         time=timetracker(amRoot=fs%cfg%amRoot)
          call param_read('Max timestep size',time%dtmax)
          call param_read('Max cfl number',time%cflmax)
          time%dt=time%dtmax
@@ -106,22 +123,22 @@ contains
       ! Initialize our velocity field
       initialize_velocity: block
          use incomp_class, only: bcond
-         type(bcond), pointer :: inflow
+         type(bcond), pointer :: my_bc
          integer :: n,i,j,k
          ! Zero initial field
          fs%U=0.0_WP; fs%V=0.0_WP; fs%W=0.0_WP
-         ! Apply Dirichlet at our inflow
-         call fs%get_bcond('inflow',inflow)
-         do n=1,inflow%itr%no_
-            i=inflow%itr%map(1,n); j=inflow%itr%map(2,n); k=inflow%itr%map(3,n)
-            fs%V(i,j,k)=1.0_WP
+         ! Apply Dirichlet at the bottom
+         call fs%get_bcond('outflow',my_bc)
+         do n=1,my_bc%itr%no_
+            i=my_bc%itr%map(1,n); j=my_bc%itr%map(2,n); k=my_bc%itr%map(3,n)
+            fs%V(i,j,k)=-1.0_WP
          end do
          ! Apply all other boundary conditions
          call fs%apply_bcond(time%t,time%dt)
          ! Compute MFR through all boundary conditions
          call fs%get_mfr()
          call fs%correct_mfr()
-         ! Compute interpolated velocity and divergence
+         ! Calculate interpolated velocity and divergence
          call fs%interp_vel(Ui,Vi,Wi)
          call fs%get_div()
       end block initialize_velocity
@@ -130,9 +147,9 @@ contains
       ! Add Ensight output
       create_ensight: block
          ! Create Ensight output from cfg
-         ens_out=ensight(cfg,'test')
+         ens_out=ensight(cfg=cfg,name='test')
          ! Create event for Ensight output
-         ens_evt=event(time,'Ensight output')
+         ens_evt=event(time=time,name='Ensight output')
          call param_read('Ensight output period',ens_evt%tper)
          ! Add variables to output
          call ens_out%add_scalar('pressure',fs%P)
@@ -199,6 +216,9 @@ contains
          ! Apply time-varying Dirichlet conditions
          ! This is where time-dpt Dirichlet would be enforced
          
+         ! Reset here fluid properties
+         fs%visc=visc
+         
          ! Perform sub-iterations
          do while (time%it.le.time%itmax)
             
@@ -232,6 +252,7 @@ contains
             fs%psolv%rhs=-fs%cfg%vol*fs%div*fs%rho/time%dt
             fs%psolv%sol=0.0_WP
             call fs%psolv%solve()
+            call fs%shift_p(fs%psolv%sol)
             
             ! Correct velocity
             call fs%get_pgrad(fs%psolv%sol,resU,resV,resW)
