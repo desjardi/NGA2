@@ -227,7 +227,7 @@ contains
          call fs%add_bcond(name='front floor vents',type=dirichlet,locator=front_floor_vents     ,face='y',dir=-1,canCorrect=.false.)
          call fs%add_bcond(name='back vent driver' ,type=dirichlet,locator=back_floor_vent_driver,face='z',dir=-1,canCorrect=.false.)
          call fs%add_bcond(name='back vent curb'   ,type=dirichlet,locator=back_floor_vent_curb  ,face='z',dir=+1,canCorrect=.false.)
-         call fs%add_bcond(name='lavatory vent'    ,type=neumann  ,locator=lavatory_vent         ,face='x',dir=-1,canCorrect=.true. )
+         call fs%add_bcond(name='lavatory vent'    ,type=clipped_neumann,locator=lavatory_vent   ,face='x',dir=-1,canCorrect=.true. )
          ! Outputs (inflows of fluid domain)
          call fs%add_bcond(name='window vents'     ,type=dirichlet,locator=window_vents          ,face='y',dir=-1,canCorrect=.false.)
          !! -- Parcel rack system -- !!

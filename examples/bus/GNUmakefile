@@ -5,6 +5,7 @@ NGA_HOME ?= ../..
 PRECISION = DOUBLE
 USE_MPI   = TRUE
 USE_HYPRE = TRUE
+USE_LAPACK= TRUE
 PROFILE   = FALSE
 DEBUG     = FALSE
 COMP      = gnu
@@ -21,8 +22,8 @@ INCLUDE_LOCATIONS += $(Ulocs)
 VPATH_LOCATIONS   += $(Ulocs)
 
 # Define external libraries - this can also be in .profile
-#HDF5_DIR = /Users/desjardi/Builds/hdf5
 HYPRE_DIR = /Users/desjardi/Builds/hypre
+LAPACK_DIR= /Users/desjardi/Builds/lapack
 
 # NGA compilation definitions
 include $(NGA_HOME)/tools/GNUMake/Make.defs
