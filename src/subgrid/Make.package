@@ -1,0 +1,4 @@
+f90EXE_sources += sgsmodel_class.f90
+
+INCLUDE_LOCATIONS += $(NGA_HOME)/src/subgrid
+VPATH_LOCATIONS   += $(NGA_HOME)/src/subgrid

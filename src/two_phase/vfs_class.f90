@@ -923,12 +923,12 @@ contains
       integer, dimension(nband) :: band_size
       
       ! Loop extents
-      ibmin_=this%cfg%imin_; if (this%cfg%iproc.eq.1           .and.this%cfg%xper) ibmin_=this%cfg%imin-1
-      ibmax_=this%cfg%imax_; if (this%cfg%iproc.eq.this%cfg%npx.and.this%cfg%xper) ibmax_=this%cfg%imax+1
-      jbmin_=this%cfg%jmin_; if (this%cfg%jproc.eq.1           .and.this%cfg%yper) jbmin_=this%cfg%jmin-1
-      jbmax_=this%cfg%jmax_; if (this%cfg%jproc.eq.this%cfg%npy.and.this%cfg%yper) jbmax_=this%cfg%jmax+1
-      kbmin_=this%cfg%kmin_; if (this%cfg%kproc.eq.1           .and.this%cfg%zper) kbmin_=this%cfg%kmin-1
-      kbmax_=this%cfg%kmax_; if (this%cfg%kproc.eq.this%cfg%npz.and.this%cfg%zper) kbmax_=this%cfg%kmax+1
+      ibmin_=this%cfg%imin_; if (this%cfg%iproc.eq.1           .and..not.this%cfg%xper) ibmin_=this%cfg%imin-1
+      ibmax_=this%cfg%imax_; if (this%cfg%iproc.eq.this%cfg%npx.and..not.this%cfg%xper) ibmax_=this%cfg%imax+1
+      jbmin_=this%cfg%jmin_; if (this%cfg%jproc.eq.1           .and..not.this%cfg%yper) jbmin_=this%cfg%jmin-1
+      jbmax_=this%cfg%jmax_; if (this%cfg%jproc.eq.this%cfg%npy.and..not.this%cfg%yper) jbmax_=this%cfg%jmax+1
+      kbmin_=this%cfg%kmin_; if (this%cfg%kproc.eq.1           .and..not.this%cfg%zper) kbmin_=this%cfg%kmin-1
+      kbmax_=this%cfg%kmax_; if (this%cfg%kproc.eq.this%cfg%npz.and..not.this%cfg%zper) kbmax_=this%cfg%kmax+1
       
       ! Reset band
       this%band=(nband+1)*int(sign(1.0_WP,this%VF-0.5_WP))
