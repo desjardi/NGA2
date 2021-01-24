@@ -1314,23 +1314,23 @@ contains
             do ii=this%cfg%imin_,this%cfg%imax_+1
                ! U-cell **********
                ! Fluxes on x-face
-               i=ii-1; j=jj; k=kk
+               i=ii-1; j=jj-1; k=kk-1
                this%FUX(i,j,k)=sum(this%hybu_x(:,i,j,k)*this%rho_Uold(i:i+1,j,k))*sum(this%itpu_x(:,i,j,k)*this%U(i:i+1,j,k))
                ! Fluxes on y-face
-               i=ii  ; j=jj; k=kk
+               i=ii; j=jj; k=kk
                this%FUY(i,j,k)=sum(this%hybu_y(:,i,j,k)*this%rho_Uold(i,j-1:j,k))*sum(this%itpv_x(:,i,j,k)*this%V(i-1:i,j,k))
                ! Fluxes on z-face
-               i=ii  ; j=jj; k=kk
+               i=ii; j=jj; k=kk
                this%FUZ(i,j,k)=sum(this%hybu_z(:,i,j,k)*this%rho_Uold(i,j,k-1:k))*sum(this%itpw_x(:,i,j,k)*this%W(i-1:i,j,k))
                ! V-cell **********
                ! Fluxes on x-face
-               i=ii; j=jj  ; k=kk
+               i=ii; j=jj; k=kk
                this%FVX(i,j,k)=sum(this%hybv_x(:,i,j,k)*this%rho_Vold(i-1:i,j,k))*sum(this%itpu_y(:,i,j,k)*this%U(i,j-1:j,k))
                ! Fluxes on y-face
-               i=ii; j=jj-1; k=kk
+               i=ii-1; j=jj-1; k=kk-1
                this%FVY(i,j,k)=sum(this%hybv_y(:,i,j,k)*this%rho_Vold(i,j:j+1,k))*sum(this%itpv_y(:,i,j,k)*this%V(i,j:j+1,k))
                ! Fluxes on z-face
-               i=ii; j=jj  ; k=kk
+               i=ii; j=jj; k=kk
                this%FVZ(i,j,k)=sum(this%hybv_z(:,i,j,k)*this%rho_Vold(i,j,k-1:k))*sum(this%itpw_y(:,i,j,k)*this%W(i,j-1:j,k))
                ! W-cell **********
                ! Fluxes on x-face
@@ -1340,7 +1340,7 @@ contains
                i=ii; j=jj; k=kk
                this%FWY(i,j,k)=sum(this%hybw_y(:,i,j,k)*this%rho_Wold(i,j-1:j,k))*sum(this%itpv_z(:,i,j,k)*this%V(i,j,k-1:k))
                ! Fluxes on z-face
-               i=ii; j=jj; k=kk-1
+               i=ii-1; j=jj-1; k=kk-1
                this%FWZ(i,j,k)=sum(this%hybw_z(:,i,j,k)*this%rho_Wold(i,j,k:k+1))*sum(this%itpw_z(:,i,j,k)*this%W(i,j,k:k+1))
             end do
          end do
@@ -1387,17 +1387,17 @@ contains
          do jj=this%cfg%jmin_,this%cfg%jmax_+1
             do ii=this%cfg%imin_,this%cfg%imax_+1
                ! Fluxes on x-face
-               i=ii-1; j=jj; k=kk
+               i=ii-1; j=jj-1; k=kk-1
                this%FUX(i,j,k)=this%FUX(i,j,k)-this%P(i,j,k) &
                &              -sum(this%hybu_x(:,i,j,k)*this%rho_Uold(i:i+1,j,k))*sum(this%hybu_x(:,i,j,k)*this%U(i:i+1,j,k))*sum(this%itpu_x(:,i,j,k)*this%U(i:i+1,j,k)) &
                &              +this%visc   (i,j,k)*(sum(this%grdu_x(:,i,j,k)*this%U(i:i+1,j,k))+sum(this%grdu_x(:,i,j,k)*this%U(i:i+1,j,k)))
                ! Fluxes on y-face
-               i=ii  ; j=jj; k=kk
+               i=ii; j=jj; k=kk
                this%FUY(i,j,k)=this%FUY(i,j,k) &
                &              -sum(this%hybu_y(:,i,j,k)*this%rho_Uold(i,j-1:j,k))*sum(this%hybu_y(:,i,j,k)*this%U(i,j-1:j,k))*sum(this%itpv_x(:,i,j,k)*this%V(i-1:i,j,k)) &
                &              +this%visc_xy(i,j,k)*(sum(this%grdu_y(:,i,j,k)*this%U(i,j-1:j,k))+sum(this%grdv_x(:,i,j,k)*this%V(i-1:i,j,k)))
                ! Fluxes on z-face
-               i=ii  ; j=jj; k=kk
+               i=ii; j=jj; k=kk
                this%FUZ(i,j,k)=this%FUZ(i,j,k) &
                &              -sum(this%hybu_z(:,i,j,k)*this%rho_Uold(i,j,k-1:k))*sum(this%hybu_z(:,i,j,k)*this%U(i,j,k-1:k))*sum(this%itpw_x(:,i,j,k)*this%W(i-1:i,j,k)) &
                &              +this%visc_zx(i,j,k)*(sum(this%grdu_z(:,i,j,k)*this%U(i,j,k-1:k))+sum(this%grdw_x(:,i,j,k)*this%W(i-1:i,j,k)))
@@ -1422,17 +1422,17 @@ contains
          do jj=this%cfg%jmin_,this%cfg%jmax_+1
             do ii=this%cfg%imin_,this%cfg%imax_+1
                ! Fluxes on x-face
-               i=ii; j=jj  ; k=kk
+               i=ii; j=jj; k=kk
                this%FVX(i,j,k)=this%FVX(i,j,k) &
                &              -sum(this%hybv_x(:,i,j,k)*this%rho_Vold(i-1:i,j,k))*sum(this%hybv_x(:,i,j,k)*this%V(i-1:i,j,k))*sum(this%itpu_y(:,i,j,k)*this%U(i,j-1:j,k)) &
                &              +this%visc_xy(i,j,k)*(sum(this%grdv_x(:,i,j,k)*this%V(i-1:i,j,k))+sum(this%grdu_y(:,i,j,k)*this%U(i,j-1:j,k)))
                ! Fluxes on y-face
-               i=ii; j=jj-1; k=kk
+               i=ii-1; j=jj-1; k=kk-1
                this%FVY(i,j,k)=this%FVY(i,j,k)-this%P(i,j,k) &
                &              -sum(this%hybv_y(:,i,j,k)*this%rho_Vold(i,j:j+1,k))*sum(this%hybv_y(:,i,j,k)*this%V(i,j:j+1,k))*sum(this%itpv_y(:,i,j,k)*this%V(i,j:j+1,k)) &
                &              +this%visc   (i,j,k)*(sum(this%grdv_y(:,i,j,k)*this%V(i,j:j+1,k))+sum(this%grdv_y(:,i,j,k)*this%V(i,j:j+1,k)))
                ! Fluxes on z-face
-               i=ii; j=jj  ; k=kk
+               i=ii; j=jj; k=kk
                this%FVZ(i,j,k)=this%FVZ(i,j,k) &
                &              -sum(this%hybv_z(:,i,j,k)*this%rho_Vold(i,j,k-1:k))*sum(this%hybv_z(:,i,j,k)*this%V(i,j,k-1:k))*sum(this%itpw_y(:,i,j,k)*this%W(i,j-1:j,k)) &
                &              +this%visc_yz(i,j,k)*(sum(this%grdv_z(:,i,j,k)*this%V(i,j,k-1:k))+sum(this%grdw_y(:,i,j,k)*this%W(i,j-1:j,k)))
@@ -1467,7 +1467,7 @@ contains
                &              -sum(this%hybw_y(:,i,j,k)*this%rho_Wold(i,j-1:j,k))*sum(this%hybw_y(:,i,j,k)*this%W(i,j-1:j,k))*sum(this%itpv_z(:,i,j,k)*this%V(i,j,k-1:k)) &
                &              +this%visc_yz(i,j,k)*(sum(this%grdw_y(:,i,j,k)*this%W(i,j-1:j,k))+sum(this%grdv_z(:,i,j,k)*this%V(i,j,k-1:k)))
                ! Fluxes on z-face
-               i=ii; j=jj; k=kk-1
+               i=ii-1; j=jj-1; k=kk-1
                this%FWZ(i,j,k)=this%FWZ(i,j,k)-this%P(i,j,k) &
                &              -sum(this%hybw_z(:,i,j,k)*this%rho_Wold(i,j,k:k+1))*sum(this%hybw_z(:,i,j,k)*this%W(i,j,k:k+1))*sum(this%itpw_z(:,i,j,k)*this%W(i,j,k:k+1)) &
                &              +this%visc   (i,j,k)*(sum(this%grdw_z(:,i,j,k)*this%W(i,j,k:k+1))+sum(this%grdw_z(:,i,j,k)*this%W(i,j,k:k+1)))
@@ -1703,7 +1703,7 @@ contains
       real(WP), dimension(3,3) :: dUdx
       
       ! Check SR's first dimension
-      if (size(SR,dim=1).eq.6) call die('[incomp get_strainrate] SR should be of size (1:6,imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)')
+      if (size(SR,dim=1).ne.6) call die('[incomp get_strainrate] SR should be of size (1:6,imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)')
       
       ! Calculate inside
       do k=this%cfg%kmin_,this%cfg%kmax_
