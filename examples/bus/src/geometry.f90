@@ -331,17 +331,15 @@ contains
                   ! Windows on curb side (front)
                   if (k.gt.cfg%kmax) cfg%VF(i,j,k)=0.0_WP
                   ! Parcel rack - driver side
-                  if (cfg%x(i)  .ge.bus%x_seatdriver.and.&
+                  if (cfg%x(i)  .ge.bus%x_seatdriver-100.0_WP*epsilon(1.0_WP).and.&
                   &   cfg%x(i+1).le.bus%x_seatdriver+bus%l_seatrow*real(bus%nseat_driver,WP).and.&
                   &   cfg%y(j)  .gt.bus%h_rack-10.0_WP*epsilon(1.0_WP).and.&
-                  &   cfg%y(j+1).lt.bus%h_bus +10.0_WP*epsilon(1.0_WP).and.&
                   &   cfg%z(k)  .gt.-10.0_WP*epsilon(1.0_WP).and.&
                   &   cfg%z(k+1).lt.bus%w_rack+10.0_WP*epsilon(1.0_WP)) cfg%VF(i,j,k)=0.0_WP
                   ! Parcel rack - curb side
                   if (cfg%x(i)  .ge.bus%x_seatcurb.and.&
                   &   cfg%x(i+1).le.bus%x_seatcurb2+bus%l_seatrow*real(bus%nseat_curb2,WP).and.&
                   &   cfg%y(j)  .gt.bus%h_rack-10.0_WP*epsilon(1.0_WP).and.&
-                  &   cfg%y(j+1).lt.bus%h_bus +10.0_WP*epsilon(1.0_WP).and.&
                   &   cfg%z(k)  .gt.bus%w_bus-bus%w_rack-10.0_WP*epsilon(1.0_WP).and.&
                   &   cfg%z(k+1).lt.bus%w_bus+10.0_WP*epsilon(1.0_WP)) cfg%VF(i,j,k)=0.0_WP
                   ! Panel for back floor intake vent - driver side
@@ -394,17 +392,15 @@ contains
                   &   cfg%z(k)  .gt.bus%w_bus-bus%w_table-10.0_WP*epsilon(1.0_WP).and.&
                   &   cfg%z(k+1).lt.bus%w_bus+10.0_WP*epsilon(1.0_WP)) cfg%VF(i,j,k)=0.0_WP
                   ! Galley
-                  if (cfg%x(i)  .gt.bus%x_lav-10.0_WP*epsilon(1.0_WP).and.&
-                  &   cfg%x(i+1).lt.bus%x_seatdriver+10.0_WP*epsilon(1.0_WP).and.&
+                  if (cfg%x(i)  .gt.bus%x_lav-100.0_WP*epsilon(1.0_WP).and.&
+                  &   cfg%x(i+1).lt.bus%x_seatdriver+100.0_WP*epsilon(1.0_WP).and.&
                   &   cfg%y(j)  .gt.-10.0_WP*epsilon(1.0_WP).and.&
-                  &   cfg%y(j+1).lt.bus%h_bus+10.0_WP*epsilon(1.0_WP).and.&
                   &   cfg%z(k)  .gt.-10.0_WP*epsilon(1.0_WP).and.&
                   &   cfg%z(k+1).lt.bus%w_galley+10.0_WP*epsilon(1.0_WP)) cfg%VF(i,j,k)=0.0_WP
                   ! Closet
                   if (cfg%x(i)  .gt.bus%l_bus-bus%x_closet.and.&
                   &   cfg%x(i+1).lt.bus%l_bus+10.0_WP*epsilon(1.0_WP).and.&
                   &   cfg%y(j)  .gt.-10.0_WP*epsilon(1.0_WP).and.&
-                  &   cfg%y(j+1).lt.bus%h_bus+10.0_WP*epsilon(1.0_WP).and.&
                   &   cfg%z(k)  .gt.-10.0_WP*epsilon(1.0_WP).and.&
                   &   cfg%z(k+1).lt.bus%w_closet+10.0_WP*epsilon(1.0_WP)) cfg%VF(i,j,k)=0.0_WP
                   ! Seats
