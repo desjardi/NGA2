@@ -4,6 +4,7 @@ module simulation
    use geometry,          only: cfg
    use incomp_class,      only: incomp
    use sgsmodel_class,    only: sgsmodel
+   use scalar_class,      only: scalar
    use timetracker_class, only: timetracker
    use ensight_class,     only: ensight
    use event_class,       only: event
@@ -11,8 +12,9 @@ module simulation
    implicit none
    private
    
-   !> Single incompressible flow solver and corresponding time tracker
+   !> Incompressible flow and scalar solver and corresponding time tracker and sgs model
    type(incomp),      public :: fs
+   type(scalar),      public :: sc
    type(timetracker), public :: time
    type(sgsmodel),    public :: sgs
    
@@ -26,9 +28,13 @@ module simulation
    public :: simulation_init,simulation_run,simulation_final
    
    !> Private work arrays
-   real(WP), dimension(:,:,:), allocatable :: resU,resV,resW
+   real(WP), dimension(:,:,:), allocatable :: resU,resV,resW,resSC
    real(WP), dimension(:,:,:), allocatable :: Ui,Vi,Wi
    real(WP), dimension(:,:,:,:), allocatable :: SR
+   
+   !> Scalar source descriptors
+   real(WP), dimension(3) :: src_pos
+   real(WP) :: src_rad
    
    !> Fluid viscosity
    real(WP) :: visc
@@ -211,6 +217,18 @@ contains
    end function rackoutlet_vents
    
    
+   !> Function that localizes the source of tracer scalar
+   function scalar_src(pg,i,j,k) result(isIn)
+      use pgrid_class, only: pgrid
+      implicit none
+      class(pgrid), intent(in) :: pg
+      integer, intent(in) :: i,j,k
+      logical :: isIn
+      isIn=.false.
+      if (sqrt((pg%xm(i)-src_pos(1))**2+(pg%ym(j)-src_pos(2))**2++(pg%zm(k)-src_pos(3))**2).le.src_rad) isIn=.true.
+   end function scalar_src
+   
+   
    !> Initialization of problem solver
    subroutine simulation_init
       use param, only: param_read
@@ -219,13 +237,14 @@ contains
       
       ! Allocate work arrays
       allocate_work_arrays: block
-         allocate(resU(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
-         allocate(resV(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
-         allocate(resW(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
-         allocate(Ui  (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
-         allocate(Vi  (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
-         allocate(Wi  (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
-         allocate(SR(6,cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+         allocate(resU (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+         allocate(resV (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+         allocate(resW (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+         allocate(resSC(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+         allocate(Ui   (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+         allocate(Vi   (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+         allocate(Wi   (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+         allocate(SR (6,cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
       end block allocate_work_arrays
       
       
@@ -338,6 +357,36 @@ contains
       end block initialize_velocity
       
       
+      ! Create an scalar solver with bconds
+      create_scalar: block
+         use ils_class, only: pcg_amg,gmres,amg,pfmg
+         use scalar_class, only: bcond,dirichlet,neumann,quick
+         type(bcond), pointer :: mybc
+         integer :: i,j,k,n
+         ! Create flow solver
+         sc=scalar(cfg=cfg,scheme=quick,name='Tracker')
+         ! Assign density and diffusivity = viscosity
+         sc%rho=fs%rho
+         sc%diff=visc
+         ! Configure implicit scalar solver
+         sc%implicit%maxit=fs%implicit%maxit; sc%implicit%rcvg=fs%implicit%rcvg
+         ! Define boundary conditions
+         call param_read('Source position',src_pos)
+         call param_read('Source radius',src_rad)
+         call sc%add_bcond(name='source',type=dirichlet,locator=scalar_src,dir='+y')
+         ! Setup the solver
+         call sc%setup(implicit_ils=gmres)
+         ! Initialize the scalar field at zero
+         sc%SC=0.0_WP
+         ! Add the source patch
+         call sc%get_bcond('source',mybc)
+         do n=1,mybc%itr%no_
+            i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
+            sc%SC(i,j,k)=1.0_WP
+         end do
+      end block create_scalar
+      
+      
       ! Add Ensight output
       create_ensight: block
          ! Create Ensight output from cfg
@@ -346,10 +395,9 @@ contains
          ens_evt=event(time=time,name='Ensight output')
          call param_read('Ensight output period',ens_evt%tper)
          ! Add variables to output
-         call ens_out%add_scalar('pressure',fs%P)
          call ens_out%add_scalar('walls',fs%cfg%VF)
          call ens_out%add_vector('velocity',Ui,Vi,Wi)
-         call ens_out%add_scalar('visc',fs%visc)
+         call ens_out%add_scalar('tracer',sc%SC)
          ! Output to ensight
          if (ens_evt%occurs()) call ens_out%write_data(time%t)
       end block create_ensight
@@ -360,6 +408,8 @@ contains
          ! Prepare some info about fields
          call fs%get_cfl(time%dt,time%cfl)
          call fs%get_max()
+         call sc%get_max()
+         call sc%get_int()
          ! Create simulation monitor
          mfile=monitor(fs%cfg%amRoot,'simulation')
          call mfile%add_column(time%n,'Timestep number')
@@ -370,6 +420,9 @@ contains
          call mfile%add_column(fs%Vmax,'Vmax')
          call mfile%add_column(fs%Wmax,'Wmax')
          call mfile%add_column(fs%Pmax,'Pmax')
+         call mfile%add_column(sc%SCmin,'SCmin')
+         call mfile%add_column(sc%SCmax,'SCmax')
+         call mfile%add_column(sc%SCint,'SCint')
          call mfile%add_column(fs%divmax,'Maximum divergence')
          call mfile%add_column(fs%psolv%it,'Pressure iteration')
          call mfile%add_column(fs%psolv%rerr,'Pressure error')
@@ -403,6 +456,9 @@ contains
          call time%adjust_dt()
          call time%increment()
          
+         ! Remember old scalar
+         sc%SCold =sc%SC
+         
          ! Remember old velocity
          fs%Uold=fs%U
          fs%Vold=fs%V
@@ -422,15 +478,39 @@ contains
             sgs%visc=-fs%visc
          end where
          fs%visc=fs%visc+sgs%visc
+         sc%diff=fs%visc
          
          ! Perform sub-iterations
          do while (time%it.le.time%itmax)
+            
+            ! Build mid-time scalar
+            sc%SC=0.5_WP*(sc%SC+sc%SCold)
             
             ! Build mid-time velocity
             fs%U=0.5_WP*(fs%U+fs%Uold)
             fs%V=0.5_WP*(fs%V+fs%Vold)
             fs%W=0.5_WP*(fs%W+fs%Wold)
             
+            ! ============= SCALAR SOLVER =======================
+            ! Explicit calculation of drhoSC/dt from scalar equation
+            resU=fs%rho*fs%U; resV=fs%rho*fs%V; resW=fs%rho*fs%W
+            call sc%get_drhoSCdt(drhoSCdt=resSC,rhoU=resU,rhoV=resV,rhoW=resW)
+            
+            ! Assemble explicit residual
+            resSC=-2.0_WP*(sc%rho*sc%SC-sc%rho*sc%SCold)+time%dt*resSC
+            
+            ! Form implicit residual
+            call sc%solve_implicit(dt=time%dt,resSC=resSC,rhoU=resU,rhoV=resV,rhoW=resW)
+            
+            ! Apply this residual
+            sc%SC=2.0_WP*sc%SC-sc%SCold+resSC
+            
+            ! Apply other boundary conditions on the resulting field
+            call sc%apply_bcond(time%t,time%dt)
+            ! ===================================================
+            
+            
+            ! ============ VELOCITY SOLVER ======================
             ! Explicit calculation of drho*u/dt from NS
             call fs%get_dmomdt(resU,resV,resW)
             
@@ -464,6 +544,7 @@ contains
             fs%U=fs%U-time%dt*resU/fs%rho
             fs%V=fs%V-time%dt*resV/fs%rho
             fs%W=fs%W-time%dt*resW/fs%rho
+            ! ===================================================
             
             ! Increment sub-iteration counter
             time%it=time%it+1
@@ -479,6 +560,8 @@ contains
          
          ! Perform and output monitoring
          call fs%get_max()
+         call sc%get_max()
+         call sc%get_int()
          call mfile%write()
          call cflfile%write()
          
@@ -498,7 +581,7 @@ contains
       ! timetracker
       
       ! Deallocate work arrays
-      deallocate(resU,resV,resW,Ui,Vi,Wi)
+      deallocate(resU,resV,resW,resSC,Ui,Vi,Wi)
       
    end subroutine simulation_final
    

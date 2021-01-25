@@ -72,10 +72,10 @@ module scalar_class
       real(WP), dimension(:,:,:,:), allocatable :: itp_x   ,itp_y   ,itp_z      !< Second order interpolation for SC diffusivity
       
       ! Masking info for metric modification
-      integer, dimension(:,:,:), allocatable :: mask                    !< Integer array used for modifying SC metrics
+      integer, dimension(:,:,:), allocatable :: mask      !< Integer array used for modifying SC metrics
       
       ! Monitoring quantities
-      real(WP) :: SCmax,SCmin                                             !< Maximum and minimum scalar
+      real(WP) :: SCmax,SCmin,SCint                       !< Maximum and minimum, integral scalar
       
    contains
       procedure :: print=>scalar_print                    !< Output solver to the screen
@@ -87,6 +87,7 @@ module scalar_class
       procedure :: adjust_metrics                         !< Adjust metrics
       procedure :: get_drhoSCdt                           !< Calculate drhoSC/dt
       procedure :: get_max                                !< Calculate maximum field values
+      procedure :: get_int                                !< Calculate integral field values
       procedure :: solve_implicit                         !< Solve for the scalar residuals implicitly
    end type scalar
    
@@ -539,6 +540,14 @@ contains
       my_SCmax=maxval(this%SC); call MPI_ALLREDUCE(my_SCmax,this%SCmax,1,MPI_REAL_WP,MPI_MAX,this%cfg%comm,ierr)
       my_SCmin=minval(this%SC); call MPI_ALLREDUCE(my_SCmin,this%SCmin,1,MPI_REAL_WP,MPI_MIN,this%cfg%comm,ierr)
    end subroutine get_max
+   
+   
+   !> Calculate the integral of our SC field
+   subroutine get_int(this)
+      implicit none
+      class(scalar), intent(inout) :: this
+      call this%cfg%integrate(this%SC,integral=this%SCint)
+   end subroutine get_int
    
    
    !> Solve for implicit scalar residual

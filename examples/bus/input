@@ -4,12 +4,16 @@ Partition : 4 1 1
 # Mesh definition
 Grid resolution : 1
 
+# Source for tracer
+Source position : 6 1.1 1.55
+Source radius :   0.05
+
 # Fluid properties
 Density :           1.2
 Dynamic viscosity : 1.8e-5
 
 # Time integration
-Max timestep size :   1e-3
+Max timestep size :   1e-2
 Max cfl number :      1.2
 Max simulation time : 200
 
