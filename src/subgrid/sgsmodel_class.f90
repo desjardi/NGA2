@@ -27,6 +27,10 @@ module sgsmodel_class
       real(WP), dimension(:,:,:), allocatable :: LM,MM          !< LM and MM tensor norms
       real(WP), dimension(:,:,:), allocatable :: visc           !< Turbulent eddy viscosity
       
+      ! Some information of the fields
+      real(WP) :: max_visc                                      !< Maximum eddy viscosity
+      real(WP) :: min_visc                                      !< Minimum eddy viscosity
+      
       ! Filtering scheme
       real(WP), dimension(:,:,:,:,:,:), allocatable :: filterd  !< Filtering operator with Dirichlet at walls
       real(WP), dimension(:,:,:,:,:,:), allocatable :: filtern  !< Filtering operator with Neumann at walls
@@ -35,7 +39,8 @@ module sgsmodel_class
       
    contains
       
-      procedure :: print                                        !< Output SGS info to the screen
+      procedure :: log=>sgs_log                                 !< Log SGS info
+      procedure :: print=>sgs_print                             !< Output SGS info to the screen
       procedure :: get_visc                                     !< Calculate the SGS viscosity
       
       procedure, private :: interpolate                         !< Helper function that interpolates a field to a point
@@ -247,6 +252,7 @@ contains
    
    !> Get subgrid scale dynamic viscosity
    subroutine get_visc(this,dt,rho,Ui,Vi,Wi,SR)
+      use param, only: verbose
       implicit none
       class(sgsmodel), intent(inout) :: this
       real(WP), intent(in) :: dt !< dt since the last call to the model
@@ -357,6 +363,7 @@ contains
                else
                   Cs=0.0_WP
                end if
+               Cs=0.16_WP
                this%visc(i,j,k)=rho(i,j,k)*S_(i,j,k)*Cs*this%delta(i,j,k)**2
             end do
          end do
@@ -367,6 +374,19 @@ contains
       
       ! Deallocate work arrays
       deallocate(LMold,MMold,S_)
+      
+      ! Calculate some info on the model
+      calc_info: block
+         use mpi_f08,  only: MPI_ALLREDUCE,MPI_MAX,MPI_MIN
+         use parallel, only: MPI_REAL_WP
+         integer :: ierr
+         call MPI_ALLREDUCE(maxval(this%visc),this%max_visc,1,MPI_REAL_WP,MPI_MAX,this%cfg%comm,ierr)
+         call MPI_ALLREDUCE(minval(this%visc),this%min_visc,1,MPI_REAL_WP,MPI_MIN,this%cfg%comm,ierr)
+      end block calc_info
+      
+      ! Output info about model
+      if (verbose.gt.0) call this%log()
+      if (verbose.gt.1) call this%print()
       
    end subroutine get_visc
    
@@ -411,18 +431,31 @@ contains
    end function interpolate
    
    
+   !> Log info for model
+   subroutine sgs_log(this)
+      use string,   only: str_long
+      use messager, only: log
+      implicit none
+      class(sgsmodel), intent(in) :: this
+      character(len=str_long) :: message
+      if (this%cfg%amRoot) then
+         write(message,'("SGS tubulence modeling for config [",a,"] - visc range = [",es12.5,",",es12.5,"]")') trim(this%cfg%name),this%min_visc,this%max_visc; call log(message)
+      end if
+   end subroutine sgs_log
+   
+   
    !> Print out info for model
-   subroutine print(this)
+   subroutine sgs_print(this)
       use, intrinsic :: iso_fortran_env, only: output_unit
       implicit none
       class(sgsmodel), intent(in) :: this
       
       ! Output
       if (this%cfg%amRoot) then
-         write(output_unit,'("SGS tubulence modeling framework for config [",a,"]")') trim(this%cfg%name)
+         write(output_unit,'("SGS tubulence modeling for config [",a,"] - visc range = [",es12.5,",",es12.5,"]")') trim(this%cfg%name),this%min_visc,this%max_visc
       end if
       
-   end subroutine print
+   end subroutine sgs_print
    
    
 end module sgsmodel_class
