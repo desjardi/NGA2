@@ -87,7 +87,7 @@ contains
          allocate(Ui  (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
          allocate(Vi  (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
          allocate(Wi  (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
-         allocate(SR(1:6,cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+         allocate(SR(6,cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
       end block allocate_work_arrays
       
       
@@ -164,8 +164,7 @@ contains
          ! Add variables to output
          call ens_out%add_scalar('pressure',fs%P)
          call ens_out%add_vector('velocity',Ui,Vi,Wi)
-         call ens_out%add_scalar('div',fs%div)
-         call ens_out%add_scalar('sgs_visc',sgs%visc)
+         call ens_out%add_scalar('visc',fs%visc)
          ! Output to ensight
          if (ens_evt%occurs()) call ens_out%write_data(time%t)
       end block create_ensight
@@ -237,7 +236,7 @@ contains
          where (sgs%visc.lt.-fs%visc)
             sgs%visc=-fs%visc
          end where
-         !fs%visc=fs%visc+sgs%visc
+         fs%visc=fs%visc+sgs%visc
          
          ! Perform sub-iterations
          do while (time%it.le.time%itmax)

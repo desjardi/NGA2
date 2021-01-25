@@ -6,7 +6,7 @@ Grid resolution : 1
 
 # Fluid properties
 Density :           1.2
-Dynamic viscosity : 5e-4
+Dynamic viscosity : 1.8e-5
 
 # Time integration
 Max timestep size :   1e-3

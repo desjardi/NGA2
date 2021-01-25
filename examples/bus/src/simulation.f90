@@ -2,8 +2,8 @@
 module simulation
    use precision,         only: WP
    use geometry,          only: cfg
-   use incomp_class,      only: incomp,bcond
-   use incomp_class,      only: dirichlet,convective,neumann,clipped_neumann
+   use incomp_class,      only: incomp
+   use sgsmodel_class,    only: sgsmodel
    use timetracker_class, only: timetracker
    use ensight_class,     only: ensight
    use event_class,       only: event
@@ -14,6 +14,7 @@ module simulation
    !> Single incompressible flow solver and corresponding time tracker
    type(incomp),      public :: fs
    type(timetracker), public :: time
+   type(sgsmodel),    public :: sgs
    
    !> Ensight postprocessing
    type(ensight) :: ens_out
@@ -27,6 +28,7 @@ module simulation
    !> Private work arrays
    real(WP), dimension(:,:,:), allocatable :: resU,resV,resW
    real(WP), dimension(:,:,:), allocatable :: Ui,Vi,Wi
+   real(WP), dimension(:,:,:,:), allocatable :: SR
    
    !> Fluid viscosity
    real(WP) :: visc
@@ -215,14 +217,27 @@ contains
       implicit none
       
       
+      ! Allocate work arrays
+      allocate_work_arrays: block
+         allocate(resU(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+         allocate(resV(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+         allocate(resW(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+         allocate(Ui  (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+         allocate(Vi  (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+         allocate(Wi  (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+         allocate(SR(6,cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+      end block allocate_work_arrays
+      
+      
       ! Create an incompressible flow solver with bconds
       create_solver: block
          use ils_class, only: pcg_amg,gmres,amg,pfmg
+         use incomp_class, only: dirichlet,convective,neumann,clipped_neumann
          ! Create flow solver
          fs=incomp(cfg=cfg,name='Incompressible NS')
          ! Set the flow properties
          call param_read('Density',fs%rho)
-         call param_read('Dynamic viscosity',visc); fs%visc
+         call param_read('Dynamic viscosity',visc); fs%visc=visc
          ! Define boundary conditions
          !! -- Main HVAC system -- !!
          ! Intakes (outflows of fluid domain)
@@ -249,15 +264,10 @@ contains
       end block create_solver
       
       
-      ! Allocate work arrays
-      allocate_work_arrays: block
-         allocate(resU(fs%cfg%imino_:fs%cfg%imaxo_,fs%cfg%jmino_:fs%cfg%jmaxo_,fs%cfg%kmino_:fs%cfg%kmaxo_))
-         allocate(resV(fs%cfg%imino_:fs%cfg%imaxo_,fs%cfg%jmino_:fs%cfg%jmaxo_,fs%cfg%kmino_:fs%cfg%kmaxo_))
-         allocate(resW(fs%cfg%imino_:fs%cfg%imaxo_,fs%cfg%jmino_:fs%cfg%jmaxo_,fs%cfg%kmino_:fs%cfg%kmaxo_))
-         allocate(Ui  (fs%cfg%imino_:fs%cfg%imaxo_,fs%cfg%jmino_:fs%cfg%jmaxo_,fs%cfg%kmino_:fs%cfg%kmaxo_))
-         allocate(Vi  (fs%cfg%imino_:fs%cfg%imaxo_,fs%cfg%jmino_:fs%cfg%jmaxo_,fs%cfg%kmino_:fs%cfg%kmaxo_))
-         allocate(Wi  (fs%cfg%imino_:fs%cfg%imaxo_,fs%cfg%jmino_:fs%cfg%jmaxo_,fs%cfg%kmino_:fs%cfg%kmaxo_))
-      end block allocate_work_arrays
+      ! Create an LES model
+      create_sgs: block
+         sgs=sgsmodel(cfg=fs%cfg,umask=fs%umask,vmask=fs%vmask,wmask=fs%wmask)
+      end block create_sgs
       
       
       ! Initialize time tracker with 2 subiterations
@@ -274,6 +284,7 @@ contains
       ! Initialize our velocity field
       initialize_velocity: block
          use geometry, only: bus
+         use incomp_class, only: bcond
          type(bcond), pointer :: my_bc
          integer :: n,i,j,k
          ! Zero initial field
@@ -338,6 +349,7 @@ contains
          call ens_out%add_scalar('pressure',fs%P)
          call ens_out%add_scalar('walls',fs%cfg%VF)
          call ens_out%add_vector('velocity',Ui,Vi,Wi)
+         call ens_out%add_scalar('visc',fs%visc)
          ! Output to ensight
          if (ens_evt%occurs()) call ens_out%write_data(time%t)
       end block create_ensight
@@ -401,6 +413,15 @@ contains
          
          ! Reset here fluid properties
          fs%visc=visc
+         
+         ! Turbulence modeling
+         call fs%get_strainrate(Ui=Ui,Vi=Vi,Wi=Wi,SR=SR)
+         resU=fs%rho
+         call sgs%get_visc(dt=time%dtold,rho=resU,Ui=Ui,Vi=Vi,Wi=Wi,SR=SR)
+         where (sgs%visc.lt.-fs%visc)
+            sgs%visc=-fs%visc
+         end where
+         fs%visc=fs%visc+sgs%visc
          
          ! Perform sub-iterations
          do while (time%it.le.time%itmax)

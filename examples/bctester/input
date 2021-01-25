@@ -11,7 +11,7 @@ nz :	50
 
 # Fluid properties
 Density :		1
-Dynamic viscosity :	1e-4
+Dynamic viscosity :	1e-5
 
 # Time integration
 Max timestep size :	1e-2
