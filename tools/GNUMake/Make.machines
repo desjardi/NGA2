@@ -1,4 +1,4 @@
-# This file defines which_site and which_computer. 
+# This file defines which_site and which_computer.
 # Thus this decides which Make.$(which_site) file is included by Make.defs.
 
 which_site := unknown
@@ -11,6 +11,8 @@ else ifdef $(HOST)
 else
   host_name := $(shell hostname -f)
 endif
+
+os_name := $(shell uname -s)
 
 # MACHINES supported
 

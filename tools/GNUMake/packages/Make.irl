@@ -2,7 +2,10 @@
 ifdef IRL_DIR
   INCLUDE_LOCATIONS += $(IRL_DIR)/include/irl_fortran
   LIBRARY_LOCATIONS += $(IRL_DIR)/lib
-  LIBRARIES += -lirl_fortran -lirl_c -lirl -labsl_all -framework CoreFoundation -lstdc++
+  LIBRARIES += -lirl_fortran -lirl_c -lirl -labsl_all -lstdc++
+  ifeq ($(os_name), Darwin)
+    LIBRARIES += -framework CoreFoundation
+  endif
 else
   $(error IRL_DIR not defined, but it is currently required by parts of NGA2)
 endif
