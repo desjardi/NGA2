@@ -518,8 +518,8 @@ contains
    subroutine adjust_metrics(this)
       implicit none
       class(tpns), intent(inout) :: this
-      integer :: i,j,k,st1,st2
-      real(WP) :: delta,mysum
+      integer :: i,j,k
+      real(WP) :: delta
       
       ! Sync up u/v/wmasks
       call this%cfg%sync(this%umask)

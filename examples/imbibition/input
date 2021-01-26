@@ -5,9 +5,9 @@ Partition : 4 1 1
 Lx : 2.5e-2
 Ly : 5.0e-2
 Lz : 2.5e-2
-nx : 50	!100
-ny : 100	!200
-nz : 50	!100
+nx : 100
+ny : 200
+nz : 100
 
 # Wall geometry
 Hole size  : 0.001
