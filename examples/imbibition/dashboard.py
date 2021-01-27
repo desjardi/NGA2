@@ -86,20 +86,24 @@ for myind in range(len(rtime)):
     myrf['R']=rf[ftime[myind]]
     myrf=myrf[myrf['y']>=0]
     myrf=myrf[myrf['R']>0]
+    #print(myind,len(myrf.index))
     # Get wetting radius
     #wet_rad.append(myrf.iat[0,1])  # This is a first order estimate
-    wet_rad.append(1.5*myrf.iat[0,1]-0.5*myrf.iat[1,1])  # This is a second-order estimate
-    # Get contact angle
-    myangle=math.atan2(myrf.iat[1,1]-myrf.iat[0,1],myrf.iat[1,0]-myrf.iat[0,0])+0.5*math.pi
-    angle.append(myangle)
-    cosangle.append(math.cos(myangle))
-    # Get CL velocity
-    if myind==0:
-        vel=0
-    else:
-        vel=(wet_rad[myind]-wet_rad[myind-1])/(rtime[myind]-rtime[myind-1])
-    myCap=mu_l*vel/sigma
-    Cap.append(myCap)
+    try:
+        wet_rad.append(1.5*myrf.iat[0,1]-0.5*myrf.iat[1,1])  # This is a second-order estimate
+        # Get contact angle
+        myangle=math.atan2(myrf.iat[1,1]-myrf.iat[0,1],myrf.iat[1,0]-myrf.iat[0,0])+0.5*math.pi
+        angle.append(myangle)
+        cosangle.append(math.cos(myangle))
+        # Get CL velocity
+        if myind==0:
+            vel=0
+        else:
+            vel=(wet_rad[myind]-wet_rad[myind-1])/(rtime[myind]-rtime[myind-1])
+        myCap=mu_l*vel/sigma
+        Cap.append(myCap)
+    except Exception as e:
+        break
 
 wr = pd.DataFrame(list(zip(rtime,wet_rad,angle,cosangle,Cap)),columns=['Time','R','angle','cosangle','Cap'])
 fig3=go.Figure()
