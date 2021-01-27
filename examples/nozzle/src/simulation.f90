@@ -191,7 +191,7 @@ contains
          call fs%get_bcond('inj2',mybc)
          do n=1,mybc%itr%no_
             i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
-            fs%V(i,j+1,k)=-Uports
+            fs%V(i,j,k)=-Uports
          end do
          call fs%get_bcond('inj3',mybc)
          do n=1,mybc%itr%no_
@@ -201,7 +201,7 @@ contains
          call fs%get_bcond('inj4',mybc)
          do n=1,mybc%itr%no_
             i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
-            fs%W(i,j,k+1)=-Uports
+            fs%W(i,j,k)=-Uports
          end do
          ! Apply all other boundary conditions
          call fs%apply_bcond(time%t,time%dt)
