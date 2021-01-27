@@ -1,0 +1,33 @@
+# Parallelization
+Partition : 4 1 1
+
+# Mesh definition
+Inlet start : 5.0e-03
+Lx :  105e-03
+Ly :  100e-03
+Lz :  100e-03
+nx :  100
+ny :  100
+nz :  100
+
+# Gas velocity
+Gas flow rate (SLPM) : 150
+
+# Fluid properties
+Density :           1.2
+Dynamic viscosity : 1.8e-5
+
+# Time integration
+Max timestep size :   1e-4
+Max cfl number :      1.0
+
+# Pressure solver
+Pressure tolerance : 1e-6
+Pressure iteration : 100
+
+# Implicit velocity solver
+Implicit tolerance : 1e-6
+Implicit iteration : 100
+
+# Ensight ouput
+Ensight output period : 1e-3

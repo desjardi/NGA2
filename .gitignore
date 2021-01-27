@@ -44,3 +44,4 @@ examples/*/*
 !examples/*/README
 !examples/*/src
 !examples/*/*.py
+!examples/nozzle/cad
