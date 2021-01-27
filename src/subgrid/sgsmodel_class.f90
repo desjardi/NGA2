@@ -11,7 +11,7 @@ module sgsmodel_class
    public :: sgsmodel
    
    ! Some clipping parameters
-   real(WP), parameter :: Cs_ref=0.16_WP
+   real(WP), parameter :: Cs_ref=0.1_WP
    
    !> SGS model object definition
    type :: sgsmodel
@@ -363,7 +363,7 @@ contains
                else
                   Cs=0.0_WP
                end if
-               Cs=0.16_WP
+               Cs=Cs_ref
                this%visc(i,j,k)=rho(i,j,k)*S_(i,j,k)*Cs*this%delta(i,j,k)**2
             end do
          end do
