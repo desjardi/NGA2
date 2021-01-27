@@ -18,7 +18,7 @@ Density :           1.2
 Dynamic viscosity : 1.8e-5
 
 # Time integration
-Max timestep size :   1e-5
+Max timestep size :   2e-5
 Max cfl number :      1.0
 
 # Pressure solver

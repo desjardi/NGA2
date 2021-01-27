@@ -225,7 +225,8 @@ contains
          call param_read('Ensight output period',ens_evt%tper)
          ! Add variables to output
          call ens_out%add_vector('velocity',Ui,Vi,Wi)
-         call ens_out%add_scalar('walls',cfg%VF)
+         call ens_out%add_scalar('walls',fs%cfg%VF)
+         call ens_out%add_scalar('visc_t',sgs%visc)
          ! Output to ensight
          if (ens_evt%occurs()) call ens_out%write_data(time%t)
       end block create_ensight
