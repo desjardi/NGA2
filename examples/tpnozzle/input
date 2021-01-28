@@ -1,0 +1,38 @@
+# Parallelization
+Partition : 4 1 1
+
+# Mesh definition - spray flow
+Lx :  0.04
+Ly :  0.03
+Lz :  0.03
+nx :  100    ! 400 ! Lam's current resolution = 400x300x300
+ny :  75     ! 300
+nz :  75     ! 300
+xmax: 0.03
+
+# Injection velocity
+Gas flow rate (SLPM) : 150
+Liquid flow rate (SLPM) : 1
+
+# Fluid properties
+Liquid dynamic viscosity :    1.3e-3
+Gas dynamic viscosity :       1.8e-5
+Liquid density :              1000
+Gas density :                 1.2
+Surface tension coefficient : 0.072
+Static contact angle :        90
+
+# Time integration
+Max timestep size : 2e-5
+Max cfl number :    1.0
+
+# Pressure solver
+Pressure tolerance : 1e-6
+Pressure iteration : 100
+
+# Implicit velocity solver
+Implicit tolerance : 1e-6
+Implicit iteration : 100
+
+# Ensight ouput
+Ensight output period : 1e-2

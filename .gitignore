@@ -45,3 +45,4 @@ examples/*/*
 !examples/*/src
 !examples/*/*.py
 !examples/nozzle/cad
+!examples/tpnozzle/cad

@@ -1,7 +1,7 @@
 !> Various definitions and tools for running an NGA2 simulation
 module simulation
    use precision,         only: WP
-   use geometry,          only: cfg
+   use geometry,          only: cfg,xinj_dist,inj_norm_diam,dli0,dlo0,dgi0
    use tpns_class,        only: tpns
    use vfs_class,         only: vfs
    use timetracker_class, only: timetracker
@@ -11,7 +11,7 @@ module simulation
    implicit none
    private
    
-   !> Single two-phase flow solver and volume fraction solver and corresponding time tracker
+   !> Two-phase incompressible flow solver, VF solver, and corresponding time tracker
    type(tpns),        public :: fs
    type(vfs),         public :: vf
    type(timetracker), public :: time
@@ -28,25 +28,118 @@ module simulation
    !> Private work arrays
    real(WP), dimension(:,:,:), allocatable :: resU,resV,resW
    real(WP), dimension(:,:,:), allocatable :: Ui,Vi,Wi
-   
-   !> Problem definition
-   real(WP), dimension(3) :: center
-   real(WP) :: radius,depth
+   real(WP), dimension(:,:,:,:), allocatable :: SR
+   real(WP) :: xloc !< X location of the interface initially
    
 contains
    
+   !> Function that localizes the right domain boundary
+   function right_boundary(pg,i,j,k) result(isIn)
+      use pgrid_class, only: pgrid
+      class(pgrid), intent(in) :: pg
+      integer, intent(in) :: i,j,k
+      logical :: isIn
+      isIn=.false.
+      if (i.eq.pg%imax+1) isIn=.true.
+   end function right_boundary
    
-   !> Function that defines a level set function for a falling drop problem
-   function levelset_falling_drop(xyz,t) result(G)
+   !> Function that localizes injector at -y
+   function inj1(pg,i,j,k) result(isIn)
+      use pgrid_class, only: pgrid
+      class(pgrid), intent(in) :: pg
+      integer, intent(in) :: i,j,k
+      real(WP) ::hyp,rise,run
+      logical :: isIn
+      isIn=.false.
+      ! Check injector x-z plane
+      hyp =norm2([pg%xm(i),pg%ym(j),pg%zm(k)]-[xinj_dist,0.0_WP,0.0_WP])
+      rise=abs(pg%ym(j))
+      run =sqrt(hyp**2-rise**2)
+      if (run.le.inj_norm_diam/2.0_WP.and.j.eq.pg%jmin) isIn=.true.
+   end function inj1
+
+   !> Function that localizes injector at +y
+   function inj2(pg,i,j,k) result(isIn)
+      use pgrid_class, only: pgrid
+      class(pgrid), intent(in) :: pg
+      integer, intent(in) :: i,j,k
+      real(WP) ::hyp,rise,run
+      logical :: isIn
+      isIn=.false.
+      ! Check injector x-z plane
+      hyp =norm2([pg%xm(i),pg%ym(j),pg%zm(k)]-[xinj_dist,0.0_WP,0.0_WP])
+      rise=abs(pg%ym(j))
+      run =sqrt(hyp**2-rise**2)
+      if (run.le.inj_norm_diam/2.0_WP.and.j.eq.pg%jmax+1) isIn=.true.
+   end function inj2
+
+   !> Function that localizes injector at -z
+   function inj3(pg,i,j,k) result(isIn)
+      use pgrid_class, only: pgrid
+      class(pgrid), intent(in) :: pg
+      integer, intent(in) :: i,j,k
+      real(WP) ::hyp,rise,run
+      logical :: isIn
+      isIn=.false.
+      ! Check injector x-y plane
+      hyp =norm2([pg%xm(i),pg%ym(j),pg%zm(k)]-[xinj_dist,0.0_WP,0.0_WP])
+      rise=abs(pg%zm(k))
+      run =sqrt(hyp**2-rise**2)
+      if (run.le.inj_norm_diam/2.0_WP.and.k.eq.pg%kmin) isIn=.true.
+   end function inj3
+
+   !> Function that localizes injector at +z
+   function inj4(pg,i,j,k) result(isIn)
+      use pgrid_class, only: pgrid
+      class(pgrid), intent(in) :: pg
+      integer, intent(in) :: i,j,k
+      real(WP) ::hyp,rise,run
+      logical :: isIn
+      isIn=.false.
+      ! Check injector x-y plane
+      hyp =norm2([pg%xm(i),pg%ym(j),pg%zm(k)]-[xinj_dist,0.0_WP,0.0_WP] )
+      rise=abs(pg%zm(k))
+      run =sqrt(hyp**2-rise**2)
+      if (run.le.inj_norm_diam/2.0_WP.and.k.eq.pg%kmax+1) isIn=.true.
+   end function inj4
+   
+   
+   !> Function that localizes liquid stream at -x
+   function liq_inj(pg,i,j,k) result(isIn)
+      use pgrid_class, only: pgrid
+      class(pgrid), intent(in) :: pg
+      integer, intent(in) :: i,j,k
+      logical :: isIn
+      real(WP) :: rad
+      isIn=.false.
+      rad=sqrt(pg%ym(j)**2+pg%zm(k)**2)
+      if (rad.lt.dli0.and.i.eq.pg%imin) isIn=.true.
+   end function liq_inj
+   
+   
+   !> Function that localizes gas stream at -x
+   function gas_inj(pg,i,j,k) result(isIn)
+      use pgrid_class, only: pgrid
+      class(pgrid), intent(in) :: pg
+      integer, intent(in) :: i,j,k
+      logical :: isIn
+      real(WP) :: rad
+      isIn=.false.
+      rad=sqrt(pg%ym(j)**2+pg%zm(k)**2)
+      if (rad.ge.dlo0.and.rad.lt.dgi0.and.i.eq.pg%imin) isIn=.true.
+   end function gas_inj
+   
+   
+   !> Function that defines a level set function for a contacting drop problem
+   function levelset_liquid_needle(xyz,t) result(G)
       implicit none
       real(WP), dimension(3),intent(in) :: xyz
       real(WP), intent(in) :: t
-      real(WP) :: G
-      ! Create the droplet
-      G=radius-sqrt(sum((xyz-center)**2))
-      ! Add the pool
-      G=max(G,depth-xyz(2))
-   end function levelset_falling_drop
+      real(WP) :: G,rad
+      G=-huge(1.0_WP)
+      rad=sqrt(xyz(2)**2+xyz(3)**2)
+      if (rad.lt.dli0) G=xloc-xyz(1)
+   end function levelset_liquid_needle
    
    
    !> Initialization of problem solver
@@ -66,9 +159,9 @@ contains
       end block allocate_work_arrays
       
       
-      ! Initialize time tracker with 2 subiterations
+      ! Initialize time tracker
       initialize_timetracker: block
-         time=timetracker(amRoot=cfg%amRoot)
+         time=timetracker(fs%cfg%amRoot)
          call param_read('Max timestep size',time%dtmax)
          call param_read('Max cfl number',time%cflmax)
          time%dt=time%dtmax
@@ -87,10 +180,8 @@ contains
          integer, parameter :: amr_ref_lvl=4
          ! Create a VOF solver
          vf=vfs(cfg=cfg,reconstruction_method=lvira,name='VOF')
-         ! Initialize to a droplet and a pool
-         center=[0.0_WP,0.5_WP,0.0_WP]
-         radius=0.1_WP
-         depth =0.2_WP
+         ! Initialize to flat interface in liquid needle
+         xloc=-0.001_WP !< Just inside the nozzle
          do k=vf%cfg%kmino_,vf%cfg%kmaxo_
             do j=vf%cfg%jmino_,vf%cfg%jmaxo_
                do i=vf%cfg%imino_,vf%cfg%imaxo_
@@ -105,7 +196,7 @@ contains
                   end do
                   ! Call adaptive refinement code to get volume and barycenters recursively
                   vol=0.0_WP; area=0.0_WP; v_cent=0.0_WP; a_cent=0.0_WP
-                  call cube_refine_vol(cube_vertex,vol,area,v_cent,a_cent,levelset_falling_drop,0.0_WP,amr_ref_lvl)
+                  call cube_refine_vol(cube_vertex,vol,area,v_cent,a_cent,levelset_liquid_needle,0.0_WP,amr_ref_lvl)
                   vf%VF(i,j,k)=vol/vf%cfg%vol(i,j,k)
                   if (vf%VF(i,j,k).ge.VFlo.and.vf%VF(i,j,k).le.VFhi) then
                      vf%Lbary(:,i,j,k)=v_cent
@@ -134,10 +225,11 @@ contains
       end block create_and_initialize_vof
       
       
-      ! Create a two-phase flow solver without bconds
-      create_and_initialize_flow_solver: block
-         use ils_class, only: amg,pcg_amg,gmres,pfmg,smg
-         ! Create flow solver
+      ! Create an incompressible flow solver with bconds
+      create_solver: block
+         use tpns_class, only: dirichlet,clipped_neumann
+         use ils_class,  only: pcg_amg,gmres
+         use mathtools,  only: Pi
          fs=tpns(cfg=cfg,name='Two-phase NS')
          ! Assign constant viscosity to each phase
          call param_read('Liquid dynamic viscosity',fs%visc_l)
@@ -147,8 +239,13 @@ contains
          call param_read('Gas density',fs%rho_g)
          ! Read in surface tension coefficient
          call param_read('Surface tension coefficient',fs%sigma)
-         ! Assign acceleration of gravity
-         call param_read('Gravity',fs%gravity)
+         call param_read('Static contact angle',fs%contact_angle)
+         fs%contact_angle=fs%contact_angle*Pi/180.0_WP
+         ! Define direction gas/liquid stream boundary conditions
+         call fs%add_bcond(name='gas_inj',type=dirichlet,face='x',dir=-1,canCorrect=.false.,locator=gas_inj)
+         call fs%add_bcond(name='liq_inj',type=dirichlet,face='x',dir=-1,canCorrect=.false.,locator=liq_inj)
+         ! Outflow on the right
+         call fs%add_bcond(name='outflow',type=clipped_neumann,face='x',dir=+1,canCorrect=.true. ,locator=right_boundary)
          ! Configure pressure solver
          call param_read('Pressure iteration',fs%psolv%maxit)
          call param_read('Pressure tolerance',fs%psolv%rcvg)
@@ -157,25 +254,62 @@ contains
          call param_read('Implicit tolerance',fs%implicit%rcvg)
          ! Setup the solver
          call fs%setup(pressure_ils=pcg_amg,implicit_ils=gmres)
+      end block create_solver
+      
+      
+      ! Initialize our velocity field
+      initialize_velocity: block
+         use mathtools,  only: pi
+         use tpns_class, only: bcond
+         type(bcond), pointer :: mybc
+         integer  :: n,i,j,k
+         real(WP) :: rad,Uports
+         real(WP) :: Q_SLPM,Q_SI,Aport
+         real(WP), parameter :: SLPM2SI=1.66667E-5_WP
          ! Zero initial field
          fs%U=0.0_WP; fs%V=0.0_WP; fs%W=0.0_WP
-         ! Calculate cell-centered velocities and divergence
+         ! Apply Dirichlet at direct liquid and gas injector ports
+         call param_read('Gas flow rate (SLPM)',Q_SLPM)
+         Q_SI=Q_SLPM*SLPM2SI
+         Aport=pi/4.0_WP*dgi0**2-pi/4.0_WP*dlo0**2
+         Uports=Q_SI/(4.0_WP*Aport)
+         call fs%get_bcond('gas_inj',mybc)
+         do n=1,mybc%itr%no_
+            i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
+            fs%U(i,j,k)=+10.0_WP
+         end do
+         call param_read('Liquid flow rate (SLPM)',Q_SLPM)
+         Q_SI=Q_SLPM*SLPM2SI
+         Aport=pi/4.0_WP*dli0**2
+         Uports=Q_SI/(4.0_WP*Aport)
+         call fs%get_bcond('liq_inj',mybc)
+         do n=1,mybc%itr%no_
+            i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
+            fs%U(i,j,k)=+1.0_WP
+         end do
+         ! Apply all other boundary conditions
+         call fs%apply_bcond(time%t,time%dt)
+         ! Compute MFR through all boundary conditions
+         call fs%get_mfr()
+         ! Adjust MFR for global mass balance
+         call fs%correct_mfr()
+         ! Compute cell-centered velocity
          call fs%interp_vel(Ui,Vi,Wi)
+         ! Compute divergence
          call fs%get_div()
-      end block create_and_initialize_flow_solver
+      end block initialize_velocity
       
       
       ! Add Ensight output
       create_ensight: block
          ! Create Ensight output from cfg
-         ens_out=ensight(cfg=cfg,name='twophase')
+         ens_out=ensight(cfg,'nozzle')
          ! Create event for Ensight output
-         ens_evt=event(time=time,name='Ensight output')
+         ens_evt=event(time,'Ensight output')
          call param_read('Ensight output period',ens_evt%tper)
          ! Add variables to output
-         call ens_out%add_scalar('pressure',fs%P)
          call ens_out%add_vector('velocity',Ui,Vi,Wi)
-         call ens_out%add_scalar('divergence',fs%div)
+         call ens_out%add_scalar('walls',fs%cfg%VF)
          call ens_out%add_scalar('VOF',vf%VF)
          call ens_out%add_scalar('curvature',vf%curv)
          call ens_out%add_surface('vofplic',vf%surfgrid)
@@ -211,7 +345,6 @@ contains
          cflfile=monitor(fs%cfg%amRoot,'cfl')
          call cflfile%add_column(time%n,'Timestep number')
          call cflfile%add_column(time%t,'Time')
-         call cflfile%add_column(fs%CFLst,'STension CFL')
          call cflfile%add_column(fs%CFLc_x,'Convective xCFL')
          call cflfile%add_column(fs%CFLc_y,'Convective yCFL')
          call cflfile%add_column(fs%CFLc_z,'Convective zCFL')
@@ -225,7 +358,7 @@ contains
    end subroutine simulation_init
    
    
-   !> Perform an NGA2 simulation - this mimicks NGA's old time integration for multiphase
+   !> Perform an NGA2 simulation
    subroutine simulation_run
       implicit none
       
@@ -344,9 +477,6 @@ contains
       deallocate(resU,resV,resW,Ui,Vi,Wi)
       
    end subroutine simulation_final
-   
-   
-   
    
    
 end module simulation

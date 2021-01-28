@@ -1,7 +1,7 @@
 !> Various definitions and tools for running an NGA2 simulation
 module simulation
    use precision,         only: WP
-   use geometry,          only: cfg,xinj_dist,inj_norm_diam
+   use geometry,          only: cfg,xinj_dist,inj_norm_diam,dli0,dlo0,dgi0
    use incomp_class,      only: incomp
    use sgsmodel_class,    only: sgsmodel
    use timetracker_class, only: timetracker
@@ -102,8 +102,34 @@ contains
       hyp =norm2([pg%xm(i),pg%ym(j),pg%zm(k)]-[xinj_dist,0.0_WP,0.0_WP] )
       rise=abs(pg%zm(k))
       run =sqrt(hyp**2-rise**2)
-      if (run.le.inj_norm_diam/2.0_WP.and.k.eq.pg%kmax+1)  isIn=.true.
+      if (run.le.inj_norm_diam/2.0_WP.and.k.eq.pg%kmax+1) isIn=.true.
    end function inj4
+   
+   
+   !> Function that localizes liquid stream at -x
+   function liq_inj(pg,i,j,k) result(isIn)
+      use pgrid_class, only: pgrid
+      class(pgrid), intent(in) :: pg
+      integer, intent(in) :: i,j,k
+      logical :: isIn
+      real(WP) :: rad
+      isIn=.false.
+      rad=sqrt(pg%ym(j)**2+pg%zm(k)**2)
+      if (rad.lt.dli0.and.i.eq.pg%imin) isIn=.true.
+   end function liq_inj
+   
+   
+   !> Function that localizes gas stream at -x
+   function gas_inj(pg,i,j,k) result(isIn)
+      use pgrid_class, only: pgrid
+      class(pgrid), intent(in) :: pg
+      integer, intent(in) :: i,j,k
+      logical :: isIn
+      real(WP) :: rad
+      isIn=.false.
+      rad=sqrt(pg%ym(j)**2+pg%zm(k)**2)
+      if (rad.ge.dlo0.and.rad.lt.dgi0.and.i.eq.pg%imin) isIn=.true.
+   end function gas_inj
    
    
    !> Initialization of problem solver
@@ -133,11 +159,15 @@ contains
          ! Set the flow properties
          call param_read('Density',fs%rho)
          call param_read('Dynamic viscosity',visc); fs%visc=visc
-         ! Define boundary conditions
-         call fs%add_bcond(name='inj1'   ,type=dirichlet      ,face='y',dir=-1,canCorrect=.false.,locator=inj1)
-         call fs%add_bcond(name='inj2'   ,type=dirichlet      ,face='y',dir=+1,canCorrect=.false.,locator=inj2)
-         call fs%add_bcond(name='inj3'   ,type=dirichlet      ,face='z',dir=-1,canCorrect=.false.,locator=inj3)
-         call fs%add_bcond(name='inj4'   ,type=dirichlet      ,face='z',dir=+1,canCorrect=.false.,locator=inj4)
+         ! Define gas port boundary conditions
+         call fs%add_bcond(name='inj1',type=dirichlet,face='y',dir=-1,canCorrect=.false.,locator=inj1)
+         call fs%add_bcond(name='inj2',type=dirichlet,face='y',dir=+1,canCorrect=.false.,locator=inj2)
+         call fs%add_bcond(name='inj3',type=dirichlet,face='z',dir=-1,canCorrect=.false.,locator=inj3)
+         call fs%add_bcond(name='inj4',type=dirichlet,face='z',dir=+1,canCorrect=.false.,locator=inj4)
+         ! Define direction gas/liquid stream boundary conditions
+         !call fs%add_bcond(name='gas_inj',type=dirichlet,face='x',dir=-1,canCorrect=.false.,locator=gas_inj)
+         !call fs%add_bcond(name='liq_inj',type=dirichlet,face='x',dir=-1,canCorrect=.false.,locator=liq_inj)
+         ! Outflow on the right
          call fs%add_bcond(name='outflow',type=clipped_neumann,face='x',dir=+1,canCorrect=.true. ,locator=right_boundary)
          ! Configure pressure solver
          call param_read('Pressure iteration',fs%psolv%maxit)
@@ -203,6 +233,25 @@ contains
             i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
             fs%W(i,j,k)=-Uports
          end do
+         ! Apply Dirichlet at direct liquid and gas injector ports
+         !call param_read('Gas flow rate (SLPM)',Q_SLPM)
+         !Q_SI=Q_SLPM*SLPM2SI
+         !Aport=pi/4.0_WP*dgi0**2-pi/4.0_WP*dlo0**2
+         !Uports=Q_SI/(4.0_WP*Aport)
+         !call fs%get_bcond('gas_inj',mybc)
+         !do n=1,mybc%itr%no_
+         !   i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
+         !   fs%U(i,j,k)=+10.0_WP
+         !end do
+         !call param_read('Liquid flow rate (SLPM)',Q_SLPM)
+         !Q_SI=Q_SLPM*SLPM2SI
+         !Aport=pi/4.0_WP*dli0**2
+         !Uports=Q_SI/(4.0_WP*Aport)
+         !call fs%get_bcond('liq_inj',mybc)
+         !do n=1,mybc%itr%no_
+         !   i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
+         !   fs%U(i,j,k)=+1.0_WP
+         !end do
          ! Apply all other boundary conditions
          call fs%apply_bcond(time%t,time%dt)
          ! Compute MFR through all boundary conditions
@@ -272,7 +321,7 @@ contains
    subroutine simulation_run
       implicit none
       
-      ! Perform explicit Euler time integration
+      ! Perform time integration
       do while (.not.time%done())
          
          ! Increment time
