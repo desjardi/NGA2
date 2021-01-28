@@ -4,6 +4,7 @@ module simulation
    use geometry,          only: cfg,xinj_dist,inj_norm_diam,dli0,dlo0,dgi0
    use tpns_class,        only: tpns
    use vfs_class,         only: vfs
+   use sgsmodel_class,    only: sgsmodel
    use timetracker_class, only: timetracker
    use ensight_class,     only: ensight
    use event_class,       only: event
@@ -11,10 +12,11 @@ module simulation
    implicit none
    private
    
-   !> Two-phase incompressible flow solver, VF solver, and corresponding time tracker
+   !> Two-phase incompressible flow solver, VF solver, and corresponding time tracker and sgs model
    type(tpns),        public :: fs
    type(vfs),         public :: vf
    type(timetracker), public :: time
+   type(sgsmodel),    public :: sgs
    
    !> Ensight postprocessing
    type(ensight) :: ens_out
@@ -143,6 +145,7 @@ contains
          allocate(Ui  (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
          allocate(Vi  (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
          allocate(Wi  (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+         allocate(SR(6,cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
       end block allocate_work_arrays
       
       
@@ -273,6 +276,12 @@ contains
       end block initialize_velocity
       
       
+      ! Create an LES model
+      create_sgs: block
+         sgs=sgsmodel(cfg=fs%cfg,umask=fs%umask,vmask=fs%vmask,wmask=fs%wmask)
+      end block create_sgs
+      
+      
       ! Add Ensight output
       create_ensight: block
          ! Create Ensight output from cfg
@@ -334,6 +343,7 @@ contains
    !> Perform an NGA2 simulation
    subroutine simulation_run
       implicit none
+      integer :: i,j,k
       
       ! Perform time integration
       do while (.not.time%done())
@@ -362,6 +372,24 @@ contains
          
          ! Prepare new staggered viscosity (at n+1)
          call fs%get_viscosity(vf=vf)
+         
+         ! Turbulence modeling
+         call fs%get_strainrate(Ui=Ui,Vi=Vi,Wi=Wi,SR=SR)
+         resU=fs%rho_l*vf%VF+fs%rho_g*(1.0_WP-vf%VF)
+         call sgs%get_visc(dt=time%dtold,rho=resU,Ui=Ui,Vi=Vi,Wi=Wi,SR=SR)
+         where (sgs%visc.lt.-min(fs%visc_l,fs%visc_g))
+            sgs%visc=-min(fs%visc_l,fs%visc_g)
+         end where
+         do k=fs%cfg%kmino_+1,fs%cfg%kmaxo_
+            do j=fs%cfg%jmino_+1,fs%cfg%jmaxo_
+               do i=fs%cfg%imino_+1,fs%cfg%imaxo_
+                  fs%visc(i,j,k)   =fs%visc(i,j,k)   +sgs%visc(i,j,k)
+                  fs%visc_xy(i,j,k)=fs%visc_xy(i,j,k)+sum(fs%itp_xy(:,:,i,j,k)*sgs%visc(i-1:i,j-1:j,k))
+                  fs%visc_yz(i,j,k)=fs%visc_yz(i,j,k)+sum(fs%itp_yz(:,:,i,j,k)*sgs%visc(i,j-1:j,k-1:k))
+                  fs%visc_zx(i,j,k)=fs%visc_zx(i,j,k)+sum(fs%itp_xz(:,:,i,j,k)*sgs%visc(i-1:i,j,k-1:k))
+               end do
+            end do
+         end do
          
          ! Perform sub-iterations
          do while (time%it.le.time%itmax)
@@ -444,7 +472,7 @@ contains
       ! timetracker
       
       ! Deallocate work arrays
-      deallocate(resU,resV,resW,Ui,Vi,Wi)
+      deallocate(resU,resV,resW,Ui,Vi,Wi,SR)
       
    end subroutine simulation_final
    

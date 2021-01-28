@@ -115,6 +115,7 @@ module tpns_class
       ! Metrics
       real(WP) :: RHOeps                                  !< Parameter for when to switch between centered and modified interpolation scheme
       real(WP), dimension(:,:,:,:), allocatable :: itpi_x,itpi_y,itpi_z   !< Interpolation for Ui/Vi/Wi
+      real(WP), dimension(:,:,:,:,:), allocatable :: itp_xy,itp_yz,itp_xz !< Interpolation for viscosity
       real(WP), dimension(:,:,:,:), allocatable :: itpu_x,itpu_y,itpu_z   !< Second order interpolation for U
       real(WP), dimension(:,:,:,:), allocatable :: itpv_x,itpv_y,itpv_z   !< Second order interpolation for V
       real(WP), dimension(:,:,:,:), allocatable :: itpw_x,itpw_y,itpw_z   !< Second order interpolation for W
@@ -329,7 +330,8 @@ contains
    subroutine init_metrics(this)
       implicit none
       class(tpns), intent(inout) :: this
-      integer :: i,j,k
+      integer :: i,j,k,st1,st2
+      real(WP), dimension(-1:0) :: itpx,itpy,itpz
       
       ! Allocate hybrid interpolation coefficients - these are populated later
       allocate(this%hybu_x( 0:+1,this%cfg%imino_  :this%cfg%imaxo_,this%cfg%jmino_  :this%cfg%jmaxo_,this%cfg%kmino_  :this%cfg%kmaxo_)); this%hybu_x=0.0_WP
@@ -353,6 +355,30 @@ contains
                this%itpi_x(:,i,j,k)=this%cfg%dxmi(i)*[this%cfg%xm(i)-this%cfg%x(i),this%cfg%x(i)-this%cfg%xm(i-1)] !< Linear interpolation in x from [xm,ym,zm] to [x,ym,zm]
                this%itpi_y(:,i,j,k)=this%cfg%dymi(j)*[this%cfg%ym(j)-this%cfg%y(j),this%cfg%y(j)-this%cfg%ym(j-1)] !< Linear interpolation in y from [xm,ym,zm] to [xm,y,zm]
                this%itpi_z(:,i,j,k)=this%cfg%dzmi(k)*[this%cfg%zm(k)-this%cfg%z(k),this%cfg%z(k)-this%cfg%zm(k-1)] !< Linear interpolation in z from [xm,ym,zm] to [xm,ym,z]
+            end do
+         end do
+      end do
+      
+      ! Allocate finite difference viscosity interpolation coefficients
+      allocate(this%itp_xy(-1:0,-1:0,this%cfg%imino_+1:this%cfg%imaxo_,this%cfg%jmino_+1:this%cfg%jmaxo_,this%cfg%kmino_+1:this%cfg%kmaxo_)) !< Edge-centered (xy)
+      allocate(this%itp_yz(-1:0,-1:0,this%cfg%imino_+1:this%cfg%imaxo_,this%cfg%jmino_+1:this%cfg%jmaxo_,this%cfg%kmino_+1:this%cfg%kmaxo_)) !< Edge-centered (yz)
+      allocate(this%itp_xz(-1:0,-1:0,this%cfg%imino_+1:this%cfg%imaxo_,this%cfg%jmino_+1:this%cfg%jmaxo_,this%cfg%kmino_+1:this%cfg%kmaxo_)) !< Edge-centered (zx)
+      ! Create viscosity interpolation coefficients to cell edge
+      do k=this%cfg%kmino_+1,this%cfg%kmaxo_
+         do j=this%cfg%jmino_+1,this%cfg%jmaxo_
+            do i=this%cfg%imino_+1,this%cfg%imaxo_
+               ! Prepare local 1D metrics
+               itpx=this%cfg%dxmi(i)*[this%cfg%xm(i)-this%cfg%x(i),this%cfg%x(i)-this%cfg%xm(i-1)]
+               itpy=this%cfg%dymi(j)*[this%cfg%ym(j)-this%cfg%y(j),this%cfg%y(j)-this%cfg%ym(j-1)]
+               itpz=this%cfg%dzmi(k)*[this%cfg%zm(k)-this%cfg%z(k),this%cfg%z(k)-this%cfg%zm(k-1)]
+               ! Combine for 2D interpolations
+               do st1=-1,0
+                  do st2=-1,0
+                     this%itp_xy(st1,st2,i,j,k)=itpx(st1)*itpy(st2)
+                     this%itp_yz(st1,st2,i,j,k)=itpy(st1)*itpz(st2)
+                     this%itp_xz(st1,st2,i,j,k)=itpx(st1)*itpz(st2)
+                  end do
+               end do
             end do
          end do
       end do
@@ -517,8 +543,8 @@ contains
    subroutine adjust_metrics(this)
       implicit none
       class(tpns), intent(inout) :: this
-      integer :: i,j,k
-      real(WP) :: delta
+      integer :: i,j,k,st1,st2
+      real(WP) :: delta,mysum
       
       ! Sync up u/v/wmasks
       call this%cfg%sync(this%umask)
@@ -546,6 +572,26 @@ contains
                if (this%mask(i,j,k).eq.1) this%itpu_x(:,i,j,k)=0.0_WP
                if (this%mask(i,j,k).eq.1) this%itpv_y(:,i,j,k)=0.0_WP
                if (this%mask(i,j,k).eq.1) this%itpw_z(:,i,j,k)=0.0_WP
+            end do
+         end do
+      end do
+      
+      ! Adjust viscosity interpolation coefficients to cell edge in the presence of walls (only walls)
+      do k=this%cfg%kmino_+1,this%cfg%kmaxo_
+         do j=this%cfg%jmino_+1,this%cfg%jmaxo_
+            do i=this%cfg%imino_+1,this%cfg%imaxo_
+               ! Zero out interpolation coefficients reaching in the walls
+               do st1=-1,0
+                  do st2=-1,0
+                     if (this%mask(i+st1,j+st2,k).eq.1) this%itp_xy(st1,st2,i,j,k)=0.0_WP
+                     if (this%mask(i,j+st1,k+st2).eq.1) this%itp_yz(st1,st2,i,j,k)=0.0_WP
+                     if (this%mask(i+st1,j,k+st2).eq.1) this%itp_xz(st1,st2,i,j,k)=0.0_WP
+                  end do
+               end do
+               ! Rescale to ensure sum(itp)=1
+               mysum=sum(this%itp_xy(:,:,i,j,k)); if (mysum.gt.0.0_WP) this%itp_xy(:,:,i,j,k)=this%itp_xy(:,:,i,j,k)/mysum
+               mysum=sum(this%itp_yz(:,:,i,j,k)); if (mysum.gt.0.0_WP) this%itp_yz(:,:,i,j,k)=this%itp_yz(:,:,i,j,k)/mysum
+               mysum=sum(this%itp_xz(:,:,i,j,k)); if (mysum.gt.0.0_WP) this%itp_xz(:,:,i,j,k)=this%itp_xz(:,:,i,j,k)/mysum
             end do
          end do
       end do
