@@ -204,7 +204,7 @@ contains
       ! Create an incompressible flow solver with bconds
       create_solver: block
          use tpns_class, only: dirichlet,clipped_neumann
-         use ils_class,  only: pcg_amg,gmres
+         use ils_class,  only: pcg_amg,gmres,gmres_amg
          use mathtools,  only: Pi
          fs=tpns(cfg=cfg,name='Two-phase NS')
          ! Assign constant viscosity to each phase
@@ -229,7 +229,7 @@ contains
          call param_read('Implicit iteration',fs%implicit%maxit)
          call param_read('Implicit tolerance',fs%implicit%rcvg)
          ! Setup the solver
-         call fs%setup(pressure_ils=pcg_amg,implicit_ils=pcg_amg)
+         call fs%setup(pressure_ils=pcg_amg,implicit_ils=gmres_amg)
       end block create_solver
       
       

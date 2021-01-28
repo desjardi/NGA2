@@ -12,7 +12,7 @@ xmax: 0.03
 
 # Injection velocity
 Gas flow rate (SLPM) : 150
-Liquid flow rate (SLPM) : 0!0.099
+Liquid flow rate (SLPM) : 0.099
 
 # Fluid properties
 Liquid dynamic viscosity :    1.3e-3
