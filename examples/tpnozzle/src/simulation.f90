@@ -161,7 +161,7 @@ contains
       
       ! Initialize time tracker
       initialize_timetracker: block
-         time=timetracker(fs%cfg%amRoot)
+         time=timetracker(cfg%amRoot)
          call param_read('Max timestep size',time%dtmax)
          call param_read('Max cfl number',time%cflmax)
          time%dt=time%dtmax
