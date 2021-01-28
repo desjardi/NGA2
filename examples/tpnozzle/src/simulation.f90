@@ -29,7 +29,6 @@ module simulation
    real(WP), dimension(:,:,:), allocatable :: resU,resV,resW
    real(WP), dimension(:,:,:), allocatable :: Ui,Vi,Wi
    real(WP), dimension(:,:,:,:), allocatable :: SR
-   real(WP) :: xloc !< X location of the interface initially
    
 contains
    
@@ -130,18 +129,6 @@ contains
    end function gas_inj
    
    
-   !> Function that defines a level set function for a contacting drop problem
-   function levelset_liquid_needle(xyz,t) result(G)
-      implicit none
-      real(WP), dimension(3),intent(in) :: xyz
-      real(WP), intent(in) :: t
-      real(WP) :: G,rad
-      G=-huge(1.0_WP)
-      rad=sqrt(xyz(2)**2+xyz(3)**2)
-      if (rad.lt.dli0) G=xloc-xyz(1)
-   end function levelset_liquid_needle
-   
-   
    !> Initialization of problem solver
    subroutine simulation_init
       use param, only: param_read
@@ -171,40 +158,24 @@ contains
       
       ! Initialize our VOF solver and field
       create_and_initialize_vof: block
-         use mms_geom, only: cube_refine_vol
-         use vfs_class, only: lvira,VFhi,VFlo
-         integer :: i,j,k,n,si,sj,sk
-         real(WP), dimension(3,8) :: cube_vertex
-         real(WP), dimension(3) :: v_cent,a_cent
-         real(WP) :: vol,area
-         integer, parameter :: amr_ref_lvl=4
+         use vfs_class, only: lvira
+         integer :: i,j,k
+         real(WP) :: xloc,rad
          ! Create a VOF solver
          vf=vfs(cfg=cfg,reconstruction_method=lvira,name='VOF')
          ! Initialize to flat interface in liquid needle
-         xloc=-0.001_WP !< Just inside the nozzle
+         xloc=-0.001_WP !< Interface initially just inside the nozzle
          do k=vf%cfg%kmino_,vf%cfg%kmaxo_
             do j=vf%cfg%jmino_,vf%cfg%jmaxo_
                do i=vf%cfg%imino_,vf%cfg%imaxo_
-                  ! Set cube vertices
-                  n=0
-                  do sk=0,1
-                     do sj=0,1
-                        do si=0,1
-                           n=n+1; cube_vertex(:,n)=[vf%cfg%x(i+si),vf%cfg%y(j+sj),vf%cfg%z(k+sk)]
-                        end do
-                     end do
-                  end do
-                  ! Call adaptive refinement code to get volume and barycenters recursively
-                  vol=0.0_WP; area=0.0_WP; v_cent=0.0_WP; a_cent=0.0_WP
-                  call cube_refine_vol(cube_vertex,vol,area,v_cent,a_cent,levelset_liquid_needle,0.0_WP,amr_ref_lvl)
-                  vf%VF(i,j,k)=vol/vf%cfg%vol(i,j,k)
-                  if (vf%VF(i,j,k).ge.VFlo.and.vf%VF(i,j,k).le.VFhi) then
-                     vf%Lbary(:,i,j,k)=v_cent
-                     vf%Gbary(:,i,j,k)=([vf%cfg%xm(i),vf%cfg%ym(j),vf%cfg%zm(k)]-vf%VF(i,j,k)*vf%Lbary(:,i,j,k))/(1.0_WP-vf%VF(i,j,k))
+                  rad=sqrt(vf%cfg%ym(j)**2+vf%cfg%zm(k)**2)
+                  if (vf%cfg%xm(i).lt.xloc.and.rad.le.dli0) then
+                     vf%VF(i,j,k)=1.0_WP
                   else
-                     vf%Lbary(:,i,j,k)=[vf%cfg%xm(i),vf%cfg%ym(j),vf%cfg%zm(k)]
-                     vf%Gbary(:,i,j,k)=[vf%cfg%xm(i),vf%cfg%ym(j),vf%cfg%zm(k)]
+                     vf%VF(i,j,k)=0.0_WP
                   end if
+                  vf%Lbary(:,i,j,k)=[vf%cfg%xm(i),vf%cfg%ym(j),vf%cfg%zm(k)]
+                  vf%Gbary(:,i,j,k)=[vf%cfg%xm(i),vf%cfg%ym(j),vf%cfg%zm(k)]
                end do
             end do
          end do
@@ -212,6 +183,8 @@ contains
          call vf%update_band()
          ! Perform interface reconstruction from VOF field
          call vf%build_interface()
+         ! Set interface planes at the boundaries
+         call vf%set_full_bcond()
          ! Create discontinuous polygon mesh from IRL interface
          call vf%polygonalize_interface()
          ! Calculate distance from polygons
@@ -233,10 +206,10 @@ contains
          fs=tpns(cfg=cfg,name='Two-phase NS')
          ! Assign constant viscosity to each phase
          call param_read('Liquid dynamic viscosity',fs%visc_l)
-         call param_read('Gas dynamic viscosity',fs%visc_g)
+         call param_read('Gas dynamic viscosity'   ,fs%visc_g)
          ! Assign constant density to each phase
          call param_read('Liquid density',fs%rho_l)
-         call param_read('Gas density',fs%rho_g)
+         call param_read('Gas density'   ,fs%rho_g)
          ! Read in surface tension coefficient
          call param_read('Surface tension coefficient',fs%sigma)
          call param_read('Static contact angle',fs%contact_angle)
@@ -276,7 +249,7 @@ contains
          call fs%get_bcond('gas_inj',mybc)
          do n=1,mybc%itr%no_
             i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
-            fs%U(i,j,k)=+10.0_WP
+            fs%U(i,j,k)=Uports
          end do
          call param_read('Liquid flow rate (SLPM)',Q_SLPM)
          Q_SI=Q_SLPM*SLPM2SI
@@ -285,7 +258,7 @@ contains
          call fs%get_bcond('liq_inj',mybc)
          do n=1,mybc%itr%no_
             i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
-            fs%U(i,j,k)=+1.0_WP
+            fs%U(i,j,k)=Uports
          end do
          ! Apply all other boundary conditions
          call fs%apply_bcond(time%t,time%dt)
@@ -403,9 +376,6 @@ contains
             
             ! Explicit calculation of drho*u/dt from NS
             call fs%get_dmomdt(resU,resV,resW)
-            
-            ! Add momentum source terms
-            call fs%addsrc_gravity(resU,resV,resW)
             
             ! Assemble explicit residual
             resU=-2.0_WP*fs%rho_U*fs%U+(fs%rho_Uold+fs%rho_U)*fs%Uold+time%dt*resU

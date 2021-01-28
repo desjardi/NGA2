@@ -93,7 +93,6 @@ module tpns_class
       real(WP), dimension(:,:,:), allocatable :: dPjy     !< dPressure jump to add to -ddP/dy
       real(WP), dimension(:,:,:), allocatable :: dPjz     !< dPressure jump to add to -ddP/dz
       
-      
       ! Old flow variables
       real(WP), dimension(:,:,:), allocatable :: Uold     !< Uold velocity array
       real(WP), dimension(:,:,:), allocatable :: Vold     !< Vold velocity array

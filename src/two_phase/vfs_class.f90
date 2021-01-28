@@ -145,6 +145,7 @@ module vfs_class
       procedure :: advect_interface                       !< Advance IRL surface to next step
       procedure :: build_interface                        !< Reconstruct IRL interface from VF field
       procedure :: build_lvira                            !< LVIRA reconstruction of the interface from VF field
+      procedure :: set_full_bcond                         !< Full liq/gas plane-setting for boundary cells - this is stair-stepped
       procedure :: polygonalize_interface                 !< Build a discontinuous polygonal representation of the IRL interface
       procedure :: distance_from_polygon                  !< Build a signed distance field from the polygonalized interface
       procedure :: subcell_vol                            !< Build subcell phasic volumes from reconstructed interface
@@ -1104,6 +1105,80 @@ contains
       call this%sync_interface()
       
    end subroutine build_lvira
+   
+   
+   !> Set all domain boundaries to full liquid/gas based on VOF value
+   subroutine set_full_bcond(this)
+      implicit none
+      class(vfs), intent(inout) :: this
+      integer :: i,j,k
+      ! In X-
+      if (.not.this%cfg%xper.and.this%cfg%iproc.eq.1) then
+         do k=this%cfg%kmino_,this%cfg%kmaxo_
+            do j=this%cfg%jmino_,this%cfg%jmaxo_
+               do i=this%cfg%imino,this%cfg%imin-1
+                  call setNumberOfPlanes(this%liquid_gas_interface(i,j,k),1)
+                  call setPlane(this%liquid_gas_interface(i,j,k),0,[0.0_WP,0.0_WP,0.0_WP],sign(1.0_WP,this%VF(i,j,k)-0.5_WP))
+               end do
+            end do
+         end do
+      end if
+      ! In X+
+      if (.not.this%cfg%xper.and.this%cfg%iproc.eq.this%cfg%npx) then
+         do k=this%cfg%kmino_,this%cfg%kmaxo_
+            do j=this%cfg%jmino_,this%cfg%jmaxo_
+               do i=this%cfg%imax+1,this%cfg%imaxo
+                  call setNumberOfPlanes(this%liquid_gas_interface(i,j,k),1)
+                  call setPlane(this%liquid_gas_interface(i,j,k),0,[0.0_WP,0.0_WP,0.0_WP],sign(1.0_WP,this%VF(i,j,k)-0.5_WP))
+               end do
+            end do
+         end do
+      end if
+      ! In Y-
+      if (.not.this%cfg%yper.and.this%cfg%jproc.eq.1) then
+         do k=this%cfg%kmino_,this%cfg%kmaxo_
+            do j=this%cfg%jmino,this%cfg%jmin-1
+               do i=this%cfg%imino_,this%cfg%imaxo_
+                  call setNumberOfPlanes(this%liquid_gas_interface(i,j,k),1)
+                  call setPlane(this%liquid_gas_interface(i,j,k),0,[0.0_WP,0.0_WP,0.0_WP],sign(1.0_WP,this%VF(i,j,k)-0.5_WP))
+               end do
+            end do
+         end do
+      end if
+      ! In Y+
+      if (.not.this%cfg%yper.and.this%cfg%jproc.eq.this%cfg%npy) then
+         do k=this%cfg%kmino_,this%cfg%kmaxo_
+            do j=this%cfg%jmax+1,this%cfg%jmaxo
+               do i=this%cfg%imino_,this%cfg%imaxo_
+                  call setNumberOfPlanes(this%liquid_gas_interface(i,j,k),1)
+                  call setPlane(this%liquid_gas_interface(i,j,k),0,[0.0_WP,0.0_WP,0.0_WP],sign(1.0_WP,this%VF(i,j,k)-0.5_WP))
+               end do
+            end do
+         end do
+      end if
+      ! In Z-
+      if (.not.this%cfg%zper.and.this%cfg%kproc.eq.1) then
+         do k=this%cfg%kmino,this%cfg%kmin-1
+            do j=this%cfg%jmino_,this%cfg%jmaxo_
+               do i=this%cfg%imino_,this%cfg%imaxo_
+                  call setNumberOfPlanes(this%liquid_gas_interface(i,j,k),1)
+                  call setPlane(this%liquid_gas_interface(i,j,k),0,[0.0_WP,0.0_WP,0.0_WP],sign(1.0_WP,this%VF(i,j,k)-0.5_WP))
+               end do
+            end do
+         end do
+      end if
+      ! In Z+
+      if (.not.this%cfg%zper.and.this%cfg%kproc.eq.this%cfg%npz) then
+         do k=this%cfg%kmax+1,this%cfg%kmaxo
+            do j=this%cfg%jmino_,this%cfg%jmaxo_
+               do i=this%cfg%imino_,this%cfg%imaxo_
+                  call setNumberOfPlanes(this%liquid_gas_interface(i,j,k),1)
+                  call setPlane(this%liquid_gas_interface(i,j,k),0,[0.0_WP,0.0_WP,0.0_WP],sign(1.0_WP,this%VF(i,j,k)-0.5_WP))
+               end do
+            end do
+         end do
+      end if
+   end subroutine set_full_bcond
    
    
    !> Polygonalization of the IRL interface (calculates SD at the same time)

@@ -12,7 +12,7 @@ xmax: 0.03
 
 # Injection velocity
 Gas flow rate (SLPM) : 150
-Liquid flow rate (SLPM) : 1
+Liquid flow rate (SLPM) : 0!0.099
 
 # Fluid properties
 Liquid dynamic viscosity :    1.3e-3
@@ -35,4 +35,4 @@ Implicit tolerance : 1e-6
 Implicit iteration : 100
 
 # Ensight ouput
-Ensight output period : 1e-2
+Ensight output period : 1e-4!3

@@ -241,7 +241,7 @@ contains
          !call fs%get_bcond('gas_inj',mybc)
          !do n=1,mybc%itr%no_
          !   i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
-         !   fs%U(i,j,k)=+10.0_WP
+         !   fs%U(i,j,k)=+Uports
          !end do
          !call param_read('Liquid flow rate (SLPM)',Q_SLPM)
          !Q_SI=Q_SLPM*SLPM2SI
@@ -250,7 +250,7 @@ contains
          !call fs%get_bcond('liq_inj',mybc)
          !do n=1,mybc%itr%no_
          !   i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
-         !   fs%U(i,j,k)=+1.0_WP
+         !   fs%U(i,j,k)=+Uports
          !end do
          ! Apply all other boundary conditions
          call fs%apply_bcond(time%t,time%dt)
