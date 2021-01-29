@@ -1,0 +1,65 @@
+######## SHARED PARAMETERS ########
+
+# Injection velocity
+Gas flow rate (SLPM) :    150
+Liquid flow rate (SLPM) : 0.099
+
+# Fluid properties
+Liquid dynamic viscosity :    1.3e-3
+Gas dynamic viscosity :       1.8e-5
+Liquid density :              1000
+Gas density :                 1.2
+Surface tension coefficient : 0.072
+Static contact angle :        90
+
+# Pressure solver
+Pressure tolerance : 1e-6
+Pressure iteration : 100
+
+# Implicit velocity solver
+Implicit tolerance : 1e-6
+Implicit iteration : 100
+
+######### SOLVER 1 INPUT ##########
+# This is the internal nozzle flow
+
+# Parallelization
+1 Partition : 4 1 1
+
+# Mesh definition - spray flow
+1 Lx :  0.1
+1 Ly :  0.1
+1 Lz :  0.1
+1 nx :  100
+1 ny :  100
+1 nz :  100
+1 xmax: 0.005
+
+# Time integration
+1 Max timestep size : 2e-5
+1 Max cfl number :    1.0
+
+# Ensight ouput
+1 Ensight output period : 1e-3
+
+######### SOLVER 2 INPUT ##########
+# This is the external atomizing flow
+
+# Parallelization
+2 Partition : 4 1 1
+
+# Mesh definition - spray flow
+2 Lx :  0.04
+2 Ly :  0.03
+2 Lz :  0.03
+2 nx :  100    ! 400 ! Lam's current resolution = 400x300x300
+2 ny :  75     ! 300
+2 nz :  75     ! 300
+2 xmax: 0.03
+
+# Time integration
+2 Max timestep size : 2e-5
+2 Max cfl number :    1.0
+
+# Ensight ouput
+2 Ensight output period : 1e-3

@@ -1,0 +1,7 @@
+*Two-fluid nozzle test case, v1*
+This is a single-phase model of the internal flow of a canonical airblast fuel nozzle.
+It is characterized by a complex stair-stepped geometry and multiple inlet ports.
+Only the gas phase is simulated here, the focus is on the gas flow development and
+turbulence.
+
+Created by L. Vu, 2019

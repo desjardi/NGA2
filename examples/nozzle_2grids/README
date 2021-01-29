@@ -1,0 +1,8 @@
+*Two-fluid nozzle test case, v3*
+This case simulates both the internal gas flow in the airblast fuel nozzle using
+a single-phase solver, and the atomizing two-phase flow exiting the tip of the nozzle
+using a two-phase flow solver. Both solvers are run simultaneously and are one-way
+coupled, with the outflow conditions of the internal simulation used as inlet
+velocity conditions for the atomization simulation.
+
+The coupling is done manually here, but in the future libraries like preCICE could be used.
