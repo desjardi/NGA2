@@ -273,25 +273,26 @@ contains
          real(WP), parameter :: SLPM2SI=1.66667E-5_WP
          ! Zero initial field
          fs2%U=0.0_WP; fs2%V=0.0_WP; fs2%W=0.0_WP
+         ! NO NEED TO DO ANYTHING HERE AS THE COUPLING WILL TAKE CARE OF IT
          ! Apply Dirichlet at direct liquid and gas injector ports
-         call param_read('Gas flow rate (SLPM)',Q_SLPM)
-         Q_SI=Q_SLPM*SLPM2SI
-         Aport=pi/4.0_WP*dgi0**2-pi/4.0_WP*dlo0**2
-         Uports=Q_SI/(4.0_WP*Aport)
-         call fs2%get_bcond('gas_inj',mybc)
-         do n=1,mybc%itr%no_
-            i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
-            fs2%U(i,j,k)=Uports
-         end do
-         call param_read('Liquid flow rate (SLPM)',Q_SLPM)
-         Q_SI=Q_SLPM*SLPM2SI
-         Aport=pi/4.0_WP*dli0**2
-         Uports=Q_SI/(4.0_WP*Aport)
-         call fs2%get_bcond('liq_inj',mybc)
-         do n=1,mybc%itr%no_
-            i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
-            fs2%U(i,j,k)=Uports
-         end do
+         ! call param_read('Gas flow rate (SLPM)',Q_SLPM)
+         ! Q_SI=Q_SLPM*SLPM2SI
+         ! Aport=pi/4.0_WP*dgi0**2-pi/4.0_WP*dlo0**2
+         ! Uports=Q_SI/(4.0_WP*Aport)
+         ! call fs2%get_bcond('gas_inj',mybc)
+         ! do n=1,mybc%itr%no_
+         !    i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
+         !    fs2%U(i,j,k)=Uports
+         ! end do
+         ! call param_read('Liquid flow rate (SLPM)',Q_SLPM)
+         ! Q_SI=Q_SLPM*SLPM2SI
+         ! Aport=pi/4.0_WP*dli0**2
+         ! Uports=Q_SI/(4.0_WP*Aport)
+         ! call fs2%get_bcond('liq_inj',mybc)
+         ! do n=1,mybc%itr%no_
+         !    i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
+         !    fs2%U(i,j,k)=Uports
+         ! end do
          ! Apply all other boundary conditions
          call fs2%apply_bcond(time2%t,time2%dt)
          ! Compute MFR through all boundary conditions
@@ -546,38 +547,38 @@ contains
          i_w=fs1%cfg%imin; do while (fs2%cfg%xm(fs2%cfg%imin-1)-fs1%cfg%xm(i_w+1).ge.0.0_WP.and.i_w+1.lt.fs1%cfg%imax+1); i_w=i_w+1; end do
          wx_w=(fs2%cfg%xm(fs2%cfg%imin-1)-fs1%cfg%xm(i_w))/(fs1%cfg%xm(i_w+1)-fs1%cfg%xm(i_w))
          ! Find interpolation index and weights in y for U
-         allocate(j_u(fs2%cfg%jmino:fs2%cfg%jmaxo),wy_u(fs2%cfg%jmino:fs2%cfg%jmaxo))
-         do j=fs2%cfg%jmino,fs2%cfg%jmaxo
+         allocate(j_u(fs2%cfg%jmino_:fs2%cfg%jmaxo_),wy_u(fs2%cfg%jmino_:fs2%cfg%jmaxo_))
+         do j=fs2%cfg%jmino_,fs2%cfg%jmaxo_
             j_u(j)=fs1%cfg%jmin; do while (fs2%cfg%ym(j)-fs1%cfg%ym(j_u(j)+1).ge.0.0_WP.and.j_u(j)+1.lt.fs1%cfg%jmax+1); j_u(j)=j_u(j)+1; end do
             wy_u(j)=(fs2%cfg%ym(j)-fs1%cfg%ym(j_u(j)))/(fs1%cfg%ym(j_u(j)+1)-fs1%cfg%ym(j_u(j)))
          end do
          ! Find interpolation index and weights in y for V
-         allocate(j_v(fs2%cfg%jmino:fs2%cfg%jmaxo),wy_v(fs2%cfg%jmino:fs2%cfg%jmaxo))
-         do j=fs2%cfg%jmino,fs2%cfg%jmaxo
+         allocate(j_v(fs2%cfg%jmino_:fs2%cfg%jmaxo_),wy_v(fs2%cfg%jmino_:fs2%cfg%jmaxo_))
+         do j=fs2%cfg%jmino_,fs2%cfg%jmaxo_
             j_v(j)=fs1%cfg%jmin; do while (fs2%cfg%y (j)-fs1%cfg%y (j_v(j)+1).ge.0.0_WP.and.j_v(j)+1.lt.fs1%cfg%jmax+1); j_v(j)=j_v(j)+1; end do
             wy_v(j)=(fs2%cfg%y (j)-fs1%cfg%y (j_v(j)))/(fs1%cfg%y (j_v(j)+1)-fs1%cfg%y (j_v(j)))
          end do
          ! Find interpolation index and weights in y for W
-         allocate(j_w(fs2%cfg%jmino:fs2%cfg%jmaxo),wy_w(fs2%cfg%jmino:fs2%cfg%jmaxo))
-         do j=fs2%cfg%jmino,fs2%cfg%jmaxo
+         allocate(j_w(fs2%cfg%jmino_:fs2%cfg%jmaxo_),wy_w(fs2%cfg%jmino_:fs2%cfg%jmaxo_))
+         do j=fs2%cfg%jmino_,fs2%cfg%jmaxo_
             j_w(j)=fs1%cfg%jmin; do while (fs2%cfg%ym(j)-fs1%cfg%ym(j_w(j)+1).ge.0.0_WP.and.j_w(j)+1.lt.fs1%cfg%jmax+1); j_w(j)=j_w(j)+1; end do
             wy_w(j)=(fs2%cfg%ym(j)-fs1%cfg%ym(j_w(j)))/(fs1%cfg%ym(j_w(j)+1)-fs1%cfg%ym(j_w(j)))
          end do
          ! Find interpolation index and weights in z for U
-         allocate(k_u(fs2%cfg%kmino:fs2%cfg%kmaxo),wz_u(fs2%cfg%kmino:fs2%cfg%kmaxo))
-         do k=fs2%cfg%kmino,fs2%cfg%kmaxo
+         allocate(k_u(fs2%cfg%kmino_:fs2%cfg%kmaxo_),wz_u(fs2%cfg%kmino_:fs2%cfg%kmaxo_))
+         do k=fs2%cfg%kmino_,fs2%cfg%kmaxo_
             k_u(k)=fs1%cfg%kmin; do while (fs2%cfg%zm(k)-fs1%cfg%zm(k_u(k)+1).ge.0.0_WP.and.k_u(k)+1.lt.fs1%cfg%kmax+1); k_u(k)=k_u(k)+1; end do
             wz_u(k)=(fs2%cfg%zm(k)-fs1%cfg%zm(k_u(k)))/(fs1%cfg%zm(k_u(k)+1)-fs1%cfg%zm(k_u(k)))
          end do
          ! Find interpolation index and weights in z for V
-         allocate(k_v(fs2%cfg%kmino:fs2%cfg%kmaxo),wz_v(fs2%cfg%kmino:fs2%cfg%kmaxo))
-         do k=fs2%cfg%kmino,fs2%cfg%kmaxo
+         allocate(k_v(fs2%cfg%kmino_:fs2%cfg%kmaxo_),wz_v(fs2%cfg%kmino_:fs2%cfg%kmaxo_))
+         do k=fs2%cfg%kmino_,fs2%cfg%kmaxo_
             k_v(k)=fs1%cfg%kmin; do while (fs2%cfg%zm(k)-fs1%cfg%zm(k_v(k)+1).ge.0.0_WP.and.k_v(k)+1.lt.fs1%cfg%kmax+1); k_v(k)=k_v(k)+1; end do
             wz_v(k)=(fs2%cfg%zm(k)-fs1%cfg%zm(k_v(k)))/(fs1%cfg%zm(k_v(k)+1)-fs1%cfg%zm(k_v(k)))
          end do
          ! Find interpolation index and weights in z for W
-         allocate(k_w(fs2%cfg%kmino:fs2%cfg%kmaxo),wz_w(fs2%cfg%kmino:fs2%cfg%kmaxo))
-         do k=fs2%cfg%kmino,fs2%cfg%kmaxo
+         allocate(k_w(fs2%cfg%kmino_:fs2%cfg%kmaxo_),wz_w(fs2%cfg%kmino_:fs2%cfg%kmaxo_))
+         do k=fs2%cfg%kmino_,fs2%cfg%kmaxo_
             k_w(k)=fs1%cfg%kmin; do while (fs2%cfg%z (k)-fs1%cfg%z (k_w(k)+1).ge.0.0_WP.and.k_w(k)+1.lt.fs1%cfg%kmax+1); k_w(k)=k_w(k)+1; end do
             wz_w(k)=(fs2%cfg%z (k)-fs1%cfg%z (k_w(k)))/(fs1%cfg%z (k_w(k)+1)-fs1%cfg%z (k_w(k)))
          end do
@@ -722,19 +723,6 @@ contains
          call MPI_ALLREDUCE(Vlocal,Vplane,fs1%cfg%ny*fs1%cfg%nz,MPI_REAL_WP,MPI_SUM,fs1%cfg%comm,ierr)
          call MPI_ALLREDUCE(Wlocal,Wplane,fs1%cfg%ny*fs1%cfg%nz,MPI_REAL_WP,MPI_SUM,fs1%cfg%comm,ierr)
          
-         
-         ! ###############################################
-         ! ############ ADVANCE SOLVER 2 HERE ############
-         ! ###############################################
-         
-         ! Remember old VOF
-         vf2%VFold=vf2%VF
-         
-         ! Remember old velocity
-         fs2%Uold=fs2%U
-         fs2%Vold=fs2%V
-         fs2%Wold=fs2%W
-         
          ! Apply time-varying Dirichlet conditions
          call fs2%get_bcond('gas_inj',mybc)
          do n=1,mybc%itr%no_
@@ -752,6 +740,19 @@ contains
             &              (1.0_WP-wy_w(j))*(       wz_w(k))*Wplane(j_w(j)  ,k_w(k)+1)+&
             &              (1.0_WP-wy_w(j))*(1.0_WP-wz_w(k))*Wplane(j_w(j)  ,k_w(k)  )
          end do
+         
+         
+         ! ###############################################
+         ! ############ ADVANCE SOLVER 2 HERE ############
+         ! ###############################################
+         
+         ! Remember old VOF
+         vf2%VFold=vf2%VF
+         
+         ! Remember old velocity
+         fs2%Uold=fs2%U
+         fs2%Vold=fs2%V
+         fs2%Wold=fs2%W
          
          ! Prepare old staggered density (at n)
          call fs2%get_olddensity(vf=vf2)
