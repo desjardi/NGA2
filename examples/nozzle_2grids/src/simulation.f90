@@ -45,8 +45,19 @@ module simulation
    real(WP), dimension(:,:,:), allocatable :: Ui2,Vi2,Wi2
    real(WP), dimension(:,:,:,:), allocatable :: SR2
    
+   !> Solver coupling arrays and metrics
+   real(WP), dimension(:,:), allocatable :: Uplane,Vplane,Wplane
+   real(WP), dimension(:,:), allocatable :: Ulocal,Vlocal,Wlocal
+   real(WP)                              :: wt
+   real(WP)                              :: wx_u,wx_v,wx_w
+   real(WP), dimension(:)  , allocatable :: wy_u,wy_v,wy_w
+   real(WP), dimension(:)  , allocatable :: wz_u,wz_v,wz_w
+   integer                               ::  i_u, i_v, i_w
+   integer , dimension(:)  , allocatable ::  j_u, j_v, j_w
+   integer , dimension(:)  , allocatable ::  k_u, k_v, k_w
    
 contains
+   
    
    !> Function that localizes the right domain boundary
    function right_boundary(pg,i,j,k) result(isIn)
@@ -513,13 +524,77 @@ contains
       end block create_monitor1
       
       
+      ! ###############################################
+      ! ######## PREPARE ONE-WAY COUPLING HERE ########
+      ! ###############################################
+      prep_coupling: block
+         integer :: j,k
+         ! Allocate global storage for the plane of velocity - this leaves ghost cells out, which is fine here
+         allocate(Uplane(fs1%cfg%jmin:fs1%cfg%jmax,fs1%cfg%kmin:fs1%cfg%kmax))
+         allocate(Vplane(fs1%cfg%jmin:fs1%cfg%jmax,fs1%cfg%kmin:fs1%cfg%kmax))
+         allocate(Wplane(fs1%cfg%jmin:fs1%cfg%jmax,fs1%cfg%kmin:fs1%cfg%kmax))
+         allocate(Ulocal(fs1%cfg%jmin:fs1%cfg%jmax,fs1%cfg%kmin:fs1%cfg%kmax))
+         allocate(Vlocal(fs1%cfg%jmin:fs1%cfg%jmax,fs1%cfg%kmin:fs1%cfg%kmax))
+         allocate(Wlocal(fs1%cfg%jmin:fs1%cfg%jmax,fs1%cfg%kmin:fs1%cfg%kmax))
+         ! Find interpolation index and weights in x for U
+         i_u=fs1%cfg%imin; do while (fs2%cfg%x (fs2%cfg%imin  )-fs1%cfg%x (i_u+1).ge.0.0_WP.and.i_u+1.lt.fs1%cfg%imax+1); i_u=i_u+1; end do
+         wx_u=(fs2%cfg%x (fs2%cfg%imin  )-fs1%cfg%x (i_u))/(fs1%cfg%x (i_u+1)-fs1%cfg%x (i_u))
+         ! Find interpolation index and weights in x for V
+         i_v=fs1%cfg%imin; do while (fs2%cfg%xm(fs2%cfg%imin-1)-fs1%cfg%xm(i_v+1).ge.0.0_WP.and.i_v+1.lt.fs1%cfg%imax+1); i_v=i_v+1; end do
+         wx_v=(fs2%cfg%xm(fs2%cfg%imin-1)-fs1%cfg%xm(i_v))/(fs1%cfg%xm(i_v+1)-fs1%cfg%xm(i_v))
+         ! Find interpolation index and weights in x for W
+         i_w=fs1%cfg%imin; do while (fs2%cfg%xm(fs2%cfg%imin-1)-fs1%cfg%xm(i_w+1).ge.0.0_WP.and.i_w+1.lt.fs1%cfg%imax+1); i_w=i_w+1; end do
+         wx_w=(fs2%cfg%xm(fs2%cfg%imin-1)-fs1%cfg%xm(i_w))/(fs1%cfg%xm(i_w+1)-fs1%cfg%xm(i_w))
+         ! Find interpolation index and weights in y for U
+         allocate(j_u(fs2%cfg%jmino:fs2%cfg%jmaxo),wy_u(fs2%cfg%jmino:fs2%cfg%jmaxo))
+         do j=fs2%cfg%jmino,fs2%cfg%jmaxo
+            j_u(j)=fs1%cfg%jmin; do while (fs2%cfg%ym(j)-fs1%cfg%ym(j_u(j)+1).ge.0.0_WP.and.j_u(j)+1.lt.fs1%cfg%jmax+1); j_u(j)=j_u(j)+1; end do
+            wy_u(j)=(fs2%cfg%ym(j)-fs1%cfg%ym(j_u(j)))/(fs1%cfg%ym(j_u(j)+1)-fs1%cfg%ym(j_u(j)))
+         end do
+         ! Find interpolation index and weights in y for V
+         allocate(j_v(fs2%cfg%jmino:fs2%cfg%jmaxo),wy_v(fs2%cfg%jmino:fs2%cfg%jmaxo))
+         do j=fs2%cfg%jmino,fs2%cfg%jmaxo
+            j_v(j)=fs1%cfg%jmin; do while (fs2%cfg%y (j)-fs1%cfg%y (j_v(j)+1).ge.0.0_WP.and.j_v(j)+1.lt.fs1%cfg%jmax+1); j_v(j)=j_v(j)+1; end do
+            wy_v(j)=(fs2%cfg%y (j)-fs1%cfg%y (j_v(j)))/(fs1%cfg%y (j_v(j)+1)-fs1%cfg%y (j_v(j)))
+         end do
+         ! Find interpolation index and weights in y for W
+         allocate(j_w(fs2%cfg%jmino:fs2%cfg%jmaxo),wy_w(fs2%cfg%jmino:fs2%cfg%jmaxo))
+         do j=fs2%cfg%jmino,fs2%cfg%jmaxo
+            j_w(j)=fs1%cfg%jmin; do while (fs2%cfg%ym(j)-fs1%cfg%ym(j_w(j)+1).ge.0.0_WP.and.j_w(j)+1.lt.fs1%cfg%jmax+1); j_w(j)=j_w(j)+1; end do
+            wy_w(j)=(fs2%cfg%ym(j)-fs1%cfg%ym(j_w(j)))/(fs1%cfg%ym(j_w(j)+1)-fs1%cfg%ym(j_w(j)))
+         end do
+         ! Find interpolation index and weights in z for U
+         allocate(k_u(fs2%cfg%kmino:fs2%cfg%kmaxo),wz_u(fs2%cfg%kmino:fs2%cfg%kmaxo))
+         do k=fs2%cfg%kmino,fs2%cfg%kmaxo
+            k_u(k)=fs1%cfg%kmin; do while (fs2%cfg%zm(k)-fs1%cfg%zm(k_u(k)+1).ge.0.0_WP.and.k_u(k)+1.lt.fs1%cfg%kmax+1); k_u(k)=k_u(k)+1; end do
+            wz_u(k)=(fs2%cfg%zm(k)-fs1%cfg%zm(k_u(k)))/(fs1%cfg%zm(k_u(k)+1)-fs1%cfg%zm(k_u(k)))
+         end do
+         ! Find interpolation index and weights in z for V
+         allocate(k_v(fs2%cfg%kmino:fs2%cfg%kmaxo),wz_v(fs2%cfg%kmino:fs2%cfg%kmaxo))
+         do k=fs2%cfg%kmino,fs2%cfg%kmaxo
+            k_v(k)=fs1%cfg%kmin; do while (fs2%cfg%zm(k)-fs1%cfg%zm(k_v(k)+1).ge.0.0_WP.and.k_v(k)+1.lt.fs1%cfg%kmax+1); k_v(k)=k_v(k)+1; end do
+            wz_v(k)=(fs2%cfg%zm(k)-fs1%cfg%zm(k_v(k)))/(fs1%cfg%zm(k_v(k)+1)-fs1%cfg%zm(k_v(k)))
+         end do
+         ! Find interpolation index and weights in z for W
+         allocate(k_w(fs2%cfg%kmino:fs2%cfg%kmaxo),wz_w(fs2%cfg%kmino:fs2%cfg%kmaxo))
+         do k=fs2%cfg%kmino,fs2%cfg%kmaxo
+            k_w(k)=fs1%cfg%kmin; do while (fs2%cfg%z (k)-fs1%cfg%z (k_w(k)+1).ge.0.0_WP.and.k_w(k)+1.lt.fs1%cfg%kmax+1); k_w(k)=k_w(k)+1; end do
+            wz_w(k)=(fs2%cfg%z (k)-fs1%cfg%z (k_w(k)))/(fs1%cfg%z (k_w(k)+1)-fs1%cfg%z (k_w(k)))
+         end do
+      end block prep_coupling
+      
+      
    end subroutine simulation_init
    
    
    !> Perform an NGA2 simulation
    subroutine simulation_run
+      use parallel, only: MPI_REAL_WP
+      use mpi_f08,  only: MPI_ALLREDUCE,MPI_SUM
+      use tpns_class, only: bcond
       implicit none
-      integer :: i,j,k
+      integer :: n,i,j,k,ierr
+      type(bcond), pointer :: mybc
       
       ! Perform time integration - the second solver is the main driver here
       do while (.not.time2%done())
@@ -621,6 +696,33 @@ contains
             
          end do
          
+         
+         ! ###############################################
+         ! ######## PERFORM ONE-WAY COUPLING HERE ########
+         ! ###############################################
+         ! At this point, we have ensured that t1>t2, therefore t2 is in [t1old,t1]
+         ! First interpolate solver 1's velocity in time to t2
+         wt=(time2%t-time1%told)/time1%dt
+         resU1=wt*fs1%U+(1.0_WP-wt)*fs1%Uold
+         resV1=wt*fs1%V+(1.0_WP-wt)*fs1%Vold
+         resW1=wt*fs1%W+(1.0_WP-wt)*fs1%Wold
+         
+         ! Bruteforce allreduce the velocity fields at fs2's inlet plane
+         Ulocal=0.0_WP; Vlocal=0.0_WP; Wlocal=0.0_WP
+         do k=fs1%cfg%kmin_,fs1%cfg%kmax_
+            do j=fs1%cfg%jmin_,fs1%cfg%jmax_
+               do i=fs1%cfg%imin_,fs1%cfg%imax_
+                  if (i.eq.i_u) Ulocal(j,k)=wx_u*resU1(i+1,j,k)+(1.0_WP-wx_u)*resU1(i,j,k)
+                  if (i.eq.i_v) Vlocal(j,k)=wx_v*resV1(i+1,j,k)+(1.0_WP-wx_v)*resV1(i,j,k)
+                  if (i.eq.i_w) Wlocal(j,k)=wx_w*resW1(i+1,j,k)+(1.0_WP-wx_w)*resW1(i,j,k)
+               end do
+            end do
+         end do
+         call MPI_ALLREDUCE(Ulocal,Uplane,fs1%cfg%ny*fs1%cfg%nz,MPI_REAL_WP,MPI_SUM,fs1%cfg%comm,ierr)
+         call MPI_ALLREDUCE(Vlocal,Vplane,fs1%cfg%ny*fs1%cfg%nz,MPI_REAL_WP,MPI_SUM,fs1%cfg%comm,ierr)
+         call MPI_ALLREDUCE(Wlocal,Wplane,fs1%cfg%ny*fs1%cfg%nz,MPI_REAL_WP,MPI_SUM,fs1%cfg%comm,ierr)
+         
+         
          ! ###############################################
          ! ############ ADVANCE SOLVER 2 HERE ############
          ! ###############################################
@@ -634,7 +736,22 @@ contains
          fs2%Wold=fs2%W
          
          ! Apply time-varying Dirichlet conditions
-         ! This is where time-dpt Dirichlet would be enforced
+         call fs2%get_bcond('gas_inj',mybc)
+         do n=1,mybc%itr%no_
+            i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
+            fs2%U(i  ,j,k)=(       wy_u(j))*(       wz_u(k))*Uplane(j_u(j)+1,k_u(k)+1)+&
+            &              (       wy_u(j))*(1.0_WP-wz_u(k))*Uplane(j_u(j)+1,k_u(k)  )+&
+            &              (1.0_WP-wy_u(j))*(       wz_u(k))*Uplane(j_u(j)  ,k_u(k)+1)+&
+            &              (1.0_WP-wy_u(j))*(1.0_WP-wz_u(k))*Uplane(j_u(j)  ,k_u(k)  )
+            fs2%V(i-1,j,k)=(       wy_v(j))*(       wz_v(k))*Vplane(j_v(j)+1,k_v(k)+1)+&
+            &              (       wy_v(j))*(1.0_WP-wz_v(k))*Vplane(j_v(j)+1,k_v(k)  )+&
+            &              (1.0_WP-wy_v(j))*(       wz_v(k))*Vplane(j_v(j)  ,k_v(k)+1)+&
+            &              (1.0_WP-wy_v(j))*(1.0_WP-wz_v(k))*Vplane(j_v(j)  ,k_v(k)  )
+            fs2%W(i-1,j,k)=(       wy_w(j))*(       wz_w(k))*Wplane(j_w(j)+1,k_w(k)+1)+&
+            &              (       wy_w(j))*(1.0_WP-wz_w(k))*Wplane(j_w(j)+1,k_w(k)  )+&
+            &              (1.0_WP-wy_w(j))*(       wz_w(k))*Wplane(j_w(j)  ,k_w(k)+1)+&
+            &              (1.0_WP-wy_w(j))*(1.0_WP-wz_w(k))*Wplane(j_w(j)  ,k_w(k)  )
+         end do
          
          ! Prepare old staggered density (at n)
          call fs2%get_olddensity(vf=vf2)
@@ -644,6 +761,7 @@ contains
          
          ! Prepare new staggered viscosity (at n+1)
          call fs2%get_viscosity(vf=vf2)
+         
          
          ! Turbulence modeling
          call fs2%get_strainrate(Ui=Ui2,Vi=Vi2,Wi=Wi2,SR=SR2)
