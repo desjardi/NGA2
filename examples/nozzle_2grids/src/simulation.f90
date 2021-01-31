@@ -273,8 +273,8 @@ contains
          real(WP), parameter :: SLPM2SI=1.66667E-5_WP
          ! Zero initial field
          fs2%U=0.0_WP; fs2%V=0.0_WP; fs2%W=0.0_WP
-         ! NO NEED TO DO ANYTHING HERE AS THE COUPLING WILL TAKE CARE OF IT
          ! Apply Dirichlet at direct liquid and gas injector ports
+         ! NO NEED TO INJECT GAS HERE AS THE COUPLING WILL TAKE CARE OF IT
          ! call param_read('Gas flow rate (SLPM)',Q_SLPM)
          ! Q_SI=Q_SLPM*SLPM2SI
          ! Aport=pi/4.0_WP*dgi0**2-pi/4.0_WP*dlo0**2
@@ -284,15 +284,15 @@ contains
          !    i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
          !    fs2%U(i,j,k)=Uports
          ! end do
-         ! call param_read('Liquid flow rate (SLPM)',Q_SLPM)
-         ! Q_SI=Q_SLPM*SLPM2SI
-         ! Aport=pi/4.0_WP*dli0**2
-         ! Uports=Q_SI/(4.0_WP*Aport)
-         ! call fs2%get_bcond('liq_inj',mybc)
-         ! do n=1,mybc%itr%no_
-         !    i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
-         !    fs2%U(i,j,k)=Uports
-         ! end do
+         call param_read('Liquid flow rate (SLPM)',Q_SLPM)
+         Q_SI=Q_SLPM*SLPM2SI
+         Aport=pi/4.0_WP*dli0**2
+         Uports=Q_SI/(4.0_WP*Aport)
+         call fs2%get_bcond('liq_inj',mybc)
+         do n=1,mybc%itr%no_
+            i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
+            fs2%U(i,j,k)=Uports
+         end do
          ! Apply all other boundary conditions
          call fs2%apply_bcond(time2%t,time2%dt)
          ! Compute MFR through all boundary conditions
