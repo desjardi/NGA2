@@ -156,6 +156,54 @@ contains
    end function gas_inj
    
    
+   !> Function that localizes the top (y+) of the domain
+   function yp_locator(pg,i,j,k) result(isIn)
+      use pgrid_class, only: pgrid
+      implicit none
+      class(pgrid), intent(in) :: pg
+      integer, intent(in) :: i,j,k
+      logical :: isIn
+      isIn=.false.
+      if (j.eq.pg%jmax+1) isIn=.true.
+   end function yp_locator
+   
+   
+   !> Function that localizes the bottom (y-) of the domain
+   function ym_locator(pg,i,j,k) result(isIn)
+      use pgrid_class, only: pgrid
+      implicit none
+      class(pgrid), intent(in) :: pg
+      integer, intent(in) :: i,j,k
+      logical :: isIn
+      isIn=.false.
+      if (j.eq.pg%jmin) isIn=.true.
+   end function ym_locator
+   
+   
+   !> Function that localizes the top (z+) of the domain
+   function zp_locator(pg,i,j,k) result(isIn)
+      use pgrid_class, only: pgrid
+      implicit none
+      class(pgrid), intent(in) :: pg
+      integer, intent(in) :: i,j,k
+      logical :: isIn
+      isIn=.false.
+      if (k.eq.pg%kmax+1) isIn=.true.
+   end function zp_locator
+   
+   
+   !> Function that localizes the bottom (z-) of the domain
+   function zm_locator(pg,i,j,k) result(isIn)
+      use pgrid_class, only: pgrid
+      implicit none
+      class(pgrid), intent(in) :: pg
+      integer, intent(in) :: i,j,k
+      logical :: isIn
+      isIn=.false.
+      if (k.eq.pg%kmin) isIn=.true.
+   end function zm_locator
+   
+   
    !> Initialization of problem solver
    subroutine simulation_init
       use param, only: param_read
@@ -232,7 +280,7 @@ contains
       
       ! Create a two-phase flow solver with bconds
       create_solver2: block
-         use tpns_class, only: dirichlet,clipped_neumann
+         use tpns_class, only: dirichlet,clipped_neumann,neumann
          use ils_class,  only: pcg_amg,gmres,gmres_amg
          use mathtools,  only: Pi
          fs2=tpns(cfg=cfg2,name='Two-phase NS')
@@ -247,8 +295,13 @@ contains
          call param_read('Static contact angle',fs2%contact_angle)
          fs2%contact_angle=fs2%contact_angle*Pi/180.0_WP
          ! Define direction gas/liquid stream boundary conditions
-         call fs2%add_bcond(name='gas_inj',type=dirichlet,face='x',dir=-1,canCorrect=.false.,locator=gas_inj)
-         call fs2%add_bcond(name='liq_inj',type=dirichlet,face='x',dir=-1,canCorrect=.false.,locator=liq_inj)
+         call fs2%add_bcond(name='gas_inj',type=dirichlet      ,face='x',dir=-1,canCorrect=.false.,locator=gas_inj)
+         call fs2%add_bcond(name='liq_inj',type=dirichlet      ,face='x',dir=-1,canCorrect=.false.,locator=liq_inj)
+         ! Neumann on the side
+         call fs2%add_bcond(name='bc_yp'  ,type=clipped_neumann,face='y',dir=+1,canCorrect=.true. ,locator=yp_locator)
+         call fs2%add_bcond(name='bc_ym'  ,type=clipped_neumann,face='y',dir=-1,canCorrect=.true. ,locator=ym_locator)
+         call fs2%add_bcond(name='bc_zp'  ,type=clipped_neumann,face='z',dir=+1,canCorrect=.true. ,locator=zp_locator)
+         call fs2%add_bcond(name='bc_zm'  ,type=clipped_neumann,face='z',dir=-1,canCorrect=.true. ,locator=zm_locator)
          ! Outflow on the right
          call fs2%add_bcond(name='outflow',type=clipped_neumann,face='x',dir=+1,canCorrect=.true. ,locator=right_boundary)
          ! Configure pressure solver
@@ -846,6 +899,11 @@ contains
          call vf2%get_max()
          call mfile2%write()
          call cflfile2%write()
+         
+         ! After we're done clip all VOF at the exit area
+         do i=fs2%cfg%imino_,fs2%cfg%imaxo_
+            if (i.ge.vf2%cfg%imax-5) vf2%VF(i,:,:)=0.0_WP
+         end do
          
       end do
       
