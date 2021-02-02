@@ -311,7 +311,7 @@ contains
          call param_read('Implicit iteration',fs2%implicit%maxit)
          call param_read('Implicit tolerance',fs2%implicit%rcvg)
          ! Setup the solver
-         call fs2%setup(pressure_ils=pcg_amg,implicit_ils=gmres_amg)
+         call fs2%setup(pressure_ils=gmres_amg,implicit_ils=gmres_amg)
       end block create_solver2
       
       
