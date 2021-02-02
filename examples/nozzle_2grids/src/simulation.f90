@@ -377,6 +377,7 @@ contains
          call ens_out2%add_scalar('walls',fs2%cfg%VF)
          call ens_out2%add_scalar('VOF',vf2%VF)
          call ens_out2%add_scalar('curvature',vf2%curv)
+         call ens_out2%add_scalar('visc_t',sgs2%visc)
          call ens_out2%add_surface('vofplic',vf2%surfgrid)
          ! Output to ensight
          if (ens_evt2%occurs()) call ens_out2%write_data(time2%t)
@@ -816,13 +817,12 @@ contains
          ! Prepare new staggered viscosity (at n+1)
          call fs2%get_viscosity(vf=vf2)
          
-         
-         ! Turbulence modeling
+         ! Turbulence modeling - only work with gas properties here
          call fs2%get_strainrate(Ui=Ui2,Vi=Vi2,Wi=Wi2,SR=SR2)
-         resU2=fs2%rho_l*vf2%VF+fs2%rho_g*(1.0_WP-vf2%VF)
+         resU2=fs2%rho_g
          call sgs2%get_visc(dt=time2%dtold,rho=resU2,Ui=Ui2,Vi=Vi2,Wi=Wi2,SR=SR2)
-         where (sgs2%visc.lt.-min(fs2%visc_l,fs2%visc_g))
-            sgs2%visc=-min(fs2%visc_l,fs2%visc_g)
+         where (sgs2%visc.lt.-fs2%visc_g)
+            sgs2%visc=-fs2%visc_g
          end where
          do k=fs2%cfg%kmino_+1,fs2%cfg%kmaxo_
             do j=fs2%cfg%jmino_+1,fs2%cfg%jmaxo_

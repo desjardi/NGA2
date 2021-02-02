@@ -26,7 +26,7 @@ Implicit iteration : 100
 # Parallelization
 1 Partition : 4 1 1
 
-# Mesh definition - spray flow
+# Mesh definition
 1 Lx :  0.1
 1 Ly :  0.1
 1 Lz :  0.1
@@ -37,7 +37,7 @@ Implicit iteration : 100
 
 # Time integration
 1 Max timestep size : 2e-5
-1 Max cfl number :    1.0
+1 Max cfl number :    0.9
 
 # Ensight ouput
 1 Ensight output period : 1e-3
@@ -48,7 +48,7 @@ Implicit iteration : 100
 # Parallelization
 2 Partition : 4 1 1
 
-# Mesh definition - spray flow
+# Mesh definition
 2 Lx :  0.04
 2 Ly :  0.03
 2 Lz :  0.03
@@ -59,7 +59,7 @@ Implicit iteration : 100
 
 # Time integration
 2 Max timestep size : 2e-5
-2 Max cfl number :    1.0
+2 Max cfl number :    0.9
 
 # Ensight ouput
 2 Ensight output period : 1e-3
