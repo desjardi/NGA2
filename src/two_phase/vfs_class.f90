@@ -35,7 +35,7 @@ module vfs_class
    
    ! Default parameters for volume fraction solver
    integer,  parameter :: nband=5                                 !< Number of cells around the interfacial cells on which localized work is performed
-   integer,  parameter :: advect_band=2                           !< How far we do the transport
+   integer,  parameter :: advect_band=4                           !< How far we do the transport
    integer,  parameter :: distance_band=2                         !< How far we build the distance
    integer,  parameter :: max_interface_planes=2                  !< Maximum number of interfaces allowed (2 for R2P)
    real(WP), parameter :: VFlo=1.0e-12_WP                         !< Minimum VF value considered
