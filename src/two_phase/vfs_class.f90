@@ -34,8 +34,8 @@ module vfs_class
    integer, parameter, public :: nonrecurs_simplex=2 !< Non-recursive simplex cutting
    
    ! Default parameters for volume fraction solver
-   integer,  parameter :: nband=5                                 !< Number of cells around the interfacial cells on which localized work is performed
-   integer,  parameter :: advect_band=4                           !< How far we do the transport
+   integer,  parameter :: nband=3                                 !< Number of cells around the interfacial cells on which localized work is performed
+   integer,  parameter :: advect_band=2                           !< How far we do the transport
    integer,  parameter :: distance_band=2                         !< How far we build the distance
    integer,  parameter :: max_interface_planes=2                  !< Maximum number of interfaces allowed (2 for R2P)
    real(WP), parameter :: VFlo=1.0e-12_WP                         !< Minimum VF value considered
@@ -94,7 +94,7 @@ module vfs_class
       ! Band strategy
       integer, dimension(:,:,:), allocatable :: band      !< Band to localize workload around the interface
       integer, dimension(:,:),   allocatable :: band_map  !< Unstructured band mapping
-      integer, dimension(nband) :: band_count             !< Number of cells per band value
+      integer, dimension(0:nband) :: band_count           !< Number of cells per band value
       
       ! Interface reconstruction method
       integer :: reconstruction_method                    !< Interface reconstruction method
@@ -650,7 +650,7 @@ contains
       end do
       
       ! Compute transported moments
-      do index=1,sum(this%band_count(1:advect_band))
+      do index=1,sum(this%band_count(0:advect_band))
          i=this%band_map(1,index)
          j=this%band_map(2,index)
          k=this%band_map(3,index)
@@ -921,7 +921,7 @@ contains
       integer :: i,j,k,ii,jj,kk,dir,n,index
       integer, dimension(3) :: ind
       integer :: ibmin_,ibmax_,jbmin_,jbmax_,kbmin_,kbmax_
-      integer, dimension(nband) :: band_size
+      integer, dimension(0:nband) :: band_size
       
       ! Loop extents
       ibmin_=this%cfg%imin_; if (this%cfg%iproc.eq.1           .and..not.this%cfg%xper) ibmin_=this%cfg%imin-1
@@ -941,14 +941,14 @@ contains
                ! Skip *real* wall cells
                if (this%mask(i,j,k).eq.1) cycle
                ! Identify cells with interface
-               if (this%VF(i,j,k).ge.VFlo.and.this%VF(i,j,k).le.VFhi) this%band(i,j,k)=int(sign(1.0_WP,this%VF(i,j,k)-0.5_WP))
+               if (this%VF(i,j,k).ge.VFlo.and.this%VF(i,j,k).le.VFhi) this%band(i,j,k)=0
                ! Check if cell-face is an interface
                do dir=1,3
                   do n=-1,+1,2
                      ind=[i,j,k]; ind(dir)=ind(dir)+n
                      if (this%mask(ind(1),ind(2),ind(3)).ne.1) then
                         if (this%VF(i,j,k).lt.VFlo.and.this%VF(ind(1),ind(2),ind(3)).gt.VFhi.or.&
-                        &   this%VF(i,j,k).gt.VFhi.and.this%VF(ind(1),ind(2),ind(3)).lt.VFlo) this%band(i,j,k)=int(sign(1.0_WP,this%VF(i,j,k)-0.5_WP))
+                        &   this%VF(i,j,k).gt.VFhi.and.this%VF(ind(1),ind(2),ind(3)).lt.VFlo) this%band(i,j,k)=0
                      end if
                   end do
                end do
@@ -958,7 +958,7 @@ contains
       call this%cfg%sync(this%band)
       
       ! Sweep to identify the bands up to nband
-      do n=2,nband
+      do n=1,nband
          ! For each band
          do k=kbmin_,kbmax_
             do j=jbmin_,jbmax_
@@ -990,7 +990,7 @@ contains
       do k=kbmin_,kbmax_
          do j=jbmin_,jbmax_
             do i=ibmin_,ibmax_
-               if (this%band(i,j,k).le.nband.and.this%band(i,j,k).ne.-nband-1) band_size(abs(this%band(i,j,k)))=band_size(abs(this%band(i,j,k)))+1
+               if (abs(this%band(i,j,k)).le.nband) band_size(abs(this%band(i,j,k)))=band_size(abs(this%band(i,j,k)))+1
             end do
          end do
       end do
@@ -1001,9 +1001,9 @@ contains
       do k=kbmin_,kbmax_
          do j=jbmin_,jbmax_
             do i=ibmin_,ibmax_
-               if (this%band(i,j,k).le.nband.and.this%band(i,j,k).ne.-nband-1) then
+               if (abs(this%band(i,j,k)).le.nband) then
                   this%band_count(abs(this%band(i,j,k)))=this%band_count(abs(this%band(i,j,k)))+1
-                  index=sum(band_size(1:abs(this%band(i,j,k))-1))+this%band_count(abs(this%band(i,j,k)))
+                  index=sum(band_size(0:abs(this%band(i,j,k))-1))+this%band_count(abs(this%band(i,j,k)))
                   this%band_map(:,index)=[i,j,k]
                end if
             end do
@@ -1384,7 +1384,7 @@ contains
       this%G=huge(1.0_WP)
       
       ! Loop over 1/2-band
-      do index=1,sum(this%band_count(1:distance_band))
+      do index=1,sum(this%band_count(0:distance_band))
          i=this%band_map(1,index)
          j=this%band_map(2,index)
          k=this%band_map(3,index)

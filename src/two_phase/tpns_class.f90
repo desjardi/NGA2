@@ -1189,7 +1189,7 @@ contains
       ! end do
       !
       ! ! Compute transported moments
-      ! do index=1,sum(this%band_count(1:advect_band))
+      ! do index=1,sum(this%band_count(0:advect_band))
       !    i=this%band_map(1,index)
       !    j=this%band_map(2,index)
       !    k=this%band_map(3,index)
