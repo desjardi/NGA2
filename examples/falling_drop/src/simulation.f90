@@ -148,8 +148,8 @@ contains
          call param_read('Gas density',fs%rho_g)
          ! Read in surface tension coefficient
          call param_read('Surface tension coefficient',fs%sigma)
-         call param_read('Static contact angle',fs2%contact_angle)
-         fs2%contact_angle=fs2%contact_angle*Pi/180.0_WP
+         call param_read('Static contact angle',fs%contact_angle)
+         fs%contact_angle=fs%contact_angle*Pi/180.0_WP
          ! Assign acceleration of gravity
          call param_read('Gravity',fs%gravity)
          ! Configure pressure solver
