@@ -646,7 +646,7 @@ contains
    subroutine simulation_run
       use parallel, only: MPI_REAL_WP
       use mpi_f08,  only: MPI_ALLREDUCE,MPI_SUM
-      use tpns_class, only: bcond
+      use tpns_class, only: bcond,static_contact
       implicit none
       integer :: n,i,j,k,ierr
       type(bcond), pointer :: mybc
