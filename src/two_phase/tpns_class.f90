@@ -2087,27 +2087,31 @@ contains
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: resV !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: resW !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       integer :: i,j,k
-      real(WP) :: rhoUp,rhoUm,rhoVp,rhoVm,rhoWp,rhoWm
+      real(WP) :: rhoUp ,rhoUm ,rhoVp ,rhoVm ,rhoWp ,rhoWm
+      real(WP) :: rhoUp1,rhoUm1,rhoVp1,rhoVm1,rhoWp1,rhoWm1
+      real(WP) :: rhoUp2,rhoUm2,rhoVp2,rhoVm2,rhoWp2,rhoWm2
       
       ! Solve implicit U problem
       this%implicit%opr(1,:,:,:)=this%rho_U; this%implicit%opr(2:,:,:,:)=0.0_WP
       do k=this%cfg%kmin_,this%cfg%kmax_
          do j=this%cfg%jmin_,this%cfg%jmax_
             do i=this%cfg%imin_,this%cfg%imax_
-               rhoUp=sum(this%hybu_x(:,i  ,j,k)*this%rho_Uold(i:i+1,j,k))*sum(this%itpu_x(:,i  ,j,k)*this%U(i  :i+1,j,k))!*2.0_WP
-               rhoUm=sum(this%hybu_x(:,i-1,j,k)*this%rho_Uold(i-1:i,j,k))*sum(this%itpu_x(:,i-1,j,k)*this%U(i-1:i  ,j,k))!*2.0_WP
-               rhoVp=sum(this%hybu_y(:,i,j+1,k)*this%rho_Uold(i,j:j+1,k))*sum(this%itpv_x(:,i,j+1,k)*this%V(i-1:i,j+1,k))
-               rhoVm=sum(this%hybu_y(:,i,j  ,k)*this%rho_Uold(i,j-1:j,k))*sum(this%itpv_x(:,i,j  ,k)*this%V(i-1:i,j  ,k))
-               rhoWp=sum(this%hybu_z(:,i,j,k+1)*this%rho_Uold(i,j,k:k+1))*sum(this%itpw_x(:,i,j,k+1)*this%W(i-1:i,j,k+1))
-               rhoWm=sum(this%hybu_z(:,i,j,k  )*this%rho_Uold(i,j,k-1:k))*sum(this%itpw_x(:,i,j,k  )*this%W(i-1:i,j,k  ))
-               this%implicit%opr(1,i,j,k)=this%implicit%opr(1,i,j,k)+0.5_WP*dt*(this%divu_x( 0,i,j,k)*this%hybu_x( 0,i  ,j,k)*rhoUp+&
-               &                                                                this%divu_x(-1,i,j,k)*this%hybu_x(+1,i-1,j,k)*rhoUm+&
+               rhoUp1=sum(this%hybu_x(:,i  ,j,k)*this%rho_Uold(i:i+1,j,k))*sum(this%itpu_x(:,i  ,j,k)*this%U(i  :i+1,j,k))
+               rhoUp2=sum(this%hybu_x(:,i  ,j,k)*this%rho_Uold(i:i+1,j,k))*sum(this%hybu_x(:,i  ,j,k)*this%U(i  :i+1,j,k))
+               rhoUm1=sum(this%hybu_x(:,i-1,j,k)*this%rho_Uold(i-1:i,j,k))*sum(this%itpu_x(:,i-1,j,k)*this%U(i-1:i  ,j,k))
+               rhoUm2=sum(this%hybu_x(:,i-1,j,k)*this%rho_Uold(i-1:i,j,k))*sum(this%hybu_x(:,i-1,j,k)*this%U(i-1:i  ,j,k))
+               rhoVp =sum(this%hybu_y(:,i,j+1,k)*this%rho_Uold(i,j:j+1,k))*sum(this%itpv_x(:,i,j+1,k)*this%V(i-1:i,j+1,k))
+               rhoVm =sum(this%hybu_y(:,i,j  ,k)*this%rho_Uold(i,j-1:j,k))*sum(this%itpv_x(:,i,j  ,k)*this%V(i-1:i,j  ,k))
+               rhoWp =sum(this%hybu_z(:,i,j,k+1)*this%rho_Uold(i,j,k:k+1))*sum(this%itpw_x(:,i,j,k+1)*this%W(i-1:i,j,k+1))
+               rhoWm =sum(this%hybu_z(:,i,j,k  )*this%rho_Uold(i,j,k-1:k))*sum(this%itpw_x(:,i,j,k  )*this%W(i-1:i,j,k  ))
+               this%implicit%opr(1,i,j,k)=this%implicit%opr(1,i,j,k)+0.5_WP*dt*(this%divu_x( 0,i,j,k)*this%hybu_x( 0,i  ,j,k)*rhoUp1+this%divu_x( 0,i,j,k)*this%itpu_x( 0,i  ,j,k)*rhoUp2+&
+               &                                                                this%divu_x(-1,i,j,k)*this%hybu_x(+1,i-1,j,k)*rhoUm1+this%divu_x(-1,i,j,k)*this%itpu_x(+1,i-1,j,k)*rhoUm2+&
                &                                                                this%divu_y(+1,i,j,k)*this%hybu_y(-1,i,j+1,k)*rhoVp+&
                &                                                                this%divu_y( 0,i,j,k)*this%hybu_y( 0,i,j  ,k)*rhoVm+&
                &                                                                this%divu_z(+1,i,j,k)*this%hybu_z(-1,i,j,k+1)*rhoWp+&
                &                                                                this%divu_z( 0,i,j,k)*this%hybu_z( 0,i,j,k  )*rhoWm)
-               this%implicit%opr(2,i,j,k)=this%implicit%opr(2,i,j,k)+0.5_WP*dt*(this%divu_x( 0,i,j,k)*this%hybu_x(+1,i  ,j,k)*rhoUp)
-               this%implicit%opr(3,i,j,k)=this%implicit%opr(3,i,j,k)+0.5_WP*dt*(this%divu_x(-1,i,j,k)*this%hybu_x( 0,i-1,j,k)*rhoUm)
+               this%implicit%opr(2,i,j,k)=this%implicit%opr(2,i,j,k)+0.5_WP*dt*(this%divu_x( 0,i,j,k)*this%hybu_x(+1,i  ,j,k)*rhoUp1+this%divu_x( 0,i,j,k)*this%itpu_x(+1,i  ,j,k)*rhoUp2)
+               this%implicit%opr(3,i,j,k)=this%implicit%opr(3,i,j,k)+0.5_WP*dt*(this%divu_x(-1,i,j,k)*this%hybu_x( 0,i-1,j,k)*rhoUm1+this%divu_x(-1,i,j,k)*this%itpu_x( 0,i-1,j,k)*rhoUm2)
                this%implicit%opr(4,i,j,k)=this%implicit%opr(4,i,j,k)+0.5_WP*dt*(this%divu_y(+1,i,j,k)*this%hybu_y( 0,i,j+1,k)*rhoVp)
                this%implicit%opr(5,i,j,k)=this%implicit%opr(5,i,j,k)+0.5_WP*dt*(this%divu_y( 0,i,j,k)*this%hybu_y(-1,i,j  ,k)*rhoVm)
                this%implicit%opr(6,i,j,k)=this%implicit%opr(6,i,j,k)+0.5_WP*dt*(this%divu_z(+1,i,j,k)*this%hybu_z( 0,i,j,k+1)*rhoWp)
@@ -2144,22 +2148,24 @@ contains
       do k=this%cfg%kmin_,this%cfg%kmax_
          do j=this%cfg%jmin_,this%cfg%jmax_
             do i=this%cfg%imin_,this%cfg%imax_
-               rhoUp=sum(this%hybv_x(:,i+1,j,k)*this%rho_Vold(i:i+1,j,k))*sum(this%itpu_y(:,i+1,j,k)*this%U(i+1,j-1:j,k))
-               rhoUm=sum(this%hybv_x(:,i  ,j,k)*this%rho_Vold(i-1:i,j,k))*sum(this%itpu_y(:,i  ,j,k)*this%U(i  ,j-1:j,k))
-               rhoVp=sum(this%hybv_y(:,i,j  ,k)*this%rho_Vold(i,j:j+1,k))*sum(this%itpv_y(:,i,j  ,k)*this%V(i,j  :j+1,k))!*2.0_WP
-               rhoVm=sum(this%hybv_y(:,i,j-1,k)*this%rho_Vold(i,j-1:j,k))*sum(this%itpv_y(:,i,j-1,k)*this%V(i,j-1:j  ,k))!*2.0_WP
-               rhoWp=sum(this%hybv_z(:,i,j,k+1)*this%rho_Vold(i,j,k:k+1))*sum(this%itpw_y(:,i,j,k+1)*this%W(i,j-1:j,k+1))
-               rhoWm=sum(this%hybv_z(:,i,j,k  )*this%rho_Vold(i,j,k-1:k))*sum(this%itpw_y(:,i,j,k  )*this%W(i,j-1:j,k  ))
+               rhoUp =sum(this%hybv_x(:,i+1,j,k)*this%rho_Vold(i:i+1,j,k))*sum(this%itpu_y(:,i+1,j,k)*this%U(i+1,j-1:j,k))
+               rhoUm =sum(this%hybv_x(:,i  ,j,k)*this%rho_Vold(i-1:i,j,k))*sum(this%itpu_y(:,i  ,j,k)*this%U(i  ,j-1:j,k))
+               rhoVp1=sum(this%hybv_y(:,i,j  ,k)*this%rho_Vold(i,j:j+1,k))*sum(this%itpv_y(:,i,j  ,k)*this%V(i,j  :j+1,k))
+               rhoVp2=sum(this%hybv_y(:,i,j  ,k)*this%rho_Vold(i,j:j+1,k))*sum(this%hybv_y(:,i,j  ,k)*this%V(i,j  :j+1,k))
+               rhoVm1=sum(this%hybv_y(:,i,j-1,k)*this%rho_Vold(i,j-1:j,k))*sum(this%itpv_y(:,i,j-1,k)*this%V(i,j-1:j  ,k))
+               rhoVm2=sum(this%hybv_y(:,i,j-1,k)*this%rho_Vold(i,j-1:j,k))*sum(this%hybv_y(:,i,j-1,k)*this%V(i,j-1:j  ,k))
+               rhoWp =sum(this%hybv_z(:,i,j,k+1)*this%rho_Vold(i,j,k:k+1))*sum(this%itpw_y(:,i,j,k+1)*this%W(i,j-1:j,k+1))
+               rhoWm =sum(this%hybv_z(:,i,j,k  )*this%rho_Vold(i,j,k-1:k))*sum(this%itpw_y(:,i,j,k  )*this%W(i,j-1:j,k  ))
                this%implicit%opr(1,i,j,k)=this%implicit%opr(1,i,j,k)+0.5_WP*dt*(this%divv_x(+1,i,j,k)*this%hybv_x(-1,i+1,j,k)*rhoUp+&
                &                                                                this%divv_x( 0,i,j,k)*this%hybv_x( 0,i  ,j,k)*rhoUm+&
-               &                                                                this%divv_y( 0,i,j,k)*this%hybv_y( 0,i,j  ,k)*rhoVp+&
-               &                                                                this%divv_y(-1,i,j,k)*this%hybv_y(+1,i,j-1,k)*rhoVm+&
+               &                                                                this%divv_y( 0,i,j,k)*this%hybv_y( 0,i,j  ,k)*rhoVp1+this%divv_y( 0,i,j,k)*this%itpv_y( 0,i,j  ,k)*rhoVp2+&
+               &                                                                this%divv_y(-1,i,j,k)*this%hybv_y(+1,i,j-1,k)*rhoVm1+this%divv_y(-1,i,j,k)*this%itpv_y(+1,i,j-1,k)*rhoVm2+&
                &                                                                this%divv_z(+1,i,j,k)*this%hybv_z(-1,i,j,k+1)*rhoWp+&
                &                                                                this%divv_z( 0,i,j,k)*this%hybv_z( 0,i,j,k  )*rhoWm)
                this%implicit%opr(2,i,j,k)=this%implicit%opr(2,i,j,k)+0.5_WP*dt*(this%divv_x(+1,i,j,k)*this%hybv_x( 0,i+1,j,k)*rhoUp)
                this%implicit%opr(3,i,j,k)=this%implicit%opr(3,i,j,k)+0.5_WP*dt*(this%divv_x( 0,i,j,k)*this%hybv_x(-1,i  ,j,k)*rhoUm)
-               this%implicit%opr(4,i,j,k)=this%implicit%opr(4,i,j,k)+0.5_WP*dt*(this%divv_y( 0,i,j,k)*this%hybv_y(+1,i,j  ,k)*rhoVp)
-               this%implicit%opr(5,i,j,k)=this%implicit%opr(5,i,j,k)+0.5_WP*dt*(this%divv_y(-1,i,j,k)*this%hybv_y( 0,i,j-1,k)*rhoVm)
+               this%implicit%opr(4,i,j,k)=this%implicit%opr(4,i,j,k)+0.5_WP*dt*(this%divv_y( 0,i,j,k)*this%hybv_y(+1,i,j  ,k)*rhoVp1+this%divv_y( 0,i,j,k)*this%itpv_y(+1,i,j  ,k)*rhoVp2)
+               this%implicit%opr(5,i,j,k)=this%implicit%opr(5,i,j,k)+0.5_WP*dt*(this%divv_y(-1,i,j,k)*this%hybv_y( 0,i,j-1,k)*rhoVm1+this%divv_y(-1,i,j,k)*this%itpv_y( 0,i,j-1,k)*rhoVm2)
                this%implicit%opr(6,i,j,k)=this%implicit%opr(6,i,j,k)+0.5_WP*dt*(this%divv_z(+1,i,j,k)*this%hybv_z( 0,i,j,k+1)*rhoWp)
                this%implicit%opr(7,i,j,k)=this%implicit%opr(7,i,j,k)+0.5_WP*dt*(this%divv_z( 0,i,j,k)*this%hybv_z(-1,i,j,k  )*rhoWm)
             end do
@@ -2194,24 +2200,26 @@ contains
       do k=this%cfg%kmin_,this%cfg%kmax_
          do j=this%cfg%jmin_,this%cfg%jmax_
             do i=this%cfg%imin_,this%cfg%imax_
-               rhoUp=sum(this%hybw_x(:,i+1,j,k)*this%rho_Wold(i:i+1,j,k))*sum(this%itpu_z(:,i+1,j,k)*this%U(i+1,j,k-1:k))
-               rhoUm=sum(this%hybw_x(:,i  ,j,k)*this%rho_Wold(i-1:i,j,k))*sum(this%itpu_z(:,i  ,j,k)*this%U(i  ,j,k-1:k))
-               rhoVp=sum(this%hybw_y(:,i,j+1,k)*this%rho_Wold(i,j:j+1,k))*sum(this%itpv_z(:,i,j+1,k)*this%V(i,j+1,k-1:k))
-               rhoVm=sum(this%hybw_y(:,i,j  ,k)*this%rho_Wold(i,j-1:j,k))*sum(this%itpv_z(:,i,j  ,k)*this%V(i,j  ,k-1:k))
-               rhoWp=sum(this%hybw_z(:,i,j,k  )*this%rho_Wold(i,j,k:k+1))*sum(this%itpw_z(:,i,j,k  )*this%W(i,j,k  :k+1))!*2.0_WP
-               rhoWm=sum(this%hybw_z(:,i,j,k-1)*this%rho_Wold(i,j,k-1:k))*sum(this%itpw_z(:,i,j,k-1)*this%W(i,j,k-1:k  ))!*2.0_WP
+               rhoUp =sum(this%hybw_x(:,i+1,j,k)*this%rho_Wold(i:i+1,j,k))*sum(this%itpu_z(:,i+1,j,k)*this%U(i+1,j,k-1:k))
+               rhoUm =sum(this%hybw_x(:,i  ,j,k)*this%rho_Wold(i-1:i,j,k))*sum(this%itpu_z(:,i  ,j,k)*this%U(i  ,j,k-1:k))
+               rhoVp =sum(this%hybw_y(:,i,j+1,k)*this%rho_Wold(i,j:j+1,k))*sum(this%itpv_z(:,i,j+1,k)*this%V(i,j+1,k-1:k))
+               rhoVm =sum(this%hybw_y(:,i,j  ,k)*this%rho_Wold(i,j-1:j,k))*sum(this%itpv_z(:,i,j  ,k)*this%V(i,j  ,k-1:k))
+               rhoWp1=sum(this%hybw_z(:,i,j,k  )*this%rho_Wold(i,j,k:k+1))*sum(this%itpw_z(:,i,j,k  )*this%W(i,j,k  :k+1))
+               rhoWp2=sum(this%hybw_z(:,i,j,k  )*this%rho_Wold(i,j,k:k+1))*sum(this%hybw_z(:,i,j,k  )*this%W(i,j,k  :k+1))
+               rhoWm1=sum(this%hybw_z(:,i,j,k-1)*this%rho_Wold(i,j,k-1:k))*sum(this%itpw_z(:,i,j,k-1)*this%W(i,j,k-1:k  ))
+               rhoWm2=sum(this%hybw_z(:,i,j,k-1)*this%rho_Wold(i,j,k-1:k))*sum(this%hybw_z(:,i,j,k-1)*this%W(i,j,k-1:k  ))
                this%implicit%opr(1,i,j,k)=this%implicit%opr(1,i,j,k)+0.5_WP*dt*(this%divw_x(+1,i,j,k)*this%hybw_x(-1,i+1,j,k)*rhoUp+&
                &                                                                this%divw_x( 0,i,j,k)*this%hybw_x( 0,i  ,j,k)*rhoUm+&
                &                                                                this%divw_y(+1,i,j,k)*this%hybw_y(-1,i,j+1,k)*rhoVp+&
                &                                                                this%divw_y( 0,i,j,k)*this%hybw_y( 0,i,j  ,k)*rhoVm+&
-               &                                                                this%divw_z( 0,i,j,k)*this%hybw_z( 0,i,j,k  )*rhoWp+&
-               &                                                                this%divw_z(-1,i,j,k)*this%hybw_z(+1,i,j,k-1)*rhoWm)
+               &                                                                this%divw_z( 0,i,j,k)*this%hybw_z( 0,i,j,k  )*rhoWp1+this%divw_z( 0,i,j,k)*this%itpw_z( 0,i,j,k  )*rhoWp2+&
+               &                                                                this%divw_z(-1,i,j,k)*this%hybw_z(+1,i,j,k-1)*rhoWm1+this%divw_z(-1,i,j,k)*this%itpw_z(+1,i,j,k-1)*rhoWm2)
                this%implicit%opr(2,i,j,k)=this%implicit%opr(2,i,j,k)+0.5_WP*dt*(this%divw_x(+1,i,j,k)*this%hybw_x( 0,i+1,j,k)*rhoUp)
                this%implicit%opr(3,i,j,k)=this%implicit%opr(3,i,j,k)+0.5_WP*dt*(this%divw_x( 0,i,j,k)*this%hybw_x(-1,i  ,j,k)*rhoUm)
                this%implicit%opr(4,i,j,k)=this%implicit%opr(4,i,j,k)+0.5_WP*dt*(this%divw_y(+1,i,j,k)*this%hybw_y( 0,i,j+1,k)*rhoVp)
                this%implicit%opr(5,i,j,k)=this%implicit%opr(5,i,j,k)+0.5_WP*dt*(this%divw_y( 0,i,j,k)*this%hybw_y(-1,i,j  ,k)*rhoVm)
-               this%implicit%opr(6,i,j,k)=this%implicit%opr(6,i,j,k)+0.5_WP*dt*(this%divw_z( 0,i,j,k)*this%hybw_z(+1,i,j,k  )*rhoWp)
-               this%implicit%opr(7,i,j,k)=this%implicit%opr(7,i,j,k)+0.5_WP*dt*(this%divw_z(-1,i,j,k)*this%hybw_z( 0,i,j,k-1)*rhoWm)
+               this%implicit%opr(6,i,j,k)=this%implicit%opr(6,i,j,k)+0.5_WP*dt*(this%divw_z( 0,i,j,k)*this%hybw_z(+1,i,j,k  )*rhoWp1+this%divw_z( 0,i,j,k)*this%itpw_z(+1,i,j,k  )*rhoWp2)
+               this%implicit%opr(7,i,j,k)=this%implicit%opr(7,i,j,k)+0.5_WP*dt*(this%divw_z(-1,i,j,k)*this%hybw_z( 0,i,j,k-1)*rhoWm1+this%divw_z(-1,i,j,k)*this%itpw_z( 0,i,j,k-1)*rhoWm2)
             end do
          end do
       end do
