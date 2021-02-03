@@ -869,7 +869,7 @@ contains
             call fs2%update_laplacian()
             call fs2%correct_mfr()
             call fs2%get_div()
-            call fs2%add_surface_tension_jump(dt=time2%dt,div=fs2%div,vf=vf2)
+            call fs2%add_surface_tension_jump(dt=time2%dt,div=fs2%div,vf=vf2,contact_model=static_contact)
             fs2%psolv%rhs=-fs2%cfg%vol*fs2%div/time2%dt
             fs2%psolv%sol=0.0_WP
             call fs2%psolv%solve()
