@@ -1258,7 +1258,7 @@ contains
             do ii=this%cfg%imin_,this%cfg%imax_+1
                ! U-cell **********
                ! Fluxes on x-face
-               i=ii-1; j=jj; k=kk
+               i=ii-1; j=jj-1; k=kk-1
                if (abs(this%rho_Uold(i+1,j,k)-this%rho_Uold(i,j,k)).gt.rhoeps) then
                   vel=sum(this%itpu_x(:,i,j,k)*this%U(i:i+1,j,k))
                   if (vel.ge.0.0_WP) then
@@ -1268,7 +1268,7 @@ contains
                   end if
                end if
                ! Fluxes on y-face
-               i=ii  ; j=jj; k=kk
+               i=ii; j=jj; k=kk
                if (abs(this%rho_Uold(i,j,k)-this%rho_Uold(i,j-1,k)).gt.rhoeps) then
                   vel=sum(this%itpv_x(:,i,j,k)*this%V(i-1:i,j,k))
                   if (vel.ge.0.0_WP) then
@@ -1278,7 +1278,7 @@ contains
                   end if
                end if
                ! Fluxes on z-face
-               i=ii  ; j=jj; k=kk
+               i=ii; j=jj; k=kk
                if (abs(this%rho_Uold(i,j,k)-this%rho_Uold(i,j,k-1)).gt.rhoeps) then
                   vel=sum(this%itpw_x(:,i,j,k)*this%W(i-1:i,j,k))
                   if (vel.ge.0.0_WP) then
@@ -1289,7 +1289,7 @@ contains
                end if
                ! V-cell **********
                ! Fluxes on x-face
-               i=ii; j=jj  ; k=kk
+               i=ii; j=jj; k=kk
                if (abs(this%rho_Vold(i,j,k)-this%rho_Vold(i-1,j,k)).gt.rhoeps) then
                   vel=sum(this%itpu_y(:,i,j,k)*this%U(i,j-1:j,k))
                   if (vel.ge.0.0_WP) then
@@ -1299,7 +1299,7 @@ contains
                   end if
                end if
                ! Fluxes on y-face
-               i=ii; j=jj-1; k=kk
+               i=ii-1; j=jj-1; k=kk-1
                if (abs(this%rho_Vold(i,j+1,k)-this%rho_Vold(i,j,k)).gt.rhoeps) then
                   vel=sum(this%itpv_y(:,i,j,k)*this%V(i,j:j+1,k))
                   if (vel.ge.0.0_WP) then
@@ -1309,7 +1309,7 @@ contains
                   end if
                end if
                ! Fluxes on z-face
-               i=ii; j=jj  ; k=kk
+               i=ii; j=jj; k=kk
                if (abs(this%rho_Vold(i,j,k)-this%rho_Vold(i,j,k-1)).gt.rhoeps) then
                   vel=sum(this%itpw_y(:,i,j,k)*this%W(i,j-1:j,k))
                   if (vel.ge.0.0_WP) then
@@ -1320,7 +1320,7 @@ contains
                end if
                ! W-cell **********
                ! Fluxes on x-face
-               i=ii; j=jj; k=kk-1
+               i=ii-1; j=jj-1; k=kk-1
                if (abs(this%rho_Wold(i,j,k)-this%rho_Wold(i-1,j,k)).gt.rhoeps) then
                   vel=sum(this%itpu_z(:,i,j,k)*this%U(i,j,k-1:k))
                   if (vel.ge.0.0_WP) then
