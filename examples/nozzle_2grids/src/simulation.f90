@@ -900,9 +900,17 @@ contains
          call mfile2%write()
          call cflfile2%write()
          
-         ! After we're done clip all VOF at the exit area
-         do i=fs2%cfg%imino_,fs2%cfg%imaxo_
-            if (i.ge.vf2%cfg%imax-5) vf2%VF(i,:,:)=0.0_WP
+         ! After we're done clip all VOF at the exit area and along the sides
+         do k=fs2%cfg%kmino_,fs2%cfg%kmaxo_
+            do j=fs2%cfg%jmino_,fs2%cfg%jmaxo_
+               do i=fs2%cfg%imino_,fs2%cfg%imaxo_
+                  if (i.ge.vf2%cfg%imax-5) vf2%VF(i,j,k)=0.0_WP
+                  if (j.ge.vf2%cfg%jmax-5) vf2%VF(i,j,k)=0.0_WP
+                  if (j.le.vf2%cfg%jmin+5) vf2%VF(i,j,k)=0.0_WP
+                  if (k.ge.vf2%cfg%kmax-5) vf2%VF(i,j,k)=0.0_WP
+                  if (k.le.vf2%cfg%kmin+5) vf2%VF(i,j,k)=0.0_WP
+               end do
+            end do
          end do
          
       end do
