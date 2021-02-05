@@ -40,5 +40,5 @@ Implicit iteration : 100
 Ensight output period : 1e-1
 
 # Restart and save
-Restart output period : 1
-Restart from :          !restart_6.06276E-04
+Restart output period : 60
+Restart from :          !restart_2.00100E+00

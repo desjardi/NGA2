@@ -551,12 +551,29 @@ contains
       use parallel, only: MPI_REAL_WP
       implicit none
       class(vdscalar), intent(inout) :: this
-      integer :: ierr
+      integer :: ierr,i,j,k
       real(WP) :: my_SCmax,my_SCmin,my_rhomax,my_rhomin
-      my_SCmax =maxval(this%SC);  call MPI_ALLREDUCE(my_SCmax ,this%SCmax ,1,MPI_REAL_WP,MPI_MAX,this%cfg%comm,ierr)
-      my_SCmin =minval(this%SC);  call MPI_ALLREDUCE(my_SCmin ,this%SCmin ,1,MPI_REAL_WP,MPI_MIN,this%cfg%comm,ierr)
-      my_rhomax=maxval(this%rho); call MPI_ALLREDUCE(my_rhomax,this%rhomax,1,MPI_REAL_WP,MPI_MAX,this%cfg%comm,ierr)
-      my_rhomin=minval(this%rho); call MPI_ALLREDUCE(my_rhomin,this%rhomin,1,MPI_REAL_WP,MPI_MIN,this%cfg%comm,ierr)
+      my_SCmax =-huge(1.0_WP)
+      my_SCmin =+huge(1.0_WP)
+      my_rhomax=-huge(1.0_WP)
+      my_rhomin=+huge(1.0_WP)
+      do k=this%cfg%kmin_,this%cfg%kmax_
+         do j=this%cfg%jmin_,this%cfg%jmax_
+            do i=this%cfg%imin_,this%cfg%imax_
+               ! Skip only walls
+               if (this%mask(i,j,k).ne.1) then
+                  my_SCmax =max( this%SC(i,j,k),my_SCmax )
+                  my_SCmin =min( this%SC(i,j,k),my_SCmin )
+                  my_rhomax=max(this%rho(i,j,k),my_rhomax)
+                  my_rhomin=min(this%rho(i,j,k),my_rhomin)
+               end if
+            end do
+         end do
+      end do
+      call MPI_ALLREDUCE(my_SCmax ,this%SCmax ,1,MPI_REAL_WP,MPI_MAX,this%cfg%comm,ierr)
+      call MPI_ALLREDUCE(my_SCmin ,this%SCmin ,1,MPI_REAL_WP,MPI_MIN,this%cfg%comm,ierr)
+      call MPI_ALLREDUCE(my_rhomax,this%rhomax,1,MPI_REAL_WP,MPI_MAX,this%cfg%comm,ierr)
+      call MPI_ALLREDUCE(my_rhomin,this%rhomin,1,MPI_REAL_WP,MPI_MIN,this%cfg%comm,ierr)
    end subroutine get_max
    
    

@@ -4,6 +4,7 @@ module simulation
    use precision,         only: WP
    use geometry,          only: cfg
    use lowmach_class,     only: lowmach
+   use sgsmodel_class,    only: sgsmodel
    use vdscalar_class,    only: vdscalar
    use timetracker_class, only: timetracker
    use ensight_class,     only: ensight
@@ -17,6 +18,7 @@ module simulation
    type(lowmach),     public :: fs
    type(vdscalar),    public :: sc
    type(timetracker), public :: time
+   type(sgsmodel),    public :: sgs
    
    !> Ensight postprocessing
    type(ensight) :: ens_out
@@ -35,6 +37,7 @@ module simulation
    !> Private work arrays
    real(WP), dimension(:,:,:), allocatable :: resU,resV,resW,resSC
    real(WP), dimension(:,:,:), allocatable :: Ui,Vi,Wi
+   real(WP), dimension(:,:,:,:), allocatable :: SR
    
    !> Equation of state and case conditions
    real(WP) :: pressure,Vtotal
@@ -125,6 +128,38 @@ contains
    end subroutine get_rho
    
    
+   !> Calculate here our viscosity from local T and vessel pressure
+   subroutine get_visc()
+      implicit none
+      real(WP), parameter :: A1=-1.146067e-01_WP
+      real(WP), parameter :: A2=+6.978380e-07_WP
+      real(WP), parameter :: A3=+3.976765e-10_WP
+      real(WP), parameter :: A4=+6.336120e-02_WP
+      real(WP), parameter :: A5=-1.166119e-02_WP
+      real(WP), parameter :: A6=+7.142596e-04_WP
+      real(WP), parameter :: A7=+6.519333e-06_WP
+      real(WP), parameter :: A8=-3.567559e-01_WP
+      real(WP), parameter :: A9=-3.180473e-02_WP
+      integer :: i,j,k
+      real(WP) :: Pbar,lnT,MUcp
+      ! Pressure needs to be in bar
+      Pbar=1.0e-5_WP*pressure
+      ! Loop over the entire domain
+      do k=sc%cfg%kmino_,sc%cfg%kmaxo_
+         do j=sc%cfg%jmino_,sc%cfg%jmaxo_
+            do i=sc%cfg%imino_,sc%cfg%imaxo_
+               ! Log of temperature clipped to 300K
+               lnT=log(max(sc%SC(i,j,k),300.0_WP))
+               ! Evaluate viscosity in cP
+               MUcp=(A1+A2*Pbar+A3*Pbar**2+A4*lnT+A5*lnT**2+A6*lnT**3)/(1.0_WP+A7*Pbar+A8*lnT+A9*lnT**2)
+               ! Set viscosity
+               fs%visc(i,j,k)=MUcp/1000.0_WP
+            end do
+         end do
+      end do
+      
+   end subroutine get_visc
+   
    !> Initialization of problem solver
    subroutine simulation_init
       use param, only: param_read
@@ -147,7 +182,7 @@ contains
             df=datafile(pg=cfg,fdata=trim(adjustl(dir_restart))//'/'//'data')
          else
             ! If we are not restarting, we will still need datafiles for saving restart files
-            df=datafile(pg=cfg,filename=trim(cfg%name),nval=3,nvar=7)
+            df=datafile(pg=cfg,filename=trim(cfg%name),nval=3,nvar=8)
             df%valname(1)='t'
             df%valname(2)='dt'
             df%valname(3)='pressure'
@@ -155,9 +190,10 @@ contains
             df%varname(2)='rhoV'
             df%varname(3)='rhoW'
             df%varname(4)='P'
-            df%varname(5)='rho'
-            df%varname(6)='rhoold'
-            df%varname(7)='SC'
+            df%varname(5)='rho_fs'
+            df%varname(6)='rho'
+            df%varname(7)='rhoold'
+            df%varname(8)='SC'
          end if
       end block restart_and_save
       
@@ -171,6 +207,7 @@ contains
          allocate(Ui  (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
          allocate(Vi  (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
          allocate(Wi  (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+         allocate(SR(6,cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
          ! Scalar solver
          allocate(resSC(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
       end block allocate_work_arrays
@@ -183,6 +220,12 @@ contains
          call param_read('Max cfl number',time%cflmax)
          time%dt=time%dtmax
          time%itmax=2
+         ! Handle restart
+         if (restarted) then
+            call df%pullval(name='t' ,val=time%t )
+            call df%pullval(name='dt',val=time%dt)
+            time%told=time%t-time%dt
+         end if
       end block initialize_timetracker
       
       
@@ -240,9 +283,18 @@ contains
          call param_read('Initial temperature',Tinit)
          call param_read('Inlet temperature',Tinlet)
          call param_read('Initial pressure',pressure)
-         ! Uniform initial temperature and density
-         sc%SC=Tinit
-         sc%rho=1.0_WP; where (sc%cfg%VF.gt.0.0_WP) sc%rho=pressure*Wmlr/(Rcst*Tinit)
+         ! Handle restart
+         if (restarted) then
+            call df%pullval(name='pressure',val=pressure )
+            call df%pullvar(name='SC'      ,var=sc%SC    )
+            call df%pullvar(name='rho'     ,var=sc%rho   )
+            call df%pullvar(name='rhoold'  ,var=sc%rhoold)
+         else
+            ! Uniform initial temperature and density
+            sc%SC=Tinit
+            sc%rho=1.0_WP; where (sc%cfg%VF.gt.0.0_WP) sc%rho=pressure*Wmlr/(Rcst*Tinit)
+            sc%rhoold=sc%rho
+         end if
          ! Compute initial mass in vessel
          call sc%cfg%integrate(sc%rho,integral=fluid_mass)
          ! Apply Dirichlet at the tube
@@ -260,10 +312,8 @@ contains
          end do
          ! Apply all other boundary conditions
          call sc%apply_bcond(time%t,time%dt)
-         ! Also compute initial volumne
+         ! Compute fluid volumne
          resU=1.0_WP; call sc%cfg%integrate(resU,integral=Vtotal)
-         ! Recompute pressure
-         resU=sc%rho*sc%SC*Rcst/Wmlr; call sc%cfg%integrate(resU,integral=pressure); pressure=pressure/Vtotal
       end block initialize_scalar
       
       
@@ -273,8 +323,13 @@ contains
          use lowmach_class, only: bcond
          type(bcond), pointer :: inflow
          integer :: n,i,j,k
-         ! Zero initial field
-         fs%U=0.0_WP; fs%V=0.0_WP; fs%W=0.0_WP
+         ! Handle restart
+         if (restarted) then
+            call df%pullvar(name='rhoU',var=fs%rhoU)
+            call df%pullvar(name='rhoV',var=fs%rhoV)
+            call df%pullvar(name='rhoW',var=fs%rhoW)
+            call df%pullvar(name='P'   ,var=fs%P   )
+         end if
          ! Read in MFR
          call param_read('Inlet MFR (kg/s)',MFR)
          rhoUin=MFR/(2.0_WP*Pi*0.02_WP*0.02_WP) !< Two round inlets pipes with radius 0.02 m
@@ -290,17 +345,25 @@ contains
             fs%rhoU(i,j,k)=+rhoUin
          end do
          ! Set density from scalar
-         fs%rho=sc%rho
+         fs%rho=0.5_WP*(sc%rho+sc%rhoold)
+         ! Handle restart
+         if (restarted) call df%pullvar(name='rho_fs',var=fs%rho)
          ! Form momentum
          call fs%rho_divide
          ! Apply all other boundary conditions
          call fs%apply_bcond(time%t,time%dt)
          call fs%interp_vel(Ui,Vi,Wi)
-         resSC=0.0_WP
+         call sc%get_drhodt(dt=time%dt,drhodt=resSC)
          call fs%get_div(drhodt=resSC)
          ! Compute MFR through all boundary conditions
          call fs%get_mfr()
       end block initialize_velocity
+      
+      
+      ! Create an LES model
+      create_sgs: block
+         sgs=sgsmodel(cfg=fs%cfg,umask=fs%umask,vmask=fs%vmask,wmask=fs%wmask)
+      end block create_sgs
       
       
       ! Add Ensight output
@@ -402,9 +465,18 @@ contains
          ! This is where time-dpt Dirichlet would be enforced
          
          ! ============ UPDATE PROPERTIES ====================
-         ! UPDATE THE VISCOSITY
+         call get_visc()
          ! UPDATE THE DIFFUSIVITY
          ! ===================================================
+         
+         ! Turbulence modeling
+         call fs%get_strainrate(Ui=Ui,Vi=Vi,Wi=Wi,SR=SR)
+         call sgs%get_visc(dt=time%dtold,rho=fs%rho,Ui=Ui,Vi=Vi,Wi=Wi,SR=SR)
+         where (sgs%visc.lt.-fs%visc)
+            sgs%visc=-fs%visc
+         end where
+         fs%visc=fs%visc+sgs%visc
+         sc%diff=fs%visc
          
          ! Perform sub-iterations
          do while (time%it.le.time%itmax)
@@ -540,6 +612,7 @@ contains
                call df%pushvar(name='rhoV'    ,var=fs%rhoV  )
                call df%pushvar(name='rhoW'    ,var=fs%rhoW  )
                call df%pushvar(name='P'       ,var=fs%P     )
+               call df%pushvar(name='rho_fs'  ,var=fs%rho   )
                call df%pushvar(name='rho'     ,var=sc%rho   )
                call df%pushvar(name='rhoold'  ,var=sc%rhoold)
                call df%pushvar(name='SC'      ,var=sc%SC    )
