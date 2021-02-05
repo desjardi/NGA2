@@ -78,8 +78,6 @@ contains
          geomfile=datafile(self,fgeom)
          ! Get the VF array
          call geomfile%pullvar('VF',self%VF)
-         ! Sync up the VF array
-         call self%sync(self%VF)
          ! Perform an extension in the overlap
          call self%VF_extend()
       end block read_VF

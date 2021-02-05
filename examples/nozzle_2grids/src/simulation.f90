@@ -1,5 +1,6 @@
 !> Various definitions and tools for running an NGA2 simulation
 module simulation
+   use string,            only: str_medium
    use precision,         only: WP
    use geometry,          only: cfg1,cfg2
    use geometry,          only: xinj_dist,inj_norm_diam,dli0,dlo0,dgi0
@@ -10,6 +11,7 @@ module simulation
    use timetracker_class, only: timetracker
    use ensight_class,     only: ensight
    use event_class,       only: event
+   use datafile_class,    only: datafile
    use monitor_class,     only: monitor
    implicit none
    private
@@ -24,6 +26,12 @@ module simulation
    type(vfs),         public :: vf2
    type(timetracker), public :: time2
    type(sgsmodel),    public :: sgs2
+   
+   !> Provide two datafiles and an event tracker for saving restarts
+   type(event)    :: save_evt
+   type(datafile) :: df1,df2
+   character(len=str_medium) :: irl_file
+   logical :: restarted
    
    !> Ensight postprocessing
    type(ensight) :: ens_out1
@@ -210,6 +218,53 @@ contains
       implicit none
       
       
+      ! Handle restart/saves here
+      restart_and_save: block
+         character(len=str_medium) :: dir_restart
+         ! Create event for saving restart files
+         save_evt=event(time2,'Restart output')
+         call param_read('Restart output period',save_evt%tper)
+         ! Check if we are restarting
+         call param_read(tag='Restart from',val=dir_restart,short='r',default='')
+         restarted=.false.; if (len_trim(dir_restart).gt.0) restarted=.true.
+         if (restarted) then
+            ! If we are, read the name of the directory
+            call param_read('Restart from',dir_restart,'r')
+            ! Read the two datafiles and the name of the IRL file to read later
+            df1=datafile(pg=cfg1,fdata=trim(adjustl(dir_restart))//'/'//'data.1')
+            df2=datafile(pg=cfg2,fdata=trim(adjustl(dir_restart))//'/'//'data.2')
+            irl_file=trim(adjustl(dir_restart))//'/'//'data.irl'
+         else
+            ! If we are not restarting, we will still need datafiles for saving restart files
+            df1=datafile(pg=cfg1,filename=trim(cfg1%name),nval=2,nvar=9)
+            df1%valname(1)='t'
+            df1%valname(2)='dt'
+            df1%varname(1)='U'
+            df1%varname(2)='V'
+            df1%varname(3)='W'
+            df1%varname(4)='P'
+            df1%varname(5)='Uold'
+            df1%varname(6)='Vold'
+            df1%varname(7)='Wold'
+            df1%varname(8)='LM'
+            df1%varname(9)='MM'
+            df2=datafile(pg=cfg2,filename=trim(cfg2%name),nval=2,nvar=10)
+            df2%valname(1)='t'
+            df2%valname(2)='dt'
+            df2%varname(1)='U'
+            df2%varname(2)='V'
+            df2%varname(3)='W'
+            df2%varname(4)='P'
+            df2%varname(5)='Pjx'
+            df2%varname(6)='Pjy'
+            df2%varname(7)='Pjz'
+            df2%varname(8)='LM'
+            df2%varname(9)='MM'
+            df2%varname(10)='VF'
+         end if
+      end block restart_and_save
+      
+      
       ! *****************************************************************************
       ! **************************** INITIALIZE SOLVER 2 ****************************
       ! *****************************************************************************
@@ -233,6 +288,12 @@ contains
          call param_read('2 Max cfl number',time2%cflmax)
          time2%dt=time2%dtmax
          time2%itmax=2
+         ! Handle restart
+         if (restarted) then
+            call df2%pullval(name='t' ,val=time2%t )
+            call df2%pullval(name='dt',val=time2%dt)
+            time2%told=time2%t-time2%dt
+         end if
       end block initialize_timetracker2
       
       
@@ -259,6 +320,15 @@ contains
                end do
             end do
          end do
+         ! Handle restart - using IRL data - untested, not working
+         !if (restarted) then
+         !   ! Get the IRL interface
+         !   call vf2%read_interface(filename=trim(irl_file))
+         !   ! Reset moments to guarantee compatibility with interface reconstruction
+         !   call vf2%reset_volume_moments()
+         !end if
+         ! Handle restart - using VF data
+         if (restarted) call df2%pullvar(name='VF',var=vf2%VF)
          ! Update the band
          call vf2%update_band()
          ! Perform interface reconstruction from VOF field
@@ -326,17 +396,17 @@ contains
          real(WP), parameter :: SLPM2SI=1.66667E-5_WP
          ! Zero initial field
          fs2%U=0.0_WP; fs2%V=0.0_WP; fs2%W=0.0_WP
-         ! Apply Dirichlet at direct liquid and gas injector ports
-         ! NO NEED TO INJECT GAS HERE AS THE COUPLING WILL TAKE CARE OF IT
-         ! call param_read('Gas flow rate (SLPM)',Q_SLPM)
-         ! Q_SI=Q_SLPM*SLPM2SI
-         ! Aport=pi/4.0_WP*dgi0**2-pi/4.0_WP*dlo0**2
-         ! Uports=Q_SI/(4.0_WP*Aport)
-         ! call fs2%get_bcond('gas_inj',mybc)
-         ! do n=1,mybc%itr%no_
-         !    i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
-         !    fs2%U(i,j,k)=Uports
-         ! end do
+         ! Handle restart
+         if (restarted) then
+            call df2%pullvar(name='U'  ,var=fs2%U  )
+            call df2%pullvar(name='V'  ,var=fs2%V  )
+            call df2%pullvar(name='W'  ,var=fs2%W  )
+            call df2%pullvar(name='P'  ,var=fs2%P  )
+            call df2%pullvar(name='Pjx',var=fs2%Pjx)
+            call df2%pullvar(name='Pjy',var=fs2%Pjy)
+            call df2%pullvar(name='Pjz',var=fs2%Pjz)
+         end if
+         ! Apply Dirichlet at liquid injector port
          call param_read('Liquid flow rate (SLPM)',Q_SLPM)
          Q_SI=Q_SLPM*SLPM2SI
          Aport=pi/4.0_WP*dli0**2
@@ -362,6 +432,11 @@ contains
       ! Create an LES model
       create_sgs2: block
          sgs2=sgsmodel(cfg=fs2%cfg,umask=fs2%umask,vmask=fs2%vmask,wmask=fs2%wmask)
+         ! Handle restart
+         if (restarted) then
+            call df2%pullvar(name='LM',var=sgs2%LM)
+            call df2%pullvar(name='MM',var=sgs2%MM)
+         end if
       end block create_sgs2
       
       
@@ -437,6 +512,22 @@ contains
       end block allocate_work_arrays1
       
       
+      ! Initialize time tracker
+      initialize_timetracker1: block
+         time1=timetracker(cfg1%amRoot,name='nozzle_interior')
+         call param_read('1 Max timestep size',time1%dtmax)
+         call param_read('1 Max cfl number',time1%cflmax)
+         time1%dt=time1%dtmax
+         time1%itmax=2
+         ! Handle restart
+         if (restarted) then
+            call df1%pullval(name='t' ,val=time1%t )
+            call df1%pullval(name='dt',val=time1%dt)
+            time1%told=time1%t-time1%dt
+         end if
+      end block initialize_timetracker1
+      
+      
       ! Create an incompressible flow solver with bconds
       create_solver1: block
          use incomp_class, only: dirichlet,clipped_neumann
@@ -464,22 +555,6 @@ contains
       end block create_solver1
       
       
-      ! Create an LES model
-      create_sgs1: block
-         sgs1=sgsmodel(cfg=fs1%cfg,umask=fs1%umask,vmask=fs1%vmask,wmask=fs1%wmask)
-      end block create_sgs1
-      
-      
-      ! Initialize time tracker
-      initialize_timetracker1: block
-         time1=timetracker(fs1%cfg%amRoot,name='nozzle_interior')
-         call param_read('1 Max timestep size',time1%dtmax)
-         call param_read('1 Max cfl number',time1%cflmax)
-         time1%dt=time1%dtmax
-         time1%itmax=2
-      end block initialize_timetracker1
-      
-      
       ! Initialize our velocity field
       initialize_velocity1: block
          use mathtools, only: pi
@@ -491,6 +566,16 @@ contains
          real(WP), parameter :: SLPM2SI=1.66667E-5_WP
          ! Zero initial field
          fs1%U=0.0_WP; fs1%V=0.0_WP; fs1%W=0.0_WP
+         ! Handle restart
+         if (restarted) then
+            call df1%pullvar(name='U'   ,var=fs1%U   )
+            call df1%pullvar(name='V'   ,var=fs1%V   )
+            call df1%pullvar(name='W'   ,var=fs1%W   )
+            call df1%pullvar(name='P'   ,var=fs1%P   )
+            call df1%pullvar(name='Uold',var=fs1%Uold)
+            call df1%pullvar(name='Vold',var=fs1%Vold)
+            call df1%pullvar(name='Wold',var=fs1%Wold)
+         end if
          ! Read in mean gas
          call param_read('Gas flow rate (SLPM)',Q_SLPM)
          Q_SI=Q_SLPM*SLPM2SI
@@ -528,6 +613,17 @@ contains
          ! Compute divergence
          call fs1%get_div()
       end block initialize_velocity1
+      
+      
+      ! Create an LES model
+      create_sgs1: block
+         sgs1=sgsmodel(cfg=fs1%cfg,umask=fs1%umask,vmask=fs1%vmask,wmask=fs1%wmask)
+         ! Handle restart
+         if (restarted) then
+            call df1%pullvar(name='LM',var=sgs1%LM)
+            call df1%pullvar(name='MM',var=sgs1%MM)
+         end if
+      end block create_sgs1
       
       
       ! Add Ensight output
@@ -644,12 +740,13 @@ contains
    
    !> Perform an NGA2 simulation
    subroutine simulation_run
-      use parallel, only: MPI_REAL_WP
-      use mpi_f08,  only: MPI_ALLREDUCE,MPI_SUM
+      use parallel,   only: MPI_REAL_WP
+      use mpi_f08,    only: MPI_ALLREDUCE,MPI_SUM
       use tpns_class, only: bcond,static_contact
       implicit none
       integer :: n,i,j,k,ierr
       type(bcond), pointer :: mybc
+      character(len=str_medium) :: dirname,timestamp
       
       ! Perform time integration - the second solver is the main driver here
       do while (.not.time2%done())
@@ -912,6 +1009,43 @@ contains
                end do
             end do
          end do
+         
+         ! Finally, see if it's time to save restart files
+         if (save_evt%occurs()) then
+            ! Prefix for files
+            dirname='restart_'; write(timestamp,'(es12.5)') time2%t
+            ! Prepare a new directory
+            if (fs1%cfg%amRoot) call execute_command_line('mkdir -p '//trim(adjustl(dirname))//trim(adjustl(timestamp)))
+            ! Populate df1 and write it
+            call df1%pushval(name=   't',val=time1%t )
+            call df1%pushval(name=  'dt',val=time1%dt)
+            call df1%pushvar(name=   'U',var=fs1%U   )
+            call df1%pushvar(name=   'V',var=fs1%V   )
+            call df1%pushvar(name=   'W',var=fs1%W   )
+            call df1%pushvar(name=   'P',var=fs1%P   )
+            call df1%pushvar(name='Uold',var=fs1%Uold)
+            call df1%pushvar(name='Vold',var=fs1%Vold)
+            call df1%pushvar(name='Wold',var=fs1%Wold)
+            call df1%pushvar(name=  'LM',var=sgs1%LM )
+            call df1%pushvar(name=  'MM',var=sgs1%MM )
+            call df1%write(fdata=trim(adjustl(dirname))//trim(adjustl(timestamp))//'/'//'data.1')
+            ! Populate df2 and write it
+            call df2%pushval(name=  't',val=time2%t )
+            call df2%pushval(name= 'dt',val=time2%dt)
+            call df2%pushvar(name=  'U',var=fs2%U   )
+            call df2%pushvar(name=  'V',var=fs2%V   )
+            call df2%pushvar(name=  'W',var=fs2%W   )
+            call df2%pushvar(name=  'P',var=fs2%P   )
+            call df2%pushvar(name='Pjx',var=fs2%Pjx )
+            call df2%pushvar(name='Pjy',var=fs2%Pjy )
+            call df2%pushvar(name='Pjz',var=fs2%Pjz )
+            call df2%pushvar(name= 'LM',var=sgs2%LM )
+            call df2%pushvar(name= 'MM',var=sgs2%MM )
+            call df2%pushvar(name= 'VF',var=vf2%VF  )
+            call df2%write(fdata=trim(adjustl(dirname))//trim(adjustl(timestamp))//'/'//'data.2')
+            ! Also output IRL interface
+            call vf2%write_interface(filename=trim(adjustl(dirname))//trim(adjustl(timestamp))//'/'//'data.irl')
+         end if
          
       end do
       

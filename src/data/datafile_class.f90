@@ -133,18 +133,24 @@ contains
       self%nval=dims(4); allocate(self%valname(self%nval)); allocate(self%val(self%nval))
       self%nvar=dims(5); allocate(self%varname(self%nvar)); allocate(self%var(self%pg%imin_:self%pg%imax_,self%pg%jmin_:self%pg%jmax_,self%pg%kmin_:self%pg%kmax_,self%nvar))
       
-      ! Read the name and data for all the values
+      ! Read the names for all the values
       do n=1,self%nval
          call MPI_FILE_READ_ALL(ifile,self%valname(n),str_short,MPI_CHARACTER,status,ierr)
-         call MPI_FILE_READ_ALL(ifile,self%val(n)    ,1        ,MPI_REAL_WP  ,status,ierr)
       end do
       
-      ! Read the name and data for all the variables
+      ! Read all the values
+      do n=1,self%nval
+         call MPI_FILE_READ_ALL(ifile,self%val(n),1,MPI_REAL_WP,status,ierr)
+      end do
+      
+      ! Read the names for all the variables
+      do n=1,self%nvar
+         call MPI_FILE_READ_ALL(ifile,self%varname(n),str_short,MPI_CHARACTER,status,ierr)
+      end do
+      
+      ! Read the data for all the variables
       call MPI_FILE_GET_POSITION(ifile,disp,ierr)
       do n=1,self%nvar
-         call MPI_FILE_SET_VIEW(ifile,disp,MPI_CHARACTER,MPI_CHARACTER,'native',info_mpiio,ierr)
-         call MPI_FILE_READ_ALL(ifile,self%varname(n),str_short,MPI_CHARACTER,status,ierr)
-         disp=disp+int(str_short,MPI_OFFSET_KIND)
          call MPI_FILE_SET_VIEW(ifile,disp,MPI_REAL_WP,self%pg%view,'native',info_mpiio,ierr)
          call MPI_FILE_READ_ALL(ifile,self%var(:,:,:,n),self%pg%nx_*self%pg%ny_*self%pg%nz_,MPI_REAL_WP,status,ierr)
          disp=disp+int(self%pg%nx,MPI_OFFSET_KIND)*int(self%pg%ny,MPI_OFFSET_KIND)*int(self%pg%nz,MPI_OFFSET_KIND)*int(WP,MPI_OFFSET_KIND)
@@ -169,7 +175,7 @@ contains
       implicit none
       class(datafile), intent(in) :: this
       character(len=*), optional :: fdata
-      integer :: ierr,n
+      integer :: ierr,n,iunit
       type(MPI_File) :: ifile
       type(MPI_Status):: status
       integer, dimension(5) :: dims
@@ -184,28 +190,38 @@ contains
          filename=trim(adjustl(this%filename))
       end if
       
-      ! First open the file in parallel
-      inquire(file=trim(filename),exist=file_is_there)
-      if (file_is_there.and.this%pg%amRoot) call MPI_FILE_DELETE(trim(filename),info_mpiio,ierr)
-      call MPI_FILE_OPEN(this%pg%comm,trim(filename),IOR(MPI_MODE_WRONLY,MPI_MODE_CREATE),info_mpiio,ifile,ierr)
-      if (ierr.ne.0) call die('[datafile write] Problem encountered while opening data file: '//trim(filename))
+      ! Root serial-writes the file header
+      if (this%pg%amRoot) then
+         ! Open the file
+         open(newunit=iunit,file=trim(filename),form='unformatted',status='replace',access='stream',iostat=ierr)
+         if (ierr.ne.0) call die('[datafile write] Problem encountered while serial-opening data file: '//trim(filename))
+         ! Dimensions
+         write(iunit) this%pg%nx,this%pg%ny,this%pg%nz,this%nval,this%nvar
+         ! Name of all values
+         do n=1,this%nval
+            write(iunit) this%valname(n)
+         end do
+         ! Write all values
+         do n=1,this%nval
+            write(iunit) this%val(n)
+         end do
+         ! Name of all variables
+         do n=1,this%nvar
+            write(iunit) this%varname(n)
+         end do
+         ! Close the file
+         close(iunit)
+      end if
       
-      ! Read file header first
-      dims=[this%pg%nx,this%pg%ny,this%pg%nz,this%nval,this%nvar]
-      call MPI_FILE_WRITE_ALL(ifile,dims,5,MPI_INTEGER,status,ierr)
+      ! The rest is done in parallel
+      call MPI_FILE_OPEN(this%pg%comm,trim(filename),IOR(MPI_MODE_WRONLY,MPI_MODE_APPEND),info_mpiio,ifile,ierr)
+      if (ierr.ne.0) call die('[datafile write] Problem encountered while parallel-opening data file: '//trim(filename))
       
-      ! Read the name and data for all the values
-      do n=1,this%nval
-         call MPI_FILE_WRITE_ALL(ifile,this%valname(n),str_short,MPI_CHARACTER,status,ierr)
-         call MPI_FILE_WRITE_ALL(ifile,this%val(n)    ,1        ,MPI_REAL_WP  ,status,ierr)
-      end do
-      
-      ! Read the name and data for all the variables
+      ! Get current position
       call MPI_FILE_GET_POSITION(ifile,disp,ierr)
+      
+      ! Write all variables
       do n=1,this%nvar
-         call MPI_FILE_SET_VIEW(ifile,disp,MPI_CHARACTER,MPI_CHARACTER,'native',info_mpiio,ierr)
-         call MPI_FILE_WRITE_ALL(ifile,this%varname(n),str_short,MPI_CHARACTER,status,ierr)
-         disp=disp+int(str_short,MPI_OFFSET_KIND)
          call MPI_FILE_SET_VIEW(ifile,disp,MPI_REAL_WP,this%pg%view,'native',info_mpiio,ierr)
          call MPI_FILE_WRITE_ALL(ifile,this%var(:,:,:,n),this%pg%nx_*this%pg%ny_*this%pg%nz_,MPI_REAL_WP,status,ierr)
          disp=disp+int(this%pg%nx,MPI_OFFSET_KIND)*int(this%pg%ny,MPI_OFFSET_KIND)*int(this%pg%nz,MPI_OFFSET_KIND)*int(WP,MPI_OFFSET_KIND)
@@ -334,7 +350,7 @@ contains
    end subroutine datafile_pushvar
    
    
-   !> Pull data from a var
+   !> Pull data from a var and synchronize it
    subroutine datafile_pullvar(this,name,var)
       use messager, only: die
       implicit none
@@ -345,6 +361,7 @@ contains
       n=this%findvar(name)
       if (n.gt.0) then
          var(this%pg%imin_:this%pg%imax_,this%pg%jmin_:this%pg%jmax_,this%pg%kmin_:this%pg%kmax_)=this%var(:,:,:,n)
+         call this%pg%sync(var)
       else
          call die('[datafile pullvar] Var does not exist in the datafile: '//name)
       end if

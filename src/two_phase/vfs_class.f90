@@ -1872,10 +1872,10 @@ contains
       integer(kind=MPI_OFFSET_KIND) :: disp
       integer :: size_to_write
       integer, dimension(3) :: dims
-      integer                       , dimension(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_) :: number_of_planes
-      integer(kind=MPI_OFFSET_KIND) , dimension(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_) :: offset_to_planes
-      integer                       , dimension(this%cfg%ny_*this%cfg%nz) :: array_of_block_lengths
-      integer(kind=MPI_ADDRESS_KIND), dimension(this%cfg%ny_*this%cfg%nz_):: array_of_displacements
+      integer,                        dimension(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_) :: number_of_planes
+      integer(kind=MPI_OFFSET_KIND),  dimension(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_) :: offset_to_planes
+      integer,                        dimension(this%cfg%ny_*this%cfg%nz ) :: array_of_block_lengths
+      integer(kind=MPI_ADDRESS_KIND), dimension(this%cfg%ny_*this%cfg%nz_) :: array_of_displacements
       type(MPI_Datatype) :: MPI_OFFSET_ARRAY_TYPE
       type(ByteBuffer_type) :: byte_buffer
       
@@ -1901,7 +1901,7 @@ contains
       end do
       
       ! Write out number of planes in each cell
-      disp=int(4,8)*int(3,8) !< Only 3 int(4) - would need to more r(8) if we add time and dt
+      disp=int(4,8)*int(3,8) !< Only 3 int(4) - would need two more r(8) if we add time and dt
       call MPI_FILE_SET_VIEW(ifile,disp,MPI_INTEGER,this%cfg%Iview,'native',info_mpiio,ierr)
       call MPI_FILE_WRITE_ALL(ifile,number_of_planes(this%cfg%imin_:this%cfg%imax_,this%cfg%jmin_:this%cfg%jmax_,this%cfg%kmin_:this%cfg%kmax_),this%cfg%nx_*this%cfg%ny_*this%cfg%nz_,MPI_INTEGER,status,ierr)
       
@@ -1913,7 +1913,7 @@ contains
       do k=this%cfg%kmin_,this%cfg%kmax_
          do j=this%cfg%jmin_,this%cfg%jmax_
             ind=ind+1
-            array_of_block_lengths(ind)=int((offset_to_planes(this%cfg%imax_,j,k)-offset_to_planes(this%cfg%imin_,j,k)),4)+int(4,4)+int(number_of_planes(this%cfg%imax_,j,k),4)*int(4,4)*int(8,4)+int(8,4)
+            array_of_block_lengths(ind)=int((offset_to_planes(this%cfg%imax_,j,k)-offset_to_planes(this%cfg%imin_,j,k)),4)+4+number_of_planes(this%cfg%imax_,j,k)*4*8+8
             array_of_displacements(ind)=int(offset_to_planes(this%cfg%imin_,j,k),MPI_ADDRESS_KIND)
          end do
       end do
@@ -1929,7 +1929,7 @@ contains
             end do
          end do
       end do
-      disp=disp+int(4,MPI_OFFSET_KIND)*int(this%cfg%nx,MPI_OFFSET_KIND)*int(this%cfg%ny,MPI_OFFSET_KIND)*int(this%cfg%nz,MPI_OFFSET_KIND)
+      disp=disp+int(4*this%cfg%nx*this%cfg%ny*this%cfg%nz,MPI_OFFSET_KIND)
       call MPI_FILE_SET_VIEW(ifile,disp,MPI_BYTE,MPI_OFFSET_ARRAY_TYPE,'native',info_mpiio,ierr)
       size_to_write=int(getSize(byte_buffer),4)
       call MPI_FILE_WRITE_ALL(ifile,dataPtr(byte_buffer),size_to_write,MPI_BYTE,status,ierr)
@@ -1954,13 +1954,12 @@ contains
       integer :: i,j,k,ind,ierr
       type(MPI_File) :: ifile
       type(MPI_Status) :: status
-      integer(kind=MPI_OFFSET_KIND) :: disp,size_to_read_big
-      integer :: size_to_read
+      integer(kind=MPI_OFFSET_KIND) :: disp,size_to_read
       integer, dimension(3) :: dims
-      integer                       , dimension(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_) :: number_of_planes
-      integer(kind=MPI_OFFSET_KIND) , dimension(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_) :: offset_to_planes
-      integer                       , dimension(this%cfg%ny_*this%cfg%nz) :: array_of_block_lengths
-      integer(kind=MPI_ADDRESS_KIND), dimension(this%cfg%ny_*this%cfg%nz_):: array_of_displacements
+      integer,                        dimension(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_) :: number_of_planes
+      integer(kind=MPI_OFFSET_KIND),  dimension(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_) :: offset_to_planes
+      integer,                        dimension(this%cfg%ny_*this%cfg%nz ) :: array_of_block_lengths
+      integer(kind=MPI_ADDRESS_KIND), dimension(this%cfg%ny_*this%cfg%nz_) :: array_of_displacements
       type(MPI_Datatype) :: MPI_OFFSET_ARRAY_TYPE
       type(ByteBuffer_type) :: byte_buffer
       
@@ -1993,12 +1992,12 @@ contains
       
       ! Make custom offset vector type for offsets
       ind=0
-      size_to_read_big=0
+      size_to_read=0
       do k=this%cfg%kmin_,this%cfg%kmax_
          do j=this%cfg%jmin_,this%cfg%jmax_
             ind=ind+1
-            array_of_block_lengths(ind)=int((offset_to_planes(this%cfg%imax_,j,k)-offset_to_planes(this%cfg%imin_,j,k)),4)+int(4,4)+int(number_of_planes(this%cfg%imax_,j,k),4)*int(4,4)*int(8,4)+int(8,4)
-            size_to_read_big=size_to_read_big+int(array_of_block_lengths(ind),MPI_OFFSET_KIND)
+            array_of_block_lengths(ind)=int((offset_to_planes(this%cfg%imax_,j,k)-offset_to_planes(this%cfg%imin_,j,k)),4)+4+number_of_planes(this%cfg%imax_,j,k)*4*8+8
+            size_to_read=size_to_read+int(array_of_block_lengths(ind),MPI_OFFSET_KIND)
             array_of_displacements(ind)=int(offset_to_planes(this%cfg%imin_,j,k),MPI_ADDRESS_KIND)
          end do
       end do
@@ -2006,13 +2005,11 @@ contains
       call MPI_TYPE_COMMIT(MPI_OFFSET_ARRAY_TYPE,ierr)
       
       ! Read in the bytes and pack in to buffer, then loop through and unpack to PlanarSep
-      disp=disp+int(4,MPI_OFFSET_KIND)*int(this%cfg%nx,MPI_OFFSET_KIND)*int(this%cfg%ny,MPI_OFFSET_KIND)*int(this%cfg%nz,MPI_OFFSET_KIND)
-      call new(byte_buffer)
-      call setSize(byte_buffer,size_to_read_big)
-      if (size_to_read_big.gt.huge(size_to_read)) call die('[vfs read interface] Cannot read that much data using the current I/O strategy') !< I/O WILL CRASH FOR IRL DATA >2Go/PROCESS
-      size_to_read=int(size_to_read_big)
+      call new(byte_buffer); call setSize(byte_buffer,size_to_read)
+      if (size_to_read.ne.int(size_to_read,4)) call die('[vfs read interface] Cannot read that much data using the current I/O strategy') !< I/O WILL CRASH FOR IRL DATA >2Go/PROCESS
+      disp=disp+int(4*this%cfg%nx*this%cfg%ny*this%cfg%nz,MPI_OFFSET_KIND)
       call MPI_FILE_SET_VIEW(ifile,disp,MPI_BYTE,MPI_OFFSET_ARRAY_TYPE,'native',info_mpiio,ierr)
-      call MPI_FILE_READ_ALL(ifile,dataPtr(byte_buffer),size_to_read,MPI_BYTE,status,ierr)
+      call MPI_FILE_READ_ALL(ifile,dataPtr(byte_buffer),int(size_to_read,4),MPI_BYTE,status,ierr)
       do k=this%cfg%kmin_,this%cfg%kmax_
          do j=this%cfg%jmin_,this%cfg%jmax_
             do i=this%cfg%imin_,this%cfg%imax_
@@ -2046,7 +2043,7 @@ contains
       type(MPI_Status) :: status
       
       ! Zero the offset to planes
-      offset_to_planes = int(0,MPI_OFFSET_KIND)
+      offset_to_planes=int(0,MPI_OFFSET_KIND)
       
       ! Calculate offsets in x direction
       isrc=this%cfg%xrank-1
