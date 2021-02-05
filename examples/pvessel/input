@@ -10,28 +10,35 @@ ny :	50
 nz :	50
 
 # Wall geometry
-Vessel inner radius :	0.4
-Vessel length :		2.5
+Vessel inner radius : 0.4
+Vessel length :       2.5
 
 # Fluid properties
-Gravity :		0 -10 0
-Dynamic viscosity :	0.0005
-Dynamic diffusivity :	0.0005
-Min temperature :	300
-Max temperature :	500
-Total mass :		5
+Gravity :             0 -9.81 0
+Dynamic viscosity :   0.0005
+Dynamic diffusivity : 0.0005
+
+# Vessel operating conditions
+Initial temperature : 300
+Inlet temperature :   430
+Initial pressure :    101325
+Inlet MFR (kg/s) :    0.02!0.20
 
 # Time integration
-Max timestep size :	1e-2
-Max cfl number :	1
+Max timestep size : 1e-2
+Max cfl number :    1
 
 # Pressure solver
-Pressure tolerance : 	1e-6
-Pressure iteration : 	100
+Pressure tolerance : 1e-6
+Pressure iteration : 100
 
 # Implicit velocity solver
-Implicit tolerance : 	1e-6
-Implicit iteration : 	100
+Implicit tolerance : 1e-6
+Implicit iteration : 100
 
 # Ensight output
 Ensight output period : 1e-1
+
+# Restart and save
+Restart output period : 1
+Restart from :          !restart_6.06276E-04

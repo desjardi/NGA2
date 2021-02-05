@@ -1,5 +1,6 @@
 !> Various definitions and tools for running an NGA2 simulation
 module simulation
+   use string,            only: str_medium
    use precision,         only: WP
    use geometry,          only: cfg
    use lowmach_class,     only: lowmach
@@ -7,6 +8,7 @@ module simulation
    use timetracker_class, only: timetracker
    use ensight_class,     only: ensight
    use event_class,       only: event
+   use datafile_class,    only: datafile
    use monitor_class,     only: monitor
    implicit none
    private
@@ -20,6 +22,11 @@ module simulation
    type(ensight) :: ens_out
    type(event)   :: ens_evt
    
+   !> Provide datafile and an event tracker for saving restarts
+   type(event)    :: save_evt
+   type(datafile) :: df
+   logical :: restarted
+   
    !> Simulation monitor file
    type(monitor) :: mfile,cflfile,consfile
    
@@ -29,8 +36,12 @@ module simulation
    real(WP), dimension(:,:,:), allocatable :: resU,resV,resW,resSC
    real(WP), dimension(:,:,:), allocatable :: Ui,Vi,Wi
    
-   !> Equation of state
-   real(WP) :: Tmin,Tmax,fluid_mass,fluid_mass_old
+   !> Equation of state and case conditions
+   real(WP) :: pressure,Vtotal
+   real(WP) :: MFR,rhoUin,fluid_mass,fluid_mass_old
+   real(WP) :: Tinit,Tinlet
+   real(WP), parameter :: Wmlr=44.01e-3_WP
+   real(WP), parameter :: Rcst=8.314_WP
    
 contains
    
@@ -120,9 +131,64 @@ contains
       implicit none
       
       
+      ! Handle restart/saves here
+      restart_and_save: block
+         character(len=str_medium) :: dir_restart
+         ! Create event for saving restart files
+         save_evt=event(time,'Restart output')
+         call param_read('Restart output period',save_evt%tper)
+         ! Check if we are restarting
+         call param_read(tag='Restart from',val=dir_restart,short='r',default='')
+         restarted=.false.; if (len_trim(dir_restart).gt.0) restarted=.true.
+         if (restarted) then
+            ! If we are, read the name of the directory
+            call param_read('Restart from',dir_restart,'r')
+            ! Read the two datafiles and the name of the IRL file to read later
+            df=datafile(pg=cfg,fdata=trim(adjustl(dir_restart))//'/'//'data')
+         else
+            ! If we are not restarting, we will still need datafiles for saving restart files
+            df=datafile(pg=cfg,filename=trim(cfg%name),nval=3,nvar=7)
+            df%valname(1)='t'
+            df%valname(2)='dt'
+            df%valname(3)='pressure'
+            df%varname(1)='rhoU'
+            df%varname(2)='rhoV'
+            df%varname(3)='rhoW'
+            df%varname(4)='P'
+            df%varname(5)='rho'
+            df%varname(6)='rhoold'
+            df%varname(7)='SC'
+         end if
+      end block restart_and_save
+      
+      
+      ! Allocate work arrays
+      allocate_work_arrays: block
+         ! Flow solver
+         allocate(resU(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+         allocate(resV(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+         allocate(resW(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+         allocate(Ui  (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+         allocate(Vi  (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+         allocate(Wi  (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+         ! Scalar solver
+         allocate(resSC(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+      end block allocate_work_arrays
+      
+      
+      ! Initialize time tracker with 2 subiterations
+      initialize_timetracker: block
+         time=timetracker(amRoot=cfg%amRoot)
+         call param_read('Max timestep size',time%dtmax)
+         call param_read('Max cfl number',time%cflmax)
+         time%dt=time%dtmax
+         time%itmax=2
+      end block initialize_timetracker
+      
+      
       ! Create an incompressible flow solver with bconds
       create_solver: block
-         use ils_class,     only: pcg_amg,gmres
+         use ils_class,     only: gmres,gmres_amg
          use lowmach_class, only: dirichlet
          real(WP) :: visc
          ! Create flow solver
@@ -141,7 +207,7 @@ contains
          call param_read('Implicit iteration',fs%implicit%maxit)
          call param_read('Implicit tolerance',fs%implicit%rcvg)
          ! Setup the solver
-         call fs%setup(pressure_ils=pcg_amg,implicit_ils=gmres)
+         call fs%setup(pressure_ils=gmres_amg,implicit_ils=gmres)
       end block create_solver
       
       
@@ -165,76 +231,63 @@ contains
       end block create_scalar
       
       
-      ! Allocate work arrays
-      allocate_work_arrays: block
-         ! Flow solver
-         allocate(resU(fs%cfg%imino_:fs%cfg%imaxo_,fs%cfg%jmino_:fs%cfg%jmaxo_,fs%cfg%kmino_:fs%cfg%kmaxo_))
-         allocate(resV(fs%cfg%imino_:fs%cfg%imaxo_,fs%cfg%jmino_:fs%cfg%jmaxo_,fs%cfg%kmino_:fs%cfg%kmaxo_))
-         allocate(resW(fs%cfg%imino_:fs%cfg%imaxo_,fs%cfg%jmino_:fs%cfg%jmaxo_,fs%cfg%kmino_:fs%cfg%kmaxo_))
-         allocate(Ui  (fs%cfg%imino_:fs%cfg%imaxo_,fs%cfg%jmino_:fs%cfg%jmaxo_,fs%cfg%kmino_:fs%cfg%kmaxo_))
-         allocate(Vi  (fs%cfg%imino_:fs%cfg%imaxo_,fs%cfg%jmino_:fs%cfg%jmaxo_,fs%cfg%kmino_:fs%cfg%kmaxo_))
-         allocate(Wi  (fs%cfg%imino_:fs%cfg%imaxo_,fs%cfg%jmino_:fs%cfg%jmaxo_,fs%cfg%kmino_:fs%cfg%kmaxo_))
-         ! Scalar solver
-         allocate(resSC(sc%cfg%imino_:sc%cfg%imaxo_,sc%cfg%jmino_:sc%cfg%jmaxo_,sc%cfg%kmino_:sc%cfg%kmaxo_))
-      end block allocate_work_arrays
-      
-      
-      ! Initialize time tracker with 2 subiterations
-      initialize_timetracker: block
-         time=timetracker(amRoot=fs%cfg%amRoot)
-         call param_read('Max timestep size',time%dtmax)
-         call param_read('Max cfl number',time%cflmax)
-         time%dt=time%dtmax
-         time%itmax=2
-      end block initialize_timetracker
-      
-      
       ! Initialize our temperature field
       initialize_scalar: block
          use vdscalar_class, only: bcond
          type(bcond), pointer :: inflow
          integer :: n,i,j,k
-         ! Read in the temperature and mass
-         call param_read('Min temperature',Tmin)
-         call param_read('Max temperature',Tmax)
-         call param_read('Total mass',fluid_mass)
-         ! Uniform initial field
-         sc%SC=Tmin
+         ! Read in the temperature and pressure
+         call param_read('Initial temperature',Tinit)
+         call param_read('Inlet temperature',Tinlet)
+         call param_read('Initial pressure',pressure)
+         ! Uniform initial temperature and density
+         sc%SC=Tinit
+         sc%rho=1.0_WP; where (sc%cfg%VF.gt.0.0_WP) sc%rho=pressure*Wmlr/(Rcst*Tinit)
+         ! Compute initial mass in vessel
+         call sc%cfg%integrate(sc%rho,integral=fluid_mass)
          ! Apply Dirichlet at the tube
          call sc%get_bcond( 'left inflow',inflow)
          do n=1,inflow%itr%no_
             i=inflow%itr%map(1,n); j=inflow%itr%map(2,n); k=inflow%itr%map(3,n)
-            sc%SC(i,j,k)=Tmax
+            sc%SC (i,j,k)=Tinlet
+            sc%rho(i,j,k)=pressure*Wmlr/(Rcst*Tinlet)
          end do
          call sc%get_bcond('right inflow',inflow)
          do n=1,inflow%itr%no_
             i=inflow%itr%map(1,n); j=inflow%itr%map(2,n); k=inflow%itr%map(3,n)
-            sc%SC(i,j,k)=Tmax
+            sc%SC(i,j,k)=Tinlet
+            sc%rho(i,j,k)=pressure*Wmlr/(Rcst*Tinlet)
          end do
          ! Apply all other boundary conditions
          call sc%apply_bcond(time%t,time%dt)
-         ! Build corresponding density
-         call get_rho(mass=fluid_mass)
+         ! Also compute initial volumne
+         resU=1.0_WP; call sc%cfg%integrate(resU,integral=Vtotal)
+         ! Recompute pressure
+         resU=sc%rho*sc%SC*Rcst/Wmlr; call sc%cfg%integrate(resU,integral=pressure); pressure=pressure/Vtotal
       end block initialize_scalar
       
       
       ! Initialize our velocity field
       initialize_velocity: block
+         use mathtools,     only: Pi
          use lowmach_class, only: bcond
          type(bcond), pointer :: inflow
          integer :: n,i,j,k
          ! Zero initial field
          fs%U=0.0_WP; fs%V=0.0_WP; fs%W=0.0_WP
+         ! Read in MFR
+         call param_read('Inlet MFR (kg/s)',MFR)
+         rhoUin=MFR/(2.0_WP*Pi*0.02_WP*0.02_WP) !< Two round inlets pipes with radius 0.02 m
          ! Apply Dirichlet at the tube
          call fs%get_bcond('left inflow',inflow)
          do n=1,inflow%itr%no_
             i=inflow%itr%map(1,n); j=inflow%itr%map(2,n); k=inflow%itr%map(3,n)
-            fs%rhoU(i,j,k)=-5.0_WP
+            fs%rhoU(i,j,k)=-rhoUin
          end do
          call fs%get_bcond('right inflow',inflow)
          do n=1,inflow%itr%no_
             i=inflow%itr%map(1,n); j=inflow%itr%map(2,n); k=inflow%itr%map(3,n)
-            fs%rhoU(i,j,k)=+5.0_WP
+            fs%rhoU(i,j,k)=+rhoUin
          end do
          ! Set density from scalar
          fs%rho=sc%rho
@@ -253,14 +306,14 @@ contains
       ! Add Ensight output
       create_ensight: block
          ! Create Ensight output from cfg
-         ens_out=ensight(cfg=cfg,name='test')
+         ens_out=ensight(cfg=cfg,name='pvessel')
          ! Create event for Ensight output
          ens_evt=event(time=time,name='Ensight output')
          call param_read('Ensight output period',ens_evt%tper)
          ! Add variables to output
+         call ens_out%add_scalar('walls',fs%cfg%VF)
          call ens_out%add_scalar('pressure',fs%P)
          call ens_out%add_vector('velocity',Ui,Vi,Wi)
-         call ens_out%add_scalar('divergence',fs%div)
          call ens_out%add_scalar('density',sc%rho)
          call ens_out%add_scalar('temperature',sc%SC)
          ! Output to ensight
@@ -309,8 +362,9 @@ contains
          call consfile%add_column(time%n,'Timestep number')
          call consfile%add_column(time%t,'Time')
          call consfile%add_column(sc%SCint,'SC integral')
-         call consfile%add_column(sc%rhoint,'RHO integral')
          call consfile%add_column(sc%rhoSCint,'rhoSC integral')
+         call consfile%add_column(sc%rhoint,'RHO integral')
+         call consfile%add_column(pressure,'Pressure thermo')
          call consfile%write()
       end block create_monitor
       
@@ -396,12 +450,12 @@ contains
                call fs%get_bcond('left inflow',inflow)
                do n=1,inflow%itr%no_
                   i=inflow%itr%map(1,n); j=inflow%itr%map(2,n); k=inflow%itr%map(3,n)
-                  fs%rhoU(i,j,k)=-5.0_WP
+                  fs%rhoU(i,j,k)=-rhoUin
                end do
                call fs%get_bcond('right inflow',inflow)
                do n=1,inflow%itr%no_
                   i=inflow%itr%map(1,n); j=inflow%itr%map(2,n); k=inflow%itr%map(3,n)
-                  fs%rhoU(i,j,k)=+5.0_WP
+                  fs%rhoU(i,j,k)=+rhoUin
                end do
             end block mom_bcond
             
@@ -461,12 +515,38 @@ contains
          if (ens_evt%occurs()) call ens_out%write_data(time%t)
          
          ! Perform and output monitoring
+         resU=sc%rho*sc%SC*Rcst/Wmlr; call sc%cfg%integrate(resU,integral=pressure); pressure=pressure/Vtotal
          call fs%get_max()
          call sc%get_max()
          call sc%get_int()
          call mfile%write()
          call cflfile%write()
          call consfile%write()
+         
+         
+         ! Finally, see if it's time to save restart files
+         if (save_evt%occurs()) then
+            save_restart: block
+               character(len=str_medium) :: dirname,timestamp
+               ! Prefix for files
+               dirname='restart_'; write(timestamp,'(es12.5)') time%t
+               ! Prepare a new directory
+               if (fs%cfg%amRoot) call execute_command_line('mkdir -p '//trim(adjustl(dirname))//trim(adjustl(timestamp)))
+               ! Populate df and write it
+               call df%pushval(name='t'       ,val=time%t   )
+               call df%pushval(name='dt'      ,val=time%dt  )
+               call df%pushval(name='pressure',val=pressure )
+               call df%pushvar(name='rhoU'    ,var=fs%rhoU  )
+               call df%pushvar(name='rhoV'    ,var=fs%rhoV  )
+               call df%pushvar(name='rhoW'    ,var=fs%rhoW  )
+               call df%pushvar(name='P'       ,var=fs%P     )
+               call df%pushvar(name='rho'     ,var=sc%rho   )
+               call df%pushvar(name='rhoold'  ,var=sc%rhoold)
+               call df%pushvar(name='SC'      ,var=sc%SC    )
+               call df%write(fdata=trim(adjustl(dirname))//trim(adjustl(timestamp))//'/'//'data')
+            end block save_restart
+         end if
+         
          
       end do
       
