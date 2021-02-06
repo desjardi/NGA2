@@ -175,6 +175,38 @@ contains
       end do
    end subroutine get_visc
    
+   
+   !> Calculate here our thermal conductivity from local T and rho
+   subroutine get_cond()
+      implicit none
+      real(WP), parameter :: A1=-105.161_WP
+      real(WP), parameter :: A2=+0.9007_WP
+      real(WP), parameter :: A3=+0.0007_WP
+      real(WP), parameter :: A4=+3.50e-15_WP
+      real(WP), parameter :: A5=+3.76e-10_WP
+      real(WP), parameter :: A6=+0.7500_WP
+      real(WP), parameter :: A7=+0.0017_WP
+      integer :: i,j,k
+      real(WP) :: T,rho,cond
+      ! Loop over the entire domain
+      do k=sc%cfg%kmino_,sc%cfg%kmaxo_
+         do j=sc%cfg%jmino_,sc%cfg%jmaxo_
+            do i=sc%cfg%imino_,sc%cfg%imaxo_
+               ! Temperature clipped to the model range
+               T=min(max(sc%SC(i,j,k),290.0_WP),800.0_WP)
+               ! Density clipped to the model range
+               rho=min(max(sc%rho(i,j,k),1.0_WP),1200.0_WP)
+               ! Evaluate conductivity in mW/(m.K)
+               cond=(A1+A2*rho+A3*rho**2+A4*rho**3*T**3+A5*rho**4+A6*T+A7*T**2)/sqrt(T)
+               ! Set heat diffusivity
+               sc%diff(i,j,k)=0.001_WP*cond/Cp
+            end do
+         end do
+      end do
+   
+end subroutine get_cond
+   
+   
    !> Initialization of problem solver
    subroutine simulation_init
       use param, only: param_read
@@ -514,7 +546,7 @@ contains
          
          ! ============ UPDATE PROPERTIES ====================
          call get_visc()
-         ! UPDATE THE DIFFUSIVITY
+         call get_cond()
          ! ===================================================
          
          ! Turbulence modeling
@@ -524,7 +556,7 @@ contains
             sgs%visc=-fs%visc
          end where
          fs%visc=fs%visc+sgs%visc
-         sc%diff=fs%visc
+         sc%diff=sc%diff+sgs%visc
          
          ! Perform sub-iterations
          do while (time%it.le.time%itmax)
