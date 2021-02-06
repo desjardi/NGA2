@@ -41,7 +41,7 @@ module simulation
    
    !> Equation of state and case conditions
    real(WP) :: pressure,Vtotal
-   real(WP) :: MFR,rhoUin,fluid_mass,fluid_mass_old
+   real(WP) :: MFR,Ain,rhoUin,fluid_mass,fluid_mass_old
    real(WP) :: Tinit,Tinlet
    real(WP), parameter :: Wmlr=44.01e-3_WP
    real(WP), parameter :: Rcst=8.314_WP
@@ -321,8 +321,11 @@ contains
       initialize_velocity: block
          use mathtools,     only: Pi
          use lowmach_class, only: bcond
+         use parallel,      only: MPI_REAL_WP
+         use mpi_f08,       only: MPI_ALLREDUCE,MPI_SUM
          type(bcond), pointer :: inflow
-         integer :: n,i,j,k
+         integer :: n,i,j,k,ierr
+         real(WP) :: myAin
          ! Handle restart
          if (restarted) then
             call df%pullvar(name='rhoU',var=fs%rhoU)
@@ -332,7 +335,21 @@ contains
          end if
          ! Read in MFR
          call param_read('Inlet MFR (kg/s)',MFR)
-         rhoUin=MFR/(2.0_WP*Pi*0.02_WP*0.02_WP) !< Two round inlets pipes with radius 0.02 m
+         ! Calculate inflow area
+         myAin=0.0_WP
+         call fs%get_bcond('left inflow',inflow)
+         do n=1,inflow%itr%n_
+            i=inflow%itr%map(1,n); j=inflow%itr%map(2,n); k=inflow%itr%map(3,n)
+            myAin=myAin+fs%cfg%dy(j)*fs%cfg%dz(k)
+         end do
+         call fs%get_bcond('right inflow',inflow)
+         do n=1,inflow%itr%n_
+            i=inflow%itr%map(1,n); j=inflow%itr%map(2,n); k=inflow%itr%map(3,n)
+            myAin=myAin+fs%cfg%dy(j)*fs%cfg%dz(k)
+         end do
+         call MPI_ALLREDUCE(myAin,Ain,1,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr)
+         ! Form inflow momentum
+         rhoUin=MFR/Ain
          ! Apply Dirichlet at the tube
          call fs%get_bcond('left inflow',inflow)
          do n=1,inflow%itr%no_
