@@ -2,7 +2,7 @@
 module simulation
    use string,            only: str_medium
    use precision,         only: WP
-   use geometry,          only: cfg
+   use geometry,          only: cfg,Lv,IR
    use lowmach_class,     only: lowmach
    use sgsmodel_class,    only: sgsmodel
    use vdscalar_class,    only: vdscalar
@@ -42,7 +42,8 @@ module simulation
    !> Equation of state and case conditions
    real(WP) :: pressure,Vtotal
    real(WP) :: MFR,Ain,rhoUin,fluid_mass,fluid_mass_old
-   real(WP) :: Tinit,Tinlet
+   real(WP) :: Tinit,Tinlet,Twall
+   logical :: wall_losses
    real(WP), parameter :: Wmlr=44.01e-3_WP
    real(WP), parameter :: Rcst=8.314_WP
    
@@ -89,6 +90,20 @@ contains
       r=sqrt((pg%ym(j)+0.34_WP)**2+(pg%zm(k))**2)
       if (abs(pg%x(i+1)-0.75_WP).lt.0.01_WP.and.r.lt.0.02_WP) isIn=.true.
    end function right_of_tube_sc
+   
+   
+   !> Function that localizes the vessel walls
+   function wall_locator(pg,i,j,k) result(isIn)
+      use pgrid_class, only: pgrid
+      implicit none
+      class(pgrid), intent(in) :: pg
+      integer, intent(in) :: i,j,k
+      logical :: isIn
+      real(WP) :: r
+      isIn=.false.
+      r=sqrt(pg%ym(j)**2+pg%zm(k)**2)
+      if (pg%xm(i).le.-0.5_WP*Lv.or.pg%xm(i).ge.+0.5_WP*Lv.or.r.ge.IR) isIn=.true.
+   end function wall_locator
    
    
    !> Define here our equation of state - rho(T,mass)
@@ -139,17 +154,17 @@ contains
       real(WP), parameter :: A6=+7.142596e-04_WP
       real(WP), parameter :: A7=+6.519333e-06_WP
       real(WP), parameter :: A8=-3.567559e-01_WP
-      real(WP), parameter :: A9=-3.180473e-02_WP
+      real(WP), parameter :: A9=+3.180473e-02_WP
       integer :: i,j,k
       real(WP) :: Pbar,lnT,MUcp
-      ! Pressure needs to be in bar
-      Pbar=1.0e-5_WP*pressure
+      ! Pressure needs to be in bar and in the model range
+      Pbar=max(min(1.0e-5_WP*pressure,1014.0_WP),75.0_WP)
       ! Loop over the entire domain
       do k=sc%cfg%kmino_,sc%cfg%kmaxo_
          do j=sc%cfg%jmino_,sc%cfg%jmaxo_
             do i=sc%cfg%imino_,sc%cfg%imaxo_
-               ! Log of temperature clipped to 300K
-               lnT=log(max(sc%SC(i,j,k),300.0_WP))
+               ! Log of temperature clipped to the model range
+               lnT=log(min(max(sc%SC(i,j,k),305.0_WP),900.0_WP))
                ! Evaluate viscosity in cP
                MUcp=(A1+A2*Pbar+A3*Pbar**2+A4*lnT+A5*lnT**2+A6*lnT**3)/(1.0_WP+A7*Pbar+A8*lnT+A9*lnT**2)
                ! Set viscosity
@@ -157,7 +172,6 @@ contains
             end do
          end do
       end do
-      
    end subroutine get_visc
    
    !> Initialization of problem solver
@@ -259,11 +273,15 @@ contains
          use ils_class,      only: gmres,pfmg
          use vdscalar_class, only: dirichlet,quick
          real(WP) :: diffusivity
+         ! Check if we want to model wall losses
+         call param_read(tag='Wall temperature',val=Twall,default=-1.0_WP)
+         wall_losses=.false.; if (Twall.gt.0.0_WP) wall_losses=.true.
          ! Create scalar solver
          sc=vdscalar(cfg=cfg,scheme=quick,name='Temperature')
          ! Define boundary conditions
          call sc%add_bcond(name= 'left inflow',type=dirichlet,locator= left_of_tube   )
          call sc%add_bcond(name='right inflow',type=dirichlet,locator=right_of_tube_sc)
+         if (wall_losses) call sc%add_bcond(name='wall',type=dirichlet,locator=wall_locator)
          ! Assign constant diffusivity
          call param_read('Dynamic diffusivity',diffusivity)
          sc%diff=diffusivity
@@ -277,7 +295,7 @@ contains
       ! Initialize our temperature field
       initialize_scalar: block
          use vdscalar_class, only: bcond
-         type(bcond), pointer :: inflow
+         type(bcond), pointer :: mybc
          integer :: n,i,j,k
          ! Read in the temperature and pressure
          call param_read('Initial temperature',Tinit)
@@ -298,18 +316,25 @@ contains
          ! Compute initial mass in vessel
          call sc%cfg%integrate(sc%rho,integral=fluid_mass)
          ! Apply Dirichlet at the tube
-         call sc%get_bcond( 'left inflow',inflow)
-         do n=1,inflow%itr%no_
-            i=inflow%itr%map(1,n); j=inflow%itr%map(2,n); k=inflow%itr%map(3,n)
+         call sc%get_bcond( 'left inflow',mybc)
+         do n=1,mybc%itr%no_
+            i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
             sc%SC (i,j,k)=Tinlet
             sc%rho(i,j,k)=pressure*Wmlr/(Rcst*Tinlet)
          end do
-         call sc%get_bcond('right inflow',inflow)
-         do n=1,inflow%itr%no_
-            i=inflow%itr%map(1,n); j=inflow%itr%map(2,n); k=inflow%itr%map(3,n)
+         call sc%get_bcond('right inflow',mybc)
+         do n=1,mybc%itr%no_
+            i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
             sc%SC(i,j,k)=Tinlet
             sc%rho(i,j,k)=pressure*Wmlr/(Rcst*Tinlet)
          end do
+         if (wall_losses) then
+            call sc%get_bcond('wall',mybc)
+            do n=1,mybc%itr%no_
+               i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
+               sc%SC(i,j,k)=Twall
+            end do
+         end if
          ! Apply all other boundary conditions
          call sc%apply_bcond(time%t,time%dt)
          ! Compute fluid volumne
@@ -323,7 +348,7 @@ contains
          use lowmach_class, only: bcond
          use parallel,      only: MPI_REAL_WP
          use mpi_f08,       only: MPI_ALLREDUCE,MPI_SUM
-         type(bcond), pointer :: inflow
+         type(bcond), pointer :: mybc
          integer :: n,i,j,k,ierr
          real(WP) :: myAin
          ! Handle restart
@@ -337,28 +362,28 @@ contains
          call param_read('Inlet MFR (kg/s)',MFR)
          ! Calculate inflow area
          myAin=0.0_WP
-         call fs%get_bcond('left inflow',inflow)
-         do n=1,inflow%itr%n_
-            i=inflow%itr%map(1,n); j=inflow%itr%map(2,n); k=inflow%itr%map(3,n)
+         call fs%get_bcond('left inflow',mybc)
+         do n=1,mybc%itr%n_
+            i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
             myAin=myAin+fs%cfg%dy(j)*fs%cfg%dz(k)
          end do
-         call fs%get_bcond('right inflow',inflow)
-         do n=1,inflow%itr%n_
-            i=inflow%itr%map(1,n); j=inflow%itr%map(2,n); k=inflow%itr%map(3,n)
+         call fs%get_bcond('right inflow',mybc)
+         do n=1,mybc%itr%n_
+            i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
             myAin=myAin+fs%cfg%dy(j)*fs%cfg%dz(k)
          end do
          call MPI_ALLREDUCE(myAin,Ain,1,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr)
          ! Form inflow momentum
          rhoUin=MFR/Ain
          ! Apply Dirichlet at the tube
-         call fs%get_bcond('left inflow',inflow)
-         do n=1,inflow%itr%no_
-            i=inflow%itr%map(1,n); j=inflow%itr%map(2,n); k=inflow%itr%map(3,n)
+         call fs%get_bcond('left inflow',mybc)
+         do n=1,mybc%itr%no_
+            i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
             fs%rhoU(i,j,k)=-rhoUin
          end do
-         call fs%get_bcond('right inflow',inflow)
-         do n=1,inflow%itr%no_
-            i=inflow%itr%map(1,n); j=inflow%itr%map(2,n); k=inflow%itr%map(3,n)
+         call fs%get_bcond('right inflow',mybc)
+         do n=1,mybc%itr%no_
+            i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
             fs%rhoU(i,j,k)=+rhoUin
          end do
          ! Set density from scalar
@@ -396,6 +421,7 @@ contains
          call ens_out%add_vector('velocity',Ui,Vi,Wi)
          call ens_out%add_scalar('density',sc%rho)
          call ens_out%add_scalar('temperature',sc%SC)
+         call ens_out%add_scalar('visc',fs%visc)
          ! Output to ensight
          if (ens_evt%occurs()) call ens_out%write_data(time%t)
       end block create_ensight
@@ -534,16 +560,16 @@ contains
             call fs%apply_bcond(time%tmid,time%dtmid)
             mom_bcond: block
                use lowmach_class, only: bcond
-               type(bcond), pointer :: inflow
+               type(bcond), pointer :: mybc
                integer :: n,i,j,k
-               call fs%get_bcond('left inflow',inflow)
-               do n=1,inflow%itr%no_
-                  i=inflow%itr%map(1,n); j=inflow%itr%map(2,n); k=inflow%itr%map(3,n)
+               call fs%get_bcond('left inflow',mybc)
+               do n=1,mybc%itr%no_
+                  i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
                   fs%rhoU(i,j,k)=-rhoUin
                end do
-               call fs%get_bcond('right inflow',inflow)
-               do n=1,inflow%itr%no_
-                  i=inflow%itr%map(1,n); j=inflow%itr%map(2,n); k=inflow%itr%map(3,n)
+               call fs%get_bcond('right inflow',mybc)
+               do n=1,mybc%itr%no_
+                  i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
                   fs%rhoU(i,j,k)=+rhoUin
                end do
             end block mom_bcond

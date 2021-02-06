@@ -10,6 +10,9 @@ module geometry
    
    public :: geometry_init
    
+   ! Vessel geometry will be needed in BCs
+   real(WP), public :: Lv,IR
+   
 contains
    
    
@@ -67,7 +70,7 @@ contains
       ! Create masks for this config
       create_walls: block
          integer :: i,j,k
-         real(WP) :: Lv,IR,r
+         real(WP) :: r
          ! Read in vessel dimensions
          call param_read('Vessel length',Lv)
          call param_read('Vessel inner radius',IR)

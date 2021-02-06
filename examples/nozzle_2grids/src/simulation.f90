@@ -320,7 +320,7 @@ contains
                end do
             end do
          end do
-         ! Handle restart - using IRL data - untested, not working
+         ! Handle restart - using IRL data - tested but not working
          !if (restarted) then
          !   ! Get the IRL interface
          !   call vf2%read_interface(filename=trim(irl_file))
