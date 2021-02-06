@@ -40,12 +40,13 @@ module simulation
    real(WP), dimension(:,:,:,:), allocatable :: SR
    
    !> Equation of state and case conditions
-   real(WP) :: pressure,Vtotal
+   real(WP) :: pressure,pressure_old,Vtotal
    real(WP) :: MFR,Ain,rhoUin,fluid_mass,fluid_mass_old
-   real(WP) :: Tinit,Tinlet,Twall
-   logical :: wall_losses
+   real(WP) :: Tinit,Tinlet,Twall,Tavg
+   logical  :: wall_losses
    real(WP), parameter :: Wmlr=44.01e-3_WP
    real(WP), parameter :: Rcst=8.314_WP
+   real(WP), parameter :: Cp=40.0_WP
    
 contains
    
@@ -337,8 +338,10 @@ contains
          end if
          ! Apply all other boundary conditions
          call sc%apply_bcond(time%t,time%dt)
-         ! Compute fluid volumne
+         ! Compute fluid volume
          resU=1.0_WP; call sc%cfg%integrate(resU,integral=Vtotal)
+         ! Recompute pressure
+         resU=sc%rho*sc%SC*Rcst/Wmlr; call sc%cfg%integrate(resU,integral=pressure); pressure=pressure/Vtotal
       end block initialize_scalar
       
       
@@ -434,6 +437,7 @@ contains
          call fs%get_max()
          call sc%get_max()
          call sc%get_int()
+         Tavg=sc%SCint/Vtotal
          ! Create simulation monitor
          mfile=monitor(fs%cfg%amRoot,'simulation')
          call mfile%add_column(time%n,'Timestep number')
@@ -468,9 +472,9 @@ contains
          call consfile%add_column(time%n,'Timestep number')
          call consfile%add_column(time%t,'Time')
          call consfile%add_column(sc%SCint,'SC integral')
-         call consfile%add_column(sc%rhoSCint,'rhoSC integral')
-         call consfile%add_column(sc%rhoint,'RHO integral')
-         call consfile%add_column(pressure,'Pressure thermo')
+         call consfile%add_column(Tavg,'Tavg')
+         call consfile%add_column(sc%rhoint,'Mass')
+         call consfile%add_column(pressure,'Pthermo')
          call consfile%write()
       end block create_monitor
       
@@ -491,8 +495,9 @@ contains
          call time%adjust_dt()
          call time%increment()
          
-         ! Remember fluid mass
+         ! Remember fluid mass and pressure
          fluid_mass_old=fluid_mass
+         pressure_old=pressure
          
          ! Remember old scalar
          sc%rhoold=sc%rho
@@ -596,6 +601,9 @@ contains
             
             
             ! ============= SCALAR SOLVER =======================
+            ! Estimate new pressure
+            resU=sc%rho*sc%SC*Rcst/Wmlr; call sc%cfg%integrate(resU,integral=pressure); pressure=pressure/Vtotal
+            
             ! Build mid-time scalar
             sc%SC=0.5_WP*(sc%SC+sc%SCold)
             
@@ -604,6 +612,9 @@ contains
             
             ! Assemble explicit residual - skip wall cells here since we're updating the density at Dirichlet boundaries
             where (sc%cfg%VF.gt.0.0_WP) resSC=time%dt*resSC-(2.0_WP*sc%rho*sc%SC-(sc%rho+sc%rhoold)*sc%SCold)
+            
+            ! Add pressure term
+            where (sc%cfg%VF.gt.0.0_WP) resSC=resSC+(pressure-pressure_old)/(Cp*0.5_WP*(sc%rho+sc%rhoold))
             
             ! Form implicit residual
             call sc%solve_implicit(time%dt,resSC,fs%rhoU,fs%rhoV,fs%rhoW)
@@ -634,6 +645,7 @@ contains
          call fs%get_max()
          call sc%get_max()
          call sc%get_int()
+         Tavg=sc%SCint/Vtotal
          call mfile%write()
          call cflfile%write()
          call consfile%write()
