@@ -55,9 +55,10 @@ def create_Tfig():
     dfnow['rhoCvT']=Cv*dfnow['Mass']*dfnow['Temp']
     dfnow['rhoCpT']=Cp*dfnow['Mass']*dfnow['Temp']
     dfnow['rhoCpT_model']=Cp*dfnow['Mass']*Tinit+(dfnow['Mass']-dfnow['Mass'].iloc[0])*Cp*Tinlet
+    dfnow['rhoCvT_model']=Cv*dfnow['Mass'].iloc[0]*Tinit+(dfnow['Mass']-dfnow['Mass'].iloc[0])*Cp*Tinlet
     # Put in fig
-    Tfig.add_trace(go.Scatter(name='Energy abiabatic wall',x=dfnow['Time']/60,y=dfnow['rhoCpT'],mode='lines',showlegend=True,line=dict(width=4)))
-    Tfig.add_trace(go.Scatter(name='model abiabatic wall',x=dfnow['Time']/60,y=dfnow['rhoCpT_model'],mode='lines',showlegend=True,line=dict(width=4)))
+    Tfig.add_trace(go.Scatter(name='Energy abiabatic wall',x=dfnow['Time']/60,y=dfnow['rhoCvT'],mode='lines',showlegend=True,line=dict(width=4)))
+    Tfig.add_trace(go.Scatter(name='model abiabatic wall',x=dfnow['Time']/60,y=dfnow['rhoCvT_model'],mode='lines',showlegend=True,line=dict(width=4)))
     
     return Tfig
 

@@ -118,12 +118,14 @@ contains
       ! Integrate 1/T
       resSC=1.0_WP/sc%SC
       call sc%cfg%integrate(resSC,integral=one_over_T)
+      ! Update pressure first
+      pressure=mass*Rcst/(Wmlr*one_over_T)
       ! Update density in the domain
       do k=sc%cfg%kmino_,sc%cfg%kmaxo_
          do j=sc%cfg%jmino_,sc%cfg%jmaxo_
             do i=sc%cfg%imino_,sc%cfg%imaxo_
                if (sc%cfg%VF(i,j,k).gt.0.0_WP) then
-                  sc%rho(i,j,k)=mass/(sc%SC(i,j,k)*one_over_T)
+                  sc%rho(i,j,k)=pressure*Wmlr/(Rcst*sc%SC(i,j,k))
                else
                   sc%rho(i,j,k)=1.0_WP
                end if
@@ -134,12 +136,12 @@ contains
       call sc%get_bcond( 'left inflow',inflow)
       do n=1,inflow%itr%no_
          i=inflow%itr%map(1,n); j=inflow%itr%map(2,n); k=inflow%itr%map(3,n)
-         sc%rho(i,j,k)=mass/(sc%SC(i,j,k)*one_over_T)
+         sc%rho(i,j,k)=pressure*Wmlr/(Rcst*sc%SC(i,j,k))
       end do
       call sc%get_bcond('right inflow',inflow)
       do n=1,inflow%itr%no_
          i=inflow%itr%map(1,n); j=inflow%itr%map(2,n); k=inflow%itr%map(3,n)
-         sc%rho(i,j,k)=mass/(sc%SC(i,j,k)*one_over_T)
+         sc%rho(i,j,k)=pressure*Wmlr/(Rcst*sc%SC(i,j,k))
       end do
    end subroutine get_rho
    
@@ -535,7 +537,7 @@ end subroutine get_cond
          
          ! Remember old scalar
          sc%rhoold=sc%rho
-         sc%SCold =sc%SC
+         sc%SCold=sc%SC; sc%rhoSCold=sc%rhoSC
          
          ! Remember old velocity and momentum
          fs%rhoold=fs%rho
@@ -565,7 +567,6 @@ end subroutine get_cond
             
             
             ! ============ VELOCITY SOLVER ======================
-            
             ! Build n+1 density
             fs%rho=0.5_WP*(sc%rho+sc%rhoold)
             
@@ -593,9 +594,10 @@ end subroutine get_cond
             fs%V=2.0_WP*fs%V-fs%Vold+resV
             fs%W=2.0_WP*fs%W-fs%Wold+resW
             
-            ! Apply other boundary conditions and update momentum - we may want to skip divide/multiply for masked cells?
-            call fs%apply_bcond(time%tmid,time%dtmid)
+            ! Get momentum
             call fs%rho_multiply()
+            
+            ! Apply other boundary conditions
             call fs%apply_bcond(time%tmid,time%dtmid)
             mom_bcond: block
                use lowmach_class, only: bcond
@@ -616,7 +618,7 @@ end subroutine get_cond
             ! Solve Poisson equation
             call fs%correct_mfr()                          !< Now outlet so this gets the MFR imbalance
             fluid_mass=fluid_mass_old-sum(fs%mfr)*time%dt  !< Update mass in system
-            call get_rho(mass=fluid_mass)                  !< Adjust rho in accordance
+            call get_rho(mass=fluid_mass)                  !< Adjust rho and pressure in accordance
             call sc%get_drhodt(dt=time%dt,drhodt=resSC)
             call fs%get_div(drhodt=resSC)
             fs%psolv%rhs=-fs%cfg%vol*fs%div/time%dtmid
@@ -631,24 +633,24 @@ end subroutine get_cond
             fs%rhoV=fs%rhoV-time%dtmid*resV
             fs%rhoW=fs%rhoW-time%dtmid*resW
             call fs%rho_divide
+            
+            ! Reapply boundary conditions
+            call fs%apply_bcond(time%tmid,time%dtmid)
             ! ===================================================
             
             
             ! ============= SCALAR SOLVER =======================
-            ! Estimate new pressure
-            resU=sc%rho*sc%SC*Rcst/Wmlr; call sc%cfg%integrate(resU,integral=pressure); pressure=pressure/Vtotal
-            
             ! Build mid-time scalar
             sc%SC=0.5_WP*(sc%SC+sc%SCold)
             
             ! Explicit calculation of drhoSC/dt from scalar equation
             call sc%get_drhoSCdt(resSC,fs%rhoU,fs%rhoV,fs%rhoW)
             
-            ! Assemble explicit residual - skip wall cells here since we're updating the density at Dirichlet boundaries
+            ! Assemble explicit residual
             where (sc%cfg%VF.gt.0.0_WP) resSC=time%dt*resSC-(2.0_WP*sc%rho*sc%SC-(sc%rho+sc%rhoold)*sc%SCold)
             
             ! Add pressure term
-            where (sc%cfg%VF.gt.0.0_WP) resSC=resSC+(pressure-pressure_old)/(Cp*0.5_WP*(sc%rho+sc%rhoold))
+            where (sc%cfg%VF.gt.0.0_WP) resSC=resSC+(pressure-pressure_old)/Cp
             
             ! Form implicit residual
             call sc%solve_implicit(time%dt,resSC,fs%rhoU,fs%rhoV,fs%rhoW)
@@ -656,10 +658,15 @@ end subroutine get_cond
             ! Apply this residual
             sc%SC=2.0_WP*sc%SC-sc%SCold+resSC
             
+            ! Update density and pressure
+            call get_rho(mass=fluid_mass)
+            
+            ! Multiply by density
+            call sc%rho_multiply()
+            
             ! Apply other boundary conditions on the resulting field
             call sc%apply_bcond(time%t,time%dt)
             ! ===================================================
-            
             
             ! Increment sub-iteration counter
             time%it=time%it+1
