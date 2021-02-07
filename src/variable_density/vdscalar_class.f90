@@ -52,10 +52,12 @@ module vdscalar_class
       ! Scalar variable
       real(WP), dimension(:,:,:), allocatable :: rho        !< Density array
       real(WP), dimension(:,:,:), allocatable :: SC         !< SC array
+      real(WP), dimension(:,:,:), allocatable :: rhoSC      !< rhoSC array
       
       ! Old scalar variable
       real(WP), dimension(:,:,:), allocatable :: rhoold     !< Old density array
       real(WP), dimension(:,:,:), allocatable :: SCold      !< SCold array
+      real(WP), dimension(:,:,:), allocatable :: rhoSCold   !< rhoSCold array
       
       ! Implicit scalar solver
       type(ils) :: implicit                                 !< Iterative linear solver object for an implicit prediction of the scalar residual
@@ -78,7 +80,7 @@ module vdscalar_class
       ! Monitoring quantities
       real(WP) :: SCmax,SCmin,SCint                         !< Maximum and minimum, integral scalar
       real(WP) :: rhomax,rhomin,rhoint                      !< Maximum and minimum, integral density
-      real(WP) :: rhoSCint                                  !< Integral of rhoSC
+      real(WP) :: rhoSCmax,rhoSCmin,rhoSCint                !< Maximum and minimum, integral of rhoSC
       
    contains
       procedure :: print=>scalar_print                      !< Output solver to the screen
@@ -93,6 +95,8 @@ module vdscalar_class
       procedure :: get_int                                  !< Calculate integral field values
       procedure :: get_drhodt                               !< Calculate drhodt
       procedure :: solve_implicit                           !< Solve for the scalar residuals implicitly
+      procedure :: rho_divide                               !< Divide rhoSC by rho to get SC
+      procedure :: rho_multiply                             !< Multiply SC by rho to get rhoSC
    end type vdscalar
    
    
@@ -125,11 +129,13 @@ contains
       self%first_bc=>NULL()
       
       ! Allocate variables
-      allocate(self%SC    (self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%SC    =0.0_WP
-      allocate(self%SCold (self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%SCold =0.0_WP
-      allocate(self%rho   (self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%rho   =0.0_WP
-      allocate(self%rhoold(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%rhoold=0.0_WP
-      allocate(self%diff  (self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%diff  =0.0_WP
+      allocate(self%SC      (self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%SC      =0.0_WP
+      allocate(self%SCold   (self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%SCold   =0.0_WP
+      allocate(self%rho     (self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%rho     =0.0_WP
+      allocate(self%rhoold  (self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%rhoold  =0.0_WP
+      allocate(self%rhoSC   (self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%rhoSC   =0.0_WP
+      allocate(self%rhoSCold(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%rhoSCold=0.0_WP
+      allocate(self%diff    (self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%diff    =0.0_WP
       
       ! Prepare advection scheme
       self%scheme=scheme
@@ -501,6 +507,7 @@ contains
                do n=1,my_bc%itr%n_
                   i=my_bc%itr%map(1,n); j=my_bc%itr%map(2,n); k=my_bc%itr%map(3,n)
                   this%SC(i,j,k)=this%SC(i-shift(1,my_bc%dir),j-shift(2,my_bc%dir),k-shift(3,my_bc%dir))
+                  this%rhoSC(i,j,k)=this%rhoSC(i-shift(1,my_bc%dir),j-shift(2,my_bc%dir),k-shift(3,my_bc%dir))
                end do
                
             case default
@@ -511,6 +518,7 @@ contains
          
          ! Sync full fields after each bcond - this should be optimized
          call this%cfg%sync(this%SC)
+         call this%cfg%sync(this%rhoSC)
          
          ! Move on to the next bcond
          my_bc=>my_bc%next
@@ -587,28 +595,34 @@ contains
       implicit none
       class(vdscalar), intent(inout) :: this
       integer :: ierr,i,j,k
-      real(WP) :: my_SCmax,my_SCmin,my_rhomax,my_rhomin
-      my_SCmax =-huge(1.0_WP)
-      my_SCmin =+huge(1.0_WP)
-      my_rhomax=-huge(1.0_WP)
-      my_rhomin=+huge(1.0_WP)
+      real(WP) :: my_SCmax,my_SCmin,my_rhomax,my_rhomin,my_rhoSCmax,my_rhoSCmin
+      my_SCmax   =-huge(1.0_WP)
+      my_SCmin   =+huge(1.0_WP)
+      my_rhomax  =-huge(1.0_WP)
+      my_rhomin  =+huge(1.0_WP)
+      my_rhoSCmax=-huge(1.0_WP)
+      my_rhoSCmin=+huge(1.0_WP)
       do k=this%cfg%kmin_,this%cfg%kmax_
          do j=this%cfg%jmin_,this%cfg%jmax_
             do i=this%cfg%imin_,this%cfg%imax_
                ! Skip only walls
                if (this%mask(i,j,k).ne.1) then
-                  my_SCmax =max( this%SC(i,j,k),my_SCmax )
-                  my_SCmin =min( this%SC(i,j,k),my_SCmin )
-                  my_rhomax=max(this%rho(i,j,k),my_rhomax)
-                  my_rhomin=min(this%rho(i,j,k),my_rhomin)
+                  my_SCmax   =max(   this%SC(i,j,k),my_SCmax   )
+                  my_SCmin   =min(   this%SC(i,j,k),my_SCmin   )
+                  my_rhomax  =max(  this%rho(i,j,k),my_rhomax  )
+                  my_rhomin  =min(  this%rho(i,j,k),my_rhomin  )
+                  my_rhoSCmax=max(this%rhoSC(i,j,k),my_rhoSCmax)
+                  my_rhoSCmin=min(this%rhoSC(i,j,k),my_rhoSCmin)
                end if
             end do
          end do
       end do
-      call MPI_ALLREDUCE(my_SCmax ,this%SCmax ,1,MPI_REAL_WP,MPI_MAX,this%cfg%comm,ierr)
-      call MPI_ALLREDUCE(my_SCmin ,this%SCmin ,1,MPI_REAL_WP,MPI_MIN,this%cfg%comm,ierr)
-      call MPI_ALLREDUCE(my_rhomax,this%rhomax,1,MPI_REAL_WP,MPI_MAX,this%cfg%comm,ierr)
-      call MPI_ALLREDUCE(my_rhomin,this%rhomin,1,MPI_REAL_WP,MPI_MIN,this%cfg%comm,ierr)
+      call MPI_ALLREDUCE(my_SCmax   ,this%SCmax   ,1,MPI_REAL_WP,MPI_MAX,this%cfg%comm,ierr)
+      call MPI_ALLREDUCE(my_SCmin   ,this%SCmin   ,1,MPI_REAL_WP,MPI_MIN,this%cfg%comm,ierr)
+      call MPI_ALLREDUCE(my_rhomax  ,this%rhomax  ,1,MPI_REAL_WP,MPI_MAX,this%cfg%comm,ierr)
+      call MPI_ALLREDUCE(my_rhomin  ,this%rhomin  ,1,MPI_REAL_WP,MPI_MIN,this%cfg%comm,ierr)
+      call MPI_ALLREDUCE(my_rhoSCmax,this%rhoSCmax,1,MPI_REAL_WP,MPI_MAX,this%cfg%comm,ierr)
+      call MPI_ALLREDUCE(my_rhoSCmin,this%rhoSCmin,1,MPI_REAL_WP,MPI_MIN,this%cfg%comm,ierr)
    end subroutine get_max
    
    
@@ -616,17 +630,30 @@ contains
    subroutine get_int(this)
       implicit none
       class(vdscalar), intent(inout) :: this
-      real(WP), dimension(:,:,:), allocatable :: rhoSC
       ! Integrate SC
       call this%cfg%integrate(this%SC,integral=this%SCint)
       ! Integrate rho
       call this%cfg%integrate(this%rho,integral=this%rhoint)
       ! Integrate rhoSC
-      allocate(rhoSC(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
-      rhoSC=this%SC*this%rho
-      call this%cfg%integrate(rhoSC,integral=this%rhoSCint)
-      deallocate(rhoSC)
+      call this%cfg%integrate(this%rhoSC,integral=this%rhoSCint)
    end subroutine get_int
+   
+   
+   !> Divide rhoSC by rho to form SC
+   subroutine rho_divide(this)
+      implicit none
+      class(vdscalar), intent(inout) :: this
+      where (this%mask.eq.0) this%SC=this%rhoSC/this%rho
+   end subroutine rho_divide
+   
+   
+   !> Multiply SC by rho to form rhoSC
+   subroutine rho_multiply(this)
+      implicit none
+      class(vdscalar), intent(inout) :: this
+      integer :: i,j,k
+      where (this%mask.eq.0) this%rhoSC=this%SC*this%rho
+   end subroutine rho_multiply
    
    
    !> Solve for implicit vdscalar residual

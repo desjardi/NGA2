@@ -23,18 +23,18 @@ Initial temperature : 300
 Inlet temperature :   430
 Initial pressure :    4.47e5  !101325
 Inlet MFR (kg/s) :    0.20
-Wall temperature :    300  ! Comment out for adiabatic
+Wall temperature :    !300  ! Comment out for adiabatic
 
 # Time integration
 Max timestep size : 5e-2
 Max cfl number :    1
 
 # Pressure solver
-Pressure tolerance : 1e-4
+Pressure tolerance : 1e-3
 Pressure iteration : 100
 
 # Implicit velocity solver
-Implicit tolerance : 1e-4
+Implicit tolerance : 1e-3
 Implicit iteration : 100
 
 # Ensight output

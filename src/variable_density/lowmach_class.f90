@@ -1251,9 +1251,9 @@ contains
       do k=this%cfg%kmin_,this%cfg%kmax_
          do j=this%cfg%jmin_,this%cfg%jmax_
             do i=this%cfg%imin_,this%cfg%imax_
-               this%U(i,j,k)=this%rhoU(i,j,k)/sum(this%itpr_x(:,i,j,k)*this%rho(i-1:i,j,k))
-               this%V(i,j,k)=this%rhoV(i,j,k)/sum(this%itpr_y(:,i,j,k)*this%rho(i,j-1:j,k))
-               this%W(i,j,k)=this%rhoW(i,j,k)/sum(this%itpr_z(:,i,j,k)*this%rho(i,j,k-1:k))
+               if (this%umask(i,j,k).eq.0) this%U(i,j,k)=this%rhoU(i,j,k)/sum(this%itpr_x(:,i,j,k)*this%rho(i-1:i,j,k))
+               if (this%vmask(i,j,k).eq.0) this%V(i,j,k)=this%rhoV(i,j,k)/sum(this%itpr_y(:,i,j,k)*this%rho(i,j-1:j,k))
+               if (this%wmask(i,j,k).eq.0) this%W(i,j,k)=this%rhoW(i,j,k)/sum(this%itpr_z(:,i,j,k)*this%rho(i,j,k-1:k))
             end do
          end do
       end do
@@ -1272,9 +1272,9 @@ contains
       do k=this%cfg%kmin_,this%cfg%kmax_
          do j=this%cfg%jmin_,this%cfg%jmax_
             do i=this%cfg%imin_,this%cfg%imax_
-               this%rhoU(i,j,k)=this%U(i,j,k)*sum(this%itpr_x(:,i,j,k)*this%rho(i-1:i,j,k))
-               this%rhoV(i,j,k)=this%V(i,j,k)*sum(this%itpr_y(:,i,j,k)*this%rho(i,j-1:j,k))
-               this%rhoW(i,j,k)=this%W(i,j,k)*sum(this%itpr_z(:,i,j,k)*this%rho(i,j,k-1:k))
+               if (this%umask(i,j,k).eq.0) this%rhoU(i,j,k)=this%U(i,j,k)*sum(this%itpr_x(:,i,j,k)*this%rho(i-1:i,j,k))
+               if (this%vmask(i,j,k).eq.0) this%rhoV(i,j,k)=this%V(i,j,k)*sum(this%itpr_y(:,i,j,k)*this%rho(i,j-1:j,k))
+               if (this%wmask(i,j,k).eq.0) this%rhoW(i,j,k)=this%W(i,j,k)*sum(this%itpr_z(:,i,j,k)*this%rho(i,j,k-1:k))
             end do
          end do
       end do

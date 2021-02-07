@@ -44,9 +44,9 @@ module simulation
    real(WP) :: MFR,Ain,rhoUin,fluid_mass,fluid_mass_old
    real(WP) :: Tinit,Tinlet,Twall,Tavg
    logical  :: wall_losses
-   real(WP), parameter :: Wmlr=44.01e-3_WP
-   real(WP), parameter :: Rcst=8.314_WP
-   real(WP), parameter :: Cp=40.0_WP
+   real(WP), parameter :: Wmlr=44.01e-3_WP  ! kg/mol
+   real(WP), parameter :: Rcst=8.314_WP     ! J/(mol.K)
+   real(WP), parameter :: Cp=40.0_WP/Wmlr   ! ~40 J/(mol.K) from NIST, divided by Wmlr to get to kg
    
 contains
    
@@ -368,12 +368,14 @@ end subroutine get_cond
                sc%SC(i,j,k)=Twall
             end do
          end if
+         ! Build rhoSC
+         call sc%rho_multiply()
          ! Apply all other boundary conditions
          call sc%apply_bcond(time%t,time%dt)
          ! Compute fluid volume
          resU=1.0_WP; call sc%cfg%integrate(resU,integral=Vtotal)
          ! Recompute pressure
-         resU=sc%rho*sc%SC*Rcst/Wmlr; call sc%cfg%integrate(resU,integral=pressure); pressure=pressure/Vtotal
+         call sc%cfg%integrate(sc%rhoSC,integral=pressure); pressure=pressure*Rcst/(Wmlr*Vtotal)
       end block initialize_scalar
       
       
@@ -469,7 +471,7 @@ end subroutine get_cond
          call fs%get_max()
          call sc%get_max()
          call sc%get_int()
-         Tavg=sc%SCint/Vtotal
+         Tavg=sc%rhoSCint/fluid_mass
          ! Create simulation monitor
          mfile=monitor(fs%cfg%amRoot,'simulation')
          call mfile%add_column(time%n,'Timestep number')
@@ -673,11 +675,10 @@ end subroutine get_cond
          if (ens_evt%occurs()) call ens_out%write_data(time%t)
          
          ! Perform and output monitoring
-         resU=sc%rho*sc%SC*Rcst/Wmlr; call sc%cfg%integrate(resU,integral=pressure); pressure=pressure/Vtotal
          call fs%get_max()
          call sc%get_max()
          call sc%get_int()
-         Tavg=sc%SCint/Vtotal
+         Tavg=sc%rhoSCint/fluid_mass
          call mfile%write()
          call cflfile%write()
          call consfile%write()
