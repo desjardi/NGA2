@@ -279,6 +279,41 @@ contains
          end do
       end do
       
+      ! Adjust scalar interpolation to reflect Dirichlet boundaries
+      do k=this%cfg%kmin_,this%cfg%kmax_+1
+         do j=this%cfg%jmin_,this%cfg%jmax_+1
+            do i=this%cfg%imin_,this%cfg%imax_+1
+               ! X face
+               if (this%mask(i-1,j,k).eq.2) then
+                  this%itpsc_xm(:,i,j,k)=0.0_WP; this%itpsc_xm(-1,i,j,k)=1.0_WP
+                  this%itpsc_xp(:,i,j,k)=0.0_WP; this%itpsc_xp(-1,i,j,k)=1.0_WP
+               end if
+               if (this%mask(i  ,j,k).eq.2) then
+                  this%itpsc_xm(:,i,j,k)=0.0_WP; this%itpsc_xm( 0,i,j,k)=1.0_WP
+                  this%itpsc_xp(:,i,j,k)=0.0_WP; this%itpsc_xp( 0,i,j,k)=1.0_WP
+               end if
+               ! Y face
+               if (this%mask(i,j-1,k).eq.2) then
+                  this%itpsc_ym(:,i,j,k)=0.0_WP; this%itpsc_ym(-1,i,j,k)=1.0_WP
+                  this%itpsc_yp(:,i,j,k)=0.0_WP; this%itpsc_yp(-1,i,j,k)=1.0_WP
+               end if
+               if (this%mask(i,j  ,k).eq.2) then
+                  this%itpsc_ym(:,i,j,k)=0.0_WP; this%itpsc_ym( 0,i,j,k)=1.0_WP
+                  this%itpsc_yp(:,i,j,k)=0.0_WP; this%itpsc_yp( 0,i,j,k)=1.0_WP
+               end if
+               ! Z face
+               if (this%mask(i,j,k-1).eq.2) then
+                  this%itpsc_zm(:,i,j,k)=0.0_WP; this%itpsc_zm(-1,i,j,k)=1.0_WP
+                  this%itpsc_zp(:,i,j,k)=0.0_WP; this%itpsc_zp(-1,i,j,k)=1.0_WP
+               end if
+               if (this%mask(i,j,k  ).eq.2) then
+                  this%itpsc_zm(:,i,j,k)=0.0_WP; this%itpsc_zm( 0,i,j,k)=1.0_WP
+                  this%itpsc_zp(:,i,j,k)=0.0_WP; this%itpsc_zp( 0,i,j,k)=1.0_WP
+               end if
+            end do
+         end do
+      end do
+      
       ! Loop over the domain and apply masked conditions to SC divergence
       do k=this%cfg%kmin_,this%cfg%kmax_
          do j=this%cfg%jmin_,this%cfg%jmax_
