@@ -39,26 +39,30 @@ def create_Tfig():
     
     # Put in fig
     Tfig=go.Figure()
-    #Tfig.add_trace(go.Scatter(name='Simple adiabatic model',x=df['Time']/60,y=df['Tadia'],mode='lines',showlegend=True,line=dict(color='firebrick',width=4,dash='dot')))
-    #Tfig.add_trace(go.Scatter(name='NGA2 with Twall=300K',x=df['Time']/60,y=df['Temp'],mode='lines',showlegend=True,line=dict(color='navy',width=2)))
-    #Tfig.update_layout(width=800,height=600)
-    #Tfig.update_xaxes(title_text='Time (min)',title_font_size=24,tickfont_size=24)
-    #Tfig.update_yaxes(title_text='Temperature (K)',title_font_size=24,tickfont_size=24,range=[280,450])
-    #Tfig.add_shape(type='line',x0=0,y0=Tinit,x1=df['Time'].iloc[-1]/60,y1=Tinit,line_color='black')
-    #Tfig.add_annotation(x=7.5,y=Tinit-7,text='Tinit',showarrow=False,font_size=16,font_color='black')
-    #Tfig.add_shape(type='line',x0=0,y0=Tinlet,x1=df['Time'].iloc[-1]/60,y1=Tinlet,line_color='green')
-    #Tfig.add_annotation(x=7.5,y=Tinlet+7,text='Tinlet',showarrow=False,font_size=16,font_color='green')
-    #Tfig.update_layout(legend=dict(font=dict(size=14)))
+    Tfig.add_trace(go.Scatter(name='0D adiabatic model',x=df['Time']/60,y=df['Tadia'],mode='lines',showlegend=True,line=dict(color='firebrick',width=2,dash='dot')))
+    Tfig.add_trace(go.Scatter(name='NGA2 with Twall=300K',x=df['Time']/60,y=df['Temp'],mode='lines',showlegend=True,line=dict(color='navy',width=2)))
+    Tfig.update_layout(width=800,height=600)
+    Tfig.update_xaxes(title_text='Time (min)',title_font_size=24,tickfont_size=24)
+    Tfig.update_yaxes(title_text='Temperature (K)',title_font_size=24,tickfont_size=24,range=[280,450])
+    Tfig.add_shape(type='line',x0=0,y0=Tinit,x1=df['Time'].iloc[-1]/60,y1=Tinit,line_color='black')
+    Tfig.add_annotation(x=7.5,y=Tinit-7,text='Tinit',showarrow=False,font_size=16,font_color='black')
+    Tfig.add_shape(type='line',x0=0,y0=Tinlet,x1=df['Time'].iloc[-1]/60,y1=Tinlet,line_color='green')
+    Tfig.add_annotation(x=7.5,y=Tinlet+7,text='Tinlet',showarrow=False,font_size=16,font_color='green')
+    Tfig.update_layout(legend=dict(font=dict(size=14)))
     
     # Add temperature data
     dfnow=pd.read_csv('monitor/conservation',delim_whitespace=True,header=None,skiprows=2,usecols=[1,3,4,5],names=['Time','Temp','Mass','Pres'])
-    dfnow['rhoCvT']=Cv*dfnow['Mass']*dfnow['Temp']
-    dfnow['rhoCpT']=Cp*dfnow['Mass']*dfnow['Temp']
-    dfnow['rhoCpT_model']=Cp*dfnow['Mass']*Tinit+(dfnow['Mass']-dfnow['Mass'].iloc[0])*Cp*Tinlet
-    dfnow['rhoCvT_model']=Cv*dfnow['Mass'].iloc[0]*Tinit+(dfnow['Mass']-dfnow['Mass'].iloc[0])*Cp*Tinlet
+    Tfig.add_trace(go.Scatter(name='NGA2 with adbiatatic walls',x=dfnow['Time']/60,y=dfnow['Temp'],mode='lines',showlegend=True,line=dict(color='firebrick',width=2)))
+    
+    
+    # Various debugging tests
+    #dfnow['rhoCvT']=Cv*dfnow['Mass']*dfnow['Temp']
+    #dfnow['rhoCpT']=Cp*dfnow['Mass']*dfnow['Temp']
+    #dfnow['rhoCpT_model']=Cp*dfnow['Mass']*Tinit+(dfnow['Mass']-dfnow['Mass'].iloc[0])*Cp*Tinlet
+    #dfnow['rhoCvT_model']=Cv*dfnow['Mass'].iloc[0]*Tinit+(dfnow['Mass']-dfnow['Mass'].iloc[0])*Cp*Tinlet
     # Put in fig
-    Tfig.add_trace(go.Scatter(name='Energy abiabatic wall',x=dfnow['Time']/60,y=dfnow['rhoCvT'],mode='lines',showlegend=True,line=dict(width=4)))
-    Tfig.add_trace(go.Scatter(name='model abiabatic wall',x=dfnow['Time']/60,y=dfnow['rhoCvT_model'],mode='lines',showlegend=True,line=dict(width=4)))
+    #Tfig.add_trace(go.Scatter(name='Energy abiabatic wall',x=dfnow['Time']/60,y=dfnow['rhoCvT'],mode='lines',showlegend=True,line=dict(width=4)))
+    #Tfig.add_trace(go.Scatter(name='model abiabatic wall',x=dfnow['Time']/60,y=dfnow['rhoCvT_model'],mode='lines',showlegend=True,line=dict(width=4)))
     
     return Tfig
 
