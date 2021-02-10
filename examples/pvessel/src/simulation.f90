@@ -42,7 +42,7 @@ module simulation
    !> Equation of state and case conditions
    real(WP) :: pressure,pressure_old,Vtotal
    real(WP) :: MFR,Ain,rhoUin,fluid_mass,fluid_mass_old
-   real(WP) :: Tinit,Tinlet,Twall,Tavg
+   real(WP) :: Tinit,Tinlet,Twall,Twallold,Tavg
    logical  :: wall_losses
    real(WP), parameter :: Wmlr=44.01e-3_WP  ! kg/mol
    real(WP), parameter :: Rcst=8.314_WP     ! J/(mol.K)
@@ -231,10 +231,11 @@ end subroutine get_cond
             df=datafile(pg=cfg,fdata=trim(adjustl(dir_restart))//'/'//'data')
          else
             ! If we are not restarting, we will still need datafiles for saving restart files
-            df=datafile(pg=cfg,filename=trim(cfg%name),nval=3,nvar=8)
+            df=datafile(pg=cfg,filename=trim(cfg%name),nval=4,nvar=8)
             df%valname(1)='t'
             df%valname(2)='dt'
             df%valname(3)='pressure'
+            df%valname(4)='Twall'
             df%varname(1)='rhoU'
             df%varname(2)='rhoV'
             df%varname(3)='rhoW'
@@ -311,6 +312,7 @@ end subroutine get_cond
          ! Check if we want to model wall losses
          call param_read(tag='Wall temperature',val=Twall,default=-1.0_WP)
          wall_losses=.false.; if (Twall.gt.0.0_WP) wall_losses=.true.
+         if (restarted) call df%pullval(name='Twall',val=Twall)
          ! Create scalar solver
          sc=vdscalar(cfg=cfg,scheme=quick,name='Temperature')
          ! Define boundary conditions
@@ -511,6 +513,7 @@ end subroutine get_cond
          call consfile%add_column(Tavg,'Tavg')
          call consfile%add_column(sc%rhoint,'Mass')
          call consfile%add_column(pressure,'Pthermo')
+         call consfile%add_column(Twall,'Twall')
          call consfile%write()
       end block create_monitor
       
@@ -531,9 +534,10 @@ end subroutine get_cond
          call time%adjust_dt()
          call time%increment()
          
-         ! Remember fluid mass and pressure
+         ! Remember fluid mass, pressure, and wall temperature
          fluid_mass_old=fluid_mass
          pressure_old=pressure
+         Twallold=Twall
          
          ! Remember old scalar
          sc%rhoold=sc%rho
@@ -561,6 +565,29 @@ end subroutine get_cond
          end where
          fs%visc=fs%visc+sgs%visc
          sc%diff=sc%diff+sgs%visc
+         
+         
+         ! ============ Estimate heat flux at wall ============
+         heat_transfer: block
+            use vdscalar_class, only: bcond
+            type(bcond), pointer :: mybc
+            real(WP), parameter :: rho_steel=8050.0_WP ! kg/m^3
+            real(WP), parameter :: Cp_steel=500.0_WP   ! J/(kg.K)
+            real(WP), parameter :: L_steel=0.0762_WP   ! 3 inches
+            real(WP), parameter :: k_steel=6.5_WP      ! W/(K.m) <- lower than steel because of teflon
+            integer :: i,j,k,n
+            ! Update the boundary condition
+            if (wall_losses) then
+               call sc%get_bcond('wall',mybc)
+               do n=1,mybc%itr%no_
+                  i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
+                  sc%SC(i,j,k)=Twall
+                  sc%diff(i,j,k)=k_steel/Cp*sc%cfg%min_meshsize/L_steel ! This simply accounts for conduction through steel
+               end do
+            end if
+         end block heat_transfer
+         ! ====================================================
+         
          
          ! Perform sub-iterations
          do while (time%it.le.time%itmax)
@@ -633,9 +660,6 @@ end subroutine get_cond
             fs%rhoV=fs%rhoV-time%dtmid*resV
             fs%rhoW=fs%rhoW-time%dtmid*resW
             call fs%rho_divide
-            
-            ! Reapply boundary conditions
-            call fs%apply_bcond(time%tmid,time%dtmid)
             ! ===================================================
             
             
@@ -673,6 +697,7 @@ end subroutine get_cond
             
          end do
          
+         
          ! Recompute interpolated velocity and divergence
          call fs%interp_vel(Ui,Vi,Wi)
          call sc%get_drhodt(dt=time%dt,drhodt=resSC)
@@ -703,6 +728,7 @@ end subroutine get_cond
                call df%pushval(name='t'       ,val=time%t   )
                call df%pushval(name='dt'      ,val=time%dt  )
                call df%pushval(name='pressure',val=pressure )
+               call df%pushval(name='Twall'   ,val=Twall    )
                call df%pushvar(name='rhoU'    ,var=fs%rhoU  )
                call df%pushvar(name='rhoV'    ,var=fs%rhoV  )
                call df%pushvar(name='rhoW'    ,var=fs%rhoW  )
