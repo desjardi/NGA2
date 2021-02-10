@@ -47,6 +47,7 @@ module simulation
    real(WP), parameter :: Wmlr=44.01e-3_WP  ! kg/mol
    real(WP), parameter :: Rcst=8.314_WP     ! J/(mol.K)
    real(WP), parameter :: Cp=40.0_WP/Wmlr   ! ~40 J/(mol.K) from NIST, divided by Wmlr to get to kg
+   real(WP), parameter :: Pr_turb=5.0_WP    ! For now, we're assuming a constant Prandtl number
    
 contains
    
@@ -564,7 +565,7 @@ end subroutine get_cond
             sgs%visc=-fs%visc
          end where
          fs%visc=fs%visc+sgs%visc
-         sc%diff=sc%diff+sgs%visc
+         sc%diff=sc%diff+sgs%visc/Pr_turb    !< This is an assumption of constant turbulent Pr number
          
          
          ! ============ Estimate heat flux at wall ============
@@ -660,6 +661,10 @@ end subroutine get_cond
             fs%rhoV=fs%rhoV-time%dtmid*resV
             fs%rhoW=fs%rhoW-time%dtmid*resW
             call fs%rho_divide
+            
+            ! Update div for monitoring
+            call sc%get_drhodt(dt=time%dt,drhodt=resSC)
+            call fs%get_div(drhodt=resSC)
             ! ===================================================
             
             
@@ -698,10 +703,8 @@ end subroutine get_cond
          end do
          
          
-         ! Recompute interpolated velocity and divergence
+         ! Recompute interpolated velocity
          call fs%interp_vel(Ui,Vi,Wi)
-         call sc%get_drhodt(dt=time%dt,drhodt=resSC)
-         call fs%get_div(drhodt=resSC)
          
          ! Output to ensight
          if (ens_evt%occurs()) call ens_out%write_data(time%t)
