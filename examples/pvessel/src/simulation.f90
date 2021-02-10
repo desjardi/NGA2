@@ -582,7 +582,7 @@ end subroutine get_cond
                do n=1,mybc%itr%no_
                   i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
                   sc%SC(i,j,k)=Twall
-                  sc%diff(i,j,k)=k_steel/Cp*sc%cfg%min_meshsize/L_steel ! This simply accounts for conduction through steel
+                  !sc%diff(i,j,k)=k_steel/Cp*sc%cfg%min_meshsize/L_steel ! We could change heat flux here
                end do
             end if
          end block heat_transfer
