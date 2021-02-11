@@ -88,7 +88,7 @@ def create_Tfig():
     
     # Add adiabatic temperature data
     #df=pd.read_csv('monitor_adiabatic/conservation',delim_whitespace=True,header=None,skiprows=2,usecols=[1,3,4,5],names=['Time','Temp','Mass','Pres'])
-    #Tfig.add_trace(go.Scatter(name='NGA2 with adbiatatic walls',x=df['Time']/60,y=df['Temp'],mode='lines',showlegend=True,line=dict(color='firebrick',width=2)))
+    #Tfig.add_trace(go.Scatter(name='NGA2 with adbiatatic walls',x=df['Time']/60,y=df['Temp'],mode='lines',showlegend=True,line=dict(width=4)))
     
     # Add temperature data with Twall=350
     #df=pd.read_csv('monitor_Twall350/conservation',delim_whitespace=True,header=None,skiprows=2,usecols=[1,3,4,5],names=['Time','Temp','Mass','Pres'])
@@ -101,8 +101,9 @@ def create_Tfig():
     
     # Add temperature running now
     df=pd.read_csv('monitor/conservation',delim_whitespace=True,header=None,skiprows=2,usecols=[1,3,4,5,6],names=['Time','Temp','Mass','Pres','Twall'])
-    Tfig.add_trace(go.Scatter(name='NGA2 simulation - Twall=300K',x=df['Time']/60,y=df['Temp'],mode='lines',showlegend=True,line=dict(width=2)))
-    #Tfig.add_trace(go.Scatter(name='runnig now - wall',  x=df['Time']/60,y=df['Twall'],mode='lines',showlegend=True,line=dict(color='navy',width=2)))
+    Tfig.add_trace(go.Scatter(name='NGA2 simulation - Tvessel',x=df['Time']/60,y=df['Temp'],mode='lines',showlegend=True,line=dict(width=2)))
+    Tfig.add_trace(go.Scatter(name='NGA2 simulation - Twall',  x=df['Time']/60,y=df['Twall'],mode='lines',showlegend=True,line=dict(color='navy',width=2)))
+#    Tfig.add_trace(go.Scatter(name='NGA2 simulation - diff',  x=df['Time']/60,y=300+df['Temp']-df['Twall'],mode='lines',showlegend=True,line=dict(color='navy',width=2,dash='dot')))
     
     
     
@@ -163,37 +164,41 @@ def create_Tfig():
     # Tfig.add_trace(go.Scatter(name='Python T=300K - wall',x=df['Time']/60,y=df['Twall'],mode='lines',showlegend=True,line=dict(width=2)))
     
     # Numerical instead
-    #Tw=300
+    Tw=300
     
-    #df=pd.read_csv('FFdata/inlet_temp.txt',delim_whitespace=True,header=None,skiprows=0,usecols=[0,1],names=['Time','Tin'])
+    df=pd.read_csv('FFdata/inlet_temp.txt',delim_whitespace=True,header=None,skiprows=0,usecols=[0,1],names=['Time','Tin'])
     
-    #myTime=df['Time'].tolist()
-    ##myTime=np.linspace(0,2000,20000)
-    #myTin=df['Tin'].tolist()
-    #myMass=np.zeros(len(myTime))
-    #myMass[0]=Minit
-    #myTemp=np.zeros(len(myTime))
-    #myTemp[0]=Tinit
-    #myMassTemp=myMass*myTemp
-    #myTwall=np.zeros(len(myTime))
-    #myTwall[0]=Tw
+    myTime=df['Time'].tolist()
+    myTin=df['Tin'].tolist()
+    myMass=np.zeros(len(myTime))
+    myMass[0]=Minit
+    myTemp=np.zeros(len(myTime))
+    myTemp[0]=Tinit
+    myMassTemp=myMass*myTemp
+    myTwall=np.zeros(len(myTime))
+    myTwall[0]=Tw
     
-
-    #k=45 # W/(K.m) Steel reduced due to teflon
-    #L_steel=0.0762
-    #coeff=0.5
-    #timescale_wall=30
-    #timescale_fluid=0.1
-    #for n in range(0,len(myTime)-1):
-    #    myMass[n+1]    =myMass[n]    +(myTime[n+1]-myTime[n])*MFR
-    #    myTwall[n+1]   =myTwall[n]   +(myTime[n+1]-myTime[n])*(myTemp[n]-myTwall[n])/timescale_wall
+    Tout=300
+    k=0.02*Cp # W/(K.m) Steel reduced due to teflon - I observe 0.02 or so in the code
+    L_steel=0.0762
+    coeff=0.1
+    tau_wall_in =100
+    tau_wall_out=300
+    timescale_fluid=0.1
+    for n in range(0,len(myTime)-1):
+        myMass[n+1]    =myMass[n]    +(myTime[n+1]-myTime[n])*MFR
+        myTwall[n+1]   =myTwall[n]   +(myTime[n+1]-myTime[n])*(myTemp[n]-myTwall[n])/tau_wall_in+(myTime[n+1]-myTime[n])*(Tout-myTwall[n])/tau_wall_out
+        
+        # Adia model
+        myMassTemp[n+1]=myMassTemp[n]+(myTime[n+1]-myTime[n])*(MFR*Gamma*myTin[n])
+        
+        #myMassTemp[n+1]=myMassTemp[n]+(myTime[n+1]-myTime[n])*(MFR*Gamma*myTin[n])-coeff*k*area/(Cv*dx)*(myTemp[n]-myTwall[n]))
+        #myMassTemp[n+1]=myMassTemp[n]+(myTime[n+1]-myTime[n])*(MFR*Gamma*myTin[n]-(myTemp[n]-myTwall[n])/timescale_fluid)
+        myTemp[n+1]    =myMassTemp[n+1]/myMass[n+1]
     
-        #myMassTemp[n+1]=myMassTemp[n]+(myTime[n+1]-myTime[n])*(MFR*Gamma*myTin[n]-coeff*k*area/(Cv*L_steel)*(myTemp[n]-myTwall[n]))
-    #    myMassTemp[n+1]=myMassTemp[n]+(myTime[n+1]-myTime[n])*(MFR*Gamma*myTin[n]-(myTemp[n]-myTwall[n])/timescale_fluid)
-    #    myTemp[n+1]    =myMassTemp[n+1]/myMass[n+1]
-    
-    #df=pd.DataFrame(list(zip(myTime,myTemp,myTwall,myTin)),columns=['Time','Temp','Twall','Tin'])
-    #Tfig.add_trace(go.Scatter(name='Python T=300K',x=df['Time']/60,y=df['Tin']  ,mode='lines',showlegend=True,line=dict(width=2)))
+    df=pd.DataFrame(list(zip(myTime,myTemp,myTwall,myTin)),columns=['Time','Temp','Twall','Tin'])
+    #Tfig.add_trace(go.Scatter(name='Adiabatic model with Tin(t)',x=df['Time']/60,y=df['Temp'] ,mode='lines',showlegend=True,line=dict(color='black',width=2)))
+    #Tfig.add_trace(go.Scatter(name='Tin(t)',x=df['Time']/60,y=df['Tin']  ,mode='lines',showlegend=True,line=dict(color='darkgreen',width=2,dash='dot')))
     #Tfig.add_trace(go.Scatter(name='Python T=300K',x=df['Time']/60,y=df['Temp'] ,mode='lines',showlegend=True,line=dict(width=2)))
     #Tfig.add_trace(go.Scatter(name='Python T=300K - wall'  ,x=df['Time']/60,y=df['Twall'],mode='lines',showlegend=True,line=dict(width=2)))
     
@@ -203,12 +208,43 @@ def create_Tfig():
 
 
 
+# Pressure graph
+def create_Pfig():
+    
+    # Create fig
+    Pfig=go.Figure()
+    
+    # Read and plot the Farther Farms data
+    df=pd.read_csv('FFdata/pressure.txt',delim_whitespace=True,header=None,skiprows=0,usecols=[0,2],names=['Time','Pres'])
+    Pfig.add_trace(go.Scatter(name='Farther Farms experiment',x=df['Time'],y=df['Pres'],mode='markers',showlegend=True,line=dict(width=2)))
+    
+    Pfig.update_layout(width=1200,height=800)
+    Pfig.update_xaxes(title_text='Time (min)',title_font_size=24,tickfont_size=24,range=[0,20])
+    Pfig.update_yaxes(title_text='Pressure (bar)',title_font_size=24,tickfont_size=24)
+    #Pfig.add_shape(type='line',x0=0,y0=Tinit,x1=df['Time'].iloc[-1]/60,y1=Tinit,line_color='black')
+    #Pfig.add_annotation(x=7.5,y=Tinit-7,text='Tinit',showarrow=False,font_size=16,font_color='black')
+    #Pfig.add_shape(type='line',x0=0,y0=Tinlet,x1=df['Time'].iloc[-1]/60,y1=Tinlet,line_color='green')
+    #Pfig.add_annotation(x=7.5,y=Tinlet+13,text='Tinlet',showarrow=False,font_size=16,font_color='green')
+    Pfig.update_layout(legend=dict(font=dict(size=14)))
+    
+    # Read and plot current data
+    df=pd.read_csv('monitor/conservation',delim_whitespace=True,header=None,skiprows=2,usecols=[1,3,4,5,6],names=['Time','Temp','Mass','Pres','Twall'])
+    Pfig.add_trace(go.Scatter(name='NGA2 simulation - 1 min shift',x=df['Time']/60+1,y=df['Pres']*1e-5,mode='lines',showlegend=True,line=dict(width=2)))
+    
+
+    return Pfig
+
+
+
+
 # This is where we define the dashboard layout
 def serve_layout():
     return html.Div(style={"margin-left": "15px"},children=[
+    
     # Title of doc
     dcc.Markdown('''# Farther Farms Project'''),
     dcc.Markdown('''*NGA2 Dashboard written by O. Desjardins, last updated 02/06/2021*'''),
+    
     # Intro
     dcc.Markdown('''
     ## Overview
@@ -216,14 +252,22 @@ def serve_layout():
     case. This simulation is based on an experiment done by Farther Farms where
     a pressure vessel is filled with heated CO2.
     '''),
-    # Imbibed volume over time
+    
+    # Temperature over time
     dcc.Markdown(f'''
     ---
     ## Average temperature in the vessel
     The graph below shows the evolution of the average temperature inside the pressurized vessel.
     '''),
-    #html.Div(create_Tfig(),style={'display':'none'}),
     dcc.Graph(id='Tgraph',figure=create_Tfig()),
+    
+    # Pressure over time
+    dcc.Markdown(f'''
+    ---
+    ## Pressure in the vessel
+    The graph below shows the evolution of the pressure inside the vessel.
+    '''),
+    dcc.Graph(id='Pgraph',figure=create_Pfig()),
 ])
 
 

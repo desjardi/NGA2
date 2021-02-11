@@ -47,7 +47,10 @@ module simulation
    real(WP), parameter :: Wmlr=44.01e-3_WP  ! kg/mol
    real(WP), parameter :: Rcst=8.314_WP     ! J/(mol.K)
    real(WP), parameter :: Cp=40.0_WP/Wmlr   ! ~40 J/(mol.K) from NIST, divided by Wmlr to get to kg
-   real(WP), parameter :: Pr_turb=5.0_WP    ! For now, we're assuming a constant Prandtl number
+   real(WP), parameter :: Pr_turb=0.9_WP    ! For now, we're assuming a constant Prandtl number
+   real(WP), parameter :: tau_wall_in =100.0_WP ! Thermal timescale for wall heating by inside  (in s)
+   real(WP), parameter :: tau_wall_out=500.0_WP ! Thermal timescale for wall cooling by outside (in s)
+   real(WP), parameter :: Tout=300.0_WP     ! Outside temp
    
 contains
    
@@ -556,7 +559,6 @@ end subroutine get_cond
          ! ============ UPDATE PROPERTIES ====================
          call get_visc()
          call get_cond()
-         ! ===================================================
          
          ! Turbulence modeling
          call fs%get_strainrate(Ui=Ui,Vi=Vi,Wi=Wi,SR=SR)
@@ -566,17 +568,16 @@ end subroutine get_cond
          end where
          fs%visc=fs%visc+sgs%visc
          sc%diff=sc%diff+sgs%visc/Pr_turb    !< This is an assumption of constant turbulent Pr number
+         ! ===================================================
          
          
          ! ============ Estimate heat flux at wall ============
          heat_transfer: block
             use vdscalar_class, only: bcond
             type(bcond), pointer :: mybc
-            real(WP), parameter :: rho_steel=8050.0_WP ! kg/m^3
-            real(WP), parameter :: Cp_steel=500.0_WP   ! J/(kg.K)
-            real(WP), parameter :: L_steel=0.0762_WP   ! 3 inches
-            real(WP), parameter :: k_steel=6.5_WP      ! W/(K.m) <- lower than steel because of teflon
             integer :: i,j,k,n
+            ! Update wall temperature based on empirical model
+            Twall=Twallold+time%dt*(Tavg-Twallold)/tau_wall_in+time%dt*(Tout-Twallold)/tau_wall_out
             ! Update the boundary condition
             if (wall_losses) then
                call sc%get_bcond('wall',mybc)
