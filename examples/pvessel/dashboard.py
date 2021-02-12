@@ -101,8 +101,8 @@ def create_Tfig():
     
     # Add temperature running now
     df=pd.read_csv('monitor/conservation',delim_whitespace=True,header=None,skiprows=2,usecols=[1,3,4,5,6],names=['Time','Temp','Mass','Pres','Twall'])
-    Tfig.add_trace(go.Scatter(name='NGA2 simulation - Tvessel',x=df['Time']/60,y=df['Temp'],mode='lines',showlegend=True,line=dict(width=2)))
-    Tfig.add_trace(go.Scatter(name='NGA2 simulation - Twall',  x=df['Time']/60,y=df['Twall'],mode='lines',showlegend=True,line=dict(color='navy',width=2)))
+    Tfig.add_trace(go.Scatter(name='NGA2 simulation - Tvessel',x=df['Time']/60,y=df['Temp'] ,mode='lines',showlegend=True,line=dict(color='red',width=2)))
+    Tfig.add_trace(go.Scatter(name='NGA2 simulation - Twall',  x=df['Time']/60,y=df['Twall'],mode='lines',showlegend=True,line=dict(color='red',width=2,dash='dot')))
 #    Tfig.add_trace(go.Scatter(name='NGA2 simulation - diff',  x=df['Time']/60,y=300+df['Temp']-df['Twall'],mode='lines',showlegend=True,line=dict(color='navy',width=2,dash='dot')))
     
     

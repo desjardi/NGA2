@@ -48,8 +48,8 @@ module simulation
    real(WP), parameter :: Rcst=8.314_WP     ! J/(mol.K)
    real(WP), parameter :: Cp=40.0_WP/Wmlr   ! ~40 J/(mol.K) from NIST, divided by Wmlr to get to kg
    real(WP), parameter :: Pr_turb=0.9_WP    ! For now, we're assuming a constant Prandtl number
-   real(WP), parameter :: tau_wall_in =100.0_WP ! Thermal timescale for wall heating by inside  (in s)
-   real(WP), parameter :: tau_wall_out=500.0_WP ! Thermal timescale for wall cooling by outside (in s)
+   real(WP), parameter :: tau_wall_in = 100.0_WP  ! Thermal timescale for wall heating by inside  (in s)
+   real(WP), parameter :: tau_wall_out=1000.0_WP  ! Thermal timescale for wall cooling by outside (in s)
    real(WP), parameter :: Tout=300.0_WP     ! Outside temp
    
 contains
