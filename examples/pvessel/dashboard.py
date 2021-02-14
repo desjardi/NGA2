@@ -40,132 +40,56 @@ Wmlr=44.01e-3        # kg/mol
 Cp=40.0/Wmlr         # J/(kg.K)
 Cv=Cp-Rcst/Wmlr      # J/(kg.K)
 Gamma=Cp/Cv          # -
+Cs=500.0             # J/(kg.K)
+k_steel=45           # W/(kg.m)
 Tinlet=430           # K
-Tinit=300            # K
-Tw=300               # K
+Tinit =300           # K
 MFR=0.2              # kg/m^3
 Minit=9.87217        # kg
+Tw=300               # K
+
 
 # Vessel geometry
 radius=0.4           # m
 length=2.5           # m
 area=2.0*math.pi*radius*length+2.0*math.pi*radius*radius
 Vtotal=math.pi*radius*radius*length # m^3
-
-# Heat transfer model
-dx=2.6/80            # m
-k=0.01               # W/(K.m)
-
-AA=Minit
-BB=MFR
-CC=MFR+k*area/(Cv*dx)
-DD=-MFR*Gamma*Tinlet-Tw*k*area/(Cv*dx)
+m_steel=268.5        # kg of steel inside
+L_steel=0.0762       # m of steel thickness
+dx=2.6/80
 
 # Temperature graph
 def create_Tfig():
-    
-    # Read the data with Twall=300
-    #df=pd.read_csv('monitor_Twall300/conservation',delim_whitespace=True,header=None,skiprows=2,usecols=[1,3,4,5],names=['Time','Temp','Mass','Pres'])
-    #df['Tadia']=(df['Mass'].iloc[0]*df['Temp'].iloc[0]+Gamma*Tinlet*(df['Mass']-df['Mass'].iloc[0]))/df['Mass']
     
     # Create fig
     Tfig=go.Figure()
     
     # Read and plot the Farther Farms data
     df=pd.read_csv('FFdata/temperature.txt',delim_whitespace=True,header=None,skiprows=0,usecols=[0,1],names=['Time','Temp'])
-    Tfig.add_trace(go.Scatter(name='Farther Farms experiment',x=df['Time']/60,y=df['Temp'],mode='lines',showlegend=True,line=dict(width=2)))
+    Tfig.add_trace(go.Scatter(name='FF experiment - with sled',x=df['Time']/60,y=df['Temp'],mode='lines',showlegend=True,line=dict(width=4)))
     
-    #Tfig.add_trace(go.Scatter(name='0D adiabatic model',x=df['Time']/60,y=df['Tadia'],mode='lines',showlegend=True,line=dict(color='firebrick',width=2,dash='dot')))
-    #Tfig.add_trace(go.Scatter(name='NGA2 with Twall=300K',x=df['Time']/60,y=df['Temp'],mode='lines',showlegend=True,line=dict(color='blue',width=2)))
+    # Some formatting
     Tfig.update_layout(width=1200,height=800)
     Tfig.update_xaxes(title_text='Time (min)',title_font_size=24,tickfont_size=24,range=[0,20])
     Tfig.update_yaxes(title_text='Temperature (K)',title_font_size=24,tickfont_size=24)#,range=[280,450])
-    Tfig.add_shape(type='line',x0=0,y0=Tinit,x1=df['Time'].iloc[-1]/60,y1=Tinit,line_color='black')
-    Tfig.add_annotation(x=7.5,y=Tinit-7,text='Tinit',showarrow=False,font_size=16,font_color='black')
-    Tfig.add_shape(type='line',x0=0,y0=Tinlet,x1=df['Time'].iloc[-1]/60,y1=Tinlet,line_color='green')
-    Tfig.add_annotation(x=7.5,y=Tinlet+7,text='Tinlet',showarrow=False,font_size=16,font_color='green')
+    #Tfig.add_shape(type='line',x0=0,y0=Tinit,x1=df['Time'].iloc[-1]/60,y1=Tinit,line_color='black')
+    #Tfig.add_annotation(x=7.5,y=Tinit-7,text='Tinit',showarrow=False,font_size=16,font_color='black')
+    #Tfig.add_shape(type='line',x0=0,y0=Tinlet,x1=df['Time'].iloc[-1]/60,y1=Tinlet,line_color='green')
+    #Tfig.add_annotation(x=7.5,y=Tinlet+7,text='Tinlet',showarrow=False,font_size=16,font_color='green')
     Tfig.update_layout(legend=dict(font=dict(size=14)))
-    
-    # Add adiabatic temperature data
-    #df=pd.read_csv('monitor_adiabatic/conservation',delim_whitespace=True,header=None,skiprows=2,usecols=[1,3,4,5],names=['Time','Temp','Mass','Pres'])
-    #Tfig.add_trace(go.Scatter(name='NGA2 with adbiatatic walls',x=df['Time']/60,y=df['Temp'],mode='lines',showlegend=True,line=dict(width=4)))
-    
-    # Add temperature data with Twall=350
-    #df=pd.read_csv('monitor_Twall350/conservation',delim_whitespace=True,header=None,skiprows=2,usecols=[1,3,4,5],names=['Time','Temp','Mass','Pres'])
-    #Tfig.add_trace(go.Scatter(name='NGA2 with Twall=350K',x=df['Time']/60,y=df['Temp'],mode='lines',showlegend=True,line=dict(color='navy',width=2)))
-    
-    # Add wall-modeled temperature data
-    #df=pd.read_csv('monitor_wallmodel/conservation',delim_whitespace=True,header=None,skiprows=2,usecols=[1,3,4,5,6],names=['Time','Temp','Mass','Pres','Twall'])
-    #Tfig.add_trace(go.Scatter(name='NGA2 with heat losses - vessel',x=df['Time']/60,y=df['Temp' ],mode='lines',showlegend=True,line=dict(width=2)))
-    #Tfig.add_trace(go.Scatter(name='NGA2 with heat losses - wall',  x=df['Time']/60,y=df['Twall'],mode='lines',showlegend=True,line=dict(width=2)))
     
     # Add temperature running now
     df=pd.read_csv('monitor/conservation',delim_whitespace=True,header=None,skiprows=2,usecols=[1,3,4,5,6],names=['Time','Temp','Mass','Pres','Twall'])
-    Tfig.add_trace(go.Scatter(name='NGA2 simulation - Tvessel',x=df['Time']/60,y=df['Temp'] ,mode='lines',showlegend=True,line=dict(color='red',width=2)))
+    Tfig.add_trace(go.Scatter(name='NGA2 simulation - Tvessel',x=df['Time']/60,y=df['Temp'] ,mode='lines',showlegend=True,line=dict(color='darkgreen',width=4)))
     Tfig.add_trace(go.Scatter(name='NGA2 simulation - Twall',  x=df['Time']/60,y=df['Twall'],mode='lines',showlegend=True,line=dict(color='red',width=2,dash='dot')))
-#    Tfig.add_trace(go.Scatter(name='NGA2 simulation - diff',  x=df['Time']/60,y=300+df['Temp']-df['Twall'],mode='lines',showlegend=True,line=dict(color='navy',width=2,dash='dot')))
     
     
+    # Read and plot the Farther Farms data
+    #df=pd.read_csv('FFdata/temp_nosled.txt',delim_whitespace=True,header=None,skiprows=0,usecols=[0,1],names=['Time','Temp'])
+    #Tfig.add_trace(go.Scatter(name='FF experiment - no sled',x=(df['Time']-40)/60,y=df['Temp'],mode='lines',showlegend=True,line=dict(width=4)))
     
-    # Add various models - analytical
-    # df['Mass']=Minit+df['Time']*MFR
-    #
-    # AA=Minit
-    # BB=MFR
-    # CC=MFR
-    # DD=-MFR*Gamma*Tinlet
-    # df['Tadia']=np.power(AA,CC/BB)*(Tinit+DD/CC)*np.power(AA+BB*df['Time'],-CC/BB)-DD/CC
-    # Tfig.add_trace(go.Scatter(name='Adia model',x=df['Time']/60,y=df['Tadia'],mode='lines',showlegend=True,line=dict(width=2)))
-    #
-    # Tw=300
-    # k=0.02
-    # Ra=radius*Cp*MFR/k
-    # coeff=3
-    # h=coeff*k/radius
-    # AA=Minit
-    # BB=MFR
-    # CC=MFR+h*area/Cv
-    # DD=-MFR*Gamma*Tinlet-Tw*h*area/Cv
-    # df['T300']=np.power(AA,CC/BB)*(Tinit+DD/CC)*np.power(AA+BB*df['Time'],-CC/BB)-DD/CC
-    # Tfig.add_trace(go.Scatter(name='T=300K model',x=df['Time']/60,y=df['T300'],mode='lines',showlegend=True,line=dict(width=2)))
     
-    # Numerical instead - That works well
-    # Tw=300
-    # coeff=1
-    # L_steel=0.0762
-    # rho_steel=8050.0
-    # Cp_steel=500.0
-    # myTime=np.linspace(0,2000,20000)
-    # myMass=np.zeros(len(myTime))
-    # myMass[0]=Minit
-    # myTemp=np.zeros(len(myTime))
-    # myTemp[0]=Tinit
-    # myMassTemp=myMass*myTemp
-    # myTwall=np.zeros(len(myTime))
-    # myTwall[0]=Tw
-    #
-    # timescale_fluid=15  # 15 sec?
-    # timescale_wall =100
-    #
-    # for n in range(0,len(myTime)-1):
-    #     k=2#get_cond(myMass[n]/Vtotal,myTemp[n])
-    #     h=coeff*k/dx
-    #
-    #     myTwall[n+1]=myTwall[n]#+(myTime[n+1]-myTime[n])*10*h/(Cp_steel*rho_steel*L_steel)*(myTemp[n]-myTwall[n])
-    #     #myTwall[n+1]=myTwall[n]+(myTime[n+1]-myTime[n])*(myTemp[n]-myTwall[n])/timescale_wall
-    #
-    #     myMass[n+1]=myMass[n]+(myTime[n+1]-myTime[n])*MFR
-    #     myMassTemp[n+1]=myMassTemp[n]+(myTime[n+1]-myTime[n])*(MFR*Gamma*Tinlet-h*area/Cv*(myTemp[n]-myTwall[n]))
-    #     #myMassTemp[n+1]=myMassTemp[n]+(myTime[n+1]-myTime[n])*(MFR*Gamma*Tinlet-myMass[n+1]*(myTemp[n]-myTwall[n])/timescale_fluid)
-    #     myTemp[n+1]=myMassTemp[n+1]/myMass[n+1]
-    #
-    # df=pd.DataFrame(list(zip(myTime,myTemp,myTwall)),columns=['Time','Temp','Twall'])
-    # Tfig.add_trace(go.Scatter(name='Python T=300K - vessel',x=df['Time']/60,y=df['Temp'],mode='lines',showlegend=True,line=dict(width=2)))
-    # Tfig.add_trace(go.Scatter(name='Python T=300K - wall',x=df['Time']/60,y=df['Twall'],mode='lines',showlegend=True,line=dict(width=2)))
-    
-    # Numerical instead
-    Tw=300
-    
+    # 0D model of the vessel using the measured Tinlet
     df=pd.read_csv('FFdata/inlet_temp.txt',delim_whitespace=True,header=None,skiprows=0,usecols=[0,1],names=['Time','Tin'])
     
     myTime=df['Time'].tolist()
@@ -174,34 +98,19 @@ def create_Tfig():
     myMass[0]=Minit
     myTemp=np.zeros(len(myTime))
     myTemp[0]=Tinit
-    myMassTemp=myMass*myTemp
-    myTwall=np.zeros(len(myTime))
-    myTwall[0]=Tw
+    myTemp2=np.zeros(len(myTime))
+    myTemp2[0]=Tinit
     
-    Tout=300
-    k=0.02*Cp # W/(K.m) Steel reduced due to teflon - I observe 0.02 or so in the code
-    L_steel=0.0762
-    coeff=0.1
-    tau_wall_in =100
-    tau_wall_out=300
-    timescale_fluid=0.1
     for n in range(0,len(myTime)-1):
-        myMass[n+1]    =myMass[n]    +(myTime[n+1]-myTime[n])*MFR
-        myTwall[n+1]   =myTwall[n]   +(myTime[n+1]-myTime[n])*(myTemp[n]-myTwall[n])/tau_wall_in+(myTime[n+1]-myTime[n])*(Tout-myTwall[n])/tau_wall_out
+        myMass[n+1]=myMass[n]+(myTime[n+1]-myTime[n])*MFR
+        myTemp[n+1]=((myMass[n]+m_steel*Cs/Cv)*myTemp[n]+(myTime[n+1]-myTime[n])*(MFR*Gamma*Tinlet))/(myMass[n+1]+m_steel*Cs/Cv)
+        #\myTemp2[n+1]=((myMass[n]+m_steel*Cs/Cv)*myTemp2[n]+(myTime[n+1]-myTime[n])*(MFR*Gamma*myTin[n]-2*area/(Cv*L_steel)*(myTemp2[n]-Tw)))/(myMass[n+1]+m_steel*Cs/Cv)
+        myTemp2[n+1]=((myMass[n]+m_steel*Cs/Cv)*myTemp2[n]+(myTime[n+1]-myTime[n])*(MFR*Gamma*myTin[n]-area/(Cv*L_steel)*(myTemp2[n]-Tw)))/(myMass[n+1]+m_steel*Cs/Cv)
         
-        # Adia model
-        myMassTemp[n+1]=myMassTemp[n]+(myTime[n+1]-myTime[n])*(MFR*Gamma*myTin[n])
-        
-        #myMassTemp[n+1]=myMassTemp[n]+(myTime[n+1]-myTime[n])*(MFR*Gamma*myTin[n])-coeff*k*area/(Cv*dx)*(myTemp[n]-myTwall[n]))
-        #myMassTemp[n+1]=myMassTemp[n]+(myTime[n+1]-myTime[n])*(MFR*Gamma*myTin[n]-(myTemp[n]-myTwall[n])/timescale_fluid)
-        myTemp[n+1]    =myMassTemp[n+1]/myMass[n+1]
     
-    df=pd.DataFrame(list(zip(myTime,myTemp,myTwall,myTin)),columns=['Time','Temp','Twall','Tin'])
-    #Tfig.add_trace(go.Scatter(name='Adiabatic model with Tin(t)',x=df['Time']/60,y=df['Temp'] ,mode='lines',showlegend=True,line=dict(color='black',width=2)))
-    #Tfig.add_trace(go.Scatter(name='Tin(t)',x=df['Time']/60,y=df['Tin']  ,mode='lines',showlegend=True,line=dict(color='darkgreen',width=2,dash='dot')))
-    #Tfig.add_trace(go.Scatter(name='Python T=300K',x=df['Time']/60,y=df['Temp'] ,mode='lines',showlegend=True,line=dict(width=2)))
-    #Tfig.add_trace(go.Scatter(name='Python T=300K - wall'  ,x=df['Time']/60,y=df['Twall'],mode='lines',showlegend=True,line=dict(width=2)))
-    
+    df=pd.DataFrame(list(zip(myTime,myTin,myTemp,myTemp2)),columns=['Time','Tin','Temp','Temp2'])
+    #Tfig.add_trace(go.Scatter(name='Adiabatic model',x=df['Time']/60,y=df['Temp'] ,mode='lines',showlegend=True,line=dict(color='red',width=2)))
+    #Tfig.add_trace(go.Scatter(name='Non-adiabatic model',x=df['Time']/60,y=df['Temp2'],mode='lines',showlegend=True,line=dict(color='blue',width=2)))
     
     return Tfig
 

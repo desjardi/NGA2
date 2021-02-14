@@ -48,9 +48,9 @@ module simulation
    real(WP), parameter :: Rcst=8.314_WP     ! J/(mol.K)
    real(WP), parameter :: Cp=40.0_WP/Wmlr   ! ~40 J/(mol.K) from NIST, divided by Wmlr to get to kg
    real(WP), parameter :: Pr_turb=0.9_WP    ! For now, we're assuming a constant Prandtl number
-   real(WP), parameter :: tau_wall_in = 100.0_WP  ! Thermal timescale for wall heating by inside  (in s)
-   real(WP), parameter :: tau_wall_out=1000.0_WP  ! Thermal timescale for wall cooling by outside (in s)
-   real(WP), parameter :: Tout=300.0_WP     ! Outside temp
+   real(WP), parameter :: Cs=500.0_WP       ! Specific heat of steel in J/(kg.K)
+   real(WP), parameter :: Msteel=268.5_WP   ! Mass of steel in the sled/basket assembly
+   
    
 contains
    
@@ -272,6 +272,7 @@ end subroutine get_cond
          time=timetracker(amRoot=cfg%amRoot)
          call param_read('Max timestep size',time%dtmax)
          call param_read('Max cfl number',time%cflmax)
+         call param_read('Max time',time%tmax)
          time%dt=time%dtmax
          time%itmax=2
          ! Handle restart
@@ -576,15 +577,13 @@ end subroutine get_cond
             use vdscalar_class, only: bcond
             type(bcond), pointer :: mybc
             integer :: i,j,k,n
-            ! Update wall temperature based on empirical model
-            Twall=Twallold+time%dt*(Tavg-Twallold)/tau_wall_in+time%dt*(Tout-Twallold)/tau_wall_out
             ! Update the boundary condition
             if (wall_losses) then
                call sc%get_bcond('wall',mybc)
                do n=1,mybc%itr%no_
                   i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
                   sc%SC(i,j,k)=Twall
-                  !sc%diff(i,j,k)=k_steel/Cp*sc%cfg%min_meshsize/L_steel ! We could change heat flux here
+                  sc%diff(i,j,k)=kwall/Cp*sc%cfg%min_meshsize/Lsteel !< Provides heat flux at wall
                end do
             end if
          end block heat_transfer
@@ -676,14 +675,22 @@ end subroutine get_cond
             ! Explicit calculation of drhoSC/dt from scalar equation
             call sc%get_drhoSCdt(resSC,fs%rhoU,fs%rhoV,fs%rhoW)
             
+            ! Add pressure term
+            where (sc%cfg%VF.gt.0.0_WP) resSC=resSC+1.0_WP/Cp*(pressure-pressure_old)/time%dt
+            
+            ! Temporarily redefine density to include sled/basket assembly
+            sc%rho   =sc%rho   +Msteel*Cs/(Vtotal*Cp)
+            sc%rhoold=sc%rhoold+Msteel*Cs/(Vtotal*Cp)
+            
             ! Assemble explicit residual
             where (sc%cfg%VF.gt.0.0_WP) resSC=time%dt*resSC-(2.0_WP*sc%rho*sc%SC-(sc%rho+sc%rhoold)*sc%SCold)
             
-            ! Add pressure term
-            where (sc%cfg%VF.gt.0.0_WP) resSC=resSC+(pressure-pressure_old)/Cp
-            
-            ! Form implicit residual
+            ! Form implicit residual - rho is modified to make volumetric heat losses implicit
             call sc%solve_implicit(time%dt,resSC,fs%rhoU,fs%rhoV,fs%rhoW)
+            
+            ! Set densities back to fluid only
+            sc%rho   =sc%rho   -Msteel*Cs/(Vtotal*Cp)
+            sc%rhoold=sc%rhoold-Msteel*Cs/(Vtotal*Cp)
             
             ! Apply this residual
             sc%SC=2.0_WP*sc%SC-sc%SCold+resSC
