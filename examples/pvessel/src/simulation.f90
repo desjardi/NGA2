@@ -50,7 +50,11 @@ module simulation
    real(WP), parameter :: Pr_turb=0.9_WP    ! For now, we're assuming a constant Prandtl number
    real(WP), parameter :: Cs=500.0_WP       ! Specific heat of steel in J/(kg.K)
    real(WP), parameter :: Msteel=268.5_WP   ! Mass of steel in the sled/basket assembly
-   
+   real(WP), parameter :: Lsteel=0.0762_WP  ! Thickness of the wall in m
+   real(WP), parameter :: kwall=2.0_WP      ! W/(K.m) <- lower than steel because of Teflon
+   real(WP), parameter :: tau_wall_in = 10.0_WP   ! Thermal timescale for wall heating by inside  (in s)
+   real(WP), parameter :: tau_wall_out=100.0_WP   ! Thermal timescale for wall cooling by outside (in s)
+   real(WP), parameter :: Tout=300.0_WP     ! Outside temp
    
 contains
    
@@ -577,13 +581,14 @@ end subroutine get_cond
             use vdscalar_class, only: bcond
             type(bcond), pointer :: mybc
             integer :: i,j,k,n
+            ! Update wall temperature based on empirical model
+            Twall=Twallold+time%dt*(Tavg-Twallold)/tau_wall_in+time%dt*(Tout-Twallold)/tau_wall_out
             ! Update the boundary condition
             if (wall_losses) then
                call sc%get_bcond('wall',mybc)
                do n=1,mybc%itr%no_
                   i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
                   sc%SC(i,j,k)=Twall
-                  sc%diff(i,j,k)=kwall/Cp*sc%cfg%min_meshsize/Lsteel !< Provides heat flux at wall
                end do
             end if
          end block heat_transfer

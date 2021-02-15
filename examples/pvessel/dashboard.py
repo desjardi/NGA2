@@ -79,7 +79,7 @@ def create_Tfig():
     Tfig.update_layout(legend=dict(font=dict(size=14)))
     
     # Add temperature running now
-    df=pd.read_csv('monitor/conservation',delim_whitespace=True,header=None,skiprows=2,usecols=[1,3,4,5,6],names=['Time','Temp','Mass','Pres','Twall'])
+    df=pd.read_csv('monitor_basket_and_wallmodel/conservation',delim_whitespace=True,header=None,skiprows=2,usecols=[1,3,4,5,6],names=['Time','Temp','Mass','Pres','Twall'])
     Tfig.add_trace(go.Scatter(name='NGA2 simulation - Tvessel',x=df['Time']/60,y=df['Temp'] ,mode='lines',showlegend=True,line=dict(color='darkgreen',width=4)))
     Tfig.add_trace(go.Scatter(name='NGA2 simulation - Twall',  x=df['Time']/60,y=df['Twall'],mode='lines',showlegend=True,line=dict(color='red',width=2,dash='dot')))
     
@@ -109,7 +109,7 @@ def create_Tfig():
         
     
     df=pd.DataFrame(list(zip(myTime,myTin,myTemp,myTemp2)),columns=['Time','Tin','Temp','Temp2'])
-    #Tfig.add_trace(go.Scatter(name='Adiabatic model',x=df['Time']/60,y=df['Temp'] ,mode='lines',showlegend=True,line=dict(color='red',width=2)))
+    Tfig.add_trace(go.Scatter(name='Adiabatic model',x=df['Time']/60,y=df['Temp'] ,mode='lines',showlegend=True,line=dict(color='red',width=2)))
     #Tfig.add_trace(go.Scatter(name='Non-adiabatic model',x=df['Time']/60,y=df['Temp2'],mode='lines',showlegend=True,line=dict(color='blue',width=2)))
     
     return Tfig
