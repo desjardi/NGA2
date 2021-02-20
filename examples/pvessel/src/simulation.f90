@@ -56,7 +56,34 @@ module simulation
    real(WP), parameter :: tau_wall_out=100.0_WP   ! Thermal timescale for wall cooling by outside (in s)
    real(WP), parameter :: Tout=300.0_WP     ! Outside temp
    
+   !> Info relevant to basket modeling
+   real(WP), parameter :: bporo=0.4_WP      ! Assuming 40% porosity in the bag - depends on shape and arrangement of product
+   real(WP), parameter :: bperm=1.0e-6_WP   ! Permeability - should be low, needs to be optimized
+   real(WP), parameter :: Tperm=1.0e-6_WP   ! Thermal permeability - should be low, needs to be optimized
+   real(WP), dimension(3), parameter :: bsize=[0.40_WP,0.05_WP,0.20_WP]  ! Dimensions of a product bag
+   real(WP) :: be                                                        ! Smearing coeff for a product bag
+   real(WP), dimension(:,:,:), allocatable :: epsp                       ! Volume fraction of product
+   real(WP), dimension(:,:,:), allocatable :: epsf                       ! Volume fraction of fluid
+   real(WP), dimension(:,:,:), allocatable :: Tprod,Tprodold             ! Temperature of product
+   real(WP), parameter :: Cprod=3500.0_WP   ! In J/(kg.K) - this is for potatoes
+   real(WP), parameter :: kprod=0.7_WP      ! In W/(m.K)  - this is a representative value for potatoes [0.545,0.957]
+   real(WP), parameter :: rprod=1070.0_WP   ! Mass density of product
+   
+   ! Backup of viscosity and diffusivity
+   real(WP), dimension(:,:,:), allocatable :: viscmol,diffmol
+   
 contains
+   
+   
+   !> Function that provides volume fraction of bag at a point
+   function bag_at_loc(bag_loc,mesh_loc) result(eps)
+      implicit none
+      real(WP), dimension(3), intent(in) :: bag_loc,mesh_loc
+      real(WP) :: eps
+      real(WP), dimension(3) :: dist
+      dist=min(mesh_loc-(bag_loc-0.5_WP*bsize),(bag_loc+0.5_WP*bsize)-mesh_loc)
+      eps=(0.5_WP+0.5_WP*tanh(dist(1)/be))*(0.5_WP+0.5_WP*tanh(dist(2)/be))*(0.5_WP+0.5_WP*tanh(dist(3)/be))
+   end function bag_at_loc
    
       
    !> Function that localizes the left end of the tube
@@ -151,6 +178,8 @@ contains
          i=inflow%itr%map(1,n); j=inflow%itr%map(2,n); k=inflow%itr%map(3,n)
          sc%rho(i,j,k)=pressure*Wmlr/(Rcst*sc%SC(i,j,k))
       end do
+      ! Account for porosity here
+      sc%rho=sc%rho*epsf
    end subroutine get_rho
    
    
@@ -205,7 +234,7 @@ contains
                ! Temperature clipped to the model range
                T=min(max(sc%SC(i,j,k),290.0_WP),800.0_WP)
                ! Density clipped to the model range
-               rho=min(max(sc%rho(i,j,k),1.0_WP),1200.0_WP)
+               rho=min(max(sc%rho(i,j,k)/epsf(i,j,k),1.0_WP),1200.0_WP)
                ! Evaluate conductivity in mW/(m.K)
                cond=(A1+A2*rho+A3*rho**2+A4*rho**3*T**3+A5*rho**4+A6*T+A7*T**2)/sqrt(T)
                ! Set heat diffusivity
@@ -239,7 +268,7 @@ end subroutine get_cond
             df=datafile(pg=cfg,fdata=trim(adjustl(dir_restart))//'/'//'data')
          else
             ! If we are not restarting, we will still need datafiles for saving restart files
-            df=datafile(pg=cfg,filename=trim(cfg%name),nval=4,nvar=8)
+            df=datafile(pg=cfg,filename=trim(cfg%name),nval=4,nvar=9)
             df%valname(1)='t'
             df%valname(2)='dt'
             df%valname(3)='pressure'
@@ -252,6 +281,7 @@ end subroutine get_cond
             df%varname(6)='rho'
             df%varname(7)='rhoold'
             df%varname(8)='SC'
+            df%varname(9)='Tprod'
          end if
       end block restart_and_save
       
@@ -313,6 +343,61 @@ end subroutine get_cond
       end block create_solver
       
       
+      ! Allocate and initialize product volume fraction
+      ! This is done ASAP but after fs%setup so we can directly modify the Laplacian
+      prepare_eps: block
+         integer :: i,j,k
+         ! Set smearing thickness based on mesh size
+         be=0.75_WP*cfg%min_meshsize
+         ! Allocate volume fractions and permeability
+         allocate(epsp(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_)); epsp=0.0_WP
+         allocate(epsf(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_)); epsf=0.0_WP
+         ! Build volume fraction based on sum of bags
+         do k=cfg%kmino_,cfg%kmaxo_
+            do j=cfg%jmino_,cfg%jmaxo_
+               do i=cfg%imino_,cfg%imaxo_
+                  epsp(i,j,k)=epsp(i,j,k)+bag_at_loc(bag_loc=[ 0.0_WP, 0.0_WP, 0.0_WP],mesh_loc=[cfg%xm(i),cfg%ym(j),cfg%zm(k)])
+                  epsp(i,j,k)=epsp(i,j,k)+bag_at_loc(bag_loc=[+0.5_WP, 0.0_WP, 0.0_WP],mesh_loc=[cfg%xm(i),cfg%ym(j),cfg%zm(k)])
+                  epsp(i,j,k)=epsp(i,j,k)+bag_at_loc(bag_loc=[-0.5_WP, 0.0_WP, 0.0_WP],mesh_loc=[cfg%xm(i),cfg%ym(j),cfg%zm(k)])
+                  epsp(i,j,k)=epsp(i,j,k)+bag_at_loc(bag_loc=[ 0.0_WP,+0.2_WP, 0.0_WP],mesh_loc=[cfg%xm(i),cfg%ym(j),cfg%zm(k)])
+                  epsp(i,j,k)=epsp(i,j,k)+bag_at_loc(bag_loc=[ 0.0_WP,-0.2_WP, 0.0_WP],mesh_loc=[cfg%xm(i),cfg%ym(j),cfg%zm(k)])
+                  epsp(i,j,k)=epsp(i,j,k)+bag_at_loc(bag_loc=[ 0.0_WP, 0.0_WP,-0.3_WP],mesh_loc=[cfg%xm(i),cfg%ym(j),cfg%zm(k)])
+                  epsp(i,j,k)=epsp(i,j,k)+bag_at_loc(bag_loc=[ 0.0_WP, 0.0_WP,+0.3_WP],mesh_loc=[cfg%xm(i),cfg%ym(j),cfg%zm(k)])
+               end do
+            end do
+         end do
+         ! Multiply by expected porosity in the bag
+         epsp=epsp*bporo
+         epsf=1.0_WP-epsp
+         ! Setup the scaled Laplacian operator from incomp metrics: lap(*)=-vol*div(epsf*grad(*))
+         do k=fs%cfg%kmin_,fs%cfg%kmax_
+            do j=fs%cfg%jmin_,fs%cfg%jmax_
+               do i=fs%cfg%imin_,fs%cfg%imax_
+                  ! Set Laplacian
+                  fs%psolv%opr(1,i,j,k)=fs%divp_x(1,i,j,k)*sum(fs%itpr_x(:,i+1,j,k)*epsf(i:i+1,j,k))*fs%divu_x(-1,i+1,j,k)+&
+                  &                     fs%divp_x(0,i,j,k)*sum(fs%itpr_x(:,i  ,j,k)*epsf(i-1:i,j,k))*fs%divu_x( 0,i  ,j,k)+&
+                  &                     fs%divp_y(1,i,j,k)*sum(fs%itpr_y(:,i,j+1,k)*epsf(i,j:j+1,k))*fs%divv_y(-1,i,j+1,k)+&
+                  &                     fs%divp_y(0,i,j,k)*sum(fs%itpr_y(:,i,j  ,k)*epsf(i,j-1:j,k))*fs%divv_y( 0,i,j  ,k)+&
+                  &                     fs%divp_z(1,i,j,k)*sum(fs%itpr_z(:,i,j,k+1)*epsf(i,j,k:k+1))*fs%divw_z(-1,i,j,k+1)+&
+                  &                     fs%divp_z(0,i,j,k)*sum(fs%itpr_z(:,i,j,k  )*epsf(i,j,k-1:k))*fs%divw_z( 0,i,j,k  )
+                  fs%psolv%opr(2,i,j,k)=fs%divp_x(1,i,j,k)*sum(fs%itpr_x(:,i+1,j,k)*epsf(i:i+1,j,k))*fs%divu_x( 0,i+1,j,k)
+                  fs%psolv%opr(3,i,j,k)=fs%divp_x(0,i,j,k)*sum(fs%itpr_x(:,i  ,j,k)*epsf(i-1:i,j,k))*fs%divu_x(-1,i  ,j,k)
+                  fs%psolv%opr(4,i,j,k)=fs%divp_y(1,i,j,k)*sum(fs%itpr_y(:,i,j+1,k)*epsf(i,j:j+1,k))*fs%divv_y( 0,i,j+1,k)
+                  fs%psolv%opr(5,i,j,k)=fs%divp_y(0,i,j,k)*sum(fs%itpr_y(:,i,j  ,k)*epsf(i,j-1:j,k))*fs%divv_y(-1,i,j  ,k)
+                  fs%psolv%opr(6,i,j,k)=fs%divp_z(1,i,j,k)*sum(fs%itpr_z(:,i,j,k+1)*epsf(i,j,k:k+1))*fs%divw_z( 0,i,j,k+1)
+                  fs%psolv%opr(7,i,j,k)=fs%divp_z(0,i,j,k)*sum(fs%itpr_z(:,i,j,k  )*epsf(i,j,k-1:k))*fs%divw_z(-1,i,j,k  )
+                  ! Scale it by the cell volume
+                  fs%psolv%opr(:,i,j,k)=-fs%psolv%opr(:,i,j,k)*fs%cfg%vol(i,j,k)
+               end do
+            end do
+         end do
+         call fs%psolv%update_solver()
+         ! Also allocate the temperature arrays
+         allocate(Tprod(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+         allocate(Tprodold(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+      end block prepare_eps
+      
+      
       ! Create a scalar solver
       create_scalar: block
          use ils_class,      only: gmres,pfmg
@@ -353,14 +438,18 @@ end subroutine get_cond
             call df%pullvar(name='SC'      ,var=sc%SC    )
             call df%pullvar(name='rho'     ,var=sc%rho   )
             call df%pullvar(name='rhoold'  ,var=sc%rhoold)
+            call sc%cfg%integrate(sc%rho,integral=fluid_mass)
+            call df%pullvar(name='Tprod'   ,var=Tprod    )
          else
             ! Uniform initial temperature and density
             sc%SC=Tinit
+            Tprod=Tinit
             sc%rho=1.0_WP; where (sc%cfg%VF.gt.0.0_WP) sc%rho=pressure*Wmlr/(Rcst*Tinit)
+            call sc%cfg%integrate(sc%rho,integral=fluid_mass)
+            ! Account for porosity here
+            sc%rho=sc%rho*epsf
             sc%rhoold=sc%rho
          end if
-         ! Compute initial mass in vessel
-         call sc%cfg%integrate(sc%rho,integral=fluid_mass)
          ! Apply Dirichlet at the tube
          call sc%get_bcond( 'left inflow',mybc)
          do n=1,mybc%itr%no_
@@ -385,8 +474,8 @@ end subroutine get_cond
          call sc%rho_multiply()
          ! Apply all other boundary conditions
          call sc%apply_bcond(time%t,time%dt)
-         ! Compute fluid volume
-         resU=1.0_WP; call sc%cfg%integrate(resU,integral=Vtotal)
+         ! Compute fluid volume - this is the integral of epsf
+         call sc%cfg%integrate(epsf,integral=Vtotal)
          ! Recompute pressure
          call sc%cfg%integrate(sc%rhoSC,integral=pressure); pressure=pressure*Rcst/(Wmlr*Vtotal)
       end block initialize_scalar
@@ -454,6 +543,8 @@ end subroutine get_cond
       
       ! Create an LES model
       create_sgs: block
+         allocate(viscmol(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+         allocate(diffmol(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
          sgs=sgsmodel(cfg=fs%cfg,umask=fs%umask,vmask=fs%vmask,wmask=fs%wmask)
       end block create_sgs
       
@@ -472,6 +563,8 @@ end subroutine get_cond
          call ens_out%add_scalar('density',sc%rho)
          call ens_out%add_scalar('temperature',sc%SC)
          call ens_out%add_scalar('visc',fs%visc)
+         call ens_out%add_scalar('epsp',epsp)
+         call ens_out%add_scalar('Tprod',Tprod)
          ! Output to ensight
          if (ens_evt%occurs()) call ens_out%write_data(time%t)
       end block create_ensight
@@ -484,7 +577,7 @@ end subroutine get_cond
          call fs%get_max()
          call sc%get_max()
          call sc%get_int()
-         Tavg=sc%rhoSCint/fluid_mass
+         Tavg=sc%rhoSCint/sc%rhoint
          ! Create simulation monitor
          mfile=monitor(fs%cfg%amRoot,'simulation')
          call mfile%add_column(time%n,'Timestep number')
@@ -547,6 +640,7 @@ end subroutine get_cond
          fluid_mass_old=fluid_mass
          pressure_old=pressure
          Twallold=Twall
+         Tprodold=Tprod
          
          ! Remember old scalar
          sc%rhoold=sc%rho
@@ -562,8 +656,8 @@ end subroutine get_cond
          ! This is where time-dpt Dirichlet would be enforced
          
          ! ============ UPDATE PROPERTIES ====================
-         call get_visc()
-         call get_cond()
+         call get_visc(); viscmol=fs%visc
+         call get_cond(); diffmol=sc%diff
          
          ! Turbulence modeling
          call fs%get_strainrate(Ui=Ui,Vi=Vi,Wi=Wi,SR=SR)
@@ -595,6 +689,21 @@ end subroutine get_cond
          ! ====================================================
          
          
+         ! Account for heat transfer to product
+         product_heating: block
+            integer :: i,j,k
+            do k=fs%cfg%kmin_,fs%cfg%kmax_
+               do j=fs%cfg%jmin_,fs%cfg%jmax_
+                  do i=fs%cfg%imin_,fs%cfg%imax_
+                     if (sc%cfg%VF(i,j,k).gt.0.0_WP) Tprod(i,j,k)=Tprod(i,j,k)+Cp*diffmol(i,j,k)*epsp(i,j,k)*(sc%SC(i,j,k)-Tprodold(i,j,k))/(rprod*bporo*bporo*Tperm*Cprod)
+                  end do
+               end do
+            end do
+            call cfg%sync(Tprod)
+         end block product_heating
+         
+         
+         
          ! Perform sub-iterations
          do while (time%it.le.time%itmax)
             
@@ -608,11 +717,41 @@ end subroutine get_cond
             fs%V=0.5_WP*(fs%V+fs%Vold); fs%rhoV=0.5_WP*(fs%rhoV+fs%rhoVold)
             fs%W=0.5_WP*(fs%W+fs%Wold); fs%rhoW=0.5_WP*(fs%rhoW+fs%rhoWold)
             
-            ! Explicit calculation of drho*u/dt from NS
+            ! Explicit calculation of drho*u/dt from NS - without grad(p) for now
+            resSC=fs%P; fs%P=0.0_WP
             call fs%get_dmomdt(resU,resV,resW)
+            fs%P=resSC
+            
+            ! Add epsf*grad(P)
+            modified_pgrad_pred: block
+               integer :: i,j,k
+               do k=fs%cfg%kmin_,fs%cfg%kmax_
+                  do j=fs%cfg%jmin_,fs%cfg%jmax_
+                     do i=fs%cfg%imin_,fs%cfg%imax_
+                        resU(i,j,k)=resU(i,j,k)-sum(fs%divu_x(:,i,j,k)*fs%P(i-1:i,j,k))*sum(fs%itpr_x(:,i,j,k)*epsf(i-1:i,j,k))
+                        resV(i,j,k)=resV(i,j,k)-sum(fs%divv_y(:,i,j,k)*fs%P(i,j-1:j,k))*sum(fs%itpr_y(:,i,j,k)*epsf(i,j-1:j,k))
+                        resW(i,j,k)=resW(i,j,k)-sum(fs%divw_z(:,i,j,k)*fs%P(i,j,k-1:k))*sum(fs%itpr_z(:,i,j,k)*epsf(i,j,k-1:k))
+                     end do
+                  end do
+               end do
+            end block modified_pgrad_pred
             
             ! Add momentum source terms
             call fs%addsrc_gravity(resU,resV,resW)
+            
+            ! Also add permeability
+            permeability: block
+               integer :: i,j,k
+               do k=fs%cfg%kmin_,fs%cfg%kmax_
+                  do j=fs%cfg%jmin_,fs%cfg%jmax_
+                     do i=fs%cfg%imin_,fs%cfg%imax_
+                        resU(i,j,k)=resU(i,j,k)-sum(fs%itpr_x(:,i,j,k)*epsf(i-1:i,j,k)*viscmol(i-1:i,j,k)*epsp(i-1:i,j,k))*fs%U(i,j,k)/(bporo*bperm)
+                        resV(i,j,k)=resV(i,j,k)-sum(fs%itpr_y(:,i,j,k)*epsf(i,j-1:j,k)*viscmol(i,j-1:j,k)*epsp(i,j-1:j,k))*fs%V(i,j,k)/(bporo*bperm)
+                        resW(i,j,k)=resW(i,j,k)-sum(fs%itpr_z(:,i,j,k)*epsf(i,j,k-1:k)*viscmol(i,j,k-1:k)*epsp(i,j,k-1:k))*fs%W(i,j,k)/(bporo*bperm)
+                     end do
+                  end do
+               end do
+            end block permeability
             
             ! Assemble explicit residual
             resU=time%dtmid*resU-(2.0_WP*fs%rhoU-2.0_WP*fs%rhoUold)
@@ -659,12 +798,23 @@ end subroutine get_cond
             call fs%psolv%solve()
             call fs%shift_p(fs%psolv%sol)
             
-            ! Correct momentum and rebuild velocity
-            call fs%get_pgrad(fs%psolv%sol,resU,resV,resW)
+            ! Correct momentum and rebuild velocity - pressure gradient is modified here due to porosity
             fs%P=fs%P+fs%psolv%sol
-            fs%rhoU=fs%rhoU-time%dtmid*resU
-            fs%rhoV=fs%rhoV-time%dtmid*resV
-            fs%rhoW=fs%rhoW-time%dtmid*resW
+            modified_pgrad_corr: block
+               integer :: i,j,k
+               do k=fs%cfg%kmin_,fs%cfg%kmax_
+                  do j=fs%cfg%jmin_,fs%cfg%jmax_
+                     do i=fs%cfg%imin_,fs%cfg%imax_
+                        fs%rhoU(i,j,k)=fs%rhoU(i,j,k)-time%dtmid*sum(fs%divu_x(:,i,j,k)*fs%psolv%sol(i-1:i,j,k))*sum(fs%itpr_x(:,i,j,k)*epsf(i-1:i,j,k))
+                        fs%rhoV(i,j,k)=fs%rhoV(i,j,k)-time%dtmid*sum(fs%divv_y(:,i,j,k)*fs%psolv%sol(i,j-1:j,k))*sum(fs%itpr_y(:,i,j,k)*epsf(i,j-1:j,k))
+                        fs%rhoW(i,j,k)=fs%rhoW(i,j,k)-time%dtmid*sum(fs%divw_z(:,i,j,k)*fs%psolv%sol(i,j,k-1:k))*sum(fs%itpr_z(:,i,j,k)*epsf(i,j,k-1:k))
+                     end do
+                  end do
+               end do
+               call fs%cfg%sync(fs%rhoU)
+               call fs%cfg%sync(fs%rhoV)
+               call fs%cfg%sync(fs%rhoW)
+            end block modified_pgrad_corr
             call fs%rho_divide
             
             ! Update div for monitoring
@@ -681,7 +831,19 @@ end subroutine get_cond
             call sc%get_drhoSCdt(resSC,fs%rhoU,fs%rhoV,fs%rhoW)
             
             ! Add pressure term
-            where (sc%cfg%VF.gt.0.0_WP) resSC=resSC+1.0_WP/Cp*(pressure-pressure_old)/time%dt
+            where (sc%cfg%VF.gt.0.0_WP) resSC=resSC+epsf/Cp*(pressure-pressure_old)/time%dt
+            
+            ! Account for heat transfer to product
+            heat_to_product: block
+               integer :: i,j,k
+               do k=fs%cfg%kmin_,fs%cfg%kmax_
+                  do j=fs%cfg%jmin_,fs%cfg%jmax_
+                     do i=fs%cfg%imin_,fs%cfg%imax_
+                        if (sc%cfg%VF(i,j,k).gt.0.0_WP) resSC(i,j,k)=resSC(i,j,k)-diffmol(i,j,k)*epsp(i,j,k)*(sc%SC(i,j,k)-Tprod(i,j,k))/(bporo*Tperm)
+                     end do
+                  end do
+               end do
+            end block heat_to_product
             
             ! Temporarily redefine density to include sled/basket assembly
             sc%rho   =sc%rho   +Msteel*Cs/(Vtotal*Cp)
@@ -726,7 +888,7 @@ end subroutine get_cond
          call fs%get_max()
          call sc%get_max()
          call sc%get_int()
-         Tavg=sc%rhoSCint/fluid_mass
+         Tavg=sc%rhoSCint/sc%rhoint
          call mfile%write()
          call cflfile%write()
          call consfile%write()
@@ -753,6 +915,7 @@ end subroutine get_cond
                call df%pushvar(name='rho'     ,var=sc%rho   )
                call df%pushvar(name='rhoold'  ,var=sc%rhoold)
                call df%pushvar(name='SC'      ,var=sc%SC    )
+               call df%pushvar(name='Tprod'   ,var=Tprod    )
                call df%write(fdata=trim(adjustl(dirname))//trim(adjustl(timestamp))//'/'//'data')
             end block save_restart
          end if
