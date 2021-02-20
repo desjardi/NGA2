@@ -58,7 +58,7 @@ module simulation
    
    !> Info relevant to basket modeling
    real(WP), parameter :: bporo=0.4_WP      ! Assuming 40% porosity in the bag - depends on shape and arrangement of product
-   real(WP), parameter :: bperm=1.0e-6_WP   ! Permeability - should be low, needs to be optimized
+   real(WP), parameter :: bperm=1.0e-7_WP   ! Permeability - should be low, needs to be optimized
    real(WP), parameter :: Tperm=1.0e-6_WP   ! Thermal permeability - should be low, needs to be optimized
    real(WP), dimension(3), parameter :: bsize=[0.40_WP,0.05_WP,0.20_WP]  ! Dimensions of a product bag
    real(WP) :: be                                                        ! Smearing coeff for a product bag
