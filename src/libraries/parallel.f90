@@ -84,7 +84,7 @@ contains
       amRoot=(rank.eq.0)
       
       ! Also initialize I/O info
-      info_mpiio=MPI_INFO_NULL
+      call MPI_INFO_CREATE(info_mpiio,ierr)
       
    end subroutine parallel_init
    
