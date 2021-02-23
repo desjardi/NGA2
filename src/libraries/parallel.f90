@@ -85,6 +85,7 @@ contains
       
       ! Also initialize I/O info
       call MPI_INFO_CREATE(info_mpiio,ierr)
+      call MPI_INFO_SET(info_mpiio,'romio_ds_read','enable',ierr)
       
    end subroutine parallel_init
    
