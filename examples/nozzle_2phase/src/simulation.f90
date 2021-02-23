@@ -248,7 +248,7 @@ contains
          call param_read('Gas flow rate (SLPM)',Q_SLPM)
          Q_SI=Q_SLPM*SLPM2SI
          Aport=pi/4.0_WP*dgi0**2-pi/4.0_WP*dlo0**2
-         Uports=Q_SI/(4.0_WP*Aport)
+         Uports=Q_SI/Aport
          call fs%get_bcond('gas_inj',mybc)
          do n=1,mybc%itr%no_
             i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
@@ -257,7 +257,7 @@ contains
          call param_read('Liquid flow rate (SLPM)',Q_SLPM)
          Q_SI=Q_SLPM*SLPM2SI
          Aport=pi/4.0_WP*dli0**2
-         Uports=Q_SI/(4.0_WP*Aport)
+         Uports=Q_SI/Aport
          call fs%get_bcond('liq_inj',mybc)
          do n=1,mybc%itr%no_
             i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
