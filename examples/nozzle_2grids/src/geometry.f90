@@ -15,11 +15,11 @@ module geometry
    real(WP), parameter :: nozzle_end   =-0.09130000_WP     !< back end of the nozzle plenum
    real(WP), parameter :: xinj_dist    =-0.06623329454_WP  !< x location of the gas port axis
    real(WP), parameter :: inj_norm_diam=+0.016002_WP       !< diameter of the gas injection ports
-   real(WP) :: dli0  !< Liquid pipe wall inner diameter at xmin, if xmin>nozzle_end
-   real(WP) :: dlo0  !< Liquid pipe wall outer diameter at xmin, if xmin>nozzle_end
-   real(WP) :: dgi0  !< Gas annular wall pipe inner diameter at xmin, if xmin>nozzle_end
-   real(WP) :: dgo0  !< Gas annular wall pipe outer diameter at xmin, if xmin>nozzle_end
-   public :: xinj_dist,inj_norm_diam,dli0,dlo0,dgi0,dgo0 ! These will be needed by the bconds later
+   real(WP) :: rli0  !< Liquid pipe wall inner diameter at xmin, if xmin>nozzle_end
+   real(WP) :: rlo0  !< Liquid pipe wall outer diameter at xmin, if xmin>nozzle_end
+   real(WP) :: rgi0  !< Gas annular wall pipe inner diameter at xmin, if xmin>nozzle_end
+   real(WP) :: rgo0  !< Gas annular wall pipe outer diameter at xmin, if xmin>nozzle_end
+   public :: xinj_dist,inj_norm_diam,rli0,rlo0,rgi0,rgo0 ! These will be needed by the bconds later
    
 contains
    
@@ -82,10 +82,10 @@ contains
          integer :: ierr,iunit,i
          ! Only the global root process reads the CAD files
          if (amRoot) then
-            open(newunit=iunit,file='cad/walldli.txt',form='formatted',status='old',access='stream',iostat=ierr); do i=1,   2; read(iunit,'(2F12.8)') x_swh1(i),swh1(i); end do; close(iunit)
-            open(newunit=iunit,file='cad/walldlo.txt',form='formatted',status='old',access='stream',iostat=ierr); do i=1, 889; read(iunit,'(2F12.8)') x_swh2(i),swh2(i); end do; close(iunit)
-            open(newunit=iunit,file='cad/walldgi.txt',form='formatted',status='old',access='stream',iostat=ierr); do i=1,3302; read(iunit,'(2F12.8)') x_swh3(i),swh3(i); end do; close(iunit)
-            open(newunit=iunit,file='cad/walldgo.txt',form='formatted',status='old',access='stream',iostat=ierr); do i=1,5053; read(iunit,'(2F12.8)') x_swh4(i),swh4(i); end do; close(iunit)
+            open(newunit=iunit,file='cad/wallrli.txt',form='formatted',status='old',access='stream',iostat=ierr); do i=1,   2; read(iunit,'(2F12.8)') x_swh1(i),swh1(i); end do; close(iunit)
+            open(newunit=iunit,file='cad/wallrlo.txt',form='formatted',status='old',access='stream',iostat=ierr); do i=1, 889; read(iunit,'(2F12.8)') x_swh2(i),swh2(i); end do; close(iunit)
+            open(newunit=iunit,file='cad/wallrgi.txt',form='formatted',status='old',access='stream',iostat=ierr); do i=1,3302; read(iunit,'(2F12.8)') x_swh3(i),swh3(i); end do; close(iunit)
+            open(newunit=iunit,file='cad/wallrgo.txt',form='formatted',status='old',access='stream',iostat=ierr); do i=1,5053; read(iunit,'(2F12.8)') x_swh4(i),swh4(i); end do; close(iunit)
          end if
          ! Then the root broadcasts
          call MPI_BCAST(x_swh1,   2,MPI_REAL_WP,0,comm,ierr); call MPI_BCAST(swh1,   2,MPI_REAL_WP,0,comm,ierr)
@@ -276,18 +276,18 @@ contains
          if (cfg2%xm(cfg2%imin).gt.nozzle_end) then
             xloc=cfg2%xm(cfg2%imin)
             call bisection(xloc,k,x_swh1,   2)
-            dli0=(xloc-x_swh1(k))/(x_swh1(k+1)-x_swh1(k))*swh1(k+1)+(x_swh1(k+1)-xloc)/(x_swh1(k+1)-x_swh1(k))*swh1(k)
+            rli0=(xloc-x_swh1(k))/(x_swh1(k+1)-x_swh1(k))*swh1(k+1)+(x_swh1(k+1)-xloc)/(x_swh1(k+1)-x_swh1(k))*swh1(k)
             call bisection(xloc,k,x_swh2, 890)
-            dlo0=(xloc-x_swh2(k))/(x_swh2(k+1)-x_swh2(k))*swh2(k+1)+(x_swh2(k+1)-xloc)/(x_swh2(k+1)-x_swh2(k))*swh2(k)
+            rlo0=(xloc-x_swh2(k))/(x_swh2(k+1)-x_swh2(k))*swh2(k+1)+(x_swh2(k+1)-xloc)/(x_swh2(k+1)-x_swh2(k))*swh2(k)
             call bisection(xloc,k,x_swh3,3302)
-            dgi0=(xloc-x_swh3(k))/(x_swh3(k+1)-x_swh3(k))*swh3(k+1)+(x_swh3(k+1)-xloc)/(x_swh3(k+1)-x_swh3(k))*swh3(k)
+            rgi0=(xloc-x_swh3(k))/(x_swh3(k+1)-x_swh3(k))*swh3(k+1)+(x_swh3(k+1)-xloc)/(x_swh3(k+1)-x_swh3(k))*swh3(k)
             call bisection(xloc,k,x_swh4,5053)
-            dgo0=(xloc-x_swh4(k))/(x_swh4(k+1)-x_swh4(k))*swh4(k+1)+(x_swh4(k+1)-xloc)/(x_swh4(k+1)-x_swh4(k))*swh4(k)
+            rgo0=(xloc-x_swh4(k))/(x_swh4(k+1)-x_swh4(k))*swh4(k+1)+(x_swh4(k+1)-xloc)/(x_swh4(k+1)-x_swh4(k))*swh4(k)
          else
-            dli0=0.0_WP
-            dlo0=0.0_WP
-            dgi0=0.0_WP
-            dgo0=0.0_WP
+            rli0=0.0_WP
+            rlo0=0.0_WP
+            rgi0=0.0_WP
+            rgo0=0.0_WP
          end if
          
          ! Write VF array - includes the overlap here

@@ -3,7 +3,7 @@ module simulation
    use string,            only: str_medium
    use precision,         only: WP
    use geometry,          only: cfg1,cfg2
-   use geometry,          only: xinj_dist,inj_norm_diam,dli0,dlo0,dgi0
+   use geometry,          only: xinj_dist,inj_norm_diam,rli0,rlo0,rgi0
    use incomp_class,      only: incomp
    use tpns_class,        only: tpns
    use vfs_class,         only: vfs
@@ -147,7 +147,7 @@ contains
       real(WP) :: rad
       isIn=.false.
       rad=sqrt(pg%ym(j)**2+pg%zm(k)**2)
-      if (rad.lt.dli0.and.i.eq.pg%imin) isIn=.true.
+      if (rad.lt.rli0.and.i.eq.pg%imin) isIn=.true.
    end function liq_inj
    
    
@@ -160,7 +160,7 @@ contains
       real(WP) :: rad
       isIn=.false.
       rad=sqrt(pg%ym(j)**2+pg%zm(k)**2)
-      if (rad.ge.dlo0.and.rad.lt.dgi0.and.i.eq.pg%imin) isIn=.true.
+      if (rad.ge.rlo0.and.rad.lt.rgi0.and.i.eq.pg%imin) isIn=.true.
    end function gas_inj
    
    
@@ -310,7 +310,7 @@ contains
             do j=vf2%cfg%jmino_,vf2%cfg%jmaxo_
                do i=vf2%cfg%imino_,vf2%cfg%imaxo_
                   rad=sqrt(vf2%cfg%ym(j)**2+vf2%cfg%zm(k)**2)
-                  if (vf2%cfg%xm(i).lt.xloc.and.rad.le.dli0) then
+                  if (vf2%cfg%xm(i).lt.xloc.and.rad.le.rli0) then
                      vf2%VF(i,j,k)=1.0_WP
                   else
                      vf2%VF(i,j,k)=0.0_WP
@@ -409,7 +409,7 @@ contains
          ! Apply Dirichlet at liquid injector port
          call param_read('Liquid flow rate (SLPM)',Q_SLPM)
          Q_SI=Q_SLPM*SLPM2SI
-         Aport=pi/4.0_WP*dli0**2
+         Aport=pi*rli0**2
          Uports=Q_SI/Aport
          call fs2%get_bcond('liq_inj',mybc)
          do n=1,mybc%itr%no_
