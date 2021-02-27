@@ -25,7 +25,7 @@ module vfs_class
    integer, parameter, public :: lvira=1             !< LVIRA scheme
    !integer, parameter, public :: elvira=2            !< ELVIRA scheme
    !integer, parameter, public :: mof=3               !< MOF scheme
-   !integer, parameter, public :: r2p=4               !< R2P scheme
+   integer, parameter, public :: r2p=4               !< R2P scheme
    !integer, parameter, public :: swartz=5            !< Swartz scheme
    
    ! IRL cutting moment calculation method
@@ -145,6 +145,7 @@ module vfs_class
       procedure :: advect_interface                       !< Advance IRL surface to next step
       procedure :: build_interface                        !< Reconstruct IRL interface from VF field
       procedure :: build_lvira                            !< LVIRA reconstruction of the interface from VF field
+      procedure :: build_r2p                              !< R2P reconstruction of the interface from VF field
       procedure :: set_full_bcond                         !< Full liq/gas plane-setting for boundary cells - this is stair-stepped
       procedure :: polygonalize_interface                 !< Build a discontinuous polygonal representation of the IRL interface
       procedure :: distance_from_polygon                  !< Build a signed distance field from the polygonalized interface
@@ -1021,6 +1022,7 @@ contains
       ! Reconstruct interface - will need to support various methods
       select case (this%reconstruction_method)
       case (lvira); call this%build_lvira()
+      case (r2p)  ; call this%build_r2p()
       case default; call die('[vfs build interface] Unknown interface reconstruction scheme')
       end select
    end subroutine build_interface
@@ -1105,6 +1107,101 @@ contains
       call this%sync_interface()
       
    end subroutine build_lvira
+   
+   
+   !> R2P reconstruction of a planar interface in mixed cells
+   subroutine build_r2p(this)
+      use mathtools, only: normalize
+      implicit none
+      class(vfs), intent(inout) :: this
+      integer(IRL_SignedIndex_t) :: i,j,k
+      integer :: ind,ii,jj,kk
+      type(R2PNeigh_RectCub_type) :: neighborhood
+      type(RectCub_type), dimension(0:26) :: neighborhood_cells
+      type(SepVM_type), dimension(0:26) :: separated_volume_moments
+      type(VMAN_type) :: volume_moments_and_normal
+      real(WP) :: surface_area
+      real(IRL_double), dimension(0:26) :: liquid_volume_fraction
+      real(IRL_double), dimension(3) :: initial_norm
+      real(IRL_double) :: initial_dist
+      
+      ! Get storage for voluem moments and normal
+      call new(volume_moments_and_normal)
+      
+      ! Give ourselves an R2P neighborhood of 27 cells along with separated volume moments
+      call new(neighborhood)
+      do i=0,26
+         call new(neighborhood_cells(i))
+         call new(separated_volume_moments(i))
+      end do
+      
+      ! Prepare linking of our neighborhood
+      do i=0,26
+         call addMember(neighborhood,neighborhood_cells(i),separated_volume_moments(i))
+      end do
+      call setCenterOfStencil(neighborhood,13)
+      
+      ! Traverse domain and reconstruct interface
+      do k=this%cfg%kmin_,this%cfg%kmax_
+         do j=this%cfg%jmin_,this%cfg%jmax_
+            do i=this%cfg%imin_,this%cfg%imax_
+               
+               ! Skip wall/bcond cells - bconds need to be provided elsewhere directly!
+               if (this%mask(i,j,k).ne.0) cycle
+               
+               ! Handle full cells differently
+               if (this%VF(i,j,k).lt.VFlo.or.this%VF(i,j,k).gt.VFhi) then
+                  call setNumberOfPlanes(this%liquid_gas_interface(i,j,k),1)
+                  call setPlane(this%liquid_gas_interface(i,j,k),0,[0.0_WP,0.0_WP,0.0_WP],sign(1.0_WP,this%VF(i,j,k)-0.5_WP))
+                  cycle
+               end if
+               
+               ! Prepare R2P neighborhood
+               ind=0
+               do kk=k-1,k+1
+                  do jj=j-1,j+1
+                     do ii=i-1,i+1
+                        call construct_2pt(neighborhood_cells(ind),[this%cfg%x(ii),this%cfg%y(jj),this%cfg%z(kk)],[this%cfg%x(ii+1),this%cfg%y(jj+1),this%cfg%z(kk+1)])
+                        call construct(separated_volume_moments(ind),[this%VF(ii,jj,kk)*this%cfg%vol(ii,jj,kk),this%Lbary(:,ii,jj,kk),(1.0_WP-this%VF(ii,jj,kk))*this%cfg%vol(ii,jj,kk),this%Gbary(:,ii,jj,kk)])
+                        ind=ind+1
+                     end do
+                  end do
+               end do
+               surface_area=0.0_WP
+               do ind=0,getSize(this%triangle_moments_storage(i,j,k))-1
+                  call getMoments(this%triangle_moments_storage(i,j,k),ind,volume_moments_and_normal)
+                  surface_area=surface_area+getVolume(volume_moments_and_normal)
+               end do
+               call setSurfaceArea(neighborhood,surface_area)
+               
+               ! Made it this far, we need a reconstruction - this builds the initial guess
+               if (getSize(this%triangle_moments_storage(i,j,k)).gt.0) then
+                  call reconstructAdvectedNormals(this%triangle_moments_storage(i,j,k),neighborhood,0.95_WP,this%liquid_gas_interface(i,j,k))
+                  if (getNumberOfPlanes(this%liquid_gas_interface(i,j,k)).eq.1) then
+                     call setNumberOfPlanes(this%liquid_gas_interface(i,j,k),1)
+                     initial_norm=normalize(this%Gbary(:,i,j,k)-this%Lbary(:,i,j,k))
+                     initial_dist=dot_product(initial_norm,[this%cfg%xm(i),this%cfg%ym(j),this%cfg%zm(k)])
+                     call setPlane(this%liquid_gas_interface(i,j,k),0,initial_norm,initial_dist)
+                     call matchVolumeFraction(neighborhood_cells(13),this%VF(i,j,k),this%liquid_gas_interface(i,j,k))
+                  end if
+               else
+                  ! No interface was advected in our cell, use MoF
+                  call reconstructMOF3D(neighborhood_cells(13),separated_volume_moments(13),this%liquid_gas_interface(i,j,k))
+                  ! Surface area not set cause no advected moments, set for current MOF reconstruction
+                  call setSurfaceArea(neighborhood,getSA(neighborhood_cells(13),this%liquid_gas_interface(i,j,k)))
+               end if
+               
+               ! Perform R2P reconstruction
+               call reconstructR2P3D(neighborhood,this%liquid_gas_interface(i,j,k))
+               
+            end do
+         end do
+      end do
+      
+      ! Synchronize across boundaries
+      call this%sync_interface()
+      
+   end subroutine build_r2p
    
    
    !> Set all domain boundaries to full liquid/gas based on VOF value
