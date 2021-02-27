@@ -1,26 +1,25 @@
 # Parallelization
-Partition :	1 1 4
+Partition :	4 1 1
 
 # Mesh definition
 Lx :	1e-3
 Ly :	1e-3
-Lz :	1e-3
+Lz :	1e-5
 nx :	100
 ny :	100
-nz :	100
+nz :	1
 
 # Droplet 1 definiton
 Droplet 1 diameter : 335.2e-6
-Droplet 1 position : -17.0e-6 0 0
+Droplet 1 position : -184.6e-6 -159.22e-6 0
 Droplet 1 velocity : +0.5 0 0
 
 # Droplet 2 definiton
 Droplet 2 diameter : 335.2e-6
-Droplet 2 position : +17.0e-6 0 0
+Droplet 2 position : +184.6e-6 +159.2e-6 0
 Droplet 2 velocity : -0.5 0 0
 
 # Fluid properties
-Gravity :                     0 0 0
 Liquid dynamic viscosity :    2.128e-3
 Gas dynamic viscosity :       1.827e-5
 Liquid density :              762.0
@@ -28,7 +27,7 @@ Gas density :                 1.225
 Surface tension coefficient : 0.0265
 
 # Time integration
-Max timestep size : 5e-6
+Max timestep size : 1e-6
 Max cfl number :    0.9
 Max time :          1e-3
 

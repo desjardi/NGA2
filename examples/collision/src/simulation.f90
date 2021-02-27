@@ -47,7 +47,7 @@ contains
       ! Create droplet 1
       G2=radius2-sqrt(sum((xyz-center2)**2))
       ! Combine
-      G=min(G1,G2)
+      G=max(G1,G2)
    end function levelset_colliding_drops
    
    
