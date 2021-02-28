@@ -1454,16 +1454,16 @@ contains
                end do
             end do
          end do
-      !else
-      !   ! Add a zero-area triangle if this proc doesn't have one
-      !   np=1; nv=3
-      !   call this%surfgrid%set_size(nvert=nv,npoly=np)
-      !   allocate(this%surfgrid%polyConn(this%surfgrid%nVert)) ! Also allocate naive connectivity
-      !   this%surfgrid%xVert(1:3)=this%cfg%x(this%cfg%imin)
-      !   this%surfgrid%yVert(1:3)=this%cfg%y(this%cfg%jmin)
-      !   this%surfgrid%zVert(1:3)=this%cfg%z(this%cfg%kmin)
-      !   this%surfgrid%polySize(1)=3
-      !   this%surfgrid%polyConn(1:3)=[1,2,3]
+      else
+         ! Add a zero-area triangle if this proc doesn't have one
+         np=1; nv=3
+         call this%surfgrid%set_size(nvert=nv,npoly=np)
+         allocate(this%surfgrid%polyConn(this%surfgrid%nVert)) ! Also allocate naive connectivity
+         this%surfgrid%xVert(1:3)=this%cfg%x(this%cfg%imin)
+         this%surfgrid%yVert(1:3)=this%cfg%y(this%cfg%jmin)
+         this%surfgrid%zVert(1:3)=this%cfg%z(this%cfg%kmin)
+         this%surfgrid%polySize(1)=3
+         this%surfgrid%polyConn(1:3)=[1,2,3]
       end if
       
    end subroutine update_surfgrid
@@ -1635,20 +1635,27 @@ contains
    subroutine get_curvature(this)
       implicit none
       class(vfs), intent(inout) :: this
-      integer :: i,j,k
-      real(WP) :: mycurv
+      integer :: i,j,k,n
+      real(WP), dimension(max_interface_planes) :: mycurv,mysurf
       ! Reset curvature
       this%curv=0.0_WP
       ! Traverse interior domain and compute curvature in cells with polygons
       do k=this%cfg%kmin_,this%cfg%kmax_
          do j=this%cfg%jmin_,this%cfg%jmax_
             do i=this%cfg%imin_,this%cfg%imax_
-               ! Skip cells without polygon
-               if (getNumberOfVertices(this%interface_polygon(1,i,j,k)).eq.0) cycle
-               ! Perform LSQ PLIC barycenter fitting
-               call this%paraboloid_fit(i,j,k,mycurv)
-               ! Store clipped curvature
-               this%curv(i,j,k)=max(min(mycurv,1.0_WP/this%cfg%meshsize(i,j,k)),-1.0_WP/this%cfg%meshsize(i,j,k))
+               ! Zero out curvature and surface storage
+               mycurv=0.0_WP; mysurf=0.0_WP
+               ! Get a curvature for each plane
+               do n=1,getNumberOfPlanes(this%liquid_gas_interface(i,j,k))
+                  ! Skip empty polygon
+                  if (getNumberOfVertices(this%interface_polygon(n,i,j,k)).eq.0) cycle
+                  ! Perform LSQ PLIC barycenter fitting
+                  call this%paraboloid_fit(i,j,k,n,mycurv(n))
+                  ! Also store surface area
+                  mysurf(n)=abs(calculateVolume(this%interface_polygon(n,i,j,k)))
+               end do
+               ! Store surface average curvature
+               if (sum(mysurf).gt.0.0_WP) this%curv(i,j,k)=max(min(sum(mysurf*mycurv)/sum(mysurf),1.0_WP/this%cfg%meshsize(i,j,k)),-1.0_WP/this%cfg%meshsize(i,j,k))
             end do
          end do
       end do
@@ -1658,19 +1665,19 @@ contains
    
    
    !> Perform local paraboloid fit of IRL surface
-   subroutine paraboloid_fit(this,i,j,k,mycurv)
+   subroutine paraboloid_fit(this,i,j,k,iplane,mycurv)
       use mathtools, only: normalize,cross_product
       implicit none
       ! In/out variables
       class(vfs), intent(inout) :: this
-      integer,  intent(in)  :: i,j,k
+      integer,  intent(in)  :: i,j,k,iplane
       real(WP), intent(out) :: mycurv
       ! Variables used to process the polygonal surface
       real(WP), dimension(3) :: pref,nref,tref,sref
       real(WP), dimension(3) :: ploc,nloc
       real(WP), dimension(3) :: buf
       real(WP) :: surf,ww
-      integer :: ii,jj,kk,ndata,info
+      integer :: n,ii,jj,kk,ndata,info
       ! Storage for least squares problem
       real(WP), dimension(125,6) :: A=0.0_WP
       real(WP), dimension(125)   :: b=0.0_WP
@@ -1680,10 +1687,10 @@ contains
       real(WP) :: dF_dt,dF_ds,ddF_dtdt,ddF_dsds,ddF_dtds
       
       ! Store polygon centroid - this is our reference point
-      pref=calculateCentroid(this%interface_polygon(1,i,j,k))
+      pref=calculateCentroid(this%interface_polygon(iplane,i,j,k))
       
       ! Create local basis from polygon normal
-      nref=calculateNormal(this%interface_polygon(1,i,j,k))
+      nref=calculateNormal(this%interface_polygon(iplane,i,j,k))
       select case (maxloc(abs(nref),1))
       case (1); tref=normalize([+nref(2),-nref(1),0.0_WP])
       case (2); tref=normalize([0.0_WP,+nref(3),-nref(2)])
@@ -1696,38 +1703,43 @@ contains
          do jj=j-2,j+2
             do ii=i-2,i+2
                
-               ! Skip the cell if there is no polygon in it
-               if (getNumberOfVertices(this%interface_polygon(1,ii,jj,kk)).eq.0) cycle
-               
                ! Skip the cell if it's a true wall
                if (this%mask(ii,jj,kk).eq.1) cycle
                
-               ! Get local polygon normal
-               nloc=calculateNormal(this%interface_polygon(1,ii,jj,kk))
-               
-               ! Store triangle centroid, and surface
-               ploc=    calculateCentroid(this%interface_polygon(1,ii,jj,kk))
-               surf=abs(calculateVolume  (this%interface_polygon(1,ii,jj,kk)))/this%cfg%meshsize(i,j,k)**2
-               
-               ! Transform polygon barycenter to a local coordinate system
-               buf=(ploc-pref)/this%cfg%meshsize(i,j,k); ploc=[dot_product(buf,nref),dot_product(buf,tref),dot_product(buf,sref)]
-               
-               ! Distance from ref point AND projected surface weighting (clipped to ensure positivity)
-               ww=surf*max(dot_product(nloc,nref),0.0_WP)*wgauss(sqrt(dot_product(ploc,ploc)),2.5_WP)
-               
-               ! If we have data, add it to the LS problem
-               if (ww.gt.0.0_WP) then
-                  ! Increment counter
-                  ndata=ndata+1
-                  ! Store least squares matrix and RHS
-                  A(ndata,1)=sqrt(ww)*1.0_WP
-                  A(ndata,2)=sqrt(ww)*ploc(2)
-                  A(ndata,3)=sqrt(ww)*ploc(3)
-                  A(ndata,4)=sqrt(ww)*0.5_WP*ploc(2)*ploc(2)
-                  A(ndata,5)=sqrt(ww)*0.5_WP*ploc(3)*ploc(3)
-                  A(ndata,6)=sqrt(ww)*1.0_WP*ploc(2)*ploc(3)
-                  b(ndata  )=sqrt(ww)*ploc(1)
-               end if
+               ! Check all planes
+               do n=1,getNumberOfPlanes(this%liquid_gas_interface(ii,jj,kk))
+                  
+                  ! Skip empty polygon
+                  if (getNumberOfVertices(this%interface_polygon(n,ii,jj,kk)).eq.0) cycle
+                  
+                  ! Get local polygon normal
+                  nloc=calculateNormal(this%interface_polygon(n,ii,jj,kk))
+                  
+                  ! Store triangle centroid, and surface
+                  ploc=    calculateCentroid(this%interface_polygon(n,ii,jj,kk))
+                  surf=abs(calculateVolume  (this%interface_polygon(n,ii,jj,kk)))/this%cfg%meshsize(i,j,k)**2
+                  
+                  ! Transform polygon barycenter to a local coordinate system
+                  buf=(ploc-pref)/this%cfg%meshsize(i,j,k); ploc=[dot_product(buf,nref),dot_product(buf,tref),dot_product(buf,sref)]
+                  
+                  ! Distance from ref point AND projected surface weighting (clipped to ensure positivity)
+                  ww=surf*max(dot_product(nloc,nref),0.0_WP)*wgauss(sqrt(dot_product(ploc,ploc)),2.5_WP)
+                  
+                  ! If we have data, add it to the LS problem
+                  if (ww.gt.0.0_WP) then
+                     ! Increment counter
+                     ndata=ndata+1
+                     ! Store least squares matrix and RHS
+                     A(ndata,1)=sqrt(ww)*1.0_WP
+                     A(ndata,2)=sqrt(ww)*ploc(2)
+                     A(ndata,3)=sqrt(ww)*ploc(3)
+                     A(ndata,4)=sqrt(ww)*0.5_WP*ploc(2)*ploc(2)
+                     A(ndata,5)=sqrt(ww)*0.5_WP*ploc(3)*ploc(3)
+                     A(ndata,6)=sqrt(ww)*1.0_WP*ploc(2)*ploc(3)
+                     b(ndata  )=sqrt(ww)*ploc(1)
+                  end if
+                  
+               end do
                
             end do
          end do
