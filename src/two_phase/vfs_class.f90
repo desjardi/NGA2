@@ -1644,18 +1644,23 @@ contains
          do j=this%cfg%jmin_,this%cfg%jmax_
             do i=this%cfg%imin_,this%cfg%imax_
                ! Zero out curvature and surface storage
-               mycurv=0.0_WP; mysurf=0.0_WP
+               mycurv=0.0_WP
+               mysurf=0.0_WP
                ! Get a curvature for each plane
                do n=1,getNumberOfPlanes(this%liquid_gas_interface(i,j,k))
                   ! Skip empty polygon
                   if (getNumberOfVertices(this%interface_polygon(n,i,j,k)).eq.0) cycle
-                  ! Perform LSQ PLIC barycenter fitting
+                  ! Perform LSQ PLIC barycenter fitting to get curvature
                   call this%paraboloid_fit(i,j,k,n,mycurv(n))
-                  ! Also store surface area
+                  ! Store surface area
                   mysurf(n)=abs(calculateVolume(this%interface_polygon(n,i,j,k)))
                end do
-               ! Store surface average curvature
-               if (sum(mysurf).gt.0.0_WP) this%curv(i,j,k)=max(min(sum(mysurf*mycurv)/sum(mysurf),1.0_WP/this%cfg%meshsize(i,j,k)),-1.0_WP/this%cfg%meshsize(i,j,k))
+               ! Store curvature of largest PLIC - incorrect in R2P cells
+               this%curv(i,j,k)=mycurv(maxloc(mysurf,1))
+               ! Store surface-averaged curvature - reasonable but incorrect with CSF
+               !if (sum(mysurf).gt.0.0_WP) this%curv(i,j,k)=sum(mysurf*mycurv)/sum(mysurf)
+               ! Clip curvature
+               this%curv(i,j,k)=max(min(this%curv(i,j,k),1.0_WP/this%cfg%meshsize(i,j,k)),-1.0_WP/this%cfg%meshsize(i,j,k))
             end do
          end do
       end do
