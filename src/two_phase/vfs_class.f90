@@ -101,6 +101,7 @@ module vfs_class
       
       ! Flotsam removal parameter - turned off by default
       real(WP) :: VFflot=0.0_WP                           !< Threshold VF parameter for flotsam removal (0.0=off)
+      real(WP) :: VFsheet=0.0_WP                          !< Threshold VF parameter for sheet removal (0.0=off)
       
       ! IRL objects
       type(ByteBuffer_type) :: send_byte_buffer
@@ -136,6 +137,7 @@ module vfs_class
       procedure :: update_band                            !< Update the band info given the VF values
       procedure :: sync_interface                         !< Synchronize the IRL objects
       procedure :: remove_flotsams                        !< Remove flotsams manually - not conservative, should be avoided!
+      procedure :: remove_sheets                          !< Remove R2P sheets manually - not conservative, should be avoided!
       procedure :: sync_and_clean_barycenters             !< Synchronize and clean up phasic barycenters
       procedure, private :: sync_side                     !< Synchronize the IRL objects across one side - another I/O helper
       procedure, private :: sync_ByteBuffer               !< Communicate byte packets across one side - another I/O helper
@@ -716,6 +718,9 @@ contains
       ! Perform interface reconstruction from transported moments
       call this%build_interface()
       
+      ! Remove thin sheets if needed
+      call this%remove_sheets()
+      
       ! Create discontinuous polygon mesh from IRL interface
       call this%polygonalize_interface()
       
@@ -740,7 +745,7 @@ contains
       class(vfs), intent(inout) :: this
       integer :: i,j,k,ii,jj,kk
       real(WP) :: FSlo,FShi
-      ! Do not do anything if VFflot<0.0_WP
+      ! Do not do anything if VFflot<=0.0_WP
       if (this%VFflot.le.0.0_WP) return
       ! Build lo and hi values
       FSlo=this%VFflot
@@ -781,6 +786,45 @@ contains
       ! Synchronize VF field
       call this%cfg%sync(this%VF)
    end subroutine remove_flotsams
+   
+   
+   !> Remove thin R2P sheets explicitly - careful, this is not conservative!
+   subroutine remove_sheets(this)
+      implicit none
+      class(vfs), intent(inout) :: this
+      integer :: i,j,k
+      real(WP) :: sheet_lo,sheet_hi
+      ! Do not do anything if VFsheet<=0.0_WP
+      if (this%VFsheet.le.0.0_WP) return
+      ! Build lo and hi values
+      sheet_lo=this%VFsheet
+      sheet_hi=1.0_WP-this%VFsheet
+      ! Loop everywhere and remove sheets
+      do k=this%cfg%kmino_,this%cfg%kmaxo_
+         do j=this%cfg%jmino_,this%cfg%jmaxo_
+            do i=this%cfg%imino_,this%cfg%imaxo_
+               ! Only work on 2-plane or more reconstructions
+               if (getNumberOfPlanes(this%liquid_gas_interface(i,j,k)).gt.1) then
+                  if (this%VF(i,j,k).lt.sheet_lo) then
+                     this%VF(i,j,k)=0.0_WP
+                     this%Lbary(:,i,j,k)=[this%cfg%xm(i),this%cfg%ym(j),this%cfg%zm(k)]
+                     this%Gbary(:,i,j,k)=[this%cfg%xm(i),this%cfg%ym(j),this%cfg%zm(k)]
+                     call setNumberOfPlanes(this%liquid_gas_interface(i,j,k),1)
+                     call setPlane(this%liquid_gas_interface(i,j,k),0,[0.0_WP,0.0_WP,0.0_WP],sign(1.0_WP,this%VF(i,j,k)-0.5_WP))
+                  else if (this%VF(i,j,k).gt.sheet_hi) then
+                     this%VF(i,j,k)=1.0_WP
+                     this%Lbary(:,i,j,k)=[this%cfg%xm(i),this%cfg%ym(j),this%cfg%zm(k)]
+                     this%Gbary(:,i,j,k)=[this%cfg%xm(i),this%cfg%ym(j),this%cfg%zm(k)]
+                     call setNumberOfPlanes(this%liquid_gas_interface(i,j,k),1)
+                     call setPlane(this%liquid_gas_interface(i,j,k),0,[0.0_WP,0.0_WP,0.0_WP],sign(1.0_WP,this%VF(i,j,k)-0.5_WP))
+                  end if
+               end if
+            end do
+         end do
+      end do
+      ! Update the band
+      call this%update_band()
+   end subroutine remove_sheets
    
    
    !> Synchronize and clean up barycenter fields
