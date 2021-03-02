@@ -1637,6 +1637,8 @@ contains
       class(vfs), intent(inout) :: this
       integer :: i,j,k,n
       real(WP), dimension(max_interface_planes) :: mycurv,mysurf
+      real(WP), dimension(max_interface_planes,3) :: mynorm
+      real(WP), dimension(3) :: csn,sn
       ! Reset curvature
       this%curv=0.0_WP
       ! Traverse interior domain and compute curvature in cells with polygons
@@ -1644,21 +1646,36 @@ contains
          do j=this%cfg%jmin_,this%cfg%jmax_
             do i=this%cfg%imin_,this%cfg%imax_
                ! Zero out curvature and surface storage
-               mycurv=0.0_WP
-               mysurf=0.0_WP
+               mycurv=0.0_WP; mysurf=0.0_WP; mynorm=0.0_WP
                ! Get a curvature for each plane
                do n=1,getNumberOfPlanes(this%liquid_gas_interface(i,j,k))
                   ! Skip empty polygon
                   if (getNumberOfVertices(this%interface_polygon(n,i,j,k)).eq.0) cycle
                   ! Perform LSQ PLIC barycenter fitting to get curvature
                   call this%paraboloid_fit(i,j,k,n,mycurv(n))
-                  ! Store surface area
-                  mysurf(n)=abs(calculateVolume(this%interface_polygon(n,i,j,k)))
+                  ! Also store surface and normal
+                  mysurf(n)  =abs(calculateVolume(this%interface_polygon(n,i,j,k)))
+                  mynorm(n,:)=    calculateNormal(this%interface_polygon(n,i,j,k))
                end do
-               ! Store curvature of largest PLIC - incorrect in R2P cells
-               this%curv(i,j,k)=mycurv(maxloc(mysurf,1))
-               ! Store surface-averaged curvature - reasonable but incorrect with CSF
-               !if (sum(mysurf).gt.0.0_WP) this%curv(i,j,k)=sum(mysurf*mycurv)/sum(mysurf)
+               ! Oriented-surface-average curvature
+               !csn=0.0_WP; sn=0.0_WP
+               !do n=1,getNumberOfPlanes(this%liquid_gas_interface(i,j,k))
+               !   csn=csn+mysurf(n)*mynorm(n,:)*mycurv(n)
+               !   sn = sn+mysurf(n)*mynorm(n,:)
+               !end do
+               !if (dot_product(sn,sn).gt.10.0_WP*tiny(1.0_WP)) this%curv(i,j,k)=dot_product(csn,sn)/dot_product(sn,sn)
+               ! Surface-averaged curvature
+               if (sum(mysurf).gt.0.0_WP) this%curv(i,j,k)=sum(mysurf*mycurv)/sum(mysurf)
+               ! Curvature of largest surface
+               !if (mysurf(maxloc(mysurf,1)).gt.0.0_WP) this%curv(i,j,k)=mycurv(maxloc(mysurf,1))
+               ! Largest curvature
+               !this%curv(i,j,k)=mycurv(maxloc(abs(mycurv),1))
+               ! Smallest curvature
+               !if (getNumberOfPlanes(this%liquid_gas_interface(i,j,k)).eq.2) then
+               !   this%curv(i,j,k)=mycurv(minloc(abs(mycurv),1))
+               !else
+               !   this%curv(i,j,k)=mycurv(1)
+               !end if
                ! Clip curvature
                this%curv(i,j,k)=max(min(this%curv(i,j,k),1.0_WP/this%cfg%meshsize(i,j,k)),-1.0_WP/this%cfg%meshsize(i,j,k))
             end do
