@@ -99,6 +99,9 @@ module vfs_class
       ! Interface reconstruction method
       integer :: reconstruction_method                    !< Interface reconstruction method
       
+      ! Flotsam removal parameter - turned off by default
+      real(WP) :: VFflot=0.0_WP                           !< Threshold VF parameter for flotsam removal (0.0=off)
+      
       ! IRL objects
       type(ByteBuffer_type) :: send_byte_buffer
       type(ByteBuffer_type) :: recv_byte_buffer
@@ -132,6 +135,7 @@ module vfs_class
       procedure :: apply_bcond                            !< Apply all boundary conditions
       procedure :: update_band                            !< Update the band info given the VF values
       procedure :: sync_interface                         !< Synchronize the IRL objects
+      procedure :: remove_flotsams                        !< Remove flotsams manually - not conservative, should be avoided!
       procedure :: sync_and_clean_barycenters             !< Synchronize and clean up phasic barycenters
       procedure, private :: sync_side                     !< Synchronize the IRL objects across one side - another I/O helper
       procedure, private :: sync_ByteBuffer               !< Communicate byte packets across one side - another I/O helper
@@ -697,6 +701,9 @@ contains
       ! Synchronize VF field
       call this%cfg%sync(this%VF)
       
+      ! Remove flotsams if needed
+      call this%remove_flotsams()
+      
       ! Synchronize and clean-up barycenter fields
       call this%sync_and_clean_barycenters()
       
@@ -725,6 +732,55 @@ contains
       call this%reset_volume_moments()
       
    end subroutine advance
+   
+   
+   !> Remove flotsams explicitly - careful, this is not conservative!
+   subroutine remove_flotsams(this)
+      implicit none
+      class(vfs), intent(inout) :: this
+      integer :: i,j,k,ii,jj,kk
+      real(WP) :: FSlo,FShi
+      ! Do not do anything if VFflot<0.0_WP
+      if (this%VFflot.le.0.0_WP) return
+      ! Build lo and hi values
+      FSlo=this%VFflot
+      FShi=1.0_WP-this%VFflot
+      ! Loop inside and remove flotsams
+      do k=this%cfg%kmin_,this%cfg%kmax_
+         do j=this%cfg%jmin_,this%cfg%jmax_
+            oloop: do i=this%cfg%imin_,this%cfg%imax_
+               ! Handle liquid flotsams
+               if (this%VF(i,j,k).ge.VFlo.and.this%VF(i,j,k).lt.FSlo) then
+                  ! Check for fuller neighbors
+                  do kk=k-1,k+1
+                     do jj=j-1,j+1
+                        do ii=i-1,i+1
+                           if (this%VF(ii,jj,kk).ge.FSlo) cycle oloop
+                        end do
+                     end do
+                  end do
+                  ! None was found, everything is below FSlo
+                  this%VF(i,j,k)=0.0_WP
+               end if
+               ! Handle gas flotsams
+               if (this%VF(i,j,k).le.VFhi.and.this%VF(i,j,k).gt.FShi) then
+                  ! Check for fuller neighbors
+                  do kk=k-1,k+1
+                     do jj=j-1,j+1
+                        do ii=i-1,i+1
+                           if (this%VF(ii,jj,kk).le.FShi) cycle oloop
+                        end do
+                     end do
+                  end do
+                  ! None was found, everything is above FShi
+                  this%VF(i,j,k)=1.0_WP
+               end if
+            end do oloop
+         end do
+      end do
+      ! Synchronize VF field
+      call this%cfg%sync(this%VF)
+   end subroutine remove_flotsams
    
    
    !> Synchronize and clean up barycenter fields
