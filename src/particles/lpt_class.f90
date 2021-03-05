@@ -21,13 +21,13 @@ module lpt_class
    
    !> Basic particle object definition
    type :: part
-      integer(kind=8) :: id     !< Particle ID
-      real(WP) :: d             !< Particle diameter
-      real(WP) :: x,y,z         !< Particle center coordinates
-      real(WP) :: u,v,w         !< Velocity of particle
-      real(WP) :: dt            !< Time step size for the particle
-      integer  :: i,j,k         !< Index of cell containing particle center
-      integer  :: flag          !< Control parameter (0=normal, 1=done->will be removed)
+      integer(kind=8) :: id                !< Particle ID
+      real(WP) :: d                        !< Particle diameter
+      real(WP), dimension(3) :: pos        !< Particle center coordinates
+      real(WP), dimension(3) :: vel        !< Velocity of particle
+      real(WP) :: dt                       !< Time step size for the particle
+      integer , dimension(3) :: ind        !< Index of cell containing particle center
+      integer  :: flag                     !< Control parameter (0=normal, 1=done->will be removed)
    end type part
    !> Number of blocks, block length, and block types in a particle
    integer, parameter                         :: part_nblock=3
@@ -70,6 +70,7 @@ module lpt_class
       procedure :: print=>lpt_print                       !< Output solver info to the screen
       procedure :: resize                                 !< Resize particle array to given size
       procedure :: recycle                                !< Recycle particle array by removing flagged particles
+      procedure :: sync                                   !< Synchronize particles across interprocessor boundaries
    end type lpt
    
    
@@ -132,6 +133,86 @@ contains
       ! Get the size of this type
       call MPI_type_size(MPI_PART,MPI_PART_SIZE,ierr)
    end subroutine prepare_mpi_part
+   
+   
+   !> Synchronize particle arrays across processors
+   subroutine sync(this)
+      use mpi_f08
+      implicit none
+      class(lpt), intent(inout) :: this
+      integer, dimension(this%cfg%nproc) :: who_send,who_recv,counter
+      integer :: i,nb_recv,nb_send,np_old
+      integer :: rank_send,rank_recv,prank,ierr
+      type(MPI_status) :: status
+      type(part), dimension(:,:), allocatable :: buf_send
+      
+      ! Recycle first
+      call this%recycle()
+      
+      ! Prepare information about who sends what to whom
+      who_send=0
+      do i=1,this%np_
+         prank=this%cfg%find_proc(this%p(i)%ind)+1
+         who_send(prank)=who_send(prank)+1
+      end do
+      ! Remove the diagonal since we won't self-send
+      who_send(this%cfg%rank+1)=0
+      
+      ! Prepare information about who receives what from whom
+      do rank_recv=1,this%cfg%nproc
+         call MPI_gather(who_send(rank_recv),1,MPI_INTEGER,who_recv,1,MPI_INTEGER,rank_recv-1,this%cfg%comm,ierr)
+      end do
+      
+      ! Prepare the buffers
+      nb_send=maxval(who_send)
+      nb_recv=sum(who_recv)
+      
+      ! Allocate buffers to send particles
+      allocate(buf_send(this%cfg%nproc,nb_send))
+      
+      ! Find and pack the particles to be sent
+      counter=0
+      do i=1,this%np_
+         ! Get the proc
+         prank=this%cfg%find_proc(this%p(i)%ind)+1
+         if (prank.ne.this%cfg%rank+1) then
+            ! Prepare for sending
+            counter(prank)=counter(prank)+1
+            buf_send(prank,counter(prank))=this%p(i)
+            ! Need to remove the particle
+            this%p(i)%flag=1
+         end if
+      end do
+      
+      ! Everybody resizes
+      np_old=this%np_
+      call this%resize(this%np_+nb_recv)
+      
+      ! Loop through the procs, pack particles in buf_send, send, unpack
+      do rank_send=1,this%cfg%nproc
+         if (this%cfg%rank+1.eq.rank_send) then
+            ! I'm the sender of particles
+            do rank_recv=1,this%cfg%nproc
+               if (who_send(rank_recv).gt.0) then
+                  call MPI_send(buf_send(rank_recv,:),who_send(rank_recv),MPI_PART,rank_recv-1,0,this%cfg%comm,ierr)
+               end if
+            end do
+         else
+            ! I'm not the sender, I receive
+            if (who_recv(rank_send).gt.0) then
+               call MPI_recv(this%p(np_old+1:np_old+who_recv(rank_send)),who_recv(rank_send),MPI_PART,rank_send-1,0,this%cfg%comm,status,ierr)
+               np_old=np_old+who_recv(rank_send)
+            end if
+         end if
+      end do
+      
+      ! Done, deallocate
+      deallocate(buf_send)
+      
+      ! Recycle
+      call this%recycle()
+      
+   end subroutine sync
    
    
    !> Adaptation of particle array size
