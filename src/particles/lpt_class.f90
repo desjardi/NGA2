@@ -4,8 +4,11 @@ module lpt_class
    use precision,      only: WP
    use string,         only: str_medium
    use config_class,   only: config
+   use mpi_f08,        only: MPI_Datatype
+   use parallel,       only: MPI_REAL_WP
    implicit none
    private
+   
    
    ! Expose type/constructor/methods
    public :: lpt
@@ -15,25 +18,29 @@ module lpt_class
    real(WP), parameter :: coeff_up=1.3_WP      !< Particle array size increase factor
    real(WP), parameter :: coeff_dn=0.7_WP      !< Particle array size decrease factor
    
-   !> Particle object definition
-   type :: part
-      !> Particle center coordinates
-      real(WP) :: x,y,z
-      !> Index of cell containing particle center
-      integer :: i,j,k
-      ! Velocity of particle
-      real(WP) :: u,v,w
-      ! Time step size
-      real(WP) :: dt
-      ! Control parameter
-      integer :: stop
-   end type part
    
+   !> Basic particle object definition
+   type :: part
+      integer(kind=8) :: id     !< Particle ID
+      real(WP) :: d             !< Particle diameter
+      real(WP) :: x,y,z         !< Particle center coordinates
+      real(WP) :: u,v,w         !< Velocity of particle
+      real(WP) :: dt            !< Time step size for the particle
+      integer  :: i,j,k         !< Index of cell containing particle center
+      integer  :: flag          !< Control parameter (0=normal, 1=done->will be removed)
+   end type part
+   !> Number of blocks, block length, and block types in a particle
+   integer, parameter                         :: part_nblock=3
+   integer           , dimension(part_nblock) :: part_lblock=[1,8,4]
+   type(MPI_Datatype), dimension(part_nblock) :: part_tblock=[MPI_INTEGER8,MPI_REAL_WP,MPI_INTEGER]
+   !> MPI_PART derived datatype and size
+   type(MPI_Datatype) :: MPI_PART
+   integer :: MPI_PART_SIZE
    
    !> Lagrangian particle tracking solver object definition
    type :: lpt
       
-      ! This is our config
+      ! This is our underlying config
       class(config), pointer :: cfg                       !< This is the config the solver is build for
       
       ! This is the name of the solver
@@ -46,13 +53,14 @@ module lpt_class
       type(part), dimension(:), allocatable :: p          !< Array of particles of type part
       
       ! Particle density
-      real(WP) :: rho                                    !< Density of particle
+      real(WP) :: rho                                     !< Density of particle
       
       ! Solver parameters
       real(WP) :: nstep=1                                 !< Number of substeps (default=1)
       logical  :: twoway=.false.                          !< Two-way coupling   (default=no)
       
       ! Monitoring info
+      real(WP) :: dmin,dmax,dmean                         !< Diameter info
       real(WP) :: Umin,Umax,Umean                         !< U velocity info
       real(WP) :: Vmin,Vmax,Vmean                         !< V velocity info
       real(WP) :: Wmin,Wmax,Wmean                         !< W velocity info
@@ -60,6 +68,8 @@ module lpt_class
       
    contains
       procedure :: print=>lpt_print                       !< Output solver info to the screen
+      procedure :: resize                                 !< Resize particle array to given size
+      procedure :: recycle                                !< Recycle particle array by removing flagged particles
    end type lpt
    
    
@@ -78,7 +88,6 @@ contains
       type(lpt) :: self
       class(config), target, intent(in) :: cfg
       character(len=*), optional :: name
-      integer :: i,j,k
       
       ! Set the name for the solver
       if (present(name)) self%name=trim(adjustl(name))
@@ -90,61 +99,39 @@ contains
       allocate(self%np_proc(self%cfg%nproc))
       
       ! Initialize MPI derived datatype for a particle
-      call self%resize(2)
-      prep_mpi_part: block
-         integer, dimension(22) :: types,lengths
-         integer(kind=MPI_ADDRESS_KIND) :: lower_bound, extent
-         integer(kind=MPI_ADDRESS_KIND), dimension(22) :: displacement
-         integer :: base,ierr
-         
-         ! Create the MPI structure to send particles
-         types( 1: 1) = MPI_INTEGER8
-         types( 2:18) = MPI_REAL_WP
-         types(19:22) = MPI_INTEGER
-         lengths(:)   = 1
-         
-         ! Hard-code displacement here
-         displacement( 1)=  0
-         displacement( 2)=  8
-         displacement( 3)= 16
-         displacement( 4)= 24
-         displacement( 5)= 32
-         displacement( 6)= 40
-         displacement( 7)= 48
-         displacement( 8)= 56
-         displacement( 9)= 64
-         displacement(10)= 72
-         displacement(11)= 80
-         displacement(12)= 88
-         displacement(13)= 96
-         displacement(14)=104
-         displacement(15)=112
-         displacement(16)=120
-         displacement(17)=128
-         displacement(18)=136
-         displacement(19)=144
-         displacement(20)=148
-         displacement(21)=152
-         displacement(22)=156
-         
-         ! Finalize by creating and commiting the new type
-         call MPI_Type_create_struct(22,lengths,displacement,types,MPI_PARTICLE_TMP,ierr)
-         call MPI_Type_get_extent(MPI_PARTICLE_TMP, lower_bound, extent, ierr)
-         call MPI_Type_create_resized(MPI_PARTICLE_TMP,lower_bound,extent,MPI_PARTICLE,ierr)
-         call MPI_Type_commit(MPI_PARTICLE,ierr)
-         
-         ! If problem, say it
-         if (ierr.ne.0) call die("Problem with MPI_PARTICLE")
-         
-         ! Get the size of this type
-         call MPI_type_size(MPI_PARTICLE,SIZE_MPI_PARTICLE,ierr)
-         
-      end block prep_mpi_part
-      call self%resize(0)
+      call prepare_mpi_part()
       
       !
       
    end function constructor
+   
+   
+   !> Creation of the MPI datatype for particle
+   subroutine prepare_mpi_part()
+      use mpi_f08
+      use parallel, only: MPI_REAL_WP
+      use messager, only: die
+      implicit none
+      integer(MPI_ADDRESS_KIND), dimension(part_nblock) :: disp
+      integer(MPI_ADDRESS_KIND) :: mydisp,lb,extent
+      type(MPI_Datatype) :: MPI_PART_TMP
+      integer :: i,size,ierr
+      ! Prepare the displacement array
+      disp(1)=0
+      do i=2,part_nblock
+         call MPI_type_size(part_tblock(i-1),mydisp,ierr)
+         disp(i)=disp(i-1)+mydisp*int(part_lblock,MPI_ADDRESS_KIND)
+      end do
+      ! Create and commit the new type
+      call MPI_Type_create_struct(part_nblock,part_lblock,disp,part_tblock,MPI_PART_TMP,ierr)
+      call MPI_Type_get_extent(MPI_PART_TMP,lb,extent,ierr)
+      call MPI_Type_create_resized(MPI_PART_TMP,lb,extent,MPI_PART,ierr)
+      call MPI_Type_commit(MPI_PART,ierr)
+      ! If a problem was encountered, say it
+      if (ierr.ne.0) call die('[lpt prepare_mpi_part] MPI Particle type creation failed')
+      ! Get the size of this type
+      call MPI_type_size(MPI_PART,MPI_PART_SIZE,ierr)
+   end subroutine prepare_mpi_part
    
    
    !> Adaptation of particle array size
@@ -153,48 +140,62 @@ contains
       class(lpt), intent(inout) :: this
       integer, intent(in) :: size
       type(part), dimension(:), allocatable :: tmp
-      integer :: n_now,n_new,i
-      real(WP) :: up,down
+      integer :: size_now,size_new
       ! Resize part array to size n
       if (.not.allocated(this%p)) then
          ! part is of size 0
          if (size.gt.0) then
             ! Allocate directly to size n
             allocate(this%p(size))
-            this%p(1:n)%stop=1
+            this%p(1:n)%flag=1
          end if
       else if (size.eq.0) then
          ! part is associated, but we want to empty it
-         deallocate(part)
-         nullify(part)
+         deallocate(this%p)
       else
-         ! Update non zero size to another non zero size
-         n_now = size(part,dim=1)
-         up  =real(n_now,WP)*coeff_up
-         down=real(n_now,WP)*coeff_down
-         if (n.gt.n_now) then
-            ! Increase from n_now to n_new
-            n_new = max(n,int(up))
-            allocate(part_temp(n_new))
-            do i=1,n_now
-               part_temp(i) = part(i)
-            end do
-            deallocate(part)
-            nullify(part)
-            part => part_temp
-            part(n_now+1:n_new)%stop=1
-         else if (n.lt.int(down)) then
-            ! Decrease from n_now to n_new
-            allocate(part_temp(n))
-            do i=1,n
-               part_temp(i) = part(i)
-            end do
-            deallocate(part)
-            nullify(part)
-            part => part_temp
+         ! Update from a non-zero size to another non-zero size
+         size_now=size(this%p,dim=1)
+         if (size.gt.size_now) then
+            size_new=max(size,int(real(size_now,WP)*coeff_up))
+            allocate(tmp(size_new))
+            tmp(1:size_now)=this%p
+            tmp(size_now+1:)%flag=1
+            call move_alloc(tmp,this%p)
+         else if (size.lt.int(real(size_now,WP)*coeff_dn)) then
+            allocate(tmp(size))
+            tmp(1:size)=this%p(1:size)
+            call move_alloc(tmp,this%p)
          end if
       end if
    end subroutine resize
+   
+   
+   !> Clean-up of particle array by removing flag=1 particles
+   subroutine recycle(this)
+      use mpi_f08
+      implicit none
+      class(lpt), intent(inout) :: this
+      integer :: new_size,ierr,i
+      ! Compact all active particles at the beginning of the array
+      new_size=0
+      if (allocated(this%p)) then
+         do i=1,size(this%p,dim=1)
+            if (this%p(i)%flag.ne.1) then
+               new_size=new_size+1
+               if (i.ne.new_size) then
+                  this%p(new_size)=this%p(i)
+                  this%p(i)%flag=1
+               end if
+            end if
+         end do
+      end if
+      ! Resize to new size
+      call this%resize(new_size)
+      ! Update number of particles
+      this%np_=size(this%p,dim=1)
+      call MPI_ALLGATHER(this%np_,1,MPI_INTEGER,this%np_proc,1,MPI_INTEGER,this%cfg%comm,ierr)
+      this%np=sum(this%np_proc)
+   end subroutine recycle
    
    
 end module lpt_class
