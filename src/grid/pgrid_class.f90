@@ -71,8 +71,8 @@ module pgrid_class
       procedure, private :: pgrid_rsync,pgrid_rsync_no                          !< Commmunicate inner and periodic boundaries for real(WP)
       procedure, private :: pgrid_rsync_array                                   !< Commmunicate inner and periodic boundaries for arrays of real(WP) of the form (:,i,j,k)
       procedure :: get_rank                                                     !< Function that returns rank of processor that contains provided indices
-      procedure :: get_local_ind                                                !< Function that returns closest mesh indices to a provided position - local to processor subdomain
-      procedure :: get_global_ind                                               !< Function that returns closest mesh indices to a provided position - global over full pgrid
+      procedure :: get_ijk_local                                                !< Function that returns closest mesh indices to a provided position - local to processor subdomain
+      procedure :: get_ijk_global                                               !< Function that returns closest mesh indices to a provided position - global over full pgrid
       procedure :: get_ijk_from_lexico,get_lexico_from_ijk                      !< Functions that convert a lexicographic index to (i,j,k) and vice-versa
    end type pgrid
    
@@ -239,6 +239,7 @@ contains
       logical, dimension(3) :: dir
       integer, dimension(3) :: coords,ploc
       integer, dimension(3) :: gsizes,lsizes,lstart
+      integer, dimension(:), allocatable :: tmp
       
       ! Store decomposition on the grid
       self%npx=decomp(1); self%npy=decomp(2); self%npz=decomp(3)
@@ -343,10 +344,16 @@ contains
          end do
       end do
       
-      ! Store index to processor coordinate info
-      allocate(self%i2iproc(self%imino:self%imaxo)); self%i2iproc=0; self%i2iproc(self%imin_:self%imax_)=self%iproc
-      allocate(self%j2jproc(self%jmino:self%jmaxo)); self%j2jproc=0; self%j2jproc(self%jmin_:self%jmax_)=self%jproc
-      allocate(self%k2kproc(self%kmino:self%kmaxo)); self%k2kproc=0; self%k2kproc(self%kmin_:self%kmax_)=self%kproc
+      ! Store index-to-processor-coordinate info
+      allocate(self%i2iproc(self%imino:self%imaxo),tmp(self%imino:self%imaxo)); tmp=-1; tmp(self%imin_:self%imax_)=self%iproc
+      call MPI_ALLREDUCE(tmp,self%i2iproc,self%nx,MPI_REAL_WP,MPI_MAX,self%comm,ierr); deallocate(tmp)
+      self%i2iproc(self%imino:self%imin-1)=self%i2iproc(self%imin); self%i2iproc(self%imax+1:self%imaxo)=self%i2iproc(self%imax)
+      allocate(self%j2jproc(self%jmino:self%jmaxo),tmp(self%jmino:self%jmaxo)); tmp=-1; tmp(self%jmin_:self%jmax_)=self%jproc
+      call MPI_ALLREDUCE(tmp,self%j2jproc,self%ny,MPI_REAL_WP,MPI_MAX,self%comm,ierr); deallocate(tmp)
+      self%j2jproc(self%jmino:self%jmin-1)=self%j2jproc(self%jmin); self%j2jproc(self%jmax+1:self%jmaxo)=self%j2jproc(self%jmax)
+      allocate(self%k2kproc(self%kmino:self%kmaxo),tmp(self%kmino:self%kmaxo)); tmp=-1; tmp(self%kmin_:self%kmax_)=self%kproc
+      call MPI_ALLREDUCE(tmp,self%k2kproc,self%nz,MPI_REAL_WP,MPI_MAX,self%comm,ierr); deallocate(tmp)
+      self%k2kproc(self%kmino:self%kmin-1)=self%k2kproc(self%kmin); self%k2kproc(self%kmax+1:self%kmaxo)=self%k2kproc(self%kmax)
       
    end subroutine pgrid_domain_decomp
    
@@ -884,7 +891,7 @@ contains
    
    
    !> Returns the closest local indices "ind" to the provided position "pos" with initial guess "ind_guess"
-   function get_local_ind(this,pos,ind_guess) result(ind)
+   function get_ijk_local(this,pos,ind_guess) result(ind)
       implicit none
       class(pgrid), intent(in) :: this
       real(WP), dimension(3), intent(in) :: pos
@@ -902,11 +909,11 @@ contains
       ind(3)=ind_guess(3)
       do while (pos(3).gt.this%z(ind(3)+1).and.ind(3).lt.this%kmaxo_); ind(3)=ind(3)+1; end do
       do while (pos(3).lt.this%z(ind(3)  ).and.ind(3).gt.this%kmino_); ind(3)=ind(3)-1; end do
-   end function get_local_ind
+   end function get_ijk_local
    
    
    !> Returns the closest global indices "ind" to the provided position "pos" with initial guess "ind_guess"
-   function get_global_ind(this,pos,ind_guess) result(ind)
+   function get_ijk_global(this,pos,ind_guess) result(ind)
       implicit none
       class(pgrid), intent(in) :: this
       real(WP), dimension(3), intent(in) :: pos
@@ -924,7 +931,7 @@ contains
       ind(3)=ind_guess(3)
       do while (pos(3).gt.this%z(ind(3)+1).and.ind(3).lt.this%kmaxo); ind(3)=ind(3)+1; end do
       do while (pos(3).lt.this%z(ind(3)  ).and.ind(3).gt.this%kmino); ind(3)=ind(3)-1; end do
-   end function get_global_ind
+   end function get_ijk_global
    
    
    !> Returns the rank that contains provided indices
@@ -932,8 +939,8 @@ contains
       implicit none
       class(pgrid), intent(in) :: this
       integer, dimension(3), intent(in) :: ind
-      real(WP) :: rank
-      
+      integer :: rank
+      rank=this%proc2rank(this%i2iproc(ind(1)),this%j2jproc(ind(2)),this%k2kproc(ind(3)))
    end function get_rank
    
    
