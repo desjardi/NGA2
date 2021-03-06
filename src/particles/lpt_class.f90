@@ -6,6 +6,7 @@ module lpt_class
    use config_class,   only: config
    use mpi_f08,        only: MPI_Datatype
    use parallel,       only: MPI_REAL_WP
+   use partmesh_class, only: partmesh
    implicit none
    private
    
@@ -62,6 +63,9 @@ module lpt_class
       real(WP) :: nstep=1                                 !< Number of substeps (default=1)
       logical  :: twoway=.false.                          !< Two-way coupling   (default=no)
       
+      ! Basic representation of the particle mesh
+      type(partmesh) :: pmesh
+      
       ! Monitoring info
       real(WP) :: dmin,dmax,dmean                         !< Diameter info
       real(WP) :: Umin,Umax,Umean                         !< U velocity info
@@ -71,6 +75,7 @@ module lpt_class
       
    contains
       procedure :: print=>lpt_print                       !< Output solver info to the screen
+      procedure :: update_partmesh                        !< Create a simple particle mesh for visualization
       procedure :: resize                                 !< Resize particle array to given size
       procedure :: recycle                                !< Recycle particle array by removing flagged particles
       procedure :: sync                                   !< Synchronize particles across interprocessor boundaries
@@ -107,9 +112,35 @@ contains
       ! Initialize MPI derived datatype for a particle
       call prepare_mpi_part()
       
+      ! Initialize a particle mesh for output purposes
+      self%pmesh=partmesh(name='lpt')
+      
       !
       
    end function constructor
+   
+   
+   !> Update particle mesh for visualization
+   subroutine update_partmesh(this)
+      implicit none
+      class(lpt), intent(inout) :: this
+      integer :: i
+      ! Reset particle mesh storage
+      call this%pmesh%reset()
+      ! Handle zero particle case by adding fictitious particle
+      if (this%np_.eq.0) then
+         call this%pmesh%set_size(1)
+         this%pmesh%pos(:,1)=0.0_WP
+         this%pmesh%d(1)    =0.0_WP
+         return
+      end if
+      ! Copy particle info
+      call this%pmesh%set_size(this%np_)
+      do i=1,this%np_
+         this%pmesh%pos(:,i)=this%p(i)%pos
+         this%pmesh%d(i)    =this%p(i)%d
+      end do
+   end subroutine update_partmesh
    
    
    !> Creation of the MPI datatype for particle

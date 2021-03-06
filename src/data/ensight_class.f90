@@ -6,6 +6,7 @@ module ensight_class
    use config_class,   only: config
    use mpi_f08,        only: MPI_Datatype
    use surfmesh_class, only: surfmesh
+   use partmesh_class, only: partmesh
    implicit none
    private
    
@@ -30,6 +31,11 @@ module ensight_class
       character(len=str_medium) :: name
       type(surfmesh), pointer :: ptr
    end type srf
+   type :: prt !< Particle mesh
+      type(prt), pointer :: next
+      character(len=str_medium) :: name
+      type(partmesh), pointer :: ptr
+   end type prt
    
    !> Ensight object definition as list of pointers to arrays
    type :: ensight
@@ -44,14 +50,17 @@ module ensight_class
       type(scl), pointer :: first_scl                                 !< Scalar list
       type(vct), pointer :: first_vct                                 !< Vector list
       type(srf), pointer :: first_srf                                 !< Surface list
+      type(prt), pointer :: first_prt                                 !< Particle list
    contains
       procedure :: write_geom                                         !< Write out geometry
       procedure :: write_data                                         !< Write out data
       procedure :: write_case                                         !< Write out case file
       procedure :: write_surf                                         !< Write out surface mesh file
+      procedure :: write_part                                         !< Write out particle mesh file
       procedure :: add_scalar                                         !< Add a new scalar field
       procedure :: add_vector                                         !< Add a new vector field
       procedure :: add_surface                                        !< Add a new surface mesh
+      procedure :: add_particle                                       !< Add a new particle mesh
    end type ensight
    
    
@@ -98,6 +107,7 @@ contains
       self%first_scl=>NULL()
       self%first_vct=>NULL()
       self%first_srf=>NULL()
+      self%first_prt=>NULL()
       
       ! Check if a case file exists already - root only
       if (self%cfg%amRoot) then
@@ -206,6 +216,26 @@ contains
    end subroutine add_surface
    
    
+   !> Add a particle mesh for output
+   subroutine add_particle(this,name,particle)
+      implicit none
+      class(ensight), intent(inout) :: this
+      character(len=*), intent(in) :: name
+      type(partmesh), target, intent(in) :: particle
+      type(prt), pointer :: new_prt
+      ! Prepare new particle
+      allocate(new_prt)
+      new_prt%name=trim(adjustl(name))
+      new_prt%ptr =>particle
+      ! Insert it up front
+      new_prt%next=>this%first_prt
+      ! Point list to new object
+      this%first_prt=>new_prt
+      ! Also create the corresponding directory
+      if (this%cfg%amRoot) call execute_command_line('mkdir -p ensight/'//trim(this%name)//'/'//trim(new_prt%name))
+   end subroutine add_particle
+   
+   
    !> Output all data in the object
    subroutine write_data(this,time)
       use precision, only: SP
@@ -225,6 +255,7 @@ contains
       type(scl), pointer :: my_scl
       type(vct), pointer :: my_vct
       type(srf), pointer :: my_srf
+      type(prt), pointer :: my_prt
       real(SP), dimension(:,:,:), allocatable :: spbuff
       real(WP), dimension(:), allocatable :: temp_time
       
@@ -342,6 +373,15 @@ contains
          call this%write_surf(my_srf)
          ! Continue on to the next surface mesh object
          my_srf=>my_srf%next
+      end do
+      
+      ! Now output all particle meshes
+      my_prt=>this%first_prt
+      do while (associated(my_prt))
+         ! Output the particle mesh as a distinct directory
+         call this%write_part(my_prt)
+         ! Continue on to the next surface mesh object
+         my_prt=>my_prt%next
       end do
       
    end subroutine write_data
@@ -578,6 +618,70 @@ contains
       end do
       
    end subroutine write_surf
+   
+   
+   !> Procedure that writes out a particle mesh in Ensight format
+   subroutine write_part(this,part)
+      use precision, only: SP
+      use messager,  only: die
+      use mpi_f08,   only: mpi_barrier
+      implicit none
+      class(ensight), intent(in) :: this
+      type(prt), pointer, intent(in) :: part
+      character(len=str_medium) :: filename
+      integer :: iunit,ierr,rank
+      character(len=80) :: cbuff
+      real(SP) :: rbuff
+      integer :: ibuff
+      
+      ! Write the case file from scratch in ASCII format
+      if (this%cfg%amRoot) then
+         ! Open the case file
+         open(newunit=iunit,file='ensight/'//trim(this%name)//'/'//trim(part%name)//'.case',form='formatted',status='replace',access='stream',iostat=ierr)
+         ! Write all the geometry information
+         write(iunit,'(a,/,a,/,/,a,/,a,/)') 'FORMAT','type: ensight gold','GEOMETRY','model: 1 '//trim(part%name)//'/'//trim(part%name)//'.******'
+         ! Write the time information
+         write(iunit,'(/,a,/,a,/,a,i0,/,a,/,a,/,a)') 'TIME','time set: 1','number of steps: ',this%ntime,'filename start number: 1','filename increment: 1','time values:'
+         write(iunit,'(999999(es12.5,/))') this%time
+         ! Close the case file
+         close(iunit)
+      end if
+      
+      ! Generate the particle geometry filename
+      filename='ensight/'//trim(this%name)//'/'//trim(part%name)//'/'//trim(part%name)//'.'
+      write(filename(len_trim(filename)+1:len_trim(filename)+6),'(i6.6)') this%ntime
+      
+      ! Write the file header for binary particle format
+      if (this%cfg%amRoot) then
+         ! Open the file
+         open(newunit=iunit,file=trim(filename),form='unformatted',status='replace',access='stream',iostat=ierr)
+         if (ierr.ne.0) call die('[ensight write part] Could not open file: '//trim(filename))
+         ! General geometry header
+         cbuff='C Binary'                          ; write(iunit) cbuff
+         cbuff=trim(adjustl(part%ptr%name))        ; write(iunit) cbuff
+         cbuff='particle coordinates'              ; write(iunit) cbuff
+         ibuff=part%ptr%n                          ; write(iunit) ibuff
+         write(iunit) (ibuff,ibuff=1,part%ptr%n)
+         ! Close the file
+         close(iunit)
+      end if
+      
+      ! Write the particle coordinates
+      do rank=0,this%cfg%nproc-1
+         if (rank.eq.this%cfg%rank) then
+            ! Open the file
+            open(newunit=iunit,file=trim(filename),form='unformatted',status='old',access='stream',position='append',iostat=ierr)
+            if (ierr.ne.0) call die('[ensight write part] Could not open file: '//trim(filename))
+            ! Write part info if it exists on the processor
+            if (part%ptr%n.gt.0) write(iunit) real(part%ptr%pos,SP)
+            ! Close the file
+            close(iunit)
+         end if
+         ! Force synchronization
+         call MPI_BARRIER(this%cfg%comm,ierr)
+      end do
+      
+   end subroutine write_part
    
    
 end module ensight_class
