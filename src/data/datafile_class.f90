@@ -178,9 +178,7 @@ contains
       integer :: ierr,n,iunit
       type(MPI_File) :: ifile
       type(MPI_Status):: status
-      integer, dimension(5) :: dims
       integer(kind=MPI_OFFSET_KIND) :: disp
-      logical :: file_is_there
       character(len=str_medium) :: filename
       
       ! Choose the filename

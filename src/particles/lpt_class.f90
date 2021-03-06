@@ -4,8 +4,7 @@ module lpt_class
    use precision,      only: WP
    use string,         only: str_medium
    use config_class,   only: config
-   use mpi_f08,        only: MPI_Datatype
-   use parallel,       only: MPI_REAL_WP
+   use mpi_f08,        only: MPI_Datatype,MPI_INTEGER8,MPI_INTEGER,MPI_DOUBLE_PRECISION
    use partmesh_class, only: partmesh
    implicit none
    private
@@ -36,7 +35,7 @@ module lpt_class
    !> Number of blocks, block length, and block types in a particle
    integer, parameter                         :: part_nblock=3
    integer           , dimension(part_nblock) :: part_lblock=[1,8,4]
-   type(MPI_Datatype), dimension(part_nblock) :: part_tblock=[MPI_INTEGER8,MPI_REAL_WP,MPI_INTEGER]
+   type(MPI_Datatype), dimension(part_nblock) :: part_tblock=[MPI_INTEGER8,MPI_DOUBLE_PRECISION,MPI_INTEGER]
    !> MPI_PART derived datatype and size
    type(MPI_Datatype) :: MPI_PART
    integer :: MPI_PART_SIZE
@@ -67,20 +66,21 @@ module lpt_class
       type(partmesh) :: pmesh
       
       ! Monitoring info
-      real(WP) :: dmin,dmax,dmean                         !< Diameter info
-      real(WP) :: Umin,Umax,Umean                         !< U velocity info
-      real(WP) :: Vmin,Vmax,Vmean                         !< V velocity info
-      real(WP) :: Wmin,Wmax,Wmean                         !< W velocity info
+      real(WP) :: dmin,dmax,dmean,dvar                    !< Diameter info
+      real(WP) :: Umin,Umax,Umean,Uvar                    !< U velocity info
+      real(WP) :: Vmin,Vmax,Vmean,Vvar                    !< V velocity info
+      real(WP) :: Wmin,Wmax,Wmean,Wvar                    !< W velocity info
       integer  :: np_new,np_out                           !< Number of new and removed particles
       
    contains
-      procedure :: print=>lpt_print                       !< Output solver info to the screen
       procedure :: update_partmesh                        !< Create a simple particle mesh for visualization
+      procedure :: advance                                !< Step forward the particle ODEs
       procedure :: resize                                 !< Resize particle array to given size
       procedure :: recycle                                !< Recycle particle array by removing flagged particles
       procedure :: sync                                   !< Synchronize particles across interprocessor boundaries
       procedure :: read                                   !< Parallel read particles from file
       procedure :: write                                  !< Parallel write particles to file
+      procedure :: get_max                                !< Extract various monitoring data
    end type lpt
    
    
@@ -94,7 +94,6 @@ contains
    
    !> Default constructor for lpt solver
    function constructor(cfg,name) result(self)
-      use messager, only: die
       implicit none
       type(lpt) :: self
       class(config), target, intent(in) :: cfg
@@ -115,9 +114,87 @@ contains
       ! Initialize a particle mesh for output purposes
       self%pmesh=partmesh(name='lpt')
       
-      !
+      ! Log/screen output
+      logging: block
+         use, intrinsic :: iso_fortran_env, only: output_unit
+         use param,    only: verbose
+         use messager, only: log
+         use string,   only: str_long
+         character(len=str_long) :: message
+         if (self%cfg%amRoot) then
+            write(message,'("Particle solver [",a,"] on partitioned grid [",a,"]")') trim(self%name),trim(self%cfg%name)
+            if (verbose.gt.1) write(output_unit,'(a)') trim(message)
+            if (verbose.gt.0) call log(message)
+         end if
+      end block logging
       
    end function constructor
+   
+   
+   !> Advance the particle equations by a specified time step dt
+   subroutine advance(this,dt,U,V,W)
+      implicit none
+      class(lpt), intent(inout) :: this
+      real(WP), intent(inout) :: dt  !< Timestep size over which to advance
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: U     !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: V     !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: W     !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      
+      
+      
+   end subroutine advance
+   
+   
+   !> Extract various monitoring data from particle field
+   subroutine get_max(this)
+      use mpi_f08,  only: MPI_ALLREDUCE,MPI_MAX,MPI_MIN,MPI_SUM
+      use parallel, only: MPI_REAL_WP
+      implicit none
+      class(lpt), intent(inout) :: this
+      real(WP) :: buf
+      integer :: i,ierr
+      
+      ! Diameter and velocity min/max/mean
+      this%dmin=huge(1.0_WP); this%dmax=-huge(1.0_WP); this%dmean=0.0_WP
+      this%Umin=huge(1.0_WP); this%Umax=-huge(1.0_WP); this%Umean=0.0_WP
+      this%Vmin=huge(1.0_WP); this%Vmax=-huge(1.0_WP); this%Vmean=0.0_WP
+      this%Wmin=huge(1.0_WP); this%Wmax=-huge(1.0_WP); this%Wmean=0.0_WP
+      do i=1,this%np_
+         this%dmin=min(this%dmin,this%p(i)%d     ); this%dmax=max(this%dmax,this%p(i)%d     ); this%dmean=this%dmean+this%p(i)%d
+         this%Umin=min(this%Umin,this%p(i)%vel(1)); this%Umax=max(this%Umax,this%p(i)%vel(1)); this%Umean=this%Umean+this%p(i)%vel(1)
+         this%Vmin=min(this%Vmin,this%p(i)%vel(2)); this%Vmax=max(this%Vmax,this%p(i)%vel(2)); this%Vmean=this%Vmean+this%p(i)%vel(2)
+         this%Wmin=min(this%Wmin,this%p(i)%vel(3)); this%Wmax=max(this%Wmax,this%p(i)%vel(3)); this%Wmean=this%Wmean+this%p(i)%vel(3)
+      end do
+      call MPI_ALLREDUCE(this%dmin ,buf,1,MPI_REAL_WP,MPI_MIN,this%cfg%comm,ierr); this%dmin =buf
+      call MPI_ALLREDUCE(this%dmax ,buf,1,MPI_REAL_WP,MPI_MAX,this%cfg%comm,ierr); this%dmax =buf
+      call MPI_ALLREDUCE(this%dmean,buf,1,MPI_REAL_WP,MPI_SUM,this%cfg%comm,ierr); this%dmean=buf/this%np
+      call MPI_ALLREDUCE(this%Umin ,buf,1,MPI_REAL_WP,MPI_MIN,this%cfg%comm,ierr); this%Umin =buf
+      call MPI_ALLREDUCE(this%Umax ,buf,1,MPI_REAL_WP,MPI_MAX,this%cfg%comm,ierr); this%Umax =buf
+      call MPI_ALLREDUCE(this%Umean,buf,1,MPI_REAL_WP,MPI_SUM,this%cfg%comm,ierr); this%Umean=buf/this%np
+      call MPI_ALLREDUCE(this%Vmin ,buf,1,MPI_REAL_WP,MPI_MIN,this%cfg%comm,ierr); this%Vmin =buf
+      call MPI_ALLREDUCE(this%Vmax ,buf,1,MPI_REAL_WP,MPI_MAX,this%cfg%comm,ierr); this%Vmax =buf
+      call MPI_ALLREDUCE(this%Vmean,buf,1,MPI_REAL_WP,MPI_SUM,this%cfg%comm,ierr); this%Vmean=buf/this%np
+      call MPI_ALLREDUCE(this%Wmin ,buf,1,MPI_REAL_WP,MPI_MIN,this%cfg%comm,ierr); this%Wmin =buf
+      call MPI_ALLREDUCE(this%Wmax ,buf,1,MPI_REAL_WP,MPI_MAX,this%cfg%comm,ierr); this%Wmax =buf
+      call MPI_ALLREDUCE(this%Wmean,buf,1,MPI_REAL_WP,MPI_SUM,this%cfg%comm,ierr); this%Wmean=buf/this%np
+      
+      ! Diameter and velocity variance
+      this%dvar=0.0_WP
+      this%Uvar=0.0_WP
+      this%Vvar=0.0_WP
+      this%Wvar=0.0_WP
+      do i=1,this%np_
+         this%dvar=this%dvar+(this%p(i)%d     -this%dmean)**2.0_WP
+         this%Uvar=this%Uvar+(this%p(i)%vel(1)-this%Umean)**2.0_WP
+         this%Vvar=this%Vvar+(this%p(i)%vel(2)-this%Vmean)**2.0_WP
+         this%Wvar=this%Wvar+(this%p(i)%vel(3)-this%Wmean)**2.0_WP
+      end do
+      call MPI_ALLREDUCE(this%dvar,buf,1,MPI_REAL_WP,MPI_SUM,this%cfg%comm,ierr); this%dvar=buf/this%np
+      call MPI_ALLREDUCE(this%Uvar,buf,1,MPI_REAL_WP,MPI_SUM,this%cfg%comm,ierr); this%Uvar=buf/this%np
+      call MPI_ALLREDUCE(this%Vvar,buf,1,MPI_REAL_WP,MPI_SUM,this%cfg%comm,ierr); this%Vvar=buf/this%np
+      call MPI_ALLREDUCE(this%Wvar,buf,1,MPI_REAL_WP,MPI_SUM,this%cfg%comm,ierr); this%Wvar=buf/this%np
+      
+   end subroutine get_max
    
    
    !> Update particle mesh for visualization
@@ -146,18 +223,17 @@ contains
    !> Creation of the MPI datatype for particle
    subroutine prepare_mpi_part()
       use mpi_f08
-      use parallel, only: MPI_REAL_WP
       use messager, only: die
       implicit none
       integer(MPI_ADDRESS_KIND), dimension(part_nblock) :: disp
-      integer(MPI_ADDRESS_KIND) :: mydisp,lb,extent
+      integer(MPI_ADDRESS_KIND) :: lb,extent
       type(MPI_Datatype) :: MPI_PART_TMP
-      integer :: i,size,ierr
+      integer :: i,mysize,ierr
       ! Prepare the displacement array
       disp(1)=0
       do i=2,part_nblock
-         call MPI_type_size(part_tblock(i-1),mydisp,ierr)
-         disp(i)=disp(i-1)+mydisp*int(part_lblock,MPI_ADDRESS_KIND)
+         call MPI_Type_size(part_tblock(i-1),mysize,ierr)
+         disp(i)=disp(i-1)+int(mysize,MPI_ADDRESS_KIND)*int(part_lblock(i-1),MPI_ADDRESS_KIND)
       end do
       ! Create and commit the new type
       call MPI_Type_create_struct(part_nblock,part_lblock,disp,part_tblock,MPI_PART_TMP,ierr)
@@ -241,35 +317,35 @@ contains
    
    
    !> Adaptation of particle array size
-   subroutine resize(this,size)
+   subroutine resize(this,n)
       implicit none
       class(lpt), intent(inout) :: this
-      integer, intent(in) :: size
+      integer, intent(in) :: n
       type(part), dimension(:), allocatable :: tmp
       integer :: size_now,size_new
       ! Resize part array to size n
       if (.not.allocated(this%p)) then
          ! part is of size 0
-         if (size.gt.0) then
+         if (n.gt.0) then
             ! Allocate directly to size n
-            allocate(this%p(size))
+            allocate(this%p(n))
             this%p(1:n)%flag=1
          end if
-      else if (size.eq.0) then
+      else if (n.eq.0) then
          ! part is associated, but we want to empty it
          deallocate(this%p)
       else
          ! Update from a non-zero size to another non-zero size
          size_now=size(this%p,dim=1)
-         if (size.gt.size_now) then
-            size_new=max(size,int(real(size_now,WP)*coeff_up))
+         if (n.gt.size_now) then
+            size_new=max(n,int(real(size_now,WP)*coeff_up))
             allocate(tmp(size_new))
             tmp(1:size_now)=this%p
             tmp(size_now+1:)%flag=1
             call move_alloc(tmp,this%p)
-         else if (size.lt.int(real(size_now,WP)*coeff_dn)) then
-            allocate(tmp(size))
-            tmp(1:size)=this%p(1:size)
+         else if (n.lt.int(real(size_now,WP)*coeff_dn)) then
+            allocate(tmp(n))
+            tmp(1:n)=this%p(1:n)
             call move_alloc(tmp,this%p)
          end if
       end if
@@ -308,6 +384,7 @@ contains
    subroutine write(this,filename)
       use mpi_f08
       use messager, only: die
+      use parallel, only: info_mpiio
       implicit none
       class(lpt), intent(inout) :: this
       character(len=*), intent(in) :: filename
@@ -364,17 +441,18 @@ contains
    subroutine read(this,filename)
       use mpi_f08
       use messager, only: die
+      use parallel, only: info_mpiio
       implicit none
       class(lpt), intent(inout) :: this
       character(len=*), intent(in) :: filename
       type(MPI_File) :: ifile
       type(MPI_Status):: status
       integer(kind=MPI_OFFSET_KIND) :: offset,header_offset
-      integer :: i,j,ierr,iunit,npadd,psize,nchunk
+      integer :: i,j,ierr,npadd,psize,nchunk,count
       integer, dimension(:,:), allocatable :: ppp
       
       ! First open the file in parallel
-      call MPI_FILE_OPEN(self%cfg%comm,trim(filename),MPI_MODE_RDONLY,info_mpiio,ifile,ierr)
+      call MPI_FILE_OPEN(this%cfg%comm,trim(filename),MPI_MODE_RDONLY,info_mpiio,ifile,ierr)
       if (ierr.ne.0) call die('[lpt read] Problem encountered while reading data file: '//trim(filename))
       
       ! Read file header first
@@ -395,7 +473,7 @@ contains
       out:do j=1,nchunk
          do i=1,this%cfg%nproc
             count=count+1
-            if (count.gt.mod(npadd,nproc*nchunk)) exit out
+            if (count.gt.mod(npadd,this%cfg%nproc*nchunk)) exit out
             ppp(i,j)=ppp(i,j)+1
          end do
       end do out

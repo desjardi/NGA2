@@ -1,0 +1,20 @@
+# Parallelization
+Partition :	4 1 1
+
+# Mesh definition
+Lx :	1
+Ly :	1
+Lz :	0.01
+nx :	100
+ny :	100
+nz :	1
+
+# Time integration
+Max timestep size :	2e-3
+Max cfl number :	1
+
+# Particle parameters
+Particle density : 1000
+
+# Ensight output
+Ensight output period : 1e-2	!1e-1

@@ -631,7 +631,6 @@ contains
       character(len=str_medium) :: filename
       integer :: iunit,ierr,rank
       character(len=80) :: cbuff
-      real(SP) :: rbuff
       integer :: ibuff
       
       ! Write the case file from scratch in ASCII format
