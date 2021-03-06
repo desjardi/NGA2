@@ -33,6 +33,11 @@ module pgrid_class
       type(MPI_Comm) :: ycomm               !< 1D y-communicator
       type(MPI_Comm) :: zcomm               !< 1D z-communicator
       integer :: xrank,yrank,zrank          !< 1D ranks
+      ! Extra info to find rank from indices
+      integer, dimension(:,:,:), allocatable :: proc2rank   !< 3D array of rank(iproc,jproc,kproc)
+      integer, dimension(:),     allocatable :: i2iproc     !< Array of iproc(i)
+      integer, dimension(:),     allocatable :: j2jproc     !< Array of jproc(j)
+      integer, dimension(:),     allocatable :: k2kproc     !< Array of kproc(k)
       ! Local grid size
       integer :: nx_,ny_,nz_                !< Local grid size in x/y/z
       ! Local grid size with overlap
@@ -65,7 +70,9 @@ module pgrid_class
       procedure, private :: pgrid_isync,pgrid_isync_no                          !< Commmunicate inner and periodic boundaries for integer
       procedure, private :: pgrid_rsync,pgrid_rsync_no                          !< Commmunicate inner and periodic boundaries for real(WP)
       procedure, private :: pgrid_rsync_array                                   !< Commmunicate inner and periodic boundaries for arrays of real(WP) of the form (:,i,j,k)
-      procedure :: get_indices                                                  !< Function that find closest mesh indices to a provided position
+      procedure :: get_rank                                                     !< Function that returns rank of processor that contains provided indices
+      procedure :: get_local_ind                                                !< Function that returns closest mesh indices to a provided position - local to processor subdomain
+      procedure :: get_global_ind                                               !< Function that returns closest mesh indices to a provided position - global over full pgrid
       procedure :: get_ijk_from_lexico,get_lexico_from_ijk                      !< Functions that convert a lexicographic index to (i,j,k) and vice-versa
    end type pgrid
    
@@ -225,12 +232,12 @@ contains
       implicit none
       class(pgrid), intent(inout) :: self
       integer, dimension(3), intent(in) :: decomp
-      integer :: ierr,q,r
+      integer :: ierr,q,r,ip,jp,kp
       type(MPI_Comm) :: tmp_comm
       integer, parameter :: ndims=3
       logical, parameter :: reorder=.true.
       logical, dimension(3) :: dir
-      integer, dimension(3) :: coords
+      integer, dimension(3) :: coords,ploc
       integer, dimension(3) :: gsizes,lsizes,lstart
       
       ! Store decomposition on the grid
@@ -323,6 +330,23 @@ contains
       call MPI_TYPE_COMMIT(self%SPview,ierr)
       call MPI_TYPE_CREATE_SUBARRAY(3,gsizes,lsizes,lstart,MPI_ORDER_FORTRAN,MPI_INTEGER,self%Iview,ierr)
       call MPI_TYPE_COMMIT(self%Iview,ierr)
+      
+      ! Store processor coordinate to rank info
+      allocate(self%proc2rank(self%npx,self%npy,self%npz))
+      do kp=1,self%npz
+         do jp=1,self%npy
+            do ip=1,self%npx
+               ploc=[ip-1,jp-1,kp-1]
+               call MPI_CART_RANK(self%comm,ploc,self%proc2rank(ip,jp,kp),ierr)
+               self%proc2rank(ip,jp,kp)=self%proc2rank(ip,jp,kp)+1
+            end do
+         end do
+      end do
+      
+      ! Store index to processor coordinate info
+      allocate(self%i2iproc(self%imino:self%imaxo)); self%i2iproc=0; self%i2iproc(self%imin_:self%imax_)=self%iproc
+      allocate(self%j2jproc(self%jmino:self%jmaxo)); self%j2jproc=0; self%j2jproc(self%jmin_:self%jmax_)=self%jproc
+      allocate(self%k2kproc(self%kmino:self%kmaxo)); self%k2kproc=0; self%k2kproc(self%kmin_:self%kmax_)=self%kproc
       
    end subroutine pgrid_domain_decomp
    
@@ -859,27 +883,58 @@ contains
    end subroutine pgrid_isync_no
    
    
-   !> Returns the closest local indices to the provided position pos with initial guess indices_guess
-   function get_indices(this,pos,indices_guess) result(indices)
+   !> Returns the closest local indices "ind" to the provided position "pos" with initial guess "ind_guess"
+   function get_local_ind(this,pos,ind_guess) result(ind)
       implicit none
       class(pgrid), intent(in) :: this
       real(WP), dimension(3), intent(in) :: pos
-      integer,  dimension(3), intent(in) :: indices_guess
-      integer,  dimension(3) :: indices
+      integer,  dimension(3), intent(in) :: ind_guess
+      integer,  dimension(3) :: ind
       ! X direction
-      indices(1)=indices_guess(1)
-      do while (pos(1).gt.this%x(indices(1)+1).and.indices(1).lt.this%imaxo_); indices(1)=indices(1)+1; end do
-      do while (pos(1).lt.this%x(indices(1)  ).and.indices(1).gt.this%imino_); indices(1)=indices(1)-1; end do
+      ind(1)=ind_guess(1)
+      do while (pos(1).gt.this%x(ind(1)+1).and.ind(1).lt.this%imaxo_); ind(1)=ind(1)+1; end do
+      do while (pos(1).lt.this%x(ind(1)  ).and.ind(1).gt.this%imino_); ind(1)=ind(1)-1; end do
       ! Y direction
-      indices(2)=indices_guess(2)
-      do while (pos(2).gt.this%y(indices(2)+1).and.indices(2).lt.this%jmaxo_); indices(2)=indices(2)+1; end do
-      do while (pos(2).lt.this%y(indices(2)  ).and.indices(2).gt.this%jmino_); indices(2)=indices(2)-1; end do
+      ind(2)=ind_guess(2)
+      do while (pos(2).gt.this%y(ind(2)+1).and.ind(2).lt.this%jmaxo_); ind(2)=ind(2)+1; end do
+      do while (pos(2).lt.this%y(ind(2)  ).and.ind(2).gt.this%jmino_); ind(2)=ind(2)-1; end do
       ! Z direction
-      indices(3)=indices_guess(3)
-      do while (pos(3).gt.this%z(indices(3)+1).and.indices(3).lt.this%kmaxo_); indices(3)=indices(3)+1; end do
-      do while (pos(3).lt.this%z(indices(3)  ).and.indices(3).gt.this%kmino_); indices(3)=indices(3)-1; end do
-      return
-   end function get_indices
+      ind(3)=ind_guess(3)
+      do while (pos(3).gt.this%z(ind(3)+1).and.ind(3).lt.this%kmaxo_); ind(3)=ind(3)+1; end do
+      do while (pos(3).lt.this%z(ind(3)  ).and.ind(3).gt.this%kmino_); ind(3)=ind(3)-1; end do
+   end function get_local_ind
+   
+   
+   !> Returns the closest global indices "ind" to the provided position "pos" with initial guess "ind_guess"
+   function get_global_ind(this,pos,ind_guess) result(ind)
+      implicit none
+      class(pgrid), intent(in) :: this
+      real(WP), dimension(3), intent(in) :: pos
+      integer,  dimension(3), intent(in) :: ind_guess
+      integer,  dimension(3) :: ind
+      ! X direction
+      ind(1)=ind_guess(1)
+      do while (pos(1).gt.this%x(ind(1)+1).and.ind(1).lt.this%imaxo); ind(1)=ind(1)+1; end do
+      do while (pos(1).lt.this%x(ind(1)  ).and.ind(1).gt.this%imino); ind(1)=ind(1)-1; end do
+      ! Y direction
+      ind(2)=ind_guess(2)
+      do while (pos(2).gt.this%y(ind(2)+1).and.ind(2).lt.this%jmaxo); ind(2)=ind(2)+1; end do
+      do while (pos(2).lt.this%y(ind(2)  ).and.ind(2).gt.this%jmino); ind(2)=ind(2)-1; end do
+      ! Z direction
+      ind(3)=ind_guess(3)
+      do while (pos(3).gt.this%z(ind(3)+1).and.ind(3).lt.this%kmaxo); ind(3)=ind(3)+1; end do
+      do while (pos(3).lt.this%z(ind(3)  ).and.ind(3).gt.this%kmino); ind(3)=ind(3)-1; end do
+   end function get_global_ind
+   
+   
+   !> Returns the rank that contains provided indices
+   function get_rank(this,ind) result(rank)
+      implicit none
+      class(pgrid), intent(in) :: this
+      integer, dimension(3), intent(in) :: ind
+      real(WP) :: rank
+      
+   end function get_rank
    
    
    !> Function that returns an (i,j,k) index from a lexicographic index

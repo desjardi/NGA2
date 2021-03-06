@@ -1110,8 +1110,8 @@ contains
       !             call adjustCapToMatchVolume(flux_polyhedron,dt*0.5_WP*sum(U(i:i+1,j,k))*this%cfg%dy(j)*this%cfg%dz(k))
       !             ! Get bounds for flux polyhedron
       !             call getBoundingPts(flux_polyhedron,bounding_pts(:,1),bounding_pts(:,2))
-      !             bb_indices(:,1)=this%cfg%get_indices(bounding_pts(:,1),[i,j,k])
-      !             bb_indices(:,2)=this%cfg%get_indices(bounding_pts(:,2),[i,j,k])
+      !             bb_indices(:,1)=this%cfg%get_local_ind(bounding_pts(:,1),[i,j,k])
+      !             bb_indices(:,2)=this%cfg%get_local_ind(bounding_pts(:,2),[i,j,k])
       !             ! Crudely check phase information for flux polyhedron
       !             crude_VF=this%crude_phase_test(bb_indices)
       !             if (crude_VF.lt.0.0_WP) then
@@ -1140,8 +1140,8 @@ contains
       !             call adjustCapToMatchVolume(flux_polyhedron,dt*V(i,j,k)*this%cfg%dx(i)*this%cfg%dz(k))
       !             ! Get bounds for flux polyhedron
       !             call getBoundingPts(flux_polyhedron,bounding_pts(:,1),bounding_pts(:,2))
-      !             bb_indices(:,1)=this%cfg%get_indices(bounding_pts(:,1),[i,j,k])
-      !             bb_indices(:,2)=this%cfg%get_indices(bounding_pts(:,2),[i,j,k])
+      !             bb_indices(:,1)=this%cfg%get_local_ind(bounding_pts(:,1),[i,j,k])
+      !             bb_indices(:,2)=this%cfg%get_local_ind(bounding_pts(:,2),[i,j,k])
       !             ! Crudely check phase information for flux polyhedron
       !             crude_VF=this%crude_phase_test(bb_indices)
       !             if (crude_VF.lt.0.0_WP) then
@@ -1170,8 +1170,8 @@ contains
       !             call adjustCapToMatchVolume(flux_polyhedron,dt*W(i,j,k)*this%cfg%dx(i)*this%cfg%dy(j))
       !             ! Get bounds for flux polyhedron
       !             call getBoundingPts(flux_polyhedron,bounding_pts(:,1),bounding_pts(:,2))
-      !             bb_indices(:,1)=this%cfg%get_indices(bounding_pts(:,1),[i,j,k])
-      !             bb_indices(:,2)=this%cfg%get_indices(bounding_pts(:,2),[i,j,k])
+      !             bb_indices(:,1)=this%cfg%get_local_ind(bounding_pts(:,1),[i,j,k])
+      !             bb_indices(:,2)=this%cfg%get_local_ind(bounding_pts(:,2),[i,j,k])
       !             ! Crudely check phase information for flux polyhedron
       !             crude_VF=this%crude_phase_test(bb_indices)
       !             if (crude_VF.lt.0.0_WP) then

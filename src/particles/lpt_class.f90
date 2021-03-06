@@ -152,7 +152,7 @@ contains
       ! Prepare information about who sends what to whom
       who_send=0
       do i=1,this%np_
-         prank=this%cfg%find_proc(this%p(i)%ind)+1
+         prank=this%cfg%get_rank(this%p(i)%ind)+1
          who_send(prank)=who_send(prank)+1
       end do
       ! Remove the diagonal since we won't self-send
@@ -174,7 +174,7 @@ contains
       counter=0
       do i=1,this%np_
          ! Get the proc
-         prank=this%cfg%find_proc(this%p(i)%ind)+1
+         prank=this%cfg%get_rank(this%p(i)%ind)+1
          if (prank.ne.this%cfg%rank+1) then
             ! Prepare for sending
             counter(prank)=counter(prank)+1
