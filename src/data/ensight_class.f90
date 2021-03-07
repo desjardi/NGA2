@@ -101,7 +101,7 @@ contains
       end if
       
       ! Write out the geometry
-      call self%write_geom()
+      call self%write_geom(cfg=self%cfg,name='geometry')
       
       ! Empty pointer to lists for now
       self%first_scl=>NULL()
@@ -406,6 +406,7 @@ contains
       
       ! Write all the variable information
       write(iunit,'(a)') 'VARIABLE'
+      write(iunit,'(a)') 'scalar per element: wall geometry.wall'
       my_scl=>this%first_scl
       do while (associated(my_scl))
          write(iunit,'(a)') 'scalar per element: 1 '//trim(my_scl%name)//' '//trim(my_scl%name)//'/'//trim(my_scl%name)//'.******'
@@ -428,104 +429,96 @@ contains
    
    
    !> Geometry output to a file in parallel
-   subroutine write_geom(this)
+   subroutine write_geom(this,cfg,name)
       use precision, only: SP
       use messager,  only: die
-      use parallel,  only: info_mpiio
+      use parallel,  only: info_mpiio,MPI_REAL_SP
       use mpi_f08
       implicit none
-      class(ensight), intent(in) :: this
+      class(ensight),   intent(in) :: this
+      class(config),    intent(in) :: cfg
+      character(len=*), intent(in) :: name
       integer :: iunit,ierr
       character(len=80) :: cbuff
       real(SP) :: rbuff
       integer :: ibuff
-      type(MPI_Datatype) :: view
       type(MPI_File) :: ifile
       type(MPI_Status):: status
       integer(kind=MPI_OFFSET_KIND) :: disp
-      integer, dimension(:,:,:), allocatable :: iblank
-      integer :: i,i1,i2,j,j1,j2,k,k1,k2,datasize
-      integer, dimension(3) :: gsizes,lsizes,lstart
+      real(SP), dimension(:,:,:), allocatable :: spbuff
       
-      ! Root does most of the I/O at first
-      if (this%cfg%amRoot) then
+      ! Only cfg root does geometry I/O
+      if (cfg%amRoot) then
          
          ! First create a new file
-         open(newunit=iunit,file='ensight/'//trim(this%name)//'/geometry',form='unformatted',status='replace',access='stream',iostat=ierr)
-         if (ierr.ne.0) call die('[ensight write geom] Could not open file: ensight/'//trim(this%name)//'/geometry')
+         open(newunit=iunit,file='ensight/'//trim(this%name)//'/'//trim(name),form='unformatted',status='replace',access='stream',iostat=ierr)
+         if (ierr.ne.0) call die('[ensight write geom] Could not open file: ensight/'//trim(this%name)//'/'//trim(name))
          
          ! General geometry header
          cbuff='C Binary'                          ; write(iunit) cbuff
          cbuff='Ensight Gold Geometry File'        ; write(iunit) cbuff
-         cbuff=trim(adjustl(this%cfg%name))        ; write(iunit) cbuff
+         cbuff=trim(adjustl(cfg%name))             ; write(iunit) cbuff
          cbuff='node id off'                       ; write(iunit) cbuff
          cbuff='element id off'                    ; write(iunit) cbuff
          
          ! Extents
          cbuff='extents'                           ; write(iunit) cbuff
-         rbuff=real(this%cfg%x(this%cfg%imin  ),SP); write(iunit) rbuff
-         rbuff=real(this%cfg%x(this%cfg%imax+1),SP); write(iunit) rbuff
-         rbuff=real(this%cfg%y(this%cfg%jmin  ),SP); write(iunit) rbuff
-         rbuff=real(this%cfg%y(this%cfg%jmax+1),SP); write(iunit) rbuff
-         rbuff=real(this%cfg%z(this%cfg%kmin  ),SP); write(iunit) rbuff
-         rbuff=real(this%cfg%z(this%cfg%kmax+1),SP); write(iunit) rbuff
+         rbuff=real(cfg%x(cfg%imin  ),SP)          ; write(iunit) rbuff
+         rbuff=real(cfg%x(cfg%imax+1),SP)          ; write(iunit) rbuff
+         rbuff=real(cfg%y(cfg%jmin  ),SP)          ; write(iunit) rbuff
+         rbuff=real(cfg%y(cfg%jmax+1),SP)          ; write(iunit) rbuff
+         rbuff=real(cfg%z(cfg%kmin  ),SP)          ; write(iunit) rbuff
+         rbuff=real(cfg%z(cfg%kmax+1),SP)          ; write(iunit) rbuff
          
          ! Part header
          cbuff='part'                              ; write(iunit) cbuff
          ibuff=1                                   ; write(iunit) ibuff
          cbuff='Complete geometry'                 ; write(iunit) cbuff  ! We have a single grid-cfg here
-         cbuff='block rectilinear iblanked'        ; write(iunit) cbuff
+         cbuff='block rectilinear'                 ; write(iunit) cbuff  ! Not blanked
          
          ! Number of cells
-         ibuff=this%cfg%nx+1                       ; write(iunit) ibuff
-         ibuff=this%cfg%ny+1                       ; write(iunit) ibuff
-         ibuff=this%cfg%nz+1                       ; write(iunit) ibuff
+         ibuff=cfg%nx+1                            ; write(iunit) ibuff
+         ibuff=cfg%ny+1                            ; write(iunit) ibuff
+         ibuff=cfg%nz+1                            ; write(iunit) ibuff
          
          ! Mesh
-         write(iunit) real(this%cfg%x(this%cfg%imin:this%cfg%imax+1),SP)
-         write(iunit) real(this%cfg%y(this%cfg%jmin:this%cfg%jmax+1),SP)
-         write(iunit) real(this%cfg%z(this%cfg%kmin:this%cfg%kmax+1),SP)
+         write(iunit) real(cfg%x(cfg%imin:cfg%imax+1),SP)
+         write(iunit) real(cfg%y(cfg%jmin:cfg%jmax+1),SP)
+         write(iunit) real(cfg%z(cfg%kmin:cfg%kmax+1),SP)
          
          ! Close the file
          close(iunit)
          
       end if
       
-      ! Set array size
-      i1=this%cfg%imin_; i2=this%cfg%imax_; if (this%cfg%iproc.eq.this%cfg%npx) i2=i2+1
-      j1=this%cfg%jmin_; j2=this%cfg%jmax_; if (this%cfg%jproc.eq.this%cfg%npy) j2=j2+1
-      k1=this%cfg%kmin_; k2=this%cfg%kmax_; if (this%cfg%kproc.eq.this%cfg%npz) k2=k2+1
-      datasize=(i2-i1+1)*(j2-j1+1)*(k2-k1+1)
+      ! Root process starts writing the file header for wall data
+      if (cfg%amRoot) then
+         ! Open the file
+         open(newunit=iunit,file='ensight/'//trim(this%name)//'/'//trim(name)//'.wall',form='unformatted',status='replace',access='stream',iostat=ierr)
+         if (ierr.ne.0) call die('[ensight write data] Could not open file: '//'ensight/'//trim(this%name)//'/'//trim(name)//'.wall')
+         ! Write the header
+         cbuff='wall'           ; write(iunit) cbuff
+         cbuff='part'           ; write(iunit) cbuff
+         ibuff=1                ; write(iunit) ibuff
+         cbuff='block'          ; write(iunit) cbuff
+         ! Close the file
+         close(iunit)
+      end if
       
-      ! Allocate iblank array
-      allocate(iblank(i1:i2,j1:j2,k1:k2))
+      ! Prepare the SP buffer
+      allocate(spbuff(cfg%imin_:cfg%imax_,cfg%jmin_:cfg%jmax_,cfg%kmin_:cfg%kmax_))
       
-      ! Build the blanking info from VF
-      do k=k1,k2
-         do j=j1,j2
-            do i=i1,i2
-               iblank(i,j,k)=nint(maxval(this%cfg%VF(i-1:i,j-1:j,k-1:k)))
-            end do
-         end do
-      end do
-      
-      ! We need to define a proper MPI-I/O view
-      gsizes=[this%cfg%nx+1,this%cfg%ny+1,this%cfg%nz+1]
-      lsizes=[i2-i1+1,j2-j1+1,k2-k1+1]
-      lstart=[this%cfg%imin_-this%cfg%imin,this%cfg%jmin_-this%cfg%jmin,this%cfg%kmin_-this%cfg%kmin]
-      call MPI_TYPE_CREATE_SUBARRAY(3,gsizes,lsizes,lstart,MPI_ORDER_FORTRAN,MPI_INTEGER,view,ierr)
-      call MPI_TYPE_COMMIT(view,ierr)
-      
-      ! Only need to parallel write masks now
-      call MPI_FILE_OPEN(this%cfg%comm,'ensight/'//trim(this%name)//'/geometry',IOR(MPI_MODE_WRONLY,MPI_MODE_APPEND),info_mpiio,ifile,ierr)
-      if (ierr.ne.0) call die('[ensight write geom] Problem encountered while parallel writing geometry file')
+      ! Now parallel-write the wall data
+      call MPI_FILE_OPEN(cfg%comm,'ensight/'//trim(this%name)//'/'//trim(name)//'.wall',IOR(MPI_MODE_WRONLY,MPI_MODE_APPEND),info_mpiio,ifile,ierr)
+      if (ierr.ne.0) call die('[ensight write geom] Problem encountered while parallel writing wall data file: '//'ensight/'//trim(this%name)//'/'//trim(name)//'.wall')
       call MPI_FILE_GET_POSITION(ifile,disp,ierr)
-      call MPI_FILE_SET_VIEW(ifile,disp,MPI_INTEGER,view,'native',info_mpiio,ierr)
-      call MPI_FILE_WRITE_ALL(ifile,iblank,datasize,MPI_INTEGER,status,ierr)
+      call MPI_FILE_SET_VIEW(ifile,disp,MPI_REAL_SP,cfg%SPview,'native',info_mpiio,ierr)
+      spbuff(cfg%imin_:cfg%imax_,cfg%jmin_:cfg%jmax_,cfg%kmin_:cfg%kmax_)=real(cfg%VF(cfg%imin_:cfg%imax_,cfg%jmin_:cfg%jmax_,cfg%kmin_:cfg%kmax_),SP)
+      call MPI_FILE_WRITE_ALL(ifile,spbuff,cfg%nx_*cfg%ny_*cfg%nz_,MPI_REAL_SP,status,ierr)
       call MPI_FILE_CLOSE(ifile,ierr)
       
-      ! Deallocate iblank array
-      deallocate(iblank)
+      ! Deallocate SP buffer
+      deallocate(spbuff)
       
    end subroutine write_geom
    
@@ -638,7 +631,7 @@ contains
          ! Open the case file
          open(newunit=iunit,file='ensight/'//trim(this%name)//'/'//trim(part%name)//'.case',form='formatted',status='replace',access='stream',iostat=ierr)
          ! Write all the geometry information
-         write(iunit,'(a,/,a,/,/,a,/,a,/)') 'FORMAT','type: ensight gold','GEOMETRY','model: 1 '//trim(part%name)//'/'//trim(part%name)//'.******'
+         write(iunit,'(a,/,a,/,/,a,/,a,/,a,/)') 'FORMAT','type: ensight gold','GEOMETRY','model: geometry','measured: 1 '//trim(part%name)//'/'//trim(part%name)//'.******'
          ! Write the time information
          write(iunit,'(/,a,/,a,/,a,i0,/,a,/,a,/,a)') 'TIME','time set: 1','number of steps: ',this%ntime,'filename start number: 1','filename increment: 1','time values:'
          write(iunit,'(999999(es12.5,/))') this%time

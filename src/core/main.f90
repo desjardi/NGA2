@@ -2,7 +2,7 @@
 !> @version 1.0
 !> @author O. Desjardins
 program nga
-   use random,     only: random_init
+   use random,     only: random_initialize
    use param,      only: param_init,param_final
    use parallel,   only: parallel_init,parallel_final
    use messager,   only: messager_init,messager_final
@@ -21,7 +21,7 @@ program nga
    ! Initialize user interaction ===========
    call param_init
    ! Initialize random number generator ====
-   call random_init
+   call random_initialize
    ! =======================================
    
    

@@ -449,7 +449,6 @@ contains
          call param_read('2 Ensight output period',ens_evt2%tper)
          ! Add variables to output
          call ens_out2%add_vector('velocity',Ui2,Vi2,Wi2)
-         call ens_out2%add_scalar('walls',fs2%cfg%VF)
          call ens_out2%add_scalar('VOF',vf2%VF)
          call ens_out2%add_scalar('curvature',vf2%curv)
          call ens_out2%add_scalar('visc_t',sgs2%visc)
@@ -635,7 +634,6 @@ contains
          call param_read('1 Ensight output period',ens_evt1%tper)
          ! Add variables to output
          call ens_out1%add_vector('velocity',Ui1,Vi1,Wi1)
-         call ens_out1%add_scalar('walls',fs1%cfg%VF)
          call ens_out1%add_scalar('visc_t',sgs1%visc)
          ! Output to ensight
          if (ens_evt1%occurs()) call ens_out1%write_data(time1%t)

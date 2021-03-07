@@ -14,7 +14,8 @@ Max timestep size :	2e-3
 Max cfl number :	1
 
 # Particle parameters
-Particle density : 1000
+Particle density :  1000
+Particle diameter : 0.001
 
 # Ensight output
 Ensight output period : 1e-2	!1e-1

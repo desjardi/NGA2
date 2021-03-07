@@ -36,8 +36,41 @@ contains
       
       ! Initialize our LPT
       initialize_lpt: block
+         use random, only: random_uniform
+         real(WP) :: dp
+         integer :: i
+         ! Create solver
          lp=lpt(cfg=cfg,name='LPT')
+         ! Get particle density from the input
          call param_read('Particle density',lp%rho)
+         ! Get particle diameter from the input
+         call param_read('Particle diameter',dp)
+         ! Root process initializes 1000 particles randomly
+         if (lp%cfg%amRoot) then
+            call lp%resize(1000)
+            do i=1,1000
+               ! Give id
+               lp%p(i)%id=int(i,8)
+               ! Set the diameter
+               lp%p(i)%d=dp
+               ! Assign random position in the domain
+               lp%p(i)%pos=[random_uniform(lp%cfg%x(lp%cfg%imin),lp%cfg%x(lp%cfg%imax+1)),&
+               &            random_uniform(lp%cfg%y(lp%cfg%jmin),lp%cfg%y(lp%cfg%jmax+1)),&
+               &            random_uniform(lp%cfg%z(lp%cfg%kmin),lp%cfg%z(lp%cfg%kmax+1))]
+               ! Give zero velocity
+               lp%p(i)%vel=0.0_WP
+               ! Give zero dt
+               lp%p(i)%dt=0.0_WP
+               ! Locate the particle on the mesh
+               lp%p(i)%ind=lp%cfg%get_ijk_global(lp%p(i)%pos,[lp%cfg%imin,lp%cfg%jmin,lp%cfg%kmin])
+               ! Activate the particle
+               lp%p(i)%flag=0
+            end do
+         end if
+         ! Count resulting particles
+         call lp%count()
+         ! Also update the output
+         call lp%update_partmesh()
       end block initialize_lpt
       
       

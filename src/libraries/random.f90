@@ -7,7 +7,7 @@ module random
    
    ! Function and subroutines
    public :: random_uniform,random_normal,random_lognormal
-   public :: random_init
+   public :: random_initialize
    
 contains
    
@@ -16,7 +16,7 @@ contains
    !> or if not available on a naive RNG seeded with time and pid.
    !>
    !> This comes from the GFortran website.
-   subroutine random_init
+   subroutine random_initialize
       use precision, only: I4,I8
       implicit none
       integer(kind=I4), allocatable, dimension(:) :: seed
@@ -61,7 +61,7 @@ contains
          s=mod(s*279470273_I8,4294967291_I8)
          v=int(mod(s,int(huge(0),I8)),kind(0))
       end function lcg
-   end subroutine random_init
+   end subroutine random_initialize
    
    
    !> Sampling of a WP real from a uniform distribution in [lo,hi]
