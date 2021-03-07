@@ -631,7 +631,11 @@ contains
          ! Open the case file
          open(newunit=iunit,file='ensight/'//trim(this%name)//'/'//trim(part%name)//'.case',form='formatted',status='replace',access='stream',iostat=ierr)
          ! Write all the geometry information
-         write(iunit,'(a,/,a,/,/,a,/,a,/,a,/)') 'FORMAT','type: ensight gold','GEOMETRY','model: geometry','measured: 1 '//trim(part%name)//'/'//trim(part%name)//'.******'
+         write(iunit,'(a,/,a,/,/,a,/,a,/,a,/)') 'FORMAT','type: ensight gold','GEOMETRY','model: geometry','measured: 1 '//trim(part%name)//'/particle.******'
+         ! Write the variables
+         write(iunit,'(a)') 'VARIABLE'
+         write(iunit,'(a)') 'scalar per element: wall geometry.wall'
+         write(iunit,'(a)') 'scalar per measured node: 1 diameter '//trim(part%name)//'/diameter.******'
          ! Write the time information
          write(iunit,'(/,a,/,a,/,a,i0,/,a,/,a,/,a)') 'TIME','time set: 1','number of steps: ',this%ntime,'filename start number: 1','filename increment: 1','time values:'
          write(iunit,'(999999(es12.5,/))') this%time
@@ -639,11 +643,10 @@ contains
          close(iunit)
       end if
       
-      ! Generate the particle geometry filename
-      filename='ensight/'//trim(this%name)//'/'//trim(part%name)//'/'//trim(part%name)//'.'
+      ! Generate the particle geometry file
+      filename='ensight/'//trim(this%name)//'/'//trim(part%name)//'/particle.'
       write(filename(len_trim(filename)+1:len_trim(filename)+6),'(i6.6)') this%ntime
-      
-      ! Write the file header for binary particle format
+      ! Root write the header
       if (this%cfg%amRoot) then
          ! Open the file
          open(newunit=iunit,file=trim(filename),form='unformatted',status='replace',access='stream',iostat=ierr)
@@ -657,7 +660,6 @@ contains
          ! Close the file
          close(iunit)
       end if
-      
       ! Write the particle coordinates
       do rank=0,this%cfg%nproc-1
          if (rank.eq.this%cfg%rank) then
@@ -666,6 +668,34 @@ contains
             if (ierr.ne.0) call die('[ensight write part] Could not open file: '//trim(filename))
             ! Write part info if it exists on the processor
             if (part%ptr%n.gt.0) write(iunit) real(part%ptr%pos,SP)
+            ! Close the file
+            close(iunit)
+         end if
+         ! Force synchronization
+         call MPI_BARRIER(this%cfg%comm,ierr)
+      end do
+      
+      ! Generate the particle diameter file
+      filename='ensight/'//trim(this%name)//'/'//trim(part%name)//'/diameter.'
+      write(filename(len_trim(filename)+1:len_trim(filename)+6),'(i6.6)') this%ntime
+      ! Root write the header
+      if (this%cfg%amRoot) then
+         ! Open the file
+         open(newunit=iunit,file=trim(filename),form='unformatted',status='replace',access='stream',iostat=ierr)
+         if (ierr.ne.0) call die('[ensight write part] Could not open file: '//trim(filename))
+         ! General header
+         cbuff='particle diameter'; write(iunit) cbuff
+         ! Close the file
+         close(iunit)
+      end if
+      ! Write the particle diameters
+      do rank=0,this%cfg%nproc-1
+         if (rank.eq.this%cfg%rank) then
+            ! Open the file
+            open(newunit=iunit,file=trim(filename),form='unformatted',status='old',access='stream',position='append',iostat=ierr)
+            if (ierr.ne.0) call die('[ensight write part] Could not open file: '//trim(filename))
+            ! Write part info if it exists on the processor
+            if (part%ptr%n.gt.0) write(iunit) real(part%ptr%d,SP)
             ! Close the file
             close(iunit)
          end if
