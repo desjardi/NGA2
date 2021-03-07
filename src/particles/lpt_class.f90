@@ -75,7 +75,6 @@ module lpt_class
    contains
       procedure :: update_partmesh                        !< Create a simple particle mesh for visualization
       procedure :: advance                                !< Step forward the particle ODEs
-      procedure :: count                                  !< Update number of particles info
       procedure :: resize                                 !< Resize particle array to given size
       procedure :: recycle                                !< Recycle particle array by removing flagged particles
       procedure :: sync                                   !< Synchronize particles across interprocessor boundaries
@@ -107,8 +106,9 @@ contains
       self%cfg=>cfg
       
       ! Allocate variables
-      allocate(self%np_proc(1:self%cfg%nproc))
-      call self%resize(0); call self%count()
+      allocate(self%np_proc(1:self%cfg%nproc)); self%np_proc=0
+      self%np_=0; self%np=0
+      call self%resize(0)
       
       ! Initialize MPI derived datatype for a particle
       call prepare_mpi_part()
@@ -356,7 +356,7 @@ contains
    subroutine recycle(this)
       implicit none
       class(lpt), intent(inout) :: this
-      integer :: new_size,i
+      integer :: new_size,i,ierr
       ! Compact all active particles at the beginning of the array
       new_size=0
       if (allocated(this%p)) then
@@ -373,24 +373,10 @@ contains
       ! Resize to new size
       call this%resize(new_size)
       ! Update number of particles
-      call this%count()
-   end subroutine recycle
-   
-   
-   !> Count number of particles on all processors
-   subroutine count(this)
-      use mpi_f08, only: MPI_ALLGATHER,MPI_INTEGER
-      implicit none
-      class(lpt), intent(inout) :: this
-      integer :: ierr
-      if (allocated(this%p)) then
-         this%np_=size(this%p,dim=1)
-      else
-         this%np_=0
-      end if
+      this%np_=new_size
       call MPI_ALLGATHER(this%np_,1,MPI_INTEGER,this%np_proc,1,MPI_INTEGER,this%cfg%comm,ierr)
       this%np=sum(this%np_proc)
-   end subroutine count
+   end subroutine recycle
    
    
    !> Parallel write particles to file
@@ -461,7 +447,7 @@ contains
       type(MPI_File) :: ifile
       type(MPI_Status):: status
       integer(kind=MPI_OFFSET_KIND) :: offset,header_offset
-      integer :: i,j,ierr,npadd,psize,nchunk,count
+      integer :: i,j,ierr,npadd,psize,nchunk,cnt
       integer, dimension(:,:), allocatable :: ppp
       
       ! First open the file in parallel
@@ -482,11 +468,11 @@ contains
       nchunk=int(npadd/(this%cfg%nproc*part_chunk_size))+1
       allocate(ppp(this%cfg%nproc,nchunk))
       ppp=int(npadd/(this%cfg%nproc*nchunk))
-      count=0
+      cnt=0
       out:do j=1,nchunk
          do i=1,this%cfg%nproc
-            count=count+1
-            if (count.gt.mod(npadd,this%cfg%nproc*nchunk)) exit out
+            cnt=cnt+1
+            if (cnt.gt.mod(npadd,this%cfg%nproc*nchunk)) exit out
             ppp(i,j)=ppp(i,j)+1
          end do
       end do out

@@ -67,15 +67,20 @@ contains
                lp%p(i)%flag=0
             end do
          end if
-         ! Count resulting particles
-         call lp%count()
-         if (cfg%amRoot) print*,'precomm',lp%np_proc
          ! Distribute particles
          call lp%sync()
-         if (cfg%amRoot) print*,'pstcomm',lp%np_proc
          ! Also update the output
          call lp%update_partmesh()
       end block initialize_lpt
+      
+      
+      ! Test particle I/O
+      !test_lpt_io: block
+      !   ! Write it out
+      !   call lp%write(filename='part.file')
+      !   ! Read it back up
+      !   call lp%read(filename='part.file')
+      !end block test_lpt_io
       
       
       ! Prepare our velocity field based on a Taylor vortex
