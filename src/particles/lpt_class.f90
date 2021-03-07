@@ -58,6 +58,9 @@ module lpt_class
       ! Particle density
       real(WP) :: rho                                     !< Density of particle
       
+      ! Gravitational acceleration
+      real(WP), dimension(3) :: gravity=0.0_WP            !< Acceleration of gravity
+      
       ! Solver parameters
       real(WP) :: nstep=1                                 !< Number of substeps (default=1)
       logical  :: twoway=.false.                          !< Two-way coupling   (default=no)
@@ -75,6 +78,9 @@ module lpt_class
    contains
       procedure :: update_partmesh                        !< Create a simple particle mesh for visualization
       procedure :: advance                                !< Step forward the particle ODEs
+      procedure :: get_rhs                                !< Compute rhs of particle odes
+      procedure, private :: get_velocity                  !< Helper function that interpolates a velocity field to a point
+      procedure, private :: get_scalar                    !< Helper function that interpolates a scalar field to a point
       procedure :: resize                                 !< Resize particle array to given size
       procedure :: recycle                                !< Recycle particle array by removing flagged particles
       procedure :: sync                                   !< Synchronize particles across interprocessor boundaries
@@ -134,17 +140,228 @@ contains
    
    
    !> Advance the particle equations by a specified time step dt
-   subroutine advance(this,dt,U,V,W)
+   subroutine advance(this,dt,U,V,W,rho,visc)
       implicit none
       class(lpt), intent(inout) :: this
       real(WP), intent(inout) :: dt  !< Timestep size over which to advance
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: U     !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: V     !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: W     !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: rho   !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: visc  !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      integer :: i
+      real(WP) :: mydt,dt_done
+      real(WP), dimension(3) :: acc
+      type(part) :: pold
       
+      ! Advance the equations
+      do i=1,this%np_
+         ! Time-integrate until dt_done=dt
+         dt_done=0.0_WP
+         do while (dt_done.lt.dt)
+            ! Decide the timestep size
+            mydt=min(this%p(i)%dt,dt-dt_done)
+            ! Remember the particle
+            pold=this%p(i)
+            ! Advance with Euler prediction
+            call this%get_rhs(U=U,V=V,W=W,rho=rho,visc=visc,p=this%p(i),acc=acc,opt_dt=this%p(i)%dt)
+            this%p(i)%pos=pold%pos+0.5_WP*mydt*this%p(i)%vel
+            this%p(i)%vel=pold%vel+0.5_WP*mydt*acc
+            ! Correct with midpoint rule
+            call this%get_rhs(U=U,V=V,W=W,rho=rho,visc=visc,p=this%p(i),acc=acc,opt_dt=this%p(i)%dt)
+            this%p(i)%pos=pold%pos+mydt*this%p(i)%vel
+            this%p(i)%vel=pold%vel+mydt*acc
+            ! Relocalize
+            this%p(i)%ind=this%cfg%get_ijk_global(this%p(i)%pos,this%p(i)%ind)
+            ! Increment
+            dt_done=dt_done+mydt
+         end do
+         ! Correct the position to take into account periodicity
+         if (this%cfg%xper) this%p(i)%pos(1)=this%cfg%x(this%cfg%imin)+modulo(this%p(i)%pos(1)-this%cfg%x(this%cfg%imin),this%cfg%xL)
+         if (this%cfg%yper) this%p(i)%pos(2)=this%cfg%y(this%cfg%jmin)+modulo(this%p(i)%pos(2)-this%cfg%y(this%cfg%jmin),this%cfg%yL)
+         if (this%cfg%zper) this%p(i)%pos(3)=this%cfg%z(this%cfg%kmin)+modulo(this%p(i)%pos(3)-this%cfg%z(this%cfg%kmin),this%cfg%zL)
+         ! Handle particles that have left the domain
+         if (this%p(i)%pos(1).lt.this%cfg%x(this%cfg%imin).or.this%p(i)%pos(1).gt.this%cfg%x(this%cfg%imax+1)) this%p(i)%flag=1
+         if (this%p(i)%pos(2).lt.this%cfg%y(this%cfg%jmin).or.this%p(i)%pos(2).gt.this%cfg%y(this%cfg%jmax+1)) this%p(i)%flag=1
+         if (this%p(i)%pos(3).lt.this%cfg%z(this%cfg%kmin).or.this%p(i)%pos(3).gt.this%cfg%z(this%cfg%kmax+1)) this%p(i)%flag=1
+         ! Relocalize the particle
+         this%p(i)%ind=this%cfg%get_ijk_global(this%p(i)%pos,this%p(i)%ind)
+      end do
       
+      ! Communicate particles
+      call this%sync()
       
    end subroutine advance
+   
+   
+   !> Calculate RHS of the particle ODEs
+   subroutine get_rhs(this,U,V,W,rho,visc,p,acc,opt_dt)
+      implicit none
+      class(lpt), intent(inout) :: this
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: U     !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: V     !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: W     !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: rho   !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: visc  !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      type(part), intent(in) :: p
+      real(WP), dimension(3), intent(out) :: acc
+      real(WP), intent(out) :: opt_dt
+      real(WP) :: Re,corr,tau
+      real(WP) :: fvisc,frho
+      real(WP), dimension(3) :: fvel
+      ! Interpolate the fluid phase velocity to the particle location
+      fvel=this%get_velocity(pos=p%pos,i0=p%ind(1),j0=p%ind(2),k0=p%ind(3),U=U,V=V,W=W)
+      ! Interpolate the fluid phase viscosity to the particle location
+      fvisc=this%get_scalar(pos=p%pos,i0=p%ind(1),j0=p%ind(2),k0=p%ind(3),S=visc)
+      ! Interpolate the fluid phase density to the particle location
+      frho=this%get_scalar(pos=p%pos,i0=p%ind(1),j0=p%ind(2),k0=p%ind(3),S=rho)
+      ! Particle Reynolds number
+      Re=frho*norm2(p%vel-fvel)*p%d/fvisc
+      ! Shiller Naumann correlation
+      corr=1.0_WP+0.15_WP*Re**(0.687_WP)
+      ! Particle response time
+      tau=this%rho*p%d**2/(18.0_WP*fvisc*corr)
+      ! Return acceleration and optimal timestep size
+      acc=(fvel-p%vel)/tau+this%gravity
+      opt_dt=tau/real(this%nstep,WP)
+   end subroutine get_rhs
+   
+   
+   !> Private function that performs an trilinear interpolation of the provided velocity U,V,W
+   !> to the provided position pos in the vicinity of cell i0,j0,k0
+   function get_velocity(this,pos,i0,j0,k0,U,V,W) result(vel)
+      implicit none
+      class(lpt), intent(inout) :: this
+      real(WP), dimension(3) :: vel
+      real(WP), dimension(3), intent(in) :: pos
+      integer, intent(in) :: i0,j0,k0
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in) :: U     !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in) :: V     !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in) :: W     !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      integer :: i,j,k
+      real(WP) :: wx1,wy1,wz1
+      real(WP) :: wx2,wy2,wz2
+      ! Interpolate U velocity ------------------------------
+      ! Find right i index
+      i=max(min(this%cfg%imaxo_-1,i0),this%cfg%imino_)
+      do while (pos(1)-this%cfg%x (i  ).lt.0.0_WP.and.i  .gt.this%cfg%imino_); i=i-1; end do
+      do while (pos(1)-this%cfg%x (i+1).ge.0.0_WP.and.i+1.lt.this%cfg%imaxo_); i=i+1; end do
+      ! Find right j index
+      j=max(min(this%cfg%jmaxo_-1,j0),this%cfg%jmino_)
+      do while (pos(2)-this%cfg%ym(j  ).lt.0.0_WP.and.j  .gt.this%cfg%jmino_); j=j-1; end do
+      do while (pos(2)-this%cfg%ym(j+1).ge.0.0_WP.and.j+1.lt.this%cfg%jmaxo_); j=j+1; end do
+      ! Find right k index
+      k=max(min(this%cfg%kmaxo_-1,k0),this%cfg%kmino_)
+      do while (pos(3)-this%cfg%zm(k  ).lt.0.0_WP.and.k  .gt.this%cfg%kmino_); k=k-1; end do
+      do while (pos(3)-this%cfg%zm(k+1).ge.0.0_WP.and.k+1.lt.this%cfg%kmaxo_); k=k+1; end do
+      ! Prepare tri-linear interpolation coefficients
+      wx1=(pos(1)-this%cfg%x (i))/(this%cfg%x (i+1)-this%cfg%x (i)); wx2=1.0_WP-wx1
+      wy1=(pos(2)-this%cfg%ym(j))/(this%cfg%ym(j+1)-this%cfg%ym(j)); wy2=1.0_WP-wy1
+      wz1=(pos(3)-this%cfg%zm(k))/(this%cfg%zm(k+1)-this%cfg%zm(k)); wz2=1.0_WP-wz1
+      ! Tri-linear interpolation of U
+      vel(1)=wz1*(wy1*(wx1*U(i+1,j+1,k+1)  + &
+      &                wx2*U(i  ,j+1,k+1)) + &
+      &           wy2*(wx1*U(i+1,j  ,k+1)  + &
+      &                wx2*U(i  ,j  ,k+1)))+ &
+      &      wz2*(wy1*(wx1*U(i+1,j+1,k  )  + &
+      &                wx2*U(i  ,j+1,k  )) + &
+      &           wy2*(wx1*U(i+1,j  ,k  )  + &
+      &                wx2*U(i  ,j  ,k  )))
+      ! Interpolate V velocity ------------------------------
+      ! Find right i index
+      i=max(min(this%cfg%imaxo_-1,i0),this%cfg%imino_)
+      do while (pos(1)-this%cfg%xm(i  ).lt.0.0_WP.and.i  .gt.this%cfg%imino_); i=i-1; end do
+      do while (pos(1)-this%cfg%xm(i+1).ge.0.0_WP.and.i+1.lt.this%cfg%imaxo_); i=i+1; end do
+      ! Find right j index
+      j=max(min(this%cfg%jmaxo_-1,j0),this%cfg%jmino_)
+      do while (pos(2)-this%cfg%y (j  ).lt.0.0_WP.and.j  .gt.this%cfg%jmino_); j=j-1; end do
+      do while (pos(2)-this%cfg%y (j+1).ge.0.0_WP.and.j+1.lt.this%cfg%jmaxo_); j=j+1; end do
+      ! Find right k index
+      k=max(min(this%cfg%kmaxo_-1,k0),this%cfg%kmino_)
+      do while (pos(3)-this%cfg%zm(k  ).lt.0.0_WP.and.k  .gt.this%cfg%kmino_); k=k-1; end do
+      do while (pos(3)-this%cfg%zm(k+1).ge.0.0_WP.and.k+1.lt.this%cfg%kmaxo_); k=k+1; end do
+      ! Prepare tri-linear interpolation coefficients
+      wx1=(pos(1)-this%cfg%xm(i))/(this%cfg%xm(i+1)-this%cfg%xm(i)); wx2=1.0_WP-wx1
+      wy1=(pos(2)-this%cfg%y (j))/(this%cfg%y (j+1)-this%cfg%y (j)); wy2=1.0_WP-wy1
+      wz1=(pos(3)-this%cfg%zm(k))/(this%cfg%zm(k+1)-this%cfg%zm(k)); wz2=1.0_WP-wz1
+      ! Tri-linear interpolation of V
+      vel(2)=wz1*(wy1*(wx1*V(i+1,j+1,k+1)  + &
+      &                wx2*V(i  ,j+1,k+1)) + &
+      &           wy2*(wx1*V(i+1,j  ,k+1)  + &
+      &                wx2*V(i  ,j  ,k+1)))+ &
+      &      wz2*(wy1*(wx1*V(i+1,j+1,k  )  + &
+      &                wx2*V(i  ,j+1,k  )) + &
+      &           wy2*(wx1*V(i+1,j  ,k  )  + &
+      &                wx2*V(i  ,j  ,k  )))
+      ! Interpolate W velocity ------------------------------
+      ! Find right i index
+      i=max(min(this%cfg%imaxo_-1,i0),this%cfg%imino_)
+      do while (pos(1)-this%cfg%xm(i  ).lt.0.0_WP.and.i  .gt.this%cfg%imino_); i=i-1; end do
+      do while (pos(1)-this%cfg%xm(i+1).ge.0.0_WP.and.i+1.lt.this%cfg%imaxo_); i=i+1; end do
+      ! Find right j index
+      j=max(min(this%cfg%jmaxo_-1,j0),this%cfg%jmino_)
+      do while (pos(2)-this%cfg%ym(j  ).lt.0.0_WP.and.j  .gt.this%cfg%jmino_); j=j-1; end do
+      do while (pos(2)-this%cfg%ym(j+1).ge.0.0_WP.and.j+1.lt.this%cfg%jmaxo_); j=j+1; end do
+      ! Find right k index
+      k=max(min(this%cfg%kmaxo_-1,k0),this%cfg%kmino_)
+      do while (pos(3)-this%cfg%z (k  ).lt.0.0_WP.and.k  .gt.this%cfg%kmino_); k=k-1; end do
+      do while (pos(3)-this%cfg%z (k+1).ge.0.0_WP.and.k+1.lt.this%cfg%kmaxo_); k=k+1; end do
+      ! Prepare tri-linear interpolation coefficients
+      wx1=(pos(1)-this%cfg%xm(i))/(this%cfg%xm(i+1)-this%cfg%xm(i)); wx2=1.0_WP-wx1
+      wy1=(pos(2)-this%cfg%ym(j))/(this%cfg%ym(j+1)-this%cfg%ym(j)); wy2=1.0_WP-wy1
+      wz1=(pos(3)-this%cfg%z (k))/(this%cfg%z (k+1)-this%cfg%z (k)); wz2=1.0_WP-wz1
+      ! Tri-linear interpolation of W
+      vel(3)=wz1*(wy1*(wx1*W(i+1,j+1,k+1)  + &
+      &                wx2*W(i  ,j+1,k+1)) + &
+      &           wy2*(wx1*W(i+1,j  ,k+1)  + &
+      &                wx2*W(i  ,j  ,k+1)))+ &
+      &      wz2*(wy1*(wx1*W(i+1,j+1,k  )  + &
+      &                wx2*W(i  ,j+1,k  )) + &
+      &           wy2*(wx1*W(i+1,j  ,k  )  + &
+      &                wx2*W(i  ,j  ,k  )))
+      return
+   end function get_velocity
+   
+   
+   !> Private function that performs an trilinear interpolation of the provided scalar S
+   !> to the provided position pos in the vicinity of cell i0,j0,k0
+   function get_scalar(this,pos,i0,j0,k0,S) result(sc)
+      implicit none
+      class(lpt), intent(inout) :: this
+      real(WP) :: sc
+      real(WP), dimension(3), intent(in) :: pos
+      integer, intent(in) :: i0,j0,k0
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in) :: S     !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      integer :: i,j,k
+      real(WP) :: wx1,wy1,wz1
+      real(WP) :: wx2,wy2,wz2
+      ! Find right i index
+      i=max(min(this%cfg%imaxo_-1,i0),this%cfg%imino_)
+      do while (pos(1)-this%cfg%xm(i  ).lt.0.0_WP.and.i  .gt.this%cfg%imino_); i=i-1; end do
+      do while (pos(1)-this%cfg%xm(i+1).ge.0.0_WP.and.i+1.lt.this%cfg%imaxo_); i=i+1; end do
+      ! Find right j index
+      j=max(min(this%cfg%jmaxo_-1,j0),this%cfg%jmino_)
+      do while (pos(2)-this%cfg%ym(j  ).lt.0.0_WP.and.j  .gt.this%cfg%jmino_); j=j-1; end do
+      do while (pos(2)-this%cfg%ym(j+1).ge.0.0_WP.and.j+1.lt.this%cfg%jmaxo_); j=j+1; end do
+      ! Find right k index
+      k=max(min(this%cfg%kmaxo_-1,k0),this%cfg%kmino_)
+      do while (pos(3)-this%cfg%zm(k  ).lt.0.0_WP.and.k  .gt.this%cfg%kmino_); k=k-1; end do
+      do while (pos(3)-this%cfg%zm(k+1).ge.0.0_WP.and.k+1.lt.this%cfg%kmaxo_); k=k+1; end do
+      ! Prepare tri-linear interpolation coefficients
+      wx1=(pos(1)-this%cfg%xm(i))/(this%cfg%xm(i+1)-this%cfg%xm(i)); wx2=1.0_WP-wx1
+      wy1=(pos(2)-this%cfg%ym(j))/(this%cfg%ym(j+1)-this%cfg%ym(j)); wy2=1.0_WP-wy1
+      wz1=(pos(3)-this%cfg%zm(k))/(this%cfg%zm(k+1)-this%cfg%zm(k)); wz2=1.0_WP-wz1
+      ! Tri-linear interpolation of S
+      sc=wz1*(wy1*(wx1*S(i+1,j+1,k+1)  + &
+      &            wx2*S(i  ,j+1,k+1)) + &
+      &       wy2*(wx1*S(i+1,j  ,k+1)  + &
+      &            wx2*S(i  ,j  ,k+1)))+ &
+      &  wz2*(wy1*(wx1*S(i+1,j+1,k  )  + &
+      &            wx2*S(i  ,j+1,k  )) + &
+      &       wy2*(wx1*S(i+1,j  ,k  )  + &
+      &            wx2*S(i  ,j  ,k  )))
+      return
+   end function get_scalar
    
    
    !> Extract various monitoring data from particle field

@@ -23,8 +23,9 @@ module simulation
    
    public :: simulation_init,simulation_run,simulation_final
    
-   !> Velocity arrays
+   !> Fluid phase arrays
    real(WP), dimension(:,:,:), allocatable :: U,V,W
+   real(WP), dimension(:,:,:), allocatable :: rho,visc
    
 contains
    
@@ -83,11 +84,14 @@ contains
       !end block test_lpt_io
       
       
-      ! Prepare our velocity field based on a Taylor vortex
-      initialize_velocity: block
+      ! Prepare our fluid phase info based on a Taylor vortex
+      initialize_fluid: block
          use mathtools, only: twoPi
          integer :: i,j,k
+         real(WP) :: rhof,viscf
          ! Allocate arrays
+         allocate(rho (lp%cfg%imino_:lp%cfg%imaxo_,lp%cfg%jmino_:lp%cfg%jmaxo_,lp%cfg%kmino_:lp%cfg%kmaxo_))
+         allocate(visc(lp%cfg%imino_:lp%cfg%imaxo_,lp%cfg%jmino_:lp%cfg%jmaxo_,lp%cfg%kmino_:lp%cfg%kmaxo_))
          allocate(U(lp%cfg%imino_:lp%cfg%imaxo_,lp%cfg%jmino_:lp%cfg%jmaxo_,lp%cfg%kmino_:lp%cfg%kmaxo_))
          allocate(V(lp%cfg%imino_:lp%cfg%imaxo_,lp%cfg%jmino_:lp%cfg%jmaxo_,lp%cfg%kmino_:lp%cfg%kmaxo_))
          allocate(W(lp%cfg%imino_:lp%cfg%imaxo_,lp%cfg%jmino_:lp%cfg%jmaxo_,lp%cfg%kmino_:lp%cfg%kmaxo_))
@@ -101,7 +105,10 @@ contains
                end do
             end do
          end do
-      end block initialize_velocity
+         ! Set constant density and viscosity
+         call param_read('Density',rhof); rho=rhof
+         call param_read('Viscosity',viscf); visc=viscf
+      end block initialize_fluid
       
       
       ! Initialize time tracker with 1 subiterations
@@ -162,7 +169,7 @@ contains
          call time%increment()
          
          ! Advance particles by dt
-         call lp%advance(dt=time%dt,U=U,V=V,W=W)
+         call lp%advance(dt=time%dt,U=U,V=V,W=W,rho=rho,visc=visc)
          
          ! Output to ensight
          if (ens_evt%occurs()) call ens_out%write_data(time%t)
@@ -187,7 +194,7 @@ contains
       ! timetracker
       
       ! Deallocate work arrays
-      deallocate(U,V,W)
+      deallocate(rho,visc,U,V,W)
       
    end subroutine simulation_final
    

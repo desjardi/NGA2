@@ -13,6 +13,10 @@ nz :	1
 Max timestep size :	2e-3
 Max cfl number :	1
 
+# Fluid properties
+Viscosity : 0.01
+Density :   1
+
 # Particle parameters
 Particle density :  1000
 Particle diameter : 0.001
