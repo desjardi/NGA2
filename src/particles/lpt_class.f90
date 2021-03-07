@@ -191,6 +191,9 @@ contains
       ! Communicate particles
       call this%sync()
       
+      ! Update the particle mesh
+      call this%update_partmesh()
+      
    end subroutine advance
    
    
