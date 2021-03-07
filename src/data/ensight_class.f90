@@ -617,14 +617,14 @@ contains
    subroutine write_part(this,part)
       use precision, only: SP
       use messager,  only: die
-      use mpi_f08,   only: mpi_barrier
+      use mpi_f08,   only: MPI_BARRIER,MPI_ALLREDUCE,MPI_SUM,MPI_INTEGER
       implicit none
       class(ensight), intent(in) :: this
       type(prt), pointer, intent(in) :: part
       character(len=str_medium) :: filename
       integer :: iunit,ierr,rank
       character(len=80) :: cbuff
-      integer :: ibuff
+      integer :: ibuff,npart
       
       ! Write the case file from scratch in ASCII format
       if (this%cfg%amRoot) then
@@ -646,6 +646,8 @@ contains
       ! Generate the particle geometry file
       filename='ensight/'//trim(this%name)//'/'//trim(part%name)//'/particle.'
       write(filename(len_trim(filename)+1:len_trim(filename)+6),'(i6.6)') this%ntime
+      ! Count the number of particles
+      call MPI_ALLREDUCE(part%ptr%n,npart,1,MPI_INTEGER,MPI_SUM,this%cfg%comm,ierr)
       ! Root write the header
       if (this%cfg%amRoot) then
          ! Open the file
@@ -655,8 +657,8 @@ contains
          cbuff='C Binary'                          ; write(iunit) cbuff
          cbuff=trim(adjustl(part%ptr%name))        ; write(iunit) cbuff
          cbuff='particle coordinates'              ; write(iunit) cbuff
-         ibuff=part%ptr%n                          ; write(iunit) ibuff
-         write(iunit) (ibuff,ibuff=1,part%ptr%n)
+         ibuff=npart                               ; write(iunit) ibuff
+         write(iunit) (ibuff,ibuff=1,npart)
          ! Close the file
          close(iunit)
       end if

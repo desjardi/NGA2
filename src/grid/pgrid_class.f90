@@ -339,20 +339,19 @@ contains
             do ip=1,self%npx
                ploc=[ip-1,jp-1,kp-1]
                call MPI_CART_RANK(self%comm,ploc,self%proc2rank(ip,jp,kp),ierr)
-               self%proc2rank(ip,jp,kp)=self%proc2rank(ip,jp,kp)+1
             end do
          end do
       end do
       
       ! Store index-to-processor-coordinate info
       allocate(self%i2iproc(self%imino:self%imaxo),tmp(self%imino:self%imaxo)); tmp=-1; tmp(self%imin_:self%imax_)=self%iproc
-      call MPI_ALLREDUCE(tmp,self%i2iproc,self%nx,MPI_REAL_WP,MPI_MAX,self%comm,ierr); deallocate(tmp)
+      call MPI_ALLREDUCE(tmp,self%i2iproc,self%nxo,MPI_INTEGER,MPI_MAX,self%comm,ierr); deallocate(tmp)
       self%i2iproc(self%imino:self%imin-1)=self%i2iproc(self%imin); self%i2iproc(self%imax+1:self%imaxo)=self%i2iproc(self%imax)
       allocate(self%j2jproc(self%jmino:self%jmaxo),tmp(self%jmino:self%jmaxo)); tmp=-1; tmp(self%jmin_:self%jmax_)=self%jproc
-      call MPI_ALLREDUCE(tmp,self%j2jproc,self%ny,MPI_REAL_WP,MPI_MAX,self%comm,ierr); deallocate(tmp)
+      call MPI_ALLREDUCE(tmp,self%j2jproc,self%nyo,MPI_INTEGER,MPI_MAX,self%comm,ierr); deallocate(tmp)
       self%j2jproc(self%jmino:self%jmin-1)=self%j2jproc(self%jmin); self%j2jproc(self%jmax+1:self%jmaxo)=self%j2jproc(self%jmax)
       allocate(self%k2kproc(self%kmino:self%kmaxo),tmp(self%kmino:self%kmaxo)); tmp=-1; tmp(self%kmin_:self%kmax_)=self%kproc
-      call MPI_ALLREDUCE(tmp,self%k2kproc,self%nz,MPI_REAL_WP,MPI_MAX,self%comm,ierr); deallocate(tmp)
+      call MPI_ALLREDUCE(tmp,self%k2kproc,self%nzo,MPI_INTEGER,MPI_MAX,self%comm,ierr); deallocate(tmp)
       self%k2kproc(self%kmino:self%kmin-1)=self%k2kproc(self%kmin); self%k2kproc(self%kmax+1:self%kmaxo)=self%k2kproc(self%kmax)
       
    end subroutine pgrid_domain_decomp

@@ -209,13 +209,8 @@ contains
       integer :: i
       ! Reset particle mesh storage
       call this%pmesh%reset()
-      ! Handle zero particle case by adding fictitious particle
-      if (this%np_.eq.0) then
-      !   call this%pmesh%set_size(1)
-      !   this%pmesh%pos(:,1)=0.0_WP
-      !   this%pmesh%d(1)    =0.0_WP
-         return
-      end if
+      ! Nothing else to do if no particle is present
+      if (this%np_.eq.0) return
       ! Copy particle info
       call this%pmesh%set_size(this%np_)
       do i=1,this%np_
@@ -280,7 +275,7 @@ contains
       nb_send=maxval(who_send)
       nb_recv=sum(who_recv)
       ! Allocate buffers to send particles
-      allocate(buf_send(this%cfg%nproc,nb_send))
+      allocate(buf_send(nb_send,this%cfg%nproc))
       ! Find and pack the particles to be sent
       counter=0
       do i=1,this%np_
@@ -289,7 +284,7 @@ contains
          if (prank.ne.this%cfg%rank+1) then
             ! Prepare for sending
             counter(prank)=counter(prank)+1
-            buf_send(prank,counter(prank))=this%p(i)
+            buf_send(counter(prank),prank)=this%p(i)
             ! Need to remove the particle
             this%p(i)%flag=1
          end if
@@ -303,7 +298,7 @@ contains
             ! I'm the sender of particles
             do rank_recv=1,this%cfg%nproc
                if (who_send(rank_recv).gt.0) then
-                  call MPI_send(buf_send(rank_recv,:),who_send(rank_recv),MPI_PART,rank_recv-1,0,this%cfg%comm,ierr)
+                  call MPI_send(buf_send(:,rank_recv),who_send(rank_recv),MPI_PART,rank_recv-1,0,this%cfg%comm,ierr)
                end if
             end do
          else

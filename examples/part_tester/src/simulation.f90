@@ -69,6 +69,10 @@ contains
          end if
          ! Count resulting particles
          call lp%count()
+         if (cfg%amRoot) print*,'precomm',lp%np_proc
+         ! Distribute particles
+         call lp%sync()
+         if (cfg%amRoot) print*,'pstcomm',lp%np_proc
          ! Also update the output
          call lp%update_partmesh()
       end block initialize_lpt
