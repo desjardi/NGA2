@@ -75,6 +75,7 @@ module lpt_class
    contains
       procedure :: update_partmesh                        !< Create a simple particle mesh for visualization
       procedure :: advance                                !< Step forward the particle ODEs
+      procedure :: count                                  !< Update number of particles info
       procedure :: resize                                 !< Resize particle array to given size
       procedure :: recycle                                !< Recycle particle array by removing flagged particles
       procedure :: sync                                   !< Synchronize particles across interprocessor boundaries
@@ -107,6 +108,7 @@ contains
       
       ! Allocate variables
       allocate(self%np_proc(1:self%cfg%nproc))
+      call self%resize(0); call self%count()
       
       ! Initialize MPI derived datatype for a particle
       call prepare_mpi_part()
@@ -151,8 +153,11 @@ contains
       use parallel, only: MPI_REAL_WP
       implicit none
       class(lpt), intent(inout) :: this
-      real(WP) :: buf
+      real(WP) :: buf,safe_np
       integer :: i,ierr
+      
+      ! Create safe np
+      safe_np=real(max(this%np,1),WP)
       
       ! Diameter and velocity min/max/mean
       this%dmin=huge(1.0_WP); this%dmax=-huge(1.0_WP); this%dmean=0.0_WP
@@ -167,16 +172,16 @@ contains
       end do
       call MPI_ALLREDUCE(this%dmin ,buf,1,MPI_REAL_WP,MPI_MIN,this%cfg%comm,ierr); this%dmin =buf
       call MPI_ALLREDUCE(this%dmax ,buf,1,MPI_REAL_WP,MPI_MAX,this%cfg%comm,ierr); this%dmax =buf
-      call MPI_ALLREDUCE(this%dmean,buf,1,MPI_REAL_WP,MPI_SUM,this%cfg%comm,ierr); this%dmean=buf/this%np
+      call MPI_ALLREDUCE(this%dmean,buf,1,MPI_REAL_WP,MPI_SUM,this%cfg%comm,ierr); this%dmean=buf/safe_np
       call MPI_ALLREDUCE(this%Umin ,buf,1,MPI_REAL_WP,MPI_MIN,this%cfg%comm,ierr); this%Umin =buf
       call MPI_ALLREDUCE(this%Umax ,buf,1,MPI_REAL_WP,MPI_MAX,this%cfg%comm,ierr); this%Umax =buf
-      call MPI_ALLREDUCE(this%Umean,buf,1,MPI_REAL_WP,MPI_SUM,this%cfg%comm,ierr); this%Umean=buf/this%np
+      call MPI_ALLREDUCE(this%Umean,buf,1,MPI_REAL_WP,MPI_SUM,this%cfg%comm,ierr); this%Umean=buf/safe_np
       call MPI_ALLREDUCE(this%Vmin ,buf,1,MPI_REAL_WP,MPI_MIN,this%cfg%comm,ierr); this%Vmin =buf
       call MPI_ALLREDUCE(this%Vmax ,buf,1,MPI_REAL_WP,MPI_MAX,this%cfg%comm,ierr); this%Vmax =buf
-      call MPI_ALLREDUCE(this%Vmean,buf,1,MPI_REAL_WP,MPI_SUM,this%cfg%comm,ierr); this%Vmean=buf/this%np
+      call MPI_ALLREDUCE(this%Vmean,buf,1,MPI_REAL_WP,MPI_SUM,this%cfg%comm,ierr); this%Vmean=buf/safe_np
       call MPI_ALLREDUCE(this%Wmin ,buf,1,MPI_REAL_WP,MPI_MIN,this%cfg%comm,ierr); this%Wmin =buf
       call MPI_ALLREDUCE(this%Wmax ,buf,1,MPI_REAL_WP,MPI_MAX,this%cfg%comm,ierr); this%Wmax =buf
-      call MPI_ALLREDUCE(this%Wmean,buf,1,MPI_REAL_WP,MPI_SUM,this%cfg%comm,ierr); this%Wmean=buf/this%np
+      call MPI_ALLREDUCE(this%Wmean,buf,1,MPI_REAL_WP,MPI_SUM,this%cfg%comm,ierr); this%Wmean=buf/safe_np
       
       ! Diameter and velocity variance
       this%dvar=0.0_WP
@@ -189,10 +194,10 @@ contains
          this%Vvar=this%Vvar+(this%p(i)%vel(2)-this%Vmean)**2.0_WP
          this%Wvar=this%Wvar+(this%p(i)%vel(3)-this%Wmean)**2.0_WP
       end do
-      call MPI_ALLREDUCE(this%dvar,buf,1,MPI_REAL_WP,MPI_SUM,this%cfg%comm,ierr); this%dvar=buf/this%np
-      call MPI_ALLREDUCE(this%Uvar,buf,1,MPI_REAL_WP,MPI_SUM,this%cfg%comm,ierr); this%Uvar=buf/this%np
-      call MPI_ALLREDUCE(this%Vvar,buf,1,MPI_REAL_WP,MPI_SUM,this%cfg%comm,ierr); this%Vvar=buf/this%np
-      call MPI_ALLREDUCE(this%Wvar,buf,1,MPI_REAL_WP,MPI_SUM,this%cfg%comm,ierr); this%Wvar=buf/this%np
+      call MPI_ALLREDUCE(this%dvar,buf,1,MPI_REAL_WP,MPI_SUM,this%cfg%comm,ierr); this%dvar=buf/safe_np
+      call MPI_ALLREDUCE(this%Uvar,buf,1,MPI_REAL_WP,MPI_SUM,this%cfg%comm,ierr); this%Uvar=buf/safe_np
+      call MPI_ALLREDUCE(this%Vvar,buf,1,MPI_REAL_WP,MPI_SUM,this%cfg%comm,ierr); this%Vvar=buf/safe_np
+      call MPI_ALLREDUCE(this%Wvar,buf,1,MPI_REAL_WP,MPI_SUM,this%cfg%comm,ierr); this%Wvar=buf/safe_np
       
    end subroutine get_max
    
@@ -206,9 +211,9 @@ contains
       call this%pmesh%reset()
       ! Handle zero particle case by adding fictitious particle
       if (this%np_.eq.0) then
-         call this%pmesh%set_size(1)
-         this%pmesh%pos(:,1)=0.0_WP
-         this%pmesh%d(1)    =0.0_WP
+      !   call this%pmesh%set_size(1)
+      !   this%pmesh%pos(:,1)=0.0_WP
+      !   this%pmesh%d(1)    =0.0_WP
          return
       end if
       ! Copy particle info
@@ -323,16 +328,16 @@ contains
       integer, intent(in) :: n
       type(part), dimension(:), allocatable :: tmp
       integer :: size_now,size_new
-      ! Resize part array to size n
+      ! Resize particle array to size n
       if (.not.allocated(this%p)) then
-         ! part is of size 0
+         ! Particle is of size 0
          if (n.gt.0) then
             ! Allocate directly to size n
             allocate(this%p(n))
             this%p(1:n)%flag=1
          end if
       else if (n.eq.0) then
-         ! part is associated, but we want to empty it
+         ! Particle array is associated, but we want to empty it
          deallocate(this%p)
       else
          ! Update from a non-zero size to another non-zero size
@@ -354,10 +359,9 @@ contains
    
    !> Clean-up of particle array by removing flag=1 particles
    subroutine recycle(this)
-      use mpi_f08
       implicit none
       class(lpt), intent(inout) :: this
-      integer :: new_size,ierr,i
+      integer :: new_size,i
       ! Compact all active particles at the beginning of the array
       new_size=0
       if (allocated(this%p)) then
@@ -374,10 +378,24 @@ contains
       ! Resize to new size
       call this%resize(new_size)
       ! Update number of particles
-      this%np_=size(this%p,dim=1)
+      call this%count()
+   end subroutine recycle
+   
+   
+   !> Count number of particles on all processors
+   subroutine count(this)
+      use mpi_f08, only: MPI_ALLGATHER,MPI_INTEGER
+      implicit none
+      class(lpt), intent(inout) :: this
+      integer :: ierr
+      if (allocated(this%p)) then
+         this%np_=size(this%p,dim=1)
+      else
+         this%np_=0
+      end if
       call MPI_ALLGATHER(this%np_,1,MPI_INTEGER,this%np_proc,1,MPI_INTEGER,this%cfg%comm,ierr)
       this%np=sum(this%np_proc)
-   end subroutine recycle
+   end subroutine count
    
    
    !> Parallel write particles to file
