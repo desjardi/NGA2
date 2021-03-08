@@ -14,7 +14,7 @@ Max timestep size :	2e-3
 Max cfl number :	1
 
 # Fluid properties
-Viscosity : 0.01
+Viscosity : 0.001
 Density :   1
 
 # Particle parameters
