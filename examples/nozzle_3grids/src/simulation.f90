@@ -3,7 +3,7 @@ module simulation
    use string,            only: str_medium
    use precision,         only: WP
    use geometry,          only: cfg1,cfg2,cfg3
-   use geometry,          only: xinj_dist,inj_norm_diam,rli0,rlo0,rgi0
+   use geometry,          only: xinj_dist,inj_norm_diam,rli0,rlo0,rgi0,rlo0_spray,rgi0_spray
    use incomp_class,      only: incomp
    use tpns_class,        only: tpns
    use vfs_class,         only: vfs
@@ -176,6 +176,18 @@ contains
       rad=sqrt(pg%ym(j)**2+pg%zm(k)**2)
       if (rad.ge.rlo0.and.rad.lt.rgi0.and.i.eq.pg%imin) isIn=.true.
    end function gas_inj
+   
+   !> Function that localizes gas stream at -x
+   function gas_inj_spray(pg,i,j,k) result(isIn)
+      use pgrid_class, only: pgrid
+      class(pgrid), intent(in) :: pg
+      integer, intent(in) :: i,j,k
+      logical :: isIn
+      real(WP) :: rad
+      isIn=.false.
+      rad=sqrt(pg%ym(j)**2+pg%zm(k)**2)
+      if (rad.ge.rlo0_spray.and.rad.lt.rgi0_spray.and.i.eq.pg%imin) isIn=.true.
+   end function gas_inj_spray
    
    
    !> Function that localizes the top (y+) of the domain
@@ -718,7 +730,7 @@ contains
       
       ! Initialize time tracker
       initialize_timetracker3: block
-         time1=timetracker(cfg3%amRoot,name='spray_region')
+         time3=timetracker(cfg3%amRoot,name='spray_region')
          call param_read('3 Max timestep size',time3%dtmax)
          call param_read('3 Max cfl number',time3%cflmax)
          time3%dt=time3%dtmax
@@ -742,7 +754,7 @@ contains
          fs3%rho=fs2%rho_g
          fs3%visc=fs2%visc_g
          ! Define direction gas/liquid stream boundary conditions
-         call fs3%add_bcond(name='gas_inj',type=dirichlet      ,face='x',dir=-1,canCorrect=.false.,locator=gas_inj)
+         call fs3%add_bcond(name='gas_inj',type=dirichlet      ,face='x',dir=-1,canCorrect=.false.,locator=gas_inj_spray)
          ! Neumann on the side
          call fs3%add_bcond(name='bc_yp'  ,type=clipped_neumann,face='y',dir=+1,canCorrect=.true. ,locator=yp_locator)
          call fs3%add_bcond(name='bc_ym'  ,type=clipped_neumann,face='y',dir=-1,canCorrect=.true. ,locator=ym_locator)
@@ -771,7 +783,7 @@ contains
          real(WP) :: Q_SLPM,Q_SI,Aport
          real(WP), parameter :: SLPM2SI=1.66667E-5_WP
          ! Zero initial field
-         fs1%U=0.0_WP; fs1%V=0.0_WP; fs1%W=0.0_WP
+         fs3%U=0.0_WP; fs3%V=0.0_WP; fs3%W=0.0_WP
          ! Handle restart
          if (restarted) then
             call df3%pullvar(name='U'   ,var=fs3%U   )
@@ -782,7 +794,7 @@ contains
          ! Read in mean gas flow rate
          call param_read('Gas flow rate (SLPM)',Q_SLPM)
          Q_SI=Q_SLPM*SLPM2SI
-         Aport=pi*rgi0**2-pi*rlo0**2
+         Aport=pi*rgi0_spray**2-pi*rlo0_spray**2
          Uports=Q_SI/Aport
          call fs3%get_bcond('gas_inj',mybc)
          do n=1,mybc%itr%no_
@@ -879,17 +891,17 @@ contains
          call sprayfile%add_column(time3%t,'Time')
          call sprayfile%add_column(time3%dt,'Timestep size')
          call sprayfile%add_column(lp3%np,'Droplet number')
-         call sprayfile%add_column(lp3%Umin,'Umin')
-         call sprayfile%add_column(lp3%Umax,'Umax')
+         call sprayfile%add_column(lp3%Umin, 'Umin')
+         call sprayfile%add_column(lp3%Umax, 'Umax')
          call sprayfile%add_column(lp3%Umean,'Umean')
-         call sprayfile%add_column(lp3%Vmin,'Vmin')
-         call sprayfile%add_column(lp3%Vmax,'Vmax')
+         call sprayfile%add_column(lp3%Vmin, 'Vmin')
+         call sprayfile%add_column(lp3%Vmax, 'Vmax')
          call sprayfile%add_column(lp3%Vmean,'Vmean')
-         call sprayfile%add_column(lp3%Wmin,'Wmin')
-         call sprayfile%add_column(lp3%Wmax,'Wmax')
+         call sprayfile%add_column(lp3%Wmin, 'Wmin')
+         call sprayfile%add_column(lp3%Wmax, 'Wmax')
          call sprayfile%add_column(lp3%Wmean,'Wmean')
-         call sprayfile%add_column(lp3%dmin,'dmin')
-         call sprayfile%add_column(lp3%dmax,'dmax')
+         call sprayfile%add_column(lp3%dmin, 'dmin')
+         call sprayfile%add_column(lp3%dmax, 'dmax')
          call sprayfile%add_column(lp3%dmean,'dmean')
          call sprayfile%write()
       end block create_monitor3

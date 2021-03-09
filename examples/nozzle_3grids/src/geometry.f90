@@ -20,7 +20,11 @@ module geometry
    real(WP) :: rlo0  !< Liquid pipe wall outer diameter at xmin, if xmin>nozzle_end
    real(WP) :: rgi0  !< Gas annular wall pipe inner diameter at xmin, if xmin>nozzle_end
    real(WP) :: rgo0  !< Gas annular wall pipe outer diameter at xmin, if xmin>nozzle_end
-   public :: xinj_dist,inj_norm_diam,rli0,rlo0,rgi0,rgo0 ! These will be needed by the bconds later
+   real(WP) :: rli0_spray  !< Liquid pipe wall inner diameter at xmin, if xmin>nozzle_end
+   real(WP) :: rlo0_spray  !< Liquid pipe wall outer diameter at xmin, if xmin>nozzle_end
+   real(WP) :: rgi0_spray  !< Gas annular wall pipe inner diameter at xmin, if xmin>nozzle_end
+   real(WP) :: rgo0_spray  !< Gas annular wall pipe outer diameter at xmin, if xmin>nozzle_end
+   public :: xinj_dist,inj_norm_diam,rli0,rlo0,rgi0,rgo0,rli0_spray,rlo0_spray,rgi0_spray,rgo0_spray ! These will be needed by the bconds later
    
 contains
    
@@ -345,7 +349,7 @@ contains
          do i=1,nx+1
             x(i)=real(i-1,WP)/real(nx,WP)*Lx-0.5_WP*Lx
          end do
-         call param_read('2 xmax',xmax)
+         call param_read('3 xmax',xmax)
          x=x-x(nx+1)+xmax
          do j=1,ny+1
             y(j)=real(j-1,WP)/real(ny,WP)*Ly-0.5_WP*Ly
@@ -398,6 +402,24 @@ contains
             call bisection(xloc,k,x_swh4,5053)
             swh(4,i)=(xloc-x_swh4(k))/(x_swh4(k+1)-x_swh4(k))*swh4(k+1)+(x_swh4(k+1)-xloc)/(x_swh4(k+1)-x_swh4(k))*swh4(k)
          end do
+         
+         ! If the domain does not extend past the back on the left, store the diameters for use by the boundary conditions
+         if (cfg3%xm(cfg2%imin).gt.nozzle_end) then
+            xloc=cfg3%xm(cfg3%imin)
+            call bisection(xloc,k,x_swh1,   2)
+            rli0_spray=(xloc-x_swh1(k))/(x_swh1(k+1)-x_swh1(k))*swh1(k+1)+(x_swh1(k+1)-xloc)/(x_swh1(k+1)-x_swh1(k))*swh1(k)
+            call bisection(xloc,k,x_swh2, 890)
+            rlo0_spray=(xloc-x_swh2(k))/(x_swh2(k+1)-x_swh2(k))*swh2(k+1)+(x_swh2(k+1)-xloc)/(x_swh2(k+1)-x_swh2(k))*swh2(k)
+            call bisection(xloc,k,x_swh3,3302)
+            rgi0_spray=(xloc-x_swh3(k))/(x_swh3(k+1)-x_swh3(k))*swh3(k+1)+(x_swh3(k+1)-xloc)/(x_swh3(k+1)-x_swh3(k))*swh3(k)
+            call bisection(xloc,k,x_swh4,5053)
+            rgo0_spray=(xloc-x_swh4(k))/(x_swh4(k+1)-x_swh4(k))*swh4(k+1)+(x_swh4(k+1)-xloc)/(x_swh4(k+1)-x_swh4(k))*swh4(k)
+         else
+            rli0_spray=0.0_WP
+            rlo0_spray=0.0_WP
+            rgi0_spray=0.0_WP
+            rgo0_spray=0.0_WP
+         end if
          
          ! Write VF array - includes the overlap here
          cfg3%VF=1.0_WP
