@@ -1,0 +1,8 @@
+# Add appropriate CWIPI includes and libraries
+ifdef CWIPI_DIR
+  INCLUDE_LOCATIONS += $(CWIPI_DIR)/include
+  LIBRARY_LOCATIONS += $(CWIPI_DIR)/lib
+  LIBRARIES += -lcwpf -lcwp
+else
+  $(error CWIPI_DIR not defined, but it is currently required by NGA2)
+endif

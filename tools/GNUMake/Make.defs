@@ -254,6 +254,10 @@ ifeq ($(USE_HDF5),TRUE)
   $(info Loading $(NGA_HOME)/tools/GNUMake/packages/Make.hdf5...)
   include        $(NGA_HOME)/tools/GNUMake/packages/Make.hdf5
 endif
+ifeq ($(USE_CWIPI),TRUE)
+  $(info Loading $(NGA_HOME)/tools/GNUMake/packages/Make.cwipi...)
+  include        $(NGA_HOME)/tools/GNUMake/packages/Make.cwipi
+endif
 ###############################################################
 
 

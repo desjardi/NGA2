@@ -1,10 +1,8 @@
 *Two-fluid nozzle test case, v4*
 This case simulates:
-1- the internal gas flow in the airblast fuel nozzle using a single-phase LES solver
+1- the internal gas flow in the air-blast fuel nozzle using a single-phase LES solver
 2- the atomizing two-phase flow exiting the tip of the nozzle using a liquid-gas flow LES solver
-3- the turbulent spray dispersion using a partcle-laden LES solver
+3- the turbulent spray dispersion using a particle-laden LES solver
 All three solvers are run simultaneously and are one-way coupled, with the outflow conditions of the nozzle simulation (1) used as inlet
 velocity conditions for the atomization simulation (2), and the atomization simulation being used for nudging the flow field in the spray
-simulation (3) and for generating the lagrangian droplets.
-
-The coupling is done manually here, but in the future libraries like preCICE could be used.
+simulation (3) and for generating the Lagrangian droplets.

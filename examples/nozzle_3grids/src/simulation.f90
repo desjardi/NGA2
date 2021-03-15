@@ -8,6 +8,7 @@ module simulation
    use tpns_class,        only: tpns
    use vfs_class,         only: vfs
    use lpt_class,         only: lpt
+   use coupler_class,     only: coupler
    use sgsmodel_class,    only: sgsmodel
    use timetracker_class, only: timetracker
    use ensight_class,     only: ensight
@@ -22,11 +23,17 @@ module simulation
    type(timetracker), public :: time1
    type(sgsmodel),    public :: sgs1
    
+   ! Coupler between 1 and 2
+   type(coupler),     public :: cpl12
+   
    !> Two-phase incompressible flow solver, VF solver, and corresponding time tracker and sgs model
    type(tpns),        public :: fs2
    type(vfs),         public :: vf2
    type(timetracker), public :: time2
    type(sgsmodel),    public :: sgs2
+   
+   ! Coupler between 2 and 3
+   !type(coupler),     public :: cpl23
    
    !> Single-phase incompressible flow solver with lpt, and corresponding time tracker and sgs model
    type(incomp),      public :: fs3
@@ -910,6 +917,26 @@ contains
          call sprayfile%add_column(lp3%dmean,'dmean')
          call sprayfile%write()
       end block create_monitor3
+      
+      
+      ! ###############################################
+      ! ######## PREPARE SOLVER COUPLING HERE #########
+      ! ###############################################
+      coupling12: block
+         ! Create coupler between configs 1 and 2
+         cpl12=coupler(pg1=cfg1,pg2=cfg2,name='nozzle_to_atom')
+      end block coupling12
+      
+      
+      !coupling23: block
+      !   ! Create coupler between configs 1 and 2
+      !   cpl23=coupler(pg1=cfg2,pg2=cfg3,name='atom_to_spray')
+      !end block coupling23
+      
+      
+      
+      
+      
       
       
       ! ###############################################
