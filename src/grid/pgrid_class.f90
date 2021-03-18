@@ -62,12 +62,6 @@ module pgrid_class
       integer :: jmaxo_=0                   !< Domain-decomposed index upper bound in y with overlap
       integer :: kmino_=0                   !< Domain-decomposed index lower bound in z with overlap
       integer :: kmaxo_=0                   !< Domain-decomposed index upper bound in z with overlap
-      
-      ! Shared domain decomposition information
-      integer, dimension(:),     allocatable :: i2iproc     !< Array of iproc(i)
-      integer, dimension(:),     allocatable :: j2jproc     !< Array of jproc(j)
-      integer, dimension(:),     allocatable :: k2kproc     !< Array of kproc(k)
-      
       !> Communication buffers
       real(WP), dimension(:,:,:), allocatable, private ::  syncbuf_x1, syncbuf_x2
       real(WP), dimension(:,:,:), allocatable, private ::  syncbuf_y1, syncbuf_y2
@@ -229,7 +223,7 @@ contains
       ! Get a root process
       self%amRoot=(self%rank.eq.0)
       ! Test if a processors was not in the group
-      if (self%rank.ne.MPI_UNDEFINED) call die('[pgrid constructor] All processors that call the constructor need to be in the group')
+      if (self%rank.eq.MPI_UNDEFINED) call die('[pgrid constructor] All processors that call the constructor need to be in the group')
    end subroutine pgrid_init_mpi
    
    
@@ -246,7 +240,6 @@ contains
       logical, dimension(3) :: dir
       integer, dimension(3) :: coords
       integer, dimension(3) :: gsizes,lsizes,lstart
-      integer, dimension(:), allocatable :: tmp
       
       ! Give cartesian layout to intracommunicator
       call MPI_CART_CREATE(self%comm,ndims,[self%npx,self%npy,self%npz],[self%xper,self%yper,self%zper],reorder,tmp_comm,ierr); self%comm=tmp_comm
@@ -268,42 +261,27 @@ contains
       
       ! Perform decomposition in x
       q=self%nx/self%npx; r=mod(self%nx,self%npx)
-      if (self%iproc.le.r) then
-         self%nx_  =q+1
-         self%imin_=self%imin+(self%iproc-1)*self%nx_
-      else
-         self%nx_  =q
-         self%imin_=self%imin+(self%iproc-1)*self%nx_+r
-      end if
-      self%imax_ =self%imin_+self%nx_-1
+      self%imin_ =self%imin+ coords(1)   *q+min(coords(1)  ,r)
+      self%imax_ =self%imin+(coords(1)+1)*q+min(coords(1)+1,r)-1
+      self%nx_   =self%imax_-self%imin_+1
       self%nxo_  =self%nx_+2*self%no
       self%imino_=self%imin_-self%no
       self%imaxo_=self%imax_+self%no
       
       ! Perform decomposition in y
       q=self%ny/self%npy; r=mod(self%ny,self%npy)
-      if (self%jproc.le.r) then
-         self%ny_  =q+1
-         self%jmin_=self%jmin+(self%jproc-1)*self%ny_
-      else
-         self%ny_  =q
-         self%jmin_=self%jmin+(self%jproc-1)*self%ny_+r
-      end if
-      self%jmax_ =self%jmin_+self%ny_-1
+      self%jmin_ =self%jmin+ coords(2)   *q+min(coords(2)  ,r)
+      self%jmax_ =self%jmin+(coords(2)+1)*q+min(coords(2)+1,r)-1
+      self%ny_   =self%jmax_-self%jmin_+1
       self%nyo_  =self%ny_+2*self%no
       self%jmino_=self%jmin_-self%no
       self%jmaxo_=self%jmax_+self%no
       
       ! Perform decomposition in z
       q=self%nz/self%npz; r=mod(self%nz,self%npz)
-      if (self%kproc.le.r) then
-         self%nz_  =q+1
-         self%kmin_=self%kmin+(self%kproc-1)*self%nz_
-      else
-         self%nz_  =q
-         self%kmin_=self%kmin+(self%kproc-1)*self%nz_+r
-      end if
-      self%kmax_ =self%kmin_+self%nz_-1
+      self%kmin_ =self%kmin+ coords(3)   *q+min(coords(3)  ,r)
+      self%kmax_ =self%kmin+(coords(3)+1)*q+min(coords(3)+1,r)-1
+      self%nz_   =self%kmax_-self%kmin_+1
       self%nzo_  =self%nz_+2*self%no
       self%kmino_=self%kmin_-self%no
       self%kmaxo_=self%kmax_+self%no
@@ -332,17 +310,6 @@ contains
       call MPI_TYPE_COMMIT(self%SPview,ierr)
       call MPI_TYPE_CREATE_SUBARRAY(3,gsizes,lsizes,lstart,MPI_ORDER_FORTRAN,MPI_INTEGER,self%Iview,ierr)
       call MPI_TYPE_COMMIT(self%Iview,ierr)
-      
-      ! Store index-to-processor-coordinate info
-      allocate(self%i2iproc(self%imino:self%imaxo),tmp(self%imino:self%imaxo)); tmp=-1; tmp(self%imin_:self%imax_)=self%iproc
-      call MPI_ALLREDUCE(tmp,self%i2iproc,self%nxo,MPI_INTEGER,MPI_MAX,self%comm,ierr); deallocate(tmp)
-      self%i2iproc(self%imino:self%imin-1)=self%i2iproc(self%imin); self%i2iproc(self%imax+1:self%imaxo)=self%i2iproc(self%imax)
-      allocate(self%j2jproc(self%jmino:self%jmaxo),tmp(self%jmino:self%jmaxo)); tmp=-1; tmp(self%jmin_:self%jmax_)=self%jproc
-      call MPI_ALLREDUCE(tmp,self%j2jproc,self%nyo,MPI_INTEGER,MPI_MAX,self%comm,ierr); deallocate(tmp)
-      self%j2jproc(self%jmino:self%jmin-1)=self%j2jproc(self%jmin); self%j2jproc(self%jmax+1:self%jmaxo)=self%j2jproc(self%jmax)
-      allocate(self%k2kproc(self%kmino:self%kmaxo),tmp(self%kmino:self%kmaxo)); tmp=-1; tmp(self%kmin_:self%kmax_)=self%kproc
-      call MPI_ALLREDUCE(tmp,self%k2kproc,self%nzo,MPI_INTEGER,MPI_MAX,self%comm,ierr); deallocate(tmp)
-      self%k2kproc(self%kmino:self%kmin-1)=self%k2kproc(self%kmin); self%k2kproc(self%kmax+1:self%kmaxo)=self%k2kproc(self%kmax)
       
    end subroutine pgrid_domain_decomp
    
@@ -921,8 +888,14 @@ contains
       implicit none
       class(pgrid), intent(in) :: this
       integer, dimension(3), intent(in) :: ind
-      integer :: rank,ierr
-      call MPI_CART_RANK(this%comm,[this%i2iproc(ind(1))-1,this%j2jproc(ind(2))-1,this%k2kproc(ind(3))-1],rank,ierr)
+      integer, dimension(3) :: coords=0
+      integer :: rank,ierr,q,r
+      ! Get coords from ind
+      q=this%nx/this%npx; r=mod(this%nx,this%npx); do while (ind(1).ge.this%imin+(coords(1)+1)*q+min(coords(1)+1,r).and.coords(1)+1.lt.this%npx); coords(1)=coords(1)+1; end do
+      q=this%ny/this%npy; r=mod(this%ny,this%npy); do while (ind(2).ge.this%jmin+(coords(2)+1)*q+min(coords(2)+1,r).and.coords(2)+1.lt.this%npy); coords(2)=coords(2)+1; end do
+      q=this%nz/this%npz; r=mod(this%nz,this%npz); do while (ind(3).ge.this%kmin+(coords(3)+1)*q+min(coords(3)+1,r).and.coords(3)+1.lt.this%npz); coords(3)=coords(3)+1; end do
+      ! Get rank from coords
+      call MPI_CART_RANK(this%comm,coords,rank,ierr)
    end function get_rank
    
    
