@@ -16,8 +16,11 @@ module coupler_class
    type :: coupler
       ! This is the name of the coupler
       character(len=str_medium) :: name='UNNAMED_CPL'     !< Coupler name (default=UNNAMED_CPL)
-      ! This is our two grids
-      class(pgrid), pointer :: pg1,pg2                    !< These are the pgrids that will be coupled
+      ! This is our source grid
+      class(pgrid), pointer :: src                        !< This is the source pgrid, from which data will be sent
+      class(pgrid), pointer :: dst                        !< This is the destination pgrid, to which data will be sent
+      ! Source rank on which dst point have been located
+      integer, dimension(:,:,:), allocatable :: srank     !< Source-rank of each destionation point
    contains
       
    end type coupler
@@ -32,22 +35,34 @@ contains
    
    
    !> Coupler constructor from two pgrids
-   function construct_from_two_pgrids(pg1,pg2,name) result(self)
+   function construct_from_two_pgrids(src,dst,name) result(self)
       use string,   only: lowercase
       use messager, only: die
       use parallel, only: comm
       implicit none
       type(coupler) :: self
-      class(pgrid), target, intent(in) :: pg1,pg2
+      class(pgrid), target, intent(in) :: src,dst
       character(len=*), intent(in) :: name
-      integer :: ierr
+      integer :: i,j,k
       
-      ! Set the name for the coupler
+      ! Set name for the coupler
       self%name=trim(adjustl(name))
       
-      ! Point to pgrid objects
-      self%pg1=>pg1
-      self%pg2=>pg2
+      ! Point to src and dst pgrid objects
+      self%src=>src
+      self%dst=>dst
+      
+      ! Allocate srank array
+      allocate(self%srank(self%dst%imino_:self%dst%imaxo_,self%dst%jmino_:self%dst%jmaxo_,self%dst%kmino_:self%dst%kmaxo_)); self%srank=-1
+      
+      ! Localize each dst cell center on the src grid - *this is from the perspective of the src*
+      do k=self%dst%kmin_,self%dst%kmax_
+         do j=self%dst%jmin_,self%dst%jmax_
+            do i=self%dst%imin_,self%dst%imax_
+               !self%srank(i,j,k)=self%src%get_rank(this%p(i)%ind)
+            end do
+         end do
+      end do
       
       ! Log/screen output
       logging: block
@@ -56,8 +71,8 @@ contains
          use messager, only: log
          use string,   only: str_long
          character(len=str_long) :: message
-         if (self%pg1%amRoot) then
-            write(message,'("Coupler [",a,"] between pgrids [",a,"] and [",a,"]")') trim(self%name),trim(self%pg1%name),trim(self%pg2%name)
+         if (self%src%amRoot) then
+            write(message,'("Coupler [",a,"] from pgrid [",a,"] to pgrid [",a,"]")') trim(self%name),trim(self%src%name),trim(self%dst%name)
             if (verbose.gt.1) write(output_unit,'(a)') trim(message)
             if (verbose.gt.0) call log(message)
          end if

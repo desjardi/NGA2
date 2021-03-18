@@ -1,10 +1,10 @@
 !> Definition of a partitioned grid class in NGA.
-!> @todo Add other parallelization strategies
+!> All processors that call the constructor need to be in the group passed by the user.
 module pgrid_class
    use precision,   only: WP
    use sgrid_class, only: sgrid
    use string,      only: str_medium
-   use mpi_f08,     only: MPI_COMM,MPI_GROUP,MPI_Datatype
+   use mpi_f08
    implicit none
    private
    
@@ -17,39 +17,57 @@ module pgrid_class
    
    !> Partitioned grid type
    type, extends(sgrid) :: pgrid
+      
       ! Parallelization information
+      type(MPI_Comm)     :: comm  =MPI_COMM_NULL              !< Grid communicator
+      type(MPI_Datatype) :: view  =MPI_DATATYPE_NULL          !< Local to global array mapping info - real(WP)
+      type(MPI_Datatype) :: Iview =MPI_DATATYPE_NULL          !< Local to global array mapping info - integer
+      type(MPI_Datatype) :: SPview=MPI_DATATYPE_NULL          !< Local to global array mapping info - real(SP)
       type(MPI_Group) :: group              !< Grid group
-      type(MPI_Comm) :: comm                !< Grid communicator
-      type(MPI_Datatype) :: view            !< Local to global array mapping info - real(WP)
-      type(MPI_Datatype) :: Iview           !< Local to global array mapping info - integer
-      type(MPI_Datatype) :: SPview          !< Local to global array mapping info - real(SP)
       integer :: nproc                      !< Number of processors
       integer :: rank                       !< Processor grid rank
       logical :: amRoot                     !< Am I grid root?
-      logical :: amIn                       !< Am I working in this grid?
-      integer :: npx,npy,npz                !< Number of processors per direction
-      integer :: iproc,jproc,kproc          !< Coordinates location of processor
-      type(MPI_Comm) :: xcomm               !< 1D x-communicator
-      type(MPI_Comm) :: ycomm               !< 1D y-communicator
-      type(MPI_Comm) :: zcomm               !< 1D z-communicator
-      integer :: xrank,yrank,zrank          !< 1D ranks
-      ! Extra info to find rank from indices
+      integer :: npx                        !< Number of processors in x
+      integer :: npy                        !< Number of processors in y
+      integer :: npz                        !< Number of processors in z
+      integer :: iproc=0                    !< Coordinate location of processor in x
+      integer :: jproc=0                    !< Coordinate location of processor in y
+      integer :: kproc=0                    !< Coordinate location of processor in z
+      type(MPI_Comm) :: xcomm=MPI_COMM_NULL !< 1D x-communicator
+      type(MPI_Comm) :: ycomm=MPI_COMM_NULL !< 1D y-communicator
+      type(MPI_Comm) :: zcomm=MPI_COMM_NULL !< 1D z-communicator
+      integer :: xrank=MPI_UNDEFINED        !< 1D rank for xcomm
+      integer :: yrank=MPI_UNDEFINED        !< 1D rank for ycomm
+      integer :: zrank=MPI_UNDEFINED        !< 1D rank for zcomm
+      
+      ! Local grid size
+      integer :: nx_=0                      !< Local grid size in x
+      integer :: ny_=0                      !< Local grid size in y
+      integer :: nz_=0                      !< Local grid size in z
+      ! Local grid size with overlap
+      integer :: nxo_=0                     !< Local grid size in x with overlap
+      integer :: nyo_=0                     !< Local grid size in y with overlap
+      integer :: nzo_=0                     !< Local grid size in z with overlap
+      ! Local index bounds
+      integer :: imin_=0                    !< Domain-decomposed index lower bound in x
+      integer :: imax_=0                    !< Domain-decomposed index upper bound in x
+      integer :: jmin_=0                    !< Domain-decomposed index lower bound in y
+      integer :: jmax_=0                    !< Domain-decomposed index upper bound in y
+      integer :: kmin_=0                    !< Domain-decomposed index lower bound in z
+      integer :: kmax_=0                    !< Domain-decomposed index upper bound in z
+      ! Local index bounds with overlap
+      integer :: imino_=0                   !< Domain-decomposed index lower bound in x with overlap
+      integer :: imaxo_=0                   !< Domain-decomposed index upper bound in x with overlap
+      integer :: jmino_=0                   !< Domain-decomposed index lower bound in y with overlap
+      integer :: jmaxo_=0                   !< Domain-decomposed index upper bound in y with overlap
+      integer :: kmino_=0                   !< Domain-decomposed index lower bound in z with overlap
+      integer :: kmaxo_=0                   !< Domain-decomposed index upper bound in z with overlap
+      
+      ! Shared domain decomposition information
       integer, dimension(:,:,:), allocatable :: proc2rank   !< 3D array of rank(iproc,jproc,kproc)
       integer, dimension(:),     allocatable :: i2iproc     !< Array of iproc(i)
       integer, dimension(:),     allocatable :: j2jproc     !< Array of jproc(j)
       integer, dimension(:),     allocatable :: k2kproc     !< Array of kproc(k)
-      ! Local grid size
-      integer :: nx_,ny_,nz_                !< Local grid size in x/y/z
-      ! Local grid size with overlap
-      integer :: nxo_,nyo_,nzo_             !< Local grid size in x/y/z with overlap
-      ! Local index bounds
-      integer :: imin_,imax_                !< Domain-decomposed index bounds in x
-      integer :: jmin_,jmax_                !< Domain-decomposed index bounds in y
-      integer :: kmin_,kmax_                !< Domain-decomposed index bounds in z
-      ! Local index bounds with overlap
-      integer :: imino_,imaxo_              !< Domain-decomposed index bounds in x with overlap
-      integer :: jmino_,jmaxo_              !< Domain-decomposed index bounds in y with overlap
-      integer :: kmino_,kmaxo_              !< Domain-decomposed index bounds in z with overlap
       
       !> Communication buffers
       real(WP), dimension(:,:,:), allocatable, private ::  syncbuf_x1, syncbuf_x2
@@ -92,9 +110,7 @@ contains
       use messager, only: die
       use param,    only: verbose
       use parallel, only: MPI_REAL_WP
-      use mpi_f08
       implicit none
-      
       type(pgrid) :: self                               !< Parallel grid
       integer, intent(in) :: no                         !< Overlap size
       character(len=*), intent(in) :: file              !< Grid file
@@ -110,9 +126,6 @@ contains
       
       ! Initialize MPI environment
       self%group=grp; call self%init_mpi
-      
-      ! Nothing more to do if the processor is not inside
-      if (.not.self%amIn) return
       
       ! Root process can now read in the grid
       if (self%amRoot) then
@@ -154,8 +167,12 @@ contains
       ! Deallocate
       deallocate(x,y,z)
       
+      ! Check and store decomposition
+      if (product(decomp).ne.self%nproc) call die('[pgrid constructor] Parallel decomposition is improper')
+      self%npx=decomp(1); self%npy=decomp(2); self%npz=decomp(3)
+      
       ! Perform actual domain decomposition of grid
-      call self%domain_decomp(decomp)
+      call self%domain_decomp()
       
       ! If verbose run, log and or print grid
       if (verbose.gt.0) call self%log
@@ -171,24 +188,23 @@ contains
       use messager, only: die
       use param,    only: verbose
       implicit none
-      
       type(pgrid) :: self                               !< Parallel grid
-      
       type(sgrid), intent(in) :: grid                   !< Base grid
       type(MPI_Group), intent(in) :: grp                !< Processor group for parallelization
-      integer, dimension(3) :: decomp                   !< Requested domain decomposition
+      integer, dimension(3), intent(in) :: decomp       !< Requested domain decomposition
       
       ! Initialize MPI environment
       self%group=grp; call self%init_mpi
       
-      ! Nothing more to do if the processor is not inside
-      if (.not.self%amIn) return
+      ! Check and store decomposition
+      if (product(decomp).ne.self%nproc) call die('[pgrid constructor] Parallel decomposition is improper')
+      self%npx=decomp(1); self%npy=decomp(2); self%npz=decomp(3)
       
       ! Assign base grid data
       self%sgrid=grid
       
       ! Perform actual domain decomposition of grid
-      call self%domain_decomp(decomp)
+      call self%domain_decomp()
       
       ! If verbose run, log and or print grid
       if (verbose.gt.0) call self%log
@@ -202,36 +218,29 @@ contains
    subroutine pgrid_init_mpi(self)
       use parallel, only: comm
       use messager, only: die
-      use mpi_f08
       implicit none
       class(pgrid), intent(inout) :: self
       integer :: ierr
       ! Get group size, and intracommunicator
       call MPI_GROUP_SIZE(self%group,self%nproc,ierr)
-      if (self%nproc.eq.0) call die('[pgrid constructor] Non-empty group is required!')
+      if (self%nproc.eq.0) call die('[pgrid constructor] A non-empty group is required')
       call MPI_COMM_CREATE(comm,self%group,self%comm,ierr)
-      ! Get rank and amIn info
+      print*,comm,self%comm,self%group
+      ! Get rank
       call MPI_GROUP_RANK(self%group,self%rank,ierr)
-      self%amIn=(self%rank.ne.MPI_UNDEFINED)
-      ! Get a root already
+      ! Get a root process
       self%amRoot=(self%rank.eq.0)
-      ! Handle processors that are not part of the group
-      if (.not.self%amIn) then
-         self%iproc=0; self%nx_=0; self%imin_=0; self%imax_=0; self%nxo_=0; self%imino_=0; self%imaxo_=0
-         self%jproc=0; self%ny_=0; self%jmin_=0; self%jmax_=0; self%nyo_=0; self%jmino_=0; self%jmaxo_=0
-         self%kproc=0; self%nz_=0; self%kmin_=0; self%kmax_=0; self%nzo_=0; self%kmino_=0; self%kmaxo_=0
-      end if
+      ! Test if a processors was not in the group
+      if (self%rank.ne.MPI_UNDEFINED) call die('[pgrid constructor] All processors that call the constructor need to be in the group')
    end subroutine pgrid_init_mpi
    
    
    !> Prepares the domain decomposition of the pgrid
-   subroutine pgrid_domain_decomp(self,decomp)
+   subroutine pgrid_domain_decomp(self)
       use messager, only: die
       use parallel, only: MPI_REAL_WP,MPI_REAL_SP
-      use mpi_f08
       implicit none
       class(pgrid), intent(inout) :: self
-      integer, dimension(3), intent(in) :: decomp
       integer :: ierr,q,r,ip,jp,kp
       type(MPI_Comm) :: tmp_comm
       integer, parameter :: ndims=3
@@ -240,12 +249,6 @@ contains
       integer, dimension(3) :: coords,ploc
       integer, dimension(3) :: gsizes,lsizes,lstart
       integer, dimension(:), allocatable :: tmp
-      
-      ! Store decomposition on the grid
-      self%npx=decomp(1); self%npy=decomp(2); self%npz=decomp(3)
-      
-      ! Perform sanity check of the decomposition
-      if (self%npx*self%npy*self%npz.ne.self%nproc) call die('[pgrid constructor] Parallel decomposition is improper')
       
       ! Give cartesian layout to intracommunicator
       call MPI_CART_CREATE(self%comm,ndims,[self%npx,self%npy,self%npz],[self%xper,self%yper,self%zper],reorder,tmp_comm,ierr); self%comm=tmp_comm
@@ -321,7 +324,7 @@ contains
       allocate(self%isyncbuf_z1(self%imino_:self%imaxo_,self%jmino_:self%jmaxo_,self%no))
       allocate(self%isyncbuf_z2(self%imino_:self%imaxo_,self%jmino_:self%jmaxo_,self%no))
       
-      ! Finally, we need to define a proper MPI-I/O view
+      ! We need to define a proper MPI-I/O view
       gsizes=[self%nx ,self%ny ,self%nz ]
       lsizes=[self%nx_,self%ny_,self%nz_]
       lstart=[self%imin_-self%imin,self%jmin_-self%jmin,self%kmin_-self%kmin]
@@ -365,8 +368,6 @@ contains
       implicit none
       class(pgrid), intent(in) :: this
       integer :: i,ierr
-      ! Return all non-involved procs
-      if (.not.this%amIn) return
       ! Root writes header
       call pgrid_print(this)
       ! Each proc provides info on his involvement in the grid
@@ -434,7 +435,6 @@ contains
    !> This routine assumes that the default overlap size is used
    !> It allows the use of pre-allocated buffers for speed
    subroutine pgrid_rsync(this,A)
-      use mpi_f08
       use parallel, only: MPI_REAL_WP
       implicit none
       class(pgrid), intent(inout) :: this
@@ -518,7 +518,6 @@ contains
    !> This routine assumes that the default overlap size is used
    !> It allows the use of pre-allocated buffers for speed
    subroutine pgrid_isync(this,A)
-      use mpi_f08
       implicit none
       class(pgrid), intent(inout) :: this
       integer, dimension(this%imino_:,this%jmino_:,this%kmino_:), intent(inout) :: A !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
@@ -600,7 +599,6 @@ contains
    !> Synchronization of overlap cells
    !> This version is capable of handling any overlap size
    subroutine pgrid_rsync_no(this,A,no)
-      use mpi_f08
       use parallel, only: MPI_REAL_WP
       implicit none
       class(pgrid), intent(in) :: this
@@ -697,7 +695,6 @@ contains
    !> Synchronization of overlap cells
    !> This version is capable of handling an array of the shape (:,i,j,k)
    subroutine pgrid_rsync_array(this,A)
-      use mpi_f08
       use parallel, only: MPI_REAL_WP
       implicit none
       class(pgrid), intent(in) :: this
@@ -796,7 +793,6 @@ contains
    !> Synchronization of overlap cells for integer
    !> This version is capable of handling any overlap size
    subroutine pgrid_isync_no(this,A,no)
-      use mpi_f08
       implicit none
       class(pgrid), intent(in) :: this
       integer, intent(in) :: no

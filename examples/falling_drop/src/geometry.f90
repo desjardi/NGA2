@@ -53,13 +53,23 @@ contains
       ! Create a config from that grid on our entire group
       create_cfg: block
          use parallel, only: group
+         use mpi_f08,  only: MPI_Group,MPI_Group_range_incl
          integer, dimension(3) :: partition
+         type(MPI_Group) :: mygrp
+         integer :: ierr
+         integer, dimension(3,1) :: myrange
          
          ! Read in partition
          call param_read('Partition',partition,short='p')
          
+         ! Create a group that macthes the partition size
+         mygrp=group
+         !myrange(:,1)=[0,partition(1)*partition(2)*partition(3)-1,1]
+         !call MPI_Group_range_incl(group,1,myrange,mygrp,ierr)
+         
          ! Create partitioned grid
-         cfg=config(grp=group,decomp=partition,grid=grid)
+         cfg=config(grp=mygrp,decomp=partition,grid=grid)
+         call cfg%allprint()
          
       end block create_cfg
       
