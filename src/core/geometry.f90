@@ -65,14 +65,14 @@ contains
       
       ! Create a config from that grid on our entire group
       create_cfg: block
-         use parallel, only: group
+         use parallel, only: comm
          integer, dimension(3) :: partition
          
          ! Read in partition
          call param_read('Partition',partition,short='p')
          
          ! Create partitioned grid
-         cfg=config(group,partition,grid)
+         cfg=config(comm=comm,partition,grid)
          
       end block create_cfg
       
@@ -117,7 +117,7 @@ contains
       
       ! Create a config from grid and config
       create_cfg2: block
-         use parallel, only: group
+         use parallel, only: comm
          use string,   only: str_medium
          character(len=str_medium) :: fgrid
          character(len=str_medium) :: fgeom
@@ -131,7 +131,7 @@ contains
          call param_read('Geom file',fgeom)
          
          ! Create the cfg by reading in the file
-         cfg2=config(group,partition,2,fgrid,fgeom)
+         cfg2=config(comm=comm,partition,2,fgrid,fgeom)
          
       end block create_cfg2
       
