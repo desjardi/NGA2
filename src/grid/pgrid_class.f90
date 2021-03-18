@@ -64,7 +64,6 @@ module pgrid_class
       integer :: kmaxo_=0                   !< Domain-decomposed index upper bound in z with overlap
       
       ! Shared domain decomposition information
-      integer, dimension(:,:,:), allocatable :: proc2rank   !< 3D array of rank(iproc,jproc,kproc)
       integer, dimension(:),     allocatable :: i2iproc     !< Array of iproc(i)
       integer, dimension(:),     allocatable :: j2jproc     !< Array of jproc(j)
       integer, dimension(:),     allocatable :: k2kproc     !< Array of kproc(k)
@@ -225,7 +224,6 @@ contains
       call MPI_GROUP_SIZE(self%group,self%nproc,ierr)
       if (self%nproc.eq.0) call die('[pgrid constructor] A non-empty group is required')
       call MPI_COMM_CREATE(comm,self%group,self%comm,ierr)
-      print*,comm,self%comm,self%group
       ! Get rank
       call MPI_GROUP_RANK(self%group,self%rank,ierr)
       ! Get a root process
@@ -241,12 +239,12 @@ contains
       use parallel, only: MPI_REAL_WP,MPI_REAL_SP
       implicit none
       class(pgrid), intent(inout) :: self
-      integer :: ierr,q,r,ip,jp,kp
+      integer :: ierr,q,r
       type(MPI_Comm) :: tmp_comm
       integer, parameter :: ndims=3
       logical, parameter :: reorder=.true.
       logical, dimension(3) :: dir
-      integer, dimension(3) :: coords,ploc
+      integer, dimension(3) :: coords
       integer, dimension(3) :: gsizes,lsizes,lstart
       integer, dimension(:), allocatable :: tmp
       
@@ -334,17 +332,6 @@ contains
       call MPI_TYPE_COMMIT(self%SPview,ierr)
       call MPI_TYPE_CREATE_SUBARRAY(3,gsizes,lsizes,lstart,MPI_ORDER_FORTRAN,MPI_INTEGER,self%Iview,ierr)
       call MPI_TYPE_COMMIT(self%Iview,ierr)
-      
-      ! Store processor coordinate to rank info
-      allocate(self%proc2rank(self%npx,self%npy,self%npz))
-      do kp=1,self%npz
-         do jp=1,self%npy
-            do ip=1,self%npx
-               ploc=[ip-1,jp-1,kp-1]
-               call MPI_CART_RANK(self%comm,ploc,self%proc2rank(ip,jp,kp),ierr)
-            end do
-         end do
-      end do
       
       ! Store index-to-processor-coordinate info
       allocate(self%i2iproc(self%imino:self%imaxo),tmp(self%imino:self%imaxo)); tmp=-1; tmp(self%imin_:self%imax_)=self%iproc
@@ -934,8 +921,8 @@ contains
       implicit none
       class(pgrid), intent(in) :: this
       integer, dimension(3), intent(in) :: ind
-      integer :: rank
-      rank=this%proc2rank(this%i2iproc(ind(1)),this%j2jproc(ind(2)),this%k2kproc(ind(3)))
+      integer :: rank,ierr
+      call MPI_CART_RANK(this%comm,[this%i2iproc(ind(1))-1,this%j2jproc(ind(2))-1,this%k2kproc(ind(3))-1],rank,ierr)
    end function get_rank
    
    
