@@ -14,11 +14,16 @@ module ensight_class
    public :: ensight
    
    ! List types
-   type :: scl !< Scalar field
+   type :: scl !< real(WP) scalar field
       type(scl), pointer :: next
       character(len=str_medium) :: name
       real(WP), dimension(:,:,:), pointer :: ptr
    end type scl
+   type :: scli !< integer scalar field
+      type(scli), pointer :: next
+      character(len=str_medium) :: name
+      integer, dimension(:,:,:), pointer :: ptr
+   end type scli
    type :: vct !< Vector field
       type(vct), pointer :: next
       character(len=str_medium) :: name
@@ -47,7 +52,8 @@ module ensight_class
       ! An ensight object stores geometry data
       type(config), pointer :: cfg                                    !< Config for ensight geometry and parallel I/O
       ! An ensight object stores lists of pointers to data
-      type(scl), pointer :: first_scl                                 !< Scalar list
+      type(scl), pointer :: first_scl                                 !< real(WP) scalar list
+      type(scli),pointer :: first_scli                                !< integer scalar list
       type(vct), pointer :: first_vct                                 !< Vector list
       type(srf), pointer :: first_srf                                 !< Surface list
       type(prt), pointer :: first_prt                                 !< Particle list
@@ -57,7 +63,8 @@ module ensight_class
       procedure :: write_case                                         !< Write out case file
       procedure :: write_surf                                         !< Write out surface mesh file
       procedure :: write_part                                         !< Write out particle mesh file
-      procedure :: add_scalar                                         !< Add a new scalar field
+      generic :: add_scalar=>add_scalar_real,add_scalar_int           !< Add a new scalar field - generic
+      procedure, private :: add_scalar_real,add_scalar_int            !< Add a new scalar field for real(WP) and integer, respectively
       procedure :: add_vector                                         !< Add a new vector field
       procedure :: add_surface                                        !< Add a new surface mesh
       procedure :: add_particle                                       !< Add a new particle mesh
@@ -105,6 +112,7 @@ contains
       
       ! Empty pointer to lists for now
       self%first_scl=>NULL()
+      self%first_scli=>NULL()
       self%first_vct=>NULL()
       self%first_srf=>NULL()
       self%first_prt=>NULL()
@@ -152,8 +160,8 @@ contains
    end function construct_ensight
    
    
-   !> Add a scalar field for output
-   subroutine add_scalar(this,name,scalar)
+   !> Add a real(WP) scalar field for output
+   subroutine add_scalar_real(this,name,scalar)
       implicit none
       class(ensight), intent(inout) :: this
       character(len=*), intent(in) :: name
@@ -169,8 +177,26 @@ contains
       this%first_scl=>new_scl
       ! Also create the corresponding directory
       if (this%cfg%amRoot) call execute_command_line('mkdir -p ensight/'//trim(this%name)//'/'//trim(new_scl%name))
-   end subroutine add_scalar
+   end subroutine add_scalar_real
    
+   !> Add a integer scalar field for output
+   subroutine add_scalar_int(this,name,scalar)
+      implicit none
+      class(ensight), intent(inout) :: this
+      character(len=*), intent(in) :: name
+      integer, dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), target, intent(in) :: scalar
+      type(scli), pointer :: new_scli
+      ! Prepare new scalar
+      allocate(new_scli)
+      new_scli%name=trim(adjustl(name))
+      new_scli%ptr =>scalar
+      ! Insert it up front
+      new_scli%next=>this%first_scli
+      ! Point list to new object
+      this%first_scli=>new_scli
+      ! Also create the corresponding directory
+      if (this%cfg%amRoot) call execute_command_line('mkdir -p ensight/'//trim(this%name)//'/'//trim(new_scli%name))
+   end subroutine add_scalar_int
    
    !> Add a vector field for output
    subroutine add_vector(this,name,vectx,vecty,vectz)
@@ -253,6 +279,7 @@ contains
       integer(kind=MPI_OFFSET_KIND) :: disp
       type(MPI_Status):: status
       type(scl), pointer :: my_scl
+      type(scli),pointer :: my_scli
       type(vct), pointer :: my_vct
       type(srf), pointer :: my_srf
       type(prt), pointer :: my_prt
@@ -280,7 +307,7 @@ contains
       ! Prepare the SP buffer
       allocate(spbuff(this%cfg%imin_:this%cfg%imax_,this%cfg%jmin_:this%cfg%jmax_,this%cfg%kmin_:this%cfg%kmax_))
       
-      ! Traverse all datasets and print them all out - scalars first
+      ! Traverse all datasets and print them all out - real scalars first
       my_scl=>this%first_scl
       do while (associated(my_scl))
          
@@ -316,7 +343,43 @@ contains
          
       end do
       
-      ! Traverse all datasets and print them all out - vectors second
+      ! Traverse all datasets and print them all out - integer scalars second
+      my_scli=>this%first_scli
+      do while (associated(my_scli))
+         
+         ! Create filename
+         filename='ensight/'//trim(this%name)//'/'//trim(my_scli%name)//'/'//trim(my_scli%name)//'.'
+         write(filename(len_trim(filename)+1:len_trim(filename)+6),'(i6.6)') this%ntime
+         
+         ! Root process starts writing the file header
+         if (this%cfg%amRoot) then
+            ! Open the file
+            open(newunit=iunit,file=trim(filename),form='unformatted',status='replace',access='stream',iostat=ierr)
+            if (ierr.ne.0) call die('[ensight write data] Could not open file '//trim(filename))
+            ! Write the header
+            cbuff=trim(my_scli%name); write(iunit) cbuff
+            cbuff='part'           ; write(iunit) cbuff
+            ibuff=1                ; write(iunit) ibuff
+            cbuff='block'          ; write(iunit) cbuff
+            ! Close the file
+            close(iunit)
+         end if
+         
+         ! Now parallel-write the actual data
+         call MPI_FILE_OPEN(this%cfg%comm,trim(filename),IOR(MPI_MODE_WRONLY,MPI_MODE_APPEND),info_mpiio,ifile,ierr)
+         if (ierr.ne.0) call die('[ensight write data] Problem encountered while parallel writing data file '//trim(filename))
+         call MPI_FILE_GET_POSITION(ifile,disp,ierr)
+         call MPI_FILE_SET_VIEW(ifile,disp,MPI_REAL_SP,this%cfg%SPview,'native',info_mpiio,ierr)
+         spbuff(this%cfg%imin_:this%cfg%imax_,this%cfg%jmin_:this%cfg%jmax_,this%cfg%kmin_:this%cfg%kmax_)=real(my_scli%ptr(this%cfg%imin_:this%cfg%imax_,this%cfg%jmin_:this%cfg%jmax_,this%cfg%kmin_:this%cfg%kmax_),SP)
+         call MPI_FILE_WRITE_ALL(ifile,spbuff,this%cfg%nx_*this%cfg%ny_*this%cfg%nz_,MPI_REAL_SP,status,ierr)
+         call MPI_FILE_CLOSE(ifile,ierr)
+         
+         ! Continue on to the next scalar object
+         my_scli=>my_scli%next
+         
+      end do
+
+      ! Traverse all datasets and print them all out - vectors third
       my_vct=>this%first_vct
       do while (associated(my_vct))
          
@@ -393,6 +456,7 @@ contains
       class(ensight), intent(in) :: this
       integer :: iunit,ierr
       type(scl), pointer :: my_scl
+      type(scli),pointer :: my_scli
       type(vct), pointer :: my_vct
       
       ! Only the root does this work
@@ -411,6 +475,11 @@ contains
       do while (associated(my_scl))
          write(iunit,'(a)') 'scalar per element: 1 '//trim(my_scl%name)//' '//trim(my_scl%name)//'/'//trim(my_scl%name)//'.******'
          my_scl=>my_scl%next
+      end do
+      my_scli=>this%first_scli
+      do while (associated(my_scli))
+         write(iunit,'(a)') 'scalar per element: 1 '//trim(my_scli%name)//' '//trim(my_scli%name)//'/'//trim(my_scli%name)//'.******'
+         my_scli=>my_scli%next
       end do
       my_vct=>this%first_vct
       do while (associated(my_vct))
