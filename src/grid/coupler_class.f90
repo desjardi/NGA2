@@ -22,8 +22,13 @@ module coupler_class
       integer :: nproc                                    !< Number of processors
       integer :: rank                                     !< Processor grid rank
       logical :: amRoot                                   !< Am I root for the coupler?
+      ! These are our two pgrids
+      type(pgrid), pointer :: src                         !< Source grid
+      type(pgrid), pointer :: dst                         !< Destination grid
    contains
-      
+      procedure :: initialize                             !< Routine that prepares all interpolation metrics from src to dst
+      procedure :: set_src                                !< Routine that sets the source grid
+      procedure :: set_dst                                !< Routine that sets the destination grid
    end type coupler
    
    
@@ -63,23 +68,49 @@ contains
       ! Create intracommunicator for the new group
       call MPI_COMM_CREATE_GROUP(comm,self%grp,0,self%comm,ierr)
       
+   end function construct_from_two_groups
+   
+   
+   !> Set the source grid - to be called by processors in src_group
+   subroutine set_src(this,pg)
+      implicit none
+      class(coupler), intent(inout) :: this
+      class(pgrid), target, intent(in) :: pg
+      this%src=>pg
+   end subroutine set_src
+   
+   
+   !> Set the destination grid - to be called by processors in dst_group
+   subroutine set_dst(this,pg)
+      implicit none
+      class(coupler), intent(inout) :: this
+      class(pgrid), target, intent(in) :: pg
+      this%dst=>pg
+   end subroutine set_dst
+   
+   
+   !> Prepare interpolation metrics from src to dst
+   subroutine initialize(this)
+      implicit none
+      class(coupler), intent(inout) :: this
+      
       
       
       ! Log/screen output
-      !logging: block
-      !   use, intrinsic :: iso_fortran_env, only: output_unit
-      !   use param,    only: verbose
-      !   use messager, only: log
-      !   use string,   only: str_long
-      !   character(len=str_long) :: message
-      !   if (self%src%amRoot) then
-      !      write(message,'("Coupler [",a,"] from pgrid [",a,"] to pgrid [",a,"]")') trim(self%name),trim(self%src%name),trim(self%dst%name)
-      !      if (verbose.gt.1) write(output_unit,'(a)') trim(message)
-      !      if (verbose.gt.0) call log(message)
-      !   end if
-      !end block logging
+      logging: block
+         use, intrinsic :: iso_fortran_env, only: output_unit
+         use param,    only: verbose
+         use messager, only: log
+         use string,   only: str_long
+         character(len=str_long) :: message
+         if (this%amRoot) then
+            write(message,'("Coupler [",a,"] from pgrid [",a,"] to pgrid [",a,"]")') trim(this%name),trim(this%src%name),trim(this%dst%name)
+            if (verbose.gt.1) write(output_unit,'(a)') trim(message)
+            if (verbose.gt.0) call log(message)
+         end if
+      end block logging
       
-   end function construct_from_two_groups
+   end subroutine initialize
    
    
 end module coupler_class

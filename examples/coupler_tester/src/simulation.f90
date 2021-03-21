@@ -30,9 +30,13 @@ contains
       
       ! Both groups prepare the coupler
       if (isInGrp1.or.isInGrp2) then
+         ! Create the coupler
          cpl=coupler(src_grp=grp1,dst_grp=grp2,name='test')
-         
-         
+         ! Set the grids
+         if (isInGrp1) call cpl%set_src(cfg1)
+         if (isInGrp2) call cpl%set_dst(cfg2)
+         ! Initialize the metrics
+         !call cpl%initialize()
       end if
       
       
