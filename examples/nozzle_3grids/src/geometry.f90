@@ -129,12 +129,12 @@ contains
       
       ! Create config1 from grid1 on our entire group
       create_cfg1: block
-         use parallel, only: comm
+         use parallel, only: group
          integer, dimension(3) :: partition
          ! Read in partition
          call param_read('1 Partition',partition,short='p')
          ! Create partitioned grid
-         cfg1=config(comm=comm,partition,grid1)
+         cfg1=config(grp=group,partition,grid1)
       end block create_cfg1
       
       
@@ -238,12 +238,12 @@ contains
       
       ! Create config2 from grid2 on our entire group
       create_cfg2: block
-         use parallel, only: comm
+         use parallel, only: group
          integer, dimension(3) :: partition
          ! Read in partition
          call param_read('2 Partition',partition,short='p')
          ! Create partitioned grid
-         cfg2=config(comm=comm,partition,grid2)
+         cfg2=config(grp=group,partition,grid2)
       end block create_cfg2
       
       
@@ -364,12 +364,12 @@ contains
       
       ! Create config3 from grid3 on our entire group
       create_cfg3: block
-         use parallel, only: comm
+         use parallel, only: group
          integer, dimension(3) :: partition
          ! Read in partition
          call param_read('3 Partition',partition,short='p')
          ! Create partitioned grid
-         cfg3=config(comm=comm,partition,grid3)
+         cfg3=config(grp=group,partition,grid3)
       end block create_cfg3
       
       

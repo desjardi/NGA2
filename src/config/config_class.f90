@@ -40,34 +40,34 @@ contains
    
    
    !> Single-grid config constructor from a serial grid
-   function construct_from_sgrid(comm,decomp,grid) result(self)
+   function construct_from_sgrid(grp,decomp,grid) result(self)
       use sgrid_class, only: sgrid
       use string,      only: str_medium
-      use mpi_f08,     only: MPI_Comm
+      use mpi_f08,     only: MPI_Group
       implicit none
       type(config) :: self
       type(sgrid), intent(in) :: grid
-      type(MPI_Comm), intent(in) :: comm
+      type(MPI_Group), intent(in) :: grp
       integer, dimension(3), intent(in) :: decomp
-      ! Create a partitioned grid with the provided comuunicator and decomposition
-      self%pgrid=pgrid(grid,comm,decomp)
+      ! Create a partitioned grid with the provided group and decomposition
+      self%pgrid=pgrid(grid,grp,decomp)
       ! Finish preparing the config
       call self%prep
    end function construct_from_sgrid
    
    
    !> Single-grid config constructor from NGA grid file
-   function construct_from_file(comm,decomp,no,fgrid,fgeom) result(self)
-      use mpi_f08, only: MPI_Comm
+   function construct_from_file(grp,decomp,no,fgrid,fgeom) result(self)
+      use mpi_f08, only: MPI_Group
       implicit none
       type(config) :: self
-      type(MPI_Comm), intent(in) :: comm
+      type(MPI_Group), intent(in) :: grp
       integer, dimension(3), intent(in) :: decomp
       integer, intent(in) :: no
       character(*), intent(in) :: fgrid
       character(*), intent(in) :: fgeom
-      ! Create a partitioned grid with the provided communicator and decomposition
-      self%pgrid=pgrid(no,fgrid,comm,decomp)
+      ! Create a partitioned grid with the provided group and decomposition
+      self%pgrid=pgrid(no,fgrid,grp,decomp)
       ! Finish preparing the config
       call self%prep
       ! Read in the VF info

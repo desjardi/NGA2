@@ -19,7 +19,8 @@ module pgrid_class
    type, extends(sgrid) :: pgrid
       
       ! Parallelization information
-      type(MPI_Comm)     :: comm                              !< Grid communicator
+      type(MPI_Group)    :: group                             !< Group of processors working on the pgrid
+      type(MPI_Comm)     :: comm  =MPI_COMM_NULL              !< Communicator for our group
       type(MPI_Datatype) :: view  =MPI_DATATYPE_NULL          !< Local to global array mapping info - real(WP)
       type(MPI_Datatype) :: Iview =MPI_DATATYPE_NULL          !< Local to global array mapping info - integer
       type(MPI_Datatype) :: SPview=MPI_DATATYPE_NULL          !< Local to global array mapping info - real(SP)
@@ -70,6 +71,7 @@ module pgrid_class
       integer , dimension(:,:,:), allocatable, private :: isyncbuf_z1,isyncbuf_z2
       
    contains
+      procedure, private :: init_mpi=>pgrid_init_mpi                            !< Prepare the MPI environment for the pgrid
       procedure, private :: domain_decomp=>pgrid_domain_decomp                  !< Perform the domain decomposition
       procedure :: allprint=>pgrid_allprint                                     !< Output grid to screen - blocking and requires all procs...
       procedure :: print   =>pgrid_print                                        !< Output grid to screen
@@ -95,7 +97,7 @@ contains
    
    
    !> Partitioned grid constructor from file
-   function construct_pgrid_from_file(no,file,comm,decomp) result(self)
+   function construct_pgrid_from_file(no,file,grp,decomp) result(self)
       use string,   only: lowercase
       use messager, only: die
       use param,    only: verbose
@@ -104,7 +106,7 @@ contains
       type(pgrid) :: self                               !< Parallel grid
       integer, intent(in) :: no                         !< Overlap size
       character(len=*), intent(in) :: file              !< Grid file
-      type(MPI_Comm), intent(in) :: comm                !< MPI communicator
+      type(MPI_Group), intent(in) :: grp                !< MPI group
       integer, dimension(3), intent(in) :: decomp       !< Desired decomposition
       integer :: ierr
       character(len=str_medium) :: simu_name
@@ -114,14 +116,8 @@ contains
       real(WP), dimension(:), allocatable :: z
       logical :: xper,yper,zper
       
-      ! Initialize MPI environment: get size, rank, and root
-      self%comm=comm
-      call MPI_COMM_SIZE(self%comm,self%nproc,ierr)
-      call MPI_COMM_RANK(self%comm,self%rank ,ierr)
-      self%amRoot=(self%rank.eq.0)
-      
-      ! Test if a processor was not in the communicator
-      if (self%rank.eq.MPI_UNDEFINED) call die('[pgrid constructor] All processors that call the constructor need to be in the communicator')
+      ! Initialize MPI environment
+      self%group=grp; call self%init_mpi
       
       ! Root process can now read in the grid
       if (self%amRoot) then
@@ -179,32 +175,25 @@ contains
    
    
    !> Partitioned grid constructor from sgrid
-   function construct_pgrid_from_sgrid(grid,comm,decomp) result(self)
+   function construct_pgrid_from_sgrid(grid,grp,decomp) result(self)
       use string,   only: lowercase
       use messager, only: die
       use param,    only: verbose
       implicit none
       type(pgrid) :: self                               !< Parallel grid
       type(sgrid), intent(in) :: grid                   !< Base grid
-      type(MPI_Comm), intent(in) :: comm                !< MPI communicator
+      type(MPI_Group), intent(in) :: grp                !< MPI group
       integer, dimension(3), intent(in) :: decomp       !< Requested domain decomposition
-      integer :: ierr
       
-      ! Initialize MPI environment: get size, rank, and root
-      self%comm=comm
-      call MPI_COMM_SIZE(self%comm,self%nproc,ierr)
-      call MPI_COMM_RANK(self%comm,self%rank ,ierr)
-      self%amRoot=(self%rank.eq.0)
+      ! Initialize MPI environment
+      self%group=grp; call self%init_mpi
       
-      ! Test if a processor was not in the communicator
-      if (self%rank.eq.MPI_UNDEFINED) call die('[pgrid constructor] All processors that call the constructor need to be in the communicator')
+      ! Copy base grid data
+      self%sgrid=grid
       
       ! Check and store decomposition
       if (product(decomp).ne.self%nproc) call die('[pgrid constructor] Parallel decomposition is improper')
       self%npx=decomp(1); self%npy=decomp(2); self%npz=decomp(3)
-      
-      ! Assign base grid data
-      self%sgrid=grid
       
       ! Perform actual domain decomposition of grid
       call self%domain_decomp()
@@ -215,6 +204,27 @@ contains
       if (verbose.gt.2) call self%allprint
       
    end function construct_pgrid_from_sgrid
+   
+   
+   !> Prepares the MPI environment for the pgrid
+   subroutine pgrid_init_mpi(self)
+      use parallel, only: comm
+      use messager, only: die
+      implicit none
+      class(pgrid), intent(inout) :: self
+      integer :: ierr
+      ! Get group size
+      call MPI_GROUP_SIZE(self%group,self%nproc,ierr)
+      if (self%nproc.eq.0) call die('[pgrid constructor] A non-empty group is required')
+      ! Get rank
+      call MPI_GROUP_RANK(self%group,self%rank,ierr)
+      ! Get a root process
+      self%amRoot=(self%rank.eq.0)
+      ! Test if a processors was not in the group
+      if (self%rank.eq.MPI_UNDEFINED) call die('[pgrid constructor] All processors that call the constructor need to be in the group')
+      ! Create intracommunicator for the group
+      call MPI_COMM_CREATE_GROUP(comm,self%group,0,self%comm,ierr)
+   end subroutine pgrid_init_mpi
    
    
    !> Prepares the domain decomposition of the pgrid

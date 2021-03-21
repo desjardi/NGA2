@@ -52,12 +52,12 @@ contains
       
       ! Create a config from that grid on our entire group
       create_cfg: block
-         use parallel, only: comm
+         use parallel, only: group
          integer, dimension(3) :: partition
          ! Read in partition
          call param_read('Partition',partition,short='p')
          ! Create partitioned grid
-         cfg=config(comm=comm,decomp=partition,grid=grid)
+         cfg=config(grp=group,decomp=partition,grid=grid)
       end block create_cfg
       
       

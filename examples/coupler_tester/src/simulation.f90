@@ -1,8 +1,8 @@
 !> Various definitions and tools for running an NGA2 simulation
 module simulation
    use precision,     only: WP
-   use geometry,      only: cfg1,cfg2
-   use geometry,      only: isInGroup1,isInGroup2
+   use geometry,      only: cfg1,grp1,isInGrp1
+   use geometry,      only: cfg2,grp2,isInGrp2
    use ensight_class, only: ensight
    use coupler_class, only: coupler
    implicit none
@@ -27,10 +27,19 @@ contains
    subroutine simulation_init
       implicit none
       
-      ! Group1's initial work
-      if (isInGroup1) then
+      
+      ! Both groups prepare the coupler
+      create_coupler: block
+         cpl=coupler(src_grp=grp1,dst_grp=grp2,name='test')
          
-         ! Group1 prepares the field to transfer
+         
+      end block create_coupler
+      
+      
+      ! Group1 does its initialization work here
+      if (isInGrp1) then
+         
+         ! Group1 allocates and initializes the field to transfer
          create_field1: block
             use mathtools, only: twoPi
             integer :: i,j,k
@@ -55,15 +64,24 @@ contains
          
       end if
       
-      ! Group2's initial work
-      if (isInGroup2) then
+      
+      ! Group2 allocates the field to receive
+      if (isInGrp2) then
+         allocate(U2(cfg2%imino_:cfg2%imaxo_,cfg2%jmino_:cfg2%jmaxo_,cfg2%kmino_:cfg2%kmaxo_))
+         U2=-1.0_WP
+      end if
+      
+      
+      ! Both groups work on the coupling
+      coupling_step: block
          
-         ! Group1 prepares the field to receive
-         create_field2: block
-            allocate(U2(cfg2%imino_:cfg2%imaxo_,cfg2%jmino_:cfg2%jmaxo_,cfg2%kmino_:cfg2%kmaxo_)); U2=-1.0_WP
-         end block create_field2
+      end block coupling_step
+      
+      
+      ! Group2 outputs its received data
+      if (isInGrp2) then
          
-         ! Group1 also outputs to Ensight
+         ! Group2 also outputs to Ensight
          create_ensight2: block
             ens2=ensight(cfg=cfg2,name='grid2')
             call ens2%add_scalar('U',U2)
@@ -71,9 +89,6 @@ contains
          end block create_ensight2
          
       end if
-      
-      
-      ! Now we create the coupler
       
       
    end subroutine simulation_init
