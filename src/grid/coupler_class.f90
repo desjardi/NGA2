@@ -65,8 +65,6 @@ contains
       
       
       
-      
-      
       ! Log/screen output
       !logging: block
       !   use, intrinsic :: iso_fortran_env, only: output_unit

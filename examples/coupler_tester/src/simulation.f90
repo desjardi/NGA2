@@ -29,11 +29,11 @@ contains
       
       
       ! Both groups prepare the coupler
-      create_coupler: block
+      if (isInGrp1.or.isInGrp2) then
          cpl=coupler(src_grp=grp1,dst_grp=grp2,name='test')
          
          
-      end block create_coupler
+      end if
       
       
       ! Group1 does its initialization work here
@@ -56,11 +56,9 @@ contains
          end block create_field1
          
          ! Group1 also outputs to Ensight
-         create_ensight1: block
-            ens1=ensight(cfg=cfg1,name='grid1')
-            call ens1%add_scalar('U',U1)
-            call ens1%write_data(0.0_WP)
-         end block create_ensight1
+         ens1=ensight(cfg=cfg1,name='grid1')
+         call ens1%add_scalar('U',U1)
+         call ens1%write_data(0.0_WP)
          
       end if
       
@@ -80,14 +78,9 @@ contains
       
       ! Group2 outputs its received data
       if (isInGrp2) then
-         
-         ! Group2 also outputs to Ensight
-         create_ensight2: block
-            ens2=ensight(cfg=cfg2,name='grid2')
-            call ens2%add_scalar('U',U2)
-            call ens2%write_data(0.0_WP)
-         end block create_ensight2
-         
+         ens2=ensight(cfg=cfg2,name='grid2')
+         call ens2%add_scalar('U',U2)
+         call ens2%write_data(0.0_WP)
       end if
       
       

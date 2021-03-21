@@ -27,7 +27,7 @@ contains
       use param,    only: param_read
       use parallel, only: comm,group,nproc,rank
       use mpi_f08,  only: MPI_Group,MPI_Group_range_incl
-      integer, dimension(3) :: partition
+      implicit none
       integer, dimension(3,1) :: grange
       integer :: ierr
       
