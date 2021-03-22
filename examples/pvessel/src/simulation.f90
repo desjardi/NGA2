@@ -2,7 +2,7 @@
 module simulation
    use string,            only: str_medium
    use precision,         only: WP
-   use geometry,          only: cfg,Lv,IR
+   use geometry,          only: cfg,Lv,IR,lpipe,ypipe,rpipe
    use lowmach_class,     only: lowmach
    use sgsmodel_class,    only: sgsmodel
    use vdscalar_class,    only: vdscalar
@@ -68,6 +68,9 @@ module simulation
    real(WP), parameter :: Cprod=3500.0_WP   ! In J/(kg.K) - this is for potatoes
    real(WP), parameter :: kprod=0.7_WP      ! In W/(m.K)  - this is a representative value for potatoes [0.545,0.957]
    real(WP), parameter :: rprod=1070.0_WP   ! Mass density of product
+   real(WP), parameter :: Mbag=2.26796_WP   ! Weight of 1 bag of product
+   integer , parameter :: nbag=55           ! Number of bags
+   real(WP), parameter :: Mprod=nbag*Mbag   ! Weight of product
    
    ! Backup of viscosity and diffusivity
    real(WP), dimension(:,:,:), allocatable :: viscmol,diffmol
@@ -95,8 +98,8 @@ contains
       logical :: isIn
       real(WP) :: r
       isIn=.false.
-      r=sqrt((pg%ym(j)+0.34_WP)**2+(pg%zm(k))**2)
-      if (abs(pg%x(i)+0.75_WP).lt.0.01_WP.and.r.lt.0.02_WP) isIn=.true.
+      r=sqrt((pg%ym(j)-ypipe)**2+(pg%zm(k))**2)
+      if (abs(pg%x(i)+0.5_WP*lpipe).lt.0.01_WP.and.r.lt.rpipe) isIn=.true.
    end function left_of_tube
    
    
@@ -109,8 +112,8 @@ contains
       logical :: isIn
       real(WP) :: r
       isIn=.false.
-      r=sqrt((pg%ym(j)+0.34_WP)**2+(pg%zm(k))**2)
-      if (abs(pg%x(i)-0.75_WP).lt.0.01_WP.and.r.lt.0.02_WP) isIn=.true.
+      r=sqrt((pg%ym(j)-ypipe)**2+(pg%zm(k))**2)
+      if (abs(pg%x(i)-0.5_WP*lpipe).lt.0.01_WP.and.r.lt.rpipe) isIn=.true.
    end function right_of_tube_vel
    
    
@@ -123,8 +126,8 @@ contains
       logical :: isIn
       real(WP) :: r
       isIn=.false.
-      r=sqrt((pg%ym(j)+0.34_WP)**2+(pg%zm(k))**2)
-      if (abs(pg%x(i+1)-0.75_WP).lt.0.01_WP.and.r.lt.0.02_WP) isIn=.true.
+      r=sqrt((pg%ym(j)-ypipe)**2+(pg%zm(k))**2)
+      if (abs(pg%x(i+1)-0.5_WP*lpipe).lt.0.01_WP.and.r.lt.rpipe) isIn=.true.
    end function right_of_tube_sc
    
    
@@ -356,19 +359,79 @@ end subroutine get_cond
          do k=cfg%kmino_,cfg%kmaxo_
             do j=cfg%jmino_,cfg%jmaxo_
                do i=cfg%imino_,cfg%imaxo_
-                  epsp(i,j,k)=epsp(i,j,k)+bag_at_loc(bag_loc=[ 0.0_WP, 0.0_WP, 0.0_WP],mesh_loc=[cfg%xm(i),cfg%ym(j),cfg%zm(k)])
-                  epsp(i,j,k)=epsp(i,j,k)+bag_at_loc(bag_loc=[+0.5_WP, 0.0_WP, 0.0_WP],mesh_loc=[cfg%xm(i),cfg%ym(j),cfg%zm(k)])
-                  epsp(i,j,k)=epsp(i,j,k)+bag_at_loc(bag_loc=[-0.5_WP, 0.0_WP, 0.0_WP],mesh_loc=[cfg%xm(i),cfg%ym(j),cfg%zm(k)])
-                  epsp(i,j,k)=epsp(i,j,k)+bag_at_loc(bag_loc=[ 0.0_WP,+0.2_WP, 0.0_WP],mesh_loc=[cfg%xm(i),cfg%ym(j),cfg%zm(k)])
-                  epsp(i,j,k)=epsp(i,j,k)+bag_at_loc(bag_loc=[ 0.0_WP,-0.2_WP, 0.0_WP],mesh_loc=[cfg%xm(i),cfg%ym(j),cfg%zm(k)])
-                  epsp(i,j,k)=epsp(i,j,k)+bag_at_loc(bag_loc=[ 0.0_WP, 0.0_WP,-0.3_WP],mesh_loc=[cfg%xm(i),cfg%ym(j),cfg%zm(k)])
-                  epsp(i,j,k)=epsp(i,j,k)+bag_at_loc(bag_loc=[ 0.0_WP, 0.0_WP,+0.3_WP],mesh_loc=[cfg%xm(i),cfg%ym(j),cfg%zm(k)])
+                  
+                  ! First 7-bag test
+                  !epsp(i,j,k)=epsp(i,j,k)+bag_at_loc(bag_loc=[ 0.0_WP, 0.0_WP, 0.0_WP],mesh_loc=[cfg%xm(i),cfg%ym(j),cfg%zm(k)])
+                  !epsp(i,j,k)=epsp(i,j,k)+bag_at_loc(bag_loc=[+0.5_WP, 0.0_WP, 0.0_WP],mesh_loc=[cfg%xm(i),cfg%ym(j),cfg%zm(k)])
+                  !epsp(i,j,k)=epsp(i,j,k)+bag_at_loc(bag_loc=[-0.5_WP, 0.0_WP, 0.0_WP],mesh_loc=[cfg%xm(i),cfg%ym(j),cfg%zm(k)])
+                  !epsp(i,j,k)=epsp(i,j,k)+bag_at_loc(bag_loc=[ 0.0_WP,+0.2_WP, 0.0_WP],mesh_loc=[cfg%xm(i),cfg%ym(j),cfg%zm(k)])
+                  !epsp(i,j,k)=epsp(i,j,k)+bag_at_loc(bag_loc=[ 0.0_WP,-0.2_WP, 0.0_WP],mesh_loc=[cfg%xm(i),cfg%ym(j),cfg%zm(k)])
+                  !epsp(i,j,k)=epsp(i,j,k)+bag_at_loc(bag_loc=[ 0.0_WP, 0.0_WP,-0.3_WP],mesh_loc=[cfg%xm(i),cfg%ym(j),cfg%zm(k)])
+                  !epsp(i,j,k)=epsp(i,j,k)+bag_at_loc(bag_loc=[ 0.0_WP, 0.0_WP,+0.3_WP],mesh_loc=[cfg%xm(i),cfg%ym(j),cfg%zm(k)])
+                  
+                  ! 55-bag version from Amir
+                  epsp(i,j,k)=epsp(i,j,k)+bag_at_loc(bag_loc=[ 0.00_WP, 0.000_WP, 0.0_WP],mesh_loc=[cfg%xm(i),cfg%ym(j),cfg%zm(k)])  ! Center bag  1
+                  epsp(i,j,k)=epsp(i,j,k)+bag_at_loc(bag_loc=[+0.45_WP, 0.000_WP, 0.0_WP],mesh_loc=[cfg%xm(i),cfg%ym(j),cfg%zm(k)])  ! X direction 2
+                  epsp(i,j,k)=epsp(i,j,k)+bag_at_loc(bag_loc=[-0.45_WP, 0.000_WP, 0.0_WP],mesh_loc=[cfg%xm(i),cfg%ym(j),cfg%zm(k)])  ! 3
+                  epsp(i,j,k)=epsp(i,j,k)+bag_at_loc(bag_loc=[+0.90_WP, 0.000_WP, 0.0_WP],mesh_loc=[cfg%xm(i),cfg%ym(j),cfg%zm(k)])  ! 4
+                  epsp(i,j,k)=epsp(i,j,k)+bag_at_loc(bag_loc=[-0.90_WP, 0.000_WP, 0.0_WP],mesh_loc=[cfg%xm(i),cfg%ym(j),cfg%zm(k)])  ! 5
+                  epsp(i,j,k)=epsp(i,j,k)+bag_at_loc(bag_loc=[ 0.00_WP,+0.075_WP, 0.0_WP],mesh_loc=[cfg%xm(i),cfg%ym(j),cfg%zm(k)])  ! 6
+                  epsp(i,j,k)=epsp(i,j,k)+bag_at_loc(bag_loc=[ 0.00_WP,-0.075_WP, 0.0_WP],mesh_loc=[cfg%xm(i),cfg%ym(j),cfg%zm(k)])  ! 7
+                  epsp(i,j,k)=epsp(i,j,k)+bag_at_loc(bag_loc=[+0.45_WP,+0.075_WP, 0.0_WP],mesh_loc=[cfg%xm(i),cfg%ym(j),cfg%zm(k)])  ! 8
+                  epsp(i,j,k)=epsp(i,j,k)+bag_at_loc(bag_loc=[-0.45_WP,+0.075_WP, 0.0_WP],mesh_loc=[cfg%xm(i),cfg%ym(j),cfg%zm(k)])  ! 9
+                  epsp(i,j,k)=epsp(i,j,k)+bag_at_loc(bag_loc=[+0.45_WP,-0.075_WP, 0.0_WP],mesh_loc=[cfg%xm(i),cfg%ym(j),cfg%zm(k)])  ! 10
+                  epsp(i,j,k)=epsp(i,j,k)+bag_at_loc(bag_loc=[-0.45_WP,-0.075_WP, 0.0_WP],mesh_loc=[cfg%xm(i),cfg%ym(j),cfg%zm(k)])  ! 11
+                  epsp(i,j,k)=epsp(i,j,k)+bag_at_loc(bag_loc=[+0.90_WP,+0.075_WP, 0.0_WP],mesh_loc=[cfg%xm(i),cfg%ym(j),cfg%zm(k)])  ! 12
+                  epsp(i,j,k)=epsp(i,j,k)+bag_at_loc(bag_loc=[-0.90_WP,+0.075_WP, 0.0_WP],mesh_loc=[cfg%xm(i),cfg%ym(j),cfg%zm(k)])  ! 13
+                  epsp(i,j,k)=epsp(i,j,k)+bag_at_loc(bag_loc=[+0.90_WP,-0.075_WP, 0.0_WP],mesh_loc=[cfg%xm(i),cfg%ym(j),cfg%zm(k)])  ! 14
+                  epsp(i,j,k)=epsp(i,j,k)+bag_at_loc(bag_loc=[-0.90_WP,-0.075_WP, 0.0_WP],mesh_loc=[cfg%xm(i),cfg%ym(j),cfg%zm(k)])  ! 15
+                  epsp(i,j,k)=epsp(i,j,k)+bag_at_loc(bag_loc=[+0.45_WP,+0.150_WP, 0.0_WP],mesh_loc=[cfg%xm(i),cfg%ym(j),cfg%zm(k)])  ! 16
+                  epsp(i,j,k)=epsp(i,j,k)+bag_at_loc(bag_loc=[-0.45_WP,+0.150_WP, 0.0_WP],mesh_loc=[cfg%xm(i),cfg%ym(j),cfg%zm(k)])  ! 17
+                  epsp(i,j,k)=epsp(i,j,k)+bag_at_loc(bag_loc=[+0.45_WP,-0.150_WP, 0.0_WP],mesh_loc=[cfg%xm(i),cfg%ym(j),cfg%zm(k)])  ! 18
+                  epsp(i,j,k)=epsp(i,j,k)+bag_at_loc(bag_loc=[-0.45_WP,-0.150_WP, 0.0_WP],mesh_loc=[cfg%xm(i),cfg%ym(j),cfg%zm(k)])  ! 19
+                  epsp(i,j,k)=epsp(i,j,k)+bag_at_loc(bag_loc=[ 0.00_WP,+0.150_WP, 0.0_WP],mesh_loc=[cfg%xm(i),cfg%ym(j),cfg%zm(k)])  ! 20
+                  epsp(i,j,k)=epsp(i,j,k)+bag_at_loc(bag_loc=[ 0.00_WP,-0.150_WP, 0.0_WP],mesh_loc=[cfg%xm(i),cfg%ym(j),cfg%zm(k)])  ! 21
+                  epsp(i,j,k)=epsp(i,j,k)+bag_at_loc(bag_loc=[ 0.00_WP,+0.225_WP, 0.0_WP],mesh_loc=[cfg%xm(i),cfg%ym(j),cfg%zm(k)])  ! 22
+                  epsp(i,j,k)=epsp(i,j,k)+bag_at_loc(bag_loc=[ 0.00_WP,-0.225_WP, 0.0_WP],mesh_loc=[cfg%xm(i),cfg%ym(j),cfg%zm(k)])  ! 23
+                  epsp(i,j,k)=epsp(i,j,k)+bag_at_loc(bag_loc=[+0.45_WP,+0.225_WP, 0.0_WP],mesh_loc=[cfg%xm(i),cfg%ym(j),cfg%zm(k)])  ! 24
+                  epsp(i,j,k)=epsp(i,j,k)+bag_at_loc(bag_loc=[-0.45_WP,+0.225_WP, 0.0_WP],mesh_loc=[cfg%xm(i),cfg%ym(j),cfg%zm(k)])  ! 25
+                  epsp(i,j,k)=epsp(i,j,k)+bag_at_loc(bag_loc=[+0.45_WP,-0.225_WP, 0.0_WP],mesh_loc=[cfg%xm(i),cfg%ym(j),cfg%zm(k)])  ! 26
+                  epsp(i,j,k)=epsp(i,j,k)+bag_at_loc(bag_loc=[-0.45_WP,-0.225_WP, 0.0_WP],mesh_loc=[cfg%xm(i),cfg%ym(j),cfg%zm(k)])  ! 27
+                  epsp(i,j,k)=epsp(i,j,k)+bag_at_loc(bag_loc=[+0.90_WP,+0.150_WP, 0.0_WP],mesh_loc=[cfg%xm(i),cfg%ym(j),cfg%zm(k)])  ! 28
+                  epsp(i,j,k)=epsp(i,j,k)+bag_at_loc(bag_loc=[-0.90_WP,+0.150_WP, 0.0_WP],mesh_loc=[cfg%xm(i),cfg%ym(j),cfg%zm(k)])  ! 29
+                  epsp(i,j,k)=epsp(i,j,k)+bag_at_loc(bag_loc=[+0.90_WP,-0.150_WP, 0.0_WP],mesh_loc=[cfg%xm(i),cfg%ym(j),cfg%zm(k)])  ! 30
+                  epsp(i,j,k)=epsp(i,j,k)+bag_at_loc(bag_loc=[-0.90_WP,-0.150_WP, 0.0_WP],mesh_loc=[cfg%xm(i),cfg%ym(j),cfg%zm(k)])  ! 31
+                  epsp(i,j,k)=epsp(i,j,k)+bag_at_loc(bag_loc=[+0.45_WP,+0.300_WP, 0.0_WP],mesh_loc=[cfg%xm(i),cfg%ym(j),cfg%zm(k)])  ! 32
+                  epsp(i,j,k)=epsp(i,j,k)+bag_at_loc(bag_loc=[-0.45_WP,+0.300_WP, 0.0_WP],mesh_loc=[cfg%xm(i),cfg%ym(j),cfg%zm(k)])  ! 33
+                  epsp(i,j,k)=epsp(i,j,k)+bag_at_loc(bag_loc=[+0.45_WP,-0.300_WP, 0.0_WP],mesh_loc=[cfg%xm(i),cfg%ym(j),cfg%zm(k)])  ! 34
+                  epsp(i,j,k)=epsp(i,j,k)+bag_at_loc(bag_loc=[-0.45_WP,-0.300_WP, 0.0_WP],mesh_loc=[cfg%xm(i),cfg%ym(j),cfg%zm(k)])  ! 35
+                  epsp(i,j,k)=epsp(i,j,k)+bag_at_loc(bag_loc=[ 0.00_WP,+0.300_WP, 0.0_WP],mesh_loc=[cfg%xm(i),cfg%ym(j),cfg%zm(k)])  ! 36
+                  epsp(i,j,k)=epsp(i,j,k)+bag_at_loc(bag_loc=[ 0.00_WP,-0.300_WP, 0.0_WP],mesh_loc=[cfg%xm(i),cfg%ym(j),cfg%zm(k)])  ! 37
+                  epsp(i,j,k)=epsp(i,j,k)+bag_at_loc(bag_loc=[+0.45_WP,+0.375_WP, 0.0_WP],mesh_loc=[cfg%xm(i),cfg%ym(j),cfg%zm(k)])  ! 38
+                  epsp(i,j,k)=epsp(i,j,k)+bag_at_loc(bag_loc=[-0.45_WP,+0.375_WP, 0.0_WP],mesh_loc=[cfg%xm(i),cfg%ym(j),cfg%zm(k)])  ! 39
+                  epsp(i,j,k)=epsp(i,j,k)+bag_at_loc(bag_loc=[+0.45_WP,-0.375_WP, 0.0_WP],mesh_loc=[cfg%xm(i),cfg%ym(j),cfg%zm(k)])  ! 40
+                  epsp(i,j,k)=epsp(i,j,k)+bag_at_loc(bag_loc=[-0.45_WP,-0.375_WP, 0.0_WP],mesh_loc=[cfg%xm(i),cfg%ym(j),cfg%zm(k)])  ! 41
+                  epsp(i,j,k)=epsp(i,j,k)+bag_at_loc(bag_loc=[ 0.00_WP,+0.375_WP, 0.0_WP],mesh_loc=[cfg%xm(i),cfg%ym(j),cfg%zm(k)])  ! 42
+                  epsp(i,j,k)=epsp(i,j,k)+bag_at_loc(bag_loc=[ 0.00_WP,-0.375_WP, 0.0_WP],mesh_loc=[cfg%xm(i),cfg%ym(j),cfg%zm(k)])  ! 43
+                  epsp(i,j,k)=epsp(i,j,k)+bag_at_loc(bag_loc=[+0.90_WP,+0.225_WP, 0.0_WP],mesh_loc=[cfg%xm(i),cfg%ym(j),cfg%zm(k)])  ! 44
+                  epsp(i,j,k)=epsp(i,j,k)+bag_at_loc(bag_loc=[-0.90_WP,+0.225_WP, 0.0_WP],mesh_loc=[cfg%xm(i),cfg%ym(j),cfg%zm(k)])  ! 45
+                  epsp(i,j,k)=epsp(i,j,k)+bag_at_loc(bag_loc=[+0.90_WP,-0.225_WP, 0.0_WP],mesh_loc=[cfg%xm(i),cfg%ym(j),cfg%zm(k)])  ! 46
+                  epsp(i,j,k)=epsp(i,j,k)+bag_at_loc(bag_loc=[-0.90_WP,-0.225_WP, 0.0_WP],mesh_loc=[cfg%xm(i),cfg%ym(j),cfg%zm(k)])  ! 47
+                  epsp(i,j,k)=epsp(i,j,k)+bag_at_loc(bag_loc=[+0.90_WP,+0.300_WP, 0.0_WP],mesh_loc=[cfg%xm(i),cfg%ym(j),cfg%zm(k)])  ! 48
+                  epsp(i,j,k)=epsp(i,j,k)+bag_at_loc(bag_loc=[-0.90_WP,+0.300_WP, 0.0_WP],mesh_loc=[cfg%xm(i),cfg%ym(j),cfg%zm(k)])  ! 49
+                  epsp(i,j,k)=epsp(i,j,k)+bag_at_loc(bag_loc=[+0.90_WP,-0.300_WP, 0.0_WP],mesh_loc=[cfg%xm(i),cfg%ym(j),cfg%zm(k)])  ! 50
+                  epsp(i,j,k)=epsp(i,j,k)+bag_at_loc(bag_loc=[-0.90_WP,-0.300_WP, 0.0_WP],mesh_loc=[cfg%xm(i),cfg%ym(j),cfg%zm(k)])  ! 51
+                  epsp(i,j,k)=epsp(i,j,k)+bag_at_loc(bag_loc=[+0.90_WP,+0.375_WP, 0.0_WP],mesh_loc=[cfg%xm(i),cfg%ym(j),cfg%zm(k)])  ! 52
+                  epsp(i,j,k)=epsp(i,j,k)+bag_at_loc(bag_loc=[-0.90_WP,+0.375_WP, 0.0_WP],mesh_loc=[cfg%xm(i),cfg%ym(j),cfg%zm(k)])  ! 53
+                  epsp(i,j,k)=epsp(i,j,k)+bag_at_loc(bag_loc=[+0.90_WP,-0.375_WP, 0.0_WP],mesh_loc=[cfg%xm(i),cfg%ym(j),cfg%zm(k)])  ! 54
+                  epsp(i,j,k)=epsp(i,j,k)+bag_at_loc(bag_loc=[-0.90_WP,-0.375_WP, 0.0_WP],mesh_loc=[cfg%xm(i),cfg%ym(j),cfg%zm(k)])  ! 55
+                  
                end do
             end do
          end do
          ! Multiply by expected porosity in the bag
          epsp=epsp*bporo
-         epsf=1.0_WP-epsp
+         epsf=1.0_WP!-epsp     !< THIS COMMENTS OUT THE POROSITY EFFECT
          ! Setup the scaled Laplacian operator from incomp metrics: lap(*)=-vol*div(epsf*grad(*))
          do k=fs%cfg%kmin_,fs%cfg%kmax_
             do j=fs%cfg%jmin_,fs%cfg%jmax_
@@ -689,17 +752,17 @@ end subroutine get_cond
          
          
          ! Account for heat transfer to product
-         product_heating: block
-            integer :: i,j,k
-            do k=fs%cfg%kmin_,fs%cfg%kmax_
-               do j=fs%cfg%jmin_,fs%cfg%jmax_
-                  do i=fs%cfg%imin_,fs%cfg%imax_
-                     if (sc%cfg%VF(i,j,k).gt.0.0_WP) Tprod(i,j,k)=Tprod(i,j,k)+Cp*diffmol(i,j,k)*epsp(i,j,k)*(sc%SC(i,j,k)-Tprodold(i,j,k))/(rprod*bporo*bporo*Tperm*Cprod)
-                  end do
-               end do
-            end do
-            call cfg%sync(Tprod)
-         end block product_heating
+         !product_heating: block
+         !   integer :: i,j,k
+         !   do k=fs%cfg%kmin_,fs%cfg%kmax_
+         !      do j=fs%cfg%jmin_,fs%cfg%jmax_
+         !         do i=fs%cfg%imin_,fs%cfg%imax_
+         !            if (sc%cfg%VF(i,j,k).gt.0.0_WP) Tprod(i,j,k)=Tprod(i,j,k)+Cp*diffmol(i,j,k)*epsp(i,j,k)*(sc%SC(i,j,k)-Tprodold(i,j,k))/(rprod*bporo*bporo*Tperm*Cprod)
+         !         end do
+         !      end do
+         !   end do
+         !   call cfg%sync(Tprod)
+         !end block product_heating
          
          
          
@@ -739,18 +802,18 @@ end subroutine get_cond
             call fs%addsrc_gravity(resU,resV,resW)
             
             ! Also add permeability
-            permeability: block
-               integer :: i,j,k
-               do k=fs%cfg%kmin_,fs%cfg%kmax_
-                  do j=fs%cfg%jmin_,fs%cfg%jmax_
-                     do i=fs%cfg%imin_,fs%cfg%imax_
-                        resU(i,j,k)=resU(i,j,k)-sum(fs%itpr_x(:,i,j,k)*epsf(i-1:i,j,k)*viscmol(i-1:i,j,k)*epsp(i-1:i,j,k))*fs%U(i,j,k)/(bporo*bperm)
-                        resV(i,j,k)=resV(i,j,k)-sum(fs%itpr_y(:,i,j,k)*epsf(i,j-1:j,k)*viscmol(i,j-1:j,k)*epsp(i,j-1:j,k))*fs%V(i,j,k)/(bporo*bperm)
-                        resW(i,j,k)=resW(i,j,k)-sum(fs%itpr_z(:,i,j,k)*epsf(i,j,k-1:k)*viscmol(i,j,k-1:k)*epsp(i,j,k-1:k))*fs%W(i,j,k)/(bporo*bperm)
-                     end do
-                  end do
-               end do
-            end block permeability
+            !permeability: block
+            !   integer :: i,j,k
+            !   do k=fs%cfg%kmin_,fs%cfg%kmax_
+            !      do j=fs%cfg%jmin_,fs%cfg%jmax_
+            !         do i=fs%cfg%imin_,fs%cfg%imax_
+            !            resU(i,j,k)=resU(i,j,k)-sum(fs%itpr_x(:,i,j,k)*epsf(i-1:i,j,k)*viscmol(i-1:i,j,k)*epsp(i-1:i,j,k))*fs%U(i,j,k)/(bporo*bperm)
+            !            resV(i,j,k)=resV(i,j,k)-sum(fs%itpr_y(:,i,j,k)*epsf(i,j-1:j,k)*viscmol(i,j-1:j,k)*epsp(i,j-1:j,k))*fs%V(i,j,k)/(bporo*bperm)
+            !            resW(i,j,k)=resW(i,j,k)-sum(fs%itpr_z(:,i,j,k)*epsf(i,j,k-1:k)*viscmol(i,j,k-1:k)*epsp(i,j,k-1:k))*fs%W(i,j,k)/(bporo*bperm)
+            !         end do
+            !      end do
+            !   end do
+            !end block permeability
             
             ! Assemble explicit residual
             resU=time%dtmid*resU-(2.0_WP*fs%rhoU-2.0_WP*fs%rhoUold)
@@ -833,20 +896,24 @@ end subroutine get_cond
             where (sc%cfg%VF.gt.0.0_WP) resSC=resSC+epsf/Cp*(pressure-pressure_old)/time%dt
             
             ! Account for heat transfer to product
-            heat_to_product: block
-               integer :: i,j,k
-               do k=fs%cfg%kmin_,fs%cfg%kmax_
-                  do j=fs%cfg%jmin_,fs%cfg%jmax_
-                     do i=fs%cfg%imin_,fs%cfg%imax_
-                        if (sc%cfg%VF(i,j,k).gt.0.0_WP) resSC(i,j,k)=resSC(i,j,k)-diffmol(i,j,k)*epsp(i,j,k)*(sc%SC(i,j,k)-Tprod(i,j,k))/(bporo*Tperm)
-                     end do
-                  end do
-               end do
-            end block heat_to_product
+            !heat_to_product: block
+            !   integer :: i,j,k
+            !   do k=fs%cfg%kmin_,fs%cfg%kmax_
+            !      do j=fs%cfg%jmin_,fs%cfg%jmax_
+            !         do i=fs%cfg%imin_,fs%cfg%imax_
+            !            if (sc%cfg%VF(i,j,k).gt.0.0_WP) resSC(i,j,k)=resSC(i,j,k)-diffmol(i,j,k)*epsp(i,j,k)*(sc%SC(i,j,k)-Tprod(i,j,k))/(bporo*Tperm)
+            !         end do
+            !      end do
+            !   end do
+            !end block heat_to_product
             
             ! Temporarily redefine density to include sled/basket assembly
             sc%rho   =sc%rho   +Msteel*Cs/(Vtotal*Cp)
             sc%rhoold=sc%rhoold+Msteel*Cs/(Vtotal*Cp)
+            
+            ! Temporarily redefine density to include product as well
+            sc%rho   =sc%rho   +Mprod*Cprod/(Vtotal*Cp)
+            sc%rhoold=sc%rhoold+Mprod*Cprod/(Vtotal*Cp)
             
             ! Assemble explicit residual
             where (sc%cfg%VF.gt.0.0_WP) resSC=time%dt*resSC-(2.0_WP*sc%rho*sc%SC-(sc%rho+sc%rhoold)*sc%SCold)
@@ -857,6 +924,10 @@ end subroutine get_cond
             ! Set densities back to fluid only
             sc%rho   =sc%rho   -Msteel*Cs/(Vtotal*Cp)
             sc%rhoold=sc%rhoold-Msteel*Cs/(Vtotal*Cp)
+            
+            ! Set densities back to fluid only
+            sc%rho   =sc%rho   -Mprod*Cprod/(Vtotal*Cp)
+            sc%rhoold=sc%rhoold-Mprod*Cprod/(Vtotal*Cp)
             
             ! Apply this residual
             sc%SC=2.0_WP*sc%SC-sc%SCold+resSC

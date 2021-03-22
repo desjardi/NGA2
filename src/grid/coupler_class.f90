@@ -30,6 +30,9 @@ module coupler_class
       ! Logicals to help us know if we have received a src or dst grid
       logical :: got_src=.false.                          !< Were we given a src grid
       logical :: got_dst=.false.                          !< Were we given a dst grid
+      ! Rank map for dst grid
+      integer :: dnproc,dnpx,dnpy,dnpz                    !< Destination grid partitioning
+      integer, dimension(:,:,:), allocatable :: rankmap   !< Processor coordinate to union group rank map
    contains
       procedure :: initialize                             !< Routine that prepares all interpolation metrics from src to dst
       procedure :: set_src                                !< Routine that sets the source grid
@@ -109,62 +112,121 @@ contains
    
    !> Prepare interpolation metrics from src to dst
    subroutine initialize(this)
-      use sgrid_class, only: sgrid
-      use parallel,    only: MPI_REAL_WP
       implicit none
       class(coupler), intent(inout) :: this
-      character(len=str_medium) :: simu_name
-      real(WP), dimension(:), allocatable :: x
-      real(WP), dimension(:), allocatable :: y
-      real(WP), dimension(:), allocatable :: z
-      logical :: xper,yper,zper
-      integer :: no,nx,ny,nz,coord,ierr
       
-      ! Destination root process extracts sgrid info
-      if (this%rank.eq.this%droot) then
-         simu_name=this%dst%name
-         coord=this%dst%coordsys
-         xper=this%dst%xper
-         yper=this%dst%yper
-         zper=this%dst%zper
-         nx=this%dst%nx
-         ny=this%dst%ny
-         nz=this%dst%nz
-         no=this%dst%no
-      end if
       
-      ! Broadcast it to our group
-      call MPI_BCAST(simu_name,len(simu_name),MPI_CHARACTER,this%droot,this%comm,ierr)
-      call MPI_BCAST(coord    ,1             ,MPI_INTEGER  ,this%droot,this%comm,ierr)
-      call MPI_BCAST(xper     ,1             ,MPI_LOGICAL  ,this%droot,this%comm,ierr)
-      call MPI_BCAST(yper     ,1             ,MPI_LOGICAL  ,this%droot,this%comm,ierr)
-      call MPI_BCAST(zper     ,1             ,MPI_LOGICAL  ,this%droot,this%comm,ierr)
-      call MPI_BCAST(nx       ,1             ,MPI_INTEGER  ,this%droot,this%comm,ierr)
-      call MPI_BCAST(ny       ,1             ,MPI_INTEGER  ,this%droot,this%comm,ierr)
-      call MPI_BCAST(nz       ,1             ,MPI_INTEGER  ,this%droot,this%comm,ierr)
-      call MPI_BCAST(no       ,1             ,MPI_INTEGER  ,this%droot,this%comm,ierr)
+      ! First step is to make destination grid available to all
+      share_grid: block
+         use sgrid_class, only: sgrid
+         use parallel,    only: MPI_REAL_WP
+         character(len=str_medium) :: simu_name
+         real(WP), dimension(:), allocatable :: x
+         real(WP), dimension(:), allocatable :: y
+         real(WP), dimension(:), allocatable :: z
+         logical :: xper,yper,zper
+         integer :: no,nx,ny,nz,coord,ierr
+         
+         ! Destination root process extracts its own sgrid
+         if (this%rank.eq.this%droot) then
+            simu_name=this%dst%name
+            coord=this%dst%coordsys
+            xper=this%dst%xper
+            yper=this%dst%yper
+            zper=this%dst%zper
+            nx=this%dst%nx
+            ny=this%dst%ny
+            nz=this%dst%nz
+            no=this%dst%no
+            this%dnproc=this%dst%nproc
+            this%dnpx=this%dst%npx
+            this%dnpy=this%dst%npy
+            this%dnpz=this%dst%npz
+         end if
+         
+         ! Then it broadcasts it to our group
+         call MPI_BCAST(simu_name,len(simu_name),MPI_CHARACTER,this%droot,this%comm,ierr)
+         call MPI_BCAST(coord    ,1             ,MPI_INTEGER  ,this%droot,this%comm,ierr)
+         call MPI_BCAST(xper     ,1             ,MPI_LOGICAL  ,this%droot,this%comm,ierr)
+         call MPI_BCAST(yper     ,1             ,MPI_LOGICAL  ,this%droot,this%comm,ierr)
+         call MPI_BCAST(zper     ,1             ,MPI_LOGICAL  ,this%droot,this%comm,ierr)
+         call MPI_BCAST(nx       ,1             ,MPI_INTEGER  ,this%droot,this%comm,ierr)
+         call MPI_BCAST(ny       ,1             ,MPI_INTEGER  ,this%droot,this%comm,ierr)
+         call MPI_BCAST(nz       ,1             ,MPI_INTEGER  ,this%droot,this%comm,ierr)
+         call MPI_BCAST(no       ,1             ,MPI_INTEGER  ,this%droot,this%comm,ierr)
+         call MPI_BCAST(this%dnpx,1             ,MPI_INTEGER  ,this%droot,this%comm,ierr)
+         call MPI_BCAST(this%dnpy,1             ,MPI_INTEGER  ,this%droot,this%comm,ierr)
+         call MPI_BCAST(this%dnpz,1             ,MPI_INTEGER  ,this%droot,this%comm,ierr)
+         call MPI_BCAST(this%dnproc,1           ,MPI_INTEGER  ,this%droot,this%comm,ierr)
+         
+         ! Allocate x/y/z, fill it, and bcast
+         allocate(x(1:nx+1),y(1:ny+1),z(1:nz+1))
+         if (this%rank.eq.this%droot) then
+            x(1:nx+1)=this%dst%x(this%dst%imin:this%dst%imax+1)
+            y(1:ny+1)=this%dst%y(this%dst%jmin:this%dst%jmax+1)
+            z(1:nz+1)=this%dst%z(this%dst%kmin:this%dst%kmax+1)
+         end if
+         call MPI_BCAST(x,nx+1,MPI_REAL_WP,this%droot,this%comm,ierr)
+         call MPI_BCAST(y,ny+1,MPI_REAL_WP,this%droot,this%comm,ierr)
+         call MPI_BCAST(z,nz+1,MPI_REAL_WP,this%droot,this%comm,ierr)
+         
+         ! Finish creating the sgrid
+         if (.not.this%got_dst) then
+            allocate(this%dst)
+            this%dst%sgrid=sgrid(coord,no,x,y,z,xper,yper,zper,trim(adjustl(simu_name)))
+         end if
+         
+         ! Deallocate
+         deallocate(x,y,z)
+         
+      end block share_grid
       
-      ! Allocate x/y/z, fill it, and bc
-      allocate(x(1:nx+1),y(1:ny+1),z(1:nz+1))
-      if (this%rank.eq.this%droot) then
-         x(1:nx+1)=this%dst%x(this%dst%imin:this%dst%imax+1)
-         y(1:ny+1)=this%dst%y(this%dst%jmin:this%dst%jmax+1)
-         z(1:nz+1)=this%dst%z(this%dst%kmin:this%dst%kmax+1)
-      end if
-      call MPI_BCAST(x,nx+1,MPI_REAL_WP,this%droot,this%comm,ierr)
-      call MPI_BCAST(y,ny+1,MPI_REAL_WP,this%droot,this%comm,ierr)
-      call MPI_BCAST(z,nz+1,MPI_REAL_WP,this%droot,this%comm,ierr)
       
-      ! Finish creating the sgrid
-      if (.not.this%got_dst) then
-         allocate(this%dst)
-         this%dst%sgrid=sgrid(coord,no,x,y,z,xper,yper,zper,trim(adjustl(simu_name)))
-      end if
+      ! Second step is to make destination partition map available to all
+      share_partition: block
+         integer :: ierr
+         integer, dimension(:), allocatable :: diproc,djproc,dkproc
+         
+         ! Destination root process extracts partition
+         if (this%rank.eq.this%droot) then
+            this%dnproc=this%dst%nproc
+            this%dnpx=this%dst%npx
+            this%dnpy=this%dst%npy
+            this%dnpz=this%dst%npz
+         end if
+         
+         ! Broadcast it to our group
+         call MPI_BCAST(this%dnpx,  1,MPI_INTEGER,this%droot,this%comm,ierr)
+         call MPI_BCAST(this%dnpy,  1,MPI_INTEGER,this%droot,this%comm,ierr)
+         call MPI_BCAST(this%dnpz,  1,MPI_INTEGER,this%droot,this%comm,ierr)
+         call MPI_BCAST(this%dnproc,1,MPI_INTEGER,this%droot,this%comm,ierr)
+         
+         ! Allocate the destination rankmap
+         allocate(this%rankmap(this%dnpx,this%dnpy,this%dnpz))
+         
+         ! Prepare communication arrays
+         allocate(diproc(this%nproc),djproc(this%nproc),dkproc(this%nproc))
+         
+         ! Provide a default i/j/kproc to processors without dst grid
+         if (.not.this%got_dst) then
+            this%dst%iproc=-1
+            this%dst%jproc=-1
+            this%dst%kproc=-1
+         end if
+         
+         ! Allgather the rank->(iproc,jproc,kproc) info
+         call MPI_ALLGATHER(this%dst%iproc,1,MPI_INTEGER,diproc,1,MPI_INTEGER,this%dst%comm,ierr)
+         call MPI_ALLGATHER(this%dst%jproc,1,MPI_INTEGER,djproc,1,MPI_INTEGER,this%dst%comm,ierr)
+         call MPI_ALLGATHER(this%dst%kproc,1,MPI_INTEGER,dkproc,1,MPI_INTEGER,this%dst%comm,ierr)
+         
+         ! Finally, flip the rankmap data
+         
+         
+         ! Deallocate communication arrays
+         deallocate(diproc,djproc,dkproc)
+         
+      end block share_partition
       
-      ! Deallocate
-      deallocate(x,y,z)
-      
-      ! We also need to know the partition map
       
       ! Log/screen output
       logging: block
@@ -179,6 +241,7 @@ contains
             if (verbose.gt.0) call log(message)
          end if
       end block logging
+      
       
    end subroutine initialize
    

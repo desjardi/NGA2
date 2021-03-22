@@ -12,6 +12,9 @@ module geometry
    
    ! Vessel geometry will be needed in BCs
    real(WP), public :: Lv,IR
+   real(WP), parameter, public :: ypipe=-0.39_WP
+   real(WP), parameter, public :: rpipe=+0.02_WP
+   real(WP), parameter, public :: lpipe=+1.50_WP
    
 contains
    
@@ -89,8 +92,8 @@ contains
          do k=cfg%kmino_,cfg%kmaxo_
             do j=cfg%jmino_,cfg%jmaxo_
                do i=cfg%imino_,cfg%imaxo_
-                  r=sqrt((cfg%ym(j)+0.34_WP)**2+(cfg%zm(k))**2)
-                  if (cfg%xm(i).gt.-0.75_WP.and.cfg%xm(i).lt.+0.75_WP.and.r.lt.0.02_WP) cfg%VF(i,j,k)=0.0_WP
+                  r=sqrt((cfg%ym(j)-ypipe)**2+(cfg%zm(k))**2)
+                  if (cfg%xm(i).gt.-0.5_WP*lpipe.and.cfg%xm(i).lt.+0.5_WP*lpipe.and.r.lt.rpipe) cfg%VF(i,j,k)=0.0_WP
                end do
             end do
          end do
