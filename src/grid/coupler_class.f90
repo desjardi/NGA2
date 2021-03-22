@@ -22,9 +22,14 @@ module coupler_class
       integer :: nproc                                    !< Number of processors
       integer :: rank                                     !< Processor grid rank
       logical :: amRoot                                   !< Am I root for the coupler?
+      integer :: sroot                                    !< Rank of src grid root on union group
+      integer :: droot                                    !< Rank of dst grid root on union group
       ! These are our two pgrids
-      type(pgrid), pointer :: src                         !< Source grid
-      type(pgrid), pointer :: dst                         !< Destination grid
+      type(pgrid), pointer :: src=>NULL()                 !< Source grid
+      type(pgrid), pointer :: dst=>NULL()                 !< Destination grid
+      ! Logicals to help us know if we have received a src or dst grid
+      logical :: got_src=.false.                          !< Were we given a src grid
+      logical :: got_dst=.false.                          !< Were we given a dst grid
    contains
       procedure :: initialize                             !< Routine that prepares all interpolation metrics from src to dst
       procedure :: set_src                                !< Routine that sets the source grid
@@ -48,6 +53,7 @@ contains
       type(coupler) :: self
       type(MPI_Group), intent(in) :: src_grp,dst_grp
       character(len=*), intent(in) :: name
+      integer, dimension(1) :: rankin,rankout
       integer :: ierr
       
       ! Set name for the coupler
@@ -63,10 +69,16 @@ contains
       if (self%nproc.eq.0) call die('[coupler constructor] Somehow the union of both groups is of size zero')
       call MPI_GROUP_RANK(self%grp,self%rank ,ierr)
       if (self%rank.eq.MPI_UNDEFINED) call die('[coupler constructor] All processors that call the constructor need to be in one of the two groups')
-      self%amRoot=(self%rank.eq.0)
       
       ! Create intracommunicator for the new group
       call MPI_COMM_CREATE_GROUP(comm,self%grp,0,self%comm,ierr)
+      
+      ! Find roots for both grids on the shared communicator
+      rankin=0; call MPI_GROUP_TRANSLATE_RANKS(self%sgrp,1,rankin,self%grp,rankout,ierr); self%sroot=rankout(1)
+      rankin=0; call MPI_GROUP_TRANSLATE_RANKS(self%dgrp,1,rankin,self%grp,rankout,ierr); self%droot=rankout(1)
+      
+      ! Set coupler root to src root
+      self%amRoot=(self%rank.eq.self%sroot)
       
    end function construct_from_two_groups
    
@@ -76,7 +88,10 @@ contains
       implicit none
       class(coupler), intent(inout) :: this
       class(pgrid), target, intent(in) :: pg
+      ! Point to the grid
       this%src=>pg
+      ! Set a flag
+      this%got_src=.true.
    end subroutine set_src
    
    
@@ -85,16 +100,71 @@ contains
       implicit none
       class(coupler), intent(inout) :: this
       class(pgrid), target, intent(in) :: pg
+      ! Point to the grid
       this%dst=>pg
+      ! Set a flag
+      this%got_dst=.true.
    end subroutine set_dst
    
    
    !> Prepare interpolation metrics from src to dst
    subroutine initialize(this)
+      use sgrid_class, only: sgrid
+      use parallel,    only: MPI_REAL_WP
       implicit none
       class(coupler), intent(inout) :: this
+      character(len=str_medium) :: simu_name
+      real(WP), dimension(:), allocatable :: x
+      real(WP), dimension(:), allocatable :: y
+      real(WP), dimension(:), allocatable :: z
+      logical :: xper,yper,zper
+      integer :: no,nx,ny,nz,coord,ierr
       
+      ! Destination root process extracts sgrid info
+      if (this%rank.eq.this%droot) then
+         simu_name=this%dst%name
+         coord=this%dst%coordsys
+         xper=this%dst%xper
+         yper=this%dst%yper
+         zper=this%dst%zper
+         nx=this%dst%nx
+         ny=this%dst%ny
+         nz=this%dst%nz
+         no=this%dst%no
+      end if
       
+      ! Broadcast it to our group
+      call MPI_BCAST(simu_name,len(simu_name),MPI_CHARACTER,this%droot,this%comm,ierr)
+      call MPI_BCAST(coord    ,1             ,MPI_INTEGER  ,this%droot,this%comm,ierr)
+      call MPI_BCAST(xper     ,1             ,MPI_LOGICAL  ,this%droot,this%comm,ierr)
+      call MPI_BCAST(yper     ,1             ,MPI_LOGICAL  ,this%droot,this%comm,ierr)
+      call MPI_BCAST(zper     ,1             ,MPI_LOGICAL  ,this%droot,this%comm,ierr)
+      call MPI_BCAST(nx       ,1             ,MPI_INTEGER  ,this%droot,this%comm,ierr)
+      call MPI_BCAST(ny       ,1             ,MPI_INTEGER  ,this%droot,this%comm,ierr)
+      call MPI_BCAST(nz       ,1             ,MPI_INTEGER  ,this%droot,this%comm,ierr)
+      call MPI_BCAST(no       ,1             ,MPI_INTEGER  ,this%droot,this%comm,ierr)
+      
+      ! Allocate x/y/z, fill it, and bc
+      allocate(x(1:nx+1),y(1:ny+1),z(1:nz+1))
+      if (this%rank.eq.this%droot) then
+         x(1:nx+1)=this%dst%x(this%dst%imin:this%dst%imax+1)
+         y(1:ny+1)=this%dst%y(this%dst%jmin:this%dst%jmax+1)
+         z(1:nz+1)=this%dst%z(this%dst%kmin:this%dst%kmax+1)
+      end if
+      call MPI_BCAST(x,nx+1,MPI_REAL_WP,this%droot,this%comm,ierr)
+      call MPI_BCAST(y,ny+1,MPI_REAL_WP,this%droot,this%comm,ierr)
+      call MPI_BCAST(z,nz+1,MPI_REAL_WP,this%droot,this%comm,ierr)
+      
+      ! Finish creating the sgrid
+      if (.not.this%got_dst) then
+         allocate(this%dst)
+         this%dst%sgrid=sgrid(coord,no,x,y,z,xper,yper,zper,trim(adjustl(simu_name)))
+      end if
+      
+      ! Deallocate
+      deallocate(x,y,z)
+      
+      ! We also need to know the partition map
       
       ! Log/screen output
       logging: block

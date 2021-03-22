@@ -36,7 +36,7 @@ contains
          if (isInGrp1) call cpl%set_src(cfg1)
          if (isInGrp2) call cpl%set_dst(cfg2)
          ! Initialize the metrics
-         !call cpl%initialize()
+         call cpl%initialize()
       end if
       
       
