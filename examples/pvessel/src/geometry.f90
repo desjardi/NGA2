@@ -11,8 +11,8 @@ module geometry
    public :: geometry_init
    
    ! Vessel geometry will be needed in BCs
-   real(WP), public :: Lv,IR
-   real(WP), parameter, public :: ypipe=-0.39_WP
+   real(WP), public :: Lv,IR,dx,dy,dz
+   real(WP), parameter, public :: ypipe=-0.375_WP
    real(WP), parameter, public :: rpipe=+0.02_WP
    real(WP), parameter, public :: lpipe=+1.50_WP
    
@@ -49,6 +49,9 @@ contains
          do k=1,nz+1
             z(k)=real(k-1,WP)/real(nz,WP)*Lz-0.5_WP*Lz
          end do
+         dx=x(2)-x(1)
+         dy=y(2)-y(1)
+         dz=z(2)-z(1)
          
          ! General serial grid object
          grid=sgrid(coord=cartesian,no=2,x=x,y=y,z=z,xper=.false.,yper=.false.,zper=.false.,name='PressureVessel')
