@@ -2361,7 +2361,6 @@ contains
    subroutine meta_structures_stats(this,U,V,W)
       use mpi_f08,   only: MPI_ALLREDUCE,MPI_SUM
       use parallel,  only: MPI_REAL_WP
-      use mathtools, only: eigensolver
       implicit none
       class(ccl), intent(inout) :: this
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in) :: U     !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
