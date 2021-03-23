@@ -450,9 +450,12 @@ contains
       class(coupler), intent(inout) :: this
       real(WP), dimension(this%dst%imino_:,this%dst%jmino_:,this%dst%kmino_:), intent(out) :: A !< Needs to be (dst%imino_:dst%imaxo_,dst%jmino_:dst%jmaxo_,dst%kmino_:dst%kmaxo_)
       integer :: n
+      ! Pull the data
       do n=1,this%nrecv
          A(this%dstind(1,n),this%dstind(2,n),this%dstind(3,n))=this%data_recv(n)
       end do
+      ! Sync it before returning
+      call this%dst%sync(A)
    end subroutine pull
    
    
