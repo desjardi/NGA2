@@ -42,11 +42,9 @@ module coupler_class
       integer, dimension(:,:,:), allocatable :: rankmap   !< Processor coordinate to union group rank map
       
       ! Interpolation support
-      integer , dimension(:,:), allocatable :: dstind     !< Dst indices of dst points that this processor can interpolate
       integer , dimension(:,:), allocatable :: srcind     !< Src indices of dst points that this processor can interpolate
-      integer , dimension(:,:), allocatable :: mapind     !< Dst indices of dst points that this processor will receive
+      integer , dimension(:,:), allocatable :: dstind     !< Dst indices of dst points that this processor will receive
       real(WP), dimension(:,:), allocatable :: w          !< Interpolation weights for dst points that this processor can interpolate
-      integer , dimension(:)  , allocatable :: rk         !< What rank to send each dst points that this processor can interpolate
       
       ! Communication support
       integer :: nsend                                    !< Total number of dst points that this processor can interpolate and will send out
@@ -56,10 +54,17 @@ module coupler_class
       integer, dimension(:), allocatable :: nrecv_proc    !< Number of points to receive from each processor
       integer, dimension(:), allocatable :: nrecv_disp    !< Data displacement when receiving from each processor
       
+      ! Data storage
+      real(WP), dimension(:), allocatable :: data_send    !< Data to send
+      real(WP), dimension(:), allocatable :: data_recv    !< Received data
+      
    contains
-      procedure :: initialize                             !< Routine that prepares all interpolation metrics from src to dst
       procedure :: set_src                                !< Routine that sets the source grid
       procedure :: set_dst                                !< Routine that sets the destination grid
+      procedure :: initialize                             !< Routine that prepares all interpolation metrics from src to dst
+      procedure :: push                                   !< Src routine that pushes a field into our send data storage
+      procedure :: pull                                   !< Dst routine that pulls a field from our received data storage
+      procedure :: transfer                               !< Routine that performs the src->dst data transfer
    end type coupler
    
    
@@ -137,7 +142,8 @@ contains
    subroutine initialize(this)
       implicit none
       class(coupler), intent(inout) :: this
-      
+      integer , dimension(:)  , allocatable :: rk
+      integer , dimension(:,:), allocatable :: dstind
       
       ! First step is to make destination grid available to all
       share_grid: block
@@ -204,7 +210,6 @@ contains
          
       end block share_grid
       
-      
       ! Second step is to make destination partition map available to all
       share_partition: block
          integer :: ierr,n
@@ -254,7 +259,6 @@ contains
          
       end block share_partition
       
-      
       ! Now the src processors identify all dst points that belong to them
       find_dst_points: block
          integer :: i,j,k,count,qx,rx,qy,ry,qz,rz
@@ -268,9 +272,9 @@ contains
          if (this%got_src) then
             
             ! Traverse the entire dst mesh and count points that can be interpolated
-            do k=this%dst%kmin,this%dst%kmax
-               do j=this%dst%jmin,this%dst%jmax
-                  do i=this%dst%imin,this%dst%imax
+            do k=this%dst%kmino,this%dst%kmaxo
+               do j=this%dst%jmino,this%dst%jmaxo
+                  do i=this%dst%imino,this%dst%imaxo
                      ! Skip grid points that lie outside our local domain
                      if (this%dst%xm(i).lt.this%src%x(this%src%imin_).or.this%dst%xm(i).ge.this%src%x(this%src%imax_+1).or. &
                      &   this%dst%ym(j).lt.this%src%y(this%src%jmin_).or.this%dst%ym(j).ge.this%src%y(this%src%jmax_+1).or. &
@@ -284,12 +288,11 @@ contains
             ! Continue only if points where found
             if (this%nsend.gt.0) then
                
-               ! Allocate storage for ind, rk, and w
+               ! Allocate storage for both ind, rk, and w
                allocate(this%srcind(3,this%nsend))
-               allocate(this%dstind(3,this%nsend))
                allocate(this%w(3,this%nsend))
-               allocate(this%rk(this%nsend))
-               
+               allocate(rk(this%nsend))
+               allocate(dstind(3,this%nsend))
                
                ! Get ready to find the dst rank
                qx=this%dst%nx/this%dnpx; rx=mod(this%dst%nx,this%dnpx)
@@ -298,9 +301,9 @@ contains
                
                ! Traverse the entire dst mesh and identify points that can be interpolated
                count=0
-               do k=this%dst%kmin,this%dst%kmax
-                  do j=this%dst%jmin,this%dst%jmax
-                     do i=this%dst%imin,this%dst%imax
+               do k=this%dst%kmino,this%dst%kmaxo
+                  do j=this%dst%jmino,this%dst%jmaxo
+                     do i=this%dst%imino,this%dst%imaxo
                         ! Skip grid points that lie outside our local domain
                         if (this%dst%xm(i).lt.this%src%x(this%src%imin_).or.this%dst%xm(i).ge.this%src%x(this%src%imax_+1).or. &
                         &   this%dst%ym(j).lt.this%src%y(this%src%jmin_).or.this%dst%ym(j).ge.this%src%y(this%src%jmax_+1).or. &
@@ -315,9 +318,9 @@ contains
                         coords(2)=0; do while (j.ge.this%dst%jmin+(coords(2)+1)*qy+min(coords(2)+1,ry).and.coords(2)+1.lt.this%dst%npy); coords(2)=coords(2)+1; end do
                         coords(3)=0; do while (k.ge.this%dst%kmin+(coords(3)+1)*qz+min(coords(3)+1,rz).and.coords(3)+1.lt.this%dst%npz); coords(3)=coords(3)+1; end do
                         ! Convert into a rank and store
-                        this%rk(count)=this%rankmap(coords(1)+1,coords(2)+1,coords(3)+1)
+                        rk(count)=this%rankmap(coords(1)+1,coords(2)+1,coords(3)+1)
                         ! Also store the dstind
-                        this%dstind(:,count)=[i,j,k]
+                        dstind(:,count)=[i,j,k]
                      end do
                   end do
                end do
@@ -328,13 +331,12 @@ contains
          
       end block find_dst_points
       
-      
       ! Next step is to sort our data by recipient
       sort_communication: block
          integer :: n,ierr
          
          ! First brute-force quick-sort our data by dst recipient
-         if (this%nsend.gt.0) call qs_commdata(this%rk,this%dstind,this%srcind,this%w)
+         if (this%nsend.gt.0) call qs_commdata(rk,dstind,this%srcind,this%w)
          
          ! Allocate and zero out per processor counters
          allocate(this%nsend_proc(0:this%nproc-1)); this%nsend_proc=0
@@ -342,8 +344,11 @@ contains
          
          ! Loop through identified points and count
          do n=1,this%nsend
-            this%nsend_proc(this%rk(n))=this%nsend_proc(this%rk(n))+1
+            this%nsend_proc(rk(n))=this%nsend_proc(rk(n))+1
          end do
+         
+         ! We are done using rk
+         if (this%nsend.gt.0) deallocate(rk)
          
          ! Prepare information about who receives what from whom
          do n=0,this%nproc-1
@@ -363,30 +368,28 @@ contains
          
       end block sort_communication
       
-      
       ! Communicate dstind to dst processors so they know what to expect
       share_dstind: block
          integer :: ierr
          integer, dimension(this%nsend) :: send_buffer
          integer, dimension(this%nrecv) :: recv_buffer
          ! Receivers allocate mapind
-         if (this%nrecv.gt.0) allocate(this%mapind(3,this%nrecv))
+         if (this%nrecv.gt.0) allocate(this%dstind(3,this%nrecv))
          ! Communicate dstind(1)
-         if (this%nsend.gt.0) send_buffer=this%dstind(1,:)
+         if (this%nsend.gt.0) send_buffer=dstind(1,:)
          call MPI_ALLtoALLv(send_buffer,this%nsend_proc,this%nsend_disp,MPI_INTEGER,recv_buffer,this%nrecv_proc,this%nrecv_disp,MPI_INTEGER,this%comm,ierr)
-         if (this%nrecv.gt.0) this%mapind(1,:)=recv_buffer
+         if (this%nrecv.gt.0) this%dstind(1,:)=recv_buffer
          ! Communicate dstind(2)
-         if (this%nsend.gt.0) send_buffer=this%dstind(2,:)
+         if (this%nsend.gt.0) send_buffer=dstind(2,:)
          call MPI_ALLtoALLv(send_buffer,this%nsend_proc,this%nsend_disp,MPI_INTEGER,recv_buffer,this%nrecv_proc,this%nrecv_disp,MPI_INTEGER,this%comm,ierr)
-         if (this%nrecv.gt.0) this%mapind(2,:)=recv_buffer
+         if (this%nrecv.gt.0) this%dstind(2,:)=recv_buffer
          ! Communicate dstind(3)
-         if (this%nsend.gt.0) send_buffer=this%dstind(3,:)
+         if (this%nsend.gt.0) send_buffer=dstind(3,:)
          call MPI_ALLtoALLv(send_buffer,this%nsend_proc,this%nsend_disp,MPI_INTEGER,recv_buffer,this%nrecv_proc,this%nrecv_disp,MPI_INTEGER,this%comm,ierr)
-         if (this%nrecv.gt.0) this%mapind(3,:)=recv_buffer
-         ! We are done using dstind and rk, we deallocate them
-         if (this%nsend.gt.0) deallocate(this%dstind,this%rk)
+         if (this%nrecv.gt.0) this%dstind(3,:)=recv_buffer
+         ! We are done using dstind
+         if (this%nsend.gt.0) deallocate(dstind)
       end block share_dstind
-      
       
       ! For visualization, create coupling field=0 if not overlap was found, 1 if overlap was found
       viz_overlap: block
@@ -394,13 +397,16 @@ contains
          if (this%got_dst) then
             ! Allocate the array
             allocate(this%overlap(this%dst%imino_:this%dst%imaxo_,this%dst%jmino_:this%dst%jmaxo_,this%dst%kmino_:this%dst%kmaxo_)); this%overlap=0.0_WP
-            ! Fill it up with out mapind info
+            ! Fill it up with out dstind info
             do n=1,this%nrecv
-               this%overlap(this%mapind(1,n),this%mapind(2,n),this%mapind(3,n))=1.0_WP
+               this%overlap(this%dstind(1,n),this%dstind(2,n),this%dstind(3,n))=1.0_WP
             end do
          end if
       end block viz_overlap
       
+      ! Final step is to allocate the data storage
+      allocate(this%data_send(this%nsend))
+      allocate(this%data_recv(this%nrecv))
       
       ! Log/screen output
       logging: block
@@ -416,8 +422,48 @@ contains
          end if
       end block logging
       
-      
    end subroutine initialize
+   
+   
+   !> Routine that interpolates src data to the send storage - to be called by processors in src_group
+   subroutine push(this,A)
+      implicit none
+      class(coupler), intent(inout) :: this
+      real(WP), dimension(this%src%imino_:,this%src%jmino_:,this%src%kmino_:), intent(in) :: A !< Needs to be (src%imino_:src%imaxo_,src%jmino_:src%jmaxo_,src%kmino_:src%kmaxo_)
+      integer :: n
+      do n=1,this%nsend
+         this%data_send(n)=(       this%w(3,n))*((       this%w(2,n))*((       this%w(1,n))*A(this%srcind(1,n)+1,this%srcind(2,n)+1,this%srcind(3,n)+1)  + &
+         &                                                             (1.0_WP-this%w(1,n))*A(this%srcind(1,n)  ,this%srcind(2,n)+1,this%srcind(3,n)+1)) + &
+         &                                       (1.0_WP-this%w(2,n))*((       this%w(1,n))*A(this%srcind(1,n)+1,this%srcind(2,n)  ,this%srcind(3,n)+1)  + &
+         &                                                             (1.0_WP-this%w(1,n))*A(this%srcind(1,n)  ,this%srcind(2,n)  ,this%srcind(3,n)+1)))+ &
+         &                 (1.0_WP-this%w(3,n))*((       this%w(2,n))*((       this%w(1,n))*A(this%srcind(1,n)+1,this%srcind(2,n)+1,this%srcind(3,n)  )  + &
+         &                                                             (1.0_WP-this%w(1,n))*A(this%srcind(1,n)  ,this%srcind(2,n)+1,this%srcind(3,n)  )) + &
+         &                                       (1.0_WP-this%w(2,n))*((       this%w(1,n))*A(this%srcind(1,n)+1,this%srcind(2,n)  ,this%srcind(3,n)  )  + &
+         &                                                             (1.0_WP-this%w(1,n))*A(this%srcind(1,n)  ,this%srcind(2,n)  ,this%srcind(3,n)  )))
+      end do
+   end subroutine push
+   
+   
+   !> Routine that pulls dst data from the receive storage - to be called by processors in dst_group
+   subroutine pull(this,A)
+      implicit none
+      class(coupler), intent(inout) :: this
+      real(WP), dimension(this%dst%imino_:,this%dst%jmino_:,this%dst%kmino_:), intent(out) :: A !< Needs to be (dst%imino_:dst%imaxo_,dst%jmino_:dst%jmaxo_,dst%kmino_:dst%kmaxo_)
+      integer :: n
+      do n=1,this%nrecv
+         A(this%dstind(1,n),this%dstind(2,n),this%dstind(3,n))=this%data_recv(n)
+      end do
+   end subroutine pull
+   
+   
+   !> Routine that transfers the data from src to dst - both src_group and dst_group processors need to call
+   subroutine transfer(this)
+      use parallel, only: MPI_REAL_WP
+      implicit none
+      class(coupler), intent(inout) :: this
+      integer :: ierr
+      call MPI_ALLtoALLv(this%data_send,this%nsend_proc,this%nsend_disp,MPI_REAL_WP,this%data_recv,this%nrecv_proc,this%nrecv_disp,MPI_REAL_WP,this%comm,ierr)
+   end subroutine transfer
    
    
    !> Private subroutine that finds weights w for the trilinear interpolation

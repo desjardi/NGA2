@@ -76,7 +76,9 @@ contains
       
       ! Both groups work on the coupling
       coupling_step: block
-         
+         if (isInGrp1) call cpl%push(U1)
+         call cpl%transfer()
+         if (isInGrp2) call cpl%pull(U2)
       end block coupling_step
       
       
