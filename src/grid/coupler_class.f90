@@ -24,6 +24,11 @@ module coupler_class
       ! These are our two pgrids
       type(pgrid), pointer :: src=>NULL()                 !< Source grid
       type(pgrid), pointer :: dst=>NULL()                 !< Destination grid
+      
+      ! Cell-centered or face-centered
+      character(len=1) :: sloc='c'                        !< Coupling location for src grid ('c'=cell center, 'x'=x-face, 'y'=y-face, 'z'=z-face)
+      character(len=1) :: dloc='c'                        !< Coupling location for dst grid ('c'=cell center, 'x'=x-face, 'y'=y-face, 'z'=z-face)
+      
       ! Logicals to help us know if we have received a src or dst grid
       logical :: got_src=.false.                          !< Were we given a src grid
       logical :: got_dst=.false.                          !< Were we given a dst grid
@@ -115,26 +120,38 @@ contains
    
    
    !> Set the source grid - to be called by processors in src_group
-   subroutine set_src(this,pg)
+   subroutine set_src(this,pg,loc)
+      use string,   only: lowercase
+      use messager, only: die
       implicit none
       class(coupler), intent(inout) :: this
       class(pgrid), target, intent(in) :: pg
+      character(len=1), optional :: loc
       ! Point to the grid
       this%src=>pg
       ! Set a flag
       this%got_src=.true.
+      ! Process location info
+      if (present(loc)) this%sloc=lowercase(loc)
+      if (this%sloc.ne.'c'.and.this%sloc.ne.'x'.and.this%sloc.ne.'y'.and.this%sloc.ne.'z') call die('[coupler set_src] Improper location value was provided')
    end subroutine set_src
    
    
    !> Set the destination grid - to be called by processors in dst_group
-   subroutine set_dst(this,pg)
+   subroutine set_dst(this,pg,loc)
+      use string,   only: lowercase
+      use messager, only: die
       implicit none
       class(coupler), intent(inout) :: this
       class(pgrid), target, intent(in) :: pg
+      character(len=1), optional :: loc
       ! Point to the grid
       this%dst=>pg
       ! Set a flag
       this%got_dst=.true.
+      ! Process location info
+      if (present(loc)) this%dloc=lowercase(loc)
+      if (this%dloc.ne.'c'.and.this%dloc.ne.'x'.and.this%dloc.ne.'y'.and.this%dloc.ne.'z') call die('[coupler set_dst] Improper location value was provided')
    end subroutine set_dst
    
    
@@ -275,10 +292,17 @@ contains
             do k=this%dst%kmino,this%dst%kmaxo
                do j=this%dst%jmino,this%dst%jmaxo
                   do i=this%dst%imino,this%dst%imaxo
-                     ! Skip grid points that lie outside our local domain
-                     if (this%dst%xm(i).lt.this%src%x(this%src%imin_).or.this%dst%xm(i).ge.this%src%x(this%src%imax_+1).or. &
-                     &   this%dst%ym(j).lt.this%src%y(this%src%jmin_).or.this%dst%ym(j).ge.this%src%y(this%src%jmax_+1).or. &
-                     &   this%dst%zm(k).lt.this%src%z(this%src%kmin_).or.this%dst%zm(k).ge.this%src%z(this%src%kmax_+1)) cycle
+                     ! Choose appropriate location
+                     select case (this%dloc)
+                     case ('c'); pt=[this%dst%xm(i),this%dst%ym(j),this%dst%zm(k)]
+                     case ('x'); pt=[this%dst%x (i),this%dst%ym(j),this%dst%zm(k)]
+                     case ('y'); pt=[this%dst%xm(i),this%dst%y (j),this%dst%zm(k)]
+                     case ('z'); pt=[this%dst%xm(i),this%dst%ym(j),this%dst%z (k)]
+                     end select
+                     ! Skip grid points that lie outside our local domain - allow for slight double-counting here with the .gt. ...
+                     if (pt(1).lt.this%src%x(this%src%imin_).or.pt(1).gt.this%src%x(this%src%imax_+1).or. &
+                     &   pt(2).lt.this%src%y(this%src%jmin_).or.pt(2).gt.this%src%y(this%src%jmax_+1).or. &
+                     &   pt(3).lt.this%src%z(this%src%kmin_).or.pt(3).gt.this%src%z(this%src%kmax_+1)) cycle
                      ! Increment our counter
                      this%nsend=this%nsend+1
                   end do
@@ -304,15 +328,26 @@ contains
                do k=this%dst%kmino,this%dst%kmaxo
                   do j=this%dst%jmino,this%dst%jmaxo
                      do i=this%dst%imino,this%dst%imaxo
-                        ! Skip grid points that lie outside our local domain
-                        if (this%dst%xm(i).lt.this%src%x(this%src%imin_).or.this%dst%xm(i).ge.this%src%x(this%src%imax_+1).or. &
-                        &   this%dst%ym(j).lt.this%src%y(this%src%jmin_).or.this%dst%ym(j).ge.this%src%y(this%src%jmax_+1).or. &
-                        &   this%dst%zm(k).lt.this%src%z(this%src%kmin_).or.this%dst%zm(k).ge.this%src%z(this%src%kmax_+1)) cycle
-                        ! The point is in our subdomain, so rename it and increment our counter
-                        pt=[this%dst%xm(i),this%dst%ym(j),this%dst%zm(k)]
+                        ! Choose appropriate location
+                        select case (this%dloc)
+                        case ('c'); pt=[this%dst%xm(i),this%dst%ym(j),this%dst%zm(k)]
+                        case ('x'); pt=[this%dst%x (i),this%dst%ym(j),this%dst%zm(k)]
+                        case ('y'); pt=[this%dst%xm(i),this%dst%y (j),this%dst%zm(k)]
+                        case ('z'); pt=[this%dst%xm(i),this%dst%ym(j),this%dst%z (k)]
+                        end select
+                        ! Skip grid points that lie outside our local domain - allow for slight double-counting here with the .gt. ...
+                        if (pt(1).lt.this%src%x(this%src%imin_).or.pt(1).gt.this%src%x(this%src%imax_+1).or. &
+                        &   pt(2).lt.this%src%y(this%src%jmin_).or.pt(2).gt.this%src%y(this%src%jmax_+1).or. &
+                        &   pt(3).lt.this%src%z(this%src%kmin_).or.pt(3).gt.this%src%z(this%src%kmax_+1)) cycle
+                        ! The point is in our subdomain, so increment our counter
                         count=count+1
-                        ! Locate point and store src index and interpolation weights
-                        call get_weights_and_indices(this%src,pt,this%src%imin_,this%src%jmin_,this%src%kmin_,this%w(:,count),this%srcind(:,count))
+                        ! Locate point and store src index and interpolation weights with proper mesh location
+                        select case (this%sloc)
+                        case ('c'); call get_weights_and_indices_c(this%src,pt,this%src%imin_,this%src%jmin_,this%src%kmin_,this%w(:,count),this%srcind(:,count))
+                        case ('x'); call get_weights_and_indices_x(this%src,pt,this%src%imin_,this%src%jmin_,this%src%kmin_,this%w(:,count),this%srcind(:,count))
+                        case ('y'); call get_weights_and_indices_y(this%src,pt,this%src%imin_,this%src%jmin_,this%src%kmin_,this%w(:,count),this%srcind(:,count))
+                        case ('z'); call get_weights_and_indices_z(this%src,pt,this%src%imin_,this%src%jmin_,this%src%kmin_,this%w(:,count),this%srcind(:,count))
+                        end select
                         ! Find coords of the dst processor
                         coords(1)=0; do while (i.ge.this%dst%imin+(coords(1)+1)*qx+min(coords(1)+1,rx).and.coords(1)+1.lt.this%dst%npx); coords(1)=coords(1)+1; end do
                         coords(2)=0; do while (j.ge.this%dst%jmin+(coords(2)+1)*qy+min(coords(2)+1,ry).and.coords(2)+1.lt.this%dst%npy); coords(2)=coords(2)+1; end do
@@ -469,9 +504,9 @@ contains
    end subroutine transfer
    
    
-   !> Private subroutine that finds weights w for the trilinear interpolation
-   !> to the provided position pos in the vicinity of cell i0,j0,k0 on pgrid this
-   subroutine get_weights_and_indices(pg,pos,i0,j0,k0,w,ind)
+   !> Private subroutine that finds weights w for the trilinear interpolation from cell centers
+   !> to the provided position pos in the vicinity of cell i0,j0,k0 on pgrid pg
+   subroutine get_weights_and_indices_c(pg,pos,i0,j0,k0,w,ind)
       implicit none
       class(pgrid), intent(in) :: pg
       real(WP), dimension(3), intent(in) :: pos
@@ -497,7 +532,100 @@ contains
       w(3)=(pos(3)-pg%zm(k))/(pg%zm(k+1)-pg%zm(k))
       ! Return the indices too
       ind=[i,j,k]
-   end subroutine get_weights_and_indices
+   end subroutine get_weights_and_indices_c
+   
+   
+   !> Private subroutine that finds weights w for the trilinear interpolation from x-faces
+   !> to the provided position pos in the vicinity of cell i0,j0,k0 on pgrid pg
+   subroutine get_weights_and_indices_x(pg,pos,i0,j0,k0,w,ind)
+      implicit none
+      class(pgrid), intent(in) :: pg
+      real(WP), dimension(3), intent(in) :: pos
+      integer, intent(in) :: i0,j0,k0
+      integer :: i,j,k
+      real(WP), dimension(3), intent(out) :: w
+      integer , dimension(3), intent(out) :: ind
+      ! Find right i index
+      i=max(min(pg%imaxo_-1,i0),pg%imino_)
+      do while (pos(1)-pg%x (i  ).lt.0.0_WP.and.i  .gt.pg%imino_); i=i-1; end do
+      do while (pos(1)-pg%x (i+1).ge.0.0_WP.and.i+1.lt.pg%imaxo_); i=i+1; end do
+      ! Find right j index
+      j=max(min(pg%jmaxo_-1,j0),pg%jmino_)
+      do while (pos(2)-pg%ym(j  ).lt.0.0_WP.and.j  .gt.pg%jmino_); j=j-1; end do
+      do while (pos(2)-pg%ym(j+1).ge.0.0_WP.and.j+1.lt.pg%jmaxo_); j=j+1; end do
+      ! Find right k index
+      k=max(min(pg%kmaxo_-1,k0),pg%kmino_)
+      do while (pos(3)-pg%zm(k  ).lt.0.0_WP.and.k  .gt.pg%kmino_); k=k-1; end do
+      do while (pos(3)-pg%zm(k+1).ge.0.0_WP.and.k+1.lt.pg%kmaxo_); k=k+1; end do
+      ! Return tri-linear interpolation coefficients
+      w(1)=(pos(1)-pg%x (i))/(pg%x (i+1)-pg%x (i))
+      w(2)=(pos(2)-pg%ym(j))/(pg%ym(j+1)-pg%ym(j))
+      w(3)=(pos(3)-pg%zm(k))/(pg%zm(k+1)-pg%zm(k))
+      ! Return the indices too
+      ind=[i,j,k]
+   end subroutine get_weights_and_indices_x
+   
+   
+   !> Private subroutine that finds weights w for the trilinear interpolation from y-faces
+   !> to the provided position pos in the vicinity of cell i0,j0,k0 on pgrid pg
+   subroutine get_weights_and_indices_y(pg,pos,i0,j0,k0,w,ind)
+      implicit none
+      class(pgrid), intent(in) :: pg
+      real(WP), dimension(3), intent(in) :: pos
+      integer, intent(in) :: i0,j0,k0
+      integer :: i,j,k
+      real(WP), dimension(3), intent(out) :: w
+      integer , dimension(3), intent(out) :: ind
+      ! Find right i index
+      i=max(min(pg%imaxo_-1,i0),pg%imino_)
+      do while (pos(1)-pg%xm(i  ).lt.0.0_WP.and.i  .gt.pg%imino_); i=i-1; end do
+      do while (pos(1)-pg%xm(i+1).ge.0.0_WP.and.i+1.lt.pg%imaxo_); i=i+1; end do
+      ! Find right j index
+      j=max(min(pg%jmaxo_-1,j0),pg%jmino_)
+      do while (pos(2)-pg%y (j  ).lt.0.0_WP.and.j  .gt.pg%jmino_); j=j-1; end do
+      do while (pos(2)-pg%y (j+1).ge.0.0_WP.and.j+1.lt.pg%jmaxo_); j=j+1; end do
+      ! Find right k index
+      k=max(min(pg%kmaxo_-1,k0),pg%kmino_)
+      do while (pos(3)-pg%zm(k  ).lt.0.0_WP.and.k  .gt.pg%kmino_); k=k-1; end do
+      do while (pos(3)-pg%zm(k+1).ge.0.0_WP.and.k+1.lt.pg%kmaxo_); k=k+1; end do
+      ! Return tri-linear interpolation coefficients
+      w(1)=(pos(1)-pg%xm(i))/(pg%xm(i+1)-pg%xm(i))
+      w(2)=(pos(2)-pg%y (j))/(pg%y (j+1)-pg%y (j))
+      w(3)=(pos(3)-pg%zm(k))/(pg%zm(k+1)-pg%zm(k))
+      ! Return the indices too
+      ind=[i,j,k]
+   end subroutine get_weights_and_indices_y
+   
+   
+   !> Private subroutine that finds weights w for the trilinear interpolation from z-faces
+   !> to the provided position pos in the vicinity of cell i0,j0,k0 on pgrid pg
+   subroutine get_weights_and_indices_z(pg,pos,i0,j0,k0,w,ind)
+      implicit none
+      class(pgrid), intent(in) :: pg
+      real(WP), dimension(3), intent(in) :: pos
+      integer, intent(in) :: i0,j0,k0
+      integer :: i,j,k
+      real(WP), dimension(3), intent(out) :: w
+      integer , dimension(3), intent(out) :: ind
+      ! Find right i index
+      i=max(min(pg%imaxo_-1,i0),pg%imino_)
+      do while (pos(1)-pg%xm(i  ).lt.0.0_WP.and.i  .gt.pg%imino_); i=i-1; end do
+      do while (pos(1)-pg%xm(i+1).ge.0.0_WP.and.i+1.lt.pg%imaxo_); i=i+1; end do
+      ! Find right j index
+      j=max(min(pg%jmaxo_-1,j0),pg%jmino_)
+      do while (pos(2)-pg%ym(j  ).lt.0.0_WP.and.j  .gt.pg%jmino_); j=j-1; end do
+      do while (pos(2)-pg%ym(j+1).ge.0.0_WP.and.j+1.lt.pg%jmaxo_); j=j+1; end do
+      ! Find right k index
+      k=max(min(pg%kmaxo_-1,k0),pg%kmino_)
+      do while (pos(3)-pg%z (k  ).lt.0.0_WP.and.k  .gt.pg%kmino_); k=k-1; end do
+      do while (pos(3)-pg%z (k+1).ge.0.0_WP.and.k+1.lt.pg%kmaxo_); k=k+1; end do
+      ! Return tri-linear interpolation coefficients
+      w(1)=(pos(1)-pg%xm(i))/(pg%xm(i+1)-pg%xm(i))
+      w(2)=(pos(2)-pg%ym(j))/(pg%ym(j+1)-pg%ym(j))
+      w(3)=(pos(3)-pg%z (k))/(pg%z (k+1)-pg%z (k))
+      ! Return the indices too
+      ind=[i,j,k]
+   end subroutine get_weights_and_indices_z
    
    
    !> Specialized quicksort driver for our communication data
