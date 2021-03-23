@@ -14,8 +14,20 @@ module coupler_class
    
    !> Coupler object definition
    type :: coupler
+      
       ! This is the name of the coupler
       character(len=str_medium) :: name='UNNAMED_CPL'     !< Coupler name (default=UNNAMED_CPL)
+      
+      ! Overlap visualization
+      real(WP), dimension(:,:,:), allocatable :: overlap  !< Array that identifies overlap in the src and dst, on the dst grid (0=no overlap, 1=overlap)
+      
+      ! These are our two pgrids
+      type(pgrid), pointer :: src=>NULL()                 !< Source grid
+      type(pgrid), pointer :: dst=>NULL()                 !< Destination grid
+      ! Logicals to help us know if we have received a src or dst grid
+      logical :: got_src=.false.                          !< Were we given a src grid
+      logical :: got_dst=.false.                          !< Were we given a dst grid
+      
       ! This is our communication information
       type(MPI_Comm) :: comm                              !< Intracommunicator over the union of both groups
       type(MPI_Group) :: sgrp,dgrp,grp                    !< Source and destination groups and their union
@@ -24,25 +36,26 @@ module coupler_class
       logical :: amRoot                                   !< Am I root for the coupler?
       integer :: sroot                                    !< Rank of src grid root on union group
       integer :: droot                                    !< Rank of dst grid root on union group
-      ! These are our two pgrids
-      type(pgrid), pointer :: src=>NULL()                 !< Source grid
-      type(pgrid), pointer :: dst=>NULL()                 !< Destination grid
-      ! Logicals to help us know if we have received a src or dst grid
-      logical :: got_src=.false.                          !< Were we given a src grid
-      logical :: got_dst=.false.                          !< Were we given a dst grid
+      
       ! Rank map for dst grid
       integer :: dnproc,dnpx,dnpy,dnpz                    !< Destination grid partitioning
       integer, dimension(:,:,:), allocatable :: rankmap   !< Processor coordinate to union group rank map
+      
       ! Interpolation support
       integer , dimension(:,:), allocatable :: dstind     !< Dst indices of dst points that this processor can interpolate
       integer , dimension(:,:), allocatable :: srcind     !< Src indices of dst points that this processor can interpolate
+      integer , dimension(:,:), allocatable :: mapind     !< Dst indices of dst points that this processor will receive
       real(WP), dimension(:,:), allocatable :: w          !< Interpolation weights for dst points that this processor can interpolate
       integer , dimension(:)  , allocatable :: rk         !< What rank to send each dst points that this processor can interpolate
+      
       ! Communication support
       integer :: nsend                                    !< Total number of dst points that this processor can interpolate and will send out
       integer, dimension(:), allocatable :: nsend_proc    !< Number of points to send to each processor
+      integer, dimension(:), allocatable :: nsend_disp    !< Data displacement when sending to each processor
       integer :: nrecv                                    !< Total number of dst points that this processor will receive
       integer, dimension(:), allocatable :: nrecv_proc    !< Number of points to receive from each processor
+      integer, dimension(:), allocatable :: nrecv_disp    !< Data displacement when receiving from each processor
+      
    contains
       procedure :: initialize                             !< Routine that prepares all interpolation metrics from src to dst
       procedure :: set_src                                !< Routine that sets the source grid
@@ -340,15 +353,54 @@ contains
          ! Set size of receive buffer
          this%nrecv=sum(this%nrecv_proc)
          
+         ! We need to generate displacements
+         allocate(this%nsend_disp(0:this%nproc-1)); this%nsend_disp=0
+         allocate(this%nrecv_disp(0:this%nproc-1)); this%nrecv_disp=0
+         do n=1,this%nproc-1
+            this%nsend_disp(n)=this%nsend_disp(n-1)+this%nsend_proc(n-1)
+            this%nrecv_disp(n)=this%nrecv_disp(n-1)+this%nrecv_proc(n-1)
+         end do
+         
       end block sort_communication
       
       
-      ! FInally, communicate the dstind to the dst processors so they know what to expect
+      ! Communicate dstind to dst processors so they know what to expect
       share_dstind: block
-         
-         !
-         
+         integer :: ierr
+         integer, dimension(this%nsend) :: send_buffer
+         integer, dimension(this%nrecv) :: recv_buffer
+         ! Receivers allocate mapind
+         if (this%nrecv.gt.0) allocate(this%mapind(3,this%nrecv))
+         ! Communicate dstind(1)
+         if (this%nsend.gt.0) send_buffer=this%dstind(1,:)
+         call MPI_ALLtoALLv(send_buffer,this%nsend_proc,this%nsend_disp,MPI_INTEGER,recv_buffer,this%nrecv_proc,this%nrecv_disp,MPI_INTEGER,this%comm,ierr)
+         if (this%nrecv.gt.0) this%mapind(1,:)=recv_buffer
+         ! Communicate dstind(2)
+         if (this%nsend.gt.0) send_buffer=this%dstind(2,:)
+         call MPI_ALLtoALLv(send_buffer,this%nsend_proc,this%nsend_disp,MPI_INTEGER,recv_buffer,this%nrecv_proc,this%nrecv_disp,MPI_INTEGER,this%comm,ierr)
+         if (this%nrecv.gt.0) this%mapind(2,:)=recv_buffer
+         ! Communicate dstind(3)
+         if (this%nsend.gt.0) send_buffer=this%dstind(3,:)
+         call MPI_ALLtoALLv(send_buffer,this%nsend_proc,this%nsend_disp,MPI_INTEGER,recv_buffer,this%nrecv_proc,this%nrecv_disp,MPI_INTEGER,this%comm,ierr)
+         if (this%nrecv.gt.0) this%mapind(3,:)=recv_buffer
+         ! We are done using dstind and rk, we deallocate them
+         if (this%nsend.gt.0) deallocate(this%dstind,this%rk)
       end block share_dstind
+      
+      
+      ! For visualization, create coupling field=0 if not overlap was found, 1 if overlap was found
+      viz_overlap: block
+         integer :: n
+         if (this%got_dst) then
+            ! Allocate the array
+            allocate(this%overlap(this%dst%imino_:this%dst%imaxo_,this%dst%jmino_:this%dst%jmaxo_,this%dst%kmino_:this%dst%kmaxo_)); this%overlap=0.0_WP
+            ! Fill it up with out mapind info
+            do n=1,this%nrecv
+               this%overlap(this%mapind(1,n),this%mapind(2,n),this%mapind(3,n))=1.0_WP
+            end do
+         end if
+      end block viz_overlap
+      
       
       ! Log/screen output
       logging: block
