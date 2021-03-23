@@ -34,10 +34,16 @@ module coupler_class
       integer :: dnproc,dnpx,dnpy,dnpz                    !< Destination grid partitioning
       integer, dimension(:,:,:), allocatable :: rankmap   !< Processor coordinate to union group rank map
       ! Interpolation support
-      integer :: npt                                      !< Number of dst points that this processor can interpolate
       integer , dimension(:,:), allocatable :: ind        !< Indices of dst points that this processor can interpolate
       real(WP), dimension(:,:), allocatable :: w          !< Interpolation weights for dst points that this processor can interpolate
       integer , dimension(:)  , allocatable :: rk         !< What rank to send each dst points that this processor can interpolate
+      ! Communication support
+      integer :: nsend                                    !< Total number of dst points that this processor can interpolate and will send out
+      integer :: maxsend                                  !< Max number of dst points that this processor will send out to a processor
+      integer, dimension(:), allocatable :: nsend_proc    !< Number of points to send to each processor
+      integer :: nrecv                                    !< Total number of dst points that this processor will receive
+      integer :: maxrecv                                  !< Max number of dst points that this processor will receive from a processor
+      integer, dimension(:), allocatable :: nrecv_proc    !< Number of points to receive from each processor
    contains
       procedure :: initialize                             !< Routine that prepares all interpolation metrics from src to dst
       procedure :: set_src                                !< Routine that sets the source grid
@@ -243,11 +249,11 @@ contains
          real(WP), dimension(3) :: pt
          integer , dimension(3) :: coords
          
+         ! Initialize counter
+         this%nsend=0
+         
          ! Only the src processors need to work here
          if (this%got_src) then
-            
-            ! Initialize counter
-            this%npt=0
             
             ! Traverse the entire dst mesh and count points that can be interpolated
             do k=this%dst%kmin,this%dst%kmax
@@ -258,18 +264,18 @@ contains
                      &   this%dst%ym(j).lt.this%src%y(this%src%jmin_).or.this%dst%ym(j).ge.this%src%y(this%src%jmax_+1).or. &
                      &   this%dst%zm(k).lt.this%src%z(this%src%kmin_).or.this%dst%zm(k).ge.this%src%z(this%src%kmax_+1)) cycle
                      ! Increment our counter
-                     this%npt=this%npt+1
+                     this%nsend=this%nsend+1
                   end do
                end do
             end do
             
-            ! Continue if points where found
-            if (this%npt.gt.0) then
+            ! Continue only if points where found
+            if (this%nsend.gt.0) then
                
                ! Allocate storage for ind, rk, and w
-               allocate(this%ind(3,this%npt))
-               allocate(this%w(3,this%npt))
-               allocate(this%rk(this%npt))
+               allocate(this%ind(3,this%nsend))
+               allocate(this%w(3,this%nsend))
+               allocate(this%rk(this%nsend))
                
                ! Get ready to find the dst rank
                qx=this%dst%nx/this%dnpx; rx=mod(this%dst%nx,this%dnpx)
@@ -308,6 +314,28 @@ contains
       
       
       ! Next step is to sort our data by recipient
+      sort_communication: block
+         integer :: n,ierr
+         
+         ! Allocate and zero out per processor counters
+         allocate(this%nsend_proc(0:this%nproc-1)); this%nsend_proc=0
+         allocate(this%nrecv_proc(0:this%nproc-1)); this%nrecv_proc=0
+         
+         ! Loop through identified points and count
+         do n=1,this%nsend
+            this%nsend_proc(this%rk(n))=this%nsend_proc(this%rk(n))+1
+         end do
+         
+         ! Prepare information about who receives what from whom
+         do n=0,this%nproc-1
+            call MPI_gather(this%nsend_proc(n),1,MPI_INTEGER,this%nrecv_proc,1,MPI_INTEGER,n,this%comm,ierr)
+         end do
+         
+         ! Prepare size info for the buffers
+         this%maxsend=maxval(this%nsend_proc)
+         this%maxrecv=maxval(this%nrecv_proc)
+         
+      end block sort_communication
       
       
       ! Log/screen output
