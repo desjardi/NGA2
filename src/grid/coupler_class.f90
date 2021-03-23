@@ -33,6 +33,11 @@ module coupler_class
       ! Rank map for dst grid
       integer :: dnproc,dnpx,dnpy,dnpz                    !< Destination grid partitioning
       integer, dimension(:,:,:), allocatable :: rankmap   !< Processor coordinate to union group rank map
+      ! Interpolation support
+      integer :: npt                                      !< Number of dst points that this processor can interpolate
+      integer , dimension(:,:), allocatable :: ind        !< Indices of dst points that this processor can interpolate
+      real(WP), dimension(:,:), allocatable :: w          !< Interpolation weights for dst points that this processor can interpolate
+      integer , dimension(:)  , allocatable :: rk         !< What rank to send each dst points that this processor can interpolate
    contains
       procedure :: initialize                             !< Routine that prepares all interpolation metrics from src to dst
       procedure :: set_src                                !< Routine that sets the source grid
@@ -232,6 +237,79 @@ contains
       end block share_partition
       
       
+      ! Now the src processors identify all dst points that belong to them
+      find_dst_points: block
+         integer :: i,j,k,count,qx,rx,qy,ry,qz,rz
+         real(WP), dimension(3) :: pt
+         integer , dimension(3) :: coords
+         
+         ! Only the src processors need to work here
+         if (this%got_src) then
+            
+            ! Initialize counter
+            this%npt=0
+            
+            ! Traverse the entire dst mesh and count points that can be interpolated
+            do k=this%dst%kmin,this%dst%kmax
+               do j=this%dst%jmin,this%dst%jmax
+                  do i=this%dst%imin,this%dst%imax
+                     ! Skip grid points that lie outside our local domain
+                     if (this%dst%xm(i).lt.this%src%x(this%src%imin_).or.this%dst%xm(i).ge.this%src%x(this%src%imax_+1).or. &
+                     &   this%dst%ym(j).lt.this%src%y(this%src%jmin_).or.this%dst%ym(j).ge.this%src%y(this%src%jmax_+1).or. &
+                     &   this%dst%zm(k).lt.this%src%z(this%src%kmin_).or.this%dst%zm(k).ge.this%src%z(this%src%kmax_+1)) cycle
+                     ! Increment our counter
+                     this%npt=this%npt+1
+                  end do
+               end do
+            end do
+            
+            ! Continue if points where found
+            if (this%npt.gt.0) then
+               
+               ! Allocate storage for ind, rk, and w
+               allocate(this%ind(3,this%npt))
+               allocate(this%w(3,this%npt))
+               allocate(this%rk(this%npt))
+               
+               ! Get ready to find the dst rank
+               qx=this%dst%nx/this%dnpx; rx=mod(this%dst%nx,this%dnpx)
+               qy=this%dst%ny/this%dnpy; ry=mod(this%dst%ny,this%dnpy)
+               qz=this%dst%nz/this%dnpz; rz=mod(this%dst%nz,this%dnpz)
+               
+               ! Traverse the entire dst mesh and identify points that can be interpolated
+               count=0
+               do k=this%dst%kmin,this%dst%kmax
+                  do j=this%dst%jmin,this%dst%jmax
+                     do i=this%dst%imin,this%dst%imax
+                        ! Skip grid points that lie outside our local domain
+                        if (this%dst%xm(i).lt.this%src%x(this%src%imin_).or.this%dst%xm(i).ge.this%src%x(this%src%imax_+1).or. &
+                        &   this%dst%ym(j).lt.this%src%y(this%src%jmin_).or.this%dst%ym(j).ge.this%src%y(this%src%jmax_+1).or. &
+                        &   this%dst%zm(k).lt.this%src%z(this%src%kmin_).or.this%dst%zm(k).ge.this%src%z(this%src%kmax_+1)) cycle
+                        ! The point is in our subdomain, so rename it and increment our counter
+                        pt=[this%dst%xm(i),this%dst%ym(j),this%dst%zm(k)]
+                        count=count+1
+                        ! Locate point and store src index and interpolation weights
+                        call get_weights_and_indices(this%src,pt,this%src%imin_,this%src%jmin_,this%src%kmin_,this%w(:,count),this%ind(:,count))
+                        ! Find coords of the dst processor
+                        coords(1)=0; do while (i.ge.this%dst%imin+(coords(1)+1)*qx+min(coords(1)+1,rx).and.coords(1)+1.lt.this%dst%npx); coords(1)=coords(1)+1; end do
+                        coords(2)=0; do while (j.ge.this%dst%jmin+(coords(2)+1)*qy+min(coords(2)+1,ry).and.coords(2)+1.lt.this%dst%npy); coords(2)=coords(2)+1; end do
+                        coords(3)=0; do while (k.ge.this%dst%kmin+(coords(3)+1)*qz+min(coords(3)+1,rz).and.coords(3)+1.lt.this%dst%npz); coords(3)=coords(3)+1; end do
+                        ! Convert into a rank and store
+                        this%rk(count)=this%rankmap(coords(1)+1,coords(2)+1,coords(3)+1)
+                     end do
+                  end do
+               end do
+               
+            end if
+            
+         end if
+         
+      end block find_dst_points
+      
+      
+      ! Next step is to sort our data by recipient
+      
+      
       ! Log/screen output
       logging: block
          use, intrinsic :: iso_fortran_env, only: output_unit
@@ -250,4 +328,35 @@ contains
    end subroutine initialize
    
    
+   !> Private subroutine that finds weights w for the trilinear interpolation
+   !> to the provided position pos in the vicinity of cell i0,j0,k0 on pgrid this
+   subroutine get_weights_and_indices(pg,pos,i0,j0,k0,w,ind)
+      implicit none
+      class(pgrid), intent(in) :: pg
+      real(WP), dimension(3), intent(in) :: pos
+      integer, intent(in) :: i0,j0,k0
+      integer :: i,j,k
+      real(WP), dimension(3), intent(out) :: w
+      integer , dimension(3), intent(out) :: ind
+      ! Find right i index
+      i=max(min(pg%imaxo_-1,i0),pg%imino_)
+      do while (pos(1)-pg%xm(i  ).lt.0.0_WP.and.i  .gt.pg%imino_); i=i-1; end do
+      do while (pos(1)-pg%xm(i+1).ge.0.0_WP.and.i+1.lt.pg%imaxo_); i=i+1; end do
+      ! Find right j index
+      j=max(min(pg%jmaxo_-1,j0),pg%jmino_)
+      do while (pos(2)-pg%ym(j  ).lt.0.0_WP.and.j  .gt.pg%jmino_); j=j-1; end do
+      do while (pos(2)-pg%ym(j+1).ge.0.0_WP.and.j+1.lt.pg%jmaxo_); j=j+1; end do
+      ! Find right k index
+      k=max(min(pg%kmaxo_-1,k0),pg%kmino_)
+      do while (pos(3)-pg%zm(k  ).lt.0.0_WP.and.k  .gt.pg%kmino_); k=k-1; end do
+      do while (pos(3)-pg%zm(k+1).ge.0.0_WP.and.k+1.lt.pg%kmaxo_); k=k+1; end do
+      ! Return tri-linear interpolation coefficients
+      w(1)=(pos(1)-pg%xm(i))/(pg%xm(i+1)-pg%xm(i))
+      w(2)=(pos(2)-pg%ym(j))/(pg%ym(j+1)-pg%ym(j))
+      w(3)=(pos(3)-pg%zm(k))/(pg%zm(k+1)-pg%zm(k))
+      ! Return the indices too
+      ind=[i,j,k]
+   end subroutine get_weights_and_indices
+   
+
 end module coupler_class
