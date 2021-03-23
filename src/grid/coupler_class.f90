@@ -184,7 +184,7 @@ contains
       
       ! Second step is to make destination partition map available to all
       share_partition: block
-         integer :: ierr
+         integer :: ierr,n
          integer, dimension(:), allocatable :: diproc,djproc,dkproc
          
          ! Destination root process extracts partition
@@ -201,26 +201,30 @@ contains
          call MPI_BCAST(this%dnpz,  1,MPI_INTEGER,this%droot,this%comm,ierr)
          call MPI_BCAST(this%dnproc,1,MPI_INTEGER,this%droot,this%comm,ierr)
          
-         ! Allocate the destination rankmap
-         allocate(this%rankmap(this%dnpx,this%dnpy,this%dnpz))
-         
          ! Prepare communication arrays
-         allocate(diproc(this%nproc),djproc(this%nproc),dkproc(this%nproc))
+         allocate(diproc(0:this%nproc-1),djproc(0:this%nproc-1),dkproc(0:this%nproc-1))
          
-         ! Provide a default i/j/kproc to processors without dst grid
+         ! Provide a default iproc/jproc/kproc to processors without dst grid
          if (.not.this%got_dst) then
-            this%dst%iproc=-1
-            this%dst%jproc=-1
-            this%dst%kproc=-1
+            this%dst%iproc=0
+            this%dst%jproc=0
+            this%dst%kproc=0
          end if
          
          ! Allgather the rank->(iproc,jproc,kproc) info
-         call MPI_ALLGATHER(this%dst%iproc,1,MPI_INTEGER,diproc,1,MPI_INTEGER,this%dst%comm,ierr)
-         call MPI_ALLGATHER(this%dst%jproc,1,MPI_INTEGER,djproc,1,MPI_INTEGER,this%dst%comm,ierr)
-         call MPI_ALLGATHER(this%dst%kproc,1,MPI_INTEGER,dkproc,1,MPI_INTEGER,this%dst%comm,ierr)
+         call MPI_ALLGATHER(this%dst%iproc,1,MPI_INTEGER,diproc,1,MPI_INTEGER,this%comm,ierr)
+         call MPI_ALLGATHER(this%dst%jproc,1,MPI_INTEGER,djproc,1,MPI_INTEGER,this%comm,ierr)
+         call MPI_ALLGATHER(this%dst%kproc,1,MPI_INTEGER,dkproc,1,MPI_INTEGER,this%comm,ierr)
+         
+         ! Allocate the destination rankmap
+         allocate(this%rankmap(this%dnpx,this%dnpy,this%dnpz))
          
          ! Finally, flip the rankmap data
-         
+         do n=0,this%nproc-1
+            if (diproc(n).gt.0) then
+               this%rankmap(diproc(n),djproc(n),dkproc(n))=n
+            end if
+         end do
          
          ! Deallocate communication arrays
          deallocate(diproc,djproc,dkproc)
