@@ -34,15 +34,14 @@ module coupler_class
       integer :: dnproc,dnpx,dnpy,dnpz                    !< Destination grid partitioning
       integer, dimension(:,:,:), allocatable :: rankmap   !< Processor coordinate to union group rank map
       ! Interpolation support
-      integer , dimension(:,:), allocatable :: ind        !< Indices of dst points that this processor can interpolate
+      integer , dimension(:,:), allocatable :: dstind     !< Dst indices of dst points that this processor can interpolate
+      integer , dimension(:,:), allocatable :: srcind     !< Src indices of dst points that this processor can interpolate
       real(WP), dimension(:,:), allocatable :: w          !< Interpolation weights for dst points that this processor can interpolate
       integer , dimension(:)  , allocatable :: rk         !< What rank to send each dst points that this processor can interpolate
       ! Communication support
       integer :: nsend                                    !< Total number of dst points that this processor can interpolate and will send out
-      integer :: maxsend                                  !< Max number of dst points that this processor will send out to a processor
       integer, dimension(:), allocatable :: nsend_proc    !< Number of points to send to each processor
       integer :: nrecv                                    !< Total number of dst points that this processor will receive
-      integer :: maxrecv                                  !< Max number of dst points that this processor will receive from a processor
       integer, dimension(:), allocatable :: nrecv_proc    !< Number of points to receive from each processor
    contains
       procedure :: initialize                             !< Routine that prepares all interpolation metrics from src to dst
@@ -273,9 +272,11 @@ contains
             if (this%nsend.gt.0) then
                
                ! Allocate storage for ind, rk, and w
-               allocate(this%ind(3,this%nsend))
+               allocate(this%srcind(3,this%nsend))
+               allocate(this%dstind(3,this%nsend))
                allocate(this%w(3,this%nsend))
                allocate(this%rk(this%nsend))
+               
                
                ! Get ready to find the dst rank
                qx=this%dst%nx/this%dnpx; rx=mod(this%dst%nx,this%dnpx)
@@ -295,13 +296,15 @@ contains
                         pt=[this%dst%xm(i),this%dst%ym(j),this%dst%zm(k)]
                         count=count+1
                         ! Locate point and store src index and interpolation weights
-                        call get_weights_and_indices(this%src,pt,this%src%imin_,this%src%jmin_,this%src%kmin_,this%w(:,count),this%ind(:,count))
+                        call get_weights_and_indices(this%src,pt,this%src%imin_,this%src%jmin_,this%src%kmin_,this%w(:,count),this%srcind(:,count))
                         ! Find coords of the dst processor
                         coords(1)=0; do while (i.ge.this%dst%imin+(coords(1)+1)*qx+min(coords(1)+1,rx).and.coords(1)+1.lt.this%dst%npx); coords(1)=coords(1)+1; end do
                         coords(2)=0; do while (j.ge.this%dst%jmin+(coords(2)+1)*qy+min(coords(2)+1,ry).and.coords(2)+1.lt.this%dst%npy); coords(2)=coords(2)+1; end do
                         coords(3)=0; do while (k.ge.this%dst%kmin+(coords(3)+1)*qz+min(coords(3)+1,rz).and.coords(3)+1.lt.this%dst%npz); coords(3)=coords(3)+1; end do
                         ! Convert into a rank and store
                         this%rk(count)=this%rankmap(coords(1)+1,coords(2)+1,coords(3)+1)
+                        ! Also store the dstind
+                        this%dstind(:,count)=[i,j,k]
                      end do
                   end do
                end do
@@ -317,6 +320,9 @@ contains
       sort_communication: block
          integer :: n,ierr
          
+         ! First brute-force quick-sort our data by dst recipient
+         if (this%nsend.gt.0) call qs_commdata(this%rk,this%dstind,this%srcind,this%w)
+         
          ! Allocate and zero out per processor counters
          allocate(this%nsend_proc(0:this%nproc-1)); this%nsend_proc=0
          allocate(this%nrecv_proc(0:this%nproc-1)); this%nrecv_proc=0
@@ -331,12 +337,18 @@ contains
             call MPI_gather(this%nsend_proc(n),1,MPI_INTEGER,this%nrecv_proc,1,MPI_INTEGER,n,this%comm,ierr)
          end do
          
-         ! Prepare size info for the buffers
-         this%maxsend=maxval(this%nsend_proc)
-         this%maxrecv=maxval(this%nrecv_proc)
+         ! Set size of receive buffer
+         this%nrecv=sum(this%nrecv_proc)
          
       end block sort_communication
       
+      
+      ! FInally, communicate the dstind to the dst processors so they know what to expect
+      share_dstind: block
+         
+         !
+         
+      end block share_dstind
       
       ! Log/screen output
       logging: block
@@ -385,6 +397,63 @@ contains
       ! Return the indices too
       ind=[i,j,k]
    end subroutine get_weights_and_indices
+   
+   
+   !> Specialized quicksort driver for our communication data
+   recursive subroutine qs_commdata(rk,dstind,srcind,w)
+      implicit none
+      integer , dimension(:)   :: rk
+      integer , dimension(:,:) :: dstind
+      integer , dimension(:,:) :: srcind
+      real(WP), dimension(:,:) :: w
+      integer :: imark
+      if (size(rk).gt.1) then
+         call qs_partition(rk,dstind,srcind,w,imark)
+         call qs_commdata(rk(     :imark-1),dstind(:,     :imark-1),srcind(:,     :imark-1),w(:,     :imark-1))
+         call qs_commdata(rk(imark:       ),dstind(:,imark:       ),srcind(:,imark:       ),w(:,imark:       ))
+      end if
+   end subroutine qs_commdata
+   
+   
+   !> Specialized quicksort partitioning
+   subroutine qs_partition(rk,dstind,srcind,w,marker)
+      implicit none
+      integer , dimension(:)   :: rk
+      integer , dimension(:,:) :: dstind
+      integer , dimension(:,:) :: srcind
+      real(WP), dimension(:,:) :: w
+      integer , intent(out) :: marker
+      integer :: i,j,x,itmp
+      integer , dimension(3) :: i3tmp
+      real(WP), dimension(3) :: d3tmp
+      x=rk(1)
+      i=0
+      j=size(rk)+1
+      do
+         j=j-1
+         do
+            if (rk(j).le.x) exit
+            j=j-1
+         end do
+         i=i+1
+         do
+            if (rk(i).ge.x) exit
+            i=i+1
+         end do
+         if (i.lt.j) then
+            itmp =      rk(i);       rk(i)=      rk(j);       rk(j)= itmp  ! Swap rk(i) and rk(j)
+            d3tmp=     w(:,i);      w(:,i)=     w(:,j);      w(:,j)=d3tmp  ! Swap w(:,i) and w(:,j)
+            i3tmp=dstind(:,i); dstind(:,i)=dstind(:,j); dstind(:,j)=i3tmp  ! Swap dstind(:,i) and dstind(:,j)
+            i3tmp=srcind(:,i); srcind(:,i)=srcind(:,j); srcind(:,j)=i3tmp  ! Swap srcind(:,i) and srcind(:,j)
+         else if (i.eq.j) then
+            marker=i+1
+            return
+         else
+            marker=i
+            return
+         end if
+      end do
+   end subroutine qs_partition
    
 
 end module coupler_class
