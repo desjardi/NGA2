@@ -72,7 +72,7 @@ contains
          call param_read('Partition',partition,short='p')
          
          ! Create partitioned grid
-         cfg=config(grp=group,partition,grid)
+         cfg=config(grp=group,decomp=partition,grid=grid)
          
       end block create_cfg
       
@@ -131,7 +131,7 @@ contains
          call param_read('Geom file',fgeom)
          
          ! Create the cfg by reading in the file
-         cfg2=config(grp=group,partition,2,fgrid,fgeom)
+         cfg2=config(grp=group,decomp=partition,no=2,fgrid=fgrid,fgeom=fgeom)
          
       end block create_cfg2
       

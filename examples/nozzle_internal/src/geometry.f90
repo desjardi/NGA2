@@ -108,7 +108,7 @@ contains
          ! Read in partition
          call param_read('Partition',partition,short='p')
          ! Create partitioned grid
-         cfg=config(grp=group,partition,grid)
+         cfg=config(grp=group,decomp=partition,grid=grid)
       end block create_cfg
       
       
