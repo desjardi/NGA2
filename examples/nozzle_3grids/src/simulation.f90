@@ -259,7 +259,7 @@ contains
             ! Read the two datafiles and the name of the IRL file to read later
             df1=datafile(pg=cfg1,fdata=trim(adjustl(dir_restart))//'/'//'data.1')
             df2=datafile(pg=cfg2,fdata=trim(adjustl(dir_restart))//'/'//'data.2')
-            df2=datafile(pg=cfg3,fdata=trim(adjustl(dir_restart))//'/'//'data.3')
+            df3=datafile(pg=cfg3,fdata=trim(adjustl(dir_restart))//'/'//'data.3')
             irl_file=trim(adjustl(dir_restart))//'/'//'data.irl'
             lpt_file=trim(adjustl(dir_restart))//'/'//'data.lpt'
          else

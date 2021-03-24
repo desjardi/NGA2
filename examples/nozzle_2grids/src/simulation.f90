@@ -215,6 +215,8 @@ contains
       ! Handle restart/saves here
       restart_and_save: block
          character(len=str_medium) :: dir_restart
+         ! CAREFUL - WE NEED TO CREATE THE TIMETRACKER BEFORE THE EVENT !
+         time2=timetracker(cfg2%amRoot,name='nozzle_exterior')
          ! Create event for saving restart files
          save_evt=event(time2,'Restart output')
          call param_read('Restart output period',save_evt%tper)
@@ -277,7 +279,7 @@ contains
       
       ! Initialize time tracker
       initialize_timetracker2: block
-         time2=timetracker(cfg2%amRoot,name='nozzle_exterior')
+         !time2=timetracker(cfg2%amRoot,name='nozzle_exterior')   !< This is moved up for restarts!
          call param_read('2 Max timestep size',time2%dtmax)
          call param_read('2 Max cfl number',time2%cflmax)
          time2%dt=time2%dtmax
@@ -347,6 +349,7 @@ contains
          use tpns_class, only: dirichlet,clipped_neumann,neumann
          use ils_class,  only: pcg_amg,gmres,gmres_amg
          use mathtools,  only: Pi
+         ! Create a two-phase flow solver
          fs2=tpns(cfg=cfg2,name='Two-phase NS')
          ! Assign constant viscosity to each phase
          call param_read('Liquid dynamic viscosity',fs2%visc_l)
