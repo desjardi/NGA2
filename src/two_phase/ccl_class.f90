@@ -67,6 +67,10 @@ module ccl_class
       ! Interface polygon information
       type(Poly_type), dimension(:,:,:,:), pointer :: poly   !< Array of IRL interface polygons (n,i,j,k)
 
+      ! Normalized surface area
+      real(WP), dimension(:,:,:), pointer :: SD              !< Surface density array
+      logical :: useSD                                       !< Logical indicating presence of SD
+
       ! Maximum number of PLIC interfaces per cell
       integer :: max_interface_planes                        !< Number of planar interfaces per cell (0=VF-only, 1=PLIC, 2=R2P, etc.)
       
@@ -77,8 +81,8 @@ module ccl_class
       type(film)  , dimension(:), pointer :: film_list => null()
 
       ! Linked-list struct and meta_struct
-      type(struct_type), pointer :: first_struct => null()   !< first element
-      type(struct_type), pointer :: my_struct => null()      !< subsequent struct in linked list
+      type(struct_type), pointer :: first_struct => null()   !< Pointer to first struct in linked list
+      type(struct_type), pointer :: my_struct => null()      !< Pointer to subsequent struct in linked list
       ! list of meta-structures' ID tags
       integer, dimension(:), pointer :: meta_structures => null()
       ! List of meta-structures
@@ -93,6 +97,7 @@ module ccl_class
       ! CCL selection parameters
       real(WP) :: VFlo=1.0e-10_WP                            !< Minimum VF value considered for a structure to exist
       real(WP) :: dot_threshold=-0.5_WP                      !< Maximum dot product of two interface normals for their respective cells to be considered film cells
+      real(WP) :: thickness_cutoff=0.5_WP                    !< Maximum film thickness as fraction of meshsize
    
       ! Feature counts
       integer :: n_struct, n_struct_max !, n_border_struct, n_border_struct_max
@@ -248,11 +253,12 @@ contains
    end function constructor
    
    !> Build lists of structures and films
-   subroutine build_lists(this,VF,poly,U,V,W)
+   subroutine build_lists(this,VF,poly,SD,U,V,W)
       implicit none
       class(ccl), intent(inout) :: this
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), target, intent(in) :: VF      !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       type(Poly_type), dimension(:,this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), target, intent(in), optional:: poly !< Needs to be (1:2,imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), target, intent(in), optional :: SD     !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in), optional :: U     !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in), optional :: V     !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in), optional :: W     !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
@@ -265,6 +271,14 @@ contains
          this%poly(1:,this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:)=>poly
       else
          this%max_interface_planes = 0
+      end if
+
+      ! Point to surface density
+      if (present(SD)) then
+         this%SD=>SD
+         this%useSD = .true.
+      else
+         this%useSD = .false.
       end if
 
       ! Label features locally
@@ -355,7 +369,6 @@ contains
                   ! Find untagged point in liquid phase
                   if (this%VF(i,j,k).ge.this%VFlo) then
 
-                     ! is_contiguous = .true.
                      is_two_plane_film = .false.
                      has_normal = getNumberOfVertices(this%poly(1,i,j,k)).gt.0
                      if (has_normal) then
@@ -871,6 +884,49 @@ contains
          end if
          return
       end function is_film_cell_upper
+
+      ! Calculate film thickness
+      function calculate_film_thickness(i,j,k) result(local_thickness)
+         implicit none
+         integer, intent(in) :: i,j,k
+         real(WP) :: local_thickness
+         real(WP) :: SD_local_sum, VOF_local_sum
+         integer :: ii,jj,kk
+
+         SD_local_sum = 0.0_WP
+         VOF_local_sum = 0.0_WP
+         if (this%film_phase(i,j,k).eq.2) then
+            do kk = k-1,k+1
+               do jj = j-1,j+1
+                  do ii = i-1,i+1
+                     VOF_local_sum = VOF_local_sum + (1.0_WP-this%VF(ii,jj,kk))
+                  end do
+               end do
+            end do
+         else
+            do kk = k-1,k+1
+               do jj = j-1,j+1
+                  do ii = i-1,i+1
+                     VOF_local_sum = VOF_local_sum + this%VF(ii,jj,kk)
+                  end do
+               end do
+            end do
+         end if
+         if (this%useSD) then
+            do kk = k-1,k+1
+               do jj = j-1,j+1
+                  do ii = i-1,i+1
+                     SD_local_sum = SD_local_sum + this%SD(ii,jj,kk)
+                  end do
+               end do
+            end do
+            local_thickness = 2.0_WP*VOF_local_sum/(SD_local_sum+epsilon(1.0_WP))
+         else
+            local_thickness = VOF_local_sum*this%cfg%meshsize(i,j,k)/9.0_WP
+         end if
+         this%film_thickness(i,j,k) = local_thickness
+         return
+      end function calculate_film_thickness
 
       ! Fill border cell id array with compact IDs
       subroutine fill_border_id(a_list_type,a_id_array,a_border_array)
