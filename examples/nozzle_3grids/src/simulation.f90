@@ -23,8 +23,8 @@ module simulation
    type(timetracker), public :: time1
    type(sgsmodel),    public :: sgs1
    
-   ! Coupler between 1 and 2
-   type(coupler),     public :: cpl12
+   ! Couplers between 1 and 2
+   type(coupler),     public :: cpl12x,cpl12y,cpl12z
    
    !> Two-phase incompressible flow solver, VF solver, and corresponding time tracker and sgs model
    type(tpns),        public :: fs2
@@ -32,8 +32,8 @@ module simulation
    type(timetracker), public :: time2
    type(sgsmodel),    public :: sgs2
    
-   ! Coupler between 2 and 3
-   !type(coupler),     public :: cpl23
+   ! Couplers between 2 and 3
+   type(coupler),     public :: cpl23x,cpl23y,cpl23z
    
    !> Single-phase incompressible flow solver with lpt, and corresponding time tracker and sgs model
    type(incomp),      public :: fs3
@@ -73,17 +73,8 @@ module simulation
    real(WP), dimension(:,:,:), allocatable :: resU3,resV3,resW3
    real(WP), dimension(:,:,:), allocatable :: Ui3,Vi3,Wi3
    real(WP), dimension(:,:,:,:), allocatable :: SR3
+   real(WP), dimension(:,:,:), allocatable :: U2on3,V2on3,W2on3
    
-   !> Solver coupling arrays and metrics
-   real(WP), dimension(:,:), allocatable :: Uplane,Vplane,Wplane
-   real(WP), dimension(:,:), allocatable :: Ulocal,Vlocal,Wlocal
-   real(WP)                              :: wt
-   real(WP)                              :: wx_u,wx_v,wx_w
-   real(WP), dimension(:)  , allocatable :: wy_u,wy_v,wy_w
-   real(WP), dimension(:)  , allocatable :: wz_u,wz_v,wz_w
-   integer                               ::  i_u, i_v, i_w
-   integer , dimension(:)  , allocatable ::  j_u, j_v, j_w
-   integer , dimension(:)  , allocatable ::  k_u, k_v, k_w
    
 contains
    
@@ -309,6 +300,22 @@ contains
             df3%varname(6)='MM'
          end if
       end block restart_and_save
+      
+      
+      ! ###############################################
+      ! ######## PREPARE SOLVER COUPLING HERE #########
+      ! ###############################################
+      coupler_prep: block
+         use parallel, only: group
+         ! Create nozzle-to-atomization couplers
+         cpl12x=coupler(src_grp=group,dst_grp=group,name='nozzle_to_atom_x'); call cpl12x%set_src(cfg1,'x'); call cpl12x%set_dst(cfg2,'x'); call cpl12x%initialize()
+         cpl12y=coupler(src_grp=group,dst_grp=group,name='nozzle_to_atom_y'); call cpl12y%set_src(cfg1,'y'); call cpl12y%set_dst(cfg2,'y'); call cpl12y%initialize()
+         cpl12z=coupler(src_grp=group,dst_grp=group,name='nozzle_to_atom_z'); call cpl12z%set_src(cfg1,'z'); call cpl12z%set_dst(cfg2,'z'); call cpl12z%initialize()
+         ! Create atomization-to-spray couplers
+         cpl23x=coupler(src_grp=group,dst_grp=group,name='atom_to_spray__x'); call cpl23x%set_src(cfg2,'x'); call cpl23x%set_dst(cfg3,'x'); call cpl23x%initialize()
+         cpl23y=coupler(src_grp=group,dst_grp=group,name='atom_to_spray__y'); call cpl23y%set_src(cfg2,'y'); call cpl23y%set_dst(cfg3,'y'); call cpl23y%initialize()
+         cpl23z=coupler(src_grp=group,dst_grp=group,name='atom_to_spray__z'); call cpl23z%set_src(cfg2,'z'); call cpl23z%set_dst(cfg3,'z'); call cpl23z%initialize()
+      end block coupler_prep
       
       
       ! *****************************************************************************
@@ -737,6 +744,9 @@ contains
          allocate(Vi3  (cfg3%imino_:cfg3%imaxo_,cfg3%jmino_:cfg3%jmaxo_,cfg3%kmino_:cfg3%kmaxo_))
          allocate(Wi3  (cfg3%imino_:cfg3%imaxo_,cfg3%jmino_:cfg3%jmaxo_,cfg3%kmino_:cfg3%kmaxo_))
          allocate(SR3(6,cfg3%imino_:cfg3%imaxo_,cfg3%jmino_:cfg3%jmaxo_,cfg3%kmino_:cfg3%kmaxo_))
+         allocate(U2on3(cfg3%imino_:cfg3%imaxo_,cfg3%jmino_:cfg3%jmaxo_,cfg3%kmino_:cfg3%kmaxo_))
+         allocate(V2on3(cfg3%imino_:cfg3%imaxo_,cfg3%jmino_:cfg3%jmaxo_,cfg3%kmino_:cfg3%kmaxo_))
+         allocate(W2on3(cfg3%imino_:cfg3%imaxo_,cfg3%jmino_:cfg3%jmaxo_,cfg3%kmino_:cfg3%kmaxo_))
       end block allocate_work_arrays3
       
       
@@ -919,86 +929,6 @@ contains
       end block create_monitor3
       
       
-      ! ###############################################
-      ! ######## PREPARE SOLVER COUPLING HERE #########
-      ! ###############################################
-      coupling12: block
-         ! Create coupler between configs 1 and 2
-         cpl12=coupler(pg1=cfg1,pg2=cfg2,name='nozzle_to_atom')
-      end block coupling12
-      
-      
-      !coupling23: block
-      !   ! Create coupler between configs 1 and 2
-      !   cpl23=coupler(pg1=cfg2,pg2=cfg3,name='atom_to_spray')
-      !end block coupling23
-      
-      
-      
-      
-      
-      
-      
-      ! ###############################################
-      ! ######## PREPARE ONE-WAY COUPLING HERE ########
-      ! ###############################################
-      prep_coupling: block
-         integer :: j,k
-         ! Allocate global storage for the plane of velocity - this leaves ghost cells out, which is fine here
-         allocate(Uplane(fs1%cfg%jmin:fs1%cfg%jmax,fs1%cfg%kmin:fs1%cfg%kmax))
-         allocate(Vplane(fs1%cfg%jmin:fs1%cfg%jmax,fs1%cfg%kmin:fs1%cfg%kmax))
-         allocate(Wplane(fs1%cfg%jmin:fs1%cfg%jmax,fs1%cfg%kmin:fs1%cfg%kmax))
-         allocate(Ulocal(fs1%cfg%jmin:fs1%cfg%jmax,fs1%cfg%kmin:fs1%cfg%kmax))
-         allocate(Vlocal(fs1%cfg%jmin:fs1%cfg%jmax,fs1%cfg%kmin:fs1%cfg%kmax))
-         allocate(Wlocal(fs1%cfg%jmin:fs1%cfg%jmax,fs1%cfg%kmin:fs1%cfg%kmax))
-         ! Find interpolation index and weights in x for U
-         i_u=fs1%cfg%imin; do while (fs2%cfg%x (fs2%cfg%imin  )-fs1%cfg%x (i_u+1).ge.0.0_WP.and.i_u+1.lt.fs1%cfg%imax+1); i_u=i_u+1; end do
-         wx_u=(fs2%cfg%x (fs2%cfg%imin  )-fs1%cfg%x (i_u))/(fs1%cfg%x (i_u+1)-fs1%cfg%x (i_u))
-         ! Find interpolation index and weights in x for V
-         i_v=fs1%cfg%imin; do while (fs2%cfg%xm(fs2%cfg%imin-1)-fs1%cfg%xm(i_v+1).ge.0.0_WP.and.i_v+1.lt.fs1%cfg%imax+1); i_v=i_v+1; end do
-         wx_v=(fs2%cfg%xm(fs2%cfg%imin-1)-fs1%cfg%xm(i_v))/(fs1%cfg%xm(i_v+1)-fs1%cfg%xm(i_v))
-         ! Find interpolation index and weights in x for W
-         i_w=fs1%cfg%imin; do while (fs2%cfg%xm(fs2%cfg%imin-1)-fs1%cfg%xm(i_w+1).ge.0.0_WP.and.i_w+1.lt.fs1%cfg%imax+1); i_w=i_w+1; end do
-         wx_w=(fs2%cfg%xm(fs2%cfg%imin-1)-fs1%cfg%xm(i_w))/(fs1%cfg%xm(i_w+1)-fs1%cfg%xm(i_w))
-         ! Find interpolation index and weights in y for U
-         allocate(j_u(fs2%cfg%jmino_:fs2%cfg%jmaxo_),wy_u(fs2%cfg%jmino_:fs2%cfg%jmaxo_))
-         do j=fs2%cfg%jmino_,fs2%cfg%jmaxo_
-            j_u(j)=fs1%cfg%jmin; do while (fs2%cfg%ym(j)-fs1%cfg%ym(j_u(j)+1).ge.0.0_WP.and.j_u(j)+1.lt.fs1%cfg%jmax+1); j_u(j)=j_u(j)+1; end do
-            wy_u(j)=(fs2%cfg%ym(j)-fs1%cfg%ym(j_u(j)))/(fs1%cfg%ym(j_u(j)+1)-fs1%cfg%ym(j_u(j)))
-         end do
-         ! Find interpolation index and weights in y for V
-         allocate(j_v(fs2%cfg%jmino_:fs2%cfg%jmaxo_),wy_v(fs2%cfg%jmino_:fs2%cfg%jmaxo_))
-         do j=fs2%cfg%jmino_,fs2%cfg%jmaxo_
-            j_v(j)=fs1%cfg%jmin; do while (fs2%cfg%y (j)-fs1%cfg%y (j_v(j)+1).ge.0.0_WP.and.j_v(j)+1.lt.fs1%cfg%jmax+1); j_v(j)=j_v(j)+1; end do
-            wy_v(j)=(fs2%cfg%y (j)-fs1%cfg%y (j_v(j)))/(fs1%cfg%y (j_v(j)+1)-fs1%cfg%y (j_v(j)))
-         end do
-         ! Find interpolation index and weights in y for W
-         allocate(j_w(fs2%cfg%jmino_:fs2%cfg%jmaxo_),wy_w(fs2%cfg%jmino_:fs2%cfg%jmaxo_))
-         do j=fs2%cfg%jmino_,fs2%cfg%jmaxo_
-            j_w(j)=fs1%cfg%jmin; do while (fs2%cfg%ym(j)-fs1%cfg%ym(j_w(j)+1).ge.0.0_WP.and.j_w(j)+1.lt.fs1%cfg%jmax+1); j_w(j)=j_w(j)+1; end do
-            wy_w(j)=(fs2%cfg%ym(j)-fs1%cfg%ym(j_w(j)))/(fs1%cfg%ym(j_w(j)+1)-fs1%cfg%ym(j_w(j)))
-         end do
-         ! Find interpolation index and weights in z for U
-         allocate(k_u(fs2%cfg%kmino_:fs2%cfg%kmaxo_),wz_u(fs2%cfg%kmino_:fs2%cfg%kmaxo_))
-         do k=fs2%cfg%kmino_,fs2%cfg%kmaxo_
-            k_u(k)=fs1%cfg%kmin; do while (fs2%cfg%zm(k)-fs1%cfg%zm(k_u(k)+1).ge.0.0_WP.and.k_u(k)+1.lt.fs1%cfg%kmax+1); k_u(k)=k_u(k)+1; end do
-            wz_u(k)=(fs2%cfg%zm(k)-fs1%cfg%zm(k_u(k)))/(fs1%cfg%zm(k_u(k)+1)-fs1%cfg%zm(k_u(k)))
-         end do
-         ! Find interpolation index and weights in z for V
-         allocate(k_v(fs2%cfg%kmino_:fs2%cfg%kmaxo_),wz_v(fs2%cfg%kmino_:fs2%cfg%kmaxo_))
-         do k=fs2%cfg%kmino_,fs2%cfg%kmaxo_
-            k_v(k)=fs1%cfg%kmin; do while (fs2%cfg%zm(k)-fs1%cfg%zm(k_v(k)+1).ge.0.0_WP.and.k_v(k)+1.lt.fs1%cfg%kmax+1); k_v(k)=k_v(k)+1; end do
-            wz_v(k)=(fs2%cfg%zm(k)-fs1%cfg%zm(k_v(k)))/(fs1%cfg%zm(k_v(k)+1)-fs1%cfg%zm(k_v(k)))
-         end do
-         ! Find interpolation index and weights in z for W
-         allocate(k_w(fs2%cfg%kmino_:fs2%cfg%kmaxo_),wz_w(fs2%cfg%kmino_:fs2%cfg%kmaxo_))
-         do k=fs2%cfg%kmino_,fs2%cfg%kmaxo_
-            k_w(k)=fs1%cfg%kmin; do while (fs2%cfg%z (k)-fs1%cfg%z (k_w(k)+1).ge.0.0_WP.and.k_w(k)+1.lt.fs1%cfg%kmax+1); k_w(k)=k_w(k)+1; end do
-            wz_w(k)=(fs2%cfg%z (k)-fs1%cfg%z (k_w(k)))/(fs1%cfg%z (k_w(k)+1)-fs1%cfg%z (k_w(k)))
-         end do
-      end block prep_coupling
-      
-      
    end subroutine simulation_init
    
    
@@ -1116,45 +1046,26 @@ contains
          ! ###############################################
          ! ######## PERFORM ONE-WAY COUPLING HERE ########
          ! ###############################################
-         ! At this point, we have ensured that t1>t2, therefore t2 is in [t1old,t1]
-         ! First interpolate solver 1's velocity in time to t2
-         wt=(time2%t-time1%told)/time1%dt
-         resU1=wt*fs1%U+(1.0_WP-wt)*fs1%Uold
-         resV1=wt*fs1%V+(1.0_WP-wt)*fs1%Vold
-         resW1=wt*fs1%W+(1.0_WP-wt)*fs1%Wold
-         
-         ! Bruteforce allreduce the velocity fields at fs2's inlet plane
-         Ulocal=0.0_WP; Vlocal=0.0_WP; Wlocal=0.0_WP
-         do k=fs1%cfg%kmin_,fs1%cfg%kmax_
-            do j=fs1%cfg%jmin_,fs1%cfg%jmax_
-               do i=fs1%cfg%imin_,fs1%cfg%imax_
-                  if (i.eq.i_u) Ulocal(j,k)=wx_u*resU1(i+1,j,k)+(1.0_WP-wx_u)*resU1(i,j,k)
-                  if (i.eq.i_v) Vlocal(j,k)=wx_v*resV1(i+1,j,k)+(1.0_WP-wx_v)*resV1(i,j,k)
-                  if (i.eq.i_w) Wlocal(j,k)=wx_w*resW1(i+1,j,k)+(1.0_WP-wx_w)*resW1(i,j,k)
-               end do
+         first_coupling: block
+            real(WP) :: wt
+            ! At this point, we have ensured that t1>t2, therefore t2 is in [t1old,t1], so interpolate solver 1's velocity in time to t2
+            wt=(time2%t-time1%told)/time1%dt
+            resU1=wt*fs1%U+(1.0_WP-wt)*fs1%Uold
+            resV1=wt*fs1%V+(1.0_WP-wt)*fs1%Vold
+            resW1=wt*fs1%W+(1.0_WP-wt)*fs1%Wold
+            ! Exchange data using cpl12x/y/z couplers
+            call cpl12x%push(resU1); call cpl12x%transfer(); call cpl12x%pull(resU2)
+            call cpl12y%push(resV1); call cpl12y%transfer(); call cpl12y%pull(resV2)
+            call cpl12z%push(resW1); call cpl12z%transfer(); call cpl12z%pull(resW2)
+            ! Apply time-varying Dirichlet conditions
+            call fs2%get_bcond('gas_inj',mybc)
+            do n=1,mybc%itr%no_
+               i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
+               fs2%U(i  ,j,k)=resU2(i,j,k)
+               fs2%V(i-1,j,k)=resV2(i,j,k)
+               fs2%W(i-1,j,k)=resW2(i,j,k)
             end do
-         end do
-         call MPI_ALLREDUCE(Ulocal,Uplane,fs1%cfg%ny*fs1%cfg%nz,MPI_REAL_WP,MPI_SUM,fs1%cfg%comm,ierr)
-         call MPI_ALLREDUCE(Vlocal,Vplane,fs1%cfg%ny*fs1%cfg%nz,MPI_REAL_WP,MPI_SUM,fs1%cfg%comm,ierr)
-         call MPI_ALLREDUCE(Wlocal,Wplane,fs1%cfg%ny*fs1%cfg%nz,MPI_REAL_WP,MPI_SUM,fs1%cfg%comm,ierr)
-         
-         ! Apply time-varying Dirichlet conditions
-         call fs2%get_bcond('gas_inj',mybc)
-         do n=1,mybc%itr%no_
-            i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
-            fs2%U(i  ,j,k)=(       wy_u(j))*(       wz_u(k))*Uplane(j_u(j)+1,k_u(k)+1)+&
-            &              (       wy_u(j))*(1.0_WP-wz_u(k))*Uplane(j_u(j)+1,k_u(k)  )+&
-            &              (1.0_WP-wy_u(j))*(       wz_u(k))*Uplane(j_u(j)  ,k_u(k)+1)+&
-            &              (1.0_WP-wy_u(j))*(1.0_WP-wz_u(k))*Uplane(j_u(j)  ,k_u(k)  )
-            fs2%V(i-1,j,k)=(       wy_v(j))*(       wz_v(k))*Vplane(j_v(j)+1,k_v(k)+1)+&
-            &              (       wy_v(j))*(1.0_WP-wz_v(k))*Vplane(j_v(j)+1,k_v(k)  )+&
-            &              (1.0_WP-wy_v(j))*(       wz_v(k))*Vplane(j_v(j)  ,k_v(k)+1)+&
-            &              (1.0_WP-wy_v(j))*(1.0_WP-wz_v(k))*Vplane(j_v(j)  ,k_v(k)  )
-            fs2%W(i-1,j,k)=(       wy_w(j))*(       wz_w(k))*Wplane(j_w(j)+1,k_w(k)+1)+&
-            &              (       wy_w(j))*(1.0_WP-wz_w(k))*Wplane(j_w(j)+1,k_w(k)  )+&
-            &              (1.0_WP-wy_w(j))*(       wz_w(k))*Wplane(j_w(j)  ,k_w(k)+1)+&
-            &              (1.0_WP-wy_w(j))*(1.0_WP-wz_w(k))*Wplane(j_w(j)  ,k_w(k)  )
-         end do
+         end block first_coupling
          
          
          ! ###############################################
@@ -1275,15 +1186,6 @@ contains
          end do
          
          
-         
-         ! ###############################################
-         ! ####### PERFORM NUDGING FROM 2->3 HERE ########
-         ! ###############################################
-         
-         
-         
-         
-         
          ! ###############################################
          ! ####### TRANSFER DROPLETS FROM 2->3 HERE ######
          ! ###############################################
@@ -1300,6 +1202,15 @@ contains
          
          ! Advance until we've caught up
          do while (time3%t.lt.time2%t)
+            
+            
+            ! ######################################
+            ! ######## PREPARE NUDGING HERE ########
+            ! ######################################
+            ! Exchange data using cpl23x/y/z couplers and the most recent velocity
+            call cpl23x%push(fs2%U); call cpl23x%transfer(); call cpl23x%pull(U2on3)
+            call cpl23y%push(fs2%V); call cpl23y%transfer(); call cpl23y%pull(V2on3)
+            call cpl23z%push(fs2%W); call cpl23z%transfer(); call cpl23z%pull(W2on3)
             
             ! Increment time
             call fs3%get_cfl(time3%dt,time3%cfl)
@@ -1346,6 +1257,35 @@ contains
                resU3=-2.0_WP*(fs3%rho*fs3%U-fs3%rho*fs3%Uold)+time3%dt*resU3
                resV3=-2.0_WP*(fs3%rho*fs3%V-fs3%rho*fs3%Vold)+time3%dt*resV3
                resW3=-2.0_WP*(fs3%rho*fs3%W-fs3%rho*fs3%Wold)+time3%dt*resW3
+               
+               ! Add nudging term here
+               nudge: block
+                  real(WP) :: xcoord,ycoord,zcoord
+                  do k=fs3%cfg%kmin_,fs3%cfg%kmax_
+                     do j=fs3%cfg%jmin_,fs3%cfg%jmax_
+                        do i=fs3%cfg%imin_,fs3%cfg%imax_
+                           if (fs3%umask(i,j,k).eq.0) then
+                              xcoord=max((fs2%cfg%x(fs2%cfg%imax+1)-    fs3%cfg%x (i) )/(fs2%cfg%x(fs2%cfg%imax+1)),0.0_WP)
+                              ycoord=max((        0.5_WP*fs2%cfg%yL-abs(fs3%cfg%ym(j)))/(0.5_WP*fs2%cfg%yL        ),0.0_WP)
+                              zcoord=max((        0.5_WP*fs2%cfg%zL-abs(fs3%cfg%zm(k)))/(0.5_WP*fs2%cfg%zL        ),0.0_WP)
+                              resU3(i,j,k)=resU3(i,j,k)+(U2on3(i,j,k)-fs3%U(i,j,k))*(xcoord*ycoord*zcoord)**2
+                           end if
+                           if (fs3%vmask(i,j,k).eq.0) then
+                              xcoord=max((fs2%cfg%x(fs2%cfg%imax+1)-    fs3%cfg%xm(i) )/(fs2%cfg%x(fs2%cfg%imax+1)),0.0_WP)
+                              ycoord=max((        0.5_WP*fs2%cfg%yL-abs(fs3%cfg%y (j)))/(0.5_WP*fs2%cfg%yL        ),0.0_WP)
+                              zcoord=max((        0.5_WP*fs2%cfg%zL-abs(fs3%cfg%zm(k)))/(0.5_WP*fs2%cfg%zL        ),0.0_WP)
+                              resV3(i,j,k)=resV3(i,j,k)+(V2on3(i,j,k)-fs3%V(i,j,k))*(xcoord*ycoord*zcoord)**2
+                           end if
+                           if (fs3%wmask(i,j,k).eq.0) then
+                              xcoord=max((fs2%cfg%x(fs2%cfg%imax+1)-    fs3%cfg%xm(i) )/(fs2%cfg%x(fs2%cfg%imax+1)),0.0_WP)
+                              ycoord=max((        0.5_WP*fs2%cfg%yL-abs(fs3%cfg%ym(j)))/(0.5_WP*fs2%cfg%yL        ),0.0_WP)
+                              zcoord=max((        0.5_WP*fs2%cfg%zL-abs(fs3%cfg%z (k)))/(0.5_WP*fs2%cfg%zL        ),0.0_WP)
+                              resW3(i,j,k)=resW3(i,j,k)+(W2on3(i,j,k)-fs3%W(i,j,k))*(xcoord*ycoord*zcoord)**2
+                           end if
+                        end do
+                     end do
+                  end do
+               end block nudge
                
                ! Form implicit residuals
                call fs3%solve_implicit(time3%dt,resU3,resV3,resW3)
@@ -1465,7 +1405,7 @@ contains
       ! Deallocate work arrays
       deallocate(resU1,resV1,resW1,Ui1,Vi1,Wi1,SR1)
       deallocate(resU2,resV2,resW2,Ui2,Vi2,Wi2,SR2)
-      deallocate(resU3,resV3,resW3,Ui3,Vi3,Wi3,SR3)
+      deallocate(resU3,resV3,resW3,Ui3,Vi3,Wi3,SR3,U2on3,V2on3,W2on3)
       
    end subroutine simulation_final
    

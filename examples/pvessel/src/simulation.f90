@@ -2,7 +2,7 @@
 module simulation
    use string,            only: str_medium
    use precision,         only: WP
-   use geometry,          only: cfg,Lv,IR
+   use geometry,          only: cfg,Lv,IR,lpipe,ypipe,rpipe,dx,dy,dz
    use lowmach_class,     only: lowmach
    use sgsmodel_class,    only: sgsmodel
    use vdscalar_class,    only: vdscalar
@@ -68,6 +68,9 @@ module simulation
    real(WP), parameter :: Cprod=3500.0_WP   ! In J/(kg.K) - this is for potatoes
    real(WP), parameter :: kprod=0.7_WP      ! In W/(m.K)  - this is a representative value for potatoes [0.545,0.957]
    real(WP), parameter :: rprod=1070.0_WP   ! Mass density of product
+   real(WP), parameter :: Mbag=2.26796_WP   ! Weight of 1 bag of product
+   integer , parameter :: nbag=55           ! Number of bags
+   real(WP), parameter :: Mprod=nbag*Mbag   ! Weight of product
    
    ! Backup of viscosity and diffusivity
    real(WP), dimension(:,:,:), allocatable :: viscmol,diffmol
@@ -85,9 +88,9 @@ contains
       eps=(0.5_WP+0.5_WP*tanh(dist(1)/be))*(0.5_WP+0.5_WP*tanh(dist(2)/be))*(0.5_WP+0.5_WP*tanh(dist(3)/be))
    end function bag_at_loc
    
-      
-   !> Function that localizes the left end of the tube
-   function left_of_tube(pg,i,j,k) result(isIn)
+   
+   !> Function that localizes the top of the tube - y-face (v-vel)
+   function vtube(pg,i,j,k) result(isIn)
       use pgrid_class, only: pgrid
       implicit none
       class(pgrid), intent(in) :: pg
@@ -95,37 +98,67 @@ contains
       logical :: isIn
       real(WP) :: r
       isIn=.false.
-      r=sqrt((pg%ym(j)+0.34_WP)**2+(pg%zm(k))**2)
-      if (abs(pg%x(i)+0.75_WP).lt.0.01_WP.and.r.lt.0.02_WP) isIn=.true.
-   end function left_of_tube
+      if (abs(pg%xm(i)+dx-0.5_WP*lpipe).le.dx.and.abs(pg%y(j)-dy-ypipe).lt.dy.and.abs(pg%zm(k)).lt.0.02_WP) isIn=.true.
+      if (abs(pg%xm(i)                ).le.dx.and.abs(pg%y(j)-dy-ypipe).lt.dy.and.abs(pg%zm(k)).lt.0.02_WP) isIn=.true.
+      if (abs(pg%xm(i)-dx+0.5_WP*lpipe).le.dx.and.abs(pg%y(j)-dy-ypipe).lt.dy.and.abs(pg%zm(k)).lt.0.02_WP) isIn=.true.
+   end function vtube
+   
+   
+   !> Function that localizes the top of the tube - scalar
+   function sctube(pg,i,j,k) result(isIn)
+      use pgrid_class, only: pgrid
+      implicit none
+      class(pgrid), intent(in) :: pg
+      integer, intent(in) :: i,j,k
+      logical :: isIn
+      real(WP) :: r
+      isIn=.false.
+      if (abs(pg%xm(i)+dx-0.5_WP*lpipe).le.dx.and.abs(pg%y(j+1)-dy-ypipe).lt.dy.and.abs(pg%zm(k)).lt.0.02_WP) isIn=.true.
+      if (abs(pg%xm(i)                ).le.dx.and.abs(pg%y(j+1)-dy-ypipe).lt.dy.and.abs(pg%zm(k)).lt.0.02_WP) isIn=.true.
+      if (abs(pg%xm(i)-dx+0.5_WP*lpipe).le.dx.and.abs(pg%y(j+1)-dy-ypipe).lt.dy.and.abs(pg%zm(k)).lt.0.02_WP) isIn=.true.
+   end function sctube
+   
+   
+   !> Function that localizes the left end of the tube
+   !function left_of_tube(pg,i,j,k) result(isIn)
+   !   use pgrid_class, only: pgrid
+   !   implicit none
+   !   class(pgrid), intent(in) :: pg
+   !   integer, intent(in) :: i,j,k
+   !   logical :: isIn
+   !   real(WP) :: r
+   !   isIn=.false.
+   !   r=sqrt((pg%ym(j)-ypipe)**2+(pg%zm(k))**2)
+   !   if (abs(pg%x(i)+0.5_WP*lpipe).lt.0.01_WP.and.r.lt.rpipe) isIn=.true.
+   !end function left_of_tube
    
    
    !> Function that localizes the right end of the tube - x-face (u-vel)
-   function right_of_tube_vel(pg,i,j,k) result(isIn)
-      use pgrid_class, only: pgrid
-      implicit none
-      class(pgrid), intent(in) :: pg
-      integer, intent(in) :: i,j,k
-      logical :: isIn
-      real(WP) :: r
-      isIn=.false.
-      r=sqrt((pg%ym(j)+0.34_WP)**2+(pg%zm(k))**2)
-      if (abs(pg%x(i)-0.75_WP).lt.0.01_WP.and.r.lt.0.02_WP) isIn=.true.
-   end function right_of_tube_vel
+   !function right_of_tube_vel(pg,i,j,k) result(isIn)
+   !   use pgrid_class, only: pgrid
+   !   implicit none
+   !   class(pgrid), intent(in) :: pg
+   !   integer, intent(in) :: i,j,k
+   !   logical :: isIn
+   !   real(WP) :: r
+   !   isIn=.false.
+   !   r=sqrt((pg%ym(j)-ypipe)**2+(pg%zm(k))**2)
+   !   if (abs(pg%x(i)-0.5_WP*lpipe).lt.0.01_WP.and.r.lt.rpipe) isIn=.true.
+   !end function right_of_tube_vel
    
    
    !> Function that localizes the right end of the tube - scalar
-   function right_of_tube_sc(pg,i,j,k) result(isIn)
-      use pgrid_class, only: pgrid
-      implicit none
-      class(pgrid), intent(in) :: pg
-      integer, intent(in) :: i,j,k
-      logical :: isIn
-      real(WP) :: r
-      isIn=.false.
-      r=sqrt((pg%ym(j)+0.34_WP)**2+(pg%zm(k))**2)
-      if (abs(pg%x(i+1)-0.75_WP).lt.0.01_WP.and.r.lt.0.02_WP) isIn=.true.
-   end function right_of_tube_sc
+   !function right_of_tube_sc(pg,i,j,k) result(isIn)
+   !   use pgrid_class, only: pgrid
+   !   implicit none
+   !   class(pgrid), intent(in) :: pg
+   !   integer, intent(in) :: i,j,k
+   !   logical :: isIn
+   !   real(WP) :: r
+   !   isIn=.false.
+   !   r=sqrt((pg%ym(j)-ypipe)**2+(pg%zm(k))**2)
+   !   if (abs(pg%x(i+1)-0.5_WP*lpipe).lt.0.01_WP.and.r.lt.rpipe) isIn=.true.
+   !end function right_of_tube_sc
    
    
    !> Function that localizes the vessel walls
@@ -168,12 +201,17 @@ contains
          end do
       end do
       ! Also update the density in the bcond
-      call sc%get_bcond( 'left inflow',inflow)
-      do n=1,inflow%itr%no_
-         i=inflow%itr%map(1,n); j=inflow%itr%map(2,n); k=inflow%itr%map(3,n)
-         sc%rho(i,j,k)=pressure*Wmlr/(Rcst*sc%SC(i,j,k))
-      end do
-      call sc%get_bcond('right inflow',inflow)
+      !call sc%get_bcond( 'left inflow',inflow)
+      !do n=1,inflow%itr%no_
+      !   i=inflow%itr%map(1,n); j=inflow%itr%map(2,n); k=inflow%itr%map(3,n)
+      !   sc%rho(i,j,k)=pressure*Wmlr/(Rcst*sc%SC(i,j,k))
+      !end do
+      !call sc%get_bcond('right inflow',inflow)
+      !do n=1,inflow%itr%no_
+      !   i=inflow%itr%map(1,n); j=inflow%itr%map(2,n); k=inflow%itr%map(3,n)
+      !   sc%rho(i,j,k)=pressure*Wmlr/(Rcst*sc%SC(i,j,k))
+      !end do
+      call sc%get_bcond('pipe inflow',inflow)
       do n=1,inflow%itr%no_
          i=inflow%itr%map(1,n); j=inflow%itr%map(2,n); k=inflow%itr%map(3,n)
          sc%rho(i,j,k)=pressure*Wmlr/(Rcst*sc%SC(i,j,k))
@@ -326,8 +364,9 @@ end subroutine get_cond
          ! Create flow solver
          fs=lowmach(cfg=cfg,name='Variable density low Mach NS')
          ! Define boundary conditions
-         call fs%add_bcond(name= 'left inflow',type=dirichlet,locator= left_of_tube    ,face='x',dir=+1,canCorrect=.false.)
-         call fs%add_bcond(name='right inflow',type=dirichlet,locator=right_of_tube_vel,face='x',dir=-1,canCorrect=.false.)
+         !call fs%add_bcond(name= 'left inflow',type=dirichlet,locator= left_of_tube    ,face='x',dir=+1,canCorrect=.false.)
+         !call fs%add_bcond(name='right inflow',type=dirichlet,locator=right_of_tube_vel,face='x',dir=-1,canCorrect=.false.)
+         call fs%add_bcond(name= 'pipe inflow',type=dirichlet,locator=vtube,face='y',dir=-1,canCorrect=.false.)
          ! Assign constant viscosity
          call param_read('Dynamic viscosity',visc); fs%visc=visc
          ! Assign acceleration of gravity
@@ -356,19 +395,79 @@ end subroutine get_cond
          do k=cfg%kmino_,cfg%kmaxo_
             do j=cfg%jmino_,cfg%jmaxo_
                do i=cfg%imino_,cfg%imaxo_
-                  epsp(i,j,k)=epsp(i,j,k)+bag_at_loc(bag_loc=[ 0.0_WP, 0.0_WP, 0.0_WP],mesh_loc=[cfg%xm(i),cfg%ym(j),cfg%zm(k)])
-                  epsp(i,j,k)=epsp(i,j,k)+bag_at_loc(bag_loc=[+0.5_WP, 0.0_WP, 0.0_WP],mesh_loc=[cfg%xm(i),cfg%ym(j),cfg%zm(k)])
-                  epsp(i,j,k)=epsp(i,j,k)+bag_at_loc(bag_loc=[-0.5_WP, 0.0_WP, 0.0_WP],mesh_loc=[cfg%xm(i),cfg%ym(j),cfg%zm(k)])
-                  epsp(i,j,k)=epsp(i,j,k)+bag_at_loc(bag_loc=[ 0.0_WP,+0.2_WP, 0.0_WP],mesh_loc=[cfg%xm(i),cfg%ym(j),cfg%zm(k)])
-                  epsp(i,j,k)=epsp(i,j,k)+bag_at_loc(bag_loc=[ 0.0_WP,-0.2_WP, 0.0_WP],mesh_loc=[cfg%xm(i),cfg%ym(j),cfg%zm(k)])
-                  epsp(i,j,k)=epsp(i,j,k)+bag_at_loc(bag_loc=[ 0.0_WP, 0.0_WP,-0.3_WP],mesh_loc=[cfg%xm(i),cfg%ym(j),cfg%zm(k)])
-                  epsp(i,j,k)=epsp(i,j,k)+bag_at_loc(bag_loc=[ 0.0_WP, 0.0_WP,+0.3_WP],mesh_loc=[cfg%xm(i),cfg%ym(j),cfg%zm(k)])
+                  
+                  ! First 7-bag test
+                  !epsp(i,j,k)=epsp(i,j,k)+bag_at_loc(bag_loc=[ 0.0_WP, 0.0_WP, 0.0_WP],mesh_loc=[cfg%xm(i),cfg%ym(j),cfg%zm(k)])
+                  !epsp(i,j,k)=epsp(i,j,k)+bag_at_loc(bag_loc=[+0.5_WP, 0.0_WP, 0.0_WP],mesh_loc=[cfg%xm(i),cfg%ym(j),cfg%zm(k)])
+                  !epsp(i,j,k)=epsp(i,j,k)+bag_at_loc(bag_loc=[-0.5_WP, 0.0_WP, 0.0_WP],mesh_loc=[cfg%xm(i),cfg%ym(j),cfg%zm(k)])
+                  !epsp(i,j,k)=epsp(i,j,k)+bag_at_loc(bag_loc=[ 0.0_WP,+0.2_WP, 0.0_WP],mesh_loc=[cfg%xm(i),cfg%ym(j),cfg%zm(k)])
+                  !epsp(i,j,k)=epsp(i,j,k)+bag_at_loc(bag_loc=[ 0.0_WP,-0.2_WP, 0.0_WP],mesh_loc=[cfg%xm(i),cfg%ym(j),cfg%zm(k)])
+                  !epsp(i,j,k)=epsp(i,j,k)+bag_at_loc(bag_loc=[ 0.0_WP, 0.0_WP,-0.3_WP],mesh_loc=[cfg%xm(i),cfg%ym(j),cfg%zm(k)])
+                  !epsp(i,j,k)=epsp(i,j,k)+bag_at_loc(bag_loc=[ 0.0_WP, 0.0_WP,+0.3_WP],mesh_loc=[cfg%xm(i),cfg%ym(j),cfg%zm(k)])
+                  
+                  ! 55-bag version from Amir
+                  epsp(i,j,k)=epsp(i,j,k)+bag_at_loc(bag_loc=[ 0.00_WP, 0.000_WP, 0.0_WP],mesh_loc=[cfg%xm(i),cfg%ym(j),cfg%zm(k)])  ! Center bag  1
+                  epsp(i,j,k)=epsp(i,j,k)+bag_at_loc(bag_loc=[+0.45_WP, 0.000_WP, 0.0_WP],mesh_loc=[cfg%xm(i),cfg%ym(j),cfg%zm(k)])  ! X direction 2
+                  epsp(i,j,k)=epsp(i,j,k)+bag_at_loc(bag_loc=[-0.45_WP, 0.000_WP, 0.0_WP],mesh_loc=[cfg%xm(i),cfg%ym(j),cfg%zm(k)])  ! 3
+                  epsp(i,j,k)=epsp(i,j,k)+bag_at_loc(bag_loc=[+0.90_WP, 0.000_WP, 0.0_WP],mesh_loc=[cfg%xm(i),cfg%ym(j),cfg%zm(k)])  ! 4
+                  epsp(i,j,k)=epsp(i,j,k)+bag_at_loc(bag_loc=[-0.90_WP, 0.000_WP, 0.0_WP],mesh_loc=[cfg%xm(i),cfg%ym(j),cfg%zm(k)])  ! 5
+                  epsp(i,j,k)=epsp(i,j,k)+bag_at_loc(bag_loc=[ 0.00_WP,+0.075_WP, 0.0_WP],mesh_loc=[cfg%xm(i),cfg%ym(j),cfg%zm(k)])  ! 6
+                  epsp(i,j,k)=epsp(i,j,k)+bag_at_loc(bag_loc=[ 0.00_WP,-0.075_WP, 0.0_WP],mesh_loc=[cfg%xm(i),cfg%ym(j),cfg%zm(k)])  ! 7
+                  epsp(i,j,k)=epsp(i,j,k)+bag_at_loc(bag_loc=[+0.45_WP,+0.075_WP, 0.0_WP],mesh_loc=[cfg%xm(i),cfg%ym(j),cfg%zm(k)])  ! 8
+                  epsp(i,j,k)=epsp(i,j,k)+bag_at_loc(bag_loc=[-0.45_WP,+0.075_WP, 0.0_WP],mesh_loc=[cfg%xm(i),cfg%ym(j),cfg%zm(k)])  ! 9
+                  epsp(i,j,k)=epsp(i,j,k)+bag_at_loc(bag_loc=[+0.45_WP,-0.075_WP, 0.0_WP],mesh_loc=[cfg%xm(i),cfg%ym(j),cfg%zm(k)])  ! 10
+                  epsp(i,j,k)=epsp(i,j,k)+bag_at_loc(bag_loc=[-0.45_WP,-0.075_WP, 0.0_WP],mesh_loc=[cfg%xm(i),cfg%ym(j),cfg%zm(k)])  ! 11
+                  epsp(i,j,k)=epsp(i,j,k)+bag_at_loc(bag_loc=[+0.90_WP,+0.075_WP, 0.0_WP],mesh_loc=[cfg%xm(i),cfg%ym(j),cfg%zm(k)])  ! 12
+                  epsp(i,j,k)=epsp(i,j,k)+bag_at_loc(bag_loc=[-0.90_WP,+0.075_WP, 0.0_WP],mesh_loc=[cfg%xm(i),cfg%ym(j),cfg%zm(k)])  ! 13
+                  epsp(i,j,k)=epsp(i,j,k)+bag_at_loc(bag_loc=[+0.90_WP,-0.075_WP, 0.0_WP],mesh_loc=[cfg%xm(i),cfg%ym(j),cfg%zm(k)])  ! 14
+                  epsp(i,j,k)=epsp(i,j,k)+bag_at_loc(bag_loc=[-0.90_WP,-0.075_WP, 0.0_WP],mesh_loc=[cfg%xm(i),cfg%ym(j),cfg%zm(k)])  ! 15
+                  epsp(i,j,k)=epsp(i,j,k)+bag_at_loc(bag_loc=[+0.45_WP,+0.150_WP, 0.0_WP],mesh_loc=[cfg%xm(i),cfg%ym(j),cfg%zm(k)])  ! 16
+                  epsp(i,j,k)=epsp(i,j,k)+bag_at_loc(bag_loc=[-0.45_WP,+0.150_WP, 0.0_WP],mesh_loc=[cfg%xm(i),cfg%ym(j),cfg%zm(k)])  ! 17
+                  epsp(i,j,k)=epsp(i,j,k)+bag_at_loc(bag_loc=[+0.45_WP,-0.150_WP, 0.0_WP],mesh_loc=[cfg%xm(i),cfg%ym(j),cfg%zm(k)])  ! 18
+                  epsp(i,j,k)=epsp(i,j,k)+bag_at_loc(bag_loc=[-0.45_WP,-0.150_WP, 0.0_WP],mesh_loc=[cfg%xm(i),cfg%ym(j),cfg%zm(k)])  ! 19
+                  epsp(i,j,k)=epsp(i,j,k)+bag_at_loc(bag_loc=[ 0.00_WP,+0.150_WP, 0.0_WP],mesh_loc=[cfg%xm(i),cfg%ym(j),cfg%zm(k)])  ! 20
+                  epsp(i,j,k)=epsp(i,j,k)+bag_at_loc(bag_loc=[ 0.00_WP,-0.150_WP, 0.0_WP],mesh_loc=[cfg%xm(i),cfg%ym(j),cfg%zm(k)])  ! 21
+                  epsp(i,j,k)=epsp(i,j,k)+bag_at_loc(bag_loc=[ 0.00_WP,+0.225_WP, 0.0_WP],mesh_loc=[cfg%xm(i),cfg%ym(j),cfg%zm(k)])  ! 22
+                  epsp(i,j,k)=epsp(i,j,k)+bag_at_loc(bag_loc=[ 0.00_WP,-0.225_WP, 0.0_WP],mesh_loc=[cfg%xm(i),cfg%ym(j),cfg%zm(k)])  ! 23
+                  epsp(i,j,k)=epsp(i,j,k)+bag_at_loc(bag_loc=[+0.45_WP,+0.225_WP, 0.0_WP],mesh_loc=[cfg%xm(i),cfg%ym(j),cfg%zm(k)])  ! 24
+                  epsp(i,j,k)=epsp(i,j,k)+bag_at_loc(bag_loc=[-0.45_WP,+0.225_WP, 0.0_WP],mesh_loc=[cfg%xm(i),cfg%ym(j),cfg%zm(k)])  ! 25
+                  epsp(i,j,k)=epsp(i,j,k)+bag_at_loc(bag_loc=[+0.45_WP,-0.225_WP, 0.0_WP],mesh_loc=[cfg%xm(i),cfg%ym(j),cfg%zm(k)])  ! 26
+                  epsp(i,j,k)=epsp(i,j,k)+bag_at_loc(bag_loc=[-0.45_WP,-0.225_WP, 0.0_WP],mesh_loc=[cfg%xm(i),cfg%ym(j),cfg%zm(k)])  ! 27
+                  epsp(i,j,k)=epsp(i,j,k)+bag_at_loc(bag_loc=[+0.90_WP,+0.150_WP, 0.0_WP],mesh_loc=[cfg%xm(i),cfg%ym(j),cfg%zm(k)])  ! 28
+                  epsp(i,j,k)=epsp(i,j,k)+bag_at_loc(bag_loc=[-0.90_WP,+0.150_WP, 0.0_WP],mesh_loc=[cfg%xm(i),cfg%ym(j),cfg%zm(k)])  ! 29
+                  epsp(i,j,k)=epsp(i,j,k)+bag_at_loc(bag_loc=[+0.90_WP,-0.150_WP, 0.0_WP],mesh_loc=[cfg%xm(i),cfg%ym(j),cfg%zm(k)])  ! 30
+                  epsp(i,j,k)=epsp(i,j,k)+bag_at_loc(bag_loc=[-0.90_WP,-0.150_WP, 0.0_WP],mesh_loc=[cfg%xm(i),cfg%ym(j),cfg%zm(k)])  ! 31
+                  epsp(i,j,k)=epsp(i,j,k)+bag_at_loc(bag_loc=[+0.45_WP,+0.300_WP, 0.0_WP],mesh_loc=[cfg%xm(i),cfg%ym(j),cfg%zm(k)])  ! 32
+                  epsp(i,j,k)=epsp(i,j,k)+bag_at_loc(bag_loc=[-0.45_WP,+0.300_WP, 0.0_WP],mesh_loc=[cfg%xm(i),cfg%ym(j),cfg%zm(k)])  ! 33
+                  epsp(i,j,k)=epsp(i,j,k)+bag_at_loc(bag_loc=[+0.45_WP,-0.300_WP, 0.0_WP],mesh_loc=[cfg%xm(i),cfg%ym(j),cfg%zm(k)])  ! 34
+                  epsp(i,j,k)=epsp(i,j,k)+bag_at_loc(bag_loc=[-0.45_WP,-0.300_WP, 0.0_WP],mesh_loc=[cfg%xm(i),cfg%ym(j),cfg%zm(k)])  ! 35
+                  epsp(i,j,k)=epsp(i,j,k)+bag_at_loc(bag_loc=[ 0.00_WP,+0.300_WP, 0.0_WP],mesh_loc=[cfg%xm(i),cfg%ym(j),cfg%zm(k)])  ! 36
+                  epsp(i,j,k)=epsp(i,j,k)+bag_at_loc(bag_loc=[ 0.00_WP,-0.300_WP, 0.0_WP],mesh_loc=[cfg%xm(i),cfg%ym(j),cfg%zm(k)])  ! 37
+                  epsp(i,j,k)=epsp(i,j,k)+bag_at_loc(bag_loc=[+0.45_WP,+0.375_WP, 0.0_WP],mesh_loc=[cfg%xm(i),cfg%ym(j),cfg%zm(k)])  ! 38
+                  epsp(i,j,k)=epsp(i,j,k)+bag_at_loc(bag_loc=[-0.45_WP,+0.375_WP, 0.0_WP],mesh_loc=[cfg%xm(i),cfg%ym(j),cfg%zm(k)])  ! 39
+                  epsp(i,j,k)=epsp(i,j,k)+bag_at_loc(bag_loc=[+0.45_WP,-0.375_WP, 0.0_WP],mesh_loc=[cfg%xm(i),cfg%ym(j),cfg%zm(k)])  ! 40
+                  epsp(i,j,k)=epsp(i,j,k)+bag_at_loc(bag_loc=[-0.45_WP,-0.375_WP, 0.0_WP],mesh_loc=[cfg%xm(i),cfg%ym(j),cfg%zm(k)])  ! 41
+                  epsp(i,j,k)=epsp(i,j,k)+bag_at_loc(bag_loc=[ 0.00_WP,+0.375_WP, 0.0_WP],mesh_loc=[cfg%xm(i),cfg%ym(j),cfg%zm(k)])  ! 42
+                  epsp(i,j,k)=epsp(i,j,k)+bag_at_loc(bag_loc=[ 0.00_WP,-0.375_WP, 0.0_WP],mesh_loc=[cfg%xm(i),cfg%ym(j),cfg%zm(k)])  ! 43
+                  epsp(i,j,k)=epsp(i,j,k)+bag_at_loc(bag_loc=[+0.90_WP,+0.225_WP, 0.0_WP],mesh_loc=[cfg%xm(i),cfg%ym(j),cfg%zm(k)])  ! 44
+                  epsp(i,j,k)=epsp(i,j,k)+bag_at_loc(bag_loc=[-0.90_WP,+0.225_WP, 0.0_WP],mesh_loc=[cfg%xm(i),cfg%ym(j),cfg%zm(k)])  ! 45
+                  epsp(i,j,k)=epsp(i,j,k)+bag_at_loc(bag_loc=[+0.90_WP,-0.225_WP, 0.0_WP],mesh_loc=[cfg%xm(i),cfg%ym(j),cfg%zm(k)])  ! 46
+                  epsp(i,j,k)=epsp(i,j,k)+bag_at_loc(bag_loc=[-0.90_WP,-0.225_WP, 0.0_WP],mesh_loc=[cfg%xm(i),cfg%ym(j),cfg%zm(k)])  ! 47
+                  epsp(i,j,k)=epsp(i,j,k)+bag_at_loc(bag_loc=[+0.90_WP,+0.300_WP, 0.0_WP],mesh_loc=[cfg%xm(i),cfg%ym(j),cfg%zm(k)])  ! 48
+                  epsp(i,j,k)=epsp(i,j,k)+bag_at_loc(bag_loc=[-0.90_WP,+0.300_WP, 0.0_WP],mesh_loc=[cfg%xm(i),cfg%ym(j),cfg%zm(k)])  ! 49
+                  epsp(i,j,k)=epsp(i,j,k)+bag_at_loc(bag_loc=[+0.90_WP,-0.300_WP, 0.0_WP],mesh_loc=[cfg%xm(i),cfg%ym(j),cfg%zm(k)])  ! 50
+                  epsp(i,j,k)=epsp(i,j,k)+bag_at_loc(bag_loc=[-0.90_WP,-0.300_WP, 0.0_WP],mesh_loc=[cfg%xm(i),cfg%ym(j),cfg%zm(k)])  ! 51
+                  epsp(i,j,k)=epsp(i,j,k)+bag_at_loc(bag_loc=[+0.90_WP,+0.375_WP, 0.0_WP],mesh_loc=[cfg%xm(i),cfg%ym(j),cfg%zm(k)])  ! 52
+                  epsp(i,j,k)=epsp(i,j,k)+bag_at_loc(bag_loc=[-0.90_WP,+0.375_WP, 0.0_WP],mesh_loc=[cfg%xm(i),cfg%ym(j),cfg%zm(k)])  ! 53
+                  epsp(i,j,k)=epsp(i,j,k)+bag_at_loc(bag_loc=[+0.90_WP,-0.375_WP, 0.0_WP],mesh_loc=[cfg%xm(i),cfg%ym(j),cfg%zm(k)])  ! 54
+                  epsp(i,j,k)=epsp(i,j,k)+bag_at_loc(bag_loc=[-0.90_WP,-0.375_WP, 0.0_WP],mesh_loc=[cfg%xm(i),cfg%ym(j),cfg%zm(k)])  ! 55
+                  
                end do
             end do
          end do
          ! Multiply by expected porosity in the bag
          epsp=epsp*bporo
-         epsf=1.0_WP-epsp
+         epsf=1.0_WP!-epsp     !< THIS COMMENTS OUT THE POROSITY EFFECT
          ! Setup the scaled Laplacian operator from incomp metrics: lap(*)=-vol*div(epsf*grad(*))
          do k=fs%cfg%kmin_,fs%cfg%kmax_
             do j=fs%cfg%jmin_,fs%cfg%jmax_
@@ -410,8 +509,9 @@ end subroutine get_cond
          ! Create scalar solver
          sc=vdscalar(cfg=cfg,scheme=quick,name='Temperature')
          ! Define boundary conditions
-         call sc%add_bcond(name= 'left inflow',type=dirichlet,locator= left_of_tube   )
-         call sc%add_bcond(name='right inflow',type=dirichlet,locator=right_of_tube_sc)
+         !call sc%add_bcond(name= 'left inflow',type=dirichlet,locator= left_of_tube   )
+         !call sc%add_bcond(name='right inflow',type=dirichlet,locator=right_of_tube_sc)
+         call sc%add_bcond(name='pipe inflow',type=dirichlet,locator=sctube)
          if (wall_losses) call sc%add_bcond(name='wall',type=dirichlet,locator=wall_locator)
          ! Assign constant diffusivity
          call param_read('Dynamic diffusivity',diffusivity)
@@ -451,13 +551,19 @@ end subroutine get_cond
             sc%rhoold=sc%rho
          end if
          ! Apply Dirichlet at the tube
-         call sc%get_bcond( 'left inflow',mybc)
-         do n=1,mybc%itr%no_
-            i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
-            sc%SC (i,j,k)=Tinlet
-            sc%rho(i,j,k)=pressure*Wmlr/(Rcst*Tinlet)
-         end do
-         call sc%get_bcond('right inflow',mybc)
+         !call sc%get_bcond( 'left inflow',mybc)
+         !do n=1,mybc%itr%no_
+         !   i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
+         !   sc%SC (i,j,k)=Tinlet
+         !   sc%rho(i,j,k)=pressure*Wmlr/(Rcst*Tinlet)
+         !end do
+         !call sc%get_bcond('right inflow',mybc)
+         !do n=1,mybc%itr%no_
+         !   i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
+         !   sc%SC(i,j,k)=Tinlet
+         !   sc%rho(i,j,k)=pressure*Wmlr/(Rcst*Tinlet)
+         !end do
+         call sc%get_bcond('pipe inflow',mybc)
          do n=1,mybc%itr%no_
             i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
             sc%SC(i,j,k)=Tinlet
@@ -501,29 +607,39 @@ end subroutine get_cond
          call param_read('Inlet MFR (kg/s)',MFR)
          ! Calculate inflow area
          myAin=0.0_WP
-         call fs%get_bcond('left inflow',mybc)
+         !call fs%get_bcond('left inflow',mybc)
+         !do n=1,mybc%itr%n_
+         !   i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
+         !   myAin=myAin+fs%cfg%dy(j)*fs%cfg%dz(k)
+         !end do
+         !call fs%get_bcond('right inflow',mybc)
+         !do n=1,mybc%itr%n_
+         !   i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
+         !   myAin=myAin+fs%cfg%dy(j)*fs%cfg%dz(k)
+         !end do
+         call fs%get_bcond('pipe inflow',mybc)
          do n=1,mybc%itr%n_
             i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
-            myAin=myAin+fs%cfg%dy(j)*fs%cfg%dz(k)
-         end do
-         call fs%get_bcond('right inflow',mybc)
-         do n=1,mybc%itr%n_
-            i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
-            myAin=myAin+fs%cfg%dy(j)*fs%cfg%dz(k)
+            myAin=myAin+fs%cfg%dx(i)*fs%cfg%dz(k)
          end do
          call MPI_ALLREDUCE(myAin,Ain,1,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr)
          ! Form inflow momentum
          rhoUin=MFR/Ain
          ! Apply Dirichlet at the tube
-         call fs%get_bcond('left inflow',mybc)
+         !call fs%get_bcond('left inflow',mybc)
+         !do n=1,mybc%itr%no_
+         !   i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
+         !   fs%rhoU(i,j,k)=-rhoUin
+         !end do
+         !call fs%get_bcond('right inflow',mybc)
+         !do n=1,mybc%itr%no_
+         !   i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
+         !   fs%rhoU(i,j,k)=+rhoUin
+         !end do
+         call fs%get_bcond('pipe inflow',mybc)
          do n=1,mybc%itr%no_
             i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
-            fs%rhoU(i,j,k)=-rhoUin
-         end do
-         call fs%get_bcond('right inflow',mybc)
-         do n=1,mybc%itr%no_
-            i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
-            fs%rhoU(i,j,k)=+rhoUin
+            fs%rhoV(i,j,k)=+rhoUin
          end do
          ! Set density from scalar
          fs%rho=0.5_WP*(sc%rho+sc%rhoold)
@@ -689,17 +805,17 @@ end subroutine get_cond
          
          
          ! Account for heat transfer to product
-         product_heating: block
-            integer :: i,j,k
-            do k=fs%cfg%kmin_,fs%cfg%kmax_
-               do j=fs%cfg%jmin_,fs%cfg%jmax_
-                  do i=fs%cfg%imin_,fs%cfg%imax_
-                     if (sc%cfg%VF(i,j,k).gt.0.0_WP) Tprod(i,j,k)=Tprod(i,j,k)+Cp*diffmol(i,j,k)*epsp(i,j,k)*(sc%SC(i,j,k)-Tprodold(i,j,k))/(rprod*bporo*bporo*Tperm*Cprod)
-                  end do
-               end do
-            end do
-            call cfg%sync(Tprod)
-         end block product_heating
+         !product_heating: block
+         !   integer :: i,j,k
+         !   do k=fs%cfg%kmin_,fs%cfg%kmax_
+         !      do j=fs%cfg%jmin_,fs%cfg%jmax_
+         !         do i=fs%cfg%imin_,fs%cfg%imax_
+         !            if (sc%cfg%VF(i,j,k).gt.0.0_WP) Tprod(i,j,k)=Tprod(i,j,k)+Cp*diffmol(i,j,k)*epsp(i,j,k)*(sc%SC(i,j,k)-Tprodold(i,j,k))/(rprod*bporo*bporo*Tperm*Cprod)
+         !         end do
+         !      end do
+         !   end do
+         !   call cfg%sync(Tprod)
+         !end block product_heating
          
          
          
@@ -739,18 +855,18 @@ end subroutine get_cond
             call fs%addsrc_gravity(resU,resV,resW)
             
             ! Also add permeability
-            permeability: block
-               integer :: i,j,k
-               do k=fs%cfg%kmin_,fs%cfg%kmax_
-                  do j=fs%cfg%jmin_,fs%cfg%jmax_
-                     do i=fs%cfg%imin_,fs%cfg%imax_
-                        resU(i,j,k)=resU(i,j,k)-sum(fs%itpr_x(:,i,j,k)*epsf(i-1:i,j,k)*viscmol(i-1:i,j,k)*epsp(i-1:i,j,k))*fs%U(i,j,k)/(bporo*bperm)
-                        resV(i,j,k)=resV(i,j,k)-sum(fs%itpr_y(:,i,j,k)*epsf(i,j-1:j,k)*viscmol(i,j-1:j,k)*epsp(i,j-1:j,k))*fs%V(i,j,k)/(bporo*bperm)
-                        resW(i,j,k)=resW(i,j,k)-sum(fs%itpr_z(:,i,j,k)*epsf(i,j,k-1:k)*viscmol(i,j,k-1:k)*epsp(i,j,k-1:k))*fs%W(i,j,k)/(bporo*bperm)
-                     end do
-                  end do
-               end do
-            end block permeability
+            !permeability: block
+            !   integer :: i,j,k
+            !   do k=fs%cfg%kmin_,fs%cfg%kmax_
+            !      do j=fs%cfg%jmin_,fs%cfg%jmax_
+            !         do i=fs%cfg%imin_,fs%cfg%imax_
+            !            resU(i,j,k)=resU(i,j,k)-sum(fs%itpr_x(:,i,j,k)*epsf(i-1:i,j,k)*viscmol(i-1:i,j,k)*epsp(i-1:i,j,k))*fs%U(i,j,k)/(bporo*bperm)
+            !            resV(i,j,k)=resV(i,j,k)-sum(fs%itpr_y(:,i,j,k)*epsf(i,j-1:j,k)*viscmol(i,j-1:j,k)*epsp(i,j-1:j,k))*fs%V(i,j,k)/(bporo*bperm)
+            !            resW(i,j,k)=resW(i,j,k)-sum(fs%itpr_z(:,i,j,k)*epsf(i,j,k-1:k)*viscmol(i,j,k-1:k)*epsp(i,j,k-1:k))*fs%W(i,j,k)/(bporo*bperm)
+            !         end do
+            !      end do
+            !   end do
+            !end block permeability
             
             ! Assemble explicit residual
             resU=time%dtmid*resU-(2.0_WP*fs%rhoU-2.0_WP*fs%rhoUold)
@@ -774,15 +890,20 @@ end subroutine get_cond
                use lowmach_class, only: bcond
                type(bcond), pointer :: mybc
                integer :: n,i,j,k
-               call fs%get_bcond('left inflow',mybc)
+               !call fs%get_bcond('left inflow',mybc)
+               !do n=1,mybc%itr%no_
+               !   i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
+               !   fs%rhoU(i,j,k)=-rhoUin
+               !end do
+               !call fs%get_bcond('right inflow',mybc)
+               !do n=1,mybc%itr%no_
+               !   i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
+               !   fs%rhoU(i,j,k)=+rhoUin
+               !end do
+               call fs%get_bcond('pipe inflow',mybc)
                do n=1,mybc%itr%no_
                   i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
-                  fs%rhoU(i,j,k)=-rhoUin
-               end do
-               call fs%get_bcond('right inflow',mybc)
-               do n=1,mybc%itr%no_
-                  i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
-                  fs%rhoU(i,j,k)=+rhoUin
+                  fs%rhoV(i,j,k)=+rhoUin
                end do
             end block mom_bcond
             
@@ -833,20 +954,24 @@ end subroutine get_cond
             where (sc%cfg%VF.gt.0.0_WP) resSC=resSC+epsf/Cp*(pressure-pressure_old)/time%dt
             
             ! Account for heat transfer to product
-            heat_to_product: block
-               integer :: i,j,k
-               do k=fs%cfg%kmin_,fs%cfg%kmax_
-                  do j=fs%cfg%jmin_,fs%cfg%jmax_
-                     do i=fs%cfg%imin_,fs%cfg%imax_
-                        if (sc%cfg%VF(i,j,k).gt.0.0_WP) resSC(i,j,k)=resSC(i,j,k)-diffmol(i,j,k)*epsp(i,j,k)*(sc%SC(i,j,k)-Tprod(i,j,k))/(bporo*Tperm)
-                     end do
-                  end do
-               end do
-            end block heat_to_product
+            !heat_to_product: block
+            !   integer :: i,j,k
+            !   do k=fs%cfg%kmin_,fs%cfg%kmax_
+            !      do j=fs%cfg%jmin_,fs%cfg%jmax_
+            !         do i=fs%cfg%imin_,fs%cfg%imax_
+            !            if (sc%cfg%VF(i,j,k).gt.0.0_WP) resSC(i,j,k)=resSC(i,j,k)-diffmol(i,j,k)*epsp(i,j,k)*(sc%SC(i,j,k)-Tprod(i,j,k))/(bporo*Tperm)
+            !         end do
+            !      end do
+            !   end do
+            !end block heat_to_product
             
             ! Temporarily redefine density to include sled/basket assembly
             sc%rho   =sc%rho   +Msteel*Cs/(Vtotal*Cp)
             sc%rhoold=sc%rhoold+Msteel*Cs/(Vtotal*Cp)
+            
+            ! Temporarily redefine density to include product as well
+            sc%rho   =sc%rho   +Mprod*Cprod/(Vtotal*Cp)
+            sc%rhoold=sc%rhoold+Mprod*Cprod/(Vtotal*Cp)
             
             ! Assemble explicit residual
             where (sc%cfg%VF.gt.0.0_WP) resSC=time%dt*resSC-(2.0_WP*sc%rho*sc%SC-(sc%rho+sc%rhoold)*sc%SCold)
@@ -857,6 +982,10 @@ end subroutine get_cond
             ! Set densities back to fluid only
             sc%rho   =sc%rho   -Msteel*Cs/(Vtotal*Cp)
             sc%rhoold=sc%rhoold-Msteel*Cs/(Vtotal*Cp)
+            
+            ! Set densities back to fluid only
+            sc%rho   =sc%rho   -Mprod*Cprod/(Vtotal*Cp)
+            sc%rhoold=sc%rhoold-Mprod*Cprod/(Vtotal*Cp)
             
             ! Apply this residual
             sc%SC=2.0_WP*sc%SC-sc%SCold+resSC

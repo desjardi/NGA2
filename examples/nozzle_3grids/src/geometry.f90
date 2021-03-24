@@ -134,7 +134,7 @@ contains
          ! Read in partition
          call param_read('1 Partition',partition,short='p')
          ! Create partitioned grid
-         cfg1=config(group,partition,grid1)
+         cfg1=config(grp=group,decomp=partition,grid=grid1)
       end block create_cfg1
       
       
@@ -243,7 +243,7 @@ contains
          ! Read in partition
          call param_read('2 Partition',partition,short='p')
          ! Create partitioned grid
-         cfg2=config(group,partition,grid2)
+         cfg2=config(grp=group,decomp=partition,grid=grid2)
       end block create_cfg2
       
       
@@ -369,7 +369,7 @@ contains
          ! Read in partition
          call param_read('3 Partition',partition,short='p')
          ! Create partitioned grid
-         cfg3=config(group,partition,grid3)
+         cfg3=config(grp=group,decomp=partition,grid=grid3)
       end block create_cfg3
       
       
