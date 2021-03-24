@@ -23,8 +23,8 @@ module simulation
    type(timetracker), public :: time1
    type(sgsmodel),    public :: sgs1
    
-   ! Coupler between 1 and 2
-   type(coupler),     public :: cpl12
+   ! Couplers between 1 and 2
+   type(coupler),     public :: cpl12x,cpl12y,cpl12z
    
    !> Two-phase incompressible flow solver, VF solver, and corresponding time tracker and sgs model
    type(tpns),        public :: fs2
@@ -32,8 +32,8 @@ module simulation
    type(timetracker), public :: time2
    type(sgsmodel),    public :: sgs2
    
-   ! Coupler between 2 and 3
-   type(coupler),     public :: cpl23
+   ! Couplers between 2 and 3
+   type(coupler),     public :: cpl23x,cpl23y,cpl23z
    
    !> Single-phase incompressible flow solver with lpt, and corresponding time tracker and sgs model
    type(incomp),      public :: fs3
@@ -306,16 +306,14 @@ contains
       ! ###############################################
       coupler_prep: block
          use parallel, only: group
-         ! Create nozzle-to-atomization coupler
-         cpl12=coupler(src_grp=group,dst_grp=group,name='nozzle_to_atom')
-         call cpl12%set_src(cfg1)
-         call cpl12%set_dst(cfg2)
-         call cpl12%initialize()
-         ! Create atomization-to-spray coupler
-         cpl23=coupler(src_grp=group,dst_grp=group,name='atom_to_spray')
-         call cpl23%set_src(cfg2)
-         call cpl23%set_dst(cfg3)
-         call cpl23%initialize()
+         ! Create nozzle-to-atomization couplers
+         cpl12x=coupler(src_grp=group,dst_grp=group,name='nozzle_to_atom_x'); call cpl12x%set_src(cfg1,'x'); call cpl12x%set_dst(cfg2,'x'); call cpl12x%initialize()
+         cpl12y=coupler(src_grp=group,dst_grp=group,name='nozzle_to_atom_y'); call cpl12y%set_src(cfg1,'y'); call cpl12y%set_dst(cfg2,'y'); call cpl12y%initialize()
+         cpl12z=coupler(src_grp=group,dst_grp=group,name='nozzle_to_atom_z'); call cpl12z%set_src(cfg1,'z'); call cpl12z%set_dst(cfg2,'z'); call cpl12z%initialize()
+         ! Create atomization-to-spray couplers
+         cpl23x=coupler(src_grp=group,dst_grp=group,name='atom_to_spray__x'); call cpl23x%set_src(cfg2,'x'); call cpl23x%set_dst(cfg3,'x'); call cpl23x%initialize()
+         cpl23y=coupler(src_grp=group,dst_grp=group,name='atom_to_spray__y'); call cpl23y%set_src(cfg2,'y'); call cpl23y%set_dst(cfg3,'y'); call cpl23y%initialize()
+         cpl23z=coupler(src_grp=group,dst_grp=group,name='atom_to_spray__z'); call cpl23z%set_src(cfg2,'z'); call cpl23z%set_dst(cfg3,'z'); call cpl23z%initialize()
       end block coupler_prep
       
       
@@ -511,7 +509,6 @@ contains
          call ens_out2%add_scalar('VOF',vf2%VF)
          call ens_out2%add_scalar('curvature',vf2%curv)
          call ens_out2%add_scalar('visc_t',sgs2%visc)
-         call ens_out2%add_scalar('overlap',cpl12%overlap)
          call ens_out2%add_surface('vofplic',vf2%surfgrid)
          ! Output to ensight
          if (ens_evt2%occurs()) call ens_out2%write_data(time2%t)
@@ -869,7 +866,6 @@ contains
          ! Add variables to output
          call ens_out3%add_vector('velocity',Ui3,Vi3,Wi3)
          call ens_out3%add_scalar('visc_t',sgs3%visc)
-         call ens_out3%add_scalar('overlap',cpl23%overlap)
          call ens_out3%add_particle('spray',lp3%pmesh)
          ! Output to ensight
          if (ens_evt3%occurs()) call ens_out3%write_data(time3%t)
@@ -1053,10 +1049,10 @@ contains
             resU1=wt*fs1%U+(1.0_WP-wt)*fs1%Uold
             resV1=wt*fs1%V+(1.0_WP-wt)*fs1%Vold
             resW1=wt*fs1%W+(1.0_WP-wt)*fs1%Wold
-            ! Exchange data using cpl12
-            call cpl12%push(resU1); call cpl12%transfer(); call cpl12%pull(resU2)
-            call cpl12%push(resV1); call cpl12%transfer(); call cpl12%pull(resV2)
-            call cpl12%push(resW1); call cpl12%transfer(); call cpl12%pull(resW2)
+            ! Exchange data using cpl12x/y/z couplers
+            call cpl12x%push(resU1); call cpl12x%transfer(); call cpl12x%pull(resU2)
+            call cpl12y%push(resV1); call cpl12y%transfer(); call cpl12y%pull(resV2)
+            call cpl12z%push(resW1); call cpl12z%transfer(); call cpl12z%pull(resW2)
             ! Apply time-varying Dirichlet conditions
             call fs2%get_bcond('gas_inj',mybc)
             do n=1,mybc%itr%no_
