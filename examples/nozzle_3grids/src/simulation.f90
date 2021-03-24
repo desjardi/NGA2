@@ -1259,6 +1259,35 @@ contains
                resV3=-2.0_WP*(fs3%rho*fs3%V-fs3%rho*fs3%Vold)+time3%dt*resV3
                resW3=-2.0_WP*(fs3%rho*fs3%W-fs3%rho*fs3%Wold)+time3%dt*resW3
                
+               ! Add nudging term here
+               nudge: block
+                  real(WP) :: xcoord,ycoord,zcoord
+                  do k=fs3%cfg%kmin_,fs3%cfg%kmax_
+                     do j=fs3%cfg%jmin_,fs3%cfg%jmax_
+                        do i=fs3%cfg%imin_,fs3%cfg%imax_
+                           if (fs3%umask(i,j,k).eq.0) then
+                              xcoord=max((fs2%cfg%x(fs2%cfg%imax+1)-    fs3%cfg%x (i) )/(fs2%cfg%x(fs2%cfg%imax+1)),0.0_WP)
+                              ycoord=max((        0.5_WP*fs2%cfg%yL-abs(fs3%cfg%ym(j)))/(0.5_WP*fs2%cfg%yL        ),0.0_WP)
+                              zcoord=max((        0.5_WP*fs2%cfg%zL-abs(fs3%cfg%zm(k)))/(0.5_WP*fs2%cfg%zL        ),0.0_WP)
+                              resU3(i,j,k)=resU3(i,j,k)+(U2on3(i,j,k)-fs3%U(i,j,k))*(xcoord*ycoord*zcoord)**2
+                           end if
+                           if (fs3%vmask(i,j,k).eq.0) then
+                              xcoord=max((fs2%cfg%x(fs2%cfg%imax+1)-    fs3%cfg%xm(i) )/(fs2%cfg%x(fs2%cfg%imax+1)),0.0_WP)
+                              ycoord=max((        0.5_WP*fs2%cfg%yL-abs(fs3%cfg%y (j)))/(0.5_WP*fs2%cfg%yL        ),0.0_WP)
+                              zcoord=max((        0.5_WP*fs2%cfg%zL-abs(fs3%cfg%zm(k)))/(0.5_WP*fs2%cfg%zL        ),0.0_WP)
+                              resV3(i,j,k)=resV3(i,j,k)+(V2on3(i,j,k)-fs3%V(i,j,k))*(xcoord*ycoord*zcoord)**2
+                           end if
+                           if (fs3%wmask(i,j,k).eq.0) then
+                              xcoord=max((fs2%cfg%x(fs2%cfg%imax+1)-    fs3%cfg%xm(i) )/(fs2%cfg%x(fs2%cfg%imax+1)),0.0_WP)
+                              ycoord=max((        0.5_WP*fs2%cfg%yL-abs(fs3%cfg%ym(j)))/(0.5_WP*fs2%cfg%yL        ),0.0_WP)
+                              zcoord=max((        0.5_WP*fs2%cfg%zL-abs(fs3%cfg%z (k)))/(0.5_WP*fs2%cfg%zL        ),0.0_WP)
+                              resW3(i,j,k)=resW3(i,j,k)+(W2on3(i,j,k)-fs3%W(i,j,k))*(xcoord*ycoord*zcoord)**2
+                           end if
+                        end do
+                     end do
+                  end do
+               end block nudge
+               
                ! Form implicit residuals
                call fs3%solve_implicit(time3%dt,resU3,resV3,resW3)
                
