@@ -2362,8 +2362,6 @@ contains
    end subroutine meta_structures_stats
 
 
-<<<<<<< Updated upstream
-=======
    !> Classify film by shape
    subroutine film_classify(this,Lbary,Gbary)
       implicit none
@@ -2455,7 +2453,6 @@ contains
    end subroutine film_classify
 
 
->>>>>>> Stashed changes
    !> Deallocate local structures
    subroutine kill_struct(this)
       implicit none
