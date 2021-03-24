@@ -73,6 +73,7 @@ module simulation
    real(WP), dimension(:,:,:), allocatable :: resU3,resV3,resW3
    real(WP), dimension(:,:,:), allocatable :: Ui3,Vi3,Wi3
    real(WP), dimension(:,:,:,:), allocatable :: SR3
+   real(WP), dimension(:,:,:), allocatable :: U2on3,V2on3,W2on3
    
    
 contains
@@ -743,6 +744,9 @@ contains
          allocate(Vi3  (cfg3%imino_:cfg3%imaxo_,cfg3%jmino_:cfg3%jmaxo_,cfg3%kmino_:cfg3%kmaxo_))
          allocate(Wi3  (cfg3%imino_:cfg3%imaxo_,cfg3%jmino_:cfg3%jmaxo_,cfg3%kmino_:cfg3%kmaxo_))
          allocate(SR3(6,cfg3%imino_:cfg3%imaxo_,cfg3%jmino_:cfg3%jmaxo_,cfg3%kmino_:cfg3%kmaxo_))
+         allocate(U2on3(cfg3%imino_:cfg3%imaxo_,cfg3%jmino_:cfg3%jmaxo_,cfg3%kmino_:cfg3%kmaxo_))
+         allocate(V2on3(cfg3%imino_:cfg3%imaxo_,cfg3%jmino_:cfg3%jmaxo_,cfg3%kmino_:cfg3%kmaxo_))
+         allocate(W2on3(cfg3%imino_:cfg3%imaxo_,cfg3%jmino_:cfg3%jmaxo_,cfg3%kmino_:cfg3%kmaxo_))
       end block allocate_work_arrays3
       
       
@@ -867,6 +871,7 @@ contains
          call ens_out3%add_vector('velocity',Ui3,Vi3,Wi3)
          call ens_out3%add_scalar('visc_t',sgs3%visc)
          call ens_out3%add_particle('spray',lp3%pmesh)
+         call ens_out3%add_vector('velocity2',U2on3,V2on3,W2on3)
          ! Output to ensight
          if (ens_evt3%occurs()) call ens_out3%write_data(time3%t)
       end block create_ensight3
@@ -1182,15 +1187,6 @@ contains
          end do
          
          
-         
-         ! ###############################################
-         ! ####### PERFORM NUDGING FROM 2->3 HERE ########
-         ! ###############################################
-         
-         
-         
-         
-         
          ! ###############################################
          ! ####### TRANSFER DROPLETS FROM 2->3 HERE ######
          ! ###############################################
@@ -1207,6 +1203,15 @@ contains
          
          ! Advance until we've caught up
          do while (time3%t.lt.time2%t)
+            
+            
+            ! ######################################
+            ! ######## PREPARE NUDGING HERE ########
+            ! ######################################
+            ! Exchange data using cpl23x/y/z couplers and the most recent velocity
+            call cpl23x%push(fs2%U); call cpl23x%transfer(); call cpl23x%pull(U2on3)
+            call cpl23y%push(fs2%V); call cpl23y%transfer(); call cpl23y%pull(V2on3)
+            call cpl23z%push(fs2%W); call cpl23z%transfer(); call cpl23z%pull(W2on3)
             
             ! Increment time
             call fs3%get_cfl(time3%dt,time3%cfl)
@@ -1372,7 +1377,7 @@ contains
       ! Deallocate work arrays
       deallocate(resU1,resV1,resW1,Ui1,Vi1,Wi1,SR1)
       deallocate(resU2,resV2,resW2,Ui2,Vi2,Wi2,SR2)
-      deallocate(resU3,resV3,resW3,Ui3,Vi3,Wi3,SR3)
+      deallocate(resU3,resV3,resW3,Ui3,Vi3,Wi3,SR3,U2on3,V2on3,W2on3)
       
    end subroutine simulation_final
    
