@@ -141,6 +141,7 @@ module ccl_class
       procedure, private :: struct_final
       procedure, private :: meta_structures_sort
       procedure, private :: meta_structures_stats
+      procedure :: film_classify
       procedure, private :: kill_struct
    end type ccl
    
@@ -2361,6 +2362,100 @@ contains
    end subroutine meta_structures_stats
 
 
+<<<<<<< Updated upstream
+=======
+   !> Classify film by shape
+   subroutine film_classify(this,Lbary,Gbary)
+      implicit none
+      class(ccl), intent(inout) :: this
+      real(WP), dimension(:,this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in) :: Lbary  !< Liquid barycenter
+      real(WP), dimension(:,this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in) :: Gbary  !< Gas barycenter      
+      integer :: m,n,i,j,k,ii,jj,kk
+      real(WP) :: xtmp, ytmp, ztmp
+      real(WP) :: x_vol,y_vol,z_vol,vol_total
+      ! Local moment of inertia tensor
+      real(WP), dimension(3,3) :: Imom
+      ! Eigenvalues/eigenvectors
+      real(WP),dimension(3) :: d
+      integer, parameter :: order = 3
+      integer, parameter :: lwork = 102 ! dsyev optimal length (nb+2)*order, where block size nb=32
+      real(WP),dimension(lwork) :: work
+      integer :: info
+      ! ! Characteristic lengths
+      ! real(WP) :: l1,l2,l3
+      real(WP), parameter :: ratio = 2.0_WP
+
+      this%film_type = 0
+      do m=this%film_synch_offset+1,this%film_synch_offset+this%n_film
+         if (this%film_list(this%film_map_(m))%phase.eq.1) then ! Liquid film
+            do n=1,this%film_list(this%film_map_(m))%nnode
+               i = this%film_list(this%film_map_(m))%node(n,1)
+               j = this%film_list(this%film_map_(m))%node(n,2)
+               k = this%film_list(this%film_map_(m))%node(n,3)
+               vol_total = 0.0_WP
+               x_vol = 0.0_WP; y_vol = 0.0_WP; z_vol = 0.0_WP
+               Imom(:,:) = 0.0_WP
+               do kk = k-2,k+2
+                  do jj = j-2,j+2
+                     do ii = i-2,i+2
+                        
+                        ! Location of film node  
+                        xtmp = Lbary(1,ii,jj,kk)
+                        ytmp = Lbary(2,ii,jj,kk)
+                        ztmp = Lbary(3,ii,jj,kk)
+
+                        ! Volume
+                        vol_total = vol_total + this%cfg%vol(ii,jj,kk)*this%VF(ii,jj,kk)
+
+                        ! Center of gravity
+                        x_vol = x_vol + xtmp*this%cfg%vol(ii,jj,kk)*this%VF(ii,jj,kk)
+                        y_vol = y_vol + ytmp*this%cfg%vol(ii,jj,kk)*this%VF(ii,jj,kk)
+                        z_vol = z_vol + ztmp*this%cfg%vol(ii,jj,kk)*this%VF(ii,jj,kk)
+            
+                     end do
+                  end do
+               end do
+               do kk = k-2,k+2
+                  do jj = j-2,j+2
+                     do ii = i-2,i+2
+                        
+                        ! Location of film node
+                        xtmp = Lbary(1,ii,jj,kk)-x_vol/vol_total
+                        ytmp = Lbary(2,ii,jj,kk)-y_vol/vol_total
+                        ztmp = Lbary(3,ii,jj,kk)-z_vol/vol_total
+
+                        Imom(1,1) = Imom(1,1) + (ytmp**2 + ztmp**2)*this%cfg%vol(ii,jj,kk)*this%VF(ii,jj,kk)
+                        Imom(2,2) = Imom(2,2) + (xtmp**2 + ztmp**2)*this%cfg%vol(ii,jj,kk)*this%VF(ii,jj,kk)
+                        Imom(3,3) = Imom(3,3) + (xtmp**2 + ytmp**2)*this%cfg%vol(ii,jj,kk)*this%VF(ii,jj,kk)
+      
+                        Imom(1,2) = Imom(1,2) - xtmp*ytmp*this%cfg%vol(ii,jj,kk)*this%VF(ii,jj,kk)
+                        Imom(1,3) = Imom(1,3) - xtmp*ztmp*this%cfg%vol(ii,jj,kk)*this%VF(ii,jj,kk)
+                        Imom(2,3) = Imom(2,3) - ytmp*ztmp*this%cfg%vol(ii,jj,kk)*this%VF(ii,jj,kk)
+                       
+                     end do
+                  end do
+               end do
+            end do
+            ! On exit, Imom contains eigenvectors, and d contains eigenvalues in ascending order
+            call dsyev('V','U',order,Imom,order,d,work,lwork,info)
+            ! Get rid of very small negative values (due to machine accuracy)
+            d = max(0.0_WP,d)
+            ! ! Calculate characteristic lengths assuming ellipsoid
+            ! l1 = sqrt(5.0_WP/2.0_WP*abs(d(2)+d(3)-d(1))/vol_total)
+            ! l2 = sqrt(5.0_WP/2.0_WP*abs(d(3)+d(1)-d(2))/vol_total)
+            ! l3 = sqrt(5.0_WP/2.0_WP*abs(d(1)+d(2)-d(3))/vol_total)
+            this%film_type(i,j,k) = 1
+            if (d(3).gt.(ratio*d(1))) this%film_type(i,j,k) = this%film_type(i,j,k) + 1
+            if (d(3).gt.(ratio*d(2))) this%film_type(i,j,k) = this%film_type(i,j,k) + 1
+            ! if (l1.gt.(ratio*l2)) film_type(i,j,k) = film_type(i,j,k) + 1
+            ! if (l1.gt.(ratio*l3)) film_type(i,j,k) = film_type(i,j,k) + 1   
+         end if ! Liquid film
+      end do      
+
+   end subroutine film_classify
+
+
+>>>>>>> Stashed changes
    !> Deallocate local structures
    subroutine kill_struct(this)
       implicit none
