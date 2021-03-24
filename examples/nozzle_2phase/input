@@ -4,14 +4,14 @@ Partition : 4 1 1
 # Mesh definition - spray flow
 Lx :  0.04
 Ly :  0.03
-Lz :  0.03
+Lz :  0.0004 ! 0.03
 nx :  100    ! 400 ! Lam's current resolution = 400x300x300
 ny :  75     ! 300
-nz :  75     ! 300
+nz :  1      ! 75     ! 300
 xmax: 0.03
 
 # Injection velocity
-Gas flow rate (SLPM) : 150
+Gas flow rate (SLPM) :    200    ! 150  !< Increased artificially to get to 40 m/s bulk in the gas
 Liquid flow rate (SLPM) : 0.099
 
 # Fluid properties

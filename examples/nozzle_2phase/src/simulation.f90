@@ -342,8 +342,10 @@ contains
          ! Neumann on the side
          call fs%add_bcond(name='bc_yp'  ,type=clipped_neumann,face='y',dir=+1,canCorrect=.true. ,locator=yp_locator)
          call fs%add_bcond(name='bc_ym'  ,type=clipped_neumann,face='y',dir=-1,canCorrect=.true. ,locator=ym_locator)
-         call fs%add_bcond(name='bc_zp'  ,type=clipped_neumann,face='z',dir=+1,canCorrect=.true. ,locator=zp_locator)
-         call fs%add_bcond(name='bc_zm'  ,type=clipped_neumann,face='z',dir=-1,canCorrect=.true. ,locator=zm_locator)
+         if (fs%cfg%nz.gt.1) then
+            call fs%add_bcond(name='bc_zp'  ,type=clipped_neumann,face='z',dir=+1,canCorrect=.true. ,locator=zp_locator)
+            call fs%add_bcond(name='bc_zm'  ,type=clipped_neumann,face='z',dir=-1,canCorrect=.true. ,locator=zm_locator)
+         end if
          ! Outflow on the right
          call fs%add_bcond(name='outflow',type=clipped_neumann,face='x',dir=+1,canCorrect=.true. ,locator=right_boundary)
          ! Configure pressure solver
@@ -605,11 +607,19 @@ contains
                   if (i.ge.vf%cfg%imax-5) vf%VF(i,j,k)=0.0_WP
                   if (j.ge.vf%cfg%jmax-5) vf%VF(i,j,k)=0.0_WP
                   if (j.le.vf%cfg%jmin+5) vf%VF(i,j,k)=0.0_WP
-                  if (k.ge.vf%cfg%kmax-5) vf%VF(i,j,k)=0.0_WP
-                  if (k.le.vf%cfg%kmin+5) vf%VF(i,j,k)=0.0_WP
                end do
             end do
          end do
+         if (fs%cfg%nz.gt.1) then
+            do k=fs%cfg%kmino_,fs%cfg%kmaxo_
+               do j=fs%cfg%jmino_,fs%cfg%jmaxo_
+                  do i=fs%cfg%imino_,fs%cfg%imaxo_
+                     if (k.ge.vf%cfg%kmax-5) vf%VF(i,j,k)=0.0_WP
+                     if (k.le.vf%cfg%kmin+5) vf%VF(i,j,k)=0.0_WP
+                  end do
+               end do
+            end do
+         end if
          
          ! Finally, see if it's time to save restart files
          if (save_evt%occurs()) then
