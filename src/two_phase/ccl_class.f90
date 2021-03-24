@@ -11,11 +11,8 @@ module ccl_class
    ! Expose type/constructor/methods
    public :: ccl
    
-   ! Default parameters for film CCL
-   real(WP), parameter :: dot_threshold=-0.5_WP           !< Maximum dot product of two interface normals for their respective cells to be considered film cells
-
-   ! define data type for local structure
-   type struct_type
+   !> Object purely for building meta structures for now - holdover from NGA
+   type :: struct_type
       ! Location WRT mesh
       integer, dimension(:,:), pointer :: node => null()
       integer :: nnode
@@ -24,8 +21,8 @@ module ccl_class
       type(struct_type), pointer :: next => null()
    end type struct_type
 
-   ! define data type for meta_structures
-   type meta_struct_type 
+   !> Meta-structure object
+   type :: meta_struct_type 
       integer :: id     
       real(WP) :: vol
       real(WP) :: x
@@ -65,13 +62,13 @@ module ccl_class
       character(len=str_medium) :: name='UNNAMED_CCL'        !< Solver name (default=UNNAMED_CCL)
 
       ! Volume fraction information
-      real(WP), dimension(:,:,:), pointer :: VF
+      real(WP), dimension(:,:,:), pointer :: VF              !< Volume fraction array
 
       ! Interface polygon information
       type(Poly_type), dimension(:,:,:,:), pointer :: poly   !< Array of IRL interface polygons (n,i,j,k)
 
       ! Maximum number of PLIC interfaces per cell
-      integer :: max_interface_planes                        !< Number of planar interfaces per cell (0=VF-only, 1=PLIC, 2=R2P, etc)
+      integer :: max_interface_planes                        !< Number of planar interfaces per cell (0=VF-only, 1=PLIC, 2=R2P, etc.)
       
       ! Structure and films
       ! type(struct), dimension(:), allocatable :: struct_list
@@ -80,8 +77,8 @@ module ccl_class
       type(film)  , dimension(:), pointer :: film_list => null()
 
       ! Linked-list struct and meta_struct
-      type(struct_type), pointer :: first_struct => null()  ! first element
-      type(struct_type), pointer :: my_struct => null()     ! subsequent struct in linked list
+      type(struct_type), pointer :: first_struct => null()   !< first element
+      type(struct_type), pointer :: my_struct => null()      !< subsequent struct in linked list
       ! list of meta-structures' ID tags
       integer, dimension(:), pointer :: meta_structures => null()
       ! List of meta-structures
@@ -93,9 +90,10 @@ module ccl_class
       integer :: nout_time
       real(WP), dimension(:), pointer :: out_time => null()
 
-      ! CCL selection parameters - *read from input by user*
+      ! CCL selection parameters
       real(WP) :: VFlo=1.0e-10_WP                            !< Minimum VF value considered for a structure to exist
-      
+      real(WP) :: dot_threshold=-0.5_WP                      !< Maximum dot product of two interface normals for their respective cells to be considered film cells
+   
       ! Feature counts
       integer :: n_struct, n_struct_max !, n_border_struct, n_border_struct_max
       integer :: n_film, n_film_max !, n_border_film, n_border_film_max
@@ -124,7 +122,7 @@ module ccl_class
       integer, dimension(:,:,:), allocatable :: film_id        !< ID of the film that contains the cell
       integer, dimension(:,:,:), allocatable :: film_phase     !< Phase of the film cell - 0/1/2/3 for none/liquid/gas/both
       real(WP),dimension(:,:,:), allocatable :: film_thickness !< Local thickness of the film cell
-      integer, dimension(:,:,:), allocatable :: film_type      !< Local film type - 1: ligament, 2: sheet
+      integer, dimension(:,:,:), allocatable :: film_type      !< Local film type - 0: droplet, 1: ligament, 2: sheet
 
       ! Work arrays
       integer, dimension(:,:,:,:), allocatable :: idp          !< ID of the structure that contains the cell
@@ -136,17 +134,10 @@ module ccl_class
    contains
       procedure :: build_lists
       procedure :: deallocate_lists
-      ! procedure, private :: is_connected
-      ! procedure, private :: is_film_cell_upper
-      ! procedure, private :: find
-      ! procedure, private :: safe_find
-      ! procedure, private :: union
       procedure, private :: label
       procedure, private :: struct_synch
-      ! procedure, private :: struct_synch_per
       procedure, private :: film_synch
-      ! procedure, private :: film_synch_per
-      procedure, private :: struct_tag_update
+      procedure, private :: struct_label_update
       procedure, private :: struct_final
       procedure, private :: meta_structures_sort
       procedure, private :: meta_structures_stats
@@ -247,8 +238,8 @@ contains
       !       end if
       !    end do future
       ! else
-         ! Create directory
-         if (self%cfg%amRoot) call execute_command_line('mkdir -p structs')
+         ! ! Create directory
+         ! if (self%cfg%amRoot) call execute_command_line('mkdir -p structs')
          ! Set the time
          self%nout_time = 0
          allocate(self%out_time(1))
@@ -259,8 +250,8 @@ contains
    subroutine build_lists(this,VF,poly,U,V,W)
       implicit none
       class(ccl), intent(inout) :: this
-      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), target, intent(in) :: VF
-      type(Poly_type), dimension(:,this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), target, intent(in), optional:: poly
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), target, intent(in) :: VF      !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      type(Poly_type), dimension(:,this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), target, intent(in), optional:: poly !< Needs to be (1:2,imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in), optional :: U     !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in), optional :: V     !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in), optional :: W     !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
@@ -271,7 +262,6 @@ contains
       ! Point to polygon object
       if (present(poly)) then
          this%poly(1:,this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:)=>poly
-         ! max_interface_planes = 2 - should user set this value? Could optionally be automatic based on reconstruction
       else
          this%max_interface_planes = 0
       end if
@@ -284,7 +274,7 @@ contains
 
       if (this%max_interface_planes.eq.2) call this%film_synch()
 
-      call this%struct_tag_update()
+      call this%struct_label_update()
       if (present(U).and.present(V).and.present(W)) call this%struct_final(U,V,W)
 
    end subroutine build_lists
@@ -337,7 +327,7 @@ contains
       ! Compute some useful values
       npp = int((this%cfg%nx*this%cfg%ny*this%cfg%nz)/(this%cfg%nproc)) ! number points per processor
       max_structs = ceiling(npp/2.0_WP)
-      this%id_offset = npp*(this%cfg%rank)         ! global tag offset; unique for each proc
+      this%id_offset = npp*(this%cfg%rank) ! global tag offset; unique for each proc
 
       ! Allocate union-find data structure
       allocate(this%struct_list(this%id_offset+1:this%id_offset+max_structs))
@@ -374,7 +364,7 @@ contains
                            n2 = calculateNormal(this%poly(2,i,j,k))
                            c1 = calculateCentroid(this%poly(1,i,j,k))
                            c2 = calculateCentroid(this%poly(2,i,j,k))
-                           is_two_plane_film = (dot_product(n1,n2).lt.dot_threshold) ! .true. if normals point in opposing directions
+                           is_two_plane_film = (dot_product(n1,n2).lt.this%dot_threshold)
 
                            if (is_two_plane_film) then
                               if (dot_product(c2-c1,n2).gt.0.0_WP) then
@@ -461,7 +451,7 @@ contains
                               else
                                  ! If neighbor is one-plane cell
                                  is_contiguous = (dot_product(c2-c1,n2).ge.0.0_WP).or.(dot_product(c1-c2,n1).ge.0.0_WP)
-                                 is_film = (dot_product(n1,n2).lt.dot_threshold) ! .true. if normals point in opposing directions
+                                 is_film = (dot_product(n1,n2).lt.this%dot_threshold)
                               end if
 
                               if (is_film) then
@@ -824,9 +814,7 @@ contains
       !    return
       ! end function union
 
-      ! ----------------------------------------------------------- !
-      ! Is the cell above (i,j,k) in the dim direction a film cell? !
-      ! ----------------------------------------------------------- !
+      ! Is the cell above (i,j,k) in the dim direction a film cell?
       function is_film_cell_upper(i,j,k,dim) result(film_phase)
          implicit none
          integer, intent(in) :: i,j,k,dim
@@ -867,7 +855,7 @@ contains
                pref = calculateCentroid(this%poly(1,i,j,k))
                ploc = calculateCentroid(this%poly(1,ii,jj,kk))
                is_contiguous = (dot_product(ploc-pref,nloc).ge.0.0_WP).or.(dot_product(pref-ploc,nref).ge.0.0_WP)
-               is_film = (dot_product(nref,nloc).lt.dot_threshold)
+               is_film = (dot_product(nref,nloc).lt.this%dot_threshold)
             end if  
             if (is_film) then
                if (is_contiguous) then
@@ -892,7 +880,7 @@ contains
          ! this%cfg%imin_
          do j= this%cfg%jmin_,this%cfg%jmax_
             do k= this%cfg%kmin_,this%cfg%kmax_
-               if (a_id_array(this%cfg%imin_,j,k).gt.0) then ! why is this necessary
+               if (a_id_array(this%cfg%imin_,j,k).gt.0) then
                   a_border_array(this%cfg%imin_,j,k) = a_list_type(a_id_array(this%cfg%imin_,j,k))%id
                end if
             end do
@@ -968,14 +956,13 @@ contains
       
    end subroutine label
 
-   ! ----------------------------------------- !
-   ! Synchronize struct tags across all procs  !
-   ! ----------------------------------------- !
+
+   !> Synchronize struct labels across all procs
    subroutine struct_synch(this)
       use mpi_f08,  only: MPI_ALLREDUCE,MPI_MIN,MPI_MAX,MPI_INTEGER
       implicit none
       class(ccl), intent(inout) :: this
-      integer :: i,j,k,n,ii,jj,kk,stop_,stop_global,counter,ierr!,print_rank=2
+      integer :: i,j,k,n,ii,jj,kk,stop_,stop_global,counter,ierr
       integer :: find_parent,find_parent_own
    
       ! Eventually replace with sum(n_struct_per_processor(1:irank)) or border_struct equivalent
@@ -991,7 +978,7 @@ contains
    
       ! update ghost cells
       call this%cfg%sync(this%border_id)      
-      ! if (irank.eq.print_rank) print *,"Starting imin_"
+
       ! imin_
       if (this%cfg%imin_.ne.this%cfg%imin) then
          do j= this%cfg%jmin_,this%cfg%jmax_
@@ -1000,15 +987,10 @@ contains
                if (this%border_id(this%cfg%imin_,j,k).gt.0.and.this%border_id(this%cfg%imin_-1,j,k).gt.0) then
                   ! If the border cell id already has a parent id, then union() the ghost cell id with the border cell id parent
                   if (this%parent(this%border_id(this%cfg%imin_,j,k)).eq.this%border_id(this%cfg%imin_,j,k)) then
-                     ! if (irank.eq.print_rank) print *,"create parentage"
                      ! call union(this%border_id(this%cfg%imin_,j,k),this%border_id(this%cfg%imin_-1,j,k))
                      ! is_contiguous = is_connected(this%cfg%imin_,j,k,1)
-                     ! if (is_contiguous) parent(this%border_id(this%cfg%imin_,j,k)) = this%border_id(this%cfg%imin_-1,j,k)
                      if (is_connected(this%cfg%imin_,j,k,1)) this%parent(this%border_id(this%cfg%imin_,j,k)) = this%border_id(this%cfg%imin_-1,j,k)
                   elseif (find(this%border_id(this%cfg%imin_,j,k)).ne.find(this%border_id(this%cfg%imin_-1,j,k))) then
-                     ! if (irank.eq.print_rank) print *,"structure borders two structures - union()"
-                     ! if (irank.eq.print_rank) print *,"parent of ghost/border",this%parent(this%border_id(this%cfg%imin_-1,j,k)),this%parent(this%border_id(this%cfg%imin_,j,k)) 
-                     ! if (irank.eq.print_rank) print *,"root   of ghost/border",find_only(this%border_id(this%cfg%imin_-1,j,k)),find_only(this%border_id(this%cfg%imin_,j,k)) 
                      ! call union(this%border_id(this%cfg%imin_-1,j,k),this%parent(this%border_id(this%cfg%imin_,j,k)))
                      if (is_connected(this%cfg%imin_,j,k,1)) then
                         if (this%border_id(this%cfg%imin_-1,j,k).gt.this%parent(this%border_id(this%cfg%imin_,j,k))) then
@@ -1022,28 +1004,18 @@ contains
             end do
          end do
       end if
-      ! if (irank.eq.2) print *,"this%synch_offset",this%synch_offset
-      ! if (irank.eq.2) print *,"irank",irank,"border id ",this%border_id(this%cfg%imin_,:,:)
-      ! if (irank.eq.2) print *,"irank",irank,"ghost id  ",this%border_id(this%cfg%imin_-1,:,:)
-      ! if (irank.eq.2) print *,"irank",irank,"this%parent", this%parent
    
-      ! if (irank.eq.print_rank) print *,"Starting this%cfg%jmin_"
       ! this%cfg%jmin_
       if (this%cfg%jmin_.ne.this%cfg%jmin) then
          do i= this%cfg%imin_,this%cfg%imax_
             do k= this%cfg%kmin_,this%cfg%kmax_
                ! If the border cell and the neighboring ghost cell are filled
                if (this%border_id(i,this%cfg%jmin_,k).gt.0.and.this%border_id(i,this%cfg%jmin_-1,k).gt.0) then
-                  ! if (irank.eq.print_rank) print *,"ghost border",this%border_id(i,this%cfg%jmin_-1,k),this%border_id(i,this%cfg%jmin_,k)
                   ! If the border cell id already has a parent id, then union() the ghost cell id with the border cell id parent
                   if (this%parent(this%border_id(i,this%cfg%jmin_,k)).eq.this%border_id(i,this%cfg%jmin_,k)) then 
-                     ! if (irank.eq.print_rank) print *,"create parentage"
                      ! call union(this%border_id(i,this%cfg%jmin_,k),this%border_id(i,this%cfg%jmin_-1,k))
                      if (is_connected(i,this%cfg%jmin_,k,2)) this%parent(this%border_id(i,this%cfg%jmin_,k)) = this%border_id(i,this%cfg%jmin_-1,k)
                   elseif (find(this%border_id(i,this%cfg%jmin_,k)).ne.find(this%border_id(i,this%cfg%jmin_-1,k))) then
-                     ! if (irank.eq.print_rank) print *,"structure borders two structures - union()" 
-                  ! if (irank.eq.print_rank) print *,"structure borders two structures - union()" 
-                     ! if (irank.eq.print_rank) print *,"structure borders two structures - union()" 
                      ! call union(this%border_id(i,this%cfg%jmin_-1,k),this%parent(this%border_id(i,this%cfg%jmin_,k)))
                      if (is_connected(i,this%cfg%jmin_,k,2)) then
                         if (this%border_id(i,this%cfg%jmin_-1,k).gt.this%parent(this%border_id(i,this%cfg%jmin_,k))) then
@@ -1057,25 +1029,18 @@ contains
             end do
          end do
       end if
-      ! if (irank.eq.2) print *,"irank",irank,"this%parent", this%parent
-   
-      ! if (irank.eq.print_rank) print *,"Starting this%cfg%kmin_"
+
       ! this%cfg%kmin_
       if (this%cfg%kmin_.ne.this%cfg%kmin) then
          do i= this%cfg%imin_,this%cfg%imax_
             do j= this%cfg%jmin_,this%cfg%jmax_
                ! If the neighboring ghost cell is filled
                if (this%border_id(i,j,this%cfg%kmin_).gt.0.and.this%border_id(i,j,this%cfg%kmin_-1).gt.0) then
-                  ! if (irank.eq.print_rank) print *,"ghost border",this%border_id(i,j,this%cfg%kmin_-1),this%border_id(i,j,this%cfg%kmin_)
                   ! If the border cell id already has a parent id, then union() the ghost cell id with the border cell id parent
                   if (this%parent(this%border_id(i,j,this%cfg%kmin_)).eq.this%border_id(i,j,this%cfg%kmin_)) then 
-                     ! if (irank.eq.print_rank) print *,"create parentage"
                      ! call union(this%border_id(i,j,this%cfg%kmin_),this%border_id(i,j,this%cfg%kmin_-1))
                      if (is_connected(i,j,this%cfg%kmin_,3)) this%parent(this%border_id(i,j,this%cfg%kmin_)) = this%border_id(i,j,this%cfg%kmin_-1)
                   elseif (find(this%border_id(i,j,this%cfg%kmin_)).ne.find(this%border_id(i,j,this%cfg%kmin_-1))) then
-                     ! if (irank.eq.print_rank) print *,"structure borders two structures - union()" 
-                     ! if (irank.eq.print_rank) print *,"parent of ghost/border",this%parent(this%border_id(i,j,this%cfg%kmin_-1)),this%parent(this%border_id(i,j,this%cfg%kmin_)) 
-                     ! if (irank.eq.print_rank) print *,"root   of ghost/border",find_only(this%border_id(i,j,this%cfg%kmin_-1)),find_only(this%border_id(i,j,this%cfg%kmin_)) 
                      ! call union(this%border_id(i,j,this%cfg%kmin_-1),this%parent(this%border_id(i,j,this%cfg%kmin_)))
                      if (is_connected(i,j,this%cfg%kmin_,3)) then 
                         if (this%border_id(i,j,this%cfg%kmin_-1).gt.this%parent(this%border_id(i,j,this%cfg%kmin_))) then
@@ -1089,7 +1054,6 @@ contains
             end do
          end do
       end if
-      ! if (irank.eq.2) print *,"irank",irank,"this%parent", this%parent
    
       ! initialize global stop criterion
       stop_global = 1
@@ -1110,32 +1074,18 @@ contains
    
          call MPI_ALLREDUCE(this%parent,this%parent_all,this%cfg%nproc*this%n_struct_max,MPI_INTEGER,MPI_MIN,this%cfg%comm,ierr)
    
-         ! print *,"counter",counter,"irank",irank,"after mpi"
          ! Set self-parents back to selves
          do i= 1,this%cfg%nproc*this%n_struct_max
             if (this%parent_all(i).eq.huge(1)) this%parent_all(i) = i
             ! if (this%parent_own(i).eq.huge(1)) this%parent_own(i) = i
-           end do
-         ! if (irank.eq.print_rank) print *,"counter",counter,"irank",irank,"this%parent_all before flatten",this%parent_all
-         ! print *,"counter",counter,"irank",irank,"this%parent_all before flatten",this%parent_all
-         ! if (irank.eq.print_rank) print *,"counter",counter,"irank",irank,"this%parent_own before flatten",this%parent_own
-         ! print *,"counter",counter,"irank",irank,"this%parent_own before flatten",this%parent_own
+         end do
+
          ! Flatten trees - is this necessary?
          do i= 1,this%cfg%nproc*this%n_struct_max
-            ! print *,"counter",counter,"irank",irank,"flatten all tree i",i
             this%parent_all(i) = find_all(i)
-            ! print *,"counter",counter,"irank",irank,"flatten own tree i",i
             this%parent_own(i) = find_own(i)
-                  ! if (irank.eq.print_rank) print *,"counter",counter,"irank",irank,"i",i,"this%parent_all i",this%parent_all
          end do
-         ! print *,"counter",counter,"irank",irank,"after flatten"
-         ! ! Fill this%parent with selves again for printing
-         ! do i= 1,this%cfg%nproc*this%n_struct_max
-         !    this%parent(i) = i
-         ! end do
-         ! if (irank.eq.print_rank) print *, "irank",irank,"    struct_id         ",this%parent
-         ! print *,"counter",counter,"irank",irank,"this%parent_all before find",this%parent_all
-         ! print *,"counter",counter,"irank",irank,"before reconciliation"
+
          ! Start with final this%parent array being equal to this%parent_all
          this%parent = this%parent_all
    
@@ -1148,7 +1098,6 @@ contains
                find_parent_own = find(this%parent_own(i))
                find_parent = find(this%parent(i))
                if (find_parent_own.gt.find_parent) then
-                  ! print *,"counter",counter,"irank",irank,"reconciliation union between",this%parent_own(i),this%parent(i),"find_own(this%parent_own) find(this%parent) find(this%parent_own)",find_own(this%parent_own(i)),find(this%parent(i)),find(this%parent_own(i))
                   call union(this%parent_own(i),this%parent(i))
                   stop_ = 1
                else if (find_parent.gt.find_parent_own) then
@@ -1162,29 +1111,24 @@ contains
    
       end do ! do while (stop_global.ne.0) excluding domain boundaries
    
-      ! if (irank.eq.1) print *,'counter',counter
       ! Update this%struct_list%parent and point all parents to root
       do i=this%synch_offset+1,this%synch_offset+this%n_struct
          this%struct_list(this%struct_map_(i))%parent = find(this%parent(i))
       end do
-         ! if (irank.eq.print_rank) print *,"irank",irank,"this%parent     after find ",this%parent
-         ! Update id array with compacted and syncrhonized ids
+
+      ! Update id array with compacted and syncrhonized ids
       do i=this%synch_offset+1,this%synch_offset+this%n_struct
          do n=1,this%struct_list(this%struct_map_(i))%nnode
             ii = this%struct_list(this%struct_map_(i))%node(n,1)
             jj = this%struct_list(this%struct_map_(i))%node(n,2)
             kk = this%struct_list(this%struct_map_(i))%node(n,3)
             this%id(ii,jj,kk) = this%struct_list(this%struct_map_(i))%parent
-            ! this%id(ii,jj,kk) = this%struct_list(this%id(ii,jj,kk))%parent
          end do
       end do
-      ! print *,'rank',irank,'Done with tree collapse'
    
-     call struct_synch_per
-   !   print *,"irank",irank,'id before boundary update',this%id(11,11,:)
-   !   print *,"irank",irank,'this%parent before boundary update',this%parent
-   !   print *,"irank",irank,'this%border_id before boundary update [border,ghost]',this%border_id(4,11,11),this%border_id(3,11,11)
-   !   call MPI_BARRIER(this%cfg%comm,ierr)
+      ! Update periodicity array across processors
+      call struct_synch_per
+
       !! Update domain boundaries
       ! this%cfg%imin
       if (this%cfg%imin_.eq.this%cfg%imin) then
@@ -1192,21 +1136,11 @@ contains
             do k= this%cfg%kmin_,this%cfg%kmax_
                ! If the border cell and the neighboring ghost cell are filled
                if (this%id(this%cfg%imin,j,k).gt.0.and.this%border_id(this%cfg%imin-1,j,k).gt.0) then
-                  ! if (irank.eq.print_rank) print *,"ijk",this%cfg%imin,j,k
-                  ! if (irank.eq.print_rank) print *,"i ghost border",this%border_id(this%cfg%imin-1,j,k),this%id(this%cfg%imin,j,k)
-                  ! if (irank.eq.print_rank) print *,"i border parent",this%parent(this%id(this%cfg%imin,j,k))
-                  ! if (irank.eq.print_rank) print *,"this%parent",this%parent
-                  ! if (irank.eq.print_rank) print *,"find border root",find(this%id(this%cfg%imin,j,k))
-                  ! if (irank.eq.print_rank) print *,"find ghost root",find(this%border_id(this%cfg%imin-1,j,k))
                   ! If the border cell id already has a parent id, then union() the ghost cell id with the border cell id parent
                   if (this%parent(this%id(this%cfg%imin,j,k)).eq.this%id(this%cfg%imin,j,k)) then
-                     ! if (irank.eq.print_rank) print *,"create parentage"
                      if (is_connected(this%cfg%imin,j,k,1)) call union(this%id(this%cfg%imin,j,k),this%border_id(this%cfg%imin-1,j,k))
                      ! this%parent(this%id(this%cfg%imin,j,k)) = this%border_id(this%cfg%imin-1,j,k)
                   elseif (find(this%id(this%cfg%imin,j,k)).ne.find(this%border_id(this%cfg%imin-1,j,k))) then
-                     ! if (irank.eq.print_rank) print *,"structure borders two structures - union()"
-                     ! if (irank.eq.print_rank) print *,"parent of ghost/border",this%parent(this%border_id(this%cfg%imin-1,j,k)),this%parent(this%border_id(this%cfg%imin,j,k)) 
-                     ! if (irank.eq.print_rank) print *,"root   of ghost/border",find_only(this%border_id(this%cfg%imin-1,j,k)),find_only(this%border_id(this%cfg%imin,j,k)) 
                      if (is_connected(this%cfg%imin,j,k,1)) then
                         if (this%border_id(this%cfg%imin-1,j,k).gt.this%parent(this%id(this%cfg%imin,j,k))) then
                            call union(this%border_id(this%cfg%imin-1,j,k),this%parent(this%id(this%cfg%imin,j,k)))
@@ -1219,27 +1153,18 @@ contains
             end do
          end do
       end if
-      ! if (irank.eq.2) print *,"this%synch_offset",this%synch_offset
-      ! if (irank.eq.2) print *,"irank",irank,"border id ",this%border_id(this%cfg%imin,:,:)
-      ! if (irank.eq.2) print *,"irank",irank,"ghost id  ",this%border_id(this%cfg%imin-1,:,:)
-      ! if (irank.eq.2) print *,"irank",irank,"this%parent", this%parent
-   
-      ! if (irank.eq.print_rank) print *,"Starting this%cfg%jmin"
-      ! print *,"irank",irank,'starting this%cfg%jmin'
+
       ! this%cfg%jmin
       if (this%cfg%jmin_.eq.this%cfg%jmin) then
          do i= this%cfg%imin_,this%cfg%imax_
             do k= this%cfg%kmin_,this%cfg%kmax_
                ! If the neighboring ghost cell is filled
                if (this%id(i,this%cfg%jmin,k).gt.0.and.this%border_id(i,this%cfg%jmin-1,k).gt.0) then
-                  ! if (irank.eq.print_rank) print *,"j ghost border",this%border_id(i,this%cfg%jmin-1,k),this%id(i,this%cfg%jmin,k)
                   ! If the border cell id already has a parent id, then union() the ghost cell id with the border cell id parent
                   if (this%parent(this%id(i,this%cfg%jmin,k)).eq.this%id(i,this%cfg%jmin,k)) then 
-                     ! if (irank.eq.print_rank) print *,"create parentage"
                      if (is_connected(i,this%cfg%jmin,k,2)) call union(this%id(i,this%cfg%jmin,k),this%border_id(i,this%cfg%jmin-1,k))
                      ! this%parent(this%id(i,this%cfg%jmin,k)) = this%border_id(i,this%cfg%jmin-1,k)
                   elseif (find(this%id(i,this%cfg%jmin,k)).ne.find(this%border_id(i,this%cfg%jmin-1,k))) then
-                     ! if (irank.eq.print_rank) print *,"structure borders two structures - union()" 
                      ! call union(this%border_id(i,this%cfg%jmin-1,k),this%parent(this%id(i,this%cfg%jmin,k)))
                      if (is_connected(i,this%cfg%jmin,k,2)) then
                         if (this%border_id(i,this%cfg%jmin-1,k).gt.this%parent(this%id(i,this%cfg%jmin,k))) then
@@ -1253,26 +1178,18 @@ contains
             end do
          end do
       end if
-      ! if (irank.eq.2) print *,"irank",irank,"this%parent", this%parent
-   
-      ! if (irank.eq.print_rank) print *,"Starting this%cfg%kmin"
-      ! print *,"irank",irank,'starting this%cfg%kmin'
+
       ! this%cfg%kmin
       if (this%cfg%kmin_.eq.this%cfg%kmin) then
          do i= this%cfg%imin_,this%cfg%imax_
             do j= this%cfg%jmin_,this%cfg%jmax_
                ! If the neighboring ghost cell is filled
                if (this%id(i,j,this%cfg%kmin).gt.0.and.this%border_id(i,j,this%cfg%kmin-1).gt.0) then
-                  ! if (irank.eq.print_rank) print *,"k ghost border",this%border_id(i,j,this%cfg%kmin-1),this%id(i,j,this%cfg%kmin)
                   ! If the border cell id already has a parent id, then union() the ghost cell id with the border cell id parent
                   if (this%parent(this%id(i,j,this%cfg%kmin)).eq.this%id(i,j,this%cfg%kmin)) then 
-                     ! if (irank.eq.print_rank) print *,"create parentage"
                      if (is_connected(i,j,this%cfg%kmin,3)) call union(this%id(i,j,this%cfg%kmin),this%border_id(i,j,this%cfg%kmin-1))
                      ! this%parent(this%id(i,j,this%cfg%kmin)) = this%border_id(i,j,this%cfg%kmin-1)
                   elseif (find(this%id(i,j,this%cfg%kmin)).ne.find(this%border_id(i,j,this%cfg%kmin-1))) then
-                     ! if (irank.eq.print_rank) print *,"structure borders two structures - union()" 
-                     ! if (irank.eq.print_rank) print *,"parent of ghost/border",this%parent(this%border_id(i,j,this%cfg%kmin-1)),this%parent(this%id(i,j,this%cfg%kmin)) 
-                     ! if (irank.eq.print_rank) print *,"root   of ghost/border",find_only(this%border_id(i,j,this%cfg%kmin-1)),find_only(this%id(i,j,this%cfg%kmin)) 
                      ! call union(this%border_id(i,j,this%cfg%kmin-1),this%parent(this%id(i,j,this%cfg%kmin)))
                      if (is_connected(i,j,this%cfg%kmin,3)) then
                         if (this%border_id(i,j,this%cfg%kmin-1).gt.this%parent(this%id(i,j,this%cfg%kmin))) then
@@ -1286,14 +1203,12 @@ contains
             end do
          end do
       end if
-      ! if (irank.eq.print_rank) print *,"irank",irank,"this%parent after boundary synch", this%parent
    
       ! initialize global stop criterion
       stop_global = 1
    
       ! initialize a counter
       counter = 0
-      ! print *,"irank",irank,'starting do while 2'
    
       do while (stop_global.ne.0)
    
@@ -1308,32 +1223,18 @@ contains
    
          call MPI_ALLREDUCE(this%parent,this%parent_all,this%cfg%nproc*this%n_struct_max,MPI_INTEGER,MPI_MIN,this%cfg%comm,ierr)
    
-         ! print *,"counter",counter,"irank",irank,"after mpi"
          ! Set self-parents back to selves
          do i= 1,this%cfg%nproc*this%n_struct_max
             if (this%parent_all(i).eq.huge(1)) this%parent_all(i) = i
             ! if (this%parent_own(i).eq.huge(1)) this%parent_own(i) = i
          end do
-         ! if (irank.eq.print_rank) print *,"counter",counter,"irank",irank,"this%parent_all before flatten",this%parent_all
-         ! print *,"counter",counter,"irank",irank,"this%parent_all before flatten",this%parent_all
-         ! if (irank.eq.print_rank) print *,"counter",counter,"irank",irank,"this%parent_own before flatten",this%parent_own
-         ! print *,"counter",counter,"irank",irank,"this%parent_own before flatten",this%parent_own
+
          ! Flatten trees - is this necessary?
          do i= 1,this%cfg%nproc*this%n_struct_max
-            ! print *,"counter",counter,"irank",irank,"flatten all tree i",i
             this%parent_all(i) = find_all_2(i,i)
-            ! print *,"counter",counter,"irank",irank,"flatten own tree i",i
             this%parent_own(i) = find_own(i)
-            ! if (irank.eq.print_rank) print *,"counter",counter,"irank",irank,"i",i,"this%parent_all i",this%parent_all
          end do
-         ! print *,"counter",counter,"irank",irank,"after flatten"
-         ! ! Fill this%parent with selves again for printing
-         ! do i= 1,this%cfg%nproc*this%n_struct_max
-         !    this%parent(i) = i
-         ! end do
-         ! if (irank.eq.print_rank) print *, "irank",irank,"    struct_id         ",this%parent
-         ! print *,"counter",counter,"irank",irank,"this%parent_all before find",this%parent_all
-         ! print *,"counter",counter,"irank",irank,"before reconciliation"
+
          ! Start with final this%parent array being equal to this%parent_all
          this%parent = this%parent_all
    
@@ -1359,14 +1260,11 @@ contains
    
       end do ! do while (stop_global.ne.0) including domain boundaries
    
-      ! if (irank.eq.1) print *,'counter',counter
       ! Update this%struct_list%parent and point all parents to root
       do i=this%synch_offset+1,this%synch_offset+this%n_struct
             this%struct_list(this%struct_map_(i))%parent = find(this%parent(i))
-            ! print *,'this%struct_list%parent',this%struct_list(this%struct_map_(i))%parent
       end do
-      ! if (irank.eq.print_rank) print *,"irank",irank,"this%parent     after find ",this%parent
-      ! print *,'id before update',this%id(11,11,:)
+
       ! Update id array with compacted and syncrhonized ids
       do i=this%synch_offset+1,this%synch_offset+this%n_struct
          do n=1,this%struct_list(this%struct_map_(i))%nnode
@@ -1376,7 +1274,6 @@ contains
             this%id(ii,jj,kk) = this%struct_list(this%struct_map_(i))%parent
          end do
       end do
-      ! print *,'rank',irank,'Done with tree collapse'
    
       ! Update this%my_struct%id
       ! start marching thru list, starting at first_struct
@@ -1511,10 +1408,7 @@ contains
          return
       end function film_find
 
-      ! --------------------------------- !
-      ! Use PLIC normals to determine if  !
-      ! two cells are in the same struct  !
-      ! --------------------------------- !
+      ! Use PLIC normals to determine if two cells are in the same struct
       function is_connected(i,j,k,dim)
          implicit none
          integer, intent(in) :: i,j,k,dim
@@ -1557,9 +1451,7 @@ contains
          return
       end function is_connected
 
-      ! ------------------------------------------------ !
-      ! Synchronize struct periodicity across all procs  !
-      ! ------------------------------------------------ !
+      !> Synchronize struct periodicity across all procs
       subroutine struct_synch_per
          implicit none
          ! integer :: i,j,k,n,ii,jj,kk,stop_,stop_global,counter,ierr
@@ -1598,14 +1490,13 @@ contains
    
    end subroutine struct_synch
 
-   ! -------------------------------------- !
-   ! Synchronize film tags across all procs !
-   ! -------------------------------------- !
+
+   !> Synchronize film labels across all procs
    subroutine film_synch(this)
       use mpi_f08,  only: MPI_ALLREDUCE,MPI_MIN,MPI_MAX,MPI_INTEGER
       implicit none
       class(ccl), intent(inout) :: this
-      integer :: i,j,k,n,ii,jj,kk,stop_,stop_global,counter,ierr!,print_rank=2
+      integer :: i,j,k,n,ii,jj,kk,stop_,stop_global,counter,ierr
       integer :: find_parent,find_parent_own
    
       ! Eventually replace with sum(n_struct_per_processor(1:irank)) or border_struct equivalent
@@ -1621,7 +1512,7 @@ contains
    
       ! update ghost cells
       call this%cfg%sync(this%film_border_id)      
-      ! if (irank.eq.print_rank) print *,"Starting imin_"
+
       ! imin_
       if (this%cfg%imin_.ne.this%cfg%imin) then
          do j= this%cfg%jmin_,this%cfg%jmax_
@@ -1630,15 +1521,11 @@ contains
                if (this%film_border_id(this%cfg%imin_,j,k).gt.0.and.this%film_border_id(this%cfg%imin_-1,j,k).gt.0) then
                   ! If the border cell id already has a parent id, then union() the ghost cell id with the border cell id parent
                   if (this%film_parent(this%film_border_id(this%cfg%imin_,j,k)).eq.this%film_border_id(this%cfg%imin_,j,k)) then
-                     ! if (irank.eq.print_rank) print *,"create parentage"
                      ! call union(this%film_border_id(this%cfg%imin_,j,k),this%film_border_id(this%cfg%imin_-1,j,k))
                      ! is_contiguous = is_connected(this%cfg%imin_,j,k,1)
                      ! if (is_contiguous) parent(this%film_border_id(this%cfg%imin_,j,k)) = this%film_border_id(this%cfg%imin_-1,j,k)
                      if (is_connected(this%cfg%imin_,j,k,1)) this%film_parent(this%film_border_id(this%cfg%imin_,j,k)) = this%film_border_id(this%cfg%imin_-1,j,k)
                   elseif (find(this%film_border_id(this%cfg%imin_,j,k)).ne.find(this%film_border_id(this%cfg%imin_-1,j,k))) then
-                     ! if (irank.eq.print_rank) print *,"structure borders two structures - union()"
-                     ! if (irank.eq.print_rank) print *,"parent of ghost/border",this%film_parent(this%film_border_id(this%cfg%imin_-1,j,k)),this%film_parent(this%film_border_id(this%cfg%imin_,j,k)) 
-                     ! if (irank.eq.print_rank) print *,"root   of ghost/border",find_only(this%film_border_id(this%cfg%imin_-1,j,k)),find_only(this%film_border_id(this%cfg%imin_,j,k)) 
                      ! call union(this%film_border_id(this%cfg%imin_-1,j,k),this%film_parent(this%film_border_id(this%cfg%imin_,j,k)))
                      if (is_connected(this%cfg%imin_,j,k,1)) then
                         if (this%film_border_id(this%cfg%imin_-1,j,k).gt.this%film_parent(this%film_border_id(this%cfg%imin_,j,k))) then
@@ -1652,28 +1539,18 @@ contains
             end do
          end do
       end if
-      ! if (irank.eq.2) print *,"this%film_synch_offset",this%film_synch_offset
-      ! if (irank.eq.2) print *,"irank",irank,"border id ",this%film_border_id(this%cfg%imin_,:,:)
-      ! if (irank.eq.2) print *,"irank",irank,"ghost id  ",this%film_border_id(this%cfg%imin_-1,:,:)
-      ! if (irank.eq.2) print *,"irank",irank,"this%film_parent", this%film_parent
-   
-      ! if (irank.eq.print_rank) print *,"Starting this%cfg%jmin_"
+
       ! this%cfg%jmin_
       if (this%cfg%jmin_.ne.this%cfg%jmin) then
          do i= this%cfg%imin_,this%cfg%imax_
             do k= this%cfg%kmin_,this%cfg%kmax_
                ! If the border cell and the neighboring ghost cell are filled
                if (this%film_border_id(i,this%cfg%jmin_,k).gt.0.and.this%film_border_id(i,this%cfg%jmin_-1,k).gt.0) then
-                  ! if (irank.eq.print_rank) print *,"ghost border",this%film_border_id(i,this%cfg%jmin_-1,k),this%film_border_id(i,this%cfg%jmin_,k)
                   ! If the border cell id already has a parent id, then union() the ghost cell id with the border cell id parent
                   if (this%film_parent(this%film_border_id(i,this%cfg%jmin_,k)).eq.this%film_border_id(i,this%cfg%jmin_,k)) then 
-                     ! if (irank.eq.print_rank) print *,"create parentage"
                      ! call union(this%film_border_id(i,this%cfg%jmin_,k),this%film_border_id(i,this%cfg%jmin_-1,k))
                      if (is_connected(i,this%cfg%jmin_,k,2)) this%film_parent(this%film_border_id(i,this%cfg%jmin_,k)) = this%film_border_id(i,this%cfg%jmin_-1,k)
                   elseif (find(this%film_border_id(i,this%cfg%jmin_,k)).ne.find(this%film_border_id(i,this%cfg%jmin_-1,k))) then
-                     ! if (irank.eq.print_rank) print *,"structure borders two structures - union()" 
-                  ! if (irank.eq.print_rank) print *,"structure borders two structures - union()" 
-                     ! if (irank.eq.print_rank) print *,"structure borders two structures - union()" 
                      ! call union(this%film_border_id(i,this%cfg%jmin_-1,k),this%film_parent(this%film_border_id(i,this%cfg%jmin_,k)))
                      if (is_connected(i,this%cfg%jmin_,k,2)) then
                         if (this%film_border_id(i,this%cfg%jmin_-1,k).gt.this%film_parent(this%film_border_id(i,this%cfg%jmin_,k))) then
@@ -1687,25 +1564,18 @@ contains
             end do
          end do
       end if
-      ! if (irank.eq.2) print *,"irank",irank,"this%film_parent", this%film_parent
-   
-      ! if (irank.eq.print_rank) print *,"Starting this%cfg%kmin_"
+
       ! this%cfg%kmin_
       if (this%cfg%kmin_.ne.this%cfg%kmin) then
          do i= this%cfg%imin_,this%cfg%imax_
             do j= this%cfg%jmin_,this%cfg%jmax_
                ! If the neighboring ghost cell is filled
                if (this%film_border_id(i,j,this%cfg%kmin_).gt.0.and.this%film_border_id(i,j,this%cfg%kmin_-1).gt.0) then
-                  ! if (irank.eq.print_rank) print *,"ghost border",this%film_border_id(i,j,this%cfg%kmin_-1),this%film_border_id(i,j,this%cfg%kmin_)
                   ! If the border cell id already has a parent id, then union() the ghost cell id with the border cell id parent
                   if (this%film_parent(this%film_border_id(i,j,this%cfg%kmin_)).eq.this%film_border_id(i,j,this%cfg%kmin_)) then 
-                     ! if (irank.eq.print_rank) print *,"create parentage"
                      ! call union(this%film_border_id(i,j,this%cfg%kmin_),this%film_border_id(i,j,this%cfg%kmin_-1))
                      if (is_connected(i,j,this%cfg%kmin_,3)) this%film_parent(this%film_border_id(i,j,this%cfg%kmin_)) = this%film_border_id(i,j,this%cfg%kmin_-1)
                   elseif (find(this%film_border_id(i,j,this%cfg%kmin_)).ne.find(this%film_border_id(i,j,this%cfg%kmin_-1))) then
-                     ! if (irank.eq.print_rank) print *,"structure borders two structures - union()" 
-                     ! if (irank.eq.print_rank) print *,"parent of ghost/border",this%film_parent(this%film_border_id(i,j,this%cfg%kmin_-1)),this%film_parent(this%film_border_id(i,j,this%cfg%kmin_)) 
-                     ! if (irank.eq.print_rank) print *,"root   of ghost/border",find_only(this%film_border_id(i,j,this%cfg%kmin_-1)),find_only(this%film_border_id(i,j,this%cfg%kmin_)) 
                      ! call union(this%film_border_id(i,j,this%cfg%kmin_-1),this%film_parent(this%film_border_id(i,j,this%cfg%kmin_)))
                      if (is_connected(i,j,this%cfg%kmin_,3)) then 
                         if (this%film_border_id(i,j,this%cfg%kmin_-1).gt.this%film_parent(this%film_border_id(i,j,this%cfg%kmin_))) then
@@ -1719,7 +1589,6 @@ contains
             end do
          end do
       end if
-      ! if (irank.eq.2) print *,"irank",irank,"this%film_parent", this%film_parent
    
       ! initialize global stop criterion
       stop_global = 1
@@ -1740,32 +1609,18 @@ contains
    
          call MPI_ALLREDUCE(this%film_parent,this%film_parent_all,this%cfg%nproc*this%n_film_max,MPI_INTEGER,MPI_MIN,this%cfg%comm,ierr)
    
-         ! print *,"counter",counter,"irank",irank,"after mpi"
          ! Set self-parents back to selves
          do i= 1,this%cfg%nproc*this%n_film_max
             if (this%film_parent_all(i).eq.huge(1)) this%film_parent_all(i) = i
             ! if (this%film_parent_own(i).eq.huge(1)) this%film_parent_own(i) = i
-           end do
-         ! if (irank.eq.print_rank) print *,"counter",counter,"irank",irank,"this%film_parent_all before flatten",this%film_parent_all
-         ! print *,"counter",counter,"irank",irank,"this%film_parent_all before flatten",this%film_parent_all
-         ! if (irank.eq.print_rank) print *,"counter",counter,"irank",irank,"this%film_parent_own before flatten",this%film_parent_own
-         ! print *,"counter",counter,"irank",irank,"this%film_parent_own before flatten",this%film_parent_own
+         end do
+
          ! Flatten trees - is this necessary?
          do i= 1,this%cfg%nproc*this%n_film_max
-            ! print *,"counter",counter,"irank",irank,"flatten all tree i",i
             this%film_parent_all(i) = find_all(i)
-            ! print *,"counter",counter,"irank",irank,"flatten own tree i",i
             this%film_parent_own(i) = find_own(i)
-                  ! if (irank.eq.print_rank) print *,"counter",counter,"irank",irank,"i",i,"this%film_parent_all i",this%film_parent_all
          end do
-         ! print *,"counter",counter,"irank",irank,"after flatten"
-         ! ! Fill this%film_parent with selves again for printing
-         ! do i= 1,this%cfg%nproc*this%n_film_max
-         !    this%film_parent(i) = i
-         ! end do
-         ! if (irank.eq.print_rank) print *, "irank",irank,"    struct_id         ",this%film_parent
-         ! print *,"counter",counter,"irank",irank,"this%film_parent_all before find",this%film_parent_all
-         ! print *,"counter",counter,"irank",irank,"before reconciliation"
+
          ! Start with final this%film_parent array being equal to this%film_parent_all
          this%film_parent = this%film_parent_all
    
@@ -1778,7 +1633,6 @@ contains
                find_parent_own = find(this%film_parent_own(i))
                find_parent = find(this%film_parent(i))
                if (find_parent_own.gt.find_parent) then
-                  ! print *,"counter",counter,"irank",irank,"reconciliation union between",this%film_parent_own(i),this%film_parent(i),"find_own(this%film_parent_own) find(this%film_parent) find(this%film_parent_own)",find_own(this%film_parent_own(i)),find(this%film_parent(i)),find(this%film_parent_own(i))
                   call union(this%film_parent_own(i),this%film_parent(i))
                   stop_ = 1
                else if (find_parent.gt.find_parent_own) then
@@ -1792,13 +1646,12 @@ contains
    
       end do ! do while (stop_global.ne.0) excluding domain boundaries
    
-      ! if (irank.eq.1) print *,'counter',counter
       ! Update this%film_list%film_parent and point all parents to root
       do i=this%film_synch_offset+1,this%film_synch_offset+this%n_film
          this%film_list(this%film_map_(i))%parent = find(this%film_parent(i))
       end do
-         ! if (irank.eq.print_rank) print *,"irank",irank,"this%film_parent     after find ",this%film_parent
-         ! Update id array with compacted and syncrhonized ids
+      
+      ! Update id array with compacted and syncrhonized ids
       do i=this%film_synch_offset+1,this%film_synch_offset+this%n_film
          do n=1,this%film_list(this%film_map_(i))%nnode
             ii = this%film_list(this%film_map_(i))%node(n,1)
@@ -1808,13 +1661,9 @@ contains
             ! this%film_id(ii,jj,kk) = this%film_list(this%film_id(ii,jj,kk))%parent
          end do
       end do
-      ! print *,'rank',irank,'Done with tree collapse'
    
-   !   call film_synch_per
-   !   print *,"irank",irank,'id before boundary update',this%film_id(11,11,:)
-   !   print *,"irank",irank,'this%film_parent before boundary update',this%film_parent
-   !   print *,"irank",irank,'this%film_border_id before boundary update [border,ghost]',this%film_border_id(4,11,11),this%film_border_id(3,11,11)
-   !   call MPI_BARRIER(this%cfg%comm,ierr)
+   !   call film_synch_per ! only if we need to keep track of film periodicity
+
       !! Update domain boundaries
       ! this%cfg%imin
       if (this%cfg%imin_.eq.this%cfg%imin) then
@@ -1822,21 +1671,11 @@ contains
             do k= this%cfg%kmin_,this%cfg%kmax_
                ! If the border cell and the neighboring ghost cell are filled
                if (this%film_id(this%cfg%imin,j,k).gt.0.and.this%film_border_id(this%cfg%imin-1,j,k).gt.0) then
-                  ! if (irank.eq.print_rank) print *,"ijk",this%cfg%imin,j,k
-                  ! if (irank.eq.print_rank) print *,"i ghost border",this%film_border_id(this%cfg%imin-1,j,k),this%film_id(this%cfg%imin,j,k)
-                  ! if (irank.eq.print_rank) print *,"i border parent",this%film_parent(this%film_id(this%cfg%imin,j,k))
-                  ! if (irank.eq.print_rank) print *,"this%film_parent",this%film_parent
-                  ! if (irank.eq.print_rank) print *,"find border root",find(this%film_id(this%cfg%imin,j,k))
-                  ! if (irank.eq.print_rank) print *,"find ghost root",find(this%film_border_id(this%cfg%imin-1,j,k))
                   ! If the border cell id already has a parent id, then union() the ghost cell id with the border cell id parent
                   if (this%film_parent(this%film_id(this%cfg%imin,j,k)).eq.this%film_id(this%cfg%imin,j,k)) then
-                     ! if (irank.eq.print_rank) print *,"create parentage"
                      if (is_connected(this%cfg%imin,j,k,1)) call union(this%film_id(this%cfg%imin,j,k),this%film_border_id(this%cfg%imin-1,j,k))
                      ! this%film_parent(this%film_id(this%cfg%imin,j,k)) = this%film_border_id(this%cfg%imin-1,j,k)
                   elseif (find(this%film_id(this%cfg%imin,j,k)).ne.find(this%film_border_id(this%cfg%imin-1,j,k))) then
-                     ! if (irank.eq.print_rank) print *,"structure borders two structures - union()"
-                     ! if (irank.eq.print_rank) print *,"parent of ghost/border",this%film_parent(this%film_border_id(this%cfg%imin-1,j,k)),this%film_parent(this%film_border_id(this%cfg%imin,j,k)) 
-                     ! if (irank.eq.print_rank) print *,"root   of ghost/border",find_only(this%film_border_id(this%cfg%imin-1,j,k)),find_only(this%film_border_id(this%cfg%imin,j,k)) 
                      if (is_connected(this%cfg%imin,j,k,1)) then
                         if (this%film_border_id(this%cfg%imin-1,j,k).gt.this%film_parent(this%film_id(this%cfg%imin,j,k))) then
                            call union(this%film_border_id(this%cfg%imin-1,j,k),this%film_parent(this%film_id(this%cfg%imin,j,k)))
@@ -1849,27 +1688,18 @@ contains
             end do
          end do
       end if
-      ! if (irank.eq.2) print *,"this%film_synch_offset",this%film_synch_offset
-      ! if (irank.eq.2) print *,"irank",irank,"border id ",this%film_border_id(this%cfg%imin,:,:)
-      ! if (irank.eq.2) print *,"irank",irank,"ghost id  ",this%film_border_id(this%cfg%imin-1,:,:)
-      ! if (irank.eq.2) print *,"irank",irank,"this%film_parent", this%film_parent
-   
-      ! if (irank.eq.print_rank) print *,"Starting this%cfg%jmin"
-      ! print *,"irank",irank,'starting this%cfg%jmin'
+
       ! this%cfg%jmin
       if (this%cfg%jmin_.eq.this%cfg%jmin) then
          do i= this%cfg%imin_,this%cfg%imax_
             do k= this%cfg%kmin_,this%cfg%kmax_
                ! If the neighboring ghost cell is filled
                if (this%film_id(i,this%cfg%jmin,k).gt.0.and.this%film_border_id(i,this%cfg%jmin-1,k).gt.0) then
-                  ! if (irank.eq.print_rank) print *,"j ghost border",this%film_border_id(i,this%cfg%jmin-1,k),this%film_id(i,this%cfg%jmin,k)
                   ! If the border cell id already has a parent id, then union() the ghost cell id with the border cell id parent
                   if (this%film_parent(this%film_id(i,this%cfg%jmin,k)).eq.this%film_id(i,this%cfg%jmin,k)) then 
-                     ! if (irank.eq.print_rank) print *,"create parentage"
                      if (is_connected(i,this%cfg%jmin,k,2)) call union(this%film_id(i,this%cfg%jmin,k),this%film_border_id(i,this%cfg%jmin-1,k))
                      ! this%film_parent(this%film_id(i,this%cfg%jmin,k)) = this%film_border_id(i,this%cfg%jmin-1,k)
                   elseif (find(this%film_id(i,this%cfg%jmin,k)).ne.find(this%film_border_id(i,this%cfg%jmin-1,k))) then
-                     ! if (irank.eq.print_rank) print *,"structure borders two structures - union()" 
                      ! call union(this%film_border_id(i,this%cfg%jmin-1,k),this%film_parent(this%film_id(i,this%cfg%jmin,k)))
                      if (is_connected(i,this%cfg%jmin,k,2)) then
                         if (this%film_border_id(i,this%cfg%jmin-1,k).gt.this%film_parent(this%film_id(i,this%cfg%jmin,k))) then
@@ -1883,26 +1713,18 @@ contains
             end do
          end do
       end if
-      ! if (irank.eq.2) print *,"irank",irank,"this%film_parent", this%film_parent
-   
-      ! if (irank.eq.print_rank) print *,"Starting this%cfg%kmin"
-      ! print *,"irank",irank,'starting this%cfg%kmin'
+
       ! this%cfg%kmin
       if (this%cfg%kmin_.eq.this%cfg%kmin) then
          do i= this%cfg%imin_,this%cfg%imax_
             do j= this%cfg%jmin_,this%cfg%jmax_
                ! If the neighboring ghost cell is filled
                if (this%film_id(i,j,this%cfg%kmin).gt.0.and.this%film_border_id(i,j,this%cfg%kmin-1).gt.0) then
-                  ! if (irank.eq.print_rank) print *,"k ghost border",this%film_border_id(i,j,this%cfg%kmin-1),this%film_id(i,j,this%cfg%kmin)
                   ! If the border cell id already has a parent id, then union() the ghost cell id with the border cell id parent
                   if (this%film_parent(this%film_id(i,j,this%cfg%kmin)).eq.this%film_id(i,j,this%cfg%kmin)) then 
-                     ! if (irank.eq.print_rank) print *,"create parentage"
                      if (is_connected(i,j,this%cfg%kmin,3)) call union(this%film_id(i,j,this%cfg%kmin),this%film_border_id(i,j,this%cfg%kmin-1))
                      ! this%film_parent(this%film_id(i,j,this%cfg%kmin)) = this%film_border_id(i,j,this%cfg%kmin-1)
                   elseif (find(this%film_id(i,j,this%cfg%kmin)).ne.find(this%film_border_id(i,j,this%cfg%kmin-1))) then
-                     ! if (irank.eq.print_rank) print *,"structure borders two structures - union()" 
-                     ! if (irank.eq.print_rank) print *,"parent of ghost/border",this%film_parent(this%film_border_id(i,j,this%cfg%kmin-1)),this%film_parent(this%film_id(i,j,this%cfg%kmin)) 
-                     ! if (irank.eq.print_rank) print *,"root   of ghost/border",find_only(this%film_border_id(i,j,this%cfg%kmin-1)),find_only(this%film_id(i,j,this%cfg%kmin)) 
                      ! call union(this%film_border_id(i,j,this%cfg%kmin-1),this%film_parent(this%film_id(i,j,this%cfg%kmin)))
                      if (is_connected(i,j,this%cfg%kmin,3)) then
                         if (this%film_border_id(i,j,this%cfg%kmin-1).gt.this%film_parent(this%film_id(i,j,this%cfg%kmin))) then
@@ -1916,14 +1738,12 @@ contains
             end do
          end do
       end if
-      ! if (irank.eq.print_rank) print *,"irank",irank,"this%film_parent after boundary synch", this%film_parent
    
       ! initialize global stop criterion
       stop_global = 1
    
       ! initialize a counter
       counter = 0
-      ! print *,"irank",irank,'starting do while 2'
    
       do while (stop_global.ne.0)
    
@@ -1938,32 +1758,17 @@ contains
    
          call MPI_ALLREDUCE(this%film_parent,this%film_parent_all,this%cfg%nproc*this%n_film_max,MPI_INTEGER,MPI_MIN,this%cfg%comm,ierr)
    
-         ! print *,"counter",counter,"irank",irank,"after mpi"
          ! Set self-parents back to selves
          do i= 1,this%cfg%nproc*this%n_film_max
             if (this%film_parent_all(i).eq.huge(1)) this%film_parent_all(i) = i
-            ! if (this%film_parent_own(i).eq.huge(1)) this%film_parent_own(i) = i
          end do
-         ! if (irank.eq.print_rank) print *,"counter",counter,"irank",irank,"this%film_parent_all before flatten",this%film_parent_all
-         ! print *,"counter",counter,"irank",irank,"this%film_parent_all before flatten",this%film_parent_all
-         ! if (irank.eq.print_rank) print *,"counter",counter,"irank",irank,"this%film_parent_own before flatten",this%film_parent_own
-         ! print *,"counter",counter,"irank",irank,"this%film_parent_own before flatten",this%film_parent_own
+
          ! Flatten trees - is this necessary?
          do i= 1,this%cfg%nproc*this%n_film_max
-            ! print *,"counter",counter,"irank",irank,"flatten all tree i",i
             this%film_parent_all(i) = find_all_2(i,i)
-            ! print *,"counter",counter,"irank",irank,"flatten own tree i",i
             this%film_parent_own(i) = find_own(i)
-            ! if (irank.eq.print_rank) print *,"counter",counter,"irank",irank,"i",i,"this%film_parent_all i",this%film_parent_all
          end do
-         ! print *,"counter",counter,"irank",irank,"after flatten"
-         ! ! Fill this%film_parent with selves again for printing
-         ! do i= 1,this%cfg%nproc*this%n_film_max
-         !    this%film_parent(i) = i
-         ! end do
-         ! if (irank.eq.print_rank) print *, "irank",irank,"    struct_id         ",this%film_parent
-         ! print *,"counter",counter,"irank",irank,"this%film_parent_all before find",this%film_parent_all
-         ! print *,"counter",counter,"irank",irank,"before reconciliation"
+
          ! Start with final this%film_parent array being equal to this%film_parent_all
          this%film_parent = this%film_parent_all
    
@@ -1989,14 +1794,11 @@ contains
    
       end do ! do while (stop_global.ne.0) including domain boundaries
    
-      ! if (irank.eq.1) print *,'counter',counter
       ! Update this%film_list%film_parent and point all parents to root
       do i=this%film_synch_offset+1,this%film_synch_offset+this%n_film
             this%film_list(this%film_map_(i))%parent = find(this%film_parent(i))
-            ! print *,'this%film_list%film_parent',this%film_list(this%film_map_(i))%parent
       end do
-      ! if (irank.eq.print_rank) print *,"irank",irank,"this%film_parent     after find ",this%film_parent
-      ! print *,'id before update',this%film_id(11,11,:)
+
       ! Update id array with compacted and syncrhonized ids
       do i=this%film_synch_offset+1,this%film_synch_offset+this%n_film
          do n=1,this%film_list(this%film_map_(i))%nnode
@@ -2006,24 +1808,7 @@ contains
             this%film_id(ii,jj,kk) = this%film_list(this%film_map_(i))%parent
          end do
       end do
-      ! print *,'rank',irank,'Done with tree collapse'
-   
-      ! ! Update my_struct%film_id
-      ! ! start marching thru list, starting at first_struct
-      ! my_struct => first_struct
-      
-      ! do while(associated(my_struct))
-      !    ii = my_struct%node(1,1)
-      !    jj = my_struct%node(1,2)
-      !    kk = my_struct%node(1,3)
-      !    ! Update structure id with id cell value
-      !    my_struct%film_id  = this%film_id(ii,jj,kk)
-         
-      !    ! Go to next structure
-      !    my_struct => my_struct%next
-      
-      ! end do
-   
+
       return
    
    contains
@@ -2072,9 +1857,8 @@ contains
          return
       end subroutine union  
    
-   ! For this%film_parent_all array
-   ! This function points the this%film_parent to root and returns that root
-   
+      ! For this%film_parent_all array
+      ! This function points the this%film_parent to root and returns that root
       recursive function find_all(a_x) result(a_y)
          implicit none
          integer :: a_x
@@ -2141,10 +1925,8 @@ contains
          return
       end function film_find
 
-      ! --------------------------------- !
-      ! Use PLIC normals to determine if  !
-      ! two cells are in the same struct  !
-      ! --------------------------------- !
+      ! Use PLIC normals to determine if two cells are in the same film
+      ! Fow now, always connected
       function is_connected(i,j,k,dim)
          implicit none
          integer, intent(in) :: i,j,k,dim
@@ -2187,9 +1969,7 @@ contains
          return
       end function is_connected
 
-      ! ------------------------------------------------ !
-      ! Synchronize struct periodicity across all procs  !
-      ! ------------------------------------------------ !
+      ! Synchronize struct periodicity across all procs
       subroutine film_synch_per
          implicit none
 
@@ -2226,11 +2006,9 @@ contains
    
    end subroutine film_synch
 
-   ! ----------------------------------------------- !
-   ! Final update of struct tag id's in global array !
-   ! Not sure we need this...perhaps for extension   !
-   ! ----------------------------------------------- !
-   subroutine struct_tag_update(this)
+
+   !> Final update of struct labels in global array
+   subroutine struct_label_update(this)
       implicit none
       class(ccl), intent(inout) :: this
       integer :: i,ii,jj,kk,n_node,tag_final
@@ -2267,11 +2045,10 @@ contains
       end do
     
       return
-   end subroutine struct_tag_update
+   end subroutine struct_label_update
 
-   ! ------------------------- !
-   ! Build array of meta_structures !
-   ! ------------------------- !
+
+   !> Build array of meta_structures
    subroutine struct_final(this,U,V,W)
       use mpi_f08,  only: MPI_ALLREDUCE,MPI_SUM,MPI_INTEGER
       implicit none
@@ -2315,10 +2092,9 @@ contains
       
       return
    end subroutine struct_final
-    
-   ! ------------------------------------------------------------------- !
-   ! Sort list of ID tags, purge extra elements, eliminate duplicates    !
-   ! ------------------------------------------------------------------- !
+
+
+   !> Sort list of ID tags, purge extra elements, eliminate duplicates
    subroutine meta_structures_sort(this)
       use quicksort, only: quick_sort_int
       implicit none
@@ -2355,9 +2131,8 @@ contains
       return
    end subroutine meta_structures_sort
    
-   ! -------------------------------------- !
-   ! Compute stats for full meta_structures !
-   ! -------------------------------------- !
+
+   !> Compute stats for full meta-structures
    subroutine meta_structures_stats(this,U,V,W)
       use mpi_f08,   only: MPI_ALLREDUCE,MPI_SUM
       use parallel,  only: MPI_REAL_WP
@@ -2486,11 +2261,7 @@ contains
                   Imom_(i,1,2) = Imom_(i,1,2) - xtmp*ytmp*this%cfg%vol(ii,jj,kk)*this%VF(ii,jj,kk)
                   Imom_(i,1,3) = Imom_(i,1,3) - xtmp*ztmp*this%cfg%vol(ii,jj,kk)*this%VF(ii,jj,kk)
                   Imom_(i,2,3) = Imom_(i,2,3) - ytmp*ztmp*this%cfg%vol(ii,jj,kk)*this%VF(ii,jj,kk)
-      
-                  Imom_(i,2,1) = Imom_(i,1,2)               
-                  Imom_(i,3,1) = Imom_(i,1,3) 
-                  Imom_(i,3,2) = Imom_(i,2,3) 
-      
+
                end do
             end if
             this%my_struct => this%my_struct%next
@@ -2542,7 +2313,7 @@ contains
          A = Imom(i,:,:)
          n = 3
          ! On exit, A contains eigenvectors, and d contains eigenvalues in ascending order
-         call dsyev('V','L',n,A,n,d,work,lwork,info)
+         call dsyev('V','U',n,A,n,d,work,lwork,info)
          ! Get rid of very small negative values (due to machine accuracy)
          d = max(0.0_WP,d)
          ! Store characteristic lenths
@@ -2578,7 +2349,7 @@ contains
          close(iunit)
       end if
       
-      ! deallocate arrays
+      ! Deallocate arrays
       deallocate(vol_struct_,x_vol_,y_vol_,z_vol_,u_vol_,v_vol_,w_vol_,Imom_)
       deallocate(vol_struct,x_vol,y_vol,z_vol,u_vol,v_vol,w_vol,Imom)
       deallocate(x_cg,y_cg,z_cg)
@@ -2589,9 +2360,8 @@ contains
       return
    end subroutine meta_structures_stats
 
-   ! --------------------------- !
-   ! Deallocate local structures !
-   ! --------------------------- !
+
+   !> Deallocate local structures
    subroutine kill_struct(this)
       implicit none
       class(ccl), intent(inout) :: this
@@ -2624,11 +2394,14 @@ contains
       deallocate(this%parent_own)
       deallocate(this%per_)
       deallocate(this%per)
-      deallocate(this%film_parent)
-      deallocate(this%film_parent_all)
-      deallocate(this%film_parent_own)
+      if (this%max_interface_planes.eq.2) then
+         deallocate(this%film_parent)
+         deallocate(this%film_parent_all)
+         deallocate(this%film_parent_own)
+      end if
 
       return
    end subroutine kill_struct
+
 
 end module ccl_class
