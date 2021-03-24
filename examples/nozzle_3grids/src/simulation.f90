@@ -871,7 +871,6 @@ contains
          call ens_out3%add_vector('velocity',Ui3,Vi3,Wi3)
          call ens_out3%add_scalar('visc_t',sgs3%visc)
          call ens_out3%add_particle('spray',lp3%pmesh)
-         call ens_out3%add_vector('velocity2',U2on3,V2on3,W2on3)
          ! Output to ensight
          if (ens_evt3%occurs()) call ens_out3%write_data(time3%t)
       end block create_ensight3
