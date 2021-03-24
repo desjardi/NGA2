@@ -98,7 +98,7 @@ module ccl_class
       real(WP) :: VFlo=1.0e-10_WP                            !< Minimum VF value considered for a structure to exist
       real(WP) :: dot_threshold=-0.5_WP                      !< Maximum dot product of two interface normals for their respective cells to be considered film cells
       real(WP) :: thickness_cutoff=0.5_WP                    !< Maximum film thickness as fraction of meshsize
-   
+
       ! Feature counts
       integer :: n_struct, n_struct_max !, n_border_struct, n_border_struct_max
       integer :: n_film, n_film_max !, n_border_film, n_border_film_max
@@ -589,32 +589,36 @@ contains
             do i=this%cfg%imin_,this%cfg%imax_
                ! Find untagged point in film
                if (this%film_phase(i,j,k).gt.0) then
-                  do dim = 1,3
-                     pos = 0
-                     pos(dim) = -1
-                     ii = i + pos(1)
-                     jj = j + pos(2)
-                     kk = k + pos(3)
-                     if (this%film_id(ii,jj,kk).gt.0) then ! Liquid neighbors should already be labeled
-                        if (this%film_id(i,j,k).ne.0) then
-                           this%film_id(i,j,k) = union(this%film_list,this%film_id(i,j,k),this%film_id(ii,jj,kk))
-                        else
-                           ! Propagate neighbor label
-                           this%film_id(i,j,k) = this%film_id(ii,jj,kk)
+                  if (calculate_film_thickness(i,j,k).lt.this%thickness_cutoff*this%cfg%meshsize(i,j,k)) then
+                     do dim = 1,3
+                        pos = 0
+                        pos(dim) = -1
+                        ii = i + pos(1)
+                        jj = j + pos(2)
+                        kk = k + pos(3)
+                        if (this%film_id(ii,jj,kk).gt.0) then ! Liquid neighbors should already be labeled
+                           if (this%film_id(i,j,k).ne.0) then
+                              this%film_id(i,j,k) = union(this%film_list,this%film_id(i,j,k),this%film_id(ii,jj,kk))
+                           else
+                              ! Propagate neighbor label
+                              this%film_id(i,j,k) = this%film_id(ii,jj,kk)
+                           end if
                         end if
-                     end if
-                     if (this%film_id(i,j,k).eq.0) then
-                        ! Create new label
-                        idd = idd + 1
-                        this%film_id(i,j,k) = idd
-                        this%film_list(idd)%parent = idd
-                     end if
-                  end do
-                  ! Periodicity
-                  if (this%cfg%xper .and. i.eq.this%cfg%imax) this%film_list(this%film_id(i,j,k))%per(1) = 1
-                  if (this%cfg%yper .and. j.eq.this%cfg%jmax) this%film_list(this%film_id(i,j,k))%per(2) = 1
-                  if (this%cfg%zper .and. k.eq.this%cfg%kmax) this%film_list(this%film_id(i,j,k))%per(3) = 1 
-                  this%film_idp(i,j,k,:) = this%film_list(this%film_id(i,j,k))%per
+                        if (this%film_id(i,j,k).eq.0) then
+                           ! Create new label
+                           idd = idd + 1
+                           this%film_id(i,j,k) = idd
+                           this%film_list(idd)%parent = idd
+                        end if
+                     end do
+                     ! Periodicity
+                     if (this%cfg%xper .and. i.eq.this%cfg%imax) this%film_list(this%film_id(i,j,k))%per(1) = 1
+                     if (this%cfg%yper .and. j.eq.this%cfg%jmax) this%film_list(this%film_id(i,j,k))%per(2) = 1
+                     if (this%cfg%zper .and. k.eq.this%cfg%kmax) this%film_list(this%film_id(i,j,k))%per(3) = 1 
+                     this%film_idp(i,j,k,:) = this%film_list(this%film_id(i,j,k))%per
+                  else
+                     this%film_phase(i,j,k) = 0
+                  end if
                end if
             end do ! k
          end do ! j
