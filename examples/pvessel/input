@@ -23,7 +23,7 @@ Initial temperature : 300
 Inlet temperature :   430
 Initial pressure :    4.47e5  !101325
 Inlet MFR (kg/s) :    0.20
-Wall temperature :    300  ! Comment out for adiabatic
+Wall temperature :    !300  ! Comment out for adiabatic
 
 # Time integration
 Max timestep size : 5e-2
@@ -42,5 +42,5 @@ Implicit iteration : 100
 Ensight output period : 1
 
 # Restart and save
-Restart output period : 60
+Restart output period : 600
 Restart from :          !restart_2.00100E+00
