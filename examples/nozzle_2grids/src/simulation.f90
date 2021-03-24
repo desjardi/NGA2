@@ -295,11 +295,15 @@ contains
       
       ! Initialize our VOF solver and field
       create_and_initialize_vof2: block
-         use vfs_class, only: lvira
+         use vfs_class, only: lvira,r2p
          integer :: i,j,k
          real(WP) :: xloc,rad
-         ! Create a VOF solver
+         ! Create a VOF solver with LVIRA
          vf2=vfs(cfg=cfg2,reconstruction_method=lvira,name='VOF')
+         ! Create a VOF solver with R2P
+         !vf2=vfs(cfg=cfg2,reconstruction_method=r2p,name='VOF')
+         !vf2%VFflot =1.0e-4_WP !< Enables flotsam removal
+         !vf2%VFsheet=1.0e-2_WP !< Enables sheet removal
          ! Initialize to flat interface in liquid needle
          xloc=-0.001_WP !< Interface initially just inside the nozzle
          do k=vf2%cfg%kmino_,vf2%cfg%kmaxo_

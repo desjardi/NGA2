@@ -1208,9 +1208,9 @@ contains
             ! ######## PREPARE NUDGING HERE ########
             ! ######################################
             ! Exchange data using cpl23x/y/z couplers and the most recent velocity
-            call cpl23x%push(fs2%U); call cpl23x%transfer(); call cpl23x%pull(U2on3)
-            call cpl23y%push(fs2%V); call cpl23y%transfer(); call cpl23y%pull(V2on3)
-            call cpl23z%push(fs2%W); call cpl23z%transfer(); call cpl23z%pull(W2on3)
+            U2on3=0.0_WP; call cpl23x%push(fs2%U); call cpl23x%transfer(); call cpl23x%pull(U2on3)
+            V2on3=0.0_WP; call cpl23y%push(fs2%V); call cpl23y%transfer(); call cpl23y%pull(V2on3)
+            W2on3=0.0_WP; call cpl23z%push(fs2%W); call cpl23z%transfer(); call cpl23z%pull(W2on3)
             
             ! Increment time
             call fs3%get_cfl(time3%dt,time3%cfl)
