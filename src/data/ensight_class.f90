@@ -17,7 +17,8 @@ module ensight_class
    type :: scl !< Scalar field
       type(scl), pointer :: next
       character(len=str_medium) :: name
-      real(WP), dimension(:,:,:), pointer :: ptr
+      real(WP), dimension(:,:,:), pointer :: rptr=>NULL()  !< real(WP) data
+      integer , dimension(:,:,:), pointer :: iptr=>NULL()  !< integer  data
    end type scl
    type :: vct !< Vector field
       type(vct), pointer :: next
@@ -57,7 +58,9 @@ module ensight_class
       procedure :: write_case                                         !< Write out case file
       procedure :: write_surf                                         !< Write out surface mesh file
       procedure :: write_part                                         !< Write out particle mesh file
-      procedure :: add_scalar                                         !< Add a new scalar field
+      generic :: add_scalar=>add_rscalar,add_iscalar                  !< Add a new scalar field
+      procedure, private :: add_rscalar                               !< Add a new real(WP) scalar field
+      procedure, private :: add_iscalar                               !< Add a new integer  scalar field
       procedure :: add_vector                                         !< Add a new vector field
       procedure :: add_surface                                        !< Add a new surface mesh
       procedure :: add_particle                                       !< Add a new particle mesh
@@ -152,8 +155,8 @@ contains
    end function construct_ensight
    
    
-   !> Add a scalar field for output
-   subroutine add_scalar(this,name,scalar)
+   !> Add a real scalar field for output
+   subroutine add_rscalar(this,name,scalar)
       implicit none
       class(ensight), intent(inout) :: this
       character(len=*), intent(in) :: name
@@ -162,14 +165,36 @@ contains
       ! Prepare new scalar
       allocate(new_scl)
       new_scl%name=trim(adjustl(name))
-      new_scl%ptr =>scalar
+      new_scl%rptr=>scalar
+      new_scl%iptr=>NULL()
       ! Insert it up front
       new_scl%next=>this%first_scl
       ! Point list to new object
       this%first_scl=>new_scl
       ! Also create the corresponding directory
       if (this%cfg%amRoot) call execute_command_line('mkdir -p ensight/'//trim(this%name)//'/'//trim(new_scl%name))
-   end subroutine add_scalar
+   end subroutine add_rscalar
+   
+   
+   !> Add an integer scalar field for output
+   subroutine add_iscalar(this,name,scalar)
+      implicit none
+      class(ensight), intent(inout) :: this
+      character(len=*), intent(in) :: name
+      integer, dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), target, intent(in) :: scalar
+      type(scl), pointer :: new_scl
+      ! Prepare new scalar
+      allocate(new_scl)
+      new_scl%name=trim(adjustl(name))
+      new_scl%rptr=>NULL()
+      new_scl%iptr=>scalar
+      ! Insert it up front
+      new_scl%next=>this%first_scl
+      ! Point list to new object
+      this%first_scl=>new_scl
+      ! Also create the corresponding directory
+      if (this%cfg%amRoot) call execute_command_line('mkdir -p ensight/'//trim(this%name)//'/'//trim(new_scl%name))
+   end subroutine add_iscalar
    
    
    !> Add a vector field for output
@@ -302,12 +327,13 @@ contains
             close(iunit)
          end if
          
-         ! Now parallel-write the actual data
+         ! Now parallel-write the actual data (note that we allow both real and integer fields!)
          call MPI_FILE_OPEN(this%cfg%comm,trim(filename),IOR(MPI_MODE_WRONLY,MPI_MODE_APPEND),info_mpiio,ifile,ierr)
          if (ierr.ne.0) call die('[ensight write data] Problem encountered while parallel writing data file '//trim(filename))
          call MPI_FILE_GET_POSITION(ifile,disp,ierr)
          call MPI_FILE_SET_VIEW(ifile,disp,MPI_REAL_SP,this%cfg%SPview,'native',info_mpiio,ierr)
-         spbuff(this%cfg%imin_:this%cfg%imax_,this%cfg%jmin_:this%cfg%jmax_,this%cfg%kmin_:this%cfg%kmax_)=real(my_scl%ptr(this%cfg%imin_:this%cfg%imax_,this%cfg%jmin_:this%cfg%jmax_,this%cfg%kmin_:this%cfg%kmax_),SP)
+         if (associated(my_scl%rptr)) spbuff(this%cfg%imin_:this%cfg%imax_,this%cfg%jmin_:this%cfg%jmax_,this%cfg%kmin_:this%cfg%kmax_)=real(my_scl%rptr(this%cfg%imin_:this%cfg%imax_,this%cfg%jmin_:this%cfg%jmax_,this%cfg%kmin_:this%cfg%kmax_),SP)
+         if (associated(my_scl%iptr)) spbuff(this%cfg%imin_:this%cfg%imax_,this%cfg%jmin_:this%cfg%jmax_,this%cfg%kmin_:this%cfg%kmax_)=real(my_scl%iptr(this%cfg%imin_:this%cfg%imax_,this%cfg%jmin_:this%cfg%jmax_,this%cfg%kmin_:this%cfg%kmax_),SP)
          call MPI_FILE_WRITE_ALL(ifile,spbuff,this%cfg%nx_*this%cfg%ny_*this%cfg%nz_,MPI_REAL_SP,status,ierr)
          call MPI_FILE_CLOSE(ifile,ierr)
          
