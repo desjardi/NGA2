@@ -2154,14 +2154,13 @@ contains
 
    !> Sort list of ID tags, purge extra elements, eliminate duplicates
    subroutine meta_structures_sort(this)
-      use quicksort, only: quick_sort_int
       implicit none
       class(ccl), intent(inout) :: this
       integer, dimension(:), pointer :: meta_structures_tmp => null()
       integer :: i,n_meta_struct_tmp
       
       ! Sort first
-      call quick_sort_int(this%meta_structures)
+      call quick_sort(this%meta_structures)
 
       ! Compact list
       n_meta_struct_tmp = 1
@@ -2187,6 +2186,62 @@ contains
       nullify(this%meta_structures)
       this%meta_structures => meta_structures_tmp
       return
+      
+   contains
+
+      recursive subroutine quick_sort(A)
+         implicit none
+         integer, dimension(:)  :: A
+         integer :: imark
+         
+         if (size(A).gt.1) then
+            call qs_partition(A,imark)
+            call quick_sort(A(:imark-1))
+            call quick_sort(A(imark:))
+         end if
+         
+         return
+      end subroutine quick_sort
+
+      subroutine qs_partition(A,marker)
+         implicit none
+         integer,  dimension(:) :: A
+         integer, intent(out) :: marker
+         integer :: i,j
+         integer :: itmp
+         integer :: x
+         
+         x = A(1)
+         i = 0
+         j = size(A) + 1
+         
+         do
+            j = j-1
+            do
+               if (A(j).le.x) exit
+               j = j-1
+            end do
+            i = i+1
+            do
+               if (A(i).ge.x) exit
+               i = i+1
+            end do
+            if (i.lt.j) then
+               ! Exchange A(i) and A(j)
+               itmp = A(i)
+               A(i) = A(j)
+               A(j) = itmp
+            else if (i.eq.j) then
+               marker = i+1
+               return
+            else
+               marker = i
+               return
+            endif
+         end do
+         
+         return
+       end subroutine qs_partition
    end subroutine meta_structures_sort
    
 
