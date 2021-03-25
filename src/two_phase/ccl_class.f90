@@ -106,7 +106,7 @@ module ccl_class
 
       ! Global tag offset
       integer :: id_offset
-      integer :: synch_offset, film_synch_offset
+      integer :: sync_offset, film_sync_offset
 
       ! Local equivalence array (array version of film/struct(:)%parent)
       integer, dimension(:), allocatable :: struct_map_
@@ -140,8 +140,8 @@ module ccl_class
       procedure :: build_lists
       procedure :: deallocate_lists
       procedure, private :: label
-      procedure, private :: struct_synch
-      procedure, private :: film_synch
+      procedure, private :: struct_sync
+      procedure, private :: film_sync
       procedure, private :: struct_label_update
       procedure, private :: struct_final
       procedure, private :: meta_structures_sort
@@ -285,9 +285,9 @@ contains
       call this%label()
 
       ! Synchronize labels across procs
-      call this%struct_synch()
+      call this%struct_sync()
 
-      if (this%max_interface_planes.eq.2) call this%film_synch()
+      if (this%max_interface_planes.eq.2) call this%film_sync()
 
       call this%struct_label_update()
       if (present(U).and.present(V).and.present(W)) call this%struct_final(U,V,W)
@@ -682,20 +682,20 @@ contains
       ! call MPI_ALLGATHER(n_border_struct, 1, MPI_INTEGER, n_border_struct_per_processor, 1, MPI_INTEGER, this%cfg%comm, ierr)
       ! call MPI_ALLGATHER(this%n_film, 1, MPI_INTEGER, this%n_film_per_processor, 1, MPI_INTEGER, this%cfg%comm, ierr)
       ! call MPI_ALLGATHER(this%n_film_border_struct, 1, MPI_INTEGER, this%n_film_border_struct_per_processor, 1, MPI_INTEGER, this%cfg%comm, ierr)
-      !   this%synch_offset = sum(this%n_struct_per_processor(0:this%cfg%rank)) ???? not sum(this%n_struct_per_processor(0:this%cfg%rank)) - this%n_struct_per_processor(this%cfg%rank)??
-      !   this%synch_offset = sum(n_border_struct_per_processor(0:this%cfg%rank))
-      !   this%film_synch_offset = sum(this%n_film_per_processor(0:this%cfg%rank))
-      !   this%film_synch_offset = sum(this%n_film_border_struct_per_processor(0:this%cfg%rank))
-      !   allocate(this%struct_map_(this%synch_offset+1:this%synch_offset+this%n_struct)); this%struct_map_ = 0
-      !   allocate(this%film_map_(this%film_synch_offset+1:this%film_synch_offset+this%n_film)); this%film_map_ = 0
+      !   this%sync_offset = sum(this%n_struct_per_processor(0:this%cfg%rank)) ???? not sum(this%n_struct_per_processor(0:this%cfg%rank)) - this%n_struct_per_processor(this%cfg%rank)??
+      !   this%sync_offset = sum(n_border_struct_per_processor(0:this%cfg%rank))
+      !   this%film_sync_offset = sum(this%n_film_per_processor(0:this%cfg%rank))
+      !   this%film_sync_offset = sum(this%n_film_border_struct_per_processor(0:this%cfg%rank))
+      !   allocate(this%struct_map_(this%sync_offset+1:this%sync_offset+this%n_struct)); this%struct_map_ = 0
+      !   allocate(this%film_map_(this%film_sync_offset+1:this%film_sync_offset+this%n_film)); this%film_map_ = 0
 
-      this%synch_offset = this%cfg%rank*this%n_struct_max
-      this%film_synch_offset = this%cfg%rank*this%n_film_max
+      this%sync_offset = this%cfg%rank*this%n_struct_max
+      this%film_sync_offset = this%cfg%rank*this%n_film_max
       ! Could allocate this%struct_map_(max_structs) and integrate this loop with above
-      ! allocate(parent_    (this%synch_offset+1:this%synch_offset+this%n_struct_max)); parent_ = 0
-      allocate(this%struct_map_(this%synch_offset+1:this%synch_offset+this%n_struct_max)); this%struct_map_ = 0
-      allocate(this%film_map_(this%film_synch_offset+1:this%film_synch_offset+this%n_film_max)); this%film_map_ = 0
-      idd = this%synch_offset
+      ! allocate(parent_    (this%sync_offset+1:this%sync_offset+this%n_struct_max)); parent_ = 0
+      allocate(this%struct_map_(this%sync_offset+1:this%sync_offset+this%n_struct_max)); this%struct_map_ = 0
+      allocate(this%film_map_(this%film_sync_offset+1:this%film_sync_offset+this%n_film_max)); this%film_map_ = 0
+      idd = this%sync_offset
       do i=this%id_offset+1,this%id_offset+max_structs
       ! Only if this%struct_list has nodes
          if (this%struct_list(i)%nnode.eq.0) cycle
@@ -703,7 +703,7 @@ contains
          this%struct_map_(idd) = i
          this%struct_list(i)%id = idd
       end do
-      idd = this%film_synch_offset
+      idd = this%film_sync_offset
       do i=this%id_offset+1,this%id_offset+max_films
       ! Only if this%film_list has nodes
          if (this%film_list(i)%nnode.eq.0) cycle
@@ -1019,7 +1019,7 @@ contains
 
 
    !> Synchronize struct labels across all procs
-   subroutine struct_synch(this)
+   subroutine struct_sync(this)
       use mpi_f08,  only: MPI_ALLREDUCE,MPI_MIN,MPI_MAX,MPI_INTEGER
       implicit none
       class(ccl), intent(inout) :: this
@@ -1173,12 +1173,12 @@ contains
       end do ! do while (stop_global.ne.0) excluding domain boundaries
    
       ! Update this%struct_list%parent and point all parents to root
-      do i=this%synch_offset+1,this%synch_offset+this%n_struct
+      do i=this%sync_offset+1,this%sync_offset+this%n_struct
          this%struct_list(this%struct_map_(i))%parent = find(this%parent(i))
       end do
 
       ! Update id array with compacted and syncrhonized ids
-      do i=this%synch_offset+1,this%synch_offset+this%n_struct
+      do i=this%sync_offset+1,this%sync_offset+this%n_struct
          do n=1,this%struct_list(this%struct_map_(i))%nnode
             ii = this%struct_list(this%struct_map_(i))%node(n,1)
             jj = this%struct_list(this%struct_map_(i))%node(n,2)
@@ -1188,7 +1188,7 @@ contains
       end do
    
       ! Update periodicity array across processors
-      call struct_synch_per
+      call struct_sync_per
 
       !! Update domain boundaries
       ! this%cfg%imin
@@ -1322,12 +1322,12 @@ contains
       end do ! do while (stop_global.ne.0) including domain boundaries
    
       ! Update this%struct_list%parent and point all parents to root
-      do i=this%synch_offset+1,this%synch_offset+this%n_struct
+      do i=this%sync_offset+1,this%sync_offset+this%n_struct
             this%struct_list(this%struct_map_(i))%parent = find(this%parent(i))
       end do
 
       ! Update id array with compacted and syncrhonized ids
-      do i=this%synch_offset+1,this%synch_offset+this%n_struct
+      do i=this%sync_offset+1,this%sync_offset+this%n_struct
          do n=1,this%struct_list(this%struct_map_(i))%nnode
             ii = this%struct_list(this%struct_map_(i))%node(n,1)
             jj = this%struct_list(this%struct_map_(i))%node(n,2)
@@ -1513,17 +1513,17 @@ contains
       end function is_connected
 
       !> Synchronize struct periodicity across all procs
-      subroutine struct_synch_per
+      subroutine struct_sync_per
          implicit none
          ! integer :: i,j,k,n,ii,jj,kk,stop_,stop_global,counter,ierr
          integer :: flag
 
          ! Allocate local and global perodicity arrays
-         allocate(this%per_(this%synch_offset+1:this%synch_offset+this%n_struct_max,1:3)); this%per_ = 0
+         allocate(this%per_(this%sync_offset+1:this%sync_offset+this%n_struct_max,1:3)); this%per_ = 0
          allocate(this%per (this%cfg%nproc*this%n_struct_max,1:3)); this%per = 0 
 
          ! Fill per_ array
-         do i=this%synch_offset+1,this%synch_offset+this%n_struct
+         do i=this%sync_offset+1,this%sync_offset+this%n_struct
             this%per_(i,:) = this%struct_list(this%struct_map_(i))%per
          end do
 
@@ -1536,7 +1536,7 @@ contains
             this%per(this%parent(i),:) = max(this%per(this%parent(i),:),this%per(i,:))
          end do
 
-         do i=this%synch_offset+1,this%synch_offset+this%n_struct
+         do i=this%sync_offset+1,this%sync_offset+this%n_struct
             do n=1,this%struct_list(this%struct_map_(i))%nnode
                ii = this%struct_list(this%struct_map_(i))%node(n,1)
                jj = this%struct_list(this%struct_map_(i))%node(n,2)
@@ -1547,13 +1547,13 @@ contains
 
          return
 
-      end subroutine struct_synch_per
+      end subroutine struct_sync_per
    
-   end subroutine struct_synch
+   end subroutine struct_sync
 
 
    !> Synchronize film labels across all procs
-   subroutine film_synch(this)
+   subroutine film_sync(this)
       use mpi_f08,  only: MPI_ALLREDUCE,MPI_MIN,MPI_MAX,MPI_INTEGER
       implicit none
       class(ccl), intent(inout) :: this
@@ -1708,12 +1708,12 @@ contains
       end do ! do while (stop_global.ne.0) excluding domain boundaries
    
       ! Update this%film_list%film_parent and point all parents to root
-      do i=this%film_synch_offset+1,this%film_synch_offset+this%n_film
+      do i=this%film_sync_offset+1,this%film_sync_offset+this%n_film
          this%film_list(this%film_map_(i))%parent = find(this%film_parent(i))
       end do
       
       ! Update id array with compacted and syncrhonized ids
-      do i=this%film_synch_offset+1,this%film_synch_offset+this%n_film
+      do i=this%film_sync_offset+1,this%film_sync_offset+this%n_film
          do n=1,this%film_list(this%film_map_(i))%nnode
             ii = this%film_list(this%film_map_(i))%node(n,1)
             jj = this%film_list(this%film_map_(i))%node(n,2)
@@ -1723,7 +1723,7 @@ contains
          end do
       end do
    
-   !   call film_synch_per ! only if we need to keep track of film periodicity
+   !   call film_sync_per ! only if we need to keep track of film periodicity
 
       !! Update domain boundaries
       ! this%cfg%imin
@@ -1856,12 +1856,12 @@ contains
       end do ! do while (stop_global.ne.0) including domain boundaries
    
       ! Update this%film_list%film_parent and point all parents to root
-      do i=this%film_synch_offset+1,this%film_synch_offset+this%n_film
+      do i=this%film_sync_offset+1,this%film_sync_offset+this%n_film
             this%film_list(this%film_map_(i))%parent = find(this%film_parent(i))
       end do
 
       ! Update id array with compacted and syncrhonized ids
-      do i=this%film_synch_offset+1,this%film_synch_offset+this%n_film
+      do i=this%film_sync_offset+1,this%film_sync_offset+this%n_film
          do n=1,this%film_list(this%film_map_(i))%nnode
             ii = this%film_list(this%film_map_(i))%node(n,1)
             jj = this%film_list(this%film_map_(i))%node(n,2)
@@ -2031,15 +2031,15 @@ contains
       end function is_connected
 
       ! Synchronize struct periodicity across all procs
-      subroutine film_synch_per
+      subroutine film_sync_per
          implicit none
 
          ! Allocate local and global perodicity arrays
-         allocate(this%per_(this%film_synch_offset+1:this%film_synch_offset+this%n_film_max,1:3)); this%per_ = 0
+         allocate(this%per_(this%film_sync_offset+1:this%film_sync_offset+this%n_film_max,1:3)); this%per_ = 0
          allocate(this%per (this%cfg%nproc*this%n_film_max,1:3)); this%per = 0 
 
          ! Fill per_ array
-         do i=this%film_synch_offset+1,this%film_synch_offset+this%n_film
+         do i=this%film_sync_offset+1,this%film_sync_offset+this%n_film
             this%per_(i,:) = this%film_list(this%film_map_(i))%per
          end do
 
@@ -2052,7 +2052,7 @@ contains
             this%per(this%film_parent(i),:) = max(this%per(this%film_parent(i),:),this%per(i,:))
          end do
 
-         do i=this%film_synch_offset+1,this%film_synch_offset+this%n_film
+         do i=this%film_sync_offset+1,this%film_sync_offset+this%n_film
             do n=1,this%film_list(this%film_map_(i))%nnode
                ii = this%film_list(this%film_map_(i))%node(n,1)
                jj = this%film_list(this%film_map_(i))%node(n,2)
@@ -2063,9 +2063,9 @@ contains
 
          return
 
-      end subroutine film_synch_per
+      end subroutine film_sync_per
    
-   end subroutine film_synch
+   end subroutine film_sync
 
 
    !> Final update of struct labels in global array
@@ -2444,7 +2444,7 @@ contains
       real(WP), parameter :: ratio = 2.0_WP
 
       this%film_type = 0
-      do m=this%film_synch_offset+1,this%film_synch_offset+this%n_film
+      do m=this%film_sync_offset+1,this%film_sync_offset+this%n_film
          if (this%film_list(this%film_map_(m))%phase.eq.1) then ! Liquid film
             do n=1,this%film_list(this%film_map_(m))%nnode
                i = this%film_list(this%film_map_(m))%node(n,1)
