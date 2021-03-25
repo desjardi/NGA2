@@ -67,10 +67,6 @@ module ccl_class
       ! Interface polygon information
       type(Poly_type), dimension(:,:,:,:), pointer :: poly   !< Array of IRL interface polygons (n,i,j,k)
 
-      ! Normalized surface area
-      real(WP), dimension(:,:,:), pointer :: SD              !< Surface density array
-      logical :: useSD                                       !< Logical indicating presence of SD
-
       ! Maximum number of PLIC interfaces per cell
       integer :: max_interface_planes                        !< Number of planar interfaces per cell (0=VF-only, 1=PLIC, 2=R2P, etc.)
       
@@ -135,6 +131,7 @@ module ccl_class
       integer, dimension(:,:,:), allocatable :: film_pair      !< ID of the film that contains the cell
       integer, dimension(:,:,:), allocatable :: border_id      !< ID of the film that contains the cell
       integer, dimension(:,:,:), allocatable :: film_border_id !< ID of the film that contains the cell
+      real(WP),dimension(:,:,:), allocatable :: SD             !< Surface density array
 
    contains
       procedure :: build_lists
@@ -202,6 +199,9 @@ contains
       allocate(self%border_id     (self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%border_id=0
       allocate(self%film_border_id(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%film_border_id=0
 
+      ! Allocate surface density array
+      allocate(self%SD(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%SD=0.0_WP
+
       ! Variable names
       self%meta_structures_nname = 20
       allocate(self%meta_structures_name(self%meta_structures_nname))
@@ -253,15 +253,16 @@ contains
    end function constructor
    
    !> Build lists of structures and films
-   subroutine build_lists(this,VF,poly,SD,U,V,W)
+   subroutine build_lists(this,VF,poly,U,V,W)
       implicit none
       class(ccl), intent(inout) :: this
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), target, intent(in) :: VF      !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       type(Poly_type), dimension(:,this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), target, intent(in), optional:: poly !< Needs to be (1:2,imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
-      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), target, intent(in), optional :: SD     !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in), optional :: U     !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in), optional :: V     !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in), optional :: W     !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      integer :: i,j,k,n
+      real(WP) :: tsd      
 
       ! Point to volume fraction field
       this%VF(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:)=>VF
@@ -269,16 +270,24 @@ contains
       ! Point to polygon object
       if (present(poly)) then
          this%poly(1:,this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:)=>poly
+         ! Now compute surface area divided by cell volume
+         this%SD=0.0_WP
+         do k=this%cfg%kmino_,this%cfg%kmaxo_
+            do j=this%cfg%jmino_,this%cfg%jmaxo_
+               do i=this%cfg%imino_,this%cfg%imaxo_
+                  if (VF(i,j,k).eq.0.0_WP) cycle
+                  tsd=0.0_WP
+                  do n=1,this%max_interface_planes
+                     if (getNumberOfVertices(this%poly(n,i,j,k)).gt.0) then
+                        tsd=tsd+abs(calculateVolume(this%poly(n,i,j,k)))
+                     end if
+                  end do
+                  this%SD(i,j,k)=tsd/this%cfg%vol(i,j,k)
+               end do
+            end do
+         end do         
       else
          this%max_interface_planes = 0
-      end if
-
-      ! Point to surface density
-      if (present(SD)) then
-         this%SD=>SD
-         this%useSD = .true.
-      else
-         this%useSD = .false.
       end if
 
       ! Label features locally
@@ -373,10 +382,10 @@ contains
                      has_normal = getNumberOfVertices(this%poly(1,i,j,k)).gt.0
                      if (has_normal) then
                         n1 = calculateNormal(this%poly(1,i,j,k))
+                        c1 = calculateCentroid(this%poly(1,i,j,k))
                         ! Rudimentary two-plane cell treatment
                         if (getNumberOfVertices(this%poly(2,i,j,k)).ne.0) then
                            n2 = calculateNormal(this%poly(2,i,j,k))
-                           c1 = calculateCentroid(this%poly(1,i,j,k))
                            c2 = calculateCentroid(this%poly(2,i,j,k))
                            is_two_plane_film = (dot_product(n1,n2).lt.this%dot_threshold)
 
@@ -442,7 +451,6 @@ contains
                         end if ! if (getNumberOfVertices(this%poly(2,i,j,k)).ne.0)
                      end if ! if (has_normal)
                      if (.not.is_two_plane_film) then
-                        if (has_normal) c1 = calculateCentroid(this%poly(1,i,j,k))
                         do dim = 1,3
                            pos = 0
                            pos(dim) = -1
@@ -511,6 +519,82 @@ contains
                end do ! k
             end do ! j
          end do ! i
+
+         ! Check upper boundaries for film cells
+         ! this%cfg%imax_
+         do j= this%cfg%jmin_,this%cfg%jmax_
+            do k= this%cfg%kmin_,this%cfg%kmax_
+               if (this%VF(this%cfg%imax_,j,k).ge.this%VFlo .and. this%film_phase(this%cfg%imax_,j,k).eq.0) then
+                  this%film_phase(this%cfg%imax_,j,k) = is_film_cell_upper(this%cfg%imax_,j,k,1)
+               end if
+            end do
+         end do
+         ! this%cfg%jmax_
+         do i= this%cfg%imin_,this%cfg%imax_
+            do k= this%cfg%kmin_,this%cfg%kmax_
+               if (this%VF(i,this%cfg%jmax_,k).ge.this%VFlo .and. this%film_phase(i,this%cfg%jmax_,k).eq.0) then
+                  this%film_phase(i,this%cfg%jmax_,k) = is_film_cell_upper(i,this%cfg%jmax_,k,2)
+               end if
+            end do
+         end do
+         ! this%cfg%kmax_
+         do i= this%cfg%imin_,this%cfg%imax_
+            do j= this%cfg%jmin_,this%cfg%jmax_
+               if (this%VF(i,j,this%cfg%kmax_).ge.this%VFlo .and. this%film_phase(i,j,this%cfg%kmax_).eq.0) then
+                  this%film_phase(i,j,this%cfg%kmax_) = is_film_cell_upper(i,j,this%cfg%kmax_,3)
+               end if
+            end do
+         end do         
+
+         ! Number of this%struct_list graph nodes
+         max_structs = idd-this%id_offset
+
+         ! Reset idd
+         idd = this%id_offset
+         ! Tag films
+         do k=this%cfg%kmin_,this%cfg%kmax_
+            do j=this%cfg%jmin_,this%cfg%jmax_
+               do i=this%cfg%imin_,this%cfg%imax_
+                  ! Find untagged point in film
+                  if (this%film_phase(i,j,k).gt.0) then
+                     if (calculate_film_thickness(i,j,k).lt.this%thickness_cutoff*this%cfg%meshsize(i,j,k)) then
+                        do dim = 1,3
+                           pos = 0
+                           pos(dim) = -1
+                           ii = i + pos(1)
+                           jj = j + pos(2)
+                           kk = k + pos(3)
+                           if (this%film_id(ii,jj,kk).gt.0) then ! Liquid neighbors should already be labeled
+                              if (this%film_id(i,j,k).ne.0) then
+                                 this%film_id(i,j,k) = union(this%film_list,this%film_id(i,j,k),this%film_id(ii,jj,kk))
+                              else
+                                 ! Propagate neighbor label
+                                 this%film_id(i,j,k) = this%film_id(ii,jj,kk)
+                              end if
+                           end if
+                           if (this%film_id(i,j,k).eq.0) then
+                              ! Create new label
+                              idd = idd + 1
+                              this%film_id(i,j,k) = idd
+                              this%film_list(idd)%parent = idd
+                           end if
+                        end do
+                        ! Periodicity
+                        if (this%cfg%xper .and. i.eq.this%cfg%imax) this%film_list(this%film_id(i,j,k))%per(1) = 1
+                        if (this%cfg%yper .and. j.eq.this%cfg%jmax) this%film_list(this%film_id(i,j,k))%per(2) = 1
+                        if (this%cfg%zper .and. k.eq.this%cfg%kmax) this%film_list(this%film_id(i,j,k))%per(3) = 1 
+                        this%film_idp(i,j,k,:) = this%film_list(this%film_id(i,j,k))%per
+                     else
+                        this%film_phase(i,j,k) = 0
+                     end if
+                  end if
+               end do ! k
+            end do ! j
+         end do ! i
+   
+         ! Number of this%film_list graph nodes
+         max_films = idd-this%id_offset
+
       else ! if no interface polygons given
          do k=this%cfg%kmin_,this%cfg%kmax_
             do j=this%cfg%jmin_,this%cfg%jmax_
@@ -550,82 +634,11 @@ contains
                end do ! k
             end do ! j
          end do ! i
+
+         ! Number of this%struct_list graph nodes
+         max_structs = idd-this%id_offset
+
       end if
-
-      ! Check upper boundaries for film cells
-      ! this%cfg%imax_
-      do j= this%cfg%jmin_,this%cfg%jmax_
-         do k= this%cfg%kmin_,this%cfg%kmax_
-            if (this%VF(this%cfg%imax_,j,k).ge.this%VFlo .and. this%film_phase(this%cfg%imax_,j,k).eq.0) then
-               this%film_phase(this%cfg%imax_,j,k) = is_film_cell_upper(this%cfg%imax_,j,k,1)
-            end if
-         end do
-      end do
-      ! this%cfg%jmax_
-      do i= this%cfg%imin_,this%cfg%imax_
-         do k= this%cfg%kmin_,this%cfg%kmax_
-            if (this%VF(i,this%cfg%jmax_,k).ge.this%VFlo .and. this%film_phase(i,this%cfg%jmax_,k).eq.0) then
-               this%film_phase(i,this%cfg%jmax_,k) = is_film_cell_upper(i,this%cfg%jmax_,k,2)
-            end if
-         end do
-      end do
-      ! this%cfg%kmax_
-      do i= this%cfg%imin_,this%cfg%imax_
-         do j= this%cfg%jmin_,this%cfg%jmax_
-            if (this%VF(i,j,this%cfg%kmax_).ge.this%VFlo .and. this%film_phase(i,j,this%cfg%kmax_).eq.0) then
-               this%film_phase(i,j,this%cfg%kmax_) = is_film_cell_upper(i,j,this%cfg%kmax_,3)
-            end if
-         end do
-      end do
-
-      ! Number of this%struct_list graph nodes
-      max_structs = idd-this%id_offset
-
-      ! Reset idd
-      idd = this%id_offset
-      ! Tag films
-      do k=this%cfg%kmin_,this%cfg%kmax_
-         do j=this%cfg%jmin_,this%cfg%jmax_
-            do i=this%cfg%imin_,this%cfg%imax_
-               ! Find untagged point in film
-               if (this%film_phase(i,j,k).gt.0) then
-                  if (calculate_film_thickness(i,j,k).lt.this%thickness_cutoff*this%cfg%meshsize(i,j,k)) then
-                     do dim = 1,3
-                        pos = 0
-                        pos(dim) = -1
-                        ii = i + pos(1)
-                        jj = j + pos(2)
-                        kk = k + pos(3)
-                        if (this%film_id(ii,jj,kk).gt.0) then ! Liquid neighbors should already be labeled
-                           if (this%film_id(i,j,k).ne.0) then
-                              this%film_id(i,j,k) = union(this%film_list,this%film_id(i,j,k),this%film_id(ii,jj,kk))
-                           else
-                              ! Propagate neighbor label
-                              this%film_id(i,j,k) = this%film_id(ii,jj,kk)
-                           end if
-                        end if
-                        if (this%film_id(i,j,k).eq.0) then
-                           ! Create new label
-                           idd = idd + 1
-                           this%film_id(i,j,k) = idd
-                           this%film_list(idd)%parent = idd
-                        end if
-                     end do
-                     ! Periodicity
-                     if (this%cfg%xper .and. i.eq.this%cfg%imax) this%film_list(this%film_id(i,j,k))%per(1) = 1
-                     if (this%cfg%yper .and. j.eq.this%cfg%jmax) this%film_list(this%film_id(i,j,k))%per(2) = 1
-                     if (this%cfg%zper .and. k.eq.this%cfg%kmax) this%film_list(this%film_id(i,j,k))%per(3) = 1 
-                     this%film_idp(i,j,k,:) = this%film_list(this%film_id(i,j,k))%per
-                  else
-                     this%film_phase(i,j,k) = 0
-                  end if
-               end if
-            end do ! k
-         end do ! j
-      end do ! i
-
-      ! Number of this%film_list graph nodes
-      max_films = idd-this%id_offset
 
       ! Collapse tree
       do k=this%cfg%kmin_,this%cfg%kmax_
@@ -916,18 +929,14 @@ contains
                end do
             end do
          end if
-         if (this%useSD) then
-            do kk = k-1,k+1
-               do jj = j-1,j+1
-                  do ii = i-1,i+1
-                     SD_local_sum = SD_local_sum + this%SD(ii,jj,kk)
-                  end do
+         do kk = k-1,k+1
+            do jj = j-1,j+1
+               do ii = i-1,i+1
+                  SD_local_sum = SD_local_sum + this%SD(ii,jj,kk)
                end do
             end do
-            local_thickness = 2.0_WP*VOF_local_sum/(SD_local_sum+epsilon(1.0_WP))
-         else
-            local_thickness = VOF_local_sum*this%cfg%meshsize(i,j,k)/9.0_WP
-         end if
+         end do
+         local_thickness = 2.0_WP*VOF_local_sum/(SD_local_sum+epsilon(1.0_WP))
          this%film_thickness(i,j,k) = local_thickness
          return
       end function calculate_film_thickness
@@ -1515,8 +1524,6 @@ contains
       !> Synchronize struct periodicity across all procs
       subroutine struct_sync_per
          implicit none
-         ! integer :: i,j,k,n,ii,jj,kk,stop_,stop_global,counter,ierr
-         integer :: flag
 
          ! Allocate local and global perodicity arrays
          allocate(this%per_(this%sync_offset+1:this%sync_offset+this%n_struct_max,1:3)); this%per_ = 0
@@ -1992,7 +1999,7 @@ contains
          implicit none
          integer, intent(in) :: i,j,k,dim
          integer :: ii,jj,kk
-         logical :: is_connected, use_normal
+         logical :: is_connected!, use_normal
          integer, dimension(3) :: pos
          ! real(WP), dimension(3) :: nref, nloc, pref, ploc
    
