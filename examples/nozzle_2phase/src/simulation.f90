@@ -6,6 +6,7 @@ module simulation
    use geometry,          only: xinj_dist,inj_norm_diam,rli0,rlo0,rgi0
    use tpns_class,        only: tpns
    use vfs_class,         only: vfs
+   use ccl_class,         only: ccl
    use sgsmodel_class,    only: sgsmodel
    use timetracker_class, only: timetracker
    use ensight_class,     only: ensight
@@ -15,11 +16,12 @@ module simulation
    implicit none
    private
    
-   !> Two-phase incompressible flow solver, VF solver, and corresponding time tracker and sgs model
+   !> Two-phase incompressible flow solver, VF solver with CCL, and corresponding time tracker and sgs model
    type(tpns),        public :: fs
    type(vfs),         public :: vf
    type(timetracker), public :: time
    type(sgsmodel),    public :: sgs
+   type(ccl),         public :: cc
    
    !> Provide two datafiles and an event tracker for saving restarts
    type(event)    :: save_evt
@@ -413,6 +415,22 @@ contains
       end block initialize_velocity
       
       
+      ! Create a connected-component labeling object
+      create_and_initialize_ccl: block
+         use vfs_class, only: VFlo
+         ! Create the CCL object
+         cc=ccl(cfg=cfg,name='CCL')
+         cc%max_interface_planes=2
+         cc%VFlo=VFlo
+         cc%dot_threshold=-0.5_WP
+         cc%thickness_cutoff=0.5_WP
+         ! Perform CCL step
+         call cc%build_lists(VF=vf%VF,poly=vf%interface_polygon,U=fs%U,V=fs%V,W=fs%W)
+         call cc%film_classify(Lbary=vf%Lbary,Gbary=vf%Gbary)
+         call cc%deallocate_lists()
+      end block create_and_initialize_ccl
+      
+      
       ! Create an LES model
       create_sgs: block
          sgs=sgsmodel(cfg=fs%cfg,umask=fs%umask,vmask=fs%vmask,wmask=fs%wmask)
@@ -436,6 +454,10 @@ contains
          call ens_out%add_scalar('VOF',vf%VF)
          call ens_out%add_scalar('curvature',vf%curv)
          call ens_out%add_scalar('visc_t',sgs%visc)
+         call ens_out%add_scalar('structID',cc%id)
+         call ens_out%add_scalar('filmID',cc%film_id)
+         call ens_out%add_scalar('filmType',cc%film_type)
+         call ens_out%add_scalar('filmThickness',cc%film_thickness)
          call ens_out%add_surface('vofplic',vf%surfgrid)
          ! Output to ensight
          if (ens_evt%occurs()) call ens_out%write_data(time%t)
@@ -590,6 +612,11 @@ contains
          ! Recompute interpolated velocity and divergence
          call fs%interp_vel(Ui,Vi,Wi)
          call fs%get_div()
+         
+         ! CCL step
+         call cc%build_lists(VF=vf%VF,poly=vf%interface_polygon,U=fs%U,V=fs%V,W=fs%W)
+         call cc%film_classify(Lbary=vf%Lbary,Gbary=vf%Gbary)
+         call cc%deallocate_lists()
          
          ! Output to ensight
          if (ens_evt%occurs()) call ens_out%write_data(time%t)
