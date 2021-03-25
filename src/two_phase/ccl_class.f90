@@ -61,6 +61,9 @@ module ccl_class
       ! This is the name of the CCL
       character(len=str_medium) :: name='UNNAMED_CCL'        !< Solver name (default=UNNAMED_CCL)
 
+      ! Volume fraction information
+      real(WP), dimension(:,:,:), pointer :: VF              !< Volume fraction array
+
       ! Interface polygon information
       type(Poly_type), dimension(:,:,:,:), pointer :: poly   !< Array of IRL interface polygons (n,i,j,k)
 
@@ -260,6 +263,9 @@ contains
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in), optional :: V     !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in), optional :: W     !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
 
+      ! Point to volume fraction field
+      this%VF(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:)=>VF
+
       ! Point to polygon object
       if (present(poly)) then
          this%poly(1:,this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:)=>poly
@@ -276,7 +282,7 @@ contains
       end if
 
       ! Label features locally
-      call this%label(VF)
+      call this%label()
 
       ! Synchronize labels across procs
       call this%struct_sync()
@@ -284,7 +290,7 @@ contains
       if (this%max_interface_planes.eq.2) call this%film_sync()
 
       call this%struct_label_update()
-      if (present(U).and.present(V).and.present(W)) call this%struct_final(VF,U,V,W)
+      if (present(U).and.present(V).and.present(W)) call this%struct_final(U,V,W)
 
    end subroutine build_lists
 
@@ -305,11 +311,10 @@ contains
    end subroutine deallocate_lists
 
    !> Build local lists of structures and films
-   subroutine label(this,VF)
+   subroutine label(this)
       use mpi_f08,  only: MPI_ALLREDUCE,MPI_MAX,MPI_INTEGER
       implicit none
       class(ccl), intent(inout) :: this
-      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in) :: VF     !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       integer :: npp,idd,i,j,k,ierr,dim,ii,jj,kk
       integer :: max_structs, max_films
       ! Using PLIC normal information
@@ -362,7 +367,7 @@ contains
                do i=this%cfg%imin_,this%cfg%imax_
          
                   ! Find untagged point in liquid phase
-                  if (VF(i,j,k).ge.this%VFlo) then
+                  if (this%VF(i,j,k).ge.this%VFlo) then
 
                      is_two_plane_film = .false.
                      has_normal = getNumberOfVertices(this%poly(1,i,j,k)).gt.0
@@ -476,8 +481,8 @@ contains
                                     this%film_pair(ii,jj,kk) = this%cfg%get_lexico_from_ijk([i,j,k])
                                  end if ! is_contiguous
                               else
-                                 ! is_contiguous = is_contiguous.or.VF(i,j,k).gt.0.1_WP.or.VF(ii,jj,kk).gt.0.1_WP
-                                 ! is_contiguous = is_contiguous.or.VF(ii,jj,kk).gt.0.1_WP
+                                 ! is_contiguous = is_contiguous.or.this%VF(i,j,k).gt.0.1_WP.or.this%VF(ii,jj,kk).gt.0.1_WP
+                                 ! is_contiguous = is_contiguous.or.this%VF(ii,jj,kk).gt.0.1_WP
                               end if ! is_film
 
                            end if ! use_normal
@@ -502,7 +507,7 @@ contains
                         if (this%cfg%zper .and. k.eq.this%cfg%kmax) this%struct_list(this%id(i,j,k))%per(3) = 1 
                         this%idp(i,j,k,:) = this%struct_list(this%id(i,j,k))%per
                      end if ! .not.is_two_plane_film
-                  end if ! VF >= this%VFlo
+                  end if ! this%VF >= this%VFlo
                end do ! k
             end do ! j
          end do ! i
@@ -512,7 +517,7 @@ contains
                do i=this%cfg%imin_,this%cfg%imax_
          
                   ! Find untagged point in liquid phase
-                  if (VF(i,j,k).ge.this%VFlo) then
+                  if (this%VF(i,j,k).ge.this%VFlo) then
 
                      do dim = 1,3
                         pos = 0
@@ -541,7 +546,7 @@ contains
                      if (this%cfg%yper .and. j.eq.this%cfg%jmax) this%struct_list(this%id(i,j,k))%per(2) = 1
                      if (this%cfg%zper .and. k.eq.this%cfg%kmax) this%struct_list(this%id(i,j,k))%per(3) = 1 
                      this%idp(i,j,k,:) = this%struct_list(this%id(i,j,k))%per
-                  end if ! VF >= this%VFlo
+                  end if ! this%VF >= this%VFlo
                end do ! k
             end do ! j
          end do ! i
@@ -551,7 +556,7 @@ contains
       ! this%cfg%imax_
       do j= this%cfg%jmin_,this%cfg%jmax_
          do k= this%cfg%kmin_,this%cfg%kmax_
-            if (VF(this%cfg%imax_,j,k).ge.this%VFlo .and. this%film_phase(this%cfg%imax_,j,k).eq.0) then
+            if (this%VF(this%cfg%imax_,j,k).ge.this%VFlo .and. this%film_phase(this%cfg%imax_,j,k).eq.0) then
                this%film_phase(this%cfg%imax_,j,k) = is_film_cell_upper(this%cfg%imax_,j,k,1)
             end if
          end do
@@ -559,7 +564,7 @@ contains
       ! this%cfg%jmax_
       do i= this%cfg%imin_,this%cfg%imax_
          do k= this%cfg%kmin_,this%cfg%kmax_
-            if (VF(i,this%cfg%jmax_,k).ge.this%VFlo .and. this%film_phase(i,this%cfg%jmax_,k).eq.0) then
+            if (this%VF(i,this%cfg%jmax_,k).ge.this%VFlo .and. this%film_phase(i,this%cfg%jmax_,k).eq.0) then
                this%film_phase(i,this%cfg%jmax_,k) = is_film_cell_upper(i,this%cfg%jmax_,k,2)
             end if
          end do
@@ -567,7 +572,7 @@ contains
       ! this%cfg%kmax_
       do i= this%cfg%imin_,this%cfg%imax_
          do j= this%cfg%jmin_,this%cfg%jmax_
-            if (VF(i,j,this%cfg%kmax_).ge.this%VFlo .and. this%film_phase(i,j,this%cfg%kmax_).eq.0) then
+            if (this%VF(i,j,this%cfg%kmax_).ge.this%VFlo .and. this%film_phase(i,j,this%cfg%kmax_).eq.0) then
                this%film_phase(i,j,this%cfg%kmax_) = is_film_cell_upper(i,j,this%cfg%kmax_,3)
             end if
          end do
@@ -584,7 +589,7 @@ contains
             do i=this%cfg%imin_,this%cfg%imax_
                ! Find untagged point in film
                if (this%film_phase(i,j,k).gt.0) then
-                  if (calculate_film_thickness(VF,i,j,k).lt.this%thickness_cutoff*this%cfg%meshsize(i,j,k)) then
+                  if (calculate_film_thickness(i,j,k).lt.this%thickness_cutoff*this%cfg%meshsize(i,j,k)) then
                      do dim = 1,3
                         pos = 0
                         pos(dim) = -1
@@ -885,9 +890,8 @@ contains
       end function is_film_cell_upper
 
       ! Calculate film thickness
-      function calculate_film_thickness(VF,i,j,k) result(local_thickness)
+      function calculate_film_thickness(i,j,k) result(local_thickness)
          implicit none
-         real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in) :: VF     !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
          integer, intent(in) :: i,j,k
          real(WP) :: local_thickness
          real(WP) :: SD_local_sum, VOF_local_sum
@@ -899,7 +903,7 @@ contains
             do kk = k-1,k+1
                do jj = j-1,j+1
                   do ii = i-1,i+1
-                     VOF_local_sum = VOF_local_sum + (1.0_WP-VF(ii,jj,kk))
+                     VOF_local_sum = VOF_local_sum + (1.0_WP-this%VF(ii,jj,kk))
                   end do
                end do
             end do
@@ -907,7 +911,7 @@ contains
             do kk = k-1,k+1
                do jj = j-1,j+1
                   do ii = i-1,i+1
-                     VOF_local_sum = VOF_local_sum + VF(ii,jj,kk)
+                     VOF_local_sum = VOF_local_sum + this%VF(ii,jj,kk)
                   end do
                end do
             end do
@@ -2106,11 +2110,10 @@ contains
 
 
    !> Build array of meta_structures
-   subroutine struct_final(this,VF,U,V,W)
+   subroutine struct_final(this,U,V,W)
       use mpi_f08,  only: MPI_ALLREDUCE,MPI_SUM,MPI_INTEGER
       implicit none
       class(ccl), intent(inout) :: this
-      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in) :: VF    !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in) :: U     !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in) :: V     !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in) :: W     !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
@@ -2142,7 +2145,7 @@ contains
       call meta_structures_sort(this)
       
       ! Compute stats
-      call meta_structures_stats(this,VF,U,V,W)
+      call meta_structures_stats(this,U,V,W)
       
       ! Clean up
       deallocate(buf)
@@ -2246,19 +2249,18 @@ contains
    
 
    !> Compute stats for full meta-structures
-   subroutine meta_structures_stats(this,VF,U,V,W)
+   subroutine meta_structures_stats(this,U,V,W)
       use mpi_f08,   only: MPI_ALLREDUCE,MPI_SUM
       use parallel,  only: MPI_REAL_WP
       implicit none
       class(ccl), intent(inout) :: this
-      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in) :: VF    !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in) :: U     !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in) :: V     !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in) :: W     !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
-      real(WP), dimension(:), pointer :: x_cg,y_cg,z_cg
-      real(WP), dimension(:), pointer :: vol_struct_,vol_struct
-      real(WP), dimension(:), pointer :: x_vol_,x_vol,y_vol_,y_vol,z_vol_,z_vol
-      real(WP), dimension(:), pointer :: u_vol_,u_vol,v_vol,v_vol_,w_vol,w_vol_
+      real(WP),dimension(:), pointer :: x_cg,y_cg,z_cg
+      real(WP),dimension(:), pointer :: vol_struct_,vol_struct
+      real(WP),dimension(:), pointer :: x_vol_,x_vol,y_vol_,y_vol,z_vol_,z_vol
+      real(WP),dimension(:), pointer :: u_vol_,u_vol,v_vol,v_vol_,w_vol,w_vol_
       real(WP), dimension(:,:,:), pointer :: Imom_,Imom
       integer :: i,j,ii,jj,kk,ierr,iunit,var
       integer :: per_x,per_y,per_z
@@ -2266,10 +2268,10 @@ contains
       character(len=str_medium) :: filename
       
       ! Eigenvalues/eigenvectors
-      real(WP), dimension(3,3) :: A
-      real(WP), dimension(3) :: d
-      integer , parameter :: lwork = 102 ! dsyev optimal length (nb+2)*n, where order n=3 and block size nb=32
-      real(WP), dimension(lwork) :: work
+      real(WP),dimension(3,3) :: A
+      real(WP),dimension(3) :: d
+      integer, parameter :: lwork = 102 ! dsyev optimal length (nb+2)*n, where order n=3 and block size nb=32
+      real(WP),dimension(lwork) :: work
       integer :: n,info
 
       ! allocate / initialize temps arrays for computation
@@ -2317,17 +2319,17 @@ contains
                   ztmp = this%cfg%zm(kk)-per_z*this%cfg%zL
       
                   ! Volume
-                  vol_struct_(i) = vol_struct_(i) + this%cfg%vol(ii,jj,kk)*VF(ii,jj,kk)
+                  vol_struct_(i) = vol_struct_(i) + this%cfg%vol(ii,jj,kk)*this%VF(ii,jj,kk)
 
                   ! Center of gravity
-                  x_vol_(i) = x_vol_(i) + xtmp*this%cfg%vol(ii,jj,kk)*VF(ii,jj,kk)
-                  y_vol_(i) = y_vol_(i) + ytmp*this%cfg%vol(ii,jj,kk)*VF(ii,jj,kk)
-                  z_vol_(i) = z_vol_(i) + ztmp*this%cfg%vol(ii,jj,kk)*VF(ii,jj,kk)
+                  x_vol_(i) = x_vol_(i) + xtmp*this%cfg%vol(ii,jj,kk)*this%VF(ii,jj,kk)
+                  y_vol_(i) = y_vol_(i) + ytmp*this%cfg%vol(ii,jj,kk)*this%VF(ii,jj,kk)
+                  z_vol_(i) = z_vol_(i) + ztmp*this%cfg%vol(ii,jj,kk)*this%VF(ii,jj,kk)
       
                   ! Average gas velocity inside struct
-                  u_vol_(i) = u_vol_(i) + U(ii,jj,kk)*this%cfg%vol(ii,jj,kk)*VF(ii,jj,kk)
-                  v_vol_(i) = v_vol_(i) + V(ii,jj,kk)*this%cfg%vol(ii,jj,kk)*VF(ii,jj,kk)
-                  w_vol_(i) = w_vol_(i) + W(ii,jj,kk)*this%cfg%vol(ii,jj,kk)*VF(ii,jj,kk)
+                  u_vol_(i) = u_vol_(i) + U(ii,jj,kk)*this%cfg%vol(ii,jj,kk)*this%VF(ii,jj,kk)
+                  v_vol_(i) = v_vol_(i) + V(ii,jj,kk)*this%cfg%vol(ii,jj,kk)*this%VF(ii,jj,kk)
+                  w_vol_(i) = w_vol_(i) + W(ii,jj,kk)*this%cfg%vol(ii,jj,kk)*this%VF(ii,jj,kk)
       
                end do
             end if
@@ -2368,13 +2370,13 @@ contains
                   ztmp = this%cfg%zm(kk)-per_z*this%cfg%zL-z_vol(i)/vol_struct(i)
 
                   ! Moment of Inertia
-                  Imom_(i,1,1) = Imom_(i,1,1) + (ytmp**2 + ztmp**2)*this%cfg%vol(ii,jj,kk)*VF(ii,jj,kk)
-                  Imom_(i,2,2) = Imom_(i,2,2) + (xtmp**2 + ztmp**2)*this%cfg%vol(ii,jj,kk)*VF(ii,jj,kk)
-                  Imom_(i,3,3) = Imom_(i,3,3) + (xtmp**2 + ytmp**2)*this%cfg%vol(ii,jj,kk)*VF(ii,jj,kk)
+                  Imom_(i,1,1) = Imom_(i,1,1) + (ytmp**2 + ztmp**2)*this%cfg%vol(ii,jj,kk)*this%VF(ii,jj,kk)
+                  Imom_(i,2,2) = Imom_(i,2,2) + (xtmp**2 + ztmp**2)*this%cfg%vol(ii,jj,kk)*this%VF(ii,jj,kk)
+                  Imom_(i,3,3) = Imom_(i,3,3) + (xtmp**2 + ytmp**2)*this%cfg%vol(ii,jj,kk)*this%VF(ii,jj,kk)
 
-                  Imom_(i,1,2) = Imom_(i,1,2) - xtmp*ytmp*this%cfg%vol(ii,jj,kk)*VF(ii,jj,kk)
-                  Imom_(i,1,3) = Imom_(i,1,3) - xtmp*ztmp*this%cfg%vol(ii,jj,kk)*VF(ii,jj,kk)
-                  Imom_(i,2,3) = Imom_(i,2,3) - ytmp*ztmp*this%cfg%vol(ii,jj,kk)*VF(ii,jj,kk)
+                  Imom_(i,1,2) = Imom_(i,1,2) - xtmp*ytmp*this%cfg%vol(ii,jj,kk)*this%VF(ii,jj,kk)
+                  Imom_(i,1,3) = Imom_(i,1,3) - xtmp*ztmp*this%cfg%vol(ii,jj,kk)*this%VF(ii,jj,kk)
+                  Imom_(i,2,3) = Imom_(i,2,3) - ytmp*ztmp*this%cfg%vol(ii,jj,kk)*this%VF(ii,jj,kk)
 
                end do
             end if
@@ -2476,10 +2478,9 @@ contains
 
 
    !> Classify film by shape
-   subroutine film_classify(this,VF,Lbary,Gbary)
+   subroutine film_classify(this,Lbary,Gbary)
       implicit none
       class(ccl), intent(inout) :: this
-      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in) :: VF     !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       real(WP), dimension(:,this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in) :: Lbary  !< Liquid barycenter
       real(WP), dimension(:,this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in) :: Gbary  !< Gas barycenter      
       integer :: m,n,i,j,k,ii,jj,kk
@@ -2517,12 +2518,12 @@ contains
                         ztmp = Lbary(3,ii,jj,kk)
 
                         ! Volume
-                        vol_total = vol_total + this%cfg%vol(ii,jj,kk)*VF(ii,jj,kk)
+                        vol_total = vol_total + this%cfg%vol(ii,jj,kk)*this%VF(ii,jj,kk)
 
                         ! Center of gravity
-                        x_vol = x_vol + xtmp*this%cfg%vol(ii,jj,kk)*VF(ii,jj,kk)
-                        y_vol = y_vol + ytmp*this%cfg%vol(ii,jj,kk)*VF(ii,jj,kk)
-                        z_vol = z_vol + ztmp*this%cfg%vol(ii,jj,kk)*VF(ii,jj,kk)
+                        x_vol = x_vol + xtmp*this%cfg%vol(ii,jj,kk)*this%VF(ii,jj,kk)
+                        y_vol = y_vol + ytmp*this%cfg%vol(ii,jj,kk)*this%VF(ii,jj,kk)
+                        z_vol = z_vol + ztmp*this%cfg%vol(ii,jj,kk)*this%VF(ii,jj,kk)
             
                      end do
                   end do
@@ -2536,13 +2537,13 @@ contains
                         ytmp = Lbary(2,ii,jj,kk)-y_vol/vol_total
                         ztmp = Lbary(3,ii,jj,kk)-z_vol/vol_total
 
-                        Imom(1,1) = Imom(1,1) + (ytmp**2 + ztmp**2)*this%cfg%vol(ii,jj,kk)*VF(ii,jj,kk)
-                        Imom(2,2) = Imom(2,2) + (xtmp**2 + ztmp**2)*this%cfg%vol(ii,jj,kk)*VF(ii,jj,kk)
-                        Imom(3,3) = Imom(3,3) + (xtmp**2 + ytmp**2)*this%cfg%vol(ii,jj,kk)*VF(ii,jj,kk)
+                        Imom(1,1) = Imom(1,1) + (ytmp**2 + ztmp**2)*this%cfg%vol(ii,jj,kk)*this%VF(ii,jj,kk)
+                        Imom(2,2) = Imom(2,2) + (xtmp**2 + ztmp**2)*this%cfg%vol(ii,jj,kk)*this%VF(ii,jj,kk)
+                        Imom(3,3) = Imom(3,3) + (xtmp**2 + ytmp**2)*this%cfg%vol(ii,jj,kk)*this%VF(ii,jj,kk)
       
-                        Imom(1,2) = Imom(1,2) - xtmp*ytmp*this%cfg%vol(ii,jj,kk)*VF(ii,jj,kk)
-                        Imom(1,3) = Imom(1,3) - xtmp*ztmp*this%cfg%vol(ii,jj,kk)*VF(ii,jj,kk)
-                        Imom(2,3) = Imom(2,3) - ytmp*ztmp*this%cfg%vol(ii,jj,kk)*VF(ii,jj,kk)
+                        Imom(1,2) = Imom(1,2) - xtmp*ytmp*this%cfg%vol(ii,jj,kk)*this%VF(ii,jj,kk)
+                        Imom(1,3) = Imom(1,3) - xtmp*ztmp*this%cfg%vol(ii,jj,kk)*this%VF(ii,jj,kk)
+                        Imom(2,3) = Imom(2,3) - ytmp*ztmp*this%cfg%vol(ii,jj,kk)*this%VF(ii,jj,kk)
                        
                      end do
                   end do
