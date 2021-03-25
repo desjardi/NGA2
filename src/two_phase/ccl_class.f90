@@ -90,26 +90,6 @@ module ccl_class
       integer :: nout_time
       real(WP), dimension(:), pointer :: out_time => null()
       
-      ! Structure and films
-      ! type(struct), dimension(:), allocatable :: struct_list
-      ! type(film)  , dimension(:), allocatable :: film_list
-      type(struct), dimension(:), pointer :: struct_list => null()
-      type(film)  , dimension(:), pointer :: film_list => null()
-
-      ! Linked-list struct and meta_struct
-      type(struct_type), pointer :: first_struct => null()   !< Pointer to first struct in linked list
-      type(struct_type), pointer :: my_struct => null()      !< Pointer to subsequent struct in linked list
-      ! list of meta-structures' ID tags
-      integer, dimension(:), pointer :: meta_structures => null()
-      ! List of meta-structures
-      type(meta_struct_type), dimension(:), pointer :: meta_structures_list => null()
-      ! List of output variables names
-      integer :: meta_structures_nname
-      character(len=str_medium), dimension(:), pointer :: meta_structures_name => null()
-      ! Time info
-      integer :: nout_time
-      real(WP), dimension(:), pointer :: out_time => null()
-
       ! CCL selection parameters
       real(WP) :: VFlo=1.0e-10_WP                            !< Minimum VF value considered for a structure to exist
       real(WP) :: dot_threshold=-0.5_WP                      !< Maximum dot product of two interface normals for their respective cells to be considered film cells
@@ -2636,18 +2616,5 @@ contains
       return
    end subroutine kill_struct
    
-         a_y = a_x
-         ! find root of x with path compression
-         if ( a_y.ne.this%parent_all(a_y) ) then
-            if ( this%parent_all(a_y).eq.a_starting_node ) then
-               a_y = this%parent_all(a_y)
-               return
-            else
-               this%parent_all(a_y) = find_all_2(this%parent_all(a_y),a_starting_node)
-               a_y = this%parent_all(a_y)
-            end if
-         end if
-         return
-      end function find_all_2
    
 end module ccl_class
