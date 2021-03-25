@@ -1224,7 +1224,6 @@ contains
       real(IRL_double), dimension(0:26) :: liquid_volume_fraction
       real(IRL_double), dimension(3) :: initial_norm
       real(IRL_double) :: initial_dist
-      type(ListVM_VMAN_type) :: neighborhood_tri_moments_list
       
       ! Get storage for voluem moments and normal
       call new(volume_moments_and_normal)
@@ -1235,8 +1234,7 @@ contains
          call new(neighborhood_cells(i))
          call new(separated_volume_moments(i))
       end do
-      call new(neighborhood_tri_moments_list)
-
+      
       ! Prepare linking of our neighborhood
       do i=0,26
          call addMember(neighborhood,neighborhood_cells(i),separated_volume_moments(i))
@@ -1276,24 +1274,9 @@ contains
                end do
                call setSurfaceArea(neighborhood,surface_area)
                
-               ! Collect tris from 3x3x3 neighborhood
-               call clear(neighborhood_tri_moments_list)
-               do kk=k-1,k+1
-                  do jj=j-1,j+1
-                     do ii=i-1,i+1
-                     ! Skip wall cells
-                     if (this%mask(ii,jj,kk).ne.0) cycle
-                     ! Append triangle_moments_storage in each cell to neighborhood list
-                     call append(neighborhood_tri_moments_list,this%triangle_moments_storage(ii,jj,kk))
-                     end do
-                  end do
-               end do
-
                ! Made it this far, we need a reconstruction - this builds the initial guess
-               ! if (getSize(this%triangle_moments_storage(i,j,k)).gt.0) then
-               if (getSize(neighborhood_tri_moments_list).gt.0) then
-                  ! call reconstructAdvectedNormals(this%triangle_moments_storage(i,j,k),neighborhood,0.95_WP,this%liquid_gas_interface(i,j,k))
-                  call reconstructAdvectedNormals(neighborhood_tri_moments_list,neighborhood,0.95_WP,this%liquid_gas_interface(i,j,k))
+               if (getSize(this%triangle_moments_storage(i,j,k)).gt.0) then
+                  call reconstructAdvectedNormals(this%triangle_moments_storage(i,j,k),neighborhood,0.95_WP,this%liquid_gas_interface(i,j,k))
                   if (getNumberOfPlanes(this%liquid_gas_interface(i,j,k)).eq.1) then
                      call setNumberOfPlanes(this%liquid_gas_interface(i,j,k),1)
                      initial_norm=normalize(this%Gbary(:,i,j,k)-this%Lbary(:,i,j,k))
