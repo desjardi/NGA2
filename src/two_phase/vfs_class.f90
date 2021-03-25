@@ -99,6 +99,9 @@ module vfs_class
       ! Interface reconstruction method
       integer :: reconstruction_method                    !< Interface reconstruction method
       
+      ! R2P two-plane threshold
+      real(WP) :: twoplane_threshold=0.95_WP              !< Threshold for r2p to switch from one-plane to two-planes
+      
       ! Flotsam removal parameter - turned off by default
       real(WP) :: VFflot=0.0_WP                           !< Threshold VF parameter for flotsam removal (0.0=off)
       real(WP) :: VFsheet=0.0_WP                          !< Threshold VF parameter for sheet removal (0.0=off)
@@ -1215,7 +1218,7 @@ contains
       implicit none
       class(vfs), intent(inout) :: this
       integer(IRL_SignedIndex_t) :: i,j,k
-      integer :: ind,ii,jj,kk
+      integer :: ind,ii,jj,kk,icenter
       type(R2PNeigh_RectCub_type) :: neighborhood
       type(RectCub_type), dimension(0:26) :: neighborhood_cells
       type(SepVM_type), dimension(0:26) :: separated_volume_moments
@@ -1234,12 +1237,6 @@ contains
          call new(neighborhood_cells(i))
          call new(separated_volume_moments(i))
       end do
-      
-      ! Prepare linking of our neighborhood
-      do i=0,26
-         call addMember(neighborhood,neighborhood_cells(i),separated_volume_moments(i))
-      end do
-      call setCenterOfStencil(neighborhood,13)
       
       ! Traverse domain and reconstruct interface
       do k=this%cfg%kmin_,this%cfg%kmax_
@@ -1261,8 +1258,19 @@ contains
                do kk=k-1,k+1
                   do jj=j-1,j+1
                      do ii=i-1,i+1
+                        ! Skip true wall cells - bconds can be used here
+                        if (this%mask(ii,jj,kk).eq.1) cycle
+                        ! Add cell to our neighborhood
+                        call addMember(neighborhood,neighborhood_cells(ind),separated_volume_moments(ind))
+                        ! Build the cell
                         call construct_2pt(neighborhood_cells(ind),[this%cfg%x(ii),this%cfg%y(jj),this%cfg%z(kk)],[this%cfg%x(ii+1),this%cfg%y(jj+1),this%cfg%z(kk+1)])
                         call construct(separated_volume_moments(ind),[this%VF(ii,jj,kk)*this%cfg%vol(ii,jj,kk),this%Lbary(:,ii,jj,kk),(1.0_WP-this%VF(ii,jj,kk))*this%cfg%vol(ii,jj,kk),this%Gbary(:,ii,jj,kk)])
+                        ! Trap and set stencil center
+                        if (ii.eq.i.and.jj.eq.j.and.kk.eq.k) then
+                           icenter=ind
+                           call setCenterOfStencil(neighborhood,icenter)
+                        end if
+                        ! Increment counter
                         ind=ind+1
                      end do
                   end do
@@ -1276,23 +1284,26 @@ contains
                
                ! Made it this far, we need a reconstruction - this builds the initial guess
                if (getSize(this%triangle_moments_storage(i,j,k)).gt.0) then
-                  call reconstructAdvectedNormals(this%triangle_moments_storage(i,j,k),neighborhood,0.95_WP,this%liquid_gas_interface(i,j,k))
+                  call reconstructAdvectedNormals(this%triangle_moments_storage(i,j,k),neighborhood,this%twoplane_threshold,this%liquid_gas_interface(i,j,k))
                   if (getNumberOfPlanes(this%liquid_gas_interface(i,j,k)).eq.1) then
                      call setNumberOfPlanes(this%liquid_gas_interface(i,j,k),1)
                      initial_norm=normalize(this%Gbary(:,i,j,k)-this%Lbary(:,i,j,k))
                      initial_dist=dot_product(initial_norm,[this%cfg%xm(i),this%cfg%ym(j),this%cfg%zm(k)])
                      call setPlane(this%liquid_gas_interface(i,j,k),0,initial_norm,initial_dist)
-                     call matchVolumeFraction(neighborhood_cells(13),this%VF(i,j,k),this%liquid_gas_interface(i,j,k))
+                     call matchVolumeFraction(neighborhood_cells(icenter),this%VF(i,j,k),this%liquid_gas_interface(i,j,k))
                   end if
                else
                   ! No interface was advected in our cell, use MoF
-                  call reconstructMOF3D(neighborhood_cells(13),separated_volume_moments(13),this%liquid_gas_interface(i,j,k))
+                  call reconstructMOF3D(neighborhood_cells(icenter),separated_volume_moments(icenter),this%liquid_gas_interface(i,j,k))
                   ! Surface area not set cause no advected moments, set for current MOF reconstruction
-                  call setSurfaceArea(neighborhood,getSA(neighborhood_cells(13),this%liquid_gas_interface(i,j,k)))
+                  call setSurfaceArea(neighborhood,getSA(neighborhood_cells(icenter),this%liquid_gas_interface(i,j,k)))
                end if
                
                ! Perform R2P reconstruction
                call reconstructR2P3D(neighborhood,this%liquid_gas_interface(i,j,k))
+               
+               ! Clean up neighborhood
+               call emptyNeighborhood(neighborhood)
                
             end do
          end do
