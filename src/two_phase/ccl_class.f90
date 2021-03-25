@@ -151,7 +151,6 @@ module ccl_class
    !> Declare CCL algorithm constructor
    interface ccl
       procedure constructor
-      ! procedure construct_struct_only
    end interface ccl
    
 contains
@@ -312,10 +311,12 @@ contains
       call this%kill_struct()
 
       ! Deallocate list of meta_structures
-      deallocate(this%meta_structures)
-      deallocate(this%meta_structures_list)
-      nullify(this%meta_structures)
-      nullify(this%meta_structures_list)
+      if (associated(this%meta_structures).and.associated(this%meta_structures_list)) then
+         deallocate(this%meta_structures)
+         deallocate(this%meta_structures_list)
+         nullify(this%meta_structures)
+         nullify(this%meta_structures_list)
+      end if
 
    end subroutine deallocate_lists
 
@@ -1365,19 +1366,19 @@ contains
    
    contains
    
-      ! For debugging only
-      function find_only(a_x) result(a_y)
-         implicit none
-         integer :: a_x
-         integer :: a_y
+      ! ! For debugging only
+      ! function find_only(a_x) result(a_y)
+      !    implicit none
+      !    integer :: a_x
+      !    integer :: a_y
    
-         a_y = a_x
-         ! find root of x with path compression
-         do while ( a_y.ne.this%parent(a_y) )
-            a_y = this%parent(a_y)
-         end do
-         return
-      end function find_only
+      !    a_y = a_x
+      !    ! find root of x with path compression
+      !    do while ( a_y.ne.this%parent(a_y) )
+      !       a_y = this%parent(a_y)
+      !    end do
+      !    return
+      ! end function find_only
    
       ! This function points the this%parent to root and returns that root
       recursive function find(a_x) result(a_y)
@@ -1881,19 +1882,19 @@ contains
    
    contains
    
-      ! For debugging only
-      function find_only(a_x) result(a_y)
-         implicit none
-         integer :: a_x
-         integer :: a_y
+      ! ! For debugging only
+      ! function find_only(a_x) result(a_y)
+      !    implicit none
+      !    integer :: a_x
+      !    integer :: a_y
    
-         a_y = a_x
-         ! find root of x with path compression
-         do while ( a_y.ne.this%film_parent(a_y) )
-            a_y = this%film_parent(a_y)
-         end do
-         return
-      end function find_only
+      !    a_y = a_x
+      !    ! find root of x with path compression
+      !    do while ( a_y.ne.this%film_parent(a_y) )
+      !       a_y = this%film_parent(a_y)
+      !    end do
+      !    return
+      ! end function find_only
    
       ! This function points the this%film_parent to root and returns that root
       recursive function find(a_x) result(a_y)
@@ -2037,40 +2038,40 @@ contains
          return
       end function is_connected
 
-      ! Synchronize struct periodicity across all procs
-      subroutine film_sync_per
-         implicit none
+      ! ! Synchronize struct periodicity across all procs
+      ! subroutine film_sync_per
+      !    implicit none
 
-         ! Allocate local and global perodicity arrays
-         allocate(this%per_(this%film_sync_offset+1:this%film_sync_offset+this%n_film_max,1:3)); this%per_ = 0
-         allocate(this%per (this%cfg%nproc*this%n_film_max,1:3)); this%per = 0 
+      !    ! Allocate local and global perodicity arrays
+      !    allocate(this%per_(this%film_sync_offset+1:this%film_sync_offset+this%n_film_max,1:3)); this%per_ = 0
+      !    allocate(this%per (this%cfg%nproc*this%n_film_max,1:3)); this%per = 0 
 
-         ! Fill per_ array
-         do i=this%film_sync_offset+1,this%film_sync_offset+this%n_film
-            this%per_(i,:) = this%film_list(this%film_map_(i))%per
-         end do
+      !    ! Fill per_ array
+      !    do i=this%film_sync_offset+1,this%film_sync_offset+this%n_film
+      !       this%per_(i,:) = this%film_list(this%film_map_(i))%per
+      !    end do
 
-         ! Communitcate per
-         call MPI_ALLGATHER(this%per_(:,1),this%n_film_max,MPI_INTEGER,this%per(:,1),this%n_film_max,MPI_INTEGER,this%cfg%comm,ierr)
-         call MPI_ALLGATHER(this%per_(:,2),this%n_film_max,MPI_INTEGER,this%per(:,2),this%n_film_max,MPI_INTEGER,this%cfg%comm,ierr)
-         call MPI_ALLGATHER(this%per_(:,3),this%n_film_max,MPI_INTEGER,this%per(:,3),this%n_film_max,MPI_INTEGER,this%cfg%comm,ierr)
-         ! Update parent per
-         do i=1,this%cfg%nproc*this%n_film_max
-            this%per(this%film_parent(i),:) = max(this%per(this%film_parent(i),:),this%per(i,:))
-         end do
+      !    ! Communitcate per
+      !    call MPI_ALLGATHER(this%per_(:,1),this%n_film_max,MPI_INTEGER,this%per(:,1),this%n_film_max,MPI_INTEGER,this%cfg%comm,ierr)
+      !    call MPI_ALLGATHER(this%per_(:,2),this%n_film_max,MPI_INTEGER,this%per(:,2),this%n_film_max,MPI_INTEGER,this%cfg%comm,ierr)
+      !    call MPI_ALLGATHER(this%per_(:,3),this%n_film_max,MPI_INTEGER,this%per(:,3),this%n_film_max,MPI_INTEGER,this%cfg%comm,ierr)
+      !    ! Update parent per
+      !    do i=1,this%cfg%nproc*this%n_film_max
+      !       this%per(this%film_parent(i),:) = max(this%per(this%film_parent(i),:),this%per(i,:))
+      !    end do
 
-         do i=this%film_sync_offset+1,this%film_sync_offset+this%n_film
-            do n=1,this%film_list(this%film_map_(i))%nnode
-               ii = this%film_list(this%film_map_(i))%node(n,1)
-               jj = this%film_list(this%film_map_(i))%node(n,2)
-               kk = this%film_list(this%film_map_(i))%node(n,3)
-               this%film_idp(ii,jj,kk,:) = this%per(this%film_id(ii,jj,kk),:)
-            end do
-         end do
+      !    do i=this%film_sync_offset+1,this%film_sync_offset+this%n_film
+      !       do n=1,this%film_list(this%film_map_(i))%nnode
+      !          ii = this%film_list(this%film_map_(i))%node(n,1)
+      !          jj = this%film_list(this%film_map_(i))%node(n,2)
+      !          kk = this%film_list(this%film_map_(i))%node(n,3)
+      !          this%film_idp(ii,jj,kk,:) = this%per(this%film_id(ii,jj,kk),:)
+      !       end do
+      !    end do
 
-         return
+      !    return
 
-      end subroutine film_sync_per
+      ! end subroutine film_sync_per
    
    end subroutine film_sync
 
@@ -2264,21 +2265,20 @@ contains
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in) :: U     !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in) :: V     !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in) :: W     !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
-      real(WP),dimension(:), pointer :: x_cg,y_cg,z_cg
-      real(WP),dimension(:), pointer :: vol_struct_,vol_struct
-      real(WP),dimension(:), pointer :: x_vol_,x_vol,y_vol_,y_vol,z_vol_,z_vol
-      real(WP),dimension(:), pointer :: u_vol_,u_vol,v_vol,v_vol_,w_vol,w_vol_
+      real(WP), dimension(:), pointer :: x_cg,y_cg,z_cg
+      real(WP), dimension(:), pointer :: vol_struct_,vol_struct
+      real(WP), dimension(:), pointer :: x_vol_,x_vol,y_vol_,y_vol,z_vol_,z_vol
+      real(WP), dimension(:), pointer :: u_vol_,u_vol,v_vol,v_vol_,w_vol,w_vol_
       real(WP), dimension(:,:,:), pointer :: Imom_,Imom
-      integer :: i,j,ii,jj,kk,ierr,iunit,var
-      integer :: per_x,per_y,per_z
+      integer  :: i,j,ii,jj,kk,ierr,iunit,var
+      integer  :: per_x,per_y,per_z
       real(WP) :: xtmp,ytmp,ztmp
       character(len=str_medium) :: filename
-      
       ! Eigenvalues/eigenvectors
-      real(WP),dimension(3,3) :: A
-      real(WP),dimension(3) :: d
-      integer, parameter :: lwork = 102 ! dsyev optimal length (nb+2)*n, where order n=3 and block size nb=32
-      real(WP),dimension(lwork) :: work
+      real(WP), dimension(3,3) :: A
+      real(WP), dimension(3) :: d
+      integer , parameter :: lwork = 102 ! dsyev optimal length (nb+2)*n, where order n=3 and block size nb=32
+      real(WP), dimension(lwork) :: work
       integer :: n,info
 
       ! allocate / initialize temps arrays for computation
@@ -2490,16 +2490,16 @@ contains
       class(ccl), intent(inout) :: this
       real(WP), dimension(:,this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in) :: Lbary  !< Liquid barycenter
       real(WP), dimension(:,this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in) :: Gbary  !< Gas barycenter      
-      integer :: m,n,i,j,k,ii,jj,kk
+      integer  :: m,n,i,j,k,ii,jj,kk
       real(WP) :: xtmp, ytmp, ztmp
       real(WP) :: x_vol,y_vol,z_vol,vol_total
       ! Local moment of inertia tensor
       real(WP), dimension(3,3) :: Imom
       ! Eigenvalues/eigenvectors
-      real(WP),dimension(3) :: d
-      integer, parameter :: order = 3
-      integer, parameter :: lwork = 102 ! dsyev optimal length (nb+2)*order, where block size nb=32
-      real(WP),dimension(lwork) :: work
+      real(WP), dimension(3)     :: d
+      integer , parameter        :: order = 3
+      integer , parameter        :: lwork = 102 ! dsyev optimal length (nb+2)*order, where block size nb=32
+      real(WP), dimension(lwork) :: work
       integer :: info
       ! ! Characteristic lengths
       ! real(WP) :: l1,l2,l3
@@ -2556,19 +2556,19 @@ contains
                   end do
                end do
             end do
-            ! On exit, Imom contains eigenvectors, and d contains eigenvalues in ascending order
-            call dsyev('V','U',order,Imom,order,d,work,lwork,info)
-            ! Get rid of very small negative values (due to machine accuracy)
-            d = max(0.0_WP,d)
-            ! ! Calculate characteristic lengths assuming ellipsoid
-            ! l1 = sqrt(5.0_WP/2.0_WP*abs(d(2)+d(3)-d(1))/vol_total)
-            ! l2 = sqrt(5.0_WP/2.0_WP*abs(d(3)+d(1)-d(2))/vol_total)
-            ! l3 = sqrt(5.0_WP/2.0_WP*abs(d(1)+d(2)-d(3))/vol_total)
-            this%film_type(i,j,k) = 1
-            if (d(3).gt.(ratio*d(1))) this%film_type(i,j,k) = this%film_type(i,j,k) + 1
-            if (d(3).gt.(ratio*d(2))) this%film_type(i,j,k) = this%film_type(i,j,k) + 1
-            ! if (l1.gt.(ratio*l2)) film_type(i,j,k) = film_type(i,j,k) + 1
-            ! if (l1.gt.(ratio*l3)) film_type(i,j,k) = film_type(i,j,k) + 1   
+         ! On exit, Imom contains eigenvectors, and d contains eigenvalues in ascending order
+         call dsyev('V','U',order,Imom,order,d,work,lwork,info)
+         ! Get rid of very small negative values (due to machine accuracy)
+         d = max(0.0_WP,d)
+         ! ! Calculate characteristic lengths assuming ellipsoid
+         ! l1 = sqrt(5.0_WP/2.0_WP*abs(d(2)+d(3)-d(1))/vol_total)
+         ! l2 = sqrt(5.0_WP/2.0_WP*abs(d(3)+d(1)-d(2))/vol_total)
+         ! l3 = sqrt(5.0_WP/2.0_WP*abs(d(1)+d(2)-d(3))/vol_total)
+         this%film_type(i,j,k) = 1
+         if (d(3).gt.(ratio*d(1))) this%film_type(i,j,k) = this%film_type(i,j,k) + 1
+         if (d(3).gt.(ratio*d(2))) this%film_type(i,j,k) = this%film_type(i,j,k) + 1
+         ! if (l1.gt.(ratio*l2)) film_type(i,j,k) = film_type(i,j,k) + 1
+         ! if (l1.gt.(ratio*l3)) film_type(i,j,k) = film_type(i,j,k) + 1  
          end if ! Liquid film
       end do      
 
@@ -2579,7 +2579,6 @@ contains
    subroutine kill_struct(this)
       implicit none
       class(ccl), intent(inout) :: this
-
       type(struct_type), pointer :: current => null()
       type(struct_type), pointer :: next => null()
     
