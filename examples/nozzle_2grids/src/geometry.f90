@@ -231,7 +231,7 @@ contains
       end block create_grid2
       
       
-      ! Create config2 from grid1 on our entire group
+      ! Create config2 from grid2 on our entire group
       create_cfg2: block
          use parallel, only: group
          integer, dimension(3) :: partition

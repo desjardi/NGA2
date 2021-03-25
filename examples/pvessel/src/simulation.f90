@@ -467,7 +467,7 @@ end subroutine get_cond
          end do
          ! Multiply by expected porosity in the bag
          epsp=epsp*bporo
-         epsf=1.0_WP!-epsp     !< THIS COMMENTS OUT THE POROSITY EFFECT
+         epsf=1.0_WP!-epsp     !< SET TO ONE TO REMOVE POROSITY EFFECT
          ! Setup the scaled Laplacian operator from incomp metrics: lap(*)=-vol*div(epsf*grad(*))
          do k=fs%cfg%kmin_,fs%cfg%kmax_
             do j=fs%cfg%jmin_,fs%cfg%jmax_
@@ -855,18 +855,18 @@ end subroutine get_cond
             call fs%addsrc_gravity(resU,resV,resW)
             
             ! Also add permeability
-            !permeability: block
-            !   integer :: i,j,k
-            !   do k=fs%cfg%kmin_,fs%cfg%kmax_
-            !      do j=fs%cfg%jmin_,fs%cfg%jmax_
-            !         do i=fs%cfg%imin_,fs%cfg%imax_
-            !            resU(i,j,k)=resU(i,j,k)-sum(fs%itpr_x(:,i,j,k)*epsf(i-1:i,j,k)*viscmol(i-1:i,j,k)*epsp(i-1:i,j,k))*fs%U(i,j,k)/(bporo*bperm)
-            !            resV(i,j,k)=resV(i,j,k)-sum(fs%itpr_y(:,i,j,k)*epsf(i,j-1:j,k)*viscmol(i,j-1:j,k)*epsp(i,j-1:j,k))*fs%V(i,j,k)/(bporo*bperm)
-            !            resW(i,j,k)=resW(i,j,k)-sum(fs%itpr_z(:,i,j,k)*epsf(i,j,k-1:k)*viscmol(i,j,k-1:k)*epsp(i,j,k-1:k))*fs%W(i,j,k)/(bporo*bperm)
-            !         end do
-            !      end do
-            !   end do
-            !end block permeability
+            permeability: block
+               integer :: i,j,k
+               do k=fs%cfg%kmin_,fs%cfg%kmax_
+                  do j=fs%cfg%jmin_,fs%cfg%jmax_
+                     do i=fs%cfg%imin_,fs%cfg%imax_
+                        resU(i,j,k)=resU(i,j,k)-sum(fs%itpr_x(:,i,j,k)*epsf(i-1:i,j,k)*viscmol(i-1:i,j,k)*epsp(i-1:i,j,k))*fs%U(i,j,k)/(bporo*bperm)
+                        resV(i,j,k)=resV(i,j,k)-sum(fs%itpr_y(:,i,j,k)*epsf(i,j-1:j,k)*viscmol(i,j-1:j,k)*epsp(i,j-1:j,k))*fs%V(i,j,k)/(bporo*bperm)
+                        resW(i,j,k)=resW(i,j,k)-sum(fs%itpr_z(:,i,j,k)*epsf(i,j,k-1:k)*viscmol(i,j,k-1:k)*epsp(i,j,k-1:k))*fs%W(i,j,k)/(bporo*bperm)
+                     end do
+                  end do
+               end do
+            end block permeability
             
             ! Assemble explicit residual
             resU=time%dtmid*resU-(2.0_WP*fs%rhoU-2.0_WP*fs%rhoUold)

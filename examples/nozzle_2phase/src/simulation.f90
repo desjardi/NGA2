@@ -1,13 +1,16 @@
 !> Various definitions and tools for running an NGA2 simulation
 module simulation
+   use string,            only: str_medium
    use precision,         only: WP
-   use geometry,          only: cfg,xinj_dist,inj_norm_diam,dli0,dlo0,dgi0
+   use geometry,          only: cfg
+   use geometry,          only: xinj_dist,inj_norm_diam,rli0,rlo0,rgi0
    use tpns_class,        only: tpns
    use vfs_class,         only: vfs
    use sgsmodel_class,    only: sgsmodel
    use timetracker_class, only: timetracker
    use ensight_class,     only: ensight
    use event_class,       only: event
+   use datafile_class,    only: datafile
    use monitor_class,     only: monitor
    implicit none
    private
@@ -17,6 +20,12 @@ module simulation
    type(vfs),         public :: vf
    type(timetracker), public :: time
    type(sgsmodel),    public :: sgs
+   
+   !> Provide two datafiles and an event tracker for saving restarts
+   type(event)    :: save_evt
+   type(datafile) :: df
+   character(len=str_medium) :: irl_file
+   logical :: restarted
    
    !> Ensight postprocessing
    type(ensight) :: ens_out
@@ -32,7 +41,9 @@ module simulation
    real(WP), dimension(:,:,:), allocatable :: Ui,Vi,Wi
    real(WP), dimension(:,:,:,:), allocatable :: SR
    
+   
 contains
+   
    
    !> Function that localizes the right domain boundary
    function right_boundary(pg,i,j,k) result(isIn)
@@ -114,7 +125,7 @@ contains
       real(WP) :: rad
       isIn=.false.
       rad=sqrt(pg%ym(j)**2+pg%zm(k)**2)
-      if (rad.lt.dli0.and.i.eq.pg%imin) isIn=.true.
+      if (rad.lt.rli0.and.i.eq.pg%imin) isIn=.true.
    end function liq_inj
    
    
@@ -127,8 +138,56 @@ contains
       real(WP) :: rad
       isIn=.false.
       rad=sqrt(pg%ym(j)**2+pg%zm(k)**2)
-      if (rad.ge.dlo0.and.rad.lt.dgi0.and.i.eq.pg%imin) isIn=.true.
+      if (rad.ge.rlo0.and.rad.lt.rgi0.and.i.eq.pg%imin) isIn=.true.
    end function gas_inj
+   
+   
+   !> Function that localizes the top (y+) of the domain
+   function yp_locator(pg,i,j,k) result(isIn)
+      use pgrid_class, only: pgrid
+      implicit none
+      class(pgrid), intent(in) :: pg
+      integer, intent(in) :: i,j,k
+      logical :: isIn
+      isIn=.false.
+      if (j.eq.pg%jmax+1) isIn=.true.
+   end function yp_locator
+   
+   
+   !> Function that localizes the bottom (y-) of the domain
+   function ym_locator(pg,i,j,k) result(isIn)
+      use pgrid_class, only: pgrid
+      implicit none
+      class(pgrid), intent(in) :: pg
+      integer, intent(in) :: i,j,k
+      logical :: isIn
+      isIn=.false.
+      if (j.eq.pg%jmin) isIn=.true.
+   end function ym_locator
+   
+   
+   !> Function that localizes the top (z+) of the domain
+   function zp_locator(pg,i,j,k) result(isIn)
+      use pgrid_class, only: pgrid
+      implicit none
+      class(pgrid), intent(in) :: pg
+      integer, intent(in) :: i,j,k
+      logical :: isIn
+      isIn=.false.
+      if (k.eq.pg%kmax+1) isIn=.true.
+   end function zp_locator
+   
+   
+   !> Function that localizes the bottom (z-) of the domain
+   function zm_locator(pg,i,j,k) result(isIn)
+      use pgrid_class, only: pgrid
+      implicit none
+      class(pgrid), intent(in) :: pg
+      integer, intent(in) :: i,j,k
+      logical :: isIn
+      isIn=.false.
+      if (k.eq.pg%kmin) isIn=.true.
+   end function zm_locator
    
    
    !> Initialization of problem solver
@@ -137,7 +196,47 @@ contains
       implicit none
       
       
-      ! Allocate work arrays
+      ! Handle restart/saves here
+      restart_and_save: block
+         character(len=str_medium) :: dir_restart
+         ! CAREFUL - WE NEED TO CREATE THE TIMETRACKER BEFORE THE EVENT !
+         time=timetracker(cfg%amRoot,name='nozzle_exterior')
+         ! Create event for saving restart files
+         save_evt=event(time,'Restart output')
+         call param_read('Restart output period',save_evt%tper)
+         ! Check if we are restarting
+         call param_read(tag='Restart from',val=dir_restart,short='r',default='')
+         restarted=.false.; if (len_trim(dir_restart).gt.0) restarted=.true.
+         if (restarted) then
+            ! If we are, read the name of the directory
+            call param_read('Restart from',dir_restart,'r')
+            ! Read the datafile and the name of the IRL file to read later
+            df=datafile(pg=cfg,fdata=trim(adjustl(dir_restart))//'/'//'data')
+            irl_file=trim(adjustl(dir_restart))//'/'//'data.irl'
+         else
+            ! If we are not restarting, we will still need datafiles for saving restart files
+            df=datafile(pg=cfg,filename=trim(cfg%name),nval=2,nvar=10)
+            df%valname(1)='t'
+            df%valname(2)='dt'
+            df%varname(1)='U'
+            df%varname(2)='V'
+            df%varname(3)='W'
+            df%varname(4)='P'
+            df%varname(5)='Pjx'
+            df%varname(6)='Pjy'
+            df%varname(7)='Pjz'
+            df%varname(8)='LM'
+            df%varname(9)='MM'
+            df%varname(10)='VF'
+         end if
+      end block restart_and_save
+      
+      
+      ! ***************************************************************************
+      ! **************************** INITIALIZE SOLVER ****************************
+      ! ***************************************************************************
+      
+      ! Allocate work arrays for cfg
       allocate_work_arrays: block
          allocate(resU(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
          allocate(resV(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
@@ -151,28 +250,38 @@ contains
       
       ! Initialize time tracker
       initialize_timetracker: block
-         time=timetracker(cfg%amRoot)
+         !time=timetracker(cfg%amRoot,name='nozzle_exterior')   !< This is moved up for restarts!
          call param_read('Max timestep size',time%dtmax)
          call param_read('Max cfl number',time%cflmax)
          time%dt=time%dtmax
          time%itmax=2
+         ! Handle restart
+         if (restarted) then
+            call df%pullval(name='t' ,val=time%t )
+            call df%pullval(name='dt',val=time%dt)
+            time%told=time%t-time%dt
+         end if
       end block initialize_timetracker
       
       
       ! Initialize our VOF solver and field
       create_and_initialize_vof: block
-         use vfs_class, only: lvira
+         use vfs_class, only: lvira,r2p
          integer :: i,j,k
          real(WP) :: xloc,rad
-         ! Create a VOF solver
+         ! Create a VOF solver with LVIRA
          vf=vfs(cfg=cfg,reconstruction_method=lvira,name='VOF')
+         ! Create a VOF solver with R2P
+         !vf=vfs(cfg=cfg,reconstruction_method=r2p,name='VOF')
+         !vf%VFflot =1.0e-4_WP !< Enables flotsam removal
+         !vf%VFsheet=1.0e-2_WP !< Enables sheet removal
          ! Initialize to flat interface in liquid needle
          xloc=-0.001_WP !< Interface initially just inside the nozzle
          do k=vf%cfg%kmino_,vf%cfg%kmaxo_
             do j=vf%cfg%jmino_,vf%cfg%jmaxo_
                do i=vf%cfg%imino_,vf%cfg%imaxo_
                   rad=sqrt(vf%cfg%ym(j)**2+vf%cfg%zm(k)**2)
-                  if (vf%cfg%xm(i).lt.xloc.and.rad.le.dli0) then
+                  if (vf%cfg%xm(i).lt.xloc.and.rad.le.rli0) then
                      vf%VF(i,j,k)=1.0_WP
                   else
                      vf%VF(i,j,k)=0.0_WP
@@ -182,6 +291,15 @@ contains
                end do
             end do
          end do
+         ! Handle restart - using IRL data - tested but not working
+         !if (restarted) then
+         !   ! Get the IRL interface
+         !   call vf%read_interface(filename=trim(irl_file))
+         !   ! Reset moments to guarantee compatibility with interface reconstruction
+         !   call vf%reset_volume_moments()
+         !end if
+         ! Handle restart - using VF data
+         if (restarted) call df%pullvar(name='VF',var=vf%VF)
          ! Update the band
          call vf%update_band()
          ! Perform interface reconstruction from VOF field
@@ -201,11 +319,12 @@ contains
       end block create_and_initialize_vof
       
       
-      ! Create an incompressible flow solver with bconds
+      ! Create a two-phase flow solver with bconds
       create_solver: block
-         use tpns_class, only: dirichlet,clipped_neumann
+         use tpns_class, only: dirichlet,clipped_neumann,neumann
          use ils_class,  only: pcg_amg,gmres,gmres_amg
          use mathtools,  only: Pi
+         ! Create a two-phase flow solver
          fs=tpns(cfg=cfg,name='Two-phase NS')
          ! Assign constant viscosity to each phase
          call param_read('Liquid dynamic viscosity',fs%visc_l)
@@ -218,8 +337,15 @@ contains
          call param_read('Static contact angle',fs%contact_angle)
          fs%contact_angle=fs%contact_angle*Pi/180.0_WP
          ! Define direction gas/liquid stream boundary conditions
-         call fs%add_bcond(name='gas_inj',type=dirichlet,face='x',dir=-1,canCorrect=.false.,locator=gas_inj)
-         call fs%add_bcond(name='liq_inj',type=dirichlet,face='x',dir=-1,canCorrect=.false.,locator=liq_inj)
+         call fs%add_bcond(name='gas_inj',type=dirichlet      ,face='x',dir=-1,canCorrect=.false.,locator=gas_inj)
+         call fs%add_bcond(name='liq_inj',type=dirichlet      ,face='x',dir=-1,canCorrect=.false.,locator=liq_inj)
+         ! Neumann on the side
+         call fs%add_bcond(name='bc_yp'  ,type=clipped_neumann,face='y',dir=+1,canCorrect=.true. ,locator=yp_locator)
+         call fs%add_bcond(name='bc_ym'  ,type=clipped_neumann,face='y',dir=-1,canCorrect=.true. ,locator=ym_locator)
+         if (fs%cfg%nz.gt.1) then
+            call fs%add_bcond(name='bc_zp'  ,type=clipped_neumann,face='z',dir=+1,canCorrect=.true. ,locator=zp_locator)
+            call fs%add_bcond(name='bc_zm'  ,type=clipped_neumann,face='z',dir=-1,canCorrect=.true. ,locator=zm_locator)
+         end if
          ! Outflow on the right
          call fs%add_bcond(name='outflow',type=clipped_neumann,face='x',dir=+1,canCorrect=.true. ,locator=right_boundary)
          ! Configure pressure solver
@@ -229,7 +355,7 @@ contains
          call param_read('Implicit iteration',fs%implicit%maxit)
          call param_read('Implicit tolerance',fs%implicit%rcvg)
          ! Setup the solver
-         call fs%setup(pressure_ils=pcg_amg,implicit_ils=gmres_amg)
+         call fs%setup(pressure_ils=gmres_amg,implicit_ils=gmres_amg)
       end block create_solver
       
       
@@ -244,21 +370,32 @@ contains
          real(WP), parameter :: SLPM2SI=1.66667E-5_WP
          ! Zero initial field
          fs%U=0.0_WP; fs%V=0.0_WP; fs%W=0.0_WP
-         ! Apply Dirichlet at direct liquid and gas injector ports
-         call param_read('Gas flow rate (SLPM)',Q_SLPM)
+         ! Handle restart
+         if (restarted) then
+            call df%pullvar(name='U'  ,var=fs%U  )
+            call df%pullvar(name='V'  ,var=fs%V  )
+            call df%pullvar(name='W'  ,var=fs%W  )
+            call df%pullvar(name='P'  ,var=fs%P  )
+            call df%pullvar(name='Pjx',var=fs%Pjx)
+            call df%pullvar(name='Pjy',var=fs%Pjy)
+            call df%pullvar(name='Pjz',var=fs%Pjz)
+         end if
+         ! Apply Dirichlet at liquid injector port
+         call param_read('Liquid flow rate (SLPM)',Q_SLPM)
          Q_SI=Q_SLPM*SLPM2SI
-         Aport=pi/4.0_WP*dgi0**2-pi/4.0_WP*dlo0**2
+         Aport=pi*rli0**2
          Uports=Q_SI/Aport
-         call fs%get_bcond('gas_inj',mybc)
+         call fs%get_bcond('liq_inj',mybc)
          do n=1,mybc%itr%no_
             i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
             fs%U(i,j,k)=Uports
          end do
-         call param_read('Liquid flow rate (SLPM)',Q_SLPM)
+         ! Apply Dirichlet at gas injector port
+         call param_read('Gas flow rate (SLPM)',Q_SLPM)
          Q_SI=Q_SLPM*SLPM2SI
-         Aport=pi/4.0_WP*dli0**2
+         Aport=pi*rgi0**2-pi*rlo0**2
          Uports=Q_SI/Aport
-         call fs%get_bcond('liq_inj',mybc)
+         call fs%get_bcond('gas_inj',mybc)
          do n=1,mybc%itr%no_
             i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
             fs%U(i,j,k)=Uports
@@ -279,13 +416,18 @@ contains
       ! Create an LES model
       create_sgs: block
          sgs=sgsmodel(cfg=fs%cfg,umask=fs%umask,vmask=fs%vmask,wmask=fs%wmask)
+         ! Handle restart
+         if (restarted) then
+            call df%pullvar(name='LM',var=sgs%LM)
+            call df%pullvar(name='MM',var=sgs%MM)
+         end if
       end block create_sgs
       
       
       ! Add Ensight output
       create_ensight: block
          ! Create Ensight output from cfg
-         ens_out=ensight(cfg,'nozzle')
+         ens_out=ensight(cfg,'atom')
          ! Create event for Ensight output
          ens_evt=event(time,'Ensight output')
          call param_read('Ensight output period',ens_evt%tper)
@@ -293,6 +435,7 @@ contains
          call ens_out%add_vector('velocity',Ui,Vi,Wi)
          call ens_out%add_scalar('VOF',vf%VF)
          call ens_out%add_scalar('curvature',vf%curv)
+         call ens_out%add_scalar('visc_t',sgs%visc)
          call ens_out%add_surface('vofplic',vf%surfgrid)
          ! Output to ensight
          if (ens_evt%occurs()) call ens_out%write_data(time%t)
@@ -341,10 +484,15 @@ contains
    
    !> Perform an NGA2 simulation
    subroutine simulation_run
+      use parallel,   only: MPI_REAL_WP
+      use mpi_f08,    only: MPI_ALLREDUCE,MPI_SUM
+      use tpns_class, only: bcond,static_contact
       implicit none
-      integer :: i,j,k
+      integer :: n,i,j,k,ierr
+      type(bcond), pointer :: mybc
+      character(len=str_medium) :: dirname,timestamp
       
-      ! Perform time integration
+      ! Perform time integration - the second solver is the main driver here
       do while (.not.time%done())
          
          ! Increment time
@@ -360,9 +508,6 @@ contains
          fs%Vold=fs%V
          fs%Wold=fs%W
          
-         ! Apply time-varying Dirichlet conditions
-         ! This is where time-dpt Dirichlet would be enforced
-         
          ! Prepare old staggered density (at n)
          call fs%get_olddensity(vf=vf)
          
@@ -372,12 +517,12 @@ contains
          ! Prepare new staggered viscosity (at n+1)
          call fs%get_viscosity(vf=vf)
          
-         ! Turbulence modeling
+         ! Turbulence modeling - only work with gas properties here
          call fs%get_strainrate(Ui=Ui,Vi=Vi,Wi=Wi,SR=SR)
-         resU=fs%rho_l*vf%VF+fs%rho_g*(1.0_WP-vf%VF)
+         resU=fs%rho_g
          call sgs%get_visc(dt=time%dtold,rho=resU,Ui=Ui,Vi=Vi,Wi=Wi,SR=SR)
-         where (sgs%visc.lt.-min(fs%visc_l,fs%visc_g))
-            sgs%visc=-min(fs%visc_l,fs%visc_g)
+         where (sgs%visc.lt.-fs%visc_g)
+            sgs%visc=-fs%visc_g
          end where
          do k=fs%cfg%kmino_+1,fs%cfg%kmaxo_
             do j=fs%cfg%jmino_+1,fs%cfg%jmaxo_
@@ -424,7 +569,7 @@ contains
             call fs%update_laplacian()
             call fs%correct_mfr()
             call fs%get_div()
-            call fs%add_surface_tension_jump(dt=time%dt,div=fs%div,vf=vf)
+            call fs%add_surface_tension_jump(dt=time%dt,div=fs%div,vf=vf,contact_model=static_contact)
             fs%psolv%rhs=-fs%cfg%vol*fs%div/time%dt
             fs%psolv%sol=0.0_WP
             call fs%psolv%solve()
@@ -454,6 +599,51 @@ contains
          call vf%get_max()
          call mfile%write()
          call cflfile%write()
+         
+         ! After we're done clip all VOF at the exit area and along the sides
+         do k=fs%cfg%kmino_,fs%cfg%kmaxo_
+            do j=fs%cfg%jmino_,fs%cfg%jmaxo_
+               do i=fs%cfg%imino_,fs%cfg%imaxo_
+                  if (i.ge.vf%cfg%imax-5) vf%VF(i,j,k)=0.0_WP
+                  if (j.ge.vf%cfg%jmax-5) vf%VF(i,j,k)=0.0_WP
+                  if (j.le.vf%cfg%jmin+5) vf%VF(i,j,k)=0.0_WP
+               end do
+            end do
+         end do
+         if (fs%cfg%nz.gt.1) then
+            do k=fs%cfg%kmino_,fs%cfg%kmaxo_
+               do j=fs%cfg%jmino_,fs%cfg%jmaxo_
+                  do i=fs%cfg%imino_,fs%cfg%imaxo_
+                     if (k.ge.vf%cfg%kmax-5) vf%VF(i,j,k)=0.0_WP
+                     if (k.le.vf%cfg%kmin+5) vf%VF(i,j,k)=0.0_WP
+                  end do
+               end do
+            end do
+         end if
+         
+         ! Finally, see if it's time to save restart files
+         if (save_evt%occurs()) then
+            ! Prefix for files
+            dirname='restart_'; write(timestamp,'(es12.5)') time%t
+            ! Prepare a new directory
+            if (fs%cfg%amRoot) call execute_command_line('mkdir -p '//trim(adjustl(dirname))//trim(adjustl(timestamp)))
+            ! Populate df and write it
+            call df%pushval(name=  't',val=time%t )
+            call df%pushval(name= 'dt',val=time%dt)
+            call df%pushvar(name=  'U',var=fs%U   )
+            call df%pushvar(name=  'V',var=fs%V   )
+            call df%pushvar(name=  'W',var=fs%W   )
+            call df%pushvar(name=  'P',var=fs%P   )
+            call df%pushvar(name='Pjx',var=fs%Pjx )
+            call df%pushvar(name='Pjy',var=fs%Pjy )
+            call df%pushvar(name='Pjz',var=fs%Pjz )
+            call df%pushvar(name= 'LM',var=sgs%LM )
+            call df%pushvar(name= 'MM',var=sgs%MM )
+            call df%pushvar(name= 'VF',var=vf%VF  )
+            call df%write(fdata=trim(adjustl(dirname))//trim(adjustl(timestamp))//'/'//'data')
+            ! Also output IRL interface
+            call vf%write_interface(filename=trim(adjustl(dirname))//trim(adjustl(timestamp))//'/'//'data.irl')
+         end if
          
       end do
       
