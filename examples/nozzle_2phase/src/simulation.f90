@@ -270,9 +270,9 @@ contains
          integer :: i,j,k
          real(WP) :: xloc,rad
          ! Create a VOF solver with LVIRA
-         vf=vfs(cfg=cfg,reconstruction_method=lvira,name='VOF')
+         !vf=vfs(cfg=cfg,reconstruction_method=lvira,name='VOF')
          ! Create a VOF solver with R2P
-         !vf=vfs(cfg=cfg,reconstruction_method=r2p,name='VOF')
+         vf=vfs(cfg=cfg,reconstruction_method=r2p,name='VOF')
          !vf%VFflot =1.0e-4_WP !< Enables flotsam removal
          !vf%VFsheet=1.0e-2_WP !< Enables sheet removal
          ! Initialize to flat interface in liquid needle
