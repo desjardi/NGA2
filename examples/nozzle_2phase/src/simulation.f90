@@ -47,7 +47,7 @@ module simulation
    real(WP), dimension(:,:,:,:), allocatable :: SR
    
    !> Transfer parameter
-   real(WP) :: film_to_drop_threshold=1.0e-7_WP
+   real(WP) :: film_to_drop_threshold=1.0e-6_WP
    
 contains
    
