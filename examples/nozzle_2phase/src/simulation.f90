@@ -661,7 +661,7 @@ contains
          ! Perform CCL
          call cc%build_lists(VF=vf%VF,poly=vf%interface_polygon,U=fs%U,V=fs%V,W=fs%W)
          call cc%film_classify(Lbary=vf%Lbary,Gbary=vf%Gbary)
-         !call cc%get_min_thickness()
+         call cc%get_min_thickness()
          ! Loop through identified films and remove those that are thin enough
          remove_film: block
             integer :: m,n,i,j,k
@@ -670,17 +670,21 @@ contains
                ! Skip non-liquid films
                if (cc%film_list(cc%film_map_(m))%phase.ne.1) cycle
                ! Skip films that are still thick enough
-               !if (cc%film_list(cc%film_map_(m))%min_thickness.gt.film_to_drop_threshold) cycle
+               if (cc%film_list(cc%film_map_(m))%min_thickness.gt.film_to_drop_threshold) cycle
                ! We are still here: transfer the film to drops
+               print*,'REMOVING A FILM!!!!!!'
                do n=1,cc%film_list(cc%film_map_(m))%nnode ! Loops over cells within local film segment
                   i=cc%film_list(cc%film_map_(m))%node(n,1)
                   j=cc%film_list(cc%film_map_(m))%node(n,2)
                   k=cc%film_list(cc%film_map_(m))%node(n,3)
                   ! Remove liquid in that cell
-                  
+                  vf%VF(i,j,k)=0.0_WP
                end do
             end do
          end block remove_film
+         ! Sync VF and clean up IRL and band
+         call vf%cfg%sync(vf%VF)
+         call vf%clean_irl_and_band()
          ! Clean up CCL
          call cc%deallocate_lists()
          ! Resync the spray

@@ -141,6 +141,7 @@ module vfs_class
       procedure :: sync_interface                         !< Synchronize the IRL objects
       procedure :: remove_flotsams                        !< Remove flotsams manually - not conservative, should be avoided!
       procedure :: remove_sheets                          !< Remove R2P sheets manually - not conservative, should be avoided!
+      procedure :: clean_irl_and_band                     !< After a manual change in VF (maybe due to transfer to drops), update IRL and band info
       procedure :: sync_and_clean_barycenters             !< Synchronize and clean up phasic barycenters
       procedure, private :: sync_side                     !< Synchronize the IRL objects across one side - another I/O helper
       procedure, private :: sync_ByteBuffer               !< Communicate byte packets across one side - another I/O helper
@@ -828,6 +829,36 @@ contains
       ! Update the band
       call this%update_band()
    end subroutine remove_sheets
+   
+   
+   !> Clean up after VF change removal
+   subroutine clean_irl_and_band(this)
+      implicit none
+      class(vfs), intent(inout) :: this
+      integer :: i,j,k
+      ! Loop everywhere and remove leftover IRL objects
+      do k=this%cfg%kmino_,this%cfg%kmaxo_
+         do j=this%cfg%jmino_,this%cfg%jmaxo_
+            do i=this%cfg%imino_,this%cfg%imaxo_
+               if (this%VF(i,j,k).lt.VFlo) then
+                  this%VF(i,j,k)=0.0_WP
+                  this%Lbary(:,i,j,k)=[this%cfg%xm(i),this%cfg%ym(j),this%cfg%zm(k)]
+                  this%Gbary(:,i,j,k)=[this%cfg%xm(i),this%cfg%ym(j),this%cfg%zm(k)]
+                  call setNumberOfPlanes(this%liquid_gas_interface(i,j,k),1)
+                  call setPlane(this%liquid_gas_interface(i,j,k),0,[0.0_WP,0.0_WP,0.0_WP],sign(1.0_WP,this%VF(i,j,k)-0.5_WP))
+               else if (this%VF(i,j,k).gt.VFhi) then
+                  this%VF(i,j,k)=1.0_WP
+                  this%Lbary(:,i,j,k)=[this%cfg%xm(i),this%cfg%ym(j),this%cfg%zm(k)]
+                  this%Gbary(:,i,j,k)=[this%cfg%xm(i),this%cfg%ym(j),this%cfg%zm(k)]
+                  call setNumberOfPlanes(this%liquid_gas_interface(i,j,k),1)
+                  call setPlane(this%liquid_gas_interface(i,j,k),0,[0.0_WP,0.0_WP,0.0_WP],sign(1.0_WP,this%VF(i,j,k)-0.5_WP))
+               end if
+            end do
+         end do
+      end do
+      ! Update the band
+      call this%update_band()
+   end subroutine clean_irl_and_band
    
    
    !> Synchronize and clean up barycenter fields
