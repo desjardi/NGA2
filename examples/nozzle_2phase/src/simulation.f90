@@ -46,6 +46,8 @@ module simulation
    real(WP), dimension(:,:,:), allocatable :: Ui,Vi,Wi
    real(WP), dimension(:,:,:,:), allocatable :: SR
    
+   !> Transfer parameter
+   real(WP) :: film_to_drop_threshold=1.0e-6_WP
    
 contains
    
@@ -544,13 +546,8 @@ contains
    
    !> Perform an NGA2 simulation
    subroutine simulation_run
-      use parallel,   only: MPI_REAL_WP
-      use mpi_f08,    only: MPI_ALLREDUCE,MPI_SUM
-      use tpns_class, only: bcond,static_contact
+      use tpns_class, only: static_contact
       implicit none
-      integer :: n,i,j,k,ierr
-      type(bcond), pointer :: mybc
-      character(len=str_medium) :: dirname,timestamp
       
       ! Perform time integration - the second solver is the main driver here
       do while (.not.time%done())
@@ -582,23 +579,26 @@ contains
          call fs%get_viscosity(vf=vf)
          
          ! Turbulence modeling - only work with gas properties here
-         call fs%get_strainrate(Ui=Ui,Vi=Vi,Wi=Wi,SR=SR)
-         resU=fs%rho_g
-         call sgs%get_visc(dt=time%dtold,rho=resU,Ui=Ui,Vi=Vi,Wi=Wi,SR=SR)
-         where (sgs%visc.lt.-fs%visc_g)
-            sgs%visc=-fs%visc_g
-         end where
-         do k=fs%cfg%kmino_+1,fs%cfg%kmaxo_
-            do j=fs%cfg%jmino_+1,fs%cfg%jmaxo_
-               do i=fs%cfg%imino_+1,fs%cfg%imaxo_
-                  fs%visc(i,j,k)   =fs%visc(i,j,k)   +sgs%visc(i,j,k)
-                  fs%visc_xy(i,j,k)=fs%visc_xy(i,j,k)+sum(fs%itp_xy(:,:,i,j,k)*sgs%visc(i-1:i,j-1:j,k))
-                  fs%visc_yz(i,j,k)=fs%visc_yz(i,j,k)+sum(fs%itp_yz(:,:,i,j,k)*sgs%visc(i,j-1:j,k-1:k))
-                  fs%visc_zx(i,j,k)=fs%visc_zx(i,j,k)+sum(fs%itp_xz(:,:,i,j,k)*sgs%visc(i-1:i,j,k-1:k))
+         sgsmodel: block
+            integer :: i,j,k
+            call fs%get_strainrate(Ui=Ui,Vi=Vi,Wi=Wi,SR=SR)
+            resU=fs%rho_g
+            call sgs%get_visc(dt=time%dtold,rho=resU,Ui=Ui,Vi=Vi,Wi=Wi,SR=SR)
+            where (sgs%visc.lt.-fs%visc_g)
+               sgs%visc=-fs%visc_g
+            end where
+            do k=fs%cfg%kmino_+1,fs%cfg%kmaxo_
+               do j=fs%cfg%jmino_+1,fs%cfg%jmaxo_
+                  do i=fs%cfg%imino_+1,fs%cfg%imaxo_
+                     fs%visc(i,j,k)   =fs%visc(i,j,k)   +sgs%visc(i,j,k)
+                     fs%visc_xy(i,j,k)=fs%visc_xy(i,j,k)+sum(fs%itp_xy(:,:,i,j,k)*sgs%visc(i-1:i,j-1:j,k))
+                     fs%visc_yz(i,j,k)=fs%visc_yz(i,j,k)+sum(fs%itp_yz(:,:,i,j,k)*sgs%visc(i,j-1:j,k-1:k))
+                     fs%visc_zx(i,j,k)=fs%visc_zx(i,j,k)+sum(fs%itp_xz(:,:,i,j,k)*sgs%visc(i-1:i,j,k-1:k))
+                  end do
                end do
             end do
-         end do
-         
+         end block sgsmodel
+            
          ! Perform sub-iterations
          do while (time%it.le.time%itmax)
             
@@ -656,16 +656,37 @@ contains
          call fs%get_div()
          
          ! ====================================================================================
+         ! ========================= CCL and drop transfer step ===============================
          ! ====================================================================================
-         ! CCL step ===========================================================================
+         ! Perform CCL
          call cc%build_lists(VF=vf%VF,poly=vf%interface_polygon,U=fs%U,V=fs%V,W=fs%W)
          call cc%film_classify(Lbary=vf%Lbary,Gbary=vf%Gbary)
+         !call cc%get_min_thickness()
+         ! Loop through identified films and remove those that are thin enough
+         remove_film: block
+            integer :: m,n,i,j,k
+            ! Loops over film segments contained locally
+            do m=cc%film_sync_offset+1,cc%film_sync_offset+cc%n_film
+               ! Skip non-liquid films
+               if (cc%film_list(cc%film_map_(m))%phase.ne.1) cycle
+               ! Skip films that are still thick enough
+               !if (cc%film_list(cc%film_map_(m))%min_thickness.gt.film_to_drop_threshold) cycle
+               ! We are still here: transfer the film to drops
+               do n=1,cc%film_list(cc%film_map_(m))%nnode ! Loops over cells within local film segment
+                  i=cc%film_list(cc%film_map_(m))%node(n,1)
+                  j=cc%film_list(cc%film_map_(m))%node(n,2)
+                  k=cc%film_list(cc%film_map_(m))%node(n,3)
+                  ! Remove liquid in that cell
+                  
+               end do
+            end do
+         end block remove_film
+         ! Clean up CCL
          call cc%deallocate_lists()
-         
-         ! Transfer to droplets ===============================================================
-         
-         
-         ! ====================================================================================
+         ! Resync the spray
+         call lp%sync()
+         ! Update the particle mesh
+         call lp%update_partmesh()
          ! ====================================================================================
          
          ! Output to ensight
@@ -680,50 +701,56 @@ contains
          call sprayfile%write()
          
          ! After we're done clip all VOF at the exit area and along the sides
-         do k=fs%cfg%kmino_,fs%cfg%kmaxo_
-            do j=fs%cfg%jmino_,fs%cfg%jmaxo_
-               do i=fs%cfg%imino_,fs%cfg%imaxo_
-                  if (i.ge.vf%cfg%imax-5) vf%VF(i,j,k)=0.0_WP
-                  if (j.ge.vf%cfg%jmax-5) vf%VF(i,j,k)=0.0_WP
-                  if (j.le.vf%cfg%jmin+5) vf%VF(i,j,k)=0.0_WP
-               end do
-            end do
-         end do
-         if (fs%cfg%nz.gt.1) then
+         vf_side_clipping: block
+            integer :: i,j,k
             do k=fs%cfg%kmino_,fs%cfg%kmaxo_
                do j=fs%cfg%jmino_,fs%cfg%jmaxo_
                   do i=fs%cfg%imino_,fs%cfg%imaxo_
-                     if (k.ge.vf%cfg%kmax-5) vf%VF(i,j,k)=0.0_WP
-                     if (k.le.vf%cfg%kmin+5) vf%VF(i,j,k)=0.0_WP
+                     if (i.ge.vf%cfg%imax-5) vf%VF(i,j,k)=0.0_WP
+                     if (j.ge.vf%cfg%jmax-5) vf%VF(i,j,k)=0.0_WP
+                     if (j.le.vf%cfg%jmin+5) vf%VF(i,j,k)=0.0_WP
                   end do
                end do
             end do
-         end if
+            if (fs%cfg%nz.gt.1) then
+               do k=fs%cfg%kmino_,fs%cfg%kmaxo_
+                  do j=fs%cfg%jmino_,fs%cfg%jmaxo_
+                     do i=fs%cfg%imino_,fs%cfg%imaxo_
+                        if (k.ge.vf%cfg%kmax-5) vf%VF(i,j,k)=0.0_WP
+                        if (k.le.vf%cfg%kmin+5) vf%VF(i,j,k)=0.0_WP
+                     end do
+                  end do
+               end do
+            end if
+         end block vf_side_clipping
          
          ! Finally, see if it's time to save restart files
          if (save_evt%occurs()) then
-            ! Prefix for files
-            dirname='restart_'; write(timestamp,'(es12.5)') time%t
-            ! Prepare a new directory
-            if (fs%cfg%amRoot) call execute_command_line('mkdir -p '//trim(adjustl(dirname))//trim(adjustl(timestamp)))
-            ! Populate df and write it
-            call df%pushval(name=  't',val=time%t )
-            call df%pushval(name= 'dt',val=time%dt)
-            call df%pushvar(name=  'U',var=fs%U   )
-            call df%pushvar(name=  'V',var=fs%V   )
-            call df%pushvar(name=  'W',var=fs%W   )
-            call df%pushvar(name=  'P',var=fs%P   )
-            call df%pushvar(name='Pjx',var=fs%Pjx )
-            call df%pushvar(name='Pjy',var=fs%Pjy )
-            call df%pushvar(name='Pjz',var=fs%Pjz )
-            call df%pushvar(name= 'LM',var=sgs%LM )
-            call df%pushvar(name= 'MM',var=sgs%MM )
-            call df%pushvar(name= 'VF',var=vf%VF  )
-            call df%write(fdata=trim(adjustl(dirname))//trim(adjustl(timestamp))//'/'//'data')
-            ! Also output IRL interface
-            call vf%write_interface(filename=trim(adjustl(dirname))//trim(adjustl(timestamp))//'/'//'data.irl')
-            ! Also output particles
-            call lp%write(filename=trim(adjustl(dirname))//trim(adjustl(timestamp))//'/'//'data.lpt')
+            save_restart: block
+               character(len=str_medium) :: dirname,timestamp
+               ! Prefix for files
+               dirname='restart_'; write(timestamp,'(es12.5)') time%t
+               ! Prepare a new directory
+               if (fs%cfg%amRoot) call execute_command_line('mkdir -p '//trim(adjustl(dirname))//trim(adjustl(timestamp)))
+               ! Populate df and write it
+               call df%pushval(name=  't',val=time%t )
+               call df%pushval(name= 'dt',val=time%dt)
+               call df%pushvar(name=  'U',var=fs%U   )
+               call df%pushvar(name=  'V',var=fs%V   )
+               call df%pushvar(name=  'W',var=fs%W   )
+               call df%pushvar(name=  'P',var=fs%P   )
+               call df%pushvar(name='Pjx',var=fs%Pjx )
+               call df%pushvar(name='Pjy',var=fs%Pjy )
+               call df%pushvar(name='Pjz',var=fs%Pjz )
+               call df%pushvar(name= 'LM',var=sgs%LM )
+               call df%pushvar(name= 'MM',var=sgs%MM )
+               call df%pushvar(name= 'VF',var=vf%VF  )
+               call df%write(fdata=trim(adjustl(dirname))//trim(adjustl(timestamp))//'/'//'data')
+               ! Also output IRL interface
+               call vf%write_interface(filename=trim(adjustl(dirname))//trim(adjustl(timestamp))//'/'//'data.irl')
+               ! Also output particles
+               call lp%write(filename=trim(adjustl(dirname))//trim(adjustl(timestamp))//'/'//'data.lpt')
+            end block save_restart
          end if
          
       end do
