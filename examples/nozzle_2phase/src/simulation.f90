@@ -47,7 +47,7 @@ module simulation
    real(WP), dimension(:,:,:,:), allocatable :: SR
    
    !> Transfer parameter
-   real(WP) :: film_to_drop_threshold=1.0e-6_WP
+   real(WP) :: film_to_drop_threshold=1.0e-7_WP
    
 contains
    
@@ -667,12 +667,12 @@ contains
             integer :: m,n,i,j,k
             ! Loops over film segments contained locally
             do m=cc%film_sync_offset+1,cc%film_sync_offset+cc%n_film
+               !print*,m,cc%film_list(cc%film_map_(m))%phase,cc%film_list(cc%film_map_(m))%min_thickness
                ! Skip non-liquid films
-               if (cc%film_list(cc%film_map_(m))%phase.ne.1) cycle
+               !if (cc%film_list(cc%film_map_(m))%phase.ne.1) cycle
                ! Skip films that are still thick enough
                if (cc%film_list(cc%film_map_(m))%min_thickness.gt.film_to_drop_threshold) cycle
                ! We are still here: transfer the film to drops
-               print*,'REMOVING A FILM!!!!!!'
                do n=1,cc%film_list(cc%film_map_(m))%nnode ! Loops over cells within local film segment
                   i=cc%film_list(cc%film_map_(m))%node(n,1)
                   j=cc%film_list(cc%film_map_(m))%node(n,2)
@@ -685,6 +685,7 @@ contains
          ! Sync VF and clean up IRL and band
          call vf%cfg%sync(vf%VF)
          call vf%clean_irl_and_band()
+         call vf%update_surfgrid()
          ! Clean up CCL
          call cc%deallocate_lists()
          ! Resync the spray

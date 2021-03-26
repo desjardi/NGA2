@@ -835,23 +835,35 @@ contains
    subroutine clean_irl_and_band(this)
       implicit none
       class(vfs), intent(inout) :: this
-      integer :: i,j,k
+      integer :: i,j,k,n
       ! Loop everywhere and remove leftover IRL objects
       do k=this%cfg%kmino_,this%cfg%kmaxo_
          do j=this%cfg%jmino_,this%cfg%jmaxo_
             do i=this%cfg%imino_,this%cfg%imaxo_
                if (this%VF(i,j,k).lt.VFlo) then
+                  ! Pure gas moments
                   this%VF(i,j,k)=0.0_WP
                   this%Lbary(:,i,j,k)=[this%cfg%xm(i),this%cfg%ym(j),this%cfg%zm(k)]
                   this%Gbary(:,i,j,k)=[this%cfg%xm(i),this%cfg%ym(j),this%cfg%zm(k)]
+                  ! Provide default interface
                   call setNumberOfPlanes(this%liquid_gas_interface(i,j,k),1)
                   call setPlane(this%liquid_gas_interface(i,j,k),0,[0.0_WP,0.0_WP,0.0_WP],sign(1.0_WP,this%VF(i,j,k)-0.5_WP))
+                  ! Zero out the polygons
+                  do n=1,max_interface_planes
+                     call zeroPolygon(this%interface_polygon(n,i,j,k))
+                  end do
                else if (this%VF(i,j,k).gt.VFhi) then
+                  ! Pure liquid moments
                   this%VF(i,j,k)=1.0_WP
                   this%Lbary(:,i,j,k)=[this%cfg%xm(i),this%cfg%ym(j),this%cfg%zm(k)]
                   this%Gbary(:,i,j,k)=[this%cfg%xm(i),this%cfg%ym(j),this%cfg%zm(k)]
+                  ! Provide default interface
                   call setNumberOfPlanes(this%liquid_gas_interface(i,j,k),1)
                   call setPlane(this%liquid_gas_interface(i,j,k),0,[0.0_WP,0.0_WP,0.0_WP],sign(1.0_WP,this%VF(i,j,k)-0.5_WP))
+                  ! Zero out the polygons
+                  do n=1,max_interface_planes
+                     call zeroPolygon(this%interface_polygon(n,i,j,k))
+                  end do
                end if
             end do
          end do
