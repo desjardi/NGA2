@@ -122,7 +122,7 @@ module ccl_class
       ! Output of the CCL
       integer, dimension(:,:,:), allocatable :: id             !< ID of the structure that contains the cell
       integer, dimension(:,:,:), allocatable :: film_id        !< ID of the film that contains the cell
-      integer, dimension(:,:,:), allocatable :: film_phase     !< Phase of the film cell - 0/1/2/3 for none/liquid/gas/both
+      integer, dimension(:,:,:), allocatable :: film_phase     !< Phase of the film cell - 0/1/2 for none/liquid/gas
       real(WP),dimension(:,:,:), allocatable :: film_thickness !< Local thickness of the film cell
       integer, dimension(:,:,:), allocatable :: film_type      !< Local film type - 0: droplet, 1: ligament, 2: sheet
       
@@ -755,6 +755,17 @@ contains
          end do ! j
       end do ! k
       
+      ! Film phase
+      film_phase: block
+         integer :: m
+         do m=this%film_sync_offset+1,this%film_sync_offset+this%n_film
+            i = this%film_list(this%film_map_(m))%node(1,1)
+            j = this%film_list(this%film_map_(m))%node(1,2)
+            k = this%film_list(this%film_map_(m))%node(1,3)
+            this%film_list(this%film_map_(m))%phase = this%film_phase(i,j,k)
+         end do
+      end block film_phase
+
       ! Copy this%struct_list to my_struct
       call copy_to_my_struct
       
