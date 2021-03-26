@@ -339,6 +339,7 @@ contains
       this%id = 0
       this%film_id = 0
       this%film_phase = 0
+      this%film_thickness = 0.0_WP
       
       ! Initialize work arrays
       this%idp = 0
