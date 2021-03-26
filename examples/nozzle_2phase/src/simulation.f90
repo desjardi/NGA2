@@ -667,9 +667,8 @@ contains
             integer :: m,n,i,j,k
             ! Loops over film segments contained locally
             do m=cc%film_sync_offset+1,cc%film_sync_offset+cc%n_film
-               !print*,m,cc%film_list(cc%film_map_(m))%phase,cc%film_list(cc%film_map_(m))%min_thickness
                ! Skip non-liquid films
-               !if (cc%film_list(cc%film_map_(m))%phase.ne.1) cycle
+               if (cc%film_list(cc%film_map_(m))%phase.ne.1) cycle
                ! Skip films that are still thick enough
                if (cc%film_list(cc%film_map_(m))%min_thickness.gt.film_to_drop_threshold) cycle
                ! We are still here: transfer the film to drops
