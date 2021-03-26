@@ -50,6 +50,7 @@ module ccl_class
    type, extends(struct) :: film
       integer :: phase                                    !< Film phase; 1 if liquid, 2 if gas
       integer, dimension(2) :: adjacent_structs           !< IDs of structures adjacent to gas film
+      real(WP) :: min_thickness                           !< Global minimum film thickness 
    end type film
    
    !> CCL object definition
@@ -144,6 +145,7 @@ module ccl_class
       procedure, private :: meta_structures_sort
       procedure, private :: meta_structures_stats
       procedure :: film_classify
+      procedure :: get_min_thickness
       procedure, private :: kill_struct
    end type ccl
    
@@ -2509,9 +2511,9 @@ contains
       real(WP), parameter :: ratio = 2.0_WP
       
       this%film_type = 0
-      do m=this%film_sync_offset+1,this%film_sync_offset+this%n_film
+      do m=this%film_sync_offset+1,this%film_sync_offset+this%n_film ! Loops over film segments contained locally
          if (this%film_list(this%film_map_(m))%phase.eq.1) then ! Liquid film
-            do n=1,this%film_list(this%film_map_(m))%nnode
+            do n=1,this%film_list(this%film_map_(m))%nnode ! Loops over cells within local film segment
                i = this%film_list(this%film_map_(m))%node(n,1)
                j = this%film_list(this%film_map_(m))%node(n,2)
                k = this%film_list(this%film_map_(m))%node(n,3)
@@ -2640,6 +2642,35 @@ contains
    end subroutine film_classify
    
    
+   !> Find the minimum thickness
+   subroutine get_min_thickness(this)
+      use mpi_f08,  only: MPI_ALLREDUCE,MPI_MIN
+      use parallel, only: MPI_REAL_WP
+      implicit none
+      class(ccl), intent(inout) :: this
+      integer  :: id,m,n,i,j,k,ierr
+      real(WP), dimension(1:this%cfg%nproc*this%n_film_max) :: min_thickness_,min_thickness
+
+      if (this%n_film_max.eq.0) return ! If there are no films globally
+      min_thickness_=huge(1.0_WP)
+      do m=this%film_sync_offset+1,this%film_sync_offset+this%n_film ! Loops over film segments contained locally
+         id=this%film_list(this%film_map_(m))%parent
+         do n=1,this%film_list(this%film_map_(m))%nnode ! Loops over cells within local film segment
+            i=this%film_list(this%film_map_(m))%node(n,1)
+            j=this%film_list(this%film_map_(m))%node(n,2)
+            k=this%film_list(this%film_map_(m))%node(n,3)
+            min_thickness_(id)=min(min_thickness_(id),this%film_thickness(i,j,k))
+         end do
+      end do      
+      call MPI_ALLREDUCE(min_thickness_,min_thickness,this%cfg%nproc*this%n_film_max,MPI_REAL_WP,MPI_MIN,this%cfg%comm,ierr)
+      do m=this%film_sync_offset+1,this%film_sync_offset+this%n_film ! Loops over film segments contained locally
+         id=this%film_list(this%film_map_(m))%parent
+         this%film_list(this%film_map_(m))%min_thickness = min_thickness(id)
+         ! print *,"rank",this%cfg%rank,"film id",id,"min thickness",min_thickness(id)
+      end do             
+   end subroutine get_min_thickness
+
+
    !> Deallocate local structures
    subroutine kill_struct(this)
       implicit none
