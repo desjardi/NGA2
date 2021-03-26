@@ -7,6 +7,7 @@ module simulation
    use tpns_class,        only: tpns
    use vfs_class,         only: vfs
    use ccl_class,         only: ccl
+   use lpt_class,         only: lpt
    use sgsmodel_class,    only: sgsmodel
    use timetracker_class, only: timetracker
    use ensight_class,     only: ensight
@@ -22,11 +23,13 @@ module simulation
    type(timetracker), public :: time
    type(sgsmodel),    public :: sgs
    type(ccl),         public :: cc
+   type(lpt),         public :: lp
    
    !> Provide two datafiles and an event tracker for saving restarts
    type(event)    :: save_evt
    type(datafile) :: df
    character(len=str_medium) :: irl_file
+   character(len=str_medium) :: lpt_file
    logical :: restarted
    
    !> Ensight postprocessing
@@ -34,7 +37,7 @@ module simulation
    type(event)   :: ens_evt
    
    !> Simulation monitor file
-   type(monitor) :: mfile,cflfile
+   type(monitor) :: mfile,cflfile,sprayfile
    
    public :: simulation_init,simulation_run,simulation_final
    
@@ -215,6 +218,7 @@ contains
             ! Read the datafile and the name of the IRL file to read later
             df=datafile(pg=cfg,fdata=trim(adjustl(dir_restart))//'/'//'data')
             irl_file=trim(adjustl(dir_restart))//'/'//'data.irl'
+            lpt_file=trim(adjustl(dir_restart))//'/'//'data.lpt'
          else
             ! If we are not restarting, we will still need datafiles for saving restart files
             df=datafile(pg=cfg,filename=trim(cfg%name),nval=2,nvar=10)
@@ -431,6 +435,19 @@ contains
       end block create_and_initialize_ccl
       
       
+      ! Create a Lagrangian spray tracker
+      create_lpt: block
+         ! Create the solver
+         lp=lpt(cfg=cfg,name='spray')
+         ! Get particle density from the flow solver
+         lp%rho=fs%rho_l
+         ! Handle restarts
+         if (restarted) call lp%read(filename=trim(lpt_file))
+         ! Also update the output
+         call lp%update_partmesh()
+      end block create_lpt
+      
+      
       ! Create an LES model
       create_sgs: block
          sgs=sgsmodel(cfg=fs%cfg,umask=fs%umask,vmask=fs%vmask,wmask=fs%wmask)
@@ -459,6 +476,7 @@ contains
          call ens_out%add_scalar('filmType',cc%film_type)
          call ens_out%add_scalar('filmThickness',cc%film_thickness)
          call ens_out%add_surface('vofplic',vf%surfgrid)
+         call ens_out%add_particle('spray',lp%pmesh)
          ! Output to ensight
          if (ens_evt%occurs()) call ens_out%write_data(time%t)
       end block create_ensight
@@ -470,6 +488,7 @@ contains
          call fs%get_cfl(time%dt,time%cfl)
          call fs%get_max()
          call vf%get_max()
+         call lp%get_max()
          ! Create simulation monitor
          mfile=monitor(fs%cfg%amRoot,'simulation')
          call mfile%add_column(time%n,'Timestep number')
@@ -498,6 +517,25 @@ contains
          call cflfile%add_column(fs%CFLv_y,'Viscous yCFL')
          call cflfile%add_column(fs%CFLv_z,'Viscous zCFL')
          call cflfile%write()
+         ! Create a spray monitor
+         sprayfile=monitor(amroot=lp%cfg%amRoot,name='spray')
+         call sprayfile%add_column(time%n,'Timestep number')
+         call sprayfile%add_column(time%t,'Time')
+         call sprayfile%add_column(time%dt,'Timestep size')
+         call sprayfile%add_column(lp%np,'Droplet number')
+         call sprayfile%add_column(lp%Umin, 'Umin')
+         call sprayfile%add_column(lp%Umax, 'Umax')
+         call sprayfile%add_column(lp%Umean,'Umean')
+         call sprayfile%add_column(lp%Vmin, 'Vmin')
+         call sprayfile%add_column(lp%Vmax, 'Vmax')
+         call sprayfile%add_column(lp%Vmean,'Vmean')
+         call sprayfile%add_column(lp%Wmin, 'Wmin')
+         call sprayfile%add_column(lp%Wmax, 'Wmax')
+         call sprayfile%add_column(lp%Wmean,'Wmean')
+         call sprayfile%add_column(lp%dmin, 'dmin')
+         call sprayfile%add_column(lp%dmax, 'dmax')
+         call sprayfile%add_column(lp%dmean,'dmean')
+         call sprayfile%write()
       end block create_monitor
       
       
@@ -521,6 +559,10 @@ contains
          call fs%get_cfl(time%dt,time%cfl)
          call time%adjust_dt()
          call time%increment()
+         
+         ! Advance our spray
+         resU=fs%rho_g; resV=fs%visc_g
+         call lp%advance(dt=time%dt,U=fs%U,V=fs%V,W=fs%W,rho=resU,visc=resV)
          
          ! Remember old VOF
          vf%VFold=vf%VF
@@ -613,19 +655,29 @@ contains
          call fs%interp_vel(Ui,Vi,Wi)
          call fs%get_div()
          
-         ! CCL step
+         ! ====================================================================================
+         ! ====================================================================================
+         ! CCL step ===========================================================================
          call cc%build_lists(VF=vf%VF,poly=vf%interface_polygon,U=fs%U,V=fs%V,W=fs%W)
          call cc%film_classify(Lbary=vf%Lbary,Gbary=vf%Gbary)
          call cc%deallocate_lists()
+         
+         ! Transfer to droplets ===============================================================
+         
+         
+         ! ====================================================================================
+         ! ====================================================================================
          
          ! Output to ensight
          if (ens_evt%occurs()) call ens_out%write_data(time%t)
          
          ! Perform and output monitoring
+         call lp%get_max()
          call fs%get_max()
          call vf%get_max()
          call mfile%write()
          call cflfile%write()
+         call sprayfile%write()
          
          ! After we're done clip all VOF at the exit area and along the sides
          do k=fs%cfg%kmino_,fs%cfg%kmaxo_
@@ -670,6 +722,8 @@ contains
             call df%write(fdata=trim(adjustl(dirname))//trim(adjustl(timestamp))//'/'//'data')
             ! Also output IRL interface
             call vf%write_interface(filename=trim(adjustl(dirname))//trim(adjustl(timestamp))//'/'//'data.irl')
+            ! Also output particles
+            call lp%write(filename=trim(adjustl(dirname))//trim(adjustl(timestamp))//'/'//'data.lpt')
          end if
          
       end do
