@@ -668,7 +668,7 @@ contains
          remove_film: block
             use mathtools, only: pi
             integer :: m,n,i,j,k,np
-            real(WP) :: Vl,Hl
+            real(WP) :: Vl,Hl,Vd
             ! Loops over film segments contained locally
             do m=cc%film_sync_offset+1,cc%film_sync_offset+cc%n_film
                ! Skip non-liquid films
@@ -683,6 +683,7 @@ contains
                   ! Get liquid volume and structure thickness in the cell
                   Vl=vf%VF(i,j,k)*vf%cfg%vol(i,j,k)
                   Hl=cc%film_thickness(i,j,k)
+                  Vd=pi/6.0_WP*(diam_over_filmthickness*Hl)**3
                   ! Create a single drop from the liquid in the cell
                   np=lp%np_+1; call lp%resize(np)
                   lp%p(np)%id  =int(0,8)                                   !< Give id (maybe based on break-up model)
