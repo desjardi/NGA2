@@ -62,6 +62,12 @@ module pgrid_class
       integer :: jmaxo_=0                   !< Domain-decomposed index upper bound in y with overlap
       integer :: kmino_=0                   !< Domain-decomposed index lower bound in z with overlap
       integer :: kmaxo_=0                   !< Domain-decomposed index upper bound in z with overlap
+      
+      ! Index to processor coordinate map
+      integer, dimension(:), allocatable :: xcoord                              !< Conversion from grid index to processor coordinate in x
+      integer, dimension(:), allocatable :: ycoord                              !< Conversion from grid index to processor coordinate in y
+      integer, dimension(:), allocatable :: zcoord                              !< Conversion from grid index to processor coordinate in z
+      
       !> Communication buffers
       real(WP), dimension(:,:,:), allocatable, private ::  syncbuf_x1, syncbuf_x2
       real(WP), dimension(:,:,:), allocatable, private ::  syncbuf_y1, syncbuf_y2
@@ -310,6 +316,32 @@ contains
       call MPI_TYPE_COMMIT(self%SPview,ierr)
       call MPI_TYPE_CREATE_SUBARRAY(3,gsizes,lsizes,lstart,MPI_ORDER_FORTRAN,MPI_INTEGER,self%Iview,ierr)
       call MPI_TYPE_COMMIT(self%Iview,ierr)
+      
+      ! Finally, create x/y/zcoord array for rapid finding of processor cartesian coordinates
+      allocate(self%xcoord(self%imino:self%imaxo)); self%xcoord=0
+      allocate(self%ycoord(self%jmino:self%jmaxo)); self%ycoord=0
+      allocate(self%zcoord(self%kmino:self%kmaxo)); self%zcoord=0
+      find_coords: block
+         integer :: i,j,k
+         q=self%nx/self%npx; r=mod(self%nx,self%npx)
+         do i=self%imino,self%imaxo
+            do while (i.ge.self%imin+(self%xcoord(i)+1)*q+min(self%xcoord(i)+1,r).and.self%xcoord(i).lt.self%npx-1)
+               self%xcoord(i)=self%xcoord(i)+1
+            end do
+         end do
+         q=self%ny/self%npy; r=mod(self%ny,self%npy)
+         do j=self%jmino,self%jmaxo
+            do while (j.ge.self%jmin+(self%ycoord(j)+1)*q+min(self%ycoord(j)+1,r).and.self%ycoord(j).lt.self%npy-1)
+               self%ycoord(j)=self%ycoord(j)+1
+            end do
+         end do
+         q=self%nz/self%npz; r=mod(self%nz,self%npz)
+         do k=self%kmino,self%kmaxo
+            do while (k.ge.self%kmin+(self%zcoord(k)+1)*q+min(self%zcoord(k)+1,r).and.self%zcoord(k).lt.self%npz-1)
+               self%zcoord(k)=self%zcoord(k)+1
+            end do
+         end do
+      end block find_coords
       
    end subroutine pgrid_domain_decomp
    
@@ -888,14 +920,8 @@ contains
       implicit none
       class(pgrid), intent(in) :: this
       integer, dimension(3), intent(in) :: ind
-      integer, dimension(3) :: coords=0
-      integer :: rank,ierr,q,r
-      ! Get coords from ind
-      q=this%nx/this%npx; r=mod(this%nx,this%npx); do while (ind(1).ge.this%imin+(coords(1)+1)*q+min(coords(1)+1,r).and.coords(1)+1.lt.this%npx); coords(1)=coords(1)+1; end do
-      q=this%ny/this%npy; r=mod(this%ny,this%npy); do while (ind(2).ge.this%jmin+(coords(2)+1)*q+min(coords(2)+1,r).and.coords(2)+1.lt.this%npy); coords(2)=coords(2)+1; end do
-      q=this%nz/this%npz; r=mod(this%nz,this%npz); do while (ind(3).ge.this%kmin+(coords(3)+1)*q+min(coords(3)+1,r).and.coords(3)+1.lt.this%npz); coords(3)=coords(3)+1; end do
-      ! Get rank from coords
-      call MPI_CART_RANK(this%comm,coords,rank,ierr)
+      integer :: rank,ierr
+      call MPI_CART_RANK(this%comm,[this%xcoord(ind(1)),this%ycoord(ind(2)),this%zcoord(ind(3))],rank,ierr)
    end function get_rank
    
    

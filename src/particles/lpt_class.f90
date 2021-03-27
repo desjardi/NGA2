@@ -472,64 +472,48 @@ contains
       use mpi_f08
       implicit none
       class(lpt), intent(inout) :: this
-      integer, dimension(this%cfg%nproc) :: who_send,who_recv,counter
-      integer :: i,nb_recv,nb_send,np_old
-      integer :: rank_send,rank_recv,prank,ierr
-      type(MPI_status) :: status
-      type(part), dimension(:,:), allocatable :: buf_send
+      integer, dimension(0:this%cfg%nproc-1) :: nsend_proc,nrecv_proc
+      integer, dimension(0:this%cfg%nproc-1) :: nsend_disp,nrecv_disp
+      integer :: n,prank,ierr
+      type(part), dimension(:), allocatable :: buf_send
       ! Recycle first to minimize communication load
       call this%recycle()
-      ! Prepare information about who sends what to whom
-      who_send=0
-      do i=1,this%np_
-         prank=this%cfg%get_rank(this%p(i)%ind)+1
-         who_send(prank)=who_send(prank)+1
+      ! Prepare information about what to send
+      nsend_proc=0
+      do n=1,this%np_
+         prank=this%cfg%get_rank(this%p(n)%ind)
+         nsend_proc(prank)=nsend_proc(prank)+1
       end do
-      ! Remove the diagonal since we won't self-send
-      who_send(this%cfg%rank+1)=0
-      ! Prepare information about who receives what from whom
-      do rank_recv=1,this%cfg%nproc
-         call MPI_gather(who_send(rank_recv),1,MPI_INTEGER,who_recv,1,MPI_INTEGER,rank_recv-1,this%cfg%comm,ierr)
+      nsend_proc(this%cfg%rank)=0
+      ! Inform processors of what they will receive
+      call MPI_ALLtoALL(nsend_proc,1,MPI_INTEGER,nrecv_proc,1,MPI_INTEGER,this%cfg%comm,ierr)
+      ! Prepare displacements for all-to-all
+      nsend_disp(0)=0
+      nrecv_disp(0)=this%np_   !< Directly add particles at the end of main array
+      do n=1,this%cfg%nproc-1
+         nsend_disp(n)=nsend_disp(n-1)+nsend_proc(n-1)
+         nrecv_disp(n)=nrecv_disp(n-1)+nrecv_proc(n-1)
       end do
-      ! Prepare the buffers
-      nb_send=maxval(who_send)
-      nb_recv=sum(who_recv)
-      ! Allocate buffers to send particles
-      allocate(buf_send(nb_send,this%cfg%nproc))
-      ! Find and pack the particles to be sent
-      counter=0
-      do i=1,this%np_
-         ! Get the proc
-         prank=this%cfg%get_rank(this%p(i)%ind)+1
-         if (prank.ne.this%cfg%rank+1) then
-            ! Prepare for sending
-            counter(prank)=counter(prank)+1
-            buf_send(counter(prank),prank)=this%p(i)
-            ! Need to remove the particle
-            this%p(i)%flag=1
-         end if
+      ! Allocate buffer to send particles
+      allocate(buf_send(sum(nsend_proc)))
+      ! Pack the particles in the send buffer
+      nsend_proc=0
+      do n=1,this%np_
+         ! Get the rank
+         prank=this%cfg%get_rank(this%p(n)%ind)
+         ! Skip particles still inside
+         if (prank.eq.this%cfg%rank) cycle
+         ! Pack up for sending
+         nsend_proc(prank)=nsend_proc(prank)+1
+         buf_send(nsend_disp(prank)+nsend_proc(prank))=this%p(n)
+         ! Flag particle for removal
+         this%p(n)%flag=1
       end do
-      ! Everybody resizes
-      np_old=this%np_
-      call this%resize(this%np_+nb_recv)
-      ! Loop through the procs, pack particles in buf_send, send, unpack
-      do rank_send=1,this%cfg%nproc
-         if (this%cfg%rank+1.eq.rank_send) then
-            ! I'm the sender of particles
-            do rank_recv=1,this%cfg%nproc
-               if (who_send(rank_recv).gt.0) then
-                  call MPI_send(buf_send(:,rank_recv),who_send(rank_recv),MPI_PART,rank_recv-1,0,this%cfg%comm,ierr)
-               end if
-            end do
-         else
-            ! I'm not the sender, I receive
-            if (who_recv(rank_send).gt.0) then
-               call MPI_recv(this%p(np_old+1:np_old+who_recv(rank_send)),who_recv(rank_send),MPI_PART,rank_send-1,0,this%cfg%comm,status,ierr)
-               np_old=np_old+who_recv(rank_send)
-            end if
-         end if
-      end do
-      ! Done, deallocate
+      ! Allocate buffer for receiving particles
+      call this%resize(this%np_+sum(nrecv_proc))
+      ! Perform communication
+      call MPI_ALLtoALLv(buf_send,nsend_proc,nsend_disp,MPI_PART,this%p,nrecv_proc,nrecv_disp,MPI_PART,this%cfg%comm,ierr)
+      ! Deallocate buffer
       deallocate(buf_send)
       ! Recycle to remove duplicate particles
       call this%recycle()
@@ -545,15 +529,9 @@ contains
       integer :: size_now,size_new
       ! Resize particle array to size n
       if (.not.allocated(this%p)) then
-         ! Particle is of size 0
-         if (n.gt.0) then
-            ! Allocate directly to size n
-            allocate(this%p(n))
-            this%p(1:n)%flag=1
-         end if
-      else if (n.eq.0) then
-         ! Particle array is associated, but we want to empty it
-         deallocate(this%p)
+         ! Allocate directly to size n
+         allocate(this%p(n))
+         this%p(1:n)%flag=1
       else
          ! Update from a non-zero size to another non-zero size
          size_now=size(this%p,dim=1)
