@@ -664,7 +664,9 @@ contains
          call cc%get_min_thickness()
          ! Loop through identified films and remove those that are thin enough
          remove_film: block
-            integer :: m,n,i,j,k
+            use mathtools, only: pi
+            integer :: m,n,i,j,k,np
+            real(WP) :: Vl,Hl
             ! Loops over film segments contained locally
             do m=cc%film_sync_offset+1,cc%film_sync_offset+cc%n_film
                ! Skip non-liquid films
@@ -676,6 +678,20 @@ contains
                   i=cc%film_list(cc%film_map_(m))%node(n,1)
                   j=cc%film_list(cc%film_map_(m))%node(n,2)
                   k=cc%film_list(cc%film_map_(m))%node(n,3)
+                  ! Get liquid volume and structure thickness in the cell
+                  Vl=vf%VF(i,j,k)*vf%cfg%vol(i,j,k)
+                  Hl=cc%film_thickness(i,j,k)
+                  ! Create a single drop from the liquid in the cell
+                  np=lp%np_+1; call lp%resize(np)
+                  lp%p(np)%id  =int(0,8)                                   !< Give id (maybe based on break-up model)
+                  lp%p(np)%d   =(6.0_WP*Vl/pi)**(1.0_WP/3.0_WP)            !< Give diameter for mass conservation
+                  lp%p(np)%pos =vf%Lbary(:,i,j,k)                          !< Place the drop at the liquid barycenter
+                  lp%p(np)%vel =[Ui(i,j,k),Vi(i,j,k),Wi(i,j,k)]            !< Take local cell velocity as drop velocity
+                  lp%p(np)%dt  =0.0_WP                                     !< Let the drop find it own integration time
+                  lp%p(np)%ind =[i,j,k]                                    !< Place the drop in the cell (only if same mesh is used!)
+                  lp%p(np)%flag=0                                          !< Activate it
+                  ! Increment particle counter
+                  lp%np_=np
                   ! Remove liquid in that cell
                   vf%VF(i,j,k)=0.0_WP
                end do
