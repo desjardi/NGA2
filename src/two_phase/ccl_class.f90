@@ -289,6 +289,8 @@ contains
          end do
       else
          this%max_interface_planes = 0
+         this%n_film = 0
+         this%n_film_max = 0
       end if
       
       ! Label features locally
@@ -359,23 +361,25 @@ contains
       max_structs = ceiling(npp/2.0_WP)
       this%id_offset = npp*(this%cfg%rank) ! global tag offset; unique for each proc
       
-      ! Allocate union-find data structure
+      ! Allocate union-find data structure for structs
       allocate(this%struct_list(this%id_offset+1:this%id_offset+max_structs))
-      allocate(this%film_list(this%id_offset+1:this%id_offset+max_structs))
       
       ! initialize this%struct_list
       this%struct_list%parent = 0
       this%struct_list%rank = 0
       this%struct_list%counter = 0
       this%struct_list%nnode = 0
-      this%film_list%parent = 0
-      this%film_list%rank = 0
-      this%film_list%counter = 0
-      this%film_list%nnode = 0
       
       ! initialize the global tag to this%id_offset - our "0"
       idd = this%id_offset
       if (this%max_interface_planes.gt.0) then
+         ! Allocate union-find data structure for films
+         allocate(this%film_list(this%id_offset+1:this%id_offset+max_structs))
+         ! Initialize this%film_list
+         this%film_list%parent = 0
+         this%film_list%rank = 0
+         this%film_list%counter = 0
+         this%film_list%nnode = 0
          ! outer loop over domain to find "corner" of structure
          do k=this%cfg%kmin_,this%cfg%kmax_
             do j=this%cfg%jmin_,this%cfg%jmax_
@@ -497,6 +501,7 @@ contains
                               else
                                  ! is_contiguous = is_contiguous.or.this%VF(i,j,k).gt.0.1_WP.or.this%VF(ii,jj,kk).gt.0.1_WP
                                  ! is_contiguous = is_contiguous.or.this%VF(ii,jj,kk).gt.0.1_WP
+                                 ! is_contiguous = is_contiguous.or.norm2(c2-c1).le.1.0_WP
                               end if ! is_film
                               
                            end if ! use_normal
@@ -601,6 +606,78 @@ contains
          ! Number of this%film_list graph nodes
          max_films = idd-this%id_offset
          
+         ! Collapse tree
+         do k=this%cfg%kmin_,this%cfg%kmax_
+            do j=this%cfg%jmin_,this%cfg%jmax_
+               do i=this%cfg%imin_,this%cfg%imax_
+                  
+                  if (this%film_id(i,j,k).gt.0) then
+                     this%film_id(i,j,k) = find(this%film_list,this%film_id(i,j,k))
+                     this%film_list(this%film_id(i,j,k))%nnode = this%film_list(this%film_id(i,j,k))%nnode + 1
+                     this%film_idp(i,j,k,1) = max(this%film_idp(i,j,k,1),this%film_list(this%film_id(i,j,k))%per(1))
+                     this%film_idp(i,j,k,2) = max(this%film_idp(i,j,k,2),this%film_list(this%film_id(i,j,k))%per(2))
+                     this%film_idp(i,j,k,3) = max(this%film_idp(i,j,k,3),this%film_list(this%film_id(i,j,k))%per(3))
+                     this%film_list(this%film_id(i,j,k))%per = this%film_idp(i,j,k,:)
+                  end if
+                  
+               end do ! k
+            end do ! j
+         end do ! i         
+
+         ! Allocate this%film_list%node array, calculate this%n_film
+         this%n_film = 0
+         do i=this%id_offset+1,this%id_offset+max_films
+            if (this%film_list(i)%nnode.gt.0) then
+               allocate(this%film_list(i)%node(this%film_list(i)%nnode,3))
+               this%n_film = this%n_film + 1
+               ! if (sum(this%film_list(i)%per).gt.0) n_border_struct = n_border_struct + 1
+            end if
+         end do
+
+         ! total films or parts of films  across all procs
+         call MPI_ALLREDUCE(this%n_film,this%n_film_max,1,MPI_INTEGER,MPI_MAX,this%cfg%comm,ierr)
+         ! call MPI_ALLREDUCE(this%n_film_border_struct,this%n_film_border_struct_max,1,MPI_INTEGER,MPI_MAX,this%cfg%comm,ierr)
+
+         this%film_sync_offset = this%cfg%rank*this%n_film_max
+
+         allocate(this%film_map_(this%film_sync_offset+1:this%film_sync_offset+this%n_film_max)); this%film_map_ = 0
+         idd = this%film_sync_offset
+         do i=this%id_offset+1,this%id_offset+max_films
+            ! Only if this%film_list has nodes
+            if (this%film_list(i)%nnode.eq.0) cycle
+            idd = idd + 1
+            this%film_map_(idd) = i
+            this%film_list(i)%id = idd
+         end do
+         call fill_border_id(this%film_list,this%film_id,this%film_border_id)
+
+         ! Fill this%film_list%node array
+         do k=this%cfg%kmin_,this%cfg%kmax_
+            do j=this%cfg%jmin_,this%cfg%jmax_
+               do i=this%cfg%imin_,this%cfg%imax_
+
+                  if (this%film_phase(i,j,k).gt.0) then
+                     this%film_list(this%film_id(i,j,k))%counter = this%film_list(this%film_id(i,j,k))%counter + 1
+                     this%film_list(this%film_id(i,j,k))%node(this%film_list(this%film_id(i,j,k))%counter,1) = i
+                     this%film_list(this%film_id(i,j,k))%node(this%film_list(this%film_id(i,j,k))%counter,2) = j
+                     this%film_list(this%film_id(i,j,k))%node(this%film_list(this%film_id(i,j,k))%counter,3) = k
+                  end if
+                  
+               end do ! i
+            end do ! j
+         end do ! k
+      
+         ! Film phase
+         film_phase: block
+            integer :: m
+            do m=this%film_sync_offset+1,this%film_sync_offset+this%n_film
+               i = this%film_list(this%film_map_(m))%node(1,1)
+               j = this%film_list(this%film_map_(m))%node(1,2)
+               k = this%film_list(this%film_map_(m))%node(1,3)
+               this%film_list(this%film_map_(m))%phase = this%film_phase(i,j,k)
+            end do
+         end block film_phase       
+
       else ! if no interface polygons given
          do k=this%cfg%kmin_,this%cfg%kmax_
             do j=this%cfg%jmin_,this%cfg%jmax_
@@ -659,14 +736,6 @@ contains
                   this%idp(i,j,k,3) = max(this%idp(i,j,k,3),this%struct_list(this%id(i,j,k))%per(3))
                   this%struct_list(this%id(i,j,k))%per = this%idp(i,j,k,:)
                end if
-               if (this%film_id(i,j,k).gt.0) then
-                  this%film_id(i,j,k) = find(this%film_list,this%film_id(i,j,k))
-                  this%film_list(this%film_id(i,j,k))%nnode = this%film_list(this%film_id(i,j,k))%nnode + 1
-                  this%film_idp(i,j,k,1) = max(this%film_idp(i,j,k,1),this%film_list(this%film_id(i,j,k))%per(1))
-                  this%film_idp(i,j,k,2) = max(this%film_idp(i,j,k,2),this%film_list(this%film_id(i,j,k))%per(2))
-                  this%film_idp(i,j,k,3) = max(this%film_idp(i,j,k,3),this%film_list(this%film_id(i,j,k))%per(3))
-                  this%film_list(this%film_id(i,j,k))%per = this%film_idp(i,j,k,:)
-               end if
                
             end do ! k
          end do ! j
@@ -681,20 +750,10 @@ contains
             ! if (sum(this%struct_list(i)%per).gt.0) n_border_struct = n_border_struct + 1
          end if
       end do
-      ! Allocate this%film_list%node array, calculate this%n_film
-      this%n_film = 0
-      do i=this%id_offset+1,this%id_offset+max_films
-         if (this%film_list(i)%nnode.gt.0) then
-            allocate(this%film_list(i)%node(this%film_list(i)%nnode,3))
-            this%n_film = this%n_film + 1
-            ! if (sum(this%film_list(i)%per).gt.0) n_border_struct = n_border_struct + 1
-         end if
-      end do
+
       ! total structures or parts of structures across all procs
       call MPI_ALLREDUCE(this%n_struct,this%n_struct_max,1,MPI_INTEGER,MPI_MAX,this%cfg%comm,ierr)
       ! call MPI_ALLREDUCE(n_border_struct,n_border_struct_max,1,MPI_INTEGER,MPI_MAX,this%cfg%comm,ierr)
-      call MPI_ALLREDUCE(this%n_film,this%n_film_max,1,MPI_INTEGER,MPI_MAX,this%cfg%comm,ierr)
-      ! call MPI_ALLREDUCE(this%n_film_border_struct,this%n_film_border_struct_max,1,MPI_INTEGER,MPI_MAX,this%cfg%comm,ierr)
       
       !! Whenever we switch to variable struct number per proc
       ! call MPI_ALLGATHER(this%n_struct, 1, MPI_INTEGER, this%n_struct_per_processor, 1, MPI_INTEGER, this%cfg%comm, ierr)
@@ -709,11 +768,9 @@ contains
       !   allocate(this%film_map_(this%film_sync_offset+1:this%film_sync_offset+this%n_film)); this%film_map_ = 0
       
       this%sync_offset = this%cfg%rank*this%n_struct_max
-      this%film_sync_offset = this%cfg%rank*this%n_film_max
       ! Could allocate this%struct_map_(max_structs) and integrate this loop with above
       ! allocate(parent_    (this%sync_offset+1:this%sync_offset+this%n_struct_max)); parent_ = 0
       allocate(this%struct_map_(this%sync_offset+1:this%sync_offset+this%n_struct_max)); this%struct_map_ = 0
-      allocate(this%film_map_(this%film_sync_offset+1:this%film_sync_offset+this%n_film_max)); this%film_map_ = 0
       idd = this%sync_offset
       do i=this%id_offset+1,this%id_offset+max_structs
          ! Only if this%struct_list has nodes
@@ -722,17 +779,9 @@ contains
          this%struct_map_(idd) = i
          this%struct_list(i)%id = idd
       end do
-      idd = this%film_sync_offset
-      do i=this%id_offset+1,this%id_offset+max_films
-         ! Only if this%film_list has nodes
-         if (this%film_list(i)%nnode.eq.0) cycle
-         idd = idd + 1
-         this%film_map_(idd) = i
-         this%film_list(i)%id = idd
-      end do
+
       
       call fill_border_id(this%struct_list,this%id,this%border_id)
-      call fill_border_id(this%film_list,this%film_id,this%film_border_id)
       
       ! Fill this%struct_list%node array
       do k=this%cfg%kmin_,this%cfg%kmax_
@@ -743,28 +792,10 @@ contains
                   this%struct_list(this%id(i,j,k))%node(this%struct_list(this%id(i,j,k))%counter,1) = i
                   this%struct_list(this%id(i,j,k))%node(this%struct_list(this%id(i,j,k))%counter,2) = j
                   this%struct_list(this%id(i,j,k))%node(this%struct_list(this%id(i,j,k))%counter,3) = k
-               end if
-               if (this%film_phase(i,j,k).gt.0) then
-                  this%film_list(this%film_id(i,j,k))%counter = this%film_list(this%film_id(i,j,k))%counter + 1
-                  this%film_list(this%film_id(i,j,k))%node(this%film_list(this%film_id(i,j,k))%counter,1) = i
-                  this%film_list(this%film_id(i,j,k))%node(this%film_list(this%film_id(i,j,k))%counter,2) = j
-                  this%film_list(this%film_id(i,j,k))%node(this%film_list(this%film_id(i,j,k))%counter,3) = k
-               end if
-               
+               end if              
             end do ! i
          end do ! j
       end do ! k
-      
-      ! Film phase
-      film_phase: block
-         integer :: m
-         do m=this%film_sync_offset+1,this%film_sync_offset+this%n_film
-            i = this%film_list(this%film_map_(m))%node(1,1)
-            j = this%film_list(this%film_map_(m))%node(1,2)
-            k = this%film_list(this%film_map_(m))%node(1,3)
-            this%film_list(this%film_map_(m))%phase = this%film_phase(i,j,k)
-         end do
-      end block film_phase
 
       ! Copy this%struct_list to my_struct
       call copy_to_my_struct
@@ -1510,6 +1541,7 @@ contains
          jj = j + pos(2)
          kk = k + pos(3)
          is_connected = .true.
+         if (this%max_interface_planes.eq.0) return
          use_normal = getNumberOfVertices(this%poly(1,i,j,k)).gt.0 .and. (getNumberOfVertices(this%poly(1,ii,jj,kk)).gt.0)
          if (use_normal) then
             ! If neighbor is a two-plane cell
@@ -2286,10 +2318,10 @@ contains
       real(WP), dimension(:), pointer :: x_vol_,x_vol,y_vol_,y_vol,z_vol_,z_vol
       real(WP), dimension(:), pointer :: u_vol_,u_vol,v_vol,v_vol_,w_vol,w_vol_
       real(WP), dimension(:,:,:), pointer :: Imom_,Imom
-      integer  :: i,j,ii,jj,kk,ierr,iunit,var
+      integer  :: i,j,ii,jj,kk,ierr!,iunit,var
       integer  :: per_x,per_y,per_z
       real(WP) :: xtmp,ytmp,ztmp
-      character(len=str_medium) :: filename
+      ! character(len=str_medium) :: filename
       ! Eigenvalues/eigenvectors
       real(WP), dimension(3,3) :: A
       real(WP), dimension(3) :: d
@@ -2706,9 +2738,11 @@ contains
       nullify(this%my_struct)
       
       deallocate(this%struct_list)
-      deallocate(this%film_list)
       deallocate(this%struct_map_)
-      deallocate(this%film_map_)
+      if (this%max_interface_planes.gt.0) then
+         deallocate(this%film_list)
+         deallocate(this%film_map_)
+      end if
       deallocate(this%parent)
       deallocate(this%parent_all)
       deallocate(this%parent_own)
