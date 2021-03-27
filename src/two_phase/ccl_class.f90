@@ -501,7 +501,8 @@ contains
                               else
                                  ! is_contiguous = is_contiguous.or.this%VF(i,j,k).gt.0.1_WP.or.this%VF(ii,jj,kk).gt.0.1_WP
                                  ! is_contiguous = is_contiguous.or.this%VF(ii,jj,kk).gt.0.1_WP
-                                 is_contiguous = is_contiguous.or.norm2(c2-c1).le.1.0_WP
+                                 ! is_contiguous = is_contiguous.or.norm2(c2-c1).le.0.5_WP*(this%cfg%meshsize(i,j,k)+this%cfg%meshsize(ii,jj,kk))
+                                 is_contiguous = is_contiguous.or.norm2(c2-c1).le.1.0_WP*norm2([this%cfg%xm(i),this%cfg%ym(j),this%cfg%zm(k)]-[this%cfg%xm(ii),this%cfg%ym(jj),this%cfg%zm(kk)])
                               end if ! is_film
                               
                            end if ! use_normal
