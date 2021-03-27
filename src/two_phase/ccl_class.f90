@@ -50,7 +50,7 @@ module ccl_class
    type, extends(struct) :: film
       integer :: phase                                    !< Film phase; 1 if liquid, 2 if gas
       integer, dimension(2) :: adjacent_structs           !< IDs of structures adjacent to gas film
-      real(WP) :: min_thickness                           !< Global minimum film thickness 
+      real(WP) :: min_thickness                           !< Global minimum film thickness
    end type film
    
    !> CCL object definition
@@ -2465,28 +2465,28 @@ contains
       end do
       
       ! Write output
-      if (this%cfg%amRoot) then
-         
-         ! Open file with correct index
-         filename = "struct_stat."
-         write(filename(len_trim(filename)+1:len_trim(filename)+6),'(i6.6)') this%nout_time
-         open(iunit,file=filename,form="formatted",iostat=ierr,status="REPLACE")
-         
-         ! Header
-         write(iunit,'(10000a20)') (trim(adjustl(this%meta_structures_name(var))),var=1,this%meta_structures_nname)
-         
-         ! Data
-         do i=1,this%n_meta_struct
-            write(iunit,'(I20,10000ES20.12)')       this%meta_structures_list(i)%id,        this%meta_structures_list(i)%vol,       &
-            this%meta_structures_list(i)%x,         this%meta_structures_list(i)%y,         this%meta_structures_list(i)%z,         &
-            this%meta_structures_list(i)%u,         this%meta_structures_list(i)%v,         this%meta_structures_list(i)%w,         &
-            this%meta_structures_list(i)%lengths(1),this%meta_structures_list(i)%lengths(2),this%meta_structures_list(i)%lengths(3),&
-            this%meta_structures_list(i)%axes(1,1), this%meta_structures_list(i)%axes(1,2), this%meta_structures_list(i)%axes(1,3), &
-            this%meta_structures_list(i)%axes(2,1), this%meta_structures_list(i)%axes(2,2), this%meta_structures_list(i)%axes(2,3), &
-            this%meta_structures_list(i)%axes(3,1), this%meta_structures_list(i)%axes(3,2), this%meta_structures_list(i)%axes(3,3)
-         end do
-         close(iunit)
-      end if
+      !if (this%cfg%amRoot) then
+      !
+      !   ! Open file with correct index
+      !   filename = "struct_stat."
+      !   write(filename(len_trim(filename)+1:len_trim(filename)+6),'(i6.6)') this%nout_time
+      !   open(iunit,file=filename,form="formatted",iostat=ierr,status="REPLACE")
+      !
+      !   ! Header
+      !   write(iunit,'(10000a20)') (trim(adjustl(this%meta_structures_name(var))),var=1,this%meta_structures_nname)
+      !
+      !   ! Data
+      !   do i=1,this%n_meta_struct
+      !      write(iunit,'(I20,10000ES20.12)')       this%meta_structures_list(i)%id,        this%meta_structures_list(i)%vol,       &
+      !      this%meta_structures_list(i)%x,         this%meta_structures_list(i)%y,         this%meta_structures_list(i)%z,         &
+      !      this%meta_structures_list(i)%u,         this%meta_structures_list(i)%v,         this%meta_structures_list(i)%w,         &
+      !      this%meta_structures_list(i)%lengths(1),this%meta_structures_list(i)%lengths(2),this%meta_structures_list(i)%lengths(3),&
+      !      this%meta_structures_list(i)%axes(1,1), this%meta_structures_list(i)%axes(1,2), this%meta_structures_list(i)%axes(1,3), &
+      !      this%meta_structures_list(i)%axes(2,1), this%meta_structures_list(i)%axes(2,2), this%meta_structures_list(i)%axes(2,3), &
+      !      this%meta_structures_list(i)%axes(3,1), this%meta_structures_list(i)%axes(3,2), this%meta_structures_list(i)%axes(3,3)
+      !   end do
+      !   close(iunit)
+      !end if
       
       ! Deallocate arrays
       deallocate(vol_struct_,x_vol_,y_vol_,z_vol_,u_vol_,v_vol_,w_vol_,Imom_)
@@ -2583,7 +2583,7 @@ contains
                if (d(3).gt.(ratio*d(1))) this%film_type(i,j,k) = this%film_type(i,j,k) + 1
                if (d(3).gt.(ratio*d(2))) this%film_type(i,j,k) = this%film_type(i,j,k) + 1
                ! if (l1.gt.(ratio*l2)) film_type(i,j,k) = film_type(i,j,k) + 1
-               ! if (l1.gt.(ratio*l3)) film_type(i,j,k) = film_type(i,j,k) + 1  
+               ! if (l1.gt.(ratio*l3)) film_type(i,j,k) = film_type(i,j,k) + 1
             end do
          else ! Gas film
             do n=1,this%film_list(this%film_map_(m))%nnode
@@ -2597,7 +2597,7 @@ contains
                   do jj = j-2,j+2
                      do ii = i-2,i+2
                         
-                        ! Location of film node  
+                        ! Location of film node
                         xtmp = Gbary(1,ii,jj,kk)
                         ytmp = Gbary(2,ii,jj,kk)
                         ztmp = Gbary(3,ii,jj,kk)
@@ -2645,10 +2645,10 @@ contains
                if (d(3).gt.(ratio*d(1))) this%film_type(i,j,k) = this%film_type(i,j,k) + 1
                if (d(3).gt.(ratio*d(2))) this%film_type(i,j,k) = this%film_type(i,j,k) + 1
                ! if (l1.gt.(ratio*l2)) film_type(i,j,k) = film_type(i,j,k) + 1
-               ! if (l1.gt.(ratio*l3)) film_type(i,j,k) = film_type(i,j,k) + 1  
+               ! if (l1.gt.(ratio*l3)) film_type(i,j,k) = film_type(i,j,k) + 1
             end do
          end if ! Film phase
-      end do      
+      end do
 
    end subroutine film_classify
    
@@ -2672,13 +2672,13 @@ contains
             k=this%film_list(this%film_map_(m))%node(n,3)
             min_thickness_(id)=min(min_thickness_(id),this%film_thickness(i,j,k))
          end do
-      end do      
+      end do
       call MPI_ALLREDUCE(min_thickness_,min_thickness,this%cfg%nproc*this%n_film_max,MPI_REAL_WP,MPI_MIN,this%cfg%comm,ierr)
       do m=this%film_sync_offset+1,this%film_sync_offset+this%n_film ! Loops over film segments contained locally
          id=this%film_list(this%film_map_(m))%parent
          this%film_list(this%film_map_(m))%min_thickness = min_thickness(id)
          ! print *,"rank",this%cfg%rank,"film id",id,"min thickness",min_thickness(id)
-      end do             
+      end do
    end subroutine get_min_thickness
 
 

@@ -46,8 +46,10 @@ module simulation
    real(WP), dimension(:,:,:), allocatable :: Ui,Vi,Wi
    real(WP), dimension(:,:,:,:), allocatable :: SR
    
-   !> Transfer parameter
-   real(WP) :: film_to_drop_threshold=1.0e-6_WP
+   !> Transfer parameters
+   real(WP) :: filmthickness_over_dx  =5.0e-1_WP
+   real(WP) :: min_filmthickness      =1.0e-6_WP
+   real(WP) :: diam_over_filmthickness=1.0e+1_WP
    
 contains
    
@@ -429,7 +431,7 @@ contains
          cc%max_interface_planes=2
          cc%VFlo=VFlo
          cc%dot_threshold=-0.5_WP
-         cc%thickness_cutoff=0.5_WP
+         cc%thickness_cutoff=filmthickness_over_dx
          ! Perform CCL step
          call cc%build_lists(VF=vf%VF,poly=vf%interface_polygon,U=fs%U,V=fs%V,W=fs%W)
          call cc%film_classify(Lbary=vf%Lbary,Gbary=vf%Gbary)
@@ -672,7 +674,7 @@ contains
                ! Skip non-liquid films
                if (cc%film_list(cc%film_map_(m))%phase.ne.1) cycle
                ! Skip films that are still thick enough
-               if (cc%film_list(cc%film_map_(m))%min_thickness.gt.film_to_drop_threshold) cycle
+               if (cc%film_list(cc%film_map_(m))%min_thickness.gt.min_filmthickness) cycle
                ! We are still here: transfer the film to drops
                do n=1,cc%film_list(cc%film_map_(m))%nnode ! Loops over cells within local film segment
                   i=cc%film_list(cc%film_map_(m))%node(n,1)
