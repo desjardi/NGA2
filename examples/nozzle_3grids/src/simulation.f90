@@ -7,6 +7,7 @@ module simulation
    use incomp_class,      only: incomp
    use tpns_class,        only: tpns
    use vfs_class,         only: vfs
+   use ccl_class,         only: ccl
    use lpt_class,         only: lpt
    use coupler_class,     only: coupler
    use sgsmodel_class,    only: sgsmodel
@@ -26,11 +27,12 @@ module simulation
    ! Couplers between 1 and 2
    type(coupler),     public :: cpl12x,cpl12y,cpl12z
    
-   !> Two-phase incompressible flow solver, VF solver, and corresponding time tracker and sgs model
+   !> Two-phase incompressible flow solver, VF solver with CCL, and corresponding time tracker and sgs model
    type(tpns),        public :: fs2
    type(vfs),         public :: vf2
    type(timetracker), public :: time2
    type(sgsmodel),    public :: sgs2
+   type(ccl),         public :: cc2
    
    ! Couplers between 2 and 3
    type(coupler),     public :: cpl23x,cpl23y,cpl23z
@@ -75,6 +77,10 @@ module simulation
    real(WP), dimension(:,:,:,:), allocatable :: SR3
    real(WP), dimension(:,:,:), allocatable :: U2on3,V2on3,W2on3
    
+   !> Transfer parameters
+   real(WP) :: filmthickness_over_dx  =5.0e-1_WP
+   real(WP) :: min_filmthickness      =1.0e-6_WP
+   real(WP) :: diam_over_filmthickness=7.0e+0_WP
    
 contains
    
@@ -487,6 +493,22 @@ contains
       end block initialize_velocity2
       
       
+      ! Create a connected-component labeling object
+      create_and_initialize_ccl2: block
+         use vfs_class, only: VFlo
+         ! Create the CCL object
+         cc2=ccl(cfg=cfg2,name='CCL')
+         cc2%max_interface_planes=2
+         cc2%VFlo=VFlo
+         cc2%dot_threshold=-0.5_WP
+         cc2%thickness_cutoff=filmthickness_over_dx
+         ! Perform CCL step
+         call cc2%build_lists(VF=vf2%VF,poly=vf2%interface_polygon,U=fs2%U,V=fs2%V,W=fs2%W)
+         call cc2%film_classify(Lbary=vf2%Lbary,Gbary=vf2%Gbary)
+         call cc2%deallocate_lists()
+      end block create_and_initialize_ccl2
+      
+      
       ! Create an LES model
       create_sgs2: block
          sgs2=sgsmodel(cfg=fs2%cfg,umask=fs2%umask,vmask=fs2%vmask,wmask=fs2%wmask)
@@ -510,6 +532,9 @@ contains
          call ens_out2%add_scalar('VOF',vf2%VF)
          call ens_out2%add_scalar('curvature',vf2%curv)
          call ens_out2%add_scalar('visc_t',sgs2%visc)
+         call ens_out2%add_scalar('structID',cc2%id)
+         call ens_out2%add_scalar('filmID',cc2%film_id)
+         call ens_out2%add_scalar('filmThickness',cc2%film_thickness)
          call ens_out2%add_surface('vofplic',vf2%surfgrid)
          ! Output to ensight
          if (ens_evt2%occurs()) call ens_out2%write_data(time2%t)
@@ -1172,7 +1197,13 @@ contains
          call mfile2%write()
          call cflfile2%write()
          
-         ! After we're done clip all VOF at the exit area and along the sides
+         
+         ! ###############################################
+         ! ####### TRANSFER DROPLETS FROM 2->3 HERE ######
+         ! ###############################################
+         ! Perform CCL and transfer
+         call transfer_vf_to_drops()
+         ! After we're done clip all VOF at the exit area and along the sides - hopefully nothing's left
          do k=fs2%cfg%kmino_,fs2%cfg%kmaxo_
             do j=fs2%cfg%jmino_,fs2%cfg%jmaxo_
                do i=fs2%cfg%imino_,fs2%cfg%imaxo_
@@ -1184,16 +1215,6 @@ contains
                end do
             end do
          end do
-         
-         
-         ! ###############################################
-         ! ####### TRANSFER DROPLETS FROM 2->3 HERE ######
-         ! ###############################################
-         
-         
-         
-         
-         
          
          
          ! ###############################################
@@ -1218,8 +1239,7 @@ contains
             call time3%increment()
             
             ! Advance particles by full dt
-            resU3=fs3%rho
-            resV3=fs2%visc_g
+            resU3=fs3%rho; resV3=fs2%visc_g
             call lp3%advance(dt=time3%dt,U=fs3%U,V=fs3%V,W=fs3%W,rho=resU3,visc=resV3)
             
             ! Remember old velocity
@@ -1390,6 +1410,106 @@ contains
       end do
       
    end subroutine simulation_run
+   
+   
+   !> Transfer vf to drops
+   subroutine transfer_vf_to_drops()
+      implicit none
+      
+      ! Perform CCL
+      call cc2%build_lists(VF=vf2%VF,poly=vf2%interface_polygon,U=fs2%U,V=fs2%V,W=fs2%W)
+      call cc2%film_classify(Lbary=vf2%Lbary,Gbary=vf2%Gbary)
+      call cc2%get_min_thickness()
+      call cc2%sort_by_thickness()
+      
+      ! Loop through identified films and remove those that are thin enough
+      remove_film: block
+         use mathtools, only: pi
+         integer :: m,n,i,j,k,np,ip,np_old
+         real(WP) :: Vt,Vl,Hl,Vd
+         
+         ! Loops over film segments contained locally
+         do m=cc2%film_sync_offset+1,cc2%film_sync_offset+cc2%n_film
+            
+            ! Skip non-liquid films
+            if (cc2%film_list(cc2%film_map_(m))%phase.ne.1) cycle
+            
+            ! Skip films that are still thick enough
+            if (cc2%film_list(cc2%film_map_(m))%min_thickness.gt.min_filmthickness) cycle
+            
+            ! We are still here: transfer the film to drops
+            Vt=0.0_WP      ! Transferred volume
+            Vl=0.0_WP      ! We will keep track incrementally of the liquid volume to transfer to ensure conservation
+            np_old=lp3%np_  ! Remember old number of particles
+            do n=1,cc2%film_list(cc2%film_map_(m))%nnode ! Loops over cells within local film segment
+               i=cc2%film_list(cc2%film_map_(m))%node(n,1)
+               j=cc2%film_list(cc2%film_map_(m))%node(n,2)
+               k=cc2%film_list(cc2%film_map_(m))%node(n,3)
+               ! Increment liquid volume to remove
+               Vl=Vl+vf2%VF(i,j,k)*vf2%cfg%vol(i,j,k)
+               ! Estimate drop size based on local film thickness in current cell
+               Hl=max(cc2%film_thickness(i,j,k),min_filmthickness)
+               Vd=pi/6.0_WP*(diam_over_filmthickness*Hl)**3
+               ! Create drops from available liquid volume
+               do while (Vl-Vd.gt.0.0_WP)
+                  ! Make room for new drop
+                  np=lp3%np_+1; call lp3%resize(np)
+                  ! Add the drop
+                  lp3%p(np)%id  =int(0,8)                                   !< Give id (maybe based on break-up model?)
+                  lp3%p(np)%dt  =0.0_WP                                     !< Let the drop find it own integration time
+                  lp3%p(np)%d   =(6.0_WP*Vd/pi)**(1.0_WP/3.0_WP)            !< Assign diameter from model above
+                  lp3%p(np)%pos =vf2%Lbary(:,i,j,k)                          !< Place the drop at the liquid barycenter
+                  lp3%p(np)%vel =fs2%cfg%get_velocity(pos=lp3%p(np)%pos,i0=i,j0=j,k0=k,U=fs2%U,V=fs2%V,W=fs2%W) !< Interpolate local cell velocity as drop velocity
+                  lp3%p(np)%ind =lp3%cfg%get_ijk_global(lp3%p(np)%pos,[lp3%cfg%imin,lp3%cfg%jmin,lp3%cfg%kmin]) !< Place the drop in the proper cell for the lp%cfg
+                  lp3%p(np)%flag=0                                          !< Activate it
+                  ! Increment particle counter
+                  lp3%np_=np
+                  ! Update tracked volumes
+                  Vl=Vl-Vd
+                  Vt=Vt+Vd
+               end do
+               ! Remove liquid in that cell
+               vf2%VF(i,j,k)=0.0_WP
+            end do
+            
+            ! Based on how many particles were created, decide what to do with left-over volume
+            if (Vt.eq.0.0_WP) then ! No particle was created, we need one...
+               ! Add one last drop for remaining liquid volume
+               np=lp3%np_+1; call lp3%resize(np)
+               ! Add the drop
+               lp3%p(np)%id  =int(0,8)                                   !< Give id (maybe based on break-up model?)
+               lp3%p(np)%dt  =0.0_WP                                     !< Let the drop find it own integration time
+               lp3%p(np)%d   =(6.0_WP*Vl/pi)**(1.0_WP/3.0_WP)            !< Assign diameter based on remaining liquid volume
+               lp3%p(np)%pos =vf2%Lbary(:,i,j,k)                          !< Place the drop at the liquid barycenter
+               lp3%p(np)%vel =fs2%cfg%get_velocity(pos=lp3%p(np)%pos,i0=i,j0=j,k0=k,U=fs2%U,V=fs2%V,W=fs2%W) !< Interpolate local cell velocity as drop velocity
+               lp3%p(np)%ind =lp3%cfg%get_ijk_global(lp3%p(np)%pos,[lp3%cfg%imin,lp3%cfg%jmin,lp3%cfg%kmin]) !< Place the drop in the proper cell for the lp%cfg
+               lp3%p(np)%flag=0                                          !< Activate it
+               ! Increment particle counter
+               lp3%np_=np
+            else ! Some particles were created, make them all larger
+               do ip=np_old+1,lp3%np_
+                  lp3%p(ip)%d=lp3%p(ip)%d*((Vt+Vl)/Vt)**(1.0_WP/3.0_WP)
+               end do
+            end if
+         end do
+         
+      end block remove_film
+      
+      ! Sync VF and clean up IRL and band
+      call vf2%cfg%sync(vf2%VF)
+      call vf2%clean_irl_and_band()
+      call vf2%update_surfgrid()
+      
+      ! Clean up CCL
+      call cc2%deallocate_lists()
+      
+      ! Resync the spray
+      call lp3%sync()
+      
+      ! Update the particle mesh
+      call lp3%update_partmesh()
+      
+   end subroutine transfer_vf_to_drops
    
    
    !> Finalize the NGA2 simulation
