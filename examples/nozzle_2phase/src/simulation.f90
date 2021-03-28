@@ -658,7 +658,7 @@ contains
          call fs%get_div()
          
          ! Perform volume-fraction-to-droplet transfer
-         call transfer_vf_to_drop()
+         call transfer_vf_to_drops()
          
          ! Output to ensight
          if (ens_evt%occurs()) call ens_out%write_data(time%t)
@@ -729,9 +729,8 @@ contains
    end subroutine simulation_run
    
    
-   
-   !> Transfer vf to drop
-   subroutine transfer_vf_to_drop()
+   !> Transfer vf to drops
+   subroutine transfer_vf_to_drops()
       implicit none
       
       ! Perform CCL
@@ -827,8 +826,7 @@ contains
       ! Update the particle mesh
       call lp%update_partmesh()
       
-   end subroutine transfer_vf_to_drop
-   
+   end subroutine transfer_vf_to_drops
    
    
    !> Finalize the NGA2 simulation
