@@ -146,6 +146,7 @@ module ccl_class
       procedure, private :: meta_structures_stats
       procedure :: film_classify
       procedure :: get_min_thickness
+      procedure :: sort_by_thickness
       procedure, private :: kill_struct
    end type ccl
    
@@ -623,7 +624,7 @@ contains
                   
                end do ! k
             end do ! j
-         end do ! i         
+         end do ! i
 
          ! Allocate this%film_list%node array, calculate this%n_film
          this%n_film = 0
@@ -677,7 +678,7 @@ contains
                k = this%film_list(this%film_map_(m))%node(1,3)
                this%film_list(this%film_map_(m))%phase = this%film_phase(i,j,k)
             end do
-         end block film_phase       
+         end block film_phase
 
       else ! if no interface polygons given
          do k=this%cfg%kmin_,this%cfg%kmax_
@@ -793,7 +794,7 @@ contains
                   this%struct_list(this%id(i,j,k))%node(this%struct_list(this%id(i,j,k))%counter,1) = i
                   this%struct_list(this%id(i,j,k))%node(this%struct_list(this%id(i,j,k))%counter,2) = j
                   this%struct_list(this%id(i,j,k))%node(this%struct_list(this%id(i,j,k))%counter,3) = k
-               end if              
+               end if
             end do ! i
          end do ! j
       end do ! k
@@ -2710,9 +2711,90 @@ contains
       do m=this%film_sync_offset+1,this%film_sync_offset+this%n_film ! Loops over film segments contained locally
          id=this%film_list(this%film_map_(m))%parent
          this%film_list(this%film_map_(m))%min_thickness = min_thickness(id)
-         ! print *,"rank",this%cfg%rank,"film id",id,"min thickness",min_thickness(id)
       end do
    end subroutine get_min_thickness
+   
+   
+   !> Sort film indices by increasing thickness
+   subroutine sort_by_thickness(this)
+      implicit none
+      class(ccl), intent(inout) :: this
+      integer  :: m,n,i,j,k
+      real(WP), dimension(  :), allocatable :: mythick
+      integer , dimension(:,:), allocatable :: mynodes
+      ! Nothing to do if there is no local film
+      if (this%n_film.eq.0) return
+      ! Build an auxiliary array with thickness for sorting for each film
+      do m=this%film_sync_offset+1,this%film_sync_offset+this%n_film
+         ! Allocate and copy 1D thickness and node map
+         allocate(mythick(    this%film_list(this%film_map_(m))%nnode))
+         allocate(mynodes(1:3,this%film_list(this%film_map_(m))%nnode))
+         do n=1,this%film_list(this%film_map_(m))%nnode
+            mythick(n)=this%film_thickness(this%film_list(this%film_map_(m))%node(n,1),&
+            &                              this%film_list(this%film_map_(m))%node(n,2),&
+            &                              this%film_list(this%film_map_(m))%node(n,3))
+            mynodes(:,n)=[this%film_list(this%film_map_(m))%node(n,1),&
+            &             this%film_list(this%film_map_(m))%node(n,2),&
+            &             this%film_list(this%film_map_(m))%node(n,3)]
+         end do
+         ! Sort it
+         call quick_sort_by_thickness(mythick,mynodes)
+         ! Copy back the map
+         do n=1,this%film_list(this%film_map_(m))%nnode
+            this%film_list(this%film_map_(m))%node(n,1)=mynodes(1,n)
+            this%film_list(this%film_map_(m))%node(n,2)=mynodes(2,n)
+            this%film_list(this%film_map_(m))%node(n,3)=mynodes(3,n)
+         end do
+         ! Deallocate thickness and map
+         deallocate(mythick,mynodes)
+      end do
+   contains
+      ! Thickness sorting
+      recursive subroutine quick_sort_by_thickness(thick,nodes)
+         implicit none
+         real(WP), dimension(:)   :: thick
+         integer , dimension(:,:) :: nodes
+         integer :: imark
+         if (size(thick).gt.1) then
+            call quick_sort_by_thickness_partition(thick,nodes,imark)
+            call quick_sort_by_thickness(thick(     :imark-1),nodes(:,     :imark-1))
+            call quick_sort_by_thickness(thick(imark:       ),nodes(:,imark:       ))
+         end if
+      end subroutine quick_sort_by_thickness
+      subroutine quick_sort_by_thickness_partition(thick,nodes,marker)
+         implicit none
+         real(WP), dimension(  :) :: thick
+         integer , dimension(:,:) :: nodes
+         integer , intent(out)    :: marker
+         integer :: i,j
+         integer, dimension(3) :: i3tmp
+         real(WP) :: dtmp,x
+         x=thick(1)
+         i=0; j=size(thick)+1
+         do
+            j=j-1
+            do
+               if (thick(j).le.x) exit
+               j=j-1
+            end do
+            i=i+1
+            do
+               if (thick(i).ge.x) exit
+               i=i+1
+            end do
+            if (i.lt.j) then
+               dtmp =thick(  i); thick(  i)=thick(  j); thick(  j)=dtmp
+               i3tmp=nodes(:,i); nodes(:,i)=nodes(:,j); nodes(:,j)=i3tmp
+            else if (i.eq.j) then
+               marker=i+1
+               return
+            else
+               marker=i
+               return
+            endif
+         end do
+      end subroutine quick_sort_by_thickness_partition
+   end subroutine sort_by_thickness
 
 
    !> Deallocate local structures

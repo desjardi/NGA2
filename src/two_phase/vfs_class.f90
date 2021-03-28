@@ -148,7 +148,6 @@ module vfs_class
       procedure, private :: calculate_offset_to_planes    !< Helper routine for I/O
       procedure, private :: crude_phase_test              !< Helper function that rapidly assess if a mixed cell might be present
       procedure, private :: project                       !< Helper function that performs a Lagrangian projection of a vertex
-      procedure, private :: get_velocity                  !< Helper function that interpolates a velocity field to a point
       procedure :: read_interface                         !< Read an IRL interface from a file
       procedure :: write_interface                        !< Write an IRL interface to a file
       procedure :: advance                                !< Advance VF to next step
@@ -2012,10 +2011,10 @@ contains
       real(WP), dimension(3) :: p2
       ! Explicit RK4
       !real(WP), dimension(3) :: v1,v2,v3,v4
-      !v1=this%get_velocity(p1             ,i,j,k,U,V,W)
-      !v2=this%get_velocity(p1+0.5_WP*dt*v1,i,j,k,U,V,W)
-      !v3=this%get_velocity(p1+0.5_WP*dt*v2,i,j,k,U,V,W)
-      !v4=this%get_velocity(p1+       dt*v3,i,j,k,U,V,W)
+      !v1=this%cfg%get_velocity(p1             ,i,j,k,U,V,W)
+      !v2=this%cfg%get_velocity(p1+0.5_WP*dt*v1,i,j,k,U,V,W)
+      !v3=this%cfg%get_velocity(p1+0.5_WP*dt*v2,i,j,k,U,V,W)
+      !v4=this%cfg%get_velocity(p1+       dt*v3,i,j,k,U,V,W)
       !p2=p1+dt/6.0_WP*(v1+2.0_WP*v2+2.0_WP*v3+v4)
       ! For implicit RK2
       real(WP), dimension(3) :: p2old,v1
@@ -2024,108 +2023,12 @@ contains
       p2=p1
       tolerance=(1.0e-3_WP*this%cfg%min_meshsize)*(1.0e-3_WP*this%cfg%min_meshsize)
       do iter=1,10
-         v1=this%get_velocity(0.5_WP*(p1+p2),i,j,k,U,V,W)
+         v1=this%cfg%get_velocity(0.5_WP*(p1+p2),i,j,k,U,V,W)
          p2old=p2
          p2=p1+dt*v1
          if (dot_product(p2-p2old,p2-p2old).lt.tolerance) exit
       end do
    end function project
-   
-   
-   !> Private function that performs an trilinear interpolation of the provided velocity U,V,W
-   !> to the provided position pos in the vicinity of cell i0,j0,k0
-   function get_velocity(this,pos,i0,j0,k0,U,V,W) result(vel)
-      implicit none
-      class(vfs), intent(inout) :: this
-      real(WP), dimension(3) :: vel
-      real(WP), dimension(3), intent(in) :: pos
-      integer, intent(in) :: i0,j0,k0
-      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in) :: U     !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
-      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in) :: V     !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
-      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in) :: W     !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
-      integer :: i,j,k
-      real(WP) :: wx1,wy1,wz1
-      real(WP) :: wx2,wy2,wz2
-      ! Interpolate U velocity ------------------------------
-      ! Find right i index
-      i=max(min(this%cfg%imaxo_-1,i0),this%cfg%imino_)
-      do while (pos(1)-this%cfg%x (i  ).lt.0.0_WP.and.i  .gt.this%cfg%imino_); i=i-1; end do
-      do while (pos(1)-this%cfg%x (i+1).ge.0.0_WP.and.i+1.lt.this%cfg%imaxo_); i=i+1; end do
-      ! Find right j index
-      j=max(min(this%cfg%jmaxo_-1,j0),this%cfg%jmino_)
-      do while (pos(2)-this%cfg%ym(j  ).lt.0.0_WP.and.j  .gt.this%cfg%jmino_); j=j-1; end do
-      do while (pos(2)-this%cfg%ym(j+1).ge.0.0_WP.and.j+1.lt.this%cfg%jmaxo_); j=j+1; end do
-      ! Find right k index
-      k=max(min(this%cfg%kmaxo_-1,k0),this%cfg%kmino_)
-      do while (pos(3)-this%cfg%zm(k  ).lt.0.0_WP.and.k  .gt.this%cfg%kmino_); k=k-1; end do
-      do while (pos(3)-this%cfg%zm(k+1).ge.0.0_WP.and.k+1.lt.this%cfg%kmaxo_); k=k+1; end do
-      ! Prepare tri-linear interpolation coefficients
-      wx1=(pos(1)-this%cfg%x (i))/(this%cfg%x (i+1)-this%cfg%x (i)); wx2=1.0_WP-wx1
-      wy1=(pos(2)-this%cfg%ym(j))/(this%cfg%ym(j+1)-this%cfg%ym(j)); wy2=1.0_WP-wy1
-      wz1=(pos(3)-this%cfg%zm(k))/(this%cfg%zm(k+1)-this%cfg%zm(k)); wz2=1.0_WP-wz1
-      ! Tri-linear interpolation of U
-      vel(1)=wz1*(wy1*(wx1*U(i+1,j+1,k+1)  + &
-      &                wx2*U(i  ,j+1,k+1)) + &
-      &           wy2*(wx1*U(i+1,j  ,k+1)  + &
-      &                wx2*U(i  ,j  ,k+1)))+ &
-      &      wz2*(wy1*(wx1*U(i+1,j+1,k  )  + &
-      &                wx2*U(i  ,j+1,k  )) + &
-      &           wy2*(wx1*U(i+1,j  ,k  )  + &
-      &                wx2*U(i  ,j  ,k  )))
-      ! Interpolate V velocity ------------------------------
-      ! Find right i index
-      i=max(min(this%cfg%imaxo_-1,i0),this%cfg%imino_)
-      do while (pos(1)-this%cfg%xm(i  ).lt.0.0_WP.and.i  .gt.this%cfg%imino_); i=i-1; end do
-      do while (pos(1)-this%cfg%xm(i+1).ge.0.0_WP.and.i+1.lt.this%cfg%imaxo_); i=i+1; end do
-      ! Find right j index
-      j=max(min(this%cfg%jmaxo_-1,j0),this%cfg%jmino_)
-      do while (pos(2)-this%cfg%y (j  ).lt.0.0_WP.and.j  .gt.this%cfg%jmino_); j=j-1; end do
-      do while (pos(2)-this%cfg%y (j+1).ge.0.0_WP.and.j+1.lt.this%cfg%jmaxo_); j=j+1; end do
-      ! Find right k index
-      k=max(min(this%cfg%kmaxo_-1,k0),this%cfg%kmino_)
-      do while (pos(3)-this%cfg%zm(k  ).lt.0.0_WP.and.k  .gt.this%cfg%kmino_); k=k-1; end do
-      do while (pos(3)-this%cfg%zm(k+1).ge.0.0_WP.and.k+1.lt.this%cfg%kmaxo_); k=k+1; end do
-      ! Prepare tri-linear interpolation coefficients
-      wx1=(pos(1)-this%cfg%xm(i))/(this%cfg%xm(i+1)-this%cfg%xm(i)); wx2=1.0_WP-wx1
-      wy1=(pos(2)-this%cfg%y (j))/(this%cfg%y (j+1)-this%cfg%y (j)); wy2=1.0_WP-wy1
-      wz1=(pos(3)-this%cfg%zm(k))/(this%cfg%zm(k+1)-this%cfg%zm(k)); wz2=1.0_WP-wz1
-      ! Tri-linear interpolation of V
-      vel(2)=wz1*(wy1*(wx1*V(i+1,j+1,k+1)  + &
-      &                wx2*V(i  ,j+1,k+1)) + &
-      &           wy2*(wx1*V(i+1,j  ,k+1)  + &
-      &                wx2*V(i  ,j  ,k+1)))+ &
-      &      wz2*(wy1*(wx1*V(i+1,j+1,k  )  + &
-      &                wx2*V(i  ,j+1,k  )) + &
-      &           wy2*(wx1*V(i+1,j  ,k  )  + &
-      &                wx2*V(i  ,j  ,k  )))
-      ! Interpolate W velocity ------------------------------
-      ! Find right i index
-      i=max(min(this%cfg%imaxo_-1,i0),this%cfg%imino_)
-      do while (pos(1)-this%cfg%xm(i  ).lt.0.0_WP.and.i  .gt.this%cfg%imino_); i=i-1; end do
-      do while (pos(1)-this%cfg%xm(i+1).ge.0.0_WP.and.i+1.lt.this%cfg%imaxo_); i=i+1; end do
-      ! Find right j index
-      j=max(min(this%cfg%jmaxo_-1,j0),this%cfg%jmino_)
-      do while (pos(2)-this%cfg%ym(j  ).lt.0.0_WP.and.j  .gt.this%cfg%jmino_); j=j-1; end do
-      do while (pos(2)-this%cfg%ym(j+1).ge.0.0_WP.and.j+1.lt.this%cfg%jmaxo_); j=j+1; end do
-      ! Find right k index
-      k=max(min(this%cfg%kmaxo_-1,k0),this%cfg%kmino_)
-      do while (pos(3)-this%cfg%z (k  ).lt.0.0_WP.and.k  .gt.this%cfg%kmino_); k=k-1; end do
-      do while (pos(3)-this%cfg%z (k+1).ge.0.0_WP.and.k+1.lt.this%cfg%kmaxo_); k=k+1; end do
-      ! Prepare tri-linear interpolation coefficients
-      wx1=(pos(1)-this%cfg%xm(i))/(this%cfg%xm(i+1)-this%cfg%xm(i)); wx2=1.0_WP-wx1
-      wy1=(pos(2)-this%cfg%ym(j))/(this%cfg%ym(j+1)-this%cfg%ym(j)); wy2=1.0_WP-wy1
-      wz1=(pos(3)-this%cfg%z (k))/(this%cfg%z (k+1)-this%cfg%z (k)); wz2=1.0_WP-wz1
-      ! Tri-linear interpolation of W
-      vel(3)=wz1*(wy1*(wx1*W(i+1,j+1,k+1)  + &
-      &                wx2*W(i  ,j+1,k+1)) + &
-      &           wy2*(wx1*W(i+1,j  ,k+1)  + &
-      &                wx2*W(i  ,j  ,k+1)))+ &
-      &      wz2*(wy1*(wx1*W(i+1,j+1,k  )  + &
-      &                wx2*W(i  ,j+1,k  )) + &
-      &           wy2*(wx1*W(i+1,j  ,k  )  + &
-      &                wx2*W(i  ,j  ,k  )))
-      return
-   end function get_velocity
    
    
    !> Calculate the min/max/int of our VF field

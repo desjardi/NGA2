@@ -49,7 +49,7 @@ module simulation
    !> Transfer parameters
    real(WP) :: filmthickness_over_dx  =5.0e-1_WP
    real(WP) :: min_filmthickness      =1.0e-6_WP
-   real(WP) :: diam_over_filmthickness=1.0e+1_WP
+   real(WP) :: diam_over_filmthickness=7.0e+0_WP
    
 contains
    
@@ -664,11 +664,12 @@ contains
          call cc%build_lists(VF=vf%VF,poly=vf%interface_polygon,U=fs%U,V=fs%V,W=fs%W)
          call cc%film_classify(Lbary=vf%Lbary,Gbary=vf%Gbary)
          call cc%get_min_thickness()
+         call cc%sort_by_thickness()
          ! Loop through identified films and remove those that are thin enough
          remove_film: block
             use mathtools, only: pi
-            integer :: m,n,i,j,k,np
-            real(WP) :: Vl,Hl,Vd
+            integer :: m,n,i,j,k,np,ip,np_old
+            real(WP) :: Vt,Vl,Hl,Vd
             ! Loops over film segments contained locally
             do m=cc%film_sync_offset+1,cc%film_sync_offset+cc%n_film
                ! Skip non-liquid films
@@ -676,28 +677,58 @@ contains
                ! Skip films that are still thick enough
                if (cc%film_list(cc%film_map_(m))%min_thickness.gt.min_filmthickness) cycle
                ! We are still here: transfer the film to drops
+               Vt=0.0_WP      ! Transferred volume
+               Vl=0.0_WP      ! We will keep track incrementally of the liquid volume to transfer to ensure conservation
+               np_old=lp%np_  ! Remember old number of particles
                do n=1,cc%film_list(cc%film_map_(m))%nnode ! Loops over cells within local film segment
                   i=cc%film_list(cc%film_map_(m))%node(n,1)
                   j=cc%film_list(cc%film_map_(m))%node(n,2)
                   k=cc%film_list(cc%film_map_(m))%node(n,3)
-                  ! Get liquid volume and structure thickness in the cell
-                  Vl=vf%VF(i,j,k)*vf%cfg%vol(i,j,k)
-                  Hl=cc%film_thickness(i,j,k)
+                  ! Increment liquid volume to remove
+                  Vl=Vl+vf%VF(i,j,k)*vf%cfg%vol(i,j,k)
+                  ! Estimate drop size based on local film thickness in current cell
+                  Hl=max(cc%film_thickness(i,j,k),min_filmthickness)
                   Vd=pi/6.0_WP*(diam_over_filmthickness*Hl)**3
-                  ! Create a single drop from the liquid in the cell
-                  np=lp%np_+1; call lp%resize(np)
-                  lp%p(np)%id  =int(0,8)                                   !< Give id (maybe based on break-up model)
-                  lp%p(np)%d   =(6.0_WP*Vl/pi)**(1.0_WP/3.0_WP)            !< Give diameter for mass conservation
-                  lp%p(np)%pos =vf%Lbary(:,i,j,k)                          !< Place the drop at the liquid barycenter
-                  lp%p(np)%vel =[Ui(i,j,k),Vi(i,j,k),Wi(i,j,k)]            !< Take local cell velocity as drop velocity
-                  lp%p(np)%dt  =0.0_WP                                     !< Let the drop find it own integration time
-                  lp%p(np)%ind =[i,j,k]                                    !< Place the drop in the cell (only if same mesh is used!)
-                  lp%p(np)%flag=0                                          !< Activate it
-                  ! Increment particle counter
-                  lp%np_=np
+                  ! Create drops from available liquid volume
+                  do while (Vl-Vd.gt.0.0_WP)
+                     ! Make room for new drop
+                     np=lp%np_+1; call lp%resize(np)
+                     ! Add the drop
+                     lp%p(np)%id  =int(0,8)                                   !< Give id (maybe based on break-up model?)
+                     lp%p(np)%dt  =0.0_WP                                     !< Let the drop find it own integration time
+                     lp%p(np)%d   =(6.0_WP*Vd/pi)**(1.0_WP/3.0_WP)            !< Assign diameter from model above
+                     lp%p(np)%pos =vf%Lbary(:,i,j,k)                          !< Place the drop at the liquid barycenter
+                     lp%p(np)%vel =fs%cfg%get_velocity(pos=lp%p(np)%pos,i0=i,j0=j,k0=k,U=fs%U,V=fs%V,W=fs%W) !< Interpolate local cell velocity as drop velocity
+                     lp%p(np)%ind =lp%cfg%get_ijk_global(lp%p(np)%pos,[lp%cfg%imin,lp%cfg%jmin,lp%cfg%kmin]) !< Place the drop in the proper cell for the lp%cfg
+                     lp%p(np)%flag=0                                          !< Activate it
+                     ! Increment particle counter
+                     lp%np_=np
+                     ! Update tracked volumes
+                     Vl=Vl-Vd
+                     Vt=Vt+Vd
+                  end do
                   ! Remove liquid in that cell
                   vf%VF(i,j,k)=0.0_WP
                end do
+               ! Based on how many particles were created, decide what to do with left-over volume
+               if (Vt.eq.0.0_WP) then ! No particle was created, we need one...
+                  ! Add one last drop for remaining liquid volume
+                  np=lp%np_+1; call lp%resize(np)
+                  ! Add the drop
+                  lp%p(np)%id  =int(0,8)                                   !< Give id (maybe based on break-up model?)
+                  lp%p(np)%dt  =0.0_WP                                     !< Let the drop find it own integration time
+                  lp%p(np)%d   =(6.0_WP*Vl/pi)**(1.0_WP/3.0_WP)            !< Assign diameter based on remaining liquid volume
+                  lp%p(np)%pos =vf%Lbary(:,i,j,k)                          !< Place the drop at the liquid barycenter
+                  lp%p(np)%vel =fs%cfg%get_velocity(pos=lp%p(np)%pos,i0=i,j0=j,k0=k,U=fs%U,V=fs%V,W=fs%W) !< Interpolate local cell velocity as drop velocity
+                  lp%p(np)%ind =lp%cfg%get_ijk_global(lp%p(np)%pos,[lp%cfg%imin,lp%cfg%jmin,lp%cfg%kmin]) !< Place the drop in the proper cell for the lp%cfg
+                  lp%p(np)%flag=0                                          !< Activate it
+                  ! Increment particle counter
+                  lp%np_=np
+               else ! Some particles were created, make them all larger
+                  do ip=np_old+1,lp%np_
+                     lp%p(ip)%d=lp%p(ip)%d*((Vt+Vl)/Vt)**(1.0_WP/3.0_WP)
+                  end do
+               end if
             end do
          end block remove_film
          ! Sync VF and clean up IRL and band
