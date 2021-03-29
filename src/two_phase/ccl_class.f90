@@ -2719,9 +2719,8 @@ contains
    subroutine sort_by_thickness(this)
       implicit none
       class(ccl), intent(inout) :: this
-      integer  :: m,n,i,j,k
+      integer  :: m,n
       real(WP), dimension(  :), allocatable :: mythick
-      integer , dimension(:,:), allocatable :: mynodes
       ! Nothing to do if there is no local film
       if (this%n_film.eq.0) return
       ! Build an auxiliary array with thickness for sorting for each film
