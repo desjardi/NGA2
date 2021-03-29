@@ -2728,25 +2728,15 @@ contains
       do m=this%film_sync_offset+1,this%film_sync_offset+this%n_film
          ! Allocate and copy 1D thickness and node map
          allocate(mythick(    this%film_list(this%film_map_(m))%nnode))
-         allocate(mynodes(1:3,this%film_list(this%film_map_(m))%nnode))
          do n=1,this%film_list(this%film_map_(m))%nnode
             mythick(n)=this%film_thickness(this%film_list(this%film_map_(m))%node(1,n),&
             &                              this%film_list(this%film_map_(m))%node(2,n),&
             &                              this%film_list(this%film_map_(m))%node(3,n))
-            mynodes(:,n)=[this%film_list(this%film_map_(m))%node(1,n),&
-            &             this%film_list(this%film_map_(m))%node(2,n),&
-            &             this%film_list(this%film_map_(m))%node(3,n)]
          end do
          ! Sort it
-         call quick_sort_by_thickness(mythick,mynodes)
-         ! Copy back the map
-         do n=1,this%film_list(this%film_map_(m))%nnode
-            this%film_list(this%film_map_(m))%node(1,n)=mynodes(1,n)
-            this%film_list(this%film_map_(m))%node(2,n)=mynodes(2,n)
-            this%film_list(this%film_map_(m))%node(3,n)=mynodes(3,n)
-         end do
+         call quick_sort_by_thickness(mythick,this%film_list(this%film_map_(m))%node)
          ! Deallocate thickness and map
-         deallocate(mythick,mynodes)
+         deallocate(mythick)
       end do
    contains
       ! Thickness sorting
