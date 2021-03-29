@@ -759,9 +759,9 @@ contains
             Vl=0.0_WP      ! We will keep track incrementally of the liquid volume to transfer to ensure conservation
             np_old=lp%np_  ! Remember old number of particles
             do n=1,cc%film_list(cc%film_map_(m))%nnode ! Loops over cells within local film segment
-               i=cc%film_list(cc%film_map_(m))%node(n,1)
-               j=cc%film_list(cc%film_map_(m))%node(n,2)
-               k=cc%film_list(cc%film_map_(m))%node(n,3)
+               i=cc%film_list(cc%film_map_(m))%node(1,n)
+               j=cc%film_list(cc%film_map_(m))%node(2,n)
+               k=cc%film_list(cc%film_map_(m))%node(3,n)
                ! Increment liquid volume to remove
                Vl=Vl+vf%VF(i,j,k)*vf%cfg%vol(i,j,k)
                ! Estimate drop size based on local film thickness in current cell
