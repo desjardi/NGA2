@@ -630,7 +630,7 @@ contains
          this%n_film = 0
          do i=this%id_offset+1,this%id_offset+max_films
             if (this%film_list(i)%nnode.gt.0) then
-               allocate(this%film_list(i)%node(this%film_list(i)%nnode,3))
+               allocate(this%film_list(i)%node(3,this%film_list(i)%nnode))
                this%n_film = this%n_film + 1
                ! if (sum(this%film_list(i)%per).gt.0) n_border_struct = n_border_struct + 1
             end if
@@ -660,9 +660,9 @@ contains
 
                   if (this%film_phase(i,j,k).gt.0) then
                      this%film_list(this%film_id(i,j,k))%counter = this%film_list(this%film_id(i,j,k))%counter + 1
-                     this%film_list(this%film_id(i,j,k))%node(this%film_list(this%film_id(i,j,k))%counter,1) = i
-                     this%film_list(this%film_id(i,j,k))%node(this%film_list(this%film_id(i,j,k))%counter,2) = j
-                     this%film_list(this%film_id(i,j,k))%node(this%film_list(this%film_id(i,j,k))%counter,3) = k
+                     this%film_list(this%film_id(i,j,k))%node(1,this%film_list(this%film_id(i,j,k))%counter) = i
+                     this%film_list(this%film_id(i,j,k))%node(2,this%film_list(this%film_id(i,j,k))%counter) = j
+                     this%film_list(this%film_id(i,j,k))%node(3,this%film_list(this%film_id(i,j,k))%counter) = k
                   end if
                   
                end do ! i
@@ -674,8 +674,8 @@ contains
             integer :: m
             do m=this%film_sync_offset+1,this%film_sync_offset+this%n_film
                i = this%film_list(this%film_map_(m))%node(1,1)
-               j = this%film_list(this%film_map_(m))%node(1,2)
-               k = this%film_list(this%film_map_(m))%node(1,3)
+               j = this%film_list(this%film_map_(m))%node(2,1)
+               k = this%film_list(this%film_map_(m))%node(3,1)
                this%film_list(this%film_map_(m))%phase = this%film_phase(i,j,k)
             end do
          end block film_phase
@@ -747,7 +747,7 @@ contains
       this%n_struct = 0 ! counter for local number of structs
       do i=this%id_offset+1,this%id_offset+max_structs
          if (this%struct_list(i)%nnode.gt.0) then
-            allocate(this%struct_list(i)%node(this%struct_list(i)%nnode,3))
+            allocate(this%struct_list(i)%node(3,this%struct_list(i)%nnode))
             this%n_struct = this%n_struct + 1
             ! if (sum(this%struct_list(i)%per).gt.0) n_border_struct = n_border_struct + 1
          end if
@@ -791,9 +791,9 @@ contains
             do i=this%cfg%imin_,this%cfg%imax_
                if (this%id(i,j,k).gt.0) then
                   this%struct_list(this%id(i,j,k))%counter = this%struct_list(this%id(i,j,k))%counter + 1
-                  this%struct_list(this%id(i,j,k))%node(this%struct_list(this%id(i,j,k))%counter,1) = i
-                  this%struct_list(this%id(i,j,k))%node(this%struct_list(this%id(i,j,k))%counter,2) = j
-                  this%struct_list(this%id(i,j,k))%node(this%struct_list(this%id(i,j,k))%counter,3) = k
+                  this%struct_list(this%id(i,j,k))%node(1,this%struct_list(this%id(i,j,k))%counter) = i
+                  this%struct_list(this%id(i,j,k))%node(2,this%struct_list(this%id(i,j,k))%counter) = j
+                  this%struct_list(this%id(i,j,k))%node(3,this%struct_list(this%id(i,j,k))%counter) = k
                end if
             end do ! i
          end do ! j
@@ -1239,9 +1239,9 @@ contains
       ! Update id array with compacted and syncrhonized ids
       do i=this%sync_offset+1,this%sync_offset+this%n_struct
          do n=1,this%struct_list(this%struct_map_(i))%nnode
-            ii = this%struct_list(this%struct_map_(i))%node(n,1)
-            jj = this%struct_list(this%struct_map_(i))%node(n,2)
-            kk = this%struct_list(this%struct_map_(i))%node(n,3)
+            ii = this%struct_list(this%struct_map_(i))%node(1,n)
+            jj = this%struct_list(this%struct_map_(i))%node(2,n)
+            kk = this%struct_list(this%struct_map_(i))%node(3,n)
             this%id(ii,jj,kk) = this%struct_list(this%struct_map_(i))%parent
          end do
       end do
@@ -1388,9 +1388,9 @@ contains
       ! Update id array with compacted and syncrhonized ids
       do i=this%sync_offset+1,this%sync_offset+this%n_struct
          do n=1,this%struct_list(this%struct_map_(i))%nnode
-            ii = this%struct_list(this%struct_map_(i))%node(n,1)
-            jj = this%struct_list(this%struct_map_(i))%node(n,2)
-            kk = this%struct_list(this%struct_map_(i))%node(n,3)
+            ii = this%struct_list(this%struct_map_(i))%node(1,n)
+            jj = this%struct_list(this%struct_map_(i))%node(2,n)
+            kk = this%struct_list(this%struct_map_(i))%node(3,n)
             this%id(ii,jj,kk) = this%struct_list(this%struct_map_(i))%parent
          end do
       end do
@@ -1401,8 +1401,8 @@ contains
       
       do while(associated(this%my_struct))
          ii = this%my_struct%node(1,1)
-         jj = this%my_struct%node(1,2)
-         kk = this%my_struct%node(1,3)
+         jj = this%my_struct%node(2,1)
+         kk = this%my_struct%node(3,1)
          ! Update structure id with id cell value
          this%my_struct%id  = this%id(ii,jj,kk)
          
@@ -1596,9 +1596,9 @@ contains
          
          do i=this%sync_offset+1,this%sync_offset+this%n_struct
             do n=1,this%struct_list(this%struct_map_(i))%nnode
-               ii = this%struct_list(this%struct_map_(i))%node(n,1)
-               jj = this%struct_list(this%struct_map_(i))%node(n,2)
-               kk = this%struct_list(this%struct_map_(i))%node(n,3)
+               ii = this%struct_list(this%struct_map_(i))%node(1,n)
+               jj = this%struct_list(this%struct_map_(i))%node(2,n)
+               kk = this%struct_list(this%struct_map_(i))%node(3,n)
                this%idp(ii,jj,kk,:) = this%per(this%id(ii,jj,kk),:)
             end do
          end do
@@ -1773,9 +1773,9 @@ contains
       ! Update id array with compacted and syncrhonized ids
       do i=this%film_sync_offset+1,this%film_sync_offset+this%n_film
          do n=1,this%film_list(this%film_map_(i))%nnode
-            ii = this%film_list(this%film_map_(i))%node(n,1)
-            jj = this%film_list(this%film_map_(i))%node(n,2)
-            kk = this%film_list(this%film_map_(i))%node(n,3)
+            ii = this%film_list(this%film_map_(i))%node(1,n)
+            jj = this%film_list(this%film_map_(i))%node(2,n)
+            kk = this%film_list(this%film_map_(i))%node(3,n)
             this%film_id(ii,jj,kk) = this%film_list(this%film_map_(i))%parent
             ! this%film_id(ii,jj,kk) = this%film_list(this%film_id(ii,jj,kk))%parent
          end do
@@ -1921,9 +1921,9 @@ contains
       ! Update id array with compacted and syncrhonized ids
       do i=this%film_sync_offset+1,this%film_sync_offset+this%n_film
          do n=1,this%film_list(this%film_map_(i))%nnode
-            ii = this%film_list(this%film_map_(i))%node(n,1)
-            jj = this%film_list(this%film_map_(i))%node(n,2)
-            kk = this%film_list(this%film_map_(i))%node(n,3)
+            ii = this%film_list(this%film_map_(i))%node(1,n)
+            jj = this%film_list(this%film_map_(i))%node(2,n)
+            kk = this%film_list(this%film_map_(i))%node(3,n)
             this%film_id(ii,jj,kk) = this%film_list(this%film_map_(i))%parent
          end do
       end do
@@ -2112,9 +2112,9 @@ contains
       
       !    do i=this%film_sync_offset+1,this%film_sync_offset+this%n_film
       !       do n=1,this%film_list(this%film_map_(i))%nnode
-      !          ii = this%film_list(this%film_map_(i))%node(n,1)
-      !          jj = this%film_list(this%film_map_(i))%node(n,2)
-      !          kk = this%film_list(this%film_map_(i))%node(n,3)
+      !          ii = this%film_list(this%film_map_(i))%node(1,n)
+      !          jj = this%film_list(this%film_map_(i))%node(2,n)
+      !          kk = this%film_list(this%film_map_(i))%node(3,n)
       !          this%film_idp(ii,jj,kk,:) = this%per(this%film_id(ii,jj,kk),:)
       !       end do
       !    end do
@@ -2149,9 +2149,9 @@ contains
          ! loop over nodes
          do i=1,n_node
             ! Update tag
-            ii= this%my_struct%node(i,1)
-            jj= this%my_struct%node(i,2)
-            kk= this%my_struct%node(i,3)
+            ii= this%my_struct%node(1,i)
+            jj= this%my_struct%node(2,i)
+            kk= this%my_struct%node(3,i)
             ! this%id(ii,jj,kk) = tag_final
             ! Update periodicity
             this%my_struct%per(1) = max(this%my_struct%per(1),this%idp(ii,jj,kk,1))
@@ -2366,9 +2366,9 @@ contains
                do j = 1,this%my_struct%nnode
                   
                   ! Indices of struct node
-                  ii = this%my_struct%node(j,1)
-                  jj = this%my_struct%node(j,2)
-                  kk = this%my_struct%node(j,3)
+                  ii = this%my_struct%node(1,j)
+                  jj = this%my_struct%node(2,j)
+                  kk = this%my_struct%node(3,j)
                   
                   ! Location of struct node
                   xtmp = this%cfg%xm(ii)-per_x*this%cfg%xL
@@ -2417,9 +2417,9 @@ contains
                do j = 1,this%my_struct%nnode
                   
                   ! Indices of struct node
-                  ii = this%my_struct%node(j,1)
-                  jj = this%my_struct%node(j,2)
-                  kk = this%my_struct%node(j,3)
+                  ii = this%my_struct%node(1,j)
+                  jj = this%my_struct%node(2,j)
+                  kk = this%my_struct%node(3,j)
                   
                   ! Location of struct node
                   xtmp = this%cfg%xm(ii)-per_x*this%cfg%xL-x_vol(i)/vol_struct(i)
@@ -2559,9 +2559,9 @@ contains
       do m=this%film_sync_offset+1,this%film_sync_offset+this%n_film ! Loops over film segments contained locally
          if (this%film_list(this%film_map_(m))%phase.eq.1) then ! Liquid film
             do n=1,this%film_list(this%film_map_(m))%nnode ! Loops over cells within local film segment
-               i = this%film_list(this%film_map_(m))%node(n,1)
-               j = this%film_list(this%film_map_(m))%node(n,2)
-               k = this%film_list(this%film_map_(m))%node(n,3)
+               i = this%film_list(this%film_map_(m))%node(1,n)
+               j = this%film_list(this%film_map_(m))%node(2,n)
+               k = this%film_list(this%film_map_(m))%node(3,n)
                vol_total = 0.0_WP
                x_vol = 0.0_WP; y_vol = 0.0_WP; z_vol = 0.0_WP
                Imom(:,:) = 0.0_WP
@@ -2621,9 +2621,9 @@ contains
             end do
          else ! Gas film
             do n=1,this%film_list(this%film_map_(m))%nnode
-               i = this%film_list(this%film_map_(m))%node(n,1)
-               j = this%film_list(this%film_map_(m))%node(n,2)
-               k = this%film_list(this%film_map_(m))%node(n,3)
+               i = this%film_list(this%film_map_(m))%node(1,n)
+               j = this%film_list(this%film_map_(m))%node(2,n)
+               k = this%film_list(this%film_map_(m))%node(3,n)
                vol_total = 0.0_WP
                x_vol = 0.0_WP; y_vol = 0.0_WP; z_vol = 0.0_WP
                Imom(:,:) = 0.0_WP
@@ -2701,9 +2701,9 @@ contains
       do m=this%film_sync_offset+1,this%film_sync_offset+this%n_film ! Loops over film segments contained locally
          id=this%film_list(this%film_map_(m))%parent
          do n=1,this%film_list(this%film_map_(m))%nnode ! Loops over cells within local film segment
-            i=this%film_list(this%film_map_(m))%node(n,1)
-            j=this%film_list(this%film_map_(m))%node(n,2)
-            k=this%film_list(this%film_map_(m))%node(n,3)
+            i=this%film_list(this%film_map_(m))%node(1,n)
+            j=this%film_list(this%film_map_(m))%node(2,n)
+            k=this%film_list(this%film_map_(m))%node(3,n)
             min_thickness_(id)=min(min_thickness_(id),this%film_thickness(i,j,k))
          end do
       end do
@@ -2730,20 +2730,20 @@ contains
          allocate(mythick(    this%film_list(this%film_map_(m))%nnode))
          allocate(mynodes(1:3,this%film_list(this%film_map_(m))%nnode))
          do n=1,this%film_list(this%film_map_(m))%nnode
-            mythick(n)=this%film_thickness(this%film_list(this%film_map_(m))%node(n,1),&
-            &                              this%film_list(this%film_map_(m))%node(n,2),&
-            &                              this%film_list(this%film_map_(m))%node(n,3))
-            mynodes(:,n)=[this%film_list(this%film_map_(m))%node(n,1),&
-            &             this%film_list(this%film_map_(m))%node(n,2),&
-            &             this%film_list(this%film_map_(m))%node(n,3)]
+            mythick(n)=this%film_thickness(this%film_list(this%film_map_(m))%node(1,n),&
+            &                              this%film_list(this%film_map_(m))%node(2,n),&
+            &                              this%film_list(this%film_map_(m))%node(3,n))
+            mynodes(:,n)=[this%film_list(this%film_map_(m))%node(1,n),&
+            &             this%film_list(this%film_map_(m))%node(2,n),&
+            &             this%film_list(this%film_map_(m))%node(3,n)]
          end do
          ! Sort it
          call quick_sort_by_thickness(mythick,mynodes)
          ! Copy back the map
          do n=1,this%film_list(this%film_map_(m))%nnode
-            this%film_list(this%film_map_(m))%node(n,1)=mynodes(1,n)
-            this%film_list(this%film_map_(m))%node(n,2)=mynodes(2,n)
-            this%film_list(this%film_map_(m))%node(n,3)=mynodes(3,n)
+            this%film_list(this%film_map_(m))%node(1,n)=mynodes(1,n)
+            this%film_list(this%film_map_(m))%node(2,n)=mynodes(2,n)
+            this%film_list(this%film_map_(m))%node(3,n)=mynodes(3,n)
          end do
          ! Deallocate thickness and map
          deallocate(mythick,mynodes)
