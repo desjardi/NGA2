@@ -189,11 +189,9 @@ contains
       allocate(self%film_type(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%film_type=0
       
       ! Allocate periodicity work arrays
-      ! allocate(self%idp     (3,self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%idp=0
-      ! allocate(self%film_idp(3,self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%film_idp=0
-      allocate(self%idp     (self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_,3)); self%idp=0
-      allocate(self%film_idp(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_,3)); self%film_idp=0
-      
+      allocate(self%idp     (3,self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%idp=0
+      allocate(self%film_idp(3,self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%film_idp=0
+     
       ! Allocate film work arrays
       allocate(self%film_pair (self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%film_pair=0
       
@@ -435,7 +433,7 @@ contains
                                  if (this%cfg%xper .and. i.eq.this%cfg%imax) this%struct_list(this%id(i,j,k))%per(1) = 1
                                  if (this%cfg%yper .and. j.eq.this%cfg%jmax) this%struct_list(this%id(i,j,k))%per(2) = 1
                                  if (this%cfg%zper .and. k.eq.this%cfg%kmax) this%struct_list(this%id(i,j,k))%per(3) = 1
-                                 this%idp(i,j,k,:) = this%struct_list(this%id(i,j,k))%per
+                                 this%idp(:,i,j,k) = this%struct_list(this%id(i,j,k))%per
                               else ! if gas film
                                  do dim = 1,3 ! need parallel treatment
                                     pos = 0
@@ -526,7 +524,7 @@ contains
                         if (this%cfg%xper .and. i.eq.this%cfg%imax) this%struct_list(this%id(i,j,k))%per(1) = 1
                         if (this%cfg%yper .and. j.eq.this%cfg%jmax) this%struct_list(this%id(i,j,k))%per(2) = 1
                         if (this%cfg%zper .and. k.eq.this%cfg%kmax) this%struct_list(this%id(i,j,k))%per(3) = 1
-                        this%idp(i,j,k,:) = this%struct_list(this%id(i,j,k))%per
+                        this%idp(:,i,j,k) = this%struct_list(this%id(i,j,k))%per
                      end if ! .not.is_two_plane_film
                   end if ! this%VF >= this%VFlo
                end do ! k
@@ -596,7 +594,7 @@ contains
                         if (this%cfg%xper .and. i.eq.this%cfg%imax) this%film_list(this%film_id(i,j,k))%per(1) = 1
                         if (this%cfg%yper .and. j.eq.this%cfg%jmax) this%film_list(this%film_id(i,j,k))%per(2) = 1
                         if (this%cfg%zper .and. k.eq.this%cfg%kmax) this%film_list(this%film_id(i,j,k))%per(3) = 1
-                        this%film_idp(i,j,k,:) = this%film_list(this%film_id(i,j,k))%per
+                        this%film_idp(:,i,j,k) = this%film_list(this%film_id(i,j,k))%per
                      else
                         this%film_phase(i,j,k) = 0
                      end if
@@ -616,10 +614,10 @@ contains
                   if (this%film_id(i,j,k).gt.0) then
                      this%film_id(i,j,k) = find(this%film_list,this%film_id(i,j,k))
                      this%film_list(this%film_id(i,j,k))%nnode = this%film_list(this%film_id(i,j,k))%nnode + 1
-                     this%film_idp(i,j,k,1) = max(this%film_idp(i,j,k,1),this%film_list(this%film_id(i,j,k))%per(1))
-                     this%film_idp(i,j,k,2) = max(this%film_idp(i,j,k,2),this%film_list(this%film_id(i,j,k))%per(2))
-                     this%film_idp(i,j,k,3) = max(this%film_idp(i,j,k,3),this%film_list(this%film_id(i,j,k))%per(3))
-                     this%film_list(this%film_id(i,j,k))%per = this%film_idp(i,j,k,:)
+                     this%film_idp(1,i,j,k) = max(this%film_idp(1,i,j,k),this%film_list(this%film_id(i,j,k))%per(1))
+                     this%film_idp(2,i,j,k) = max(this%film_idp(2,i,j,k),this%film_list(this%film_id(i,j,k))%per(2))
+                     this%film_idp(3,i,j,k) = max(this%film_idp(3,i,j,k),this%film_list(this%film_id(i,j,k))%per(3))
+                     this%film_list(this%film_id(i,j,k))%per = this%film_idp(:,i,j,k)
                   end if
                   
                end do ! k
@@ -714,7 +712,7 @@ contains
                      if (this%cfg%xper .and. i.eq.this%cfg%imax) this%struct_list(this%id(i,j,k))%per(1) = 1
                      if (this%cfg%yper .and. j.eq.this%cfg%jmax) this%struct_list(this%id(i,j,k))%per(2) = 1
                      if (this%cfg%zper .and. k.eq.this%cfg%kmax) this%struct_list(this%id(i,j,k))%per(3) = 1
-                     this%idp(i,j,k,:) = this%struct_list(this%id(i,j,k))%per
+                     this%idp(:,i,j,k) = this%struct_list(this%id(i,j,k))%per
                   end if ! this%VF >= this%VFlo
                end do ! k
             end do ! j
@@ -733,10 +731,10 @@ contains
                if (this%id(i,j,k).gt.0) then
                   this%id(i,j,k) = find(this%struct_list,this%id(i,j,k))
                   this%struct_list(this%id(i,j,k))%nnode = this%struct_list(this%id(i,j,k))%nnode + 1
-                  this%idp(i,j,k,1) = max(this%idp(i,j,k,1),this%struct_list(this%id(i,j,k))%per(1))
-                  this%idp(i,j,k,2) = max(this%idp(i,j,k,2),this%struct_list(this%id(i,j,k))%per(2))
-                  this%idp(i,j,k,3) = max(this%idp(i,j,k,3),this%struct_list(this%id(i,j,k))%per(3))
-                  this%struct_list(this%id(i,j,k))%per = this%idp(i,j,k,:)
+                  this%idp(1,i,j,k) = max(this%idp(1,i,j,k),this%struct_list(this%id(i,j,k))%per(1))
+                  this%idp(2,i,j,k) = max(this%idp(2,i,j,k),this%struct_list(this%id(i,j,k))%per(2))
+                  this%idp(3,i,j,k) = max(this%idp(3,i,j,k),this%struct_list(this%id(i,j,k))%per(3))
+                  this%struct_list(this%id(i,j,k))%per = this%idp(:,i,j,k)
                end if
                
             end do ! k
@@ -1577,21 +1575,24 @@ contains
          implicit none
          
          ! Allocate local and global perodicity arrays
-         allocate(this%per_(this%sync_offset+1:this%sync_offset+this%n_struct_max,1:3)); this%per_ = 0
-         allocate(this%per (this%cfg%nproc*this%n_struct_max,1:3)); this%per = 0
+         allocate(this%per_(1:3,this%sync_offset+1:this%sync_offset+this%n_struct_max)); this%per_ = 0
+         allocate(this%per (1:3,this%cfg%nproc*this%n_struct_max)); this%per = 0
          
          ! Fill per_ array
          do i=this%sync_offset+1,this%sync_offset+this%n_struct
-            this%per_(i,:) = this%struct_list(this%struct_map_(i))%per
+            this%per_(:,i) = this%struct_list(this%struct_map_(i))%per
          end do
          
          ! Communitcate per
-         call MPI_ALLGATHER(this%per_(:,1),this%n_struct_max,MPI_INTEGER,this%per(:,1),this%n_struct_max,MPI_INTEGER,this%cfg%comm,ierr)
-         call MPI_ALLGATHER(this%per_(:,2),this%n_struct_max,MPI_INTEGER,this%per(:,2),this%n_struct_max,MPI_INTEGER,this%cfg%comm,ierr)
-         call MPI_ALLGATHER(this%per_(:,3),this%n_struct_max,MPI_INTEGER,this%per(:,3),this%n_struct_max,MPI_INTEGER,this%cfg%comm,ierr)
+         call MPI_ALLGATHER(this%per_(1,:),this%n_struct_max,MPI_INTEGER,this%per(1,:),this%n_struct_max,MPI_INTEGER,this%cfg%comm,ierr)
+         call MPI_ALLGATHER(this%per_(2,:),this%n_struct_max,MPI_INTEGER,this%per(2,:),this%n_struct_max,MPI_INTEGER,this%cfg%comm,ierr)
+         call MPI_ALLGATHER(this%per_(3,:),this%n_struct_max,MPI_INTEGER,this%per(3,:),this%n_struct_max,MPI_INTEGER,this%cfg%comm,ierr)
+         ! do i=this%sync_offset+1,this%sync_offset+this%n_struct_max
+         !    call MPI_ALLGATHER(this%per_(:,i),3,MPI_INTEGER,this%per(:,i),3,MPI_INTEGER,this%cfg%comm,ierr)
+         ! end do         
          ! Update parent per
          do i=1,this%cfg%nproc*this%n_struct_max
-            this%per(this%parent(i),:) = max(this%per(this%parent(i),:),this%per(i,:))
+            this%per(:,this%parent(i)) = max(this%per(:,this%parent(i)),this%per(:,i))
          end do
          
          do i=this%sync_offset+1,this%sync_offset+this%n_struct
@@ -1599,7 +1600,7 @@ contains
                ii = this%struct_list(this%struct_map_(i))%node(1,n)
                jj = this%struct_list(this%struct_map_(i))%node(2,n)
                kk = this%struct_list(this%struct_map_(i))%node(3,n)
-               this%idp(ii,jj,kk,:) = this%per(this%id(ii,jj,kk),:)
+               this%idp(:,ii,jj,kk) = this%per(:,this%id(ii,jj,kk))
             end do
          end do
          
@@ -2093,21 +2094,21 @@ contains
       !    implicit none
       
       !    ! Allocate local and global perodicity arrays
-      !    allocate(this%per_(this%film_sync_offset+1:this%film_sync_offset+this%n_film_max,1:3)); this%per_ = 0
-      !    allocate(this%per (this%cfg%nproc*this%n_film_max,1:3)); this%per = 0
+      !    allocate(this%per_(1:3,this%film_sync_offset+1:this%film_sync_offset+this%n_film_max)); this%per_ = 0
+      !    allocate(this%per (1:3,this%cfg%nproc*this%n_film_max)); this%per = 0
       
       !    ! Fill per_ array
       !    do i=this%film_sync_offset+1,this%film_sync_offset+this%n_film
-      !       this%per_(i,:) = this%film_list(this%film_map_(i))%per
+      !       this%per_(:,i) = this%film_list(this%film_map_(i))%per
       !    end do
       
       !    ! Communitcate per
-      !    call MPI_ALLGATHER(this%per_(:,1),this%n_film_max,MPI_INTEGER,this%per(:,1),this%n_film_max,MPI_INTEGER,this%cfg%comm,ierr)
-      !    call MPI_ALLGATHER(this%per_(:,2),this%n_film_max,MPI_INTEGER,this%per(:,2),this%n_film_max,MPI_INTEGER,this%cfg%comm,ierr)
-      !    call MPI_ALLGATHER(this%per_(:,3),this%n_film_max,MPI_INTEGER,this%per(:,3),this%n_film_max,MPI_INTEGER,this%cfg%comm,ierr)
+      !    call MPI_ALLGATHER(this%per_(1,:),this%n_film_max,MPI_INTEGER,this%per(1,:),this%n_film_max,MPI_INTEGER,this%cfg%comm,ierr)
+      !    call MPI_ALLGATHER(this%per_(2,:),this%n_film_max,MPI_INTEGER,this%per(2,:),this%n_film_max,MPI_INTEGER,this%cfg%comm,ierr)
+      !    call MPI_ALLGATHER(this%per_(3,:),this%n_film_max,MPI_INTEGER,this%per(3,:),this%n_film_max,MPI_INTEGER,this%cfg%comm,ierr)
       !    ! Update parent per
       !    do i=1,this%cfg%nproc*this%n_film_max
-      !       this%per(this%film_parent(i),:) = max(this%per(this%film_parent(i),:),this%per(i,:))
+      !       this%per(:,this%film_parent(i)) = max(this%per(:,this%film_parent(i)),this%per(:,i))
       !    end do
       
       !    do i=this%film_sync_offset+1,this%film_sync_offset+this%n_film
@@ -2115,7 +2116,7 @@ contains
       !          ii = this%film_list(this%film_map_(i))%node(1,n)
       !          jj = this%film_list(this%film_map_(i))%node(2,n)
       !          kk = this%film_list(this%film_map_(i))%node(3,n)
-      !          this%film_idp(ii,jj,kk,:) = this%per(this%film_id(ii,jj,kk),:)
+      !          this%film_idp(:,ii,jj,kk) = this%per(:,this%film_id(ii,jj,kk))
       !       end do
       !    end do
       
@@ -2154,9 +2155,9 @@ contains
             kk= this%my_struct%node(3,i)
             ! this%id(ii,jj,kk) = tag_final
             ! Update periodicity
-            this%my_struct%per(1) = max(this%my_struct%per(1),this%idp(ii,jj,kk,1))
-            this%my_struct%per(2) = max(this%my_struct%per(2),this%idp(ii,jj,kk,2))
-            this%my_struct%per(3) = max(this%my_struct%per(3),this%idp(ii,jj,kk,3))
+            this%my_struct%per(1) = max(this%my_struct%per(1),this%idp(1,ii,jj,kk))
+            this%my_struct%per(2) = max(this%my_struct%per(2),this%idp(2,ii,jj,kk))
+            this%my_struct%per(3) = max(this%my_struct%per(3),this%idp(3,ii,jj,kk))
          end do
          
          this%my_struct => this%my_struct%next
