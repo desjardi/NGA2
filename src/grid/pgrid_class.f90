@@ -39,6 +39,12 @@ module pgrid_class
       integer :: xrank=MPI_UNDEFINED        !< 1D rank for xcomm
       integer :: yrank=MPI_UNDEFINED        !< 1D rank for ycomm
       integer :: zrank=MPI_UNDEFINED        !< 1D rank for zcomm
+      type(MPI_Comm) :: xycomm=MPI_COMM_NULL!< 2D xy-communicator
+      type(MPI_Comm) :: yzcomm=MPI_COMM_NULL!< 2D yz-communicator
+      type(MPI_Comm) :: zxcomm=MPI_COMM_NULL!< 2D zx-communicator
+      integer :: xyrank=MPI_UNDEFINED       !< 2D rank for xycomm
+      integer :: yzrank=MPI_UNDEFINED       !< 2D rank for yzcomm
+      integer :: zxrank=MPI_UNDEFINED       !< 2D rank for zxcomm
       
       ! Local grid size
       integer :: nx_=0                      !< Local grid size in x
@@ -266,6 +272,17 @@ contains
       dir=[.false.,.false.,.true.]
       call MPI_CART_SUB(self%comm,dir,self%zcomm,ierr)
       call MPI_COMM_RANK(self%zcomm,self%zrank,ierr)
+      
+      ! Create 2D communicators
+      dir=[.true.,.true.,.false.]
+      call MPI_CART_SUB(self%comm,dir,self%xycomm,ierr)
+      call MPI_COMM_RANK(self%xycomm,self%xyrank,ierr)
+      dir=[.false.,.true.,.true.]
+      call MPI_CART_SUB(self%comm,dir,self%yzcomm,ierr)
+      call MPI_COMM_RANK(self%yzcomm,self%yzrank,ierr)
+      dir=[.true.,.false.,.true.]
+      call MPI_CART_SUB(self%comm,dir,self%zxcomm,ierr)
+      call MPI_COMM_RANK(self%zxcomm,self%zxrank,ierr)
       
       ! Perform decomposition in x
       q=self%nx/self%npx; r=mod(self%nx,self%npx)
