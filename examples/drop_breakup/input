@@ -10,9 +10,9 @@ ny :  50
 nz :  50
 
 # Case definition velocity
-Gas velocity :     20
-Droplet diameter : 0.0025
-Droplet center :   0.005 0 0
+Gas velocity :   20
+Droplet radii :  0.0015 0.0015 0.0015
+Droplet center : 0.005 0 0
 
 # Fluid properties
 Liquid dynamic viscosity :    1.137e-3

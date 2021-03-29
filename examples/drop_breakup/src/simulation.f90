@@ -46,8 +46,7 @@ module simulation
    real(WP), dimension(:,:,:,:), allocatable :: SR
    
    !> Problem definition
-   real(WP), dimension(3) :: center
-   real(WP) :: radius
+   real(WP), dimension(3) :: center,radii
    
    !> Transfer parameters
    real(WP) :: filmthickness_over_dx  =5.0e-1_WP
@@ -87,7 +86,7 @@ contains
       real(WP), dimension(3),intent(in) :: xyz
       real(WP), intent(in) :: t
       real(WP) :: G
-      G=radius-sqrt(sum((xyz-center)**2))
+      G=1.0_WP-sqrt(((xyz(1)-center(1))/radii(1))**2+((xyz(2)-center(2))/radii(2))**2+((xyz(3)-center(3))/radii(3))**2)
    end function levelset_drop
    
    
@@ -179,7 +178,7 @@ contains
          !vf%VFsheet=1.0e-2_WP !< Enables sheet removal
          ! Initialize to droplet
          call param_read('Droplet center',center)
-         call param_read('Droplet diameter',radius); radius=0.5_WP*radius
+         call param_read('Droplet radii',radii)
          do k=vf%cfg%kmino_,vf%cfg%kmaxo_
             do j=vf%cfg%jmino_,vf%cfg%jmaxo_
                do i=vf%cfg%imino_,vf%cfg%imaxo_
