@@ -1589,7 +1589,7 @@ contains
          call MPI_ALLGATHER(this%per_(3,:),this%n_struct_max,MPI_INTEGER,this%per(3,:),this%n_struct_max,MPI_INTEGER,this%cfg%comm,ierr)
          ! do i=this%sync_offset+1,this%sync_offset+this%n_struct_max
          !    call MPI_ALLGATHER(this%per_(:,i),3,MPI_INTEGER,this%per(:,i),3,MPI_INTEGER,this%cfg%comm,ierr)
-         ! end do         
+         ! end do
          ! Update parent per
          do i=1,this%cfg%nproc*this%n_struct_max
             this%per(:,this%parent(i)) = max(this%per(:,this%parent(i)),this%per(:,i))
@@ -2490,10 +2490,12 @@ contains
          call dsyev('V','U',n,A,n,d,work,lwork,info)
          ! Get rid of very small negative values (due to machine accuracy)
          d = max(0.0_WP,d)
-         ! Store characteristic lenths
+         ! Store characteristic lengths
          this%meta_structures_list(i)%lengths(1) = sqrt(5.0_WP/2.0_WP*abs(d(2)+d(3)-d(1))/vol_struct(i))
          this%meta_structures_list(i)%lengths(2) = sqrt(5.0_WP/2.0_WP*abs(d(3)+d(1)-d(2))/vol_struct(i))
          this%meta_structures_list(i)%lengths(3) = sqrt(5.0_WP/2.0_WP*abs(d(1)+d(2)-d(3))/vol_struct(i))
+         ! Zero out length in 3rd dimension if 2D
+         if (this%cfg%nx.eq.1.or.this%cfg%ny.eq.1.or.this%cfg%nz.eq.1) this%meta_structures_list(i)%lengths(3)=0.0_WP
          ! Store principal axes
          this%meta_structures_list(i)%axes(:,:) = A
          

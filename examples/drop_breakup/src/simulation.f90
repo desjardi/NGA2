@@ -52,6 +52,10 @@ module simulation
    real(WP) :: filmthickness_over_dx  =5.0e-1_WP
    real(WP) :: min_filmthickness      =1.0e-6_WP
    real(WP) :: diam_over_filmthickness=7.0e+0_WP
+   real(WP) :: max_eccentricity       =5.0e-1_WP
+   
+   !> SGS surface tension model
+   real(WP), dimension(:,:,:), allocatable :: sgsSTx,sgsSTy,sgsSTz
    
 contains
    
@@ -135,13 +139,16 @@ contains
       
       ! Allocate work arrays for cfg
       allocate_work_arrays: block
-         allocate(resU(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
-         allocate(resV(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
-         allocate(resW(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
-         allocate(Ui  (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
-         allocate(Vi  (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
-         allocate(Wi  (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
-         allocate(SR(6,cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+         allocate(resU  (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+         allocate(resV  (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+         allocate(resW  (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+         allocate(Ui    (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+         allocate(Vi    (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+         allocate(Wi    (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+         allocate(SR  (6,cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+         allocate(sgsSTx(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_)); sgsSTx=0.0_WP
+         allocate(sgsSTy(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_)); sgsSTy=0.0_WP
+         allocate(sgsSTz(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_)); sgsSTz=0.0_WP
       end block allocate_work_arrays
       
       
@@ -350,6 +357,8 @@ contains
          ! Add variables to output
          call ens_out%add_vector('velocity',Ui,Vi,Wi)
          call ens_out%add_scalar('VOF',vf%VF)
+         call ens_out%add_scalar('curv',vf%curv)
+         call ens_out%add_vector('sgsST',sgsSTx,sgsSTy,sgsSTz)
          call ens_out%add_scalar('structID',cc%id)
          call ens_out%add_scalar('filmID',cc%film_id)
          call ens_out%add_scalar('filmType',cc%film_type)
@@ -369,7 +378,7 @@ contains
          call vf%get_max()
          call lp%get_max()
          ! Create simulation monitor
-         mfile=monitor(fs%cfg%amRoot,'simulation')
+         mfile=monitor(amroot=fs%cfg%amRoot,name='simulation')
          call mfile%add_column(time%n,'Timestep number')
          call mfile%add_column(time%t,'Time')
          call mfile%add_column(time%dt,'Timestep size')
@@ -386,7 +395,7 @@ contains
          call mfile%add_column(fs%psolv%rerr,'Pressure error')
          call mfile%write()
          ! Create CFL monitor
-         cflfile=monitor(fs%cfg%amRoot,'cfl')
+         cflfile=monitor(amroot=fs%cfg%amRoot,name='cfl')
          call cflfile%add_column(time%n,'Timestep number')
          call cflfile%add_column(time%t,'Time')
          call cflfile%add_column(fs%CFLc_x,'Convective xCFL')
@@ -475,6 +484,52 @@ contains
             end do
          end block sgsmodel
          
+         ! SGS modeling of surface tension force
+         STmodel_prep: block
+            use vfs_class, only: VFlo,VFhi
+            integer :: i,j,k,ii,jj,kk
+            real(WP) :: Lvol,norm,STmag
+            real(WP), dimension(3) :: Lbary
+            real(WP), parameter :: disp_threshold=1.25_WP
+            ! Zero out sgs term
+            sgsSTx=0.0_WP; sgsSTy=0.0_WP; sgsSTz=0.0_WP
+            ! Loop over the domain and find interfacial cells
+            do k=vf%cfg%kmin_,vf%cfg%kmax_
+               do j=vf%cfg%jmin_,vf%cfg%jmax_
+                  do i=vf%cfg%imin_,vf%cfg%imax_
+                     ! Skip cells without interface
+                     if (vf%VF(i,j,k).lt.VFlo.or.vf%VF(i,j,k).gt.VFhi) cycle
+                     ! Filter liquid phase barycenter
+                     Lvol=0.0_WP
+                     Lbary=0.0_WP
+                     do kk=k-2,k+2
+                        do jj=j-2,j+2
+                           do ii=i-2,i+2
+                              Lvol =Lvol +vf%VF(ii,jj,kk)
+                              Lbary=Lbary+vf%VF(ii,jj,kk)*vf%Lbary(:,ii,jj,kk)
+                           end do
+                        end do
+                     end do
+                     Lbary=Lbary/Lvol
+                     ! Compute displacement
+                     Lbary=(Lbary-vf%Lbary(:,i,j,k))/vf%cfg%meshsize(i,j,k)
+                     ! Apply sgs ST force model if the displacement is large enough
+                     norm=norm2(Lbary)
+                     if (norm.gt.disp_threshold) then
+                        STmag=fs%sigma*vf%SD(i,j,k)/max(cc%film_thickness(i,j,k),0.5_WP*vf%cfg%min_meshsize)
+                        sgsSTx(i,j,k)=STmag*Lbary(1)/norm
+                        sgsSTy(i,j,k)=STmag*Lbary(2)/norm
+                        sgsSTz(i,j,k)=STmag*Lbary(3)/norm
+                     end if
+                  end do
+               end do
+            end do
+            ! Sync it
+            call vf%cfg%sync(sgsSTx)
+            call vf%cfg%sync(sgsSTy)
+            call vf%cfg%sync(sgsSTz)
+         end block STmodel_prep
+         
          ! Perform sub-iterations
          do while (time%it.le.time%itmax)
             
@@ -488,6 +543,20 @@ contains
             
             ! Explicit calculation of drho*u/dt from NS
             call fs%get_dmomdt(resU,resV,resW)
+            
+            ! Add sgs ST model
+            STmodel_add: block
+               integer :: i,j,k
+               do k=vf%cfg%kmin_,vf%cfg%kmax_
+                  do j=vf%cfg%jmin_,vf%cfg%jmax_
+                     do i=vf%cfg%imin_,vf%cfg%imax_
+                        if (fs%umask(i,j,k).eq.0) resU(i,j,k)=resU(i,j,k)+sum(fs%itpu_x(:,i,j,k)*sgsSTx(i:i+1,j,k))
+                        if (fs%vmask(i,j,k).eq.0) resV(i,j,k)=resV(i,j,k)+sum(fs%itpv_y(:,i,j,k)*sgsSTy(i,j:j+1,k))
+                        if (fs%wmask(i,j,k).eq.0) resW(i,j,k)=resW(i,j,k)+sum(fs%itpw_z(:,i,j,k)*sgsSTz(i,j,k:k+1))
+                     end do
+                  end do
+               end do
+            end block STmodel_add
             
             ! Assemble explicit residual
             resU=-2.0_WP*fs%rho_U*fs%U+(fs%rho_Uold+fs%rho_U)*fs%Uold+time%dt*resU
@@ -674,6 +743,55 @@ contains
          
       end block remove_film
       
+      ! Loop through identified detached structs and remove those that are spherical enough
+      remove_struct: block
+         use mathtools, only: pi
+         integer :: m,n,l,i,j,k,np
+         real(WP) :: lmin,lmax,eccentricity
+         
+         ! Loops over film segments contained locally
+         do m=1,cc%n_meta_struct
+            
+            ! Test for sphericity
+            lmin=cc%meta_structures_list(m)%lengths(3)
+            if (lmin.eq.0.0_WP) lmin=cc%meta_structures_list(m)%lengths(2) ! Handle 2D case
+            lmax=cc%meta_structures_list(m)%lengths(1)
+            eccentricity=sqrt(1.0_WP-lmin**2/lmax**2)
+            if (eccentricity.gt.max_eccentricity) cycle
+            
+            ! Create drop from available liquid volume - only one root does that
+            if (cc%cfg%amRoot) then
+               ! Make room for new drop
+               np=lp%np_+1; call lp%resize(np)
+               ! Add the drop
+               lp%p(np)%id  =int(0,8)                                                                                 !< Give id (maybe based on break-up model?)
+               lp%p(np)%dt  =0.0_WP                                                                                   !< Let the drop find it own integration time
+               lp%p(np)%d   =(6.0_WP*cc%meta_structures_list(m)%vol/pi)**(1.0_WP/3.0_WP)                              !< Assign diameter from model above
+               lp%p(np)%pos =[cc%meta_structures_list(m)%x,cc%meta_structures_list(m)%y,cc%meta_structures_list(m)%z] !< Place the drop at the liquid barycenter
+               lp%p(np)%vel =[cc%meta_structures_list(m)%u,cc%meta_structures_list(m)%v,cc%meta_structures_list(m)%w] !< Assign mean structure velocity as drop velocity
+               lp%p(np)%ind =lp%cfg%get_ijk_global(lp%p(np)%pos,[lp%cfg%imin,lp%cfg%jmin,lp%cfg%kmin])                !< Place the drop in the proper cell for the lp%cfg
+               lp%p(np)%flag=0                                                                                        !< Activate it
+               ! Increment particle counter
+               lp%np_=np
+            end if
+            
+            ! Find local structs with matching id
+            do n=cc%sync_offset+1,cc%sync_offset+cc%n_struct
+               if (cc%struct_list(cc%struct_map_(n))%parent.ne.cc%meta_structures_list(m)%id) cycle
+               ! Remove liquid in meta-structure cells
+               do l=1,cc%struct_list(cc%struct_map_(n))%nnode ! Loops over cells within local
+                  i=cc%struct_list(cc%struct_map_(n))%node(1,l)
+                  j=cc%struct_list(cc%struct_map_(n))%node(2,l)
+                  k=cc%struct_list(cc%struct_map_(n))%node(3,l)
+                  ! Remove liquid in that cell
+                  vf%VF(i,j,k)=0.0_WP
+               end do
+            end do
+            
+         end do
+         
+      end block remove_struct
+      
       ! Sync VF and clean up IRL and band
       call vf%cfg%sync(vf%VF)
       call vf%clean_irl_and_band()
@@ -689,6 +807,16 @@ contains
       call lp%update_partmesh()
       
    end subroutine transfer_vf_to_drops
+   
+   
+   !> Transfer detached structures to drops
+   subroutine transfer_structs_to_drops()
+      implicit none
+      
+      
+      
+      
+   end subroutine transfer_structs_to_drops
    
    
    !> Finalize the NGA2 simulation

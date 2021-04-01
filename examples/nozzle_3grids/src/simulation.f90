@@ -1438,8 +1438,8 @@ contains
             if (cc2%film_list(cc2%film_map_(m))%min_thickness.gt.min_filmthickness) cycle
             
             ! We are still here: transfer the film to drops
-            Vt=0.0_WP      ! Transferred volume
-            Vl=0.0_WP      ! We will keep track incrementally of the liquid volume to transfer to ensure conservation
+            Vt=0.0_WP       ! Transferred volume
+            Vl=0.0_WP       ! We will keep track incrementally of the liquid volume to transfer to ensure conservation
             np_old=lp3%np_  ! Remember old number of particles
             do n=1,cc2%film_list(cc2%film_map_(m))%nnode ! Loops over cells within local film segment
                i=cc2%film_list(cc2%film_map_(m))%node(1,n)
@@ -1458,7 +1458,7 @@ contains
                   lp3%p(np)%id  =int(0,8)                                   !< Give id (maybe based on break-up model?)
                   lp3%p(np)%dt  =0.0_WP                                     !< Let the drop find it own integration time
                   lp3%p(np)%d   =(6.0_WP*Vd/pi)**(1.0_WP/3.0_WP)            !< Assign diameter from model above
-                  lp3%p(np)%pos =vf2%Lbary(:,i,j,k)                          !< Place the drop at the liquid barycenter
+                  lp3%p(np)%pos =vf2%Lbary(:,i,j,k)                         !< Place the drop at the liquid barycenter
                   lp3%p(np)%vel =fs2%cfg%get_velocity(pos=lp3%p(np)%pos,i0=i,j0=j,k0=k,U=fs2%U,V=fs2%V,W=fs2%W) !< Interpolate local cell velocity as drop velocity
                   lp3%p(np)%ind =lp3%cfg%get_ijk_global(lp3%p(np)%pos,[lp3%cfg%imin,lp3%cfg%jmin,lp3%cfg%kmin]) !< Place the drop in the proper cell for the lp%cfg
                   lp3%p(np)%flag=0                                          !< Activate it
@@ -1480,7 +1480,7 @@ contains
                lp3%p(np)%id  =int(0,8)                                   !< Give id (maybe based on break-up model?)
                lp3%p(np)%dt  =0.0_WP                                     !< Let the drop find it own integration time
                lp3%p(np)%d   =(6.0_WP*Vl/pi)**(1.0_WP/3.0_WP)            !< Assign diameter based on remaining liquid volume
-               lp3%p(np)%pos =vf2%Lbary(:,i,j,k)                          !< Place the drop at the liquid barycenter
+               lp3%p(np)%pos =vf2%Lbary(:,i,j,k)                         !< Place the drop at the liquid barycenter
                lp3%p(np)%vel =fs2%cfg%get_velocity(pos=lp3%p(np)%pos,i0=i,j0=j,k0=k,U=fs2%U,V=fs2%V,W=fs2%W) !< Interpolate local cell velocity as drop velocity
                lp3%p(np)%ind =lp3%cfg%get_ijk_global(lp3%p(np)%pos,[lp3%cfg%imin,lp3%cfg%jmin,lp3%cfg%kmin]) !< Place the drop in the proper cell for the lp%cfg
                lp3%p(np)%flag=0                                          !< Activate it
