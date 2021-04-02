@@ -53,6 +53,7 @@ module simulation
    real(WP) :: min_filmthickness      =1.0e-6_WP
    real(WP) :: diam_over_filmthickness=7.0e+0_WP
    real(WP) :: max_eccentricity       =5.0e-1_WP
+   real(WP) :: d_threshold            =5.0e-4_WP
    
    !> SGS surface tension model
    real(WP), dimension(:,:,:), allocatable :: sgsSTx,sgsSTy,sgsSTz
@@ -545,18 +546,18 @@ contains
             call fs%get_dmomdt(resU,resV,resW)
             
             ! Add sgs ST model
-            !STmodel_add: block
-            !   integer :: i,j,k
-            !   do k=vf%cfg%kmin_,vf%cfg%kmax_
-            !      do j=vf%cfg%jmin_,vf%cfg%jmax_
-            !         do i=vf%cfg%imin_,vf%cfg%imax_
-            !            if (fs%umask(i,j,k).eq.0) resU(i,j,k)=resU(i,j,k)+sum(fs%itpi_x(:,i,j,k)*sgsSTx(i-1:i,j,k))
-            !            if (fs%vmask(i,j,k).eq.0) resV(i,j,k)=resV(i,j,k)+sum(fs%itpi_y(:,i,j,k)*sgsSTy(i,j-1:j,k))
-            !            if (fs%wmask(i,j,k).eq.0) resW(i,j,k)=resW(i,j,k)+sum(fs%itpi_z(:,i,j,k)*sgsSTz(i,j,k-1:k))
-            !         end do
-            !      end do
-            !   end do
-            !end block STmodel_add
+            STmodel_add: block
+               integer :: i,j,k
+               do k=vf%cfg%kmin_,vf%cfg%kmax_
+                  do j=vf%cfg%jmin_,vf%cfg%jmax_
+                     do i=vf%cfg%imin_,vf%cfg%imax_
+                        if (fs%umask(i,j,k).eq.0) resU(i,j,k)=resU(i,j,k)+sum(fs%itpi_x(:,i,j,k)*sgsSTx(i-1:i,j,k))
+                        if (fs%vmask(i,j,k).eq.0) resV(i,j,k)=resV(i,j,k)+sum(fs%itpi_y(:,i,j,k)*sgsSTy(i,j-1:j,k))
+                        if (fs%wmask(i,j,k).eq.0) resW(i,j,k)=resW(i,j,k)+sum(fs%itpi_z(:,i,j,k)*sgsSTz(i,j,k-1:k))
+                     end do
+                  end do
+               end do
+            end block STmodel_add
             
             ! Assemble explicit residual
             resU=-2.0_WP*fs%rho_U*fs%U+(fs%rho_Uold+fs%rho_U)*fs%Uold+time%dt*resU
@@ -747,17 +748,21 @@ contains
       remove_struct: block
          use mathtools, only: pi
          integer :: m,n,l,i,j,k,np
-         real(WP) :: lmin,lmax,eccentricity
+         real(WP) :: lmin,lmax,eccentricity,diam
          
          ! Loops over film segments contained locally
          do m=1,cc%n_meta_struct
             
-            ! Test for sphericity
+            ! Test if sphericity is compatible with transfer
             lmin=cc%meta_structures_list(m)%lengths(3)
             if (lmin.eq.0.0_WP) lmin=cc%meta_structures_list(m)%lengths(2) ! Handle 2D case
             lmax=cc%meta_structures_list(m)%lengths(1)
             eccentricity=sqrt(1.0_WP-lmin**2/lmax**2)
             if (eccentricity.gt.max_eccentricity) cycle
+            
+            ! Test if diameter is compatible with transfer
+            diam=(6.0_WP*cc%meta_structures_list(m)%vol/pi)**(1.0_WP/3.0_WP)
+            if (diam.eq.0.0_WP.or.diam.gt.d_threshold) cycle
             
             ! Create drop from available liquid volume - only one root does that
             if (cc%cfg%amRoot) then
@@ -766,7 +771,7 @@ contains
                ! Add the drop
                lp%p(np)%id  =int(0,8)                                                                                 !< Give id (maybe based on break-up model?)
                lp%p(np)%dt  =0.0_WP                                                                                   !< Let the drop find it own integration time
-               lp%p(np)%d   =(6.0_WP*cc%meta_structures_list(m)%vol/pi)**(1.0_WP/3.0_WP)                              !< Assign diameter from model above
+               lp%p(np)%d   =diam                                                                                     !< Assign diameter to account for full volume
                lp%p(np)%pos =[cc%meta_structures_list(m)%x,cc%meta_structures_list(m)%y,cc%meta_structures_list(m)%z] !< Place the drop at the liquid barycenter
                lp%p(np)%vel =[cc%meta_structures_list(m)%u,cc%meta_structures_list(m)%v,cc%meta_structures_list(m)%w] !< Assign mean structure velocity as drop velocity
                lp%p(np)%ind =lp%cfg%get_ijk_global(lp%p(np)%pos,[lp%cfg%imin,lp%cfg%jmin,lp%cfg%kmin])                !< Place the drop in the proper cell for the lp%cfg
@@ -789,7 +794,7 @@ contains
             end do
             
          end do
-         
+      
       end block remove_struct
       
       ! Sync VF and clean up IRL and band
