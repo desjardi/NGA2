@@ -545,18 +545,18 @@ contains
             call fs%get_dmomdt(resU,resV,resW)
             
             ! Add sgs ST model
-            STmodel_add: block
-               integer :: i,j,k
-               do k=vf%cfg%kmin_,vf%cfg%kmax_
-                  do j=vf%cfg%jmin_,vf%cfg%jmax_
-                     do i=vf%cfg%imin_,vf%cfg%imax_
-                        if (fs%umask(i,j,k).eq.0) resU(i,j,k)=resU(i,j,k)+sum(fs%itpu_x(:,i,j,k)*sgsSTx(i:i+1,j,k))
-                        if (fs%vmask(i,j,k).eq.0) resV(i,j,k)=resV(i,j,k)+sum(fs%itpv_y(:,i,j,k)*sgsSTy(i,j:j+1,k))
-                        if (fs%wmask(i,j,k).eq.0) resW(i,j,k)=resW(i,j,k)+sum(fs%itpw_z(:,i,j,k)*sgsSTz(i,j,k:k+1))
-                     end do
-                  end do
-               end do
-            end block STmodel_add
+            !STmodel_add: block
+            !   integer :: i,j,k
+            !   do k=vf%cfg%kmin_,vf%cfg%kmax_
+            !      do j=vf%cfg%jmin_,vf%cfg%jmax_
+            !         do i=vf%cfg%imin_,vf%cfg%imax_
+            !            if (fs%umask(i,j,k).eq.0) resU(i,j,k)=resU(i,j,k)+sum(fs%itpi_x(:,i,j,k)*sgsSTx(i-1:i,j,k))
+            !            if (fs%vmask(i,j,k).eq.0) resV(i,j,k)=resV(i,j,k)+sum(fs%itpi_y(:,i,j,k)*sgsSTy(i,j-1:j,k))
+            !            if (fs%wmask(i,j,k).eq.0) resW(i,j,k)=resW(i,j,k)+sum(fs%itpi_z(:,i,j,k)*sgsSTz(i,j,k-1:k))
+            !         end do
+            !      end do
+            !   end do
+            !end block STmodel_add
             
             ! Assemble explicit residual
             resU=-2.0_WP*fs%rho_U*fs%U+(fs%rho_Uold+fs%rho_U)*fs%Uold+time%dt*resU
