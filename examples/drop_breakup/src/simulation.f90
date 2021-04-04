@@ -506,69 +506,6 @@ contains
                   end do
                end do
             end do
-            ! ! Loop over the domain and find interfacial cells
-            ! do k=vf%cfg%kmin_,vf%cfg%kmax_
-            !    do j=vf%cfg%jmin_,vf%cfg%jmax_
-            !       do i=vf%cfg%imin_,vf%cfg%imax_
-            !          ! ! Skip cells without interface
-            !          ! if (vf%VF(i,j,k).lt.VFlo.or.vf%VF(i,j,k).gt.VFhi) cycle
-            !          ! ! Filter liquid phase barycenter
-            !          ! Lvol=0.0_WP
-            !          ! Lbary=0.0_WP
-            !          ! do kk=k-2,k+2
-            !          !    do jj=j-2,j+2
-            !          !       do ii=i-2,i+2
-            !          !          Lvol =Lvol +vf%VF(ii,jj,kk)
-            !          !          Lbary=Lbary+vf%VF(ii,jj,kk)*vf%Lbary(:,ii,jj,kk)
-            !          !       end do
-            !          !    end do
-            !          ! end do
-            !          ! Lbary=Lbary/Lvol
-            !          ! ! Compute displacement
-            !          ! Lbary=(Lbary-vf%Lbary(:,i,j,k))/vf%cfg%meshsize(i,j,k)
-            !          ! ! Apply sgs ST force model if the displacement is large enough
-            !          ! norm=norm2(Lbary)
-            !          ! if (norm.gt.disp_threshold) then
-            !          !    STmag=fs%sigma*vf%SD(i,j,k)/max(cc%film_thickness(i,j,k),0.5_WP*vf%cfg%min_meshsize)
-            !          !    sgsSTx(i,j,k)=STmag*Lbary(1)/norm
-            !          !    sgsSTy(i,j,k)=STmag*Lbary(2)/norm
-            !          !    sgsSTz(i,j,k)=STmag*Lbary(3)/norm
-            !          ! end if
-                     
-                     
-            !          ! Skip cells without interface
-            !          if (vf%VF(i,j,k).lt.VFlo.or.vf%VF(i,j,k).gt.VFhi) cycle
-            !          ! Filter surface density - medium scale
-            !          SD1=0.0_WP; myvol=0.0_WP
-            !          do kk=k-1,k+1
-            !             do jj=j-1,j+1
-            !                do ii=i-1,i+1
-            !                   myvol=myvol+vf%cfg%vol(ii,jj,kk)
-            !                   SD1=SD1+vf%SD(ii,jj,kk)*vf%cfg%vol(ii,jj,kk)
-            !                end do
-            !             end do
-            !          end do
-            !          SD1=SD1/myvol
-            !          ! Filter surface density - large scale
-            !          SD2=0.0_WP; myvol=0.0_WP
-            !          do kk=k-2,k+2
-            !             do jj=j-2,j+2
-            !                do ii=i-2,i+2
-            !                   myvol=myvol+vf%cfg%vol(ii,jj,kk)
-            !                   SD2=SD2+vf%SD(ii,jj,kk)*vf%cfg%vol(ii,jj,kk)
-            !                end do
-            !             end do
-            !          end do
-            !          SD2=SD2/myvol
-            !          ! Compute displacement
-            !          Lbary=(Lbary-vf%Lbary(:,i,j,k))/vf%cfg%meshsize(i,j,k)
-            !          ! Plot SD at three different scales
-            !          sgsSTx(i,j,k)=vf%SD(i,j,k) !< unfiltered
-            !          sgsSTy(i,j,k)=SD1          !< 27-cell stencil
-            !          sgsSTz(i,j,k)=SD2          !< 125-cell stencil
-            !       end do
-            !    end do
-            ! end do
             ! Sync it
             call vf%cfg%sync(sgsSTx)
             call vf%cfg%sync(sgsSTy)
