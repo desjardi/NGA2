@@ -405,6 +405,7 @@ contains
          call cflfile%add_column(fs%CFLv_x,'Viscous xCFL')
          call cflfile%add_column(fs%CFLv_y,'Viscous yCFL')
          call cflfile%add_column(fs%CFLv_z,'Viscous zCFL')
+         call cflfile%add_column(fs%CFLst,'ST CFL')
          call cflfile%write()
          ! Create a spray monitor
          sprayfile=monitor(amroot=lp%cfg%amRoot,name='spray')
@@ -497,7 +498,7 @@ contains
                do j=vf%cfg%jmin_,vf%cfg%jmax_
                   do i=vf%cfg%imin_,vf%cfg%imax_
                      if (cc%film_edge(i,j,k).gt.disp_threshold) then
-                        STmag=fs%sigma*vf%SD(i,j,k)/max(cc%film_thickness(i,j,k),0.5_WP*vf%cfg%min_meshsize)
+                        STmag=fs%sigma*vf%SD(i,j,k)/max(cc%film_thickness(i,j,k),fs%CFLst*vf%cfg%min_meshsize)
                         sgsSTx(i,j,k)=-STmag*cc%film_edge_normal(1,i,j,k)
                         sgsSTy(i,j,k)=-STmag*cc%film_edge_normal(2,i,j,k)
                         sgsSTz(i,j,k)=-STmag*cc%film_edge_normal(3,i,j,k)
