@@ -362,7 +362,7 @@ contains
          call ens_out%add_vector('sgsST',sgsSTx,sgsSTy,sgsSTz)
          call ens_out%add_scalar('structID',cc%id)
          call ens_out%add_scalar('filmID',cc%film_id)
-         call ens_out%add_scalar('filmType',cc%film_type)
+         call ens_out%add_scalar('filmEdge',cc%film_edge)
          call ens_out%add_scalar('filmThickness',cc%film_thickness)
          call ens_out%add_surface('vofplic',vf%surfgrid)
          call ens_out%add_particle('spray',lp%pmesh)
