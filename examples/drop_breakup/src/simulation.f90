@@ -57,6 +57,7 @@ module simulation
    
    !> SGS surface tension model
    real(WP), dimension(:,:,:), allocatable :: sgsSTx,sgsSTy,sgsSTz
+   real(WP), dimension(:,:,:), allocatable :: eigen1,eigen2,eigen3
    
 contains
    
@@ -150,6 +151,9 @@ contains
          allocate(sgsSTx(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_)); sgsSTx=0.0_WP
          allocate(sgsSTy(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_)); sgsSTy=0.0_WP
          allocate(sgsSTz(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_)); sgsSTz=0.0_WP
+         allocate(eigen1(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_)); eigen1=0.0_WP
+         allocate(eigen2(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_)); eigen2=0.0_WP
+         allocate(eigen3(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_)); eigen3=0.0_WP
       end block allocate_work_arrays
       
       
@@ -360,9 +364,7 @@ contains
          call ens_out%add_scalar('VOF',vf%VF)
          call ens_out%add_scalar('curv',vf%curv)
          call ens_out%add_vector('sgsST',sgsSTx,sgsSTy,sgsSTz)
-         call ens_out%add_scalar('structID',cc%id)
-         call ens_out%add_scalar('filmID',cc%film_id)
-         call ens_out%add_scalar('filmEdge',cc%film_edge)
+         call ens_out%add_vector('eigen',eigen1,eigen2,eigen3)
          call ens_out%add_scalar('filmThickness',cc%film_thickness)
          call ens_out%add_surface('vofplic',vf%surfgrid)
          call ens_out%add_particle('spray',lp%pmesh)
@@ -488,20 +490,90 @@ contains
          
          ! SGS modeling of surface tension force
          STmodel_prep: block
-            integer :: i,j,k
-            real(WP) :: STmag
-            real(WP), parameter :: disp_threshold=2.00_WP
+            use vfs_class, only: VFlo
+            use mathtools, only: normalize
+            integer :: i,j,k,ii,jj,kk
+            real(WP) :: STmag,fvol
+            real(WP), dimension(3) :: fbary
+            real(WP), parameter :: disp_threshold=1.5_WP
+            real(WP) :: xtmp,ytmp,ztmp
+            real(WP), dimension(3,3) :: Imom
+            ! Eigenvalues/eigenvectors
+            real(WP), dimension(3)     :: d
+            integer , parameter        :: order=3
+            integer , parameter        :: lwork=102 ! dsyev optimal length (nb+2)*order, where block size nb=32
+            real(WP), dimension(lwork) :: work
+            integer :: info
+            ! Zero out edge information
+            eigen1=0.0_WP; eigen2=0.0_WP; eigen3=0.0_WP
+            ! Loop over the domain and compute edge information
+            do k=vf%cfg%kmin_,vf%cfg%kmax_
+               do j=vf%cfg%jmin_,vf%cfg%jmax_
+                  do i=vf%cfg%imin_,vf%cfg%imax_
+                     ! Work only if liquid is present
+                     if (vf%VF(i,j,k).lt.VFlo) cycle
+                     ! Calculate barycenter first
+                     fvol=0.0_WP; fbary=0.0_WP; Imom=0.0_WP
+                     do kk=k-2,k+2
+                        do jj=j-2,j+2
+                           do ii=i-2,i+2
+                              fvol =fvol +vf%cfg%vol(ii,jj,kk)*vf%VF(ii,jj,kk)
+                              fbary=fbary+vf%cfg%vol(ii,jj,kk)*vf%VF(ii,jj,kk)*vf%Lbary(:,ii,jj,kk)
+                           end do
+                        end do
+                     end do
+                     fbary=fbary/fvol
+                     ! Second pass to calculate moment of inertia
+                     do kk=k-2,k+2
+                        do jj=j-2,j+2
+                           do ii=i-2,i+2
+                              ! Shifted local barycenter
+                              xtmp=vf%Lbary(1,ii,jj,kk)-fbary(1)
+                              ytmp=vf%Lbary(2,ii,jj,kk)-fbary(2)
+                              ztmp=vf%Lbary(3,ii,jj,kk)-fbary(3)
+                              ! Moment of inertia
+                              Imom(1,1)=Imom(1,1)+(ytmp**2+ztmp**2)*vf%cfg%vol(ii,jj,kk)*vf%VF(ii,jj,kk)
+                              Imom(2,2)=Imom(2,2)+(xtmp**2+ztmp**2)*vf%cfg%vol(ii,jj,kk)*vf%VF(ii,jj,kk)
+                              Imom(3,3)=Imom(3,3)+(xtmp**2+ytmp**2)*vf%cfg%vol(ii,jj,kk)*vf%VF(ii,jj,kk)
+                              Imom(1,2)=Imom(1,2)-xtmp*ytmp*vf%cfg%vol(ii,jj,kk)*vf%VF(ii,jj,kk)
+                              Imom(1,3)=Imom(1,3)-xtmp*ztmp*vf%cfg%vol(ii,jj,kk)*vf%VF(ii,jj,kk)
+                              Imom(2,3)=Imom(2,3)-ytmp*ztmp*vf%cfg%vol(ii,jj,kk)*vf%VF(ii,jj,kk)
+                           end do
+                        end do
+                     end do
+                     ! On exit, Imom contains eigenvectors, and d contains eigenvalues in ascending order
+                     call dsyev('V','U',order,Imom,order,d,work,lwork,info); d=max(0.0_WP,d)
+                     ! Store this information in the form of characteristic lengths
+                     eigen1(i,j,k)=sqrt(d(1)/fvol)/vf%cfg%meshsize(i,j,k)
+                     eigen2(i,j,k)=sqrt(d(2)/fvol)/vf%cfg%meshsize(i,j,k)
+                     eigen3(i,j,k)=sqrt(d(3)/fvol)/vf%cfg%meshsize(i,j,k)
+                  end do
+               end do
+            end do
             ! Zero out sgs term
             sgsSTx=0.0_WP; sgsSTy=0.0_WP; sgsSTz=0.0_WP
             ! Loop over the domain and find interfacial cells
             do k=vf%cfg%kmin_,vf%cfg%kmax_
                do j=vf%cfg%jmin_,vf%cfg%jmax_
                   do i=vf%cfg%imin_,vf%cfg%imax_
-                     if (cc%film_edge(i,j,k).gt.disp_threshold) then
+                     if (eigen2(i,j,k).gt.disp_threshold*eigen1(i,j,k)) then
+                        ! First compute ST force direction
+                        fbary=0.0_WP; fvol=0.0_WP
+                        do kk=k-2,k+2
+                           do jj=j-2,j+2
+                              do ii=i-2,i+2
+                                 fvol =fvol +vf%cfg%vol(ii,jj,kk)*vf%VF(ii,jj,kk)
+                                 fbary=fbary+vf%cfg%vol(ii,jj,kk)*vf%VF(ii,jj,kk)*vf%Lbary(:,ii,jj,kk)
+                              end do
+                           end do
+                        end do
+                        fbary=normalize(fbary/fvol-vf%Lbary(:,i,j,k))
+                        ! Estimate force magnitude
                         STmag=fs%sigma*vf%SD(i,j,k)/max(cc%film_thickness(i,j,k),fs%CFLst*vf%cfg%min_meshsize)
-                        sgsSTx(i,j,k)=-STmag*cc%film_edge_normal(1,i,j,k)
-                        sgsSTy(i,j,k)=-STmag*cc%film_edge_normal(2,i,j,k)
-                        sgsSTz(i,j,k)=-STmag*cc%film_edge_normal(3,i,j,k)
+                        ! Apply it
+                        sgsSTx(i,j,k)=STmag*fbary(1)
+                        sgsSTy(i,j,k)=STmag*fbary(2)
+                        sgsSTz(i,j,k)=STmag*fbary(3)
                      end if
                   end do
                end do
@@ -711,7 +783,7 @@ contains
       
       ! Perform more detailed CCL in a second pass
       call cc%build_lists(VF=vf%VF,poly=vf%interface_polygon,U=fs%U,V=fs%V,W=fs%W)
-      call cc%film_classify(Lbary=vf%Lbary,Gbary=vf%Gbary)
+      !call cc%film_classify(Lbary=vf%Lbary,Gbary=vf%Gbary)
       call cc%get_min_thickness()
       call cc%sort_by_thickness()
       

@@ -126,9 +126,7 @@ contains
       implicit none
       real(WP), dimension(3), intent(in) :: v
       real(WP), dimension(3)             :: w
-      real(WP)                           :: norm
-      norm=sqrt(dot_product(v,v))
-      w=v/(norm+tiny(1.0_WP))
+      w=v/(norm2(v)+tiny(1.0_WP))
    end function normalize
    
    
