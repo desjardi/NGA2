@@ -102,6 +102,9 @@ module vfs_class
       ! R2P two-plane threshold
       real(WP) :: twoplane_threshold=0.95_WP              !< Threshold for r2p to switch from one-plane to two-planes
       
+      ! Curvature clipping parameter
+      real(WP) :: maxcurv_times_mesh=2.0_WP               !< Clipping parameter for maximum curvature (classically set to 1, but should be larger since we resolve more)
+      
       ! Flotsam removal parameter - turned off by default
       real(WP) :: VFflot=0.0_WP                           !< Threshold VF parameter for flotsam removal (0.0=off)
       real(WP) :: VFsheet=0.0_WP                          !< Threshold VF parameter for sheet removal (0.0=off)
@@ -1829,8 +1832,8 @@ contains
                !else
                !   this%curv(i,j,k)=mycurv(1)
                !end if
-               ! Clip curvature
-               this%curv(i,j,k)=max(min(this%curv(i,j,k),1.0_WP/this%cfg%meshsize(i,j,k)),-1.0_WP/this%cfg%meshsize(i,j,k))
+               ! Clip curvature - may not be needed if we select polygons carefully
+               this%curv(i,j,k)=max(min(this%curv(i,j,k),this%maxcurv_times_mesh/this%cfg%meshsize(i,j,k)),-this%maxcurv_times_mesh/this%cfg%meshsize(i,j,k))
             end do
          end do
       end do

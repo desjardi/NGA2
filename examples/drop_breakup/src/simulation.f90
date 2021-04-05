@@ -490,7 +490,7 @@ contains
          STmodel_prep: block
             integer :: i,j,k
             real(WP) :: STmag
-            real(WP), parameter :: disp_threshold=5.00_WP
+            real(WP), parameter :: disp_threshold=2.00_WP
             ! Zero out sgs term
             sgsSTx=0.0_WP; sgsSTy=0.0_WP; sgsSTz=0.0_WP
             ! Loop over the domain and find interfacial cells
