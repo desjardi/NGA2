@@ -317,7 +317,6 @@ contains
          use vfs_class, only: VFlo
          ! Create the CCL object
          cc=ccl(cfg=cfg,name='CCL')
-         cc%max_interface_planes=2
          cc%VFlo=VFlo
          cc%dot_threshold=-0.5_WP
          cc%thickness_cutoff=filmthickness_over_dx

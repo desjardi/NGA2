@@ -275,6 +275,8 @@ contains
       ! Point to polygon object
       if (present(poly)) then
          this%poly(1:,this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:)=>poly
+         ! Check for maximum number of planes per cell
+         this%max_interface_planes = size(ARRAY=poly,DIM=1)
       else
          this%max_interface_planes = 0
          this%n_film = 0
