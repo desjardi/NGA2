@@ -668,6 +668,9 @@ contains
          j=this%band_map(2,index)
          k=this%band_map(3,index)
          
+         ! Skip wall/bcond cells - bconds need to be provided elsewhere directly!
+         if (this%mask(i,j,k).ne.0) cycle
+         
          ! Old liquid and gas volumes
          Lvolold=        this%VFold(i,j,k) *this%cfg%vol(i,j,k)
          Gvolold=(1.0_WP-this%VFold(i,j,k))*this%cfg%vol(i,j,k)
