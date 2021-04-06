@@ -126,8 +126,6 @@ module ccl_class
       integer, dimension(:,:,:), allocatable :: film_phase     !< Phase of the film cell - 0/1/2 for none/liquid/gas
       real(WP),dimension(:,:,:), allocatable :: film_thickness !< Local thickness of the film cell
       integer, dimension(:,:,:), allocatable :: film_type      !< Local film type - 0: droplet, 1: ligament, 2: sheet
-      real(WP),dimension(:,:,:), allocatable :: film_edge      !< Some measure of whether the film cell is an edge cell 
-      real(WP),dimension(:,:,:,:), allocatable :: film_edge_normal !< Outward facing normal of film edge 
 
       ! Work arrays
       integer, dimension(:,:,:,:), allocatable :: idp          !< ID of the structure that contains the cell
@@ -189,10 +187,6 @@ contains
       
       ! Allocate film type array
       allocate(self%film_type(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%film_type=0
-      
-      ! Allocate film edge array
-      allocate(self%film_edge(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%film_edge=0.0_WP
-      allocate(self%film_edge_normal(1:3,self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%film_edge_normal=0.0_WP
 
       ! Allocate periodicity work arrays
       allocate(self%idp     (3,self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%idp=0
@@ -264,8 +258,6 @@ contains
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in), optional :: U     !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in), optional :: V     !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in), optional :: W     !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
-      integer :: i,j,k,n
-      real(WP) :: tsd
       
       ! Point to volume fraction field
       this%VF(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:)=>VF
@@ -2559,15 +2551,11 @@ contains
       integer , parameter        :: lwork = 102 ! dsyev optimal length (nb+2)*order, where block size nb=32
       real(WP), dimension(lwork) :: work
       integer :: info
-      ! ! Characteristic lengths
-      ! real(WP) :: l1,l2,l3
-      real(WP), parameter :: ratio = 2.0_WP
-      ! Edge detection
-      real(WP), dimension(3) :: c_local, c_filter
+      real(WP) :: ratio
+      real(WP), parameter :: ligam_threshold=1.3_WP
+      real(WP), parameter :: sheet_threshold=0.7_WP
       
       this%film_type = 0
-      this%film_edge = 0.0_WP
-      this%film_edge_normal = 0.0_WP
       do m=this%film_sync_offset+1,this%film_sync_offset+this%n_film ! Loops over film segments contained locally
          if (this%film_list(this%film_map_(m))%phase.eq.1) then ! Liquid film
             do n=1,this%film_list(this%film_map_(m))%nnode ! Loops over cells within local film segment
@@ -2576,7 +2564,7 @@ contains
                k = this%film_list(this%film_map_(m))%node(3,n)
                vol_total = 0.0_WP
                x_vol = 0.0_WP; y_vol = 0.0_WP; z_vol = 0.0_WP
-               Imom(:,:) = 0.0_WP
+               Imom = 0.0_WP
                do kk = k-2,k+2
                   do jj = j-2,j+2
                      do ii = i-2,i+2
@@ -2618,27 +2606,16 @@ contains
                   end do
                end do
                ! On exit, Imom contains eigenvectors, and d contains eigenvalues in ascending order
-               call dsyev('V','U',order,Imom,order,d,work,lwork,info)
-               ! Get rid of very small negative values (due to machine accuracy)
-               d = max(0.0_WP,d)
-               ! ! Calculate characteristic lengths assuming ellipsoid
-               ! l1 = sqrt(5.0_WP/2.0_WP*abs(d(2)+d(3)-d(1))/vol_total)
-               ! l2 = sqrt(5.0_WP/2.0_WP*abs(d(3)+d(1)-d(2))/vol_total)
-               ! l3 = sqrt(5.0_WP/2.0_WP*abs(d(1)+d(2)-d(3))/vol_total)
-               this%film_type(i,j,k) = 1
-               if (d(3).gt.(ratio*d(1))) this%film_type(i,j,k) = this%film_type(i,j,k) + 1
-               if (d(3).gt.(ratio*d(2))) this%film_type(i,j,k) = this%film_type(i,j,k) + 1
-               ! if (l1.gt.(ratio*l2)) film_type(i,j,k) = film_type(i,j,k) + 1
-               ! if (l1.gt.(ratio*l3)) film_type(i,j,k) = film_type(i,j,k) + 1
-
-               ! We get edge detection for free - need to distinguish between sheet and ligament edge
-               ! this%film_edge(i,j,k) = l1/l2
-               this%film_edge(i,j,k) = d(2)/d(1)
-
-               ! Calculate edge normal
-               c_local = Lbary(:,i,j,k)
-               c_filter = [x_vol,y_vol,z_vol]/vol_total
-               this%film_edge_normal(:,i,j,k) = (c_local-c_filter)/norm2(c_local-c_filter)
+               call dsyev('V','U',order,Imom,order,d,work,lwork,info); d=max(0.0_WP,d)
+               ! Use eigenvalue ratio for classification
+               ratio=d(2)/sqrt(d(1)*d(3))
+               if (ratio.gt.ligam_threshold) then
+                  this%film_type(i,j,k)=2
+               elseif (ratio.lt.sheet_threshold) then
+                  this%film_type(i,j,k)=3
+               else
+                  this%film_type(i,j,k)=1
+               end if 
             end do
          else ! Gas film
             do n=1,this%film_list(this%film_map_(m))%nnode
@@ -2689,18 +2666,16 @@ contains
                   end do
                end do
                ! On exit, Imom contains eigenvectors, and d contains eigenvalues in ascending order
-               call dsyev('V','U',order,Imom,order,d,work,lwork,info)
-               ! Get rid of very small negative values (due to machine accuracy)
-               d = max(0.0_WP,d)
-               ! ! Calculate characteristic lengths assuming ellipsoid
-               ! l1 = sqrt(5.0_WP/2.0_WP*abs(d(2)+d(3)-d(1))/vol_total)
-               ! l2 = sqrt(5.0_WP/2.0_WP*abs(d(3)+d(1)-d(2))/vol_total)
-               ! l3 = sqrt(5.0_WP/2.0_WP*abs(d(1)+d(2)-d(3))/vol_total)
-               this%film_type(i,j,k) = 1
-               if (d(3).gt.(ratio*d(1))) this%film_type(i,j,k) = this%film_type(i,j,k) + 1
-               if (d(3).gt.(ratio*d(2))) this%film_type(i,j,k) = this%film_type(i,j,k) + 1
-               ! if (l1.gt.(ratio*l2)) film_type(i,j,k) = film_type(i,j,k) + 1
-               ! if (l1.gt.(ratio*l3)) film_type(i,j,k) = film_type(i,j,k) + 1
+               call dsyev('V','U',order,Imom,order,d,work,lwork,info); d=max(0.0_WP,d)
+               ! Use eigenvalue ratio for classification
+               ratio=d(2)/sqrt(d(1)*d(3))
+               if (ratio.gt.ligam_threshold) then
+                  this%film_type(i,j,k)=2
+               elseif (ratio.lt.sheet_threshold) then
+                  this%film_type(i,j,k)=3
+               else
+                  this%film_type(i,j,k)=1
+               end if
             end do
          end if ! Film phase
       end do
