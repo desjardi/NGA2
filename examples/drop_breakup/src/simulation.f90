@@ -519,9 +519,9 @@ contains
                      thickness=2.0_WP*fvol/fSD
                      ! Calculate barycenter
                      fvol=0.0_WP; fbary=0.0_WP; Imom=0.0_WP
-                     do kk=k-2,k+2
-                        do jj=j-2,j+2
-                           do ii=i-2,i+2
+                     do kk=k-1,k+1
+                        do jj=j-1,j+1
+                           do ii=i-1,i+1
                               fvol =fvol +vf%cfg%vol(ii,jj,kk)*vf%VF(ii,jj,kk)
                               fbary=fbary+vf%cfg%vol(ii,jj,kk)*vf%VF(ii,jj,kk)*vf%Lbary(:,ii,jj,kk)
                            end do
@@ -529,9 +529,9 @@ contains
                      end do
                      fbary=fbary/fvol
                      ! Second pass to calculate moment of inertia
-                     do kk=k-2,k+2
-                        do jj=j-2,j+2
-                           do ii=i-2,i+2
+                     do kk=k-1,k+1
+                        do jj=j-1,j+1
+                           do ii=i-1,i+1
                               ! Shifted local barycenter
                               xtmp=vf%Lbary(1,ii,jj,kk)-fbary(1)
                               ytmp=vf%Lbary(2,ii,jj,kk)-fbary(2)
@@ -553,7 +553,7 @@ contains
                         ! First compute ST force direction
                         fbary=normalize(fbary-vf%Lbary(:,i,j,k))
                         ! Estimate SGS curvature
-                        sgscurv=max(1.0_WP/thickness-abs(vf%curv(i,j,k)),0.0_WP)
+                        sgscurv=min(max(1.0_WP/thickness-abs(vf%curv(i,j,k)),0.0_WP),1.0_WP/(fs%CFLst*vf%cfg%meshsize(i,j,k)))
                         ! Compute force magnitude
                         STmag=fs%sigma*vf%SD(i,j,k)*sgscurv
                         ! Apply it
