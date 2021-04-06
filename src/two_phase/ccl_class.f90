@@ -127,8 +127,7 @@ module ccl_class
       real(WP),dimension(:,:,:), allocatable :: film_thickness !< Local thickness of the film cell
       integer, dimension(:,:,:), allocatable :: film_type      !< Local film type - 0: droplet, 1: ligament, 2: sheet
       real(WP),dimension(:,:,:), allocatable :: film_edge      !< Some measure of whether the film cell is an edge cell 
-      real(WP),dimension(:,:,:,:), allocatable :: film_edge_normal !< Outward facing normal of film edge
-      real(WP),dimension(:,:,:,:), allocatable :: film_char_length !< Characteristic lengths of the fluid volume in a film cell neighborhood
+      real(WP),dimension(:,:,:,:), allocatable :: film_edge_normal !< Outward facing normal of film edge 
 
       ! Work arrays
       integer, dimension(:,:,:,:), allocatable :: idp          !< ID of the structure that contains the cell
@@ -194,7 +193,6 @@ contains
       ! Allocate film edge array
       allocate(self%film_edge(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%film_edge=0.0_WP
       allocate(self%film_edge_normal(1:3,self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%film_edge_normal=0.0_WP
-      allocate(self%film_char_length(1:3,self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%film_char_length=0.0_WP
 
       ! Allocate periodicity work arrays
       allocate(self%idp     (3,self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%idp=0
@@ -2570,7 +2568,6 @@ contains
       this%film_type = 0
       this%film_edge = 0.0_WP
       this%film_edge_normal = 0.0_WP
-      this%film_char_length = 0.0_WP
       do m=this%film_sync_offset+1,this%film_sync_offset+this%n_film ! Loops over film segments contained locally
          if (this%film_list(this%film_map_(m))%phase.eq.1) then ! Liquid film
             do n=1,this%film_list(this%film_map_(m))%nnode ! Loops over cells within local film segment
@@ -2624,10 +2621,10 @@ contains
                call dsyev('V','U',order,Imom,order,d,work,lwork,info)
                ! Get rid of very small negative values (due to machine accuracy)
                d = max(0.0_WP,d)
-               ! Calculate characteristic lengths assuming ellipsoid
-               this%film_char_length(1,i,j,k) = sqrt(5.0_WP/2.0_WP*abs(d(2)+d(3)-d(1))/vol_total)
-               this%film_char_length(2,i,j,k) = sqrt(5.0_WP/2.0_WP*abs(d(3)+d(1)-d(2))/vol_total)
-               this%film_char_length(3,i,j,k) = sqrt(5.0_WP/2.0_WP*abs(d(1)+d(2)-d(3))/vol_total)
+               ! ! Calculate characteristic lengths assuming ellipsoid
+               ! l1 = sqrt(5.0_WP/2.0_WP*abs(d(2)+d(3)-d(1))/vol_total)
+               ! l2 = sqrt(5.0_WP/2.0_WP*abs(d(3)+d(1)-d(2))/vol_total)
+               ! l3 = sqrt(5.0_WP/2.0_WP*abs(d(1)+d(2)-d(3))/vol_total)
                this%film_type(i,j,k) = 1
                if (d(3).gt.(ratio*d(1))) this%film_type(i,j,k) = this%film_type(i,j,k) + 1
                if (d(3).gt.(ratio*d(2))) this%film_type(i,j,k) = this%film_type(i,j,k) + 1
@@ -2695,10 +2692,10 @@ contains
                call dsyev('V','U',order,Imom,order,d,work,lwork,info)
                ! Get rid of very small negative values (due to machine accuracy)
                d = max(0.0_WP,d)
-               ! Calculate characteristic lengths assuming ellipsoid
-               this%film_char_length(1,i,j,k) = sqrt(5.0_WP/2.0_WP*abs(d(2)+d(3)-d(1))/vol_total)
-               this%film_char_length(2,i,j,k) = sqrt(5.0_WP/2.0_WP*abs(d(3)+d(1)-d(2))/vol_total)
-               this%film_char_length(3,i,j,k) = sqrt(5.0_WP/2.0_WP*abs(d(1)+d(2)-d(3))/vol_total)
+               ! ! Calculate characteristic lengths assuming ellipsoid
+               ! l1 = sqrt(5.0_WP/2.0_WP*abs(d(2)+d(3)-d(1))/vol_total)
+               ! l2 = sqrt(5.0_WP/2.0_WP*abs(d(3)+d(1)-d(2))/vol_total)
+               ! l3 = sqrt(5.0_WP/2.0_WP*abs(d(1)+d(2)-d(3))/vol_total)
                this%film_type(i,j,k) = 1
                if (d(3).gt.(ratio*d(1))) this%film_type(i,j,k) = this%film_type(i,j,k) + 1
                if (d(3).gt.(ratio*d(2))) this%film_type(i,j,k) = this%film_type(i,j,k) + 1
