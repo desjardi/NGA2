@@ -136,7 +136,6 @@ module ccl_class
       integer, dimension(:,:,:), allocatable :: film_pair      !< ID of the film that contains the cell
       integer, dimension(:,:,:), allocatable :: border_id      !< ID of the film that contains the cell
       integer, dimension(:,:,:), allocatable :: film_border_id !< ID of the film that contains the cell
-      real(WP),dimension(:,:,:), allocatable :: SD             !< Surface density array
       
    contains
       procedure :: build_lists
@@ -208,9 +207,6 @@ contains
       allocate(self%border_id     (self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%border_id=0
       allocate(self%film_border_id(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%film_border_id=0
       
-      ! Allocate surface density array
-      allocate(self%SD(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%SD=0.0_WP
-      
       ! Variable names
       self%meta_structures_nname = 20
       allocate(self%meta_structures_name(self%meta_structures_nname))
@@ -279,22 +275,6 @@ contains
       ! Point to polygon object
       if (present(poly)) then
          this%poly(1:,this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:)=>poly
-         ! Now compute surface area divided by cell volume
-         this%SD=0.0_WP
-         do k=this%cfg%kmino_,this%cfg%kmaxo_
-            do j=this%cfg%jmino_,this%cfg%jmaxo_
-               do i=this%cfg%imino_,this%cfg%imaxo_
-                  if (VF(i,j,k).eq.0.0_WP) cycle
-                  tsd=0.0_WP
-                  do n=1,this%max_interface_planes
-                     if (getNumberOfVertices(this%poly(n,i,j,k)).gt.0) then
-                        tsd=tsd+abs(calculateVolume(this%poly(n,i,j,k)))
-                     end if
-                  end do
-                  this%SD(i,j,k)=tsd/this%cfg%vol(i,j,k)
-               end do
-            end do
-         end do
       else
          this%max_interface_planes = 0
          this%n_film = 0
@@ -337,13 +317,15 @@ contains
       use mpi_f08,  only: MPI_ALLREDUCE,MPI_MAX,MPI_INTEGER
       implicit none
       class(ccl), intent(inout) :: this
-      integer :: npp,idd,i,j,k,ierr,dim,ii,jj,kk
+      integer :: npp,idd,i,j,k,ierr,dim,ii,jj,kk,n
       integer :: max_structs, max_films
       ! Using PLIC normal information
       logical :: is_contiguous = .true., has_normal, use_normal
       integer, dimension(3) :: pos
       real(WP), dimension(3) :: n1, n2, c1, c2
       logical :: is_film = .false., is_two_plane_film = .false.
+      real(WP), dimension(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_) :: SD       
+      real(WP) :: tsd
       ! Only if two-plane cells are used
       real(WP), dimension(3) :: c22, n22
       
@@ -381,6 +363,22 @@ contains
       ! initialize the global tag to this%id_offset - our "0"
       idd = this%id_offset
       if (this%max_interface_planes.gt.0) then
+         ! Compute surface area divided by cell volume
+         SD=0.0_WP
+         do k=this%cfg%kmino_,this%cfg%kmaxo_
+            do j=this%cfg%jmino_,this%cfg%jmaxo_
+               do i=this%cfg%imino_,this%cfg%imaxo_
+                  if (this%VF(i,j,k).eq.0.0_WP) cycle
+                  tsd=0.0_WP
+                  do n=1,this%max_interface_planes
+                     if (getNumberOfVertices(this%poly(n,i,j,k)).gt.0) then
+                        tsd=tsd+abs(calculateVolume(this%poly(n,i,j,k)))
+                     end if
+                  end do
+                  SD(i,j,k)=tsd/this%cfg%vol(i,j,k)
+               end do
+            end do
+         end do
          ! Allocate union-find data structure for films
          allocate(this%film_list(this%id_offset+1:this%id_offset+max_structs))
          ! Initialize this%film_list
@@ -989,7 +987,7 @@ contains
          do kk = k-1,k+1
             do jj = j-1,j+1
                do ii = i-1,i+1
-                  SD_local_sum = SD_local_sum + this%SD(ii,jj,kk)
+                  SD_local_sum = SD_local_sum + SD(ii,jj,kk)
                end do
             end do
          end do
