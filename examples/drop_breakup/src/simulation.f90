@@ -57,7 +57,6 @@ module simulation
    
    !> SGS surface tension model
    real(WP), dimension(:,:,:), allocatable :: sgsSTx,sgsSTy,sgsSTz
-   real(WP), dimension(:,:,:), allocatable :: eigen1,eigen2,eigen3
    
 contains
    
@@ -151,9 +150,6 @@ contains
          allocate(sgsSTx(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_)); sgsSTx=0.0_WP
          allocate(sgsSTy(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_)); sgsSTy=0.0_WP
          allocate(sgsSTz(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_)); sgsSTz=0.0_WP
-         allocate(eigen1(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_)); eigen1=0.0_WP
-         allocate(eigen2(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_)); eigen2=0.0_WP
-         allocate(eigen3(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_)); eigen3=0.0_WP
       end block allocate_work_arrays
       
       
@@ -363,7 +359,6 @@ contains
          call ens_out%add_scalar('VOF',vf%VF)
          call ens_out%add_scalar('curv',vf%curv)
          call ens_out%add_vector('sgsST',sgsSTx,sgsSTy,sgsSTz)
-         call ens_out%add_vector('eigen',eigen1,eigen2,eigen3)
          call ens_out%add_scalar('filmThickness',cc%film_thickness)
          call ens_out%add_surface('vofplic',vf%surfgrid)
          call ens_out%add_particle('spray',lp%pmesh)
@@ -489,29 +484,39 @@ contains
          
          ! SGS modeling of surface tension force
          STmodel_prep: block
-            use vfs_class, only: VFlo
             use mathtools, only: normalize
             integer :: i,j,k,ii,jj,kk
-            real(WP) :: STmag,fvol
-            real(WP), dimension(3) :: fbary
-            real(WP), parameter :: disp_threshold=1.5_WP
-            real(WP) :: xtmp,ytmp,ztmp
+            real(WP) :: thickness,STmag,fvol,sgscurv,fSD,xtmp,ytmp,ztmp
+            real(WP), dimension(3)   :: fbary
             real(WP), dimension(3,3) :: Imom
-            ! Eigenvalues/eigenvectors
+            real(WP), parameter :: ligam_threshold=1.3_WP
+            real(WP), parameter :: thick_threshold=1.0_WP
+            ! LAPACK Eigenvalues/eigenvectors
+            integer :: info
             real(WP), dimension(3)     :: d
             integer , parameter        :: order=3
             integer , parameter        :: lwork=102 ! dsyev optimal length (nb+2)*order, where block size nb=32
             real(WP), dimension(lwork) :: work
-            integer :: info
-            ! Zero out edge information
-            eigen1=0.0_WP; eigen2=0.0_WP; eigen3=0.0_WP
-            ! Loop over the domain and compute edge information
+            ! Zero out sgs term
+            sgsSTx=0.0_WP; sgsSTy=0.0_WP; sgsSTz=0.0_WP
+            ! Loop over the domain and find ligament/edge cells
             do k=vf%cfg%kmin_,vf%cfg%kmax_
                do j=vf%cfg%jmin_,vf%cfg%jmax_
                   do i=vf%cfg%imin_,vf%cfg%imax_
-                     ! Work only if liquid is present
-                     if (vf%VF(i,j,k).lt.VFlo) cycle
-                     ! Calculate barycenter first
+                     ! Work only if interface is present
+                     if (vf%SD(i,j,k).eq.0.0_WP) cycle
+                     ! Compute thickness
+                     fvol=0.0_WP; fSD=0.0_WP
+                     do kk=k-1,k+1
+                        do jj=j-1,j+1
+                           do ii=i-1,i+1
+                              fvol=fvol+vf%VF(ii,jj,kk)
+                              fSD =fSD +vf%SD(ii,jj,kk)
+                           end do
+                        end do
+                     end do
+                     thickness=2.0_WP*fvol/fSD
+                     ! Calculate barycenter
                      fvol=0.0_WP; fbary=0.0_WP; Imom=0.0_WP
                      do kk=k-2,k+2
                         do jj=j-2,j+2
@@ -542,33 +547,14 @@ contains
                      end do
                      ! On exit, Imom contains eigenvectors, and d contains eigenvalues in ascending order
                      call dsyev('V','U',order,Imom,order,d,work,lwork,info); d=max(0.0_WP,d)
-                     ! Store this information in the form of characteristic lengths
-                     eigen1(i,j,k)=sqrt(d(1)/fvol)/vf%cfg%meshsize(i,j,k)
-                     eigen2(i,j,k)=sqrt(d(2)/fvol)/vf%cfg%meshsize(i,j,k)
-                     eigen3(i,j,k)=sqrt(d(3)/fvol)/vf%cfg%meshsize(i,j,k)
-                  end do
-               end do
-            end do
-            ! Zero out sgs term
-            sgsSTx=0.0_WP; sgsSTy=0.0_WP; sgsSTz=0.0_WP
-            ! Loop over the domain and find interfacial cells
-            do k=vf%cfg%kmin_,vf%cfg%kmax_
-               do j=vf%cfg%jmin_,vf%cfg%jmax_
-                  do i=vf%cfg%imin_,vf%cfg%imax_
-                     if (eigen2(i,j,k).gt.disp_threshold*eigen1(i,j,k)) then
+                     ! Only apply model for ligaments/edges that are thin enough
+                     if (d(2).gt.ligam_threshold*sqrt(d(1)*d(3)).and.thickness.lt.thick_threshold*vf%cfg%meshsize(i,j,k)) then
                         ! First compute ST force direction
-                        fbary=0.0_WP; fvol=0.0_WP
-                        do kk=k-2,k+2
-                           do jj=j-2,j+2
-                              do ii=i-2,i+2
-                                 fvol =fvol +vf%cfg%vol(ii,jj,kk)*vf%VF(ii,jj,kk)
-                                 fbary=fbary+vf%cfg%vol(ii,jj,kk)*vf%VF(ii,jj,kk)*vf%Lbary(:,ii,jj,kk)
-                              end do
-                           end do
-                        end do
-                        fbary=normalize(fbary/fvol-vf%Lbary(:,i,j,k))
-                        ! Estimate force magnitude
-                        STmag=fs%sigma*vf%SD(i,j,k)/max(cc%film_thickness(i,j,k),fs%CFLst*vf%cfg%min_meshsize)
+                        fbary=normalize(fbary-vf%Lbary(:,i,j,k))
+                        ! Estimate SGS curvature
+                        sgscurv=max(1.0_WP/thickness-abs(vf%curv(i,j,k)),0.0_WP)
+                        ! Compute force magnitude
+                        STmag=fs%sigma*vf%SD(i,j,k)*sgscurv
                         ! Apply it
                         sgsSTx(i,j,k)=STmag*fbary(1)
                         sgsSTy(i,j,k)=STmag*fbary(2)
@@ -717,72 +703,72 @@ contains
    subroutine transfer_vf_to_drops()
       implicit none
       
-      ! ! Perform a first pass with simplest CCL
-      ! call cc%build_lists(VF=vf%VF,U=fs%U,V=fs%V,W=fs%W)
-      !
-      ! ! Loop through identified detached structs and remove those that are spherical enough
-      ! remove_struct: block
-      !    use mathtools, only: pi
-      !    integer :: m,n,l,i,j,k,np
-      !    real(WP) :: lmin,lmax,eccentricity,diam
-      !
-      !    ! Loops over film segments contained locally
-      !    do m=1,cc%n_meta_struct
-      !
-      !       ! Test if sphericity is compatible with transfer
-      !       lmin=cc%meta_structures_list(m)%lengths(3)
-      !       if (lmin.eq.0.0_WP) lmin=cc%meta_structures_list(m)%lengths(2) ! Handle 2D case
-      !       lmax=cc%meta_structures_list(m)%lengths(1)
-      !       eccentricity=sqrt(1.0_WP-lmin**2/lmax**2)
-      !       if (eccentricity.gt.max_eccentricity) cycle
-      !
-      !       ! Test if diameter is compatible with transfer
-      !       diam=(6.0_WP*cc%meta_structures_list(m)%vol/pi)**(1.0_WP/3.0_WP)
-      !       if (diam.eq.0.0_WP.or.diam.gt.d_threshold) cycle
-      !
-      !       ! Create drop from available liquid volume - only one root does that
-      !       if (cc%cfg%amRoot) then
-      !          ! Make room for new drop
-      !          np=lp%np_+1; call lp%resize(np)
-      !          ! Add the drop
-      !          lp%p(np)%id  =int(0,8)                                                                                 !< Give id (maybe based on break-up model?)
-      !          lp%p(np)%dt  =0.0_WP                                                                                   !< Let the drop find it own integration time
-      !          lp%p(np)%d   =diam                                                                                     !< Assign diameter to account for full volume
-      !          lp%p(np)%pos =[cc%meta_structures_list(m)%x,cc%meta_structures_list(m)%y,cc%meta_structures_list(m)%z] !< Place the drop at the liquid barycenter
-      !          lp%p(np)%vel =[cc%meta_structures_list(m)%u,cc%meta_structures_list(m)%v,cc%meta_structures_list(m)%w] !< Assign mean structure velocity as drop velocity
-      !          lp%p(np)%ind =lp%cfg%get_ijk_global(lp%p(np)%pos,[lp%cfg%imin,lp%cfg%jmin,lp%cfg%kmin])                !< Place the drop in the proper cell for the lp%cfg
-      !          lp%p(np)%flag=0                                                                                        !< Activate it
-      !          ! Increment particle counter
-      !          lp%np_=np
-      !       end if
-      !
-      !       ! Find local structs with matching id
-      !       do n=cc%sync_offset+1,cc%sync_offset+cc%n_struct
-      !          if (cc%struct_list(cc%struct_map_(n))%parent.ne.cc%meta_structures_list(m)%id) cycle
-      !          ! Remove liquid in meta-structure cells
-      !          do l=1,cc%struct_list(cc%struct_map_(n))%nnode ! Loops over cells within local
-      !             i=cc%struct_list(cc%struct_map_(n))%node(1,l)
-      !             j=cc%struct_list(cc%struct_map_(n))%node(2,l)
-      !             k=cc%struct_list(cc%struct_map_(n))%node(3,l)
-      !             ! Remove liquid in that cell
-      !             vf%VF(i,j,k)=0.0_WP
-      !          end do
-      !       end do
-      !
-      !    end do
-      !
-      ! end block remove_struct
-      !
-      ! ! Sync VF and clean up IRL and band
-      ! call vf%cfg%sync(vf%VF)
-      ! call vf%clean_irl_and_band()
-      !
-      ! ! Clean up CCL
-      ! call cc%deallocate_lists()
+      ! Perform a first pass with simplest CCL
+      call cc%build_lists(VF=vf%VF,U=fs%U,V=fs%V,W=fs%W)
+      
+      ! Loop through identified detached structs and remove those that are spherical enough
+      remove_struct: block
+         use mathtools, only: pi
+         integer :: m,n,l,i,j,k,np
+         real(WP) :: lmin,lmax,eccentricity,diam
+         
+         ! Loops over film segments contained locally
+         do m=1,cc%n_meta_struct
+            
+            ! Test if sphericity is compatible with transfer
+            lmin=cc%meta_structures_list(m)%lengths(3)
+            if (lmin.eq.0.0_WP) lmin=cc%meta_structures_list(m)%lengths(2) ! Handle 2D case
+            lmax=cc%meta_structures_list(m)%lengths(1)
+            eccentricity=sqrt(1.0_WP-lmin**2/lmax**2)
+            if (eccentricity.gt.max_eccentricity) cycle
+            
+            ! Test if diameter is compatible with transfer
+            diam=(6.0_WP*cc%meta_structures_list(m)%vol/pi)**(1.0_WP/3.0_WP)
+            if (diam.eq.0.0_WP.or.diam.gt.d_threshold) cycle
+            
+            ! Create drop from available liquid volume - only one root does that
+            if (cc%cfg%amRoot) then
+               ! Make room for new drop
+               np=lp%np_+1; call lp%resize(np)
+               ! Add the drop
+               lp%p(np)%id  =int(0,8)                                                                                 !< Give id (maybe based on break-up model?)
+               lp%p(np)%dt  =0.0_WP                                                                                   !< Let the drop find it own integration time
+               lp%p(np)%d   =diam                                                                                     !< Assign diameter to account for full volume
+               lp%p(np)%pos =[cc%meta_structures_list(m)%x,cc%meta_structures_list(m)%y,cc%meta_structures_list(m)%z] !< Place the drop at the liquid barycenter
+               lp%p(np)%vel =[cc%meta_structures_list(m)%u,cc%meta_structures_list(m)%v,cc%meta_structures_list(m)%w] !< Assign mean structure velocity as drop velocity
+               lp%p(np)%ind =lp%cfg%get_ijk_global(lp%p(np)%pos,[lp%cfg%imin,lp%cfg%jmin,lp%cfg%kmin])                !< Place the drop in the proper cell for the lp%cfg
+               lp%p(np)%flag=0                                                                                        !< Activate it
+               ! Increment particle counter
+               lp%np_=np
+            end if
+            
+            ! Find local structs with matching id
+            do n=cc%sync_offset+1,cc%sync_offset+cc%n_struct
+               if (cc%struct_list(cc%struct_map_(n))%parent.ne.cc%meta_structures_list(m)%id) cycle
+               ! Remove liquid in meta-structure cells
+               do l=1,cc%struct_list(cc%struct_map_(n))%nnode ! Loops over cells within local
+                  i=cc%struct_list(cc%struct_map_(n))%node(1,l)
+                  j=cc%struct_list(cc%struct_map_(n))%node(2,l)
+                  k=cc%struct_list(cc%struct_map_(n))%node(3,l)
+                  ! Remove liquid in that cell
+                  vf%VF(i,j,k)=0.0_WP
+               end do
+            end do
+            
+         end do
+         
+      end block remove_struct
+      
+      ! Sync VF and clean up IRL and band
+      call vf%cfg%sync(vf%VF)
+      call vf%clean_irl_and_band()
+      
+      ! Clean up CCL
+      call cc%deallocate_lists()
       
       ! Perform more detailed CCL in a second pass
+      cc%max_interface_planes=2
       call cc%build_lists(VF=vf%VF,poly=vf%interface_polygon,U=fs%U,V=fs%V,W=fs%W)
-      !call cc%film_classify(Lbary=vf%Lbary,Gbary=vf%Gbary)
       call cc%get_min_thickness()
       call cc%sort_by_thickness()
       
@@ -897,7 +883,7 @@ contains
       ! timetracker
       
       ! Deallocate work arrays
-      deallocate(resU,resV,resW,Ui,Vi,Wi,SR)
+      deallocate(resU,resV,resW,Ui,Vi,Wi,SR,sgsSTx,sgsSTy,sgsSTz)
       
    end subroutine simulation_final
    
