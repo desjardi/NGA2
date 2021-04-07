@@ -9,10 +9,12 @@ module partmesh_class
    
    !> Particle mesh object
    type :: partmesh
-      character(len=str_medium) :: name='PARTMESH'         !< Name for the particle mesh
-      integer :: n                                         !< Number of particles
-      real(WP), dimension(:,:), allocatable :: pos         !< Position of the particles
-      real(WP), dimension(:),   allocatable :: d           !< Diameter of the particles
+      character(len=str_medium) :: name='PARTMESH'                      !< Name for the particle mesh
+      integer :: n                                                      !< Number of particles
+      real(WP), dimension(:,:), allocatable :: pos                      !< Position of the particles
+      integer :: nvar                                                   !< Number of particle variables stored
+      real(WP), dimension(:,:), allocatable :: var                      !< Particle variable storage
+      character(len=str_medium), dimension(:), allocatable :: varname   !< Name of particle variable fields
    contains
       procedure :: reset                                   !< Reset particle mesh to zero size
       procedure :: set_size                                !< Set particle mesh to provided size
@@ -29,14 +31,19 @@ contains
    
    
    !> Constructor for particle mesh object
-   function constructor(name) result(self)
+   function constructor(nvar,name) result(self)
       implicit none
       type(partmesh) :: self
+      integer, intent(in) :: nvar
       character(len=*), optional :: name
-      ! Set the name of the surface mesh
+      ! Set the name of the particle mesh
       if (present(name)) self%name=trim(adjustl(name))
-      ! Default to 0 size
+      ! Default to 0 particles
       self%n=0
+      ! Initialize additional variables
+      self%nvar=nvar
+      allocate(self%varname(self%nvar))
+      self%varname='' !< Users will set the name themselves
    end function constructor
    
    
@@ -46,7 +53,7 @@ contains
       class(partmesh), intent(inout) :: this
       this%n=0
       if (allocated(this%pos)) deallocate(this%pos)
-      if (allocated(this%d))   deallocate(this%d)
+      if (allocated(this%var)) deallocate(this%var)
    end subroutine reset
    
    
@@ -56,8 +63,8 @@ contains
       class(partmesh), intent(inout) :: this
       integer, intent(in) :: size
       this%n=size
-      allocate(this%pos(3,this%n))
-      allocate(this%d  (  this%n))
+      allocate(this%pos(        3,this%n))
+      allocate(this%var(this%nvar,this%n))
    end subroutine set_size
    
    

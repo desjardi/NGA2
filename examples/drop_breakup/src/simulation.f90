@@ -53,7 +53,7 @@ module simulation
    real(WP) :: min_filmthickness      =1.0e-6_WP
    real(WP) :: diam_over_filmthickness=7.0e+0_WP
    real(WP) :: max_eccentricity       =5.0e-1_WP
-   real(WP) :: d_threshold            =5.0e-4_WP
+   real(WP) :: d_threshold            =1.0e-3_WP
    
    !> SGS surface tension model
    real(WP), dimension(:,:,:), allocatable :: sgsSTx,sgsSTy,sgsSTz
@@ -172,7 +172,7 @@ contains
       ! Initialize our VOF solver and field
       create_and_initialize_vof: block
          use mms_geom,  only: cube_refine_vol
-         use vfs_class, only: VFlo,VFhi,lvira,r2p
+         use vfs_class, only: VFlo,VFhi,lvira,r2p,art
          integer :: i,j,k,si,sj,sk,n
          real(WP), dimension(3,8) :: cube_vertex
          real(WP), dimension(3) :: v_cent,a_cent
@@ -181,9 +181,11 @@ contains
          ! Create a VOF solver with LVIRA
          !vf=vfs(cfg=cfg,reconstruction_method=lvira,name='VOF')
          ! Create a VOF solver with R2P
-         vf=vfs(cfg=cfg,reconstruction_method=r2p,name='VOF')
+         !vf=vfs(cfg=cfg,reconstruction_method=r2p,name='VOF')
          !vf%VFflot =1.0e-4_WP !< Enables flotsam removal
          !vf%VFsheet=1.0e-2_WP !< Enables sheet removal
+         ! Create a VOF solver with ART
+         vf=vfs(cfg=cfg,reconstruction_method=art,name='VOF')
          ! Initialize to droplet
          call param_read('Droplet center',center)
          call param_read('Droplet radii',radii)
@@ -482,92 +484,92 @@ contains
             end do
          end block sgsmodel
          
-         ! SGS modeling of surface tension force
-         STmodel_prep: block
-            use mathtools, only: normalize
-            integer :: i,j,k,ii,jj,kk
-            real(WP) :: thickness,STmag,fvol,sgscurv,fSD,xtmp,ytmp,ztmp
-            real(WP), dimension(3)   :: fbary
-            real(WP), dimension(3,3) :: Imom
-            real(WP), parameter :: ligam_threshold=1.3_WP
-            real(WP), parameter :: thick_threshold=1.0_WP
-            ! LAPACK Eigenvalues/eigenvectors
-            integer :: info
-            real(WP), dimension(3)     :: d
-            integer , parameter        :: order=3
-            integer , parameter        :: lwork=102 ! dsyev optimal length (nb+2)*order, where block size nb=32
-            real(WP), dimension(lwork) :: work
-            ! Zero out sgs term
-            sgsSTx=0.0_WP; sgsSTy=0.0_WP; sgsSTz=0.0_WP
-            ! Loop over the domain and find ligament/edge cells
-            do k=vf%cfg%kmin_,vf%cfg%kmax_
-               do j=vf%cfg%jmin_,vf%cfg%jmax_
-                  do i=vf%cfg%imin_,vf%cfg%imax_
-                     ! Work only if interface is present
-                     if (vf%SD(i,j,k).eq.0.0_WP) cycle
-                     ! Compute thickness
-                     fvol=0.0_WP; fSD=0.0_WP
-                     do kk=k-1,k+1
-                        do jj=j-1,j+1
-                           do ii=i-1,i+1
-                              fvol=fvol+vf%VF(ii,jj,kk)
-                              fSD =fSD +vf%SD(ii,jj,kk)
-                           end do
-                        end do
-                     end do
-                     thickness=2.0_WP*fvol/fSD
-                     ! Calculate barycenter
-                     fvol=0.0_WP; fbary=0.0_WP; Imom=0.0_WP
-                     do kk=k-1,k+1
-                        do jj=j-1,j+1
-                           do ii=i-1,i+1
-                              fvol =fvol +vf%cfg%vol(ii,jj,kk)*vf%VF(ii,jj,kk)
-                              fbary=fbary+vf%cfg%vol(ii,jj,kk)*vf%VF(ii,jj,kk)*vf%Lbary(:,ii,jj,kk)
-                           end do
-                        end do
-                     end do
-                     fbary=fbary/fvol
-                     ! Second pass to calculate moment of inertia
-                     do kk=k-1,k+1
-                        do jj=j-1,j+1
-                           do ii=i-1,i+1
-                              ! Shifted local barycenter
-                              xtmp=vf%Lbary(1,ii,jj,kk)-fbary(1)
-                              ytmp=vf%Lbary(2,ii,jj,kk)-fbary(2)
-                              ztmp=vf%Lbary(3,ii,jj,kk)-fbary(3)
-                              ! Moment of inertia
-                              Imom(1,1)=Imom(1,1)+(ytmp**2+ztmp**2)*vf%cfg%vol(ii,jj,kk)*vf%VF(ii,jj,kk)
-                              Imom(2,2)=Imom(2,2)+(xtmp**2+ztmp**2)*vf%cfg%vol(ii,jj,kk)*vf%VF(ii,jj,kk)
-                              Imom(3,3)=Imom(3,3)+(xtmp**2+ytmp**2)*vf%cfg%vol(ii,jj,kk)*vf%VF(ii,jj,kk)
-                              Imom(1,2)=Imom(1,2)-xtmp*ytmp*vf%cfg%vol(ii,jj,kk)*vf%VF(ii,jj,kk)
-                              Imom(1,3)=Imom(1,3)-xtmp*ztmp*vf%cfg%vol(ii,jj,kk)*vf%VF(ii,jj,kk)
-                              Imom(2,3)=Imom(2,3)-ytmp*ztmp*vf%cfg%vol(ii,jj,kk)*vf%VF(ii,jj,kk)
-                           end do
-                        end do
-                     end do
-                     ! On exit, Imom contains eigenvectors, and d contains eigenvalues in ascending order
-                     call dsyev('V','U',order,Imom,order,d,work,lwork,info); d=max(0.0_WP,d)
-                     ! Only apply model for ligaments/edges that are thin enough
-                     if (d(2).gt.ligam_threshold*sqrt(d(1)*d(3)).and.thickness.lt.thick_threshold*vf%cfg%meshsize(i,j,k)) then
-                        ! First compute ST force direction
-                        fbary=normalize(fbary-vf%Lbary(:,i,j,k))
-                        ! Estimate SGS curvature
-                        sgscurv=min(max(1.0_WP/thickness-abs(vf%curv(i,j,k)),0.0_WP),1.0_WP/(fs%CFLst*vf%cfg%meshsize(i,j,k)))
-                        ! Compute force magnitude
-                        STmag=fs%sigma*vf%SD(i,j,k)*sgscurv
-                        ! Apply it
-                        sgsSTx(i,j,k)=STmag*fbary(1)
-                        sgsSTy(i,j,k)=STmag*fbary(2)
-                        sgsSTz(i,j,k)=STmag*fbary(3)
-                     end if
-                  end do
-               end do
-            end do
-            ! Sync it
-            call vf%cfg%sync(sgsSTx)
-            call vf%cfg%sync(sgsSTy)
-            call vf%cfg%sync(sgsSTz)
-         end block STmodel_prep
+         ! ! SGS modeling of surface tension force
+         ! STmodel_prep: block
+         !    use mathtools, only: normalize
+         !    integer :: i,j,k,ii,jj,kk
+         !    real(WP) :: thickness,STmag,fvol,sgscurv,fSD,xtmp,ytmp,ztmp
+         !    real(WP), dimension(3)   :: fbary
+         !    real(WP), dimension(3,3) :: Imom
+         !    real(WP), parameter :: ligam_threshold=1.3_WP
+         !    real(WP), parameter :: thick_threshold=1.0_WP
+         !    ! LAPACK Eigenvalues/eigenvectors
+         !    integer :: info
+         !    real(WP), dimension(3)     :: d
+         !    integer , parameter        :: order=3
+         !    integer , parameter        :: lwork=102 ! dsyev optimal length (nb+2)*order, where block size nb=32
+         !    real(WP), dimension(lwork) :: work
+         !    ! Zero out sgs term
+         !    sgsSTx=0.0_WP; sgsSTy=0.0_WP; sgsSTz=0.0_WP
+         !    ! Loop over the domain and find ligament/edge cells
+         !    do k=vf%cfg%kmin_,vf%cfg%kmax_
+         !       do j=vf%cfg%jmin_,vf%cfg%jmax_
+         !          do i=vf%cfg%imin_,vf%cfg%imax_
+         !             ! Work only if interface is present
+         !             if (vf%SD(i,j,k).eq.0.0_WP) cycle
+         !             ! Compute thickness
+         !             fvol=0.0_WP; fSD=0.0_WP
+         !             do kk=k-1,k+1
+         !                do jj=j-1,j+1
+         !                   do ii=i-1,i+1
+         !                      fvol=fvol+vf%VF(ii,jj,kk)
+         !                      fSD =fSD +vf%SD(ii,jj,kk)
+         !                   end do
+         !                end do
+         !             end do
+         !             thickness=2.0_WP*fvol/fSD
+         !             ! Calculate barycenter
+         !             fvol=0.0_WP; fbary=0.0_WP; Imom=0.0_WP
+         !             do kk=k-1,k+1
+         !                do jj=j-1,j+1
+         !                   do ii=i-1,i+1
+         !                      fvol =fvol +vf%cfg%vol(ii,jj,kk)*vf%VF(ii,jj,kk)
+         !                      fbary=fbary+vf%cfg%vol(ii,jj,kk)*vf%VF(ii,jj,kk)*vf%Lbary(:,ii,jj,kk)
+         !                   end do
+         !                end do
+         !             end do
+         !             fbary=fbary/fvol
+         !             ! Second pass to calculate moment of inertia
+         !             do kk=k-1,k+1
+         !                do jj=j-1,j+1
+         !                   do ii=i-1,i+1
+         !                      ! Shifted local barycenter
+         !                      xtmp=vf%Lbary(1,ii,jj,kk)-fbary(1)
+         !                      ytmp=vf%Lbary(2,ii,jj,kk)-fbary(2)
+         !                      ztmp=vf%Lbary(3,ii,jj,kk)-fbary(3)
+         !                      ! Moment of inertia
+         !                      Imom(1,1)=Imom(1,1)+(ytmp**2+ztmp**2)*vf%cfg%vol(ii,jj,kk)*vf%VF(ii,jj,kk)
+         !                      Imom(2,2)=Imom(2,2)+(xtmp**2+ztmp**2)*vf%cfg%vol(ii,jj,kk)*vf%VF(ii,jj,kk)
+         !                      Imom(3,3)=Imom(3,3)+(xtmp**2+ytmp**2)*vf%cfg%vol(ii,jj,kk)*vf%VF(ii,jj,kk)
+         !                      Imom(1,2)=Imom(1,2)-xtmp*ytmp*vf%cfg%vol(ii,jj,kk)*vf%VF(ii,jj,kk)
+         !                      Imom(1,3)=Imom(1,3)-xtmp*ztmp*vf%cfg%vol(ii,jj,kk)*vf%VF(ii,jj,kk)
+         !                      Imom(2,3)=Imom(2,3)-ytmp*ztmp*vf%cfg%vol(ii,jj,kk)*vf%VF(ii,jj,kk)
+         !                   end do
+         !                end do
+         !             end do
+         !             ! On exit, Imom contains eigenvectors, and d contains eigenvalues in ascending order
+         !             call dsyev('V','U',order,Imom,order,d,work,lwork,info); d=max(0.0_WP,d)
+         !             ! Only apply model for ligaments/edges that are thin enough
+         !             if (d(2).gt.ligam_threshold*sqrt(d(1)*d(3)).and.thickness.lt.thick_threshold*vf%cfg%meshsize(i,j,k)) then
+         !                ! First compute ST force direction
+         !                fbary=normalize(fbary-vf%Lbary(:,i,j,k))
+         !                ! Estimate SGS curvature
+         !                sgscurv=min(max(1.0_WP/thickness-abs(vf%curv(i,j,k)),0.0_WP),1.0_WP/(fs%CFLst*vf%cfg%meshsize(i,j,k)))
+         !                ! Compute force magnitude
+         !                STmag=fs%sigma*vf%SD(i,j,k)*sgscurv
+         !                ! Apply it
+         !                sgsSTx(i,j,k)=STmag*fbary(1)
+         !                sgsSTy(i,j,k)=STmag*fbary(2)
+         !                sgsSTz(i,j,k)=STmag*fbary(3)
+         !             end if
+         !          end do
+         !       end do
+         !    end do
+         !    ! Sync it
+         !    call vf%cfg%sync(sgsSTx)
+         !    call vf%cfg%sync(sgsSTy)
+         !    call vf%cfg%sync(sgsSTz)
+         ! end block STmodel_prep
          
          ! Perform sub-iterations
          do while (time%it.le.time%itmax)
@@ -583,19 +585,19 @@ contains
             ! Explicit calculation of drho*u/dt from NS
             call fs%get_dmomdt(resU,resV,resW)
             
-            ! Add sgs ST model
-            STmodel_add: block
-               integer :: i,j,k
-               do k=vf%cfg%kmin_,vf%cfg%kmax_
-                  do j=vf%cfg%jmin_,vf%cfg%jmax_
-                     do i=vf%cfg%imin_,vf%cfg%imax_
-                        if (fs%umask(i,j,k).eq.0) resU(i,j,k)=resU(i,j,k)+sum(fs%itpi_x(:,i,j,k)*sgsSTx(i-1:i,j,k))
-                        if (fs%vmask(i,j,k).eq.0) resV(i,j,k)=resV(i,j,k)+sum(fs%itpi_y(:,i,j,k)*sgsSTy(i,j-1:j,k))
-                        if (fs%wmask(i,j,k).eq.0) resW(i,j,k)=resW(i,j,k)+sum(fs%itpi_z(:,i,j,k)*sgsSTz(i,j,k-1:k))
-                     end do
-                  end do
-               end do
-            end block STmodel_add
+            ! ! Add sgs ST model
+            ! STmodel_add: block
+            !    integer :: i,j,k
+            !    do k=vf%cfg%kmin_,vf%cfg%kmax_
+            !       do j=vf%cfg%jmin_,vf%cfg%jmax_
+            !          do i=vf%cfg%imin_,vf%cfg%imax_
+            !             if (fs%umask(i,j,k).eq.0) resU(i,j,k)=resU(i,j,k)+sum(fs%itpi_x(:,i,j,k)*sgsSTx(i-1:i,j,k))
+            !             if (fs%vmask(i,j,k).eq.0) resV(i,j,k)=resV(i,j,k)+sum(fs%itpi_y(:,i,j,k)*sgsSTy(i,j-1:j,k))
+            !             if (fs%wmask(i,j,k).eq.0) resW(i,j,k)=resW(i,j,k)+sum(fs%itpi_z(:,i,j,k)*sgsSTz(i,j,k-1:k))
+            !          end do
+            !       end do
+            !    end do
+            ! end block STmodel_add
             
             ! Assemble explicit residual
             resU=-2.0_WP*fs%rho_U*fs%U+(fs%rho_Uold+fs%rho_U)*fs%Uold+time%dt*resU
@@ -639,8 +641,8 @@ contains
          call fs%interp_vel(Ui,Vi,Wi)
          call fs%get_div()
          
-         ! Perform volume-fraction-to-droplet transfer
-         call transfer_vf_to_drops()
+         ! ! Perform volume-fraction-to-droplet transfer
+         ! call transfer_vf_to_drops()
          
          ! Output to ensight
          if (ens_evt%occurs()) call ens_out%write_data(time%t)
