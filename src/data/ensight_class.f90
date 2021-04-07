@@ -558,7 +558,7 @@ contains
       class(ensight), intent(in) :: this
       type(srf), pointer, intent(in) :: surf
       character(len=str_medium) :: filename
-      integer :: iunit,ierr,rank
+      integer :: iunit,ierr,rank,n
       character(len=80) :: cbuff
       real(SP) :: rbuff
       integer :: ibuff
@@ -569,6 +569,11 @@ contains
          open(newunit=iunit,file='ensight/'//trim(this%name)//'/'//trim(surf%name)//'.case',form='formatted',status='replace',access='stream',iostat=ierr)
          ! Write all the geometry information
          write(iunit,'(a,/,a,/,/,a,/,a,/)') 'FORMAT','type: ensight gold','GEOMETRY','model: 1 '//trim(surf%name)//'/'//trim(surf%name)//'.******'
+         ! Write the variables
+         write(iunit,'(a)') 'VARIABLE'
+         do n=1,surf%ptr%nvar
+            write(iunit,'(a)') 'scalar per element: 1 '//trim(surf%ptr%varname(n))//' '//trim(surf%name)//'/'//trim(surf%ptr%varname(n))//'.******'
+         end do
          ! Write the time information
          write(iunit,'(/,a,/,a,/,a,i0,/,a,/,a,/,a)') 'TIME','time set: 1','number of steps: ',this%ntime,'filename start number: 1','filename increment: 1','time values:'
          write(iunit,'(999999(es12.5,/))') this%time
@@ -634,6 +639,42 @@ contains
          end if
          ! Force synchronization
          call MPI_BARRIER(this%cfg%comm,ierr)
+      end do
+      
+      ! Generate the additional variable files
+      do n=1,surf%ptr%nvar
+         filename='ensight/'//trim(this%name)//'/'//trim(surf%name)//'/'//trim(surf%ptr%varname(n))//'.'
+         write(filename(len_trim(filename)+1:len_trim(filename)+6),'(i6.6)') this%ntime
+         ! Root write the header
+         if (this%cfg%amRoot) then
+            ! Open the file
+            open(newunit=iunit,file=trim(filename),form='unformatted',status='replace',access='stream',iostat=ierr)
+            if (ierr.ne.0) call die('[ensight write surf] Could not open file: '//trim(filename))
+            ! Write the header
+            cbuff=trim(surf%name); write(iunit) cbuff
+            ! Close the file
+            close(iunit)
+         end if
+         ! Write the surface variables
+         do rank=0,this%cfg%nproc-1
+            if (rank.eq.this%cfg%rank) then
+               ! Open the file
+               open(newunit=iunit,file=trim(filename),form='unformatted',status='old',access='stream',position='append',iostat=ierr)
+               if (ierr.ne.0) call die('[ensight write surf] Could not open file: '//trim(filename))
+               ! Part header
+               cbuff='part'         ; write(iunit) cbuff
+               ibuff=rank+1         ; write(iunit) ibuff
+               ! Write surf info if it exists on the processor
+               if (surf%ptr%nPoly.gt.0) then
+                  cbuff='nsided'       ; write(iunit) cbuff
+                  write(iunit) real(surf%ptr%var(n,:),SP)
+               end if
+               ! Close the file
+               close(iunit)
+            end if
+            ! Force synchronization
+            call MPI_BARRIER(this%cfg%comm,ierr)
+         end do
       end do
       
    end subroutine write_surf
@@ -719,7 +760,7 @@ contains
             ! Close the file
             close(iunit)
          end if
-         ! Write the particle diameters
+         ! Write the particle variable
          do rank=0,this%cfg%nproc-1
             if (rank.eq.this%cfg%rank) then
                ! Open the file
