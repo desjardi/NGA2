@@ -118,7 +118,7 @@ contains
       call prepare_mpi_part()
       
       ! Initialize a particle mesh for output purposes
-      self%pmesh=partmesh(name='lpt')
+      self%pmesh=partmesh(nvar=1,name='lpt'); self%pmesh%varname(1)='diameter'
       
       ! Log/screen output
       logging: block
@@ -310,7 +310,7 @@ contains
       call this%pmesh%set_size(this%np_)
       do i=1,this%np_
          this%pmesh%pos(:,i)=this%p(i)%pos
-         this%pmesh%d(i)    =this%p(i)%d
+         this%pmesh%var(1,i)=this%p(i)%d
       end do
    end subroutine update_partmesh
    
