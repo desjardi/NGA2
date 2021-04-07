@@ -230,7 +230,7 @@ contains
       call self%initialize_irl()
       
       ! Also initialize a surface grid
-      self%surfgrid=surfmesh(name='plic')
+      self%surfgrid=surfmesh(nvar=1,name='plic'); self%surfgrid%varname(1)='nplane'
       
       ! Prepare mask for VF
       allocate(self%mask(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%mask=0
@@ -1789,6 +1789,8 @@ contains
                         ! Increment polygon counter
                         np=np+1
                         this%surfgrid%polySize(np)=shape
+                        ! Set nplane variable
+                        this%surfgrid%var(1,np)=getNumberOfPlanes(this%liquid_gas_interface(i,j,k))
                         ! Loop over its vertices and add them
                         do n=1,shape
                            tmp_vert=getPt(this%interface_polygon(nplane,i,j,k),n-1)
@@ -1813,6 +1815,7 @@ contains
          this%surfgrid%yVert(1:3)=this%cfg%y(this%cfg%jmin)
          this%surfgrid%zVert(1:3)=this%cfg%z(this%cfg%kmin)
          this%surfgrid%polySize(1)=3
+         this%surfgrid%var(1,1)=1
          this%surfgrid%polyConn(1:3)=[1,2,3]
       end if
       

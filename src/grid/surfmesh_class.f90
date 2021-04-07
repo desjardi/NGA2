@@ -17,6 +17,9 @@ module surfmesh_class
       integer :: nPoly                                     !< Number of polygons
       integer,  dimension(:), allocatable :: polySize      !< Size of polygons - size=nPoly
       integer,  dimension(:), allocatable :: polyConn      !< Connectivity - size=sum(polySize)
+      integer :: nvar                                                   !< Number of surface variables stored
+      real(WP), dimension(:,:), allocatable :: var                      !< Surface variable storage
+      character(len=str_medium), dimension(:), allocatable :: varname   !< Name of surface variable fields
    contains
       procedure :: reset                                   !< Reset surface mesh to zero size
       procedure :: set_size                                !< Set surface mesh to provided size
@@ -33,15 +36,20 @@ contains
    
    
    !> Constructor for surface mesh object
-   function constructor(name) result(self)
+   function constructor(nvar,name) result(self)
       implicit none
       type(surfmesh) :: self
+      integer, intent(in) :: nvar
       character(len=*), optional :: name
       ! Set the name of the surface mesh
       if (present(name)) self%name=trim(adjustl(name))
       ! Default to 0 size
       self%nVert=0
       self%nPoly=0
+      ! Initialize additional variables
+      self%nvar=nvar
+      allocate(self%varname(self%nvar))
+      self%varname='' !< Users will set the name themselves
    end function constructor
    
    
@@ -55,6 +63,7 @@ contains
       if (allocated(this%zVert))    deallocate(this%zvert)
       if (allocated(this%polySize)) deallocate(this%polySize)
       if (allocated(this%polyConn)) deallocate(this%polyConn)
+      if (allocated(this%var))      deallocate(this%var)
    end subroutine reset
    
    
@@ -68,6 +77,7 @@ contains
       allocate(this%yVert   (this%nVert))
       allocate(this%zVert   (this%nVert))
       allocate(this%polySize(this%nPoly))
+      allocate(this%var     (this%nvar,this%nPoly))
    end subroutine set_size
    
    

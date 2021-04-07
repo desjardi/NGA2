@@ -40,7 +40,7 @@ contains
       if (present(name)) self%name=trim(adjustl(name))
       ! Default to 0 particles
       self%n=0
-      ! Initialize variables
+      ! Initialize additional variables
       self%nvar=nvar
       allocate(self%varname(self%nvar))
       self%varname='' !< Users will set the name themselves
