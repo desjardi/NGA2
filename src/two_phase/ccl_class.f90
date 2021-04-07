@@ -49,7 +49,7 @@ module ccl_class
    !> Film object
    type, extends(struct) :: film
       integer :: phase                                    !< Film phase; 1: liquid, 2: gas
-      integer :: type                                     !< Film type; 0: droplet, 1: ligament, 2: sheet
+      integer :: type                                     !< Film type; 1: droplet, 2: ligament, 3: sheet
       integer, dimension(2) :: adjacent_structs           !< IDs of structures adjacent to gas film
       real(WP) :: min_thickness                           !< Global minimum film thickness
    end type film
@@ -2536,6 +2536,7 @@ contains
    
    !> Classify film by shape
    subroutine film_classify(this,Lbary,Gbary)
+      use mpi_f08,  only: MPI_ALLREDUCE,MPI_SUM,MPI_INTEGER
       implicit none
       class(ccl), intent(inout) :: this
       real(WP), dimension(:,this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in) :: Lbary  !< Liquid barycenter
@@ -2551,12 +2552,17 @@ contains
       integer , parameter        :: lwork = 102 ! dsyev optimal length (nb+2)*order, where block size nb=32
       real(WP), dimension(lwork) :: work
       integer :: info
+      ! Classification
+      integer :: id,ierr
       real(WP) :: ratio
       real(WP), parameter :: ligam_threshold=1.3_WP
-      real(WP), parameter :: sheet_threshold=0.7_WP
-      
+      real(WP), parameter :: sheet_threshold=0.9_WP
+      integer, dimension(1:this%cfg%nproc*this%n_film_max,1:3) :: ntype_,ntype
+
       this%film_type = 0
+      ntype_=0
       do m=this%film_sync_offset+1,this%film_sync_offset+this%n_film ! Loops over film segments contained locally
+         id=this%film_list(this%film_map_(m))%parent
          if (this%film_list(this%film_map_(m))%phase.eq.1) then ! Liquid film
             do n=1,this%film_list(this%film_map_(m))%nnode ! Loops over cells within local film segment
                i = this%film_list(this%film_map_(m))%node(1,n)
@@ -2565,10 +2571,12 @@ contains
                vol_total = 0.0_WP
                x_vol = 0.0_WP; y_vol = 0.0_WP; z_vol = 0.0_WP
                Imom = 0.0_WP
-               do kk = k-2,k+2
-                  do jj = j-2,j+2
-                     do ii = i-2,i+2
-                        
+               ! do kk = k-2,k+2
+               !    do jj = j-2,j+2
+               !       do ii = i-2,i+2
+               do kk=k-1,k+1
+                  do jj=j-1,j+1
+                     do ii=i-1,i+1                        
                         ! Location of film node
                         xtmp = Lbary(1,ii,jj,kk)
                         ytmp = Lbary(2,ii,jj,kk)
@@ -2585,9 +2593,9 @@ contains
                      end do
                   end do
                end do
-               do kk = k-2,k+2
-                  do jj = j-2,j+2
-                     do ii = i-2,i+2
+               do kk=k-1,k+1
+                  do jj=j-1,j+1
+                     do ii=i-1,i+1
                         
                         ! Location of film node
                         xtmp = Lbary(1,ii,jj,kk)-x_vol/vol_total
@@ -2615,7 +2623,9 @@ contains
                   this%film_type(i,j,k)=3
                else
                   this%film_type(i,j,k)=1
-               end if 
+               end if
+               ! Add to type count
+               ntype_(id,this%film_type(i,j,k))=ntype_(id,this%film_type(i,j,k))+1
             end do
          else ! Gas film
             do n=1,this%film_list(this%film_map_(m))%nnode
@@ -2625,9 +2635,9 @@ contains
                vol_total = 0.0_WP
                x_vol = 0.0_WP; y_vol = 0.0_WP; z_vol = 0.0_WP
                Imom(:,:) = 0.0_WP
-               do kk = k-2,k+2
-                  do jj = j-2,j+2
-                     do ii = i-2,i+2
+               do kk=k-1,k+1
+                  do jj=j-1,j+1
+                     do ii=i-1,i+1
                         
                         ! Location of film node
                         xtmp = Gbary(1,ii,jj,kk)
@@ -2645,9 +2655,9 @@ contains
                      end do
                   end do
                end do
-               do kk = k-2,k+2
-                  do jj = j-2,j+2
-                     do ii = i-2,i+2
+               do kk=k-1,k+1
+                  do jj=j-1,j+1
+                     do ii=i-1,i+1
                         
                         ! Location of film node
                         xtmp = Gbary(1,ii,jj,kk)-x_vol/vol_total
@@ -2676,10 +2686,25 @@ contains
                else
                   this%film_type(i,j,k)=1
                end if
+               ! Add to type count
+               ntype_(id,this%film_type(i,j,k))=ntype_(id,this%film_type(i,j,k))+1
             end do
          end if ! Film phase
       end do
-
+      call MPI_ALLREDUCE(ntype_(:,1),ntype(:,1),this%cfg%nproc*this%n_film_max,MPI_INTEGER,MPI_SUM,this%cfg%comm,ierr)
+      call MPI_ALLREDUCE(ntype_(:,2),ntype(:,2),this%cfg%nproc*this%n_film_max,MPI_INTEGER,MPI_SUM,this%cfg%comm,ierr)
+      call MPI_ALLREDUCE(ntype_(:,3),ntype(:,3),this%cfg%nproc*this%n_film_max,MPI_INTEGER,MPI_SUM,this%cfg%comm,ierr)
+      do m=this%film_sync_offset+1,this%film_sync_offset+this%n_film ! Loops over film segments contained locally
+         id=this%film_list(this%film_map_(m))%parent
+         ! Determine film type
+         this%film_list(this%film_map_(m))%type=maxloc(ntype(id,:),dim=1)
+         do n=1,this%film_list(this%film_map_(m))%nnode ! Loops over cells within local film segment
+            i = this%film_list(this%film_map_(m))%node(1,n)
+            j = this%film_list(this%film_map_(m))%node(2,n)
+            k = this%film_list(this%film_map_(m))%node(3,n)
+            this%film_type(i,j,k)=this%film_list(this%film_map_(m))%type
+         end do
+      end do
    end subroutine film_classify
    
    
