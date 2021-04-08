@@ -172,7 +172,7 @@ contains
       ! Initialize our VOF solver and field
       create_and_initialize_vof: block
          use mms_geom,  only: cube_refine_vol
-         use vfs_class, only: VFlo,VFhi,lvira,r2p,art
+         use vfs_class, only: VFlo,VFhi,lvira,r2p,art,swartz
          integer :: i,j,k,si,sj,sk,n
          real(WP), dimension(3,8) :: cube_vertex
          real(WP), dimension(3) :: v_cent,a_cent
@@ -181,11 +181,11 @@ contains
          ! Create a VOF solver with LVIRA
          !vf=vfs(cfg=cfg,reconstruction_method=lvira,name='VOF')
          ! Create a VOF solver with R2P
-         !vf=vfs(cfg=cfg,reconstruction_method=r2p,name='VOF')
+         vf=vfs(cfg=cfg,reconstruction_method=r2p,name='VOF')
          !vf%VFflot =1.0e-4_WP !< Enables flotsam removal
          !vf%VFsheet=1.0e-2_WP !< Enables sheet removal
          ! Create a VOF solver with ART
-         vf=vfs(cfg=cfg,reconstruction_method=art,name='VOF')
+         !vf=vfs(cfg=cfg,reconstruction_method=art,name='VOF')
          ! Initialize to droplet
          call param_read('Droplet center',center)
          call param_read('Droplet radii',radii)
