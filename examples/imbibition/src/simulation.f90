@@ -274,7 +274,6 @@ contains
          ! Add variables to output
          call ens_out%add_scalar('pressure',fs%P)
          call ens_out%add_vector('velocity',Ui,Vi,Wi)
-         call ens_out%add_scalar('divergence',fs%div)
          call ens_out%add_scalar('VOF',vf%VF)
          call ens_out%add_scalar('curvature',vf%curv)
          call ens_out%add_surface('vofplic',vf%surfgrid)
