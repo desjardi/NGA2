@@ -50,8 +50,8 @@ module simulation
    
    !> Transfer model parameters
    real(WP) :: filmthickness_over_dx  =5.0e-1_WP
-   real(WP) :: min_filmthickness      =1.0e-7_WP
-   real(WP) :: diam_over_filmthickness=1.5e+1_WP
+   real(WP) :: min_filmthickness      =1.0e-6_WP
+   real(WP) :: diam_over_filmthickness=1.0e+1_WP
    real(WP) :: max_eccentricity       =5.0e-1_WP
    real(WP) :: d_threshold            =1.0e-3_WP
    
