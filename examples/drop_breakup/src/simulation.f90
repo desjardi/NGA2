@@ -642,8 +642,8 @@ contains
          call fs%interp_vel(Ui,Vi,Wi)
          call fs%get_div()
          
-         ! ! Perform volume-fraction-to-droplet transfer
-         ! call transfer_vf_to_drops()
+         ! Perform volume-fraction-to-droplet transfer
+         call transfer_vf_to_drops()
          
          ! Output to ensight
          if (ens_evt%occurs()) call ens_out%write_data(time%t)

@@ -103,7 +103,7 @@ module vfs_class
       real(WP) :: art_threshold=1.30_WP                   !< Threshold for art to switch from r2p to lvira
       
       ! Curvature clipping parameter
-      real(WP) :: maxcurv_times_mesh=2.0_WP               !< Clipping parameter for maximum curvature (classically set to 1, but should be larger since we resolve more)
+      real(WP) :: maxcurv_times_mesh=1.0_WP               !< Clipping parameter for maximum curvature (classically set to 1, but should be larger since we resolve more)
       
       ! Flotsam removal parameter - turned off by default
       real(WP) :: VFflot=0.0_WP                           !< Threshold VF parameter for flotsam removal (0.0=off)
