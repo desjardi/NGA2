@@ -77,10 +77,12 @@ module simulation
    real(WP), dimension(:,:,:,:), allocatable :: SR3
    real(WP), dimension(:,:,:), allocatable :: U2on3,V2on3,W2on3
    
-   !> Transfer parameters
+   !> Transfer model parameters
    real(WP) :: filmthickness_over_dx  =5.0e-1_WP
-   real(WP) :: min_filmthickness      =1.0e-6_WP
-   real(WP) :: diam_over_filmthickness=7.0e+0_WP
+   real(WP) :: min_filmthickness      =1.0e-7_WP
+   real(WP) :: diam_over_filmthickness=1.5e+1_WP
+   real(WP) :: max_eccentricity       =5.0e-1_WP
+   real(WP) :: d_threshold            =1.0e-3_WP
    
 contains
    
@@ -362,9 +364,9 @@ contains
          integer :: i,j,k
          real(WP) :: xloc,rad
          ! Create a VOF solver with LVIRA
-         vf2=vfs(cfg=cfg2,reconstruction_method=lvira,name='VOF')
+         !vf2=vfs(cfg=cfg2,reconstruction_method=lvira,name='VOF')
          ! Create a VOF solver with R2P
-         !vf2=vfs(cfg=cfg2,reconstruction_method=r2p,name='VOF')
+         vf2=vfs(cfg=cfg2,reconstruction_method=r2p,name='VOF')
          !vf2%VFflot =1.0e-4_WP !< Enables flotsam removal
          !vf2%VFsheet=1.0e-2_WP !< Enables sheet removal
          ! Initialize to flat interface in liquid needle
@@ -532,7 +534,6 @@ contains
          call ens_out2%add_scalar('VOF',vf2%VF)
          call ens_out2%add_scalar('curvature',vf2%curv)
          call ens_out2%add_scalar('visc_t',sgs2%visc)
-         call ens_out2%add_scalar('structID',cc2%id)
          call ens_out2%add_scalar('filmID',cc2%film_id)
          call ens_out2%add_scalar('filmThickness',cc2%film_thickness)
          call ens_out2%add_surface('vofplic',vf2%surfgrid)
@@ -873,16 +874,16 @@ contains
       
       
       ! Initialize our Lagrangian spray solver
-      initialize_lpt: block
+      initialize_lpt3: block
          ! Create solver
-         lp3=lpt(cfg=cfg3,name='LPT')
+         lp3=lpt(cfg=cfg3,name='spray')
          ! Get droplet density from the input
          call param_read('Liquid density',lp3%rho)
          ! Handle restarts
          if (restarted) call lp3%read(filename=trim(lpt_file))
          ! Also update the output
          call lp3%update_partmesh()
-      end block initialize_lpt
+      end block initialize_lpt3
       
       
       ! Add Ensight output
@@ -1416,9 +1417,72 @@ contains
    subroutine transfer_vf_to_drops()
       implicit none
       
-      ! Perform CCL
+      ! Perform a first pass with simplest CCL
+      call cc2%build_lists(VF=vf2%VF,U=fs2%U,V=fs2%V,W=fs2%W)
+      
+      ! Loop through identified detached structs and remove those that are spherical enough
+      remove_struct: block
+         use mathtools, only: pi
+         integer :: m,n,l,i,j,k,np
+         real(WP) :: lmin,lmax,eccentricity,diam
+         
+         ! Loops over film segments contained locally
+         do m=1,cc2%n_meta_struct
+            
+            ! Test if sphericity is compatible with transfer
+            lmin=cc2%meta_structures_list(m)%lengths(3)
+            if (lmin.eq.0.0_WP) lmin=cc2%meta_structures_list(m)%lengths(2) ! Handle 2D case
+            lmax=cc2%meta_structures_list(m)%lengths(1)
+            eccentricity=sqrt(1.0_WP-lmin**2/lmax**2)
+            if (eccentricity.gt.max_eccentricity) cycle
+            
+            ! Test if diameter is compatible with transfer
+            diam=(6.0_WP*cc2%meta_structures_list(m)%vol/pi)**(1.0_WP/3.0_WP)
+            if (diam.eq.0.0_WP.or.diam.gt.d_threshold) cycle
+            
+            ! Create drop from available liquid volume - only one root does that
+            if (cc2%cfg%amRoot) then
+               ! Make room for new drop
+               np=lp3%np_+1; call lp3%resize(np)
+               ! Add the drop
+               lp3%p(np)%id  =int(0,8)                                                                                      !< Give id (maybe based on break-up model?)
+               lp3%p(np)%dt  =0.0_WP                                                                                        !< Let the drop find it own integration time
+               lp3%p(np)%d   =diam                                                                                          !< Assign diameter to account for full volume
+               lp3%p(np)%pos =[cc2%meta_structures_list(m)%x,cc2%meta_structures_list(m)%y,cc2%meta_structures_list(m)%z]   !< Place the drop at the liquid barycenter
+               lp3%p(np)%vel =[cc2%meta_structures_list(m)%u,cc2%meta_structures_list(m)%v,cc2%meta_structures_list(m)%w]   !< Assign mean structure velocity as drop velocity
+               lp3%p(np)%ind =lp3%cfg%get_ijk_global(lp3%p(np)%pos,[lp3%cfg%imin,lp3%cfg%jmin,lp3%cfg%kmin])                !< Place the drop in the proper cell for the lp%cfg
+               lp3%p(np)%flag=0                                                                                             !< Activate it
+               ! Increment particle counter
+               lp3%np_=np
+            end if
+            
+            ! Find local structs with matching id
+            do n=cc2%sync_offset+1,cc2%sync_offset+cc2%n_struct
+               if (cc2%struct_list(cc2%struct_map_(n))%parent.ne.cc2%meta_structures_list(m)%id) cycle
+               ! Remove liquid in meta-structure cells
+               do l=1,cc2%struct_list(cc2%struct_map_(n))%nnode ! Loops over cells within local
+                  i=cc2%struct_list(cc2%struct_map_(n))%node(1,l)
+                  j=cc2%struct_list(cc2%struct_map_(n))%node(2,l)
+                  k=cc2%struct_list(cc2%struct_map_(n))%node(3,l)
+                  ! Remove liquid in that cell
+                  vf2%VF(i,j,k)=0.0_WP
+               end do
+            end do
+            
+         end do
+         
+      end block remove_struct
+      
+      ! Sync VF and clean up IRL and band
+      call vf2%cfg%sync(vf2%VF)
+      call vf2%clean_irl_and_band()
+      
+      ! Clean up CCL
+      call cc2%deallocate_lists()
+      
+      ! Perform more detailed CCL in a second pass
+      cc2%max_interface_planes=2
       call cc2%build_lists(VF=vf2%VF,poly=vf2%interface_polygon,U=fs2%U,V=fs2%V,W=fs2%W)
-      call cc2%film_classify(Lbary=vf2%Lbary,Gbary=vf2%Gbary)
       call cc2%get_min_thickness()
       call cc2%sort_by_thickness()
       

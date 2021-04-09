@@ -48,10 +48,10 @@ module simulation
    !> Problem definition
    real(WP), dimension(3) :: center,radii
    
-   !> Transfer parameters
+   !> Transfer model parameters
    real(WP) :: filmthickness_over_dx  =5.0e-1_WP
-   real(WP) :: min_filmthickness      =1.0e-6_WP
-   real(WP) :: diam_over_filmthickness=7.0e+0_WP
+   real(WP) :: min_filmthickness      =1.0e-7_WP
+   real(WP) :: diam_over_filmthickness=1.5e+1_WP
    real(WP) :: max_eccentricity       =5.0e-1_WP
    real(WP) :: d_threshold            =1.0e-3_WP
    
@@ -863,16 +863,6 @@ contains
       call lp%update_partmesh()
       
    end subroutine transfer_vf_to_drops
-   
-   
-   !> Transfer detached structures to drops
-   subroutine transfer_structs_to_drops()
-      implicit none
-      
-      
-      
-      
-   end subroutine transfer_structs_to_drops
    
    
    !> Finalize the NGA2 simulation
