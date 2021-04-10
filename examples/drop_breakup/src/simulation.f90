@@ -48,10 +48,10 @@ module simulation
    !> Problem definition
    real(WP), dimension(3) :: center,radii
    
-   !> Transfer parameters
+   !> Transfer model parameters
    real(WP) :: filmthickness_over_dx  =5.0e-1_WP
    real(WP) :: min_filmthickness      =1.0e-6_WP
-   real(WP) :: diam_over_filmthickness=7.0e+0_WP
+   real(WP) :: diam_over_filmthickness=1.0e+1_WP
    real(WP) :: max_eccentricity       =5.0e-1_WP
    real(WP) :: d_threshold            =1.0e-3_WP
    
@@ -172,7 +172,7 @@ contains
       ! Initialize our VOF solver and field
       create_and_initialize_vof: block
          use mms_geom,  only: cube_refine_vol
-         use vfs_class, only: VFlo,VFhi,lvira,r2p,art
+         use vfs_class, only: VFlo,VFhi,lvira,r2p,art,swartz
          integer :: i,j,k,si,sj,sk,n
          real(WP), dimension(3,8) :: cube_vertex
          real(WP), dimension(3) :: v_cent,a_cent
@@ -181,11 +181,11 @@ contains
          ! Create a VOF solver with LVIRA
          !vf=vfs(cfg=cfg,reconstruction_method=lvira,name='VOF')
          ! Create a VOF solver with R2P
-         !vf=vfs(cfg=cfg,reconstruction_method=r2p,name='VOF')
+         vf=vfs(cfg=cfg,reconstruction_method=r2p,name='VOF')
          !vf%VFflot =1.0e-4_WP !< Enables flotsam removal
          !vf%VFsheet=1.0e-2_WP !< Enables sheet removal
          ! Create a VOF solver with ART
-         vf=vfs(cfg=cfg,reconstruction_method=art,name='VOF')
+         !vf=vfs(cfg=cfg,reconstruction_method=art,name='VOF')
          ! Initialize to droplet
          call param_read('Droplet center',center)
          call param_read('Droplet radii',radii)
@@ -641,8 +641,8 @@ contains
          call fs%interp_vel(Ui,Vi,Wi)
          call fs%get_div()
          
-         ! ! Perform volume-fraction-to-droplet transfer
-         ! call transfer_vf_to_drops()
+         ! Perform volume-fraction-to-droplet transfer
+         call transfer_vf_to_drops()
          
          ! Output to ensight
          if (ens_evt%occurs()) call ens_out%write_data(time%t)
@@ -862,16 +862,6 @@ contains
       call lp%update_partmesh()
       
    end subroutine transfer_vf_to_drops
-   
-   
-   !> Transfer detached structures to drops
-   subroutine transfer_structs_to_drops()
-      implicit none
-      
-      
-      
-      
-   end subroutine transfer_structs_to_drops
    
    
    !> Finalize the NGA2 simulation

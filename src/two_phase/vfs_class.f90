@@ -26,7 +26,7 @@ module vfs_class
    !integer, parameter, public :: elvira=2            !< ELVIRA scheme
    !integer, parameter, public :: mof=3               !< MOF scheme
    integer, parameter, public :: r2p=4               !< R2P scheme
-   !integer, parameter, public :: swartz=5            !< Swartz scheme
+   integer, parameter, public :: swartz=5            !< Swartz scheme
    integer, parameter, public :: art=6               !< ART scheme
    
    ! IRL cutting moment calculation method
@@ -103,7 +103,7 @@ module vfs_class
       real(WP) :: art_threshold=1.30_WP                   !< Threshold for art to switch from r2p to lvira
       
       ! Curvature clipping parameter
-      real(WP) :: maxcurv_times_mesh=2.0_WP               !< Clipping parameter for maximum curvature (classically set to 1, but should be larger since we resolve more)
+      real(WP) :: maxcurv_times_mesh=1.0_WP               !< Clipping parameter for maximum curvature (classically set to 1, but should be larger since we resolve more)
       
       ! Flotsam removal parameter - turned off by default
       real(WP) :: VFflot=0.0_WP                           !< Threshold VF parameter for flotsam removal (0.0=off)
@@ -159,6 +159,7 @@ module vfs_class
       procedure :: build_lvira                            !< LVIRA reconstruction of the interface from VF field
       procedure :: build_r2p                              !< R2P reconstruction of the interface from VF field
       procedure :: build_art                              !< ART reconstruction of the interface from VF field
+      procedure :: smooth_interface                       !< Interface smoothing based on Swartz idea
       procedure :: set_full_bcond                         !< Full liq/gas plane-setting for boundary cells - this is stair-stepped
       procedure :: polygonalize_interface                 !< Build a discontinuous polygonal representation of the IRL interface
       procedure :: distance_from_polygon                  !< Build a signed distance field from the polygonalized interface
@@ -1173,12 +1174,101 @@ contains
       class(vfs), intent(inout) :: this
       ! Reconstruct interface - will need to support various methods
       select case (this%reconstruction_method)
-      case (lvira); call this%build_lvira()
-      case (r2p)  ; call this%build_r2p()
-      case (art)  ; call this%build_art()
+      case (lvira) ; call this%build_lvira()
+      case (r2p)   ; call this%build_r2p()
+      case (art)   ; call this%build_art()
+      case (swartz)
+         call this%build_lvira()
+         call this%smooth_interface()
       case default; call die('[vfs build interface] Unknown interface reconstruction scheme')
       end select
    end subroutine build_interface
+   
+   
+   !> Smoothing of an IRL interface based on Swartz-like algorithm
+   subroutine smooth_interface(this)
+      use mathtools, only: cross_product,normalize
+      use mpi_f08,   only: MPI_ALLREDUCE,MPI_MAX
+      use parallel,  only: MPI_REAL_WP
+      implicit none
+      class(vfs), intent(inout) :: this
+      integer :: i,j,k,ii,jj,kk,ierr,ite,count
+      real(WP) :: myres,res,mag
+      real(WP), dimension(3) :: mynorm,mybary,bary,norm,newnorm
+      real(WP), dimension(4) :: plane
+      type(RectCub_type) :: cell
+      real(WP), parameter :: norm_threshold=0.5_WP
+      real(WP), parameter :: maxres=1.0e-6_WP
+      integer , parameter :: maxite=4
+      
+      ! Allocate cell
+      call new(cell)
+      
+      ! Iterate until convergence criterion is met
+      res=huge(1.0_WP); ite=0
+      do while (res.ge.maxres.and.ite.lt.maxite)
+         
+         ! Create discontinuous polygon mesh from IRL interface
+         call this%polygonalize_interface()
+         
+         ! Traverse domain and form new normal
+         myres=0.0_WP
+         do k=this%cfg%kmin_,this%cfg%kmax_
+            do j=this%cfg%jmin_,this%cfg%jmax_
+               do i=this%cfg%imin_,this%cfg%imax_
+                  ! Skip wall/bcond cells
+                  if (this%mask(i,j,k).ne.0) cycle
+                  ! Skip cells without interface
+                  if (this%VF(i,j,k).lt.VFlo.or.this%VF(i,j,k).gt.VFhi) cycle
+                  ! Compute polygon barycenter and normal
+                  mybary=calculateCentroid(this%interface_polygon(1,i,j,k))
+                  mynorm=calculateNormal  (this%interface_polygon(1,i,j,k))
+                  ! Loop over our neighbors and form new normal
+                  newnorm=0.0_WP; count=0
+                  do kk=k-1,k+1
+                     do jj=j-1,j+1
+                        do ii=i-1,i+1
+                           ! Skip stencil center
+                           if (ii.eq.i.and.jj.eq.j.and.kk.eq.k) cycle
+                           ! Skip cells without polygons
+                           if (getNumberOfVertices(this%interface_polygon(1,ii,jj,kk)).eq.0) cycle
+                           ! Increment neighbor counter
+                           count=count+1
+                           ! Compute polygon barycenter and normal
+                           bary=calculateCentroid(this%interface_polygon(1,ii,jj,kk))-mybary
+                           norm=calculateNormal  (this%interface_polygon(1,ii,jj,kk))
+                           ! Skip polygons with normal too different from ours
+                           if (dot_product(mynorm,norm).lt.norm_threshold) cycle
+                           ! Add edge-normal to our new normal
+                           newnorm=newnorm+normalize(cross_product(bary,cross_product(mynorm,bary)))
+                        end do
+                     end do
+                  end do
+                  ! Set minimum number of neighbors
+                  if (count.lt.2) cycle
+                  ! Normalize new normal vector
+                  newnorm=normalize(newnorm)
+                  ! Adjust plane position to conserve volume
+                  plane=getPlane(this%liquid_gas_interface(i,j,k),0)
+                  call setPlane(this%liquid_gas_interface(i,j,k),0,newnorm,plane(4))
+                  call construct_2pt(cell,[this%cfg%x(i),this%cfg%y(j),this%cfg%z(k)],[this%cfg%x(i+1),this%cfg%y(j+1),this%cfg%z(k+1)])
+                  call matchVolumeFraction(cell,this%VF(i,j,k),this%liquid_gas_interface(i,j,k))
+                  ! Monitor convergence
+                  myres=max(myres,1.0_WP-dot_product(mynorm,newnorm))
+               end do
+            end do
+         end do
+         
+         ! Collect maximum residual and increment iteration counter
+         call MPI_ALLREDUCE(myres,res,1,MPI_REAL_WP,MPI_MAX,this%cfg%comm,ierr); ite=ite+1
+         if (this%cfg%amRoot) print*,'ite=',ite,'residual=',res
+         
+         ! Synchronize across boundaries
+         call this%sync_interface()
+         
+      end do
+      
+   end subroutine smooth_interface
    
    
    !> LVIRA reconstruction of a planar interface in mixed cells
@@ -1790,7 +1880,7 @@ contains
                         np=np+1
                         this%surfgrid%polySize(np)=shape
                         ! Set nplane variable
-                        this%surfgrid%var(1,np)=getNumberOfPlanes(this%liquid_gas_interface(i,j,k))
+                        this%surfgrid%var(1,np)=real(getNumberOfPlanes(this%liquid_gas_interface(i,j,k)),WP)
                         ! Loop over its vertices and add them
                         do n=1,shape
                            tmp_vert=getPt(this%interface_polygon(nplane,i,j,k),n-1)
@@ -1815,7 +1905,7 @@ contains
          this%surfgrid%yVert(1:3)=this%cfg%y(this%cfg%jmin)
          this%surfgrid%zVert(1:3)=this%cfg%z(this%cfg%kmin)
          this%surfgrid%polySize(1)=3
-         this%surfgrid%var(1,1)=1
+         this%surfgrid%var(1,1)=1.0_WP
          this%surfgrid%polyConn(1:3)=[1,2,3]
       end if
       
