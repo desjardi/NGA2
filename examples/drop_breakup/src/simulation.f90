@@ -50,10 +50,10 @@ module simulation
    
    !> Transfer model parameters
    real(WP) :: filmthickness_over_dx  =5.0e-1_WP
-   real(WP) :: min_filmthickness      =1.0e-6_WP
+   real(WP) :: min_filmthickness      =1.0e-3_WP
    real(WP) :: diam_over_filmthickness=1.0e+1_WP
    real(WP) :: max_eccentricity       =5.0e-1_WP
-   real(WP) :: d_threshold            =1.0e-3_WP
+   real(WP) :: d_threshold            =1.0e-1_WP
    
    !> SGS surface tension model
    real(WP), dimension(:,:,:), allocatable :: sgsSTx,sgsSTy,sgsSTz
@@ -158,6 +158,7 @@ contains
          !time=timetracker(cfg%amRoot,name='drop break-up')   !< This is moved up for restarts!
          call param_read('Max timestep size',time%dtmax)
          call param_read('Max cfl number',time%cflmax)
+         call param_read('Max time',time%tmax)
          time%dt=time%dtmax
          time%itmax=2
          ! Handle restart
@@ -179,9 +180,9 @@ contains
          real(WP) :: vol,area
          integer, parameter :: amr_ref_lvl=4
          ! Create a VOF solver with LVIRA
-         !vf=vfs(cfg=cfg,reconstruction_method=lvira,name='VOF')
+         vf=vfs(cfg=cfg,reconstruction_method=lvira,name='VOF')
          ! Create a VOF solver with R2P
-         vf=vfs(cfg=cfg,reconstruction_method=r2p,name='VOF')
+         !vf=vfs(cfg=cfg,reconstruction_method=r2p,name='VOF')
          !vf%VFflot =1.0e-4_WP !< Enables flotsam removal
          !vf%VFsheet=1.0e-2_WP !< Enables sheet removal
          ! Create a VOF solver with ART
