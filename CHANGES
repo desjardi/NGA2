@@ -7,3 +7,7 @@ October 2020 - Restarting development to get a first flow solver
 January 2021 - Constant density, variable density, and multiphase flow solvers
 have been completed. Constant and variable density scalar solvers are done, as
 well as a VOF solver. First open source release on github of NGA2 on January 16.
+
+April 2021 - Large-eddy simulation modeling has been implemented. An internal
+parallel coupler has been implemented, so multi-block simulations are now fully
+supported. Lagrangian particle tracking has been added.

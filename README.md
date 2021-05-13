@@ -6,7 +6,7 @@ NGA2 is a high performance computing research library that provides a variety of
 - two-phase Navier-Stokes
 - constant and variable density scalar transport
 - phasic volume fraction for volume-of-fluid methods
-- overset meshes
+- overset and multi-block meshes via parallel coupler
 - Lagrangian particle tracking
 - large-eddy simulation models
 
