@@ -13,19 +13,22 @@ module ils_class
    
    
    ! List of known available methods
-   integer, parameter, public :: rbgs=1
-   integer, parameter, public :: amg =2
-   integer, parameter, public :: pcg_amg=3
-   integer, parameter, public :: pcg_parasail=4
-   integer, parameter, public :: gmres=5
-   integer, parameter, public :: gmres_pilut=6
-   integer, parameter, public :: smg=7
-   integer, parameter, public :: pfmg=8
-   integer, parameter, public :: gmres_amg=9
-   integer, parameter, public :: bicgstab_amg=10
-   integer, parameter, public :: pcg=11
-   integer, parameter, public :: bbox=12
-   integer, parameter, public :: pcg_bbox=13
+   integer, parameter, public ::         bbox= 1
+   integer, parameter, public ::     pcg_bbox= 2
+   integer, parameter, public ::          amg= 3
+   integer, parameter, public ::      pcg_amg= 4
+   integer, parameter, public ::    gmres_amg= 5
+   integer, parameter, public :: bicgstab_amg= 6
+   integer, parameter, public :: pcg         = 7
+   integer, parameter, public :: pcg_parasail= 8
+   integer, parameter, public ::  gmres      = 9
+   integer, parameter, public ::  gmres_pilut=10
+   integer, parameter, public ::         pfmg=11
+   integer, parameter, public ::     pcg_pfmg=12
+   integer, parameter, public ::   gmres_pfmg=13
+   integer, parameter, public ::          smg=14
+   integer, parameter, public ::      pcg_smg=15
+   integer, parameter, public ::    gmres_smg=16
    
    
    ! List of key solver parameters
@@ -66,6 +69,12 @@ module ils_class
       real(WP) :: rerr                                                !< Current relative error
       real(WP) :: aerr                                                !< Current absolute error
       
+      ! Is the solver setup?
+      logical :: setup_done                                           !< Check whether the solver has been setup
+      
+      ! For multigrid solvers, maxlevel parameter is needed
+      integer :: maxlevel                                             !< Maximum number of multigrid levels
+      
       ! Unstructured mapping
       integer,  dimension(:,:,:), allocatable :: ind     !< Unique global index
       integer :: ind_min,ind_max                         !< Local min and max indices
@@ -87,10 +96,10 @@ module ils_class
       procedure :: print_short=>ils_print_short                       !< Short print of ILS object info
       procedure :: print=>ils_print                                   !< Print ILS object info
       procedure :: log  =>ils_log                                     !< Log ILS object info
-      procedure :: init_solver                                        !< Solver initialization (at start-up)
-      procedure :: update_solver                                      !< Solver update (every time the operator changes)
-      procedure :: solve                                              !< Equation solver
-      procedure :: solve_rbgs                                         !< Solve equation with rbgs
+      procedure :: init                                               !< Grid and stencil initialization - done once for the grid and stencil
+      procedure :: setup                                              !< Solver setup (every time the operator changes)
+      procedure :: solve                                              !< Execute solver (assumes new RHS and initial guess at every call)
+      procedure :: destroy                                            !< Solver destruction (every time the operator changes)
       procedure :: prep_umap                                          !< Create unstructured mapping
       final     :: destructor                                         !< Destructor for ILS
    end type ils
@@ -132,6 +141,8 @@ contains
       
       ! Zero out some info
       self%it=0; self%aerr=0.0_WP; self%rerr=0.0_WP
+      self%maxlevel=0
+      self%setup_done=.false.
       
       ! Set up stencil size and map
       self%nst=7; if (present(nst)) self%nst=nst
@@ -145,18 +156,16 @@ contains
    end function ils_from_args
    
    
-   !> Initialize solver - done at start-up only as long as the stencil or cfg does not change
-   !> When creating the solver, zero values of this%opr(1,:,:,:)
-   !> indicate cells that do not participate in the solver
+   !> Initialize grid and stencil - done at start-up only as long as the stencil or cfg does not change
+   !> When calling, zero values of this%opr(1,:,:,:) indicate cells that do not participate in the solver
    !> Only the stencil needs to be defined at this point
-   subroutine init_solver(this,method)
+   subroutine init(this,method)
       use messager, only: die
       implicit none
       class(ils), intent(inout) :: this
       integer, intent(in) :: method
       integer :: ierr,st,stx1,stx2,sty1,sty2,stz1,stz2
       integer, dimension(3) :: periodicity,offset
-      integer, dimension(:), allocatable :: sizes
       
       ! Set solution method
       this%method=method
@@ -170,243 +179,67 @@ contains
          this%stmap(this%stc(st,1),this%stc(st,2),this%stc(st,3))=st
       end do
       
-      ! Initialize matrix and vectors - this also catches incorrect solvers
+      ! Initialize grid and stencil - this also catches incorrect solvers
       select case (this%method)
-      case (rbgs)
-         ! Nothing needed
-      case (bbox,pcg_bbox) ! Initialize a black-box mg solver
+      case (bbox,pcg_bbox)
+         ! For simplicity, directly initialize an in-house black-box multi-grid solver
+         ! We'll need to have a proper destructor for bbox in order to adhere to ILS' intended use scenario...
          this%bbox=bbmg(pg=this%cfg,name=trim(this%name),nst=[3,3,3])
-      case (amg,pcg_amg,pcg_parasail,gmres,gmres_pilut,gmres_amg,bicgstab_amg,pcg)  ! Initialize a HYPRE IJ enviroment
-         ! Allocate and prepare unstructed mapping
+         ! Adjust parameters
+         this%bbox%max_ite=this%maxit
+         this%bbox%max_res=this%rcvg
+         this%bbox%relax_pre =2
+         this%bbox%relax_post=2
+         this%bbox%use_direct_solve=.true.
+         this%bbox%ncell_coarsest=300
+         if (this%method.eq.    bbox) this%bbox%use_krylov=.false.
+         if (this%method.eq.pcg_bbox) this%bbox%use_krylov=.true.
+         ! Initialize solver
+         call this%bbox%initialize()
+      case (amg,pcg_amg,pcg_parasail,gmres,gmres_pilut,gmres_amg,bicgstab_amg,pcg)
+         ! These use HYPRE's IJ environment, which requires that we allocate and prepare an unstructed mapping
          call this%prep_umap()
-         ! Create a HYPRE matrix
-         call HYPRE_IJMatrixCreate       (this%cfg%comm,this%ind_min,this%ind_max,this%ind_min,this%ind_max,this%hypre_mat,ierr)
-         call HYPRE_IJMatrixSetObjectType(this%hypre_mat,hypre_ParCSR,ierr)
-         allocate(sizes(this%ind_min:this%ind_max)); sizes=this%nst
-         call HYPRE_IJMatrixSetRowSizes  (this%hypre_mat,sizes,ierr)
-         deallocate(sizes)
-         call HYPRE_IJMatrixInitialize   (this%hypre_mat,ierr)
-         ! Create a HYPRE rhs vector
-         call HYPRE_IJVectorCreate       (this%cfg%comm,this%ind_min,this%ind_max,this%hypre_rhs,ierr)
-         call HYPRE_IJVectorSetObjectType(this%hypre_rhs,hypre_ParCSR,ierr)
-         call HYPRE_IJVectorInitialize   (this%hypre_rhs,ierr)
-         call HYPRE_IJVectorGetObject    (this%hypre_rhs,this%parse_rhs,ierr)
-         ! Create a HYPRE solution vector
-         call HYPRE_IJVectorCreate       (this%cfg%comm,this%ind_min,this%ind_max,this%hypre_sol,ierr)
-         call HYPRE_IJVectorSetObjectType(this%hypre_sol,hypre_ParCSR,ierr)
-         call HYPRE_IJVectorInitialize   (this%hypre_sol,ierr)
-         call HYPRE_IJVectorGetObject    (this%hypre_sol,this%parse_sol,ierr)
-      case (smg,pfmg) ! Initialize a structured HYPRE environment - we will need to pay attention to 1D vs 2D vs 3D
-         ! Create Hypre grid
-         call HYPRE_StructGridCreate      (this%cfg%comm,3,this%hypre_box,ierr)
-         call HYPRE_StructGridSetExtents  (this%hypre_box,[this%cfg%imin_,this%cfg%jmin_,this%cfg%kmin_],[this%cfg%imax_,this%cfg%jmax_,this%cfg%kmax_],ierr)
+      case (smg,pcg_smg,gmres_smg,pfmg,pcg_pfmg,gmres_pfmg)
+         ! These use HYPRE's structured environment, which requires that we create a HYPRE grid and stencil
+         call HYPRE_StructGridCreate     (this%cfg%comm,3,this%hypre_box,ierr)
+         call HYPRE_StructGridSetExtents (this%hypre_box,[this%cfg%imin_,this%cfg%jmin_,this%cfg%kmin_],[this%cfg%imax_,this%cfg%jmax_,this%cfg%kmax_],ierr)
          periodicity=0
          if (this%cfg%xper) periodicity(1)=this%cfg%nx
          if (this%cfg%yper) periodicity(2)=this%cfg%ny
          if (this%cfg%zper) periodicity(3)=this%cfg%nz
-         call HYPRE_StructGridSetPeriodic (this%hypre_box,periodicity,ierr)
-         call HYPRE_StructGridAssemble    (this%hypre_box,ierr)
+         call HYPRE_StructGridSetPeriodic(this%hypre_box,periodicity,ierr)
+         call HYPRE_StructGridAssemble   (this%hypre_box,ierr)
          ! Build Hypre stencil
-         call HYPRE_StructStencilCreate   (3,this%nst,this%hypre_stc,ierr)
+         call HYPRE_StructStencilCreate  (3,this%nst,this%hypre_stc,ierr)
          do st=1,this%nst
             offset=this%stc(st,:)
             call HYPRE_StructStencilSetElement(this%hypre_stc,st-1,offset,ierr)
          end do
-         ! Build Hypre matrix
-         call HYPRE_StructMatrixCreate    (this%cfg%comm,this%hypre_box,this%hypre_stc,this%hypre_mat,ierr)
-         call HYPRE_StructMatrixInitialize(this%hypre_mat,ierr)
-         ! Prepare Hypre RHS
-         call HYPRE_StructVectorCreate    (this%cfg%comm,this%hypre_box,this%hypre_rhs,ierr)
-         call HYPRE_StructVectorInitialize(this%hypre_rhs,ierr)
-         ! Create Hypre solution vector
-         call HYPRE_StructVectorCreate    (this%cfg%comm,this%hypre_box,this%hypre_sol,ierr)
-         call HYPRE_StructVectorInitialize(this%hypre_sol,ierr)
       case default
-         call die('[ils prep solver] Unknown solution method')
+         call die('[ils init] Unknown solution method')
       end select
       
-      ! Now initialize the actual solver
-      select case (this%method)
-      case (rbgs)
-         ! Nothing needed
-      case (bbox)
-         ! Adjust parameters
-         this%bbox%max_ite=this%maxit
-         this%bbox%max_res=this%rcvg
-         this%bbox%relax_pre =2
-         this%bbox%relax_post=2
-         this%bbox%use_direct_solve=.true.
-         this%bbox%ncell_coarsest=300
-         this%bbox%use_krylov=.false.
-         ! Initialize solver
-         call this%bbox%initialize()
-      case (pcg_bbox)
-         ! Adjust parameters
-         this%bbox%max_ite=this%maxit
-         this%bbox%max_res=this%rcvg
-         this%bbox%relax_pre =2
-         this%bbox%relax_post=2
-         this%bbox%use_direct_solve=.true.
-         this%bbox%ncell_coarsest=300
-         this%bbox%use_krylov=.true.
-         ! Initialize solver
-         call this%bbox%initialize()
-      case (amg)
-         ! Create an AMG solver
-         call HYPRE_BoomerAMGCreate        (this%hypre_solver,ierr)
-         call HYPRE_BoomerAMGSetPrintLevel (this%hypre_solver,sprintlvl,ierr)
-         call HYPRE_BoomerAMGSetInterpType (this%hypre_solver,amg_interp,ierr)
-         call HYPRE_BoomerAMGSetCoarsenType(this%hypre_solver,amg_coarsen_type,ierr)
-         call HYPRE_BoomerAMGSetStrongThrshld(this%hypre_solver,amg_strong_threshold,ierr)
-         call HYPRE_BoomerAMGSetRelaxType  (this%hypre_solver,amg_relax,ierr)
-         call HYPRE_BoomerAMGSetCycleRelaxType(this%hypre_solver,amg_relax_coarse,3,ierr)
-         call HYPRE_BoomerAMGSetMaxIter    (this%hypre_solver,this%maxit,ierr)
-         call HYPRE_BoomerAMGSetTol        (this%hypre_solver,this%rcvg ,ierr)
-      case (pcg_amg)
-         ! Create a PCG solver
-         call HYPRE_ParCSRPCGCreate        (this%cfg%comm,this%hypre_solver,ierr)
-         call HYPRE_ParCSRPCGSetPrintLevel (this%hypre_solver,sprintlvl,ierr)
-         call HYPRE_ParCSRPCGSetMaxIter    (this%hypre_solver,this%maxit,ierr)
-         call HYPRE_ParCSRPCGSetTol        (this%hypre_solver,this%rcvg ,ierr)
-         call HYPRE_ParCSRPCGSetTwoNorm    (this%hypre_solver,1,ierr)
-         call HYPRE_ParCSRPCGSetLogging    (this%hypre_solver,1,ierr)
-         ! Create an AMG preconditioner
-         call HYPRE_BoomerAMGCreate        (this%hypre_precond,ierr)
-         call HYPRE_BoomerAMGSetPrintLevel (this%hypre_precond,pprintlvl,ierr)
-         call HYPRE_BoomerAMGSetInterpType (this%hypre_precond,amg_interp,ierr)
-         call HYPRE_BoomerAMGSetCoarsenType(this%hypre_precond,amg_coarsen_type,ierr)
-         call HYPRE_BoomerAMGSetStrongThrshld(this%hypre_precond,amg_strong_threshold,ierr)
-         call HYPRE_BoomerAMGSetRelaxType  (this%hypre_precond,amg_relax,ierr)
-         call HYPRE_BoomerAMGSetCycleRelaxType(this%hypre_precond,amg_relax_coarse,3,ierr)
-         call HYPRE_BoomerAMGSetMaxIter    (this%hypre_precond,1,ierr)
-         call HYPRE_BoomerAMGSetTol        (this%hypre_precond,0.0_WP,ierr)
-         call HYPRE_BoomerAMGSetNumSweeps  (this%hypre_precond,1,ierr)
-         ! Set AMG as preconditioner to PCG
-         call HYPRE_ParCSRPCGSetPrecond    (this%hypre_solver,2,this%hypre_precond,ierr)
-      case (pcg_parasail)
-         ! Create a PCG solver
-         call HYPRE_ParCSRPCGCreate        (this%cfg%comm,this%hypre_solver,ierr)
-         call HYPRE_ParCSRPCGSetPrintLevel (this%hypre_solver,sprintlvl,ierr)
-         call HYPRE_ParCSRPCGSetMaxIter    (this%hypre_solver,this%maxit,ierr)
-         call HYPRE_ParCSRPCGSetTol        (this%hypre_solver,this%rcvg ,ierr)
-         call HYPRE_ParCSRPCGSetTwoNorm    (this%hypre_solver,1,ierr)
-         call HYPRE_ParCSRPCGSetLogging    (this%hypre_solver,1,ierr)
-         ! Create a PARASAIL preconditioner
-         call HYPRE_ParaSailsCreate        (this%cfg%comm,this%hypre_precond,ierr)
-         call HYPRE_ParaSailsSetParams     (this%hypre_precond,0.1_WP,1,ierr)
-         call HYPRE_ParaSailsSetFilter     (this%hypre_precond,0.05_WP,ierr)
-         call HYPRE_ParaSailsSetSym        (this%hypre_precond,0,ierr)
-         call HYPRE_ParaSailsSetLogging    (this%hypre_precond,1,ierr)
-         ! Set PARASAIL as preconditioner to PCG
-         call HYPRE_ParCSRPCGSetPrecond    (this%hypre_solver,4,this%hypre_precond,ierr)
-      case (pcg)
-         ! Create a PCG solver
-         call HYPRE_ParCSRPCGCreate        (this%cfg%comm,this%hypre_solver,ierr)
-         call HYPRE_ParCSRPCGSetPrintLevel (this%hypre_solver,sprintlvl,ierr)
-         call HYPRE_ParCSRPCGSetMaxIter    (this%hypre_solver,this%maxit,ierr)
-         call HYPRE_ParCSRPCGSetTol        (this%hypre_solver,this%rcvg ,ierr)
-         call HYPRE_ParCSRPCGSetTwoNorm    (this%hypre_solver,1,ierr)
-         call HYPRE_ParCSRPCGSetLogging    (this%hypre_solver,1,ierr)
-         ! Set Diagonal Scaling as preconditioner to PCG
-         call HYPRE_ParCSRPCGSetPrecond    (this%hypre_solver,1,this%hypre_precond,ierr)
-      case (gmres)
-         ! Create a GMRES solver
-         call HYPRE_ParCSRGMRESCreate      (this%cfg%comm,this%hypre_solver,ierr)
-         call HYPRE_ParCSRGMRESSetPrintLevel(this%hypre_solver,sprintlvl,ierr)
-         call HYPRE_ParCSRGMRESSetKDim     (this%hypre_solver,gmres_kdim,ierr)
-         call HYPRE_ParCSRGMRESSetMaxIter  (this%hypre_solver,this%maxit,ierr)
-         call HYPRE_ParCSRGMRESSetTol      (this%hypre_solver,this%rcvg,ierr)
-         call HYPRE_ParCSRGMRESSetLogging  (this%hypre_solver,1,ierr)
-         ! Set Diagonal Scaling as preconditioner to PCG
-         call HYPRE_ParCSRGMRESSetPrecond  (this%hypre_solver,1,this%hypre_precond,ierr)
-      case (gmres_amg)
-         ! Create a GMRES solver
-         call HYPRE_ParCSRGMRESCreate      (this%cfg%comm,this%hypre_solver,ierr)
-         call HYPRE_ParCSRGMRESSetPrintLevel(this%hypre_solver,sprintlvl,ierr)
-         call HYPRE_ParCSRGMRESSetKDim     (this%hypre_solver,gmres_kdim,ierr)
-         call HYPRE_ParCSRGMRESSetMaxIter  (this%hypre_solver,this%maxit,ierr)
-         call HYPRE_ParCSRGMRESSetTol      (this%hypre_solver,this%rcvg,ierr)
-         call HYPRE_ParCSRGMRESSetLogging  (this%hypre_solver,1,ierr)
-         ! Create an AMG preconditioner
-         call HYPRE_BoomerAMGCreate        (this%hypre_precond,ierr)
-         call HYPRE_BoomerAMGSetPrintLevel (this%hypre_precond,pprintlvl,ierr)
-         call HYPRE_BoomerAMGSetInterpType (this%hypre_precond,amg_interp,ierr)
-         call HYPRE_BoomerAMGSetCoarsenType(this%hypre_precond,amg_coarsen_type,ierr)
-         call HYPRE_BoomerAMGSetStrongThrshld(this%hypre_precond,amg_strong_threshold,ierr)
-         call HYPRE_BoomerAMGSetRelaxType  (this%hypre_precond,amg_relax,ierr)
-         call HYPRE_BoomerAMGSetCycleRelaxType(this%hypre_precond,amg_relax_coarse,3,ierr)
-         call HYPRE_BoomerAMGSetMaxIter    (this%hypre_precond,1,ierr)
-         call HYPRE_BoomerAMGSetTol        (this%hypre_precond,0.0_WP,ierr)
-         call HYPRE_BoomerAMGSetNumSweeps  (this%hypre_precond,1,ierr)
-         ! Set AMG as preconditioner to GMRES
-         call HYPRE_ParCSRGMRESSetPrecond  (this%hypre_solver,2,this%hypre_precond,ierr)
-      case (gmres_pilut)
-         ! Create a GMRES solver
-         call HYPRE_ParCSRGMRESCreate      (this%cfg%comm,this%hypre_solver,ierr)
-         call HYPRE_ParCSRGMRESSetPrintLevel(this%hypre_solver,sprintlvl,ierr)
-         call HYPRE_ParCSRGMRESSetKDim     (this%hypre_solver,gmres_kdim,ierr)
-         call HYPRE_ParCSRGMRESSetMaxIter  (this%hypre_solver,this%maxit,ierr)
-         call HYPRE_ParCSRGMRESSetTol      (this%hypre_solver,this%rcvg,ierr)
-         call HYPRE_ParCSRGMRESSetLogging  (this%hypre_solver,1,ierr)
-         ! Create a PILUT preconditioner
-         call HYPRE_ParCSRPilutCreate      (this%cfg%comm,this%hypre_precond,ierr)
-         ! Set PILUT as preconditioner to GMRES
-         call HYPRE_ParCSRGMRESSetPrecond  (this%hypre_solver,3,this%hypre_precond,ierr)
-      case (bicgstab_amg)
-         ! Create a BiCGstab solver
-         call HYPRE_ParCSRBiCGSTABCreate    (this%cfg%comm,this%hypre_solver,ierr)
-         call HYPRE_ParCSRBiCGSTABSetPrintLev(this%hypre_solver,sprintlvl,ierr)
-         call HYPRE_ParCSRBiCGSTABSetMaxIter(this%hypre_solver,this%maxit,ierr)
-         call HYPRE_ParCSRBiCGSTABSetTol    (this%hypre_solver,this%rcvg ,ierr)
-         call HYPRE_ParCSRBiCGSTABSetLogging(this%hypre_solver,1,ierr)
-         ! Create an AMG preconditioner
-         call HYPRE_BoomerAMGCreate        (this%hypre_precond,ierr)
-         call HYPRE_BoomerAMGSetPrintLevel (this%hypre_precond,pprintlvl,ierr)
-         call HYPRE_BoomerAMGSetInterpType (this%hypre_precond,amg_interp,ierr)
-         call HYPRE_BoomerAMGSetCoarsenType(this%hypre_precond,amg_coarsen_type,ierr)
-         call HYPRE_BoomerAMGSetStrongThrshld(this%hypre_precond,amg_strong_threshold,ierr)
-         call HYPRE_BoomerAMGSetRelaxType  (this%hypre_precond,amg_relax,ierr)
-         call HYPRE_BoomerAMGSetCycleRelaxType(this%hypre_precond,amg_relax_coarse,3,ierr)
-         call HYPRE_BoomerAMGSetMaxIter    (this%hypre_precond,1,ierr)
-         call HYPRE_BoomerAMGSetTol        (this%hypre_precond,0.0_WP,ierr)
-         call HYPRE_BoomerAMGSetNumSweeps  (this%hypre_precond,1,ierr)
-         ! Set AMG as preconditioner to BiCGstab
-         call HYPRE_ParCSRBiCGSTABSetPrecond(this%hypre_solver,2,this%hypre_precond,ierr)
-      case (smg)
-         ! Create a SMG solver
-         call HYPRE_StructSMGCreate        (this%cfg%comm,this%hypre_solver,ierr)
-         call HYPRE_StructSMGSetPrintLevel (this%hypre_solver,sprintlvl,ierr)
-         call HYPRE_StructSMGSetMaxIter    (this%hypre_solver,this%maxit,ierr)
-         call HYPRE_StructSMGSetTol        (this%hypre_solver,this%rcvg ,ierr)
-         call HYPRE_StructSMGSetLogging    (this%hypre_solver,1,ierr)
-      case (pfmg)
-         ! Create a PFMG solver
-         call HYPRE_StructPFMGCreate       (this%cfg%comm,this%hypre_solver,ierr)
-         call HYPRE_StructPFMGSetRelaxType (this%hypre_solver,2,ierr)
-         call HYPRE_StructPFMGSetRAPType   (this%hypre_solver,1,ierr)
-         call HYPRE_StructPFMGSetMaxIter   (this%hypre_solver,this%maxit,ierr)
-         call HYPRE_StructPFMGSetTol       (this%hypre_solver,this%rcvg ,ierr)
-         call HYPRE_StructPFMGSetLogging   (this%hypre_solver,1,ierr)
-         call HYPRE_StructPFMGSetPrintLevel(this%hypre_solver,sprintlvl,ierr)
-      end select
-      
-   end subroutine init_solver
+   end subroutine init
    
    
-   !> Update solver - done everytime the operator changes
-   subroutine update_solver(this)
+   !> Setup solver - done everytime the operator changes
+   subroutine setup(this)
       use messager, only: die
       implicit none
       class(ils), intent(inout) :: this
       integer :: i,j,k,st,count1,count2,ierr,nn
       integer,  dimension(:), allocatable :: row,ncol,mycol,col
       real(WP), dimension(:), allocatable :: myval,val
+      integer,  dimension(:), allocatable :: sizes
       
-      ! First update the matrix
+      ! If the solver has already been setup, destroy it first
+      if (this%setup_done) call this%destroy()
+      
+      ! Create the operator and rhs/sol vectors
       select case (this%method)
-      case (rbgs)
-         ! Nothing to do
       case (bbox,pcg_bbox)
+         
+         ! Storage for matrix/vectors is already available within bbox, so just copy operator
          do k=this%cfg%kmin_,this%cfg%kmax_
             do j=this%cfg%jmin_,this%cfg%jmax_
                do i=this%cfg%imin_,this%cfg%imax_
@@ -417,7 +250,15 @@ contains
                end do
             end do
          end do
-      case (amg,pcg_amg,pcg_parasail,gmres,gmres_pilut,gmres_amg,bicgstab_amg,pcg)  ! Prepare the IJ operator
+         
+      case (amg,pcg_amg,pcg_parasail,gmres,gmres_pilut,gmres_amg,bicgstab_amg,pcg)
+         
+         ! Create an IJ matrix
+         call HYPRE_IJMatrixCreate       (this%cfg%comm,this%ind_min,this%ind_max,this%ind_min,this%ind_max,this%hypre_mat,ierr)
+         call HYPRE_IJMatrixSetObjectType(this%hypre_mat,hypre_ParCSR,ierr)
+         allocate(sizes(this%ind_min:this%ind_max)); sizes=this%nst
+         call HYPRE_IJMatrixSetRowSizes  (this%hypre_mat,sizes,ierr)
+         deallocate(sizes)
          ! Allocate storage for transfer
          allocate(mycol(this%nst))
          allocate(myval(this%nst))
@@ -471,7 +312,24 @@ contains
          ! For debugging - output the operator to a file
          !call HYPRE_IJMatrixPrint(this%hypre_mat,'ij_mat'//char(0),ierr)
          !call die('Matrix was printed out')
-      case (smg,pfmg) ! Prepare the struct operator
+         
+         ! Create an IJ vector for rhs
+         call HYPRE_IJVectorCreate       (this%cfg%comm,this%ind_min,this%ind_max,this%hypre_rhs,ierr)
+         call HYPRE_IJVectorSetObjectType(this%hypre_rhs,hypre_ParCSR,ierr)
+         call HYPRE_IJVectorInitialize   (this%hypre_rhs,ierr)
+         call HYPRE_IJVectorGetObject    (this%hypre_rhs,this%parse_rhs,ierr)
+         
+         ! Create an IJ vector for solution
+         call HYPRE_IJVectorCreate       (this%cfg%comm,this%ind_min,this%ind_max,this%hypre_sol,ierr)
+         call HYPRE_IJVectorSetObjectType(this%hypre_sol,hypre_ParCSR,ierr)
+         call HYPRE_IJVectorInitialize   (this%hypre_sol,ierr)
+         call HYPRE_IJVectorGetObject    (this%hypre_sol,this%parse_sol,ierr)
+         
+      case (smg,pcg_smg,gmres_smg,pfmg,pcg_pfmg,gmres_pfmg)
+         
+         ! Create a structured matrix
+         call HYPRE_StructMatrixCreate    (this%cfg%comm,this%hypre_box,this%hypre_stc,this%hypre_mat,ierr)
+         call HYPRE_StructMatrixInitialize(this%hypre_mat,ierr)
          ! Prepare local storage
          allocate(row(1:this%nst))
          do st=1,this%nst
@@ -479,7 +337,6 @@ contains
          end do
          allocate(val(1:this%nst))
          ! Transfer the operator
-         call HYPRE_StructMatrixInitialize(this%hypre_mat,ierr)
          do k=this%cfg%kmin_,this%cfg%kmax_
             do j=this%cfg%jmin_,this%cfg%jmax_
                do i=this%cfg%imin_,this%cfg%imax_
@@ -495,29 +352,317 @@ contains
          ! For debugging - output the operator to a file
          !call HYPRE_StructMatrixPrint('struct_mat'//char(0),this%hypre_mat,0,ierr)
          !call die('Matrix was printed out')
+         
+         ! Prepare structured rhs vector
+         call HYPRE_StructVectorCreate    (this%cfg%comm,this%hypre_box,this%hypre_rhs,ierr)
+         call HYPRE_StructVectorInitialize(this%hypre_rhs,ierr)
+         
+         ! Prepare structured solution vector
+         call HYPRE_StructVectorCreate    (this%cfg%comm,this%hypre_box,this%hypre_sol,ierr)
+         call HYPRE_StructVectorInitialize(this%hypre_sol,ierr)
+         
       end select
       
-      ! Setup the solver
+      
+      ! Initialize and setup the actual solver
       select case (this%method)
-      case (rbgs)
-         ! Nothing to do
       case (bbox,pcg_bbox)
+         
+         ! The bbox solver was created already
          call this%bbox%update()
+         
       case (amg)
-         call HYPRE_BoomerAMGSetup  (this%hypre_solver,this%parse_mat,this%parse_rhs,this%parse_sol,ierr)
-      case (pcg,pcg_amg,pcg_parasail)
-         call HYPRE_ParCSRPCGSetup  (this%hypre_solver,this%parse_mat,this%parse_rhs,this%parse_sol,ierr)
-      case (gmres,gmres_pilut,gmres_amg)
-         call HYPRE_ParCSRGMRESSetup(this%hypre_solver,this%parse_mat,this%parse_rhs,this%parse_sol,ierr)
+         
+         ! Create AMG solver
+         call HYPRE_BoomerAMGCreate        (this%hypre_solver,ierr)
+         call HYPRE_BoomerAMGSetPrintLevel (this%hypre_solver,sprintlvl,ierr)
+         call HYPRE_BoomerAMGSetInterpType (this%hypre_solver,amg_interp,ierr)
+         call HYPRE_BoomerAMGSetCoarsenType(this%hypre_solver,amg_coarsen_type,ierr)
+         call HYPRE_BoomerAMGSetStrongThrshld(this%hypre_solver,amg_strong_threshold,ierr)
+         call HYPRE_BoomerAMGSetRelaxType  (this%hypre_solver,amg_relax,ierr)
+         call HYPRE_BoomerAMGSetCycleRelaxType(this%hypre_solver,amg_relax_coarse,3,ierr)
+         !if (this%maxlevel.gt.0) call HYPRE_BoomerAMGSetMaxLevels(this%hypre_solver,this%maxlevel,ierr)
+         call HYPRE_BoomerAMGSetMaxIter    (this%hypre_solver,this%maxit,ierr)
+         call HYPRE_BoomerAMGSetTol        (this%hypre_solver,this%rcvg ,ierr)
+         
+         ! Setup AMG solver
+         call HYPRE_BoomerAMGSetup         (this%hypre_solver,this%parse_mat,this%parse_rhs,this%parse_sol,ierr)
+         
+      case (pcg_amg)
+         
+         ! Create PCG solver
+         call HYPRE_ParCSRPCGCreate        (this%cfg%comm,this%hypre_solver,ierr)
+         call HYPRE_ParCSRPCGSetPrintLevel (this%hypre_solver,sprintlvl,ierr)
+         call HYPRE_ParCSRPCGSetMaxIter    (this%hypre_solver,this%maxit,ierr)
+         call HYPRE_ParCSRPCGSetTol        (this%hypre_solver,this%rcvg ,ierr)
+         call HYPRE_ParCSRPCGSetTwoNorm    (this%hypre_solver,1,ierr)
+         call HYPRE_ParCSRPCGSetLogging    (this%hypre_solver,1,ierr)
+         
+         ! Create AMG preconditioner
+         call HYPRE_BoomerAMGCreate        (this%hypre_precond,ierr)
+         call HYPRE_BoomerAMGSetPrintLevel (this%hypre_precond,pprintlvl,ierr)
+         call HYPRE_BoomerAMGSetInterpType (this%hypre_precond,amg_interp,ierr)
+         call HYPRE_BoomerAMGSetCoarsenType(this%hypre_precond,amg_coarsen_type,ierr)
+         call HYPRE_BoomerAMGSetStrongThrshld(this%hypre_precond,amg_strong_threshold,ierr)
+         call HYPRE_BoomerAMGSetRelaxType  (this%hypre_precond,amg_relax,ierr)
+         call HYPRE_BoomerAMGSetCycleRelaxType(this%hypre_precond,amg_relax_coarse,3,ierr)
+         !if (this%maxlevel.gt.0) call HYPRE_BoomerAMGSetMaxLevels(this%hypre_precond,this%maxlevel,ierr)
+         call HYPRE_BoomerAMGSetMaxIter    (this%hypre_precond,1,ierr)
+         call HYPRE_BoomerAMGSetTol        (this%hypre_precond,0.0_WP,ierr)
+         call HYPRE_BoomerAMGSetNumSweeps  (this%hypre_precond,1,ierr)
+         
+         ! Set AMG as preconditioner to PCG
+         call HYPRE_ParCSRPCGSetPrecond    (this%hypre_solver,2,this%hypre_precond,ierr)
+         
+         ! Setup PCG solver
+         call HYPRE_ParCSRPCGSetup         (this%hypre_solver,this%parse_mat,this%parse_rhs,this%parse_sol,ierr)
+         
+      case (pcg_parasail)
+         
+         ! Create PCG solver
+         call HYPRE_ParCSRPCGCreate        (this%cfg%comm,this%hypre_solver,ierr)
+         call HYPRE_ParCSRPCGSetPrintLevel (this%hypre_solver,sprintlvl,ierr)
+         call HYPRE_ParCSRPCGSetMaxIter    (this%hypre_solver,this%maxit,ierr)
+         call HYPRE_ParCSRPCGSetTol        (this%hypre_solver,this%rcvg ,ierr)
+         call HYPRE_ParCSRPCGSetTwoNorm    (this%hypre_solver,1,ierr)
+         call HYPRE_ParCSRPCGSetLogging    (this%hypre_solver,1,ierr)
+         
+         ! Create PARASAIL preconditioner
+         call HYPRE_ParaSailsCreate        (this%cfg%comm,this%hypre_precond,ierr)
+         call HYPRE_ParaSailsSetParams     (this%hypre_precond,0.1_WP,1,ierr)
+         call HYPRE_ParaSailsSetFilter     (this%hypre_precond,0.05_WP,ierr)
+         call HYPRE_ParaSailsSetSym        (this%hypre_precond,0,ierr)
+         call HYPRE_ParaSailsSetLogging    (this%hypre_precond,1,ierr)
+         
+         ! Set PARASAIL as preconditioner to PCG
+         call HYPRE_ParCSRPCGSetPrecond    (this%hypre_solver,4,this%hypre_precond,ierr)
+         
+         ! Setup PCG solver
+         call HYPRE_ParCSRPCGSetup         (this%hypre_solver,this%parse_mat,this%parse_rhs,this%parse_sol,ierr)
+         
+      case (pcg)
+         
+         ! Create PCG solver
+         call HYPRE_ParCSRPCGCreate        (this%cfg%comm,this%hypre_solver,ierr)
+         call HYPRE_ParCSRPCGSetPrintLevel (this%hypre_solver,sprintlvl,ierr)
+         call HYPRE_ParCSRPCGSetMaxIter    (this%hypre_solver,this%maxit,ierr)
+         call HYPRE_ParCSRPCGSetTol        (this%hypre_solver,this%rcvg ,ierr)
+         call HYPRE_ParCSRPCGSetTwoNorm    (this%hypre_solver,1,ierr)
+         call HYPRE_ParCSRPCGSetLogging    (this%hypre_solver,1,ierr)
+         
+         ! Set Diagonal Scaling as preconditioner to PCG
+         call HYPRE_ParCSRPCGSetPrecond    (this%hypre_solver,1,this%hypre_precond,ierr)
+         
+         ! Setup PCG solver
+         call HYPRE_ParCSRPCGSetup         (this%hypre_solver,this%parse_mat,this%parse_rhs,this%parse_sol,ierr)
+         
+      case (gmres)
+         
+         ! Create GMRES solver
+         call HYPRE_ParCSRGMRESCreate      (this%cfg%comm,this%hypre_solver,ierr)
+         call HYPRE_ParCSRGMRESSetPrintLevel(this%hypre_solver,sprintlvl,ierr)
+         call HYPRE_ParCSRGMRESSetKDim     (this%hypre_solver,gmres_kdim,ierr)
+         call HYPRE_ParCSRGMRESSetMaxIter  (this%hypre_solver,this%maxit,ierr)
+         call HYPRE_ParCSRGMRESSetTol      (this%hypre_solver,this%rcvg,ierr)
+         call HYPRE_ParCSRGMRESSetLogging  (this%hypre_solver,1,ierr)
+         
+         ! Set Diagonal Scaling as preconditioner to GMRES
+         call HYPRE_ParCSRGMRESSetPrecond  (this%hypre_solver,1,this%hypre_precond,ierr)
+         
+         ! Setup GMRES solver
+         call HYPRE_ParCSRGMRESSetup       (this%hypre_solver,this%parse_mat,this%parse_rhs,this%parse_sol,ierr)
+         
+      case (gmres_amg)
+         
+         ! Create GMRES solver
+         call HYPRE_ParCSRGMRESCreate      (this%cfg%comm,this%hypre_solver,ierr)
+         call HYPRE_ParCSRGMRESSetPrintLevel(this%hypre_solver,sprintlvl,ierr)
+         call HYPRE_ParCSRGMRESSetKDim     (this%hypre_solver,gmres_kdim,ierr)
+         call HYPRE_ParCSRGMRESSetMaxIter  (this%hypre_solver,this%maxit,ierr)
+         call HYPRE_ParCSRGMRESSetTol      (this%hypre_solver,this%rcvg,ierr)
+         call HYPRE_ParCSRGMRESSetLogging  (this%hypre_solver,1,ierr)
+         
+         ! Create AMG preconditioner
+         call HYPRE_BoomerAMGCreate        (this%hypre_precond,ierr)
+         call HYPRE_BoomerAMGSetPrintLevel (this%hypre_precond,pprintlvl,ierr)
+         call HYPRE_BoomerAMGSetInterpType (this%hypre_precond,amg_interp,ierr)
+         call HYPRE_BoomerAMGSetCoarsenType(this%hypre_precond,amg_coarsen_type,ierr)
+         call HYPRE_BoomerAMGSetStrongThrshld(this%hypre_precond,amg_strong_threshold,ierr)
+         call HYPRE_BoomerAMGSetRelaxType  (this%hypre_precond,amg_relax,ierr)
+         call HYPRE_BoomerAMGSetCycleRelaxType(this%hypre_precond,amg_relax_coarse,3,ierr)
+         !if (this%maxlevel.gt.0) call HYPRE_BoomerAMGSetMaxLevels(this%hypre_precond,this%maxlevel,ierr)
+         call HYPRE_BoomerAMGSetMaxIter    (this%hypre_precond,1,ierr)
+         call HYPRE_BoomerAMGSetTol        (this%hypre_precond,0.0_WP,ierr)
+         call HYPRE_BoomerAMGSetNumSweeps  (this%hypre_precond,1,ierr)
+         
+         ! Set AMG as preconditioner to GMRES
+         call HYPRE_ParCSRGMRESSetPrecond  (this%hypre_solver,2,this%hypre_precond,ierr)
+         
+         ! Setup GMRES solver
+         call HYPRE_ParCSRGMRESSetup       (this%hypre_solver,this%parse_mat,this%parse_rhs,this%parse_sol,ierr)
+         
+         
+      case (gmres_pilut)
+         
+         ! Create GMRES solver
+         call HYPRE_ParCSRGMRESCreate      (this%cfg%comm,this%hypre_solver,ierr)
+         call HYPRE_ParCSRGMRESSetPrintLevel(this%hypre_solver,sprintlvl,ierr)
+         call HYPRE_ParCSRGMRESSetKDim     (this%hypre_solver,gmres_kdim,ierr)
+         call HYPRE_ParCSRGMRESSetMaxIter  (this%hypre_solver,this%maxit,ierr)
+         call HYPRE_ParCSRGMRESSetTol      (this%hypre_solver,this%rcvg,ierr)
+         call HYPRE_ParCSRGMRESSetLogging  (this%hypre_solver,1,ierr)
+         
+         ! Create PILUT preconditioner
+         call HYPRE_ParCSRPilutCreate      (this%cfg%comm,this%hypre_precond,ierr)
+         
+         ! Set PILUT as preconditioner to GMRES
+         call HYPRE_ParCSRGMRESSetPrecond  (this%hypre_solver,3,this%hypre_precond,ierr)
+         
+         ! Setup GMRES solver
+         call HYPRE_ParCSRGMRESSetup       (this%hypre_solver,this%parse_mat,this%parse_rhs,this%parse_sol,ierr)
+         
       case (bicgstab_amg)
-         call HYPRE_ParCSRBiCGSTABSetup(this%hypre_solver,this%parse_mat,this%parse_rhs,this%parse_sol,ierr)
+         
+         ! Create BiCGstab solver
+         call HYPRE_ParCSRBiCGSTABCreate    (this%cfg%comm,this%hypre_solver,ierr)
+         call HYPRE_ParCSRBiCGSTABSetPrintLev(this%hypre_solver,sprintlvl,ierr)
+         call HYPRE_ParCSRBiCGSTABSetMaxIter(this%hypre_solver,this%maxit,ierr)
+         call HYPRE_ParCSRBiCGSTABSetTol    (this%hypre_solver,this%rcvg ,ierr)
+         call HYPRE_ParCSRBiCGSTABSetLogging(this%hypre_solver,1,ierr)
+         
+         ! Create AMG preconditioner
+         call HYPRE_BoomerAMGCreate        (this%hypre_precond,ierr)
+         call HYPRE_BoomerAMGSetPrintLevel (this%hypre_precond,pprintlvl,ierr)
+         call HYPRE_BoomerAMGSetInterpType (this%hypre_precond,amg_interp,ierr)
+         call HYPRE_BoomerAMGSetCoarsenType(this%hypre_precond,amg_coarsen_type,ierr)
+         call HYPRE_BoomerAMGSetStrongThrshld(this%hypre_precond,amg_strong_threshold,ierr)
+         call HYPRE_BoomerAMGSetRelaxType  (this%hypre_precond,amg_relax,ierr)
+         call HYPRE_BoomerAMGSetCycleRelaxType(this%hypre_precond,amg_relax_coarse,3,ierr)
+         !if (this%maxlevel.gt.0) call HYPRE_BoomerAMGSetMaxLevels(this%hypre_precond,this%maxlevel,ierr)
+         call HYPRE_BoomerAMGSetMaxIter    (this%hypre_precond,1,ierr)
+         call HYPRE_BoomerAMGSetTol        (this%hypre_precond,0.0_WP,ierr)
+         call HYPRE_BoomerAMGSetNumSweeps  (this%hypre_precond,1,ierr)
+         
+         ! Set AMG as preconditioner to BiCGstab
+         call HYPRE_ParCSRBiCGSTABSetPrecond(this%hypre_solver,2,this%hypre_precond,ierr)
+         
+         ! Setup BiCGstab solver
+         call HYPRE_ParCSRBiCGSTABSetup    (this%hypre_solver,this%parse_mat,this%parse_rhs,this%parse_sol,ierr)
+         
       case (smg)
-         call HYPRE_StructSMGSetup  (this%hypre_solver,this%hypre_mat,this%hypre_rhs,this%hypre_sol,ierr)
+         
+         ! Create SMG solver
+         call HYPRE_StructSMGCreate        (this%cfg%comm,this%hypre_solver,ierr)
+         call HYPRE_StructSMGSetPrintLevel (this%hypre_solver,sprintlvl,ierr)
+         call HYPRE_StructSMGSetMaxIter    (this%hypre_solver,this%maxit,ierr)
+         call HYPRE_StructSMGSetTol        (this%hypre_solver,this%rcvg ,ierr)
+         call HYPRE_StructSMGSetLogging    (this%hypre_solver,1,ierr)
+         
+         ! Setup SMG solver
+         call HYPRE_StructSMGSetup         (this%hypre_solver,this%hypre_mat,this%hypre_rhs,this%hypre_sol,ierr)
+         
+      case (pcg_smg)
+         
+         ! Create SMG preconditioner
+         call HYPRE_StructSMGCreate      (this%cfg%comm,this%hypre_precond,ierr)
+         call HYPRE_StructSMGSetMaxIter  (this%hypre_precond,1,ierr)
+         call HYPRE_StructSMGSetTol      (this%hypre_precond,0.0_WP,ierr)
+         
+         ! Create PCG solver
+         call HYPRE_StructPCGCreate       (this%cfg%comm,this%hypre_solver,ierr)
+         call HYPRE_StructPCGSetMaxIter   (this%hypre_solver,this%maxit,ierr)
+         call HYPRE_StructPCGSetTol       (this%hypre_solver,this%rcvg,ierr)
+         call HYPRE_StructPCGSetLogging   (this%hypre_solver,1,ierr)
+         
+         ! Set SMG as preconditioner to PCG
+         call HYPRE_StructPCGSetPrecond   (this%hypre_solver,0,this%hypre_precond,ierr)
+         
+         ! Setup PCG solver
+         call HYPRE_StructPCGSetup        (this%hypre_solver,this%hypre_mat,this%hypre_rhs,this%hypre_sol,ierr)
+         
+      case (gmres_smg)
+         
+         ! Create SMG preconditioner
+         call HYPRE_StructSMGCreate      (this%cfg%comm,this%hypre_precond,ierr)
+         call HYPRE_StructSMGSetMaxIter  (this%hypre_precond,1,ierr)
+         call HYPRE_StructSMGSetTol      (this%hypre_precond,0.0_WP,ierr)
+         
+         ! Create GMRES solver
+         call HYPRE_StructGMRESCreate     (this%cfg%comm,this%hypre_solver,ierr)
+         call HYPRE_StructGMRESSetMaxIter (this%hypre_solver,this%maxit,ierr)
+         call HYPRE_StructGMRESSetTol     (this%hypre_solver,this%rcvg,ierr)
+         call HYPRE_StructGMRESSetLogging (this%hypre_solver,1,ierr)
+         
+         ! Set SMG as preconditioner to GMRES
+         call HYPRE_StructGMRESSetPrecond (this%hypre_solver,0,this%hypre_precond,ierr)
+         
+         ! Setup GMRES solver
+         call HYPRE_StructGMRESSetup      (this%hypre_solver,this%hypre_mat,this%hypre_rhs,this%hypre_sol,ierr)
+         
       case (pfmg)
-         call HYPRE_StructPFMGSetup (this%hypre_solver,this%hypre_mat,this%hypre_rhs,this%hypre_sol,ierr)
+         
+         ! Create PFMG solver
+         call HYPRE_StructPFMGCreate       (this%cfg%comm,this%hypre_solver,ierr)
+         call HYPRE_StructPFMGSetRelaxType (this%hypre_solver,2,ierr)
+         call HYPRE_StructPFMGSetRAPType   (this%hypre_solver,1,ierr)
+         if (this%maxlevel.gt.0) call HYPRE_StructPFMGSetMaxLevels(this%hypre_solver,this%maxlevel,ierr)
+         call HYPRE_StructPFMGSetMaxIter   (this%hypre_solver,this%maxit,ierr)
+         call HYPRE_StructPFMGSetTol       (this%hypre_solver,this%rcvg ,ierr)
+         call HYPRE_StructPFMGSetLogging   (this%hypre_solver,1,ierr)
+         call HYPRE_StructPFMGSetPrintLevel(this%hypre_solver,sprintlvl,ierr)
+         
+         ! Setup PFMG solver
+         call HYPRE_StructPFMGSetup        (this%hypre_solver,this%hypre_mat,this%hypre_rhs,this%hypre_sol,ierr)
+      
+      case (pcg_pfmg)
+         
+         ! Create PFMG preconditioner
+         call HYPRE_StructPFMGCreate      (this%cfg%comm,this%hypre_precond,ierr)
+         call HYPRE_StructPFMGSetMaxIter  (this%hypre_precond,1,ierr)
+         call HYPRE_StructPFMGSetTol      (this%hypre_precond,0.0_WP,ierr)
+         call HYPRE_StructPFMGSetRelaxType(this%hypre_precond,2,ierr)
+         if (this%maxlevel.gt.0) call HYPRE_StructPFMGSetMaxLevels(this%hypre_precond,this%maxlevel,ierr)
+         
+         ! Create PCG solver
+         call HYPRE_StructPCGCreate       (this%cfg%comm,this%hypre_solver,ierr)
+         call HYPRE_StructPCGSetMaxIter   (this%hypre_solver,this%maxit,ierr)
+         call HYPRE_StructPCGSetTol       (this%hypre_solver,this%rcvg,ierr)
+         call HYPRE_StructPCGSetLogging   (this%hypre_solver,1,ierr)
+         
+         ! Set PFMG as preconditioner to PCG
+         call HYPRE_StructPCGSetPrecond   (this%hypre_solver,1,this%hypre_precond,ierr)
+         
+         ! Setup PCG solver
+         call HYPRE_StructPCGSetup        (this%hypre_solver,this%hypre_mat,this%hypre_rhs,this%hypre_sol,ierr)
+         
+      case (gmres_pfmg)
+         
+         ! Create PFMG preconditioner
+         call HYPRE_StructPFMGCreate      (this%cfg%comm,this%hypre_precond,ierr)
+         call HYPRE_StructPFMGSetMaxIter  (this%hypre_precond,1,ierr)
+         call HYPRE_StructPFMGSetTol      (this%hypre_precond,0.0_WP,ierr)
+         call HYPRE_StructPFMGSetRelaxType(this%hypre_precond,2,ierr)
+         if (this%maxlevel.gt.0) call HYPRE_StructPFMGSetMaxLevels(this%hypre_precond,this%maxlevel,ierr)
+         
+         ! Create GMRES solver
+         call HYPRE_StructGMRESCreate      (this%cfg%comm,this%hypre_solver,ierr)
+         call HYPRE_StructGMRESSetMaxIter  (this%hypre_solver,this%maxit,ierr)
+         call HYPRE_StructGMRESSetTol      (this%hypre_solver,this%rcvg,ierr)
+         call HYPRE_StructGMRESSetLogging  (this%hypre_solver,1,ierr)
+         
+         ! Set PFMG as preconditioner to GMRES
+         call HYPRE_StructGMRESSetPrecond  (this%hypre_solver,1,this%hypre_precond,ierr)
+         
+         ! Setup GMRES solver
+         call HYPRE_StructGMRESSetup       (this%hypre_solver,this%hypre_mat,this%hypre_rhs,this%hypre_sol,ierr)
+         
+         
       end select
       
-   end subroutine update_solver
+      ! Set setup-flag to true
+      this%setup_done=.true.
+      
+   end subroutine setup
    
    
    !> Solve the linear system iteratively
@@ -526,18 +671,20 @@ contains
       use param,    only: verbose
       implicit none
       class(ils), intent(inout) :: this
-      integer :: i,j,k,count,ierr
+      integer :: i,j,k,count,ierr,maxlvl
       integer,  dimension(:), allocatable :: ind
       real(WP), dimension(:), allocatable :: rhs,sol
+      
+      ! Check that setup was done
+      if (.not.this%setup_done) call die('[ils solve] Solver has not been setup.')
       
       ! Set solver it and err to standard values
       this%it=-1; this%aerr=huge(1.0_WP); this%rerr=huge(1.0_WP)
       
       ! Transfer the RHS and IG to the appropriate environment
       select case (this%method)
-      case (rbgs)
-         ! Nothing to do
       case (bbox,pcg_bbox)
+         ! Transfer data to bbox
          do k=this%cfg%kmin_,this%cfg%kmax_
             do j=this%cfg%jmin_,this%cfg%jmax_
                do i=this%cfg%imin_,this%cfg%imax_
@@ -546,7 +693,8 @@ contains
                end do
             end do
          end do
-      case (amg,pcg_amg,pcg_parasail,gmres,gmres_pilut,gmres_amg,bicgstab_amg,pcg)  ! Prepare the IJ vectors
+      case (amg,pcg_amg,pcg_parasail,gmres,gmres_pilut,gmres_amg,bicgstab_amg,pcg)
+         ! Transfer data to the IJ vectors
          allocate(rhs(this%ncell_))
          allocate(sol(this%ncell_))
          allocate(ind(this%ncell_))
@@ -563,15 +711,10 @@ contains
                end do
             end do
          end do
-         call HYPRE_IJVectorInitialize(this%hypre_rhs,ierr)
-         call HYPRE_IJVectorSetValues (this%hypre_rhs,this%ncell_,ind,rhs,ierr)
-         call HYPRE_IJVectorAssemble  (this%hypre_rhs,ierr)
-         call HYPRE_IJVectorInitialize(this%hypre_sol,ierr)
-         call HYPRE_IJVectorSetValues (this%hypre_sol,this%ncell_,ind,sol,ierr)
-         call HYPRE_IJVectorAssemble  (this%hypre_sol,ierr)
-      case (smg,pfmg) ! Prepare the struct vectors
-         call HYPRE_StructVectorInitialize(this%hypre_rhs,ierr)
-         call HYPRE_StructVectorInitialize(this%hypre_sol,ierr)
+         call HYPRE_IJVectorSetValues(this%hypre_rhs,this%ncell_,ind,rhs,ierr)
+         call HYPRE_IJVectorSetValues(this%hypre_sol,this%ncell_,ind,sol,ierr)
+      case (smg,pcg_smg,gmres_smg,pfmg,pcg_pfmg,gmres_pfmg)
+         ! Transfer data to the structured vectors
          do k=this%cfg%kmin_,this%cfg%kmax_
             do j=this%cfg%jmin_,this%cfg%jmax_
                do i=this%cfg%imin_,this%cfg%imax_
@@ -585,14 +728,10 @@ contains
                end do
             end do
          end do
-         call HYPRE_StructVectorAssemble(this%hypre_rhs,ierr)
-         call HYPRE_StructVectorAssemble(this%hypre_sol,ierr)
       end select
       
       ! Call the appropriate solver
       select case (this%method)
-      case (rbgs)
-         call this%solve_rbgs()
       case (bbox,pcg_bbox)
          call this%bbox%solve()
          this%it  =this%bbox%my_ite
@@ -621,13 +760,20 @@ contains
          call HYPRE_StructPFMGSolve          (this%hypre_solver,this%hypre_mat,this%hypre_rhs,this%hypre_sol,ierr)
          call HYPRE_StructPFMGGetNumIteration(this%hypre_solver,this%it  ,ierr)
          call HYPRE_StructPFMGGetFinalRelativ(this%hypre_solver,this%rerr,ierr)
+      case (pcg_smg,pcg_pfmg)
+         call HYPRE_StructPCGSolve           (this%hypre_solver,this%hypre_mat,this%hypre_rhs,this%hypre_sol,ierr)
+         call HYPRE_StructPCGGetNumIterations(this%hypre_solver,this%it  ,ierr)
+         call HYPRE_StructPCGGetFinalRelative(this%hypre_solver,this%rerr,ierr)
+      case (gmres_smg,gmres_pfmg)
+         call HYPRE_StructGMRESSolve         (this%hypre_solver,this%hypre_mat,this%hypre_rhs,this%hypre_sol,ierr)
+         call HYPRE_StructGMRESGetNumIteratio(this%hypre_solver,this%it  ,ierr)
+         call HYPRE_StructGMRESGetFinalRelati(this%hypre_solver,this%rerr,ierr)
       end select
       
-      ! Transfer the SOL out of the appropriate environment and deallocate storage
+      ! Transfer the solution out of the appropriate environment and deallocate storage
       select case (this%method)
-      case (rbgs)
-         ! Nothing to do
       case (bbox,pcg_bbox)
+         ! Retreive solution from bbox
          do k=this%cfg%kmin_,this%cfg%kmax_
             do j=this%cfg%jmin_,this%cfg%jmax_
                do i=this%cfg%imin_,this%cfg%imax_
@@ -635,7 +781,8 @@ contains
                end do
             end do
          end do
-      case (amg,pcg_amg,pcg_parasail,gmres,gmres_pilut,gmres_amg,bicgstab_amg,pcg)  ! Retrieve the IJ vector
+      case (amg,pcg_amg,pcg_parasail,gmres,gmres_pilut,gmres_amg,bicgstab_amg,pcg)
+         ! Retrieve solution from IJ vector
          call HYPRE_IJVectorGetValues(this%hypre_sol,this%ncell_,ind,sol,ierr)
          count=0
          do k=this%cfg%kmin_,this%cfg%kmax_
@@ -649,7 +796,8 @@ contains
             end do
          end do
          deallocate(rhs,sol,ind)
-      case (smg,pfmg) ! Retrieve the struct vector
+      case (smg,pcg_smg,gmres_smg,pfmg,pcg_pfmg,gmres_pfmg)
+         ! Retrieve solution from structured vector
          do k=this%cfg%kmin_,this%cfg%kmax_
             do j=this%cfg%jmin_,this%cfg%jmax_
                do i=this%cfg%imin_,this%cfg%imax_
@@ -669,49 +817,103 @@ contains
    end subroutine solve
    
    
-   !> Solve the linear system using RBGS
-   subroutine solve_rbgs(this)
+   !> Destroy solver - done everytime the operator changes
+   subroutine destroy(this)
+      use messager, only: die
       implicit none
       class(ils), intent(inout) :: this
-      integer :: i,j,k,col,st
-      integer :: colmin,colmax,coldir
-      real(WP) :: val
-      ! Reset iteration and error
-      this%it=0
-      this%rerr=huge(1.0_WP)
-      this%aerr=huge(1.0_WP)
-      ! Loop until done
-      do while (this%it.lt.this%maxit.and.this%rerr.ge.this%rcvg.and.this%aerr.ge.this%acvg)
-         ! Increment counter
-         this%it=this%it+1
-         ! Alternate sweep direction
-         if (mod(this%it,2).eq.0) then
-            colmin=8; colmax=1; coldir=-1 !< Negative sweep
-         else
-            colmin=1; colmax=8; coldir=+1 !< Positive sweep
-         end if
-         ! Loop over colors
-         do col=colmin,colmax,coldir
-            ! Loop over domain
-            do k=this%cfg%kmin_+mod((col-1)/4,2),this%cfg%kmax_,2
-               do j=this%cfg%jmin_+mod((col-1)/2,2),this%cfg%jmax_,2
-                  do i=this%cfg%imin_+mod((col-1)/1,2),this%cfg%imax_,2
-                     ! Gauss-Seidel step
-                     if (abs(this%opr(1,i,j,k)).gt.0.0_WP) then
-                        val=this%rhs(i,j,k)
-                        do st=2,this%nst
-                           val=val-this%opr(st,i,j,k)*this%sol(i+this%stc(st,1),j+this%stc(st,2),k+this%stc(st,3))
-                        end do
-                        this%sol(i,j,k)=val/this%opr(1,i,j,k)
-                     end if
-                  end do
-               end do
-            end do
-            ! Communicate solution
-            call this%cfg%sync(this%sol)
-         end do
-      end do
-   end subroutine solve_rbgs
+      integer :: ierr
+      
+      ! Destroy solver, operator, and rhs/sol vectors
+      select case (this%method)
+      case (bbox,pcg_bbox)
+         ! Do nothing here since we don't have a bbox destructor yet
+      case (amg)
+         call HYPRE_BoomerAMGDestroy   (this%hypre_solver,ierr)
+         call HYPRE_ParCSRMatrixDestroy(this%parse_mat,ierr)
+         call HYPRE_IJVectorDestroy    (this%hypre_rhs,ierr)
+         call HYPRE_IJVectorDestroy    (this%hypre_sol,ierr)
+      case (pcg_amg)
+         call HYPRE_BoomerAMGDestroy   (this%hypre_precond,ierr)
+         call HYPRE_ParCSRPCGDestroy   (this%hypre_solver,ierr)
+         call HYPRE_ParCSRMatrixDestroy(this%parse_mat,ierr)
+         !call HYPRE_IJMatrixDestroy    (this%hypre_mat,ierr)
+         call HYPRE_IJVectorDestroy    (this%hypre_rhs,ierr)
+         call HYPRE_IJVectorDestroy    (this%hypre_sol,ierr)
+      case (pcg_parasail)
+         call HYPRE_ParaSailsDestroy   (this%hypre_precond,ierr)
+         call HYPRE_ParCSRPCGDestroy   (this%hypre_solver,ierr)
+         call HYPRE_ParCSRMatrixDestroy(this%parse_mat,ierr)
+         call HYPRE_IJVectorDestroy    (this%hypre_rhs,ierr)
+         call HYPRE_IJVectorDestroy    (this%hypre_sol,ierr)
+      case (pcg)
+         call HYPRE_ParCSRPCGDestroy   (this%hypre_solver,ierr)
+         call HYPRE_ParCSRMatrixDestroy(this%parse_mat,ierr)
+         call HYPRE_IJVectorDestroy    (this%hypre_rhs,ierr)
+         call HYPRE_IJVectorDestroy    (this%hypre_sol,ierr)
+      case (gmres)
+         call HYPRE_ParCSRGMRESDestroy (this%hypre_solver,ierr)
+         call HYPRE_ParCSRMatrixDestroy(this%parse_mat,ierr)
+         call HYPRE_IJVectorDestroy    (this%hypre_rhs,ierr)
+         call HYPRE_IJVectorDestroy    (this%hypre_sol,ierr)
+      case (gmres_amg)
+         call HYPRE_BoomerAMGDestroy   (this%hypre_precond,ierr)
+         call HYPRE_ParCSRGMRESDestroy (this%hypre_solver,ierr)
+         call HYPRE_ParCSRMatrixDestroy(this%parse_mat,ierr)
+         call HYPRE_IJVectorDestroy    (this%hypre_rhs,ierr)
+         call HYPRE_IJVectorDestroy    (this%hypre_sol,ierr)
+      case (gmres_pilut)
+         call HYPRE_ParCSRPilutDestroy (this%hypre_precond,ierr)
+         call HYPRE_ParCSRGMRESDestroy (this%hypre_solver,ierr)
+         call HYPRE_ParCSRMatrixDestroy(this%parse_mat,ierr)
+         call HYPRE_IJVectorDestroy    (this%hypre_rhs,ierr)
+         call HYPRE_IJVectorDestroy    (this%hypre_sol,ierr)
+      case (bicgstab_amg)
+         call HYPRE_BoomerAMGDestroy     (this%hypre_precond,ierr)
+         call HYPRE_ParCSRBiCGSTABDestroy(this%hypre_solver,ierr)
+         call HYPRE_ParCSRMatrixDestroy(this%parse_mat,ierr)
+         call HYPRE_IJVectorDestroy    (this%hypre_rhs,ierr)
+         call HYPRE_IJVectorDestroy    (this%hypre_sol,ierr)
+      case (smg)
+         call HYPRE_StructSMGDestroy   (this%hypre_solver,ierr)
+         call HYPRE_StructMatrixDestroy(this%hypre_mat,ierr)
+         call HYPRE_StructVectorDestroy(this%hypre_rhs,ierr)
+         call HYPRE_StructVectorDestroy(this%hypre_sol,ierr)
+      case (pcg_smg)
+         call HYPRE_StructSMGDestroy   (this%hypre_precond,ierr)
+         call HYPRE_StructPCGDestroy   (this%hypre_solver,ierr)
+         call HYPRE_StructMatrixDestroy(this%hypre_mat,ierr)
+         call HYPRE_StructVectorDestroy(this%hypre_rhs,ierr)
+         call HYPRE_StructVectorDestroy(this%hypre_sol,ierr)
+      case (gmres_smg)
+         call HYPRE_StructSMGDestroy   (this%hypre_precond,ierr)
+         call HYPRE_StructGMRESDestroy (this%hypre_solver,ierr)
+         call HYPRE_StructMatrixDestroy(this%hypre_mat,ierr)
+         call HYPRE_StructVectorDestroy(this%hypre_rhs,ierr)
+         call HYPRE_StructVectorDestroy(this%hypre_sol,ierr)
+      case (pfmg)
+         call HYPRE_StructPFMGDestroy  (this%hypre_solver,ierr)
+         call HYPRE_StructMatrixDestroy(this%hypre_mat,ierr)
+         call HYPRE_StructVectorDestroy(this%hypre_rhs,ierr)
+         call HYPRE_StructVectorDestroy(this%hypre_sol,ierr)
+      case (pcg_pfmg)
+         call HYPRE_StructPFMGDestroy  (this%hypre_precond,ierr)
+         call HYPRE_StructPCGDestroy   (this%hypre_solver,ierr)
+         call HYPRE_StructMatrixDestroy(this%hypre_mat,ierr)
+         call HYPRE_StructVectorDestroy(this%hypre_rhs,ierr)
+         call HYPRE_StructVectorDestroy(this%hypre_sol,ierr)
+      case (gmres_pfmg)
+         call HYPRE_StructPFMGDestroy  (this%hypre_precond,ierr)
+         call HYPRE_StructGMRESDestroy (this%hypre_solver,ierr)
+         call HYPRE_StructMatrixDestroy(this%hypre_mat,ierr)
+         call HYPRE_StructVectorDestroy(this%hypre_rhs,ierr)
+         call HYPRE_StructVectorDestroy(this%hypre_sol,ierr)
+      end select
+      
+      ! Set setup-flag to false
+      this%setup_done=.false.
+      
+   end subroutine destroy
    
    
    !> Creation of an unstructured mapping

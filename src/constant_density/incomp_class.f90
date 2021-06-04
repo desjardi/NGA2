@@ -778,8 +778,8 @@ contains
       end do
       
       ! Initialize the pressure Poisson solver
-      call this%psolv%init_solver(pressure_ils)
-      call this%psolv%update_solver()
+      call this%psolv%init(pressure_ils)
+      call this%psolv%setup()
       
       ! Set 7-pt stencil map for the velocity solver
       this%implicit%stc(1,:)=[ 0, 0, 0]
@@ -794,7 +794,7 @@ contains
       this%implicit%opr(1,:,:,:)=1.0_WP
       
       ! Initialize the implicit velocity solver
-      call this%implicit%init_solver(implicit_ils)
+      call this%implicit%init(implicit_ils)
       
    end subroutine setup
    
@@ -1595,7 +1595,7 @@ contains
             end do
          end do
       end do
-      call this%implicit%update_solver()
+      call this%implicit%setup()
       this%implicit%rhs=resU
       this%implicit%sol=0.0_WP
       call this%implicit%solve()
@@ -1645,7 +1645,7 @@ contains
             end do
          end do
       end do
-      call this%implicit%update_solver()
+      call this%implicit%setup()
       this%implicit%rhs=resV
       this%implicit%sol=0.0_WP
       call this%implicit%solve()
@@ -1695,7 +1695,7 @@ contains
             end do
          end do
       end do
-      call this%implicit%update_solver()
+      call this%implicit%setup()
       this%implicit%rhs=resW
       this%implicit%sol=0.0_WP
       call this%implicit%solve()
