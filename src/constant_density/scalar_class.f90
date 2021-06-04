@@ -380,7 +380,7 @@ contains
       this%implicit%opr(1,:,:,:)=1.0_WP
       
       ! Initialize the implicit scalar solver
-      call this%implicit%init_solver(implicit_ils)
+      call this%implicit%init(implicit_ils)
       
    end subroutine setup
    
@@ -641,7 +641,7 @@ contains
       end do
       
       ! Solve the linear system
-      call this%implicit%update_solver()
+      call this%implicit%setup()
       this%implicit%rhs=resSC
       this%implicit%sol=0.0_WP
       call this%implicit%solve()
