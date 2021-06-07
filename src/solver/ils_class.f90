@@ -656,7 +656,6 @@ contains
          ! Setup GMRES solver
          call HYPRE_StructGMRESSetup       (this%hypre_solver,this%hypre_mat,this%hypre_rhs,this%hypre_sol,ierr)
          
-         
       end select
       
       ! Set setup-flag to true
