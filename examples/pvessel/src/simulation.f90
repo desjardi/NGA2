@@ -358,7 +358,7 @@ end subroutine get_cond
       
       ! Create an incompressible flow solver with bconds
       create_solver: block
-         use ils_class,     only: gmres,gmres_amg
+         use ils_class,     only: pcg_pfmg
          use lowmach_class, only: dirichlet
          real(WP) :: visc
          ! Create flow solver
@@ -378,7 +378,7 @@ end subroutine get_cond
          call param_read('Implicit iteration',fs%implicit%maxit)
          call param_read('Implicit tolerance',fs%implicit%rcvg)
          ! Setup the solver
-         call fs%setup(pressure_ils=gmres_amg,implicit_ils=gmres)
+         call fs%setup(pressure_ils=pcg_pfmg,implicit_ils=pcg_pfmg)
       end block create_solver
       
       
@@ -490,7 +490,7 @@ end subroutine get_cond
                end do
             end do
          end do
-         call fs%psolv%update_solver()
+         call fs%psolv%setup()
          ! Also allocate the temperature arrays
          allocate(Tprod(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
          allocate(Tprodold(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
@@ -499,7 +499,7 @@ end subroutine get_cond
       
       ! Create a scalar solver
       create_scalar: block
-         use ils_class,      only: gmres,pfmg
+         use ils_class,      only: gmres
          use vdscalar_class, only: dirichlet,quick
          real(WP) :: diffusivity
          ! Check if we want to model wall losses
