@@ -122,6 +122,66 @@ contains
    end subroutine postproc_data
    
    
+   !> Function that localizes the top (x+) of the domain
+   function xp_locator(pg,i,j,k) result(isIn)
+      use pgrid_class, only: pgrid
+      implicit none
+      class(pgrid), intent(in) :: pg
+      integer, intent(in) :: i,j,k
+      logical :: isIn
+      isIn=.false.
+      if (i.eq.pg%imax+1.and.pg%ym(j).ge.0.0_WP) isIn=.true.
+   end function xp_locator
+   
+   
+   !> Function that localizes the bottom (x-) of the domain
+   function xm_locator(pg,i,j,k) result(isIn)
+      use pgrid_class, only: pgrid
+      implicit none
+      class(pgrid), intent(in) :: pg
+      integer, intent(in) :: i,j,k
+      logical :: isIn
+      isIn=.false.
+      if (i.eq.pg%imin.and.pg%ym(j).ge.0.0_WP) isIn=.true.
+   end function xm_locator
+   
+   
+   !> Function that localizes the top (z+) of the domain
+   function zp_locator(pg,i,j,k) result(isIn)
+      use pgrid_class, only: pgrid
+      implicit none
+      class(pgrid), intent(in) :: pg
+      integer, intent(in) :: i,j,k
+      logical :: isIn
+      isIn=.false.
+      if (k.eq.pg%kmax+1.and.pg%ym(j).ge.0.0_WP) isIn=.true.
+   end function zp_locator
+   
+   
+   !> Function that localizes the bottom (z-) of the domain
+   function zm_locator(pg,i,j,k) result(isIn)
+      use pgrid_class, only: pgrid
+      implicit none
+      class(pgrid), intent(in) :: pg
+      integer, intent(in) :: i,j,k
+      logical :: isIn
+      isIn=.false.
+      if (k.eq.pg%kmin.and.pg%ym(j).ge.0.0_WP) isIn=.true.
+   end function zm_locator
+   
+   
+   !> Function that localizes the needle injection
+   function needle(pg,i,j,k) result(isIn)
+      use pgrid_class, only: pgrid
+      implicit none
+      class(pgrid), intent(in) :: pg
+      integer, intent(in) :: i,j,k
+      logical :: isIn
+      isIn=.false.
+      if (j.eq.pg%jmax+1.and.sqrt(pg%xm(i)**2+pg%zm(k)**2).le.0.70e-3_WP) isIn=.true.
+   end function needle
+   
+   
    !> Initialization of problem solver
    subroutine simulation_init
       use param, only: param_read
@@ -190,6 +250,13 @@ contains
                      vf%Gbary(:,i,j,k)=[vf%cfg%xm(i),vf%cfg%ym(j),vf%cfg%zm(k)]
                      cycle
                   end if
+                  ! Fill out the needle - this is handwavy...
+                  !if (vf%cfg%ym(j).gt.0.010_WP.and.sqrt(vf%cfg%xm(i)**2+vf%cfg%zm(k)**2).lt.0.0007_WP) then
+                  !   vf%VF(i,j,k)=1.0_WP
+                  !   vf%Lbary(:,i,j,k)=[vf%cfg%xm(i),vf%cfg%ym(j),vf%cfg%zm(k)]
+                  !   vf%Gbary(:,i,j,k)=[vf%cfg%xm(i),vf%cfg%ym(j),vf%cfg%zm(k)]
+                  !   cycle
+                  !end if
                   ! Set cube vertices
                   n=0
                   do sk=0,1
@@ -217,6 +284,8 @@ contains
          call vf%update_band()
          ! Perform interface reconstruction from VOF field
          call vf%build_interface()
+         ! Set interface planes at the boundaries
+         call vf%set_full_bcond()
          ! Create discontinuous polygon mesh from IRL interface
          call vf%polygonalize_interface()
          ! Calculate distance from polygons
@@ -232,8 +301,12 @@ contains
       
       ! Create a two-phase flow solver without bconds
       create_and_initialize_flow_solver: block
-         use ils_class, only: pcg_pfmg
-         use mathtools, only: Pi
+         use tpns_class, only: clipped_neumann,dirichlet,bcond
+         use ils_class,  only: pcg_pfmg
+         use mathtools,  only: Pi
+         type(bcond), pointer :: mybc
+         real(WP) :: Vneedle
+         integer :: i,j,k,n
          ! Create flow solver
          fs=tpns(cfg=cfg,name='Two-phase NS')
          ! Assign constant viscosity to each phase
@@ -248,6 +321,12 @@ contains
          fs%contact_angle=fs%contact_angle*Pi/180.0_WP
          ! Assign acceleration of gravity
          call param_read('Gravity',fs%gravity)
+         ! Setup boundary conditions
+         call fs%add_bcond(name='bc_xp' ,type=clipped_neumann,face='x',dir=+1,canCorrect=.true. ,locator=xp_locator)
+         call fs%add_bcond(name='bc_xm' ,type=clipped_neumann,face='x',dir=-1,canCorrect=.true. ,locator=xm_locator)
+         call fs%add_bcond(name='bc_zp' ,type=clipped_neumann,face='z',dir=+1,canCorrect=.true. ,locator=zp_locator)
+         call fs%add_bcond(name='bc_zm' ,type=clipped_neumann,face='z',dir=-1,canCorrect=.true. ,locator=zm_locator)
+         !call fs%add_bcond(name='needle',type=dirichlet      ,face='y',dir=+1,canCorrect=.false.,locator=needle    )
          ! Configure pressure solver
          call param_read('Pressure iteration',fs%psolv%maxit)
          call param_read('Pressure tolerance',fs%psolv%rcvg)
@@ -256,9 +335,16 @@ contains
          call param_read('Implicit tolerance',fs%implicit%rcvg)
          ! Setup the solver
          call fs%setup(pressure_ils=pcg_pfmg,implicit_ils=pcg_pfmg)
-         fs%psolv%maxlevel=14
+         fs%psolv%maxlevel=10
          ! Zero initial field
          fs%U=0.0_WP; fs%V=0.0_WP; fs%W=0.0_WP
+         ! Apply Dirichlet at liquid needle
+         !call param_read('Liquid injection velocity',Vneedle)
+         !call fs%get_bcond('needle',mybc)
+         !do n=1,mybc%itr%no_
+         !   i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
+         !   fs%V(i,j,k)=-Vneedle
+         !end do
          ! Calculate cell-centered velocities and divergence
          call fs%interp_vel(Ui,Vi,Wi)
          call fs%get_div()

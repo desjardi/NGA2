@@ -2,9 +2,9 @@
 Partition : 1 1 4
 
 # Mesh definition
-Lx : 25.0e-3
-Ly : 12.5e-3
-Lz : 25.0e-3
+Lx : 30e-3
+Ly : 15e-3
+Lz : 30e-3
 nx : 64
 ny : 32
 nz : 64
@@ -15,7 +15,8 @@ Hole dist  : 0.002
 Hole depth : 0.02
 
 # Droplet properties
-Droplet radius :        5e-3
+Liquid injection velocity : 0.02
+Droplet radius :        6e-3
 Initial contact angle : 180
 
 # Source
@@ -29,7 +30,7 @@ Liquid density : 997
 Gas density :    1.15
 
 Surface tension coefficient : 0.072
-Static contact angle :        60
+Static contact angle :        70
 
 # Time integration
 Max timestep size : 1e-4
