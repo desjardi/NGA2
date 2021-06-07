@@ -332,7 +332,7 @@ contains
       ! Create a two-phase flow solver with bconds
       create_solver: block
          use tpns_class, only: dirichlet,clipped_neumann,neumann
-         use ils_class,  only: pcg_amg,gmres,gmres_amg
+         use ils_class,  only: pcg_pfmg
          use mathtools,  only: Pi
          ! Create a two-phase flow solver
          fs=tpns(cfg=cfg,name='Two-phase NS')
@@ -365,7 +365,8 @@ contains
          call param_read('Implicit iteration',fs%implicit%maxit)
          call param_read('Implicit tolerance',fs%implicit%rcvg)
          ! Setup the solver
-         call fs%setup(pressure_ils=gmres_amg,implicit_ils=gmres_amg)
+         call fs%setup(pressure_ils=pcg_pfmg,implicit_ils=pcg_pfmg)
+         fs%psolv%maxlevel=16
       end block create_solver
       
       
