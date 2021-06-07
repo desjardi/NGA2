@@ -22,7 +22,7 @@ Implicit iteration : 100
 
 # Restart and save
 Restart output period : 1e-4
-Restart from :          restart_6.06276E-04
+Restart from :          !restart_6.06276E-04
 
 ######### SOLVER 1 INPUT ##########
 # This is the internal nozzle flow

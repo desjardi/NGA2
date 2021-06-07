@@ -351,7 +351,7 @@ contains
       ! Create a two-phase flow solver with bconds
       create_solver2: block
          use tpns_class, only: dirichlet,clipped_neumann,neumann
-         use ils_class,  only: pcg_amg,gmres,gmres_amg
+         use ils_class,  only: pcg_pfmg
          use mathtools,  only: Pi
          ! Create a two-phase flow solver
          fs2=tpns(cfg=cfg2,name='Two-phase NS')
@@ -382,7 +382,8 @@ contains
          call param_read('Implicit iteration',fs2%implicit%maxit)
          call param_read('Implicit tolerance',fs2%implicit%rcvg)
          ! Setup the solver
-         call fs2%setup(pressure_ils=gmres_amg,implicit_ils=gmres_amg)
+         call fs2%setup(pressure_ils=pcg_pfmg,implicit_ils=pcg_pfmg)
+         fs1%psolv%maxlevel=16
       end block create_solver2
       
       
@@ -531,7 +532,7 @@ contains
       ! Create an incompressible flow solver with bconds
       create_solver1: block
          use incomp_class, only: dirichlet,clipped_neumann
-         use ils_class,    only: pcg_amg,gmres
+         use ils_class,    only: pcg_pfmg,pcg_pfmg
          ! Create flow solver
          fs1=incomp(cfg=cfg1,name='Incompressible NS')
          ! Set the flow properties
@@ -551,7 +552,8 @@ contains
          call param_read('Implicit iteration',fs1%implicit%maxit)
          call param_read('Implicit tolerance',fs1%implicit%rcvg)
          ! Setup the solver
-         call fs1%setup(pressure_ils=pcg_amg,implicit_ils=gmres)
+         call fs1%setup(pressure_ils=pcg_pfmg,implicit_ils=pcg_pfmg)
+         fs1%psolv%maxlevel=16
       end block create_solver1
       
       
