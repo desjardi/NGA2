@@ -334,8 +334,8 @@ contains
          call param_read('Implicit iteration',fs%implicit%maxit)
          call param_read('Implicit tolerance',fs%implicit%rcvg)
          ! Setup the solver
-         call fs%setup(pressure_ils=pcg_pfmg,implicit_ils=pcg_pfmg)
          fs%psolv%maxlevel=10
+         call fs%setup(pressure_ils=pcg_pfmg,implicit_ils=pcg_pfmg)
          ! Zero initial field
          fs%U=0.0_WP; fs%V=0.0_WP; fs%W=0.0_WP
          ! Apply Dirichlet at liquid needle

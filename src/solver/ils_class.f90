@@ -671,7 +671,7 @@ contains
       use param,    only: verbose
       implicit none
       class(ils), intent(inout) :: this
-      integer :: i,j,k,count,ierr,maxlvl
+      integer :: i,j,k,count,ierr
       integer,  dimension(:), allocatable :: ind
       real(WP), dimension(:), allocatable :: rhs,sol
       

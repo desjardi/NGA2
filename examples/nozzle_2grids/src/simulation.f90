@@ -382,8 +382,8 @@ contains
          call param_read('Implicit iteration',fs2%implicit%maxit)
          call param_read('Implicit tolerance',fs2%implicit%rcvg)
          ! Setup the solver
-         call fs2%setup(pressure_ils=pcg_pfmg,implicit_ils=pcg_pfmg)
          fs1%psolv%maxlevel=16
+         call fs2%setup(pressure_ils=pcg_pfmg,implicit_ils=pcg_pfmg)
       end block create_solver2
       
       
@@ -552,8 +552,8 @@ contains
          call param_read('Implicit iteration',fs1%implicit%maxit)
          call param_read('Implicit tolerance',fs1%implicit%rcvg)
          ! Setup the solver
-         call fs1%setup(pressure_ils=pcg_pfmg,implicit_ils=pcg_pfmg)
          fs1%psolv%maxlevel=16
+         call fs1%setup(pressure_ils=pcg_pfmg,implicit_ils=pcg_pfmg)
       end block create_solver1
       
       

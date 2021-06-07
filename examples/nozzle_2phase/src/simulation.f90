@@ -365,8 +365,8 @@ contains
          call param_read('Implicit iteration',fs%implicit%maxit)
          call param_read('Implicit tolerance',fs%implicit%rcvg)
          ! Setup the solver
-         call fs%setup(pressure_ils=pcg_pfmg,implicit_ils=pcg_pfmg)
          fs%psolv%maxlevel=16
+         call fs%setup(pressure_ils=pcg_pfmg,implicit_ils=pcg_pfmg)
       end block create_solver
       
       
