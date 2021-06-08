@@ -153,7 +153,7 @@ contains
       ! Create an incompressible flow solver with bconds
       create_solver: block
          use incomp_class, only: dirichlet,clipped_neumann
-         use ils_class,    only: pcg_pfmg
+         use ils_class,    only: pcg_pfmg,pcg_amg
          ! Create flow solver
          fs=incomp(cfg=cfg,name='Incompressible NS')
          ! Set the flow properties
@@ -177,7 +177,7 @@ contains
          call param_read('Implicit tolerance',fs%implicit%rcvg)
          ! Setup the solver
          fs%psolv%maxlevel=16
-         call fs%setup(pressure_ils=pcg_pfmg,implicit_ils=pcg_pfmg)
+         call fs%setup(pressure_ils=pcg_amg,implicit_ils=pcg_amg)
       end block create_solver
       
       
