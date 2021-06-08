@@ -197,9 +197,13 @@ contains
          ! Initialize solver
          call this%bbox%initialize()
       case (amg,pcg_amg,pcg_parasail,gmres,gmres_pilut,gmres_amg,bicgstab_amg,pcg)
+         ! Initialize HYPRE
+         call HYPRE_Init(ierr)
          ! These use HYPRE's IJ environment, which requires that we allocate and prepare an unstructed mapping
          call this%prep_umap()
       case (smg,pcg_smg,gmres_smg,pfmg,pcg_pfmg,gmres_pfmg)
+         ! Initialize HYPRE
+         call HYPRE_Init(ierr)
          ! These use HYPRE's structured environment, which requires that we create a HYPRE grid and stencil
          call HYPRE_StructGridCreate     (this%cfg%comm,3,this%hypre_box,ierr)
          call HYPRE_StructGridSetExtents (this%hypre_box,[this%cfg%imin_,this%cfg%jmin_,this%cfg%kmin_],[this%cfg%imax_,this%cfg%jmax_,this%cfg%kmax_],ierr)
