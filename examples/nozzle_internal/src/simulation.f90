@@ -177,7 +177,7 @@ contains
          call param_read('Implicit tolerance',fs%implicit%rcvg)
          ! Setup the solver
          fs%psolv%maxlevel=16
-         call fs%setup(pressure_ils=pcg_amg,implicit_ils=pcg_amg)
+         call fs%setup(pressure_ils=pcg_amg,implicit_ils=pcg_pfmg)
       end block create_solver
       
       
