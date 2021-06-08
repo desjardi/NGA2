@@ -275,7 +275,7 @@ contains
          do k=this%cfg%kmin_,this%cfg%kmax_
             do j=this%cfg%jmin_,this%cfg%jmax_
                do i=this%cfg%imin_,this%cfg%imax_
-                  if (this%ind(i,j,k).gt.0) then
+                  if (this%ind(i,j,k).ge.0) then
                      ! Prepare to add the row
                      count1=count1+1
                      row (count1)=this%ind(i,j,k)
@@ -288,7 +288,7 @@ contains
                      ! Compress columns to avoid redundancy
                      do st=1,this%nst
                         do nn=1,st-1
-                           if (mycol(st).eq.mycol(nn).and.mycol(st).gt.0) then
+                           if (mycol(st).eq.mycol(nn).and.mycol(st).ge.0) then
                               mycol(st)=0
                               myval(nn)=myval(nn)+myval(st)
                            end if
@@ -296,7 +296,7 @@ contains
                      end do
                      ! Finally transfer to operator
                      do st=1,this%nst
-                        if (mycol(st).gt.0) then
+                        if (mycol(st).ge.0) then
                            count2=count2+1
                            ncol(count1)=ncol(count1)+1
                            col (count2)=mycol(st)
@@ -707,7 +707,7 @@ contains
          do k=this%cfg%kmin_,this%cfg%kmax_
             do j=this%cfg%jmin_,this%cfg%jmax_
                do i=this%cfg%imin_,this%cfg%imax_
-                  if (this%ind(i,j,k).gt.0) then
+                  if (this%ind(i,j,k).ge.0) then
                      count=count+1
                      ind(count)=this%ind(i,j,k)
                      rhs(count)=this%rhs(i,j,k)
@@ -793,7 +793,7 @@ contains
          do k=this%cfg%kmin_,this%cfg%kmax_
             do j=this%cfg%jmin_,this%cfg%jmax_
                do i=this%cfg%imin_,this%cfg%imax_
-                  if (this%ind(i,j,k).gt.0) then
+                  if (this%ind(i,j,k).ge.0) then
                      count=count+1
                      this%sol(i,j,k)=sol(count)
                   end if
@@ -960,8 +960,8 @@ contains
          do j=this%cfg%jmin_,this%cfg%jmax_
             do i=this%cfg%imin_,this%cfg%imax_
                if (abs(this%opr(1,i,j,k)).gt.10.0_WP*epsilon(1.0_WP)) then
-                  count=count+1
                   this%ind(i,j,k)=count
+                  count=count+1
                end if
             end do
          end do
@@ -971,9 +971,9 @@ contains
       call this%cfg%sync(this%ind)
       
       ! Get local min/max
-      this%ind_min=1
-      if (this%cfg%rank.gt.0) this%ind_min=ncell_per_proc(this%cfg%rank)+1
-      this%ind_max=ncell_per_proc(this%cfg%rank+1)
+      this%ind_min=0
+      if (this%cfg%rank.gt.0) this%ind_min=ncell_per_proc(this%cfg%rank)
+      this%ind_max=ncell_per_proc(this%cfg%rank+1)-1
       
       ! Deallocate
       deallocate(ncell_per_proc)
