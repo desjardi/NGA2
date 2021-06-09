@@ -302,7 +302,7 @@ contains
       ! Create a two-phase flow solver without bconds
       create_and_initialize_flow_solver: block
          use tpns_class, only: clipped_neumann,dirichlet,bcond
-         use ils_class,  only: pcg_amg
+         use ils_class,  only: pcg_pfmg
          use mathtools,  only: Pi
          type(bcond), pointer :: mybc
          real(WP) :: Vneedle
@@ -335,7 +335,7 @@ contains
          call param_read('Implicit tolerance',fs%implicit%rcvg)
          ! Setup the solver
          fs%psolv%maxlevel=10
-         call fs%setup(pressure_ils=pcg_amg,implicit_ils=pcg_amg)
+         call fs%setup(pressure_ils=pcg_pfmg,implicit_ils=pcg_pfmg)
          ! Zero initial field
          fs%U=0.0_WP; fs%V=0.0_WP; fs%W=0.0_WP
          ! Apply Dirichlet at liquid needle

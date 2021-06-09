@@ -23,7 +23,7 @@ Initial contact angle : 180
 Gravity : 0 0 0
 
 # Fluid properties
-Liquid dynamic viscosity : 0.9e-4
+Liquid dynamic viscosity : 9.0e-4
 Gas dynamic viscosity :    1.8e-5
 
 Liquid density : 997
