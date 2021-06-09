@@ -358,7 +358,7 @@ end subroutine get_cond
       
       ! Create an incompressible flow solver with bconds
       create_solver: block
-         use ils_class,     only: pcg_pfmg
+         use ils_class,     only: pcg_pfmg,pcg_amg
          use lowmach_class, only: dirichlet
          real(WP) :: visc
          ! Create flow solver
@@ -378,7 +378,7 @@ end subroutine get_cond
          call param_read('Implicit iteration',fs%implicit%maxit)
          call param_read('Implicit tolerance',fs%implicit%rcvg)
          ! Setup the solver
-         call fs%setup(pressure_ils=pcg_pfmg,implicit_ils=pcg_pfmg)
+         call fs%setup(pressure_ils=pcg_amg,implicit_ils=pcg_pfmg)
       end block create_solver
       
       
