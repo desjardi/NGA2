@@ -382,7 +382,7 @@ contains
          call param_read('Implicit iteration',fs2%implicit%maxit)
          call param_read('Implicit tolerance',fs2%implicit%rcvg)
          ! Setup the solver
-         fs1%psolv%maxlevel=16
+         fs2%psolv%maxlevel=16
          call fs2%setup(pressure_ils=pcg_pfmg,implicit_ils=pcg_pfmg)
       end block create_solver2
       
@@ -532,7 +532,7 @@ contains
       ! Create an incompressible flow solver with bconds
       create_solver1: block
          use incomp_class, only: dirichlet,clipped_neumann
-         use ils_class,    only: pcg_pfmg,pcg_pfmg
+         use ils_class,    only: pcg_pfmg,pcg_amg
          ! Create flow solver
          fs1=incomp(cfg=cfg1,name='Incompressible NS')
          ! Set the flow properties
@@ -553,7 +553,7 @@ contains
          call param_read('Implicit tolerance',fs1%implicit%rcvg)
          ! Setup the solver
          fs1%psolv%maxlevel=16
-         call fs1%setup(pressure_ils=pcg_pfmg,implicit_ils=pcg_pfmg)
+         call fs1%setup(pressure_ils=pcg_amg,implicit_ils=pcg_pfmg)
       end block create_solver1
       
       
