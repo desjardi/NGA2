@@ -168,6 +168,7 @@ module vfs_class
       procedure :: update_surfgrid                        !< Create a simple surface mesh from the IRL polygons
       procedure :: get_curvature                          !< Compute curvature from IRL surface polygons
       procedure :: paraboloid_fit                         !< Perform local paraboloid fit of IRL surface
+      procedure :: paraboloid_integral_fit                !< Perform local paraboloid fit of IRL surface volumetrically
       procedure :: get_max                                !< Calculate maximum field values
       procedure :: get_cfl                                !< Get CFL for the VF solver
    end type vfs
@@ -2096,6 +2097,8 @@ contains
                   if (getNumberOfVertices(this%interface_polygon(n,i,j,k)).eq.0) cycle
                   ! Perform LSQ PLIC barycenter fitting to get curvature
                   call this%paraboloid_fit(i,j,k,n,mycurv(n))
+                  ! ! Perform PLIC volume fitting to get curvature
+                  ! call this%paraboloid_integral_fit(i,j,k,n,mycurv(n))                  
                   ! Also store surface and normal
                   mysurf(n)  =abs(calculateVolume(this%interface_polygon(n,i,j,k)))
                   mynorm(n,:)=    calculateNormal(this%interface_polygon(n,i,j,k))
@@ -2131,6 +2134,131 @@ contains
    
    !> Perform local paraboloid fit of IRL surface
    subroutine paraboloid_fit(this,i,j,k,iplane,mycurv)
+      use mathtools, only: normalize,cross_product
+      implicit none
+      ! In/out variables
+      class(vfs), intent(inout) :: this
+      integer,  intent(in)  :: i,j,k,iplane
+      real(WP), intent(out) :: mycurv
+      ! Variables used to process the polygonal surface
+      real(WP), dimension(3) :: pref,nref,tref,sref
+      real(WP), dimension(3) :: ploc,nloc
+      real(WP), dimension(3) :: buf
+      real(WP) :: surf,ww
+      integer :: n,ii,jj,kk,ndata,info
+      ! Storage for least squares problem
+      real(WP), dimension(125,6) :: A=0.0_WP
+      real(WP), dimension(125)   :: b=0.0_WP
+      real(WP), dimension(6)     :: sol
+      real(WP), dimension(200)   :: work
+      ! Curvature evaluation
+      real(WP) :: dF_dt,dF_ds,ddF_dtdt,ddF_dsds,ddF_dtds
+      
+      ! Store polygon centroid - this is our reference point
+      pref=calculateCentroid(this%interface_polygon(iplane,i,j,k))
+      
+      ! Create local basis from polygon normal
+      nref=calculateNormal(this%interface_polygon(iplane,i,j,k))
+      select case (maxloc(abs(nref),1))
+      case (1); tref=normalize([+nref(2),-nref(1),0.0_WP])
+      case (2); tref=normalize([0.0_WP,+nref(3),-nref(2)])
+      case (3); tref=normalize([-nref(3),0.0_WP,+nref(1)])
+      end select; sref=cross_product(nref,tref)
+      
+      ! Collect all data
+      ndata=0
+      do kk=k-2,k+2
+         do jj=j-2,j+2
+            do ii=i-2,i+2
+               
+               ! Skip the cell if it's a true wall
+               if (this%mask(ii,jj,kk).eq.1) cycle
+               
+               ! Check all planes
+               do n=1,getNumberOfPlanes(this%liquid_gas_interface(ii,jj,kk))
+                  
+                  ! Skip empty polygon
+                  if (getNumberOfVertices(this%interface_polygon(n,ii,jj,kk)).eq.0) cycle
+                  
+                  ! Get local polygon normal
+                  nloc=calculateNormal(this%interface_polygon(n,ii,jj,kk))
+                  
+                  ! Store triangle centroid, and surface
+                  ploc=    calculateCentroid(this%interface_polygon(n,ii,jj,kk))
+                  surf=abs(calculateVolume  (this%interface_polygon(n,ii,jj,kk)))/this%cfg%meshsize(i,j,k)**2
+                  
+                  ! Transform polygon barycenter to a local coordinate system
+                  buf=(ploc-pref)/this%cfg%meshsize(i,j,k); ploc=[dot_product(buf,nref),dot_product(buf,tref),dot_product(buf,sref)]
+                  
+                  ! Distance from ref point AND projected surface weighting (clipped to ensure positivity)
+                  ww=surf*max(dot_product(nloc,nref),0.0_WP)*wgauss(sqrt(dot_product(ploc,ploc)),2.5_WP)
+                  
+                  ! If we have data, add it to the LS problem
+                  if (ww.gt.0.0_WP) then
+                     ! Increment counter
+                     ndata=ndata+1
+                     ! Store least squares matrix and RHS
+                     A(ndata,1)=sqrt(ww)*1.0_WP
+                     A(ndata,2)=sqrt(ww)*ploc(2)
+                     A(ndata,3)=sqrt(ww)*ploc(3)
+                     A(ndata,4)=sqrt(ww)*0.5_WP*ploc(2)*ploc(2)
+                     A(ndata,5)=sqrt(ww)*0.5_WP*ploc(3)*ploc(3)
+                     A(ndata,6)=sqrt(ww)*1.0_WP*ploc(2)*ploc(3)
+                     b(ndata  )=sqrt(ww)*ploc(1)
+                  end if
+                  
+               end do
+               
+            end do
+         end do
+      end do
+      
+      ! Solve for surface as n=F(t,s)=b1+b2*t+b3*s+b4*t^2+b5*s^2+b6*t*s using Lapack
+      call dgels('N',ndata,6,1,A,125,b,125,work,200,info); sol=b(1:6)
+      
+      ! Get the curvature at (t,s)=(0,0)
+      dF_dt=sol(2)+sol(4)*0.0_WP+sol(6)*0.0_WP; ddF_dtdt=sol(4)
+      dF_ds=sol(3)+sol(5)*0.0_WP+sol(6)*0.0_WP; ddF_dsds=sol(5)
+      ddF_dtds=sol(6)
+      mycurv=-((1.0_WP+dF_dt**2)*ddF_dsds-2.0_WP*dF_dt*dF_ds*ddF_dtds+(1.0_WP+dF_ds**2)*ddF_dtdt)/(1.0_WP+dF_dt**2+dF_ds**2)**(1.5_WP)
+      mycurv=mycurv/this%cfg%meshsize(i,j,k)
+      
+   contains
+      
+      ! Some weighting function - h=0.75 looks okay
+      real(WP) function wkernel(d,h)
+         implicit none
+         real(WP), intent(in) :: d,h
+         wkernel=(1.0_WP+(d/h)**2)**(-1.4_WP)
+      end function wkernel
+      
+      ! Tri-cubic Weighting function - h=2 looks okay
+      real(WP) function tricubic(d,h)
+         implicit none
+         real(WP), intent(in) :: d,h
+         if (d.ge.h) then
+            tricubic=0.0_WP
+         else
+            tricubic=(1.0_WP-(d/h)**3)**3
+         end if
+      end function tricubic
+      
+      ! Quasi-Gaussian weighting function - h=2.5 looks okay
+      real(WP) function wgauss(d,h)
+         implicit none
+         real(WP), intent(in) :: d,h
+         if (d.ge.h) then
+            wgauss=0.0_WP
+         else
+            wgauss=(1.0_WP+4.0_WP*d/h)*(1.0_WP-d/h)**4
+         end if
+      end function wgauss
+      
+   end subroutine paraboloid_fit
+
+
+   !> Perform local paraboloid fit of IRL surface volumetrically
+   subroutine paraboloid_integral_fit(this,i,j,k,iplane,mycurv)
       use mathtools, only: normalize,cross_product
       implicit none
       ! In/out variables
@@ -2234,7 +2362,7 @@ contains
       ddF_dtds=sol(5)
       mycurv=-((1.0_WP+dF_dt**2)*ddF_dsds-2.0_WP*dF_dt*dF_ds*ddF_dtds+(1.0_WP+dF_ds**2)*ddF_dtdt)/(1.0_WP+dF_dt**2+dF_ds**2)**(1.5_WP)
       mycurv=mycurv/this%cfg%meshsize(i,j,k)
-   end subroutine paraboloid_fit
+   end subroutine paraboloid_integral_fit
    
    
    !> Private function to rapidly assess if a mixed cell is possible
