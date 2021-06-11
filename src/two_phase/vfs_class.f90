@@ -168,6 +168,7 @@ module vfs_class
       procedure :: update_surfgrid                        !< Create a simple surface mesh from the IRL polygons
       procedure :: get_curvature                          !< Compute curvature from IRL surface polygons
       procedure :: paraboloid_fit                         !< Perform local paraboloid fit of IRL surface
+      procedure :: paraboloid_integral_fit                !< Perform local paraboloid fit of IRL surface volumetrically
       procedure :: get_max                                !< Calculate maximum field values
       procedure :: get_cfl                                !< Get CFL for the VF solver
    end type vfs
@@ -2096,6 +2097,8 @@ contains
                   if (getNumberOfVertices(this%interface_polygon(n,i,j,k)).eq.0) cycle
                   ! Perform LSQ PLIC barycenter fitting to get curvature
                   call this%paraboloid_fit(i,j,k,n,mycurv(n))
+                  ! ! Perform PLIC volume fitting to get curvature
+                  ! call this%paraboloid_integral_fit(i,j,k,n,mycurv(n))                  
                   ! Also store surface and normal
                   mysurf(n)  =abs(calculateVolume(this%interface_polygon(n,i,j,k)))
                   mynorm(n,:)=    calculateNormal(this%interface_polygon(n,i,j,k))
@@ -2217,7 +2220,7 @@ contains
       dF_dt=sol(2)+sol(4)*0.0_WP+sol(6)*0.0_WP; ddF_dtdt=sol(4)
       dF_ds=sol(3)+sol(5)*0.0_WP+sol(6)*0.0_WP; ddF_dsds=sol(5)
       ddF_dtds=sol(6)
-      mycurv=-((1+dF_dt**2)*ddF_dsds-2.0_WP*dF_dt*dF_ds*ddF_dtds+(1.0_WP+dF_ds**2)*ddF_dtdt)/(1.0_WP+dF_dt**2+dF_ds**2)**(1.5_WP)
+      mycurv=-((1.0_WP+dF_dt**2)*ddF_dsds-2.0_WP*dF_dt*dF_ds*ddF_dtds+(1.0_WP+dF_ds**2)*ddF_dtdt)/(1.0_WP+dF_dt**2+dF_ds**2)**(1.5_WP)
       mycurv=mycurv/this%cfg%meshsize(i,j,k)
       
    contains
@@ -2252,6 +2255,114 @@ contains
       end function wgauss
       
    end subroutine paraboloid_fit
+
+
+   !> Perform local paraboloid fit of IRL surface volumetrically
+   subroutine paraboloid_integral_fit(this,i,j,k,iplane,mycurv)
+      use mathtools, only: normalize,cross_product
+      implicit none
+      ! In/out variables
+      class(vfs), intent(inout) :: this
+      integer,  intent(in)  :: i,j,k,iplane
+      real(WP), intent(out) :: mycurv
+      ! Variables used to process the polygons
+      real(WP), dimension(3) :: pref,nref,tref,sref
+      real(WP), dimension(3) :: vert1,vert2,ploc,nloc
+      real(WP), dimension(3) :: buf,reconst_plane_coeffs
+      integer :: nplane,shape,n,ii,jj,kk,ai,aj
+      real(WP), dimension(6) :: integrals
+      real(WP) :: xv,xvn,yv,yvn,b_dot_sum
+      ! Storage for symmetric problem
+      real(WP), dimension(6,6) :: A
+      integer , dimension(6)   :: ipiv
+      real(WP), dimension(6)   :: b
+      real(WP), dimension(6)   :: sol
+      real(WP), dimension(:), allocatable :: work
+      real(WP) :: lwork_query
+      integer :: lwork,info
+      ! Curvature evaluation
+      real(WP) :: dF_dt,dF_ds,ddF_dtdt,ddF_dsds,ddF_dtds
+      
+      ! Store polygon centroid - this is our reference point
+      pref=calculateCentroid(this%interface_polygon(iplane,i,j,k))
+      
+      ! Create local basis from polygon normal
+      nref=calculateNormal(this%interface_polygon(iplane,i,j,k))
+      select case (maxloc(abs(nref),1))
+      case (1); tref=normalize([+nref(2),-nref(1),0.0_WP])
+      case (2); tref=normalize([0.0_WP,+nref(3),-nref(2)])
+      case (3); tref=normalize([-nref(3),0.0_WP,+nref(1)])
+      end select; sref=cross_product(nref,tref)
+
+      A=0.0_WP
+      b=0.0_WP
+      do kk=k-1,k+1
+         do jj=j-1,j+1
+            do ii=i-1,i+1      
+               ! Skip the cell if it's a true wall
+               if (this%mask(ii,jj,kk).eq.1) cycle
+               ! Check all planes
+               do nplane=1,getNumberOfPlanes(this%liquid_gas_interface(ii,jj,kk))
+                  shape=getNumberOfVertices(this%interface_polygon(nplane,ii,jj,kk))                  
+                  ! Skip empty polygon
+                  if (shape.eq.0) cycle
+                  ! Get local polygon normal and skip if normal is not aligned with center polygon normal 
+                  nloc=calculateNormal(this%interface_polygon(nplane,ii,jj,kk))
+                  if (dot_product(nloc,nref).le.0.0_WP) cycle
+                  ! Get local polygon centroid
+                  ploc=calculateCentroid(this%interface_polygon(nplane,ii,jj,kk))
+                  ! Transform normal and centroid to a local coordinate system
+                  buf=(ploc-pref)/this%cfg%meshsize(i,j,k); ploc=[dot_product(buf,tref),dot_product(buf,sref),dot_product(buf,nref)]
+                  buf=nloc; nloc=[dot_product(buf,tref),dot_product(buf,sref),dot_product(buf,nref)]
+                  ! Get plane coefficients
+                  reconst_plane_coeffs(1)=-dot_product(nloc,ploc)
+                  reconst_plane_coeffs(2)=nloc(1)
+                  reconst_plane_coeffs(3)=nloc(2)
+                  reconst_plane_coeffs=reconst_plane_coeffs/(-nloc(3))
+                  ! Get integrals
+                  integrals=0.0_WP
+                  b_dot_sum=0.0_WP
+                  do n=1,shape
+                     vert1=getPt(this%interface_polygon(nplane,ii,jj,kk),n-1)
+                     vert2=getPt(this%interface_polygon(nplane,ii,jj,kk),modulo(n,shape))
+                     ! Transform vertices to a local coordinate system
+                     buf=(vert1-pref)/this%cfg%meshsize(i,j,k); vert1=[dot_product(buf,tref),dot_product(buf,sref),dot_product(buf,nref)]
+                     buf=(vert2-pref)/this%cfg%meshsize(i,j,k); vert2=[dot_product(buf,tref),dot_product(buf,sref),dot_product(buf,nref)]
+                     ! Add to area integral
+                     xv=vert1(1); xvn=vert2(1); yv=vert1(2); yvn=vert2(2)
+                     integrals = integrals + [&
+                     (xv*yvn - xvn*yv) / 2.0_WP, &
+                     (xv + xvn)*(xv*yvn - xvn*yv) / 6.0_WP, &
+                     (yv + yvn)*(xv*yvn - xvn*yv) / 6.0_WP, &
+                     (xv + xvn)*(xv**2 + xvn**2)*(yvn - yv) / 12.0_WP, &
+                     (yvn - yv)*(3.0_WP*xv**2*yv + xv**2*yvn + 2.0_WP*xv*xvn*yv + 2.0_WP*xv*xvn*yvn + xvn**2*yv + 3.0_WP*xvn**2*yvn)/24.0_WP, &
+                     (xv - xvn)*(yv + yvn)*(yv**2 + yvn**2) / 12.0_WP]            
+                  end do
+                  b_dot_sum=b_dot_sum+dot_product(reconst_plane_coeffs,integrals(1:3))                     
+                  ! Add to symmetric matrix
+                  do aj=1,6
+                     do ai=1,aj
+                        A(ai,aj)=A(ai,aj)+integrals(ai)*integrals(aj)
+                     end do
+                  end do
+                  ! Add to RHS
+                  b=b+integrals*b_dot_sum
+               end do
+            end do
+         end do
+      end do
+      ! Query optimal work array size
+      call dsysv('U',6,1,A,6,ipiv,b,6,lwork_query,-1,info); lwork=int(lwork_query)
+      allocate(work(lwork))
+      ! Solve for paraboloid as n=F(t,s)=b1+b2*t+b3*s+b4*t^2+b5*t*s+b6*s^2 using Lapack
+      call dsysv('U',6,1,A,6,ipiv,b,6,work,lwork,info); sol=b(1:6)
+      ! Get the curvature at (t,s)=(0,0)
+      dF_dt=sol(2)+2.0_WP*sol(4)*0.0_WP+sol(5)*0.0_WP; ddF_dtdt=2.0_WP*sol(4)
+      dF_ds=sol(3)+2.0_WP*sol(6)*0.0_WP+sol(5)*0.0_WP; ddF_dsds=2.0_WP*sol(6)
+      ddF_dtds=sol(5)
+      mycurv=-((1.0_WP+dF_dt**2)*ddF_dsds-2.0_WP*dF_dt*dF_ds*ddF_dtds+(1.0_WP+dF_ds**2)*ddF_dtdt)/(1.0_WP+dF_dt**2+dF_ds**2)**(1.5_WP)
+      mycurv=mycurv/this%cfg%meshsize(i,j,k)
+   end subroutine paraboloid_integral_fit
    
    
    !> Private function to rapidly assess if a mixed cell is possible
