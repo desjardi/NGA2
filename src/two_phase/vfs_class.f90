@@ -2278,7 +2278,7 @@ contains
       real(WP), dimension(6)   :: b
       real(WP), dimension(6)   :: sol
       real(WP), dimension(:), allocatable :: work
-      real(WP) :: lwork_query
+      real(WP), dimension(1) :: lwork_query
       integer :: lwork,info
       ! Curvature evaluation
       real(WP) :: dF_dt,dF_ds,ddF_dtdt,ddF_dsds,ddF_dtds
@@ -2352,7 +2352,7 @@ contains
          end do
       end do
       ! Query optimal work array size
-      call dsysv('U',6,1,A,6,ipiv,b,6,lwork_query,-1,info); lwork=int(lwork_query)
+      call dsysv('U',6,1,A,6,ipiv,b,6,lwork_query,-1,info); lwork=int(lwork_query(1))
       allocate(work(lwork))
       ! Solve for paraboloid as n=F(t,s)=b1+b2*t+b3*s+b4*t^2+b5*t*s+b6*s^2 using Lapack
       call dsysv('U',6,1,A,6,ipiv,b,6,work,lwork,info); sol=b(1:6)
