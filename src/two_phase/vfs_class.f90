@@ -2097,8 +2097,8 @@ contains
                   if (getNumberOfVertices(this%interface_polygon(n,i,j,k)).eq.0) cycle
                   ! Perform LSQ PLIC barycenter fitting to get curvature
                   call this%paraboloid_fit(i,j,k,n,mycurv(n))
-                  ! ! Perform PLIC surface fitting to get curvature
-                  ! call this%paraboloid_integral_fit(i,j,k,n,mycurv(n))
+                  ! Perform PLIC surface fitting to get curvature
+                  !call this%paraboloid_integral_fit(i,j,k,n,mycurv(n))
                   ! Also store surface and normal
                   mysurf(n)  =abs(calculateVolume(this%interface_polygon(n,i,j,k)))
                   mynorm(n,:)=    calculateNormal(this%interface_polygon(n,i,j,k))
@@ -2271,7 +2271,7 @@ contains
       real(WP), dimension(3) :: buf,reconst_plane_coeffs
       integer :: nplane,shape,n,ii,jj,kk,ai,aj
       real(WP), dimension(6) :: integrals
-      real(WP) :: xv,xvn,yv,yvn,b_dot_sum
+      real(WP) :: xv,xvn,yv,yvn,ww,b_dot_sum
       ! Storage for symmetric problem
       real(WP), dimension(6,6) :: A
       integer , dimension(6)   :: ipiv
@@ -2297,9 +2297,9 @@ contains
       ! Collect all data
       A=0.0_WP
       b=0.0_WP
-      do kk=k-1,k+1
-         do jj=j-1,j+1
-            do ii=i-1,i+1
+      do kk=k-2,k+2
+         do jj=j-2,j+2
+            do ii=i-2,i+2
                
                ! Skip the cell if it's a true wall
                if (this%mask(ii,jj,kk).eq.1) cycle
@@ -2349,23 +2349,24 @@ contains
                   end do
                   b_dot_sum=b_dot_sum+dot_product(reconst_plane_coeffs,integrals(1:3))
                   
+                  ! Get weighting
+                  ww=wgauss(sqrt(dot_product(ploc,ploc)),10.0_WP)
+                  
                   ! Add to symmetric matrix and RHS
                   do aj=1,6
                      do ai=1,aj
-                        A(ai,aj)=A(ai,aj)+integrals(ai)*integrals(aj)
+                        A(ai,aj)=A(ai,aj)+ww*integrals(ai)*integrals(aj)
                      end do
                   end do
-                  b=b+integrals*b_dot_sum
+                  b=b+ww*integrals*b_dot_sum
                   
                end do
             end do
          end do
       end do
       
-      ! Query optimal work array size
+      ! Query optimal work array size then solve for paraboloid as n=F(t,s)=b1+b2*t+b3*s+b4*t^2+b5*t*s+b6*s^2
       call dsysv('U',6,1,A,6,ipiv,b,6,lwork_query,-1,info); lwork=int(lwork_query(1)); allocate(work(lwork))
-      
-      ! Solve for paraboloid as n=F(t,s)=b1+b2*t+b3*s+b4*t^2+b5*t*s+b6*s^2 using Lapack
       call dsysv('U',6,1,A,6,ipiv,b,6,work,lwork,info); sol=b(1:6)
       
       ! Get the curvature at (t,s)=(0,0)
@@ -2374,6 +2375,19 @@ contains
       ddF_dtds=sol(5)
       mycurv=-((1.0_WP+dF_dt**2)*ddF_dsds-2.0_WP*dF_dt*dF_ds*ddF_dtds+(1.0_WP+dF_ds**2)*ddF_dtdt)/(1.0_WP+dF_dt**2+dF_ds**2)**(1.5_WP)
       mycurv=mycurv/this%cfg%meshsize(i,j,k)
+      
+   contains
+      
+      ! Quasi-Gaussian weighting function - h=2.5 looks okay
+      real(WP) function wgauss(d,h)
+         implicit none
+         real(WP), intent(in) :: d,h
+         if (d.ge.h) then
+            wgauss=0.0_WP
+         else
+            wgauss=(1.0_WP+4.0_WP*d/h)*(1.0_WP-d/h)**4
+         end if
+      end function wgauss
       
    end subroutine paraboloid_integral_fit
    

@@ -5,9 +5,9 @@ Partition : 1 1 4
 Lx : 30e-3
 Ly : 15e-3
 Lz : 30e-3
-nx : 64
-ny : 32
-nz : 64
+nx : 100
+ny : 50
+nz : 100
 
 # Wall geometry
 Hole size  : 0.001
@@ -16,8 +16,8 @@ Hole depth : 0.02
 
 # Droplet properties
 Liquid injection velocity : 0.02
-Droplet radius :        6e-3
-Initial contact angle : 180
+Droplet radius :            6e-3
+Initial contact angle :     180
 
 # Source
 Gravity : 0 0 0
