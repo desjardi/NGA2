@@ -91,12 +91,11 @@ contains
                end do
             end do
          end do
-         ! Add a pipe-like wall at the bottom
+         ! Add a pipe-like wall at the bottom - now with a square cylinder
          do k=cfg%kmino_,cfg%kmaxo_
             do j=cfg%jmino_,cfg%jmaxo_
                do i=cfg%imino_,cfg%imaxo_
-                  r=sqrt((cfg%ym(j)-ypipe)**2+(cfg%zm(k))**2)
-                  if (cfg%xm(i).gt.-0.5_WP*lpipe.and.cfg%xm(i).lt.+0.5_WP*lpipe.and.r.lt.rpipe) cfg%VF(i,j,k)=0.0_WP
+                  if (cfg%xm(i).gt.-0.5_WP*lpipe.and.cfg%xm(i).lt.+0.5_WP*lpipe.and.abs(cfg%ym(j)-ypipe).lt.rpipe.and.abs(cfg%zm(k)).lt.rpipe) cfg%VF(i,j,k)=0.0_WP
                end do
             end do
          end do

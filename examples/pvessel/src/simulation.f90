@@ -98,9 +98,9 @@ contains
       logical :: isIn
       real(WP) :: r
       isIn=.false.
-      if (abs(pg%xm(i)+dx-0.5_WP*lpipe).le.dx.and.abs(pg%y(j)-dy-ypipe).lt.dy.and.abs(pg%zm(k)).lt.0.02_WP) isIn=.true.
-      if (abs(pg%xm(i)                ).le.dx.and.abs(pg%y(j)-dy-ypipe).lt.dy.and.abs(pg%zm(k)).lt.0.02_WP) isIn=.true.
-      if (abs(pg%xm(i)-dx+0.5_WP*lpipe).le.dx.and.abs(pg%y(j)-dy-ypipe).lt.dy.and.abs(pg%zm(k)).lt.0.02_WP) isIn=.true.
+      if (abs(pg%xm(i)+dx-0.5_WP*lpipe).le.dx.and.pg%y(j)-0.5_WP*dy.lt.ypipe+rpipe.and.pg%y(j)+0.5_WP*dy.ge.ypipe+rpipe.and.abs(pg%zm(k)).lt.rpipe) isIn=.true.
+      if (abs(pg%xm(i)                ).le.dx.and.pg%y(j)-0.5_WP*dy.lt.ypipe+rpipe.and.pg%y(j)+0.5_WP*dy.ge.ypipe+rpipe.and.abs(pg%zm(k)).lt.rpipe) isIn=.true.
+      if (abs(pg%xm(i)-dx+0.5_WP*lpipe).le.dx.and.pg%y(j)-0.5_WP*dy.lt.ypipe+rpipe.and.pg%y(j)+0.5_WP*dy.ge.ypipe+rpipe.and.abs(pg%zm(k)).lt.rpipe) isIn=.true.
    end function vtube
    
    
@@ -113,9 +113,9 @@ contains
       logical :: isIn
       real(WP) :: r
       isIn=.false.
-      if (abs(pg%xm(i)+dx-0.5_WP*lpipe).le.dx.and.abs(pg%y(j+1)-dy-ypipe).lt.dy.and.abs(pg%zm(k)).lt.0.02_WP) isIn=.true.
-      if (abs(pg%xm(i)                ).le.dx.and.abs(pg%y(j+1)-dy-ypipe).lt.dy.and.abs(pg%zm(k)).lt.0.02_WP) isIn=.true.
-      if (abs(pg%xm(i)-dx+0.5_WP*lpipe).le.dx.and.abs(pg%y(j+1)-dy-ypipe).lt.dy.and.abs(pg%zm(k)).lt.0.02_WP) isIn=.true.
+      if (abs(pg%xm(i)+dx-0.5_WP*lpipe).le.dx.and.pg%ym(j).lt.ypipe+rpipe.and.pg%ym(j)+dy.ge.ypipe+rpipe.and.abs(pg%zm(k)).lt.rpipe) isIn=.true.
+      if (abs(pg%xm(i)                ).le.dx.and.pg%ym(j).lt.ypipe+rpipe.and.pg%ym(j)+dy.ge.ypipe+rpipe.and.abs(pg%zm(k)).lt.rpipe) isIn=.true.
+      if (abs(pg%xm(i)-dx+0.5_WP*lpipe).le.dx.and.pg%ym(j).lt.ypipe+rpipe.and.pg%ym(j)+dy.ge.ypipe+rpipe.and.abs(pg%zm(k)).lt.rpipe) isIn=.true.
    end function sctube
    
    
@@ -908,9 +908,9 @@ end subroutine get_cond
             end block mom_bcond
             
             ! Solve Poisson equation
-            call fs%correct_mfr()                          !< Now outlet so this gets the MFR imbalance
+            call fs%correct_mfr()                          !< No outlet so this gets the MFR imbalance
             fluid_mass=fluid_mass_old-sum(fs%mfr)*time%dt  !< Update mass in system
-            call get_rho(mass=fluid_mass)                  !< Adjust rho and pressure in accordance
+            call get_rho(mass=fluid_mass)                  !< Adjust rho and pressure accordingly
             call sc%get_drhodt(dt=time%dt,drhodt=resSC)
             call fs%get_div(drhodt=resSC)
             fs%psolv%rhs=-fs%cfg%vol*fs%div/time%dtmid
