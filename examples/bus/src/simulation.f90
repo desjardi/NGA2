@@ -250,7 +250,7 @@ contains
       
       ! Create an incompressible flow solver with bconds
       create_solver: block
-         use ils_class, only: pcg_amg,gmres,amg,pfmg
+         use ils_class, only: pcg_amg,pcg_pfmg,gmres
          use incomp_class, only: dirichlet,convective,neumann,clipped_neumann
          ! Create flow solver
          fs=incomp(cfg=cfg,name='Incompressible NS')
@@ -279,6 +279,7 @@ contains
          call param_read('Implicit iteration',fs%implicit%maxit)
          call param_read('Implicit tolerance',fs%implicit%rcvg)
          ! Setup the solver
+         fs%psolv%maxlevel=16
          call fs%setup(pressure_ils=pcg_amg,implicit_ils=gmres)
       end block create_solver
       
@@ -359,7 +360,7 @@ contains
       
       ! Create an scalar solver with bconds
       create_scalar: block
-         use ils_class, only: pcg_amg,gmres,amg,pfmg
+         use ils_class, only: gmres
          use scalar_class, only: bcond,dirichlet,neumann,quick
          type(bcond), pointer :: mybc
          integer :: i,j,k,n
