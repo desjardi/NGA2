@@ -259,9 +259,11 @@ contains
          nsc=param_getsize('Source position')/3
          if (cfg%amRoot) print*,'Found',nsc,'sources!'
          ! Allocate storage for sources and read them
-         allocate(all_src_pos(3,nsc))
-         call param_read('Source position',all_src_pos)
-         call param_read('Source radius',src_rad)
+         if (nsc.gt.0) then
+            allocate(all_src_pos(3,nsc))
+            call param_read('Source position',all_src_pos)
+            call param_read('Source radius',src_rad)
+         end if
       end block initialize_sources
       
       
@@ -448,7 +450,7 @@ contains
          integer :: i,j,k,n,ii
          character(len=2) :: id
          ! Allocate scalar solvers
-         allocate(sc(nsc))
+         if (nsc.gt.0) allocate(sc(nsc))
          ! For each solver, prepare it completely
          do ii=1,nsc
             ! Prepare tracer name
@@ -485,7 +487,7 @@ contains
          call param_read('Ensight output period',ens_evt%tper)
          ! Add variables to output
          call ens_out%add_vector('velocity',Ui,Vi,Wi)
-         call ens_out%add_scalar('tracer',sc(1)%SC)
+         if (nsc.ge.1) call ens_out%add_scalar('tracer',sc(1)%SC)
          ! Output to ensight
          if (ens_evt%occurs()) call ens_out%write_data(time%t)
       end block create_ensight
