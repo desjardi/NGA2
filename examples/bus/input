@@ -14,7 +14,7 @@ Dynamic viscosity : 1.8e-5
 
 # Time integration
 Max timestep size :   1e-2
-Max cfl number :      1.2
+Max cfl number :      1.0
 Max simulation time : 200
 
 # Pressure solver
@@ -25,5 +25,6 @@ Pressure iteration : 100
 Implicit tolerance : 1e-6
 Implicit iteration : 100
 
-# Ensight ouput
-Ensight output period : 1
+# Various outputs
+Ensight output period : 10
+Restart output period : 60

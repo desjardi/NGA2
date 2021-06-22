@@ -5,9 +5,9 @@ Partition : 1 1 4
 Lx : 30e-3
 Ly : 15e-3
 Lz : 30e-3
-nx : 128
-ny : 64
-nz : 128
+nx : 100
+ny : 50
+nz : 100
 
 # Wall geometry
 Hole size  : 0.001
@@ -33,7 +33,7 @@ Surface tension coefficient : 0.072
 Static contact angle :        70
 
 # Time integration
-Max timestep size : 0.5e-4
+Max timestep size : 1e-4
 Max cfl number :    0.9
 Max time :          0.2
 
