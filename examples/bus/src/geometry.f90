@@ -1,7 +1,8 @@
 !> Various definitions and tools for initializing NGA2 config
 module geometry
-   use config_class, only: config
-   use precision,    only: WP
+   use config_class,   only: config
+   use precision,      only: WP
+   use partmesh_class, only: partmesh
    implicit none
    private
    
@@ -52,9 +53,18 @@ module geometry
       real(WP) :: vel_fventdriver,vel_fventcurb
       real(WP) :: vel_ventwindow
       real(WP) :: vel_ventface,vel_vinrack
+      ! Passenger height
+      real(WP) :: h_psg
    end type geom_bus
    
    type(geom_bus), public :: bus
+   
+   !> Passenger information
+   type(partmesh)             , public :: psg_mesh
+   real(WP)                   , public :: h_psg    !> Height of passenger mouth from the ground
+   integer , parameter        , public :: npsg=32  !< Hard code 32 passengers
+   integer , dimension(3,npsg), public :: ipsg     !< Index for each passenger
+   real(WP), dimension(3,npsg), public :: xpsg     !< Location for each passenger
    
 contains
    
@@ -506,6 +516,58 @@ contains
             end do
          end do
       end block create_walls
+      
+      
+      ! Create passengers
+      add_passengers: block
+         integer :: n,count
+         real(WP) :: adist,x1face
+         
+         ! Get factor to adjust seat spacing according to mesh
+         adist = real(mod(nint(bus%l_seatrow/bus%i2m),nint(bus%min_length/bus%gres/bus%i2m)),WP)*bus%i2m
+         
+         ! Read in source height
+         call param_read('Source height',h_psg)
+         
+         ! Assign positions
+         count=0
+         ! Driver side
+         x1face=bus%x_seatdriver
+         do n=1,bus%nseat_driver
+            count=count+1
+            xpsg(:,count)=[x1face+real(n-1,WP)*bus%l_seatrow+real(mod(n-1,2),WP)*adist+0.5_WP*bus%l_seat,h_psg,bus%w_seatcol-0.5_WP*bus%w_seat]
+            ipsg(:,count)=cfg%get_ijk_global(xpsg(:,count),[cfg%imino,cfg%jmino,cfg%kmino])
+         end do
+         ! Curb side - back section
+         x1face=bus%x_seatcurb
+         do n=1,bus%nseat_curb1
+            count=count+1
+            xpsg(:,count)=[x1face+real(n-1,WP)*bus%l_seatrow+real(mod(n-1,2),WP)*adist+0.5_WP*bus%l_seat,h_psg,bus%w_bus-bus%w_seatcol+0.5_WP*bus%w_seat]
+            ipsg(:,count)=cfg%get_ijk_global(xpsg(:,count),[cfg%imino,cfg%jmino,cfg%kmino])
+            count=count+1
+            xpsg(:,count)=[x1face+real(n-1,WP)*bus%l_seatrow+real(mod(n-1,2),WP)*adist+0.5_WP*bus%l_seat,h_psg,bus%w_bus-2.0_WP*bus%w_seatcol+0.5_WP*bus%w_seat]
+            ipsg(:,count)=cfg%get_ijk_global(xpsg(:,count),[cfg%imino,cfg%jmino,cfg%kmino])
+         end do
+         ! Curb side - front section
+         x1face=bus%x_seatcurb2+0.5_WP*bus%l_seat-2.0_WP*bus%th_bseat
+         do n=1,bus%nseat_curb2
+            count=count+1
+            xpsg(:,count)=[x1face+real(n-1,WP)*bus%l_seatrow+real(mod(n-1,2),WP)*adist+0.5_WP*bus%l_seat,h_psg,bus%w_bus-bus%w_seatcol+0.5_WP*bus%w_seat]
+            ipsg(:,count)=cfg%get_ijk_global(xpsg(:,count),[cfg%imino,cfg%jmino,cfg%kmino])
+            count=count+1
+            xpsg(:,count)=[x1face+real(n-1,WP)*bus%l_seatrow+real(mod(n-1,2),WP)*adist+0.5_WP*bus%l_seat,h_psg,bus%w_bus-2.0_WP*bus%w_seatcol+0.5_WP*bus%w_seat]
+            ipsg(:,count)=cfg%get_ijk_global(xpsg(:,count),[cfg%imino,cfg%jmino,cfg%kmino])
+            x1face=bus%x_seatcurb2
+         end do
+         
+         ! While we're at it, create a particle mesh for plotting the passenger positions
+         psg_mesh=partmesh(nvar=0,name='psg'); call psg_mesh%reset()
+         call psg_mesh%set_size(npsg)
+         do n=1,npsg
+            psg_mesh%pos(:,n)=xpsg(:,n)
+         end do
+         
+      end block add_passengers
       
       
    end subroutine geometry_init

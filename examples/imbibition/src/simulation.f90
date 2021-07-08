@@ -243,23 +243,23 @@ contains
          do k=vf%cfg%kmino_,vf%cfg%kmaxo_
             do j=vf%cfg%jmino_,vf%cfg%jmaxo_
                do i=vf%cfg%imino_,vf%cfg%imaxo_
-                  ! Fill out part of the needle
-                  if (vf%cfg%ym(j).gt.0.013_WP.and.sqrt(vf%cfg%xm(i)**2+vf%cfg%zm(k)**2).lt.0.0007_WP) then
-                     vf%VF(i,j,k)=1.0_WP
-                     vf%Lbary(:,i,j,k)=[vf%cfg%xm(i),vf%cfg%ym(j),vf%cfg%zm(k)]
-                     vf%Gbary(:,i,j,k)=[vf%cfg%xm(i),vf%cfg%ym(j),vf%cfg%zm(k)]
-                  else
-                     vf%VF(i,j,k)=0.0_WP
-                     vf%Lbary(:,i,j,k)=[vf%cfg%xm(i),vf%cfg%ym(j),vf%cfg%zm(k)]
-                     vf%Gbary(:,i,j,k)=[vf%cfg%xm(i),vf%cfg%ym(j),vf%cfg%zm(k)]
-                  end if
-                  ! ! Handle wall cells or cells below the plate surface
-                  ! if (vf%mask(i,j,k).eq.1.or.vf%cfg%ym(j).lt.0.0_WP) then
+                  ! ! Fill out part of the needle
+                  ! if (vf%cfg%ym(j).gt.0.013_WP.and.sqrt(vf%cfg%xm(i)**2+vf%cfg%zm(k)**2).lt.0.0007_WP) then
+                  !    vf%VF(i,j,k)=1.0_WP
+                  !    vf%Lbary(:,i,j,k)=[vf%cfg%xm(i),vf%cfg%ym(j),vf%cfg%zm(k)]
+                  !    vf%Gbary(:,i,j,k)=[vf%cfg%xm(i),vf%cfg%ym(j),vf%cfg%zm(k)]
+                  ! else
                   !    vf%VF(i,j,k)=0.0_WP
                   !    vf%Lbary(:,i,j,k)=[vf%cfg%xm(i),vf%cfg%ym(j),vf%cfg%zm(k)]
                   !    vf%Gbary(:,i,j,k)=[vf%cfg%xm(i),vf%cfg%ym(j),vf%cfg%zm(k)]
-                  !    cycle
                   ! end if
+                  ! Handle wall cells or cells below the plate surface
+                  if (vf%mask(i,j,k).eq.1.or.vf%cfg%ym(j).lt.0.0_WP) then
+                     vf%VF(i,j,k)=0.0_WP
+                     vf%Lbary(:,i,j,k)=[vf%cfg%xm(i),vf%cfg%ym(j),vf%cfg%zm(k)]
+                     vf%Gbary(:,i,j,k)=[vf%cfg%xm(i),vf%cfg%ym(j),vf%cfg%zm(k)]
+                     cycle
+                  end if
                   ! ! Fill out the needle - this is handwavy...
                   ! if (vf%cfg%ym(j).gt.0.010_WP.and.sqrt(vf%cfg%xm(i)**2+vf%cfg%zm(k)**2).lt.0.0007_WP) then
                   !    vf%VF(i,j,k)=1.0_WP
@@ -267,26 +267,26 @@ contains
                   !    vf%Gbary(:,i,j,k)=[vf%cfg%xm(i),vf%cfg%ym(j),vf%cfg%zm(k)]
                   !    cycle
                   ! end if
-                  ! ! Set cube vertices
-                  ! n=0
-                  ! do sk=0,1
-                  !    do sj=0,1
-                  !       do si=0,1
-                  !          n=n+1; cube_vertex(:,n)=[vf%cfg%x(i+si),vf%cfg%y(j+sj),vf%cfg%z(k+sk)]
-                  !       end do
-                  !    end do
-                  ! end do
-                  ! ! Call adaptive refinement code to get volume and barycenters recursively
-                  ! vol=0.0_WP; area=0.0_WP; v_cent=0.0_WP; a_cent=0.0_WP
-                  ! call cube_refine_vol(cube_vertex,vol,area,v_cent,a_cent,levelset_contact_drop,0.0_WP,amr_ref_lvl)
-                  ! vf%VF(i,j,k)=vol/vf%cfg%vol(i,j,k)
-                  ! if (vf%VF(i,j,k).ge.VFlo.and.vf%VF(i,j,k).le.VFhi) then
-                  !    vf%Lbary(:,i,j,k)=v_cent
-                  !    vf%Gbary(:,i,j,k)=([vf%cfg%xm(i),vf%cfg%ym(j),vf%cfg%zm(k)]-vf%VF(i,j,k)*vf%Lbary(:,i,j,k))/(1.0_WP-vf%VF(i,j,k))
-                  ! else
-                  !    vf%Lbary(:,i,j,k)=[vf%cfg%xm(i),vf%cfg%ym(j),vf%cfg%zm(k)]
-                  !    vf%Gbary(:,i,j,k)=[vf%cfg%xm(i),vf%cfg%ym(j),vf%cfg%zm(k)]
-                  ! end if
+                  ! Set cube vertices
+                  n=0
+                  do sk=0,1
+                     do sj=0,1
+                        do si=0,1
+                           n=n+1; cube_vertex(:,n)=[vf%cfg%x(i+si),vf%cfg%y(j+sj),vf%cfg%z(k+sk)]
+                        end do
+                     end do
+                  end do
+                  ! Call adaptive refinement code to get volume and barycenters recursively
+                  vol=0.0_WP; area=0.0_WP; v_cent=0.0_WP; a_cent=0.0_WP
+                  call cube_refine_vol(cube_vertex,vol,area,v_cent,a_cent,levelset_contact_drop,0.0_WP,amr_ref_lvl)
+                  vf%VF(i,j,k)=vol/vf%cfg%vol(i,j,k)
+                  if (vf%VF(i,j,k).ge.VFlo.and.vf%VF(i,j,k).le.VFhi) then
+                     vf%Lbary(:,i,j,k)=v_cent
+                     vf%Gbary(:,i,j,k)=([vf%cfg%xm(i),vf%cfg%ym(j),vf%cfg%zm(k)]-vf%VF(i,j,k)*vf%Lbary(:,i,j,k))/(1.0_WP-vf%VF(i,j,k))
+                  else
+                     vf%Lbary(:,i,j,k)=[vf%cfg%xm(i),vf%cfg%ym(j),vf%cfg%zm(k)]
+                     vf%Gbary(:,i,j,k)=[vf%cfg%xm(i),vf%cfg%ym(j),vf%cfg%zm(k)]
+                  end if
                end do
             end do
          end do
@@ -312,7 +312,7 @@ contains
       ! Create a two-phase flow solver without bconds
       create_and_initialize_flow_solver: block
          use tpns_class, only: clipped_neumann,dirichlet,bcond
-         use ils_class,  only: pcg_pfmg
+         use ils_class,  only: pcg_pfmg,pcg_amg
          use mathtools,  only: Pi
          type(bcond), pointer :: mybc
          real(WP) :: Vneedle
@@ -336,7 +336,7 @@ contains
          call fs%add_bcond(name='bc_xm' ,type=clipped_neumann,face='x',dir=-1,canCorrect=.true. ,locator=xm_locator)
          call fs%add_bcond(name='bc_zp' ,type=clipped_neumann,face='z',dir=+1,canCorrect=.true. ,locator=zp_locator)
          call fs%add_bcond(name='bc_zm' ,type=clipped_neumann,face='z',dir=-1,canCorrect=.true. ,locator=zm_locator)
-         call fs%add_bcond(name='needle',type=dirichlet      ,face='y',dir=+1,canCorrect=.false.,locator=needle    )
+         ! call fs%add_bcond(name='needle',type=dirichlet      ,face='y',dir=+1,canCorrect=.false.,locator=needle    )
          ! Configure pressure solver
          call param_read('Pressure iteration',fs%psolv%maxit)
          call param_read('Pressure tolerance',fs%psolv%rcvg)
@@ -345,16 +345,16 @@ contains
          call param_read('Implicit tolerance',fs%implicit%rcvg)
          ! Setup the solver
          fs%psolv%maxlevel=10
-         call fs%setup(pressure_ils=pcg_pfmg,implicit_ils=pcg_pfmg)
+         call fs%setup(pressure_ils=pcg_amg,implicit_ils=pcg_pfmg)
          ! Zero initial field
          fs%U=0.0_WP; fs%V=0.0_WP; fs%W=0.0_WP
-         ! Apply Dirichlet at liquid needle
-         call param_read('Liquid injection velocity',Vneedle)
-         call fs%get_bcond('needle',mybc)
-         do n=1,mybc%itr%no_
-            i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
-            fs%V(i,j,k)=-Vneedle
-         end do
+         ! ! Apply Dirichlet at liquid needle
+         ! call param_read('Liquid injection velocity',Vneedle)
+         ! call fs%get_bcond('needle',mybc)
+         ! do n=1,mybc%itr%no_
+         !    i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
+         !    fs%V(i,j,k)=-Vneedle
+         ! end do
          ! Calculate cell-centered velocities and divergence
          call fs%interp_vel(Ui,Vi,Wi)
          call fs%get_div()

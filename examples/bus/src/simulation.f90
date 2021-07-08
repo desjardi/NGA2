@@ -2,7 +2,7 @@
 module simulation
    use string,            only: str_medium
    use precision,         only: WP
-   use geometry,          only: cfg
+   use geometry,          only: cfg,npsg,ipsg,xpsg,psg_mesh
    use incomp_class,      only: incomp
    use sgsmodel_class,    only: sgsmodel
    use scalar_class,      only: scalar
@@ -11,6 +11,8 @@ module simulation
    use event_class,       only: event
    use monitor_class,     only: monitor
    use datafile_class,    only: datafile
+   use mpi_f08
+   use parallel,          only: MPI_REAL_WP
    implicit none
    private
    
@@ -31,6 +33,7 @@ module simulation
    
    !> Simulation monitor file
    type(monitor) :: mfile,cflfile,intfile
+   type(monitor), dimension(:), allocatable :: psgfile
    
    public :: simulation_init,simulation_run,simulation_final
    
@@ -41,9 +44,10 @@ module simulation
    
    !> Scalar source descriptor
    integer :: nsc
-   real(WP), dimension(:,:), allocatable :: all_src_pos
+   integer , dimension(:), allocatable :: src_psg
    real(WP), dimension(3) :: src_pos
    real(WP) :: src_rad
+   real(WP), dimension(:,:), allocatable :: psg_trc
    
    !> Fluid viscosity
    real(WP) :: visc
@@ -256,12 +260,11 @@ contains
       initialize_sources: block
          use param, only: param_getsize
          ! Figure out how many sources
-         nsc=param_getsize('Source position')/3
-         if (cfg%amRoot) print*,'Found',nsc,'sources!'
+         nsc=param_getsize('Source passengers')
          ! Allocate storage for sources and read them
          if (nsc.gt.0) then
-            allocate(all_src_pos(3,nsc))
-            call param_read('Source position',all_src_pos)
+            allocate(src_psg(nsc))
+            call param_read('Source passengers',src_psg)
             call param_read('Source radius',src_rad)
          end if
       end block initialize_sources
@@ -462,7 +465,7 @@ contains
             ! Configure implicit scalar solver
             sc(ii)%implicit%maxit=fs%implicit%maxit; sc(ii)%implicit%rcvg=fs%implicit%rcvg
             ! Assign proper source location
-            src_pos=all_src_pos(:,ii)
+            src_pos=xpsg(:,src_psg(ii))
             ! Define boundary conditions
             call sc(ii)%add_bcond(name='source',type=dirichlet,locator=scalar_src,dir='+y')
             ! Setup the solver
@@ -475,7 +478,34 @@ contains
                sc(ii)%SC(i,j,k)=1.0_WP
             end do
          end do
+         ! Also create monitoring of scalar concentration
+         if (nsc.gt.0) allocate(psg_trc(1:nsc,1:npsg)); psg_trc=0.0_WP
       end block create_scalar
+      
+      
+      ! Get tracer data at passenger location
+      get_tracer_at_passenger: block
+         integer :: nn,ii,ierr
+         real(WP), dimension(:,:), allocatable :: temp
+         ! Allocate temp array
+         allocate(temp(1:nsc,1:npsg))
+         ! Populate tracer values at passenger location
+         do nn=1,npsg
+            if (ipsg(1,nn).ge.cfg%imin_.and.ipsg(1,nn).le.cfg%imax_.and.ipsg(2,nn).ge.cfg%jmin_.and.ipsg(2,nn).le.cfg%jmax_.and.ipsg(3,nn).ge.cfg%kmin_.and.ipsg(3,nn).le.cfg%kmax_) then
+               do ii=1,nsc
+                  temp(ii,nn)=sc(ii)%SC(ipsg(1,nn),ipsg(2,nn),ipsg(3,nn))
+               end do
+            else
+               do ii=1,nsc
+                  temp(ii,nn)=0.0_WP
+               end do
+            end if
+         end do
+         ! All gather the data
+         call MPI_ALLREDUCE(temp,psg_trc,nsc*npsg,MPI_REAL_WP,MPI_SUM,cfg%comm,ierr)
+         ! Deallocate temp array
+         deallocate(temp)
+      end block get_tracer_at_passenger
       
       
       ! Add Ensight output
@@ -488,6 +518,8 @@ contains
          ! Add variables to output
          call ens_out%add_vector('velocity',Ui,Vi,Wi)
          if (nsc.ge.1) call ens_out%add_scalar('tracer',sc(1)%SC)
+         ! Add particles at passenger location
+         !call ens_out%add_particle('PSG',psg_mesh)
          ! Output to ensight
          if (ens_evt%occurs()) call ens_out%write_data(time%t)
       end block create_ensight
@@ -495,7 +527,7 @@ contains
       
       ! Create a monitor file
       create_monitor: block
-         integer :: ii
+         integer :: ii,nn
          character(len=2) :: id
          ! Prepare some info about fields
          call fs%get_cfl(time%dt,time%cfl)
@@ -525,14 +557,33 @@ contains
          call cflfile%add_column(fs%CFLv_y,'Viscous yCFL')
          call cflfile%add_column(fs%CFLv_z,'Viscous zCFL')
          call cflfile%write()
-         ! Create sc integral monitor
+         ! Create sc integral monitor file
          intfile=monitor(fs%cfg%amRoot,'integral')
          call intfile%add_column(time%n,'Timestep number')
          call intfile%add_column(time%t,'Time')
          do ii=1,nsc
-            call sc(ii)%get_max(); call sc(ii)%get_int()
+            ! Prepare tracer name
             write(id,'(i2.2)') ii
+            ! Prepare tracer stats and add them
+            call sc(ii)%get_max(); call sc(ii)%get_int()
             call intfile%add_column(sc(ii)%SCint,'SC'//id)
+         end do
+         ! Create passenger tracer monitor
+         if (nsc.gt.0) allocate(psgfile(nsc))
+         do ii=1,nsc
+            ! Prepare tracer name
+            write(id,'(i2.2)') ii
+            ! Create file
+            psgfile(ii)=monitor(fs%cfg%amRoot,'tracer_'//id)
+            call psgfile(ii)%add_column(time%n,'Timestep number')
+            call psgfile(ii)%add_column(time%t,'Time')
+            ! Add a column for each passenger
+            do nn=1,npsg
+               ! Prepare passenegr name
+               write(id,'(i2.2)') nn
+               ! Add passenger tracer data
+               call psgfile(ii)%add_column(psg_trc(ii,nn),'PSG_'//id)
+            end do
          end do
       end block create_monitor
       
@@ -667,6 +718,35 @@ contains
          call mfile%write()
          call cflfile%write()
          call intfile%write()
+         
+         ! Get tracer data at passenger location
+         get_tracer_at_passenger: block
+            integer :: nn,ierr
+            real(WP), dimension(:,:), allocatable :: temp
+            ! Allocate temp array
+            allocate(temp(1:nsc,1:npsg))
+            ! Populate tracer values at passenger location
+            do nn=1,npsg
+               if (ipsg(1,nn).ge.cfg%imin_.and.ipsg(1,nn).le.cfg%imax_.and.ipsg(2,nn).ge.cfg%jmin_.and.ipsg(2,nn).le.cfg%jmax_.and.ipsg(3,nn).ge.cfg%kmin_.and.ipsg(3,nn).le.cfg%kmax_) then
+                  do ii=1,nsc
+                     temp(ii,nn)=sc(ii)%SC(ipsg(1,nn),ipsg(2,nn),ipsg(3,nn))
+                  end do
+               else
+                  do ii=1,nsc
+                     temp(ii,nn)=0.0_WP
+                  end do
+               end if
+            end do
+            ! All gather the data
+            call MPI_ALLREDUCE(temp,psg_trc,nsc*npsg,MPI_REAL_WP,MPI_SUM,cfg%comm,ierr)
+            ! Deallocate temp array
+            deallocate(temp)
+         end block get_tracer_at_passenger
+         
+         ! Output
+         do ii=1,nsc
+            call psgfile(ii)%write()
+         end do
          
          ! Finally, see if it's time to save restart files
          if (save_evt%occurs()) then

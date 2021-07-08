@@ -38,7 +38,7 @@ contains
             x(i)=real(i-1,WP)/real(nx,WP)*Lx-0.5_WP*Lx
          end do
          do j=1,ny+1
-            y(j)=real(j-1,WP)/real(ny,WP)*Ly!-0.5_WP*Ly
+            y(j)=real(j-1,WP)/real(ny,WP)*Ly-0.5_WP*Ly-0.01_WP
          end do
          do k=1,nz+1
             z(k)=real(k-1,WP)/real(nz,WP)*Lz-0.5_WP*Lz
@@ -100,26 +100,26 @@ contains
          
          
          
-         ! Redo for pipette problem
-         cfg%VF=1.0_WP
-         ! Put wall below y=0 for the bottom plate
-         do k=cfg%kmino_,cfg%kmaxo_
-            do j=cfg%jmino_,cfg%jmaxo_
-               do i=cfg%imino_,cfg%imaxo_
-                  if (cfg%ym(j).lt.0.0_WP) cfg%VF(i,j,k)=0.0_WP
-               end do
-            end do
-         end do
-         ! Create pipette duct
-         do k=cfg%kmino_,cfg%kmaxo_
-            do j=cfg%jmino_,cfg%jmaxo_
-               do i=cfg%imino_,cfg%imaxo_
-                  if (sqrt(cfg%xm(i)**2+cfg%zm(k)**2).gt.0.70e-3_WP.and.&
-                  &   sqrt(cfg%xm(i)**2+cfg%zm(k)**2).lt.1.46e-3_WP.and.cfg%ym(j).gt.0.012_WP) cfg%VF(i,j,k)=0.0_WP
-               end do
-            end do
-         end do
-         call cfg%sync(cfg%VF)
+         ! ! Redo for pipette problem
+         ! cfg%VF=1.0_WP
+         ! ! Put wall below y=0 for the bottom plate
+         ! do k=cfg%kmino_,cfg%kmaxo_
+         !    do j=cfg%jmino_,cfg%jmaxo_
+         !       do i=cfg%imino_,cfg%imaxo_
+         !          if (cfg%ym(j).lt.0.0_WP) cfg%VF(i,j,k)=0.0_WP
+         !       end do
+         !    end do
+         ! end do
+         ! ! Create pipette duct
+         ! do k=cfg%kmino_,cfg%kmaxo_
+         !    do j=cfg%jmino_,cfg%jmaxo_
+         !       do i=cfg%imino_,cfg%imaxo_
+         !          if (sqrt(cfg%xm(i)**2+cfg%zm(k)**2).gt.0.70e-3_WP.and.&
+         !          &   sqrt(cfg%xm(i)**2+cfg%zm(k)**2).lt.1.46e-3_WP.and.cfg%ym(j).gt.0.012_WP) cfg%VF(i,j,k)=0.0_WP
+         !       end do
+         !    end do
+         ! end do
+         ! call cfg%sync(cfg%VF)
          
          
       end block create_walls

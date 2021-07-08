@@ -2,12 +2,12 @@
 Partition : 1 1 4
 
 # Mesh definition
-Lx : 30e-3
-Ly : 15e-3
-Lz : 30e-3
-nx : 100
-ny : 50
-nz : 100
+Lx : 25e-3
+Ly : 50e-3
+Lz : 25e-3
+nx : 50
+ny : 100
+nz : 50
 
 # Wall geometry
 Hole size  : 0.001
@@ -30,10 +30,10 @@ Liquid density : 997
 Gas density :    1.15
 
 Surface tension coefficient : 0.072
-Static contact angle :        70
+Static contact angle :        30
 
 # Time integration
-Max timestep size : 1e-4
+Max timestep size : 2e-4
 Max cfl number :    0.9
 Max time :          0.2
 

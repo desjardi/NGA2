@@ -5,8 +5,9 @@ Partition : 4 1 1
 Grid resolution : 1
 
 # Source for tracer
-Source position : #6 1.1 1.55
-Source radius :   0.05
+Source height : 1.1
+Source radius : 0.05
+Source passengers : 1 5 9 13 17 21 25 29
 
 # Fluid properties
 Density :           1.2
