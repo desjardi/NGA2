@@ -20,9 +20,9 @@ Dynamic diffusivity : 0.0005
 
 # Vessel operating conditions
 Initial temperature : 300
-Inlet temperature :   430
+Inlet temperature :   430 430 430
 Initial pressure :    4.47e5  !101325
-Inlet MFR (kg/s) :    0.20
+Inlet MFR (kg/s) :    0.08 0.04 0.08
 Wall temperature :    !300  ! Comment out for adiabatic
 
 # Time integration
