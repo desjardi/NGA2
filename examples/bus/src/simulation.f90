@@ -28,7 +28,7 @@ module simulation
    logical :: restarted
    
    !> Ensight postprocessing
-   type(ensight) :: ens_out
+   type(ensight) :: ens_out,psg_out
    type(event)   :: ens_evt
    
    !> Simulation monitor file
@@ -518,10 +518,12 @@ contains
          ! Add variables to output
          call ens_out%add_vector('velocity',Ui,Vi,Wi)
          if (nsc.ge.1) call ens_out%add_scalar('tracer',sc(1)%SC)
-         ! Add particles at passenger location
-         !call ens_out%add_particle('PSG',psg_mesh)
          ! Output to ensight
          if (ens_evt%occurs()) call ens_out%write_data(time%t)
+         ! Also create an Ensight output for the passengers
+         psg_out=ensight(cfg=cfg,name='psg')
+         call psg_out%add_particle('PSG',psg_mesh)
+         call psg_out%write_data(time%t)
       end block create_ensight
       
       

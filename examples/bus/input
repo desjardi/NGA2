@@ -7,7 +7,7 @@ Grid resolution : 1
 # Source for tracer
 Source height : 1.1
 Source radius : 0.05
-Source passengers : 1 5 9 13 17 21 25 29
+Source passengers : 1 4 7 10 11 16 19 25 31
 
 # Fluid properties
 Density :           1.2
@@ -29,3 +29,6 @@ Implicit iteration : 100
 # Various outputs
 Ensight output period : 10
 Restart output period : 60
+
+# Restart from existing data
+Restart from : !restart_200

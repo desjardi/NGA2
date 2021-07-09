@@ -561,10 +561,11 @@ contains
          end do
          
          ! While we're at it, create a particle mesh for plotting the passenger positions
-         psg_mesh=partmesh(nvar=0,name='psg'); call psg_mesh%reset()
+         psg_mesh=partmesh(nvar=1,name='psg'); psg_mesh%varname(1)='id'; call psg_mesh%reset()
          call psg_mesh%set_size(npsg)
          do n=1,npsg
             psg_mesh%pos(:,n)=xpsg(:,n)
+            psg_mesh%var(1,n)=real(n,WP)
          end do
          
       end block add_passengers
