@@ -47,7 +47,7 @@ module simulation
    integer , dimension(:), allocatable :: src_psg
    real(WP), dimension(3) :: src_pos
    real(WP) :: src_rad
-   real(WP), dimension(:,:), allocatable :: psg_trc
+   real(WP), dimension(npsg) :: psg_val,tmp_val
    
    !> Fluid viscosity
    real(WP) :: visc
@@ -478,34 +478,7 @@ contains
                sc(ii)%SC(i,j,k)=1.0_WP
             end do
          end do
-         ! Also create monitoring of scalar concentration
-         if (nsc.gt.0) allocate(psg_trc(1:nsc,1:npsg)); psg_trc=0.0_WP
       end block create_scalar
-      
-      
-      ! Get tracer data at passenger location
-      get_tracer_at_passenger: block
-         integer :: nn,ii,ierr
-         real(WP), dimension(:,:), allocatable :: temp
-         ! Allocate temp array
-         allocate(temp(1:nsc,1:npsg))
-         ! Populate tracer values at passenger location
-         do nn=1,npsg
-            if (ipsg(1,nn).ge.cfg%imin_.and.ipsg(1,nn).le.cfg%imax_.and.ipsg(2,nn).ge.cfg%jmin_.and.ipsg(2,nn).le.cfg%jmax_.and.ipsg(3,nn).ge.cfg%kmin_.and.ipsg(3,nn).le.cfg%kmax_) then
-               do ii=1,nsc
-                  temp(ii,nn)=sc(ii)%SC(ipsg(1,nn),ipsg(2,nn),ipsg(3,nn))
-               end do
-            else
-               do ii=1,nsc
-                  temp(ii,nn)=0.0_WP
-               end do
-            end if
-         end do
-         ! All gather the data
-         call MPI_ALLREDUCE(temp,psg_trc,nsc*npsg,MPI_REAL_WP,MPI_SUM,cfg%comm,ierr)
-         ! Deallocate temp array
-         deallocate(temp)
-      end block get_tracer_at_passenger
       
       
       ! Add Ensight output
@@ -529,7 +502,7 @@ contains
       
       ! Create a monitor file
       create_monitor: block
-         integer :: ii,nn
+         integer :: ii,nn,ierr
          character(len=2) :: id
          ! Prepare some info about fields
          call fs%get_cfl(time%dt,time%cfl)
@@ -570,6 +543,7 @@ contains
             call sc(ii)%get_max(); call sc(ii)%get_int()
             call intfile%add_column(sc(ii)%SCint,'SC'//id)
          end do
+         call intfile%write()
          ! Create passenger tracer monitor
          if (nsc.gt.0) allocate(psgfile(nsc))
          do ii=1,nsc
@@ -584,8 +558,19 @@ contains
                ! Prepare passenegr name
                write(id,'(i2.2)') nn
                ! Add passenger tracer data
-               call psgfile(ii)%add_column(psg_trc(ii,nn),'PSG_'//id)
+               call psgfile(ii)%add_column(psg_val(nn),'PSG_'//id)
             end do
+            ! Populate tracer values at passenger location
+            do nn=1,npsg
+               if (ipsg(1,nn).ge.cfg%imin_.and.ipsg(1,nn).le.cfg%imax_.and.ipsg(2,nn).ge.cfg%jmin_.and.ipsg(2,nn).le.cfg%jmax_.and.ipsg(3,nn).ge.cfg%kmin_.and.ipsg(3,nn).le.cfg%kmax_) then
+                  tmp_val(nn)=sc(ii)%SC(ipsg(1,nn),ipsg(2,nn),ipsg(3,nn))
+               else
+                  tmp_val(nn)=0.0_WP
+               end if
+            end do
+            call MPI_ALLREDUCE(tmp_val,psg_val,npsg,MPI_REAL_WP,MPI_SUM,cfg%comm,ierr)
+            ! Write
+            call psgfile(ii)%write()
          end do
       end block create_monitor
       
@@ -596,7 +581,7 @@ contains
    !> Perform an NGA2 simulation
    subroutine simulation_run
       implicit none
-      integer :: ii
+      integer :: ii,nn,ierr
       
       ! Perform time integration
       do while (.not.time%done())
@@ -721,32 +706,18 @@ contains
          call cflfile%write()
          call intfile%write()
          
-         ! Get tracer data at passenger location
-         get_tracer_at_passenger: block
-            integer :: nn,ierr
-            real(WP), dimension(:,:), allocatable :: temp
-            ! Allocate temp array
-            allocate(temp(1:nsc,1:npsg))
+         ! Output tracer at passanger location
+         do ii=1,nsc
             ! Populate tracer values at passenger location
             do nn=1,npsg
                if (ipsg(1,nn).ge.cfg%imin_.and.ipsg(1,nn).le.cfg%imax_.and.ipsg(2,nn).ge.cfg%jmin_.and.ipsg(2,nn).le.cfg%jmax_.and.ipsg(3,nn).ge.cfg%kmin_.and.ipsg(3,nn).le.cfg%kmax_) then
-                  do ii=1,nsc
-                     temp(ii,nn)=sc(ii)%SC(ipsg(1,nn),ipsg(2,nn),ipsg(3,nn))
-                  end do
+                  tmp_val(nn)=sc(ii)%SC(ipsg(1,nn),ipsg(2,nn),ipsg(3,nn))
                else
-                  do ii=1,nsc
-                     temp(ii,nn)=0.0_WP
-                  end do
+                  tmp_val(nn)=0.0_WP
                end if
             end do
-            ! All gather the data
-            call MPI_ALLREDUCE(temp,psg_trc,nsc*npsg,MPI_REAL_WP,MPI_SUM,cfg%comm,ierr)
-            ! Deallocate temp array
-            deallocate(temp)
-         end block get_tracer_at_passenger
-         
-         ! Output
-         do ii=1,nsc
+            call MPI_ALLREDUCE(tmp_val,psg_val,npsg,MPI_REAL_WP,MPI_SUM,cfg%comm,ierr)
+            ! Write out file
             call psgfile(ii)%write()
          end do
          
