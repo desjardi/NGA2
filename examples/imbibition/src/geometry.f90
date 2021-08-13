@@ -10,6 +10,10 @@ module geometry
    
    public :: geometry_init
    
+   ! Pipette data
+   real(WP), public :: ypip,ripip,ropip
+   logical , public :: include_pipette
+   
 contains
    
    
@@ -66,62 +70,65 @@ contains
       
       ! Create masks for this config
       create_walls: block
+         logical :: include_holes
          real(WP) :: hole_size,hole_dist,hole_depth
-         integer :: i,j,k
+         integer  :: i,j,k
          ! Read in wall definitions
          call param_read('Hole size',hole_size)
          call param_read('Hole dist',hole_dist)
          call param_read('Hole depth',hole_depth)
-         ! Put walls all around first
-         cfg%VF=0.0_WP
-         cfg%VF(cfg%imin_:cfg%imax_,cfg%jmin_:cfg%jmax_,cfg%kmin_:cfg%kmax_)=1.0_WP
-         call cfg%sync(cfg%VF)
-         ! Add the perforated plate here
-         do k=cfg%kmin_,cfg%kmax_
-            do j=cfg%jmin_,cfg%jmax_
-               do i=cfg%imin_,cfg%imax_
-                  if (cfg%ym(j).gt.0.0_WP) then
-                     ! Above the plate
-                     cfg%VF(i,j,k)=1.0_WP
-                  else if (cfg%ym(j).lt.-hole_depth) then
-                     ! Below the plate
-                     cfg%VF(i,j,k)=1.0_WP
-                  else
-                     ! This is the plate
-                     cfg%VF(i,j,k)=0.0_WP
-                     ! Now perforate it
-                     if ((0.5_WP*hole_dist-abs(modulo(cfg%xm(i),hole_dist)-0.5_WP*hole_dist)).lt.0.5_WP*hole_size.and.&
-                     &   (0.5_WP*hole_dist-abs(modulo(cfg%zm(k),hole_dist)-0.5_WP*hole_dist)).lt.0.5_WP*hole_size) cfg%VF(i,j,k)=1.0_WP
-                  end if
+         ! Start from open box
+         cfg%VF=1.0_WP
+         ! Add plate below y=0
+         do k=cfg%kmino_,cfg%kmaxo_
+            do j=cfg%jmino_,cfg%jmaxo_
+               do i=cfg%imino_,cfg%imaxo_
+                  if (cfg%ym(j).lt.0.0_WP) cfg%VF(i,j,k)=0.0_WP
                end do
             end do
          end do
-         call cfg%sync(cfg%VF)
-         
-         
-         
-         ! ! Redo for pipette problem
-         ! cfg%VF=1.0_WP
-         ! ! Put wall below y=0 for the bottom plate
-         ! do k=cfg%kmino_,cfg%kmaxo_
-         !    do j=cfg%jmino_,cfg%jmaxo_
-         !       do i=cfg%imino_,cfg%imaxo_
-         !          if (cfg%ym(j).lt.0.0_WP) cfg%VF(i,j,k)=0.0_WP
-         !       end do
-         !    end do
-         ! end do
-         ! ! Create pipette duct
-         ! do k=cfg%kmino_,cfg%kmaxo_
-         !    do j=cfg%jmino_,cfg%jmaxo_
-         !       do i=cfg%imino_,cfg%imaxo_
-         !          if (sqrt(cfg%xm(i)**2+cfg%zm(k)**2).gt.0.70e-3_WP.and.&
-         !          &   sqrt(cfg%xm(i)**2+cfg%zm(k)**2).lt.1.46e-3_WP.and.cfg%ym(j).gt.0.012_WP) cfg%VF(i,j,k)=0.0_WP
-         !       end do
-         !    end do
-         ! end do
-         ! call cfg%sync(cfg%VF)
-         
-         
+         ! Add the perforations if needed
+         call param_read('Include holes',include_holes)
+         if (include_holes) then
+            ! Finite plate thickness
+            do k=cfg%kmino_,cfg%kmaxo_
+               do j=cfg%jmino_,cfg%jmaxo_
+                  do i=cfg%imino_,cfg%imaxo_
+                     if (cfg%ym(j).lt.-hole_depth) cfg%VF(i,j,k)=1.0_WP
+                  end do
+               end do
+            end do
+            ! Open up holes in the plate
+            do k=cfg%kmin_,cfg%kmax_
+               do j=cfg%jmin_,cfg%jmax_
+                  do i=cfg%imin_,cfg%imax_
+                     if (cfg%ym(j).lt.0.0_WP.and.cfg%ym(j).ge.-hole_depth) then
+                        if ((0.5_WP*hole_dist-abs(modulo(cfg%xm(i),hole_dist)-0.5_WP*hole_dist)).lt.0.5_WP*hole_size.and.&
+                        &   (0.5_WP*hole_dist-abs(modulo(cfg%zm(k),hole_dist)-0.5_WP*hole_dist)).lt.0.5_WP*hole_size) cfg%VF(i,j,k)=1.0_WP
+                     end if
+                  end do
+               end do
+            end do
+            call cfg%sync(cfg%VF)
+         end if
+         ! Create pipette
+         call param_read('Include pipette',include_pipette)
+         if (include_pipette) then
+            ! Read in pipette geometry
+            call param_read('Pipette height',ypip)
+            call param_read('Pipette inner radius',ripip)
+            call param_read('Pipette outer radius',ropip)
+            ! Adjust walls
+            do k=cfg%kmino_,cfg%kmaxo_
+               do j=cfg%jmino_,cfg%jmaxo_
+                  do i=cfg%imino_,cfg%imaxo_
+                     if (sqrt(cfg%xm(i)**2+cfg%zm(k)**2).gt.ripip.and.&
+                     &   sqrt(cfg%xm(i)**2+cfg%zm(k)**2).lt.ropip.and.cfg%ym(j).gt.ypip) cfg%VF(i,j,k)=0.0_WP
+                  end do
+               end do
+            end do
+            call cfg%sync(cfg%VF)
+         end if
       end block create_walls
       
       

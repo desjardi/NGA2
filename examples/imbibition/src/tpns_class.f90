@@ -50,6 +50,7 @@ module tpns_class
       character(len=str_medium) :: name='UNNAMED_TPNS'    !< Solver name (default=UNNAMED_TPNS)
       
       ! Constant property fluids
+      real(WP) :: pipette_ca                              !< Addiditonal contact angle for the pipette
       real(WP) :: contact_angle                           !< This is our static contact angle
       real(WP) :: sigma                                   !< This is our constant surface tension coefficient
       real(WP) :: rho_l,rho_g                             !< These are our constant densities in liquid and gas
@@ -2436,7 +2437,7 @@ contains
    
    !> Add a static contact line model
    subroutine add_static_contact(this,vf)
-      use mathtools, only: normalize,Pi
+      use mathtools, only: normalize
       use vfs_class, only: vfs
       use irl_fortran_interface, only: calculateNormal,calculateVolume
       implicit none
@@ -2462,7 +2463,8 @@ contains
       sin_contact_angle=sin(this%contact_angle)
       tan_contact_angle=tan(this%contact_angle)
       
-      cos_contact_angle_top=cos(150.0_WP*Pi/180.0_WP)
+      ! Also calculate pipette info
+      cos_contact_angle_top=cos(this%pipette_ca)
       
       ! Loop over domain and identify cells that require contact angle model in GFM style
       do k=this%cfg%kmin_,this%cfg%kmax_+1

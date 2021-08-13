@@ -1,7 +1,7 @@
 !> Various definitions and tools for running an NGA2 simulation
 module simulation
    use precision,         only: WP
-   use geometry,          only: cfg
+   use geometry,          only: cfg,include_pipette,ypip,ripip
    use tpns_class,        only: tpns
    use vfs_class,         only: vfs
    use timetracker_class, only: timetracker
@@ -170,16 +170,16 @@ contains
    end function zm_locator
    
    
-   !> Function that localizes the needle injection
-   function needle(pg,i,j,k) result(isIn)
+   !> Function that localizes the pipette injection
+   function pipette(pg,i,j,k) result(isIn)
       use pgrid_class, only: pgrid
       implicit none
       class(pgrid), intent(in) :: pg
       integer, intent(in) :: i,j,k
       logical :: isIn
       isIn=.false.
-      if (j.eq.pg%jmax+1.and.sqrt(pg%xm(i)**2+pg%zm(k)**2).le.0.70e-3_WP) isIn=.true.
-   end function needle
+      if (j.eq.pg%jmax+1.and.sqrt(pg%xm(i)**2+pg%zm(k)**2).le.ripip) isIn=.true.
+   end function pipette
    
    
    !> Initialization of problem solver
@@ -243,16 +243,6 @@ contains
          do k=vf%cfg%kmino_,vf%cfg%kmaxo_
             do j=vf%cfg%jmino_,vf%cfg%jmaxo_
                do i=vf%cfg%imino_,vf%cfg%imaxo_
-                  ! ! Fill out part of the needle
-                  ! if (vf%cfg%ym(j).gt.0.013_WP.and.sqrt(vf%cfg%xm(i)**2+vf%cfg%zm(k)**2).lt.0.0007_WP) then
-                  !    vf%VF(i,j,k)=1.0_WP
-                  !    vf%Lbary(:,i,j,k)=[vf%cfg%xm(i),vf%cfg%ym(j),vf%cfg%zm(k)]
-                  !    vf%Gbary(:,i,j,k)=[vf%cfg%xm(i),vf%cfg%ym(j),vf%cfg%zm(k)]
-                  ! else
-                  !    vf%VF(i,j,k)=0.0_WP
-                  !    vf%Lbary(:,i,j,k)=[vf%cfg%xm(i),vf%cfg%ym(j),vf%cfg%zm(k)]
-                  !    vf%Gbary(:,i,j,k)=[vf%cfg%xm(i),vf%cfg%ym(j),vf%cfg%zm(k)]
-                  ! end if
                   ! Handle wall cells or cells below the plate surface
                   if (vf%mask(i,j,k).eq.1.or.vf%cfg%ym(j).lt.0.0_WP) then
                      vf%VF(i,j,k)=0.0_WP
@@ -260,13 +250,13 @@ contains
                      vf%Gbary(:,i,j,k)=[vf%cfg%xm(i),vf%cfg%ym(j),vf%cfg%zm(k)]
                      cycle
                   end if
-                  ! ! Fill out the needle - this is handwavy...
-                  ! if (vf%cfg%ym(j).gt.0.010_WP.and.sqrt(vf%cfg%xm(i)**2+vf%cfg%zm(k)**2).lt.0.0007_WP) then
-                  !    vf%VF(i,j,k)=1.0_WP
-                  !    vf%Lbary(:,i,j,k)=[vf%cfg%xm(i),vf%cfg%ym(j),vf%cfg%zm(k)]
-                  !    vf%Gbary(:,i,j,k)=[vf%cfg%xm(i),vf%cfg%ym(j),vf%cfg%zm(k)]
-                  !    cycle
-                  ! end if
+                  ! Fill out the pipette if it is included
+                  if (include_pipette.and.vf%cfg%ym(j).gt.ypip.and.sqrt(vf%cfg%xm(i)**2+vf%cfg%zm(k)**2).lt.ripip) then
+                     vf%VF(i,j,k)=1.0_WP
+                     vf%Lbary(:,i,j,k)=[vf%cfg%xm(i),vf%cfg%ym(j),vf%cfg%zm(k)]
+                     vf%Gbary(:,i,j,k)=[vf%cfg%xm(i),vf%cfg%ym(j),vf%cfg%zm(k)]
+                     cycle
+                  end if
                   ! Set cube vertices
                   n=0
                   do sk=0,1
@@ -315,7 +305,7 @@ contains
          use ils_class,  only: pcg_pfmg,pcg_amg
          use mathtools,  only: Pi
          type(bcond), pointer :: mybc
-         real(WP) :: Vneedle
+         real(WP) :: Vpipette
          integer :: i,j,k,n
          ! Create flow solver
          fs=tpns(cfg=cfg,name='Two-phase NS')
@@ -329,14 +319,19 @@ contains
          call param_read('Surface tension coefficient',fs%sigma)
          call param_read('Static contact angle',fs%contact_angle)
          fs%contact_angle=fs%contact_angle*Pi/180.0_WP
+         ! Read in pipette contact angle
+         if (include_pipette) then
+            call param_read('Pipette contact angle',fs%pipette_ca)
+            fs%pipette_ca=fs%pipette_ca*Pi/180.0_WP
+         end if
          ! Assign acceleration of gravity
          call param_read('Gravity',fs%gravity)
          ! Setup boundary conditions
-         call fs%add_bcond(name='bc_xp' ,type=clipped_neumann,face='x',dir=+1,canCorrect=.true. ,locator=xp_locator)
-         call fs%add_bcond(name='bc_xm' ,type=clipped_neumann,face='x',dir=-1,canCorrect=.true. ,locator=xm_locator)
-         call fs%add_bcond(name='bc_zp' ,type=clipped_neumann,face='z',dir=+1,canCorrect=.true. ,locator=zp_locator)
-         call fs%add_bcond(name='bc_zm' ,type=clipped_neumann,face='z',dir=-1,canCorrect=.true. ,locator=zm_locator)
-         ! call fs%add_bcond(name='needle',type=dirichlet      ,face='y',dir=+1,canCorrect=.false.,locator=needle    )
+         call fs%add_bcond(name='bc_xp',type=clipped_neumann,face='x',dir=+1,canCorrect=.true.,locator=xp_locator)
+         call fs%add_bcond(name='bc_xm',type=clipped_neumann,face='x',dir=-1,canCorrect=.true.,locator=xm_locator)
+         call fs%add_bcond(name='bc_zp',type=clipped_neumann,face='z',dir=+1,canCorrect=.true.,locator=zp_locator)
+         call fs%add_bcond(name='bc_zm',type=clipped_neumann,face='z',dir=-1,canCorrect=.true.,locator=zm_locator)
+         if (include_pipette) call fs%add_bcond(name='pipette',type=dirichlet,face='y',dir=+1,canCorrect=.false.,locator=pipette)
          ! Configure pressure solver
          call param_read('Pressure iteration',fs%psolv%maxit)
          call param_read('Pressure tolerance',fs%psolv%rcvg)
@@ -348,13 +343,15 @@ contains
          call fs%setup(pressure_ils=pcg_amg,implicit_ils=pcg_pfmg)
          ! Zero initial field
          fs%U=0.0_WP; fs%V=0.0_WP; fs%W=0.0_WP
-         ! ! Apply Dirichlet at liquid needle
-         ! call param_read('Liquid injection velocity',Vneedle)
-         ! call fs%get_bcond('needle',mybc)
-         ! do n=1,mybc%itr%no_
-         !    i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
-         !    fs%V(i,j,k)=-Vneedle
-         ! end do
+         ! Apply Dirichlet at liquid pipette
+         if (include_pipette) then
+            call param_read('Liquid injection velocity',Vpipette)
+            call fs%get_bcond('pipette',mybc)
+            do n=1,mybc%itr%no_
+               i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
+               fs%V(i,j,k)=-Vpipette
+            end do
+         end if
          ! Calculate cell-centered velocities and divergence
          call fs%interp_vel(Ui,Vi,Wi)
          call fs%get_div()

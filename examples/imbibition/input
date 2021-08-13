@@ -10,14 +10,22 @@ ny : 100
 nz : 50
 
 # Wall geometry
-Hole size  : 0.001
-Hole dist  : 0.002
-Hole depth : 0.02
+Include holes : .false.!.true.
+Hole size  :    0.001
+Hole dist  :    0.002
+Hole depth :    0.02
 
 # Droplet properties
+Droplet radius :        6e-3
+Initial contact angle : 180
+
+# Pipette information
+Include pipette :           .false.!.true.
+Pipette height :            0.012
+Pipette inner radius :      0.70e-3
+Pipette outer radius :      1.46e-3
 Liquid injection velocity : 0.02
-Droplet radius :            6e-3
-Initial contact angle :     180
+Pipette contact angle :     150
 
 # Source
 Gravity : 0 0 0
