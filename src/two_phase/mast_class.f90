@@ -43,6 +43,9 @@ module mast_class
       
       ! This is the name of the solver
       character(len=str_medium) :: name='UNNAMED_MAST'    !< Solver name (default=UNNAMED_MAST)
+
+      ! Solver parameters
+      real(WP) :: shs_wt                                  !< Shock sensor weight (higher value --> more sensitive)
       
       ! Constant fluid properties
       real(WP) :: contact_angle                           !< This is our static contact angle
@@ -168,6 +171,7 @@ module mast_class
       ! For beginning of timestep (before iterative loop)
       procedure :: init_metrics                           !< Initialize metrics
       procedure :: adjust_metrics                         !< Adjust metrics
+      procedure :: flag_sl                                !< Flag where SL scheme needs to be used
       ! For advection solve
       procedure :: advection_step
       ! For viscous/dissipative/body forces (will address later)
@@ -779,11 +783,155 @@ contains
       
    end subroutine apply_bcond
 
+   subroutine flag_sl(this,vf)
+     use vfs_class, only: vfs, VFhi, VFlo
+     implicit none
+
+     class(mast), intent(inout) :: this   !< The two-phase all-Mach flow solver
+     class(vfs),  intent(inout) :: vf     !< The volume fraction solver
+     integer :: VF_check,shock_check,n_band,ni,nj,nk
+     integer :: i,j,k
+
+     !n_band = ceiling(max_CFL)
+
+     this%sl_face = 0
+     ! 1 is for semi-Lagrangian, 0 is for centered scheme
+
+     ! Loop over the domain and determine multiphase locations within band and shock locations
+     do k=this%cfg%kmin_,this%cfg%kmax_
+        do j=this%cfg%jmin_,this%cfg%jmax_
+           do i=this%cfg%imin_,this%cfg%imax_
+              if (vf%VFold(i,j,k).lt.VFlo) then
+                 ! In fully gas cells, check in band for change in phase
+                 VF_check = 0
+                 do ni=-n_band,n_band
+                    do nj=-n_band,n_band
+                       do nk=-n_band,n_band
+                          if (vf%VFold(max(this%cfg%imino_,min(i+ni,this%cfg%imaxo_)), &
+                               max(this%cfg%jmino_,min(j+nj,this%cfg%jmaxo_)), &
+                               max(this%cfg%kmino_,min(k+nk,this%cfg%kmaxo_))).gt.VFlo .and. &
+                               this%cfg%vol(max(this%cfg%imino_,min(i+ni,this%cfg%imaxo_)), &
+                               max(this%cfg%jmino_,min(j+nj,this%cfg%jmaxo_)), &
+                               max(this%cfg%kmino_,min(k+nk,this%cfg%kmaxo_))).gt.0.0_WP) then
+                             !! Update wall check^ !!
+                             VF_check = 1
+                          end if
+                       end do
+                    end do
+                 end do
+                 if (VF_check.eq.0) then
+                    ! If change of phase is not found in band, check shock sensor
+                    if (shock_sensor(i,j,k).gt.0) then
+                       ! If shock is indicated, set values to negative, band will be extended around these cells
+                       this%sl_face(i,j,k,1:3)=-1
+                       this%sl_face(i+1,j,k,1)=-1; this%sl_face(i,j+1,k,2)=-1; this%sl_face(i,j,k+1,3)=-1;
+                    end if
+                 else
+                    ! If change of phase is found in band, turn on SL fluxing
+                    this%sl_face(i,j,k,1:3)=1
+                    this%sl_face(i+1,j,k,1)=1; this%sl_face(i,j+1,k,2)=1; this%sl_face(i,j,k+1,3)=1;
+                 end if
+              elseif (vf%VFold(i,j,k).gt.VFhi) then
+                 ! In fully liquid cells, check in band for change in phase
+                 VF_check = 0
+                 do ni=-n_band,n_band
+                    do nj=-n_band,n_band
+                       do nk=-n_band,n_band
+                          if (vf%VFold(max(this%cfg%imino_,min(i+ni,this%cfg%imaxo_)), &
+                               max(this%cfg%jmino_,min(j+nj,this%cfg%jmaxo_)), &
+                               max(this%cfg%kmino_,min(k+nk,this%cfg%kmaxo_))).lt.VFhi .and. &
+                               this%cfg%vol(max(this%cfg%imino_,min(i+ni,this%cfg%imaxo_)), &
+                               max(this%cfg%jmino_,min(j+nj,this%cfg%jmaxo_)), &
+                               max(this%cfg%kmino_,min(k+nk,this%cfg%kmaxo_))).gt.0.0_WP) then
+                             !! Update wall check^ !!
+                             VF_check = 1
+                          end if
+                       end do
+                    end do
+                 end do
+                 if (VF_check.eq.0) then
+                    ! If change of phase is not found in band, check shock sensor
+                    if (shock_sensor(i,j,k).gt.0.0_WP) then
+                       ! If shock is indicated, set values to negative, band will be extended around these cells
+                       this%sl_face(i,j,k,1:3)=-1
+                       this%sl_face(i+1,j,k,1)=-1; this%sl_face(i,j+1,k,2)=-1; this%sl_face(i,j,k+1,3)=-1;
+                    end if
+                 else
+                    ! If change of phase is found in band, turn on SL fluxing
+                    this%sl_face(i,j,k,1:3)=1
+                    this%sl_face(i+1,j,k,1)=1; this%sl_face(i,j+1,k,2)=1; this%sl_face(i,j,k+1,3)=1;
+                 end if
+              else
+                 ! If cell is multiphase, turn on SL fluxing
+                 this%sl_face(i,j,k,1:3)=1
+                 this%sl_face(i+1,j,k,1)=1; this%sl_face(i,j+1,k,2)=1; this%sl_face(i,j,k+1,3)=1;
+              end if
+           end do
+        end do
+     end do
+
+     ! BC communication for flag
+
+     ! Loop over the domain and check within band containing shock locations
+     do k=this%cfg%kmin_,this%cfg%kmax_
+        do j=this%cfg%jmin_,this%cfg%jmax_
+           do i=this%cfg%imin_,this%cfg%imax_
+              if (this%sl_face(i,j,k,1).eq.0.or.this%sl_face(i,j,k,2).eq.0.or.this%sl_face(i,j,k,3).eq.0) then
+                 shock_check = 0
+                 do ni=-n_band,n_band
+                    do nj=-n_band,n_band
+                       do nk=-n_band,n_band
+                          if (minval(this%sl_face(max(this%cfg%imino_,min(i+ni,this%cfg%imaxo_)), &
+                               max(this%cfg%jmino_,min(j+nj,this%cfg%jmaxo_)), &
+                               max(this%cfg%kmino_,min(k+nk,this%cfg%kmaxo_)),:)).eq.-1) then
+                             shock_check = 1
+                          end if
+                       end do
+                    end do
+                 end do
+                 if (shock_check.eq.1) then
+                    ! If shock is found in band, turn on SL fluxing, but only in faces where shock is not indicated
+                    ! I want 0 to go to 1, 1 to stay at 1, and -1 to stay at -1
+                    this%sl_face(i  ,j,k,1)=min(1,2*this%sl_face(i  ,j,k,1)+1)
+                    this%sl_face(i+1,j,k,1)=min(1,2*this%sl_face(i+1,j,k,1)+1)
+                    this%sl_face(i,j  ,k,2)=min(1,2*this%sl_face(i,j  ,k,2)+1)
+                    this%sl_face(i,j+1,k,2)=min(1,2*this%sl_face(i,j+1,k,2)+1)
+                    this%sl_face(i,j,k  ,3)=min(1,2*this%sl_face(i,j,k  ,3)+1)
+                    this%sl_face(i,j,k+1,3)=min(1,2*this%sl_face(i,j,k+1,3)+1)
+                 end if
+              end if
+           end do
+        end do
+     end do
+
+     ! Make all the negatives positive
+     this%sl_face = abs(this%sl_face)
+
+     ! BCs again
+
+   contains
+
+     function shock_sensor(i,j,k) result(cb)
+       real(WP) :: cb
+       integer :: i,j,k
+
+       ! --- Bhagatwala and Lele, modified --- !
+       ! wt weights how important the acoustic scale is
+       cb=abs(sum(this%divp_x(:,i,j,k)*this%U(i:i+1,j,k)) &
+            + sum(this%divp_y(:,i,j,k)*this%V(i,j:j+1,k)) &
+            + sum(this%divp_z(:,i,j,k)*this%W(i,j,k:k+1)) &
+            )-min(this%cfg%dxi(i),this%cfg%dyi(j),this%cfg%dzi(k)) &
+            / sqrt(this%RHOSS2(i,j,k)/this%RHO(i,j,k)) / this%shs_wt
+
+     end function shock_sensor
+
+   end subroutine flag_sl
+
 
    subroutine advection_step(this,dt,vf)
      use vfs_class, only: vfs, VFhi, VFlo
      implicit none
-     class(mast), intent(inout) :: this   !< The two-phase flow solver
+     class(mast), intent(inout) :: this   !< The two-phase all-Mach flow solver
      class(vfs),  intent(inout) :: vf     !< The volume fraction solver
      real(WP),    intent(inout) :: dt     !< Timestep size over which to advance
      real(WP),   dimension(14)  :: flux   !< Passes flux to and from routines
