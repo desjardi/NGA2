@@ -119,7 +119,7 @@ contains
          integer :: i,j,k
          real(WP), dimension(3) :: xyz
          ! Create flow solver
-         fs=mast(cfg=cfg,name='Two-phase All-Mach')
+         fs=mast(cfg=cfg,name='Two-phase All-Mach',vf=vf)
          ! Assign constant viscosity to each phase
          call param_read('Liquid dynamic viscosity',fs%visc_l0)
          call param_read('Gas dynamic viscosity',fs%visc_g0)
@@ -237,9 +237,6 @@ contains
          call time%adjust_dt()
          call time%increment()
          
-         ! Remember old VOF
-         vf%VFold=vf%VF
-         
          ! Remember old flow variables (mixture)
          fs%Uiold=fs%Ui; fs%Viold=fs%Vi; fs%Wiold=fs%Wi
          fs%RHOold = fs%RHO
@@ -250,15 +247,18 @@ contains
          fs%GrhoWold=fs%GrhoW; fs%LrhoWold=fs%LrhoW
          fs%GrhoEold=fs%GrhoE; fs%LrhoEold=fs%LrhoE
 
-         ! Remember old interface
+         ! Remember old interface, including VF and barycenters
+         call vf%copy_interface_to_old()
          
          ! Create in-cell reconstruction
+         call fs%flow_reconstruct(vf)
 
          ! Apply boundary conditions
 
          ! Other routines to add later: sgs, lpt, prescribe
 
          ! Determine semi-Lagrangian advection flag
+         call fs%flag_sl(vf)
 
          ! Initialize loop quantities
          
