@@ -182,6 +182,7 @@ module mast_class
       procedure :: init_metrics                           !< Initialize metrics
       procedure :: adjust_metrics                         !< Adjust metrics
       procedure :: flag_sl                                !< Flag where SL scheme needs to be used
+      procedure :: flow_reconstruct                       !< Calculate in-cell gradients for reconstructing flow variables
       ! For advection solve
       procedure :: advection_step                         !< Full, hybrid advection step
       ! For convenience in advection routines
@@ -212,12 +213,14 @@ contains
    
    
    !> Default constructor for two-phase compressible flow solver
-   function constructor(cfg,name) result(self)
+   function constructor(cfg,name,vf) result(self)
+      use vfs_class, only: vfs
       implicit none
       type(mast) :: self
       class(config), target, intent(in) :: cfg
       character(len=*), optional :: name
       integer :: i,j,k
+      class(vfs),  intent(inout) :: vf     !< The volume fraction solver
       
       ! Set the name for the solver
       if (present(name)) self%name=trim(adjustl(name))
@@ -325,6 +328,9 @@ contains
       allocate(self%sl_face(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_,3)); self%sl_face=0.0_WP
       ! Pressure relaxation
       allocate(self%srcVF(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%srcVF=0.0_WP
+
+      ! Allocate vfs objects that are required for the MAST solver
+      call vf%allocate_supplement()
       
       ! Create pressure solver object
       self%psolv   =ils(cfg=self%cfg,name='Pressure')
@@ -960,6 +966,146 @@ contains
    end subroutine flag_sl
 
 
+   ! ==================================================== !
+   ! Form conservative linear reconstruction in each cell !
+   ! ==================================================== !
+   subroutine flow_reconstruct(this,vf)
+     use vfs_class, only: vfs
+     implicit none
+     class(mast), intent(inout) :: this   !< The two-phase all-Mach flow solver
+     class(vfs),  intent(inout) :: vf     !< The volume fraction solver
+     integer  :: i,j,k,ip,jp,kp,im,jm,km,idir
+     real(WP) :: idp,idm !,idpg,idpl,idmg,idml
+
+     ! Zero gradients
+     this%gradGrho =0.0_WP
+     this%gradGrhoE=0.0_WP
+     this%gradGrhoU=0.0_WP
+     this%gradGrhoV=0.0_WP
+     this%gradGrhoW=0.0_WP
+     this%gradLrho =0.0_WP
+     this%gradLrhoE=0.0_WP
+     this%gradLrhoU=0.0_WP
+     this%gradLrhoV=0.0_WP
+     this%gradLrhoW=0.0_WP
+
+     this%gradGIE  =0.0_WP
+     this%gradLIE  =0.0_WP
+
+     this%gradGP   =0.0_WP
+     this%gradLP   =0.0_WP
+
+     ! Gradients for linear reconstruction
+     do k=this%cfg%kmin_,this%cfg%kmax_
+        do j=this%cfg%jmin_,this%cfg%jmax_
+           do i=this%cfg%imin_,this%cfg%imax_
+              ! No need to calculate gradient inside of wall cell
+              if (this%mask(i,j,k).eq.1) cycle
+              ! Cycle through directions
+              do idir=1,3
+                 select case (idir)
+                 case (1) ! X gradient
+                    ip=i+1; jp=j; kp=k; idp=this%cfg%dxmi(i+1)
+                    im=i-1; jm=j; km=k; idm=this%cfg%dxmi(i  )
+                    ! idpg=1.0_WP/(vf%Gbary(1,i+1,j,k)-vf%Gbary(1,i,j,k))
+                    ! idpl=1.0_WP/(vf%Lbary(1,i+1,j,k)-vf%Lbary(1,i,j,k))
+                    ! idmg=1.0_WP/(vf%Gbary(1,i,j,k)-vf%Gbary(1,i-1,j,k))
+                    ! idml=1.0_WP/(vf%Lbary(1,i,j,k)-vf%Lbary(1,i-1,j,k))
+                 case (2) ! Y gradient
+                    ip=i; jp=j+1; kp=k; idp=this%cfg%dymi(j+1)
+                    im=i; jm=j-1; km=k; idm=this%cfg%dymi(j  )
+                    ! idpg=1.0_WP/(vf%Gbary(2,i,j+1,k)-vf%Gbary(2,i,j,k))
+                    ! idpl=1.0_WP/(vf%Lbary(2,i,j+1,k)-vf%Lbary(2,i,j,k))
+                    ! idmg=1.0_WP/(vf%Gbary(2,i,j,k)-vf%Gbary(2,i,j-1,k))
+                    ! idml=1.0_WP/(vf%Lbary(2,i,j,k)-vf%Lbary(2,i,j-1,k))
+                 case (3) ! Z gradient
+                    ip=i; jp=j; kp=k+1; idp=this%cfg%dzmi(k+1)
+                    im=i; jm=j; km=k-1; idm=this%cfg%dzmi(k  )
+                    ! idpg=1.0_WP/(vf%Gbary(3,i,j,k+1)-vf%Gbary(3,i,j,k))
+                    ! idpl=1.0_WP/(vf%Lbary(3,i,j,k+1)-vf%Lbary(3,i,j,k))
+                    ! idmg=1.0_WP/(vf%Gbary(3,i,j,k)-vf%Gbary(3,i,j,k+1))
+                    ! idml=1.0_WP/(vf%Lbary(3,i,j,k)-vf%Lbary(3,i,j,k-1))
+                 end select
+                 this%gradGrho (idir,i,j,k)=mmgrad((this%Grho (ip,jp,kp)-this%Grho (i,j,k))*idp,&
+                      (this%Grho (i,j,k)-this%Grho (im,jm,km))*idm)*real(floor(1.0_WP-vf%VF(i,j,k)),WP)
+                 this%gradGrhoE(idir,i,j,k)=mmgrad((this%GrhoE(ip,jp,kp)-this%GrhoE(i,j,k))*idp,&
+                      (this%GrhoE(i,j,k)-this%GrhoE(im,jm,km))*idm)*real(floor(1.0_WP-vf%VF(i,j,k)),WP)
+                 this%gradGrhoU(idir,i,j,k)=mmgrad((this%GrhoU(ip,jp,kp)-this%GrhoU(i,j,k))*idp,&
+                      (this%GrhoU(i,j,k)-this%GrhoU(im,jm,km))*idm)*real(floor(1.0_WP-vf%VF(i,j,k)),WP)
+                 this%gradGrhoV(idir,i,j,k)=mmgrad((this%GrhoV(ip,jp,kp)-this%GrhoV(i,j,k))*idp,&
+                      (this%GrhoV(i,j,k)-this%GrhoV(im,jm,km))*idm)*real(floor(1.0_WP-vf%VF(i,j,k)),WP)
+                 this%gradGrhoW(idir,i,j,k)=mmgrad((this%GrhoW(ip,jp,kp)-this%GrhoW(i,j,k))*idp,&
+                      (this%GrhoW(i,j,k)-this%GrhoW(im,jm,km))*idm)*real(floor(1.0_WP-vf%VF(i,j,k)),WP)
+                 this%gradLrho (idir,i,j,k)=mmgrad((this%Lrho (ip,jp,kp)-this%Lrho (i,j,k))*idp,&
+                      (this%Lrho (i,j,k)-this%Lrho (im,jm,km))*idm)*real(floor(       vf%VF(i,j,k)),WP)
+                 this%gradLrhoE(idir,i,j,k)=mmgrad((this%LrhoE(ip,jp,kp)-this%LrhoE(i,j,k))*idp,&
+                      (this%LrhoE(i,j,k)-this%LrhoE(im,jm,km))*idm)*real(floor(       vf%VF(i,j,k)),WP)
+                 this%gradLrhoU(idir,i,j,k)=mmgrad((this%LrhoU(ip,jp,kp)-this%LrhoU(i,j,k))*idp,&
+                      (this%LrhoU(i,j,k)-this%LrhoU(im,jm,km))*idm)*real(floor(       vf%VF(i,j,k)),WP)
+                 this%gradLrhoV(idir,i,j,k)=mmgrad((this%LrhoV(ip,jp,kp)-this%LrhoV(i,j,k))*idp,&
+                      (this%LrhoV(i,j,k)-this%LrhoV(im,jm,km))*idm)*real(floor(       vf%VF(i,j,k)),WP)
+                 this%gradLrhoW(idir,i,j,k)=mmgrad((this%LrhoW(ip,jp,kp)-this%LrhoW(i,j,k))*idp,&
+                      (this%LrhoW(i,j,k)-this%LrhoW(im,jm,km))*idm)*real(floor(       vf%VF(i,j,k)),WP)
+
+                 this%gradGIE  (idir,i,j,k)=mmgrad((this%GrhoE(ip,jp,kp)-this%GKEold(ip,jp,kp)-this%GrhoE(i,j,k) &
+                      +this%GKEold(i,j,k))*idp,(this%GrhoE(i,j,k)-this%GKEold(i,j,k)-this%GrhoE(im,jm,km) &
+                      +this%GKEold(im,jm,km))*idm)*real(floor(1.0_WP-vf%VF(i,j,k)),WP)
+                 this%gradLIE  (idir,i,j,k)=mmgrad((this%LrhoE(ip,jp,kp)-this%LKEold(ip,jp,kp)-this%LrhoE(i,j,k) &
+                      +this%LKEold(i,j,k))*idp,(this%LrhoE(i,j,k)-this%LKEold(i,j,k)-this%LrhoE(im,jm,km) &
+                      +this%LKEold(im,jm,km))*idm)*real(floor(       vf%VF(i,j,k)),WP)
+
+                 this%gradGP   (idir,i,j,k)=mmgrad((this%GP(ip,jp,kp)-this%GP(i,j,k))*idp,&
+                      (this%GP(i,j,k)-this%GP(im,jm,km))*idm)*real(floor(1.0_WP-vf%VF(i,j,k)),WP)
+                 this%gradLP   (idir,i,j,k)=mmgrad((this%LP(ip,jp,kp)-this%LP(i,j,k))*idp,&
+                      (this%LP(i,j,k)-this%LP(im,jm,km))*idm)*real(floor(       vf%VF(i,j,k)),WP)
+
+                 ! this%gradGrho (idir,i,j,k)=mmgrad((Grho (ip,jp,kp)-Grho (i,j,k))*idpg,(Grho (i,j,k)-Grho (im,jm,km))*idmg)
+                 ! this%gradGrhoE(idir,i,j,k)=mmgrad((GrhoE(ip,jp,kp)-GrhoE(i,j,k))*idpg,(GrhoE(i,j,k)-GrhoE(im,jm,km))*idmg)
+                 ! this%gradGrhoU(idir,i,j,k)=mmgrad((GrhoU(ip,jp,kp)-GrhoU(i,j,k))*idpg,(GrhoU(i,j,k)-GrhoU(im,jm,km))*idmg)
+                 ! this%gradGrhoV(idir,i,j,k)=mmgrad((GrhoV(ip,jp,kp)-GrhoV(i,j,k))*idpg,(GrhoV(i,j,k)-GrhoV(im,jm,km))*idmg)
+                 ! this%gradGrhoW(idir,i,j,k)=mmgrad((GrhoW(ip,jp,kp)-GrhoW(i,j,k))*idpg,(GrhoW(i,j,k)-GrhoW(im,jm,km))*idmg)
+                 ! this%gradLrho (idir,i,j,k)=mmgrad((Lrho (ip,jp,kp)-Lrho (i,j,k))*idpl,(Lrho (i,j,k)-Lrho (im,jm,km))*idml)
+                 ! this%gradLrhoE(idir,i,j,k)=mmgrad((LrhoE(ip,jp,kp)-LrhoE(i,j,k))*idpl,(LrhoE(i,j,k)-LrhoE(im,jm,km))*idml)
+                 ! this%gradLrhoU(idir,i,j,k)=mmgrad((LrhoU(ip,jp,kp)-LrhoU(i,j,k))*idpl,(LrhoU(i,j,k)-LrhoU(im,jm,km))*idml)
+                 ! this%gradLrhoV(idir,i,j,k)=mmgrad((LrhoV(ip,jp,kp)-LrhoV(i,j,k))*idpl,(LrhoV(i,j,k)-LrhoV(im,jm,km))*idml)
+                 ! this%gradLrhoW(idir,i,j,k)=mmgrad((LrhoW(ip,jp,kp)-LrhoW(i,j,k))*idpl,(LrhoW(i,j,k)-LrhoW(im,jm,km))*idml)
+
+                 ! this%gradGIE(idir,i,j,k)=mmgrad((GrhoE(ip,jp,kp)-oldGKE(ip,jp,kp)-GrhoE(i,j,k)+oldGKE(i,j,k))*idpg,&
+                 !                           (GrhoE(i,j,k)-oldGKE(i,j,k)-GrhoE(im,jm,km)+oldGKE(im,jm,km))*idmg)
+                 ! this%gradLIE(idir,i,j,k)=mmgrad((LrhoE(ip,jp,kp)-oldLKE(ip,jp,kp)-LrhoE(i,j,k)+oldLKE(i,j,k))*idpl,&
+                 !                           (LrhoE(i,j,k)-oldLKE(i,j,k)-LrhoE(im,jm,km)+oldLKE(im,jm,km))*idml)
+
+                 ! this%gradGP(idir,i,j,k)=mmgrad((GP(ip,jp,kp)-GP(i,j,k))*idpg,(GP(i,j,k)-GP(im,jm,km))*idmg)
+                 ! this%gradLP(idir,i,j,k)=mmgrad((LP(ip,jp,kp)-LP(i,j,k))*idpl,(LP(i,j,k)-LP(im,jm,km))*idml)
+              end do
+           end do
+        end do
+     end do
+
+     ! Communication and BCs
+     
+   contains
+
+     ! Minmod gradient
+     function mmgrad(g1,g2) result(g)
+       implicit none
+       real(WP), intent(in) :: g1,g2
+       real(WP) :: g
+       if (g1*g2.le.0.0_WP) then
+          g=0.0_WP
+       else
+          if (abs(g1).lt.abs(g2)) then
+             g=g1
+          else
+             g=g2
+          end if
+       end if
+     end function mmgrad
+
+   end subroutine flow_reconstruct
+
+
+   ! Full advection routine inside the inner loop
    subroutine advection_step(this,dt,vf)
      use vfs_class, only: vfs, VFhi, VFlo
      use irl_fortran_interface, only : CapDod_type,TagAccVM_SepVM_type,new
@@ -1315,15 +1461,6 @@ contains
        this%GrhoFf(i,j,k,idir) = flux(3)
        this%LrhoFf(i,j,k,idir) = flux(8)
        
-       ! ! Prepare flux polyhedron
-       ! call fluxpoly_project(a_flux_polyhedron,i,j,k,'z')
-       ! ! Get all volumetric fluxes
-       ! call getNormMoments(a_flux_polyhedron,old_localized_separator_link(i,j,k),some_face_flux_moments)
-       ! ! Calculate fluxes from volume moments
-       ! call SL_getFaceFlux(a_flux_polyhedron,i,j,k,some_face_flux_moments, flux,3)
-       ! ! Store face density terms
-       ! this%GrhoZf(i,j,k) = flux(3)
-       ! this%LrhoZf(i,j,k) = flux(8)
        return
      end subroutine SL_advect
 
@@ -1349,7 +1486,7 @@ contains
        ! Loop through tags in the list
        do n = 0,list_size-1
           ! Get indices of current cell, volumes, and centroids
-          call vf%SepVM_getvolcentr(f_moments,n,ii,jj,kk, &
+          call vf%fluxpoly_cell_getvolcentr(f_moments,n,ii,jj,kk, &
                my_Lbary,my_Gbary,my_Lvol,my_Gvol,skip_flag)
 
           ! Skip current cell if there is a reason

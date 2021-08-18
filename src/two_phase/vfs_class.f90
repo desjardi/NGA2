@@ -75,8 +75,8 @@ module vfs_class
       real(WP), dimension(:,:,:), allocatable :: VFold    !< VFold array
       
       ! Phase barycenter data
-      real(WP), dimension(:,:,:,:), allocatable :: Lbary     !< Liquid barycenter
-      real(WP), dimension(:,:,:,:), allocatable :: Gbary     !< Gas barycenter
+      real(WP), dimension(:,:,:,:), allocatable :: Lbary   !< Liquid barycenter
+      real(WP), dimension(:,:,:,:), allocatable :: Gbary   !< Gas barycenter
       
       ! Subcell phasic volume fields
       real(WP), dimension(:,:,:,:,:,:), allocatable :: Lvol   !< Subcell liquid volume
@@ -137,8 +137,10 @@ module vfs_class
       ! Old arrays that are needed for the compressible MAST solver
       real(WP), dimension(:,:,:,:), allocatable :: Lbaryold  !< Liquid barycenter
       real(WP), dimension(:,:,:,:), allocatable :: Gbaryold  !< Gas barycenter
+      type(PlanarSep_type),   dimension(:,:,:),   allocatable :: liquid_gas_interfaceold
       type(LocSepLink_type),  dimension(:,:,:),   allocatable :: localized_separator_linkold
-
+      type(ObjServer_PlanarSep_type)  :: planar_separatorold_allocation
+      type(ObjServer_LocSepLink_type) :: localized_separator_linkold_allocation
       
    contains
       procedure :: print=>vfs_print                       !< Output solver to the screen
@@ -177,8 +179,11 @@ module vfs_class
       procedure :: get_max                                !< Calculate maximum field values
       procedure :: get_cfl                                !< Get CFL for the VF solver
 
-      procedure :: SepVM_getvolcentr                      !< Get the volume and centroid during generalized SL advection
+      procedure :: allocate_supplement                    !< Allocate arrays and initialize objects needed for compressible MAST solver
+      procedure :: copy_interface_to_old                  !< Copy interface variables at beginning of timestep
       procedure :: fluxpoly_project_getmoments            !< Project face to get flux volume and output its moments
+      procedure :: fluxpoly_cell_getvolcentr              !< Get the volume and centroid during generalized SL advection
+
    end type vfs
    
    
@@ -292,8 +297,8 @@ contains
       if (.not.self%cfg%zper.and.self%cfg%kproc.eq.1) self%vmask(:,:,self%cfg%kmino)=self%vmask(:,:,self%cfg%kmino+1)
       
    end function constructor
-   
-   
+    
+
    !> Initialize the IRL representation of our interfaces
    subroutine initialize_irl(this)
       implicit none
@@ -306,7 +311,7 @@ contains
       call setVFTolerance_IterativeDistanceFinding(iterative_distfind_tol)
       call setMinimumVolToTrack(volume_epsilon_factor*this%cfg%min_meshsize**3)
       call setMinimumSAToTrack(surface_epsilon_factor*this%cfg%min_meshsize**2)
-      
+
       ! Set IRL's moment calculation method
       call getMoments_setMethod(half_edge)
       
@@ -425,6 +430,107 @@ contains
       
    end subroutine initialize_irl
    
+
+   ! Set up additional arrays needed for the compressible MAST solver
+   subroutine allocate_supplement(this)
+     implicit none
+     class(vfs), intent(inout) :: this
+     integer  :: i,j,k,tag
+     integer(IRL_LargeOffsetIndex_t) :: total_cells
+     
+     ! Allocate arrays for storing old variables
+     allocate(this%liquid_gas_interfaceold    (this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
+     allocate(this%localized_separator_linkold(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
+     total_cells=int(this%cfg%nxo_,8)*int(this%cfg%nyo_,8)*int(this%cfg%nzo_,8)
+     call new(this%planar_separatorold_allocation,total_cells)
+     call new(this%localized_separator_linkold_allocation,total_cells)
+
+     ! Initialize arrays and setup linking
+     do k=this%cfg%kmino_,this%cfg%kmaxo_
+        do j=this%cfg%jmino_,this%cfg%jmaxo_
+           do i=this%cfg%imino_,this%cfg%imaxo_
+              ! PLIC interface(s)
+              call new(this%liquid_gas_interfaceold(i,j,k),this%planar_separatorold_allocation)
+              ! PLIC+mesh with connectivity (i.e., link)
+              call new(this%localized_separator_linkold(i,j,k),this%localized_separator_linkold_allocation,this%localizer(i,j,k),this%liquid_gas_interfaceold(i,j,k))
+           end do
+        end do
+     end do
+
+     ! Give each link a unique lexicographic tag (per processor)
+     do k=this%cfg%kmino_,this%cfg%kmaxo_
+        do j=this%cfg%jmino_,this%cfg%jmaxo_
+           do i=this%cfg%imino_,this%cfg%imaxo_
+              tag=this%cfg%get_lexico_from_ijk([i,j,k])
+              call setId(this%localized_separator_linkold(i,j,k),tag)
+           end do
+        end do
+     end do
+
+     ! Set the connectivity
+     do k=this%cfg%kmino_,this%cfg%kmaxo_
+        do j=this%cfg%jmino_,this%cfg%jmaxo_
+           do i=this%cfg%imino_,this%cfg%imaxo_
+              ! In the x- direction
+              if (i.gt.this%cfg%imino_) then
+                 call setEdgeConnectivity(this%localized_separator_linkold(i,j,k),0,this%localized_separator_linkold(i-1,j,k))
+              end if
+              ! In the x+ direction
+              if (i.lt.this%cfg%imaxo_) then
+                 call setEdgeConnectivity(this%localized_separator_linkold(i,j,k),1,this%localized_separator_linkold(i+1,j,k))
+              end if
+              ! In the y- direction
+              if (j.gt.this%cfg%jmino_) then
+                 call setEdgeConnectivity(this%localized_separator_linkold(i,j,k),2,this%localized_separator_linkold(i,j-1,k))
+              end if
+              ! In the y+ direction
+              if (j.lt.this%cfg%jmaxo_) then
+                 call setEdgeConnectivity(this%localized_separator_linkold(i,j,k),3,this%localized_separator_linkold(i,j+1,k))
+              end if
+              ! In the z- direction
+              if (k.gt.this%cfg%kmino_) then
+                 call setEdgeConnectivity(this%localized_separator_linkold(i,j,k),4,this%localized_separator_linkold(i,j,k-1))
+              end if
+              ! In the z+ direction
+              if (k.lt.this%cfg%kmaxo_) then
+                 call setEdgeConnectivity(this%localized_separator_linkold(i,j,k),5,this%localized_separator_linkold(i,j,k+1))
+              end if
+           end do
+        end do
+     end do
+
+
+     ! Deallocate memory-intensive arrays that are not used
+     deallocate(this%face_flux)
+
+   end subroutine allocate_supplement
+   
+   
+   ! Store old liquid_gas_interface at the beginning of every timestep
+   subroutine copy_interface_to_old(this)
+     implicit none
+     class(vfs), intent(inout) :: this
+     integer :: i,j,k
+
+     ! Copy interface
+     do k=this%cfg%kmino_,this%cfg%kmaxo_
+        do j=this%cfg%jmino_,this%cfg%jmaxo_
+           do i=this%cfg%imino_,this%cfg%imaxo_
+              call copy(this%liquid_gas_interfaceold(i,j,k),this%liquid_gas_interface(i,j,k))
+           end do
+        end do
+     end do
+
+     ! Copy volume fraction
+     this%VFold = this%VF
+
+     ! Copy barycenters
+     this%Gbaryold = this%Gbary
+     this%Lbaryold = this%Lbary
+
+     return
+   end subroutine copy_interface_to_old
+
    
    !> Add a boundary condition
    subroutine add_bcond(this,name,type,locator,dir)
@@ -758,43 +864,7 @@ contains
       
    end subroutine advance
 
-   subroutine SepVM_getvolcentr(this,f_moments,n,ii,jj,kk,my_Lbary,my_Gbary,my_Lvol,my_Gvol,skip_flag)
-     implicit none
-     class(vfs), intent(inout) :: this
-     type(TagAccVM_SepVM_type) :: f_moments
-     integer, intent(in) :: n
-     integer  :: ii,jj,kk,localizer_id
-     integer, dimension(3) :: ind
-     type(SepVM_type) :: my_SepVM
-     real(WP) :: my_Gvol,my_Lvol
-     real(WP), dimension(3) :: my_Gbary,my_Lbary
-     logical  :: skip_flag
-
-     skip_flag = .false.
-     ! Get unique id of current cell
-     localizer_id = getTagForIndex(f_moments,n)
-     ! Convert unique id to indices ii,jj,kk
-     ind=this%cfg%get_ijk_from_lexico(localizer_id)
-     ii = ind(1); jj = ind(2); kk = ind(3)
-
-     ! If inside wall, nothing should be added to flux
-     if (this%mask(ii,jj,kk).eq.1) then
-        skip_flag = .true.
-        return
-     end if
-
-     ! If bringing material back from beyond outflow boundary, skip
-     !if (backflow_flux_flag(ii,jj,kk)) cycle
-
-     ! Get barycenter and volume of tets in current cell
-     call getSepVMAtIndex(f_moments,n,my_SepVM)
-     my_Lbary = getCentroid(my_SepVM, 0)
-     my_Gbary = getCentroid(my_SepVM, 1)
-     my_Lvol  = getVolume(my_SepVM, 0)
-     my_Gvol  = getVolume(my_SepVM, 1)
-     
-   end subroutine SepVM_getvolcentr
-
+   ! Project a single face to get flux polyhedron and get its moments
    subroutine fluxpoly_project_getmoments(this,i,j,k,dt,dir,U,V,W,a_flux_polyhedron,a_locseplink,some_face_flux_moments)
      implicit none
      class(vfs), intent(inout)    :: this
@@ -880,7 +950,46 @@ contains
 
    end subroutine fluxpoly_project_getmoments
    
-   
+
+   ! From the moments object in a single cell, get the volume and centroid out of IRL
+   subroutine fluxpoly_cell_getvolcentr(this,f_moments,n,ii,jj,kk,my_Lbary,my_Gbary,my_Lvol,my_Gvol,skip_flag)
+     implicit none
+     class(vfs), intent(inout) :: this
+     type(TagAccVM_SepVM_type) :: f_moments
+     integer, intent(in) :: n
+     integer  :: ii,jj,kk,localizer_id
+     integer, dimension(3) :: ind
+     type(SepVM_type) :: my_SepVM
+     real(WP) :: my_Gvol,my_Lvol
+     real(WP), dimension(3) :: my_Gbary,my_Lbary
+     logical  :: skip_flag
+
+     skip_flag = .false.
+     ! Get unique id of current cell
+     localizer_id = getTagForIndex(f_moments,n)
+     ! Convert unique id to indices ii,jj,kk
+     ind=this%cfg%get_ijk_from_lexico(localizer_id)
+     ii = ind(1); jj = ind(2); kk = ind(3)
+
+     ! If inside wall, nothing should be added to flux
+     if (this%mask(ii,jj,kk).eq.1) then
+        skip_flag = .true.
+        return
+     end if
+
+     ! If bringing material back from beyond outflow boundary, skip
+     !if (backflow_flux_flag(ii,jj,kk)) cycle
+
+     ! Get barycenter and volume of tets in current cell
+     call getSepVMAtIndex(f_moments,n,my_SepVM)
+     my_Lbary = getCentroid(my_SepVM, 0)
+     my_Gbary = getCentroid(my_SepVM, 1)
+     my_Lvol  = getVolume(my_SepVM, 0)
+     my_Gvol  = getVolume(my_SepVM, 1)
+     
+   end subroutine fluxpoly_cell_getvolcentr
+
+
    !> Remove flotsams explicitly - careful, this is not conservative!
    subroutine remove_flotsams(this)
       implicit none
