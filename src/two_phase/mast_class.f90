@@ -126,6 +126,16 @@ module mast_class
       real(WP), dimension(:,:,:), allocatable :: F_GP,   F_LP            !< Pressure fluxes
       real(WP), dimension(:,:,:), allocatable :: F_VOL,  F_VF            !< Volume fluxes
 
+      ! Density flux arrays
+      real(WP), dimension(:,:,:,:), allocatable :: GrhoFf                !< Gas density flux (used for SC advection)
+      real(WP), dimension(:,:,:,:), allocatable :: LrhoFf                !< Liquid density flux
+
+      ! Scalar gradient arrays (for reconstruction)
+      real(WP), dimension(:,:,:,:), allocatable :: gradGrho,gradGrhoE,gradGIE,gradGP !< Gradients: Gas scalars
+      real(WP), dimension(:,:,:,:), allocatable :: gradGrhoU,gradGrhoV,gradGrhoW     !< Gradients: Gas momentum
+      real(WP), dimension(:,:,:,:), allocatable :: gradLrho,gradLrhoE,gradLIE,gradLP !< Gradients: Liquid scalars
+      real(WP), dimension(:,:,:,:), allocatable :: gradLrhoU,gradLrhoV,gradLrhoW     !< Gradients: Liquid momentum
+
       ! Hybrid advection
       integer,  dimension(:,:,:,:), allocatable :: sl_face ! < Flag for flux method switching
       ! Pressure relaxation
@@ -173,7 +183,9 @@ module mast_class
       procedure :: adjust_metrics                         !< Adjust metrics
       procedure :: flag_sl                                !< Flag where SL scheme needs to be used
       ! For advection solve
-      procedure :: advection_step
+      procedure :: advection_step                         !< Full, hybrid advection step
+      ! For convenience in advection routines
+      procedure :: GKEold, LKEold                         !< Calculate kinetic energy at timestep 'n'
       ! For viscous/dissipative/body forces (will address later)
       ! For setting up pressure solve
       !procedure :: interp_vel                             !< Calculate interpolated velocity
@@ -288,6 +300,26 @@ contains
       allocate(self%F_LrhoE(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%F_LrhoE=0.0_WP
       allocate(self%F_GP   (self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%F_GP   =0.0_WP
       allocate(self%F_LP   (self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%F_LP   =0.0_WP
+
+      ! Density flux arrays
+      allocate(self%GrhoFf (self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_,3)); self%GrhoFf =0.0_WP
+      allocate(self%LrhoFf (self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_,3)); self%LrhoFf =0.0_WP
+
+      ! Gradients
+      allocate(self%gradGrho (3,self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%gradGrho =0.0_WP
+      allocate(self%gradGrhoE(3,self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%gradGrhoE=0.0_WP
+      allocate(self%gradGIE  (3,self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%gradGIE  =0.0_WP
+      allocate(self%gradGP   (3,self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%gradGP   =0.0_WP
+      allocate(self%gradGrhoU(3,self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%gradGrhoU=0.0_WP
+      allocate(self%gradGrhoV(3,self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%gradGrhoV=0.0_WP
+      allocate(self%gradGrhoW(3,self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%gradGrhoW=0.0_WP
+      allocate(self%gradLrho (3,self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%gradLrho =0.0_WP
+      allocate(self%gradLrhoE(3,self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%gradLrhoE=0.0_WP
+      allocate(self%gradLIE  (3,self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%gradLIE  =0.0_WP
+      allocate(self%gradLP   (3,self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%gradLP   =0.0_WP
+      allocate(self%gradLrhoU(3,self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%gradLrhoU=0.0_WP
+      allocate(self%gradLrhoV(3,self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%gradLrhoV=0.0_WP
+      allocate(self%gradLrhoW(3,self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%gradLrhoW=0.0_WP
 
       ! Hybrid advection
       allocate(self%sl_face(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_,3)); self%sl_face=0.0_WP
@@ -930,11 +962,14 @@ contains
 
    subroutine advection_step(this,dt,vf)
      use vfs_class, only: vfs, VFhi, VFlo
+     use irl_fortran_interface, only : CapDod_type,TagAccVM_SepVM_type,new
      implicit none
      class(mast), intent(inout) :: this   !< The two-phase all-Mach flow solver
      class(vfs),  intent(inout) :: vf     !< The volume fraction solver
      real(WP),    intent(inout) :: dt     !< Timestep size over which to advance
      real(WP),   dimension(14)  :: flux   !< Passes flux to and from routines
+     type(CapDod_type) :: fp              !< Object for flux polyhedron
+     type(TagAccVM_SepVM_type) :: ffm     !< Object for flux moments
      real(WP) :: Ga_i,Ga_nb,La_i,La_nb
      integer  :: i,j,k
 
@@ -963,6 +998,11 @@ contains
      this%F_LrhoW=this%LrhoWold*((       vf%VFold)*this%cfg%vol)
      this%F_LP   =this%LPold   *((       vf%VFold)*this%cfg%vol)
 
+     ! Allocate flux_polyhedron that will be used for fluxes
+     call new(fp)
+     ! Allocate face_flux_moment that will be used in fluxes
+     call new(ffm)
+
      !! ---------------------------------------!!
      !! 1. SL and TTSL flux calculations       !!
      !! ---------------------------------------!!
@@ -972,22 +1012,22 @@ contains
               
               !! ---- LEFT X(I) FACE ---- !!
               select case(this%sl_face(i,j,k,1))
-              case(1)!; call SL_advect  (flux,b_flux,fp,ffm              ,i,j,k,'x')
-              case(0)!; call TTSL_advect(flux,b_flux,[x (i),ym(j),zm(k)],i,j,k,'x')
+              case(1); call SL_advect  (flux,fp,ffm                                        ,i,j,k,'x')
+              case(0); call TTSL_advect(flux,[this%cfg%x (i),this%cfg%ym(j),this%cfg%zm(k)],i,j,k,'x')
               end select
               call add_fluxes(flux,i,j,k,'x')
 
               !! ---- BOTTOM Y(J) FACE ---- !!
               select case(this%sl_face(i,j,k,2))
-              case(1)!; call SL_advect  (flux,b_flux,fp,ffm              ,i,j,k,'y')
-              case(0)!; call TTSL_advect(flux,b_flux,[xm(i),y (j),zm(k)],i,j,k,'y')
+              case(1); call SL_advect  (flux,fp,ffm                                        ,i,j,k,'y')
+              case(0); call TTSL_advect(flux,[this%cfg%xm(i),this%cfg%y (j),this%cfg%zm(k)],i,j,k,'y')
               end select
               call add_fluxes(flux,i,j,k,'y')
 
               !! ---- BACK Z(K) FACE ---- !!
               select case(this%sl_face(i,j,k,3))
-              case(1)!; call SL_advect  (flux,b_flux,fp,ffm             ,i,j,k,'z')
-              case(0)!; call TTSL_advect(flux,b_flux,[xm(i),ym(j),z (k)],i,j,k,'z')
+              case(1); call SL_advect  (flux,fp,ffm                                        ,i,j,k,'z')
+              case(0); call TTSL_advect(flux,[this%cfg%xm(i),this%cfg%ym(j),this%cfg%z (k)],i,j,k,'z')
               end select
               call add_fluxes(flux,i,j,k,'z')
 
@@ -1246,6 +1286,312 @@ contains
   
    contains
 
+     ! ================================================================= !
+     ! Construct flux hexahedron, perform cutting, call flux calculation !
+     ! ================================================================= !
+     subroutine SL_advect(flux,a_flux_polyhedron,some_face_flux_moments,i,j,k,dir)
+       character(len=1) :: dir
+       integer :: i,j,k,idir
+       real(WP), dimension(14) :: flux
+
+       type(CapDod_type) :: a_flux_polyhedron
+       type(TagAccVM_SepVM_type) :: some_face_flux_moments
+
+       select case (trim(dir))
+       case ('x')
+          idir = 1
+       case ('y')
+          idir = 2
+       case('z')
+          idir = 3
+       end select
+
+       ! Prepare flux polyhedron
+       call vf%fluxpoly_project_getmoments(i,j,k,dt,dir,this%U,this%V,this%W,&
+            a_flux_polyhedron,vf%localized_separator_linkold(i,j,k),some_face_flux_moments)
+       ! Calculate fluxes from volume moments
+       call SL_getFaceFlux(some_face_flux_moments, flux)
+       ! Store face density terms
+       this%GrhoFf(i,j,k,idir) = flux(3)
+       this%LrhoFf(i,j,k,idir) = flux(8)
+       
+       ! ! Prepare flux polyhedron
+       ! call fluxpoly_project(a_flux_polyhedron,i,j,k,'z')
+       ! ! Get all volumetric fluxes
+       ! call getNormMoments(a_flux_polyhedron,old_localized_separator_link(i,j,k),some_face_flux_moments)
+       ! ! Calculate fluxes from volume moments
+       ! call SL_getFaceFlux(a_flux_polyhedron,i,j,k,some_face_flux_moments, flux,3)
+       ! ! Store face density terms
+       ! this%GrhoZf(i,j,k) = flux(3)
+       ! this%LrhoZf(i,j,k) = flux(8)
+       return
+     end subroutine SL_advect
+
+     ! ====================================================== !
+     ! Given a flux hexahedron, calculate and return the flux !
+     ! ====================================================== !
+     subroutine SL_getFaceFlux(f_moments, flux)
+       use irl_fortran_interface, only: getSize
+       integer  :: ii,jj,kk,n
+       integer  :: list_size,uniq_id
+       integer,  dimension(3) :: ind
+       real(WP) :: my_Gvol,my_Lvol
+       real(WP), dimension(3) :: my_Gbary,my_Lbary
+       real(WP), dimension(14)  :: flux
+       type(TagAccVM_SepVM_type) :: f_moments
+       logical  :: skip_flag
+
+       !..... Using geometry, calculate fluxes .....!
+       ! Initialize at zero
+       flux = 0.0_WP
+       ! Get number of tags (elements) in the f_moments
+       list_size = getSize(f_moments)
+       ! Loop through tags in the list
+       do n = 0,list_size-1
+          ! Get indices of current cell, volumes, and centroids
+          call vf%SepVM_getvolcentr(f_moments,n,ii,jj,kk, &
+               my_Lbary,my_Gbary,my_Lvol,my_Gvol,skip_flag)
+
+          ! Skip current cell if there is a reason
+          if (skip_flag) cycle
+
+          ! Store barycenter fluxes
+          !b_flux(:,1) = b_flux(:,1) + my_Gvol*my_Gbary
+          !b_flux(:,2) = b_flux(:,2) + my_Lvol*my_Lbary
+
+          ! Bound barycenters by the cell dimensions
+          my_Lbary(1) = max(this%cfg%x(ii),min(this%cfg%x(ii+1),my_Lbary(1)))
+          my_Gbary(1) = max(this%cfg%x(ii),min(this%cfg%x(ii+1),my_Gbary(1)))
+          my_Lbary(2) = max(this%cfg%y(jj),min(this%cfg%y(jj+1),my_Lbary(2)))
+          my_Gbary(2) = max(this%cfg%y(jj),min(this%cfg%y(jj+1),my_Gbary(2)))
+          my_Lbary(3) = max(this%cfg%z(kk),min(this%cfg%z(kk+1),my_Lbary(3)))
+          my_Gbary(3) = max(this%cfg%z(kk),min(this%cfg%z(kk+1),my_Gbary(3)))
+
+          ! Make barycenter relative to cell
+          my_Lbary = my_Lbary - vf%Lbaryold(:,ii,jj,kk)
+          my_Gbary = my_Gbary - vf%Gbaryold(:,ii,jj,kk)
+
+          ! Add contribution to the flux in this tetrahedron
+          flux( 1) = flux( 1) + my_Lvol + my_Gvol
+          flux( 2) = flux( 2) + my_Lvol
+
+          flux( 3) = flux( 3) + my_Gvol*(this%Grhoold (ii,jj,kk)+sum(this%gradGrho (:,ii,jj,kk)*my_Gbary(:)))
+          flux( 4) = flux( 4) + my_Gvol*(this%GrhoEold(ii,jj,kk)+sum(this%gradGrhoE(:,ii,jj,kk)*my_Gbary(:)))
+          flux( 5) = flux( 5) + my_Gvol*(this%GrhoUold(ii,jj,kk)+sum(this%gradGrhoU(:,ii,jj,kk)*my_Gbary(:)))
+          flux( 6) = flux( 6) + my_Gvol*(this%GrhoVold(ii,jj,kk)+sum(this%gradGrhoV(:,ii,jj,kk)*my_Gbary(:)))
+          flux( 7) = flux( 7) + my_Gvol*(this%GrhoWold(ii,jj,kk)+sum(this%gradGrhoW(:,ii,jj,kk)*my_Gbary(:)))
+
+          flux( 8) = flux( 8) + my_Lvol*(this%Lrhoold (ii,jj,kk)+sum(this%gradLrho (:,ii,jj,kk)*my_Lbary(:)))
+          flux( 9) = flux( 9) + my_Lvol*(this%LrhoEold(ii,jj,kk)+sum(this%gradLrhoE(:,ii,jj,kk)*my_Lbary(:)))
+          flux(10) = flux(10) + my_Lvol*(this%LrhoUold(ii,jj,kk)+sum(this%gradLrhoU(:,ii,jj,kk)*my_Lbary(:)))
+          flux(11) = flux(11) + my_Lvol*(this%LrhoVold(ii,jj,kk)+sum(this%gradLrhoV(:,ii,jj,kk)*my_Lbary(:)))
+          flux(12) = flux(12) + my_Lvol*(this%LrhoWold(ii,jj,kk)+sum(this%gradLrhoW(:,ii,jj,kk)*my_Lbary(:)))
+
+          flux(13) = flux(13) + my_Gvol*(this%GPold   (ii,jj,kk)+sum(this%gradGP   (:,ii,jj,kk)*my_Gbary(:)))
+          flux(14) = flux(14) + my_Lvol*(this%LPold   (ii,jj,kk)+sum(this%gradLP   (:,ii,jj,kk)*my_Lbary(:)))
+
+       end do
+
+       return
+     end subroutine SL_getFaceFlux
+
+     ! ===================================================== !
+     ! Project the center of the face, call flux calculation !
+     ! ===================================================== !
+     subroutine TTSL_advect(flux,pt_f,i,j,k,dir)
+       implicit none
+       real(WP), dimension(3) :: pt_f,pt_p
+       real(WP), dimension(14):: flux
+       integer,  dimension(3) :: ind_p
+       real(WP) :: vol_f,vol_check
+       character(len=1) :: dir
+       integer :: n,i,j,k,idir
+
+       ! Trajectory-Tracing Semi-Lagrangian scheme
+
+       ! Initialize flux at 0
+       flux = 0.0_WP
+
+       ! Get projected point
+       pt_p = vf%project(pt_f,i,j,k,-dt,this%U,this%V,this%W)
+
+       ! Get approximate barycenter of flux volume, assign to one phase
+       ! b_flux(:,ceiling(oldVOF(i,j,k))+1) = 0.5_WP*(pt_p+pt_f)
+
+       select case (trim(dir))
+       case('x')
+          idir = 1
+          ! Flux volume
+          vol_f = dt*this%U(i,j,k)*this%cfg%dy(j)*this%cfg%dz(k)
+          ! Ratio of distance to check
+          vol_check = abs(dt*this%U(i,j,k)*this%cfg%dxi(i))
+       case('y')
+          idir = 2
+          ! Flux volume
+          vol_f = dt*this%V(i,j,k)*this%cfg%dx(i)*this%cfg%dz(k)
+          ! Ratio of distance to check
+          vol_check = abs(dt*this%V(i,j,k)*this%cfg%dyi(j))
+       case('z')
+          idir = 3
+          ! Flux volume
+          vol_f = dt*this%W(i,j,k)*this%cfg%dx(i)*this%cfg%dy(j)
+          ! Ratio of distance to check
+          vol_check = abs(dt*this%W(i,j,k)*this%cfg%dzi(k))
+       end select
+       
+       ! Calculate barycenter fluxes
+       !b_flux = b_flux*vol_f
+       
+       ! Calculate fluxes (if there is any flux to calculate)
+       if (vol_check.gt.epsilon(1.0_WP)) then
+          ! Get initial indices
+          ind_p = this%cfg%get_ijk_local(pt_p,[i,j,k])
+          call TTSL_getFaceFlux(pt_p,pt_f,ind_p,vol_f,  flux)
+       end if
+       ! Store face density terms
+       this%GrhoFf(i,j,k,idir) = flux(3)
+       this%LrhoFf(i,j,k,idir) = flux(8)
+       
+       return
+     end subroutine TTSL_advect
+
+     ! ===================================================== !
+     ! Calculate fluxes using amount of line segment in cell !
+     ! ===================================================== !
+     subroutine TTSL_getFaceFlux(pt_p,pt_f,ind_p,vol_f, flux)
+       implicit none
+       real(WP), dimension(3) :: pt_f,pt_p,pt_c,dx_f
+       real(WP), dimension(14):: flux
+       integer,  dimension(3) :: ind_p,ind_c
+       real(WP) :: vol_f,l_f,l_c,l_d,l_s
+
+       ! Total distance from projected face centroid to initial face centroid
+       l_f = sqrt(sum((pt_p-pt_f)**2))
+       ! Initial difference between integrated distance and total distance
+       l_d = l_f
+       ! Initial amount of length that has been summed over
+       l_s = 0.0_WP
+       ! Loop through cells while progressing from pt_p to pt_f
+       do while (l_d.gt.epsilon(1.0_WP))
+          ! Find intersection between flux line and mesh, get next point and indices
+          call mesh_intersect(pt_p,pt_f,ind_p,   pt_c,ind_c)
+          ! Find distance between intersection and origin face
+          l_d = sqrt(sum((pt_c-pt_f)**2))
+          ! Get distance between point p and intersection (current distance)
+          l_c = l_f - l_d - l_s
+          ! Calculate flux, multiply by distance ratio
+          flux = flux + l_c/(l_f+tiny(1.0_WP))*vol_f*TTSL_getval(ind_p,0.5_WP*(pt_p+pt_c))
+          ! Move point p to intersection
+          pt_p = pt_c
+          ! Move indices to next location
+          ind_p = ind_c
+          ! Add length that has been summed over
+          l_s = l_s + l_c
+       end do
+
+     end subroutine TTSL_getFaceFlux
+     
+     ! Find value at point on line segment
+     function TTSL_getval(ind,pt_i) result(f)
+
+       real(WP), dimension(3),  intent(in)  :: pt_i
+       integer,  dimension(3),  intent(in)  :: ind
+       real(WP), dimension(14) :: f
+       real(WP), dimension(3) :: dx_i
+       integer :: ii,jj,kk
+
+       ii = ind(1); jj = ind(2); kk = ind(3)
+       f = 0.0_WP
+
+       ! Avoid if in wall
+       if (this%mask(ii,jj,kk).eq.1) return
+       ! Avoid if beyond outflow boundary
+       ! if (backflow_flux_flag(ii,jj,kk)) return
+
+       ! normalized volume flux
+       f(1) = 1.0_WP
+       select case(ceiling(vf%VFold(ii,jj,kk)))
+       case(0)
+          ! displacement to barycenter
+          dx_i = pt_i - vf%Gbaryold(:,ii,jj,kk)
+          ! interpolated variables
+          f(3) = this%Grhoold (ii,jj,kk)                       + sum(this%gradGrho(:,ii,jj,kk)*dx_i)
+          f(4) = this%GrhoEold(ii,jj,kk)-this%GKEold(ii,jj,kk) + sum(this%gradGIE (:,ii,jj,kk)*dx_i)
+          f(13)= this%GPold   (ii,jj,kk)                       + sum(this%gradGP  (:,ii,jj,kk)*dx_i)
+       case(1)
+          ! displacement to barycenter
+          dx_i = pt_i - vf%Lbaryold(:,ii,jj,kk)
+          ! interpolated variables
+          f(2) = 1.0_WP
+          f(8) = this%Lrhoold (ii,jj,kk)                       + sum(this%gradLrho(:,ii,jj,kk)*dx_i)
+          f(9) = this%LrhoEold(ii,jj,kk)-this%LKEold(ii,jj,kk) + sum(this%gradLIE (:,ii,jj,kk)*dx_i)
+          f(14)= this%LPold   (ii,jj,kk)                       + sum(this%gradLP  (:,ii,jj,kk)*dx_i)
+       end select
+     end function TTSL_getval
+
+     ! Routine to find intesections with mesh and calculate distances
+     subroutine mesh_intersect(pt_p,pt_f,ind_p, pt_c,ind_c)
+       integer :: i,j,k,min_d
+       real(WP) :: slope_factor
+       real(WP), dimension(3) :: pt_p,pt_f,pt_c,vec
+       integer,  dimension(3) :: ind_p,ind_c,ind_m
+       real(WP), dimension(3) :: xint,yint,zint
+       real(WP), dimension(4) :: dint
+       logical :: p_flag
+
+       ! Direction of intersection
+       vec = pt_f - pt_p
+       ! Identify indices of mesh planes that could be intersected
+       ind_m = ind_p + nint(0.5_WP*(1.0_WP - sign(1.0_WP,-pt_f+pt_p)))
+       ! Identify indices of potential next cells
+       ind_c = ind_p - nint(sign(1.0_WP,-pt_f+pt_p))
+       ! Signs are weird because I need sign(0) => -1
+       ! Calculate intersection point for each mesh plane
+       ! X-plane
+       xint(1) = this%cfg%x(ind_m(1))                   ! x-coord at intersection
+       slope_factor = (xint(1)-pt_f(1))/(vec(1)+tiny(1.0_WP))
+       slope_factor = min(sqrt(huge(1.0_WP)),max(slope_factor,-sqrt(huge(1.0_WP))))
+       xint(2) = pt_p(2) + vec(2)*(1.0_WP+slope_factor) ! y-coord at intersection
+       xint(3) = pt_p(3) + vec(3)*(1.0_WP+slope_factor) ! z-coord at intersection
+       ! Y-plane
+       yint(2) = this%cfg%y(ind_m(2))                   ! y-coord at intersection
+       slope_factor = (yint(2)-pt_f(2))/(vec(2)+tiny(1.0_WP))
+       slope_factor = min(sqrt(huge(1.0_WP)),max(slope_factor,-sqrt(huge(1.0_WP))))
+       yint(1) = pt_p(1) + vec(1)*(1.0_WP+slope_factor) ! x-coord at intersection
+       yint(3) = pt_p(3) + vec(3)*(1.0_WP+slope_factor) ! z-coord at intersection
+       ! Z-plane
+       zint(3) = this%cfg%z(ind_m(3))                   ! z-coord at intersection
+       slope_factor = (zint(3)-pt_f(3))/(vec(3)+tiny(1.0_WP))
+       slope_factor = min(sqrt(huge(1.0_WP)),max(slope_factor,-sqrt(huge(1.0_WP))))
+       zint(1) = pt_p(1) + vec(1)*(1.0_WP+slope_factor) ! x-coord at intersection
+       zint(2) = pt_p(2) + vec(2)*(1.0_WP+slope_factor) ! y-coord at intersection
+       ! If slope is zero, the equation should become a constant
+       ! Calculate distance of line segment, find minimum
+       dint(1) = sqrt(sum((pt_p-xint)**2)) ! distance to x intersection
+       dint(2) = sqrt(sum((pt_p-yint)**2)) ! distance to y intersection
+       dint(3) = sqrt(sum((pt_p-zint)**2)) ! distance to z intersection
+       dint(4) = sqrt(sum((pt_p-pt_f)**2)) ! distance to origin face point
+       min_d = minloc(dint,1)
+
+       ! Update new point location, reset other indices to keep only correct new index
+       select case (min_d)
+       case(1) ! x intersection
+          ind_c(2) = ind_p(2); ind_c(3) = ind_p(3)
+          pt_c = xint
+       case(2) ! y intersection
+          ind_c(1) = ind_p(1); ind_c(3) = ind_p(3)
+          pt_c = yint
+       case(3) ! z intersection
+          ind_c(1) = ind_p(1); ind_c(2) = ind_p(2)
+          pt_c = zint
+       case(4) ! origin point is closest
+          ind_c = ind_p ! no need to change indices
+          pt_c = pt_f
+       end select
+
+       return
+     end subroutine mesh_intersect
+
      function VF_src_quad(gss2,lss2,fvf,fvl,vl) result(volfrac)
        real(WP), intent(in) :: gss2, lss2, fvf, fvl, vl
        real(WP) :: volfrac
@@ -1350,16 +1696,16 @@ contains
        select case (trim(dir))
        case('x')
           st_i =-1; st_j = 0; st_k = 0
-          !grho_fterm = GrhoXf(i,j,k)
-          !lrho_fterm = LrhoXf(i,j,k)
+          grho_fterm = this%GrhoFf(i,j,k,1)
+          lrho_fterm = this%LrhoFf(i,j,k,1)
        case('y')
           st_i = 0; st_j =-1; st_k = 0
-          !grho_fterm = GrhoYf(i,j,k)
-          !lrho_fterm = LrhoYf(i,j,k)
+          grho_fterm = this%GrhoFf(i,j,k,2)
+          lrho_fterm = this%LrhoFf(i,j,k,2)
        case('z')
           st_i = 0; st_j = 0; st_k =-1
-          !grho_fterm = GrhoZf(i,j,k)
-          !lrho_fterm = LrhoZf(i,j,k)
+          grho_fterm = this%GrhoFf(i,j,k,3)
+          lrho_fterm = this%LrhoFf(i,j,k,3)
        end select
 
        !print*,'before flux calculations'
@@ -1437,16 +1783,16 @@ contains
        select case (trim(dir))
        case('x')
           st_i =-1; st_j = 0; st_k = 0
-          !grho_fterm = -GrhoXf(i,j,k)
-          !lrho_fterm = -LrhoXf(i,j,k)
+          grho_fterm = -this%GrhoFf(i,j,k,1)
+          lrho_fterm = -this%LrhoFf(i,j,k,1)
        case('y')
           st_i = 0; st_j =-1; st_k = 0
-          !grho_fterm = -GrhoYf(i,j,k)
-          !lrho_fterm = -LrhoYf(i,j,k)
+          grho_fterm = -this%GrhoFf(i,j,k,2)
+          lrho_fterm = -this%LrhoFf(i,j,k,2)
        case('z')
           st_i = 0; st_j = 0; st_k =-1
-          !grho_fterm = -GrhoZf(i,j,k)
-          !lrho_fterm = -LrhoZf(i,j,k)
+          grho_fterm = -this%GrhoFf(i,j,k,3)
+          lrho_fterm = -this%LrhoFf(i,j,k,3)
        end select
        ! Negative sign since this is on the left hand side
 
@@ -1504,16 +1850,16 @@ contains
        select case (trim(dir))
        case('x')
           st_i =-1; st_j = 0; st_k = 0
-          !grho_fterm = GrhoXf(i,j,k)
-          !lrho_fterm = LrhoXf(i,j,k)
+          grho_fterm = this%GrhoFf(i,j,k,1)
+          lrho_fterm = this%LrhoFf(i,j,k,1)
        case('y')
           st_i = 0; st_j =-1; st_k = 0
-          !grho_fterm = GrhoYf(i,j,k)
-          !lrho_fterm = LrhoYf(i,j,k)
+          grho_fterm = this%GrhoFf(i,j,k,2)
+          lrho_fterm = this%LrhoFf(i,j,k,2)
        case('z')
           st_i = 0; st_j = 0; st_k =-1
-          !grho_fterm = GrhoZf(i,j,k)
-          !lrho_fterm = LrhoZf(i,j,k)
+          grho_fterm = this%GrhoFf(i,j,k,3)
+          lrho_fterm = this%LrhoFf(i,j,k,3)
        end select
 
        ! get starred velocity first
@@ -1554,7 +1900,27 @@ contains
      end subroutine calculate_ustar
        
    end subroutine advection_step
-   
+
+   ! Function to more easily calculate gas kinetic energy
+   function GKEold(this,i,j,k) result(val)
+     implicit none
+     class(mast), intent(inout) :: this
+     real(WP) :: val
+     integer, intent(in) :: i,j,k
+     val = 0.5_WP*this%Grhoold(i,j,k)*(this%Uiold(i,j,k)**2+this%Viold(i,j,k)**2+this%Wiold(i,j,k)**2)
+     return
+   end function GKEold
+
+   ! Function to more easily calculate liquid kinetic energy
+   function LKEold(this,i,j,k) result(val)
+     implicit none
+     class(mast), intent(inout) :: this
+     real(WP) :: val
+     integer, intent(in) :: i,j,k
+     val = 0.5_WP*this%Lrhoold(i,j,k)*(this%Uiold(i,j,k)**2+this%Viold(i,j,k)**2+this%Wiold(i,j,k)**2)
+     return
+   end function LKEold
+
    !> Add surface tension jump term using CSF
    subroutine add_surface_tension_jump(this,dt,div,vf,contact_model)
       use messager,  only: die

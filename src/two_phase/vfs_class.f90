@@ -75,8 +75,8 @@ module vfs_class
       real(WP), dimension(:,:,:), allocatable :: VFold    !< VFold array
       
       ! Phase barycenter data
-      real(WP), dimension(:,:,:,:), allocatable :: Lbary  !< Liquid barycenter
-      real(WP), dimension(:,:,:,:), allocatable :: Gbary  !< Gas barycenter
+      real(WP), dimension(:,:,:,:), allocatable :: Lbary     !< Liquid barycenter
+      real(WP), dimension(:,:,:,:), allocatable :: Gbary     !< Gas barycenter
       
       ! Subcell phasic volume fields
       real(WP), dimension(:,:,:,:,:,:), allocatable :: Lvol   !< Subcell liquid volume
@@ -133,6 +133,12 @@ module vfs_class
       
       ! Monitoring quantities
       real(WP) :: VFmax,VFmin,VFint                       !< Maximum, minimum, and integral volume fraction
+
+      ! Old arrays that are needed for the compressible MAST solver
+      real(WP), dimension(:,:,:,:), allocatable :: Lbaryold  !< Liquid barycenter
+      real(WP), dimension(:,:,:,:), allocatable :: Gbaryold  !< Gas barycenter
+      type(LocSepLink_type),  dimension(:,:,:),   allocatable :: localized_separator_linkold
+
       
    contains
       procedure :: print=>vfs_print                       !< Output solver to the screen
@@ -150,7 +156,7 @@ module vfs_class
       procedure, private :: sync_ByteBuffer               !< Communicate byte packets across one side - another I/O helper
       procedure, private :: calculate_offset_to_planes    !< Helper routine for I/O
       procedure, private :: crude_phase_test              !< Helper function that rapidly assess if a mixed cell might be present
-      procedure, private :: project                       !< Helper function that performs a Lagrangian projection of a vertex
+      procedure :: project                                !< Function that performs a Lagrangian projection of a vertex
       procedure :: read_interface                         !< Read an IRL interface from a file
       procedure :: write_interface                        !< Write an IRL interface to a file
       procedure :: advance                                !< Advance VF to next step
@@ -170,6 +176,9 @@ module vfs_class
       procedure :: paraboloid_fit                         !< Perform local paraboloid fit of IRL surface
       procedure :: get_max                                !< Calculate maximum field values
       procedure :: get_cfl                                !< Get CFL for the VF solver
+
+      procedure :: SepVM_getvolcentr                      !< Get the volume and centroid during generalized SL advection
+      procedure :: fluxpoly_project_getmoments            !< Project face to get flux volume and output its moments
    end type vfs
    
    
@@ -748,6 +757,128 @@ contains
       call this%reset_volume_moments()
       
    end subroutine advance
+
+   subroutine SepVM_getvolcentr(this,f_moments,n,ii,jj,kk,my_Lbary,my_Gbary,my_Lvol,my_Gvol,skip_flag)
+     implicit none
+     class(vfs), intent(inout) :: this
+     type(TagAccVM_SepVM_type) :: f_moments
+     integer, intent(in) :: n
+     integer  :: ii,jj,kk,localizer_id
+     integer, dimension(3) :: ind
+     type(SepVM_type) :: my_SepVM
+     real(WP) :: my_Gvol,my_Lvol
+     real(WP), dimension(3) :: my_Gbary,my_Lbary
+     logical  :: skip_flag
+
+     skip_flag = .false.
+     ! Get unique id of current cell
+     localizer_id = getTagForIndex(f_moments,n)
+     ! Convert unique id to indices ii,jj,kk
+     ind=this%cfg%get_ijk_from_lexico(localizer_id)
+     ii = ind(1); jj = ind(2); kk = ind(3)
+
+     ! If inside wall, nothing should be added to flux
+     if (this%mask(ii,jj,kk).eq.1) then
+        skip_flag = .true.
+        return
+     end if
+
+     ! If bringing material back from beyond outflow boundary, skip
+     !if (backflow_flux_flag(ii,jj,kk)) cycle
+
+     ! Get barycenter and volume of tets in current cell
+     call getSepVMAtIndex(f_moments,n,my_SepVM)
+     my_Lbary = getCentroid(my_SepVM, 0)
+     my_Gbary = getCentroid(my_SepVM, 1)
+     my_Lvol  = getVolume(my_SepVM, 0)
+     my_Gvol  = getVolume(my_SepVM, 1)
+     
+   end subroutine SepVM_getvolcentr
+
+   subroutine fluxpoly_project_getmoments(this,i,j,k,dt,dir,U,V,W,a_flux_polyhedron,a_locseplink,some_face_flux_moments)
+     implicit none
+     class(vfs), intent(inout)    :: this
+     integer,          intent(in) :: i,j,k    !< Index 
+     real(WP),         intent(in) :: dt       !< Timestep size over which to advance
+     character(len=1), intent(in) :: dir      !< Orientation of current face
+     type(CapDod_type)         :: a_flux_polyhedron
+     type(LocSepLink_type)     :: a_locseplink
+     type(TagAccVM_SepVM_type) :: some_face_flux_moments
+     real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: U     !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+     real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: V     !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+     real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: W     !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+     real(IRL_double), dimension(3,9) :: face !< Points on face being projected to form flux volume
+     real(WP) :: vol_f                        !< Consistent volume according to face velocity and mesh
+
+     ! Project points, form flux volume, set directional parameters
+     select case(trim(dir))
+     case('x')
+        ! Construct and project left x(i) face
+        face(:,1)=[this%cfg%x(i  ),this%cfg%y(j  ),this%cfg%z(k+1)]
+        face(:,2)=[this%cfg%x(i  ),this%cfg%y(j  ),this%cfg%z(k  )]
+        face(:,3)=[this%cfg%x(i  ),this%cfg%y(j+1),this%cfg%z(k  )]
+        face(:,4)=[this%cfg%x(i  ),this%cfg%y(j+1),this%cfg%z(k+1)]
+        face(:,5)=this%project(face(:,1),i,j,k,-dt,U,V,W)
+        face(:,6)=this%project(face(:,2),i,j,k,-dt,U,V,W)
+        face(:,7)=this%project(face(:,3),i,j,k,-dt,U,V,W)
+        face(:,8)=this%project(face(:,4),i,j,k,-dt,U,V,W)
+        face(:,9)=0.25_WP*[sum(face(1,1:4)),sum(face(2,1:4)),sum(face(3,1:4))]
+        face(:,9)=this%project(face(:,9),i,j,k,-dt,U,V,W)
+        ! Limit projection in the case of walls
+        if (this%vmask(i  ,j  ,k+1).eq.1) face(:,5)=face(:,1)
+        if (this%vmask(i  ,j  ,k  ).eq.1) face(:,6)=face(:,2)
+        if (this%vmask(i  ,j+1,k  ).eq.1) face(:,7)=face(:,3)
+        if (this%vmask(i  ,j+1,k+1).eq.1) face(:,8)=face(:,4)
+        ! Calculate consistent volume
+        vol_f = dt*U(i,j,k)*this%cfg%dy(j)*this%cfg%dz(k)
+     case ('y')
+        ! Construct and project bottom y(j) face
+        face(:,1)=[this%cfg%x(i+1),this%cfg%y(j  ),this%cfg%z(k  )]
+        face(:,2)=[this%cfg%x(i  ),this%cfg%y(j  ),this%cfg%z(k  )]
+        face(:,3)=[this%cfg%x(i  ),this%cfg%y(j  ),this%cfg%z(k+1)]
+        face(:,4)=[this%cfg%x(i+1),this%cfg%y(j  ),this%cfg%z(k+1)]
+        face(:,5)=this%project(face(:,1),i,j,k,-dt,U,V,W)
+        face(:,6)=this%project(face(:,2),i,j,k,-dt,U,V,W)
+        face(:,7)=this%project(face(:,3),i,j,k,-dt,U,V,W)
+        face(:,8)=this%project(face(:,4),i,j,k,-dt,U,V,W)
+        face(:,9)=0.25_WP*[sum(face(1,1:4)),sum(face(2,1:4)),sum(face(3,1:4))]
+        face(:,9)=this%project(face(:,9),i,j,k,-dt,U,V,W)
+        ! Limit projection in the case of walls
+        if (this%vmask(i+1,j  ,k  ).eq.1) face(:,5)=face(:,1)
+        if (this%vmask(i  ,j  ,k  ).eq.1) face(:,6)=face(:,2)
+        if (this%vmask(i  ,j  ,k+1).eq.1) face(:,7)=face(:,3)
+        if (this%vmask(i+1,j  ,k+1).eq.1) face(:,8)=face(:,4)
+        ! Calculate consistent volume
+        vol_f = dt*V(i,j,k)*this%cfg%dx(i)*this%cfg%dz(k)
+     case('z')
+        ! Construct and project bottom z(k) face
+        face(:,1)=[this%cfg%x(i  ),this%cfg%y(j+1),this%cfg%z(k  )]
+        face(:,2)=[this%cfg%x(i  ),this%cfg%y(j  ),this%cfg%z(k  )]
+        face(:,3)=[this%cfg%x(i+1),this%cfg%y(j  ),this%cfg%z(k  )]
+        face(:,4)=[this%cfg%x(i+1),this%cfg%y(j+1),this%cfg%z(k  )]
+        face(:,5)=this%project(face(:,1),i,j,k,-dt,U,V,W)
+        face(:,6)=this%project(face(:,2),i,j,k,-dt,U,V,W)
+        face(:,7)=this%project(face(:,3),i,j,k,-dt,U,V,W)
+        face(:,8)=this%project(face(:,4),i,j,k,-dt,U,V,W)
+        face(:,9)=0.25_WP*[sum(face(1,1:4)),sum(face(2,1:4)),sum(face(3,1:4))]
+        face(:,9)=this%project(face(:,9),i,j,k,-dt,U,V,W)
+        ! Limit projection in the case of walls
+        if (this%vmask(i  ,j+1,k  ).eq.1) face(:,5)=face(:,1)
+        if (this%vmask(i  ,j  ,k  ).eq.1) face(:,6)=face(:,2)
+        if (this%vmask(i+1,j  ,k  ).eq.1) face(:,7)=face(:,3)
+        if (this%vmask(i+1,j+1,k  ).eq.1) face(:,8)=face(:,4)
+        ! Calculate consistent volume
+        vol_f = dt*W(i,j,k)*this%cfg%dx(i)*this%cfg%dy(j)
+     end select
+
+     ! Form flux polyhedron
+     call construct(a_flux_polyhedron,face)
+     ! Add volume-consistent correction
+     call adjustCapToMatchVolume(a_flux_polyhedron,vol_f)
+     ! Get all volumetric fluxes
+     call getNormMoments(a_flux_polyhedron,a_locseplink,some_face_flux_moments)
+
+   end subroutine fluxpoly_project_getmoments
    
    
    !> Remove flotsams explicitly - careful, this is not conservative!
