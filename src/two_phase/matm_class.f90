@@ -4,23 +4,11 @@ module matm_class
    use precision,      only: WP
    use string,         only: str_medium
    use config_class,   only: config
-   use ils_class,      only: ils
-   use iterator_class, only: iterator
    implicit none
    private
    
    ! Expose type/constructor/methods
    public :: matm
-   
-   ! List of known available ...
-   integer, parameter, public :: wall=1              !< Dirichlet at zero condition
-   integer, parameter, public :: dirichlet=2         !< Dirichlet condition
-   integer, parameter, public :: neumann=3           !< Zero normal gradient
-   !integer, parameter, public :: convective=4        !< Convective outflow condition
-   integer, parameter, public :: clipped_neumann=5   !< Clipped Neumann condition (outflow only)
-   
-   ! List of available contact line models for this solver
-   integer, parameter, public :: static_contact=1    !< Static contact line model
    
    !> Material modeling type intended for two-phase, liquid-gas flows
    type :: matm
