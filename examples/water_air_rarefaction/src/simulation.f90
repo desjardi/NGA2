@@ -4,6 +4,7 @@ module simulation
    use geometry,          only: cfg
    use mast_class,        only: mast
    use vfs_class,         only: vfs
+   use matm_class,        only: matm
    use timetracker_class, only: timetracker
    use ensight_class,     only: ensight
    use event_class,       only: event
@@ -11,9 +12,11 @@ module simulation
    implicit none
    private
    
-   !> Single two-phase flow solver and volume fraction solver and corresponding time tracker
+   !> Single two-phase flow solver, volume fraction solver, and material model set
+   !> With corresponding time tracker
    type(mast),        public :: fs
    type(vfs),         public :: vf
+   type(matm),        public :: matmod
    type(timetracker), public :: time
    
    !> Ensight postprocessing
@@ -118,8 +121,21 @@ contains
          use mathtools, only: Pi
          integer :: i,j,k
          real(WP), dimension(3) :: xyz
+         real(WP) :: gamm_l,Pref_l,gamm_g
+         ! Create material model class
+         matmod=matm(cfg=cfg,name='Liquid-gas models')
+         ! Get EOS parameters from input
+         call param_read('Liquid gamma',gamm_l)
+         call param_read('Liquid Pref', Pref_l)
+         call param_read('Gas gamma',gamm_g)
+         ! Register equations of state
+         call matmod%register_stiffenedgas('liquid',gamm_l,Pref_l)
+         call matmod%register_idealgas('gas',gamm_g)
          ! Create flow solver
          fs=mast(cfg=cfg,name='Two-phase All-Mach',vf=vf)
+         ! Register flow solver variables with material models
+         call matmod%register_thermoflow_variables('liquid',fs%Lrho,fs%Ui,fs%Vi,fs%Wi,fs%LrhoE,fs%LP)
+         call matmod%register_thermoflow_variables('gas'   ,fs%Grho,fs%Ui,fs%Vi,fs%Wi,fs%GrhoE,fs%GP)
          ! Assign constant viscosity to each phase
          call param_read('Liquid dynamic viscosity',fs%visc_l0)
          call param_read('Gas dynamic viscosity',fs%visc_g0)
@@ -266,7 +282,7 @@ contains
          do while (time%it.le.time%itmax)
             
             ! Predictor step, involving advection and pressure terms
-            call fs%advection_step(time%dt,vf)
+            call fs%advection_step(time%dt,vf,matmod)
 
             ! Insert viscous step here, or possibly incorporate into predictor above
 

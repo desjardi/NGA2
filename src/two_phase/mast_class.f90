@@ -1106,12 +1106,14 @@ contains
 
 
    ! Full advection routine inside the inner loop
-   subroutine advection_step(this,dt,vf)
-     use vfs_class, only: vfs, VFhi, VFlo
+   subroutine advection_step(this,dt,vf,matmod)
+     use vfs_class,  only: vfs, VFhi, VFlo
+     use matm_class, only: matm
      use irl_fortran_interface, only : CapDod_type,TagAccVM_SepVM_type,new
      implicit none
      class(mast), intent(inout) :: this   !< The two-phase all-Mach flow solver
      class(vfs),  intent(inout) :: vf     !< The volume fraction solver
+     class(matm), intent(inout) :: matmod !< The material models for this solver
      real(WP),    intent(inout) :: dt     !< Timestep size over which to advance
      real(WP),   dimension(14)  :: flux   !< Passes flux to and from routines
      type(CapDod_type) :: fp              !< Object for flux polyhedron
@@ -1199,67 +1201,67 @@ contains
                  ! Gas only
                  vf%VF(i,j,k) = 0.0_WP
                  ! Calculate PA, bulkmod using primitively advected density
-                 this%Grho (i,j,k)    = this%F_Grho (i,j,k)/(this%F_VOL(i,j,k)-this%F_VF(i,j,k))
-                 this%GP   (i,j,k)    = this%F_GP   (i,j,k)/(this%F_VOL(i,j,k)-this%F_VF(i,j,k))
-                 !this%GrhoSS2(i,j,k) = matm%EOS_gas(i,j,k,'K')
+                 this%Grho (i,j,k)   = this%F_Grho (i,j,k)/(this%F_VOL(i,j,k)-this%F_VF(i,j,k))
+                 this%GP   (i,j,k)   = this%F_GP   (i,j,k)/(this%F_VOL(i,j,k)-this%F_VF(i,j,k))
+                 this%GrhoSS2(i,j,k) = matmod%EOS_gas   (i,j,k,'K')
                  ! Zero quantities in opposite phase
-                 this%Lrho (i,j,k)    = 0.0_WP
-                 this%LP   (i,j,k)    = 0.0_WP
+                 this%Lrho (i,j,k)   = 0.0_WP
+                 this%LP   (i,j,k)   = 0.0_WP
                  this%LrhoSS2(i,j,k) = 0.0_WP
                  ! Calculate density incorporating volume change
-                 this%Grho (i,j,k)    = this%F_Grho (i,j,k)/this%cfg%vol(i,j,k)
+                 this%Grho (i,j,k)   = this%F_Grho (i,j,k)/this%cfg%vol(i,j,k)
               else if (vf%VF(i,j,k).gt.VFhi) then
                  ! Liquid only
                  vf%VF  (i,j,k) = 1.0_WP
                  ! Calculate PA, bulkmod using primitively advected density
-                 this%Lrho (i,j,k)    = this%F_Lrho (i,j,k)/this%F_VF(i,j,k)
-                 this%LP   (i,j,k)    = this%F_LP   (i,j,k)/this%F_VF(i,j,k)
-                 !this%LrhoSS2(i,j,k) = matm%EOS_liq(i,j,k,'K')
+                 this%Lrho (i,j,k)   = this%F_Lrho (i,j,k)/this%F_VF(i,j,k)
+                 this%LP   (i,j,k)   = this%F_LP   (i,j,k)/this%F_VF(i,j,k)
+                 this%LrhoSS2(i,j,k) = matmod%EOS_liquid(i,j,k,'K')
                  ! Zero quantities in opposite phase
-                 this%Grho (i,j,k)    = 0.0_WP
-                 this%GP   (i,j,k)    = 0.0_WP
+                 this%Grho (i,j,k)   = 0.0_WP
+                 this%GP   (i,j,k)   = 0.0_WP
                  this%GrhoSS2(i,j,k) = 0.0_WP
                  ! Calculate density incorporating volume change
-                 this%Lrho (i,j,k)    = this%F_Lrho (i,j,k)/this%cfg%vol(i,j,k)
+                 this%Lrho (i,j,k)   = this%F_Lrho (i,j,k)/this%cfg%vol(i,j,k)
               else
                  ! Primitive density, advected pressure, bulkmod for both phases
-                 this%Grho (i,j,k)    = this%F_Grho (i,j,k)/(this%F_VOL(i,j,k)-this%F_VF(i,j,k))
-                 this%Lrho (i,j,k)    = this%F_Lrho (i,j,k)/(                  this%F_VF(i,j,k))
-                 this%GP   (i,j,k)    = this%F_GP   (i,j,k)/(this%F_VOL(i,j,k)-this%F_VF(i,j,k))
-                 this%LP   (i,j,k)    = this%F_LP   (i,j,k)/(                  this%F_VF(i,j,k))
-                 !this%GrhoSS2(i,j,k) = matm%EOS_gas(i,j,k,'K')
-                 !this%LrhoSS2(i,j,k) = matm%EOS_liq(i,j,k,'K')
+                 this%Grho (i,j,k)   = this%F_Grho (i,j,k)/(this%F_VOL(i,j,k)-this%F_VF(i,j,k))
+                 this%Lrho (i,j,k)   = this%F_Lrho (i,j,k)/(                  this%F_VF(i,j,k))
+                 this%GP   (i,j,k)   = this%F_GP   (i,j,k)/(this%F_VOL(i,j,k)-this%F_VF(i,j,k))
+                 this%LP   (i,j,k)   = this%F_LP   (i,j,k)/(                  this%F_VF(i,j,k))
+                 this%GrhoSS2(i,j,k) = matmod%EOS_gas   (i,j,k,'K')
+                 this%LrhoSS2(i,j,k) = matmod%EOS_liquid(i,j,k,'K')
                  ! Store current VF
-                 this%srcVF(i,j,k)    = vf%VF(i,j,k)
+                 this%srcVF(i,j,k)   = vf%VF(i,j,k)
                  ! Get new VF according to quadratic source term that depends on compressibility
                  vf%VF(i,j,k) = VF_src_quad(this%GrhoSS2(i,j,k), this%LrhoSS2(i,j,k), &
                       this%F_VF(i,j,k), this%F_VOL(i,j,k), this%cfg%vol(i,j,k))
                  ! Update phase quantities according to VF limits (again)
                  if (vf%VF(i,j,k).lt.VFlo) then
                     vf%VF(i,j,k)        = 0.0_WP
-                    this%srcVF(i,j,k)    = 0.0_WP
+                    this%srcVF(i,j,k)   = 0.0_WP
                     ! Zero density, PA, bulkmod, and dpde_rho of other phase
-                    this%Lrho (i,j,k)    = 0.0_WP
-                    this%LP   (i,j,k)    = 0.0_WP
+                    this%Lrho (i,j,k)   = 0.0_WP
+                    this%LP   (i,j,k)   = 0.0_WP
                     this%LrhoSS2(i,j,k) = 0.0_WP
                     ! Calculate density, incorporating volume change
-                    this%Grho (i,j,k) = this%F_Grho (i,j,k)/this%cfg%vol(i,j,k)
+                    this%Grho (i,j,k)   = this%F_Grho (i,j,k)/this%cfg%vol(i,j,k)
                  else if (vf%VF(i,j,k).gt.VFhi) then
                     vf%VF(i,j,k)        = 1.0_WP
-                    this%srcVF(i,j,k)    = 0.0_WP
+                    this%srcVF(i,j,k)   = 0.0_WP
                     ! Zero density, PA, bulkmod, and dpde_rho of other phase
-                    this%Grho (i,j,k)    = 0.0_WP
-                    this%GP   (i,j,k)    = 0.0_WP
+                    this%Grho (i,j,k)   = 0.0_WP
+                    this%GP   (i,j,k)   = 0.0_WP
                     this%GrhoSS2(i,j,k) = 0.0_WP
                     ! Calculate density, incorporating volume change
-                    this%Lrho (i,j,k) = this%F_Lrho (i,j,k)/this%cfg%vol(i,j,k)
+                    this%Lrho (i,j,k)   = this%F_Lrho (i,j,k)/this%cfg%vol(i,j,k)
                  else
                     ! Record srcVF
-                    this%srcVF(i,j,k) = vf%VF(i,j,k)-this%srcVF(i,j,k)
+                    this%srcVF(i,j,k)   = vf%VF(i,j,k)-this%srcVF(i,j,k)
                     ! PA, bulkmod stay unchanged
                     ! Calculate density, incorporating volume change
-                    this%Grho (i,j,k) = this%F_Grho (i,j,k)/((1.0_WP-vf%VF(i,j,k))*this%cfg%vol(i,j,k))
-                    this%Lrho (i,j,k) = this%F_Lrho (i,j,k)/(        vf%VF(i,j,k) *this%cfg%vol(i,j,k))
+                    this%Grho (i,j,k)   = this%F_Grho (i,j,k)/((1.0_WP-vf%VF(i,j,k))*this%cfg%vol(i,j,k))
+                    this%Lrho (i,j,k)   = this%F_Lrho (i,j,k)/(        vf%VF(i,j,k) *this%cfg%vol(i,j,k))
                  end if
               end if
            end do
