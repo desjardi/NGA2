@@ -18,6 +18,7 @@ module partmesh_class
    contains
       procedure :: reset                                   !< Reset particle mesh to zero size
       procedure :: set_size                                !< Set particle mesh to provided size
+      procedure :: add_vars                                !< Add particle variables
    end type partmesh
    
    
@@ -68,4 +69,21 @@ contains
    end subroutine set_size
    
    
+   ! Add particle variables
+   subroutine add_vars(this,nvars_to_add)
+      implicit none
+      class(partmesh), intent(inout) :: this
+      integer, intent(in) :: nvars_to_add
+      this%nvar=this%nvar+nvars_to_add
+      if (allocated(this%var)) then
+         deallocate(this%var)
+         allocate(this%var(this%nvar,this%n))
+      end if
+      if (allocated(this%varname)) then
+         deallocate(this%varname)
+         allocate(this%varname(this%nvar))
+      end if
+      this%varname='' !< Users will set the names themselves
+   end subroutine add_vars
+
 end module partmesh_class

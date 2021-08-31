@@ -23,7 +23,8 @@ module surfmesh_class
    contains
       procedure :: reset                                   !< Reset surface mesh to zero size
       procedure :: set_size                                !< Set surface mesh to provided size
-   end type surfmesh
+      procedure :: add_vars                                !< Add surface variables
+      end type surfmesh
    
    
    !> Declare surface mesh constructor
@@ -81,4 +82,21 @@ contains
    end subroutine set_size
    
    
+   ! Add surface variables
+   subroutine add_vars(this,nvars_to_add)
+      implicit none
+      class(surfmesh), intent(inout) :: this
+      integer, intent(in) :: nvars_to_add
+      this%nvar=this%nvar+nvars_to_add
+      if (allocated(this%var)) then
+         deallocate(this%var)
+         allocate(this%var(this%nvar,this%nPoly))
+      end if
+      if (allocated(this%varname)) then
+         deallocate(this%varname)
+         allocate(this%varname(this%nvar))
+      end if
+      this%varname='' !< Users will set the names themselves
+   end subroutine add_vars
+
 end module surfmesh_class
