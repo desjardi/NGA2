@@ -5,7 +5,6 @@ module lpt_class
    use string,         only: str_medium
    use config_class,   only: config
    use mpi_f08,        only: MPI_Datatype,MPI_INTEGER8,MPI_INTEGER,MPI_DOUBLE_PRECISION
-   use partmesh_class, only: partmesh
    implicit none
    private
    
@@ -65,9 +64,6 @@ module lpt_class
       real(WP) :: nstep=1                                 !< Number of substeps (default=1)
       logical  :: twoway=.false.                          !< Two-way coupling   (default=no)
       
-      ! Basic representation of the particle mesh
-      type(partmesh) :: pmesh
-      
       ! Monitoring info
       real(WP) :: dmin,dmax,dmean,dvar                    !< Diameter info
       real(WP) :: Umin,Umax,Umean,Uvar                    !< U velocity info
@@ -76,7 +72,7 @@ module lpt_class
       integer  :: np_new,np_out                           !< Number of new and removed particles
       
    contains
-      procedure :: update_partmesh                        !< Create a simple particle mesh for visualization
+      procedure :: update_partmesh                        !< Update a partmesh object using current particles
       procedure :: advance                                !< Step forward the particle ODEs
       procedure :: get_rhs                                !< Compute rhs of particle odes
       procedure :: resize                                 !< Resize particle array to given size
@@ -116,9 +112,6 @@ contains
       
       ! Initialize MPI derived datatype for a particle
       call prepare_mpi_part()
-      
-      ! Initialize a particle mesh for output purposes
-      self%pmesh=partmesh(nvar=1,name='lpt'); self%pmesh%varname(1)='diameter'
       
       ! Log/screen output
       logging: block
@@ -188,9 +181,6 @@ contains
       
       ! Communicate particles
       call this%sync()
-      
-      ! Update the particle mesh
-      call this%update_partmesh()
       
       ! Log/screen output
       logging: block
@@ -297,20 +287,21 @@ contains
    end subroutine get_max
    
    
-   !> Update particle mesh for visualization
-   subroutine update_partmesh(this)
+   !> Update particle mesh using our current particles
+   subroutine update_partmesh(this,pmesh)
+      use partmesh_class, only: partmesh
       implicit none
       class(lpt), intent(inout) :: this
+      class(partmesh), intent(inout) :: pmesh
       integer :: i
       ! Reset particle mesh storage
-      call this%pmesh%reset()
+      call pmesh%reset()
       ! Nothing else to do if no particle is present
       if (this%np_.eq.0) return
       ! Copy particle info
-      call this%pmesh%set_size(this%np_)
+      call pmesh%set_size(this%np_)
       do i=1,this%np_
-         this%pmesh%pos(:,i)=this%p(i)%pos
-         this%pmesh%var(1,i)=this%p(i)%d
+         pmesh%pos(:,i)=this%p(i)%pos
       end do
    end subroutine update_partmesh
    
