@@ -86,24 +86,20 @@ contains
    subroutine add_var(this,name)
       implicit none
       class(surfmesh), intent(inout) :: this
-      character(len=*), optional :: name
-      real(WP), dimension(:,:), allocatable :: var
-      character(len=str_medium), dimension(:), allocatable :: varname     
+      character(len=*), intent(in) :: name
+      real(WP), dimension(:,:), allocatable :: temp
+      character(len=str_medium), dimension(:), allocatable :: tempname      
       this%nvar=this%nvar+1
       if (allocated(this%var)) then
-         allocate(var(this%nvar,this%nPoly))
-         deallocate(this%var)
-         allocate(this%var(this%nvar,this%nPoly))
-         this%var(1:this%nvar-1,:)=var
-         deallocate(var)
+         allocate(temp(this%nvar,this%nPoly))
+         temp(1:this%nvar-1,:)=this%var
+         call move_alloc(temp,this%var)
       end if
       if (allocated(this%varname)) then
-         allocate(varname(this%nvar-1))
-         varname=this%varname
-         deallocate(this%varname)
-         allocate(this%varname(this%nvar))
-         this%varname(1:this%nvar-1)=varname
-         if (present(name)) this%varname(this%nvar)=trim(adjustl(name))
+         allocate(tempname(this%nvar))
+         tempname(1:this%nvar-1)=this%varname
+         tempname(this%nvar)=trim(adjustl(name))
+         call move_alloc(tempname,this%varname)
       end if
    end subroutine add_var
 
