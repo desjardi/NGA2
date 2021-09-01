@@ -454,7 +454,6 @@ contains
          call ens_out2%add_scalar('VOF',vf2%VF)
          call ens_out2%add_scalar('curvature',vf2%curv)
          call ens_out2%add_scalar('visc_t',sgs2%visc)
-         call ens_out2%add_surface('vofplic',vf2%surfgrid)
          ! Output to ensight
          if (ens_evt2%occurs()) call ens_out2%write_data(time2%t)
       end block create_ensight2

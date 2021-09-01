@@ -5,6 +5,7 @@ module simulation
    use vfs_class,         only: vfs
    use timetracker_class, only: timetracker
    use ensight_class,     only: ensight
+   use surfmesh_class,    only: surfmesh
    use event_class,       only: event
    use monitor_class,     only: monitor
    implicit none
@@ -15,8 +16,9 @@ module simulation
    type(timetracker), public :: time
    
    !> Ensight postprocessing
-   type(ensight) :: ens_out
-   type(event)   :: ens_evt
+   type(surfmesh) :: smesh
+   type(ensight)  :: ens_out
+   type(event)    :: ens_evt
    
    !> Simulation monitor file
    type(monitor) :: mfile
@@ -117,7 +119,7 @@ contains
          ! Calculate distance from polygons
          call vf%distance_from_polygon()
          ! Calculate subcell phasic volume
-         call vf%subcell_volume()
+         call vf%subcell_vol()
          ! Calculate curvature
          call vf%get_curvature()
          ! Reset moments to guarantee compatibility with interface reconstruction
@@ -155,6 +157,13 @@ contains
       end block initialize_timetracker
       
       
+      ! Create surfmesh object for interface polygon output
+      create_smesh: block
+         smesh=surfmesh(nvar=0,name='plic')
+         call vf%update_surfmesh(smesh)
+      end block create_smesh
+      
+      
       ! Add Ensight output
       create_ensight: block
          ! Create Ensight output from cfg
@@ -165,7 +174,7 @@ contains
          ! Add variables to output
          call ens_out%add_scalar('VOF',vf%VF)
          call ens_out%add_scalar('curvature',vf%curv)
-         call ens_out%add_surface('vofplic',vf%surfgrid)
+         call ens_out%add_surface('vofplic',smesh)
          ! Output to ensight
          if (ens_evt%occurs()) call ens_out%write_data(time%t)
       end block create_ensight
@@ -217,7 +226,10 @@ contains
          end do
          
          ! Output to ensight
-         if (ens_evt%occurs()) call ens_out%write_data(time%t)
+         if (ens_evt%occurs()) then
+            call vf%update_surfmesh(smesh)
+            call ens_out%write_data(time%t)
+         end if
          
          ! Perform and output monitoring
          call vf%get_max()
