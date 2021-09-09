@@ -76,6 +76,18 @@ module simulation
    ! Backup of viscosity and diffusivity
    real(WP), dimension(:,:,:), allocatable :: viscmol,diffmol
    
+   ! Tabulated EOS
+   real(WP), parameter :: Ptable_min=1.0e5_WP   ! Start tabulation at   1 bar
+   real(WP), parameter :: Ptable_max=200.0e5_WP ! End   tabulation at 200 bar
+   real(WP), parameter :: Ttable_min=280.0_WP   ! Start tabulation at 280 K
+   real(WP), parameter :: Ttable_max=500.0_WP   ! End   tabulation at 500 K
+   integer,  parameter :: nP=200            ! Table resolution in pressure
+   integer,  parameter :: nT=200            ! Table resolution in temperature
+   real(WP), dimension(nP) :: Ptable        ! Pressure mesh
+   real(WP), dimension(nT) :: Ttable        ! Temperature mesh
+   real(WP), dimension(nT,nP) :: rhoTable   ! Actual table
+   
+   
 contains
    
    
@@ -271,6 +283,241 @@ contains
    end subroutine get_rho
    
    
+   !> Define here our equation of state using CoolProp
+   !> Inputs are temperature and mass, outputs are density and pressure
+   subroutine get_rho_cp(mass)
+      use coolprop
+      implicit none
+      integer :: i,j,k
+      real(WP), intent(in) :: mass
+      real(WP), parameter :: coeff=0.05_WP
+      real(WP), parameter :: delta_P=1.0e3_WP
+      real(WP) :: dMdP,P1,P2,M1,M2,scaling
+      
+      ! Force at least one step
+      M1=0.0_WP
+      ! Perform Newton solve to find new pressure
+      do while (abs(M1-mass).gt.coeff*mass)
+         ! Numerically evaluate d(mass)/d(pressure)
+         get_dMdP: block
+            ! Evaluate mass at current pressure
+            P1=pressure
+            do k=sc%cfg%kmino_,sc%cfg%kmaxo_
+               do j=sc%cfg%jmino_,sc%cfg%jmaxo_
+                  do i=sc%cfg%imino_,sc%cfg%imaxo_
+                     if (sc%cfg%VF(i,j,k).gt.0.0_WP) then
+                        sc%rho(i,j,k)=cprop(output='D'//char(0),name1='T'//char(0),prop1=sc%SC(i,j,k),name2='P'//char(0),prop2=P1,fluidname='CO2'//char(0))
+                     else
+                        sc%rho(i,j,k)=1.0_WP
+                     end if
+                  end do
+               end do
+            end do
+            call sc%cfg%integrate(sc%rho,integral=M1)
+            ! Evaluate mass at slightly higher pressure
+            P2=P1+delta_P
+            do k=sc%cfg%kmino_,sc%cfg%kmaxo_
+               do j=sc%cfg%jmino_,sc%cfg%jmaxo_
+                  do i=sc%cfg%imino_,sc%cfg%imaxo_
+                     if (sc%cfg%VF(i,j,k).gt.0.0_WP) then
+                        sc%rho(i,j,k)=cprop(output='D'//char(0),name1='T'//char(0),prop1=sc%SC(i,j,k),name2='P'//char(0),prop2=P2,fluidname='CO2'//char(0))
+                     else
+                        sc%rho(i,j,k)=1.0_WP
+                     end if
+                  end do
+               end do
+            end do
+            call sc%cfg%integrate(sc%rho,integral=M2)
+            ! Compute derivative
+            dMdP=(M2-M1)/(P2-P1)
+         end block get_dMdP
+         ! Estimate new pressure
+         pressure=P1+(mass-M1)/dMdP
+         print*,'EOS calculation',pressure,mass,M1
+      end do
+      
+      ! Evaluate resulting density
+      do k=sc%cfg%kmino_,sc%cfg%kmaxo_
+         do j=sc%cfg%jmino_,sc%cfg%jmaxo_
+            do i=sc%cfg%imino_,sc%cfg%imaxo_
+               if (sc%cfg%VF(i,j,k).gt.0.0_WP) then
+                  sc%rho(i,j,k)=cprop(output='D'//char(0),name1='T'//char(0),prop1=sc%SC(i,j,k),name2='P'//char(0),prop2=pressure,fluidname='CO2'//char(0))
+               else
+                  sc%rho(i,j,k)=1.0_WP
+               end if
+            end do
+         end do
+      end do
+      call sc%cfg%integrate(sc%rho,integral=M1)
+      
+      ! Perform final rescaling for exact mass conservation
+      do k=sc%cfg%kmino_,sc%cfg%kmaxo_
+         do j=sc%cfg%jmino_,sc%cfg%jmaxo_
+            do i=sc%cfg%imino_,sc%cfg%imaxo_
+               if (sc%cfg%VF(i,j,k).gt.0.0_WP) then
+                  sc%rho(i,j,k)=sc%rho(i,j,k)*mass/M1
+               else
+                  sc%rho(i,j,k)=1.0_WP
+               end if
+            end do
+         end do
+      end do
+      
+      ! Update the densities (including rescaling) in the inflow conditions
+      get_new_density_in_bc: block
+         use vdscalar_class, only: bcond
+         type(bcond), pointer :: inflow
+         integer :: n
+         call sc%get_bcond('inlet 1',inflow)
+         do n=1,inflow%itr%no_
+            i=inflow%itr%map(1,n); j=inflow%itr%map(2,n); k=inflow%itr%map(3,n)
+            sc%rho(i,j,k)=cprop(output='D'//char(0),name1='T'//char(0),prop1=sc%SC(i,j,k),name2='P'//char(0),prop2=pressure,fluidname='CO2'//char(0))*mass/M1
+         end do
+         call sc%get_bcond('inlet 2',inflow)
+         do n=1,inflow%itr%no_
+            i=inflow%itr%map(1,n); j=inflow%itr%map(2,n); k=inflow%itr%map(3,n)
+            sc%rho(i,j,k)=cprop(output='D'//char(0),name1='T'//char(0),prop1=sc%SC(i,j,k),name2='P'//char(0),prop2=pressure,fluidname='CO2'//char(0))*mass/M1
+         end do
+         call sc%get_bcond('inlet 3',inflow)
+         do n=1,inflow%itr%no_
+            i=inflow%itr%map(1,n); j=inflow%itr%map(2,n); k=inflow%itr%map(3,n)
+            sc%rho(i,j,k)=cprop(output='D'//char(0),name1='T'//char(0),prop1=sc%SC(i,j,k),name2='P'//char(0),prop2=pressure,fluidname='CO2'//char(0))*mass/M1
+         end do
+      end block get_new_density_in_bc
+      
+      ! Finally, account for porosity
+      sc%rho=sc%rho*epsf
+      
+   end subroutine get_rho_cp
+   
+   
+   !> Define here our equation of state using tabulated data
+   !> Inputs are temperature and mass, outputs are density and pressure
+   subroutine get_rho_table(mass)
+      implicit none
+      integer :: i,j,k,iP,iT
+      real(WP), intent(in) :: mass
+      real(WP), parameter :: coeff=0.05_WP
+      real(WP), parameter :: delta_P=1.0e3_WP
+      real(WP) :: dMdP,P1,P2,M1,M2,scaling,c1P,c2P,c1T,c2T
+      
+      ! Force at least one step
+      M1=0.0_WP
+      ! Perform Newton solve to find new pressure
+      do while (abs(M1-mass).gt.coeff*mass)
+         ! Numerically evaluate d(mass)/d(pressure)
+         get_dMdP: block
+            ! Evaluate mass at current pressure
+            P1=pressure
+            iP=max(min(floor((P1-Ptable_min)/(Ptable_max-Ptable_min)*real(nP-1,WP))+1,nP-1),1)
+            c1P=(P1-Ptable(iP))/(Ptable(iP+1)-Ptable(iP)); c2P=1.0_WP-c1P
+            do k=sc%cfg%kmino_,sc%cfg%kmaxo_
+               do j=sc%cfg%jmino_,sc%cfg%jmaxo_
+                  do i=sc%cfg%imino_,sc%cfg%imaxo_
+                     if (sc%cfg%VF(i,j,k).gt.0.0_WP) then
+                        iT=max(min(floor((sc%SC(i,j,k)-Ttable_min)/(Ttable_max-Ttable_min)*real(nT-1,WP))+1,nT-1),1)
+                        c1T=(sc%SC(i,j,k)-Ttable(iT))/(Ttable(iT+1)-Ttable(iT)); c2T=1.0_WP-c1T
+                        sc%rho(i,j,k)=c1P*c1T*rhoTable(iT+1,iP+1)+c1P*c2T*rhoTable(iT,iP+1)+c2P*c1T*rhoTable(iT+1,iP)+c2P*c2T*rhoTable(iT,iP)
+                     else
+                        sc%rho(i,j,k)=1.0_WP
+                     end if
+                  end do
+               end do
+            end do
+            call sc%cfg%integrate(sc%rho,integral=M1)
+            ! Evaluate mass at slightly higher pressure
+            P2=P1+delta_P
+            iP=max(min(floor((P2-Ptable_min)/(Ptable_max-Ptable_min)*real(nP-1,WP))+1,nP-1),1)
+            c1P=(P2-Ptable(iP))/(Ptable(iP+1)-Ptable(iP)); c2P=1.0_WP-c1P
+            do k=sc%cfg%kmino_,sc%cfg%kmaxo_
+               do j=sc%cfg%jmino_,sc%cfg%jmaxo_
+                  do i=sc%cfg%imino_,sc%cfg%imaxo_
+                     if (sc%cfg%VF(i,j,k).gt.0.0_WP) then
+                        iT=max(min(floor((sc%SC(i,j,k)-Ttable_min)/(Ttable_max-Ttable_min)*real(nT-1,WP))+1,nT-1),1)
+                        c1T=(sc%SC(i,j,k)-Ttable(iT))/(Ttable(iT+1)-Ttable(iT)); c2T=1.0_WP-c1T
+                        sc%rho(i,j,k)=c1P*c1T*rhoTable(iT+1,iP+1)+c1P*c2T*rhoTable(iT,iP+1)+c2P*c1T*rhoTable(iT+1,iP)+c2P*c2T*rhoTable(iT,iP)
+                     else
+                        sc%rho(i,j,k)=1.0_WP
+                     end if
+                  end do
+               end do
+            end do
+            call sc%cfg%integrate(sc%rho,integral=M2)
+            ! Compute derivative
+            dMdP=(M2-M1)/(P2-P1)
+         end block get_dMdP
+         ! Estimate new pressure
+         pressure=P1+(mass-M1)/dMdP
+      end do
+      
+      ! Evaluate resulting density
+      iP=max(min(floor((pressure-Ptable_min)/(Ptable_max-Ptable_min)*real(nP-1,WP))+1,nP-1),1)
+      c1P=(pressure-Ptable(iP))/(Ptable(iP+1)-Ptable(iP)); c2P=1.0_WP-c1P
+      do k=sc%cfg%kmino_,sc%cfg%kmaxo_
+         do j=sc%cfg%jmino_,sc%cfg%jmaxo_
+            do i=sc%cfg%imino_,sc%cfg%imaxo_
+               if (sc%cfg%VF(i,j,k).gt.0.0_WP) then
+                  iT=max(min(floor((sc%SC(i,j,k)-Ttable_min)/(Ttable_max-Ttable_min)*real(nT-1,WP))+1,nT-1),1)
+                  c1T=(sc%SC(i,j,k)-Ttable(iT))/(Ttable(iT+1)-Ttable(iT)); c2T=1.0_WP-c1T
+                  sc%rho(i,j,k)=c1P*c1T*rhoTable(iT+1,iP+1)+c1P*c2T*rhoTable(iT,iP+1)+c2P*c1T*rhoTable(iT+1,iP)+c2P*c2T*rhoTable(iT,iP)
+               else
+                  sc%rho(i,j,k)=1.0_WP
+               end if
+            end do
+         end do
+      end do
+      call sc%cfg%integrate(sc%rho,integral=M1)
+      
+      ! Perform final rescaling for exact mass conservation
+      do k=sc%cfg%kmino_,sc%cfg%kmaxo_
+         do j=sc%cfg%jmino_,sc%cfg%jmaxo_
+            do i=sc%cfg%imino_,sc%cfg%imaxo_
+               if (sc%cfg%VF(i,j,k).gt.0.0_WP) then
+                  sc%rho(i,j,k)=sc%rho(i,j,k)*mass/M1
+               else
+                  sc%rho(i,j,k)=1.0_WP
+               end if
+            end do
+         end do
+      end do
+      
+      ! Update the densities (including rescaling) in the inflow conditions
+      get_new_density_in_bc: block
+         use vdscalar_class, only: bcond
+         type(bcond), pointer :: inflow
+         integer :: n
+         call sc%get_bcond('inlet 1',inflow)
+         do n=1,inflow%itr%no_
+            i=inflow%itr%map(1,n); j=inflow%itr%map(2,n); k=inflow%itr%map(3,n)
+            iT=max(min(floor((sc%SC(i,j,k)-Ttable_min)/(Ttable_max-Ttable_min)*real(nT-1,WP))+1,nT-1),1)
+            c1T=(sc%SC(i,j,k)-Ttable(iT))/(Ttable(iT+1)-Ttable(iT)); c2T=1.0_WP-c1T
+            sc%rho(i,j,k)=c1P*c1T*rhoTable(iT+1,iP+1)+c1P*c2T*rhoTable(iT,iP+1)+c2P*c1T*rhoTable(iT+1,iP)+c2P*c2T*rhoTable(iT,iP)
+            sc%rho(i,j,k)=sc%rho(i,j,k)*mass/M1
+         end do
+         call sc%get_bcond('inlet 2',inflow)
+         do n=1,inflow%itr%no_
+            i=inflow%itr%map(1,n); j=inflow%itr%map(2,n); k=inflow%itr%map(3,n)
+            iT=max(min(floor((sc%SC(i,j,k)-Ttable_min)/(Ttable_max-Ttable_min)*real(nT-1,WP))+1,nT-1),1)
+            c1T=(sc%SC(i,j,k)-Ttable(iT))/(Ttable(iT+1)-Ttable(iT)); c2T=1.0_WP-c1T
+            sc%rho(i,j,k)=c1P*c1T*rhoTable(iT+1,iP+1)+c1P*c2T*rhoTable(iT,iP+1)+c2P*c1T*rhoTable(iT+1,iP)+c2P*c2T*rhoTable(iT,iP)
+            sc%rho(i,j,k)=sc%rho(i,j,k)*mass/M1
+         end do
+         call sc%get_bcond('inlet 3',inflow)
+         do n=1,inflow%itr%no_
+            i=inflow%itr%map(1,n); j=inflow%itr%map(2,n); k=inflow%itr%map(3,n)
+            iT=max(min(floor((sc%SC(i,j,k)-Ttable_min)/(Ttable_max-Ttable_min)*real(nT-1,WP))+1,nT-1),1)
+            c1T=(sc%SC(i,j,k)-Ttable(iT))/(Ttable(iT+1)-Ttable(iT)); c2T=1.0_WP-c1T
+            sc%rho(i,j,k)=c1P*c1T*rhoTable(iT+1,iP+1)+c1P*c2T*rhoTable(iT,iP+1)+c2P*c1T*rhoTable(iT+1,iP)+c2P*c2T*rhoTable(iT,iP)
+            sc%rho(i,j,k)=sc%rho(i,j,k)*mass/M1
+         end do
+      end block get_new_density_in_bc
+      
+      ! Finally, account for porosity
+      sc%rho=sc%rho*epsf
+      
+   end subroutine get_rho_table
+   
+   
    !> Calculate here our viscosity from local T and vessel pressure
    subroutine get_visc()
       implicit none
@@ -339,6 +586,21 @@ contains
       use param,    only: param_read
       use messager, only: die
       implicit none
+      
+      
+      ! Start by preparing rho table using CoolProp
+      rho_table_prep: block
+         use coolprop
+         integer :: iT,iP
+         real(WP) :: myT,myP
+         do iP=1,nP
+            Ptable(iP)=Ptable_min+(Ptable_max-Ptable_min)*real(iP-1,WP)/real(nP-1,WP)
+            do iT=1,nT
+               Ttable(iT)=Ttable_min+(Ttable_max-Ttable_min)*real(iT-1,WP)/real(nT-1,WP)
+               rhoTable(iT,iP)=cprop(output='D'//char(0),name1='T'//char(0),prop1=Ttable(iT),name2='P'//char(0),prop2=Ptable(iP),fluidname='CO2'//char(0))
+            end do
+         end do
+      end block rho_table_prep
       
       
       ! Process inlet conditions first
@@ -1027,7 +1289,7 @@ contains
             ! Solve Poisson equation
             call fs%correct_mfr()                          !< No outlet so this gets the MFR imbalance
             fluid_mass=fluid_mass_old-sum(fs%mfr)*time%dt  !< Update mass in system
-            call get_rho(mass=fluid_mass)                  !< Adjust rho and pressure accordingly
+            call get_rho_table(mass=fluid_mass)            !< Adjust rho and pressure accordingly
             call sc%get_drhodt(dt=time%dt,drhodt=resSC)
             call fs%get_div(drhodt=resSC)
             fs%psolv%rhs=-fs%cfg%vol*fs%div/time%dtmid
@@ -1108,7 +1370,7 @@ contains
             sc%SC=2.0_WP*sc%SC-sc%SCold+resSC
             
             ! Update density and pressure
-            call get_rho(mass=fluid_mass)
+            call get_rho_table(mass=fluid_mass)
             
             ! Multiply by density
             call sc%rho_multiply()
