@@ -81,11 +81,17 @@ module simulation
    real(WP), parameter :: Ptable_max=200.0e5_WP ! End   tabulation at 200 bar
    real(WP), parameter :: Ttable_min=280.0_WP   ! Start tabulation at 280 K
    real(WP), parameter :: Ttable_max=500.0_WP   ! End   tabulation at 500 K
-   integer,  parameter :: nP=200            ! Table resolution in pressure
-   integer,  parameter :: nT=200            ! Table resolution in temperature
-   real(WP), dimension(nP) :: Ptable        ! Pressure mesh
-   real(WP), dimension(nT) :: Ttable        ! Temperature mesh
-   real(WP), dimension(nT,nP) :: rhoTable   ! Actual table
+   integer,  parameter :: nP=200                ! Table resolution in pressure
+   integer,  parameter :: nT=200                ! Table resolution in temperature
+   real(WP), dimension(nP) :: Ptable            ! Pressure mesh
+   real(WP), dimension(nT) :: Ttable            ! Temperature mesh
+   real(WP), dimension(nT,nP) :: rhoTable       ! Actual table
+   
+   ! Tabulated inlet data
+   integer,  parameter :: n_inlet_data=43       ! Number of inlet data points
+   real(WP), parameter :: dt_inlet_data=20.0_WP ! dt for tabulation of inlet values
+   real(WP), dimension(n_inlet_data), parameter :: Tin_inlet_data =[430.43_WP,432.21_WP,433.82_WP,434.21_WP,434.65_WP,434.21_WP,432.43_WP,433.43_WP,434.54_WP,435.04_WP,434.82_WP,432.21_WP,431.54_WP,431.71_WP,432.32_WP,428.54_WP,428.15_WP,428.21_WP,427.93_WP,427.04_WP,427.04_WP,427.21_WP,426.82_WP,426.32_WP,425.93_WP,422.32_WP,421.93_WP,421.54_WP,421.43_WP,421.65_WP,422.21_WP,422.71_WP,422.54_WP,418.32_WP,417.43_WP,419.43_WP,418.21_WP,414.71_WP,415.71_WP,415.21_WP,414.93_WP,415.15_WP,417.71_WP]
+   real(WP), dimension(n_inlet_data), parameter :: MFR_inlet_data =[0.332_WP,0.304_WP,0.310_WP,0.314_WP,0.314_WP,0.309_WP,0.306_WP,0.302_WP,0.298_WP,0.300_WP,0.364_WP,0.357_WP,0.366_WP,0.365_WP,0.450_WP,0.446_WP,0.455_WP,0.452_WP,0.453_WP,0.452_WP,0.451_WP,0.452_WP,0.447_WP,0.451_WP,0.549_WP,0.542_WP,0.524_WP,0.541_WP,0.520_WP,0.512_WP,0.529_WP,0.508_WP,0.637_WP,0.635_WP,0.603_WP,0.636_WP,0.668_WP,0.602_WP,0.629_WP,0.666_WP,0.661_WP,0.599_WP,0.603_WP]
    
    
 contains
@@ -1136,8 +1142,13 @@ contains
          fs%Vold=fs%V; fs%rhoVold=fs%rhoV
          fs%Wold=fs%W; fs%rhoWold=fs%rhoW
          
-         ! Apply time-varying Dirichlet conditions
-         ! This is where time-dpt Dirichlet would be enforced
+         ! Update time-varying Dirichlet conditions
+         update_inlet_conditions: block
+            integer :: iTime
+            iTime=min(floor(time%t/dt_inlet_data)+1,n_inlet_data)
+            rhoUin=MFR_inlet_data(iTime)/sum(Ain)
+            Tinlet=Tin_inlet_data(iTime)
+         end block update_inlet_conditions
          
          ! ============ UPDATE PROPERTIES ====================
          call get_visc(); viscmol=fs%visc
@@ -1377,6 +1388,36 @@ contains
             
             ! Apply other boundary conditions on the resulting field
             call sc%apply_bcond(time%t,time%dt)
+            temp_bcond: block
+               use vdscalar_class, only: bcond
+               type(bcond), pointer :: mybc
+               integer :: n,i,j,k
+               !call fs%get_bcond('left inflow',mybc)
+               !do n=1,mybc%itr%no_
+               !   i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
+               !   fs%rhoU(i,j,k)=-rhoUin
+               !end do
+               !call fs%get_bcond('right inflow',mybc)
+               !do n=1,mybc%itr%no_
+               !   i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
+               !   fs%rhoU(i,j,k)=+rhoUin
+               !end do
+               call sc%get_bcond('inlet 1',mybc)
+               do n=1,mybc%itr%no_
+                  i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
+                  sc%SC(i,j,k)=Tinlet(1)
+               end do
+               call sc%get_bcond('inlet 2',mybc)
+               do n=1,mybc%itr%no_
+                  i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
+                  sc%SC(i,j,k)=Tinlet(2)
+               end do
+               call sc%get_bcond('inlet 3',mybc)
+               do n=1,mybc%itr%no_
+                  i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
+                  sc%SC(i,j,k)=Tinlet(3)
+               end do
+            end block temp_bcond
             ! ===================================================
             
             ! Increment sub-iteration counter
