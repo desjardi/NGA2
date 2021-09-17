@@ -94,6 +94,14 @@ module simulation
    real(WP), dimension(n_inlet_data), parameter :: MFR_inlet_data =[0.332_WP,0.304_WP,0.310_WP,0.314_WP,0.314_WP,0.309_WP,0.306_WP,0.302_WP,0.298_WP,0.300_WP,0.364_WP,0.357_WP,0.366_WP,0.365_WP,0.450_WP,0.446_WP,0.455_WP,0.452_WP,0.453_WP,0.452_WP,0.451_WP,0.452_WP,0.447_WP,0.451_WP,0.549_WP,0.542_WP,0.524_WP,0.541_WP,0.520_WP,0.512_WP,0.529_WP,0.508_WP,0.637_WP,0.635_WP,0.603_WP,0.636_WP,0.668_WP,0.602_WP,0.629_WP,0.666_WP,0.661_WP,0.599_WP,0.603_WP]
    
    
+   ! Monitoring of probe data
+   type(monitor) :: probefile
+   real(WP) :: Tp1,Tp2
+   integer, dimension(3) :: ipos1,ipos2
+   real(WP), dimension(3), parameter :: pos1=[0.0_WP,0.0_WP,0.0_WP]  !< Sets the position of the first probe
+   real(WP), dimension(3), parameter :: pos2=[0.5_WP,0.2_WP,0.2_WP]  !< Sets the position of the second probe
+   
+   
 contains
    
    
@@ -1110,6 +1118,22 @@ contains
       end block create_monitor
       
       
+      ! Create a probe monitoring file
+      create_probe: block
+         ! Find mesh location of probes
+         ipos1=sc%cfg%get_ijk_global(pos1,[sc%cfg%imino,sc%cfg%jmino,sc%cfg%kmino])
+         ipos2=sc%cfg%get_ijk_global(pos2,[sc%cfg%imino,sc%cfg%jmino,sc%cfg%kmino])
+         ! Get probe temperature
+         Tp1=sc%SC(ipos1(1),ipos1(2),ipos1(3))
+         Tp2=sc%SC(ipos2(1),ipos2(2),ipos2(3))
+         ! Create simulation monitor
+         probefile=monitor(sc%cfg%amRoot,'probe')
+         call probefile%add_column(time%n,'Timestep number')
+         call probefile%add_column(time%t,'Time')
+         call probefile%add_column(Tp1,'Tp1')
+         call probefile%add_column(Tp2,'Tp2')
+      end block create_probe
+      
    end subroutine simulation_init
    
    
@@ -1440,6 +1464,11 @@ contains
          call mfile%write()
          call cflfile%write()
          call consfile%write()
+         monitor_probe: block
+            Tp1=sc%SC(ipos1(1),ipos1(2),ipos1(3))
+            Tp2=sc%SC(ipos2(1),ipos2(2),ipos2(3))
+            call probefile%write()
+         end block monitor_probe
          
          
          ! Finally, see if it's time to save restart files
