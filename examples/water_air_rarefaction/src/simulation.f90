@@ -288,18 +288,15 @@ contains
 
             ! Insert sponge step here
             
-            ! Helmholtz solve
-            ! call fs%calcH_LHS(fs%psolv%op)
-            ! call fs%interp_vel(fs%U,fs%V,fs%W)
-            ! call fs%calcH_RHS(fs%psolv%rhs)
-            ! call fs%psolv%setup()
-            ! fs%psolv%sol=0.0_WP
-            ! call fs%psolv%solve()
-            
-            ! ! Corrector step
-            ! fs%P=fs%P+fs%psolv%sol
-            ! call fs%correct_face(fs%psolv%sol)
-            ! call fs%correct_cellcenter()
+            ! Prepare pressure projection
+            call fs%pressureproj_prepare(time%dt,vf)
+            ! Initialize and solve Helmholtz equation
+            call fs%psolv%setup()
+            fs%psolv%sol=0.0_WP
+            call fs%psolv%solve()
+            ! Perform corrector step using solution
+            fs%P=fs%P+fs%psolv%sol
+            call fs%pressureproj_correct()
             
             ! Increment sub-iteration counter
             time%it=time%it+1
