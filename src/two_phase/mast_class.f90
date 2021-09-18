@@ -145,6 +145,9 @@ module mast_class
       ! Pressure relaxation
       real(WP), dimension(:,:,:), allocatable :: srcVF ! < Predicted volume exchange during advection
 
+      ! Temporary arrays for a few things
+      real(WP), dimension(:,:,:), pointer :: tmp1,tmp2,tmp3
+      
       ! Pressure solver
       type(ils) :: psolv                                  !< Iterative linear solver object for the pressure Helmholtz equation
       
@@ -193,13 +196,16 @@ module mast_class
       procedure :: GKEold, LKEold                         !< Calculate kinetic energy at timestep 'n'
       ! For viscous/dissipative/body forces (will address later)
       ! For setting up pressure solve
+      procedure :: pressureproj_prepare                   !< Overall subroutine for pressure solve setup
       procedure :: interp_pressure_density                !< Calculate pressure and density interpolated to face
       procedure :: interp_vel_basic                       !< Calculate interpolated velocity
       procedure :: interp_vel_full                        !< Calculate interpolated velocity, with additional terms
-      !procedure :: calcH_LHS                              !< Calculate the left-hand side of the pressure equation
-      !procedure :: calcH_RHS                              !< Calculate the right-hand side of the pressure equation
+      procedure :: terms_modified_face_velocity           !< Calculate additional terms for velocity interpolation
+      procedure :: calcHelmholtz_LHS                      !< Calculate the left-hand side of the pressure equation
+      procedure :: calcHelmholtz_RHS                      !< Calculate the right-hand side of the pressure equation
       procedure :: add_surface_tension_jump               !< Add surface tension jump
       ! For pressure correction
+      procedure :: pressureproj_correct                   !< Overall subroutine for pressure solve correction
       procedure :: get_pgrad                              !< Calculate pressure gradient
       ! For pressure relaxation
 
@@ -338,6 +344,11 @@ contains
       ! Pressure relaxation
       allocate(self%srcVF(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%srcVF=0.0_WP
 
+      ! Arrays employed temporarily in a few places
+      allocate(self%tmp1(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%tmp1   =0.0_WP
+      allocate(self%tmp2(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%tmp1   =0.0_WP
+      allocate(self%tmp3(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%tmp1   =0.0_WP
+      
       ! Allocate vfs objects that are required for the MAST solver
       call vf%allocate_supplement()
       
@@ -830,6 +841,26 @@ contains
       
    end subroutine apply_bcond
 
+   ! Function to more easily calculate gas kinetic energy
+   function GKEold(this,i,j,k) result(val)
+     implicit none
+     class(mast), intent(inout) :: this
+     real(WP) :: val
+     integer, intent(in) :: i,j,k
+     val = 0.5_WP*this%Grhoold(i,j,k)*(this%Uiold(i,j,k)**2+this%Viold(i,j,k)**2+this%Wiold(i,j,k)**2)
+     return
+   end function GKEold
+
+   ! Function to more easily calculate liquid kinetic energy
+   function LKEold(this,i,j,k) result(val)
+     implicit none
+     class(mast), intent(inout) :: this
+     real(WP) :: val
+     integer, intent(in) :: i,j,k
+     val = 0.5_WP*this%Lrhoold(i,j,k)*(this%Uiold(i,j,k)**2+this%Viold(i,j,k)**2+this%Wiold(i,j,k)**2)
+     return
+   end function LKEold
+
    subroutine flag_sl(this,vf)
      use vfs_class, only: vfs, VFhi, VFlo
      implicit none
@@ -1202,7 +1233,7 @@ contains
         do j=this%cfg%jmin_,this%cfg%jmax_
            do i=this%cfg%imin_,this%cfg%imax_
               ! Skip wall cells
-              if (this%cfg%vol(i,j,k).eq.0.0_WP) cycle
+              if (this%mask(i,j,k).eq.1) cycle
               ! Update VF
               vf%VF(i,j,k) = this%F_VF(i,j,k)/this%F_VOL(i,j,k)
               ! Update phase density, pressure, and bulk moduli according to VF limits
@@ -1423,7 +1454,7 @@ contains
         do j=this%cfg%jmin_,this%cfg%jmax_
            do i=this%cfg%imin_,this%cfg%imax_
               ! Cycle wall cells
-              if (this%cfg%vol(i,j,k).eq.0.0_WP) cycle
+              if (this%mask(i,j,k).eq.1) cycle
               ! Update phase energy
               if      (vf%VF(i,j,k).lt.VFlo) then
                  this%GrhoE(i,j,k) = this%F_GrhoE(i,j,k)/this%cfg%vol(i,j,k)
@@ -2049,25 +2080,46 @@ contains
        
    end subroutine advection_step
 
-   ! Function to more easily calculate gas kinetic energy
-   function GKEold(this,i,j,k) result(val)
+   subroutine pressureproj_prepare(this,dt,vf)
+     use vfs_class, only : vfs
      implicit none
      class(mast), intent(inout) :: this
-     real(WP) :: val
-     integer, intent(in) :: i,j,k
-     val = 0.5_WP*this%Grhoold(i,j,k)*(this%Uiold(i,j,k)**2+this%Viold(i,j,k)**2+this%Wiold(i,j,k)**2)
-     return
-   end function GKEold
+     class(vfs),  intent(in)    :: vf
+     real(WP),    intent(in)    :: dt
+     real(WP), dimension(:,:,:), pointer :: termU,termV,termW
 
-   ! Function to more easily calculate liquid kinetic energy
-   function LKEold(this,i,j,k) result(val)
+     ! Designate the use of temporary arrays
+     termU => this%tmp1; termV => this%tmp2; termW =>this%tmp3
+     ! Calculate terms for modified velocity interpolation
+     call this%terms_modified_face_velocity(vf,termU,termV,termW)
+     ! Perform modified velocity interpolation
+     call this%interp_vel_full(vf,dt,this%Ui,this%Vi,this%Wi,termU,termV,termW,this%U,this%V,this%W)
+     ! Disassociate pointers at end of use
+     nullify(termU,termV,termW)
+     ! Calculate LHS operator of Helmholtz equation
+     call this%calcHelmholtz_LHS()
+     ! Calculate RHS of Helmholtz equation
+     call this%calcHelmholtz_RHS()
+
+     contains
+
+   end subroutine pressureproj_prepare
+
+   subroutine pressureproj_correct(this)
      implicit none
      class(mast), intent(inout) :: this
-     real(WP) :: val
-     integer, intent(in) :: i,j,k
-     val = 0.5_WP*this%Lrhoold(i,j,k)*(this%Uiold(i,j,k)**2+this%Viold(i,j,k)**2+this%Wiold(i,j,k)**2)
-     return
-   end function LKEold
+     ! Use this%psolv%sol
+
+     ! Correct face velocity and calculate incremental face pressure
+
+     ! BCs
+
+     ! Correct cell-centered quantities
+
+     ! BCs
+
+   end subroutine pressureproj_correct
+     
 
    !> Add surface tension jump term using CSF
    subroutine add_surface_tension_jump(this,dt,div,vf,contact_model)
@@ -2378,6 +2430,71 @@ contains
      ! Boundary conditions
 
    end subroutine interp_vel_full
+   
+   ! Make terms to remove explicit pressure gradient from the cell-centered velocity before interpolation
+   subroutine terms_modified_face_velocity(this,vf,termU,termV,termW)
+     use vfs_class, only : vfs
+     implicit none
+     class(mast), intent(in) :: this
+     class(vfs),  intent(in) :: vf
+     real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: termU
+     real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: termV
+     real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: termW
+     integer  :: i,j,k
+     real(WP) :: vol_r,vol_l,rho_r,rho_l
+     real(WP), dimension(0:1) :: jumpx,jumpy,jumpz
+                                                                                    
+     do k=this%cfg%kmin_,this%cfg%kmax_
+        do j=this%cfg%jmin_,this%cfg%jmax_
+           do i=this%cfg%imin_,this%cfg%imax_
+              ! Begin at zero every time
+              termU(i,j,k) = 0.0_WP
+              termV(i,j,k) = 0.0_WP
+              termW(i,j,k) = 0.0_WP
+              ! No need to calculate terms inside of wall cell
+              if (this%mask(i,j,k).eq.1) cycle
+              ! Only need to apply terms where SL scheme is present
+              if (max(maxval(this%sl_face(i,j,k,:)),this%sl_face(i+1,j,k,1),&
+                   this%sl_face(i,j+1,k,2),this%sl_face(i,j,k+1,3)).eq.0) cycle
+
+              ! Get contributions of pressure jump to faces of current cell
+              ! r and l are with respect to the cell here, not a face
+              rho_l=sum(vf%Gvol(0,:,:,i,j,k))*this%Grho(i,j,k)+sum(vf%Lvol(0,:,:,i,j,k))*this%Lrho(i,j,k)
+              rho_r=sum(vf%Gvol(1,:,:,i,j,k))*this%Grho(i,j,k)+sum(vf%Lvol(1,:,:,i,j,k))*this%Lrho(i,j,k)
+              jumpx(0)=rho_l*this%Pjx(i  ,j,k)/(this%rho_U(i  ,j,k)*this%cfg%vol(i,j,k))
+              jumpx(1)=rho_r*this%Pjx(i+1,j,k)/(this%rho_U(i+1,j,k)*this%cfg%vol(i,j,k))
+              rho_l=sum(vf%Gvol(:,0,:,i,j,k))*this%Grho(i,j,k)+sum(vf%Lvol(:,0,:,i,j,k))*this%Lrho(i,j,k)
+              rho_r=sum(vf%Gvol(:,1,:,i,j,k))*this%Grho(i,j,k)+sum(vf%Lvol(:,1,:,i,j,k))*this%Lrho(i,j,k)
+              jumpy(0)=rho_l*this%Pjy(i,j  ,k)/(this%rho_V(i,j  ,k)*this%cfg%vol(i,j,k))
+              jumpy(1)=rho_r*this%Pjy(i,j+1,k)/(this%rho_V(i,j+1,k)*this%cfg%vol(i,j,k))
+              rho_l=sum(vf%Gvol(:,:,0,i,j,k))*this%Grho(i,j,k)+sum(vf%Lvol(:,:,0,i,j,k))*this%Lrho(i,j,k)
+              rho_r=sum(vf%Gvol(:,:,1,i,j,k))*this%Grho(i,j,k)+sum(vf%Lvol(:,:,1,i,j,k))*this%Lrho(i,j,k)
+              jumpz(0)=rho_l*this%Pjz(i,j,k  )/(this%rho_W(i,j,k  )*this%cfg%vol(i,j,k))
+              jumpz(1)=rho_r*this%Pjz(i,j,k+1)/(this%rho_W(i,j,k+1)*this%cfg%vol(i,j,k))
+
+              ! Combine contributions with cell-centered pressure gradient
+              termU(i,j,k)=((this%P_U(i+1,j,k)-this%P_U(i,j,k))*this%cfg%dxi(i)-sum(jumpx))/this%RHO(i,j,k)
+              termV(i,j,k)=((this%P_V(i,j+1,k)-this%P_V(i,j,k))*this%cfg%dyi(j)-sum(jumpy))/this%RHO(i,j,k)
+              termW(i,j,k)=((this%P_W(i,j,k+1)-this%P_W(i,j,k))*this%cfg%dzi(k)-sum(jumpz))/this%RHO(i,j,k)
+           end do
+        end do
+     end do
+
+     ! Boundary conditions
+
+   end subroutine terms_modified_face_velocity
+
+   subroutine calcHelmholtz_LHS(this)
+     class(mast), intent(inout) :: this
+     ! Work on this%psolv%opr
+     
+   end subroutine calcHelmholtz_LHS
+
+   subroutine calcHelmholtz_RHS(this)
+     class(mast), intent(inout) :: this
+     ! Work on this%psolv%rhs
+     
+   end subroutine calcHelmholtz_RHS
    
    !> Calculate the CFL
    subroutine get_cfl(this,dt,cflc,cfl)
