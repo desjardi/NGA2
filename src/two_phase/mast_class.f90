@@ -142,8 +142,10 @@ module mast_class
 
       ! Hybrid advection
       integer,  dimension(:,:,:,:), allocatable :: sl_face ! < Flag for flux method switching
-      ! Pressure relaxation
-      real(WP), dimension(:,:,:), allocatable :: srcVF ! < Predicted volume exchange during advection
+      ! Terms needed for pressure relaxation
+      real(WP), dimension(:,:,:), allocatable :: srcVF   ! < Predicted volume exchange during advection
+      real(WP), dimension(:,:,:), allocatable :: Hpjump  ! < Helmholtz pressure jump
+      real(WP), dimension(:,:,:), allocatable :: dHpjump ! < Helmholtz pressure jump increment, also used for old Hpjump
 
       ! Temporary arrays for a few things
       real(WP), dimension(:,:,:), pointer :: tmp1,tmp2,tmp3
@@ -343,6 +345,8 @@ contains
       allocate(self%sl_face(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_,3)); self%sl_face=0.0_WP
       ! Pressure relaxation
       allocate(self%srcVF(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%srcVF=0.0_WP
+      allocate(self%Hpjump(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%Hpjump=0.0_WP
+      allocate(self%dHpjump(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%dHpjump=0.0_WP
 
       ! Arrays employed temporarily in a few places
       allocate(self%tmp1(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%tmp1   =0.0_WP
@@ -2114,6 +2118,7 @@ contains
      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: DP
      real(WP), dimension(:,:,:), pointer :: DP_U,DP_V,DP_W
      real(WP) :: vol_l,rho_l,vol_r,rho_r
+     real(WP), dimension(0:1) :: jumpx,jumpy,jumpz
      integer :: i,j,k
      ! Set up temporary array
      DP_U=>this%tmp1; DP_V=>this%tmp2; DP_W=>this%tmp3
@@ -2171,11 +2176,72 @@ contains
      ! BCs
 
      ! Correct cell-centered quantities
+     do k=this%cfg%kmin_,this%cfg%kmax_+1
+        do j=this%cfg%jmin_,this%cfg%jmax_+1
+           do i=this%cfg%imin_,this%cfg%imax_+1
+              ! No need to calculate terms inside of wall cell
+              if (this%mask(i,j,k).eq.1) cycle
 
-      ! BCs
+              ! r and l are with respect to the cell here, not a face
+              rho_l=sum(vf%Gvol(0,:,:,i,j,k))*this%Grho(i,j,k)+sum(vf%Lvol(0,:,:,i,j,k))*this%Lrho(i,j,k)
+              rho_r=sum(vf%Gvol(1,:,:,i,j,k))*this%Grho(i,j,k)+sum(vf%Lvol(1,:,:,i,j,k))*this%Lrho(i,j,k)
+              jumpx(0)=rho_l*this%DPjx(i  ,j,k)/(this%rho_U(i  ,j,k)*this%cfg%vol(i,j,k))
+              jumpx(1)=rho_r*this%DPjx(i+1,j,k)/(this%rho_U(i+1,j,k)*this%cfg%vol(i,j,k))
+              rho_l=sum(vf%Gvol(:,0,:,i,j,k))*this%Grho(i,j,k)+sum(vf%Lvol(:,0,:,i,j,k))*this%Lrho(i,j,k)
+              rho_r=sum(vf%Gvol(:,1,:,i,j,k))*this%Grho(i,j,k)+sum(vf%Lvol(:,1,:,i,j,k))*this%Lrho(i,j,k)
+              jumpy(0)=rho_l*this%DPjy(i,j  ,k)/(this%rho_V(i,j  ,k)*this%cfg%vol(i,j,k))
+              jumpy(1)=rho_r*this%DPjy(i,j+1,k)/(this%rho_V(i,j+1,k)*this%cfg%vol(i,j,k))
+              rho_l=sum(vf%Gvol(:,:,0,i,j,k))*this%Grho(i,j,k)+sum(vf%Lvol(:,:,0,i,j,k))*this%Lrho(i,j,k)
+              rho_r=sum(vf%Gvol(:,:,1,i,j,k))*this%Grho(i,j,k)+sum(vf%Lvol(:,:,1,i,j,k))*this%Lrho(i,j,k)
+              jumpz(0)=rho_l*this%DPjz(i,j,k  )/(this%rho_W(i,j,k  )*this%cfg%vol(i,j,k))
+              jumpz(1)=rho_r*this%DPjz(i,j,k+1)/(this%rho_W(i,j,k+1)*this%cfg%vol(i,j,k))
 
-      ! End use of temporary memory
-      nullify(DP_U,DP_V,DP_W)
+              ! Update momentum in X
+              this%rhoUi(i,j,k)=this%rhoUi(i,j,k)-dt*((DP_U(i+1,j,k)-DP_U(i,j,k))*this%cfg%dxi(i)-sum(jumpx))
+              ! Update momentum in Y
+              this%rhoVi(i,j,k)=this%rhoVi(i,j,k)-dt*((DP_V(i,j+1,k)-DP_V(i,j,k))*this%cfg%dyi(j)-sum(jumpy))
+              ! Update momentum in Z
+              this%rhoWi(i,j,k)=this%rhoWi(i,j,k)-dt*((DP_W(i,j,k+1)-DP_W(i,j,k))*this%cfg%dzi(k)-sum(jumpz))
+
+	      ! Update gas total energy
+              this%GrhoE(i,j,k) = this%GrhoE(i,j,k) - dt*( this%Grho(i,j,k)/this%RHO(i,j,k)*&
+                   ( sum(this%divp_x(:,i,j,k)*this%U(i:i+1,j,k)*DP_U(i:i+1,j,k)) &
+                   + sum(this%divp_y(:,i,j,k)*this%V(i,j:j+1,k)*DP_V(i,j:j+1,k)) &
+                   + sum(this%divp_z(:,i,j,k)*this%W(i,j,k:k+1)*DP_W(i,j,k:k+1)) &
+                   - sum(this%DPjx(i:i+1,j,k)*this%U(i:i+1,j,k)) &
+                   - sum(this%DPjy(i,j:j+1,k)*this%V(i,j:j+1,k)) &
+                   - sum(this%DPjz(i,j,k:k+1)*this%W(i,j,k:k+1)) ) + &
+                   ( sum(this%divp_x(:,i,j,k)*this%U(i:i+1,j,k)) &
+                   + sum(this%divp_y(:,i,j,k)*this%V(i,j:j+1,k)) &
+                   + sum(this%divp_z(:,i,j,k)*this%W(i,j,k:k+1)) )*(DP(i,j,k)* &
+                   (real(ceiling(1.0_WP-vf%VF(i,j,k)),WP)-this%Grho(i,j,k)/this%RHO(i,j,k)) &
+                   - (       vf%VF(i,j,k))*this%dHpjump(i,j,k) ) )
+
+              ! Update liquid total energy
+              this%LrhoE(i,j,k) = this%LrhoE(i,j,k) - dt*( this%Lrho(i,j,k)/this%RHO(i,j,k)*&
+                   ( sum(this%divp_x(:,i,j,k)*this%U(i:i+1,j,k)*DP_U(i:i+1,j,k)) &
+                   + sum(this%divp_y(:,i,j,k)*this%V(i,j:j+1,k)*DP_V(i,j:j+1,k)) &
+                   + sum(this%divp_z(:,i,j,k)*this%W(i,j,k:k+1)*DP_W(i,j,k:k+1)) &
+                   - sum(this%DPjx(i:i+1,j,k)*this%U(i:i+1,j,k)) &
+                   - sum(this%DPjy(i,j:j+1,k)*this%V(i,j:j+1,k)) &
+                   - sum(this%DPjz(i,j,k:k+1)*this%W(i,j,k:k+1)) ) + &
+                   ( sum(this%divp_x(:,i,j,k)*this%U(i:i+1,j,k)) &
+                   + sum(this%divp_y(:,i,j,k)*this%V(i,j:j+1,k)) &
+                   + sum(this%divp_z(:,i,j,k)*this%W(i,j,k:k+1)) )*(DP(i,j,k)* &
+                   (real(ceiling(       vf%VF(i,j,k)),WP)-this%Lrho(i,j,k)/this%RHO(i,j,k)) &
+                   + (1.0_WP-vf%VF(i,j,k))*this%dHpjump(i,j,k) ) )
+
+           end do
+        end do
+     end do
+
+     ! Transfer current jump to old
+     this%dHpjump = this%Hpjump
+
+     ! BCs
+     
+     ! End use of temporary memory
+     nullify(DP_U,DP_V,DP_W)
 
    end subroutine pressureproj_correct
      
@@ -2244,17 +2310,11 @@ contains
       this%DPjx=this%Pjx-this%DPjx
       this%DPjy=this%Pjy-this%DPjy
       this%DPjz=this%Pjz-this%DPjz
-      
-      ! Add div(Pjump) to RP
-      do k=this%cfg%kmin_,this%cfg%kmax_
-         do j=this%cfg%jmin_,this%cfg%jmax_
-            do i=this%cfg%imin_,this%cfg%imax_
-               div(i,j,k)=div(i,j,k)+dt*(sum(this%divp_x(:,i,j,k)*this%DPjx(i:i+1,j,k)/this%rho_U(i:i+1,j,k))&
-               &                        +sum(this%divp_y(:,i,j,k)*this%DPjy(i,j:j+1,k)/this%rho_V(i,j:j+1,k))&
-               &                        +sum(this%divp_z(:,i,j,k)*this%DPjz(i,j,k:k+1)/this%rho_W(i,j,k:k+1)))
-            end do
-         end do
-      end do
+
+      ! Store pressure jump at cell centers
+      this%Hpjump = this%sigma*vf%curv
+      ! Get increment, while considering different phase values during iteration
+      this%dHpjump = this%Hpjump - this%dHpjump*real(ceiling(1.0_WP-vf%VF)*ceiling(vf%VF),WP)
       
     end subroutine add_surface_tension_jump
 
