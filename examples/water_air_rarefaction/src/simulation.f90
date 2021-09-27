@@ -296,7 +296,7 @@ contains
             call fs%psolv%solve()
             ! Perform corrector step using solution
             fs%P=fs%P+fs%psolv%sol
-            call fs%pressureproj_correct()
+            call fs%pressureproj_correct(time%dt,vf,fs%psolv%sol)
             
             ! Increment sub-iteration counter
             time%it=time%it+1

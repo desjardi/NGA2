@@ -2105,18 +2105,77 @@ contains
 
    end subroutine pressureproj_prepare
 
-   subroutine pressureproj_correct(this)
+   subroutine pressureproj_correct(this,dt,vf,DP)
+     use vfs_class, only : vfs
      implicit none
      class(mast), intent(inout) :: this
-     ! Use this%psolv%sol
+     class(vfs),  intent(inout) :: vf
+     real(WP),    intent(in)    :: dt
+     real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: DP
+     real(WP), dimension(:,:,:), pointer :: DP_U,DP_V,DP_W
+     real(WP) :: vol_l,rho_l,vol_r,rho_r
+     integer :: i,j,k
+     ! Set up temporary array
+     DP_U=>this%tmp1; DP_V=>this%tmp2; DP_W=>this%tmp3
 
      ! Correct face velocity and calculate incremental face pressure
-
+     do k=this%cfg%kmin_,this%cfg%kmax_+1
+        do j=this%cfg%jmin_,this%cfg%jmax_+1
+           do i=this%cfg%imin_,this%cfg%imax_+1
+               ! Update face pressure and density in X
+               rho_r=0.0_WP; vol_r=sum(vf%Gvol(0,:,:,i  ,j,k)+vf%Lvol(0,:,:,i  ,j,k))
+               if (vol_r.gt.0.0_WP) rho_r=(sum(vf%Gvol(0,:,:,i  ,j,k))*this%Grho(i  ,j,k)&
+                                          +sum(vf%Lvol(0,:,:,i  ,j,k))*this%Lrho(i  ,j,k))
+               rho_l=0.0_WP; vol_l=sum(vf%Gvol(1,:,:,i-1,j,k)+vf%Lvol(1,:,:,i-1,j,k))
+               if (vol_l.gt.0.0_WP) rho_l=(sum(vf%Gvol(1,:,:,i-1,j,k))*this%Grho(i-1,j,k)&
+                                          +sum(vf%Lvol(1,:,:,i-1,j,k))*this%Lrho(i-1,j,k))
+               if (rho_l+rho_r.gt.0.0_WP) then
+                  DP_U(i,j,k)=2.0_WP*sum(this%itpi_x(:,i,j,k)*DP(i-1:i,j,k))&
+                       -(rho_l*DP(i-1,j,k)+rho_r*DP(i,j,k))/(rho_l+rho_r)
+                  this%U(i,j,k)=this%U(i,j,k)-dt*(&
+                       sum(this%divu_x(:,i,j,k)*DP(i-1:i,j,k))&
+                       -this%DPjx(i,j,k))/this%rho_U(i,j,k)
+               end if
+               ! Update face pressure and density in Y
+               rho_r=0.0_WP; vol_r=sum(vf%Gvol(:,0,:,i,j  ,k)+vf%Lvol(:,0,:,i,j  ,k))
+               if (vol_r.gt.0.0_WP) rho_r=(sum(vf%Gvol(:,0,:,i,j  ,k))*this%Grho(i,j  ,k)&
+                                          +sum(vf%Lvol(:,0,:,i,j  ,k))*this%Lrho(i,j  ,k))
+               rho_l=0.0_WP; vol_l=sum(vf%Gvol(:,1,:,i,j-1,k)+vf%Lvol(:,1,:,i,j-1,k))
+               if (vol_l.gt.0.0_WP) rho_l=(sum(vf%Gvol(:,1,:,i,j-1,k))*this%Grho(i,j-1,k)&
+                                          +sum(vf%Lvol(:,1,:,i,j-1,k))*this%Lrho(i,j-1,k))
+               if (rho_l+rho_r.gt.0.0_WP) then
+                  DP_V(i,j,k)=2.0_WP*sum(this%itpi_y(:,i,j,k)*DP(i,j-1:j,k))&
+                       -(rho_l*DP(i,j-1,k)+rho_r*DP(i,j,k))/(rho_l+rho_r)
+                  this%V(i,j,k)=this%V(i,j,k)-dt*(&
+                       sum(this%divv_y(:,i,j,k)*DP(i,j-1:j,k))&
+                       -this%DPjy(i,j,k))/this%rho_V(i,j,k)
+               end if
+               ! Update face pressure and density in Z
+               rho_r=0.0_WP; vol_r=sum(vf%Gvol(:,:,0,i,j,k  )+vf%Lvol(:,:,0,i,j,k  ))
+               if (vol_r.gt.0.0_WP) rho_r=(sum(vf%Gvol(:,:,0,i,j,k  ))*this%Grho(i,j,k  )&
+                                          +sum(vf%Lvol(:,:,0,i,j,k  ))*this%Lrho(i,j,k  ))
+               rho_l=0.0_WP; vol_l=sum(vf%Gvol(:,:,1,i,j,k-1)+vf%Lvol(:,:,1,i,j,k-1))
+               if (vol_l.gt.0.0_WP) rho_l=(sum(vf%Gvol(:,:,1,i,j,k-1))*this%Grho(i,j,k-1)&
+                                          +sum(vf%Lvol(:,:,1,i,j,k-1))*this%Lrho(i,j,k-1))
+               if (rho_l+rho_r.gt.0.0_WP) then
+                  DP_W(i,j,k)=2.0_WP*sum(this%itpi_z(:,i,j,k)*DP(i,j,k-1:k))&
+                       -(rho_l*DP(i,j,k-1)+rho_r*DP(i,j,k))/(rho_l+rho_r)
+                  this%W(i,j,k)=this%W(i,j,k)-dt*(&
+                       sum(this%divw_z(:,i,j,k)*DP(i,j,k-1:k))&
+                       -this%DPjz(i,j,k))/this%rho_W(i,j,k)
+               end if
+            end do
+         end do
+      end do
+      
      ! BCs
 
      ! Correct cell-centered quantities
 
-     ! BCs
+      ! BCs
+
+      ! End use of temporary memory
+      nullify(DP_U,DP_V,DP_W)
 
    end subroutine pressureproj_correct
      
