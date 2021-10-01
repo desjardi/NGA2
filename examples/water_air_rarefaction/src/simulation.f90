@@ -176,7 +176,9 @@ contains
          ! Initialize flow properties and therm variables
          !call fs%therm_init()
          ! Calculate face velocities
-         !call fs%interp_vel()
+         call fs%interp_vel_basic(vf,fs%Ui,fs%Vi,fs%Wi,fs%U,fs%V,fs%W)
+         ! Get initial pressure jump
+
          ! Perform initial pressure relax
          !call fs%pressure_relax()
 
