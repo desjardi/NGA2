@@ -2239,6 +2239,11 @@ contains
      this%dHpjump = this%Hpjump
 
      ! BCs
+
+     ! Calculate other quantities
+     this%Ui=this%rhoUi/this%RHO
+     this%Vi=this%rhoVi/this%RHO
+     this%Wi=this%rhoWi/this%RHO
      
      ! End use of temporary memory
      nullify(DP_U,DP_V,DP_W)
