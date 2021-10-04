@@ -13,6 +13,12 @@ nz :	40
 Vessel inner radius : 0.4
 Vessel length :       2.5
 
+# Inlet geometry
+Inlet pipe position : -0.375
+Inlet pipe radius   : 0.02
+Inlet pipe length   : 1.50
+Inlet x locations   : -0.7 0 +0.5 +0.7
+
 # Fluid properties
 Gravity :             0 -9.81 0
 Dynamic viscosity :   0.0005
@@ -20,9 +26,9 @@ Dynamic diffusivity : 0.0005
 
 # Vessel operating conditions
 Initial temperature : 300
-Inlet temperature :   430 430 430
+Inlet temperature :   430 430 430 430
 Initial pressure :    4.47e5  !101325
-Inlet MFR (kg/s) :    0.08 0.04 0.08
+Inlet MFR (kg/s) :    0.02 0.04 0.02 0.04
 Wall temperature :    !300  ! Comment out for adiabatic
 
 # Time integration

@@ -12,9 +12,7 @@ module geometry
    
    ! Vessel geometry will be needed in BCs
    real(WP), public :: Lv,IR,dx,dy,dz
-   real(WP), parameter, public :: ypipe=-0.375_WP
-   real(WP), parameter, public :: rpipe=+0.02_WP
-   real(WP), parameter, public :: lpipe=+1.50_WP
+   real(WP), public :: ypipe,rpipe,lpipe
    
 contains
    
@@ -80,6 +78,10 @@ contains
          ! Read in vessel dimensions
          call param_read('Vessel length',Lv)
          call param_read('Vessel inner radius',IR)
+         ! Read in inlet pipe geometry
+         call param_read('Inlet pipe position',ypipe)
+         call param_read('Inlet pipe radius'  ,rpipe)
+         call param_read('Inlet pipe length'  ,lpipe)
          ! Start from no fluid
          cfg%VF=0.0_WP
          ! Carve out the inside of the vessel
@@ -100,6 +102,10 @@ contains
             end do
          end do
       end block create_walls
+      
+      
+      ! Finally, write out config file
+      call cfg%write('config')
       
       
    end subroutine geometry_init

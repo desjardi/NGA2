@@ -39,9 +39,15 @@ module simulation
    real(WP), dimension(:,:,:), allocatable :: Ui,Vi,Wi
    real(WP), dimension(:,:,:,:), allocatable :: SR
    
+   !> Boundary condition data
+   integer :: ninlet
+   real(WP) :: current_inlet_position
+   character(len=8), dimension(:), allocatable :: name_in
+   real(WP), dimension(:), allocatable :: Xinlet
+   real(WP), dimension(:), allocatable :: MFR,Ain,rhoUin,Tinlet
+   
    !> Equation of state and case conditions
    real(WP) :: pressure,pressure_old,Vtotal
-   real(WP), dimension(:), allocatable :: MFR,Ain,rhoUin,Tinlet
    real(WP) :: fluid_mass,fluid_mass_old
    real(WP) :: Tinit,Twall,Twallold,Tavg
    logical  :: wall_losses
@@ -116,8 +122,8 @@ contains
    end function bag_at_loc
    
    
-   !> Functions that localize the top of the tube (y-face for v-vel and center for temp) - INLET 1
-   function vtube1(pg,i,j,k) result(isIn)
+   !> Functions that localize the top of the tube (y-face for v-vel and center for temp)
+   function vtube(pg,i,j,k) result(isIn)
       use pgrid_class, only: pgrid
       implicit none
       class(pgrid), intent(in) :: pg
@@ -125,9 +131,9 @@ contains
       logical :: isIn
       real(WP) :: r
       isIn=.false.
-      if (abs(pg%xm(i)+dx-0.5_WP*lpipe).le.dx.and.pg%y(j)-0.5_WP*dy.lt.ypipe+rpipe.and.pg%y(j)+0.5_WP*dy.ge.ypipe+rpipe.and.abs(pg%zm(k)).lt.rpipe) isIn=.true.
-   end function vtube1
-   function sctube1(pg,i,j,k) result(isIn)
+      if (abs(pg%xm(i)-current_inlet_position).le.0.5_WP*dx.and.pg%y(j)-0.5_WP*dy.lt.ypipe+rpipe.and.pg%y(j)+0.5_WP*dy.ge.ypipe+rpipe.and.abs(pg%zm(k)).lt.rpipe) isIn=.true.
+   end function vtube
+   function sctube(pg,i,j,k) result(isIn)
       use pgrid_class, only: pgrid
       implicit none
       class(pgrid), intent(in) :: pg
@@ -135,96 +141,8 @@ contains
       logical :: isIn
       real(WP) :: r
       isIn=.false.
-      if (abs(pg%xm(i)+dx-0.5_WP*lpipe).le.dx.and.pg%ym(j).lt.ypipe+rpipe.and.pg%ym(j)+dy.ge.ypipe+rpipe.and.abs(pg%zm(k)).lt.rpipe) isIn=.true.
-   end function sctube1
-   
-   
-   !> Functions that localize the top of the tube (y-face for v-vel and center for temp) - INLET 2
-   function vtube2(pg,i,j,k) result(isIn)
-      use pgrid_class, only: pgrid
-      implicit none
-      class(pgrid), intent(in) :: pg
-      integer, intent(in) :: i,j,k
-      logical :: isIn
-      real(WP) :: r
-      isIn=.false.
-      if (abs(pg%xm(i)).le.dx.and.pg%y(j)-0.5_WP*dy.lt.ypipe+rpipe.and.pg%y(j)+0.5_WP*dy.ge.ypipe+rpipe.and.abs(pg%zm(k)).lt.rpipe) isIn=.true.
-   end function vtube2
-   function sctube2(pg,i,j,k) result(isIn)
-      use pgrid_class, only: pgrid
-      implicit none
-      class(pgrid), intent(in) :: pg
-      integer, intent(in) :: i,j,k
-      logical :: isIn
-      real(WP) :: r
-      isIn=.false.
-      if (abs(pg%xm(i)).le.dx.and.pg%ym(j).lt.ypipe+rpipe.and.pg%ym(j)+dy.ge.ypipe+rpipe.and.abs(pg%zm(k)).lt.rpipe) isIn=.true.
-   end function sctube2
-   
-   
-   !> Functions that localize the top of the tube (y-face for v-vel and center for temp) - INLET 3
-   function vtube3(pg,i,j,k) result(isIn)
-      use pgrid_class, only: pgrid
-      implicit none
-      class(pgrid), intent(in) :: pg
-      integer, intent(in) :: i,j,k
-      logical :: isIn
-      real(WP) :: r
-      isIn=.false.
-      if (abs(pg%xm(i)-dx+0.5_WP*lpipe).le.dx.and.pg%y(j)-0.5_WP*dy.lt.ypipe+rpipe.and.pg%y(j)+0.5_WP*dy.ge.ypipe+rpipe.and.abs(pg%zm(k)).lt.rpipe) isIn=.true.
-   end function vtube3
-   function sctube3(pg,i,j,k) result(isIn)
-      use pgrid_class, only: pgrid
-      implicit none
-      class(pgrid), intent(in) :: pg
-      integer, intent(in) :: i,j,k
-      logical :: isIn
-      real(WP) :: r
-      isIn=.false.
-      if (abs(pg%xm(i)-dx+0.5_WP*lpipe).le.dx.and.pg%ym(j).lt.ypipe+rpipe.and.pg%ym(j)+dy.ge.ypipe+rpipe.and.abs(pg%zm(k)).lt.rpipe) isIn=.true.
-   end function sctube3
-   
-   
-   !> Function that localizes the left end of the tube
-   !function left_of_tube(pg,i,j,k) result(isIn)
-   !   use pgrid_class, only: pgrid
-   !   implicit none
-   !   class(pgrid), intent(in) :: pg
-   !   integer, intent(in) :: i,j,k
-   !   logical :: isIn
-   !   real(WP) :: r
-   !   isIn=.false.
-   !   r=sqrt((pg%ym(j)-ypipe)**2+(pg%zm(k))**2)
-   !   if (abs(pg%x(i)+0.5_WP*lpipe).lt.0.01_WP.and.r.lt.rpipe) isIn=.true.
-   !end function left_of_tube
-   
-   
-   !> Function that localizes the right end of the tube - x-face (u-vel)
-   !function right_of_tube_vel(pg,i,j,k) result(isIn)
-   !   use pgrid_class, only: pgrid
-   !   implicit none
-   !   class(pgrid), intent(in) :: pg
-   !   integer, intent(in) :: i,j,k
-   !   logical :: isIn
-   !   real(WP) :: r
-   !   isIn=.false.
-   !   r=sqrt((pg%ym(j)-ypipe)**2+(pg%zm(k))**2)
-   !   if (abs(pg%x(i)-0.5_WP*lpipe).lt.0.01_WP.and.r.lt.rpipe) isIn=.true.
-   !end function right_of_tube_vel
-   
-   
-   !> Function that localizes the right end of the tube - scalar
-   !function right_of_tube_sc(pg,i,j,k) result(isIn)
-   !   use pgrid_class, only: pgrid
-   !   implicit none
-   !   class(pgrid), intent(in) :: pg
-   !   integer, intent(in) :: i,j,k
-   !   logical :: isIn
-   !   real(WP) :: r
-   !   isIn=.false.
-   !   r=sqrt((pg%ym(j)-ypipe)**2+(pg%zm(k))**2)
-   !   if (abs(pg%x(i+1)-0.5_WP*lpipe).lt.0.01_WP.and.r.lt.rpipe) isIn=.true.
-   !end function right_of_tube_sc
+      if (abs(pg%xm(i)-current_inlet_position).le.0.5_WP*dx.and.pg%ym(j).lt.ypipe+rpipe.and.pg%ym(j)+dy.ge.ypipe+rpipe.and.abs(pg%zm(k)).lt.rpipe) isIn=.true.
+   end function sctube
    
    
    !> Function that localizes the vessel walls
@@ -247,7 +165,7 @@ contains
       implicit none
       real(WP), intent(in) :: mass
       type(bcond), pointer :: inflow
-      integer :: i,j,k,n
+      integer :: i,j,k,n,ni
       real(WP) :: one_over_T
       ! Integrate 1/T
       resSC=1.0_WP/sc%SC
@@ -267,30 +185,12 @@ contains
          end do
       end do
       ! Also update the density in the bcond
-      !call sc%get_bcond( 'left inflow',inflow)
-      !do n=1,inflow%itr%no_
-      !   i=inflow%itr%map(1,n); j=inflow%itr%map(2,n); k=inflow%itr%map(3,n)
-      !   sc%rho(i,j,k)=pressure*Wmlr/(Rcst*sc%SC(i,j,k))
-      !end do
-      !call sc%get_bcond('right inflow',inflow)
-      !do n=1,inflow%itr%no_
-      !   i=inflow%itr%map(1,n); j=inflow%itr%map(2,n); k=inflow%itr%map(3,n)
-      !   sc%rho(i,j,k)=pressure*Wmlr/(Rcst*sc%SC(i,j,k))
-      !end do
-      call sc%get_bcond('inlet 1',inflow)
-      do n=1,inflow%itr%no_
-         i=inflow%itr%map(1,n); j=inflow%itr%map(2,n); k=inflow%itr%map(3,n)
-         sc%rho(i,j,k)=pressure*Wmlr/(Rcst*sc%SC(i,j,k))
-      end do
-      call sc%get_bcond('inlet 2',inflow)
-      do n=1,inflow%itr%no_
-         i=inflow%itr%map(1,n); j=inflow%itr%map(2,n); k=inflow%itr%map(3,n)
-         sc%rho(i,j,k)=pressure*Wmlr/(Rcst*sc%SC(i,j,k))
-      end do
-      call sc%get_bcond('inlet 3',inflow)
-      do n=1,inflow%itr%no_
-         i=inflow%itr%map(1,n); j=inflow%itr%map(2,n); k=inflow%itr%map(3,n)
-         sc%rho(i,j,k)=pressure*Wmlr/(Rcst*sc%SC(i,j,k))
+      do ni=1,ninlet
+         call sc%get_bcond(name_in(ni),inflow)
+         do n=1,inflow%itr%no_
+            i=inflow%itr%map(1,n); j=inflow%itr%map(2,n); k=inflow%itr%map(3,n)
+            sc%rho(i,j,k)=pressure*Wmlr/(Rcst*sc%SC(i,j,k))
+         end do
       end do
       ! Account for porosity here
       sc%rho=sc%rho*epsf
@@ -381,21 +281,13 @@ contains
       get_new_density_in_bc: block
          use vdscalar_class, only: bcond
          type(bcond), pointer :: inflow
-         integer :: n
-         call sc%get_bcond('inlet 1',inflow)
-         do n=1,inflow%itr%no_
-            i=inflow%itr%map(1,n); j=inflow%itr%map(2,n); k=inflow%itr%map(3,n)
-            sc%rho(i,j,k)=cprop(output='D'//char(0),name1='T'//char(0),prop1=sc%SC(i,j,k),name2='P'//char(0),prop2=pressure,fluidname='CO2'//char(0))*mass/M1
-         end do
-         call sc%get_bcond('inlet 2',inflow)
-         do n=1,inflow%itr%no_
-            i=inflow%itr%map(1,n); j=inflow%itr%map(2,n); k=inflow%itr%map(3,n)
-            sc%rho(i,j,k)=cprop(output='D'//char(0),name1='T'//char(0),prop1=sc%SC(i,j,k),name2='P'//char(0),prop2=pressure,fluidname='CO2'//char(0))*mass/M1
-         end do
-         call sc%get_bcond('inlet 3',inflow)
-         do n=1,inflow%itr%no_
-            i=inflow%itr%map(1,n); j=inflow%itr%map(2,n); k=inflow%itr%map(3,n)
-            sc%rho(i,j,k)=cprop(output='D'//char(0),name1='T'//char(0),prop1=sc%SC(i,j,k),name2='P'//char(0),prop2=pressure,fluidname='CO2'//char(0))*mass/M1
+         integer :: n,ni
+         do ni=1,ninlet
+            call sc%get_bcond(name_in(ni),inflow)
+            do n=1,inflow%itr%no_
+               i=inflow%itr%map(1,n); j=inflow%itr%map(2,n); k=inflow%itr%map(3,n)
+               sc%rho(i,j,k)=cprop(output='D'//char(0),name1='T'//char(0),prop1=sc%SC(i,j,k),name2='P'//char(0),prop2=pressure,fluidname='CO2'//char(0))*mass/M1
+            end do
          end do
       end block get_new_density_in_bc
       
@@ -499,30 +391,16 @@ contains
       get_new_density_in_bc: block
          use vdscalar_class, only: bcond
          type(bcond), pointer :: inflow
-         integer :: n
-         call sc%get_bcond('inlet 1',inflow)
-         do n=1,inflow%itr%no_
-            i=inflow%itr%map(1,n); j=inflow%itr%map(2,n); k=inflow%itr%map(3,n)
-            iT=max(min(floor((sc%SC(i,j,k)-Ttable_min)/(Ttable_max-Ttable_min)*real(nT-1,WP))+1,nT-1),1)
-            c1T=(sc%SC(i,j,k)-Ttable(iT))/(Ttable(iT+1)-Ttable(iT)); c2T=1.0_WP-c1T
-            sc%rho(i,j,k)=c1P*c1T*rhoTable(iT+1,iP+1)+c1P*c2T*rhoTable(iT,iP+1)+c2P*c1T*rhoTable(iT+1,iP)+c2P*c2T*rhoTable(iT,iP)
-            sc%rho(i,j,k)=sc%rho(i,j,k)*mass/M1
-         end do
-         call sc%get_bcond('inlet 2',inflow)
-         do n=1,inflow%itr%no_
-            i=inflow%itr%map(1,n); j=inflow%itr%map(2,n); k=inflow%itr%map(3,n)
-            iT=max(min(floor((sc%SC(i,j,k)-Ttable_min)/(Ttable_max-Ttable_min)*real(nT-1,WP))+1,nT-1),1)
-            c1T=(sc%SC(i,j,k)-Ttable(iT))/(Ttable(iT+1)-Ttable(iT)); c2T=1.0_WP-c1T
-            sc%rho(i,j,k)=c1P*c1T*rhoTable(iT+1,iP+1)+c1P*c2T*rhoTable(iT,iP+1)+c2P*c1T*rhoTable(iT+1,iP)+c2P*c2T*rhoTable(iT,iP)
-            sc%rho(i,j,k)=sc%rho(i,j,k)*mass/M1
-         end do
-         call sc%get_bcond('inlet 3',inflow)
-         do n=1,inflow%itr%no_
-            i=inflow%itr%map(1,n); j=inflow%itr%map(2,n); k=inflow%itr%map(3,n)
-            iT=max(min(floor((sc%SC(i,j,k)-Ttable_min)/(Ttable_max-Ttable_min)*real(nT-1,WP))+1,nT-1),1)
-            c1T=(sc%SC(i,j,k)-Ttable(iT))/(Ttable(iT+1)-Ttable(iT)); c2T=1.0_WP-c1T
-            sc%rho(i,j,k)=c1P*c1T*rhoTable(iT+1,iP+1)+c1P*c2T*rhoTable(iT,iP+1)+c2P*c1T*rhoTable(iT+1,iP)+c2P*c2T*rhoTable(iT,iP)
-            sc%rho(i,j,k)=sc%rho(i,j,k)*mass/M1
+         integer :: n,ni
+         do ni=1,ninlet
+            call sc%get_bcond(name_in(ni),inflow)
+            do n=1,inflow%itr%no_
+               i=inflow%itr%map(1,n); j=inflow%itr%map(2,n); k=inflow%itr%map(3,n)
+               iT=max(min(floor((sc%SC(i,j,k)-Ttable_min)/(Ttable_max-Ttable_min)*real(nT-1,WP))+1,nT-1),1)
+               c1T=(sc%SC(i,j,k)-Ttable(iT))/(Ttable(iT+1)-Ttable(iT)); c2T=1.0_WP-c1T
+               sc%rho(i,j,k)=c1P*c1T*rhoTable(iT+1,iP+1)+c1P*c2T*rhoTable(iT,iP+1)+c2P*c1T*rhoTable(iT+1,iP)+c2P*c2T*rhoTable(iT,iP)
+               sc%rho(i,j,k)=sc%rho(i,j,k)*mass/M1
+            end do
          end do
       end block get_new_density_in_bc
       
@@ -620,19 +498,24 @@ contains
       ! Process inlet conditions first
       inlet_conditions: block
          use param, only: param_getsize
-         integer :: ninlet_tmp,ninlet_mfr
+         character(len=2) :: numb
+         integer :: ni
          ! Figure out how many inlets
-         ninlet_tmp=param_getsize('Inlet temperature')
-         ninlet_mfr=param_getsize('Inlet MFR (kg/s)')
-         if (ninlet_mfr.ne.ninlet_tmp) call die('[simulation_init] Inlet numbers are incompatible')
-         allocate(Tinlet(ninlet_tmp))
-         allocate(MFR(ninlet_mfr))
-         ! Read in temperature and MFR
+         ninlet=param_getsize('Inlet x locations')
+         if (ninlet.ne.param_getsize('Inlet temperature').or.ninlet.ne.param_getsize('Inlet MFR (kg/s)' )) call die('[simulation_init] Inlet numbers are incompatible')
+         allocate(Tinlet(ninlet),MFR(ninlet),Xinlet(ninlet))
+         ! Read in position, temperature, and MFR
+         call param_read('Inlet x locations',Xinlet)
          call param_read('Inlet temperature',Tinlet)
-         call param_read('Inlet MFR (kg/s)',MFR)
+         call param_read('Inlet MFR (kg/s)' ,MFR)
          ! Also allocate rhoUin and Ain
-         allocate(rhoUin(ninlet_mfr))
-         allocate(Ain(ninlet_mfr))
+         allocate(rhoUin(ninlet),Ain(ninlet))
+         ! Also create default names
+         allocate(name_in(ninlet))
+         do ni=1,ninlet
+            write(numb,'(i2)') ni
+            name_in(ni)='inlet_'//numb
+         end do
       end block inlet_conditions
       
       
@@ -652,7 +535,7 @@ contains
             df=datafile(pg=cfg,fdata=trim(adjustl(dir_restart))//'/'//'data')
          else
             ! If we are not restarting, we will still need datafiles for saving restart files
-            df=datafile(pg=cfg,filename=trim(cfg%name),nval=4,nvar=9)
+            df=datafile(pg=cfg,filename=trim(cfg%name),nval=4,nvar=13)
             df%valname(1)='t'
             df%valname(2)='dt'
             df%valname(3)='pressure'
@@ -666,6 +549,10 @@ contains
             df%varname(7)='rhoold'
             df%varname(8)='SC'
             df%varname(9)='Tprod'
+            df%varname(10)='visc'
+            df%varname(11)='Ui'
+            df%varname(12)='Vi'
+            df%varname(13)='Wi'
          end if
       end block restart_and_save
       
@@ -707,14 +594,13 @@ contains
          use ils_class,     only: pcg_pfmg,pcg_amg
          use lowmach_class, only: dirichlet
          real(WP) :: visc
+         integer :: ni
          ! Create flow solver
          fs=lowmach(cfg=cfg,name='Variable density low Mach NS')
          ! Define boundary conditions
-         !call fs%add_bcond(name= 'left inflow',type=dirichlet,locator= left_of_tube    ,face='x',dir=+1,canCorrect=.false.)
-         !call fs%add_bcond(name='right inflow',type=dirichlet,locator=right_of_tube_vel,face='x',dir=-1,canCorrect=.false.)
-         call fs%add_bcond(name='inlet 1',type=dirichlet,locator=vtube1,face='y',dir=-1,canCorrect=.false.)
-         call fs%add_bcond(name='inlet 2',type=dirichlet,locator=vtube2,face='y',dir=-1,canCorrect=.false.)
-         call fs%add_bcond(name='inlet 3',type=dirichlet,locator=vtube3,face='y',dir=-1,canCorrect=.false.)
+         do ni=1,ninlet
+            current_inlet_position=Xinlet(ni); call fs%add_bcond(name=name_in(ni),type=dirichlet,locator=vtube,face='y',dir=-1,canCorrect=.false.)
+         end do
          ! Assign constant viscosity
          call param_read('Dynamic viscosity',visc); fs%visc=visc
          ! Assign acceleration of gravity
@@ -850,6 +736,7 @@ contains
          use ils_class,      only: gmres
          use vdscalar_class, only: dirichlet,quick
          real(WP) :: diffusivity
+         integer :: ni
          ! Check if we want to model wall losses
          call param_read(tag='Wall temperature',val=Twall,default=-1.0_WP)
          wall_losses=.false.; if (Twall.gt.0.0_WP) wall_losses=.true.
@@ -857,11 +744,9 @@ contains
          ! Create scalar solver
          sc=vdscalar(cfg=cfg,scheme=quick,name='Temperature')
          ! Define boundary conditions
-         !call sc%add_bcond(name= 'left inflow',type=dirichlet,locator= left_of_tube   )
-         !call sc%add_bcond(name='right inflow',type=dirichlet,locator=right_of_tube_sc)
-         call sc%add_bcond(name='inlet 1',type=dirichlet,locator=sctube1)
-         call sc%add_bcond(name='inlet 2',type=dirichlet,locator=sctube2)
-         call sc%add_bcond(name='inlet 3',type=dirichlet,locator=sctube3)
+         do ni=1,ninlet
+            current_inlet_position=Xinlet(ni); call sc%add_bcond(name=name_in(ni),type=dirichlet,locator=sctube)
+         end do
          if (wall_losses) call sc%add_bcond(name='wall',type=dirichlet,locator=wall_locator)
          ! Assign constant diffusivity
          call param_read('Dynamic diffusivity',diffusivity)
@@ -877,7 +762,7 @@ contains
       initialize_scalar: block
          use vdscalar_class, only: bcond
          type(bcond), pointer :: mybc
-         integer :: n,i,j,k
+         integer :: n,i,j,k,ni
          ! Read in the temperature and pressure
          call param_read('Initial temperature',Tinit)
          call param_read('Initial pressure',pressure)
@@ -899,37 +784,16 @@ contains
             sc%rho=sc%rho*epsf
             sc%rhoold=sc%rho
          end if
-         ! Apply Dirichlet at the tube
-         !call sc%get_bcond( 'left inflow',mybc)
-         !do n=1,mybc%itr%no_
-         !   i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
-         !   sc%SC (i,j,k)=Tinlet
-         !   sc%rho(i,j,k)=pressure*Wmlr/(Rcst*Tinlet)
-         !end do
-         !call sc%get_bcond('right inflow',mybc)
-         !do n=1,mybc%itr%no_
-         !   i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
-         !   sc%SC(i,j,k)=Tinlet
-         !   sc%rho(i,j,k)=pressure*Wmlr/(Rcst*Tinlet)
-         !end do
-         call sc%get_bcond('inlet 1',mybc)
-         do n=1,mybc%itr%no_
-            i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
-            sc%SC(i,j,k)=Tinlet(1)
-            sc%rho(i,j,k)=pressure*Wmlr/(Rcst*Tinlet(1))
+         ! Apply Dirichlet at the inlets
+         do ni=1,ninlet
+            call sc%get_bcond(name_in(ni),mybc)
+            do n=1,mybc%itr%no_
+               i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
+               sc%SC(i,j,k)=Tinlet(1)
+               sc%rho(i,j,k)=pressure*Wmlr/(Rcst*Tinlet(ni))
+            end do
          end do
-         call sc%get_bcond('inlet 2',mybc)
-         do n=1,mybc%itr%no_
-            i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
-            sc%SC(i,j,k)=Tinlet(2)
-            sc%rho(i,j,k)=pressure*Wmlr/(Rcst*Tinlet(2))
-         end do
-         call sc%get_bcond('inlet 3',mybc)
-         do n=1,mybc%itr%no_
-            i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
-            sc%SC(i,j,k)=Tinlet(3)
-            sc%rho(i,j,k)=pressure*Wmlr/(Rcst*Tinlet(3))
-         end do
+         ! Apply Dirichlet at the wall
          if (wall_losses) then
             call sc%get_bcond('wall',mybc)
             do n=1,mybc%itr%no_
@@ -955,7 +819,7 @@ contains
          use parallel,      only: MPI_REAL_WP
          use mpi_f08,       only: MPI_ALLREDUCE,MPI_SUM
          type(bcond), pointer :: mybc
-         integer :: n,i,j,k,ierr
+         integer :: n,i,j,k,ierr,ni
          real(WP) :: myAin
          ! Handle restart
          if (restarted) then
@@ -965,64 +829,23 @@ contains
             call df%pullvar(name='P'   ,var=fs%P   )
          end if
          ! Calculate inflow area
-         !call fs%get_bcond('left inflow',mybc)
-         !do n=1,mybc%itr%n_
-         !   i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
-         !   myAin=myAin+fs%cfg%dy(j)*fs%cfg%dz(k)
-         !end do
-         !call fs%get_bcond('right inflow',mybc)
-         !do n=1,mybc%itr%n_
-         !   i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
-         !   myAin=myAin+fs%cfg%dy(j)*fs%cfg%dz(k)
-         !end do
-         call fs%get_bcond('inlet 1',mybc)
-         myAin=0.0_WP
-         do n=1,mybc%itr%n_
-            i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
-            myAin=myAin+fs%cfg%dx(i)*fs%cfg%dz(k)
+         do ni=1,ninlet
+            call fs%get_bcond(name_in(ni),mybc)
+            myAin=0.0_WP
+            do n=1,mybc%itr%n_
+               i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
+               myAin=myAin+fs%cfg%dx(i)*fs%cfg%dz(k)
+            end do
+            call MPI_ALLREDUCE(myAin,Ain(ni),1,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr)
          end do
-         call MPI_ALLREDUCE(myAin,Ain(1),1,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr)
-         myAin=0.0_WP
-         call fs%get_bcond('inlet 2',mybc)
-         do n=1,mybc%itr%n_
-            i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
-            myAin=myAin+fs%cfg%dx(i)*fs%cfg%dz(k)
-         end do
-         call MPI_ALLREDUCE(myAin,Ain(2),1,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr)
-         myAin=0.0_WP
-         call fs%get_bcond('inlet 3',mybc)
-         do n=1,mybc%itr%n_
-            i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
-            myAin=myAin+fs%cfg%dx(i)*fs%cfg%dz(k)
-         end do
-         call MPI_ALLREDUCE(myAin,Ain(3),1,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr)
-         ! Form inflow momentum
-         ! Apply Dirichlet at the tube
-         !call fs%get_bcond('left inflow',mybc)
-         !do n=1,mybc%itr%no_
-         !   i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
-         !   fs%rhoU(i,j,k)=-rhoUin
-         !end do
-         !call fs%get_bcond('right inflow',mybc)
-         !do n=1,mybc%itr%no_
-         !   i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
-         !   fs%rhoU(i,j,k)=+rhoUin
-         !end do
+         ! Form and set inflow momentum
          rhoUin=MFR/Ain
-         call fs%get_bcond('inlet 1',mybc)
-         do n=1,mybc%itr%no_
-            i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
-            fs%rhoV(i,j,k)=+rhoUin(1)
-         end do
-         call fs%get_bcond('inlet 2',mybc)
-         do n=1,mybc%itr%no_
-            i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
-            fs%rhoV(i,j,k)=+rhoUin(2)
-         end do
-         call fs%get_bcond('inlet 3',mybc)
-         do n=1,mybc%itr%no_
-            i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
-            fs%rhoV(i,j,k)=+rhoUin(3)
+         do ni=1,ninlet
+            call fs%get_bcond(name_in(ni),mybc)
+            do n=1,mybc%itr%no_
+               i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
+               fs%rhoV(i,j,k)=+rhoUin(ni)
+            end do
          end do
          ! Set density from scalar
          fs%rho=0.5_WP*(sc%rho+sc%rhoold)
@@ -1167,12 +990,12 @@ contains
          fs%Wold=fs%W; fs%rhoWold=fs%rhoW
          
          ! Update time-varying Dirichlet conditions
-         update_inlet_conditions: block
-            integer :: iTime
-            iTime=min(floor(time%t/dt_inlet_data)+1,n_inlet_data)
-            rhoUin=MFR_inlet_data(iTime)/sum(Ain)
-            Tinlet=Tin_inlet_data(iTime)
-         end block update_inlet_conditions
+         !update_inlet_conditions: block
+         !   integer :: iTime
+         !   iTime=min(floor(time%t/dt_inlet_data)+1,n_inlet_data)
+         !   rhoUin=MFR_inlet_data(iTime)/sum(Ain)
+         !   Tinlet=Tin_inlet_data(iTime)
+         !end block update_inlet_conditions
          
          ! ============ UPDATE PROPERTIES ====================
          call get_visc(); viscmol=fs%visc
@@ -1293,31 +1116,13 @@ contains
             mom_bcond: block
                use lowmach_class, only: bcond
                type(bcond), pointer :: mybc
-               integer :: n,i,j,k
-               !call fs%get_bcond('left inflow',mybc)
-               !do n=1,mybc%itr%no_
-               !   i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
-               !   fs%rhoU(i,j,k)=-rhoUin
-               !end do
-               !call fs%get_bcond('right inflow',mybc)
-               !do n=1,mybc%itr%no_
-               !   i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
-               !   fs%rhoU(i,j,k)=+rhoUin
-               !end do
-               call fs%get_bcond('inlet 1',mybc)
-               do n=1,mybc%itr%no_
-                  i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
-                  fs%rhoV(i,j,k)=+rhoUin(1)
-               end do
-               call fs%get_bcond('inlet 2',mybc)
-               do n=1,mybc%itr%no_
-                  i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
-                  fs%rhoV(i,j,k)=+rhoUin(2)
-               end do
-               call fs%get_bcond('inlet 3',mybc)
-               do n=1,mybc%itr%no_
-                  i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
-                  fs%rhoV(i,j,k)=+rhoUin(3)
+               integer :: n,i,j,k,ni
+               do ni=1,ninlet
+                  call fs%get_bcond(name_in(ni),mybc)
+                  do n=1,mybc%itr%no_
+                     i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
+                     fs%rhoV(i,j,k)=+rhoUin(ni)
+                  end do
                end do
             end block mom_bcond
             
@@ -1415,31 +1220,13 @@ contains
             temp_bcond: block
                use vdscalar_class, only: bcond
                type(bcond), pointer :: mybc
-               integer :: n,i,j,k
-               !call fs%get_bcond('left inflow',mybc)
-               !do n=1,mybc%itr%no_
-               !   i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
-               !   fs%rhoU(i,j,k)=-rhoUin
-               !end do
-               !call fs%get_bcond('right inflow',mybc)
-               !do n=1,mybc%itr%no_
-               !   i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
-               !   fs%rhoU(i,j,k)=+rhoUin
-               !end do
-               call sc%get_bcond('inlet 1',mybc)
-               do n=1,mybc%itr%no_
-                  i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
-                  sc%SC(i,j,k)=Tinlet(1)
-               end do
-               call sc%get_bcond('inlet 2',mybc)
-               do n=1,mybc%itr%no_
-                  i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
-                  sc%SC(i,j,k)=Tinlet(2)
-               end do
-               call sc%get_bcond('inlet 3',mybc)
-               do n=1,mybc%itr%no_
-                  i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
-                  sc%SC(i,j,k)=Tinlet(3)
+               integer :: n,i,j,k,ni
+               do ni=1,ninlet
+                  call sc%get_bcond(name_in(ni),mybc)
+                  do n=1,mybc%itr%no_
+                     i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
+                     sc%SC(i,j,k)=Tinlet(ni)
+                  end do
                end do
             end block temp_bcond
             ! ===================================================
@@ -1493,6 +1280,10 @@ contains
                call df%pushvar(name='rhoold'  ,var=sc%rhoold)
                call df%pushvar(name='SC'      ,var=sc%SC    )
                call df%pushvar(name='Tprod'   ,var=Tprod    )
+               call df%pushvar(name='visc'    ,var=fs%visc  )
+               call df%pushvar(name='Ui'      ,var=Ui       )
+               call df%pushvar(name='Vi'      ,var=Vi       )
+               call df%pushvar(name='Wi'      ,var=Wi       )
                call df%write(fdata=trim(adjustl(dirname))//trim(adjustl(timestamp))//'/'//'data')
             end block save_restart
          end if
