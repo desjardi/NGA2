@@ -1,0 +1,2 @@
+This is an implementation of a droplet spreading problem. This is intended as a test of
+the contact line modeling in the two-phase velocity solver.

@@ -1,0 +1,32 @@
+# Parallelization
+Partition : 1 1 4
+
+# Mesh definition
+Lx : 25e-3
+Ly : 25e-3
+Lz : 25e-3
+nx : 50
+ny : 50
+nz : 50
+
+# Non-dimensional fluid properties
+Density ratio :   1000
+Viscosity ratio : 50
+#Ohnesorge :      1e-2  <<< Provided in the command line
+#Static CA :      30    <<< Provided in the command line
+
+# Time integration
+Max timestep size : 1e-4
+Max cfl number :    0.9
+Max time :          0.2
+
+# Pressure solver
+Pressure tolerance : 1e-6
+Pressure iteration : 100
+
+# Implicit velocity solver
+Implicit tolerance : 1e-6
+Implicit iteration : 100
+
+# Ensight output
+Ensight output period : 1e-3
