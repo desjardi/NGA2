@@ -62,7 +62,7 @@ contains
          ! Start from open box
          cfg%VF=1.0_WP
          ! Add plate below y=0
-         if (cfg%jproc.eq.1) cfg%VF(:,cfg%jmino:jmin-1,:)=0.0_WP
+         if (cfg%jproc.eq.1) cfg%VF(:,cfg%jmino:cfg%jmin-1,:)=0.0_WP
       end block create_walls
       
       

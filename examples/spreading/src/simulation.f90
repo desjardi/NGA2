@@ -31,7 +31,7 @@ module simulation
    
    !> Problem definition and post-processing
    real(WP), dimension(3) :: Cdrop
-   real(WP) :: Rdrop
+   real(WP) :: Rdrop,Rwet
    type(monitor) :: ppfile
    
 contains
@@ -195,8 +195,8 @@ contains
          ! Create a VOF solver
          vf=vfs(cfg=cfg,reconstruction_method=lvira,name='VOF')
          ! Prepare the analytical calculation of a sphere on a wall
-         call param_read('Initial drop radius',Rdrop,1.0_WP)
-         call param_read('Initial contact angle',contact,180.0_WP); contact=contact*Pi/180.0_WP
+         call param_read('Initial drop radius',Rdrop,default=1.0_WP)
+         call param_read('Initial contact angle',contact,default=180.0_WP); contact=contact*Pi/180.0_WP
          if (vf%cfg%nz.eq.1) then ! 2D analytical drop shape
             Rdrop=Rdrop*sqrt(Pi/(2.0_WP*(contact-sin(contact)*cos(contact))))
          else ! 3D analytical drop shape
@@ -265,8 +265,6 @@ contains
          use tpns_class, only: clipped_neumann,dirichlet,bcond
          use ils_class,  only: pcg_pfmg,pcg_amg
          use mathtools,  only: Pi
-         type(bcond), pointer :: mybc
-         real(WP) :: Vpipette
          integer :: i,j,k,n
          ! Create flow solver
          fs=tpns(cfg=cfg,name='Two-phase NS')
@@ -364,7 +362,7 @@ contains
          call ppfile%add_column(vf%VFmax,'VOF maximum')
          call ppfile%add_column(vf%VFmin,'VOF minimum')
          call ppfile%add_column(vf%VFint,'Total volume')
-         call ppfile%add_column(Vimb,'Wetted radius')
+         call ppfile%add_column(Rwet,'Wetted radius')
          call ppfile%write()
       end block create_postproc
       
