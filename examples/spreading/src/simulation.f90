@@ -195,7 +195,7 @@ contains
          ! Create a VOF solver
          vf=vfs(cfg=cfg,reconstruction_method=lvira,name='VOF')
          ! Prepare the analytical calculation of a sphere on a wall
-         call param_read('Initial drop radius',Rdrop,0.5_WP)
+         call param_read('Initial drop radius',Rdrop,1.0_WP)
          call param_read('Initial contact angle',contact,180.0_WP); contact=contact*Pi/180.0_WP
          if (vf%cfg%nz.eq.1) then ! 2D analytical drop shape
             Rdrop=Rdrop*sqrt(Pi/(2.0_WP*(contact-sin(contact)*cos(contact))))
@@ -273,9 +273,9 @@ contains
          ! Assign constant density to each phase
          fs%rho_l=1.0_WP; call param_read('Density ratio',fs%rho_g); fs%rho_g=fs%rho_l/fs%rho_g
          ! Read in surface tension coefficient and contact angle
-         fs%sigma=1.0_WP; call param_read('Static CA',fs%contact_angle); fs%contact_angle=fs%contact_angle*Pi/180.0_WP
+         fs%sigma=1.0_WP; call param_read('CA',fs%contact_angle); fs%contact_angle=fs%contact_angle*Pi/180.0_WP
          ! Assign constant viscosity to each phase
-         call param_read('Ohnesorge',fs%visc_l); call param_read('Viscosity ratio',fs%visc_g); fs%visc_g=fs%visc_l/fs%visc_g
+         call param_read('Oh',fs%visc_l); call param_read('Viscosity ratio',fs%visc_g); fs%visc_g=fs%visc_l/fs%visc_g
          ! Setup boundary conditions
          call fs%add_bcond(name='bc_xp',type=clipped_neumann,face='x',dir=+1,canCorrect=.true.,locator=xp_locator)
          call fs%add_bcond(name='bc_xm',type=clipped_neumann,face='x',dir=-1,canCorrect=.true.,locator=xm_locator)

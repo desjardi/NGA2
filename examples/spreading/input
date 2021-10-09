@@ -2,9 +2,9 @@
 Partition : 1 1 4
 
 # Mesh definition
-Lx : 25e-3
-Ly : 25e-3
-Lz : 25e-3
+Lx : 5
+Ly : 5
+Lz : 5
 nx : 50
 ny : 50
 nz : 50
@@ -12,8 +12,8 @@ nz : 50
 # Non-dimensional fluid properties
 Density ratio :   1000
 Viscosity ratio : 50
-#Ohnesorge :      1e-2  <<< Provided in the command line
-#Static CA :      30    <<< Provided in the command line
+#Oh : 1e-2  <<< Provided in the command line Oh=mu_l/sqrt(rho_l*R*sigma)
+#CA : 30    <<< Provided in the command line
 
 # Time integration
 Max timestep size : 1e-4
