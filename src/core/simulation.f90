@@ -60,7 +60,7 @@ contains
       
       ! Create an incompressible flow solver with bconds
       create_solver: block
-         use ils_class,    only: rbgs,amg,pcg_amg,pcg_parasail,gmres,gmres_pilut,smg,pfmg
+         use ils_class,    only: amg,pcg_amg,pcg_parasail,gmres,gmres_pilut,smg,pfmg
          use incomp_class, only: dirichlet,convective,neumann,clipped_neumann
          real(WP) :: visc
          ! Create flow solver
