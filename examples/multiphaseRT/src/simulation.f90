@@ -30,20 +30,20 @@ module simulation
    real(WP), dimension(:,:,:), allocatable :: Ui,Vi,Wi
    
    !> Problem definition
-   real(WP), dimension(3) :: center
-   real(WP) :: radius
+   real(WP) :: amp
    
 contains
    
    
    !> Function that defines a level set function for a falling drop problem
    function levelset_falling_drop(xyz,t) result(G)
+      use mathtools, only: twoPi
       implicit none
       real(WP), dimension(3),intent(in) :: xyz
       real(WP), intent(in) :: t
       real(WP) :: G
       ! Create the droplet
-      G=radius-sqrt(sum((xyz-center)**2))
+      G=xyz(2)-amp*cos(twoPi*xyz(1))
    end function levelset_falling_drop
    
    
@@ -86,8 +86,7 @@ contains
          ! Create a VOF solver
          vf=vfs(cfg=cfg,reconstruction_method=lvira,name='VOF')
          ! Initialize to a droplet
-         center=[0.0_WP,0.0_WP,0.0_WP]
-         radius=0.1_WP
+         amp=1.0e-3_WP
          do k=vf%cfg%kmino_,vf%cfg%kmaxo_
             do j=vf%cfg%jmino_,vf%cfg%jmaxo_
                do i=vf%cfg%imino_,vf%cfg%imaxo_
@@ -133,7 +132,7 @@ contains
       
       ! Create a two-phase flow solver without bconds
       create_and_initialize_flow_solver: block
-         use ils_class, only: gmres_amg
+         use ils_class, only: pcg_pfmg
          ! Create flow solver
          fs=tpns(cfg=cfg,name='Two-phase NS')
          ! Assign constant viscosity to each phase
@@ -153,7 +152,7 @@ contains
          call param_read('Implicit iteration',fs%implicit%maxit)
          call param_read('Implicit tolerance',fs%implicit%rcvg)
          ! Setup the solver
-         call fs%setup(pressure_ils=gmres_amg,implicit_ils=gmres_amg)
+         call fs%setup(pressure_ils=pcg_pfmg,implicit_ils=pcg_pfmg)
          ! Zero initial field
          fs%U=0.0_WP; fs%V=0.0_WP; fs%W=0.0_WP
          ! Calculate cell-centered velocities and divergence
