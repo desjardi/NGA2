@@ -180,7 +180,7 @@ contains
          ! Get initial pressure jump
 
          ! Perform initial pressure relax
-         !call fs%pressure_relax()
+         call fs%pressure_relax(vf,matmod)
 
       end block create_and_initialize_flow_solver
       
@@ -306,7 +306,7 @@ contains
          end do
 
          ! Pressure relaxation
-         !call fs%pressure_relax()
+         call fs%pressure_relax(vf,matmod)
          
          ! Output to ensight
          if (ens_evt%occurs()) call ens_out%write_data(time%t)
