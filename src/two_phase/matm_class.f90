@@ -48,6 +48,9 @@ module matm_class
 
       procedure :: register_thermoflow_variables          !< Creates pointers from material models to flow solver variables
 
+      procedure :: EOS_relax_quad                         !< Outputs terms for mechanical pressure relaxation step
+      procedure :: fix_energy                             !< Can correct erroneous energy values
+
       procedure :: viscosity_water,  viscosity_air        !< Empirical models for temperature dependence of dynamic viscosity
       procedure :: spec_heat_water,  spec_heat_air        !< Empirical models for temperature dependence of specific heat (cv)
       procedure :: therm_cond_water, therm_cond_air       !< Empirical models for temperature dependence of thermal conductivity
@@ -281,6 +284,107 @@ contains
      return
    end function EOS_all
 
+   subroutine EOS_relax_quad(this,i,j,k,myVF,srcVF,my_pjump,lbm,gbm,VF_terms,quad_terms,Pint_terms)
+     implicit none
+     class(matm), intent(inout) :: this
+     integer,  intent(in) :: i,j,k
+     real(WP), intent(in) :: myVF,srcVF,my_pjump,lbm,gbm
+     real(WP) :: KE, cJ, Pint
+     real(WP) :: n1,n0,d1,d0
+     real(WP) :: re1,r1,a1,b1,q1,g1,pr1,z1,p1
+     real(WP) :: re2,r2,a2,b2,q2,g2,pr2,z2,p2
+     real(WP) :: a,b,c
+     real(WP), parameter :: phist = 1.0_WP
+     real(WP), parameter :: phi0 = 1.0_WP-phist
+     real(WP), dimension(4) :: VF_terms
+     real(WP), dimension(3) :: quad_terms
+     real(WP), dimension(2) :: Pint_terms
+
+     ! Incoming quantities
+     ! srcVF   : predicted change in phase volume from the advection solver
+     ! myVF    : local value of volume fraction
+     ! my_pjump: pressure jump from phase 1 to 2, i.e. liquid to gas
+     ! lbm,gbm : current phase bulk moduli calculated in adv. step, used as backup
+
+     ! Working quantities
+     ! phist   : temporal weighting coefficient for pressure (phi^*)
+     ! phi0    : corresponding weighting coefficient, at timestep 0 (unrelaxed)
+     ! r1 ,r2  : phase mass for liquid, gas
+     ! re1,re2 : phase internal energy for liquid, gas
+     ! a1, a2  : phase volume fraction without srcVF
+     ! Pint    : interface pressure (weighted with acoustic impedance) at timestep 0
+     ! cJ      : part of impedance weighting applied to pressure jump
+
+     ! Outputs
+     ! a,b,c       : coefficients for quadratic equation of phase 1 eq. pressure (quad_terms)
+     ! n1,n0,d1,d0 : coefficients for rational equation of phase 1 vol. frac.    (VF_terms)
+     ! phist, (-phist*cJ*my_pjump + phi0*Pint):
+     !   ^       ^ : coefficients for interface pressure in energy exchange      (Pint_terms)
+
+     ! Calculate kinetic energy without the density (assuming single velocity)
+     KE  = 0.5_WP*(this%LU(i,j,k)**2+this%LV(i,j,k)**2+this%LW(i,j,k)**2)
+
+     ! Liquid is fluid 1, Gas is fluid 2
+     re1 = (       myVF)*(this%LrhoE(i,j,k)-this%Lrho(i,j,k)*KE)
+     re2 = (1.0_WP-myVF)*(this%GrhoE(i,j,k)-this%Grho(i,j,k)*KE)
+     r1  = (       myVF)*this%Lrho (i,j,k)
+     r2  = (1.0_WP-myVF)*this%Grho (i,j,k)
+     a1  = myVF-srcVF; a2  = 1.0_WP-a1
+
+     ! Calculate acoustic impedance (rho c) and initial interface pressure
+     ! Adjust quantities first to get to the 0 instance (without the source term)
+     this%LrhoE(i,j,k) = (       myVF)*this%LrhoE(i,j,k)/a1
+     this%GrhoE(i,j,k) = (1.0_WP-myVF)*this%GrhoE(i,j,k)/a2
+     this%Lrho (i,j,k) = (       myVF)*this%Lrho (i,j,k)/a1
+     this%Grho (i,j,k) = (1.0_WP-myVF)*this%Grho (i,j,k)/a2
+     ! Use the bulk modulus calculated from conservative variables unless it is faulty
+     z1  = this%EOS_liquid(i,j,k,'M'); if (z1.lt.0.0_WP) z1 = lbm
+     z2  = this%EOS_gas   (i,j,k,'M'); if (z2.lt.0.0_WP) z2 = gbm
+     z1  = sqrt(this%Lrho(i,j,k)*z1)
+     z2  = sqrt(this%Grho(i,j,k)*z2)
+     p1  = this%EOS_liquid(i,j,k,'p')
+     p2  = this%EOS_gas   (i,j,k,'p')
+     Pint = (z2*p1+z1*p2)/(z1+z2)
+
+     ! Weight based on impedance to get interface pressure after relaxation
+     cJ = z1/(z1+z2)
+
+     ! Adjust back
+     this%LrhoE(i,j,k) = a1*this%LrhoE(i,j,k)/(       myVF)
+     this%GrhoE(i,j,k) = a2*this%GrhoE(i,j,k)/(1.0_WP-myVF)
+     this%Lrho (i,j,k) = a1*this%Lrho (i,j,k)/(       myVF)
+     this%Grho (i,j,k) = a2*this%Grho (i,j,k)/(1.0_WP-myVF)
+
+     ! Temporal weighting of pressure
+     ! Rename property variables for brevity
+     b1  = this%b_l; b2 = this%b_g;  g1 = this%gamm_l;  g2 = this%gamm_g
+     q1  = this%q_l; q2 = this%q_g;  pr1 = this%Pref_l; pr2 = this%Pref_g
+     ! Intermediate terms
+     n1 = a1*phist + r1*b1/(g1-1.0_WP)
+     n0 = a1*(phi0*Pint - phist*cJ*my_pjump) + re1 - r1*q1 + g1/(g1-1.0_WP)*pr1*r1*b1
+     d1 = phist + 1.0_WP/(g1-1.0_WP)
+     d0 = phi0*Pint - phist*cJ*my_pjump + g1/(g1-1.0_WP)*pr1
+     ! Terms in quadratic equation
+     a = d1*((1.0_WP - r2*b2)/(g2-1.0_WP) + phist*a1) &
+       + n1*(-1.0_WP/(g2-1.0_WP) - phist)
+     b = d1*((g2*pr2-my_pjump)/(g2-1.0_WP)*(1.0_WP - r2*b2) + r2*q2 - re2 + a1*(phi0*Pint-phist*cJ*my_pjump)) &
+       + n1*(-(g2*pr2-my_pjump)/(g2-1.0_WP) - phi0*Pint + phist*cJ*my_pjump) &
+       + d0*((1.0_WP - r2*b2)/(g2-1.0_WP) + phist*a1) &
+       + n0*(-1.0_WP/(g2-1.0_WP) - phist)
+     c = d0*((g2*pr2-my_pjump)/(g2-1.0_WP)*(1.0_WP - r2*b2) + r2*q2 - re2 + a1*(phi0*Pint-phist*cJ*my_pjump)) &
+          + n0*(-(g2*pr2-my_pjump)/(g2-1.0_WP) - phi0*Pint + phist*cJ*my_pjump)
+     ! Put into vector -> for result of Peq
+     quad_terms = (/a,b,c/)
+     ! Terms in new volume fraction equations -> for VF=(n1*Peq+n0)/(d1*Peq+d0)
+     VF_terms   = (/n1,n0,d1,d0/)
+     ! Terms in interface pressure equation -> for Pint = phist*(Peq-cJ*my_pjump)+phi0*Pint)
+     Pint_terms = (/phist,-phist*cJ*my_pjump+phi0*Pint/)
+     ! ^ uses acoustic impedance to calculate the interface pressure in relaxed state,
+     !   and time interpolates with the value of interface pressure at initial state
+
+     return
+   end subroutine EOS_relax_quad
+
    function viscosity_air(this,T) result(mu)
      implicit none
      class(matm), intent(inout) :: this
@@ -353,6 +457,41 @@ contains
 
      return
    end function therm_cond_water
+
+   subroutine fix_energy(this,vf,KE,PresH,my_pjump,i,j,k,Gflag,Lflag)
+     use vfs_class, only : VFlo, VFhi
+     implicit none
+     class(matm), intent(inout) :: this
+     real(WP),    intent(in) :: vf, KE, PresH, my_pjump
+     integer,     intent(in)  :: i,j,k
+     logical,     intent(inout)  :: Gflag, Lflag
+     real(WP), parameter :: Lrhoe_fix = 1.0_WP
+     real(WP), parameter :: Grhoe_fix = 1.0_WP
+     real(WP), parameter :: P_fix = 1e-9_WP
+
+     if (vf.lt.VFhi.and. &
+          min(this%EOS_gas   (i,j,k,'p')+this%Pref_g,this%GrhoE(i,j,k)-this%Grho(i,j,k)*KE).le.0.0_WP) then
+        this%GrhoE(i,j,k) = max(Grhoe_fix+this%Grho(i,j,k)*KE,this%EOS_energy(max( &
+             P_fix-this%Pref_g, &
+             PresH-(       vf)*my_pjump &
+             ), this%Grho(i,j,k),sqrt(2.0_WP*KE),0.0_WP,0.0_WP,'gas'))
+        Gflag = .true.
+        ! Update temperature
+        !call compressible_therm_refresh_one(i,j,k)
+     end if
+     if (vf.gt.VFlo.and. &
+          min(this%EOS_liquid(i,j,k,'p')+this%Pref_l,this%LrhoE(i,j,k)-this%Lrho(i,j,k)*KE).le.0.0_WP) then
+        this%LrhoE(i,j,k) = max(Lrhoe_fix+this%Lrho(i,j,k)*KE,this%EOS_energy(max( &
+             P_fix-this%Pref_l, &
+             PresH+(1.0_WP-vf)*my_pjump &
+             ), this%Lrho(i,j,k),sqrt(2.0_WP*KE),0.0_WP,0.0_WP,'liquid'))
+        Lflag = .true.
+        ! Update temperature
+        !call compressible_therm_refresh_one(i,j,k)
+     end if
+
+     return
+   end subroutine fix_energy
 
 end module matm_class
 

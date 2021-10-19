@@ -66,6 +66,9 @@ module mast_class
       real(WP) :: correctable_area                        !< Area of bcond that can be corrected
       type(bcond), pointer :: first_bc                    !< List of bcond for our solver
 
+      ! Ad-hoc fixing of variables
+      logical :: energy_fix                               !< Turns on correction of bad energy values at the end of the timestep
+
       ! Note: naming convention of "U-cell", etc. is maintained, but this is a collocated solver.
       ! U-cells correspond to face velocities, which are interpolated and projected quantities.
       ! The cell-centered velocities, such as "Ui", correspond to the conserved mass and momentum and are not interpolated.
@@ -75,9 +78,9 @@ module mast_class
       real(WP), dimension(:,:,:), allocatable :: rho_V    !< Density field array on V-cell
       real(WP), dimension(:,:,:), allocatable :: rho_W    !< Density field array on W-cell
       ! Interpolated pressure fields
-      real(WP), dimension(:,:,:), allocatable :: P_U    !< Pressure field array on U-cell
-      real(WP), dimension(:,:,:), allocatable :: P_V    !< Pressure field array on V-cell
-      real(WP), dimension(:,:,:), allocatable :: P_W    !< Pressure field array on W-cell
+      real(WP), dimension(:,:,:), allocatable :: P_U      !< Pressure field array on U-cell
+      real(WP), dimension(:,:,:), allocatable :: P_V      !< Pressure field array on V-cell
+      real(WP), dimension(:,:,:), allocatable :: P_W      !< Pressure field array on W-cell
       
       ! Viscosity fields
       real(WP), dimension(:,:,:), allocatable :: visc     !< Viscosity field on P-cell
@@ -210,6 +213,8 @@ module mast_class
       procedure :: pressureproj_correct                   !< Overall subroutine for pressure solve correction
       procedure :: get_pgrad                              !< Calculate pressure gradient
       ! For pressure relaxation
+      procedure :: pressure_relax                         !< Loop to relax pressure, change VF and phase values, at end of timetep
+      procedure :: pressure_relax_one                     !< Routine to perform mechanical relaxation for an individual cell
 
       ! Miscellaneous
       procedure :: get_cfl                                !< Calculate maximum CFL
@@ -238,6 +243,9 @@ contains
       
       ! Set the name for the solver
       if (present(name)) self%name=trim(adjustl(name))
+
+      ! Set fixes off initially
+      self%energy_fix = .false.
       
       ! Point to pgrid object
       self%cfg=>cfg
@@ -1313,6 +1321,21 @@ contains
      end do
 
      ! Boundaries for VF, phase density, phase pressure
+     call vf%cfg%sync(vf%VF)
+     
+     ! Update phase interface to match VF field, etc.
+     ! (Mimics the end of vf%advance())
+     call vf%remove_flotsams()
+     call vf%sync_and_clean_barycenters()
+     call vf%advect_interface(dt,this%U,this%V,this%W)
+     call vf%build_interface()
+     !call vf%update_band()
+     call vf%remove_sheets()
+     call vf%polygonalize_interface()
+     !call vf%distance_from_polygon()
+     call vf%subcell_vol()
+     call vf%get_curvature()
+     ! Band and distance information should not be needed
 
      ! Mixture density
      this%RHO = vf%VF*this%Lrho + (1.0_WP-vf%VF)*this%Grho
@@ -2249,7 +2272,257 @@ contains
      nullify(DP_U,DP_V,DP_W)
 
    end subroutine pressureproj_correct
+
+   subroutine pressure_relax(this,vf,matmod)
+     use vfs_class,  only: vfs, VFlo, VFhi
+     use matm_class, only: matm
+     implicit none
+     class(mast), intent(inout) :: this
+     class(vfs),  intent(inout) :: vf
+     class(matm), intent(inout) :: matmod
+     real(WP) :: KE
+     logical  :: Gflag, Lflag
+     integer  :: i,j,k
+
+     ! Loop through domain and relax multiphase cells
+     do k=this%cfg%kmino_,this%cfg%kmaxo_
+        do j=this%cfg%jmino_,this%cfg%jmaxo_
+           do i=this%cfg%imino_,this%cfg%imaxo_
+              ! Skip wall cells
+              if (this%mask(i,j,k).eq.1) cycle
+              ! Determine if multiphase cell
+              if ((vf%VF(i,j,k).ge.VFlo).and.(vf%VF(i,j,k).le.VFhi)) then
+                 if (.true.) then !(mult_iso) then
+                    ! Mechanical relaxation
+                    call this%pressure_relax_one(vf,matmod,i,j,k)
+                 else
+                    ! Thermal relaxation
+                    ! call pressure_thermal_relax_one(i,j,k)
+                 end if
+                 ! Refresh temperature and temperature-dependent variables
+                 ! call therm_refresh_one(i,j,k)
+              end if
+           end do
+        end do
+     end do
+
+     ! Update phase interface to match VF field, etc.
+     ! (Mimics the end of vf%advance())
+     call vf%remove_flotsams()
+     call vf%advect_interface(0.0_WP,this%U,this%V,this%W)
+     call vf%build_interface()
+     !call vf%update_band()
+     call vf%remove_sheets()
+     call vf%polygonalize_interface()
+     !call vf%distance_from_polygon()
+     call vf%subcell_vol()
+     call vf%get_curvature()
+     ! * Band and distance information should not be needed
+     ! * Interface information won't be used before interface changes
+     !   Just VOF and barycenter values
+     ! * Relaxation is assumed to be instantaneous, so advect_interface happens over dt=0
+
+     ! Correct bad energy values if permitted
+     if (this%energy_fix) then
+        Gflag = .false.; Lflag = .false.
+        do k=this%cfg%kmino_,this%cfg%kmaxo_
+           do j=this%cfg%jmino_,this%cfg%jmaxo_
+              do i=this%cfg%imino_,this%cfg%imaxo_
+                 ! Skip wall cells
+                 if (this%mask(i,j,k).eq.1) cycle
+                 ! Calculate kinematic KE
+                 KE = 0.5_WP*(this%Ui(i,j,k)**2+this%Vi(i,j,k)**2+this%Wi(i,j,k)**2)
+                 ! Alter energy if needed
+                 call matmod%fix_energy(vf%VF(i,j,k),KE,this%P(i,j,k),this%sigma*vf%curv(i,j,k),i,j,k,Gflag,Lflag)
+              end do
+           end do
+        end do
+
+        if (Gflag.or.Lflag) then
+           print*,'Energy fixed during timestep: Gas ',Gflag,'Liquid ',Lflag
+        end if
+     end if
+                 
+     return
+   end subroutine pressure_relax
+
+   subroutine pressure_relax_one(this,vf,matmod,i,j,k)
+     use vfs_class, only: vfs, VFlo, VFhi
+     use matm_class, only: matm
+     implicit none
+     class(mast), intent(inout) :: this
+     class(vfs),  intent(inout) :: vf
+     class(matm), intent(inout) :: matmod
+     integer,     intent(in)    :: i,j,k
+     real(WP) :: KE,Pint,buf_VF,detmnt
+     real(WP) :: Peq,dVF,oVF,my_pjump
+     real(WP) :: rGrhoE,rLrhoE,rGrho,rLrho,rGIE,rLIE
+     real(WP), dimension(4) :: VF_terms
+     real(WP), dimension(3) :: quad_terms
+     real(WP), dimension(2) :: Pint_terms
+     real(WP), parameter :: lelim = 0.1_WP
+     real(WP), parameter :: gelim = 1.0_WP-lelim
+     real(WP), parameter :: Plo = 1e-8_WP
+
+     ! Calculate kinetic energy without the density
+     KE  = 0.5_WP*(this%Ui(i,j,k)**2+this%Vi(i,j,k)**2+this%Wi(i,j,k)**2)
+
+     ! Store old VF value
+     oVF = vf%VF(i,j,k)
+     ! Store pressure jump
+     my_pjump = this%sigma*vf%curv(i,j,k)
+
+     ! Get coefficients for quadratic equation
+     call matmod%EOS_relax_quad(i,j,k,vf%VF(i,j,k),this%srcVF(i,j,k),my_pjump,&
+          this%LrhoSS2(i,j,k),this%GrhoSS2(i,j,k),      VF_terms,quad_terms,Pint_terms)
      
+     ! Check if solution can exist
+     detmnt = quad_terms(2)**2-4.0_WP*quad_terms(1)*quad_terms(3)
+     if (detmnt.lt.0.0_WP) then
+        if (i.ge.this%cfg%imin_.and.i.le.this%cfg%imax_.and. &
+             j.ge.this%cfg%jmin_.and.j.le.this%cfg%jmax_.and. &
+             k.ge.this%cfg%kmin_.and.k.le.this%cfg%kmax_) then
+           print*,'Ptherm relax could not be performed',i,j,k,'oVF',oVF, &
+                'detmnt',detmnt,'Pliq',matmod%EOS_liquid(i,j,k,'p'),'Pgas',matmod%EOS_gas(i,j,k,'p')
+        end if
+        return
+     end if
+     
+     ! Solve quadratic equation for equilibrium pressure
+     Peq = (-quad_terms(2) + sqrt(detmnt))/(2.0_WP*quad_terms(1))
+     
+     ! Use equilibrium pressure to calculate the new VF,
+     ! and check if it is not NaN. Let bounds be handled later.
+     buf_VF = (VF_terms(1)*Peq+VF_terms(2))/(VF_terms(3)*Peq+VF_terms(4))
+     if (buf_VF.ne.buf_VF.or.&
+          (Peq+matmod%Pref_g-my_pjump.lt.Plo.and.oVF.le.gelim).or.&
+          (Peq+matmod%Pref_l.lt.Plo.and.oVF.ge.lelim)) then
+        if (i.ge.this%cfg%imin_.and.i.le.this%cfg%imax_.and. &
+             j.ge.this%cfg%jmin_.and.j.le.this%cfg%jmax_.and. &
+             k.ge.this%cfg%kmin_.and.k.le.this%cfg%kmax_) then
+           print*,'P relax could not be performed',i,j,k,'oVF',oVF,'VF*',buf_VF, &
+                'Peq',Peq,'Pliq',matmod%EOS_liquid(i,j,k,'p'),'Pgas',matmod%EOS_gas(i,j,k,'p')
+        end if
+        return
+     end if
+
+     ! Calculate how much VF changes from unrelaxed state
+     dVF = buf_VF - (oVF-this%srcVF(i,j,k))
+     ! Calculate interface pressure according to temporal interpolation and acoustic impedances
+     Pint = Pint_terms(1)*Peq+Pint_terms(2)
+     ! Use the VF increment and Pint to calculate the change of the internal energy
+     ! Store "relaxed" values with prefix r
+     if (buf_VF.le.VFhi.and.buf_VF.ge.VFlo) then
+        ! Calculate future energy unless VF is out of bounds
+        rLrhoE = (oVF*this%LrhoE(i,j,k) - Pint*dVF)/buf_VF
+        rGrhoE = ((1.0_WP-oVF)*this%GrhoE(i,j,k) + Pint*dVF)/(1.0_WP-buf_VF)
+        ! Adjust phase quantities now that the volume fraction has changed
+        rLrho  = oVF*this%Lrho(i,j,k)/buf_VF
+        rGrho  = (1.0_WP-oVF)*this%Grho(i,j,k)/(1.0_WP-buf_VF)
+        ! Calculate relaxed internal energy of each phase
+        rLIE   = rLrhoE-rLrho*KE
+        rGIE   = rGrhoE-rGrho*KE
+     end if
+
+     ! Go through cases according to the values found
+     ! Check for VF bounds, then for bad values
+     if (buf_VF.gt.VFhi) then
+        ! If equilibrium pressure or relaxed energy is negative, let liquid phase take gas energy
+        vf%VF(i,j,k) = 1.0_WP
+        this%LrhoE(i,j,k) = oVF*this%LrhoE(i,j,k) + (1.0_WP-oVF)*this%GrhoE(i,j,k)
+        this%GrhoE(i,j,k) = 0.0_WP
+        this%Lrho (i,j,k) = oVF*this%Lrho(i,j,k)
+        this%Grho (i,j,k) = 0.0_WP
+     else if (buf_VF.lt.VFlo) then
+        vf%VF(i,j,k) = 0.0_WP
+        this%GrhoE(i,j,k) = (1.0_WP-oVF)*this%GrhoE(i,j,k) + oVF*this%LrhoE(i,j,k)
+        this%LrhoE(i,j,k) = 0.0_WP
+        this%Grho (i,j,k) = (1.0_WP-oVF)*this%Grho(i,j,k)
+        this%Lrho (i,j,k) = 0.0_WP
+     else if (rGIE.lt.Plo.and.oVF.gt.gelim) then
+        ! If equilibrium energy is negative, leave other values unchanged
+        if (i.ge.this%cfg%imin_.and.i.le.this%cfg%imax_.and. &
+             j.ge.this%cfg%jmin_.and.j.le.this%cfg%jmax_.and. &
+             k.ge.this%cfg%kmin_.and.k.le.this%cfg%kmax_) then
+           print*,'Gas phase eliminated in P relax',i,j,k,'oVF',oVF,'VF*',buf_VF, &
+                'Peq-pjump',Peq-my_pjump,'Pliq',matmod%EOS_liquid(i,j,k,'p'), &
+                'Grhoe0',this%GrhoE(i,j,k)-this%Grho(i,j,k)*KE,'Grho0',this%Grho(i,j,k)
+        end if
+        vf%VF(i,j,k) = 1.0_WP
+        this%LrhoE(i,j,k) = this%LrhoE(i,j,k)
+        this%GrhoE(i,j,k) = 0.0_WP
+        this%Lrho (i,j,k) = this%Lrho(i,j,k)
+        this%Grho (i,j,k) = 0.0_WP
+     else if (rLIE.lt.Plo.and.oVF.lt.lelim) then
+        ! If equilibrium pressure is negative, leave other values unchanged
+        if (i.ge.this%cfg%imin_.and.i.le.this%cfg%imax_.and. &
+             j.ge.this%cfg%jmin_.and.j.le.this%cfg%jmax_.and. &
+             k.ge.this%cfg%kmin_.and.k.le.this%cfg%kmax_) then
+           print*,'Liq phase eliminated in P relax',i,j,k,'oVF',oVF,'VF*',buf_VF, &
+                'Peq',Peq,'Pgas',matmod%EOS_gas(i,j,k,'p'), &
+                'Lrhoe0',this%LrhoE(i,j,k)-this%Lrho(i,j,k)*KE,'Lrho0',this%Lrho(i,j,k)
+        end if
+        vf%VF(i,j,k) = 0.0_WP
+        this%GrhoE(i,j,k) = this%GrhoE(i,j,k)
+        this%LrhoE(i,j,k) = 0.0_WP
+        this%Grho (i,j,k) = this%Grho(i,j,k)
+        this%Lrho (i,j,k) = 0.0_WP
+     else if (Peq+matmod%Pref_g-my_pjump.lt.Plo.and.oVF.gt.gelim) then
+        ! If equilibrium pressure is negative, let liquid phase take the energy
+        if (i.ge.this%cfg%imin_.and.i.le.this%cfg%imax_.and. &
+             j.ge.this%cfg%jmin_.and.j.le.this%cfg%jmax_.and. &
+             k.ge.this%cfg%kmin_.and.k.le.this%cfg%kmax_) then
+           print*,'Gas phase eliminated in P relax',i,j,k,'oVF',oVF,'VF*',buf_VF, &
+                'Peq-pjump',Peq-my_pjump,'Pliq',matmod%EOS_liquid(i,j,k,'p'), &
+                'Grhoe0',this%GrhoE(i,j,k)-this%Grho(i,j,k)*KE,'Grho0',this%Grho(i,j,k)
+        end if
+        vf%VF(i,j,k) = 1.0_WP
+        this%LrhoE(i,j,k) = oVF*this%LrhoE(i,j,k) + max((1.0_WP-oVF)*this%GrhoE(i,j,k),0.0_WP)
+        this%GrhoE(i,j,k) = 0.0_WP
+        this%Lrho (i,j,k) = oVF*this%Lrho(i,j,k) ! + (1.0_WP-oVF)*Grho(i,j,k)
+        this%Grho (i,j,k) = 0.0_WP
+     else if (Peq+matmod%Pref_l.lt.Plo.and.oVF.lt.lelim) then
+        ! If equilibrium pressure is negative, let gas phase take energy
+        if (i.ge.this%cfg%imin_.and.i.le.this%cfg%imax_.and. &
+             j.ge.this%cfg%jmin_.and.j.le.this%cfg%jmax_.and. &
+             k.ge.this%cfg%kmin_.and.k.le.this%cfg%kmax_) then
+           print*,'Liq phase eliminated in P relax',i,j,k,'oVF',oVF,'VF*',buf_VF, &
+                'Peq',Peq,'Pgas',matmod%EOS_gas(i,j,k,'p'), &
+                'Lrhoe0',this%LrhoE(i,j,k)-this%Lrho(i,j,k)*KE,'Lrho0',this%Lrho(i,j,k)
+        end if
+        vf%VF(i,j,k) = 0.0_WP
+        this%GrhoE(i,j,k) = (1.0_WP-oVF)*this%GrhoE(i,j,k) + max(oVF*this%LrhoE(i,j,k),0.0_WP)
+        this%LrhoE(i,j,k) = 0.0_WP
+        this%Grho (i,j,k) = (1.0_WP-oVF)*this%Grho(i,j,k) ! + oVF*Lrho(i,j,k)
+        this%Lrho (i,j,k) = 0.0_WP
+     else
+        ! Check for errant energy values
+        if (min(rGIE,rLIE,Peq+matmod%Pref_g-my_pjump,Peq+matmod%Pref_l).lt.Plo) then
+           if (i.ge.this%cfg%imin_.and.i.le.this%cfg%imax_.and. &
+                j.ge.this%cfg%jmin_.and.j.le.this%cfg%jmax_.and. &
+                k.ge.this%cfg%kmin_.and.k.le.this%cfg%kmax_) then
+              print*,'P relax could not be performed',i,j,k,'oVF',oVF,'VF*',buf_VF, &
+                   'Peq+Pref_l',Peq+matmod%Pref_l,'Peq+Pref_g-pjump',Peq+matmod%Pref_g-my_pjump, &
+                   'rGrhoe',rGIE,'rLrhoe',rLIE
+           end if
+           return
+        end if
+
+        ! Set VF, rhoE, rho to relaxed values (made it past all the conditionals)
+        vf%VF(i,j,k) = buf_VF
+        this%LrhoE(i,j,k) = rLrhoE
+        this%GrhoE(i,j,k) = rGrhoE
+        this%Lrho (i,j,k) = rLrho
+        this%Grho (i,j,k) = rGrho
+     end if
+     
+     ! Adjust phase momentum according to new phase density
+     this%LrhoU(i,j,k) = this%Lrho(i,j,k)*this%Ui(i,j,k); this%GrhoU(i,j,k) = this%Grho(i,j,k)*this%Ui(i,j,k)
+     this%LrhoV(i,j,k) = this%Lrho(i,j,k)*this%Vi(i,j,k); this%GrhoV(i,j,k) = this%Grho(i,j,k)*this%Vi(i,j,k); 
+     this%LrhoW(i,j,k) = this%Lrho(i,j,k)*this%Wi(i,j,k); this%GrhoW(i,j,k) = this%Grho(i,j,k)*this%Wi(i,j,k)
+
+     return
+   end subroutine pressure_relax_one
 
    !> Add surface tension jump term using CSF
    subroutine add_surface_tension_jump(this,dt,div,vf,contact_model)

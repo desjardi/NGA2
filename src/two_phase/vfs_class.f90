@@ -1226,7 +1226,7 @@ contains
    subroutine advect_interface(this,dt,U,V,W)
       implicit none
       class(vfs), intent(inout) :: this
-      real(WP), intent(inout) :: dt  !< Timestep size over which to advance
+      real(WP), intent(in) :: dt  !< Timestep size over which to advance
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: U     !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: V     !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: W     !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
