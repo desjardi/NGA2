@@ -11,14 +11,14 @@ nz : 50
 
 # Non-dimensional fluid properties
 Density ratio :   1000
-Viscosity ratio : 50
+Viscosity ratio : 1!50
 #Oh : 1e-2  <<< Provided in the command line Oh=mu_l/sqrt(rho_l*R*sigma)
 #CA : 30    <<< Provided in the command line
 
 # Time integration
-Max timestep size : 1e-4
-Max cfl number :    0.9
-Max time :          0.2
+Max timestep size : 5e-3
+Max cfl number :    1.0
+Max time :          2
 
 # Pressure solver
 Pressure tolerance : 1e-6

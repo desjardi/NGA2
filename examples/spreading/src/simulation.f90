@@ -31,7 +31,8 @@ module simulation
    
    !> Problem definition and post-processing
    real(WP), dimension(3) :: Cdrop
-   real(WP) :: Rdrop,Rwet
+   real(WP) :: Rdrop
+   real(WP) :: height,R_wet,R1,R2,CArad,CAdeg,CLvel
    type(monitor) :: ppfile
    
 contains
@@ -50,55 +51,88 @@ contains
    
    !> Specialized subroutine that outputs wetting information
    subroutine postproc_data()
+      use irl_fortran_interface
       use mathtools, only: Pi
       use string,    only: str_medium
       use mpi_f08,   only: MPI_ALLREDUCE,MPI_SUM
       use parallel,  only: MPI_REAL_WP
       implicit none
-      integer :: iunit,ierr,i,j,k
-      real(WP), dimension(:), allocatable :: localvol,totalvol
-      real(WP), dimension(:), allocatable :: localvel,totalvel
-      real(WP), dimension(:), allocatable :: localpre,totalpre
-      character(len=str_medium) :: filename,timestamp
+      integer :: ierr,i,j,k
+      real(WP) :: myheight,myR1,myR2,myeps
+      !real(WP), dimension(:), allocatable :: localvol,totalvol
+      type(RectCub_type) :: cell
+      type(SepVM_type) :: separated_volume_moments
       ! Allocate vertical line storage
-      allocate(localvol(vf%cfg%jmin:vf%cfg%jmax)); localvol=0.0_WP
-      allocate(localvel(vf%cfg%jmin:vf%cfg%jmax)); localvel=0.0_WP
-      allocate(localpre(vf%cfg%jmin:vf%cfg%jmax)); localpre=0.0_WP
-      allocate(totalvol(vf%cfg%jmin:vf%cfg%jmax)); totalvol=0.0_WP
-      allocate(totalvel(vf%cfg%jmin:vf%cfg%jmax)); totalvel=0.0_WP
-      allocate(totalpre(vf%cfg%jmin:vf%cfg%jmax)); totalpre=0.0_WP
-      ! Initialize local data to zero
-      localvol=0.0_WP; localvel=0.0_WP; localpre=0.0_WP
-      ! Integrate all data over x and z
+      !allocate(localvol(vf%cfg%jmin:vf%cfg%jmax)); localvol=0.0_WP
+      !allocate(totalvol(vf%cfg%jmin:vf%cfg%jmax)); totalvol=0.0_WP
+      ! Integrate all data over x and z and reduce in parallel
+      !do k=vf%cfg%kmin_,vf%cfg%kmax_
+      !   do j=vf%cfg%jmin_,vf%cfg%jmax_
+      !      do i=vf%cfg%imin_,vf%cfg%imax_
+      !         localvol(j)=localvol(j)+vf%VF(i,j,k)*vf%cfg%dx(i)*vf%cfg%dz(k)
+      !      end do
+      !   end do
+      !end do
+      !call MPI_ALLREDUCE(localvol,totalvol,vf%cfg%ny,MPI_REAL_WP,MPI_SUM,vf%cfg%comm,ierr)
+      ! Post-process wetted radius, contact line velocity, and effective contact angle
+      !CLvel=R_wet
+      !R_wet=sqrt(totalvol(vf%cfg%jmin)/Pi)+(sqrt(totalvol(vf%cfg%jmin)/Pi)-sqrt(totalvol(vf%cfg%jmin+1)/Pi))*vf%cfg%ym(vf%cfg%jmin)/vf%cfg%dym(vf%cfg%jmin+1)
+      !if (time%t.eq.0.0_WP) then
+      !   CLvel=0.0_WP
+      !else
+      !   CLvel=(R_wet-CLvel)/time%dt
+      !end if
+      !CArad=atan2((sqrt(totalvol(vf%cfg%jmin+1)/Pi)-sqrt(totalvol(vf%cfg%jmin)/Pi)),vf%cfg%dym(vf%cfg%jmin+1))+0.5_WP*Pi
+      !CAdeg=CArad*180.0_WP/Pi
+      ! Deallocate storage
+      !deallocate(localvol,totalvol)
+      ! Post-process height of drop
+      myheight=0.0_WP
       do k=vf%cfg%kmin_,vf%cfg%kmax_
-         do j=vf%cfg%jmin_,vf%cfg%jmax_
-            do i=vf%cfg%imin_,vf%cfg%imax_
-               localvol(j)=localvol(j)+vf%VF(i,j,k)*vf%cfg%dx(i)*vf%cfg%dz(k)
-               localvel(j)=localvel(j)+vf%VF(i,j,k)*vf%cfg%dx(i)*vf%cfg%dz(k)*Vi(i,j,k)
-               localpre(j)=localpre(j)+vf%VF(i,j,k)*vf%cfg%dx(i)*vf%cfg%dz(k)*fs%P(i,j,k)
-            end do
+         do i=vf%cfg%imin_,vf%cfg%imax_
+            ! Find closest vertical column to center
+            if (vf%cfg%x(i).le.0.0_WP.and.vf%cfg%x(i+1).gt.0.0_WP.and.vf%cfg%z(k).le.0.0_WP.and.vf%cfg%z(k+1).gt.0.0_WP) then
+               ! Integrate height
+               do j=vf%cfg%jmin_,vf%cfg%jmax_
+                  myheight=myheight+vf%VF(i,j,k)*vf%cfg%dy(j)
+               end do
+            end if
          end do
       end do
-      ! All-reduce the data
-      call MPI_ALLREDUCE(localvol,totalvol,vf%cfg%ny,MPI_REAL_WP,MPI_SUM,vf%cfg%comm,ierr)
-      call MPI_ALLREDUCE(localvel,totalvel,vf%cfg%ny,MPI_REAL_WP,MPI_SUM,vf%cfg%comm,ierr)
-      call MPI_ALLREDUCE(localpre,totalpre,vf%cfg%ny,MPI_REAL_WP,MPI_SUM,vf%cfg%comm,ierr)
-      ! If root, print it out
-      if (vf%cfg%amRoot) then
-         call execute_command_line('mkdir -p radius')
-         filename='radius_'
-         write(timestamp,'(es12.5)') time%t
-         open(newunit=iunit,file='radius/'//trim(adjustl(filename))//trim(adjustl(timestamp)),form='formatted',status='replace',access='stream',iostat=ierr)
-         write(iunit,'(a12,3x,a12,3x,a12,3x,a12,3x,a12)') 'Height','Liq_Radius','Liq_Area','Liq_VFR','Liq_P'
-         do j=vf%cfg%jmin,vf%cfg%jmax
-            write(iunit,'(es12.5,3x,es12.5,3x,es12.5,3x,es12.5,3x,es12.5)') vf%cfg%ym(j),sqrt(totalvol(j)/Pi),totalvol(j),totalvel(j),totalpre(j)/(totalvol(j)+tiny(totalvol(j)))
+      call MPI_ALLREDUCE(myheight,height,1,MPI_REAL_WP,MPI_SUM,vf%cfg%comm,ierr)
+      ! Post-process wetted radius, contact line velocity, and effective contact angle from bottom cell PLIC
+      call new(cell)
+      call new(separated_volume_moments)
+      myeps=1.0e-6_WP*vf%cfg%min_meshsize
+      myR1=0.0_WP
+      myR2=0.0_WP
+      if (vf%cfg%jproc.eq.1) then
+         do k=vf%cfg%kmin_,vf%cfg%kmax_
+            do i=vf%cfg%imin_,vf%cfg%imax_
+               ! Form thin volume just above bottom of first cell
+               call construct_2pt(cell,[vf%cfg%x(i),vf%cfg%y(vf%cfg%jmin),vf%cfg%z(k)],[vf%cfg%x(i+1),vf%cfg%y(vf%cfg%jmin)+myeps,vf%cfg%z(k+1)])
+               call getNormMoments(cell,vf%liquid_gas_interface(i,vf%cfg%jmin,k),separated_volume_moments)
+               myR1=myR1+getVolume(separated_volume_moments,0)/myeps
+               ! Form thin volume just below top of first cell
+               call construct_2pt(cell,[vf%cfg%x(i),vf%cfg%y(vf%cfg%jmin+1)-myeps,vf%cfg%z(k)],[vf%cfg%x(i+1),vf%cfg%y(vf%cfg%jmin+1),vf%cfg%z(k+1)])
+               call getNormMoments(cell,vf%liquid_gas_interface(i,vf%cfg%jmin,k),separated_volume_moments)
+               myR2=myR2+getVolume(separated_volume_moments,0)/myeps
+            end do
          end do
-         close(iunit)
       end if
-      ! Deallocate work arrays
-      deallocate(localvol,totalvol)
-      deallocate(localvel,totalvel)
-      deallocate(localpre,totalpre)
+      call MPI_ALLREDUCE(myR1,R1,1,MPI_REAL_WP,MPI_SUM,vf%cfg%comm,ierr)
+      call MPI_ALLREDUCE(myR2,R2,1,MPI_REAL_WP,MPI_SUM,vf%cfg%comm,ierr)
+      R1=sqrt(R1/Pi)
+      R2=sqrt(R2/Pi)
+      CLvel=R_wet
+      R_wet=R1
+      if (time%t.eq.0.0_WP) then
+         CLvel=0.0_WP
+      else
+         CLvel=(R_wet-CLvel)/time%dt
+      end if
+      CArad=atan2((R2-R1),vf%cfg%dy(vf%cfg%jmin))+0.5_WP*Pi
+      CAdeg=CArad*180.0_WP/Pi
    end subroutine postproc_data
    
    
@@ -362,7 +396,11 @@ contains
          call ppfile%add_column(vf%VFmax,'VOF maximum')
          call ppfile%add_column(vf%VFmin,'VOF minimum')
          call ppfile%add_column(vf%VFint,'Total volume')
-         call ppfile%add_column(Rwet,'Wetted radius')
+         call ppfile%add_column(height,'Drop height')
+         call ppfile%add_column(R_wet,'Wetted radius')
+         call ppfile%add_column(CLvel,'CL vel')
+         call ppfile%add_column(CArad,'CA rad')
+         call ppfile%add_column(CAdeg,'CA deg')
          call ppfile%write()
       end block create_postproc
       
