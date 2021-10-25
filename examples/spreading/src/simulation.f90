@@ -34,7 +34,7 @@ module simulation
    !> Problem definition and post-processing
    real(WP), dimension(3) :: Cdrop
    real(WP) :: Rdrop
-   real(WP) :: height,R_wet,R1,R2,CArad,CAdeg,CLvel
+   real(WP) :: height,R_wet,CArad,CAdeg,CLvel
    type(monitor) :: ppfile
    
 contains
@@ -60,9 +60,7 @@ contains
       use parallel,  only: MPI_REAL_WP
       implicit none
       integer :: ierr,i,j,k
-      !real(WP) :: wetted_area,my_wetted_area,surface_area,my_surface_area,cos_theta,my_cos_theta
-      real(WP) :: my_height,myR1,myR2
-      real(WP), dimension(:), allocatable :: localvol,totalvol
+      real(WP) :: my_height,myR1,R1,myR2,R2
       ! Post-process height of drop
       my_height=0.0_WP
       do k=vf%cfg%kmin_,vf%cfg%kmax_
@@ -77,57 +75,29 @@ contains
          end do
       end do
       call MPI_ALLREDUCE(my_height,height,1,MPI_REAL_WP,MPI_SUM,vf%cfg%comm,ierr)
-      ! Allocate vertical line storage
-      allocate(localvol(vf%cfg%jmin:vf%cfg%jmax)); localvol=0.0_WP
-      allocate(totalvol(vf%cfg%jmin:vf%cfg%jmax)); totalvol=0.0_WP
-      ! Integrate all data over x and z and reduce in parallel
-      do k=vf%cfg%kmin_,vf%cfg%kmax_
-         do j=vf%cfg%jmin_,vf%cfg%jmax_
+      ! Post-process wetted radius, contact line velocity, and effective contact angle from bottom cell PLIC
+      myR1=0.0_WP; myR2=0.0_WP
+      if (vf%cfg%jproc.eq.1) then
+         do k=vf%cfg%kmin_,vf%cfg%kmax_
             do i=vf%cfg%imin_,vf%cfg%imax_
-               localvol(j)=localvol(j)+vf%VF(i,j,k)*vf%cfg%dx(i)*vf%cfg%dz(k)
+               ! Compute the wetted area from VOF
+               myR1=myR1+vf%VF(i,vf%cfg%jmin,k)*vf%cfg%dx(i)*vf%cfg%dz(k)
+               ! Compute the wetted area from top of PLIC
+               call getMoments(vf%polyface(2,i,vf%cfg%jmin+1,k),vf%liquid_gas_interface(i,vf%cfg%jmin,k),R2); myR2=myR2+abs(R2)
             end do
          end do
-      end do
-      call MPI_ALLREDUCE(localvol,totalvol,vf%cfg%ny,MPI_REAL_WP,MPI_SUM,vf%cfg%comm,ierr)
-      ! Post-process wetted radius, contact line velocity, and effective contact angle from VOF
+      end if
+      call MPI_ALLREDUCE(myR1,R1,1,MPI_REAL_WP,MPI_SUM,vf%cfg%comm,ierr); R1=sqrt(R1/Pi)
+      call MPI_ALLREDUCE(myR2,R2,1,MPI_REAL_WP,MPI_SUM,vf%cfg%comm,ierr); R2=sqrt(R2/Pi)
       CLvel=R_wet
-      R_wet=sqrt(totalvol(vf%cfg%jmin)/Pi)+(sqrt(totalvol(vf%cfg%jmin)/Pi)-sqrt(totalvol(vf%cfg%jmin+1)/Pi))*vf%cfg%ym(vf%cfg%jmin)/vf%cfg%dym(vf%cfg%jmin+1)
+      R_wet=2.0_WP*R1-R2
       if (time%t.eq.0.0_WP) then
          CLvel=0.0_WP
       else
          CLvel=(R_wet-CLvel)/time%dt
       end if
-      CArad=atan2((sqrt(totalvol(vf%cfg%jmin+1)/Pi)-sqrt(totalvol(vf%cfg%jmin)/Pi)),vf%cfg%dym(vf%cfg%jmin+1))+0.5_WP*Pi
+      CArad=atan2((R2-R1),0.5_WP*vf%cfg%dy(vf%cfg%jmin))+0.5_WP*Pi
       CAdeg=CArad*180.0_WP/Pi
-      ! Deallocate storage
-      deallocate(localvol,totalvol)
-      ! Post-process wetted radius, contact line velocity, and effective contact angle from bottom cell PLIC
-      !my_wetted_area=0.0_WP; my_surface_area=0.0_WP; my_cos_theta=0.0_WP
-      !if (vf%cfg%jproc.eq.1) then
-      !   do k=vf%cfg%kmin_,vf%cfg%kmax_
-      !      do i=vf%cfg%imin_,vf%cfg%imax_
-      !         ! Compute the wetted area
-      !         call getMoments(vf%polyface(2,i,vf%cfg%jmin,k),vf%liquid_gas_interface(i,vf%cfg%jmin,k),wetted_area)
-      !         my_wetted_area=my_wetted_area+abs(wetted_area)
-      !         ! Also average cos(theta)
-      !         surface_area=abs(calculateVolume(vf%interface_polygon(1,i,vf%cfg%jmin,k)))
-      !         cos_theta=dot_product(calculateNormal(vf%interface_polygon(1,i,vf%cfg%jmin,k)),[0.0_WP,1.0_WP,0.0_WP])
-      !         my_surface_area=my_surface_area+surface_area
-      !         my_cos_theta=my_cos_theta+surface_area*cos_theta
-      !      end do
-      !   end do
-      !end if
-      !call MPI_ALLREDUCE(my_wetted_area,wetted_area,1,MPI_REAL_WP,MPI_SUM,vf%cfg%comm,ierr)
-      !call MPI_ALLREDUCE(my_surface_area,surface_area,1,MPI_REAL_WP,MPI_SUM,vf%cfg%comm,ierr)
-      !call MPI_ALLREDUCE(my_cos_theta,cos_theta,1,MPI_REAL_WP,MPI_SUM,vf%cfg%comm,ierr)
-      !cos_theta=cos_theta/surface_area; CArad=acos(cos_theta); CAdeg=CArad*180.0_WP/Pi
-      !CLvel=R_wet
-      !R_wet=sqrt(wetted_area/Pi)
-      !if (time%t.eq.0.0_WP) then
-      !   CLvel=0.0_WP
-      !else
-      !   CLvel=(R_wet-CLvel)/time%dt
-      !end if
    end subroutine postproc_data
    
    
