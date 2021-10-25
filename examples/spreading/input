@@ -11,7 +11,7 @@ nz : 50
 
 # Non-dimensional fluid properties
 Density ratio :   1000
-Viscosity ratio : 1!50
+Viscosity ratio : 50
 #Oh : 1e-2  <<< Provided in the command line Oh=mu_l/sqrt(rho_l*R*sigma)
 #CA : 30    <<< Provided in the command line
 

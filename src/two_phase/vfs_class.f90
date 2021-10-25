@@ -121,6 +121,7 @@ module vfs_class
       type(ListVM_VMAN_type), dimension(:,:,:),   allocatable :: triangle_moments_storage
       type(LocLink_type),     dimension(:,:,:),   allocatable :: localizer_link
       type(Poly_type),        dimension(:,:,:,:), allocatable :: interface_polygon
+      type(Poly_type),        dimension(:,:,:,:), allocatable :: polyface
       type(SepVM_type),       dimension(:,:,:,:), allocatable :: face_flux
       
       ! Masking info for metric modification
@@ -284,6 +285,7 @@ contains
       implicit none
       class(vfs), intent(inout) :: this
       integer :: i,j,k,n,tag
+      real(WP), dimension(3,4) :: vert
       integer(IRL_LargeOffsetIndex_t) :: total_cells
       
       ! Transfer small constants to IRL
@@ -302,6 +304,7 @@ contains
       allocate(this%triangle_moments_storage(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
       allocate(this%localizer_link          (this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
       allocate(this%interface_polygon(1:max_interface_planes,this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
+      allocate(this%polyface            (1:3,this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
       
       ! Work arrays for face fluxes
       allocate(this%face_flux(1:3,this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
@@ -351,6 +354,38 @@ contains
                do n=1,max_interface_planes
                   call new(this%interface_polygon(n,i,j,k))
                end do
+            end do
+         end do
+      end do
+      
+      ! Polygonal representation of cell faces
+      do k=this%cfg%kmino_,this%cfg%kmaxo_
+         do j=this%cfg%jmino_,this%cfg%jmaxo_
+            do i=this%cfg%imino_,this%cfg%imaxo_
+               ! Polygonal representation of the x-face
+               call new(this%polyface(1,i,j,k))
+               vert(:,1)=[this%cfg%x(i),this%cfg%y(j  ),this%cfg%z(k  )]
+               vert(:,2)=[this%cfg%x(i),this%cfg%y(j+1),this%cfg%z(k  )]
+               vert(:,3)=[this%cfg%x(i),this%cfg%y(j+1),this%cfg%z(k+1)]
+               vert(:,4)=[this%cfg%x(i),this%cfg%y(j  ),this%cfg%z(k+1)]
+               call construct(this%polyface(1,i,j,k),4,vert)
+               call setPlaneOfExistence(this%polyface(1,i,j,k),[1.0_WP,0.0_WP,0.0_WP,this%cfg%x(i)])
+               ! Polygonal representation of the y-face
+               call new(this%polyface(2,i,j,k))
+               vert(:,1)=[this%cfg%x(i  ),this%cfg%y(j),this%cfg%z(k  )]
+               vert(:,2)=[this%cfg%x(i  ),this%cfg%y(j),this%cfg%z(k+1)]
+               vert(:,3)=[this%cfg%x(i+1),this%cfg%y(j),this%cfg%z(k+1)]
+               vert(:,4)=[this%cfg%x(i+1),this%cfg%y(j),this%cfg%z(k  )]
+               call construct(this%polyface(2,i,j,k),4,vert)
+               call setPlaneOfExistence(this%polyface(2,i,j,k),[0.0_WP,1.0_WP,0.0_WP,this%cfg%y(j)])
+               ! Polygonal representation of the z-face
+               call new(this%polyface(3,i,j,k))
+               vert(:,1)=[this%cfg%x(i  ),this%cfg%y(j  ),this%cfg%z(k)]
+               vert(:,2)=[this%cfg%x(i+1),this%cfg%y(j  ),this%cfg%z(k)]
+               vert(:,3)=[this%cfg%x(i+1),this%cfg%y(j+1),this%cfg%z(k)]
+               vert(:,4)=[this%cfg%x(i  ),this%cfg%y(j+1),this%cfg%z(k)]
+               call construct(this%polyface(3,i,j,k),4,vert)
+               call setPlaneOfExistence(this%polyface(3,i,j,k),[0.0_WP,0.0_WP,1.0_WP,this%cfg%z(k)])
             end do
          end do
       end do

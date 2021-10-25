@@ -2444,17 +2444,18 @@ contains
    subroutine add_static_contact(this,vf)
       use mathtools, only: normalize
       use vfs_class, only: vfs
-      use irl_fortran_interface, only: calculateNormal,calculateVolume
+      use irl_fortran_interface
       implicit none
       class(tpns), intent(inout) :: this
       class(vfs),  intent(in) :: vf
       integer :: i,j,k
-      real(WP), dimension(3) :: nw,mynorm
-      real(WP) :: dd,mysurf
+      real(WP), dimension(3) :: nw
+      real(WP), dimension(2) :: fvof
+      real(WP), dimension(:,:,:), allocatable :: GFM
+      real(WP) :: dd,mysurf,mycos
       real(WP) :: cos_contact_angle
       real(WP) :: sin_contact_angle
       real(WP) :: tan_contact_angle
-      real(WP), dimension(:,:,:), allocatable :: GFM
       real(WP), parameter :: cfactor=1.0_WP
       
       ! Allocate and zero out binarized VF for GFM-style jump distribution
@@ -2468,77 +2469,185 @@ contains
       sin_contact_angle=sin(this%contact_angle)
       tan_contact_angle=tan(this%contact_angle)
       
-      ! Loop over domain and identify cells that require contact angle model in GFM style
+      ! Loop over domain and identify cells that require contact angle model
       do k=this%cfg%kmin_,this%cfg%kmax_+1
          do j=this%cfg%jmin_,this%cfg%jmax_+1
             do i=this%cfg%imin_,this%cfg%imax_+1
                
-               ! Check if we have an interface on the x-face then check walls
+               ! Check if we have an interface in the vicinity of the x-face
                mysurf=abs(calculateVolume(vf%interface_polygon(1,i-1,j,k)))+abs(calculateVolume(vf%interface_polygon(1,i,j,k)))
-               if (GFM(i,j,k).ne.GFM(i-1,j,k).and.mysurf.gt.0.0_WP) then
-                  mynorm=normalize(abs(calculateVolume(vf%interface_polygon(1,i-1,j,k)))*calculateNormal(vf%interface_polygon(1,i-1,j,k))+&
-                  &                abs(calculateVolume(vf%interface_polygon(1,i  ,j,k)))*calculateNormal(vf%interface_polygon(1,i  ,j,k)))
-                  if (this%umask(i,j-1,k).eq.1) then
+               if (mysurf.gt.0.0_WP) then
+                  ! Compute the liquid area fractions from GFM
+                  fvof=GFM(i-1:i,j,k)
+                  ! Check for local wall configuration - wall in y-
+                  if (this%umask(i,j,k).eq.0.and.this%mask(i,j-1,k).eq.1.and.this%mask(i-1,j-1,k).eq.1) then
+                     ! Define wall
                      nw=[0.0_WP,+1.0_WP,0.0_WP]; dd=cfactor*this%cfg%dy(j)
-                     this%Pjx(i,j,k)=this%Pjx(i,j,k)+this%sigma*sum(this%divu_x(:,i,j,k)*GFM(i-1:i,j,k))*(dot_product(mynorm,nw)-cos_contact_angle)/dd
+                     ! Compute the liquid area fractions from PLIC
+                     !call getMoments(vf%polyface(2,i-1,j,k),vf%liquid_gas_interface(i-1,j,k),fvof(1)); fvof(1)=abs(fvof(1))/abs(calculateVolume(vf%polyface(2,i-1,j,k)))
+                     !call getMoments(vf%polyface(2,i  ,j,k),vf%liquid_gas_interface(i  ,j,k),fvof(2)); fvof(2)=abs(fvof(2))/abs(calculateVolume(vf%polyface(2,i  ,j,k)))
+                     ! Surface-averaged local cos(CA)
+                     mycos=(abs(calculateVolume(vf%interface_polygon(1,i-1,j,k)))*dot_product(calculateNormal(vf%interface_polygon(1,i-1,j,k)),nw)+&
+                     &      abs(calculateVolume(vf%interface_polygon(1,i  ,j,k)))*dot_product(calculateNormal(vf%interface_polygon(1,i  ,j,k)),nw))/mysurf
+                     ! Add source term
+                     this%Pjx(i,j,k)=this%Pjx(i,j,k)+this%sigma*sum(this%divu_x(:,i,j,k)*fvof(:))*(mycos-cos_contact_angle)/dd
                   end if
-                  if (this%umask(i,j+1,k).eq.1) then
+                  ! Check for local wall configuration - wall in y+
+                  if (this%umask(i,j,k).eq.0.and.this%mask(i,j+1,k).eq.1.and.this%mask(i-1,j+1,k).eq.1) then
+                     ! Define wall
                      nw=[0.0_WP,-1.0_WP,0.0_WP]; dd=cfactor*this%cfg%dy(j)
-                     this%Pjx(i,j,k)=this%Pjx(i,j,k)+this%sigma*sum(this%divu_x(:,i,j,k)*GFM(i-1:i,j,k))*(dot_product(mynorm,nw)-cos_contact_angle)/dd
+                     ! Compute the liquid area fractions
+                     !call getMoments(vf%polyface(2,i-1,j+1,k),vf%liquid_gas_interface(i-1,j,k),fvof(1)); fvof(1)=abs(fvof(1))/abs(calculateVolume(vf%polyface(2,i-1,j+1,k)))
+                     !call getMoments(vf%polyface(2,i  ,j+1,k),vf%liquid_gas_interface(i  ,j,k),fvof(2)); fvof(2)=abs(fvof(2))/abs(calculateVolume(vf%polyface(2,i  ,j+1,k)))
+                     ! Surface-averaged local cos(CA)
+                     mycos=(abs(calculateVolume(vf%interface_polygon(1,i-1,j,k)))*dot_product(calculateNormal(vf%interface_polygon(1,i-1,j,k)),nw)+&
+                     &      abs(calculateVolume(vf%interface_polygon(1,i  ,j,k)))*dot_product(calculateNormal(vf%interface_polygon(1,i  ,j,k)),nw))/mysurf
+                     ! Add source term
+                     this%Pjx(i,j,k)=this%Pjx(i,j,k)+this%sigma*sum(this%divu_x(:,i,j,k)*fvof(:))*(mycos-cos_contact_angle)/dd
                   end if
-                  if (this%umask(i,j,k-1).eq.1) then
+                  ! Check for local wall configuration - wall in z-
+                  if (this%umask(i,j,k).eq.0.and.this%mask(i,j,k-1).eq.1.and.this%mask(i-1,j,k-1).eq.1) then
+                     ! Define wall
                      nw=[0.0_WP,0.0_WP,+1.0_WP]; dd=cfactor*this%cfg%dz(k)
-                     this%Pjx(i,j,k)=this%Pjx(i,j,k)+this%sigma*sum(this%divu_x(:,i,j,k)*GFM(i-1:i,j,k))*(dot_product(mynorm,nw)-cos_contact_angle)/dd
+                     ! Compute the liquid area fractions
+                     !call getMoments(vf%polyface(3,i-1,j,k),vf%liquid_gas_interface(i-1,j,k),fvof(1)); fvof(1)=abs(fvof(1))/abs(calculateVolume(vf%polyface(3,i-1,j,k)))
+                     !call getMoments(vf%polyface(3,i  ,j,k),vf%liquid_gas_interface(i  ,j,k),fvof(2)); fvof(2)=abs(fvof(2))/abs(calculateVolume(vf%polyface(3,i  ,j,k)))
+                     ! Surface-averaged local cos(CA)
+                     mycos=(abs(calculateVolume(vf%interface_polygon(1,i-1,j,k)))*dot_product(calculateNormal(vf%interface_polygon(1,i-1,j,k)),nw)+&
+                     &      abs(calculateVolume(vf%interface_polygon(1,i  ,j,k)))*dot_product(calculateNormal(vf%interface_polygon(1,i  ,j,k)),nw))/mysurf
+                     ! Add source term
+                     this%Pjx(i,j,k)=this%Pjx(i,j,k)+this%sigma*sum(this%divu_x(:,i,j,k)*fvof(:))*(mycos-cos_contact_angle)/dd
                   end if
-                  if (this%umask(i,j,k+1).eq.1) then
+                  ! Check for local wall configuration - wall in z+
+                  if (this%umask(i,j,k).eq.0.and.this%mask(i,j,k+1).eq.1.and.this%mask(i-1,j,k+1).eq.1) then
+                     ! Define wall
                      nw=[0.0_WP,0.0_WP,-1.0_WP]; dd=cfactor*this%cfg%dz(k)
-                     this%Pjx(i,j,k)=this%Pjx(i,j,k)+this%sigma*sum(this%divu_x(:,i,j,k)*GFM(i-1:i,j,k))*(dot_product(mynorm,nw)-cos_contact_angle)/dd
+                     ! Compute the liquid area fractions
+                     !call getMoments(vf%polyface(3,i-1,j,k+1),vf%liquid_gas_interface(i-1,j,k),fvof(1)); fvof(1)=abs(fvof(1))/abs(calculateVolume(vf%polyface(3,i-1,j,k+1)))
+                     !call getMoments(vf%polyface(3,i  ,j,k+1),vf%liquid_gas_interface(i  ,j,k),fvof(2)); fvof(2)=abs(fvof(2))/abs(calculateVolume(vf%polyface(3,i  ,j,k+1)))
+                     ! Surface-averaged local cos(CA)
+                     mycos=(abs(calculateVolume(vf%interface_polygon(1,i-1,j,k)))*dot_product(calculateNormal(vf%interface_polygon(1,i-1,j,k)),nw)+&
+                     &      abs(calculateVolume(vf%interface_polygon(1,i  ,j,k)))*dot_product(calculateNormal(vf%interface_polygon(1,i  ,j,k)),nw))/mysurf
+                     ! Add source term
+                     this%Pjx(i,j,k)=this%Pjx(i,j,k)+this%sigma*sum(this%divu_x(:,i,j,k)*fvof(:))*(mycos-cos_contact_angle)/dd
                   end if
                end if
                
-               ! Check if we have an interface on the y-face then check walls
+               ! Check if we have an interface in the vicinity of the y-face
                mysurf=abs(calculateVolume(vf%interface_polygon(1,i,j-1,k)))+abs(calculateVolume(vf%interface_polygon(1,i,j,k)))
-               if (GFM(i,j,k).ne.GFM(i,j-1,k).and.mysurf.gt.0.0_WP) then
-                  mynorm=normalize(abs(calculateVolume(vf%interface_polygon(1,i,j-1,k)))*calculateNormal(vf%interface_polygon(1,i,j-1,k))+&
-                  &                abs(calculateVolume(vf%interface_polygon(1,i,j  ,k)))*calculateNormal(vf%interface_polygon(1,i,j  ,k)))
-                  if (this%vmask(i-1,j,k).eq.1) then
+               if (mysurf.gt.0.0_WP) then
+                  ! Compute the liquid area fractions from GFM
+                  fvof=GFM(i,j-1:j,k)
+                  ! Check for local wall configuration - wall in x-
+                  if (this%vmask(i,j,k).eq.0.and.this%mask(i-1,j,k).eq.1.and.this%mask(i-1,j-1,k).eq.1) then
+                     ! Define wall
                      nw=[+1.0_WP,0.0_WP,0.0_WP]; dd=cfactor*this%cfg%dx(i)
-                     this%Pjy(i,j,k)=this%Pjy(i,j,k)+this%sigma*sum(this%divv_y(:,i,j,k)*GFM(i,j-1:j,k))*(dot_product(mynorm,nw)-cos_contact_angle)/dd
+                     ! Compute the liquid area fractions
+                     !call getMoments(vf%polyface(1,i,j-1,k),vf%liquid_gas_interface(i,j-1,k),fvof(1)); fvof(1)=abs(fvof(1))/abs(calculateVolume(vf%polyface(1,i,j-1,k)))
+                     !call getMoments(vf%polyface(1,i,j  ,k),vf%liquid_gas_interface(i,j  ,k),fvof(2)); fvof(2)=abs(fvof(2))/abs(calculateVolume(vf%polyface(1,i,j  ,k)))
+                     ! Surface-averaged local cos(CA)
+                     mycos=(abs(calculateVolume(vf%interface_polygon(1,i,j-1,k)))*dot_product(calculateNormal(vf%interface_polygon(1,i,j-1,k)),nw)+&
+                     &      abs(calculateVolume(vf%interface_polygon(1,i,j  ,k)))*dot_product(calculateNormal(vf%interface_polygon(1,i,j  ,k)),nw))/mysurf
+                     ! Add source term
+                     this%Pjy(i,j,k)=this%Pjy(i,j,k)+this%sigma*sum(this%divv_y(:,i,j,k)*fvof(:))*(mycos-cos_contact_angle)/dd
                   end if
-                  if (this%vmask(i+1,j,k).eq.1) then
+                  ! Check for local wall configuration - wall in x+
+                  if (this%vmask(i,j,k).eq.0.and.this%mask(i+1,j,k).eq.1.and.this%mask(i+1,j-1,k).eq.1) then
+                     ! Define wall
                      nw=[-1.0_WP,0.0_WP,0.0_WP]; dd=cfactor*this%cfg%dx(i)
-                     this%Pjy(i,j,k)=this%Pjy(i,j,k)+this%sigma*sum(this%divv_y(:,i,j,k)*GFM(i,j-1:j,k))*(dot_product(mynorm,nw)-cos_contact_angle)/dd
+                     ! Compute the liquid area fractions
+                     !call getMoments(vf%polyface(1,i+1,j-1,k),vf%liquid_gas_interface(i,j-1,k),fvof(1)); fvof(1)=abs(fvof(1))/abs(calculateVolume(vf%polyface(1,i+1,j-1,k)))
+                     !call getMoments(vf%polyface(1,i+1,j  ,k),vf%liquid_gas_interface(i,j  ,k),fvof(2)); fvof(2)=abs(fvof(2))/abs(calculateVolume(vf%polyface(1,i+1,j  ,k)))
+                     ! Surface-averaged local cos(CA)
+                     mycos=(abs(calculateVolume(vf%interface_polygon(1,i,j-1,k)))*dot_product(calculateNormal(vf%interface_polygon(1,i,j-1,k)),nw)+&
+                     &      abs(calculateVolume(vf%interface_polygon(1,i,j  ,k)))*dot_product(calculateNormal(vf%interface_polygon(1,i,j  ,k)),nw))/mysurf
+                     ! Add source term
+                     this%Pjy(i,j,k)=this%Pjy(i,j,k)+this%sigma*sum(this%divv_y(:,i,j,k)*fvof(:))*(mycos-cos_contact_angle)/dd
                   end if
-                  if (this%vmask(i,j,k-1).eq.1) then
+                  ! Check for local wall configuration - wall in z-
+                  if (this%vmask(i,j,k).eq.0.and.this%mask(i,j,k-1).eq.1.and.this%mask(i,j-1,k-1).eq.1) then
+                     ! Define wall
                      nw=[0.0_WP,0.0_WP,+1.0_WP]; dd=cfactor*this%cfg%dz(k)
-                     this%Pjy(i,j,k)=this%Pjy(i,j,k)+this%sigma*sum(this%divv_y(:,i,j,k)*GFM(i,j-1:j,k))*(dot_product(mynorm,nw)-cos_contact_angle)/dd
+                     ! Compute the liquid area fractions
+                     !call getMoments(vf%polyface(3,i,j-1,k),vf%liquid_gas_interface(i,j-1,k),fvof(1)); fvof(1)=abs(fvof(1))/abs(calculateVolume(vf%polyface(3,i,j-1,k)))
+                     !call getMoments(vf%polyface(3,i,j  ,k),vf%liquid_gas_interface(i,j  ,k),fvof(2)); fvof(2)=abs(fvof(2))/abs(calculateVolume(vf%polyface(3,i,j  ,k)))
+                     ! Surface-averaged local cos(CA)
+                     mycos=(abs(calculateVolume(vf%interface_polygon(1,i,j-1,k)))*dot_product(calculateNormal(vf%interface_polygon(1,i,j-1,k)),nw)+&
+                     &      abs(calculateVolume(vf%interface_polygon(1,i,j  ,k)))*dot_product(calculateNormal(vf%interface_polygon(1,i,j  ,k)),nw))/mysurf
+                     ! Add source term
+                     this%Pjy(i,j,k)=this%Pjy(i,j,k)+this%sigma*sum(this%divv_y(:,i,j,k)*fvof(:))*(mycos-cos_contact_angle)/dd
                   end if
-                  if (this%vmask(i,j,k+1).eq.1) then
+                  ! Check for local wall configuration - wall in z+
+                  if (this%vmask(i,j,k).eq.0.and.this%mask(i,j,k+1).eq.1.and.this%mask(i,j-1,k+1).eq.1) then
+                     ! Define wall
                      nw=[0.0_WP,0.0_WP,-1.0_WP]; dd=cfactor*this%cfg%dz(k)
-                     this%Pjy(i,j,k)=this%Pjy(i,j,k)+this%sigma*sum(this%divv_y(:,i,j,k)*GFM(i,j-1:j,k))*(dot_product(mynorm,nw)-cos_contact_angle)/dd
+                     ! Compute the liquid area fractions
+                     !call getMoments(vf%polyface(3,i,j-1,k+1),vf%liquid_gas_interface(i,j-1,k),fvof(1)); fvof(1)=abs(fvof(1))/abs(calculateVolume(vf%polyface(3,i,j-1,k+1)))
+                     !call getMoments(vf%polyface(3,i,j  ,k+1),vf%liquid_gas_interface(i,j  ,k),fvof(2)); fvof(2)=abs(fvof(2))/abs(calculateVolume(vf%polyface(3,i,j  ,k+1)))
+                     ! Surface-averaged local cos(CA)
+                     mycos=(abs(calculateVolume(vf%interface_polygon(1,i,j-1,k)))*dot_product(calculateNormal(vf%interface_polygon(1,i,j-1,k)),nw)+&
+                     &      abs(calculateVolume(vf%interface_polygon(1,i,j  ,k)))*dot_product(calculateNormal(vf%interface_polygon(1,i,j  ,k)),nw))/mysurf
+                     ! Add source term
+                     this%Pjy(i,j,k)=this%Pjy(i,j,k)+this%sigma*sum(this%divv_y(:,i,j,k)*fvof(:))*(mycos-cos_contact_angle)/dd
                   end if
                end if
                
-               ! Check if we have an interface on the z-face then check walls
+               ! Check if we have an interface in the vicinity of the z-face
                mysurf=abs(calculateVolume(vf%interface_polygon(1,i,j,k-1)))+abs(calculateVolume(vf%interface_polygon(1,i,j,k)))
-               if (GFM(i,j,k).ne.GFM(i,j,k-1).and.mysurf.gt.0.0_WP) then
-                  mynorm=normalize(abs(calculateVolume(vf%interface_polygon(1,i,j,k-1)))*calculateNormal(vf%interface_polygon(1,i,j,k-1))+&
-                  &                abs(calculateVolume(vf%interface_polygon(1,i,j,k  )))*calculateNormal(vf%interface_polygon(1,i,j,k  )))
-                  if (this%wmask(i-1,j,k).eq.1) then
+               if (mysurf.gt.0.0_WP) then
+                  ! Compute the liquid area fractions from GFM
+                  fvof=GFM(i,j,k-1:k)
+                  ! Check for local wall configuration - wall in x-
+                  if (this%wmask(i,j,k).eq.0.and.this%mask(i-1,j,k).eq.1.and.this%mask(i-1,j,k-1).eq.1) then
+                     ! Define wall
                      nw=[+1.0_WP,0.0_WP,0.0_WP]; dd=cfactor*this%cfg%dx(i)
-                     this%Pjz(i,j,k)=this%Pjz(i,j,k)+this%sigma*sum(this%divw_z(:,i,j,k)*GFM(i,j,k-1:k))*(dot_product(mynorm,nw)-cos_contact_angle)/dd
+                     ! Compute the liquid area fractions
+                     !call getMoments(vf%polyface(1,i,j,k-1),vf%liquid_gas_interface(i,j,k-1),fvof(1)); fvof(1)=abs(fvof(1))/abs(calculateVolume(vf%polyface(1,i,j,k-1)))
+                     !call getMoments(vf%polyface(1,i,j,k  ),vf%liquid_gas_interface(i,j,k  ),fvof(2)); fvof(2)=abs(fvof(2))/abs(calculateVolume(vf%polyface(1,i,j,k  )))
+                     ! Surface-averaged local cos(CA)
+                     mycos=(abs(calculateVolume(vf%interface_polygon(1,i,j,k-1)))*dot_product(calculateNormal(vf%interface_polygon(1,i,j,k-1)),nw)+&
+                     &      abs(calculateVolume(vf%interface_polygon(1,i,j,k  )))*dot_product(calculateNormal(vf%interface_polygon(1,i,j,k  )),nw))/mysurf
+                     ! Add source term
+                     this%Pjz(i,j,k)=this%Pjz(i,j,k)+this%sigma*sum(this%divw_z(:,i,j,k)*fvof(:))*(mycos-cos_contact_angle)/dd
                   end if
-                  if (this%wmask(i+1,j,k).eq.1) then
+                  ! Check for local wall configuration - wall in x+
+                  if (this%wmask(i,j,k).eq.0.and.this%mask(i+1,j,k).eq.1.and.this%mask(i+1,j,k-1).eq.1) then
+                     ! Define wall
                      nw=[-1.0_WP,0.0_WP,0.0_WP]; dd=cfactor*this%cfg%dx(i)
-                     this%Pjz(i,j,k)=this%Pjz(i,j,k)+this%sigma*sum(this%divw_z(:,i,j,k)*GFM(i,j,k-1:k))*(dot_product(mynorm,nw)-cos_contact_angle)/dd
+                     ! Compute the liquid area fractions
+                     !call getMoments(vf%polyface(1,i+1,j,k-1),vf%liquid_gas_interface(i,j,k-1),fvof(1)); fvof(1)=abs(fvof(1))/abs(calculateVolume(vf%polyface(1,i+1,j,k-1)))
+                     !call getMoments(vf%polyface(1,i+1,j,k  ),vf%liquid_gas_interface(i,j,k  ),fvof(2)); fvof(2)=abs(fvof(2))/abs(calculateVolume(vf%polyface(1,i+1,j,k  )))
+                     ! Surface-averaged local cos(CA)
+                     mycos=(abs(calculateVolume(vf%interface_polygon(1,i,j,k-1)))*dot_product(calculateNormal(vf%interface_polygon(1,i,j,k-1)),nw)+&
+                     &      abs(calculateVolume(vf%interface_polygon(1,i,j,k  )))*dot_product(calculateNormal(vf%interface_polygon(1,i,j,k  )),nw))/mysurf
+                     ! Add source term
+                     this%Pjz(i,j,k)=this%Pjz(i,j,k)+this%sigma*sum(this%divw_z(:,i,j,k)*fvof(:))*(mycos-cos_contact_angle)/dd
                   end if
-                  if (this%wmask(i,j-1,k).eq.1) then
+                  ! Check for local wall configuration - wall in y-
+                  if (this%wmask(i,j,k).eq.0.and.this%mask(i,j-1,k).eq.1.and.this%mask(i,j-1,k-1).eq.1) then
+                     ! Define wall
                      nw=[0.0_WP,+1.0_WP,0.0_WP]; dd=cfactor*this%cfg%dy(j)
-                     this%Pjz(i,j,k)=this%Pjz(i,j,k)+this%sigma*sum(this%divw_z(:,i,j,k)*GFM(i,j,k-1:k))*(dot_product(mynorm,nw)-cos_contact_angle)/dd
+                     ! Compute the liquid area fractions
+                     !call getMoments(vf%polyface(2,i,j,k-1),vf%liquid_gas_interface(i,j,k-1),fvof(1)); fvof(1)=abs(fvof(1))/abs(calculateVolume(vf%polyface(2,i,j,k-1)))
+                     !call getMoments(vf%polyface(2,i,j,k  ),vf%liquid_gas_interface(i,j,k  ),fvof(2)); fvof(2)=abs(fvof(2))/abs(calculateVolume(vf%polyface(2,i,j,k  )))
+                     ! Surface-averaged local cos(CA)
+                     mycos=(abs(calculateVolume(vf%interface_polygon(1,i,j,k-1)))*dot_product(calculateNormal(vf%interface_polygon(1,i,j,k-1)),nw)+&
+                     &      abs(calculateVolume(vf%interface_polygon(1,i,j,k  )))*dot_product(calculateNormal(vf%interface_polygon(1,i,j,k  )),nw))/mysurf
+                     ! Add source term
+                     this%Pjz(i,j,k)=this%Pjz(i,j,k)+this%sigma*sum(this%divw_z(:,i,j,k)*fvof(:))*(mycos-cos_contact_angle)/dd
                   end if
-                  if (this%wmask(i,j+1,k).eq.1) then
+                  ! Check for local wall configuration - wall in y+
+                  if (this%wmask(i,j,k).eq.0.and.this%mask(i,j+1,k).eq.1.and.this%mask(i,j+1,k-1).eq.1) then
+                     ! Define wall
                      nw=[0.0_WP,-1.0_WP,0.0_WP]; dd=cfactor*this%cfg%dy(j)
-                     this%Pjz(i,j,k)=this%Pjz(i,j,k)+this%sigma*sum(this%divw_z(:,i,j,k)*GFM(i,j,k-1:k))*(dot_product(mynorm,nw)-cos_contact_angle)/dd
+                     ! Compute the liquid area fractions
+                     !call getMoments(vf%polyface(2,i,j+1,k-1),vf%liquid_gas_interface(i,j,k-1),fvof(1)); fvof(1)=abs(fvof(1))/abs(calculateVolume(vf%polyface(2,i,j+1,k-1)))
+                     !call getMoments(vf%polyface(2,i,j+1,k  ),vf%liquid_gas_interface(i,j,k  ),fvof(2)); fvof(2)=abs(fvof(2))/abs(calculateVolume(vf%polyface(2,i,j+1,k  )))
+                     ! Surface-averaged local cos(CA)
+                     mycos=(abs(calculateVolume(vf%interface_polygon(1,i,j,k-1)))*dot_product(calculateNormal(vf%interface_polygon(1,i,j,k-1)),nw)+&
+                     &      abs(calculateVolume(vf%interface_polygon(1,i,j,k  )))*dot_product(calculateNormal(vf%interface_polygon(1,i,j,k  )),nw))/mysurf
+                     ! Add source term
+                     this%Pjz(i,j,k)=this%Pjz(i,j,k)+this%sigma*sum(this%divw_z(:,i,j,k)*fvof(:))*(mycos-cos_contact_angle)/dd
                   end if
                end if
                
