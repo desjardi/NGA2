@@ -30,7 +30,7 @@ module simulation
    real(WP), dimension(:,:,:), allocatable :: Ui,Vi,Wi
    
    !> Problem definition
-   real(WP) :: amp
+   real(WP) :: amp0,amp,grate
    
 contains
    
@@ -43,8 +43,41 @@ contains
       real(WP), intent(in) :: t
       real(WP) :: G
       ! Create the droplet
-      G=xyz(2)-amp*cos(twoPi*xyz(1))
+      G=xyz(2)-amp0*cos(twoPi*xyz(1))
    end function levelset_falling_drop
+   
+   
+   !> Specialized subroutine that outputs wave amplitude information
+   subroutine postproc_data()
+      use irl_fortran_interface
+      use mathtools, only: Pi
+      use string,    only: str_medium
+      use mpi_f08,   only: MPI_ALLREDUCE,MPI_SUM
+      use parallel,  only: MPI_REAL_WP
+      implicit none
+      integer :: ierr,i,j,k
+      real(WP) :: my_height
+      grate=amp
+      my_height=0.0_WP
+      do k=vf%cfg%kmin_,vf%cfg%kmax_
+         do i=vf%cfg%imin_,vf%cfg%imax_
+            ! Find closest vertical column to center
+            if (vf%cfg%x(i).le.0.5_WP*vf%cfg%xL.and.vf%cfg%x(i+1).gt.0.5_WP*vf%cfg%xL.and.vf%cfg%z(k).le.0.0_WP.and.vf%cfg%z(k+1).gt.0.0_WP) then
+               ! Integrate height
+               do j=vf%cfg%jmin_,vf%cfg%jmax_
+                  my_height=my_height+vf%VF(i,j,k)*vf%cfg%dy(j)
+               end do
+            end if
+         end do
+      end do
+      call MPI_ALLREDUCE(my_height,amp,1,MPI_REAL_WP,MPI_SUM,vf%cfg%comm,ierr)
+      amp=amp-0.5_WP*vf%cfg%yL
+      if (time%t.gt.0.0_WP) then
+         grate=(amp-grate)/time%dt
+      else
+         grate=0.0_WP
+      end if
+   end subroutine postproc_data
    
    
    !> Initialization of problem solver
@@ -86,7 +119,7 @@ contains
          ! Create a VOF solver
          vf=vfs(cfg=cfg,reconstruction_method=lvira,name='VOF')
          ! Initialize to a droplet
-         amp=1.0e-3_WP
+         amp0=1.0e-5_WP
          do k=vf%cfg%kmino_,vf%cfg%kmaxo_
             do j=vf%cfg%jmino_,vf%cfg%jmaxo_
                do i=vf%cfg%imino_,vf%cfg%imaxo_
@@ -183,12 +216,15 @@ contains
          call fs%get_cfl(time%dt,time%cfl)
          call fs%get_max()
          call vf%get_max()
+         call postproc_data()
          ! Create simulation monitor
          mfile=monitor(fs%cfg%amRoot,'simulation')
          call mfile%add_column(time%n,'Timestep number')
          call mfile%add_column(time%t,'Time')
          call mfile%add_column(time%dt,'Timestep size')
          call mfile%add_column(time%cfl,'Maximum CFL')
+         call mfile%add_column(amp,'Wave amplitude')
+         call mfile%add_column(grate,'Growth rate')
          call mfile%add_column(fs%Umax,'Umax')
          call mfile%add_column(fs%Vmax,'Vmax')
          call mfile%add_column(fs%Wmax,'Wmax')
@@ -315,6 +351,7 @@ contains
          ! Perform and output monitoring
          call fs%get_max()
          call vf%get_max()
+         call postproc_data()
          call mfile%write()
          call cflfile%write()
          
