@@ -34,7 +34,7 @@ module simulation
    !> Problem definition and post-processing
    real(WP), dimension(3) :: Cdrop
    real(WP) :: Rdrop
-   real(WP) :: height,R_wet,CArad,CAdeg,CLvel
+   real(WP) :: height,R_wet,CArad,CAdeg,CLvel,C,alpha
    type(monitor) :: ppfile
    
 contains
@@ -60,7 +60,7 @@ contains
       use parallel,  only: MPI_REAL_WP
       implicit none
       integer :: ierr,i,j,k
-      real(WP) :: my_height,myR1,R1,myR2,R2
+      real(WP) :: my_height,myR1,R1,myR2,R2,R_wet_old
       ! Post-process height of drop
       my_height=0.0_WP
       do k=vf%cfg%kmin_,vf%cfg%kmax_
@@ -89,15 +89,18 @@ contains
       end if
       call MPI_ALLREDUCE(myR1,R1,1,MPI_REAL_WP,MPI_SUM,vf%cfg%comm,ierr); R1=sqrt(R1/Pi)
       call MPI_ALLREDUCE(myR2,R2,1,MPI_REAL_WP,MPI_SUM,vf%cfg%comm,ierr); R2=sqrt(R2/Pi)
-      CLvel=R_wet
+      R_wet_old=R_wet
       R_wet=2.0_WP*R1-R2
       if (time%t.eq.0.0_WP) then
          CLvel=0.0_WP
       else
-         CLvel=(R_wet-CLvel)/time%dt
+         CLvel=(R_wet-R_wet_old)/time%dt
       end if
       CArad=atan2((R2-R1),0.5_WP*vf%cfg%dy(vf%cfg%jmin))+0.5_WP*Pi
       CAdeg=CArad*180.0_WP/Pi
+      ! Also attempt to get C and alpha on the fly
+      alpha=time%t*CLvel/R_wet
+      C=R_wet/(time%t**alpha)
    end subroutine postproc_data
    
    
@@ -374,6 +377,8 @@ contains
          call ppfile%add_column(CLvel,'CL vel')
          call ppfile%add_column(CArad,'CA rad')
          call ppfile%add_column(CAdeg,'CA deg')
+         call ppfile%add_column(C,'C')
+         call ppfile%add_column(alpha,'alpha')
          call ppfile%write()
       end block create_postproc
       

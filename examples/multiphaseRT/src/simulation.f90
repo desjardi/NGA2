@@ -31,6 +31,7 @@ module simulation
    
    !> Problem definition
    real(WP) :: amp0,amp,grate
+   reaL(WP), dimension(:), allocatable :: all_time,all_amp
    
 contains
    
@@ -55,8 +56,10 @@ contains
       use mpi_f08,   only: MPI_ALLREDUCE,MPI_SUM
       use parallel,  only: MPI_REAL_WP
       implicit none
-      integer :: ierr,i,j,k
+      integer :: ierr,i,j,k,my_size
       real(WP) :: my_height
+      real(WP), dimension(:), allocatable :: temp
+      ! Calculate new amplitude
       grate=amp
       my_height=0.0_WP
       do k=vf%cfg%kmin_,vf%cfg%kmax_
@@ -72,11 +75,20 @@ contains
       end do
       call MPI_ALLREDUCE(my_height,amp,1,MPI_REAL_WP,MPI_SUM,vf%cfg%comm,ierr)
       amp=amp-0.5_WP*vf%cfg%yL
+      ! Estimate growth rate
       if (time%t.gt.0.0_WP) then
          grate=(amp-grate)/time%dt
       else
          grate=0.0_WP
       end if
+      ! Store time and amplitude series
+      if (.not.allocated(all_time)) then
+         my_size=0
+      else
+         my_size=size(all_time,dim=1)
+      end if
+      allocate(temp(my_size+1)); temp(1:my_size)=all_time; temp(my_size+1)=time%t; call MOVE_ALLOC(temp,all_time)
+      allocate(temp(my_size+1)); temp(1:my_size)=all_amp ; temp(my_size+1)=amp   ; call MOVE_ALLOC(temp,all_amp )
    end subroutine postproc_data
    
    
@@ -259,7 +271,7 @@ contains
       implicit none
       
       ! Perform time integration
-      do while (.not.time%done())
+      do while (.not.time%done().and.amp.lt.0.1_WP*vf%cfg%yL)
          
          ! Increment time
          call fs%get_cfl(time%dt,time%cfl)
@@ -356,6 +368,12 @@ contains
          call cflfile%write()
          
       end do
+      
+      ! Post-process growth rate using ODRPACK
+      odr_fit: block
+         
+      end block odr_fit
+      
       
    end subroutine simulation_run
    
