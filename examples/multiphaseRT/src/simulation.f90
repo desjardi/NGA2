@@ -30,6 +30,7 @@ module simulation
    real(WP), dimension(:,:,:), allocatable :: Ui,Vi,Wi
    
    !> Problem definition
+   real(WP) :: lc,tau
    real(WP) :: amp0,amp,grate
    reaL(WP), dimension(:), allocatable :: all_time,all_amp
    
@@ -206,6 +207,25 @@ contains
       end block create_and_initialize_flow_solver
       
       
+      ! Output and store some useful reference time and length scales
+      get_ref_info: block
+         use, intrinsic :: iso_fortran_env, only: output_unit
+         use mathtools, only: twoPi
+         use messager,  only: log
+         use string,    only: str_long
+         character(len=str_long) :: message
+         ! Calculate cut-off length and time scale
+         tau=(fs%sigma/((fs%rho_l-fs%rho_g)*abs(fs%gravity(2))**3))**0.25_WP
+         lc =sqrt(fs%sigma/((fs%rho_l-fs%rho_g)*abs(fs%gravity(2))))
+         if (fs%cfg%amRoot) then
+            write(output_unit,'("Reference time scale = ",es12.5)') tau
+            write(output_unit,'("Cut-off length scale = ",es12.5)') lc
+            write(message    ,'("Reference time scale = ",es12.5)') tau; call log(message)
+            write(message    ,'("Cut-off length scale = ",es12.5)') lc ; call log(message)
+         end if
+      end block get_ref_info
+      
+      
       ! Add Ensight output
       create_ensight: block
          ! Create Ensight output from cfg
@@ -271,7 +291,7 @@ contains
       implicit none
       
       ! Perform time integration
-      do while (.not.time%done().and.amp.lt.0.1_WP*vf%cfg%yL)
+      do while (.not.time%done().and.amp.lt.0.1_WP*vf%cfg%yL.and.time%t.lt.10.0_WP*tau)
          
          ! Increment time
          call fs%get_cfl(time%dt,time%cfl)
@@ -402,7 +422,6 @@ contains
          real(WP)                      :: SSTOL=-1.0_WP          !> Relative cvg of sum of squares: this sets it to 1e-8             ********* Need to change to sth else
          real(WP)                      :: PARTOL=-1.0_WP         !> Relative cvg for model parameters: this sets it to 1e-11         ********* Need to change to sth else
          integer                       :: MAXIT=-1               !> Maximum number of iterations                                     ********* Need to change to sth else
-         !integer                       :: IPRINT=2212            !> 4-digit parameter flag for controlling printing (default is -1)
          integer                       :: IPRINT=0               !> 4-digit parameter flag for controlling printing (default is -1)
          integer                       :: LUNERR=10              !> Logical unit for error reporting (6 by default)
          integer                       :: LUNRPT=10              !> Logical unit for reporting
@@ -440,10 +459,10 @@ contains
          &          SSTOL,PARTOL,MAXIT,IPRINT,LUNERR,LUNRPT,STPB,STPD,LDSTPD,SCLB,SCLD,LDSCLD,WORK,LWORK,iWORK,LiWORK,INFO)
          ! Get back growth rate
          if (fs%cfg%amRoot) then
-            write(output_unit,'("Normalized growth rate is",es12.5)') BETA(1)*(fs%sigma/((fs%rho_l-fs%rho_g)*abs(fs%gravity(2))**3))**0.25_WP
-            write(output_unit,'("Normalized wave number is",es12.5)') twoPi/fs%cfg%xL*sqrt(fs%sigma/((fs%rho_l-fs%rho_g)*abs(fs%gravity(2))))
-            write(message,'("Normalized growth rate is",es12.5)') BETA(1)*(fs%sigma/((fs%rho_l-fs%rho_g)*abs(fs%gravity(2))**3))**0.25_WP; call log(message)
-            write(message,'("Normalized wave number is",es12.5)') twoPi/fs%cfg%xL*sqrt(fs%sigma/((fs%rho_l-fs%rho_g)*abs(fs%gravity(2)))); call log(message)
+            write(output_unit,'("Normalized growth rate = ",es12.5)') BETA(1)*tau
+            write(output_unit,'("Normalized wave number = ",es12.5)') twoPi/fs%cfg%xL*lc
+            write(message    ,'("Normalized growth rate = ",es12.5)') BETA(1)*tau
+            write(message    ,'("Normalized wave number = ",es12.5)') twoPi/fs%cfg%xL*lc
          end if
       end block odr_fit
       
