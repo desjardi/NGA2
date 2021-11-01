@@ -371,7 +371,54 @@ contains
       
       ! Post-process growth rate using ODRPACK
       odr_fit: block
+         ! ODRPACK variables - explicit model based on exponential of time
+         !external :: exponential_model
+         integer                       :: N                      !> Number of observations (number of polygons)
+         integer , parameter           :: M=1                    !> Number of elements per explanatory variables (1 time)
+         integer , parameter           :: NP=1                   !> Number of parameters in our model (1 for a normalized exponential in time)
+         integer , parameter           :: NQ=1                   !> Number of response per observation (only 1, the normalized amplitude)
+         real(WP), dimension(NP)       :: BETA=0.0_WP            !> Array of model parameter values (the growth rate)
+         real(WP), dimension(:,:)  , allocatable :: YY           !> Value of response variable (of size LDYYxNQ)
+         integer                       :: LDYY                   !> Leading dimension of YY (equals N since an explicit model is used)
+         real(WP), dimension(:,:)  , allocatable :: XX           !> Value of explanatory variable (of size LDXXxM)
+         integer                       :: LDXX                   !> Leading dimension of XX (equals N)
+         real(WP), dimension(:,:,:), allocatable :: WE           !> Weighting of response data (of size LDWExLD2WExNQ)
+         integer                       :: LDWE                   !> Leading dimension of WE (equals N since an explicit model is used)
+         integer                       :: LD2WE                  !> Second dimension of WE (equals NQ)
+         real(WP), dimension(:,:,:), allocatable :: WD           !> Weighting of explanatory data (of size LDWDxLD2WDxM)
+         integer                       :: LDWD                   !> Leading dimension of WD (equals N)
+         integer                       :: LD2WD                  !> Second dimension of WD (equals 1)
+         integer , dimension(NP)       :: IFIXB=-1               !> Whether any model parameters has to be kept constant
+         integer , parameter           :: LDIFX=1                !> Leading dimension of IFIXX (equals 1)
+         integer , dimension(LDIFX,M)  :: IFIXX=-1               !> Whether any explanatory variable data is to be treated as "fixed"
+         integer                       :: JOB=00030              !> 5-digit parameter flag that controls execution (this invokes analytical Jacobian with explicit model)
+         integer                       :: NDIGIT=1               !> Number of reliable digits in our model - let ODRPACK figure it out on its own
+         real(WP)                      :: TAUFAC=0.0_WP          !> To control size of first step (ignored here)
+         real(WP)                      :: SSTOL=-1.0_WP          !> Relative cvg of sum of squares: this sets it to 1e-8             ********* Need to change to sth else
+         real(WP)                      :: PARTOL=-1.0_WP         !> Relative cvg for model parameters: this sets it to 1e-11         ********* Need to change to sth else
+         integer                       :: MAXIT=-1               !> Maximum number of iterations                                     ********* Need to change to sth else
+         !integer                       :: IPRINT=2212            !> 4-digit parameter flag for controlling printing (default is -1)
+         integer                       :: IPRINT=0               !> 4-digit parameter flag for controlling printing (default is -1)
+         integer                       :: LUNERR=10              !> Logical unit for error reporting (6 by default)
+         integer                       :: LUNRPT=10              !> Logical unit for reporting
+         real(WP), dimension(NP)       :: STPB=0.0_WP            !> Relative step sizes for Jacobian for model parameters (here, default)
+         integer , parameter           :: LDSTPD=1               !> Leading dimension of STPD, either 1 or N (here, 1)
+         real(WP), dimension(LDSTPD,1) :: STPD=0.0_WP            !> Relative step sizes for Jacobian for input errors (here, default)
+         real(WP), dimension(NP)       :: SCLB=1.0_WP            !> Scaling for the model parameters (here, not default but set to 1.0 to avoid rescaling 0 coefficients)
+         real(WP), dimension(:,:)  , allocatable :: SCLD         !> Scaling for the input errors (here, not default but set to 1.0 to avoid rescaling 0 coefficients)
+         integer                       :: LDSCLD                 !> Leading dimension of SCLD, either 1 or N (here, N)
+         integer                       :: LWORK                  !> Size of WORK array
+         real(WP), dimension(:)    , allocatable :: WORK         !> WORK array
+         integer , parameter           :: LiWORK=20+NP+NQ*(NP+M) !> Size of IWORK array
+         integer , dimension(LiWORK)   :: iWORK                  !> iWORK array
+         integer                       :: INFO                   !> Why the calculations stopped
+         ! Copy over data and sizes
          
+         ! Call ODRPACK
+         call DODRC(exponential_model,N,M,NP,NQ,BETA,YY,LDYY,XX,LDXX,WE,LDWE,LD2WE,WD,LDWD,LD2WD,IFIXB,IFIXX,LDIFX,JOB,NDIGIT,TAUFAC,&
+         &          SSTOL,PARTOL,MAXIT,IPRINT,LUNERR,LUNRPT,STPB,STPD,LDSTPD,SCLB,SCLD,LDSCLD,WORK,LWORK,iWORK,LiWORK,INFO)
+         ! Get back growth rate
+         print*,'MY GROWTH RATE',BETA
       end block odr_fit
       
       
@@ -394,7 +441,57 @@ contains
    end subroutine simulation_final
    
    
-   
+   !> Definition of our exponential function of time model
+   subroutine exponential_model(N,M,NP,NQ,LDN,LDM,LDNP,BETA,XPLUSD,IFIXB,IFIXX,LDFIX,IDEVAL,F,FJACB,FJACD,ISTOP)
+      implicit none
+      ! Input parameters
+      integer , intent(in) :: IDEVAL,LDFIX,LDM,LDN,LDNP,M,N,NP,NQ
+      integer , dimension(NP)     , intent(in) :: IFIXB
+      integer , dimension(LDFIX,M), intent(in) :: IFIXX
+      real(WP), dimension(NP)     , intent(in) :: BETA
+      real(WP), dimension(LDN,M)  , intent(in) :: XPLUSD
+      ! Output parameters
+      real(WP), dimension(LDN,NQ) :: F
+      real(WP), dimension(LDN,LDNP,NQ) :: FJACB
+      real(WP), dimension(LDN,LDM ,NQ) :: FJACD
+      integer :: ISTOP,i
+      
+      ! Check stopping condition - all values are acceptable
+      ISTOP=0
+      
+      ! Compute model value
+      if (mod(IDEVAL,10).ge.1) then
+         do i=1,N
+            F(i,1)=1.0_WP*BETA(1)                         &
+            &     +1.0_WP*BETA(2)*XPLUSD(i,1)             &
+            &     +1.0_WP*BETA(3)*XPLUSD(i,2)             &
+            &     +0.5_WP*BETA(4)*XPLUSD(i,1)*XPLUSD(i,1) &
+            &     +0.5_WP*BETA(5)*XPLUSD(i,2)*XPLUSD(i,2) &
+            &     +1.0_WP*BETA(6)*XPLUSD(i,1)*XPLUSD(i,2)
+         end do
+      end if
+      
+      ! Compute model derivatives with respect to BETA
+      if (mod(IDEVAL/10,10).GE.1) then
+         do i=1,N
+            FJACB(i,1,1)=1.0_WP
+            FJACB(i,2,1)=1.0_WP*XPLUSD(i,1)
+            FJACB(i,3,1)=1.0_WP*XPLUSD(i,2)
+            FJACB(i,4,1)=0.5_WP*XPLUSD(i,1)*XPLUSD(i,1)
+            FJACB(i,5,1)=0.5_WP*XPLUSD(i,2)*XPLUSD(i,2)
+            FJACB(i,6,1)=1.0_WP*XPLUSD(i,1)*XPLUSD(i,2)
+         end do
+      end if
+      
+      ! Compute model derivatives with respect to input
+      if (mod(IDEVAL/100,10).GE.1) then
+         do i=1,N
+            FJACD(i,1,1)=BETA(2)+BETA(4)*XPLUSD(i,1)+BETA(6)*XPLUSD(i,2)
+            FJACD(i,2,1)=BETA(3)+BETA(5)*XPLUSD(i,2)+BETA(6)*XPLUSD(i,1)
+         end do
+      end if
+      
+   end subroutine exponential_model
    
    
 end module simulation

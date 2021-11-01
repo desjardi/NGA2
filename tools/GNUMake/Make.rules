@@ -135,20 +135,20 @@ $(objBuildDir)/%.o: %.F90
 #
 # The command of `sed` needs to be inside a pair of `'`s.  But the
 # whole `sed -e '......'` is already inside a pair of `'`s for the
-# shell.  So we have to use escape, thus `'\''mycommand'\''`. 
+# shell.  So we have to use escape, thus `'\''mycommand'\''`.
 #
 # The sed command is search and replace, `s,X,Y` that replaces `X` by
-# `Y`. 
+# `Y`.
 #
 # In the first sed, `X` is `^[^:]*\/`.  This matches the beginning
 # of the line to the last `/` before `:`.  The `Y` contains nothing.
-# So the matched string is removed, and the line becomes `x.o: /path/to/x.xpp`. 
+# So the matched string is removed, and the line becomes `x.o: /path/to/x.xpp`.
 #
 # In the second sed, we replace `x.o` with `$(objBuildDir)/o`.  Note
 # that `$*` is make variable set to `%` (i.e., `x` in our example).
 # `&` is sed variable meaning the whole matched string.  The
 # replacement string also includes the target of the make rule (i.e.,
-# `$(depBuildDir)/x.d`). 
+# `$(depBuildDir)/x.d`).
 #
 # The final result is `$(objBuildDir)/x.o $(depBuildDir)/x.d: /path/to/y.H`.
 #
@@ -180,7 +180,7 @@ $(depBuildDir)/%.d: %.f
 	@$(SHELL) -ec '$(MKDEP) -fortran $(fincludes) $< | \
 		sed -e '\''s,^[^:]*\/,,'\'' | \
 		sed -e '\''s,$*.o,$(objBuildDir)/& $@,'\'' > $@'
-
+		
 DEP_CHECK_OPTS :=
 
 $(depBuildDir)/f90.depends: $(f90EXE_sources) $(F90EXE_sources)
@@ -192,7 +192,7 @@ $(depBuildDir)/f90.depends: $(f90EXE_sources) $(F90EXE_sources)
             --temp_dir $(f77BuildDir) \
             --cpp "$(FORT_CPP)" \
             --defines "-DBL_LANG_FORT $(CPPFLAGS) $(fincludes)" \
-            --f90_preprocess "$(F90PREP)" $^ > $(depBuildDir)/f90.depends 
+            --f90_preprocess "$(F90PREP)" $^ > $(depBuildDir)/f90.depends
 
 
 #

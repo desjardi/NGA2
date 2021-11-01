@@ -70,17 +70,17 @@ DEFINES += -DNGA_GIT_VERSION=\"$(NGA_GIT_VERSION)\"
 # Link Fortran
 FORTLINK  	= UNDERSCORE
 # Fortran preprocessor
-FORT_CPP        = cpp -E -traditional-cpp -P
+FORT_CPP    = cpp -E -traditional-cpp -P
 # Scripts for building dependencies
-MKDEP		= perl $(NGA_HOME)/tools/scripts/mkdep
+MKDEP		   = perl $(NGA_HOME)/tools/scripts/mkdep.pl
 MODDEP		= $(NGA_HOME)/tools/scripts/dep.py
 FORTPREP  	= perl $(NGA_HOME)/Tools/scripts/strip72 -c
 F90PREP  	= cat  # a placeholder in case we have to write something later
-CPP_PREFIX      =
-CHECKFORT       = $(NGA_HOME)/tools/typechecker/typechecker.py
-MKCONFIG        = $(NGA_HOME)/tools/libamrex/mkconfig.py
+CPP_PREFIX  =
+CHECKFORT   = $(NGA_HOME)/tools/typechecker/typechecker.py
+MKCONFIG    = $(NGA_HOME)/tools/libamrex/mkconfig.py
 # Ranlib
-RANLIB          = ranlib
+RANLIB      = ranlib
 # Object option
 EXE_OUTPUT_OPTION      = -o $(objBuildDir)/$*.o
 FORT_EXE_OUTPUT_OPTION = -o $(objBuildDir)/$*.o
@@ -261,6 +261,10 @@ endif
 ifeq ($(USE_CWIPI),TRUE)
   $(info Loading $(NGA_HOME)/tools/GNUMake/packages/Make.cwipi...)
   include        $(NGA_HOME)/tools/GNUMake/packages/Make.cwipi
+endif
+ifeq ($(USE_ODRPACK),TRUE)
+  $(info Loading $(NGA_HOME)/tools/GNUMake/packages/Make.odrpack...)
+  include        $(NGA_HOME)/tools/GNUMake/packages/Make.odrpack
 endif
 ###############################################################
 
