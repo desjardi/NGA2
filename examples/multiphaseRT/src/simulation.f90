@@ -371,13 +371,18 @@ contains
       
       ! Post-process growth rate using ODRPACK
       odr_fit: block
+         use, intrinsic :: iso_fortran_env, only: output_unit
+         use mathtools, only: twoPi
+         use messager,  only: log
+         use string,    only: str_long
+         character(len=str_long) :: message
+         integer :: i
          ! ODRPACK variables - explicit model based on exponential of time
-         !external :: exponential_model
          integer                       :: N                      !> Number of observations (number of polygons)
          integer , parameter           :: M=1                    !> Number of elements per explanatory variables (1 time)
-         integer , parameter           :: NP=1                   !> Number of parameters in our model (1 for a normalized exponential in time)
+         integer , parameter           :: NP=2                   !> Number of parameters in our model (2 for a normalized exponential in time with time shift)
          integer , parameter           :: NQ=1                   !> Number of response per observation (only 1, the normalized amplitude)
-         real(WP), dimension(NP)       :: BETA=0.0_WP            !> Array of model parameter values (the growth rate)
+         real(WP), dimension(NP)       :: BETA=0.0_WP            !> Array of model parameter values (the growth rate and time shift)
          real(WP), dimension(:,:)  , allocatable :: YY           !> Value of response variable (of size LDYYxNQ)
          integer                       :: LDYY                   !> Leading dimension of YY (equals N since an explicit model is used)
          real(WP), dimension(:,:)  , allocatable :: XX           !> Value of explanatory variable (of size LDXXxM)
@@ -413,32 +418,37 @@ contains
          integer , dimension(LiWORK)   :: iWORK                  !> iWORK array
          integer                       :: INFO                   !> Why the calculations stopped
          ! Copy over data and sizes
-         
-         ! Call ODRPACK
+         N=size(all_time,dim=1)
+         LDYY=N; allocate(YY(LDYY,NQ)); YY(:,1)=all_amp/amp0
+         LDXX=N; allocate(XX(LDXX,M )); XX(:,1)=all_time
+         LDWE=N; LD2WE=NQ; allocate(WE(LDWE,LD2WE,NQ)); WE=1.0_WP
+         LDWD=N; LD2WD=1 ; allocate(WD(LDWD,LD2WD,M )); WD=1.0_WP
+         LDSCLD=N; allocate(SCLD(LDSCLD,M)); SCLD=1.0_WP
+         LWORK=18+11*NP+NP**2+M+M**2+4*N*NQ+6*N*M+2*N*NQ*NP+2*N*NQ*M+NQ**2+5*NQ+NQ*(NP+M)+(LDWE*LD2WE)*NQ; allocate(WORK(LWORK))
+         ! Call ODRPACK to find time shift
+         call DODRC(exponential_model,N,M,NP,NQ,BETA,YY,LDYY,XX,LDXX,WE,LDWE,LD2WE,WD,LDWD,LD2WD,IFIXB,IFIXX,LDIFX,JOB,NDIGIT,TAUFAC,&
+         &          SSTOL,PARTOL,MAXIT,IPRINT,LUNERR,LUNRPT,STPB,STPD,LDSTPD,SCLB,SCLD,LDSCLD,WORK,LWORK,iWORK,LiWORK,INFO)
+         ! Adjust weights to eliminate the early non-exponential part
+         do i=1,size(all_time,dim=1)
+            if (all_time(i).le.2.0_WP*BETA(2)) then
+               WE(i,1,1)=0.0_WP
+               WD(i,1,1)=0.0_WP
+            end if
+         end do
+         ! Call ODRPACK again to find growth rate
          call DODRC(exponential_model,N,M,NP,NQ,BETA,YY,LDYY,XX,LDXX,WE,LDWE,LD2WE,WD,LDWD,LD2WD,IFIXB,IFIXX,LDIFX,JOB,NDIGIT,TAUFAC,&
          &          SSTOL,PARTOL,MAXIT,IPRINT,LUNERR,LUNRPT,STPB,STPD,LDSTPD,SCLB,SCLD,LDSCLD,WORK,LWORK,iWORK,LiWORK,INFO)
          ! Get back growth rate
-         print*,'MY GROWTH RATE',BETA
+         if (fs%cfg%amRoot) then
+            write(output_unit,'("Normalized growth rate is",es12.5)') BETA(1)*(fs%sigma/((fs%rho_l-fs%rho_g)*abs(fs%gravity(2))**3))**0.25_WP
+            write(output_unit,'("Normalized wave number is",es12.5)') twoPi/fs%cfg%xL*sqrt(fs%sigma/((fs%rho_l-fs%rho_g)*abs(fs%gravity(2))))
+            write(message,'("Normalized growth rate is",es12.5)') BETA(1)*(fs%sigma/((fs%rho_l-fs%rho_g)*abs(fs%gravity(2))**3))**0.25_WP; call log(message)
+            write(message,'("Normalized wave number is",es12.5)') twoPi/fs%cfg%xL*sqrt(fs%sigma/((fs%rho_l-fs%rho_g)*abs(fs%gravity(2)))); call log(message)
+         end if
       end block odr_fit
       
       
    end subroutine simulation_run
-   
-   
-   !> Finalize the NGA2 simulation
-   subroutine simulation_final
-      implicit none
-      
-      ! Get rid of all objects - need destructors
-      ! monitor
-      ! ensight
-      ! bcond
-      ! timetracker
-      
-      ! Deallocate work arrays
-      deallocate(resU,resV,resW,Ui,Vi,Wi)
-      
-   end subroutine simulation_final
    
    
    !> Definition of our exponential function of time model
@@ -455,43 +465,44 @@ contains
       real(WP), dimension(LDN,LDNP,NQ) :: FJACB
       real(WP), dimension(LDN,LDM ,NQ) :: FJACD
       integer :: ISTOP,i
-      
       ! Check stopping condition - all values are acceptable
       ISTOP=0
-      
       ! Compute model value
       if (mod(IDEVAL,10).ge.1) then
          do i=1,N
-            F(i,1)=1.0_WP*BETA(1)                         &
-            &     +1.0_WP*BETA(2)*XPLUSD(i,1)             &
-            &     +1.0_WP*BETA(3)*XPLUSD(i,2)             &
-            &     +0.5_WP*BETA(4)*XPLUSD(i,1)*XPLUSD(i,1) &
-            &     +0.5_WP*BETA(5)*XPLUSD(i,2)*XPLUSD(i,2) &
-            &     +1.0_WP*BETA(6)*XPLUSD(i,1)*XPLUSD(i,2)
+            F(i,1)=exp(BETA(1)*(XPLUSD(i,1)-BETA(2)))
          end do
       end if
-      
       ! Compute model derivatives with respect to BETA
       if (mod(IDEVAL/10,10).GE.1) then
          do i=1,N
-            FJACB(i,1,1)=1.0_WP
-            FJACB(i,2,1)=1.0_WP*XPLUSD(i,1)
-            FJACB(i,3,1)=1.0_WP*XPLUSD(i,2)
-            FJACB(i,4,1)=0.5_WP*XPLUSD(i,1)*XPLUSD(i,1)
-            FJACB(i,5,1)=0.5_WP*XPLUSD(i,2)*XPLUSD(i,2)
-            FJACB(i,6,1)=1.0_WP*XPLUSD(i,1)*XPLUSD(i,2)
+            FJACB(i,1,1)=(XPLUSD(i,1)-BETA(2))*exp(BETA(1)*(XPLUSD(i,1)-BETA(2)))
+            FJACB(i,2,1)=            -BETA(1) *exp(BETA(1)*(XPLUSD(i,1)-BETA(2)))
          end do
       end if
-      
       ! Compute model derivatives with respect to input
       if (mod(IDEVAL/100,10).GE.1) then
          do i=1,N
-            FJACD(i,1,1)=BETA(2)+BETA(4)*XPLUSD(i,1)+BETA(6)*XPLUSD(i,2)
-            FJACD(i,2,1)=BETA(3)+BETA(5)*XPLUSD(i,2)+BETA(6)*XPLUSD(i,1)
+            FJACD(i,1,1)=BETA(1)*exp(BETA(1)*(XPLUSD(i,1)-BETA(2)))
          end do
       end if
-      
    end subroutine exponential_model
+   
+   
+   !> Finalize the NGA2 simulation
+   subroutine simulation_final
+      implicit none
+      
+      ! Get rid of all objects - need destructors
+      ! monitor
+      ! ensight
+      ! bcond
+      ! timetracker
+      
+      ! Deallocate work arrays
+      deallocate(resU,resV,resW,Ui,Vi,Wi)
+      
+   end subroutine simulation_final
    
    
 end module simulation
