@@ -207,22 +207,10 @@ contains
       end block create_and_initialize_flow_solver
       
       
-      ! Output and store some useful reference time and length scales
+      ! Store some useful reference time and length scales
       get_ref_info: block
-         use, intrinsic :: iso_fortran_env, only: output_unit
-         use mathtools, only: twoPi
-         use messager,  only: log
-         use string,    only: str_long
-         character(len=str_long) :: message
-         ! Calculate cut-off length and time scale
          tau=(fs%sigma/((fs%rho_l-fs%rho_g)*abs(fs%gravity(2))**3))**0.25_WP
          lc =sqrt(fs%sigma/((fs%rho_l-fs%rho_g)*abs(fs%gravity(2))))
-         if (fs%cfg%amRoot) then
-            write(output_unit,'("Reference time scale = ",es12.5)') tau
-            write(output_unit,'("Cut-off length scale = ",es12.5)') lc
-            write(message    ,'("Reference time scale = ",es12.5)') tau; call log(message)
-            write(message    ,'("Cut-off length scale = ",es12.5)') lc ; call log(message)
-         end if
       end block get_ref_info
       
       
@@ -459,10 +447,11 @@ contains
          &          SSTOL,PARTOL,MAXIT,IPRINT,LUNERR,LUNRPT,STPB,STPD,LDSTPD,SCLB,SCLD,LDSCLD,WORK,LWORK,iWORK,LiWORK,INFO)
          ! Get back growth rate
          if (fs%cfg%amRoot) then
-            write(output_unit,'("Normalized growth rate = ",es12.5)') BETA(1)*tau
-            write(output_unit,'("Normalized wave number = ",es12.5)') twoPi/fs%cfg%xL*lc
-            write(message    ,'("Normalized growth rate = ",es12.5)') BETA(1)*tau
-            write(message    ,'("Normalized wave number = ",es12.5)') twoPi/fs%cfg%xL*lc
+            write(output_unit,'(es12.5,x,es12.5,x,es12.5,x,es12.5)') lc,tau,twoPi/fs%cfg%xL*lc,BETA(1)*tau
+            write(message    ,'("Reference time scale   = ",es12.5)') tau               ; call log(message)
+            write(message    ,'("Cut-off length scale   = ",es12.5)') lc                ; call log(message)
+            write(message    ,'("Normalized growth rate = ",es12.5)') BETA(1)*tau       ; call log(message)
+            write(message    ,'("Normalized wave number = ",es12.5)') twoPi/fs%cfg%xL*lc; call log(message)
          end if
       end block odr_fit
       
