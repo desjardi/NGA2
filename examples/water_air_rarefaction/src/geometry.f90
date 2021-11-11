@@ -30,8 +30,9 @@ contains
          
          ! Read in grid definition
          call param_read('Lx',Lx); call param_read('nx',nx); allocate(x(nx+1))
-         call param_read('Ly',Ly); call param_read('ny',ny); allocate(y(ny+1))
-         call param_read('Lz',Lz); call param_read('nz',nz); allocate(z(nz+1))
+         ! 1D problem
+         ny = 1; allocate(y(ny+1)); Ly = Lx/nx;
+         nz = 1; allocate(z(nz+1)); Lz = Lx/nx;
          
          ! Create simple rectilinear grid
          do i=1,nx+1

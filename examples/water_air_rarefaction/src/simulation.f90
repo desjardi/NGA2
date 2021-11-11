@@ -28,13 +28,9 @@ module simulation
    
    public :: simulation_init,simulation_run,simulation_final
    
-   !> Private work arrays
-   real(WP), dimension(:,:,:), allocatable :: resU,resV,resW
-   real(WP), dimension(:,:,:), allocatable :: Ui,Vi,Wi
-   
    !> Problem definition
-   real(WP), dimension(3) :: center1,center2,vel1,vel2
-   real(WP) :: radius1,radius2
+   real(WP) :: l0,l1
+   real(WP) :: discloc,v0,v1,p0,p1
    
 contains
    
@@ -67,34 +63,20 @@ contains
          integer, parameter :: amr_ref_lvl=4
          ! Create a VOF solver with lvira reconstruction
          vf=vfs(cfg=cfg,reconstruction_method=lvira,name='VOF')
-         ! Initialize two droplets
-         call param_read('Droplet 1 diameter',radius1); radius1=0.5_WP*radius1
-         call param_read('Droplet 1 position',center1)
-         call param_read('Droplet 2 diameter',radius2); radius2=0.5_WP*radius2
-         call param_read('Droplet 2 position',center2)
+         ! Initialize liquid at left
+         call param_read('Liquid start location',l0)
+         call param_read('Liquid end location',l1)
          do k=vf%cfg%kmino_,vf%cfg%kmaxo_
             do j=vf%cfg%jmino_,vf%cfg%jmaxo_
                do i=vf%cfg%imino_,vf%cfg%imaxo_
-                  ! Set cube vertices
-                  n=0
-                  do sk=0,1
-                     do sj=0,1
-                        do si=0,1
-                           n=n+1; cube_vertex(:,n)=[vf%cfg%x(i+si),vf%cfg%y(j+sj),vf%cfg%z(k+sk)]
-                        end do
-                     end do
-                  end do
-                  ! Call adaptive refinement code to get volume and barycenters recursively
-                  vol=0.0_WP; area=0.0_WP; v_cent=0.0_WP; a_cent=0.0_WP
-                  !call cube_refine_vol(cube_vertex,vol,area,v_cent,a_cent,levelset_colliding_drops,0.0_WP,amr_ref_lvl)
-                  vf%VF(i,j,k)=vol/vf%cfg%vol(i,j,k)
-                  if (vf%VF(i,j,k).ge.VFlo.and.vf%VF(i,j,k).le.VFhi) then
-                     vf%Lbary(:,i,j,k)=v_cent
-                     vf%Gbary(:,i,j,k)=([vf%cfg%xm(i),vf%cfg%ym(j),vf%cfg%zm(k)]-vf%VF(i,j,k)*vf%Lbary(:,i,j,k))/(1.0_WP-vf%VF(i,j,k))
+                  ! Stick to single-phase cells
+                  if (vf%cfg%x(i).gt.l0.and.vf%cfg%x(i).lt.l1) then
+                     vf%VF(i,j,k)=1.0_WP
                   else
-                     vf%Lbary(:,i,j,k)=[vf%cfg%xm(i),vf%cfg%ym(j),vf%cfg%zm(k)]
-                     vf%Gbary(:,i,j,k)=[vf%cfg%xm(i),vf%cfg%ym(j),vf%cfg%zm(k)]
+                     vf%VF(i,j,k)=0.0_WP
                   end if
+                  vf%Lbary(:,i,j,k)=[vf%cfg%xm(i),vf%cfg%ym(j),vf%cfg%zm(k)]
+                  vf%Gbary(:,i,j,k)=[vf%cfg%xm(i),vf%cfg%ym(j),vf%cfg%zm(k)]
                end do
             end do
          end do
@@ -121,7 +103,7 @@ contains
          use mathtools, only: Pi
          integer :: i,j,k
          real(WP), dimension(3) :: xyz
-         real(WP) :: gamm_l,Pref_l,gamm_g
+         real(WP) :: gamm_l,Pref_l,gamm_g,rho_l0,rho_g0
          ! Create material model class
          matmod=matm(cfg=cfg,name='Liquid-gas models')
          ! Get EOS parameters from input
@@ -139,9 +121,6 @@ contains
          ! Assign constant viscosity to each phase
          call param_read('Liquid dynamic viscosity',fs%visc_l0)
          call param_read('Gas dynamic viscosity',fs%visc_g0)
-         ! Assign constant density to each phase
-         !call param_read('Liquid density',fs%rho_l)
-         !call param_read('Gas density',fs%rho_g)
          ! Read in surface tension coefficient
          call param_read('Surface tension coefficient',fs%sigma)
          ! Configure pressure solver
@@ -152,35 +131,43 @@ contains
          call param_read('Implicit tolerance',fs%implicit%rcvg)
          ! Setup the solver
          call fs%setup(pressure_ils=gmres_amg,implicit_ils=gmres_amg)
-         ! Initial droplet velocity
-         call param_read('Droplet 1 velocity',vel1)
-         call param_read('Droplet 2 velocity',vel2)
-         do k=fs%cfg%kmino_,fs%cfg%kmaxo_
-            do j=fs%cfg%jmino_,fs%cfg%jmaxo_
-               do i=fs%cfg%imino_,fs%cfg%imaxo_
-                  ! U velocity
-                  xyz=[fs%cfg%x(i),fs%cfg%ym(j),fs%cfg%zm(k)]
-                  if (radius1-sqrt(sum((xyz-center1)**2)).ge.0.0_WP) fs%U(i,j,k)=vel1(1)
-                  if (radius2-sqrt(sum((xyz-center2)**2)).ge.0.0_WP) fs%U(i,j,k)=vel2(1)
-                  ! V velocity
-                  xyz=[fs%cfg%xm(i),fs%cfg%y(j),fs%cfg%zm(k)]
-                  if (radius1-sqrt(sum((xyz-center1)**2)).ge.0.0_WP) fs%V(i,j,k)=vel1(2)
-                  if (radius2-sqrt(sum((xyz-center2)**2)).ge.0.0_WP) fs%V(i,j,k)=vel2(2)
-                  ! V velocity
-                  xyz=[fs%cfg%xm(i),fs%cfg%ym(j),fs%cfg%z(k)]
-                  if (radius1-sqrt(sum((xyz-center1)**2)).ge.0.0_WP) fs%W(i,j,k)=vel1(3)
-                  if (radius2-sqrt(sum((xyz-center2)**2)).ge.0.0_WP) fs%W(i,j,k)=vel2(3)
-               end do
-            end do
+
+         ! Initial conditions
+         call param_read('Liquid density',rho_l0)
+         call param_read('Gas density',rho_g0)
+         fs%Lrho = rho_l0; fs%Grho = rho_g0
+         fs%Vi = 0.0_WP; fs%Wi = 0.0_WP
+         call param_read('Discontinuity location',discloc)
+         call param_read('Pre-discontinuity velocity',v0)
+         call param_read('Post-discontinuity velocity',v1)
+         call param_read('Pre-discontinuity pressure',p0)
+         call param_read('Post-discontinuity pressure',p1)
+         do i=fs%cfg%imino_,fs%cfg%imaxo_
+            ! pressure, velocity, use matmod for energy
+            if (fs%cfg%x(i).gt.discloc) then
+               fs%Ui(i,:,:) = v1
+               fs%GrhoE(i,:,:) = matmod%EOS_energy(p1,rho_g0,v1,0.0_WP,0.0_WP,'gas')
+               fs%LrhoE(i,:,:) = matmod%EOS_energy(p1,rho_l0,v1,0.0_WP,0.0_WP,'liquid')
+            else
+               fs%Ui(i,:,:) = v0
+               fs%GrhoE(i,:,:) = matmod%EOS_energy(p0,rho_g0,v0,0.0_WP,0.0_WP,'gas')
+               fs%LrhoE(i,:,:) = matmod%EOS_energy(p0,rho_l0,v0,0.0_WP,0.0_WP,'liquid')
+            end if
          end do
-         ! Initialize flow properties and therm variables
-         !call fs%therm_init()
+         ! Calculate phase momenta
+         fs%GrhoU = fs%Grho*fs%Ui; fs%GrhoV = fs%Grho*fs%Vi; fs%GrhoW = fs%Grho*fs%Wi;
+         fs%LrhoU = fs%Lrho*fs%Ui; fs%LrhoV = fs%Lrho*fs%Vi; fs%LrhoW = fs%Lrho*fs%Wi;
          ! Calculate face velocities
          call fs%interp_vel_basic(vf,fs%Ui,fs%Vi,fs%Wi,fs%U,fs%V,fs%W)
-         ! Get initial pressure jump
-
          ! Perform initial pressure relax
          call fs%pressure_relax(vf,matmod)
+
+         ! Note: conditions used in Kuhn and Desjardins (2021) are as follows
+         ! rho_l0 = 1   rho_g0 = 1e-3
+         ! discloc = 0.65
+         ! v0 = 2       v1 = 11.29375
+         ! p0 = 0.7     p1 = 0.3
+         ! (and left boundary extended in order to avoid reflection back into domain)
 
       end block create_and_initialize_flow_solver
       
@@ -193,7 +180,7 @@ contains
          ens_evt=event(time=time,name='Ensight output')
          call param_read('Ensight output period',ens_evt%tper)
          ! Add variables to output
-         call ens_out%add_vector('velocity',Ui,Vi,Wi)
+         call ens_out%add_vector('velocity',fs%Ui,fs%Vi,fs%Wi)
          call ens_out%add_scalar('VOF',vf%VF)
          call ens_out%add_scalar('curvature',vf%curv)
          call ens_out%add_surface('vofplic',vf%surfgrid)
@@ -332,7 +319,7 @@ contains
       ! bcond
       ! timetracker
       
-      ! Deallocate work arrays
+      ! Deallocate work arrays - none
       
    end subroutine simulation_final
    
