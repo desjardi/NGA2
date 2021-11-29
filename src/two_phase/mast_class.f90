@@ -2886,18 +2886,15 @@ contains
      real(WP) :: vol_r,vol_l,rho_r,rho_l
      real(WP), dimension(0:1) :: jumpx,jumpy,jumpz
                                                                                     
-     do k=this%cfg%kmin_,this%cfg%kmax_
-        do j=this%cfg%jmin_,this%cfg%jmax_
-           do i=this%cfg%imin_,this%cfg%imax_
+     do k=this%cfg%kmin_-1,this%cfg%kmax_+1
+        do j=this%cfg%jmin_-1,this%cfg%jmax_+1
+           do i=this%cfg%imin_-1,this%cfg%imax_+1
               ! Begin at zero every time
               termU(i,j,k) = 0.0_WP
               termV(i,j,k) = 0.0_WP
               termW(i,j,k) = 0.0_WP
-              ! No need to calculate terms inside of wall cell
-              if (this%mask(i,j,k).eq.1) cycle
-              ! Only need to apply terms where SL scheme is present
-              if (max(maxval(this%sl_face(i,j,k,:)),this%sl_face(i+1,j,k,1),&
-                   this%sl_face(i,j+1,k,2),this%sl_face(i,j,k+1,3)).eq.0) cycle
+              ! No need to calculate terms inside of wall cell or masked BCs
+              if (this%mask(i,j,k).gt.0) cycle
 
               ! Get contributions of pressure jump to faces of current cell
               ! r and l are with respect to the cell here, not a face
@@ -2922,7 +2919,7 @@ contains
         end do
      end do
 
-     ! Boundary conditions
+     ! No need for communication or boundary conditions on these arrays
 
    end subroutine terms_modified_face_velocity
 
