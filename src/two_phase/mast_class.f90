@@ -32,8 +32,10 @@ module mast_class
       character(len=1) :: face                            !< Bcond face (x/y/z)
       integer :: dir                                      !< Bcond direction (+1,-1,0 for interior)
       real(WP) :: rdir                                    !< Bcond direction (real variable)
-      logical :: canCorrect                               !< Can this bcond be corrected for global conservation?
    end type bcond
+
+   !> Bcond shift value
+   integer, dimension(3,6), parameter :: shift=reshape([+1,0,0,-1,0,0,0,+1,0,0,-1,0,0,0,+1,0,0,-1],shape(shift))
    
    !> Two-phase compressible solver object definition ([M]ultiphase [A]ll-Mach [S]emi-Lagrangian [T]ransport)
    type :: mast
@@ -61,9 +63,6 @@ module mast_class
       
       ! Boundary condition list
       integer :: nbc                                      !< Number of bcond for our solver
-      real(WP), dimension(:), allocatable :: mfr          !< MFR through each bcond
-      real(WP), dimension(:), allocatable :: area         !< Area for each bcond
-      real(WP) :: correctable_area                        !< Area of bcond that can be corrected
       type(bcond), pointer :: first_bc                    !< List of bcond for our solver
 
       ! Ad-hoc fixing of variables
@@ -184,7 +183,7 @@ module mast_class
    contains
       procedure :: print=>mast_print                      !< Output solver to the screen
       procedure :: get_bcond                              !< Get a boundary condition
-      procedure :: apply_bcond                            !< Apply all boundary conditions
+      procedure :: apply_bcond                            !< Apply boundary conditions as specified
       procedure :: add_static_contact                     !< Add static contact line model to surface tension jump
 
       ! For initialization of simulation
@@ -649,7 +648,7 @@ contains
    
    
    !> Add a boundary condition
-   subroutine add_bcond(this,name,type,locator,face,dir,canCorrect)
+   subroutine add_bcond(this,name,type,locator,face,dir)
       use string,   only: lowercase
       use messager, only: die
       implicit none
@@ -665,7 +664,6 @@ contains
       end interface
       character(len=1), intent(in) :: face
       integer, intent(in) :: dir
-      logical, intent(in) :: canCorrect
       type(bcond), pointer :: new_bc
       integer :: i,j,k,n
       
@@ -687,7 +685,6 @@ contains
       case default; call die('[mast add_bcond] Unknown bcond dir - expecting -1, +1, or 0')
       end select
       new_bc%rdir=real(new_bc%dir,WP)
-      new_bc%canCorrect=canCorrect
       
       ! Insert it up front
       new_bc%next=>this%first_bc
@@ -695,33 +692,30 @@ contains
       
       ! Increment bcond counter
       this%nbc=this%nbc+1
+
+      ! For this collocated solver, BCs only specify cell-centered values and behavior,
+      ! and the behavior of the face-centered values depends on the type of BC.
+      ! (For now, dirichlet BCs always enforce the flowrate, i.e., mask face velocities,
+      !  and clipped neumann BCs modify the sl_face flags to what works best at the outlet.)
       
       ! Now adjust the metrics accordingly
       select case (new_bc%type)
-      case (dirichlet) !< Dirichlet is set one face (i.e., velocit component) at the time
-         select case (new_bc%face)
-         case ('x')
-            do n=1,new_bc%itr%n_
-               i=new_bc%itr%map(1,n); j=new_bc%itr%map(2,n); k=new_bc%itr%map(3,n)
-               this%umask(i,j,k)=2
-            end do
-         case ('y')
-            do n=1,new_bc%itr%n_
-               i=new_bc%itr%map(1,n); j=new_bc%itr%map(2,n); k=new_bc%itr%map(3,n)
-               this%vmask(i,j,k)=2
-            end do
-         case ('z')
-            do n=1,new_bc%itr%n_
-               i=new_bc%itr%map(1,n); j=new_bc%itr%map(2,n); k=new_bc%itr%map(3,n)
-               this%wmask(i,j,k)=2
-            end do
-         end select
+      case (dirichlet)
+         do n=1,new_bc%itr%n_
+            i=new_bc%itr%map(1,n); j=new_bc%itr%map(2,n); k=new_bc%itr%map(3,n)
+            ! Mask cell
+            this%mask(i,j,k)     =2
+            ! Mask faces
+            this%umask(i:i+1,j,k)=2
+            this%vmask(i,j:j+1,k)=2
+            this%wmask(i,j,k:k+1)=2
+         end do
          
       case (neumann) !< Neumann has to be at existing wall or at domain boundary!
       case (clipped_neumann)
       !case (convective)
       case default
-         call die('[mast apply_bcond] Unknown bcond type')
+         call die('[mast add_bcond] Unknown bcond type')
       end select
    
    end subroutine add_bcond
@@ -744,28 +738,17 @@ contains
    
    
    !> Enforce boundary condition
-   subroutine apply_bcond(this,t,dt)
+   subroutine apply_bcond(this,dt,scope)
       use messager, only: die
       implicit none
       class(mast), intent(inout) :: this
-      real(WP), intent(in) :: t,dt
-      integer :: i,j,k,n,stag
+      real(WP), intent(in) :: dt
+      integer :: i,j,k,n,stag,iscope,ii
       type(bcond), pointer :: my_bc
+      character(len=str_medium) :: scope
       
-      ! ! First enfore zero velocity at walls
-      ! do k=this%cfg%kmin_,this%cfg%kmax_
-      !    do j=this%cfg%jmin_,this%cfg%jmax_
-      !       do i=this%cfg%imin_,this%cfg%imax_
-      !          if (minval(this%cfg%VF(i-1:i,j,k)).lt.10.0_WP*epsilon(1.0_WP)) this%U(i,j,k)=0.0_WP
-      !          if (minval(this%cfg%VF(i,j-1:j,k)).lt.10.0_WP*epsilon(1.0_WP)) this%V(i,j,k)=0.0_WP
-      !          if (minval(this%cfg%VF(i,j,k-1:k)).lt.10.0_WP*epsilon(1.0_WP)) this%W(i,j,k)=0.0_WP
-      !       end do
-      !    end do
-      ! end do
-      ! ! Sync fields
-      ! call this%cfg%sync(this%U)
-      ! call this%cfg%sync(this%V)
-      ! call this%cfg%sync(this%W)
+      ! Scope
+      ! Available options: density, phase_momentum, momentum, energy, velocity, flag
       
       ! Traverse bcond list
       my_bc=>this%first_bc
@@ -786,34 +769,62 @@ contains
                ! Handle index shift due to staggering
                stag=min(my_bc%dir,0)
                ! Implement based on bcond direction
-               select case (my_bc%face)
-               case ('x')
-                  stag=min(my_bc%dir,0)
-                  do n=1,my_bc%itr%n_
-                     i=my_bc%itr%map(1,n); j=my_bc%itr%map(2,n); k=my_bc%itr%map(3,n)
-                     this%U(i     ,j    ,k    )=this%U(i-my_bc%dir     ,j    ,k    )
-                     this%V(i+stag,j:j+1,k    )=this%V(i-my_bc%dir+stag,j:j+1,k    )
-                     this%W(i+stag,j    ,k:k+1)=this%W(i-my_bc%dir+stag,j    ,k:k+1)
-                  end do
-               case ('y')
-                  stag=min(my_bc%dir,0)
-                  do n=1,my_bc%itr%n_
-                     i=my_bc%itr%map(1,n); j=my_bc%itr%map(2,n); k=my_bc%itr%map(3,n)
-                     this%U(i:i+1,j+stag,k    )=this%U(i:i+1,j-my_bc%dir+stag,k    )
-                     this%V(i    ,j     ,k    )=this%V(i    ,j-my_bc%dir     ,k    )
-                     this%W(i    ,j+stag,k:k+1)=this%W(i    ,j-my_bc%dir+stag,k:k+1)
-                  end do
-               case ('z')
-                  stag=min(my_bc%dir,0)
-                  do n=1,my_bc%itr%n_
-                     i=my_bc%itr%map(1,n); j=my_bc%itr%map(2,n); k=my_bc%itr%map(3,n)
-                     this%U(i:i+1,j    ,k+stag)=this%U(i:i+1,j    ,k-my_bc%dir+stag)
-                     this%V(i    ,j:j+1,k+stag)=this%V(i    ,j:j+1,k-my_bc%dir+stag)
-                     this%W(i    ,j    ,k     )=this%W(i    ,j    ,k-my_bc%dir     )
-                  end do
-               end select
+               stag=min(my_bc%dir,0)
+               do n=1,my_bc%itr%n_
+                  i=my_bc%itr%map(1,n); j=my_bc%itr%map(2,n); k=my_bc%itr%map(3,n)
+                  select case (trim(adjustl(scope)))
+                  case('density')
+                     this%Grho(i,j,k)=this%Grho(i-shift(1,my_bc%dir),j-shift(2,my_bc%dir),k-shift(3,my_bc%dir))
+                     this%Lrho(i,j,k)=this%Lrho(i-shift(1,my_bc%dir),j-shift(2,my_bc%dir),k-shift(3,my_bc%dir))
+                  case('phase_momentum')
+                     this%GrhoU(i,j,k)=this%GrhoU(i-shift(1,my_bc%dir),j-shift(2,my_bc%dir),k-shift(3,my_bc%dir))
+                     this%GrhoV(i,j,k)=this%GrhoV(i-shift(1,my_bc%dir),j-shift(2,my_bc%dir),k-shift(3,my_bc%dir))
+                     this%GrhoW(i,j,k)=this%GrhoW(i-shift(1,my_bc%dir),j-shift(2,my_bc%dir),k-shift(3,my_bc%dir))
+                     this%LrhoU(i,j,k)=this%LrhoU(i-shift(1,my_bc%dir),j-shift(2,my_bc%dir),k-shift(3,my_bc%dir))
+                     this%LrhoV(i,j,k)=this%LrhoV(i-shift(1,my_bc%dir),j-shift(2,my_bc%dir),k-shift(3,my_bc%dir))
+                     this%LrhoW(i,j,k)=this%LrhoW(i-shift(1,my_bc%dir),j-shift(2,my_bc%dir),k-shift(3,my_bc%dir))
+                  case('momentum')
+                     this%rhoUi(i,j,k)=this%rhoUi(i-shift(1,my_bc%dir),j-shift(2,my_bc%dir),k-shift(3,my_bc%dir))
+                     this%rhoVi(i,j,k)=this%rhoVi(i-shift(1,my_bc%dir),j-shift(2,my_bc%dir),k-shift(3,my_bc%dir))
+                     this%rhoWi(i,j,k)=this%rhoWi(i-shift(1,my_bc%dir),j-shift(2,my_bc%dir),k-shift(3,my_bc%dir))
+                  case('energy')
+                     this%GrhoE(i,j,k)=this%GrhoE(i-shift(1,my_bc%dir),j-shift(2,my_bc%dir),k-shift(3,my_bc%dir))
+                     this%LrhoE(i,j,k)=this%LrhoE(i-shift(1,my_bc%dir),j-shift(2,my_bc%dir),k-shift(3,my_bc%dir))
+                  case('velocity')
+                     select case (my_bc%face)
+                     case ('x')
+                        this%U(i     ,j    ,k    )=this%U(i-my_bc%dir     ,j    ,k    )
+                        this%V(i+stag,j:j+1,k    )=this%V(i-my_bc%dir+stag,j:j+1,k    )
+                        this%W(i+stag,j    ,k:k+1)=this%W(i-my_bc%dir+stag,j    ,k:k+1)
+                     case ('y')
+                        this%U(i:i+1,j+stag,k    )=this%U(i:i+1,j-my_bc%dir+stag,k    )
+                        this%V(i    ,j     ,k    )=this%V(i    ,j-my_bc%dir     ,k    )
+                        this%W(i    ,j+stag,k:k+1)=this%W(i    ,j-my_bc%dir+stag,k:k+1)
+                     case ('z')
+                        this%U(i:i+1,j    ,k+stag)=this%U(i:i+1,j    ,k-my_bc%dir+stag)
+                        this%V(i    ,j:j+1,k+stag)=this%V(i    ,j:j+1,k-my_bc%dir+stag)
+                        this%W(i    ,j    ,k     )=this%W(i    ,j    ,k-my_bc%dir     )
+                     end select
+                  case('flag')
+                     ! Extend 
+                     select case (my_bc%face)
+                     case ('x')
+                        do ii = 0,abs(2*my_bc%dir)
+                           this%sl_face(i+stag+ii*my_bc%dir ,j     ,k     ,1     ) = 1
+                        end do
+                     case ('y')
+                        do ii = 0,abs(2*my_bc%dir)
+                           this%sl_face(i     ,j+stag+ii*my_bc%dir ,k     ,2     ) = 1
+                        end do
+                     case ('z')
+                        do ii = 0,abs(2*my_bc%dir)
+                           this%sl_face(i     ,j     ,k+stag+ii*my_bc%dir ,3     ) = 1
+                        end do
+                     end select
+                  end select
+               end do
                ! If needed, clip
-               if (my_bc%type.eq.clipped_neumann) then
+               if (my_bc%type.eq.clipped_neumann.and.trim(adjustl(scope)).eq.'velocity') then
                   select case (my_bc%face)
                   case ('x')
                      do n=1,my_bc%itr%n_
@@ -841,10 +852,34 @@ contains
             
          end if
          
-         ! Sync full fields after each bcond - this should be optimized
-         call this%cfg%sync(this%U)
-         call this%cfg%sync(this%V)
-         call this%cfg%sync(this%W)
+         ! Sync full fields after each bcond (Needs to be done anyways)
+         select case(trim(adjustl(scope)))
+         case('density')
+            call this%cfg%sync(this%Grho)
+            call this%cfg%sync(this%Lrho)
+         case('phase_momentum')
+            call this%cfg%sync(this%GrhoU)
+            call this%cfg%sync(this%GrhoV)
+            call this%cfg%sync(this%GrhoW)
+            call this%cfg%sync(this%LrhoU)
+            call this%cfg%sync(this%LrhoV)
+            call this%cfg%sync(this%LrhoW)
+         case('momentum')
+            call this%cfg%sync(this%rhoUi)
+            call this%cfg%sync(this%rhoVi)
+            call this%cfg%sync(this%rhoWi)
+         case('energy')
+            call this%cfg%sync(this%GrhoE)
+            call this%cfg%sync(this%LrhoE)
+         case('velocity')
+            call this%cfg%sync(this%U)
+            call this%cfg%sync(this%V)
+            call this%cfg%sync(this%W)
+         case('flag')
+            call this%cfg%sync(this%sl_face(:,:,:,1))
+            call this%cfg%sync(this%sl_face(:,:,:,2))
+            call this%cfg%sync(this%sl_face(:,:,:,3))
+         end select
          
          ! Move on to the next bcond
          my_bc=>my_bc%next
@@ -1244,8 +1279,8 @@ contains
      do k=this%cfg%kmin_,this%cfg%kmax_
         do j=this%cfg%jmin_,this%cfg%jmax_
            do i=this%cfg%imin_,this%cfg%imax_
-              ! Skip wall cells
-              if (this%mask(i,j,k).eq.1) cycle
+              ! Skip wall cells and masked BC cells
+              if (this%mask(i,j,k).gt.0) cycle
               ! Update VF
               vf%VF(i,j,k) = this%F_VF(i,j,k)/this%F_VOL(i,j,k)
               ! Update phase density, pressure, and bulk moduli according to VF limits
@@ -1336,6 +1371,12 @@ contains
      call vf%subcell_vol()
      call vf%get_curvature()
      ! Band and distance information should not be needed
+
+     ! Boundary conditions density
+     call this%apply_bcond(dt,'density')
+     ! Sync for phase pressure (boundaries are not used)
+     call this%cfg%sync(this%GP)
+     call this%cfg%sync(this%LP)
 
      ! Mixture density
      this%RHO = vf%VF*this%Lrho + (1.0_WP-vf%VF)*this%Grho
@@ -1442,6 +1483,7 @@ contains
      this%rhoWi=this%implicit%sol
 
      ! Boundary conditions for momentum
+     call this%apply_bcond(dt,'phase_momentum')
 
      ! Velocity
      this%Ui=this%rhoUi/this%RHO
@@ -1480,8 +1522,8 @@ contains
      do k=this%cfg%kmin_,this%cfg%kmax_
         do j=this%cfg%jmin_,this%cfg%jmax_
            do i=this%cfg%imin_,this%cfg%imax_
-              ! Cycle wall cells
-              if (this%mask(i,j,k).eq.1) cycle
+              ! Cycle wall cells and masked BC cells
+              if (this%mask(i,j,k).gt.0) cycle
               ! Update phase energy
               if      (vf%VF(i,j,k).lt.VFlo) then
                  this%GrhoE(i,j,k) = this%F_GrhoE(i,j,k)/this%cfg%vol(i,j,k)
@@ -1498,6 +1540,7 @@ contains
      end do
 
      ! Energy boundary conditions
+     call this%apply_bcond(dt,'energy')
   
    contains
 
@@ -2196,14 +2239,15 @@ contains
          end do
       end do
       
-     ! BCs
+      ! BCs
+      call this%apply_bcond(dt,'velocity')
 
      ! Correct cell-centered quantities
-     do k=this%cfg%kmin_,this%cfg%kmax_+1
-        do j=this%cfg%jmin_,this%cfg%jmax_+1
-           do i=this%cfg%imin_,this%cfg%imax_+1
-              ! No need to calculate terms inside of wall cell
-              if (this%mask(i,j,k).eq.1) cycle
+     do k=this%cfg%kmin_,this%cfg%kmax_
+        do j=this%cfg%jmin_,this%cfg%jmax_
+           do i=this%cfg%imin_,this%cfg%imax_
+              ! No need to calculate terms inside of wall cell or masked BC
+              if (this%mask(i,j,k).gt.0) cycle
 
               ! r and l are with respect to the cell here, not a face
               rho_l=sum(vf%Gvol(0,:,:,i,j,k))*this%Grho(i,j,k)+sum(vf%Lvol(0,:,:,i,j,k))*this%Lrho(i,j,k)
@@ -2262,6 +2306,8 @@ contains
      this%dHpjump = this%Hpjump
 
      ! BCs
+     call this%apply_bcond(dt,'momentum')
+     call this%apply_bcond(dt,'energy')
 
      ! Calculate other quantities
      this%Ui=this%rhoUi/this%RHO
@@ -2288,8 +2334,8 @@ contains
      do k=this%cfg%kmino_,this%cfg%kmaxo_
         do j=this%cfg%jmino_,this%cfg%jmaxo_
            do i=this%cfg%imino_,this%cfg%imaxo_
-              ! Skip wall cells
-              if (this%mask(i,j,k).eq.1) cycle
+              ! Skip wall cells and masked BCs
+              if (this%mask(i,j,k).gt.0) cycle
               ! Determine if multiphase cell
               if ((vf%VF(i,j,k).ge.VFlo).and.(vf%VF(i,j,k).le.VFhi)) then
                  if (.true.) then !(mult_iso) then
@@ -2328,8 +2374,8 @@ contains
         do k=this%cfg%kmino_,this%cfg%kmaxo_
            do j=this%cfg%jmino_,this%cfg%jmaxo_
               do i=this%cfg%imino_,this%cfg%imaxo_
-                 ! Skip wall cells
-                 if (this%mask(i,j,k).eq.1) cycle
+                 ! Skip wall cells and masked BCs
+                 if (this%mask(i,j,k).gt.0) cycle
                  ! Calculate kinematic KE
                  KE = 0.5_WP*(this%Ui(i,j,k)**2+this%Vi(i,j,k)**2+this%Wi(i,j,k)**2)
                  ! Alter energy if needed
@@ -2705,7 +2751,7 @@ contains
               rho_r=sum(vf%Gvol(0,:,:,i  ,j,k))*this%Grho(i  ,j,k)+sum(vf%Lvol(0,:,:,i  ,j,k))*this%Lrho(i  ,j,k)
               rho_l=sum(vf%Gvol(1,:,:,i-1,j,k))*this%Grho(i-1,j,k)+sum(vf%Lvol(1,:,:,i-1,j,k))*this%Lrho(i-1,j,k)
               if (min(vol_l,vol_r).gt.0.0_WP) then
-                 U(i,j,k)=(rho_l*Ui(i-1,j,k)+rho_r*Ui(i,j,k))/(rho_l+rho_r)
+                 if (this%umask(i,j,k).ne.2) U(i,j,k)=(rho_l*Ui(i-1,j,k)+rho_r*Ui(i,j,k))/(rho_l+rho_r)
               else
                  U(i,j,k)=0.0_WP
               end if
@@ -2715,7 +2761,7 @@ contains
               rho_r=sum(vf%Gvol(:,0,:,i,j  ,k))*this%Grho(i,j  ,k)+sum(vf%Lvol(:,0,:,i,j  ,k))*this%Lrho(i,j  ,k)
               rho_l=sum(vf%Gvol(:,1,:,i,j-1,k))*this%Grho(i,j-1,k)+sum(vf%Lvol(:,1,:,i,j-1,k))*this%Lrho(i,j-1,k)
               if (min(vol_l,vol_r).gt.0.0_WP) then
-                 V(i,j,k)=(rho_l*Vi(i,j-1,k)+rho_r*Vi(i,j,k))/(rho_l+rho_r)
+                 if (this%vmask(i,j,k).ne.2) V(i,j,k)=(rho_l*Vi(i,j-1,k)+rho_r*Vi(i,j,k))/(rho_l+rho_r)
               else
                  V(i,j,k)=0.0_WP
               end if
@@ -2725,7 +2771,7 @@ contains
               rho_r=sum(vf%Gvol(:,:,0,i,j,k  ))*this%Grho(i,j,k  )+sum(vf%Lvol(:,:,0,i,j,k  ))*this%Lrho(i,j,k  )
               rho_l=sum(vf%Gvol(:,:,1,i,j,k-1))*this%Grho(i,j,k-1)+sum(vf%Lvol(:,:,1,i,j,k-1))*this%Lrho(i,j,k-1)
               if (min(vol_l,vol_r).gt.0.0_WP) then
-                 W(i,j,k)=(rho_l*Wi(i,j,k-1)+rho_r*Wi(i,j,k))/(rho_l+rho_r)
+                 if (this%wmask(i,j,k).ne.2) W(i,j,k)=(rho_l*Wi(i,j,k-1)+rho_r*Wi(i,j,k))/(rho_l+rho_r)
               else
                  W(i,j,k)=0.0_WP
               end if
@@ -2733,7 +2779,7 @@ contains
         end do
      end do
 
-     ! Boundary conditions
+     ! Boundary conditions not included here (except through masks)
 
    end subroutine interp_vel_basic
 
@@ -2777,7 +2823,7 @@ contains
                     subtract_l = 0.0_WP; subtract_r = 0.0_WP; add = 0.0_WP
                  end if
                  u_l = Ui(i-1,j,k)+subtract_l; u_r = Ui(i,j,k)+subtract_r
-                 U(i,j,k)=(rho_l*u_l+rho_r*u_r)/(rho_l+rho_r) + add
+                 if (this%umask(i,j,k).ne.2) U(i,j,k)=(rho_l*u_l+rho_r*u_r)/(rho_l+rho_r) + add
               else
                  U(i,j,k)=0.0_WP
               end if
@@ -2796,7 +2842,7 @@ contains
                     subtract_l = 0.0_WP; subtract_r = 0.0_WP; add = 0.0_WP
                  end if
                  u_l = Vi(i,j-1,k)+subtract_l; u_r = Vi(i,j,k)+subtract_r
-                 V(i,j,k)=(rho_l*u_l+rho_r*u_r)/(rho_l+rho_r) + add
+                 if (this%vmask(i,j,k).ne.2) V(i,j,k)=(rho_l*u_l+rho_r*u_r)/(rho_l+rho_r) + add
               else
                  V(i,j,k)=0.0_WP
               end if
@@ -2815,8 +2861,7 @@ contains
                     subtract_l = 0.0_WP; subtract_r = 0.0_WP; add = 0.0_WP
                  end if
                  u_l = Wi(i,j,k-1)+subtract_l; u_r = Wi(i,j,k)+subtract_r
-                 W(i,j,k)=(rho_l*u_l+rho_r*u_r)/(rho_l+rho_r) + add
-                 W(i,j,k)=(rho_l*Wi(i,j,k-1)+rho_r*Wi(i,j,k))/(rho_l+rho_r)
+                 if (this%wmask(i,j,k).ne.2) W(i,j,k)=(rho_l*u_l+rho_r*u_r)/(rho_l+rho_r) + add
               else
                  W(i,j,k)=0.0_WP
               end if
@@ -2824,7 +2869,7 @@ contains
         end do
      end do
 
-     ! Boundary conditions
+     ! Boundary conditions not addressed here, except through masks
 
    end subroutine interp_vel_full
    
@@ -3000,98 +3045,6 @@ contains
       !call MPI_ALLREDUCE(my_divmax,this%divmax,1,MPI_REAL_WP,MPI_MAX,this%cfg%comm,ierr)
       
    end subroutine get_max
-   
-   
-   !> Compute MFR through all bcs
-   subroutine get_mfr(this)
-      use mpi_f08,  only: MPI_SUM,MPI_ALLREDUCE
-      use parallel, only: MPI_REAL_WP
-      implicit none
-      class(mast), intent(inout) :: this
-      integer :: i,j,k,n,ibc,ierr
-      type(bcond), pointer :: my_bc
-      real(WP), dimension(:), allocatable :: my_mfr,my_area
-      real(WP), dimension(:), allocatable :: canCorrect
-      
-      ! Ensure this%mfr is of proper size
-      if (.not.allocated(this%mfr)) then
-         allocate(this%mfr(this%nbc))
-      else
-         if (size(this%mfr).ne.this%nbc) then
-            deallocate(this%mfr); allocate(this%mfr(this%nbc))
-         end if
-      end if
-      
-      ! Ensure this%area is of proper size
-      if (.not.allocated(this%area)) then
-         allocate(this%area(this%nbc))
-      else
-         if (size(this%area).ne.this%nbc) then
-            deallocate(this%area); allocate(this%area(this%nbc))
-         end if
-      end if
-      
-      ! Allocate temp array for communication
-      allocate(my_mfr(this%nbc))
-      allocate(my_area(this%nbc))
-      allocate(canCorrect(this%nbc))
-      
-      ! Traverse bcond list and integrate local outgoing MFR
-      my_bc=>this%first_bc; ibc=1
-      do while (associated(my_bc))
-         
-         ! Set zero local MFR and area
-         my_mfr(ibc)=0.0_WP
-         my_area(ibc)=0.0_WP
-         if (my_bc%canCorrect) then
-            canCorrect(ibc)=1.0_WP
-         else
-            canCorrect(ibc)=0.0_WP
-         end if
-         
-         ! Only processes inside the bcond have a non-zero MFR
-         if (my_bc%itr%amIn) then
-            
-            ! Implement based on bcond face and dir, loop over interior only
-            select case (my_bc%face)
-            case ('x')
-               do n=1,my_bc%itr%n_
-                  i=my_bc%itr%map(1,n); j=my_bc%itr%map(2,n); k=my_bc%itr%map(3,n)
-                  my_mfr(ibc)=my_mfr(ibc)+my_bc%rdir*this%U(i,j,k)*this%cfg%dy(j)*this%cfg%dz(k)
-                  my_area(ibc)=my_area(ibc)+this%cfg%dy(j)*this%cfg%dz(k)
-               end do
-            case ('y')
-               do n=1,my_bc%itr%n_
-                  i=my_bc%itr%map(1,n); j=my_bc%itr%map(2,n); k=my_bc%itr%map(3,n)
-                  my_mfr(ibc)=my_mfr(ibc)+my_bc%rdir*this%V(i,j,k)*this%cfg%dz(k)*this%cfg%dx(i)
-                  my_area(ibc)=my_area(ibc)+this%cfg%dz(k)*this%cfg%dx(i)
-               end do
-            case ('z')
-               do n=1,my_bc%itr%n_
-                  i=my_bc%itr%map(1,n); j=my_bc%itr%map(2,n); k=my_bc%itr%map(3,n)
-                  my_mfr(ibc)=my_mfr(ibc)+my_bc%rdir*this%W(i,j,k)*this%cfg%dx(i)*this%cfg%dy(j)
-                  my_area(ibc)=my_area(ibc)+this%cfg%dx(i)*this%cfg%dy(j)
-               end do
-            end select
-            
-         end if
-         
-         ! Move on to the next bcond
-         my_bc=>my_bc%next; ibc=ibc+1
-         
-      end do
-      
-      ! Sum up all values
-      call MPI_ALLREDUCE(my_mfr ,this%mfr ,this%nbc,MPI_REAL_WP,MPI_SUM,this%cfg%comm,ierr)
-      call MPI_ALLREDUCE(my_area,this%area,this%nbc,MPI_REAL_WP,MPI_SUM,this%cfg%comm,ierr)
-      
-      ! Compute the correctable area
-      this%correctable_area=sum(this%area*canCorrect)
-      
-      ! Deallocate temp array
-      deallocate(my_mfr,my_area,canCorrect)
-      
-   end subroutine get_mfr
    
    !> Prepare viscosity arrays from vfs object
    subroutine get_viscosity(this,vf)
