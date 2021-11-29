@@ -2167,11 +2167,12 @@ contains
      ! Disassociate pointers at end of use
      nullify(termU,termV,termW)
      ! Calculate LHS operator of Helmholtz equation
-     call this%calcHelmholtz_LHS()
+     call this%calcHelmholtz_LHS(dt)
      ! Calculate RHS of Helmholtz equation
-     call this%calcHelmholtz_RHS()
-
-     contains
+     call this%calcHelmholtz_RHS(dt)
+     ! Boundary conditions will be needed for pressure equation if dirichlet or fixed gradient is used.
+     ! These boundary conditions could be applied by the user directly, though.
+     ! (For Neumann pressure BCs, nothing needs to be done)
 
    end subroutine pressureproj_prepare
 
@@ -2923,16 +2924,67 @@ contains
 
    end subroutine terms_modified_face_velocity
 
-   subroutine calcHelmholtz_LHS(this)
+   subroutine calcHelmholtz_LHS(this,dt)
      class(mast), intent(inout) :: this
+     real(WP), intent(in)  :: dt
+     integer :: i,j,k
      ! Work on this%psolv%opr
+
+     do k=this%cfg%kmin_,this%cfg%kmax_
+        do j=this%cfg%jmin_,this%cfg%jmax_
+           do i=this%cfg%imin_,this%cfg%imax_
+              ! Laplacian operator
+              this%psolv%opr(1,i,j,k)=this%divp_x(1,i,j,k)*this%divu_x(-1,i+1,j,k)/this%rho_U(i+1,j,k)+&
+                   &                  this%divp_x(0,i,j,k)*this%divu_x( 0,i  ,j,k)/this%rho_U(i  ,j,k)+&
+                   &                  this%divp_y(1,i,j,k)*this%divv_y(-1,i,j+1,k)/this%rho_V(i,j+1,k)+&
+                   &                  this%divp_y(0,i,j,k)*this%divv_y( 0,i,j  ,k)/this%rho_V(i,j  ,k)+&
+                   &                  this%divp_z(1,i,j,k)*this%divw_z(-1,i,j,k+1)/this%rho_W(i,j,k+1)+&
+                   &                  this%divp_z(0,i,j,k)*this%divw_z( 0,i,j,k  )/this%rho_W(i,j,k  )
+              this%psolv%opr(2,i,j,k)=this%divp_x(1,i,j,k)*this%divu_x( 0,i+1,j,k)/this%rho_U(i+1,j,k)
+              this%psolv%opr(3,i,j,k)=this%divp_x(0,i,j,k)*this%divu_x(-1,i  ,j,k)/this%rho_U(i  ,j,k)
+              this%psolv%opr(4,i,j,k)=this%divp_y(1,i,j,k)*this%divv_y( 0,i,j+1,k)/this%rho_V(i,j+1,k)
+              this%psolv%opr(5,i,j,k)=this%divp_y(0,i,j,k)*this%divv_y(-1,i,j  ,k)/this%rho_V(i,j  ,k)
+              this%psolv%opr(6,i,j,k)=this%divp_z(1,i,j,k)*this%divw_z( 0,i,j,k+1)/this%rho_W(i,j,k+1)
+              this%psolv%opr(7,i,j,k)=this%divp_z(0,i,j,k)*this%divw_z(-1,i,j,k  )/this%rho_W(i,j,k  )
+              ! Multiply by temporal term and sign
+              this%psolv%opr(:,i,j,k) = -dt**2*this%psolv%opr(:,i,j,k)
+              ! Diagonal term
+              this%psolv%opr(1,i,j,k) = this%psolv%opr(1,i,j,k) + 1.0_WP/this%RHOSS2(i,j,k)
+
+           end do
+        end do
+     end do
      
    end subroutine calcHelmholtz_LHS
 
-   subroutine calcHelmholtz_RHS(this)
+   subroutine calcHelmholtz_RHS(this,dt)
      class(mast), intent(inout) :: this
+     real(WP), intent(in)  :: dt
+     integer :: i,j,k
      ! Work on this%psolv%rhs
      
+     do k=this%cfg%kmin_,this%cfg%kmax_
+        do j=this%cfg%jmin_,this%cfg%jmax_
+           do i=this%cfg%imin_,this%cfg%imax_
+              ! Advected pressure minus pressure at n
+              this%psolv%rhs(i,j,k) = (this%PA(i,j,k) - this%P(i,j,k))/this%RHOSS2(i,j,k)
+
+              ! Divergence
+              this%psolv%rhs(i,j,k) = this%psolv%rhs(i,j,k) - dt*&
+                   ( sum(this%divp_x(:,i,j,k)*this%U(i:i+1,j,k)) &
+                   + sum(this%divp_y(:,i,j,k)*this%V(i,j:j+1,k)) &
+                   + sum(this%divp_z(:,i,j,k)*this%W(i,j,k:k+1)) )
+
+              ! Pressure jump components
+              this%psolv%rhs(i,j,k) = this%psolv%rhs(i,j,k) - dt**2*&
+                   ( sum(this%divp_x(:,i,j,k)*this%DPjx(i:i+1,j,k)*this%rho_U(i:i+1,j,k)) &
+                   + sum(this%divp_y(:,i,j,k)*this%DPjy(i,j:j+1,k)*this%rho_V(i,j:j+1,k)) &
+                   + sum(this%divp_z(:,i,j,k)*this%DPjz(i,j,k:k+1)*this%rho_W(i,j,k:k+1)) )
+
+           end do
+        end do
+     end do
+
    end subroutine calcHelmholtz_RHS
    
    !> Calculate the CFL
