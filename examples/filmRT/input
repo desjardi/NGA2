@@ -9,13 +9,16 @@ nx :	100
 ny :	100
 nz :	1
 
+# Film definition
+Film thickness : 0.02
+
 # Fluid properties
 Gravity :                     0 -1 0
 Liquid dynamic viscosity :    0.02
 Gas dynamic viscosity :       0.01
 Liquid density :              2
 Gas density :                 1
-#Surface tension coefficient : 0.01  << Set through command line
+Surface tension coefficient : 0  !0.01
 
 # Time integration
 Max timestep size : 1e-2
