@@ -97,7 +97,7 @@ contains
       end block create_and_initialize_vof
       
       
-      ! Create a two-phase flow solver without bconds
+      ! Create a compressible two-phase flow solver
       create_and_initialize_flow_solver: block
          use ils_class, only: gmres_amg
          use mathtools, only: Pi
@@ -157,8 +157,14 @@ contains
          ! Calculate phase momenta
          fs%GrhoU = fs%Grho*fs%Ui; fs%GrhoV = fs%Grho*fs%Vi; fs%GrhoW = fs%Grho*fs%Wi;
          fs%LrhoU = fs%Lrho*fs%Ui; fs%LrhoV = fs%Lrho*fs%Vi; fs%LrhoW = fs%Lrho*fs%Wi;
-         ! Calculate face velocities
+
+         ! Define boundary conditions
+         
+         ! Calculate face velocities and apply BCs
          call fs%interp_vel_basic(vf,fs%Ui,fs%Vi,fs%Wi,fs%U,fs%V,fs%W)
+         call fs%apply_bcond(time%dt,'velocity')
+         ! Calculate mixture density
+         fs%RHO = (1.0_WP-vf%VF)*fs%Grho + vf%VF*fs%Lrho
          ! Perform initial pressure relax
          call fs%pressure_relax(vf,matmod)
 
@@ -258,7 +264,7 @@ contains
          ! Create in-cell reconstruction
          call fs%flow_reconstruct(vf)
 
-         ! Apply boundary conditions
+         ! Get boundary conditions at current time
 
          ! Other routines to add later: sgs, lpt, prescribe
 
