@@ -132,7 +132,7 @@ contains
          ! Create a VOF solver
          vf=vfs(cfg=cfg,reconstruction_method=lvira,name='VOF')
          ! Initialize to a droplet
-         amp0=1.0e-5_WP
+         amp0=1.0e-4_WP
          do k=vf%cfg%kmino_,vf%cfg%kmaxo_
             do j=vf%cfg%jmino_,vf%cfg%jmaxo_
                do i=vf%cfg%imino_,vf%cfg%imaxo_
@@ -279,7 +279,7 @@ contains
       implicit none
       
       ! Perform time integration
-      do while (.not.time%done().and.amp.lt.0.1_WP*vf%cfg%yL.and.time%t.lt.10.0_WP*tau)
+      do while (.not.time%done().and.amp.lt.0.1_WP*vf%cfg%yL.and.time%t.lt.20.0_WP*tau)
          
          ! Increment time
          call fs%get_cfl(time%dt,time%cfl)
