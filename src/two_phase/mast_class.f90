@@ -317,6 +317,8 @@ contains
       allocate(self%LPold   (self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%LPold   =0.0_WP
       
       ! Flux sum arrays need to be preallocated
+      allocate(self%F_VF (self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%F_VF=0.0_WP
+      allocate(self%F_VOL(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%F_VOL=0.0_WP
       allocate(self%F_GrhoU(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%F_GrhoU=0.0_WP
       allocate(self%F_GrhoV(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%F_GrhoV=0.0_WP
       allocate(self%F_GrhoW(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%F_GrhoW=0.0_WP
@@ -351,7 +353,7 @@ contains
       allocate(self%gradLrhoW(3,self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%gradLrhoW=0.0_WP
 
       ! Hybrid advection
-      allocate(self%sl_face(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_,3)); self%sl_face=0.0_WP
+      allocate(self%sl_face(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_,3)); self%sl_face=0
       ! Pressure relaxation
       allocate(self%srcVF(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%srcVF=0.0_WP
       allocate(self%Hpjump(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%Hpjump=0.0_WP
@@ -1209,15 +1211,6 @@ contains
      type(TagAccVM_SepVM_type) :: ffm     !< Object for flux moments
      real(WP) :: Ga_i,Ga_nb,La_i,La_nb
      integer  :: i,j,k
-
-     ! Initialize flux arrays
-     this%F_VOL   = 0.0_WP; this%F_VF    = 0.0_WP
-     this%F_Grho  = 0.0_WP; this%F_Lrho  = 0.0_WP
-     this%F_GrhoU = 0.0_WP; this%F_LrhoU = 0.0_WP
-     this%F_GrhoV = 0.0_WP; this%F_LrhoV = 0.0_WP
-     this%F_GrhoW = 0.0_WP; this%F_LrhoW = 0.0_WP
-     this%F_GrhoE = 0.0_WP; this%F_LrhoE = 0.0_WP
-     this%F_GP    = 0.0_WP; this%F_LP    = 0.0_WP
 
      ! Initialize flux sum arrays
      this%F_VOL  =                                 this%cfg%vol
