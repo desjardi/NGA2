@@ -205,9 +205,10 @@ module mast_class
       procedure :: interp_vel_basic                       !< Calculate interpolated velocity
       procedure :: interp_vel_full                        !< Calculate interpolated velocity, with additional terms
       procedure :: terms_modified_face_velocity           !< Calculate additional terms for velocity interpolation
-      procedure :: calcHelmholtz_LHS                      !< Calculate the left-hand side of the pressure equation
-      procedure :: calcHelmholtz_RHS                      !< Calculate the right-hand side of the pressure equation
-      procedure :: add_surface_tension_jump               !< Add surface tension jump
+      procedure :: update_Helmholtz_LHS                   !< Calculate the left-hand side of the pressure equation
+      procedure :: update_Helmholtz_RHS                   !< Calculate the right-hand side of the pressure equation
+      procedure :: update_surface_tension_jump            !< Calculate surface tension jump
+      procedure :: harmonize_advpressure_bulkmod          !< Calculate PA and RHOSS2 for Helmholtz equation
       ! For pressure correction
       procedure :: pressureproj_correct                   !< Overall subroutine for pressure solve correction
       procedure :: get_pgrad                              !< Calculate pressure gradient
@@ -1376,7 +1377,8 @@ contains
      ! Mixture density
      this%RHO = vf%VF*this%Lrho + (1.0_WP-vf%VF)*this%Grho
 
-     ! Initialize quantities
+     ! Interpolate pressure (for predictor) and density (for predictor and Helmholtz equation operator)
+     call this%interp_pressure_density(vf)
      this%implicit%opr(:,:,:,:) = 0.0_WP        ! zero operator
      this%implicit%opr(1,:,:,:) = this%cfg%vol  ! unity*volume diagonal
      
@@ -2145,12 +2147,15 @@ contains
        
    end subroutine advection_step
 
-   subroutine pressureproj_prepare(this,dt,vf)
+   subroutine pressureproj_prepare(this,dt,vf,matmod,contact_model)
      use vfs_class, only : vfs
+     use matm_class, only: matm
      implicit none
      class(mast), intent(inout) :: this
      class(vfs),  intent(in)    :: vf
+     class(matm), intent(inout) :: matmod
      real(WP),    intent(in)    :: dt
+     integer, intent(in), optional :: contact_model
      real(WP), dimension(:,:,:), pointer :: termU,termV,termW
 
      ! Designate the use of temporary arrays
@@ -2161,10 +2166,14 @@ contains
      call this%interp_vel_full(vf,dt,this%Ui,this%Vi,this%Wi,termU,termV,termW,this%U,this%V,this%W)
      ! Disassociate pointers at end of use
      nullify(termU,termV,termW)
+     ! Calculate mixed advected pressure and bulk modulus
+     call this%harmonize_advpressure_bulkmod(vf,matmod)
+     ! Calculate pressure jump
+     call this%update_surface_tension_jump(vf,contact_model)
      ! Calculate LHS operator of Helmholtz equation
-     call this%calcHelmholtz_LHS(dt)
+     call this%update_Helmholtz_LHS(dt)
      ! Calculate RHS of Helmholtz equation
-     call this%calcHelmholtz_RHS(dt)
+     call this%update_Helmholtz_RHS(dt)
      ! Boundary conditions will be needed for pressure equation if dirichlet or fixed gradient is used.
      ! These boundary conditions could be applied by the user directly, though.
      ! (For Neumann pressure BCs, nothing needs to be done)
@@ -2566,15 +2575,47 @@ contains
      return
    end subroutine pressure_relax_one
 
+   !> Combine phase pressures and bulk moduli according to mixture rules, add additional terms to PA
+   subroutine harmonize_advpressure_bulkmod(this,vf,matmod)
+     use vfs_class, only : vfs,VFlo,VFhi
+     use matm_class, only: matm
+     implicit none
+     class(mast), intent(inout) :: this
+     class(vfs), intent(in) :: vf
+     class(matm), intent(in) :: matmod
+     real(WP) :: rhoc2_lI,rhoc2_gI,denom
+     integer :: i,j,k
+
+     do k=this%cfg%kmin_,this%cfg%kmax_+1
+        do j=this%cfg%jmin_,this%cfg%jmax_+1
+           do i=this%cfg%imin_,this%cfg%imax_+1
+              ! Intermediate variables for mechanical equilibrium projection
+              rhoc2_lI = this%LrhoSS2(i,j,k); rhoc2_gI = this%GrhoSS2(i,j,k)
+              if (vf%VF(i,j,k).ge.VFlo.and.vf%VF(i,j,k).le.VFhi) call matmod%bulkmod_intf(i,j,k,rhoc2_lI,rhoc2_gI)
+              denom = 1.0_WP/ &
+                   ((       vf%VF(i,j,k))/(rhoc2_lI+tiny(1.0_WP)) &
+                   +(1.0_WP-vf%VF(i,j,k))/(rhoc2_gI+tiny(1.0_WP)))
+              ! Mixture bulk modulus
+              this%RHOSS2(i,j,k) = (vf%VF(i,j,k) *(this%LrhoSS2(i,j,k)/(rhoc2_lI+tiny(1.0_WP))) &
+                           +(1.0_WP-vf%VF(i,j,k))*(this%GrhoSS2(i,j,k)/(rhoc2_gI+tiny(1.0_WP))))*denom
+              ! Mixture advected pressure with additional jump terms
+              this%PA(i,j,k) = ((vf%VF(i,j,k) *(this%LP(i,j,k)/(rhoc2_lI+tiny(1.0_WP))) &
+                   +(1.0_WP-vf%VF(i,j,k))*(this%GP(i,j,k)/(rhoc2_gI+tiny(1.0_WP)))) &
+                   + vf%VF(i,j,k)*(1.0_WP-vf%VF(i,j,k))*(rhoc2_lI-rhoc2_gI)/&
+                   (rhoc2_lI*rhoc2_gI+tiny(1.0_WP))*this%sigma*vf%curv(i,j,k) )*denom
+           end do
+        end do
+     end do
+
+   end subroutine harmonize_advpressure_bulkmod
+
    !> Add surface tension jump term using CSF
-   subroutine add_surface_tension_jump(this,dt,div,vf,contact_model)
+   subroutine update_surface_tension_jump(this,vf,contact_model)
       use messager,  only: die
       use vfs_class, only: vfs
       implicit none
       class(mast), intent(inout) :: this
-      real(WP), intent(inout) :: dt     !< Timestep size over which to advance
-      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: div  !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
-      class(vfs), intent(inout) :: vf
+      class(vfs), intent(in) :: vf
       integer, intent(in), optional :: contact_model
       integer :: i,j,k
       real(WP) :: mycurv,mysurf
@@ -2636,7 +2677,7 @@ contains
       ! Get increment, while considering different phase values during iteration
       this%dHpjump = this%Hpjump - this%dHpjump*real(ceiling(1.0_WP-vf%VF)*ceiling(vf%VF),WP)
       
-    end subroutine add_surface_tension_jump
+    end subroutine update_surface_tension_jump
 
 
     subroutine interp_pressure_density(this,vf)
@@ -2919,7 +2960,7 @@ contains
 
    end subroutine terms_modified_face_velocity
 
-   subroutine calcHelmholtz_LHS(this,dt)
+   subroutine update_Helmholtz_LHS(this,dt)
      class(mast), intent(inout) :: this
      real(WP), intent(in)  :: dt
      integer :: i,j,k
@@ -2950,9 +2991,9 @@ contains
         end do
      end do
      
-   end subroutine calcHelmholtz_LHS
+   end subroutine update_Helmholtz_LHS
 
-   subroutine calcHelmholtz_RHS(this,dt)
+   subroutine update_Helmholtz_RHS(this,dt)
      class(mast), intent(inout) :: this
      real(WP), intent(in)  :: dt
      integer :: i,j,k
@@ -2980,7 +3021,7 @@ contains
         end do
      end do
 
-   end subroutine calcHelmholtz_RHS
+   end subroutine update_Helmholtz_RHS
    
    !> Calculate the CFL
    subroutine get_cfl(this,dt,cflc,cfl)
@@ -3136,47 +3177,7 @@ contains
       ! call this%cfg%sync(this%visc_zx)
    end subroutine get_viscosity
    
-   
-   ! !> Prepare old density arrays from vfs object
-   ! subroutine get_olddensity(this,vf)
-   !    use vfs_class, only: vfs
-   !    implicit none
-   !    class(mast), intent(inout) :: this
-   !    class(vfs), intent(in) :: vf
-   !    integer :: i,j,k
-   !    real(WP) :: liq_vol,gas_vol,tot_vol
-   !    ! Calculate rho_U/V/Wold using subcell phasic volumes
-   !    do k=this%cfg%kmino_+1,this%cfg%kmaxo_
-   !       do j=this%cfg%jmino_+1,this%cfg%jmaxo_
-   !          do i=this%cfg%imino_+1,this%cfg%imaxo_
-   !             ! U-cell
-   !             liq_vol=sum(vf%Lvol(0,:,:,i,j,k))+sum(vf%Lvol(1,:,:,i-1,j,k))
-   !             gas_vol=sum(vf%Gvol(0,:,:,i,j,k))+sum(vf%Gvol(1,:,:,i-1,j,k))
-   !             tot_vol=gas_vol+liq_vol
-   !             this%rho_Uold(i,j,k)=1.0_WP
-   !             if (tot_vol.gt.0.0_WP) this%rho_Uold(i,j,k)=(liq_vol*this%rho_l+gas_vol*this%rho_g)/tot_vol
-   !             ! V-cell
-   !             liq_vol=sum(vf%Lvol(:,0,:,i,j,k))+sum(vf%Lvol(:,1,:,i,j-1,k))
-   !             gas_vol=sum(vf%Gvol(:,0,:,i,j,k))+sum(vf%Gvol(:,1,:,i,j-1,k))
-   !             tot_vol=gas_vol+liq_vol
-   !             this%rho_Vold(i,j,k)=1.0_WP
-   !             if (tot_vol.gt.0.0_WP) this%rho_Vold(i,j,k)=(liq_vol*this%rho_l+gas_vol*this%rho_g)/tot_vol
-   !             ! W-cell
-   !             liq_vol=sum(vf%Lvol(:,:,0,i,j,k))+sum(vf%Lvol(:,:,1,i,j,k-1))
-   !             gas_vol=sum(vf%Gvol(:,:,0,i,j,k))+sum(vf%Gvol(:,:,1,i,j,k-1))
-   !             tot_vol=gas_vol+liq_vol
-   !             this%rho_Wold(i,j,k)=1.0_WP
-   !             if (tot_vol.gt.0.0_WP) this%rho_Wold(i,j,k)=(liq_vol*this%rho_l+gas_vol*this%rho_g)/tot_vol
-   !          end do
-   !       end do
-   !    end do
-   !    ! Synchronize boundaries - not really needed...
-   !    call this%cfg%sync(this%rho_Uold)
-   !    call this%cfg%sync(this%rho_Vold)
-   !    call this%cfg%sync(this%rho_Wold)
-   ! end subroutine get_olddensity
-   
-   
+
    ! !> Add gravity source term - assumes that rho_[UVW] have been generated before
    ! subroutine addsrc_gravity(this,resU,resV,resW)
    !    implicit none
