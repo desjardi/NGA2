@@ -189,11 +189,14 @@ module mast_class
       ! For initialization of simulation
       procedure :: setup                                  !< Finish configuring the flow solver
       procedure :: add_bcond                              !< Add a boundary condition
+      procedure :: init_phase_bulkmod                     !< Calculate phase bulk moduli according to other variables
       ! For beginning of timestep (before iterative loop)
       procedure :: init_metrics                           !< Initialize metrics
       procedure :: adjust_metrics                         !< Adjust metrics
       procedure :: flag_sl                                !< Flag where SL scheme needs to be used
       procedure :: flow_reconstruct                       !< Calculate in-cell gradients for reconstructing flow variables
+      procedure :: reinit_phase_pressure                  !< Calculates phase pressures according to other conserved variables
+      
       ! For advection solve
       procedure :: advection_step                         !< Full, hybrid advection step
       ! For convenience in advection routines
@@ -2959,6 +2962,46 @@ contains
      ! No need for communication or boundary conditions on these arrays
 
    end subroutine terms_modified_face_velocity
+
+   subroutine reinit_phase_pressure(this,vf,matmod)
+     use vfs_class,  only: vfs
+     use matm_class, only: matm
+     implicit none
+     class(mast), intent(inout) :: this
+     class(vfs),  intent(inout) :: vf
+     class(matm), intent(inout) :: matmod
+     integer :: i,j,k
+     
+     do k=this%cfg%kmino_,this%cfg%kmaxo_
+        do j=this%cfg%jmino_,this%cfg%jmaxo_
+           do i=this%cfg%imino_,this%cfg%imaxo_
+              if (vf%VF(i,j,k).gt.0.0_WP) this%LP(i,j,k) = matmod%EOS_liquid(i,j,k,'p')
+              if (vf%VF(i,j,k).lt.1.0_WP) this%GP(i,j,k) = matmod%EOS_gas(i,j,k,'p')
+           end do
+        end do
+     end do
+
+   end subroutine reinit_phase_pressure
+   
+   subroutine init_phase_bulkmod(this,vf,matmod)
+     use vfs_class,  only: vfs
+     use matm_class, only: matm
+     implicit none
+     class(mast), intent(inout) :: this
+     class(vfs),  intent(inout) :: vf
+     class(matm), intent(inout) :: matmod
+     integer :: i,j,k
+     
+     do k=this%cfg%kmino_,this%cfg%kmaxo_
+        do j=this%cfg%jmino_,this%cfg%jmaxo_
+           do i=this%cfg%imino_,this%cfg%imaxo_
+              if (vf%VF(i,j,k).gt.0.0_WP) this%LrhoSS2(i,j,k) = matmod%EOS_liquid(i,j,k,'M')
+              if (vf%VF(i,j,k).lt.1.0_WP) this%GrhoSS2(i,j,k) = matmod%EOS_gas(i,j,k,'M')
+           end do
+        end do
+     end do
+
+   end subroutine init_phase_bulkmod
 
    subroutine update_Helmholtz_LHS(this,dt)
      class(mast), intent(inout) :: this

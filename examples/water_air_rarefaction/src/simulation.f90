@@ -167,13 +167,8 @@ contains
          fs%RHO = (1.0_WP-vf%VF)*fs%Grho + vf%VF*fs%Lrho
          ! Perform initial pressure relax
          call fs%pressure_relax(vf,matmod)
-         ! Calculate initial phase bulk moduli
-         j = fs%cfg%jmin_; k = fs%cfg%kmin_
-         do i=fs%cfg%imino_,fs%cfg%imaxo_
-            if (vf%VF(i,j,k).gt.0.0_WP) fs%LrhoSS2(i,:,:) = matmod%EOS_liquid(i,j,k,'M')
-            if (vf%VF(i,j,k).lt.1.0_WP) fs%GrhoSS2(i,:,:) = matmod%EOS_gas(i,j,k,'M')
-         end do
-         ! Calculate initial mixture bulk modulus
+         ! Calculate initial phase and bulk moduli
+         call fs%init_phase_bulkmod(vf,matmod)
          call fs%harmonize_advpressure_bulkmod(vf,matmod)
 
          ! Note: conditions used in Kuhn and Desjardins (2021) are as follows
@@ -189,7 +184,7 @@ contains
       ! Add Ensight output
       create_ensight: block
          ! Create Ensight output from cfg
-         ens_out=ensight(cfg=cfg,name='CollidingDrop')
+         ens_out=ensight(cfg=cfg,name='WaterAirRare')
          ! Create event for Ensight output
          ens_evt=event(time=time,name='Ensight output')
          call param_read('Ensight output period',ens_evt%tper)
@@ -256,7 +251,8 @@ contains
          call time%adjust_dt()
          call time%increment()
          
-         ! Remember old flow variables (mixture)
+         ! Reinitialize phase pressure by syncing it with conserved phase energy
+         call fs%reinit_phase_pressure(vf,matmod)
          fs%Uiold=fs%Ui; fs%Viold=fs%Vi; fs%Wiold=fs%Wi
          fs%RHOold = fs%RHO
          ! Remember old flow variables (phase)
@@ -265,6 +261,7 @@ contains
          fs%GrhoVold=fs%GrhoV; fs%LrhoVold=fs%LrhoV
          fs%GrhoWold=fs%GrhoW; fs%LrhoWold=fs%LrhoW
          fs%GrhoEold=fs%GrhoE; fs%LrhoEold=fs%LrhoE
+         fs%GPold   =   fs%GP; fs%LPold   =   fs%LP
 
          ! Remember old interface, including VF and barycenters
          call vf%copy_interface_to_old()
@@ -279,8 +276,6 @@ contains
          ! Determine semi-Lagrangian advection flag
          call fs%flag_sl(vf)
 
-         ! Initialize loop quantities
-         
          ! Perform sub-iterations
          do while (time%it.le.time%itmax)
             
