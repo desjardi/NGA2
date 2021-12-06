@@ -167,6 +167,14 @@ contains
          fs%RHO = (1.0_WP-vf%VF)*fs%Grho + vf%VF*fs%Lrho
          ! Perform initial pressure relax
          call fs%pressure_relax(vf,matmod)
+         ! Calculate initial phase bulk moduli
+         j = fs%cfg%jmin_; k = fs%cfg%kmin_
+         do i=fs%cfg%imino_,fs%cfg%imaxo_
+            if (vf%VF(i,j,k).gt.0.0_WP) fs%LrhoSS2(i,:,:) = matmod%EOS_liquid(i,j,k,'M')
+            if (vf%VF(i,j,k).lt.1.0_WP) fs%GrhoSS2(i,:,:) = matmod%EOS_gas(i,j,k,'M')
+         end do
+         ! Calculate initial mixture bulk modulus
+         call fs%harmonize_advpressure_bulkmod(vf,matmod)
 
          ! Note: conditions used in Kuhn and Desjardins (2021) are as follows
          ! rho_l0 = 1   rho_g0 = 1e-3
