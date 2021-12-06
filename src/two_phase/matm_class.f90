@@ -49,6 +49,7 @@ module matm_class
       procedure :: register_thermoflow_variables          !< Creates pointers from material models to flow solver variables
 
       procedure :: EOS_relax_quad                         !< Outputs terms for mechanical pressure relaxation step
+      procedure :: bulkmod_intf                           !< Calculate the bulk modulus at liquid-gas interface
       procedure :: fix_energy                             !< Can correct erroneous energy values
 
       procedure :: viscosity_water,  viscosity_air        !< Empirical models for temperature dependence of dynamic viscosity
@@ -384,6 +385,27 @@ contains
 
      return
    end subroutine EOS_relax_quad
+
+   subroutine bulkmod_intf(this,i,j,k,rc2_l,rc2_g)
+     implicit none
+     class(matm), intent(in) :: this
+     real(WP), intent(inout) :: rc2_l,rc2_g
+     integer  :: i,j,k
+     real(WP) :: p_I
+
+     ! Calculate interface pressure (using acoustic impedance rule)
+     p_I = (sqrt(this%Grho(i,j,k)*rc2_g)*this%LP(i,j,k) &
+           +sqrt(this%Lrho(i,j,k)*rc2_l)*this%GP(i,j,k)) /&
+           (sqrt(this%Grho(i,j,k)*rc2_g)+sqrt(this%Lrho(i,j,k)*rc2_l))
+
+     ! Calculate each bulk modulus at the interface
+     rc2_l = (p_I*(this%gamm_l-1.0_WP)+this%LP(i,j,k) &
+          +this%gamm_l*this%Pref_l)/(1.0_WP-this%Lrho(i,j,k)*this%b_l)
+     rc2_g = (p_I*(this%gamm_g-1.0_WP)+this%GP(i,j,k) &
+          +this%gamm_g*this%Pref_g)/(1.0_WP-this%Grho(i,j,k)*this%b_g)
+
+     return
+   end subroutine bulkmod_intf
 
    function viscosity_air(this,T) result(mu)
      implicit none
