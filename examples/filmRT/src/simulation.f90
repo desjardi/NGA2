@@ -78,14 +78,14 @@ contains
       ! Initialize our VOF solver and field
       create_and_initialize_vof: block
          use mms_geom, only: cube_refine_vol
-         use vfs_class, only: lvira,VFhi,VFlo
+         use vfs_class, only: r2p,lvira,VFhi,VFlo
          integer :: i,j,k,n,si,sj,sk
          real(WP), dimension(3,8) :: cube_vertex
          real(WP), dimension(3) :: v_cent,a_cent
          real(WP) :: vol,area
          integer, parameter :: amr_ref_lvl=4
          ! Create a VOF solver
-         vf=vfs(cfg=cfg,reconstruction_method=lvira,name='VOF')
+         vf=vfs(cfg=cfg,reconstruction_method=r2p,name='VOF')
          ! Initialize to a thin film
          call param_read('Film thickness',Hfilm)
          amp0=1.0e-5_WP
