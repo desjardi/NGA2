@@ -190,6 +190,11 @@ contains
          call param_read('Ensight output period',ens_evt%tper)
          ! Add variables to output
          call ens_out%add_vector('velocity',fs%Ui,fs%Vi,fs%Wi)
+         call ens_out%add_scalar('P',fs%P)
+         call ens_out%add_scalar('Grho',fs%Grho)
+         call ens_out%add_scalar('Lrho',fs%Lrho)
+         call ens_out%add_scalar('Density',fs%RHO)
+         call ens_out%add_scalar('Bulkmod',fs%RHOSS2)
          call ens_out%add_scalar('VOF',vf%VF)
          call ens_out%add_scalar('curvature',vf%curv)
          call ens_out%add_surface('vofplic',vf%surfgrid)
