@@ -152,19 +152,19 @@ contains
      
      select case(trim(adjustl(phase)))
      case('liquid')
-        this%Grho  => rho
-        this%GU    => u
-        this%GV    => v
-        this%GW    => w
-        this%GrhoE => rhoE
-        this%GP    => p
-     case('gas')
         this%Lrho  => rho
         this%LU    => u
         this%LV    => v
         this%LW    => w
         this%LrhoE => rhoE
         this%LP    => p
+     case('gas')
+        this%Grho  => rho
+        this%GU    => u
+        this%GV    => v
+        this%GW    => w
+        this%GrhoE => rhoE
+        this%GP    => p
      end select
 
    end subroutine register_thermoflow_variables
