@@ -33,8 +33,29 @@ module simulation
    real(WP) :: discloc,v0,v1,p0,p1
    
 contains
-   
-   
+
+   !> Function that localizes the left (x-) of the domain
+   function left_of_domain(pg,i,j,k) result(isIn)
+     use pgrid_class, only: pgrid
+     implicit none
+     class(pgrid), intent(in) :: pg
+     integer, intent(in) :: i,j,k
+     logical :: isIn
+     isIn=.false.
+     if (i.eq.pg%imin-1) isIn=.true.
+   end function left_of_domain
+
+   !> Function that localizes the right (x+) of the domain
+   function right_of_domain(pg,i,j,k) result(isIn)
+     use pgrid_class, only: pgrid
+     implicit none
+     class(pgrid), intent(in) :: pg
+     integer, intent(in) :: i,j,k
+     logical :: isIn
+     isIn=.false.
+     if (i.eq.pg%imax+1) isIn=.true.
+   end function right_of_domain
+    
    !> Initialization of problem solver
    subroutine simulation_init
       use param, only: param_read
@@ -47,6 +68,7 @@ contains
          call param_read('Max timestep size',time%dtmax)
          call param_read('Max cfl number',time%cflmax)
          call param_read('Max time',time%tmax)
+         !call param_read('Max steps',time%nmax)
          time%dt=time%dtmax
          time%itmax=2
       end block initialize_timetracker
@@ -99,8 +121,9 @@ contains
       
       ! Create a compressible two-phase flow solver
       create_and_initialize_flow_solver: block
-         use ils_class, only: gmres_amg
-         use mathtools, only: Pi
+         use mast_class, only: clipped_neumann,dirichlet
+         use ils_class,  only: gmres_amg
+         use mathtools,  only: Pi
          integer :: i,j,k
          real(WP), dimension(3) :: xyz
          real(WP) :: gamm_l,Pref_l,gamm_g,rho_l0,rho_g0
@@ -158,9 +181,11 @@ contains
          fs%GrhoU = fs%Grho*fs%Ui; fs%GrhoV = fs%Grho*fs%Vi; fs%GrhoW = fs%Grho*fs%Wi;
          fs%LrhoU = fs%Lrho*fs%Ui; fs%LrhoV = fs%Lrho*fs%Vi; fs%LrhoW = fs%Lrho*fs%Wi;
 
-         ! Define boundary conditions
-         
-         ! Calculate face velocities and apply BCs
+         ! Define boundary conditions - initialized values are intended dirichlet values too
+         call fs%add_bcond(name= 'inflow',type=dirichlet      ,locator=left_of_domain ,face='x',dir=-1)
+         call fs%add_bcond(name='outflow',type=clipped_neumann,locator=right_of_domain,face='x',dir=+1)
+
+         ! Calculate face velocities and apply face BC
          call fs%interp_vel_basic(vf,fs%Ui,fs%Vi,fs%Wi,fs%U,fs%V,fs%W)
          call fs%apply_bcond(time%dt,'velocity')
          ! Calculate mixture density
@@ -292,7 +317,7 @@ contains
             ! Insert sponge step here
             
             ! Prepare pressure projection
-            call fs%pressureproj_prepare(time%dt,vf)
+            call fs%pressureproj_prepare(time%dt,vf,matmod)
             ! Initialize and solve Helmholtz equation
             call fs%psolv%setup()
             fs%psolv%sol=0.0_WP

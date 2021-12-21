@@ -777,7 +777,6 @@ contains
                ! Handle index shift due to staggering
                stag=min(my_bc%dir,0)
                ! Implement based on bcond direction
-               stag=min(my_bc%dir,0)
                do n=1,my_bc%itr%n_
                   i=my_bc%itr%map(1,n); j=my_bc%itr%map(2,n); k=my_bc%itr%map(3,n)
                   select case (trim(adjustl(scope)))
