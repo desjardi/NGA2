@@ -1475,9 +1475,9 @@ contains
      end do
 
      ! Put momentum eq RHS into arrays
-     this%rhoUi = (1.0_WP-vf%VF)*this%F_GrhoU + vf%VF*this%F_LrhoU
-     this%rhoVi = (1.0_WP-vf%VF)*this%F_GrhoV + vf%VF*this%F_LrhoV
-     this%rhoWi = (1.0_WP-vf%VF)*this%F_GrhoW + vf%VF*this%F_LrhoW
+     this%rhoUi = this%F_GrhoU + this%F_LrhoU
+     this%rhoVi = this%F_GrhoV + this%F_LrhoV
+     this%rhoWi = this%F_GrhoW + this%F_LrhoW
 
      ! Solve for x-momentum
      call this%implicit%setup()
