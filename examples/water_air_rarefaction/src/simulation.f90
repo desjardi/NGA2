@@ -42,7 +42,7 @@ contains
      integer, intent(in) :: i,j,k
      logical :: isIn
      isIn=.false.
-     if (i.eq.pg%imin-1) isIn=.true.
+     if (i.le.pg%imin-1) isIn=.true.
    end function left_of_domain
 
    !> Function that localizes the right (x+) of the domain
@@ -123,12 +123,13 @@ contains
       
       ! Create a compressible two-phase flow solver
       create_and_initialize_flow_solver: block
-         use mast_class, only: clipped_neumann,dirichlet
+         use mast_class, only: clipped_neumann,dirichlet,bc_scope,bcond
          use ils_class,  only: gmres_amg
          use mathtools,  only: Pi
-         integer :: i,j,k
+         integer :: i,j,k,n
          real(WP), dimension(3) :: xyz
          real(WP) :: gamm_l,Pref_l,gamm_g,rho_l0,rho_g0
+         type(bcond), pointer :: mybc
          ! Create material model class
          matmod=matm(cfg=cfg,name='Liquid-gas models')
          ! Get EOS parameters from input
@@ -183,13 +184,22 @@ contains
          fs%GrhoU = fs%Grho*fs%Ui; fs%GrhoV = fs%Grho*fs%Vi; fs%GrhoW = fs%Grho*fs%Wi;
          fs%LrhoU = fs%Lrho*fs%Ui; fs%LrhoV = fs%Lrho*fs%Vi; fs%LrhoW = fs%Lrho*fs%Wi;
 
-         ! Define boundary conditions - initialized values are intended dirichlet values too
+         ! Define boundary conditions - initialized values are intended dirichlet values too, for the cell centers
          call fs%add_bcond(name= 'inflow',type=dirichlet      ,locator=left_of_domain ,face='x',dir=-1)
          call fs%add_bcond(name='outflow',type=clipped_neumann,locator=right_of_domain,face='x',dir=+1)
 
-         ! Calculate face velocities and apply face BC
+         ! Calculate face velocities
          call fs%interp_vel_basic(vf,fs%Ui,fs%Vi,fs%Wi,fs%U,fs%V,fs%W)
-         call fs%apply_bcond(time%dt,'velocity')
+         ! Apply face BC - inflow
+         call fs%get_bcond('inflow',mybc)
+         do n=1,mybc%itr%no_
+            i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
+            fs%U(i+max(0,-mybc%dir),j,k)=v0
+         end do
+         ! Apply face BC - outflow
+         bc_scope = 'velocity'
+         call fs%apply_bcond(time%dt,bc_scope)
+
          ! Calculate mixture density
          fs%RHO = (1.0_WP-vf%VF)*fs%Grho + vf%VF*fs%Lrho
          ! Perform initial pressure relax

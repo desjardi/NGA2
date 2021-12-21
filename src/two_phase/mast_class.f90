@@ -22,6 +22,9 @@ module mast_class
    
    ! List of available contact line models for this solver
    integer, parameter, public :: static_contact=1    !< Static contact line model
+
+   ! Buffer for labeling BCs
+   character(len=str_medium), public :: bc_scope
    
    !> Boundary conditions for the two-phase solver
    type :: bcond
@@ -714,9 +717,20 @@ contains
             ! Mask cell
             this%mask(i,j,k)     =2
             ! Mask faces
-            this%umask(i:i+1,j,k)=2
-            this%vmask(i,j:j+1,k)=2
-            this%wmask(i,j,k:k+1)=2
+            select case(face)
+            case('x')
+               this%umask(i+max(0,-dir),j    ,k    )=2
+               this%vmask(i            ,j:j+1,k    )=2
+               this%wmask(i            ,j    ,k:k+1)=2
+            case('y')
+               this%umask(i:i+1,j            ,k    )=2
+               this%vmask(i    ,j+max(0,-dir),k    )=2
+               this%wmask(i    ,j            ,k:k+1)=2
+            case('z')
+               this%umask(i:i+1,j    ,k            )=2
+               this%vmask(i    ,j:j+1,k            )=2
+               this%wmask(i    ,j    ,k+max(0,-dir))=2
+            end select
          end do
          
       case (neumann) !< Neumann has to be at existing wall or at domain boundary!
@@ -751,7 +765,7 @@ contains
       implicit none
       class(mast), intent(inout) :: this
       real(WP), intent(in) :: dt
-      integer :: i,j,k,n,stag,iscope,ii
+      integer :: i,j,k,n,stag,ii
       type(bcond), pointer :: my_bc
       character(len=str_medium) :: scope
       
@@ -772,10 +786,12 @@ contains
                
                ! This is done by the user directly
                ! Unclear whether we want to do this within the solver...
+
+               ! Probably need condition for sl_face here
                
             case (neumann,clipped_neumann) !< Apply Neumann condition to all 3 components
                ! Handle index shift due to staggering
-               stag=min(my_bc%dir,0)
+               stag=max(-my_bc%dir,0)
                ! Implement based on bcond direction
                do n=1,my_bc%itr%n_
                   i=my_bc%itr%map(1,n); j=my_bc%itr%map(2,n); k=my_bc%itr%map(3,n)
@@ -800,32 +816,32 @@ contains
                   case('velocity')
                      select case (my_bc%face)
                      case ('x')
-                        this%U(i     ,j    ,k    )=this%U(i-my_bc%dir     ,j    ,k    )
-                        this%V(i+stag,j:j+1,k    )=this%V(i-my_bc%dir+stag,j:j+1,k    )
-                        this%W(i+stag,j    ,k:k+1)=this%W(i-my_bc%dir+stag,j    ,k:k+1)
+                        this%U(i+stag,j    ,k    )=this%U(i-my_bc%dir+stag,j    ,k    )
+                        this%V(i     ,j:j+1,k    )=this%V(i-my_bc%dir     ,j:j+1,k    )
+                        this%W(i     ,j    ,k:k+1)=this%W(i-my_bc%dir     ,j    ,k:k+1)
                      case ('y')
-                        this%U(i:i+1,j+stag,k    )=this%U(i:i+1,j-my_bc%dir+stag,k    )
-                        this%V(i    ,j     ,k    )=this%V(i    ,j-my_bc%dir     ,k    )
-                        this%W(i    ,j+stag,k:k+1)=this%W(i    ,j-my_bc%dir+stag,k:k+1)
+                        this%U(i:i+1,j     ,k    )=this%U(i:i+1,j-my_bc%dir     ,k    )
+                        this%V(i    ,j+stag,k    )=this%V(i    ,j-my_bc%dir+stag,k    )
+                        this%W(i    ,j     ,k:k+1)=this%W(i    ,j-my_bc%dir     ,k:k+1)
                      case ('z')
-                        this%U(i:i+1,j    ,k+stag)=this%U(i:i+1,j    ,k-my_bc%dir+stag)
-                        this%V(i    ,j:j+1,k+stag)=this%V(i    ,j:j+1,k-my_bc%dir+stag)
-                        this%W(i    ,j    ,k     )=this%W(i    ,j    ,k-my_bc%dir     )
+                        this%U(i:i+1,j    ,k     )=this%U(i:i+1,j    ,k-my_bc%dir     )
+                        this%V(i    ,j:j+1,k     )=this%V(i    ,j:j+1,k-my_bc%dir     )
+                        this%W(i    ,j    ,k+stag)=this%W(i    ,j    ,k-my_bc%dir+stag)
                      end select
                   case('flag')
                      ! Extend 
                      select case (my_bc%face)
                      case ('x')
                         do ii = 0,abs(2*my_bc%dir)
-                           this%sl_face(i+stag+ii*my_bc%dir ,j     ,k     ,1     ) = 1
+                           this%sl_face(i+stag-ii*my_bc%dir ,j     ,k     ,1     ) = 1
                         end do
                      case ('y')
                         do ii = 0,abs(2*my_bc%dir)
-                           this%sl_face(i     ,j+stag+ii*my_bc%dir ,k     ,2     ) = 1
+                           this%sl_face(i     ,j-stag+ii*my_bc%dir ,k     ,2     ) = 1
                         end do
                      case ('z')
                         do ii = 0,abs(2*my_bc%dir)
-                           this%sl_face(i     ,j     ,k+stag+ii*my_bc%dir ,3     ) = 1
+                           this%sl_face(i     ,j     ,k+stag-ii*my_bc%dir ,3     ) = 1
                         end do
                      end select
                   end select
@@ -836,17 +852,17 @@ contains
                   case ('x')
                      do n=1,my_bc%itr%n_
                         i=my_bc%itr%map(1,n); j=my_bc%itr%map(2,n); k=my_bc%itr%map(3,n)
-                        if (this%U(i,j,k)*my_bc%rdir.lt.0.0_WP) this%U(i,j,k)=0.0_WP
+                        if (this%U(i+stag,j,k)*my_bc%rdir.lt.0.0_WP) this%U(i+stag,j,k)=0.0_WP
                      end do
                   case ('y')
                      do n=1,my_bc%itr%n_
                         i=my_bc%itr%map(1,n); j=my_bc%itr%map(2,n); k=my_bc%itr%map(3,n)
-                        if (this%V(i,j,k)*my_bc%rdir.lt.0.0_WP) this%V(i,j,k)=0.0_WP
+                        if (this%V(i,j+stag,k)*my_bc%rdir.lt.0.0_WP) this%V(i,j+stag,k)=0.0_WP
                      end do
                   case ('z')
                      do n=1,my_bc%itr%n_
                         i=my_bc%itr%map(1,n); j=my_bc%itr%map(2,n); k=my_bc%itr%map(3,n)
-                        if (this%W(i,j,k)*my_bc%rdir.lt.0.0_WP) this%W(i,j,k)=0.0_WP
+                        if (this%W(i,j,k+stag)*my_bc%rdir.lt.0.0_WP) this%W(i,j,k+stag)=0.0_WP
                      end do
                   end select
                end if
@@ -1371,7 +1387,8 @@ contains
      ! Band and distance information should not be needed
 
      ! Boundary conditions density
-     call this%apply_bcond(dt,'density')
+     bc_scope = 'density'
+     call this%apply_bcond(dt,bc_scope)
      ! Sync for phase pressure (boundaries are not used)
      call this%cfg%sync(this%GP)
      call this%cfg%sync(this%LP)
@@ -1482,7 +1499,8 @@ contains
      this%rhoWi=this%implicit%sol
 
      ! Boundary conditions for momentum
-     call this%apply_bcond(dt,'phase_momentum')
+     bc_scope = 'phase_momentum'
+     call this%apply_bcond(dt,bc_scope)
 
      ! Velocity
      this%Ui=this%rhoUi/this%RHO
@@ -1539,7 +1557,8 @@ contains
      end do
 
      ! Energy boundary conditions
-     call this%apply_bcond(dt,'energy')
+     bc_scope = 'energy'
+     call this%apply_bcond(dt,bc_scope)
   
    contains
 
@@ -2247,7 +2266,8 @@ contains
       end do
       
       ! BCs
-      call this%apply_bcond(dt,'velocity')
+      bc_scope = 'velocity'
+      call this%apply_bcond(dt,bc_scope)
 
      ! Correct cell-centered quantities
      do k=this%cfg%kmin_,this%cfg%kmax_
@@ -2313,8 +2333,10 @@ contains
      this%dHpjump = this%Hpjump
 
      ! BCs
-     call this%apply_bcond(dt,'momentum')
-     call this%apply_bcond(dt,'energy')
+     bc_scope = 'momentum'
+     call this%apply_bcond(dt,bc_scope)
+     bc_scope = 'energy'
+     call this%apply_bcond(dt,bc_scope)
 
      ! Calculate other quantities
      this%Ui=this%rhoUi/this%RHO
