@@ -180,9 +180,6 @@ contains
                fs%LrhoE(i,:,:) = matmod%EOS_energy(p0,rho_l0,v0,0.0_WP,0.0_WP,'liquid')
             end if
          end do
-         ! Calculate phase momenta
-         fs%GrhoU = fs%Grho*fs%Ui; fs%GrhoV = fs%Grho*fs%Vi; fs%GrhoW = fs%Grho*fs%Wi;
-         fs%LrhoU = fs%Lrho*fs%Ui; fs%LrhoV = fs%Lrho*fs%Vi; fs%LrhoW = fs%Lrho*fs%Wi;
 
          ! Define boundary conditions - initialized values are intended dirichlet values too, for the cell centers
          call fs%add_bcond(name= 'inflow',type=dirichlet      ,locator=left_of_domain ,face='x',dir=-1)
@@ -200,8 +197,9 @@ contains
          bc_scope = 'velocity'
          call fs%apply_bcond(time%dt,bc_scope)
 
-         ! Calculate mixture density
-         fs%RHO = (1.0_WP-vf%VF)*fs%Grho + vf%VF*fs%Lrho
+         ! Calculate mixture density and momenta
+         fs%RHO   = (1.0_WP-vf%VF)*fs%Grho  + vf%VF*fs%Lrho
+         fs%rhoUi = fs%RHO*fs%Ui; fs%rhoVi = fs%RHO*fs%Vi; fs%rhoWi = fs%RHO*fs%Wi
          ! Perform initial pressure relax
          call fs%pressure_relax(vf,matmod)
          ! Calculate initial phase and bulk moduli
@@ -299,9 +297,6 @@ contains
          fs%RHOold = fs%RHO
          ! Remember old flow variables (phase)
          fs%Grhoold = fs%Grho; fs%Lrhoold = fs%Lrho
-         fs%GrhoUold=fs%GrhoU; fs%LrhoUold=fs%LrhoU
-         fs%GrhoVold=fs%GrhoV; fs%LrhoVold=fs%LrhoV
-         fs%GrhoWold=fs%GrhoW; fs%LrhoWold=fs%LrhoW
          fs%GrhoEold=fs%GrhoE; fs%LrhoEold=fs%LrhoE
          fs%GPold   =   fs%GP; fs%LPold   =   fs%LP
 
