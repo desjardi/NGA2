@@ -112,9 +112,6 @@ module mast_class
       real(WP), dimension(:,:,:), allocatable :: dPjz     !< dPressure jump to add to -ddP/dz
       ! Flow variables - individual phases
       real(WP), dimension(:,:,:), allocatable :: Grho,   Lrho    !< phase density arrays
-      real(WP), dimension(:,:,:), allocatable :: GrhoU,  LrhoU   !< phase U momentum arrays
-      real(WP), dimension(:,:,:), allocatable :: GrhoV,  LrhoV   !< phase V momentum arrays
-      real(WP), dimension(:,:,:), allocatable :: GrhoW,  LrhoW   !< phase W momentum arrays
       real(WP), dimension(:,:,:), allocatable :: GrhoE,  LrhoE   !< phase energy arrays
       real(WP), dimension(:,:,:), allocatable :: GP,     LP      !< phase pressure arrays
       real(WP), dimension(:,:,:), allocatable :: GrhoSS2,LrhoSS2 !< phase bulk modulus arrays
@@ -122,7 +119,6 @@ module mast_class
       ! Old flow variables
       real(WP), dimension(:,:,:), allocatable :: RHOold
       real(WP), dimension(:,:,:), allocatable :: Uiold,   Viold,   Wiold
-      real(WP), dimension(:,:,:), allocatable :: GrhoUold,GrhoVold,GrhoWold,LrhoUold,LrhoVold,LrhoWold
       real(WP), dimension(:,:,:), allocatable :: GrhoEold,LrhoEold
       real(WP), dimension(:,:,:), allocatable :: Grhoold, Lrhoold
       real(WP), dimension(:,:,:), allocatable :: GPold,   LPold
@@ -293,12 +289,6 @@ contains
       ! Two-phase
       allocate(self%Grho (self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%Grho =0.0_WP
       allocate(self%Lrho (self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%Lrho =0.0_WP
-      allocate(self%GrhoU(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%GrhoU=0.0_WP
-      allocate(self%GrhoV(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%GrhoV=0.0_WP
-      allocate(self%GrhoW(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%GrhoW=0.0_WP
-      allocate(self%LrhoU(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%LrhoU=0.0_WP
-      allocate(self%LrhoV(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%LrhoV=0.0_WP
-      allocate(self%LrhoW(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%LrhoW=0.0_WP
       allocate(self%GrhoE(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%GrhoE=0.0_WP
       allocate(self%LrhoE(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%LrhoE=0.0_WP
       allocate(self%GP   (self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%GP   =0.0_WP
@@ -312,12 +302,6 @@ contains
       allocate(self%Uiold(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%Uiold=0.0_WP
       allocate(self%Viold(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%Viold=0.0_WP
       allocate(self%Wiold(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%Wiold=0.0_WP
-      allocate(self%GrhoUold(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%GrhoUold=0.0_WP
-      allocate(self%GrhoVold(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%GrhoVold=0.0_WP
-      allocate(self%GrhoWold(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%GrhoWold=0.0_WP
-      allocate(self%LrhoUold(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%LrhoUold=0.0_WP
-      allocate(self%LrhoVold(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%LrhoVold=0.0_WP
-      allocate(self%LrhoWold(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%LrhoWold=0.0_WP
       allocate(self%GrhoEold(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%GrhoEold=0.0_WP
       allocate(self%LrhoEold(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%LrhoEold=0.0_WP
       allocate(self%GPold   (self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%GPold   =0.0_WP
@@ -805,13 +789,6 @@ contains
                   case('density')
                      this%Grho(i,j,k)=this%Grho(i-shift(1,my_bc%dir),j-shift(2,my_bc%dir),k-shift(3,my_bc%dir))
                      this%Lrho(i,j,k)=this%Lrho(i-shift(1,my_bc%dir),j-shift(2,my_bc%dir),k-shift(3,my_bc%dir))
-                  case('phase_momentum')
-                     this%GrhoU(i,j,k)=this%GrhoU(i-shift(1,my_bc%dir),j-shift(2,my_bc%dir),k-shift(3,my_bc%dir))
-                     this%GrhoV(i,j,k)=this%GrhoV(i-shift(1,my_bc%dir),j-shift(2,my_bc%dir),k-shift(3,my_bc%dir))
-                     this%GrhoW(i,j,k)=this%GrhoW(i-shift(1,my_bc%dir),j-shift(2,my_bc%dir),k-shift(3,my_bc%dir))
-                     this%LrhoU(i,j,k)=this%LrhoU(i-shift(1,my_bc%dir),j-shift(2,my_bc%dir),k-shift(3,my_bc%dir))
-                     this%LrhoV(i,j,k)=this%LrhoV(i-shift(1,my_bc%dir),j-shift(2,my_bc%dir),k-shift(3,my_bc%dir))
-                     this%LrhoW(i,j,k)=this%LrhoW(i-shift(1,my_bc%dir),j-shift(2,my_bc%dir),k-shift(3,my_bc%dir))
                   case('momentum')
                      this%rhoUi(i,j,k)=this%rhoUi(i-shift(1,my_bc%dir),j-shift(2,my_bc%dir),k-shift(3,my_bc%dir))
                      this%rhoVi(i,j,k)=this%rhoVi(i-shift(1,my_bc%dir),j-shift(2,my_bc%dir),k-shift(3,my_bc%dir))
@@ -886,13 +863,6 @@ contains
          case('density')
             call this%cfg%sync(this%Grho)
             call this%cfg%sync(this%Lrho)
-         case('phase_momentum')
-            call this%cfg%sync(this%GrhoU)
-            call this%cfg%sync(this%GrhoV)
-            call this%cfg%sync(this%GrhoW)
-            call this%cfg%sync(this%LrhoU)
-            call this%cfg%sync(this%LrhoV)
-            call this%cfg%sync(this%LrhoW)
          case('momentum')
             call this%cfg%sync(this%rhoUi)
             call this%cfg%sync(this%rhoVi)
@@ -1146,22 +1116,23 @@ contains
                       (this%Grho (i,j,k)-this%Grho (im,jm,km))*idm)*real(floor(1.0_WP-vf%VF(i,j,k)),WP)
                  this%gradGrhoE(idir,i,j,k)=mmgrad((this%GrhoE(ip,jp,kp)-this%GrhoE(i,j,k))*idp,&
                       (this%GrhoE(i,j,k)-this%GrhoE(im,jm,km))*idm)*real(floor(1.0_WP-vf%VF(i,j,k)),WP)
-                 this%gradGrhoU(idir,i,j,k)=mmgrad((this%GrhoU(ip,jp,kp)-this%GrhoU(i,j,k))*idp,&
-                      (this%GrhoU(i,j,k)-this%GrhoU(im,jm,km))*idm)*real(floor(1.0_WP-vf%VF(i,j,k)),WP)
-                 this%gradGrhoV(idir,i,j,k)=mmgrad((this%GrhoV(ip,jp,kp)-this%GrhoV(i,j,k))*idp,&
-                      (this%GrhoV(i,j,k)-this%GrhoV(im,jm,km))*idm)*real(floor(1.0_WP-vf%VF(i,j,k)),WP)
-                 this%gradGrhoW(idir,i,j,k)=mmgrad((this%GrhoW(ip,jp,kp)-this%GrhoW(i,j,k))*idp,&
-                      (this%GrhoW(i,j,k)-this%GrhoW(im,jm,km))*idm)*real(floor(1.0_WP-vf%VF(i,j,k)),WP)
+                 this%gradGrhoU(idir,i,j,k)=mmgrad((this%Grho(ip,jp,kp)*this%Ui(ip,jp,kp)-this%Grho(i,j,k)*this%Ui(i,j,k))*idp,&
+                      (this%Grho(i,j,k)*this%Ui(i,j,k)-this%Grho(im,jm,km)*this%Ui(im,jm,km))*idm)*real(floor(1.0_WP-vf%VF(i,j,k)),WP)
+                 this%gradGrhoV(idir,i,j,k)=mmgrad((this%Grho(ip,jp,kp)*this%Vi(ip,jp,kp)-this%Grho(i,j,k)*this%Vi(i,j,k))*idp,&
+                      (this%Grho(i,j,k)*this%Vi(i,j,k)-this%Grho(im,jm,km)*this%Vi(im,jm,km))*idm)*real(floor(1.0_WP-vf%VF(i,j,k)),WP)
+                 this%gradGrhoW(idir,i,j,k)=mmgrad((this%Grho(ip,jp,kp)*this%Wi(ip,jp,kp)-this%Grho(i,j,k)*this%Wi(i,j,k))*idp,&
+                      (this%Grho(i,j,k)*this%Wi(i,j,k)-this%Grho(im,jm,km)*this%Wi(im,jm,km))*idm)*real(floor(1.0_WP-vf%VF(i,j,k)),WP)
+
                  this%gradLrho (idir,i,j,k)=mmgrad((this%Lrho (ip,jp,kp)-this%Lrho (i,j,k))*idp,&
                       (this%Lrho (i,j,k)-this%Lrho (im,jm,km))*idm)*real(floor(       vf%VF(i,j,k)),WP)
                  this%gradLrhoE(idir,i,j,k)=mmgrad((this%LrhoE(ip,jp,kp)-this%LrhoE(i,j,k))*idp,&
                       (this%LrhoE(i,j,k)-this%LrhoE(im,jm,km))*idm)*real(floor(       vf%VF(i,j,k)),WP)
-                 this%gradLrhoU(idir,i,j,k)=mmgrad((this%LrhoU(ip,jp,kp)-this%LrhoU(i,j,k))*idp,&
-                      (this%LrhoU(i,j,k)-this%LrhoU(im,jm,km))*idm)*real(floor(       vf%VF(i,j,k)),WP)
-                 this%gradLrhoV(idir,i,j,k)=mmgrad((this%LrhoV(ip,jp,kp)-this%LrhoV(i,j,k))*idp,&
-                      (this%LrhoV(i,j,k)-this%LrhoV(im,jm,km))*idm)*real(floor(       vf%VF(i,j,k)),WP)
-                 this%gradLrhoW(idir,i,j,k)=mmgrad((this%LrhoW(ip,jp,kp)-this%LrhoW(i,j,k))*idp,&
-                      (this%LrhoW(i,j,k)-this%LrhoW(im,jm,km))*idm)*real(floor(       vf%VF(i,j,k)),WP)
+                 this%gradLrhoU(idir,i,j,k)=mmgrad((this%Lrho(ip,jp,kp)*this%Ui(ip,jp,kp)-this%Lrho(i,j,k)*this%Ui(i,j,k))*idp,&
+                      (this%Lrho(i,j,k)*this%Ui(i,j,k)-this%Lrho(im,jm,km)*this%Ui(im,jm,km))*idm)*real(floor(1.0_WP-vf%VF(i,j,k)),WP)
+                 this%gradLrhoV(idir,i,j,k)=mmgrad((this%Lrho(ip,jp,kp)*this%Vi(ip,jp,kp)-this%Lrho(i,j,k)*this%Vi(i,j,k))*idp,&
+                      (this%Lrho(i,j,k)*this%Vi(i,j,k)-this%Lrho(im,jm,km)*this%Vi(im,jm,km))*idm)*real(floor(1.0_WP-vf%VF(i,j,k)),WP)
+                 this%gradLrhoW(idir,i,j,k)=mmgrad((this%Lrho(ip,jp,kp)*this%Wi(ip,jp,kp)-this%Lrho(i,j,k)*this%Wi(i,j,k))*idp,&
+                      (this%Lrho(i,j,k)*this%Wi(i,j,k)-this%Lrho(im,jm,km)*this%Wi(im,jm,km))*idm)*real(floor(1.0_WP-vf%VF(i,j,k)),WP)                 
 
                  this%gradGIE  (idir,i,j,k)=mmgrad((this%GrhoE(ip,jp,kp)-this%GKEold(ip,jp,kp)-this%GrhoE(i,j,k) &
                       +this%GKEold(i,j,k))*idp,(this%GrhoE(i,j,k)-this%GKEold(i,j,k)-this%GrhoE(im,jm,km) &
@@ -1242,15 +1213,15 @@ contains
      this%F_VF   =                       vf%VFold *this%cfg%vol
      this%F_Grho =this%Grhoold *((1.0_WP-vf%VFold)*this%cfg%vol)
      this%F_GrhoE=this%GrhoEold*((1.0_WP-vf%VFold)*this%cfg%vol)
-     this%F_GrhoU=this%GrhoUold*((1.0_WP-vf%VFold)*this%cfg%vol)
-     this%F_GrhoV=this%GrhoVold*((1.0_WP-vf%VFold)*this%cfg%vol)
-     this%F_GrhoW=this%GrhoWold*((1.0_WP-vf%VFold)*this%cfg%vol)
+     this%F_GrhoU=this%Grhoold*this%Uiold*((1.0_WP-vf%VFold)*this%cfg%vol)
+     this%F_GrhoV=this%Grhoold*this%Viold*((1.0_WP-vf%VFold)*this%cfg%vol)
+     this%F_GrhoW=this%Grhoold*this%Wiold*((1.0_WP-vf%VFold)*this%cfg%vol)
      this%F_GP   =this%GPold   *((1.0_WP-vf%VFold)*this%cfg%vol)
      this%F_Lrho =this%Lrhoold *((       vf%VFold)*this%cfg%vol)
      this%F_LrhoE=this%LrhoEold*((       vf%VFold)*this%cfg%vol)
-     this%F_LrhoU=this%LrhoUold*((       vf%VFold)*this%cfg%vol)
-     this%F_LrhoV=this%LrhoVold*((       vf%VFold)*this%cfg%vol)
-     this%F_LrhoW=this%LrhoWold*((       vf%VFold)*this%cfg%vol)
+     this%F_LrhoU=this%Lrhoold*this%Uiold*((       vf%VFold)*this%cfg%vol)
+     this%F_LrhoV=this%Lrhoold*this%Viold*((       vf%VFold)*this%cfg%vol)
+     this%F_LrhoW=this%Lrhoold*this%Wiold*((       vf%VFold)*this%cfg%vol)
      this%F_LP   =this%LPold   *((       vf%VFold)*this%cfg%vol)
 
      ! Allocate flux_polyhedron that will be used for fluxes
@@ -1480,32 +1451,28 @@ contains
         end do
      end do
 
-     ! Put momentum eq RHS into arrays
-     this%rhoUi = this%F_GrhoU + this%F_LrhoU
-     this%rhoVi = this%F_GrhoV + this%F_LrhoV
-     this%rhoWi = this%F_GrhoW + this%F_LrhoW
 
      ! Solve for x-momentum
      call this%implicit%setup()
-     this%implicit%rhs=this%rhoUi
-     this%implicit%sol=0.0_WP
+     this%implicit%rhs=this%F_GrhoU+this%F_LrhoU
+     this%implicit%sol=this%rhoUi
      call this%implicit%solve()
      this%rhoUi=this%implicit%sol
      ! Solve for y-momentum
      call this%implicit%setup()
-     this%implicit%rhs=this%rhoVi
-     this%implicit%sol=0.0_WP
+     this%implicit%rhs=this%F_GrhoV+this%F_LrhoV
+     this%implicit%sol=this%rhoVi
      call this%implicit%solve()
      this%rhoVi=this%implicit%sol
      ! Solve for z-momentum
      call this%implicit%setup()
-     this%implicit%rhs=this%rhoWi
-     this%implicit%sol=0.0_WP
+     this%implicit%rhs=this%F_GrhoW+this%F_LrhoW
+     this%implicit%sol=this%rhoWi
      call this%implicit%solve()
      this%rhoWi=this%implicit%sol
 
      ! Boundary conditions for momentum
-     bc_scope = 'phase_momentum'
+     bc_scope = 'momentum'
      call this%apply_bcond(dt,bc_scope)
 
      ! Velocity
@@ -1650,15 +1617,15 @@ contains
 
           flux( 3) = flux( 3) + my_Gvol*(this%Grhoold (ii,jj,kk)+sum(this%gradGrho (:,ii,jj,kk)*my_Gbary(:)))
           flux( 4) = flux( 4) + my_Gvol*(this%GrhoEold(ii,jj,kk)+sum(this%gradGrhoE(:,ii,jj,kk)*my_Gbary(:)))
-          flux( 5) = flux( 5) + my_Gvol*(this%GrhoUold(ii,jj,kk)+sum(this%gradGrhoU(:,ii,jj,kk)*my_Gbary(:)))
-          flux( 6) = flux( 6) + my_Gvol*(this%GrhoVold(ii,jj,kk)+sum(this%gradGrhoV(:,ii,jj,kk)*my_Gbary(:)))
-          flux( 7) = flux( 7) + my_Gvol*(this%GrhoWold(ii,jj,kk)+sum(this%gradGrhoW(:,ii,jj,kk)*my_Gbary(:)))
+          flux( 5) = flux( 5) + my_Gvol*(this%Grhoold(ii,jj,kk)*this%Uiold(ii,jj,kk)+sum(this%gradGrhoU(:,ii,jj,kk)*my_Gbary(:)))
+          flux( 6) = flux( 6) + my_Gvol*(this%Grhoold(ii,jj,kk)*this%Viold(ii,jj,kk)+sum(this%gradGrhoV(:,ii,jj,kk)*my_Gbary(:)))
+          flux( 7) = flux( 7) + my_Gvol*(this%Grhoold(ii,jj,kk)*this%Wiold(ii,jj,kk)+sum(this%gradGrhoW(:,ii,jj,kk)*my_Gbary(:)))
 
           flux( 8) = flux( 8) + my_Lvol*(this%Lrhoold (ii,jj,kk)+sum(this%gradLrho (:,ii,jj,kk)*my_Lbary(:)))
           flux( 9) = flux( 9) + my_Lvol*(this%LrhoEold(ii,jj,kk)+sum(this%gradLrhoE(:,ii,jj,kk)*my_Lbary(:)))
-          flux(10) = flux(10) + my_Lvol*(this%LrhoUold(ii,jj,kk)+sum(this%gradLrhoU(:,ii,jj,kk)*my_Lbary(:)))
-          flux(11) = flux(11) + my_Lvol*(this%LrhoVold(ii,jj,kk)+sum(this%gradLrhoV(:,ii,jj,kk)*my_Lbary(:)))
-          flux(12) = flux(12) + my_Lvol*(this%LrhoWold(ii,jj,kk)+sum(this%gradLrhoW(:,ii,jj,kk)*my_Lbary(:)))
+          flux(10) = flux(10) + my_Lvol*(this%Lrhoold(ii,jj,kk)*this%Uiold(ii,jj,kk)+sum(this%gradLrhoU(:,ii,jj,kk)*my_Lbary(:)))
+          flux(11) = flux(11) + my_Lvol*(this%Lrhoold(ii,jj,kk)*this%Viold(ii,jj,kk)+sum(this%gradLrhoV(:,ii,jj,kk)*my_Lbary(:)))
+          flux(12) = flux(12) + my_Lvol*(this%Lrhoold(ii,jj,kk)*this%Wiold(ii,jj,kk)+sum(this%gradLrhoW(:,ii,jj,kk)*my_Lbary(:)))
 
           flux(13) = flux(13) + my_Gvol*(this%GPold   (ii,jj,kk)+sum(this%gradGP   (:,ii,jj,kk)*my_Gbary(:)))
           flux(14) = flux(14) + my_Lvol*(this%LPold   (ii,jj,kk)+sum(this%gradLP   (:,ii,jj,kk)*my_Lbary(:)))
@@ -1986,33 +1953,33 @@ contains
        flux(5) = SubCan_advect_mom_RHS(&
             this%RHO     (i,j,k),this%RHO     (i+st_i,j+st_j,k+st_k),&
             this%RHOold  (i,j,k),this%RHOold  (i+st_i,j+st_j,k+st_k),&
-            this%GrhoUold(i,j,k),this%GrhoUold(i+st_i,j+st_j,k+st_k),&
+            this%Grhoold(i,j,k)*this%Uiold(i,j,k),this%Grhoold(i+st_i,j+st_j,k+st_k)*this%Uiold(i+st_i,j+st_j,k+st_k),&
             grho_fterm)
        flux(6) = SubCan_advect_mom_RHS(&
             this%RHO     (i,j,k),this%RHO     (i+st_i,j+st_j,k+st_k),&
             this%RHOold  (i,j,k),this%RHOold  (i+st_i,j+st_j,k+st_k),&
-            this%GrhoVold(i,j,k),this%GrhoVold(i+st_i,j+st_j,k+st_k),&
+            this%Grhoold(i,j,k)*this%Viold(i,j,k),this%Grhoold(i+st_i,j+st_j,k+st_k)*this%Viold(i+st_i,j+st_j,k+st_k),&
             grho_fterm)
        flux(7) = SubCan_advect_mom_RHS(&
             this%RHO     (i,j,k),this%RHO     (i+st_i,j+st_j,k+st_k),&
             this%RHOold  (i,j,k),this%RHOold  (i+st_i,j+st_j,k+st_k),&
-            this%GrhoWold(i,j,k),this%GrhoWold(i+st_i,j+st_j,k+st_k),&
+            this%Grhoold(i,j,k)*this%Wiold(i,j,k),this%Grhoold(i+st_i,j+st_j,k+st_k)*this%Wiold(i+st_i,j+st_j,k+st_k),&
             grho_fterm)
        ! Liquid phase
        flux(10)= SubCan_advect_mom_RHS(&
             this%RHO     (i,j,k),this%RHO     (i+st_i,j+st_j,k+st_k),&
             this%RHOold  (i,j,k),this%RHOold  (i+st_i,j+st_j,k+st_k),&
-            this%LrhoUold(i,j,k),this%LrhoUold(i+st_i,j+st_j,k+st_k),&
+            this%Lrhoold(i,j,k)*this%Uiold(i,j,k),this%Lrhoold(i+st_i,j+st_j,k+st_k)*this%Uiold(i+st_i,j+st_j,k+st_k),&
             lrho_fterm)
        flux(11)= SubCan_advect_mom_RHS(&
             this%RHO     (i,j,k),this%RHO     (i+st_i,j+st_j,k+st_k),&
             this%RHOold  (i,j,k),this%RHOold  (i+st_i,j+st_j,k+st_k),&
-            this%LrhoVold(i,j,k),this%LrhoVold(i+st_i,j+st_j,k+st_k),&
+            this%Lrhoold(i,j,k)*this%Viold(i,j,k),this%Lrhoold(i+st_i,j+st_j,k+st_k)*this%Viold(i+st_i,j+st_j,k+st_k),&
             lrho_fterm)
        flux(12)= SubCan_advect_mom_RHS(&
             this%RHO     (i,j,k),this%RHO     (i+st_i,j+st_j,k+st_k),&
             this%RHOold  (i,j,k),this%RHOold  (i+st_i,j+st_j,k+st_k),&
-            this%LrhoWold(i,j,k),this%LrhoWold(i+st_i,j+st_j,k+st_k),&
+            this%Lrhoold(i,j,k)*this%Wiold(i,j,k),this%Lrhoold(i+st_i,j+st_j,k+st_k)*this%Wiold(i+st_i,j+st_j,k+st_k),&
             lrho_fterm)
 
        ! Store update for right cell from face
@@ -2603,11 +2570,6 @@ contains
         this%Grho (i,j,k) = rGrho
      end if
      
-     ! Adjust phase momentum according to new phase density
-     this%LrhoU(i,j,k) = this%Lrho(i,j,k)*this%Ui(i,j,k); this%GrhoU(i,j,k) = this%Grho(i,j,k)*this%Ui(i,j,k)
-     this%LrhoV(i,j,k) = this%Lrho(i,j,k)*this%Vi(i,j,k); this%GrhoV(i,j,k) = this%Grho(i,j,k)*this%Vi(i,j,k); 
-     this%LrhoW(i,j,k) = this%Lrho(i,j,k)*this%Wi(i,j,k); this%GrhoW(i,j,k) = this%Grho(i,j,k)*this%Wi(i,j,k)
-
      return
    end subroutine pressure_relax_one
 
