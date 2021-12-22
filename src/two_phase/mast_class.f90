@@ -162,7 +162,7 @@ module mast_class
       type(ils) :: implicit                               !< Iterative linear solver object for an implicit prediction of the advection residual
       
       ! Metrics
-      real(WP), dimension(:,:,:,:), allocatable :: itpi_x,itpi_y,itpi_z   !< Interpolation to cell center
+      real(WP), dimension(:,:,:,:), allocatable :: itpi_x,itpi_y,itpi_z   !< Interpolation fom cell center to face (for scalars, e.g. pressure)
       real(WP), dimension(:,:,:,:), allocatable :: divp_x,divp_y,divp_z   !< Divergence for P-cell
       real(WP), dimension(:,:,:,:), allocatable :: divu_x,divu_y,divu_z   !< Divergence for U-cell
       real(WP), dimension(:,:,:,:), allocatable :: divv_x,divv_y,divv_z   !< Divergence for V-cell
@@ -540,14 +540,20 @@ contains
       if (.not.this%cfg%xper.and.this%cfg%iproc.eq.1) this%umask(this%cfg%imino,:,:)=this%umask(this%cfg%imino+1,:,:)
       if (.not.this%cfg%yper.and.this%cfg%jproc.eq.1) this%vmask(:,this%cfg%jmino,:)=this%vmask(:,this%cfg%jmino+1,:)
       if (.not.this%cfg%zper.and.this%cfg%kproc.eq.1) this%wmask(:,:,this%cfg%kmino)=this%wmask(:,:,this%cfg%kmino+1)
-      
-      ! Adjust Ui/Vi/Wi interpolation coefficients back to cell faces in the presence of walls (only walls!)
+
+      ! Adjust interpolation coefficients to cell faces - used for scalars
       do k=this%cfg%kmin_,this%cfg%kmax_+1
          do j=this%cfg%jmin_,this%cfg%jmax_+1
             do i=this%cfg%imin_,this%cfg%imax_+1
-               if (this%umask(i,j,k).eq.1) this%itpi_x(:,i,j,k)=0.0_WP
-               if (this%vmask(i,j,k).eq.1) this%itpi_y(:,i,j,k)=0.0_WP
-               if (this%wmask(i,j,k).eq.1) this%itpi_z(:,i,j,k)=0.0_WP
+               ! Linear interpolation in x
+               if (this%mask(i,j,k).eq.0.and.this%mask(i-1,j,k).gt.0) this%itpi_x(:,i,j,k)=[0.0_WP,1.0_WP]
+               if (this%mask(i,j,k).gt.0.and.this%mask(i-1,j,k).eq.0) this%itpi_x(:,i,j,k)=[1.0_WP,0.0_WP]
+               ! Linear interpolation in y               
+               if (this%mask(i,j,k).eq.0.and.this%mask(i,j-1,k).gt.0) this%itpi_y(:,i,j,k)=[0.0_WP,1.0_WP]
+               if (this%mask(i,j,k).gt.0.and.this%mask(i,j-1,k).eq.0) this%itpi_y(:,i,j,k)=[1.0_WP,0.0_WP]
+               ! Linear interpolation in z
+               if (this%mask(i,j,k).eq.0.and.this%mask(i,j,k-1).gt.0) this%itpi_z(:,i,j,k)=[0.0_WP,1.0_WP]
+               if (this%mask(i,j,k).gt.0.and.this%mask(i,j,k-1).eq.0) this%itpi_z(:,i,j,k)=[1.0_WP,0.0_WP]
             end do
          end do
       end do
@@ -2221,11 +2227,13 @@ contains
            do i=this%cfg%imin_,this%cfg%imax_+1
                ! Update face pressure and density in X
                rho_r=0.0_WP; vol_r=sum(vf%Gvol(0,:,:,i  ,j,k)+vf%Lvol(0,:,:,i  ,j,k))
-               if (vol_r.gt.0.0_WP) rho_r=(sum(vf%Gvol(0,:,:,i  ,j,k))*this%Grho(i  ,j,k)&
-                                          +sum(vf%Lvol(0,:,:,i  ,j,k))*this%Lrho(i  ,j,k))
+               if (vol_r.gt.0.0_WP.and.this%mask(i  ,j,k).eq.0) &
+                    rho_r=(sum(vf%Gvol(0,:,:,i  ,j,k))*this%Grho(i  ,j,k)&
+                          +sum(vf%Lvol(0,:,:,i  ,j,k))*this%Lrho(i  ,j,k))
                rho_l=0.0_WP; vol_l=sum(vf%Gvol(1,:,:,i-1,j,k)+vf%Lvol(1,:,:,i-1,j,k))
-               if (vol_l.gt.0.0_WP) rho_l=(sum(vf%Gvol(1,:,:,i-1,j,k))*this%Grho(i-1,j,k)&
-                                          +sum(vf%Lvol(1,:,:,i-1,j,k))*this%Lrho(i-1,j,k))
+               if (vol_l.gt.0.0_WP.and.this%mask(i-1,j,k).eq.0) &
+                    rho_l=(sum(vf%Gvol(1,:,:,i-1,j,k))*this%Grho(i-1,j,k)&
+                          +sum(vf%Lvol(1,:,:,i-1,j,k))*this%Lrho(i-1,j,k))
                if (rho_l+rho_r.gt.0.0_WP) then
                   DP_U(i,j,k)=2.0_WP*sum(this%itpi_x(:,i,j,k)*DP(i-1:i,j,k))&
                        -(rho_l*DP(i-1,j,k)+rho_r*DP(i,j,k))/(rho_l+rho_r)
@@ -2235,11 +2243,13 @@ contains
                end if
                ! Update face pressure and density in Y
                rho_r=0.0_WP; vol_r=sum(vf%Gvol(:,0,:,i,j  ,k)+vf%Lvol(:,0,:,i,j  ,k))
-               if (vol_r.gt.0.0_WP) rho_r=(sum(vf%Gvol(:,0,:,i,j  ,k))*this%Grho(i,j  ,k)&
-                                          +sum(vf%Lvol(:,0,:,i,j  ,k))*this%Lrho(i,j  ,k))
+               if (vol_r.gt.0.0_WP.and.this%mask(i,j  ,k).eq.0) &
+                    rho_r=(sum(vf%Gvol(:,0,:,i,j  ,k))*this%Grho(i,j  ,k)&
+                          +sum(vf%Lvol(:,0,:,i,j  ,k))*this%Lrho(i,j  ,k))
                rho_l=0.0_WP; vol_l=sum(vf%Gvol(:,1,:,i,j-1,k)+vf%Lvol(:,1,:,i,j-1,k))
-               if (vol_l.gt.0.0_WP) rho_l=(sum(vf%Gvol(:,1,:,i,j-1,k))*this%Grho(i,j-1,k)&
-                                          +sum(vf%Lvol(:,1,:,i,j-1,k))*this%Lrho(i,j-1,k))
+               if (vol_l.gt.0.0_WP.and.this%mask(i,j+1,k).eq.0) &
+                    rho_l=(sum(vf%Gvol(:,1,:,i,j-1,k))*this%Grho(i,j-1,k)&
+                          +sum(vf%Lvol(:,1,:,i,j-1,k))*this%Lrho(i,j-1,k))
                if (rho_l+rho_r.gt.0.0_WP) then
                   DP_V(i,j,k)=2.0_WP*sum(this%itpi_y(:,i,j,k)*DP(i,j-1:j,k))&
                        -(rho_l*DP(i,j-1,k)+rho_r*DP(i,j,k))/(rho_l+rho_r)
@@ -2249,11 +2259,13 @@ contains
                end if
                ! Update face pressure and density in Z
                rho_r=0.0_WP; vol_r=sum(vf%Gvol(:,:,0,i,j,k  )+vf%Lvol(:,:,0,i,j,k  ))
-               if (vol_r.gt.0.0_WP) rho_r=(sum(vf%Gvol(:,:,0,i,j,k  ))*this%Grho(i,j,k  )&
-                                          +sum(vf%Lvol(:,:,0,i,j,k  ))*this%Lrho(i,j,k  ))
+               if (vol_r.gt.0.0_WP.and.this%mask(i,j,k  ).eq.0) &
+                    rho_r=(sum(vf%Gvol(:,:,0,i,j,k  ))*this%Grho(i,j,k  )&
+                          +sum(vf%Lvol(:,:,0,i,j,k  ))*this%Lrho(i,j,k  ))
                rho_l=0.0_WP; vol_l=sum(vf%Gvol(:,:,1,i,j,k-1)+vf%Lvol(:,:,1,i,j,k-1))
-               if (vol_l.gt.0.0_WP) rho_l=(sum(vf%Gvol(:,:,1,i,j,k-1))*this%Grho(i,j,k-1)&
-                                          +sum(vf%Lvol(:,:,1,i,j,k-1))*this%Lrho(i,j,k-1))
+               if (vol_l.gt.0.0_WP.and.this%mask(i,j,k+1).eq.0) &
+                    rho_l=(sum(vf%Gvol(:,:,1,i,j,k-1))*this%Grho(i,j,k-1)&
+                          +sum(vf%Lvol(:,:,1,i,j,k-1))*this%Lrho(i,j,k-1))
                if (rho_l+rho_r.gt.0.0_WP) then
                   DP_W(i,j,k)=2.0_WP*sum(this%itpi_z(:,i,j,k)*DP(i,j,k-1:k))&
                        -(rho_l*DP(i,j,k-1)+rho_r*DP(i,j,k))/(rho_l+rho_r)
