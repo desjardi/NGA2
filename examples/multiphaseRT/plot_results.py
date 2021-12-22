@@ -1,5 +1,5 @@
 import numpy as np
-from scipy import optimize
+from scipy.optimize import fsolve
 from matplotlib import pyplot as plt
 import re
 
@@ -40,8 +40,8 @@ plt.ylabel('Normalized growth rate')
 ref_klc=np.linspace(0,1,num=1000)
 inviscid_ngr=np.sqrt(At*(ref_klc-ref_klc**3))
 viscous_ngr =np.sqrt(At*(ref_klc-ref_klc**3)+iGap*ref_klc)-np.sqrt(iGap*ref_klc)
-plt.plot(ref_klc,inviscid_ngr,'-',lw=2,color='blue',label='Inviscid')
-#plt.plot(ref_klc,viscous_ngr,'-',lw=2,color='green',label='Viscous approx')
+plt.plot(ref_klc,inviscid_ngr,'-',lw=2,color='blue',label='Inviscid exact')
+plt.plot(ref_klc, viscous_ngr,'-',lw=2,color='green',label='Viscous approx.')
 plt.ylim(bottom=0,top=1.2*max(inviscid_ngr))
 
 # Define dispersion relation for two-phase viscous RT
@@ -56,9 +56,8 @@ def viscous_dispersion(x,klc,At,Pl,Pg,iGal,iGag,iGam):
 # Plot exact viscous RT solution
 viscous2_ngr=0*ref_klc
 for ik, myklc in np.ndenumerate(ref_klc):
-    sol=optimize.root_scalar(viscous_dispersion,args=(myklc,At,Pl,Pg,iGal,iGag,iGam),bracket=[1e-8,2*inviscid_ngr[ik]],method='brentq')
-    viscous2_ngr[ik]=sol.root
-plt.plot(ref_klc,viscous2_ngr,'-',lw=2,color='blue',label='Viscous')
+    viscous2_ngr[ik]=fsolve(func=viscous_dispersion,x0=viscous_ngr[ik],args=(myklc,At,Pl,Pg,iGal,iGag,iGam))
+plt.plot(ref_klc,viscous2_ngr,'-',lw=2,color='purple',label='Viscous exact')
 
 # Plot results from result.txt file
 result=np.fromfile('result.txt',dtype=float,sep=' ')

@@ -266,6 +266,10 @@ ifeq ($(USE_ODRPACK),TRUE)
   $(info Loading $(NGA_HOME)/tools/GNUMake/packages/Make.odrpack...)
   include        $(NGA_HOME)/tools/GNUMake/packages/Make.odrpack
 endif
+ifeq ($(USE_FFTW),TRUE)
+  $(info Loading $(NGA_HOME)/tools/GNUMake/packages/Make.fftw...)
+  include        $(NGA_HOME)/tools/GNUMake/packages/Make.fftw
+endif
 ###############################################################
 
 

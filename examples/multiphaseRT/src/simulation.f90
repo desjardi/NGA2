@@ -45,7 +45,7 @@ contains
       real(WP), intent(in) :: t
       real(WP) :: G
       ! Create the droplet
-      G=xyz(2)-amp0*cos(twoPi*xyz(1))
+      G=xyz(2)-amp0*cos(twoPi*xyz(1)/cfg%xL)
    end function levelset_falling_drop
    
    
@@ -132,7 +132,7 @@ contains
          ! Create a VOF solver
          vf=vfs(cfg=cfg,reconstruction_method=lvira,name='VOF')
          ! Initialize to a droplet
-         amp0=1.0e-4_WP
+         amp0=1.0e-2_WP*cfg%min_meshsize
          do k=vf%cfg%kmino_,vf%cfg%kmaxo_
             do j=vf%cfg%jmino_,vf%cfg%jmaxo_
                do i=vf%cfg%imino_,vf%cfg%imaxo_

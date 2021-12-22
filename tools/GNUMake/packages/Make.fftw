@@ -1,0 +1,8 @@
+# Add appropriate FFTW includes and libraries
+ifdef FFTW_DIR
+  INCLUDE_LOCATIONS += $(FFTW_DIR)/include
+  LIBRARY_LOCATIONS += $(FFTW_DIR)/lib
+  LIBRARIES += -lfftw3_mpi -fftw3
+else
+  $(error FFTW_DIR not defined, but it is currently required by NGA2)
+endif
