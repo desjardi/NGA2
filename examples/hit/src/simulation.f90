@@ -2,6 +2,7 @@
 module simulation
    use precision,         only: WP
    use geometry,          only: cfg
+   use pfft3d_class,      only: pfft3d
    use incomp_class,      only: incomp
    use timetracker_class, only: timetracker
    use ensight_class,     only: ensight
@@ -10,7 +11,8 @@ module simulation
    implicit none
    private
    
-   !> Single-phase incompressible flow solver and corresponding time tracker
+   !> Single-phase incompressible flow solver, a pressure solver, and a time tracker
+   type(pfft3d),      public :: pressure_solver
    type(incomp),      public :: fs
    type(timetracker), public :: time
    
@@ -62,21 +64,16 @@ contains
       
       ! Create a single-phase flow solver without bconds
       create_and_initialize_flow_solver: block
-         use ils_class, only: bbox
          ! Create flow solver
          fs=incomp(cfg=cfg,name='NS solver')
          ! Assign constant viscosity
          call param_read('Dynamic viscosity',visc); fs%visc=visc
          ! Assign constant density
          call param_read('Density',fs%rho)
-         ! Configure pressure solver
-         call param_read('Pressure iteration',fs%psolv%maxit)
-         call param_read('Pressure tolerance',fs%psolv%rcvg)
-         ! Configure implicit velocity solver
-         call param_read('Implicit iteration',fs%implicit%maxit)
-         call param_read('Implicit tolerance',fs%implicit%rcvg)
+         ! Prepare and configure pressure solver
+         pressure_solver=pfft3d(cfg=cfg,name='Pressure')
          ! Setup the solver
-         call fs%setup(pressure_ils=bbox,implicit_ils=bbox)
+         call fs%setup(pressure_solver=pressure_solver)
          ! Zero initial field
          fs%U=0.0_WP; fs%V=0.0_WP; fs%W=0.0_WP
          ! Calculate cell-centered velocities and divergence
@@ -172,7 +169,7 @@ contains
             resW=-2.0_WP*(fs%rho*fs%W-fs%rho*fs%Wold)+time%dt*resW
             
             ! Form implicit residuals
-            call fs%solve_implicit(time%dt,resU,resV,resW)
+            !call fs%solve_implicit(time%dt,resU,resV,resW)
             
             ! Apply these residuals
             fs%U=2.0_WP*fs%U-fs%Uold+resU

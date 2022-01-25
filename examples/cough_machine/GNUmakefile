@@ -7,7 +7,6 @@ USE_MPI   = TRUE
 USE_HYPRE = TRUE
 USE_LAPACK= TRUE
 USE_IRL   = TRUE
-USE_FFTW  = TRUE
 PROFILE   = FALSE
 DEBUG     = FALSE
 COMP      = gnu
@@ -24,16 +23,15 @@ INCLUDE_LOCATIONS += $(Ulocs)
 VPATH_LOCATIONS   += $(Ulocs)
 
 # Define external libraries - this can also be in .profile
-FFTW_DIR  = /Users/desjardi/Builds/fftw
 HYPRE_DIR = /Users/desjardi/Builds/hypre
-IRL_DIR   = /Users/desjardi/Builds/IRL
 LAPACK_DIR= /Users/desjardi/Builds/lapack
+IRL_DIR   = /Users/desjardi/Builds/IRL
 
 # NGA compilation definitions
 include $(NGA_HOME)/tools/GNUMake/Make.defs
 
 # Include NGA base code
-Bdirs   := core two_phase data solver config grid libraries
+Bdirs   := particles core subgrid two_phase data solver config grid libraries
 Bpack   += $(foreach dir, $(Bdirs), $(NGA_HOME)/src/$(dir)/Make.package)
 include $(Bpack)
 

@@ -6,7 +6,7 @@ module incomp_class
    use precision,      only: WP
    use string,         only: str_medium
    use config_class,   only: config
-   use ils_class,      only: ils
+   use linsol_class,   only: linsol
    use iterator_class, only: iterator
    implicit none
    private
@@ -68,10 +68,10 @@ module incomp_class
       real(WP), dimension(:,:,:), allocatable :: div      !< Divergence array
       
       ! Pressure solver
-      type(ils) :: psolv                                  !< Iterative linear solver object for the pressure Poisson equation
+      class(linsol), pointer :: psolv                     !< Iterative linear solver object for the pressure Poisson equation
       
       ! Implicit velocity solver
-      type(ils) :: implicit                               !< Iterative linear solver object for an implicit prediction of the NS residual
+      class(linsol), pointer :: implicit                  !< Iterative linear solver object for an implicit prediction of the NS residual
       
       ! Metrics
       real(WP), dimension(:,:,:,:,:), allocatable :: itp_xy,itp_yz,itp_xz !< Interpolation for viscosity
@@ -164,12 +164,6 @@ contains
       allocate(self%Uold(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%Uold=0.0_WP
       allocate(self%Vold(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%Vold=0.0_WP
       allocate(self%Wold(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%Wold=0.0_WP
-      
-      ! Create pressure solver object
-      self%psolv   =ils(cfg=self%cfg,name='Pressure')
-      
-      ! Create implicit velocity solver object
-      self%implicit=ils(cfg=self%cfg,name='Momentum')
       
       ! Prepare default metrics
       call self%init_metrics()
@@ -735,15 +729,18 @@ contains
    
    
    !> Finish setting up the flow solver now that bconds have been defined
-   subroutine setup(this,pressure_ils,implicit_ils)
+   subroutine setup(this,pressure_solver,implicit_solver)
       implicit none
       class(incomp), intent(inout) :: this
-      integer, intent(in) :: pressure_ils
-      integer, intent(in) :: implicit_ils
+      class(linsol), target, intent(in) :: pressure_solver                      !< A pressure solver is required
+      class(linsol), target, intent(in), optional :: implicit_solver            !< An implicit solver can be provided
       integer :: i,j,k
       
       ! Adjust metrics based on bcflag array
       call this%adjust_metrics()
+      
+      ! Point to pressure solver linsol object
+      this%psolv=>pressure_solver
       
       ! Set 7-pt stencil map for the pressure solver
       this%psolv%stc(1,:)=[ 0, 0, 0]
@@ -778,23 +775,31 @@ contains
       end do
       
       ! Initialize the pressure Poisson solver
-      call this%psolv%init(pressure_ils)
+      call this%psolv%init()
       call this%psolv%setup()
       
-      ! Set 7-pt stencil map for the velocity solver
-      this%implicit%stc(1,:)=[ 0, 0, 0]
-      this%implicit%stc(2,:)=[+1, 0, 0]
-      this%implicit%stc(3,:)=[-1, 0, 0]
-      this%implicit%stc(4,:)=[ 0,+1, 0]
-      this%implicit%stc(5,:)=[ 0,-1, 0]
-      this%implicit%stc(6,:)=[ 0, 0,+1]
-      this%implicit%stc(7,:)=[ 0, 0,-1]
-      
-      ! Set the diagonal to 1 to make sure all cells participate in solver
-      this%implicit%opr(1,:,:,:)=1.0_WP
-      
-      ! Initialize the implicit velocity solver
-      call this%implicit%init(implicit_ils)
+      ! Prepare implicit solver if it had been provided
+      if (present(implicit_solver)) then
+         
+         ! Point to implicit solver linsol object
+         this%implicit=>implicit_solver
+         
+         ! Set 7-pt stencil map for the velocity solver
+         this%implicit%stc(1,:)=[ 0, 0, 0]
+         this%implicit%stc(2,:)=[+1, 0, 0]
+         this%implicit%stc(3,:)=[-1, 0, 0]
+         this%implicit%stc(4,:)=[ 0,+1, 0]
+         this%implicit%stc(5,:)=[ 0,-1, 0]
+         this%implicit%stc(6,:)=[ 0, 0,+1]
+         this%implicit%stc(7,:)=[ 0, 0,-1]
+         
+         ! Set the diagonal to 1 to make sure all cells participate in solver
+         this%implicit%opr(1,:,:,:)=1.0_WP
+         
+         ! Initialize the implicit velocity solver
+         call this%implicit%init()
+         
+      end if
       
    end subroutine setup
    
