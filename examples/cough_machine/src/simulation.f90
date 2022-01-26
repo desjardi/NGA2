@@ -35,6 +35,8 @@ module simulation
    real(WP), dimension(:,:,:), allocatable :: Ui,Vi,Wi
    real(WP), dimension(:,:,:,:), allocatable :: SR
    
+   !> Inflow parameters
+   real(WP) :: Uin,delta,Urand
    
 contains
    
@@ -46,7 +48,7 @@ contains
       integer, intent(in) :: i,j,k
       logical :: isIn
       isIn=.false.
-      if (i.eq.pg%imin.and.pg%ym(j).gt.0.0_WP) isIn=.true.
+      if (i.eq.pg%imin.and.pg%ym(j).gt.0.0_WP.and.j.le.pg%jmax) isIn=.true.
    end function left_boundary
    
    
@@ -57,19 +59,8 @@ contains
       integer, intent(in) :: i,j,k
       logical :: isIn
       isIn=.false.
-      if (i.eq.pg%imax+1.and.pg%ym(j).gt.0.0_WP) isIn=.true.
+      if (i.eq.pg%imax+1.and.pg%ym(j).gt.0.0_WP.and.j.le.pg%jmax) isIn=.true.
    end function right_boundary
-   
-   
-   !> Function that localizes the top domain boundary
-   function top_boundary(pg,i,j,k) result(isIn)
-      use pgrid_class, only: pgrid
-      class(pgrid), intent(in) :: pg
-      integer, intent(in) :: i,j,k
-      logical :: isIn
-      isIn=.false.
-      if (j.eq.pg%jmax+1) isIn=.true.
-   end function top_boundary
    
    
    !> Initialization of problem solver
@@ -95,6 +86,7 @@ contains
          time=timetracker(cfg%amRoot,name='cough_machine')
          call param_read('Max timestep size',time%dtmax)
          call param_read('Max cfl number',time%cflmax)
+         call param_read('Max time',time%tmax)
          time%dt=time%dtmax
          time%itmax=2
       end block initialize_timetracker
@@ -160,8 +152,6 @@ contains
          fs%contact_angle=fs%contact_angle*Pi/180.0_WP
          ! Inflow on the left
          call fs%add_bcond(name='inflow' ,type=dirichlet      ,face='x',dir=-1,canCorrect=.false.,locator=left_boundary)
-         ! Neumann on the top
-         call fs%add_bcond(name='top'    ,type=clipped_neumann,face='y',dir=+1,canCorrect=.false.,locator=top_boundary)
          ! Outflow on the right
          call fs%add_bcond(name='outflow',type=clipped_neumann,face='x',dir=+1,canCorrect=.true. ,locator=right_boundary)
          ! Configure pressure solver
@@ -179,17 +169,19 @@ contains
       ! Initialize our velocity field
       initialize_velocity: block
          use tpns_class, only: bcond
+         use random,     only: random_uniform
          type(bcond), pointer :: mybc
-         real(WP) :: Uin
          integer  :: n,i,j,k
          ! Zero initial field
          fs%U=0.0_WP; fs%V=0.0_WP; fs%W=0.0_WP
          ! Apply Dirichlet at inlet
          call param_read('Gas velocity',Uin)
+         call param_read('Gas thickness',delta)
+         call param_read('Gas perturbation',Urand)
          call fs%get_bcond('inflow',mybc)
          do n=1,mybc%itr%no_
             i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
-            fs%U(i,j,k)=Uin
+            fs%U(i,j,k)=Uin*tanh(2.0_WP*fs%cfg%ym(j)/delta)*tanh(2.0_WP*(fs%cfg%y(fs%cfg%jmax+1)-fs%cfg%ym(j))/delta)+random_uniform(-Urand,Urand)
          end do
          ! Apply all other boundary conditions
          call fs%apply_bcond(time%t,time%dt)
@@ -287,6 +279,19 @@ contains
          fs%Uold=fs%U
          fs%Vold=fs%V
          fs%Wold=fs%W
+         
+         ! Reapply Dirichlet at inlet
+         reapply_dirichlet: block
+            use tpns_class, only: bcond
+            use random,     only: random_uniform
+            type(bcond), pointer :: mybc
+            integer  :: n,i,j,k
+            call fs%get_bcond('inflow',mybc)
+            do n=1,mybc%itr%no_
+               i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
+               fs%U(i,j,k)=Uin*tanh(2.0_WP*fs%cfg%ym(j)/delta)*tanh(2.0_WP*(fs%cfg%y(fs%cfg%jmax+1)-fs%cfg%ym(j))/delta)+random_uniform(-Urand,Urand)
+            end do
+         end block reapply_dirichlet
          
          ! Prepare old staggered density (at n)
          call fs%get_olddensity(vf=vf)

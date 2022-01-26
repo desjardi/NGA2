@@ -11,9 +11,9 @@ module geometry
    type(config), public :: cfg
    
    ! Cough machine dimensions
-   real(WP), parameter :: tray_depth=5.0e-3_WP
-   real(WP), parameter :: front_lip =1.0e-2_WP
-   real(WP), parameter :: back_lip  =1.0e-2_WP
+   real(WP), parameter :: tray_depth=2.0e-3_WP
+   real(WP), parameter :: front_lip =5.0e-3_WP
+   real(WP), parameter :: back_lip  =5.0e-3_WP
    
 contains
    
@@ -69,6 +69,8 @@ contains
          do k=cfg%kmino_,cfg%kmaxo_
             do j=cfg%jmino_,cfg%jmaxo_
                do i=cfg%imino_,cfg%imaxo_
+                  ! Top wall
+                  if (j.gt.cfg%jmax) cfg%VF(i,j,k)=0.0_WP
                   ! Bottom wall
                   if (cfg%ym(j).lt.-tray_depth) cfg%VF(i,j,k)=0.0_WP
                   ! Front lip
