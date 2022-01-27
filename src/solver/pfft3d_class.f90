@@ -82,9 +82,9 @@ module pfft3d_class
       procedure, private :: pfft3d_ytranspose_forward
       procedure, private :: pfft3d_ztranspose_forward
       
-      !procedure, private :: pfft3d_xtranspose_backward
-      !procedure, private :: pfft3d_ytranspose_backward
-      !procedure, private :: pfft3d_ztranspose_backward
+      procedure, private :: pfft3d_xtranspose_backward
+      procedure, private :: pfft3d_ytranspose_backward
+      procedure, private :: pfft3d_ztranspose_backward
       
    end type pfft3d
    
@@ -559,7 +559,7 @@ contains
    end subroutine pfft3d_ztranspose_init
    
    
-   !> Perform transpose in x
+   !> Perform forward transpose in x
    subroutine pfft3d_xtranspose_forward(this,A,At)
       use mpi_f08
       use parallel, only: MPI_REAL_WP
@@ -628,140 +628,349 @@ contains
    end subroutine pfft3d_xtranspose_forward
    
    
-   !> Perform transpose in y
+   !> Perform forward transpose in y
    subroutine pfft3d_ytranspose_forward(this,A,At)
       use mpi_f08
+      use parallel, only: MPI_REAL_WP
       implicit none
       class(pfft3d), intent(inout) :: this
       real(WP), dimension(this%cfg%imin_:,this%cfg%jmin_:,this%cfg%kmin_:), intent(in) :: A
       real(WP), dimension(this%imin_y(this%cfg%jproc):,this%cfg%jmin:,this%kmin_y(this%cfg%jproc):), intent(out) :: At
       integer :: i,j,k,jp,ii,jj,kk,ierr
       
-      ! select case (trim(this%ydir))
-      ! case ('x')
-      !    ! Transpose y=>x
-      !    do jp=1,npy
-      !       do k=kmin_,kmax_
-      !          do j=jmin_,jmax_
-      !             do i=imin_y(jp),imax_y(jp)
-      !                ii=i-imin_y(jp)+1
-      !                jj=j-jmin_+1
-      !                sendbuf_y(ii,jj,k,jp) = A(i,j,k)
-      !             end do
-      !          end do
-      !       end do
-      !    end do
-      !    call MPI_AllToAll(sendbuf_y,sendcount_y,MPI_REAL_WP,recvbuf_y,recvcount_y,MPI_REAL_WP,comm_y,ierr)
-      !    do jp=1,npy
-      !       do k=kmin_,kmax_
-      !          do j=jmin_y(jp),jmax_y(jp)
-      !             do i=imin_y(jproc),imax_y(jproc)
-      !                ii=i-imin_y(jproc)+1
-      !                jj=j-jmin_y(jp)+1
-      !                At(i,j,k)=recvbuf_y(ii,jj,k,jp)
-      !             end do
-      !          end do
-      !       end do
-      !    end do
-      ! case ('y')
-      !    ! No transpose required
-      !    At=A
-      ! case ('z')
-      !    ! Transpose y=>z
-      !    do jp=1,npy
-      !       do k=kmin_y(jp),kmax_y(jp)
-      !          do j=jmin_,jmax_
-      !             do i=imin_,imax_
-      !                kk=k-kmin_y(jp)+1
-      !                jj=j-jmin_+1
-      !                sendbuf_y(i,jj,kk,jp) = A(i,j,k)
-      !             end do
-      !          end do
-      !       end do
-      !    end do
-      !    call MPI_AllToAll(sendbuf_y,sendcount_y,MPI_REAL_WP,recvbuf_y,recvcount_y,MPI_REAL_WP,comm_y,ierr)
-      !    do jp=1,npy
-      !       do k=kmin_y(jproc),kmax_y(jproc)
-      !          do j=jmin_y(jp),jmax_y(jp)
-      !             do i=imin_,imax_
-      !                kk=k-kmin_y(jproc)+1
-      !                jj=j-jmin_y(jp)+1
-      !                At(i,j,k)=recvbuf_y(i,jj,kk,jp)
-      !             end do
-      !          end do
-      !       end do
-      !    end do
-      ! end select
+      select case (trim(this%ydir))
+      case ('x')
+         ! Transpose y=>x
+         do jp=1,this%cfg%npy
+            do k=this%cfg%kmin_,this%cfg%kmax_
+               do j=this%cfg%jmin_,this%cfg%jmax_
+                  do i=this%imin_y(jp),this%imax_y(jp)
+                     ii=i-this%imin_y(jp)+1
+                     jj=j-this%cfg%jmin_+1
+                     this%sendbuf_y(ii,jj,k,jp)=A(i,j,k)
+                  end do
+               end do
+            end do
+         end do
+         call MPI_AllToAll(this%sendbuf_y,this%sendcount_y,MPI_REAL_WP,this%recvbuf_y,this%recvcount_y,MPI_REAL_WP,this%cfg%ycomm,ierr)
+         do jp=1,this%cfg%npy
+            do k=this%cfg%kmin_,this%cfg%kmax_
+               do j=this%jmin_y(jp),this%jmax_y(jp)
+                  do i=this%imin_y(this%cfg%jproc),this%imax_y(this%cfg%jproc)
+                     ii=i-this%imin_y(this%cfg%jproc)+1
+                     jj=j-this%jmin_y(jp)+1
+                     At(i,j,k)=this%recvbuf_y(ii,jj,k,jp)
+                  end do
+               end do
+            end do
+         end do
+      case ('y')
+         ! No transpose required
+         At=A
+      case ('z')
+         ! Transpose y=>z
+         do jp=1,this%cfg%npy
+            do k=this%kmin_y(jp),this%kmax_y(jp)
+               do j=this%cfg%jmin_,this%cfg%jmax_
+                  do i=this%cfg%imin_,this%cfg%imax_
+                     kk=k-this%kmin_y(jp)+1
+                     jj=j-this%cfg%jmin_+1
+                     this%sendbuf_y(i,jj,kk,jp)=A(i,j,k)
+                  end do
+               end do
+            end do
+         end do
+         call MPI_AllToAll(this%sendbuf_y,this%sendcount_y,MPI_REAL_WP,this%recvbuf_y,this%recvcount_y,MPI_REAL_WP,this%cfg%ycomm,ierr)
+         do jp=1,this%cfg%npy
+            do k=this%kmin_y(this%cfg%jproc),this%kmax_y(this%cfg%jproc)
+               do j=this%jmin_y(jp),this%jmax_y(jp)
+                  do i=this%cfg%imin_,this%cfg%imax_
+                     kk=k-this%kmin_y(this%cfg%jproc)+1
+                     jj=j-this%jmin_y(jp)+1
+                     At(i,j,k)=this%recvbuf_y(i,jj,kk,jp)
+                  end do
+               end do
+            end do
+         end do
+      end select
       
    end subroutine pfft3d_ytranspose_forward
    
    
-   !> Perform transpose in y
+   !> Perform forward transpose in z
    subroutine pfft3d_ztranspose_forward(this,A,At)
       use mpi_f08
+      use parallel, only: MPI_REAL_WP
       implicit none
       class(pfft3d), intent(inout) :: this
       real(WP), dimension(this%cfg%imin_:,this%cfg%jmin_:,this%cfg%kmin_:), intent(in) :: A
       real(WP), dimension(this%imin_z(this%cfg%kproc):,this%jmin_z(this%cfg%kproc):,this%cfg%kmin:), intent(out) :: At
       integer :: i,j,k,kp,ii,jj,kk,ierr
       
-      ! select case (trim(this%zdir))
-      ! case ('x')
-      !    ! Transpose z=>x
-      !    do kp=1,npz
-      !       do k=kmin_,kmax_
-      !          do j=jmin_,jmax_
-      !             do i=imin_z(kp),imax_z(kp)
-      !                ii=i-imin_z(kp)+1
-      !                kk=k-kmin_+1
-      !                sendbuf_z(ii,j,kk,kp) = A(i,j,k)
-      !             end do
-      !          end do
-      !       end do
-      !    end do
-      !    call MPI_AllToAll(sendbuf_z,sendcount_z,MPI_REAL_WP,recvbuf_z,recvcount_z,MPI_REAL_WP,comm_z,ierr)
-      !    do kp=1,npz
-      !       do k=kmin_z(kp),kmax_z(kp)
-      !          do j=jmin_,jmax_
-      !             do i=imin_z(kproc),imax_z(kproc)
-      !                ii=i-imin_z(kproc)+1
-      !                kk=k-kmin_z(kp)+1
-      !                At(i,j,k)=recvbuf_z(ii,j,kk,kp)
-      !             end do
-      !          end do
-      !       end do
-      !    end do
-      ! case ('y')
-      !    ! Transpose z=>y
-      !    do kp=1,npz
-      !       do k=kmin_,kmax_
-      !          do j=jmin_z(kp),jmax_z(kp)
-      !             do i=imin_,imax_
-      !                jj=j-jmin_z(kp)+1
-      !                kk=k-kmin_+1
-      !                sendbuf_z(i,jj,kk,kp) = A(i,j,k)
-      !             end do
-      !          end do
-      !       end do
-      !    end do
-      !    call MPI_AllToAll(sendbuf_z,sendcount_z,MPI_REAL_WP,recvbuf_z,recvcount_z,MPI_REAL_WP,comm_z,ierr)
-      !    do kp=1,npz
-      !       do k=kmin_z(kp),kmax_z(kp)
-      !          do j=jmin_z(kproc),jmax_z(kproc)
-      !             do i=imin_,imax_
-      !                jj=j-jmin_z(kproc)+1
-      !                kk=k-kmin_z(kp)+1
-      !                At(i,j,k)=recvbuf_z(i,jj,kk,kp)
-      !             end do
-      !          end do
-      !       end do
-      !    end do
-      ! case ('z')
-      !    ! No transpose required
-      !    At=A
-      ! end select
+      select case (trim(this%zdir))
+      case ('x')
+         ! Transpose z=>x
+         do kp=1,this%cfg%npz
+            do k=this%cfg%kmin_,this%cfg%kmax_
+               do j=this%cfg%jmin_,this%cfg%jmax_
+                  do i=this%imin_z(kp),this%imax_z(kp)
+                     ii=i-this%imin_z(kp)+1
+                     kk=k-this%cfg%kmin_+1
+                     this%sendbuf_z(ii,j,kk,kp)=A(i,j,k)
+                  end do
+               end do
+            end do
+         end do
+         call MPI_AllToAll(this%sendbuf_z,this%sendcount_z,MPI_REAL_WP,this%recvbuf_z,this%recvcount_z,MPI_REAL_WP,this%cfg%zcomm,ierr)
+         do kp=1,this%cfg%npz
+            do k=this%kmin_z(kp),this%kmax_z(kp)
+               do j=this%cfg%jmin_,this%cfg%jmax_
+                  do i=this%imin_z(this%cfg%kproc),this%imax_z(this%cfg%kproc)
+                     ii=i-this%imin_z(this%cfg%kproc)+1
+                     kk=k-this%kmin_z(kp)+1
+                     At(i,j,k)=this%recvbuf_z(ii,j,kk,kp)
+                  end do
+               end do
+            end do
+         end do
+      case ('y')
+         ! Transpose z=>y
+         do kp=1,this%cfg%npz
+            do k=this%cfg%kmin_,this%cfg%kmax_
+               do j=this%jmin_z(kp),this%jmax_z(kp)
+                  do i=this%cfg%imin_,this%cfg%imax_
+                     jj=j-this%jmin_z(kp)+1
+                     kk=k-this%cfg%kmin_+1
+                     this%sendbuf_z(i,jj,kk,kp)=A(i,j,k)
+                  end do
+               end do
+            end do
+         end do
+         call MPI_AllToAll(this%sendbuf_z,this%sendcount_z,MPI_REAL_WP,this%recvbuf_z,this%recvcount_z,MPI_REAL_WP,this%cfg%zcomm,ierr)
+         do kp=1,this%cfg%npz
+            do k=this%kmin_z(kp),this%kmax_z(kp)
+               do j=this%jmin_z(this%cfg%kproc),this%jmax_z(this%cfg%kproc)
+                  do i=this%cfg%imin_,this%cfg%imax_
+                     jj=j-this%jmin_z(this%cfg%kproc)+1
+                     kk=k-this%kmin_z(kp)+1
+                     At(i,j,k)=this%recvbuf_z(i,jj,kk,kp)
+                  end do
+               end do
+            end do
+         end do
+      case ('z')
+         ! No transpose required
+         At=A
+      end select
       
    end subroutine pfft3d_ztranspose_forward
+   
+   
+   !> Perform backward transpose in x
+   subroutine pfft3d_xtranspose_backward(this,At,A)
+      use mpi_f08
+      use parallel, only: MPI_REAL_WP
+      implicit none
+      class(pfft3d), intent(inout) :: this
+      real(WP), dimension(this%cfg%imin :,this%jmin_x(this%cfg%iproc):,this%kmin_x(this%cfg%iproc):), intent(in) :: At
+      real(WP), dimension(this%cfg%imin_:,this%cfg%jmin_:,this%cfg%kmin_:), intent(out) :: A
+      integer :: i,j,k,ip,ii,jj,kk,ierr
+      
+      select case (trim(this%xdir))
+      case ('x')
+         ! No transpose required
+         A=At
+      case ('y')
+         ! Transpose y=>x
+         do ip=1,this%cfg%npx
+            do k=this%cfg%kmin_,this%cfg%kmax_
+               do j=this%jmin_x(this%cfg%iproc),this%jmax_x(this%cfg%iproc)
+                  do i=this%imin_x(ip),this%imax_x(ip)
+                     jj=j-this%jmin_x(this%cfg%iproc)+1
+                     ii=i-this%imin_x(ip)+1
+                     this%sendbuf_x(ii,jj,k,ip)=At(i,j,k)
+                  end do
+               end do
+            end do
+         end do
+         call MPI_AllToAll(this%sendbuf_x,this%sendcount_x,MPI_REAL_WP,this%recvbuf_x,this%recvcount_x,MPI_REAL_WP,this%cfg%xcomm,ierr)
+         do ip=1,this%cfg%npx
+            do k=this%cfg%kmin_,this%cfg%kmax_
+               do j=this%jmin_x(ip),this%jmax_x(ip)
+                  do i=this%imin_x(this%cfg%iproc),this%imax_x(this%cfg%iproc)
+                     jj=j-this%jmin_x(ip)+1
+                     ii=i-this%imin_x(this%cfg%iproc)+1
+                     A(i,j,k)=this%recvbuf_x(ii,jj,k,ip)
+                  end do
+               end do
+            end do
+         end do
+      case ('z')
+         ! Transpose z=>x
+         do ip=1,this%cfg%npx
+            do k=this%kmin_x(this%cfg%iproc),this%kmax_x(this%cfg%iproc)
+               do j=this%cfg%jmin_,this%cfg%jmax_
+                  do i=this%imin_x(ip),this%imax_x(ip)
+                     kk=k-this%kmin_x(this%cfg%iproc)+1
+                     ii=i-this%imin_x(ip)+1
+                     this%sendbuf_x(ii,j,kk,ip)=At(i,j,k)
+                  end do
+               end do
+            end do
+         end do
+         call MPI_AllToAll(this%sendbuf_x,this%sendcount_x,MPI_REAL_WP,this%recvbuf_x,this%recvcount_x,MPI_REAL_WP,this%cfg%xcomm,ierr)
+         do ip=1,this%cfg%npx
+            do k=this%kmin_x(ip),this%kmax_x(ip)
+               do j=this%cfg%jmin_,this%cfg%jmax_
+                  do i=this%imin_x(this%cfg%iproc),this%imax_x(this%cfg%iproc)
+                     kk=k-this%kmin_x(ip)+1
+                     ii=i-this%imin_x(this%cfg%iproc)+1
+                     A(i,j,k)=this%recvbuf_x(ii,j,kk,ip)
+                  end do
+               end do
+            end do
+         end do
+      end select
+      
+   end subroutine pfft3d_xtranspose_backward
+
+   
+   !> Perform backward transpose in y
+   subroutine pfft3d_ytranspose_backward(this,At,A)
+      use mpi_f08
+      use parallel, only: MPI_REAL_WP
+      implicit none
+      class(pfft3d), intent(inout) :: this
+      real(WP), dimension(this%imin_y(this%cfg%jproc):,this%cfg%jmin:,this%kmin_y(this%cfg%jproc):), intent(in) :: At
+      real(WP), dimension(this%cfg%imin_:,this%cfg%jmin_:,this%cfg%kmin_:), intent(out) :: A
+      integer :: i,j,k,jp,ii,jj,kk,ierr
+      
+      select case (trim(this%ydir))
+      case ('x')
+         ! Transpose x=>y
+         do jp=1,this%cfg%npy
+            do k=this%cfg%kmin_,this%cfg%kmax_
+               do j=this%jmin_y(jp),this%jmax_y(jp)
+                  do i=this%imin_y(this%cfg%jproc),this%imax_y(this%cfg%jproc)
+                     ii=i-this%imin_y(this%cfg%jproc)+1
+                     jj=j-this%jmin_y(jp)+1
+                     this%sendbuf_y(ii,jj,k,jp)=At(i,j,k)
+                  end do
+               end do
+            end do
+         end do
+         call MPI_AllToAll(this%sendbuf_y,this%sendcount_y,MPI_REAL_WP,this%recvbuf_y,this%recvcount_y,MPI_REAL_WP,this%cfg%ycomm,ierr)
+         do jp=1,this%cfg%npy
+            do k=this%cfg%kmin_,this%cfg%kmax_
+               do j=this%jmin_y(this%cfg%jproc),this%jmax_y(this%cfg%jproc)
+                  do i=this%imin_y(jp),this%imax_y(jp)
+                     ii=i-this%imin_y(jp)+1
+                     jj=j-this%jmin_y(this%cfg%jproc)+1
+                     A(i,j,k)=this%recvbuf_y(ii,jj,k,jp)
+                  end do
+               end do
+            end do
+         end do
+      case ('y')
+         ! No transpose required
+         A=At
+      case ('z')
+         ! Transpose z=>y
+         do jp=1,this%cfg%npy
+            do k=this%kmin_y(this%cfg%jproc),this%kmax_y(this%cfg%jproc)
+               do j=this%jmin_y(jp),this%jmax_y(jp)
+                  do i=this%cfg%imin_,this%cfg%imax_
+                     kk=k-this%kmin_y(this%cfg%jproc)+1
+                     jj=j-this%jmin_y(jp)+1
+                     this%sendbuf_y(i,jj,kk,jp)=At(i,j,k)
+                  end do
+               end do
+            end do
+         end do
+         call MPI_AllToAll(this%sendbuf_y,this%sendcount_y,MPI_REAL_WP,this%recvbuf_y,this%recvcount_y,MPI_REAL_WP,this%cfg%ycomm,ierr)
+         do jp=1,this%cfg%npy
+            do k=this%kmin_y(jp),this%kmax_y(jp)
+               do j=this%jmin_y(this%cfg%jproc),this%jmax_y(this%cfg%jproc)
+                  do i=this%cfg%imin_,this%cfg%imax_
+                     kk=k-this%kmin_y(jp)+1
+                     jj=j-this%jmin_y(this%cfg%jproc)+1
+                     A(i,j,k)=this%recvbuf_y(i,jj,kk,jp)
+                  end do
+               end do
+            end do
+         end do
+      end select
+      
+   end subroutine pfft3d_ytranspose_backward
+   
+   
+   !> Perform backward transpose in z
+   subroutine pfft3d_ztranspose_backward(this,At,A)
+      use mpi_f08
+      use parallel, only: MPI_REAL_WP
+      implicit none
+      class(pfft3d), intent(inout) :: this
+      real(WP), dimension(this%imin_z(this%cfg%kproc):,this%jmin_z(this%cfg%kproc):,this%cfg%kmin:), intent(in) :: At
+      real(WP), dimension(this%cfg%imin_:,this%cfg%jmin_:,this%cfg%kmin_:), intent(out) :: A
+      integer :: i,j,k,kp,ii,jj,kk,ierr
+      
+      select case (trim(this%zdir))
+      case ('x')
+         ! Transpose x=>z
+         do kp=1,this%cfg%npz
+            do k=this%kmin_z(kp),this%kmax_z(kp)
+               do j=this%cfg%jmin_,this%cfg%jmax_
+                  do i=this%imin_z(this%cfg%kproc),this%imax_z(this%cfg%kproc)
+                     ii=i-this%imin_z(this%cfg%kproc)+1
+                     kk=k-this%kmin_z(kp)+1
+                     this%sendbuf_z(ii,j,kk,kp)=At(i,j,k)
+                  end do
+               end do
+            end do
+         end do
+         call MPI_AllToAll(this%sendbuf_z,this%sendcount_z,MPI_REAL_WP,this%recvbuf_z,this%recvcount_z,MPI_REAL_WP,this%cfg%zcomm,ierr)
+         do kp=1,this%cfg%npz
+            do k=this%kmin_z(this%cfg%kproc),this%kmax_z(this%cfg%kproc)
+               do j=this%cfg%jmin_,this%cfg%jmax_
+                  do i=this%imin_z(kp),this%imax_z(kp)
+                     ii=i-this%imin_z(kp)+1
+                     kk=k-this%kmin_z(this%cfg%kproc)+1
+                     A(i,j,k)=this%recvbuf_z(ii,j,kk,kp)
+                  end do
+               end do
+            end do
+         end do
+      case ('y')
+         ! Transpose y=>z
+         do kp=1,this%cfg%npz
+            do k=this%kmin_z(kp),this%kmax_z(kp)
+               do j=this%jmin_z(this%cfg%kproc),this%jmax_z(this%cfg%kproc)
+                  do i=this%cfg%imin_,this%cfg%imax_
+                     jj=j-this%jmin_z(this%cfg%kproc)+1
+                     kk=k-this%kmin_z(kp)+1
+                     this%sendbuf_z(i,jj,kk,kp)=At(i,j,k)
+                  end do
+               end do
+            end do
+         end do
+         call MPI_AllToAll(this%sendbuf_z,this%sendcount_z,MPI_REAL_WP,this%recvbuf_z,this%recvcount_z,MPI_REAL_WP,this%cfg%zcomm,ierr)
+         do kp=1,this%cfg%npz
+            do k=this%kmin_z(this%cfg%kproc),this%kmax_z(this%cfg%kproc)
+               do j=this%jmin_z(kp),this%jmax_z(kp)
+                  do i=this%cfg%imin_,this%cfg%imax_
+                     jj=j-this%jmin_z(kp)+1
+                     kk=k-this%kmin_z(this%cfg%kproc)+1
+                     A(i,j,k)=this%recvbuf_z(i,jj,kk,kp)
+                  end do
+               end do
+            end do
+         end do
+      case ('z')
+         ! No transpose required
+         A=At
+      end select
+      
+   end subroutine pfft3d_ztranspose_backward
    
    
    !> Setup solver - done everytime the operator changes
