@@ -11,7 +11,7 @@ module geometry
    type(config), public :: cfg
    
    ! Cough machine dimensions
-   real(WP), parameter :: tray_depth=2.0e-3_WP
+   real(WP), parameter :: tray_depth=1.0e-3_WP
    real(WP), parameter :: front_lip =5.0e-3_WP
    real(WP), parameter :: back_lip  =5.0e-3_WP
    
@@ -44,10 +44,10 @@ contains
             y(j)=real(j-1,WP)/real(ny,WP)*Ly-tray_depth
          end do
          do k=1,nz+1
-            z(k)=real(k-1,WP)/real(nz,WP)*Lz
+            z(k)=real(k-1,WP)/real(nz,WP)*Lz-0.5_WP*Lz
          end do
          ! General serial grid object with overlap=3 for tpns
-         grid=sgrid(coord=cartesian,no=3,x=x,y=y,z=z,xper=.false.,yper=.false.,zper=.true.,name='cough_machine')
+         grid=sgrid(coord=cartesian,no=3,x=x,y=y,z=z,xper=.false.,yper=.false.,zper=.false.,name='cough_machine')
       end block create_grid
       
       
@@ -69,6 +69,9 @@ contains
          do k=cfg%kmino_,cfg%kmaxo_
             do j=cfg%jmino_,cfg%jmaxo_
                do i=cfg%imino_,cfg%imaxo_
+                  ! Side walls
+                  if (k.gt.cfg%kmax) cfg%VF(i,j,k)=0.0_WP
+                  if (k.lt.cfg%kmin) cfg%VF(i,j,k)=0.0_WP
                   ! Top wall
                   if (j.gt.cfg%jmax) cfg%VF(i,j,k)=0.0_WP
                   ! Bottom wall

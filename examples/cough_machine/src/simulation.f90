@@ -48,7 +48,7 @@ contains
       integer, intent(in) :: i,j,k
       logical :: isIn
       isIn=.false.
-      if (i.eq.pg%imin.and.pg%ym(j).gt.0.0_WP.and.j.le.pg%jmax) isIn=.true.
+      if (i.eq.pg%imin.and.pg%ym(j).gt.0.0_WP.and.j.le.pg%jmax.and.k.le.pg%kmax.and.k.ge.pg%kmin) isIn=.true.
    end function left_boundary
    
    
@@ -59,7 +59,7 @@ contains
       integer, intent(in) :: i,j,k
       logical :: isIn
       isIn=.false.
-      if (i.eq.pg%imax+1.and.pg%ym(j).gt.0.0_WP.and.j.le.pg%jmax) isIn=.true.
+      if (i.eq.pg%imax+1.and.pg%ym(j).gt.0.0_WP.and.j.le.pg%jmax.and.k.le.pg%kmax.and.k.ge.pg%kmin) isIn=.true.
    end function right_boundary
    
    
@@ -136,7 +136,7 @@ contains
       ! Create a two-phase flow solver with bconds
       create_solver: block
          use tpns_class, only: dirichlet,clipped_neumann,neumann
-         use ils_class,  only: pcg_pfmg
+         use ils_class,  only: pcg_pfmg,gmres_amg
          use mathtools,  only: Pi
          ! Create a two-phase flow solver
          fs=tpns(cfg=cfg,name='Two-phase NS')
@@ -161,8 +161,8 @@ contains
          call param_read('Implicit iteration',fs%implicit%maxit)
          call param_read('Implicit tolerance',fs%implicit%rcvg)
          ! Setup the solver
-         fs%psolv%maxlevel=10
-         call fs%setup(pressure_ils=pcg_pfmg,implicit_ils=pcg_pfmg)
+         !fs%psolv%maxlevel=10
+         call fs%setup(pressure_ils=gmres_amg,implicit_ils=gmres_amg)
       end block create_solver
       
       
@@ -181,7 +181,7 @@ contains
          call fs%get_bcond('inflow',mybc)
          do n=1,mybc%itr%no_
             i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
-            fs%U(i,j,k)=Uin*tanh(2.0_WP*fs%cfg%ym(j)/delta)*tanh(2.0_WP*(fs%cfg%y(fs%cfg%jmax+1)-fs%cfg%ym(j))/delta)+random_uniform(-Urand,Urand)
+            fs%U(i,j,k)=Uin*tanh(2.0_WP*(fs%cfg%zm(k)-fs%cfg%z(fs%cfg%kmin))/delta)*tanh(2.0_WP*(fs%cfg%z(fs%cfg%kmax+1)-fs%cfg%zm(k))/delta)*tanh(2.0_WP*fs%cfg%ym(j)/delta)*tanh(2.0_WP*(fs%cfg%y(fs%cfg%jmax+1)-fs%cfg%ym(j))/delta)+random_uniform(-Urand,Urand)
          end do
          ! Apply all other boundary conditions
          call fs%apply_bcond(time%t,time%dt)
@@ -197,9 +197,9 @@ contains
       
       
       ! Create an LES model
-      create_sgs: block
-         sgs=sgsmodel(cfg=fs%cfg,umask=fs%umask,vmask=fs%vmask,wmask=fs%wmask)
-      end block create_sgs
+      !create_sgs: block
+      !   sgs=sgsmodel(cfg=fs%cfg,umask=fs%umask,vmask=fs%vmask,wmask=fs%wmask)
+      !end block create_sgs
       
       
       ! Add Ensight output
@@ -213,7 +213,7 @@ contains
          call ens_out%add_vector('velocity',Ui,Vi,Wi)
          call ens_out%add_scalar('VOF',vf%VF)
          call ens_out%add_scalar('curvature',vf%curv)
-         call ens_out%add_scalar('visc_t',sgs%visc)
+         !call ens_out%add_scalar('visc_t',sgs%visc)
          ! Output to ensight
          if (ens_evt%occurs()) call ens_out%write_data(time%t)
       end block create_ensight
@@ -303,25 +303,25 @@ contains
          call fs%get_viscosity(vf=vf)
          
          ! Turbulence modeling - only work with gas properties here
-         sgsmodel: block
-            integer :: i,j,k
-            call fs%get_strainrate(Ui=Ui,Vi=Vi,Wi=Wi,SR=SR)
-            resU=fs%rho_g
-            call sgs%get_visc(dt=time%dtold,rho=resU,Ui=Ui,Vi=Vi,Wi=Wi,SR=SR)
-            where (sgs%visc.lt.-fs%visc_g)
-               sgs%visc=-fs%visc_g
-            end where
-            do k=fs%cfg%kmino_+1,fs%cfg%kmaxo_
-               do j=fs%cfg%jmino_+1,fs%cfg%jmaxo_
-                  do i=fs%cfg%imino_+1,fs%cfg%imaxo_
-                     fs%visc(i,j,k)   =fs%visc(i,j,k)   +sgs%visc(i,j,k)
-                     fs%visc_xy(i,j,k)=fs%visc_xy(i,j,k)+sum(fs%itp_xy(:,:,i,j,k)*sgs%visc(i-1:i,j-1:j,k))
-                     fs%visc_yz(i,j,k)=fs%visc_yz(i,j,k)+sum(fs%itp_yz(:,:,i,j,k)*sgs%visc(i,j-1:j,k-1:k))
-                     fs%visc_zx(i,j,k)=fs%visc_zx(i,j,k)+sum(fs%itp_xz(:,:,i,j,k)*sgs%visc(i-1:i,j,k-1:k))
-                  end do
-               end do
-            end do
-         end block sgsmodel
+         ! sgsmodel: block
+         !    integer :: i,j,k
+         !    call fs%get_strainrate(Ui=Ui,Vi=Vi,Wi=Wi,SR=SR)
+         !    resU=fs%rho_g
+         !    call sgs%get_visc(dt=time%dtold,rho=resU,Ui=Ui,Vi=Vi,Wi=Wi,SR=SR)
+         !    where (sgs%visc.lt.-fs%visc_g)
+         !       sgs%visc=-fs%visc_g
+         !    end where
+         !    do k=fs%cfg%kmino_+1,fs%cfg%kmaxo_
+         !       do j=fs%cfg%jmino_+1,fs%cfg%jmaxo_
+         !          do i=fs%cfg%imino_+1,fs%cfg%imaxo_
+         !             fs%visc(i,j,k)   =fs%visc(i,j,k)   +sgs%visc(i,j,k)
+         !             fs%visc_xy(i,j,k)=fs%visc_xy(i,j,k)+sum(fs%itp_xy(:,:,i,j,k)*sgs%visc(i-1:i,j-1:j,k))
+         !             fs%visc_yz(i,j,k)=fs%visc_yz(i,j,k)+sum(fs%itp_yz(:,:,i,j,k)*sgs%visc(i,j-1:j,k-1:k))
+         !             fs%visc_zx(i,j,k)=fs%visc_zx(i,j,k)+sum(fs%itp_xz(:,:,i,j,k)*sgs%visc(i-1:i,j,k-1:k))
+         !          end do
+         !       end do
+         !    end do
+         ! end block sgsmodel
             
          ! Perform sub-iterations
          do while (time%it.le.time%itmax)

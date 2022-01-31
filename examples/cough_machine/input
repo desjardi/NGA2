@@ -15,12 +15,12 @@ Gas thickness :      0.001
 Gas perturbation :   1
 
 # Fluid properties
-Liquid dynamic viscosity :    5e-3       !1.137e-3
-Gas dynamic viscosity :       2e-5       !1.780e-5
+Liquid dynamic viscosity :    1.137e-3
+Gas dynamic viscosity :       1.780e-5
 Liquid density :              1000
 Gas density :                 1.226
-Surface tension coefficient : 0.03       !0.0728
-Static contact angle :        70
+Surface tension coefficient : 0.0728
+Static contact angle :        50
 
 # Time integration
 Max timestep size : 1e-5
