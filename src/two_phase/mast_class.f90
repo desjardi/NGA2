@@ -352,8 +352,8 @@ contains
 
       ! Arrays employed temporarily in a few places
       allocate(self%tmp1(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%tmp1   =0.0_WP
-      allocate(self%tmp2(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%tmp1   =0.0_WP
-      allocate(self%tmp3(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%tmp1   =0.0_WP
+      allocate(self%tmp2(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%tmp2   =0.0_WP
+      allocate(self%tmp3(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%tmp3   =0.0_WP
       
       ! Allocate vfs objects that are required for the MAST solver
       call vf%allocate_supplement()
@@ -1203,9 +1203,12 @@ contains
      class(matm), intent(inout) :: matmod !< The material models for this solver
      real(WP),    intent(inout) :: dt     !< Timestep size over which to advance
      real(WP),   dimension(14)  :: flux   !< Passes flux to and from routines
+     real(WP), dimension(:,:,:), pointer :: PgradX,PgradY,PgradZ
      type(CapDod_type) :: fp              !< Object for flux polyhedron
      type(TagAccVM_SepVM_type) :: ffm     !< Object for flux moments
+     real(WP), dimension(0:1) :: jump
      real(WP) :: Ga_i,Ga_nb,La_i,La_nb
+     real(WP) :: rho_l,rho_r
      integer  :: i,j,k
 
      ! Initialize flux sum arrays
@@ -1228,6 +1231,11 @@ contains
      call new(fp)
      ! Allocate face_flux_moment that will be used in fluxes
      call new(ffm)
+
+     ! Designate the use of temporary arrays for pressure gradients
+     PgradX => this%tmp1; PgradY => this%tmp2; PgradZ =>this%tmp3
+     PgradX = 0.0_WP;     PgradY = 0.0_WP;     PgradZ = 0.0_WP
+
 
      !! ---------------------------------------!!
      !! 1. SL and TTSL flux calculations       !!
@@ -1342,6 +1350,27 @@ contains
                     this%Lrho (i,j,k)   = this%F_Lrho (i,j,k)/(        vf%VF(i,j,k) *this%cfg%vol(i,j,k))
                  end if
               end if
+
+              !! Pressure predictor - momentum
+              ! Pressure jump, gradient for x
+              rho_l=sum(vf%Gvol(0,:,:,i,j,k))*this%Grho(i,j,k)+sum(vf%Lvol(0,:,:,i,j,k))*this%Lrho(i,j,k)
+              rho_r=sum(vf%Gvol(1,:,:,i,j,k))*this%Grho(i,j,k)+sum(vf%Lvol(1,:,:,i,j,k))*this%Lrho(i,j,k)
+              jump(0)=rho_l*this%Pjx(i  ,j,k)/(this%rho_U(i  ,j,k)*this%cfg%vol(i,j,k))
+              jump(1)=rho_r*this%Pjx(i+1,j,k)/(this%rho_U(i+1,j,k)*this%cfg%vol(i,j,k))
+              PgradX(i,j,k) = (this%P_U(i+1,j,k)-this%P_U(i,j,k))*this%cfg%dxi(i)-sum(jump)
+              ! Pressure jump, gradient for y
+              rho_l=sum(vf%Gvol(:,0,:,i,j,k))*this%Grho(i,j,k)+sum(vf%Lvol(:,0,:,i,j,k))*this%Lrho(i,j,k)
+              rho_r=sum(vf%Gvol(:,1,:,i,j,k))*this%Grho(i,j,k)+sum(vf%Lvol(:,1,:,i,j,k))*this%Lrho(i,j,k)
+              jump(0)=rho_l*this%Pjy(i,j  ,k)/(this%rho_V(i,j  ,k)*this%cfg%vol(i,j,k))
+              jump(1)=rho_r*this%Pjy(i,j+1,k)/(this%rho_V(i,j+1,k)*this%cfg%vol(i,j,k))
+              PgradY(i,j,k) = (this%P_V(i,j+1,k)-this%P_V(i,j,k))*this%cfg%dyi(j)-sum(jump)
+              ! Pressure jump, gradient for z
+              rho_l=sum(vf%Gvol(:,:,0,i,j,k))*this%Grho(i,j,k)+sum(vf%Lvol(:,:,0,i,j,k))*this%Lrho(i,j,k)
+              rho_r=sum(vf%Gvol(:,:,1,i,j,k))*this%Grho(i,j,k)+sum(vf%Lvol(:,:,1,i,j,k))*this%Lrho(i,j,k)
+              jump(0)=rho_l*this%Pjz(i,j,k  )/(this%rho_W(i,j,k  )*this%cfg%vol(i,j,k))
+              jump(1)=rho_r*this%Pjz(i,j,k+1)/(this%rho_W(i,j,k+1)*this%cfg%vol(i,j,k))
+              PgradZ(i,j,k) = (this%P_W(i,j,k+1)-this%P_W(i,j,k))*this%cfg%dzi(k)-sum(jump)
+
            end do
         end do
      end do
@@ -1454,19 +1483,19 @@ contains
 
      ! Solve for x-momentum
      call this%implicit%setup()
-     this%implicit%rhs=this%F_GrhoU+this%F_LrhoU
+     this%implicit%rhs=this%F_GrhoU+this%F_LrhoU-dt*this%cfg%vol*PgradX
      this%implicit%sol=this%rhoUi
      call this%implicit%solve()
      this%rhoUi=this%implicit%sol
      ! Solve for y-momentum
      call this%implicit%setup()
-     this%implicit%rhs=this%F_GrhoV+this%F_LrhoV
+     this%implicit%rhs=this%F_GrhoV+this%F_LrhoV-dt*this%cfg%vol*PgradY
      this%implicit%sol=this%rhoVi
      call this%implicit%solve()
      this%rhoVi=this%implicit%sol
      ! Solve for z-momentum
      call this%implicit%setup()
-     this%implicit%rhs=this%F_GrhoW+this%F_LrhoW
+     this%implicit%rhs=this%F_GrhoW+this%F_LrhoW-dt*this%cfg%vol*PgradZ
      this%implicit%sol=this%rhoWi
      call this%implicit%solve()
      this%rhoWi=this%implicit%sol
@@ -1512,8 +1541,39 @@ contains
      do k=this%cfg%kmin_,this%cfg%kmax_
         do j=this%cfg%jmin_,this%cfg%jmax_
            do i=this%cfg%imin_,this%cfg%imax_
+              
               ! Cycle wall cells and masked BC cells
               if (this%mask(i,j,k).gt.0) cycle
+              
+              ! Incorporate pressure predictor terms
+              this%F_GrhoE(i,j,k) = this%F_GrhoE(i,j,k) &
+                   - dt*this%cfg%vol(i,j,k)*(1.0_WP-vf%VF(i,j,k))*(this%Grho(i,j,k)/this%RHO(i,j,k)*&
+                   ( sum(this%divu_x(i,j,k,:)*this%U(i:i+1,j,k)*this%P_U(i:i+1,j,k)) &
+                   + sum(this%divv_y(i,j,k,:)*this%V(i,j:j+1,k)*this%P_V(i,j:j+1,k)) &
+                   + sum(this%divw_z(i,j,k,:)*this%W(i,j,k:k+1)*this%P_W(i,j,k:k+1)) &
+                   - sum(this%Pjx (i:i+1,j,k)*this%U(i:i+1,j,k)) &
+                   - sum(this%Pjy (i,j:j+1,k)*this%V(i,j:j+1,k)) &
+                   - sum(this%Pjz (i,j,k:k+1)*this%W(i,j,k:k+1)) ) + &
+                   ( sum(this%divu_x(i,j,k,:)*this%U(i:i+1,j,k)) &
+                   + sum(this%divv_y(i,j,k,:)*this%V(i,j:j+1,k)) &
+                   + sum(this%divw_z(i,j,k,:)*this%W(i,j,k:k+1)) )*&
+                   ( this%P(i,j,k)*(1.0_WP-this%Grho(i,j,k)/this%RHO(i,j,k)) &
+                   - this%Hpjump(i,j,k)*(       vf%VF(i,j,k))) )
+
+	      this%F_LrhoE(i,j,k) = this%F_LrhoE(i,j,k) &
+                   - dt*this%cfg%vol(i,j,k)*(       vf%VF(i,j,k))*(this%Lrho(i,j,k)/this%RHO(i,j,k)*&
+                   ( sum(this%divu_x(i,j,k,:)*this%U(i:i+1,j,k)*this%P_U(i:i+1,j,k)) &
+                   + sum(this%divv_y(i,j,k,:)*this%V(i,j:j+1,k)*this%P_V(i,j:j+1,k)) &
+                   + sum(this%divw_z(i,j,k,:)*this%W(i,j,k:k+1)*this%P_W(i,j,k:k+1)) &
+                   - sum(this%Pjx (i:i+1,j,k)*this%U(i:i+1,j,k)) &
+                   - sum(this%Pjy (i,j:j+1,k)*this%V(i,j:j+1,k)) &
+                   - sum(this%Pjz (i,j,k:k+1)*this%W(i,j,k:k+1)) ) + &
+                   ( sum(this%divu_x(i,j,k,:)*this%U(i:i+1,j,k)) &
+                   + sum(this%divv_y(i,j,k,:)*this%V(i,j:j+1,k)) &
+                   + sum(this%divw_z(i,j,k,:)*this%W(i,j,k:k+1)) )*&
+                   ( this%P(i,j,k)*(1.0_WP-this%Lrho(i,j,k)/this%RHO(i,j,k)) &
+                   + this%Hpjump(i,j,k)*(1.0_WP-vf%VF(i,j,k))) )              
+              
               ! Update phase energy
               if      (vf%VF(i,j,k).lt.VFlo) then
                  this%GrhoE(i,j,k) = this%F_GrhoE(i,j,k)/this%cfg%vol(i,j,k)
@@ -1525,6 +1585,7 @@ contains
                  this%GrhoE(i,j,k)=this%F_GrhoE(i,j,k)/((1.0_WP-vf%VF(i,j,k))*this%cfg%vol(i,j,k))
                  this%LrhoE(i,j,k)=this%F_LrhoE(i,j,k)/(        vf%VF(i,j,k) *this%cfg%vol(i,j,k))
               end if
+              
            end do
         end do
      end do
