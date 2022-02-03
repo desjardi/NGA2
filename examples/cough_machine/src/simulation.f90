@@ -150,6 +150,8 @@ contains
          call param_read('Surface tension coefficient',fs%sigma)
          call param_read('Static contact angle',fs%contact_angle)
          fs%contact_angle=fs%contact_angle*Pi/180.0_WP
+         ! Assign acceleration of gravity
+         call param_read('Gravity',fs%gravity)
          ! Inflow on the left
          call fs%add_bcond(name='inflow' ,type=dirichlet      ,face='x',dir=-1,canCorrect=.false.,locator=left_boundary)
          ! Outflow on the right
@@ -197,9 +199,9 @@ contains
       
       
       ! Create an LES model
-      !create_sgs: block
-      !   sgs=sgsmodel(cfg=fs%cfg,umask=fs%umask,vmask=fs%vmask,wmask=fs%wmask)
-      !end block create_sgs
+      create_sgs: block
+         sgs=sgsmodel(cfg=fs%cfg,umask=fs%umask,vmask=fs%vmask,wmask=fs%wmask)
+      end block create_sgs
       
       
       ! Add Ensight output
@@ -303,26 +305,26 @@ contains
          call fs%get_viscosity(vf=vf)
          
          ! Turbulence modeling - only work with gas properties here
-         ! sgsmodel: block
-         !    integer :: i,j,k
-         !    call fs%get_strainrate(Ui=Ui,Vi=Vi,Wi=Wi,SR=SR)
-         !    resU=fs%rho_g
-         !    call sgs%get_visc(dt=time%dtold,rho=resU,Ui=Ui,Vi=Vi,Wi=Wi,SR=SR)
-         !    where (sgs%visc.lt.-fs%visc_g)
-         !       sgs%visc=-fs%visc_g
-         !    end where
-         !    do k=fs%cfg%kmino_+1,fs%cfg%kmaxo_
-         !       do j=fs%cfg%jmino_+1,fs%cfg%jmaxo_
-         !          do i=fs%cfg%imino_+1,fs%cfg%imaxo_
-         !             fs%visc(i,j,k)   =fs%visc(i,j,k)   +sgs%visc(i,j,k)
-         !             fs%visc_xy(i,j,k)=fs%visc_xy(i,j,k)+sum(fs%itp_xy(:,:,i,j,k)*sgs%visc(i-1:i,j-1:j,k))
-         !             fs%visc_yz(i,j,k)=fs%visc_yz(i,j,k)+sum(fs%itp_yz(:,:,i,j,k)*sgs%visc(i,j-1:j,k-1:k))
-         !             fs%visc_zx(i,j,k)=fs%visc_zx(i,j,k)+sum(fs%itp_xz(:,:,i,j,k)*sgs%visc(i-1:i,j,k-1:k))
-         !          end do
-         !       end do
-         !    end do
-         ! end block sgsmodel
-            
+         sgsmodel: block
+            integer :: i,j,k
+            call fs%get_strainrate(Ui=Ui,Vi=Vi,Wi=Wi,SR=SR)
+            resU=fs%rho_g
+            call sgs%get_visc(dt=time%dtold,rho=resU,Ui=Ui,Vi=Vi,Wi=Wi,SR=SR)
+            where (sgs%visc.lt.-fs%visc_g)
+               sgs%visc=-fs%visc_g
+            end where
+            do k=fs%cfg%kmino_+1,fs%cfg%kmaxo_
+               do j=fs%cfg%jmino_+1,fs%cfg%jmaxo_
+                  do i=fs%cfg%imino_+1,fs%cfg%imaxo_
+                     fs%visc(i,j,k)   =fs%visc(i,j,k)   +sgs%visc(i,j,k)
+                     fs%visc_xy(i,j,k)=fs%visc_xy(i,j,k)+sum(fs%itp_xy(:,:,i,j,k)*sgs%visc(i-1:i,j-1:j,k))
+                     fs%visc_yz(i,j,k)=fs%visc_yz(i,j,k)+sum(fs%itp_yz(:,:,i,j,k)*sgs%visc(i,j-1:j,k-1:k))
+                     fs%visc_zx(i,j,k)=fs%visc_zx(i,j,k)+sum(fs%itp_xz(:,:,i,j,k)*sgs%visc(i-1:i,j,k-1:k))
+                  end do
+               end do
+            end do
+         end block sgsmodel
+         
          ! Perform sub-iterations
          do while (time%it.le.time%itmax)
             
@@ -336,6 +338,9 @@ contains
             
             ! Explicit calculation of drho*u/dt from NS
             call fs%get_dmomdt(resU,resV,resW)
+            
+            ! Add momentum source terms
+            call fs%addsrc_gravity(resU,resV,resW)
             
             ! Assemble explicit residual
             resU=-2.0_WP*fs%rho_U*fs%U+(fs%rho_Uold+fs%rho_U)*fs%Uold+time%dt*resU

@@ -15,6 +15,7 @@ Gas thickness :      0.001
 Gas perturbation :   1
 
 # Fluid properties
+Gravity :                     0 -9.81 0
 Liquid dynamic viscosity :    1.137e-3
 Gas dynamic viscosity :       1.780e-5
 Liquid density :              1000
