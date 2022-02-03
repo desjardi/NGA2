@@ -2,15 +2,15 @@
 Partition : 4 1 1
 
 # Mesh definition
-Lx :  0.05
-Ly :  0.01
-Lz :  0.01    !0.02
-nx :  100     !500 !1000
-ny :  20      !100 !200
-nz :  20      !100 !200
+Lx :  0.1
+Ly :  0.03
+Lz :  0.03
+nx :  200
+ny :  60
+nz :  60
 
 # Injection velocity
-Gas velocity :       30
+Gas velocity :       20
 Gas thickness :      0.001
 Gas perturbation :   1
 

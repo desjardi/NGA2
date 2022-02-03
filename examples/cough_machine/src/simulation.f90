@@ -2,7 +2,7 @@
 module simulation
    use string,            only: str_medium
    use precision,         only: WP
-   use geometry,          only: cfg
+   use geometry,          only: cfg,t_wall,L_mouth,H_mouth,W_mouth,L_film,H_film,W_film,L_lip
    use tpns_class,        only: tpns
    use vfs_class,         only: vfs
    use sgsmodel_class,    only: sgsmodel
@@ -48,7 +48,7 @@ contains
       integer, intent(in) :: i,j,k
       logical :: isIn
       isIn=.false.
-      if (i.eq.pg%imin.and.pg%ym(j).gt.0.0_WP.and.j.le.pg%jmax.and.k.le.pg%kmax.and.k.ge.pg%kmin) isIn=.true.
+      if (i.eq.pg%imin.and.pg%ym(j).gt.0.0_WP.and.pg%ym(j).lt.H_mouth.and.abs(pg%zm(k)).lt.0.5_WP*W_mouth) isIn=.true.
    end function left_boundary
    
    
@@ -59,7 +59,7 @@ contains
       integer, intent(in) :: i,j,k
       logical :: isIn
       isIn=.false.
-      if (i.eq.pg%imax+1.and.pg%ym(j).gt.0.0_WP.and.j.le.pg%jmax.and.k.le.pg%kmax.and.k.ge.pg%kmin) isIn=.true.
+      if (i.eq.pg%imax+1) isIn=.true.
    end function right_boundary
    
    
@@ -104,7 +104,7 @@ contains
          do k=vf%cfg%kmino_,vf%cfg%kmaxo_
             do j=vf%cfg%jmino_,vf%cfg%jmaxo_
                do i=vf%cfg%imino_,vf%cfg%imaxo_
-                  if (vf%cfg%ym(j).lt.0.0_WP.and.vf%cfg%VF(i,j,k).eq.1.0_WP) then
+                  if (vf%cfg%xm(i).lt.-L_lip.and.vf%cfg%xm(i).gt.-L_lip-L_film.and.abs(vf%cfg%zm(k)).lt.0.5_WP*W_film.and.vf%cfg%ym(j).lt.0.0_WP.and.vf%cfg%ym(j).gt.-H_film) then
                      vf%VF(i,j,k)=1.0_WP
                   else
                      vf%VF(i,j,k)=0.0_WP
@@ -181,7 +181,7 @@ contains
          call fs%get_bcond('inflow',mybc)
          do n=1,mybc%itr%no_
             i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
-            fs%U(i,j,k)=Uin*tanh(2.0_WP*(fs%cfg%zm(k)-fs%cfg%z(fs%cfg%kmin))/delta)*tanh(2.0_WP*(fs%cfg%z(fs%cfg%kmax+1)-fs%cfg%zm(k))/delta)*tanh(2.0_WP*fs%cfg%ym(j)/delta)*tanh(2.0_WP*(fs%cfg%y(fs%cfg%jmax+1)-fs%cfg%ym(j))/delta)+random_uniform(-Urand,Urand)
+            fs%U(i,j,k)=Uin*tanh(2.0_WP*(0.5_WP*W_mouth-abs(fs%cfg%zm(k)))/delta)*tanh(2.0_WP*fs%cfg%ym(j)/delta)*tanh(2.0_WP*(H_mouth-fs%cfg%ym(j))/delta)+random_uniform(-Urand,Urand)
          end do
          ! Apply all other boundary conditions
          call fs%apply_bcond(time%t,time%dt)
@@ -289,7 +289,7 @@ contains
             call fs%get_bcond('inflow',mybc)
             do n=1,mybc%itr%no_
                i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
-               fs%U(i,j,k)=Uin*tanh(2.0_WP*fs%cfg%ym(j)/delta)*tanh(2.0_WP*(fs%cfg%y(fs%cfg%jmax+1)-fs%cfg%ym(j))/delta)+random_uniform(-Urand,Urand)
+               fs%U(i,j,k)=Uin*tanh(2.0_WP*(0.5_WP*W_mouth-abs(fs%cfg%zm(k)))/delta)*tanh(2.0_WP*fs%cfg%ym(j)/delta)*tanh(2.0_WP*(H_mouth-fs%cfg%ym(j))/delta)+random_uniform(-Urand,Urand)
             end do
          end block reapply_dirichlet
          

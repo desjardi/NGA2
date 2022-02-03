@@ -5,15 +5,20 @@ module geometry
    implicit none
    private
    
-   public :: geometry_init
+   public :: geometry_init,t_wall,L_mouth,H_mouth,W_mouth,L_film,H_film,W_film,L_lip
    
    !> Single config files
    type(config), public :: cfg
    
-   ! Cough machine dimensions
-   real(WP), parameter :: tray_depth=1.0e-3_WP
-   real(WP), parameter :: front_lip =5.0e-3_WP
-   real(WP), parameter :: back_lip  =5.0e-3_WP
+   ! Virtual mouth dimensions
+   real(WP), parameter :: t_wall =5.0e-3_WP
+   real(WP), parameter :: L_mouth=5.0e-2_WP
+   real(WP), parameter :: H_mouth=1.0e-2_WP
+   real(WP), parameter :: W_mouth=1.0e-2_WP
+   real(WP), parameter :: L_film =4.0e-2_WP
+   real(WP), parameter :: H_film =1.0e-3_WP
+   real(WP), parameter :: W_film =1.0e-2_WP
+   real(WP), parameter :: L_lip  =5.0e-3_WP
    
 contains
    
@@ -38,10 +43,10 @@ contains
          call param_read('Lz',Lz); call param_read('nz',nz); allocate(z(nz+1))
          ! Create simple rectilinear grid
          do i=1,nx+1
-            x(i)=real(i-1,WP)/real(nx,WP)*Lx-front_lip
+            x(i)=real(i-1,WP)/real(nx,WP)*Lx-L_mouth
          end do
          do j=1,ny+1
-            y(j)=real(j-1,WP)/real(ny,WP)*Ly-tray_depth
+            y(j)=real(j-1,WP)/real(ny,WP)*Ly-0.5_WP*Ly+0.5_WP*H_mouth
          end do
          do k=1,nz+1
             z(k)=real(k-1,WP)/real(nz,WP)*Lz-0.5_WP*Lz
@@ -69,17 +74,12 @@ contains
          do k=cfg%kmino_,cfg%kmaxo_
             do j=cfg%jmino_,cfg%jmaxo_
                do i=cfg%imino_,cfg%imaxo_
-                  ! Side walls
-                  if (k.gt.cfg%kmax) cfg%VF(i,j,k)=0.0_WP
-                  if (k.lt.cfg%kmin) cfg%VF(i,j,k)=0.0_WP
-                  ! Top wall
-                  if (j.gt.cfg%jmax) cfg%VF(i,j,k)=0.0_WP
-                  ! Bottom wall
-                  if (cfg%ym(j).lt.-tray_depth) cfg%VF(i,j,k)=0.0_WP
-                  ! Front lip
-                  if (cfg%ym(j).lt.0.0_WP.and.cfg%xm(i).lt.0.0_WP) cfg%VF(i,j,k)=0.0_WP
-                  ! Back lip
-                  if (cfg%ym(j).lt.0.0_WP.and.cfg%xm(i).gt.cfg%xL-front_lip-back_lip) cfg%VF(i,j,k)=0.0_WP
+                  ! Zero out wall cells including inside mouth
+                  if (cfg%xm(i).lt.0.0_WP.and.abs(cfg%zm(k)).lt.0.5_WP*W_mouth+t_wall.and.cfg%ym(j).gt.-t_wall.and.cfg%ym(j).lt.H_mouth+t_wall) cfg%VF(i,j,k)=0.0_WP
+                  ! Carve out inside of mouth
+                  if (cfg%xm(i).lt.0.0_WP.and.abs(cfg%zm(k)).lt.0.5_WP*W_mouth.and.cfg%ym(j).gt.0.0_WP.and.cfg%ym(j).lt.H_mouth) cfg%VF(i,j,k)=1.0_WP
+                  ! Carve out tray for liquid film
+                  if (cfg%xm(i).lt.-L_lip.and.cfg%xm(i).gt.-L_lip-L_film.and.abs(cfg%zm(k)).lt.0.5_WP*W_film.and.cfg%ym(j).lt.0.0_WP.and.cfg%ym(j).gt.-H_film) cfg%VF(i,j,k)=1.0_WP
                end do
             end do
          end do
