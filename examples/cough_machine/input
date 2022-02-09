@@ -1,13 +1,22 @@
 # Parallelization
-Partition : 4 1 1
+Inner partition : 4 1 1
+Outer partition : 4 1 1
 
-# Mesh definition
-Lx :  0.1
-Ly :  0.03
-Lz :  0.03
-nx :  200
-ny :  60
-nz :  60
+# Zoomed out mesh definition
+Outer Lx :  1
+Outer Ly :  0.5
+Outer Lz :  0.5
+Outer nx :  100
+Outer ny :  50
+Outer nz :  50
+
+# Zoomed in mesh definition
+Inner Lx :  0.1
+Inner Ly :  0.03
+Inner Lz :  0.03
+Inner nx :  200
+Inner ny :  60
+Inner nz :  60
 
 # Injection velocity
 Gas velocity :       20

@@ -7,6 +7,7 @@ USE_MPI   = TRUE
 USE_HYPRE = TRUE
 USE_LAPACK= TRUE
 USE_IRL   = TRUE
+USE_FFTW  = TRUE
 PROFILE   = FALSE
 DEBUG     = FALSE
 COMP      = gnu
@@ -26,6 +27,7 @@ VPATH_LOCATIONS   += $(Ulocs)
 HYPRE_DIR = /Users/desjardi/Builds/hypre
 LAPACK_DIR= /Users/desjardi/Builds/lapack
 IRL_DIR   = /Users/desjardi/Builds/IRL
+FFTW_DIR  = /Users/desjardi/Builds/fftw
 
 # NGA compilation definitions
 include $(NGA_HOME)/tools/GNUMake/Make.defs
