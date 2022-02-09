@@ -1351,26 +1351,6 @@ contains
                  end if
               end if
 
-              !! Pressure predictor - momentum
-              ! Pressure jump, gradient for x
-              rho_l=sum(vf%Gvol(0,:,:,i,j,k))*this%Grho(i,j,k)+sum(vf%Lvol(0,:,:,i,j,k))*this%Lrho(i,j,k)
-              rho_r=sum(vf%Gvol(1,:,:,i,j,k))*this%Grho(i,j,k)+sum(vf%Lvol(1,:,:,i,j,k))*this%Lrho(i,j,k)
-              jump(0)=rho_l*this%Pjx(i  ,j,k)/(this%rho_U(i  ,j,k)*this%cfg%vol(i,j,k))
-              jump(1)=rho_r*this%Pjx(i+1,j,k)/(this%rho_U(i+1,j,k)*this%cfg%vol(i,j,k))
-              PgradX(i,j,k) = (this%P_U(i+1,j,k)-this%P_U(i,j,k))*this%cfg%dxi(i)-sum(jump)
-              ! Pressure jump, gradient for y
-              rho_l=sum(vf%Gvol(:,0,:,i,j,k))*this%Grho(i,j,k)+sum(vf%Lvol(:,0,:,i,j,k))*this%Lrho(i,j,k)
-              rho_r=sum(vf%Gvol(:,1,:,i,j,k))*this%Grho(i,j,k)+sum(vf%Lvol(:,1,:,i,j,k))*this%Lrho(i,j,k)
-              jump(0)=rho_l*this%Pjy(i,j  ,k)/(this%rho_V(i,j  ,k)*this%cfg%vol(i,j,k))
-              jump(1)=rho_r*this%Pjy(i,j+1,k)/(this%rho_V(i,j+1,k)*this%cfg%vol(i,j,k))
-              PgradY(i,j,k) = (this%P_V(i,j+1,k)-this%P_V(i,j,k))*this%cfg%dyi(j)-sum(jump)
-              ! Pressure jump, gradient for z
-              rho_l=sum(vf%Gvol(:,:,0,i,j,k))*this%Grho(i,j,k)+sum(vf%Lvol(:,:,0,i,j,k))*this%Lrho(i,j,k)
-              rho_r=sum(vf%Gvol(:,:,1,i,j,k))*this%Grho(i,j,k)+sum(vf%Lvol(:,:,1,i,j,k))*this%Lrho(i,j,k)
-              jump(0)=rho_l*this%Pjz(i,j,k  )/(this%rho_W(i,j,k  )*this%cfg%vol(i,j,k))
-              jump(1)=rho_r*this%Pjz(i,j,k+1)/(this%rho_W(i,j,k+1)*this%cfg%vol(i,j,k))
-              PgradZ(i,j,k) = (this%P_W(i,j,k+1)-this%P_W(i,j,k))*this%cfg%dzi(k)-sum(jump)
-
            end do
         end do
      end do
@@ -1476,6 +1456,32 @@ contains
                  end if
               end if
 
+           end do
+        end do
+     end do
+
+     !! Pressure predictor - momentum
+     do k=this%cfg%kmin_,this%cfg%kmax_
+        do j=this%cfg%jmin_,this%cfg%jmax_
+           do i=this%cfg%imin_,this%cfg%imax_
+              ! Pressure jump, gradient for x
+              rho_l=sum(vf%Gvol(0,:,:,i,j,k))*this%Grho(i,j,k)+sum(vf%Lvol(0,:,:,i,j,k))*this%Lrho(i,j,k)
+              rho_r=sum(vf%Gvol(1,:,:,i,j,k))*this%Grho(i,j,k)+sum(vf%Lvol(1,:,:,i,j,k))*this%Lrho(i,j,k)
+              jump(0)=rho_l*this%Pjx(i  ,j,k)/(this%rho_U(i  ,j,k)*this%cfg%vol(i,j,k))
+              jump(1)=rho_r*this%Pjx(i+1,j,k)/(this%rho_U(i+1,j,k)*this%cfg%vol(i,j,k))
+              PgradX(i,j,k) = (this%P_U(i+1,j,k)-this%P_U(i,j,k))*this%cfg%dxi(i)-sum(jump)
+              ! Pressure jump, gradient for y
+              rho_l=sum(vf%Gvol(:,0,:,i,j,k))*this%Grho(i,j,k)+sum(vf%Lvol(:,0,:,i,j,k))*this%Lrho(i,j,k)
+              rho_r=sum(vf%Gvol(:,1,:,i,j,k))*this%Grho(i,j,k)+sum(vf%Lvol(:,1,:,i,j,k))*this%Lrho(i,j,k)
+              jump(0)=rho_l*this%Pjy(i,j  ,k)/(this%rho_V(i,j  ,k)*this%cfg%vol(i,j,k))
+              jump(1)=rho_r*this%Pjy(i,j+1,k)/(this%rho_V(i,j+1,k)*this%cfg%vol(i,j,k))
+              PgradY(i,j,k) = (this%P_V(i,j+1,k)-this%P_V(i,j,k))*this%cfg%dyi(j)-sum(jump)
+              ! Pressure jump, gradient for z
+              rho_l=sum(vf%Gvol(:,:,0,i,j,k))*this%Grho(i,j,k)+sum(vf%Lvol(:,:,0,i,j,k))*this%Lrho(i,j,k)
+              rho_r=sum(vf%Gvol(:,:,1,i,j,k))*this%Grho(i,j,k)+sum(vf%Lvol(:,:,1,i,j,k))*this%Lrho(i,j,k)
+              jump(0)=rho_l*this%Pjz(i,j,k  )/(this%rho_W(i,j,k  )*this%cfg%vol(i,j,k))
+              jump(1)=rho_r*this%Pjz(i,j,k+1)/(this%rho_W(i,j,k+1)*this%cfg%vol(i,j,k))
+              PgradZ(i,j,k) = (this%P_W(i,j,k+1)-this%P_W(i,j,k))*this%cfg%dzi(k)-sum(jump)
            end do
         end do
      end do
