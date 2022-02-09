@@ -310,6 +310,11 @@ contains
 
          ! Other routines to add later: sgs, lpt, prescribe
 
+         ! Zero variables that will change during subiterations
+         fs%P = 0.0_WP
+         fs%Pjx = 0.0_WP; fs%Pjy = 0.0_WP; fs%Pjz = 0.0_WP
+         fs%Hpjump = 0.0_WP
+
          ! Determine semi-Lagrangian advection flag
          call fs%flag_sl(vf)
 
