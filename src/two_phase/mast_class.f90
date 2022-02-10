@@ -1506,6 +1506,9 @@ contains
      call this%implicit%solve()
      this%rhoWi=this%implicit%sol
 
+     ! Nullify pointers
+     nullify(PgradX,PgradY,PgradZ)
+
      ! Boundary conditions for momentum
      bc_scope = 'momentum'
      call this%apply_bcond(dt,bc_scope)
@@ -2267,7 +2270,7 @@ contains
                rho_f(0)=0.0_WP; vol_l=sum(vf%Gvol(1,:,:,i-1,j,k)+vf%Lvol(1,:,:,i-1,j,k))
                if (vol_l.gt.0.0_WP.and.this%mask(i-1,j,k).eq.0) &
                     rho_f(0)=(sum(vf%Gvol(1,:,:,i-1,j,k))*this%Grho(i-1,j,k)&
-                            +sum(vf%Lvol(1,:,:,i-1,j,k))*this%Lrho(i-1,j,k))
+                             +sum(vf%Lvol(1,:,:,i-1,j,k))*this%Lrho(i-1,j,k))
                if (sum(rho_f).gt.0.0_WP) then
                   DP_U(i,j,k)=2.0_WP*sum(this%itpi_x(:,i,j,k)*DP(i-1:i,j,k))&
                        -sum(this%itpi_x(:,i,j,k)*rho_f*DP(i-1:i,j,k)) / &
@@ -2280,11 +2283,11 @@ contains
                rho_f(1)=0.0_WP; vol_r=sum(vf%Gvol(:,0,:,i,j  ,k)+vf%Lvol(:,0,:,i,j  ,k))
                if (vol_r.gt.0.0_WP.and.this%mask(i,j  ,k).eq.0) &
                     rho_f(1)=(sum(vf%Gvol(:,0,:,i,j  ,k))*this%Grho(i,j  ,k)&
-                            +sum(vf%Lvol(:,0,:,i,j  ,k))*this%Lrho(i,j  ,k))
+                             +sum(vf%Lvol(:,0,:,i,j  ,k))*this%Lrho(i,j  ,k))
                rho_f(0)=0.0_WP; vol_l=sum(vf%Gvol(:,1,:,i,j-1,k)+vf%Lvol(:,1,:,i,j-1,k))
                if (vol_l.gt.0.0_WP.and.this%mask(i,j+1,k).eq.0) &
                     rho_f(0)=(sum(vf%Gvol(:,1,:,i,j-1,k))*this%Grho(i,j-1,k)&
-                            +sum(vf%Lvol(:,1,:,i,j-1,k))*this%Lrho(i,j-1,k))
+                             +sum(vf%Lvol(:,1,:,i,j-1,k))*this%Lrho(i,j-1,k))
                if (sum(rho_f).gt.0.0_WP) then
                   DP_V(i,j,k)=2.0_WP*sum(this%itpi_y(:,i,j,k)*DP(i,j-1:j,k))&
                        -sum(this%itpi_y(:,i,j,k)*rho_f*DP(i,j-1:j,k)) / &
@@ -2297,11 +2300,11 @@ contains
                rho_f(1)=0.0_WP; vol_r=sum(vf%Gvol(:,:,0,i,j,k  )+vf%Lvol(:,:,0,i,j,k  ))
                if (vol_r.gt.0.0_WP.and.this%mask(i,j,k  ).eq.0) &
                     rho_f(1)=(sum(vf%Gvol(:,:,0,i,j,k  ))*this%Grho(i,j,k  )&
-                            +sum(vf%Lvol(:,:,0,i,j,k  ))*this%Lrho(i,j,k  ))
+                             +sum(vf%Lvol(:,:,0,i,j,k  ))*this%Lrho(i,j,k  ))
                rho_f(0)=0.0_WP; vol_l=sum(vf%Gvol(:,:,1,i,j,k-1)+vf%Lvol(:,:,1,i,j,k-1))
                if (vol_l.gt.0.0_WP.and.this%mask(i,j,k+1).eq.0) &
                     rho_f(0)=(sum(vf%Gvol(:,:,1,i,j,k-1))*this%Grho(i,j,k-1)&
-                            +sum(vf%Lvol(:,:,1,i,j,k-1))*this%Lrho(i,j,k-1))
+                             +sum(vf%Lvol(:,:,1,i,j,k-1))*this%Lrho(i,j,k-1))
                if (sum(rho_f).gt.0.0_WP) then
                   DP_W(i,j,k)=2.0_WP*sum(this%itpi_z(:,i,j,k)*DP(i,j,k-1:k))&
                        -sum(this%itpi_z(:,i,j,k)*rho_f*DP(i,j,k-1:k)) / &
