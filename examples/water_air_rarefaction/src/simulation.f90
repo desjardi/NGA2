@@ -334,6 +334,7 @@ contains
             call fs%psolv%setup()
             fs%psolv%sol=0.0_WP
             call fs%psolv%solve()
+            call fs%cfg%sync(fs%psolv%sol)
             ! Perform corrector step using solution
             fs%P=fs%P+fs%psolv%sol
             call fs%pressureproj_correct(time%dt,vf,fs%psolv%sol)
