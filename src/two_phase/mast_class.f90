@@ -2999,13 +2999,14 @@ contains
      real(WP) :: vol_r,vol_l,rho_r,rho_l
      real(WP), dimension(0:1) :: jumpx,jumpy,jumpz
                                                                                     
-     do k=this%cfg%kmin_-1,this%cfg%kmax_+1
-        do j=this%cfg%jmin_-1,this%cfg%jmax_+1
-           do i=this%cfg%imin_-1,this%cfg%imax_+1
+     do k=this%cfg%kmin_,this%cfg%kmax_
+        do j=this%cfg%jmin_,this%cfg%jmax_
+           do i=this%cfg%imin_,this%cfg%imax_
               ! Begin at zero every time
               termU(i,j,k) = 0.0_WP
               termV(i,j,k) = 0.0_WP
               termW(i,j,k) = 0.0_WP
+
               ! No need to calculate terms inside of wall cell or masked BCs
               if (this%mask(i,j,k).gt.0) cycle
 
@@ -3032,7 +3033,11 @@ contains
         end do
      end do
 
-     ! No need for communication or boundary conditions on these arrays
+     ! Communicate
+     call this%cfg%sync(termU)
+     call this%cfg%sync(termV)
+     call this%cfg%sync(termW)
+
 
    end subroutine terms_modified_face_velocity
 
