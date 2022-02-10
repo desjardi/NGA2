@@ -1557,29 +1557,29 @@ contains
               ! Incorporate pressure predictor terms
               this%F_GrhoE(i,j,k) = this%F_GrhoE(i,j,k) &
                    - dt*this%cfg%vol(i,j,k)*(1.0_WP-vf%VF(i,j,k))*(this%Grho(i,j,k)/this%RHO(i,j,k)*&
-                   ( sum(this%divu_x(i,j,k,:)*this%U(i:i+1,j,k)*this%P_U(i:i+1,j,k)) &
-                   + sum(this%divv_y(i,j,k,:)*this%V(i,j:j+1,k)*this%P_V(i,j:j+1,k)) &
-                   + sum(this%divw_z(i,j,k,:)*this%W(i,j,k:k+1)*this%P_W(i,j,k:k+1)) &
+                   ( sum(this%divp_x(:,i,j,k)*this%U(i:i+1,j,k)*this%P_U(i:i+1,j,k)) &
+                   + sum(this%divp_y(:,i,j,k)*this%V(i,j:j+1,k)*this%P_V(i,j:j+1,k)) &
+                   + sum(this%divp_z(:,i,j,k)*this%W(i,j,k:k+1)*this%P_W(i,j,k:k+1)) &
                    - sum(this%Pjx (i:i+1,j,k)*this%U(i:i+1,j,k)) &
                    - sum(this%Pjy (i,j:j+1,k)*this%V(i,j:j+1,k)) &
                    - sum(this%Pjz (i,j,k:k+1)*this%W(i,j,k:k+1)) ) + &
-                   ( sum(this%divu_x(i,j,k,:)*this%U(i:i+1,j,k)) &
-                   + sum(this%divv_y(i,j,k,:)*this%V(i,j:j+1,k)) &
-                   + sum(this%divw_z(i,j,k,:)*this%W(i,j,k:k+1)) )*&
+                   ( sum(this%divp_x(:,i,j,k)*this%U(i:i+1,j,k)) &
+                   + sum(this%divp_y(:,i,j,k)*this%V(i,j:j+1,k)) &
+                   + sum(this%divp_z(:,i,j,k)*this%W(i,j,k:k+1)) )*&
                    ( this%P(i,j,k)*(1.0_WP-this%Grho(i,j,k)/this%RHO(i,j,k)) &
                    - this%Hpjump(i,j,k)*(       vf%VF(i,j,k))) )
 
 	      this%F_LrhoE(i,j,k) = this%F_LrhoE(i,j,k) &
                    - dt*this%cfg%vol(i,j,k)*(       vf%VF(i,j,k))*(this%Lrho(i,j,k)/this%RHO(i,j,k)*&
-                   ( sum(this%divu_x(i,j,k,:)*this%U(i:i+1,j,k)*this%P_U(i:i+1,j,k)) &
-                   + sum(this%divv_y(i,j,k,:)*this%V(i,j:j+1,k)*this%P_V(i,j:j+1,k)) &
-                   + sum(this%divw_z(i,j,k,:)*this%W(i,j,k:k+1)*this%P_W(i,j,k:k+1)) &
+                   ( sum(this%divp_x(:,i,j,k)*this%U(i:i+1,j,k)*this%P_U(i:i+1,j,k)) &
+                   + sum(this%divp_y(:,i,j,k)*this%V(i,j:j+1,k)*this%P_V(i,j:j+1,k)) &
+                   + sum(this%divp_z(:,i,j,k)*this%W(i,j,k:k+1)*this%P_W(i,j,k:k+1)) &
                    - sum(this%Pjx (i:i+1,j,k)*this%U(i:i+1,j,k)) &
                    - sum(this%Pjy (i,j:j+1,k)*this%V(i,j:j+1,k)) &
                    - sum(this%Pjz (i,j,k:k+1)*this%W(i,j,k:k+1)) ) + &
-                   ( sum(this%divu_x(i,j,k,:)*this%U(i:i+1,j,k)) &
-                   + sum(this%divv_y(i,j,k,:)*this%V(i,j:j+1,k)) &
-                   + sum(this%divw_z(i,j,k,:)*this%W(i,j,k:k+1)) )*&
+                   ( sum(this%divp_x(:,i,j,k)*this%U(i:i+1,j,k)) &
+                   + sum(this%divp_y(:,i,j,k)*this%V(i,j:j+1,k)) &
+                   + sum(this%divp_z(:,i,j,k)*this%W(i,j,k:k+1)) )*&
                    ( this%P(i,j,k)*(1.0_WP-this%Lrho(i,j,k)/this%RHO(i,j,k)) &
                    + this%Hpjump(i,j,k)*(1.0_WP-vf%VF(i,j,k))) )              
               
