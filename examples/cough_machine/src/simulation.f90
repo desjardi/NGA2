@@ -2,7 +2,9 @@
 module simulation
    use string,            only: str_medium
    use precision,         only: WP
-   use geometry,          only: cfg_in,t_wall,L_mouth,H_mouth,W_mouth,L_film,H_film,W_film,L_lip
+   use geometry,          only: cfg1,cfg2,t_wall,L_mouth,H_mouth,W_mouth,L_film,H_film,W_film,L_lip
+   use config_class,      only: config
+   use incomp_class,      only: incomp
    use tpns_class,        only: tpns
    use vfs_class,         only: vfs
    use sgsmodel_class,    only: sgsmodel
@@ -15,28 +17,48 @@ module simulation
    implicit none
    private
    
-   !> Two-phase incompressible flow solver, VF solver with CCL, and corresponding time tracker and sgs model
-   type(tpns),        public :: fs_in
-   type(vfs),         public :: vf_in
-   type(timetracker), public :: time_in
-   type(sgsmodel),    public :: sgs_in
-   
-   !> Ensight postprocessing
-   type(ensight)  :: ens_out_in
-   type(event)    :: ens_evt_in
-   
-   !> Simulation monitor file
-   type(monitor) :: mfile_in,cflfile_in
    
    public :: simulation_init,simulation_run,simulation_final
    
-   !> Private work arrays
-   real(WP), dimension(:,:,:), allocatable :: resU_in,resV_in,resW_in
-   real(WP), dimension(:,:,:), allocatable :: Ui_in,Vi_in,Wi_in
-   real(WP), dimension(:,:,:,:), allocatable :: SR_in
+   
+   !> Create structure for b1
+   type :: b1_type
+      class(config), pointer :: cfg       !< Pointer to config
+      type(tpns) :: fs                    !< Two-phase incompressible flow solver
+      type(vfs) :: vf                     !< VF solver
+      type(timetracker) :: time           !< Time tracker
+      type(sgsmodel) ::  sgs              !< SGS model
+      type(ensight) :: ens_out            !< Ensight output
+      type(event) :: ens_evt              !< Ensight output event
+      type(monitor) :: mfile,cflfile      !< Monitor files
+      !> Private work arrays
+      real(WP), dimension(:,:,:),   allocatable :: resU,resV,resW
+      real(WP), dimension(:,:,:),   allocatable :: Ui,Vi,Wi
+      real(WP), dimension(:,:,:,:), allocatable :: SR
+   end type b1_type
+   type(b1_type) :: b1
+   
+   
+   !> Create structure for b2
+   type :: b2_type
+      class(config), pointer :: cfg       !< Pointer to config
+      type(incomp) :: fs                  !< Single-phase incompressible flow solver
+      type(timetracker) :: time           !< Time tracker
+      type(sgsmodel) ::  sgs              !< SGS model
+      type(ensight) :: ens_out            !< Ensight output
+      type(event) :: ens_evt              !< Ensight output event
+      type(monitor) :: mfile,cflfile      !< Monitor files
+      !> Private work arrays
+      real(WP), dimension(:,:,:),   allocatable :: resU,resV,resW
+      real(WP), dimension(:,:,:),   allocatable :: Ui,Vi,Wi
+      real(WP), dimension(:,:,:,:), allocatable :: SR
+   end type b2_type
+   type(b2_type) :: b2
+   
    
    !> Inflow parameters
    real(WP) :: Uin,delta,Urand
+   
    
 contains
    
@@ -65,33 +87,46 @@ contains
    
    !> Initialization of problem solver
    subroutine simulation_init
-      use param, only: param_read
       implicit none
       
-      ! Zoomed in simulation setup
-      ! ==========================
+      ! Initialize block 1
+      call simulation_init_b1(b1)
+      
+      ! Initialize block 2
+      !call simulation_init_b2(b2)
+      
+   end subroutine simulation_init
+   
+   
+   subroutine simulation_init_b1(b)
+      use param, only: param_read
+      implicit none
+      type(b1_type), intent(inout) :: b
+      
+      ! Link cfg
+      b%cfg=>cfg1
       
       ! Allocate work arrays for cfg
-      allocate_work_arrays_in: block
-         allocate(resU_in(cfg_in%imino_:cfg_in%imaxo_,cfg_in%jmino_:cfg_in%jmaxo_,cfg_in%kmino_:cfg_in%kmaxo_))
-         allocate(resV_in(cfg_in%imino_:cfg_in%imaxo_,cfg_in%jmino_:cfg_in%jmaxo_,cfg_in%kmino_:cfg_in%kmaxo_))
-         allocate(resW_in(cfg_in%imino_:cfg_in%imaxo_,cfg_in%jmino_:cfg_in%jmaxo_,cfg_in%kmino_:cfg_in%kmaxo_))
-         allocate(Ui_in  (cfg_in%imino_:cfg_in%imaxo_,cfg_in%jmino_:cfg_in%jmaxo_,cfg_in%kmino_:cfg_in%kmaxo_))
-         allocate(Vi_in  (cfg_in%imino_:cfg_in%imaxo_,cfg_in%jmino_:cfg_in%jmaxo_,cfg_in%kmino_:cfg_in%kmaxo_))
-         allocate(Wi_in  (cfg_in%imino_:cfg_in%imaxo_,cfg_in%jmino_:cfg_in%jmaxo_,cfg_in%kmino_:cfg_in%kmaxo_))
-         allocate(SR_in(6,cfg_in%imino_:cfg_in%imaxo_,cfg_in%jmino_:cfg_in%jmaxo_,cfg_in%kmino_:cfg_in%kmaxo_))
-      end block allocate_work_arrays_in
+      allocate_work_arrays_1: block
+         allocate(b%resU(b%cfg%imino_:b%cfg%imaxo_,b%cfg%jmino_:b%cfg%jmaxo_,b%cfg%kmino_:b%cfg%kmaxo_))
+         allocate(b%resV(b%cfg%imino_:b%cfg%imaxo_,b%cfg%jmino_:b%cfg%jmaxo_,b%cfg%kmino_:b%cfg%kmaxo_))
+         allocate(b%resW(b%cfg%imino_:b%cfg%imaxo_,b%cfg%jmino_:b%cfg%jmaxo_,b%cfg%kmino_:b%cfg%kmaxo_))
+         allocate(b%Ui  (b%cfg%imino_:b%cfg%imaxo_,b%cfg%jmino_:b%cfg%jmaxo_,b%cfg%kmino_:b%cfg%kmaxo_))
+         allocate(b%Vi  (b%cfg%imino_:b%cfg%imaxo_,b%cfg%jmino_:b%cfg%jmaxo_,b%cfg%kmino_:b%cfg%kmaxo_))
+         allocate(b%Wi  (b%cfg%imino_:b%cfg%imaxo_,b%cfg%jmino_:b%cfg%jmaxo_,b%cfg%kmino_:b%cfg%kmaxo_))
+         allocate(b%SR(6,b%cfg%imino_:b%cfg%imaxo_,b%cfg%jmino_:b%cfg%jmaxo_,b%cfg%kmino_:b%cfg%kmaxo_))
+      end block allocate_work_arrays_1
       
       
       ! Initialize time tracker
-      initialize_timetracker_in: block
-         time_in=timetracker(cfg_in%amRoot,name='cough_machine_in')
-         call param_read('Max timestep size',time_in%dtmax)
-         call param_read('Max cfl number',time_in%cflmax)
-         call param_read('Max time',time_in%tmax)
-         time_in%dt=time_in%dtmax
-         time_in%itmax=2
-      end block initialize_timetracker_in
+      initialize_timetracker_1: block
+         b%time=timetracker(b%cfg%amRoot,name='cough_machine_in')
+         call param_read('Max timestep size',b%time%dtmax)
+         call param_read('Max cfl number',b%time%cflmax)
+         call param_read('Max time',b%time%tmax)
+         b%time%dt=b%time%dtmax
+         b%time%itmax=2
+      end block initialize_timetracker_1
       
       
       ! Initialize our VOF solver and field
@@ -99,309 +134,316 @@ contains
          use vfs_class, only: lvira,r2p
          integer :: i,j,k
          ! Create a VOF solver with LVIRA
-         vf_in=vfs(cfg=cfg_in,reconstruction_method=lvira,name='VOF')
+         b%vf=vfs(cfg=b%cfg,reconstruction_method=lvira,name='VOF')
          ! Create a VOF solver with R2P
          !vf=vfs(cfg=cfg,reconstruction_method=r2p,name='VOF')
          ! Initialize to flat interface in liquid tray
-         do k=vf_in%cfg%kmino_,vf_in%cfg%kmaxo_
-            do j=vf_in%cfg%jmino_,vf_in%cfg%jmaxo_
-               do i=vf_in%cfg%imino_,vf_in%cfg%imaxo_
-                  if (vf_in%cfg%xm(i).lt.-L_lip.and.vf_in%cfg%xm(i).gt.-L_lip-L_film.and.abs(vf_in%cfg%zm(k)).lt.0.5_WP*W_film.and.vf_in%cfg%ym(j).lt.0.0_WP.and.vf_in%cfg%ym(j).gt.-H_film) then
-                     vf_in%VF(i,j,k)=1.0_WP
+         do k=b%vf%cfg%kmino_,b%vf%cfg%kmaxo_
+            do j=b%vf%cfg%jmino_,b%vf%cfg%jmaxo_
+               do i=b%vf%cfg%imino_,b%vf%cfg%imaxo_
+                  if (b%vf%cfg%xm(i).lt.-L_lip.and.b%vf%cfg%xm(i).gt.-L_lip-L_film.and.abs(b%vf%cfg%zm(k)).lt.0.5_WP*W_film.and.b%vf%cfg%ym(j).lt.0.0_WP.and.b%vf%cfg%ym(j).gt.-H_film) then
+                     b%vf%VF(i,j,k)=1.0_WP
                   else
-                     vf_in%VF(i,j,k)=0.0_WP
+                     b%vf%VF(i,j,k)=0.0_WP
                   end if
-                  vf_in%Lbary(:,i,j,k)=[vf_in%cfg%xm(i),vf_in%cfg%ym(j),vf_in%cfg%zm(k)]
-                  vf_in%Gbary(:,i,j,k)=[vf_in%cfg%xm(i),vf_in%cfg%ym(j),vf_in%cfg%zm(k)]
+                  b%vf%Lbary(:,i,j,k)=[b%vf%cfg%xm(i),b%vf%cfg%ym(j),b%vf%cfg%zm(k)]
+                  b%vf%Gbary(:,i,j,k)=[b%vf%cfg%xm(i),b%vf%cfg%ym(j),b%vf%cfg%zm(k)]
                end do
             end do
          end do
          ! Update the band
-         call vf_in%update_band()
+         call b%vf%update_band()
          ! Perform interface reconstruction from VOF field
-         call vf_in%build_interface()
+         call b%vf%build_interface()
          ! Set interface planes at the boundaries
-         call vf_in%set_full_bcond()
+         call b%vf%set_full_bcond()
          ! Create discontinuous polygon mesh from IRL interface
-         call vf_in%polygonalize_interface()
+         call b%vf%polygonalize_interface()
          ! Calculate distance from polygons
-         call vf_in%distance_from_polygon()
+         call b%vf%distance_from_polygon()
          ! Calculate subcell phasic volumes
-         call vf_in%subcell_vol()
+         call b%vf%subcell_vol()
          ! Calculate curvature
-         call vf_in%get_curvature()
+         call b%vf%get_curvature()
          ! Reset moments to guarantee compatibility with interface reconstruction
-         call vf_in%reset_volume_moments()
+         call b%vf%reset_volume_moments()
       end block create_and_initialize_vof
       
       
       ! Create a two-phase flow solver with bconds
-      create_solver_in: block
+      create_solver_1: block
          use tpns_class, only: dirichlet,clipped_neumann,neumann
          use ils_class,  only: pcg_pfmg,gmres_amg
          use mathtools,  only: Pi
          ! Create a two-phase flow solver
-         fs_in=tpns(cfg=cfg_in,name='Two-phase NS')
+         b%fs=tpns(cfg=b%cfg,name='Two-phase NS')
          ! Assign constant viscosity to each phase
-         call param_read('Liquid dynamic viscosity',fs_in%visc_l)
-         call param_read('Gas dynamic viscosity'   ,fs_in%visc_g)
+         call param_read('Liquid dynamic viscosity',b%fs%visc_l)
+         call param_read('Gas dynamic viscosity'   ,b%fs%visc_g)
          ! Assign constant density to each phase
-         call param_read('Liquid density',fs_in%rho_l)
-         call param_read('Gas density'   ,fs_in%rho_g)
+         call param_read('Liquid density',b%fs%rho_l)
+         call param_read('Gas density'   ,b%fs%rho_g)
          ! Read in surface tension coefficient
-         call param_read('Surface tension coefficient',fs_in%sigma)
-         call param_read('Static contact angle',fs_in%contact_angle)
-         fs_in%contact_angle=fs_in%contact_angle*Pi/180.0_WP
+         call param_read('Surface tension coefficient',b%fs%sigma)
+         call param_read('Static contact angle',b%fs%contact_angle)
+         b%fs%contact_angle=b%fs%contact_angle*Pi/180.0_WP
          ! Assign acceleration of gravity
-         call param_read('Gravity',fs_in%gravity)
+         call param_read('Gravity',b%fs%gravity)
          ! Inflow on the left
-         call fs_in%add_bcond(name='inflow' ,type=dirichlet      ,face='x',dir=-1,canCorrect=.false.,locator=left_boundary_mouth)
+         call b%fs%add_bcond(name='inflow' ,type=dirichlet      ,face='x',dir=-1,canCorrect=.false.,locator=left_boundary_mouth)
          ! Outflow on the right
-         call fs_in%add_bcond(name='outflow',type=clipped_neumann,face='x',dir=+1,canCorrect=.true. ,locator=right_boundary)
+         call b%fs%add_bcond(name='outflow',type=clipped_neumann,face='x',dir=+1,canCorrect=.true. ,locator=right_boundary)
          ! Configure pressure solver
-         call param_read('Pressure iteration',fs_in%psolv%maxit)
-         call param_read('Pressure tolerance',fs_in%psolv%rcvg)
+         call param_read('Pressure iteration',b%fs%psolv%maxit)
+         call param_read('Pressure tolerance',b%fs%psolv%rcvg)
          ! Configure implicit velocity solver
-         call param_read('Implicit iteration',fs_in%implicit%maxit)
-         call param_read('Implicit tolerance',fs_in%implicit%rcvg)
+         call param_read('Implicit iteration',b%fs%implicit%maxit)
+         call param_read('Implicit tolerance',b%fs%implicit%rcvg)
          ! Setup the solver
-         !fs%psolv%maxlevel=10
-         call fs_in%setup(pressure_ils=gmres_amg,implicit_ils=gmres_amg)
-      end block create_solver_in
+         !b%fs%psolv%maxlevel=10
+         call b%fs%setup(pressure_ils=gmres_amg,implicit_ils=gmres_amg)
+      end block create_solver_1
       
       
       ! Initialize our velocity field
-      initialize_velocity_in: block
+      initialize_velocity_1: block
          use tpns_class, only: bcond
          use random,     only: random_uniform
          type(bcond), pointer :: mybc
          integer  :: n,i,j,k
          ! Zero initial field
-         fs_in%U=0.0_WP; fs_in%V=0.0_WP; fs_in%W=0.0_WP
+         b%fs%U=0.0_WP; b%fs%V=0.0_WP; b%fs%W=0.0_WP
          ! Apply Dirichlet at inlet
          call param_read('Gas velocity',Uin)
          call param_read('Gas thickness',delta)
          call param_read('Gas perturbation',Urand)
-         call fs_in%get_bcond('inflow',mybc)
+         call b%fs%get_bcond('inflow',mybc)
          do n=1,mybc%itr%no_
             i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
-            fs_in%U(i,j,k)=Uin*tanh(2.0_WP*(0.5_WP*W_mouth-abs(fs_in%cfg%zm(k)))/delta)*tanh(2.0_WP*fs_in%cfg%ym(j)/delta)*tanh(2.0_WP*(H_mouth-fs_in%cfg%ym(j))/delta)+random_uniform(-Urand,Urand)
+            b%fs%U(i,j,k)=Uin*tanh(2.0_WP*(0.5_WP*W_mouth-abs(b%fs%cfg%zm(k)))/delta)*tanh(2.0_WP*b%fs%cfg%ym(j)/delta)*tanh(2.0_WP*(H_mouth-b%fs%cfg%ym(j))/delta)+random_uniform(-Urand,Urand)
          end do
          ! Apply all other boundary conditions
-         call fs_in%apply_bcond(time_in%t,time_in%dt)
+         call b%fs%apply_bcond(b%time%t,b%time%dt)
          ! Compute MFR through all boundary conditions
-         call fs_in%get_mfr()
+         call b%fs%get_mfr()
          ! Adjust MFR for global mass balance
-         call fs_in%correct_mfr()
+         call b%fs%correct_mfr()
          ! Compute cell-centered velocity
-         call fs_in%interp_vel(Ui_in,Vi_in,Wi_in)
+         call b%fs%interp_vel(b%Ui,b%Vi,b%Wi)
          ! Compute divergence
-         call fs_in%get_div()
-      end block initialize_velocity_in
+         call b%fs%get_div()
+      end block initialize_velocity_1
       
       
       ! Create an LES model
-      create_sgs_in: block
-         sgs_in=sgsmodel(cfg=fs_in%cfg,umask=fs_in%umask,vmask=fs_in%vmask,wmask=fs_in%wmask)
-      end block create_sgs_in
+      create_sgs_1: block
+         b%sgs=sgsmodel(cfg=b%fs%cfg,umask=b%fs%umask,vmask=b%fs%vmask,wmask=b%fs%wmask)
+      end block create_sgs_1
       
       
       ! Add Ensight output
-      create_ensight_in: block
+      create_ensight_1: block
          ! Create Ensight output from cfg
-         ens_out_in=ensight(cfg_in,'cough_in')
+         b%ens_out=ensight(b%cfg,'cough_in')
          ! Create event for Ensight output
-         ens_evt_in=event(time_in,'Ensight output')
-         call param_read('Ensight output period',ens_evt_in%tper)
+         b%ens_evt=event(b%time,'Ensight output')
+         call param_read('Ensight output period',b%ens_evt%tper)
          ! Add variables to output
-         call ens_out_in%add_vector('velocity',Ui_in,Vi_in,Wi_in)
-         call ens_out_in%add_scalar('VOF',vf_in%VF)
-         call ens_out_in%add_scalar('curvature',vf_in%curv)
-         !call ens_out_in%add_scalar('visc_t',sgs_in%visc)
+         call b%ens_out%add_vector('velocity',b%Ui,b%Vi,b%Wi)
+         call b%ens_out%add_scalar('VOF',b%vf%VF)
+         call b%ens_out%add_scalar('curvature',b%vf%curv)
+         !call b%ens_out%add_scalar('visc_t',b%sgs%visc)
          ! Output to ensight
-         if (ens_evt_in%occurs()) call ens_out_in%write_data(time_in%t)
-      end block create_ensight_in
+         if (b%ens_evt%occurs()) call b%ens_out%write_data(b%time%t)
+      end block create_ensight_1
       
       
       ! Create a monitor file
-      create_monitor_in: block
+      create_monitor_1: block
          ! Prepare some info about fields
-         call fs_in%get_cfl(time_in%dt,time_in%cfl)
-         call fs_in%get_max()
-         call vf_in%get_max()
+         call b%fs%get_cfl(b%time%dt,b%time%cfl)
+         call b%fs%get_max()
+         call b%vf%get_max()
          ! Create simulation monitor
-         mfile_in=monitor(fs_in%cfg%amRoot,'simulation')
-         call mfile_in%add_column(time_in%n,'Timestep number')
-         call mfile_in%add_column(time_in%t,'Time')
-         call mfile_in%add_column(time_in%dt,'Timestep size')
-         call mfile_in%add_column(time_in%cfl,'Maximum CFL')
-         call mfile_in%add_column(fs_in%Umax,'Umax')
-         call mfile_in%add_column(fs_in%Vmax,'Vmax')
-         call mfile_in%add_column(fs_in%Wmax,'Wmax')
-         call mfile_in%add_column(fs_in%Pmax,'Pmax')
-         call mfile_in%add_column(vf_in%VFmax,'VOF maximum')
-         call mfile_in%add_column(vf_in%VFmin,'VOF minimum')
-         call mfile_in%add_column(vf_in%VFint,'VOF integral')
-         call mfile_in%add_column(fs_in%divmax,'Maximum divergence')
-         call mfile_in%add_column(fs_in%psolv%it,'Pressure iteration')
-         call mfile_in%add_column(fs_in%psolv%rerr,'Pressure error')
-         call mfile_in%write()
+         b%mfile=monitor(b%fs%cfg%amRoot,'simulation')
+         call b%mfile%add_column(b%time%n,'Timestep number')
+         call b%mfile%add_column(b%time%t,'Time')
+         call b%mfile%add_column(b%time%dt,'Timestep size')
+         call b%mfile%add_column(b%time%cfl,'Maximum CFL')
+         call b%mfile%add_column(b%fs%Umax,'Umax')
+         call b%mfile%add_column(b%fs%Vmax,'Vmax')
+         call b%mfile%add_column(b%fs%Wmax,'Wmax')
+         call b%mfile%add_column(b%fs%Pmax,'Pmax')
+         call b%mfile%add_column(b%vf%VFmax,'VOF maximum')
+         call b%mfile%add_column(b%vf%VFmin,'VOF minimum')
+         call b%mfile%add_column(b%vf%VFint,'VOF integral')
+         call b%mfile%add_column(b%fs%divmax,'Maximum divergence')
+         call b%mfile%add_column(b%fs%psolv%it,'Pressure iteration')
+         call b%mfile%add_column(b%fs%psolv%rerr,'Pressure error')
+         call b%mfile%write()
          ! Create CFL monitor
-         cflfile_in=monitor(fs_in%cfg%amRoot,'cfl')
-         call cflfile_in%add_column(time_in%n,'Timestep number')
-         call cflfile_in%add_column(time_in%t,'Time')
-         call cflfile_in%add_column(fs_in%CFLc_x,'Convective xCFL')
-         call cflfile_in%add_column(fs_in%CFLc_y,'Convective yCFL')
-         call cflfile_in%add_column(fs_in%CFLc_z,'Convective zCFL')
-         call cflfile_in%add_column(fs_in%CFLv_x,'Viscous xCFL')
-         call cflfile_in%add_column(fs_in%CFLv_y,'Viscous yCFL')
-         call cflfile_in%add_column(fs_in%CFLv_z,'Viscous zCFL')
-         call cflfile_in%write()
-      end block create_monitor_in
+         b%cflfile=monitor(b%fs%cfg%amRoot,'cfl')
+         call b%cflfile%add_column(b%time%n,'Timestep number')
+         call b%cflfile%add_column(b%time%t,'Time')
+         call b%cflfile%add_column(b%fs%CFLc_x,'Convective xCFL')
+         call b%cflfile%add_column(b%fs%CFLc_y,'Convective yCFL')
+         call b%cflfile%add_column(b%fs%CFLc_z,'Convective zCFL')
+         call b%cflfile%add_column(b%fs%CFLv_x,'Viscous xCFL')
+         call b%cflfile%add_column(b%fs%CFLv_y,'Viscous yCFL')
+         call b%cflfile%add_column(b%fs%CFLv_z,'Viscous zCFL')
+         call b%cflfile%write()
+      end block create_monitor_1
       
       
-      ! Zoomed out simulation setup
-      ! ===========================
-      
-      
-   end subroutine simulation_init
+   end subroutine simulation_init_b1
    
    
    !> Perform an NGA2 simulation
    subroutine simulation_run
-      use tpns_class, only: static_contact
       implicit none
       
-      ! Perform time integration - the zoomed in solver is the main driver here
-      do while (.not.time_in%done())
+      ! Perform time integration - block 1 is the main driver here
+      do while (.not.b1%time%done())
          
-         ! Increment time
-         call fs_in%get_cfl(time_in%dt,time_in%cfl)
-         call time_in%adjust_dt()
-         call time_in%increment()
-         
-         ! Remember old VOF
-         vf_in%VFold=vf_in%VF
-         
-         ! Remember old velocity
-         fs_in%Uold=fs_in%U
-         fs_in%Vold=fs_in%V
-         fs_in%Wold=fs_in%W
-         
-         ! Reapply Dirichlet at inlet
-         reapply_dirichlet_in: block
-            use tpns_class, only: bcond
-            use random,     only: random_uniform
-            type(bcond), pointer :: mybc
-            integer  :: n,i,j,k
-            call fs_in%get_bcond('inflow',mybc)
-            do n=1,mybc%itr%no_
-               i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
-               fs_in%U(i,j,k)=Uin*tanh(2.0_WP*(0.5_WP*W_mouth-abs(fs_in%cfg%zm(k)))/delta)*tanh(2.0_WP*fs_in%cfg%ym(j)/delta)*tanh(2.0_WP*(H_mouth-fs_in%cfg%ym(j))/delta)+random_uniform(-Urand,Urand)
-            end do
-         end block reapply_dirichlet_in
-         
-         ! Prepare old staggered density (at n)
-         call fs_in%get_olddensity(vf=vf_in)
-         
-         ! VOF solver step
-         call vf_in%advance(dt=time_in%dt,U=fs_in%U,V=fs_in%V,W=fs_in%W)
-         
-         ! Prepare new staggered viscosity (at n+1)
-         call fs_in%get_viscosity(vf=vf_in)
-         
-         ! Turbulence modeling - only work with gas properties here
-         sgsmodel_in: block
-            integer :: i,j,k
-            call fs_in%get_strainrate(Ui=Ui_in,Vi=Vi_in,Wi=Wi_in,SR=SR_in)
-            resU_in=fs_in%rho_g
-            call sgs_in%get_visc(dt=time_in%dtold,rho=resU_in,Ui=Ui_in,Vi=Vi_in,Wi=Wi_in,SR=SR_in)
-            where (sgs_in%visc.lt.-fs_in%visc_g)
-               sgs_in%visc=-fs_in%visc_g
-            end where
-            do k=fs_in%cfg%kmino_+1,fs_in%cfg%kmaxo_
-               do j=fs_in%cfg%jmino_+1,fs_in%cfg%jmaxo_
-                  do i=fs_in%cfg%imino_+1,fs_in%cfg%imaxo_
-                     fs_in%visc(i,j,k)   =fs_in%visc(i,j,k)   +sgs_in%visc(i,j,k)
-                     fs_in%visc_xy(i,j,k)=fs_in%visc_xy(i,j,k)+sum(fs_in%itp_xy(:,:,i,j,k)*sgs_in%visc(i-1:i,j-1:j,k))
-                     fs_in%visc_yz(i,j,k)=fs_in%visc_yz(i,j,k)+sum(fs_in%itp_yz(:,:,i,j,k)*sgs_in%visc(i,j-1:j,k-1:k))
-                     fs_in%visc_zx(i,j,k)=fs_in%visc_zx(i,j,k)+sum(fs_in%itp_xz(:,:,i,j,k)*sgs_in%visc(i-1:i,j,k-1:k))
-                  end do
-               end do
-            end do
-         end block sgsmodel_in
-         
-         ! Perform sub-iterations
-         do while (time_in%it.le.time_in%itmax)
-            
-            ! Build mid-time velocity
-            fs_in%U=0.5_WP*(fs_in%U+fs_in%Uold)
-            fs_in%V=0.5_WP*(fs_in%V+fs_in%Vold)
-            fs_in%W=0.5_WP*(fs_in%W+fs_in%Wold)
-            
-            ! Preliminary mass and momentum transport step at the interface
-            call fs_in%prepare_advection_upwind(dt=time_in%dt)
-            
-            ! Explicit calculation of drho*u/dt from NS
-            call fs_in%get_dmomdt(resU_in,resV_in,resW_in)
-            
-            ! Add momentum source terms
-            call fs_in%addsrc_gravity(resU_in,resV_in,resW_in)
-            
-            ! Assemble explicit residual
-            resU_in=-2.0_WP*fs_in%rho_U*fs_in%U+(fs_in%rho_Uold+fs_in%rho_U)*fs_in%Uold+time_in%dt*resU_in
-            resV_in=-2.0_WP*fs_in%rho_V*fs_in%V+(fs_in%rho_Vold+fs_in%rho_V)*fs_in%Vold+time_in%dt*resV_in
-            resW_in=-2.0_WP*fs_in%rho_W*fs_in%W+(fs_in%rho_Wold+fs_in%rho_W)*fs_in%Wold+time_in%dt*resW_in
-            
-            ! Form implicit residuals
-            call fs_in%solve_implicit(time_in%dt,resU_in,resV_in,resW_in)
-            
-            ! Apply these residuals
-            fs_in%U=2.0_WP*fs_in%U-fs_in%Uold+resU_in
-            fs_in%V=2.0_WP*fs_in%V-fs_in%Vold+resV_in
-            fs_in%W=2.0_WP*fs_in%W-fs_in%Wold+resW_in
-            
-            ! Apply other boundary conditions
-            call fs_in%apply_bcond(time_in%t,time_in%dt)
-            
-            ! Solve Poisson equation
-            call fs_in%update_laplacian()
-            call fs_in%correct_mfr()
-            call fs_in%get_div()
-            call fs_in%add_surface_tension_jump(dt=time_in%dt,div=fs_in%div,vf=vf_in,contact_model=static_contact)
-            fs_in%psolv%rhs=-fs_in%cfg%vol*fs_in%div/time_in%dt
-            fs_in%psolv%sol=0.0_WP
-            call fs_in%psolv%solve()
-            call fs_in%shift_p(fs_in%psolv%sol)
-            
-            ! Correct velocity
-            call fs_in%get_pgrad(fs_in%psolv%sol,resU_in,resV_in,resW_in)
-            fs_in%P=fs_in%P+fs_in%psolv%sol
-            fs_in%U=fs_in%U-time_in%dt*resU_in/fs_in%rho_U
-            fs_in%V=fs_in%V-time_in%dt*resV_in/fs_in%rho_V
-            fs_in%W=fs_in%W-time_in%dt*resW_in/fs_in%rho_W
-            
-            ! Increment sub-iteration counter
-            time_in%it=time_in%it+1
-            
-         end do
-         
-         ! Recompute interpolated velocity and divergence
-         call fs_in%interp_vel(Ui_in,Vi_in,Wi_in)
-         call fs_in%get_div()
-         
-         ! Output to ensight
-         if (ens_evt_in%occurs()) call ens_out_in%write_data(time_in%t)
-         
-         ! Perform and output monitoring
-         call fs_in%get_max()
-         call vf_in%get_max()
-         call mfile_in%write()
-         call cflfile_in%write()
+         ! Advance block 1
+         call simulation_step_b1(b1)
          
       end do
       
    end subroutine simulation_run
+   
+   
+   !> Take a time step with block 1
+   subroutine simulation_step_b1(b)
+      use tpns_class, only: static_contact
+      implicit none
+      type(b1_type), intent(inout) :: b
+      
+      ! Increment time
+      call b%fs%get_cfl(b%time%dt,b%time%cfl)
+      call b%time%adjust_dt()
+      call b%time%increment()
+      
+      ! Remember old VOF
+      b%vf%VFold=b%vf%VF
+      
+      ! Remember old velocity
+      b%fs%Uold=b%fs%U
+      b%fs%Vold=b%fs%V
+      b%fs%Wold=b%fs%W
+      
+      ! Reapply Dirichlet at inlet
+      reapply_dirichlet_1: block
+         use tpns_class, only: bcond
+         use random,     only: random_uniform
+         type(bcond), pointer :: mybc
+         integer  :: n,i,j,k
+         call b%fs%get_bcond('inflow',mybc)
+         do n=1,mybc%itr%no_
+            i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
+            b%fs%U(i,j,k)=Uin*tanh(2.0_WP*(0.5_WP*W_mouth-abs(b%fs%cfg%zm(k)))/delta)*tanh(2.0_WP*b%fs%cfg%ym(j)/delta)*tanh(2.0_WP*(H_mouth-b%fs%cfg%ym(j))/delta)+random_uniform(-Urand,Urand)
+         end do
+      end block reapply_dirichlet_1
+      
+      ! Prepare old staggered density (at n)
+      call b%fs%get_olddensity(vf=b%vf)
+      
+      ! VOF solver step
+      call b%vf%advance(dt=b%time%dt,U=b%fs%U,V=b%fs%V,W=b%fs%W)
+      
+      ! Prepare new staggered viscosity (at n+1)
+      call b%fs%get_viscosity(vf=b%vf)
+      
+      ! Turbulence modeling - only work with gas properties here
+      sgsmodel_1: block
+         integer :: i,j,k
+         call b%fs%get_strainrate(Ui=b%Ui,Vi=b%Vi,Wi=b%Wi,SR=b%SR)
+         b%resU=b%fs%rho_g
+         call b%sgs%get_visc(dt=b%time%dtold,rho=b%resU,Ui=b%Ui,Vi=b%Vi,Wi=b%Wi,SR=b%SR)
+         where (b%sgs%visc.lt.-b%fs%visc_g)
+            b%sgs%visc=-b%fs%visc_g
+         end where
+         do k=b%fs%cfg%kmino_+1,b%fs%cfg%kmaxo_
+            do j=b%fs%cfg%jmino_+1,b%fs%cfg%jmaxo_
+               do i=b%fs%cfg%imino_+1,b%fs%cfg%imaxo_
+                  b%fs%visc(i,j,k)   =b%fs%visc(i,j,k)   +b%sgs%visc(i,j,k)
+                  b%fs%visc_xy(i,j,k)=b%fs%visc_xy(i,j,k)+sum(b%fs%itp_xy(:,:,i,j,k)*b%sgs%visc(i-1:i,j-1:j,k))
+                  b%fs%visc_yz(i,j,k)=b%fs%visc_yz(i,j,k)+sum(b%fs%itp_yz(:,:,i,j,k)*b%sgs%visc(i,j-1:j,k-1:k))
+                  b%fs%visc_zx(i,j,k)=b%fs%visc_zx(i,j,k)+sum(b%fs%itp_xz(:,:,i,j,k)*b%sgs%visc(i-1:i,j,k-1:k))
+               end do
+            end do
+         end do
+      end block sgsmodel_1
+      
+      ! Perform sub-iterations
+      do while (b%time%it.le.b%time%itmax)
+         
+         ! Build mid-time velocity
+         b%fs%U=0.5_WP*(b%fs%U+b%fs%Uold)
+         b%fs%V=0.5_WP*(b%fs%V+b%fs%Vold)
+         b%fs%W=0.5_WP*(b%fs%W+b%fs%Wold)
+         
+         ! Preliminary mass and momentum transport step at the interface
+         call b%fs%prepare_advection_upwind(dt=b%time%dt)
+         
+         ! Explicit calculation of drho*u/dt from NS
+         call b%fs%get_dmomdt(b%resU,b%resV,b%resW)
+         
+         ! Add momentum source terms
+         call b%fs%addsrc_gravity(b%resU,b%resV,b%resW)
+         
+         ! Assemble explicit residual
+         b%resU=-2.0_WP*b%fs%rho_U*b%fs%U+(b%fs%rho_Uold+b%fs%rho_U)*b%fs%Uold+b%time%dt*b%resU
+         b%resV=-2.0_WP*b%fs%rho_V*b%fs%V+(b%fs%rho_Vold+b%fs%rho_V)*b%fs%Vold+b%time%dt*b%resV
+         b%resW=-2.0_WP*b%fs%rho_W*b%fs%W+(b%fs%rho_Wold+b%fs%rho_W)*b%fs%Wold+b%time%dt*b%resW
+         
+         ! Form implicit residuals
+         call b%fs%solve_implicit(b%time%dt,b%resU,b%resV,b%resW)
+         
+         ! Apply these residuals
+         b%fs%U=2.0_WP*b%fs%U-b%fs%Uold+b%resU
+         b%fs%V=2.0_WP*b%fs%V-b%fs%Vold+b%resV
+         b%fs%W=2.0_WP*b%fs%W-b%fs%Wold+b%resW
+         
+         ! Apply other boundary conditions
+         call b%fs%apply_bcond(b%time%t,b%time%dt)
+         
+         ! Solve Poisson equation
+         call b%fs%update_laplacian()
+         call b%fs%correct_mfr()
+         call b%fs%get_div()
+         call b%fs%add_surface_tension_jump(dt=b%time%dt,div=b%fs%div,vf=b%vf,contact_model=static_contact)
+         b%fs%psolv%rhs=-b%fs%cfg%vol*b%fs%div/b%time%dt
+         b%fs%psolv%sol=0.0_WP
+         call b%fs%psolv%solve()
+         call b%fs%shift_p(b%fs%psolv%sol)
+         
+         ! Correct velocity
+         call b%fs%get_pgrad(b%fs%psolv%sol,b%resU,b%resV,b%resW)
+         b%fs%P=b%fs%P+b%fs%psolv%sol
+         b%fs%U=b%fs%U-b%time%dt*b%resU/b%fs%rho_U
+         b%fs%V=b%fs%V-b%time%dt*b%resV/b%fs%rho_V
+         b%fs%W=b%fs%W-b%time%dt*b%resW/b%fs%rho_W
+         
+         ! Increment sub-iteration counter
+         b%time%it=b%time%it+1
+         
+      end do
+      
+      ! Recompute interpolated velocity and divergence
+      call b%fs%interp_vel(b%Ui,b%Vi,b%Wi)
+      call b%fs%get_div()
+      
+      ! Output to ensight
+      if (b%ens_evt%occurs()) call b%ens_out%write_data(b%time%t)
+      
+      ! Perform and output monitoring
+      call b%fs%get_max()
+      call b%vf%get_max()
+      call b%mfile%write()
+      call b%cflfile%write()
+      
+   end subroutine simulation_step_b1
    
    
    !> Finalize the NGA2 simulation
@@ -415,7 +457,8 @@ contains
       ! timetracker
       
       ! Deallocate work arrays
-      deallocate(resU_in,resV_in,resW_in,Ui_in,Vi_in,Wi_in,SR_in)
+      deallocate(b1%resU,b1%resV,b1%resW,b1%Ui,b1%Vi,b1%Wi,b1%SR)
+      deallocate(b2%resU,b2%resV,b2%resW,b2%Ui,b2%Vi,b2%Wi,b2%SR)
       
    end subroutine simulation_final
    

@@ -1,22 +1,26 @@
-# Parallelization
-Inner partition : 4 1 1
-Outer partition : 4 1 1
+# Block definitions
+# 1=block zoomed in on mouth
+# 2=block zoomed out on container
 
-# Zoomed out mesh definition
-Outer Lx :  1
-Outer Ly :  0.5
-Outer Lz :  0.5
-Outer nx :  100
-Outer ny :  50
-Outer nz :  50
+# Parallelization
+1 Partition : 4 1 1
+2 Partition : 4 1 1
 
 # Zoomed in mesh definition
-Inner Lx :  0.1
-Inner Ly :  0.03
-Inner Lz :  0.03
-Inner nx :  200
-Inner ny :  60
-Inner nz :  60
+1 Lx :  0.1
+1 Ly :  0.03
+1 Lz :  0.03
+1 nx :  200
+1 ny :  60
+1 nz :  60
+
+# Zoomed out mesh definition
+2 Lx :  1
+2 Ly :  0.5
+2 Lz :  0.5
+2 nx :  100
+2 ny :  50
+2 nz :  50
 
 # Injection velocity
 Gas velocity :       20

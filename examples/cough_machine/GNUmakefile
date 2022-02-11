@@ -33,7 +33,7 @@ IRL_DIR   = /Users/desjardi/Builds/IRL
 include $(NGA_HOME)/tools/GNUMake/Make.defs
 
 # Include NGA base code
-Bdirs   := particles core subgrid two_phase data solver config grid libraries
+Bdirs   := particles core subgrid two_phase constant_density data solver config grid libraries
 Bpack   += $(foreach dir, $(Bdirs), $(NGA_HOME)/src/$(dir)/Make.package)
 include $(Bpack)
 

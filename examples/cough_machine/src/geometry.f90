@@ -7,8 +7,11 @@ module geometry
    
    public :: geometry_init,t_wall,L_mouth,H_mouth,W_mouth,L_film,H_film,W_film,L_lip
    
-   !> Two config
-   type(config), public :: cfg_in,cfg_out
+   !> Two configs:
+   !> Block 1 (b1) -> zoomed in on mouth, two-phase with VOF
+   type(config), target, public :: cfg1
+   !> Block 2 (b2) -> zoomed out, Euler-Lagrange
+   type(config), target, public :: cfg2
    
    ! Virtual mouth dimensions
    real(WP), parameter :: t_wall =5.0e-3_WP
@@ -21,30 +24,28 @@ module geometry
    real(WP), parameter :: L_lip  =5.0e-3_WP
    
    
-   
 contains
    
    
    !> Initialization of problem geometry
    subroutine geometry_init
-      use sgrid_class, only: sgrid
-      use param,       only: param_read
+      use param, only: param_read
       implicit none
-      type(sgrid) :: grid_in,grid_out
       
       
-      ! First create inner computational domain
-      ! ======================================-
-      ! Create inner grid from input params
-      create_grid_inner: block
-         use sgrid_class, only: cartesian
+      ! First create config for block 1
+      create_block1: block
+         use sgrid_class, only: cartesian,sgrid
+         use parallel, only: group
          integer :: i,j,k,nx,ny,nz
          real(WP) :: Lx,Ly,Lz
          real(WP), dimension(:), allocatable :: x,y,z
+         type(sgrid) :: grid
+         integer, dimension(3) :: partition
          ! Read in grid definition
-         call param_read('Inner Lx',Lx); call param_read('Inner nx',nx); allocate(x(nx+1))
-         call param_read('Inner Ly',Ly); call param_read('Inner ny',ny); allocate(y(ny+1))
-         call param_read('Inner Lz',Lz); call param_read('Inner nz',nz); allocate(z(nz+1))
+         call param_read('1 Lx',Lx); call param_read('1 nx',nx); allocate(x(nx+1))
+         call param_read('1 Ly',Ly); call param_read('1 ny',ny); allocate(y(ny+1))
+         call param_read('1 Lz',Lz); call param_read('1 nz',nz); allocate(z(nz+1))
          ! Create simple rectilinear grid
          do i=1,nx+1
             x(i)=real(i-1,WP)/real(nx,WP)*Lx-L_mouth
@@ -56,52 +57,41 @@ contains
             z(k)=real(k-1,WP)/real(nz,WP)*Lz-0.5_WP*Lz
          end do
          ! General serial grid object with overlap=3 for tpns
-         grid_in=sgrid(coord=cartesian,no=3,x=x,y=y,z=z,xper=.false.,yper=.false.,zper=.false.,name='cough_machine_in')
-      end block create_grid_inner
-      
-      
-      ! Create config from grid on our entire group
-      create_cfg_inner: block
-         use parallel, only: group
-         integer, dimension(3) :: partition
+         grid=sgrid(coord=cartesian,no=3,x=x,y=y,z=z,xper=.false.,yper=.false.,zper=.false.,name='cough_machine_in')
          ! Read in partition
-         call param_read('Inner partition',partition,short='p')
+         call param_read('1 Partition',partition,short='p')
          ! Create partitioned grid
-         cfg_in=config(grp=group,decomp=partition,grid=grid_in)
-      end block create_cfg_inner
-      
-      
-      ! Create masks for config
-      create_walls_inner: block
-         integer :: i,j,k
-         cfg_in%VF=1.0_WP
-         do k=cfg_in%kmino_,cfg_in%kmaxo_
-            do j=cfg_in%jmino_,cfg_in%jmaxo_
-               do i=cfg_in%imino_,cfg_in%imaxo_
+         cfg1=config(grp=group,decomp=partition,grid=grid)
+         ! Create walls
+         cfg1%VF=1.0_WP
+         do k=cfg1%kmino_,cfg1%kmaxo_
+            do j=cfg1%jmino_,cfg1%jmaxo_
+               do i=cfg1%imino_,cfg1%imaxo_
                   ! Zero out wall cells including inside mouth
-                  if (cfg_in%xm(i).lt.0.0_WP.and.abs(cfg_in%zm(k)).lt.0.5_WP*W_mouth+t_wall.and.cfg_in%ym(j).gt.-t_wall.and.cfg_in%ym(j).lt.H_mouth+t_wall) cfg_in%VF(i,j,k)=0.0_WP
+                  if (cfg1%xm(i).lt.0.0_WP.and.abs(cfg1%zm(k)).lt.0.5_WP*W_mouth+t_wall.and.cfg1%ym(j).gt.-t_wall.and.cfg1%ym(j).lt.H_mouth+t_wall) cfg1%VF(i,j,k)=0.0_WP
                   ! Carve out inside of mouth
-                  if (cfg_in%xm(i).lt.0.0_WP.and.abs(cfg_in%zm(k)).lt.0.5_WP*W_mouth.and.cfg_in%ym(j).gt.0.0_WP.and.cfg_in%ym(j).lt.H_mouth) cfg_in%VF(i,j,k)=1.0_WP
+                  if (cfg1%xm(i).lt.0.0_WP.and.abs(cfg1%zm(k)).lt.0.5_WP*W_mouth.and.cfg1%ym(j).gt.0.0_WP.and.cfg1%ym(j).lt.H_mouth) cfg1%VF(i,j,k)=1.0_WP
                   ! Carve out tray for liquid film
-                  if (cfg_in%xm(i).lt.-L_lip.and.cfg_in%xm(i).gt.-L_lip-L_film.and.abs(cfg_in%zm(k)).lt.0.5_WP*W_film.and.cfg_in%ym(j).lt.0.0_WP.and.cfg_in%ym(j).gt.-H_film) cfg_in%VF(i,j,k)=1.0_WP
+                  if (cfg1%xm(i).lt.-L_lip.and.cfg1%xm(i).gt.-L_lip-L_film.and.abs(cfg1%zm(k)).lt.0.5_WP*W_film.and.cfg1%ym(j).lt.0.0_WP.and.cfg1%ym(j).gt.-H_film) cfg1%VF(i,j,k)=1.0_WP
                end do
             end do
          end do
-      end block create_walls_inner
+      end block create_block1
       
       
-      ! Second create outer computational domain
-      ! ======================================-
-      ! Create outer grid from input params
-      create_grid_outer: block
-         use sgrid_class, only: cartesian
+      ! Second create config for block 2
+      create_block2: block
+         use sgrid_class, only: cartesian,sgrid
+         use parallel, only: group
          integer :: i,j,k,nx,ny,nz
          real(WP) :: Lx,Ly,Lz
          real(WP), dimension(:), allocatable :: x,y,z
+         type(sgrid) :: grid
+         integer, dimension(3) :: partition
          ! Read in grid definition
-         call param_read('Outer Lx',Lx); call param_read('Outer nx',nx); allocate(x(nx+1))
-         call param_read('Outer Ly',Ly); call param_read('Outer ny',ny); allocate(y(ny+1))
-         call param_read('Outer Lz',Lz); call param_read('Outer nz',nz); allocate(z(nz+1))
+         call param_read('2 Lx',Lx); call param_read('2 nx',nx); allocate(x(nx+1))
+         call param_read('2 Ly',Ly); call param_read('2 ny',ny); allocate(y(ny+1))
+         call param_read('2 Lz',Lz); call param_read('2 nz',nz); allocate(z(nz+1))
          ! Create simple rectilinear grid
          do i=1,nx+1
             x(i)=real(i-1,WP)/real(nx,WP)*Lx-L_mouth
@@ -113,25 +103,14 @@ contains
             z(k)=real(k-1,WP)/real(nz,WP)*Lz-0.5_WP*Lz
          end do
          ! General serial grid object with overlap=2 for Euler-Lagrange solver
-         grid_out=sgrid(coord=cartesian,no=2,x=x,y=y,z=z,xper=.false.,yper=.false.,zper=.false.,name='cough_machine_out')
-      end block create_grid_outer
-      
-      
-      ! Create config from grid on our entire group
-      create_cfg_outer: block
-         use parallel, only: group
-         integer, dimension(3) :: partition
+         grid=sgrid(coord=cartesian,no=2,x=x,y=y,z=z,xper=.false.,yper=.false.,zper=.false.,name='cough_machine_out')
          ! Read in partition
-         call param_read('Outer partition',partition,short='p')
+         call param_read('2 Partition',partition,short='p')
          ! Create partitioned grid
-         cfg_out=config(grp=group,decomp=partition,grid=grid_out)
-      end block create_cfg_outer
-      
-      
-      ! Create masks for config
-      create_walls_outer: block
-         cfg_out%VF=1.0_WP
-      end block create_walls_outer
+         cfg2=config(grp=group,decomp=partition,grid=grid)
+         ! Create walls
+         cfg2%VF=1.0_WP
+      end block create_block2
       
       
    end subroutine geometry_init
