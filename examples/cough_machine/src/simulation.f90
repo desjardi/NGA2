@@ -35,6 +35,9 @@ module simulation
       real(WP), dimension(:,:,:),   allocatable :: resU,resV,resW
       real(WP), dimension(:,:,:),   allocatable :: Ui,Vi,Wi
       real(WP), dimension(:,:,:,:), allocatable :: SR
+   !contains
+   !   procedure :: init()                 !< Initialize block
+   !   procedure :: step()                 !< Advance block
    end type b1_type
    type(b1_type) :: b1
    
@@ -52,6 +55,9 @@ module simulation
       real(WP), dimension(:,:,:),   allocatable :: resU,resV,resW
       real(WP), dimension(:,:,:),   allocatable :: Ui,Vi,Wi
       real(WP), dimension(:,:,:,:), allocatable :: SR
+   !contains
+   !   procedure :: init()                 !< Initialize block
+   !   procedure :: step()                 !< Advance block
    end type b2_type
    type(b2_type) :: b2
    
