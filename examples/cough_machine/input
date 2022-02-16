@@ -9,18 +9,18 @@
 # Zoomed in mesh definition
 1 Lx :  0.1
 1 Ly :  0.03
-1 Lz :  0.03
+1 Lz :  0.0005
 1 nx :  200
 1 ny :  60
-1 nz :  60
+1 nz :  1
 
 # Zoomed out mesh definition
 2 Lx :  1
 2 Ly :  0.5
-2 Lz :  0.5
+2 Lz :  0.0005
 2 nx :  100
 2 ny :  50
-2 nz :  50
+2 nz :  1
 
 # Injection velocity
 Gas velocity :       20

@@ -236,7 +236,7 @@ contains
          call b%fs%get_max()
          call b%vf%get_max()
          ! Create simulation monitor
-         b%mfile=monitor(b%fs%cfg%amRoot,'simulation')
+         b%mfile=monitor(b%fs%cfg%amRoot,'simulation1')
          call b%mfile%add_column(b%time%n,'Timestep number')
          call b%mfile%add_column(b%time%t,'Time')
          call b%mfile%add_column(b%time%dt,'Timestep size')
@@ -253,7 +253,7 @@ contains
          call b%mfile%add_column(b%fs%psolv%rerr,'Pressure error')
          call b%mfile%write()
          ! Create CFL monitor
-         b%cflfile=monitor(b%fs%cfg%amRoot,'cfl')
+         b%cflfile=monitor(b%fs%cfg%amRoot,'cfl1')
          call b%cflfile%add_column(b%time%n,'Timestep number')
          call b%cflfile%add_column(b%time%t,'Time')
          call b%cflfile%add_column(b%fs%CFLc_x,'Convective xCFL')
@@ -406,8 +406,10 @@ contains
    subroutine final(b)
       implicit none
       class(block1), intent(inout) :: b
+      
       ! Deallocate work arrays
       deallocate(b%resU,b%resV,b%resW,b%Ui,b%Vi,b%Wi,b%SR)
+      
    end subroutine final
    
    
