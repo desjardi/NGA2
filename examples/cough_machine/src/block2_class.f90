@@ -6,31 +6,36 @@ module block2_class
    use config_class,      only: config
    use incomp_class,      only: incomp
    use hypre_uns_class,   only: hypre_uns
+   use lpt_class,         only: lpt
    use sgsmodel_class,    only: sgsmodel
    use timetracker_class, only: timetracker
    use ensight_class,     only: ensight
    use surfmesh_class,    only: surfmesh
+   use partmesh_class,    only: partmesh
    use event_class,       only: event
    use datafile_class,    only: datafile
    use monitor_class,     only: monitor
    implicit none
    private
-   
-   
+
+   !> Ensight postprocessing
+   type(partmesh) :: pmesh
+
    public :: block2
-   
-   
+
+
    !> Block 2 object
    type :: block2
-      class(config), pointer :: cfg       !< Pointer to config
-      type(incomp) :: fs                  !< Single-phase incompressible flow solver
-      type(hypre_uns) :: ps               !< Unstructured HYPRE pressure solver
-      type(hypre_uns) :: is               !< Unstructured HYPRE implicit solver
-      type(timetracker) :: time           !< Time tracker
-      type(sgsmodel) ::  sgs              !< SGS model
-      type(ensight) :: ens_out            !< Ensight output
-      type(event) :: ens_evt              !< Ensight output event
-      type(monitor) :: mfile,cflfile      !< Monitor files
+      class(config), pointer :: cfg                 !< Pointer to config
+      type(incomp) :: fs                            !< Single-phase incompressible flow solver
+      type(hypre_uns) :: ps                         !< Unstructured HYPRE pressure solver
+      type(hypre_uns) :: is                         !< Unstructured HYPRE implicit solver
+      type(lpt)       :: lp
+      type(timetracker) :: time                     !< Time tracker
+      type(sgsmodel) ::  sgs                        !< SGS model
+      type(ensight) :: ens_out                      !< Ensight output
+      type(event) :: ens_evt                        !< Ensight output event
+      type(monitor) :: mfile,cflfile,sprayfile      !< Monitor files
       !> Private work arrays
       real(WP), dimension(:,:,:),   allocatable :: resU,resV,resW
       real(WP), dimension(:,:,:),   allocatable :: Ui,Vi,Wi
@@ -45,22 +50,22 @@ module block2_class
       procedure :: step                   !< Advance block
       procedure :: final                  !< Finalize block
    end type block2
-   
-   
+
+
    !> Gas viscosity
-   real(WP) :: visc_g
-   
-   
+   real(WP) :: visc_g  !? Why is the viscosity defined outside of strucutre?
+
+
 contains
-   
-   
+
+
    !> Initialization of block 2
    subroutine init(b)
       use param, only: param_read
       implicit none
       class(block2), intent(inout) :: b
-      
-      
+
+
       ! Allocate work arrays for cfg
       allocate_work_arrays: block
          allocate(b%resU(b%cfg%imino_:b%cfg%imaxo_,b%cfg%jmino_:b%cfg%jmaxo_,b%cfg%kmino_:b%cfg%kmaxo_))
@@ -71,8 +76,8 @@ contains
          allocate(b%Wi  (b%cfg%imino_:b%cfg%imaxo_,b%cfg%jmino_:b%cfg%jmaxo_,b%cfg%kmino_:b%cfg%kmaxo_))
          allocate(b%SR(6,b%cfg%imino_:b%cfg%imaxo_,b%cfg%jmino_:b%cfg%jmaxo_,b%cfg%kmino_:b%cfg%kmaxo_))
       end block allocate_work_arrays
-      
-      
+
+
       ! Initialize time tracker
       initialize_timetracker: block
          b%time=timetracker(b%cfg%amRoot,name='cough_machine_out')
@@ -82,8 +87,8 @@ contains
          b%time%dt=b%time%dtmax
          b%time%itmax=2
       end block initialize_timetracker
-      
-      
+
+
       ! Create a single-phase flow solver with bconds
       create_solver: block
          use incomp_class,    only: dirichlet,clipped_neumann,neumann
@@ -110,8 +115,8 @@ contains
          ! Setup the solver
          call b%fs%setup(pressure_solver=b%ps,implicit_solver=b%is)
       end block create_solver
-      
-      
+
+
       ! Initialize our velocity field
       initialize_velocity: block
          use tpns_class, only: bcond
@@ -140,14 +145,35 @@ contains
          ! Compute divergence
          call b%fs%get_div()
       end block initialize_velocity
-      
-      
+
+
       ! Create an LES model
       create_sgs: block
          b%sgs=sgsmodel(cfg=b%fs%cfg,umask=b%fs%umask,vmask=b%fs%vmask,wmask=b%fs%wmask)
       end block create_sgs
-      
-      
+
+      ! Initialize our Lagrangian spray solver
+      initialize_lpt: block
+         ! Create solver
+         b%lp=lpt(cfg=b%cfg,name='spray')
+         ! Get droplet density from the input
+         call param_read('Liquid density',b%lp%rho)
+      end block initialize_lpt
+
+      ! Create partmesh object for Lagrangian particle output
+      create_pmesh: block
+         integer :: i
+         ! Include an extra variable for droplet diameter
+         pmesh=partmesh(nvar=1,name='lpt')
+         pmesh%varname(1)='diameter'
+         ! Transfer particles to pmesh
+         call b%lp%update_partmesh(pmesh)
+         ! Also populate diameter variable
+         do i=1,b%lp%np_
+            pmesh%var(1,i)=b%lp%p(i)%d
+         end do
+      end block create_pmesh
+
       ! Add Ensight output
       create_ensight: block
          ! Create Ensight output from cfg
@@ -160,8 +186,7 @@ contains
          ! Output to ensight
          if (b%ens_evt%occurs()) call b%ens_out%write_data(b%time%t)
       end block create_ensight
-      
-      
+
       ! Create a monitor file
       create_monitor: block
          ! Prepare some info about fields
@@ -192,12 +217,31 @@ contains
          call b%cflfile%add_column(b%fs%CFLv_y,'Viscous yCFL')
          call b%cflfile%add_column(b%fs%CFLv_z,'Viscous zCFL')
          call b%cflfile%write()
+         ! Create a spray monitor
+         b%sprayfile=monitor(amroot=b%lp%cfg%amRoot,name='spray')
+         call b%sprayfile%add_column(b%time%n,'Timestep number')
+         call b%sprayfile%add_column(b%time%t,'Time')
+         call b%sprayfile%add_column(b%time%dt,'Timestep size')
+         call b%sprayfile%add_column(b%lp%np,'Droplet number')
+         call b%sprayfile%add_column(b%lp%Umin, 'Umin')
+         call b%sprayfile%add_column(b%lp%Umax, 'Umax')
+         call b%sprayfile%add_column(b%lp%Umean,'Umean')
+         call b%sprayfile%add_column(b%lp%Vmin, 'Vmin')
+         call b%sprayfile%add_column(b%lp%Vmax, 'Vmax')
+         call b%sprayfile%add_column(b%lp%Vmean,'Vmean')
+         call b%sprayfile%add_column(b%lp%Wmin, 'Wmin')
+         call b%sprayfile%add_column(b%lp%Wmax, 'Wmax')
+         call b%sprayfile%add_column(b%lp%Wmean,'Wmean')
+         call b%sprayfile%add_column(b%lp%dmin, 'dmin')
+         call b%sprayfile%add_column(b%lp%dmax, 'dmax')
+         call b%sprayfile%add_column(b%lp%dmean,'dmean')
+         call b%sprayfile%write()
       end block create_monitor
-      
-      
+
+
    end subroutine init
-   
-   
+
+
    !> Take a time step with block 2
    subroutine step(b,Unudge,Vnudge,Wnudge)
       implicit none
@@ -205,23 +249,23 @@ contains
       real(WP), dimension(b%cfg%imino_:,b%cfg%jmino_:,b%cfg%kmino_:), intent(inout) :: Unudge     !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       real(WP), dimension(b%cfg%imino_:,b%cfg%jmino_:,b%cfg%kmino_:), intent(inout) :: Vnudge     !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       real(WP), dimension(b%cfg%imino_:,b%cfg%jmino_:,b%cfg%kmino_:), intent(inout) :: Wnudge     !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
-      
+
       ! Increment time
       call b%fs%get_cfl(b%time%dt,b%time%cfl)
       call b%time%adjust_dt()
       call b%time%increment()
-      
+
       ! Remember old velocity
       b%fs%Uold=b%fs%U
       b%fs%Vold=b%fs%V
       b%fs%Wold=b%fs%W
-      
+
       ! Apply time-varying Dirichlet conditions
       ! This is where time-dpt Dirichlet would be enforced
-      
+
       ! Reset here gas viscosity
       b%fs%visc=visc_g
-      
+
       ! Turbulence modeling
       call b%fs%get_strainrate(Ui=b%Ui,Vi=b%Vi,Wi=b%Wi,SR=b%SR)
       b%resU=b%fs%rho
@@ -230,23 +274,23 @@ contains
          b%sgs%visc=-b%fs%visc
       end where
       b%fs%visc=b%fs%visc+b%sgs%visc
-      
+
       ! Perform sub-iterations
       do while (b%time%it.le.b%time%itmax)
-         
+
          ! Build mid-time velocity
          b%fs%U=0.5_WP*(b%fs%U+b%fs%Uold)
          b%fs%V=0.5_WP*(b%fs%V+b%fs%Vold)
          b%fs%W=0.5_WP*(b%fs%W+b%fs%Wold)
-         
+
          ! Explicit calculation of drho*u/dt from NS
          call b%fs%get_dmomdt(b%resU,b%resV,b%resW)
-         
+
          ! Assemble explicit residual
          b%resU=-2.0_WP*(b%fs%rho*b%fs%U-b%fs%rho*b%fs%Uold)+b%time%dt*b%resU
          b%resV=-2.0_WP*(b%fs%rho*b%fs%V-b%fs%rho*b%fs%Vold)+b%time%dt*b%resV
          b%resW=-2.0_WP*(b%fs%rho*b%fs%W-b%fs%rho*b%fs%Wold)+b%time%dt*b%resW
-         
+
          ! Add nudging term here
          nudge: block
             real(WP), dimension(3) :: pos
@@ -283,61 +327,62 @@ contains
                end do
             end do
          end block nudge
-         
+
          ! Form implicit residuals
          call b%fs%solve_implicit(b%time%dt,b%resU,b%resV,b%resW)
-         
+
          ! Apply these residuals
          b%fs%U=2.0_WP*b%fs%U-b%fs%Uold+b%resU
          b%fs%V=2.0_WP*b%fs%V-b%fs%Vold+b%resV
          b%fs%W=2.0_WP*b%fs%W-b%fs%Wold+b%resW
-         
+
          ! Apply other boundary conditions on the resulting fields
          call b%fs%apply_bcond(b%time%t,b%time%dt)
-         
+
          ! Solve Poisson equation
          call b%fs%correct_mfr()
          call b%fs%get_div()
          b%ps%rhs=-b%fs%cfg%vol*b%fs%div*b%fs%rho/b%time%dt
          b%ps%sol=0.0_WP
          call b%ps%solve()
-         
+
          ! Correct velocity
          call b%fs%get_pgrad(b%ps%sol,b%resU,b%resV,b%resW)
          b%fs%P=b%fs%P+b%ps%sol
          b%fs%U=b%fs%U-b%time%dt*b%resU/b%fs%rho
          b%fs%V=b%fs%V-b%time%dt*b%resV/b%fs%rho
          b%fs%W=b%fs%W-b%time%dt*b%resW/b%fs%rho
-         
+
          ! Increment sub-iteration counter
          b%time%it=b%time%it+1
-         
+
       end do
-      
+
       ! Recompute interpolated velocity and divergence
       call b%fs%interp_vel(b%Ui,b%Vi,b%Wi)
       call b%fs%get_div()
-      
+
       ! Output to ensight
       if (b%ens_evt%occurs()) call b%ens_out%write_data(b%time%t)
-      
+
       ! Perform and output monitoring
       call b%fs%get_max()
       call b%mfile%write()
       call b%cflfile%write()
-      
+      call b%sprayfile%write()
+
    end subroutine step
-   
-   
+
+
    !> Finalize b1 simulation
    subroutine final(b)
       implicit none
       class(block2), intent(inout) :: b
-      
+
       ! Deallocate work arrays
       deallocate(b%resU,b%resV,b%resW,b%Ui,b%Vi,b%Wi,b%SR)
-      
+
    end subroutine final
-   
-   
+
+
 end module block2_class
