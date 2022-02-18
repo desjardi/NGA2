@@ -1,7 +1,7 @@
 !> Various definitions and tools for running an NGA2 simulation
 module simulation
    use precision,     only: WP
-   use block1_class,  only: block1
+   use block1_class,  only: block1,filmthickness_over_dx,min_filmthickness,diam_over_filmthickness,max_eccentricity,d_threshold
    use block2_class,  only: block2
    use coupler_class, only: coupler
    implicit none

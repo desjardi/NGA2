@@ -6,6 +6,7 @@ module block1_class
    use config_class,      only: config
    use tpns_class,        only: tpns
    use vfs_class,         only: vfs
+   use ccl_class,         only: ccl
    use sgsmodel_class,    only: sgsmodel
    use timetracker_class, only: timetracker
    use ensight_class,     only: ensight
@@ -15,16 +16,15 @@ module block1_class
    use monitor_class,     only: monitor
    implicit none
    private
-   
-   
-   public :: block1
-   
-   
+
+   public :: block1,filmthickness_over_dx,min_filmthickness,diam_over_filmthickness,max_eccentricity,d_threshold
+
    !> Block 1 object
    type :: block1
       class(config), pointer :: cfg       !< Pointer to config
       type(tpns) :: fs                    !< Two-phase incompressible flow solver
       type(vfs) :: vf                     !< VF solver
+      type(ccl) :: cc1                    !< Connected component labeling
       type(timetracker) :: time           !< Time tracker
       type(sgsmodel) ::  sgs              !< SGS model
       type(ensight) :: ens_out            !< Ensight output
@@ -39,15 +39,21 @@ module block1_class
       procedure :: step                   !< Advance block
       procedure :: final                  !< Finalize block
    end type block1
-   
-   
+
+   !> Transfer model parameters
+   real(WP) :: filmthickness_over_dx  =5.0e-1_WP
+   real(WP) :: min_filmthickness      =1.0e-6_WP
+   real(WP) :: diam_over_filmthickness=1.0e+1_WP
+   real(WP) :: max_eccentricity       =5.0e-1_WP
+   real(WP) :: d_threshold            =1.0e-3_WP
+
    !> Inflow parameters
    real(WP) :: Uin,delta,Urand
-   
-   
+
+
 contains
-   
-   
+
+
    !> Function that localizes the left domain boundary, inside the mouth
    function left_boundary_mouth(pg,i,j,k) result(isIn)
       use pgrid_class, only: pgrid
@@ -57,8 +63,8 @@ contains
       isIn=.false.
       if (i.eq.pg%imin.and.pg%ym(j).gt.0.0_WP.and.pg%ym(j).lt.H_mouth.and.abs(pg%zm(k)).lt.0.5_WP*W_mouth) isIn=.true.
    end function left_boundary_mouth
-   
-   
+
+
    !> Function that localizes the rightmost domain boundary
    function right_boundary(pg,i,j,k) result(isIn)
       use pgrid_class, only: pgrid
@@ -68,15 +74,15 @@ contains
       isIn=.false.
       if (i.eq.pg%imax+1) isIn=.true.
    end function right_boundary
-   
-   
+
+
    !> Initialization of block 1
    subroutine init(b)
       use param, only: param_read
       implicit none
       class(block1), intent(inout) :: b
-      
-      
+
+
       ! Allocate work arrays for cfg
       allocate_work_arrays: block
          allocate(b%resU(b%cfg%imino_:b%cfg%imaxo_,b%cfg%jmino_:b%cfg%jmaxo_,b%cfg%kmino_:b%cfg%kmaxo_))
@@ -87,8 +93,8 @@ contains
          allocate(b%Wi  (b%cfg%imino_:b%cfg%imaxo_,b%cfg%jmino_:b%cfg%jmaxo_,b%cfg%kmino_:b%cfg%kmaxo_))
          allocate(b%SR(6,b%cfg%imino_:b%cfg%imaxo_,b%cfg%jmino_:b%cfg%jmaxo_,b%cfg%kmino_:b%cfg%kmaxo_))
       end block allocate_work_arrays
-      
-      
+
+
       ! Initialize time tracker
       initialize_timetracker: block
          b%time=timetracker(b%cfg%amRoot,name='cough_machine_in')
@@ -98,8 +104,8 @@ contains
          b%time%dt=b%time%dtmax
          b%time%itmax=2
       end block initialize_timetracker
-      
-      
+
+
       ! Initialize our VOF solver and field
       create_and_initialize_vof: block
          use vfs_class, only: lvira,r2p
@@ -139,8 +145,8 @@ contains
          ! Reset moments to guarantee compatibility with interface reconstruction
          call b%vf%reset_volume_moments()
       end block create_and_initialize_vof
-      
-      
+
+
       ! Create a two-phase flow solver with bconds
       create_solver: block
          use tpns_class, only: dirichlet,clipped_neumann,neumann
@@ -174,8 +180,8 @@ contains
          !b%fs%psolv%maxlevel=10
          call b%fs%setup(pressure_ils=gmres_amg,implicit_ils=gmres_amg)
       end block create_solver
-      
-      
+
+
       ! Initialize our velocity field
       initialize_velocity: block
          use tpns_class, only: bcond
@@ -204,14 +210,28 @@ contains
          ! Compute divergence
          call b%fs%get_div()
       end block initialize_velocity
-      
-      
+
+      ! Create a connected-component labeling object
+      create_and_initialize_ccl1: block
+         use vfs_class, only: VFlo
+         ! Create the CCL object
+         b%cc1=ccl(cfg=b%cfg,name='CCL')
+         b%cc1%max_interface_planes=2
+         b%cc1%VFlo=VFlo
+         b%cc1%dot_threshold=-0.5_WP
+         b%cc1%thickness_cutoff=filmthickness_over_dx
+         ! Perform CCL step
+         call b%cc1%build_lists(VF=b%vf%VF,poly=b%vf%interface_polygon,U=b%fs%U,V=b%fs%V,W=b%fs%W)
+         call b%cc1%film_classify(Lbary=b%vf%Lbary,Gbary=b%vf%Gbary)
+         call b%cc1%deallocate_lists()
+      end block create_and_initialize_ccl1
+
       ! Create an LES model
       create_sgs: block
          b%sgs=sgsmodel(cfg=b%fs%cfg,umask=b%fs%umask,vmask=b%fs%vmask,wmask=b%fs%wmask)
       end block create_sgs
-      
-      
+
+
       ! Add Ensight output
       create_ensight: block
          ! Create Ensight output from cfg
@@ -227,8 +247,8 @@ contains
          ! Output to ensight
          if (b%ens_evt%occurs()) call b%ens_out%write_data(b%time%t)
       end block create_ensight
-      
-      
+
+
       ! Create a monitor file
       create_monitor: block
          ! Prepare some info about fields
@@ -264,30 +284,30 @@ contains
          call b%cflfile%add_column(b%fs%CFLv_z,'Viscous zCFL')
          call b%cflfile%write()
       end block create_monitor
-      
-      
+
+
    end subroutine init
-   
-   
+
+
    !> Take a time step with block 1
    subroutine step(b)
       use tpns_class, only: static_contact
       implicit none
       class(block1), intent(inout) :: b
-      
+
       ! Increment time
       call b%fs%get_cfl(b%time%dt,b%time%cfl)
       call b%time%adjust_dt()
       call b%time%increment()
-      
+
       ! Remember old VOF
       b%vf%VFold=b%vf%VF
-      
+
       ! Remember old velocity
       b%fs%Uold=b%fs%U
       b%fs%Vold=b%fs%V
       b%fs%Wold=b%fs%W
-      
+
       ! Reapply Dirichlet at inlet
       reapply_dirichlet: block
          use tpns_class, only: bcond
@@ -300,16 +320,16 @@ contains
             b%fs%U(i,j,k)=Uin*tanh(2.0_WP*(0.5_WP*W_mouth-abs(b%fs%cfg%zm(k)))/delta)*tanh(2.0_WP*b%fs%cfg%ym(j)/delta)*tanh(2.0_WP*(H_mouth-b%fs%cfg%ym(j))/delta)+random_uniform(-Urand,Urand)
          end do
       end block reapply_dirichlet
-      
+
       ! Prepare old staggered density (at n)
       call b%fs%get_olddensity(vf=b%vf)
-      
+
       ! VOF solver step
       call b%vf%advance(dt=b%time%dt,U=b%fs%U,V=b%fs%V,W=b%fs%W)
-      
+
       ! Prepare new staggered viscosity (at n+1)
       call b%fs%get_viscosity(vf=b%vf)
-      
+
       ! Turbulence modeling - only work with gas properties here
       sgs_model: block
          integer :: i,j,k
@@ -330,40 +350,40 @@ contains
             end do
          end do
       end block sgs_model
-      
+
       ! Perform sub-iterations
       do while (b%time%it.le.b%time%itmax)
-         
+
          ! Build mid-time velocity
          b%fs%U=0.5_WP*(b%fs%U+b%fs%Uold)
          b%fs%V=0.5_WP*(b%fs%V+b%fs%Vold)
          b%fs%W=0.5_WP*(b%fs%W+b%fs%Wold)
-         
+
          ! Preliminary mass and momentum transport step at the interface
          call b%fs%prepare_advection_upwind(dt=b%time%dt)
-         
+
          ! Explicit calculation of drho*u/dt from NS
          call b%fs%get_dmomdt(b%resU,b%resV,b%resW)
-         
+
          ! Add momentum source terms
          call b%fs%addsrc_gravity(b%resU,b%resV,b%resW)
-         
+
          ! Assemble explicit residual
          b%resU=-2.0_WP*b%fs%rho_U*b%fs%U+(b%fs%rho_Uold+b%fs%rho_U)*b%fs%Uold+b%time%dt*b%resU
          b%resV=-2.0_WP*b%fs%rho_V*b%fs%V+(b%fs%rho_Vold+b%fs%rho_V)*b%fs%Vold+b%time%dt*b%resV
          b%resW=-2.0_WP*b%fs%rho_W*b%fs%W+(b%fs%rho_Wold+b%fs%rho_W)*b%fs%Wold+b%time%dt*b%resW
-         
+
          ! Form implicit residuals
          call b%fs%solve_implicit(b%time%dt,b%resU,b%resV,b%resW)
-         
+
          ! Apply these residuals
          b%fs%U=2.0_WP*b%fs%U-b%fs%Uold+b%resU
          b%fs%V=2.0_WP*b%fs%V-b%fs%Vold+b%resV
          b%fs%W=2.0_WP*b%fs%W-b%fs%Wold+b%resW
-         
+
          ! Apply other boundary conditions
          call b%fs%apply_bcond(b%time%t,b%time%dt)
-         
+
          ! Solve Poisson equation
          call b%fs%update_laplacian()
          call b%fs%correct_mfr()
@@ -373,44 +393,44 @@ contains
          b%fs%psolv%sol=0.0_WP
          call b%fs%psolv%solve()
          call b%fs%shift_p(b%fs%psolv%sol)
-         
+
          ! Correct velocity
          call b%fs%get_pgrad(b%fs%psolv%sol,b%resU,b%resV,b%resW)
          b%fs%P=b%fs%P+b%fs%psolv%sol
          b%fs%U=b%fs%U-b%time%dt*b%resU/b%fs%rho_U
          b%fs%V=b%fs%V-b%time%dt*b%resV/b%fs%rho_V
          b%fs%W=b%fs%W-b%time%dt*b%resW/b%fs%rho_W
-         
+
          ! Increment sub-iteration counter
          b%time%it=b%time%it+1
-         
+
       end do
-      
+
       ! Recompute interpolated velocity and divergence
       call b%fs%interp_vel(b%Ui,b%Vi,b%Wi)
       call b%fs%get_div()
-      
+
       ! Output to ensight
       if (b%ens_evt%occurs()) call b%ens_out%write_data(b%time%t)
-      
+
       ! Perform and output monitoring
       call b%fs%get_max()
       call b%vf%get_max()
       call b%mfile%write()
       call b%cflfile%write()
-      
+
    end subroutine step
-   
-   
+
+
    !> Finalize b1 simulation
    subroutine final(b)
       implicit none
       class(block1), intent(inout) :: b
-      
+
       ! Deallocate work arrays
       deallocate(b%resU,b%resV,b%resW,b%Ui,b%Vi,b%Wi,b%SR)
-      
+
    end subroutine final
-   
-   
+
+
 end module block1_class
