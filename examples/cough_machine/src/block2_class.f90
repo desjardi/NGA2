@@ -18,9 +18,6 @@ module block2_class
    implicit none
    private
 
-   !> Ensight postprocessing
-   type(partmesh) :: pmesh
-
    public :: block2
 
 
@@ -30,7 +27,8 @@ module block2_class
       type(incomp) :: fs                            !< Single-phase incompressible flow solver
       type(hypre_uns) :: ps                         !< Unstructured HYPRE pressure solver
       type(hypre_uns) :: is                         !< Unstructured HYPRE implicit solver
-      type(lpt)       :: lp
+      type(lpt)       :: lp                         !< Lagrangian particle tracking
+      type(partmesh)  :: pmesh                      !< Partmesh for Lagrangian particle output
       type(timetracker) :: time                     !< Time tracker
       type(sgsmodel) ::  sgs                        !< SGS model
       type(ensight) :: ens_out                      !< Ensight output
@@ -53,7 +51,7 @@ module block2_class
 
 
    !> Gas viscosity
-   real(WP) :: visc_g  !? Why is the viscosity defined outside of strucutre?
+   real(WP) :: visc_g  ! ?Why is the viscosity defined outside of strucutre?
 
 
 contains
@@ -75,6 +73,7 @@ contains
          allocate(b%Vi  (b%cfg%imino_:b%cfg%imaxo_,b%cfg%jmino_:b%cfg%jmaxo_,b%cfg%kmino_:b%cfg%kmaxo_))
          allocate(b%Wi  (b%cfg%imino_:b%cfg%imaxo_,b%cfg%jmino_:b%cfg%jmaxo_,b%cfg%kmino_:b%cfg%kmaxo_))
          allocate(b%SR(6,b%cfg%imino_:b%cfg%imaxo_,b%cfg%jmino_:b%cfg%jmaxo_,b%cfg%kmino_:b%cfg%kmaxo_))
+         !U/V/W 1on2?
       end block allocate_work_arrays
 
 
@@ -164,13 +163,13 @@ contains
       create_pmesh: block
          integer :: i
          ! Include an extra variable for droplet diameter
-         pmesh=partmesh(nvar=1,name='lpt')
-         pmesh%varname(1)='diameter'
+         b%pmesh=partmesh(nvar=1,name='lpt')
+         b%pmesh%varname(1)='diameter'
          ! Transfer particles to pmesh
-         call b%lp%update_partmesh(pmesh)
+         call b%lp%update_partmesh(b%pmesh)
          ! Also populate diameter variable
          do i=1,b%lp%np_
-            pmesh%var(1,i)=b%lp%p(i)%d
+            b%pmesh%var(1,i)=b%lp%p(i)%d
          end do
       end block create_pmesh
 
@@ -183,6 +182,8 @@ contains
          call param_read('Ensight output period',b%ens_evt%tper)
          ! Add variables to output
          call b%ens_out%add_vector('velocity',b%Ui,b%Vi,b%Wi)
+         call b%ens_out%add_scalar('visc_t',b%sgs%visc)
+         call b%ens_out%add_particle('spray',b%pmesh)
          ! Output to ensight
          if (b%ens_evt%occurs()) call b%ens_out%write_data(b%time%t)
       end block create_ensight
@@ -250,10 +251,14 @@ contains
       real(WP), dimension(b%cfg%imino_:,b%cfg%jmino_:,b%cfg%kmino_:), intent(inout) :: Vnudge     !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       real(WP), dimension(b%cfg%imino_:,b%cfg%jmino_:,b%cfg%kmino_:), intent(inout) :: Wnudge     !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
 
+      !! Exchange data using couplers and the most recent velocities
+
       ! Increment time
       call b%fs%get_cfl(b%time%dt,b%time%cfl)
       call b%time%adjust_dt()
       call b%time%increment()
+
+      !! Advance particles by fulldt
 
       ! Remember old velocity
       b%fs%Uold=b%fs%U
@@ -363,10 +368,24 @@ contains
       call b%fs%get_div()
 
       ! Output to ensight
-      if (b%ens_evt%occurs()) call b%ens_out%write_data(b%time%t)
+      if (b%ens_evt%occurs()) then
+         ! Update partmesh object
+         update_pmesh: block
+            integer :: i
+            ! Transfer particles to pmesh
+            call b%lp%update_partmesh(b%pmesh)
+            ! Also populate diameter variable
+            do i=1,b%lp%np_
+               b%pmesh%var(1,i)=b%lp%p(i)%d
+            end do
+         end block update_pmesh
+         ! Perform ensight output
+         call b%ens_out%write_data(b%time%t)
+      end if
 
       ! Perform and output monitoring
       call b%fs%get_max()
+      call b%lp%get_max()
       call b%mfile%write()
       call b%cflfile%write()
       call b%sprayfile%write()
