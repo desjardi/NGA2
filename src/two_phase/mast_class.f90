@@ -1411,8 +1411,8 @@ contains
                     this%implicit%opr(1,i  ,j,k) = this%implicit%opr(1,i  ,j,k) + (1.0_WP-vf%VF(i  ,j,k))*Ga_i + vf%VF(i  ,j,k)*La_i
                     this%implicit%opr(3,i  ,j,k) = this%implicit%opr(3,i  ,j,k) + (1.0_WP-vf%VF(i  ,j,k))*Ga_nb+ vf%VF(i  ,j,k)*La_nb
                     ! Left cell (left from face)
-                    this%implicit%opr(1,i-1,j,k) = this%implicit%opr(1,i-1,j,k) + (1.0_WP-vf%VF(i-1,j,k))*Ga_nb+ vf%VF(i-1,j,k)*La_nb
-                    this%implicit%opr(2,i-1,j,k) = this%implicit%opr(2,i-1,j,k) + (1.0_WP-vf%VF(i-1,j,k))*Ga_i + vf%VF(i-1,j,k)*La_i
+                    this%implicit%opr(1,i-1,j,k) = this%implicit%opr(1,i-1,j,k) - (1.0_WP-vf%VF(i-1,j,k))*Ga_nb+ vf%VF(i-1,j,k)*La_nb
+                    this%implicit%opr(2,i-1,j,k) = this%implicit%opr(2,i-1,j,k) - (1.0_WP-vf%VF(i-1,j,k))*Ga_i + vf%VF(i-1,j,k)*La_i
                  end if
               end if
 
@@ -1431,8 +1431,8 @@ contains
                     this%implicit%opr(1,i,j  ,k) = this%implicit%opr(1,i,j  ,k) + (1.0_WP-vf%VF(i,j  ,k))*Ga_i + vf%VF(i,j  ,k)*La_i
                     this%implicit%opr(5,i,j  ,k) = this%implicit%opr(5,i,j  ,k) + (1.0_WP-vf%VF(i,j  ,k))*Ga_nb+ vf%VF(i,j  ,k)*La_nb
                     ! Left cell (below face)
-                    this%implicit%opr(1,i,j-1,k) = this%implicit%opr(1,i,j-1,k) + (1.0_WP-vf%VF(i,j-1,k))*Ga_nb+ vf%VF(i,j-1,k)*La_nb
-                    this%implicit%opr(4,i,j-1,k) = this%implicit%opr(4,i,j-1,k) + (1.0_WP-vf%VF(i,j-1,k))*Ga_i + vf%VF(i,j-1,k)*La_i
+                    this%implicit%opr(1,i,j-1,k) = this%implicit%opr(1,i,j-1,k) - (1.0_WP-vf%VF(i,j-1,k))*Ga_nb+ vf%VF(i,j-1,k)*La_nb
+                    this%implicit%opr(4,i,j-1,k) = this%implicit%opr(4,i,j-1,k) - (1.0_WP-vf%VF(i,j-1,k))*Ga_i + vf%VF(i,j-1,k)*La_i
                  end if
               end if
 
@@ -1451,8 +1451,8 @@ contains
                     this%implicit%opr(1,i,j,k  ) = this%implicit%opr(1,i,j,k  ) + (1.0_WP-vf%VF(i,j,k  ))*Ga_i + vf%VF(i,j,k  )*La_i
                     this%implicit%opr(7,i,j,k  ) = this%implicit%opr(5,i,j,k  ) + (1.0_WP-vf%VF(i,j,k  ))*Ga_nb+ vf%VF(i,j,k  )*La_nb
                     ! Left cell (behind face)
-                    this%implicit%opr(1,i,j,k-1) = this%implicit%opr(1,i,j,k-1) + (1.0_WP-vf%VF(i,j,k-1))*Ga_nb+ vf%VF(i,j,k-1)*La_nb
-                    this%implicit%opr(6,i,j,k-1) = this%implicit%opr(6,i,j,k-1) + (1.0_WP-vf%VF(i,j,k-1))*Ga_i + vf%VF(i,j,k-1)*La_i
+                    this%implicit%opr(1,i,j,k-1) = this%implicit%opr(1,i,j,k-1) - (1.0_WP-vf%VF(i,j,k-1))*Ga_nb+ vf%VF(i,j,k-1)*La_nb
+                    this%implicit%opr(6,i,j,k-1) = this%implicit%opr(6,i,j,k-1) - (1.0_WP-vf%VF(i,j,k-1))*Ga_i + vf%VF(i,j,k-1)*La_i
                  end if
               end if
 
