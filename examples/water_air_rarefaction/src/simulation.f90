@@ -205,6 +205,8 @@ contains
          ! Calculate initial phase and bulk moduli
          call fs%init_phase_bulkmod(vf,matmod)
          call fs%harmonize_advpressure_bulkmod(vf,matmod)
+         ! Set initial pressure to harmonized field based on internal energy
+         fs%P = fs%PA
 
          ! Note: conditions used in Kuhn and Desjardins (2021) are as follows
          ! rho_l0 = 1   rho_g0 = 1e-3
@@ -212,6 +214,8 @@ contains
          ! v0 = 2       v1 = 11.29375
          ! p0 = 0.7     p1 = 0.3
          ! (and left boundary extended in order to avoid reflection back into domain)
+
+         ! Results compared at t = 0.0095, 0.0145
 
       end block create_and_initialize_flow_solver
       
@@ -226,6 +230,7 @@ contains
          ! Add variables to output
          call ens_out%add_vector('velocity',fs%Ui,fs%Vi,fs%Wi)
          call ens_out%add_scalar('P',fs%P)
+         call ens_out%add_scalar('PA',fs%PA)
          call ens_out%add_scalar('Grho',fs%Grho)
          call ens_out%add_scalar('Lrho',fs%Lrho)
          call ens_out%add_scalar('Density',fs%RHO)
