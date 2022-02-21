@@ -916,7 +916,7 @@ contains
      integer :: VF_check,shock_check,n_band,ni,nj,nk
      integer :: i,j,k
 
-     !n_band = ceiling(max_CFL)
+     n_band = 1 !ceiling(max_CFL)
 
      this%sl_face = 0
      ! 1 is for semi-Lagrangian, 0 is for centered scheme
@@ -934,10 +934,9 @@ contains
                           if (vf%VFold(max(this%cfg%imino_,min(i+ni,this%cfg%imaxo_)), &
                                max(this%cfg%jmino_,min(j+nj,this%cfg%jmaxo_)), &
                                max(this%cfg%kmino_,min(k+nk,this%cfg%kmaxo_))).gt.VFlo .and. &
-                               this%cfg%vol(max(this%cfg%imino_,min(i+ni,this%cfg%imaxo_)), &
+                               this%mask(max(this%cfg%imino_,min(i+ni,this%cfg%imaxo_)), &
                                max(this%cfg%jmino_,min(j+nj,this%cfg%jmaxo_)), &
-                               max(this%cfg%kmino_,min(k+nk,this%cfg%kmaxo_))).gt.0.0_WP) then
-                             !! Update wall check^ !!
+                               max(this%cfg%kmino_,min(k+nk,this%cfg%kmaxo_))).ne.1) then
                              VF_check = 1
                           end if
                        end do
@@ -964,10 +963,9 @@ contains
                           if (vf%VFold(max(this%cfg%imino_,min(i+ni,this%cfg%imaxo_)), &
                                max(this%cfg%jmino_,min(j+nj,this%cfg%jmaxo_)), &
                                max(this%cfg%kmino_,min(k+nk,this%cfg%kmaxo_))).lt.VFhi .and. &
-                               this%cfg%vol(max(this%cfg%imino_,min(i+ni,this%cfg%imaxo_)), &
+                               this%mask(max(this%cfg%imino_,min(i+ni,this%cfg%imaxo_)), &
                                max(this%cfg%jmino_,min(j+nj,this%cfg%jmaxo_)), &
-                               max(this%cfg%kmino_,min(k+nk,this%cfg%kmaxo_))).gt.0.0_WP) then
-                             !! Update wall check^ !!
+                               max(this%cfg%kmino_,min(k+nk,this%cfg%kmaxo_))).ne.1) then
                              VF_check = 1
                           end if
                        end do
