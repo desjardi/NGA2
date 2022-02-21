@@ -24,12 +24,13 @@ Gas gamma : 		      1.4
 # Initial conditions
 Liquid density :              1
 Gas density :                 1e-3
-Surface tension coefficient : 0.0265
+Surface tension coefficient : 0
 
 # Time integration
 Max timestep size : 1e-4
-Max cfl number :    3
-Max time :          1e-3
+Max cfl number :    1
+Max time :          14.5e-3
+Max steps :	    100000
 
 # Pressure solver
 Pressure tolerance : 1e-6
@@ -40,4 +41,4 @@ Implicit tolerance : 1e-6
 Implicit iteration : 100
 
 # Ensight output
-Ensight output period : 1e-5
+Ensight output period : 5e-4
