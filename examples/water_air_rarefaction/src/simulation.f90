@@ -42,7 +42,7 @@ contains
      integer, intent(in) :: i,j,k
      logical :: isIn
      isIn=.false.
-     if (i.le.pg%imin-1) isIn=.true.
+     if (i.eq.pg%imin) isIn=.true.
    end function left_of_domain
 
    !> Function that localizes the right (x+) of the domain
@@ -189,9 +189,9 @@ contains
          call fs%interp_vel_basic(vf,fs%Ui,fs%Vi,fs%Wi,fs%U,fs%V,fs%W)
          ! Apply face BC - inflow
          call fs%get_bcond('inflow',mybc)
-         do n=1,mybc%itr%no_
+         do n=1,mybc%itr%n_
             i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
-            fs%U(i+max(0,-mybc%dir),j,k)=v0
+            fs%U(i,j,k)=v0
          end do
          ! Apply face BC - outflow
          bc_scope = 'velocity'
@@ -321,7 +321,7 @@ contains
          fs%Hpjump = 0.0_WP
 
          ! Determine semi-Lagrangian advection flag
-         call fs%flag_sl(vf)
+         call fs%flag_sl(time%dt,vf)
 
          ! Perform sub-iterations
          do while (time%it.le.time%itmax)
