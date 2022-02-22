@@ -73,17 +73,17 @@ contains
          ! Perform CCL and transfer
          call transfer_vf_to_drops()
          ! After we're done clip all VOF at the exit area and along the sides - hopefully nothing's left
-         do k=b1%fs%cfg%kmino_,b1%fs%cfg%kmaxo_
-            do j=b1%fs%cfg%jmino_,b1%fs%cfg%jmaxo_
-               do i=b1%fs%cfg%imino_,b1%fs%cfg%imaxo_
-                  if (i.ge.b1%vf%cfg%imax-5) b1%vf%VF(i,j,k)=0.0_WP
-                  if (j.ge.b1%vf%cfg%jmax-5) b1%vf%VF(i,j,k)=0.0_WP
-                  if (j.le.b1%vf%cfg%jmin+5) b1%vf%VF(i,j,k)=0.0_WP
-                  if (k.ge.b1%vf%cfg%kmax-5) b1%vf%VF(i,j,k)=0.0_WP
-                  if (k.le.b1%vf%cfg%kmin+5) b1%vf%VF(i,j,k)=0.0_WP
-               end do
-            end do
-         end do
+         !do k=b1%fs%cfg%kmino_,b1%fs%cfg%kmaxo_
+         !   do j=b1%fs%cfg%jmino_,b1%fs%cfg%jmaxo_
+         !      do i=b1%fs%cfg%imino_,b1%fs%cfg%imaxo_
+         !         if (i.ge.b1%vf%cfg%imax-5) b1%vf%VF(i,j,k)=0.0_WP
+         !         if (j.ge.b1%vf%cfg%jmax-5) b1%vf%VF(i,j,k)=0.0_WP
+         !         if (j.le.b1%vf%cfg%jmin+5) b1%vf%VF(i,j,k)=0.0_WP
+         !         if (k.ge.b1%vf%cfg%kmax-5) b1%vf%VF(i,j,k)=0.0_WP
+         !         if (k.le.b1%vf%cfg%kmin+5) b1%vf%VF(i,j,k)=0.0_WP
+         !      end do
+         !   end do
+         !end do
 
          ! Advance block 2 until we've caught up
          do while (b2%time%t.lt.b1%time%t)
