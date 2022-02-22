@@ -803,7 +803,7 @@ contains
                
             case (neumann,clipped_neumann) !< Apply Neumann condition to all 3 components
                ! Handle index shift due to staggering
-               stag=max(-my_bc%dir,0)
+               stag=min(my_bc%dir,0)
                ! Implement based on bcond direction
                do n=1,my_bc%itr%n_
                   i=my_bc%itr%map(1,n); j=my_bc%itr%map(2,n); k=my_bc%itr%map(3,n)
@@ -821,32 +821,32 @@ contains
                   case('velocity')
                      select case (my_bc%face)
                      case ('x')
-                        this%U(i+stag,j    ,k    )=this%U(i-my_bc%dir+stag,j    ,k    )
-                        this%V(i     ,j:j+1,k    )=this%V(i-my_bc%dir     ,j:j+1,k    )
-                        this%W(i     ,j    ,k:k+1)=this%W(i-my_bc%dir     ,j    ,k:k+1)
+                        this%U(i     ,j    ,k    )=this%U(i-my_bc%dir     ,j    ,k    )
+                        this%V(i+stag,j:j+1,k    )=this%V(i-my_bc%dir+stag,j:j+1,k    )
+                        this%W(i+stag,j    ,k:k+1)=this%W(i-my_bc%dir+stag,j    ,k:k+1)
                      case ('y')
-                        this%U(i:i+1,j     ,k    )=this%U(i:i+1,j-my_bc%dir     ,k    )
-                        this%V(i    ,j+stag,k    )=this%V(i    ,j-my_bc%dir+stag,k    )
-                        this%W(i    ,j     ,k:k+1)=this%W(i    ,j-my_bc%dir     ,k:k+1)
+                        this%U(i:i+1,j+stag,k    )=this%U(i:i+1,j-my_bc%dir+stag,k    )
+                        this%V(i    ,j     ,k    )=this%V(i    ,j-my_bc%dir     ,k    )
+                        this%W(i    ,j+stag,k:k+1)=this%W(i    ,j-my_bc%dir+stag,k:k+1)
                      case ('z')
-                        this%U(i:i+1,j    ,k     )=this%U(i:i+1,j    ,k-my_bc%dir     )
-                        this%V(i    ,j:j+1,k     )=this%V(i    ,j:j+1,k-my_bc%dir     )
-                        this%W(i    ,j    ,k+stag)=this%W(i    ,j    ,k-my_bc%dir+stag)
+                        this%U(i:i+1,j    ,k+stag)=this%U(i:i+1,j    ,k-my_bc%dir+stag)
+                        this%V(i    ,j:j+1,k+stag)=this%V(i    ,j:j+1,k-my_bc%dir+stag)
+                        this%W(i    ,j    ,k     )=this%W(i    ,j    ,k-my_bc%dir     )
                      end select
                   case('flag')
                      ! Extend 
                      select case (my_bc%face)
                      case ('x')
                         do ii = 0,abs(2*my_bc%dir)
-                           this%sl_face(i+stag-ii*my_bc%dir ,j     ,k     ,1     ) = 1
+                           this%sl_face(i-ii*my_bc%dir ,j     ,k     ,1     ) = 1
                         end do
                      case ('y')
                         do ii = 0,abs(2*my_bc%dir)
-                           this%sl_face(i     ,j-stag+ii*my_bc%dir ,k     ,2     ) = 1
+                           this%sl_face(i     ,j-ii*my_bc%dir ,k     ,2     ) = 1
                         end do
                      case ('z')
                         do ii = 0,abs(2*my_bc%dir)
-                           this%sl_face(i     ,j     ,k+stag-ii*my_bc%dir ,3     ) = 1
+                           this%sl_face(i     ,j     ,k-ii*my_bc%dir ,3     ) = 1
                         end do
                      end select
                   end select
@@ -855,20 +855,11 @@ contains
                if (my_bc%type.eq.clipped_neumann.and.trim(adjustl(scope)).eq.'velocity') then
                   select case (my_bc%face)
                   case ('x')
-                     do n=1,my_bc%itr%n_
-                        i=my_bc%itr%map(1,n); j=my_bc%itr%map(2,n); k=my_bc%itr%map(3,n)
-                        if (this%U(i+stag,j,k)*my_bc%rdir.lt.0.0_WP) this%U(i+stag,j,k)=0.0_WP
-                     end do
+                     if (this%U(i,j,k)*my_bc%rdir.lt.0.0_WP) this%U(i,j,k)=0.0_WP
                   case ('y')
-                     do n=1,my_bc%itr%n_
-                        i=my_bc%itr%map(1,n); j=my_bc%itr%map(2,n); k=my_bc%itr%map(3,n)
-                        if (this%V(i,j+stag,k)*my_bc%rdir.lt.0.0_WP) this%V(i,j+stag,k)=0.0_WP
-                     end do
+                     if (this%V(i,j,k)*my_bc%rdir.lt.0.0_WP) this%V(i,j,k)=0.0_WP
                   case ('z')
-                     do n=1,my_bc%itr%n_
-                        i=my_bc%itr%map(1,n); j=my_bc%itr%map(2,n); k=my_bc%itr%map(3,n)
-                        if (this%W(i,j,k+stag)*my_bc%rdir.lt.0.0_WP) this%W(i,j,k+stag)=0.0_WP
-                     end do
+                     if (this%W(i,j,k)*my_bc%rdir.lt.0.0_WP) this%W(i,j,k)=0.0_WP
                   end select
                end if
                
