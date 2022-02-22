@@ -694,32 +694,35 @@ contains
       ! Increment bcond counter
       this%nbc=this%nbc+1
 
-      ! For this collocated solver, BCs only specify cell-centered values and behavior,
+      ! For this collocated solver, BCs specify cell-centered values and behavior,
       ! and the behavior of the face-centered values depends on the type of BC.
       ! (For now, dirichlet BCs always enforce the flowrate, i.e., mask face velocities,
       !  and clipped neumann BCs modify the sl_face flags to what works best at the outlet.)
+
+      ! To work properly with n_ and locators, dirichlets work by specifying the face that is
+      ! a part of the dirichlet, and the cell behind it (determined by the direction) is included.
       
       ! Now adjust the metrics accordingly
       select case (new_bc%type)
       case (dirichlet)
          do n=1,new_bc%itr%n_
             i=new_bc%itr%map(1,n); j=new_bc%itr%map(2,n); k=new_bc%itr%map(3,n)
-            ! Mask cell
-            this%mask(i,j,k)     =2
-            ! Mask faces
             select case(face)
             case('x')
-               this%umask(i+max(0,-dir),j    ,k    )=2
-               this%vmask(i            ,j:j+1,k    )=2
-               this%wmask(i            ,j    ,k:k+1)=2
+               ! Mask face
+               this%umask(i,j,k)=2
+               ! Mask cell
+               this%mask(i+min(0,dir),j,k)=2
             case('y')
-               this%umask(i:i+1,j            ,k    )=2
-               this%vmask(i    ,j+max(0,-dir),k    )=2
-               this%wmask(i    ,j            ,k:k+1)=2
+               ! Mask face
+               this%vmask(i,j,k)=2
+               ! Mask cell
+               this%mask(i,j+min(0,dir),k)=2
             case('z')
-               this%umask(i:i+1,j    ,k            )=2
-               this%vmask(i    ,j:j+1,k            )=2
-               this%wmask(i    ,j    ,k+max(0,-dir))=2
+               ! Mask face
+               this%wmask(i,j,k)=2
+               ! Mask cell
+               this%mask(i,j,k+min(0,dir))=2
             end select
          end do
          
@@ -774,10 +777,29 @@ contains
                
             case (dirichlet)               !< Apply Dirichlet conditions
                
-               ! This is done by the user directly
-               ! Unclear whether we want to do this within the solver...
+               ! This is done by the user directly for conseerved quantities and face velocity
 
-               ! Probably need condition for sl_face here
+               ! Condition is necessary for sl_face
+               if (trim(adjustl(scope)).eq.'flag') then
+                  ! Usage of SL scheme is same for dirichlet and neumann
+                  do n=1,my_bc%itr%n_
+                     i=my_bc%itr%map(1,n); j=my_bc%itr%map(2,n); k=my_bc%itr%map(3,n)
+                     select case (my_bc%face)
+                     case ('x')
+                        do ii = 0,abs(2*my_bc%dir)
+                           this%sl_face(i-ii*my_bc%dir,j,k,1) = 1
+                        end do
+                     case ('y')
+                        do ii = 0,abs(2*my_bc%dir)
+                           this%sl_face(i,j+ii*my_bc%dir,k,2) = 1
+                        end do
+                     case ('z')
+                        do ii = 0,abs(2*my_bc%dir)
+                           this%sl_face(i,j,k-ii*my_bc%dir,3) = 1
+                        end do
+                     end select
+                  end do
+               end if
                
             case (neumann,clipped_neumann) !< Apply Neumann condition to all 3 components
                ! Handle index shift due to staggering
@@ -907,12 +929,13 @@ contains
      return
    end function LKEold
 
-   subroutine flag_sl(this,vf)
+   subroutine flag_sl(this,dt,vf)
      use vfs_class, only: vfs, VFhi, VFlo
      implicit none
 
      class(mast), intent(inout) :: this   !< The two-phase all-Mach flow solver
      class(vfs),  intent(inout) :: vf     !< The volume fraction solver
+     real(WP), intent(in) :: dt           !< Passed to BC routine
      integer :: VF_check,shock_check,n_band,ni,nj,nk
      integer :: i,j,k
 
@@ -992,7 +1015,9 @@ contains
         end do
      end do
 
-     ! BC communication for flag
+     ! BC for flag
+     bc_scope = 'flag'
+     call this%apply_bcond(dt,bc_scope)
 
      ! Loop over the domain and check within band containing shock locations
      do k=this%cfg%kmin_,this%cfg%kmax_
@@ -1030,6 +1055,8 @@ contains
      this%sl_face = abs(this%sl_face)
 
      ! BCs again
+     bc_scope = 'flag'
+     call this%apply_bcond(dt,bc_scope)
 
    contains
 
