@@ -51,14 +51,82 @@ module block2_class
 
 
    !> Gas viscosity
-   real(WP) :: visc_g  ! ?Why is the viscosity defined outside of strucutre?
+   real(WP) :: visc_g
 
 
 contains
 
+   !> Function that localizes the right domain boundary
+   function right_boundary(pg,i,j,k) result(isIn)
+      use pgrid_class, only: pgrid
+      class(pgrid), intent(in) :: pg
+      integer, intent(in) :: i,j,k
+      logical :: isIn
+      isIn=.false.
+      if (i.eq.pg%imax+1) isIn=.true.
+   end function right_boundary
+
+   !> Function that localizes cough stream at L_mouth
+   function gas_inj_spray(pg,i,j,k) result(isIn)
+      use pgrid_class, only: pgrid
+      class(pgrid), intent(in) :: pg
+      integer, intent(in) :: i,j,k
+      logical :: isIn
+      isIn=.false.
+      if (i.eq.L_mouth.and.pg%ym(j).gt.0.0_WP.and.pg%ym(j).lt.H_mouth.and.abs(pg%zm(k)).lt.0.5_WP*W_mouth) isIn=.true.
+   end function gas_inj_spray
+
+   !> Function that localizes the top (y+) of the domain
+   function yp_locator(pg,i,j,k) result(isIn)
+      use pgrid_class, only: pgrid
+      implicit none
+      class(pgrid), intent(in) :: pg
+      integer, intent(in) :: i,j,k
+      logical :: isIn
+      isIn=.false.
+      if (j.eq.pg%jmax+1) isIn=.true.
+   end function yp_locator
+
+
+   !> Function that localizes the bottom (y-) of the domain
+   function ym_locator(pg,i,j,k) result(isIn)
+      use pgrid_class, only: pgrid
+      implicit none
+      class(pgrid), intent(in) :: pg
+      integer, intent(in) :: i,j,k
+      logical :: isIn
+      isIn=.false.
+      if (j.eq.pg%jmin) isIn=.true.
+   end function ym_locator
+
+
+   !> Function that localizes the top (z+) of the domain
+   function zp_locator(pg,i,j,k) result(isIn)
+      use pgrid_class, only: pgrid
+      implicit none
+      class(pgrid), intent(in) :: pg
+      integer, intent(in) :: i,j,k
+      logical :: isIn
+      isIn=.false.
+      if (k.eq.pg%kmax+1) isIn=.true.
+   end function zp_locator
+
+
+   !> Function that localizes the bottom (z-) of the domain
+   function zm_locator(pg,i,j,k) result(isIn)
+      use pgrid_class, only: pgrid
+      implicit none
+      class(pgrid), intent(in) :: pg
+      integer, intent(in) :: i,j,k
+      logical :: isIn
+      isIn=.false.
+      if (k.eq.pg%kmin) isIn=.true.
+   end function zm_locator
+
 
    !> Initialization of block 2
    subroutine init(b)
+   !subroutine init(b,Unudge,Vnudge,Wnudge) ! Attempt to init b2 depending on vel from b1
       use param, only: param_read
       implicit none
       class(block2), intent(inout) :: b
@@ -98,10 +166,15 @@ contains
          b%fs%visc=visc_g
          ! Assign constant density to each phase
          call param_read('Gas density',b%fs%rho)
-         ! Inflow on the left
-         !call b%fs%add_bcond(name='inflow' ,type=dirichlet      ,face='x',dir=-1,canCorrect=.false.,locator=left_boundary_mouth)
+         ! Define direction gas/liquid stream boundary conditions (inflow from block1 to block2)
+         call b%fs%add_bcond(name='gas_inj',type=dirichlet      ,face='x',dir=-1,canCorrect=.false.,locator=gas_inj_spray)
+         ! Neumann on the side
+         call b%fs%add_bcond(name='bc_yp'  ,type=clipped_neumann,face='y',dir=+1,canCorrect=.true. ,locator=yp_locator)
+         call b%fs%add_bcond(name='bc_ym'  ,type=clipped_neumann,face='y',dir=-1,canCorrect=.true. ,locator=ym_locator)
+         call b%fs%add_bcond(name='bc_zp'  ,type=clipped_neumann,face='z',dir=+1,canCorrect=.true. ,locator=zp_locator)
+         call b%fs%add_bcond(name='bc_zm'  ,type=clipped_neumann,face='z',dir=-1,canCorrect=.true. ,locator=zm_locator)
          ! Outflow on the right
-         !call b%fs%add_bcond(name='outflow',type=clipped_neumann,face='x',dir=+1,canCorrect=.true. ,locator=right_boundary)
+         call b%fs%add_bcond(name='outflow',type=clipped_neumann,face='x',dir=+1,canCorrect=.true. ,locator=right_boundary)
          ! Prepare and configure pressure solver
          b%ps=hypre_uns(cfg=b%cfg,name='Pressure',method=gmres_amg,nst=7)
          call param_read('Pressure iteration',b%ps%maxit)
@@ -124,13 +197,13 @@ contains
          ! Zero initial field
          b%fs%U=0.0_WP; b%fs%V=0.0_WP; b%fs%W=0.0_WP
          ! Apply Dirichlet at inlet
-         !call param_read('Gas velocity',Uin)
-         !call param_read('Gas thickness',delta)
-         !call param_read('Gas perturbation',Urand)
-         !call b%fs%get_bcond('inflow',mybc)
+         !call b%fs%get_bcond('gas_inj',mybc)
          !do n=1,mybc%itr%no_
          !   i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
          !   b%fs%U(i,j,k)=Uin*tanh(2.0_WP*(0.5_WP*W_mouth-abs(b%fs%cfg%zm(k)))/delta)*tanh(2.0_WP*b%fs%cfg%ym(j)/delta)*tanh(2.0_WP*(H_mouth-b%fs%cfg%ym(j))/delta)+random_uniform(-Urand,Urand)
+         !   ! U velocity in x/i
+         !   ! V velocity in y/j
+         !   ! W velocity in z/k
          !end do
          ! Apply all other boundary conditions
          call b%fs%apply_bcond(b%time%t,b%time%dt)
