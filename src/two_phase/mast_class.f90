@@ -213,7 +213,6 @@ module mast_class
       procedure :: harmonize_advpressure_bulkmod          !< Calculate PA and RHOSS2 for Helmholtz equation
       ! For pressure correction
       procedure :: pressureproj_correct                   !< Overall subroutine for pressure solve correction
-      procedure :: get_pgrad                              !< Calculate pressure gradient
       ! For pressure relaxation
       procedure :: pressure_relax                         !< Loop to relax pressure, change VF and phase values, at end of timetep
       procedure :: pressure_relax_one                     !< Routine to perform mechanical relaxation for an individual cell
@@ -2246,6 +2245,9 @@ contains
      call this%interp_vel_full(vf,dt,this%Ui,this%Vi,this%Wi,termU,termV,termW,this%U,this%V,this%W)
      ! Disassociate pointers at end of use
      nullify(termU,termV,termW)
+     ! Address BCs of velocity field
+     bc_scope = 'velocity'
+     call this%apply_bcond(dt,bc_scope)
      ! Calculate mixed advected pressure and bulk modulus
      call this%harmonize_advpressure_bulkmod(vf,matmod)
      ! Calculate pressure jump
@@ -2828,33 +2830,7 @@ contains
       end do
 
     end subroutine interp_pressure_density
-   
-   
-   !> Calculate the pressure gradient based on P
-   subroutine get_pgrad(this,P,Pgradx,Pgrady,Pgradz)
-      implicit none
-      class(mast), intent(inout) :: this
-      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in)  :: P      !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
-      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(out) :: Pgradx !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
-      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(out) :: Pgrady !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
-      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(out) :: Pgradz !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
-      integer :: i,j,k
-      do k=this%cfg%kmin_,this%cfg%kmax_
-         do j=this%cfg%jmin_,this%cfg%jmax_
-            do i=this%cfg%imin_,this%cfg%imax_
-               Pgradx(i,j,k)=sum(this%divu_x(:,i,j,k)*P(i-1:i,j,k))-this%dPjx(i,j,k)
-               Pgrady(i,j,k)=sum(this%divv_y(:,i,j,k)*P(i,j-1:j,k))-this%dPjy(i,j,k)
-               Pgradz(i,j,k)=sum(this%divw_z(:,i,j,k)*P(i,j,k-1:k))-this%dPjz(i,j,k)
-            end do
-         end do
-      end do
-      ! Sync it
-      call this%cfg%sync(Pgradx)
-      call this%cfg%sync(Pgrady)
-      call this%cfg%sync(Pgradz)
-   end subroutine get_pgrad
-   
-   
+
    !> Calculate the interpolated velocity, which is the velocity at the face
    subroutine interp_vel_basic(this,vf,Ui,Vi,Wi,U,V,W)
      use vfs_class, only : vfs
@@ -3014,14 +2990,15 @@ contains
      integer  :: i,j,k
      real(WP) :: vol_r,vol_l,rho_r,rho_l
      real(WP), dimension(0:1) :: jumpx,jumpy,jumpz
-                                                                                    
+
+     ! Begin at zero every time
+     termU = 0.0_WP
+     termV = 0.0_WP
+     termW = 0.0_WP
+
      do k=this%cfg%kmin_,this%cfg%kmax_
         do j=this%cfg%jmin_,this%cfg%jmax_
            do i=this%cfg%imin_,this%cfg%imax_
-              ! Begin at zero every time
-              termU(i,j,k) = 0.0_WP
-              termV(i,j,k) = 0.0_WP
-              termW(i,j,k) = 0.0_WP
 
               ! No need to calculate terms inside of wall cell or masked BCs
               if (this%mask(i,j,k).gt.0) cycle
