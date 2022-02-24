@@ -204,6 +204,7 @@ contains
          call fs%pressure_relax(vf,matmod)
          ! Calculate initial phase and bulk moduli
          call fs%init_phase_bulkmod(vf,matmod)
+         call fs%reinit_phase_pressure(vf,matmod)
          call fs%harmonize_advpressure_bulkmod(vf,matmod)
          ! Set initial pressure to harmonized field based on internal energy
          fs%P = fs%PA
@@ -337,7 +338,7 @@ contains
             call fs%pressureproj_prepare(time%dt,vf,matmod)
             ! Initialize and solve Helmholtz equation
             call fs%psolv%setup()
-            fs%psolv%sol=0.0_WP
+            fs%psolv%sol=fs%PA
             call fs%psolv%solve()
             call fs%cfg%sync(fs%psolv%sol)
             ! Perform corrector step using solution
