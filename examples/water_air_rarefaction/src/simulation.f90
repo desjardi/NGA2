@@ -124,7 +124,7 @@ contains
       ! Create a compressible two-phase flow solver
       create_and_initialize_flow_solver: block
          use mast_class, only: clipped_neumann,dirichlet,bc_scope,bcond
-         use ils_class,  only: gmres_amg
+         use ils_class,  only: gmres_amg,pcg_bbox
          use mathtools,  only: Pi
          integer :: i,j,k,n
          real(WP), dimension(3) :: xyz
@@ -156,7 +156,7 @@ contains
          call param_read('Implicit iteration',fs%implicit%maxit)
          call param_read('Implicit tolerance',fs%implicit%rcvg)
          ! Setup the solver
-         call fs%setup(pressure_ils=gmres_amg,implicit_ils=gmres_amg)
+         call fs%setup(pressure_ils=pcg_bbox,implicit_ils=gmres_amg)
 
          ! Initial conditions
          call param_read('Liquid density',rho_l0)
