@@ -5,7 +5,7 @@ module block2_class
    use geometry,          only: t_wall,L_mouth,H_mouth,W_mouth,L_film,H_film,W_film,L_lip
    use config_class,      only: config
    use incomp_class,      only: incomp
-   use hypre_uns_class,   only: hypre_uns
+   use hypre_str_class,   only: hypre_str
    use lpt_class,         only: lpt
    use sgsmodel_class,    only: sgsmodel
    use timetracker_class, only: timetracker
@@ -25,8 +25,8 @@ module block2_class
    type :: block2
       class(config), pointer :: cfg                 !< Pointer to config
       type(incomp) :: fs                            !< Single-phase incompressible flow solver
-      type(hypre_uns) :: ps                         !< Unstructured HYPRE pressure solver
-      type(hypre_uns) :: is                         !< Unstructured HYPRE implicit solver
+      type(hypre_str) :: ps                         !< Unstructured HYPRE pressure solver
+      type(hypre_str) :: is                         !< Unstructured HYPRE implicit solver
       type(lpt)       :: lp                         !< Lagrangian particle tracking
       type(partmesh)  :: pmesh                      !< Partmesh for Lagrangian particle output
       type(timetracker) :: time                     !< Time tracker
@@ -55,6 +55,16 @@ module block2_class
 
 
 contains
+
+   !> Function that localizes the left domain boundary
+   function left_boundary(pg,i,j,k) result(isIn)
+      use pgrid_class, only: pgrid
+      class(pgrid), intent(in) :: pg
+      integer, intent(in) :: i,j,k
+      logical :: isIn
+      isIn=.false.
+      if (i.eq.pg%imin) isIn=.true.
+   end function left_boundary
 
    !> Function that localizes the right domain boundary
    function right_boundary(pg,i,j,k) result(isIn)
@@ -126,7 +136,6 @@ contains
 
    !> Initialization of block 2
    subroutine init(b)
-   !subroutine init(b,Unudge,Vnudge,Wnudge) ! Attempt to init b2 depending on vel from b1
       use param, only: param_read
       implicit none
       class(block2), intent(inout) :: b
@@ -147,7 +156,7 @@ contains
       ! Initialize time tracker
       initialize_timetracker: block
          b%time=timetracker(b%cfg%amRoot,name='cough_machine_out')
-         call param_read('Max timestep size',b%time%dtmax)
+         call param_read('2 Max timestep size',b%time%dtmax)
          call param_read('Max cfl number',b%time%cflmax)
          call param_read('Max time',b%time%tmax)
          b%time%dt=b%time%dtmax
@@ -158,7 +167,7 @@ contains
       ! Create a single-phase flow solver with bconds
       create_solver: block
          use incomp_class,    only: dirichlet,clipped_neumann,neumann
-         use hypre_uns_class, only: gmres_amg
+         use hypre_str_class, only: pcg_pfmg
          ! Create a single-phase flow solver
          b%fs=incomp(cfg=b%cfg,name='Single-phase NS')
          ! Assign constant viscosity to each phase
@@ -167,20 +176,23 @@ contains
          ! Assign constant density to each phase
          call param_read('Gas density',b%fs%rho)
          ! Define direction gas/liquid stream boundary conditions (inflow from block1 to block2)
-         call b%fs%add_bcond(name='gas_inj',type=dirichlet      ,face='x',dir=-1,canCorrect=.false.,locator=gas_inj_spray)
-         ! Neumann on the side
-         call b%fs%add_bcond(name='bc_yp'  ,type=clipped_neumann,face='y',dir=+1,canCorrect=.true. ,locator=yp_locator)
-         call b%fs%add_bcond(name='bc_ym'  ,type=clipped_neumann,face='y',dir=-1,canCorrect=.true. ,locator=ym_locator)
-         call b%fs%add_bcond(name='bc_zp'  ,type=clipped_neumann,face='z',dir=+1,canCorrect=.true. ,locator=zp_locator)
-         call b%fs%add_bcond(name='bc_zm'  ,type=clipped_neumann,face='z',dir=-1,canCorrect=.true. ,locator=zm_locator)
+         !call b%fs%add_bcond(name='gas_inj',type=dirichlet      ,face='x',dir=-1,canCorrect=.false.,locator=gas_inj_spray)
+         ! Neumann on block 1 interface
+         call b%fs%add_bcond(name='b1_interface'  ,type=neumann,face='x',dir=-1,canCorrect=.true. ,locator=left_boundary)
+         ! Neumann on the sides
+         call b%fs%add_bcond(name='bc_yp'  ,type=neumann,face='y',dir=+1,canCorrect=.true. ,locator=yp_locator)
+         call b%fs%add_bcond(name='bc_ym'  ,type=neumann,face='y',dir=-1,canCorrect=.true. ,locator=ym_locator)
+         call b%fs%add_bcond(name='bc_zp'  ,type=neumann,face='z',dir=+1,canCorrect=.true. ,locator=zp_locator)
+         call b%fs%add_bcond(name='bc_zm'  ,type=neumann,face='z',dir=-1,canCorrect=.true. ,locator=zm_locator)
          ! Outflow on the right
          call b%fs%add_bcond(name='outflow',type=clipped_neumann,face='x',dir=+1,canCorrect=.true. ,locator=right_boundary)
          ! Prepare and configure pressure solver
-         b%ps=hypre_uns(cfg=b%cfg,name='Pressure',method=gmres_amg,nst=7)
+         b%ps=hypre_str(cfg=b%cfg,name='Pressure',method=pcg_pfmg,nst=7)
+         b%ps%maxlevel=20
          call param_read('Pressure iteration',b%ps%maxit)
          call param_read('Pressure tolerance',b%ps%rcvg)
          ! Prepare and configure implicit solver
-         b%is=hypre_uns(cfg=b%cfg,name='Implicit',method=gmres_amg,nst=7)
+         b%is=hypre_str(cfg=b%cfg,name='Implicit',method=pcg_pfmg,nst=7)
          call param_read('Implicit iteration',b%is%maxit)
          call param_read('Implicit tolerance',b%is%rcvg)
          ! Setup the solver
@@ -190,7 +202,7 @@ contains
 
       ! Initialize our velocity field
       initialize_velocity: block
-         use tpns_class, only: bcond
+         use incomp_class, only: bcond
          use random,     only: random_uniform
          type(bcond), pointer :: mybc
          integer  :: n,i,j,k
