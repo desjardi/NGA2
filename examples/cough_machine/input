@@ -15,12 +15,18 @@
 1 nz :  1
 
 # Zoomed out mesh definition
-2 Lx :  1
-2 Ly :  0.5
-2 Lz :  0.0005
-2 nx :  100
-2 ny :  50
-2 nz :  1
+2 Uniform Lx :  0.3
+2 Uniform Ly :  0.1
+2 Uniform Lz :  0.0005
+2 Uniform nx :  60
+2 Uniform ny :  30
+2 Uniform nz :  1
+2 Total nx :  92
+2 Total ny :  80
+2 Total nz :  1
+2 Stretching x : 1.08
+2 Stretching y : 1.08
+2 Stretching z : 1
 
 # Injection velocity
 Gas velocity :       20

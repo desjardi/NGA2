@@ -70,6 +70,50 @@ contains
    end function right_boundary
    
    
+   !> Function that localizes the top domain boundary
+   function top_boundaryV(pg,i,j,k) result(isIn)
+      use pgrid_class, only: pgrid
+      class(pgrid), intent(in) :: pg
+      integer, intent(in) :: i,j,k
+      logical :: isIn
+      isIn=.false.
+      if (j.eq.pg%jmax+1) isIn=.true.
+   end function top_boundaryV
+   
+   
+   !> Function that localizes the bottom domain boundary
+   function bottom_boundaryV(pg,i,j,k) result(isIn)
+      use pgrid_class, only: pgrid
+      class(pgrid), intent(in) :: pg
+      integer, intent(in) :: i,j,k
+      logical :: isIn
+      isIn=.false.
+      if (j.eq.pg%jmin) isIn=.true.
+   end function bottom_boundaryV
+   
+   
+   !> Function that localizes the top domain boundary
+   function top_boundaryU(pg,i,j,k) result(isIn)
+      use pgrid_class, only: pgrid
+      class(pgrid), intent(in) :: pg
+      integer, intent(in) :: i,j,k
+      logical :: isIn
+      isIn=.false.
+      if (j.eq.pg%jmax+1) isIn=.true.
+   end function top_boundaryU
+   
+   
+   !> Function that localizes the bottom domain boundary
+   function bottom_boundaryU(pg,i,j,k) result(isIn)
+      use pgrid_class, only: pgrid
+      class(pgrid), intent(in) :: pg
+      integer, intent(in) :: i,j,k
+      logical :: isIn
+      isIn=.false.
+      if (j.eq.pg%jmin-1) isIn=.true.
+   end function bottom_boundaryU
+   
+   
    !> Initialization of block 1
    subroutine init(b)
       use param, only: param_read
@@ -164,6 +208,11 @@ contains
          call b%fs%add_bcond(name='inflow' ,type=dirichlet      ,face='x',dir=-1,canCorrect=.false.,locator=left_boundary_mouth)
          ! Outflow on the right
          call b%fs%add_bcond(name='outflow',type=clipped_neumann,face='x',dir=+1,canCorrect=.true. ,locator=right_boundary)
+         ! Dirichlet top and bottom
+         call b%fs%add_bcond(name='topU'   ,type=dirichlet,face='x',dir= 0,canCorrect=.false.,locator=   top_boundaryU)
+         call b%fs%add_bcond(name='topV'   ,type=dirichlet,face='y',dir=+1,canCorrect=.false.,locator=   top_boundaryV)
+         call b%fs%add_bcond(name='bottomU',type=dirichlet,face='x',dir= 0,canCorrect=.false.,locator=bottom_boundaryU)
+         call b%fs%add_bcond(name='bottomV',type=dirichlet,face='y',dir=-1,canCorrect=.false.,locator=bottom_boundaryV)
          ! Configure pressure solver
          call param_read('Pressure iteration',b%fs%psolv%maxit)
          call param_read('Pressure tolerance',b%fs%psolv%rcvg)
@@ -171,8 +220,8 @@ contains
          call param_read('Implicit iteration',b%fs%implicit%maxit)
          call param_read('Implicit tolerance',b%fs%implicit%rcvg)
          ! Setup the solver
-         !b%fs%psolv%maxlevel=10
-         call b%fs%setup(pressure_ils=gmres_amg,implicit_ils=gmres_amg)
+         b%fs%psolv%maxlevel=10
+         call b%fs%setup(pressure_ils=pcg_pfmg,implicit_ils=pcg_pfmg)
       end block create_solver
       
       
@@ -270,10 +319,13 @@ contains
    
    
    !> Take a time step with block 1
-   subroutine step(b)
+   subroutine step(b,Udir,Vdir,Wdir)
       use tpns_class, only: static_contact
       implicit none
       class(block1), intent(inout) :: b
+      real(WP), dimension(b%cfg%imino_:,b%cfg%jmino_:,b%cfg%kmino_:), intent(inout) :: Udir     !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      real(WP), dimension(b%cfg%imino_:,b%cfg%jmino_:,b%cfg%kmino_:), intent(inout) :: Vdir     !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      real(WP), dimension(b%cfg%imino_:,b%cfg%jmino_:,b%cfg%kmino_:), intent(inout) :: Wdir     !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       
       ! Increment time
       call b%fs%get_cfl(b%time%dt,b%time%cfl)
@@ -288,16 +340,39 @@ contains
       b%fs%Vold=b%fs%V
       b%fs%Wold=b%fs%W
       
-      ! Reapply Dirichlet at inlet
+      ! Reapply Dirichlet conditions
       reapply_dirichlet: block
          use tpns_class, only: bcond
          use random,     only: random_uniform
          type(bcond), pointer :: mybc
          integer  :: n,i,j,k
+         ! Reapply Dirichlet at inlet
          call b%fs%get_bcond('inflow',mybc)
          do n=1,mybc%itr%no_
             i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
             b%fs%U(i,j,k)=Uin*tanh(2.0_WP*(0.5_WP*W_mouth-abs(b%fs%cfg%zm(k)))/delta)*tanh(2.0_WP*b%fs%cfg%ym(j)/delta)*tanh(2.0_WP*(H_mouth-b%fs%cfg%ym(j))/delta)+random_uniform(-Urand,Urand)
+         end do
+         ! Reapply Dirichlet at top
+         call b%fs%get_bcond('topU',mybc)
+         do n=1,mybc%itr%no_
+            i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
+            b%fs%U(i,j,k)=Udir(i,j,k)
+         end do
+         call b%fs%get_bcond('topV',mybc)
+         do n=1,mybc%itr%no_
+            i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
+            b%fs%V(i,j,k)=Vdir(i,j,k)
+         end do
+         ! Reapply Dirichlet at bottom
+         call b%fs%get_bcond('bottomU',mybc)
+         do n=1,mybc%itr%no_
+            i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
+            b%fs%U(i,j,k)=Udir(i,j,k)
+         end do
+         call b%fs%get_bcond('bottomV',mybc)
+         do n=1,mybc%itr%no_
+            i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
+            b%fs%V(i,j,k)=Vdir(i,j,k)
          end do
       end block reapply_dirichlet
       

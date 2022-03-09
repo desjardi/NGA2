@@ -5,7 +5,7 @@ module block2_class
    use geometry,          only: t_wall,L_mouth,H_mouth,W_mouth,L_film,H_film,W_film,L_lip
    use config_class,      only: config
    use incomp_class,      only: incomp
-   use hypre_uns_class,   only: hypre_uns
+   use hypre_str_class,   only: hypre_str
    use sgsmodel_class,    only: sgsmodel
    use timetracker_class, only: timetracker
    use ensight_class,     only: ensight
@@ -24,8 +24,8 @@ module block2_class
    type :: block2
       class(config), pointer :: cfg       !< Pointer to config
       type(incomp) :: fs                  !< Single-phase incompressible flow solver
-      type(hypre_uns) :: ps               !< Unstructured HYPRE pressure solver
-      type(hypre_uns) :: is               !< Unstructured HYPRE implicit solver
+      type(hypre_str) :: ps               !< Structured HYPRE pressure solver
+      type(hypre_str) :: is               !< Structured HYPRE implicit solver
       type(timetracker) :: time           !< Time tracker
       type(sgsmodel) ::  sgs              !< SGS model
       type(ensight) :: ens_out            !< Ensight output
@@ -52,6 +52,50 @@ module block2_class
    
    
 contains
+   
+   
+   !> Function that localizes the leftmost domain boundary
+   function left_boundary(pg,i,j,k) result(isIn)
+      use pgrid_class, only: pgrid
+      class(pgrid), intent(in) :: pg
+      integer, intent(in) :: i,j,k
+      logical :: isIn
+      isIn=.false.
+      if (i.eq.pg%imin) isIn=.true.
+   end function left_boundary
+   
+   
+   !> Function that localizes the rightmost domain boundary
+   function right_boundary(pg,i,j,k) result(isIn)
+      use pgrid_class, only: pgrid
+      class(pgrid), intent(in) :: pg
+      integer, intent(in) :: i,j,k
+      logical :: isIn
+      isIn=.false.
+      if (i.eq.pg%imax+1) isIn=.true.
+   end function right_boundary
+   
+   
+   !> Function that localizes the top domain boundary
+   function top_boundary(pg,i,j,k) result(isIn)
+      use pgrid_class, only: pgrid
+      class(pgrid), intent(in) :: pg
+      integer, intent(in) :: i,j,k
+      logical :: isIn
+      isIn=.false.
+      if (j.eq.pg%jmax+1) isIn=.true.
+   end function top_boundary
+   
+   
+   !> Function that localizes the bottom domain boundary
+   function bottom_boundary(pg,i,j,k) result(isIn)
+      use pgrid_class, only: pgrid
+      class(pgrid), intent(in) :: pg
+      integer, intent(in) :: i,j,k
+      logical :: isIn
+      isIn=.false.
+      if (j.eq.pg%jmin) isIn=.true.
+   end function bottom_boundary
    
    
    !> Initialization of block 2
@@ -87,7 +131,7 @@ contains
       ! Create a single-phase flow solver with bconds
       create_solver: block
          use incomp_class,    only: dirichlet,clipped_neumann,neumann
-         use hypre_uns_class, only: gmres_amg
+         use hypre_str_class, only: pcg_pfmg
          ! Create a single-phase flow solver
          b%fs=incomp(cfg=b%cfg,name='Single-phase NS')
          ! Assign constant viscosity to each phase
@@ -95,16 +139,19 @@ contains
          b%fs%visc=visc_g
          ! Assign constant density to each phase
          call param_read('Gas density',b%fs%rho)
-         ! Inflow on the left
-         !call b%fs%add_bcond(name='inflow' ,type=dirichlet      ,face='x',dir=-1,canCorrect=.false.,locator=left_boundary_mouth)
-         ! Outflow on the right
-         !call b%fs%add_bcond(name='outflow',type=clipped_neumann,face='x',dir=+1,canCorrect=.true. ,locator=right_boundary)
+         ! Apply clipped Neumann on the right
+         call b%fs%add_bcond(name='outflow',type=clipped_neumann,face='x',dir=+1,canCorrect=.true.,locator=right_boundary)
+         ! Apply Neumann everywhere else
+         call b%fs%add_bcond(name=   'top',type=neumann,face='y',dir=+1,canCorrect=.false.,locator=   top_boundary)
+         call b%fs%add_bcond(name='bottom',type=neumann,face='y',dir=-1,canCorrect=.false.,locator=bottom_boundary)
+         call b%fs%add_bcond(name=  'left',type=neumann,face='x',dir=-1,canCorrect=.false.,locator=  left_boundary)
          ! Prepare and configure pressure solver
-         b%ps=hypre_uns(cfg=b%cfg,name='Pressure',method=gmres_amg,nst=7)
+         b%ps=hypre_str(cfg=b%cfg,name='Pressure',method=pcg_pfmg,nst=7)
+         b%ps%maxlevel=12
          call param_read('Pressure iteration',b%ps%maxit)
          call param_read('Pressure tolerance',b%ps%rcvg)
          ! Prepare and configure implicit solver
-         b%is=hypre_uns(cfg=b%cfg,name='Implicit',method=gmres_amg,nst=7)
+         b%is=hypre_str(cfg=b%cfg,name='Implicit',method=pcg_pfmg,nst=7)
          call param_read('Implicit iteration',b%is%maxit)
          call param_read('Implicit tolerance',b%is%rcvg)
          ! Setup the solver
