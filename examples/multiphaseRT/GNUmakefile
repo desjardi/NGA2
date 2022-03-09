@@ -7,7 +7,7 @@ USE_MPI   = TRUE
 USE_HYPRE = TRUE
 USE_LAPACK= TRUE
 USE_IRL   = TRUE
-USE_ODRPACK=TRUE
+USE_ODRPACK=FALSE
 PROFILE   = FALSE
 DEBUG     = FALSE
 COMP      = gnu
@@ -27,7 +27,7 @@ VPATH_LOCATIONS   += $(Ulocs)
 HYPRE_DIR = /Users/desjardi/Builds/hypre
 IRL_DIR   = /Users/desjardi/Builds/IRL
 LAPACK_DIR= /Users/desjardi/Builds/lapack
-ODRPACK_DIR=/Users/desjardi/Builds/odrpack
+#ODRPACK_DIR=/Users/desjardi/Builds/odrpack
 
 # NGA compilation definitions
 include $(NGA_HOME)/tools/GNUMake/Make.defs
