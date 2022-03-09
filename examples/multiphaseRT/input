@@ -2,15 +2,23 @@
 Partition :	4 1 1
 
 # Mesh definition
-Lx : 1e-3
-nx : 50
+Lx :	1e-2
+Ly :	2e-2
+Lz :	2e-4
+nx :	50
+ny :	100
+nz :	1
 
 # Fluid properties
-Dynamic viscosity : 1.780e-5
-Density :           1.226
+Gravity :                     0 -1 0
+Liquid dynamic viscosity :    0
+Gas dynamic viscosity :       0
+Liquid density :              10
+Gas density :                 1
+Surface tension coefficient : 0.00
 
 # Time integration
-Max timestep size : 1e-2
+Max timestep size : 1e-5
 Max cfl number :    0.9
 
 # Pressure solver
@@ -22,4 +30,4 @@ Implicit tolerance : 1e-6
 Implicit iteration : 100
 
 # Ensight output
-Ensight output period : 1e-1
+Ensight output period : 1e-3

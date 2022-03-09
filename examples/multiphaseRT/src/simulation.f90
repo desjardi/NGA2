@@ -132,7 +132,7 @@ contains
          ! Create a VOF solver
          vf=vfs(cfg=cfg,reconstruction_method=lvira,name='VOF')
          ! Initialize to a droplet
-         amp0=1.0e-2_WP*cfg%min_meshsize
+         amp0=cfg%min_meshsize
          do k=vf%cfg%kmino_,vf%cfg%kmaxo_
             do j=vf%cfg%jmino_,vf%cfg%jmaxo_
                do i=vf%cfg%imino_,vf%cfg%imaxo_
@@ -279,7 +279,7 @@ contains
       implicit none
       
       ! Perform time integration
-      do while (.not.time%done().and.amp.lt.0.1_WP*vf%cfg%yL.and.time%t.lt.20.0_WP*tau)
+      do while (.not.time%done())!.and.amp.lt.0.1_WP*vf%cfg%yL.and.time%t.lt.20.0_WP*tau)
          
          ! Increment time
          call fs%get_cfl(time%dt,time%cfl)
@@ -378,82 +378,82 @@ contains
       end do
       
       ! Post-process growth rate using ODRPACK
-      odr_fit: block
-         use, intrinsic :: iso_fortran_env, only: output_unit
-         use mathtools, only: twoPi
-         use messager,  only: log
-         use string,    only: str_long
-         character(len=str_long) :: message
-         integer :: i
-         ! ODRPACK variables - explicit model based on exponential of time
-         integer                       :: N                      !> Number of observations (number of polygons)
-         integer , parameter           :: M=1                    !> Number of elements per explanatory variables (1 time)
-         integer , parameter           :: NP=2                   !> Number of parameters in our model (2 for a normalized exponential in time with time shift)
-         integer , parameter           :: NQ=1                   !> Number of response per observation (only 1, the normalized amplitude)
-         real(WP), dimension(NP)       :: BETA=0.0_WP            !> Array of model parameter values (the growth rate and time shift)
-         real(WP), dimension(:,:)  , allocatable :: YY           !> Value of response variable (of size LDYYxNQ)
-         integer                       :: LDYY                   !> Leading dimension of YY (equals N since an explicit model is used)
-         real(WP), dimension(:,:)  , allocatable :: XX           !> Value of explanatory variable (of size LDXXxM)
-         integer                       :: LDXX                   !> Leading dimension of XX (equals N)
-         real(WP), dimension(:,:,:), allocatable :: WE           !> Weighting of response data (of size LDWExLD2WExNQ)
-         integer                       :: LDWE                   !> Leading dimension of WE (equals N since an explicit model is used)
-         integer                       :: LD2WE                  !> Second dimension of WE (equals NQ)
-         real(WP), dimension(:,:,:), allocatable :: WD           !> Weighting of explanatory data (of size LDWDxLD2WDxM)
-         integer                       :: LDWD                   !> Leading dimension of WD (equals N)
-         integer                       :: LD2WD                  !> Second dimension of WD (equals 1)
-         integer , dimension(NP)       :: IFIXB=-1               !> Whether any model parameters has to be kept constant
-         integer , parameter           :: LDIFX=1                !> Leading dimension of IFIXX (equals 1)
-         integer , dimension(LDIFX,M)  :: IFIXX=-1               !> Whether any explanatory variable data is to be treated as "fixed"
-         integer                       :: JOB=00030              !> 5-digit parameter flag that controls execution (this invokes analytical Jacobian with explicit model)
-         integer                       :: NDIGIT=1               !> Number of reliable digits in our model - let ODRPACK figure it out on its own
-         real(WP)                      :: TAUFAC=0.0_WP          !> To control size of first step (ignored here)
-         real(WP)                      :: SSTOL=-1.0_WP          !> Relative cvg of sum of squares: this sets it to 1e-8             ********* Need to change to sth else
-         real(WP)                      :: PARTOL=-1.0_WP         !> Relative cvg for model parameters: this sets it to 1e-11         ********* Need to change to sth else
-         integer                       :: MAXIT=-1               !> Maximum number of iterations                                     ********* Need to change to sth else
-         integer                       :: IPRINT=0               !> 4-digit parameter flag for controlling printing (default is -1)
-         integer                       :: LUNERR=10              !> Logical unit for error reporting (6 by default)
-         integer                       :: LUNRPT=10              !> Logical unit for reporting
-         real(WP), dimension(NP)       :: STPB=0.0_WP            !> Relative step sizes for Jacobian for model parameters (here, default)
-         integer , parameter           :: LDSTPD=1               !> Leading dimension of STPD, either 1 or N (here, 1)
-         real(WP), dimension(LDSTPD,1) :: STPD=0.0_WP            !> Relative step sizes for Jacobian for input errors (here, default)
-         real(WP), dimension(NP)       :: SCLB=1.0_WP            !> Scaling for the model parameters (here, not default but set to 1.0 to avoid rescaling 0 coefficients)
-         real(WP), dimension(:,:)  , allocatable :: SCLD         !> Scaling for the input errors (here, not default but set to 1.0 to avoid rescaling 0 coefficients)
-         integer                       :: LDSCLD                 !> Leading dimension of SCLD, either 1 or N (here, N)
-         integer                       :: LWORK                  !> Size of WORK array
-         real(WP), dimension(:)    , allocatable :: WORK         !> WORK array
-         integer , parameter           :: LiWORK=20+NP+NQ*(NP+M) !> Size of IWORK array
-         integer , dimension(LiWORK)   :: iWORK                  !> iWORK array
-         integer                       :: INFO                   !> Why the calculations stopped
-         ! Copy over data and sizes
-         N=size(all_time,dim=1)
-         LDYY=N; allocate(YY(LDYY,NQ)); YY(:,1)=all_amp/amp0
-         LDXX=N; allocate(XX(LDXX,M )); XX(:,1)=all_time
-         LDWE=N; LD2WE=NQ; allocate(WE(LDWE,LD2WE,NQ)); WE=1.0_WP
-         LDWD=N; LD2WD=1 ; allocate(WD(LDWD,LD2WD,M )); WD=1.0_WP
-         LDSCLD=N; allocate(SCLD(LDSCLD,M)); SCLD=1.0_WP
-         LWORK=18+11*NP+NP**2+M+M**2+4*N*NQ+6*N*M+2*N*NQ*NP+2*N*NQ*M+NQ**2+5*NQ+NQ*(NP+M)+(LDWE*LD2WE)*NQ; allocate(WORK(LWORK))
-         ! Call ODRPACK to find time shift
-         call DODRC(exponential_model,N,M,NP,NQ,BETA,YY,LDYY,XX,LDXX,WE,LDWE,LD2WE,WD,LDWD,LD2WD,IFIXB,IFIXX,LDIFX,JOB,NDIGIT,TAUFAC,&
-         &          SSTOL,PARTOL,MAXIT,IPRINT,LUNERR,LUNRPT,STPB,STPD,LDSTPD,SCLB,SCLD,LDSCLD,WORK,LWORK,iWORK,LiWORK,INFO)
-         ! Adjust weights to eliminate the early non-exponential part
-         do i=1,size(all_time,dim=1)
-            if (all_time(i).le.2.0_WP*BETA(2)) then
-               WE(i,1,1)=0.0_WP
-               WD(i,1,1)=0.0_WP
-            end if
-         end do
-         ! Call ODRPACK again to find growth rate
-         call DODRC(exponential_model,N,M,NP,NQ,BETA,YY,LDYY,XX,LDXX,WE,LDWE,LD2WE,WD,LDWD,LD2WD,IFIXB,IFIXX,LDIFX,JOB,NDIGIT,TAUFAC,&
-         &          SSTOL,PARTOL,MAXIT,IPRINT,LUNERR,LUNRPT,STPB,STPD,LDSTPD,SCLB,SCLD,LDSCLD,WORK,LWORK,iWORK,LiWORK,INFO)
-         ! Get back growth rate
-         if (fs%cfg%amRoot) then
-            write(output_unit,'(es12.5,x,es12.5,x,es12.5,x,es12.5)') lc,tau,twoPi/fs%cfg%xL*lc,BETA(1)*tau
-            write(message    ,'("Reference time scale   = ",es12.5)') tau               ; call log(message)
-            write(message    ,'("Cut-off length scale   = ",es12.5)') lc                ; call log(message)
-            write(message    ,'("Normalized growth rate = ",es12.5)') BETA(1)*tau       ; call log(message)
-            write(message    ,'("Normalized wave number = ",es12.5)') twoPi/fs%cfg%xL*lc; call log(message)
-         end if
-      end block odr_fit
+      ! odr_fit: block
+      !    use, intrinsic :: iso_fortran_env, only: output_unit
+      !    use mathtools, only: twoPi
+      !    use messager,  only: log
+      !    use string,    only: str_long
+      !    character(len=str_long) :: message
+      !    integer :: i
+      !    ! ODRPACK variables - explicit model based on exponential of time
+      !    integer                       :: N                      !> Number of observations (number of polygons)
+      !    integer , parameter           :: M=1                    !> Number of elements per explanatory variables (1 time)
+      !    integer , parameter           :: NP=2                   !> Number of parameters in our model (2 for a normalized exponential in time with time shift)
+      !    integer , parameter           :: NQ=1                   !> Number of response per observation (only 1, the normalized amplitude)
+      !    real(WP), dimension(NP)       :: BETA=0.0_WP            !> Array of model parameter values (the growth rate and time shift)
+      !    real(WP), dimension(:,:)  , allocatable :: YY           !> Value of response variable (of size LDYYxNQ)
+      !    integer                       :: LDYY                   !> Leading dimension of YY (equals N since an explicit model is used)
+      !    real(WP), dimension(:,:)  , allocatable :: XX           !> Value of explanatory variable (of size LDXXxM)
+      !    integer                       :: LDXX                   !> Leading dimension of XX (equals N)
+      !    real(WP), dimension(:,:,:), allocatable :: WE           !> Weighting of response data (of size LDWExLD2WExNQ)
+      !    integer                       :: LDWE                   !> Leading dimension of WE (equals N since an explicit model is used)
+      !    integer                       :: LD2WE                  !> Second dimension of WE (equals NQ)
+      !    real(WP), dimension(:,:,:), allocatable :: WD           !> Weighting of explanatory data (of size LDWDxLD2WDxM)
+      !    integer                       :: LDWD                   !> Leading dimension of WD (equals N)
+      !    integer                       :: LD2WD                  !> Second dimension of WD (equals 1)
+      !    integer , dimension(NP)       :: IFIXB=-1               !> Whether any model parameters has to be kept constant
+      !    integer , parameter           :: LDIFX=1                !> Leading dimension of IFIXX (equals 1)
+      !    integer , dimension(LDIFX,M)  :: IFIXX=-1               !> Whether any explanatory variable data is to be treated as "fixed"
+      !    integer                       :: JOB=00030              !> 5-digit parameter flag that controls execution (this invokes analytical Jacobian with explicit model)
+      !    integer                       :: NDIGIT=1               !> Number of reliable digits in our model - let ODRPACK figure it out on its own
+      !    real(WP)                      :: TAUFAC=0.0_WP          !> To control size of first step (ignored here)
+      !    real(WP)                      :: SSTOL=-1.0_WP          !> Relative cvg of sum of squares: this sets it to 1e-8             ********* Need to change to sth else
+      !    real(WP)                      :: PARTOL=-1.0_WP         !> Relative cvg for model parameters: this sets it to 1e-11         ********* Need to change to sth else
+      !    integer                       :: MAXIT=-1               !> Maximum number of iterations                                     ********* Need to change to sth else
+      !    integer                       :: IPRINT=0               !> 4-digit parameter flag for controlling printing (default is -1)
+      !    integer                       :: LUNERR=10              !> Logical unit for error reporting (6 by default)
+      !    integer                       :: LUNRPT=10              !> Logical unit for reporting
+      !    real(WP), dimension(NP)       :: STPB=0.0_WP            !> Relative step sizes for Jacobian for model parameters (here, default)
+      !    integer , parameter           :: LDSTPD=1               !> Leading dimension of STPD, either 1 or N (here, 1)
+      !    real(WP), dimension(LDSTPD,1) :: STPD=0.0_WP            !> Relative step sizes for Jacobian for input errors (here, default)
+      !    real(WP), dimension(NP)       :: SCLB=1.0_WP            !> Scaling for the model parameters (here, not default but set to 1.0 to avoid rescaling 0 coefficients)
+      !    real(WP), dimension(:,:)  , allocatable :: SCLD         !> Scaling for the input errors (here, not default but set to 1.0 to avoid rescaling 0 coefficients)
+      !    integer                       :: LDSCLD                 !> Leading dimension of SCLD, either 1 or N (here, N)
+      !    integer                       :: LWORK                  !> Size of WORK array
+      !    real(WP), dimension(:)    , allocatable :: WORK         !> WORK array
+      !    integer , parameter           :: LiWORK=20+NP+NQ*(NP+M) !> Size of IWORK array
+      !    integer , dimension(LiWORK)   :: iWORK                  !> iWORK array
+      !    integer                       :: INFO                   !> Why the calculations stopped
+      !    ! Copy over data and sizes
+      !    N=size(all_time,dim=1)
+      !    LDYY=N; allocate(YY(LDYY,NQ)); YY(:,1)=all_amp/amp0
+      !    LDXX=N; allocate(XX(LDXX,M )); XX(:,1)=all_time
+      !    LDWE=N; LD2WE=NQ; allocate(WE(LDWE,LD2WE,NQ)); WE=1.0_WP
+      !    LDWD=N; LD2WD=1 ; allocate(WD(LDWD,LD2WD,M )); WD=1.0_WP
+      !    LDSCLD=N; allocate(SCLD(LDSCLD,M)); SCLD=1.0_WP
+      !    LWORK=18+11*NP+NP**2+M+M**2+4*N*NQ+6*N*M+2*N*NQ*NP+2*N*NQ*M+NQ**2+5*NQ+NQ*(NP+M)+(LDWE*LD2WE)*NQ; allocate(WORK(LWORK))
+      !    ! Call ODRPACK to find time shift
+      !    call DODRC(exponential_model,N,M,NP,NQ,BETA,YY,LDYY,XX,LDXX,WE,LDWE,LD2WE,WD,LDWD,LD2WD,IFIXB,IFIXX,LDIFX,JOB,NDIGIT,TAUFAC,&
+      !    &          SSTOL,PARTOL,MAXIT,IPRINT,LUNERR,LUNRPT,STPB,STPD,LDSTPD,SCLB,SCLD,LDSCLD,WORK,LWORK,iWORK,LiWORK,INFO)
+      !    ! Adjust weights to eliminate the early non-exponential part
+      !    do i=1,size(all_time,dim=1)
+      !       if (all_time(i).le.2.0_WP*BETA(2)) then
+      !          WE(i,1,1)=0.0_WP
+      !          WD(i,1,1)=0.0_WP
+      !       end if
+      !    end do
+      !    ! Call ODRPACK again to find growth rate
+      !    call DODRC(exponential_model,N,M,NP,NQ,BETA,YY,LDYY,XX,LDXX,WE,LDWE,LD2WE,WD,LDWD,LD2WD,IFIXB,IFIXX,LDIFX,JOB,NDIGIT,TAUFAC,&
+      !    &          SSTOL,PARTOL,MAXIT,IPRINT,LUNERR,LUNRPT,STPB,STPD,LDSTPD,SCLB,SCLD,LDSCLD,WORK,LWORK,iWORK,LiWORK,INFO)
+      !    ! Get back growth rate
+      !    if (fs%cfg%amRoot) then
+      !       write(output_unit,'(es12.5,x,es12.5,x,es12.5,x,es12.5)') lc,tau,twoPi/fs%cfg%xL*lc,BETA(1)*tau
+      !       write(message    ,'("Reference time scale   = ",es12.5)') tau               ; call log(message)
+      !       write(message    ,'("Cut-off length scale   = ",es12.5)') lc                ; call log(message)
+      !       write(message    ,'("Normalized growth rate = ",es12.5)') BETA(1)*tau       ; call log(message)
+      !       write(message    ,'("Normalized wave number = ",es12.5)') twoPi/fs%cfg%xL*lc; call log(message)
+      !    end if
+      ! end block odr_fit
       
       
    end subroutine simulation_run
