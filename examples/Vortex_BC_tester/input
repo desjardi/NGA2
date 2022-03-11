@@ -7,21 +7,21 @@
 #2 Partition : 1 1 1
 
 # Block 1 mesh definition
-1 Lx :  0.1
-1 Ly :  0.03
+1 Lx :  0.5
+1 Ly :  0.2
 1 Lz :  0.0005
 1 nx :  150
 1 ny :  50
 1 nz :  1
 
 # Streching
-Stretching x : 1.01
-Stretching y : 1.01
+Stretching x : 0
+Stretching y : 0
 
 # Vortex properties
-Vortex orientation : 1
-Vortex size        : 0.2
-Vortex intensity   : 20
+Orientation        : x
+Vortex size        : 0.05
+Vortex intensity   : 30
 
 # Zoomed out mesh definition
 #2 Ly :  0.5

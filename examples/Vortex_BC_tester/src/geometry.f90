@@ -5,10 +5,14 @@ module geometry
    implicit none
    private
 
-   public :: geometry_init
+   public :: geometry_init,H_vortex,W_vortex
 
    !> Config:
    type(config), target, public :: cfg1
+
+   ! Virtual mouth dimensions
+   real(WP), parameter :: H_vortex=1.0e-2_WP
+   real(WP), parameter :: W_vortex=1.0e-2_WP
 
 contains
 
@@ -21,10 +25,10 @@ contains
       create_block1: block
          use sgrid_class, only: cartesian,sgrid
          use parallel,    only: group
-         !use random,      only: random_uniform,random_initialize
-         !use mathtools,   only: twoPi
+         use random,      only: random_uniform,random_initialize
+         use mathtools,   only: twoPi
          integer :: i,j,k,nx,ny,nz
-         real(WP) :: Lx,Ly,Lz!,rand,sx,sy
+         real(WP) :: Lx,Ly,Lz,rand,sx,sy
          real(WP), dimension(:), allocatable :: x,y,z
          type(sgrid) :: grid
          integer, dimension(3) :: partition
@@ -33,8 +37,8 @@ contains
          call param_read('1 Ly',Ly); call param_read('1 ny',ny); allocate(y(ny+1))
          call param_read('1 Lz',Lz); call param_read('1 nz',nz); allocate(z(nz+1))
          ! Read in streching coefficient
-         !call param_read('Stretching x',sx)
-         !call param_read('Stretching y',sy)
+         call param_read('Stretching x',sx)
+         call param_read('Stretching y',sy)
          ! Create simple rectilinear grid
          do i=1,nx+1
             x(i)=real(i-1,WP)/real(nx,WP)*Lx
@@ -46,50 +50,40 @@ contains
             z(k)=real(k-1,WP)/real(nz,WP)*Lz-0.5_WP*Lz
          end do
          ! General serial grid object with overlap=2 for Euler-Lagrange solver
-         grid=sgrid(coord=cartesian,no=1,x=x,y=y,z=z,xper=.true.,yper=.false.,zper=.false.,name='block1')
+         grid=sgrid(coord=cartesian,no=1,x=x,y=y,z=z,xper=.true.,yper=.true.,zper=.true.,name='block1')
          ! Read in partition
          call param_read('1 Partition',partition,short='p')
          ! Create partitioned grid
          cfg1=config(grp=group,decomp=partition,grid=grid)
          ! Apply stretching
-         !if (sx.gt.0.0_WP) then
-         !   x = x + sx*sin(1.0_WP*twoPi*x/Lx)
-         !else if (sx.lt.0.0_WP) then
-         !   call random_initialize
-         !   do i=2,nx+1
-         !      call random_number(rand)
-         !      rand=1.0_WP+sx-2.0_WP*sx*rand
-         !      x(i) = x(i-1)+rand*(x(i)-x(i-1))
-         !   end do
-         !   x=x+0.5_WP*Lx
-         !   rand=x(nx+1)
-         !   x=x*Lx/rand
-         !   x=x-0.5_WP*Lx
-         !end if
-         !if (sy.gt.0.0_WP) then
-         !   y = y + sy*sin(1.0_WP*twoPi*y/Ly)
-         !else if (sy.lt.0.0_WP) then
-         !   call random_initialize
-         !   do j=2,ny+1
-         !      call random_number(rand)
-         !      rand=1.0_WP+sy-2.0_WP*sy*rand
-         !      y(j) = y(j-1)+rand*(y(j)-y(j-1))
-         !   end do
-         !   y=y+0.5_WP*Ly
-         !   rand=y(ny+1)
-         !   y=y*Ly/rand
-         !   y=y-0.5_WP*Ly
-         !end if
-
-         !do i=1,nx
-         !   cfg1%xm(i)= 0.5_WP*(x(i)+x(i+1))
-         !end do
-         !do j=1,ny
-         !   cfg1%ym(j)= 0.5_WP*(y(j)+y(j+1))
-         !end do
-         !do k=1,nz
-         !   cfg1%zm(k)= 0.5_WP*(z(k)+z(k+1))
-         !end do
+         if (sx.gt.0.0_WP) then
+            x = x + sx*sin(1.0_WP*twoPi*x/Lx)
+         else if (sx.lt.0.0_WP) then
+            call random_initialize
+            do i=2,nx+1
+               call random_number(rand)
+               rand=1.0_WP+sx-2.0_WP*sx*rand
+               x(i) = x(i-1)+rand*(x(i)-x(i-1))
+            end do
+            x=x+0.5_WP*Lx
+            rand=x(nx+1)
+            x=x*Lx/rand
+            x=x-0.5_WP*Lx
+         end if
+         if (sy.gt.0.0_WP) then
+            y = y + sy*sin(1.0_WP*twoPi*y/Ly)
+         else if (sy.lt.0.0_WP) then
+            call random_initialize
+            do j=2,ny+1
+               call random_number(rand)
+               rand=1.0_WP+sy-2.0_WP*sy*rand
+               y(j) = y(j-1)+rand*(y(j)-y(j-1))
+            end do
+            y=y+0.5_WP*Ly
+            rand=y(ny+1)
+            y=y*Ly/rand
+            y=y-0.5_WP*Ly
+         end if
       end block create_block1
 
    end subroutine geometry_init
