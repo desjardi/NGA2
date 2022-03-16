@@ -1086,6 +1086,10 @@ contains
                ! Build ratio of transported area to reference area
                trans_area_over_ref_area=this%SDold(i,j,k)/(this%SDpoly(i,j,k)*this%cfg%vol(i,j,k))
                
+               trans_area_over_ref_area_x=this%SDxold(i,j,k)/(this%SDpoly(i,j,k)*this%cfg%vol(i,j,k))
+               trans_area_over_ref_area_y=this%SDyold(i,j,k)/(this%SDpoly(i,j,k)*this%cfg%vol(i,j,k))
+               trans_area_over_ref_area_z=this%SDzold(i,j,k)/(this%SDpoly(i,j,k)*this%cfg%vol(i,j,k))
+               
                ! Construct triangulation of each interface plane
                do n=1,getNumberOfPlanes(this%liquid_gas_interface(i,j,k))
                   
