@@ -7,12 +7,18 @@
 2 Partition : 9 1 1
 
 # Zoomed in mesh definition
-1 Lx :  0.1
-1 Ly :  0.03
-1 Lz :  0.0005
-1 nx :  100
-1 ny :  30
-1 nz :  1
+1 Uniform Lx :  0.1
+1 Uniform Ly :  0.03
+1 Uniform Lz :  0.0005
+1 Uniform nx :  200
+1 Uniform ny :  60
+1 Uniform nz :  1
+1 Total nx :  200
+1 Total ny :  100
+1 Total nz :  1
+1 Stretching x : 1.08
+1 Stretching y : 1.08
+1 Stretching z : 1
 
 # Zoomed out mesh definition
 2 Uniform Lx :  0.3
@@ -32,6 +38,7 @@
 Gas velocity :       20
 Gas thickness :      0.001
 Gas perturbation :   1
+Gas coflow :         2
 
 # Fluid properties
 Gravity :                     0 -9.81 0

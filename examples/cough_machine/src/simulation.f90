@@ -53,7 +53,7 @@ contains
       end block coupler_prep
 
       ! Setup nudging region in block 2
-      b2%nudge_trans=10.0_WP*b2%cfg%min_meshsize
+      b2%nudge_trans=20.0_WP*b2%cfg%min_meshsize
       b2%nudge_xmin =-1.0_WP !b1%cfg%x(b1%cfg%imin)
       b2%nudge_xmax =b1%cfg%x(b1%cfg%imax+1)
       b2%nudge_ymin =b1%cfg%y(b1%cfg%jmin)

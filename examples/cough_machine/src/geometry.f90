@@ -37,24 +37,43 @@ contains
       create_block1: block
          use sgrid_class, only: cartesian,sgrid
          use parallel, only: group
-         integer :: i,j,k,nx,ny,nz
-         real(WP) :: Lx,Ly,Lz
+         integer :: i,j,k,nx,ny,nz,unx,uny,unz
+         real(WP) :: Lx,Ly,Lz,Sx,Sy,Sz
          real(WP), dimension(:), allocatable :: x,y,z
          type(sgrid) :: grid
          integer, dimension(3) :: partition
          ! Read in grid definition
-         call param_read('1 Lx',Lx); call param_read('1 nx',nx); allocate(x(nx+1))
-         call param_read('1 Ly',Ly); call param_read('1 ny',ny); allocate(y(ny+1))
-         call param_read('1 Lz',Lz); call param_read('1 nz',nz); allocate(z(nz+1))
+         call param_read('1 Uniform Lx',Lx); call param_read('1 Uniform nx',unx); call param_read('1 Total nx',nx); allocate(x(nx+1))
+         call param_read('1 Uniform Ly',Ly); call param_read('1 Uniform ny',uny); call param_read('1 Total ny',ny); allocate(y(ny+1))
+         call param_read('1 Uniform Lz',Lz); call param_read('1 Uniform nz',unz); call param_read('1 Total nz',nz); allocate(z(nz+1))
+         call param_read('1 Stretching x',Sx)
+         call param_read('1 Stretching y',Sy)
+         call param_read('1 Stretching z',Sz)
          ! Create simple rectilinear grid
-         do i=1,nx+1
-            x(i)=real(i-1,WP)/real(nx,WP)*Lx-L_mouth
+         do i=1,unx+1
+            x(i)=real(i-1,WP)/real(unx,WP)*Lx-L_mouth
          end do
-         do j=1,ny+1
-            y(j)=real(j-1,WP)/real(ny,WP)*Ly-0.5_WP*Ly+0.5_WP*H_mouth
+         do j=1+(ny-uny)/2,1+(ny+uny)/2
+            y(j)=real(j-(1+(ny-uny)/2),WP)/real(uny,WP)*Ly-0.5_WP*Ly+0.5_WP*H_mouth
          end do
-         do k=1,nz+1
-            z(k)=real(k-1,WP)/real(nz,WP)*Lz-0.5_WP*Lz
+         do k=1+(nz-unz)/2,1+(nz+unz)/2
+            z(k)=real(k-(1+(nz-unz)/2),WP)/real(unz,WP)*Lz-0.5_WP*Lz
+         end do
+         ! Add stretching
+         do i=unx+2,nx+1
+            x(i)=(1.0_WP+Sx)*x(i-1)-Sx*x(i-2)
+         end do
+         do j=(ny+uny)/2+2,ny+1
+            y(j)=(1.0_WP+Sy)*y(j-1)-Sy*y(j-2)
+         end do
+         do j=(ny-uny)/2,1,-1
+            y(j)=(1.0_WP+Sy)*y(j+1)-Sy*y(j+2)
+         end do
+         do k=(nz+unz)/2+2,nz+1
+            z(k)=(1.0_WP+Sz)*z(k-1)-Sz*z(k-2)
+         end do
+         do k=(nz-unz)/2,1,-1
+            z(k)=(1.0_WP+Sz)*z(k+1)-Sz*z(k+2)
          end do
          ! General serial grid object with overlap=3 for tpns
          grid=sgrid(coord=cartesian,no=3,x=x,y=y,z=z,xper=.false.,yper=.false.,zper=.false.,name='cough_machine_in')

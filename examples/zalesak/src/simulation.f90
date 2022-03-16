@@ -124,6 +124,12 @@ contains
          call vf%get_curvature()
          ! Reset moments to guarantee compatibility with interface reconstruction
          call vf%reset_volume_moments()
+         ! Initialize auxiliary surface area to PLIC surface area
+         vf%SD=vf%SDpoly
+         
+         !vf%SDx=vf%SDpoly*
+         !vf%SDy=vf%SDpoly*
+         !vf%SDz=vf%SDpoly*
       end block initialize_vof
       
       
@@ -173,6 +179,8 @@ contains
          call param_read('Ensight output period',ens_evt%tper)
          ! Add variables to output
          call ens_out%add_scalar('VOF',vf%VF)
+         call ens_out%add_scalar('SDpoly',vf%SDpoly)
+         call ens_out%add_scalar('SD',vf%SD)
          call ens_out%add_scalar('curvature',vf%curv)
          call ens_out%add_surface('vofplic',smesh)
          ! Output to ensight
@@ -192,6 +200,8 @@ contains
          call mfile%add_column(vf%VFmax,'VOF maximum')
          call mfile%add_column(vf%VFmin,'VOF minimum')
          call mfile%add_column(vf%VFint,'VOF integral')
+         call mfile%add_column(vf%SDpolyint,'SDpoly integral')
+         call mfile%add_column(vf%SDint,'SD integral')
          call mfile%write()
       end block create_monitor
       
