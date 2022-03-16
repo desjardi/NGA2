@@ -50,19 +50,44 @@ module block2_class
    !> Gas viscosity
    real(WP) :: visc_g
    
+   !> Inflow parameters
+   real(WP) :: Uin,delta,Uco
+   
    
 contains
    
    
    !> Function that localizes the leftmost domain boundary
-   function left_boundary(pg,i,j,k) result(isIn)
+   ! function left_boundary(pg,i,j,k) result(isIn)
+   !    use pgrid_class, only: pgrid
+   !    class(pgrid), intent(in) :: pg
+   !    integer, intent(in) :: i,j,k
+   !    logical :: isIn
+   !    isIn=.false.
+   !    if (i.eq.pg%imin) isIn=.true.
+   ! end function left_boundary
+   
+   
+   !> Function that localizes the left domain boundary, inside the mouth
+   function left_boundary_mouth(pg,i,j,k) result(isIn)
       use pgrid_class, only: pgrid
       class(pgrid), intent(in) :: pg
       integer, intent(in) :: i,j,k
       logical :: isIn
       isIn=.false.
-      if (i.eq.pg%imin) isIn=.true.
-   end function left_boundary
+      if (i.eq.pg%imin.and.pg%ym(j).gt.0.0_WP.and.pg%ym(j).lt.H_mouth.and.abs(pg%zm(k)).lt.0.5_WP*W_mouth) isIn=.true.
+   end function left_boundary_mouth
+   
+   
+   !> Function that localizes the left domain boundary, outside the mouth
+   function left_boundary_coflow(pg,i,j,k) result(isIn)
+      use pgrid_class, only: pgrid
+      class(pgrid), intent(in) :: pg
+      integer, intent(in) :: i,j,k
+      logical :: isIn
+      isIn=.false.
+      if (i.eq.pg%imin.and.(pg%ym(j).le.-t_wall.or.pg%ym(j).ge.H_mouth+t_wall.or.abs(pg%zm(k)).ge.0.5_WP*W_mouth+t_wall)) isIn=.true.
+   end function left_boundary_coflow
    
    
    !> Function that localizes the rightmost domain boundary
@@ -77,25 +102,25 @@ contains
    
    
    !> Function that localizes the top domain boundary
-   function top_boundary(pg,i,j,k) result(isIn)
-      use pgrid_class, only: pgrid
-      class(pgrid), intent(in) :: pg
-      integer, intent(in) :: i,j,k
-      logical :: isIn
-      isIn=.false.
-      if (j.eq.pg%jmax+1) isIn=.true.
-   end function top_boundary
+   ! function top_boundary(pg,i,j,k) result(isIn)
+   !    use pgrid_class, only: pgrid
+   !    class(pgrid), intent(in) :: pg
+   !    integer, intent(in) :: i,j,k
+   !    logical :: isIn
+   !    isIn=.false.
+   !    if (j.eq.pg%jmax+1) isIn=.true.
+   ! end function top_boundary
    
    
    !> Function that localizes the bottom domain boundary
-   function bottom_boundary(pg,i,j,k) result(isIn)
-      use pgrid_class, only: pgrid
-      class(pgrid), intent(in) :: pg
-      integer, intent(in) :: i,j,k
-      logical :: isIn
-      isIn=.false.
-      if (j.eq.pg%jmin) isIn=.true.
-   end function bottom_boundary
+   ! function bottom_boundary(pg,i,j,k) result(isIn)
+   !    use pgrid_class, only: pgrid
+   !    class(pgrid), intent(in) :: pg
+   !    integer, intent(in) :: i,j,k
+   !    logical :: isIn
+   !    isIn=.false.
+   !    if (j.eq.pg%jmin) isIn=.true.
+   ! end function bottom_boundary
    
    
    !> Initialization of block 2
@@ -141,10 +166,13 @@ contains
          call param_read('Gas density',b%fs%rho)
          ! Apply clipped Neumann on the right
          call b%fs%add_bcond(name='outflow',type=clipped_neumann,face='x',dir=+1,canCorrect=.true.,locator=right_boundary)
+         ! Apply Dirichlet at inlet
+         call b%fs%add_bcond(name='inflow' ,type=dirichlet      ,face='x',dir=-1,canCorrect=.false.,locator=left_boundary_mouth)
+         call b%fs%add_bcond(name='coflow' ,type=dirichlet      ,face='x',dir=-1,canCorrect=.false.,locator=left_boundary_coflow)
          ! Apply Neumann everywhere else
-         call b%fs%add_bcond(name=   'top',type=neumann,face='y',dir=+1,canCorrect=.false.,locator=   top_boundary)
-         call b%fs%add_bcond(name='bottom',type=neumann,face='y',dir=-1,canCorrect=.false.,locator=bottom_boundary)
-         call b%fs%add_bcond(name=  'left',type=neumann,face='x',dir=-1,canCorrect=.false.,locator=  left_boundary)
+         !call b%fs%add_bcond(name=   'top',type=neumann,face='y',dir=+1,canCorrect=.false.,locator=   top_boundary)
+         !call b%fs%add_bcond(name='bottom',type=neumann,face='y',dir=-1,canCorrect=.false.,locator=bottom_boundary)
+         !call b%fs%add_bcond(name=  'left',type=neumann,face='x',dir=-1,canCorrect=.false.,locator=  left_boundary)
          ! Prepare and configure pressure solver
          b%ps=hypre_str(cfg=b%cfg,name='Pressure',method=pcg_pfmg,nst=7)
          b%ps%maxlevel=12
@@ -161,21 +189,27 @@ contains
       
       ! Initialize our velocity field
       initialize_velocity: block
-         use tpns_class, only: bcond
-         use random,     only: random_uniform
+         use incomp_class, only: bcond
+         use random,       only: random_uniform
          type(bcond), pointer :: mybc
          integer  :: n,i,j,k
          ! Zero initial field
          b%fs%U=0.0_WP; b%fs%V=0.0_WP; b%fs%W=0.0_WP
          ! Apply Dirichlet at inlet
-         !call param_read('Gas velocity',Uin)
-         !call param_read('Gas thickness',delta)
+         call param_read('Gas velocity',Uin)
+         call param_read('Gas thickness',delta)
          !call param_read('Gas perturbation',Urand)
-         !call b%fs%get_bcond('inflow',mybc)
-         !do n=1,mybc%itr%no_
-         !   i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
-         !   b%fs%U(i,j,k)=Uin*tanh(2.0_WP*(0.5_WP*W_mouth-abs(b%fs%cfg%zm(k)))/delta)*tanh(2.0_WP*b%fs%cfg%ym(j)/delta)*tanh(2.0_WP*(H_mouth-b%fs%cfg%ym(j))/delta)+random_uniform(-Urand,Urand)
-         !end do
+         call b%fs%get_bcond('inflow',mybc)
+         do n=1,mybc%itr%no_
+            i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
+            b%fs%U(i,j,k)=Uin*tanh(2.0_WP*(0.5_WP*W_mouth-abs(b%fs%cfg%zm(k)))/delta)*tanh(2.0_WP*b%fs%cfg%ym(j)/delta)*tanh(2.0_WP*(H_mouth-b%fs%cfg%ym(j))/delta)
+         end do
+         call param_read('Gas coflow',Uco)
+         call b%fs%get_bcond('coflow',mybc)
+         do n=1,mybc%itr%no_
+            i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
+            b%fs%U(i,j,k)=Uco
+         end do
          ! Apply all other boundary conditions
          call b%fs%apply_bcond(b%time%t,b%time%dt)
          ! Compute MFR through all boundary conditions
