@@ -15,7 +15,8 @@ module simulation
 
    !> Couplers between blocks
    type(coupler) :: cpl12x,cpl12y,cpl12z
-
+   type(coupler) :: cpl21x,cpl21y,cpl21z
+   
    !> Storage for coupled fields
    real(WP), dimension(:,:,:), allocatable :: U1on2,V1on2,W1on2
    real(WP), dimension(:,:,:), allocatable :: U2on1,V2on1,W2on1
@@ -35,13 +36,20 @@ contains
       ! Initialize the couplers
       coupler_prep: block
          use parallel, only: group
-         ! Create block1-to-block2 couplers
+         ! Block 1 to block 2
          cpl12x=coupler(src_grp=group,dst_grp=group,name='in_to_out_x'); call cpl12x%set_src(cfg1,'x'); call cpl12x%set_dst(cfg2,'x'); call cpl12x%initialize()
          cpl12y=coupler(src_grp=group,dst_grp=group,name='in_to_out_y'); call cpl12y%set_src(cfg1,'y'); call cpl12y%set_dst(cfg2,'y'); call cpl12y%initialize()
          cpl12z=coupler(src_grp=group,dst_grp=group,name='in_to_out_z'); call cpl12z%set_src(cfg1,'z'); call cpl12z%set_dst(cfg2,'z'); call cpl12z%initialize()
-         allocate(U1on2(cfg2%imino_:cfg2%imaxo_,cfg2%jmino_:cfg2%jmaxo_,cfg2%kmino_:cfg2%kmaxo_))
-         allocate(V1on2(cfg2%imino_:cfg2%imaxo_,cfg2%jmino_:cfg2%jmaxo_,cfg2%kmino_:cfg2%kmaxo_))
-         allocate(W1on2(cfg2%imino_:cfg2%imaxo_,cfg2%jmino_:cfg2%jmaxo_,cfg2%kmino_:cfg2%kmaxo_))
+         allocate(U1on2(cfg2%imino_:cfg2%imaxo_,cfg2%jmino_:cfg2%jmaxo_,cfg2%kmino_:cfg2%kmaxo_)); U1on2=0.0_WP
+         allocate(V1on2(cfg2%imino_:cfg2%imaxo_,cfg2%jmino_:cfg2%jmaxo_,cfg2%kmino_:cfg2%kmaxo_)); V1on2=0.0_WP
+         allocate(W1on2(cfg2%imino_:cfg2%imaxo_,cfg2%jmino_:cfg2%jmaxo_,cfg2%kmino_:cfg2%kmaxo_)); W1on2=0.0_WP
+         ! Block 2 to block 1
+         cpl21x=coupler(src_grp=group,dst_grp=group,name='out_to_in_x'); call cpl21x%set_src(cfg2,'x'); call cpl21x%set_dst(cfg1,'x'); call cpl21x%initialize()
+         cpl21y=coupler(src_grp=group,dst_grp=group,name='out_to_in_y'); call cpl21y%set_src(cfg2,'y'); call cpl21y%set_dst(cfg1,'y'); call cpl21y%initialize()
+         cpl21z=coupler(src_grp=group,dst_grp=group,name='out_to_in_z'); call cpl21z%set_src(cfg2,'z'); call cpl21z%set_dst(cfg1,'z'); call cpl21z%initialize()
+         allocate(U2on1(cfg1%imino_:cfg1%imaxo_,cfg1%jmino_:cfg1%jmaxo_,cfg1%kmino_:cfg1%kmaxo_)); U2on1=0.0_WP
+         allocate(V2on1(cfg1%imino_:cfg1%imaxo_,cfg1%jmino_:cfg1%jmaxo_,cfg1%kmino_:cfg1%kmaxo_)); V2on1=0.0_WP
+         allocate(W2on1(cfg1%imino_:cfg1%imaxo_,cfg1%jmino_:cfg1%jmaxo_,cfg1%kmino_:cfg1%kmaxo_)); W2on1=0.0_WP
       end block coupler_prep
 
       ! Setup nudging region in block 2
@@ -65,7 +73,7 @@ contains
       do while (.not.b1%time%done())
 
          ! Advance block 1
-         call b1%step()
+         call b1%step(U2on1,V2on1,W2on1)
 
          ! ###############################################
          ! ####### TRANSFER DROPLETS FROM 1->2 HERE ######
@@ -95,7 +103,12 @@ contains
 
             ! Advance block 2
             call b2%step(U1on2,V1on2,W1on2)
-
+            
+            ! Exchange data using cpl21x/y/z couplers and the most recent velocity
+            U2on1=0.0_WP; call cpl21x%push(b2%fs%U); call cpl21x%transfer(); call cpl21x%pull(U2on1)
+            V2on1=0.0_WP; call cpl21y%push(b2%fs%V); call cpl21y%transfer(); call cpl21y%pull(V2on1)
+            W2on1=0.0_WP; call cpl21z%push(b2%fs%W); call cpl21z%transfer(); call cpl21z%pull(W2on1)
+            
          end do
 
       end do
@@ -134,13 +147,13 @@ contains
                   ! Make room for new drop
                   np=b2%lp%np_+1; call b2%lp%resize(np)
                   ! Add the drop
-                  b2%lp%p(np)%id  =int(0,8)                                                                                      !< Give id (maybe based on break-up model?)
-                  b2%lp%p(np)%dt  =0.0_WP                                                                                        !< Let the drop find it own integration time
-                  b2%lp%p(np)%d   =diam                                                                                          !< Assign diameter to account for full volume
+                  b2%lp%p(np)%id  =int(0,8)                                                                                               !< Give id (maybe based on break-up model?)
+                  b2%lp%p(np)%dt  =0.0_WP                                                                                                 !< Let the drop find it own integration time
+                  b2%lp%p(np)%d   =diam                                                                                                   !< Assign diameter to account for full volume
                   b2%lp%p(np)%pos =[b1%cc1%meta_structures_list(m)%x,b1%cc1%meta_structures_list(m)%y,b1%cc1%meta_structures_list(m)%z]   !< Place the drop at the liquid barycenter
                   b2%lp%p(np)%vel =[b1%cc1%meta_structures_list(m)%u,b1%cc1%meta_structures_list(m)%v,b1%cc1%meta_structures_list(m)%w]   !< Assign mean structure velocity as drop velocity
-                  b2%lp%p(np)%ind =b2%lp%cfg%get_ijk_global(b2%lp%p(np)%pos,[b2%lp%cfg%imin,b2%lp%cfg%jmin,b2%lp%cfg%kmin])                !< Place the drop in the proper cell for the lp%cfg
-                  b2%lp%p(np)%flag=0                                                                                             !< Activate it
+                  b2%lp%p(np)%ind =b2%lp%cfg%get_ijk_global(b2%lp%p(np)%pos,[b2%lp%cfg%imin,b2%lp%cfg%jmin,b2%lp%cfg%kmin])               !< Place the drop in the proper cell for the lp%cfg
+                  b2%lp%p(np)%flag=0                                                                                                      !< Activate it
                   ! Increment particle counter
                   b2%lp%np_=np
                end if

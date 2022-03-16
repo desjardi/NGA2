@@ -2,11 +2,10 @@
 module block1_class
    use string,            only: str_short,str_medium
    use precision,         only: WP
-   use geometry,          only: H_vortex,W_vortex
    use config_class,      only: config
    use incomp_class,      only: incomp
    use hypre_str_class,   only: hypre_str
-   !use sgsmodel_class,    only: sgsmodel
+   use sgsmodel_class,    only: sgsmodel
    use timetracker_class, only: timetracker
    use ensight_class,     only: ensight
    use event_class,       only: event
@@ -24,7 +23,7 @@ module block1_class
       type(hypre_str) :: ps               !< Unstructured HYPRE pressure solver
       type(hypre_str) :: is               !< Unstructured HYPRE implicit solver
       type(timetracker) :: time           !< Time tracker
-      !type(sgsmodel) ::  sgs              !< SGS model
+      type(sgsmodel) ::  sgs              !< SGS model
       type(ensight) :: ens_out            !< Ensight output
       type(event) :: ens_evt              !< Ensight output event
       type(monitor) :: mfile,cflfile      !< Monitor files
@@ -40,6 +39,8 @@ module block1_class
 
    !> Vortex parameters
    real(WP) :: tau,Umax,A
+   !> Convective velocity array
+   real(WP), dimension(3) :: Uc
    !> Orientation
    character(len=str_medium) :: orientation
 
@@ -50,18 +51,18 @@ module block1_class
 contains
 
 
-   !> Function that localizes the left domain boundary
-   function left_boundary_vortex(pg,i,j,k) result(isIn)
+   !> Function that localizes the left domain boundary. 
+   function left_boundary(pg,i,j,k) result(isIn)
       use pgrid_class, only: pgrid
       class(pgrid), intent(in) :: pg
       integer, intent(in) :: i,j,k
       logical :: isIn
       isIn=.false.
-      if (i.eq.pg%imin.and.pg%ym(j).gt.0.0_WP.and.pg%ym(j).lt.H_vortex.and.abs(pg%zm(k)).lt.0.5_WP*W_vortex) isIn=.true.
-   end function left_boundary_vortex
+      if (i.eq.pg%imin) isIn=.true. 
+   end function left_boundary
 
 
-   !> Function that localizes the rightmost domain boundary
+   !> Function that localizes the right domain boundary
    function right_boundary(pg,i,j,k) result(isIn)
       use pgrid_class, only: pgrid
       class(pgrid), intent(in) :: pg
@@ -94,30 +95,28 @@ contains
       if (j.eq.pg%jmin) isIn=.true.
    end function ym_locator
 
-
    !> Function that localizes the top (z+) of the domain
-   function zp_locator(pg,i,j,k) result(isIn)
-      use pgrid_class, only: pgrid
-      implicit none
-      class(pgrid), intent(in) :: pg
-      integer, intent(in) :: i,j,k
-      logical :: isIn
-      isIn=.false.
-      if (k.eq.pg%kmax+1) isIn=.true.
-   end function zp_locator
+   !function zp_locator(pg,i,j,k) result(isIn)
+   !   use pgrid_class, only: pgrid
+   !   implicit none
+   !   class(pgrid), intent(in) :: pg
+   !   integer, intent(in) :: i,j,k
+   !   logical :: isIn
+   !   isIn=.false.
+   !   if (k.eq.pg%kmax+1) isIn=.true.
+   !end function zp_locator
 
 
    !> Function that localizes the bottom (z-) of the domain
-   function zm_locator(pg,i,j,k) result(isIn)
-      use pgrid_class, only: pgrid
-      implicit none
-      class(pgrid), intent(in) :: pg
-      integer, intent(in) :: i,j,k
-      logical :: isIn
-      isIn=.false.
-      if (k.eq.pg%kmin) isIn=.true.
-   end function zm_locator
-
+   !function zm_locator(pg,i,j,k) result(isIn)
+   !   use pgrid_class, only: pgrid
+   !   implicit none
+   !   class(pgrid), intent(in) :: pg
+   !   integer, intent(in) :: i,j,k
+   !   logical :: isIn
+   !   isIn=.false.
+   !   if (k.eq.pg%kmin) isIn=.true.
+   !end function zm_locator
 
 
    !> Initialization of block 1
@@ -152,8 +151,7 @@ contains
       ! Create a single-phase flow solver with bconds
       create_solver: block
          use incomp_class,    only: dirichlet,clipped_neumann,neumann
-         use hypre_str_class, only: pcg_pfmg
-         ! Create a single-phase flow solver
+         use hypre_str_class, only: pcg_pfmg,pcg_smg ! Create a single-phase flow solver
          b%fs=incomp(cfg=b%cfg,name='Single-phase NS')
          ! Assign constant viscosity to each phase
          call param_read('Gas dynamic viscosity',visc_g)
@@ -161,9 +159,7 @@ contains
          ! Assign constant density to each phase
          call param_read('Gas density',b%fs%rho)
          ! Inflow on the left
-         call b%fs%add_bcond(name='inflow' ,type=dirichlet      ,face='x',dir=-1,canCorrect=.false.,locator=left_boundary_vortex)
-         ! Neumann on block 1 interface
-         !call b%fs%add_bcond(name='b1_interface'  ,type=neumann,face='x',dir=-1,canCorrect=.true. ,locator=left_boundary)
+         call b%fs%add_bcond(name='inflow' ,type=dirichlet     ,face='x',dir=-1,canCorrect=.false.,locator=left_boundary)
          ! Neumann on the sides
          !call b%fs%add_bcond(name='bc_yp'  ,type=neumann,face='y',dir=+1,canCorrect=.true. ,locator=yp_locator)
          !call b%fs%add_bcond(name='bc_ym'  ,type=neumann,face='y',dir=-1,canCorrect=.true. ,locator=ym_locator)
@@ -172,12 +168,12 @@ contains
          ! Outflow on the right
          call b%fs%add_bcond(name='outflow',type=clipped_neumann,face='x',dir=+1,canCorrect=.true. ,locator=right_boundary)
          ! Prepare and configure pressure solver
-         b%ps=hypre_str(cfg=b%cfg,name='Pressure',method=pcg_pfmg,nst=7)
-         b%ps%maxlevel=10
+         b%ps=hypre_str(cfg=b%cfg,name='Pressure',method=pcg_smg,nst=7)
+         b%ps%maxlevel=15
          call param_read('Pressure iteration',b%ps%maxit)
          call param_read('Pressure tolerance',b%ps%rcvg)
          ! Prepare and configure implicit solver
-         b%is=hypre_str(cfg=b%cfg,name='Implicit',method=pcg_pfmg,nst=7)
+         b%is=hypre_str(cfg=b%cfg,name='Implicit',method=pcg_smg,nst=7)
          call param_read('Implicit iteration',b%is%maxit)
          call param_read('Implicit tolerance',b%is%rcvg)
          ! Setup the solver
@@ -190,46 +186,28 @@ contains
          use random,     only: random_uniform
          type(bcond), pointer :: mybc
          integer  :: n,i,j,k
-         ! Zero initial field
-         b%fs%U=0.0_WP; b%fs%V=0.0_WP; b%fs%W=0.0_WP
          ! Create the vortex
          call param_read('Orientation',orientation)
          call param_read('Vortex size',tau)
          call param_read('Vortex intensity',Umax)
+         call param_read('Convective Velocity',Uc)
+         ! Initial convection velocity field 
+         b%fs%U=Uc(1); b%fs%V=Uc(2); b%fs%W=Uc(3)
          A = sqrt(2.0_WP)*Umax*exp(0.5_WP)/tau
          call b%fs%get_bcond('inflow',mybc)
-         ! Apply Dirichlet at inlet
+         ! Vortex Velocity Profile
          do n=1,mybc%itr%no_
             i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
-            b%fs%U(i,j,k) = Umax
             select case (trim(orientation))
             case('x')
-               do k=1,b%cfg%nz
-                  do j=1,b%cfg%ny
-                     do i=1,b%cfg%nx
-                        b%fs%V(i,j,k)=b%fs%V(i,j,k)+A*exp(-(b%cfg%y(j)**2+b%cfg%zm(k)**2)/tau**2)*(-b%cfg%zm(k))
-                        b%fs%W(i,j,k)=b%fs%W(i,j,k)+A*exp(-(b%cfg%ym(j)**2+b%cfg%z(k)**2)/tau**2)*(b%cfg%ym(j))
-                     end do
-                  end do
-               end do
+               b%fs%V(i,j,k)=b%fs%V(i,j,k)+A*exp(-(b%cfg%y(j)**2+b%cfg%zm(k)**2)/tau**2)*(-b%cfg%zm(k))
+               b%fs%W(i,j,k)=b%fs%W(i,j,k)+A*exp(-(b%cfg%ym(j)**2+b%cfg%z(k)**2)/tau**2)*(b%cfg%ym(j))
             case('y')
-               do k=1,b%cfg%nz
-                  do j=1,b%cfg%ny
-                     do i=1,b%cfg%nx
-                        b%fs%U(i,j,k)=b%fs%U(i,j,k)+A*exp(-(b%cfg%x(i)**2+b%cfg%zm(k)**2)/tau**2)*(-b%cfg%zm(k))
-                        b%fs%W(i,j,k)=b%fs%W(i,j,k)+A*exp(-(b%cfg%xm(i)**2+b%cfg%z(k)**2)/tau**2)*(b%cfg%xm(i))
-                     end do
-                  end do
-               end do
+               b%fs%U(i,j,k)=b%fs%U(i,j,k)+A*exp(-(b%cfg%x(i)**2+b%cfg%zm(k)**2)/tau**2)*(-b%cfg%zm(k))
+               b%fs%W(i,j,k)=b%fs%W(i,j,k)+A*exp(-(b%cfg%xm(i)**2+b%cfg%z(k)**2)/tau**2)*(b%cfg%xm(i))
             case('z')
-               do k=1,b%cfg%nz
-                  do j=1,b%cfg%ny
-                     do i=1,b%cfg%nx
-                        b%fs%U(i,j,k)=b%fs%U(i,j,k)+A*exp(-(b%cfg%x(i)**2+b%cfg%ym(j)**2)/tau**2)*(-b%cfg%ym(j))
-                        b%fs%V(i,j,k)=b%fs%V(i,j,k)+A*exp(-(b%cfg%xm(i)**2+b%cfg%y(j)**2)/tau**2)*(b%cfg%xm(i))
-                     end do
-                  end do
-               end do
+               b%fs%U(i,j,k)=b%fs%U(i,j,k)+A*exp(-(b%cfg%x(i)**2+b%cfg%ym(j)**2)/tau**2)*(-b%cfg%ym(j))
+               b%fs%V(i,j,k)=b%fs%V(i,j,k)+A*exp(-(b%cfg%xm(i)**2+b%cfg%y(j)**2)/tau**2)*(b%cfg%xm(i))
             end select
          end do
          ! Apply all other boundary conditions
@@ -245,9 +223,9 @@ contains
       end block initialize_velocity
 
       ! Create an LES model
-      !create_sgs: block
-      !   b%sgs=sgsmodel(cfg=b%fs%cfg,umask=b%fs%umask,vmask=b%fs%vmask,wmask=b%fs%wmask)
-      !end block create_sgs
+      create_sgs: block
+         b%sgs=sgsmodel(cfg=b%fs%cfg,umask=b%fs%umask,vmask=b%fs%vmask,wmask=b%fs%wmask)
+      end block create_sgs
 
 
       ! Add Ensight output
@@ -259,7 +237,7 @@ contains
          call param_read('Ensight output period',b%ens_evt%tper)
          ! Add variables to output
          call b%ens_out%add_vector('velocity',b%Ui,b%Vi,b%Wi)
-         !call b%ens_out%add_scalar('visc_t',b%sgs%visc)
+         call b%ens_out%add_scalar('visc_t',b%sgs%visc)
          ! Output to ensight
          if (b%ens_evt%occurs()) call b%ens_out%write_data(b%time%t)
       end block create_ensight
@@ -320,13 +298,13 @@ contains
       b%fs%visc=visc_g
 
       ! Turbulence modeling
-      !call b%fs%get_strainrate(Ui=b%Ui,Vi=b%Vi,Wi=b%Wi,SR=b%SR)
-      !b%resU=b%fs%rho
-      !call b%sgs%get_visc(dt=b%time%dtold,rho=b%resU,Ui=b%Ui,Vi=b%Vi,Wi=b%Wi,SR=b%SR)
-      !where (b%sgs%visc.lt.-b%fs%visc)
-      !   b%sgs%visc=-b%fs%visc
-      !end where
-      !b%fs%visc=b%fs%visc+b%sgs%visc
+      call b%fs%get_strainrate(Ui=b%Ui,Vi=b%Vi,Wi=b%Wi,SR=b%SR)
+      b%resU=b%fs%rho
+      call b%sgs%get_visc(dt=b%time%dtold,rho=b%resU,Ui=b%Ui,Vi=b%Vi,Wi=b%Wi,SR=b%SR)
+      where (b%sgs%visc.lt.-b%fs%visc)
+      b%sgs%visc=-b%fs%visc
+      end where
+      b%fs%visc=b%fs%visc+b%sgs%visc
 
       ! Perform sub-iterations
       do while (b%time%it.le.b%time%itmax)

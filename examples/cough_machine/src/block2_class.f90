@@ -56,7 +56,7 @@ module block2_class
 
 contains
 
-   !> Function that localizes the left domain boundary
+   !> Function that localizes the leftmost domain boundary
    function left_boundary(pg,i,j,k) result(isIn)
       use pgrid_class, only: pgrid
       class(pgrid), intent(in) :: pg
@@ -76,18 +76,9 @@ contains
       if (i.eq.pg%imax+1) isIn=.true.
    end function right_boundary
 
-   !> Function that localizes cough stream at L_mouth
-   function gas_inj_spray(pg,i,j,k) result(isIn)
-      use pgrid_class, only: pgrid
-      class(pgrid), intent(in) :: pg
-      integer, intent(in) :: i,j,k
-      logical :: isIn
-      isIn=.false.
-      if (i.eq.L_mouth.and.pg%ym(j).gt.0.0_WP.and.pg%ym(j).lt.H_mouth.and.abs(pg%zm(k)).lt.0.5_WP*W_mouth) isIn=.true.
-   end function gas_inj_spray
 
-   !> Function that localizes the top (y+) of the domain
-   function yp_locator(pg,i,j,k) result(isIn)
+   !> Function that localizes the top domain boundary
+   function top_boundary(pg,i,j,k) result(isIn)
       use pgrid_class, only: pgrid
       implicit none
       class(pgrid), intent(in) :: pg
@@ -95,11 +86,11 @@ contains
       logical :: isIn
       isIn=.false.
       if (j.eq.pg%jmax+1) isIn=.true.
-   end function yp_locator
+   end function top_boundary
 
 
-   !> Function that localizes the bottom (y-) of the domain
-   function ym_locator(pg,i,j,k) result(isIn)
+   !> Function that localizes the bottom domain boundary
+   function bottom_boundary(pg,i,j,k) result(isIn)
       use pgrid_class, only: pgrid
       implicit none
       class(pgrid), intent(in) :: pg
@@ -107,31 +98,7 @@ contains
       logical :: isIn
       isIn=.false.
       if (j.eq.pg%jmin) isIn=.true.
-   end function ym_locator
-
-
-   !> Function that localizes the top (z+) of the domain
-   function zp_locator(pg,i,j,k) result(isIn)
-      use pgrid_class, only: pgrid
-      implicit none
-      class(pgrid), intent(in) :: pg
-      integer, intent(in) :: i,j,k
-      logical :: isIn
-      isIn=.false.
-      if (k.eq.pg%kmax+1) isIn=.true.
-   end function zp_locator
-
-
-   !> Function that localizes the bottom (z-) of the domain
-   function zm_locator(pg,i,j,k) result(isIn)
-      use pgrid_class, only: pgrid
-      implicit none
-      class(pgrid), intent(in) :: pg
-      integer, intent(in) :: i,j,k
-      logical :: isIn
-      isIn=.false.
-      if (k.eq.pg%kmin) isIn=.true.
-   end function zm_locator
+   end function bottom_boundary
 
 
    !> Initialization of block 2
@@ -175,20 +142,15 @@ contains
          b%fs%visc=visc_g
          ! Assign constant density to each phase
          call param_read('Gas density',b%fs%rho)
-         ! Define direction gas/liquid stream boundary conditions (inflow from block1 to block2)
-         !call b%fs%add_bcond(name='gas_inj',type=dirichlet      ,face='x',dir=-1,canCorrect=.false.,locator=gas_inj_spray)
-         ! Neumann on block 1 interface
-         call b%fs%add_bcond(name='b1_interface'  ,type=neumann,face='x',dir=-1,canCorrect=.true. ,locator=left_boundary)
-         ! Neumann on the sides
-         call b%fs%add_bcond(name='bc_yp'  ,type=neumann,face='y',dir=+1,canCorrect=.true. ,locator=yp_locator)
-         call b%fs%add_bcond(name='bc_ym'  ,type=neumann,face='y',dir=-1,canCorrect=.true. ,locator=ym_locator)
-         call b%fs%add_bcond(name='bc_zp'  ,type=neumann,face='z',dir=+1,canCorrect=.true. ,locator=zp_locator)
-         call b%fs%add_bcond(name='bc_zm'  ,type=neumann,face='z',dir=-1,canCorrect=.true. ,locator=zm_locator)
-         ! Outflow on the right
-         call b%fs%add_bcond(name='outflow',type=clipped_neumann,face='x',dir=+1,canCorrect=.true. ,locator=right_boundary)
+         ! Apply clipped Neumann on the right
+         call b%fs%add_bcond(name='outflow',type=clipped_neumann,face='x',dir=+1,canCorrect=.true.,locator=right_boundary)
+         ! Apply Neumann everywhere else
+         call b%fs%add_bcond(name=   'top',type=neumann,face='y',dir=+1,canCorrect=.false.,locator=   top_boundary)
+         call b%fs%add_bcond(name='bottom',type=neumann,face='y',dir=-1,canCorrect=.false.,locator=bottom_boundary)
+         call b%fs%add_bcond(name=  'left',type=neumann,face='x',dir=-1,canCorrect=.false.,locator=  left_boundary)
          ! Prepare and configure pressure solver
          b%ps=hypre_str(cfg=b%cfg,name='Pressure',method=pcg_pfmg,nst=7)
-         b%ps%maxlevel=20
+         b%ps%maxlevel=12
          call param_read('Pressure iteration',b%ps%maxit)
          call param_read('Pressure tolerance',b%ps%rcvg)
          ! Prepare and configure implicit solver
@@ -208,15 +170,6 @@ contains
          integer  :: n,i,j,k
          ! Zero initial field
          b%fs%U=0.0_WP; b%fs%V=0.0_WP; b%fs%W=0.0_WP
-         ! Apply Dirichlet at inlet
-         !call b%fs%get_bcond('gas_inj',mybc)
-         !do n=1,mybc%itr%no_
-         !   i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
-         !   b%fs%U(i,j,k)=Uin*tanh(2.0_WP*(0.5_WP*W_mouth-abs(b%fs%cfg%zm(k)))/delta)*tanh(2.0_WP*b%fs%cfg%ym(j)/delta)*tanh(2.0_WP*(H_mouth-b%fs%cfg%ym(j))/delta)+random_uniform(-Urand,Urand)
-         !   ! U velocity in x/i
-         !   ! V velocity in y/j
-         !   ! W velocity in z/k
-         !end do
          ! Apply all other boundary conditions
          call b%fs%apply_bcond(b%time%t,b%time%dt)
          ! Compute MFR through all boundary conditions

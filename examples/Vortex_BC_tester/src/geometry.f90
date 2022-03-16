@@ -5,14 +5,11 @@ module geometry
    implicit none
    private
 
-   public :: geometry_init,H_vortex,W_vortex
+   public :: geometry_init
 
    !> Config:
    type(config), target, public :: cfg1
 
-   ! Virtual mouth dimensions
-   real(WP), parameter :: H_vortex=1.0e-2_WP
-   real(WP), parameter :: W_vortex=1.0e-2_WP
 
 contains
 
@@ -44,46 +41,46 @@ contains
             x(i)=real(i-1,WP)/real(nx,WP)*Lx
          end do
          do j=1,ny+1
-            y(j)=real(j-1,WP)/real(ny,WP)*Ly
+            y(j)=real(j-1,WP)/real(ny,WP)*Ly-0.5_WP*Ly
          end do
          do k=1,nz+1
             z(k)=real(k-1,WP)/real(nz,WP)*Lz-0.5_WP*Lz
          end do
          ! General serial grid object with overlap=2 for Euler-Lagrange solver
-         grid=sgrid(coord=cartesian,no=2,x=x,y=y,z=z,xper=.true.,yper=.true.,zper=.true.,name='block1')
+         grid=sgrid(coord=cartesian,no=3,x=x,y=y,z=z,xper=.false.,yper=.false.,zper=.false.,name='block1')
          ! Read in partition
          call param_read('1 Partition',partition,short='p')
          ! Create partitioned grid
          cfg1=config(grp=group,decomp=partition,grid=grid)
          ! Apply stretching
-         if (sx.gt.0.0_WP) then
-            x = x + sx*sin(1.0_WP*twoPi*x/Lx)
-         else if (sx.lt.0.0_WP) then
-            call random_initialize
-            do i=2,nx+1
-               call random_number(rand)
-               rand=1.0_WP+sx-2.0_WP*sx*rand
-               x(i) = x(i-1)+rand*(x(i)-x(i-1))
-            end do
-            x=x+0.5_WP*Lx
-            rand=x(nx+1)
-            x=x*Lx/rand
-            x=x-0.5_WP*Lx
-         end if
-         if (sy.gt.0.0_WP) then
-            y = y + sy*sin(1.0_WP*twoPi*y/Ly)
-         else if (sy.lt.0.0_WP) then
-            call random_initialize
-            do j=2,ny+1
-               call random_number(rand)
-               rand=1.0_WP+sy-2.0_WP*sy*rand
-               y(j) = y(j-1)+rand*(y(j)-y(j-1))
-            end do
-            y=y+0.5_WP*Ly
-            rand=y(ny+1)
-            y=y*Ly/rand
-            y=y-0.5_WP*Ly
-         end if
+         !if (sx.gt.0.0_WP) then
+         !   x = x + sx*sin(1.0_WP*twoPi*x/Lx)
+         !else if (sx.lt.0.0_WP) then
+         !   call random_initialize
+         !   do i=2,nx+1
+         !      call random_number(rand)
+         !      rand=1.0_WP+sx-2.0_WP*sx*rand
+         !      x(i) = x(i-1)+rand*(x(i)-x(i-1))
+         !   end do
+         !   x=x+0.5_WP*Lx
+         !   rand=x(nx+1)
+         !   x=x*Lx/rand
+         !   x=x-0.5_WP*Lx
+         !end if
+         !if (sy.gt.0.0_WP) then
+         !   y = y + sy*sin(1.0_WP*twoPi*y/Ly)
+         !else if (sy.lt.0.0_WP) then
+         !   call random_initialize
+         !   do j=2,ny+1
+         !      call random_number(rand)
+         !      rand=1.0_WP+sy-2.0_WP*sy*rand
+         !      y(j) = y(j-1)+rand*(y(j)-y(j-1))
+         !   end do
+         !   y=y+0.5_WP*Ly
+         !   rand=y(ny+1)
+         !   y=y*Ly/rand
+         !   y=y-0.5_WP*Ly
+         !end if
       end block create_block1
 
    end subroutine geometry_init
