@@ -41,5 +41,3 @@ These scripts are used for various build functions
    parameters.  It works by reading all of the `_parameter` files to
    find runtime parameters and takes a template Fortran file and
    inserts the definitions and defaults into the template.
-
-

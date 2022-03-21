@@ -16,7 +16,7 @@ echo WARNING! This script is not for use on Jaguar.
 NCPUS=15
 
 
-# pidfile is a lock file that is used to make sure that only one instance 
+# pidfile is a lock file that is used to make sure that only one instance
 # of this script is working on the current directory
 pidfile=process.pid
 
@@ -30,7 +30,7 @@ initial=29005
 final=29010
 increment=5
 
-# directory archive in HPSS 
+# directory archive in HPSS
 HPSS_DIR="IMmarch11_full"
 
 
@@ -39,14 +39,14 @@ HPSS_DIR="IMmarch11_full"
 
 # Process Files.  Once a plotfile is successfully processed, we will output
 # a file pltXXXXX.processed (checkpoint files are only archived, with a
-# chkXXXXX.processed file appearing once the archiving is successful).  
+# chkXXXXX.processed file appearing once the archiving is successful).
 # Subsequent invocations of this routine will skip over any plotfiles or
 # checkpoint files that have a corresponding .processed file.
 
 function untar_file
 {
 
-    # the argument $1 is the name of the directory we are 
+    # the argument $1 is the name of the directory we are
     # operating on
 
     echo "working on " $1
@@ -63,9 +63,9 @@ function untar_file
 
 
 #----------------------------------------------------------------------------
-# The function freecpus looks counts the _process.XX files to determine 
+# The function freecpus looks counts the _process.XX files to determine
 # how many files we are currently processing.  If we are processing <
-# NCPUS, return 1 to indicate that there are free CPUs available to 
+# NCPUS, return 1 to indicate that there are free CPUs available to
 # do more processing.
 function freecpus
 {
@@ -83,7 +83,7 @@ function freecpus
 # the main loop
 
 # We process NCPUS files at a time.  We loop over files, waiting for free CPUs.
-# When a CPU becomes available, we launch the processing job in the 
+# When a CPU becomes available, we launch the processing job in the
 # background, and move to the next file, again waiting for an available
 # CPU.
 

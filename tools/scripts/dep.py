@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 
 # automatically generate Makefile dependencies for Fortran 90 source.
 #

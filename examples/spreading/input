@@ -12,13 +12,14 @@ nz : 50
 # Non-dimensional fluid properties
 Density ratio :   1000
 Viscosity ratio : 50
-#Oh : 1e-2  <<< Provided in the command line Oh=mu_l/sqrt(rho_l*R*sigma)
-#CA : 30    <<< Provided in the command line
+Oh : 1e-2  #<<< Oh=mu_l/sqrt(rho_l*R*sigma)
+CA : 30
+Initial contact angle : 180
 
 # Time integration
-Max timestep size : 5e-3
-Max cfl number :    1.0
-Max time :          2
+Max timestep size : 1e-2
+Max cfl number :    2.0
+Max time :          5
 
 # Pressure solver
 Pressure tolerance : 1e-6
@@ -29,4 +30,4 @@ Implicit tolerance : 1e-6
 Implicit iteration : 100
 
 # Ensight output
-Ensight output period : 1e-3
+Ensight output period : 5e-2
