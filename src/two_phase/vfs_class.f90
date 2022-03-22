@@ -74,8 +74,8 @@ module vfs_class
       real(WP), dimension(:,:,:), allocatable :: VFold    !< VFold array
       
       ! Phase barycenter data
-      real(WP), dimension(:,:,:,:), allocatable :: Lbary   !< Liquid barycenter
-      real(WP), dimension(:,:,:,:), allocatable :: Gbary   !< Gas barycenter
+      real(WP), dimension(:,:,:,:), allocatable :: Lbary  !< Liquid barycenter
+      real(WP), dimension(:,:,:,:), allocatable :: Gbary  !< Gas barycenter
       
       ! Subcell phasic volume fields
       real(WP), dimension(:,:,:,:,:,:), allocatable :: Lvol   !< Subcell liquid volume
