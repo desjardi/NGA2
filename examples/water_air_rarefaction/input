@@ -1,0 +1,44 @@
+# Parallelization
+Partition :	1 1 1
+
+# Mesh definition
+Lx :	1
+nx :	400
+
+# Flow setup
+Liquid start location :	      -1
+Liquid end location :         0.35
+Discontinuity location :      0.65
+Pre-discontinuity velocity :  2
+Pre-discontinuity pressure :  1
+Post-discontinuity velocity : 11.20375
+Post-discontinuity pressure : 0.7
+
+# Fluid properties
+Liquid dynamic viscosity :    0
+Gas dynamic viscosity :       0
+Liquid gamma :	      	      4.4
+Liquid Pref :		      6e3
+Gas gamma : 		      1.4
+
+# Initial conditions
+Liquid density :              1
+Gas density :                 1e-3
+Surface tension coefficient : 0
+
+# Time integration
+Max timestep size : 1e-4
+Max cfl number :    1
+Max time :          14.5e-3
+Max steps :	    100000
+
+# Pressure solver
+Pressure tolerance : 1e-6
+Pressure iteration : 100
+
+# Implicit velocity solver
+Implicit tolerance : 1e-6
+Implicit iteration : 100
+
+# Ensight output
+Ensight output period : 5e-4
