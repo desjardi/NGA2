@@ -1,4 +1,4 @@
-f90EXE_sources += vfs_class.f90 tpns_class.f90 ccl_class.f90
+f90EXE_sources += vfs_class.f90 tpns_class.f90 ccl_class.f90 matm_class.f90 mast_class.f90
 
 INCLUDE_LOCATIONS += $(NGA_HOME)/src/two_phase
 VPATH_LOCATIONS   += $(NGA_HOME)/src/two_phase
