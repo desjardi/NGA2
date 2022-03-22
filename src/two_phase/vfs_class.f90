@@ -454,6 +454,7 @@ contains
       class(vfs), intent(inout) :: this
       character(len=*), intent(in) :: name
       integer,  intent(in) :: type
+      external :: locator
       interface
          logical function locator(pargrid,ind1,ind2,ind3)
             use pgrid_class, only: pgrid
