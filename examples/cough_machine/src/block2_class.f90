@@ -15,6 +15,7 @@ module block2_class
    use event_class,       only: event
    use datafile_class,    only: datafile
    use monitor_class,     only: monitor
+   use stat_1d_lpt_class, only: stat_1d_lpt
    implicit none
    private
 
@@ -23,17 +24,20 @@ module block2_class
 
    !> Block 2 object
    type :: block2
-      class(config), pointer :: cfg                 !< Pointer to config
-      type(incomp) :: fs                            !< Single-phase incompressible flow solver
-      type(hypre_str) :: ps                         !< Unstructured HYPRE pressure solver
-      type(hypre_str) :: is                         !< Unstructured HYPRE implicit solver
-      type(lpt)       :: lp                         !< Lagrangian particle tracking
-      type(partmesh)  :: pmesh                      !< Partmesh for Lagrangian particle output
-      type(timetracker) :: time                     !< Time tracker
-      type(sgsmodel) ::  sgs                        !< SGS model
-      type(ensight) :: ens_out                      !< Ensight output
-      type(event) :: ens_evt                        !< Ensight output event
-      type(monitor) :: mfile,cflfile,sprayfile      !< Monitor files
+      class(config), pointer :: cfg                               !< Pointer to config
+      type(incomp) :: fs                                          !< Single-phase incompressible flow solver
+      type(hypre_str) :: ps                                       !< Unstructured HYPRE pressure solver
+      type(hypre_str) :: is                                       !< Unstructured HYPRE implicit solver
+      type(lpt)       :: lp                                       !< Lagrangian particle tracking
+      type(partmesh)  :: pmesh                                    !< Partmesh for Lagrangian particle output
+      type(timetracker) :: time                                   !< Time tracker
+      type(sgsmodel) ::  sgs                                      !< SGS model
+      type(ensight) :: ens_out                                    !< Ensight output
+      type(event) :: ens_evt                                      !< Ensight output event
+      type(monitor) :: mfile,cflfile,sprayfile                    !< Monitor files
+      !> Stat files for lpt
+      type(stat_1d_lpt) :: stat_1d_lpt_xloc1,stat_1d_lpt_xloc2    
+      type(event)       :: stat_evt
       !> Private work arrays
       real(WP), dimension(:,:,:),   allocatable :: resU,resV,resW
       real(WP), dimension(:,:,:),   allocatable :: Ui,Vi,Wi
@@ -167,15 +171,15 @@ contains
          b%fs%visc=visc_g
          ! Assign constant density to each phase
          call param_read('Gas density',b%fs%rho)
-         ! Apply clipped Neumann on the right
-         call b%fs%add_bcond(name='outflow',type=clipped_neumann,face='x',dir=+1,canCorrect=.true.,locator=right_boundary)
-         ! Apply Dirichlet at inlet
+         ! Apply Dirichlet at inlet of b1 into b2
          call b%fs%add_bcond(name='inflow' ,type=dirichlet      ,face='x',dir=-1,canCorrect=.false.,locator=left_boundary_mouth)
          call b%fs%add_bcond(name='coflow' ,type=dirichlet      ,face='x',dir=-1,canCorrect=.false.,locator=left_boundary_coflow)
          ! Apply Neumann everywhere else
          !call b%fs%add_bcond(name=   'top',type=neumann,face='y',dir=+1,canCorrect=.false.,locator=   top_boundary)
          !call b%fs%add_bcond(name='bottom',type=neumann,face='y',dir=-1,canCorrect=.false.,locator=bottom_boundary)
          !call b%fs%add_bcond(name=  'left',type=neumann,face='x',dir=-1,canCorrect=.false.,locator=  left_boundary)
+         ! Apply clipped Neumann on the right
+         call b%fs%add_bcond(name='outflow',type=clipped_neumann,face='x',dir=+1,canCorrect=.true.,locator=right_boundary)
          ! Prepare and configure pressure solver
          b%ps=hypre_str(cfg=b%cfg,name='Pressure',method=pcg_pfmg,nst=7)
          b%ps%maxlevel=12
@@ -268,11 +272,22 @@ contains
          if (b%ens_evt%occurs()) call b%ens_out%write_data(b%time%t)
       end block create_ensight
 
+      ! Add particle stats
+      create_stat_lpt: block
+        ! Create event for stats
+        b%stat_evt=event(b%time,'Stat cough_out output')
+        call param_read('Stat output period',b%stat_evt%tper)
+        ! Create stat_lpt plane
+        b%stat_1d_lpt_xloc1=stat_1d_lpt(cfg=b%cfg,lp=b%lp,xloc=90e-03_WP,name='stat_1d_lpt1',dmin=0.0_WP,dmax=1e-03_WP,dnbins=100,ID=int(0,8))
+        b%stat_1d_lpt_xloc2=stat_1d_lpt(cfg=b%cfg,lp=b%lp,xloc=90e-03_WP,name='stat_1d_lpt2',dmin=0.0_WP,dmax=1e-03_WP,dnbins=100,ID=int(1,8))
+      end block create_stat_lpt
+
       ! Create a monitor file
       create_monitor: block
          ! Prepare some info about fields
          call b%fs%get_cfl(b%time%dt,b%time%cfl)
          call b%fs%get_max()
+         call b%lp%get_max()
          ! Create simulation monitor
          b%mfile=monitor(b%fs%cfg%amRoot,'simulation2')
          call b%mfile%add_column(b%time%n,'Timestep number')
@@ -462,6 +477,16 @@ contains
          ! Perform ensight output
          call b%ens_out%write_data(b%time%t)
       end if
+
+      ! Sample and write
+      sample_and_write_statlpt : block
+         call b%stat_1d_lpt_xloc1%sample(b%time%dt)
+         call b%stat_1d_lpt_xloc2%sample(b%time%dt)
+         if (b%stat_evt%occurs()) then
+           call b%stat_1d_lpt_xloc1%write()
+           call b%stat_1d_lpt_xloc2%write()
+         end if
+      end block sample_and_write_statlpt
 
       ! Perform and output monitoring
       call b%fs%get_max()

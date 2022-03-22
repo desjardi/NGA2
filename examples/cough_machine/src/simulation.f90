@@ -21,6 +21,10 @@ module simulation
    real(WP), dimension(:,:,:), allocatable :: U1on2,V1on2,W1on2
    real(WP), dimension(:,:,:), allocatable :: U2on1,V2on1,W2on1
 
+   !> How much volume is clipped
+   real(WP) :: Vclipped, V_before, V_after
+
+
 contains
 
 
@@ -80,8 +84,12 @@ contains
          ! ###############################################
          ! Perform CCL and transfer
          call transfer_vf_to_drops()
-         ! After we're done clip all VOF at the exit area and along the sides - hopefully nothing's left
-         !do k=b1%fs%cfg%kmino_,b1%fs%cfg%kmaxo_
+
+         ! ! Preclip
+         ! call b1%vf%cfg%integrate(b1%vf%VF,V_before)
+
+         ! ! After we're done clip all VOF at the exit area and along the sides - hopefully nothing's left
+         ! do k=b1%fs%cfg%kmino_,b1%fs%cfg%kmaxo_
          !   do j=b1%fs%cfg%jmino_,b1%fs%cfg%jmaxo_
          !      do i=b1%fs%cfg%imino_,b1%fs%cfg%imaxo_
          !         if (i.ge.b1%vf%cfg%imax-5) b1%vf%VF(i,j,k)=0.0_WP
@@ -91,7 +99,11 @@ contains
          !         if (k.le.b1%vf%cfg%kmin+5) b1%vf%VF(i,j,k)=0.0_WP
          !      end do
          !   end do
-         !end do
+         ! end do
+
+         ! ! Preclip
+         ! call b1%vf%cfg%integrate(b1%vf%VF,V_after)
+         ! Vclipped = V_after - V_before
 
          ! Advance block 2 until we've caught up
          do while (b2%time%t.lt.b1%time%t)

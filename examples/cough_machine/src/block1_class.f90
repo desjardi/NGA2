@@ -41,11 +41,13 @@ module block1_class
    end type block1
 
    !> Transfer model parameters
-   real(WP) :: filmthickness_over_dx  =5.0e-1_WP
-   real(WP) :: min_filmthickness      =1.0e-6_WP
-   real(WP) :: diam_over_filmthickness=1.0e+1_WP
-   real(WP) :: max_eccentricity       =5.0e-1_WP
-   real(WP) :: d_threshold            =1.0e-3_WP
+   real(WP) :: filmthickness_over_dx  =5.0e-1_WP   !Model parameter
+
+   real(WP) :: min_filmthickness      =1.0e-6_WP   !Model parameter
+   real(WP) :: diam_over_filmthickness=1.0e+1_WP   !Model parameter
+   
+   real(WP) :: max_eccentricity       =5.0e-1_WP   !Saliva specific?
+   real(WP) :: d_threshold            =1.0e-3_WP   !Saliva specific? 
 
    !> Inflow parameters
    real(WP) :: Uin,delta,Urand,Uco

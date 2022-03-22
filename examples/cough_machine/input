@@ -3,8 +3,8 @@
 # 2=block zoomed out on container
 
 # Parallelization
-1 Partition : 9 1 1
-2 Partition : 9 1 1
+1 Partition : 4 1 1
+2 Partition : 4 1 1
 
 # Zoomed in mesh definition
 1 Uniform Lx :  0.1
@@ -65,3 +65,4 @@ Implicit iteration : 100
 
 # Ensight ouput
 Ensight output period : 1e-3
+Stat output period : 1e-3
