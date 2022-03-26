@@ -141,8 +141,12 @@ module ccl_class
       procedure :: build_lists
       procedure :: deallocate_lists
       procedure, private :: label
+      procedure, private :: calculate_film_thickness
+      procedure, private :: is_film_cell_upper
       procedure, private :: struct_sync
+      procedure, private :: is_connected
       procedure, private :: film_sync
+      procedure, private :: film_is_connected
       procedure, private :: struct_label_update
       procedure, private :: struct_final
       procedure, private :: meta_structures_sort
@@ -543,7 +547,7 @@ contains
          do j= this%cfg%jmin_,this%cfg%jmax_
             do k= this%cfg%kmin_,this%cfg%kmax_
                if (this%VF(this%cfg%imax_,j,k).ge.this%VFlo .and. this%film_phase(this%cfg%imax_,j,k).eq.0) then
-                  this%film_phase(this%cfg%imax_,j,k) = is_film_cell_upper(this%cfg%imax_,j,k,1)
+                  this%film_phase(this%cfg%imax_,j,k) = this%is_film_cell_upper(this%cfg%imax_,j,k,1)
                end if
             end do
          end do
@@ -551,7 +555,7 @@ contains
          do i= this%cfg%imin_,this%cfg%imax_
             do k= this%cfg%kmin_,this%cfg%kmax_
                if (this%VF(i,this%cfg%jmax_,k).ge.this%VFlo .and. this%film_phase(i,this%cfg%jmax_,k).eq.0) then
-                  this%film_phase(i,this%cfg%jmax_,k) = is_film_cell_upper(i,this%cfg%jmax_,k,2)
+                  this%film_phase(i,this%cfg%jmax_,k) = this%is_film_cell_upper(i,this%cfg%jmax_,k,2)
                end if
             end do
          end do
@@ -559,7 +563,7 @@ contains
          do i= this%cfg%imin_,this%cfg%imax_
             do j= this%cfg%jmin_,this%cfg%jmax_
                if (this%VF(i,j,this%cfg%kmax_).ge.this%VFlo .and. this%film_phase(i,j,this%cfg%kmax_).eq.0) then
-                  this%film_phase(i,j,this%cfg%kmax_) = is_film_cell_upper(i,j,this%cfg%kmax_,3)
+                  this%film_phase(i,j,this%cfg%kmax_) = this%is_film_cell_upper(i,j,this%cfg%kmax_,3)
                end if
             end do
          end do
@@ -575,7 +579,7 @@ contains
                do i=this%cfg%imin_,this%cfg%imax_
                   ! Find untagged point in film
                   if (this%film_phase(i,j,k).gt.0) then
-                     if (calculate_film_thickness(i,j,k).lt.this%thickness_cutoff*this%cfg%meshsize(i,j,k)) then
+                     if (this%calculate_film_thickness(i,j,k).lt.this%thickness_cutoff*this%cfg%meshsize(i,j,k)) then
                         do dim = 1,3
                            pos = 0
                            pos(dim) = -1
@@ -900,102 +904,6 @@ contains
       !    return
       ! end function union
       
-      ! Is the cell above (i,j,k) in the dim direction a film cell?
-      function is_film_cell_upper(i,j,k,dim) result(film_phase)
-         implicit none
-         integer, intent(in) :: i,j,k,dim
-         integer :: ii,jj,kk
-         logical :: is_film, use_normal, is_contiguous
-         integer, dimension(3) :: pos
-         real(WP), dimension(3) :: nref, nloc, pref, ploc
-         integer :: film_phase
-         
-         pos = 0
-         pos(dim) = +1
-         ii = i + pos(1)
-         jj = j + pos(2)
-         kk = k + pos(3)
-         film_phase = 0
-         use_normal = getNumberOfVertices(this%poly(1,i,j,k)).gt.0 .and. (getNumberOfVertices(this%poly(1,ii,jj,kk)).gt.0)
-         if (use_normal) then
-            ! If neighbor is a two-plane cell
-            if (getNumberOfVertices(this%poly(2,ii,jj,kk)).ne.0) then
-               nref = calculateNormal(this%poly(1,ii,jj,kk))
-               nloc = calculateNormal(this%poly(2,ii,jj,kk))
-               pref = calculateCentroid(this%poly(1,ii,jj,kk))
-               ploc = calculateCentroid(this%poly(2,ii,jj,kk))
-               is_contiguous = dot_product(ploc-pref,nloc).gt.0.0_WP ! .true. if liquid film
-               is_film = .true.
-               ! If self is a two-plane cell
-            elseif (getNumberOfVertices(this%poly(2,i,j,k)).ne.0) then
-               nref = calculateNormal(this%poly(1,i,j,k))
-               nloc = calculateNormal(this%poly(2,i,j,k))
-               pref = calculateCentroid(this%poly(1,i,j,k))
-               ploc = calculateCentroid(this%poly(2,i,j,k))
-               is_contiguous = dot_product(ploc-pref,nloc).gt.0.0_WP ! .true. if liquid film
-               is_film = .true.
-               ! If both are one-plane cells
-            else
-               nref = calculateNormal(this%poly(1,i,j,k))
-               nloc = calculateNormal(this%poly(1,ii,jj,kk))
-               pref = calculateCentroid(this%poly(1,i,j,k))
-               ploc = calculateCentroid(this%poly(1,ii,jj,kk))
-               is_contiguous = (dot_product(ploc-pref,nloc).ge.0.0_WP).or.(dot_product(pref-ploc,nref).ge.0.0_WP)
-               is_film = (dot_product(nref,nloc).lt.this%dot_threshold)
-            end if
-            if (is_film) then
-               if (is_contiguous) then
-                  ! Liquid film
-                  film_phase = 1
-               else
-                  ! Gas film
-                  film_phase = 2
-                  this%film_pair(i,j,k) = this%cfg%get_lexico_from_ijk([ii,jj,kk])
-               end if ! is_contiguous
-            end if ! is_film
-         end if
-         return
-      end function is_film_cell_upper
-      
-      ! Calculate film thickness
-      function calculate_film_thickness(i,j,k) result(local_thickness)
-         implicit none
-         integer, intent(in) :: i,j,k
-         real(WP) :: local_thickness
-         real(WP) :: SD_local_sum, VOF_local_sum
-         integer :: ii,jj,kk
-         
-         SD_local_sum = 0.0_WP
-         VOF_local_sum = 0.0_WP
-         if (this%film_phase(i,j,k).eq.2) then
-            do kk = k-1,k+1
-               do jj = j-1,j+1
-                  do ii = i-1,i+1
-                     VOF_local_sum = VOF_local_sum + (1.0_WP-this%VF(ii,jj,kk))
-                  end do
-               end do
-            end do
-         else
-            do kk = k-1,k+1
-               do jj = j-1,j+1
-                  do ii = i-1,i+1
-                     VOF_local_sum = VOF_local_sum + this%VF(ii,jj,kk)
-                  end do
-               end do
-            end do
-         end if
-         do kk = k-1,k+1
-            do jj = j-1,j+1
-               do ii = i-1,i+1
-                  SD_local_sum = SD_local_sum + this%SD(ii,jj,kk)
-               end do
-            end do
-         end do
-         local_thickness = 2.0_WP*VOF_local_sum/(SD_local_sum+epsilon(1.0_WP))
-         this%film_thickness(i,j,k) = local_thickness
-         return
-      end function calculate_film_thickness
-      
       ! Fill border cell id array with compact IDs
       subroutine fill_border_id(a_list_type,a_id_array,a_border_array)
          implicit none
@@ -1081,6 +989,103 @@ contains
       
    end subroutine label
    
+   ! Calculate film thickness
+   function calculate_film_thickness(this,i,j,k) result(local_thickness)
+      implicit none
+      class(ccl), intent(inout) :: this
+      integer, intent(in) :: i,j,k
+      real(WP) :: local_thickness
+      real(WP) :: SD_local_sum, VOF_local_sum
+      integer :: ii,jj,kk
+      
+      SD_local_sum = 0.0_WP
+      VOF_local_sum = 0.0_WP
+      if (this%film_phase(i,j,k).eq.2) then
+         do kk = k-1,k+1
+            do jj = j-1,j+1
+               do ii = i-1,i+1
+                  VOF_local_sum = VOF_local_sum + (1.0_WP-this%VF(ii,jj,kk))
+               end do
+            end do
+         end do
+      else
+         do kk = k-1,k+1
+            do jj = j-1,j+1
+               do ii = i-1,i+1
+                  VOF_local_sum = VOF_local_sum + this%VF(ii,jj,kk)
+               end do
+            end do
+         end do
+      end if
+      do kk = k-1,k+1
+         do jj = j-1,j+1
+            do ii = i-1,i+1
+               SD_local_sum = SD_local_sum + this%SD(ii,jj,kk)
+            end do
+         end do
+      end do
+      local_thickness = 2.0_WP*VOF_local_sum/(SD_local_sum+epsilon(1.0_WP))
+      this%film_thickness(i,j,k) = local_thickness
+      return
+   end function calculate_film_thickness
+
+   ! Is the cell above (i,j,k) in the dim direction a film cell?
+   function is_film_cell_upper(this,i,j,k,dim) result(film_phase)
+      implicit none
+      class(ccl), intent(inout) :: this
+      integer, intent(in) :: i,j,k,dim
+      integer :: ii,jj,kk
+      logical :: is_film, use_normal, is_contiguous
+      integer, dimension(3) :: pos
+      real(WP), dimension(3) :: nref, nloc, pref, ploc
+      integer :: film_phase
+      
+      pos = 0
+      pos(dim) = +1
+      ii = i + pos(1)
+      jj = j + pos(2)
+      kk = k + pos(3)
+      film_phase = 0
+      use_normal = getNumberOfVertices(this%poly(1,i,j,k)).gt.0 .and. (getNumberOfVertices(this%poly(1,ii,jj,kk)).gt.0)
+      if (use_normal) then
+         ! If neighbor is a two-plane cell
+         if (getNumberOfVertices(this%poly(2,ii,jj,kk)).ne.0) then
+            nref = calculateNormal(this%poly(1,ii,jj,kk))
+            nloc = calculateNormal(this%poly(2,ii,jj,kk))
+            pref = calculateCentroid(this%poly(1,ii,jj,kk))
+            ploc = calculateCentroid(this%poly(2,ii,jj,kk))
+            is_contiguous = dot_product(ploc-pref,nloc).gt.0.0_WP ! .true. if liquid film
+            is_film = .true.
+            ! If self is a two-plane cell
+         elseif (getNumberOfVertices(this%poly(2,i,j,k)).ne.0) then
+            nref = calculateNormal(this%poly(1,i,j,k))
+            nloc = calculateNormal(this%poly(2,i,j,k))
+            pref = calculateCentroid(this%poly(1,i,j,k))
+            ploc = calculateCentroid(this%poly(2,i,j,k))
+            is_contiguous = dot_product(ploc-pref,nloc).gt.0.0_WP ! .true. if liquid film
+            is_film = .true.
+            ! If both are one-plane cells
+         else
+            nref = calculateNormal(this%poly(1,i,j,k))
+            nloc = calculateNormal(this%poly(1,ii,jj,kk))
+            pref = calculateCentroid(this%poly(1,i,j,k))
+            ploc = calculateCentroid(this%poly(1,ii,jj,kk))
+            is_contiguous = (dot_product(ploc-pref,nloc).ge.0.0_WP).or.(dot_product(pref-ploc,nref).ge.0.0_WP)
+            is_film = (dot_product(nref,nloc).lt.this%dot_threshold)
+         end if
+         if (is_film) then
+            if (is_contiguous) then
+               ! Liquid film
+               film_phase = 1
+            else
+               ! Gas film
+               film_phase = 2
+               this%film_pair(i,j,k) = this%cfg%get_lexico_from_ijk([ii,jj,kk])
+            end if ! is_contiguous
+         end if ! is_film
+      end if
+      return
+   end function is_film_cell_upper
    
    !> Synchronize struct labels across all procs
    subroutine struct_sync(this)
@@ -1114,10 +1119,10 @@ contains
                   if (this%parent(this%border_id(this%cfg%imin_,j,k)).eq.this%border_id(this%cfg%imin_,j,k)) then
                      ! call union(this%border_id(this%cfg%imin_,j,k),this%border_id(this%cfg%imin_-1,j,k))
                      ! is_contiguous = is_connected(this%cfg%imin_,j,k,1)
-                     if (is_connected(this%cfg%imin_,j,k,1)) this%parent(this%border_id(this%cfg%imin_,j,k)) = this%border_id(this%cfg%imin_-1,j,k)
+                     if (this%is_connected(this%cfg%imin_,j,k,1)) this%parent(this%border_id(this%cfg%imin_,j,k)) = this%border_id(this%cfg%imin_-1,j,k)
                   elseif (find(this%border_id(this%cfg%imin_,j,k)).ne.find(this%border_id(this%cfg%imin_-1,j,k))) then
                      ! call union(this%border_id(this%cfg%imin_-1,j,k),this%parent(this%border_id(this%cfg%imin_,j,k)))
-                     if (is_connected(this%cfg%imin_,j,k,1)) then
+                     if (this%is_connected(this%cfg%imin_,j,k,1)) then
                         if (this%border_id(this%cfg%imin_-1,j,k).gt.this%parent(this%border_id(this%cfg%imin_,j,k))) then
                            call union(this%border_id(this%cfg%imin_-1,j,k),this%parent(this%border_id(this%cfg%imin_,j,k)))
                         else
@@ -1139,10 +1144,10 @@ contains
                   ! If the border cell id already has a parent id, then union() the ghost cell id with the border cell id parent
                   if (this%parent(this%border_id(i,this%cfg%jmin_,k)).eq.this%border_id(i,this%cfg%jmin_,k)) then
                      ! call union(this%border_id(i,this%cfg%jmin_,k),this%border_id(i,this%cfg%jmin_-1,k))
-                     if (is_connected(i,this%cfg%jmin_,k,2)) this%parent(this%border_id(i,this%cfg%jmin_,k)) = this%border_id(i,this%cfg%jmin_-1,k)
+                     if (this%is_connected(i,this%cfg%jmin_,k,2)) this%parent(this%border_id(i,this%cfg%jmin_,k)) = this%border_id(i,this%cfg%jmin_-1,k)
                   elseif (find(this%border_id(i,this%cfg%jmin_,k)).ne.find(this%border_id(i,this%cfg%jmin_-1,k))) then
                      ! call union(this%border_id(i,this%cfg%jmin_-1,k),this%parent(this%border_id(i,this%cfg%jmin_,k)))
-                     if (is_connected(i,this%cfg%jmin_,k,2)) then
+                     if (this%is_connected(i,this%cfg%jmin_,k,2)) then
                         if (this%border_id(i,this%cfg%jmin_-1,k).gt.this%parent(this%border_id(i,this%cfg%jmin_,k))) then
                            call union(this%border_id(i,this%cfg%jmin_-1,k),this%parent(this%border_id(i,this%cfg%jmin_,k)))
                         else
@@ -1164,10 +1169,10 @@ contains
                   ! If the border cell id already has a parent id, then union() the ghost cell id with the border cell id parent
                   if (this%parent(this%border_id(i,j,this%cfg%kmin_)).eq.this%border_id(i,j,this%cfg%kmin_)) then
                      ! call union(this%border_id(i,j,this%cfg%kmin_),this%border_id(i,j,this%cfg%kmin_-1))
-                     if (is_connected(i,j,this%cfg%kmin_,3)) this%parent(this%border_id(i,j,this%cfg%kmin_)) = this%border_id(i,j,this%cfg%kmin_-1)
+                     if (this%is_connected(i,j,this%cfg%kmin_,3)) this%parent(this%border_id(i,j,this%cfg%kmin_)) = this%border_id(i,j,this%cfg%kmin_-1)
                   elseif (find(this%border_id(i,j,this%cfg%kmin_)).ne.find(this%border_id(i,j,this%cfg%kmin_-1))) then
                      ! call union(this%border_id(i,j,this%cfg%kmin_-1),this%parent(this%border_id(i,j,this%cfg%kmin_)))
-                     if (is_connected(i,j,this%cfg%kmin_,3)) then
+                     if (this%is_connected(i,j,this%cfg%kmin_,3)) then
                         if (this%border_id(i,j,this%cfg%kmin_-1).gt.this%parent(this%border_id(i,j,this%cfg%kmin_))) then
                            call union(this%border_id(i,j,this%cfg%kmin_-1),this%parent(this%border_id(i,j,this%cfg%kmin_)))
                         else
@@ -1263,10 +1268,10 @@ contains
                if (this%id(this%cfg%imin,j,k).gt.0.and.this%border_id(this%cfg%imin-1,j,k).gt.0) then
                   ! If the border cell id already has a parent id, then union() the ghost cell id with the border cell id parent
                   if (this%parent(this%id(this%cfg%imin,j,k)).eq.this%id(this%cfg%imin,j,k)) then
-                     if (is_connected(this%cfg%imin,j,k,1)) call union(this%id(this%cfg%imin,j,k),this%border_id(this%cfg%imin-1,j,k))
+                     if (this%is_connected(this%cfg%imin,j,k,1)) call union(this%id(this%cfg%imin,j,k),this%border_id(this%cfg%imin-1,j,k))
                      ! this%parent(this%id(this%cfg%imin,j,k)) = this%border_id(this%cfg%imin-1,j,k)
                   elseif (find(this%id(this%cfg%imin,j,k)).ne.find(this%border_id(this%cfg%imin-1,j,k))) then
-                     if (is_connected(this%cfg%imin,j,k,1)) then
+                     if (this%is_connected(this%cfg%imin,j,k,1)) then
                         if (this%border_id(this%cfg%imin-1,j,k).gt.this%parent(this%id(this%cfg%imin,j,k))) then
                            call union(this%border_id(this%cfg%imin-1,j,k),this%parent(this%id(this%cfg%imin,j,k)))
                         else
@@ -1287,11 +1292,11 @@ contains
                if (this%id(i,this%cfg%jmin,k).gt.0.and.this%border_id(i,this%cfg%jmin-1,k).gt.0) then
                   ! If the border cell id already has a parent id, then union() the ghost cell id with the border cell id parent
                   if (this%parent(this%id(i,this%cfg%jmin,k)).eq.this%id(i,this%cfg%jmin,k)) then
-                     if (is_connected(i,this%cfg%jmin,k,2)) call union(this%id(i,this%cfg%jmin,k),this%border_id(i,this%cfg%jmin-1,k))
+                     if (this%is_connected(i,this%cfg%jmin,k,2)) call union(this%id(i,this%cfg%jmin,k),this%border_id(i,this%cfg%jmin-1,k))
                      ! this%parent(this%id(i,this%cfg%jmin,k)) = this%border_id(i,this%cfg%jmin-1,k)
                   elseif (find(this%id(i,this%cfg%jmin,k)).ne.find(this%border_id(i,this%cfg%jmin-1,k))) then
                      ! call union(this%border_id(i,this%cfg%jmin-1,k),this%parent(this%id(i,this%cfg%jmin,k)))
-                     if (is_connected(i,this%cfg%jmin,k,2)) then
+                     if (this%is_connected(i,this%cfg%jmin,k,2)) then
                         if (this%border_id(i,this%cfg%jmin-1,k).gt.this%parent(this%id(i,this%cfg%jmin,k))) then
                            call union(this%border_id(i,this%cfg%jmin-1,k),this%parent(this%id(i,this%cfg%jmin,k)))
                         else
@@ -1312,11 +1317,11 @@ contains
                if (this%id(i,j,this%cfg%kmin).gt.0.and.this%border_id(i,j,this%cfg%kmin-1).gt.0) then
                   ! If the border cell id already has a parent id, then union() the ghost cell id with the border cell id parent
                   if (this%parent(this%id(i,j,this%cfg%kmin)).eq.this%id(i,j,this%cfg%kmin)) then
-                     if (is_connected(i,j,this%cfg%kmin,3)) call union(this%id(i,j,this%cfg%kmin),this%border_id(i,j,this%cfg%kmin-1))
+                     if (this%is_connected(i,j,this%cfg%kmin,3)) call union(this%id(i,j,this%cfg%kmin),this%border_id(i,j,this%cfg%kmin-1))
                      ! this%parent(this%id(i,j,this%cfg%kmin)) = this%border_id(i,j,this%cfg%kmin-1)
                   elseif (find(this%id(i,j,this%cfg%kmin)).ne.find(this%border_id(i,j,this%cfg%kmin-1))) then
                      ! call union(this%border_id(i,j,this%cfg%kmin-1),this%parent(this%id(i,j,this%cfg%kmin)))
-                     if (is_connected(i,j,this%cfg%kmin,3)) then
+                     if (this%is_connected(i,j,this%cfg%kmin,3)) then
                         if (this%border_id(i,j,this%cfg%kmin-1).gt.this%parent(this%id(i,j,this%cfg%kmin))) then
                            call union(this%border_id(i,j,this%cfg%kmin-1),this%parent(this%id(i,j,this%cfg%kmin)))
                         else
@@ -1533,9 +1538,49 @@ contains
          return
       end function film_find
       
-      ! Use PLIC normals to determine if two cells are in the same struct
-      function is_connected(i,j,k,dim)
+      !> Synchronize struct periodicity across all procs
+      subroutine struct_sync_per
          implicit none
+         
+         ! Allocate local and global perodicity arrays
+         allocate(this%per_(1:3,this%sync_offset+1:this%sync_offset+this%n_struct_max)); this%per_ = 0
+         allocate(this%per (1:3,this%cfg%nproc*this%n_struct_max)); this%per = 0
+         
+         ! Fill per_ array
+         do i=this%sync_offset+1,this%sync_offset+this%n_struct
+            this%per_(:,i) = this%struct_list(this%struct_map_(i))%per
+         end do
+         
+         ! Communitcate per
+         call MPI_ALLGATHER(this%per_(1,:),this%n_struct_max,MPI_INTEGER,this%per(1,:),this%n_struct_max,MPI_INTEGER,this%cfg%comm,ierr)
+         call MPI_ALLGATHER(this%per_(2,:),this%n_struct_max,MPI_INTEGER,this%per(2,:),this%n_struct_max,MPI_INTEGER,this%cfg%comm,ierr)
+         call MPI_ALLGATHER(this%per_(3,:),this%n_struct_max,MPI_INTEGER,this%per(3,:),this%n_struct_max,MPI_INTEGER,this%cfg%comm,ierr)
+        
+         ! Update parent per
+         do i=1,this%cfg%nproc*this%n_struct_max
+            this%per(:,this%parent(i)) = max(this%per(:,this%parent(i)),this%per(:,i))
+         end do
+         
+         do i=this%sync_offset+1,this%sync_offset+this%n_struct
+            do n=1,this%struct_list(this%struct_map_(i))%nnode
+               ii = this%struct_list(this%struct_map_(i))%node(1,n)
+               jj = this%struct_list(this%struct_map_(i))%node(2,n)
+               kk = this%struct_list(this%struct_map_(i))%node(3,n)
+               this%idp(:,ii,jj,kk) = this%per(:,this%id(ii,jj,kk))
+            end do
+         end do
+         
+         return
+         
+      end subroutine struct_sync_per
+      
+   end subroutine struct_sync
+   
+   
+      ! Use PLIC normals to determine if two cells are in the same struct
+   function is_connected(this,i,j,k,dim)
+         implicit none
+      class(ccl), intent(inout) :: this
          integer, intent(in) :: i,j,k,dim
          integer :: ii,jj,kk
          logical :: is_connected, use_normal
@@ -1577,44 +1622,6 @@ contains
          return
       end function is_connected
       
-      !> Synchronize struct periodicity across all procs
-      subroutine struct_sync_per
-         implicit none
-         
-         ! Allocate local and global perodicity arrays
-         allocate(this%per_(1:3,this%sync_offset+1:this%sync_offset+this%n_struct_max)); this%per_ = 0
-         allocate(this%per (1:3,this%cfg%nproc*this%n_struct_max)); this%per = 0
-         
-         ! Fill per_ array
-         do i=this%sync_offset+1,this%sync_offset+this%n_struct
-            this%per_(:,i) = this%struct_list(this%struct_map_(i))%per
-         end do
-         
-         ! Communitcate per
-         call MPI_ALLGATHER(this%per_(1,:),this%n_struct_max,MPI_INTEGER,this%per(1,:),this%n_struct_max,MPI_INTEGER,this%cfg%comm,ierr)
-         call MPI_ALLGATHER(this%per_(2,:),this%n_struct_max,MPI_INTEGER,this%per(2,:),this%n_struct_max,MPI_INTEGER,this%cfg%comm,ierr)
-         call MPI_ALLGATHER(this%per_(3,:),this%n_struct_max,MPI_INTEGER,this%per(3,:),this%n_struct_max,MPI_INTEGER,this%cfg%comm,ierr)
-        
-         ! Update parent per
-         do i=1,this%cfg%nproc*this%n_struct_max
-            this%per(:,this%parent(i)) = max(this%per(:,this%parent(i)),this%per(:,i))
-         end do
-         
-         do i=this%sync_offset+1,this%sync_offset+this%n_struct
-            do n=1,this%struct_list(this%struct_map_(i))%nnode
-               ii = this%struct_list(this%struct_map_(i))%node(1,n)
-               jj = this%struct_list(this%struct_map_(i))%node(2,n)
-               kk = this%struct_list(this%struct_map_(i))%node(3,n)
-               this%idp(:,ii,jj,kk) = this%per(:,this%id(ii,jj,kk))
-            end do
-         end do
-         
-         return
-         
-      end subroutine struct_sync_per
-      
-   end subroutine struct_sync
-   
    
    !> Synchronize film labels across all procs
    subroutine film_sync(this)
@@ -1647,12 +1654,12 @@ contains
                   ! If the border cell id already has a parent id, then union() the ghost cell id with the border cell id parent
                   if (this%film_parent(this%film_border_id(this%cfg%imin_,j,k)).eq.this%film_border_id(this%cfg%imin_,j,k)) then
                      ! call union(this%film_border_id(this%cfg%imin_,j,k),this%film_border_id(this%cfg%imin_-1,j,k))
-                     ! is_contiguous = is_connected(this%cfg%imin_,j,k,1)
+                     ! is_contiguous = this%film_is_connected(this%cfg%imin_,j,k,1)
                      ! if (is_contiguous) parent(this%film_border_id(this%cfg%imin_,j,k)) = this%film_border_id(this%cfg%imin_-1,j,k)
-                     if (is_connected(this%cfg%imin_,j,k,1)) this%film_parent(this%film_border_id(this%cfg%imin_,j,k)) = this%film_border_id(this%cfg%imin_-1,j,k)
+                     if (this%film_is_connected(this%cfg%imin_,j,k,1)) this%film_parent(this%film_border_id(this%cfg%imin_,j,k)) = this%film_border_id(this%cfg%imin_-1,j,k)
                   elseif (find(this%film_border_id(this%cfg%imin_,j,k)).ne.find(this%film_border_id(this%cfg%imin_-1,j,k))) then
                      ! call union(this%film_border_id(this%cfg%imin_-1,j,k),this%film_parent(this%film_border_id(this%cfg%imin_,j,k)))
-                     if (is_connected(this%cfg%imin_,j,k,1)) then
+                     if (this%film_is_connected(this%cfg%imin_,j,k,1)) then
                         if (this%film_border_id(this%cfg%imin_-1,j,k).gt.this%film_parent(this%film_border_id(this%cfg%imin_,j,k))) then
                            call union(this%film_border_id(this%cfg%imin_-1,j,k),this%film_parent(this%film_border_id(this%cfg%imin_,j,k)))
                         else
@@ -1674,10 +1681,10 @@ contains
                   ! If the border cell id already has a parent id, then union() the ghost cell id with the border cell id parent
                   if (this%film_parent(this%film_border_id(i,this%cfg%jmin_,k)).eq.this%film_border_id(i,this%cfg%jmin_,k)) then
                      ! call union(this%film_border_id(i,this%cfg%jmin_,k),this%film_border_id(i,this%cfg%jmin_-1,k))
-                     if (is_connected(i,this%cfg%jmin_,k,2)) this%film_parent(this%film_border_id(i,this%cfg%jmin_,k)) = this%film_border_id(i,this%cfg%jmin_-1,k)
+                     if (this%film_is_connected(i,this%cfg%jmin_,k,2)) this%film_parent(this%film_border_id(i,this%cfg%jmin_,k)) = this%film_border_id(i,this%cfg%jmin_-1,k)
                   elseif (find(this%film_border_id(i,this%cfg%jmin_,k)).ne.find(this%film_border_id(i,this%cfg%jmin_-1,k))) then
                      ! call union(this%film_border_id(i,this%cfg%jmin_-1,k),this%film_parent(this%film_border_id(i,this%cfg%jmin_,k)))
-                     if (is_connected(i,this%cfg%jmin_,k,2)) then
+                     if (this%film_is_connected(i,this%cfg%jmin_,k,2)) then
                         if (this%film_border_id(i,this%cfg%jmin_-1,k).gt.this%film_parent(this%film_border_id(i,this%cfg%jmin_,k))) then
                            call union(this%film_border_id(i,this%cfg%jmin_-1,k),this%film_parent(this%film_border_id(i,this%cfg%jmin_,k)))
                         else
@@ -1699,10 +1706,10 @@ contains
                   ! If the border cell id already has a parent id, then union() the ghost cell id with the border cell id parent
                   if (this%film_parent(this%film_border_id(i,j,this%cfg%kmin_)).eq.this%film_border_id(i,j,this%cfg%kmin_)) then
                      ! call union(this%film_border_id(i,j,this%cfg%kmin_),this%film_border_id(i,j,this%cfg%kmin_-1))
-                     if (is_connected(i,j,this%cfg%kmin_,3)) this%film_parent(this%film_border_id(i,j,this%cfg%kmin_)) = this%film_border_id(i,j,this%cfg%kmin_-1)
+                     if (this%film_is_connected(i,j,this%cfg%kmin_,3)) this%film_parent(this%film_border_id(i,j,this%cfg%kmin_)) = this%film_border_id(i,j,this%cfg%kmin_-1)
                   elseif (find(this%film_border_id(i,j,this%cfg%kmin_)).ne.find(this%film_border_id(i,j,this%cfg%kmin_-1))) then
                      ! call union(this%film_border_id(i,j,this%cfg%kmin_-1),this%film_parent(this%film_border_id(i,j,this%cfg%kmin_)))
-                     if (is_connected(i,j,this%cfg%kmin_,3)) then
+                     if (this%film_is_connected(i,j,this%cfg%kmin_,3)) then
                         if (this%film_border_id(i,j,this%cfg%kmin_-1).gt.this%film_parent(this%film_border_id(i,j,this%cfg%kmin_))) then
                            call union(this%film_border_id(i,j,this%cfg%kmin_-1),this%film_parent(this%film_border_id(i,j,this%cfg%kmin_)))
                         else
@@ -1798,10 +1805,10 @@ contains
                if (this%film_id(this%cfg%imin,j,k).gt.0.and.this%film_border_id(this%cfg%imin-1,j,k).gt.0) then
                   ! If the border cell id already has a parent id, then union() the ghost cell id with the border cell id parent
                   if (this%film_parent(this%film_id(this%cfg%imin,j,k)).eq.this%film_id(this%cfg%imin,j,k)) then
-                     if (is_connected(this%cfg%imin,j,k,1)) call union(this%film_id(this%cfg%imin,j,k),this%film_border_id(this%cfg%imin-1,j,k))
+                     if (this%film_is_connected(this%cfg%imin,j,k,1)) call union(this%film_id(this%cfg%imin,j,k),this%film_border_id(this%cfg%imin-1,j,k))
                      ! this%film_parent(this%film_id(this%cfg%imin,j,k)) = this%film_border_id(this%cfg%imin-1,j,k)
                   elseif (find(this%film_id(this%cfg%imin,j,k)).ne.find(this%film_border_id(this%cfg%imin-1,j,k))) then
-                     if (is_connected(this%cfg%imin,j,k,1)) then
+                     if (this%film_is_connected(this%cfg%imin,j,k,1)) then
                         if (this%film_border_id(this%cfg%imin-1,j,k).gt.this%film_parent(this%film_id(this%cfg%imin,j,k))) then
                            call union(this%film_border_id(this%cfg%imin-1,j,k),this%film_parent(this%film_id(this%cfg%imin,j,k)))
                         else
@@ -1822,11 +1829,11 @@ contains
                if (this%film_id(i,this%cfg%jmin,k).gt.0.and.this%film_border_id(i,this%cfg%jmin-1,k).gt.0) then
                   ! If the border cell id already has a parent id, then union() the ghost cell id with the border cell id parent
                   if (this%film_parent(this%film_id(i,this%cfg%jmin,k)).eq.this%film_id(i,this%cfg%jmin,k)) then
-                     if (is_connected(i,this%cfg%jmin,k,2)) call union(this%film_id(i,this%cfg%jmin,k),this%film_border_id(i,this%cfg%jmin-1,k))
+                     if (this%film_is_connected(i,this%cfg%jmin,k,2)) call union(this%film_id(i,this%cfg%jmin,k),this%film_border_id(i,this%cfg%jmin-1,k))
                      ! this%film_parent(this%film_id(i,this%cfg%jmin,k)) = this%film_border_id(i,this%cfg%jmin-1,k)
                   elseif (find(this%film_id(i,this%cfg%jmin,k)).ne.find(this%film_border_id(i,this%cfg%jmin-1,k))) then
                      ! call union(this%film_border_id(i,this%cfg%jmin-1,k),this%film_parent(this%film_id(i,this%cfg%jmin,k)))
-                     if (is_connected(i,this%cfg%jmin,k,2)) then
+                     if (this%film_is_connected(i,this%cfg%jmin,k,2)) then
                         if (this%film_border_id(i,this%cfg%jmin-1,k).gt.this%film_parent(this%film_id(i,this%cfg%jmin,k))) then
                            call union(this%film_border_id(i,this%cfg%jmin-1,k),this%film_parent(this%film_id(i,this%cfg%jmin,k)))
                         else
@@ -1847,11 +1854,11 @@ contains
                if (this%film_id(i,j,this%cfg%kmin).gt.0.and.this%film_border_id(i,j,this%cfg%kmin-1).gt.0) then
                   ! If the border cell id already has a parent id, then union() the ghost cell id with the border cell id parent
                   if (this%film_parent(this%film_id(i,j,this%cfg%kmin)).eq.this%film_id(i,j,this%cfg%kmin)) then
-                     if (is_connected(i,j,this%cfg%kmin,3)) call union(this%film_id(i,j,this%cfg%kmin),this%film_border_id(i,j,this%cfg%kmin-1))
+                     if (this%film_is_connected(i,j,this%cfg%kmin,3)) call union(this%film_id(i,j,this%cfg%kmin),this%film_border_id(i,j,this%cfg%kmin-1))
                      ! this%film_parent(this%film_id(i,j,this%cfg%kmin)) = this%film_border_id(i,j,this%cfg%kmin-1)
                   elseif (find(this%film_id(i,j,this%cfg%kmin)).ne.find(this%film_border_id(i,j,this%cfg%kmin-1))) then
                      ! call union(this%film_border_id(i,j,this%cfg%kmin-1),this%film_parent(this%film_id(i,j,this%cfg%kmin)))
-                     if (is_connected(i,j,this%cfg%kmin,3)) then
+                     if (this%film_is_connected(i,j,this%cfg%kmin,3)) then
                         if (this%film_border_id(i,j,this%cfg%kmin-1).gt.this%film_parent(this%film_id(i,j,this%cfg%kmin))) then
                            call union(this%film_border_id(i,j,this%cfg%kmin-1),this%film_parent(this%film_id(i,j,this%cfg%kmin)))
                         else
@@ -2050,50 +2057,6 @@ contains
          return
       end function film_find
       
-      ! Use PLIC normals to determine if two cells are in the same film
-      ! Fow now, always connected
-      function is_connected(i,j,k,dim)
-         implicit none
-         integer, intent(in) :: i,j,k,dim
-         integer :: ii,jj,kk
-         logical :: is_connected!, use_normal
-         integer, dimension(3) :: pos
-         ! real(WP), dimension(3) :: nref, nloc, pref, ploc
-         
-         pos = 0
-         pos(dim) = -1
-         ii = i + pos(1)
-         jj = j + pos(2)
-         kk = k + pos(3)
-         is_connected = .true.
-         ! use_normal = getNumberOfVertices(this%poly(1,i,j,k)).gt.0 .and. (getNumberOfVertices(this%poly(1,ii,jj,kk)).gt.0)
-         ! if (use_normal) then
-         !    ! If neighbor is a two-plane cell
-         !    if (getNumberOfVertices(this%poly(2,ii,jj,kk)).ne.0) then
-         !       nref = calculateNormal(this%poly(1,ii,jj,kk))
-         !       nloc = calculateNormal(this%poly(2,ii,jj,kk))
-         !       pref = calculateCentroid(this%poly(1,ii,jj,kk))
-         !       ploc = calculateCentroid(this%poly(2,ii,jj,kk))
-         !       is_connected = dot_product(ploc-pref,nloc).gt.0.0_WP ! .true. if liquid film
-         !    ! If self is a two-plane cell
-         !    elseif (getNumberOfVertices(this%poly(2,i,j,k)).ne.0) then
-         !       nref = calculateNormal(this%poly(1,i,j,k))
-         !       nloc = calculateNormal(this%poly(2,i,j,k))
-         !       pref = calculateCentroid(this%poly(1,i,j,k))
-         !       ploc = calculateCentroid(this%poly(2,i,j,k))
-         !       is_connected = dot_product(ploc-pref,nloc).gt.0.0_WP ! .true. if liquid film
-         !    ! If both are one-plane cells
-         !    else
-         !       nref = calculateNormal(this%poly(1,i,j,k))
-         !       nloc = calculateNormal(this%poly(1,ii,jj,kk))
-         !       pref = calculateCentroid(this%poly(1,i,j,k))
-         !       ploc = calculateCentroid(this%poly(1,ii,jj,kk))
-         !       is_connected = (dot_product(ploc-pref,nloc).ge.0.0_WP).or.(dot_product(pref-ploc,nref).ge.0.0_WP)
-         !    end if
-         ! end if
-         return
-      end function is_connected
-      
       ! ! Synchronize struct periodicity across all procs
       ! subroutine film_sync_per
       !    implicit none
@@ -2130,6 +2093,52 @@ contains
       ! end subroutine film_sync_per
       
    end subroutine film_sync
+   
+   
+      ! Use PLIC normals to determine if two cells are in the same film
+      ! Fow now, always connected
+   function film_is_connected(this,i,j,k,dim)
+         implicit none
+      class(ccl), intent(inout) :: this
+         integer, intent(in) :: i,j,k,dim
+         integer :: ii,jj,kk
+      logical :: film_is_connected!, use_normal
+         integer, dimension(3) :: pos
+         ! real(WP), dimension(3) :: nref, nloc, pref, ploc
+         
+         pos = 0
+         pos(dim) = -1
+         ii = i + pos(1)
+         jj = j + pos(2)
+         kk = k + pos(3)
+      film_is_connected = .true.
+         ! use_normal = getNumberOfVertices(this%poly(1,i,j,k)).gt.0 .and. (getNumberOfVertices(this%poly(1,ii,jj,kk)).gt.0)
+         ! if (use_normal) then
+         !    ! If neighbor is a two-plane cell
+         !    if (getNumberOfVertices(this%poly(2,ii,jj,kk)).ne.0) then
+         !       nref = calculateNormal(this%poly(1,ii,jj,kk))
+         !       nloc = calculateNormal(this%poly(2,ii,jj,kk))
+         !       pref = calculateCentroid(this%poly(1,ii,jj,kk))
+         !       ploc = calculateCentroid(this%poly(2,ii,jj,kk))
+      !       film_is_connected = dot_product(ploc-pref,nloc).gt.0.0_WP ! .true. if liquid film
+         !    ! If self is a two-plane cell
+         !    elseif (getNumberOfVertices(this%poly(2,i,j,k)).ne.0) then
+         !       nref = calculateNormal(this%poly(1,i,j,k))
+         !       nloc = calculateNormal(this%poly(2,i,j,k))
+         !       pref = calculateCentroid(this%poly(1,i,j,k))
+         !       ploc = calculateCentroid(this%poly(2,i,j,k))
+      !       film_is_connected = dot_product(ploc-pref,nloc).gt.0.0_WP ! .true. if liquid film
+         !    ! If both are one-plane cells
+         !    else
+         !       nref = calculateNormal(this%poly(1,i,j,k))
+         !       nloc = calculateNormal(this%poly(1,ii,jj,kk))
+         !       pref = calculateCentroid(this%poly(1,i,j,k))
+         !       ploc = calculateCentroid(this%poly(1,ii,jj,kk))
+      !       film_is_connected = (dot_product(ploc-pref,nloc).ge.0.0_WP).or.(dot_product(pref-ploc,nref).ge.0.0_WP)
+         !    end if
+         ! end if
+         return
+   end function film_is_connected
    
    
    !> Final update of struct labels in global array
@@ -2274,35 +2283,35 @@ contains
          implicit none
          integer,  dimension(:) :: A
          integer, intent(out) :: marker
-         integer :: i,j
+         integer :: ii,jj
          integer :: itmp
          integer :: x
          
          x = A(1)
-         i = 0
-         j = size(A) + 1
+         ii = 0
+         jj = size(A) + 1
          
          do
-            j = j-1
+            jj = jj-1
             do
-               if (A(j).le.x) exit
-               j = j-1
+               if (A(jj).le.x) exit
+               jj = jj-1
             end do
-            i = i+1
+            ii = ii+1
             do
-               if (A(i).ge.x) exit
-               i = i+1
+               if (A(ii).ge.x) exit
+               ii = ii+1
             end do
-            if (i.lt.j) then
-               ! Exchange A(i) and A(j)
-               itmp = A(i)
-               A(i) = A(j)
-               A(j) = itmp
-            else if (i.eq.j) then
-               marker = i+1
+            if (ii.lt.jj) then
+               ! Exchange A(ii) and A(jj)
+               itmp = A(ii)
+               A(ii) = A(jj)
+               A(jj) = itmp
+            else if (ii.eq.jj) then
+               marker = ii+1
                return
             else
-               marker = i
+               marker = ii
                return
             endif
          end do
@@ -2541,7 +2550,7 @@ contains
       return
    end subroutine meta_structures_stats
    
-   
+
    !> Classify film by shape
    subroutine film_classify(this,Lbary,Gbary)
       implicit none
@@ -2556,15 +2565,18 @@ contains
       ! Eigenvalues/eigenvectors
       real(WP), dimension(3)     :: d
       integer , parameter        :: order = 3
-      integer , parameter        :: lwork = 102 ! dsyev optimal length (nb+2)*order, where block size nb=32
-      real(WP), dimension(lwork) :: work
-      integer :: info
+      real(WP), dimension(:), allocatable :: work
+      real(WP), dimension(1)   :: lwork_query
+      integer  :: lwork,info
       ! ! Characteristic lengths
       ! real(WP) :: l1,l2,l3
-      real(WP), parameter :: ratio = 2.0_WP
+      real(WP), parameter :: ratio = 1.5_WP
       ! Edge detection
       real(WP), dimension(3) :: c_local, c_filter
-      
+
+      ! Query optimal work array size
+      call dsyev('V','U',order,Imom,order,d,lwork_query,-1,info); lwork=int(lwork_query(1)); allocate(work(lwork))
+
       this%film_type = 0
       this%film_edge = 0.0_WP
       this%film_edge_normal = 0.0_WP
@@ -2625,7 +2637,7 @@ contains
                ! l1 = sqrt(5.0_WP/2.0_WP*abs(d(2)+d(3)-d(1))/vol_total)
                ! l2 = sqrt(5.0_WP/2.0_WP*abs(d(3)+d(1)-d(2))/vol_total)
                ! l3 = sqrt(5.0_WP/2.0_WP*abs(d(1)+d(2)-d(3))/vol_total)
-               this%film_type(i,j,k) = 1
+               this%film_type(i,j,k) = 0
                if (d(3).gt.(ratio*d(1))) this%film_type(i,j,k) = this%film_type(i,j,k) + 1
                if (d(3).gt.(ratio*d(2))) this%film_type(i,j,k) = this%film_type(i,j,k) + 1
                ! if (l1.gt.(ratio*l2)) film_type(i,j,k) = film_type(i,j,k) + 1
