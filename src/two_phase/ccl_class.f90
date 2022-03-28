@@ -2095,49 +2095,49 @@ contains
    end subroutine film_sync
    
    
-      ! Use PLIC normals to determine if two cells are in the same film
-      ! Fow now, always connected
+   ! Use PLIC normals to determine if two cells are in the same film
+   ! Fow now, always connected
    function film_is_connected(this,i,j,k,dim)
-         implicit none
+      implicit none
       class(ccl), intent(inout) :: this
-         integer, intent(in) :: i,j,k,dim
-         integer :: ii,jj,kk
+      integer, intent(in) :: i,j,k,dim
+      integer :: ii,jj,kk
       logical :: film_is_connected!, use_normal
-         integer, dimension(3) :: pos
-         ! real(WP), dimension(3) :: nref, nloc, pref, ploc
-         
-         pos = 0
-         pos(dim) = -1
-         ii = i + pos(1)
-         jj = j + pos(2)
-         kk = k + pos(3)
+      integer, dimension(3) :: pos
+      ! real(WP), dimension(3) :: nref, nloc, pref, ploc
+      
+      pos = 0
+      pos(dim) = -1
+      ii = i + pos(1)
+      jj = j + pos(2)
+      kk = k + pos(3)
       film_is_connected = .true.
-         ! use_normal = getNumberOfVertices(this%poly(1,i,j,k)).gt.0 .and. (getNumberOfVertices(this%poly(1,ii,jj,kk)).gt.0)
-         ! if (use_normal) then
-         !    ! If neighbor is a two-plane cell
-         !    if (getNumberOfVertices(this%poly(2,ii,jj,kk)).ne.0) then
-         !       nref = calculateNormal(this%poly(1,ii,jj,kk))
-         !       nloc = calculateNormal(this%poly(2,ii,jj,kk))
-         !       pref = calculateCentroid(this%poly(1,ii,jj,kk))
-         !       ploc = calculateCentroid(this%poly(2,ii,jj,kk))
-      !       film_is_connected = dot_product(ploc-pref,nloc).gt.0.0_WP ! .true. if liquid film
-         !    ! If self is a two-plane cell
-         !    elseif (getNumberOfVertices(this%poly(2,i,j,k)).ne.0) then
-         !       nref = calculateNormal(this%poly(1,i,j,k))
-         !       nloc = calculateNormal(this%poly(2,i,j,k))
-         !       pref = calculateCentroid(this%poly(1,i,j,k))
-         !       ploc = calculateCentroid(this%poly(2,i,j,k))
-      !       film_is_connected = dot_product(ploc-pref,nloc).gt.0.0_WP ! .true. if liquid film
-         !    ! If both are one-plane cells
-         !    else
-         !       nref = calculateNormal(this%poly(1,i,j,k))
-         !       nloc = calculateNormal(this%poly(1,ii,jj,kk))
-         !       pref = calculateCentroid(this%poly(1,i,j,k))
-         !       ploc = calculateCentroid(this%poly(1,ii,jj,kk))
-      !       film_is_connected = (dot_product(ploc-pref,nloc).ge.0.0_WP).or.(dot_product(pref-ploc,nref).ge.0.0_WP)
-         !    end if
-         ! end if
-         return
+      ! use_normal = getNumberOfVertices(this%poly(1,i,j,k)).gt.0 .and. (getNumberOfVertices(this%poly(1,ii,jj,kk)).gt.0)
+      ! if (use_normal) then
+      !    ! If neighbor is a two-plane cell
+      !    if (getNumberOfVertices(this%poly(2,ii,jj,kk)).ne.0) then
+      !       nref = calculateNormal(this%poly(1,ii,jj,kk))
+      !       nloc = calculateNormal(this%poly(2,ii,jj,kk))
+      !       pref = calculateCentroid(this%poly(1,ii,jj,kk))
+      !       ploc = calculateCentroid(this%poly(2,ii,jj,kk))
+   !       film_is_connected = dot_product(ploc-pref,nloc).gt.0.0_WP ! .true. if liquid film
+      !    ! If self is a two-plane cell
+      !    elseif (getNumberOfVertices(this%poly(2,i,j,k)).ne.0) then
+      !       nref = calculateNormal(this%poly(1,i,j,k))
+      !       nloc = calculateNormal(this%poly(2,i,j,k))
+      !       pref = calculateCentroid(this%poly(1,i,j,k))
+      !       ploc = calculateCentroid(this%poly(2,i,j,k))
+   !       film_is_connected = dot_product(ploc-pref,nloc).gt.0.0_WP ! .true. if liquid film
+      !    ! If both are one-plane cells
+      !    else
+      !       nref = calculateNormal(this%poly(1,i,j,k))
+      !       nloc = calculateNormal(this%poly(1,ii,jj,kk))
+      !       pref = calculateCentroid(this%poly(1,i,j,k))
+      !       ploc = calculateCentroid(this%poly(1,ii,jj,kk))
+   !       film_is_connected = (dot_product(ploc-pref,nloc).ge.0.0_WP).or.(dot_product(pref-ploc,nref).ge.0.0_WP)
+      !    end if
+      ! end if
+      return
    end function film_is_connected
    
    
