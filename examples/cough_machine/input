@@ -3,36 +3,36 @@
 # 2=block zoomed out on container
 
 # Parallelization
-1 Partition : 4 1 1
-2 Partition : 4 1 1
+1 Partition : 2 2 2
+2 Partition : 2 2 2
 
 # Zoomed in mesh definition
 1 Uniform Lx :  0.1
 1 Uniform Ly :  0.03
-1 Uniform Lz :  0.0005
-1 Uniform nx :  200
-1 Uniform ny :  60
-1 Uniform nz :  1
-1 Total nx :  200
-1 Total ny :  100
-1 Total nz :  1
+1 Uniform Lz :  0.03
+1 Uniform nx :  100
+1 Uniform ny :  30
+1 Uniform nz :  30
+1 Total nx :  100
+1 Total ny :  50
+1 Total nz :  50
 1 Stretching x : 1.08
 1 Stretching y : 1.08
-1 Stretching z : 1
+1 Stretching z : 1.08
 
 # Zoomed out mesh definition
 2 Uniform Lx :  0.3
 2 Uniform Ly :  0.1
-2 Uniform Lz :  0.0005
+2 Uniform Lz :  0.1
 2 Uniform nx :  60
 2 Uniform ny :  30
-2 Uniform nz :  1
+2 Uniform nz :  30
 2 Total nx :  92
 2 Total ny :  80
-2 Total nz :  1
+2 Total nz :  80
 2 Stretching x : 1.08
 2 Stretching y : 1.08
-2 Stretching z : 1
+2 Stretching z : 1.08
 
 # Injection velocity
 Gas velocity :       20

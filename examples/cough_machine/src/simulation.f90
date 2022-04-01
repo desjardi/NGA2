@@ -62,8 +62,8 @@ contains
       b2%nudge_xmax =b1%cfg%x(b1%cfg%imax+1)
       b2%nudge_ymin =b1%cfg%y(b1%cfg%jmin)
       b2%nudge_ymax =b1%cfg%y(b1%cfg%jmax+1)
-      b2%nudge_zmin =-1.0_WP !b1%cfg%z(b1%cfg%kmin)
-      b2%nudge_zmax =+1.0_WP !b1%cfg%z(b1%cfg%kmax+1)
+      b2%nudge_zmin =b1%cfg%z(b1%cfg%kmin)
+      b2%nudge_zmax =b1%cfg%z(b1%cfg%kmax+1)
 
    end subroutine simulation_init
 

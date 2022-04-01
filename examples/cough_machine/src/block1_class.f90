@@ -27,6 +27,7 @@ module block1_class
       type(ccl) :: cc1                    !< Connected component labeling
       type(timetracker) :: time           !< Time tracker
       type(sgsmodel) ::  sgs              !< SGS model
+      type(surfmesh) :: smesh             !< Surfmesh 
       type(ensight) :: ens_out            !< Ensight output
       type(event) :: ens_evt              !< Ensight output event
       type(monitor) :: mfile,cflfile      !< Monitor files
@@ -228,11 +229,6 @@ contains
          call b%fs%add_bcond(name='coflow' ,type=dirichlet      ,face='x',dir=-1,canCorrect=.false.,locator=left_boundary_coflow)
          ! Outflow on the right
          call b%fs%add_bcond(name='outflow',type=clipped_neumann,face='x',dir=+1,canCorrect=.true. ,locator=right_boundary)
-         ! Dirichlet top and bottom
-         !call b%fs%add_bcond(name='topU'   ,type=dirichlet,face='x',dir= 0,canCorrect=.false.,locator=   top_boundaryU)
-         !call b%fs%add_bcond(name='topV'   ,type=dirichlet,face='y',dir=+1,canCorrect=.false.,locator=   top_boundaryV)
-         !call b%fs%add_bcond(name='bottomU',type=dirichlet,face='x',dir= 0,canCorrect=.false.,locator=bottom_boundaryU)
-         !call b%fs%add_bcond(name='bottomV',type=dirichlet,face='y',dir=-1,canCorrect=.false.,locator=bottom_boundaryV)
          ! Configure pressure solver
          call param_read('Pressure iteration',b%fs%psolv%maxit)
          call param_read('Pressure tolerance',b%fs%psolv%rcvg)
@@ -300,6 +296,11 @@ contains
          b%sgs=sgsmodel(cfg=b%fs%cfg,umask=b%fs%umask,vmask=b%fs%vmask,wmask=b%fs%wmask)
       end block create_sgs
 
+      ! Create surfmesh object for interface polygon output
+      create_smesh: block
+         b%smesh=surfmesh(nvar=0,name='plic')
+         call b%vf%update_surfmesh(b%smesh)
+      end block create_smesh
 
       ! Add Ensight output
       create_ensight: block
@@ -392,28 +393,6 @@ contains
             i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
             b%fs%U(i,j,k)=Uin*tanh(2.0_WP*(0.5_WP*W_mouth-abs(b%fs%cfg%zm(k)))/delta)*tanh(2.0_WP*b%fs%cfg%ym(j)/delta)*tanh(2.0_WP*(H_mouth-b%fs%cfg%ym(j))/delta)+random_uniform(-Urand,Urand)
          end do
-         ! Reapply Dirichlet at top
-         ! call b%fs%get_bcond('topU',mybc)
-         ! do n=1,mybc%itr%no_
-         !    i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
-         !    b%fs%U(i,j,k)=Udir(i,j,k)
-         ! end do
-         ! call b%fs%get_bcond('topV',mybc)
-         ! do n=1,mybc%itr%no_
-         !    i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
-         !    b%fs%V(i,j,k)=Vdir(i,j,k)
-         ! end do
-         ! Reapply Dirichlet at bottom
-         ! call b%fs%get_bcond('bottomU',mybc)
-         ! do n=1,mybc%itr%no_
-         !    i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
-         !    b%fs%U(i,j,k)=Udir(i,j,k)
-         ! end do
-         ! call b%fs%get_bcond('bottomV',mybc)
-         ! do n=1,mybc%itr%no_
-         !    i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
-         !    b%fs%V(i,j,k)=Vdir(i,j,k)
-         ! end do
       end block reapply_dirichlet
 
       ! Prepare old staggered density (at n)
@@ -506,7 +485,10 @@ contains
       call b%fs%get_div()
 
       ! Output to ensight
-      if (b%ens_evt%occurs()) call b%ens_out%write_data(b%time%t)
+      if (b%ens_evt%occurs()) then 
+         call b%ens_out%write_data(b%time%t)
+         call b%ens_out%write_data(b%time%t)
+      end if
 
       ! Perform and output monitoring
       call b%fs%get_max()

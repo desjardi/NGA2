@@ -58,21 +58,10 @@ module block2_class
    real(WP) :: visc_g
    
    !> Inflow parameters
-   real(WP) :: Uin,delta,Uco
+   real(WP) :: Uin,delta,Urand,Uco
    
    
 contains
-   
-   
-   !> Function that localizes the leftmost domain boundary
-   ! function left_boundary(pg,i,j,k) result(isIn)
-   !    use pgrid_class, only: pgrid
-   !    class(pgrid), intent(in) :: pg
-   !    integer, intent(in) :: i,j,k
-   !    logical :: isIn
-   !    isIn=.false.
-   !    if (i.eq.pg%imin) isIn=.true.
-   ! end function left_boundary
    
    
    !> Function that localizes the left domain boundary, inside the mouth
@@ -171,13 +160,9 @@ contains
          b%fs%visc=visc_g
          ! Assign constant density to each phase
          call param_read('Gas density',b%fs%rho)
-         ! Apply Dirichlet at inlet of b1 into b2
+         ! Inflow on the left
          call b%fs%add_bcond(name='inflow' ,type=dirichlet      ,face='x',dir=-1,canCorrect=.false.,locator=left_boundary_mouth)
          call b%fs%add_bcond(name='coflow' ,type=dirichlet      ,face='x',dir=-1,canCorrect=.false.,locator=left_boundary_coflow)
-         ! Apply Neumann everywhere else
-         !call b%fs%add_bcond(name=   'top',type=neumann,face='y',dir=+1,canCorrect=.false.,locator=   top_boundary)
-         !call b%fs%add_bcond(name='bottom',type=neumann,face='y',dir=-1,canCorrect=.false.,locator=bottom_boundary)
-         !call b%fs%add_bcond(name=  'left',type=neumann,face='x',dir=-1,canCorrect=.false.,locator=  left_boundary)
          ! Apply clipped Neumann on the right
          call b%fs%add_bcond(name='outflow',type=clipped_neumann,face='x',dir=+1,canCorrect=.true.,locator=right_boundary)
          ! Prepare and configure pressure solver
@@ -205,7 +190,7 @@ contains
          ! Apply Dirichlet at inlet
          call param_read('Gas velocity',Uin)
          call param_read('Gas thickness',delta)
-         !call param_read('Gas perturbation',Urand)
+         call param_read('Gas perturbation',Urand)
          call b%fs%get_bcond('inflow',mybc)
          do n=1,mybc%itr%no_
             i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
