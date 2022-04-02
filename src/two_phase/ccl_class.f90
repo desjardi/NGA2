@@ -613,6 +613,9 @@ contains
                end do ! k
             end do ! j
          end do ! i
+         ! Update ghost cells
+         call this%cfg%sync(this%film_phase)
+         call this%cfg%sync(this%film_thickness)
          
          ! Number of this%film_list graph nodes
          max_films = idd-this%id_offset
@@ -1404,6 +1407,8 @@ contains
             this%id(ii,jj,kk) = this%struct_list(this%struct_map_(i))%parent
          end do
       end do
+      ! Update ghost cells
+      call this%cfg%sync(this%id)
       
       ! Update this%my_struct%id
       ! start marching thru list, starting at first_struct
@@ -1940,6 +1945,8 @@ contains
             this%film_id(ii,jj,kk) = this%film_list(this%film_map_(i))%parent
          end do
       end do
+      ! Update ghost cells
+      call this%cfg%sync(this%film_id)
       
       return
       
@@ -2716,6 +2723,10 @@ contains
             end do
          end if ! Film phase
       end do
+      ! Update ghost cells
+      call this%cfg%sync(this%film_type)
+      call this%cfg%sync(this%film_edge)
+      call this%cfg%sync(this%film_edge_normal)
 
    end subroutine film_classify
    
