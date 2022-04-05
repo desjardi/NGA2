@@ -125,10 +125,11 @@ contains
    
    
    !> Initialization of block 2
-   subroutine init(b)
+   subroutine init(b,restarted)
       use param, only: param_read
       implicit none
       class(block2), intent(inout) :: b
+      logical,       intent(in) :: restarted
 
 
       ! Allocate work arrays for cfg

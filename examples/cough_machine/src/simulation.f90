@@ -46,7 +46,7 @@ contains
       restart_and_save: block
          character(len=str_medium) :: dir_restart
          ! CAREFUL - WE NEED TO CREATE THE TIMETRACKER BEFORE THE EVENT !
-         b1%time=timetracker(b1%cfg%amRoot,name='cough_machine_in')
+         b1%time=timetracker(cfg1%amRoot,name='cough_machine_in')
          ! Create event for saving restart files
          save_evt=event(b1%time,'Restart output')
          call param_read('Restart output period',save_evt%tper)
@@ -57,12 +57,12 @@ contains
             ! If we are, read the name of the directory
             call param_read('Restart from',dir_restart,'r')
             ! Read in filenames
-            b1%df=datafile(pg=b1%cfg,fdata='data1_'//trim(adjustl(dir_restart)))
-            b2%df=datafile(pg=b2%cfg,fdata='data2_'//trim(adjustl(dir_restart)))
+            b1%df=datafile(pg=cfg1,fdata='data1_'//trim(adjustl(dir_restart)))
+            b2%df=datafile(pg=cfg2,fdata='data2_'//trim(adjustl(dir_restart)))
             b2%lpt_file='datalpt_'//trim(adjustl(dir_restart))
          else
             ! If we are not restarting, we will still need datafiles for saving restart files
-            b1%df=datafile(pg=cfg1,filename=trim(b1%cfg%name),nval=2,nvar=7)
+            b1%df=datafile(pg=cfg1,filename=trim(cfg1%name),nval=2,nvar=7)
             b1%df%valname(1)='t'
             b1%df%valname(2)='dt'
             b1%df%varname(1)='U'
@@ -72,7 +72,7 @@ contains
             b1%df%varname(5)='LM'
             b1%df%varname(6)='MM'
             b1%df%varname(7)='VF'
-            b2%df=datafile(pg=cfg2,filename=trim(b2%cfg%name),nval=2,nvar=6)
+            b2%df=datafile(pg=cfg2,filename=trim(cfg1%name),nval=2,nvar=6)
             b2%df%valname(1)='t'
             b2%df%valname(2)='dt'
             b2%df%varname(1)='U'
@@ -83,6 +83,10 @@ contains
             b2%df%varname(6)='MM'
          end if
       end block restart_and_save
+
+      ! Initialize both blocks
+      b1%cfg=>cfg1; call b1%init(restarted)
+      b2%cfg=>cfg2; call b2%init(restarted)
 
       ! Initialize the couplers
       coupler_prep: block
@@ -103,9 +107,7 @@ contains
          allocate(W2on1(cfg1%imino_:cfg1%imaxo_,cfg1%jmino_:cfg1%jmaxo_,cfg1%kmino_:cfg1%kmaxo_)); W2on1=0.0_WP
       end block coupler_prep
 
-      ! Initialize both blocks
-      b1%cfg=>cfg1; call b1%init()
-      b2%cfg=>cfg2; call b2%init()
+
 
       ! Setup nudging region in block 2
       b2%nudge_trans=20.0_WP*b2%cfg%min_meshsize
@@ -181,6 +183,7 @@ contains
          
          ! Finally, see if it's time to save restart files
          if (save_evt%occurs()) then
+            write(*,*) "Save Event has occured"
             ! Prefix for files
             write(timestamp,'(es12.5)') b1%time%t
             ! Populate df1 and write it
@@ -193,7 +196,7 @@ contains
             call b1%df%pushvar(name= 'LM',var=b1%sgs%LM )
             call b1%df%pushvar(name= 'MM',var=b1%sgs%MM )
             call b1%df%pushvar(name= 'VF',var=b1%vf%VF  )
-            call b1%df%write(fdata='data2_'//trim(adjustl(timestamp)))
+            call b1%df%write(fdata='data1_'//trim(adjustl(timestamp)))
             ! Populate df2 and write it
             call b2%df%pushval(name=   't',val=b2%time%t )
             call b2%df%pushval(name=  'dt',val=b2%time%dt)
@@ -388,7 +391,7 @@ contains
       call b1%df%pushvar(name= 'LM',var=b1%sgs%LM )
       call b1%df%pushvar(name= 'MM',var=b1%sgs%MM )
       call b1%df%pushvar(name= 'VF',var=b1%vf%VF  )
-      call b1%df%write(fdata='data2_'//trim(adjustl(timestamp)))
+      call b1%df%write(fdata='data1_'//trim(adjustl(timestamp)))
       ! Populate df2 and write it
       call b2%df%pushval(name=   't',val=b2%time%t )
       call b2%df%pushval(name=  'dt',val=b2%time%dt)

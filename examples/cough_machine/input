@@ -3,8 +3,8 @@
 # 2=block zoomed out on container
 
 # Parallelization
-1 Partition : 4 3 2
-2 Partition : 4 3 2
+1 Partition : 8 1 1
+2 Partition : 8 1 1
 
 # Zoomed in mesh definition
 1 Uniform Lx :  0.1
@@ -68,6 +68,6 @@ Ensight output period : 1e-3
 Stat output period : 1e-3
 
 # Restart and save
-Restart output period : 1e-2
-#Restart from :          !restart_6.06276E-04
-Restart from :          
+Restart output period : 5e-4
+Restart from :          !5.00000E-04
+
