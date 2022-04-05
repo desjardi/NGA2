@@ -35,6 +35,8 @@ module block2_class
       type(ensight) :: ens_out                                    !< Ensight output
       type(event) :: ens_evt                                      !< Ensight output event
       type(monitor) :: mfile,cflfile,sprayfile                    !< Monitor files
+      type(datafile) :: df                                        !< Datafile for restart
+      character(len=str_medium) :: lpt_file
       !> Stat files for lpt
       type(stat_1d_lpt) :: stat_1d_lpt_xloc1,stat_1d_lpt_xloc2    
       type(event)       :: stat_evt
@@ -59,6 +61,9 @@ module block2_class
    
    !> Inflow parameters
    real(WP) :: Uin,delta,Urand,Uco
+
+   !> Logical constant for evaluating restart
+   logical :: restarted
    
    
 contains
@@ -146,6 +151,12 @@ contains
          call param_read('Max time',b%time%tmax)
          b%time%dt=b%time%dtmax
          b%time%itmax=2
+         ! Handle restart
+         if (restarted) then
+            call b%df%pullval(name='t' ,val=b%time%t )
+            call b%df%pullval(name='dt',val=b%time%dt)
+            b%time%told=b%time%t-b%time%dt
+         end if
       end block initialize_timetracker
 
 
@@ -187,6 +198,13 @@ contains
          integer  :: n,i,j,k
          ! Zero initial field
          b%fs%U=0.0_WP; b%fs%V=0.0_WP; b%fs%W=0.0_WP
+         ! Handle restart
+         if (restarted) then
+            call b%df%pullvar(name='U'  ,var=b%fs%U  )
+            call b%df%pullvar(name='V'  ,var=b%fs%V  )
+            call b%df%pullvar(name='W'  ,var=b%fs%W  )
+            call b%df%pullvar(name='P'  ,var=b%fs%P  )
+         end if
          ! Apply Dirichlet at inlet
          call param_read('Gas velocity',Uin)
          call param_read('Gas thickness',delta)
@@ -218,6 +236,11 @@ contains
       ! Create an LES model
       create_sgs: block
          b%sgs=sgsmodel(cfg=b%fs%cfg,umask=b%fs%umask,vmask=b%fs%vmask,wmask=b%fs%wmask)
+         ! Handle restart
+         if (restarted) then
+            call b%df%pullvar(name='LM',var=b%sgs%LM)
+            call b%df%pullvar(name='MM',var=b%sgs%MM)
+         end if
       end block create_sgs
 
       ! Initialize our Lagrangian spray solver
@@ -226,6 +249,8 @@ contains
          b%lp=lpt(cfg=b%cfg,name='spray')
          ! Get droplet density from the input
          call param_read('Liquid density',b%lp%rho)
+         ! Handle restarts
+         if (restarted) call b%lp%read(filename=trim(b%lpt_file))
       end block initialize_lpt
 
       ! Create partmesh object for Lagrangian particle output

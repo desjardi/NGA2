@@ -3,8 +3,8 @@
 # 2=block zoomed out on container
 
 # Parallelization
-1 Partition : 2 2 2
-2 Partition : 2 2 2
+1 Partition : 4 3 2
+2 Partition : 4 3 2
 
 # Zoomed in mesh definition
 1 Uniform Lx :  0.1
@@ -24,7 +24,7 @@
 2 Uniform Lx :  0.3
 2 Uniform Ly :  0.1
 2 Uniform Lz :  0.1
-2 Uniform nx :  60
+2 Uniform nx :  92
 2 Uniform ny :  30
 2 Uniform nz :  30
 2 Total nx :  92
@@ -53,7 +53,7 @@ Static contact angle :        60
 1 Max timestep size : 1e-5
 2 Max timestep size : 1e-5
 Max cfl number :    0.9
-Max time :          0.2
+Max time :          0.02
 
 # Pressure solver
 Pressure tolerance : 1e-6
@@ -66,3 +66,8 @@ Implicit iteration : 100
 # Ensight ouput
 Ensight output period : 1e-3
 Stat output period : 1e-3
+
+# Restart and save
+Restart output period : 1e-2
+#Restart from :          !restart_6.06276E-04
+Restart from :          

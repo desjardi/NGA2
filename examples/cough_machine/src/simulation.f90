@@ -1,9 +1,13 @@
 !> Various definitions and tools for running an NGA2 simulation
 module simulation
-   use precision,     only: WP
-   use block1_class,  only: block1,filmthickness_over_dx,min_filmthickness,diam_over_filmthickness,max_eccentricity,d_threshold
-   use block2_class,  only: block2
-   use coupler_class, only: coupler
+   use string,             only: str_medium
+   use precision,          only: WP
+   use block1_class,       only: block1,filmthickness_over_dx,min_filmthickness,diam_over_filmthickness,max_eccentricity,d_threshold
+   use block2_class,       only: block2
+   use coupler_class,      only: coupler
+   use event_class,        only: event
+   use timetracker_class,  only: timetracker
+   use datafile_class,     only: datafile
    implicit none
    private
 
@@ -16,6 +20,10 @@ module simulation
    !> Couplers between blocks
    type(coupler) :: cpl12x,cpl12y,cpl12z
    type(coupler) :: cpl21x,cpl21y,cpl21z
+
+   !> Event tracker for saving restarts and logical constant for checking restarts
+   type(event)   :: save_evt
+   logical, public :: restarted
    
    !> Storage for coupled fields
    real(WP), dimension(:,:,:), allocatable :: U1on2,V1on2,W1on2
@@ -31,11 +39,50 @@ contains
    !> Initialization of problem solver
    subroutine simulation_init
       use geometry, only: cfg1,cfg2
+      use param, only: param_read
       implicit none
 
-      ! Initialize both blocks
-      b1%cfg=>cfg1; call b1%init()
-      b2%cfg=>cfg2; call b2%init()
+      ! Handle restart/saves here
+      restart_and_save: block
+         character(len=str_medium) :: dir_restart
+         ! CAREFUL - WE NEED TO CREATE THE TIMETRACKER BEFORE THE EVENT !
+         b1%time=timetracker(b1%cfg%amRoot,name='cough_machine_in')
+         ! Create event for saving restart files
+         save_evt=event(b1%time,'Restart output')
+         call param_read('Restart output period',save_evt%tper)
+         ! Check if we are restarting
+         call param_read(tag='Restart from',val=dir_restart,short='r',default='')
+         restarted=.false.; if (len_trim(dir_restart).gt.0) restarted=.true.
+         if (restarted) then
+            ! If we are, read the name of the directory
+            call param_read('Restart from',dir_restart,'r')
+            ! Read in filenames
+            b1%df=datafile(pg=b1%cfg,fdata='data1_'//trim(adjustl(dir_restart)))
+            b2%df=datafile(pg=b2%cfg,fdata='data2_'//trim(adjustl(dir_restart)))
+            b2%lpt_file='datalpt_'//trim(adjustl(dir_restart))
+         else
+            ! If we are not restarting, we will still need datafiles for saving restart files
+            b1%df=datafile(pg=cfg1,filename=trim(b1%cfg%name),nval=2,nvar=7)
+            b1%df%valname(1)='t'
+            b1%df%valname(2)='dt'
+            b1%df%varname(1)='U'
+            b1%df%varname(2)='V'
+            b1%df%varname(3)='W'
+            b1%df%varname(4)='P'
+            b1%df%varname(5)='LM'
+            b1%df%varname(6)='MM'
+            b1%df%varname(7)='VF'
+            b2%df=datafile(pg=cfg2,filename=trim(b2%cfg%name),nval=2,nvar=6)
+            b2%df%valname(1)='t'
+            b2%df%valname(2)='dt'
+            b2%df%varname(1)='U'
+            b2%df%varname(2)='V'
+            b2%df%varname(3)='W'
+            b2%df%varname(4)='P'
+            b2%df%varname(5)='LM'
+            b2%df%varname(6)='MM'
+         end if
+      end block restart_and_save
 
       ! Initialize the couplers
       coupler_prep: block
@@ -56,6 +103,10 @@ contains
          allocate(W2on1(cfg1%imino_:cfg1%imaxo_,cfg1%jmino_:cfg1%jmaxo_,cfg1%kmino_:cfg1%kmaxo_)); W2on1=0.0_WP
       end block coupler_prep
 
+      ! Initialize both blocks
+      b1%cfg=>cfg1; call b1%init()
+      b2%cfg=>cfg2; call b2%init()
+
       ! Setup nudging region in block 2
       b2%nudge_trans=20.0_WP*b2%cfg%min_meshsize
       b2%nudge_xmin =-1.0_WP !b1%cfg%x(b1%cfg%imin)
@@ -72,6 +123,7 @@ contains
    subroutine simulation_run
       implicit none
       integer :: i,j,k
+      character(len=str_medium) :: dirname,timestamp
 
       ! Perform time integration - block 1 is the main driver here
       do while (.not.b1%time%done())
@@ -123,6 +175,39 @@ contains
             
          end do
 
+         ! ###############################################
+         ! ############## PERFORM I/O HERE ###############
+         ! ###############################################
+         
+         ! Finally, see if it's time to save restart files
+         if (save_evt%occurs()) then
+            ! Prefix for files
+            write(timestamp,'(es12.5)') b1%time%t
+            ! Populate df1 and write it
+            call b1%df%pushval(name=  't',val=b1%time%t )
+            call b1%df%pushval(name= 'dt',val=b1%time%dt)
+            call b1%df%pushvar(name=  'U',var=b1%fs%U   )
+            call b1%df%pushvar(name=  'V',var=b1%fs%V   )
+            call b1%df%pushvar(name=  'W',var=b1%fs%W   )
+            call b1%df%pushvar(name=  'P',var=b1%fs%P   )
+            call b1%df%pushvar(name= 'LM',var=b1%sgs%LM )
+            call b1%df%pushvar(name= 'MM',var=b1%sgs%MM )
+            call b1%df%pushvar(name= 'VF',var=b1%vf%VF  )
+            call b1%df%write(fdata='data2_'//trim(adjustl(timestamp)))
+            ! Populate df2 and write it
+            call b2%df%pushval(name=   't',val=b2%time%t )
+            call b2%df%pushval(name=  'dt',val=b2%time%dt)
+            call b2%df%pushvar(name=   'U',var=b2%fs%U   )
+            call b2%df%pushvar(name=   'V',var=b2%fs%V   )
+            call b2%df%pushvar(name=   'W',var=b2%fs%W   )
+            call b2%df%pushvar(name=   'P',var=b2%fs%P   )
+            call b2%df%pushvar(name=  'LM',var=b2%sgs%LM )
+            call b2%df%pushvar(name=  'MM',var=b2%sgs%MM )
+            call b2%df%write(fdata='data2_'//trim(adjustl(timestamp)))
+            ! Also output particles
+            call b2%lp%write(filename='datalpt_'//trim(adjustl(timestamp)))
+         end if
+         
       end do
 
    end subroutine simulation_run
@@ -289,6 +374,33 @@ contains
    !> Finalize the NGA2 simulation
    subroutine simulation_final
       implicit none
+
+      character(len=str_medium) :: timestamp
+
+      write(timestamp,'(es12.5)') b1%time%t
+      ! Populate df1 and write it
+      call b1%df%pushval(name=  't',val=b1%time%t )
+      call b1%df%pushval(name= 'dt',val=b1%time%dt)
+      call b1%df%pushvar(name=  'U',var=b1%fs%U   )
+      call b1%df%pushvar(name=  'V',var=b1%fs%V   )
+      call b1%df%pushvar(name=  'W',var=b1%fs%W   )
+      call b1%df%pushvar(name=  'P',var=b1%fs%P   )
+      call b1%df%pushvar(name= 'LM',var=b1%sgs%LM )
+      call b1%df%pushvar(name= 'MM',var=b1%sgs%MM )
+      call b1%df%pushvar(name= 'VF',var=b1%vf%VF  )
+      call b1%df%write(fdata='data2_'//trim(adjustl(timestamp)))
+      ! Populate df2 and write it
+      call b2%df%pushval(name=   't',val=b2%time%t )
+      call b2%df%pushval(name=  'dt',val=b2%time%dt)
+      call b2%df%pushvar(name=   'U',var=b2%fs%U   )
+      call b2%df%pushvar(name=   'V',var=b2%fs%V   )
+      call b2%df%pushvar(name=   'W',var=b2%fs%W   )
+      call b2%df%pushvar(name=   'P',var=b2%fs%P   )
+      call b2%df%pushvar(name=  'LM',var=b2%sgs%LM )
+      call b2%df%pushvar(name=  'MM',var=b2%sgs%MM )
+      call b2%df%write(fdata='data2_'//trim(adjustl(timestamp)))
+      ! Also output particles
+      call b2%lp%write(filename='datalpt_'//trim(adjustl(timestamp)))
 
       ! Deallocate work arrays for both blocks
       call b1%final()
