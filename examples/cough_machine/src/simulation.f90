@@ -226,6 +226,8 @@ contains
             use mathtools, only: pi
             integer :: m,n,l,i,j,k,np
             real(WP) :: lmin,lmax,eccentricity,diam
+         
+            print *, "Pre_rs-rank: ", b1%cfg%pgrid%rank, "lmin=", lmin," lmax=",lmax, " eccentricity=",eccentricity," diam=",diam
 
             ! Loops over film segments contained locally
             do m=1,b1%cc1%n_meta_struct
@@ -272,6 +274,8 @@ contains
 
             end do
 
+            print *, "Pos_rs-rank: ", b1%cfg%pgrid%rank, "lmin=", lmin," lmax=",lmax, " eccentricity=",eccentricity," diam=",diam
+
          end block remove_struct
 
          ! Sync VF and clean up IRL and band
@@ -292,6 +296,8 @@ contains
             use mathtools, only: pi
             integer :: m,n,i,j,k,np,ip,np_old
             real(WP) :: Vt,Vl,Hl,Vd
+
+            print *, "Pre_rf-rank: ", b1%cfg%pgrid%rank, "Vt=", Vt," Vl=",Vl, " Hl=",Hl," Vd=",Vd
 
             ! Loops over film segments contained locally
             do m=b1%cc1%film_sync_offset+1,b1%cc1%film_sync_offset+b1%cc1%n_film
@@ -357,6 +363,8 @@ contains
                   end do
                end if
             end do
+
+            print *, "Pos_rf-rank: ", b1%cfg%pgrid%rank, "Vt=", Vt," Vl=",Vl, " Hl=",Hl," Vd=",Vd
 
          end block remove_film
 
