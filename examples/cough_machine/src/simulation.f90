@@ -183,7 +183,6 @@ contains
          
          ! Finally, see if it's time to save restart files
          if (save_evt%occurs()) then
-            write(*,*) "Save Event has occured"
             ! Prefix for files
             write(timestamp,'(es12.5)') b1%time%t
             ! Populate df1 and write it

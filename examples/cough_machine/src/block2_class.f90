@@ -63,7 +63,7 @@ module block2_class
    real(WP) :: Uin,delta,Urand,Uco
 
    !> Logical constant for evaluating restart
-   logical :: restarted
+   logical :: restart_test
    
    
 contains
@@ -125,11 +125,11 @@ contains
    
    
    !> Initialization of block 2
-   subroutine init(b,restarted)
+   subroutine init(b,restart_test)
       use param, only: param_read
       implicit none
       class(block2), intent(inout) :: b
-      logical,       intent(in) :: restarted
+      logical,       intent(in) :: restart_test
 
 
       ! Allocate work arrays for cfg
@@ -153,7 +153,7 @@ contains
          b%time%dt=b%time%dtmax
          b%time%itmax=2
          ! Handle restart
-         if (restarted) then
+         if (restart_test) then
             call b%df%pullval(name='t' ,val=b%time%t )
             call b%df%pullval(name='dt',val=b%time%dt)
             b%time%told=b%time%t-b%time%dt
@@ -200,7 +200,7 @@ contains
          ! Zero initial field
          b%fs%U=0.0_WP; b%fs%V=0.0_WP; b%fs%W=0.0_WP
          ! Handle restart
-         if (restarted) then
+         if (restart_test) then
             call b%df%pullvar(name='U'  ,var=b%fs%U  )
             call b%df%pullvar(name='V'  ,var=b%fs%V  )
             call b%df%pullvar(name='W'  ,var=b%fs%W  )
@@ -238,7 +238,7 @@ contains
       create_sgs: block
          b%sgs=sgsmodel(cfg=b%fs%cfg,umask=b%fs%umask,vmask=b%fs%vmask,wmask=b%fs%wmask)
          ! Handle restart
-         if (restarted) then
+         if (restart_test) then
             call b%df%pullvar(name='LM',var=b%sgs%LM)
             call b%df%pullvar(name='MM',var=b%sgs%MM)
          end if
@@ -251,7 +251,7 @@ contains
          ! Get droplet density from the input
          call param_read('Liquid density',b%lp%rho)
          ! Handle restarts
-         if (restarted) call b%lp%read(filename=trim(b%lpt_file))
+         if (restart_test) call b%lp%read(filename=trim(b%lpt_file))
       end block initialize_lpt
 
       ! Create partmesh object for Lagrangian particle output
