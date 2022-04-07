@@ -2715,7 +2715,7 @@ contains
                ! l1 = sqrt(5.0_WP/2.0_WP*abs(d(2)+d(3)-d(1))/vol_total)
                ! l2 = sqrt(5.0_WP/2.0_WP*abs(d(3)+d(1)-d(2))/vol_total)
                ! l3 = sqrt(5.0_WP/2.0_WP*abs(d(1)+d(2)-d(3))/vol_total)
-               this%film_type(i,j,k) = 1
+               this%film_type(i,j,k) = 0
                if (d(3).gt.(ratio*d(1))) this%film_type(i,j,k) = this%film_type(i,j,k) + 1
                if (d(3).gt.(ratio*d(2))) this%film_type(i,j,k) = this%film_type(i,j,k) + 1
                ! if (l1.gt.(ratio*l2)) film_type(i,j,k) = film_type(i,j,k) + 1
