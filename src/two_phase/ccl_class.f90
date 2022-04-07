@@ -2349,10 +2349,14 @@ contains
       ! Eigenvalues/eigenvectors
       real(WP), dimension(3,3) :: A
       real(WP), dimension(3) :: d
-      integer , parameter :: lwork = 102 ! dsyev optimal length (nb+2)*n, where order n=3 and block size nb=32
-      real(WP), dimension(lwork) :: work
-      integer :: n,info
+      integer , parameter :: order = 3
+      real(WP), dimension(:), allocatable :: work
+      real(WP), dimension(1)   :: lwork_query
+      integer  :: lwork,info,n
       
+      ! Query optimal work array size
+      call dsyev('V','U',order,Imom,order,d,lwork_query,-1,info); lwork=int(lwork_query(1)); allocate(work(lwork))
+
       ! allocate / initialize temps arrays for computation
       allocate(vol_struct(1:this%n_meta_struct),vol_struct_(1:this%n_meta_struct))
       allocate(x_vol(1:this%n_meta_struct),x_vol_(1:this%n_meta_struct))
