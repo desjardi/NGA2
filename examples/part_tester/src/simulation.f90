@@ -99,8 +99,13 @@ contains
          do k=lp%cfg%kmino_,lp%cfg%kmaxo_
             do j=lp%cfg%jmino_,lp%cfg%jmaxo_
                do i=lp%cfg%imino_,lp%cfg%imaxo_
-                  U(i,j,k)=-twoPi*lp%cfg%ym(j)
-                  V(i,j,k)=+twoPi*lp%cfg%xm(i)
+                  ! Solid body rotation
+                  !U(i,j,k)=-twoPi*lp%cfg%ym(j)
+                  !V(i,j,k)=+twoPi*lp%cfg%xm(i)
+                  !W(i,j,k)=0.0_WP
+                  ! Taylor-Green vortex
+                  U(i,j,k)=+cos(twoPi*lp%cfg%x (i))*sin(twoPi*lp%cfg%ym(j))
+                  V(i,j,k)=-sin(twoPi*lp%cfg%xm(i))*cos(twoPi*lp%cfg%y (j))
                   W(i,j,k)=0.0_WP
                end do
             end do
@@ -136,6 +141,7 @@ contains
          call param_read('Ensight output period',ens_evt%tper)
          ! Add variables to output
          call ens_out%add_particle('particles',pmesh)
+         call ens_out%add_vector('velocity',U,V,W)
          ! Output to ensight
          if (ens_evt%occurs()) call ens_out%write_data(time%t)
       end block create_ensight
