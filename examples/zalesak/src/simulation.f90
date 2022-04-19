@@ -126,10 +126,6 @@ contains
          call vf%reset_volume_moments()
          ! Initialize auxiliary surface area to PLIC surface area
          vf%SD=vf%SDpoly
-         
-         !vf%SDx=vf%SDpoly*
-         !vf%SDy=vf%SDpoly*
-         !vf%SDz=vf%SDpoly*
       end block initialize_vof
       
       

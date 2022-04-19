@@ -86,11 +86,6 @@ module vfs_class
       real(WP), dimension(:,:,:), allocatable :: SD       !< Surface area density from auxiliary transport equation
       real(WP), dimension(:,:,:), allocatable :: SDold    !< Old surface area density from auxiliary transport equation
       
-      ! Transported normal.SD
-      real(WP), dimension(:,:,:), allocatable :: SDx,SDxold !< Surface area density projected in x from auxiliary transport equation
-      real(WP), dimension(:,:,:), allocatable :: SDy,SDyold !< Surface area density projected in y from auxiliary transport equation
-      real(WP), dimension(:,:,:), allocatable :: SDz,SDzold !< Surface area density projected in z from auxiliary transport equation
-      
       ! Distance level set
       real(WP) :: Gclip                                   !< Min/max distance
       real(WP), dimension(:,:,:), allocatable :: G        !< Distance level set array
@@ -220,14 +215,6 @@ contains
       allocate(self%SDold (  self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%SDold =0.0_WP
       allocate(self%G     (  self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%G     =0.0_WP
       allocate(self%curv  (  self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%curv  =0.0_WP
-      
-      allocate(self%SDx   (  self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%SDx   =0.0_WP
-      allocate(self%SDxold(  self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%SDxold=0.0_WP
-      allocate(self%SDy   (  self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%SDy   =0.0_WP
-      allocate(self%SDyold(  self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%SDyold=0.0_WP
-      allocate(self%SDz   (  self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%SDz   =0.0_WP
-      allocate(self%SDzold(  self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%SDzold=0.0_WP
-      
       
       ! Set clipping distance
       self%Gclip=real(distance_band+1,WP)*self%cfg%min_meshsize
@@ -1048,16 +1035,10 @@ contains
       real(IRL_double), dimension(1:3,1:3) :: tri_vert
       type(VMAN_type) :: volume_moments_and_normal
       real(WP) :: deposited_area,trans_area_over_ref_area
-      real(WP) :: deposited_area_x,trans_area_over_ref_area_x
-      real(WP) :: deposited_area_y,trans_area_over_ref_area_y
-      real(WP) :: deposited_area_z,trans_area_over_ref_area_z
       
       ! Back up SD to SDold
       this%SDold=this%SD
-      
-      this%SDxold=this%SDx
-      this%SDyold=this%SDy
-      this%SDzold=this%SDz
+      this%SD=0.0_WP
       
       ! Clear moments from before
       do k=this%cfg%kmino_,this%cfg%kmaxo_
@@ -1085,10 +1066,6 @@ contains
                
                ! Build ratio of transported area to reference area
                trans_area_over_ref_area=this%SDold(i,j,k)/(this%SDpoly(i,j,k)*this%cfg%vol(i,j,k))
-               
-               trans_area_over_ref_area_x=this%SDxold(i,j,k)/(this%SDpoly(i,j,k)*this%cfg%vol(i,j,k))
-               trans_area_over_ref_area_y=this%SDyold(i,j,k)/(this%SDpoly(i,j,k)*this%cfg%vol(i,j,k))
-               trans_area_over_ref_area_z=this%SDzold(i,j,k)/(this%SDpoly(i,j,k)*this%cfg%vol(i,j,k))
                
                ! Construct triangulation of each interface plane
                do n=1,getNumberOfPlanes(this%liquid_gas_interface(i,j,k))
@@ -1126,7 +1103,6 @@ contains
                         ! Get area of the deposited surface element and flux auxiliary surface area
                         call getMoments(moments_list_from_tri,0,volume_moments_and_normal); deposited_area=getVolume(volume_moments_and_normal)
                         this%SD(ind(1),ind(2),ind(3))=this%SD(ind(1),ind(2),ind(3))+deposited_area*trans_area_over_ref_area
-                        this%SD(i,j,k)               =this%SD(i,j,k)               -deposited_area*trans_area_over_ref_area
                      end do
                   end do
                   
