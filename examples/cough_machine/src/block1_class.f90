@@ -222,7 +222,7 @@ contains
       ! Create a two-phase flow solver with bconds
       create_solver: block
          use tpns_class, only: dirichlet,clipped_neumann,neumann
-         use ils_class,  only: pcg_pfmg,gmres_amg
+         use ils_class,  only: pcg_pfmg,gmres_amg,gmres_pilut !Didn't work for pressure_ils: gmres_pilut, pcg_pfmg
          use mathtools,  only: Pi
          ! Create a two-phase flow solver
          b%fs=tpns(cfg=b%cfg,name='Two-phase NS')
@@ -250,8 +250,8 @@ contains
          call param_read('Implicit iteration',b%fs%implicit%maxit)
          call param_read('Implicit tolerance',b%fs%implicit%rcvg)
          ! Setup the solver
-         b%fs%psolv%maxlevel=10
-         call b%fs%setup(pressure_ils=pcg_pfmg,implicit_ils=pcg_pfmg)
+         b%fs%psolv%maxlevel=19
+         call b%fs%setup(pressure_ils=gmres_amg,implicit_ils=gmres_amg)
       end block create_solver
 
 
@@ -324,8 +324,27 @@ contains
 
       ! Create surfmesh object for interface polygon output
       create_smesh: block
-         b%smesh=surfmesh(nvar=0,name='plic')
+         use irl_fortran_interface
+         integer :: i,j,k,nplane,np
+         ! Include an extra variable for number of planes
+         b%smesh=surfmesh(nvar=1,name='plic')
+         b%smesh%varname(1)='nplane'
+         ! Transfer polygons to smesh
          call b%vf%update_surfmesh(b%smesh)
+         ! Also populate nplane variable
+         b%smesh%var(1,:)=1.0_WP
+         np=0
+         do k=b%vf%cfg%kmin_,b%vf%cfg%kmax_
+            do j=b%vf%cfg%jmin_,b%vf%cfg%jmax_
+               do i=b%vf%cfg%imin_,b%vf%cfg%imax_
+                  do nplane=1,getNumberOfPlanes(b%vf%liquid_gas_interface(i,j,k))
+                     if (getNumberOfVertices(b%vf%interface_polygon(nplane,i,j,k)).gt.0) then
+                        np=np+1; b%smesh%var(1,np)=real(getNumberOfPlanes(b%vf%liquid_gas_interface(i,j,k)),WP)
+                     end if
+                  end do
+               end do
+            end do
+         end do
       end block create_smesh
 
       ! Add Ensight output
@@ -474,8 +493,9 @@ contains
          b%resW=-2.0_WP*b%fs%rho_W*b%fs%W+(b%fs%rho_Wold+b%fs%rho_W)*b%fs%Wold+b%time%dt*b%resW
 
          ! Form implicit residuals
+         if (b%cfg%rank.eq.1) print *, "B1 - pre fs%solve_implicit, time step: ", b%time%n," iterations: ",b%time%it
          call b%fs%solve_implicit(b%time%dt,b%resU,b%resV,b%resW)
-
+         if (b%cfg%rank.eq.1) print *, "B1 - post fs%solve_implicit, time step: ", b%time%n," iterations: ",b%time%it
          ! Apply these residuals
          b%fs%U=2.0_WP*b%fs%U-b%fs%Uold+b%resU
          b%fs%V=2.0_WP*b%fs%V-b%fs%Vold+b%resV
@@ -491,7 +511,9 @@ contains
          call b%fs%add_surface_tension_jump(dt=b%time%dt,div=b%fs%div,vf=b%vf,contact_model=static_contact)
          b%fs%psolv%rhs=-b%fs%cfg%vol*b%fs%div/b%time%dt
          b%fs%psolv%sol=0.0_WP
+         if (b%cfg%rank.eq.1) print *, "B1 - pre fs%psol, time step: ", b%time%n," iterations: ",b%time%it
          call b%fs%psolv%solve()
+         if (b%cfg%rank.eq.1) print *, "B1 - post fs%psol, time step: ", b%time%n," iterations: ",b%time%it
          call b%fs%shift_p(b%fs%psolv%sol)
 
          ! Correct velocity
@@ -512,7 +534,28 @@ contains
 
       ! Output to ensight
       if (b%ens_evt%occurs()) then 
-         call b%ens_out%write_data(b%time%t)
+         ! Update surfmesh object
+         update_smesh: block
+         use irl_fortran_interface
+         integer :: nplane,np,i,j,k
+         ! Transfer polygons to smesh
+         call b%vf%update_surfmesh(b%smesh)
+         ! Also populate nplane variable
+         b%smesh%var(1,:)=1.0_WP
+         np=0
+         do k=b%vf%cfg%kmin_,b%vf%cfg%kmax_
+            do j=b%vf%cfg%jmin_,b%vf%cfg%jmax_
+               do i=b%vf%cfg%imin_,b%vf%cfg%imax_
+                  do nplane=1,getNumberOfPlanes(b%vf%liquid_gas_interface(i,j,k))
+                     if (getNumberOfVertices(b%vf%interface_polygon(nplane,i,j,k)).gt.0) then
+                        np=np+1; b%smesh%var(1,np)=real(getNumberOfPlanes(b%vf%liquid_gas_interface(i,j,k)),WP)
+                     end if
+                  end do
+               end do
+            end do
+         end do
+      end block update_smesh
+      ! Perform ensight output 
          call b%ens_out%write_data(b%time%t)
       end if
 

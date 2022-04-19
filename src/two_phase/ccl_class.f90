@@ -93,7 +93,7 @@ module ccl_class
       real(WP), dimension(:), pointer :: out_time => null()
       
       ! CCL selection parameters
-      real(WP) :: VFlo=1.0e-10_WP                            !< Minimum VF value considered for a structure to exist
+      real(WP) :: VFlo=1.0e-8_WP                            !< Minimum VF value considered for a structure to exist
       real(WP) :: dot_threshold=-0.5_WP                      !< Maximum dot product of two interface normals for their respective cells to be considered film cells
       real(WP) :: thickness_cutoff=0.5_WP                    !< Maximum film thickness as fraction of meshsize
       

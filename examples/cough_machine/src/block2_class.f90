@@ -26,8 +26,8 @@ module block2_class
    type :: block2
       class(config), pointer :: cfg                               !< Pointer to config
       type(incomp) :: fs                                          !< Single-phase incompressible flow solver
-      type(hypre_str) :: ps                                       !< Unstructured HYPRE pressure solver
-      type(hypre_str) :: is                                       !< Unstructured HYPRE implicit solver
+      type(hypre_uns) :: ps                                       !< Unstructured HYPRE pressure solver
+      type(hypre_uns) :: is                                       !< Unstructured HYPRE implicit solver
       type(lpt)       :: lp                                       !< Lagrangian particle tracking
       type(partmesh)  :: pmesh                                    !< Partmesh for Lagrangian particle output
       type(timetracker) :: time                                   !< Time tracker
@@ -164,7 +164,7 @@ contains
       ! Create a single-phase flow solver with bconds
       create_solver: block
          use incomp_class,    only: dirichlet,clipped_neumann,neumann
-         use hypre_str_class, only: pcg_pfmg
+         use hypre_uns_class, only: pcg_amg
          ! Create a single-phase flow solver
          b%fs=incomp(cfg=b%cfg,name='Single-phase NS')
          ! Assign constant viscosity to each phase
@@ -440,7 +440,9 @@ contains
          end block nudge
 
          ! Form implicit residuals
+         if (b%cfg%rank.eq.1) print *, "B2 - pre solve_implicit, time step: ", b%time%n," iterations: ",b%time%it
          call b%fs%solve_implicit(b%time%dt,b%resU,b%resV,b%resW)
+         if (b%cfg%rank.eq.1) print *, "B2 - post solve_implicit, time step: ", b%time%n," iterations: ",b%time%it
 
          ! Apply these residuals
          b%fs%U=2.0_WP*b%fs%U-b%fs%Uold+b%resU
@@ -455,7 +457,9 @@ contains
          call b%fs%get_div()
          b%ps%rhs=-b%fs%cfg%vol*b%fs%div*b%fs%rho/b%time%dt
          b%ps%sol=0.0_WP
+         if (b%cfg%rank.eq.1) print *, "B2 - pre ps%sol, time step: ", b%time%n," iterations: ",b%time%it
          call b%ps%solve()
+         if (b%cfg%rank.eq.1) print *, "B2 - post ps%sol, time step: ", b%time%n," iterations: ",b%time%it
 
          ! Correct velocity
          call b%fs%get_pgrad(b%ps%sol,b%resU,b%resV,b%resW)

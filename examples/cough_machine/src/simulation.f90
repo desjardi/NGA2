@@ -32,6 +32,8 @@ module simulation
    !> How much volume is clipped
    real(WP) :: Vclipped, V_before, V_after
 
+   !>Parameter to compare diameters of junk
+   real(WP) :: diam_thresh=1e-6
 
 contains
 
@@ -72,7 +74,7 @@ contains
             b1%df%varname(5)='LM'
             b1%df%varname(6)='MM'
             b1%df%varname(7)='VF'
-            b2%df=datafile(pg=cfg2,filename=trim(cfg1%name),nval=2,nvar=6)
+            b2%df=datafile(pg=cfg2,filename=trim(cfg2%name),nval=2,nvar=6)
             b2%df%valname(1)='t'
             b2%df%valname(2)='dt'
             b2%df%varname(1)='U'
@@ -139,25 +141,25 @@ contains
          ! Perform CCL and transfer
          call transfer_vf_to_drops()
 
-         ! ! Preclip
-         ! call b1%vf%cfg%integrate(b1%vf%VF,V_before)
+         ! Preclip
+         call b1%vf%cfg%integrate(b1%vf%VF,V_before)
 
-         ! ! After we're done clip all VOF at the exit area and along the sides - hopefully nothing's left
-         ! do k=b1%fs%cfg%kmino_,b1%fs%cfg%kmaxo_
-         !   do j=b1%fs%cfg%jmino_,b1%fs%cfg%jmaxo_
-         !      do i=b1%fs%cfg%imino_,b1%fs%cfg%imaxo_
-         !         if (i.ge.b1%vf%cfg%imax-5) b1%vf%VF(i,j,k)=0.0_WP
-         !         if (j.ge.b1%vf%cfg%jmax-5) b1%vf%VF(i,j,k)=0.0_WP
-         !         if (j.le.b1%vf%cfg%jmin+5) b1%vf%VF(i,j,k)=0.0_WP
-         !         if (k.ge.b1%vf%cfg%kmax-5) b1%vf%VF(i,j,k)=0.0_WP
-         !         if (k.le.b1%vf%cfg%kmin+5) b1%vf%VF(i,j,k)=0.0_WP
-         !      end do
-         !   end do
-         ! end do
+         ! After we're done clip all VOF at the exit area and along the sides - hopefully nothing's left
+         do k=b1%fs%cfg%kmino_,b1%fs%cfg%kmaxo_
+           do j=b1%fs%cfg%jmino_,b1%fs%cfg%jmaxo_
+              do i=b1%fs%cfg%imino_,b1%fs%cfg%imaxo_
+                 if (i.ge.b1%vf%cfg%imax-5) b1%vf%VF(i,j,k)=0.0_WP
+                 if (j.ge.b1%vf%cfg%jmax-5) b1%vf%VF(i,j,k)=0.0_WP
+                 if (j.le.b1%vf%cfg%jmin+5) b1%vf%VF(i,j,k)=0.0_WP
+                 if (k.ge.b1%vf%cfg%kmax-5) b1%vf%VF(i,j,k)=0.0_WP
+                 if (k.le.b1%vf%cfg%kmin+5) b1%vf%VF(i,j,k)=0.0_WP
+              end do
+           end do
+         end do
 
-         ! ! Preclip
-         ! call b1%vf%cfg%integrate(b1%vf%VF,V_after)
-         ! Vclipped = V_after - V_before
+         ! Preclip
+         call b1%vf%cfg%integrate(b1%vf%VF,V_after)
+         Vclipped = V_after - V_before
 
          ! Advance block 2 until we've caught up
          do while (b2%time%t.lt.b1%time%t)
@@ -232,6 +234,24 @@ contains
             ! Loops over film segments contained locally
             do m=1,b1%cc1%n_meta_struct
 
+               ! Skip 0 volume structs
+               if(b1%cc1%meta_structures_list(m)%vol.lt.(((pi*diam_thresh)**3)/6.0_WP)) then
+                     ! Find local structs with matching id
+                     do n=b1%cc1%sync_offset+1,b1%cc1%sync_offset+b1%cc1%n_struct
+                        if (b1%cc1%struct_list(b1%cc1%struct_map_(n))%parent.ne.b1%cc1%meta_structures_list(m)%id) cycle
+                        ! Remove liquid in meta-structure cells
+                        do l=1,b1%cc1%struct_list(b1%cc1%struct_map_(n))%nnode ! Loops over cells within local
+                           i=b1%cc1%struct_list(b1%cc1%struct_map_(n))%node(1,l)
+                           j=b1%cc1%struct_list(b1%cc1%struct_map_(n))%node(2,l)
+                           k=b1%cc1%struct_list(b1%cc1%struct_map_(n))%node(3,l)
+                           ! Remove liquid in that cell
+                           b1%vf%VF(i,j,k)=0.0_WP
+                        end do
+                     end do
+                  else
+                     cycle
+               end if
+               
                ! Test if sphericity is compatible with transfer
                lmin=b1%cc1%meta_structures_list(m)%lengths(3)
                if (lmin.eq.0.0_WP) lmin=b1%cc1%meta_structures_list(m)%lengths(2) ! Handle 2D case
@@ -295,9 +315,7 @@ contains
          remove_film: block
             use mathtools, only: pi
             integer :: m,n,i,j,k,np,ip,np_old
-            real(WP) :: Vt,Vl,Hl,Vd
-
-            print *, "Pre_rf-rank: ", b1%cfg%pgrid%rank, "Vt=", Vt," Vl=",Vl, " Hl=",Hl," Vd=",Vd
+            real(WP) :: Vt,Vl,Hl,Vd,diameter
 
             ! Loops over film segments contained locally
             do m=b1%cc1%film_sync_offset+1,b1%cc1%film_sync_offset+b1%cc1%n_film
@@ -320,7 +338,9 @@ contains
                   Vl=Vl+b1%vf%VF(i,j,k)*b1%vf%cfg%vol(i,j,k)
                   ! Estimate drop size based on local film thickness in current cell
                   Hl=max(b1%cc1%film_thickness(i,j,k),min_filmthickness)
-                  Vd=pi/6.0_WP*(diam_over_filmthickness*Hl)**3
+                  diameter=max(diam_over_filmthickness*Hl,diam_thresh)
+                  Vd=pi/6.0_WP*diameter**3
+                  !Vd=pi/6.0_WP*(diam_over_filmthickness*Hl)**3
                   ! Create drops from available liquid volume
                   do while (Vl-Vd.gt.0.0_WP)
                      ! Make room for new drop
@@ -344,7 +364,7 @@ contains
                end do
 
                ! Based on how many particles were created, decide what to do with left-over volume
-               if (Vt.eq.0.0_WP) then ! No particle was created, we need one...
+               if (Vt.eq.0.0_WP.and.Vl.gt.((pi*diam_thresh)**3)/6.0_WP) then ! No particle was created, we need one...
                   ! Add one last drop for remaining liquid volume
                   np=b2%lp%np_+1; call b2%lp%resize(np)
                   ! Add the drop

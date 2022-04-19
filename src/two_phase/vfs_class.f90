@@ -787,10 +787,10 @@ contains
       
       ! Calculate subcell phasic volumes
       call this%subcell_vol()
-      
-      ! Calculate curvature
+      ! Calculate curvature - Getting stuck here
+      if (this%cfg%rank.eq.1) print *,"b1%vf%advance_pre get_curvature"
       call this%get_curvature()
-      
+      if (this%cfg%rank.eq.1) print *,"b1%vf%advance_post get_curvature"
       ! Reset moments to guarantee compatibility with interface reconstruction
       call this%reset_volume_moments()
       
@@ -2196,8 +2196,10 @@ contains
             end do
          end do
       end do
-      ! Synchronize boundaries
+      ! Synchronize boundaries - Getting stuck here
+      if (this%cfg%rank.eq.1) print *,"get_curvature: pre cfg%sync"
       call this%cfg%sync(this%curv)
+      if (this%cfg%rank.eq.1) print *,"get_curvature: post cfg%sync"
    end subroutine get_curvature
    
    
