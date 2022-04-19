@@ -5,7 +5,7 @@ module block2_class
    use geometry,          only: t_wall,L_mouth,H_mouth,W_mouth,L_film,H_film,W_film,L_lip
    use config_class,      only: config
    use incomp_class,      only: incomp
-   use hypre_str_class,   only: hypre_str
+   use hypre_uns_class,   only: hypre_uns
    use lpt_class,         only: lpt
    use sgsmodel_class,    only: sgsmodel
    use timetracker_class, only: timetracker
@@ -58,6 +58,9 @@ module block2_class
 
    !> Gas viscosity
    real(WP) :: visc_g
+   
+   !> Gas Density
+   real(WP) :: rho_g
    
    !> Inflow parameters
    real(WP) :: Uin,delta,Urand,Uco
@@ -178,12 +181,12 @@ contains
          ! Apply clipped Neumann on the right
          call b%fs%add_bcond(name='outflow',type=clipped_neumann,face='x',dir=+1,canCorrect=.true.,locator=right_boundary)
          ! Prepare and configure pressure solver
-         b%ps=hypre_str(cfg=b%cfg,name='Pressure',method=pcg_pfmg,nst=7)
-         b%ps%maxlevel=12
+         b%ps=hypre_uns(cfg=b%cfg,name='Pressure',method=pcg_amg,nst=7)
+         b%ps%maxlevel=19
          call param_read('Pressure iteration',b%ps%maxit)
          call param_read('Pressure tolerance',b%ps%rcvg)
          ! Prepare and configure implicit solver
-         b%is=hypre_str(cfg=b%cfg,name='Implicit',method=pcg_pfmg,nst=7)
+         b%is=hypre_uns(cfg=b%cfg,name='Implicit',method=pcg_amg,nst=7)
          call param_read('Implicit iteration',b%is%maxit)
          call param_read('Implicit tolerance',b%is%rcvg)
          ! Setup the solver
