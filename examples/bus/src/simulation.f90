@@ -1,7 +1,8 @@
 !> Various definitions and tools for running an NGA2 simulation
 module simulation
+   use string,            only: str_medium
    use precision,         only: WP
-   use geometry,          only: cfg
+   use geometry,          only: cfg,npsg,ipsg,xpsg,psg_mesh
    use incomp_class,      only: incomp
    use sgsmodel_class,    only: sgsmodel
    use scalar_class,      only: scalar
@@ -9,37 +10,50 @@ module simulation
    use ensight_class,     only: ensight
    use event_class,       only: event
    use monitor_class,     only: monitor
+   use datafile_class,    only: datafile
+   use mpi_f08
+   use parallel,          only: MPI_REAL_WP
    implicit none
    private
    
-   !> Incompressible flow and scalar solver and corresponding time tracker and sgs model
+   !> Incompressible flow and scalar solvers and corresponding time tracker and sgs model
+   type(scalar), dimension(:), allocatable, public :: sc
    type(incomp),      public :: fs
-   type(scalar),      public :: sc
    type(timetracker), public :: time
    type(sgsmodel),    public :: sgs
    
+   !> Provide a datafile and an event tracker for saving restarts
+   type(event)    :: save_evt
+   type(datafile) :: df
+   logical :: restarted
+   
    !> Ensight postprocessing
-   type(ensight) :: ens_out
+   type(ensight) :: ens_out,psg_out
    type(event)   :: ens_evt
    
    !> Simulation monitor file
-   type(monitor) :: mfile,cflfile
+   type(monitor) :: mfile,cflfile,intfile
+   type(monitor), dimension(:), allocatable :: psgfile
    
    public :: simulation_init,simulation_run,simulation_final
    
    !> Private work arrays
-   real(WP), dimension(:,:,:), allocatable :: resU,resV,resW,resSC
-   real(WP), dimension(:,:,:), allocatable :: Ui,Vi,Wi
+   real(WP), dimension(:,:,:),   allocatable :: resU,resV,resW,Ui,Vi,Wi
+   real(WP), dimension(:,:,:),   allocatable :: resSC
    real(WP), dimension(:,:,:,:), allocatable :: SR
    
-   !> Scalar source descriptors
+   !> Scalar source descriptor
+   integer :: nsc
+   integer , dimension(:), allocatable :: src_psg
    real(WP), dimension(3) :: src_pos
    real(WP) :: src_rad
+   real(WP), dimension(npsg) :: psg_val,tmp_val
    
    !> Fluid viscosity
    real(WP) :: visc
    
 contains
+   
    
    !> Localizes the vertical vent near the front of the bus (facing -z)
    function vertical_vent(pg,i,j,k) result(isIn)
@@ -55,6 +69,7 @@ contains
       &   pg%z(k) .gt.bus%w_bus-bus%w_seatcol-100.0_WP*epsilon(1.0_WP).and.&
       &   pg%z(k) .lt.bus%w_bus-bus%w_seatcol+100.0_WP*epsilon(1.0_WP)) isIn=.true.
    end function vertical_vent
+   
    
    !> Localizes the 3 floor vents near the front of the bus (facing +y)
    function front_floor_vents(pg,i,j,k) result(isIn)
@@ -76,6 +91,7 @@ contains
       &   pg%z(k+1).lt.bus%w_bus-bus%w_ventwindow-bus%w_seatcol+10.0_WP*epsilon(1.0_WP)))) isIn=.true.
    end function front_floor_vents
    
+   
    !> Localizes the back floor vent driver's side (facing +y)
    function back_floor_vent_driver(pg,i,j,k) result(isIn)
       use pgrid_class, only: pgrid
@@ -89,6 +105,7 @@ contains
       &   pg%z(k+1).gt.bus%z_fventback+10.0_WP*epsilon(1.0_WP).and.&
       &   pg%z(k  ).lt.bus%z_fventback+10.0_WP*epsilon(1.0_WP)) isIn=.true.
    end function back_floor_vent_driver
+   
    
    !> Localizes the back floor vent curb side (facing +y)
    function back_floor_vent_curb(pg,i,j,k) result(isIn)
@@ -105,6 +122,7 @@ contains
       &   pg%z(k)  .lt.bus%w_bus-bus%z_fventback+10.0_WP*epsilon(1.0_WP)) isIn=.true.
    end function back_floor_vent_curb
    
+   
    !> Localizes the vent(s) at the lavatory (facing +x)
    function lavatory_vent(pg,i,j,k) result(isIn)
       use pgrid_class, only: pgrid
@@ -120,6 +138,7 @@ contains
       &   pg%z(k)  .gt.bus%w_bus-bus%w_seatcol+bus%w_seat-bus%w_ventlav.and.&
       &   pg%z(k+1).lt.bus%w_bus-bus%w_seatcol+bus%w_seat) isIn=.true.
    end function lavatory_vent
+   
    
    !> Localizes the vents along the windows on both sides (facing +y)
    function window_vents(pg,i,j,k) result(isIn)
@@ -141,6 +160,7 @@ contains
       &   pg%z(k+1).le.bus%w_bus+10.0_WP*epsilon(1.0_WP)) isIn=.true.
    end function window_vents
    
+   
    !> Localizes the intake vents of the parcel rack (facing -y)
    function rackintake_vents(pg,i,j,k) result(isIn)
       use pgrid_class, only: pgrid
@@ -159,6 +179,7 @@ contains
       &  (pg%z(k)  .gt.bus%w_bus-bus%w_vinrack-bus%min_length/real(bus%gres,WP)-10.0_WP*epsilon(1.0_WP).and.&
       &   pg%z(k+1).lt.bus%w_bus-bus%min_length/real(bus%gres,WP)+10.0_WP*epsilon(1.0_WP)))) isIn=.true.
    end function rackintake_vents
+   
    
    !> Localizes the outlet vents of the parcel rack (facing -y)
    function rackoutlet_vents(pg,i,j,k) result(isIn)
@@ -217,7 +238,7 @@ contains
    end function rackoutlet_vents
    
    
-   !> Function that localizes the source of tracer scalar
+   !> Functions that localizes the source of tracer scalar
    function scalar_src(pg,i,j,k) result(isIn)
       use pgrid_class, only: pgrid
       implicit none
@@ -235,6 +256,71 @@ contains
       implicit none
       
       
+      ! Start by reading in the source positions
+      initialize_sources: block
+         use param, only: param_getsize
+         ! Figure out how many sources
+         nsc=param_getsize('Source passengers')
+         ! Allocate storage for sources and read them
+         if (nsc.gt.0) then
+            allocate(src_psg(nsc))
+            call param_read('Source passengers',src_psg)
+            call param_read('Source radius',src_rad)
+         end if
+      end block initialize_sources
+      
+      
+      ! Initialize time tracker with 2 subiterations
+      initialize_timetracker: block
+         time=timetracker(amRoot=cfg%amRoot,name='bustime')
+         call param_read('Max timestep size',time%dtmax)
+         call param_read('Max cfl number',time%cflmax)
+         call param_read('Max simulation time',time%tmax)
+         time%dt=time%dtmax
+         time%itmax=2
+      end block initialize_timetracker
+      
+      
+      ! Handle restart/saves here
+      restart_and_save: block ! CAREFUL - WE NEED TO CREATE THE TIMETRACKER BEFORE THE EVENT
+         character(len=str_medium) :: dir_restart
+         ! Create event for saving restart files
+         save_evt=event(time,'Restart output')
+         call param_read('Restart output period',save_evt%tper)
+         ! Check if we are restarting
+         call param_read(tag='Restart from',val=dir_restart,short='r',default='')
+         restarted=.false.; if (len_trim(dir_restart).gt.0) restarted=.true.
+         if (restarted) then
+            ! If we are, read the name of the directory
+            call param_read('Restart from',dir_restart,'r')
+            ! Read the datafile
+            df=datafile(pg=cfg,fdata=trim(adjustl(dir_restart))//'/'//'data')
+         else
+            ! If we are not restarting, we will still need a datafile for saving restart files
+            ! We're only saving the velocity/pressure here, not the tracers
+            df=datafile(pg=cfg,filename=trim(cfg%name),nval=2,nvar=6)
+            df%valname(1)='t'
+            df%valname(2)='dt'
+            df%varname(1)='U'
+            df%varname(2)='V'
+            df%varname(3)='W'
+            df%varname(4)='P'
+            df%varname(5)='LM'
+            df%varname(6)='MM'
+         end if
+      end block restart_and_save
+      
+      
+      ! Revisit timetracker to adjust time and time step values if this is a restart
+      update_timetracker: block
+         if (restarted) then
+            call df%pullval(name='t' ,val=time%t )
+            call df%pullval(name='dt',val=time%dt)
+            time%told=time%t-time%dt
+         end if
+      end block update_timetracker
+      
+      
       ! Allocate work arrays
       allocate_work_arrays: block
          allocate(resU (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
@@ -250,7 +336,7 @@ contains
       
       ! Create an incompressible flow solver with bconds
       create_solver: block
-         use ils_class, only: pcg_amg,gmres,amg,pfmg
+         use ils_class, only: pcg_amg,pcg_pfmg,gmres
          use incomp_class, only: dirichlet,convective,neumann,clipped_neumann
          ! Create flow solver
          fs=incomp(cfg=cfg,name='Incompressible NS')
@@ -279,6 +365,7 @@ contains
          call param_read('Implicit iteration',fs%implicit%maxit)
          call param_read('Implicit tolerance',fs%implicit%rcvg)
          ! Setup the solver
+         fs%psolv%maxlevel=16
          call fs%setup(pressure_ils=pcg_amg,implicit_ils=gmres)
       end block create_solver
       
@@ -286,18 +373,12 @@ contains
       ! Create an LES model
       create_sgs: block
          sgs=sgsmodel(cfg=fs%cfg,umask=fs%umask,vmask=fs%vmask,wmask=fs%wmask)
+         ! Handle restart
+         if (restarted) then
+            call df%pullvar(name='LM',var=sgs%LM)
+            call df%pullvar(name='MM',var=sgs%MM)
+         end if
       end block create_sgs
-      
-      
-      ! Initialize time tracker with 2 subiterations
-      initialize_timetracker: block
-         time=timetracker(amRoot=fs%cfg%amRoot)
-         call param_read('Max timestep size',time%dtmax)
-         call param_read('Max cfl number',time%cflmax)
-         call param_read('Max simulation time',time%tmax)
-         time%dt=time%dtmax
-         time%itmax=2
-      end block initialize_timetracker
       
       
       ! Initialize our velocity field
@@ -306,8 +387,15 @@ contains
          use incomp_class, only: bcond
          type(bcond), pointer :: my_bc
          integer :: n,i,j,k
-         ! Zero initial field
-         fs%U=0.0_WP; fs%V=0.0_WP; fs%W=0.0_WP
+         ! Initial fields
+         fs%U=0.0_WP; fs%V=0.0_WP; fs%W=0.0_WP; fs%P=0.0_WP
+         ! Handle restart
+         if (restarted) then
+            call df%pullvar(name='U',var=fs%U)
+            call df%pullvar(name='V',var=fs%V)
+            call df%pullvar(name='W',var=fs%W)
+            call df%pullvar(name='P',var=fs%P)
+         end if
          ! Apply Dirichlet at the inflow vents and known outflow vents
          call fs%get_bcond('vertical vent',my_bc)
          do n=1,my_bc%itr%no_
@@ -357,32 +445,38 @@ contains
       end block initialize_velocity
       
       
-      ! Create an scalar solver with bconds
+      ! Create nsc scalar solvers with bconds
       create_scalar: block
-         use ils_class, only: pcg_amg,gmres,amg,pfmg
+         use ils_class, only: gmres
          use scalar_class, only: bcond,dirichlet,neumann,quick
          type(bcond), pointer :: mybc
-         integer :: i,j,k,n
-         ! Create flow solver
-         sc=scalar(cfg=cfg,scheme=quick,name='Tracker')
-         ! Assign density and diffusivity = viscosity
-         sc%rho=fs%rho
-         sc%diff=visc
-         ! Configure implicit scalar solver
-         sc%implicit%maxit=fs%implicit%maxit; sc%implicit%rcvg=fs%implicit%rcvg
-         ! Define boundary conditions
-         call param_read('Source position',src_pos)
-         call param_read('Source radius',src_rad)
-         call sc%add_bcond(name='source',type=dirichlet,locator=scalar_src,dir='+y')
-         ! Setup the solver
-         call sc%setup(implicit_ils=gmres)
-         ! Initialize the scalar field at zero
-         sc%SC=0.0_WP
-         ! Add the source patch
-         call sc%get_bcond('source',mybc)
-         do n=1,mybc%itr%no_
-            i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
-            sc%SC(i,j,k)=1.0_WP
+         integer :: i,j,k,n,ii
+         character(len=2) :: id
+         ! Allocate scalar solvers
+         if (nsc.gt.0) allocate(sc(nsc))
+         ! For each solver, prepare it completely
+         do ii=1,nsc
+            ! Prepare tracer name
+            write(id,'(i2.2)') ii
+            ! Create solver
+            sc(ii)=scalar(cfg=cfg,scheme=quick,name='Tracker'//id)
+            ! Assign density and diffusivity = viscosity
+            sc(ii)%rho=fs%rho; sc(ii)%diff=visc
+            ! Configure implicit scalar solver
+            sc(ii)%implicit%maxit=fs%implicit%maxit; sc(ii)%implicit%rcvg=fs%implicit%rcvg
+            ! Assign proper source location
+            src_pos=xpsg(:,src_psg(ii))
+            ! Define boundary conditions
+            call sc(ii)%add_bcond(name='source',type=dirichlet,locator=scalar_src,dir='+y')
+            ! Setup the solver
+            call sc(ii)%setup(implicit_ils=gmres)
+            ! Initialize the scalar fields at zero except for source patch
+            sc(ii)%SC=0.0_WP
+            call sc(ii)%get_bcond('source',mybc)
+            do n=1,mybc%itr%no_
+               i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
+               sc(ii)%SC(i,j,k)=1.0_WP
+            end do
          end do
       end block create_scalar
       
@@ -396,19 +490,23 @@ contains
          call param_read('Ensight output period',ens_evt%tper)
          ! Add variables to output
          call ens_out%add_vector('velocity',Ui,Vi,Wi)
-         call ens_out%add_scalar('tracer',sc%SC)
+         if (nsc.ge.1) call ens_out%add_scalar('tracer',sc(1)%SC)
          ! Output to ensight
          if (ens_evt%occurs()) call ens_out%write_data(time%t)
+         ! Also create an Ensight output for the passengers
+         psg_out=ensight(cfg=cfg,name='psg')
+         call psg_out%add_particle('PSG',psg_mesh)
+         call psg_out%write_data(time%t)
       end block create_ensight
       
       
       ! Create a monitor file
       create_monitor: block
+         integer :: ii,nn,ierr
+         character(len=2) :: id
          ! Prepare some info about fields
          call fs%get_cfl(time%dt,time%cfl)
          call fs%get_max()
-         call sc%get_max()
-         call sc%get_int()
          ! Create simulation monitor
          mfile=monitor(fs%cfg%amRoot,'simulation')
          call mfile%add_column(time%n,'Timestep number')
@@ -419,9 +517,6 @@ contains
          call mfile%add_column(fs%Vmax,'Vmax')
          call mfile%add_column(fs%Wmax,'Wmax')
          call mfile%add_column(fs%Pmax,'Pmax')
-         call mfile%add_column(sc%SCmin,'SCmin')
-         call mfile%add_column(sc%SCmax,'SCmax')
-         call mfile%add_column(sc%SCint,'SCint')
          call mfile%add_column(fs%divmax,'Maximum divergence')
          call mfile%add_column(fs%psolv%it,'Pressure iteration')
          call mfile%add_column(fs%psolv%rerr,'Pressure error')
@@ -437,6 +532,46 @@ contains
          call cflfile%add_column(fs%CFLv_y,'Viscous yCFL')
          call cflfile%add_column(fs%CFLv_z,'Viscous zCFL')
          call cflfile%write()
+         ! Create sc integral monitor file
+         intfile=monitor(fs%cfg%amRoot,'integral')
+         call intfile%add_column(time%n,'Timestep number')
+         call intfile%add_column(time%t,'Time')
+         do ii=1,nsc
+            ! Prepare tracer name
+            write(id,'(i2.2)') ii
+            ! Prepare tracer stats and add them
+            call sc(ii)%get_max(); call sc(ii)%get_int()
+            call intfile%add_column(sc(ii)%SCint,'SC'//id)
+         end do
+         call intfile%write()
+         ! Create passenger tracer monitor
+         if (nsc.gt.0) allocate(psgfile(nsc))
+         do ii=1,nsc
+            ! Prepare tracer name
+            write(id,'(i2.2)') ii
+            ! Create file
+            psgfile(ii)=monitor(fs%cfg%amRoot,'tracer_'//id)
+            call psgfile(ii)%add_column(time%n,'Timestep number')
+            call psgfile(ii)%add_column(time%t,'Time')
+            ! Add a column for each passenger
+            do nn=1,npsg
+               ! Prepare passenegr name
+               write(id,'(i2.2)') nn
+               ! Add passenger tracer data
+               call psgfile(ii)%add_column(psg_val(nn),'PSG_'//id)
+            end do
+            ! Populate tracer values at passenger location
+            do nn=1,npsg
+               if (ipsg(1,nn).ge.cfg%imin_.and.ipsg(1,nn).le.cfg%imax_.and.ipsg(2,nn).ge.cfg%jmin_.and.ipsg(2,nn).le.cfg%jmax_.and.ipsg(3,nn).ge.cfg%kmin_.and.ipsg(3,nn).le.cfg%kmax_) then
+                  tmp_val(nn)=sc(ii)%SC(ipsg(1,nn),ipsg(2,nn),ipsg(3,nn))
+               else
+                  tmp_val(nn)=0.0_WP
+               end if
+            end do
+            call MPI_ALLREDUCE(tmp_val,psg_val,npsg,MPI_REAL_WP,MPI_SUM,cfg%comm,ierr)
+            ! Write
+            call psgfile(ii)%write()
+         end do
       end block create_monitor
       
       
@@ -446,6 +581,7 @@ contains
    !> Perform an NGA2 simulation
    subroutine simulation_run
       implicit none
+      integer :: ii,nn,ierr
       
       ! Perform time integration
       do while (.not.time%done())
@@ -456,7 +592,9 @@ contains
          call time%increment()
          
          ! Remember old scalar
-         sc%SCold =sc%SC
+         do ii=1,nsc
+            sc(ii)%SCold=sc(ii)%SC
+         end do
          
          ! Remember old velocity
          fs%Uold=fs%U
@@ -477,13 +615,17 @@ contains
             sgs%visc=-fs%visc
          end where
          fs%visc=fs%visc+sgs%visc
-         sc%diff=fs%visc
+         do ii=1,nsc
+            sc(ii)%diff=fs%visc
+         end do
          
          ! Perform sub-iterations
          do while (time%it.le.time%itmax)
             
             ! Build mid-time scalar
-            sc%SC=0.5_WP*(sc%SC+sc%SCold)
+            do ii=1,nsc
+               sc(ii)%SC=0.5_WP*(sc(ii)%SC+sc(ii)%SCold)
+            end do
             
             ! Build mid-time velocity
             fs%U=0.5_WP*(fs%U+fs%Uold)
@@ -491,21 +633,19 @@ contains
             fs%W=0.5_WP*(fs%W+fs%Wold)
             
             ! ============= SCALAR SOLVER =======================
-            ! Explicit calculation of drhoSC/dt from scalar equation
             resU=fs%rho*fs%U; resV=fs%rho*fs%V; resW=fs%rho*fs%W
-            call sc%get_drhoSCdt(drhoSCdt=resSC,rhoU=resU,rhoV=resV,rhoW=resW)
-            
-            ! Assemble explicit residual
-            resSC=-2.0_WP*(sc%rho*sc%SC-sc%rho*sc%SCold)+time%dt*resSC
-            
-            ! Form implicit residual
-            call sc%solve_implicit(dt=time%dt,resSC=resSC,rhoU=resU,rhoV=resV,rhoW=resW)
-            
-            ! Apply this residual
-            sc%SC=2.0_WP*sc%SC-sc%SCold+resSC
-            
-            ! Apply other boundary conditions on the resulting field
-            call sc%apply_bcond(time%t,time%dt)
+            do ii=1,nsc
+               ! Explicit calculation of drhoSC/dt from scalar equation
+               call sc(ii)%get_drhoSCdt(drhoSCdt=resSC,rhoU=resU,rhoV=resV,rhoW=resW)
+               ! Assemble explicit residual
+               resSC=-2.0_WP*(sc(ii)%rho*sc(ii)%SC-sc(ii)%rho*sc(ii)%SCold)+time%dt*resSC
+               ! Form implicit residual
+               call sc(ii)%solve_implicit(dt=time%dt,resSC=resSC,rhoU=resU,rhoV=resV,rhoW=resW)
+               ! Apply this residual
+               sc(ii)%SC=2.0_WP*sc(ii)%SC-sc(ii)%SCold+resSC
+               ! Apply other boundary conditions on the resulting field
+               call sc(ii)%apply_bcond(time%t,time%dt)
+            end do
             ! ===================================================
             
             
@@ -559,10 +699,48 @@ contains
          
          ! Perform and output monitoring
          call fs%get_max()
-         call sc%get_max()
-         call sc%get_int()
+         do ii=1,nsc
+            call sc(ii)%get_max(); call sc(ii)%get_int()
+         end do
          call mfile%write()
          call cflfile%write()
+         call intfile%write()
+         
+         ! Output tracer at passanger location
+         do ii=1,nsc
+            ! Populate tracer values at passenger location
+            do nn=1,npsg
+               if (ipsg(1,nn).ge.cfg%imin_.and.ipsg(1,nn).le.cfg%imax_.and.ipsg(2,nn).ge.cfg%jmin_.and.ipsg(2,nn).le.cfg%jmax_.and.ipsg(3,nn).ge.cfg%kmin_.and.ipsg(3,nn).le.cfg%kmax_) then
+                  tmp_val(nn)=sc(ii)%SC(ipsg(1,nn),ipsg(2,nn),ipsg(3,nn))
+               else
+                  tmp_val(nn)=0.0_WP
+               end if
+            end do
+            call MPI_ALLREDUCE(tmp_val,psg_val,npsg,MPI_REAL_WP,MPI_SUM,cfg%comm,ierr)
+            ! Write out file
+            call psgfile(ii)%write()
+         end do
+         
+         ! Finally, see if it's time to save restart files
+         if (save_evt%occurs()) then
+            save_restart: block
+               character(len=str_medium) :: dirname,timestamp
+               ! Prefix for files
+               dirname='restart_'; write(timestamp,'(es12.5)') time%t
+               ! Prepare a new directory
+               if (fs%cfg%amRoot) call execute_command_line('mkdir -p '//trim(adjustl(dirname))//trim(adjustl(timestamp)))
+               ! Populate df and write it
+               call df%pushval(name='t' ,val=time%t )
+               call df%pushval(name='dt',val=time%dt)
+               call df%pushvar(name='U' ,var=fs%U   )
+               call df%pushvar(name='V' ,var=fs%V   )
+               call df%pushvar(name='W' ,var=fs%W   )
+               call df%pushvar(name='P' ,var=fs%P   )
+               call df%pushvar(name='LM',var=sgs%LM )
+               call df%pushvar(name='MM',var=sgs%MM )
+               call df%write(fdata=trim(adjustl(dirname))//trim(adjustl(timestamp))//'/'//'data')
+            end block save_restart
+         end if
          
       end do
       

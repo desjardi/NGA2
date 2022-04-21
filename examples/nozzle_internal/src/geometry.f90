@@ -179,10 +179,12 @@ contains
                      cfg%VF(i,j,k)=0.0_WP
                      cycle
                   end if
-                  ! first nozzle wall
-                  if (swh(1,i).le.rad.and.rad.lt.swh(2,i)) cfg%VF(i,j,k)=0.0_WP
-                  ! second nozzle wall
-                  if (swh(3,i).le.rad.and.rad.lt.swh(4,i)) cfg%VF(i,j,k)=0.0_WP
+                  ! First nozzle wall
+                  !if (rad.ge.swh(1,i).and.rad.lt.swh(2,i)) cfg%VF(i,j,k)=0.0_WP
+                  if (                    rad.lt.swh(2,i)) cfg%VF(i,j,k)=0.0_WP
+                  ! Second nozzle wall
+                  !if (rad.ge.swh(3,i).and.rad.lt.swh(4,i)) cfg%VF(i,j,k)=0.0_WP
+                  if (rad.ge.swh(3,i)                    ) cfg%VF(i,j,k)=0.0_WP
                   ! Carve out injector ports
                   if (swh(3,i).le.rad.and.rad.lt.swh(4,i)) then
                      ! Check injector x-y plane

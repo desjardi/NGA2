@@ -197,9 +197,13 @@ contains
          ! Initialize solver
          call this%bbox%initialize()
       case (amg,pcg_amg,pcg_parasail,gmres,gmres_pilut,gmres_amg,bicgstab_amg,pcg)
+         ! Initialize HYPRE
+         call HYPRE_Init(ierr)
          ! These use HYPRE's IJ environment, which requires that we allocate and prepare an unstructed mapping
          call this%prep_umap()
       case (smg,pcg_smg,gmres_smg,pfmg,pcg_pfmg,gmres_pfmg)
+         ! Initialize HYPRE
+         call HYPRE_Init(ierr)
          ! These use HYPRE's structured environment, which requires that we create a HYPRE grid and stencil
          call HYPRE_StructGridCreate     (this%cfg%comm,3,this%hypre_box,ierr)
          call HYPRE_StructGridSetExtents (this%hypre_box,[this%cfg%imin_,this%cfg%jmin_,this%cfg%kmin_],[this%cfg%imax_,this%cfg%jmax_,this%cfg%kmax_],ierr)
@@ -271,7 +275,7 @@ contains
          do k=this%cfg%kmin_,this%cfg%kmax_
             do j=this%cfg%jmin_,this%cfg%jmax_
                do i=this%cfg%imin_,this%cfg%imax_
-                  if (this%ind(i,j,k).gt.0) then
+                  if (this%ind(i,j,k).ge.0) then
                      ! Prepare to add the row
                      count1=count1+1
                      row (count1)=this%ind(i,j,k)
@@ -284,7 +288,7 @@ contains
                      ! Compress columns to avoid redundancy
                      do st=1,this%nst
                         do nn=1,st-1
-                           if (mycol(st).eq.mycol(nn).and.mycol(st).gt.0) then
+                           if (mycol(st).eq.mycol(nn).and.mycol(st).ge.0) then
                               mycol(st)=0
                               myval(nn)=myval(nn)+myval(st)
                            end if
@@ -292,7 +296,7 @@ contains
                      end do
                      ! Finally transfer to operator
                      do st=1,this%nst
-                        if (mycol(st).gt.0) then
+                        if (mycol(st).ge.0) then
                            count2=count2+1
                            ncol(count1)=ncol(count1)+1
                            col (count2)=mycol(st)
@@ -621,6 +625,7 @@ contains
          call HYPRE_StructPFMGSetMaxIter  (this%hypre_precond,1,ierr)
          call HYPRE_StructPFMGSetTol      (this%hypre_precond,0.0_WP,ierr)
          call HYPRE_StructPFMGSetRelaxType(this%hypre_precond,2,ierr)
+         call HYPRE_StructPFMGSetRAPType  (this%hypre_precond,1,ierr)
          if (this%maxlevel.gt.0) call HYPRE_StructPFMGSetMaxLevels(this%hypre_precond,this%maxlevel,ierr)
          
          ! Create PCG solver
@@ -642,6 +647,7 @@ contains
          call HYPRE_StructPFMGSetMaxIter  (this%hypre_precond,1,ierr)
          call HYPRE_StructPFMGSetTol      (this%hypre_precond,0.0_WP,ierr)
          call HYPRE_StructPFMGSetRelaxType(this%hypre_precond,2,ierr)
+         call HYPRE_StructPFMGSetRAPType  (this%hypre_precond,1,ierr)
          if (this%maxlevel.gt.0) call HYPRE_StructPFMGSetMaxLevels(this%hypre_precond,this%maxlevel,ierr)
          
          ! Create GMRES solver
@@ -655,7 +661,6 @@ contains
          
          ! Setup GMRES solver
          call HYPRE_StructGMRESSetup       (this%hypre_solver,this%hypre_mat,this%hypre_rhs,this%hypre_sol,ierr)
-         
          
       end select
       
@@ -671,7 +676,7 @@ contains
       use param,    only: verbose
       implicit none
       class(ils), intent(inout) :: this
-      integer :: i,j,k,count,ierr,maxlvl
+      integer :: i,j,k,count,ierr
       integer,  dimension(:), allocatable :: ind
       real(WP), dimension(:), allocatable :: rhs,sol
       
@@ -702,7 +707,7 @@ contains
          do k=this%cfg%kmin_,this%cfg%kmax_
             do j=this%cfg%jmin_,this%cfg%jmax_
                do i=this%cfg%imin_,this%cfg%imax_
-                  if (this%ind(i,j,k).gt.0) then
+                  if (this%ind(i,j,k).ge.0) then
                      count=count+1
                      ind(count)=this%ind(i,j,k)
                      rhs(count)=this%rhs(i,j,k)
@@ -788,7 +793,7 @@ contains
          do k=this%cfg%kmin_,this%cfg%kmax_
             do j=this%cfg%jmin_,this%cfg%jmax_
                do i=this%cfg%imin_,this%cfg%imax_
-                  if (this%ind(i,j,k).gt.0) then
+                  if (this%ind(i,j,k).ge.0) then
                      count=count+1
                      this%sol(i,j,k)=sol(count)
                   end if
@@ -830,48 +835,47 @@ contains
          ! Do nothing here since we don't have a bbox destructor yet
       case (amg)
          call HYPRE_BoomerAMGDestroy   (this%hypre_solver,ierr)
-         call HYPRE_ParCSRMatrixDestroy(this%parse_mat,ierr)
+         call HYPRE_IJMatrixDestroy    (this%hypre_mat,ierr)
          call HYPRE_IJVectorDestroy    (this%hypre_rhs,ierr)
          call HYPRE_IJVectorDestroy    (this%hypre_sol,ierr)
       case (pcg_amg)
          call HYPRE_BoomerAMGDestroy   (this%hypre_precond,ierr)
          call HYPRE_ParCSRPCGDestroy   (this%hypre_solver,ierr)
-         call HYPRE_ParCSRMatrixDestroy(this%parse_mat,ierr)
-         !call HYPRE_IJMatrixDestroy    (this%hypre_mat,ierr)
+         call HYPRE_IJMatrixDestroy    (this%hypre_mat,ierr)
          call HYPRE_IJVectorDestroy    (this%hypre_rhs,ierr)
          call HYPRE_IJVectorDestroy    (this%hypre_sol,ierr)
       case (pcg_parasail)
          call HYPRE_ParaSailsDestroy   (this%hypre_precond,ierr)
          call HYPRE_ParCSRPCGDestroy   (this%hypre_solver,ierr)
-         call HYPRE_ParCSRMatrixDestroy(this%parse_mat,ierr)
+         call HYPRE_IJMatrixDestroy    (this%hypre_mat,ierr)
          call HYPRE_IJVectorDestroy    (this%hypre_rhs,ierr)
          call HYPRE_IJVectorDestroy    (this%hypre_sol,ierr)
       case (pcg)
          call HYPRE_ParCSRPCGDestroy   (this%hypre_solver,ierr)
-         call HYPRE_ParCSRMatrixDestroy(this%parse_mat,ierr)
+         call HYPRE_IJMatrixDestroy    (this%hypre_mat,ierr)
          call HYPRE_IJVectorDestroy    (this%hypre_rhs,ierr)
          call HYPRE_IJVectorDestroy    (this%hypre_sol,ierr)
       case (gmres)
          call HYPRE_ParCSRGMRESDestroy (this%hypre_solver,ierr)
-         call HYPRE_ParCSRMatrixDestroy(this%parse_mat,ierr)
+         call HYPRE_IJMatrixDestroy    (this%hypre_mat,ierr)
          call HYPRE_IJVectorDestroy    (this%hypre_rhs,ierr)
          call HYPRE_IJVectorDestroy    (this%hypre_sol,ierr)
       case (gmres_amg)
          call HYPRE_BoomerAMGDestroy   (this%hypre_precond,ierr)
          call HYPRE_ParCSRGMRESDestroy (this%hypre_solver,ierr)
-         call HYPRE_ParCSRMatrixDestroy(this%parse_mat,ierr)
+         call HYPRE_IJMatrixDestroy    (this%hypre_mat,ierr)
          call HYPRE_IJVectorDestroy    (this%hypre_rhs,ierr)
          call HYPRE_IJVectorDestroy    (this%hypre_sol,ierr)
       case (gmres_pilut)
          call HYPRE_ParCSRPilutDestroy (this%hypre_precond,ierr)
          call HYPRE_ParCSRGMRESDestroy (this%hypre_solver,ierr)
-         call HYPRE_ParCSRMatrixDestroy(this%parse_mat,ierr)
+         call HYPRE_IJMatrixDestroy    (this%hypre_mat,ierr)
          call HYPRE_IJVectorDestroy    (this%hypre_rhs,ierr)
          call HYPRE_IJVectorDestroy    (this%hypre_sol,ierr)
       case (bicgstab_amg)
          call HYPRE_BoomerAMGDestroy     (this%hypre_precond,ierr)
          call HYPRE_ParCSRBiCGSTABDestroy(this%hypre_solver,ierr)
-         call HYPRE_ParCSRMatrixDestroy(this%parse_mat,ierr)
+         call HYPRE_IJMatrixDestroy    (this%hypre_mat,ierr)
          call HYPRE_IJVectorDestroy    (this%hypre_rhs,ierr)
          call HYPRE_IJVectorDestroy    (this%hypre_sol,ierr)
       case (smg)
@@ -956,8 +960,8 @@ contains
          do j=this%cfg%jmin_,this%cfg%jmax_
             do i=this%cfg%imin_,this%cfg%imax_
                if (abs(this%opr(1,i,j,k)).gt.10.0_WP*epsilon(1.0_WP)) then
-                  count=count+1
                   this%ind(i,j,k)=count
+                  count=count+1
                end if
             end do
          end do
@@ -967,9 +971,9 @@ contains
       call this%cfg%sync(this%ind)
       
       ! Get local min/max
-      this%ind_min=1
-      if (this%cfg%rank.gt.0) this%ind_min=ncell_per_proc(this%cfg%rank)+1
-      this%ind_max=ncell_per_proc(this%cfg%rank+1)
+      this%ind_min=0
+      if (this%cfg%rank.gt.0) this%ind_min=ncell_per_proc(this%cfg%rank)
+      this%ind_max=ncell_per_proc(this%cfg%rank+1)-1
       
       ! Deallocate
       deallocate(ncell_per_proc)

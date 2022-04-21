@@ -967,7 +967,6 @@ contains
    end function get_lexico_from_ijk
    
    
-   
    !> Function that performs trilinear interpolation of provided
    !> velocity U,V,W to provided position pos near cell i0,j0,k0
    function get_velocity(this,pos,i0,j0,k0,U,V,W) result(vel)

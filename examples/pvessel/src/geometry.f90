@@ -12,9 +12,7 @@ module geometry
    
    ! Vessel geometry will be needed in BCs
    real(WP), public :: Lv,IR,dx,dy,dz
-   real(WP), parameter, public :: ypipe=-0.375_WP
-   real(WP), parameter, public :: rpipe=+0.02_WP
-   real(WP), parameter, public :: lpipe=+1.50_WP
+   real(WP), public :: ypipe,rpipe,lpipe
    
 contains
    
@@ -80,6 +78,10 @@ contains
          ! Read in vessel dimensions
          call param_read('Vessel length',Lv)
          call param_read('Vessel inner radius',IR)
+         ! Read in inlet pipe geometry
+         call param_read('Inlet pipe position',ypipe)
+         call param_read('Inlet pipe radius'  ,rpipe)
+         call param_read('Inlet pipe length'  ,lpipe)
          ! Start from no fluid
          cfg%VF=0.0_WP
          ! Carve out the inside of the vessel
@@ -91,16 +93,19 @@ contains
                end do
             end do
          end do
-         ! Add a pipe-like wall at the bottom
+         ! Add a pipe-like wall at the bottom - now with a square cylinder
          do k=cfg%kmino_,cfg%kmaxo_
             do j=cfg%jmino_,cfg%jmaxo_
                do i=cfg%imino_,cfg%imaxo_
-                  r=sqrt((cfg%ym(j)-ypipe)**2+(cfg%zm(k))**2)
-                  if (cfg%xm(i).gt.-0.5_WP*lpipe.and.cfg%xm(i).lt.+0.5_WP*lpipe.and.r.lt.rpipe) cfg%VF(i,j,k)=0.0_WP
+                  if (cfg%xm(i).gt.-0.5_WP*lpipe.and.cfg%xm(i).lt.+0.5_WP*lpipe.and.abs(cfg%ym(j)-ypipe).lt.rpipe.and.abs(cfg%zm(k)).lt.rpipe) cfg%VF(i,j,k)=0.0_WP
                end do
             end do
          end do
       end block create_walls
+      
+      
+      ! Finally, write out config file
+      call cfg%write('config')
       
       
    end subroutine geometry_init

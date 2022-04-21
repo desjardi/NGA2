@@ -39,10 +39,17 @@ module simulation
    real(WP), dimension(:,:,:), allocatable :: Ui,Vi,Wi
    real(WP), dimension(:,:,:,:), allocatable :: SR
    
+   !> Boundary condition data
+   integer :: ninlet
+   real(WP) :: current_inlet_position
+   character(len=8), dimension(:), allocatable :: name_in
+   real(WP), dimension(:), allocatable :: Xinlet
+   real(WP), dimension(:), allocatable :: MFR,Ain,rhoUin,Tinlet
+   
    !> Equation of state and case conditions
    real(WP) :: pressure,pressure_old,Vtotal
-   real(WP) :: MFR,Ain,rhoUin,fluid_mass,fluid_mass_old
-   real(WP) :: Tinit,Tinlet,Twall,Twallold,Tavg
+   real(WP) :: fluid_mass,fluid_mass_old
+   real(WP) :: Tinit,Twall,Twallold,Tavg
    logical  :: wall_losses
    real(WP), parameter :: Wmlr=44.01e-3_WP  ! kg/mol
    real(WP), parameter :: Rcst=8.314_WP     ! J/(mol.K)
@@ -75,6 +82,32 @@ module simulation
    ! Backup of viscosity and diffusivity
    real(WP), dimension(:,:,:), allocatable :: viscmol,diffmol
    
+   ! Tabulated EOS
+   real(WP), parameter :: Ptable_min=1.0e5_WP   ! Start tabulation at   1 bar
+   real(WP), parameter :: Ptable_max=200.0e5_WP ! End   tabulation at 200 bar
+   real(WP), parameter :: Ttable_min=280.0_WP   ! Start tabulation at 280 K
+   real(WP), parameter :: Ttable_max=500.0_WP   ! End   tabulation at 500 K
+   integer,  parameter :: nP=200                ! Table resolution in pressure
+   integer,  parameter :: nT=200                ! Table resolution in temperature
+   real(WP), dimension(nP) :: Ptable            ! Pressure mesh
+   real(WP), dimension(nT) :: Ttable            ! Temperature mesh
+   real(WP), dimension(nT,nP) :: rhoTable       ! Actual table
+   
+   ! Tabulated inlet data
+   integer,  parameter :: n_inlet_data=43       ! Number of inlet data points
+   real(WP), parameter :: dt_inlet_data=20.0_WP ! dt for tabulation of inlet values
+   real(WP), dimension(n_inlet_data), parameter :: Tin_inlet_data =[430.43_WP,432.21_WP,433.82_WP,434.21_WP,434.65_WP,434.21_WP,432.43_WP,433.43_WP,434.54_WP,435.04_WP,434.82_WP,432.21_WP,431.54_WP,431.71_WP,432.32_WP,428.54_WP,428.15_WP,428.21_WP,427.93_WP,427.04_WP,427.04_WP,427.21_WP,426.82_WP,426.32_WP,425.93_WP,422.32_WP,421.93_WP,421.54_WP,421.43_WP,421.65_WP,422.21_WP,422.71_WP,422.54_WP,418.32_WP,417.43_WP,419.43_WP,418.21_WP,414.71_WP,415.71_WP,415.21_WP,414.93_WP,415.15_WP,417.71_WP]
+   real(WP), dimension(n_inlet_data), parameter :: MFR_inlet_data =[0.332_WP,0.304_WP,0.310_WP,0.314_WP,0.314_WP,0.309_WP,0.306_WP,0.302_WP,0.298_WP,0.300_WP,0.364_WP,0.357_WP,0.366_WP,0.365_WP,0.450_WP,0.446_WP,0.455_WP,0.452_WP,0.453_WP,0.452_WP,0.451_WP,0.452_WP,0.447_WP,0.451_WP,0.549_WP,0.542_WP,0.524_WP,0.541_WP,0.520_WP,0.512_WP,0.529_WP,0.508_WP,0.637_WP,0.635_WP,0.603_WP,0.636_WP,0.668_WP,0.602_WP,0.629_WP,0.666_WP,0.661_WP,0.599_WP,0.603_WP]
+   
+   
+   ! Monitoring of probe data
+   type(monitor) :: probefile
+   real(WP) :: Tp1,Tp2
+   integer, dimension(3) :: ipos1,ipos2
+   real(WP), dimension(3), parameter :: pos1=[0.0_WP,0.0_WP,0.0_WP]  !< Sets the position of the first probe
+   real(WP), dimension(3), parameter :: pos2=[0.5_WP,0.2_WP,0.2_WP]  !< Sets the position of the second probe
+   
+   
 contains
    
    
@@ -89,7 +122,7 @@ contains
    end function bag_at_loc
    
    
-   !> Function that localizes the top of the tube - y-face (v-vel)
+   !> Functions that localize the top of the tube (y-face for v-vel and center for temp)
    function vtube(pg,i,j,k) result(isIn)
       use pgrid_class, only: pgrid
       implicit none
@@ -98,13 +131,8 @@ contains
       logical :: isIn
       real(WP) :: r
       isIn=.false.
-      if (abs(pg%xm(i)+dx-0.5_WP*lpipe).le.dx.and.abs(pg%y(j)-dy-ypipe).lt.dy.and.abs(pg%zm(k)).lt.0.02_WP) isIn=.true.
-      if (abs(pg%xm(i)                ).le.dx.and.abs(pg%y(j)-dy-ypipe).lt.dy.and.abs(pg%zm(k)).lt.0.02_WP) isIn=.true.
-      if (abs(pg%xm(i)-dx+0.5_WP*lpipe).le.dx.and.abs(pg%y(j)-dy-ypipe).lt.dy.and.abs(pg%zm(k)).lt.0.02_WP) isIn=.true.
+      if (abs(pg%xm(i)-current_inlet_position).le.0.5_WP*dx.and.pg%y(j)-0.5_WP*dy.lt.ypipe+rpipe.and.pg%y(j)+0.5_WP*dy.ge.ypipe+rpipe.and.abs(pg%zm(k)).lt.rpipe) isIn=.true.
    end function vtube
-   
-   
-   !> Function that localizes the top of the tube - scalar
    function sctube(pg,i,j,k) result(isIn)
       use pgrid_class, only: pgrid
       implicit none
@@ -113,52 +141,8 @@ contains
       logical :: isIn
       real(WP) :: r
       isIn=.false.
-      if (abs(pg%xm(i)+dx-0.5_WP*lpipe).le.dx.and.abs(pg%y(j+1)-dy-ypipe).lt.dy.and.abs(pg%zm(k)).lt.0.02_WP) isIn=.true.
-      if (abs(pg%xm(i)                ).le.dx.and.abs(pg%y(j+1)-dy-ypipe).lt.dy.and.abs(pg%zm(k)).lt.0.02_WP) isIn=.true.
-      if (abs(pg%xm(i)-dx+0.5_WP*lpipe).le.dx.and.abs(pg%y(j+1)-dy-ypipe).lt.dy.and.abs(pg%zm(k)).lt.0.02_WP) isIn=.true.
+      if (abs(pg%xm(i)-current_inlet_position).le.0.5_WP*dx.and.pg%ym(j).lt.ypipe+rpipe.and.pg%ym(j)+dy.ge.ypipe+rpipe.and.abs(pg%zm(k)).lt.rpipe) isIn=.true.
    end function sctube
-   
-   
-   !> Function that localizes the left end of the tube
-   !function left_of_tube(pg,i,j,k) result(isIn)
-   !   use pgrid_class, only: pgrid
-   !   implicit none
-   !   class(pgrid), intent(in) :: pg
-   !   integer, intent(in) :: i,j,k
-   !   logical :: isIn
-   !   real(WP) :: r
-   !   isIn=.false.
-   !   r=sqrt((pg%ym(j)-ypipe)**2+(pg%zm(k))**2)
-   !   if (abs(pg%x(i)+0.5_WP*lpipe).lt.0.01_WP.and.r.lt.rpipe) isIn=.true.
-   !end function left_of_tube
-   
-   
-   !> Function that localizes the right end of the tube - x-face (u-vel)
-   !function right_of_tube_vel(pg,i,j,k) result(isIn)
-   !   use pgrid_class, only: pgrid
-   !   implicit none
-   !   class(pgrid), intent(in) :: pg
-   !   integer, intent(in) :: i,j,k
-   !   logical :: isIn
-   !   real(WP) :: r
-   !   isIn=.false.
-   !   r=sqrt((pg%ym(j)-ypipe)**2+(pg%zm(k))**2)
-   !   if (abs(pg%x(i)-0.5_WP*lpipe).lt.0.01_WP.and.r.lt.rpipe) isIn=.true.
-   !end function right_of_tube_vel
-   
-   
-   !> Function that localizes the right end of the tube - scalar
-   !function right_of_tube_sc(pg,i,j,k) result(isIn)
-   !   use pgrid_class, only: pgrid
-   !   implicit none
-   !   class(pgrid), intent(in) :: pg
-   !   integer, intent(in) :: i,j,k
-   !   logical :: isIn
-   !   real(WP) :: r
-   !   isIn=.false.
-   !   r=sqrt((pg%ym(j)-ypipe)**2+(pg%zm(k))**2)
-   !   if (abs(pg%x(i+1)-0.5_WP*lpipe).lt.0.01_WP.and.r.lt.rpipe) isIn=.true.
-   !end function right_of_tube_sc
    
    
    !> Function that localizes the vessel walls
@@ -181,7 +165,7 @@ contains
       implicit none
       real(WP), intent(in) :: mass
       type(bcond), pointer :: inflow
-      integer :: i,j,k,n
+      integer :: i,j,k,n,ni
       real(WP) :: one_over_T
       ! Integrate 1/T
       resSC=1.0_WP/sc%SC
@@ -201,24 +185,229 @@ contains
          end do
       end do
       ! Also update the density in the bcond
-      !call sc%get_bcond( 'left inflow',inflow)
-      !do n=1,inflow%itr%no_
-      !   i=inflow%itr%map(1,n); j=inflow%itr%map(2,n); k=inflow%itr%map(3,n)
-      !   sc%rho(i,j,k)=pressure*Wmlr/(Rcst*sc%SC(i,j,k))
-      !end do
-      !call sc%get_bcond('right inflow',inflow)
-      !do n=1,inflow%itr%no_
-      !   i=inflow%itr%map(1,n); j=inflow%itr%map(2,n); k=inflow%itr%map(3,n)
-      !   sc%rho(i,j,k)=pressure*Wmlr/(Rcst*sc%SC(i,j,k))
-      !end do
-      call sc%get_bcond('pipe inflow',inflow)
-      do n=1,inflow%itr%no_
-         i=inflow%itr%map(1,n); j=inflow%itr%map(2,n); k=inflow%itr%map(3,n)
-         sc%rho(i,j,k)=pressure*Wmlr/(Rcst*sc%SC(i,j,k))
+      do ni=1,ninlet
+         call sc%get_bcond(name_in(ni),inflow)
+         do n=1,inflow%itr%no_
+            i=inflow%itr%map(1,n); j=inflow%itr%map(2,n); k=inflow%itr%map(3,n)
+            sc%rho(i,j,k)=pressure*Wmlr/(Rcst*sc%SC(i,j,k))
+         end do
       end do
       ! Account for porosity here
       sc%rho=sc%rho*epsf
    end subroutine get_rho
+   
+   
+   !> Define here our equation of state using CoolProp
+   !> Inputs are temperature and mass, outputs are density and pressure
+   subroutine get_rho_cp(mass)
+      use coolprop
+      implicit none
+      integer :: i,j,k
+      real(WP), intent(in) :: mass
+      real(WP), parameter :: coeff=0.05_WP
+      real(WP), parameter :: delta_P=1.0e3_WP
+      real(WP) :: dMdP,P1,P2,M1,M2,scaling
+      
+      ! Force at least one step
+      M1=0.0_WP
+      ! Perform Newton solve to find new pressure
+      do while (abs(M1-mass).gt.coeff*mass)
+         ! Numerically evaluate d(mass)/d(pressure)
+         get_dMdP: block
+            ! Evaluate mass at current pressure
+            P1=pressure
+            do k=sc%cfg%kmino_,sc%cfg%kmaxo_
+               do j=sc%cfg%jmino_,sc%cfg%jmaxo_
+                  do i=sc%cfg%imino_,sc%cfg%imaxo_
+                     if (sc%cfg%VF(i,j,k).gt.0.0_WP) then
+                        sc%rho(i,j,k)=cprop(output='D'//char(0),name1='T'//char(0),prop1=sc%SC(i,j,k),name2='P'//char(0),prop2=P1,fluidname='CO2'//char(0))
+                     else
+                        sc%rho(i,j,k)=1.0_WP
+                     end if
+                  end do
+               end do
+            end do
+            call sc%cfg%integrate(sc%rho,integral=M1)
+            ! Evaluate mass at slightly higher pressure
+            P2=P1+delta_P
+            do k=sc%cfg%kmino_,sc%cfg%kmaxo_
+               do j=sc%cfg%jmino_,sc%cfg%jmaxo_
+                  do i=sc%cfg%imino_,sc%cfg%imaxo_
+                     if (sc%cfg%VF(i,j,k).gt.0.0_WP) then
+                        sc%rho(i,j,k)=cprop(output='D'//char(0),name1='T'//char(0),prop1=sc%SC(i,j,k),name2='P'//char(0),prop2=P2,fluidname='CO2'//char(0))
+                     else
+                        sc%rho(i,j,k)=1.0_WP
+                     end if
+                  end do
+               end do
+            end do
+            call sc%cfg%integrate(sc%rho,integral=M2)
+            ! Compute derivative
+            dMdP=(M2-M1)/(P2-P1)
+         end block get_dMdP
+         ! Estimate new pressure
+         pressure=P1+(mass-M1)/dMdP
+         print*,'EOS calculation',pressure,mass,M1
+      end do
+      
+      ! Evaluate resulting density
+      do k=sc%cfg%kmino_,sc%cfg%kmaxo_
+         do j=sc%cfg%jmino_,sc%cfg%jmaxo_
+            do i=sc%cfg%imino_,sc%cfg%imaxo_
+               if (sc%cfg%VF(i,j,k).gt.0.0_WP) then
+                  sc%rho(i,j,k)=cprop(output='D'//char(0),name1='T'//char(0),prop1=sc%SC(i,j,k),name2='P'//char(0),prop2=pressure,fluidname='CO2'//char(0))
+               else
+                  sc%rho(i,j,k)=1.0_WP
+               end if
+            end do
+         end do
+      end do
+      call sc%cfg%integrate(sc%rho,integral=M1)
+      
+      ! Perform final rescaling for exact mass conservation
+      do k=sc%cfg%kmino_,sc%cfg%kmaxo_
+         do j=sc%cfg%jmino_,sc%cfg%jmaxo_
+            do i=sc%cfg%imino_,sc%cfg%imaxo_
+               if (sc%cfg%VF(i,j,k).gt.0.0_WP) then
+                  sc%rho(i,j,k)=sc%rho(i,j,k)*mass/M1
+               else
+                  sc%rho(i,j,k)=1.0_WP
+               end if
+            end do
+         end do
+      end do
+      
+      ! Update the densities (including rescaling) in the inflow conditions
+      get_new_density_in_bc: block
+         use vdscalar_class, only: bcond
+         type(bcond), pointer :: inflow
+         integer :: n,ni
+         do ni=1,ninlet
+            call sc%get_bcond(name_in(ni),inflow)
+            do n=1,inflow%itr%no_
+               i=inflow%itr%map(1,n); j=inflow%itr%map(2,n); k=inflow%itr%map(3,n)
+               sc%rho(i,j,k)=cprop(output='D'//char(0),name1='T'//char(0),prop1=sc%SC(i,j,k),name2='P'//char(0),prop2=pressure,fluidname='CO2'//char(0))*mass/M1
+            end do
+         end do
+      end block get_new_density_in_bc
+      
+      ! Finally, account for porosity
+      sc%rho=sc%rho*epsf
+      
+   end subroutine get_rho_cp
+   
+   
+   !> Define here our equation of state using tabulated data
+   !> Inputs are temperature and mass, outputs are density and pressure
+   subroutine get_rho_table(mass)
+      implicit none
+      integer :: i,j,k,iP,iT
+      real(WP), intent(in) :: mass
+      real(WP), parameter :: coeff=0.05_WP
+      real(WP), parameter :: delta_P=1.0e3_WP
+      real(WP) :: dMdP,P1,P2,M1,M2,scaling,c1P,c2P,c1T,c2T
+      
+      ! Force at least one step
+      M1=0.0_WP
+      ! Perform Newton solve to find new pressure
+      do while (abs(M1-mass).gt.coeff*mass)
+         ! Numerically evaluate d(mass)/d(pressure)
+         get_dMdP: block
+            ! Evaluate mass at current pressure
+            P1=pressure
+            iP=max(min(floor((P1-Ptable_min)/(Ptable_max-Ptable_min)*real(nP-1,WP))+1,nP-1),1)
+            c1P=(P1-Ptable(iP))/(Ptable(iP+1)-Ptable(iP)); c2P=1.0_WP-c1P
+            do k=sc%cfg%kmino_,sc%cfg%kmaxo_
+               do j=sc%cfg%jmino_,sc%cfg%jmaxo_
+                  do i=sc%cfg%imino_,sc%cfg%imaxo_
+                     if (sc%cfg%VF(i,j,k).gt.0.0_WP) then
+                        iT=max(min(floor((sc%SC(i,j,k)-Ttable_min)/(Ttable_max-Ttable_min)*real(nT-1,WP))+1,nT-1),1)
+                        c1T=(sc%SC(i,j,k)-Ttable(iT))/(Ttable(iT+1)-Ttable(iT)); c2T=1.0_WP-c1T
+                        sc%rho(i,j,k)=c1P*c1T*rhoTable(iT+1,iP+1)+c1P*c2T*rhoTable(iT,iP+1)+c2P*c1T*rhoTable(iT+1,iP)+c2P*c2T*rhoTable(iT,iP)
+                     else
+                        sc%rho(i,j,k)=1.0_WP
+                     end if
+                  end do
+               end do
+            end do
+            call sc%cfg%integrate(sc%rho,integral=M1)
+            ! Evaluate mass at slightly higher pressure
+            P2=P1+delta_P
+            iP=max(min(floor((P2-Ptable_min)/(Ptable_max-Ptable_min)*real(nP-1,WP))+1,nP-1),1)
+            c1P=(P2-Ptable(iP))/(Ptable(iP+1)-Ptable(iP)); c2P=1.0_WP-c1P
+            do k=sc%cfg%kmino_,sc%cfg%kmaxo_
+               do j=sc%cfg%jmino_,sc%cfg%jmaxo_
+                  do i=sc%cfg%imino_,sc%cfg%imaxo_
+                     if (sc%cfg%VF(i,j,k).gt.0.0_WP) then
+                        iT=max(min(floor((sc%SC(i,j,k)-Ttable_min)/(Ttable_max-Ttable_min)*real(nT-1,WP))+1,nT-1),1)
+                        c1T=(sc%SC(i,j,k)-Ttable(iT))/(Ttable(iT+1)-Ttable(iT)); c2T=1.0_WP-c1T
+                        sc%rho(i,j,k)=c1P*c1T*rhoTable(iT+1,iP+1)+c1P*c2T*rhoTable(iT,iP+1)+c2P*c1T*rhoTable(iT+1,iP)+c2P*c2T*rhoTable(iT,iP)
+                     else
+                        sc%rho(i,j,k)=1.0_WP
+                     end if
+                  end do
+               end do
+            end do
+            call sc%cfg%integrate(sc%rho,integral=M2)
+            ! Compute derivative
+            dMdP=(M2-M1)/(P2-P1)
+         end block get_dMdP
+         ! Estimate new pressure
+         pressure=P1+(mass-M1)/dMdP
+      end do
+      
+      ! Evaluate resulting density
+      iP=max(min(floor((pressure-Ptable_min)/(Ptable_max-Ptable_min)*real(nP-1,WP))+1,nP-1),1)
+      c1P=(pressure-Ptable(iP))/(Ptable(iP+1)-Ptable(iP)); c2P=1.0_WP-c1P
+      do k=sc%cfg%kmino_,sc%cfg%kmaxo_
+         do j=sc%cfg%jmino_,sc%cfg%jmaxo_
+            do i=sc%cfg%imino_,sc%cfg%imaxo_
+               if (sc%cfg%VF(i,j,k).gt.0.0_WP) then
+                  iT=max(min(floor((sc%SC(i,j,k)-Ttable_min)/(Ttable_max-Ttable_min)*real(nT-1,WP))+1,nT-1),1)
+                  c1T=(sc%SC(i,j,k)-Ttable(iT))/(Ttable(iT+1)-Ttable(iT)); c2T=1.0_WP-c1T
+                  sc%rho(i,j,k)=c1P*c1T*rhoTable(iT+1,iP+1)+c1P*c2T*rhoTable(iT,iP+1)+c2P*c1T*rhoTable(iT+1,iP)+c2P*c2T*rhoTable(iT,iP)
+               else
+                  sc%rho(i,j,k)=1.0_WP
+               end if
+            end do
+         end do
+      end do
+      call sc%cfg%integrate(sc%rho,integral=M1)
+      
+      ! Perform final rescaling for exact mass conservation
+      do k=sc%cfg%kmino_,sc%cfg%kmaxo_
+         do j=sc%cfg%jmino_,sc%cfg%jmaxo_
+            do i=sc%cfg%imino_,sc%cfg%imaxo_
+               if (sc%cfg%VF(i,j,k).gt.0.0_WP) then
+                  sc%rho(i,j,k)=sc%rho(i,j,k)*mass/M1
+               else
+                  sc%rho(i,j,k)=1.0_WP
+               end if
+            end do
+         end do
+      end do
+      
+      ! Update the densities (including rescaling) in the inflow conditions
+      get_new_density_in_bc: block
+         use vdscalar_class, only: bcond
+         type(bcond), pointer :: inflow
+         integer :: n,ni
+         do ni=1,ninlet
+            call sc%get_bcond(name_in(ni),inflow)
+            do n=1,inflow%itr%no_
+               i=inflow%itr%map(1,n); j=inflow%itr%map(2,n); k=inflow%itr%map(3,n)
+               iT=max(min(floor((sc%SC(i,j,k)-Ttable_min)/(Ttable_max-Ttable_min)*real(nT-1,WP))+1,nT-1),1)
+               c1T=(sc%SC(i,j,k)-Ttable(iT))/(Ttable(iT+1)-Ttable(iT)); c2T=1.0_WP-c1T
+               sc%rho(i,j,k)=c1P*c1T*rhoTable(iT+1,iP+1)+c1P*c2T*rhoTable(iT,iP+1)+c2P*c1T*rhoTable(iT+1,iP)+c2P*c2T*rhoTable(iT,iP)
+               sc%rho(i,j,k)=sc%rho(i,j,k)*mass/M1
+            end do
+         end do
+      end block get_new_density_in_bc
+      
+      ! Finally, account for porosity
+      sc%rho=sc%rho*epsf
+      
+   end subroutine get_rho_table
    
    
    !> Calculate here our viscosity from local T and vessel pressure
@@ -280,14 +469,54 @@ contains
             end do
          end do
       end do
-   
-end subroutine get_cond
+      
+   end subroutine get_cond
    
    
    !> Initialization of problem solver
    subroutine simulation_init
-      use param, only: param_read
+      use param,    only: param_read
+      use messager, only: die
       implicit none
+      
+      
+      ! Start by preparing rho table using CoolProp
+      rho_table_prep: block
+         use coolprop
+         integer :: iT,iP
+         real(WP) :: myT,myP
+         do iP=1,nP
+            Ptable(iP)=Ptable_min+(Ptable_max-Ptable_min)*real(iP-1,WP)/real(nP-1,WP)
+            do iT=1,nT
+               Ttable(iT)=Ttable_min+(Ttable_max-Ttable_min)*real(iT-1,WP)/real(nT-1,WP)
+               rhoTable(iT,iP)=cprop(output='D'//char(0),name1='T'//char(0),prop1=Ttable(iT),name2='P'//char(0),prop2=Ptable(iP),fluidname='CO2'//char(0))
+            end do
+         end do
+      end block rho_table_prep
+      
+      
+      ! Process inlet conditions first
+      inlet_conditions: block
+         use param, only: param_getsize
+         character(len=2) :: numb
+         integer :: ni
+         ! Figure out how many inlets
+         ninlet=param_getsize('Inlet x locations')
+         if (ninlet.ne.param_getsize('Inlet temperature').or.ninlet.ne.param_getsize('Inlet MFR (kg/s)' )) call die('[simulation_init] Inlet numbers are incompatible')
+         allocate(Tinlet(ninlet),MFR(ninlet),Xinlet(ninlet))
+         ! Read in position, temperature, and MFR
+         call param_read('Inlet x locations',Xinlet)
+         call param_read('Inlet temperature',Tinlet)
+         call param_read('Inlet MFR (kg/s)' ,MFR)
+         ! Also allocate rhoUin and Ain
+         allocate(rhoUin(ninlet),Ain(ninlet))
+         ! Also create default names
+         allocate(name_in(ninlet))
+         do ni=1,ninlet
+            write(numb,'(i2)') ni
+            name_in(ni)='inlet_'//numb
+         end do
+      end block inlet_conditions
       
       
       ! Handle restart/saves here
@@ -306,7 +535,7 @@ end subroutine get_cond
             df=datafile(pg=cfg,fdata=trim(adjustl(dir_restart))//'/'//'data')
          else
             ! If we are not restarting, we will still need datafiles for saving restart files
-            df=datafile(pg=cfg,filename=trim(cfg%name),nval=4,nvar=9)
+            df=datafile(pg=cfg,filename=trim(cfg%name),nval=4,nvar=13)
             df%valname(1)='t'
             df%valname(2)='dt'
             df%valname(3)='pressure'
@@ -320,6 +549,10 @@ end subroutine get_cond
             df%varname(7)='rhoold'
             df%varname(8)='SC'
             df%varname(9)='Tprod'
+            df%varname(10)='visc'
+            df%varname(11)='Ui'
+            df%varname(12)='Vi'
+            df%varname(13)='Wi'
          end if
       end block restart_and_save
       
@@ -358,15 +591,16 @@ end subroutine get_cond
       
       ! Create an incompressible flow solver with bconds
       create_solver: block
-         use ils_class,     only: gmres,gmres_amg
+         use ils_class,     only: pcg_pfmg,pcg_amg
          use lowmach_class, only: dirichlet
          real(WP) :: visc
+         integer :: ni
          ! Create flow solver
          fs=lowmach(cfg=cfg,name='Variable density low Mach NS')
          ! Define boundary conditions
-         !call fs%add_bcond(name= 'left inflow',type=dirichlet,locator= left_of_tube    ,face='x',dir=+1,canCorrect=.false.)
-         !call fs%add_bcond(name='right inflow',type=dirichlet,locator=right_of_tube_vel,face='x',dir=-1,canCorrect=.false.)
-         call fs%add_bcond(name= 'pipe inflow',type=dirichlet,locator=vtube,face='y',dir=-1,canCorrect=.false.)
+         do ni=1,ninlet
+            current_inlet_position=Xinlet(ni); call fs%add_bcond(name=name_in(ni),type=dirichlet,locator=vtube,face='y',dir=-1,canCorrect=.false.)
+         end do
          ! Assign constant viscosity
          call param_read('Dynamic viscosity',visc); fs%visc=visc
          ! Assign acceleration of gravity
@@ -378,7 +612,7 @@ end subroutine get_cond
          call param_read('Implicit iteration',fs%implicit%maxit)
          call param_read('Implicit tolerance',fs%implicit%rcvg)
          ! Setup the solver
-         call fs%setup(pressure_ils=gmres_amg,implicit_ils=gmres)
+         call fs%setup(pressure_ils=pcg_amg,implicit_ils=pcg_pfmg)
       end block create_solver
       
       
@@ -490,7 +724,7 @@ end subroutine get_cond
                end do
             end do
          end do
-         call fs%psolv%update_solver()
+         call fs%psolv%setup()
          ! Also allocate the temperature arrays
          allocate(Tprod(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
          allocate(Tprodold(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
@@ -499,9 +733,10 @@ end subroutine get_cond
       
       ! Create a scalar solver
       create_scalar: block
-         use ils_class,      only: gmres,pfmg
+         use ils_class,      only: gmres
          use vdscalar_class, only: dirichlet,quick
          real(WP) :: diffusivity
+         integer :: ni
          ! Check if we want to model wall losses
          call param_read(tag='Wall temperature',val=Twall,default=-1.0_WP)
          wall_losses=.false.; if (Twall.gt.0.0_WP) wall_losses=.true.
@@ -509,9 +744,9 @@ end subroutine get_cond
          ! Create scalar solver
          sc=vdscalar(cfg=cfg,scheme=quick,name='Temperature')
          ! Define boundary conditions
-         !call sc%add_bcond(name= 'left inflow',type=dirichlet,locator= left_of_tube   )
-         !call sc%add_bcond(name='right inflow',type=dirichlet,locator=right_of_tube_sc)
-         call sc%add_bcond(name='pipe inflow',type=dirichlet,locator=sctube)
+         do ni=1,ninlet
+            current_inlet_position=Xinlet(ni); call sc%add_bcond(name=name_in(ni),type=dirichlet,locator=sctube)
+         end do
          if (wall_losses) call sc%add_bcond(name='wall',type=dirichlet,locator=wall_locator)
          ! Assign constant diffusivity
          call param_read('Dynamic diffusivity',diffusivity)
@@ -527,10 +762,9 @@ end subroutine get_cond
       initialize_scalar: block
          use vdscalar_class, only: bcond
          type(bcond), pointer :: mybc
-         integer :: n,i,j,k
+         integer :: n,i,j,k,ni
          ! Read in the temperature and pressure
          call param_read('Initial temperature',Tinit)
-         call param_read('Inlet temperature',Tinlet)
          call param_read('Initial pressure',pressure)
          ! Handle restart
          if (restarted) then
@@ -550,25 +784,16 @@ end subroutine get_cond
             sc%rho=sc%rho*epsf
             sc%rhoold=sc%rho
          end if
-         ! Apply Dirichlet at the tube
-         !call sc%get_bcond( 'left inflow',mybc)
-         !do n=1,mybc%itr%no_
-         !   i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
-         !   sc%SC (i,j,k)=Tinlet
-         !   sc%rho(i,j,k)=pressure*Wmlr/(Rcst*Tinlet)
-         !end do
-         !call sc%get_bcond('right inflow',mybc)
-         !do n=1,mybc%itr%no_
-         !   i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
-         !   sc%SC(i,j,k)=Tinlet
-         !   sc%rho(i,j,k)=pressure*Wmlr/(Rcst*Tinlet)
-         !end do
-         call sc%get_bcond('pipe inflow',mybc)
-         do n=1,mybc%itr%no_
-            i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
-            sc%SC(i,j,k)=Tinlet
-            sc%rho(i,j,k)=pressure*Wmlr/(Rcst*Tinlet)
+         ! Apply Dirichlet at the inlets
+         do ni=1,ninlet
+            call sc%get_bcond(name_in(ni),mybc)
+            do n=1,mybc%itr%no_
+               i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
+               sc%SC(i,j,k)=Tinlet(1)
+               sc%rho(i,j,k)=pressure*Wmlr/(Rcst*Tinlet(ni))
+            end do
          end do
+         ! Apply Dirichlet at the wall
          if (wall_losses) then
             call sc%get_bcond('wall',mybc)
             do n=1,mybc%itr%no_
@@ -594,7 +819,7 @@ end subroutine get_cond
          use parallel,      only: MPI_REAL_WP
          use mpi_f08,       only: MPI_ALLREDUCE,MPI_SUM
          type(bcond), pointer :: mybc
-         integer :: n,i,j,k,ierr
+         integer :: n,i,j,k,ierr,ni
          real(WP) :: myAin
          ! Handle restart
          if (restarted) then
@@ -603,43 +828,24 @@ end subroutine get_cond
             call df%pullvar(name='rhoW',var=fs%rhoW)
             call df%pullvar(name='P'   ,var=fs%P   )
          end if
-         ! Read in MFR
-         call param_read('Inlet MFR (kg/s)',MFR)
          ! Calculate inflow area
-         myAin=0.0_WP
-         !call fs%get_bcond('left inflow',mybc)
-         !do n=1,mybc%itr%n_
-         !   i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
-         !   myAin=myAin+fs%cfg%dy(j)*fs%cfg%dz(k)
-         !end do
-         !call fs%get_bcond('right inflow',mybc)
-         !do n=1,mybc%itr%n_
-         !   i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
-         !   myAin=myAin+fs%cfg%dy(j)*fs%cfg%dz(k)
-         !end do
-         call fs%get_bcond('pipe inflow',mybc)
-         do n=1,mybc%itr%n_
-            i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
-            myAin=myAin+fs%cfg%dx(i)*fs%cfg%dz(k)
+         do ni=1,ninlet
+            call fs%get_bcond(name_in(ni),mybc)
+            myAin=0.0_WP
+            do n=1,mybc%itr%n_
+               i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
+               myAin=myAin+fs%cfg%dx(i)*fs%cfg%dz(k)
+            end do
+            call MPI_ALLREDUCE(myAin,Ain(ni),1,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr)
          end do
-         call MPI_ALLREDUCE(myAin,Ain,1,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr)
-         ! Form inflow momentum
+         ! Form and set inflow momentum
          rhoUin=MFR/Ain
-         ! Apply Dirichlet at the tube
-         !call fs%get_bcond('left inflow',mybc)
-         !do n=1,mybc%itr%no_
-         !   i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
-         !   fs%rhoU(i,j,k)=-rhoUin
-         !end do
-         !call fs%get_bcond('right inflow',mybc)
-         !do n=1,mybc%itr%no_
-         !   i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
-         !   fs%rhoU(i,j,k)=+rhoUin
-         !end do
-         call fs%get_bcond('pipe inflow',mybc)
-         do n=1,mybc%itr%no_
-            i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
-            fs%rhoV(i,j,k)=+rhoUin
+         do ni=1,ninlet
+            call fs%get_bcond(name_in(ni),mybc)
+            do n=1,mybc%itr%no_
+               i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
+               fs%rhoV(i,j,k)=+rhoUin(ni)
+            end do
          end do
          ! Set density from scalar
          fs%rho=0.5_WP*(sc%rho+sc%rhoold)
@@ -735,6 +941,22 @@ end subroutine get_cond
       end block create_monitor
       
       
+      ! Create a probe monitoring file
+      create_probe: block
+         ! Find mesh location of probes
+         ipos1=sc%cfg%get_ijk_global(pos1,[sc%cfg%imino,sc%cfg%jmino,sc%cfg%kmino])
+         ipos2=sc%cfg%get_ijk_global(pos2,[sc%cfg%imino,sc%cfg%jmino,sc%cfg%kmino])
+         ! Get probe temperature
+         Tp1=sc%SC(ipos1(1),ipos1(2),ipos1(3))
+         Tp2=sc%SC(ipos2(1),ipos2(2),ipos2(3))
+         ! Create simulation monitor
+         probefile=monitor(sc%cfg%amRoot,'probe')
+         call probefile%add_column(time%n,'Timestep number')
+         call probefile%add_column(time%t,'Time')
+         call probefile%add_column(Tp1,'Tp1')
+         call probefile%add_column(Tp2,'Tp2')
+      end block create_probe
+      
    end subroutine simulation_init
    
    
@@ -767,8 +989,13 @@ end subroutine get_cond
          fs%Vold=fs%V; fs%rhoVold=fs%rhoV
          fs%Wold=fs%W; fs%rhoWold=fs%rhoW
          
-         ! Apply time-varying Dirichlet conditions
-         ! This is where time-dpt Dirichlet would be enforced
+         ! Update time-varying Dirichlet conditions
+         !update_inlet_conditions: block
+         !   integer :: iTime
+         !   iTime=min(floor(time%t/dt_inlet_data)+1,n_inlet_data)
+         !   rhoUin=MFR_inlet_data(iTime)/sum(Ain)
+         !   Tinlet=Tin_inlet_data(iTime)
+         !end block update_inlet_conditions
          
          ! ============ UPDATE PROPERTIES ====================
          call get_visc(); viscmol=fs%visc
@@ -889,28 +1116,20 @@ end subroutine get_cond
             mom_bcond: block
                use lowmach_class, only: bcond
                type(bcond), pointer :: mybc
-               integer :: n,i,j,k
-               !call fs%get_bcond('left inflow',mybc)
-               !do n=1,mybc%itr%no_
-               !   i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
-               !   fs%rhoU(i,j,k)=-rhoUin
-               !end do
-               !call fs%get_bcond('right inflow',mybc)
-               !do n=1,mybc%itr%no_
-               !   i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
-               !   fs%rhoU(i,j,k)=+rhoUin
-               !end do
-               call fs%get_bcond('pipe inflow',mybc)
-               do n=1,mybc%itr%no_
-                  i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
-                  fs%rhoV(i,j,k)=+rhoUin
+               integer :: n,i,j,k,ni
+               do ni=1,ninlet
+                  call fs%get_bcond(name_in(ni),mybc)
+                  do n=1,mybc%itr%no_
+                     i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
+                     fs%rhoV(i,j,k)=+rhoUin(ni)
+                  end do
                end do
             end block mom_bcond
             
             ! Solve Poisson equation
-            call fs%correct_mfr()                          !< Now outlet so this gets the MFR imbalance
+            call fs%correct_mfr()                          !< No outlet so this gets the MFR imbalance
             fluid_mass=fluid_mass_old-sum(fs%mfr)*time%dt  !< Update mass in system
-            call get_rho(mass=fluid_mass)                  !< Adjust rho and pressure in accordance
+            call get_rho_table(mass=fluid_mass)            !< Adjust rho and pressure accordingly
             call sc%get_drhodt(dt=time%dt,drhodt=resSC)
             call fs%get_div(drhodt=resSC)
             fs%psolv%rhs=-fs%cfg%vol*fs%div/time%dtmid
@@ -991,13 +1210,25 @@ end subroutine get_cond
             sc%SC=2.0_WP*sc%SC-sc%SCold+resSC
             
             ! Update density and pressure
-            call get_rho(mass=fluid_mass)
+            call get_rho_table(mass=fluid_mass)
             
             ! Multiply by density
             call sc%rho_multiply()
             
             ! Apply other boundary conditions on the resulting field
             call sc%apply_bcond(time%t,time%dt)
+            temp_bcond: block
+               use vdscalar_class, only: bcond
+               type(bcond), pointer :: mybc
+               integer :: n,i,j,k,ni
+               do ni=1,ninlet
+                  call sc%get_bcond(name_in(ni),mybc)
+                  do n=1,mybc%itr%no_
+                     i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
+                     sc%SC(i,j,k)=Tinlet(ni)
+                  end do
+               end do
+            end block temp_bcond
             ! ===================================================
             
             ! Increment sub-iteration counter
@@ -1020,6 +1251,11 @@ end subroutine get_cond
          call mfile%write()
          call cflfile%write()
          call consfile%write()
+         monitor_probe: block
+            Tp1=sc%SC(ipos1(1),ipos1(2),ipos1(3))
+            Tp2=sc%SC(ipos2(1),ipos2(2),ipos2(3))
+            call probefile%write()
+         end block monitor_probe
          
          
          ! Finally, see if it's time to save restart files
@@ -1044,6 +1280,10 @@ end subroutine get_cond
                call df%pushvar(name='rhoold'  ,var=sc%rhoold)
                call df%pushvar(name='SC'      ,var=sc%SC    )
                call df%pushvar(name='Tprod'   ,var=Tprod    )
+               call df%pushvar(name='visc'    ,var=fs%visc  )
+               call df%pushvar(name='Ui'      ,var=Ui       )
+               call df%pushvar(name='Vi'      ,var=Vi       )
+               call df%pushvar(name='Wi'      ,var=Wi       )
                call df%write(fdata=trim(adjustl(dirname))//trim(adjustl(timestamp))//'/'//'data')
             end block save_restart
          end if

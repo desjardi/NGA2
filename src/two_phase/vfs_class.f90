@@ -6,7 +6,6 @@ module vfs_class
    use string,         only: str_medium
    use config_class,   only: config
    use iterator_class, only: iterator
-   use surfmesh_class, only: surfmesh
    use irl_fortran_interface
    implicit none
    private
@@ -122,10 +121,8 @@ module vfs_class
       type(ListVM_VMAN_type), dimension(:,:,:),   allocatable :: triangle_moments_storage
       type(LocLink_type),     dimension(:,:,:),   allocatable :: localizer_link
       type(Poly_type),        dimension(:,:,:,:), allocatable :: interface_polygon
+      type(Poly_type),        dimension(:,:,:,:), allocatable :: polyface
       type(SepVM_type),       dimension(:,:,:,:), allocatable :: face_flux
-      
-      ! More basic representation of the surface grid
-      type(surfmesh) :: surfgrid
       
       ! Masking info for metric modification
       integer, dimension(:,:,:), allocatable :: mask      !< Integer array used for enforcing bconds
@@ -133,6 +130,14 @@ module vfs_class
       
       ! Monitoring quantities
       real(WP) :: VFmax,VFmin,VFint                       !< Maximum, minimum, and integral volume fraction
+
+      ! Old arrays that are needed for the compressible MAST solver
+      real(WP), dimension(:,:,:,:), allocatable :: Lbaryold  !< Liquid barycenter
+      real(WP), dimension(:,:,:,:), allocatable :: Gbaryold  !< Gas barycenter
+      type(PlanarSep_type),   dimension(:,:,:),   allocatable :: liquid_gas_interfaceold
+      type(LocSepLink_type),  dimension(:,:,:),   allocatable :: localized_separator_linkold
+      type(ObjServer_PlanarSep_type)  :: planar_separatorold_allocation
+      type(ObjServer_LocSepLink_type) :: localized_separator_linkold_allocation
       
    contains
       procedure :: print=>vfs_print                       !< Output solver to the screen
@@ -150,7 +155,7 @@ module vfs_class
       procedure, private :: sync_ByteBuffer               !< Communicate byte packets across one side - another I/O helper
       procedure, private :: calculate_offset_to_planes    !< Helper routine for I/O
       procedure, private :: crude_phase_test              !< Helper function that rapidly assess if a mixed cell might be present
-      procedure, private :: project                       !< Helper function that performs a Lagrangian projection of a vertex
+      procedure :: project                                !< Function that performs a Lagrangian projection of a vertex
       procedure :: read_interface                         !< Read an IRL interface from a file
       procedure :: write_interface                        !< Write an IRL interface to a file
       procedure :: advance                                !< Advance VF to next step
@@ -165,11 +170,18 @@ module vfs_class
       procedure :: distance_from_polygon                  !< Build a signed distance field from the polygonalized interface
       procedure :: subcell_vol                            !< Build subcell phasic volumes from reconstructed interface
       procedure :: reset_volume_moments                   !< Reconstruct volume moments from IRL interfaces
-      procedure :: update_surfgrid                        !< Create a simple surface mesh from the IRL polygons
+      procedure :: update_surfmesh                        !< Update a surfmesh object using current polygons
       procedure :: get_curvature                          !< Compute curvature from IRL surface polygons
-      procedure :: paraboloid_fit                         !< Perform local paraboloid fit of IRL surface
+      procedure :: paraboloid_fit                         !< Perform local paraboloid fit of IRL surface using IRL barycenter data
+      procedure :: paraboloid_integral_fit                !< Perform local paraboloid fit of IRL surface using surface-integrated IRL data
       procedure :: get_max                                !< Calculate maximum field values
       procedure :: get_cfl                                !< Get CFL for the VF solver
+
+      procedure :: allocate_supplement                    !< Allocate arrays and initialize objects needed for compressible MAST solver
+      procedure :: copy_interface_to_old                  !< Copy interface variables at beginning of timestep
+      procedure :: fluxpoly_project_getmoments            !< Project face to get flux volume and output its moments
+      procedure :: fluxpoly_cell_getvolcentr              !< Get the volume and centroid during generalized SL advection
+
    end type vfs
    
    
@@ -230,9 +242,6 @@ contains
       ! Initialize IRL
       call self%initialize_irl()
       
-      ! Also initialize a surface grid
-      self%surfgrid=surfmesh(nvar=1,name='plic'); self%surfgrid%varname(1)='nplane'
-      
       ! Prepare mask for VF
       allocate(self%mask(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%mask=0
       if (.not.self%cfg%xper) then
@@ -283,13 +292,14 @@ contains
       if (.not.self%cfg%zper.and.self%cfg%kproc.eq.1) self%vmask(:,:,self%cfg%kmino)=self%vmask(:,:,self%cfg%kmino+1)
       
    end function constructor
-   
-   
+    
+
    !> Initialize the IRL representation of our interfaces
    subroutine initialize_irl(this)
       implicit none
       class(vfs), intent(inout) :: this
       integer :: i,j,k,n,tag
+      real(WP), dimension(3,4) :: vert
       integer(IRL_LargeOffsetIndex_t) :: total_cells
       
       ! Transfer small constants to IRL
@@ -297,7 +307,7 @@ contains
       call setVFTolerance_IterativeDistanceFinding(iterative_distfind_tol)
       call setMinimumVolToTrack(volume_epsilon_factor*this%cfg%min_meshsize**3)
       call setMinimumSAToTrack(surface_epsilon_factor*this%cfg%min_meshsize**2)
-      
+
       ! Set IRL's moment calculation method
       call getMoments_setMethod(half_edge)
       
@@ -308,6 +318,7 @@ contains
       allocate(this%triangle_moments_storage(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
       allocate(this%localizer_link          (this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
       allocate(this%interface_polygon(1:max_interface_planes,this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
+      allocate(this%polyface            (1:3,this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
       
       ! Work arrays for face fluxes
       allocate(this%face_flux(1:3,this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
@@ -357,6 +368,38 @@ contains
                do n=1,max_interface_planes
                   call new(this%interface_polygon(n,i,j,k))
                end do
+            end do
+         end do
+      end do
+      
+      ! Polygonal representation of cell faces
+      do k=this%cfg%kmino_,this%cfg%kmaxo_
+         do j=this%cfg%jmino_,this%cfg%jmaxo_
+            do i=this%cfg%imino_,this%cfg%imaxo_
+               ! Polygonal representation of the x-face
+               call new(this%polyface(1,i,j,k))
+               vert(:,1)=[this%cfg%x(i),this%cfg%y(j  ),this%cfg%z(k  )]
+               vert(:,2)=[this%cfg%x(i),this%cfg%y(j+1),this%cfg%z(k  )]
+               vert(:,3)=[this%cfg%x(i),this%cfg%y(j+1),this%cfg%z(k+1)]
+               vert(:,4)=[this%cfg%x(i),this%cfg%y(j  ),this%cfg%z(k+1)]
+               call construct(this%polyface(1,i,j,k),4,vert)
+               call setPlaneOfExistence(this%polyface(1,i,j,k),[1.0_WP,0.0_WP,0.0_WP,this%cfg%x(i)])
+               ! Polygonal representation of the y-face
+               call new(this%polyface(2,i,j,k))
+               vert(:,1)=[this%cfg%x(i  ),this%cfg%y(j),this%cfg%z(k  )]
+               vert(:,2)=[this%cfg%x(i  ),this%cfg%y(j),this%cfg%z(k+1)]
+               vert(:,3)=[this%cfg%x(i+1),this%cfg%y(j),this%cfg%z(k+1)]
+               vert(:,4)=[this%cfg%x(i+1),this%cfg%y(j),this%cfg%z(k  )]
+               call construct(this%polyface(2,i,j,k),4,vert)
+               call setPlaneOfExistence(this%polyface(2,i,j,k),[0.0_WP,1.0_WP,0.0_WP,this%cfg%y(j)])
+               ! Polygonal representation of the z-face
+               call new(this%polyface(3,i,j,k))
+               vert(:,1)=[this%cfg%x(i  ),this%cfg%y(j  ),this%cfg%z(k)]
+               vert(:,2)=[this%cfg%x(i+1),this%cfg%y(j  ),this%cfg%z(k)]
+               vert(:,3)=[this%cfg%x(i+1),this%cfg%y(j+1),this%cfg%z(k)]
+               vert(:,4)=[this%cfg%x(i  ),this%cfg%y(j+1),this%cfg%z(k)]
+               call construct(this%polyface(3,i,j,k),4,vert)
+               call setPlaneOfExistence(this%polyface(3,i,j,k),[0.0_WP,0.0_WP,1.0_WP,this%cfg%z(k)])
             end do
          end do
       end do
@@ -416,6 +459,107 @@ contains
       
    end subroutine initialize_irl
    
+
+   ! Set up additional arrays needed for the compressible MAST solver
+   subroutine allocate_supplement(this)
+     implicit none
+     class(vfs), intent(inout) :: this
+     integer  :: i,j,k,tag
+     integer(IRL_LargeOffsetIndex_t) :: total_cells
+     
+     ! Allocate arrays for storing old variables
+     allocate(this%liquid_gas_interfaceold    (this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
+     allocate(this%localized_separator_linkold(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
+     total_cells=int(this%cfg%nxo_,8)*int(this%cfg%nyo_,8)*int(this%cfg%nzo_,8)
+     call new(this%planar_separatorold_allocation,total_cells)
+     call new(this%localized_separator_linkold_allocation,total_cells)
+
+     ! Initialize arrays and setup linking
+     do k=this%cfg%kmino_,this%cfg%kmaxo_
+        do j=this%cfg%jmino_,this%cfg%jmaxo_
+           do i=this%cfg%imino_,this%cfg%imaxo_
+              ! PLIC interface(s)
+              call new(this%liquid_gas_interfaceold(i,j,k),this%planar_separatorold_allocation)
+              ! PLIC+mesh with connectivity (i.e., link)
+              call new(this%localized_separator_linkold(i,j,k),this%localized_separator_linkold_allocation,this%localizer(i,j,k),this%liquid_gas_interfaceold(i,j,k))
+           end do
+        end do
+     end do
+
+     ! Give each link a unique lexicographic tag (per processor)
+     do k=this%cfg%kmino_,this%cfg%kmaxo_
+        do j=this%cfg%jmino_,this%cfg%jmaxo_
+           do i=this%cfg%imino_,this%cfg%imaxo_
+              tag=this%cfg%get_lexico_from_ijk([i,j,k])
+              call setId(this%localized_separator_linkold(i,j,k),tag)
+           end do
+        end do
+     end do
+
+     ! Set the connectivity
+     do k=this%cfg%kmino_,this%cfg%kmaxo_
+        do j=this%cfg%jmino_,this%cfg%jmaxo_
+           do i=this%cfg%imino_,this%cfg%imaxo_
+              ! In the x- direction
+              if (i.gt.this%cfg%imino_) then
+                 call setEdgeConnectivity(this%localized_separator_linkold(i,j,k),0,this%localized_separator_linkold(i-1,j,k))
+              end if
+              ! In the x+ direction
+              if (i.lt.this%cfg%imaxo_) then
+                 call setEdgeConnectivity(this%localized_separator_linkold(i,j,k),1,this%localized_separator_linkold(i+1,j,k))
+              end if
+              ! In the y- direction
+              if (j.gt.this%cfg%jmino_) then
+                 call setEdgeConnectivity(this%localized_separator_linkold(i,j,k),2,this%localized_separator_linkold(i,j-1,k))
+              end if
+              ! In the y+ direction
+              if (j.lt.this%cfg%jmaxo_) then
+                 call setEdgeConnectivity(this%localized_separator_linkold(i,j,k),3,this%localized_separator_linkold(i,j+1,k))
+              end if
+              ! In the z- direction
+              if (k.gt.this%cfg%kmino_) then
+                 call setEdgeConnectivity(this%localized_separator_linkold(i,j,k),4,this%localized_separator_linkold(i,j,k-1))
+              end if
+              ! In the z+ direction
+              if (k.lt.this%cfg%kmaxo_) then
+                 call setEdgeConnectivity(this%localized_separator_linkold(i,j,k),5,this%localized_separator_linkold(i,j,k+1))
+              end if
+           end do
+        end do
+     end do
+
+
+     ! Deallocate memory-intensive arrays that are not used
+     deallocate(this%face_flux)
+
+   end subroutine allocate_supplement
+   
+   
+   ! Store old liquid_gas_interface at the beginning of every timestep
+   subroutine copy_interface_to_old(this)
+     implicit none
+     class(vfs), intent(inout) :: this
+     integer :: i,j,k
+
+     ! Copy interface
+     do k=this%cfg%kmino_,this%cfg%kmaxo_
+        do j=this%cfg%jmino_,this%cfg%jmaxo_
+           do i=this%cfg%imino_,this%cfg%imaxo_
+              call copy(this%liquid_gas_interfaceold(i,j,k),this%liquid_gas_interface(i,j,k))
+           end do
+        end do
+     end do
+
+     ! Copy volume fraction
+     this%VFold = this%VF
+
+     ! Copy barycenters
+     this%Gbaryold = this%Gbary
+     this%Lbaryold = this%Lbary
+
+     return
+   end subroutine copy_interface_to_old
+
    
    !> Add a boundary condition
    subroutine add_bcond(this,name,type,locator,dir)
@@ -425,6 +569,7 @@ contains
       class(vfs), intent(inout) :: this
       character(len=*), intent(in) :: name
       integer,  intent(in) :: type
+      external :: locator
       interface
          logical function locator(pargrid,ind1,ind2,ind3)
             use pgrid_class, only: pgrid
@@ -748,8 +893,133 @@ contains
       call this%reset_volume_moments()
       
    end subroutine advance
+
+   ! Project a single face to get flux polyhedron and get its moments
+   subroutine fluxpoly_project_getmoments(this,i,j,k,dt,dir,U,V,W,a_flux_polyhedron,a_locseplink,some_face_flux_moments)
+     implicit none
+     class(vfs), intent(inout)    :: this
+     integer,          intent(in) :: i,j,k    !< Index 
+     real(WP),         intent(in) :: dt       !< Timestep size over which to advance
+     character(len=1), intent(in) :: dir      !< Orientation of current face
+     type(CapDod_type)         :: a_flux_polyhedron
+     type(LocSepLink_type)     :: a_locseplink
+     type(TagAccVM_SepVM_type) :: some_face_flux_moments
+     real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: U     !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+     real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: V     !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+     real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: W     !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+     real(IRL_double), dimension(3,9) :: face !< Points on face being projected to form flux volume
+     real(WP) :: vol_f                        !< Consistent volume according to face velocity and mesh
+
+     ! Project points, form flux volume, set directional parameters
+     select case(trim(dir))
+     case('x')
+        ! Construct and project left x(i) face
+        face(:,1)=[this%cfg%x(i  ),this%cfg%y(j  ),this%cfg%z(k+1)]
+        face(:,2)=[this%cfg%x(i  ),this%cfg%y(j  ),this%cfg%z(k  )]
+        face(:,3)=[this%cfg%x(i  ),this%cfg%y(j+1),this%cfg%z(k  )]
+        face(:,4)=[this%cfg%x(i  ),this%cfg%y(j+1),this%cfg%z(k+1)]
+        face(:,5)=this%project(face(:,1),i,j,k,-dt,U,V,W)
+        face(:,6)=this%project(face(:,2),i,j,k,-dt,U,V,W)
+        face(:,7)=this%project(face(:,3),i,j,k,-dt,U,V,W)
+        face(:,8)=this%project(face(:,4),i,j,k,-dt,U,V,W)
+        face(:,9)=0.25_WP*[sum(face(1,1:4)),sum(face(2,1:4)),sum(face(3,1:4))]
+        face(:,9)=this%project(face(:,9),i,j,k,-dt,U,V,W)
+        ! Limit projection in the case of walls
+        if (this%vmask(i  ,j  ,k+1).eq.1) face(:,5)=face(:,1)
+        if (this%vmask(i  ,j  ,k  ).eq.1) face(:,6)=face(:,2)
+        if (this%vmask(i  ,j+1,k  ).eq.1) face(:,7)=face(:,3)
+        if (this%vmask(i  ,j+1,k+1).eq.1) face(:,8)=face(:,4)
+        ! Calculate consistent volume
+        vol_f = dt*U(i,j,k)*this%cfg%dy(j)*this%cfg%dz(k)
+     case ('y')
+        ! Construct and project bottom y(j) face
+        face(:,1)=[this%cfg%x(i+1),this%cfg%y(j  ),this%cfg%z(k  )]
+        face(:,2)=[this%cfg%x(i  ),this%cfg%y(j  ),this%cfg%z(k  )]
+        face(:,3)=[this%cfg%x(i  ),this%cfg%y(j  ),this%cfg%z(k+1)]
+        face(:,4)=[this%cfg%x(i+1),this%cfg%y(j  ),this%cfg%z(k+1)]
+        face(:,5)=this%project(face(:,1),i,j,k,-dt,U,V,W)
+        face(:,6)=this%project(face(:,2),i,j,k,-dt,U,V,W)
+        face(:,7)=this%project(face(:,3),i,j,k,-dt,U,V,W)
+        face(:,8)=this%project(face(:,4),i,j,k,-dt,U,V,W)
+        face(:,9)=0.25_WP*[sum(face(1,1:4)),sum(face(2,1:4)),sum(face(3,1:4))]
+        face(:,9)=this%project(face(:,9),i,j,k,-dt,U,V,W)
+        ! Limit projection in the case of walls
+        if (this%vmask(i+1,j  ,k  ).eq.1) face(:,5)=face(:,1)
+        if (this%vmask(i  ,j  ,k  ).eq.1) face(:,6)=face(:,2)
+        if (this%vmask(i  ,j  ,k+1).eq.1) face(:,7)=face(:,3)
+        if (this%vmask(i+1,j  ,k+1).eq.1) face(:,8)=face(:,4)
+        ! Calculate consistent volume
+        vol_f = dt*V(i,j,k)*this%cfg%dx(i)*this%cfg%dz(k)
+     case('z')
+        ! Construct and project bottom z(k) face
+        face(:,1)=[this%cfg%x(i  ),this%cfg%y(j+1),this%cfg%z(k  )]
+        face(:,2)=[this%cfg%x(i  ),this%cfg%y(j  ),this%cfg%z(k  )]
+        face(:,3)=[this%cfg%x(i+1),this%cfg%y(j  ),this%cfg%z(k  )]
+        face(:,4)=[this%cfg%x(i+1),this%cfg%y(j+1),this%cfg%z(k  )]
+        face(:,5)=this%project(face(:,1),i,j,k,-dt,U,V,W)
+        face(:,6)=this%project(face(:,2),i,j,k,-dt,U,V,W)
+        face(:,7)=this%project(face(:,3),i,j,k,-dt,U,V,W)
+        face(:,8)=this%project(face(:,4),i,j,k,-dt,U,V,W)
+        face(:,9)=0.25_WP*[sum(face(1,1:4)),sum(face(2,1:4)),sum(face(3,1:4))]
+        face(:,9)=this%project(face(:,9),i,j,k,-dt,U,V,W)
+        ! Limit projection in the case of walls
+        if (this%vmask(i  ,j+1,k  ).eq.1) face(:,5)=face(:,1)
+        if (this%vmask(i  ,j  ,k  ).eq.1) face(:,6)=face(:,2)
+        if (this%vmask(i+1,j  ,k  ).eq.1) face(:,7)=face(:,3)
+        if (this%vmask(i+1,j+1,k  ).eq.1) face(:,8)=face(:,4)
+        ! Calculate consistent volume
+        vol_f = dt*W(i,j,k)*this%cfg%dx(i)*this%cfg%dy(j)
+     end select
+
+     ! Form flux polyhedron
+     call construct(a_flux_polyhedron,face)
+     ! Add volume-consistent correction
+     call adjustCapToMatchVolume(a_flux_polyhedron,vol_f)
+     ! Get all volumetric fluxes
+     call getNormMoments(a_flux_polyhedron,a_locseplink,some_face_flux_moments)
+
+   end subroutine fluxpoly_project_getmoments
    
-   
+
+   ! From the moments object in a single cell, get the volume and centroid out of IRL
+   subroutine fluxpoly_cell_getvolcentr(this,f_moments,n,ii,jj,kk,my_Lbary,my_Gbary,my_Lvol,my_Gvol,skip_flag)
+     implicit none
+     class(vfs), intent(inout) :: this
+     type(TagAccVM_SepVM_type) :: f_moments
+     integer, intent(in) :: n
+     integer  :: ii,jj,kk,localizer_id
+     integer, dimension(3) :: ind
+     type(SepVM_type) :: my_SepVM
+     real(WP) :: my_Gvol,my_Lvol
+     real(WP), dimension(3) :: my_Gbary,my_Lbary
+     logical  :: skip_flag
+
+     skip_flag = .false.
+     ! Get unique id of current cell
+     localizer_id = getTagForIndex(f_moments,n)
+     ! Convert unique id to indices ii,jj,kk
+     ind=this%cfg%get_ijk_from_lexico(localizer_id)
+     ii = ind(1); jj = ind(2); kk = ind(3)
+
+     ! If inside wall, nothing should be added to flux
+     if (this%mask(ii,jj,kk).eq.1) then
+        skip_flag = .true.
+        return
+     end if
+
+     ! If bringing material back from beyond outflow boundary, skip
+     !if (backflow_flux_flag(ii,jj,kk)) cycle
+
+     ! Get barycenter and volume of tets in current cell
+     call getSepVMAtIndex(f_moments,n,my_SepVM)
+     my_Lbary = getCentroid(my_SepVM, 0)
+     my_Gbary = getCentroid(my_SepVM, 1)
+     my_Lvol  = getVolume(my_SepVM, 0)
+     my_Gvol  = getVolume(my_SepVM, 1)
+     
+   end subroutine fluxpoly_cell_getvolcentr
+
+
    !> Remove flotsams explicitly - careful, this is not conservative!
    subroutine remove_flotsams(this)
       implicit none
@@ -986,7 +1256,7 @@ contains
    subroutine advect_interface(this,dt,U,V,W)
       implicit none
       class(vfs), intent(inout) :: this
-      real(WP), intent(inout) :: dt  !< Timestep size over which to advance
+      real(WP), intent(in) :: dt  !< Timestep size over which to advance
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: U     !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: V     !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: W     !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
@@ -1833,23 +2103,22 @@ contains
          end do
       end do
       
-      ! Finally, update the basic unstructured surface mesh representation of our polygons
-      call this%update_surfgrid()
-      
    end subroutine polygonalize_interface
    
    
-   !> Create a basic surface mesh from our IRL polygons
-   subroutine update_surfgrid(this)
+   !> Update a surfmesh object from our current polygons
+   subroutine update_surfmesh(this,smesh)
+      use surfmesh_class, only: surfmesh
       implicit none
       class(vfs), intent(inout) :: this
+      class(surfmesh), intent(inout) :: smesh
       integer :: i,j,k,n,shape,nv,np,nplane
       real(WP), dimension(3) :: tmp_vert
       
       ! Reset surface mesh storage
-      call this%surfgrid%reset()
+      call smesh%reset()
       
-      ! First pass to count how many vertices and polygones are inside our processor
+      ! First pass to count how many vertices and polygons are inside our processor
       nv=0; np=0
       do k=this%cfg%kmin_,this%cfg%kmax_
          do j=this%cfg%jmin_,this%cfg%jmax_
@@ -1867,8 +2136,8 @@ contains
       
       ! Reallocate storage and fill out arrays
       if (np.gt.0) then
-         call this%surfgrid%set_size(nvert=nv,npoly=np)
-         allocate(this%surfgrid%polyConn(this%surfgrid%nVert)) ! Also allocate naive connectivity
+         call smesh%set_size(nvert=nv,npoly=np)
+         allocate(smesh%polyConn(smesh%nVert)) ! Also allocate naive connectivity
          nv=0; np=0
          do k=this%cfg%kmin_,this%cfg%kmax_
             do j=this%cfg%jmin_,this%cfg%jmax_
@@ -1878,18 +2147,16 @@ contains
                      if (shape.gt.0) then
                         ! Increment polygon counter
                         np=np+1
-                        this%surfgrid%polySize(np)=shape
-                        ! Set nplane variable
-                        this%surfgrid%var(1,np)=real(getNumberOfPlanes(this%liquid_gas_interface(i,j,k)),WP)
+                        smesh%polySize(np)=shape
                         ! Loop over its vertices and add them
                         do n=1,shape
                            tmp_vert=getPt(this%interface_polygon(nplane,i,j,k),n-1)
                            ! Increment node counter
                            nv=nv+1
-                           this%surfgrid%xVert(nv)=tmp_vert(1)
-                           this%surfgrid%yVert(nv)=tmp_vert(2)
-                           this%surfgrid%zVert(nv)=tmp_vert(3)
-                           this%surfgrid%polyConn(nv)=nv
+                           smesh%xVert(nv)=tmp_vert(1)
+                           smesh%yVert(nv)=tmp_vert(2)
+                           smesh%zVert(nv)=tmp_vert(3)
+                           smesh%polyConn(nv)=nv
                         end do
                      end if
                   end do
@@ -1899,17 +2166,16 @@ contains
       else
          ! Add a zero-area triangle if this proc doesn't have one
          np=1; nv=3
-         call this%surfgrid%set_size(nvert=nv,npoly=np)
-         allocate(this%surfgrid%polyConn(this%surfgrid%nVert)) ! Also allocate naive connectivity
-         this%surfgrid%xVert(1:3)=this%cfg%x(this%cfg%imin)
-         this%surfgrid%yVert(1:3)=this%cfg%y(this%cfg%jmin)
-         this%surfgrid%zVert(1:3)=this%cfg%z(this%cfg%kmin)
-         this%surfgrid%polySize(1)=3
-         this%surfgrid%var(1,1)=1.0_WP
-         this%surfgrid%polyConn(1:3)=[1,2,3]
+         call smesh%set_size(nvert=nv,npoly=np)
+         allocate(smesh%polyConn(smesh%nVert)) ! Also allocate naive connectivity
+         smesh%xVert(1:3)=this%cfg%x(this%cfg%imin)
+         smesh%yVert(1:3)=this%cfg%y(this%cfg%jmin)
+         smesh%zVert(1:3)=this%cfg%z(this%cfg%kmin)
+         smesh%polySize(1)=3
+         smesh%polyConn(1:3)=[1,2,3]
       end if
       
-   end subroutine update_surfgrid
+   end subroutine update_surfmesh
    
    
    !> Calculate distance from polygonalized interface inside the band
@@ -2096,6 +2362,8 @@ contains
                   if (getNumberOfVertices(this%interface_polygon(n,i,j,k)).eq.0) cycle
                   ! Perform LSQ PLIC barycenter fitting to get curvature
                   call this%paraboloid_fit(i,j,k,n,mycurv(n))
+                  ! Perform PLIC surface fitting to get curvature
+                  !call this%paraboloid_integral_fit(i,j,k,n,mycurv(n))
                   ! Also store surface and normal
                   mysurf(n)  =abs(calculateVolume(this%interface_polygon(n,i,j,k)))
                   mynorm(n,:)=    calculateNormal(this%interface_polygon(n,i,j,k))
@@ -2129,7 +2397,7 @@ contains
    end subroutine get_curvature
    
    
-   !> Perform local paraboloid fit of IRL surface
+   !> Perform local paraboloid fit of IRL surface in pointwise sense
    subroutine paraboloid_fit(this,i,j,k,iplane,mycurv)
       use mathtools, only: normalize,cross_product
       implicit none
@@ -2217,7 +2485,7 @@ contains
       dF_dt=sol(2)+sol(4)*0.0_WP+sol(6)*0.0_WP; ddF_dtdt=sol(4)
       dF_ds=sol(3)+sol(5)*0.0_WP+sol(6)*0.0_WP; ddF_dsds=sol(5)
       ddF_dtds=sol(6)
-      mycurv=-((1+dF_dt**2)*ddF_dsds-2.0_WP*dF_dt*dF_ds*ddF_dtds+(1.0_WP+dF_ds**2)*ddF_dtdt)/(1.0_WP+dF_dt**2+dF_ds**2)**(1.5_WP)
+      mycurv=-((1.0_WP+dF_dt**2)*ddF_dsds-2.0_WP*dF_dt*dF_ds*ddF_dtds+(1.0_WP+dF_ds**2)*ddF_dtdt)/(1.0_WP+dF_dt**2+dF_ds**2)**(1.5_WP)
       mycurv=mycurv/this%cfg%meshsize(i,j,k)
       
    contains
@@ -2252,6 +2520,141 @@ contains
       end function wgauss
       
    end subroutine paraboloid_fit
+
+
+   !> Perform local paraboloid fit of IRL surface in integral sense
+   subroutine paraboloid_integral_fit(this,i,j,k,iplane,mycurv)
+      use mathtools, only: normalize,cross_product
+      implicit none
+      ! In/out variables
+      class(vfs), intent(inout) :: this
+      integer,  intent(in)  :: i,j,k,iplane
+      real(WP), intent(out) :: mycurv
+      ! Variables used to process the polygons
+      real(WP), dimension(3) :: pref,nref,tref,sref
+      real(WP), dimension(3) :: vert1,vert2,ploc,nloc
+      real(WP), dimension(3) :: buf,reconst_plane_coeffs
+      integer :: nplane,shape,n,ii,jj,kk,ai,aj
+      real(WP), dimension(6) :: integrals
+      real(WP) :: xv,xvn,yv,yvn,ww,b_dot_sum
+      ! Storage for symmetric problem
+      real(WP), dimension(6,6) :: A
+      integer , dimension(6)   :: ipiv
+      real(WP), dimension(6)   :: b
+      real(WP), dimension(6)   :: sol
+      real(WP), dimension(:), allocatable :: work
+      real(WP), dimension(1)   :: lwork_query
+      integer  :: lwork,info
+      ! Curvature evaluation
+      real(WP) :: dF_dt,dF_ds,ddF_dtdt,ddF_dsds,ddF_dtds
+      
+      ! Store polygon centroid - this is our reference point
+      pref=calculateCentroid(this%interface_polygon(iplane,i,j,k))
+      
+      ! Create local basis from polygon normal
+      nref=calculateNormal(this%interface_polygon(iplane,i,j,k))
+      select case (maxloc(abs(nref),1))
+      case (1); tref=normalize([+nref(2),-nref(1),0.0_WP])
+      case (2); tref=normalize([0.0_WP,+nref(3),-nref(2)])
+      case (3); tref=normalize([-nref(3),0.0_WP,+nref(1)])
+      end select; sref=cross_product(nref,tref)
+      
+      ! Collect all data
+      A=0.0_WP
+      b=0.0_WP
+      do kk=k-2,k+2
+         do jj=j-2,j+2
+            do ii=i-2,i+2
+               
+               ! Skip the cell if it's a true wall
+               if (this%mask(ii,jj,kk).eq.1) cycle
+               
+               ! Check all planes
+               do nplane=1,getNumberOfPlanes(this%liquid_gas_interface(ii,jj,kk))
+                  
+                  ! Skip empty polygon
+                  shape=getNumberOfVertices(this%interface_polygon(nplane,ii,jj,kk))
+                  if (shape.eq.0) cycle
+                  
+                  ! Get local polygon normal and skip if normal is not aligned with center polygon normal
+                  nloc=calculateNormal(this%interface_polygon(nplane,ii,jj,kk))
+                  if (dot_product(nloc,nref).le.0.0_WP) cycle
+                  
+                  ! Get local polygon centroid
+                  ploc=calculateCentroid(this%interface_polygon(nplane,ii,jj,kk))
+                  
+                  ! Transform normal and centroid to a local coordinate system
+                  buf=(ploc-pref)/this%cfg%meshsize(i,j,k); ploc=[dot_product(buf,tref),dot_product(buf,sref),dot_product(buf,nref)]
+                  buf=nloc; nloc=[dot_product(buf,tref),dot_product(buf,sref),dot_product(buf,nref)]
+                  
+                  ! Get plane coefficients
+                  reconst_plane_coeffs(1)=-dot_product(nloc,ploc)
+                  reconst_plane_coeffs(2)=nloc(1)
+                  reconst_plane_coeffs(3)=nloc(2)
+                  reconst_plane_coeffs=reconst_plane_coeffs/(-nloc(3))
+                  
+                  ! Get integrals
+                  integrals=0.0_WP
+                  b_dot_sum=0.0_WP
+                  do n=1,shape
+                     vert1=getPt(this%interface_polygon(nplane,ii,jj,kk),n-1)
+                     vert2=getPt(this%interface_polygon(nplane,ii,jj,kk),modulo(n,shape))
+                     ! Transform vertices to a local coordinate system
+                     buf=(vert1-pref)/this%cfg%meshsize(i,j,k); vert1=[dot_product(buf,tref),dot_product(buf,sref),dot_product(buf,nref)]
+                     buf=(vert2-pref)/this%cfg%meshsize(i,j,k); vert2=[dot_product(buf,tref),dot_product(buf,sref),dot_product(buf,nref)]
+                     ! Add to area integral
+                     xv=vert1(1); xvn=vert2(1); yv=vert1(2); yvn=vert2(2)
+                     integrals = integrals + [&
+                     (xv*yvn - xvn*yv) / 2.0_WP, &
+                     (xv + xvn)*(xv*yvn - xvn*yv) / 6.0_WP, &
+                     (yv + yvn)*(xv*yvn - xvn*yv) / 6.0_WP, &
+                     (xv + xvn)*(xv**2 + xvn**2)*(yvn - yv) / 12.0_WP, &
+                     (yvn - yv)*(3.0_WP*xv**2*yv + xv**2*yvn + 2.0_WP*xv*xvn*yv + 2.0_WP*xv*xvn*yvn + xvn**2*yv + 3.0_WP*xvn**2*yvn)/24.0_WP, &
+                     (xv - xvn)*(yv + yvn)*(yv**2 + yvn**2) / 12.0_WP]
+                  end do
+                  b_dot_sum=b_dot_sum+dot_product(reconst_plane_coeffs,integrals(1:3))
+                  
+                  ! Get weighting
+                  ww=wgauss(sqrt(dot_product(ploc,ploc)),2.5_WP)
+                  
+                  ! Add to symmetric matrix and RHS
+                  do aj=1,6
+                     do ai=1,aj
+                        A(ai,aj)=A(ai,aj)+ww*integrals(ai)*integrals(aj)
+                     end do
+                  end do
+                  b=b+ww*integrals*b_dot_sum
+                  
+               end do
+            end do
+         end do
+      end do
+      
+      ! Query optimal work array size then solve for paraboloid as n=F(t,s)=b1+b2*t+b3*s+b4*t^2+b5*t*s+b6*s^2
+      call dsysv('U',6,1,A,6,ipiv,b,6,lwork_query,-1,info); lwork=int(lwork_query(1)); allocate(work(lwork))
+      call dsysv('U',6,1,A,6,ipiv,b,6,work,lwork,info); sol=b(1:6)
+      
+      ! Get the curvature at (t,s)=(0,0)
+      dF_dt=sol(2)+2.0_WP*sol(4)*0.0_WP+sol(5)*0.0_WP; ddF_dtdt=2.0_WP*sol(4)
+      dF_ds=sol(3)+2.0_WP*sol(6)*0.0_WP+sol(5)*0.0_WP; ddF_dsds=2.0_WP*sol(6)
+      ddF_dtds=sol(5)
+      mycurv=-((1.0_WP+dF_dt**2)*ddF_dsds-2.0_WP*dF_dt*dF_ds*ddF_dtds+(1.0_WP+dF_ds**2)*ddF_dtdt)/(1.0_WP+dF_dt**2+dF_ds**2)**(1.5_WP)
+      mycurv=mycurv/this%cfg%meshsize(i,j,k)
+      
+   contains
+      
+      ! Quasi-Gaussian weighting function - h=2.5 looks okay
+      real(WP) function wgauss(d,h)
+         implicit none
+         real(WP), intent(in) :: d,h
+         if (d.ge.h) then
+            wgauss=0.0_WP
+         else
+            wgauss=(1.0_WP+4.0_WP*d/h)*(1.0_WP-d/h)**4
+         end if
+      end function wgauss
+      
+   end subroutine paraboloid_integral_fit
    
    
    !> Private function to rapidly assess if a mixed cell is possible

@@ -2,34 +2,43 @@
 Partition : 1 1 4
 
 # Mesh definition
-Lx : 25.0e-3
-Ly : 12.5e-3
-Lz : 25.0e-3
-nx : 64
-ny : 32
-nz : 64
+Lx : 25e-3
+Ly : 50e-3
+Lz : 25e-3
+nx : 100
+ny : 200
+nz : 100
 
 # Wall geometry
-Hole size  : 0.001
-Hole dist  : 0.002
-Hole depth : 0.02
+#Include holes : .true.              <<< Provided in the command line
+Hole size  :    0.001
+Hole dist  :    0.002
+Hole depth :    0.02
 
 # Droplet properties
-Droplet radius :        5e-3
+Droplet radius :        6e-3
 Initial contact angle : 180
+
+# Pipette information
+#Include pipette :           .true.  <<< Provided in the command line
+Pipette height :            0.012
+Pipette inner radius :      0.70e-3
+Pipette outer radius :      1.46e-3
+Liquid injection velocity : 0.02
+Pipette contact angle :     150
 
 # Source
 Gravity : 0 0 0
 
 # Fluid properties
-Liquid dynamic viscosity : 0.9e-4
+Liquid dynamic viscosity : 9.0e-4
 Gas dynamic viscosity :    1.8e-5
 
 Liquid density : 997
 Gas density :    1.15
 
 Surface tension coefficient : 0.072
-Static contact angle :        60
+#Static contact angle :        30    <<< Provided in the command line
 
 # Time integration
 Max timestep size : 1e-4

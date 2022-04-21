@@ -6,6 +6,7 @@ PRECISION = DOUBLE
 USE_MPI   = TRUE
 USE_HYPRE = TRUE
 USE_LAPACK= TRUE
+USE_COOLPROP= TRUE
 PROFILE   = FALSE
 DEBUG     = FALSE
 COMP      = gnu
@@ -24,6 +25,7 @@ VPATH_LOCATIONS   += $(Ulocs)
 # Define external libraries - this can also be in .profile
 HYPRE_DIR = /Users/desjardi/Builds/hypre
 LAPACK_DIR= /Users/desjardi/Builds/lapack
+COOLPROP_DIR= /Users/desjardi/Builds/coolprop
 
 # NGA compilation definitions
 include $(NGA_HOME)/tools/GNUMake/Make.defs

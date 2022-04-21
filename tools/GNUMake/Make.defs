@@ -3,9 +3,9 @@
 ###############################################################
 
 # Check python version ########################################
-my_python_version := $(word 2, $(shell python --version 2>&1))
-ifneq ($(firstword $(sort 2.7 $(my_python_version))), 2.7)
-  $(error Python >= 2.7 required! Your version is $(my_python_version))
+my_python_version := $(word 2, $(shell python3 --version 2>&1))
+ifneq ($(firstword $(sort 3 $(my_python_version))), 3)
+  $(error Python >= 3 required! Your version is $(my_python_version))
 endif
 ###############################################################
 
@@ -70,17 +70,17 @@ DEFINES += -DNGA_GIT_VERSION=\"$(NGA_GIT_VERSION)\"
 # Link Fortran
 FORTLINK  	= UNDERSCORE
 # Fortran preprocessor
-FORT_CPP        = cpp -E -traditional-cpp -P
+FORT_CPP    = cpp -E -traditional-cpp -P
 # Scripts for building dependencies
-MKDEP		= perl $(NGA_HOME)/tools/scripts/mkdep
+MKDEP		   = perl $(NGA_HOME)/tools/scripts/mkdep.pl
 MODDEP		= $(NGA_HOME)/tools/scripts/dep.py
 FORTPREP  	= perl $(NGA_HOME)/Tools/scripts/strip72 -c
 F90PREP  	= cat  # a placeholder in case we have to write something later
-CPP_PREFIX      =
-CHECKFORT       = $(NGA_HOME)/tools/typechecker/typechecker.py
-MKCONFIG        = $(NGA_HOME)/tools/libamrex/mkconfig.py
+CPP_PREFIX  =
+CHECKFORT   = $(NGA_HOME)/tools/typechecker/typechecker.py
+MKCONFIG    = $(NGA_HOME)/tools/libamrex/mkconfig.py
 # Ranlib
-RANLIB          = ranlib
+RANLIB      = ranlib
 # Object option
 EXE_OUTPUT_OPTION      = -o $(objBuildDir)/$*.o
 FORT_EXE_OUTPUT_OPTION = -o $(objBuildDir)/$*.o
@@ -246,6 +246,10 @@ ifeq ($(USE_LAPACK),TRUE)
   $(info Loading $(NGA_HOME)/tools/GNUMake/packages/Make.lapack...)
   include        $(NGA_HOME)/tools/GNUMake/packages/Make.lapack
 endif
+ifeq ($(USE_COOLPROP),TRUE)
+  $(info Loading $(NGA_HOME)/tools/GNUMake/packages/Make.coolprop...)
+  include        $(NGA_HOME)/tools/GNUMake/packages/Make.coolprop
+endif
 ifeq ($(USE_IRL),TRUE)
   $(info Loading $(NGA_HOME)/tools/GNUMake/packages/Make.irl...)
   include        $(NGA_HOME)/tools/GNUMake/packages/Make.irl
@@ -257,6 +261,14 @@ endif
 ifeq ($(USE_CWIPI),TRUE)
   $(info Loading $(NGA_HOME)/tools/GNUMake/packages/Make.cwipi...)
   include        $(NGA_HOME)/tools/GNUMake/packages/Make.cwipi
+endif
+ifeq ($(USE_ODRPACK),TRUE)
+  $(info Loading $(NGA_HOME)/tools/GNUMake/packages/Make.odrpack...)
+  include        $(NGA_HOME)/tools/GNUMake/packages/Make.odrpack
+endif
+ifeq ($(USE_FFTW),TRUE)
+  $(info Loading $(NGA_HOME)/tools/GNUMake/packages/Make.fftw...)
+  include        $(NGA_HOME)/tools/GNUMake/packages/Make.fftw
 endif
 ###############################################################
 

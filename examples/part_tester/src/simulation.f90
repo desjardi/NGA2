@@ -5,6 +5,7 @@ module simulation
    use lpt_class,         only: lpt
    use timetracker_class, only: timetracker
    use ensight_class,     only: ensight
+   use partmesh_class,    only: partmesh
    use event_class,       only: event
    use monitor_class,     only: monitor
    implicit none
@@ -15,8 +16,9 @@ module simulation
    type(timetracker), public :: time
    
    !> Ensight postprocessing
-   type(ensight) :: ens_out
-   type(event)   :: ens_evt
+   type(partmesh) :: pmesh
+   type(ensight)  :: ens_out
+   type(event)    :: ens_evt
    
    !> Simulation monitor file
    type(monitor) :: mfile
@@ -70,8 +72,6 @@ contains
          end if
          ! Distribute particles
          call lp%sync()
-         ! Also update the output
-         call lp%update_partmesh()
       end block initialize_lpt
       
       
@@ -99,8 +99,13 @@ contains
          do k=lp%cfg%kmino_,lp%cfg%kmaxo_
             do j=lp%cfg%jmino_,lp%cfg%jmaxo_
                do i=lp%cfg%imino_,lp%cfg%imaxo_
-                  U(i,j,k)=-twoPi*lp%cfg%ym(j)
-                  V(i,j,k)=+twoPi*lp%cfg%xm(i)
+                  ! Solid body rotation
+                  !U(i,j,k)=-twoPi*lp%cfg%ym(j)
+                  !V(i,j,k)=+twoPi*lp%cfg%xm(i)
+                  !W(i,j,k)=0.0_WP
+                  ! Taylor-Green vortex
+                  U(i,j,k)=+cos(twoPi*lp%cfg%x (i))*sin(twoPi*lp%cfg%ym(j))
+                  V(i,j,k)=-sin(twoPi*lp%cfg%xm(i))*cos(twoPi*lp%cfg%y (j))
                   W(i,j,k)=0.0_WP
                end do
             end do
@@ -120,6 +125,13 @@ contains
       end block initialize_timetracker
       
       
+      ! Create partmesh object for Lagrangian particle output
+      create_pmesh: block
+         pmesh=partmesh(nvar=0,name='lpt')
+         call lp%update_partmesh(pmesh)
+      end block create_pmesh
+      
+      
       ! Add Ensight output
       create_ensight: block
          ! Create Ensight output from cfg
@@ -128,7 +140,8 @@ contains
          ens_evt=event(time=time,name='Ensight output')
          call param_read('Ensight output period',ens_evt%tper)
          ! Add variables to output
-         call ens_out%add_particle('particles',lp%pmesh)
+         call ens_out%add_particle('particles',pmesh)
+         call ens_out%add_vector('velocity',U,V,W)
          ! Output to ensight
          if (ens_evt%occurs()) call ens_out%write_data(time%t)
       end block create_ensight
@@ -172,7 +185,10 @@ contains
          call lp%advance(dt=time%dt,U=U,V=V,W=W,rho=rho,visc=visc)
          
          ! Output to ensight
-         if (ens_evt%occurs()) call ens_out%write_data(time%t)
+         if (ens_evt%occurs()) then
+            call lp%update_partmesh(pmesh)
+            call ens_out%write_data(time%t)
+         end if
          
          ! Perform and output monitoring
          call lp%get_max()

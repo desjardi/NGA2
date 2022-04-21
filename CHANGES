@@ -11,3 +11,5 @@ well as a VOF solver. First open source release on github of NGA2 on January 16.
 April 2021 - Large-eddy simulation modeling has been implemented. An internal
 parallel coupler has been implemented, so multi-block simulations are now fully
 supported. Lagrangian particle tracking has been added.
+
+March 2022 - Compressible multiphase solver added by Michael Kuhn.

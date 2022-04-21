@@ -50,6 +50,7 @@ contains
       type(iterator) :: self
       class(pgrid), target, intent(in) :: pg
       character(len=*), intent(in) :: name
+      external :: locator
       interface
          logical function locator(pargrid,ind1,ind2,ind3)
             use pgrid_class, only: pgrid

@@ -1,0 +1,7 @@
+# Add appropriate ODRPACK includes and libraries
+ifdef ODRPACK_DIR
+  LIBRARY_LOCATIONS += $(ODRPACK_DIR)/lib
+  LIBRARIES += -lodrpack
+else
+  $(error ODRPACK_DIR not defined, but it is currently required by NGA2)
+endif

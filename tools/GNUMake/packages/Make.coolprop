@@ -1,0 +1,7 @@
+# Add appropriate COOLPROP includes and libraries
+ifdef COOLPROP_DIR
+  LIBRARY_LOCATIONS += $(COOLPROP_DIR)/lib
+  LIBRARIES += -lCoolProp -lstdc++ -ldl
+else
+  $(error COOLPROP_DIR not defined, but it is currently required by NGA2)
+endif

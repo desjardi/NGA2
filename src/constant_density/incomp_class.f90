@@ -807,6 +807,7 @@ contains
       class(incomp), intent(inout) :: this
       character(len=*), intent(in) :: name
       integer, intent(in) :: type
+      external :: locator
       interface
          logical function locator(pargrid,ind1,ind2,ind3)
             use pgrid_class, only: pgrid
@@ -1376,15 +1377,21 @@ contains
       real(WP), dimension(:), allocatable :: canCorrect
       
       ! Ensure this%mfr is of proper size
-      if (size(this%mfr).ne.this%nbc.or..not.allocated(this%mfr)) then
-         if (allocated(this%mfr)) deallocate(this%mfr)
+      if (.not.allocated(this%mfr)) then
          allocate(this%mfr(this%nbc))
+      else
+         if (size(this%mfr).ne.this%nbc) then
+            deallocate(this%mfr); allocate(this%mfr(this%nbc))
+         end if
       end if
       
       ! Ensure this%area is of proper size
-      if (size(this%area).ne.this%nbc.or..not.allocated(this%area)) then
-         if (allocated(this%area)) deallocate(this%area)
+      if (.not.allocated(this%area)) then
          allocate(this%area(this%nbc))
+      else
+         if (size(this%area).ne.this%nbc) then
+            deallocate(this%area); allocate(this%area(this%nbc))
+         end if
       end if
       
       ! Allocate temp array for communication

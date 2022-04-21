@@ -13,6 +13,8 @@ module simulation
    use sgsmodel_class,    only: sgsmodel
    use timetracker_class, only: timetracker
    use ensight_class,     only: ensight
+   use surfmesh_class,    only: surfmesh
+   use partmesh_class,    only: partmesh
    use event_class,       only: event
    use datafile_class,    only: datafile
    use monitor_class,     only: monitor
@@ -51,12 +53,14 @@ module simulation
    logical :: restarted
    
    !> Ensight postprocessing
-   type(ensight) :: ens_out1
-   type(ensight) :: ens_out2
-   type(ensight) :: ens_out3
-   type(event)   :: ens_evt1
-   type(event)   :: ens_evt2
-   type(event)   :: ens_evt3
+   type(surfmesh) :: smesh2
+   type(partmesh) :: pmesh3
+   type(ensight)  :: ens_out1
+   type(ensight)  :: ens_out2
+   type(ensight)  :: ens_out3
+   type(event)    :: ens_evt1
+   type(event)    :: ens_evt2
+   type(event)    :: ens_evt3
    
    !> Simulation monitor file
    type(monitor) :: mfile1,cflfile1
@@ -416,7 +420,7 @@ contains
       ! Create a two-phase flow solver with bconds
       create_solver2: block
          use tpns_class, only: dirichlet,clipped_neumann,neumann
-         use ils_class,  only: pcg_amg,gmres,gmres_amg
+         use ils_class,  only: pcg_pfmg
          use mathtools,  only: Pi
          ! Instanciate the solver
          fs2=tpns(cfg=cfg2,name='Two-phase NS')
@@ -447,7 +451,8 @@ contains
          call param_read('Implicit iteration',fs2%implicit%maxit)
          call param_read('Implicit tolerance',fs2%implicit%rcvg)
          ! Setup the solver
-         call fs2%setup(pressure_ils=gmres_amg,implicit_ils=gmres_amg)
+         fs2%psolv%maxlevel=16
+         call fs2%setup(pressure_ils=pcg_pfmg,implicit_ils=pcg_pfmg)
       end block create_solver2
       
       
@@ -522,6 +527,32 @@ contains
       end block create_sgs2
       
       
+      ! Create surfmesh object for interface polygon output
+      create_smesh2: block
+         use irl_fortran_interface
+         integer :: i,j,k,nplane,np
+         ! Include an extra variable for number of planes
+         smesh2=surfmesh(nvar=1,name='plic')
+         smesh2%varname(1)='nplane'
+         ! Transfer polygons to smesh
+         call vf2%update_surfmesh(smesh2)
+         ! Also populate nplane variable
+         smesh2%var(1,:)=1.0_WP
+         np=0
+         do k=vf2%cfg%kmin_,vf2%cfg%kmax_
+            do j=vf2%cfg%jmin_,vf2%cfg%jmax_
+               do i=vf2%cfg%imin_,vf2%cfg%imax_
+                  do nplane=1,getNumberOfPlanes(vf2%liquid_gas_interface(i,j,k))
+                     if (getNumberOfVertices(vf2%interface_polygon(nplane,i,j,k)).gt.0) then
+                        np=np+1; smesh2%var(1,np)=real(getNumberOfPlanes(vf2%liquid_gas_interface(i,j,k)),WP)
+                     end if
+                  end do
+               end do
+            end do
+         end do
+      end block create_smesh2
+      
+      
       ! Add Ensight output
       create_ensight2: block
          ! Create Ensight output from cfg2
@@ -536,7 +567,7 @@ contains
          call ens_out2%add_scalar('visc_t',sgs2%visc)
          call ens_out2%add_scalar('filmID',cc2%film_id)
          call ens_out2%add_scalar('filmThickness',cc2%film_thickness)
-         call ens_out2%add_surface('vofplic',vf2%surfgrid)
+         call ens_out2%add_surface('vofplic',smesh2)
          ! Output to ensight
          if (ens_evt2%occurs()) call ens_out2%write_data(time2%t)
       end block create_ensight2
@@ -614,7 +645,7 @@ contains
       ! Create an incompressible flow solver with bconds
       create_solver1: block
          use incomp_class, only: dirichlet,clipped_neumann
-         use ils_class,    only: pcg_amg,gmres
+         use ils_class,    only: pcg_pfmg,pcg_amg
          ! Create flow solver
          fs1=incomp(cfg=cfg1,name='Incompressible NS')
          ! Set the flow properties
@@ -634,7 +665,8 @@ contains
          call param_read('Implicit iteration',fs1%implicit%maxit)
          call param_read('Implicit tolerance',fs1%implicit%rcvg)
          ! Setup the solver
-         call fs1%setup(pressure_ils=pcg_amg,implicit_ils=gmres)
+         fs1%psolv%maxlevel=16
+         call fs1%setup(pressure_ils=pcg_amg,implicit_ils=pcg_pfmg)
       end block create_solver1
       
       
@@ -795,7 +827,7 @@ contains
       ! Create an incompressible flow solver with bconds
       create_solver3: block
          use incomp_class, only: dirichlet,clipped_neumann
-         use ils_class,    only: pcg_amg,gmres
+         use ils_class,    only: pcg_pfmg,pcg_amg
          ! Create flow solver
          fs3=incomp(cfg=cfg3,name='Incompressible NS')
          ! Set the flow properties
@@ -817,7 +849,8 @@ contains
          call param_read('Implicit iteration',fs3%implicit%maxit)
          call param_read('Implicit tolerance',fs3%implicit%rcvg)
          ! Setup the solver
-         call fs3%setup(pressure_ils=pcg_amg,implicit_ils=gmres)
+         fs3%psolv%maxlevel=18
+         call fs3%setup(pressure_ils=pcg_amg,implicit_ils=pcg_pfmg)
       end block create_solver3
       
       
@@ -881,9 +914,22 @@ contains
          call param_read('Liquid density',lp3%rho)
          ! Handle restarts
          if (restarted) call lp3%read(filename=trim(lpt_file))
-         ! Also update the output
-         call lp3%update_partmesh()
       end block initialize_lpt3
+      
+      
+      ! Create partmesh object for Lagrangian particle output
+      create_pmesh3: block
+         integer :: i
+         ! Include an extra variable for droplet diameter
+         pmesh3=partmesh(nvar=1,name='lpt')
+         pmesh3%varname(1)='diameter'
+         ! Transfer particles to pmesh
+         call lp3%update_partmesh(pmesh3)
+         ! Also populate diameter variable
+         do i=1,lp3%np_
+            pmesh3%var(1,i)=lp3%p(i)%d
+         end do
+      end block create_pmesh3
       
       
       ! Add Ensight output
@@ -896,7 +942,7 @@ contains
          ! Add variables to output
          call ens_out3%add_vector('velocity',Ui3,Vi3,Wi3)
          call ens_out3%add_scalar('visc_t',sgs3%visc)
-         call ens_out3%add_particle('spray',lp3%pmesh)
+         call ens_out3%add_particle('spray',pmesh3)
          ! Output to ensight
          if (ens_evt3%occurs()) call ens_out3%write_data(time3%t)
       end block create_ensight3
@@ -1190,7 +1236,31 @@ contains
          call fs2%get_div()
          
          ! Output to ensight
-         if (ens_evt2%occurs()) call ens_out2%write_data(time2%t)
+         if (ens_evt2%occurs()) then
+            ! Update surfmesh object
+            update_smesh2: block
+               use irl_fortran_interface
+               integer :: nplane,np
+               ! Transfer polygons to smesh
+               call vf2%update_surfmesh(smesh2)
+               ! Also populate nplane variable
+               smesh2%var(1,:)=1.0_WP
+               np=0
+               do k=vf2%cfg%kmin_,vf2%cfg%kmax_
+                  do j=vf2%cfg%jmin_,vf2%cfg%jmax_
+                     do i=vf2%cfg%imin_,vf2%cfg%imax_
+                        do nplane=1,getNumberOfPlanes(vf2%liquid_gas_interface(i,j,k))
+                           if (getNumberOfVertices(vf2%interface_polygon(nplane,i,j,k)).gt.0) then
+                              np=np+1; smesh2%var(1,np)=real(getNumberOfPlanes(vf2%liquid_gas_interface(i,j,k)),WP)
+                           end if
+                        end do
+                     end do
+                  end do
+               end do
+            end block update_smesh2
+            ! Perform ensight output
+            call ens_out2%write_data(time2%t)
+         end if
          
          ! Perform and output monitoring
          call fs2%get_max()
@@ -1343,7 +1413,19 @@ contains
             call fs3%get_div()
             
             ! Output to ensight
-            if (ens_evt3%occurs()) call ens_out3%write_data(time3%t)
+            if (ens_evt3%occurs()) then
+               ! Update partmesh object
+               update_pmesh3: block
+                  ! Transfer particles to pmesh
+                  call lp3%update_partmesh(pmesh3)
+                  ! Also populate diameter variable
+                  do i=1,lp3%np_
+                     pmesh3%var(1,i)=lp3%p(i)%d
+                  end do
+               end block update_pmesh3
+               ! Perform ensight output
+               call ens_out3%write_data(time3%t)
+            end if
             
             ! Perform and output monitoring
             call fs3%get_max()
@@ -1562,16 +1644,12 @@ contains
       ! Sync VF and clean up IRL and band
       call vf2%cfg%sync(vf2%VF)
       call vf2%clean_irl_and_band()
-      call vf2%update_surfgrid()
       
       ! Clean up CCL
       call cc2%deallocate_lists()
       
       ! Resync the spray
       call lp3%sync()
-      
-      ! Update the particle mesh
-      call lp3%update_partmesh()
       
    end subroutine transfer_vf_to_drops
    
