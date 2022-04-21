@@ -1059,7 +1059,7 @@ contains
             ploc = calculateCentroid(this%poly(2,ii,jj,kk))
             is_contiguous = dot_product(ploc-pref,nloc).gt.0.0_WP ! .true. if liquid film
             is_film = .true.
-            ! If self is a two-plane cell
+         ! If self is a two-plane cell
          elseif (getNumberOfVertices(this%poly(2,i,j,k)).ne.0) then
             nref = calculateNormal(this%poly(1,i,j,k))
             nloc = calculateNormal(this%poly(2,i,j,k))
@@ -1067,7 +1067,7 @@ contains
             ploc = calculateCentroid(this%poly(2,i,j,k))
             is_contiguous = dot_product(ploc-pref,nloc).gt.0.0_WP ! .true. if liquid film
             is_film = .true.
-            ! If both are one-plane cells
+         ! If both are one-plane cells
          else
             nref = calculateNormal(this%poly(1,i,j,k))
             nloc = calculateNormal(this%poly(1,ii,jj,kk))
@@ -2113,11 +2113,11 @@ contains
       integer, dimension(3) :: pos
       ! real(WP), dimension(3) :: nref, nloc, pref, ploc
       
-      pos = 0
-      pos(dim) = -1
-      ii = i + pos(1)
-      jj = j + pos(2)
-      kk = k + pos(3)
+      ! pos = 0
+      ! pos(dim) = -1
+      ! ii = i + pos(1)
+      ! jj = j + pos(2)
+      ! kk = k + pos(3)
       film_is_connected = .true.
       ! use_normal = getNumberOfVertices(this%poly(1,i,j,k)).gt.0 .and. (getNumberOfVertices(this%poly(1,ii,jj,kk)).gt.0)
       ! if (use_normal) then
@@ -2355,7 +2355,7 @@ contains
       integer  :: lwork,info,n
       
       ! Query optimal work array size
-      call dsyev('V','U',order,Imom,order,d,lwork_query,-1,info); lwork=int(lwork_query(1)); allocate(work(lwork))
+      call dsyev('V','U',order,A,order,d,lwork_query,-1,info); lwork=int(lwork_query(1)); allocate(work(lwork))
 
       ! allocate / initialize temps arrays for computation
       allocate(vol_struct(1:this%n_meta_struct),vol_struct_(1:this%n_meta_struct))
