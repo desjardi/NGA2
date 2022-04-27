@@ -26,6 +26,7 @@ module config_class
       procedure, private :: prep=>config_prep                  !< Finish preparing config after the partitioned grid is loaded
       procedure :: VF_extend                                   !< Extend VF array into the non-periodic domain overlaps
       procedure :: integrate                                   !< Integrate a variable on config while accounting for VF
+      procedure :: set_scalar                                  !< Subroutine that extrapolates a provided scalar value at a point to a pgrid field
    end type config
    
    
@@ -184,6 +185,62 @@ contains
       end do
       call MPI_ALLREDUCE(my_int,integral,1,MPI_REAL_WP,MPI_SUM,this%comm,ierr)
    end subroutine integrate
+
+
+   !> Subroutine that performs trilinear extrapolation of provided value Sp
+   !> at provided position pos near cell i0,j0,k0 to provided scalar field S
+   subroutine set_scalar(this,Sp,pos,i0,j0,k0,S)
+      implicit none
+      class(config), intent(in) :: this
+      real(WP), intent(in) :: Sp
+      real(WP), dimension(3), intent(in) :: pos
+      integer, intent(in) :: i0,j0,k0
+      real(WP), dimension(this%imino_:,this%jmino_:,this%kmino_:), intent(inout) :: S     !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      integer :: i,j,k,ni,nj,nk
+      real(WP) :: wx1,wy1,wz1
+      real(WP) :: wx2,wy2,wz2
+      real(WP), dimension(2,2,2) :: ww
+      ! Find right i index
+      i=max(min(this%imaxo_-1,i0),this%imino_)
+      do while (pos(1)-this%xm(i  ).lt.0.0_WP.and.i  .gt.this%imino_); i=i-1; end do
+      do while (pos(1)-this%xm(i+1).ge.0.0_WP.and.i+1.lt.this%imaxo_); i=i+1; end do
+      ! Find right j index
+      j=max(min(this%jmaxo_-1,j0),this%jmino_)
+      do while (pos(2)-this%ym(j  ).lt.0.0_WP.and.j  .gt.this%jmino_); j=j-1; end do
+      do while (pos(2)-this%ym(j+1).ge.0.0_WP.and.j+1.lt.this%jmaxo_); j=j+1; end do
+      ! Find right k index
+      k=max(min(this%kmaxo_-1,k0),this%kmino_)
+      do while (pos(3)-this%zm(k  ).lt.0.0_WP.and.k  .gt.this%kmino_); k=k-1; end do
+      do while (pos(3)-this%zm(k+1).ge.0.0_WP.and.k+1.lt.this%kmaxo_); k=k+1; end do
+      ! For exact conservation, all information needs to be placed *inside* the domain
+      if (.not.this%xper) i=max(this%imin,min(this%imax-1,i))
+      if (.not.this%yper) j=max(this%jmin,min(this%jmax-1,j))
+      if (.not.this%zper) k=max(this%kmin,min(this%kmax-1,k))
+      ! Prepare tri-linear extrapolation coefficients
+      wx1=(pos(1)-this%xm(i))/(this%xm(i+1)-this%xm(i)); wx2=1.0_WP-wx1
+      wy1=(pos(2)-this%ym(j))/(this%ym(j+1)-this%ym(j)); wy2=1.0_WP-wy1
+      wz1=(pos(3)-this%zm(k))/(this%zm(k+1)-this%zm(k)); wz2=1.0_WP-wz1
+      ! Combine into array for easy rescaling
+      ww(1,1,1)=wx2*wy2*wz2
+      ww(2,1,1)=wx1*wy2*wz2
+      ww(1,2,1)=wx2*wy1*wz2
+      ww(2,2,1)=wx1*wy1*wz2
+      ww(1,1,2)=wx2*wy2*wz1
+      ww(2,1,2)=wx1*wy2*wz1
+      ww(1,2,2)=wx2*wy1*wz1
+      ww(2,2,2)=wx1*wy1*wz1
+      ! Apply Neumann condition at walls
+      do nk=0,1
+         do nj=0,1
+            do ni=0,1
+               if (this%VF(i+ni,j+nj,k+nk).eq.0.0_WP) ww(1+ni,1+nj,1+nk)=0.0_WP
+            end do
+         end do
+      end do
+      ww=ww/sum(ww)
+      ! Tri-linear extrapolation of Sp onto S
+      S(i:i+1,j:j+1,k:k+1)=S(i:i+1,j:j+1,k:k+1)+ww*Sp
+   end subroutine set_scalar
    
    
    !> Cheap print of config info to screen

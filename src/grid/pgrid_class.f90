@@ -92,6 +92,8 @@ module pgrid_class
       procedure, private :: pgrid_isync,pgrid_isync_no                          !< Commmunicate inner and periodic boundaries for integer
       procedure, private :: pgrid_rsync,pgrid_rsync_no                          !< Commmunicate inner and periodic boundaries for real(WP)
       procedure, private :: pgrid_rsync_array                                   !< Commmunicate inner and periodic boundaries for arrays of real(WP) of the form (:,i,j,k)
+      generic :: syncsum=>pgrid_rsyncsum                                        !< Summation across inner and periodic boundaries - generic
+      procedure, private :: pgrid_rsyncsum                                      !< Summation inner and periodic boundaries for real(WP)
       procedure :: get_rank                                                     !< Function that returns rank of processor that contains provided indices
       procedure :: get_ijk_local                                                !< Function that returns closest mesh indices to a provided position - local to processor subdomain
       procedure :: get_ijk_global                                               !< Function that returns closest mesh indices to a provided position - global over full pgrid
@@ -889,6 +891,92 @@ contains
       
    end subroutine pgrid_isync_no
    
+   
+   !> Synchronization by summation of overlap cells - uses full no
+   !> This routine assumes that the default overlap size is used
+   !> It allows the use of pre-allocated buffers for speed
+   subroutine pgrid_rsyncsum(this,A)
+      use parallel, only: MPI_REAL_WP
+      implicit none
+      class(pgrid), intent(inout) :: this
+      real(WP), dimension(this%imino_:,this%jmino_:,this%kmino_:), intent(inout) :: A !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      type(MPI_Status) :: status
+      integer :: isrc,idst,ierr,isize,i,j,k
+      
+      ! Work in x - is it 2D or 3D?
+      if (this%nx.eq.1) then
+         ! Sum along x
+         do i=this%imax_+1,this%imaxo_
+            A(this%imin,:,:)=A(this%imin,:,:)+A(i,:,:)
+         end do
+         do i=this%imino_,this%imin_-1
+            A(this%imin,:,:)=A(this%imin,:,:)+A(i,:,:)
+         end do
+      else
+         isize=(this%no)*(this%nyo_)*(this%nzo_)
+         ! Send left buffer to left neighbour
+         call MPI_CART_SHIFT(this%comm,0,-1,isrc,idst,ierr)
+         this%syncbuf_x1=A(this%imino_:this%imin_-1,:,:)
+         call MPI_SENDRECV(this%syncbuf_x1,isize,MPI_REAL_WP,idst,0,this%syncbuf_x2,isize,MPI_REAL_WP,isrc,0,this%comm,status,ierr)
+         if (isrc.ne.MPI_PROC_NULL) A(this%imax_-this%no+1:this%imax_,:,:)=A(this%imax_-this%no+1:this%imax_,:,:)+this%syncbuf_x2
+         ! Send right buffer to right neighbour
+         call MPI_CART_SHIFT(this%comm,0,+1,isrc,idst,ierr)
+         this%syncbuf_x1=A(this%imax_+1:this%imaxo_,:,:)
+         call MPI_SENDRECV(this%syncbuf_x1,isize,MPI_REAL_WP,idst,0,this%syncbuf_x2,isize,MPI_REAL_WP,isrc,0,this%comm,status,ierr)
+         if (isrc.ne.MPI_PROC_NULL) A(this%imin_:this%imin_+this%no-1,:,:)=A(this%imin_:this%imin_+this%no-1,:,:)+this%syncbuf_x2
+      end if
+      
+      ! Work in y - is it 2D or 3D?
+      if (this%ny.eq.1) then
+         ! Sum along x
+         do j=this%jmax_+1,this%jmaxo_
+            A(:,this%jmin,:)=A(:,this%jmin,:)+A(:,j,:)
+         end do
+         do j=this%jmino_,this%jmin_-1
+            A(:,this%jmin,:)=A(:,this%jmin,:)+A(:,j,:)
+         end do
+      else
+         isize=(this%nxo_)*(this%no)*(this%nzo_)
+         ! Send left buffer to left neighbour
+         call MPI_CART_SHIFT(this%comm,1,-1,isrc,idst,ierr)
+         this%syncbuf_y1=A(:,this%jmino_:this%jmin_-1,:)
+         call MPI_SENDRECV(this%syncbuf_y1,isize,MPI_REAL_WP,idst,0,this%syncbuf_y2,isize,MPI_REAL_WP,isrc,0,this%comm,status,ierr)
+         if (isrc.ne.MPI_PROC_NULL) A(:,this%jmax_-this%no+1:this%jmax_,:)=A(:,this%jmax_-this%no+1:this%jmax_,:)+this%syncbuf_y2
+         ! Send right buffer to right neighbour
+         call MPI_CART_SHIFT(this%comm,1,+1,isrc,idst,ierr)
+         this%syncbuf_y1=A(:,this%jmax_+1:this%jmaxo_,:)
+         call MPI_SENDRECV(this%syncbuf_y1,isize,MPI_REAL_WP,idst,0,this%syncbuf_y2,isize,MPI_REAL_WP,isrc,0,this%comm,status,ierr)
+         if (isrc.ne.MPI_PROC_NULL) A(:,this%jmin_:this%jmin_+this%no-1,:)=A(:,this%jmin_:this%jmin_+this%no-1,:)+this%syncbuf_y2
+      end if
+      
+      ! Work in z - is it 2D or 3D?
+      if (this%nz.eq.1) then
+         ! Sum along z
+         do k=this%kmax_+1,this%kmaxo_
+            A(:,:,this%kmin)=A(:,:,this%kmin)+A(:,:,k)
+         end do
+         do k=this%kmino_,this%kmin_-1
+            A(:,:,this%kmin)=A(:,:,this%kmin)+A(:,:,k)
+         end do
+      else
+         isize=(this%nxo_)*(this%nyo_)*(this%no)
+         ! Send left buffer to left neighbour
+         call MPI_CART_SHIFT(this%comm,2,-1,isrc,idst,ierr)
+         this%syncbuf_z1=A(:,:,this%kmino_:this%kmin_-1)
+         call MPI_SENDRECV(this%syncbuf_z1,isize,MPI_REAL_WP,idst,0,this%syncbuf_z2,isize,MPI_REAL_WP,isrc,0,this%comm,status,ierr)
+         if (isrc.ne.MPI_PROC_NULL) A(:,:,this%kmax_-this%no+1:this%kmax_)=A(:,:,this%kmax_-this%no+1:this%kmax_)+this%syncbuf_z2
+         ! Send right buffer to right neighbour
+         call MPI_CART_SHIFT(this%comm,2,+1,isrc,idst,ierr)
+         this%syncbuf_z1=A(:,:,this%kmax_+1:this%kmaxo_)
+         call MPI_SENDRECV(this%syncbuf_z1,isize,MPI_REAL_WP,idst,0,this%syncbuf_z2,isize,MPI_REAL_WP,isrc,0,this%comm,status,ierr)
+         if (isrc.ne.MPI_PROC_NULL) A(:,:,this%kmin_:this%kmin_+this%no-1)=A(:,:,this%kmin_:this%kmin_+this%no-1)+this%syncbuf_z2
+      end if
+      
+      ! Follow by a sync step
+      call this%pgrid_rsync(A)
+
+   end subroutine pgrid_rsyncsum
+
    
    !> Returns the closest local indices "ind" to the provided position "pos" with initial guess "ind_guess"
    function get_ijk_local(this,pos,ind_guess) result(ind)

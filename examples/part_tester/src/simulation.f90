@@ -48,6 +48,8 @@ contains
          call param_read('Particle density',lp%rho)
          ! Get particle diameter from the input
          call param_read('Particle diameter',dp)
+         ! Set filter scale to 3.5*dx
+         lp%filter_width=3.5_WP*cfg%min_meshsize
          ! Root process initializes 1000 particles randomly
          if (lp%cfg%amRoot) then
             call lp%resize(1000)
@@ -72,6 +74,8 @@ contains
          end if
          ! Distribute particles
          call lp%sync()
+         ! Get particle volume fraction
+         call lp%update_VF()
       end block initialize_lpt
       
       
@@ -142,6 +146,8 @@ contains
          ! Add variables to output
          call ens_out%add_particle('particles',pmesh)
          call ens_out%add_vector('velocity',U,V,W)
+         call ens_out%add_vector('source',lp%srcU,lp%srcV,lp%srcW)
+         call ens_out%add_scalar('epsp',lp%VF)
          ! Output to ensight
          if (ens_evt%occurs()) call ens_out%write_data(time%t)
       end block create_ensight
@@ -157,6 +163,7 @@ contains
          call mfile%add_column(time%t,'Time')
          call mfile%add_column(time%dt,'Timestep size')
          call mfile%add_column(lp%np,'Particle number')
+         call mfile%add_column(lp%VFmean,'Mean VF')
          call mfile%add_column(lp%Umin,'Particle Umin')
          call mfile%add_column(lp%Umax,'Particle Umax')
          call mfile%add_column(lp%Vmin,'Particle Vmin')
@@ -181,8 +188,14 @@ contains
          ! Increment time
          call time%increment()
          
+         ! Collide particles
+         call lp%collide()
+         
          ! Advance particles by dt
          call lp%advance(dt=time%dt,U=U,V=V,W=W,rho=rho,visc=visc)
+         
+         ! Get particle volume fraction
+         call lp%update_VF()
          
          ! Output to ensight
          if (ens_evt%occurs()) then
