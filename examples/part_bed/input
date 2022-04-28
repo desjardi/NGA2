@@ -1,0 +1,28 @@
+# Parallelization
+Partition :	2 2 1
+
+# Mesh definition
+Lx :	0.5
+Ly :	1
+Lz :	0.02
+nx :	25
+ny :	50
+nz :	1
+
+# Time integration
+Max timestep size :	1e-4
+Max cfl number :	   1
+Max time :           10
+
+# Fluid properties
+Viscosity : 1e-5     !< zero turn off drag...
+Density :   1
+Gravity :   0 -1 0
+
+# Particle parameters
+Number of particles : 3000
+Particle density :  1000
+Particle diameter : 0.01
+
+# Ensight output
+Ensight output period : 1e-1

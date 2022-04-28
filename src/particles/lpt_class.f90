@@ -373,6 +373,7 @@ contains
             npic(ip,jp,kp)=npic(ip,jp,kp)+1
             ipic(npic(ip,jp,kp),ip,jp,kp)=-i
          end do
+         
       end block pic_prep
       
       ! Finally, calculate collision force
@@ -913,18 +914,17 @@ contains
             end if
          end if
       end do
+      nrecv=0
       call MPI_CART_SHIFT(this%cfg%comm,0,-1,isrc,idst,ierr)
-      if (isrc.ne.MPI_PROC_NULL) then
-         call MPI_SENDRECV(nsend,1,MPI_INTEGER,idst,0,nrecv,1,MPI_INTEGER,isrc,0,this%cfg%comm,status,ierr)
-         allocate(torecv(nrecv))
-         call MPI_SENDRECV(tosend,nsend,MPI_PART,idst,0,torecv,nrecv,MPI_PART,isrc,0,this%cfg%comm,status,ierr)
-         call this%resize_ghost(this%ng_+nrecv)
-         this%g(this%ng_+1:this%ng_+nrecv)=torecv
-         this%ng_=this%ng_+nrecv
-      end if
+      call MPI_SENDRECV(nsend,1,MPI_INTEGER,idst,0,nrecv,1,MPI_INTEGER,isrc,0,this%cfg%comm,status,ierr)
+      allocate(torecv(nrecv))
+      call MPI_SENDRECV(tosend,nsend,MPI_PART,idst,0,torecv,nrecv,MPI_PART,isrc,0,this%cfg%comm,status,ierr)
+      call this%resize_ghost(this%ng_+nrecv)
+      this%g(this%ng_+1:this%ng_+nrecv)=torecv
+      this%ng_=this%ng_+nrecv
       if (allocated(tosend)) deallocate(tosend)
       if (allocated(torecv)) deallocate(torecv)
-
+      
       ! Share ghost particles to the right in x
       nsend=0
       do n=1,this%np_
@@ -942,18 +942,17 @@ contains
             end if
          end if
       end do
+      nrecv=0
       call MPI_CART_SHIFT(this%cfg%comm,0,+1,isrc,idst,ierr)
-      if (isrc.ne.MPI_PROC_NULL) then
-         call MPI_SENDRECV(nsend,1,MPI_INTEGER,idst,0,nrecv,1,MPI_INTEGER,isrc,0,this%cfg%comm,status,ierr)
-         allocate(torecv(nrecv))
-         call MPI_SENDRECV(tosend,nsend,MPI_PART,idst,0,torecv,nrecv,MPI_PART,isrc,0,this%cfg%comm,status,ierr)
-         call this%resize_ghost(this%ng_+nrecv)
-         this%g(this%ng_+1:this%ng_+nrecv)=torecv
-         this%ng_=this%ng_+nrecv
-      end if
+      call MPI_SENDRECV(nsend,1,MPI_INTEGER,idst,0,nrecv,1,MPI_INTEGER,isrc,0,this%cfg%comm,status,ierr)
+      allocate(torecv(nrecv))
+      call MPI_SENDRECV(tosend,nsend,MPI_PART,idst,0,torecv,nrecv,MPI_PART,isrc,0,this%cfg%comm,status,ierr)
+      call this%resize_ghost(this%ng_+nrecv)
+      this%g(this%ng_+1:this%ng_+nrecv)=torecv
+      this%ng_=this%ng_+nrecv
       if (allocated(tosend)) deallocate(tosend)
       if (allocated(torecv)) deallocate(torecv)
-
+      
       ! Share ghost particles to the left in y
       nsend=0
       do n=1,this%np_
@@ -971,18 +970,17 @@ contains
             end if
          end if
       end do
+      nrecv=0
       call MPI_CART_SHIFT(this%cfg%comm,1,-1,isrc,idst,ierr)
-      if (isrc.ne.MPI_PROC_NULL) then
-         call MPI_SENDRECV(nsend,1,MPI_INTEGER,idst,0,nrecv,1,MPI_INTEGER,isrc,0,this%cfg%comm,status,ierr)
-         allocate(torecv(nrecv))
-         call MPI_SENDRECV(tosend,nsend,MPI_PART,idst,0,torecv,nrecv,MPI_PART,isrc,0,this%cfg%comm,status,ierr)
-         call this%resize_ghost(this%ng_+nrecv)
-         this%g(this%ng_+1:this%ng_+nrecv)=torecv
-         this%ng_=this%ng_+nrecv
-      end if
+      call MPI_SENDRECV(nsend,1,MPI_INTEGER,idst,0,nrecv,1,MPI_INTEGER,isrc,0,this%cfg%comm,status,ierr)
+      allocate(torecv(nrecv))
+      call MPI_SENDRECV(tosend,nsend,MPI_PART,idst,0,torecv,nrecv,MPI_PART,isrc,0,this%cfg%comm,status,ierr)
+      call this%resize_ghost(this%ng_+nrecv)
+      this%g(this%ng_+1:this%ng_+nrecv)=torecv
+      this%ng_=this%ng_+nrecv
       if (allocated(tosend)) deallocate(tosend)
       if (allocated(torecv)) deallocate(torecv)
-
+      
       ! Share ghost particles to the right in y
       nsend=0
       do n=1,this%np_
@@ -1000,15 +998,14 @@ contains
             end if
          end if
       end do
+      nrecv=0
       call MPI_CART_SHIFT(this%cfg%comm,1,+1,isrc,idst,ierr)
-      if (isrc.ne.MPI_PROC_NULL) then
-         call MPI_SENDRECV(nsend,1,MPI_INTEGER,idst,0,nrecv,1,MPI_INTEGER,isrc,0,this%cfg%comm,status,ierr)
-         allocate(torecv(nrecv))
-         call MPI_SENDRECV(tosend,nsend,MPI_PART,idst,0,torecv,nrecv,MPI_PART,isrc,0,this%cfg%comm,status,ierr)
-         call this%resize_ghost(this%ng_+nrecv)
-         this%g(this%ng_+1:this%ng_+nrecv)=torecv
-         this%ng_=this%ng_+nrecv
-      end if
+      call MPI_SENDRECV(nsend,1,MPI_INTEGER,idst,0,nrecv,1,MPI_INTEGER,isrc,0,this%cfg%comm,status,ierr)
+      allocate(torecv(nrecv))
+      call MPI_SENDRECV(tosend,nsend,MPI_PART,idst,0,torecv,nrecv,MPI_PART,isrc,0,this%cfg%comm,status,ierr)
+      call this%resize_ghost(this%ng_+nrecv)
+      this%g(this%ng_+1:this%ng_+nrecv)=torecv
+      this%ng_=this%ng_+nrecv
       if (allocated(tosend)) deallocate(tosend)
       if (allocated(torecv)) deallocate(torecv)
       
@@ -1029,18 +1026,17 @@ contains
             end if
          end if
       end do
+      nrecv=0
       call MPI_CART_SHIFT(this%cfg%comm,2,-1,isrc,idst,ierr)
-      if (isrc.ne.MPI_PROC_NULL) then
-         call MPI_SENDRECV(nsend,1,MPI_INTEGER,idst,0,nrecv,1,MPI_INTEGER,isrc,0,this%cfg%comm,status,ierr)
-         allocate(torecv(nrecv))
-         call MPI_SENDRECV(tosend,nsend,MPI_PART,idst,0,torecv,nrecv,MPI_PART,isrc,0,this%cfg%comm,status,ierr)
-         call this%resize_ghost(this%ng_+nrecv)
-         this%g(this%ng_+1:this%ng_+nrecv)=torecv
-         this%ng_=this%ng_+nrecv
-      end if
+      call MPI_SENDRECV(nsend,1,MPI_INTEGER,idst,0,nrecv,1,MPI_INTEGER,isrc,0,this%cfg%comm,status,ierr)
+      allocate(torecv(nrecv))
+      call MPI_SENDRECV(tosend,nsend,MPI_PART,idst,0,torecv,nrecv,MPI_PART,isrc,0,this%cfg%comm,status,ierr)
+      call this%resize_ghost(this%ng_+nrecv)
+      this%g(this%ng_+1:this%ng_+nrecv)=torecv
+      this%ng_=this%ng_+nrecv
       if (allocated(tosend)) deallocate(tosend)
       if (allocated(torecv)) deallocate(torecv)
-
+      
       ! Share ghost particles to the right in z
       nsend=0
       do n=1,this%np_
@@ -1058,18 +1054,17 @@ contains
             end if
          end if
       end do
+      nrecv=0
       call MPI_CART_SHIFT(this%cfg%comm,2,+1,isrc,idst,ierr)
-      if (isrc.ne.MPI_PROC_NULL) then
-         call MPI_SENDRECV(nsend,1,MPI_INTEGER,idst,0,nrecv,1,MPI_INTEGER,isrc,0,this%cfg%comm,status,ierr)
-         allocate(torecv(nrecv))
-         call MPI_SENDRECV(tosend,nsend,MPI_PART,idst,0,torecv,nrecv,MPI_PART,isrc,0,this%cfg%comm,status,ierr)
-         call this%resize_ghost(this%ng_+nrecv)
-         this%g(this%ng_+1:this%ng_+nrecv)=torecv
-         this%ng_=this%ng_+nrecv
-      end if
+      call MPI_SENDRECV(nsend,1,MPI_INTEGER,idst,0,nrecv,1,MPI_INTEGER,isrc,0,this%cfg%comm,status,ierr)
+      allocate(torecv(nrecv))
+      call MPI_SENDRECV(tosend,nsend,MPI_PART,idst,0,torecv,nrecv,MPI_PART,isrc,0,this%cfg%comm,status,ierr)
+      call this%resize_ghost(this%ng_+nrecv)
+      this%g(this%ng_+1:this%ng_+nrecv)=torecv
+      this%ng_=this%ng_+nrecv
       if (allocated(tosend)) deallocate(tosend)
       if (allocated(torecv)) deallocate(torecv)
-      
+
    end subroutine share
    
    
