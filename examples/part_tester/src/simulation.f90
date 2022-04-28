@@ -37,6 +37,16 @@ contains
       use param, only: param_read
       implicit none
       
+      
+      ! Initialize time tracker with 1 subiterations
+      initialize_timetracker: block
+         time=timetracker(amRoot=cfg%amRoot)
+         call param_read('Max timestep size',time%dtmax)
+         time%dt=time%dtmax
+         time%itmax=1
+      end block initialize_timetracker
+      
+
       ! Initialize our LPT
       initialize_lpt: block
          use random, only: random_uniform
@@ -62,8 +72,11 @@ contains
                lp%p(i)%pos=[random_uniform(lp%cfg%x(lp%cfg%imin),lp%cfg%x(lp%cfg%imax+1)),&
                &            random_uniform(lp%cfg%y(lp%cfg%jmin),lp%cfg%y(lp%cfg%jmax+1)),&
                &            random_uniform(lp%cfg%z(lp%cfg%kmin),lp%cfg%z(lp%cfg%kmax+1))]
+               lp%p(i)%pos(3)=lp%cfg%zm(lp%cfg%kmin)
                ! Give zero velocity
                lp%p(i)%vel=0.0_WP
+               ! Give zero collision force
+               lp%p(i)%col=0.0_WP
                ! Give zero dt
                lp%p(i)%dt=0.0_WP
                ! Locate the particle on the mesh
@@ -76,6 +89,8 @@ contains
          call lp%sync()
          ! Get particle volume fraction
          call lp%update_VF()
+         ! Set collision timescale
+         lp%Tcol=5.0_WP*time%dt
       end block initialize_lpt
       
       
@@ -118,15 +133,6 @@ contains
          call param_read('Density',rhof); rho=rhof
          call param_read('Viscosity',viscf); visc=viscf
       end block initialize_fluid
-      
-      
-      ! Initialize time tracker with 1 subiterations
-      initialize_timetracker: block
-         time=timetracker(amRoot=lp%cfg%amRoot)
-         call param_read('Max timestep size',time%dtmax)
-         time%dt=time%dtmax
-         time%itmax=1
-      end block initialize_timetracker
       
       
       ! Create partmesh object for Lagrangian particle output
@@ -189,7 +195,7 @@ contains
          call time%increment()
          
          ! Collide particles
-         call lp%collide()
+         call lp%collide(dt=time%dt)
          
          ! Advance particles by dt
          call lp%advance(dt=time%dt,U=U,V=V,W=W,rho=rho,visc=visc)

@@ -61,7 +61,7 @@ module lpt_class
       ! Overlap particle (i.e., ghost) data
       integer :: ng_                                      !< Local number of ghosts
       type(part), dimension(:), allocatable :: g          !< Array of ghosts of type part
-
+      
       ! Particle density
       real(WP) :: rho                                     !< Density of particle
       
@@ -70,8 +70,12 @@ module lpt_class
       
       ! Solver parameters
       real(WP) :: nstep=1                                 !< Number of substeps (default=1)
-      logical  :: twoway=.false.                          !< Two-way coupling   (default=no)
-      
+
+      ! Collisional parameters
+      real(WP) :: Tcol                                    !< Characteristic collision time scale
+      real(WP) :: e_n=0.9_WP                              !< Normal restitution coefficient
+      real(WP) :: clip_col=0.2_WP                         !< Maximum allowable overlap
+
       ! Monitoring info
       real(WP) :: VFmin,VFmax,VFmean,VFvar                !< Volume fraction info
       real(WP) :: dmin,dmax,dmean,dvar                    !< Diameter info
@@ -87,7 +91,7 @@ module lpt_class
       real(WP), dimension(:,:,:), allocatable :: srcU     !< U momentum source on mesh, cell-centered
       real(WP), dimension(:,:,:), allocatable :: srcV     !< V momentum source on mesh, cell-centered
       real(WP), dimension(:,:,:), allocatable :: srcW     !< W momentum source on mesh, cell-centered
-
+      
       ! Filtering operation
       real(WP) :: filter_width                            !< Characteristic filter width
       real(WP), dimension(:,:,:,:), allocatable :: div_x,div_y,div_z    !< Divergence operator
@@ -236,14 +240,144 @@ contains
    
    
    !> Resolve collisional interaction between particles
-   subroutine collide(this)
+   !> Requires Tcol and e_n to be set beforehand
+   subroutine collide(this,dt)
       implicit none
       class(lpt), intent(inout) :: this
+      real(WP), intent(inout) :: dt  !< Timestep size over which to advance
+      integer, dimension(:,:,:), allocatable :: npic      !< Number of particle in cell
+      integer, dimension(:,:,:,:), allocatable :: ipic    !< Index of particle in cell
       
-      ! First share particles across overlap
+      ! Start by zeroing out the collision force
+      zero_force: block
+         integer :: i
+         do i=1,this%np_
+            this%p(i)%col=0.0_WP
+         end do
+      end block zero_force
+      
+      ! Then share particles across overlap
       call this%share()
       
+      ! We can now assemble particle-in-cell information
+      pic_prep: block
+         use mpi_f08
+         integer :: i,ip,jp,kp,ierr
+         integer :: mymax_npic,max_npic
+         
+         ! Allocate number of particle in cell
+         allocate(npic(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_)); npic=0
+         
+         ! Count particles and ghosts per cell
+         do i=1,this%np_
+            ip=this%p(i)%ind(1); jp=this%p(i)%ind(2); kp=this%p(i)%ind(3)
+            npic(ip,jp,kp)=npic(ip,jp,kp)+1
+         end do
+         do i=1,this%ng_
+            ip=this%g(i)%ind(1); jp=this%g(i)%ind(2); kp=this%g(i)%ind(3)
+            npic(ip,jp,kp)=npic(ip,jp,kp)+1
+         end do
+         
+         ! Get maximum number of particle in cell
+         mymax_npic=maxval(npic); call MPI_ALLREDUCE(mymax_npic,max_npic,1,MPI_INTEGER,MPI_MAX,this%cfg%comm,ierr)
+         
+         ! Allocate pic map
+         allocate(ipic(1:max_npic,this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_)); ipic=0
+         
+         ! Assemble pic map
+         npic=0
+         do i=1,this%np_
+            ip=this%p(i)%ind(1); jp=this%p(i)%ind(2); kp=this%p(i)%ind(3)
+            npic(ip,jp,kp)=npic(ip,jp,kp)+1
+            ipic(npic(ip,jp,kp),ip,jp,kp)=i
+         end do
+         do i=1,this%ng_
+            ip=this%g(i)%ind(1); jp=this%g(i)%ind(2); kp=this%g(i)%ind(3)
+            npic(ip,jp,kp)=npic(ip,jp,kp)+1
+            ipic(npic(ip,jp,kp),ip,jp,kp)=-i
+         end do
+      end block pic_prep
       
+      ! Finally, calculate collision force
+      collision_force: block
+         use mathtools, only: Pi
+         integer :: i1,i2,ii,jj,kk,nn
+         real(WP) :: d1,m1,d2,m2,d12,m12
+         real(WP), dimension(3) :: r1,v1,r2,v2,v12,n12,f_n
+         real(WP) :: k_n,eta_n,lne,pilne2,rnv,r_influ,delta_n
+         
+         ! Precompute ln(e_n) and Pi^2+ln(e_n)^2
+         lne=log(this%e_n); pilne2=Pi**2+lne**2
+         
+         ! Loop over all local particles
+         do i1=1,this%np_
+            
+            ! Store particle data
+            r1=this%p(i1)%pos
+            v1=this%p(i1)%vel
+            d1=this%p(i1)%d
+            m1=this%rho*Pi/6.0_WP*d1**3
+            
+            ! Loop over nearest cells
+            do kk=this%p(i1)%ind(3)-1,this%p(i1)%ind(3)+1
+               do jj=this%p(i1)%ind(2)-1,this%p(i1)%ind(2)+1
+                  do ii=this%p(i1)%ind(1)-1,this%p(i1)%ind(1)+1
+                     
+                     ! Loop over particles in that cell
+                     do nn=1,npic(ii,jj,kk)
+                        
+                        ! Get index of neighbor particle
+                        i2=ipic(nn,ii,jj,kk)
+                        
+                        ! Get relevant data from correct storage
+                        if (i2.gt.0) then
+                           r2=this%p(i2)%pos
+                           v2=this%p(i2)%vel
+                           d2=this%p(i2)%d
+                           m2=this%rho*Pi/6.0_WP*d2**3
+                        else if (i2.lt.0) then
+                           i2=-i2
+                           r2=this%g(i2)%pos
+                           v2=this%g(i2)%vel
+                           d2=this%g(i2)%d
+                           m2=this%rho*Pi/6.0_WP*d2**3
+                        end if
+                        
+                        ! Compute relative information
+                        d12=sqrt(sum((r1-r2)*(r1-r2)))
+                        if (d12.lt.10.0_WP*epsilon(d12)) cycle !< this should skip auto-collision
+                        n12=(r2-r1)/d12
+                        v12=v1-v2
+                        rnv=dot_product(v12,n12)
+                        r_influ=min(abs(rnv)*dt,0.1_WP*(d1+d2))
+                        delta_n=0.5_WP*(d1+d2)+r_influ-d12
+                        delta_n=min(delta_n,this%clip_col*0.5_WP*(d1+d2))
+                        
+                        ! Assess if there is collision
+                        if (delta_n.gt.0.0_WP) then
+                           ! Normal collision
+                           m12=m1*m2/(m1+m2)
+                           k_n=m12/(this%Tcol**2*pilne2)
+                           eta_n=-2.0_WP*lne*sqrt(m12*k_n)/pilne2
+                           f_n=-k_n*delta_n*n12-eta_n*rnv*n12
+                           ! Calculate collision force
+                           this%p(i1)%col=this%p(i1)%col+f_n/m1
+                        end if
+                        
+                     end do
+                     
+                  end do
+               end do
+            end do
+            
+            ! Deal with dimensionality
+            if (this%cfg%nx.eq.1) this%p(i1)%col(1)=0.0_WP
+            if (this%cfg%ny.eq.1) this%p(i1)%col(2)=0.0_WP
+            if (this%cfg%nz.eq.1) this%p(i1)%col(3)=0.0_WP
+            
+         end do
+         
+      end block collision_force
       
    end subroutine collide
 
@@ -288,6 +422,11 @@ contains
             this%p(i)%vel=pold%vel+mydt*(acc+this%gravity+this%p(i)%col)
             ! Relocalize
             this%p(i)%ind=this%cfg%get_ijk_global(this%p(i)%pos,this%p(i)%ind)
+            ! Send source term back to the mesh
+            dmom=mydt*acc*this%rho*Pi/6.0_WP*this%p(i)%d**3
+            if (this%cfg%nx.gt.1) call this%cfg%set_scalar(Sp=-dmom(1),pos=this%p(i)%pos,i0=this%p(i)%ind(1),j0=this%p(i)%ind(2),k0=this%p(i)%ind(3),S=this%srcU)
+            if (this%cfg%ny.gt.1) call this%cfg%set_scalar(Sp=-dmom(2),pos=this%p(i)%pos,i0=this%p(i)%ind(1),j0=this%p(i)%ind(2),k0=this%p(i)%ind(3),S=this%srcV)
+            if (this%cfg%nz.gt.1) call this%cfg%set_scalar(Sp=-dmom(3),pos=this%p(i)%pos,i0=this%p(i)%ind(1),j0=this%p(i)%ind(2),k0=this%p(i)%ind(3),S=this%srcW)
             ! Increment
             dt_done=dt_done+mydt
          end do
@@ -301,11 +440,6 @@ contains
          if (this%p(i)%pos(3).lt.this%cfg%z(this%cfg%kmin).or.this%p(i)%pos(3).gt.this%cfg%z(this%cfg%kmax+1)) this%p(i)%flag=1
          ! Relocalize the particle
          this%p(i)%ind=this%cfg%get_ijk_global(this%p(i)%pos,this%p(i)%ind)
-         ! Send source term back to the mesh
-         dmom=-1.0_WP!mydt*acc*this%rho*Pi/6.0_WP*this%p(i)%d**3
-         if (this%cfg%nx.gt.1) call this%cfg%set_scalar(Sp=-dmom(1),pos=this%p(i)%pos,i0=this%p(i)%ind(1),j0=this%p(i)%ind(2),k0=this%p(i)%ind(3),S=this%srcU)
-         if (this%cfg%ny.gt.1) call this%cfg%set_scalar(Sp=-dmom(2),pos=this%p(i)%pos,i0=this%p(i)%ind(1),j0=this%p(i)%ind(2),k0=this%p(i)%ind(3),S=this%srcV)
-         if (this%cfg%nz.gt.1) call this%cfg%set_scalar(Sp=-dmom(3),pos=this%p(i)%pos,i0=this%p(i)%ind(1),j0=this%p(i)%ind(2),k0=this%p(i)%ind(3),S=this%srcW)
       end do
       
       ! Communicate particles
@@ -626,21 +760,22 @@ contains
    
 
    !> Share particles across processor boundaries
-   subroutine share(this,no)
+   subroutine share(this,nover)
       use mpi_f08
       use messager, only: warn,die
       implicit none
       class(lpt), intent(inout) :: this
-      integer, optional :: no
+      integer, optional :: nover
       type(part), dimension(:), allocatable :: tosend
       type(part), dimension(:), allocatable :: torecv
-      integer :: nsend,nrecv
+      integer :: no,nsend,nrecv
       type(MPI_Status) :: status
       integer :: icnt,isrc,idst,ierr
       integer :: i,n
       
       ! Check overlap size
-      if (present(no)) then
+      if (present(nover)) then
+         no=nover
          if (no.gt.this%cfg%no) then
             call warn('[lpt_class share] Specified overlap is larger than that of cfg - reducing no')
             no=this%cfg%no
