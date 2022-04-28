@@ -87,7 +87,7 @@ contains
          end if
          ! Distribute particles
          call lp%sync()
-         ! Get particle volume fraction
+         ! Get initial particle volume fraction
          call lp%update_VF()
          ! Set collision timescale
          lp%Tcol=5.0_WP*time%dt
@@ -199,9 +199,6 @@ contains
          
          ! Advance particles by dt
          call lp%advance(dt=time%dt,U=U,V=V,W=W,rho=rho,visc=visc)
-         
-         ! Get particle volume fraction
-         call lp%update_VF()
          
          ! Output to ensight
          if (ens_evt%occurs()) then

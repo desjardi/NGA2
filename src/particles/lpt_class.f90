@@ -344,7 +344,7 @@ contains
                         end if
                         
                         ! Compute relative information
-                        d12=sqrt(sum((r1-r2)*(r1-r2)))
+                        d12=norm2(r1-r2)
                         if (d12.lt.10.0_WP*epsilon(d12)) cycle !< this should skip auto-collision
                         n12=(r2-r1)/d12
                         v12=v1-v2
@@ -424,9 +424,9 @@ contains
             this%p(i)%ind=this%cfg%get_ijk_global(this%p(i)%pos,this%p(i)%ind)
             ! Send source term back to the mesh
             dmom=mydt*acc*this%rho*Pi/6.0_WP*this%p(i)%d**3
-            if (this%cfg%nx.gt.1) call this%cfg%set_scalar(Sp=-dmom(1),pos=this%p(i)%pos,i0=this%p(i)%ind(1),j0=this%p(i)%ind(2),k0=this%p(i)%ind(3),S=this%srcU)
-            if (this%cfg%ny.gt.1) call this%cfg%set_scalar(Sp=-dmom(2),pos=this%p(i)%pos,i0=this%p(i)%ind(1),j0=this%p(i)%ind(2),k0=this%p(i)%ind(3),S=this%srcV)
-            if (this%cfg%nz.gt.1) call this%cfg%set_scalar(Sp=-dmom(3),pos=this%p(i)%pos,i0=this%p(i)%ind(1),j0=this%p(i)%ind(2),k0=this%p(i)%ind(3),S=this%srcW)
+            if (this%cfg%nx.gt.1) call this%cfg%set_scalar(Sp=-dmom(1),pos=this%p(i)%pos,i0=this%p(i)%ind(1),j0=this%p(i)%ind(2),k0=this%p(i)%ind(3),S=this%srcU,bc='n')
+            if (this%cfg%ny.gt.1) call this%cfg%set_scalar(Sp=-dmom(2),pos=this%p(i)%pos,i0=this%p(i)%ind(1),j0=this%p(i)%ind(2),k0=this%p(i)%ind(3),S=this%srcV,bc='n')
+            if (this%cfg%nz.gt.1) call this%cfg%set_scalar(Sp=-dmom(3),pos=this%p(i)%pos,i0=this%p(i)%ind(1),j0=this%p(i)%ind(2),k0=this%p(i)%ind(3),S=this%srcW,bc='n')
             ! Increment
             dt_done=dt_done+mydt
          end do
@@ -449,6 +449,9 @@ contains
       this%srcU=this%srcU/this%cfg%vol; call this%cfg%syncsum(this%srcU); call this%filter(this%srcU)
       this%srcV=this%srcV/this%cfg%vol; call this%cfg%syncsum(this%srcV); call this%filter(this%srcV)
       this%srcW=this%srcW/this%cfg%vol; call this%cfg%syncsum(this%srcW); call this%filter(this%srcW)
+      
+      ! Recompute volume fraction
+      call this%update_VF()
       
       ! Log/screen output
       logging: block
@@ -479,23 +482,32 @@ contains
       type(part), intent(in) :: p
       real(WP), dimension(3), intent(out) :: acc
       real(WP), intent(out) :: opt_dt
-      real(WP) :: Re,corr,tau
-      real(WP) :: fvisc,frho
+      real(WP) :: Re,corr,tau,b1,b2
+      real(WP) :: fvisc,frho,pVF,fVF
       real(WP), dimension(3) :: fvel
       ! Interpolate the fluid phase velocity to the particle location
       fvel=this%cfg%get_velocity(pos=p%pos,i0=p%ind(1),j0=p%ind(2),k0=p%ind(3),U=U,V=V,W=W)
       ! Interpolate the fluid phase viscosity to the particle location
-      fvisc=this%cfg%get_scalar(pos=p%pos,i0=p%ind(1),j0=p%ind(2),k0=p%ind(3),S=visc)
+      fvisc=this%cfg%get_scalar(pos=p%pos,i0=p%ind(1),j0=p%ind(2),k0=p%ind(3),S=visc,bc='n')
       ! Interpolate the fluid phase density to the particle location
-      frho=this%cfg%get_scalar(pos=p%pos,i0=p%ind(1),j0=p%ind(2),k0=p%ind(3),S=rho)
+      frho=this%cfg%get_scalar(pos=p%pos,i0=p%ind(1),j0=p%ind(2),k0=p%ind(3),S=rho,bc='n')
+      ! Interpolate the particle volume fraction to the particle location
+      pVF=this%cfg%get_scalar(pos=p%pos,i0=p%ind(1),j0=p%ind(2),k0=p%ind(3),S=this%VF,bc='n')
+      fVF=1.0_WP-pVF
       ! Particle Reynolds number
-      Re=frho*norm2(p%vel-fvel)*p%d/fvisc
+      Re=frho*norm2(p%vel-fvel)*p%d/fvisc+epsilon(1.0_WP)
+      ! Stokes correlation
+      !corr=1.0_WP
       ! Schiller Naumann correlation
-      corr=1.0_WP+0.15_WP*Re**(0.687_WP)
+      !corr=1.0_WP+0.15_WP*Re**(0.687_WP)
+      ! Tenneti and Subramaniam (2011)
+      b1=5.81_WP*pVF/fVF**3+0.48_WP*pVF**(1.0_WP/3.0_WP)/fVF**4
+      b2=pVF**3*Re*(0.95_WP+0.61_WP*pVF**3/fVF**2)
+      corr=fVF*(1.0_WP+0.15_WP*Re**(0.687_WP))/fVF**3+b1+b2
       ! Particle response time
       tau=this%rho*p%d**2/(18.0_WP*fvisc*corr)
       ! Return acceleration and optimal timestep size
-      acc=(fvel-p%vel)/tau
+      acc=fVF*(fvel-p%vel)/tau
       opt_dt=tau/real(this%nstep,WP)
    end subroutine get_rhs
 
@@ -515,7 +527,7 @@ contains
          if (this%p(i)%flag.eq.1) cycle
          ! Transfer particle volume
          Vp=Pi/6.0_WP*this%p(i)%d**3
-         call this%cfg%set_scalar(Sp=Vp,pos=this%p(i)%pos,i0=this%p(i)%ind(1),j0=this%p(i)%ind(2),k0=this%p(i)%ind(3),S=this%VF)
+         call this%cfg%set_scalar(Sp=Vp,pos=this%p(i)%pos,i0=this%p(i)%ind(1),j0=this%p(i)%ind(2),k0=this%p(i)%ind(3),S=this%VF,bc='n')
       end do
       this%VF=this%VF/this%cfg%vol
       ! Sum at boundaries

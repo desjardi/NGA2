@@ -27,6 +27,8 @@ module config_class
       procedure :: VF_extend                                   !< Extend VF array into the non-periodic domain overlaps
       procedure :: integrate                                   !< Integrate a variable on config while accounting for VF
       procedure :: set_scalar                                  !< Subroutine that extrapolates a provided scalar value at a point to a pgrid field
+      procedure :: get_velocity                                !< Function that interpolates a provided velocity field staggered on the pgrid to a point
+      procedure :: get_scalar                                  !< Function that interpolates a provided scalar field centered on the pgrid to a point
    end type config
    
    
@@ -185,17 +187,91 @@ contains
       end do
       call MPI_ALLREDUCE(my_int,integral,1,MPI_REAL_WP,MPI_SUM,this%comm,ierr)
    end subroutine integrate
+   
+   
+   !> Subroutine that performs trilinear interpolation of provided scalar field S
+   !> to provided position pos near cell i0,j0,k0, stores it in Sp 
+   function get_scalar(this,pos,i0,j0,k0,S,bc) result(Sp)
+      use messager, only: die
+      implicit none
+      class(config), intent(in) :: this
+      real(WP) :: Sp
+      real(WP), dimension(3), intent(in) :: pos
+      integer, intent(in) :: i0,j0,k0
+      real(WP), dimension(this%imino_:,this%jmino_:,this%kmino_:), intent(inout) :: S     !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      character(len=1), intent(in) :: bc    !< Supports n for Neumann, d for Dirichlet, 0 for zero Dirichlet
+      integer :: i,j,k,ni,nj,nk
+      real(WP) :: wx1,wy1,wz1
+      real(WP) :: wx2,wy2,wz2
+      real(WP), dimension(2,2,2) :: ww
+      ! Find right i index
+      i=max(min(this%imaxo_-1,i0),this%imino_)
+      do while (pos(1)-this%xm(i  ).lt.0.0_WP.and.i  .gt.this%imino_); i=i-1; end do
+      do while (pos(1)-this%xm(i+1).ge.0.0_WP.and.i+1.lt.this%imaxo_); i=i+1; end do
+      ! Find right j index
+      j=max(min(this%jmaxo_-1,j0),this%jmino_)
+      do while (pos(2)-this%ym(j  ).lt.0.0_WP.and.j  .gt.this%jmino_); j=j-1; end do
+      do while (pos(2)-this%ym(j+1).ge.0.0_WP.and.j+1.lt.this%jmaxo_); j=j+1; end do
+      ! Find right k index
+      k=max(min(this%kmaxo_-1,k0),this%kmino_)
+      do while (pos(3)-this%zm(k  ).lt.0.0_WP.and.k  .gt.this%kmino_); k=k-1; end do
+      do while (pos(3)-this%zm(k+1).ge.0.0_WP.and.k+1.lt.this%kmaxo_); k=k+1; end do
+      ! Prepare tri-linear extrapolation coefficients
+      wx1=(pos(1)-this%xm(i))/(this%xm(i+1)-this%xm(i)); wx2=1.0_WP-wx1
+      wy1=(pos(2)-this%ym(j))/(this%ym(j+1)-this%ym(j)); wy2=1.0_WP-wy1
+      wz1=(pos(3)-this%zm(k))/(this%zm(k+1)-this%zm(k)); wz2=1.0_WP-wz1
+      ! Combine into array for easy rescaling
+      ww(1,1,1)=wx2*wy2*wz2
+      ww(2,1,1)=wx1*wy2*wz2
+      ww(1,2,1)=wx2*wy1*wz2
+      ww(2,2,1)=wx1*wy1*wz2
+      ww(1,1,2)=wx2*wy2*wz1
+      ww(2,1,2)=wx1*wy2*wz1
+      ww(1,2,2)=wx2*wy1*wz1
+      ww(2,2,2)=wx1*wy1*wz1
+      ! Apply bc
+      select case (bc)
+      case ('n','N')
+         ! Apply Neumann condition at walls
+         do nk=0,1
+            do nj=0,1
+               do ni=0,1
+                  if (this%VF(i+ni,j+nj,k+nk).eq.0.0_WP) ww(1+ni,1+nj,1+nk)=0.0_WP
+               end do
+            end do
+         end do
+         ww=ww/sum(ww)
+      case ('0')
+         ! Apply zero Dirichlet at walls
+         do nk=0,1
+            do nj=0,1
+               do ni=0,1
+                  if (this%VF(i+ni,j+nj,k+nk).eq.0.0_WP) ww(1+ni,1+nj,1+nk)=0.0_WP
+               end do
+            end do
+         end do
+      case ('d','D')
+         ! Apply Dirichlet at walls
+      case default
+         ! Not recognized
+         call die('[cfg get_scalar] Boundary condition not recognized')
+      end select
+      ! Tri-linear interpolation of S
+      Sp=sum(ww*S(i:i+1,j:j+1,k:k+1))
+   end function get_scalar
 
-
+   
    !> Subroutine that performs trilinear extrapolation of provided value Sp
    !> at provided position pos near cell i0,j0,k0 to provided scalar field S
-   subroutine set_scalar(this,Sp,pos,i0,j0,k0,S)
+   subroutine set_scalar(this,Sp,pos,i0,j0,k0,S,bc)
+      use messager, only: die
       implicit none
       class(config), intent(in) :: this
       real(WP), intent(in) :: Sp
       real(WP), dimension(3), intent(in) :: pos
       integer, intent(in) :: i0,j0,k0
       real(WP), dimension(this%imino_:,this%jmino_:,this%kmino_:), intent(inout) :: S     !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      character(len=1), intent(in) :: bc    !< Supports n for Neumann, d for Dirichlet, 0 for zero Dirichlet
       integer :: i,j,k,ni,nj,nk
       real(WP) :: wx1,wy1,wz1
       real(WP) :: wx2,wy2,wz2
@@ -229,19 +305,133 @@ contains
       ww(2,1,2)=wx1*wy2*wz1
       ww(1,2,2)=wx2*wy1*wz1
       ww(2,2,2)=wx1*wy1*wz1
-      ! Apply Neumann condition at walls
-      do nk=0,1
-         do nj=0,1
-            do ni=0,1
-               if (this%VF(i+ni,j+nj,k+nk).eq.0.0_WP) ww(1+ni,1+nj,1+nk)=0.0_WP
+      ! Apply bc
+      select case (bc)
+      case ('n','N')
+         ! Apply Neumann condition at walls
+         do nk=0,1
+            do nj=0,1
+               do ni=0,1
+                  if (this%VF(i+ni,j+nj,k+nk).eq.0.0_WP) ww(1+ni,1+nj,1+nk)=0.0_WP
+               end do
             end do
          end do
-      end do
-      ww=ww/sum(ww)
+         ww=ww/sum(ww)
+      case ('0')
+         ! Apply zero Dirichlet at walls
+         do nk=0,1
+            do nj=0,1
+               do ni=0,1
+                  if (this%VF(i+ni,j+nj,k+nk).eq.0.0_WP) ww(1+ni,1+nj,1+nk)=0.0_WP
+               end do
+            end do
+         end do
+      case ('d','D')
+         ! Apply Dirichlet at walls
+      case default
+         ! Not recognized
+         call die('[cfg set_scalar] Boundary condition not recognized')
+      end select
       ! Tri-linear extrapolation of Sp onto S
       S(i:i+1,j:j+1,k:k+1)=S(i:i+1,j:j+1,k:k+1)+ww*Sp
    end subroutine set_scalar
    
+   
+   !> Function that performs trilinear interpolation of provided
+   !> velocity U,V,W to provided position pos near cell i0,j0,k0
+   function get_velocity(this,pos,i0,j0,k0,U,V,W) result(vel)
+      implicit none
+      class(config), intent(in) :: this
+      real(WP), dimension(3) :: vel
+      real(WP), dimension(3), intent(in) :: pos
+      integer, intent(in) :: i0,j0,k0
+      real(WP), dimension(this%imino_:,this%jmino_:,this%kmino_:), intent(in) :: U     !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      real(WP), dimension(this%imino_:,this%jmino_:,this%kmino_:), intent(in) :: V     !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      real(WP), dimension(this%imino_:,this%jmino_:,this%kmino_:), intent(in) :: W     !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      integer :: i,j,k
+      real(WP) :: wx1,wy1,wz1
+      real(WP) :: wx2,wy2,wz2
+      ! Interpolate U velocity ------------------------------
+      ! Find right i index
+      i=max(min(this%imaxo_-1,i0),this%imino_)
+      do while (pos(1)-this%x (i  ).lt.0.0_WP.and.i  .gt.this%imino_); i=i-1; end do
+      do while (pos(1)-this%x (i+1).ge.0.0_WP.and.i+1.lt.this%imaxo_); i=i+1; end do
+      ! Find right j index
+      j=max(min(this%jmaxo_-1,j0),this%jmino_)
+      do while (pos(2)-this%ym(j  ).lt.0.0_WP.and.j  .gt.this%jmino_); j=j-1; end do
+      do while (pos(2)-this%ym(j+1).ge.0.0_WP.and.j+1.lt.this%jmaxo_); j=j+1; end do
+      ! Find right k index
+      k=max(min(this%kmaxo_-1,k0),this%kmino_)
+      do while (pos(3)-this%zm(k  ).lt.0.0_WP.and.k  .gt.this%kmino_); k=k-1; end do
+      do while (pos(3)-this%zm(k+1).ge.0.0_WP.and.k+1.lt.this%kmaxo_); k=k+1; end do
+      ! Prepare tri-linear interpolation coefficients
+      wx1=(pos(1)-this%x (i))/(this%x (i+1)-this%x (i)); wx2=1.0_WP-wx1
+      wy1=(pos(2)-this%ym(j))/(this%ym(j+1)-this%ym(j)); wy2=1.0_WP-wy1
+      wz1=(pos(3)-this%zm(k))/(this%zm(k+1)-this%zm(k)); wz2=1.0_WP-wz1
+      ! Tri-linear interpolation of U
+      vel(1)=wz1*(wy1*(wx1*U(i+1,j+1,k+1)  + &
+      &                wx2*U(i  ,j+1,k+1)) + &
+      &           wy2*(wx1*U(i+1,j  ,k+1)  + &
+      &                wx2*U(i  ,j  ,k+1)))+ &
+      &      wz2*(wy1*(wx1*U(i+1,j+1,k  )  + &
+      &                wx2*U(i  ,j+1,k  )) + &
+      &           wy2*(wx1*U(i+1,j  ,k  )  + &
+      &                wx2*U(i  ,j  ,k  )))
+      ! Interpolate V velocity ------------------------------
+      ! Find right i index
+      i=max(min(this%imaxo_-1,i0),this%imino_)
+      do while (pos(1)-this%xm(i  ).lt.0.0_WP.and.i  .gt.this%imino_); i=i-1; end do
+      do while (pos(1)-this%xm(i+1).ge.0.0_WP.and.i+1.lt.this%imaxo_); i=i+1; end do
+      ! Find right j index
+      j=max(min(this%jmaxo_-1,j0),this%jmino_)
+      do while (pos(2)-this%y (j  ).lt.0.0_WP.and.j  .gt.this%jmino_); j=j-1; end do
+      do while (pos(2)-this%y (j+1).ge.0.0_WP.and.j+1.lt.this%jmaxo_); j=j+1; end do
+      ! Find right k index
+      k=max(min(this%kmaxo_-1,k0),this%kmino_)
+      do while (pos(3)-this%zm(k  ).lt.0.0_WP.and.k  .gt.this%kmino_); k=k-1; end do
+      do while (pos(3)-this%zm(k+1).ge.0.0_WP.and.k+1.lt.this%kmaxo_); k=k+1; end do
+      ! Prepare tri-linear interpolation coefficients
+      wx1=(pos(1)-this%xm(i))/(this%xm(i+1)-this%xm(i)); wx2=1.0_WP-wx1
+      wy1=(pos(2)-this%y (j))/(this%y (j+1)-this%y (j)); wy2=1.0_WP-wy1
+      wz1=(pos(3)-this%zm(k))/(this%zm(k+1)-this%zm(k)); wz2=1.0_WP-wz1
+      ! Tri-linear interpolation of V
+      vel(2)=wz1*(wy1*(wx1*V(i+1,j+1,k+1)  + &
+      &                wx2*V(i  ,j+1,k+1)) + &
+      &           wy2*(wx1*V(i+1,j  ,k+1)  + &
+      &                wx2*V(i  ,j  ,k+1)))+ &
+      &      wz2*(wy1*(wx1*V(i+1,j+1,k  )  + &
+      &                wx2*V(i  ,j+1,k  )) + &
+      &           wy2*(wx1*V(i+1,j  ,k  )  + &
+      &                wx2*V(i  ,j  ,k  )))
+      ! Interpolate W velocity ------------------------------
+      ! Find right i index
+      i=max(min(this%imaxo_-1,i0),this%imino_)
+      do while (pos(1)-this%xm(i  ).lt.0.0_WP.and.i  .gt.this%imino_); i=i-1; end do
+      do while (pos(1)-this%xm(i+1).ge.0.0_WP.and.i+1.lt.this%imaxo_); i=i+1; end do
+      ! Find right j index
+      j=max(min(this%jmaxo_-1,j0),this%jmino_)
+      do while (pos(2)-this%ym(j  ).lt.0.0_WP.and.j  .gt.this%jmino_); j=j-1; end do
+      do while (pos(2)-this%ym(j+1).ge.0.0_WP.and.j+1.lt.this%jmaxo_); j=j+1; end do
+      ! Find right k index
+      k=max(min(this%kmaxo_-1,k0),this%kmino_)
+      do while (pos(3)-this%z (k  ).lt.0.0_WP.and.k  .gt.this%kmino_); k=k-1; end do
+      do while (pos(3)-this%z (k+1).ge.0.0_WP.and.k+1.lt.this%kmaxo_); k=k+1; end do
+      ! Prepare tri-linear interpolation coefficients
+      wx1=(pos(1)-this%xm(i))/(this%xm(i+1)-this%xm(i)); wx2=1.0_WP-wx1
+      wy1=(pos(2)-this%ym(j))/(this%ym(j+1)-this%ym(j)); wy2=1.0_WP-wy1
+      wz1=(pos(3)-this%z (k))/(this%z (k+1)-this%z (k)); wz2=1.0_WP-wz1
+      ! Tri-linear interpolation of W
+      vel(3)=wz1*(wy1*(wx1*W(i+1,j+1,k+1)  + &
+      &                wx2*W(i  ,j+1,k+1)) + &
+      &           wy2*(wx1*W(i+1,j  ,k+1)  + &
+      &                wx2*W(i  ,j  ,k+1)))+ &
+      &      wz2*(wy1*(wx1*W(i+1,j+1,k  )  + &
+      &                wx2*W(i  ,j+1,k  )) + &
+      &           wy2*(wx1*W(i+1,j  ,k  )  + &
+      &                wx2*W(i  ,j  ,k  )))
+      return
+   end function get_velocity
+
    
    !> Cheap print of config info to screen
    subroutine config_print(this)
