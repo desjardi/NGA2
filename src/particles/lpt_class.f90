@@ -70,12 +70,14 @@ module lpt_class
       
       ! Solver parameters
       real(WP) :: nstep=1                                 !< Number of substeps (default=1)
-
+      
       ! Collisional parameters
       real(WP) :: Tcol                                    !< Characteristic collision time scale
       real(WP) :: e_n=0.9_WP                              !< Normal restitution coefficient
       real(WP) :: clip_col=0.2_WP                         !< Maximum allowable overlap
-
+      real(WP), dimension(:,:,:),   allocatable :: Wdist  !< Signed wall distance - naive for now (could be redone with FMM)
+      real(WP), dimension(:,:,:,:), allocatable :: Wnorm  !< Wall normal function - naive for now (could be redone with FMM)
+      
       ! Monitoring info
       real(WP) :: VFmin,VFmax,VFmean,VFvar                !< Volume fraction info
       real(WP) :: dmin,dmax,dmean,dvar                    !< Diameter info
@@ -221,7 +223,82 @@ contains
          self%div_z=0.0_WP
          self%grd_z=0.0_WP
       end if
-
+      
+      ! Generate a wall distance/norm function
+      allocate(self%Wdist(  self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_))
+      allocate(self%Wnorm(3,self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_))
+      ! First pass to set correct sign
+      do k=self%cfg%kmino_,self%cfg%kmaxo_
+         do j=self%cfg%jmino_,self%cfg%jmaxo_
+            do i=self%cfg%imino_,self%cfg%imaxo_
+               if (self%cfg%VF(i,j,k).eq.0.0_WP) then
+                  self%Wdist(i,j,k)=-sqrt(self%cfg%xL**2+self%cfg%yL**2+self%cfg%zL**2)
+               else
+                  self%Wdist(i,j,k)=+sqrt(self%cfg%xL**2+self%cfg%yL**2+self%cfg%zL**2)
+               end if
+               self%Wnorm(:,i,j,k)=0.0_WP
+            end do
+         end do
+      end do
+      ! Second pass to compute local distance
+      do k=self%cfg%kmino_,self%cfg%kmaxo_
+         do j=self%cfg%jmino_,self%cfg%jmaxo_
+            do i=self%cfg%imino_+1,self%cfg%imaxo_
+               if (self%Wdist(i,j,k)*self%Wdist(i-1,j,k).lt.0.0_WP) then
+                  ! There is a wall at x(i)
+                  if (abs(self%cfg%xm(i  )-self%cfg%x(i)).lt.abs(self%Wdist(i  ,j,k))) then
+                     self%Wdist(i  ,j,k)=sign(self%cfg%xm(i  )-self%cfg%x(i),self%Wdist(i  ,j,k))
+                     self%Wnorm(:,i  ,j,k)=[self%cfg%VF(i,j,k)-self%cfg%VF(i-1,j,k),0.0_WP,0.0_WP]
+                  end if
+                  if (abs(self%cfg%xm(i-1)-self%cfg%x(i)).lt.abs(self%Wdist(i-1,j,k))) then
+                     self%Wdist(i-1,j,k)=sign(self%cfg%xm(i-1)-self%cfg%x(i),self%Wdist(i-1,j,k))
+                     self%Wnorm(:,i-1,j,k)=[self%cfg%VF(i,j,k)-self%cfg%VF(i-1,j,k),0.0_WP,0.0_WP]
+                  end if
+               end if
+            end do
+         end do
+      end do
+      call self%cfg%sync(self%Wdist)
+      call self%cfg%sync(self%Wnorm)
+      do k=self%cfg%kmino_,self%cfg%kmaxo_
+         do j=self%cfg%jmino_+1,self%cfg%jmaxo_
+            do i=self%cfg%imino_,self%cfg%imaxo_
+               if (self%Wdist(i,j,k)*self%Wdist(i,j-1,k).lt.0.0_WP) then
+                  ! There is a wall at y(j)
+                  if (abs(self%cfg%ym(j  )-self%cfg%y(j)).lt.abs(self%Wdist(i,j  ,k))) then
+                     self%Wdist(i,j  ,k)=sign(self%cfg%ym(j  )-self%cfg%y(j),self%Wdist(i,j  ,k))
+                     self%Wnorm(:,i,j  ,k)=[0.0_WP,self%cfg%VF(i,j,k)-self%cfg%VF(i,j-1,k),0.0_WP]
+                  end if
+                  if (abs(self%cfg%ym(j-1)-self%cfg%y(j)).lt.abs(self%Wdist(i,j-1,k))) then
+                     self%Wdist(i,j-1,k)=sign(self%cfg%ym(j-1)-self%cfg%y(j),self%Wdist(i,j-1,k))
+                     self%Wnorm(:,i,j-1,k)=[0.0_WP,self%cfg%VF(i,j,k)-self%cfg%VF(i,j-1,k),0.0_WP]
+                  end if
+               end if
+            end do
+         end do
+      end do
+      call self%cfg%sync(self%Wdist)
+      call self%cfg%sync(self%Wnorm)
+      do k=self%cfg%kmino_+1,self%cfg%kmaxo_
+         do j=self%cfg%jmino_,self%cfg%jmaxo_
+            do i=self%cfg%imino_,self%cfg%imaxo_
+               if (self%Wdist(i,j,k)*self%Wdist(i,j,k-1).lt.0.0_WP) then
+                  ! There is a wall at z(k)
+                  if (abs(self%cfg%zm(k  )-self%cfg%z(k)).lt.abs(self%Wdist(i,j,k  ))) then
+                     self%Wdist(i,j,k  )=sign(self%cfg%zm(k  )-self%cfg%z(k),self%Wdist(i,j,k  ))
+                     self%Wnorm(:,i,j,k  )=[0.0_WP,0.0_WP,self%cfg%VF(i,j,k)-self%cfg%VF(i,j,k-1)]
+                  end if
+                  if (abs(self%cfg%zm(k-1)-self%cfg%z(k)).lt.abs(self%Wdist(i,j,k-1))) then
+                     self%Wdist(i,j,k-1)=sign(self%cfg%zm(k-1)-self%cfg%z(k),self%Wdist(i,j,k-1))
+                     self%Wnorm(:,i,j,k-1)=[0.0_WP,0.0_WP,self%cfg%VF(i,j,k)-self%cfg%VF(i,j,k-1)]
+                  end if
+               end if
+            end do
+         end do
+      end do
+      call self%cfg%sync(self%Wdist)
+      call self%cfg%sync(self%Wnorm)
+      
       ! Log/screen output
       logging: block
          use, intrinsic :: iso_fortran_env, only: output_unit
@@ -300,7 +377,7 @@ contains
       
       ! Finally, calculate collision force
       collision_force: block
-         use mathtools, only: Pi
+         use mathtools, only: Pi,normalize
          integer :: i1,i2,ii,jj,kk,nn
          real(WP) :: d1,m1,d2,m2,d12,m12
          real(WP), dimension(3) :: r1,v1,r2,v2,v12,n12,f_n
@@ -317,6 +394,24 @@ contains
             v1=this%p(i1)%vel
             d1=this%p(i1)%d
             m1=this%rho*Pi/6.0_WP*d1**3
+            
+            ! First collide with walls
+            d12=this%cfg%get_scalar(pos=this%p(i1)%pos,i0=this%p(i1)%ind(1),j0=this%p(i1)%ind(2),k0=this%p(i1)%ind(3),S=this%Wdist,bc='d')
+            n12=this%Wnorm(:,this%p(i1)%ind(1),this%p(i1)%ind(2),this%p(i1)%ind(3))
+            n12=-normalize(n12+[epsilon(1.0_WP),epsilon(1.0_WP),epsilon(1.0_WP)])
+            rnv=dot_product(v1,n12)
+            r_influ=min(2.0_WP*abs(rnv)*dt,0.2_WP*d1)
+            delta_n=min(0.5_WP*d1+r_influ-d12,this%clip_col*0.5_WP*d1)
+            
+            ! Assess if there is collision
+            if (delta_n.gt.0.0_WP) then
+               ! Normal collision
+               k_n=m1/(this%Tcol**2*pilne2)
+               eta_n=-2.0_WP*lne*sqrt(m1*k_n)/pilne2
+               f_n=-k_n*delta_n*n12-eta_n*rnv*n12
+               ! Calculate collision force
+               this%p(i1)%col=this%p(i1)%col+f_n/m1
+            end if
             
             ! Loop over nearest cells
             do kk=this%p(i1)%ind(3)-1,this%p(i1)%ind(3)+1
@@ -350,8 +445,7 @@ contains
                         v12=v1-v2
                         rnv=dot_product(v12,n12)
                         r_influ=min(abs(rnv)*dt,0.1_WP*(d1+d2))
-                        delta_n=0.5_WP*(d1+d2)+r_influ-d12
-                        delta_n=min(delta_n,this%clip_col*0.5_WP*(d1+d2))
+                        delta_n=min(0.5_WP*(d1+d2)+r_influ-d12,this%clip_col*0.5_WP*(d1+d2))
                         
                         ! Assess if there is collision
                         if (delta_n.gt.0.0_WP) then
@@ -489,6 +583,7 @@ contains
       fvel=this%cfg%get_velocity(pos=p%pos,i0=p%ind(1),j0=p%ind(2),k0=p%ind(3),U=U,V=V,W=W)
       ! Interpolate the fluid phase viscosity to the particle location
       fvisc=this%cfg%get_scalar(pos=p%pos,i0=p%ind(1),j0=p%ind(2),k0=p%ind(3),S=visc,bc='n')
+      fvisc=fvisc+epsilon(1.0_WP)
       ! Interpolate the fluid phase density to the particle location
       frho=this%cfg%get_scalar(pos=p%pos,i0=p%ind(1),j0=p%ind(2),k0=p%ind(3),S=rho,bc='n')
       ! Interpolate the particle volume fraction to the particle location

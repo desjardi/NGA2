@@ -240,7 +240,7 @@ contains
                end do
             end do
          end do
-         ww=ww/sum(ww)
+         ww=ww/(sum(ww)+epsilon(1.0_WP))
       case ('0')
          ! Apply zero Dirichlet at walls
          do nk=0,1
@@ -316,7 +316,7 @@ contains
                end do
             end do
          end do
-         ww=ww/sum(ww)
+         ww=ww/(sum(ww)+epsilon(1.0_WP))
       case ('0')
          ! Apply zero Dirichlet at walls
          do nk=0,1

@@ -66,7 +66,15 @@ contains
       
       ! Create masks for this config
       create_walls: block
+         integer :: i,j,k
          cfg%VF=1.0_WP
+         do k=cfg%kmino_,cfg%kmaxo_
+            do j=cfg%jmino_,cfg%jmaxo_
+               do i=cfg%imino_,cfg%imaxo_
+                  if (abs(cfg%xm(i)).lt.0.1_WP.and.abs(cfg%ym(j)).lt.0.2_WP) cfg%VF(i,j,k)=0.0_WP
+               end do
+            end do
+         end do
       end block create_walls
       
       
