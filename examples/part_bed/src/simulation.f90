@@ -121,8 +121,13 @@ contains
       
       ! Create partmesh object for Lagrangian particle output
       create_pmesh: block
-         pmesh=partmesh(nvar=0,name='lpt')
+         integer :: i
+         pmesh=partmesh(nvar=1,name='lpt')
+         pmesh%varname(1)='radius'
          call lp%update_partmesh(pmesh)
+         do i=1,lp%np_
+            pmesh%var(1,i)=0.5_WP*lp%p(i)%d
+         end do
       end block create_pmesh
       
       
@@ -184,7 +189,13 @@ contains
          
          ! Output to ensight
          if (ens_evt%occurs()) then
-            call lp%update_partmesh(pmesh)
+            update_pmesh: block
+               integer :: i
+               call lp%update_partmesh(pmesh)
+               do i=1,lp%np_
+                  pmesh%var(1,i)=0.5_WP*lp%p(i)%d
+               end do
+            end block update_pmesh
             call ens_out%write_data(time%t)
          end if
          

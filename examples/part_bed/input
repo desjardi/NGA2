@@ -10,7 +10,7 @@ ny :	50
 nz :	1
 
 # Time integration
-Max timestep size :	1e-4
+Max timestep size :	5e-5
 Max cfl number :	   1
 Max time :           10
 
