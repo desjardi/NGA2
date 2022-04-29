@@ -18,7 +18,7 @@ Viscosity : 0.001
 Density :   1
 
 # Particle parameters
-Particle density :  1000
+Particle density :  100
 Particle diameter : 0.005
 
 # Ensight output

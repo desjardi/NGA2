@@ -25,7 +25,7 @@ module simulation
    
    public :: simulation_init,simulation_run,simulation_final
    
-   !> Dluid info
+   !> Fluid info
    real(WP), dimension(:,:,:), allocatable :: U,V,W
    real(WP), dimension(:,:,:), allocatable :: rho,visc
 
