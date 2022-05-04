@@ -48,8 +48,8 @@ module block1_class
    real(WP) :: min_filmthickness      =1.0e-6_WP   !Model parameter
    real(WP) :: diam_over_filmthickness=1.0e+1_WP   !Model parameter
    
-   real(WP) :: max_eccentricity       =5.0e-1_WP   !Saliva specific?
-   real(WP) :: d_threshold            =1.0e-3_WP   !Saliva specific? 
+   real(WP) :: max_eccentricity       =2.0e-1_WP   !Saliva specific?
+   real(WP) :: d_threshold            =1.0e-2_WP   !Saliva specific? 
 
    !> Inflow parameters
    real(WP) :: Uin,delta,Urand,Uco
@@ -277,7 +277,8 @@ contains
          call b%fs%get_bcond('inflow',mybc)
          do n=1,mybc%itr%no_
             i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
-            b%fs%U(i,j,k)=Uin*tanh(2.0_WP*(0.5_WP*W_mouth-abs(b%fs%cfg%zm(k)))/delta)*tanh(2.0_WP*b%fs%cfg%ym(j)/delta)*tanh(2.0_WP*(H_mouth-b%fs%cfg%ym(j))/delta)+random_uniform(-Urand,Urand)
+            !b%fs%U(i,j,k)=Uin*tanh(2.0_WP*(0.5_WP*W_mouth-abs(b%fs%cfg%zm(k)))/delta)*tanh(2.0_WP*b%fs%cfg%ym(j)/delta)*tanh(2.0_WP*(H_mouth-b%fs%cfg%ym(j))/delta)+random_uniform(-Urand,Urand)
+            b%fs%U(i,j,k)=Uin*tanh(2.0_WP*(0.5_WP*W_mouth-abs(b%fs%cfg%zm(k)))/delta)*tanh(2.0_WP*b%fs%cfg%ym(j)/delta)*tanh(2.0_WP*(H_mouth-b%fs%cfg%ym(j))/delta)
          end do
          call param_read('Gas coflow',Uco)
          call b%fs%get_bcond('coflow',mybc)
@@ -437,7 +438,8 @@ contains
          call b%fs%get_bcond('inflow',mybc)
          do n=1,mybc%itr%no_
             i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
-            b%fs%U(i,j,k)=Uin*tanh(2.0_WP*(0.5_WP*W_mouth-abs(b%fs%cfg%zm(k)))/delta)*tanh(2.0_WP*b%fs%cfg%ym(j)/delta)*tanh(2.0_WP*(H_mouth-b%fs%cfg%ym(j))/delta)+random_uniform(-Urand,Urand)
+            !b%fs%U(i,j,k)=Uin*tanh(2.0_WP*(0.5_WP*W_mouth-abs(b%fs%cfg%zm(k)))/delta)*tanh(2.0_WP*b%fs%cfg%ym(j)/delta)*tanh(2.0_WP*(H_mouth-b%fs%cfg%ym(j))/delta)+random_uniform(-Urand,Urand)
+            b%fs%U(i,j,k)=Uin*tanh(2.0_WP*(0.5_WP*W_mouth-abs(b%fs%cfg%zm(k)))/delta)*tanh(2.0_WP*b%fs%cfg%ym(j)/delta)*tanh(2.0_WP*(H_mouth-b%fs%cfg%ym(j))/delta)
          end do
       end block reapply_dirichlet
 
@@ -445,9 +447,9 @@ contains
       call b%fs%get_olddensity(vf=b%vf)
       
       ! VOF solver step
-      if(b%cfg%rank.eq.1) print *, "Pre VOF solver step"
+      !if(b%cfg%rank.eq.1) print *, "Pre VOF solver step"
       call b%vf%advance(dt=b%time%dt,U=b%fs%U,V=b%fs%V,W=b%fs%W)
-      if(b%cfg%rank.eq.1) print *, "Post VOF solver step"
+      !if(b%cfg%rank.eq.1) print *, "Post VOF solver step"
       ! Prepare new staggered viscosity (at n+1)
       call b%fs%get_viscosity(vf=b%vf)
 
