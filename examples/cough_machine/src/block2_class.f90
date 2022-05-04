@@ -163,11 +163,10 @@ contains
          end if
       end block initialize_timetracker
 
-
       ! Create a single-phase flow solver with bconds
       create_solver: block
          use incomp_class,    only: dirichlet,clipped_neumann,neumann
-         use hypre_uns_class, only: pcg_amg
+         use hypre_uns_class, only: pcg_amg,gmres_amg
          ! Create a single-phase flow solver
          b%fs=incomp(cfg=b%cfg,name='Single-phase NS')
          ! Assign constant viscosity to each phase
@@ -182,11 +181,11 @@ contains
          call b%fs%add_bcond(name='outflow',type=clipped_neumann,face='x',dir=+1,canCorrect=.true.,locator=right_boundary)
          ! Prepare and configure pressure solver
          b%ps=hypre_uns(cfg=b%cfg,name='Pressure',method=pcg_amg,nst=7)
-         b%ps%maxlevel=19
+         b%ps%maxlevel=22
          call param_read('Pressure iteration',b%ps%maxit)
          call param_read('Pressure tolerance',b%ps%rcvg)
          ! Prepare and configure implicit solver
-         b%is=hypre_uns(cfg=b%cfg,name='Implicit',method=pcg_amg,nst=7)
+         b%is=hypre_uns(cfg=b%cfg,name='Implicit',method=gmres_amg,nst=7)
          call param_read('Implicit iteration',b%is%maxit)
          call param_read('Implicit tolerance',b%is%rcvg)
          ! Setup the solver
@@ -443,9 +442,9 @@ contains
          end block nudge
 
          ! Form implicit residuals
-         if (b%cfg%rank.eq.1) print *, "B2 - pre solve_implicit, time step: ", b%time%n," iterations: ",b%time%it
+         !if (b%cfg%rank.eq.1) print *, "B2 - pre solve_implicit, time step: ", b%time%n," iterations: ",b%time%it
          call b%fs%solve_implicit(b%time%dt,b%resU,b%resV,b%resW)
-         if (b%cfg%rank.eq.1) print *, "B2 - post solve_implicit, time step: ", b%time%n," iterations: ",b%time%it
+         !if (b%cfg%rank.eq.1) print *, "B2 - post solve_implicit, time step: ", b%time%n," iterations: ",b%time%it
 
          ! Apply these residuals
          b%fs%U=2.0_WP*b%fs%U-b%fs%Uold+b%resU
@@ -460,9 +459,9 @@ contains
          call b%fs%get_div()
          b%ps%rhs=-b%fs%cfg%vol*b%fs%div*b%fs%rho/b%time%dt
          b%ps%sol=0.0_WP
-         if (b%cfg%rank.eq.1) print *, "B2 - pre ps%sol, time step: ", b%time%n," iterations: ",b%time%it
+         !if (b%cfg%rank.eq.1) print *, "B2 - pre ps%sol, time step: ", b%time%n," iterations: ",b%time%it
          call b%ps%solve()
-         if (b%cfg%rank.eq.1) print *, "B2 - post ps%sol, time step: ", b%time%n," iterations: ",b%time%it
+         !if (b%cfg%rank.eq.1) print *, "B2 - post ps%sol, time step: ", b%time%n," iterations: ",b%time%it
 
          ! Correct velocity
          call b%fs%get_pgrad(b%ps%sol,b%resU,b%resV,b%resW)

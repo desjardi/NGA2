@@ -250,7 +250,7 @@ contains
          call param_read('Implicit iteration',b%fs%implicit%maxit)
          call param_read('Implicit tolerance',b%fs%implicit%rcvg)
          ! Setup the solver
-         b%fs%psolv%maxlevel=19
+         b%fs%psolv%maxlevel=24
          call b%fs%setup(pressure_ils=gmres_amg,implicit_ils=gmres_amg)
       end block create_solver
 
@@ -358,7 +358,8 @@ contains
          call b%ens_out%add_vector('velocity',b%Ui,b%Vi,b%Wi)
          call b%ens_out%add_scalar('VOF',b%vf%VF)
          call b%ens_out%add_scalar('curvature',b%vf%curv)
-         !call b%ens_out%add_scalar('visc_t',b%sgs%visc)
+         call b%ens_out%add_scalar('visc_t',b%sgs%visc)
+         call b%ens_out%add_surface('vofplic',b%smesh)
          ! Output to ensight
          if (b%ens_evt%occurs()) call b%ens_out%write_data(b%time%t)
       end block create_ensight
@@ -442,10 +443,11 @@ contains
 
       ! Prepare old staggered density (at n)
       call b%fs%get_olddensity(vf=b%vf)
-
+      
       ! VOF solver step
+      if(b%cfg%rank.eq.1) print *, "Pre VOF solver step"
       call b%vf%advance(dt=b%time%dt,U=b%fs%U,V=b%fs%V,W=b%fs%W)
-
+      if(b%cfg%rank.eq.1) print *, "Post VOF solver step"
       ! Prepare new staggered viscosity (at n+1)
       call b%fs%get_viscosity(vf=b%vf)
 
@@ -493,9 +495,9 @@ contains
          b%resW=-2.0_WP*b%fs%rho_W*b%fs%W+(b%fs%rho_Wold+b%fs%rho_W)*b%fs%Wold+b%time%dt*b%resW
 
          ! Form implicit residuals
-         if (b%cfg%rank.eq.1) print *, "B1 - pre fs%solve_implicit, time step: ", b%time%n," iterations: ",b%time%it
+         !if(b%cfg%rank.eq.1) print *, "B1 - pre solve_implicit, time step: ", b%time%n, " iteration/max iteration: ",b%time%it, "/",b%time%itmax
          call b%fs%solve_implicit(b%time%dt,b%resU,b%resV,b%resW)
-         if (b%cfg%rank.eq.1) print *, "B1 - post fs%solve_implicit, time step: ", b%time%n," iterations: ",b%time%it
+         !if(b%cfg%rank.eq.1) print *, "B1 - post solve_implicit, time step: ", b%time%n, " iteration/max iteration: ",b%time%it, "/",b%time%itmax
          ! Apply these residuals
          b%fs%U=2.0_WP*b%fs%U-b%fs%Uold+b%resU
          b%fs%V=2.0_WP*b%fs%V-b%fs%Vold+b%resV
@@ -511,9 +513,9 @@ contains
          call b%fs%add_surface_tension_jump(dt=b%time%dt,div=b%fs%div,vf=b%vf,contact_model=static_contact)
          b%fs%psolv%rhs=-b%fs%cfg%vol*b%fs%div/b%time%dt
          b%fs%psolv%sol=0.0_WP
-         if (b%cfg%rank.eq.1) print *, "B1 - pre fs%psol, time step: ", b%time%n," iterations: ",b%time%it
+         !if(b%cfg%rank.eq.1) print *, "B1 - pre psolv, time step: ", b%time%n, " iteration/max iteration: ",b%time%it, "/",b%time%itmax
          call b%fs%psolv%solve()
-         if (b%cfg%rank.eq.1) print *, "B1 - post fs%psol, time step: ", b%time%n," iterations: ",b%time%it
+         !if(b%cfg%rank.eq.1) print *, "B1 - post psolv, time step: ", b%time%n, " iteration/max iteration: ",b%time%it, "/",b%time%itmax
          call b%fs%shift_p(b%fs%psolv%sol)
 
          ! Correct velocity

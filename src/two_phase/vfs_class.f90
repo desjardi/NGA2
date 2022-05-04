@@ -38,7 +38,7 @@ module vfs_class
    integer,  parameter :: advect_band=2                           !< How far we do the transport
    integer,  parameter :: distance_band=2                         !< How far we build the distance
    integer,  parameter :: max_interface_planes=2                  !< Maximum number of interfaces allowed (2 for R2P)
-   real(WP), parameter :: VFlo=1.0e-12_WP                         !< Minimum VF value considered
+   real(WP), parameter :: VFlo=1.0e-8_WP                         !< Minimum VF value considered
    real(WP), parameter :: VFhi=1.0_WP-VFlo                        !< Maximum VF value considered
    real(WP), parameter :: volume_epsilon_factor =1.0e-15_WP       !< Minimum volume  to consider for computational geometry (normalized by min_meshsize**3)
    real(WP), parameter :: surface_epsilon_factor=1.0e-15_WP       !< Minimum surface to consider for computational geometry (normalized by min_meshsize**2)
@@ -774,8 +774,9 @@ contains
       call this%update_band()
       
       ! Perform interface reconstruction from transported moments
+      if (this%cfg%rank.eq.1) print *, "Pre build interface"
       call this%build_interface()
-      
+      if (this%cfg%rank.eq.1) print *, "Post build interface"
       ! Remove thin sheets if needed
       call this%remove_sheets()
       
@@ -788,9 +789,7 @@ contains
       ! Calculate subcell phasic volumes
       call this%subcell_vol()
       ! Calculate curvature - Getting stuck here
-      if (this%cfg%rank.eq.1) print *,"b1%vf%advance_pre get_curvature"
       call this%get_curvature()
-      if (this%cfg%rank.eq.1) print *,"b1%vf%advance_post get_curvature"
       ! Reset moments to guarantee compatibility with interface reconstruction
       call this%reset_volume_moments()
       
@@ -2197,9 +2196,7 @@ contains
          end do
       end do
       ! Synchronize boundaries - Getting stuck here
-      if (this%cfg%rank.eq.1) print *,"get_curvature: pre cfg%sync"
       call this%cfg%sync(this%curv)
-      if (this%cfg%rank.eq.1) print *,"get_curvature: post cfg%sync"
    end subroutine get_curvature
    
    

@@ -226,7 +226,7 @@ subroutine stat_1d_lpt_sample(this,dt)
   call MPI_ALLREDUCE(buf,buf_sync,size(buf),MPI_REAL_WP,MPI_SUM,this%comm,ierr)
 
   ! Integrate over dt, particles is handled above
-  this%buf = this%buf + buf_sync*dt
+  !this%buf = this%buf + buf_sync*dt
 
   ! Increment time particles have been avg, 0 if no particles and the number of particles
   do j = 1,this%nr
@@ -258,12 +258,12 @@ subroutine stat_1d_lpt_write(this)
   if (.not.this%amIn) return
 
   ! Get Number flux
-  this%stat(:,:,1) = this%buf(:,:,1) / this%Delta_t
+  !this%stat(:,:,1) = this%buf(:,:,1) / this%Delta_t
 
   ! Normalize rest of stats by time and number of particles
   do j = 1,this%nr
     do i = 1,this%nd
-      if(this%np_r(i,j).gt.0.0_WP) this%stat(i,j,2:) = this%buf(i,j,2:) / this%Deltat_r(i,j) / this%np_r(i,j)
+      if(this%np_r(i,j).gt.0.0_WP) this%stat(i,j,2:) = this%buf(i,j,2:) / this%np_r(i,j)
     end do
   end do
 

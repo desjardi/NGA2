@@ -229,7 +229,6 @@ contains
             integer :: m,n,l,i,j,k,np
             real(WP) :: lmin,lmax,eccentricity,diam
          
-            print *, "Pre_rs-rank: ", b1%cfg%pgrid%rank, "lmin=", lmin," lmax=",lmax, " eccentricity=",eccentricity," diam=",diam
 
             ! Loops over film segments contained locally
             do m=1,b1%cc1%n_meta_struct
@@ -248,14 +247,13 @@ contains
                            b1%vf%VF(i,j,k)=0.0_WP
                         end do
                      end do
-                  else
                      cycle
                end if
                
                ! Test if sphericity is compatible with transfer
                lmin=b1%cc1%meta_structures_list(m)%lengths(3)
                if (lmin.eq.0.0_WP) lmin=b1%cc1%meta_structures_list(m)%lengths(2) ! Handle 2D case
-               lmax=b1%cc1%meta_structures_list(m)%lengths(1)
+               lmax=b1%cc1%meta_structures_list(m)%lengths(1)+epsilon(0.0_WP)
                eccentricity=sqrt(1.0_WP-lmin**2/lmax**2)
                if (eccentricity.gt.max_eccentricity) cycle
 
@@ -294,7 +292,6 @@ contains
 
             end do
 
-            print *, "Pos_rs-rank: ", b1%cfg%pgrid%rank, "lmin=", lmin," lmax=",lmax, " eccentricity=",eccentricity," diam=",diam
 
          end block remove_struct
 
@@ -384,7 +381,6 @@ contains
                end if
             end do
 
-            print *, "Pos_rf-rank: ", b1%cfg%pgrid%rank, "Vt=", Vt," Vl=",Vl, " Hl=",Hl," Vd=",Vd
 
          end block remove_film
 
