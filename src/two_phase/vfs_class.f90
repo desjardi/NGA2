@@ -1408,19 +1408,23 @@ contains
       class(vfs), intent(inout) :: this
       integer(IRL_SignedIndex_t) :: i,j,k
       integer :: ind,ii,jj,kk,icenter
-      type(R2PNeigh_RectCub_type) :: neighborhood
+      type(LVIRANeigh_RectCub_type) :: nh_lvr
+      type(R2PNeigh_RectCub_type)   :: nh_r2p
       type(RectCub_type), dimension(0:26) :: neighborhood_cells
+      real(IRL_double)  , dimension(0:26) :: liquid_volume_fraction
       type(SepVM_type), dimension(0:26) :: separated_volume_moments
       type(VMAN_type) :: volume_moments_and_normal
       real(WP) :: surface_area
       real(IRL_double), dimension(3) :: initial_norm
       real(IRL_double) :: initial_dist
-      
+      logical :: is_wall
+
       ! Get storage for voluem moments and normal
       call new(volume_moments_and_normal)
       
-      ! Give ourselves an R2P neighborhood of 27 cells along with separated volume moments
-      call new(neighborhood)
+      ! Give ourselves an R2P and an LVIRA neighborhood of 27 cells along with separated volume moments
+      call new(nh_r2p)
+      call new(nh_lvr)
       do i=0,26
          call new(neighborhood_cells(i))
          call new(separated_volume_moments(i))
@@ -1441,57 +1445,110 @@ contains
                   cycle
                end if
                
-               ! Prepare R2P neighborhood
-               ind=0
+               ! Check whether a wall is in our neighborhood
+               is_wall=.false.
                do kk=k-1,k+1
                   do jj=j-1,j+1
                      do ii=i-1,i+1
-                        ! Skip true wall cells - bconds can be used here
-                        if (this%mask(ii,jj,kk).eq.1) cycle
-                        ! Add cell to our neighborhood
-                        call addMember(neighborhood,neighborhood_cells(ind),separated_volume_moments(ind))
-                        ! Build the cell
-                        call construct_2pt(neighborhood_cells(ind),[this%cfg%x(ii),this%cfg%y(jj),this%cfg%z(kk)],[this%cfg%x(ii+1),this%cfg%y(jj+1),this%cfg%z(kk+1)])
-                        call construct(separated_volume_moments(ind),[this%VF(ii,jj,kk)*this%cfg%vol(ii,jj,kk),this%Lbary(:,ii,jj,kk),(1.0_WP-this%VF(ii,jj,kk))*this%cfg%vol(ii,jj,kk),this%Gbary(:,ii,jj,kk)])
-                        ! Trap and set stencil center
-                        if (ii.eq.i.and.jj.eq.j.and.kk.eq.k) then
-                           icenter=ind
-                           call setCenterOfStencil(neighborhood,icenter)
-                        end if
-                        ! Increment counter
-                        ind=ind+1
+                        if (this%mask(ii,jj,kk).eq.1) is_wall=.true.
                      end do
                   end do
                end do
-               surface_area=0.0_WP
-               do ind=0,getSize(this%triangle_moments_storage(i,j,k))-1
-                  call getMoments(this%triangle_moments_storage(i,j,k),ind,volume_moments_and_normal)
-                  surface_area=surface_area+getVolume(volume_moments_and_normal)
-               end do
-               call setSurfaceArea(neighborhood,surface_area)
                
-               ! Made it this far, we need a reconstruction - this builds the initial guess
-               if (getSize(this%triangle_moments_storage(i,j,k)).gt.0) then
-                  call reconstructAdvectedNormals(this%triangle_moments_storage(i,j,k),neighborhood,this%twoplane_threshold,this%liquid_gas_interface(i,j,k))
-                  if (getNumberOfPlanes(this%liquid_gas_interface(i,j,k)).eq.1) then
-                     call setNumberOfPlanes(this%liquid_gas_interface(i,j,k),1)
-                     initial_norm=normalize(this%Gbary(:,i,j,k)-this%Lbary(:,i,j,k))
-                     initial_dist=dot_product(initial_norm,[this%cfg%xm(i),this%cfg%ym(j),this%cfg%zm(k)])
-                     call setPlane(this%liquid_gas_interface(i,j,k),0,initial_norm,initial_dist)
-                     call matchVolumeFraction(neighborhood_cells(icenter),this%VF(i,j,k),this%liquid_gas_interface(i,j,k))
-                  end if
+               ! Apply LVIRA if there is a wall, otherwise use R2P
+               if (is_wall) then
+                  
+                  ! Set neighborhood_cells and liquid_volume_fraction to current correct values
+                  ind=0
+                  do kk=k-1,k+1
+                     do jj=j-1,j+1
+                        do ii=i-1,i+1
+                           ! Skip true wall cells - bconds can be used here
+                           if (this%mask(ii,jj,kk).eq.1) cycle
+                           ! Add cell to neighborhood
+                           call addMember(nh_lvr,neighborhood_cells(ind),liquid_volume_fraction(ind))
+                           ! Build the cell
+                           call construct_2pt(neighborhood_cells(ind),[this%cfg%x(ii),this%cfg%y(jj),this%cfg%z(kk)],[this%cfg%x(ii+1),this%cfg%y(jj+1),this%cfg%z(kk+1)])
+                           ! Assign volume fraction
+                           liquid_volume_fraction(ind)=this%VF(ii,jj,kk)
+                           ! Trap and set stencil center
+                           if (ii.eq.i.and.jj.eq.j.and.kk.eq.k) then
+                              icenter=ind
+                              call setCenterOfStencil(nh_lvr,icenter)
+                           end if
+                           ! Increment counter
+                           ind=ind+1
+                        end do
+                     end do
+                  end do
+                  
+                  ! Formulate initial guess
+                  call setNumberOfPlanes(this%liquid_gas_interface(i,j,k),1)
+                  initial_norm=normalize(this%Gbary(:,i,j,k)-this%Lbary(:,i,j,k))
+                  initial_dist=dot_product(initial_norm,[this%cfg%xm(i),this%cfg%ym(j),this%cfg%zm(k)])
+                  call setPlane(this%liquid_gas_interface(i,j,k),0,initial_norm,initial_dist)
+                  call matchVolumeFraction(neighborhood_cells(icenter),this%VF(i,j,k),this%liquid_gas_interface(i,j,k))
+                  
+                  ! Perform the reconstruction
+                  call reconstructLVIRA3D(nh_lvr,this%liquid_gas_interface(i,j,k))
+                  
+                  ! Clean up neighborhood
+                  call emptyNeighborhood(nh_lvr)
+                  
                else
-                  ! No interface was advected in our cell, use MoF
-                  call reconstructMOF3D(neighborhood_cells(icenter),separated_volume_moments(icenter),this%liquid_gas_interface(i,j,k))
-                  ! Surface area not set cause no advected moments, set for current MOF reconstruction
-                  call setSurfaceArea(neighborhood,getSA(neighborhood_cells(icenter),this%liquid_gas_interface(i,j,k)))
+                  
+                  ! Prepare R2P neighborhood
+                  ind=0
+                  do kk=k-1,k+1
+                     do jj=j-1,j+1
+                        do ii=i-1,i+1
+                           ! Skip true wall cells - bconds can be used here
+                           if (this%mask(ii,jj,kk).eq.1) cycle
+                           ! Add cell to our neighborhood
+                           call addMember(nh_r2p,neighborhood_cells(ind),separated_volume_moments(ind))
+                           ! Build the cell
+                           call construct_2pt(neighborhood_cells(ind),[this%cfg%x(ii),this%cfg%y(jj),this%cfg%z(kk)],[this%cfg%x(ii+1),this%cfg%y(jj+1),this%cfg%z(kk+1)])
+                           call construct(separated_volume_moments(ind),[this%VF(ii,jj,kk)*this%cfg%vol(ii,jj,kk),this%Lbary(:,ii,jj,kk),(1.0_WP-this%VF(ii,jj,kk))*this%cfg%vol(ii,jj,kk),this%Gbary(:,ii,jj,kk)])
+                           ! Trap and set stencil center
+                           if (ii.eq.i.and.jj.eq.j.and.kk.eq.k) then
+                              icenter=ind
+                              call setCenterOfStencil(nh_r2p,icenter)
+                           end if
+                           ! Increment counter
+                           ind=ind+1
+                        end do
+                     end do
+                  end do
+                  surface_area=0.0_WP
+                  do ind=0,getSize(this%triangle_moments_storage(i,j,k))-1
+                     call getMoments(this%triangle_moments_storage(i,j,k),ind,volume_moments_and_normal)
+                     surface_area=surface_area+getVolume(volume_moments_and_normal)
+                  end do
+                  call setSurfaceArea(nh_r2p,surface_area)
+                  
+                  ! Made it this far, we need a reconstruction - this builds the initial guess
+                  if (getSize(this%triangle_moments_storage(i,j,k)).gt.0) then
+                     call reconstructAdvectedNormals(this%triangle_moments_storage(i,j,k),nh_r2p,this%twoplane_threshold,this%liquid_gas_interface(i,j,k))
+                     if (getNumberOfPlanes(this%liquid_gas_interface(i,j,k)).eq.1) then
+                        call setNumberOfPlanes(this%liquid_gas_interface(i,j,k),1)
+                        initial_norm=normalize(this%Gbary(:,i,j,k)-this%Lbary(:,i,j,k))
+                        initial_dist=dot_product(initial_norm,[this%cfg%xm(i),this%cfg%ym(j),this%cfg%zm(k)])
+                        call setPlane(this%liquid_gas_interface(i,j,k),0,initial_norm,initial_dist)
+                        call matchVolumeFraction(neighborhood_cells(icenter),this%VF(i,j,k),this%liquid_gas_interface(i,j,k))
+                     end if
+                  else
+                     ! No interface was advected in our cell, use MoF
+                     call reconstructMOF3D(neighborhood_cells(icenter),separated_volume_moments(icenter),this%liquid_gas_interface(i,j,k))
+                     ! Surface area not set cause no advected moments, set for current MOF reconstruction
+                     call setSurfaceArea(nh_r2p,getSA(neighborhood_cells(icenter),this%liquid_gas_interface(i,j,k)))
+                  end if
+                  
+                  ! Perform R2P reconstruction
+                  call reconstructR2P3D(nh_r2p,this%liquid_gas_interface(i,j,k))
+                  
+                  ! Clean up neighborhood
+                  call emptyNeighborhood(nh_r2p)
                end if
-               
-               ! Perform R2P reconstruction
-               call reconstructR2P3D(neighborhood,this%liquid_gas_interface(i,j,k))
-               
-               ! Clean up neighborhood
-               call emptyNeighborhood(neighborhood)
                
             end do
          end do
