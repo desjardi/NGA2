@@ -1,0 +1,36 @@
+# Parallelization
+Partition :	4 1 1
+
+# Mesh definition
+Lx :	0.5
+Ly :	1
+Lz :	0.02
+nx :	25
+ny :	50
+nz :	1
+
+# Time integration
+Max timestep size :	1e-4
+Max cfl number :	   1
+Max time :           10
+
+# Fluid properties
+Dynamic viscosity : 1e-5
+Density :   1
+Gravity :   0 -1 0
+
+# Particle parameters
+Number of particles : 3000
+Particle density :  1000
+Particle diameter : 0.01
+
+# Pressure solver
+Pressure tolerance : 	1e-6
+Pressure iteration : 	100
+
+# Implicit velocity solver
+Implicit tolerance : 	1e-6
+Implicit iteration : 	100
+
+# Ensight output
+Ensight output period : 1e-2
