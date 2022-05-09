@@ -219,7 +219,7 @@ contains
                do i=fs%cfg%imino_,fs%cfg%imaxo_
                   if (fs%cfg%ym(j).le.0.0_WP) then
                      ! Use the liquid profile
-                     fs%U(i,j,k)=erf(fs%cfg%ym(j)/delta_l)
+                     fs%U(i,j,k)=r_vel*erf(fs%cfg%ym(j)/delta_l)
                   else
                      ! Use the gas profile
                      fs%U(i,j,k)=erf(fs%cfg%ym(j))
