@@ -5,9 +5,9 @@ Partition :	4 1 1
 Lx :	      32
 Liquid Ly :	4
 Gas Ly :	   12
-Lz :	      16e-2
-nx :	200
-ny :	100
+Lz :	      1e-1
+nx :	320
+ny :	160
 nz :	1
 
 # Fluid properties and inital profile

@@ -30,24 +30,23 @@ module simulation
    real(WP), dimension(:,:,:), allocatable :: Ui,Vi,Wi
    
    !> Problem definition
-   real(WP) :: Reg,Weg,r_visc,r_rho,r_vel
-   real(WP) :: amp0,delta_l
-   real(WP), dimension(:), allocatable :: wlength
+   real(WP) :: Reg,Weg,r_visc,r_rho,r_vel,delta_l
+   integer :: nwave
+   real(WP), dimension(:), allocatable :: wnumb,wphase,wamp
    
 contains
    
    
    !> Function that defines a level set function for a initial wavy interface
    function levelset_wavy(xyz,t) result(G)
-      use mathtools, only: twoPi
       implicit none
       real(WP), dimension(3),intent(in) :: xyz
       real(WP), intent(in) :: t
       real(WP) :: G
       integer :: n
       G=-xyz(2)
-      do n=1,size(wlength,DIM=1)
-         G=G+amp0*cos(twoPi*xyz(1)/wlength(n))
+      do n=1,nwave
+         G=G+wamp(n)*sin(wnumb(n)*xyz(1)+wphase(n))
       end do
    end function levelset_wavy
    
@@ -125,8 +124,10 @@ contains
       
       ! Initialize our VOF solver and field
       create_and_initialize_vof: block
-         use mms_geom, only: cube_refine_vol
+         use mms_geom,  only: cube_refine_vol
          use vfs_class, only: lvira,VFhi,VFlo
+         use mathtools, only: twoPi
+         use random,    only: random_uniform
          integer :: i,j,k,n,si,sj,sk
          real(WP), dimension(3,8) :: cube_vertex
          real(WP), dimension(3) :: v_cent,a_cent
@@ -134,9 +135,15 @@ contains
          integer, parameter :: amr_ref_lvl=4
          ! Create a VOF solver
          vf=vfs(cfg=cfg,reconstruction_method=lvira,name='VOF')
-         ! Initialize to a wavy interface (should be read from input)
-         amp0=cfg%min_meshsize
-         allocate(wlength(5)); wlength=cfg%xL/[3.0_WP,4.0_WP,5.0_WP,6.0_WP,7.0_WP]
+         ! Prepare initialize interface parameters
+         nwave=6
+         allocate(wnumb(nwave),wphase(nwave),wamp(nwave))
+         wamp=cfg%min_meshsize
+         wnumb=[3.0_WP,4.0_WP,5.0_WP,6.0_WP,7.0_WP,8.0_WP]*twoPi/cfg%xL
+         do n=1,nwave
+            wphase(n)=random_uniform(lo=0.0_WP,hi=twoPi)
+         end do
+         ! Create the wavy interface
          do k=vf%cfg%kmino_,vf%cfg%kmaxo_
             do j=vf%cfg%jmino_,vf%cfg%jmaxo_
                do i=vf%cfg%imino_,vf%cfg%imaxo_
