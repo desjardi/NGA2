@@ -32,7 +32,7 @@ module simulation
    !> Problem definition
    real(WP) :: Reg,Weg,r_visc,r_rho,r_vel,delta_l
    integer :: nwave
-   real(WP), dimension(:), allocatable :: wnumb,wphase,wamp
+   real(WP), dimension(:), allocatable :: wnumb,wshift,wamp
    
 contains
    
@@ -46,7 +46,7 @@ contains
       integer :: n
       G=-xyz(2)
       do n=1,nwave
-         G=G+wamp(n)*sin(wnumb(n)*xyz(1)+wphase(n))
+         G=G+wamp(n)*cos(wnumb(n)*(xyz(1)-wshift(n)))
       end do
    end function levelset_wavy
    
@@ -128,7 +128,9 @@ contains
          use vfs_class, only: lvira,VFhi,VFlo
          use mathtools, only: twoPi
          use random,    only: random_uniform
-         integer :: i,j,k,n,si,sj,sk
+         use parallel,  only: MPI_REAL_WP
+         use mpi_f08
+         integer :: i,j,k,n,si,sj,sk,ierr
          real(WP), dimension(3,8) :: cube_vertex
          real(WP), dimension(3) :: v_cent,a_cent
          real(WP) :: vol,area
@@ -137,12 +139,15 @@ contains
          vf=vfs(cfg=cfg,reconstruction_method=lvira,name='VOF')
          ! Prepare initialize interface parameters
          nwave=6
-         allocate(wnumb(nwave),wphase(nwave),wamp(nwave))
-         wamp=cfg%min_meshsize
+         allocate(wnumb(nwave),wshift(nwave),wamp(nwave))
+         wamp=0.1_WP*cfg%min_meshsize
          wnumb=[3.0_WP,4.0_WP,5.0_WP,6.0_WP,7.0_WP,8.0_WP]*twoPi/cfg%xL
-         do n=1,nwave
-            wphase(n)=random_uniform(lo=0.0_WP,hi=twoPi)
-         end do
+         if (cfg%amRoot) then
+            do n=1,nwave
+               wshift(n)=random_uniform(lo=-0.5_WP*cfg%xL,hi=+0.5_WP*cfg%xL)
+            end do
+         end if
+         call MPI_BCAST(wshift,nwave,MPI_REAL_WP,0,cfg%comm,ierr)
          ! Create the wavy interface
          do k=vf%cfg%kmino_,vf%cfg%kmaxo_
             do j=vf%cfg%jmino_,vf%cfg%jmaxo_

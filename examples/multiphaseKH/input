@@ -5,20 +5,20 @@ Partition :	4 1 1
 Lx :	      32
 Liquid Ly :	4
 Gas Ly :	   12
-Lz :	      1e-1
-nx :	320
-ny :	160
+Lz :	      1.6e-1
+nx :	200 !320
+ny :	100 !160
 nz :	1
 
 # Fluid properties and inital profile
 Gas Reynolds number :  1000
 Gas Weber number :     10
-Viscosity ratio :      1      !< This is mu_l/mu_g
-Density ratio :        10     !< This is rho_l/rho_g
-Velocity ratio :       0.1    !< This is delta_l/delta_g
+Viscosity ratio :      1       !< This is mu_l/mu_g
+Density ratio :        10      !< This is rho_l/rho_g
+Velocity ratio :       0.1     !< This is delta_l/delta_g
 
 # Time integration
-Max timestep size : 5e-2
+Max timestep size : 1e-1
 Max cfl number :    0.9
 
 # Pressure solver

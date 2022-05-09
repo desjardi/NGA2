@@ -30,7 +30,7 @@ module simulation
    
    !> Work arrays and fluid properties
    real(WP), dimension(:,:,:), allocatable :: resU,resV,resW
-   real(WP), dimension(:,:,:), allocatable :: Ui,Vi,Wi
+   real(WP), dimension(:,:,:), allocatable :: Ui,Vi,Wi,dRHOdt
    real(WP) :: visc,rho
 
 contains
@@ -104,41 +104,14 @@ contains
       
       ! Allocate work arrays
       allocate_work_arrays: block
-         allocate(resU(fs%cfg%imino_:fs%cfg%imaxo_,fs%cfg%jmino_:fs%cfg%jmaxo_,fs%cfg%kmino_:fs%cfg%kmaxo_))
-         allocate(resV(fs%cfg%imino_:fs%cfg%imaxo_,fs%cfg%jmino_:fs%cfg%jmaxo_,fs%cfg%kmino_:fs%cfg%kmaxo_))
-         allocate(resW(fs%cfg%imino_:fs%cfg%imaxo_,fs%cfg%jmino_:fs%cfg%jmaxo_,fs%cfg%kmino_:fs%cfg%kmaxo_))
-         allocate(Ui  (fs%cfg%imino_:fs%cfg%imaxo_,fs%cfg%jmino_:fs%cfg%jmaxo_,fs%cfg%kmino_:fs%cfg%kmaxo_))
-         allocate(Vi  (fs%cfg%imino_:fs%cfg%imaxo_,fs%cfg%jmino_:fs%cfg%jmaxo_,fs%cfg%kmino_:fs%cfg%kmaxo_))
-         allocate(Wi  (fs%cfg%imino_:fs%cfg%imaxo_,fs%cfg%jmino_:fs%cfg%jmaxo_,fs%cfg%kmino_:fs%cfg%kmaxo_))
+         allocate(dRHOdt(fs%cfg%imino_:fs%cfg%imaxo_,fs%cfg%jmino_:fs%cfg%jmaxo_,fs%cfg%kmino_:fs%cfg%kmaxo_))
+         allocate(resU  (fs%cfg%imino_:fs%cfg%imaxo_,fs%cfg%jmino_:fs%cfg%jmaxo_,fs%cfg%kmino_:fs%cfg%kmaxo_))
+         allocate(resV  (fs%cfg%imino_:fs%cfg%imaxo_,fs%cfg%jmino_:fs%cfg%jmaxo_,fs%cfg%kmino_:fs%cfg%kmaxo_))
+         allocate(resW  (fs%cfg%imino_:fs%cfg%imaxo_,fs%cfg%jmino_:fs%cfg%jmaxo_,fs%cfg%kmino_:fs%cfg%kmaxo_))
+         allocate(Ui    (fs%cfg%imino_:fs%cfg%imaxo_,fs%cfg%jmino_:fs%cfg%jmaxo_,fs%cfg%kmino_:fs%cfg%kmaxo_))
+         allocate(Vi    (fs%cfg%imino_:fs%cfg%imaxo_,fs%cfg%jmino_:fs%cfg%jmaxo_,fs%cfg%kmino_:fs%cfg%kmaxo_))
+         allocate(Wi    (fs%cfg%imino_:fs%cfg%imaxo_,fs%cfg%jmino_:fs%cfg%jmaxo_,fs%cfg%kmino_:fs%cfg%kmaxo_))
       end block allocate_work_arrays
-      
-      
-      ! Initialize our velocity field
-      initialize_velocity: block
-         use lowmach_class, only: bcond
-         type(bcond), pointer :: mybc
-         integer :: n,i,j,k
-         ! Zero initial field
-         fs%U=0.0_WP; fs%V=0.0_WP; fs%W=0.0_WP
-         ! Set inflow velocity/momentum
-         call fs%get_bcond('inflow',mybc)
-         do n=1,mybc%itr%no_
-            i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
-            fs%rhoV(i,j,k)=1.0_WP
-            fs%V(i,j,k)   =1.0_WP
-         end do
-         ! Set density from particle volume fraction
-         !fs%rho=rho*(1.0_WP-lp%VF) !< BCs?
-         ! Form momentum
-         call fs%rho_multiply
-         ! Apply all other boundary conditions
-         call fs%apply_bcond(time%t,time%dt)
-         call fs%interp_vel(Ui,Vi,Wi)
-         resU=0.0_WP
-         call fs%get_div(drhodt=resU)
-         ! Compute MFR through all boundary conditions
-         call fs%get_mfr()
-      end block initialize_velocity
       
       
       ! Initialize our LPT solver
@@ -207,6 +180,33 @@ contains
          end do
       end block create_pmesh
       
+      
+      ! Initialize our velocity field
+      initialize_velocity: block
+         use lowmach_class, only: bcond
+         type(bcond), pointer :: mybc
+         integer :: n,i,j,k
+         ! Zero initial field
+         fs%U=0.0_WP; fs%V=0.0_WP; fs%W=0.0_WP
+         ! Set inflow velocity/momentum
+         call fs%get_bcond('inflow',mybc)
+         do n=1,mybc%itr%no_
+            i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
+            fs%rhoV(i,j,k)=1.0_WP
+            fs%V(i,j,k)   =1.0_WP
+         end do
+         ! Set density from particle volume fraction
+         fs%rho=rho*(1.0_WP-lp%VF)
+         ! Form momentum
+         call fs%rho_multiply
+         ! Apply all other boundary conditions
+         call fs%apply_bcond(time%t,time%dt)
+         call fs%interp_vel(Ui,Vi,Wi)
+         call fs%get_div(drhodt=dRHOdt)
+         ! Compute MFR through all boundary conditions
+         call fs%get_mfr()
+      end block initialize_velocity
+
       
       ! Add Ensight output
       create_ensight: block
@@ -295,14 +295,16 @@ contains
          fs%Wold=fs%W; fs%rhoWold=fs%rhoW
          
          ! Collide and advance particles
-         call lp%collide(dt=time%dt)
-         call lp%advance(dt=time%dt,U=fs%U,V=fs%V,W=fs%W,rho=fs%rho,visc=fs%visc)
+         call lp%collide(dt=time%dtmid)
+         resU=rho
+         call lp%advance(dt=time%dtmid,U=fs%U,V=fs%V,W=fs%W,rho=resU,visc=fs%visc)
          
+         ! Update density based on particle volume fraction
+         fs%rho=rho*(1.0_WP-lp%VF)
+         dRHOdt=(fs%RHO-fs%RHOold)/time%dtmid
+
          ! Perform sub-iterations
          do while (time%it.le.time%itmax)
-
-            ! Build n+1 density
-            !fs%rho=0.5_WP*(lp%VF+lp%VFold)
             
             ! Build mid-time velocity and momentum
             fs%U=0.5_WP*(fs%U+fs%Uold); fs%rhoU=0.5_WP*(fs%rhoU+fs%rhoUold)
@@ -320,6 +322,20 @@ contains
             resV=time%dtmid*resV-(2.0_WP*fs%rhoV-2.0_WP*fs%rhoVold)
             resW=time%dtmid*resW-(2.0_WP*fs%rhoW-2.0_WP*fs%rhoWold)
             
+            ! Add momentum source term from lpt
+            add_lpt_src: block
+               integer :: i,j,k
+               do k=fs%cfg%kmin_,fs%cfg%kmax_
+                  do j=fs%cfg%jmin_,fs%cfg%jmax_
+                     do i=fs%cfg%imin_,fs%cfg%imax_
+                        resU(i,j,k)=resU(i,j,k)+sum(fs%itpr_x(:,i,j,k)*lp%srcU(i-1:i,j,k))
+                        resV(i,j,k)=resV(i,j,k)+sum(fs%itpr_y(:,i,j,k)*lp%srcV(i,j-1:j,k))
+                        resW(i,j,k)=resW(i,j,k)+sum(fs%itpr_z(:,i,j,k)*lp%srcW(i,j,k-1:k))
+                     end do
+                  end do
+               end do
+            end block add_lpt_src
+
             ! Form implicit residuals
             call fs%solve_implicit(time%dtmid,resU,resV,resW)
             
@@ -333,10 +349,22 @@ contains
             call fs%rho_multiply()
             call fs%apply_bcond(time%tmid,time%dtmid)
             
+            ! Reset Dirichlet BCs
+            dirichlet_velocity: block
+               use lowmach_class, only: bcond
+               type(bcond), pointer :: mybc
+               integer :: n,i,j,k
+               call fs%get_bcond('inflow',mybc)
+               do n=1,mybc%itr%no_
+                  i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
+                  fs%rhoV(i,j,k)=1.0_WP
+                  fs%V(i,j,k)   =1.0_WP
+               end do
+            end block dirichlet_velocity
+            
             ! Solve Poisson equation
             call fs%correct_mfr()
-            resU=0.0_WP
-            call fs%get_div(drhodt=resU)
+            call fs%get_div(drhodt=dRHOdt)
             fs%psolv%rhs=-fs%cfg%vol*fs%div/time%dtmid
             fs%psolv%sol=0.0_WP
             call fs%psolv%solve()
@@ -357,8 +385,7 @@ contains
 
          ! Recompute interpolated velocity and divergence
          call fs%interp_vel(Ui,Vi,Wi)
-         resU=0.0_WP
-         call fs%get_div(drhodt=resU)
+         call fs%get_div(drhodt=dRHOdt)
          
          ! Output to ensight
          if (ens_evt%occurs()) then
@@ -398,7 +425,7 @@ contains
       ! timetracker
       
       ! Deallocate work arrays
-      deallocate(resU,resV,resW,Ui,Vi,Wi)
+      deallocate(resU,resV,resW,Ui,Vi,Wi,dRHOdt)
       
    end subroutine simulation_final
    
