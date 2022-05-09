@@ -50,8 +50,8 @@ module mast_class
       character(len=str_medium) :: name='UNNAMED_MAST'    !< Solver name (default=UNNAMED_MAST)
 
       ! Solver parameters
-      real(WP) :: shs_wt                                  !< Shock sensor weight (higher value --> more sensitive)
-      
+      real(WP) :: shs_wt=4.0_WP                           !< Shock sensor weight (higher value --> more sensitive)
+
       ! Constant fluid properties
       real(WP) :: contact_angle                           !< This is our static contact angle
       real(WP) :: sigma                                   !< This is our constant surface tension coefficient
@@ -3169,7 +3169,7 @@ contains
       
       ! Get largest kinematic viscosity
       !max_nu=max(this%visc_l/this%rho_l,this%visc_g/this%rho_g)
-      
+      max_nu = 0.0 ! for now
       ! Set the CFLs to zero
       my_CFLc_x=0.0_WP; my_CFLc_y=0.0_WP; my_CFLc_z=0.0_WP
       my_CFLv_x=0.0_WP; my_CFLv_y=0.0_WP; my_CFLv_z=0.0_WP
