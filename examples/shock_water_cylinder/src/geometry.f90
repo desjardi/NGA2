@@ -67,8 +67,7 @@ contains
                print*,"MESH ERROR: using uniform spacing in initial stretched x region meets or exceeds the boundary"
                print*,"- prescribed region length x1:",box_x1,"region length with uniform spacing:",rdx*cpl
              end if
-             call die("[geometry] geometric series is impossible. please alter inputs")
-             return
+             call die("[geometry] geometric series is impossible (0). please alter inputs")
            end if
            tol = 1e-10_WP ! tolerance for how close calculated Lx should be to real Lx
            ! initial values for loop to find r
@@ -93,6 +92,14 @@ contains
 
            !! Middle x region: x1 to x2 !!
            nxr = ceiling((box_x2-box_x1)/rdx)
+           if (nx .le. nxr+cpl) then
+             if (amRoot) then
+               print*,"MESH ERROR: insufficient number of points for x direction"
+               print*,"= prescribed total points",nx
+               print*,"= left stretched pts",cpl,"refined pts",nxr,"right stretched pts",nx-nxr-cpl
+             end if
+             call die("[geometry] geometric series is impossible (1). please alter inputs")
+           end if
            do i=2,nxr+1
              x(cpl+i) = x(cpl+i-1)+rdx
            end do
@@ -100,23 +107,13 @@ contains
 
            !! Right x region: x2 to Lx  !!
            np = nx-nxr-cpl
-
            ! check if stretching is possible, given inputs
            if ((box_x2+rdx*np) .ge. Lx) then
              if (amRoot) then
                print*,"MESH ERROR: using uniform spacing in final x stretched region meets or exceeds the boundary"
-               print*,"- prescribed length Lx:",Lx,"length with uniform spacing:",box_x2+rdx*np
+               print*,"= prescribed length Lx:",Lx,"length with uniform spacing:",box_x2+rdx*np
              end if
-             call die("[geometry] geometric series is impossible. please alter inputs")
-             return
-           end if
-           if (np .le. 0) then
-             if (amRoot) then
-               print*,"MESH ERROR: insufficient points for final stretched region in x"
-               print*,"- refined points",nxr,"stretched points",np
-             end if
-             call die("[geometry] geometric series is impossible. please alter inputs")
-             return
+             call die("[geometry] geometric series is impossible (2). please alter inputs")
            end if
            ! Need to make these abort statements
            tol = 1e-10_WP ! tolerance for how close calculated Lx should be to real Lx
@@ -154,6 +151,14 @@ contains
            else
              !! Middle y region: 0 to y1  !!
              nyr = ceiling(box_y1/rdx)
+             if (ny/2 .le. nyr) then
+               if (amRoot) then
+                 print*,"MESH ERROR: insufficient number of points for y direction"
+                 print*,"= prescribed total points",ny
+                 print*,"= refined pts",2*nyr,"right stretched pts",ny-2*nyr
+               end if
+               call die("[geometry] geometric series is impossible (3). please alter inputs")
+             end if
              y(ny/2+1) = 0.0_WP
              do j=2,nyr+1
                y(ny/2+j) = y(ny/2+j-1)+rdx
@@ -166,18 +171,9 @@ contains
              if ((box_y1+rdx*np) .ge. Ly/2) then
                if (amRoot) then
                  print*,"MESH ERROR: using uniform spacing in stretched y regions meets or exceeds the boundaries"
-                 print*,"- prescribed half height Ly/2:",Ly/2,"half height with uniform spacing",box_y1+rdx*np
+                 print*,"= prescribed half height Ly/2:",Ly/2,"half height with uniform spacing",box_y1+rdx*np
                end if
-               call die("[geometry] geometric series is impossible. please alter inputs")
-               return
-             end if
-             if (np .le. Ly/2) then
-               if (amRoot) then
-                 print*,"MESH ERROR: insufficient points for symmetric stretched regions in y"
-                 print*,"- refined points",2*nyr,"stretched points",2*np
-               end if
-               call die("[geometry] geometric series is impossible. please alter inputs")
-               return
+               call die("[geometry] geometric series is impossible (4). please alter inputs")
              end if
              tol = 1e-10_WP ! tolerance for how close calculated Ly should be to real Ly
              ! initial values for loop to find r
