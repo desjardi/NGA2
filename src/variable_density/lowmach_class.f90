@@ -1571,17 +1571,19 @@ contains
    
    
    !> Correct MFR through correctable bconds - acts on rhoU only, U/V/W needs to be adjusted elsewhere
-   subroutine correct_mfr(this)
+   subroutine correct_mfr(this,drhodt)
       use mpi_f08, only: MPI_SUM
       implicit none
       class(lowmach), intent(inout) :: this
-      real(WP) :: mfr_error,mom_correction
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in) :: drhodt      !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      real(WP) :: mfr_error,mom_correction,dMdt
       integer :: i,j,k,n
       type(bcond), pointer :: my_bc
       
       ! Evaluate MFR mismatch and velocity correction
+      call this%cfg%integrate(A=drhodt,integral=dMdt)
       call this%get_mfr()
-      mfr_error=sum(this%mfr)
+      mfr_error=sum(this%mfr)+dMdt
       if (abs(mfr_error).lt.10.0_WP*epsilon(1.0_WP).or.abs(this%correctable_area).lt.10.0_WP*epsilon(1.0_WP)) return
       mom_correction=-mfr_error/(this%correctable_area)
       

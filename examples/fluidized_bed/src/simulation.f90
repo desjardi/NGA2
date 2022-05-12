@@ -31,7 +31,7 @@ module simulation
    !> Work arrays and fluid properties
    real(WP), dimension(:,:,:), allocatable :: resU,resV,resW
    real(WP), dimension(:,:,:), allocatable :: Ui,Vi,Wi,dRHOdt
-   real(WP) :: visc,rho
+   real(WP) :: visc,rho,inlet_velocity
 
 contains
    
@@ -104,13 +104,13 @@ contains
       
       ! Allocate work arrays
       allocate_work_arrays: block
-         allocate(dRHOdt(fs%cfg%imino_:fs%cfg%imaxo_,fs%cfg%jmino_:fs%cfg%jmaxo_,fs%cfg%kmino_:fs%cfg%kmaxo_))
-         allocate(resU  (fs%cfg%imino_:fs%cfg%imaxo_,fs%cfg%jmino_:fs%cfg%jmaxo_,fs%cfg%kmino_:fs%cfg%kmaxo_))
-         allocate(resV  (fs%cfg%imino_:fs%cfg%imaxo_,fs%cfg%jmino_:fs%cfg%jmaxo_,fs%cfg%kmino_:fs%cfg%kmaxo_))
-         allocate(resW  (fs%cfg%imino_:fs%cfg%imaxo_,fs%cfg%jmino_:fs%cfg%jmaxo_,fs%cfg%kmino_:fs%cfg%kmaxo_))
-         allocate(Ui    (fs%cfg%imino_:fs%cfg%imaxo_,fs%cfg%jmino_:fs%cfg%jmaxo_,fs%cfg%kmino_:fs%cfg%kmaxo_))
-         allocate(Vi    (fs%cfg%imino_:fs%cfg%imaxo_,fs%cfg%jmino_:fs%cfg%jmaxo_,fs%cfg%kmino_:fs%cfg%kmaxo_))
-         allocate(Wi    (fs%cfg%imino_:fs%cfg%imaxo_,fs%cfg%jmino_:fs%cfg%jmaxo_,fs%cfg%kmino_:fs%cfg%kmaxo_))
+         allocate(dRHOdt(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+         allocate(resU  (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+         allocate(resV  (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+         allocate(resW  (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+         allocate(Ui    (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+         allocate(Vi    (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+         allocate(Wi    (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
       end block allocate_work_arrays
       
       
@@ -189,11 +189,12 @@ contains
          ! Zero initial field
          fs%U=0.0_WP; fs%V=0.0_WP; fs%W=0.0_WP
          ! Set inflow velocity/momentum
+         call param_read('Inlet velocity',inlet_velocity)
          call fs%get_bcond('inflow',mybc)
          do n=1,mybc%itr%no_
             i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
-            fs%rhoV(i,j,k)=1.0_WP
-            fs%V(i,j,k)   =1.0_WP
+            fs%rhoV(i,j,k)=inlet_velocity
+            fs%V(i,j,k)   =inlet_velocity
          end do
          ! Set density from particle volume fraction
          fs%rho=rho*(1.0_WP-lp%VF)
@@ -211,7 +212,7 @@ contains
       ! Add Ensight output
       create_ensight: block
          ! Create Ensight output from cfg
-         ens_out=ensight(cfg=fs%cfg,name='fluidized_bed')
+         ens_out=ensight(cfg=cfg,name='fluidized_bed')
          ! Create event for Ensight output
          ens_evt=event(time=time,name='Ensight output')
          call param_read('Ensight output period',ens_evt%tper)
@@ -260,6 +261,7 @@ contains
          lptfile=monitor(amroot=lp%cfg%amRoot,name='lpt')
          call lptfile%add_column(time%n,'Timestep number')
          call lptfile%add_column(time%t,'Time')
+         call lptfile%add_column(lp%VFmean,'VFp')
          call lptfile%add_column(lp%np,'Particle number')
          call lptfile%add_column(lp%Umin,'Particle Umin')
          call lptfile%add_column(lp%Umax,'Particle Umax')
@@ -357,13 +359,13 @@ contains
                call fs%get_bcond('inflow',mybc)
                do n=1,mybc%itr%no_
                   i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
-                  fs%rhoV(i,j,k)=1.0_WP
-                  fs%V(i,j,k)   =1.0_WP
+                  fs%rhoV(i,j,k)=inlet_velocity
+                  fs%V(i,j,k)   =inlet_velocity
                end do
             end block dirichlet_velocity
             
             ! Solve Poisson equation
-            call fs%correct_mfr()
+            call fs%correct_mfr(drhodt=dRHOdt)
             call fs%get_div(drhodt=dRHOdt)
             fs%psolv%rhs=-fs%cfg%vol*fs%div/time%dtmid
             fs%psolv%sol=0.0_WP
