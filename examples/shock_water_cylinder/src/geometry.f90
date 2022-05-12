@@ -134,11 +134,18 @@ contains
            do i = nxr+cpl+2,nx+1
              x(i) = x(i-1)+rdx*r**(i-nxr-cpl-1)
            end do
+           ! Assuming everything is spaced correctly, Make boundary points exact
+           x(1) = 0.0_WP
+           x(nx+1) = Lx
 
 
-           ! Check if y is meant to be stretched
-           if (box_y1.eq.0.0_WP) then
-             ! Use uniform spacing for y
+           if (ny.eq.1) then
+             ! Check if y is a single cell
+             y(1) = -0.5 * rdx
+             y(2) = 0.5 * rdx
+             
+           elseif (box_y1.eq.0.0_WP) then
+             ! If y is not meant to be stretched, use uniform spacing for y
              y(ny/2+1) = 0.0_WP
              ! Use inner resolution for all cells
              do j = 2,ny/2+1
@@ -193,6 +200,9 @@ contains
              do j = nyr+2,ny/2+1
                y(ny/2+j) = y(ny/2+j-1)+rdx*r**(j-nyr-1)
              end do
+             ! Assuming everything is spaced correctly, Make boundary points exact
+             y(1) = -Ly/2.0_WP
+             y(ny+1) = Ly/2.0_WP
            end if
 
            !! Mirror y for bottom half: -Ly/2 to 0  !!
@@ -221,13 +231,6 @@ contains
              print*,'    first pt',y(1),'last pt',y(ny/2)
              print*,' '
            end if
-
-           ! Assuming everything is spaced correctly, Make boundary points exact
-           x(1) = 0.0_WP
-           x(nx+1) = Lx
-           y(1) = -Ly/2.0_WP
-           y(ny+1) = Ly/2.0_WP
-           ! This is just to eliminate round-off error, not to 'fix' any wrong calcs
 
          else
            ! Uniform grid
