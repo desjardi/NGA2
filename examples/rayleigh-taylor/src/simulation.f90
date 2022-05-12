@@ -66,8 +66,7 @@ contains
       
       ! Create an incompressible flow solver with bconds
       create_solver: block
-         use ils_class,     only: rbgs,amg,pcg_amg,pcg_parasail,gmres,gmres_pilut,smg,pfmg
-         use lowmach_class, only: dirichlet,convective,neumann,clipped_neumann
+         use ils_class, only: pcg_amg,pfmg
          real(WP) :: visc
          ! Create flow solver
          fs=lowmach(cfg=cfg,name='Variable density low Mach NS')
@@ -323,8 +322,8 @@ contains
             call fs%apply_bcond(time%tmid,time%dtmid)
             
             ! Solve Poisson equation
-            call fs%correct_mfr()
             call sc%get_drhodt(dt=time%dt,drhodt=resSC)
+            call fs%correct_mfr(drhodt=resSC)
             call fs%get_div(drhodt=resSC)
             fs%psolv%rhs=-fs%cfg%vol*fs%div/time%dtmid
             fs%psolv%sol=0.0_WP

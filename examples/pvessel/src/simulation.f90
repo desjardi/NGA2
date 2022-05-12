@@ -1127,7 +1127,8 @@ contains
             end block mom_bcond
             
             ! Solve Poisson equation
-            call fs%correct_mfr()                          !< No outlet so this gets the MFR imbalance
+            resSC=0.0_WP
+            call fs%correct_mfr(drhodt=resSC)              !< No outlet so this gets the MFR imbalance
             fluid_mass=fluid_mass_old-sum(fs%mfr)*time%dt  !< Update mass in system
             call get_rho_table(mass=fluid_mass)            !< Adjust rho and pressure accordingly
             call sc%get_drhodt(dt=time%dt,drhodt=resSC)
