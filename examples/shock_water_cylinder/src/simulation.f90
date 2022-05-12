@@ -118,6 +118,7 @@ contains
          use mast_class, only: clipped_neumann,dirichlet,bc_scope,bcond
          use ils_class,  only: gmres_amg,pcg_bbox
          use mathtools,  only: Pi
+         use parallel,   only: amRoot
          integer :: i,j,k,n
          real(WP), dimension(3) :: xyz
          real(WP) :: gamm_l,Pref_l,gamm_g
@@ -174,10 +175,13 @@ contains
          ! Velocity at which shock moves
          relshockvel = -Grho1*vshock/(Grho0-Grho1)
 
-         print*,'Mach number', Ma
-         print*,'Pre-shock:  Density',Grho0,'Pressure',GP0
-         print*,'Post-shock: Density',Grho1,'Pressure',GP1,'Velocity',vshock
-         print*,'Shock velocity', relshockvel
+         if (amRoot) then
+           print*,"===== Problem Setup Description ====="
+           print*,'Mach number', Ma
+           print*,'Pre-shock:  Density',Grho0,'Pressure',GP0
+           print*,'Post-shock: Density',Grho1,'Pressure',GP1,'Velocity',vshock
+           print*,'Shock velocity', relshockvel
+         end if
 
          ! Initialize gas phase quantities
          do i=fs%cfg%imino_,fs%cfg%imaxo_

@@ -17,6 +17,8 @@ contains
    subroutine geometry_init
       use sgrid_class, only: sgrid
       use param,       only: param_read, param_exists
+      use parallel,    only: amRoot
+      use messager,    only: die
       implicit none
       type(sgrid) :: grid
 
@@ -48,6 +50,7 @@ contains
 
          if (param_exists('Cells per diameter')) then
            ! Stretched grid
+           if (amRoot) print*,"===== Stretched Mesh Description ====="
            call param_read('Cells per diameter',cpd)
            call param_read('Cells per left region',cpl)
            call param_read('Refined region left bdy',box_x1)
@@ -60,9 +63,11 @@ contains
            !! Left x region: 0 to x1    !!
            ! check if stretching is possible, given inputs
            if ((rdx*cpl) .ge. box_x1) then
-             print*,"using uniform spacing in stretched region meets or exceeds the boundary"
-             print*,"x1:",box_x1,"rdx*cpl",rdx*cpl
-             print*,"geometric series is impossible. please alter inputs"
+             if (amRoot) then
+               print*,"MESH ERROR: using uniform spacing in initial stretched x region meets or exceeds the boundary"
+               print*,"- prescribed region length x1:",box_x1,"region length with uniform spacing:",rdx*cpl
+             end if
+             call die("[geometry] geometric series is impossible. please alter inputs")
              return
            end if
            tol = 1e-10_WP ! tolerance for how close calculated Lx should be to real Lx
@@ -78,7 +83,7 @@ contains
              Lcalc = -rdx+rdx*(1.0_WP-r**(real(cpl+1,WP)))/(1.0_WP-r) ! use new r to calc Lx
              err = abs(Lcalc-box_x1) ! find err
            end do
-           print*,'Left x stretching ratio',r
+           if (amRoot) print*,'Left x stretching ratio',r
            x(1) = 0.0_WP
            x(cpl+1) = box_x1
            ! use r to populate x
@@ -95,13 +100,25 @@ contains
 
            !! Right x region: x2 to Lx  !!
            np = nx-nxr-cpl
+
            ! check if stretching is possible, given inputs
            if ((box_x2+rdx*np) .ge. Lx) then
-             print*,"using uniform spacing in stretched region meets or exceeds the boundary"
-             print*,"Lx:",Lx,"x2+rdx*np",box_x2+rdx*np
-             print*,"geometric series is impossible. please alter inputs"
+             if (amRoot) then
+               print*,"MESH ERROR: using uniform spacing in final x stretched region meets or exceeds the boundary"
+               print*,"- prescribed length Lx:",Lx,"length with uniform spacing:",box_x2+rdx*np
+             end if
+             call die("[geometry] geometric series is impossible. please alter inputs")
              return
            end if
+           if (np .le. 0) then
+             if (amRoot) then
+               print*,"MESH ERROR: insufficient points for final stretched region in x"
+               print*,"- refined points",nxr,"stretched points",np
+             end if
+             call die("[geometry] geometric series is impossible. please alter inputs")
+             return
+           end if
+           ! Need to make these abort statements
            tol = 1e-10_WP ! tolerance for how close calculated Lx should be to real Lx
            ! initial values for loop to find r
            err = 1.0_WP
@@ -115,7 +132,7 @@ contains
              Lcalc = box_x2-rdx+rdx*(1.0_WP-r**real(np+1,WP))/(1.0_WP-r) ! use new r to calc Lx
              err = abs(Lcalc-Lx) ! find err
            end do
-           print*,'Right x stretching ratio',r
+           if (amRoot) print*,'Right x stretching ratio',r
            ! use r to populate x
            do i = nxr+cpl+2,nx+1
              x(i) = x(i-1)+rdx*r**(i-nxr-cpl-1)
@@ -132,7 +149,7 @@ contains
              end do
              ! All points are uniform
              nyr = ny/2-1
-             print*,"No stretching in y. Ly:",Ly,"rdx*ny",rdx*ny
+             if (amRoot) print*,"No stretching in y. Ly:",Ly,"rdx*ny",rdx*ny
 
            else
              !! Middle y region: 0 to y1  !!
@@ -147,9 +164,19 @@ contains
              np = ny/2-nyr
              ! check if stretching is possible, given inputs
              if ((box_y1+rdx*np) .ge. Ly/2) then
-               print*,"using uniform spacing in stretched region meets or exceeds the boundary"
-               print*,"Ly/2:",Ly/2,"y1+rdx*np",box_y1+rdx*np
-               print*,"geometric series is impossible. please alter inputs"
+               if (amRoot) then
+                 print*,"MESH ERROR: using uniform spacing in stretched y regions meets or exceeds the boundaries"
+                 print*,"- prescribed half height Ly/2:",Ly/2,"half height with uniform spacing",box_y1+rdx*np
+               end if
+               call die("[geometry] geometric series is impossible. please alter inputs")
+               return
+             end if
+             if (np .le. Ly/2) then
+               if (amRoot) then
+                 print*,"MESH ERROR: insufficient points for symmetric stretched regions in y"
+                 print*,"- refined points",2*nyr,"stretched points",2*np
+               end if
+               call die("[geometry] geometric series is impossible. please alter inputs")
                return
              end if
              tol = 1e-10_WP ! tolerance for how close calculated Ly should be to real Ly
@@ -165,7 +192,7 @@ contains
                Lcalc = box_y1-rdx+rdx*(1.0_WP-r**real(np+1,WP))/(1.0_WP-r) ! use new r to calc Lx
                err = abs(Lcalc-Ly/2.0_WP) ! find err
              end do
-             print*,'Top y stretching ratio',r
+             if (amRoot) print*,'Top y stretching ratio',r
              ! use r to populate y
              do j = nyr+2,ny/2+1
                y(ny/2+j) = y(ny/2+j-1)+rdx*r**(j-nyr-1)
@@ -178,23 +205,26 @@ contains
            end do
 
            ! Print mesh data to check
-           print*,'Left stretched region'
-           print*,'first dx',x(2)-x(1),'last dx',x(cpl+1)-x(cpl)
-           print*,'first pt',x(1),'last point',x(cpl+1),'x1',box_x1
-           print*,'Uniform x region'
-           print*,'dx',x(cpl+2)-x(cpl+1),'rdx',rdx
-           print*,'last pt',x(cpl+nxr+1),'number of pts',nxr
-           print*,'Right stretched region'
-           print*,'first dx',x(cpl+nxr+2)-x(cpl+nxr+1),'last dx',x(nx+1)-x(nx)
-           print*,'last pt',x(nx+1)
-           print*,'Uniform y region'
-           print*,'dy',y(ny/2+2)-y(ny/2+1),'rdx',rdx
-           print*,'first pt',y(ny/2+1),'number of pts',nyr
-           print*,'Top stretched region'
-           print*,'first dy',y(ny/2+nyr+2)-y(ny/2+nyr+1),'last dy',y(ny+1)-y(ny)
-           print*,'first pt',y(ny/2+nyr+1),'last pt',y(ny+1)
-           print*,'Bottom region'
-           print*,'first pt',y(1),'last pt',y(ny/2)
+           if (amRoot) then
+             print*,'Left stretched region'
+             print*,'    first dx',x(2)-x(1),'last dx',x(cpl+1)-x(cpl)
+             print*,'    first pt',x(1),'last point',x(cpl+1),'x1',box_x1
+             print*,'Uniform x region'
+             print*,'    dx',x(cpl+2)-x(cpl+1),'rdx',rdx
+             print*,'    last pt',x(cpl+nxr+1),'number of pts',nxr
+             print*,'Right stretched region'
+             print*,'    first dx',x(cpl+nxr+2)-x(cpl+nxr+1),'last dx',x(nx+1)-x(nx)
+             print*,'    last pt',x(nx+1)
+             print*,'Uniform y region'
+             print*,'    dy',y(ny/2+2)-y(ny/2+1),'rdx',rdx
+             print*,'    first pt',y(ny/2+1),'number of pts',nyr
+             print*,'Top stretched region'
+             print*,'    first dy',y(ny/2+nyr+2)-y(ny/2+nyr+1),'last dy',y(ny+1)-y(ny)
+             print*,'    first pt',y(ny/2+nyr+1),'last pt',y(ny+1)
+             print*,'Bottom region'
+             print*,'    first pt',y(1),'last pt',y(ny/2)
+             print*,' '
+           end if
 
            ! Assuming everything is spaced correctly, Make boundary points exact
            x(1) = 0.0_WP
