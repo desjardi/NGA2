@@ -3128,9 +3128,9 @@ contains
 
               ! Pressure jump components
               this%psolv%rhs(i,j,k) = this%psolv%rhs(i,j,k) - dt**2*&
-                   ( sum(this%divp_x(:,i,j,k)*this%DPjx(i:i+1,j,k)*this%rho_U(i:i+1,j,k)) &
-                   + sum(this%divp_y(:,i,j,k)*this%DPjy(i,j:j+1,k)*this%rho_V(i,j:j+1,k)) &
-                   + sum(this%divp_z(:,i,j,k)*this%DPjz(i,j,k:k+1)*this%rho_W(i,j,k:k+1)) )
+                   ( sum(this%divp_x(:,i,j,k)*this%DPjx(i:i+1,j,k)/this%rho_U(i:i+1,j,k)) &
+                   + sum(this%divp_y(:,i,j,k)*this%DPjy(i,j:j+1,k)/this%rho_V(i,j:j+1,k)) &
+                   + sum(this%divp_z(:,i,j,k)*this%DPjz(i,j,k:k+1)/this%rho_W(i,j,k:k+1)) )
 
            end do
         end do

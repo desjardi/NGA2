@@ -30,7 +30,7 @@ Gas gamma : 		      1.4
 
 # Initial conditions
 Liquid density :              1000
-Surface tension coefficient : 0
+Surface tension coefficient : 0.0757
 
 # Time integration
 Max timestep size : 1e-6
