@@ -50,8 +50,8 @@ module mast_class
       character(len=str_medium) :: name='UNNAMED_MAST'    !< Solver name (default=UNNAMED_MAST)
 
       ! Solver parameters
-      real(WP) :: shs_wt                                  !< Shock sensor weight (higher value --> more sensitive)
-      
+      real(WP) :: shs_wt=4.0_WP                           !< Shock sensor weight (higher value --> more sensitive)
+
       ! Constant fluid properties
       real(WP) :: contact_angle                           !< This is our static contact angle
       real(WP) :: sigma                                   !< This is our constant surface tension coefficient
@@ -2368,7 +2368,7 @@ contains
               ! Update momentum in Z
               this%rhoWi(i,j,k)=this%rhoWi(i,j,k)-dt*((DP_W(i,j,k+1)-DP_W(i,j,k))*this%cfg%dzi(k)-sum(jumpz))
 
-	      ! Update gas total energy
+	            ! Update gas total energy
               this%GrhoE(i,j,k) = this%GrhoE(i,j,k) - dt*( this%Grho(i,j,k)/this%RHO(i,j,k)*&
                    ( sum(this%divp_x(:,i,j,k)*this%U(i:i+1,j,k)*DP_U(i:i+1,j,k)) &
                    + sum(this%divp_y(:,i,j,k)*this%V(i,j:j+1,k)*DP_V(i,j:j+1,k)) &
@@ -3128,9 +3128,9 @@ contains
 
               ! Pressure jump components
               this%psolv%rhs(i,j,k) = this%psolv%rhs(i,j,k) - dt**2*&
-                   ( sum(this%divp_x(:,i,j,k)*this%DPjx(i:i+1,j,k)*this%rho_U(i:i+1,j,k)) &
-                   + sum(this%divp_y(:,i,j,k)*this%DPjy(i,j:j+1,k)*this%rho_V(i,j:j+1,k)) &
-                   + sum(this%divp_z(:,i,j,k)*this%DPjz(i,j,k:k+1)*this%rho_W(i,j,k:k+1)) )
+                   ( sum(this%divp_x(:,i,j,k)*this%DPjx(i:i+1,j,k)/this%rho_U(i:i+1,j,k)) &
+                   + sum(this%divp_y(:,i,j,k)*this%DPjy(i,j:j+1,k)/this%rho_V(i,j:j+1,k)) &
+                   + sum(this%divp_z(:,i,j,k)*this%DPjz(i,j,k:k+1)/this%rho_W(i,j,k:k+1)) )
 
            end do
         end do
@@ -3169,7 +3169,7 @@ contains
       
       ! Get largest kinematic viscosity
       !max_nu=max(this%visc_l/this%rho_l,this%visc_g/this%rho_g)
-      
+      max_nu = 0.0 ! for now
       ! Set the CFLs to zero
       my_CFLc_x=0.0_WP; my_CFLc_y=0.0_WP; my_CFLc_z=0.0_WP
       my_CFLv_x=0.0_WP; my_CFLv_y=0.0_WP; my_CFLv_z=0.0_WP
