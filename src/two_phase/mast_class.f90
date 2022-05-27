@@ -2368,7 +2368,7 @@ contains
               ! Update momentum in Z
               this%rhoWi(i,j,k)=this%rhoWi(i,j,k)-dt*((DP_W(i,j,k+1)-DP_W(i,j,k))*this%cfg%dzi(k)-sum(jumpz))
 
-	      ! Update gas total energy
+	            ! Update gas total energy
               this%GrhoE(i,j,k) = this%GrhoE(i,j,k) - dt*( this%Grho(i,j,k)/this%RHO(i,j,k)*&
                    ( sum(this%divp_x(:,i,j,k)*this%U(i:i+1,j,k)*DP_U(i:i+1,j,k)) &
                    + sum(this%divp_y(:,i,j,k)*this%V(i,j:j+1,k)*DP_V(i,j:j+1,k)) &

@@ -1,16 +1,16 @@
 # Parallelization
-Partition :	1 1 1
+Partition :	4 1 1
 
 # Mesh definition
 Lx :	0.0576
 nx :	128
 Ly :	0.0576
 ny :	128
-Cells per diameter :	  16
-Cells per left region:	  8
+#Cells per diameter :	  16
+Cells per left region:	  16
 Refined region left bdy:  0.02
 Refined region right bdy: 0.04
-Refined region top bdy:	  0.01
+#Refined region top bdy:	  0.01
 
 
 # Flow setup
