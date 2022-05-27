@@ -76,7 +76,7 @@ contains
          call param_read('Max timestep size',time%dtmax)
          call param_read('Max cfl number',time%cflmax)
          call param_read('Max time',time%tmax)
-         !call param_read('Max steps',time%nmax)
+         call param_read('Max steps',time%nmax)
          time%dt=time%dtmax
          time%itmax=2
       end block initialize_timetracker
@@ -144,7 +144,7 @@ contains
       ! Create a compressible two-phase flow solver
       create_and_initialize_flow_solver: block
          use mast_class, only: clipped_neumann,dirichlet,bc_scope,bcond
-         use ils_class,  only: gmres_amg,pcg_bbox
+         use ils_class,  only: pcg_bbox,pcg_amg
          use mathtools,  only: Pi
          use parallel,   only: amRoot
          integer :: i,j,k,n
@@ -179,7 +179,7 @@ contains
          call param_read('Implicit iteration',fs%implicit%maxit)
          call param_read('Implicit tolerance',fs%implicit%rcvg)
          ! Setup the solver
-         call fs%setup(pressure_ils=pcg_bbox,implicit_ils=gmres_amg)
+         call fs%setup(pressure_ils=pcg_bbox,implicit_ils=pcg_amg)
 
          ! Liquid density
          call param_read('Liquid density',Lrho0)

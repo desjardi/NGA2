@@ -6,11 +6,11 @@ Lx :	0.0576
 nx :	128
 Ly :	0.0576
 ny :	128
-#Cells per diameter :	  16
+Cells per diameter :	  16
 Cells per left region:	  16
 Refined region left bdy:  0.02
 Refined region right bdy: 0.04
-#Refined region top bdy:	  0.01
+Refined region top bdy:	  0.01
 
 
 # Flow setup
@@ -35,7 +35,8 @@ Surface tension coefficient : 0
 # Time integration
 Max timestep size : 1e-6
 Max cfl number :    0.9
-Max time :          2.9e-3
+Max time :     	    5e-5
+# To look at breakup, use tmax = 2.9e-3
 Max steps :	    100000
 
 # Pressure solver
@@ -47,4 +48,4 @@ Implicit tolerance : 1e-6
 Implicit iteration : 100
 
 # Ensight output
-Ensight output period : 5e-4
+Ensight output period : 1e-6
