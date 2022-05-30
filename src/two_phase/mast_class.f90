@@ -1382,11 +1382,11 @@ contains
                     this%Grho (i,j,k)   = this%F_Grho (i,j,k)/((1.0_WP-vf%VF(i,j,k))*this%cfg%vol(i,j,k))
                     this%Lrho (i,j,k)   = this%F_Lrho (i,j,k)/(        vf%VF(i,j,k) *this%cfg%vol(i,j,k))
                     ! Calculate barycenters from source
-                    vf%Gbary(:,i,j,k) = this%F_Gbary(:,i,j,k)/((1.0_WP-vf%VF(i,j,k))*this%cfg%vol(i,j,k))
-                    vf%Lbary(:,i,j,k) = this%F_Lbary(:,i,j,k)/(        vf%VF(i,j,k) *this%cfg%vol(i,j,k))
+                    vf%Gbary(:,i,j,k) = this%F_Gbary(:,i,j,k)/(this%F_VOL(i,j,k)-this%F_VF(i,j,k))
+                    vf%Lbary(:,i,j,k) = this%F_Lbary(:,i,j,k)/(                  this%F_VF(i,j,k))
                     ! Project forward in time
-                    vf%Lbary(:,i,j,k)=vf%project(vf%Lbary(:,i,j,k),i,j,k,dt,this%U,this%V,this%W)
                     vf%Gbary(:,i,j,k)=vf%project(vf%Gbary(:,i,j,k),i,j,k,dt,this%U,this%V,this%W)
+                    vf%Lbary(:,i,j,k)=vf%project(vf%Lbary(:,i,j,k),i,j,k,dt,this%U,this%V,this%W)
                     
                  end if
               end if
