@@ -130,6 +130,7 @@ module mast_class
       real(WP), dimension(:,:,:), allocatable :: F_GrhoE,F_LrhoE         !< Energy fluxes
       real(WP), dimension(:,:,:), allocatable :: F_GP,   F_LP            !< Pressure fluxes
       real(WP), dimension(:,:,:), allocatable :: F_VOL,  F_VF            !< Volume fluxes
+      real(WP), dimension(:,:,:,:), allocatable :: F_Gbary, F_Lbary      !< Barycenter fluxes
 
       ! Density flux arrays
       real(WP), dimension(:,:,:,:), allocatable :: GrhoFf                !< Gas density flux (used for SC advection)
@@ -321,6 +322,10 @@ contains
       allocate(self%F_LrhoE(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%F_LrhoE=0.0_WP
       allocate(self%F_GP   (self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%F_GP   =0.0_WP
       allocate(self%F_LP   (self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%F_LP   =0.0_WP
+
+      ! Flux sum arrays for barycenters
+      allocate(self%F_Gbary(3,self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%F_Gbary=0.0_WP
+      allocate(self%F_Lbary(3,self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%F_Lbary=0.0_WP
 
       ! Density flux arrays
       allocate(self%GrhoFf (self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_,3)); self%GrhoFf =0.0_WP
@@ -791,7 +796,7 @@ contains
                         end do
                      case ('y')
                         do ii = 0,abs(2*my_bc%dir)
-                           this%sl_face(i,j+ii*my_bc%dir,k,2) = 1
+                           this%sl_face(i,j-ii*my_bc%dir,k,2) = 1
                         end do
                      case ('z')
                         do ii = 0,abs(2*my_bc%dir)
@@ -1219,6 +1224,7 @@ contains
      class(matm), intent(inout) :: matmod !< The material models for this solver
      real(WP),    intent(inout) :: dt     !< Timestep size over which to advance
      real(WP),   dimension(14)  :: flux   !< Passes flux to and from routines
+     real(WP),  dimension(3,2)  :: b_flux !< Passes barycenter fluxes
      real(WP), dimension(:,:,:), pointer :: PgradX,PgradY,PgradZ
      type(CapDod_type) :: fp              !< Object for flux polyhedron
      type(TagAccVM_SepVM_type) :: ffm     !< Object for flux moments
@@ -1242,6 +1248,13 @@ contains
      this%F_LrhoV=this%Lrhoold*this%Viold*((       vf%VFold)*this%cfg%vol)
      this%F_LrhoW=this%Lrhoold*this%Wiold*((       vf%VFold)*this%cfg%vol)
      this%F_LP   =this%LPold   *((       vf%VFold)*this%cfg%vol)
+     
+     this%F_Gbary(1,:,:,:)=  vf%Gbaryold(1,:,:,:)*((1.0_WP-vf%VFold)*this%cfg%vol)
+     this%F_Gbary(2,:,:,:)=  vf%Gbaryold(2,:,:,:)*((1.0_WP-vf%VFold)*this%cfg%vol)
+     this%F_Gbary(3,:,:,:)=  vf%Gbaryold(3,:,:,:)*((1.0_WP-vf%VFold)*this%cfg%vol)
+     this%F_Lbary(1,:,:,:)=  vf%Lbaryold(1,:,:,:)*         vf%VFold *this%cfg%vol
+     this%F_Lbary(2,:,:,:)=  vf%Lbaryold(2,:,:,:)*         vf%VFold *this%cfg%vol
+     this%F_Lbary(3,:,:,:)=  vf%Lbaryold(3,:,:,:)*         vf%VFold *this%cfg%vol
 
      ! Allocate flux_polyhedron that will be used for fluxes
      call new(fp)
@@ -1251,7 +1264,11 @@ contains
      ! Designate the use of temporary arrays for pressure gradients
      PgradX => this%tmp1; PgradY => this%tmp2; PgradZ =>this%tmp3
      PgradX = 0.0_WP;     PgradY = 0.0_WP;     PgradZ = 0.0_WP
-
+     
+     ! New barycenters are old by default, will be changed if necessary
+     ! (necessary for any iteration beyond the first)
+     vf%Gbary = vf%Gbaryold
+     vf%Lbary = vf%Lbaryold
 
      !! ---------------------------------------!!
      !! 1. SL and TTSL flux calculations       !!
@@ -1262,24 +1279,24 @@ contains
               
               !! ---- LEFT X(I) FACE ---- !!
               select case(this%sl_face(i,j,k,1))
-              case(1); call SL_advect  (flux,fp,ffm                                        ,i,j,k,'x')
-              case(0); call TTSL_advect(flux,[this%cfg%x (i),this%cfg%ym(j),this%cfg%zm(k)],i,j,k,'x')
+              case(1); call SL_advect  (flux,b_flux,fp,ffm                                        ,i,j,k,'x')
+              case(0); call TTSL_advect(flux,b_flux,[this%cfg%x (i),this%cfg%ym(j),this%cfg%zm(k)],i,j,k,'x')
               end select
-              call add_fluxes(flux,i,j,k,'x')
+              call add_fluxes(flux,b_flux,i,j,k,'x')
 
               !! ---- BOTTOM Y(J) FACE ---- !!
               select case(this%sl_face(i,j,k,2))
-              case(1); call SL_advect  (flux,fp,ffm                                        ,i,j,k,'y')
-              case(0); call TTSL_advect(flux,[this%cfg%xm(i),this%cfg%y (j),this%cfg%zm(k)],i,j,k,'y')
+              case(1); call SL_advect  (flux,b_flux,fp,ffm                                        ,i,j,k,'y')
+              case(0); call TTSL_advect(flux,b_flux,[this%cfg%xm(i),this%cfg%y (j),this%cfg%zm(k)],i,j,k,'y')
               end select
-              call add_fluxes(flux,i,j,k,'y')
+              call add_fluxes(flux,b_flux,i,j,k,'y')
 
               !! ---- BACK Z(K) FACE ---- !!
               select case(this%sl_face(i,j,k,3))
-              case(1); call SL_advect  (flux,fp,ffm                                        ,i,j,k,'z')
-              case(0); call TTSL_advect(flux,[this%cfg%xm(i),this%cfg%ym(j),this%cfg%z (k)],i,j,k,'z')
+              case(1); call SL_advect  (flux,b_flux,fp,ffm                                        ,i,j,k,'z')
+              case(0); call TTSL_advect(flux,b_flux,[this%cfg%xm(i),this%cfg%ym(j),this%cfg%z (k)],i,j,k,'z')
               end select
-              call add_fluxes(flux,i,j,k,'z')
+              call add_fluxes(flux,b_flux,i,j,k,'z')
 
            end do
         end do
@@ -1364,6 +1381,13 @@ contains
                     ! Calculate density, incorporating volume change
                     this%Grho (i,j,k)   = this%F_Grho (i,j,k)/((1.0_WP-vf%VF(i,j,k))*this%cfg%vol(i,j,k))
                     this%Lrho (i,j,k)   = this%F_Lrho (i,j,k)/(        vf%VF(i,j,k) *this%cfg%vol(i,j,k))
+                    ! Calculate barycenters from source
+                    vf%Gbary(:,i,j,k) = this%F_Gbary(:,i,j,k)/((1.0_WP-vf%VF(i,j,k))*this%cfg%vol(i,j,k))
+                    vf%Lbary(:,i,j,k) = this%F_Lbary(:,i,j,k)/(        vf%VF(i,j,k) *this%cfg%vol(i,j,k))
+                    ! Project forward in time
+                    vf%Lbary(:,i,j,k)=vf%project(vf%Lbary(:,i,j,k),i,j,k,dt,this%U,this%V,this%W)
+                    vf%Gbary(:,i,j,k)=vf%project(vf%Gbary(:,i,j,k),i,j,k,dt,this%U,this%V,this%W)
+                    
                  end if
               end if
 
@@ -1624,10 +1648,11 @@ contains
      ! ================================================================= !
      ! Construct flux hexahedron, perform cutting, call flux calculation !
      ! ================================================================= !
-     subroutine SL_advect(flux,a_flux_polyhedron,some_face_flux_moments,i,j,k,dir)
+     subroutine SL_advect(flux,b_flux,a_flux_polyhedron,some_face_flux_moments,i,j,k,dir)
        character(len=1) :: dir
        integer :: i,j,k,idir
-       real(WP), dimension(14) :: flux
+       real(WP), dimension(14)  :: flux
+       real(WP), dimension(3,2) :: b_flux
 
        type(CapDod_type) :: a_flux_polyhedron
        type(TagAccVM_SepVM_type) :: some_face_flux_moments
@@ -1645,7 +1670,7 @@ contains
        call vf%fluxpoly_project_getmoments(i,j,k,dt,dir,this%U,this%V,this%W,&
             a_flux_polyhedron,vf%localized_separator_linkold(i,j,k),some_face_flux_moments)
        ! Calculate fluxes from volume moments
-       call SL_getFaceFlux(some_face_flux_moments, flux)
+       call SL_getFaceFlux(some_face_flux_moments, flux, b_flux)
        ! Store face density terms
        this%GrhoFf(i,j,k,idir) = flux(3)
        this%LrhoFf(i,j,k,idir) = flux(8)
@@ -1656,7 +1681,7 @@ contains
      ! ====================================================== !
      ! Given a flux hexahedron, calculate and return the flux !
      ! ====================================================== !
-     subroutine SL_getFaceFlux(f_moments, flux)
+     subroutine SL_getFaceFlux(f_moments, flux, b_flux)
        use irl_fortran_interface, only: getSize
        integer  :: ii,jj,kk,n
        integer  :: list_size,uniq_id
@@ -1664,12 +1689,14 @@ contains
        real(WP) :: my_Gvol,my_Lvol
        real(WP), dimension(3) :: my_Gbary,my_Lbary
        real(WP), dimension(14)  :: flux
+       real(WP), dimension(3,2) :: b_flux
        type(TagAccVM_SepVM_type) :: f_moments
        logical  :: skip_flag
 
        !..... Using geometry, calculate fluxes .....!
        ! Initialize at zero
        flux = 0.0_WP
+       b_flux = 0.0_WP
        ! Get number of tags (elements) in the f_moments
        list_size = getSize(f_moments)
        ! Loop through tags in the list
@@ -1682,8 +1709,8 @@ contains
           if (skip_flag) cycle
 
           ! Store barycenter fluxes
-          !b_flux(:,1) = b_flux(:,1) + my_Gvol*my_Gbary
-          !b_flux(:,2) = b_flux(:,2) + my_Lvol*my_Lbary
+          b_flux(:,1) = b_flux(:,1) + my_Gvol*my_Gbary
+          b_flux(:,2) = b_flux(:,2) + my_Lvol*my_Lbary
 
           ! Bound barycenters by the cell dimensions
           my_Lbary(1) = max(this%cfg%x(ii),min(this%cfg%x(ii+1),my_Lbary(1)))
@@ -1724,25 +1751,27 @@ contains
      ! ===================================================== !
      ! Project the center of the face, call flux calculation !
      ! ===================================================== !
-     subroutine TTSL_advect(flux,pt_f,i,j,k,dir)
+     subroutine TTSL_advect(flux,b_flux,pt_f,i,j,k,dir)
        implicit none
-       real(WP), dimension(3) :: pt_f,pt_p
-       real(WP), dimension(14):: flux
-       integer,  dimension(3) :: ind_p
+       real(WP), dimension(3)   :: pt_f,pt_p
+       real(WP), dimension(14)  :: flux
+       real(WP), dimension(3,2) :: b_flux
+       integer,  dimension(3)   :: ind_p
        real(WP) :: vol_f,vol_check
        character(len=1) :: dir
        integer :: n,i,j,k,idir
 
        ! Trajectory-Tracing Semi-Lagrangian scheme
 
-       ! Initialize flux at 0
+       ! Initialize fluxes at 0
        flux = 0.0_WP
+       b_flux = 0.0_WP
 
        ! Get projected point
        pt_p = vf%project(pt_f,i,j,k,-dt,this%U,this%V,this%W)
 
        ! Get approximate barycenter of flux volume, assign to one phase
-       ! b_flux(:,ceiling(oldVOF(i,j,k))+1) = 0.5_WP*(pt_p+pt_f)
+       b_flux(:,ceiling(vf%VFold(i,j,k))+1) = 0.5_WP*(pt_p+pt_f)
 
        select case (trim(dir))
        case('x')
@@ -1765,8 +1794,8 @@ contains
           vol_check = abs(dt*this%W(i,j,k)*this%cfg%dzi(k))
        end select
        
-       ! Calculate barycenter fluxes
-       !b_flux = b_flux*vol_f
+       ! Calculate barycenter fluxes by multiplying integration volume
+       b_flux = b_flux*vol_f
        
        ! Calculate fluxes (if there is any flux to calculate)
        if (vol_check.gt.epsilon(1.0_WP)) then
@@ -1935,9 +1964,10 @@ contains
        end if
      end function VF_src_quad
 
-     subroutine add_fluxes(flux,i,j,k,dir)
+     subroutine add_fluxes(flux,b_flux,i,j,k,dir)
        implicit none
-       real(WP), dimension(14) :: flux
+       real(WP), dimension(14)  :: flux
+       real(WP), dimension(3,2) :: b_flux
        character(len=1) :: dir
        integer :: i,j,k,st_i,st_j,st_k
 
@@ -1949,6 +1979,12 @@ contains
        case('z')
           st_i = 0; st_j = 0; st_k =-1
        end select
+       
+       ! Barycenter fluxes
+       this%F_Gbary(:,i,j,k)=this%F_Gbary(:,i,j,k) +b_flux(:,1)
+       this%F_Lbary(:,i,j,k)=this%F_Lbary(:,i,j,k) +b_flux(:,2)
+       this%F_Gbary(:,i+st_i,j+st_j,k+st_k)=this%F_Gbary(:,i+st_i,j+st_j,k+st_k) -b_flux(:,1)
+       this%F_Lbary(:,i+st_i,j+st_j,k+st_k)=this%F_Lbary(:,i+st_i,j+st_j,k+st_k) -b_flux(:,2)
 
        ! Store update for right cell from face
        this%F_VOL  (i,j,k)=this%F_VOL  (i,j,k) +flux( 1)
