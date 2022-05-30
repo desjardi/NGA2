@@ -1265,7 +1265,7 @@ contains
      PgradX => this%tmp1; PgradY => this%tmp2; PgradZ =>this%tmp3
      PgradX = 0.0_WP;     PgradY = 0.0_WP;     PgradZ = 0.0_WP
      
-     ! New barycenters are old by default, will be changed if necessary
+     ! New barycenters are old by default, will be changed in multiphase cells
      ! (necessary for any iteration beyond the first)
      vf%Gbary = vf%Gbaryold
      vf%Lbary = vf%Lbaryold
