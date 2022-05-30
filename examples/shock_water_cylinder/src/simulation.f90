@@ -186,6 +186,8 @@ contains
          fs%Lrho = Lrho0
          ! Initially 0 velocity in y and z
          fs%Vi = 0.0_WP; fs%Wi = 0.0_WP
+         ! Zero face velocities as well for the sake of dirichlet boundaries
+         fs%V = 0.0_WP; fs%W = 0.0_WP
          ! Set up initial thermo properties (0)
          ! Default is from Meng & Colonius (2015),
          ! which is basically the same as Igra & Takayama and Terashima & Tryggvason
