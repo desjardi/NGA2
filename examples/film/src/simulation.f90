@@ -208,16 +208,7 @@ contains
          ! Reset moments to guarantee compatibility with interface reconstruction
          call vf%reset_volume_moments()
       end block create_and_initialize_vof
-      
-      
-      ! Create a connected-component labeling object
-      create_and_initialize_ccl: block
-         use vfs_class, only: VFlo
-         cc=ccl(cfg=cfg,name='CCL')
-         cc%max_interface_planes=1
-         cc%VFlo=VFlo
-      end block create_and_initialize_ccl
-      
+
       
       ! Create a two-phase flow solver without bconds
       create_and_initialize_flow_solver: block
@@ -261,16 +252,29 @@ contains
       end block create_ensight
       
       
-      ! Create a monitor file
-      create_monitor: block
+      ! Prepare drop post-processing
+      postprocess_drop: block
+         use vfs_class, only: VFlo
+         ! Creat CCL object
+         cc=ccl(cfg=cfg,name='CCL')
+         cc%max_interface_planes=1
+         cc%VFlo=VFlo
          ! Create event for drop size output
          drop_evt=event(time=time,name='Drop output')
          call param_read('Drop output period',drop_evt%tper)
+         ! Prepare directory for drop size output
+         if (vf%cfg%amRoot) call execute_command_line('mkdir -p drops')
+         ! Perform first analysis
+         call analyze_drops()
+      end block postprocess_drop
+      
+      
+      ! Create a monitor file
+      create_monitor: block
          ! Prepare some info about fields
          call fs%get_cfl(time%dt,time%cfl)
          call fs%get_max()
          call vf%get_max()
-         call analyze_drops()
          ! Create simulation monitor
          mfile=monitor(fs%cfg%amRoot,'simulation')
          call mfile%add_column(time%n,'Timestep number')
@@ -301,7 +305,7 @@ contains
          call cflfile%add_column(fs%CFLv_z,'Viscous zCFL')
          call cflfile%write()
          ! Create drop monitor
-         dropfile=monitor(fs%cfg%amRoot,'drop')
+         dropfile=monitor(vf%cfg%amRoot,'drop')
          call dropfile%add_column(time%n,'Timestep number')
          call dropfile%add_column(time%t,'Time')
          call dropfile%add_column(ndrop,'Ndrop')
@@ -456,7 +460,6 @@ contains
       
       ! If root and if event triggers, print out drop sizes
       if (vf%cfg%amRoot.and.drop_evt%occurs()) then
-         call execute_command_line('mkdir -p drops')
          filename='diameter_'
          write(timestamp,'(es12.5)') time%t
          open(newunit=iunit,file='drops/'//trim(adjustl(filename))//trim(adjustl(timestamp)),form='formatted',status='replace',access='stream',iostat=ierr)
