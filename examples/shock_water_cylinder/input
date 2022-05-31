@@ -35,7 +35,7 @@ Surface tension coefficient : 0.0757
 # Time integration
 Max timestep size : 1e-6
 Max cfl number :    0.9
-Max time :     	    5e-5
+Max time :     	    3e-3
 # To look at breakup, use tmax = 2.9e-3
 Max steps :	    100000
 
