@@ -4,6 +4,7 @@ module simulation
    use geometry,          only: cfg
    use tpns_class,        only: tpns
    use vfs_class,         only: vfs
+   use ccl_class,         only: ccl
    use timetracker_class, only: timetracker
    use ensight_class,     only: ensight
    use event_class,       only: event
@@ -15,6 +16,9 @@ module simulation
    type(tpns),        public :: fs
    type(vfs),         public :: vf
    type(timetracker), public :: time
+
+   !> CCL framework
+   type(ccl),         public :: cc
    
    !> Ensight postprocessing
    type(ensight) :: ens_out
@@ -33,7 +37,13 @@ module simulation
    real(WP) :: rho_ratio,visc_ratio,Oh,dh
    integer :: nh
    real(WP), dimension(:,:), allocatable :: ph
-
+   
+   !> Post-processing info
+   integer :: ndrop
+   real(WP), dimension(:), allocatable :: drop_diam
+   real(WP) :: mean_diam,min_diam,max_diam
+   type(event) :: drop_evt
+   type(monitor) :: dropfile
 
 contains
    
@@ -200,6 +210,15 @@ contains
       end block create_and_initialize_vof
       
       
+      ! Create a connected-component labeling object
+      create_and_initialize_ccl: block
+         use vfs_class, only: VFlo
+         cc=ccl(cfg=cfg,name='CCL')
+         cc%max_interface_planes=1
+         cc%VFlo=VFlo
+      end block create_and_initialize_ccl
+      
+      
       ! Create a two-phase flow solver without bconds
       create_and_initialize_flow_solver: block
          use ils_class, only: pcg_pfmg
@@ -244,10 +263,14 @@ contains
       
       ! Create a monitor file
       create_monitor: block
+         ! Create event for drop size output
+         drop_evt=event(time=time,name='Drop output')
+         call param_read('Drop output period',drop_evt%tper)
          ! Prepare some info about fields
          call fs%get_cfl(time%dt,time%cfl)
          call fs%get_max()
          call vf%get_max()
+         call analyze_drops()
          ! Create simulation monitor
          mfile=monitor(fs%cfg%amRoot,'simulation')
          call mfile%add_column(time%n,'Timestep number')
@@ -277,6 +300,15 @@ contains
          call cflfile%add_column(fs%CFLv_y,'Viscous yCFL')
          call cflfile%add_column(fs%CFLv_z,'Viscous zCFL')
          call cflfile%write()
+         ! Create drop monitor
+         dropfile=monitor(fs%cfg%amRoot,'drop')
+         call dropfile%add_column(time%n,'Timestep number')
+         call dropfile%add_column(time%t,'Time')
+         call dropfile%add_column(ndrop,'Ndrop')
+         call dropfile%add_column( min_diam, 'Min diameter')
+         call dropfile%add_column(mean_diam,'Mean diameter')
+         call dropfile%add_column( max_diam, 'Max diameter')
+         call dropfile%write()
       end block create_monitor
       
       
@@ -382,11 +414,59 @@ contains
          call vf%get_max()
          call mfile%write()
          call cflfile%write()
-         
+
+         ! Count drops and get mean diameter
+         call analyze_drops()
+         call dropfile%write()
+
       end do
       
       
    end subroutine simulation_run
+   
+   
+   !> Analyze VOF field for drops
+   subroutine analyze_drops()
+      use mathtools, only: Pi
+      use string,    only: str_medium
+      implicit none
+      integer :: n,iunit,ierr
+      character(len=str_medium) :: filename,timestamp
+      
+      ! Perform CCL on VOF field
+      call cc%build_lists(VF=vf%VF,U=fs%U,V=fs%V,W=fs%W)
+      
+      ! Store number of droplets and allocate diameter
+      ndrop=cc%n_meta_struct
+      if (allocated(drop_diam)) deallocate(drop_diam)
+      allocate(drop_diam(ndrop))
+      
+      ! Loops over identified structures and get equivalent diameter
+      mean_diam=0.0_WP
+      do n=1,ndrop
+         drop_diam(n)=(6.0_WP*cc%meta_structures_list(n)%vol/Pi)**(1.0_WP/3.0_WP)
+         mean_diam=mean_diam+drop_diam(n)
+      end do
+      if (ndrop.gt.0) mean_diam=mean_diam/real(ndrop,WP)
+      min_diam=minval(drop_diam)
+      max_diam=maxval(drop_diam)
+      
+      ! Clean up CCL
+      call cc%deallocate_lists()
+      
+      ! If root and if event triggers, print out drop sizes
+      if (vf%cfg%amRoot.and.drop_evt%occurs()) then
+         call execute_command_line('mkdir -p drops')
+         filename='diameter_'
+         write(timestamp,'(es12.5)') time%t
+         open(newunit=iunit,file='drops/'//trim(adjustl(filename))//trim(adjustl(timestamp)),form='formatted',status='replace',access='stream',iostat=ierr)
+         do n=1,ndrop
+            write(iunit,'(es12.5)') drop_diam(n)
+         end do
+         close(iunit)
+      end if
+
+   end subroutine analyze_drops
    
    
    !> Finalize the NGA2 simulation
