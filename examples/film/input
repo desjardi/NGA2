@@ -23,6 +23,7 @@ Size of holes :   2
 # Time integration
 Max timestep size : 1e-3
 Max cfl number :    0.9
+Max time :          10
 
 # Pressure solver
 Pressure tolerance : 1e-6

@@ -20,6 +20,7 @@ Velocity ratio :       0.1     !< This is U_l/U_g
 # Time integration
 Max timestep size : 1e-1
 Max cfl number :    0.9
+Max time :          400
 
 # Pressure solver
 Pressure tolerance : 1e-6
