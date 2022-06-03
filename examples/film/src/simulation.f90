@@ -6,6 +6,7 @@ module simulation
    use vfs_class,         only: vfs
    use ccl_class,         only: ccl
    use timetracker_class, only: timetracker
+   use surfmesh_class,    only: surfmesh
    use ensight_class,     only: ensight
    use event_class,       only: event
    use monitor_class,     only: monitor
@@ -21,6 +22,7 @@ module simulation
    type(ccl),         public :: cc
    
    !> Ensight postprocessing
+   type(surfmesh) :: smesh
    type(ensight) :: ens_out
    type(event)   :: ens_evt
    
@@ -132,7 +134,7 @@ contains
                zh=random_uniform(lo=cfg%z(cfg%kmin),hi=cfg%z(cfg%kmax+1))
                ! Compare to all previous holes
                is_overlap=.false.
-               do nn=1,n-1
+               do nn=1,n
                   ! Get the position of the other hole
                   xxh=ph(1,nn); zzh=ph(2,nn)
                   ! Account for periodicity
@@ -159,14 +161,14 @@ contains
       ! Initialize our VOF solver and field
       create_and_initialize_vof: block
          use mms_geom, only: cube_refine_vol
-         use vfs_class, only: lvira,VFhi,VFlo
+         use vfs_class, only: swartz,lvira,elvira,VFhi,VFlo
          integer :: i,j,k,n,si,sj,sk
          real(WP), dimension(3,8) :: cube_vertex
          real(WP), dimension(3) :: v_cent,a_cent
          real(WP) :: vol,area
          integer, parameter :: amr_ref_lvl=4
          ! Create a VOF solver
-         vf=vfs(cfg=cfg,reconstruction_method=lvira,name='VOF')
+         vf=vfs(cfg=cfg,reconstruction_method=elvira,name='VOF')
          ! Initialize to a film
          do k=vf%cfg%kmino_,vf%cfg%kmaxo_
             do j=vf%cfg%jmino_,vf%cfg%jmaxo_
@@ -198,6 +200,8 @@ contains
          call vf%update_band()
          ! Perform interface reconstruction from VOF field
          call vf%build_interface()
+         ! Set interface planes at the boundaries
+         call vf%set_full_bcond()
          ! Create discontinuous polygon mesh from IRL interface
          call vf%polygonalize_interface()
          ! Calculate distance from polygons
@@ -237,6 +241,13 @@ contains
       end block create_and_initialize_flow_solver
       
       
+      ! Create surfmesh object for interface polygon output
+      create_smesh: block
+         smesh=surfmesh(nvar=0,name='plic')
+         call vf%update_surfmesh(smesh)
+      end block create_smesh
+      
+      
       ! Add Ensight output
       create_ensight: block
          ! Create Ensight output from cfg
@@ -248,6 +259,7 @@ contains
          call ens_out%add_vector('velocity',Ui,Vi,Wi)
          call ens_out%add_scalar('VOF',vf%VF)
          call ens_out%add_scalar('curvature',vf%curv)
+         call ens_out%add_surface('vofplic',smesh)
          ! Output to ensight
          if (ens_evt%occurs()) call ens_out%write_data(time%t)
       end block create_ensight
@@ -412,6 +424,7 @@ contains
          call fs%get_div()
          
          ! Output to ensight
+         call vf%update_surfmesh(smesh)
          if (ens_evt%occurs()) call ens_out%write_data(time%t)
          
          ! Perform and output monitoring

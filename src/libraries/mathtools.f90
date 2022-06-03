@@ -9,6 +9,7 @@ module mathtools
    public :: inverse_matrix
    public :: cross_product
    public :: normalize
+   public :: qrotate
    
    ! Trigonometric parameters
    real(WP), parameter :: Pi   =3.1415926535897932385_WP
@@ -128,6 +129,24 @@ contains
       real(WP), dimension(3)             :: w
       w=v/(norm2(v)+tiny(1.0_WP))
    end function normalize
+   
+   
+   ! Rotates a vector v by a specified quaternion q: w=q*v*conj(q)
+   pure function qrotate(v,q) result(w)
+      implicit none
+      real(WP), dimension(3), intent(in) :: v    !< Vector to rotate
+      real(WP), dimension(4), intent(in) :: q    !< Quaternion
+      real(WP), dimension(3)             :: w    !< Rotated vector
+      w(1)=(2.0_WP*(q(1)*q(1)+q(2)*q(2))-1.0_WP)*v(1)+&
+      &     2.0_WP*(q(2)*q(3)-q(1)*q(4))        *v(2)+&
+      &     2.0_WP*(q(2)*q(4)+q(1)*q(3))        *v(3)
+      w(2)= 2.0_WP*(q(2)*q(3)+q(1)*q(4))        *v(1)+&
+      &    (2.0_WP*(q(1)*q(1)+q(3)*q(3))-1.0_WP)*v(2)+&
+      &     2.0_WP*(q(3)*q(4)-q(1)*q(2))        *v(3)
+      w(3)= 2.0_WP*(q(2)*q(4)-q(1)*q(3))        *v(1)+&
+      &     2.0_WP*(q(3)*q(4)+q(1)*q(2))        *v(2)+&
+      &    (2.0_WP*(q(1)*q(1)+q(4)*q(4))-1.0_WP)*v(3)
+   end function
    
    
 end module mathtools
