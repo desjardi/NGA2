@@ -85,14 +85,14 @@ contains
       ! Initialize our VOF solver and field
       create_and_initialize_vof: block
          use mms_geom, only: cube_refine_vol
-         use vfs_class, only: r2p,lvira,VFhi,VFlo
+         use vfs_class, only: r2p,lvira,elvira,VFhi,VFlo
          integer :: i,j,k,n,si,sj,sk
          real(WP), dimension(3,8) :: cube_vertex
          real(WP), dimension(3) :: v_cent,a_cent
          real(WP) :: vol,area
          integer, parameter :: amr_ref_lvl=4
          ! Create a VOF solver with lvira reconstruction
-         vf=vfs(cfg=cfg,reconstruction_method=lvira,name='VOF')
+         vf=vfs(cfg=cfg,reconstruction_method=elvira,name='VOF')
          ! Initialize liquid at left
          call param_read('Cylinder diameter',dcyl)
          call param_read('Cylinder location',xcyl)

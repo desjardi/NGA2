@@ -1621,6 +1621,79 @@ contains
       
    end subroutine smooth_interface
    
+   !> ELVIRA reconstruction of a planar interface in mixed cells
+   subroutine build_elvira(this)
+      use mathtools, only: normalize
+      implicit none
+      class(vfs), intent(inout) :: this
+      integer(IRL_SignedIndex_t) :: i,j,k
+      integer :: ind,ii,jj,kk,icenter
+      type(ELVIRANeigh_type) :: neighborhood
+      type(RectCub_type), dimension(0:26) :: neighborhood_cells
+      real(IRL_double)  , dimension(0:26) :: liquid_volume_fraction
+      real(IRL_double), dimension(3) :: initial_norm
+      real(IRL_double) :: initial_dist
+      
+      ! Give ourselves an LVIRA neighborhood of 27 cells
+      call new(neighborhood)
+      do i=0,26
+         call new(neighborhood_cells(i))
+      end do
+      
+      call setSize(neighborhood,27)
+      ind = 0
+      do k = -1, 1
+        do j = -1, 1
+          do i = -1, 1
+           call setMember(neighborhood,neighborhood_cells(ind),liquid_volume_fraction(ind),i,j,k)
+           ind = ind + 1
+         end do
+       end do
+     end do
+      
+      ! Traverse domain and reconstruct interface
+      do k=this%cfg%kmin_,this%cfg%kmax_
+         do j=this%cfg%jmin_,this%cfg%jmax_
+            do i=this%cfg%imin_,this%cfg%imax_
+               
+               ! Skip wall/bcond cells - bconds need to be provided elsewhere directly!
+               if (this%mask(i,j,k).ne.0) cycle
+               
+               ! Handle full cells differently
+               if (this%VF(i,j,k).lt.VFlo.or.this%VF(i,j,k).gt.VFhi) then
+                  call setNumberOfPlanes(this%liquid_gas_interface(i,j,k),1)
+                  call setPlane(this%liquid_gas_interface(i,j,k),0,[0.0_WP,0.0_WP,0.0_WP],sign(1.0_WP,this%VF(i,j,k)-0.5_WP))
+                  cycle
+               end if
+               
+               ! Set neighborhood_cells and liquid_volume_fraction to current correct values
+               ind=0
+               do kk=k-1,k+1
+                  do jj=j-1,j+1
+                     do ii=i-1,i+1
+                        ! Skip true wall cells - bconds can be used here
+                        if (this%mask(ii,jj,kk).eq.1) cycle
+                        ! Build the cell
+                        call construct_2pt(neighborhood_cells(ind),[this%cfg%x(ii),this%cfg%y(jj),this%cfg%z(kk)],[this%cfg%x(ii+1),this%cfg%y(jj+1),this%cfg%z(kk+1)])
+                        ! Assign volume fraction
+                        liquid_volume_fraction(ind)=this%VF(ii,jj,kk)
+                        ! Increment counter
+                        ind=ind+1
+                     end do
+                  end do
+               end do
+               
+               ! Perform the reconstruction
+               call reconstructELVIRA3D(neighborhood,this%liquid_gas_interface(i,j,k))
+               
+            end do
+         end do
+      end do
+      
+      ! Synchronize across boundaries
+      call this%sync_interface()
+      
+   end subroutine build_elvira
    
    !> Youngs' algorithm for reconstructing a planar interface
    subroutine build_youngs(this)
