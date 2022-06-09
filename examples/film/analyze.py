@@ -8,8 +8,8 @@ d_5_larger=np.array([9.39457E+00,3.90435E-02,2.47652E-02,1.56308E-02,1.81611E-04
 
 # Exclude drops that are too small
 d_5 =d_5 [d_5 >0.5]
-d_50=d_50[d_50>3]
-d_5_larger=d_5_larger[d_5_larger>10]
+d_50=d_50[d_50>0.5]
+d_5_larger=d_5_larger[d_5_larger>0.5]
 
 # Assemble the data to plot
 diam=[d_5_larger,d_50]

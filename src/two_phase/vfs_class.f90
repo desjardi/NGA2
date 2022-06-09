@@ -27,6 +27,8 @@ module vfs_class
    integer, parameter, public :: r2p=4               !< R2P scheme
    integer, parameter, public :: swartz=5            !< Swartz scheme
    integer, parameter, public :: art=6               !< ART scheme
+   integer, parameter, public :: youngs=7            !< Youngs' scheme
+   integer, parameter, public :: lvlset=8            !< Levelset-based scheme
    
    ! IRL cutting moment calculation method
    integer, parameter, public :: recursive_simplex=0 !< Recursive simplex cutting
@@ -165,6 +167,8 @@ module vfs_class
       procedure :: build_lvira                            !< LVIRA reconstruction of the interface from VF field
       procedure :: build_r2p                              !< R2P reconstruction of the interface from VF field
       procedure :: build_art                              !< ART reconstruction of the interface from VF field
+      procedure :: build_youngs                           !< Youngs' reconstruction of the interface from VF field
+      !procedure :: build_lvlset                           !< LVLSET-based reconstruction of the interface from VF field
       procedure :: smooth_interface                       !< Interface smoothing based on Swartz idea
       procedure :: set_full_bcond                         !< Full liq/gas plane-setting for boundary cells - this is stair-stepped
       procedure :: polygonalize_interface                 !< Build a discontinuous polygonal representation of the IRL interface
@@ -1446,13 +1450,15 @@ contains
       class(vfs), intent(inout) :: this
       ! Reconstruct interface - will need to support various methods
       select case (this%reconstruction_method)
-      case (elvira) ; call this%build_elvira()
+      case (elvira); call this%build_elvira()
       case (lvira) ; call this%build_lvira()
       case (r2p)   ; call this%build_r2p()
       case (art)   ; call this%build_art()
       case (swartz)
          call this%build_lvira()
          call this%smooth_interface()
+      case (youngs); call this%build_youngs()
+      !case (lvlset); call this%build_lvlset()
       case default; call die('[vfs build interface] Unknown interface reconstruction scheme')
       end select
    end subroutine build_interface
@@ -1460,7 +1466,6 @@ contains
    
    !> ELVIRA reconstruction of a planar interface in mixed cells
    subroutine build_elvira(this)
-      use mathtools, only: normalize
       implicit none
       class(vfs), intent(inout) :: this
       integer(IRL_SignedIndex_t) :: i,j,k
@@ -1614,6 +1619,40 @@ contains
       end do
       
    end subroutine smooth_interface
+   
+   
+   !> Youngs' algorithm for reconstructing a planar interface
+   subroutine build_youngs(this)
+      implicit none
+      class(vfs), intent(inout) :: this
+      integer :: i,j,k
+      
+      ! Traverse domain and reconstruct interface
+      do k=this%cfg%kmin_,this%cfg%kmax_
+         do j=this%cfg%jmin_,this%cfg%jmax_
+            do i=this%cfg%imin_,this%cfg%imax_
+               
+               ! Skip wall/bcond cells - bconds need to be provided elsewhere directly!
+               if (this%mask(i,j,k).ne.0) cycle
+               
+               ! Handle full cells differently
+               if (this%VF(i,j,k).lt.VFlo.or.this%VF(i,j,k).gt.VFhi) then
+                  call setNumberOfPlanes(this%liquid_gas_interface(i,j,k),1)
+                  call setPlane(this%liquid_gas_interface(i,j,k),0,[0.0_WP,0.0_WP,0.0_WP],sign(1.0_WP,this%VF(i,j,k)-0.5_WP))
+                  cycle
+               end if
+
+               ! Apply Youngs' method to get normal
+               
+
+            end do
+         end do
+      end do
+
+      ! Synchronize across boundaries
+      call this%sync_interface()
+
+   end subroutine build_youngs
    
    
    !> LVIRA reconstruction of a planar interface in mixed cells
