@@ -63,7 +63,7 @@ module block2_class
    real(WP) :: rho_g
    
    !> Inflow parameters
-   real(WP) :: Uin,delta,Urand,Uco
+   real(WP) :: Uin,delta,Urand,Uco,CPFR
 
    !> Logical constant for evaluating restart
    logical :: restart_test
@@ -103,7 +103,35 @@ contains
       isIn=.false.
       if (i.eq.pg%imax+1) isIn=.true.
    end function right_boundary
-   
+
+   !> Function that calcuates velocity at current time 
+   function inflowVelocity(time,CPFR,H,W) result(UCPFR)
+      real(WP), intent(in)   :: time,CPFR,H,W
+      real(WP)               :: UCPFR
+      real(WP)               :: CEV,PVT,a1,b1,c1,a2,b2,c2,tau,M
+      class(config), pointer :: cfg 
+      !Model parameters
+      CEV=0.20_WP*CPFR-4e-5_WP    !cough expiratory volume
+      PVT=2.85_WP*CPFR+0.07_WP    !Peak velocity time
+      a1=1.68_WP
+      b1=3.34_WP
+      c1=0.43_WP
+      a2=(CEV/(PVT*CPFR))-a1
+      b2=((-2.16_WP*CEV)/(PVT*CPFR))+10.46_WP
+      c2=(1.8_WP/(b2-1.0_WP))
+      !Dimensionless time
+      tau=time/PVT
+      !Dimensionless flow rate
+      if (tau.eq.0.0_WP) then
+         M=0.0_WP
+      else if (tau.lt.1.2_WP.and.tau.gt.0.0_WP) then 
+         M=(a1*tau**(b1-1.0_WP)*exp(-tau/c1))/(gamma(b1)*c1**b1)    
+      else if (tau.ge.1.2_WP) then 
+         M=(a1*tau**(b1-1.0_WP)*exp(-tau/c1))/(gamma(b1)*c1**b1)+(a2*(tau-1.2_WP)**(b2-1.0_WP)*exp(-(tau-1.2_WP)/c2))/(gamma(b2)*c2**b2)   
+      end if
+      ! Inflow velocity 
+      UCPFR=(M*CPFR)/(H*W)
+   end function inflowVelocity
    
    !> Function that localizes the top domain boundary
    ! function top_boundary(pg,i,j,k) result(isIn)
@@ -208,16 +236,22 @@ contains
             call b%df%pullvar(name='W'  ,var=b%fs%W  )
             call b%df%pullvar(name='P'  ,var=b%fs%P  )
          end if
-         ! Apply Dirichlet at inlet
-         call param_read('Gas velocity',Uin)
+         ! Gas velocity parameters
+         !call param_read('Gas velocity',Uin)
+         call param_read('Peak flow rate',CPFR)
+         Uin=inflowVelocity(b%time%t,CPFR,H_mouth,W_mouth)
          call param_read('Gas thickness',delta)
          call param_read('Gas perturbation',Urand)
          call b%fs%get_bcond('inflow',mybc)
+         ! Apply Dirichlet at inlet
          do n=1,mybc%itr%no_
             i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
+            !b%fs%U(i,j,k)=Uin*tanh(2.0_WP*(0.5_WP*W_mouth-abs(b%fs%cfg%zm(k)))/delta)*tanh(2.0_WP*b%fs%cfg%ym(j)/delta)*tanh(2.0_WP*(H_mouth-b%fs%cfg%ym(j))/delta)+random_uniform(-Urand,Urand)
             b%fs%U(i,j,k)=Uin*tanh(2.0_WP*(0.5_WP*W_mouth-abs(b%fs%cfg%zm(k)))/delta)*tanh(2.0_WP*b%fs%cfg%ym(j)/delta)*tanh(2.0_WP*(H_mouth-b%fs%cfg%ym(j))/delta)
          end do
-         call param_read('Gas coflow',Uco)
+         ! Apply coflow around inlet geometry
+         !call param_read('Gas coflow',Uco)
+         Uco=0.10_WP*Uin
          call b%fs%get_bcond('coflow',mybc)
          do n=1,mybc%itr%no_
             i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
@@ -234,7 +268,6 @@ contains
          ! Compute divergence
          call b%fs%get_div()
       end block initialize_velocity
-
 
       ! Create an LES model
       create_sgs: block
@@ -364,6 +397,29 @@ contains
       call b%time%adjust_dt()
       call b%time%increment()
 
+      ! Apply time-varying Dirichlet conditions
+      reapply_dirichlet: block
+         use incomp_class, only: bcond
+         use random,     only: random_uniform
+         type(bcond), pointer :: mybc
+         integer  :: n,i,j,k
+         ! Reapply Dirichlet at inlet
+         Uin=inflowVelocity(b%time%t,CPFR,H_mouth,W_mouth)
+         call b%fs%get_bcond('inflow',mybc)
+         do n=1,mybc%itr%no_
+            i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
+            !b%fs%U(i,j,k)=Uin*tanh(2.0_WP*(0.5_WP*W_mouth-abs(b%fs%cfg%zm(k)))/delta)*tanh(2.0_WP*b%fs%cfg%ym(j)/delta)*tanh(2.0_WP*(H_mouth-b%fs%cfg%ym(j))/delta)+random_uniform(-Urand,Urand)
+            b%fs%U(i,j,k)=Uin*tanh(2.0_WP*(0.5_WP*W_mouth-abs(b%fs%cfg%zm(k)))/delta)*tanh(2.0_WP*b%fs%cfg%ym(j)/delta)*tanh(2.0_WP*(H_mouth-b%fs%cfg%ym(j))/delta)
+         end do
+         ! Reapply coflow around inlet geometry
+         Uco=0.10_WP*Uin
+         call b%fs%get_bcond('coflow',mybc)
+         do n=1,mybc%itr%no_
+            i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
+            b%fs%U(i,j,k)=Uco
+         end do
+      end block reapply_dirichlet
+
       ! Advance particles by full dt
       b%resU=b%fs%rho; b%resV=b%fs%visc
       call b%lp%advance(dt=b%time%dt,U=b%fs%U,V=b%fs%V,W=b%fs%W,rho=b%resU,visc=b%resV)
@@ -372,9 +428,6 @@ contains
       b%fs%Uold=b%fs%U
       b%fs%Vold=b%fs%V
       b%fs%Wold=b%fs%W
-
-      ! Apply time-varying Dirichlet conditions
-      ! This is where time-dpt Dirichlet would be enforced
 
       ! Reset here gas viscosity
       b%fs%visc=visc_g
@@ -442,9 +495,7 @@ contains
          end block nudge
 
          ! Form implicit residuals
-         !if (b%cfg%rank.eq.1) print *, "B2 - pre solve_implicit, time step: ", b%time%n," iterations: ",b%time%it
          call b%fs%solve_implicit(b%time%dt,b%resU,b%resV,b%resW)
-         !if (b%cfg%rank.eq.1) print *, "B2 - post solve_implicit, time step: ", b%time%n," iterations: ",b%time%it
 
          ! Apply these residuals
          b%fs%U=2.0_WP*b%fs%U-b%fs%Uold+b%resU
@@ -459,9 +510,7 @@ contains
          call b%fs%get_div()
          b%ps%rhs=-b%fs%cfg%vol*b%fs%div*b%fs%rho/b%time%dt
          b%ps%sol=0.0_WP
-         !if (b%cfg%rank.eq.1) print *, "B2 - pre ps%sol, time step: ", b%time%n," iterations: ",b%time%it
          call b%ps%solve()
-         !if (b%cfg%rank.eq.1) print *, "B2 - post ps%sol, time step: ", b%time%n," iterations: ",b%time%it
 
          ! Correct velocity
          call b%fs%get_pgrad(b%ps%sol,b%resU,b%resV,b%resW)

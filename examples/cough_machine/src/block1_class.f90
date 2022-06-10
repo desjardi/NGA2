@@ -52,7 +52,7 @@ module block1_class
    real(WP) :: d_threshold            =1.0e-2_WP   !Saliva specific? 
 
    !> Inflow parameters
-   real(WP) :: Uin,delta,Urand,Uco
+   real(WP) :: Uin,delta,Urand,Uco,CPFR
 
    !> Logical constant for evaluating restart
    logical :: restart_test
@@ -93,6 +93,34 @@ contains
       if (i.eq.pg%imax+1) isIn=.true.
    end function right_boundary
    
+   !> Function that calcuates velocity at current time 
+   function inflowVelocity(time,CPFR,H,W) result(UCPFR)
+      real(WP), intent(in)   :: time,CPFR,H,W
+      real(WP)               :: UCPFR
+      real(WP)               :: CEV,PVT,a1,b1,c1,a2,b2,c2,tau,M
+      class(config), pointer :: cfg 
+      !Model parameters
+      CEV=0.20_WP*CPFR-4e-5_WP    !cough expiratory volume
+      PVT=2.85_WP*CPFR+0.07_WP    !Peak velocity time
+      a1=1.68_WP
+      b1=3.34_WP
+      c1=0.43_WP
+      a2=(CEV/(PVT*CPFR))-a1
+      b2=((-2.16_WP*CEV)/(PVT*CPFR))+10.46_WP
+      c2=(1.8_WP/(b2-1.0_WP))
+      !Dimensionless time
+      tau=time/PVT
+      !Dimensionless flow rate
+      if (tau.eq.0.0_WP) then
+         M=0.0_WP
+      else if (tau.lt.1.2_WP.and.tau.gt.0.0_WP) then 
+         M=(a1*tau**(b1-1.0_WP)*exp(-tau/c1))/(gamma(b1)*c1**b1)    
+      else if (tau.ge.1.2_WP) then 
+         M=(a1*tau**(b1-1.0_WP)*exp(-tau/c1))/(gamma(b1)*c1**b1)+(a2*(tau-1.2_WP)**(b2-1.0_WP)*exp(-(tau-1.2_WP)/c2))/(gamma(b2)*c2**b2)   
+      end if
+      ! Inflow velocity 
+      UCPFR=(M*CPFR)/(H*W)
+   end function inflowVelocity
    
    !> Function that localizes the top domain boundary
    ! function top_boundaryV(pg,i,j,k) result(isIn)
@@ -145,8 +173,6 @@ contains
       class(block1), intent(inout) :: b
       logical,       intent(in) :: restart_test
    
-
-
       ! Allocate work arrays for cfg
       allocate_work_arrays: block
          allocate(b%resU(b%cfg%imino_:b%cfg%imaxo_,b%cfg%jmino_:b%cfg%jmaxo_,b%cfg%kmino_:b%cfg%kmaxo_))
@@ -157,7 +183,6 @@ contains
          allocate(b%Wi  (b%cfg%imino_:b%cfg%imaxo_,b%cfg%jmino_:b%cfg%jmaxo_,b%cfg%kmino_:b%cfg%kmaxo_))
          allocate(b%SR(6,b%cfg%imino_:b%cfg%imaxo_,b%cfg%jmino_:b%cfg%jmaxo_,b%cfg%kmino_:b%cfg%kmaxo_))
       end block allocate_work_arrays
-
 
       ! Initialize time tracker
       initialize_timetracker: block
@@ -270,17 +295,22 @@ contains
             call b%df%pullvar(name='W'  ,var=b%fs%W  )
             call b%df%pullvar(name='P'  ,var=b%fs%P  )
          end if
-         ! Apply Dirichlet at inlet
-         call param_read('Gas velocity',Uin)
+         ! Gas velocity parameters
+         !call param_read('Gas velocity',Uin)
+         call param_read('Peak flow rate',CPFR)
+         Uin=inflowVelocity(b%time%t,CPFR,H_mouth,W_mouth)
          call param_read('Gas thickness',delta)
          call param_read('Gas perturbation',Urand)
          call b%fs%get_bcond('inflow',mybc)
+         ! Apply Dirichlet at inlet
          do n=1,mybc%itr%no_
             i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
             !b%fs%U(i,j,k)=Uin*tanh(2.0_WP*(0.5_WP*W_mouth-abs(b%fs%cfg%zm(k)))/delta)*tanh(2.0_WP*b%fs%cfg%ym(j)/delta)*tanh(2.0_WP*(H_mouth-b%fs%cfg%ym(j))/delta)+random_uniform(-Urand,Urand)
             b%fs%U(i,j,k)=Uin*tanh(2.0_WP*(0.5_WP*W_mouth-abs(b%fs%cfg%zm(k)))/delta)*tanh(2.0_WP*b%fs%cfg%ym(j)/delta)*tanh(2.0_WP*(H_mouth-b%fs%cfg%ym(j))/delta)
          end do
-         call param_read('Gas coflow',Uco)
+         ! Apply coflow around inlet geometry
+         !call param_read('Gas coflow',Uco)
+         Uco=0.10_WP*Uin
          call b%fs%get_bcond('coflow',mybc)
          do n=1,mybc%itr%no_
             i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
@@ -365,7 +395,6 @@ contains
          if (b%ens_evt%occurs()) call b%ens_out%write_data(b%time%t)
       end block create_ensight
 
-
       ! Create a monitor file
       create_monitor: block
          ! Prepare some info about fields
@@ -388,6 +417,7 @@ contains
          call b%mfile%add_column(b%fs%divmax,'Maximum divergence')
          call b%mfile%add_column(b%fs%psolv%it,'Pressure iteration')
          call b%mfile%add_column(b%fs%psolv%rerr,'Pressure error')
+         call b%mfile%add_column(Uin,'Inflow Velocity')
          call b%mfile%write()
          ! Create CFL monitor
          b%cflfile=monitor(b%fs%cfg%amRoot,'cfl1')
@@ -420,6 +450,29 @@ contains
       call b%time%adjust_dt()
       call b%time%increment()
 
+      ! Apply time-varying Dirichlet conditions
+      reapply_dirichlet: block
+         use tpns_class, only: bcond
+         use random,     only: random_uniform
+         type(bcond), pointer :: mybc
+         integer  :: n,i,j,k
+         ! Reapply Dirichlet at inlet
+         Uin=inflowVelocity(b%time%t,CPFR,H_mouth,W_mouth)
+         call b%fs%get_bcond('inflow',mybc)
+         do n=1,mybc%itr%no_
+            i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
+            !b%fs%U(i,j,k)=Uin*tanh(2.0_WP*(0.5_WP*W_mouth-abs(b%fs%cfg%zm(k)))/delta)*tanh(2.0_WP*b%fs%cfg%ym(j)/delta)*tanh(2.0_WP*(H_mouth-b%fs%cfg%ym(j))/delta)+random_uniform(-Urand,Urand)
+            b%fs%U(i,j,k)=Uin*tanh(2.0_WP*(0.5_WP*W_mouth-abs(b%fs%cfg%zm(k)))/delta)*tanh(2.0_WP*b%fs%cfg%ym(j)/delta)*tanh(2.0_WP*(H_mouth-b%fs%cfg%ym(j))/delta)
+         end do
+         ! Reapply coflow around inlet geometry
+         Uco=0.10_WP*Uin
+         call b%fs%get_bcond('coflow',mybc)
+         do n=1,mybc%itr%no_
+            i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
+            b%fs%U(i,j,k)=Uco
+         end do
+      end block reapply_dirichlet
+
       ! Remember old VOF
       b%vf%VFold=b%vf%VF
 
@@ -428,28 +481,12 @@ contains
       b%fs%Vold=b%fs%V
       b%fs%Wold=b%fs%W
       
-      ! Reapply Dirichlet conditions
-      reapply_dirichlet: block
-         use tpns_class, only: bcond
-         use random,     only: random_uniform
-         type(bcond), pointer :: mybc
-         integer  :: n,i,j,k
-         ! Reapply Dirichlet at inlet
-         call b%fs%get_bcond('inflow',mybc)
-         do n=1,mybc%itr%no_
-            i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
-            !b%fs%U(i,j,k)=Uin*tanh(2.0_WP*(0.5_WP*W_mouth-abs(b%fs%cfg%zm(k)))/delta)*tanh(2.0_WP*b%fs%cfg%ym(j)/delta)*tanh(2.0_WP*(H_mouth-b%fs%cfg%ym(j))/delta)+random_uniform(-Urand,Urand)
-            b%fs%U(i,j,k)=Uin*tanh(2.0_WP*(0.5_WP*W_mouth-abs(b%fs%cfg%zm(k)))/delta)*tanh(2.0_WP*b%fs%cfg%ym(j)/delta)*tanh(2.0_WP*(H_mouth-b%fs%cfg%ym(j))/delta)
-         end do
-      end block reapply_dirichlet
-
       ! Prepare old staggered density (at n)
       call b%fs%get_olddensity(vf=b%vf)
       
       ! VOF solver step
-      !if(b%cfg%rank.eq.1) print *, "Pre VOF solver step"
       call b%vf%advance(dt=b%time%dt,U=b%fs%U,V=b%fs%V,W=b%fs%W)
-      !if(b%cfg%rank.eq.1) print *, "Post VOF solver step"
+
       ! Prepare new staggered viscosity (at n+1)
       call b%fs%get_viscosity(vf=b%vf)
 
@@ -497,9 +534,8 @@ contains
          b%resW=-2.0_WP*b%fs%rho_W*b%fs%W+(b%fs%rho_Wold+b%fs%rho_W)*b%fs%Wold+b%time%dt*b%resW
 
          ! Form implicit residuals
-         !if(b%cfg%rank.eq.1) print *, "B1 - pre solve_implicit, time step: ", b%time%n, " iteration/max iteration: ",b%time%it, "/",b%time%itmax
          call b%fs%solve_implicit(b%time%dt,b%resU,b%resV,b%resW)
-         !if(b%cfg%rank.eq.1) print *, "B1 - post solve_implicit, time step: ", b%time%n, " iteration/max iteration: ",b%time%it, "/",b%time%itmax
+         
          ! Apply these residuals
          b%fs%U=2.0_WP*b%fs%U-b%fs%Uold+b%resU
          b%fs%V=2.0_WP*b%fs%V-b%fs%Vold+b%resV
@@ -515,9 +551,7 @@ contains
          call b%fs%add_surface_tension_jump(dt=b%time%dt,div=b%fs%div,vf=b%vf,contact_model=static_contact)
          b%fs%psolv%rhs=-b%fs%cfg%vol*b%fs%div/b%time%dt
          b%fs%psolv%sol=0.0_WP
-         !if(b%cfg%rank.eq.1) print *, "B1 - pre psolv, time step: ", b%time%n, " iteration/max iteration: ",b%time%it, "/",b%time%itmax
          call b%fs%psolv%solve()
-         !if(b%cfg%rank.eq.1) print *, "B1 - post psolv, time step: ", b%time%n, " iteration/max iteration: ",b%time%it, "/",b%time%itmax
          call b%fs%shift_p(b%fs%psolv%sol)
 
          ! Correct velocity
