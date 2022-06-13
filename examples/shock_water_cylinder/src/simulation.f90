@@ -150,7 +150,7 @@ contains
          use parallel,   only: amRoot
          integer :: i,j,k,n
          real(WP), dimension(3) :: xyz
-         real(WP) :: gamm_l,Pref_l,gamm_g
+         real(WP) :: gamm_l,Pref_l,gamm_g,visc_l,visc_g
          real(WP) :: xshock,vshock,relshockvel,dcyl
          real(WP) :: Grho0, GP0, Grho1, GP1, ST, Ma1, Ma, Lrho0
          type(bcond), pointer :: mybc
@@ -169,8 +169,9 @@ contains
          call matmod%register_thermoflow_variables('liquid',fs%Lrho,fs%Ui,fs%Vi,fs%Wi,fs%LrhoE,fs%LP)
          call matmod%register_thermoflow_variables('gas'   ,fs%Grho,fs%Ui,fs%Vi,fs%Wi,fs%GrhoE,fs%GP)
          ! Assign constant viscosity to each phase
-         call param_read('Liquid dynamic viscosity',fs%visc_l0)
-         call param_read('Gas dynamic viscosity',fs%visc_g0)
+         call param_read('Liquid dynamic viscosity',visc_l)
+         call param_read('Gas dynamic viscosity',visc_g)
+         call matmod%register_diffusion_thermo_models(viscconst_gas=visc_g,viscconst_liquid=visc_l)
          ! Read in surface tension coefficient
          call param_read('Surface tension coefficient',fs%sigma)
          ! Configure pressure solver
@@ -372,7 +373,7 @@ contains
             call fs%advection_step(time%dt,vf,matmod)
 
             ! Insert viscous step here, or possibly incorporate into predictor above
-
+            call fs%diffusion_src_explicit_step(time%dt,vf,matmod)
             ! Insert sponge step here
 
             ! Prepare pressure projection

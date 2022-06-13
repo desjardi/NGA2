@@ -56,11 +56,6 @@ module mast_class
       real(WP) :: contact_angle                           !< This is our static contact angle
       real(WP) :: sigma                                   !< This is our constant surface tension coefficient
 
-      ! Variable or constant fluid properties
-      real(WP) :: visc_l0,visc_g0                         !< These are our constant/initial dynamic viscosities in liquid and gas
-      real(WP) :: cv_l0,cv_g0                             !< These are our constant/initial specific heats (constant volume) in liquid and gas
-      real(WP) :: kappa_l0,kappa_g0                       !< These are our constant/initial thermal conductivities in liquid and gas
-      
       ! Gravitational acceleration
       real(WP), dimension(3) :: gravity=0.0_WP            !< Acceleration of gravity
       
@@ -84,11 +79,12 @@ module mast_class
       real(WP), dimension(:,:,:), allocatable :: P_V      !< Pressure field array on V-cell
       real(WP), dimension(:,:,:), allocatable :: P_W      !< Pressure field array on W-cell
       
-      ! Viscosity fields
+      ! Viscosity
       real(WP), dimension(:,:,:), allocatable :: visc     !< Viscosity field on P-cell
-      real(WP), dimension(:,:,:), allocatable :: visc_xy  !< Viscosity field on U-cell
-      real(WP), dimension(:,:,:), allocatable :: visc_yz  !< Viscosity field on V-cell
-      real(WP), dimension(:,:,:), allocatable :: visc_zx  !< Viscosity field on W-cell
+      ! Thermal conductivity
+      real(WP), dimension(:,:,:), allocatable :: therm_cond !< Viscosity field on P-cell
+      
+      ! Note: conserved variables are rhoUi, rhoVi, rhoWi, Grho, GrhoE, Lrho, LrhoE
       
       ! Flow variables - harmonized/mixture
       real(WP), dimension(:,:,:), allocatable :: RHO      !< density array
@@ -110,6 +106,7 @@ module mast_class
       real(WP), dimension(:,:,:), allocatable :: dPjx     !< dPressure jump to add to -ddP/dx
       real(WP), dimension(:,:,:), allocatable :: dPjy     !< dPressure jump to add to -ddP/dy
       real(WP), dimension(:,:,:), allocatable :: dPjz     !< dPressure jump to add to -ddP/dz
+      real(WP), dimension(:,:,:), allocatable :: Tmptr    !< Temperature of mixture
       ! Flow variables - individual phases
       real(WP), dimension(:,:,:), allocatable :: Grho,   Lrho    !< phase density arrays
       real(WP), dimension(:,:,:), allocatable :: GrhoE,  LrhoE   !< phase energy arrays
@@ -151,6 +148,9 @@ module mast_class
 
       ! Temporary arrays for a few things
       real(WP), dimension(:,:,:), pointer :: tmp1,tmp2,tmp3
+      
+      ! Temporary arrays for viscous routine (may be used for more in the future)
+      real(WP), dimension(:,:,:), pointer :: tmp4,tmp5,tmp6,tmp7,tmp8,tmp9,tmp10
       
       ! Pressure solver
       type(ils) :: psolv                                  !< Iterative linear solver object for the pressure Helmholtz equation
@@ -201,7 +201,9 @@ module mast_class
       procedure :: advection_step                         !< Full, hybrid advection step
       ! For convenience in advection routines
       procedure :: GKEold, LKEold                         !< Calculate kinetic energy at timestep 'n'
-      ! For viscous/dissipative/body forces (will address later)
+      ! For viscous/dissipative/body forces
+      procedure :: diffusion_src_explicit_step            !< Explicit approach to incorporating body forces and diffusion
+      procedure :: get_viscosity                          !< Calculates diffusive terms at required locations
       ! For setting up pressure solve
       procedure :: pressureproj_prepare                   !< Overall subroutine for pressure solve setup
       procedure :: interp_pressure_density                !< Calculate pressure and density interpolated to face
@@ -276,6 +278,7 @@ contains
       allocate(self%dPjx(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%dPjx=0.0_WP
       allocate(self%dPjy(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%dPjy=0.0_WP
       allocate(self%dPjz(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%dPjz=0.0_WP
+      allocate(self%Tmptr(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%Tmptr=25.0_WP
       allocate(self%rho_U(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%rho_U=0.0_WP
       allocate(self%rho_V(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%rho_V=0.0_WP
       allocate(self%rho_W(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%rho_W=0.0_WP
@@ -283,9 +286,7 @@ contains
       allocate(self%P_V(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%P_V=0.0_WP
       allocate(self%P_W(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%P_W=0.0_WP
       allocate(self%visc   (self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%visc   =0.0_WP
-      allocate(self%visc_xy(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%visc_xy=0.0_WP
-      allocate(self%visc_yz(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%visc_yz=0.0_WP
-      allocate(self%visc_zx(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%visc_zx=0.0_WP
+      allocate(self%therm_cond(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%therm_cond=0.0_WP
       ! Two-phase
       allocate(self%Grho (self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%Grho =0.0_WP
       allocate(self%Lrho (self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%Lrho =0.0_WP
@@ -355,9 +356,16 @@ contains
       allocate(self%dHpjump(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%dHpjump=0.0_WP
 
       ! Arrays employed temporarily in a few places
-      allocate(self%tmp1(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%tmp1   =0.0_WP
-      allocate(self%tmp2(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%tmp2   =0.0_WP
-      allocate(self%tmp3(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%tmp3   =0.0_WP
+      allocate(self%tmp1 (self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%tmp1  =0.0_WP
+      allocate(self%tmp2 (self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%tmp2  =0.0_WP
+      allocate(self%tmp3 (self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%tmp3  =0.0_WP
+      allocate(self%tmp4 (self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%tmp4  =0.0_WP
+      allocate(self%tmp5 (self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%tmp5  =0.0_WP
+      allocate(self%tmp6 (self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%tmp6  =0.0_WP
+      allocate(self%tmp7 (self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%tmp7  =0.0_WP
+      allocate(self%tmp8 (self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%tmp8  =0.0_WP
+      allocate(self%tmp9 (self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%tmp9  =0.0_WP
+      allocate(self%tmp10(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%tmp10 =0.0_WP
       
       ! Allocate vfs objects that are required for the MAST solver
       call vf%allocate_supplement()
@@ -2263,6 +2271,301 @@ contains
      end subroutine calculate_ustar
        
    end subroutine advection_step
+   
+   subroutine diffusion_src_explicit_step(this,dt,vf,matmod,sgs_visc)
+     use mpi_f08,   only: MPI_ALLREDUCE,MPI_MAX
+     use parallel,  only: MPI_REAL_WP
+     use vfs_class, only: vfs
+     use matm_class, only: matm
+     implicit none
+     class(mast), intent(inout) :: this   !< The two-phase all-Mach flow solver
+     class(vfs),  intent(inout) :: vf     !< The volume fraction solver
+     class(matm), intent(inout) :: matmod !< The material models for this solver
+     real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in), optional :: sgs_visc !< The subgrid-scale modeling, passed in
+     real(WP),    intent(in)    :: dt     !< Timestep size over which to advance
+     real(WP), dimension(:,:,:), pointer :: div       !< divergence calculated each substep
+     real(WP), dimension(:,:,:), pointer :: Uf_y,Uf_z !< X velocity interpolated to other faces
+     real(WP), dimension(:,:,:), pointer :: Vf_x,Vf_z !< Y velocity interpolated to other faces
+     real(WP), dimension(:,:,:), pointer :: Wf_x,Wf_y !< Z velocity interpolated to other faces
+     real(WP), dimension(:,:,:), pointer :: visc_x,visc_y,visc_z !< viscosity interpolated to faces
+     integer  :: i,j,k,n,nCFL,ierr
+     real(WP) :: buf,myCFL,mydt,spec_heat
+     
+     ! Set up intermediate divergence
+     div =>this%tmp1
+     ! Set up temporary face viscosity
+     Uf_y=>this%tmp2; Vf_z=>this%tmp4; Wf_x=>this%tmp6
+     Uf_z=>this%tmp3; Vf_x=>this%tmp5; Wf_y=>this%tmp7
+     ! Set up face viscosities
+     visc_x=>this%tmp8; visc_y=>this%tmp9; visc_z=>this%tmp10
+     
+     ! Update temperature
+     call matmod%update_temperature(vf,this%Tmptr)
+     ! Viscosity and thermal conductivity updated using new temperature and VOF
+     call this%get_viscosity(vf,matmod,sgs_visc,visc_x,visc_y,visc_z)
+     
+     ! Estimate CFL from explicit diffusive and source terms
+     buf=0.0_WP
+     do k=this%cfg%kmin_,this%cfg%kmax_
+       do j=this%cfg%jmin_,this%cfg%jmax_
+         do i=this%cfg%imin_,this%cfg%imax_
+           ! Viscous CFL
+           buf=max(buf,4.0_WP*dt*this%visc(i,j,k)*max(this%cfg%dxi(i),this%cfg%dyi(j),this%cfg%dzi(k))**2/this%RHO(i,j,k))
+           spec_heat = ((1.0_WP-vf%VF(i,j,k))*matmod%spec_heat_gas   (this%Tmptr(i,j,k))*this%Grho(i,j,k) &
+                       +(       vf%VF(i,j,k))*matmod%spec_heat_liquid(this%Tmptr(i,j,k))*this%Lrho(i,j,k) )
+           buf=max(buf,4.0_WP*dt*this%therm_cond(i,j,k)*max(this%cfg%dxi(i),this%cfg%dyi(j),this%cfg%dzi(k))**2/spec_heat)
+           ! Gravity CFL (check this)
+           buf=max(buf,dt**2*abs(this%gravity(1))*this%cfg%dxi(i), &
+                       dt**2*abs(this%gravity(2))*this%cfg%dyi(j), &
+                       dt**2*abs(this%gravity(3))*this%cfg%dzi(k))
+         end do
+       end do
+     end do
+     call MPI_ALLREDUCE(buf,myCFL,1,MPI_REAL_WP,MPI_MAX,this%cfg%comm,ierr)
+     
+     ! Calculate sub-step for viscous solver
+     nCFL=ceiling(myCFL)
+     mydt=dt/(real(nCFL,WP)+epsilon(1.0_WP)) ! This would divide by zero if there is no viscosity, so I added the epsilond
+     
+     ! Sub-step for stability
+     do n=1,nCFL
+       ! Perform viscous step
+       call diffusion_src_explicit_substep()
+       ! Update temperature
+       call matmod%update_temperature(vf,this%Tmptr)
+       ! Calculate viscosity
+       if (n.lt.nCFL) call this%get_viscosity(vf,matmod,sgs_visc,visc_x,visc_y,visc_z)
+     end do
+     
+     ! Nullify...
+     
+   contains
+     
+     subroutine diffusion_src_explicit_substep()
+       implicit none
+       
+       real(WP) :: VISCforceX,VISCforceY,VISCforceZ,spongeX
+       real(WP) :: VISCIntEnergy,VISCKinEnergy,HEATIntEnergy
+       real(WP) :: dUdx,dUdy,dUdz,dVdx,dVdy,dVdz,dWdx,dWdy,dWdz
+       real(WP) :: dMUdx,dMUdy,dMUdz
+       real(WP) :: div2U,div2V,div2W
+       real(WP) :: ddilatationdx,ddilatationdy,ddilatationdz
+       
+       integer :: i,j,k,n
+       
+       ! Viscous routine operates on face velocities, need to be updated each time
+       ! Update traditional face velocity (just interpolated)
+       call this%interp_vel_basic(vf,this%Ui,this%Vi,this%Wi,this%U,this%V,this%W)
+       ! Apply boundary condtions
+       bc_scope = 'velocity'
+       call this%apply_bcond(dt,bc_scope)
+       ! Calculate other interpolated face velocities
+       call this%interp_vel_basic(vf,this%Vi,this%Wi,this%Ui,Vf_x,Wf_y,Uf_z)
+       call this%interp_vel_basic(vf,this%Wi,this%Ui,this%Vi,Wf_x,Uf_y,Vf_z)
+       ! BCs not needed, masks are already addressed, nothing used from within boundary
+       
+       ! Compute divergence and SGS isotropic tensor in each cell
+       do k=this%cfg%kmin_,this%cfg%kmax_
+         do j=this%cfg%jmin_,this%cfg%jmax_
+           do i=this%cfg%imin_,this%cfg%imax_
+             div(i,j,k)=( sum(this%divp_x(:,i,j,k)*this%U(i:i+1,j,k)) &
+                        + sum(this%divp_y(:,i,j,k)*this%V(i,j:j+1,k)) &
+                        + sum(this%divp_z(:,i,j,k)*this%W(i,j,k:k+1)) )
+             !tau_kk(i,j,k) = 2.0_WP*CI_visc(i,j,k)*RHO(i,j,k)*(delta_3D(i,j,k)*S(i,j,k))**2
+             ! Zero values near wall cells
+             !if (minval(vol(i-3:i+3,j-3:j+3,k-3:k+3)).eq.0.0_WP) then
+             !eddyVISC(i,j,k) = 0.0_WP
+             !   tau_kk  (i,j,k) = 0.0_WP
+             !end if
+           end do
+         end do
+       end do
+       ! Communicate
+       call this%cfg%sync(div)
+       !call compressible_boundary_update(tau_kk)
+       
+       ! Perform viscous update over substep
+       do k=this%cfg%kmin_,this%cfg%kmax_
+         do j=this%cfg%jmin_,this%cfg%jmax_
+           do i=this%cfg%imin_,this%cfg%imax_
+             
+             dMUdx= sum(this%divp_x(:,i,j,k)*visc_x(i:i+1,j,k))
+             dMUdy= sum(this%divp_y(:,i,j,k)*visc_y(i,j:j+1,k))
+             dMUdz= sum(this%divp_z(:,i,j,k)*visc_z(i,j,k:k+1))
+             
+             dUdx = sum(this%divp_x(i,j,k,:)*this%U(i:i+1,j,k))
+             dVdx = sum(this%divp_x(i,j,k,:)*Vf_x  (i:i+1,j,k))
+             dWdx = sum(this%divp_x(i,j,k,:)*Wf_x  (i:i+1,j,k))
+             
+             dUdy = sum(this%divp_y(i,j,k,:)*Uf_y  (i,j:j+1,k))
+             dVdy = sum(this%divp_y(i,j,k,:)*this%V(i,j:j+1,k))
+             dWdy = sum(this%divp_y(i,j,k,:)*Wf_y  (i,j:j+1,k))
+             
+             dUdz = sum(this%divp_z(i,j,k,:)*Uf_z  (i,j,k:k+1))
+             dVdz = sum(this%divp_z(i,j,k,:)*Vf_z  (i,j,k:k+1))
+             dWdz = sum(this%divp_z(i,j,k,:)*this%W(i,j,k:k+1))
+             
+             div2U = 2.0_WP*( &
+                     this%divp_x(1,i,j,k)*(this%divp_x(i,j,k,1)*this%U (i+1,j,k) + this%divp_x(0,i,j,k)*this%Ui(i,j,k)) +&
+                     this%divp_x(0,i,j,k)*(this%divp_x(i,j,k,1)*this%Ui(i,j,k)   + this%divp_x(0,i,j,k)*this%U (i,j,k)) +&
+                     this%divp_x(1,i,j,k)*(this%divp_y(i,j,k,1)*Uf_y   (i,j+1,k) + this%divp_y(0,i,j,k)*this%Ui(i,j,k)) +&
+                     this%divp_y(0,i,j,k)*(this%divp_y(i,j,k,1)*this%Ui(i,j,k)   + this%divp_y(0,i,j,k)*Uf_y   (i,j,k)) +&
+                     this%divp_z(1,i,j,k)*(this%divp_z(i,j,k,1)*Uf_z   (i,j,k+1) + this%divp_z(0,i,j,k)*this%Ui(i,j,k)) +&
+                     this%divp_z(0,i,j,k)*(this%divp_z(i,j,k,1)*this%Ui(i,j,k)   + this%divp_z(0,i,j,k)*Uf_z   (i,j,k)) )
+             div2V = 2.0_WP*( &
+                     this%divp_x(1,i,j,k)*(this%divp_x(i,j,k,1)*Vf_x   (i+1,j,k) + this%divp_x(0,i,j,k)*this%Vi(i,j,k)) +&
+                     this%divp_x(0,i,j,k)*(this%divp_x(i,j,k,1)*this%Vi(i,j,k)   + this%divp_x(0,i,j,k)*Vf_x   (i,j,k)) +&
+                     this%divp_x(1,i,j,k)*(this%divp_y(i,j,k,1)*this%V (i,j+1,k) + this%divp_y(0,i,j,k)*this%Vi(i,j,k)) +&
+                     this%divp_y(0,i,j,k)*(this%divp_y(i,j,k,1)*this%Vi(i,j,k)   + this%divp_y(0,i,j,k)*this%V (i,j,k)) +&
+                     this%divp_z(1,i,j,k)*(this%divp_z(i,j,k,1)*Vf_z   (i,j,k+1) + this%divp_z(0,i,j,k)*this%Vi(i,j,k)) +&
+                     this%divp_z(0,i,j,k)*(this%divp_z(i,j,k,1)*this%Vi(i,j,k)   + this%divp_z(0,i,j,k)*Vf_z   (i,j,k)) )
+             div2W = 2.0_WP*( &
+                     this%divp_x(1,i,j,k)*(this%divp_x(i,j,k,1)*Wf_x   (i+1,j,k) + this%divp_x(0,i,j,k)*this%Wi(i,j,k)) +&
+                     this%divp_x(0,i,j,k)*(this%divp_x(i,j,k,1)*this%Wi(i,j,k)   + this%divp_x(0,i,j,k)*Wf_x   (i,j,k)) +&
+                     this%divp_x(1,i,j,k)*(this%divp_y(i,j,k,1)*Wf_y   (i,j+1,k) + this%divp_y(0,i,j,k)*this%Wi(i,j,k)) +&
+                     this%divp_y(0,i,j,k)*(this%divp_y(i,j,k,1)*this%Wi(i,j,k)   + this%divp_y(0,i,j,k)*Wf_y   (i,j,k)) +&
+                     this%divp_z(1,i,j,k)*(this%divp_z(i,j,k,1)*this%W (i,j,k+1) + this%divp_z(0,i,j,k)*this%Wi(i,j,k)) +&
+                     this%divp_z(0,i,j,k)*(this%divp_z(i,j,k,1)*this%Wi(i,j,k)   + this%divp_z(0,i,j,k)*this%W (i,j,k)) )
+             
+             ddilatationdx = this%divp_x(0,i,j,k)*sum(this%itpi_x(:,i  ,j,k)*div(i-1:i,j,k)) &
+                            +this%divp_x(1,i,j,k)*sum(this%itpi_x(:,i+1,j,k)*div(i:i+1,j,k))
+             ddilatationdy = this%divp_y(0,i,j,k)*sum(this%itpi_y(:,i,j  ,k)*div(i,j-1:j,k)) &
+                            +this%divp_y(1,i,j,k)*sum(this%itpi_y(:,i,j+1,k)*div(i,j:j+1,k))
+             ddilatationdz = this%divp_z(0,i,j,k)*sum(this%itpi_z(:,i,j,k  )*div(i,j,k-1:k)) &
+                            +this%divp_z(1,i,j,k)*sum(this%itpi_z(:,i,j,k+1)*div(i,j,k:k+1))
+             
+             ! Compute d/dx_j (tau_ij) for i = 1
+             ! (x-direction)
+             VISCforceX=dMUdx*(dUdx+dUdx) & ! j = 1
+             +dMUdy*(dUdy+dVdx) & ! j = 2
+             +dMUdz*(dUdz+dWdx) & ! j = 3
+             +this%visc(i,j,k)*div2U &
+             -(2.0_WP/3.0_WP)*dMUdx*div(i,j,k) &
+             +(1.0_WP/3.0_WP)*this%visc(i,j,k)*ddilatationdx
+             
+             ! Compute d/dx_j (tau_ij) for i = 2
+             ! (y-direction)
+             VISCforceY=dMUdx*(dVdx+dUdy) & ! j = 1
+             +dMUdy*(dVdy+dVdy) & ! j = 2
+             +dMUdz*(dVdz+dWdy) & ! j = 3
+             +this%visc(i,j,k)*div2V &
+             -(2.0_WP/3.0_WP)*dMUdy*div(i,j,k) &
+             +(1.0_WP/3.0_WP)*this%visc(i,j,k)*ddilatationdy
+             
+             ! Compute d/dx_j (tau_ij) for i = 3
+             ! (z-direction)
+             VISCforceZ=dMUdx*(dWdx+dUdz) & ! j = 1
+             +dMUdy*(dWdy+dVdz) & ! j = 2
+             +dMUdz*(dWdz+dWdz) & ! j = 3
+             +this%visc(i,j,k)*div2W &
+             -(2.0_WP/3.0_WP)*dMUdz*div(i,j,k) &
+             +(1.0_WP/3.0_WP)*this%visc(i,j,k)*ddilatationdz
+             
+             ! Compute the energy source/sink due to viscous effects
+             ! d/dx_j (tau_ij  u_i) = tau_ij d/dx_i u_j + u_i d/dx_j (tau_ij)
+             !                        ^{internal energy}  ^{kinetic energy}
+             VISCKinEnergy=this%Ui(i,j,k)*VISCforceX+this%Vi(i,j,k)*VISCforceY+this%Wi(i,j,k)*VISCforceZ
+             ! ^ needs to be multiplied by density ratio
+             VISCIntEnergy= this%visc(i,j,k)*(&
+             (dUdx*(dUdx+dUdx)+dUdy*(dVdx+dUdy)+dUdz*(dWdx+dUdz) &
+             +dVdx*(dUdy+dVdx)+dVdy*(dVdy+dVdy)+dVdz*(dWdy+dVdz) &
+             +dWdx*(dUdz+dWdx)+dWdy*(dVdz+dWdy)+dWdz*(dWdz+dWdz))&
+             -(2.0_WP/3.0_WP)*div(i,j,k)**2)
+             HEATIntEnergy=therm_diffterm(i,j,k)
+             ! ^ phase-specific terms are included
+             
+             ! Add sponge
+             !spongeX=(RHO(i,j,k)*sp_vel-rhoU(i,j,k))*sp_coeff*0.5_WP*(tanh((xm(i)-sp_loc)/(2.0_WP*min_meshsize))+1.0_WP)
+             ! Perform update from viscous forces
+             this%rhoUi(i,j,k)=this%rhoUi(i,j,k)+mydt*VISCforceX!+mydt*eddyVISCforceX+mydt*spongeX!+mydt*STforceX
+             this%rhoVi(i,j,k)=this%rhoVi(i,j,k)+mydt*VISCforceY!+mydt*eddyVISCforceY!+mydt*STforceY
+             this%rhoWi(i,j,k)=this%rhoWi(i,j,k)+mydt*VISCforceZ!+mydt*eddyVISCforceZ!+mydt*STforceZ
+             this%GrhoE(i,j,k)=this%GrhoE(i,j,k) &
+                +mydt*this%Grho(i,j,k)/this%RHO(i,j,k)*VISCKinEnergy &
+                +mydt*(VISCIntEnergy+HEATIntEnergy)*real(ceiling(1.0_WP-vf%VF(i,j,k)),WP)
+             this%LrhoE(i,j,k)=this%LrhoE(i,j,k) &
+                +mydt*this%Lrho(i,j,k)/this%RHO(i,j,k)*VISCKinEnergy &
+                +mydt*(VISCIntEnergy+HEATIntEnergy)*real(ceiling(       vf%VF(i,j,k)),WP)
+             this%GP   (i,j,k)=this%GP   (i,j,k)+mydt*matmod%EOS_gas   (i,j,k,'v')* &
+             (VISCIntEnergy + HEATIntEnergy)*real(ceiling(1.0_WP-vf%VF(i,j,k)),WP)
+             this%LP   (i,j,k)=this%LP   (i,j,k)+mydt*matmod%EOS_liquid(i,j,k,'v')* &
+             (VISCIntEnergy + HEATIntEnergy)*real(ceiling(       vf%VF(i,j,k)),WP)
+             ! Not sure about RHO terms for GPA, LPA
+             
+             ! Update with gravity
+             this%rhoUi(i,j,k)=this%rhoUi(i,j,k)+mydt*this%RHO (i,j,k)*this%gravity(1)
+             this%rhoVi(i,j,k)=this%rhoVi(i,j,k)+mydt*this%RHO (i,j,k)*this%gravity(2)
+             this%rhoWi(i,j,k)=this%rhoWi(i,j,k)+mydt*this%RHO (i,j,k)*this%gravity(3)
+             this%GrhoE(i,j,k)=this%GrhoE(i,j,k)+mydt*this%Grho(i,j,k)*(1.0_WP-vf%VF(i,j,k))* &
+                  (this%Ui(i,j,k)*this%gravity(1)+this%Vi(i,j,k)*this%gravity(2)+this%Wi(i,j,k)*this%gravity(3))
+             this%LrhoE(i,j,k)=this%LrhoE(i,j,k)+mydt*this%Lrho(i,j,k)*(       vf%VF(i,j,k))* &
+                  (this%Ui(i,j,k)*this%gravity(1)+this%Vi(i,j,k)*this%gravity(2)+this%Wi(i,j,k)*this%gravity(3))
+             
+             ! Include source terms from LPT
+             !rhoU(i,j,k)=rhoU(i,j,k) + srcUi(i,j,k)/real(nCFL,WP)
+             !rhoV(i,j,k)=rhoV(i,j,k) + srcVi(i,j,k)/real(nCFL,WP)
+             !rhoW(i,j,k)=rhoW(i,j,k) + srcWi(i,j,k)/real(nCFL,WP)
+             !GrhoE(i,j,k)=GrhoE(i,j,k)+srcE (i,j,k)/real(nCFL,WP)
+             ! LPT are liquid droplets, only get energy from gas phase
+             
+           end do
+         end do
+       end do
+       
+       ! BCs and communication for updated variables
+       bc_scope = 'momentum'
+       call this%apply_bcond(dt,bc_scope)
+       bc_scope = 'energy'
+       call this%apply_bcond(dt,bc_scope)
+       call this%cfg%sync(this%GP)
+       call this%cfg%sync(this%LP)
+       
+       ! Synchronize velocity with momeentum
+       this%Ui=this%rhoUi/this%RHO
+       this%Vi=this%rhoVi/this%RHO
+       this%Wi=this%rhoWi/this%RHO
+       
+       return
+     end subroutine diffusion_src_explicit_substep
+     
+     function therm_diffterm(i,j,k) result(heat_term)
+       implicit none
+       integer  :: i,j,k
+       real(WP) :: heat_term
+       real(WP) :: div2T,dTdx,dTdy,dTdz
+       real(WP) :: dkdx,dkdy,dkdz
+       
+       ! Calculate finite difference derivatives
+       
+       div2T = this%divp_x(0,i,j,k)*sum(this%divu_x(:,i  ,j,k)*this%Tmptr(i-1:i,j,k)) &
+              +this%divp_x(1,i,j,k)*sum(this%divu_x(:,i+1,j,k)*this%Tmptr(i:i+1,j,k)) &
+              +this%divp_y(0,i,j,k)*sum(this%divv_y(:,i,j  ,k)*this%Tmptr(i,j-1:j,k)) &
+              +this%divp_y(1,i,j,k)*sum(this%divv_y(:,i,j+1,k)*this%Tmptr(i,j:j+1,k)) &
+              +this%divp_z(0,i,j,k)*sum(this%divw_z(:,i,j,k  )*this%Tmptr(i,j,k-1:k)) &
+              +this%divp_z(1,i,j,k)*sum(this%divw_z(:,i,j,k+1)*this%Tmptr(i,j,k:k+1))
+       
+       dTdx = this%divp_x(0,i,j,k)*sum(this%itpi_x(:,i  ,j,k)*this%Tmptr(i-1:i,j,k)) &
+             +this%divp_x(1,i,j,k)*sum(this%itpi_x(:,i+1,j,k)*this%Tmptr(i:i+1,j,k))
+       dTdy = this%divp_y(0,i,j,k)*sum(this%itpi_y(:,i,j  ,k)*this%Tmptr(i,j-1:j,k)) &
+             +this%divp_y(1,i,j,k)*sum(this%itpi_y(:,i,j+1,k)*this%Tmptr(i,j:j+1,k))
+       dTdz = this%divp_z(0,i,j,k)*sum(this%itpi_z(:,i,j,k  )*this%Tmptr(i,j,k-1:k)) &
+             +this%divp_z(1,i,j,k)*sum(this%itpi_z(:,i,j,k+1)*this%Tmptr(i,j,k:k+1))
+             
+       dkdx = this%divp_x(0,i,j,k)*sum(this%itpi_x(:,i  ,j,k)*this%therm_cond(i-1:i,j,k)) &
+             +this%divp_x(1,i,j,k)*sum(this%itpi_x(:,i+1,j,k)*this%therm_cond(i:i+1,j,k))
+       dkdy = this%divp_y(0,i,j,k)*sum(this%itpi_y(:,i,j  ,k)*this%therm_cond(i,j-1:j,k)) &
+             +this%divp_y(1,i,j,k)*sum(this%itpi_y(:,i,j+1,k)*this%therm_cond(i,j:j+1,k))
+       dkdz = this%divp_z(0,i,j,k)*sum(this%itpi_z(:,i,j,k  )*this%therm_cond(i,j,k-1:k)) &
+             +this%divp_z(1,i,j,k)*sum(this%itpi_z(:,i,j,k+1)*this%therm_cond(i,j,k:k+1))
+       
+       ! Calculate heat conduction term
+       heat_term = dkdx*dTdx+dkdy*dTdy+dkdz*dTdz+this%therm_cond(i,j,k)*div2T
+       
+       return
+     end function therm_diffterm
+
+     
+   end subroutine diffusion_src_explicit_step
 
    subroutine pressureproj_prepare(this,dt,vf,matmod,contact_model)
      use vfs_class, only : vfs
@@ -3284,52 +3587,116 @@ contains
       
    end subroutine get_max
    
-   !> Prepare viscosity arrays from vfs object
-   subroutine get_viscosity(this,vf)
-      use vfs_class, only: vfs
-      implicit none
-      class(mast), intent(inout) :: this
-      class(vfs), intent(in) :: vf
-      integer :: i,j,k
-      real(WP) :: liq_vol,gas_vol,tot_vol
-      ! ! Compute harmonically-averaged staggered viscosities using subcell phasic volumes
-      ! do k=this%cfg%kmino_+1,this%cfg%kmaxo_
-      !    do j=this%cfg%jmino_+1,this%cfg%jmaxo_
-      !       do i=this%cfg%imino_+1,this%cfg%imaxo_
-      !          ! VISC at [xm,ym,zm] - direct sum in x/y/z
-      !          liq_vol=sum(vf%Lvol(:,:,:,i,j,k))
-      !          gas_vol=sum(vf%Gvol(:,:,:,i,j,k))
-      !          tot_vol=gas_vol+liq_vol
-      !          this%visc(i,j,k)=0.0_WP
-      !          if (tot_vol.gt.0.0_WP) this%visc(i,j,k)=this%visc_g*this%visc_l/(this%visc_l*gas_vol/tot_vol+this%visc_g*liq_vol/tot_vol+epsilon(1.0_WP))
-      !          ! VISC_xy at [x,y,zm] - direct sum in z, staggered sum in x/y
-      !          liq_vol=sum(vf%Lvol(0,0,:,i,j,k))+sum(vf%Lvol(1,0,:,i-1,j,k))+sum(vf%Lvol(0,1,:,i,j-1,k))+sum(vf%Lvol(1,1,:,i-1,j-1,k))
-      !          gas_vol=sum(vf%Gvol(0,0,:,i,j,k))+sum(vf%Gvol(1,0,:,i-1,j,k))+sum(vf%Gvol(0,1,:,i,j-1,k))+sum(vf%Gvol(1,1,:,i-1,j-1,k))
-      !          tot_vol=gas_vol+liq_vol
-      !          this%visc_xy(i,j,k)=0.0_WP
-      !          if (tot_vol.gt.0.0_WP) this%visc_xy(i,j,k)=this%visc_g*this%visc_l/(this%visc_l*gas_vol/tot_vol+this%visc_g*liq_vol/tot_vol+epsilon(1.0_WP))
-      !          ! VISC_yz at [xm,y,z] - direct sum in x, staggered sum in y/z
-      !          liq_vol=sum(vf%Lvol(:,0,0,i,j,k))+sum(vf%Lvol(:,1,0,i,j-1,k))+sum(vf%Lvol(:,0,1,i,j,k-1))+sum(vf%Lvol(:,1,1,i,j-1,k-1))
-      !          gas_vol=sum(vf%Gvol(:,0,0,i,j,k))+sum(vf%Gvol(:,1,0,i,j-1,k))+sum(vf%Gvol(:,0,1,i,j,k-1))+sum(vf%Gvol(:,1,1,i,j-1,k-1))
-      !          tot_vol=gas_vol+liq_vol
-      !          this%visc_yz(i,j,k)=0.0_WP
-      !          if (tot_vol.gt.0.0_WP) this%visc_yz(i,j,k)=this%visc_g*this%visc_l/(this%visc_l*gas_vol/tot_vol+this%visc_g*liq_vol/tot_vol+epsilon(1.0_WP))
-      !          ! VISC_zx at [x,ym,z] - direct sum in y, staggered sum in z/x
-      !          liq_vol=sum(vf%Lvol(0,:,0,i,j,k))+sum(vf%Lvol(0,:,1,i,j,k-1))+sum(vf%Lvol(1,:,0,i-1,j,k))+sum(vf%Lvol(1,:,1,i-1,j,k-1))
-      !          gas_vol=sum(vf%Gvol(0,:,0,i,j,k))+sum(vf%Gvol(0,:,1,i,j,k-1))+sum(vf%Gvol(1,:,0,i-1,j,k))+sum(vf%Gvol(1,:,1,i-1,j,k-1))
-      !          tot_vol=gas_vol+liq_vol
-      !          this%visc_zx(i,j,k)=0.0_WP
-      !          if (tot_vol.gt.0.0_WP) this%visc_zx(i,j,k)=this%visc_g*this%visc_l/(this%visc_l*gas_vol/tot_vol+this%visc_g*liq_vol/tot_vol+epsilon(1.0_WP))
-      !       end do
-      !    end do
-      ! end do
-      ! ! Synchronize boundaries - not really needed...
-      ! call this%cfg%sync(this%visc)
-      ! call this%cfg%sync(this%visc_xy)
-      ! call this%cfg%sync(this%visc_yz)
-      ! call this%cfg%sync(this%visc_zx)
+   !> Prepare viscosity arrays from vfs, matm, and sgsmodel objects
+   subroutine get_viscosity(this,vf,matmod,sgs_visc,visc_x,visc_y,visc_z)
+     use vfs_class,  only: vfs, VFhi, VFlo
+     use matm_class, only: matm
+     implicit none
+     class(mast), intent(inout) :: this   !< The two-phase all-Mach flow solver
+     class(vfs),  intent(inout) :: vf     !< The volume fraction solver
+     class(matm), intent(inout) :: matmod !< The material models for this solver
+     real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in), optional :: sgs_visc
+     real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: visc_x
+     real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: visc_y
+     real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: visc_z
+     real(WP) :: visc_g,visc_l,kappa_g,kappa_l
+     real(WP) :: liq_vol,gas_vol,tot_vol
+     integer :: i,j,k
+     
+     ! Initialize face viscosities
+     visc_x = 0.0_WP; visc_y = 0.0_WP; visc_z = 0.0_WP
+     ! Initialize cell-centered diffusion parameters
+     this%visc = 0.0_WP;
+     this%therm_cond = 0.0_WP;
+     
+     do k=this%cfg%kmin_-1,this%cfg%kmax_+2
+       do j=this%cfg%jmin_-1,this%cfg%jmax_+2
+         do i=this%cfg%imin_-1,this%cfg%imax_+2
+           
+           ! Update thermal conductivity and viscosity of each phase
+           ! Set to unity if phase not present for sake of harmonic average
+           if (vf%VF(i,j,k).ge.VFlo) then
+             kappa_l = matmod%therm_cond_liquid(this%Tmptr(i,j,k))
+             visc_l = matmod%viscosity_liquid(this%Tmptr(i,j,k))
+           else
+             kappa_l = 1.0_WP; visc_l = 1.0_WP
+           end if
+           if (vf%VF(i,j,k).le.VFhi) then
+             kappa_g = matmod%therm_cond_gas(this%Tmptr(i,j,k))
+             visc_g = matmod%viscosity_gas(this%Tmptr(i,j,k))
+           else
+             kappa_g = 1.0_WP; visc_g = 1.0_WP
+           end if
+           
+           ! Contribute eddy viscosity to each phase viscosity
+           if (present(sgs_visc)) then
+             visc_g = visc_g + this%Grho(i,j,k)*sgs_visc(i,j,k)
+             visc_l = visc_l + this%Lrho(i,j,k)*sgs_visc(i,j,k)
+           end if
+           
+           !! -- CELL CENTER -- !!
+           liq_vol=sum(vf%Lvol(:,:,:,i,j,k))
+           gas_vol=sum(vf%Gvol(:,:,:,i,j,k))
+           tot_vol=gas_vol+liq_vol
+           if (tot_vol.gt.0.0_WP) then
+             this%therm_cond(i,j,k)=kappa_g*kappa_l/(kappa_l*gas_vol/tot_vol+kappa_g*liq_vol/tot_vol+epsilon(1.0_WP))
+             this%visc(i,j,k)=visc_g*visc_l/(visc_l*gas_vol/tot_vol+visc_g*liq_vol/tot_vol+epsilon(1.0_WP))
+           end if
+           
+           ! Skip if inviscid
+           if (.not.(visc_g.gt.0.0_WP .and. visc_l.gt.0.0_WP)) cycle
+           
+           !! -- X FACE -- !!
+           ! Left half contribution
+           liq_vol=sum(vf%Lvol(1,:,:,i,j,k))
+           gas_vol=sum(vf%Gvol(1,:,:,i,j,k))
+           visc_x(i+1,j,k) = visc_x(i+1,j,k) + gas_vol/visc_g + liq_vol/visc_l
+           ! Right half contribution
+           liq_vol=sum(vf%Lvol(0,:,:,i,j,k))
+           gas_vol=sum(vf%Gvol(0,:,:,i,j,k))
+           visc_x(i  ,j,k) = visc_x(i  ,j,k) + gas_vol/visc_g + liq_vol/visc_l
+           ! Perform harmonic average (reciprocal)
+           tot_vol = sum(vf%Gvol(0,:,:,i,j,k)) + sum(vf%Lvol(0,:,:,i,j,k)) + sum(vf%Gvol(1,:,:,i-1,j,k)) + sum(vf%Lvol(1,:,:,i-1,j,k))
+           if (tot_vol.gt.0.0_WP) visc_x(i,j,k) = tot_vol / visc_x(i,j,k);
+           
+           !! -- Y FACE -- !!
+           ! Left half contribution
+           liq_vol=sum(vf%Lvol(:,1,:,i,j,k))
+           gas_vol=sum(vf%Gvol(:,1,:,i,j,k))
+           visc_y(i,j+1,k) = visc_y(i,j+1,k) + gas_vol/visc_g + liq_vol/visc_l
+           ! Right half contribution
+           liq_vol=sum(vf%Lvol(:,0,:,i,j,k))
+           gas_vol=sum(vf%Gvol(:,0,:,i,j,k))
+           visc_y(i,j  ,k) = visc_y(i,j  ,k) + gas_vol/visc_g + liq_vol/visc_l
+           ! Perform harmonic average (reciprocal)
+           tot_vol = sum(vf%Gvol(:,0,:,i,j,k)) + sum(vf%Lvol(:,0,:,i,j,k)) + sum(vf%Gvol(:,1,:,i,j-1,k)) + sum(vf%Lvol(:,1,:,i,j-1,k))
+           if (tot_vol.gt.0.0_WP) visc_y(i,j,k) = tot_vol / visc_y(i,j,k);
+           
+           !! -- Z FACE -- !!
+           ! Left half contribution
+           liq_vol=sum(vf%Lvol(:,:,1,i,j,k))
+           gas_vol=sum(vf%Gvol(:,:,1,i,j,k))
+           visc_z(i,j,k+1) = visc_z(i,j,k+1) + gas_vol/visc_g + liq_vol/visc_l
+           ! Right half contribution
+           liq_vol=sum(vf%Lvol(:,:,0,i,j,k))
+           gas_vol=sum(vf%Gvol(:,:,0,i,j,k))
+           visc_z(i,j,k  ) = visc_z(i,j,k  ) + gas_vol/visc_g + liq_vol/visc_l
+           ! Perform harmonic average (reciprocal)
+           tot_vol = sum(vf%Gvol(:,:,0,i,j,k)) + sum(vf%Lvol(:,:,0,i,j,k)) + sum(vf%Gvol(:,:,1,i,j,k-1)) + sum(vf%Lvol(:,:,1,i,j,k-1))
+           if (tot_vol.gt.0.0_WP) visc_z(i,j,k) = tot_vol / visc_z(i,j,k);
+           
+         end do
+       end do
+     end do
+     
+     !call this%cfg%sync(this%therm_cond)
+     !call this%cfg%sync(this%visc)
+     !call this%cfg%sync(visc_x)
+     !call this%cfg%sync(visc_y)
+     !call this%cfg%sync(visc_z)
+
+     return
    end subroutine get_viscosity
-   
 
    ! !> Add gravity source term - assumes that rho_[UVW] have been generated before
    ! subroutine addsrc_gravity(this,resU,resV,resW)
