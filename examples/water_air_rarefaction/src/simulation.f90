@@ -147,8 +147,8 @@ contains
          call matmod%register_thermoflow_variables('gas'   ,fs%Grho,fs%Ui,fs%Vi,fs%Wi,fs%GrhoE,fs%GP)
          ! As a shocktube case, it is intended to be inviscid, no diffusion
          call matmod%register_diffusion_thermo_models(viscmodel_liquid=none,viscmodel_gas=none,hdffmodel_liquid=none,hdffmodel_gas=none)
-         ! Read in surface tension coefficient
-         call param_read('Surface tension coefficient',fs%sigma)
+         ! Surface tension should be set to 0, it is a 1D case
+         fs%sigma = 0.0_WP
          ! Configure pressure solver
          call param_read('Pressure iteration',fs%psolv%maxit)
          call param_read('Pressure tolerance',fs%psolv%rcvg)

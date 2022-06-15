@@ -15,8 +15,6 @@ Post-discontinuity velocity : 11.20375
 Post-discontinuity pressure : 0.7
 
 # Fluid properties
-Liquid dynamic viscosity :    0
-Gas dynamic viscosity :       0
 Liquid gamma :	      	      4.4
 Liquid Pref :		      6e3
 Gas gamma : 		      1.4
@@ -24,7 +22,6 @@ Gas gamma : 		      1.4
 # Initial conditions
 Liquid density :              1
 Gas density :                 1e-3
-Surface tension coefficient : 0
 
 # Time integration
 Max timestep size : 1e-4
