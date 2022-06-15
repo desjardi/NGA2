@@ -124,6 +124,7 @@ contains
       ! Create a compressible two-phase flow solver
       create_and_initialize_flow_solver: block
          use mast_class, only: clipped_neumann,dirichlet,bc_scope,bcond
+         use matm_class, only: none
          use ils_class,  only: gmres_amg,pcg_bbox
          use mathtools,  only: Pi
          integer :: i,j,k,n
@@ -144,9 +145,8 @@ contains
          ! Register flow solver variables with material models
          call matmod%register_thermoflow_variables('liquid',fs%Lrho,fs%Ui,fs%Vi,fs%Wi,fs%LrhoE,fs%LP)
          call matmod%register_thermoflow_variables('gas'   ,fs%Grho,fs%Ui,fs%Vi,fs%Wi,fs%GrhoE,fs%GP)
-         ! Assign constant viscosity to each phase
-         call param_read('Liquid dynamic viscosity',fs%visc_l0)
-         call param_read('Gas dynamic viscosity',fs%visc_g0)
+         ! As a shocktube case, it is intended to be inviscid, no diffusion
+         call matmod%register_diffusion_thermo_models(viscmodel_liquid=none,viscmodel_gas=none,hdffmodel_liquid=none,hdffmodel_gas=none)
          ! Read in surface tension coefficient
          call param_read('Surface tension coefficient',fs%sigma)
          ! Configure pressure solver
