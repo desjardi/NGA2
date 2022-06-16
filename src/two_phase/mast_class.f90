@@ -1498,7 +1498,7 @@ contains
                  else
                     ! Current cell (in front of face)
                     this%implicit%opr(1,i,j,k  ) = this%implicit%opr(1,i,j,k  ) + (1.0_WP-vf%VF(i,j,k  ))*Ga_i + vf%VF(i,j,k  )*La_i
-                    this%implicit%opr(7,i,j,k  ) = this%implicit%opr(5,i,j,k  ) + (1.0_WP-vf%VF(i,j,k  ))*Ga_nb+ vf%VF(i,j,k  )*La_nb
+                    this%implicit%opr(7,i,j,k  ) = this%implicit%opr(7,i,j,k  ) + (1.0_WP-vf%VF(i,j,k  ))*Ga_nb+ vf%VF(i,j,k  )*La_nb
                     ! Left cell (behind face)
                     this%implicit%opr(1,i,j,k-1) = this%implicit%opr(1,i,j,k-1) - (1.0_WP-vf%VF(i,j,k-1))*Ga_nb- vf%VF(i,j,k-1)*La_nb
                     this%implicit%opr(6,i,j,k-1) = this%implicit%opr(6,i,j,k-1) - (1.0_WP-vf%VF(i,j,k-1))*Ga_i - vf%VF(i,j,k-1)*La_i
@@ -1618,7 +1618,7 @@ contains
                    ( this%P(i,j,k)*(1.0_WP-this%Grho(i,j,k)/this%RHO(i,j,k)) &
                    - this%Hpjump(i,j,k)*(       vf%VF(i,j,k))) )
 
-	      this%F_LrhoE(i,j,k) = this%F_LrhoE(i,j,k) &
+	            this%F_LrhoE(i,j,k) = this%F_LrhoE(i,j,k) &
                    - dt*this%cfg%vol(i,j,k)*(       vf%VF(i,j,k))*(this%Lrho(i,j,k)/this%RHO(i,j,k)*&
                    ( sum(this%divp_x(:,i,j,k)*this%U(i:i+1,j,k)*this%P_U(i:i+1,j,k)) &
                    + sum(this%divp_y(:,i,j,k)*this%V(i,j:j+1,k)*this%P_V(i,j:j+1,k)) &
