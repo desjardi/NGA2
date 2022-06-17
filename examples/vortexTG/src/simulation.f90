@@ -225,7 +225,7 @@ contains
       ! Create a monitor file
       create_monitor: block
          ! Prepare some info about fields
-         call fs%get_cfl(time%dt,time%cfl)
+         call fs%get_cfl(time%dt,time%cfl,matmod=matmod)
          call fs%get_max()
          call vf%get_max()
          ! Create simulation monitor
@@ -272,7 +272,7 @@ contains
       do while (.not.time%done())
          
          ! Increment time
-         call fs%get_cfl(time%dt,time%cfl)
+         call fs%get_cfl(time%dt,time%cfl,matmod=matmod)
          call time%adjust_dt()
          call time%increment()
          

@@ -3480,12 +3480,14 @@ contains
    end subroutine update_Helmholtz_RHS
    
    !> Calculate the CFL
-   subroutine get_cfl(this,dt,cflc,cfl)
+   subroutine get_cfl(this,dt,cflc,cfl,matmod)
       use mpi_f08,   only: MPI_ALLREDUCE,MPI_MAX,MPI_MIN
       use parallel,  only: MPI_REAL_WP
       use mathtools, only: Pi
+      use matm_class, only: matm
       implicit none
       class(mast), intent(inout) :: this
+      class(matm), intent(inout), optional :: matmod
       real(WP), intent(in)  :: dt
       real(WP), intent(out) :: cflc
       real(WP), optional :: cfl
@@ -3508,9 +3510,6 @@ contains
       call MPI_ALLREDUCE(my_CFLst,this%CFLst,1,MPI_REAL_WP,MPI_MIN,this%cfg%comm,ierr)
       this%CFLst=dt/this%CFLst
       
-      ! Get largest kinematic viscosity
-      !max_nu=max(this%visc_l/this%rho_l,this%visc_g/this%rho_g)
-      max_nu = 0.0 ! for now
       ! Set the CFLs to zero
       my_CFLc_x=0.0_WP; my_CFLc_y=0.0_WP; my_CFLc_z=0.0_WP
       my_CFLv_x=0.0_WP; my_CFLv_y=0.0_WP; my_CFLv_z=0.0_WP
@@ -3524,6 +3523,16 @@ contains
                my_CFLa_x=max(my_CFLa_x,abs(this%U(i,j,k)+sqrt(this%RHOSS2(i,j,k)/this%RHO(i,j,k)))*this%cfg%dxmi(i))
                my_CFLa_y=max(my_CFLa_y,abs(this%V(i,j,k)+sqrt(this%RHOSS2(i,j,k)/this%RHO(i,j,k)))*this%cfg%dymi(j))
                my_CFLa_z=max(my_CFLa_z,abs(this%W(i,j,k)+sqrt(this%RHOSS2(i,j,k)/this%RHO(i,j,k)))*this%cfg%dzmi(k))
+               
+               max_nu = this%VISC(i,j,k)/this%RHO(i,j,k)
+               if (present(matmod)) then
+                 if (this%Lrho(i,j,k).gt.0.0_WP) then 
+                   max_nu = max(max_nu,matmod%viscosity_liquid(this%Tmptr(i,j,k))/this%Lrho(i,j,k)) 
+                 end if
+                 if (this%Grho(i,j,k).gt.0.0_WP) then 
+                   max_nu = max(max_nu,matmod%viscosity_gas   (this%Tmptr(i,j,k))/this%Grho(i,j,k)) 
+                 end if
+               end if
                my_CFLv_x=max(my_CFLv_x,4.0_WP*max_nu*this%cfg%dxi(i)**2)
                my_CFLv_y=max(my_CFLv_y,4.0_WP*max_nu*this%cfg%dyi(j)**2)
                my_CFLv_z=max(my_CFLv_z,4.0_WP*max_nu*this%cfg%dzi(k)**2)
