@@ -2392,40 +2392,40 @@ contains
              dMUdx= sum(this%divp_x(:,i,j,k)*visc_x(i:i+1,j,k))
              dMUdy= sum(this%divp_y(:,i,j,k)*visc_y(i,j:j+1,k))
              dMUdz= sum(this%divp_z(:,i,j,k)*visc_z(i,j,k:k+1))
+
+             dUdx = sum(this%divp_x(:,i,j,k)*this%U(i:i+1,j,k))
+             dVdx = sum(this%divp_x(:,i,j,k)*Vf_x  (i:i+1,j,k))
+             dWdx = sum(this%divp_x(:,i,j,k)*Wf_x  (i:i+1,j,k))
              
-             dUdx = sum(this%divp_x(i,j,k,:)*this%U(i:i+1,j,k))
-             dVdx = sum(this%divp_x(i,j,k,:)*Vf_x  (i:i+1,j,k))
-             dWdx = sum(this%divp_x(i,j,k,:)*Wf_x  (i:i+1,j,k))
+             dUdy = sum(this%divp_y(:,i,j,k)*Uf_y  (i,j:j+1,k))
+             dVdy = sum(this%divp_y(:,i,j,k)*this%V(i,j:j+1,k))
+             dWdy = sum(this%divp_y(:,i,j,k)*Wf_y  (i,j:j+1,k))
              
-             dUdy = sum(this%divp_y(i,j,k,:)*Uf_y  (i,j:j+1,k))
-             dVdy = sum(this%divp_y(i,j,k,:)*this%V(i,j:j+1,k))
-             dWdy = sum(this%divp_y(i,j,k,:)*Wf_y  (i,j:j+1,k))
-             
-             dUdz = sum(this%divp_z(i,j,k,:)*Uf_z  (i,j,k:k+1))
-             dVdz = sum(this%divp_z(i,j,k,:)*Vf_z  (i,j,k:k+1))
-             dWdz = sum(this%divp_z(i,j,k,:)*this%W(i,j,k:k+1))
+             dUdz = sum(this%divp_z(:,i,j,k)*Uf_z  (i,j,k:k+1))
+             dVdz = sum(this%divp_z(:,i,j,k)*Vf_z  (i,j,k:k+1))
+             dWdz = sum(this%divp_z(:,i,j,k)*this%W(i,j,k:k+1))
              
              div2U = 2.0_WP*( &
-                     this%divp_x(1,i,j,k)*(this%divp_x(i,j,k,1)*this%U (i+1,j,k) + this%divp_x(0,i,j,k)*this%Ui(i,j,k)) +&
-                     this%divp_x(0,i,j,k)*(this%divp_x(i,j,k,1)*this%Ui(i,j,k)   + this%divp_x(0,i,j,k)*this%U (i,j,k)) +&
-                     this%divp_x(1,i,j,k)*(this%divp_y(i,j,k,1)*Uf_y   (i,j+1,k) + this%divp_y(0,i,j,k)*this%Ui(i,j,k)) +&
-                     this%divp_y(0,i,j,k)*(this%divp_y(i,j,k,1)*this%Ui(i,j,k)   + this%divp_y(0,i,j,k)*Uf_y   (i,j,k)) +&
-                     this%divp_z(1,i,j,k)*(this%divp_z(i,j,k,1)*Uf_z   (i,j,k+1) + this%divp_z(0,i,j,k)*this%Ui(i,j,k)) +&
-                     this%divp_z(0,i,j,k)*(this%divp_z(i,j,k,1)*this%Ui(i,j,k)   + this%divp_z(0,i,j,k)*Uf_z   (i,j,k)) )
+                     this%divp_x(1,i,j,k)*(this%divp_x(1,i,j,k)*this%U (i+1,j,k) + this%divp_x(0,i,j,k)*this%Ui(i,j,k)) +&
+                     this%divp_x(0,i,j,k)*(this%divp_x(1,i,j,k)*this%Ui(i,j,k)   + this%divp_x(0,i,j,k)*this%U (i,j,k)) +&
+                     this%divp_x(1,i,j,k)*(this%divp_y(1,i,j,k)*Uf_y   (i,j+1,k) + this%divp_y(0,i,j,k)*this%Ui(i,j,k)) +&
+                     this%divp_y(0,i,j,k)*(this%divp_y(1,i,j,k)*this%Ui(i,j,k)   + this%divp_y(0,i,j,k)*Uf_y   (i,j,k)) +&
+                     this%divp_z(1,i,j,k)*(this%divp_z(1,i,j,k)*Uf_z   (i,j,k+1) + this%divp_z(0,i,j,k)*this%Ui(i,j,k)) +&
+                     this%divp_z(0,i,j,k)*(this%divp_z(1,i,j,k)*this%Ui(i,j,k)   + this%divp_z(0,i,j,k)*Uf_z   (i,j,k)) )
              div2V = 2.0_WP*( &
-                     this%divp_x(1,i,j,k)*(this%divp_x(i,j,k,1)*Vf_x   (i+1,j,k) + this%divp_x(0,i,j,k)*this%Vi(i,j,k)) +&
-                     this%divp_x(0,i,j,k)*(this%divp_x(i,j,k,1)*this%Vi(i,j,k)   + this%divp_x(0,i,j,k)*Vf_x   (i,j,k)) +&
-                     this%divp_x(1,i,j,k)*(this%divp_y(i,j,k,1)*this%V (i,j+1,k) + this%divp_y(0,i,j,k)*this%Vi(i,j,k)) +&
-                     this%divp_y(0,i,j,k)*(this%divp_y(i,j,k,1)*this%Vi(i,j,k)   + this%divp_y(0,i,j,k)*this%V (i,j,k)) +&
-                     this%divp_z(1,i,j,k)*(this%divp_z(i,j,k,1)*Vf_z   (i,j,k+1) + this%divp_z(0,i,j,k)*this%Vi(i,j,k)) +&
-                     this%divp_z(0,i,j,k)*(this%divp_z(i,j,k,1)*this%Vi(i,j,k)   + this%divp_z(0,i,j,k)*Vf_z   (i,j,k)) )
+                     this%divp_x(1,i,j,k)*(this%divp_x(1,i,j,k)*Vf_x   (i+1,j,k) + this%divp_x(0,i,j,k)*this%Vi(i,j,k)) +&
+                     this%divp_x(0,i,j,k)*(this%divp_x(1,i,j,k)*this%Vi(i,j,k)   + this%divp_x(0,i,j,k)*Vf_x   (i,j,k)) +&
+                     this%divp_x(1,i,j,k)*(this%divp_y(1,i,j,k)*this%V (i,j+1,k) + this%divp_y(0,i,j,k)*this%Vi(i,j,k)) +&
+                     this%divp_y(0,i,j,k)*(this%divp_y(1,i,j,k)*this%Vi(i,j,k)   + this%divp_y(0,i,j,k)*this%V (i,j,k)) +&
+                     this%divp_z(1,i,j,k)*(this%divp_z(1,i,j,k)*Vf_z   (i,j,k+1) + this%divp_z(0,i,j,k)*this%Vi(i,j,k)) +&
+                     this%divp_z(0,i,j,k)*(this%divp_z(1,i,j,k)*this%Vi(i,j,k)   + this%divp_z(0,i,j,k)*Vf_z   (i,j,k)) )
              div2W = 2.0_WP*( &
-                     this%divp_x(1,i,j,k)*(this%divp_x(i,j,k,1)*Wf_x   (i+1,j,k) + this%divp_x(0,i,j,k)*this%Wi(i,j,k)) +&
-                     this%divp_x(0,i,j,k)*(this%divp_x(i,j,k,1)*this%Wi(i,j,k)   + this%divp_x(0,i,j,k)*Wf_x   (i,j,k)) +&
-                     this%divp_x(1,i,j,k)*(this%divp_y(i,j,k,1)*Wf_y   (i,j+1,k) + this%divp_y(0,i,j,k)*this%Wi(i,j,k)) +&
-                     this%divp_y(0,i,j,k)*(this%divp_y(i,j,k,1)*this%Wi(i,j,k)   + this%divp_y(0,i,j,k)*Wf_y   (i,j,k)) +&
-                     this%divp_z(1,i,j,k)*(this%divp_z(i,j,k,1)*this%W (i,j,k+1) + this%divp_z(0,i,j,k)*this%Wi(i,j,k)) +&
-                     this%divp_z(0,i,j,k)*(this%divp_z(i,j,k,1)*this%Wi(i,j,k)   + this%divp_z(0,i,j,k)*this%W (i,j,k)) )
+                     this%divp_x(1,i,j,k)*(this%divp_x(1,i,j,k)*Wf_x   (i+1,j,k) + this%divp_x(0,i,j,k)*this%Wi(i,j,k)) +&
+                     this%divp_x(0,i,j,k)*(this%divp_x(1,i,j,k)*this%Wi(i,j,k)   + this%divp_x(0,i,j,k)*Wf_x   (i,j,k)) +&
+                     this%divp_x(1,i,j,k)*(this%divp_y(1,i,j,k)*Wf_y   (i,j+1,k) + this%divp_y(0,i,j,k)*this%Wi(i,j,k)) +&
+                     this%divp_y(0,i,j,k)*(this%divp_y(1,i,j,k)*this%Wi(i,j,k)   + this%divp_y(0,i,j,k)*Wf_y   (i,j,k)) +&
+                     this%divp_z(1,i,j,k)*(this%divp_z(1,i,j,k)*this%W (i,j,k+1) + this%divp_z(0,i,j,k)*this%Wi(i,j,k)) +&
+                     this%divp_z(0,i,j,k)*(this%divp_z(1,i,j,k)*this%Wi(i,j,k)   + this%divp_z(0,i,j,k)*this%W (i,j,k)) )
              
              ddilatationdx = this%divp_x(0,i,j,k)*sum(this%itpi_x(:,i  ,j,k)*div(i-1:i,j,k)) &
                             +this%divp_x(1,i,j,k)*sum(this%itpi_x(:,i+1,j,k)*div(i:i+1,j,k))
