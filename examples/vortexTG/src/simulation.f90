@@ -24,12 +24,39 @@ module simulation
    type(event)   :: ens_evt
    
    !> Simulation monitor file
-   type(monitor) :: mfile,cflfile
+   type(monitor) :: mfile,cflfile,kefile
    
    public :: simulation_init,simulation_run,simulation_final
    
+   ! Ad-hoc monitor variable and function
+   real(WP) :: KE
+   public   :: current_KE
+   
 contains
+  
+  function current_KE(this) result(buf)
+    use mpi_f08,   only: MPI_ALLREDUCE,MPI_SUM
+    use parallel,  only: MPI_REAL_WP
+    implicit none
+    type(mast), intent(in) :: this
+    real(WP) :: buf, KE
+    integer  :: ierr,i,j,k
     
+    KE = 0.0_WP
+    
+    do k=this%cfg%kmin_,this%cfg%kmax_
+      do j=this%cfg%jmin_,this%cfg%jmax_
+        do i=this%cfg%imin_,this%cfg%imax_
+          KE = KE + 0.5_WP*this%RHO(i,j,k)* &
+          (this%Ui(i,j,k)**2+this%Vi(i,j,k)**2+this%Wi(i,j,k)**2)
+        end do
+      end do
+    end do
+    call MPI_ALLREDUCE(KE,buf,1,MPI_REAL_WP,MPI_SUM,this%cfg%comm,ierr)
+    
+  end function
+  
+  
    !> Initialization of problem solver
    subroutine simulation_init
       use param, only: param_read,param_exists
@@ -80,7 +107,7 @@ contains
       create_and_initialize_flow_solver: block
          use mast_class, only: clipped_neumann,dirichlet,bc_scope,bcond
          use matm_class, only: none
-         use ils_class,  only: gmres_amg,pcg_bbox
+         use ils_class,  only: pcg_bbox,pcg_amg
          use mathtools,  only: Pi
          character(len=1) :: orientation
          integer :: i,j,k,n
@@ -114,7 +141,7 @@ contains
          call param_read('Implicit iteration',fs%implicit%maxit)
          call param_read('Implicit tolerance',fs%implicit%rcvg)
          ! Setup the solver
-         call fs%setup(pressure_ils=pcg_bbox,implicit_ils=gmres_amg)
+         call fs%setup(pressure_ils=pcg_bbox,implicit_ils=pcg_amg)
 
          ! Initial conditions
          call param_read('Gas density',rho_g0)
@@ -172,6 +199,9 @@ contains
          call fs%harmonize_advpressure_bulkmod(vf,matmod)
          ! Set initial pressure to harmonized field based on internal energy
          fs%P = fs%PA
+         
+         ! Update KE
+         KE = current_KE(fs)
 
       end block create_and_initialize_flow_solver
       
@@ -210,8 +240,13 @@ contains
          call mfile%add_column(fs%Pmax,'Pmax')
          call mfile%add_column(fs%psolv%it,'Pressure iteration')
          call mfile%add_column(fs%psolv%rerr,'Pressure error')
-         ! Kinetic energy
          call mfile%write()
+         ! Create kinetic energy monitor
+         kefile=monitor(fs%cfg%amRoot,'kinetic_energy')
+         call kefile%add_column(time%n,'Timestep number')
+         call kefile%add_column(time%t,'Time')
+         call kefile%add_column(KE,'Kinetic energy')
+         call kefile%write()
          ! Create CFL monitor
          cflfile=monitor(fs%cfg%amRoot,'cfl')
          call cflfile%add_column(time%n,'Timestep number')
@@ -300,10 +335,14 @@ contains
          ! Output to ensight
          if (ens_evt%occurs()) call ens_out%write_data(time%t)
          
+         ! Update KE
+         KE = current_KE(fs)
+         
          ! Perform and output monitoring
          call fs%get_max()
          call vf%get_max()
          call mfile%write()
+         call kefile%write()
          call cflfile%write()
          
       end do
