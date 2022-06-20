@@ -92,7 +92,7 @@ contains
       real(WP)               :: CEV,PVT,a1,b1,c1,a2,b2,c2,tau,M
       class(config), pointer :: cfg 
       !Model parameters
-      CEV=0.20_WP*CPFR-4e-5_WP    !cough expiratory volume
+      CEV=0.20_WP*CPFR-4e-5_WP    !Cough expiratory volume
       PVT=2.85_WP*CPFR+0.07_WP    !Peak velocity time
       a1=1.68_WP
       b1=3.34_WP
@@ -132,6 +132,12 @@ contains
          allocate(b%SR(6,b%cfg%imino_:b%cfg%imaxo_,b%cfg%jmino_:b%cfg%jmaxo_,b%cfg%kmino_:b%cfg%kmaxo_))
       end block allocate_work_arrays
 
+      ! print *,'x=',b%cfg%x
+      ! print *,'y=',b%cfg%y
+      ! print *,'z=',b%cfg%z
+      ! print *,'xm=',b%cfg%xm
+      ! print *,'ym=',b%cfg%ym
+      ! print *,'zm=',b%cfg%zm
 
       ! Initialize time tracker
       initialize_timetracker: block
@@ -182,20 +188,22 @@ contains
          ! Zero initial field
          b%fs%U=0.0_WP; b%fs%V=0.0_WP; b%fs%W=0.0_WP
          ! Apply Dirichlet at inlet
-         !call param_read('Gas velocity',Uin)
-         call param_read('Peak flow rate',CPFR)
-         Uin=inflowVelocity(b%time%t,CPFR,H_mouth,W_mouth)
+         call param_read('Gas velocity',Uin)
+         !call param_read('Peak flow rate',CPFR)
+         !Uin=inflowVelocity(b%time%t,CPFR,H_mouth,W_mouth)
          call param_read('Gas thickness',delta)
          call param_read('Gas perturbation',Urand)
          call b%fs%get_bcond('inflow',mybc)
          do n=1,mybc%itr%no_
             i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
-            !b%fs%U(i,j,k)=Uin*tanh(2.0_WP*(0.5_WP*W_mouth-abs(b%fs%cfg%zm(k)))/delta)*tanh(2.0_WP*b%fs%cfg%ym(j)/delta)*tanh(2.0_WP*(H_mouth-b%fs%cfg%ym(j))/delta)
-            b%fs%U(i,j,k)=Uin
+            b%fs%U(i,j,k)=Uin*tanh(2.0_WP*(0.5_WP*W_mouth-abs(b%fs%cfg%zm(k)))/delta)*tanh(2.0_WP*b%fs%cfg%ym(j)/delta)*tanh(2.0_WP*(H_mouth-b%fs%cfg%ym(j))/delta)+random_uniform(-Urand,Urand)
+            !b%fs%U(i,j,k)=abs(b%fs%cfg%zm(k))!Uin*tanh(0.5_WP*W_mouth-abs(b%fs%cfg%zm(k)))
+            !b%fs%U(i,j,k)=Uin*tanh(2.0_WP*(0.5_WP*W_mouth-abs(b%fs%cfg%zm(k)))/delta)
+            print *,'n=',n,'zm(k)=',b%fs%cfg%zm(k),'ym(j)=',b%fs%cfg%ym(j)
          end do
          !Apply coflow around inlet geometry
-         !call param_read('Gas coflow',Uco)
-         Uco=0.10_WP*Uin
+         call param_read('Gas coflow',Uco)
+         !Uco=0.10_WP*Uin
          call b%fs%get_bcond('coflow',mybc)
          do n=1,mybc%itr%no_
             i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
@@ -288,21 +296,20 @@ contains
          type(bcond), pointer :: mybc
          integer  :: n,i,j,k
          ! Reapply Dirichlet at inlet
-         Uin=inflowVelocity(b%time%t,CPFR,H_mouth,W_mouth)
+         !Uin=inflowVelocity(b%time%t,CPFR,H_mouth,W_mouth)
          call b%fs%get_bcond('inflow',mybc)
          do n=1,mybc%itr%no_
             i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
             !b%fs%U(i,j,k)=Uin*tanh(2.0_WP*(0.5_WP*W_mouth-abs(b%fs%cfg%zm(k)))/delta)*tanh(2.0_WP*b%fs%cfg%ym(j)/delta)*tanh(2.0_WP*(H_mouth-b%fs%cfg%ym(j))/delta)+random_uniform(-Urand,Urand)
             b%fs%U(i,j,k)=Uin*tanh(2.0_WP*(0.5_WP*W_mouth-abs(b%fs%cfg%zm(k)))/delta)*tanh(2.0_WP*b%fs%cfg%ym(j)/delta)*tanh(2.0_WP*(H_mouth-b%fs%cfg%ym(j))/delta)
-            b%fs%U(i,j,k)=Uin
          end do
          ! Reapply coflow around inlet geometry
-         Uco=0.10_WP*Uin
-         call b%fs%get_bcond('coflow',mybc)
-         do n=1,mybc%itr%no_
-            i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
-            b%fs%U(i,j,k)=Uco
-         end do
+         ! Uco=0.10_WP*Uin
+         ! call b%fs%get_bcond('coflow',mybc)
+         ! do n=1,mybc%itr%no_
+         !    i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
+         !    b%fs%U(i,j,k)=Uco
+         ! end do
       end block reapply_dirichlet
 
       ! Remember old velocity

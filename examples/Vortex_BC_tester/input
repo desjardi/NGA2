@@ -19,9 +19,10 @@ Stretching x : 0
 Stretching y : 0
 
 # Vortex properties
-Orientation        : x
-Vortex size        : 0.05
-Vortex intensity   : 30
+Orientation         : x
+Vortex size         : 0.05
+Vortex intensity    : 30
+Convective Velocity : 0.1 0.2 0.1
 
 # Zoomed out mesh definition
 #2 Ly :  0.5

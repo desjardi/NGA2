@@ -1,5 +1,5 @@
 # Parallelization
-1 Partition : 2 2 2
+1 Partition : 1 1 1
 
 # Zoomed in mesh definition
 1 Lx :  0.1
@@ -10,7 +10,7 @@
 1 nz :  50
 
 # Injection velocity
-Gas velocity :        10
+Gas velocity :        20
 Peak flow rate :      0.001
 Gas thickness :       0.001
 Gas perturbation :    1

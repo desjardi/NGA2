@@ -61,6 +61,8 @@ contains
       !b2%nudge_zmin =-1.0_WP !b1%cfg%z(b1%cfg%kmin)
       !b2%nudge_zmax =+1.0_WP !b1%cfg%z(b1%cfg%kmax+1)
 
+      print *, 'Done with init'
+
    end subroutine simulation_init
 
 

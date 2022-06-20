@@ -135,7 +135,7 @@ contains
          allocate(b%Wi  (b%cfg%imino_:b%cfg%imaxo_,b%cfg%jmino_:b%cfg%jmaxo_,b%cfg%kmino_:b%cfg%kmaxo_))
          allocate(b%SR(6,b%cfg%imino_:b%cfg%imaxo_,b%cfg%jmino_:b%cfg%jmaxo_,b%cfg%kmino_:b%cfg%kmaxo_))
       end block allocate_work_arrays
-
+      
 
       ! Initialize time tracker
       initialize_timetracker: block
@@ -180,6 +180,7 @@ contains
          call b%fs%setup(pressure_solver=b%ps,implicit_solver=b%is)
       end block create_solver
 
+
       ! Initialize our velocity field
       initialize_velocity: block
          use incomp_class, only: bcond
@@ -221,6 +222,7 @@ contains
          ! Compute divergence
          call b%fs%get_div()
       end block initialize_velocity
+
 
       ! Create an LES model
       create_sgs: block
