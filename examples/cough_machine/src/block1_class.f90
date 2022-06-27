@@ -36,6 +36,7 @@ module block1_class
       real(WP), dimension(:,:,:),   allocatable :: resU,resV,resW
       real(WP), dimension(:,:,:),   allocatable :: Ui,Vi,Wi
       real(WP), dimension(:,:,:,:), allocatable :: SR
+      real(WP), dimension(:,:,:),   allocatable :: SR_mag   !< Magnitude of strain rate tensor 
    contains
       procedure :: init                   !< Initialize block
       procedure :: step                   !< Advance block
@@ -96,21 +97,19 @@ contains
    !> Function that calcuates velocity at current time 
    function inflowVelocity(time,CPFR,H,W) result(UCPFR)
       real(WP), intent(in)   :: time,CPFR,H,W
-      real(WP)               :: UCPFR
-      real(WP)               :: CEV,PVT,a1,b1,c1,a2,b2,c2,tau,M
-      class(config), pointer :: cfg 
-      !Model parameters
-      CEV=0.20_WP*CPFR-4e-5_WP    !cough expiratory volume
-      PVT=2.85_WP*CPFR+0.07_WP    !Peak velocity time
+      real(WP)               :: UCPFR,CEV,PVT,a1,b1,c1,a2,b2,c2,tau,M
+      ! Model parameters
+      CEV=0.20_WP*CPFR-4e-5_WP    ! cough expiratory volume
+      PVT=2.85_WP*CPFR+0.07_WP    ! Peak velocity time
       a1=1.68_WP
       b1=3.34_WP
       c1=0.43_WP
       a2=(CEV/(PVT*CPFR))-a1
       b2=((-2.16_WP*CEV)/(PVT*CPFR))+10.46_WP
       c2=(1.8_WP/(b2-1.0_WP))
-      !Dimensionless time
+      ! Dimensionless time
       tau=time/PVT
-      !Dimensionless flow rate
+      ! Dimensionless flow rate
       if (tau.eq.0.0_WP) then
          M=0.0_WP
       else if (tau.lt.1.2_WP.and.tau.gt.0.0_WP) then 
@@ -182,6 +181,7 @@ contains
          allocate(b%Vi  (b%cfg%imino_:b%cfg%imaxo_,b%cfg%jmino_:b%cfg%jmaxo_,b%cfg%kmino_:b%cfg%kmaxo_))
          allocate(b%Wi  (b%cfg%imino_:b%cfg%imaxo_,b%cfg%jmino_:b%cfg%jmaxo_,b%cfg%kmino_:b%cfg%kmaxo_))
          allocate(b%SR(6,b%cfg%imino_:b%cfg%imaxo_,b%cfg%jmino_:b%cfg%jmaxo_,b%cfg%kmino_:b%cfg%kmaxo_))
+         allocate(b%SR_mag(b%cfg%imino_:b%cfg%imaxo_,b%cfg%jmino_:b%cfg%jmaxo_,b%cfg%kmino_:b%cfg%kmaxo_)) 
       end block allocate_work_arrays
 
       ! Initialize time tracker
@@ -249,10 +249,14 @@ contains
          use tpns_class, only: dirichlet,clipped_neumann,neumann
          use ils_class,  only: pcg_pfmg,gmres_amg,gmres_pilut !Didn't work for pressure_ils: gmres_pilut, pcg_pfmg
          use mathtools,  only: Pi
+         integer  :: i,j,k
          ! Create a two-phase flow solver
          b%fs=tpns(cfg=b%cfg,name='Two-phase NS')
+         ! Allocate array for variable liquid viscosity phase and assign a initial value
+         allocate(b%fs%visc_l_variable(b%cfg%imino_:b%cfg%imaxo_,b%cfg%jmino_:b%cfg%jmaxo_,b%cfg%kmino_:b%cfg%kmaxo_))
+         b%fs%visc_l_variable=b%fs%visc_l_0
          ! Assign constant viscosity to each phase
-         call param_read('Liquid dynamic viscosity',b%fs%visc_l)
+         !call param_read('Liquid dynamic viscosity',b%fs%visc_l)
          call param_read('Gas dynamic viscosity'   ,b%fs%visc_g)
          ! Assign constant density to each phase
          call param_read('Liquid density',b%fs%rho_l)
@@ -390,6 +394,8 @@ contains
          call b%ens_out%add_scalar('VOF',b%vf%VF)
          call b%ens_out%add_scalar('curvature',b%vf%curv)
          call b%ens_out%add_scalar('visc_t',b%sgs%visc)
+         call b%ens_out%add_scalar('SR_mag',b%SR_mag)
+         call b%ens_out%add_scalar('liquid_viscocity',b%fs%visc_l_variable)
          call b%ens_out%add_surface('vofplic',b%smesh)
          ! Output to ensight
          if (b%ens_evt%occurs()) call b%ens_out%write_data(b%time%t)
@@ -418,6 +424,8 @@ contains
          call b%mfile%add_column(b%fs%psolv%it,'Pressure iteration')
          call b%mfile%add_column(b%fs%psolv%rerr,'Pressure error')
          call b%mfile%add_column(Uin,'Inflow Velocity')
+         call b%mfile%add_column(b%fs%SRmax,'SR maximum')
+         call b%mfile%add_column(b%fs%Visclmax,'Max liq visc')
          call b%mfile%write()
          ! Create CFL monitor
          b%cflfile=monitor(b%fs%cfg%amRoot,'cfl1')
@@ -487,13 +495,18 @@ contains
       ! VOF solver step
       call b%vf%advance(dt=b%time%dt,U=b%fs%U,V=b%fs%V,W=b%fs%W)
 
-      ! Prepare new staggered viscosity (at n+1)
-      call b%fs%get_viscosity(vf=b%vf)
+      ! Update SR tensor and SR_mag array
+      call b%fs%get_strainrate(Ui=b%Ui,Vi=b%Vi,Wi=b%Wi,SR=b%SR,SR_mag=b%SR_mag)
+
+      ! Prepare new staggered constant viscosity (at n+1)
+      !call b%fs%get_viscosity(vf=b%vf)
+
+      ! Prepare new staggered variable viscosity at (n+1)
+      call b%fs%get_variable_viscosity(vf=b%vf,SR_mag=b%SR_mag)
 
       ! Turbulence modeling - only work with gas properties here
       sgs_model: block
          integer :: i,j,k
-         call b%fs%get_strainrate(Ui=b%Ui,Vi=b%Vi,Wi=b%Wi,SR=b%SR)
          b%resU=b%fs%rho_g
          call b%sgs%get_visc(dt=b%time%dtold,rho=b%resU,Ui=b%Ui,Vi=b%Vi,Wi=b%Wi,SR=b%SR)
          where (b%sgs%visc.lt.-b%fs%visc_g)
@@ -612,7 +625,7 @@ contains
       class(block1), intent(inout) :: b
 
       ! Deallocate work arrays
-      deallocate(b%resU,b%resV,b%resW,b%Ui,b%Vi,b%Wi,b%SR)
+      deallocate(b%resU,b%resV,b%resW,b%Ui,b%Vi,b%Wi,b%SR,b%SR_mag)
 
    end subroutine final
 
