@@ -92,6 +92,7 @@ module vfs_class
       
       ! Curvature
       real(WP), dimension(:,:,:), allocatable :: curv     !< Interface mean curvature
+      real(WP), dimension(:,:,:,:), allocatable :: curv2  !< Interface mean curvatures for two-plane cells
       
       ! Band strategy
       integer, dimension(:,:,:), allocatable :: band      !< Band to localize workload around the interface
@@ -215,7 +216,8 @@ contains
       allocate(self%SDold (  self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%SDold =0.0_WP
       allocate(self%G     (  self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%G     =0.0_WP
       allocate(self%curv  (  self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%curv  =0.0_WP
-      
+      allocate(self%curv2(2,self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%curv2=0.0_WP
+
       ! Set clipping distance
       self%Gclip=real(distance_band+1,WP)*self%cfg%min_meshsize
       
@@ -2187,6 +2189,7 @@ contains
       real(WP), dimension(3) :: csn,sn
       ! Reset curvature
       this%curv=0.0_WP
+      this%curv2=0.0_WP
       ! Traverse interior domain and compute curvature in cells with polygons
       do k=this%cfg%kmin_,this%cfg%kmax_
          do j=this%cfg%jmin_,this%cfg%jmax_
@@ -2204,6 +2207,8 @@ contains
                   ! Also store surface and normal
                   mysurf(n)  =abs(calculateVolume(this%interface_polygon(n,i,j,k)))
                   mynorm(n,:)=    calculateNormal(this%interface_polygon(n,i,j,k))
+                  ! Separate curvatures
+                  this%curv2(n,i,j,k)=mycurv(n)    
                end do
                ! Oriented-surface-average curvature
                !csn=0.0_WP; sn=0.0_WP
@@ -2226,11 +2231,13 @@ contains
                !end if
                ! Clip curvature - may not be needed if we select polygons carefully
                this%curv(i,j,k)=max(min(this%curv(i,j,k),this%maxcurv_times_mesh/this%cfg%meshsize(i,j,k)),-this%maxcurv_times_mesh/this%cfg%meshsize(i,j,k))
+               this%curv2(:,i,j,k)=max(min(this%curv2(:,i,j,k),this%maxcurv_times_mesh/this%cfg%meshsize(i,j,k)),-this%maxcurv_times_mesh/this%cfg%meshsize(i,j,k))            
             end do
          end do
       end do
       ! Synchronize boundaries
       call this%cfg%sync(this%curv)
+      call this%cfg%sync(this%curv2)
    end subroutine get_curvature
    
    

@@ -139,45 +139,45 @@ contains
          ! ####### TRANSFER DROPLETS FROM 1->2 HERE ######
          ! ###############################################
          ! Perform CCL and transfer
-         ! call transfer_vf_to_drops()
+         call transfer_vf_to_drops()
 
-         ! ! Preclip
-         ! call b1%vf%cfg%integrate(b1%vf%VF,V_before)
+         ! Preclip
+         call b1%vf%cfg%integrate(b1%vf%VF,V_before)
 
-         ! ! After we're done clip all VOF at the exit area and along the sides - hopefully nothing's left
-         ! do k=b1%fs%cfg%kmino_,b1%fs%cfg%kmaxo_
-         !   do j=b1%fs%cfg%jmino_,b1%fs%cfg%jmaxo_
-         !      do i=b1%fs%cfg%imino_,b1%fs%cfg%imaxo_
-         !         if (i.ge.b1%vf%cfg%imax-5) b1%vf%VF(i,j,k)=0.0_WP
-         !         if (j.ge.b1%vf%cfg%jmax-5) b1%vf%VF(i,j,k)=0.0_WP
-         !         if (j.le.b1%vf%cfg%jmin+5) b1%vf%VF(i,j,k)=0.0_WP
-         !         if (k.ge.b1%vf%cfg%kmax-5) b1%vf%VF(i,j,k)=0.0_WP
-         !         if (k.le.b1%vf%cfg%kmin+5) b1%vf%VF(i,j,k)=0.0_WP
-         !      end do
-         !   end do
-         ! end do
+         ! After we're done clip all VOF at the exit area and along the sides - hopefully nothing's left
+         do k=b1%fs%cfg%kmino_,b1%fs%cfg%kmaxo_
+           do j=b1%fs%cfg%jmino_,b1%fs%cfg%jmaxo_
+              do i=b1%fs%cfg%imino_,b1%fs%cfg%imaxo_
+                 if (i.ge.b1%vf%cfg%imax-5) b1%vf%VF(i,j,k)=0.0_WP
+                 if (j.ge.b1%vf%cfg%jmax-5) b1%vf%VF(i,j,k)=0.0_WP
+                 if (j.le.b1%vf%cfg%jmin+5) b1%vf%VF(i,j,k)=0.0_WP
+                 if (k.ge.b1%vf%cfg%kmax-5) b1%vf%VF(i,j,k)=0.0_WP
+                 if (k.le.b1%vf%cfg%kmin+5) b1%vf%VF(i,j,k)=0.0_WP
+              end do
+           end do
+         end do
 
-         ! ! Preclip
-         ! call b1%vf%cfg%integrate(b1%vf%VF,V_after)
-         ! Vclipped = V_after - V_before
+         ! Preclip
+         call b1%vf%cfg%integrate(b1%vf%VF,V_after)
+         Vclipped = V_after - V_before
 
          ! Advance block 2 until we've caught up
-         ! do while (b2%time%t.lt.b1%time%t)
+         do while (b2%time%t.lt.b1%time%t)
 
-         !    ! Exchange data using cpl12x/y/z couplers and the most recent velocity
-         !    U1on2=0.0_WP; call cpl12x%push(b1%fs%U); call cpl12x%transfer(); call cpl12x%pull(U1on2)
-         !    V1on2=0.0_WP; call cpl12y%push(b1%fs%V); call cpl12y%transfer(); call cpl12y%pull(V1on2)
-         !    W1on2=0.0_WP; call cpl12z%push(b1%fs%W); call cpl12z%transfer(); call cpl12z%pull(W1on2)
+            ! Exchange data using cpl12x/y/z couplers and the most recent velocity
+            U1on2=0.0_WP; call cpl12x%push(b1%fs%U); call cpl12x%transfer(); call cpl12x%pull(U1on2)
+            V1on2=0.0_WP; call cpl12y%push(b1%fs%V); call cpl12y%transfer(); call cpl12y%pull(V1on2)
+            W1on2=0.0_WP; call cpl12z%push(b1%fs%W); call cpl12z%transfer(); call cpl12z%pull(W1on2)
 
-         !    ! Advance block 2
-         !    call b2%step(U1on2,V1on2,W1on2)
+            ! Advance block 2
+            call b2%step(U1on2,V1on2,W1on2)
             
-         !    ! Exchange data using cpl21x/y/z couplers and the most recent velocity
-         !    U2on1=0.0_WP; call cpl21x%push(b2%fs%U); call cpl21x%transfer(); call cpl21x%pull(U2on1)
-         !    V2on1=0.0_WP; call cpl21y%push(b2%fs%V); call cpl21y%transfer(); call cpl21y%pull(V2on1)
-         !    W2on1=0.0_WP; call cpl21z%push(b2%fs%W); call cpl21z%transfer(); call cpl21z%pull(W2on1)
+            ! Exchange data using cpl21x/y/z couplers and the most recent velocity
+            U2on1=0.0_WP; call cpl21x%push(b2%fs%U); call cpl21x%transfer(); call cpl21x%pull(U2on1)
+            V2on1=0.0_WP; call cpl21y%push(b2%fs%V); call cpl21y%transfer(); call cpl21y%pull(V2on1)
+            W2on1=0.0_WP; call cpl21z%push(b2%fs%W); call cpl21z%transfer(); call cpl21z%pull(W2on1)
             
-         ! end do
+         end do
 
          ! ###############################################
          ! ############## PERFORM I/O HERE ###############

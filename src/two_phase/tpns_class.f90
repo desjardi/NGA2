@@ -1594,10 +1594,103 @@ contains
    end subroutine get_div
    
    
+   ! !> Add surface tension jump term using CSF
+   ! subroutine add_surface_tension_jump(this,dt,div,vf,contact_model)
+   !    use messager,  only: die
+   !    use vfs_class, only: vfs
+   !    use, intrinsic :: ieee_arithmetic
+   !    implicit none
+   !    class(tpns), intent(inout) :: this
+   !    real(WP), intent(inout) :: dt     !< Timestep size over which to advance
+   !    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: div  !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+   !    class(vfs), intent(inout) :: vf
+   !    integer, intent(in), optional :: contact_model
+   !    integer :: i,j,k
+   !    real(WP) :: mycurv,mysurf
+   !    logical :: T
+      
+   !    ! Store old jump
+   !    this%DPjx=this%Pjx
+   !    this%DPjy=this%Pjy
+   !    this%DPjz=this%Pjz
+      
+   !    ! Calculate pressure jump
+   !    do k=this%cfg%kmin_,this%cfg%kmax_+1
+   !       do j=this%cfg%jmin_,this%cfg%jmax_+1
+   !          do i=this%cfg%imin_,this%cfg%imax_+1
+   !             ! X face
+   !             mysurf=sum(vf%SD(i-1:i,j,k)*this%cfg%vol(i-1:i,j,k))
+   !             if (mysurf.gt.0.0_WP) then
+   !                mycurv=sum(vf%SD(i-1:i,j,k)*vf%curv(i-1:i,j,k)*this%cfg%vol(i-1:i,j,k))/mysurf
+   !             else
+   !                mycurv=0.0_WP
+   !             end if
+   !             this%Pjx(i,j,k)=this%sigma*mycurv*sum(this%divu_x(:,i,j,k)*vf%VF(i-1:i,j,k))
+   !             ! Y face
+   !             mysurf=sum(vf%SD(i,j-1:j,k)*this%cfg%vol(i,j-1:j,k))
+   !             if (mysurf.gt.0.0_WP) then
+   !                mycurv=sum(vf%SD(i,j-1:j,k)*vf%curv(i,j-1:j,k)*this%cfg%vol(i,j-1:j,k))/mysurf
+   !             else
+   !                mycurv=0.0_WP
+   !             end if
+   !             this%Pjy(i,j,k)=this%sigma*mycurv*sum(this%divv_y(:,i,j,k)*vf%VF(i,j-1:j,k))
+   !             ! Z face
+   !             mysurf=sum(vf%SD(i,j,k-1:k)*this%cfg%vol(i,j,k-1:k))
+   !             if (mysurf.gt.0.0_WP) then
+   !                mycurv=sum(vf%SD(i,j,k-1:k)*vf%curv(i,j,k-1:k)*this%cfg%vol(i,j,k-1:k))/mysurf
+   !             else
+   !                mycurv=0.0_WP
+   !             end if
+   !             this%Pjz(i,j,k)=this%sigma*mycurv*sum(this%divw_z(:,i,j,k)*vf%VF(i,j,k-1:k))
+   !          end do
+   !       end do
+   !    end do
+
+   !    print *, 'sigma=',this%sigma
+   !    print *, 'isnan(sigma)=',isnan(this%sigma)
+
+   !    if (isnan(this%sigma)) then
+   !       print *, 'sigma NaN=',this%sigma
+   !       print *, 'nan=',ieee_value(1.0_WP,ieee_quiet_nan)
+   !       call die('[tpns: add_surface_tension_jump] sigma NaN')
+   !    end if
+      
+   !    ! Add wall contact force to pressure jump
+   !    if (present(contact_model)) then
+   !       select case (contact_model)
+   !       case (static_contact)
+   !          call this%add_static_contact(vf=vf)
+   !       case default
+   !          call die('[tpns: add_surface_tension_jump] Unknown contact model!')
+   !       end select
+   !    end if
+      
+   !    ! Compute jump of DP
+   !    this%DPjx=this%Pjx-this%DPjx
+   !    this%DPjy=this%Pjy-this%DPjy
+   !    this%DPjz=this%Pjz-this%DPjz
+      
+   !    ! Add div(Pjump) to RP
+   !    do k=this%cfg%kmin_,this%cfg%kmax_
+   !       do j=this%cfg%jmin_,this%cfg%jmax_
+   !          do i=this%cfg%imin_,this%cfg%imax_
+   !             div(i,j,k)=div(i,j,k)+dt*(sum(this%divp_x(:,i,j,k)*this%DPjx(i:i+1,j,k)/this%rho_U(i:i+1,j,k))&
+   !             &                        +sum(this%divp_y(:,i,j,k)*this%DPjy(i,j:j+1,k)/this%rho_V(i,j:j+1,k))&
+   !             &                        +sum(this%divp_z(:,i,j,k)*this%DPjz(i,j,k:k+1)/this%rho_W(i,j,k:k+1)))
+   !          end do
+   !       end do
+   !    end do
+      
+   ! end subroutine add_surface_tension_jump
+
    !> Add surface tension jump term using CSF
+   !> GFM-style film treatment, precompute alpha
    subroutine add_surface_tension_jump(this,dt,div,vf,contact_model)
       use messager,  only: die
-      use vfs_class, only: vfs
+      use vfs_class, only: vfs, VFlo
+      use ccl_class, only: ccl
+      use mathtools, only: normalize
+      use irl_fortran_interface
       implicit none
       class(tpns), intent(inout) :: this
       real(WP), intent(inout) :: dt     !< Timestep size over which to advance
@@ -1606,40 +1699,291 @@ contains
       integer, intent(in), optional :: contact_model
       integer :: i,j,k
       real(WP) :: mycurv,mysurf
+      ! Alpha array creation
+      type(ccl) :: cc
+      real(WP), dimension(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_) :: alpha
+      ! Curvature determination
+      integer :: nplanem, nplanen      !< nplane my cell, nplane neighbor cell
+      integer :: n,ind
+      real(WP), dimension(3) :: n0,n1,n2
+      real(WP), parameter :: edge_threshold=2.0_WP
+      real(WP), parameter :: h_over_dx_thresh=0.5_WP
+      logical, parameter :: use_surface_average=.true.
+      ! Reconstruction
+      type(LVIRANeigh_RectCub_type) :: neighborhood
+      integer :: ii,jj,kk,icenter
+      type(RectCub_type), dimension(0:26) :: neighborhood_cells
+      real(IRL_double)  , dimension(0:26) :: liquid_volume_fraction
+      real(IRL_double), dimension(3) :: initial_norm
+      real(IRL_double) :: initial_dist
+      ! type(RectCub_type) :: cell
+      ! real(WP), dimension(1:4) :: plane
+
+      ! Create the CCL object
+      cc=ccl(cfg=this%cfg,name='CCL')
+      cc%max_interface_planes=2
+      cc%VFlo=VFlo
+      cc%dot_threshold=-0.5_WP
+      ! cc%dot_threshold=0.0_WP
+      cc%thickness_cutoff=1.0_WP ! want to capture all films that require special ST treatment
+      ! Perform CCL step
+      call cc%build_lists(VF=vf%VF,poly=vf%interface_polygon,U=this%U,V=this%V,W=this%W)
+      call cc%film_classify(Lbary=vf%Lbary,Gbary=vf%Gbary)
+      call cc%deallocate_lists()
+      
+      ! ! Initialize IRL objects
+      ! ! call new(cell)
+      ! ! Give ourselves an LVIRA neighborhood of 27 cells
+      ! call new(neighborhood)
+      ! do i=0,26
+      !    call new(neighborhood_cells(i))
+      ! end do
+
+      alpha=0.0_WP
+      ! Precompute alpha
+      do k=this%cfg%kmin_-1,this%cfg%kmax_+1
+         do j=this%cfg%jmin_-1,this%cfg%jmax_+1
+            do i=this%cfg%imin_-1,this%cfg%imax_+1
+               ! if (cc%film_phase(i,j,k).eq.1) then
+               !    alpha(i,j,k)=1.0_WP
+               ! elseif (cc%film_phase(i,j,k).eq.2) then
+               !    alpha(i,j,k)=0.0_WP
+               ! else
+               !    alpha(i,j,k)=vf%VF(i,j,k)
+               ! endif
+               if ((cc%film_phase(i,j,k).eq.1).and.(cc%film_type(i,j,k).eq.2)) then
+                  alpha(i,j,k)=1.0_WP
+               elseif ((cc%film_phase(i,j,k).eq.2).and.(cc%film_type(i,j,k).eq.2)) then
+                  alpha(i,j,k)=0.0_WP
+               else
+                  alpha(i,j,k)=vf%VF(i,j,k)
+               endif
+               !! Correct edge cell alpha
+               if (cc%film_type(i,j,k).eq.1) then
+                  if (cc%film_edge(i,j,k).gt.3.0_WP) then
+                     ! if (cc%film_thickness(i,j,k).lt.h_over_dx_thresh*this%cfg%meshsize(i,j,k)) then
+                        vf%curv2(:,i,j,k)=0.5_WP/cc%film_thickness(i,j,k)
+                        vf%curv2(:,i,j,k)=min(max(vf%curv2(:,i,j,k),0.0_WP),1.0_WP/(this%CFLst*vf%cfg%meshsize(i,j,k)))
+                     !    ! vf%curv2(:,i,j,k)=1.0e4_WP
+                     ! else
+                     !    ! vf%curv2(:,i,j,k)=maxval(vf%curv2(:,i,j,k))
+                     !    call vf%paraboloid_integral_fit(i,j,k,vf%curv2(1,i,j,k))
+                     !    vf%curv2(:,i,j,k)=max(vf%curv2(1,i,j,k),0.0_WP)
+                     ! end if
+                  !    if (cc%film_thickness(i,j,k).gt.0.0_WP) vf%curv2(:,i,j,k)=0.1_WP/cc%film_thickness(i,j,k)
+                     vf%curv(i,j,k)=vf%curv2(1,i,j,k)
+                  elseif (cc%film_edge(i,j,k).gt.edge_threshold) then
+                  ! if (cc%film_edge(i,j,k).gt.edge_threshold) then
+                     !    ! 
+                  !    ! ! alpha(i,j,k)=0.5_WP
+                     ! if (cc%film_thickness(i,j,k).lt.h_over_dx_thresh*this%cfg%meshsize(i,j,k)) then
+                     !    vf%curv2(:,i,j,k)=0.1_WP/cc%film_thickness(i,j,k)
+                     !    vf%curv2(:,i,j,k)=min(max(vf%curv2(:,i,j,k),0.0_WP),1.0_WP/(this%CFLst*vf%cfg%meshsize(i,j,k)))
+                     ! !    ! vf%curv2(:,i,j,k)=1.0e4_WP
+                     ! else
+                        ! alpha(i,j,k)=vf%VF(i,j,k)
+                     !    vf%curv2(:,i,j,k)=maxval(vf%curv2(:,i,j,k))
+                     ! end if
+                     vf%curv2(:,i,j,k)=maxval(vf%curv2(:,i,j,k))
+                     vf%curv2(:,i,j,k)=max(vf%curv2(:,i,j,k),0.0_WP)
+                     ! vf%curv(i,j,k)=maxval(vf%curv2(:,i,j,k))
+                     vf%curv(i,j,k)=vf%curv2(1,i,j,k)
+                  elseif (cc%film_edge(i,j,k).gt.1.2_WP) then
+                     vf%curv2(:,i,j,k)=max(vf%curv2(:,i,j,k),0.0_WP)
+                     ! vf%curv(i,j,k)=max(vf%curv(i,j,k),0.0_WP)
+                     vf%curv(i,j,k)=maxval(vf%curv2(:,i,j,k))
+                  endif            
+               endif      
+            end do
+         end do
+      end do
+      call this%cfg%sync(alpha)
       
       ! Store old jump
       this%DPjx=this%Pjx
       this%DPjy=this%Pjy
       this%DPjz=this%Pjz
       
+      ! Zero pressure jump
+      this%Pjx=0.0_WP
+      this%Pjy=0.0_WP
+      this%Pjz=0.0_WP
       ! Calculate pressure jump
       do k=this%cfg%kmin_,this%cfg%kmax_+1
          do j=this%cfg%jmin_,this%cfg%jmax_+1
             do i=this%cfg%imin_,this%cfg%imax_+1
+               nplanem=0
+               do n=1,getNumberOfPlanes(vf%liquid_gas_interface(i,j,k))
+                  if (getNumberOfVertices(vf%interface_polygon(n,i,j,k)).gt.0) then
+                     nplanem=nplanem+1
+                  end if
+               end do            
                ! X face
-               mysurf=sum(vf%SD(i-1:i,j,k)*this%cfg%vol(i-1:i,j,k))
-               if (mysurf.gt.0.0_WP) then
-                  mycurv=sum(vf%SD(i-1:i,j,k)*vf%curv(i-1:i,j,k)*this%cfg%vol(i-1:i,j,k))/mysurf
-               else
+               nplanen=0
+               do n=1,getNumberOfPlanes(vf%liquid_gas_interface(i-1,j,k))
+                  if (getNumberOfVertices(vf%interface_polygon(n,i-1,j,k)).gt.0) then
+                     nplanen=nplanen+1
+                  end if
+               end do
+               mycurv=0.0_WP
+               select case (nplanem+3*nplanen)
+               case (0) ! non-R2P
                   mycurv=0.0_WP
-               end if
-               this%Pjx(i,j,k)=this%sigma*mycurv*sum(this%divu_x(:,i,j,k)*vf%VF(i-1:i,j,k))
+               case (1) ! nplanem=1,nplanen=0
+                  mycurv=vf%curv(i,j,k)
+               case (3) ! 0+1
+                  mycurv=vf%curv(i-1,j,k)
+               case (4) ! 1+1
+                  mysurf=sum(vf%SDpoly(i-1:i,j,k)*this%cfg%vol(i-1:i,j,k))
+                  mycurv=sum(vf%SDpoly(i-1:i,j,k)*vf%curv(i-1:i,j,k)*this%cfg%vol(i-1:i,j,k))/mysurf
+                  ! mycurv=vf%curv2(1,i,j,k)
+               case (2) ! nplanem=2,nplanen=0
+                  n1=calculateNormal(vf%interface_polygon(1,i,j,k))
+                  n2=calculateNormal(vf%interface_polygon(2,i,j,k))
+                  ind=maxloc([dot_product(n1,[-1.0_WP,0.0_WP,0.0_WP]),dot_product(n2,[-1.0_WP,0.0_WP,0.0_WP])],dim=1)
+                  mycurv=vf%curv2(ind,i,j,k)
+               case (5) ! 2+1
+                  if (use_surface_average) then
+                     mysurf=sum(vf%SDpoly(i-1:i,j,k)*this%cfg%vol(i-1:i,j,k))
+                     mycurv=sum(vf%SDpoly(i-1:i,j,k)*vf%curv(i-1:i,j,k)*this%cfg%vol(i-1:i,j,k))/mysurf
+               else
+                     n1=calculateNormal(vf%interface_polygon(1,i,j,k))
+                     n2=calculateNormal(vf%interface_polygon(2,i,j,k))
+                     ind=maxloc([dot_product(n1,[-1.0_WP,0.0_WP,0.0_WP]),dot_product(n2,[-1.0_WP,0.0_WP,0.0_WP])],dim=1)
+                     ! pair_curv(2)=vf%curv2(ind,i,j,k)
+                     ! pair_curv(1)=vf%curv2(1,i-1,j,k)
+                     mycurv=vf%curv2(ind,i,j,k) ! could surface average
+                  end if
+               case (6) ! 0+2
+                  n1=calculateNormal(vf%interface_polygon(1,i-1,j,k))
+                  n2=calculateNormal(vf%interface_polygon(2,i-1,j,k))
+                  ind=maxloc([dot_product(n1,[+1.0_WP,0.0_WP,0.0_WP]),dot_product(n2,[+1.0_WP,0.0_WP,0.0_WP])],dim=1)
+                  mycurv=vf%curv2(ind,i-1,j,k)
+               case (7) ! 1+2
+                  if (use_surface_average) then
+                     mysurf=sum(vf%SDpoly(i-1:i,j,k)*this%cfg%vol(i-1:i,j,k))
+                     mycurv=sum(vf%SDpoly(i-1:i,j,k)*vf%curv(i-1:i,j,k)*this%cfg%vol(i-1:i,j,k))/mysurf
+                  else
+                     n1=calculateNormal(vf%interface_polygon(1,i-1,j,k))
+                     n2=calculateNormal(vf%interface_polygon(2,i-1,j,k))
+                     ind=maxloc([dot_product(n1,[+1.0_WP,0.0_WP,0.0_WP]),dot_product(n2,[+1.0_WP,0.0_WP,0.0_WP])],dim=1)
+                     ! pair_curv(1)=vf%curv2(ind,i-1,j,k)
+                     ! pair_curv(2)=vf%curv2(1,i,j,k)
+                     mycurv=vf%curv2(ind,i-1,j,k)
+                  end if
+               case (8) ! 2+2
+                  mysurf=sum(vf%SDpoly(i-1:i,j,k)*this%cfg%vol(i-1:i,j,k))
+                  mycurv=sum(vf%SDpoly(i-1:i,j,k)*vf%curv(i-1:i,j,k)*this%cfg%vol(i-1:i,j,k))/mysurf
+               end select
+               this%Pjx(i,j,k)=this%sigma*mycurv*sum(this%divu_x(:,i,j,k)*alpha(i-1:i,j,k))
                ! Y face
-               mysurf=sum(vf%SD(i,j-1:j,k)*this%cfg%vol(i,j-1:j,k))
-               if (mysurf.gt.0.0_WP) then
-                  mycurv=sum(vf%SD(i,j-1:j,k)*vf%curv(i,j-1:j,k)*this%cfg%vol(i,j-1:j,k))/mysurf
-               else
+               nplanen=0
+               do n=1,getNumberOfPlanes(vf%liquid_gas_interface(i,j-1,k))
+                  if (getNumberOfVertices(vf%interface_polygon(n,i,j-1,k)).gt.0) then
+                     nplanen=nplanen+1
+                  end if
+               end do
                   mycurv=0.0_WP
+               select case (nplanem+3*nplanen)
+               case (0) ! non-R2P
+                  mycurv=0.0_WP
+               case (1) ! nplanem=1,nplanen=0
+                  mycurv=vf%curv(i,j,k)
+               case (3) ! 0+1
+                  mycurv=vf%curv(i,j-1,k)
+               case (4) ! 1+1         
+                  mysurf=sum(vf%SDpoly(i,j-1:j,k)*this%cfg%vol(i,j-1:j,k))
+                  mycurv=sum(vf%SDpoly(i,j-1:j,k)*vf%curv(i,j-1:j,k)*this%cfg%vol(i,j-1:j,k))/mysurf
+                  ! mycurv=vf%curv2(1,i,j,k)
+               case (2) ! nplanem=2,nplanen=0
+                  n1=calculateNormal(vf%interface_polygon(1,i,j,k))
+                  n2=calculateNormal(vf%interface_polygon(2,i,j,k))
+                  ind=maxloc([dot_product(n1,[0.0_WP,-1.0_WP,0.0_WP]),dot_product(n2,[0.0_WP,-1.0_WP,0.0_WP])],dim=1)
+                  mycurv=vf%curv2(ind,i,j,k)
+               case (5) ! 2+1
+                  if (use_surface_average) then
+                     mysurf=sum(vf%SDpoly(i,j-1:j,k)*this%cfg%vol(i,j-1:j,k))
+                     mycurv=sum(vf%SDpoly(i,j-1:j,k)*vf%curv(i,j-1:j,k)*this%cfg%vol(i,j-1:j,k))/mysurf
+                  else
+                     n1=calculateNormal(vf%interface_polygon(1,i,j,k))
+                     n2=calculateNormal(vf%interface_polygon(2,i,j,k))
+                     ind=maxloc([dot_product(n1,[0.0_WP,-1.0_WP,0.0_WP]),dot_product(n2,[0.0_WP,-1.0_WP,0.0_WP])],dim=1)
+                     mycurv=vf%curv2(ind,i,j,k)
                end if
-               this%Pjy(i,j,k)=this%sigma*mycurv*sum(this%divv_y(:,i,j,k)*vf%VF(i,j-1:j,k))
+               case (6) ! 0+2
+                  n1=calculateNormal(vf%interface_polygon(1,i,j-1,k))
+                  n2=calculateNormal(vf%interface_polygon(2,i,j-1,k))
+                  ind=maxloc([dot_product(n1,[0.0_WP,+1.0_WP,0.0_WP]),dot_product(n2,[0.0_WP,+1.0_WP,0.0_WP])],dim=1)
+                  mycurv=vf%curv2(ind,i,j-1,k)
+               case (7) ! 1+2
+                  if (use_surface_average) then
+                     mysurf=sum(vf%SDpoly(i,j-1:j,k)*this%cfg%vol(i,j-1:j,k))
+                     mycurv=sum(vf%SDpoly(i,j-1:j,k)*vf%curv(i,j-1:j,k)*this%cfg%vol(i,j-1:j,k))/mysurf
+               else
+                     n1=calculateNormal(vf%interface_polygon(1,i,j-1,k))
+                     n2=calculateNormal(vf%interface_polygon(2,i,j-1,k))
+                     ind=maxloc([dot_product(n1,[0.0_WP,+1.0_WP,0.0_WP]),dot_product(n2,[0.0_WP,+1.0_WP,0.0_WP])],dim=1)
+                     mycurv=vf%curv2(ind,i,j-1,k)
+                  end if         
+               case (8) ! 2+2
+                  mysurf=sum(vf%SDpoly(i,j-1:j,k)*this%cfg%vol(i,j-1:j,k))
+                  mycurv=sum(vf%SDpoly(i,j-1:j,k)*vf%curv(i,j-1:j,k)*this%cfg%vol(i,j-1:j,k))/mysurf
+               end select
+               this%Pjy(i,j,k)=this%sigma*mycurv*sum(this%divv_y(:,i,j,k)*alpha(i,j-1:j,k))
                ! Z face
-               mysurf=sum(vf%SD(i,j,k-1:k)*this%cfg%vol(i,j,k-1:k))
-               if (mysurf.gt.0.0_WP) then
-                  mycurv=sum(vf%SD(i,j,k-1:k)*vf%curv(i,j,k-1:k)*this%cfg%vol(i,j,k-1:k))/mysurf
-               else
+               nplanen=0
+               do n=1,getNumberOfPlanes(vf%liquid_gas_interface(i,j,k-1))
+                  if (getNumberOfVertices(vf%interface_polygon(n,i,j,k-1)).gt.0) then
+                     nplanen=nplanen+1
+                  end if
+               end do
+               mycurv=0.0_WP
+               select case (nplanem+3*nplanen)
+               case (0) ! non-R2P
                   mycurv=0.0_WP
+               case (1) ! nplanem=1,nplanen=0
+                  mycurv=vf%curv(i,j,k)
+               case (3) ! 0+1
+                  mycurv=vf%curv(i,j,k-1)
+               case (4) ! 1+1         
+                  mysurf=sum(vf%SDpoly(i,j,k-1:k)*this%cfg%vol(i,j,k-1:k))
+                  mycurv=sum(vf%SDpoly(i,j,k-1:k)*vf%curv(i,j,k-1:k)*this%cfg%vol(i,j,k-1:k))/mysurf
+                  ! mycurv=vf%curv2(1,i,j,k)
+               case (2) ! nplanem=2,nplanen=0
+                  n1=calculateNormal(vf%interface_polygon(1,i,j,k))
+                  n2=calculateNormal(vf%interface_polygon(2,i,j,k))
+                  ind=maxloc([dot_product(n1,[0.0_WP,0.0_WP,-1.0_WP]),dot_product(n2,[0.0_WP,0.0_WP,-1.0_WP])],dim=1)
+                  mycurv=vf%curv2(ind,i,j,k)
+               case (5) ! 2+1
+                  if (use_surface_average) then
+                     mysurf=sum(vf%SDpoly(i,j,k-1:k)*this%cfg%vol(i,j,k-1:k))
+                     mycurv=sum(vf%SDpoly(i,j,k-1:k)*vf%curv(i,j,k-1:k)*this%cfg%vol(i,j,k-1:k))/mysurf
+                  else
+                     n1=calculateNormal(vf%interface_polygon(1,i,j,k))
+                     n2=calculateNormal(vf%interface_polygon(2,i,j,k))
+                     ind=maxloc([dot_product(n1,[0.0_WP,0.0_WP,-1.0_WP]),dot_product(n2,[0.0_WP,0.0_WP,-1.0_WP])],dim=1)
+                     mycurv=vf%curv2(ind,i,j,k)
                end if
-               this%Pjz(i,j,k)=this%sigma*mycurv*sum(this%divw_z(:,i,j,k)*vf%VF(i,j,k-1:k))
+               case (6) ! 0+2
+                  n1=calculateNormal(vf%interface_polygon(1,i,j,k-1))
+                  n2=calculateNormal(vf%interface_polygon(2,i,j,k-1))
+                  ind=maxloc([dot_product(n1,[0.0_WP,0.0_WP,+1.0_WP]),dot_product(n2,[0.0_WP,0.0_WP,+1.0_WP])],dim=1)
+                  mycurv=vf%curv2(ind,i,j,k-1)
+               case (7) ! 1+2
+                  if (use_surface_average) then
+                     mysurf=sum(vf%SDpoly(i,j,k-1:k)*this%cfg%vol(i,j,k-1:k))
+                     mycurv=sum(vf%SDpoly(i,j,k-1:k)*vf%curv(i,j,k-1:k)*this%cfg%vol(i,j,k-1:k))/mysurf
+               else
+                     n1=calculateNormal(vf%interface_polygon(1,i,j,k-1))
+                     n2=calculateNormal(vf%interface_polygon(2,i,j,k-1))
+                     ind=maxloc([dot_product(n1,[0.0_WP,0.0_WP,+1.0_WP]),dot_product(n2,[0.0_WP,0.0_WP,+1.0_WP])],dim=1)
+                     mycurv=vf%curv2(ind,i,j,k-1)
+               end if
+               case (8) ! 2+2
+                  mysurf=sum(vf%SDpoly(i,j,k-1:k)*this%cfg%vol(i,j,k-1:k))
+                  mycurv=sum(vf%SDpoly(i,j,k-1:k)*vf%curv(i,j,k-1:k)*this%cfg%vol(i,j,k-1:k))/mysurf
+               end select
+               this%Pjz(i,j,k)=this%sigma*mycurv*sum(this%divw_z(:,i,j,k)*alpha(i,j,k-1:k))
             end do
          end do
       end do
