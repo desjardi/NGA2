@@ -68,6 +68,7 @@ module matm_class
       procedure :: EOS_gas, EOS_liquid                    !< Output solver to the screen
       procedure :: EOS_energy                             !< Calculates phase total energy from pressure and kinetic energy
       procedure :: EOS_temp                               !< Calculates phase temperature from pressure directly
+      procedure :: EOS_density                            !< Calculates phase density from pressure and temperature directly
       procedure :: EOS_all                                !< Calculates vol-avg pressure for entire domain from conserved variables
 
       procedure :: register_idealgas                      !< EOS available for gas-like fluids
@@ -391,9 +392,9 @@ contains
      real(WP), dimension(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_) :: Temperature
      integer :: i,j,k
      
-     do k=this%cfg%kmin_,this%cfg%kmax_
-       do j=this%cfg%jmin_,this%cfg%jmax_
-         do i=this%cfg%imin_,this%cfg%imax_
+     do k=this%cfg%kmino_,this%cfg%kmaxo_
+       do j=this%cfg%jmino_,this%cfg%jmaxo_
+         do i=this%cfg%imino_,this%cfg%imaxo_
             ! Get local temperature, use current temperature as first guess for cv
             Temperature(i,j,k) = this%get_local_temperature(vf,i,j,k,Temperature(i,j,k))
          end do
@@ -575,6 +576,23 @@ contains
 
      return
    end function EOS_temp
+   
+   function EOS_density(this,pres,temp,cv,phase) result(dens)
+     implicit none
+     class(matm), intent(inout) :: this
+     real(WP), intent(in) :: pres,temp,cv
+     character(len=*),intent(in) :: phase
+     real(WP) :: dens
+
+     select case(trim(adjustl(phase)))
+     case('liquid')
+        dens = (pres+this%Pref_l)/(cv*(this%gamm_l-1.0_WP)*temp+this%b_l*(pres+this%Pref_l))
+     case('gas')
+        dens = (pres+this%Pref_g)/(cv*(this%gamm_g-1.0_WP)*temp+this%b_g*(pres+this%Pref_g))
+     end select
+
+     return
+   end function EOS_density
 
    function EOS_all(this,vf,buf_GrhoE,buf_LrhoE) result(buf_P)
      use vfs_class, only : vfs
