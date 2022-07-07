@@ -884,32 +884,32 @@ contains
             
          end if
          
-         ! Sync full fields after each bcond (Needs to be done anyways)
-         select case(trim(adjustl(scope)))
-         case('density')
-            call this%cfg%sync(this%Grho)
-            call this%cfg%sync(this%Lrho)
-         case('momentum')
-            call this%cfg%sync(this%rhoUi)
-            call this%cfg%sync(this%rhoVi)
-            call this%cfg%sync(this%rhoWi)
-         case('energy')
-            call this%cfg%sync(this%GrhoE)
-            call this%cfg%sync(this%LrhoE)
-         case('velocity')
-            call this%cfg%sync(this%U)
-            call this%cfg%sync(this%V)
-            call this%cfg%sync(this%W)
-         case('flag')
-            call this%cfg%sync(this%sl_face(:,:,:,1))
-            call this%cfg%sync(this%sl_face(:,:,:,2))
-            call this%cfg%sync(this%sl_face(:,:,:,3))
-         end select
-         
          ! Move on to the next bcond
          my_bc=>my_bc%next
          
       end do
+      
+      ! Sync full fields after all bconds
+      select case(trim(adjustl(scope)))
+      case('density')
+         call this%cfg%sync(this%Grho)
+         call this%cfg%sync(this%Lrho)
+      case('momentum')
+         call this%cfg%sync(this%rhoUi)
+         call this%cfg%sync(this%rhoVi)
+         call this%cfg%sync(this%rhoWi)
+      case('energy')
+         call this%cfg%sync(this%GrhoE)
+         call this%cfg%sync(this%LrhoE)
+      case('velocity')
+         call this%cfg%sync(this%U)
+         call this%cfg%sync(this%V)
+         call this%cfg%sync(this%W)
+      case('flag')
+         call this%cfg%sync(this%sl_face(:,:,:,1))
+         call this%cfg%sync(this%sl_face(:,:,:,2))
+         call this%cfg%sync(this%sl_face(:,:,:,3))
+      end select
       
    end subroutine apply_bcond
 

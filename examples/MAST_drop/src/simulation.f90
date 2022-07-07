@@ -87,6 +87,14 @@ contains
       real(WP) :: G
       G=1.0_WP-sqrt(xyz(1)**2+xyz(2)**2+xyz(3))/(ddrop/2.0)
    end function levelset_drop_center
+   
+   function levelset_cyl_center(xyz,t) result(G)
+      implicit none
+      real(WP), dimension(3),intent(in) :: xyz
+      real(WP), intent(in) :: t
+      real(WP) :: G
+      G=1.0_WP-sqrt((xyz(1)/ddrop*2.0_WP)**2+(xyz(2)/ddrop*2.0_WP)**2)
+   end function levelset_cyl_center
 
    !> Initialization of problem solver
    subroutine simulation_init
@@ -134,12 +142,16 @@ contains
                   end do
                   ! Call adaptive refinement code to get volume and barycenters recursively
                   vol=0.0_WP; area=0.0_WP; v_cent=0.0_WP; a_cent=0.0_WP
-                  call cube_refine_vol(cube_vertex,vol,area,v_cent,a_cent,levelset_drop_center,0.0_WP,amr_ref_lvl)
+                  if (vf%cfg%nz.eq.1) then
+                    call cube_refine_vol(cube_vertex,vol,area,v_cent,a_cent,levelset_cyl_center,0.0_WP,amr_ref_lvl)
+                  else
+                    call cube_refine_vol(cube_vertex,vol,area,v_cent,a_cent,levelset_drop_center,0.0_WP,amr_ref_lvl)
+                  end if
                   vf%VF(i,j,k)=vol/vf%cfg%vol(i,j,k)
                   if (vf%VF(i,j,k).ge.VFlo.and.vf%VF(i,j,k).le.VFhi) then
-                     vf%Lbary(:,i,j,k)=v_cent
-                     vf%Gbary(:,i,j,k)=([vf%cfg%xm(i),vf%cfg%ym(j),vf%cfg%zm(k)]-vf%VF(i,j,k)*vf%Lbary(:,i,j,k))/(1.0_WP-vf%VF(i,j,k))
-                     vf%Gbary(3,i,j,k)=v_cent(3);
+                    vf%Lbary(:,i,j,k)=v_cent
+                    vf%Gbary(:,i,j,k)=([vf%cfg%xm(i),vf%cfg%ym(j),vf%cfg%zm(k)]-vf%VF(i,j,k)*vf%Lbary(:,i,j,k))/(1.0_WP-vf%VF(i,j,k))
+                    if (vf%cfg%nz.eq.1) vf%Gbary(3,i,j,k)=v_cent(3);
                   else
                      vf%Lbary(:,i,j,k)=[vf%cfg%xm(i),vf%cfg%ym(j),vf%cfg%zm(k)]
                      vf%Gbary(:,i,j,k)=[vf%cfg%xm(i),vf%cfg%ym(j),vf%cfg%zm(k)]
@@ -474,10 +486,96 @@ contains
 
    !> Finalize the NGA2 simulation
    subroutine simulation_final
+      use mpi_f08,   only: MPI_ALLREDUCE,MPI_SUM
+      use parallel,  only: MPI_REAL_WP
+      use string,    only: str_long
       implicit none
+      integer,          parameter :: col_len=14
+      character(len=*), parameter :: aformat='(a12)'
+      character(len=*), parameter :: rformat='(es12.5)'
+      integer  :: i,j,k,n,ierr,iunit
+      real(WP) :: dxr, r, buf0, buf1, l_left, l_right
+      real(WP), dimension(:), allocatable :: Tprof, RHOprof, normprof, xmprof
+      character(len=str_long) :: line, header
       
       ! Output temperature and density profiles 
       if (yes_Temp) then 
+        
+        ! Resolution of final profile
+        dxr = (2.0_WP/real(fs%cfg%nx,WP))
+        ! Allocate and zero profile arrays
+        allocate(Tprof(fs%cfg%nx/2),RHOprof(fs%cfg%nx/2),normprof(fs%cfg%nx/2),xmprof(fs%cfg%nx/2))
+        Tprof = 0.0_WP; RHOprof = 0.0_WP; normprof = 0.0_WP
+        ! Populate the x profile
+        do i=1,fs%cfg%nx/2
+          xmprof(i) = 0.5_WP*dxr + real(i-1,WP)*dxr
+        end do
+        
+        do k=fs%cfg%kmin_,fs%cfg%kmax_
+          do j=fs%cfg%jmin_,fs%cfg%jmax_
+            do i=fs%cfg%imin_,fs%cfg%imax_
+              ! Calculate current radius
+              r = sqrt(fs%cfg%xm(i)**2+fs%cfg%ym(j)**2+fs%cfg%zm(k)**2)
+              
+              !! == For plotting profile == !!
+              ! Determine which increment of the domain this belongs to
+              n = 1+floor((r-0.5_WP*dxr)/dxr)
+              ! Contribute to the left
+              if (n.le.fs%cfg%nx/2) then
+                l_left = real(n,WP)*dxr-(r-0.5_WP*dxr)
+                Tprof(n) = Tprof(n) + l_left*fs%Tmptr(i,j,k)
+                RHOprof(n) = RHOprof(n) + l_left*fs%RHO(i,j,k)
+                normprof(n) = normprof(n) + l_left
+              end if
+              ! Contribute to the right
+              if (n+1.le.fs%cfg%nx/2) then
+                l_right = (r+0.5_WP*dxr)-real(n,WP)*dxr
+                Tprof(n+1) = Tprof(n+1) + l_right*fs%Tmptr(i,j,k)
+                RHOprof(n+1) = RHOprof(n+1) + l_right*fs%RHO(i,j,k)
+                normprof(n+1) = normprof(n+1) + l_right
+              end if
+              
+            end do
+          end do
+        end do
+        ! Create final profile array using info from every proc
+        do n=1,fs%cfg%nx/2
+          ! Sum normalization at current location
+          call MPI_ALLREDUCE(normprof(n),buf0,1,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr);
+          ! Sum temperature
+          call MPI_ALLREDUCE(Tprof(n),buf1,1,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr);
+          ! Update temperature
+          Tprof(n) = buf1/buf0
+          ! Sum density
+          call MPI_ALLREDUCE(RHOprof(n),buf1,1,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr);
+          ! Update density
+          RHOprof(n) = buf1/buf0
+        end do
+        ! Write profile to file
+        if (fs%cfg%amRoot) then
+          ! Open file
+          if (fs%sigma.eq.0.0_WP) then
+            open(newunit=iunit,file='profile_noST.txt',form="formatted",iostat=ierr,status="REPLACE")
+          else
+            open(newunit=iunit,file='profile_ST.txt',form="formatted",iostat=ierr,status="REPLACE")
+          end if
+          ! Write header
+          write (header(1+0*col_len:),aformat) 'xm'
+          write (header(1+1*col_len:),aformat) 'T'
+          write (header(1+2*col_len:),aformat) 'RHO'
+          write(iunit,'(a)') trim(header)
+          ! Write data
+          do n=1,fs%cfg%nx/2
+            ! Create the line to dump
+            write (line(1+0*col_len:),rformat) xmprof(n)
+            write (line(1+1*col_len:),rformat) Tprof(n)
+            write (line(1+2*col_len:),rformat) RHOprof(n)
+            ! Dump the line
+            write(iunit,'(a)') trim(line)
+          end do
+          ! Close file
+          close(iunit)
+        end if
       end if
 
       ! Get rid of all objects - need destructors

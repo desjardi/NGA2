@@ -453,7 +453,7 @@ contains
          ! Convergence residual
          delta_T = abs(Ltemp-Tlast)
          ! Exit loop if constant model
-         if (this%M_cv_g.eq.constant) n = n_loop
+         if (this%M_cv_l.eq.constant) n = n_loop
          ! Exit loop if not converging
          if (Ltemp.le.0.0_WP) then 
            n = n_loop
