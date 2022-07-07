@@ -35,11 +35,11 @@
 2 Stretching z : 1.08
 
 # Injection velocity
-#Gas velocity :        10
+Gas velocity :        10
 Peak flow rate :      0.001
 Gas thickness :       0.001
 Gas perturbation :    1
-#Gas coflow :          2
+Gas coflow :          1
 
 # Fluid properties
 Gravity :                           0 -9.81 0

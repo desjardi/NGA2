@@ -137,6 +137,10 @@ module ccl_class
       integer, dimension(:,:,:), allocatable :: film_border_id !< ID of the film that contains the cell
       real(WP),dimension(:,:,:), allocatable :: SD             !< Surface density array
       
+      ! 0 volume structure monitoring
+      real(WP) :: zero_struct_vol=0.0_WP
+      integer  :: zero_struct_id =0
+      
    contains
       procedure :: build_lists
       procedure :: deallocate_lists

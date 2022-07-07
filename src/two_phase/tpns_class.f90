@@ -1846,7 +1846,7 @@ contains
                   if (use_surface_average) then
                      mysurf=sum(vf%SDpoly(i-1:i,j,k)*this%cfg%vol(i-1:i,j,k))
                      mycurv=sum(vf%SDpoly(i-1:i,j,k)*vf%curv(i-1:i,j,k)*this%cfg%vol(i-1:i,j,k))/mysurf
-               else
+                  else
                      n1=calculateNormal(vf%interface_polygon(1,i,j,k))
                      n2=calculateNormal(vf%interface_polygon(2,i,j,k))
                      ind=maxloc([dot_product(n1,[-1.0_WP,0.0_WP,0.0_WP]),dot_product(n2,[-1.0_WP,0.0_WP,0.0_WP])],dim=1)
@@ -2261,10 +2261,10 @@ contains
       implicit none
       class(tpns), intent(inout) :: this
       integer :: i,j,k,ierr
-      real(WP) :: my_Umax,my_Vmax,my_Wmax,my_Pmax,my_divmax,my_Visclmax
+      real(WP) :: my_Umax,my_Vmax,my_Wmax,my_Pmax,my_divmax !,my_Visclmax
       
       ! Set all to zero
-      my_Umax=0.0_WP; my_Vmax=0.0_WP; my_Wmax=0.0_WP; my_Pmax=0.0_WP; my_divmax=0.0_WP; my_Visclmax=0.0_WP
+      my_Umax=0.0_WP; my_Vmax=0.0_WP; my_Wmax=0.0_WP; my_Pmax=0.0_WP; my_divmax=0.0_WP !; my_Visclmax=0.0_WP
       do k=this%cfg%kmin_,this%cfg%kmax_
          do j=this%cfg%jmin_,this%cfg%jmax_
             do i=this%cfg%imin_,this%cfg%imax_
@@ -2273,7 +2273,7 @@ contains
                my_Wmax=max(my_Wmax,abs(this%W(i,j,k)))               
                if (this%cfg%VF(i,j,k).gt.0.0_WP) my_Pmax  =max(my_Pmax  ,abs(this%P(i,j,k)  ))
                if (this%cfg%VF(i,j,k).gt.0.0_WP) my_divmax=max(my_divmax,abs(this%div(i,j,k)))
-               if (this%cfg%VF(i,j,k).gt.0.0_WP) my_Visclmax=max(my_Visclmax,abs(this%visc_l_variable(i,j,k)))
+               ! if (this%cfg%VF(i,j,k).gt.0.0_WP) my_Visclmax=max(my_Visclmax,abs(this%visc_l_variable(i,j,k)))
             end do
          end do
       end do
@@ -2284,7 +2284,7 @@ contains
       call MPI_ALLREDUCE(my_Wmax  ,this%Wmax  ,1,MPI_REAL_WP,MPI_MAX,this%cfg%comm,ierr)
       call MPI_ALLREDUCE(my_Pmax  ,this%Pmax  ,1,MPI_REAL_WP,MPI_MAX,this%cfg%comm,ierr)
       call MPI_ALLREDUCE(my_divmax,this%divmax,1,MPI_REAL_WP,MPI_MAX,this%cfg%comm,ierr)
-      call MPI_ALLREDUCE(my_Visclmax ,this%Visclmax ,1,MPI_REAL_WP,MPI_MAX,this%cfg%comm,ierr)
+      ! call MPI_ALLREDUCE(my_Visclmax ,this%Visclmax ,1,MPI_REAL_WP,MPI_MAX,this%cfg%comm,ierr)
       
    end subroutine get_max
    

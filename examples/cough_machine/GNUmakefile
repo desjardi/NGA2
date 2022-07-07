@@ -24,7 +24,7 @@ VPATH_LOCATIONS   += $(Ulocs)
 
 # Define external libraries - this can also be in .profile
 HYPRE_DIR = /Users/josephgiliberto/Builds/HYPRE
-LAPACK_DIR= /usr/local/Celar/lapack/3.10.0
+LAPACK_DIR= /usr/local/Cellar/lapack/3.10.0
 IRL_DIR   = /Users/josephgiliberto/Builds/IRL
 
 # NGA compilation definitions

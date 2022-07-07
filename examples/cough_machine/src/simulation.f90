@@ -227,8 +227,7 @@ contains
          remove_struct: block
             use mathtools, only: pi
             integer :: m,n,l,i,j,k,np
-            real(WP) :: lmin,lmax,eccentricity,diam
-         
+            real(WP) :: lmin,lmax,eccentricity,diam         
 
             ! Loops over film segments contained locally
             do m=1,b1%cc1%n_meta_struct
@@ -238,6 +237,10 @@ contains
                      ! Find local structs with matching id
                      do n=b1%cc1%sync_offset+1,b1%cc1%sync_offset+b1%cc1%n_struct
                         if (b1%cc1%struct_list(b1%cc1%struct_map_(n))%parent.ne.b1%cc1%meta_structures_list(m)%id) cycle
+                           ! Record 0 vol struc timestep, time, ID and volume
+                           b1%cc1%zero_struct_id =b1%cc1%meta_structures_list(m)%id
+                           b1%cc1%zero_struct_vol=b1%cc1%meta_structures_list(m)%vol
+                           call b1%volfile%write()
                         ! Remove liquid in meta-structure cells
                         do l=1,b1%cc1%struct_list(b1%cc1%struct_map_(n))%nnode ! Loops over cells within local
                            i=b1%cc1%struct_list(b1%cc1%struct_map_(n))%node(1,l)
@@ -346,7 +349,7 @@ contains
                      b2%lp%p(np)%id  =int(0,8)                                   !< Give id (maybe based on break-up model?)
                      b2%lp%p(np)%dt  =0.0_WP                                     !< Let the drop find it own integration time
                      b2%lp%p(np)%d   =(6.0_WP*Vd/pi)**(1.0_WP/3.0_WP)            !< Assign diameter from model above
-                     b2%lp%p(np)%pos =b1%vf%Lbary(:,i,j,k)                         !< Place the drop at the liquid barycenter
+                     b2%lp%p(np)%pos =b1%vf%Lbary(:,i,j,k)                       !< Place the drop at the liquid barycenter
                      b2%lp%p(np)%vel =b1%fs%cfg%get_velocity(pos=b2%lp%p(np)%pos,i0=i,j0=j,k0=k,U=b1%fs%U,V=b1%fs%V,W=b1%fs%W) !< Interpolate local cell velocity as drop velocity
                      b2%lp%p(np)%ind =b2%lp%cfg%get_ijk_global(b2%lp%p(np)%pos,[b2%lp%cfg%imin,b2%lp%cfg%jmin,b2%lp%cfg%kmin]) !< Place the drop in the proper cell for the lp%cfg
                      b2%lp%p(np)%flag=0                                          !< Activate it
@@ -368,7 +371,7 @@ contains
                   b2%lp%p(np)%id  =int(0,8)                                   !< Give id (maybe based on break-up model?)
                   b2%lp%p(np)%dt  =0.0_WP                                     !< Let the drop find it own integration time
                   b2%lp%p(np)%d   =(6.0_WP*Vl/pi)**(1.0_WP/3.0_WP)            !< Assign diameter based on remaining liquid volume
-                  b2%lp%p(np)%pos =b1%vf%Lbary(:,i,j,k)                         !< Place the drop at the liquid barycenter
+                  b2%lp%p(np)%pos =b1%vf%Lbary(:,i,j,k)                       !< Place the drop at the liquid barycenter
                   b2%lp%p(np)%vel =b1%fs%cfg%get_velocity(pos=b2%lp%p(np)%pos,i0=i,j0=j,k0=k,U=b1%fs%U,V=b1%fs%V,W=b1%fs%W) !< Interpolate local cell velocity as drop velocity
                   b2%lp%p(np)%ind =b2%lp%cfg%get_ijk_global(b2%lp%p(np)%pos,[b2%lp%cfg%imin,b2%lp%cfg%jmin,b2%lp%cfg%kmin]) !< Place the drop in the proper cell for the lp%cfg
                   b2%lp%p(np)%flag=0                                          !< Activate it

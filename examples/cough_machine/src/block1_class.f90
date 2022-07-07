@@ -21,17 +21,17 @@ module block1_class
 
    !> Block 1 object
    type :: block1
-      class(config), pointer :: cfg       !< Pointer to config
-      type(tpns) :: fs                    !< Two-phase incompressible flow solver
-      type(vfs) :: vf                     !< VF solver
-      type(ccl) :: cc1                    !< Connected component labeling
-      type(timetracker) :: time           !< Time tracker
-      type(sgsmodel) ::  sgs              !< SGS model
-      type(surfmesh) :: smesh             !< Surfmesh 
-      type(ensight) :: ens_out            !< Ensight output
-      type(event) :: ens_evt              !< Ensight output event
-      type(monitor) :: mfile,cflfile      !< Monitor files
-      type(datafile) :: df                !< Datafile for restart
+      class(config), pointer :: cfg             !< Pointer to config
+      type(tpns) :: fs                          !< Two-phase incompressible flow solver
+      type(vfs) :: vf                           !< VF solver
+      type(ccl) :: cc1                          !< Connected component labeling
+      type(timetracker) :: time                 !< Time tracker
+      type(sgsmodel) ::  sgs                    !< SGS model
+      type(surfmesh) :: smesh                   !< Surfmesh 
+      type(ensight) :: ens_out                  !< Ensight output
+      type(event) :: ens_evt                    !< Ensight output event
+      type(monitor) :: mfile,cflfile,volfile    !< Monitor files
+      type(datafile) :: df                      !< Datafile for restart
       !> Private work arrays
       real(WP), dimension(:,:,:),   allocatable :: resU,resV,resW
       real(WP), dimension(:,:,:),   allocatable :: Ui,Vi,Wi
@@ -46,11 +46,11 @@ module block1_class
    !> Transfer model parameters
    real(WP) :: filmthickness_over_dx  =5.0e-1_WP   !Model parameter
 
-   real(WP) :: min_filmthickness      =1.0e-6_WP   !Model parameter
+   real(WP) :: min_filmthickness      =1.0e-7_WP   !Model parameter
    real(WP) :: diam_over_filmthickness=1.0e+1_WP   !Model parameter
    
    real(WP) :: max_eccentricity       =2.0e-1_WP   !Saliva specific?
-   real(WP) :: d_threshold            =1.0e-2_WP   !Saliva specific? 
+   real(WP) :: d_threshold            =1.0e-3_WP   ! Uperbound of respiratory droplets generated in oral cavity 
 
    !> Inflow parameters
    real(WP) :: Uin,delta,Urand,Uco,CPFR
@@ -253,10 +253,10 @@ contains
          ! Create a two-phase flow solver
          b%fs=tpns(cfg=b%cfg,name='Two-phase NS')
          ! Allocate array for variable liquid viscosity phase and assign a initial value
-         allocate(b%fs%visc_l_variable(b%cfg%imino_:b%cfg%imaxo_,b%cfg%jmino_:b%cfg%jmaxo_,b%cfg%kmino_:b%cfg%kmaxo_))
-         b%fs%visc_l_variable=b%fs%visc_l_0
+         ! allocate(b%fs%visc_l_variable(b%cfg%imino_:b%cfg%imaxo_,b%cfg%jmino_:b%cfg%jmaxo_,b%cfg%kmino_:b%cfg%kmaxo_))
+         ! b%fs%visc_l_variable=b%fs%visc_l_0
          ! Assign constant viscosity to each phase
-         !call param_read('Liquid dynamic viscosity',b%fs%visc_l)
+         call param_read('Liquid dynamic viscosity',b%fs%visc_l)
          call param_read('Gas dynamic viscosity'   ,b%fs%visc_g)
          ! Assign constant density to each phase
          call param_read('Liquid density',b%fs%rho_l)
@@ -395,7 +395,7 @@ contains
          call b%ens_out%add_scalar('curvature',b%vf%curv)
          call b%ens_out%add_scalar('visc_t',b%sgs%visc)
          call b%ens_out%add_scalar('SR_mag',b%SR_mag)
-         call b%ens_out%add_scalar('liquid_viscocity',b%fs%visc_l_variable)
+         ! call b%ens_out%add_scalar('liquid_viscocity',b%fs%visc_l_variable)
          call b%ens_out%add_surface('vofplic',b%smesh)
          ! Output to ensight
          if (b%ens_evt%occurs()) call b%ens_out%write_data(b%time%t)
@@ -425,7 +425,7 @@ contains
          call b%mfile%add_column(b%fs%psolv%rerr,'Pressure error')
          call b%mfile%add_column(Uin,'Inflow Velocity')
          call b%mfile%add_column(b%fs%SRmax,'SR maximum')
-         call b%mfile%add_column(b%fs%Visclmax,'Max liq visc')
+         ! call b%mfile%add_column(b%fs%Visclmax,'Max liq visc')
          call b%mfile%write()
          ! Create CFL monitor
          b%cflfile=monitor(b%fs%cfg%amRoot,'cfl1')
@@ -438,6 +438,13 @@ contains
          call b%cflfile%add_column(b%fs%CFLv_y,'Viscous yCFL')
          call b%cflfile%add_column(b%fs%CFLv_z,'Viscous zCFL')
          call b%cflfile%write()
+         ! Create 0 volume struct monitor
+         b%volfile=monitor(b%fs%cfg%amRoot,'Zero_Vol_Struct')
+         call b%volfile%add_column(b%time%n,'Timestep number')
+         call b%volfile%add_column(b%time%t,'Time')
+         call b%volfile%add_column(b%cc1%zero_struct_id,'Structure ID')
+         call b%volfile%add_column(b%cc1%zero_struct_vol,'Structure volume')
+         call b%volfile%write()
       end block create_monitor
 
 
@@ -499,10 +506,10 @@ contains
       call b%fs%get_strainrate(Ui=b%Ui,Vi=b%Vi,Wi=b%Wi,SR=b%SR,SR_mag=b%SR_mag)
 
       ! Prepare new staggered constant viscosity (at n+1)
-      !call b%fs%get_viscosity(vf=b%vf)
+      call b%fs%get_viscosity(vf=b%vf)
 
-      ! Prepare new staggered variable viscosity at (n+1)
-      call b%fs%get_variable_viscosity(vf=b%vf,SR_mag=b%SR_mag)
+      ! ! Prepare new staggered variable viscosity at (n+1)
+      ! call b%fs%get_variable_viscosity(vf=b%vf,SR_mag=b%SR_mag)
 
       ! Turbulence modeling - only work with gas properties here
       sgs_model: block

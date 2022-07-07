@@ -16,6 +16,7 @@ module block2_class
    use datafile_class,    only: datafile
    use monitor_class,     only: monitor
    use stat_1d_lpt_class, only: stat_1d_lpt
+   use stat_lpt_class,    only: stat_plane_lpt
    implicit none
    private
 
@@ -38,7 +39,8 @@ module block2_class
       type(datafile) :: df                                        !< Datafile for restart
       character(len=str_medium) :: lpt_file
       !> Stat files for lpt
-      type(stat_1d_lpt) :: stat_1d_lpt_xloc1,stat_1d_lpt_xloc2    
+      type(stat_1d_lpt)    :: stat_1d_lpt_xloc1
+      type(stat_plane_lpt) :: stat_lpt_xaxes    
       type(event)       :: stat_evt
       !> Private work arrays
       real(WP), dimension(:,:,:),   allocatable :: resU,resV,resW
@@ -325,7 +327,8 @@ contains
         call param_read('Stat output period',b%stat_evt%tper)
         ! Create stat_lpt plane
         b%stat_1d_lpt_xloc1=stat_1d_lpt(cfg=b%cfg,lp=b%lp,xloc=90e-03_WP,name='stat_1d_lpt1',dmin=0.0_WP,dmax=1e-03_WP,dnbins=100,ID=int(0,8))
-        b%stat_1d_lpt_xloc2=stat_1d_lpt(cfg=b%cfg,lp=b%lp,xloc=90e-03_WP,name='stat_1d_lpt2',dmin=0.0_WP,dmax=1e-03_WP,dnbins=100,ID=int(1,8))
+        b%stat_lpt_xaxes=stat_plane_lpt(cfg=b%cfg,lp=b%lp,location=90e-03_WP,plane_pos='x',name='stat_plane_x',dmin=0.0_WP,dmax=1e-03_WP,dnbins=100,ID=int(0,8))
+        !b%stat_1d_lpt_xloc2=stat_1d_lpt(cfg=b%cfg,lp=b%lp,xloc=90e-03_WP,name='stat_1d_lpt2',dmin=0.0_WP,dmax=1e-03_WP,dnbins=100,ID=int(1,8))
       end block create_stat_lpt
 
       ! Create a monitor file
@@ -547,10 +550,12 @@ contains
       ! Sample and write
       sample_and_write_statlpt : block
          call b%stat_1d_lpt_xloc1%sample(b%time%dt)
-         call b%stat_1d_lpt_xloc2%sample(b%time%dt)
+         call b%stat_lpt_xaxes%sample(b%time%dt)
+         !call b%stat_1d_lpt_xloc2%sample(b%time%dt)
          if (b%stat_evt%occurs()) then
            call b%stat_1d_lpt_xloc1%write()
-           call b%stat_1d_lpt_xloc2%write()
+           call b%stat_lpt_xaxes%write()
+           !call b%stat_1d_lpt_xloc2%write()
          end if
       end block sample_and_write_statlpt
 
