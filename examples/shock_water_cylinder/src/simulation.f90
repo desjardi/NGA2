@@ -151,7 +151,7 @@ contains
          integer :: i,j,k,n
          real(WP), dimension(3) :: xyz
          real(WP) :: gamm_l,Pref_l,gamm_g,visc_l,visc_g
-         real(WP) :: xshock,vshock,relshockvel,dcyl
+         real(WP) :: xshock,vshock,relshockvel
          real(WP) :: Grho0, GP0, Grho1, GP1, ST, Ma1, Ma, Lrho0
          type(bcond), pointer :: mybc
          ! Create material model class
@@ -230,7 +230,6 @@ contains
          end do
 
          ! Initialize liquid energy, with surface tension
-         call param_read('Cylinder diameter',dcyl)
          fs%LrhoE = matmod%EOS_energy(GP0+fs%sigma*2.0_WP/dcyl,Lrho0,0.0_WP,0.0_WP,0.0_WP,'liquid')
 
          ! Define boundary conditions - initialized values are intended dirichlet values too, for the cell centers
