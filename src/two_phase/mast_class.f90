@@ -140,7 +140,7 @@ module mast_class
       real(WP), dimension(:,:,:,:), allocatable :: gradLrhoU,gradLrhoV,gradLrhoW     !< Gradients: Liquid momentum
 
       ! Hybrid advection
-      integer,  dimension(:,:,:,:), allocatable :: sl_face ! < Flag for flux method switching
+      integer,  dimension(:,:,:), allocatable :: sl_x,sl_y,sl_z ! < Flag for flux method switching
       ! Terms needed for pressure relaxation
       real(WP), dimension(:,:,:), allocatable :: srcVF   ! < Predicted volume exchange during advection
       real(WP), dimension(:,:,:), allocatable :: Hpjump  ! < Helmholtz pressure jump
@@ -349,7 +349,9 @@ contains
       allocate(self%gradLrhoW(3,self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%gradLrhoW=0.0_WP
 
       ! Hybrid advection
-      allocate(self%sl_face(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_,3)); self%sl_face=0
+      allocate(self%sl_x(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%sl_x=0
+      allocate(self%sl_y(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%sl_y=0
+      allocate(self%sl_z(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%sl_z=0
       ! Pressure relaxation
       allocate(self%srcVF(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%srcVF=0.0_WP
       allocate(self%Hpjump(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%Hpjump=0.0_WP
@@ -710,7 +712,7 @@ contains
       ! For this collocated solver, BCs specify cell-centered values and behavior,
       ! and the behavior of the face-centered values depends on the type of BC.
       ! (For now, dirichlet BCs always enforce the flowrate, i.e., mask face velocities,
-      !  and clipped neumann BCs modify the sl_face flags to what works best at the outlet.)
+      !  and clipped neumann BCs modify the sl_ flags to what works best at the outlet.)
 
       ! To work properly with n_ and locators, dirichlets work by specifying the face that is
       ! a part of the dirichlet, and the cell behind it (determined by the direction) is included.
@@ -792,7 +794,7 @@ contains
                
                ! This is done by the user directly for conseerved quantities and face velocity
 
-               ! Condition is necessary for sl_face
+               ! Condition is necessary for sl_ flags
                if (trim(adjustl(scope)).eq.'flag') then
                   ! Usage of SL scheme is same for dirichlet and neumann
                   do n=1,my_bc%itr%n_
@@ -800,15 +802,15 @@ contains
                      select case (my_bc%face)
                      case ('x')
                         do ii = 0,abs(2*my_bc%dir)
-                           this%sl_face(i-ii*my_bc%dir,j,k,1) = 1
+                           this%sl_x(i-ii*my_bc%dir,j,k) = 1
                         end do
                      case ('y')
                         do ii = 0,abs(2*my_bc%dir)
-                           this%sl_face(i,j-ii*my_bc%dir,k,2) = 1
+                           this%sl_y(i,j-ii*my_bc%dir,k) = 1
                         end do
                      case ('z')
                         do ii = 0,abs(2*my_bc%dir)
-                           this%sl_face(i,j,k-ii*my_bc%dir,3) = 1
+                           this%sl_z(i,j,k-ii*my_bc%dir) = 1
                         end do
                      end select
                   end do
@@ -851,15 +853,15 @@ contains
                      select case (my_bc%face)
                      case ('x')
                         do ii = 0,abs(2*my_bc%dir)
-                           this%sl_face(i-ii*my_bc%dir ,j     ,k     ,1     ) = 1
+                           this%sl_x(i-ii*my_bc%dir ,j     ,k    ) = 1
                         end do
                      case ('y')
                         do ii = 0,abs(2*my_bc%dir)
-                           this%sl_face(i     ,j-ii*my_bc%dir ,k     ,2     ) = 1
+                           this%sl_y(i     ,j-ii*my_bc%dir ,k    ) = 1
                         end do
                      case ('z')
                         do ii = 0,abs(2*my_bc%dir)
-                           this%sl_face(i     ,j     ,k-ii*my_bc%dir ,3     ) = 1
+                           this%sl_z(i     ,j     ,k-ii*my_bc%dir) = 1
                         end do
                      end select
                   end select
@@ -906,9 +908,9 @@ contains
          call this%cfg%sync(this%V)
          call this%cfg%sync(this%W)
       case('flag')
-         call this%cfg%sync(this%sl_face(:,:,:,1))
-         call this%cfg%sync(this%sl_face(:,:,:,2))
-         call this%cfg%sync(this%sl_face(:,:,:,3))
+         call this%cfg%sync(this%sl_x)
+         call this%cfg%sync(this%sl_y)
+         call this%cfg%sync(this%sl_z)
       end select
       
    end subroutine apply_bcond
@@ -945,13 +947,14 @@ contains
 
      n_band = 1 !ceiling(max_CFL)
 
-     this%sl_face = 0
+     this%sl_x = 0; this%sl_y = 0; this%sl_z = 0
      ! 1 is for semi-Lagrangian, 0 is for centered scheme
 
      ! Loop over the domain and determine multiphase locations within band and shock locations
-     do k=this%cfg%kmin_,this%cfg%kmax_
-        do j=this%cfg%jmin_,this%cfg%jmax_
-           do i=this%cfg%imin_,this%cfg%imax_
+     ! Include +1/-1 to account for cell center / face mismatch in communication
+     do k=this%cfg%kmin_-1,this%cfg%kmax_+1
+        do j=this%cfg%jmin_-1,this%cfg%jmax_+1
+           do i=this%cfg%imin_-1,this%cfg%imax_+1
               if (vf%VFold(i,j,k).lt.VFlo) then
                  ! In fully gas cells, check in band for change in phase
                  VF_check = 0
@@ -973,13 +976,11 @@ contains
                     ! If change of phase is not found in band, check shock sensor
                     if (shock_sensor(i,j,k).gt.0) then
                        ! If shock is indicated, set values to negative, band will be extended around these cells
-                       this%sl_face(i,j,k,1:3)=-1
-                       this%sl_face(i+1,j,k,1)=-1; this%sl_face(i,j+1,k,2)=-1; this%sl_face(i,j,k+1,3)=-1;
+                       this%sl_x(i:i+1,j,k)=-1; this%sl_y(i,j:j+1,k)=-1; this%sl_z(i,j,k:k+1)=-1
                     end if
                  else
                     ! If change of phase is found in band, turn on SL fluxing
-                    this%sl_face(i,j,k,1:3)=1
-                    this%sl_face(i+1,j,k,1)=1; this%sl_face(i,j+1,k,2)=1; this%sl_face(i,j,k+1,3)=1;
+                    this%sl_x(i:i+1,j,k)=1; this%sl_y(i,j:j+1,k)=1; this%sl_z(i,j,k:k+1)=1
                  end if
               elseif (vf%VFold(i,j,k).gt.VFhi) then
                  ! In fully liquid cells, check in band for change in phase
@@ -1002,18 +1003,15 @@ contains
                     ! If change of phase is not found in band, check shock sensor
                     if (shock_sensor(i,j,k).gt.0.0_WP) then
                        ! If shock is indicated, set values to negative, band will be extended around these cells
-                       this%sl_face(i,j,k,1:3)=-1
-                       this%sl_face(i+1,j,k,1)=-1; this%sl_face(i,j+1,k,2)=-1; this%sl_face(i,j,k+1,3)=-1;
+                       this%sl_x(i:i+1,j,k)=-1; this%sl_y(i,j:j+1,k)=-1; this%sl_z(i,j,k:k+1)=-1
                     end if
                  else
                     ! If change of phase is found in band, turn on SL fluxing
-                    this%sl_face(i,j,k,1:3)=1
-                    this%sl_face(i+1,j,k,1)=1; this%sl_face(i,j+1,k,2)=1; this%sl_face(i,j,k+1,3)=1;
+                    this%sl_x(i:i+1,j,k)=1; this%sl_y(i,j:j+1,k)=1; this%sl_z(i,j,k:k+1)=1
                  end if
               else
                  ! If cell is multiphase, turn on SL fluxing
-                 this%sl_face(i,j,k,1:3)=1
-                 this%sl_face(i+1,j,k,1)=1; this%sl_face(i,j+1,k,2)=1; this%sl_face(i,j,k+1,3)=1;
+                 this%sl_x(i:i+1,j,k)=1; this%sl_y(i,j:j+1,k)=1; this%sl_z(i,j,k:k+1)=1
               end if
            end do
         end do
@@ -1024,17 +1022,25 @@ contains
      call this%apply_bcond(dt,bc_scope)
 
      ! Loop over the domain and check within band containing shock locations
-     do k=this%cfg%kmin_,this%cfg%kmax_
-        do j=this%cfg%jmin_,this%cfg%jmax_
-           do i=this%cfg%imin_,this%cfg%imax_
-              if (this%sl_face(i,j,k,1).eq.0.or.this%sl_face(i,j,k,2).eq.0.or.this%sl_face(i,j,k,3).eq.0) then
+     do k=this%cfg%kmin_-1,this%cfg%kmax_+1
+        do j=this%cfg%jmin_-1,this%cfg%jmax_+1
+           do i=this%cfg%imin_-1,this%cfg%imax_+1
+              if (minval(this%sl_x(i:i+1,j,k)).eq.0.or. &
+                  minval(this%sl_y(i,j:j+1,k)).eq.0.or. &
+                  minval(this%sl_z(i,j,k:k+1)).eq.0) then
                  shock_check = 0
                  do ni=-n_band,n_band
                     do nj=-n_band,n_band
-                       do nk=-n_band,n_band
-                          if (minval(this%sl_face(max(this%cfg%imino_,min(i+ni,this%cfg%imaxo_)), &
-                               max(this%cfg%jmino_,min(j+nj,this%cfg%jmaxo_)), &
-                               max(this%cfg%kmino_,min(k+nk,this%cfg%kmaxo_)),:)).eq.-1) then
+                      do nk=-n_band,n_band
+                        if (min(this%sl_x(max(this%cfg%imino_,min(i+ni,this%cfg%imaxo_)), &
+                            max(this%cfg%jmino_,min(j+nj,this%cfg%jmaxo_)), &
+                            max(this%cfg%kmino_,min(k+nk,this%cfg%kmaxo_))), &
+                            this%sl_y(max(this%cfg%imino_,min(i+ni,this%cfg%imaxo_)), &
+                            max(this%cfg%jmino_,min(j+nj,this%cfg%jmaxo_)), &
+                            max(this%cfg%kmino_,min(k+nk,this%cfg%kmaxo_))), &
+                            this%sl_z(max(this%cfg%imino_,min(i+ni,this%cfg%imaxo_)), &
+                            max(this%cfg%jmino_,min(j+nj,this%cfg%jmaxo_)), &
+                            max(this%cfg%kmino_,min(k+nk,this%cfg%kmaxo_)))).eq.-1) then
                              shock_check = 1
                           end if
                        end do
@@ -1043,12 +1049,12 @@ contains
                  if (shock_check.eq.1) then
                     ! If shock is found in band, turn on SL fluxing, but only in faces where shock is not indicated
                     ! I want 0 to go to 1, 1 to stay at 1, and -1 to stay at -1
-                    this%sl_face(i  ,j,k,1)=min(1,2*this%sl_face(i  ,j,k,1)+1)
-                    this%sl_face(i+1,j,k,1)=min(1,2*this%sl_face(i+1,j,k,1)+1)
-                    this%sl_face(i,j  ,k,2)=min(1,2*this%sl_face(i,j  ,k,2)+1)
-                    this%sl_face(i,j+1,k,2)=min(1,2*this%sl_face(i,j+1,k,2)+1)
-                    this%sl_face(i,j,k  ,3)=min(1,2*this%sl_face(i,j,k  ,3)+1)
-                    this%sl_face(i,j,k+1,3)=min(1,2*this%sl_face(i,j,k+1,3)+1)
+                    this%sl_x(i  ,j,k)=min(1,2*this%sl_x(i  ,j,k)+1)
+                    this%sl_x(i+1,j,k)=min(1,2*this%sl_x(i+1,j,k)+1)
+                    this%sl_y(i,j  ,k)=min(1,2*this%sl_y(i,j  ,k)+1)
+                    this%sl_y(i,j+1,k)=min(1,2*this%sl_y(i,j+1,k)+1)
+                    this%sl_z(i,j,k  )=min(1,2*this%sl_z(i,j,k  )+1)
+                    this%sl_z(i,j,k+1)=min(1,2*this%sl_z(i,j,k+1)+1)
                  end if
               end if
            end do
@@ -1056,7 +1062,7 @@ contains
      end do
 
      ! Make all the negatives positive
-     this%sl_face = abs(this%sl_face)
+     this%sl_x = abs(this%sl_x); this%sl_y = abs(this%sl_y); this%sl_z = abs(this%sl_z)
 
      ! BCs again
      bc_scope = 'flag'
@@ -1286,21 +1292,21 @@ contains
            do i=this%cfg%imin_,this%cfg%imax_+1
               
               !! ---- LEFT X(I) FACE ---- !!
-              select case(this%sl_face(i,j,k,1))
+              select case(this%sl_x(i,j,k))
               case(1); call SL_advect  (flux,b_flux,fp,ffm                                        ,i,j,k,'x')
               case(0); call TTSL_advect(flux,b_flux,[this%cfg%x (i),this%cfg%ym(j),this%cfg%zm(k)],i,j,k,'x')
               end select
               call add_fluxes(flux,b_flux,i,j,k,'x')
 
               !! ---- BOTTOM Y(J) FACE ---- !!
-              select case(this%sl_face(i,j,k,2))
+              select case(this%sl_y(i,j,k))
               case(1); call SL_advect  (flux,b_flux,fp,ffm                                        ,i,j,k,'y')
               case(0); call TTSL_advect(flux,b_flux,[this%cfg%xm(i),this%cfg%y (j),this%cfg%zm(k)],i,j,k,'y')
               end select
               call add_fluxes(flux,b_flux,i,j,k,'y')
 
               !! ---- BACK Z(K) FACE ---- !!
-              select case(this%sl_face(i,j,k,3))
+              select case(this%sl_z(i,j,k))
               case(1); call SL_advect  (flux,b_flux,fp,ffm                                        ,i,j,k,'z')
               case(0); call TTSL_advect(flux,b_flux,[this%cfg%xm(i),this%cfg%ym(j),this%cfg%z (k)],i,j,k,'z')
               end select
@@ -1445,7 +1451,7 @@ contains
 
               !! ---- LEFT X(I) FACE ---- !!
               ! Advection term
-              if (this%sl_face(i,j,k,1).eq.0) then
+              if (this%sl_x(i,j,k).eq.0) then
                  call SubCan_mom_RHS_flux(i,j,k,'x')
 
                  ! Calculate coefficients to go into alap array
@@ -1467,7 +1473,7 @@ contains
 
               !! ---- BOTTOM Y(J) FACE ---- !!
               ! Advection term
-              if (this%sl_face(i,j,k,2).eq.0) then
+              if (this%sl_y(i,j,k).eq.0) then
                  call SubCan_mom_RHS_flux(i,j,k,'y')
 
                  ! Calculate coefficients to go into alap array
@@ -1487,7 +1493,7 @@ contains
 
               !! ---- BACK Z(K) FACE ---- !!
               ! Advection term
-              if (this%sl_face(i,j,k,3).eq.0) then
+              if (this%sl_z(i,j,k).eq.0) then
                  call SubCan_mom_RHS_flux(i,j,k,'z')
 
                  ! Calculate coefficients to go into alap array
@@ -1575,17 +1581,17 @@ contains
            do i=this%cfg%imin_,this%cfg%imax_+1
 
               !! ---- LEFT X(I) FACE ---- !!
-              if (this%sl_face(i,j,k,1).eq.0) then
+              if (this%sl_x(i,j,k).eq.0) then
                  call SubCan_KE_RHS_flux(i,j,k,'x')
               end if
 
               !! ---- BOTTOM Y(J) FACE ---- !!
-              if (this%sl_face(i,j,k,2).eq.0) then
+              if (this%sl_y(i,j,k).eq.0) then
                  call SubCan_KE_RHS_flux(i,j,k,'y')
               end if
 
               !! ---- BACK Z(K) FACE ---- !!
-              if (this%sl_face(i,j,k,3).eq.0) then
+              if (this%sl_z(i,j,k).eq.0) then
                  call SubCan_KE_RHS_flux(i,j,k,'z')
               end if
 
@@ -3260,7 +3266,7 @@ contains
               rho_r=sum(vf%Gvol(0,:,:,i  ,j,k))*this%Grho(i  ,j,k)+sum(vf%Lvol(0,:,:,i  ,j,k))*this%Lrho(i  ,j,k)
               rho_l=sum(vf%Gvol(1,:,:,i-1,j,k))*this%Grho(i-1,j,k)+sum(vf%Lvol(1,:,:,i-1,j,k))*this%Lrho(i-1,j,k)
               if (min(vol_l,vol_r).gt.0.0_WP) then
-                 if (this%sl_face(i,j,k,1).eq.1) then
+                 if (this%sl_x(i,j,k).eq.1) then
                     subtract_l = dt*termU(i-1,j,k)
                     subtract_r = dt*termU(i  ,j,k)
                     add = -dt*sum(this%divu_x(:,i,j,k)*this%P(i-1:i,j,k))/this%rho_U(i,j,k)&
@@ -3279,7 +3285,7 @@ contains
               rho_r=sum(vf%Gvol(:,0,:,i,j  ,k))*this%Grho(i,j  ,k)+sum(vf%Lvol(:,0,:,i,j  ,k))*this%Lrho(i,j  ,k)
               rho_l=sum(vf%Gvol(:,1,:,i,j-1,k))*this%Grho(i,j-1,k)+sum(vf%Lvol(:,1,:,i,j-1,k))*this%Lrho(i,j-1,k)
               if (min(vol_l,vol_r).gt.0.0_WP) then
-                 if (this%sl_face(i,j,k,2).eq.1) then
+                 if (this%sl_y(i,j,k).eq.1) then
                     subtract_l = dt*termV(i,j-1,k)
                     subtract_r = dt*termV(i,j  ,k)
                     add = -dt*sum(this%divv_y(:,i,j,k)*this%P(i,j-1:j,k))/this%rho_V(i,j,k)&
@@ -3298,7 +3304,7 @@ contains
               rho_r=sum(vf%Gvol(:,:,0,i,j,k  ))*this%Grho(i,j,k  )+sum(vf%Lvol(:,:,0,i,j,k  ))*this%Lrho(i,j,k  )
               rho_l=sum(vf%Gvol(:,:,1,i,j,k-1))*this%Grho(i,j,k-1)+sum(vf%Lvol(:,:,1,i,j,k-1))*this%Lrho(i,j,k-1)
               if (min(vol_l,vol_r).gt.0.0_WP) then
-                 if (this%sl_face(i,j,k,3).eq.1) then
+                 if (this%sl_z(i,j,k).eq.1) then
                     subtract_l = dt*termW(i,j,k-1)
                     subtract_r = dt*termW(i,j,k  )
                     add = -dt*sum(this%divw_z(:,i,j,k)*this%P(i,j,k-1:k))/this%rho_W(i,j,k)&
