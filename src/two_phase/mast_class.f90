@@ -1111,9 +1111,9 @@ contains
      this%gradLP   =0.0_WP
 
      ! Gradients for linear reconstruction
-     do k=this%cfg%kmin_,this%cfg%kmax_
-        do j=this%cfg%jmin_,this%cfg%jmax_
-           do i=this%cfg%imin_,this%cfg%imax_
+     do k=this%cfg%kmino_+1,this%cfg%kmaxo_-1
+        do j=this%cfg%jmino_+1,this%cfg%jmaxo_-1
+           do i=this%cfg%imino_+1,this%cfg%imaxo_-1
               ! No need to calculate gradient inside of wall cell
               if (this%mask(i,j,k).eq.1) cycle
               ! Cycle through directions
@@ -2490,7 +2490,6 @@ contains
              (VISCIntEnergy + HEATIntEnergy)*real(ceiling(1.0_WP-vf%VF(i,j,k)),WP)
              this%LP   (i,j,k)=this%LP   (i,j,k)+mydt*matmod%EOS_liquid(i,j,k,'v')* &
              (VISCIntEnergy + HEATIntEnergy)*real(ceiling(       vf%VF(i,j,k)),WP)
-             ! Not sure about RHO terms for GPA, LPA
              
              ! Update with gravity
              this%rhoUi(i,j,k)=this%rhoUi(i,j,k)+mydt*this%RHO (i,j,k)*this%gravity(1)
@@ -3017,9 +3016,9 @@ contains
      real(WP) :: rhoc2_lI,rhoc2_gI,denom
      integer :: i,j,k
 
-     do k=this%cfg%kmin_,this%cfg%kmax_+1
-        do j=this%cfg%jmin_,this%cfg%jmax_+1
-           do i=this%cfg%imin_,this%cfg%imax_+1
+     do k=this%cfg%kmin_,this%cfg%kmax_
+        do j=this%cfg%jmin_,this%cfg%jmax_
+           do i=this%cfg%imin_,this%cfg%imax_
               ! Intermediate variables for mechanical equilibrium projection
               rhoc2_lI = this%LrhoSS2(i,j,k); rhoc2_gI = this%GrhoSS2(i,j,k)
               if (vf%VF(i,j,k).ge.VFlo.and.vf%VF(i,j,k).le.VFhi) call matmod%bulkmod_intf(i,j,k,rhoc2_lI,rhoc2_gI)

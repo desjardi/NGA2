@@ -24,7 +24,7 @@ module simulation
    type(event)   :: ens_evt
 
    !> Simulation monitor file
-   type(monitor) :: mfile,dfile,cflfile
+   type(monitor) :: mfile,dfile,cflfile,consfile
 
    public :: simulation_init,simulation_run,simulation_final
 
@@ -34,6 +34,8 @@ module simulation
    
    !> Monitor output variables
    real(WP) :: xd,yd,zd, vmag2, vmaginf
+   real(WP) :: LV0,mass0,mom0_x,mom0_y,mom0_z,totegy0
+   real(WP) :: LVdiff,massdiff,momdiff_x,momdiff_y,momdiff_z,totegydiff
 
 contains
   
@@ -61,13 +63,13 @@ contains
            yd = yd + vf%Lbary(2,i,j,k)*fs%cfg%vol(i,j,k)*vf%VF(i,j,k)*fs%Lrho(i,j,k)
            zd = zd + vf%Lbary(3,i,j,k)*fs%cfg%vol(i,j,k)*vf%VF(i,j,k)*fs%Lrho(i,j,k)
            ! Velocity norms
-           vmag2 = fs%cfg%vol(i,j,k)*(fs%Ui(i,j,k)**2+fs%Vi(i,j,k)**2+fs%Wi(i,j,k)**2)
+           vmag2 = vmag2 + fs%cfg%vol(i,j,k)*(fs%Ui(i,j,k)**2+fs%Vi(i,j,k)**2+fs%Wi(i,j,k)**2)
            vmaginf = max(vmaginf,sqrt(fs%Ui(i,j,k)**2+fs%Vi(i,j,k)**2+fs%Wi(i,j,k)**2))
          end do
        end do
      end do
      ! Normalizing quantities
-     call MPI_ALLREDUCE(md,buf,1,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr); md = buf;
+     call MPI_ALLREDUCE(vol_tot,buf,1,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr); vol_tot = buf;
      call MPI_ALLREDUCE(md,buf,1,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr); md = buf;
      ! Droplet position
      call MPI_ALLREDUCE(xd,buf,1,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr); xd = buf/md;
@@ -78,7 +80,55 @@ contains
      call MPI_ALLREDUCE(vmaginf,buf,1,MPI_REAL_WP,MPI_MAX,fs%cfg%comm,ierr); vmaginf = buf;
      
    end subroutine mast_drop_update
-
+   
+   !> Updates quantities specific to the monitor of this case
+   subroutine conservation_update()
+     use mpi_f08,   only: MPI_ALLREDUCE,MPI_SUM,MPI_MAX
+     use parallel,  only: MPI_REAL_WP
+     implicit none
+     real(WP) :: vol_tot, buf
+     integer  :: ierr,i,j,k
+     
+     ! Initialize
+     vol_tot = 0.0_WP
+     LVdiff = 0.0_WP; massdiff = 0.0_WP; totegydiff = 0.0_WP
+     momdiff_x = 0.0_WP; momdiff_y = 0.0_WP; momdiff_z = 0.0_WP
+     do k=fs%cfg%kmin_,fs%cfg%kmax_
+       do j=fs%cfg%jmin_,fs%cfg%jmax_
+         do i=fs%cfg%imin_,fs%cfg%imax_
+           ! Volume (for normalizing)
+           vol_tot = vol_tot + fs%cfg%vol(i,j,k)
+           ! Liquid volume
+           LVdiff = LVdiff + fs%cfg%vol(i,j,k)*vf%VF(i,j,k)
+           ! Mass
+           massdiff = massdiff + fs%cfg%vol(i,j,k)*fs%RHO(i,j,k)
+           ! Momentum
+           momdiff_x = momdiff_x + fs%cfg%vol(i,j,k)*fs%rhoUi(i,j,k)
+           momdiff_y = momdiff_y + fs%cfg%vol(i,j,k)*fs%rhoVi(i,j,k)
+           momdiff_z = momdiff_z + fs%cfg%vol(i,j,k)*fs%rhoWi(i,j,k)
+           ! Total energy
+           totegydiff = totegydiff + fs%cfg%vol(i,j,k)*(vf%VF(i,j,k)*fs%LrhoE(i,j,k)+(1.0-vf%VF(i,j,k))*fs%GrhoE(i,j,k))
+         end do
+       end do
+     end do
+     
+     ! Parallel sums
+     call MPI_ALLREDUCE(vol_tot,buf,1,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr); vol_tot = buf;
+     ! Normalizing quantities is not necessary, but makes things more understandable
+     call MPI_ALLREDUCE(LVdiff,buf,1,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr); LVdiff = buf/vol_tot;
+     call MPI_ALLREDUCE(massdiff,buf,1,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr); massdiff = buf/vol_tot;
+     call MPI_ALLREDUCE(momdiff_x,buf,1,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr); momdiff_x = buf/vol_tot;
+     call MPI_ALLREDUCE(momdiff_y,buf,1,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr); momdiff_y = buf/vol_tot;
+     call MPI_ALLREDUCE(momdiff_z,buf,1,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr); momdiff_z = buf/vol_tot;
+     call MPI_ALLREDUCE(totegydiff,buf,1,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr); totegydiff = buf/vol_tot;
+     ! Subtract for differences
+     LVdiff = LVdiff - LV0
+     massdiff = massdiff - mass0
+     momdiff_x = momdiff_x - mom0_x; momdiff_y = momdiff_y - mom0_y; momdiff_z = momdiff_z - mom0_z
+     totegydiff = totegydiff - totegy0
+     
+   end subroutine conservation_update
+   
    !> Function that defines a level set function for a spherical droplet at center
    function levelset_drop_center(xyz,t) result(G)
       implicit none
@@ -312,7 +362,9 @@ contains
 
          ! Calculate face velocities
          call fs%interp_vel_basic(vf,fs%Ui,fs%Vi,fs%Wi,fs%U,fs%V,fs%W)
-         ! No BCs - periodic simulation
+         ! Need to fill ghost cells
+         bc_scope='velocity'
+         call fs%apply_bcond(time%dt,bc_scope)
 
          ! Calculate mixture density and momenta
          fs%RHO   = (1.0_WP-vf%VF)*fs%Grho  + vf%VF*fs%Lrho
@@ -327,6 +379,8 @@ contains
          fs%P = fs%PA
          ! Calculate initial temperature
          call matmod%update_temperature(vf,fs%Tmptr)
+         ! Initialize first guess for pressure (0 works best)
+         fs%psolv%sol=0.0_WP
 
       end block create_and_initialize_flow_solver
 
@@ -381,6 +435,7 @@ contains
          call dfile%add_column(zd,'zdrop')
          call dfile%add_column(vmag2,'Vmag2Norm')
          call dfile%add_column(vmaginf,'VmagInfNorm')
+         call mast_drop_update()
          call dfile%write()
          ! Create CFL monitor
          cflfile=monitor(fs%cfg%amRoot,'cfl')
@@ -394,6 +449,28 @@ contains
          call cflfile%add_column(fs%CFLv_y,'Viscous yCFL')
          call cflfile%add_column(fs%CFLv_z,'Viscous zCFL')
          call cflfile%write()
+         
+         ! Create conservation monitor
+         consfile=monitor(fs%cfg%amRoot,'conservation')
+         call consfile%add_column(time%n,'Timestep number')
+         call consfile%add_column(time%t,'Time')
+         call consfile%add_column(LVdiff,'D_LiqVol')
+         call consfile%add_column(massdiff,'D_Mass')
+         call consfile%add_column(momdiff_x,'D_XMomentum')
+         call consfile%add_column(momdiff_y,'D_YMomentum')
+         call consfile%add_column(momdiff_z,'D_ZMomentum')
+         call consfile%add_column(totegydiff,'D_TotEnergy')
+         ! Set initial quantities to zero
+         LV0 = 0.0_WP; mass0 = 0.0_WP; totegy0 = 0.0_WP
+         mom0_x = 0.0_WP; mom0_y = 0.0_WP; mom0_z = 0.0_WP
+         call conservation_update()
+         ! Copy current quantities to initial
+         LV0 = LVdiff; mass0 = massdiff; totegy0 = totegydiff
+         mom0_x = momdiff_x; mom0_y = momdiff_y; mom0_z = momdiff_z
+         ! Reset differences to zero, by definition
+         LVdiff = 0.0_WP; massdiff = 0.0_WP; totegydiff = 0.0_WP
+         momdiff_x = 0.0_WP; momdiff_y = 0.0_WP; momdiff_z = 0.0_WP
+         call consfile%write()
       end block create_monitor
 
 
@@ -453,7 +530,6 @@ contains
             call fs%pressureproj_prepare(time%dt,vf,matmod)
             ! Initialize and solve Helmholtz equation
             call fs%psolv%setup()
-            fs%psolv%sol=fs%PA-fs%P
             call fs%psolv%solve()
             call fs%cfg%sync(fs%psolv%sol)
             ! Perform corrector step using solution
@@ -478,6 +554,8 @@ contains
          call mast_drop_update()
          call dfile%write()
          call cflfile%write()
+         call conservation_update()
+         call consfile%write()
 
       end do
 

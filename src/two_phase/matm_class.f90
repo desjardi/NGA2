@@ -594,16 +594,16 @@ contains
      return
    end function EOS_density
 
-   function EOS_all(this,vf,buf_GrhoE,buf_LrhoE) result(buf_P)
+   function EOS_all(this,vf) result(buf_P)
      use vfs_class, only : vfs
      implicit none
      class(matm), intent(inout) :: this
      class(vfs),  intent(inout) :: vf
-     real(WP), dimension(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_) :: buf_GrhoE,buf_LrhoE,buf_P
+     real(WP), dimension(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_) :: buf_P
 
-     buf_P = (1.0_WP-vf%VF)*((this%gamm_g-1.0_WP)/(1.0_WP-this%Grho*this%b_g)*(buf_GrhoE-0.5_WP* &
+     buf_P = (1.0_WP-vf%VF)*((this%gamm_g-1.0_WP)/(1.0_WP-this%Grho*this%b_g)*(this%GrhoE-0.5_WP* &
              this%Grho*(this%GU**2+this%GV**2+this%GW**2)-this%Grho*this%q_g)-this%gamm_g*this%Pref_g) + &
-             (       vf%VF)*((this%gamm_l-1.0_WP)/(1.0_WP-this%Lrho*this%b_l)*(buf_LrhoE-0.5_WP* &
+             (       vf%VF)*((this%gamm_l-1.0_WP)/(1.0_WP-this%Lrho*this%b_l)*(this%LrhoE-0.5_WP* &
              this%Lrho*(this%LU**2+this%LV**2+this%LW**2)-this%Lrho*this%q_l)-this%gamm_l*this%Pref_l)
 
      return
