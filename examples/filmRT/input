@@ -18,7 +18,7 @@ Liquid dynamic viscosity :    1
 Gas dynamic viscosity :       0.01
 Liquid density :              1000
 Gas density :                 1
-Surface tension coefficient : 0.3
+Surface tension coefficient : 1
 
 # Time integration
 Max timestep size : 5e-3
