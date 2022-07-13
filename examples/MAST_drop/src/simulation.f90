@@ -404,7 +404,7 @@ contains
          ! Add variables to output
          call ens_out%add_vector('velocity',fs%Ui,fs%Vi,fs%Wi)
          call ens_out%add_scalar('P',fs%P)
-         call ens_out%add_scalar('PA',fs%PA)
+         call ens_out%add_scalar('Peos',fs%PA)
          call ens_out%add_scalar('Grho',fs%Grho)
          call ens_out%add_scalar('Lrho',fs%Lrho)
          call ens_out%add_scalar('Density',fs%RHO)
@@ -569,6 +569,7 @@ contains
          call fs%pressure_relax(vf,matmod)
 
          ! Output to ensight
+         fs%PA = matmod%EOS_all(vf);
          if (ens_evt%occurs()) call ens_out%write_data(time%t)
 
          ! Perform and output monitoring
