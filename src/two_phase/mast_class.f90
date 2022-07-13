@@ -1410,6 +1410,7 @@ contains
      !call vf%distance_from_polygon()
      call vf%subcell_vol()
      call vf%get_curvature()
+     call vf%reset_moments()
      ! Band and distance information should not be needed
 
      ! Boundary conditions density
@@ -2499,6 +2500,7 @@ contains
      !call vf%distance_from_polygon()
      call vf%subcell_vol()
      call vf%get_curvature()
+     call vf%reset_moments()
      ! * Band and distance information should not be needed
      ! * Interface information won't be used before interface changes
      !   Just VOF and barycenter values
