@@ -3042,6 +3042,8 @@ contains
            end do
         end do
      end do
+     
+     call this%cfg%sync(this%RHOSS2)
 
    end subroutine harmonize_advpressure_bulkmod
 

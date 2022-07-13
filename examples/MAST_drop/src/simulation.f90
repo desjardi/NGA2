@@ -48,6 +48,7 @@ contains
      integer  :: ierr,i,j,k
      
      ! Initialize
+     vol_tot = 0.0_WP
      md = 0.0_WP
      xd = 0.0_WP; yd = 0.0_WP; zd = 0.0_WP
      vmag2 = 0.0_WP; vmaginf = 0.0_WP
@@ -306,6 +307,14 @@ contains
          if (param_exists('Background pressure')) then
            ! Set background pressure if specified
            call param_read('Background pressure',GP0)
+           ! Calculate liquid pressure
+           if (fs%cfg%nz.eq.1) then
+             ! Cylinder configuration, curv = 1/r
+             LP0 = GP0 + 2.0/ddrop*fs%sigma
+           else
+             ! Sphere configuration, curv = 1/r + 1/r
+             LP0 = GP0 + 4.0/ddrop*fs%sigma
+           end if
            if (param_exists('Liquid density')) then
              ! Set phase density if specified
              call param_read('Liquid density',Lrho0)
@@ -326,14 +335,14 @@ contains
            call param_read('Gas density',Grho0)
            ! Calculate background pressure
            GP0 = Grho0*GSS**2/gamm_g
-         end if
-         ! Calculate liquid pressure
-         if (fs%cfg%nz.eq.1) then
-           ! Cylinder configuration, curv = 1/r
-           LP0 = GP0 + 2.0/ddrop*fs%sigma
-         else
-           ! Sphere configuration, curv = 1/r + 1/r
-           LP0 = GP0 + 4.0/ddrop*fs%sigma
+           ! Calculate liquid pressure
+           if (fs%cfg%nz.eq.1) then
+             ! Cylinder configuration, curv = 1/r
+             LP0 = GP0 + 2.0/ddrop*fs%sigma
+           else
+             ! Sphere configuration, curv = 1/r + 1/r
+             LP0 = GP0 + 4.0/ddrop*fs%sigma
+           end if
          end if
          if (amRoot) then
            print*,"===== Problem Setup Description ====="

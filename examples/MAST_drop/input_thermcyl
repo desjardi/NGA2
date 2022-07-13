@@ -38,7 +38,7 @@ Liquid temperature:	      350
 
 # Time integration
 Max cfl number :    0.9
-Max time :     	    50
+Max time :     	    49.99999
 Max steps :	    10000000
 
 # Pressure solver
