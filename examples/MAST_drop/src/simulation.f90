@@ -24,7 +24,7 @@ module simulation
    type(event)   :: ens_evt
 
    !> Simulation monitor file
-   type(monitor) :: mfile,dfile,cflfile,consfile
+   type(monitor) :: mfile,dfile,cflfile,consfile,cvgfile
 
    public :: simulation_init,simulation_run,simulation_final
 
@@ -432,8 +432,7 @@ contains
          call mfile%add_column(fs%Vmax,'Vmax')
          call mfile%add_column(fs%Wmax,'Wmax')
          call mfile%add_column(fs%Pmax,'Pmax')
-         call mfile%add_column(fs%psolv%it,'Pressure iteration')
-         call mfile%add_column(fs%psolv%rerr,'Pressure error')
+         call mfile%add_column(fs%Tmax,'Tmax')
          call mfile%write()
          ! Create drop monitor
          dfile=monitor(fs%cfg%amRoot,'drop')
@@ -458,6 +457,19 @@ contains
          call cflfile%add_column(fs%CFLv_y,'Viscous yCFL')
          call cflfile%add_column(fs%CFLv_z,'Viscous zCFL')
          call cflfile%write()
+         ! Create convergence monitor
+         cvgfile=monitor(fs%cfg%amRoot,'cvg')
+         call cvgfile%add_column(time%n,'Timestep number')
+         call cvgfile%add_column(time%it,'Iteration')
+         call cvgfile%add_column(time%t,'Time')
+         call cvgfile%add_column(fs%impl_it_x,'Impl_x iteration')
+         call cvgfile%add_column(fs%impl_rerr_x,'Impl_x error')
+         call cvgfile%add_column(fs%impl_it_y,'Impl_y iteration')
+         call cvgfile%add_column(fs%impl_rerr_y,'Impl_y error')
+         call cvgfile%add_column(fs%implicit%it,'Impl_z iteration')
+         call cvgfile%add_column(fs%implicit%rerr,'Impl_z error')
+         call cvgfile%add_column(fs%psolv%it,'Pressure iteration')
+         call cvgfile%add_column(fs%psolv%rerr,'Pressure error')
          
          ! Create conservation monitor
          consfile=monitor(fs%cfg%amRoot,'conservation')
@@ -544,6 +556,9 @@ contains
             ! Perform corrector step using solution
             fs%P=fs%P+fs%psolv%sol
             call fs%pressureproj_correct(time%dt,vf,fs%psolv%sol)
+            
+            ! Record convergence monitor
+            call cvgfile%write()
 
             ! Increment sub-iteration counter
             time%it=time%it+1

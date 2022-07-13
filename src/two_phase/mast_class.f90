@@ -157,6 +157,9 @@ module mast_class
       
       ! Implicit momentum solver
       type(ils) :: implicit                               !< Iterative linear solver object for an implicit prediction of the advection residual
+      ! Variables to save information for monitor
+      integer  :: impl_it_x,   impl_it_y
+      real(WP) :: impl_rerr_x, impl_rerr_y
       
       ! Metrics
       real(WP), dimension(:,:,:,:), allocatable :: itpi_x,itpi_y,itpi_z   !< Interpolation fom cell center to face (for scalars, e.g. pressure)
@@ -178,7 +181,7 @@ module mast_class
       real(WP) :: CFLv_x,CFLv_y,CFLv_z                                    !< Viscous CFL numbers
       
       ! Monitoring quantities
-      real(WP) :: Umax,Vmax,Wmax,Pmax,RHOmax                              !< Maximum velocity, pressure, density
+      real(WP) :: Umax,Vmax,Wmax,Pmax,RHOmax,Tmax                         !< Maximum velocity, pressure, density, temperature
       
    contains
       procedure :: print=>mast_print                      !< Output solver to the screen
@@ -1548,18 +1551,21 @@ contains
      this%implicit%sol=this%rhoUi
      call this%implicit%solve()
      this%rhoUi=this%implicit%sol
+     this%impl_it_x = this%implicit%it; this%impl_rerr_x=this%implicit%rerr ! monitor info
      ! Solve for y-momentum
      call this%implicit%setup()
      this%implicit%rhs=this%F_GrhoV+this%F_LrhoV-dt*this%cfg%vol*PgradY
      this%implicit%sol=this%rhoVi
      call this%implicit%solve()
      this%rhoVi=this%implicit%sol
+     this%impl_it_y = this%implicit%it; this%impl_rerr_y=this%implicit%rerr ! monitor info
      ! Solve for z-momentum
      call this%implicit%setup()
      this%implicit%rhs=this%F_GrhoW+this%F_LrhoW-dt*this%cfg%vol*PgradZ
      this%implicit%sol=this%rhoWi
      call this%implicit%solve()
      this%rhoWi=this%implicit%sol
+     ! monitor info retained by solver
 
      ! Nullify pointers
      nullify(PgradX,PgradY,PgradZ)
@@ -3578,28 +3584,28 @@ contains
       implicit none
       class(mast), intent(inout) :: this
       integer :: i,j,k,ierr
-      real(WP) :: my_Umax,my_Vmax,my_Wmax,my_Pmax,my_divmax
+      real(WP) :: my_Umax,my_Vmax,my_Wmax,my_Pmax,my_Tmax
       
       ! Set all to zero
-      my_Umax=0.0_WP; my_Vmax=0.0_WP; my_Wmax=0.0_WP; my_Pmax=0.0_WP; my_divmax=0.0_WP
+      my_Umax=0.0_WP; my_Vmax=0.0_WP; my_Wmax=0.0_WP; my_Pmax=0.0_WP; my_Tmax=0.0_WP
       do k=this%cfg%kmin_,this%cfg%kmax_
          do j=this%cfg%jmin_,this%cfg%jmax_
             do i=this%cfg%imin_,this%cfg%imax_
                my_Umax=max(my_Umax,abs(this%U(i,j,k)))
                my_Vmax=max(my_Vmax,abs(this%V(i,j,k)))
                my_Wmax=max(my_Wmax,abs(this%W(i,j,k)))
-               if (this%cfg%VF(i,j,k).gt.0.0_WP) my_Pmax  =max(my_Pmax  ,abs(this%P(i,j,k)  ))
-               !if (this%cfg%VF(i,j,k).gt.0.0_WP) my_divmax=max(my_divmax,abs(this%div(i,j,k)))
+               if (this%cfg%VF(i,j,k).gt.0.0_WP) my_Pmax=max(my_Pmax,abs(this%P(i,j,k)))
+               if (this%cfg%VF(i,j,k).gt.0.0_WP) my_Tmax=max(my_Tmax,abs(this%Tmptr(i,j,k)))
             end do
          end do
       end do
       
       ! Get the parallel max
-      call MPI_ALLREDUCE(my_Umax  ,this%Umax  ,1,MPI_REAL_WP,MPI_MAX,this%cfg%comm,ierr)
-      call MPI_ALLREDUCE(my_Vmax  ,this%Vmax  ,1,MPI_REAL_WP,MPI_MAX,this%cfg%comm,ierr)
-      call MPI_ALLREDUCE(my_Wmax  ,this%Wmax  ,1,MPI_REAL_WP,MPI_MAX,this%cfg%comm,ierr)
-      call MPI_ALLREDUCE(my_Pmax  ,this%Pmax  ,1,MPI_REAL_WP,MPI_MAX,this%cfg%comm,ierr)
-      !call MPI_ALLREDUCE(my_divmax,this%divmax,1,MPI_REAL_WP,MPI_MAX,this%cfg%comm,ierr)
+      call MPI_ALLREDUCE(my_Umax,this%Umax,1,MPI_REAL_WP,MPI_MAX,this%cfg%comm,ierr)
+      call MPI_ALLREDUCE(my_Vmax,this%Vmax,1,MPI_REAL_WP,MPI_MAX,this%cfg%comm,ierr)
+      call MPI_ALLREDUCE(my_Wmax,this%Wmax,1,MPI_REAL_WP,MPI_MAX,this%cfg%comm,ierr)
+      call MPI_ALLREDUCE(my_Pmax,this%Pmax,1,MPI_REAL_WP,MPI_MAX,this%cfg%comm,ierr)
+      call MPI_ALLREDUCE(my_Tmax,this%Tmax,1,MPI_REAL_WP,MPI_MAX,this%cfg%comm,ierr)
       
    end subroutine get_max
    
