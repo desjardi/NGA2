@@ -50,4 +50,4 @@ Implicit tolerance : 1e-6
 Implicit iteration : 100
 
 # Ensight output
-Ensight output period : 1
+Ensight output period : 0.9999999

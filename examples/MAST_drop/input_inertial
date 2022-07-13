@@ -33,11 +33,11 @@ Max time :     	    1
 Max steps :	    100000
 
 # Pressure solver
-Pressure tolerance : 1e-6
+Pressure tolerance : 1e-10
 Pressure iteration : 100
 
 # Implicit velocity solver
-Implicit tolerance : 1e-6
+Implicit tolerance : 1e-10
 Implicit iteration : 100
 
 # Ensight output
