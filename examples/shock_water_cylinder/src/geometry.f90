@@ -228,7 +228,7 @@ contains
              print*,'    first dy',y(ny/2+nyr+2)-y(ny/2+nyr+1),'last dy',y(ny+1)-y(ny)
              print*,'    first pt',y(ny/2+nyr+1),'last pt',y(ny+1)
              print*,'Bottom region'
-             print*,'    first pt',y(1),'last pt',y(ny/2)
+             print*,'    first pt',y(1),'last pt',y(ny/2-nyr+1)
              print*,' '
            end if
 
