@@ -66,7 +66,10 @@ contains
       
       ! Create a single-phase flow solver without bconds
       create_and_initialize_flow_solver: block
-         use ils_class, only: pcg_pfmg
+         use ils_class, only: gmres_amg
+         use mathtools, only: twoPi
+         integer :: i,j,k
+         real(WP) :: amp,vel
          ! Create flow solver
          fs=incomp(cfg=cfg,name='NS solver')
          ! Assign constant viscosity
@@ -80,7 +83,7 @@ contains
          call param_read('Implicit iteration',fs%implicit%maxit)
          call param_read('Implicit tolerance',fs%implicit%rcvg)
          ! Setup the solver
-         call fs%setup(pressure_ils=pcg_pfmg,implicit_ils=pcg_pfmg)
+         call fs%setup(pressure_ils=gmres_amg,implicit_ils=gmres_amg)
          ! Initialize velocity based on specified bulk
          call param_read('Ubulk',Ubulk)
          call param_read('Wbulk',Wbulk)
@@ -88,6 +91,17 @@ contains
          where (fs%wmask.eq.0) fs%W=Wbulk
          meanU=Ubulk
          meanW=Wbulk
+         ! To facilitate transition
+         call param_read('Perturbation',amp)
+         vel=sqrt(Ubulk**2+Wbulk**2)
+         do k=fs%cfg%kmino_,fs%cfg%kmaxo_
+            do j=fs%cfg%jmino_,fs%cfg%jmaxo_
+               do i=fs%cfg%imino_,fs%cfg%imaxo_
+                  if (fs%umask(i,j,k).eq.0) fs%U(i,j,k)=fs%U(i,j,k)+amp*vel*cos(8.0_WP*twoPi*fs%cfg%zm(k)/fs%cfg%zL)
+                  if (fs%wmask(i,j,k).eq.0) fs%W(i,j,k)=fs%W(i,j,k)+amp*vel*cos(8.0_WP*twoPi*fs%cfg%xm(i)/fs%cfg%xL)
+               end do
+            end do
+         end do
          ! Calculate cell-centered velocities and divergence
          call fs%interp_vel(Ui,Vi,Wi)
          call fs%get_div()
@@ -198,12 +212,12 @@ contains
                   do j=fs%cfg%jmin_,fs%cfg%jmax_
                      do i=fs%cfg%imin_,fs%cfg%imax_
                         if (fs%umask(i,j,k).eq.0) then
-                           myU   =myU   +fs%U(i,j,k)*fs%cfg%dxm(i)*fs%cfg%dy(j)*fs%cfg%dz(k)
-                           myUvol=myUvol+            fs%cfg%dxm(i)*fs%cfg%dy(j)*fs%cfg%dz(k)
+                           myU   =myU   +fs%cfg%dxm(i)*fs%cfg%dy(j)*fs%cfg%dz(k)*(2.0_WP*fs%U(i,j,k)-fs%Uold(i,j,k))
+                           myUvol=myUvol+fs%cfg%dxm(i)*fs%cfg%dy(j)*fs%cfg%dz(k)
                         end if
                         if (fs%wmask(i,j,k).eq.0) then
-                           myW   =myW    +fs%W(i,j,k)*fs%cfg%dx(i)*fs%cfg%dy(j)*fs%cfg%dzm(k)
-                           myWvol=myWvol+            fs%cfg%dx(i)*fs%cfg%dy(j)*fs%cfg%dzm(k)
+                           myW   =myW   +fs%cfg%dx(i)*fs%cfg%dy(j)*fs%cfg%dzm(k)*(2.0_WP*fs%W(i,j,k)-fs%Wold(i,j,k))
+                           myWvol=myWvol+fs%cfg%dx(i)*fs%cfg%dy(j)*fs%cfg%dzm(k)
                         end if
                      end do
                   end do
