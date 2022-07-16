@@ -2507,11 +2507,14 @@ contains
              this%rhoUi(i,j,k)=this%rhoUi(i,j,k)+mydt*this%RHO (i,j,k)*this%gravity(1)
              this%rhoVi(i,j,k)=this%rhoVi(i,j,k)+mydt*this%RHO (i,j,k)*this%gravity(2)
              this%rhoWi(i,j,k)=this%rhoWi(i,j,k)+mydt*this%RHO (i,j,k)*this%gravity(3)
-             this%GrhoE(i,j,k)=this%GrhoE(i,j,k)+mydt*this%Grho(i,j,k)*(1.0_WP-vf%VF(i,j,k))* &
-                  (this%Ui(i,j,k)*this%gravity(1)+this%Vi(i,j,k)*this%gravity(2)+this%Wi(i,j,k)*this%gravity(3))
-             this%LrhoE(i,j,k)=this%LrhoE(i,j,k)+mydt*this%Lrho(i,j,k)*(       vf%VF(i,j,k))* &
-                  (this%Ui(i,j,k)*this%gravity(1)+this%Vi(i,j,k)*this%gravity(2)+this%Wi(i,j,k)*this%gravity(3))
-             
+             this%GrhoE(i,j,k)=this%GrhoE(i,j,k)+mydt*this%Grho(i,j,k)* &
+                  (this%gravity(1)*(this%Ui(i,j,k)+0.5_WP*mydt*this%gravity(1)) &
+                  +this%gravity(2)*(this%Vi(i,j,k)+0.5_WP*mydt*this%gravity(2)) &
+                  +this%gravity(3)*(this%Wi(i,j,k)+0.5_WP*mydt*this%gravity(3)))
+             this%LrhoE(i,j,k)=this%LrhoE(i,j,k)+mydt*this%Lrho(i,j,k)* &
+                  (this%gravity(1)*(this%Ui(i,j,k)+0.5_WP*mydt*this%gravity(1)) &
+                  +this%gravity(2)*(this%Vi(i,j,k)+0.5_WP*mydt*this%gravity(2)) &
+                  +this%gravity(3)*(this%Wi(i,j,k)+0.5_WP*mydt*this%gravity(3)))
              ! Include source terms from LPT
              !rhoU(i,j,k)=rhoU(i,j,k) + srcUi(i,j,k)/real(nCFL,WP)
              !rhoV(i,j,k)=rhoV(i,j,k) + srcVi(i,j,k)/real(nCFL,WP)

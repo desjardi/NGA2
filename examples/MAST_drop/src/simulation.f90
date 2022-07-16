@@ -136,7 +136,7 @@ contains
       real(WP), dimension(3),intent(in) :: xyz
       real(WP), intent(in) :: t
       real(WP) :: G
-      G=1.0_WP-sqrt(xyz(1)**2+xyz(2)**2+xyz(3))/(ddrop/2.0)
+      G=1.0_WP-sqrt(xyz(1)**2+xyz(2)**2+xyz(3)**2)/(ddrop/2.0)
    end function levelset_drop_center
    
    function levelset_cyl_center(xyz,t) result(G)
@@ -235,12 +235,13 @@ contains
          use ils_class,  only: pcg_bbox,pcg_amg
          use mathtools,  only: Pi
          use parallel,   only: amRoot
-         integer :: i,j,k,n
-         real(WP), dimension(3) :: xyz
+         use string,     only: str_medium
+         integer :: i,j,k,n,impl_option
          real(WP) :: gamm_l,Pref_l,gamm_g,visc_l,visc_g,hdff_l,hdff_g,cv_l,cv_g,b_l,q_l
          real(WP) :: GSS, GP0, LP0, Grho0, Lrho0, GTemp0, LTemp0
          real(WP), dimension(3) :: u_g,u_l,u_mix
          type(bcond), pointer :: mybc
+         character(len=str_medium) :: impl_str
          ! Create material model class
          matmod=matm(cfg=cfg,name='Liquid-gas models')
          ! Get EOS parameters from input
@@ -291,8 +292,11 @@ contains
          ! Configure implicit momentum solver
          call param_read('Implicit iteration',fs%implicit%maxit)
          call param_read('Implicit tolerance',fs%implicit%rcvg)
-         ! Setup the solver
-         call fs%setup(pressure_ils=pcg_bbox,implicit_ils=pcg_amg)
+         ! Setup the solver, default is amg
+         impl_option = pcg_amg
+         if (param_exists('Implicit solver')) call param_read('Implicit solver',impl_str)
+         if (trim(impl_str).eq.'blackbox') impl_option = pcg_bbox
+         call fs%setup(pressure_ils=pcg_bbox,implicit_ils=impl_option)
 
          ! Set up problem: velocity, density, pressure
          ! Velocity is quiescent unless specified
@@ -343,6 +347,10 @@ contains
              ! Sphere configuration, curv = 1/r + 1/r
              LP0 = GP0 + 4.0/ddrop*fs%sigma
            end if
+         end if
+         ! Get gravity if specified
+         if (param_exists('Gravity')) then
+            call param_read('Gravity',fs%gravity)
          end if
          if (amRoot) then
            print*,"===== Problem Setup Description ====="
