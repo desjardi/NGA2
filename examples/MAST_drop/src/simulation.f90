@@ -353,9 +353,48 @@ contains
             call param_read('Gravity',fs%gravity)
          end if
          if (amRoot) then
-           print*,"===== Problem Setup Description ====="
-           ! Laplace number, Reynolds number, 
-           
+           print*,"===== Problem Setup Non-dimensional Numbers ====="
+           if (visc_g.ne.0.0_WP) then
+             print*,'Reynolds (gas)    = ', Grho0*sqrt(u_g(1)**2+u_g(2)**2+u_g(3)**2)*ddrop/visc_g
+             print*,'Reynolds (liquid) = ', Lrho0*sqrt(u_l(1)**2+u_l(2)**2+u_l(3)**2)*ddrop/visc_l
+             print*,'Acoustic Reynolds = ', Grho0*sqrt(gamm_g*GP0/Grho0)*ddrop/visc_g
+             print*,'Laplace           = ', fs%sigma*Lrho0*ddrop/visc_l**2
+           else
+             print*,'Reynolds (gas)    = Infinity'
+             print*,'Reynolds (liquid) = Infinity'
+             print*,'Acoustic Reynolds = Infinity'
+             if (fs%sigma.ne.0.0_WP) then
+               print*,'Laplace           = Infinity'
+             else
+               print*,'Laplace           = Undefined'
+             end if
+           end if
+           if (hdff_g.ne.0.0_WP) then
+             print*,'Prandtl (gas)     = ', visc_g*gamm_g*cv_g/hdff_g
+             print*,'Prandtl (liquid)  = ', visc_l*gamm_l*cv_l/hdff_l
+           else
+             if (visc_g.ne.0.0_WP) then
+               print*,'Prandtl (gas)     = Infinity'
+               print*,'Prandtl (liquid)  = Infinity'
+             else
+               print*,'Prandtl (gas)     = Undefined'
+               print*,'Prandtl (liquid)  = Undefined'
+             end if
+           end if
+           if (fs%sigma.ne.0.0_WP) then
+             print*,'Weber             = ', Grho0*((u_g(1)-u_l(1))**2+(u_g(2)-u_l(2))**2+(u_g(3)-u_l(3))**2)*ddrop/fs%sigma
+             print*,'Acoustic Weber    = ', gamm_g*GP0*ddrop/fs%sigma
+           else
+             print*,'Weber             = Infinity'
+             print*,'Acoustic Weber    = Infinity'
+           end if
+           if (sum(abs(fs%gravity)).ne.0.0_WP) then
+             print*,'Froude            = ', sqrt(u_l(1)**2+u_l(2)**2+u_l(3)**2)/(fs%gravity(1)**2+fs%gravity(2)**2+fs%gravity(3)**2)/sqrt(ddrop)
+           else if (sqrt(u_l(1)**2+u_l(2)**2+u_l(3)**2).ne.0.0_WP) then
+             print*,'Froude            = Infinity'
+           else
+             print*,'Froude            = Undefined'
+           end if
          end if
 
          ! Initialize flow variables
