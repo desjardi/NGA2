@@ -822,8 +822,6 @@ contains
              PresH-(       vf)*my_pjump &
              ), this%Grho(i,j,k),sqrt(2.0_WP*KE),0.0_WP,0.0_WP,'gas'))
         Gflag = .true.
-        ! Update temperature
-        !call compressible_therm_refresh_one(i,j,k)
      end if
      if (vf.gt.VFlo.and. &
           min(this%EOS_liquid(i,j,k,'p')+this%Pref_l,this%LrhoE(i,j,k)-this%Lrho(i,j,k)*KE).le.0.0_WP) then
@@ -832,8 +830,6 @@ contains
              PresH+(1.0_WP-vf)*my_pjump &
              ), this%Lrho(i,j,k),sqrt(2.0_WP*KE),0.0_WP,0.0_WP,'liquid'))
         Lflag = .true.
-        ! Update temperature
-        !call compressible_therm_refresh_one(i,j,k)
      end if
 
      return

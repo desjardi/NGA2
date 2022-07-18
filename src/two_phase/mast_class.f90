@@ -2781,7 +2781,7 @@ contains
      class(vfs),  intent(inout) :: vf
      class(matm), intent(inout) :: matmod
      real(WP) :: KE
-     logical  :: Gflag, Lflag
+     logical  :: Gflag, Lflag, Gf, Lf
      integer  :: i,j,k
 
      ! Loop through domain and relax multiphase cells
@@ -2800,7 +2800,7 @@ contains
                     ! call pressure_thermal_relax_one(i,j,k)
                  end if
                  ! Refresh temperature and temperature-dependent variables
-                 ! call therm_refresh_one(i,j,k)
+                 this%Tmptr(i,j,k)=matmod%get_local_temperature(vf,i,j,k,this%Tmptr(i,j,k))
               end if
            end do
         end do
@@ -2834,7 +2834,12 @@ contains
                  ! Calculate kinematic KE
                  KE = 0.5_WP*(this%Ui(i,j,k)**2+this%Vi(i,j,k)**2+this%Wi(i,j,k)**2)
                  ! Alter energy if needed
+                 Gf = .false.; Lf = .false.
                  call matmod%fix_energy(vf%VF(i,j,k),KE,this%P(i,j,k),this%sigma*vf%curv(i,j,k),i,j,k,Gflag,Lflag)
+                 ! If energy has been altered, update temperature
+                 if (Gf.or.Lf) this%Tmptr(i,j,k) = matmod%get_local_temperature(vf,i,j,k,this%Tmptr(i,j,k))
+                 ! Update flags
+                 Gflag = (Gflag.or.Gf); Lflag = (Lflag.or.Lf)
               end do
            end do
         end do
