@@ -80,6 +80,7 @@ module matm_class
       procedure :: register_thermoflow_variables          !< Creates pointers from material models to flow solver variables
 
       procedure :: EOS_relax_quad                         !< Outputs terms for mechanical pressure relaxation step
+      procedure :: EOS_thermal_relax_quad                 !< Outputs terms for thermo-mechanical pressure relaxation step
       procedure :: bulkmod_intf                           !< Calculate the bulk modulus at liquid-gas interface
       procedure :: fix_energy                             !< Can correct erroneous energy values
       
@@ -709,6 +710,70 @@ contains
 
      return
    end subroutine EOS_relax_quad
+   
+   subroutine EOS_thermal_relax_quad(this,i,j,k,myVF,my_pjump,cv_l,cv_g,VF_terms,quad_terms)
+     implicit none
+     class(matm), intent(inout) :: this
+     integer,  intent(in) :: i,j,k
+     real(WP), intent(in) :: my_pjump,myVF,cv_l,cv_g
+     real(WP) :: KE
+     real(WP) :: n1,n0,d1,d0
+     real(WP) :: re1,r1,cv1,b1,q1,g1,pr1,temp1
+     real(WP) :: re2,r2,cv2,b2,q2,g2,pr2,temp2
+     real(WP) :: a,b,c
+     real(WP), parameter :: phist = 1.0_WP
+     real(WP), parameter :: phi0 = 1.0_WP-phist
+     real(WP), dimension(4) :: VF_terms
+     real(WP), dimension(3) :: quad_terms
+     real(WP), dimension(2) :: Pint_terms
+
+     ! Incoming quantities
+     ! myVF    : local value of volume fraction
+     ! my_pjump: pressure jump from phase 1 to 2, i.e. liquid to gas
+     ! cv_l    : specific heat of liquid phase
+     ! cv_g    : specific heat of gas phase
+
+     ! Outputs
+     ! a,b,c       : coefficients for quadratic equation of phase 1 eq. pressure (quad_terms)
+     ! n1,n0,d1,d0 : coefficients for rational equation of phase 1 vol. frac.    (VF_terms)
+
+     ! Calculate kinetic energy without the density (assuming single velocity)
+     KE  = 0.5_WP*(this%LU(i,j,k)**2+this%LV(i,j,k)**2+this%LW(i,j,k)**2)
+
+     ! Liquid is fluid 1, Gas is fluid 2
+     re1 = (       myVF)*(this%LrhoE(i,j,k)-this%Lrho(i,j,k)*KE)
+     re2 = (1.0_WP-myVF)*(this%GrhoE(i,j,k)-this%Grho(i,j,k)*KE)
+     r1  = (       myVF)*this%Lrho (i,j,k)
+     r2  = (1.0_WP-myVF)*this%Grho (i,j,k)
+     ! Rename property variables for brevity
+     b1  = this%b_l; b2 = this%b_g;  g1 = this%gamm_l;  g2 = this%gamm_g
+     q1  = this%q_l; q2 = this%q_g;  pr1 = this%Pref_l; pr2 = this%Pref_g
+     cv1 = cv_l; cv2 = cv_g;
+     ! Intermediate terms
+     temp1 = (g1-1.0_WP)*r1*cv1
+     temp2 = (g2-1.0_WP)*r2*cv2
+     n1 =     r1*b1*temp2 +                (1.0_WP-r2*b2)*temp1
+     n0 = pr1*r1*b1*temp2 + (pr2-my_pjump)*(1.0_WP-r2*b2)*temp1
+     d1 =           temp2 +                               temp1
+     d0 =       pr1*temp2 +                (pr2-my_pjump)*temp1
+     ! Terms in quadratic equation
+     a = n1*(1.0_WP/(g1-1.0_WP) - 1.0_WP/(g2-1.0_WP)) + &
+          d1*(-r1*b1/(g1-1.0_WP) + (1.0_WP-r2*b2)/(g2-1.0_WP))
+     b = n1*(g1*pr1/(g1-1.0_WP) - (g2*pr2-my_pjump)/(g2-1.0_WP)) + &
+          d1*(-g1*pr1*r1*b1/(g1-1.0_WP) + (g2*pr2-my_pjump)*(1.0_WP-r2*b2)/(g2-1.0_WP) &
+          + r1*q1 + r2*q2 - re1 - re2) + &
+          n0*(1.0_WP/(g1-1.0_WP) - 1.0_WP/(g2-1.0_WP)) + &
+          d0*(-r1*b1/(g1-1.0_WP) + (1.0_WP-r2*b2)/(g2-1.0_WP))
+     c = n0*(g1*pr1/(g1-1.0_WP) - (g2*pr2-my_pjump)/(g2-1.0_WP)) + &
+          d0*(-g1*pr1*r1*b1/(g1-1.0_WP) + (g2*pr2-my_pjump)*(1.0_WP-r2*b2)/(g2-1.0_WP) &
+          + r1*q1 + r2*q2 - re1 - re2)
+     ! Put into vector -> for result of Peq
+     quad_terms = (/a,b,c/)
+     ! Terms in new volume fraction equations -> for VF=(n1*Peq+n0)/(d1*Peq+d0)
+     VF_terms   = (/n1,n0,d1,d0/)
+
+     return
+   end subroutine EOS_thermal_relax_quad
 
    subroutine bulkmod_intf(this,i,j,k,rc2_l,rc2_g)
      implicit none
