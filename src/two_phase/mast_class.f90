@@ -22,6 +22,11 @@ module mast_class
    
    ! List of available contact line models for this solver
    integer, parameter, public :: static_contact=1    !< Static contact line model
+   
+   ! List of available pressure relaxation implementations
+   integer, parameter, public :: mech_egy_mech_hhz=1       !< Mechanical for energy, mechanical for helmholtz
+   integer, parameter, public :: thermmech_egy_mech_hhz=2  !< Thermo-mechanical for energy, mechanical for helmholtz
+   !integer, parameter, public :: thermmech_egy_therm_hhz=3 !< Thermo-mechanical for energy, thermal for helmholtz
 
    ! Buffer for labeling BCs
    character(len=str_medium), public :: bc_scope
@@ -2774,13 +2779,14 @@ contains
 
    end subroutine pressureproj_correct
 
-   subroutine pressure_relax(this,vf,matmod)
+   subroutine pressure_relax(this,vf,matmod,relax_model)
      use vfs_class,  only: vfs, VFlo, VFhi
      use matm_class, only: matm
      implicit none
      class(mast), intent(inout) :: this
      class(vfs),  intent(inout) :: vf
      class(matm), intent(inout) :: matmod
+     integer, intent(in), optional :: relax_model
      real(WP) :: KE
      logical  :: Gflag, Lflag, Gf, Lf
      integer  :: i,j,k
@@ -2793,13 +2799,14 @@ contains
               if (this%mask(i,j,k).gt.0) cycle
               ! Determine if multiphase cell
               if ((vf%VF(i,j,k).ge.VFlo).and.(vf%VF(i,j,k).le.VFhi)) then
-                 if (.true.) then !(mult_iso) then
-                    ! Mechanical relaxation
-                    call this%pressure_relax_one(vf,matmod,i,j,k)
-                 else
-                    ! Thermal relaxation
-                    call this%pressure_thermal_relax_one(vf,matmod,i,j,k)
-                 end if
+                select case (relax_model)
+                case (mech_egy_mech_hhz)
+                  ! Mechanical relaxation
+                  call this%pressure_relax_one(vf,matmod,i,j,k)
+                case (thermmech_egy_mech_hhz) !,thermmech_egy_therm_hhz
+                  ! Thermo-mechanical relaxation
+                  call this%pressure_thermal_relax_one(vf,matmod,i,j,k)
+                end select
               end if
               ! Update temperature globally, having changed during prior iteration and relaxation
               this%Tmptr(i,j,k)=matmod%get_local_temperature(vf,i,j,k,this%Tmptr(i,j,k))

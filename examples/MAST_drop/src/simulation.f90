@@ -28,6 +28,8 @@ module simulation
 
    public :: simulation_init,simulation_run,simulation_final
 
+   !> Choice of relaxation model
+   integer  :: relax_model
    !> Problem definition
    real(WP) :: ddrop
    logical  :: yes_Temp
@@ -231,7 +233,7 @@ contains
 
       ! Create a compressible two-phase flow solver
       create_and_initialize_flow_solver: block
-         use mast_class, only: clipped_neumann,dirichlet,bc_scope,bcond
+         use mast_class, only: clipped_neumann,dirichlet,bc_scope,bcond,mech_egy_mech_hhz,thermmech_egy_mech_hhz
          use ils_class,  only: pcg_bbox,pcg_amg
          use mathtools,  only: Pi
          use parallel,   only: amRoot
@@ -421,12 +423,21 @@ contains
          ! Need to fill ghost cells
          bc_scope='velocity'
          call fs%apply_bcond(time%dt,bc_scope)
+         
+         ! Choose relaxation model
+         if (abs(cv_l)+abs(cv_g).gt.0.0_WP) then
+           ! Use thermo-mechanical if heat conduction is considered
+           relax_model = thermmech_egy_mech_hhz
+         else
+           ! Use mechanical otherwise
+           relax_model = mech_egy_mech_hhz
+         end if
 
          ! Calculate mixture density and momenta
          fs%RHO   = (1.0_WP-vf%VF)*fs%Grho  + vf%VF*fs%Lrho
          fs%rhoUi = fs%RHO*fs%Ui; fs%rhoVi = fs%RHO*fs%Vi; fs%rhoWi = fs%RHO*fs%Wi
          ! Perform initial pressure relax
-         call fs%pressure_relax(vf,matmod)
+         call fs%pressure_relax(vf,matmod,relax_model)
          ! Calculate initial phase and bulk moduli
          call fs%init_phase_bulkmod(vf,matmod)
          call fs%reinit_phase_pressure(vf,matmod)
@@ -613,7 +624,7 @@ contains
          end do
 
          ! Pressure relaxation
-         call fs%pressure_relax(vf,matmod)
+         call fs%pressure_relax(vf,matmod,relax_model)
 
          ! Output to ensight
          fs%PA = matmod%EOS_all(vf);
