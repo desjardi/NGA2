@@ -468,8 +468,7 @@ contains
    subroutine init_metrics(this)
       implicit none
       class(mast), intent(inout) :: this
-      integer :: i,j,k,st1,st2
-      real(WP), dimension(-1:0) :: itpx,itpy,itpz
+      integer :: i,j,k
       
       ! Allocate interpolation coefficients for center to cell face
       allocate(this%itpi_x(-1:0,this%cfg%imin_:this%cfg%imax_+1,this%cfg%jmin_:this%cfg%jmax_+1,this%cfg%kmin_:this%cfg%kmax_+1)) !< X-face-centered
@@ -537,8 +536,7 @@ contains
    subroutine adjust_metrics(this)
       implicit none
       class(mast), intent(inout) :: this
-      integer :: i,j,k,st1,st2
-      real(WP) :: delta,mysum
+      integer :: i,j,k
       
       ! Sync up u/v/wmasks
       call this%cfg%sync(this%umask)
@@ -1711,8 +1709,7 @@ contains
      subroutine SL_getFaceFlux(f_moments, flux, b_flux)
        use irl_fortran_interface, only: getSize
        integer  :: ii,jj,kk,n
-       integer  :: list_size,uniq_id
-       integer,  dimension(3) :: ind
+       integer  :: list_size
        real(WP) :: my_Gvol,my_Lvol
        real(WP), dimension(3) :: my_Gbary,my_Lbary
        real(WP), dimension(14)  :: flux
@@ -1786,7 +1783,7 @@ contains
        integer,  dimension(3)   :: ind_p
        real(WP) :: vol_f,vol_check
        character(len=1) :: dir
-       integer :: n,i,j,k,idir
+       integer :: i,j,k,idir
 
        ! Trajectory-Tracing Semi-Lagrangian scheme
 
@@ -1842,7 +1839,7 @@ contains
      ! ===================================================== !
      subroutine TTSL_getFaceFlux(pt_p,pt_f,ind_p,vol_f, flux)
        implicit none
-       real(WP), dimension(3) :: pt_f,pt_p,pt_c,dx_f
+       real(WP), dimension(3) :: pt_f,pt_p,pt_c
        real(WP), dimension(14):: flux
        integer,  dimension(3) :: ind_p,ind_c
        real(WP) :: vol_f,l_f,l_c,l_d,l_s
@@ -1913,13 +1910,12 @@ contains
 
      ! Routine to find intesections with mesh and calculate distances
      subroutine mesh_intersect(pt_p,pt_f,ind_p, pt_c,ind_c)
-       integer :: i,j,k,min_d
+       integer :: min_d
        real(WP) :: slope_factor
        real(WP), dimension(3) :: pt_p,pt_f,pt_c,vec
        integer,  dimension(3) :: ind_p,ind_c,ind_m
        real(WP), dimension(3) :: xint,yint,zint
        real(WP), dimension(4) :: dint
-       logical :: p_flag
 
        ! Direction of intersection
        vec = pt_f - pt_p
@@ -3565,7 +3561,7 @@ contains
      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: termV
      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: termW
      integer  :: i,j,k
-     real(WP) :: vol_r,vol_l,rho_r,rho_l
+     real(WP) :: rho_r,rho_l
      real(WP), dimension(0:1) :: jumpx,jumpy,jumpz
 
      ! Begin at zero every time

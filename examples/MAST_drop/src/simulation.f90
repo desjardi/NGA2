@@ -238,11 +238,10 @@ contains
          use mathtools,  only: Pi
          use parallel,   only: amRoot
          use string,     only: str_medium
-         integer :: i,j,k,n,impl_option
+         integer :: i,j,k,impl_option
          real(WP) :: gamm_l,Pref_l,gamm_g,visc_l,visc_g,hdff_l,hdff_g,cv_l,cv_g,b_l,q_l
          real(WP) :: GSS, GP0, LP0, Grho0, Lrho0, GTemp0, LTemp0
          real(WP), dimension(3) :: u_g,u_l,u_mix
-         type(bcond), pointer :: mybc
          character(len=str_medium) :: impl_str
          ! Create material model class
          matmod=matm(cfg=cfg,name='Liquid-gas models')
