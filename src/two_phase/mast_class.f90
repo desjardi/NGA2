@@ -2782,7 +2782,7 @@ contains
      class(mast), intent(inout) :: this
      class(vfs),  intent(inout) :: vf
      class(matm), intent(inout) :: matmod
-     integer, intent(in), optional :: relax_model
+     integer, intent(in) :: relax_model
      real(WP) :: KE
      logical  :: Gflag, Lflag, Gf, Lf
      integer  :: i,j,k
