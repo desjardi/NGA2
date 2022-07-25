@@ -70,6 +70,9 @@ module lpt_class
       real(WP) :: Vmin,Vmax,Vmean,Vvar                    !< V velocity info
       real(WP) :: Wmin,Wmax,Wmean,Wvar                    !< W velocity info
       integer  :: np_new,np_out                           !< Number of new and removed particles
+
+      ! Time spent in lpt advance procedure
+      real(WP) :: lpt_wt=0.0_WP
       
    contains
       procedure :: update_partmesh                        !< Update a partmesh object using current particles
@@ -132,6 +135,7 @@ contains
    
    !> Advance the particle equations by a specified time step dt
    subroutine advance(this,dt,U,V,W,rho,visc)
+      use mpi, only: mpi_wtime
       implicit none
       class(lpt), intent(inout) :: this
       real(WP), intent(inout) :: dt  !< Timestep size over which to advance
@@ -142,8 +146,12 @@ contains
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: visc  !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       integer :: i
       real(WP) :: mydt,dt_done
+      real(WP) :: starttime,endtime
       real(WP), dimension(3) :: acc
       type(part) :: pold
+
+      ! Start lpt advance timer
+      starttime=mpi_wtime()
       
       ! Advance the equations
       do i=1,this%np_
@@ -195,6 +203,12 @@ contains
             if (verbose.gt.0) call log(message)
          end if
       end block logging
+
+      ! End lpt advance timer
+      endtime=mpi_wtime()
+
+      ! Time spent advancing lpt in current time step
+      this%lpt_wt=endtime-starttime
       
    end subroutine advance
    

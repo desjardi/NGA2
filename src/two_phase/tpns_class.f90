@@ -150,6 +150,9 @@ module tpns_class
       
       ! Monitoring quantities
       real(WP) :: Umax,Vmax,Wmax,Pmax,divmax,SRmax,Visclmax               !< Maximum velocity, pressure, divergence
+
+      ! Wall time in solver procedure
+      real(WP) :: implicit_solver_wt=0.0_WP
       
    contains
       procedure :: print=>tpns_print                      !< Output solver to the screen
@@ -2474,6 +2477,7 @@ contains
    !> NEED TO CHECK IMPLICITATION OF THE CONVECTIVE TERM ON THE DIAGONALS
    subroutine solve_implicit(this,dt,resU,resV,resW)
       use ils_class, only: amg
+      use mpi,       only: mpi_wtime
       implicit none
       class(tpns), intent(inout) :: this
       real(WP), intent(in) :: dt
@@ -2482,8 +2486,12 @@ contains
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: resW !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       integer :: i,j,k
       real(WP) :: rhoUp ,rhoUm ,rhoVp ,rhoVm ,rhoWp ,rhoWm
+      real(WP) :: starttime,endtime
       !real(WP) :: rhoUp1,rhoUm1,rhoVp1,rhoVm1,rhoWp1,rhoWm1
       !real(WP) :: rhoUp2,rhoUm2,rhoVp2,rhoVm2,rhoWp2,rhoWm2
+
+      ! Start implicit solver timer
+      starttime=mpi_wtime()
       
       ! Solve implicit U problem
       this%implicit%opr(1,:,:,:)=this%rho_U; this%implicit%opr(2:,:,:,:)=0.0_WP
@@ -2717,6 +2725,12 @@ contains
       call this%cfg%sync(resU)
       call this%cfg%sync(resV)
       call this%cfg%sync(resW)
+
+      ! End implicit solver timer
+      endtime=mpi_wtime()
+
+      ! Wall time spent in current time step
+      this%implicit_solver_wt=endtime-starttime
       
    end subroutine solve_implicit
    

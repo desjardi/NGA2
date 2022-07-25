@@ -46,6 +46,9 @@ module linsol_class
       integer  :: it                                                  !< Current number of iterations
       real(WP) :: rerr                                                !< Current relative error
       real(WP) :: aerr                                                !< Current absolute error
+
+      ! Time spent in solver procedure
+      real(WP) :: solver_wt=0.0_WP
       
    contains
       procedure(in_noarg_interface   ), deferred :: print_short             !< One-line printing of solver status

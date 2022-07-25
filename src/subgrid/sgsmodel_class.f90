@@ -36,6 +36,9 @@ module sgsmodel_class
       real(WP), dimension(:,:,:,:,:,:), allocatable :: filtern  !< Filtering operator with Neumann at walls
       real(WP), dimension(:,:,:), allocatable :: ratio          !< Filter ratio
       real(WP), dimension(:,:,:), allocatable :: delta          !< Filter size
+
+      ! Wall time in get sgs visc procedure
+      real(WP) :: sgs_wt=0.0_WP
       
    contains
       
@@ -253,6 +256,7 @@ contains
    !> Get subgrid scale dynamic viscosity
    subroutine get_visc(this,dt,rho,Ui,Vi,Wi,SR)
       use param, only: verbose
+      use mpi,   only: mpi_wtime
       implicit none
       class(sgsmodel), intent(inout) :: this
       real(WP), intent(in) :: dt !< dt since the last call to the model
@@ -264,9 +268,13 @@ contains
       integer :: i,j,k
       real(WP) :: Frho,FU,FV,FW,FS_
       real(WP) :: Cs,tau,alpha
+      real(WP) :: starttime,endtime
       real(WP), dimension(3) :: pos
       real(WP), dimension(6) :: FSR,FrhoS_SR,FrhoUU,Mij,Lij
       real(WP), dimension(:,:,:), allocatable :: S_,LMold,MMold
+
+      ! Start  get sgs visc timer
+      starttime=mpi_wtime()
       
       ! Remember the previous LM and MM
       allocate(LMold(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_)); LMold=this%LM
@@ -387,6 +395,12 @@ contains
       ! Output info about model
       if (verbose.gt.0) call this%log()
       if (verbose.gt.1) call this%print()
+
+      ! End get sgs visc timer
+      endtime=mpi_wtime()
+
+      ! Wall time for get sgs vsic in current time step
+      this%sgs_wt=endtime-starttime
       
    end subroutine get_visc
    

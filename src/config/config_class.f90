@@ -19,6 +19,9 @@ module config_class
       
       ! Geometry
       real(WP), dimension(:,:,:), allocatable :: VF            !< Volume fraction info (VF=1 is fluid, VF=0 is wall)
+
+      ! Wall time spent in current time step for a domain
+      real(WP) :: step_wt=0.0_WP
       
    contains
       procedure :: print=>config_print                         !< Output configuration information to the screen

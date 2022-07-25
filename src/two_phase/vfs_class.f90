@@ -29,7 +29,6 @@ module vfs_class
    integer, parameter, public :: art=6               !< ART scheme
    
    ! IRL cutting moment calculation method
-   integer, parameter, public :: recursive_simplex=0 !< Recursive simplex cutting
    integer, parameter, public :: half_edge=1         !< Half-edge cutting
    integer, parameter, public :: nonrecurs_simplex=2 !< Non-recursive simplex cutting
    
@@ -134,6 +133,9 @@ module vfs_class
       ! Monitoring quantities
       real(WP) :: VFmax,VFmin,VFint                       !< Maximum, minimum, and integral volume fraction
       real(WP) :: SDint,SDpolyint                         !< Integrals of available surface areas
+
+      ! Time spent in vf advance procedure
+      real(WP) :: vf_wt=0.0_WP
       
    contains
       procedure :: print=>vfs_print                       !< Output solver to the screen
@@ -584,6 +586,7 @@ contains
    
    !> Calculate the new VF based on U/V/W and dt
    subroutine advance(this,dt,U,V,W)
+      use mpi, only: mpi_wtime
       implicit none
       class(vfs), intent(inout) :: this
       real(WP), intent(inout) :: dt  !< Timestep size over which to advance
@@ -597,9 +600,13 @@ contains
       real(WP) :: Lvolinc,Gvolinc
       real(WP) :: Lvolnew,Gvolnew
       real(WP) :: vol_now,crude_VF
+      real(WP) :: starttime,endtime
       real(WP), dimension(3) :: ctr_now
       real(WP), dimension(3,2) :: bounding_pts
       integer, dimension(3,2) :: bb_indices
+
+      ! Start VF advance timer
+      starttime=mpi_wtime()
       
       ! Allocate
       call new(flux_polyhedron)
@@ -782,6 +789,12 @@ contains
       
       ! Reset moments to guarantee compatibility with interface reconstruction
       call this%reset_volume_moments()
+
+      ! End VF advance timer
+      endtime=mpi_wtime()
+
+      ! Time spent advancing VF in current time step
+      this%vf_wt=endtime-starttime
       
    end subroutine advance
    

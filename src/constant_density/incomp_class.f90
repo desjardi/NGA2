@@ -99,6 +99,9 @@ module incomp_class
       
       ! Monitoring quantities
       real(WP) :: Umax,Vmax,Wmax,Pmax,divmax                              !< Maximum velocity, pressure, divergence
+
+      ! Wall time in solver procedure
+      real(WP) :: implicit_solver_wt=0.0_WP
       
    contains
       procedure :: print=>incomp_print                    !< Output solver to the screen
@@ -1553,6 +1556,7 @@ contains
    !> Solve for implicit velocity residual
    subroutine solve_implicit(this,dt,resU,resV,resW)
       use ils_class, only: amg
+      use mpi,       only: mpi_wtime
       implicit none
       class(incomp), intent(inout) :: this
       real(WP), intent(in) :: dt
@@ -1561,6 +1565,10 @@ contains
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: resW !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       integer :: i,j,k
       real(WP) :: rhoUp,rhoUm,rhoVp,rhoVm,rhoWp,rhoWm
+      real(WP) :: starttime,endtime
+
+      ! Start implicit solver timer
+      starttime=mpi_wtime()
       
       ! Solve implicit U problem
       this%implicit%opr(1,:,:,:)=this%rho; this%implicit%opr(2:,:,:,:)=0.0_WP
@@ -1716,6 +1724,12 @@ contains
       call this%cfg%sync(resU)
       call this%cfg%sync(resV)
       call this%cfg%sync(resW)
+
+      ! End implicit solver timer
+      endtime=mpi_wtime()
+
+      ! Wall time spent in current time step
+      this%implicit_solver_wt=endtime-starttime
       
    end subroutine solve_implicit
    

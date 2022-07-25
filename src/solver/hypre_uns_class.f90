@@ -431,11 +431,16 @@ contains
    subroutine hypre_uns_solve(this)
       use messager, only: die
       use param,    only: verbose
+      use mpi,      only: mpi_wtime
       implicit none
       class(hypre_uns), intent(inout) :: this
       integer :: i,j,k,count,ierr
+      real(WP) :: starttime,endtime
       integer,  dimension(:), allocatable :: ind
       real(WP), dimension(:), allocatable :: rhs,sol
+      
+      ! Start solver timer
+      starttime=mpi_wtime()
       
       ! Check that setup was done
       if (.not.this%setup_done) call die('[hypre_uns solve] Solver has not been setup.')
@@ -504,6 +509,12 @@ contains
       ! If verbose run, log and or print info
       if (verbose.gt.0) call this%log
       if (verbose.gt.1) call this%print_short
+
+      ! End solver timer
+      endtime=mpi_wtime()
+
+      ! Wall time spent in current time step
+      this%solver_wt=endtime-starttime
       
    end subroutine hypre_uns_solve
    

@@ -1,2 +1,2 @@
 # List here the extra files here
-f90EXE_sources += geometry.f90 block1_class.f90 block2_class.f90 simulation.f90 stat_1d_lpt_class.f90 stat_lpt_class.f90
+f90EXE_sources += geometry.f90 block1_class.f90 block2_class.f90 simulation.f90 stat_1d_lpt_class.f90 stat_lpt_class.f90 object_timer.f90

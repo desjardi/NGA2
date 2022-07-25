@@ -17,6 +17,7 @@ module block2_class
    use monitor_class,     only: monitor
    use stat_1d_lpt_class, only: stat_1d_lpt
    use stat_lpt_class,    only: stat_plane_lpt
+   use object_timer,      only: objtimer
    implicit none
    private
 
@@ -25,18 +26,19 @@ module block2_class
 
    !> Block 2 object
    type :: block2
-      class(config), pointer :: cfg                               !< Pointer to config
-      type(incomp) :: fs                                          !< Single-phase incompressible flow solver
-      type(hypre_uns) :: ps                                       !< Unstructured HYPRE pressure solver
-      type(hypre_uns) :: is                                       !< Unstructured HYPRE implicit solver
-      type(lpt)       :: lp                                       !< Lagrangian particle tracking
-      type(partmesh)  :: pmesh                                    !< Partmesh for Lagrangian particle output
-      type(timetracker) :: time                                   !< Time tracker
-      type(sgsmodel) ::  sgs                                      !< SGS model
-      type(ensight) :: ens_out                                    !< Ensight output
-      type(event) :: ens_evt                                      !< Ensight output event
-      type(monitor) :: mfile,cflfile,sprayfile                    !< Monitor files
-      type(datafile) :: df                                        !< Datafile for restart
+      class(config), pointer :: cfg                                        !< Pointer to config
+      type(incomp) :: fs                                                   !< Single-phase incompressible flow solver
+      type(hypre_uns) :: ps                                                !< Unstructured HYPRE pressure solver
+      type(hypre_uns) :: is                                                !< Unstructured HYPRE implicit solver
+      type(lpt)       :: lp                                                !< Lagrangian particle tracking
+      type(partmesh)  :: pmesh                                             !< Partmesh for Lagrangian particle output
+      type(timetracker) :: time                                            !< Time tracker
+      type(objtimer) :: timer                                              !< Method timer
+      type(sgsmodel) ::  sgs                                               !< SGS model
+      type(ensight) :: ens_out                                             !< Ensight output
+      type(event) :: ens_evt                                               !< Ensight output event
+      type(monitor) :: mfile,cflfile,sprayfile,timerfile,timersummaryfile  !< Monitor files
+      type(datafile) :: df                                                 !< Datafile for restart
       character(len=str_medium) :: lpt_file
       !> Stat files for lpt
       type(stat_1d_lpt)    :: stat_1d_lpt_xloc1
@@ -192,6 +194,11 @@ contains
             b%time%told=b%time%t-b%time%dt
          end if
       end block initialize_timetracker
+
+      ! Initalize object time tracker
+      initialize_objtimer: block
+         b%timer=objtimer(b%cfg%amRoot,name='cough_out_timer')
+      end block initialize_objtimer
 
       ! Create a single-phase flow solver with bconds
       create_solver: block
@@ -381,6 +388,31 @@ contains
          call b%sprayfile%add_column(b%lp%dmax, 'dmax')
          call b%sprayfile%add_column(b%lp%dmean,'dmean')
          call b%sprayfile%write()
+         ! Create object time tracker monitor
+         b%timerfile=monitor(b%fs%cfg%amRoot,'cough_out_timers')
+         call b%timerfile%add_column(b%time%n,'Timestep number')
+         call b%timerfile%add_column(b%time%t,'Simulation Time')
+         call b%timerfile%add_column(b%timer%lpt_wt,'lpt_advance Wall Time')
+         call b%timerfile%add_column(b%timer%sgs_wt,'sgs_visc Wall Time')
+         call b%timerfile%add_column(b%timer%implicit_wt,'imp_solv Wall Time')
+         call b%timerfile%add_column(b%timer%pressure_wt,'pres_solv Wall Time')
+         call b%timerfile%add_column(b%timer%step_wt,'time_step Wall Time')
+         call b%timerfile%write()
+         ! Create object time and cost summary monitor
+         b%timersummaryfile=monitor(b%fs%cfg%amRoot,'cough_out_timer_summary')
+         call b%timersummaryfile%add_column(b%time%n,'Timestep number')
+         call b%timersummaryfile%add_column(b%time%t,'Simulation Time')
+         call b%timersummaryfile%add_column(b%timer%lpt_wt_total,'lpt_advance Total Hours')
+         call b%timersummaryfile%add_column(b%timer%lpt_core_hours,'lpt_advance Core Hours')
+         call b%timersummaryfile%add_column(b%timer%sgs_wt_total,'sgs_visc WT Hours')
+         call b%timersummaryfile%add_column(b%timer%sgs_core_hours,'sgs_visc Core Hours')
+         call b%timersummaryfile%add_column(b%timer%implicit_wt_total,'imp_solv WT Hours')
+         call b%timersummaryfile%add_column(b%timer%implicit_core_hours,'imp_solv Core Hours')
+         call b%timersummaryfile%add_column(b%timer%pressure_wt_total,'pres_solv WT Hours')
+         call b%timersummaryfile%add_column(b%timer%pressure_core_hours,'pres_solv Core Hours')
+         call b%timersummaryfile%add_column(b%timer%step_wt_total,'time_step WT Hours')
+         call b%timersummaryfile%add_column(b%timer%step_core_hours,'time_step Core Hours')
+         call b%timersummaryfile%write()
       end block create_monitor
 
 
@@ -389,11 +421,16 @@ contains
 
    !> Take a time step with block 2
    subroutine step(b,Unudge,Vnudge,Wnudge)
+      use mpi, only: mpi_wtime
       implicit none
       class(block2), intent(inout) :: b
       real(WP), dimension(b%cfg%imino_:,b%cfg%jmino_:,b%cfg%kmino_:), intent(inout) :: Unudge     !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       real(WP), dimension(b%cfg%imino_:,b%cfg%jmino_:,b%cfg%kmino_:), intent(inout) :: Vnudge     !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       real(WP), dimension(b%cfg%imino_:,b%cfg%jmino_:,b%cfg%kmino_:), intent(inout) :: Wnudge     !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      real(WP) :: starttime,endtime
+
+      ! Start time step timer
+      starttime=mpi_wtime()
 
       ! Increment time
       call b%fs%get_cfl(b%time%dt,b%time%cfl)
@@ -531,6 +568,12 @@ contains
       call b%fs%interp_vel(b%Ui,b%Vi,b%Wi)
       call b%fs%get_div()
 
+      ! End time steo timer
+      endtime=mpi_wtime()
+
+      ! Wall time spent in current time step
+      b%cfg%step_wt=endtime-starttime
+
       ! Output to ensight
       if (b%ens_evt%occurs()) then
          ! Update partmesh object
@@ -559,17 +602,26 @@ contains
          end if
       end block sample_and_write_statlpt
 
+      ! Update object time trackers
+      call b%timer%lpt_advance_timer(b%cfg,b%lp)
+      call b%timer%sgs_visc_timer(b%cfg,b%sgs)
+      call b%timer%implicit_timer(b%cfg,b%fs)
+      call b%timer%pressure_timer(b%cfg,b%fs)
+      call b%timer%step_timer(b%cfg)
+
       ! Perform and output monitoring
       call b%fs%get_max()
       call b%lp%get_max()
       call b%mfile%write()
       call b%cflfile%write()
       call b%sprayfile%write()
+      call b%timerfile%write()
+      call b%timersummaryfile%write()
 
    end subroutine step
 
 
-   !> Finalize b1 simulation
+   !> Finalize b2 simulation
    subroutine final(b)
       implicit none
       class(block2), intent(inout) :: b
