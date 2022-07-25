@@ -4,7 +4,7 @@
 
 # Parallelization
 1 Partition : 2 2 2
-2 Partition : 2 2 2
+2 Partition : 2 2 2 #Test
 
 # Zoomed in mesh definition
 1 Uniform Lx :  0.1
