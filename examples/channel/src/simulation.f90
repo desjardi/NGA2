@@ -26,6 +26,7 @@ module simulation
    !> Private work arrays
    real(WP), dimension(:,:,:), allocatable :: resU,resV,resW
    real(WP), dimension(:,:,:), allocatable :: Ui,Vi,Wi
+   real(WP), dimension(:,:,:,:), allocatable :: SR
    
    !> Fluid viscosity
    real(WP) :: visc
@@ -33,8 +34,60 @@ module simulation
    !> Channel forcing
    real(WP) :: Ubulk,Wbulk
    real(WP) :: meanU,meanW
+
+   !> Event for post-processing
+   type(event) :: ppevt
    
 contains
+   
+   
+   !> Specialized subroutine that outputs the velocity distribution
+   subroutine postproc_vel()
+      use string,    only: str_medium
+      use mpi_f08,   only: MPI_ALLREDUCE,MPI_SUM
+      use parallel,  only: MPI_REAL_WP
+      implicit none
+      integer :: iunit,ierr,i,j,k
+      real(WP), dimension(:), allocatable :: Uavg,Uavg_,vol,vol_
+      character(len=str_medium) :: filename,timestamp
+      ! Allocate vertical line storage
+      allocate(Uavg (fs%cfg%jmin:fs%cfg%jmax)); Uavg =0.0_WP
+      allocate(Uavg_(fs%cfg%jmin:fs%cfg%jmax)); Uavg_=0.0_WP
+      allocate(vol_ (fs%cfg%jmin:fs%cfg%jmax)); vol_ =0.0_WP
+      allocate(vol  (fs%cfg%jmin:fs%cfg%jmax)); vol  =0.0_WP
+      ! Integrate all data over x and z
+      do k=fs%cfg%kmin_,fs%cfg%kmax_
+         do j=fs%cfg%jmin_,fs%cfg%jmax_
+            do i=fs%cfg%imin_,fs%cfg%imax_
+               vol_(j) = vol_(j)+fs%cfg%vol(i,j,k)
+               Uavg_(j)=Uavg_(j)+fs%cfg%vol(i,j,k)*fs%U(i,j,k)
+            end do
+         end do
+      end do
+      ! All-reduce the data
+      call MPI_ALLREDUCE( vol_, vol,fs%cfg%ny,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr)
+      call MPI_ALLREDUCE(Uavg_,Uavg,fs%cfg%ny,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr)
+      do j=fs%cfg%jmin,fs%cfg%jmax
+         if (vol(j).gt.0.0_WP) then
+            Uavg(j)=Uavg(j)/vol(j)
+         else
+            Uavg(j)=0.0_WP
+         end if
+      end do
+      ! If root, print it out
+      if (fs%cfg%amRoot) then
+         filename='Uavg_'
+         write(timestamp,'(es12.5)') time%t
+         open(newunit=iunit,file=trim(adjustl(filename))//trim(adjustl(timestamp)),form='formatted',status='replace',access='stream',iostat=ierr)
+         write(iunit,'(a12,3x,a12)') 'Height','Uavg'
+         do j=fs%cfg%jmin,fs%cfg%jmax
+            write(iunit,'(es12.5,3x,es12.5)') fs%cfg%ym(j),Uavg(j)
+         end do
+         close(iunit)
+      end if
+      ! Deallocate work arrays
+      deallocate(Uavg,Uavg_,vol,vol_)
+   end subroutine postproc_vel
    
    
    !> Initialization of problem solver
@@ -51,6 +104,7 @@ contains
          allocate(Ui  (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
          allocate(Vi  (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
          allocate(Wi  (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+         allocate(SR(6,cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
       end block allocate_work_arrays
       
       
@@ -66,7 +120,7 @@ contains
       
       ! Create a single-phase flow solver without bconds
       create_and_initialize_flow_solver: block
-         use ils_class, only: gmres_amg
+         use ils_class, only: gmres_amg,pcg_pfmg
          use mathtools, only: twoPi
          integer :: i,j,k
          real(WP) :: amp,vel
@@ -83,7 +137,7 @@ contains
          call param_read('Implicit iteration',fs%implicit%maxit)
          call param_read('Implicit tolerance',fs%implicit%rcvg)
          ! Setup the solver
-         call fs%setup(pressure_ils=gmres_amg,implicit_ils=gmres_amg)
+         call fs%setup(pressure_ils=pcg_pfmg,implicit_ils=pcg_pfmg)
          ! Initialize velocity based on specified bulk
          call param_read('Ubulk',Ubulk)
          call param_read('Wbulk',Wbulk)
@@ -117,6 +171,7 @@ contains
          call param_read('Ensight output period',ens_evt%tper)
          ! Add variables to output
          call ens_out%add_vector('velocity',Ui,Vi,Wi)
+         call ens_out%add_scalar('viscosity',fs%visc)
          ! Output to ensight
          if (ens_evt%occurs()) call ens_out%write_data(time%t)
       end block create_ensight
@@ -162,6 +217,16 @@ contains
       end block create_monitor
       
       
+      ! Create a specialized post-processing file
+      create_postproc: block
+         ! Create event for data postprocessing
+         ppevt=event(time=time,name='Postproc output')
+         call param_read('Postproc output period',ppevt%tper)
+         ! Perform the output
+         if (ppevt%occurs()) call postproc_vel()
+      end block create_postproc
+      
+      
    end subroutine simulation_init
    
    
@@ -177,6 +242,27 @@ contains
          call time%adjust_dt()
          call time%increment()
          
+         ! Model non-Newtonian fluid
+         nonewt: block
+            integer :: i,j,k
+            real(WP) :: SRmag
+            real(WP), parameter :: C=1.0e-2_WP
+            real(WP), parameter :: n=0.3_WP
+            ! Calculate SR
+            call fs%get_strainrate(Ui,Vi,Wi,SR)
+            ! Update viscosity
+            do k=fs%cfg%kmino_,fs%cfg%kmaxo_
+               do j=fs%cfg%jmino_,fs%cfg%jmaxo_
+                  do i=fs%cfg%imino_,fs%cfg%imaxo_
+                     SRmag=sqrt(SR(1,i,j,k)**2+SR(2,i,j,k)**2+SR(3,i,j,k)**2+2.0_WP*(SR(4,i,j,k)**2+SR(5,i,j,k)**2+SR(6,i,j,k)**2))
+                     SRmag=max(SRmag,100.0_WP**(1.0_WP/(n-1.0_WP)))
+                     fs%visc(i,j,k)=C*SRmag**(n-1.0_WP)
+                  end do
+               end do
+            end do
+            call fs%cfg%sync(fs%visc)
+         end block nonewt
+
          ! Remember old velocity
          fs%Uold=fs%U
          fs%Vold=fs%V
@@ -274,6 +360,9 @@ contains
          call cflfile%write()
          call forcefile%write()
 
+         ! Specialized post-processing
+         if (ppevt%occurs()) call postproc_vel()
+
       end do
       
    end subroutine simulation_run
@@ -290,7 +379,7 @@ contains
       ! timetracker
       
       ! Deallocate work arrays
-      deallocate(resU,resV,resW,Ui,Vi,Wi)
+      deallocate(resU,resV,resW,Ui,Vi,Wi,SR)
       
    end subroutine simulation_final
    
