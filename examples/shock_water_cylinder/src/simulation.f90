@@ -368,10 +368,6 @@ contains
          ! Create in-cell reconstruction
          call fs%flow_reconstruct(vf)
 
-         ! Get boundary conditions at current time
-
-         ! Other routines to add later: sgs, lpt, prescribe
-
          ! Zero variables that will change during subiterations
          fs%P = 0.0_WP
          fs%Pjx = 0.0_WP; fs%Pjy = 0.0_WP; fs%Pjz = 0.0_WP
@@ -401,13 +397,15 @@ contains
             fs%P=fs%P+fs%psolv%sol
             call fs%pressureproj_correct(time%dt,vf,fs%psolv%sol)
 
+            ! Record convergence monitor
+            call cvgfile%write()
             ! Increment sub-iteration counter
             time%it=time%it+1
 
          end do
 
          ! Pressure relaxation
-         call fs%pressure_relax(vf,matmod)
+         call fs%pressure_relax(vf,matmod,relax_model)
 
          ! Output to ensight
          if (ens_evt%occurs()) call ens_out%write_data(time%t)
