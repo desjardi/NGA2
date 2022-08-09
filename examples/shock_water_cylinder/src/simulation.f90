@@ -24,12 +24,13 @@ module simulation
    type(event)   :: ens_evt
 
    !> Simulation monitor file
-   type(monitor) :: mfile,cflfile
+   type(monitor) :: mfile,cflfile,cvgfile
 
    public :: simulation_init,simulation_run,simulation_final
 
    !> Problem definition
    real(WP) :: dcyl,xcyl
+   integer :: relax_model
 
 contains
 
@@ -144,13 +145,13 @@ contains
 
       ! Create a compressible two-phase flow solver
       create_and_initialize_flow_solver: block
-         use mast_class, only: clipped_neumann,dirichlet,bc_scope,bcond
+         use mast_class, only: clipped_neumann,dirichlet,bc_scope,bcond,mech_egy_mech_hhz
          use ils_class,  only: pcg_bbox,pcg_amg
          use mathtools,  only: Pi
          use parallel,   only: amRoot
          integer :: i,j,k,n
          real(WP), dimension(3) :: xyz
-         real(WP) :: gamm_l,Pref_l,gamm_g,visc_l,visc_g
+         real(WP) :: gamm_l,Pref_l,gamm_g,visc_l,visc_g,hdff_g,hdff_l
          real(WP) :: xshock,vshock,relshockvel
          real(WP) :: Grho0, GP0, Grho1, GP1, ST, Ma1, Ma, Lrho0
          type(bcond), pointer :: mybc
@@ -168,10 +169,13 @@ contains
          ! Register flow solver variables with material models
          call matmod%register_thermoflow_variables('liquid',fs%Lrho,fs%Ui,fs%Vi,fs%Wi,fs%LrhoE,fs%LP)
          call matmod%register_thermoflow_variables('gas'   ,fs%Grho,fs%Ui,fs%Vi,fs%Wi,fs%GrhoE,fs%GP)
-         ! Assign constant viscosity to each phase
+         ! Assign constant viscosity to each phase, also heat diffusion
          call param_read('Liquid dynamic viscosity',visc_l)
          call param_read('Gas dynamic viscosity',visc_g)
-         call matmod%register_diffusion_thermo_models(viscconst_gas=visc_g,viscconst_liquid=visc_l)
+         call param_read('Liquid thermal conductivity',hdff_l)
+         call param_read('Gas thermal conductivity',hdff_g)
+         call matmod%register_diffusion_thermo_models(viscconst_gas=visc_g, viscconst_liquid=visc_l, &
+                                                      hdffconst_gas=hdff_g, hdffconst_liquid=hdff_l)
          ! Read in surface tension coefficient
          call param_read('Surface tension coefficient',fs%sigma)
          ! Configure pressure solver
@@ -252,7 +256,8 @@ contains
          fs%RHO   = (1.0_WP-vf%VF)*fs%Grho  + vf%VF*fs%Lrho
          fs%rhoUi = fs%RHO*fs%Ui; fs%rhoVi = fs%RHO*fs%Vi; fs%rhoWi = fs%RHO*fs%Wi
          ! Perform initial pressure relax
-         call fs%pressure_relax(vf,matmod)
+         relax_model = mech_egy_mech_hhz
+         call fs%pressure_relax(vf,matmod,relax_model)
          ! Calculate initial phase and bulk moduli
          call fs%init_phase_bulkmod(vf,matmod)
          call fs%reinit_phase_pressure(vf,matmod)
@@ -297,16 +302,13 @@ contains
          call mfile%add_column(time%t,'Time')
          call mfile%add_column(time%dt,'Timestep size')
          call mfile%add_column(time%cfl,'Maximum CFL')
+         call mfile%add_column(fs%RHOmin,'RHOmin')
+         call mfile%add_column(fs%RHOmax,'RHOmax')
          call mfile%add_column(fs%Umax,'Umax')
          call mfile%add_column(fs%Vmax,'Vmax')
          call mfile%add_column(fs%Wmax,'Wmax')
          call mfile%add_column(fs%Pmax,'Pmax')
-         call mfile%add_column(vf%VFmax,'VOF maximum')
-         call mfile%add_column(vf%VFmin,'VOF minimum')
-         call mfile%add_column(vf%VFint,'VOF integral')
-         !call mfile%add_column(fs%divmax,'Maximum divergence')
-         call mfile%add_column(fs%psolv%it,'Pressure iteration')
-         call mfile%add_column(fs%psolv%rerr,'Pressure error')
+         call mfile%add_column(fs%Tmax,'Tmax')
          call mfile%write()
          ! Create CFL monitor
          cflfile=monitor(fs%cfg%amRoot,'cfl')
@@ -320,6 +322,19 @@ contains
          call cflfile%add_column(fs%CFLv_y,'Viscous yCFL')
          call cflfile%add_column(fs%CFLv_z,'Viscous zCFL')
          call cflfile%write()
+         ! Create convergence monitor
+         cvgfile=monitor(fs%cfg%amRoot,'cvg')
+         call cvgfile%add_column(time%n,'Timestep number')
+         call cvgfile%add_column(time%it,'Iteration')
+         call cvgfile%add_column(time%t,'Time')
+         call cvgfile%add_column(fs%impl_it_x,'Impl_x iteration')
+         call cvgfile%add_column(fs%impl_rerr_x,'Impl_x error')
+         call cvgfile%add_column(fs%impl_it_y,'Impl_y iteration')
+         call cvgfile%add_column(fs%impl_rerr_y,'Impl_y error')
+         call cvgfile%add_column(fs%implicit%it,'Impl_z iteration')
+         call cvgfile%add_column(fs%implicit%rerr,'Impl_z error')
+         call cvgfile%add_column(fs%psolv%it,'Pressure iteration')
+         call cvgfile%add_column(fs%psolv%rerr,'Pressure error')
       end block create_monitor
 
 

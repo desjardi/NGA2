@@ -24,6 +24,8 @@ Pre-shock pressure :  1.01325e5
 # Fluid properties
 Liquid dynamic viscosity :    0
 Gas dynamic viscosity :       0
+Liquid thermal conductivity : 0
+Gas thermal conductivity :    0
 Liquid gamma :	      	      4.4
 Liquid Pref :		      6e8
 Gas gamma : 		      1.4

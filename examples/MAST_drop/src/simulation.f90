@@ -582,10 +582,6 @@ contains
          ! Create in-cell reconstruction
          call fs%flow_reconstruct(vf)
 
-         ! Get boundary conditions at current time
-
-         ! Other routines to add later: sgs, lpt, prescribe
-
          ! Zero variables that will change during subiterations
          fs%P = 0.0_WP
          fs%Pjx = 0.0_WP; fs%Pjy = 0.0_WP; fs%Pjz = 0.0_WP
@@ -600,9 +596,8 @@ contains
             ! Predictor step, involving advection and pressure terms
             call fs%advection_step(time%dt,vf,matmod)
 
-            ! Insert viscous step here, or possibly incorporate into predictor above
+            ! Diffusion and source term step
             call fs%diffusion_src_explicit_step(time%dt,vf,matmod)
-            ! Insert sponge step here
 
             ! Prepare pressure projection
             call fs%pressureproj_prepare(time%dt,vf,matmod)

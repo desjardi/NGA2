@@ -186,7 +186,7 @@ module mast_class
       real(WP) :: CFLv_x,CFLv_y,CFLv_z                                    !< Viscous CFL numbers
       
       ! Monitoring quantities
-      real(WP) :: Umax,Vmax,Wmax,Pmax,RHOmax,Tmax                         !< Maximum velocity, pressure, density, temperature
+      real(WP) :: RHOmin,RHOmax,Umax,Vmax,Wmax,Pmax,Tmax                  !< Minimum density; Maximum density, velocity, pressure, density, temperature
       
    contains
       procedure :: print=>mast_print                      !< Output solver to the screen
@@ -3774,7 +3774,7 @@ contains
       my_CFLa_x=my_CFLa_x*dt; my_CFLa_y=my_CFLa_y*dt; my_CFLa_z=my_CFLa_z*dt
       my_CFLv_x=my_CFLv_x*dt; my_CFLv_y=my_CFLv_y*dt; my_CFLv_z=my_CFLv_z*dt
       
-      ! Get the parallel max
+      ! Get the parallel min, max
       call MPI_ALLREDUCE(my_CFLc_x,this%CFLc_x,1,MPI_REAL_WP,MPI_MAX,this%cfg%comm,ierr)
       call MPI_ALLREDUCE(my_CFLc_y,this%CFLc_y,1,MPI_REAL_WP,MPI_MAX,this%cfg%comm,ierr)
       call MPI_ALLREDUCE(my_CFLc_z,this%CFLc_z,1,MPI_REAL_WP,MPI_MAX,this%cfg%comm,ierr)
@@ -3797,14 +3797,15 @@ contains
    
    !> Calculate the max of our fields
    subroutine get_max(this)
-      use mpi_f08,  only: MPI_ALLREDUCE,MPI_MAX
+      use mpi_f08,  only: MPI_ALLREDUCE,MPI_MAX,MPI_MIN
       use parallel, only: MPI_REAL_WP
       implicit none
       class(mast), intent(inout) :: this
       integer :: i,j,k,ierr
-      real(WP) :: my_Umax,my_Vmax,my_Wmax,my_Pmax,my_Tmax
+      real(WP) :: my_RHOmin,my_RHOmax,my_Umax,my_Vmax,my_Wmax,my_Pmax,my_Tmax
       
       ! Set all to zero
+      my_RHOmin=huge(1.0_WP); my_RHOmax = 0.0_WP
       my_Umax=0.0_WP; my_Vmax=0.0_WP; my_Wmax=0.0_WP; my_Pmax=0.0_WP; my_Tmax=0.0_WP
       do k=this%cfg%kmin_,this%cfg%kmax_
          do j=this%cfg%jmin_,this%cfg%jmax_
@@ -3812,6 +3813,8 @@ contains
                my_Umax=max(my_Umax,abs(this%U(i,j,k)))
                my_Vmax=max(my_Vmax,abs(this%V(i,j,k)))
                my_Wmax=max(my_Wmax,abs(this%W(i,j,k)))
+               if (this%cfg%VF(i,j,k).gt.0.0_WP) my_RHOmin=min(my_RHOmin,abs(this%RHO(i,j,k)))
+               if (this%cfg%VF(i,j,k).gt.0.0_WP) my_RHOmax=max(my_RHOmax,abs(this%RHO(i,j,k)))
                if (this%cfg%VF(i,j,k).gt.0.0_WP) my_Pmax=max(my_Pmax,abs(this%P(i,j,k)))
                if (this%cfg%VF(i,j,k).gt.0.0_WP) my_Tmax=max(my_Tmax,abs(this%Tmptr(i,j,k)))
             end do
@@ -3819,6 +3822,8 @@ contains
       end do
       
       ! Get the parallel max
+      call MPI_ALLREDUCE(my_RHOmin,this%RHOmin,1,MPI_REAL_WP,MPI_MIN,this%cfg%comm,ierr)
+      call MPI_ALLREDUCE(my_RHOmax,this%RHOmax,1,MPI_REAL_WP,MPI_MAX,this%cfg%comm,ierr)
       call MPI_ALLREDUCE(my_Umax,this%Umax,1,MPI_REAL_WP,MPI_MAX,this%cfg%comm,ierr)
       call MPI_ALLREDUCE(my_Vmax,this%Vmax,1,MPI_REAL_WP,MPI_MAX,this%cfg%comm,ierr)
       call MPI_ALLREDUCE(my_Wmax,this%Wmax,1,MPI_REAL_WP,MPI_MAX,this%cfg%comm,ierr)
