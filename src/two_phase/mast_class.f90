@@ -958,10 +958,9 @@ contains
      ! 1 is for semi-Lagrangian, 0 is for centered scheme
 
      ! Loop over the domain and determine multiphase locations within band and shock locations
-     ! Include +1/-1 to account for cell center / face mismatch in communication
-     do k=this%cfg%kmin_-1,this%cfg%kmax_+1
-        do j=this%cfg%jmin_-1,this%cfg%jmax_+1
-           do i=this%cfg%imin_-1,this%cfg%imax_+1
+     do k=this%cfg%kmin_,this%cfg%kmax_
+        do j=this%cfg%jmin_,this%cfg%jmax_
+           do i=this%cfg%imin_,this%cfg%imax_
               if (vf%VFold(i,j,k).lt.VFlo) then
                  ! In fully gas cells, check in band for change in phase
                  VF_check = 0
@@ -1029,9 +1028,9 @@ contains
      call this%apply_bcond(dt,bc_scope)
 
      ! Loop over the domain and check within band containing shock locations
-     do k=this%cfg%kmin_-1,this%cfg%kmax_+1
-        do j=this%cfg%jmin_-1,this%cfg%jmax_+1
-           do i=this%cfg%imin_-1,this%cfg%imax_+1
+     do k=this%cfg%kmin_,this%cfg%kmax_
+        do j=this%cfg%jmin_,this%cfg%jmax_
+           do i=this%cfg%imin_,this%cfg%imax_
               if (minval(this%sl_x(i:i+1,j,k)).eq.0.or. &
                   minval(this%sl_y(i,j:j+1,k)).eq.0.or. &
                   minval(this%sl_z(i,j,k:k+1)).eq.0) then
