@@ -1417,6 +1417,7 @@ contains
 
      ! Boundaries for VF, phase density, phase pressure
      call vf%cfg%sync(vf%VF)
+     call vf%apply_bcond(0.0_WP,dt) ! 0 is a placeholder for time, not used now
      
      ! Update phase interface to match VF field, etc.
      ! (Mimics the end of vf%advance())
