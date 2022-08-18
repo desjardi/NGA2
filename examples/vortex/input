@@ -1,0 +1,39 @@
+
+# Parallelization
+1 Partition : 4 2 1
+
+# Block 1 mesh definition
+1 Lx :  10
+1 Ly :  10
+1 Lz :  0.04
+1 nx :  100
+1 ny :  100
+1 nz :  1
+
+# Vortex properties
+Vortex size         : 1
+Vortex strength     : 5
+Convective Velocity : 0 0 0
+x center            : 5
+y center            : 0
+Vortex height       : 3
+Vortex radius       : 2
+
+# Fluid properties and velocity
+Dynamic viscosity :   0.001
+Density :             1
+
+# Time integration
+Max timestep size : 2e-4
+Max cfl number :    0.9
+
+# Pressure solver
+Pressure tolerance : 1e-6
+Pressure iteration : 100
+
+# Implicit velocity solver
+Implicit tolerance : 1e-6
+Implicit iteration : 100
+
+# Ensight output
+Ensight output period :  1e-3
