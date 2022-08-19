@@ -42,7 +42,7 @@ contains
             z(k)=real(k-1,WP)/real(nz,WP)*Lz-0.5_WP*Lz
          end do
          ! General serial grid object
-         grid=sgrid(coord=cartesian,no=1,x=x,y=y,z=z,xper=.true.,yper=.true.,zper=.true.,name='block1')
+         grid=sgrid(coord=cartesian,no=1,x=x,y=y,z=z,xper=.true.,yper=.true.,zper=.false.,name='block1')
          ! Read in partition
          call param_read('1 Partition',partition,short='p')
          ! Create partitioned grid

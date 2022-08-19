@@ -48,6 +48,8 @@ module block1_class
    
    !> Convective velocity array
    real(WP), dimension(3) :: Uc
+   real(WP) :: Uinf
+   real(WP) :: Vinf
 
    real(WP) :: vheight,vint,vradius
    real(WP) :: s
@@ -111,7 +113,7 @@ contains
          call param_read('Vortex radius',vradius)
          call param_read('Vortex strength',vint)
          ! Initial convection velocity field 
-         b%fs%U=Uc(1); b%fs%V=Uc(2); b%fs%W=Uc(3)
+         ! b%fs%U=Uc(1); b%fs%V=Uc(2); b%fs%W=Uc(3)
          ! Assign constant density
          call param_read('Density',b%fs%rho)
          ! Calculate density in each cell
@@ -125,28 +127,42 @@ contains
          ! end do
 
          ! Prepare and configure pressure solver
-         b%ps=hypre_str(cfg=b%cfg,name='Pressure',method=pcg_smg,nst=7)
+         b%ps=hypre_str(cfg=b%cfg,name='Pressure',method=pcg_pfmg,nst=7)
          b%ps%maxlevel=15
          call param_read('Pressure iteration',b%ps%maxit)
          call param_read('Pressure tolerance',b%ps%rcvg)
          ! Prepare and configure implicit solver
-         b%is=hypre_str(cfg=b%cfg,name='Implicit',method=pcg_pfmg,nst=7)
+         !b%is=hypre_str(cfg=b%cfg,name='Implicit',method=pcg_pfmg,nst=7)
+         b%is=hypre_str(cfg=b%cfg,name='Implicit',method=pcg_smg,nst=7)
          call param_read('Implicit iteration',b%is%maxit)
          call param_read('Implicit tolerance',b%is%rcvg)
          ! Setup the solver
          call b%fs%setup(pressure_solver=b%ps,implicit_solver=b%is)
-
+         ! Initial convection velocity field 
+         ! b%fs%U(i,j,k)=Uc(1); b%fs%V(i,j,k)=Uc(2); b%fs%W(i,j,k)=Uc(3)
          ! A = sqrt(2.0_WP)*Umax*exp(0.5_WP)/tau
-         A=beta*exp(0.5_WP)/(2.0_WP*Pi)
+         call param_read('U infinity',Uinf)
+         call param_read('V infinity',Vinf)
+         meanU=Uinf
+         A=beta*exp(0.5_WP)/(twoPi)
          do k=b%fs%cfg%kmino_,b%fs%cfg%kmaxo_
             do j=b%fs%cfg%jmino_,b%fs%cfg%jmaxo_
                do i=b%fs%cfg%imino_,b%fs%cfg%imaxo_
-                  ! Axial
-                  s = sqrt((b%cfg%x(i)-vheight)**2+(sqrt(b%cfg%ym(j)**2+b%cfg%zm(k)**2)-vradius)**2)+tiny(1.0_WP)
-                  b%fs%U(i,j,k) = +1.0_WP/(twoPi*s)*(1.0_WP-exp(-s**2/vint**2))*(sqrt(b%cfg%ym(j)**2+b%cfg%zm(k)**2)-vradius)/s
-                  ! V
-                  s = sqrt((b%cfg%xm(i)-vheight)**2+(sqrt(b%cfg%y(j)**2+b%cfg%zm(k)**2)-vradius)**2)+tiny(1.0_WP)
-                  b%fs%V(i,j,k) = -1.0_WP/(twoPi*s)*(1.0_WP-exp(-s**2/vint**2))*(b%cfg%xm(i)-vheight)/s*b%cfg%y(j)/sqrt(b%cfg%y(j)**2+b%cfg%zm(k)**2)
+                  ! ! Main vortex
+                  ! s=sqrt((b%cfg%xm(i)-vheight)**2+(b%cfg%ym(j)-vradius)**2)+tiny(1.0_WP)
+                  ! b%fs%U(i,j,k)=b%fs%U(i,j,k)+1.0_WP/(twoPi*s)*(1.0_WP-exp(-s**2/vint**2))*(b%cfg%ym(j)-vradius)/s
+                  ! b%fs%V(i,j,k)=-1.0_WP/(twoPi*s)*(1.0_WP-exp(-s**2/vint**2))*(b%cfg%xm(i)-vheight)/s
+                  
+                  r_squared=(b%fs%cfg%xm(i)-xc)**2+(b%fs%cfg%ym(j)-yc)**2
+                  b%fs%U(i,j,k)=Uinf-A*exp(1.0_WP-r_squared)*(b%fs%cfg%ym(j)-yc)
+                  b%fs%V(i,j,k)=Vinf+A*exp(1.0_WP-r_squared)*(b%fs%cfg%xm(i)-xc)
+                  
+                  ! ! Axial
+                  ! s = sqrt((b%cfg%x(i)-vheight)**2+(sqrt(b%cfg%ym(j)**2+b%cfg%zm(k)**2)-vradius)**2)+tiny(1.0_WP)
+                  ! b%fs%U(i,j,k) = +1.0_WP/(twoPi*s)*(1.0_WP-exp(-s**2/vint**2))*(sqrt(b%cfg%ym(j)**2+b%cfg%zm(k)**2)-vradius)/s
+                  ! ! V
+                  ! s = sqrt((b%cfg%xm(i)-vheight)**2+(sqrt(b%cfg%y(j)**2+b%cfg%zm(k)**2)-vradius)**2)+tiny(1.0_WP)
+                  ! b%fs%V(i,j,k) = -1.0_WP/(twoPi*s)*(1.0_WP-exp(-s**2/vint**2))*(b%cfg%xm(i)-vheight)/s*b%cfg%y(j)/sqrt(b%cfg%y(j)**2+b%cfg%zm(k)**2)
                   ! W
                   ! s = sqrt((b%cfg%xm(i)-vheight)**2+(sqrt(b%cfg%ym(j)**2+b%cfg%z(k)**2)-vradius)**2)+tiny(1.0_WP)
                   ! b%fs%W(i,j,k) = -1.0_WP/(twoPi*s)*(1.0_WP-exp(-s**2/vint**2))*(b%cfg%xm(i)-vheight)/s*b%cfg%z(k)/sqrt(b%cfg%ym(j)**2+b%cfg%z(k)**2)
@@ -210,8 +226,6 @@ contains
          call b%cflfile%write()
       end block create_monitor
 
-      print *, 'Done with intalization'
-
    end subroutine init
 
 
@@ -225,32 +239,44 @@ contains
       call b%time%adjust_dt()
       call b%time%increment()
 
-      ! Convect vortex through the domain
-      convect_vortex: block
-         use mathtools,       only: Pi,twoPi 
-         integer :: i,j,k
-         do k=b%fs%cfg%kmino_,b%fs%cfg%kmaxo_
-            do j=b%fs%cfg%jmino_,b%fs%cfg%jmaxo_
-               do i=b%fs%cfg%imino_,b%fs%cfg%imaxo_
-                  ! Axial
-                  s = sqrt((b%cfg%x(i)-vheight)**2+(sqrt(b%cfg%ym(j)**2+b%cfg%zm(k)**2)-vradius)**2)+tiny(1.0_WP)
-                  b%fs%U(i,j,k) = +1.0_WP/(twoPi*s)*(1.0_WP-exp(-s**2/vint**2))*(sqrt(b%cfg%ym(j)**2+b%cfg%zm(k)**2)-vradius)/s
-                  ! V
-                  ! s = sqrt((b%cfg%xm(i)-vheight)**2+(sqrt(b%cfg%y(j)**2+b%cfg%zm(k)**2)-vradius)**2)+tiny(1.0_WP)
-                  ! b%fs%V(i,j,k) = -1.0_WP/(twoPi*s)*(1.0_WP-exp(-s**2/vint**2))*(b%cfg%xm(i)-vheight)/s*b%cfg%y(j)/sqrt(b%cfg%y(j)**2+b%cfg%zm(k)**2)
-                  ! ! W
-                  ! s = sqrt((b%cfg%xm(i)-vheight)**2+(sqrt(b%cfg%ym(j)**2+b%cfg%z(k)**2)-vradius)**2)+tiny(1.0_WP)
-                  ! b%fs%W(i,j,k) = -1.0_WP/(twoPi*s)*(1.0_WP-exp(-s**2/vint**2))*(b%cfg%xm(i)-vheight)/s*b%cfg%z(k)/sqrt(b%cfg%ym(j)**2+b%cfg%z(k)**2)
-                     ! r_squared=(b%cfg%xm(k)-xc)**2+(b%cfg%ym(k)-yc)**2
-                     ! b%fs%U(i,j,k)=b%fs%U(i,j,k)-A*exp(1.0_WP-r_squared)*(b%cfg%ym(j)-yc)
-                     ! b%fs%V(i,j,k)=b%fs%V(i,j,k)+A*exp(1.0_WP-r_squared)*(b%cfg%xm(i)-xc)
-                  ! b%fs%U(i,j,k)=b%fs%U(i,j,k)+A*exp(-(b%cfg%x(i)**2+b%cfg%zm(k)**2)/tau**2)*(-b%cfg%zm(k))
-                  ! b%fs%V(i,j,k)=b%fs%V(i,j,k)+A*exp(-(b%cfg%xm(i)**2+b%cfg%y(j)**2)/tau**2)*(b%cfg%xm(i))
-                  ! b%fs%W(i,j,k)=b%fs%W(i,j,k)+A*exp(-(b%cfg%xm(i)**2+b%cfg%z(k)**2)/tau**2)*(b%cfg%xm(i))  
-               end do
-            end do
-         end do
-      end block convect_vortex
+      ! ! Convect vortex through the domain
+      ! convect_vortex: block
+      !    use mathtools,       only: Pi,twoPi 
+      !    integer :: i,j,k
+      !    do k=b%fs%cfg%kmino_,b%fs%cfg%kmaxo_
+      !       do j=b%fs%cfg%jmino_,b%fs%cfg%jmaxo_
+      !          do i=b%fs%cfg%imino_,b%fs%cfg%imaxo_
+
+      !             ! r_squared=(b%fs%cfg%xm(i)-xc)**2+(b%fs%cfg%ym(j)-yc)**2
+      !             ! b%fs%U(i,j,k)=b%fs%U(i,j,k)-A*exp(1.0_WP-r_squared)*(b%fs%cfg%ym(j)-yc)
+      !             ! b%fs%V(i,j,k)=b%fs%V(i,j,k)+A*exp(1.0_WP-r_squared)*(b%fs%cfg%xm(i)-xc)
+
+      !             ! r_squared=(b%fs%cfg%xm(k)-xc)**2+(b%fs%cfg%ym(k)-yc)**2
+      !             ! b%fs%U(i,j,k)=b%fs%U(i,j,k)-A*exp(1.0_WP-r_squared)*(b%fs%cfg%ym(j)-yc)
+      !             ! b%fs%V(i,j,k)=b%fs%V(i,j,k)+A*exp(1.0_WP-r_squared)*(b%fs%cfg%xm(i)-xc)
+      !             ! ! Main vortex
+      !             ! s=sqrt((b%cfg%xm(i)-vheight)**2+(b%cfg%ym(j)-vradius)**2)+tiny(1.0_WP)
+      !             ! b%fs%U(i,j,k)=1.0_WP/(twoPi*s)*(1.0_WP-exp(-s**2/vint**2))*(b%cfg%ym(j)-vradius)/s
+      !             ! b%fs%V(i,j,k)=-1.0_WP/(twoPi*s)*(1.0_WP-exp(-s**2/vint**2))*(b%cfg%xm(i)-vheight)/s
+      !             ! ! Axial
+      !             ! s = sqrt((b%cfg%x(i)-vheight)**2+(sqrt(b%cfg%ym(j)**2+b%cfg%zm(k)**2)-vradius)**2)+tiny(1.0_WP)
+      !             ! b%fs%U(i,j,k) = +1.0_WP/(twoPi*s)*(1.0_WP-exp(-s**2/vint**2))*(sqrt(b%cfg%ym(j)**2+b%cfg%zm(k)**2)-vradius)/s
+      !             ! V
+      !             ! s = sqrt((b%cfg%xm(i)-vheight)**2+(sqrt(b%cfg%y(j)**2+b%cfg%zm(k)**2)-vradius)**2)+tiny(1.0_WP)
+      !             ! b%fs%V(i,j,k) = -1.0_WP/(twoPi*s)*(1.0_WP-exp(-s**2/vint**2))*(b%cfg%xm(i)-vheight)/s*b%cfg%y(j)/sqrt(b%cfg%y(j)**2+b%cfg%zm(k)**2)
+      !             ! ! W
+      !             ! s = sqrt((b%cfg%xm(i)-vheight)**2+(sqrt(b%cfg%ym(j)**2+b%cfg%z(k)**2)-vradius)**2)+tiny(1.0_WP)
+      !             ! b%fs%W(i,j,k) = -1.0_WP/(twoPi*s)*(1.0_WP-exp(-s**2/vint**2))*(b%cfg%xm(i)-vheight)/s*b%cfg%z(k)/sqrt(b%cfg%ym(j)**2+b%cfg%z(k)**2)
+      !                ! r_squared=(b%cfg%xm(k)-xc)**2+(b%cfg%ym(k)-yc)**2
+      !                ! b%fs%U(i,j,k)=b%fs%U(i,j,k)-A*exp(1.0_WP-r_squared)*(b%cfg%ym(j)-yc)
+      !                ! b%fs%V(i,j,k)=b%fs%V(i,j,k)+A*exp(1.0_WP-r_squared)*(b%cfg%xm(i)-xc)
+      !             ! b%fs%U(i,j,k)=b%fs%U(i,j,k)+A*exp(-(b%cfg%x(i)**2+b%cfg%zm(k)**2)/tau**2)*(-b%cfg%zm(k))
+      !             ! b%fs%V(i,j,k)=b%fs%V(i,j,k)+A*exp(-(b%cfg%xm(i)**2+b%cfg%y(j)**2)/tau**2)*(b%cfg%xm(i))
+      !             ! b%fs%W(i,j,k)=b%fs%W(i,j,k)+A*exp(-(b%cfg%xm(i)**2+b%cfg%z(k)**2)/tau**2)*(b%cfg%xm(i))  
+      !          end do
+      !       end do
+      !    end do
+      ! end block convect_vortex
 
       ! Remember old velocity
       b%fs%Uold=b%fs%U
@@ -272,6 +298,28 @@ contains
          b%resU=-2.0_WP*(b%fs%rho*b%fs%U-b%fs%rho*b%fs%Uold)+b%time%dt*b%resU
          b%resV=-2.0_WP*(b%fs%rho*b%fs%V-b%fs%rho*b%fs%Vold)+b%time%dt*b%resV
          b%resW=-2.0_WP*(b%fs%rho*b%fs%W-b%fs%rho*b%fs%Wold)+b%time%dt*b%resW
+
+         ! Add body forcing
+         forcing: block
+            use mpi_f08,  only: MPI_SUM,MPI_ALLREDUCE
+            use parallel, only: MPI_REAL_WP
+            integer :: i,j,k,ierr
+            real(WP) :: myU,myUvol,myW,myWvol,Uvol,Wvol
+            myU=0.0_WP; myUvol=0.0_WP; myW=0.0_WP; myWvol=0.0_WP
+            do k=b%fs%cfg%kmin_,b%fs%cfg%kmax_
+               do j=b%fs%cfg%jmin_,b%fs%cfg%jmax_
+                  do i=b%fs%cfg%imin_,b%fs%cfg%imax_
+                     if (b%fs%umask(i,j,k).eq.0) then
+                        myU   =myU   +b%fs%cfg%dxm(i)*b%fs%cfg%dy(j)*b%fs%cfg%dz(k)*(2.0_WP*b%fs%U(i,j,k)-b%fs%Uold(i,j,k))
+                        myUvol=myUvol+b%fs%cfg%dxm(i)*b%fs%cfg%dy(j)*b%fs%cfg%dz(k)
+                     end if
+                  end do
+               end do
+            end do
+            call MPI_ALLREDUCE(myUvol,Uvol ,1,MPI_REAL_WP,MPI_SUM,b%fs%cfg%comm,ierr)
+            call MPI_ALLREDUCE(myU   ,meanU,1,MPI_REAL_WP,MPI_SUM,b%fs%cfg%comm,ierr); meanU=meanU/Uvol
+            where (b%fs%umask.eq.0) b%resU=b%resU+Ubulk-meanU
+         end block forcing 
 
          ! Form implicit residuals
          call b%fs%solve_implicit(b%time%dt,b%resU,b%resV,b%resW)
