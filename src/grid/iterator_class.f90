@@ -135,9 +135,9 @@ contains
       ! Create unstructured mapping to iterator cells - first inside cells then overlap
       allocate(self%map(1:3,1:self%no_))
       cnt=0
-      do k=self%pg%kmin_,f_kmax_
-         do j=self%pg%jmin_,f_jmax_
-            do i=self%pg%imin_,f_imax_
+      do k=f_kmin_,f_kmax_
+         do j=f_jmin_,f_jmax_
+            do i=f_imin_,f_imax_
                if (locator(self%pg,i,j,k)) then
                   cnt=cnt+1
                   self%map(1:3,cnt)=[i,j,k]
@@ -149,9 +149,9 @@ contains
          do j=self%pg%jmino_,self%pg%jmaxo_
             do i=self%pg%imino_,self%pg%imaxo_
                ! Skip inside cells
-               if (i.ge.self%pg%imin_.and.i.le.f_imax_.and. &
-               &   j.ge.self%pg%jmin_.and.j.le.f_jmax_.and. &
-               &   k.ge.self%pg%kmin_.and.k.le.f_kmax_) cycle
+               if (i.ge.f_imin_.and.i.le.f_imax_.and. &
+               &   j.ge.f_jmin_.and.j.le.f_jmax_.and. &
+               &   k.ge.f_kmin_.and.k.le.f_kmax_) cycle
                ! Only consider overlap cells
                if (locator(self%pg,i,j,k)) then
                   cnt=cnt+1
