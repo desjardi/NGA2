@@ -40,29 +40,16 @@ module block1_class
    real(WP) :: tau,beta,A
 
    !> Channel forcing
-   real(WP) :: Ubulk,Wbulk
-   real(WP) :: meanU,meanW
+   real(WP) :: Uinf,Vinf
+   real(WP) :: meanU,meanV
 
    !> Fluid viscosity
    real(WP) :: visc
-   
-   !> Convective velocity array
-   real(WP), dimension(3) :: Uc
-   real(WP) :: Uinf
-   real(WP) :: Vinf
-
-   real(WP) :: vheight,vint,vradius
-   real(WP) :: s
 
    !> Vortex center location
    real(WP) :: xc,yc,r_squared
-   
-   !> Orientation
-   character(len=str_medium) :: orientation
-
 
 contains
-
 
 
    !> Initialization of block 1
@@ -97,35 +84,13 @@ contains
       create_solver: block
          use hypre_str_class, only: pcg_pfmg,pcg_smg,gmres_pfmg
          use mathtools,       only: Pi,twoPi 
-         integer :: i,j,k
-         real(WP) :: gamma=1.40_WP
+         integer :: i,j,k 
          ! Create a single-phase flow solver
          b%fs=incomp(cfg=b%cfg,name='Block 1 NS solver')
          ! Assign constant viscosity
          call param_read('Dynamic viscosity',visc); b%fs%visc=visc
-         ! Initialize our vortex feild
-         call param_read('Vortex size',tau)
-         call param_read('Vortex strength',beta)
-         call param_read('Convective Velocity',Uc)
-         call param_read('x center',xc)
-         call param_read('y center',yc)
-         call param_read('Vortex height',vheight)
-         call param_read('Vortex radius',vradius)
-         call param_read('Vortex strength',vint)
-         ! Initial convection velocity field 
-         ! b%fs%U=Uc(1); b%fs%V=Uc(2); b%fs%W=Uc(3)
          ! Assign constant density
          call param_read('Density',b%fs%rho)
-         ! Calculate density in each cell
-         ! do k=b%fs%cfg%kmino_,b%fs%cfg%kmaxo_
-         !    do j=b%fs%cfg%jmino_,b%fs%cfg%jmaxo_
-         !       do i=b%fs%cfg%imino_,b%fs%cfg%imaxo_
-         !             r_squared=(b%fs%cfg%xm(k)-xc)**2+(b%fs%cfg%ym(k)-yc)**2
-         !             b%fs%rho(i,j,k)=(1-((((gamma-1.00_WP)*beta**2)/(8.00_WP*gamma*Pi))*exp(1.00_WP-r_squared)))**(1.00_WP/(gamma-1.00_WP))
-         !       end do
-         !    end do
-         ! end do
-
          ! Prepare and configure pressure solver
          b%ps=hypre_str(cfg=b%cfg,name='Pressure',method=pcg_pfmg,nst=7)
          b%ps%maxlevel=15
@@ -138,40 +103,25 @@ contains
          call param_read('Implicit tolerance',b%is%rcvg)
          ! Setup the solver
          call b%fs%setup(pressure_solver=b%ps,implicit_solver=b%is)
-         ! Initial convection velocity field 
-         ! b%fs%U(i,j,k)=Uc(1); b%fs%V(i,j,k)=Uc(2); b%fs%W(i,j,k)=Uc(3)
-         ! A = sqrt(2.0_WP)*Umax*exp(0.5_WP)/tau
+         ! Initialize velocity based on specified bulk
          call param_read('U infinity',Uinf)
          call param_read('V infinity',Vinf)
+         where (b%fs%umask.eq.0) b%fs%U=Uinf
+         where (b%fs%vmask.eq.0) b%fs%V=Vinf
          meanU=Uinf
+         meanV=Vinf
+         ! Initial vortex dimensions
+         call param_read('Vortex size',tau)
+         call param_read('Vortex strength',beta)
+         call param_read('x center',xc)
+         call param_read('y center',yc)
          A=beta*exp(0.5_WP)/(twoPi)
          do k=b%fs%cfg%kmino_,b%fs%cfg%kmaxo_
             do j=b%fs%cfg%jmino_,b%fs%cfg%jmaxo_
                do i=b%fs%cfg%imino_,b%fs%cfg%imaxo_
-                  ! ! Main vortex
-                  ! s=sqrt((b%cfg%xm(i)-vheight)**2+(b%cfg%ym(j)-vradius)**2)+tiny(1.0_WP)
-                  ! b%fs%U(i,j,k)=b%fs%U(i,j,k)+1.0_WP/(twoPi*s)*(1.0_WP-exp(-s**2/vint**2))*(b%cfg%ym(j)-vradius)/s
-                  ! b%fs%V(i,j,k)=-1.0_WP/(twoPi*s)*(1.0_WP-exp(-s**2/vint**2))*(b%cfg%xm(i)-vheight)/s
-                  
                   r_squared=(b%fs%cfg%xm(i)-xc)**2+(b%fs%cfg%ym(j)-yc)**2
-                  b%fs%U(i,j,k)=Uinf-A*exp(1.0_WP-r_squared)*(b%fs%cfg%ym(j)-yc)
-                  b%fs%V(i,j,k)=Vinf+A*exp(1.0_WP-r_squared)*(b%fs%cfg%xm(i)-xc)
-                  
-                  ! ! Axial
-                  ! s = sqrt((b%cfg%x(i)-vheight)**2+(sqrt(b%cfg%ym(j)**2+b%cfg%zm(k)**2)-vradius)**2)+tiny(1.0_WP)
-                  ! b%fs%U(i,j,k) = +1.0_WP/(twoPi*s)*(1.0_WP-exp(-s**2/vint**2))*(sqrt(b%cfg%ym(j)**2+b%cfg%zm(k)**2)-vradius)/s
-                  ! ! V
-                  ! s = sqrt((b%cfg%xm(i)-vheight)**2+(sqrt(b%cfg%y(j)**2+b%cfg%zm(k)**2)-vradius)**2)+tiny(1.0_WP)
-                  ! b%fs%V(i,j,k) = -1.0_WP/(twoPi*s)*(1.0_WP-exp(-s**2/vint**2))*(b%cfg%xm(i)-vheight)/s*b%cfg%y(j)/sqrt(b%cfg%y(j)**2+b%cfg%zm(k)**2)
-                  ! W
-                  ! s = sqrt((b%cfg%xm(i)-vheight)**2+(sqrt(b%cfg%ym(j)**2+b%cfg%z(k)**2)-vradius)**2)+tiny(1.0_WP)
-                  ! b%fs%W(i,j,k) = -1.0_WP/(twoPi*s)*(1.0_WP-exp(-s**2/vint**2))*(b%cfg%xm(i)-vheight)/s*b%cfg%z(k)/sqrt(b%cfg%ym(j)**2+b%cfg%z(k)**2)
-                     ! r_squared=(b%fs%cfg%xm(k)-xc)**2+(b%fs%cfg%ym(k)-yc)**2
-                     ! b%fs%U(i,j,k)=b%fs%U(i,j,k)-A*exp(1.0_WP-r_squared)*(b%fs%cfg%ym(j)-yc)
-                     ! b%fs%V(i,j,k)=b%fs%V(i,j,k)+A*exp(1.0_WP-r_squared)*(b%fs%cfg%xm(i)-xc)
-                     ! b%fs%U(i,j,k)=b%fs%U(i,j,k)+A*exp(-(b%cfg%x(i)**2+b%cfg%zm(k)**2)/tau**2)*(-b%cfg%zm(k))
-                     ! b%fs%V(i,j,k)=b%fs%V(i,j,k)+A*exp(-(b%cfg%xm(i)**2+b%cfg%y(j)**2)/tau**2)*(b%cfg%xm(i))
-                     ! b%fs%W(i,j,k)=b%fs%W(i,j,k)+A*exp(-(b%cfg%xm(i)**2+b%cfg%z(k)**2)/tau**2)*(b%cfg%xm(i))    
+                  b%fs%U(i,j,k)=b%fs%U(i,j,k)-A*exp(1.0_WP-r_squared)*(b%fs%cfg%ym(j)-yc)
+                  b%fs%V(i,j,k)=b%fs%V(i,j,k)+A*exp(1.0_WP-r_squared)*(b%fs%cfg%xm(i)-xc) 
                end do
             end do
          end do
@@ -304,22 +254,29 @@ contains
             use mpi_f08,  only: MPI_SUM,MPI_ALLREDUCE
             use parallel, only: MPI_REAL_WP
             integer :: i,j,k,ierr
-            real(WP) :: myU,myUvol,myW,myWvol,Uvol,Wvol
-            myU=0.0_WP; myUvol=0.0_WP; myW=0.0_WP; myWvol=0.0_WP
+            real(WP) :: myU,myUvol,myV,myVvol,Uvol,Vvol
+            myU=0.0_WP; myUvol=0.0_WP; myV=0.0_WP; myVvol=0.0_WP
             do k=b%fs%cfg%kmin_,b%fs%cfg%kmax_
                do j=b%fs%cfg%jmin_,b%fs%cfg%jmax_
                   do i=b%fs%cfg%imin_,b%fs%cfg%imax_
                      if (b%fs%umask(i,j,k).eq.0) then
-                        myU   =myU   +b%fs%cfg%dxm(i)*b%fs%cfg%dy(j)*b%fs%cfg%dz(k)*(2.0_WP*b%fs%U(i,j,k)-b%fs%Uold(i,j,k))
-                        myUvol=myUvol+b%fs%cfg%dxm(i)*b%fs%cfg%dy(j)*b%fs%cfg%dz(k)
+                        myU   =myU   +b%fs%cfg%dxm(i)*b%fs%cfg%dy(j)*b%fs%cfg%dzm(k)*(2.0_WP*b%fs%U(i,j,k)-b%fs%Uold(i,j,k))
+                        myUvol=myUvol+b%fs%cfg%dxm(i)*b%fs%cfg%dy(j)*b%fs%cfg%dzm(k)
+                     end if
+                     if (b%fs%vmask(i,j,k).eq.0) then
+                        myV   =myV   +b%fs%cfg%dx(i)*b%fs%cfg%dy(j)*b%fs%cfg%dzm(k)*(2.0_WP*b%fs%V(i,j,k)-b%fs%Vold(i,j,k))
+                        myVvol=myVvol+b%fs%cfg%dx(i)*b%fs%cfg%dy(j)*b%fs%cfg%dzm(k)
                      end if
                   end do
                end do
             end do
             call MPI_ALLREDUCE(myUvol,Uvol ,1,MPI_REAL_WP,MPI_SUM,b%fs%cfg%comm,ierr)
             call MPI_ALLREDUCE(myU   ,meanU,1,MPI_REAL_WP,MPI_SUM,b%fs%cfg%comm,ierr); meanU=meanU/Uvol
-            where (b%fs%umask.eq.0) b%resU=b%resU+Ubulk-meanU
-         end block forcing 
+            where (b%fs%umask.eq.0) b%resU=b%resU+Uinf-meanU
+            call MPI_ALLREDUCE(myVvol,Vvol ,1,MPI_REAL_WP,MPI_SUM,b%fs%cfg%comm,ierr)
+            call MPI_ALLREDUCE(myV   ,meanV,1,MPI_REAL_WP,MPI_SUM,b%fs%cfg%comm,ierr); meanV=meanV/Vvol
+            where (b%fs%vmask.eq.0) b%resV=b%resV+Vinf-meanV
+         end block forcing   
 
          ! Form implicit residuals
          call b%fs%solve_implicit(b%time%dt,b%resU,b%resV,b%resW)

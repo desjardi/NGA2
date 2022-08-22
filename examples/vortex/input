@@ -12,14 +12,11 @@
 
 # Vortex properties
 Vortex size         : 1
-Vortex strength     : 5
-Convective Velocity : 10 0 0
-U infinity          : 0.5
+Vortex strength     : 0
+U infinity          : 1
 V infinity          : 0
 x center            : 5
 y center            : 0
-Vortex height       : 5
-Vortex radius       : 0
 
 # Fluid properties and velocity
 Dynamic viscosity :   1
