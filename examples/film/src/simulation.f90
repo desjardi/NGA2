@@ -4,9 +4,10 @@ module simulation
    use geometry,          only: cfg
    use tpns_class,        only: tpns
    use vfs_class,         only: vfs
+   use ccl_class,         only: ccl
    use timetracker_class, only: timetracker
-   use ensight_class,     only: ensight
    use surfmesh_class,    only: surfmesh
+   use ensight_class,     only: ensight
    use event_class,       only: event
    use monitor_class,     only: monitor
    implicit none
@@ -16,11 +17,14 @@ module simulation
    type(tpns),        public :: fs
    type(vfs),         public :: vf
    type(timetracker), public :: time
+
+   !> CCL framework
+   type(ccl),         public :: cc
    
    !> Ensight postprocessing
+   type(surfmesh) :: smesh
    type(ensight) :: ens_out
    type(event)   :: ens_evt
-   type(surfmesh) :: smesh
    
    !> Simulation monitor file
    type(monitor) :: mfile,cflfile
@@ -32,22 +36,50 @@ module simulation
    real(WP), dimension(:,:,:), allocatable :: Ui,Vi,Wi
    
    !> Problem definition
-   real(WP) :: amp0,hfilm
+   real(WP) :: rho_ratio,visc_ratio,Oh,dh
+   integer :: nh
+   real(WP), dimension(:,:), allocatable :: ph
    
+   !> Post-processing info
+   integer :: ndrop
+   real(WP), dimension(:), allocatable :: drop_diam
+   real(WP) :: mean_diam,min_diam,max_diam
+   type(event) :: drop_evt
+   type(monitor) :: dropfile
+
 contains
    
    
-   !> Function that defines a level set function for a perturbed film problem
-   function levelset_film(xyz,t) result(G)
+   !> Function that defines a level set function for a perforated film
+   function levelset_perf_film(xyz,t) result(G)
       use mathtools, only: twoPi
       implicit none
       real(WP), dimension(3),intent(in) :: xyz
       real(WP), intent(in) :: t
-      real(WP) :: G1,G2,G
-      G1=+xyz(2)+0.5_WP*Hfilm-amp0*cos(twoPi*xyz(1))
-      G2=-xyz(2)+0.5_WP*Hfilm+amp0*cos(twoPi*xyz(1))
-      G=min(G1,G2)
-   end function levelset_film
+      real(WP) :: G,dist
+      real(WP), dimension(3) :: c,pos,myh
+      integer :: n
+      ! Create the film of unity thickness
+      G=0.5_WP-abs(xyz(2))
+      ! Add the holes
+      do n=1,nh
+         ! Store 2D positions
+         pos=[xyz(1) ,0.0_WP,xyz(3) ]
+         myh=[ph(1,n),0.0_WP,ph(2,n)]
+         ! Account for periodicity
+         if (myh(1)-pos(1).gt.+0.5_WP*cfg%xL) myh(1)=myh(1)-cfg%xL
+         if (myh(1)-pos(1).lt.-0.5_WP*cfg%xL) myh(1)=myh(1)+cfg%xL
+         if (myh(3)-pos(3).gt.+0.5_WP*cfg%zL) myh(3)=myh(3)-cfg%zL
+         if (myh(3)-pos(3).lt.-0.5_WP*cfg%zL) myh(3)=myh(3)+cfg%zL
+         ! Check hole is close enough
+         dist=norm2(myh-pos)
+         if (dist.lt.0.5_WP*dh) then
+            ! Get closest point on torus
+            c=myh+0.5_WP*dh*(pos-myh)/(dist+tiny(dist))
+            G=0.5_WP-norm2(xyz-c)
+         end if
+      end do
+   end function levelset_perf_film
    
    
    !> Initialization of problem solver
@@ -72,25 +104,72 @@ contains
          time=timetracker(amRoot=cfg%amRoot)
          call param_read('Max timestep size',time%dtmax)
          call param_read('Max cfl number',time%cflmax)
+         call param_read('Max time',time%tmax)
          time%dt=time%dtmax
          time%itmax=2
       end block initialize_timetracker
       
+
+      ! Prepare random holes for film perforation
+      initialize_holes: block
+         use random,   only: random_uniform
+         use parallel, only: MPI_REAL_WP
+         use mpi_f08,  only: MPI_BCAST
+         integer  :: n,nn,ierr
+         real(WP) :: xh,zh,xxh,zzh
+         logical  :: is_overlap
+         real(WP), parameter :: safety_margin=1.5_WP
+         ! Read in the hole size
+         call param_read('Size of holes',dh)
+         ! Read in the number of holes
+         call param_read('Number of holes',nh)
+         ! Allocate hole position array
+         allocate(ph(2,nh))
+         ! Root assigns positions to holes
+         if (cfg%amRoot) then
+            n=0
+            do while (n.lt.nh)
+               ! Draw a random position on the film
+               xh=random_uniform(lo=cfg%x(cfg%imin),hi=cfg%x(cfg%imax+1))
+               zh=random_uniform(lo=cfg%z(cfg%kmin),hi=cfg%z(cfg%kmax+1))
+               ! Compare to all previous holes
+               is_overlap=.false.
+               do nn=1,n
+                  ! Get the position of the other hole
+                  xxh=ph(1,nn); zzh=ph(2,nn)
+                  ! Account for periodicity
+                  if (xxh-xh.gt.+0.5_WP*cfg%xL) xxh=xxh-cfg%xL
+                  if (xxh-xh.lt.-0.5_WP*cfg%xL) xxh=xxh+cfg%xL
+                  if (zzh-zh.gt.+0.5_WP*cfg%zL) zzh=zzh-cfg%zL
+                  if (zzh-zh.lt.-0.5_WP*cfg%zL) zzh=zzh+cfg%zL
+                  ! Check for overlap
+                  if (norm2([xxh-xh,zzh-zh]).lt.safety_margin*dh) is_overlap=.true.
+               end do
+               ! If no overlap was found, add the hole to the list
+               if (.not.is_overlap) then
+                  n=n+1
+                  ph(1,n)=xh
+                  ph(2,n)=zh
+               end if
+            end do
+         end if
+         ! Broadcoast the hole positions
+         call MPI_BCAST(ph,2*nh,MPI_REAL_WP,0,cfg%comm,ierr)
+      end block initialize_holes
+
       
       ! Initialize our VOF solver and field
       create_and_initialize_vof: block
          use mms_geom, only: cube_refine_vol
-         use vfs_class, only: r2p,lvira,VFhi,VFlo
+         use vfs_class, only: swartz,lvira,elvira,VFhi,VFlo
          integer :: i,j,k,n,si,sj,sk
          real(WP), dimension(3,8) :: cube_vertex
          real(WP), dimension(3) :: v_cent,a_cent
          real(WP) :: vol,area
          integer, parameter :: amr_ref_lvl=4
          ! Create a VOF solver
-         vf=vfs(cfg=cfg,reconstruction_method=r2p,name='VOF')
-         ! Initialize to a thin film
-         call param_read('Film thickness',Hfilm)
-         amp0=1.0e-3_WP
+         vf=vfs(cfg=cfg,reconstruction_method=elvira,name='VOF')
+         ! Initialize to a film
          do k=vf%cfg%kmino_,vf%cfg%kmaxo_
             do j=vf%cfg%jmino_,vf%cfg%jmaxo_
                do i=vf%cfg%imino_,vf%cfg%imaxo_
@@ -105,7 +184,7 @@ contains
                   end do
                   ! Call adaptive refinement code to get volume and barycenters recursively
                   vol=0.0_WP; area=0.0_WP; v_cent=0.0_WP; a_cent=0.0_WP
-                  call cube_refine_vol(cube_vertex,vol,area,v_cent,a_cent,levelset_film,0.0_WP,amr_ref_lvl)
+                  call cube_refine_vol(cube_vertex,vol,area,v_cent,a_cent,levelset_perf_film,0.0_WP,amr_ref_lvl)
                   vf%VF(i,j,k)=vol/vf%cfg%vol(i,j,k)
                   if (vf%VF(i,j,k).ge.VFlo.and.vf%VF(i,j,k).le.VFhi) then
                      vf%Lbary(:,i,j,k)=v_cent
@@ -134,23 +213,18 @@ contains
          ! Reset moments to guarantee compatibility with interface reconstruction
          call vf%reset_volume_moments()
       end block create_and_initialize_vof
-      
+
       
       ! Create a two-phase flow solver without bconds
       create_and_initialize_flow_solver: block
          use ils_class, only: pcg_pfmg
          ! Create flow solver
          fs=tpns(cfg=cfg,name='Two-phase NS')
-         ! Assign constant viscosity to each phase
-         call param_read('Liquid dynamic viscosity',fs%visc_l)
-         call param_read('Gas dynamic viscosity',fs%visc_g)
-         ! Assign constant density to each phase
-         call param_read('Liquid density',fs%rho_l)
-         call param_read('Gas density',fs%rho_g)
-         ! Read in surface tension coefficient
-         call param_read('Surface tension coefficient',fs%sigma)
-         ! Assign acceleration of gravity
-         call param_read('Gravity',fs%gravity)
+         ! Assign constant density and viscosity to each phase
+         fs%rho_l =1.0_WP; call param_read('Density ratio'  ,  rho_ratio); fs%rho_g =fs%rho_l / rho_ratio
+         fs%visc_l=1.0_WP; call param_read('Viscosity ratio', visc_ratio); fs%visc_g=fs%visc_l/visc_ratio
+         ! Read in Ohnesorge number and assign surface tension coefficient
+         call param_read('Oh',Oh); fs%sigma=Oh**(-2)
          ! Configure pressure solver
          call param_read('Pressure iteration',fs%psolv%maxit)
          call param_read('Pressure tolerance',fs%psolv%rcvg)
@@ -166,37 +240,18 @@ contains
          call fs%get_div()
       end block create_and_initialize_flow_solver
       
-
+      
       ! Create surfmesh object for interface polygon output
       create_smesh: block
-         use irl_fortran_interface
-         integer :: i,j,k,nplane,np
-         ! Include an extra variable for number of planes
-         smesh=surfmesh(nvar=1,name='plic')
-         smesh%varname(1)='nplane'
-         ! Transfer polygons to smesh
+         smesh=surfmesh(nvar=0,name='plic')
          call vf%update_surfmesh(smesh)
-         ! Also populate nplane variable
-         smesh%var(1,:)=1.0_WP
-         np=0
-         do k=vf%cfg%kmin_,vf%cfg%kmax_
-            do j=vf%cfg%jmin_,vf%cfg%jmax_
-               do i=vf%cfg%imin_,vf%cfg%imax_
-                  do nplane=1,getNumberOfPlanes(vf%liquid_gas_interface(i,j,k))
-                     if (getNumberOfVertices(vf%interface_polygon(nplane,i,j,k)).gt.0) then
-                        np=np+1; smesh%var(1,np)=real(getNumberOfPlanes(vf%liquid_gas_interface(i,j,k)),WP)
-                     end if
-                  end do
-               end do
-            end do
-         end do
       end block create_smesh
-
+      
       
       ! Add Ensight output
       create_ensight: block
          ! Create Ensight output from cfg
-         ens_out=ensight(cfg=cfg,name='filmRT')
+         ens_out=ensight(cfg=cfg,name='Film')
          ! Create event for Ensight output
          ens_evt=event(time=time,name='Ensight output')
          call param_read('Ensight output period',ens_evt%tper)
@@ -208,6 +263,23 @@ contains
          ! Output to ensight
          if (ens_evt%occurs()) call ens_out%write_data(time%t)
       end block create_ensight
+      
+      
+      ! Prepare drop post-processing
+      postprocess_drop: block
+         use vfs_class, only: VFlo
+         ! Creat CCL object
+         cc=ccl(cfg=cfg,name='CCL')
+         cc%max_interface_planes=1
+         cc%VFlo=VFlo
+         ! Create event for drop size output
+         drop_evt=event(time=time,name='Drop output')
+         call param_read('Drop output period',drop_evt%tper)
+         ! Prepare directory for drop size output
+         if (vf%cfg%amRoot) call execute_command_line('mkdir -p drops')
+         ! Perform first analysis
+         call analyze_drops()
+      end block postprocess_drop
       
       
       ! Create a monitor file
@@ -245,6 +317,15 @@ contains
          call cflfile%add_column(fs%CFLv_y,'Viscous yCFL')
          call cflfile%add_column(fs%CFLv_z,'Viscous zCFL')
          call cflfile%write()
+         ! Create drop monitor
+         dropfile=monitor(vf%cfg%amRoot,'drop')
+         call dropfile%add_column(time%n,'Timestep number')
+         call dropfile%add_column(time%t,'Time')
+         call dropfile%add_column(ndrop,'Ndrop')
+         call dropfile%add_column( min_diam, 'Min diameter')
+         call dropfile%add_column(mean_diam,'Mean diameter')
+         call dropfile%add_column( max_diam, 'Max diameter')
+         call dropfile%write()
       end block create_monitor
       
       
@@ -342,29 +423,8 @@ contains
          call fs%interp_vel(Ui,Vi,Wi)
          call fs%get_div()
          
-         ! Update surfmesh object
-         update_smesh: block
-            use irl_fortran_interface
-            integer :: nplane,np,i,j,k
-            ! Transfer polygons to smesh
-            call vf%update_surfmesh(smesh)
-            ! Also populate nplane variable
-            smesh%var(1,:)=1.0_WP
-            np=0
-            do k=vf%cfg%kmin_,vf%cfg%kmax_
-               do j=vf%cfg%jmin_,vf%cfg%jmax_
-                  do i=vf%cfg%imin_,vf%cfg%imax_
-                     do nplane=1,getNumberOfPlanes(vf%liquid_gas_interface(i,j,k))
-                        if (getNumberOfVertices(vf%interface_polygon(nplane,i,j,k)).gt.0) then
-                           np=np+1; smesh%var(1,np)=real(getNumberOfPlanes(vf%liquid_gas_interface(i,j,k)),WP)
-                        end if
-                     end do
-                  end do
-               end do
-            end do
-         end block update_smesh
-         
          ! Output to ensight
+         call vf%update_surfmesh(smesh)
          if (ens_evt%occurs()) call ens_out%write_data(time%t)
          
          ! Perform and output monitoring
@@ -372,11 +432,58 @@ contains
          call vf%get_max()
          call mfile%write()
          call cflfile%write()
-         
+
+         ! Count drops and get mean diameter
+         call analyze_drops()
+         call dropfile%write()
+
       end do
       
       
    end subroutine simulation_run
+   
+   
+   !> Analyze VOF field for drops
+   subroutine analyze_drops()
+      use mathtools, only: Pi
+      use string,    only: str_medium
+      implicit none
+      integer :: n,iunit,ierr
+      character(len=str_medium) :: filename,timestamp
+      
+      ! Perform CCL on VOF field
+      call cc%build_lists(VF=vf%VF,U=fs%U,V=fs%V,W=fs%W)
+      
+      ! Store number of droplets and allocate diameter
+      ndrop=cc%n_meta_struct
+      if (allocated(drop_diam)) deallocate(drop_diam)
+      allocate(drop_diam(ndrop))
+      
+      ! Loops over identified structures and get equivalent diameter
+      mean_diam=0.0_WP
+      do n=1,ndrop
+         drop_diam(n)=(6.0_WP*cc%meta_structures_list(n)%vol/Pi)**(1.0_WP/3.0_WP)
+         mean_diam=mean_diam+drop_diam(n)
+      end do
+      if (ndrop.gt.0) mean_diam=mean_diam/real(ndrop,WP)
+      min_diam=minval(drop_diam)
+      max_diam=maxval(drop_diam)
+      
+      ! Clean up CCL
+      call cc%deallocate_lists()
+      
+      ! If root and if event triggers, print out drop sizes
+      if (vf%cfg%amRoot.and.drop_evt%occurs()) then
+         filename='diameter_'
+         write(timestamp,'(es12.5)') time%t
+         open(newunit=iunit,file='drops/'//trim(adjustl(filename))//trim(adjustl(timestamp)),form='formatted',status='replace',access='stream',iostat=ierr)
+         do n=1,ndrop
+            write(iunit,'(es12.5)') drop_diam(n)
+         end do
+         close(iunit)
+      end if
+
+   end subroutine analyze_drops
    
    
    !> Finalize the NGA2 simulation

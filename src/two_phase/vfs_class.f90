@@ -22,11 +22,13 @@ module vfs_class
    
    ! List of available interface reconstructions schemes for VF
    integer, parameter, public :: lvira=1             !< LVIRA scheme
-   !integer, parameter, public :: elvira=2            !< ELVIRA scheme
+   integer, parameter, public :: elvira=2            !< ELVIRA scheme
    !integer, parameter, public :: mof=3               !< MOF scheme
    integer, parameter, public :: r2p=4               !< R2P scheme
    integer, parameter, public :: swartz=5            !< Swartz scheme
    integer, parameter, public :: art=6               !< ART scheme
+   integer, parameter, public :: youngs=7            !< Youngs' scheme
+   integer, parameter, public :: lvlset=8            !< Levelset-based scheme
    
    ! IRL cutting moment calculation method
    integer, parameter, public :: recursive_simplex=0 !< Recursive simplex cutting
@@ -161,15 +163,19 @@ module vfs_class
       procedure :: advance                                !< Advance VF to next step
       procedure :: advect_interface                       !< Advance IRL surface to next step
       procedure :: build_interface                        !< Reconstruct IRL interface from VF field
+      procedure :: build_elvira                           !< ELVIRA reconstruction of the interface from VF field
       procedure :: build_lvira                            !< LVIRA reconstruction of the interface from VF field
       procedure :: build_r2p                              !< R2P reconstruction of the interface from VF field
       procedure :: build_art                              !< ART reconstruction of the interface from VF field
+      procedure :: build_youngs                           !< Youngs' reconstruction of the interface from VF field
+      !procedure :: build_lvlset                           !< LVLSET-based reconstruction of the interface from VF field
       procedure :: smooth_interface                       !< Interface smoothing based on Swartz idea
       procedure :: set_full_bcond                         !< Full liq/gas plane-setting for boundary cells - this is stair-stepped
       procedure :: polygonalize_interface                 !< Build a discontinuous polygonal representation of the IRL interface
       procedure :: distance_from_polygon                  !< Build a signed distance field from the polygonalized interface
       procedure :: subcell_vol                            !< Build subcell phasic volumes from reconstructed interface
       procedure :: reset_volume_moments                   !< Reconstruct volume moments from IRL interfaces
+      procedure :: reset_moments                          !< Reconstruct first-order moments from IRL interfaces
       procedure :: update_surfmesh                        !< Update a surfmesh object using current polygons
       procedure :: get_curvature                          !< Compute curvature from IRL surface polygons
       procedure :: paraboloid_fit                         !< Perform local paraboloid fit of IRL surface using IRL barycenter data
@@ -893,8 +899,9 @@ contains
       call this%reset_volume_moments()
       
    end subroutine advance
+   
 
-   ! Project a single face to get flux polyhedron and get its moments
+   !> Project a single face to get flux polyhedron and get its moments
    subroutine fluxpoly_project_getmoments(this,i,j,k,dt,dir,U,V,W,a_flux_polyhedron,a_locseplink,some_face_flux_moments)
      implicit none
      class(vfs), intent(inout)    :: this
@@ -981,7 +988,7 @@ contains
    end subroutine fluxpoly_project_getmoments
    
 
-   ! From the moments object in a single cell, get the volume and centroid out of IRL
+   !> From the moments object in a single cell, get the volume and centroid out of IRL
    subroutine fluxpoly_cell_getvolcentr(this,f_moments,n,ii,jj,kk,my_Lbary,my_Gbary,my_Lvol,my_Gvol,skip_flag)
      implicit none
      class(vfs), intent(inout) :: this
@@ -1444,32 +1451,103 @@ contains
       class(vfs), intent(inout) :: this
       ! Reconstruct interface - will need to support various methods
       select case (this%reconstruction_method)
+      case (elvira); call this%build_elvira()
       case (lvira) ; call this%build_lvira()
       case (r2p)   ; call this%build_r2p()
       case (art)   ; call this%build_art()
       case (swartz)
          call this%build_lvira()
          call this%smooth_interface()
+      case (youngs); call this%build_youngs()
+      !case (lvlset); call this%build_lvlset()
       case default; call die('[vfs build interface] Unknown interface reconstruction scheme')
       end select
    end subroutine build_interface
    
    
+   !> ELVIRA reconstruction of a planar interface in mixed cells
+   subroutine build_elvira(this)
+      implicit none
+      class(vfs), intent(inout) :: this
+      integer(IRL_SignedIndex_t) :: i,j,k
+      integer :: ind,ii,jj,kk
+      type(ELVIRANeigh_type) :: neighborhood
+      type(RectCub_type), dimension(0:26) :: neighborhood_cells
+      real(IRL_double), dimension(0:26) :: liquid_volume_fraction
+      
+      ! Give ourselves a ELVIRA neighborhood of 27 cells
+      call new(neighborhood)
+      do i=0,26
+         call new(neighborhood_cells(i))
+      end do
+      call setSize(neighborhood,27)
+      ind=0
+      do k=-1,+1
+         do j=-1,+1
+            do i=-1,+1
+               call setMember(neighborhood,neighborhood_cells(ind),liquid_volume_fraction(ind),i,j,k)
+               ind=ind+1
+            end do
+         end do
+      end do
+      
+      ! Traverse domain and reconstruct interface
+      do k=this%cfg%kmin_,this%cfg%kmax_
+         do j=this%cfg%jmin_,this%cfg%jmax_
+            do i=this%cfg%imin_,this%cfg%imax_
+               
+               ! Skip wall/bcond cells - bconds need to be provided elsewhere directly!
+               if (this%mask(i,j,k).ne.0) cycle
+               
+               ! Handle full cells differently
+               if (this%VF(i,j,k).lt.VFlo.or.this%VF(i,j,k).gt.VFhi) then
+                  call setNumberOfPlanes(this%liquid_gas_interface(i,j,k),1)
+                  call setPlane(this%liquid_gas_interface(i,j,k),0,[0.0_WP,0.0_WP,0.0_WP],sign(1.0_WP,this%VF(i,j,k)-0.5_WP))
+                  cycle
+               end if
+
+               ! Set neighborhood_cells and liquid_volume_fraction to current correct values
+               ind=0
+               do kk=k-1,k+1
+                  do jj=j-1,j+1
+                     do ii=i-1,i+1
+                        ! Build the cell
+                        call construct_2pt(neighborhood_cells(ind),[this%cfg%x(ii),this%cfg%y(jj),this%cfg%z(kk)],[this%cfg%x(ii+1),this%cfg%y(jj+1),this%cfg%z(kk+1)])
+                        ! Assign volume fraction
+                        liquid_volume_fraction(ind)=this%VF(ii,jj,kk)
+                        ! Increment counter
+                        ind=ind+1
+                     end do
+                  end do
+               end do
+               ! Perform the reconstruction
+               call reconstructELVIRA3D(neighborhood,this%liquid_gas_interface(i,j,k))
+            end do
+         end do
+      end do
+      
+      ! Synchronize across boundaries
+      call this%sync_interface()
+      
+   end subroutine build_elvira
+
+   
    !> Smoothing of an IRL interface based on Swartz-like algorithm
    subroutine smooth_interface(this)
-      use mathtools, only: cross_product,normalize
+      use mathtools, only: cross_product,normalize,Pi,qrotate
       use mpi_f08,   only: MPI_ALLREDUCE,MPI_MAX
       use parallel,  only: MPI_REAL_WP
       implicit none
       class(vfs), intent(inout) :: this
       integer :: i,j,k,ii,jj,kk,ierr,ite,count
       real(WP) :: myres,res,mag
-      real(WP), dimension(3) :: mynorm,mybary,bary,norm,newnorm
-      real(WP), dimension(4) :: plane
+      real(WP), dimension(3) :: mynorm,mybary,bary,norm,newnorm,r
+      real(WP), dimension(4) :: plane,q
       type(RectCub_type) :: cell
-      real(WP), parameter :: norm_threshold=0.5_WP
+      !real(WP), parameter :: norm_threshold=0.85_WP ! About 30 degrees
+      real(WP), parameter :: norm_threshold=0.0_WP ! 0 degrees
       real(WP), parameter :: maxres=1.0e-6_WP
-      integer , parameter :: maxite=4
+      integer , parameter :: maxite=5
       
       ! Allocate cell
       call new(cell)
@@ -1509,16 +1587,19 @@ contains
                            norm=calculateNormal  (this%interface_polygon(1,ii,jj,kk))
                            ! Skip polygons with normal too different from ours
                            if (dot_product(mynorm,norm).lt.norm_threshold) cycle
-                           ! Add edge-normal to our new normal
-                           newnorm=newnorm+normalize(cross_product(bary,cross_product(mynorm,bary)))
+                           ! Build a quaternion to rotate Pi/2 around r axis
+                           r=cross_product(bary,mynorm)
+                           q(1)=cos(0.25_WP*Pi); q(2:4)=sin(0.25_WP*Pi)*normalize(r)
+                           ! Increment our normal estimate using a barycenter-based normal
+                           newnorm=newnorm+qrotate(v=bary,q=q)
                         end do
                      end do
                   end do
-                  ! Set minimum number of neighbors
-                  if (count.lt.2) cycle
+                  ! Set minimum number of neighbors to 1
+                  if (count.eq.0) cycle
                   ! Normalize new normal vector
                   newnorm=normalize(newnorm)
-                  ! Adjust plane position to conserve volume
+                  ! Adjust plane orientation (not position yet)
                   plane=getPlane(this%liquid_gas_interface(i,j,k),0)
                   call setPlane(this%liquid_gas_interface(i,j,k),0,newnorm,plane(4))
                   call construct_2pt(cell,[this%cfg%x(i),this%cfg%y(j),this%cfg%z(k)],[this%cfg%x(i+1),this%cfg%y(j+1),this%cfg%z(k+1)])
@@ -1539,6 +1620,40 @@ contains
       end do
       
    end subroutine smooth_interface
+   
+   
+   !> Youngs' algorithm for reconstructing a planar interface
+   subroutine build_youngs(this)
+      implicit none
+      class(vfs), intent(inout) :: this
+      integer :: i,j,k
+      
+      ! Traverse domain and reconstruct interface
+      do k=this%cfg%kmin_,this%cfg%kmax_
+         do j=this%cfg%jmin_,this%cfg%jmax_
+            do i=this%cfg%imin_,this%cfg%imax_
+               
+               ! Skip wall/bcond cells - bconds need to be provided elsewhere directly!
+               if (this%mask(i,j,k).ne.0) cycle
+               
+               ! Handle full cells differently
+               if (this%VF(i,j,k).lt.VFlo.or.this%VF(i,j,k).gt.VFhi) then
+                  call setNumberOfPlanes(this%liquid_gas_interface(i,j,k),1)
+                  call setPlane(this%liquid_gas_interface(i,j,k),0,[0.0_WP,0.0_WP,0.0_WP],sign(1.0_WP,this%VF(i,j,k)-0.5_WP))
+                  cycle
+               end if
+
+               ! Apply Youngs' method to get normal
+               
+
+            end do
+         end do
+      end do
+
+      ! Synchronize across boundaries
+      call this%sync_interface()
+
+   end subroutine build_youngs
    
    
    !> LVIRA reconstruction of a planar interface in mixed cells
@@ -2395,6 +2510,48 @@ contains
       !call this%sync_and_clean_barycenters()
       
    end subroutine reset_volume_moments
+   
+   ! Reset only moments, leave VF unchanged
+   subroutine reset_moments(this)
+      implicit none
+      class(vfs), intent(inout) :: this
+      integer :: i,j,k
+      type(RectCub_type) :: cell
+      type(SepVM_type) :: separated_volume_moments
+      
+      ! Calculate volume moments and store
+      call new(cell)
+      call new(separated_volume_moments)
+      do k=this%cfg%kmino_,this%cfg%kmaxo_
+         do j=this%cfg%jmino_,this%cfg%jmaxo_
+            do i=this%cfg%imino_,this%cfg%imaxo_
+               ! Handle pure wall cells
+               if (this%mask(i,j,k).eq.1) then
+                  this%Lbary(:,i,j,k)=[this%cfg%xm(i),this%cfg%ym(j),this%cfg%zm(k)]
+                  this%Gbary(:,i,j,k)=[this%cfg%xm(i),this%cfg%ym(j),this%cfg%zm(k)]
+                  cycle
+               end if
+               ! Form the grid cell
+               call construct_2pt(cell,[this%cfg%x(i),this%cfg%y(j),this%cfg%z(k)],[this%cfg%x(i+1),this%cfg%y(j+1),this%cfg%z(k+1)])
+               ! Cut it by the current interface(s)
+               call getNormMoments(cell,this%liquid_gas_interface(i,j,k),separated_volume_moments)
+               ! Recover relevant moments
+               this%Lbary(:,i,j,k)=getCentroid(separated_volume_moments,0)
+               this%Gbary(:,i,j,k)=getCentroid(separated_volume_moments,1)
+               ! Clean up
+               if (this%VF(i,j,k).lt.VFlo) then
+                  this%Lbary(:,i,j,k)=[this%cfg%xm(i),this%cfg%ym(j),this%cfg%zm(k)]
+                  this%Gbary(:,i,j,k)=[this%cfg%xm(i),this%cfg%ym(j),this%cfg%zm(k)]
+               end if
+               if (this%VF(i,j,k).gt.VFhi) then
+                  this%Lbary(:,i,j,k)=[this%cfg%xm(i),this%cfg%ym(j),this%cfg%zm(k)]
+                  this%Gbary(:,i,j,k)=[this%cfg%xm(i),this%cfg%ym(j),this%cfg%zm(k)]
+               end if
+            end do
+         end do
+      end do
+      
+   end subroutine reset_moments
    
    
    !> Compute curvature from a least squares fit of the IRL surface

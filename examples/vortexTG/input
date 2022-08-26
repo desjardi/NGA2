@@ -2,32 +2,24 @@
 Partition :	1 1 1
 
 # Mesh definition
-Lx :	1
-nx :	400
+nx :	32
 
 # Flow setup
-Liquid start location :	      -1
-Liquid end location :         0.35
-Discontinuity location :      0.65
-Pre-discontinuity velocity :  2
-Pre-discontinuity pressure :  1
-Post-discontinuity velocity : 11.20375
-Post-discontinuity pressure : 0.7
+Background pressure : 59.76143
 
 # Fluid properties
 Liquid gamma :	      	      4.4
 Liquid Pref :		      6e3
 Gas gamma : 		      1.4
+Gas dynamic viscosity :	      0
 
 # Initial conditions
-Liquid density :              1
-Gas density :                 1e-3
+Gas density :                 1
 
 # Time integration
-Max timestep size : 1e-4
+Max timestep size : 0.01
 Max cfl number :    1
-Max time :          14.5e-3
-Max steps :	    100000
+Max time :          3.9999999
 
 # Pressure solver
 Pressure tolerance : 1e-6

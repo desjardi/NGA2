@@ -1,0 +1,51 @@
+# Parallelization
+Partition :	4 1 1
+
+# Mesh definition
+Lx :	0.0576
+nx :	128
+Ly :	0.0576
+ny :	128
+Cells per diameter :	  16
+Cells per left region:	  16
+Refined region left bdy:  0.02
+Refined region right bdy: 0.04
+Refined region top bdy:	  0.01
+
+
+# Flow setup
+Cylinder diameter :   0.0048
+Cylinder location :   0.0288
+Shock location :      0.02489
+Mach number of shock :   1.47
+Pre-shock density :   1.204
+Pre-shock pressure :  1.01325e5
+
+# Fluid properties
+Liquid dynamic viscosity :    0
+Gas dynamic viscosity :       0
+Liquid gamma :	      	      4.4
+Liquid Pref :		      6e8
+Gas gamma : 		      1.4
+
+# Initial conditions
+Liquid density :              1000
+Surface tension coefficient : 0.0757
+
+# Time integration
+Max timestep size : 1e-6
+Max cfl number :    0.9
+Max time :     	    3e-3
+# To look at breakup, use tmax = 2.9e-3
+Max steps :	    100000
+
+# Pressure solver
+Pressure tolerance : 1e-6
+Pressure iteration : 100
+
+# Implicit velocity solver
+Implicit tolerance : 1e-6
+Implicit iteration : 100
+
+# Ensight output
+Ensight output period : 1e-6

@@ -10,6 +10,17 @@ module matm_class
    ! Expose type/constructor/methods
    public :: matm
    
+   ! Parameters for viscosity, and heat diffusion models
+   integer, parameter, public :: none      =0        !< Sets the constant to 0 (for inviscid, isothermal, etc.). Careful, overwrites input values
+   integer, parameter, public :: constant  =1        !< Assumes default value, available for all types, overwritten by input
+   integer, parameter, public :: visc_water=2        !< Empirical model for viscosity of water
+   integer, parameter, public :: hdff_water=3        !<     "       "    "  heat diffusivity (kappa) of water
+   integer, parameter, public :: spht_water=4        !<     "       "    "  specific heat (cv) of water
+   integer, parameter, public :: visc_air  =5        !< Empirical model for viscosity of air
+   integer, parameter, public :: hdff_air  =6        !<     "       "    "  heat diffusivity (kappa) of air
+   integer, parameter, public :: spht_air  =7        !<     "       "    "  specific heat (cv) of air
+   ! More can be added for other materials, alongside functions that feature models
+   
    !> Material modeling type intended for two-phase, liquid-gas flows
    type :: matm
       
@@ -29,32 +40,58 @@ module matm_class
       ! Gas properties
       real(WP) :: gamm_g,Pref_g,q_g,b_g
 
-      ! Specific heat coefficients
-      real(WP), dimension(:,:,:), allocatable :: cv_l, cv_g
-
       ! Pointers for local thermodynamic or flow variables
       real(WP), dimension(:,:,:), pointer     :: Grho,GU,GV,GW,GrhoE,GP
       real(WP), dimension(:,:,:), pointer     :: Lrho,LU,LV,LW,LrhoE,LP
+      
+      ! Variables to store chosen diffusion & thermo models (defaults to constant model, M references "model")
+      integer  :: M_mu_l    = 1
+      integer  :: M_kappa_l = 1
+      integer  :: M_cv_l    = 1
+      integer  :: M_mu_g    = 1
+      integer  :: M_kappa_g = 1
+      integer  :: M_cv_g    = 1
+      
+      ! Defaults for constant diffusion & thermo parameters
+      real(WP) :: mu_l0  = 8.9e-4_WP
+      real(WP) :: mu_g0  = 1.81e-5_WP
+      real(WP) :: kappa_l0 = 0.610_WP
+      real(WP) :: kappa_g0 = 0.026_WP
+      real(WP) :: cv_l0    = 4130.2_WP
+      real(WP) :: cv_g0    = 717.6_WP
+      
+      ! Default temperature guess (for the sake of variable cv) upon initialization, can be overwritten
+      ! Also used by EOS_gas and EOS_liquid functions if temperature guess is not directly supplied
+      real(WP) :: Tdefault = 25.0_WP + 273.15_WP
 
    contains
       procedure :: EOS_gas, EOS_liquid                    !< Output solver to the screen
       procedure :: EOS_energy                             !< Calculates phase total energy from pressure and kinetic energy
       procedure :: EOS_temp                               !< Calculates phase temperature from pressure directly
+      procedure :: EOS_density                            !< Calculates phase density from pressure and temperature directly
       procedure :: EOS_all                                !< Calculates vol-avg pressure for entire domain from conserved variables
 
       procedure :: register_idealgas                      !< EOS available for gas-like fluids
       procedure :: register_stiffenedgas                  !< EOS for liquid-like fluids
       procedure :: register_NobleAbelstiffenedgas         !< EOS for liquid-like fluids
+      
+      procedure :: register_diffusion_thermo_models       !< Choose models or set parameters for viscosity, thermal conductivity, and specific heat
 
       procedure :: register_thermoflow_variables          !< Creates pointers from material models to flow solver variables
 
       procedure :: EOS_relax_quad                         !< Outputs terms for mechanical pressure relaxation step
       procedure :: bulkmod_intf                           !< Calculate the bulk modulus at liquid-gas interface
       procedure :: fix_energy                             !< Can correct erroneous energy values
+      
+      procedure :: update_temperature                     !< Updates entire array of mixture temperature as passed in
+      procedure :: get_local_temperature                  !< Calculates local mixture temperature
 
       procedure :: viscosity_water,  viscosity_air        !< Empirical models for temperature dependence of dynamic viscosity
       procedure :: spec_heat_water,  spec_heat_air        !< Empirical models for temperature dependence of specific heat (cv)
       procedure :: therm_cond_water, therm_cond_air       !< Empirical models for temperature dependence of thermal conductivity
+      
+      procedure :: viscosity_gas, spec_heat_gas, therm_cond_gas  !< Provide diffusive/thermal parameters according to registered model
+      procedure :: viscosity_liquid, spec_heat_liquid, therm_cond_liquid
       
    end type matm
    
@@ -83,10 +120,6 @@ contains
      ! Zero EOS parameters
      self%gamm_l = 0.0_WP; self%Pref_l = 0.0_WP; self%q_l = 0.0_WP; self%b_l = 0.0_WP
      self%gamm_g = 0.0_WP; self%Pref_g = 0.0_WP; self%q_g = 0.0_WP; self%b_g = 0.0_WP
-
-     ! Allocate specific heat
-     allocate(self%cv_l(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%cv_l=0.0_WP
-     allocate(self%cv_g(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%cv_g=0.0_WP
 
    end function constructor
 
@@ -143,6 +176,91 @@ contains
      
    end subroutine register_NobleAbelstiffenedgas
 
+   subroutine register_diffusion_thermo_models(this,viscmodel_liquid,hdffmodel_liquid,sphtmodel_liquid,viscmodel_gas,hdffmodel_gas,sphtmodel_gas,viscconst_liquid,hdffconst_liquid,sphtconst_liquid,viscconst_gas,hdffconst_gas,sphtconst_gas)
+     use messager,  only: die
+     implicit none
+     class(matm), intent(inout) :: this
+     integer , intent(in), optional :: viscmodel_liquid,hdffmodel_liquid,sphtmodel_liquid,viscmodel_gas,hdffmodel_gas,sphtmodel_gas
+     real(WP), intent(in), optional :: viscconst_liquid,hdffconst_liquid,sphtconst_liquid,viscconst_gas,hdffconst_gas,sphtconst_gas
+
+     ! If constants are supplied, replace default constants with provided constants
+     if (present(viscconst_liquid)) then
+       this%mu_l0 = viscconst_liquid
+     end if
+     if (present(viscconst_gas)) then
+       this%mu_g0 = viscconst_gas
+     end if
+     if (present(hdffconst_liquid)) then
+       this%kappa_l0 = hdffconst_liquid
+     end if
+     if (present(hdffconst_gas)) then
+       this%kappa_g0 = hdffconst_gas
+     end if
+     if (present(sphtconst_liquid)) then
+       this%cv_l0 = sphtconst_liquid
+     end if
+     if (present(sphtconst_gas)) then
+       this%cv_g0 = sphtconst_gas
+     end if
+     
+     ! If models are supplied, replace default models (constant) with specified models
+     ! Specifying a non-constant model will override specifying a constant parameter above
+     if (present(viscmodel_liquid)) then
+       this%M_mu_l = viscmodel_liquid
+       ! Check allowed values
+       select case (this%M_mu_l)
+       case (none,constant,visc_water); ! do nothing
+       case default; call die('[matm register_diffusion_thermo_models] Unknown liquid viscosity model')
+       end select
+     end if
+     if (present(viscmodel_gas)) then
+       this%M_mu_g = viscmodel_gas
+       ! Check allowed values
+       select case (this%M_mu_g)
+       case (none,constant,visc_air); ! do nothing
+       case default; call die('[matm register_diffusion_thermo_models] Unknown gas viscosity model')
+       end select
+     end if
+     if (present(hdffmodel_liquid)) then
+       this%M_kappa_l = hdffmodel_liquid
+       ! Check allowed values
+       select case (this%M_kappa_l)
+       case (none,constant,hdff_water); ! do nothing
+       case default; call die('[matm register_diffusion_thermo_models] Unknown liquid heat diffusivity model')
+       end select
+     end if
+     if (present(hdffmodel_gas)) then
+       this%M_kappa_g = hdffmodel_gas
+       ! Check allowed values
+       select case (this%M_kappa_g)
+       case (none,constant,hdff_air); ! do nothing
+       case default; call die('[matm register_diffusion_thermo_models] Unknown gas heat diffusivity model')
+       end select
+     end if
+     if (present(sphtmodel_liquid)) then
+       this%M_cv_l = sphtmodel_liquid
+       ! Check allowed values
+       select case (this%M_cv_l)
+       case (constant,spht_water); ! do nothing - never zero, so none is not allowed
+       case default; call die('[matm register_diffusion_thermo_models] Unknown liquid specific heat model')
+       end select
+     end if
+     if (present(sphtmodel_gas)) then
+       this%M_cv_g = sphtmodel_gas
+       ! Check allowed values
+       select case (this%M_cv_g)
+       case (constant,spht_air); ! do nothing - never zero, so none is not allowed
+       case default; call die('[matm register_diffusion_thermo_models] Unknown gas specific heat model')
+       end select
+     end if
+     
+     ! Set parameter values to zero if prescribed
+     if (this%M_mu_l   .eq.none) this%mu_l0    = 0.0_WP
+     if (this%M_kappa_l.eq.none) this%kappa_l0 = 0.0_WP
+     if (this%M_mu_g   .eq.none) this%mu_g0    = 0.0_WP
+     if (this%M_kappa_g.eq.none) this%kappa_g0 = 0.0_WP
+     
+   end subroutine register_diffusion_thermo_models
    
    subroutine register_thermoflow_variables(this,phase,rho,u,v,w,rhoe,p)
      implicit none
@@ -168,13 +286,199 @@ contains
      end select
 
    end subroutine register_thermoflow_variables
+   
+   
+   function viscosity_liquid(this,T) result(mu)
+     implicit none
+     class(matm), intent(inout) :: this
+     real(WP), intent(in) :: T  ! Temperature - always supplied, not always used
+     real(WP) :: mu
      
+     select case(this%M_mu_l)
+     case(none,constant)
+       mu = this%mu_l0
+     case(visc_water)
+       mu = this%viscosity_water(T)
+     end select
+     
+     return
+   end function viscosity_liquid
+   
+   function viscosity_gas(this,T) result(mu)
+     implicit none
+     class(matm), intent(inout) :: this
+     real(WP), intent(in) :: T  ! Temperature - always supplied, not always used
+     real(WP) :: mu
+     
+     select case(this%M_mu_g)
+     case(none,constant)
+       mu = this%mu_g0
+     case(visc_water)
+       mu = this%viscosity_air(T)
+     end select
+     
+     return
+   end function viscosity_gas
+   
+   function therm_cond_liquid(this,T) result(kappa)
+     implicit none
+     class(matm), intent(inout) :: this
+     real(WP), intent(in) :: T  ! Temperature - always supplied, not always used
+     real(WP) :: kappa
+     
+     select case(this%M_kappa_l)
+     case(none,constant)
+       kappa = this%kappa_l0
+     case(hdff_water)
+       kappa = this%therm_cond_water(T)
+     end select
+     
+     return
+   end function therm_cond_liquid
+   
+   function therm_cond_gas(this,T) result(kappa)
+     implicit none
+     class(matm), intent(inout) :: this
+     real(WP), intent(in) :: T  ! Temperature - always supplied, not always used
+     real(WP) :: kappa
+     
+     select case(this%M_kappa_g)
+     case(none,constant)
+       kappa = this%kappa_g0
+     case(hdff_air)
+       kappa = this%therm_cond_air(T)
+     end select
+     
+     return
+   end function therm_cond_gas
+   
+   function spec_heat_liquid(this,T) result(cv)
+     implicit none
+     class(matm), intent(inout) :: this
+     real(WP), intent(in) :: T  ! Temperature - always supplied, not always used
+     real(WP) :: cv
+     
+     select case(this%M_cv_l)
+     case(constant)
+       cv = this%cv_l0
+     case(spht_water)
+       cv = this%spec_heat_water(T)
+     end select
+     
+     return
+   end function spec_heat_liquid
+   
+   function spec_heat_gas(this,T) result(cv)
+     implicit none
+     class(matm), intent(inout) :: this
+     real(WP), intent(in) :: T  ! Temperature - always supplied, not always used
+     real(WP) :: cv
+     
+     select case(this%M_cv_g)
+     case(constant)
+       cv = this%cv_g0
+     case(spht_air)
+       cv = this%spec_heat_air(T)
+     end select
+     
+     return
+   end function spec_heat_gas
+   
+   subroutine update_temperature(this,vf,Temperature)
+     use vfs_class, only : vfs
+     implicit none
+     class(matm), intent(inout) :: this
+     class(vfs),  intent(inout) :: vf
+     real(WP), dimension(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_) :: Temperature
+     integer :: i,j,k
+     
+     do k=this%cfg%kmino_,this%cfg%kmaxo_
+       do j=this%cfg%jmino_,this%cfg%jmaxo_
+         do i=this%cfg%imino_,this%cfg%imaxo_
+            ! Get local temperature, use current temperature as first guess for cv
+            Temperature(i,j,k) = this%get_local_temperature(vf,i,j,k,Temperature(i,j,k))
+         end do
+       end do
+     end do
+     
+   end subroutine update_temperature
+   
+   function get_local_temperature(this,vf,i,j,k,Tguess) result(T)
+     use vfs_class, only : vfs, VFhi, VFlo
+     implicit none
+     class(matm), intent(inout) :: this
+     class(vfs),  intent(inout) :: vf
+     integer,  intent(in) :: i,j,k
+     real(WP), intent(in) :: Tguess
+     real(WP) :: Tlast,delta_T,Gtemp,Ltemp,T
+     real(WP) :: cv_g = 0.0_WP
+     real(WP) :: cv_l = 0.0_WP
+     integer  :: n
+     real(WP), parameter :: T_cvg = 1e-1_WP
+     integer,  parameter :: n_loop = 10
+     
+     ! Initialize guesses
+     Gtemp = Tguess; Ltemp = Tguess
+     ! Gas temperature
+     if (vf%VF(i,j,k).le.VFhi) then
+       n = 0; delta_T = 1.0_WP + T_cvg
+       do while ((delta_T.gt.T_cvg).and.(n.lt.n_loop))
+         Tlast = Gtemp
+         ! Calculate temperature with latest temperature in cv_g calculation
+         Gtemp = this%EOS_gas(i,j,k,'T',Gtemp)
+         ! Increment interation number
+         n = n+1
+         ! Convergence residual
+         delta_T = abs(Gtemp-Tlast)
+         ! Exit loop if constant model
+         if (this%M_cv_g.eq.constant) n = n_loop
+         ! Exit loop if not converging
+         if (Gtemp.le.0.0_WP) then 
+           n = n_loop
+           Gtemp = Tlast ! hopefully last iteration had better value
+         end if
+       end do
+       ! Update cv value using current temperature value
+       cv_g = this%spec_heat_gas(Gtemp)
+     end if
+     ! Liquid temperature
+     if (vf%VF(i,j,k).ge.VFlo) then
+       n = 0; delta_T = 1.0_WP + T_cvg
+       do while ((delta_T.gt.T_cvg).and.(n.lt.n_loop))
+         Tlast = Ltemp
+         ! Calculate temperature with latest temperature in cv_l calculation
+         Ltemp = this%EOS_liquid(i,j,k,'T',Ltemp)
+         ! Increment interation number
+         n = n+1
+         ! Convergence residual
+         delta_T = abs(Ltemp-Tlast)
+         ! Exit loop if constant model
+         if (this%M_cv_l.eq.constant) n = n_loop
+         ! Exit loop if not converging
+         if (Ltemp.le.0.0_WP) then 
+           n = n_loop
+           Ltemp = Tlast ! hopefully last iteration had better value
+         end if
+       end do
+       ! Update cv value using current temperature value
+       cv_l = this%spec_heat_liquid(Ltemp)
+     end if
+     
+     ! Mixture temperature
+     T = ((1.0_WP-vf%VF(i,j,k))*cv_g*this%Grho(i,j,k)*Gtemp &
+        +(        vf%VF(i,j,k))*cv_l*this%Lrho(i,j,k)*Ltemp)&
+        /((1.0_WP-vf%VF(i,j,k))*cv_g*this%Grho(i,j,k) &
+        +(        vf%VF(i,j,k))*cv_l*this%Lrho(i,j,k) )
+     
+     return
+   end function get_local_temperature
 
-   function EOS_liquid(this,i,j,k,flag) result(property)
+   function EOS_liquid(this,i,j,k,flag,Ltemp) result(property)
      implicit none
      class(matm), intent(inout) :: this
      integer,intent(in) :: i,j,k
      character(len=1),intent(in) :: flag
+     real(WP), intent(in), optional :: Ltemp ! Just for getting cv
      real(WP) :: property
 
      select case(flag)
@@ -187,9 +491,10 @@ contains
         property = this%LP(i,j,k)+this%Pref_l
         property = this%gamm_l/(1.0_WP-this%Lrho(i,j,k)*this%b_l)*property
      case('T') ! Temperature
+        if (present(Ltemp)) then; property = Ltemp; else; property = this%Tdefault; end if
         property = (-(1.0_WP-this%Lrho(i,j,k)*this%b_l)*this%Pref_l+this%LrhoE(i,j,k) &
              -0.5_WP*this%Lrho(i,j,k)*(this%LU(i,j,k)**2+this%LV(i,j,k)**2+this%LW(i,j,k)**2) &
-             -this%Lrho(i,j,k)*this%q_l) / (this%Lrho(i,j,k)*this%cv_l(i,j,k))
+             -this%Lrho(i,j,k)*this%q_l) / (this%Lrho(i,j,k)*this%spec_heat_liquid(property))
      case('v') ! (1/rho)(dp/de), for viscous pressure term
         property = (this%gamm_l-1.0_WP)/(1.0_WP-this%Lrho(i,j,k)*this%b_l)
      case('M') ! Bulk modulus calculated from conserved variables
@@ -202,11 +507,12 @@ contains
      return
    end function EOS_liquid
 
-   function EOS_gas(this,i,j,k,flag) result(property)
+   function EOS_gas(this,i,j,k,flag,Gtemp) result(property)
      implicit none
      class(matm), intent(inout) :: this
      integer,intent(in) :: i,j,k
      character(len=1),intent(in) :: flag
+     real(WP), intent(in), optional :: Gtemp ! Just for getting cv
      real(WP) :: property
 
      select case(flag)
@@ -219,9 +525,10 @@ contains
         property = this%GP(i,j,k)+this%Pref_g
         property = this%gamm_g/(1.0_WP-this%Grho(i,j,k)*this%b_g)*property
      case('T') ! Temperature
+       if (present(Gtemp)) then; property = Gtemp; else; property = this%Tdefault; end if
         property = (-(1.0_WP-this%Grho(i,j,k)*this%b_g)*this%Pref_g+this%GrhoE(i,j,k) &
              -0.5_WP*this%Grho(i,j,k)*(this%GU(i,j,k)**2+this%GV(i,j,k)**2+this%GW(i,j,k)**2) &
-             -this%Grho(i,j,k)*this%q_g) / (this%Grho(i,j,k)*this%cv_g(i,j,k))
+             -this%Grho(i,j,k)*this%q_g) / (this%Grho(i,j,k)*this%spec_heat_gas(property))
      case('v') ! (1/rho)(dp/de), for viscous pressure term
         property = (this%gamm_g-1.0_WP)/(1.0_WP-this%Grho(i,j,k)*this%b_g)
      case('M') ! Bulk modulus calculated from conserved variables
@@ -269,17 +576,34 @@ contains
 
      return
    end function EOS_temp
+   
+   function EOS_density(this,pres,temp,cv,phase) result(dens)
+     implicit none
+     class(matm), intent(inout) :: this
+     real(WP), intent(in) :: pres,temp,cv
+     character(len=*),intent(in) :: phase
+     real(WP) :: dens
 
-   function EOS_all(this,vf,buf_GrhoE,buf_LrhoE) result(buf_P)
+     select case(trim(adjustl(phase)))
+     case('liquid')
+        dens = (pres+this%Pref_l)/(cv*(this%gamm_l-1.0_WP)*temp+this%b_l*(pres+this%Pref_l))
+     case('gas')
+        dens = (pres+this%Pref_g)/(cv*(this%gamm_g-1.0_WP)*temp+this%b_g*(pres+this%Pref_g))
+     end select
+
+     return
+   end function EOS_density
+
+   function EOS_all(this,vf) result(buf_P)
      use vfs_class, only : vfs
      implicit none
      class(matm), intent(inout) :: this
      class(vfs),  intent(inout) :: vf
-     real(WP), dimension(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_) :: buf_GrhoE,buf_LrhoE,buf_P
+     real(WP), dimension(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_) :: buf_P
 
-     buf_P = (1.0_WP-vf%VF)*((this%gamm_g-1.0_WP)/(1.0_WP-this%Grho*this%b_g)*(buf_GrhoE-0.5_WP* &
+     buf_P = (1.0_WP-vf%VF)*((this%gamm_g-1.0_WP)/(1.0_WP-this%Grho*this%b_g)*(this%GrhoE-0.5_WP* &
              this%Grho*(this%GU**2+this%GV**2+this%GW**2)-this%Grho*this%q_g)-this%gamm_g*this%Pref_g) + &
-             (       vf%VF)*((this%gamm_l-1.0_WP)/(1.0_WP-this%Lrho*this%b_l)*(buf_LrhoE-0.5_WP* &
+             (       vf%VF)*((this%gamm_l-1.0_WP)/(1.0_WP-this%Lrho*this%b_l)*(this%LrhoE-0.5_WP* &
              this%Lrho*(this%LU**2+this%LV**2+this%LW**2)-this%Lrho*this%q_l)-this%gamm_l*this%Pref_l)
 
      return

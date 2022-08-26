@@ -41,7 +41,8 @@ stat/
 # Ignore all content of examples
 examples/*/*
 !examples/*/GNUmakefile
-!examples/*/input
+!examples/*/input*
+examples/*/input*~
 !examples/*/README
 !examples/*/src
 !examples/*/*.py

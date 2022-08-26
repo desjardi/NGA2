@@ -814,6 +814,7 @@ contains
                ! Add the drop
                lp%p(np)%id  =int(0,8)                                                                                 !< Give id (maybe based on break-up model?)
                lp%p(np)%dt  =0.0_WP                                                                                   !< Let the drop find it own integration time
+               lp%p(np)%col =0.0_WP                                                                                   !< Give zero collision force
                lp%p(np)%d   =diam                                                                                     !< Assign diameter to account for full volume
                lp%p(np)%pos =[cc%meta_structures_list(m)%x,cc%meta_structures_list(m)%y,cc%meta_structures_list(m)%z] !< Place the drop at the liquid barycenter
                lp%p(np)%vel =[cc%meta_structures_list(m)%u,cc%meta_structures_list(m)%v,cc%meta_structures_list(m)%w] !< Assign mean structure velocity as drop velocity
@@ -888,6 +889,7 @@ contains
                   ! Add the drop
                   lp%p(np)%id  =int(0,8)                                   !< Give id (maybe based on break-up model?)
                   lp%p(np)%dt  =0.0_WP                                     !< Let the drop find it own integration time
+                  lp%p(np)%col =0.0_WP                                     !< Give zero collision force
                   lp%p(np)%d   =(6.0_WP*Vd/pi)**(1.0_WP/3.0_WP)            !< Assign diameter from model above
                   lp%p(np)%pos =vf%Lbary(:,i,j,k)                          !< Place the drop at the liquid barycenter
                   lp%p(np)%vel =fs%cfg%get_velocity(pos=lp%p(np)%pos,i0=i,j0=j,k0=k,U=fs%U,V=fs%V,W=fs%W) !< Interpolate local cell velocity as drop velocity
@@ -910,6 +912,7 @@ contains
                ! Add the drop
                lp%p(np)%id  =int(0,8)                                   !< Give id (maybe based on break-up model?)
                lp%p(np)%dt  =0.0_WP                                     !< Let the drop find it own integration time
+               lp%p(np)%col =0.0_WP                                     !< Give zero collision force
                lp%p(np)%d   =(6.0_WP*Vl/pi)**(1.0_WP/3.0_WP)            !< Assign diameter based on remaining liquid volume
                lp%p(np)%pos =vf%Lbary(:,i,j,k)                          !< Place the drop at the liquid barycenter
                lp%p(np)%vel =fs%cfg%get_velocity(pos=lp%p(np)%pos,i0=i,j0=j,k0=k,U=fs%U,V=fs%V,W=fs%W) !< Interpolate local cell velocity as drop velocity

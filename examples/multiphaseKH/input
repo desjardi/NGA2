@@ -5,10 +5,10 @@ Partition :	4 1 1
 Lx :	      32
 Liquid Ly :	4
 Gas Ly :	   12
-Lz :	      1e-1
-nx :	      320
-ny :	      160
-nz :	      1
+Lz :	      16!1e-1
+nx :	      160!320
+ny :	      80!160
+nz :	      80!160
 
 # Fluid properties and inital profile
 Gas Reynolds number :  1000
@@ -20,6 +20,7 @@ Velocity ratio :       0.1     !< This is U_l/U_g
 # Time integration
 Max timestep size : 1e-1
 Max cfl number :    0.9
+Max time :          400
 
 # Pressure solver
 Pressure tolerance : 1e-6

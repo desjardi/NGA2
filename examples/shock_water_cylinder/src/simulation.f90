@@ -11,27 +11,26 @@ module simulation
    use monitor_class,     only: monitor
    implicit none
    private
-   
+
    !> Single two-phase flow solver, volume fraction solver, and material model set
    !> With corresponding time tracker
    type(mast),        public :: fs
    type(vfs),         public :: vf
    type(matm),        public :: matmod
    type(timetracker), public :: time
-   
+
    !> Ensight postprocessing
    type(ensight) :: ens_out
    type(event)   :: ens_evt
-   
+
    !> Simulation monitor file
    type(monitor) :: mfile,cflfile
-   
+
    public :: simulation_init,simulation_run,simulation_final
-   
+
    !> Problem definition
-   real(WP) :: l0,l1
-   real(WP) :: discloc,v0,v1,p0,p1
-   
+   real(WP) :: dcyl,xcyl
+
 contains
 
    !> Function that localizes the left (x-) of the domain
@@ -55,50 +54,72 @@ contains
      isIn=.false.
      if (i.eq.pg%imax+1) isIn=.true.
    end function right_of_domain
-    
+
+   !> Function that defines a level set function for a cylindrical droplet
+   function levelset_cyl(xyz,t) result(G)
+      implicit none
+      real(WP), dimension(3),intent(in) :: xyz
+      real(WP), intent(in) :: t
+      real(WP) :: G
+      G=1.0_WP-sqrt(((xyz(1)-xcyl)/dcyl*2.0_WP)**2+(xyz(2)/dcyl*2.0_WP)**2)
+   end function levelset_cyl
+
    !> Initialization of problem solver
    subroutine simulation_init
       use param, only: param_read
       implicit none
-      
-      
+
+
       ! Initialize time tracker with 2 subiterations
       initialize_timetracker: block
          time=timetracker(amRoot=cfg%amRoot)
          call param_read('Max timestep size',time%dtmax)
          call param_read('Max cfl number',time%cflmax)
          call param_read('Max time',time%tmax)
-         !call param_read('Max steps',time%nmax)
+         call param_read('Max steps',time%nmax)
          time%dt=time%dtmax
          time%itmax=2
       end block initialize_timetracker
-      
-      
+
+
       ! Initialize our VOF solver and field
       create_and_initialize_vof: block
          use mms_geom, only: cube_refine_vol
-         use vfs_class, only: r2p,lvira,VFhi,VFlo
+         use vfs_class, only: r2p,lvira,elvira,VFhi,VFlo
          integer :: i,j,k,n,si,sj,sk
          real(WP), dimension(3,8) :: cube_vertex
          real(WP), dimension(3) :: v_cent,a_cent
          real(WP) :: vol,area
          integer, parameter :: amr_ref_lvl=4
          ! Create a VOF solver with lvira reconstruction
-         vf=vfs(cfg=cfg,reconstruction_method=lvira,name='VOF')
+         vf=vfs(cfg=cfg,reconstruction_method=elvira,name='VOF')
          ! Initialize liquid at left
-         call param_read('Liquid start location',l0)
-         call param_read('Liquid end location',l1)
+         call param_read('Cylinder diameter',dcyl)
+         call param_read('Cylinder location',xcyl)
          do k=vf%cfg%kmino_,vf%cfg%kmaxo_
             do j=vf%cfg%jmino_,vf%cfg%jmaxo_
                do i=vf%cfg%imino_,vf%cfg%imaxo_
-                  ! Stick to single-phase cells
-                  if (vf%cfg%x(i).gt.l0.and.vf%cfg%x(i).lt.l1) then
-                     vf%VF(i,j,k)=1.0_WP
+                  ! Set cube vertices
+                  n=0
+                  do sk=0,1
+                     do sj=0,1
+                        do si=0,1
+                           n=n+1; cube_vertex(:,n)=[vf%cfg%x(i+si),vf%cfg%y(j+sj),vf%cfg%z(k+sk)]
+                        end do
+                     end do
+                  end do
+                  ! Call adaptive refinement code to get volume and barycenters recursively
+                  vol=0.0_WP; area=0.0_WP; v_cent=0.0_WP; a_cent=0.0_WP
+                  call cube_refine_vol(cube_vertex,vol,area,v_cent,a_cent,levelset_cyl,0.0_WP,amr_ref_lvl)
+                  vf%VF(i,j,k)=vol/vf%cfg%vol(i,j,k)
+                  if (vf%VF(i,j,k).ge.VFlo.and.vf%VF(i,j,k).le.VFhi) then
+                     vf%Lbary(:,i,j,k)=v_cent
+                     vf%Gbary(:,i,j,k)=([vf%cfg%xm(i),vf%cfg%ym(j),vf%cfg%zm(k)]-vf%VF(i,j,k)*vf%Lbary(:,i,j,k))/(1.0_WP-vf%VF(i,j,k))
+                     vf%Gbary(3,i,j,k)=v_cent(3);
                   else
-                     vf%VF(i,j,k)=0.0_WP
+                     vf%Lbary(:,i,j,k)=[vf%cfg%xm(i),vf%cfg%ym(j),vf%cfg%zm(k)]
+                     vf%Gbary(:,i,j,k)=[vf%cfg%xm(i),vf%cfg%ym(j),vf%cfg%zm(k)]
                   end if
-                  vf%Lbary(:,i,j,k)=[vf%cfg%xm(i),vf%cfg%ym(j),vf%cfg%zm(k)]
-                  vf%Gbary(:,i,j,k)=[vf%cfg%xm(i),vf%cfg%ym(j),vf%cfg%zm(k)]
                end do
             end do
          end do
@@ -119,17 +140,19 @@ contains
          ! Reset moments to guarantee compatibility with interface reconstruction
          call vf%reset_volume_moments()
       end block create_and_initialize_vof
-      
-      
+
+
       ! Create a compressible two-phase flow solver
       create_and_initialize_flow_solver: block
          use mast_class, only: clipped_neumann,dirichlet,bc_scope,bcond
-         use matm_class, only: none
-         use ils_class,  only: gmres_amg,pcg_bbox
+         use ils_class,  only: pcg_bbox,pcg_amg
          use mathtools,  only: Pi
+         use parallel,   only: amRoot
          integer :: i,j,k,n
          real(WP), dimension(3) :: xyz
-         real(WP) :: gamm_l,Pref_l,gamm_g,rho_l0,rho_g0
+         real(WP) :: gamm_l,Pref_l,gamm_g,visc_l,visc_g
+         real(WP) :: xshock,vshock,relshockvel
+         real(WP) :: Grho0, GP0, Grho1, GP1, ST, Ma1, Ma, Lrho0
          type(bcond), pointer :: mybc
          ! Create material model class
          matmod=matm(cfg=cfg,name='Liquid-gas models')
@@ -145,10 +168,12 @@ contains
          ! Register flow solver variables with material models
          call matmod%register_thermoflow_variables('liquid',fs%Lrho,fs%Ui,fs%Vi,fs%Wi,fs%LrhoE,fs%LP)
          call matmod%register_thermoflow_variables('gas'   ,fs%Grho,fs%Ui,fs%Vi,fs%Wi,fs%GrhoE,fs%GP)
-         ! As a shocktube case, it is intended to be inviscid, no diffusion
-         call matmod%register_diffusion_thermo_models(viscmodel_liquid=none,viscmodel_gas=none,hdffmodel_liquid=none,hdffmodel_gas=none)
-         ! Surface tension should be set to 0, it is a 1D case
-         fs%sigma = 0.0_WP
+         ! Assign constant viscosity to each phase
+         call param_read('Liquid dynamic viscosity',visc_l)
+         call param_read('Gas dynamic viscosity',visc_g)
+         call matmod%register_diffusion_thermo_models(viscconst_gas=visc_g,viscconst_liquid=visc_l)
+         ! Read in surface tension coefficient
+         call param_read('Surface tension coefficient',fs%sigma)
          ! Configure pressure solver
          call param_read('Pressure iteration',fs%psolv%maxit)
          call param_read('Pressure tolerance',fs%psolv%rcvg)
@@ -156,30 +181,56 @@ contains
          call param_read('Implicit iteration',fs%implicit%maxit)
          call param_read('Implicit tolerance',fs%implicit%rcvg)
          ! Setup the solver
-         call fs%setup(pressure_ils=pcg_bbox,implicit_ils=gmres_amg)
+         call fs%setup(pressure_ils=pcg_bbox,implicit_ils=pcg_amg)
 
-         ! Initial conditions
-         call param_read('Liquid density',rho_l0)
-         call param_read('Gas density',rho_g0)
-         fs%Lrho = rho_l0; fs%Grho = rho_g0
+         ! Liquid density
+         call param_read('Liquid density',Lrho0)
+         fs%Lrho = Lrho0
+         ! Initially 0 velocity in y and z
          fs%Vi = 0.0_WP; fs%Wi = 0.0_WP
-         call param_read('Discontinuity location',discloc)
-         call param_read('Pre-discontinuity velocity',v0)
-         call param_read('Post-discontinuity velocity',v1)
-         call param_read('Pre-discontinuity pressure',p0)
-         call param_read('Post-discontinuity pressure',p1)
+         ! Zero face velocities as well for the sake of dirichlet boundaries
+         fs%V = 0.0_WP; fs%W = 0.0_WP
+         ! Set up initial thermo properties (0)
+         ! Default is from Meng & Colonius (2015),
+         ! which is basically the same as Igra & Takayama and Terashima & Tryggvason
+         call param_read('Pre-shock density',Grho0,default=1.204_WP)
+         call param_read('Pre-shock pressure',GP0,default=1.01325e5_WP)
+         call param_read('Mach number of shock',Ma,default=1.47_WP)
+         call param_read('Shock location',xshock)
+         ! Use shock relations to get post-shock numbers (1)
+         GP1 = GP0 * (2.0_WP*gamm_g*Ma**2 - (gamm_g-1.0_WP)) / (gamm_g+1.0_WP)
+         Grho1 = Grho0 * (Ma**2 * (gamm_g+1.0_WP) / ((gamm_g-1.0_WP)*Ma**2 + 2.0_WP))
+         ! Calculate post-shock Mach number
+         Ma1 = sqrt(((gamm_g-1.0_WP)*(Ma**2)+2.0_WP)/(2.0_WP*gamm_g*(Ma**2)-(gamm_g-1.0_WP)))
+         ! Calculate post-shock velocity
+         vshock = -Ma1 * sqrt(gamm_g*GP1/Grho1) + Ma*sqrt(gamm_g*GP0/Grho0)
+         ! Velocity at which shock moves
+         relshockvel = -Grho1*vshock/(Grho0-Grho1)
+
+         if (amRoot) then
+           print*,"===== Problem Setup Description ====="
+           print*,'Mach number', Ma
+           print*,'Pre-shock:  Density',Grho0,'Pressure',GP0
+           print*,'Post-shock: Density',Grho1,'Pressure',GP1,'Velocity',vshock
+           print*,'Shock velocity', relshockvel
+         end if
+
+         ! Initialize gas phase quantities
          do i=fs%cfg%imino_,fs%cfg%imaxo_
-            ! pressure, velocity, use matmod for energy
-            if (fs%cfg%x(i).gt.discloc) then
-               fs%Ui(i,:,:) = v1
-               fs%GrhoE(i,:,:) = matmod%EOS_energy(p1,rho_g0,v1,0.0_WP,0.0_WP,'gas')
-               fs%LrhoE(i,:,:) = matmod%EOS_energy(p1,rho_l0,v1,0.0_WP,0.0_WP,'liquid')
-            else
-               fs%Ui(i,:,:) = v0
-               fs%GrhoE(i,:,:) = matmod%EOS_energy(p0,rho_g0,v0,0.0_WP,0.0_WP,'gas')
-               fs%LrhoE(i,:,:) = matmod%EOS_energy(p0,rho_l0,v0,0.0_WP,0.0_WP,'liquid')
-            end if
+           ! pressure, velocity, use matmod for energy
+           if (fs%cfg%x(i).lt.xshock) then
+             fs%Grho(i,:,:) = Grho1
+             fs%Ui(i,:,:) = vshock
+             fs%GrhoE(i,:,:) = matmod%EOS_energy(GP1,Grho1,vshock,0.0_WP,0.0_WP,'gas')
+           else
+             fs%Grho(i,:,:) = Grho0
+             fs%Ui(i,:,:) = 0.0_WP
+             fs%GrhoE(i,:,:) = matmod%EOS_energy(GP0,Grho0,0.0_WP,0.0_WP,0.0_WP,'gas')
+           end if
          end do
+
+         ! Initialize liquid energy, with surface tension
+         fs%LrhoE = matmod%EOS_energy(GP0+fs%sigma*2.0_WP/dcyl,Lrho0,0.0_WP,0.0_WP,0.0_WP,'liquid')
 
          ! Define boundary conditions - initialized values are intended dirichlet values too, for the cell centers
          call fs%add_bcond(name= 'inflow',type=dirichlet      ,locator=left_of_domain ,face='x',dir=-1)
@@ -191,7 +242,7 @@ contains
          call fs%get_bcond('inflow',mybc)
          do n=1,mybc%itr%n_
             i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
-            fs%U(i,j,k)=v0
+            fs%U(i,j,k)=vshock
          end do
          ! Apply face BC - outflow
          bc_scope = 'velocity'
@@ -209,22 +260,13 @@ contains
          ! Set initial pressure to harmonized field based on internal energy
          fs%P = fs%PA
 
-         ! Note: conditions used in Kuhn and Desjardins (2021) are as follows
-         ! rho_l0 = 1   rho_g0 = 1e-3
-         ! discloc = 0.65
-         ! v0 = 2       v1 = 11.29375
-         ! p0 = 0.7     p1 = 0.3
-         ! (and left boundary extended in order to avoid reflection back into domain)
-
-         ! Results compared at t = 0.0095, 0.0145
-
       end block create_and_initialize_flow_solver
-      
-      
+
+
       ! Add Ensight output
       create_ensight: block
          ! Create Ensight output from cfg
-         ens_out=ensight(cfg=cfg,name='WaterAirRare')
+         ens_out=ensight(cfg=cfg,name='ShockWaterCylinder')
          ! Create event for Ensight output
          ens_evt=event(time=time,name='Ensight output')
          call param_read('Ensight output period',ens_evt%tper)
@@ -241,8 +283,8 @@ contains
          ! Output to ensight
          if (ens_evt%occurs()) call ens_out%write_data(time%t)
       end block create_ensight
-      
-      
+
+
       ! Create a monitor file
       create_monitor: block
          ! Prepare some info about fields
@@ -279,23 +321,23 @@ contains
          call cflfile%add_column(fs%CFLv_z,'Viscous zCFL')
          call cflfile%write()
       end block create_monitor
-      
-      
+
+
    end subroutine simulation_init
-   
-   
+
+
    !> Perform an NGA2 simulation - this mimicks NGA's old time integration for multiphase
    subroutine simulation_run
       implicit none
-      
+
       ! Perform time integration
       do while (.not.time%done())
-         
+
          ! Increment time
          call fs%get_cfl(time%dt,time%cfl)
          call time%adjust_dt()
          call time%increment()
-         
+
          ! Reinitialize phase pressure by syncing it with conserved phase energy
          call fs%reinit_phase_pressure(vf,matmod)
          fs%Uiold=fs%Ui; fs%Viold=fs%Vi; fs%Wiold=fs%Wi
@@ -307,7 +349,7 @@ contains
 
          ! Remember old interface, including VF and barycenters
          call vf%copy_interface_to_old()
-         
+
          ! Create in-cell reconstruction
          call fs%flow_reconstruct(vf)
 
@@ -325,14 +367,14 @@ contains
 
          ! Perform sub-iterations
          do while (time%it.le.time%itmax)
-            
+
             ! Predictor step, involving advection and pressure terms
             call fs%advection_step(time%dt,vf,matmod)
 
             ! Insert viscous step here, or possibly incorporate into predictor above
-
+            call fs%diffusion_src_explicit_step(time%dt,vf,matmod)
             ! Insert sponge step here
-            
+
             ! Prepare pressure projection
             call fs%pressureproj_prepare(time%dt,vf,matmod)
             ! Initialize and solve Helmholtz equation
@@ -343,41 +385,41 @@ contains
             ! Perform corrector step using solution
             fs%P=fs%P+fs%psolv%sol
             call fs%pressureproj_correct(time%dt,vf,fs%psolv%sol)
-            
+
             ! Increment sub-iteration counter
             time%it=time%it+1
-            
+
          end do
 
          ! Pressure relaxation
          call fs%pressure_relax(vf,matmod)
-         
+
          ! Output to ensight
          if (ens_evt%occurs()) call ens_out%write_data(time%t)
-         
+
          ! Perform and output monitoring
          call fs%get_max()
          call vf%get_max()
          call mfile%write()
          call cflfile%write()
-         
+
       end do
-      
+
    end subroutine simulation_run
-   
-   
+
+
    !> Finalize the NGA2 simulation
    subroutine simulation_final
       implicit none
-      
+
       ! Get rid of all objects - need destructors
       ! monitor
       ! ensight
       ! bcond
       ! timetracker
-      
+
       ! Deallocate work arrays - none
-      
+
    end subroutine simulation_final
-   
+
 end module simulation

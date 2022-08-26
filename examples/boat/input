@@ -1,0 +1,43 @@
+# Parallelization
+Partition :	1 1 4
+
+# Mesh definition
+Lx :	6.4
+Ly :	1.6
+Lz :	3.2
+nx :	64
+ny :	16
+nz :	32
+
+# Boat definition
+Boat length :   0.3
+Boat width :    0.2
+Boat height :   0.2
+Boat location : 1
+
+# Flow definition
+Inflow velocity : 3
+
+# Fluid properties
+Gravity :                     0 -9.81 0
+Liquid dynamic viscosity :    1.137e-3
+Gas dynamic viscosity :       1.780e-5
+Liquid density :              1000
+Gas density :                 1.226
+Surface tension coefficient : 0.0728
+Static contact angle :        70
+
+# Time integration
+Max timestep size : 2e-2
+Max cfl number :    0.9
+
+# Pressure solver
+Pressure tolerance : 1e-6
+Pressure iteration : 100
+
+# Implicit velocity solver
+Implicit tolerance : 1e-6
+Implicit iteration : 100
+
+# Ensight output
+Ensight output period : 1e-1

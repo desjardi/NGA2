@@ -31,8 +31,8 @@ module simulation
    
    !> Problem definition
    real(WP) :: Reg,Weg,r_visc,r_rho,r_vel,delta_l
-   integer :: nwave
-   real(WP), dimension(:), allocatable :: wnumb,wshift,wamp
+   integer :: nwaveX,nwaveZ
+   real(WP), dimension(:), allocatable :: wnumbX,wshiftX,wampX,wnumbZ,wshiftZ,wampZ
    
 contains
    
@@ -43,10 +43,12 @@ contains
       real(WP), dimension(3),intent(in) :: xyz
       real(WP), intent(in) :: t
       real(WP) :: G
-      integer :: n
+      integer :: nX,nZ
       G=-xyz(2)
-      do n=1,nwave
-         G=G+wamp(n)*cos(wnumb(n)*(xyz(1)-wshift(n)))
+      do nX=1,nwaveX
+         do nZ=1,nwaveZ
+            G=G+wampX(nX)*cos(wnumbX(nX)*(xyz(1)-wshiftX(nX)))*wampZ(nZ)*cos(wnumbZ(nZ)*(xyz(3)-wshiftZ(nZ)))
+         end do
       end do
    end function levelset_wavy
    
@@ -117,6 +119,7 @@ contains
          time=timetracker(amRoot=cfg%amRoot)
          call param_read('Max timestep size',time%dtmax)
          call param_read('Max cfl number',time%cflmax)
+         call param_read('Max time',time%tmax)
          time%dt=time%dtmax
          time%itmax=2
       end block initialize_timetracker
@@ -138,16 +141,26 @@ contains
          ! Create a VOF solver
          vf=vfs(cfg=cfg,reconstruction_method=lvira,name='VOF')
          ! Prepare initialize interface parameters
-         nwave=6
-         allocate(wnumb(nwave),wshift(nwave),wamp(nwave))
-         wamp=0.1_WP*cfg%min_meshsize
-         wnumb=[3.0_WP,4.0_WP,5.0_WP,6.0_WP,7.0_WP,8.0_WP]*twoPi/cfg%xL
+         nwaveX=6
+         allocate(wnumbX(nwaveX),wshiftX(nwaveX),wampX(nwaveX))
+         wampX=0.3_WP/real(nwaveX,WP)
+         wnumbX=[3.0_WP,4.0_WP,5.0_WP,6.0_WP,7.0_WP,8.0_WP]*twoPi/cfg%xL
          if (cfg%amRoot) then
-            do n=1,nwave
-               wshift(n)=random_uniform(lo=-0.5_WP*cfg%xL,hi=+0.5_WP*cfg%xL)
+            do n=1,nwaveX
+               wshiftX(n)=random_uniform(lo=-0.5_WP*cfg%xL,hi=+0.5_WP*cfg%xL)
             end do
          end if
-         call MPI_BCAST(wshift,nwave,MPI_REAL_WP,0,cfg%comm,ierr)
+         call MPI_BCAST(wshiftX,nwaveX,MPI_REAL_WP,0,cfg%comm,ierr)
+         nwaveZ=6
+         allocate(wnumbZ(nwaveZ),wshiftZ(nwaveZ),wampZ(nwaveZ))
+         wampZ=0.3_WP/real(nwaveZ,WP)
+         wnumbZ=[3.0_WP,4.0_WP,5.0_WP,6.0_WP,7.0_WP,8.0_WP]*twoPi/cfg%zL
+         if (cfg%amRoot) then
+            do n=1,nwaveZ
+               wshiftZ(n)=random_uniform(lo=-0.5_WP*cfg%zL,hi=+0.5_WP*cfg%zL)
+            end do
+         end if
+         call MPI_BCAST(wshiftZ,nwaveZ,MPI_REAL_WP,0,cfg%comm,ierr)
          ! Create the wavy interface
          do k=vf%cfg%kmino_,vf%cfg%kmaxo_
             do j=vf%cfg%jmino_,vf%cfg%jmaxo_
