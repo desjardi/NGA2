@@ -11,14 +11,10 @@ module matm_class
    public :: matm
    
    ! Parameters for viscosity, and heat diffusion models
-   integer, parameter, public :: none      =0        !< Sets the constant to 0 (for inviscid, isothermal, etc.). Careful, overwrites input values
-   integer, parameter, public :: constant  =1        !< Assumes default value, available for all types, overwritten by input
-   integer, parameter, public :: visc_water=2        !< Empirical model for viscosity of water
-   integer, parameter, public :: hdff_water=3        !<     "       "    "  heat diffusivity (kappa) of water
-   integer, parameter, public :: spht_water=4        !<     "       "    "  specific heat (cv) of water
-   integer, parameter, public :: visc_air  =5        !< Empirical model for viscosity of air
-   integer, parameter, public :: hdff_air  =6        !<     "       "    "  heat diffusivity (kappa) of air
-   integer, parameter, public :: spht_air  =7        !<     "       "    "  specific heat (cv) of air
+   integer, parameter, public :: none     =0  !< Sets the constant to 0 (for inviscid, isothermal, etc.). Careful, overwrites input values
+   integer, parameter, public :: constant =1  !< Assumes default value, available for all types, overwritten by input
+   integer, parameter, public :: water    =2  !< Empirical models for water (mu, kappa, cv)
+   integer, parameter, public :: air      =3  !< Empirical models for air (mu, kappa, cv)
    ! More can be added for other materials, alongside functions that feature models
    
    !> Material modeling type intended for two-phase, liquid-gas flows
@@ -69,6 +65,7 @@ module matm_class
       procedure :: EOS_energy                             !< Calculates phase total energy from pressure and kinetic energy
       procedure :: EOS_temp                               !< Calculates phase temperature from pressure directly
       procedure :: EOS_density                            !< Calculates phase density from pressure and temperature directly
+      procedure :: EOS_pressure                           !< Calculates phase pressure from density and temperature directly
       procedure :: EOS_all                                !< Calculates vol-avg pressure for entire domain from conserved variables
 
       procedure :: register_idealgas                      !< EOS available for gas-like fluids
@@ -210,7 +207,7 @@ contains
        this%M_mu_l = viscmodel_liquid
        ! Check allowed values
        select case (this%M_mu_l)
-       case (none,constant,visc_water); ! do nothing
+       case (none,constant,water); ! do nothing
        case default; call die('[matm register_diffusion_thermo_models] Unknown liquid viscosity model')
        end select
      end if
@@ -218,7 +215,7 @@ contains
        this%M_mu_g = viscmodel_gas
        ! Check allowed values
        select case (this%M_mu_g)
-       case (none,constant,visc_air); ! do nothing
+       case (none,constant,air); ! do nothing
        case default; call die('[matm register_diffusion_thermo_models] Unknown gas viscosity model')
        end select
      end if
@@ -226,7 +223,7 @@ contains
        this%M_kappa_l = hdffmodel_liquid
        ! Check allowed values
        select case (this%M_kappa_l)
-       case (none,constant,hdff_water); ! do nothing
+       case (none,constant,water); ! do nothing
        case default; call die('[matm register_diffusion_thermo_models] Unknown liquid heat diffusivity model')
        end select
      end if
@@ -234,7 +231,7 @@ contains
        this%M_kappa_g = hdffmodel_gas
        ! Check allowed values
        select case (this%M_kappa_g)
-       case (none,constant,hdff_air); ! do nothing
+       case (none,constant,air); ! do nothing
        case default; call die('[matm register_diffusion_thermo_models] Unknown gas heat diffusivity model')
        end select
      end if
@@ -242,7 +239,7 @@ contains
        this%M_cv_l = sphtmodel_liquid
        ! Check allowed values
        select case (this%M_cv_l)
-       case (constant,spht_water); ! do nothing - never zero, so none is not allowed
+       case (constant,water); ! do nothing - never zero, so none is not allowed
        case default; call die('[matm register_diffusion_thermo_models] Unknown liquid specific heat model')
        end select
      end if
@@ -250,7 +247,7 @@ contains
        this%M_cv_g = sphtmodel_gas
        ! Check allowed values
        select case (this%M_cv_g)
-       case (constant,spht_air); ! do nothing - never zero, so none is not allowed
+       case (constant,air); ! do nothing - never zero, so none is not allowed
        case default; call die('[matm register_diffusion_thermo_models] Unknown gas specific heat model')
        end select
      end if
@@ -298,7 +295,7 @@ contains
      select case(this%M_mu_l)
      case(none,constant)
        mu = this%mu_l0
-     case(visc_water)
+     case(water)
        mu = this%viscosity_water(T)
      end select
      
@@ -314,7 +311,7 @@ contains
      select case(this%M_mu_g)
      case(none,constant)
        mu = this%mu_g0
-     case(visc_water)
+     case(air)
        mu = this%viscosity_air(T)
      end select
      
@@ -330,7 +327,7 @@ contains
      select case(this%M_kappa_l)
      case(none,constant)
        kappa = this%kappa_l0
-     case(hdff_water)
+     case(water)
        kappa = this%therm_cond_water(T)
      end select
      
@@ -346,7 +343,7 @@ contains
      select case(this%M_kappa_g)
      case(none,constant)
        kappa = this%kappa_g0
-     case(hdff_air)
+     case(air)
        kappa = this%therm_cond_air(T)
      end select
      
@@ -362,7 +359,7 @@ contains
      select case(this%M_cv_l)
      case(constant)
        cv = this%cv_l0
-     case(spht_water)
+     case(water)
        cv = this%spec_heat_water(T)
      end select
      
@@ -378,7 +375,7 @@ contains
      select case(this%M_cv_g)
      case(constant)
        cv = this%cv_g0
-     case(spht_air)
+     case(air)
        cv = this%spec_heat_air(T)
      end select
      
@@ -577,6 +574,23 @@ contains
 
      return
    end function EOS_temp
+   
+   function EOS_pressure(this,temp,dens,cv,phase) result(pres)
+     implicit none
+     class(matm), intent(inout) :: this
+     real(WP), intent(in) :: temp,dens,cv
+     character(len=*),intent(in) :: phase
+     real(WP) :: pres
+
+     select case(trim(adjustl(phase)))
+     case('liquid')
+        pres = temp*(dens*cv)*(this%gamm_l-1.0_WP)/(1.0_WP-dens*this%b_l)-this%Pref_l
+     case('gas')
+        pres = temp*(dens*cv)*(this%gamm_g-1.0_WP)/(1.0_WP-dens*this%b_g)-this%Pref_g
+     end select
+
+     return
+   end function EOS_pressure
    
    function EOS_density(this,pres,temp,cv,phase) result(dens)
      implicit none
