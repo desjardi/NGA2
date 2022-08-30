@@ -86,7 +86,7 @@ contains
       ! Initialize our VOF solver and field
       create_and_initialize_vof: block
          use mms_geom, only: cube_refine_vol
-         use vfs_class, only: r2p,lvira,elvira,VFhi,VFlo,neumann
+         use vfs_class, only: r2p,lvira,elvira,VFhi,VFlo
          integer :: i,j,k,n,si,sj,sk
          real(WP), dimension(3,8) :: cube_vertex
          real(WP), dimension(3) :: v_cent,a_cent
@@ -124,10 +124,7 @@ contains
                end do
             end do
          end do
-         ! Boundary conditions on VF
-         ! (inflow condition is unnecessary, because it is
-         !  default to set mask = 2 in boundaries for VF.)
-         call vf%add_bcond(name='outflow',type=neumann  ,locator=right_of_domain,dir='x+')
+         ! Boundary conditions on VF are built into the mast solver
          ! Update the band
          call vf%update_band()
          ! Perform interface reconstruction from VOF field
@@ -387,18 +384,8 @@ contains
             ! Predictor step, involving advection and pressure terms
             call fs%advection_step(time%dt,vf,matmod)
             
-            if (time%n.eq.1481) then
-              call fs%get_max()
-              call vf%get_max()
-              call mfile%write()
-              call cvgfile%write()
-              call ens_out%write_data(time%t)
-              call die('requested end')
-            end if
-
-            ! Insert viscous step here, or possibly incorporate into predictor above
+            ! Viscous step
             call fs%diffusion_src_explicit_step(time%dt,vf,matmod)
-            ! Insert sponge step here
 
             ! Prepare pressure projection
             call fs%pressureproj_prepare(time%dt,vf,matmod)
