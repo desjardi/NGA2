@@ -18,7 +18,9 @@ module scalar_class
    integer, parameter, public :: neumann=3           !< Zero normal gradient
    
    ! List of available advection schemes for scalar transport
+   integer, parameter, public :: upwind=0            !< First order upwind scheme
    integer, parameter, public :: quick=1             !< Quick scheme
+   integer, parameter, public :: bquick=2            !< BQuick scheme
    
    
    !> Boundary conditions for the incompressible solver
@@ -65,12 +67,16 @@ module scalar_class
       integer :: nst                                      !< Scheme order (and elemental stencil size)
       integer :: stp1,stp2                                !< Plus interpolation stencil extent for scalar advection
       integer :: stm1,stm2                                !< Minus interpolation stencil extent for scalar advection
-      real(WP), dimension(:,:,:,:), allocatable :: itpsc_xp,itpsc_yp,itpsc_zp   !< Plus interpolation for SC
-      real(WP), dimension(:,:,:,:), allocatable :: itpsc_xm,itpsc_ym,itpsc_zm   !< Minus interpolation for SC
-      real(WP), dimension(:,:,:,:), allocatable :: divsc_x ,divsc_y ,divsc_z    !< Divergence for SC
-      real(WP), dimension(:,:,:,:), allocatable :: grdsc_x ,grdsc_y ,grdsc_z    !< Scalar gradient for SC
-      real(WP), dimension(:,:,:,:), allocatable :: itp_x   ,itp_y   ,itp_z      !< Second order interpolation for SC diffusivity
+      real(WP), dimension(:,:,:,:), allocatable :: itp_xp,itp_yp,itp_zp  !< Plus interpolation for SC
+      real(WP), dimension(:,:,:,:), allocatable :: itp_xm,itp_ym,itp_zm  !< Minus interpolation for SC
+      real(WP), dimension(:,:,:,:), allocatable :: div_x ,div_y ,div_z   !< Divergence for SC
+      real(WP), dimension(:,:,:,:), allocatable :: grd_x ,grd_y ,grd_z   !< Scalar gradient for SC
+      real(WP), dimension(:,:,:,:), allocatable :: itp_x ,itp_y ,itp_z   !< Second order interpolation for SC diffusivity
       
+      ! Bquick requires additional storage
+	  real(WP), dimension(:,:,:,:), allocatable :: bitp_xp,bitp_yp,bitp_zp  !< Plus interpolation for SC  - backup
+      real(WP), dimension(:,:,:,:), allocatable :: bitp_xm,bitp_ym,bitp_zm  !< Minus interpolation for SC - backup
+
       ! Masking info for metric modification
       integer, dimension(:,:,:), allocatable :: mask      !< Integer array used for modifying SC metrics
       
@@ -85,6 +91,8 @@ module scalar_class
       procedure :: apply_bcond                            !< Apply all boundary conditions
       procedure :: init_metrics                           !< Initialize metrics
       procedure :: adjust_metrics                         !< Adjust metrics
+	  procedure :: metric_reset                           !< Reset adaptive metrics like bquick
+	  procedure :: metric_adjust                          !< Adjust adaptive metrics like bquick
       procedure :: get_drhoSCdt                           !< Calculate drhoSC/dt
       procedure :: get_max                                !< Calculate maximum field values
       procedure :: get_int                                !< Calculate integral field values
@@ -128,6 +136,13 @@ contains
       ! Prepare advection scheme
       self%scheme=scheme
       select case (self%scheme)
+	  case (upwind)
+		 ! Check current overlap
+		 if (self%cfg%no.lt.1) call die('[scalar constructor] Scalar transport scheme requires larger overlap')
+		 ! Set interpolation stencil sizes
+		 self%nst=1
+		 self%stp1=-(self%nst+1)/2; self%stp2=self%nst+self%stp1-1
+		 self%stm1=-(self%nst-1)/2; self%stm2=self%nst+self%stm1-1
       case (quick)
          ! Check current overlap
          if (self%cfg%no.lt.2) call die('[scalar constructor] Scalar transport scheme requires larger overlap')
@@ -135,6 +150,13 @@ contains
          self%nst=3
          self%stp1=-(self%nst+1)/2; self%stp2=self%nst+self%stp1-1
          self%stm1=-(self%nst-1)/2; self%stm2=self%nst+self%stm1-1
+	  case (bquick)
+	     ! Check current overlap
+	     if (self%cfg%no.lt.2) call die('[scalar constructor] Scalar transport scheme requires larger overlap')
+	     ! Set interpolation stencil sizes
+	     self%nst=3
+	     self%stp1=-(self%nst+1)/2; self%stp2=self%nst+self%stp1-1
+	     self%stm1=-(self%nst-1)/2; self%stm2=self%nst+self%stm1-1
       case default
          call die('[scalar constructor] Unknown scalar transport scheme selected')
       end select
@@ -194,58 +216,62 @@ contains
       end do
       
       ! Allocate finite difference scalar interpolation coefficients
-      allocate(this%itpsc_xp(this%stp1:this%stp2,this%cfg%imin_:this%cfg%imax_+1,this%cfg%jmin_:this%cfg%jmax_+1,this%cfg%kmin_:this%cfg%kmax_+1)) !< X-face-centered
-      allocate(this%itpsc_xm(this%stm1:this%stm2,this%cfg%imin_:this%cfg%imax_+1,this%cfg%jmin_:this%cfg%jmax_+1,this%cfg%kmin_:this%cfg%kmax_+1)) !< X-face-centered
-      allocate(this%itpsc_yp(this%stp1:this%stp2,this%cfg%imin_:this%cfg%imax_+1,this%cfg%jmin_:this%cfg%jmax_+1,this%cfg%kmin_:this%cfg%kmax_+1)) !< Y-face-centered
-      allocate(this%itpsc_ym(this%stm1:this%stm2,this%cfg%imin_:this%cfg%imax_+1,this%cfg%jmin_:this%cfg%jmax_+1,this%cfg%kmin_:this%cfg%kmax_+1)) !< Y-face-centered
-      allocate(this%itpsc_zp(this%stp1:this%stp2,this%cfg%imin_:this%cfg%imax_+1,this%cfg%jmin_:this%cfg%jmax_+1,this%cfg%kmin_:this%cfg%kmax_+1)) !< Z-face-centered
-      allocate(this%itpsc_zm(this%stm1:this%stm2,this%cfg%imin_:this%cfg%imax_+1,this%cfg%jmin_:this%cfg%jmax_+1,this%cfg%kmin_:this%cfg%kmax_+1)) !< Z-face-centered
+      allocate(this%itp_xp(this%stp1:this%stp2,this%cfg%imin_:this%cfg%imax_+1,this%cfg%jmin_:this%cfg%jmax_+1,this%cfg%kmin_:this%cfg%kmax_+1)) !< X-face-centered
+      allocate(this%itp_xm(this%stm1:this%stm2,this%cfg%imin_:this%cfg%imax_+1,this%cfg%jmin_:this%cfg%jmax_+1,this%cfg%kmin_:this%cfg%kmax_+1)) !< X-face-centered
+      allocate(this%itp_yp(this%stp1:this%stp2,this%cfg%imin_:this%cfg%imax_+1,this%cfg%jmin_:this%cfg%jmax_+1,this%cfg%kmin_:this%cfg%kmax_+1)) !< Y-face-centered
+      allocate(this%itp_ym(this%stm1:this%stm2,this%cfg%imin_:this%cfg%imax_+1,this%cfg%jmin_:this%cfg%jmax_+1,this%cfg%kmin_:this%cfg%kmax_+1)) !< Y-face-centered
+      allocate(this%itp_zp(this%stp1:this%stp2,this%cfg%imin_:this%cfg%imax_+1,this%cfg%jmin_:this%cfg%jmax_+1,this%cfg%kmin_:this%cfg%kmax_+1)) !< Z-face-centered
+      allocate(this%itp_zm(this%stm1:this%stm2,this%cfg%imin_:this%cfg%imax_+1,this%cfg%jmin_:this%cfg%jmax_+1,this%cfg%kmin_:this%cfg%kmax_+1)) !< Z-face-centered
       ! Create scalar interpolation coefficients to cell faces
       select case (this%scheme)
-      case (quick)
+	  case (upwind)
+		 this%itp_xp=1.0_WP; this%itp_xm=1.0_WP
+		 this%itp_yp=1.0_WP; this%itp_ym=1.0_WP
+		 this%itp_zp=1.0_WP; this%itp_zm=1.0_WP
+      case (quick,bquick)
          do k=this%cfg%kmin_,this%cfg%kmax_+1
             do j=this%cfg%jmin_,this%cfg%jmax_+1
                do i=this%cfg%imin_,this%cfg%imax_+1
                   ! Interpolation to x-face
-                  call fv_itp_build(n=3,x=this%cfg%x(i+this%stp1:i+this%stp2+1),xp=this%cfg%x(i),coeff=this%itpsc_xp(:,i,j,k))
-                  call fv_itp_build(n=3,x=this%cfg%x(i+this%stm1:i+this%stm2+1),xp=this%cfg%x(i),coeff=this%itpsc_xm(:,i,j,k))
+                  call fv_itp_build(n=3,x=this%cfg%x(i+this%stp1:i+this%stp2+1),xp=this%cfg%x(i),coeff=this%itp_xp(:,i,j,k))
+                  call fv_itp_build(n=3,x=this%cfg%x(i+this%stm1:i+this%stm2+1),xp=this%cfg%x(i),coeff=this%itp_xm(:,i,j,k))
                   ! Interpolation to y-face
-                  call fv_itp_build(n=3,x=this%cfg%y(j+this%stp1:j+this%stp2+1),xp=this%cfg%y(j),coeff=this%itpsc_yp(:,i,j,k))
-                  call fv_itp_build(n=3,x=this%cfg%y(j+this%stm1:j+this%stm2+1),xp=this%cfg%y(j),coeff=this%itpsc_ym(:,i,j,k))
+                  call fv_itp_build(n=3,x=this%cfg%y(j+this%stp1:j+this%stp2+1),xp=this%cfg%y(j),coeff=this%itp_yp(:,i,j,k))
+                  call fv_itp_build(n=3,x=this%cfg%y(j+this%stm1:j+this%stm2+1),xp=this%cfg%y(j),coeff=this%itp_ym(:,i,j,k))
                   ! Interpolation to z-face
-                  call fv_itp_build(n=3,x=this%cfg%z(k+this%stp1:k+this%stp2+1),xp=this%cfg%z(k),coeff=this%itpsc_zp(:,i,j,k))
-                  call fv_itp_build(n=3,x=this%cfg%z(k+this%stm1:k+this%stm2+1),xp=this%cfg%z(k),coeff=this%itpsc_zm(:,i,j,k))
+                  call fv_itp_build(n=3,x=this%cfg%z(k+this%stp1:k+this%stp2+1),xp=this%cfg%z(k),coeff=this%itp_zp(:,i,j,k))
+                  call fv_itp_build(n=3,x=this%cfg%z(k+this%stm1:k+this%stm2+1),xp=this%cfg%z(k),coeff=this%itp_zm(:,i,j,k))
                end do
             end do
          end do
       end select
       
       ! Allocate finite volume divergence operators
-      allocate(this%divsc_x(0:+1,this%cfg%imin_:this%cfg%imax_,this%cfg%jmin_:this%cfg%jmax_,this%cfg%kmin_:this%cfg%kmax_)) !< Cell-centered
-      allocate(this%divsc_y(0:+1,this%cfg%imin_:this%cfg%imax_,this%cfg%jmin_:this%cfg%jmax_,this%cfg%kmin_:this%cfg%kmax_)) !< Cell-centered
-      allocate(this%divsc_z(0:+1,this%cfg%imin_:this%cfg%imax_,this%cfg%jmin_:this%cfg%jmax_,this%cfg%kmin_:this%cfg%kmax_)) !< Cell-centered
+      allocate(this%div_x(0:+1,this%cfg%imin_:this%cfg%imax_,this%cfg%jmin_:this%cfg%jmax_,this%cfg%kmin_:this%cfg%kmax_)) !< Cell-centered
+      allocate(this%div_y(0:+1,this%cfg%imin_:this%cfg%imax_,this%cfg%jmin_:this%cfg%jmax_,this%cfg%kmin_:this%cfg%kmax_)) !< Cell-centered
+      allocate(this%div_z(0:+1,this%cfg%imin_:this%cfg%imax_,this%cfg%jmin_:this%cfg%jmax_,this%cfg%kmin_:this%cfg%kmax_)) !< Cell-centered
       ! Create divergence operator to cell center [xm,ym,zm]
       do k=this%cfg%kmin_,this%cfg%kmax_
          do j=this%cfg%jmin_,this%cfg%jmax_
             do i=this%cfg%imin_,this%cfg%imax_
-               this%divsc_x(:,i,j,k)=this%cfg%dxi(i)*[-1.0_WP,+1.0_WP] !< FV divergence from [x ,ym,zm]
-               this%divsc_y(:,i,j,k)=this%cfg%dyi(j)*[-1.0_WP,+1.0_WP] !< FV divergence from [xm,y ,zm]
-               this%divsc_z(:,i,j,k)=this%cfg%dzi(k)*[-1.0_WP,+1.0_WP] !< FV divergence from [xm,ym,z ]
+               this%div_x(:,i,j,k)=this%cfg%dxi(i)*[-1.0_WP,+1.0_WP] !< FV divergence from [x ,ym,zm]
+               this%div_y(:,i,j,k)=this%cfg%dyi(j)*[-1.0_WP,+1.0_WP] !< FV divergence from [xm,y ,zm]
+               this%div_z(:,i,j,k)=this%cfg%dzi(k)*[-1.0_WP,+1.0_WP] !< FV divergence from [xm,ym,z ]
             end do
          end do
       end do
       
       ! Allocate finite difference velocity gradient operators
-      allocate(this%grdsc_x(-1:0,this%cfg%imin_:this%cfg%imax_+1,this%cfg%jmin_:this%cfg%jmax_+1,this%cfg%kmin_:this%cfg%kmax_+1)) !< X-face-centered
-      allocate(this%grdsc_y(-1:0,this%cfg%imin_:this%cfg%imax_+1,this%cfg%jmin_:this%cfg%jmax_+1,this%cfg%kmin_:this%cfg%kmax_+1)) !< Y-face-centered
-      allocate(this%grdsc_z(-1:0,this%cfg%imin_:this%cfg%imax_+1,this%cfg%jmin_:this%cfg%jmax_+1,this%cfg%kmin_:this%cfg%kmax_+1)) !< Z-face-centered
+      allocate(this%grd_x(-1:0,this%cfg%imin_:this%cfg%imax_+1,this%cfg%jmin_:this%cfg%jmax_+1,this%cfg%kmin_:this%cfg%kmax_+1)) !< X-face-centered
+      allocate(this%grd_y(-1:0,this%cfg%imin_:this%cfg%imax_+1,this%cfg%jmin_:this%cfg%jmax_+1,this%cfg%kmin_:this%cfg%kmax_+1)) !< Y-face-centered
+      allocate(this%grd_z(-1:0,this%cfg%imin_:this%cfg%imax_+1,this%cfg%jmin_:this%cfg%jmax_+1,this%cfg%kmin_:this%cfg%kmax_+1)) !< Z-face-centered
       ! Create gradient coefficients to cell faces
       do k=this%cfg%kmin_,this%cfg%kmax_+1
          do j=this%cfg%jmin_,this%cfg%jmax_+1
             do i=this%cfg%imin_,this%cfg%imax_+1
-               this%grdsc_x(:,i,j,k)=this%cfg%dxmi(i)*[-1.0_WP,+1.0_WP] !< FD gradient of SC in x from [xm,ym,zm] to [x,ym,zm]
-               this%grdsc_y(:,i,j,k)=this%cfg%dymi(j)*[-1.0_WP,+1.0_WP] !< FD gradient of SC in y from [xm,ym,zm] to [xm,y,zm]
-               this%grdsc_z(:,i,j,k)=this%cfg%dzmi(k)*[-1.0_WP,+1.0_WP] !< FD gradient of SC in z from [xm,ym,zm] to [xm,ym,z]
+               this%grd_x(:,i,j,k)=this%cfg%dxmi(i)*[-1.0_WP,+1.0_WP] !< FD gradient of SC in x from [xm,ym,zm] to [x,ym,zm]
+               this%grd_y(:,i,j,k)=this%cfg%dymi(j)*[-1.0_WP,+1.0_WP] !< FD gradient of SC in y from [xm,ym,zm] to [xm,y,zm]
+               this%grd_z(:,i,j,k)=this%cfg%dzmi(k)*[-1.0_WP,+1.0_WP] !< FD gradient of SC in z from [xm,ym,zm] to [xm,ym,z]
             end do
          end do
       end do
@@ -285,30 +311,30 @@ contains
             do i=this%cfg%imin_,this%cfg%imax_+1
                ! X face
                if (this%mask(i-1,j,k).eq.2) then
-                  this%itpsc_xm(:,i,j,k)=0.0_WP; this%itpsc_xm(-1,i,j,k)=1.0_WP
-                  this%itpsc_xp(:,i,j,k)=0.0_WP; this%itpsc_xp(-1,i,j,k)=1.0_WP
+                  this%itp_xm(:,i,j,k)=0.0_WP; this%itp_xm(-1,i,j,k)=1.0_WP
+                  this%itp_xp(:,i,j,k)=0.0_WP; this%itp_xp(-1,i,j,k)=1.0_WP
                end if
                if (this%mask(i  ,j,k).eq.2) then
-                  this%itpsc_xm(:,i,j,k)=0.0_WP; this%itpsc_xm( 0,i,j,k)=1.0_WP
-                  this%itpsc_xp(:,i,j,k)=0.0_WP; this%itpsc_xp( 0,i,j,k)=1.0_WP
+                  this%itp_xm(:,i,j,k)=0.0_WP; this%itp_xm( 0,i,j,k)=1.0_WP
+                  this%itp_xp(:,i,j,k)=0.0_WP; this%itp_xp( 0,i,j,k)=1.0_WP
                end if
                ! Y face
                if (this%mask(i,j-1,k).eq.2) then
-                  this%itpsc_ym(:,i,j,k)=0.0_WP; this%itpsc_ym(-1,i,j,k)=1.0_WP
-                  this%itpsc_yp(:,i,j,k)=0.0_WP; this%itpsc_yp(-1,i,j,k)=1.0_WP
+                  this%itp_ym(:,i,j,k)=0.0_WP; this%itp_ym(-1,i,j,k)=1.0_WP
+                  this%itp_yp(:,i,j,k)=0.0_WP; this%itp_yp(-1,i,j,k)=1.0_WP
                end if
                if (this%mask(i,j  ,k).eq.2) then
-                  this%itpsc_ym(:,i,j,k)=0.0_WP; this%itpsc_ym( 0,i,j,k)=1.0_WP
-                  this%itpsc_yp(:,i,j,k)=0.0_WP; this%itpsc_yp( 0,i,j,k)=1.0_WP
+                  this%itp_ym(:,i,j,k)=0.0_WP; this%itp_ym( 0,i,j,k)=1.0_WP
+                  this%itp_yp(:,i,j,k)=0.0_WP; this%itp_yp( 0,i,j,k)=1.0_WP
                end if
                ! Z face
                if (this%mask(i,j,k-1).eq.2) then
-                  this%itpsc_zm(:,i,j,k)=0.0_WP; this%itpsc_zm(-1,i,j,k)=1.0_WP
-                  this%itpsc_zp(:,i,j,k)=0.0_WP; this%itpsc_zp(-1,i,j,k)=1.0_WP
+                  this%itp_zm(:,i,j,k)=0.0_WP; this%itp_zm(-1,i,j,k)=1.0_WP
+                  this%itp_zp(:,i,j,k)=0.0_WP; this%itp_zp(-1,i,j,k)=1.0_WP
                end if
                if (this%mask(i,j,k  ).eq.2) then
-                  this%itpsc_zm(:,i,j,k)=0.0_WP; this%itpsc_zm( 0,i,j,k)=1.0_WP
-                  this%itpsc_zp(:,i,j,k)=0.0_WP; this%itpsc_zp( 0,i,j,k)=1.0_WP
+                  this%itp_zm(:,i,j,k)=0.0_WP; this%itp_zm( 0,i,j,k)=1.0_WP
+                  this%itp_zp(:,i,j,k)=0.0_WP; this%itp_zp( 0,i,j,k)=1.0_WP
                end if
             end do
          end do
@@ -319,9 +345,9 @@ contains
          do j=this%cfg%jmin_,this%cfg%jmax_
             do i=this%cfg%imin_,this%cfg%imax_
                if (this%mask(i,j,k).gt.0) then
-                  this%divsc_x(:,i,j,k)=0.0_WP
-                  this%divsc_y(:,i,j,k)=0.0_WP
-                  this%divsc_z(:,i,j,k)=0.0_WP
+                  this%div_x(:,i,j,k)=0.0_WP
+                  this%div_y(:,i,j,k)=0.0_WP
+                  this%div_z(:,i,j,k)=0.0_WP
                end if
             end do
          end do
@@ -331,25 +357,25 @@ contains
       do k=this%cfg%kmin_,this%cfg%kmax_+1
          do j=this%cfg%jmin_,this%cfg%jmax_+1
             do i=this%cfg%imin_,this%cfg%imax_+1
-               if (this%mask(i,j,k).eq.1.or.this%mask(i-1,j,k).eq.1) this%grdsc_x(:,i,j,k)=0.0_WP     !< FD gradient in x of SC
-               if (this%mask(i,j,k).eq.1.or.this%mask(i,j-1,k).eq.1) this%grdsc_y(:,i,j,k)=0.0_WP     !< FD gradient in y of SC
-               if (this%mask(i,j,k).eq.1.or.this%mask(i,j,k-1).eq.1) this%grdsc_z(:,i,j,k)=0.0_WP     !< FD gradient in z of SC
+               if (this%mask(i,j,k).eq.1.or.this%mask(i-1,j,k).eq.1) this%grd_x(:,i,j,k)=0.0_WP     !< FD gradient in x of SC
+               if (this%mask(i,j,k).eq.1.or.this%mask(i,j-1,k).eq.1) this%grd_y(:,i,j,k)=0.0_WP     !< FD gradient in y of SC
+               if (this%mask(i,j,k).eq.1.or.this%mask(i,j,k-1).eq.1) this%grd_z(:,i,j,k)=0.0_WP     !< FD gradient in z of SC
             end do
          end do
       end do
       
       ! Adjust metrics to account for lower dimensionality
       if (this%cfg%nx.eq.1) then
-         this%divsc_x=0.0_WP
-         this%grdsc_x=0.0_WP
+         this%div_x=0.0_WP
+         this%grd_x=0.0_WP
       end if
       if (this%cfg%ny.eq.1) then
-         this%divsc_y=0.0_WP
-         this%grdsc_y=0.0_WP
+         this%div_y=0.0_WP
+         this%grd_y=0.0_WP
       end if
       if (this%cfg%nz.eq.1) then
-         this%divsc_z=0.0_WP
-         this%grdsc_z=0.0_WP
+         this%div_z=0.0_WP
+         this%grd_z=0.0_WP
       end if
       
    end subroutine adjust_metrics
@@ -365,6 +391,17 @@ contains
       ! Adjust metrics based on mask array
       call this%adjust_metrics()
       
+      ! Bquick needs to remember the quick coefficients
+	  select case (this%scheme)
+      case (bquick)
+		 allocate(this%bitp_xp(this%stp1:this%stp2,this%cfg%imin_:this%cfg%imax_+1,this%cfg%jmin_:this%cfg%jmax_+1,this%cfg%kmin_:this%cfg%kmax_+1)); this%bitp_xp=this%itp_xp
+		 allocate(this%bitp_xm(this%stm1:this%stm2,this%cfg%imin_:this%cfg%imax_+1,this%cfg%jmin_:this%cfg%jmax_+1,this%cfg%kmin_:this%cfg%kmax_+1)); this%bitp_xm=this%itp_xm
+		 allocate(this%bitp_yp(this%stp1:this%stp2,this%cfg%imin_:this%cfg%imax_+1,this%cfg%jmin_:this%cfg%jmax_+1,this%cfg%kmin_:this%cfg%kmax_+1)); this%bitp_yp=this%itp_yp
+		 allocate(this%bitp_ym(this%stm1:this%stm2,this%cfg%imin_:this%cfg%imax_+1,this%cfg%jmin_:this%cfg%jmax_+1,this%cfg%kmin_:this%cfg%kmax_+1)); this%bitp_ym=this%itp_ym
+		 allocate(this%bitp_zp(this%stp1:this%stp2,this%cfg%imin_:this%cfg%imax_+1,this%cfg%jmin_:this%cfg%jmax_+1,this%cfg%kmin_:this%cfg%kmax_+1)); this%bitp_zp=this%itp_zp
+		 allocate(this%bitp_zm(this%stm1:this%stm2,this%cfg%imin_:this%cfg%imax_+1,this%cfg%jmin_:this%cfg%jmax_+1,this%cfg%kmin_:this%cfg%kmax_+1)); this%bitp_zm=this%itp_zm
+      end select
+
       ! Set dynamic stencil map for the scalar solver
       count=1; this%implicit%stc(count,:)=[0,0,0]
       do st=1,abs(this%stp1)
@@ -534,17 +571,17 @@ contains
          do j=this%cfg%jmin_,this%cfg%jmax_+1
             do i=this%cfg%imin_,this%cfg%imax_+1
                ! Fluxes on x-face
-               FX(i,j,k)=-0.5_WP*(rhoU(i,j,k)+abs(rhoU(i,j,k)))*sum(this%itpsc_xp(:,i,j,k)*this%SC(i+this%stp1:i+this%stp2,j,k)) &
-               &         -0.5_WP*(rhoU(i,j,k)-abs(rhoU(i,j,k)))*sum(this%itpsc_xm(:,i,j,k)*this%SC(i+this%stm1:i+this%stm2,j,k)) &
-               &         +sum(this%itp_x(:,i,j,k)*this%diff(i-1:i,j,k))*sum(this%grdsc_x(:,i,j,k)*this%SC(i-1:i,j,k))
+               FX(i,j,k)=-0.5_WP*(rhoU(i,j,k)+abs(rhoU(i,j,k)))*sum(this%itp_xp(:,i,j,k)*this%SC(i+this%stp1:i+this%stp2,j,k)) &
+               &         -0.5_WP*(rhoU(i,j,k)-abs(rhoU(i,j,k)))*sum(this%itp_xm(:,i,j,k)*this%SC(i+this%stm1:i+this%stm2,j,k)) &
+               &         +sum(this%itp_x(:,i,j,k)*this%diff(i-1:i,j,k))*sum(this%grd_x(:,i,j,k)*this%SC(i-1:i,j,k))
                ! Fluxes on y-face
-               FY(i,j,k)=-0.5_WP*(rhoV(i,j,k)+abs(rhoV(i,j,k)))*sum(this%itpsc_yp(:,i,j,k)*this%SC(i,j+this%stp1:j+this%stp2,k)) &
-               &         -0.5_WP*(rhoV(i,j,k)-abs(rhoV(i,j,k)))*sum(this%itpsc_ym(:,i,j,k)*this%SC(i,j+this%stm1:j+this%stm2,k)) &
-               &         +sum(this%itp_y(:,i,j,k)*this%diff(i,j-1:j,k))*sum(this%grdsc_y(:,i,j,k)*this%SC(i,j-1:j,k))
+               FY(i,j,k)=-0.5_WP*(rhoV(i,j,k)+abs(rhoV(i,j,k)))*sum(this%itp_yp(:,i,j,k)*this%SC(i,j+this%stp1:j+this%stp2,k)) &
+               &         -0.5_WP*(rhoV(i,j,k)-abs(rhoV(i,j,k)))*sum(this%itp_ym(:,i,j,k)*this%SC(i,j+this%stm1:j+this%stm2,k)) &
+               &         +sum(this%itp_y(:,i,j,k)*this%diff(i,j-1:j,k))*sum(this%grd_y(:,i,j,k)*this%SC(i,j-1:j,k))
                ! Fluxes on z-face
-               FZ(i,j,k)=-0.5_WP*(rhoW(i,j,k)+abs(rhoW(i,j,k)))*sum(this%itpsc_zp(:,i,j,k)*this%SC(i,j,k+this%stp1:k+this%stp2)) &
-               &         -0.5_WP*(rhoW(i,j,k)-abs(rhoW(i,j,k)))*sum(this%itpsc_zm(:,i,j,k)*this%SC(i,j,k+this%stm1:k+this%stm2)) &
-               &         +sum(this%itp_z(:,i,j,k)*this%diff(i,j,k-1:k))*sum(this%grdsc_z(:,i,j,k)*this%SC(i,j,k-1:k))
+               FZ(i,j,k)=-0.5_WP*(rhoW(i,j,k)+abs(rhoW(i,j,k)))*sum(this%itp_zp(:,i,j,k)*this%SC(i,j,k+this%stp1:k+this%stp2)) &
+               &         -0.5_WP*(rhoW(i,j,k)-abs(rhoW(i,j,k)))*sum(this%itp_zm(:,i,j,k)*this%SC(i,j,k+this%stm1:k+this%stm2)) &
+               &         +sum(this%itp_z(:,i,j,k)*this%diff(i,j,k-1:k))*sum(this%grd_z(:,i,j,k)*this%SC(i,j,k-1:k))
             end do
          end do
       end do
@@ -552,9 +589,9 @@ contains
       do k=this%cfg%kmin_,this%cfg%kmax_
          do j=this%cfg%jmin_,this%cfg%jmax_
             do i=this%cfg%imin_,this%cfg%imax_
-               drhoSCdt(i,j,k)=sum(this%divsc_x(:,i,j,k)*FX(i:i+1,j,k))+&
-               &               sum(this%divsc_y(:,i,j,k)*FY(i,j:j+1,k))+&
-               &               sum(this%divsc_z(:,i,j,k)*FZ(i,j,k:k+1))
+               drhoSCdt(i,j,k)=sum(this%div_x(:,i,j,k)*FX(i:i+1,j,k))+&
+               &               sum(this%div_y(:,i,j,k)*FY(i,j:j+1,k))+&
+               &               sum(this%div_z(:,i,j,k)*FZ(i,j,k:k+1))
             end do
          end do
       end do
@@ -606,15 +643,15 @@ contains
                do std=0,1
                   ! Loop over plus interpolation stencil
                   do sti=this%stp1,this%stp2
-                     this%implicit%opr(this%implicit%stmap(sti+std,0,0),i,j,k)=this%implicit%opr(this%implicit%stmap(sti+std,0,0),i,j,k)+0.5_WP*dt*this%divsc_x(std,i,j,k)*0.5_WP*(rhoU(i+std,j,k)+abs(rhoU(i+std,j,k)))*this%itpsc_xp(sti,i+std,j,k)
-                     this%implicit%opr(this%implicit%stmap(0,sti+std,0),i,j,k)=this%implicit%opr(this%implicit%stmap(0,sti+std,0),i,j,k)+0.5_WP*dt*this%divsc_y(std,i,j,k)*0.5_WP*(rhoV(i,j+std,k)+abs(rhoV(i,j+std,k)))*this%itpsc_yp(sti,i,j+std,k)
-                     this%implicit%opr(this%implicit%stmap(0,0,sti+std),i,j,k)=this%implicit%opr(this%implicit%stmap(0,0,sti+std),i,j,k)+0.5_WP*dt*this%divsc_z(std,i,j,k)*0.5_WP*(rhoW(i,j,k+std)+abs(rhoW(i,j,k+std)))*this%itpsc_zp(sti,i,j,k+std)
+                     this%implicit%opr(this%implicit%stmap(sti+std,0,0),i,j,k)=this%implicit%opr(this%implicit%stmap(sti+std,0,0),i,j,k)+0.5_WP*dt*this%div_x(std,i,j,k)*0.5_WP*(rhoU(i+std,j,k)+abs(rhoU(i+std,j,k)))*this%itp_xp(sti,i+std,j,k)
+                     this%implicit%opr(this%implicit%stmap(0,sti+std,0),i,j,k)=this%implicit%opr(this%implicit%stmap(0,sti+std,0),i,j,k)+0.5_WP*dt*this%div_y(std,i,j,k)*0.5_WP*(rhoV(i,j+std,k)+abs(rhoV(i,j+std,k)))*this%itp_yp(sti,i,j+std,k)
+                     this%implicit%opr(this%implicit%stmap(0,0,sti+std),i,j,k)=this%implicit%opr(this%implicit%stmap(0,0,sti+std),i,j,k)+0.5_WP*dt*this%div_z(std,i,j,k)*0.5_WP*(rhoW(i,j,k+std)+abs(rhoW(i,j,k+std)))*this%itp_zp(sti,i,j,k+std)
                   end do
                   ! Loop over minus interpolation stencil
                   do sti=this%stm1,this%stm2
-                     this%implicit%opr(this%implicit%stmap(sti+std,0,0),i,j,k)=this%implicit%opr(this%implicit%stmap(sti+std,0,0),i,j,k)+0.5_WP*dt*this%divsc_x(std,i,j,k)*0.5_WP*(rhoU(i+std,j,k)-abs(rhoU(i+std,j,k)))*this%itpsc_xm(sti,i+std,j,k)
-                     this%implicit%opr(this%implicit%stmap(0,sti+std,0),i,j,k)=this%implicit%opr(this%implicit%stmap(0,sti+std,0),i,j,k)+0.5_WP*dt*this%divsc_y(std,i,j,k)*0.5_WP*(rhoV(i,j+std,k)-abs(rhoV(i,j+std,k)))*this%itpsc_ym(sti,i,j+std,k)
-                     this%implicit%opr(this%implicit%stmap(0,0,sti+std),i,j,k)=this%implicit%opr(this%implicit%stmap(0,0,sti+std),i,j,k)+0.5_WP*dt*this%divsc_z(std,i,j,k)*0.5_WP*(rhoW(i,j,k+std)-abs(rhoW(i,j,k+std)))*this%itpsc_zm(sti,i,j,k+std)
+                     this%implicit%opr(this%implicit%stmap(sti+std,0,0),i,j,k)=this%implicit%opr(this%implicit%stmap(sti+std,0,0),i,j,k)+0.5_WP*dt*this%div_x(std,i,j,k)*0.5_WP*(rhoU(i+std,j,k)-abs(rhoU(i+std,j,k)))*this%itp_xm(sti,i+std,j,k)
+                     this%implicit%opr(this%implicit%stmap(0,sti+std,0),i,j,k)=this%implicit%opr(this%implicit%stmap(0,sti+std,0),i,j,k)+0.5_WP*dt*this%div_y(std,i,j,k)*0.5_WP*(rhoV(i,j+std,k)-abs(rhoV(i,j+std,k)))*this%itp_ym(sti,i,j+std,k)
+                     this%implicit%opr(this%implicit%stmap(0,0,sti+std),i,j,k)=this%implicit%opr(this%implicit%stmap(0,0,sti+std),i,j,k)+0.5_WP*dt*this%div_z(std,i,j,k)*0.5_WP*(rhoW(i,j,k+std)-abs(rhoW(i,j,k+std)))*this%itp_zm(sti,i,j,k+std)
                   end do
                end do
             end do
@@ -625,18 +662,18 @@ contains
       do k=this%cfg%kmin_,this%cfg%kmax_
          do j=this%cfg%jmin_,this%cfg%jmax_
             do i=this%cfg%imin_,this%cfg%imax_
-               this%implicit%opr(1,i,j,k)=this%implicit%opr(1,i,j,k)-0.5_WP*dt*(this%divsc_x(+1,i,j,k)*sum(this%itp_x(:,i+1,j,k)*this%diff(i  :i+1,j,k))*this%grdsc_x(-1,i+1,j,k)+&
-               &                                                                this%divsc_x( 0,i,j,k)*sum(this%itp_x(:,i  ,j,k)*this%diff(i-1:i  ,j,k))*this%grdsc_x( 0,i  ,j,k)+&
-               &                                                                this%divsc_y(+1,i,j,k)*sum(this%itp_y(:,i,j+1,k)*this%diff(i,j  :j+1,k))*this%grdsc_y(-1,i,j+1,k)+&
-               &                                                                this%divsc_y( 0,i,j,k)*sum(this%itp_y(:,i,j  ,k)*this%diff(i,j-1:j  ,k))*this%grdsc_y( 0,i,j  ,k)+&
-               &                                                                this%divsc_z(+1,i,j,k)*sum(this%itp_z(:,i,j,k+1)*this%diff(i,j,k  :k+1))*this%grdsc_z(-1,i,j,k+1)+&
-               &                                                                this%divsc_z( 0,i,j,k)*sum(this%itp_z(:,i,j,k  )*this%diff(i,j,k-1:k  ))*this%grdsc_z( 0,i,j,k  ))
-               this%implicit%opr(2,i,j,k)=this%implicit%opr(2,i,j,k)-0.5_WP*dt*(this%divsc_x(+1,i,j,k)*sum(this%itp_x(:,i+1,j,k)*this%diff(i  :i+1,j,k))*this%grdsc_x( 0,i+1,j,k))
-               this%implicit%opr(3,i,j,k)=this%implicit%opr(3,i,j,k)-0.5_WP*dt*(this%divsc_x( 0,i,j,k)*sum(this%itp_x(:,i  ,j,k)*this%diff(i-1:i  ,j,k))*this%grdsc_x(-1,i  ,j,k))
-               this%implicit%opr(4,i,j,k)=this%implicit%opr(4,i,j,k)-0.5_WP*dt*(this%divsc_y(+1,i,j,k)*sum(this%itp_y(:,i,j+1,k)*this%diff(i,j  :j+1,k))*this%grdsc_y( 0,i,j+1,k))
-               this%implicit%opr(5,i,j,k)=this%implicit%opr(5,i,j,k)-0.5_WP*dt*(this%divsc_y( 0,i,j,k)*sum(this%itp_y(:,i,j  ,k)*this%diff(i,j-1:j  ,k))*this%grdsc_y(-1,i,j  ,k))
-               this%implicit%opr(6,i,j,k)=this%implicit%opr(6,i,j,k)-0.5_WP*dt*(this%divsc_z(+1,i,j,k)*sum(this%itp_z(:,i,j,k+1)*this%diff(i,j,k  :k+1))*this%grdsc_z( 0,i,j,k+1))
-               this%implicit%opr(7,i,j,k)=this%implicit%opr(7,i,j,k)-0.5_WP*dt*(this%divsc_z( 0,i,j,k)*sum(this%itp_z(:,i,j,k  )*this%diff(i,j,k-1:k  ))*this%grdsc_z(-1,i,j,k  ))
+               this%implicit%opr(1,i,j,k)=this%implicit%opr(1,i,j,k)-0.5_WP*dt*(this%div_x(+1,i,j,k)*sum(this%itp_x(:,i+1,j,k)*this%diff(i  :i+1,j,k))*this%grd_x(-1,i+1,j,k)+&
+               &                                                                this%div_x( 0,i,j,k)*sum(this%itp_x(:,i  ,j,k)*this%diff(i-1:i  ,j,k))*this%grd_x( 0,i  ,j,k)+&
+               &                                                                this%div_y(+1,i,j,k)*sum(this%itp_y(:,i,j+1,k)*this%diff(i,j  :j+1,k))*this%grd_y(-1,i,j+1,k)+&
+               &                                                                this%div_y( 0,i,j,k)*sum(this%itp_y(:,i,j  ,k)*this%diff(i,j-1:j  ,k))*this%grd_y( 0,i,j  ,k)+&
+               &                                                                this%div_z(+1,i,j,k)*sum(this%itp_z(:,i,j,k+1)*this%diff(i,j,k  :k+1))*this%grd_z(-1,i,j,k+1)+&
+               &                                                                this%div_z( 0,i,j,k)*sum(this%itp_z(:,i,j,k  )*this%diff(i,j,k-1:k  ))*this%grd_z( 0,i,j,k  ))
+               this%implicit%opr(2,i,j,k)=this%implicit%opr(2,i,j,k)-0.5_WP*dt*(this%div_x(+1,i,j,k)*sum(this%itp_x(:,i+1,j,k)*this%diff(i  :i+1,j,k))*this%grd_x( 0,i+1,j,k))
+               this%implicit%opr(3,i,j,k)=this%implicit%opr(3,i,j,k)-0.5_WP*dt*(this%div_x( 0,i,j,k)*sum(this%itp_x(:,i  ,j,k)*this%diff(i-1:i  ,j,k))*this%grd_x(-1,i  ,j,k))
+               this%implicit%opr(4,i,j,k)=this%implicit%opr(4,i,j,k)-0.5_WP*dt*(this%div_y(+1,i,j,k)*sum(this%itp_y(:,i,j+1,k)*this%diff(i,j  :j+1,k))*this%grd_y( 0,i,j+1,k))
+               this%implicit%opr(5,i,j,k)=this%implicit%opr(5,i,j,k)-0.5_WP*dt*(this%div_y( 0,i,j,k)*sum(this%itp_y(:,i,j  ,k)*this%diff(i,j-1:j  ,k))*this%grd_y(-1,i,j  ,k))
+               this%implicit%opr(6,i,j,k)=this%implicit%opr(6,i,j,k)-0.5_WP*dt*(this%div_z(+1,i,j,k)*sum(this%itp_z(:,i,j,k+1)*this%diff(i,j,k  :k+1))*this%grd_z( 0,i,j,k+1))
+               this%implicit%opr(7,i,j,k)=this%implicit%opr(7,i,j,k)-0.5_WP*dt*(this%div_z( 0,i,j,k)*sum(this%itp_z(:,i,j,k  )*this%diff(i,j,k-1:k  ))*this%grd_z(-1,i,j,k  ))
             end do
          end do
       end do
@@ -653,6 +690,68 @@ contains
       
    end subroutine solve_implicit
    
+   
+   !> Metric resetting for adaptive discretization like bquick
+   subroutine metric_reset(this)
+	  implicit none
+	  class(scalar), intent(inout) :: this
+	  select case (this%scheme)
+	  case (bquick)
+	     this%itp_xp=this%bitp_xp
+	     this%itp_xm=this%bitp_xm
+	     this%itp_yp=this%bitp_yp
+	     this%itp_ym=this%bitp_ym
+	     this%itp_zp=this%bitp_zp
+	     this%itp_zm=this%bitp_zm
+	  end select
+   end subroutine metric_reset
+
+
+   !> Adjust adaptive metrics like bquick
+   subroutine metric_adjust(this,SC,SCmin,SCmax)
+	  implicit none
+	  class(scalar), intent(inout) :: this
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in) :: SC !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+	  real(WP), optional :: SCmin
+	  real(WP), optional :: SCmax
+	  integer :: i,j,k
+	  select case (this%scheme)
+	  case (bquick)
+	     if (present(SCmin)) then
+		    do k=this%cfg%kmin_,this%cfg%kmax_+1
+		       do j=this%cfg%jmin_,this%cfg%jmax_+1
+			      do i=this%cfg%imin_,this%cfg%imax_+1
+			         if (SC(i,j,k).lt.SCmin) then
+					    !this%itp_xp(i:i+1,j,k)=[0.0_WP,1.0_WP,0.0_WP]
+                        !this%itp_xm(i:i+1,j,k)=[0.0_WP,1.0_WP,0.0_WP]
+                        !this%itp_yp(i,j:j+1,k)=[0.0_WP,1.0_WP,0.0_WP]
+                        !this%itp_ym(i,j:j+1,k)=[0.0_WP,1.0_WP,0.0_WP]
+                        !this%itp_zp(i,j,k:k+1)=[0.0_WP,1.0_WP,0.0_WP]
+                        !this%itp_zm(i,j,k:k+1)=[0.0_WP,1.0_WP,0.0_WP]
+					 end if
+			      end do
+			   end do
+		    end do
+	     end if
+         if (present(SCmax)) then
+	        do k=this%cfg%kmin_,this%cfg%kmax_+1
+		       do j=this%cfg%jmin_,this%cfg%jmax_+1
+			      do i=this%cfg%imin_,this%cfg%imax_+1
+				     if (SC(i,j,k).gt.SCmax) then
+				        !this%itp_xp(i:i+1,j,k)=[0.0_WP,1.0_WP,0.0_WP]
+					    !this%itp_xm(i:i+1,j,k)=[0.0_WP,1.0_WP,0.0_WP]
+					    !this%itp_yp(i,j:j+1,k)=[0.0_WP,1.0_WP,0.0_WP]
+					    !this%itp_ym(i,j:j+1,k)=[0.0_WP,1.0_WP,0.0_WP]
+					    !this%itp_zp(i,j,k:k+1)=[0.0_WP,1.0_WP,0.0_WP]
+					    !this%itp_zm(i,j,k:k+1)=[0.0_WP,1.0_WP,0.0_WP]
+				     end if
+			      end do
+		       end do
+		    end do
+	     end if
+	  end select
+   end subroutine metric_adjust
+
    
    !> Print out info for scalar solver
    subroutine scalar_print(this)
