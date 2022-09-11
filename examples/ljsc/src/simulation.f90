@@ -90,7 +90,7 @@ contains
      if (k.eq.pg%kmax+1) isIn=.true.
    end function front_of_domain
    
-   !> Function that localizes the jet(s)
+   !> Function that localizes the jet(s) initial location
    function jet(pg,i,j,k) result(isIn)
      use pgrid_class, only: pgrid
      implicit none
@@ -113,6 +113,19 @@ contains
      isIn=.false.
      if (j.le.pg%jmin-1+nwall.and.(.not.jet(pg,i,j,k))) isIn=.true.
    end function wall
+   
+   !> Function that localizes the jet(s) BCs at edge of domain
+   function jet_bdy(pg,i,j,k) result(isIn)
+     use pgrid_class, only: pgrid
+     implicit none
+     class(pgrid), intent(in) :: pg
+     integer, intent(in) :: i,j,k
+     real(WP), dimension(3) :: xyz
+     logical :: isIn
+     isIn=.false.
+     xyz(1)=pg%xm(i); xyz(2)=0.0_WP; xyz(3)=pg%zm(k)
+     if (j.eq.pg%jmin-1.and.(jet(pg,i,j,k))) isIn=.true.
+   end function jet_bdy
 
    !> Function that defines a level set function for the start of a jet at wall
    function levelset_halfdrop(xyz,t) result(G)
@@ -350,7 +363,7 @@ contains
          
          ! Define boundary conditions - initialized values are intended dirichlet values too, for the cell centers
          call fs%add_bcond(name='crossflow',type=dirichlet      ,locator=left_of_domain ,celldir='xm')
-         call fs%add_bcond(name='jet'      ,type=dirichlet      ,locator=jet            ,celldir='ym')
+         call fs%add_bcond(name='jet'      ,type=dirichlet      ,locator=jet_bdy        ,celldir='ym')
          call fs%add_bcond(name='outflow'  ,type=clipped_neumann,locator=right_of_domain,celldir='xp')
          call fs%add_bcond(name='out_yp'   ,type=clipped_neumann,locator=top_of_domain  ,celldir='yp')
          if (fs%cfg%nz.gt.1) then
