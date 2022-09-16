@@ -38,7 +38,6 @@ module block1_class
       real(WP), dimension(:,:,:),   allocatable :: resU,resV,resW
       real(WP), dimension(:,:,:),   allocatable :: Ui,Vi,Wi
       real(WP), dimension(:,:,:,:), allocatable :: SR
-      real(WP), dimension(:,:,:),   allocatable :: SR_mag   !< Magnitude of strain rate tensor 
    contains
       procedure :: init                   !< Initialize block
       procedure :: step                   !< Advance block
@@ -183,7 +182,6 @@ contains
          allocate(b%Vi  (b%cfg%imino_:b%cfg%imaxo_,b%cfg%jmino_:b%cfg%jmaxo_,b%cfg%kmino_:b%cfg%kmaxo_))
          allocate(b%Wi  (b%cfg%imino_:b%cfg%imaxo_,b%cfg%jmino_:b%cfg%jmaxo_,b%cfg%kmino_:b%cfg%kmaxo_))
          allocate(b%SR(6,b%cfg%imino_:b%cfg%imaxo_,b%cfg%jmino_:b%cfg%jmaxo_,b%cfg%kmino_:b%cfg%kmaxo_))
-         allocate(b%SR_mag(b%cfg%imino_:b%cfg%imaxo_,b%cfg%jmino_:b%cfg%jmaxo_,b%cfg%kmino_:b%cfg%kmaxo_)) 
       end block allocate_work_arrays
 
       ! Initialize time tracker
@@ -258,11 +256,8 @@ contains
          integer  :: i,j,k
          ! Create a two-phase flow solver
          b%fs=tpns(cfg=b%cfg,name='Two-phase NS')
-         ! Allocate array for variable liquid viscosity phase and assign a initial value
-         ! allocate(b%fs%visc_l_variable(b%cfg%imino_:b%cfg%imaxo_,b%cfg%jmino_:b%cfg%jmaxo_,b%cfg%kmino_:b%cfg%kmaxo_))
-         ! b%fs%visc_l_variable=b%fs%visc_l_0
          ! Assign constant viscosity to each phase
-         call param_read('Liquid dynamic viscosity',b%fs%visc_l)
+         ! call param_read('Liquid dynamic viscosity',b%fs%visc_l)
          call param_read('Gas dynamic viscosity'   ,b%fs%visc_g)
          ! Assign constant density to each phase
          call param_read('Liquid density',b%fs%rho_l)
@@ -400,8 +395,6 @@ contains
          call b%ens_out%add_scalar('VOF',b%vf%VF)
          call b%ens_out%add_scalar('curvature',b%vf%curv)
          call b%ens_out%add_scalar('visc_t',b%sgs%visc)
-         call b%ens_out%add_scalar('SR_mag',b%SR_mag)
-         ! call b%ens_out%add_scalar('liquid_viscocity',b%fs%visc_l_variable)
          call b%ens_out%add_surface('vofplic',b%smesh)
          ! Output to ensight
          if (b%ens_evt%occurs()) call b%ens_out%write_data(b%time%t)
@@ -430,8 +423,6 @@ contains
          call b%mfile%add_column(b%fs%psolv%it,'Pressure iteration')
          call b%mfile%add_column(b%fs%psolv%rerr,'Pressure error')
          call b%mfile%add_column(Uin,'Inflow Velocity')
-         call b%mfile%add_column(b%fs%SRmax,'SR maximum')
-         ! call b%mfile%add_column(b%fs%Visclmax,'Max liq visc')
          call b%mfile%write()
          ! Create CFL monitor
          b%cflfile=monitor(b%fs%cfg%amRoot,'cfl1')
@@ -524,6 +515,28 @@ contains
          end do
       end block reapply_dirichlet
 
+      ! Calculate SR
+      call b%fs%get_strainrate(Ui=b%Ui,Vi=b%Vi,Wi=b%Wi,SR=b%SR)
+
+      ! Model non-Newtonian fluid
+      nonewt: block
+         integer :: i,j,k
+         real(WP) :: SRmag
+         real(WP), parameter :: C=1.0e-2_WP
+         real(WP), parameter :: n=0.3_WP 
+         ! Update viscosity
+         do k=b%fs%cfg%kmino_,b%fs%cfg%kmaxo_
+            do j=b%fs%cfg%jmino_,b%fs%cfg%jmaxo_
+               do i=b%fs%cfg%imino_,b%fs%cfg%imaxo_
+                  SRmag=sqrt(b%SR(1,i,j,k)**2+b%SR(2,i,j,k)**2+b%SR(3,i,j,k)**2+2.0_WP*(b%SR(4,i,j,k)**2+b%SR(5,i,j,k)**2+b%SR(6,i,j,k)**2))
+                  SRmag=max(SRmag,1000.0_WP**(1.0_WP/(n-1.0_WP)))
+                  b%fs%visc_l(i,j,k)=C*SRmag**(n-1.0_WP)
+               end do
+            end do
+         end do
+         call b%fs%cfg%sync(b%fs%visc_l)
+      end block nonewt
+
       ! Remember old VOF
       b%vf%VFold=b%vf%VF
 
@@ -538,14 +551,8 @@ contains
       ! VOF solver step
       call b%vf%advance(dt=b%time%dt,U=b%fs%U,V=b%fs%V,W=b%fs%W)
 
-      ! Update SR tensor and SR_mag array
-      call b%fs%get_strainrate(Ui=b%Ui,Vi=b%Vi,Wi=b%Wi,SR=b%SR,SR_mag=b%SR_mag)
-
       ! Prepare new staggered constant viscosity (at n+1)
-      call b%fs%get_viscosity(vf=b%vf)
-
-      ! ! Prepare new staggered variable viscosity at (n+1)
-      ! call b%fs%get_variable_viscosity(vf=b%vf,SR_mag=b%SR_mag)
+      call b%fs%get_variable_viscosity(vf=b%vf)
 
       ! Turbulence modeling - only work with gas properties here
       sgs_model: block
@@ -683,7 +690,7 @@ contains
       class(block1), intent(inout) :: b
 
       ! Deallocate work arrays
-      deallocate(b%resU,b%resV,b%resW,b%Ui,b%Vi,b%Wi,b%SR,b%SR_mag)
+      deallocate(b%resU,b%resV,b%resW,b%Ui,b%Vi,b%Wi,b%SR)
 
    end subroutine final
 

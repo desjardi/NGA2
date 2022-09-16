@@ -59,7 +59,6 @@ module block2_class
       procedure :: final                  !< Finalize block
    end type block2
 
-
    !> Gas viscosity
    real(WP) :: visc_g
    
@@ -334,8 +333,8 @@ contains
         call param_read('Stat output period',b%stat_evt%tper)
         ! Create stat_lpt plane
         b%stat_1d_lpt_xloc1=stat_1d_lpt(cfg=b%cfg,lp=b%lp,xloc=90e-03_WP,name='stat_1d_lpt1',dmin=0.0_WP,dmax=1e-03_WP,dnbins=100,ID=int(0,8))
-        b%stat_lpt_xaxes=stat_plane_lpt(cfg=b%cfg,lp=b%lp,location=90e-03_WP,plane_pos='x',name='stat_plane_x',dmin=0.0_WP,dmax=1e-03_WP,dnbins=100,ID=int(0,8))
-        !b%stat_1d_lpt_xloc2=stat_1d_lpt(cfg=b%cfg,lp=b%lp,xloc=90e-03_WP,name='stat_1d_lpt2',dmin=0.0_WP,dmax=1e-03_WP,dnbins=100,ID=int(1,8))
+      !   b%stat_lpt_xaxes=stat_plane_lpt(cfg=b%cfg,lp=b%lp,location=90e-03_WP,plane_pos='x',name='stat_plane_x',dmin=0.0_WP,dmax=1e-03_WP,dnbins=100,ID=int(0,8))
+      !   b%stat_1d_lpt_xloc2=stat_1d_lpt(cfg=b%cfg,lp=b%lp,xloc=90e-03_WP,name='stat_1d_lpt2',dmin=0.0_WP,dmax=1e-03_WP,dnbins=100,ID=int(1,8))
       end block create_stat_lpt
 
       ! Create a monitor file
