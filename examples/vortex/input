@@ -1,6 +1,6 @@
 
 # Parallelization
-1 Partition : 4 2 1
+1 Partition : 2 2 1
 
 # Block 1 mesh definition
 1 Lx :  10
@@ -12,11 +12,14 @@
 
 # Vortex properties
 Vortex size         : 1
-Vortex strength     : 0
+Vortex strength     : 0.5
 U infinity          : 1
 V infinity          : 0
+W infinity          : 0
 x center            : 5
 y center            : 0
+z center            : 0
+Orientation         : z
 
 # Fluid properties and velocity
 Dynamic viscosity :   1

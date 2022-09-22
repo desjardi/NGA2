@@ -3,7 +3,7 @@ module block1_class
    use string,            only: str_short,str_medium
    use precision,         only: WP
    use config_class,      only: config
-   use incomp_class,     only: incomp
+   use incomp_class,      only: incomp
    use hypre_str_class,   only: hypre_str
    use sgsmodel_class,    only: sgsmodel
    use timetracker_class, only: timetracker
@@ -40,14 +40,17 @@ module block1_class
    real(WP) :: tau,beta,A
 
    !> Channel forcing
-   real(WP) :: Uinf,Vinf
-   real(WP) :: meanU,meanV
+   real(WP) :: Uinf,Vinf,Winf
+   real(WP) :: meanU,meanV,meanW
 
    !> Fluid viscosity
    real(WP) :: visc
 
    !> Vortex center location
-   real(WP) :: xc,yc,r_squared
+   real(WP) :: xc,yc,zc,r_squared
+
+   !> Orientation
+   character(len=str_medium) :: orientation
 
 contains
 
@@ -106,22 +109,41 @@ contains
          ! Initialize velocity based on specified bulk
          call param_read('U infinity',Uinf)
          call param_read('V infinity',Vinf)
+         call param_read('W infinity',Winf)
          where (b%fs%umask.eq.0) b%fs%U=Uinf
          where (b%fs%vmask.eq.0) b%fs%V=Vinf
+         where (b%fs%wmask.eq.0) b%fs%W=Winf
          meanU=Uinf
          meanV=Vinf
+         meanW=Winf
          ! Initial vortex dimensions
          call param_read('Vortex size',tau)
          call param_read('Vortex strength',beta)
          call param_read('x center',xc)
          call param_read('y center',yc)
+         call param_read('z center',zc)
+         call param_read('Orientation',orientation)
          A=beta*exp(0.5_WP)/(twoPi)
          do k=b%fs%cfg%kmino_,b%fs%cfg%kmaxo_
             do j=b%fs%cfg%jmino_,b%fs%cfg%jmaxo_
                do i=b%fs%cfg%imino_,b%fs%cfg%imaxo_
-                  r_squared=(b%fs%cfg%xm(i)-xc)**2+(b%fs%cfg%ym(j)-yc)**2
-                  b%fs%U(i,j,k)=b%fs%U(i,j,k)-A*exp(1.0_WP-r_squared)*(b%fs%cfg%ym(j)-yc)
-                  b%fs%V(i,j,k)=b%fs%V(i,j,k)+A*exp(1.0_WP-r_squared)*(b%fs%cfg%xm(i)-xc) 
+                  ! r_squared=(b%fs%cfg%xm(i)-xc)**2+(b%fs%cfg%ym(j)-yc)**2
+                  ! b%fs%U(i,j,k)=b%fs%U(i,j,k)-A*exp(1.0_WP-r_squared)*(b%fs%cfg%ym(j)-yc)
+                  ! b%fs%V(i,j,k)=b%fs%V(i,j,k)+A*exp(1.0_WP-r_squared)*(b%fs%cfg%xm(i)-xc) 
+                  select case (trim(orientation))
+                  case('x')
+                     r_squared=(b%fs%cfg%ym(j)-yc)**2+(b%fs%cfg%zm(k)-zc)**2  
+                     b%fs%V(i,j,k)=b%fs%V(i,j,k)-A*exp(1.0_WP-r_squared)*(b%fs%cfg%zm(k)-zc)
+                     b%fs%W(i,j,k)=b%fs%W(i,j,k)+A*exp(1.0_WP-r_squared)*(b%fs%cfg%ym(j)-yc) 
+                  case('y')
+                     r_squared=(b%fs%cfg%xm(i)-xc)**2+(b%fs%cfg%zm(k)-zc)**2  
+                     b%fs%U(i,j,k)=b%fs%U(i,j,k)-A*exp(1.0_WP-r_squared)*(b%fs%cfg%zm(k)-zc)
+                     b%fs%W(i,j,k)=b%fs%W(i,j,k)+A*exp(1.0_WP-r_squared)*(b%fs%cfg%xm(i)-xc) 
+                  case('z')
+                     r_squared=(b%fs%cfg%xm(i)-xc)**2+(b%fs%cfg%ym(j)-yc)**2  
+                     b%fs%U(i,j,k)=b%fs%U(i,j,k)+A*exp(1.0_WP-r_squared)*(b%fs%cfg%ym(j)-yc)
+                     b%fs%V(i,j,k)=b%fs%V(i,j,k)+A*exp(1.0_WP-r_squared)*(b%fs%cfg%xm(i)-xc) 
+                  end select
                end do
             end do
          end do
@@ -249,34 +271,63 @@ contains
          b%resV=-2.0_WP*(b%fs%rho*b%fs%V-b%fs%rho*b%fs%Vold)+b%time%dt*b%resV
          b%resW=-2.0_WP*(b%fs%rho*b%fs%W-b%fs%rho*b%fs%Wold)+b%time%dt*b%resW
 
-         ! Add body forcing
-         forcing: block
-            use mpi_f08,  only: MPI_SUM,MPI_ALLREDUCE
-            use parallel, only: MPI_REAL_WP
-            integer :: i,j,k,ierr
-            real(WP) :: myU,myUvol,myV,myVvol,Uvol,Vvol
-            myU=0.0_WP; myUvol=0.0_WP; myV=0.0_WP; myVvol=0.0_WP
-            do k=b%fs%cfg%kmin_,b%fs%cfg%kmax_
-               do j=b%fs%cfg%jmin_,b%fs%cfg%jmax_
-                  do i=b%fs%cfg%imin_,b%fs%cfg%imax_
-                     if (b%fs%umask(i,j,k).eq.0) then
-                        myU   =myU   +b%fs%cfg%dxm(i)*b%fs%cfg%dy(j)*b%fs%cfg%dzm(k)*(2.0_WP*b%fs%U(i,j,k)-b%fs%Uold(i,j,k))
-                        myUvol=myUvol+b%fs%cfg%dxm(i)*b%fs%cfg%dy(j)*b%fs%cfg%dzm(k)
-                     end if
-                     if (b%fs%vmask(i,j,k).eq.0) then
-                        myV   =myV   +b%fs%cfg%dx(i)*b%fs%cfg%dy(j)*b%fs%cfg%dzm(k)*(2.0_WP*b%fs%V(i,j,k)-b%fs%Vold(i,j,k))
-                        myVvol=myVvol+b%fs%cfg%dx(i)*b%fs%cfg%dy(j)*b%fs%cfg%dzm(k)
-                     end if
-                  end do
-               end do
-            end do
-            call MPI_ALLREDUCE(myUvol,Uvol ,1,MPI_REAL_WP,MPI_SUM,b%fs%cfg%comm,ierr)
-            call MPI_ALLREDUCE(myU   ,meanU,1,MPI_REAL_WP,MPI_SUM,b%fs%cfg%comm,ierr); meanU=meanU/Uvol
-            where (b%fs%umask.eq.0) b%resU=b%resU+Uinf-meanU
-            call MPI_ALLREDUCE(myVvol,Vvol ,1,MPI_REAL_WP,MPI_SUM,b%fs%cfg%comm,ierr)
-            call MPI_ALLREDUCE(myV   ,meanV,1,MPI_REAL_WP,MPI_SUM,b%fs%cfg%comm,ierr); meanV=meanV/Vvol
-            where (b%fs%vmask.eq.0) b%resV=b%resV+Vinf-meanV
-         end block forcing   
+         ! ! Add body forcing
+         ! forcing: block
+         !    use mpi_f08,  only: MPI_SUM,MPI_ALLREDUCE
+         !    use parallel, only: MPI_REAL_WP
+         !    integer :: i,j,k,ierr
+         !    real(WP) :: myU,myUvol,myV,myVvol,Uvol,Vvol
+         !    myU=0.0_WP; myUvol=0.0_WP; myV=0.0_WP; myVvol=0.0_WP
+         !    do k=b%fs%cfg%kmin_,b%fs%cfg%kmax_
+         !       do j=b%fs%cfg%jmin_,b%fs%cfg%jmax_
+         !          do i=b%fs%cfg%imin_,b%fs%cfg%imax_
+         !             r_squared=(b%fs%cfg%xm(i)-xc)**2+(b%fs%cfg%ym(j)-yc)**2
+         !             if (b%fs%umask(i,j,k).eq.0) then
+         !                myU   =myU   +b%fs%cfg%dxm(i)*b%fs%cfg%dy(j)*b%fs%cfg%dz(k)*(2.0_WP*b%fs%U(i,j,k)-b%fs%Uold(i,j,k))
+         !                myUvol=myUvol+b%fs%cfg%dxm(i)*b%fs%cfg%dy(j)*b%fs%cfg%dz(k)
+         !             end if
+         !             ! if (b%fs%vmask(i,j,k).eq.0) then
+         !             !    myV   =myV   +b%fs%cfg%dx(i)*b%fs%cfg%dy(j)*b%fs%cfg%dzm(k)*(2.0_WP*b%fs%V(i,j,k)-b%fs%Vold(i,j,k))
+         !             !    myVvol=myVvol+b%fs%cfg%dx(i)*b%fs%cfg%dy(j)*b%fs%cfg%dzm(k)
+         !             ! end if
+         !          end do
+         !       end do
+         !    end do
+         !    call MPI_ALLREDUCE(myUvol,Uvol ,1,MPI_REAL_WP,MPI_SUM,b%fs%cfg%comm,ierr)
+         !    call MPI_ALLREDUCE(myU   ,meanU,1,MPI_REAL_WP,MPI_SUM,b%fs%cfg%comm,ierr); meanU=meanU/Uvol
+         !    where (b%fs%umask.eq.0) b%resU=b%resU+Uinf-meanU
+         !    ! call MPI_ALLREDUCE(myVvol,Vvol ,1,MPI_REAL_WP,MPI_SUM,b%fs%cfg%comm,ierr)
+         !    ! call MPI_ALLREDUCE(myV   ,meanV,1,MPI_REAL_WP,MPI_SUM,b%fs%cfg%comm,ierr); meanV=meanV/Vvol
+         !    ! where (b%fs%vmask.eq.0) b%resV=b%resV+Vinf-meanV
+         ! end block forcing 
+
+         ! ! Add vortex perturbations
+         ! perturbation: block
+         !    integer :: i,j,k
+         !    do k=b%fs%cfg%kmin_,b%fs%cfg%kmax_
+         !       do j=b%fs%cfg%jmin_,b%fs%cfg%jmax_
+         !          do i=b%fs%cfg%imin_,b%fs%cfg%imax_
+         !                r_squared=(b%fs%cfg%xm(i)-xc)**2+(b%fs%cfg%ym(j)-yc)**2
+         !                if (b%fs%umask(i,j,k).eq.0) then
+         !                   b%resU(i,j,k)=b%resU(i,j,k)+(Uinf-A*exp(1.0_WP-r_squared)*(b%fs%cfg%ym(j)-yc))
+         !                end if
+         !                if (b%fs%vmask(i,j,k).eq.0) then
+         !                   b%resV(i,j,k)=b%resV(i,j,k)+(Vinf+A*exp(1.0_WP-r_squared)*(b%fs%cfg%xm(i)-xc)) 
+         !                end if
+         !             ! if (b%fs%wmask(i,j,k).eq.0) then
+         !             !    pos=[b%fs%cfg%xm(i),b%fs%cfg%ym(j),b%fs%cfg%z(k)]
+         !             !    dist=min(b%nudge_xmax-pos(1),pos(1)-b%nudge_xmin,&
+         !             !    &        b%nudge_ymax-pos(2),pos(2)-b%nudge_ymin,&
+         !             !    &        b%nudge_zmax-pos(3),pos(3)-b%nudge_zmin)/b%nudge_trans
+         !             !    dist=min(max(dist,0.0_WP),1.0_WP)
+         !             !    b%resW(i,j,k)=b%resW(i,j,k)+(Wnudge(i,j,k)-b%fs%W(i,j,k))*dist**2
+         !             ! end if
+         !          end do
+         !       end do
+         !    end do
+         ! end block perturbation 
+
+           
 
          ! Form implicit residuals
          call b%fs%solve_implicit(b%time%dt,b%resU,b%resV,b%resW)
