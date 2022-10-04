@@ -1,0 +1,61 @@
+# Parallelization
+Partition :	4 1 1
+
+# Mesh definition
+Lx :	0.03
+Ly :	0.0158
+Lz :    0.0181
+
+Cells per jet diameter     : 5
+Stretching bdy in x pre    : 0.005
+Stretching ratio in x pre  : 1.3
+Stretching bdy in x post   : 0.025
+Stretching ratio in x post : 1.05
+
+Cell height at wall        : 1e-5
+Stretching ratio in y pre  : 1.3
+Stretching bdy in y post   : 0.012
+Stretching ratio in y post : 1.1
+
+Stretching bdy in z        : 0.005
+Stretching ratio in z      : 1.3
+
+Wall cells in domain : 1
+
+# Flow setup - Crossflow
+Mach number :		         2
+Stagnation pressure :	   307e3
+Stagnation temperature : 300
+Crossflow BL thickness : 0.001
+
+# Flow setup - Liquid Jet
+Jet diameter :       0.00076
+Jet location :       0.011
+Mass flowrate :      0.0182
+Liquid temperature : 357
+Liquid density :     1000
+
+# Fluid properties
+Liquid gamma :	      1.19
+Liquid Pref :		      7.028e8
+Liquid q :            -1.178e6
+Liquid b :            6.61e-4
+Gas gamma : 		      1.4
+Surface tension coefficient : 0.078
+
+# Time integration
+Max timestep size : 5e-7
+Max cfl number :    0.9
+Max time :     	    1e-3
+Max steps :	        100000
+
+# Pressure solver
+Pressure tolerance : 1e-6
+Pressure iteration : 100
+
+# Implicit velocity solver
+Implicit tolerance : 1e-6
+Implicit iteration : 100
+
+# Ensight output
+Ensight output period : 1.99999e-6
