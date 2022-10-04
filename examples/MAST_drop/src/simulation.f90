@@ -28,6 +28,8 @@ module simulation
 
    public :: simulation_init,simulation_run,simulation_final
 
+   !> Choice of relaxation model
+   integer  :: relax_model
    !> Problem definition
    real(WP) :: ddrop
    logical  :: yes_Temp
@@ -136,7 +138,7 @@ contains
       real(WP), dimension(3),intent(in) :: xyz
       real(WP), intent(in) :: t
       real(WP) :: G
-      G=1.0_WP-sqrt(xyz(1)**2+xyz(2)**2+xyz(3))/(ddrop/2.0)
+      G=1.0_WP-sqrt(xyz(1)**2+xyz(2)**2+xyz(3)**2)/(ddrop/2.0)
    end function levelset_drop_center
    
    function levelset_cyl_center(xyz,t) result(G)
@@ -231,16 +233,16 @@ contains
 
       ! Create a compressible two-phase flow solver
       create_and_initialize_flow_solver: block
-         use mast_class, only: clipped_neumann,dirichlet,bc_scope,bcond
+         use mast_class, only: clipped_neumann,dirichlet,bc_scope,bcond,mech_egy_mech_hhz,thermmech_egy_mech_hhz
          use ils_class,  only: pcg_bbox,pcg_amg
          use mathtools,  only: Pi
          use parallel,   only: amRoot
-         integer :: i,j,k,n
-         real(WP), dimension(3) :: xyz
+         use string,     only: str_medium
+         integer :: i,j,k,impl_option
          real(WP) :: gamm_l,Pref_l,gamm_g,visc_l,visc_g,hdff_l,hdff_g,cv_l,cv_g,b_l,q_l
          real(WP) :: GSS, GP0, LP0, Grho0, Lrho0, GTemp0, LTemp0
          real(WP), dimension(3) :: u_g,u_l,u_mix
-         type(bcond), pointer :: mybc
+         character(len=str_medium) :: impl_str
          ! Create material model class
          matmod=matm(cfg=cfg,name='Liquid-gas models')
          ! Get EOS parameters from input
@@ -291,8 +293,11 @@ contains
          ! Configure implicit momentum solver
          call param_read('Implicit iteration',fs%implicit%maxit)
          call param_read('Implicit tolerance',fs%implicit%rcvg)
-         ! Setup the solver
-         call fs%setup(pressure_ils=pcg_bbox,implicit_ils=pcg_amg)
+         ! Setup the solver, default is amg
+         impl_option = pcg_amg
+         if (param_exists('Implicit solver')) call param_read('Implicit solver',impl_str)
+         if (trim(impl_str).eq.'blackbox') impl_option = pcg_bbox
+         call fs%setup(pressure_ils=pcg_bbox,implicit_ils=impl_option)
 
          ! Set up problem: velocity, density, pressure
          ! Velocity is quiescent unless specified
@@ -344,10 +349,53 @@ contains
              LP0 = GP0 + 4.0/ddrop*fs%sigma
            end if
          end if
+         ! Get gravity if specified
+         if (param_exists('Gravity')) then
+            call param_read('Gravity',fs%gravity)
+         end if
          if (amRoot) then
-           print*,"===== Problem Setup Description ====="
-           ! Laplace number, Reynolds number, 
-           
+           print*,"===== Problem Setup Non-dimensional Numbers ====="
+           if (visc_g.ne.0.0_WP) then
+             print*,'Reynolds (gas)    = ', Grho0*sqrt(u_g(1)**2+u_g(2)**2+u_g(3)**2)*ddrop/visc_g
+             print*,'Reynolds (liquid) = ', Lrho0*sqrt(u_l(1)**2+u_l(2)**2+u_l(3)**2)*ddrop/visc_l
+             print*,'Acoustic Reynolds = ', Grho0*sqrt(gamm_g*GP0/Grho0)*ddrop/visc_g
+             print*,'Laplace           = ', fs%sigma*Lrho0*ddrop/visc_l**2
+           else
+             print*,'Reynolds (gas)    = Infinity'
+             print*,'Reynolds (liquid) = Infinity'
+             print*,'Acoustic Reynolds = Infinity'
+             if (fs%sigma.ne.0.0_WP) then
+               print*,'Laplace           = Infinity'
+             else
+               print*,'Laplace           = Undefined'
+             end if
+           end if
+           if (hdff_g.ne.0.0_WP) then
+             print*,'Prandtl (gas)     = ', visc_g*gamm_g*cv_g/hdff_g
+             print*,'Prandtl (liquid)  = ', visc_l*gamm_l*cv_l/hdff_l
+           else
+             if (visc_g.ne.0.0_WP) then
+               print*,'Prandtl (gas)     = Infinity'
+               print*,'Prandtl (liquid)  = Infinity'
+             else
+               print*,'Prandtl (gas)     = Undefined'
+               print*,'Prandtl (liquid)  = Undefined'
+             end if
+           end if
+           if (fs%sigma.ne.0.0_WP) then
+             print*,'Weber             = ', Grho0*((u_g(1)-u_l(1))**2+(u_g(2)-u_l(2))**2+(u_g(3)-u_l(3))**2)*ddrop/fs%sigma
+             print*,'Acoustic Weber    = ', gamm_g*GP0*ddrop/fs%sigma
+           else
+             print*,'Weber             = Infinity'
+             print*,'Acoustic Weber    = Infinity'
+           end if
+           if (sum(abs(fs%gravity)).ne.0.0_WP) then
+             print*,'Froude            = ', sqrt(u_l(1)**2+u_l(2)**2+u_l(3)**2)/(fs%gravity(1)**2+fs%gravity(2)**2+fs%gravity(3)**2)/sqrt(ddrop)
+           else if (sqrt(u_l(1)**2+u_l(2)**2+u_l(3)**2).ne.0.0_WP) then
+             print*,'Froude            = Infinity'
+           else
+             print*,'Froude            = Undefined'
+           end if
          end if
 
          ! Initialize flow variables
@@ -374,12 +422,21 @@ contains
          ! Need to fill ghost cells
          bc_scope='velocity'
          call fs%apply_bcond(time%dt,bc_scope)
+         
+         ! Choose relaxation model
+         if (abs(cv_l)+abs(cv_g).gt.0.0_WP) then
+           ! Use thermo-mechanical if heat conduction is considered
+           relax_model = thermmech_egy_mech_hhz
+         else
+           ! Use mechanical otherwise
+           relax_model = mech_egy_mech_hhz
+         end if
 
          ! Calculate mixture density and momenta
          fs%RHO   = (1.0_WP-vf%VF)*fs%Grho  + vf%VF*fs%Lrho
          fs%rhoUi = fs%RHO*fs%Ui; fs%rhoVi = fs%RHO*fs%Vi; fs%rhoWi = fs%RHO*fs%Wi
          ! Perform initial pressure relax
-         call fs%pressure_relax(vf,matmod)
+         call fs%pressure_relax(vf,matmod,relax_model)
          ! Calculate initial phase and bulk moduli
          call fs%init_phase_bulkmod(vf,matmod)
          call fs%reinit_phase_pressure(vf,matmod)
@@ -525,10 +582,6 @@ contains
          ! Create in-cell reconstruction
          call fs%flow_reconstruct(vf)
 
-         ! Get boundary conditions at current time
-
-         ! Other routines to add later: sgs, lpt, prescribe
-
          ! Zero variables that will change during subiterations
          fs%P = 0.0_WP
          fs%Pjx = 0.0_WP; fs%Pjy = 0.0_WP; fs%Pjz = 0.0_WP
@@ -543,9 +596,8 @@ contains
             ! Predictor step, involving advection and pressure terms
             call fs%advection_step(time%dt,vf,matmod)
 
-            ! Insert viscous step here, or possibly incorporate into predictor above
+            ! Diffusion and source term step
             call fs%diffusion_src_explicit_step(time%dt,vf,matmod)
-            ! Insert sponge step here
 
             ! Prepare pressure projection
             call fs%pressureproj_prepare(time%dt,vf,matmod)
@@ -566,7 +618,7 @@ contains
          end do
 
          ! Pressure relaxation
-         call fs%pressure_relax(vf,matmod)
+         call fs%pressure_relax(vf,matmod,relax_model)
 
          ! Output to ensight
          fs%PA = matmod%EOS_all(vf);

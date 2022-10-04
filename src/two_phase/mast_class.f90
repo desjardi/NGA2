@@ -19,9 +19,16 @@ module mast_class
    integer, parameter, public :: neumann=3           !< Zero normal gradient
    !integer, parameter, public :: convective=4        !< Convective outflow condition
    integer, parameter, public :: clipped_neumann=5   !< Clipped Neumann condition (outflow only)
+   !integer, parameter, public :: adiabatic=6
+   !integer, parameter, public :: pressure_dirichlet=7 
    
    ! List of available contact line models for this solver
    integer, parameter, public :: static_contact=1    !< Static contact line model
+   
+   ! List of available pressure relaxation implementations
+   integer, parameter, public :: mech_egy_mech_hhz=1       !< Mechanical for energy, mechanical for helmholtz
+   integer, parameter, public :: thermmech_egy_mech_hhz=2  !< Thermo-mechanical for energy, mechanical for helmholtz
+   !integer, parameter, public :: thermmech_egy_therm_hhz=3 !< Thermo-mechanical for energy, thermal for helmholtz
 
    ! Buffer for labeling BCs
    character(len=str_medium), public :: bc_scope
@@ -33,12 +40,13 @@ module mast_class
       integer :: type                                     !< Bcond type
       type(iterator) :: itr                               !< This is the iterator for the bcond - this identifies the (i,j,k)
       character(len=1) :: face                            !< Bcond face (x/y/z)
-      integer :: dir                                      !< Bcond direction (+1,-1,0 for interior)
-      real(WP) :: rdir                                    !< Bcond direction (real variable)
+      integer :: dir_rhs,dir_lhs,fdir_rhs,fdir_lhs        !< Bcond key for shift array based on direction and face
+      character(len=2) :: celldir                         !< Bcond cell and direction (e.g. x+ or xp)
+      integer :: dir                                      !< Bcond direction (-1 or +1)
    end type bcond
 
    !> Bcond shift value
-   integer, dimension(3,6), parameter :: shift=reshape([+1,0,0,-1,0,0,0,+1,0,0,-1,0,0,0,+1,0,0,-1],shape(shift))
+   integer, dimension(3,10), parameter :: shift=reshape([+1,0,0,-1,0,0,0,+1,0,0,-1,0,0,0,+1,0,0,-1,-2,0,0,0,-2,0,0,0,-2,0,0,0],shape(shift))
    
    !> Two-phase compressible solver object definition ([M]ultiphase [A]ll-Mach [S]emi-Lagrangian [T]ransport)
    type :: mast
@@ -181,12 +189,14 @@ module mast_class
       real(WP) :: CFLv_x,CFLv_y,CFLv_z                                    !< Viscous CFL numbers
       
       ! Monitoring quantities
-      real(WP) :: Umax,Vmax,Wmax,Pmax,RHOmax,Tmax                         !< Maximum velocity, pressure, density, temperature
+      real(WP) :: RHOmin,RHOmax,Umax,Vmax,Wmax,Pmax,Tmax                  !< Minimum density; Maximum density, velocity, pressure, density, temperature
       
    contains
       procedure :: print=>mast_print                      !< Output solver to the screen
       procedure :: get_bcond                              !< Get a boundary condition
       procedure :: apply_bcond                            !< Apply boundary conditions as specified
+      procedure :: apply_bcond_vf                         !< Apply boundary conditions for VF field
+      procedure :: apply_bcond_facepressure               !< Apply boundary conditions to face pressure field
       procedure :: add_static_contact                     !< Add static contact line model to surface tension jump
 
       ! For initialization of simulation
@@ -222,6 +232,7 @@ module mast_class
       ! For pressure relaxation
       procedure :: pressure_relax                         !< Loop to relax pressure, change VF and phase values, at end of timetep
       procedure :: pressure_relax_one                     !< Routine to perform mechanical relaxation for an individual cell
+      procedure :: pressure_thermal_relax_one                     !< Routine to perform thermo-mechanical relaxation for an individual cell
 
       ! Miscellaneous
       procedure :: get_cfl                                !< Calculate maximum CFL
@@ -462,8 +473,7 @@ contains
    subroutine init_metrics(this)
       implicit none
       class(mast), intent(inout) :: this
-      integer :: i,j,k,st1,st2
-      real(WP), dimension(-1:0) :: itpx,itpy,itpz
+      integer :: i,j,k
       
       ! Allocate interpolation coefficients for center to cell face
       allocate(this%itpi_x(-1:0,this%cfg%imin_:this%cfg%imax_+1,this%cfg%jmin_:this%cfg%jmax_+1,this%cfg%kmin_:this%cfg%kmax_+1)) !< X-face-centered
@@ -531,8 +541,7 @@ contains
    subroutine adjust_metrics(this)
       implicit none
       class(mast), intent(inout) :: this
-      integer :: i,j,k,st1,st2
-      real(WP) :: delta,mysum
+      integer :: i,j,k
       
       ! Sync up u/v/wmasks
       call this%cfg%sync(this%umask)
@@ -666,7 +675,7 @@ contains
    
    
    !> Add a boundary condition
-   subroutine add_bcond(this,name,type,locator,face,dir)
+   subroutine add_bcond(this,name,type,locator,face,dir,celldir)
       use string,   only: lowercase
       use messager, only: die
       implicit none
@@ -681,29 +690,84 @@ contains
             integer, intent(in) :: ind1,ind2,ind3
          end function locator
       end interface
-      character(len=1), intent(in) :: face
-      integer, intent(in) :: dir
+      character(len=1), intent(in), optional :: face
+      integer, intent(in), optional :: dir
+      character(len=2), intent(in), optional :: celldir
       type(bcond), pointer :: new_bc
       integer :: i,j,k,n
       
-      ! Prepare new bcond
-      allocate(new_bc)
-      new_bc%name=trim(adjustl(name))
-      new_bc%type=type
-      select case (lowercase(face))
-      case ('x'); new_bc%face='x'
-      case ('y'); new_bc%face='y'
-      case ('z'); new_bc%face='z'
-      case default; call die('[mast add_bcond] Unknown bcond face - expecting x, y, or z')
-      end select
-      new_bc%itr=iterator(pg=this%cfg,name=new_bc%name,locator=locator,face=new_bc%face)
-      select case (dir) ! Outward-oriented
-      case (+1); new_bc%dir=+1
-      case (-1); new_bc%dir=-1
-      case ( 0); new_bc%dir= 0
-      case default; call die('[mast add_bcond] Unknown bcond dir - expecting -1, +1, or 0')
-      end select
-      new_bc%rdir=real(new_bc%dir,WP)
+      ! Check face or cell specification
+      if (present(face).and.present(celldir)) call die('[mast add_bcond] Specification of bcond must be by face or cell, not both')
+      if ((.not.present(face)).and.(.not.present(celldir))) call die('[mast add_bcond] Specification of bcond must be by face or cell')
+      
+      ! BC specified using face locator; cell BC is implied
+      if (present(face)) then
+        ! Check presence of dir
+        if (.not.present(dir)) call die('[mast add_bcond] Specification of bcond by face must include dir')
+        ! Check direction parameter
+        select case (dir) ! Outward-oriented
+        case (+1,-1)
+        case default; call die('[mast add_bcond] Unknown bcond dir - expecting -1 or +1')
+        end select
+        ! Create BC
+        allocate(new_bc)
+        new_bc%name=trim(adjustl(name))
+        new_bc%type=type
+        ! Check face parameter
+        select case (lowercase(face))
+        case ('x')
+          new_bc%fdir_rhs=1+max(0,-dir) ! 1 and 2
+          new_bc%dir_lhs=(1-max(0,-dir))*10 + max(0,-dir)*1 ! 10 and 1
+          new_bc%dir_rhs=(1-max(0,-dir))*1 + max(0,-dir)*10 ! 1 and 10
+        case ('y')
+          new_bc%fdir_rhs=3+max(0,-dir) ! 3 and 4
+          new_bc%dir_lhs=(1-max(0,-dir))*10 + max(0,-dir)*3 ! 10 and 3
+          new_bc%dir_rhs=(1-max(0,-dir))*3 + max(0,-dir)*10 ! 3 and 10
+        case ('z')
+          new_bc%fdir_rhs=5+max(0,-dir) ! 5 and 6
+          new_bc%dir_lhs=(1-max(0,-dir))*10 + max(0,-dir)*5 ! 10 and 5
+          new_bc%dir_rhs=(1-max(0,-dir))*5 + max(0,-dir)*10 ! 5 and 10
+        case default
+          call die('[mast add_bcond] Unknown bcond face - expecting x, y, or z')
+        end select
+        ! Prepare new bcond
+        new_bc%fdir_lhs=10 ! no shifts for face lhs
+        new_bc%face=face
+        new_bc%itr=iterator(pg=this%cfg,name=new_bc%name,locator=locator,face=face)
+        new_bc%dir=dir
+      end if
+      ! BC specified using cell locator; face BC is implied
+      if (present(celldir)) then
+        ! Create BC
+        allocate(new_bc)
+        new_bc%name=trim(adjustl(name))
+        new_bc%type=type
+        ! Check celldir string; direction tells which face is included
+        select case (lowercase(celldir))
+        case ('+x','x+','xp','px')
+          new_bc%dir_rhs =1;  new_bc%dir=+1; new_bc%face='x'
+          new_bc%fdir_lhs=10; new_bc%fdir_rhs=1
+        case ('-x','x-','xm','mx')
+          new_bc%dir_rhs =2;  new_bc%dir=-1; new_bc%face='x'
+          new_bc%fdir_lhs=2;  new_bc%fdir_rhs=7
+        case ('+y','y+','yp','py')
+          new_bc%dir_rhs =3;  new_bc%dir=+1; new_bc%face='y'
+          new_bc%fdir_lhs=10; new_bc%fdir_rhs=3
+        case ('-y','y-','ym','my')
+          new_bc%dir_rhs =4;  new_bc%dir=-1; new_bc%face='y'
+          new_bc%fdir_lhs=4;  new_bc%fdir_rhs=8
+        case ('+z','z+','zp','pz')
+          new_bc%dir_rhs =5;  new_bc%dir=+1; new_bc%face='z'
+          new_bc%fdir_lhs=10; new_bc%fdir_rhs=5
+        case ('-z','z-','zm','mz')
+          new_bc%dir_rhs =6;  new_bc%dir=-1; new_bc%face='z'
+          new_bc%fdir_lhs=6;  new_bc%fdir_rhs=9
+        case default; call die('[vfs add_bcond] Unknown bcond celldir')
+        end select
+        ! Prepare new bcond
+        new_bc%dir_lhs=10 ! no shifts for cell lhs
+        new_bc%itr=iterator(pg=this%cfg,name=new_bc%name,locator=locator,face='c')
+      end if
       
       ! Insert it up front
       new_bc%next=>this%first_bc
@@ -714,39 +778,78 @@ contains
 
       ! For this collocated solver, BCs specify cell-centered values and behavior,
       ! and the behavior of the face-centered values depends on the type of BC.
-      ! (For now, dirichlet BCs always enforce the flowrate, i.e., mask face velocities,
-      !  and clipped neumann BCs modify the sl_ flags to what works best at the outlet.)
 
-      ! To work properly with n_ and locators, dirichlets work by specifying the face that is
-      ! a part of the dirichlet, and the cell behind it (determined by the direction) is included.
+      ! BC locators can be specified using faces or cells, and this is interpreted by
+      ! which parameters are used when add_bcond is called. For pure neumann conditions,
+      ! face velocities are untouched, but for clipped neumann conditions, face quantities
+      ! are modified to limit reflection from the boundary. For dirichlet conditions,
+      ! the cell and corresponding face values are masked, and the user must be aware of 
+      ! which indices are being used in the locator in order to set the values within
+      ! the simulation file.
       
       ! Now adjust the metrics accordingly
       select case (new_bc%type)
       case (dirichlet)
          do n=1,new_bc%itr%n_
             i=new_bc%itr%map(1,n); j=new_bc%itr%map(2,n); k=new_bc%itr%map(3,n)
-            select case(face)
-            case('x')
-               ! Mask face
-               this%umask(i,j,k)=2
-               ! Mask cell
-               this%mask(i+min(0,dir),j,k)=2
-            case('y')
-               ! Mask face
-               this%vmask(i,j,k)=2
-               ! Mask cell
-               this%mask(i,j+min(0,dir),k)=2
-            case('z')
-               ! Mask face
-               this%wmask(i,j,k)=2
-               ! Mask cell
-               this%mask(i,j,k+min(0,dir))=2
-            end select
+            if (present(face)) then
+              select case(face)
+              case('x')
+                ! Mask face
+                this%umask(i,j,k)=2
+                ! Mask cell
+                this%mask(i+min(0,dir),j,k)=2
+              case('y')
+                ! Mask face
+                this%vmask(i,j,k)=2
+                ! Mask cell
+                this%mask(i,j+min(0,dir),k)=2
+              case('z')
+                ! Mask face
+                this%wmask(i,j,k)=2
+                ! Mask cell
+                this%mask(i,j,k+min(0,dir))=2
+              end select
+            else
+              select case(celldir)
+              case('+x','x+','xp','px')
+                ! Mask cell
+                this%mask(i,j,k)=2
+                ! Mask face
+                this%umask(i,j,k)=2
+              case('-x','x-','xm','mx')
+                ! Mask cell
+                this%mask(i,j,k)=2
+                ! Mask face
+                this%umask(i+1,j,k)=2
+              case('+y','y+','yp','py')
+                ! Mask cell
+                this%mask(i,j,k)=2
+                ! Mask face
+                this%vmask(i,j,k)=2
+              case('-y','y-','ym','my')
+                ! Mask cell
+                this%mask(i,j,k)=2
+                ! Mask face
+                this%vmask(i,j+1,k)=2
+              case('+z','z+','zp','pz')
+                ! Mask cell
+                this%mask(i,j,k)=2
+                ! Mask face
+                this%wmask(i,j,k)=2
+              case('-z','z-','zm','mz')
+                ! Mask cell
+                this%mask(i,j,k)=2
+                ! Mask face
+                this%wmask(i,j,k+1)=2
+              end select
+            end if
          end do
          
       case (neumann) !< Neumann has to be at existing wall or at domain boundary!
       case (clipped_neumann)
       !case (convective)
+      !case (adiabatic)
       case default
          call die('[mast add_bcond] Unknown bcond type')
       end select
@@ -776,7 +879,7 @@ contains
       implicit none
       class(mast), intent(inout) :: this
       real(WP), intent(in) :: dt
-      integer :: i,j,k,n,stag,ii
+      integer :: i,j,k,n,ii,factor
       type(bcond), pointer :: my_bc
       character(len=str_medium) :: scope
       
@@ -799,72 +902,109 @@ contains
 
                ! Condition is necessary for sl_ flags
                if (trim(adjustl(scope)).eq.'flag') then
-                  ! Usage of SL scheme is same for dirichlet and neumann
                   do n=1,my_bc%itr%n_
                      i=my_bc%itr%map(1,n); j=my_bc%itr%map(2,n); k=my_bc%itr%map(3,n)
                      select case (my_bc%face)
                      case ('x')
-                        do ii = 0,abs(2*my_bc%dir)
-                           this%sl_x(i-ii*my_bc%dir,j,k) = 1
-                        end do
+                        this%sl_x(i-shift(1,my_bc%fdir_lhs),j,k)=1
                      case ('y')
-                        do ii = 0,abs(2*my_bc%dir)
-                           this%sl_y(i,j-ii*my_bc%dir,k) = 1
-                        end do
+                        this%sl_y(i,j-shift(2,my_bc%fdir_lhs),k)=1
                      case ('z')
-                        do ii = 0,abs(2*my_bc%dir)
-                           this%sl_z(i,j,k-ii*my_bc%dir) = 1
-                        end do
+                        this%sl_z(i,j,k-shift(3,my_bc%fdir_lhs))=1
                      end select
                   end do
                end if
                
             case (neumann,clipped_neumann) !< Apply Neumann condition to all 3 components
-               ! Handle index shift due to staggering
-               stag=min(my_bc%dir,0)
                ! Implement based on bcond direction
                do n=1,my_bc%itr%n_
                   i=my_bc%itr%map(1,n); j=my_bc%itr%map(2,n); k=my_bc%itr%map(3,n)
                   select case (trim(adjustl(scope)))
                   case('density')
-                     this%Grho(i,j,k)=this%Grho(i-shift(1,my_bc%dir),j-shift(2,my_bc%dir),k-shift(3,my_bc%dir))
-                     this%Lrho(i,j,k)=this%Lrho(i-shift(1,my_bc%dir),j-shift(2,my_bc%dir),k-shift(3,my_bc%dir))
+                     this%Grho     (i-shift(1,my_bc%dir_lhs),j-shift(2,my_bc%dir_lhs),k-shift(3,my_bc%dir_lhs)) &
+                         =this%Grho(i-shift(1,my_bc%dir_rhs),j-shift(2,my_bc%dir_rhs),k-shift(3,my_bc%dir_rhs))
+                     this%Lrho     (i-shift(1,my_bc%dir_lhs),j-shift(2,my_bc%dir_lhs),k-shift(3,my_bc%dir_lhs)) &
+                         =this%Lrho(i-shift(1,my_bc%dir_rhs),j-shift(2,my_bc%dir_rhs),k-shift(3,my_bc%dir_rhs))
                   case('momentum')
-                     this%rhoUi(i,j,k)=this%rhoUi(i-shift(1,my_bc%dir),j-shift(2,my_bc%dir),k-shift(3,my_bc%dir))
-                     this%rhoVi(i,j,k)=this%rhoVi(i-shift(1,my_bc%dir),j-shift(2,my_bc%dir),k-shift(3,my_bc%dir))
-                     this%rhoWi(i,j,k)=this%rhoWi(i-shift(1,my_bc%dir),j-shift(2,my_bc%dir),k-shift(3,my_bc%dir))
+                     this%rhoUi     (i-shift(1,my_bc%dir_lhs),j-shift(2,my_bc%dir_lhs),k-shift(3,my_bc%dir_lhs)) &
+                         =this%rhoUi(i-shift(1,my_bc%dir_rhs),j-shift(2,my_bc%dir_rhs),k-shift(3,my_bc%dir_rhs))
+                     this%rhoVi     (i-shift(1,my_bc%dir_lhs),j-shift(2,my_bc%dir_lhs),k-shift(3,my_bc%dir_lhs)) &
+                         =this%rhoVi(i-shift(1,my_bc%dir_rhs),j-shift(2,my_bc%dir_rhs),k-shift(3,my_bc%dir_rhs))
+                     this%rhoWi     (i-shift(1,my_bc%dir_lhs),j-shift(2,my_bc%dir_lhs),k-shift(3,my_bc%dir_lhs)) &
+                         =this%rhoWi(i-shift(1,my_bc%dir_rhs),j-shift(2,my_bc%dir_rhs),k-shift(3,my_bc%dir_rhs))
                   case('energy')
-                     this%GrhoE(i,j,k)=this%GrhoE(i-shift(1,my_bc%dir),j-shift(2,my_bc%dir),k-shift(3,my_bc%dir))
-                     this%LrhoE(i,j,k)=this%LrhoE(i-shift(1,my_bc%dir),j-shift(2,my_bc%dir),k-shift(3,my_bc%dir))
+                     this%GrhoE     (i-shift(1,my_bc%dir_lhs),j-shift(2,my_bc%dir_lhs),k-shift(3,my_bc%dir_lhs)) &
+                         =this%GrhoE(i-shift(1,my_bc%dir_rhs),j-shift(2,my_bc%dir_rhs),k-shift(3,my_bc%dir_rhs))
+                     this%LrhoE     (i-shift(1,my_bc%dir_lhs),j-shift(2,my_bc%dir_lhs),k-shift(3,my_bc%dir_lhs)) &
+                         =this%LrhoE(i-shift(1,my_bc%dir_rhs),j-shift(2,my_bc%dir_rhs),k-shift(3,my_bc%dir_rhs))
                   case('velocity')
-                     select case (my_bc%face)
-                     case ('x')
-                        this%U(i     ,j    ,k    )=this%U(i-my_bc%dir     ,j    ,k    )
-                        this%V(i+stag,j:j+1,k    )=this%V(i-my_bc%dir+stag,j:j+1,k    )
-                        this%W(i+stag,j    ,k:k+1)=this%W(i-my_bc%dir+stag,j    ,k:k+1)
-                     case ('y')
-                        this%U(i:i+1,j+stag,k    )=this%U(i:i+1,j-my_bc%dir+stag,k    )
-                        this%V(i    ,j     ,k    )=this%V(i    ,j-my_bc%dir     ,k    )
-                        this%W(i    ,j+stag,k:k+1)=this%W(i    ,j-my_bc%dir+stag,k:k+1)
-                     case ('z')
-                        this%U(i:i+1,j    ,k+stag)=this%U(i:i+1,j    ,k-my_bc%dir+stag)
-                        this%V(i    ,j:j+1,k+stag)=this%V(i    ,j:j+1,k-my_bc%dir+stag)
-                        this%W(i    ,j    ,k     )=this%W(i    ,j    ,k-my_bc%dir     )
-                     end select
+                    ! Neumann only applied to face velocity for clipped_neumann,
+                    ! otherwise the value comes from the cell-centered velocity
+                    if (my_bc%type.eq.clipped_neumann) then
+                      select case (my_bc%face)
+                      case ('x')
+                        this%U     (i-shift(1,my_bc%fdir_lhs),j,k) &
+                            =this%U(i-shift(1,my_bc%fdir_rhs),j,k)
+                        this%V     (i-shift(1,my_bc%dir_lhs),j:j+1,k) &
+                            =this%V(i-shift(1,my_bc%dir_rhs),j:j+1,k)
+                        this%W     (i-shift(1,my_bc%dir_lhs),j,k:k+1) &
+                            =this%W(i-shift(1,my_bc%dir_rhs),j,k:k+1)
+                      case ('y')
+                        this%U     (i:i+1,j-shift(2,my_bc%dir_lhs),k) &
+                            =this%U(i:i+1,j-shift(2,my_bc%dir_rhs),k)
+                        this%V     (i,j-shift(2,my_bc%fdir_lhs),k) &
+                            =this%V(i,j-shift(2,my_bc%fdir_rhs),k)
+                        this%W     (i,j-shift(2,my_bc%dir_lhs),k:k+1) &
+                            =this%W(i,j-shift(2,my_bc%dir_rhs),k:k+1)
+                      case ('z')
+                        this%U     (i:i+1,j,k-shift(3,my_bc%dir_lhs)) &
+                            =this%U(i:i+1,j,k-shift(3,my_bc%dir_rhs))
+                        this%V     (i,j:j+1,k-shift(3,my_bc%dir_lhs)) &
+                            =this%V(i,j:j+1,k-shift(3,my_bc%dir_rhs))
+                        this%W     (i,j,k-shift(3,my_bc%fdir_lhs)) &
+                            =this%W(i,j,k-shift(3,my_bc%fdir_rhs))
+                      end select
+                    else
+                      select case (my_bc%face)
+                      case ('x')
+                        this%U     (i-shift(1,my_bc%fdir_lhs),j,k) &
+                            =this%Ui(i-shift(1,my_bc%dir_rhs),j,k)
+                        this%V     (i-shift(1,my_bc%dir_lhs),j:j+1,k) &
+                            =this%V(i-shift(1,my_bc%dir_rhs),j:j+1,k)
+                        this%W     (i-shift(1,my_bc%dir_lhs),j,k:k+1) &
+                            =this%W(i-shift(1,my_bc%dir_rhs),j,k:k+1)
+                      case ('y')
+                        this%U     (i:i+1,j-shift(2,my_bc%dir_lhs),k) &
+                            =this%U(i:i+1,j-shift(2,my_bc%dir_rhs),k)
+                        this%V     (i,j-shift(2,my_bc%fdir_lhs),k) &
+                            =this%Vi(i,j-shift(2,my_bc%dir_rhs),k)
+                        this%W     (i,j-shift(2,my_bc%dir_lhs),k:k+1) &
+                            =this%W(i,j-shift(2,my_bc%dir_rhs),k:k+1)
+                      case ('z')
+                        this%U     (i:i+1,j,k-shift(3,my_bc%dir_lhs)) &
+                            =this%U(i:i+1,j,k-shift(3,my_bc%dir_rhs))
+                        this%V     (i,j:j+1,k-shift(3,my_bc%dir_lhs)) &
+                            =this%V(i,j:j+1,k-shift(3,my_bc%dir_rhs))
+                        this%W     (i,j,k-shift(3,my_bc%fdir_lhs)) &
+                            =this%Wi(i,j,k-shift(3,my_bc%dir_rhs))
+                      end select
+                    end if
                   case('flag')
-                     ! Extend 
+                     ! Extend if clipped neumann
+                     factor = 0
+                     if (my_bc%type.eq.clipped_neumann) factor = 2
                      select case (my_bc%face)
                      case ('x')
-                        do ii = 0,abs(2*my_bc%dir)
-                           this%sl_x(i-ii*my_bc%dir ,j     ,k    ) = 1
+                        do ii = 0,abs(factor*my_bc%dir)
+                           this%sl_x(i-shift(1,my_bc%fdir_lhs)-ii*my_bc%dir,j,k)=1
                         end do
                      case ('y')
-                        do ii = 0,abs(2*my_bc%dir)
-                           this%sl_y(i     ,j-ii*my_bc%dir ,k    ) = 1
+                        do ii = 0,abs(factor*my_bc%dir)
+                           this%sl_y(i,j-shift(2,my_bc%fdir_lhs)-ii*my_bc%dir,k)=1
                         end do
                      case ('z')
-                        do ii = 0,abs(2*my_bc%dir)
-                           this%sl_z(i     ,j     ,k-ii*my_bc%dir) = 1
+                        do ii = 0,abs(factor*my_bc%dir)
+                           this%sl_z(i,j,k-shift(3,my_bc%fdir_lhs)-ii*my_bc%dir)=1
                         end do
                      end select
                   end select
@@ -873,15 +1013,20 @@ contains
                if (my_bc%type.eq.clipped_neumann.and.trim(adjustl(scope)).eq.'velocity') then
                   select case (my_bc%face)
                   case ('x')
-                     if (this%U(i,j,k)*my_bc%rdir.lt.0.0_WP) this%U(i,j,k)=0.0_WP
+                     if (this%U(i-shift(1,my_bc%fdir_lhs),j,k)*real(my_bc%dir,WP).lt.0.0_WP) &
+                         this%U(i-shift(1,my_bc%fdir_lhs),j,k)=0.0_WP
                   case ('y')
-                     if (this%V(i,j,k)*my_bc%rdir.lt.0.0_WP) this%V(i,j,k)=0.0_WP
+                     if (this%V(i,j-shift(2,my_bc%fdir_lhs),k)*real(my_bc%dir,WP).lt.0.0_WP) &
+                         this%V(i,j-shift(2,my_bc%fdir_lhs),k)=0.0_WP
                   case ('z')
-                     if (this%W(i,j,k)*my_bc%rdir.lt.0.0_WP) this%W(i,j,k)=0.0_WP
+                     if (this%W(i,j,k-shift(3,my_bc%fdir_lhs))*real(my_bc%dir,WP).lt.0.0_WP) &
+                         this%W(i,j,k-shift(3,my_bc%fdir_lhs))=0.0_WP
                   end select
                end if
                
             !case (convective)   ! Not implemented yet!
+            
+            !case (adiabatic)    ! Not implemented yet!
                
             case default
                call die('[mast apply_bcond] Unknown bcond type')
@@ -917,6 +1062,95 @@ contains
       end select
       
    end subroutine apply_bcond
+   
+   !> Enforce boundary condition on vf%VF
+   subroutine apply_bcond_vf(this,vf)
+      use messager, only: die
+      use vfs_class, only: vfs
+      implicit none
+      class(mast), intent(inout) :: this
+      class(vfs), intent(inout) :: vf
+      integer :: i,j,k,n
+      type(bcond), pointer :: my_bc
+
+      ! Traverse bcond list
+      my_bc=>this%first_bc
+      do while (associated(my_bc))
+         ! Only processes inside the bcond work here
+         if (my_bc%itr%amIn) then
+            ! Select appropriate action based on the bcond type
+            select case (my_bc%type)
+            case (dirichlet)               !< Apply Dirichlet conditions (nothing to do here)
+            case (neumann,clipped_neumann) !< Apply Neumann condition
+              do n=1,my_bc%itr%n_
+                i=my_bc%itr%map(1,n); j=my_bc%itr%map(2,n); k=my_bc%itr%map(3,n)
+                vf%VF   (i-shift(1,my_bc%dir_lhs),j-shift(2,my_bc%dir_lhs),k-shift(3,my_bc%dir_lhs)) &
+                  =vf%VF(i-shift(1,my_bc%dir_rhs),j-shift(2,my_bc%dir_rhs),k-shift(3,my_bc%dir_rhs))
+              end do
+            !case (convective)   ! Not implemented yet!
+            !case (adiabatic)    ! Not implemented yet!
+            case default
+               call die('[mast apply_bcond_vf] Unknown bcond type')
+            end select
+         end if
+         ! Move on to the next bcond
+         my_bc=>my_bc%next
+      end do
+      
+      ! Sync field
+      call this%cfg%sync(vf%VF)
+      
+   end subroutine apply_bcond_vf
+   
+   !> Enforce boundary conditions face pressure, if specified
+   subroutine apply_bcond_facepressure(this,Px,Py,Pz)
+      use messager, only: die
+      implicit none
+      class(mast), intent(inout) :: this
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: Px,Py,Pz
+      integer :: i,j,k,n
+      type(bcond), pointer :: my_bc
+
+      ! Traverse bcond list
+      my_bc=>this%first_bc
+      do while (associated(my_bc))
+         ! Only processes inside the bcond work here
+         if (my_bc%itr%amIn) then
+            ! Select appropriate action based on the bcond type
+            select case (my_bc%type)
+            case (dirichlet)               !< Apply Dirichlet conditions (nothing to do here)
+            case (neumann)                 !< no treatment of face pressure with neumann
+            case (clipped_neumann)         !< Apply clipped Neumann condition
+              do n=1,my_bc%itr%n_
+                i=my_bc%itr%map(1,n); j=my_bc%itr%map(2,n); k=my_bc%itr%map(3,n)
+                select case (my_bc%face)
+                case ('x')
+                  Px   (i-shift(1,my_bc%fdir_lhs),j,k) &
+                    =Px(i-shift(1,my_bc%fdir_rhs),j,k)
+                case ('y')
+                  Py   (i,j-shift(2,my_bc%fdir_lhs),k) &
+                    =Py(i,j-shift(2,my_bc%fdir_rhs),k)
+                case ('z')
+                  Pz   (i,j,k-shift(3,my_bc%fdir_lhs)) &
+                    =Pz(i,j,k-shift(3,my_bc%fdir_rhs))
+                end select
+              end do
+            !case (convective)   ! Not implemented yet!
+            !case (adiabatic)    ! Not implemented yet!
+            case default
+               call die('[mast apply_bcond_facepressure] Unknown bcond type')
+            end select
+         end if
+         ! Move on to the next bcond
+         my_bc=>my_bc%next
+      end do
+      
+      ! Sync fields
+      call this%cfg%sync(Px)
+      call this%cfg%sync(Py)
+      call this%cfg%sync(Pz)
+      
+   end subroutine apply_bcond_facepressure
 
    ! Function to more easily calculate gas kinetic energy
    function GKEold(this,i,j,k) result(val)
@@ -954,10 +1188,9 @@ contains
      ! 1 is for semi-Lagrangian, 0 is for centered scheme
 
      ! Loop over the domain and determine multiphase locations within band and shock locations
-     ! Include +1/-1 to account for cell center / face mismatch in communication
-     do k=this%cfg%kmin_-1,this%cfg%kmax_+1
-        do j=this%cfg%jmin_-1,this%cfg%jmax_+1
-           do i=this%cfg%imin_-1,this%cfg%imax_+1
+     do k=this%cfg%kmin_,this%cfg%kmax_
+        do j=this%cfg%jmin_,this%cfg%jmax_
+           do i=this%cfg%imin_,this%cfg%imax_
               if (vf%VFold(i,j,k).lt.VFlo) then
                  ! In fully gas cells, check in band for change in phase
                  VF_check = 0
@@ -1025,9 +1258,9 @@ contains
      call this%apply_bcond(dt,bc_scope)
 
      ! Loop over the domain and check within band containing shock locations
-     do k=this%cfg%kmin_-1,this%cfg%kmax_+1
-        do j=this%cfg%jmin_-1,this%cfg%jmax_+1
-           do i=this%cfg%imin_-1,this%cfg%imax_+1
+     do k=this%cfg%kmin_,this%cfg%kmax_
+        do j=this%cfg%jmin_,this%cfg%jmax_
+           do i=this%cfg%imin_,this%cfg%imax_
               if (minval(this%sl_x(i:i+1,j,k)).eq.0.or. &
                   minval(this%sl_y(i,j:j+1,k)).eq.0.or. &
                   minval(this%sl_z(i,j,k:k+1)).eq.0) then
@@ -1081,9 +1314,9 @@ contains
        ! wt weights how important the acoustic scale is
        cb=abs(sum(this%divp_x(:,i,j,k)*this%U(i:i+1,j,k)) &
             + sum(this%divp_y(:,i,j,k)*this%V(i,j:j+1,k)) &
-            + sum(this%divp_z(:,i,j,k)*this%W(i,j,k:k+1)) &
-            )-min(this%cfg%dxi(i),this%cfg%dyi(j),this%cfg%dzi(k)) &
-            / sqrt(this%RHOSS2(i,j,k)/this%RHO(i,j,k)) / this%shs_wt
+            + sum(this%divp_z(:,i,j,k)*this%W(i,j,k:k+1)))&
+            - min(this%cfg%dxi(i),this%cfg%dyi(j),this%cfg%dzi(k)) &
+            * sqrt(this%RHOSS2(i,j,k)/this%RHO(i,j,k)) / this%shs_wt
 
      end function shock_sensor
 
@@ -1412,8 +1645,8 @@ contains
         end do
      end do
 
-     ! Boundaries for VF, phase density, phase pressure
-     call vf%cfg%sync(vf%VF)
+     ! Boundaries for VF
+     call this%apply_bcond_vf(vf)
      
      ! Update phase interface to match VF field, etc.
      ! (Mimics the end of vf%advance())
@@ -1522,6 +1755,9 @@ contains
      do k=this%cfg%kmin_,this%cfg%kmax_
         do j=this%cfg%jmin_,this%cfg%jmax_
            do i=this%cfg%imin_,this%cfg%imax_
+              PgradX(i,j,k)=0.0_WP; PgradY(i,j,k)=0.0_WP; PgradZ(i,j,k)=0.0_WP
+              ! Skip wall cells and masked BC cells
+              if (this%mask(i,j,k).gt.0) cycle
               ! Pressure jump, gradient for x
               rho_l=sum(vf%Gvol(0,:,:,i,j,k))*this%Grho(i,j,k)+sum(vf%Lvol(0,:,:,i,j,k))*this%Lrho(i,j,k)
               rho_r=sum(vf%Gvol(1,:,:,i,j,k))*this%Grho(i,j,k)+sum(vf%Lvol(1,:,:,i,j,k))*this%Lrho(i,j,k)
@@ -1705,8 +1941,7 @@ contains
      subroutine SL_getFaceFlux(f_moments, flux, b_flux)
        use irl_fortran_interface, only: getSize
        integer  :: ii,jj,kk,n
-       integer  :: list_size,uniq_id
-       integer,  dimension(3) :: ind
+       integer  :: list_size
        real(WP) :: my_Gvol,my_Lvol
        real(WP), dimension(3) :: my_Gbary,my_Lbary
        real(WP), dimension(14)  :: flux
@@ -1780,7 +2015,7 @@ contains
        integer,  dimension(3)   :: ind_p
        real(WP) :: vol_f,vol_check
        character(len=1) :: dir
-       integer :: n,i,j,k,idir
+       integer :: i,j,k,idir
 
        ! Trajectory-Tracing Semi-Lagrangian scheme
 
@@ -1836,7 +2071,7 @@ contains
      ! ===================================================== !
      subroutine TTSL_getFaceFlux(pt_p,pt_f,ind_p,vol_f, flux)
        implicit none
-       real(WP), dimension(3) :: pt_f,pt_p,pt_c,dx_f
+       real(WP), dimension(3) :: pt_f,pt_p,pt_c
        real(WP), dimension(14):: flux
        integer,  dimension(3) :: ind_p,ind_c
        real(WP) :: vol_f,l_f,l_c,l_d,l_s
@@ -1907,13 +2142,12 @@ contains
 
      ! Routine to find intesections with mesh and calculate distances
      subroutine mesh_intersect(pt_p,pt_f,ind_p, pt_c,ind_c)
-       integer :: i,j,k,min_d
+       integer :: min_d
        real(WP) :: slope_factor
        real(WP), dimension(3) :: pt_p,pt_f,pt_c,vec
        integer,  dimension(3) :: ind_p,ind_c,ind_m
        real(WP), dimension(3) :: xint,yint,zint
        real(WP), dimension(4) :: dint
-       logical :: p_flag
 
        ! Direction of intersection
        vec = pt_f - pt_p
@@ -2305,7 +2539,7 @@ contains
      
      ! Set up intermediate divergence
      div =>this%tmp1
-     ! Set up temporary face viscosity
+     ! Set up temporary face velocity
      Uf_y=>this%tmp2; Vf_z=>this%tmp4; Wf_x=>this%tmp6
      Uf_z=>this%tmp3; Vf_x=>this%tmp5; Wf_y=>this%tmp7
      ! Set up face viscosities
@@ -2371,9 +2605,9 @@ contains
        ! Apply boundary condtions
        bc_scope = 'velocity'
        call this%apply_bcond(dt,bc_scope)
-       ! Calculate other interpolated face velocities
-       call this%interp_vel_basic(vf,this%Vi,this%Wi,this%Ui,Vf_x,Wf_y,Uf_z)
-       call this%interp_vel_basic(vf,this%Wi,this%Ui,this%Vi,Wf_x,Uf_y,Vf_z)
+       ! Calculate other interpolated face velocities (ignore masks)
+       call this%interp_vel_basic(vf,this%Vi,this%Wi,this%Ui,Vf_x,Wf_y,Uf_z,use_masks=.false.)
+       call this%interp_vel_basic(vf,this%Wi,this%Ui,this%Vi,Wf_x,Uf_y,Vf_z,use_masks=.false.)
        ! BCs not needed, masks are already addressed, nothing used from within boundary
        
        ! Compute divergence and SGS isotropic tensor in each cell
@@ -2507,11 +2741,14 @@ contains
              this%rhoUi(i,j,k)=this%rhoUi(i,j,k)+mydt*this%RHO (i,j,k)*this%gravity(1)
              this%rhoVi(i,j,k)=this%rhoVi(i,j,k)+mydt*this%RHO (i,j,k)*this%gravity(2)
              this%rhoWi(i,j,k)=this%rhoWi(i,j,k)+mydt*this%RHO (i,j,k)*this%gravity(3)
-             this%GrhoE(i,j,k)=this%GrhoE(i,j,k)+mydt*this%Grho(i,j,k)*(1.0_WP-vf%VF(i,j,k))* &
-                  (this%Ui(i,j,k)*this%gravity(1)+this%Vi(i,j,k)*this%gravity(2)+this%Wi(i,j,k)*this%gravity(3))
-             this%LrhoE(i,j,k)=this%LrhoE(i,j,k)+mydt*this%Lrho(i,j,k)*(       vf%VF(i,j,k))* &
-                  (this%Ui(i,j,k)*this%gravity(1)+this%Vi(i,j,k)*this%gravity(2)+this%Wi(i,j,k)*this%gravity(3))
-             
+             this%GrhoE(i,j,k)=this%GrhoE(i,j,k)+mydt*this%Grho(i,j,k)* &
+                  (this%gravity(1)*(this%Ui(i,j,k)+0.5_WP*mydt*this%gravity(1)) &
+                  +this%gravity(2)*(this%Vi(i,j,k)+0.5_WP*mydt*this%gravity(2)) &
+                  +this%gravity(3)*(this%Wi(i,j,k)+0.5_WP*mydt*this%gravity(3)))
+             this%LrhoE(i,j,k)=this%LrhoE(i,j,k)+mydt*this%Lrho(i,j,k)* &
+                  (this%gravity(1)*(this%Ui(i,j,k)+0.5_WP*mydt*this%gravity(1)) &
+                  +this%gravity(2)*(this%Vi(i,j,k)+0.5_WP*mydt*this%gravity(2)) &
+                  +this%gravity(3)*(this%Wi(i,j,k)+0.5_WP*mydt*this%gravity(3)))
              ! Include source terms from LPT
              !rhoU(i,j,k)=rhoU(i,j,k) + srcUi(i,j,k)/real(nCFL,WP)
              !rhoV(i,j,k)=rhoV(i,j,k) + srcVi(i,j,k)/real(nCFL,WP)
@@ -2690,6 +2927,7 @@ contains
       ! BCs
       bc_scope = 'velocity'
       call this%apply_bcond(dt,bc_scope)
+      call this%apply_bcond_facepressure(DP_U,DP_V,DP_W)
 
      ! Correct cell-centered quantities
      do k=this%cfg%kmin_,this%cfg%kmax_
@@ -2770,15 +3008,16 @@ contains
 
    end subroutine pressureproj_correct
 
-   subroutine pressure_relax(this,vf,matmod)
+   subroutine pressure_relax(this,vf,matmod,relax_model)
      use vfs_class,  only: vfs, VFlo, VFhi
      use matm_class, only: matm
      implicit none
      class(mast), intent(inout) :: this
      class(vfs),  intent(inout) :: vf
      class(matm), intent(inout) :: matmod
+     integer, intent(in) :: relax_model
      real(WP) :: KE
-     logical  :: Gflag, Lflag
+     logical  :: Gflag, Lflag, Gf, Lf
      integer  :: i,j,k
 
      ! Loop through domain and relax multiphase cells
@@ -2789,16 +3028,17 @@ contains
               if (this%mask(i,j,k).gt.0) cycle
               ! Determine if multiphase cell
               if ((vf%VF(i,j,k).ge.VFlo).and.(vf%VF(i,j,k).le.VFhi)) then
-                 if (.true.) then !(mult_iso) then
-                    ! Mechanical relaxation
-                    call this%pressure_relax_one(vf,matmod,i,j,k)
-                 else
-                    ! Thermal relaxation
-                    ! call pressure_thermal_relax_one(i,j,k)
-                 end if
-                 ! Refresh temperature and temperature-dependent variables
-                 ! call therm_refresh_one(i,j,k)
+                select case (relax_model)
+                case (mech_egy_mech_hhz)
+                  ! Mechanical relaxation
+                  call this%pressure_relax_one(vf,matmod,i,j,k)
+                case (thermmech_egy_mech_hhz) !,thermmech_egy_therm_hhz
+                  ! Thermo-mechanical relaxation
+                  call this%pressure_thermal_relax_one(vf,matmod,i,j,k)
+                end select
               end if
+              ! Update temperature globally, having changed during prior iteration and relaxation
+              this%Tmptr(i,j,k)=matmod%get_local_temperature(vf,i,j,k,this%Tmptr(i,j,k))
            end do
         end do
      end do
@@ -2831,7 +3071,12 @@ contains
                  ! Calculate kinematic KE
                  KE = 0.5_WP*(this%Ui(i,j,k)**2+this%Vi(i,j,k)**2+this%Wi(i,j,k)**2)
                  ! Alter energy if needed
+                 Gf = .false.; Lf = .false.
                  call matmod%fix_energy(vf%VF(i,j,k),KE,this%P(i,j,k),this%sigma*vf%curv(i,j,k),i,j,k,Gflag,Lflag)
+                 ! If energy has been altered, update temperature
+                 if (Gf.or.Lf) this%Tmptr(i,j,k) = matmod%get_local_temperature(vf,i,j,k,this%Tmptr(i,j,k))
+                 ! Update flags
+                 Gflag = (Gflag.or.Gf); Lflag = (Lflag.or.Lf)
               end do
            end do
         end do
@@ -2880,7 +3125,7 @@ contains
         if (i.ge.this%cfg%imin_.and.i.le.this%cfg%imax_.and. &
              j.ge.this%cfg%jmin_.and.j.le.this%cfg%jmax_.and. &
              k.ge.this%cfg%kmin_.and.k.le.this%cfg%kmax_) then
-           print*,'Ptherm relax could not be performed',i,j,k,'oVF',oVF, &
+           print*,'Ptherm relax could not be performed(1)',i,j,k,'oVF',oVF, &
                 'detmnt',detmnt,'Pliq',matmod%EOS_liquid(i,j,k,'p'),'Pgas',matmod%EOS_gas(i,j,k,'p')
         end if
         return
@@ -2898,7 +3143,7 @@ contains
         if (i.ge.this%cfg%imin_.and.i.le.this%cfg%imax_.and. &
              j.ge.this%cfg%jmin_.and.j.le.this%cfg%jmax_.and. &
              k.ge.this%cfg%kmin_.and.k.le.this%cfg%kmax_) then
-           print*,'P relax could not be performed',i,j,k,'oVF',oVF,'VF*',buf_VF, &
+           print*,'P relax could not be performed(2)',i,j,k,'oVF',oVF,'VF*',buf_VF, &
                 'Peq',Peq,'Pliq',matmod%EOS_liquid(i,j,k,'p'),'Pgas',matmod%EOS_gas(i,j,k,'p')
         end if
         return
@@ -2911,7 +3156,7 @@ contains
      ! Use the VF increment and Pint to calculate the change of the internal energy
      ! Store "relaxed" values with prefix r
      if (buf_VF.le.VFhi.and.buf_VF.ge.VFlo) then
-        ! Calculate future energy unless VF is out of bounds
+        ! Calculate total energy 
         rLrhoE = (oVF*this%LrhoE(i,j,k) - Pint*dVF)/buf_VF
         rGrhoE = ((1.0_WP-oVF)*this%GrhoE(i,j,k) + Pint*dVF)/(1.0_WP-buf_VF)
         ! Adjust phase quantities now that the volume fraction has changed
@@ -2925,7 +3170,6 @@ contains
      ! Go through cases according to the values found
      ! Check for VF bounds, then for bad values
      if (buf_VF.gt.VFhi) then
-        ! If equilibrium pressure or relaxed energy is negative, let liquid phase take gas energy
         vf%VF(i,j,k) = 1.0_WP
         this%LrhoE(i,j,k) = oVF*this%LrhoE(i,j,k) + (1.0_WP-oVF)*this%GrhoE(i,j,k)
         this%GrhoE(i,j,k) = 0.0_WP
@@ -2938,11 +3182,11 @@ contains
         this%Grho (i,j,k) = (1.0_WP-oVF)*this%Grho(i,j,k)
         this%Lrho (i,j,k) = 0.0_WP
      else if (rGIE.lt.Plo.and.oVF.gt.gelim) then
-        ! If equilibrium energy is negative, leave other values unchanged
+        ! If equilibrium gas energy is negative, leave other values unchanged
         if (i.ge.this%cfg%imin_.and.i.le.this%cfg%imax_.and. &
              j.ge.this%cfg%jmin_.and.j.le.this%cfg%jmax_.and. &
              k.ge.this%cfg%kmin_.and.k.le.this%cfg%kmax_) then
-           print*,'Gas phase eliminated in P relax',i,j,k,'oVF',oVF,'VF*',buf_VF, &
+           print*,'Gas phase eliminated in P relax(3)',i,j,k,'oVF',oVF,'VF*',buf_VF, &
                 'Peq-pjump',Peq-my_pjump,'Pliq',matmod%EOS_liquid(i,j,k,'p'), &
                 'Grhoe0',this%GrhoE(i,j,k)-this%Grho(i,j,k)*KE,'Grho0',this%Grho(i,j,k)
         end if
@@ -2952,11 +3196,11 @@ contains
         this%Lrho (i,j,k) = this%Lrho(i,j,k)
         this%Grho (i,j,k) = 0.0_WP
      else if (rLIE.lt.Plo.and.oVF.lt.lelim) then
-        ! If equilibrium pressure is negative, leave other values unchanged
+        ! If equilibrium liquid energy is negative, leave other values unchanged
         if (i.ge.this%cfg%imin_.and.i.le.this%cfg%imax_.and. &
              j.ge.this%cfg%jmin_.and.j.le.this%cfg%jmax_.and. &
              k.ge.this%cfg%kmin_.and.k.le.this%cfg%kmax_) then
-           print*,'Liq phase eliminated in P relax',i,j,k,'oVF',oVF,'VF*',buf_VF, &
+           print*,'Liq phase eliminated in P relax(4)',i,j,k,'oVF',oVF,'VF*',buf_VF, &
                 'Peq',Peq,'Pgas',matmod%EOS_gas(i,j,k,'p'), &
                 'Lrhoe0',this%LrhoE(i,j,k)-this%Lrho(i,j,k)*KE,'Lrho0',this%Lrho(i,j,k)
         end if
@@ -2970,7 +3214,7 @@ contains
         if (i.ge.this%cfg%imin_.and.i.le.this%cfg%imax_.and. &
              j.ge.this%cfg%jmin_.and.j.le.this%cfg%jmax_.and. &
              k.ge.this%cfg%kmin_.and.k.le.this%cfg%kmax_) then
-           print*,'Gas phase eliminated in P relax',i,j,k,'oVF',oVF,'VF*',buf_VF, &
+           print*,'Gas phase eliminated in P relax(5)',i,j,k,'oVF',oVF,'VF*',buf_VF, &
                 'Peq-pjump',Peq-my_pjump,'Pliq',matmod%EOS_liquid(i,j,k,'p'), &
                 'Grhoe0',this%GrhoE(i,j,k)-this%Grho(i,j,k)*KE,'Grho0',this%Grho(i,j,k)
         end if
@@ -2984,7 +3228,7 @@ contains
         if (i.ge.this%cfg%imin_.and.i.le.this%cfg%imax_.and. &
              j.ge.this%cfg%jmin_.and.j.le.this%cfg%jmax_.and. &
              k.ge.this%cfg%kmin_.and.k.le.this%cfg%kmax_) then
-           print*,'Liq phase eliminated in P relax',i,j,k,'oVF',oVF,'VF*',buf_VF, &
+           print*,'Liq phase eliminated in P relax(6)',i,j,k,'oVF',oVF,'VF*',buf_VF, &
                 'Peq',Peq,'Pgas',matmod%EOS_gas(i,j,k,'p'), &
                 'Lrhoe0',this%LrhoE(i,j,k)-this%Lrho(i,j,k)*KE,'Lrho0',this%Lrho(i,j,k)
         end if
@@ -2999,7 +3243,7 @@ contains
            if (i.ge.this%cfg%imin_.and.i.le.this%cfg%imax_.and. &
                 j.ge.this%cfg%jmin_.and.j.le.this%cfg%jmax_.and. &
                 k.ge.this%cfg%kmin_.and.k.le.this%cfg%kmax_) then
-              print*,'P relax could not be performed',i,j,k,'oVF',oVF,'VF*',buf_VF, &
+              print*,'P relax could not be performed(7)',i,j,k,'oVF',oVF,'VF*',buf_VF, &
                    'Peq+Pref_l',Peq+matmod%Pref_l,'Peq+Pref_g-pjump',Peq+matmod%Pref_g-my_pjump, &
                    'rGrhoe',rGIE,'rLrhoe',rLIE
            end if
@@ -3016,6 +3260,213 @@ contains
      
      return
    end subroutine pressure_relax_one
+   
+   subroutine pressure_thermal_relax_one(this,vf,matmod,i,j,k)
+     use vfs_class, only: vfs, VFlo, VFhi
+     use matm_class, only: matm, constant
+     implicit none
+     class(mast), intent(inout) :: this
+     class(vfs),  intent(inout) :: vf
+     class(matm), intent(inout) :: matmod
+     integer,     intent(in)    :: i,j,k
+     integer  :: n
+     real(WP) :: KE,buf_VF,detmnt,cvg_p,re1,re2,T1,T2
+     real(WP) :: Peq,Pold,Pnorm,oVF,my_pjump
+     real(WP) :: rGrhoE,rLrhoE,rGrho,rLrho,rGIE,rLIE,D_rhoe
+     real(WP), dimension(4) :: VF_terms
+     real(WP), dimension(3) :: quad_terms
+     integer , parameter :: n_loop = 10
+     real(WP), parameter :: tol_p = 1e-5
+     real(WP), parameter :: lelim = 0.1_WP
+     real(WP), parameter :: gelim = 1.0_WP-lelim
+     real(WP), parameter :: Plo = 1e-8_WP
+
+     ! Calculate kinetic energy without the density
+     KE  = 0.5_WP*(this%Ui(i,j,k)**2+this%Vi(i,j,k)**2+this%Wi(i,j,k)**2)
+
+     ! Store old VF value
+     oVF = vf%VF(i,j,k)
+     ! Store pressure jump
+     my_pjump = this%sigma*vf%curv(i,j,k)
+     ! Set initial guesses and loop quantities
+     this%Tmptr(i,j,k) = matmod%get_local_temperature(vf,i,j,k,this%Tmptr(i,j,k))
+     T1 = this%Tmptr(i,j,k); T2 = this%Tmptr(i,j,k)
+     Pnorm = abs(oVF*matmod%EOS_liquid(i,j,k,'p') + (1.0_WP-oVF)*matmod%EOS_gas(i,j,k,'p'))
+     n = 0; cvg_p = 1.0_WP; Pold = Pnorm
+     
+     ! Begin loop (for temperature-dependent cv)
+     do while (cvg_p.gt.tol_p.and.n.lt.n_loop)
+       
+       ! Get coefficients for quadratic equation
+       call matmod%EOS_thermal_relax_quad(i,j,k,oVF,my_pjump, &
+                 matmod%spec_heat_liquid(T1),matmod%spec_heat_gas(T2), &
+                 VF_terms,quad_terms)
+       
+       ! Check if solution can exist
+       detmnt = quad_terms(2)**2-4.0_WP*quad_terms(1)*quad_terms(3)
+       if (detmnt.lt.0.0_WP) then
+         if (i.ge.this%cfg%imin_.and.i.le.this%cfg%imax_.and. &
+             j.ge.this%cfg%jmin_.and.j.le.this%cfg%jmax_.and. &
+             k.ge.this%cfg%kmin_.and.k.le.this%cfg%kmax_) then
+             print*,'Ptherm relax could not be performed(1)',i,j,k,'oVF',oVF, &
+             'detmnt',detmnt,'Pliq',matmod%EOS_liquid(i,j,k,'p'),'Pgas',matmod%EOS_gas(i,j,k,'p')
+         end if
+         return
+       end if
+     
+       ! Solve quadratic equation for equilibrium pressure
+       Peq = (-quad_terms(2) + sqrt(detmnt))/(2.0_WP*quad_terms(1))
+       ! Use equilibrium pressure to calculate the new VF
+       buf_VF = (VF_terms(1)*Peq+VF_terms(2))/(VF_terms(3)*Peq+VF_terms(4))
+       
+       ! Check if new VF not NaN. Let bounds be handled later.
+       if (buf_VF.ne.buf_VF.or.&
+          (Peq+matmod%Pref_g-my_pjump.lt.Plo.and.oVF.le.gelim).or.&
+          (Peq+matmod%Pref_l.lt.Plo.and.oVF.ge.lelim)) then
+          if (i.ge.this%cfg%imin_.and.i.le.this%cfg%imax_.and. &
+              j.ge.this%cfg%jmin_.and.j.le.this%cfg%jmax_.and. &
+              k.ge.this%cfg%kmin_.and.k.le.this%cfg%kmax_) then
+              print*,'P relax could not be performed(2)',i,j,k,'oVF',oVF,'VF*',buf_VF, &
+              'Peq',Peq,'Pliq',matmod%EOS_liquid(i,j,k,'p'),'Pgas',matmod%EOS_gas(i,j,k,'p')
+          end if
+          return
+       end if
+       
+       ! If cell becomes single-phase, exit
+       if ((buf_VF.gt.VFhi).or.(buf_VF.lt.VFlo)) exit
+       
+       ! Calculate relaxed phase densities
+       rLrho  = (       oVF)*this%Lrho(i,j,k)/(       buf_VF)
+       rGrho  = (1.0_WP-oVF)*this%Grho(i,j,k)/(1.0_WP-buf_VF)
+       ! Update temperature of each phase according to equilibrium pressure
+       T1 = matmod%EOS_temp(Peq         ,rLrho,matmod%spec_heat_liquid(T1),'liquid')
+       T2 = matmod%EOS_temp(Peq-my_pjump,rGrho,matmod%spec_heat_gas(T2),   'gas')
+       
+       ! If properties are constant, exit after one iteration
+       if ((matmod%M_cv_l.eq.constant).and.(matmod%M_cv_g.eq.constant)) exit
+       
+       ! Prepare for next iteration and calculate loop criteria
+       n = n + 1
+       cvg_p = abs(Peq-Pold)/Pnorm
+       Pold = Peq
+
+     end do
+     
+     ! Store "relaxed" values with prefix r
+     if (buf_VF.le.VFhi.and.buf_VF.ge.VFlo) then
+       ! Use the new VOF and the EOS to calculate the energy exchange
+       ! If statement is to reduce the likelihood of round-off error
+       re1 = (       oVF)*(this%LrhoE(i,j,k)-this%Lrho(i,j,k)*KE)
+       re2 = (1.0_WP-oVF)*(this%GrhoE(i,j,k)-this%Grho(i,j,k)*KE)
+       if (abs(re1).gt.abs(re2)) then
+         D_rhoe = -(1.0_WP-buf_VF)*matmod%EOS_energy(Peq-my_pjump,rGrho, &
+                    0.0_WP,0.0_WP,0.0_WP,'gas'   ) + re2
+       else
+         D_rhoe = +(       buf_VF)*matmod%EOS_energy(Peq         ,rLrho, &
+                    0.0_WP,0.0_WP,0.0_WP,'liquid') - re1
+       end if
+       ! Calculate relaxed energy
+       rLrhoE = ((       oVF)*this%LrhoE(i,j,k) + D_rhoe)/(       buf_VF)
+       rGrhoE = ((1.0_WP-oVF)*this%GrhoE(i,j,k) - D_rhoe)/(1.0_WP-buf_VF)
+       ! Calculate relaxed internal energy of each phase
+       rLIE   = rLrhoE-rLrho*KE
+       rGIE   = rGrhoE-rGrho*KE
+     end if
+
+     ! Go through cases according to the values found
+     ! Check for VF bounds, then for bad values
+     if (buf_VF.gt.VFhi) then
+        vf%VF(i,j,k) = 1.0_WP
+        this%LrhoE(i,j,k) = oVF*this%LrhoE(i,j,k) + (1.0_WP-oVF)*this%GrhoE(i,j,k)
+        this%GrhoE(i,j,k) = 0.0_WP
+        this%Lrho (i,j,k) = oVF*this%Lrho(i,j,k)
+        this%Grho (i,j,k) = 0.0_WP
+     else if (buf_VF.lt.VFlo) then
+        vf%VF(i,j,k) = 0.0_WP
+        this%GrhoE(i,j,k) = (1.0_WP-oVF)*this%GrhoE(i,j,k) + oVF*this%LrhoE(i,j,k)
+        this%LrhoE(i,j,k) = 0.0_WP
+        this%Grho (i,j,k) = (1.0_WP-oVF)*this%Grho(i,j,k)
+        this%Lrho (i,j,k) = 0.0_WP
+     else if (rGIE.lt.Plo.and.oVF.gt.gelim) then
+        ! If equilibrium energy is negative, leave other values unchanged
+        if (i.ge.this%cfg%imin_.and.i.le.this%cfg%imax_.and. &
+             j.ge.this%cfg%jmin_.and.j.le.this%cfg%jmax_.and. &
+             k.ge.this%cfg%kmin_.and.k.le.this%cfg%kmax_) then
+           print*,'Gas phase eliminated in P relax(3)',i,j,k,'oVF',oVF,'VF*',buf_VF, &
+                'Peq-pjump',Peq-my_pjump,'Pliq',matmod%EOS_liquid(i,j,k,'p'), &
+                'Grhoe0',this%GrhoE(i,j,k)-this%Grho(i,j,k)*KE,'Grho0',this%Grho(i,j,k)
+        end if
+        vf%VF(i,j,k) = 1.0_WP
+        this%LrhoE(i,j,k) = this%LrhoE(i,j,k)
+        this%GrhoE(i,j,k) = 0.0_WP
+        this%Lrho (i,j,k) = this%Lrho(i,j,k)
+        this%Grho (i,j,k) = 0.0_WP
+     else if (rLIE.lt.Plo.and.oVF.lt.lelim) then
+        ! If equilibrium pressure is negative, leave other values unchanged
+        if (i.ge.this%cfg%imin_.and.i.le.this%cfg%imax_.and. &
+             j.ge.this%cfg%jmin_.and.j.le.this%cfg%jmax_.and. &
+             k.ge.this%cfg%kmin_.and.k.le.this%cfg%kmax_) then
+           print*,'Liq phase eliminated in P relax(4)',i,j,k,'oVF',oVF,'VF*',buf_VF, &
+                'Peq',Peq,'Pgas',matmod%EOS_gas(i,j,k,'p'), &
+                'Lrhoe0',this%LrhoE(i,j,k)-this%Lrho(i,j,k)*KE,'Lrho0',this%Lrho(i,j,k)
+        end if
+        vf%VF(i,j,k) = 0.0_WP
+        this%GrhoE(i,j,k) = this%GrhoE(i,j,k)
+        this%LrhoE(i,j,k) = 0.0_WP
+        this%Grho (i,j,k) = this%Grho(i,j,k)
+        this%Lrho (i,j,k) = 0.0_WP
+     else if (Peq+matmod%Pref_g-my_pjump.lt.Plo.and.oVF.gt.gelim) then
+        ! If equilibrium pressure is negative, let liquid phase take the energy
+        if (i.ge.this%cfg%imin_.and.i.le.this%cfg%imax_.and. &
+             j.ge.this%cfg%jmin_.and.j.le.this%cfg%jmax_.and. &
+             k.ge.this%cfg%kmin_.and.k.le.this%cfg%kmax_) then
+           print*,'Gas phase eliminated in P relax(5)',i,j,k,'oVF',oVF,'VF*',buf_VF, &
+                'Peq-pjump',Peq-my_pjump,'Pliq',matmod%EOS_liquid(i,j,k,'p'), &
+                'Grhoe0',this%GrhoE(i,j,k)-this%Grho(i,j,k)*KE,'Grho0',this%Grho(i,j,k)
+        end if
+        vf%VF(i,j,k) = 1.0_WP
+        this%LrhoE(i,j,k) = oVF*this%LrhoE(i,j,k) + max((1.0_WP-oVF)*this%GrhoE(i,j,k),0.0_WP)
+        this%GrhoE(i,j,k) = 0.0_WP
+        this%Lrho (i,j,k) = oVF*this%Lrho(i,j,k) ! + (1.0_WP-oVF)*Grho(i,j,k)
+        this%Grho (i,j,k) = 0.0_WP
+     else if (Peq+matmod%Pref_l.lt.Plo.and.oVF.lt.lelim) then
+        ! If equilibrium pressure is negative, let gas phase take energy
+        if (i.ge.this%cfg%imin_.and.i.le.this%cfg%imax_.and. &
+             j.ge.this%cfg%jmin_.and.j.le.this%cfg%jmax_.and. &
+             k.ge.this%cfg%kmin_.and.k.le.this%cfg%kmax_) then
+           print*,'Liq phase eliminated in P relax(6)',i,j,k,'oVF',oVF,'VF*',buf_VF, &
+                'Peq',Peq,'Pgas',matmod%EOS_gas(i,j,k,'p'), &
+                'Lrhoe0',this%LrhoE(i,j,k)-this%Lrho(i,j,k)*KE,'Lrho0',this%Lrho(i,j,k)
+        end if
+        vf%VF(i,j,k) = 0.0_WP
+        this%GrhoE(i,j,k) = (1.0_WP-oVF)*this%GrhoE(i,j,k) + max(oVF*this%LrhoE(i,j,k),0.0_WP)
+        this%LrhoE(i,j,k) = 0.0_WP
+        this%Grho (i,j,k) = (1.0_WP-oVF)*this%Grho(i,j,k) ! + oVF*Lrho(i,j,k)
+        this%Lrho (i,j,k) = 0.0_WP
+     else
+        ! Check for errant energy values
+        if (min(rGIE,rLIE,Peq+matmod%Pref_g-my_pjump,Peq+matmod%Pref_l).lt.Plo) then
+           if (i.ge.this%cfg%imin_.and.i.le.this%cfg%imax_.and. &
+                j.ge.this%cfg%jmin_.and.j.le.this%cfg%jmax_.and. &
+                k.ge.this%cfg%kmin_.and.k.le.this%cfg%kmax_) then
+              print*,'P relax could not be performed(7)',i,j,k,'oVF',oVF,'VF*',buf_VF, &
+                   'Peq+Pref_l',Peq+matmod%Pref_l,'Peq+Pref_g-pjump',Peq+matmod%Pref_g-my_pjump, &
+                   'rGrhoe',rGIE,'rLrhoe',rLIE
+           end if
+           return
+        end if
+
+        ! Set VF, rhoE, rho to relaxed values (made it past all the conditionals)
+        vf%VF(i,j,k) = buf_VF
+        this%LrhoE(i,j,k) = rLrhoE
+        this%GrhoE(i,j,k) = rGrhoE
+        this%Lrho (i,j,k) = rLrho
+        this%Grho (i,j,k) = rGrho
+        this%Tmptr(i,j,k) = T1 ! = T2
+     end if
+     
+     return
+   end subroutine pressure_thermal_relax_one
 
    !> Combine phase pressures and bulk moduli according to mixture rules, add additional terms to PA
    subroutine harmonize_advpressure_bulkmod(this,vf,matmod)
@@ -3183,11 +3634,14 @@ contains
             end do
          end do
       end do
+      
+      ! Boundary conditions for pressure at faces (helps outflow)
+      call this%apply_bcond_facepressure(this%P_U,this%P_V,this%P_W)
 
     end subroutine interp_pressure_density
 
    !> Calculate the interpolated velocity, which is the velocity at the face
-   subroutine interp_vel_basic(this,vf,Ui,Vi,Wi,U,V,W)
+   subroutine interp_vel_basic(this,vf,Ui,Vi,Wi,U,V,W,use_masks)
      use vfs_class, only : vfs
      implicit none
      class(mast), intent(in) :: this
@@ -3198,9 +3652,17 @@ contains
      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(out) :: U
      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(out) :: V
      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(out) :: W
+     logical, intent(in), optional :: use_masks
      integer  :: i,j,k
      real(WP) :: vol_r,vol_l,rho_r,rho_l
+     logical  :: flag
 
+     ! Determine whether masks should matter or use global interpolation
+     if (present(use_masks)) then
+        flag = .not.use_masks
+     else
+        flag = .false.
+      end if
 
      do k=this%cfg%kmin_,this%cfg%kmax_+1
         do j=this%cfg%jmin_,this%cfg%jmax_+1
@@ -3211,7 +3673,7 @@ contains
               rho_r=sum(vf%Gvol(0,:,:,i  ,j,k))*this%Grho(i  ,j,k)+sum(vf%Lvol(0,:,:,i  ,j,k))*this%Lrho(i  ,j,k)
               rho_l=sum(vf%Gvol(1,:,:,i-1,j,k))*this%Grho(i-1,j,k)+sum(vf%Lvol(1,:,:,i-1,j,k))*this%Lrho(i-1,j,k)
               if (min(vol_l,vol_r).gt.0.0_WP) then
-                 if (this%umask(i,j,k).ne.2) U(i,j,k)=(rho_l*Ui(i-1,j,k)+rho_r*Ui(i,j,k))/(rho_l+rho_r)
+                 if (this%umask(i,j,k).ne.2.or.flag) U(i,j,k)=(rho_l*Ui(i-1,j,k)+rho_r*Ui(i,j,k))/(rho_l+rho_r)
               else
                  U(i,j,k)=0.0_WP
               end if
@@ -3221,7 +3683,7 @@ contains
               rho_r=sum(vf%Gvol(:,0,:,i,j  ,k))*this%Grho(i,j  ,k)+sum(vf%Lvol(:,0,:,i,j  ,k))*this%Lrho(i,j  ,k)
               rho_l=sum(vf%Gvol(:,1,:,i,j-1,k))*this%Grho(i,j-1,k)+sum(vf%Lvol(:,1,:,i,j-1,k))*this%Lrho(i,j-1,k)
               if (min(vol_l,vol_r).gt.0.0_WP) then
-                 if (this%vmask(i,j,k).ne.2) V(i,j,k)=(rho_l*Vi(i,j-1,k)+rho_r*Vi(i,j,k))/(rho_l+rho_r)
+                 if (this%vmask(i,j,k).ne.2.or.flag) V(i,j,k)=(rho_l*Vi(i,j-1,k)+rho_r*Vi(i,j,k))/(rho_l+rho_r)
               else
                  V(i,j,k)=0.0_WP
               end if
@@ -3231,7 +3693,7 @@ contains
               rho_r=sum(vf%Gvol(:,:,0,i,j,k  ))*this%Grho(i,j,k  )+sum(vf%Lvol(:,:,0,i,j,k  ))*this%Lrho(i,j,k  )
               rho_l=sum(vf%Gvol(:,:,1,i,j,k-1))*this%Grho(i,j,k-1)+sum(vf%Lvol(:,:,1,i,j,k-1))*this%Lrho(i,j,k-1)
               if (min(vol_l,vol_r).gt.0.0_WP) then
-                 if (this%wmask(i,j,k).ne.2) W(i,j,k)=(rho_l*Wi(i,j,k-1)+rho_r*Wi(i,j,k))/(rho_l+rho_r)
+                 if (this%wmask(i,j,k).ne.2.or.flag) W(i,j,k)=(rho_l*Wi(i,j,k-1)+rho_r*Wi(i,j,k))/(rho_l+rho_r)
               else
                  W(i,j,k)=0.0_WP
               end if
@@ -3343,7 +3805,7 @@ contains
      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: termV
      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: termW
      integer  :: i,j,k
-     real(WP) :: vol_r,vol_l,rho_r,rho_l
+     real(WP) :: rho_r,rho_l
      real(WP), dimension(0:1) :: jumpx,jumpy,jumpz
 
      ! Begin at zero every time
@@ -3556,7 +4018,7 @@ contains
       my_CFLa_x=my_CFLa_x*dt; my_CFLa_y=my_CFLa_y*dt; my_CFLa_z=my_CFLa_z*dt
       my_CFLv_x=my_CFLv_x*dt; my_CFLv_y=my_CFLv_y*dt; my_CFLv_z=my_CFLv_z*dt
       
-      ! Get the parallel max
+      ! Get the parallel min, max
       call MPI_ALLREDUCE(my_CFLc_x,this%CFLc_x,1,MPI_REAL_WP,MPI_MAX,this%cfg%comm,ierr)
       call MPI_ALLREDUCE(my_CFLc_y,this%CFLc_y,1,MPI_REAL_WP,MPI_MAX,this%cfg%comm,ierr)
       call MPI_ALLREDUCE(my_CFLc_z,this%CFLc_z,1,MPI_REAL_WP,MPI_MAX,this%cfg%comm,ierr)
@@ -3579,14 +4041,15 @@ contains
    
    !> Calculate the max of our fields
    subroutine get_max(this)
-      use mpi_f08,  only: MPI_ALLREDUCE,MPI_MAX
+      use mpi_f08,  only: MPI_ALLREDUCE,MPI_MAX,MPI_MIN
       use parallel, only: MPI_REAL_WP
       implicit none
       class(mast), intent(inout) :: this
       integer :: i,j,k,ierr
-      real(WP) :: my_Umax,my_Vmax,my_Wmax,my_Pmax,my_Tmax
+      real(WP) :: my_RHOmin,my_RHOmax,my_Umax,my_Vmax,my_Wmax,my_Pmax,my_Tmax
       
       ! Set all to zero
+      my_RHOmin=huge(1.0_WP); my_RHOmax = 0.0_WP
       my_Umax=0.0_WP; my_Vmax=0.0_WP; my_Wmax=0.0_WP; my_Pmax=0.0_WP; my_Tmax=0.0_WP
       do k=this%cfg%kmin_,this%cfg%kmax_
          do j=this%cfg%jmin_,this%cfg%jmax_
@@ -3594,6 +4057,8 @@ contains
                my_Umax=max(my_Umax,abs(this%U(i,j,k)))
                my_Vmax=max(my_Vmax,abs(this%V(i,j,k)))
                my_Wmax=max(my_Wmax,abs(this%W(i,j,k)))
+               if (this%cfg%VF(i,j,k).gt.0.0_WP) my_RHOmin=min(my_RHOmin,abs(this%RHO(i,j,k)))
+               if (this%cfg%VF(i,j,k).gt.0.0_WP) my_RHOmax=max(my_RHOmax,abs(this%RHO(i,j,k)))
                if (this%cfg%VF(i,j,k).gt.0.0_WP) my_Pmax=max(my_Pmax,abs(this%P(i,j,k)))
                if (this%cfg%VF(i,j,k).gt.0.0_WP) my_Tmax=max(my_Tmax,abs(this%Tmptr(i,j,k)))
             end do
@@ -3601,6 +4066,8 @@ contains
       end do
       
       ! Get the parallel max
+      call MPI_ALLREDUCE(my_RHOmin,this%RHOmin,1,MPI_REAL_WP,MPI_MIN,this%cfg%comm,ierr)
+      call MPI_ALLREDUCE(my_RHOmax,this%RHOmax,1,MPI_REAL_WP,MPI_MAX,this%cfg%comm,ierr)
       call MPI_ALLREDUCE(my_Umax,this%Umax,1,MPI_REAL_WP,MPI_MAX,this%cfg%comm,ierr)
       call MPI_ALLREDUCE(my_Vmax,this%Vmax,1,MPI_REAL_WP,MPI_MAX,this%cfg%comm,ierr)
       call MPI_ALLREDUCE(my_Wmax,this%Wmax,1,MPI_REAL_WP,MPI_MAX,this%cfg%comm,ierr)
