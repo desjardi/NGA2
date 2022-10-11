@@ -8,7 +8,7 @@ USE_HYPRE = TRUE
 USE_LAPACK= TRUE
 USE_IRL   = TRUE
 PROFILE   = FALSE
-DEBUG     = FALSE
+DEBUG     = TRUE
 COMP      = gnu
 EXEBASE   = nga
 
@@ -23,9 +23,8 @@ INCLUDE_LOCATIONS += $(Ulocs)
 VPATH_LOCATIONS   += $(Ulocs)
 
 # Define external libraries - this can also be in .profile
-HYPRE_DIR = /Users/desjardi/Builds/hypre
-IRL_DIR   = /Users/desjardi/Builds/IRL
-LAPACK_DIR= /Users/desjardi/Builds/lapack
+HYPRE_DIR = /Users/desjardi/Repositories/Builds/hypre
+IRL_DIR   = /Users/desjardi/Repositories/Builds/IRL
 
 # NGA compilation definitions
 include $(NGA_HOME)/tools/GNUMake/Make.defs
