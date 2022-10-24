@@ -245,9 +245,9 @@ contains
             call b%df%pullvar(name='P'  ,var=b%fs%P  )
          end if
          ! Gas velocity parameters
-         !call param_read('Gas velocity',Uin)
+         call param_read('Gas velocity',Uin)
          call param_read('Peak flow rate',CPFR)
-         Uin=inflowVelocity(b%time%t,CPFR,H_mouth,W_mouth)
+         ! Uin=inflowVelocity(b%time%t,CPFR,H_mouth,W_mouth)
          call param_read('Gas thickness',delta)
          call param_read('Gas perturbation',Urand)
          call b%fs%get_bcond('inflow',mybc)
@@ -443,7 +443,7 @@ contains
          type(bcond), pointer :: mybc
          integer  :: n,i,j,k
          ! Reapply Dirichlet at inlet
-         Uin=inflowVelocity(b%time%t,CPFR,H_mouth,W_mouth)
+         ! Uin=inflowVelocity(b%time%t,CPFR,H_mouth,W_mouth)
          call b%fs%get_bcond('inflow',mybc)
          do n=1,mybc%itr%no_
             i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)

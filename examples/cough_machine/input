@@ -35,7 +35,7 @@
 2 Stretching z : 1.08
 
 # Injection velocity
-Gas velocity :        10
+Gas velocity :        20
 Peak flow rate :      0.001
 Gas thickness :       0.001
 Gas perturbation :    1
@@ -54,7 +54,7 @@ Static contact angle :              51
 1 Max timestep size : 1e-5
 2 Max timestep size : 1e-5
 Max cfl number :    0.9
-Max time :          0.6
+Max time :          0.3
 
 # Pressure solver
 Pressure tolerance : 1e-6
@@ -69,6 +69,6 @@ Ensight output period : 1e-3
 Stat output period : 1e-3
 
 # Restart and save
-Restart output period : 5e-3
-Restart from :          !5.00000E-04
+Restart output period : 1e-5
+Restart from :          !5.00000E-05
 

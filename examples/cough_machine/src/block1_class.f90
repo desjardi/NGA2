@@ -56,6 +56,9 @@ module block1_class
    !> Inflow parameters
    real(WP) :: Uin,delta,Urand,Uco,CPFR
 
+   !> Liquid viscosity
+   real(WP) :: visc_l
+
    !> Logical constant for evaluating restart
    logical :: restart_test
    
@@ -256,8 +259,9 @@ contains
          integer  :: i,j,k
          ! Create a two-phase flow solver
          b%fs=tpns(cfg=b%cfg,name='Two-phase NS')
-         ! Assign constant viscosity to each phase
-         ! call param_read('Liquid dynamic viscosity',b%fs%visc_l)
+         ! Assign viscosity to each phase
+         call param_read('Liquid dynamic viscosity',visc_l)
+         b%fs%visc_l=visc_l
          call param_read('Gas dynamic viscosity'   ,b%fs%visc_g)
          ! Assign constant density to each phase
          call param_read('Liquid density',b%fs%rho_l)
@@ -301,9 +305,9 @@ contains
             call b%df%pullvar(name='P'  ,var=b%fs%P  )
          end if
          ! Gas velocity parameters
-         !call param_read('Gas velocity',Uin)
+         call param_read('Gas velocity',Uin)
          call param_read('Peak flow rate',CPFR)
-         Uin=inflowVelocity(b%time%t,CPFR,H_mouth,W_mouth)
+         ! Uin=inflowVelocity(b%time%t,CPFR,H_mouth,W_mouth)
          call param_read('Gas thickness',delta)
          call param_read('Gas perturbation',Urand)
          call b%fs%get_bcond('inflow',mybc)
@@ -474,14 +478,15 @@ contains
 
 
    !> Take a time step with block 1
-   subroutine step(b,Udir,Vdir,Wdir)
+   ! subroutine step(b,Udir,Vdir,Wdir)
+   subroutine step(b)
       use tpns_class, only: static_contact
       use mpi,        only: mpi_wtime
       implicit none
       class(block1), intent(inout) :: b
-      real(WP), dimension(b%cfg%imino_:,b%cfg%jmino_:,b%cfg%kmino_:), intent(inout) :: Udir     !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
-      real(WP), dimension(b%cfg%imino_:,b%cfg%jmino_:,b%cfg%kmino_:), intent(inout) :: Vdir     !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
-      real(WP), dimension(b%cfg%imino_:,b%cfg%jmino_:,b%cfg%kmino_:), intent(inout) :: Wdir     !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      ! real(WP), dimension(b%cfg%imino_:,b%cfg%jmino_:,b%cfg%kmino_:), intent(inout) :: Udir     !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      ! real(WP), dimension(b%cfg%imino_:,b%cfg%jmino_:,b%cfg%kmino_:), intent(inout) :: Vdir     !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      ! real(WP), dimension(b%cfg%imino_:,b%cfg%jmino_:,b%cfg%kmino_:), intent(inout) :: Wdir     !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       real(WP) :: starttime,endtime
 
       ! Start time step timer
@@ -499,7 +504,7 @@ contains
          type(bcond), pointer :: mybc
          integer  :: n,i,j,k
          ! Reapply Dirichlet at inlet
-         Uin=inflowVelocity(b%time%t,CPFR,H_mouth,W_mouth)
+         ! Uin=inflowVelocity(b%time%t,CPFR,H_mouth,W_mouth)
          call b%fs%get_bcond('inflow',mybc)
          do n=1,mybc%itr%no_
             i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
@@ -522,7 +527,7 @@ contains
       nonewt: block
          integer :: i,j,k
          real(WP) :: SRmag
-         real(WP), parameter :: C=1.0e-2_WP
+         real(WP), parameter :: C=1.137e-3_WP
          real(WP), parameter :: n=0.3_WP 
          ! Update viscosity
          do k=b%fs%cfg%kmino_,b%fs%cfg%kmaxo_
@@ -552,7 +557,7 @@ contains
       call b%vf%advance(dt=b%time%dt,U=b%fs%U,V=b%fs%V,W=b%fs%W)
 
       ! Prepare new staggered constant viscosity (at n+1)
-      call b%fs%get_variable_viscosity(vf=b%vf)
+      call b%fs%get_viscosity(vf=b%vf)
 
       ! Turbulence modeling - only work with gas properties here
       sgs_model: block
