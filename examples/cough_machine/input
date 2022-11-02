@@ -4,44 +4,54 @@
 
 # Parallelization
 1 Partition : 2 2 2
-2 Partition : 2 2 2 #Test
+2 Partition : 2 2 2 
+3 Partition : 2 2 2 
+
+# Turbulent duct mesh definition
+1 Lx :	5
+1 Ly :	1
+1 Lz :	1
+1 nx :	128
+1 ny :	40
+1 nz :	40
+1 Stretching : 2.1
 
 # Zoomed in mesh definition
-1 Uniform Lx :  0.1
-1 Uniform Ly :  0.03
-1 Uniform Lz :  0.03
-1 Uniform nx :  100
-1 Uniform ny :  30
-1 Uniform nz :  30
-1 Total nx :  100
-1 Total ny :  50
-1 Total nz :  50
-1 Stretching x : 1
-1 Stretching y : 1.08
-1 Stretching z : 1.08
-
-# Zoomed out mesh definition
-2 Uniform Lx :  0.3
-2 Uniform Ly :  0.1
-2 Uniform Lz :  0.1
-2 Uniform nx :  60
+2 Uniform Lx :  0.1
+2 Uniform Ly :  0.03
+2 Uniform Lz :  0.03
+2 Uniform nx :  100
 2 Uniform ny :  30
 2 Uniform nz :  30
-2 Total nx :  92
-2 Total ny :  80
-2 Total nz :  80
-2 Stretching x : 1.08
+2 Total nx :  100
+2 Total ny :  50
+2 Total nz :  50
+2 Stretching x : 1
 2 Stretching y : 1.08
 2 Stretching z : 1.08
 
+# Zoomed out mesh definition
+3 Uniform Lx :  0.3
+3 Uniform Ly :  0.1
+3 Uniform Lz :  0.1
+3 Uniform nx :  60
+3 Uniform ny :  30
+3 Uniform nz :  30
+3 Total nx :  92
+3 Total ny :  80
+3 Total nz :  80
+3 Stretching x : 1.08
+3 Stretching y : 1.08
+3 Stretching z : 1.08
+
 # Injection velocity
 Gas velocity :        20
-Peak flow rate :      0.001
+Peak flow rate :      0.002
 Gas thickness :       0.001
 Gas perturbation :    1
 Gas coflow :          1
 
-# Fluid properties
+# Fluid properties and velocity
 Gravity :                           0 -9.81 0
 Liquid dynamic viscosity :          1.137e-3
 Gas dynamic viscosity :             1.780e-5
@@ -49,10 +59,21 @@ Liquid density :                    1000
 Gas density :                       1.226
 Surface tension coefficient :       0.05
 Static contact angle :              51
+Ubulk :                             1
+Wbulk :                             0
+Perturbation :                      0
+
+# Boussinesq approximation
+Ambient temperature :            25
+Oral cavity temperature :        37
+Gas thermal diffusivity :        2.346e-5
+Gas specific heat :              1007
+Coefficent of Thermal expansion: 3.4e-3
 
 # Time integration
 1 Max timestep size : 1e-5
 2 Max timestep size : 1e-5
+3 Max timestep size : 2e-5
 Max cfl number :    0.9
 Max time :          0.3
 
@@ -65,7 +86,7 @@ Implicit tolerance : 1e-6
 Implicit iteration : 100
 
 # Ensight ouput
-Ensight output period : 1e-3
+Ensight output period : 1e-4
 Stat output period : 1e-3
 
 # Restart and save

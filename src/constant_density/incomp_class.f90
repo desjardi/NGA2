@@ -45,6 +45,9 @@ module incomp_class
       ! Constant property fluid
       real(WP) :: rho                                     !< This is our constant fluid density
       real(WP), dimension(:,:,:), allocatable :: visc     !< These is our constant+SGS dynamic viscosity
+
+      ! Gravitational acceleration
+      real(WP), dimension(3) :: gravity=0.0_WP            !< Acceleration of gravity
       
       ! Boundary condition list
       integer :: nbc                                      !< Number of bcond for our solver
@@ -122,6 +125,9 @@ module incomp_class
       procedure :: correct_mfr                            !< Correct for mfr mismatch to ensure global conservation
       procedure :: shift_p                                !< Shift pressure to have zero average
       procedure :: solve_implicit                         !< Solve for the velocity residuals implicitly
+      
+      procedure :: addsrc_gravity                         !< Add gravitational body force
+
    end type incomp
    
    
@@ -1732,6 +1738,25 @@ contains
       this%implicit_solver_wt=endtime-starttime
       
    end subroutine solve_implicit
+
+   !> Add gravity source term - assumes that rho_[UVW] have been generated before
+   subroutine addsrc_gravity(this,resU,resV,resW)
+      implicit none
+      class(incomp), intent(inout) :: this
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: resU !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: resV !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: resW !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      integer :: i,j,k
+      do k=this%cfg%kmin_,this%cfg%kmax_
+         do j=this%cfg%jmin_,this%cfg%jmax_
+            do i=this%cfg%imin_,this%cfg%imax_
+               if (this%umask(i,j,k).eq.0) resU(i,j,k)=resU(i,j,k)+this%rho*this%gravity(1)
+               if (this%vmask(i,j,k).eq.0) resV(i,j,k)=resV(i,j,k)+this%rho*this%gravity(2)
+               if (this%wmask(i,j,k).eq.0) resW(i,j,k)=resW(i,j,k)+this%rho*this%gravity(3)
+            end do
+         end do
+      end do
+   end subroutine addsrc_gravity
    
    
    !> Print out info for incompressible flow solver

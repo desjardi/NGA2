@@ -113,7 +113,7 @@ module bbmg_class
       procedure :: cgsolve                                            !< Solve the linear system with CG
       procedure :: initialize                                         !< Initialize the solver
       
-      procedure :: recompute_prolongation                             !< Recompute the prolongation at a given level
+      ! procedure :: recompute_prolongation                             !< Recompute the prolongation at a given level
       procedure :: recompute_restriction                              !< Recompute the restriction at a given level
       procedure :: recompute_operator                                 !< Recompute the operator at a given level
       procedure :: recompute_direct                                   !< Recompute the direct problem at the final level
@@ -951,7 +951,7 @@ contains
       ! Loop over levels
       do n=2,this%nlvl
          ! Recompute prolongation
-         call this%recompute_prolongation(n-1)
+         ! call this%recompute_prolongation(n-1)
          ! Recompute restriction
          call this%recompute_restriction(n)
          ! Recompute operator
@@ -962,239 +962,239 @@ contains
    end subroutine update
    
    
-   !> Recompute prolongation
-   subroutine recompute_prolongation(this,n)
-      implicit none
-      class(bbmg), intent(inout) :: this
-      integer, intent(in) :: n
-      integer :: n1,n2,n3
-      integer :: fi,fj,fk
-      integer :: li,lj,lk
-      integer :: pi,pj,pk
-      integer :: si,sj,sk
-      real(WP), dimension(-1:+1)       :: opr1d
-      real(WP), dimension(-1:+1,-1:+1) :: opr2d
-      real(WP), parameter :: ratio=10.0_WP
-      ! Sweep 1 - identity and 1D interpolations
-      do fk=this%lvl(n)%kmino_,this%lvl(n)%kmaxo_
-         do fj=this%lvl(n)%jmino_,this%lvl(n)%jmaxo_
-            do fi=this%lvl(n)%imino_,this%lvl(n)%imaxo_
-               ! Check stencil size
-               n1=this%pmodx(fi,n); n2=this%pmody(fj,n); n3=this%pmodz(fk,n)
-               ! Reset prolongation operator
-               this%lvl(n)%c2f(:,:,:,fi,fj,fk)=0.0_WP
-               ! Compute prolongation coefficients
-               select case (n1+n2+n3)
-               case (0) ! Fine and coarse locations coincide => Identity
-                  this%lvl(n)%c2f(0,0,0,fi,fj,fk)=1.0_WP
-               case (1) ! Fine location lies on coarse x/y/z-line => Which one?
-                  if      (n1.eq.1) then ! In x
-                     ! Aggregate operator
-                     opr1d=0.0_WP
-                     do lk=-1,+1
-                        do lj=-1,+1
-                           do li=-1,+1
-                              if (ratio*abs(this%lvl(n)%opr(li,0,0,fi,fj,fk)).ge.abs(this%lvl(n)%opr(li,lj,lk,fi,fj,fk))) then
-                                 opr1d(li)=opr1d(li)+this%lvl(n)%opr(li,lj,lk,fi,fj,fk)
-                              else
-                                 opr1d( 0)=opr1d( 0)+this%lvl(n)%opr(li,lj,lk,fi,fj,fk)
-                              end if
-                           end do
-                        end do
-                     end do
-                     opr1d(0)=sign(max(abs(opr1d(0)),epsilon(1.0_WP)),opr1d(0))
-                     ! Form x-interpolation
-                     this%lvl(n)%c2f(0,0,0,fi,fj,fk)=-opr1d(-1)/opr1d(0)
-                     this%lvl(n)%c2f(1,0,0,fi,fj,fk)=-opr1d(+1)/opr1d(0)
-                  else if (n2.eq.1) then ! In y
-                     ! Aggregate operator
-                     opr1d=0.0_WP
-                     do lk=-1,+1
-                        do lj=-1,+1
-                           do li=-1,+1
-                              if (ratio*abs(this%lvl(n)%opr(0,lj,0,fi,fj,fk)).ge.abs(this%lvl(n)%opr(li,lj,lk,fi,fj,fk))) then
-                                 opr1d(lj)=opr1d(lj)+this%lvl(n)%opr(li,lj,lk,fi,fj,fk)
-                              else
-                                 opr1d( 0)=opr1d( 0)+this%lvl(n)%opr(li,lj,lk,fi,fj,fk)
-                              end if
-                           end do
-                        end do
-                     end do
-                     opr1d(0)=sign(max(abs(opr1d(0)),epsilon(1.0_WP)),opr1d(0))
-                     ! Form y-interpolation
-                     this%lvl(n)%c2f(0,0,0,fi,fj,fk)=-opr1d(-1)/opr1d(0)
-                     this%lvl(n)%c2f(0,1,0,fi,fj,fk)=-opr1d(+1)/opr1d(0)
-                  else if (n3.eq.1) then ! In z
-                     ! Aggregate operator
-                     opr1d=0.0_WP
-                     do lk=-1,+1
-                        do lj=-1,+1
-                           do li=-1,+1
-                              if (ratio*abs(this%lvl(n)%opr(0,0,lk,fi,fj,fk)).ge.abs(this%lvl(n)%opr(li,lj,lk,fi,fj,fk))) then
-                                 opr1d(lk)=opr1d(lk)+this%lvl(n)%opr(li,lj,lk,fi,fj,fk)
-                              else
-                                 opr1d( 0)=opr1d( 0)+this%lvl(n)%opr(li,lj,lk,fi,fj,fk)
-                              end if
-                           end do
-                        end do
-                     end do
-                     opr1d(0)=sign(max(abs(opr1d(0)),epsilon(1.0_WP)),opr1d(0))
-                     ! Form z-interpolation
-                     this%lvl(n)%c2f(0,0,0,fi,fj,fk)=-opr1d(-1)/opr1d(0)
-                     this%lvl(n)%c2f(0,0,1,fi,fj,fk)=-opr1d(+1)/opr1d(0)
-                  end if
-               case default ! Do not treat face of cube centers yet
-                  cycle
-               end select
-            end do
-         end do
-      end do
-      ! Sweep 2 - 2D face interpolations
-      do fk=this%lvl(n)%kmino_,this%lvl(n)%kmaxo_
-         do fj=this%lvl(n)%jmino_,this%lvl(n)%jmaxo_
-            do fi=this%lvl(n)%imino_,this%lvl(n)%imaxo_
-               ! Check stencil size
-               n1=this%pmodx(fi,n); n2=this%pmody(fj,n); n3=this%pmodz(fk,n)
-               ! Compute prolongation coefficients
-               select case (n1+n2+n3)
-               case (2) ! Fine location lies on coarse xy/yz/zx-plane => Which one?
-                  if      (n1.eq.0) then ! In y/z
-                     ! yz-plane - skip if in y/z ghost cell
-                     if (fj.eq.this%lvl(n)%jmino_.or.fj.eq.this%lvl(n)%jmaxo_.or.fk.eq.this%lvl(n)%kmino_.or.fk.eq.this%lvl(n)%kmaxo_) cycle
-                     ! Aggregate operator
-                     opr2d=0.0_WP
-                     do lk=-1,+1
-                        do lj=-1,+1
-                           do li=-1,+1
-                              if (ratio*abs(this%lvl(n)%opr(0,lj,lk,fi,fj,fk)).ge.abs(this%lvl(n)%opr(li,lj,lk,fi,fj,fk))) then
-                                 opr2d(lj,lk)=opr2d(lj,lk)+this%lvl(n)%opr(li,lj,lk,fi,fj,fk)
-                              else
-                                 opr2d( 0, 0)=opr2d( 0, 0)+this%lvl(n)%opr(li,lj,lk,fi,fj,fk)
-                              end if
-                           end do
-                        end do
-                     end do
-                     opr2d(0,0)=sign(max(abs(opr2d(0,0)),epsilon(1.0_WP)),opr2d(0,0))
-                     ! Loop over operator stencil
-                     do lk=-1,+1
-                        do lj=-1,+1
-                           ! Skip middle of stencil
-                           if (lj.eq.0.and.lk.eq.0) cycle
-                           ! Loop over prolongation stencil
-                           do pk=0,1-abs(lk)
-                              do pj=0,1-abs(lj)
-                                 sj=(lj+1)/2+pj; sk=(lk+1)/2+pk
-                                 this%lvl(n)%c2f(0,sj,sk,fi,fj,fk)=this%lvl(n)%c2f(0,sj,sk,fi,fj,fk)-opr2d(lj,lk)/opr2d(0,0)*this%lvl(n)%c2f(0,pj,pk,fi,fj+lj,fk+lk)
-                              end do
-                           end do
-                        end do
-                     end do
-                  else if (n2.eq.0) then ! In z/x
-                     ! zx-plane - skip if in z/x ghost cell
-                     if (fk.eq.this%lvl(n)%kmino_.or.fk.eq.this%lvl(n)%kmaxo_.or.fi.eq.this%lvl(n)%imino_.or.fi.eq.this%lvl(n)%imaxo_) cycle
-                     ! Aggregate operator
-                     opr2d=0.0_WP
-                     do lk=-1,+1
-                        do lj=-1,+1
-                           do li=-1,+1
-                              if (ratio*abs(this%lvl(n)%opr(li,0,lk,fi,fj,fk)).ge.abs(this%lvl(n)%opr(li,lj,lk,fi,fj,fk))) then
-                                 opr2d(li,lk)=opr2d(li,lk)+this%lvl(n)%opr(li,lj,lk,fi,fj,fk)
-                              else
-                                 opr2d( 0, 0)=opr2d( 0, 0)+this%lvl(n)%opr(li,lj,lk,fi,fj,fk)
-                              end if
-                           end do
-                        end do
-                     end do
-                     opr2d(0,0)=sign(max(abs(opr2d(0,0)),epsilon(1.0_WP)),opr2d(0,0))
-                     ! Loop over operator stencil
-                     do lk=-1,+1
-                        do li=-1,+1
-                           ! Skip middle of stencil
-                           if (li.eq.0.and.lk.eq.0) cycle
-                           ! Loop over prolongation stencil
-                           do pk=0,1-abs(lk)
-                              do pi=0,1-abs(li)
-                                 si=(li+1)/2+pi; sk=(lk+1)/2+pk
-                                 this%lvl(n)%c2f(si,0,sk,fi,fj,fk)=this%lvl(n)%c2f(si,0,sk,fi,fj,fk)-opr2d(li,lk)/opr2d(0,0)*this%lvl(n)%c2f(pi,0,pk,fi+li,fj,fk+lk)
-                              end do
-                           end do
-                        end do
-                     end do
-                  else if (n3.eq.0) then ! In x/y
-                     ! xy-plane - skip if in x/y ghost cell
-                     if (fi.eq.this%lvl(n)%imino_.or.fi.eq.this%lvl(n)%imaxo_.or.fj.eq.this%lvl(n)%jmino_.or.fj.eq.this%lvl(n)%jmaxo_) cycle
-                     ! Aggregate operator
-                     opr2d=0.0_WP
-                     do lk=-1,+1
-                        do lj=-1,+1
-                           do li=-1,+1
-                              if (ratio*abs(this%lvl(n)%opr(li,lj,0,fi,fj,fk)).ge.abs(this%lvl(n)%opr(li,lj,lk,fi,fj,fk))) then
-                                 opr2d(li,lj)=opr2d(li,lj)+this%lvl(n)%opr(li,lj,lk,fi,fj,fk)
-                              else
-                                 opr2d( 0, 0)=opr2d( 0, 0)+this%lvl(n)%opr(li,lj,lk,fi,fj,fk)
-                              end if
-                           end do
-                        end do
-                     end do
-                     opr2d(0,0)=sign(max(abs(opr2d(0,0)),epsilon(1.0_WP)),opr2d(0,0))
-                     ! Loop over operator stencil
-                     do lj=-1,+1
-                        do li=-1,+1
-                           ! Skip middle of stencil
-                           if (li.eq.0.and.lj.eq.0) cycle
-                           ! Loop over prolongation stencil
-                           do pj=0,1-abs(lj)
-                              do pi=0,1-abs(li)
-                                 si=(li+1)/2+pi; sj=(lj+1)/2+pj
-                                 this%lvl(n)%c2f(si,sj,0,fi,fj,fk)=this%lvl(n)%c2f(si,sj,0,fi,fj,fk)-opr2d(li,lj)/opr2d(0,0)*this%lvl(n)%c2f(pi,pj,0,fi+li,fj+lj,fk)
-                              end do
-                           end do
-                        end do
-                     end do
-                  end if
-               case default ! Identity & line already treated, and don't treat cube centers yet
-                  cycle
-               end select
-            end do
-         end do
-      end do
-      ! Sweep 3 - 3D cube interpolation
-      do fk=this%lvl(n)%kmin_,this%lvl(n)%kmax_
-         do fj=this%lvl(n)%jmin_,this%lvl(n)%jmax_
-            do fi=this%lvl(n)%imin_,this%lvl(n)%imax_
-               ! Check stencil size
-               n1=this%pmodx(fi,n); n2=this%pmody(fj,n); n3=this%pmodz(fk,n)
-               ! Compute prolongation coefficients
-               select case (n1+n2+n3)
-               case (3) ! Fine location lies on xyz-cube
-                  ! Loop over operator stencil
-                  do lk=-1,+1
-                     do lj=-1,+1
-                        do li=-1,+1
-                           ! Skip middle of stencil
-                           if (li.eq.0.and.lj.eq.0.and.lk.eq.0) cycle
-                           ! Loop over prolongation stencil
-                           do pk=0,1-abs(lk)
-                              do pj=0,1-abs(lj)
-                                 do pi=0,1-abs(li)
-                                    si=(li+1)/2+pi; sj=(lj+1)/2+pj; sk=(lk+1)/2+pk
-                                    this%lvl(n)%c2f(si,sj,sk,fi,fj,fk)=this%lvl(n)%c2f(si,sj,sk,fi,fj,fk)-this%lvl(n)%opr(li,lj,lk,fi,fj,fk)&
-                                    &/sign(max(abs(this%lvl(n)%opr(0,0,0,fi,fj,fk)),epsilon(1.0_WP)),this%lvl(n)%opr(0,0,0,fi,fj,fk))*this%lvl(n)%c2f(pi,pj,pk,fi+li,fj+lj,fk+lk)
-                                 end do
-                              end do
-                           end do
-                        end do
-                     end do
-                  end do
-               case default ! All other cases have been treated already
-                  cycle
-               end select
-            end do
-         end do
-      end do
-      ! Synchronize prolongation
-      call this%sync(this%lvl(n)%c2f,n)
-   end subroutine recompute_prolongation
+   ! !> Recompute prolongation
+   ! subroutine recompute_prolongation(this,n)
+   !    implicit none
+   !    class(bbmg), intent(inout) :: this
+   !    integer, intent(in) :: n
+   !    integer :: n1,n2,n3
+   !    integer :: fi,fj,fk
+   !    integer :: li,lj,lk
+   !    integer :: pi,pj,pk
+   !    integer :: si,sj,sk
+   !    real(WP), dimension(-1:+1)       :: opr1d
+   !    real(WP), dimension(-1:+1,-1:+1) :: opr2d
+   !    real(WP), parameter :: ratio=10.0_WP
+   !    ! Sweep 1 - identity and 1D interpolations
+   !    do fk=this%lvl(n)%kmino_,this%lvl(n)%kmaxo_
+   !       do fj=this%lvl(n)%jmino_,this%lvl(n)%jmaxo_
+   !          do fi=this%lvl(n)%imino_,this%lvl(n)%imaxo_
+   !             ! Check stencil size
+   !             n1=this%pmodx(fi,n); n2=this%pmody(fj,n); n3=this%pmodz(fk,n)
+   !             ! Reset prolongation operator
+   !             this%lvl(n)%c2f(:,:,:,fi,fj,fk)=0.0_WP
+   !             ! Compute prolongation coefficients
+   !             select case (n1+n2+n3)
+   !             case (0) ! Fine and coarse locations coincide => Identity
+   !                this%lvl(n)%c2f(0,0,0,fi,fj,fk)=1.0_WP
+   !             case (1) ! Fine location lies on coarse x/y/z-line => Which one?
+   !                if      (n1.eq.1) then ! In x
+   !                   ! Aggregate operator
+   !                   opr1d=0.0_WP
+   !                   do lk=-1,+1
+   !                      do lj=-1,+1
+   !                         do li=-1,+1
+   !                            if (ratio*abs(this%lvl(n)%opr(li,0,0,fi,fj,fk)).ge.abs(this%lvl(n)%opr(li,lj,lk,fi,fj,fk))) then
+   !                               opr1d(li)=opr1d(li)+this%lvl(n)%opr(li,lj,lk,fi,fj,fk)
+   !                            else
+   !                               opr1d( 0)=opr1d( 0)+this%lvl(n)%opr(li,lj,lk,fi,fj,fk)
+   !                            end if
+   !                         end do
+   !                      end do
+   !                   end do
+   !                   opr1d(0)=sign(max(abs(opr1d(0)),epsilon(1.0_WP)),opr1d(0))
+   !                   ! Form x-interpolation
+   !                   this%lvl(n)%c2f(0,0,0,fi,fj,fk)=-opr1d(-1)/opr1d(0)
+   !                   this%lvl(n)%c2f(1,0,0,fi,fj,fk)=-opr1d(+1)/opr1d(0)
+   !                else if (n2.eq.1) then ! In y
+   !                   ! Aggregate operator
+   !                   opr1d=0.0_WP
+   !                   do lk=-1,+1
+   !                      do lj=-1,+1
+   !                         do li=-1,+1
+   !                            if (ratio*abs(this%lvl(n)%opr(0,lj,0,fi,fj,fk)).ge.abs(this%lvl(n)%opr(li,lj,lk,fi,fj,fk))) then
+   !                               opr1d(lj)=opr1d(lj)+this%lvl(n)%opr(li,lj,lk,fi,fj,fk)
+   !                            else
+   !                               opr1d( 0)=opr1d( 0)+this%lvl(n)%opr(li,lj,lk,fi,fj,fk)
+   !                            end if
+   !                         end do
+   !                      end do
+   !                   end do
+   !                   opr1d(0)=sign(max(abs(opr1d(0)),epsilon(1.0_WP)),opr1d(0))
+   !                   ! Form y-interpolation
+   !                   this%lvl(n)%c2f(0,0,0,fi,fj,fk)=-opr1d(-1)/opr1d(0)
+   !                   this%lvl(n)%c2f(0,1,0,fi,fj,fk)=-opr1d(+1)/opr1d(0)
+   !                else if (n3.eq.1) then ! In z
+   !                   ! Aggregate operator
+   !                   opr1d=0.0_WP
+   !                   do lk=-1,+1
+   !                      do lj=-1,+1
+   !                         do li=-1,+1
+   !                            if (ratio*abs(this%lvl(n)%opr(0,0,lk,fi,fj,fk)).ge.abs(this%lvl(n)%opr(li,lj,lk,fi,fj,fk))) then
+   !                               opr1d(lk)=opr1d(lk)+this%lvl(n)%opr(li,lj,lk,fi,fj,fk)
+   !                            else
+   !                               opr1d( 0)=opr1d( 0)+this%lvl(n)%opr(li,lj,lk,fi,fj,fk)
+   !                            end if
+   !                         end do
+   !                      end do
+   !                   end do
+   !                   opr1d(0)=sign(max(abs(opr1d(0)),epsilon(1.0_WP)),opr1d(0))
+   !                   ! Form z-interpolation
+   !                   this%lvl(n)%c2f(0,0,0,fi,fj,fk)=-opr1d(-1)/opr1d(0)
+   !                   this%lvl(n)%c2f(0,0,1,fi,fj,fk)=-opr1d(+1)/opr1d(0)
+   !                end if
+   !             case default ! Do not treat face of cube centers yet
+   !                cycle
+   !             end select
+   !          end do
+   !       end do
+   !    end do
+   !    ! Sweep 2 - 2D face interpolations
+   !    do fk=this%lvl(n)%kmino_,this%lvl(n)%kmaxo_
+   !       do fj=this%lvl(n)%jmino_,this%lvl(n)%jmaxo_
+   !          do fi=this%lvl(n)%imino_,this%lvl(n)%imaxo_
+   !             ! Check stencil size
+   !             n1=this%pmodx(fi,n); n2=this%pmody(fj,n); n3=this%pmodz(fk,n)
+   !             ! Compute prolongation coefficients
+   !             select case (n1+n2+n3)
+   !             case (2) ! Fine location lies on coarse xy/yz/zx-plane => Which one?
+   !                if      (n1.eq.0) then ! In y/z
+   !                   ! yz-plane - skip if in y/z ghost cell
+   !                   if (fj.eq.this%lvl(n)%jmino_.or.fj.eq.this%lvl(n)%jmaxo_.or.fk.eq.this%lvl(n)%kmino_.or.fk.eq.this%lvl(n)%kmaxo_) cycle
+   !                   ! Aggregate operator
+   !                   opr2d=0.0_WP
+   !                   do lk=-1,+1
+   !                      do lj=-1,+1
+   !                         do li=-1,+1
+   !                            if (ratio*abs(this%lvl(n)%opr(0,lj,lk,fi,fj,fk)).ge.abs(this%lvl(n)%opr(li,lj,lk,fi,fj,fk))) then
+   !                               opr2d(lj,lk)=opr2d(lj,lk)+this%lvl(n)%opr(li,lj,lk,fi,fj,fk)
+   !                            else
+   !                               opr2d( 0, 0)=opr2d( 0, 0)+this%lvl(n)%opr(li,lj,lk,fi,fj,fk)
+   !                            end if
+   !                         end do
+   !                      end do
+   !                   end do
+   !                   opr2d(0,0)=sign(max(abs(opr2d(0,0)),epsilon(1.0_WP)),opr2d(0,0))
+   !                   ! Loop over operator stencil
+   !                   do lk=-1,+1
+   !                      do lj=-1,+1
+   !                         ! Skip middle of stencil
+   !                         if (lj.eq.0.and.lk.eq.0) cycle
+   !                         ! Loop over prolongation stencil
+   !                         do pk=0,1-abs(lk)
+   !                            do pj=0,1-abs(lj)
+   !                               sj=(lj+1)/2+pj; sk=(lk+1)/2+pk
+   !                               this%lvl(n)%c2f(0,sj,sk,fi,fj,fk)=this%lvl(n)%c2f(0,sj,sk,fi,fj,fk)-opr2d(lj,lk)/opr2d(0,0)*this%lvl(n)%c2f(0,pj,pk,fi,fj+lj,fk+lk)
+   !                            end do
+   !                         end do
+   !                      end do
+   !                   end do
+   !                else if (n2.eq.0) then ! In z/x
+   !                   ! zx-plane - skip if in z/x ghost cell
+   !                   if (fk.eq.this%lvl(n)%kmino_.or.fk.eq.this%lvl(n)%kmaxo_.or.fi.eq.this%lvl(n)%imino_.or.fi.eq.this%lvl(n)%imaxo_) cycle
+   !                   ! Aggregate operator
+   !                   opr2d=0.0_WP
+   !                   do lk=-1,+1
+   !                      do lj=-1,+1
+   !                         do li=-1,+1
+   !                            if (ratio*abs(this%lvl(n)%opr(li,0,lk,fi,fj,fk)).ge.abs(this%lvl(n)%opr(li,lj,lk,fi,fj,fk))) then
+   !                               opr2d(li,lk)=opr2d(li,lk)+this%lvl(n)%opr(li,lj,lk,fi,fj,fk)
+   !                            else
+   !                               opr2d( 0, 0)=opr2d( 0, 0)+this%lvl(n)%opr(li,lj,lk,fi,fj,fk)
+   !                            end if
+   !                         end do
+   !                      end do
+   !                   end do
+   !                   opr2d(0,0)=sign(max(abs(opr2d(0,0)),epsilon(1.0_WP)),opr2d(0,0))
+   !                   ! Loop over operator stencil
+   !                   do lk=-1,+1
+   !                      do li=-1,+1
+   !                         ! Skip middle of stencil
+   !                         if (li.eq.0.and.lk.eq.0) cycle
+   !                         ! Loop over prolongation stencil
+   !                         do pk=0,1-abs(lk)
+   !                            do pi=0,1-abs(li)
+   !                               si=(li+1)/2+pi; sk=(lk+1)/2+pk
+   !                               this%lvl(n)%c2f(si,0,sk,fi,fj,fk)=this%lvl(n)%c2f(si,0,sk,fi,fj,fk)-opr2d(li,lk)/opr2d(0,0)*this%lvl(n)%c2f(pi,0,pk,fi+li,fj,fk+lk)
+   !                            end do
+   !                         end do
+   !                      end do
+   !                   end do
+   !                else if (n3.eq.0) then ! In x/y
+   !                   ! xy-plane - skip if in x/y ghost cell
+   !                   if (fi.eq.this%lvl(n)%imino_.or.fi.eq.this%lvl(n)%imaxo_.or.fj.eq.this%lvl(n)%jmino_.or.fj.eq.this%lvl(n)%jmaxo_) cycle
+   !                   ! Aggregate operator
+   !                   opr2d=0.0_WP
+   !                   do lk=-1,+1
+   !                      do lj=-1,+1
+   !                         do li=-1,+1
+   !                            if (ratio*abs(this%lvl(n)%opr(li,lj,0,fi,fj,fk)).ge.abs(this%lvl(n)%opr(li,lj,lk,fi,fj,fk))) then
+   !                               opr2d(li,lj)=opr2d(li,lj)+this%lvl(n)%opr(li,lj,lk,fi,fj,fk)
+   !                            else
+   !                               opr2d( 0, 0)=opr2d( 0, 0)+this%lvl(n)%opr(li,lj,lk,fi,fj,fk)
+   !                            end if
+   !                         end do
+   !                      end do
+   !                   end do
+   !                   opr2d(0,0)=sign(max(abs(opr2d(0,0)),epsilon(1.0_WP)),opr2d(0,0))
+   !                   ! Loop over operator stencil
+   !                   do lj=-1,+1
+   !                      do li=-1,+1
+   !                         ! Skip middle of stencil
+   !                         if (li.eq.0.and.lj.eq.0) cycle
+   !                         ! Loop over prolongation stencil
+   !                         do pj=0,1-abs(lj)
+   !                            do pi=0,1-abs(li)
+   !                               si=(li+1)/2+pi; sj=(lj+1)/2+pj
+   !                               this%lvl(n)%c2f(si,sj,0,fi,fj,fk)=this%lvl(n)%c2f(si,sj,0,fi,fj,fk)-opr2d(li,lj)/opr2d(0,0)*this%lvl(n)%c2f(pi,pj,0,fi+li,fj+lj,fk)
+   !                            end do
+   !                         end do
+   !                      end do
+   !                   end do
+   !                end if
+   !             case default ! Identity & line already treated, and don't treat cube centers yet
+   !                cycle
+   !             end select
+   !          end do
+   !       end do
+   !    end do
+   !    ! Sweep 3 - 3D cube interpolation
+   !    do fk=this%lvl(n)%kmin_,this%lvl(n)%kmax_
+   !       do fj=this%lvl(n)%jmin_,this%lvl(n)%jmax_
+   !          do fi=this%lvl(n)%imin_,this%lvl(n)%imax_
+   !             ! Check stencil size
+   !             n1=this%pmodx(fi,n); n2=this%pmody(fj,n); n3=this%pmodz(fk,n)
+   !             ! Compute prolongation coefficients
+   !             select case (n1+n2+n3)
+   !             case (3) ! Fine location lies on xyz-cube
+   !                ! Loop over operator stencil
+   !                do lk=-1,+1
+   !                   do lj=-1,+1
+   !                      do li=-1,+1
+   !                         ! Skip middle of stencil
+   !                         if (li.eq.0.and.lj.eq.0.and.lk.eq.0) cycle
+   !                         ! Loop over prolongation stencil
+   !                         do pk=0,1-abs(lk)
+   !                            do pj=0,1-abs(lj)
+   !                               do pi=0,1-abs(li)
+   !                                  si=(li+1)/2+pi; sj=(lj+1)/2+pj; sk=(lk+1)/2+pk
+   !                                  this%lvl(n)%c2f(si,sj,sk,fi,fj,fk)=this%lvl(n)%c2f(si,sj,sk,fi,fj,fk)-this%lvl(n)%opr(li,lj,lk,fi,fj,fk)&
+   !                                  &/sign(max(abs(this%lvl(n)%opr(0,0,0,fi,fj,fk)),epsilon(1.0_WP)),this%lvl(n)%opr(0,0,0,fi,fj,fk))*this%lvl(n)%c2f(pi,pj,pk,fi+li,fj+lj,fk+lk)
+   !                               end do
+   !                            end do
+   !                         end do
+   !                      end do
+   !                   end do
+   !                end do
+   !             case default ! All other cases have been treated already
+   !                cycle
+   !             end select
+   !          end do
+   !       end do
+   !    end do
+   !    ! Synchronize prolongation
+   !    call this%sync(this%lvl(n)%c2f,n)
+   ! end subroutine recompute_prolongation
    
    
    !> Recompute restriction
