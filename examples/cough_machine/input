@@ -8,9 +8,9 @@
 3 Partition : 2 2 2 
 
 # Turbulent duct mesh definition
-1 Lx :	5
-1 Ly :	1
-1 Lz :	1
+1 Lx :	0.3
+1 Ly :	0.06
+1 Lz :	0.06
 1 nx :	128
 1 ny :	40
 1 nz :	40
@@ -21,14 +21,14 @@
 2 Uniform Ly :  0.03
 2 Uniform Lz :  0.03
 2 Uniform nx :  100
-2 Uniform ny :  30
-2 Uniform nz :  30
+2 Uniform ny :  50
+2 Uniform nz :  50
 2 Total nx :  100
 2 Total ny :  50
 2 Total nz :  50
 2 Stretching x : 1
-2 Stretching y : 1.08
-2 Stretching z : 1.08
+2 Stretching y : 1
+2 Stretching z : 1
 
 # Zoomed out mesh definition
 3 Uniform Lx :  0.3

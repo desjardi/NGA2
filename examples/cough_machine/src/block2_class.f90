@@ -97,6 +97,26 @@ contains
       isIn=.false.
       if (i.eq.pg%imax+1) isIn=.true.
    end function right_boundary
+
+   !> Function that localizes the left domain boundary, inside the mouth
+   function left_boundary_inflow(pg,i,j,k) result(isIn)
+      use pgrid_class, only: pgrid
+      class(pgrid), intent(in) :: pg
+      integer, intent(in) :: i,j,k
+      logical :: isIn
+      isIn=.false.
+      if (i.eq.pg%imin.and.pg%ym(j).gt.0.0_WP) isIn=.true.
+   end function left_boundary_inflow
+
+   !> Function that localizes the rightmost domain boundary
+   function right_boundary_outflow(pg,i,j,k) result(isIn)
+      use pgrid_class, only: pgrid
+      class(pgrid), intent(in) :: pg
+      integer, intent(in) :: i,j,k
+      logical :: isIn
+      isIn=.false.
+      if (i.eq.pg%imax+1.and.pg%ym(j).gt.0.0_WP) isIn=.true.
+   end function right_boundary_outflow
    
    !> Function that calcuates velocity at current time 
    function inflowVelocity(time,CPFR,H,W) result(UCPFR)
@@ -220,7 +240,8 @@ contains
          do k=b%vf%cfg%kmino_,b%vf%cfg%kmaxo_
             do j=b%vf%cfg%jmino_,b%vf%cfg%jmaxo_
                do i=b%vf%cfg%imino_,b%vf%cfg%imaxo_
-                  if (b%vf%cfg%xm(i).lt.-L_lip.and.b%vf%cfg%xm(i).gt.-L_lip-L_film.and.abs(b%vf%cfg%zm(k)).lt.0.5_WP*W_film.and.b%vf%cfg%ym(j).lt.0.0_WP.and.b%vf%cfg%ym(j).gt.-H_film) then
+                  ! if (b%vf%cfg%xm(i).lt.-L_lip.and.b%vf%cfg%xm(i).gt.-L_lip-L_film.and.abs(b%vf%cfg%zm(k)).lt.0.5_WP*W_film.and.b%vf%cfg%ym(j).lt.0.0_WP.and.b%vf%cfg%ym(j).gt.-H_film) then !original 
+                  if (b%vf%cfg%xm(i).gt.L_lip.and.b%vf%cfg%xm(i).lt.L_lip+L_film.and.b%vf%cfg%ym(j).lt.0.0_WP.and.b%vf%cfg%ym(j).gt.-H_film) then
                      b%vf%VF(i,j,k)=1.0_WP
                   else
                      b%vf%VF(i,j,k)=0.0_WP
@@ -273,10 +294,11 @@ contains
          ! Assign acceleration of gravity
          call param_read('Gravity',b%fs%gravity)
          ! Inflow on the left
-         call b%fs%add_bcond(name='inflow' ,type=dirichlet      ,face='x',dir=-1,canCorrect=.false.,locator=left_boundary_mouth)
-         call b%fs%add_bcond(name='coflow' ,type=dirichlet      ,face='x',dir=-1,canCorrect=.false.,locator=left_boundary_coflow)
+         call b%fs%add_bcond(name='inflow' ,type=dirichlet      ,face='x',dir=-1,canCorrect=.false.,locator=left_boundary_inflow)
+         ! call b%fs%add_bcond(name='inflow' ,type=dirichlet      ,face='x',dir=-1,canCorrect=.false.,locator=left_boundary_mouth)
+         ! call b%fs%add_bcond(name='coflow' ,type=dirichlet      ,face='x',dir=-1,canCorrect=.false.,locator=left_boundary_coflow)
          ! Outflow on the right
-         call b%fs%add_bcond(name='outflow',type=clipped_neumann,face='x',dir=+1,canCorrect=.true. ,locator=right_boundary)
+         call b%fs%add_bcond(name='outflow',type=clipped_neumann,face='x',dir=+1,canCorrect=.true. ,locator=right_boundary_outflow)
          ! Configure pressure solver
          call param_read('Pressure iteration',b%fs%psolv%maxit)
          call param_read('Pressure tolerance',b%fs%psolv%rcvg)
@@ -306,7 +328,7 @@ contains
          end if
          ! Gas velocity parameters
          call param_read('Gas velocity',Uin)
-         call param_read('Peak flow rate',CPFR)
+         ! call param_read('Peak flow rate',CPFR)
          ! Uin=inflowVelocity(b%time%t,CPFR,H_mouth,W_mouth)
          call param_read('Gas thickness',delta)
          call param_read('Gas perturbation',Urand)
@@ -315,16 +337,16 @@ contains
          do n=1,mybc%itr%no_
             i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
             !b%fs%U(i,j,k)=Uin*tanh(2.0_WP*(0.5_WP*W_mouth-abs(b%fs%cfg%zm(k)))/delta)*tanh(2.0_WP*b%fs%cfg%ym(j)/delta)*tanh(2.0_WP*(H_mouth-b%fs%cfg%ym(j))/delta)+random_uniform(-Urand,Urand)
-            b%fs%U(i,j,k)=Uin*tanh(2.0_WP*(0.5_WP*W_mouth-abs(b%fs%cfg%zm(k)))/delta)*tanh(2.0_WP*b%fs%cfg%ym(j)/delta)*tanh(2.0_WP*(H_mouth-b%fs%cfg%ym(j))/delta)
+            b%fs%U(i,j,k)=Uin!*tanh(2.0_WP*(0.5_WP*W_mouth-abs(b%fs%cfg%zm(k)))/delta)*tanh(2.0_WP*b%fs%cfg%ym(j)/delta)*tanh(2.0_WP*(H_mouth-b%fs%cfg%ym(j))/delta)
          end do
          ! Apply coflow around inlet geometry
          !call param_read('Gas coflow',Uco)
-         Uco=0.10_WP*Uin
-         call b%fs%get_bcond('coflow',mybc)
-         do n=1,mybc%itr%no_
-            i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
-            b%fs%U(i,j,k)=Uco
-         end do
+         ! Uco=0.10_WP*Uin
+         ! call b%fs%get_bcond('coflow',mybc)
+         ! do n=1,mybc%itr%no_
+         !    i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
+         !    b%fs%U(i,j,k)=Uco
+         ! end do
          ! Apply all other boundary conditions
          call b%fs%apply_bcond(b%time%t,b%time%dt)
          ! Compute MFR through all boundary conditions
@@ -497,50 +519,50 @@ contains
       call b%time%adjust_dt()
       call b%time%increment()
 
-      ! Apply time-varying Dirichlet conditions
-      reapply_dirichlet: block
-         use tpns_class, only: bcond
-         use random,     only: random_uniform
-         type(bcond), pointer :: mybc
-         integer  :: n,i,j,k
-         ! Reapply Dirichlet at inlet
-         ! Uin=inflowVelocity(b%time%t,CPFR,H_mouth,W_mouth)
-         call b%fs%get_bcond('inflow',mybc)
-         do n=1,mybc%itr%no_
-            i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
-            !b%fs%U(i,j,k)=Uin*tanh(2.0_WP*(0.5_WP*W_mouth-abs(b%fs%cfg%zm(k)))/delta)*tanh(2.0_WP*b%fs%cfg%ym(j)/delta)*tanh(2.0_WP*(H_mouth-b%fs%cfg%ym(j))/delta)+random_uniform(-Urand,Urand)
-            b%fs%U(i,j,k)=Uin*tanh(2.0_WP*(0.5_WP*W_mouth-abs(b%fs%cfg%zm(k)))/delta)*tanh(2.0_WP*b%fs%cfg%ym(j)/delta)*tanh(2.0_WP*(H_mouth-b%fs%cfg%ym(j))/delta)
-         end do
-         ! Reapply coflow around inlet geometry
-         Uco=0.10_WP*Uin
-         call b%fs%get_bcond('coflow',mybc)
-         do n=1,mybc%itr%no_
-            i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
-            b%fs%U(i,j,k)=Uco
-         end do
-      end block reapply_dirichlet
+      ! ! Apply time-varying Dirichlet conditions
+      ! reapply_dirichlet: block
+      !    use tpns_class, only: bcond
+      !    use random,     only: random_uniform
+      !    type(bcond), pointer :: mybc
+      !    integer  :: n,i,j,k
+      !    ! Reapply Dirichlet at inlet
+      !    ! Uin=inflowVelocity(b%time%t,CPFR,H_mouth,W_mouth)
+      !    call b%fs%get_bcond('inflow',mybc)
+      !    do n=1,mybc%itr%no_
+      !       i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
+      !       !b%fs%U(i,j,k)=Uin*tanh(2.0_WP*(0.5_WP*W_mouth-abs(b%fs%cfg%zm(k)))/delta)*tanh(2.0_WP*b%fs%cfg%ym(j)/delta)*tanh(2.0_WP*(H_mouth-b%fs%cfg%ym(j))/delta)+random_uniform(-Urand,Urand)
+      !       b%fs%U(i,j,k)=Uin*tanh(2.0_WP*(0.5_WP*W_mouth-abs(b%fs%cfg%zm(k)))/delta)*tanh(2.0_WP*b%fs%cfg%ym(j)/delta)*tanh(2.0_WP*(H_mouth-b%fs%cfg%ym(j))/delta)
+      !    end do
+      !    ! Reapply coflow around inlet geometry
+      !    Uco=0.10_WP*Uin
+      !    call b%fs%get_bcond('coflow',mybc)
+      !    do n=1,mybc%itr%no_
+      !       i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
+      !       b%fs%U(i,j,k)=Uco
+      !    end do
+      ! end block reapply_dirichlet
 
       ! Calculate SR
       call b%fs%get_strainrate(Ui=b%Ui,Vi=b%Vi,Wi=b%Wi,SR=b%SR)
 
-      ! Model non-Newtonian fluid
-      nonewt: block
-         integer :: i,j,k
-         real(WP) :: SRmag
-         real(WP), parameter :: C=1.137e-3_WP
-         real(WP), parameter :: n=0.3_WP 
-         ! Update viscosity
-         do k=b%fs%cfg%kmino_,b%fs%cfg%kmaxo_
-            do j=b%fs%cfg%jmino_,b%fs%cfg%jmaxo_
-               do i=b%fs%cfg%imino_,b%fs%cfg%imaxo_
-                  SRmag=sqrt(b%SR(1,i,j,k)**2+b%SR(2,i,j,k)**2+b%SR(3,i,j,k)**2+2.0_WP*(b%SR(4,i,j,k)**2+b%SR(5,i,j,k)**2+b%SR(6,i,j,k)**2))
-                  SRmag=max(SRmag,1000.0_WP**(1.0_WP/(n-1.0_WP)))
-                  b%fs%visc_l(i,j,k)=C*SRmag**(n-1.0_WP)
-               end do
-            end do
-         end do
-         call b%fs%cfg%sync(b%fs%visc_l)
-      end block nonewt
+      ! ! Model non-Newtonian fluid
+      ! nonewt: block
+      !    integer :: i,j,k
+      !    real(WP) :: SRmag
+      !    real(WP), parameter :: C=1.137e-3_WP
+      !    real(WP), parameter :: n=0.3_WP 
+      !    ! Update viscosity
+      !    do k=b%fs%cfg%kmino_,b%fs%cfg%kmaxo_
+      !       do j=b%fs%cfg%jmino_,b%fs%cfg%jmaxo_
+      !          do i=b%fs%cfg%imino_,b%fs%cfg%imaxo_
+      !             SRmag=sqrt(b%SR(1,i,j,k)**2+b%SR(2,i,j,k)**2+b%SR(3,i,j,k)**2+2.0_WP*(b%SR(4,i,j,k)**2+b%SR(5,i,j,k)**2+b%SR(6,i,j,k)**2))
+      !             SRmag=max(SRmag,1000.0_WP**(1.0_WP/(n-1.0_WP)))
+      !             b%fs%visc_l(i,j,k)=C*SRmag**(n-1.0_WP)
+      !          end do
+      !       end do
+      !    end do
+      !    call b%fs%cfg%sync(b%fs%visc_l)
+      ! end block nonewt
 
       ! Remember old VOF
       b%vf%VFold=b%vf%VF

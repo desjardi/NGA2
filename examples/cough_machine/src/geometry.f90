@@ -17,13 +17,21 @@ module geometry
    
    ! Virtual mouth dimensions
    real(WP), parameter :: t_wall =5.0e-3_WP
-   real(WP), parameter :: L_mouth=5.0e-2_WP
+   ! real(WP), parameter :: L_mouth=5.0e-2_WP
    real(WP), parameter :: H_mouth=1.0e-2_WP
    real(WP), parameter :: W_mouth=1.0e-2_WP
-   real(WP), parameter :: L_film =4.0e-2_WP
-   real(WP), parameter :: H_film =1.0e-3_WP
-   real(WP), parameter :: W_film =1.0e-2_WP
-   real(WP), parameter :: L_lip  =5.0e-3_WP
+   ! real(WP), parameter :: L_film =4.0e-2_WP
+   ! real(WP), parameter :: H_film =1.0e-3_WP
+   ! real(WP), parameter :: W_film =1.0e-2_WP
+   ! real(WP), parameter :: L_lip  =5.0e-3_WP 
+   
+   ! Dimensions for extended mouth
+   real(WP), parameter :: H_film =2.0e-3_WP
+   real(WP), parameter :: L_lip  =1.0e-2_WP
+   real(WP), parameter :: L_film =8.0e-2_WP
+   real(WP), parameter :: t_base =1.0e-2_WP
+   real(WP), parameter :: W_film =3.0e-2_WP
+   real(WP), parameter :: L_mouth=1.0e-1_WP
    
    
 contains
@@ -59,7 +67,7 @@ contains
             z(k)=real(k-1,WP)/real(nz,WP)*Lz-0.5_WP*Lz
          end do
          ! General serial grid object
-         grid=sgrid(coord=cartesian,no=1,x=x,y=y,z=z,xper=.true.,yper=.false.,zper=.false.,name='duct')
+         grid=sgrid(coord=cartesian,no=2,x=x,y=y,z=z,xper=.true.,yper=.false.,zper=.false.,name='duct')
          ! Read in partition
          call param_read('1 Partition',partition,short='p')
          ! Create partitioned grid
@@ -88,50 +96,72 @@ contains
          call param_read('2 Stretching z',Sz)
          ! Create simple rectilinear grid
          do i=1,unx+1
-            x(i)=real(i-1,WP)/real(unx,WP)*Lx-L_mouth
+            x(i)=real(i-1,WP)/real(unx,WP)*Lx
          end do
          do j=1+(ny-uny)/2,1+(ny+uny)/2
-            y(j)=real(j-(1+(ny-uny)/2),WP)/real(uny,WP)*Ly-0.5_WP*Ly+0.5_WP*H_mouth
+            y(j)=real(j-(1+(ny-uny)/2),WP)/real(uny,WP)*(Ly+t_base)-t_base
          end do
          do k=1+(nz-unz)/2,1+(nz+unz)/2
             z(k)=real(k-(1+(nz-unz)/2),WP)/real(unz,WP)*Lz-0.5_WP*Lz
          end do
-         ! Add stretching
-         do i=unx+2,nx+1
-            x(i)=(1.0_WP+Sx)*x(i-1)-Sx*x(i-2)
-         end do
-         do j=(ny+uny)/2+2,ny+1
-            y(j)=(1.0_WP+Sy)*y(j-1)-Sy*y(j-2)
-         end do
-         do j=(ny-uny)/2,1,-1
-            y(j)=(1.0_WP+Sy)*y(j+1)-Sy*y(j+2)
-         end do
-         do k=(nz+unz)/2+2,nz+1
-            z(k)=(1.0_WP+Sz)*z(k-1)-Sz*z(k-2)
-         end do
-         do k=(nz-unz)/2,1,-1
-            z(k)=(1.0_WP+Sz)*z(k+1)-Sz*z(k+2)
-         end do
+         ! Grid for square duct domain
+         ! do i=1,unx+1
+         !    x(i)=real(i-1,WP)/real(unx,WP)*Lx-L_mouth
+         ! end do
+         ! do j=1+(ny-uny)/2,1+(ny+uny)/2
+         !    y(j)=real(j-(1+(ny-uny)/2),WP)/real(uny,WP)*Ly-0.5_WP*Ly+0.5_WP*H_mouth
+         ! end do
+         ! do k=1+(nz-unz)/2,1+(nz+unz)/2
+         !    z(k)=real(k-(1+(nz-unz)/2),WP)/real(unz,WP)*Lz-0.5_WP*Lz
+         ! end do
+         ! ! Add stretching
+         ! do i=unx+2,nx+1
+         !    x(i)=(1.0_WP+Sx)*x(i-1)-Sx*x(i-2)
+         ! end do
+         ! do j=(ny+uny)/2+2,ny+1
+         !    y(j)=(1.0_WP+Sy)*y(j-1)-Sy*y(j-2)
+         ! end do
+         ! do j=(ny-uny)/2,1,-1
+         !    y(j)=(1.0_WP+Sy)*y(j+1)-Sy*y(j+2)
+         ! end do
+         ! do k=(nz+unz)/2+2,nz+1
+         !    z(k)=(1.0_WP+Sz)*z(k-1)-Sz*z(k-2)
+         ! end do
+         ! do k=(nz-unz)/2,1,-1
+         !    z(k)=(1.0_WP+Sz)*z(k+1)-Sz*z(k+2)
+         ! end do
          ! General serial grid object with overlap=3 for tpns
          grid=sgrid(coord=cartesian,no=3,x=x,y=y,z=z,xper=.false.,yper=.false.,zper=.false.,name='cough_machine_in')
          ! Read in partition
          call param_read('2 Partition',partition,short='p')
          ! Create partitioned grid
          cfg2=config(grp=group,decomp=partition,grid=grid)
-         ! Create walls
+         ! Create walls - extended mouth
          cfg2%VF=1.0_WP
          do k=cfg2%kmino_,cfg2%kmaxo_
             do j=cfg2%jmino_,cfg2%jmaxo_
                do i=cfg2%imino_,cfg2%imaxo_
-                  ! Zero out wall cells including inside mouth
-                  if (cfg2%xm(i).lt.0.0_WP.and.abs(cfg2%zm(k)).lt.0.5_WP*W_mouth+t_wall.and.cfg2%ym(j).gt.-t_wall.and.cfg2%ym(j).lt.H_mouth+t_wall) cfg2%VF(i,j,k)=0.0_WP
-                  ! Carve out inside of mouth
-                  if (cfg2%xm(i).lt.0.0_WP.and.abs(cfg2%zm(k)).lt.0.5_WP*W_mouth.and.cfg2%ym(j).gt.0.0_WP.and.cfg2%ym(j).lt.H_mouth) cfg2%VF(i,j,k)=1.0_WP
+                  ! Zero out base cells
+                  if (cfg2%ym(j).lt.0.0_WP) cfg2%VF(i,j,k)=0.0_WP
                   ! Carve out tray for liquid film
-                  if (cfg2%xm(i).lt.-L_lip.and.cfg2%xm(i).gt.-L_lip-L_film.and.abs(cfg2%zm(k)).lt.0.5_WP*W_film.and.cfg2%ym(j).lt.0.0_WP.and.cfg2%ym(j).gt.-H_film) cfg2%VF(i,j,k)=1.0_WP
+                  if (cfg2%xm(i).gt.L_lip.and.cfg2%xm(i).lt.L_lip+L_film.and.cfg2%ym(j).lt.0.0_WP.and.cfg2%ym(j).gt.-H_film) cfg2%VF(i,j,k)=1.0_WP
                end do
             end do
          end do
+         ! ! Create walls - duct geometry
+         ! cfg2%VF=1.0_WP
+         ! do k=cfg2%kmino_,cfg2%kmaxo_
+         !    do j=cfg2%jmino_,cfg2%jmaxo_
+         !       do i=cfg2%imino_,cfg2%imaxo_
+         !          ! Zero out wall cells including inside mouth
+         !          if (cfg2%xm(i).lt.0.0_WP.and.abs(cfg2%zm(k)).lt.0.5_WP*W_mouth+t_wall.and.cfg2%ym(j).gt.-t_wall.and.cfg2%ym(j).lt.H_mouth+t_wall) cfg2%VF(i,j,k)=0.0_WP
+         !          ! Carve out inside of mouth
+         !          if (cfg2%xm(i).lt.0.0_WP.and.abs(cfg2%zm(k)).lt.0.5_WP*W_mouth.and.cfg2%ym(j).gt.0.0_WP.and.cfg2%ym(j).lt.H_mouth) cfg2%VF(i,j,k)=1.0_WP
+         !          ! Carve out tray for liquid film
+         !          if (cfg2%xm(i).lt.-L_lip.and.cfg2%xm(i).gt.-L_lip-L_film.and.abs(cfg2%zm(k)).lt.0.5_WP*W_film.and.cfg2%ym(j).lt.0.0_WP.and.cfg2%ym(j).gt.-H_film) cfg2%VF(i,j,k)=1.0_WP
+         !       end do
+         !    end do
+         ! end do
       end block create_block2
       
       
