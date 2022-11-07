@@ -559,11 +559,11 @@ module simulation
                  pmesh%var(1,i)=0.5_WP*lp%p(i)%d
               end do
             end block update_pmesh
+            call fs%get_viz()
             call ens_out%write_data(time%t)
          end if
 
          ! Perform and output monitoring
-         call fs%get_viz()
          call fs%get_max()
          call lp%get_max()
          call mfile%write()

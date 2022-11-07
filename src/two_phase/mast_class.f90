@@ -115,8 +115,7 @@ module mast_class
       real(WP), dimension(:,:,:), allocatable :: dPjy     !< dPressure jump to add to -ddP/dy
       real(WP), dimension(:,:,:), allocatable :: dPjz     !< dPressure jump to add to -ddP/dz
       real(WP), dimension(:,:,:), allocatable :: Tmptr    !< Temperature of mixture
-      real(WP), dimension(:,:,:), allocatable :: divU     !< Dilatation
-      real(WP), dimension(:,:,:), allocatable :: Mach     !< Mach number
+
       ! Flow variables - individual phases
       real(WP), dimension(:,:,:), allocatable :: Grho,   Lrho    !< phase density arrays
       real(WP), dimension(:,:,:), allocatable :: GrhoE,  LrhoE   !< phase energy arrays
@@ -156,9 +155,13 @@ module mast_class
       real(WP), dimension(:,:,:), allocatable :: Hpjump  ! < Helmholtz pressure jump
       real(WP), dimension(:,:,:), allocatable :: dHpjump ! < Helmholtz pressure jump increment, also used for old Hpjump
 
+      ! Visualization arrays
+      real(WP), dimension(:,:,:), allocatable :: divU     !< Dilatation
+      real(WP), dimension(:,:,:), allocatable :: Mach     !< Mach number
+
       ! Temporary arrays for a few things
       real(WP), dimension(:,:,:), pointer :: tmp1,tmp2,tmp3
-      
+
       ! Temporary arrays for viscous routine (may be used for more in the future)
       real(WP), dimension(:,:,:), pointer :: tmp4,tmp5,tmp6,tmp7,tmp8,tmp9,tmp10
       
