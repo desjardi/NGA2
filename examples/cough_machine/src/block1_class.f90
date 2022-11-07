@@ -255,6 +255,9 @@ contains
       b%fs%Vold=b%fs%V
       b%fs%Wold=b%fs%W
 
+      ! Reset here gas viscosity
+      b%fs%visc=visc
+
       ! Turbulence modeling
       call b%fs%get_strainrate(Ui=b%Ui,Vi=b%Vi,Wi=b%Wi,SR=b%SR)
       b%resU=b%fs%rho

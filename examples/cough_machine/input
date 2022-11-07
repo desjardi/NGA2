@@ -1,6 +1,7 @@
 # Block definitions
-# 1=block zoomed in on mouth
-# 2=block zoomed out on container
+# 1=turbulent duct for gas 
+# 2=block zoomed in on mouth
+# 3=block zoomed out on container
 
 # Parallelization
 1 Partition : 2 2 2
@@ -8,18 +9,18 @@
 3 Partition : 2 2 2 
 
 # Turbulent duct mesh definition
-1 Lx :	0.3
-1 Ly :	0.06
-1 Lz :	0.06
-1 nx :	128
-1 ny :	40
-1 nz :	40
-1 Stretching : 2.1
+1 Lx :	5
+1 Ly :	1
+1 Lz :	1
+1 nx :	144
+1 ny :	56
+1 nz :	56
+1 Stretching : 2.5
 
 # Zoomed in mesh definition
-2 Uniform Lx :  0.1
-2 Uniform Ly :  0.03
-2 Uniform Lz :  0.03
+2 Uniform Lx :  3
+2 Uniform Ly :  1
+2 Uniform Lz :  1
 2 Uniform nx :  100
 2 Uniform ny :  50
 2 Uniform nz :  50
@@ -59,9 +60,9 @@ Liquid density :                    1000
 Gas density :                       1.226
 Surface tension coefficient :       0.05
 Static contact angle :              51
-Ubulk :                             1
+Ubulk :                             0.08
 Wbulk :                             0
-Perturbation :                      0
+Perturbation :                      0.5
 
 # Boussinesq approximation
 Ambient temperature :            25

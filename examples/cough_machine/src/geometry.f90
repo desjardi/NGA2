@@ -29,7 +29,7 @@ module geometry
    real(WP), parameter :: H_film =2.0e-3_WP
    real(WP), parameter :: L_lip  =1.0e-2_WP
    real(WP), parameter :: L_film =8.0e-2_WP
-   real(WP), parameter :: t_base =1.0e-2_WP
+   real(WP), parameter :: t_base =1.0e-1_WP
    real(WP), parameter :: W_film =3.0e-2_WP
    real(WP), parameter :: L_mouth=1.0e-1_WP
    
@@ -64,7 +64,7 @@ contains
             y(j)=0.5_WP*Ly*tanh(stretch*(2.0_WP*real(j-1,WP)/real(ny,WP)-1.0_WP))/tanh(stretch)
          end do
          do k=1,nz+1
-            z(k)=real(k-1,WP)/real(nz,WP)*Lz-0.5_WP*Lz
+            z(k)=0.5_WP*Lz*tanh(stretch*(2.0_WP*real(k-1,WP)/real(nz,WP)-1.0_WP))/tanh(stretch)
          end do
          ! General serial grid object
          grid=sgrid(coord=cartesian,no=2,x=x,y=y,z=z,xper=.true.,yper=.false.,zper=.false.,name='duct')
