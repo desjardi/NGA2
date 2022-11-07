@@ -175,6 +175,7 @@ module vfs_class
       procedure :: distance_from_polygon                  !< Build a signed distance field from the polygonalized interface
       procedure :: subcell_vol                            !< Build subcell phasic volumes from reconstructed interface
       procedure :: reset_volume_moments                   !< Reconstruct volume moments from IRL interfaces
+      procedure :: reset_moments                          !< Reconstruct first-order moments from IRL interfaces
       procedure :: update_surfmesh                        !< Update a surfmesh object using current polygons
       procedure :: get_curvature                          !< Compute curvature from IRL surface polygons
       procedure :: paraboloid_fit                         !< Perform local paraboloid fit of IRL surface using IRL barycenter data
@@ -604,7 +605,7 @@ contains
          if (new_bc%type.eq.neumann) call die('[vfs apply_bcond] Neumann requires a direction')
          new_bc%dir=0
       end if
-      new_bc%itr=iterator(this%cfg,new_bc%name,locator)
+      new_bc%itr=iterator(this%cfg,new_bc%name,locator,'c')
       
       ! Insert it up front
       new_bc%next=>this%first_bc
@@ -2509,6 +2510,48 @@ contains
       !call this%sync_and_clean_barycenters()
       
    end subroutine reset_volume_moments
+   
+   ! Reset only moments, leave VF unchanged
+   subroutine reset_moments(this)
+      implicit none
+      class(vfs), intent(inout) :: this
+      integer :: i,j,k
+      type(RectCub_type) :: cell
+      type(SepVM_type) :: separated_volume_moments
+      
+      ! Calculate volume moments and store
+      call new(cell)
+      call new(separated_volume_moments)
+      do k=this%cfg%kmino_,this%cfg%kmaxo_
+         do j=this%cfg%jmino_,this%cfg%jmaxo_
+            do i=this%cfg%imino_,this%cfg%imaxo_
+               ! Handle pure wall cells
+               if (this%mask(i,j,k).eq.1) then
+                  this%Lbary(:,i,j,k)=[this%cfg%xm(i),this%cfg%ym(j),this%cfg%zm(k)]
+                  this%Gbary(:,i,j,k)=[this%cfg%xm(i),this%cfg%ym(j),this%cfg%zm(k)]
+                  cycle
+               end if
+               ! Form the grid cell
+               call construct_2pt(cell,[this%cfg%x(i),this%cfg%y(j),this%cfg%z(k)],[this%cfg%x(i+1),this%cfg%y(j+1),this%cfg%z(k+1)])
+               ! Cut it by the current interface(s)
+               call getNormMoments(cell,this%liquid_gas_interface(i,j,k),separated_volume_moments)
+               ! Recover relevant moments
+               this%Lbary(:,i,j,k)=getCentroid(separated_volume_moments,0)
+               this%Gbary(:,i,j,k)=getCentroid(separated_volume_moments,1)
+               ! Clean up
+               if (this%VF(i,j,k).lt.VFlo) then
+                  this%Lbary(:,i,j,k)=[this%cfg%xm(i),this%cfg%ym(j),this%cfg%zm(k)]
+                  this%Gbary(:,i,j,k)=[this%cfg%xm(i),this%cfg%ym(j),this%cfg%zm(k)]
+               end if
+               if (this%VF(i,j,k).gt.VFhi) then
+                  this%Lbary(:,i,j,k)=[this%cfg%xm(i),this%cfg%ym(j),this%cfg%zm(k)]
+                  this%Gbary(:,i,j,k)=[this%cfg%xm(i),this%cfg%ym(j),this%cfg%zm(k)]
+               end if
+            end do
+         end do
+      end do
+      
+   end subroutine reset_moments
    
    
    !> Compute curvature from a least squares fit of the IRL surface

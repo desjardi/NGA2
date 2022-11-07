@@ -19,7 +19,9 @@ module lpt_class
    
    !> I/O chunk size to read at a time
    integer, parameter :: part_chunk_size=1000  !< Read 1000 particles at a time before redistributing
-   
+
+   ! Drag model
+   character(len=str_medium) :: drag_model
    
    !> Basic particle object definition
    type :: part
@@ -30,6 +32,7 @@ module lpt_class
       real(WP), dimension(3) :: pos        !< Particle center coordinates
       real(WP), dimension(3) :: vel        !< Velocity of particle
       real(WP), dimension(3) :: col        !< Collision force
+      real(WP) :: T                        !< Temperature
       real(WP) :: dt                       !< Time step size for the particle
       !> MPI_INTEGER data
       integer , dimension(3) :: ind        !< Index of cell containing particle center
@@ -37,7 +40,7 @@ module lpt_class
    end type part
    !> Number of blocks, block length, and block types in a particle
    integer, parameter                         :: part_nblock=3
-   integer           , dimension(part_nblock) :: part_lblock=[1,11,4]
+   integer           , dimension(part_nblock) :: part_lblock=[1,12,4]
    type(MPI_Datatype), dimension(part_nblock) :: part_tblock=[MPI_INTEGER8,MPI_DOUBLE_PRECISION,MPI_INTEGER]
    !> MPI_PART derived datatype and size
    type(MPI_Datatype) :: MPI_PART
@@ -93,6 +96,7 @@ module lpt_class
       real(WP), dimension(:,:,:), allocatable :: srcU     !< U momentum source on mesh, cell-centered
       real(WP), dimension(:,:,:), allocatable :: srcV     !< V momentum source on mesh, cell-centered
       real(WP), dimension(:,:,:), allocatable :: srcW     !< W momentum source on mesh, cell-centered
+      real(WP), dimension(:,:,:), allocatable :: srcE     !< E momentum source on mesh, cell-centered
       
       ! Filtering operation
       real(WP) :: filter_width                            !< Characteristic filter width
@@ -152,6 +156,7 @@ contains
       allocate(self%srcU(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%srcU=0.0_WP
       allocate(self%srcV(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%srcV=0.0_WP
       allocate(self%srcW(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%srcW=0.0_WP
+      allocate(self%srcE(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%srcE=0.0_WP
       
       ! Set default filter width to zero by default
       self%filter_width=0.0_WP
@@ -489,7 +494,7 @@ contains
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: rho   !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: visc  !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       integer :: i
-      real(WP) :: mydt,dt_done
+      real(WP) :: mydt,dt_done,deng
       real(WP), dimension(3) :: acc,dmom
       type(part) :: pold
       
@@ -497,6 +502,7 @@ contains
       this%srcU=0.0_WP
       this%srcV=0.0_WP
       this%srcW=0.0_WP
+      this%srcE=0.0_WP
       
       ! Advance the equations
       do i=1,this%np_
@@ -519,9 +525,11 @@ contains
             this%p(i)%ind=this%cfg%get_ijk_global(this%p(i)%pos,this%p(i)%ind)
             ! Send source term back to the mesh
             dmom=mydt*acc*this%rho*Pi/6.0_WP*this%p(i)%d**3
+            deng=sum(dmom*this%p(i)%vel)
             if (this%cfg%nx.gt.1) call this%cfg%set_scalar(Sp=-dmom(1),pos=this%p(i)%pos,i0=this%p(i)%ind(1),j0=this%p(i)%ind(2),k0=this%p(i)%ind(3),S=this%srcU,bc='n')
             if (this%cfg%ny.gt.1) call this%cfg%set_scalar(Sp=-dmom(2),pos=this%p(i)%pos,i0=this%p(i)%ind(1),j0=this%p(i)%ind(2),k0=this%p(i)%ind(3),S=this%srcV,bc='n')
             if (this%cfg%nz.gt.1) call this%cfg%set_scalar(Sp=-dmom(3),pos=this%p(i)%pos,i0=this%p(i)%ind(1),j0=this%p(i)%ind(2),k0=this%p(i)%ind(3),S=this%srcW,bc='n')
+                                  call this%cfg%set_scalar(Sp=-deng   ,pos=this%p(i)%pos,i0=this%p(i)%ind(1),j0=this%p(i)%ind(2),k0=this%p(i)%ind(3),S=this%srcE,bc='n')
             ! Increment
             dt_done=dt_done+mydt
          end do
@@ -544,6 +552,7 @@ contains
       this%srcU=this%srcU/this%cfg%vol; call this%cfg%syncsum(this%srcU); call this%filter(this%srcU)
       this%srcV=this%srcV/this%cfg%vol; call this%cfg%syncsum(this%srcV); call this%filter(this%srcV)
       this%srcW=this%srcW/this%cfg%vol; call this%cfg%syncsum(this%srcW); call this%filter(this%srcW)
+      this%srcE=this%srcE/this%cfg%vol; call this%cfg%syncsum(this%srcE); call this%filter(this%srcE)
       
       ! Recompute volume fraction
       call this%update_VF()
@@ -605,11 +614,24 @@ contains
       ! Return acceleration and optimal timestep size
       acc=fVF*(fvel-p%vel)/tau
       opt_dt=tau/real(this%nstep,WP)
-   end subroutine get_rhs
+
+    contains
+
+      function drag(Rep,Map,VFp,Knp) result(Fd)
+        real(WP) :: Fd
+        real(WP) :: Rep,Map,VFp,Knp
+
+        select case(trim(drag_model))
+        case ('Tenneti')
+        case ('KC')
+        end select
+        
+      end function drag
+    end subroutine get_rhs
 
 
-   !> Update particle volume fraction using our current particles
-   subroutine update_VF(this)
+    !> Update particle volume fraction using our current particles
+    subroutine update_VF(this)
       use mathtools, only: Pi
       implicit none
       class(lpt), intent(inout) :: this

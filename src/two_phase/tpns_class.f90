@@ -1760,9 +1760,9 @@ contains
                Vxm=sum(this%itpi_x(:,i,j,k)*Vi(i-1:i,j,k)); Vxp=sum(this%itpi_x(:,i+1,j,k)*Vi(i:i+1,j,k)); Vym=sum(this%itpi_y(:,i,j,k)*Vi(i,j-1:j,k)); Vyp=sum(this%itpi_y(:,i,j+1,k)*Vi(i,j:j+1,k)); Vzm=sum(this%itpi_z(:,i,j,k)*Vi(i,j,k-1:k)); Vzp=sum(this%itpi_z(:,i,j,k+1)*Vi(i,j,k:k+1))
                Wxm=sum(this%itpi_x(:,i,j,k)*Wi(i-1:i,j,k)); Wxp=sum(this%itpi_x(:,i+1,j,k)*Wi(i:i+1,j,k)); Wym=sum(this%itpi_y(:,i,j,k)*Wi(i,j-1:j,k)); Wyp=sum(this%itpi_y(:,i,j+1,k)*Wi(i,j:j+1,k)); Wzm=sum(this%itpi_z(:,i,j,k)*Wi(i,j,k-1:k)); Wzp=sum(this%itpi_z(:,i,j,k+1)*Wi(i,j,k:k+1))
                ! Get velocity gradient tensor
-               dUdx(1,1)=this%cfg%dxi(i)*(Uxp-Uxm); dUdx(1,2)=this%cfg%dyi(j)*(Uxp-Uxm); dUdx(1,3)=this%cfg%dzi(k)*(Uxp-Uxm)
-               dUdx(2,1)=this%cfg%dxi(i)*(Vxp-Vxm); dUdx(2,2)=this%cfg%dyi(j)*(Vxp-Vxm); dUdx(2,3)=this%cfg%dzi(k)*(Vxp-Vxm)
-               dUdx(3,1)=this%cfg%dxi(i)*(Wxp-Wxm); dUdx(3,2)=this%cfg%dyi(j)*(Wxp-Wxm); dUdx(3,3)=this%cfg%dzi(k)*(Wxp-Wxm)
+               dUdx(1,1)=this%cfg%dxi(i)*(Uxp-Uxm); dUdx(1,2)=this%cfg%dyi(j)*(Uyp-Uym); dUdx(1,3)=this%cfg%dzi(k)*(Uzp-Uzm)
+               dUdx(2,1)=this%cfg%dxi(i)*(Vxp-Vxm); dUdx(2,2)=this%cfg%dyi(j)*(Vyp-Vym); dUdx(2,3)=this%cfg%dzi(k)*(Vzp-Vzm)
+               dUdx(3,1)=this%cfg%dxi(i)*(Wxp-Wxm); dUdx(3,2)=this%cfg%dyi(j)*(Wyp-Wym); dUdx(3,3)=this%cfg%dzi(k)*(Wzp-Wzm)
                ! Assemble the strain rate
                SR(1,i,j,k)=dUdx(1,1)-(dUdx(1,1)+dUdx(2,2)+dUdx(3,3))/3.0_WP
                SR(2,i,j,k)=dUdx(2,2)-(dUdx(1,1)+dUdx(2,2)+dUdx(3,3))/3.0_WP

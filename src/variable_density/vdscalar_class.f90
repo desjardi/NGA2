@@ -435,7 +435,7 @@ contains
          if (new_bc%type.eq.neumann) call die('[vdscalar apply_bcond] Neumann requires a direction')
          new_bc%dir=0
       end if
-      new_bc%itr=iterator(this%cfg,new_bc%name,locator)
+      new_bc%itr=iterator(this%cfg,new_bc%name,locator,'c')
       
       ! Insert it up front
       new_bc%next=>this%first_bc
