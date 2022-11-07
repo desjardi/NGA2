@@ -3,5 +3,9 @@ ifdef LAPACK_DIR
   LIBRARY_LOCATIONS += $(LAPACK_DIR)/lib
   LIBRARIES += -llapack -lblas
 else
-  $(error LAPACK_DIR not defined, but it is currently required by NGA2)
+  ifeq ($(os_name), Darwin)
+    LIBRARIES += -framework Accelerate
+  else
+    $(error LAPACK_DIR not defined, but it is currently required by NGA2)
+  endif
 endif
