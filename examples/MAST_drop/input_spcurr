@@ -1,0 +1,39 @@
+# Parallelization
+Partition :	1 1 1
+
+# Mesh definition
+Lx :	2
+Ly :	2
+nx :	20
+ny :	20
+
+# Flow setup and initial conditions
+Droplet diameter :	      1
+Gas sound speed : 	      1e2
+Liquid density :              1000
+Gas density :  		      1
+Surface tension coefficient : 1e4
+
+# Fluid properties
+Liquid dynamic viscosity :    1
+Gas dynamic viscosity :       1
+Liquid gamma :	      	      4.4
+Liquid Pref :		      6e8
+Gas gamma : 		      1.4
+
+# Time integration
+Max timestep size : 3.7e-5
+Max cfl number :    0.9
+Max time :     	    2.5e-1
+Max steps :	    100000
+
+# Pressure solver
+Pressure tolerance : 1e-6
+Pressure iteration : 100
+
+# Implicit velocity solver
+Implicit tolerance : 1e-6
+Implicit iteration : 100
+
+# Ensight output
+Ensight output period : 1e-3

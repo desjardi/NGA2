@@ -1,0 +1,53 @@
+# From Kuhn & Desjardins JCP (2021)
+# Case 1 is with uniform velocity of 0.2, inviscid, no surface tension, dt=2.5e-2 (paper has typo)
+# Case 2 is quiescent, viscosity of 0.1 in both phases, surface tension of 1000, dt=5e-4
+Gas velocity :	       	      0.2 0 0
+Liquid velocity :	      0.2 0 0
+Liquid dynamic viscosity :    0 !0.1
+Gas dynamic viscosity :       0 !0.1
+Surface tension coefficient : 0 !1000
+Max timestep size : 	      2.5e-2 !5e-4    
+
+# Parallelization
+Partition :	4 1 1
+
+# Mesh definition
+Lx :	2
+Ly :	2
+nx :	200
+ny :	200
+
+# Flow setup
+Droplet diameter :   0.4
+
+# Fluid properties
+Liquid gamma :	      	      1.19
+Liquid Pref :		      7.028e8
+Liquid b :  		      6.61e-4
+Liquid q :		      -1.178e6
+Liquid spec heat :	      4130
+Liquid therm cond :	      1
+Gas gamma : 		      1.4
+Gas spec heat :		      718
+Gas therm cond :	      0.5
+
+# Initial conditions
+Background pressure:	      1e5
+Gas temperature:	      300
+Liquid temperature:	      350
+
+# Time integration
+Max cfl number :    0.9
+Max time :     	    49.99999
+Max steps :	    10000000
+
+# Pressure solver
+Pressure tolerance : 1e-6
+Pressure iteration : 100
+
+# Implicit velocity solver
+Implicit tolerance : 1e-6
+Implicit iteration : 100
+
+# Ensight output
+Ensight output period : 0.9999999
