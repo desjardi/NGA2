@@ -99,10 +99,13 @@ module simulation
         use random, only: random_uniform
         use mathtools,  only: Pi
         use parallel,   only: amRoot
+        use lpt_class,  only: drag_model
         real(WP) :: dp,VFp,L,x0,vol,volp
          integer :: i,np
          ! Create solver
          lp=lpt(cfg=cfg,name='LPT')
+         ! Get drag model from the inpit
+         call param_read('Drag model',drag_model,default='Tenneti')
          ! Get particle density from the input
          call param_read('Particle density',lp%rho)
          ! Get particle diameter from the input
@@ -246,7 +249,7 @@ module simulation
          case('gas')
             call matmod%register_idealgas('gas',gamm)
          case('liquid')
-            call param_read('Liquid Pref', Pref)
+            call param_read('Pref', Pref)
             call matmod%register_stiffenedgas('liquid',gamm,Pref)
          end select
          ! Create flow solver
@@ -379,7 +382,7 @@ module simulation
          call ens_out%add_scalar('Bulkmod',fs%RHOSS2)
          call ens_out%add_scalar('divU',fs%divU)
          call ens_out%add_scalar('Viscosity',fs%visc)
-         call ens_out%add_scalar('Sensor',fs%sl_x)
+         call ens_out%add_scalar('Mach',fs%Mach)
          call ens_out%add_particle('particles',pmesh)
          call ens_out%add_scalar('epsp',lp%VF)
          ! Output to ensight
@@ -560,6 +563,7 @@ module simulation
          end if
 
          ! Perform and output monitoring
+         call fs%get_viz()
          call fs%get_max()
          call lp%get_max()
          call mfile%write()

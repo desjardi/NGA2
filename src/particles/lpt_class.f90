@@ -21,7 +21,7 @@ module lpt_class
    integer, parameter :: part_chunk_size=1000  !< Read 1000 particles at a time before redistributing
 
    ! Drag model
-   character(len=str_medium) :: drag_model
+   character(len=str_medium), public :: drag_model
    
    !> Basic particle object definition
    type :: part
@@ -586,7 +586,7 @@ contains
       type(part), intent(in) :: p
       real(WP), dimension(3), intent(out) :: acc
       real(WP), intent(out) :: opt_dt
-      real(WP) :: Re,corr,tau,b1,b2
+      real(WP) :: Re,corr,tau
       real(WP) :: fvisc,frho,pVF,fVF
       real(WP), dimension(3) :: fvel
       ! Interpolate the fluid phase velocity to the particle location
@@ -601,32 +601,33 @@ contains
       fVF=1.0_WP-pVF
       ! Particle Reynolds number
       Re=frho*norm2(p%vel-fvel)*p%d/fvisc+epsilon(1.0_WP)
-      ! Stokes correlation
-      !corr=1.0_WP
-      ! Schiller Naumann correlation
-      !corr=1.0_WP+0.15_WP*Re**(0.687_WP)
-      ! Tenneti and Subramaniam (2011)
-      b1=5.81_WP*pVF/fVF**3+0.48_WP*pVF**(1.0_WP/3.0_WP)/fVF**4
-      b2=pVF**3*Re*(0.95_WP+0.61_WP*pVF**3/fVF**2)
-      corr=fVF*(1.0_WP+0.15_WP*Re**(0.687_WP))/fVF**3+b1+b2
+      ! Drag correction
+      corr=drag_correction(Re,pVF)
       ! Particle response time
       tau=this%rho*p%d**2/(18.0_WP*fvisc*corr)
       ! Return acceleration and optimal timestep size
-      acc=fVF*(fvel-p%vel)/tau
+      acc=corr*(fvel-p%vel)/tau
       opt_dt=tau/real(this%nstep,WP)
 
     contains
 
-      function drag(Rep,Map,VFp,Knp) result(Fd)
-        real(WP) :: Fd
-        real(WP) :: Rep,Map,VFp,Knp
+      function drag_correction(Rep,VFp) result(F)
+        real(WP) :: F,Rep,Map,VFp,Knp,b1,b2
 
         select case(trim(drag_model))
-        case ('Tenneti')
-        case ('KC')
+        case('Stokes')
+           F=1.0_WP
+        case('Schiller-Naumann')
+           F=1.0_WP+0.15_WP*Re**(0.687_WP)
+        case('Tenneti')
+           ! Tenneti and Subramaniam (2011)
+           b1=5.81_WP*pVF/fVF**3+0.48_WP*pVF**(1.0_WP/3.0_WP)/fVF**4
+           b2=pVF**3*Re*(0.95_WP+0.61_WP*pVF**3/fVF**2)
+           F=fVF*(1.0_WP+0.15_WP*Re**(0.687_WP))/fVF**3+b1+b2
+        case('KC')
         end select
-        
-      end function drag
+
+      end function drag_correction
     end subroutine get_rhs
 
 
