@@ -586,7 +586,7 @@ contains
       type(part), intent(in) :: p
       real(WP), dimension(3), intent(out) :: acc
       real(WP), intent(out) :: opt_dt
-      real(WP) :: Re,corr,tau
+      real(WP) :: corr,Re,tau
       real(WP) :: fvisc,frho,pVF,fVF
       real(WP), dimension(3) :: fvel
       ! Interpolate the fluid phase velocity to the particle location
@@ -602,7 +602,7 @@ contains
       ! Particle Reynolds number
       Re=frho*norm2(p%vel-fvel)*p%d/fvisc+epsilon(1.0_WP)
       ! Drag correction
-      corr=drag_correction(Re,pVF)
+      corr=drag_correction()
       ! Particle response time
       tau=this%rho*p%d**2/(18.0_WP*fvisc*corr)
       ! Return acceleration and optimal timestep size
@@ -611,8 +611,9 @@ contains
 
     contains
 
-      function drag_correction(Rep,VFp) result(F)
-        real(WP) :: F,Rep,Map,VFp,Knp,b1,b2
+      function drag_correction() result(F)
+        real(WP) :: F
+        real(WP) :: Ma,Kn,b1,b2
 
         select case(trim(drag_model))
         case('Stokes')
@@ -623,7 +624,7 @@ contains
            ! Tenneti and Subramaniam (2011)
            b1=5.81_WP*pVF/fVF**3+0.48_WP*pVF**(1.0_WP/3.0_WP)/fVF**4
            b2=pVF**3*Re*(0.95_WP+0.61_WP*pVF**3/fVF**2)
-           F=fVF*(1.0_WP+0.15_WP*Re**(0.687_WP))/fVF**3+b1+b2
+           F=fVF*((1.0_WP+0.15_WP*Re**(0.687_WP))/fVF**3+b1+b2)
         case('KC')
         end select
 

@@ -22,8 +22,9 @@ Thermal conductivity :    0
 Gamma : 		  1.4
 
 # Particle parameters
-Particle density :  1000
+Particle density  :  1000
 Particle diameter : 200e-6
+Drag model        : Tenneti
 
 # Time integration
 Max timestep size : 8e-7
