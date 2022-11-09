@@ -20,6 +20,7 @@ module simulation
    type(block3) :: b3
 
    !> Couplers between blocks
+   type(coupler) :: cpl12x,cpl12y,cpl12z
    type(coupler) :: cpl23x,cpl23y,cpl23z
    type(coupler) :: cpl32x,cpl32y,cpl32z
 
@@ -28,6 +29,7 @@ module simulation
    logical, public :: restarted
    
    !> Storage for coupled fields
+   real(WP), dimension(:,:,:), allocatable :: U1on2,V1on2,W1on2
    real(WP), dimension(:,:,:), allocatable :: U2on3,V2on3,W2on3
    real(WP), dimension(:,:,:), allocatable :: U3on2,V3on2,W3on2
 
@@ -107,6 +109,13 @@ contains
       ! Initialize the couplers
       coupler_prep: block
          use parallel, only: group
+         ! Block 1 to block 2
+         cpl12x=coupler(src_grp=group,dst_grp=group,name='duct_to_in_x'); call cpl12x%set_src(cfg1,'x'); call cpl12x%set_dst(cfg2,'x'); call cpl12x%initialize()
+         cpl12y=coupler(src_grp=group,dst_grp=group,name='duct_to_in_y'); call cpl12y%set_src(cfg1,'y'); call cpl12y%set_dst(cfg2,'y'); call cpl12y%initialize()
+         cpl12z=coupler(src_grp=group,dst_grp=group,name='duct_to_in_z'); call cpl12z%set_src(cfg1,'z'); call cpl12z%set_dst(cfg2,'z'); call cpl12z%initialize()
+         allocate(U1on2(cfg2%imino_:cfg2%imaxo_,cfg2%jmino_:cfg2%jmaxo_,cfg2%kmino_:cfg2%kmaxo_)); U1on2=0.0_WP
+         allocate(V1on2(cfg2%imino_:cfg2%imaxo_,cfg2%jmino_:cfg2%jmaxo_,cfg2%kmino_:cfg2%kmaxo_)); V1on2=0.0_WP
+         allocate(W1on2(cfg2%imino_:cfg2%imaxo_,cfg2%jmino_:cfg2%jmaxo_,cfg2%kmino_:cfg2%kmaxo_)); W1on2=0.0_WP
          ! Block 2 to block 3
          cpl23x=coupler(src_grp=group,dst_grp=group,name='in_to_out_x'); call cpl23x%set_src(cfg2,'x'); call cpl23x%set_dst(cfg3,'x'); call cpl23x%initialize()
          cpl23y=coupler(src_grp=group,dst_grp=group,name='in_to_out_y'); call cpl23y%set_src(cfg2,'y'); call cpl23y%set_dst(cfg3,'y'); call cpl23y%initialize()
@@ -122,6 +131,16 @@ contains
          allocate(V3on2(cfg2%imino_:cfg2%imaxo_,cfg2%jmino_:cfg2%jmaxo_,cfg2%kmino_:cfg2%kmaxo_)); V3on2=0.0_WP
          allocate(W3on2(cfg2%imino_:cfg2%imaxo_,cfg2%jmino_:cfg2%jmaxo_,cfg2%kmino_:cfg2%kmaxo_)); W3on2=0.0_WP
       end block coupler_prep
+
+
+      ! Setup nudging region in block 2
+      b2%nudge_trans=20.0_WP*b2%cfg%min_meshsize
+      b2%nudge_xmin =b1%cfg%x(3*b1%cfg%nx/4)
+      b2%nudge_xmax =b1%cfg%x(3*b1%cfg%nx/4)
+      b2%nudge_ymin =b1%cfg%y(b2%cfg%jmin)
+      b2%nudge_ymax =b1%cfg%y(b2%cfg%jmax+1)
+      b2%nudge_zmin =b1%cfg%z(b2%cfg%kmin)
+      b2%nudge_zmax =b1%cfg%z(b2%cfg%kmax+1)
 
       ! Setup nudging region in block 3
       b3%nudge_trans=20.0_WP*b3%cfg%min_meshsize
@@ -145,8 +164,7 @@ contains
       do while (.not.b2%time%done())
 
          ! Advance block 2
-         call b2%step()
-         ! call b2%step(U3on2,V3on2,W3on2)
+         call b2%step(U1on2,V1on2,W1on2)
 
          ! ###############################################
          ! ####### TRANSFER DROPLETS FROM 2->3 HERE ######
@@ -179,6 +197,11 @@ contains
 
             ! Advance block 1
             call b1%step()
+
+            ! Exchange data using cpl12x/y/z couplers and the most recent velocity
+            U1on2=0.0_WP; call cpl12x%push(b1%fs%U); call cpl12x%transfer(); call cpl12x%pull(U1on2)
+            V1on2=0.0_WP; call cpl12y%push(b1%fs%V); call cpl12y%transfer(); call cpl12y%pull(V1on2)
+            W1on2=0.0_WP; call cpl12z%push(b1%fs%W); call cpl12z%transfer(); call cpl12z%pull(W1on2)
 
          end do
 

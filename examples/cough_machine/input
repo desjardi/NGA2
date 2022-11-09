@@ -9,7 +9,7 @@
 3 Partition : 2 2 2 
 
 # Turbulent duct mesh definition
-1 Lx :	5
+1 Lx :	12
 1 Ly :	1
 1 Lz :	1
 1 nx :	144
@@ -18,18 +18,26 @@
 1 Stretching : 2.5
 
 # Zoomed in mesh definition
-2 Uniform Lx :  3
-2 Uniform Ly :  1
-2 Uniform Lz :  1
-2 Uniform nx :  100
-2 Uniform ny :  50
-2 Uniform nz :  50
-2 Total nx :  100
-2 Total ny :  50
-2 Total nz :  50
-2 Stretching x : 1
-2 Stretching y : 1
-2 Stretching z : 1
+2 Lx :	3
+2 Ly :	1
+2 Lz :	1
+2 nx :	36
+2 ny :	56
+2 nz :	56
+2 Uniform ny : 76
+2 Stretching : 2.5
+# 2 Uniform Lx :  3
+# 2 Uniform Ly :  1
+# 2 Uniform Lz :  1
+# 2 Uniform nx :  100
+# 2 Uniform ny :  50
+# 2 Uniform nz :  50
+# 2 Total nx :  100
+# 2 Total ny :  50
+# 2 Total nz :  50
+# 2 Stretching x : 1
+# 2 Stretching y : 1
+# 2 Stretching z : 1
 
 # Zoomed out mesh definition
 3 Uniform Lx :  0.3
@@ -55,12 +63,14 @@ Gas coflow :          1
 # Fluid properties and velocity
 Gravity :                           0 -9.81 0
 Liquid dynamic viscosity :          1.137e-3
-Gas dynamic viscosity :             1.780e-5
+# Gas dynamic viscosity :             1.780e-5
+Gas dynamic viscosity :             2.00e-4
 Liquid density :                    1000
-Gas density :                       1.226
+# Gas density :                       1.226
+Gas density :                       1
 Surface tension coefficient :       0.05
 Static contact angle :              51
-Ubulk :                             0.08
+Ubulk :                             1
 Wbulk :                             0
 Perturbation :                      0.5
 
@@ -72,11 +82,11 @@ Gas specific heat :              1007
 Coefficent of Thermal expansion: 3.4e-3
 
 # Time integration
-1 Max timestep size : 1e-5
+1 Max timestep size : 2e-2
 2 Max timestep size : 1e-5
 3 Max timestep size : 2e-5
 Max cfl number :    0.9
-Max time :          0.3
+Max time :          200
 
 # Pressure solver
 Pressure tolerance : 1e-6

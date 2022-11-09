@@ -232,14 +232,10 @@ contains
 
 
    !> Take a time step with block 1
-   ! subroutine step(b,Udir,Vdir,Wdir)
    subroutine step(b)
       use mpi,        only: mpi_wtime
       implicit none
       class(block1), intent(inout) :: b
-      ! real(WP), dimension(b%cfg%imino_:,b%cfg%jmino_:,b%cfg%kmino_:), intent(inout) :: Udir     !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
-      ! real(WP), dimension(b%cfg%imino_:,b%cfg%jmino_:,b%cfg%kmino_:), intent(inout) :: Vdir     !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
-      ! real(WP), dimension(b%cfg%imino_:,b%cfg%jmino_:,b%cfg%kmino_:), intent(inout) :: Wdir     !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       real(WP) :: starttime,endtime
 
       ! Start time step timer
@@ -277,9 +273,6 @@ contains
 
          ! Explicit calculation of drho*u/dt from NS
          call b%fs%get_dmomdt(b%resU,b%resV,b%resW)
-
-         ! Add momentum source terms
-         call b%fs%addsrc_gravity(b%resU,b%resV,b%resW)
 
          ! Assemble explicit residual
          b%resU=-2.0_WP*(b%fs%rho*b%fs%U-b%fs%rho*b%fs%Uold)+b%time%dt*b%resU

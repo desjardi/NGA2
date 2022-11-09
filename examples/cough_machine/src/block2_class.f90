@@ -38,6 +38,11 @@ module block2_class
       real(WP), dimension(:,:,:),   allocatable :: resU,resV,resW
       real(WP), dimension(:,:,:),   allocatable :: Ui,Vi,Wi
       real(WP), dimension(:,:,:,:), allocatable :: SR
+      !> Nudging region
+      real(WP) :: nudge_trans
+      real(WP) :: nudge_xmin,nudge_xmax
+      real(WP) :: nudge_ymin,nudge_ymax
+      real(WP) :: nudge_zmin,nudge_zmax
    contains
       procedure :: init                   !< Initialize block
       procedure :: step                   !< Advance block
@@ -327,18 +332,18 @@ contains
             call b%df%pullvar(name='P'  ,var=b%fs%P  )
          end if
          ! Gas velocity parameters
-         call param_read('Gas velocity',Uin)
+         ! call param_read('Gas velocity',Uin)
          ! call param_read('Peak flow rate',CPFR)
          ! Uin=inflowVelocity(b%time%t,CPFR,H_mouth,W_mouth)
-         call param_read('Gas thickness',delta)
-         call param_read('Gas perturbation',Urand)
-         call b%fs%get_bcond('inflow',mybc)
+         ! call param_read('Gas thickness',delta)
+         ! call param_read('Gas perturbation',Urand)
+         ! call b%fs%get_bcond('inflow',mybc)
          ! Apply Dirichlet at inlet
-         do n=1,mybc%itr%no_
-            i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
-            !b%fs%U(i,j,k)=Uin*tanh(2.0_WP*(0.5_WP*W_mouth-abs(b%fs%cfg%zm(k)))/delta)*tanh(2.0_WP*b%fs%cfg%ym(j)/delta)*tanh(2.0_WP*(H_mouth-b%fs%cfg%ym(j))/delta)+random_uniform(-Urand,Urand)
-            b%fs%U(i,j,k)=Uin!*tanh(2.0_WP*(0.5_WP*W_mouth-abs(b%fs%cfg%zm(k)))/delta)*tanh(2.0_WP*b%fs%cfg%ym(j)/delta)*tanh(2.0_WP*(H_mouth-b%fs%cfg%ym(j))/delta)
-         end do
+         ! do n=1,mybc%itr%no_
+         !    i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
+         !    !b%fs%U(i,j,k)=Uin*tanh(2.0_WP*(0.5_WP*W_mouth-abs(b%fs%cfg%zm(k)))/delta)*tanh(2.0_WP*b%fs%cfg%ym(j)/delta)*tanh(2.0_WP*(H_mouth-b%fs%cfg%ym(j))/delta)+random_uniform(-Urand,Urand)
+         !    b%fs%U(i,j,k)=Uin*tanh(2.0_WP*(0.5_WP*W_mouth-abs(b%fs%cfg%zm(k)))/delta)*tanh(2.0_WP*b%fs%cfg%ym(j)/delta)*tanh(2.0_WP*(H_mouth-b%fs%cfg%ym(j))/delta)
+         ! end do
          ! Apply coflow around inlet geometry
          !call param_read('Gas coflow',Uco)
          ! Uco=0.10_WP*Uin
@@ -500,15 +505,14 @@ contains
 
 
    !> Take a time step with block 2
-   ! subroutine step(b,Udir,Vdir,Wdir)
-   subroutine step(b)
+   subroutine step(b,Unudge,Vnudge,Wnudge)
       use tpns_class, only: static_contact
       use mpi,        only: mpi_wtime
       implicit none
       class(block2), intent(inout) :: b
-      ! real(WP), dimension(b%cfg%imino_:,b%cfg%jmino_:,b%cfg%kmino_:), intent(inout) :: Udir     !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
-      ! real(WP), dimension(b%cfg%imino_:,b%cfg%jmino_:,b%cfg%kmino_:), intent(inout) :: Vdir     !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
-      ! real(WP), dimension(b%cfg%imino_:,b%cfg%jmino_:,b%cfg%kmino_:), intent(inout) :: Wdir     !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      real(WP), dimension(b%cfg%imino_:,b%cfg%jmino_:,b%cfg%kmino_:), intent(inout) :: Unudge     !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      real(WP), dimension(b%cfg%imino_:,b%cfg%jmino_:,b%cfg%kmino_:), intent(inout) :: Vnudge     !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      real(WP), dimension(b%cfg%imino_:,b%cfg%jmino_:,b%cfg%kmino_:), intent(inout) :: Wnudge     !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       real(WP) :: starttime,endtime
 
       ! Start time step timer
@@ -519,28 +523,28 @@ contains
       call b%time%adjust_dt()
       call b%time%increment()
 
-      ! ! Apply time-varying Dirichlet conditions
-      ! reapply_dirichlet: block
-      !    use tpns_class, only: bcond
-      !    use random,     only: random_uniform
-      !    type(bcond), pointer :: mybc
-      !    integer  :: n,i,j,k
-      !    ! Reapply Dirichlet at inlet
-      !    ! Uin=inflowVelocity(b%time%t,CPFR,H_mouth,W_mouth)
-      !    call b%fs%get_bcond('inflow',mybc)
-      !    do n=1,mybc%itr%no_
-      !       i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
-      !       !b%fs%U(i,j,k)=Uin*tanh(2.0_WP*(0.5_WP*W_mouth-abs(b%fs%cfg%zm(k)))/delta)*tanh(2.0_WP*b%fs%cfg%ym(j)/delta)*tanh(2.0_WP*(H_mouth-b%fs%cfg%ym(j))/delta)+random_uniform(-Urand,Urand)
-      !       b%fs%U(i,j,k)=Uin*tanh(2.0_WP*(0.5_WP*W_mouth-abs(b%fs%cfg%zm(k)))/delta)*tanh(2.0_WP*b%fs%cfg%ym(j)/delta)*tanh(2.0_WP*(H_mouth-b%fs%cfg%ym(j))/delta)
-      !    end do
-      !    ! Reapply coflow around inlet geometry
-      !    Uco=0.10_WP*Uin
-      !    call b%fs%get_bcond('coflow',mybc)
-      !    do n=1,mybc%itr%no_
-      !       i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
-      !       b%fs%U(i,j,k)=Uco
-      !    end do
-      ! end block reapply_dirichlet
+      ! Apply time-varying Dirichlet conditions
+      reapply_dirichlet: block
+         use tpns_class, only: bcond
+         use random,     only: random_uniform
+         type(bcond), pointer :: mybc
+         integer  :: n,i,j,k
+         ! Reapply Dirichlet at inlet
+         ! Uin=inflowVelocity(b%time%t,CPFR,H_mouth,W_mouth)
+         call b%fs%get_bcond('inflow',mybc)
+         do n=1,mybc%itr%no_
+            i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
+            ! b%fs%U(i,j,k)=Uin*tanh(2.0_WP*(0.5_WP*W_mouth-abs(b%fs%cfg%zm(k)))/delta)*tanh(2.0_WP*b%fs%cfg%ym(j)/delta)*tanh(2.0_WP*(H_mouth-b%fs%cfg%ym(j))/delta)+random_uniform(-Urand,Urand)
+            ! b%fs%U(i,j,k)=Uin*tanh(2.0_WP*(0.5_WP*W_mouth-abs(b%fs%cfg%zm(k)))/delta)*tanh(2.0_WP*b%fs%cfg%ym(j)/delta)*tanh(2.0_WP*(H_mouth-b%fs%cfg%ym(j))/delta)
+         end do
+         ! Reapply coflow around inlet geometry
+         Uco=0.10_WP*Uin
+         call b%fs%get_bcond('coflow',mybc)
+         do n=1,mybc%itr%no_
+            i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
+            b%fs%U(i,j,k)=Uco
+         end do
+      end block reapply_dirichlet
 
       ! Calculate SR
       call b%fs%get_strainrate(Ui=b%Ui,Vi=b%Vi,Wi=b%Wi,SR=b%SR)
