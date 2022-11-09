@@ -62,7 +62,7 @@ contains
          end do
          do j=1,ny+1
             ! y(j)=0.5_WP*Ly*tanh(stretch*(2.0_WP*real(j-1,WP)/real(ny,WP)-1.0_WP))/tanh(stretch)
-            y(j)=0.5_WP*Ly*tanh(stretch*(2.0_WP*real(j-1,WP)/real(ny,WP)-1.0_WP))/tanh(stretch)+0.5_WP
+            y(j)=0.5_WP*Ly*tanh(stretch*(2.0_WP*real(j-1,WP)/real(ny,WP)-1.0_WP))/tanh(stretch)+(Ly/2.0_WP)
          end do
          do k=1,nz+1
             z(k)=0.5_WP*Lz*tanh(stretch*(2.0_WP*real(k-1,WP)/real(nz,WP)-1.0_WP))/tanh(stretch)
@@ -88,41 +88,23 @@ contains
          real(WP), dimension(:), allocatable :: x,y,z
          type(sgrid) :: grid
          integer, dimension(3) :: partition
-         ! Read in grid definition - updated tanh streched mesh
-         call param_read('2 Lx',Lx); call param_read('2 nx',nx); allocate(x(nx+1))
-         call param_read('2 Ly',Ly); call param_read('2 ny',ny); allocate(y(ny+1)); call param_read('2 Uniform ny',uny)
-         call param_read('2 Lz',Lz); call param_read('2 nz',nz); allocate(z(nz+1))
-         call param_read('2 Stretching',stretch)
-         ! Create simple rectilinear grid in x and z, tanh-stretched grid in y
-         do i=1,nx+1
-            x(i)=real(i-1,WP)/real(nx,WP)*Lx
+         ! Read in grid definition
+         call param_read('2 Uniform Lx',Lx); call param_read('2 Uniform nx',unx); call param_read('2 Total nx',nx); allocate(x(nx+1))
+         call param_read('2 Uniform Ly',Ly); call param_read('2 Uniform ny',uny); call param_read('2 Total ny',ny); allocate(y(ny+1))
+         call param_read('2 Uniform Lz',Lz); call param_read('2 Uniform nz',unz); call param_read('2 Total nz',nz); allocate(z(nz+1))
+         call param_read('2 Stretching x',Sx)
+         call param_read('2 Stretching y',Sy)
+         call param_read('2 Stretching z',Sz)
+         ! Create simple rectilinear grid
+         do i=1,unx+1
+            x(i)=real(i-1,WP)/real(unx,WP)*Lx
          end do
-         do j=1,ny
-            y(j)=0.5_WP*Ly*tanh(stretch*(2.0_WP*real(j-1,WP)/real(ny,WP)-1.0_WP))/tanh(stretch)+0.5_WP
+         do j=1+(ny-uny)/2,1+(ny+uny)/2
+            y(j)=real(j-(1+(ny-uny)/2),WP)/real(uny,WP)*(Ly+t_base)-t_base
          end do
-         ! do j=ny+1,(ny+1)+uny+1
-         !    ! y(j)=
-         ! end do
-         do k=1,nz+1
-            z(k)=0.5_WP*Lz*tanh(stretch*(2.0_WP*real(k-1,WP)/real(nz,WP)-1.0_WP))/tanh(stretch)
+         do k=1+(nz-unz)/2,1+(nz+unz)/2
+            z(k)=real(k-(1+(nz-unz)/2),WP)/real(unz,WP)*Lz-0.5_WP*Lz
          end do
-         ! Read in grid definition - original mesh
-         ! call param_read('2 Uniform Lx',Lx); call param_read('2 Uniform nx',unx); call param_read('2 Total nx',nx); allocate(x(nx+1))
-         ! call param_read('2 Uniform Ly',Ly); call param_read('2 Uniform ny',uny); call param_read('2 Total ny',ny); allocate(y(ny+1))
-         ! call param_read('2 Uniform Lz',Lz); call param_read('2 Uniform nz',unz); call param_read('2 Total nz',nz); allocate(z(nz+1))
-         ! call param_read('2 Stretching x',Sx)
-         ! call param_read('2 Stretching y',Sy)
-         ! call param_read('2 Stretching z',Sz)
-         ! ! Create simple rectilinear grid
-         ! do i=1,unx+1
-         !    x(i)=real(i-1,WP)/real(unx,WP)*Lx
-         ! end do
-         ! do j=1+(ny-uny)/2,1+(ny+uny)/2
-         !    y(j)=real(j-(1+(ny-uny)/2),WP)/real(uny,WP)*(Ly+t_base)-t_base
-         ! end do
-         ! do k=1+(nz-unz)/2,1+(nz+unz)/2
-         !    z(k)=real(k-(1+(nz-unz)/2),WP)/real(unz,WP)*Lz-0.5_WP*Lz
-         ! end do
          ! Grid for square duct domain
          ! do i=1,unx+1
          !    x(i)=real(i-1,WP)/real(unx,WP)*Lx-L_mouth

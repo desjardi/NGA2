@@ -338,7 +338,7 @@ contains
          ! call param_read('Gas thickness',delta)
          ! call param_read('Gas perturbation',Urand)
          ! call b%fs%get_bcond('inflow',mybc)
-         ! Apply Dirichlet at inlet
+         ! ! Apply Dirichlet at inlet
          ! do n=1,mybc%itr%no_
          !    i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
          !    !b%fs%U(i,j,k)=Uin*tanh(2.0_WP*(0.5_WP*W_mouth-abs(b%fs%cfg%zm(k)))/delta)*tanh(2.0_WP*b%fs%cfg%ym(j)/delta)*tanh(2.0_WP*(H_mouth-b%fs%cfg%ym(j))/delta)+random_uniform(-Urand,Urand)
@@ -534,16 +534,19 @@ contains
          call b%fs%get_bcond('inflow',mybc)
          do n=1,mybc%itr%no_
             i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
-            ! b%fs%U(i,j,k)=Uin*tanh(2.0_WP*(0.5_WP*W_mouth-abs(b%fs%cfg%zm(k)))/delta)*tanh(2.0_WP*b%fs%cfg%ym(j)/delta)*tanh(2.0_WP*(H_mouth-b%fs%cfg%ym(j))/delta)+random_uniform(-Urand,Urand)
+            b%fs%U(i,j,k)=Unudge(i,j,k)
+            b%fs%V(i,j,k)=Vnudge(i,j,k)
+            b%fs%W(i,j,k)=Wnudge(i,j,k)
+            ! b%fs%U(i,j,k)=Uin!*tanh(2.0_WP*(0.5_WP*W_mouth-abs(b%fs%cfg%zm(k)))/delta)*tanh(2.0_WP*b%fs%cfg%ym(j)/delta)*tanh(2.0_WP*(H_mouth-b%fs%cfg%ym(j))/delta)+random_uniform(-Urand,Urand)
             ! b%fs%U(i,j,k)=Uin*tanh(2.0_WP*(0.5_WP*W_mouth-abs(b%fs%cfg%zm(k)))/delta)*tanh(2.0_WP*b%fs%cfg%ym(j)/delta)*tanh(2.0_WP*(H_mouth-b%fs%cfg%ym(j))/delta)
          end do
          ! Reapply coflow around inlet geometry
-         Uco=0.10_WP*Uin
-         call b%fs%get_bcond('coflow',mybc)
-         do n=1,mybc%itr%no_
-            i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
-            b%fs%U(i,j,k)=Uco
-         end do
+         ! Uco=0.10_WP*Uin
+         ! call b%fs%get_bcond('coflow',mybc)
+         ! do n=1,mybc%itr%no_
+         !    i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
+         !    b%fs%U(i,j,k)=Uco
+         ! end do
       end block reapply_dirichlet
 
       ! Calculate SR
