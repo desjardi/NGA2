@@ -56,11 +56,13 @@ Gas coflow :          1
 Gravity :                           0 -9.81 0
 Liquid dynamic viscosity :          1.137e-3
 # Gas dynamic viscosity :             1.780e-5
-Gas dynamic viscosity :             0.001
 Liquid density :                    1000
 # Gas density :                       1.226
+Gas dynamic viscosity :             0.001
 Gas density :                       1
-Surface tension coefficient :       0.05
+Density ratio :                     0.001 # rho_g/rho_l
+Viscosity ratio :                   0.016 # mu_g/mu_l
+Surface tension coefficient :       0.45
 Static contact angle :              51
 Ubulk :                             1
 Wbulk :                             0
@@ -75,7 +77,7 @@ Coefficent of Thermal expansion: 3.4e-3
 
 # Time integration
 1 Max timestep size : 2e-2
-2 Max timestep size : 1e-5
+2 Max timestep size : 2e-2
 3 Max timestep size : 2e-5
 Max cfl number :    0.9
 Max time :          200

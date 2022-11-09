@@ -61,6 +61,9 @@ module block2_class
    !> Inflow parameters
    real(WP) :: Uin,delta,Urand,Uco,CPFR
 
+   !> Parameter ratios
+   real(WP) :: rhog_rhol,mug_mul
+   
    !> Liquid viscosity
    real(WP) :: visc_l
 
@@ -103,15 +106,25 @@ contains
       if (i.eq.pg%imax+1) isIn=.true.
    end function right_boundary
 
-   !> Function that localizes the left domain boundary, inside the mouth
-   function left_boundary_inflow(pg,i,j,k) result(isIn)
+   !> Function that localizes the left domain boundary at imin
+   function left_boundary_u_inflow(pg,i,j,k) result(isIn)
       use pgrid_class, only: pgrid
       class(pgrid), intent(in) :: pg
       integer, intent(in) :: i,j,k
       logical :: isIn
       isIn=.false.
       if (i.eq.pg%imin.and.pg%ym(j).gt.0.0_WP) isIn=.true.
-   end function left_boundary_inflow
+   end function left_boundary_u_inflow
+
+   !> Function that localizes the left domain boundary at imin-1
+   function left_boundary_vw_inflow(pg,i,j,k) result(isIn)
+      use pgrid_class, only: pgrid
+      class(pgrid), intent(in) :: pg
+      integer, intent(in) :: i,j,k
+      logical :: isIn
+      isIn=.false.
+      if (i.eq.pg%imin-1.and.pg%ym(j).gt.0.0_WP) isIn=.true.
+   end function left_boundary_vw_inflow
 
    !> Function that localizes the rightmost domain boundary
    function right_boundary_outflow(pg,i,j,k) result(isIn)
@@ -285,13 +298,21 @@ contains
          integer  :: i,j,k
          ! Create a two-phase flow solver
          b%fs=tpns(cfg=b%cfg,name='Two-phase NS')
+         ! Assign gas viscosity and density
+         call param_read('Gas dynamic viscosity',b%fs%visc_g)
+         call param_read('Gas density'          ,b%fs%rho_g)
+         ! Assign liquid viscosity and density based on ratios
+         call param_read('Viscosity ratio',mug_mul)
+         b%fs%visc_l=b%fs%visc_g/mug_mul
+         call param_read('Density ratio',  rhog_rhol)
+         b%fs%rho_l=b%fs%rho_g/rhog_rhol
          ! Assign viscosity to each phase
-         call param_read('Liquid dynamic viscosity',visc_l)
-         b%fs%visc_l=visc_l
-         call param_read('Gas dynamic viscosity'   ,b%fs%visc_g)
+         ! call param_read('Liquid dynamic viscosity',visc_l)
+         ! b%fs%visc_l=visc_l
+         ! call param_read('Gas dynamic viscosity'   ,b%fs%visc_g)
          ! Assign constant density to each phase
-         call param_read('Liquid density',b%fs%rho_l)
-         call param_read('Gas density'   ,b%fs%rho_g)
+         ! call param_read('Liquid density',b%fs%rho_l)
+         ! call param_read('Gas density'   ,b%fs%rho_g)
          ! Read in surface tension coefficient
          call param_read('Surface tension coefficient',b%fs%sigma)
          call param_read('Static contact angle',b%fs%contact_angle)
@@ -299,7 +320,8 @@ contains
          ! Assign acceleration of gravity
          call param_read('Gravity',b%fs%gravity)
          ! Inflow on the left
-         call b%fs%add_bcond(name='inflow' ,type=dirichlet      ,face='x',dir=-1,canCorrect=.false.,locator=left_boundary_inflow)
+         call b%fs%add_bcond(name='u_inflow' ,type=dirichlet,face='x',dir=-1,canCorrect=.false.,locator=left_boundary_u_inflow )
+         call b%fs%add_bcond(name='vw_inflow',type=dirichlet,face='x',dir=-1,canCorrect=.false.,locator=left_boundary_vw_inflow)
          ! call b%fs%add_bcond(name='inflow' ,type=dirichlet      ,face='x',dir=-1,canCorrect=.false.,locator=left_boundary_mouth)
          ! call b%fs%add_bcond(name='coflow' ,type=dirichlet      ,face='x',dir=-1,canCorrect=.false.,locator=left_boundary_coflow)
          ! Outflow on the right
@@ -529,17 +551,27 @@ contains
          use random,     only: random_uniform
          type(bcond), pointer :: mybc
          integer  :: n,i,j,k
-         ! Reapply Dirichlet at inlet
-         ! Uin=inflowVelocity(b%time%t,CPFR,H_mouth,W_mouth)
-         call b%fs%get_bcond('inflow',mybc)
+         ! U velocity inflow from duct
+         call b%fs%get_bcond('u_inflow',mybc)
          do n=1,mybc%itr%no_
             i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
             b%fs%U(i,j,k)=Unudge(i,j,k)
+         end do
+         ! V and W velocity inflow from duct
+         call b%fs%get_bcond('vw_inflow',mybc)
+         do n=1,mybc%itr%no_
+            i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
             b%fs%V(i,j,k)=Vnudge(i,j,k)
             b%fs%W(i,j,k)=Wnudge(i,j,k)
-            ! b%fs%U(i,j,k)=Uin!*tanh(2.0_WP*(0.5_WP*W_mouth-abs(b%fs%cfg%zm(k)))/delta)*tanh(2.0_WP*b%fs%cfg%ym(j)/delta)*tanh(2.0_WP*(H_mouth-b%fs%cfg%ym(j))/delta)+random_uniform(-Urand,Urand)
-            ! b%fs%U(i,j,k)=Uin*tanh(2.0_WP*(0.5_WP*W_mouth-abs(b%fs%cfg%zm(k)))/delta)*tanh(2.0_WP*b%fs%cfg%ym(j)/delta)*tanh(2.0_WP*(H_mouth-b%fs%cfg%ym(j))/delta)
          end do
+         ! Reapply Dirichlet at inlet
+         ! Uin=inflowVelocity(b%time%t,CPFR,H_mouth,W_mouth)
+         ! U velocity inflow from duct
+         ! do n=1,mybc%itr%no_
+         !    i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
+         !    b%fs%U(i,j,k)=Uin!*tanh(2.0_WP*(0.5_WP*W_mouth-abs(b%fs%cfg%zm(k)))/delta)*tanh(2.0_WP*b%fs%cfg%ym(j)/delta)*tanh(2.0_WP*(H_mouth-b%fs%cfg%ym(j))/delta)+random_uniform(-Urand,Urand)
+         !    b%fs%U(i,j,k)=Uin*tanh(2.0_WP*(0.5_WP*W_mouth-abs(b%fs%cfg%zm(k)))/delta)*tanh(2.0_WP*b%fs%cfg%ym(j)/delta)*tanh(2.0_WP*(H_mouth-b%fs%cfg%ym(j))/delta)
+         ! end do
          ! Reapply coflow around inlet geometry
          ! Uco=0.10_WP*Uin
          ! call b%fs%get_bcond('coflow',mybc)
