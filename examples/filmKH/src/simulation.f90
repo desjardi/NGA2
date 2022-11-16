@@ -33,6 +33,9 @@ module simulation
    real(WP) :: Reg,Weg,r_visc,r_rho
    integer :: nwaveX,nwaveZ
    real(WP), dimension(:), allocatable :: wnumbX,wshiftX,wampX,wnumbZ,wshiftZ,wampZ
+
+   !> Post-processing
+   type(event) :: ppevt
    
 contains
    
@@ -53,48 +56,52 @@ contains
    end function levelset_wavy
    
    
-   !> Specialized subroutine that outputs wave amplitude information
-   !subroutine postproc_data()
-   !   use irl_fortran_interface
-   !   use mathtools, only: Pi
-   !   use string,    only: str_medium
-   !   use mpi_f08,   only: MPI_ALLREDUCE,MPI_SUM
-   !   use parallel,  only: MPI_REAL_WP
-   !   implicit none
-   !   integer :: ierr,i,j,k,my_size
-   !   real(WP) :: my_height
-   !   real(WP), dimension(:), allocatable :: temp
-   !   ! Calculate new amplitude
-   !   grate=amp
-   !   my_height=0.0_WP
-   !   do k=vf%cfg%kmin_,vf%cfg%kmax_
-   !      do i=vf%cfg%imin_,vf%cfg%imax_
-   !         ! Find closest vertical column to center
-   !         if (vf%cfg%x(i).le.0.5_WP*vf%cfg%xL.and.vf%cfg%x(i+1).gt.0.5_WP*vf%cfg%xL.and.vf%cfg%z(k).le.0.0_WP.and.vf%cfg%z(k+1).gt.0.0_WP) then
-   !            ! Integrate height
-   !            do j=vf%cfg%jmin_,vf%cfg%jmax_
-   !               my_height=my_height+vf%VF(i,j,k)*vf%cfg%dy(j)
-   !            end do
-   !         end if
-   !      end do
-   !   end do
-   !   call MPI_ALLREDUCE(my_height,amp,1,MPI_REAL_WP,MPI_SUM,vf%cfg%comm,ierr)
-   !   amp=amp-0.5_WP*vf%cfg%yL
-   !   ! Estimate growth rate
-   !   if (time%t.gt.0.0_WP) then
-   !      grate=(amp-grate)/time%dt
-   !   else
-   !      grate=0.0_WP
-   !   end if
-   !   ! Store time and amplitude series
-   !   if (.not.allocated(all_time)) then
-   !      my_size=0
-   !   else
-   !      my_size=size(all_time,dim=1)
-   !   end if
-   !   allocate(temp(my_size+1)); temp(1:my_size)=all_time; temp(my_size+1)=time%t; call MOVE_ALLOC(temp,all_time)
-   !   allocate(temp(my_size+1)); temp(1:my_size)=all_amp ; temp(my_size+1)=amp   ; call MOVE_ALLOC(temp,all_amp )
-   !end subroutine postproc_data
+  !> Specialized subroutine that outputs the vertical liquid distribution
+   subroutine postproc_data()
+      use mathtools, only: Pi
+      use string,    only: str_medium
+      use mpi_f08,   only: MPI_ALLREDUCE,MPI_SUM
+      use parallel,  only: MPI_REAL_WP
+      implicit none
+      integer :: iunit,ierr,i,j,k
+      real(WP), dimension(:), allocatable :: myVOF,VOF
+      real(WP), dimension(:), allocatable :: myVEL,VEL
+      character(len=str_medium) :: filename,timestamp
+      ! Allocate vertical line storage
+      allocate(myVOF(vf%cfg%jmin:vf%cfg%jmax)); myVOF=0.0_WP
+      allocate(myVEL(vf%cfg%jmin:vf%cfg%jmax)); myVEL=0.0_WP
+      allocate(  VOF(vf%cfg%jmin:vf%cfg%jmax)); VOF=0.0_WP
+      allocate(  VEL(vf%cfg%jmin:vf%cfg%jmax)); VEL=0.0_WP
+      ! Initialize local data to zero
+      myVOF=0.0_WP; myVEL=0.0_WP
+      ! Integrate all data over x and z
+      do k=vf%cfg%kmin_,vf%cfg%kmax_
+         do j=vf%cfg%jmin_,vf%cfg%jmax_
+            do i=vf%cfg%imin_,vf%cfg%imax_
+               myVOF(j)=myVOF(j)+vf%VF(i,j,k)
+               myVEL(j)=myVEL(j)+fs%U(i,j,k)
+            end do
+         end do
+      end do
+      ! All-reduce the data
+      call MPI_ALLREDUCE(myVOF,VOF,vf%cfg%ny,MPI_REAL_WP,MPI_SUM,vf%cfg%comm,ierr); VOF=VOF/real(vf%cfg%nx*vf%cfg%nz,WP)
+      call MPI_ALLREDUCE(myVEL,VEL,vf%cfg%ny,MPI_REAL_WP,MPI_SUM,vf%cfg%comm,ierr); VEL=VEL/real(vf%cfg%nx*vf%cfg%nz,WP)
+      ! If root, print it out
+      if (vf%cfg%amRoot) then
+         call execute_command_line('mkdir -p stats')
+         filename='profile_'
+         write(timestamp,'(es12.5)') time%t
+         open(newunit=iunit,file='stats/'//trim(adjustl(filename))//trim(adjustl(timestamp)),form='formatted',status='replace',access='stream',iostat=ierr)
+         write(iunit,'(a12,3x,a12,3x,a12)') 'Height','VOF','VEL'
+         do j=vf%cfg%jmin,vf%cfg%jmax
+            write(iunit,'(es12.5,3x,es12.5,3x,es12.5)') vf%cfg%ym(j),VOF(j),VEL(j)
+         end do
+         close(iunit)
+      end if
+      ! Deallocate work arrays
+      deallocate(myVOF,VOF)
+      deallocate(myVEL,VEL)
+   end subroutine postproc_data
    
    
    !> Initialization of problem solver
@@ -283,6 +290,7 @@ contains
          call mfile%add_column(vf%VFmax,'VOF maximum')
          call mfile%add_column(vf%VFmin,'VOF minimum')
          call mfile%add_column(vf%VFint,'VOF integral')
+         call mfile%add_column(vf%SDint,'SD integral')
          call mfile%add_column(fs%divmax,'Maximum divergence')
          call mfile%add_column(fs%psolv%it,'Pressure iteration')
          call mfile%add_column(fs%psolv%rerr,'Pressure error')
@@ -301,7 +309,17 @@ contains
          call cflfile%write()
       end block create_monitor
       
+
+      ! Create specialized post-processing
+      create_postproc: block
+         ! Create event for data postprocessing
+         ppevt=event(time=time,name='Postproc output')
+         call param_read('Postproc output period',ppevt%tper)
+         ! Perform the output
+         if (ppevt%occurs()) call postproc_data()
+      end block create_postproc
       
+
    end subroutine simulation_init
    
    
@@ -405,6 +423,9 @@ contains
          call vf%get_max()
          call mfile%write()
          call cflfile%write()
+
+         ! Specialized post-processing
+         if (ppevt%occurs()) call postproc_data()
          
       end do
       
