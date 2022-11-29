@@ -19,9 +19,6 @@ module lpt_class
    
    !> I/O chunk size to read at a time
    integer, parameter :: part_chunk_size=1000  !< Read 1000 particles at a time before redistributing
-
-   ! Drag model
-   character(len=str_medium), public :: drag_model
    
    !> Basic particle object definition
    type :: part
@@ -73,6 +70,7 @@ module lpt_class
       
       ! Solver parameters
       real(WP) :: nstep=1                                 !< Number of substeps (default=1)
+      character(len=str_medium), public :: drag_model     !< Drag model
       
       ! Collisional parameters
       real(WP) :: Tcol                                    !< Characteristic collision time scale
@@ -575,7 +573,7 @@ contains
    
    
    !> Calculate RHS of the particle ODEs
-   subroutine get_rhs(this,U,V,W,rho,visc,p,acc,opt_dt)
+   subroutine get_rhs(this,U,V,W,rho,visc,T,p,acc,opt_dt)
       implicit none
       class(lpt), intent(inout) :: this
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: U     !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
@@ -583,11 +581,12 @@ contains
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: W     !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: rho   !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: visc  !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout), optional :: T  !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       type(part), intent(in) :: p
       real(WP), dimension(3), intent(out) :: acc
       real(WP), intent(out) :: opt_dt
       real(WP) :: corr,Re,tau
-      real(WP) :: fvisc,frho,pVF,fVF
+      real(WP) :: fvisc,frho,pVF,fVF,fT
       real(WP), dimension(3) :: fvel
       ! Interpolate the fluid phase velocity to the particle location
       fvel=this%cfg%get_velocity(pos=p%pos,i0=p%ind(1),j0=p%ind(2),k0=p%ind(3),U=U,V=V,W=W)
@@ -599,6 +598,8 @@ contains
       ! Interpolate the particle volume fraction to the particle location
       pVF=this%cfg%get_scalar(pos=p%pos,i0=p%ind(1),j0=p%ind(2),k0=p%ind(3),S=this%VF,bc='n')
       fVF=1.0_WP-pVF
+      ! Interpolate the fluid temperature to the particle location if present
+      if (present(T)) fT=this%cfg%get_scalar(pos=p%pos,i0=p%ind(1),j0=p%ind(2),k0=p%ind(3),S=T,bc='n')
       ! Particle Reynolds number
       Re=frho*norm2(p%vel-fvel)*p%d/fvisc+epsilon(1.0_WP)
       ! Drag correction
@@ -615,7 +616,7 @@ contains
         real(WP) :: F
         real(WP) :: Ma,Kn,b1,b2
 
-        select case(trim(drag_model))
+        select case(trim(this%drag_model))
         case('Stokes')
            F=1.0_WP
         case('Schiller-Naumann')
