@@ -607,7 +607,7 @@ contains
       ! Particle response time
       tau=this%rho*p%d**2/(18.0_WP*fvisc*corr)
       ! Return acceleration and optimal timestep size
-      acc=corr*(fvel-p%vel)/tau
+      acc=(fvel-p%vel)/tau
       opt_dt=tau/real(this%nstep,WP)
 
     contains
@@ -619,14 +619,17 @@ contains
         select case(trim(this%drag_model))
         case('Stokes')
            F=1.0_WP
-        case('Schiller-Naumann')
+        case('Schiller-Naumann','Schiller Naumann','SN')
            F=1.0_WP+0.15_WP*Re**(0.687_WP)
         case('Tenneti')
            ! Tenneti and Subramaniam (2011)
            b1=5.81_WP*pVF/fVF**3+0.48_WP*pVF**(1.0_WP/3.0_WP)/fVF**4
            b2=pVF**3*Re*(0.95_WP+0.61_WP*pVF**3/fVF**2)
            F=fVF*((1.0_WP+0.15_WP*Re**(0.687_WP))/fVF**3+b1+b2)
-        case('KC')
+        case('Khalloufi Capecelatro','KC')
+           F=0.0_WP
+        case default
+           F=1.0_WP
         end select
 
       end function drag_correction
