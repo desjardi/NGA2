@@ -148,6 +148,8 @@ contains
          integer :: i,np
          ! Create solver
          lp=lpt(cfg=cfg,name='LPT')
+         ! Get drag model from the inpit
+         call param_read('Drag model',lp%drag_model,default='Schiller-Naumann')
          ! Get particle density from the input
          call param_read('Particle density',lp%rho)
          ! Get particle diameter from the input
