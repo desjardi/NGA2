@@ -2,11 +2,11 @@
 Partition :	4 1 1
 
 # Mesh definition
-Lx :	0.5
-Ly :	1
-Lz :	0.02
-nx :	32
-ny :	64
+Lx :	.0256
+Ly :	.0128
+Lz :	2.19e-4
+nx :	64
+ny :	32
 nz :	1
 
 # Time integration
@@ -15,15 +15,17 @@ Max cfl number :	   1
 Max time :           10
 
 # Fluid properties
-Dynamic viscosity : 1e-5
-Density :   1
-Gravity :   0 -1 0
-Inlet velocity : 3.5
+Dynamic viscosity : 1.8e-5
+Density :   1.2
+Gravity :   -1 0 0
+Inlet velocity : 0.2
 
 # Particle parameters
-Number of particles : 3000
+Bed height : .0128
+Avg. volume fraction : 0.4
+Coefficient of restitution : 0.8
 Particle density :  1000
-Particle diameter : 0.01
+Particle diameter : 200e-6
 
 # Pressure solver
 Pressure tolerance : 	1e-6
