@@ -97,6 +97,7 @@ module lpt_class
       real(WP), dimension(:,:,:), allocatable :: srcE     !< E momentum source on mesh, cell-centered
       
       ! Filtering operation
+      logical :: implicit_filter                          !< Solve implicitly
       real(WP) :: filter_width                            !< Characteristic filter width
       real(WP), dimension(:,:,:,:), allocatable :: div_x,div_y,div_z    !< Divergence operator
       real(WP), dimension(:,:,:,:), allocatable :: grd_x,grd_y,grd_z    !< Gradient operator
@@ -156,8 +157,11 @@ contains
       allocate(self%srcW(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%srcW=0.0_WP
       allocate(self%srcE(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%srcE=0.0_WP
       
-      ! Set default filter width to zero by default
+      ! Set filter width to zero by default
       self%filter_width=0.0_WP
+
+      ! Solve explicitly by default
+      self%implicit_filter=.false.
       
       ! Allocate finite volume divergence operators
       allocate(self%div_x(0:+1,self%cfg%imin_:self%cfg%imax_,self%cfg%jmin_:self%cfg%jmax_,self%cfg%kmin_:self%cfg%kmax_)) !< Cell-centered
@@ -625,7 +629,7 @@ contains
            ! Tenneti and Subramaniam (2011)
            b1=5.81_WP*pVF/fVF**3+0.48_WP*pVF**(1.0_WP/3.0_WP)/fVF**4
            b2=pVF**3*Re*(0.95_WP+0.61_WP*pVF**3/fVF**2)
-           F=fVF*((1.0_WP+0.15_WP*Re**(0.687_WP))/fVF**3+b1+b2)
+           F=fVF*(1.0_WP+0.15_WP*Re**(0.687_WP)/fVF**3+b1+b2)           
         case('Khalloufi Capecelatro','KC')
            F=0.0_WP
         case default
@@ -669,46 +673,108 @@ contains
       real(WP) :: filter_coeff
       integer :: i,j,k,n,nstep
       real(WP), dimension(:,:,:), allocatable :: FX,FY,FZ
+      real(WP), dimension(:,:,:,:), allocatable :: Ax,Ay,Az
+      real(WP), dimension(:,:,:), allocatable :: Rx,Ry,Rz
       
       ! Return without filtering if filter width is zero
       if (this%filter_width.le.0.0_WP) return
-      
+
       ! Recompute filter coeff and number of explicit steps needed
       filter_coeff=0.5_WP*(this%filter_width/(2.0_WP*sqrt(2.0_WP*log(2.0_WP))))**2
-      nstep=ceiling(6.0_WP*filter_coeff/this%cfg%min_meshsize**2)
-      filter_coeff=filter_coeff/real(nstep,WP)
-      
-      ! Allocate flux arrays
-      allocate(FX(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
-      allocate(FY(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
-      allocate(FZ(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
-      
-      ! Apply filter
-      do n=1,nstep
-         ! Diffusive flux of A
-         do k=this%cfg%kmin_,this%cfg%kmax_+1
-            do j=this%cfg%jmin_,this%cfg%jmax_+1
-               do i=this%cfg%imin_,this%cfg%imax_+1
-                  FX(i,j,k)=filter_coeff*sum(this%grd_x(:,i,j,k)*A(i-1:i,j,k))
-                  FY(i,j,k)=filter_coeff*sum(this%grd_y(:,i,j,k)*A(i,j-1:j,k))
-                  FZ(i,j,k)=filter_coeff*sum(this%grd_z(:,i,j,k)*A(i,j,k-1:k))
-               end do
-            end do
-         end do
-         ! Divergence of fluxes
+
+      if (this%implicit_filter) then
+         ! Apply filter implicitly via approximate factorization
+         ! Allocate implicit arrays
+         allocate(Ax(this%cfg%jmino_+1:this%cfg%jmaxo_-1,this%cfg%kmino_+1:this%cfg%kmaxo_-1,this%cfg%imino_+1:this%cfg%imaxo_-1,-1:+1))
+         allocate(Ay(this%cfg%imino_+1:this%cfg%imaxo_-1,this%cfg%kmino_+1:this%cfg%kmaxo_-1,this%cfg%jmino_+1:this%cfg%jmaxo_-1,-1:+1))
+         allocate(Az(this%cfg%imino_+1:this%cfg%imaxo_-1,this%cfg%jmino_+1:this%cfg%jmaxo_-1,this%cfg%kmino_+1:this%cfg%kmaxo_-1,-1:+1))
+         allocate(Rx(this%cfg%jmino_+1:this%cfg%jmaxo_-1,this%cfg%kmino_+1:this%cfg%kmaxo_-1,this%cfg%imino_+1:this%cfg%imaxo_-1))
+         allocate(Ry(this%cfg%imino_+1:this%cfg%imaxo_-1,this%cfg%kmino_+1:this%cfg%kmaxo_-1,this%cfg%jmino_+1:this%cfg%jmaxo_-1))
+         allocate(Rz(this%cfg%imino_+1:this%cfg%imaxo_-1,this%cfg%jmino_+1:this%cfg%jmaxo_-1,this%cfg%kmino_+1:this%cfg%kmaxo_-1))
+         ! Inverse in X-direction
          do k=this%cfg%kmin_,this%cfg%kmax_
             do j=this%cfg%jmin_,this%cfg%jmax_
                do i=this%cfg%imin_,this%cfg%imax_
-                  A(i,j,k)=A(i,j,k)+sum(this%div_x(:,i,j,k)*FX(i:i+1,j,k))+sum(this%div_y(:,i,j,k)*FY(i,j:j+1,k))+sum(this%div_z(:,i,j,k)*FZ(i,j,k:k+1))
+                  Ax(j,k,i,-1) = - this%div_x(0,i,j,k) * filter_coeff * this%grd_x(-1,i,j,k)
+                  Ax(j,k,i, 0) = 1.0_WP - (this%div_x(0,i,j,k) * filter_coeff * this%grd_x(0,i,j,k) &
+                       + this%div_x(1,i,j,k) * filter_coeff * this%grd_x(-1,i+1,j,k))
+                  Ax(j,k,i,+1) = - this%div_x(1,i,j,k) * filter_coeff * this%grd_x(i+1,i,j,k)
+                  Rx(j,k,i) = A(i,j,k)
+               end do
+            end do
+         end do
+         !!call linear_solver_x(3)
+         ! Inverse in Y-direction
+         do k=this%cfg%kmin_,this%cfg%kmax_
+            do j=this%cfg%jmin_,this%cfg%jmax_
+               do i=this%cfg%imin_,this%cfg%imax_
+                  Ay(i,k,j,-1) = - this%div_y(0,i,j,k) * filter_coeff * this%grd_y(-1,i,j,k)
+                  Ay(i,k,j, 0) = 1.0_WP - (this%div_y(0,i,j,k)* filter_coeff * this%grd_y(0,i,j,k) &
+                       + this%div_y(1,i,j,k)* filter_coeff * this%grd_y(-1,i,j+1,k))
+                  Ay(i,k,j,+1) = - this%div_y(1,i,j,k) * filter_coeff * this%grd_y(0,i,j+1,k)
+                  Ry(i,k,j) = Rx(j,k,i)
+               end do
+            end do
+         end do
+         !!call linear_solver_y(3)
+         ! Inverse in Z-direction
+         do k=this%cfg%kmin_,this%cfg%kmax_
+            do j=this%cfg%jmin_,this%cfg%jmax_
+               do i=this%cfg%imin_,this%cfg%imax_
+                  Az(i,j,k,-1) = - this%div_z(0,i,j,k) * filter_coeff * this%grd_z(-1,i,j,k)
+                  Az(i,j,k, 0) = 1.0_WP - (this%div_z(0,i,j,k) * filter_coeff * this%grd_z(0,i,j,k) &
+                       + this%div_z(1,i,j,k) * filter_coeff * this%grd_z(-1,i,j,k))
+                  Az(i,j,k,+1) = - this%div_z(1,i,j,k) * filter_coeff * this%grd_z(0,i,j,k)
+                  Rz(i,j,k) = Ry(i,k,j)
+               end do
+            end do
+         end do
+         !!call linear_solver_z(3)
+         ! Update A
+         do k=this%cfg%kmin_,this%cfg%kmax_
+            do j=this%cfg%jmin_,this%cfg%jmax_
+               do i=this%cfg%imin_,this%cfg%imax_
+                  A(i,j,k)=Rz(i,j,k)
                end do
             end do
          end do
          ! Sync A
          call this%cfg%sync(A)
-      end do
-      
-      ! Deallocate flux arrays
-      deallocate(FX,FY,FZ)
+         ! Deallocate implicit arrays
+         deallocate(Ax,Ay,Az,Rx,Ry,Rz)
+      else
+         ! Apply filter explicitly
+         ! Allocate flux arrays
+         allocate(FX(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
+         allocate(FY(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
+         allocate(FZ(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
+         nstep=ceiling(6.0_WP*filter_coeff/this%cfg%min_meshsize**2)
+         filter_coeff=filter_coeff/real(nstep,WP)
+         do n=1,nstep
+            ! Diffusive flux of A
+            do k=this%cfg%kmin_,this%cfg%kmax_+1
+               do j=this%cfg%jmin_,this%cfg%jmax_+1
+                  do i=this%cfg%imin_,this%cfg%imax_+1
+                     FX(i,j,k)=filter_coeff*sum(this%grd_x(:,i,j,k)*A(i-1:i,j,k))
+                     FY(i,j,k)=filter_coeff*sum(this%grd_y(:,i,j,k)*A(i,j-1:j,k))
+                     FZ(i,j,k)=filter_coeff*sum(this%grd_z(:,i,j,k)*A(i,j,k-1:k))
+                  end do
+               end do
+            end do
+            ! Divergence of fluxes
+            do k=this%cfg%kmin_,this%cfg%kmax_
+               do j=this%cfg%jmin_,this%cfg%jmax_
+                  do i=this%cfg%imin_,this%cfg%imax_
+                     A(i,j,k)=A(i,j,k)+sum(this%div_x(:,i,j,k)*FX(i:i+1,j,k))+sum(this%div_y(:,i,j,k)*FY(i,j:j+1,k))+sum(this%div_z(:,i,j,k)*FZ(i,j,k:k+1))
+                  end do
+               end do
+            end do
+            ! Sync A
+            call this%cfg%sync(A)
+         end do
+         ! Deallocate flux arrays
+         deallocate(FX,FY,FZ)
+      end if
       
    end subroutine filter
    
