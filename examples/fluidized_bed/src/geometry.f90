@@ -66,15 +66,16 @@ contains
       
       ! Create masks for this config
       create_walls: block
-         integer :: i,j,k
-         do k=cfg%kmino_,cfg%kmaxo_
-            do j=cfg%jmino_,cfg%jmaxo_
-               do i=cfg%imino_,cfg%imaxo_
-                  if (cfg%xm(i).lt.0.0_WP) cfg%VF(i,j,k)=0.0_WP
-                  if (cfg%xm(i).gt.cfg%xL) cfg%VF(i,j,k)=0.0_WP
-               end do
-            end do
-         end do
+        integer :: i,j,k
+        cfg%VF=1.0_WP
+        do k=cfg%kmino_,cfg%kmaxo_
+           do j=cfg%jmino_,cfg%jmaxo_
+              do i=cfg%imino_,cfg%imaxo_
+                 if (cfg%xm(i).lt.0.0_WP) cfg%VF(i,j,k)=0.0_WP
+                 if (cfg%xm(i).gt.cfg%xL) cfg%VF(i,j,k)=0.0_WP
+              end do
+           end do
+        end do
       end block create_walls
       
       

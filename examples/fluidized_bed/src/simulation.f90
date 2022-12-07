@@ -21,6 +21,7 @@ module simulation
   type(partmesh) :: pmesh
   type(ensight)  :: ens_out
   type(event)    :: ens_evt
+  integer, dimension(:,:,:), allocatable :: cpu_rank
 
   !> Simulation monitor file
   type(monitor) :: mfile,cflfile
@@ -104,14 +105,21 @@ contains
 
     ! Allocate work arrays
     allocate_work_arrays: block
-      allocate(dRHOdt(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
-      allocate(resU  (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
-      allocate(resV  (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
-      allocate(resW  (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
-      allocate(Ui    (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
-      allocate(Vi    (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
-      allocate(Wi    (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+      allocate(dRHOdt  (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+      allocate(resU    (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+      allocate(resV    (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+      allocate(resW    (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+      allocate(Ui      (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+      allocate(Vi      (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+      allocate(Wi      (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
     end block allocate_work_arrays
+
+
+    ! Store processor decomposition for visualization
+    store_cpu_rank: block
+      allocate(cpu_rank(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+      cpu_rank=cfg%rank
+    end block store_cpu_rank
 
 
     ! Initialize our LPT solver
@@ -122,6 +130,8 @@ contains
       integer :: i,ix,iy,iz,np,npx,npy,npz
       ! Create solver
       lp=lpt(cfg=cfg,name='LPT')
+      ! Get drag model from the inpit
+      call param_read('Drag model',lp%drag_model,default='Tenneti')
       ! Get particle density from the input
       call param_read('Particle density',lp%rho)
       ! Get particle diameter from the input
@@ -131,7 +141,7 @@ contains
 
       ! Root process initializes particles uniformly
       call param_read('Bed height',Hbed)
-      call param_read('Avg. volume fraction',VFavg)
+      call param_read('Particle volume fraction',VFavg)
       call param_read('Particle temperature',Tp,default=298.15_WP)
       if (lp%cfg%amRoot) then
          ! Particle volume
@@ -184,6 +194,11 @@ contains
       call param_read('Coefficient of restitution',lp%e_n)
       ! Set gravity
       call param_read('Gravity',lp%gravity)
+      if (lp%cfg%amRoot) then
+         print*,"===== Particle Setup Description ====="
+         print*,'Number of particles', np
+         print*,'Mean volume fraction',VFavg
+      end if
     end block initialize_lpt
 
 
@@ -239,10 +254,10 @@ contains
       call ens_out%add_vector('velocity',Ui,Vi,Wi)
       call ens_out%add_scalar('epsp',lp%VF)
       call ens_out%add_scalar('pressure',fs%P)
+      call ens_out%add_scalar('CPU',cpu_rank)
       ! Output to ensight
       if (ens_evt%occurs()) call ens_out%write_data(time%t)
     end block create_ensight
-
 
     ! Create a monitor file
     create_monitor: block
@@ -428,9 +443,6 @@ contains
        call lptfile%write()
 
     end do
-
-    ! Ouput particle bed
-    !call lp%write(filename='part.file')
 
   end subroutine simulation_run
 
