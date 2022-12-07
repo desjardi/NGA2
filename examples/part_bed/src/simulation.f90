@@ -122,7 +122,7 @@ contains
       ! Create partmesh object for Lagrangian particle output
       create_pmesh: block
          integer :: i
-         pmesh=partmesh(nvar=1,name='lpt')
+         pmesh=partmesh(nvar=1,nvec=0,name='lpt')
          pmesh%varname(1)='radius'
          call lp%update_partmesh(pmesh)
          do i=1,lp%np_

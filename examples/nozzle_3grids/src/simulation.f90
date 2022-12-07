@@ -921,7 +921,7 @@ contains
       create_pmesh3: block
          integer :: i
          ! Include an extra variable for droplet diameter
-         pmesh3=partmesh(nvar=1,name='lpt')
+         pmesh3=partmesh(nvar=1,nvec=0,name='lpt')
          pmesh3%varname(1)='diameter'
          ! Transfer particles to pmesh
          call lp3%update_partmesh(pmesh3)

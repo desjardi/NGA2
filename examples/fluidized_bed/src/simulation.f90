@@ -205,11 +205,13 @@ contains
     ! Create partmesh object for Lagrangian particle output
     create_pmesh: block
       integer :: i
-      pmesh=partmesh(nvar=1,name='lpt')
-      pmesh%varname(1)='radius'
+      pmesh=partmesh(nvar=1,nvec=1,name='lpt')
+      pmesh%varname(1)='diameter'
+      pmesh%vecname(1)='velocity'
       call lp%update_partmesh(pmesh)
       do i=1,lp%np_
-         pmesh%var(1,i)=0.5_WP*lp%p(i)%d
+         pmesh%var(1,i)=lp%p(i)%d
+         pmesh%vec(:,1,i)=lp%p(i)%vel
       end do
     end block create_pmesh
 
@@ -429,7 +431,8 @@ contains
             integer :: i
             call lp%update_partmesh(pmesh)
             do i=1,lp%np_
-               pmesh%var(1,i)=0.5_WP*lp%p(i)%d
+               pmesh%var(1,i)=lp%p(i)%d
+               pmesh%vec(:,1,i)=lp%p(i)%vel
             end do
           end block update_pmesh
           call ens_out%write_data(time%t)

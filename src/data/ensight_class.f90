@@ -705,6 +705,9 @@ contains
          do n=1,part%ptr%nvar
             write(iunit,'(a)') 'scalar per measured node: 1 '//trim(part%ptr%varname(n))//' '//trim(part%name)//'/'//trim(part%ptr%varname(n))//'.******'
          end do
+         do n=1,part%ptr%nvec
+            write(iunit,'(a)') 'vector per measured node: 1 '//trim(part%ptr%vecname(n))//' '//trim(part%name)//'/'//trim(part%ptr%vecname(n))//'.******'
+         end do
          ! Write the time information
          write(iunit,'(/,a,/,a,/,a,i0,/,a,/,a,/,a)') 'TIME','time set: 1','number of steps: ',this%ntime,'filename start number: 1','filename increment: 1','time values:'
          write(iunit,'(999999(es12.5,/))') this%time
@@ -746,7 +749,7 @@ contains
          call MPI_BARRIER(this%cfg%comm,ierr)
       end do
       
-      ! Generate the additional variable files
+      ! Generate the particle scalar files
       do n=1,part%ptr%nvar
          filename='ensight/'//trim(this%name)//'/'//trim(part%name)//'/'//trim(part%ptr%varname(n))//'.'
          write(filename(len_trim(filename)+1:len_trim(filename)+6),'(i6.6)') this%ntime
@@ -768,6 +771,36 @@ contains
                if (ierr.ne.0) call die('[ensight write part] Could not open file: '//trim(filename))
                ! Write part info if it exists on the processor
                if (part%ptr%n.gt.0) write(iunit) real(part%ptr%var(n,:),SP)
+               ! Close the file
+               close(iunit)
+            end if
+            ! Force synchronization
+            call MPI_BARRIER(this%cfg%comm,ierr)
+         end do
+      end do
+      
+      ! Generate the particle vector files
+      do n=1,part%ptr%nvec
+         filename='ensight/'//trim(this%name)//'/'//trim(part%name)//'/'//trim(part%ptr%vecname(n))//'.'
+         write(filename(len_trim(filename)+1:len_trim(filename)+6),'(i6.6)') this%ntime
+         ! Root write the header
+         if (this%cfg%amRoot) then
+            ! Open the file
+            open(newunit=iunit,file=trim(filename),form='unformatted',status='replace',access='stream',iostat=ierr)
+            if (ierr.ne.0) call die('[ensight write part] Could not open file: '//trim(filename))
+            ! General header
+            cbuff='particle'//trim(adjustl(part%ptr%vecname(n)))     ; write(iunit) cbuff
+            ! Close the file
+            close(iunit)
+         end if
+         ! Write the vector at the particle location
+         do rank=0,this%cfg%nproc-1
+            if (rank.eq.this%cfg%rank) then
+               ! Open the file
+               open(newunit=iunit,file=trim(filename),form='unformatted',status='old',access='stream',position='append',iostat=ierr)
+               if (ierr.ne.0) call die('[ensight write part] Could not open file: '//trim(filename))
+               ! Write part info if it exists on the processor
+               if (part%ptr%n.gt.0) write(iunit) real(part%ptr%vec(:,n,:),SP)
                ! Close the file
                close(iunit)
             end if
