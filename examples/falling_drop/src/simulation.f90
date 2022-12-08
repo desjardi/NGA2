@@ -88,9 +88,9 @@ contains
          ! Create a VOF solver
          vf=vfs(cfg=cfg,reconstruction_method=lvira,name='VOF')
          ! Initialize to a droplet and a pool
-         center=[0.0_WP,0.05_WP,0.0_WP]
-         radius=0.01_WP
-         depth =0.02_WP
+         center=[0.0_WP,0.5_WP,0.0_WP]
+         radius=0.1_WP
+         depth =0.2_WP
          do k=vf%cfg%kmino_,vf%cfg%kmaxo_
             do j=vf%cfg%jmino_,vf%cfg%jmaxo_
                do i=vf%cfg%imino_,vf%cfg%imaxo_
@@ -162,6 +162,8 @@ contains
          call fs%setup(pressure_ils=gmres_amg,implicit_ils=gmres_amg)
          ! Zero initial field
          fs%U=0.0_WP; fs%V=0.0_WP; fs%W=0.0_WP
+         ! Initial density from VOF
+         fs%rho=fs%rho_l*vf%VF+fs%rho_g*(1.0_WP-vf%VF)
          ! Calculate cell-centered velocities and divergence
          call fs%interp_vel(Ui,Vi,Wi)
          call fs%get_div()
@@ -228,6 +230,7 @@ contains
    !> Perform an NGA2 simulation - this mimicks NGA's old time integration for multiphase
    subroutine simulation_run
       implicit none
+      integer :: i,j,k
       
       ! Perform time integration
       do while (.not.time%done())
@@ -240,7 +243,8 @@ contains
          ! Remember old VOF
          vf%VFold=vf%VF
          
-         ! Remember old velocity
+         ! Remember old velocity and density
+         fs%rhoold=fs%rho
          fs%Uold=fs%U
          fs%Vold=fs%V
          fs%Wold=fs%W
@@ -248,14 +252,17 @@ contains
          ! Apply time-varying Dirichlet conditions
          ! This is where time-dpt Dirichlet would be enforced
          
-         ! Prepare old staggered density (at n)
-         call fs%get_olddensity(vf=vf)
-         
          ! VOF solver step
          call vf%advance(dt=time%dt,U=fs%U,V=fs%V,W=fs%W)
          
          ! Prepare new staggered viscosity (at n+1)
          call fs%get_viscosity(vf=vf)
+         
+         ! Transfer consistent density and mass fluxes to momentum solver
+         fs%rho=fs%rho_l*vf%VF+fs%rho_g*(1.0_WP-vf%VF)
+         fs%rhoU=fs%rho_l*vf%UFl(1,:,:,:)+fs%rho_g*vf%UFg(1,:,:,:)
+         fs%rhoV=fs%rho_l*vf%UFl(2,:,:,:)+fs%rho_g*vf%UFg(2,:,:,:)
+         fs%rhoW=fs%rho_l*vf%UFl(3,:,:,:)+fs%rho_g*vf%UFg(3,:,:,:)
          
          ! Perform sub-iterations
          do while (time%it.le.time%itmax)
@@ -265,9 +272,6 @@ contains
             fs%V=0.5_WP*(fs%V+fs%Vold)
             fs%W=0.5_WP*(fs%W+fs%Wold)
             
-            ! Preliminary mass and momentum transport step at the interface
-            call fs%prepare_advection_upwind(dt=time%dt)
-            
             ! Explicit calculation of drho*u/dt from NS
             call fs%get_dmomdt(resU,resV,resW)
             
@@ -275,9 +279,15 @@ contains
             call fs%addsrc_gravity(resU,resV,resW)
             
             ! Assemble explicit residual
-            resU=-2.0_WP*fs%rho_U*fs%U+(fs%rho_Uold+fs%rho_U)*fs%Uold+time%dt*resU
-            resV=-2.0_WP*fs%rho_V*fs%V+(fs%rho_Vold+fs%rho_V)*fs%Vold+time%dt*resV
-            resW=-2.0_WP*fs%rho_W*fs%W+(fs%rho_Wold+fs%rho_W)*fs%Wold+time%dt*resW
+            do k=fs%cfg%kmino_,fs%cfg%kmaxo_
+               do j=fs%cfg%jmino_,fs%cfg%jmaxo_
+                  do i=fs%cfg%imino_,fs%cfg%imaxo_
+                     resU(i,j,k)=-2.0_WP*sum(fs%itpr_x(:,i,j,k)*fs%rho(i-1:i,j,k))*fs%U(i,j,k)+sum(fs%itpr_x(:,i,j,k)*(fs%rhoold(i-1:i,j,k)+fs%rho(i-1:i,j,k)))*fs%Uold(i,j,k)+time%dt*resU(i,j,k)
+                     resV(i,j,k)=-2.0_WP*sum(fs%itpr_y(:,i,j,k)*fs%rho(i,j-1:j,k))*fs%V(i,j,k)+sum(fs%itpr_y(:,i,j,k)*(fs%rhoold(i,j-1:j,k)+fs%rho(i,j-1:j,k)))*fs%Vold(i,j,k)+time%dt*resV(i,j,k)
+                     resW(i,j,k)=-2.0_WP*sum(fs%itpr_z(:,i,j,k)*fs%rho(i,j,k-1:k))*fs%W(i,j,k)+sum(fs%itpr_z(:,i,j,k)*(fs%rhoold(i,j,k-1:k)+fs%rho(i,j,k-1:k)))*fs%Wold(i,j,k)+time%dt*resW(i,j,k)
+                  end do
+               end do
+            end do
             
             ! Form implicit residuals
             call fs%solve_implicit(time%dt,resU,resV,resW)
@@ -303,9 +313,15 @@ contains
             ! Correct velocity
             call fs%get_pgrad(fs%psolv%sol,resU,resV,resW)
             fs%P=fs%P+fs%psolv%sol
-            fs%U=fs%U-time%dt*resU/fs%rho_U
-            fs%V=fs%V-time%dt*resV/fs%rho_V
-            fs%W=fs%W-time%dt*resW/fs%rho_W
+            do k=fs%cfg%kmino_,fs%cfg%kmaxo_
+               do j=fs%cfg%jmino_,fs%cfg%jmaxo_
+                  do i=fs%cfg%imino_,fs%cfg%imaxo_
+                     fs%U(i,j,k)=fs%U(i,j,k)-time%dt*resU(i,j,k)/sum(fs%itpr_x(:,i,j,k)*fs%rho(i-1:i,j,k))
+                     fs%V(i,j,k)=fs%V(i,j,k)-time%dt*resV(i,j,k)/sum(fs%itpr_y(:,i,j,k)*fs%rho(i,j-1:j,k))
+                     fs%W(i,j,k)=fs%W(i,j,k)-time%dt*resW(i,j,k)/sum(fs%itpr_z(:,i,j,k)*fs%rho(i,j,k-1:k))
+                  end do
+               end do
+            end do
             
             ! Increment sub-iteration counter
             time%it=time%it+1

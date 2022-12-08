@@ -75,14 +75,10 @@ module vfs_class
       real(WP), dimension(:,:,:), allocatable :: VF       !< VF array
       real(WP), dimension(:,:,:), allocatable :: VFold    !< VFold array
       
-      ! Staggered volume fractions and volume fraction fluxes
-      real(WP), dimension(:,:,:), allocatable :: xVF,xVFold      !< x-staggered VF and VFold
-      real(WP), dimension(:,:,:), allocatable :: yVF,yVFold      !< y-staggered VF and VFold
-      real(WP), dimension(:,:,:), allocatable :: zVF,zVFold      !< z-staggered VF and VFold
-      real(WP), dimension(:,:,:), allocatable :: xFX,xFY,xFZ     !< x-staggered VF flux
-      real(WP), dimension(:,:,:), allocatable :: yFX,yFY,yFZ     !< y-staggered VF flux
-      real(WP), dimension(:,:,:), allocatable :: zFX,zFY,zFZ     !< z-staggered VF flux
-
+      ! Superficial fluxing velocities
+      real(WP), dimension(:,:,:,:), allocatable :: UFl    !< Superficial liquid fluxing velocity
+      real(WP), dimension(:,:,:,:), allocatable :: UFg    !< Superficial gas fluxing velocity
+      
       ! Phase barycenter data
       real(WP), dimension(:,:,:,:), allocatable :: Lbary  !< Liquid barycenter
       real(WP), dimension(:,:,:,:), allocatable :: Gbary  !< Gas barycenter
@@ -139,7 +135,7 @@ module vfs_class
       integer, dimension(:,:,:), allocatable :: vmask     !< Integer array used for enforcing bconds - for vertices
       
       ! Monitoring quantities
-      real(WP) :: VFmax,VFmin,VFint                       !< Maximum, minimum, and integral volume fraction
+      real(WP) :: VFmax,VFmin,VFint,SDint                 !< Maximum, minimum, and integral volume fraction and surface density
 
       ! Old arrays that are needed for the compressible MAST solver
       real(WP), dimension(:,:,:,:), allocatable :: Lbaryold  !< Liquid barycenter
@@ -190,9 +186,7 @@ module vfs_class
       procedure :: paraboloid_integral_fit                !< Perform local paraboloid fit of IRL surface using surface-integrated IRL data
       procedure :: get_max                                !< Calculate maximum field values
       procedure :: get_cfl                                !< Get CFL for the VF solver
-      
-      procedure :: get_staggered_VFdata                   !< Build staggered VF and VF fluxes
-      
+
       procedure :: allocate_supplement                    !< Allocate arrays and initialize objects needed for compressible MAST solver
       procedure :: copy_interface_to_old                  !< Copy interface variables at beginning of timestep
       procedure :: fluxpoly_project_getmoments            !< Project face to get flux volume and output its moments
@@ -240,6 +234,10 @@ contains
       allocate(self%SD   (  self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%SD   =0.0_WP
       allocate(self%G    (  self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%G    =0.0_WP
       allocate(self%curv (  self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%curv =0.0_WP
+      
+      ! Superificial fluxing velocities for liquid and gas
+      allocate(self%UFl(1:3,self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%UFl=0.0_WP
+      allocate(self%UFg(1:3,self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%UFg=0.0_WP
       
       ! Set clipping distance
       self%Gclip=real(distance_band+1,WP)*self%cfg%min_meshsize
@@ -821,7 +819,16 @@ contains
                   end if
                end if
                
+               ! Store superficial liquid and gas fluxing velocities for momentum solver
+               this%UFl(1,i,j,k)=getVolumePtr(this%face_flux(1,i,j,k),0)/(this%cfg%dy(j)*this%cfg%dz(k)*dt)
+               this%UFl(2,i,j,k)=getVolumePtr(this%face_flux(2,i,j,k),0)/(this%cfg%dz(k)*this%cfg%dx(i)*dt)
+               this%UFl(3,i,j,k)=getVolumePtr(this%face_flux(3,i,j,k),0)/(this%cfg%dx(i)*this%cfg%dy(j)*dt)
+               this%UFg(1,i,j,k)=getVolumePtr(this%face_flux(1,i,j,k),1)/(this%cfg%dy(j)*this%cfg%dz(k)*dt)
+               this%UFg(2,i,j,k)=getVolumePtr(this%face_flux(2,i,j,k),1)/(this%cfg%dz(k)*this%cfg%dx(i)*dt)
+               this%UFg(3,i,j,k)=getVolumePtr(this%face_flux(3,i,j,k),1)/(this%cfg%dx(i)*this%cfg%dy(j)*dt)
+               
             end do
+
          end do
       end do
       
@@ -875,6 +882,10 @@ contains
       ! Synchronize VF field
       call this%cfg%sync(this%VF)
       
+      ! Synchronize fluxing velocities
+      call this%cfg%sync(this%UFl)
+      call this%cfg%sync(this%UFg)
+
       ! Remove flotsams if needed
       call this%remove_flotsams()
       
@@ -909,254 +920,6 @@ contains
       call this%reset_volume_moments()
       
    end subroutine advance
-
-
-   !> Calculate staggered VF transport info
-   subroutine get_staggered_VFdata(this,dt)
-      implicit none
-      class(vfs), intent(inout) :: this
-      real(WP), intent(inout) :: dt  !< Timestep size over which to advance
-      
-      ! Loop over the full domain and compute staggered VF by averaging
-      do k=this%cfg%kmin_,this%cfg%kmax_+1
-         do j=this%cfg%jmin_,this%cfg%jmax_+1
-            do i=this%cfg%imin_,this%cfg%imax_+1
-               
-               ! X flux
-               if (minval(abs(this%band(i-1:i,j,k))).le.advect_band) then
-                  ! Construct and project face
-                  face(:,1)=[this%cfg%x(i  ),this%cfg%y(j  ),this%cfg%z(k+1)]; face(:,5)=this%project(face(:,1),i,j,k,-dt,U,V,W); if (this%vmask(i  ,j  ,k+1).eq.1) face(:,5)=face(:,1)
-                  face(:,2)=[this%cfg%x(i  ),this%cfg%y(j  ),this%cfg%z(k  )]; face(:,6)=this%project(face(:,2),i,j,k,-dt,U,V,W); if (this%vmask(i  ,j  ,k  ).eq.1) face(:,6)=face(:,2)
-                  face(:,3)=[this%cfg%x(i  ),this%cfg%y(j+1),this%cfg%z(k  )]; face(:,7)=this%project(face(:,3),i,j,k,-dt,U,V,W); if (this%vmask(i  ,j+1,k  ).eq.1) face(:,7)=face(:,3)
-                  face(:,4)=[this%cfg%x(i  ),this%cfg%y(j+1),this%cfg%z(k+1)]; face(:,8)=this%project(face(:,4),i,j,k,-dt,U,V,W); if (this%vmask(i  ,j+1,k+1).eq.1) face(:,8)=face(:,4)
-                  face(:,9)=0.25_WP*[sum(face(1,1:4)),sum(face(2,1:4)),sum(face(3,1:4))]
-                  face(:,9)=this%project(face(:,9),i,j,k,-dt,U,V,W)
-                  ! Form flux polyhedron
-                  call construct(flux_polyhedron,face)
-                  ! Add solenoidal correction
-                  call adjustCapToMatchVolume(flux_polyhedron,dt*U(i,j,k)*this%cfg%dy(j)*this%cfg%dz(k))
-                  ! Get bounds for flux polyhedron
-                  call getBoundingPts(flux_polyhedron,bounding_pts(:,1),bounding_pts(:,2))
-                  bb_indices(:,1)=this%cfg%get_ijk_local(bounding_pts(:,1),[i,j,k])
-                  bb_indices(:,2)=this%cfg%get_ijk_local(bounding_pts(:,2),[i,j,k])
-                  ! Crudely check phase information for flux polyhedron
-                  crude_VF=this%crude_phase_test(bb_indices)
-                  if (crude_VF.lt.0.0_WP) then
-                     ! Need full geometric flux
-                     call getMoments(flux_polyhedron,this%localized_separator_link(i,j,k),this%face_flux(1,i,j,k))
-                  else
-                     ! Simpler flux calculation
-                     vol_now=calculateVolume(flux_polyhedron); ctr_now=calculateCentroid(flux_polyhedron)
-                     call construct(this%face_flux(1,i,j,k),[crude_VF*vol_now,crude_VF*vol_now*ctr_now,(1.0_WP-crude_VF)*vol_now,(1.0_WP-crude_VF)*vol_now*ctr_now])
-                  end if
-               end if
-               
-               ! Y flux
-               if (minval(abs(this%band(i,j-1:j,k))).le.advect_band) then
-                  ! Construct and project face
-                  face(:,1)=[this%cfg%x(i+1),this%cfg%y(j  ),this%cfg%z(k  )]; face(:,5)=this%project(face(:,1),i,j,k,-dt,U,V,W); if (this%vmask(i+1,j  ,k  ).eq.1) face(:,5)=face(:,1)
-                  face(:,2)=[this%cfg%x(i  ),this%cfg%y(j  ),this%cfg%z(k  )]; face(:,6)=this%project(face(:,2),i,j,k,-dt,U,V,W); if (this%vmask(i  ,j  ,k  ).eq.1) face(:,6)=face(:,2)
-                  face(:,3)=[this%cfg%x(i  ),this%cfg%y(j  ),this%cfg%z(k+1)]; face(:,7)=this%project(face(:,3),i,j,k,-dt,U,V,W); if (this%vmask(i  ,j  ,k+1).eq.1) face(:,7)=face(:,3)
-                  face(:,4)=[this%cfg%x(i+1),this%cfg%y(j  ),this%cfg%z(k+1)]; face(:,8)=this%project(face(:,4),i,j,k,-dt,U,V,W); if (this%vmask(i+1,j  ,k+1).eq.1) face(:,8)=face(:,4)
-                  face(:,9)=0.25_WP*[sum(face(1,1:4)),sum(face(2,1:4)),sum(face(3,1:4))]
-                  face(:,9)=this%project(face(:,9),i,j,k,-dt,U,V,W)
-                  ! Form flux polyhedron
-                  call construct(flux_polyhedron,face)
-                  ! Add solenoidal correction
-                  call adjustCapToMatchVolume(flux_polyhedron,dt*V(i,j,k)*this%cfg%dx(i)*this%cfg%dz(k))
-                  ! Get bounds for flux polyhedron
-                  call getBoundingPts(flux_polyhedron,bounding_pts(:,1),bounding_pts(:,2))
-                  bb_indices(:,1)=this%cfg%get_ijk_local(bounding_pts(:,1),[i,j,k])
-                  bb_indices(:,2)=this%cfg%get_ijk_local(bounding_pts(:,2),[i,j,k])
-                  ! Crudely check phase information for flux polyhedron
-                  crude_VF=this%crude_phase_test(bb_indices)
-                  if (crude_VF.lt.0.0_WP) then
-                     ! Need full geometric flux
-                     call getMoments(flux_polyhedron,this%localized_separator_link(i,j,k),this%face_flux(2,i,j,k))
-                  else
-                     ! Simpler flux calculation
-                     vol_now=calculateVolume(flux_polyhedron); ctr_now=calculateCentroid(flux_polyhedron)
-                     call construct(this%face_flux(2,i,j,k),[crude_VF*vol_now,crude_VF*vol_now*ctr_now,(1.0_WP-crude_VF)*vol_now,(1.0_WP-crude_VF)*vol_now*ctr_now])
-                  end if
-               end if
-               
-               ! Z flux
-               if (minval(abs(this%band(i,j,k-1:k))).le.advect_band) then
-                  ! Construct and project face
-                  face(:,1)=[this%cfg%x(i  ),this%cfg%y(j+1),this%cfg%z(k  )]; face(:,5)=this%project(face(:,1),i,j,k,-dt,U,V,W); if (this%vmask(i  ,j+1,k  ).eq.1) face(:,5)=face(:,1)
-                  face(:,2)=[this%cfg%x(i  ),this%cfg%y(j  ),this%cfg%z(k  )]; face(:,6)=this%project(face(:,2),i,j,k,-dt,U,V,W); if (this%vmask(i  ,j  ,k  ).eq.1) face(:,6)=face(:,2)
-                  face(:,3)=[this%cfg%x(i+1),this%cfg%y(j  ),this%cfg%z(k  )]; face(:,7)=this%project(face(:,3),i,j,k,-dt,U,V,W); if (this%vmask(i+1,j  ,k  ).eq.1) face(:,7)=face(:,3)
-                  face(:,4)=[this%cfg%x(i+1),this%cfg%y(j+1),this%cfg%z(k  )]; face(:,8)=this%project(face(:,4),i,j,k,-dt,U,V,W); if (this%vmask(i+1,j+1,k  ).eq.1) face(:,8)=face(:,4)
-                  face(:,9)=0.25_WP*[sum(face(1,1:4)),sum(face(2,1:4)),sum(face(3,1:4))]
-                  face(:,9)=this%project(face(:,9),i,j,k,-dt,U,V,W)
-                  ! Form flux polyhedron
-                  call construct(flux_polyhedron,face)
-                  ! Add solenoidal correction
-                  call adjustCapToMatchVolume(flux_polyhedron,dt*W(i,j,k)*this%cfg%dx(i)*this%cfg%dy(j))
-                  ! Get bounds for flux polyhedron
-                  call getBoundingPts(flux_polyhedron,bounding_pts(:,1),bounding_pts(:,2))
-                  bb_indices(:,1)=this%cfg%get_ijk_local(bounding_pts(:,1),[i,j,k])
-                  bb_indices(:,2)=this%cfg%get_ijk_local(bounding_pts(:,2),[i,j,k])
-                  ! Crudely check phase information for flux polyhedron
-                  crude_VF=this%crude_phase_test(bb_indices)
-                  if (crude_VF.lt.0.0_WP) then
-                     ! Need full geometric flux
-                     call getMoments(flux_polyhedron,this%localized_separator_link(i,j,k),this%face_flux(3,i,j,k))
-                  else
-                     ! Simpler flux calculation
-                     vol_now=calculateVolume(flux_polyhedron); ctr_now=calculateCentroid(flux_polyhedron)
-                     call construct(this%face_flux(3,i,j,k),[crude_VF*vol_now,crude_VF*vol_now*ctr_now,(1.0_WP-crude_VF)*vol_now,(1.0_WP-crude_VF)*vol_now*ctr_now])
-                  end if
-               end if
-               
-            end do
-         end do
-      end do
-      
-      ! Loop over the domain and compute fluxes using semi-Lagrangian algorithm
-      do k=this%cfg%kmin_,this%cfg%kmax_+1
-         do j=this%cfg%jmin_,this%cfg%jmax_+1
-            do i=this%cfg%imin_,this%cfg%imax_+1
-               
-               ! X flux
-               if (minval(abs(this%band(i-1:i,j,k))).le.advect_band) then
-                  ! Construct and project face
-                  face(:,1)=[this%cfg%x(i  ),this%cfg%y(j  ),this%cfg%z(k+1)]; face(:,5)=this%project(face(:,1),i,j,k,-dt,U,V,W); if (this%vmask(i  ,j  ,k+1).eq.1) face(:,5)=face(:,1)
-                  face(:,2)=[this%cfg%x(i  ),this%cfg%y(j  ),this%cfg%z(k  )]; face(:,6)=this%project(face(:,2),i,j,k,-dt,U,V,W); if (this%vmask(i  ,j  ,k  ).eq.1) face(:,6)=face(:,2)
-                  face(:,3)=[this%cfg%x(i  ),this%cfg%y(j+1),this%cfg%z(k  )]; face(:,7)=this%project(face(:,3),i,j,k,-dt,U,V,W); if (this%vmask(i  ,j+1,k  ).eq.1) face(:,7)=face(:,3)
-                  face(:,4)=[this%cfg%x(i  ),this%cfg%y(j+1),this%cfg%z(k+1)]; face(:,8)=this%project(face(:,4),i,j,k,-dt,U,V,W); if (this%vmask(i  ,j+1,k+1).eq.1) face(:,8)=face(:,4)
-                  face(:,9)=0.25_WP*[sum(face(1,1:4)),sum(face(2,1:4)),sum(face(3,1:4))]
-                  face(:,9)=this%project(face(:,9),i,j,k,-dt,U,V,W)
-                  ! Form flux polyhedron
-                  call construct(flux_polyhedron,face)
-                  ! Add solenoidal correction
-                  call adjustCapToMatchVolume(flux_polyhedron,dt*U(i,j,k)*this%cfg%dy(j)*this%cfg%dz(k))
-                  ! Get bounds for flux polyhedron
-                  call getBoundingPts(flux_polyhedron,bounding_pts(:,1),bounding_pts(:,2))
-                  bb_indices(:,1)=this%cfg%get_ijk_local(bounding_pts(:,1),[i,j,k])
-                  bb_indices(:,2)=this%cfg%get_ijk_local(bounding_pts(:,2),[i,j,k])
-                  ! Crudely check phase information for flux polyhedron
-                  crude_VF=this%crude_phase_test(bb_indices)
-                  if (crude_VF.lt.0.0_WP) then
-                     ! Need full geometric flux
-                     call getMoments(flux_polyhedron,this%localized_separator_link(i,j,k),this%face_flux(1,i,j,k))
-                  else
-                     ! Simpler flux calculation
-                     vol_now=calculateVolume(flux_polyhedron); ctr_now=calculateCentroid(flux_polyhedron)
-                     call construct(this%face_flux(1,i,j,k),[crude_VF*vol_now,crude_VF*vol_now*ctr_now,(1.0_WP-crude_VF)*vol_now,(1.0_WP-crude_VF)*vol_now*ctr_now])
-                  end if
-               end if
-               
-               ! Y flux
-               if (minval(abs(this%band(i,j-1:j,k))).le.advect_band) then
-                  ! Construct and project face
-                  face(:,1)=[this%cfg%x(i+1),this%cfg%y(j  ),this%cfg%z(k  )]; face(:,5)=this%project(face(:,1),i,j,k,-dt,U,V,W); if (this%vmask(i+1,j  ,k  ).eq.1) face(:,5)=face(:,1)
-                  face(:,2)=[this%cfg%x(i  ),this%cfg%y(j  ),this%cfg%z(k  )]; face(:,6)=this%project(face(:,2),i,j,k,-dt,U,V,W); if (this%vmask(i  ,j  ,k  ).eq.1) face(:,6)=face(:,2)
-                  face(:,3)=[this%cfg%x(i  ),this%cfg%y(j  ),this%cfg%z(k+1)]; face(:,7)=this%project(face(:,3),i,j,k,-dt,U,V,W); if (this%vmask(i  ,j  ,k+1).eq.1) face(:,7)=face(:,3)
-                  face(:,4)=[this%cfg%x(i+1),this%cfg%y(j  ),this%cfg%z(k+1)]; face(:,8)=this%project(face(:,4),i,j,k,-dt,U,V,W); if (this%vmask(i+1,j  ,k+1).eq.1) face(:,8)=face(:,4)
-                  face(:,9)=0.25_WP*[sum(face(1,1:4)),sum(face(2,1:4)),sum(face(3,1:4))]
-                  face(:,9)=this%project(face(:,9),i,j,k,-dt,U,V,W)
-                  ! Form flux polyhedron
-                  call construct(flux_polyhedron,face)
-                  ! Add solenoidal correction
-                  call adjustCapToMatchVolume(flux_polyhedron,dt*V(i,j,k)*this%cfg%dx(i)*this%cfg%dz(k))
-                  ! Get bounds for flux polyhedron
-                  call getBoundingPts(flux_polyhedron,bounding_pts(:,1),bounding_pts(:,2))
-                  bb_indices(:,1)=this%cfg%get_ijk_local(bounding_pts(:,1),[i,j,k])
-                  bb_indices(:,2)=this%cfg%get_ijk_local(bounding_pts(:,2),[i,j,k])
-                  ! Crudely check phase information for flux polyhedron
-                  crude_VF=this%crude_phase_test(bb_indices)
-                  if (crude_VF.lt.0.0_WP) then
-                     ! Need full geometric flux
-                     call getMoments(flux_polyhedron,this%localized_separator_link(i,j,k),this%face_flux(2,i,j,k))
-                  else
-                     ! Simpler flux calculation
-                     vol_now=calculateVolume(flux_polyhedron); ctr_now=calculateCentroid(flux_polyhedron)
-                     call construct(this%face_flux(2,i,j,k),[crude_VF*vol_now,crude_VF*vol_now*ctr_now,(1.0_WP-crude_VF)*vol_now,(1.0_WP-crude_VF)*vol_now*ctr_now])
-                  end if
-               end if
-               
-               ! Z flux
-               if (minval(abs(this%band(i,j,k-1:k))).le.advect_band) then
-                  ! Construct and project face
-                  face(:,1)=[this%cfg%x(i  ),this%cfg%y(j+1),this%cfg%z(k  )]; face(:,5)=this%project(face(:,1),i,j,k,-dt,U,V,W); if (this%vmask(i  ,j+1,k  ).eq.1) face(:,5)=face(:,1)
-                  face(:,2)=[this%cfg%x(i  ),this%cfg%y(j  ),this%cfg%z(k  )]; face(:,6)=this%project(face(:,2),i,j,k,-dt,U,V,W); if (this%vmask(i  ,j  ,k  ).eq.1) face(:,6)=face(:,2)
-                  face(:,3)=[this%cfg%x(i+1),this%cfg%y(j  ),this%cfg%z(k  )]; face(:,7)=this%project(face(:,3),i,j,k,-dt,U,V,W); if (this%vmask(i+1,j  ,k  ).eq.1) face(:,7)=face(:,3)
-                  face(:,4)=[this%cfg%x(i+1),this%cfg%y(j+1),this%cfg%z(k  )]; face(:,8)=this%project(face(:,4),i,j,k,-dt,U,V,W); if (this%vmask(i+1,j+1,k  ).eq.1) face(:,8)=face(:,4)
-                  face(:,9)=0.25_WP*[sum(face(1,1:4)),sum(face(2,1:4)),sum(face(3,1:4))]
-                  face(:,9)=this%project(face(:,9),i,j,k,-dt,U,V,W)
-                  ! Form flux polyhedron
-                  call construct(flux_polyhedron,face)
-                  ! Add solenoidal correction
-                  call adjustCapToMatchVolume(flux_polyhedron,dt*W(i,j,k)*this%cfg%dx(i)*this%cfg%dy(j))
-                  ! Get bounds for flux polyhedron
-                  call getBoundingPts(flux_polyhedron,bounding_pts(:,1),bounding_pts(:,2))
-                  bb_indices(:,1)=this%cfg%get_ijk_local(bounding_pts(:,1),[i,j,k])
-                  bb_indices(:,2)=this%cfg%get_ijk_local(bounding_pts(:,2),[i,j,k])
-                  ! Crudely check phase information for flux polyhedron
-                  crude_VF=this%crude_phase_test(bb_indices)
-                  if (crude_VF.lt.0.0_WP) then
-                     ! Need full geometric flux
-                     call getMoments(flux_polyhedron,this%localized_separator_link(i,j,k),this%face_flux(3,i,j,k))
-                  else
-                     ! Simpler flux calculation
-                     vol_now=calculateVolume(flux_polyhedron); ctr_now=calculateCentroid(flux_polyhedron)
-                     call construct(this%face_flux(3,i,j,k),[crude_VF*vol_now,crude_VF*vol_now*ctr_now,(1.0_WP-crude_VF)*vol_now,(1.0_WP-crude_VF)*vol_now*ctr_now])
-                  end if
-               end if
-               
-            end do
-         end do
-      end do
-      
-      ! Compute transported moments
-      do index=1,sum(this%band_count(0:advect_band))
-         i=this%band_map(1,index)
-         j=this%band_map(2,index)
-         k=this%band_map(3,index)
-         
-         ! Skip wall/bcond cells - bconds need to be provided elsewhere directly!
-         if (this%mask(i,j,k).ne.0) cycle
-         
-         ! Old liquid and gas volumes
-         Lvolold=        this%VFold(i,j,k) *this%cfg%vol(i,j,k)
-         Gvolold=(1.0_WP-this%VFold(i,j,k))*this%cfg%vol(i,j,k)
-         
-         ! Compute incoming liquid and gas volumes
-         Lvolinc=-getVolumePtr(this%face_flux(1,i+1,j,k),0)+getVolumePtr(this%face_flux(1,i,j,k),0) &
-         &       -getVolumePtr(this%face_flux(2,i,j+1,k),0)+getVolumePtr(this%face_flux(2,i,j,k),0) &
-         &       -getVolumePtr(this%face_flux(3,i,j,k+1),0)+getVolumePtr(this%face_flux(3,i,j,k),0)
-         Gvolinc=-getVolumePtr(this%face_flux(1,i+1,j,k),1)+getVolumePtr(this%face_flux(1,i,j,k),1) &
-         &       -getVolumePtr(this%face_flux(2,i,j+1,k),1)+getVolumePtr(this%face_flux(2,i,j,k),1) &
-         &       -getVolumePtr(this%face_flux(3,i,j,k+1),1)+getVolumePtr(this%face_flux(3,i,j,k),1)
-         
-         ! Compute new liquid and gas volumes
-         Lvolnew=Lvolold+Lvolinc
-         Gvolnew=Gvolold+Gvolinc
-         
-         ! Compute new liquid volume fraction
-         this%VF(i,j,k)=Lvolnew/(Lvolnew+Gvolnew)
-         
-         ! Only work on higher order moments if VF is in [VFlo,VFhi]
-         if (this%VF(i,j,k).lt.VFlo) then
-            this%VF(i,j,k)=0.0_WP
-         else if (this%VF(i,j,k).gt.VFhi) then
-            this%VF(i,j,k)=1.0_WP
-         else
-            ! Compute old phase barycenters
-            this%Lbary(:,i,j,k)=(this%Lbary(:,i,j,k)*Lvolold-getCentroidPtr(this%face_flux(1,i+1,j,k),0)+getCentroidPtr(this%face_flux(1,i,j,k),0) &
-            &                                               -getCentroidPtr(this%face_flux(2,i,j+1,k),0)+getCentroidPtr(this%face_flux(2,i,j,k),0) &
-            &                                               -getCentroidPtr(this%face_flux(3,i,j,k+1),0)+getCentroidPtr(this%face_flux(3,i,j,k),0))/Lvolnew
-            this%Gbary(:,i,j,k)=(this%Gbary(:,i,j,k)*Gvolold-getCentroidPtr(this%face_flux(1,i+1,j,k),1)+getCentroidPtr(this%face_flux(1,i,j,k),1) &
-            &                                               -getCentroidPtr(this%face_flux(2,i,j+1,k),1)+getCentroidPtr(this%face_flux(2,i,j,k),1) &
-            &                                               -getCentroidPtr(this%face_flux(3,i,j,k+1),1)+getCentroidPtr(this%face_flux(3,i,j,k),1))/Gvolnew
-            ! Project forward in time
-            this%Lbary(:,i,j,k)=this%project(this%Lbary(:,i,j,k),i,j,k,dt,U,V,W)
-            this%Gbary(:,i,j,k)=this%project(this%Gbary(:,i,j,k),i,j,k,dt,U,V,W)
-         end if
-      end do
-      
-   end subroutine get_staggered_VFdata
    
 
    !> Project a single face to get flux polyhedron and get its moments
@@ -3207,6 +2970,7 @@ contains
       my_VFmax=maxval(this%VF); call MPI_ALLREDUCE(my_VFmax,this%VFmax,1,MPI_REAL_WP,MPI_MAX,this%cfg%comm,ierr)
       my_VFmin=minval(this%VF); call MPI_ALLREDUCE(my_VFmin,this%VFmin,1,MPI_REAL_WP,MPI_MIN,this%cfg%comm,ierr)
       call this%cfg%integrate(this%VF,integral=this%VFint)
+      call this%cfg%integrate(this%SD,integral=this%SDint)
    end subroutine get_max
    
    
