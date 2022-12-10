@@ -2,6 +2,7 @@
 module diag_class
   use precision, only: WP
   use config_class,   only: config
+  use string,       only: str_medium
   implicit none
   private
 
@@ -12,14 +13,19 @@ module diag_class
   type :: diag
      ! Diagonalr solver works for a config
      type(config), pointer :: cfg                                    !< Config for the diag solver
+     character(len=str_medium) :: name                               !< Name of solver
+     integer :: ndiags                                               !< Number of diagonals
      real(WP), dimension(:,:,:,:), allocatable :: Ax,Ay,Az           !< Working arrays
      real(WP), dimension(:,:,:), allocatable :: Rx,Ry,Rz             !< Solution arrays
+     real(WP), dimension(:,:), allocatable :: stackmem               !< Work arrays
 
    contains
-
-     procedure :: tridiagonal                                        !< Tridiagonal solver
-     procedure :: pentadiagonal                                      !< Pentadiagonal solver
-     procedure :: polydiagonal                                       !< Polydiagonal solver
+     procedure :: linsol_x                                           !< Linear solver in x
+     procedure :: linsol_y                                           !< Linear solver in y
+     procedure :: linsol_z                                           !< Linear solver in z
+     procedure :: tridiagonal
+     procedure :: pentadiagonal
+     procedure :: polydiagonal
      final     :: destructor                                         !< Destructor for diag
   end type diag
 
@@ -40,29 +46,129 @@ contains
     if (allocated(this%Rx)) deallocate(this%Rx)
     if (allocated(this%Ry)) deallocate(this%Ry)
     if (allocated(this%Rz)) deallocate(this%Rz)
+    if (allocated(this%stackmem)) deallocate(this%stackmem)
   end subroutine destructor
 
 
   !> Constructor for a diag object
-  function diag_from_args(cfg,n) result(self)
+  function diag_from_args(cfg,name,n) result(self)
     use messager, only: die
     implicit none
     type(diag) :: self
     class(config), target, intent(in) :: cfg
+    character(len=*), intent(in) :: name
     integer, intent(in) :: n
-
-    ! Link the config
+    integer :: nst
+    
+    ! Link the config and store the name
     self%cfg=>cfg
+    self%name=trim(adjustl(name))
+
+    ! Number of diagonals and stencil size
+    self%ndiags=n
+    nst=(n-1)/2
 
     ! Allocate arrays
-    allocate(self%Ax(self%cfg%jmino_+n:self%cfg%jmaxo_-n,self%cfg%kmino_+n:self%cfg%kmaxo_-n,self%cfg%imino_+n:self%cfg%imaxo_-n,-n:+n))
-    allocate(self%Ay(self%cfg%imino_+n:self%cfg%imaxo_-n,self%cfg%kmino_+n:self%cfg%kmaxo_-n,self%cfg%jmino_+n:self%cfg%jmaxo_-n,-n:+n))
-    allocate(self%Az(self%cfg%imino_+n:self%cfg%imaxo_-n,self%cfg%jmino_+n:self%cfg%jmaxo_-n,self%cfg%kmino_+n:self%cfg%kmaxo_-n,-n:+n))
-    allocate(self%Rx(self%cfg%jmino_+n:self%cfg%jmaxo_-n,self%cfg%kmino_+n:self%cfg%kmaxo_-n,self%cfg%imino_+n:self%cfg%imaxo_-n))
-    allocate(self%Ry(self%cfg%imino_+n:self%cfg%imaxo_-n,self%cfg%kmino_+n:self%cfg%kmaxo_-n,self%cfg%jmino_+n:self%cfg%jmaxo_-n))
-    allocate(self%Rz(self%cfg%imino_+n:self%cfg%imaxo_-n,self%cfg%jmino_+n:self%cfg%jmaxo_-n,self%cfg%kmino_+n:self%cfg%kmaxo_-n))
+    allocate(self%Ax(self%cfg%jmin_:self%cfg%jmax_,self%cfg%kmin_:self%cfg%kmax_,self%cfg%imin_:self%cfg%imax_,-nst:+nst))
+    allocate(self%Ay(self%cfg%imin_:self%cfg%imax_,self%cfg%kmin_:self%cfg%kmax_,self%cfg%jmin_:self%cfg%jmax_,-nst:+nst))
+    allocate(self%Az(self%cfg%imin_:self%cfg%imax_,self%cfg%jmin_:self%cfg%jmax_,self%cfg%kmin_:self%cfg%kmax_,-nst:+nst))
+    allocate(self%Rx(self%cfg%jmin_:self%cfg%jmax_,self%cfg%kmin_:self%cfg%kmax_,self%cfg%imin_:self%cfg%imax_))
+    allocate(self%Ry(self%cfg%imin_:self%cfg%imax_,self%cfg%kmin_:self%cfg%kmax_,self%cfg%jmin_:self%cfg%jmax_))
+    allocate(self%Rz(self%cfg%imin_:self%cfg%imax_,self%cfg%jmin_:self%cfg%jmax_,self%cfg%kmin_:self%cfg%kmax_))
+    allocate(self%stackmem((self%cfg%imaxo_-self%cfg%imino_)*(self%cfg%jmaxo_-self%cfg%jmino_)*(self%cfg%kmaxo_-self%cfg%kmino_),nst+1))
 
   end function diag_from_args
+
+
+  ! Real solver in x
+  subroutine linsol_x(this)
+    implicit none
+    class(diag), intent(inout) :: this
+
+    ! Choose based on number of diagonals
+    select case(this%ndiags)
+    case(3)
+       call this%tridiagonal(&
+            this%Ax(this%cfg%jmin_,this%cfg%kmin_,this%cfg%imin_,-1),&
+            this%Ax(this%cfg%jmin_,this%cfg%kmin_,this%cfg%imin_, 0),&
+            this%Ax(this%cfg%jmin_,this%cfg%kmin_,this%cfg%imin_,+1),&
+            this%Rx,this%cfg%nx_,this%cfg%ny_*this%cfg%nz_,'x',this%stackmem(1,1),this%stackmem(1,2))
+    case(5)
+       call this%pentadiagonal(&
+            this%Ax(this%cfg%jmin_,this%cfg%kmin_,this%cfg%imin_,-2),&
+            this%Ax(this%cfg%jmin_,this%cfg%kmin_,this%cfg%imin_,-1),&
+            this%Ax(this%cfg%jmin_,this%cfg%kmin_,this%cfg%imin_, 0),&
+            this%Ax(this%cfg%jmin_,this%cfg%kmin_,this%cfg%imin_,+1),&
+            this%Ax(this%cfg%jmin_,this%cfg%kmin_,this%cfg%imin_,+2),&
+            this%Rx,this%cfg%nx_,this%cfg%ny_*this%cfg%nz_,'x',this%stackmem(1,1),this%stackmem(1,3))
+    case default
+       call this%polydiagonal((this%ndiags-1)/2,this%Ax(this%cfg%jmin_,this%cfg%kmin_,this%cfg%imin_,&
+            -(this%ndiags-1)/2),this%Rx,this%cfg%nx_,this%cfg%ny_*this%cfg%nz_,'x',this%stackmem)
+    end select
+
+    return
+  end subroutine linsol_x
+
+
+  ! Real solver in y
+  subroutine linsol_y(this)
+    implicit none
+    class(diag), intent(inout) :: this
+
+    ! Choose based on number of diagonals
+    select case(this%ndiags)
+    case(3)
+       call this%tridiagonal(&
+            this%Ay(this%cfg%imin_,this%cfg%kmin_,this%cfg%jmin_,-1),&
+            this%Ay(this%cfg%imin_,this%cfg%kmin_,this%cfg%jmin_, 0),&
+            this%Ay(this%cfg%imin_,this%cfg%kmin_,this%cfg%jmin_,+1),&
+            this%Ry,this%cfg%ny_,this%cfg%nx_*this%cfg%nz_,'y',this%stackmem(1,1),this%stackmem(1,2))
+    case(5)
+       call this%pentadiagonal(&
+            this%Ay(this%cfg%imin_,this%cfg%kmin_,this%cfg%jmin_,-2),&
+            this%Ay(this%cfg%imin_,this%cfg%kmin_,this%cfg%jmin_,-1),&
+            this%Ay(this%cfg%imin_,this%cfg%kmin_,this%cfg%jmin_, 0),&
+            this%Ay(this%cfg%imin_,this%cfg%kmin_,this%cfg%jmin_,+1),&
+            this%Ay(this%cfg%imin_,this%cfg%kmin_,this%cfg%jmin_,+2),&
+            this%Ry,this%cfg%ny_,this%cfg%nx_*this%cfg%nz_,'y',this%stackmem(1,1),this%stackmem(1,3))
+    case default
+       call this%polydiagonal((this%ndiags-1)/2,this%Ay(this%cfg%imin_,this%cfg%kmin_,this%cfg%jmin_,&
+            -(this%ndiags-1)/2),this%Ry,this%cfg%ny_,this%cfg%nx_*this%cfg%nz_,'y',this%stackmem)
+    end select
+
+    return
+  end subroutine linsol_y
+
+
+  ! Real solver in z
+  subroutine linsol_z(this)
+    implicit none
+    class(diag), intent(inout) :: this
+
+    ! Choose based on number of diagonals
+    select case(this%ndiags)
+    case(3)
+       call this%tridiagonal(&
+            this%Az(this%cfg%imin_,this%cfg%jmin_,this%cfg%kmin_,-1),&
+            this%Az(this%cfg%imin_,this%cfg%jmin_,this%cfg%kmin_, 0),&
+            this%Az(this%cfg%imin_,this%cfg%jmin_,this%cfg%kmin_,+1),&
+            this%Rz,this%cfg%nz_,this%cfg%ny_*this%cfg%nx_,'z',this%stackmem(1,1),this%stackmem(1,2))
+    case(5)
+       call this%pentadiagonal(&
+            this%Az(this%cfg%imin_,this%cfg%jmin_,this%cfg%kmin_,-2),&
+            this%Az(this%cfg%imin_,this%cfg%jmin_,this%cfg%kmin_,-1),&
+            this%Az(this%cfg%imin_,this%cfg%jmin_,this%cfg%kmin_, 0),&
+            this%Az(this%cfg%imin_,this%cfg%jmin_,this%cfg%kmin_,+1),&
+            this%Az(this%cfg%imin_,this%cfg%jmin_,this%cfg%kmin_,+2),&
+            this%Rz,this%cfg%nz_,this%cfg%ny_*this%cfg%nx_,'z',this%stackmem(1,1),this%stackmem(1,3))
+    case default
+       call this%polydiagonal((this%ndiags-1)/2,this%Az(this%cfg%imin_,this%cfg%jmin_,this%cfg%kmin_,&
+            -(this%ndiags-1)/2),this%Rz,this%cfg%nz_,this%cfg%ny_*this%cfg%nx_,'z',this%stackmem)
+    end select
+
+    return
+  end subroutine linsol_z
+
 
   subroutine tridiagonal(this,A,B,C,R,n,lot,dir,s1,s2)
     use parallel

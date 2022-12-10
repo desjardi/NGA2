@@ -4,6 +4,7 @@ module lpt_class
    use precision,      only: WP
    use string,         only: str_medium
    use config_class,   only: config
+   use diag_class,     only: diag
    use mpi_f08,        only: MPI_Datatype,MPI_INTEGER8,MPI_INTEGER,MPI_DOUBLE_PRECISION
    implicit none
    private
@@ -48,6 +49,8 @@ module lpt_class
       
       ! This is our underlying config
       class(config), pointer :: cfg                       !< This is the config the solver is build for
+
+      type(diag) :: tridiag                               !< Tridiagonal solver for implicit filter
       
       ! This is the name of the solver
       character(len=str_medium) :: name='UNNAMED_LPT'     !< Solver name (default=UNNAMED_LPT)
@@ -141,6 +144,9 @@ contains
       
       ! Point to pgrid object
       self%cfg=>cfg
+
+      ! Create tridiagonal solver object
+      self%tridiag=diag(cfg=self%cfg,name='Tridiagonal',n=3)
       
       ! Allocate variables
       allocate(self%np_proc(1:self%cfg%nproc)); self%np_proc=0
@@ -161,7 +167,7 @@ contains
       self%filter_width=0.0_WP
 
       ! Solve explicitly by default
-      self%implicit_filter=.false.
+      self%implicit_filter=.true.
       
       ! Allocate finite volume divergence operators
       allocate(self%div_x(0:+1,self%cfg%imin_:self%cfg%imax_,self%cfg%jmin_:self%cfg%jmax_,self%cfg%kmin_:self%cfg%kmax_)) !< Cell-centered
@@ -673,8 +679,6 @@ contains
       real(WP) :: filter_coeff
       integer :: i,j,k,n,nstep
       real(WP), dimension(:,:,:), allocatable :: FX,FY,FZ
-      real(WP), dimension(:,:,:,:), allocatable :: Ax,Ay,Az
-      real(WP), dimension(:,:,:), allocatable :: Rx,Ry,Rz
       
       ! Return without filtering if filter width is zero
       if (this%filter_width.le.0.0_WP) return
@@ -682,68 +686,57 @@ contains
       ! Recompute filter coeff and number of explicit steps needed
       filter_coeff=0.5_WP*(this%filter_width/(2.0_WP*sqrt(2.0_WP*log(2.0_WP))))**2
 
-      if (this%implicit_filter) then
-         ! Apply filter implicitly via approximate factorization
-         ! Allocate implicit arrays
-         allocate(Ax(this%cfg%jmino_+1:this%cfg%jmaxo_-1,this%cfg%kmino_+1:this%cfg%kmaxo_-1,this%cfg%imino_+1:this%cfg%imaxo_-1,-1:+1))
-         allocate(Ay(this%cfg%imino_+1:this%cfg%imaxo_-1,this%cfg%kmino_+1:this%cfg%kmaxo_-1,this%cfg%jmino_+1:this%cfg%jmaxo_-1,-1:+1))
-         allocate(Az(this%cfg%imino_+1:this%cfg%imaxo_-1,this%cfg%jmino_+1:this%cfg%jmaxo_-1,this%cfg%kmino_+1:this%cfg%kmaxo_-1,-1:+1))
-         allocate(Rx(this%cfg%jmino_+1:this%cfg%jmaxo_-1,this%cfg%kmino_+1:this%cfg%kmaxo_-1,this%cfg%imino_+1:this%cfg%imaxo_-1))
-         allocate(Ry(this%cfg%imino_+1:this%cfg%imaxo_-1,this%cfg%kmino_+1:this%cfg%kmaxo_-1,this%cfg%jmino_+1:this%cfg%jmaxo_-1))
-         allocate(Rz(this%cfg%imino_+1:this%cfg%imaxo_-1,this%cfg%jmino_+1:this%cfg%jmaxo_-1,this%cfg%kmino_+1:this%cfg%kmaxo_-1))
+      if (this%implicit_filter) then  !< Apply filter implicitly via approximate factorization
          ! Inverse in X-direction
          do k=this%cfg%kmin_,this%cfg%kmax_
             do j=this%cfg%jmin_,this%cfg%jmax_
                do i=this%cfg%imin_,this%cfg%imax_
-                  Ax(j,k,i,-1) = - this%div_x(0,i,j,k) * filter_coeff * this%grd_x(-1,i,j,k)
-                  Ax(j,k,i, 0) = 1.0_WP - (this%div_x(0,i,j,k) * filter_coeff * this%grd_x(0,i,j,k) &
+                  this%tridiag%Ax(j,k,i,-1) = - this%div_x(0,i,j,k) * filter_coeff * this%grd_x(-1,i,j,k)
+                  this%tridiag%Ax(j,k,i, 0) = 1.0_WP - (this%div_x(0,i,j,k) * filter_coeff * this%grd_x(0,i,j,k) &
                        + this%div_x(1,i,j,k) * filter_coeff * this%grd_x(-1,i+1,j,k))
-                  Ax(j,k,i,+1) = - this%div_x(1,i,j,k) * filter_coeff * this%grd_x(i+1,i,j,k)
-                  Rx(j,k,i) = A(i,j,k)
+                  this%tridiag%Ax(j,k,i,+1) = - this%div_x(1,i,j,k) * filter_coeff * this%grd_x(i+1,i,j,k)
+                  this%tridiag%Rx(j,k,i) = A(i,j,k)
                end do
             end do
          end do
-         !!call linear_solver_x(3)
+         call this%tridiag%linsol_x()         
          ! Inverse in Y-direction
          do k=this%cfg%kmin_,this%cfg%kmax_
             do j=this%cfg%jmin_,this%cfg%jmax_
                do i=this%cfg%imin_,this%cfg%imax_
-                  Ay(i,k,j,-1) = - this%div_y(0,i,j,k) * filter_coeff * this%grd_y(-1,i,j,k)
-                  Ay(i,k,j, 0) = 1.0_WP - (this%div_y(0,i,j,k)* filter_coeff * this%grd_y(0,i,j,k) &
+                  this%tridiag%Ay(i,k,j,-1) = - this%div_y(0,i,j,k) * filter_coeff * this%grd_y(-1,i,j,k)
+                  this%tridiag%Ay(i,k,j, 0) = 1.0_WP - (this%div_y(0,i,j,k)* filter_coeff * this%grd_y(0,i,j,k) &
                        + this%div_y(1,i,j,k)* filter_coeff * this%grd_y(-1,i,j+1,k))
-                  Ay(i,k,j,+1) = - this%div_y(1,i,j,k) * filter_coeff * this%grd_y(0,i,j+1,k)
-                  Ry(i,k,j) = Rx(j,k,i)
+                  this%tridiag%Ay(i,k,j,+1) = - this%div_y(1,i,j,k) * filter_coeff * this%grd_y(0,i,j+1,k)
+                  this%tridiag%Ry(i,k,j) = this%tridiag%Rx(j,k,i)
                end do
             end do
          end do
-         !!call linear_solver_y(3)
+         call this%tridiag%linsol_y()
          ! Inverse in Z-direction
          do k=this%cfg%kmin_,this%cfg%kmax_
             do j=this%cfg%jmin_,this%cfg%jmax_
                do i=this%cfg%imin_,this%cfg%imax_
-                  Az(i,j,k,-1) = - this%div_z(0,i,j,k) * filter_coeff * this%grd_z(-1,i,j,k)
-                  Az(i,j,k, 0) = 1.0_WP - (this%div_z(0,i,j,k) * filter_coeff * this%grd_z(0,i,j,k) &
+                  this%tridiag%Az(i,j,k,-1) = - this%div_z(0,i,j,k) * filter_coeff * this%grd_z(-1,i,j,k)
+                  this%tridiag%Az(i,j,k, 0) = 1.0_WP - (this%div_z(0,i,j,k) * filter_coeff * this%grd_z(0,i,j,k) &
                        + this%div_z(1,i,j,k) * filter_coeff * this%grd_z(-1,i,j,k))
-                  Az(i,j,k,+1) = - this%div_z(1,i,j,k) * filter_coeff * this%grd_z(0,i,j,k)
-                  Rz(i,j,k) = Ry(i,k,j)
+                  this%tridiag%Az(i,j,k,+1) = - this%div_z(1,i,j,k) * filter_coeff * this%grd_z(0,i,j,k)
+                 this%tridiag% Rz(i,j,k) = this%tridiag%Ry(i,k,j)
                end do
             end do
          end do
-         !!call linear_solver_z(3)
+         call this%tridiag%linsol_z()        
          ! Update A
          do k=this%cfg%kmin_,this%cfg%kmax_
             do j=this%cfg%jmin_,this%cfg%jmax_
                do i=this%cfg%imin_,this%cfg%imax_
-                  A(i,j,k)=Rz(i,j,k)
+                  A(i,j,k)=this%tridiag%Rz(i,j,k)
                end do
             end do
          end do
          ! Sync A
          call this%cfg%sync(A)
-         ! Deallocate implicit arrays
-         deallocate(Ax,Ay,Az,Rx,Ry,Rz)
-      else
-         ! Apply filter explicitly
+      else  !< Apply filter explicitly
          ! Allocate flux arrays
          allocate(FX(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
          allocate(FY(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
