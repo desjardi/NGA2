@@ -71,17 +71,7 @@ module tpns_class
       real(WP), dimension(:,:,:), allocatable :: rhoU     !< U momentum array
       real(WP), dimension(:,:,:), allocatable :: rhoV     !< V momentum array
       real(WP), dimension(:,:,:), allocatable :: rhoW     !< W momentum array
-      
-      ! Staggered density fields
-      real(WP), dimension(:,:,:), allocatable :: rho_U    !< Density field array on U-cell
-      real(WP), dimension(:,:,:), allocatable :: rho_V    !< Density field array on V-cell
-      real(WP), dimension(:,:,:), allocatable :: rho_W    !< Density field array on W-cell
-      
-      ! Old staggered density fields
-      real(WP), dimension(:,:,:), allocatable :: rho_Uold !< Old density field array on U-cell
-      real(WP), dimension(:,:,:), allocatable :: rho_Vold !< Old density field array on V-cell
-      real(WP), dimension(:,:,:), allocatable :: rho_Wold !< Old density field array on W-cell
-      
+
       ! Viscosity fields
       real(WP), dimension(:,:,:), allocatable :: visc     !< Viscosity field on P-cell
       real(WP), dimension(:,:,:), allocatable :: visc_xy  !< Viscosity field on U-cell
@@ -163,7 +153,6 @@ module tpns_class
       procedure :: correct_mfr                            !< Correct for mfr mismatch to ensure global conservation
       procedure :: shift_p                                !< Shift pressure to have zero average
       procedure :: get_viscosity                          !< Calculate viscosity fields from subcell phasic volume data in a vfs object
-      procedure :: get_staggered_density                  !< Calculate density on staggered cell via interpolation
       procedure :: solve_implicit                         !< Solve for the velocity residuals implicitly
       
       procedure :: addsrc_gravity                         !< Add gravitational body force
@@ -221,15 +210,7 @@ contains
       allocate(self%rhoW  (self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%rhoW  =0.0_WP
       allocate(self%rho   (self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%rho   =0.0_WP
       allocate(self%rhoold(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%rhoold=0.0_WP
-
-      ! New and old staggered densities
-      allocate(self%rho_U   (self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%rho_U   =0.0_WP
-      allocate(self%rho_V   (self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%rho_V   =0.0_WP
-      allocate(self%rho_W   (self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%rho_W   =0.0_WP
-      allocate(self%rho_Uold(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%rho_Uold=0.0_WP
-      allocate(self%rho_Vold(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%rho_Vold=0.0_WP
-      allocate(self%rho_Wold(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%rho_Wold=0.0_WP
-
+      
       ! Allocate flow divergence
       allocate(self%div(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%div=0.0_WP
       
@@ -328,30 +309,16 @@ contains
       integer :: i,j,k,st1,st2
       real(WP), dimension(-1:0) :: itpx,itpy,itpz
       
-      ! Allocate finite difference density interpolation coefficients to cell faces
-      allocate(this%itpr_x(-1:0,this%cfg%imino_+1:this%cfg%imaxo_,this%cfg%jmino_  :this%cfg%jmaxo_,this%cfg%kmino_  :this%cfg%kmaxo_)) !< X-face-centered
-      allocate(this%itpr_y(-1:0,this%cfg%imino_  :this%cfg%imaxo_,this%cfg%jmino_+1:this%cfg%jmaxo_,this%cfg%kmino_  :this%cfg%kmaxo_)) !< Y-face-centered
-      allocate(this%itpr_z(-1:0,this%cfg%imino_  :this%cfg%imaxo_,this%cfg%jmino_  :this%cfg%jmaxo_,this%cfg%kmino_+1:this%cfg%kmaxo_)) !< Z-face-centered
-      ! Create density interpolation coefficients to cell face in x
-      do k=this%cfg%kmino_  ,this%cfg%kmaxo_
-         do j=this%cfg%jmino_  ,this%cfg%jmaxo_
-            do i=this%cfg%imino_+1,this%cfg%imaxo_
+      ! Allocate finite difference density interpolation coefficients
+      allocate(this%itpr_x(-1:0,this%cfg%imin_:this%cfg%imax_+1,this%cfg%jmin_:this%cfg%jmax_+1,this%cfg%kmin_:this%cfg%kmax_+1)) !< X-face-centered
+      allocate(this%itpr_y(-1:0,this%cfg%imin_:this%cfg%imax_+1,this%cfg%jmin_:this%cfg%jmax_+1,this%cfg%kmin_:this%cfg%kmax_+1)) !< Y-face-centered
+      allocate(this%itpr_z(-1:0,this%cfg%imin_:this%cfg%imax_+1,this%cfg%jmin_:this%cfg%jmax_+1,this%cfg%kmin_:this%cfg%kmax_+1)) !< Z-face-centered
+      ! Create density interpolation coefficients to cell face
+      do k=this%cfg%kmin_,this%cfg%kmax_+1
+         do j=this%cfg%jmin_,this%cfg%jmax_+1
+            do i=this%cfg%imin_,this%cfg%imax_+1
                this%itpr_x(:,i,j,k)=this%cfg%dxmi(i)*[this%cfg%xm(i)-this%cfg%x(i),this%cfg%x(i)-this%cfg%xm(i-1)] !< Linear interpolation in x from [xm,ym,zm] to [x,ym,zm]
-            end do
-         end do
-      end do
-      ! Create density interpolation coefficients to cell face in y
-      do k=this%cfg%kmino_  ,this%cfg%kmaxo_
-         do j=this%cfg%jmino_+1,this%cfg%jmaxo_
-            do i=this%cfg%imino_  ,this%cfg%imaxo_
                this%itpr_y(:,i,j,k)=this%cfg%dymi(j)*[this%cfg%ym(j)-this%cfg%y(j),this%cfg%y(j)-this%cfg%ym(j-1)] !< Linear interpolation in y from [xm,ym,zm] to [xm,y,zm]
-            end do
-         end do
-      end do
-      ! Create density interpolation coefficients to cell face in z
-      do k=this%cfg%kmino_+1,this%cfg%kmaxo_
-         do j=this%cfg%jmino_  ,this%cfg%jmaxo_
-            do i=this%cfg%imino_  ,this%cfg%imaxo_
                this%itpr_z(:,i,j,k)=this%cfg%dzmi(k)*[this%cfg%zm(k)-this%cfg%z(k),this%cfg%z(k)-this%cfg%zm(k-1)] !< Linear interpolation in z from [xm,ym,zm] to [xm,ym,z]
             end do
          end do
@@ -557,9 +524,9 @@ contains
       ! or outflow condition (then the density needs to be available but it should be directly calculated)
       ! or used for a real no-slip wall (then density is always multiplied by zero)
       ! Adjust density interpolation coefficients to cell faces in the presence of walls (only walls!)
-      !do k=this%cfg%kmin_,this%cfg%kmax_+1 ! SIZES NEED TO BE ADJUSTED
-      !   do j=this%cfg%jmin_,this%cfg%jmax_+1 ! SIZES NEED TO BE ADJUSTED
-      !      do i=this%cfg%imin_,this%cfg%imax_+1 ! SIZES NEED TO BE ADJUSTED
+      !do k=this%cfg%kmin_,this%cfg%kmax_+1
+      !   do j=this%cfg%jmin_,this%cfg%jmax_+1
+      !      do i=this%cfg%imin_,this%cfg%imax_+1
       !         ! Linear interpolation in x
       !         if (this%cfg%VF(i,j,k).eq.0.0_WP.and.this%cfg%VF(i-1,j,k).gt.0.0_WP) this%itpr_x(:,i,j,k)=[1.0_WP,0.0_WP]
       !         if (this%cfg%VF(i,j,k).gt.0.0_WP.and.this%cfg%VF(i-1,j,k).eq.0.0_WP) this%itpr_x(:,i,j,k)=[0.0_WP,1.0_WP]
@@ -1200,34 +1167,17 @@ contains
       do k=this%cfg%kmin_,this%cfg%kmax_
          do j=this%cfg%jmin_,this%cfg%jmax_
             do i=this%cfg%imin_,this%cfg%imax_
-
                ! Zero out Laplacian
-               !this%psolv%opr(:,i,j,k)=0.0_WP
+               this%psolv%opr(:,i,j,k)=0.0_WP
                ! Tranverse the stencil and recompute Laplacian
-               !do s1=0,1
-               !   do s2=-1,0
-               !      this%psolv%opr(this%psolv%stmap(s1+s2,0,0),i,j,k)=this%psolv%opr(this%psolv%stmap(s1+s2,0,0),i,j,k)+this%divp_x(s1,i,j,k)*this%divu_x(s2,i+s1,j,k)/sum(this%itpr_x(:,i+s1,j,k)*this%rho(i+s1-1:i+s1,j,k))
-               !      this%psolv%opr(this%psolv%stmap(0,s1+s2,0),i,j,k)=this%psolv%opr(this%psolv%stmap(0,s1+s2,0),i,j,k)+this%divp_y(s1,i,j,k)*this%divv_y(s2,i,j+s1,k)/sum(this%itpr_y(:,i,j+s1,k)*this%rho(i,j+s1-1:j+s1,k))
-               !      this%psolv%opr(this%psolv%stmap(0,0,s1+s2),i,j,k)=this%psolv%opr(this%psolv%stmap(0,0,s1+s2),i,j,k)+this%divp_z(s1,i,j,k)*this%divw_z(s2,i,j,k+s1)/sum(this%itpr_z(:,i,j,k+s1)*this%rho(i,j,k+s1-1:k+s1))
-               !   end do
-               !end do
+               do s1=0,1
+                  do s2=-1,0
+                     this%psolv%opr(this%psolv%stmap(s1+s2,0,0),i,j,k)=this%psolv%opr(this%psolv%stmap(s1+s2,0,0),i,j,k)+this%divp_x(s1,i,j,k)*this%divu_x(s2,i+s1,j,k)/sum(this%itpr_x(:,i+s1,j,k)*this%rho(i+s1-1:i+s1,j,k))
+                     this%psolv%opr(this%psolv%stmap(0,s1+s2,0),i,j,k)=this%psolv%opr(this%psolv%stmap(0,s1+s2,0),i,j,k)+this%divp_y(s1,i,j,k)*this%divv_y(s2,i,j+s1,k)/sum(this%itpr_y(:,i,j+s1,k)*this%rho(i,j+s1-1:j+s1,k))
+                     this%psolv%opr(this%psolv%stmap(0,0,s1+s2),i,j,k)=this%psolv%opr(this%psolv%stmap(0,0,s1+s2),i,j,k)+this%divp_z(s1,i,j,k)*this%divw_z(s2,i,j,k+s1)/sum(this%itpr_z(:,i,j,k+s1)*this%rho(i,j,k+s1-1:k+s1))
+                  end do
+               end do
                ! Scale Laplacian by cell volume
-               !this%psolv%opr(:,i,j,k)=-this%psolv%opr(:,i,j,k)*this%cfg%vol(i,j,k)
-
-               ! Set Laplacian
-               this%psolv%opr(1,i,j,k)=this%divp_x(1,i,j,k)*this%divu_x(-1,i+1,j,k)/this%rho_U(i+1,j,k)+&
-               &                       this%divp_x(0,i,j,k)*this%divu_x( 0,i  ,j,k)/this%rho_U(i  ,j,k)+&
-               &                       this%divp_y(1,i,j,k)*this%divv_y(-1,i,j+1,k)/this%rho_V(i,j+1,k)+&
-               &                       this%divp_y(0,i,j,k)*this%divv_y( 0,i,j  ,k)/this%rho_V(i,j  ,k)+&
-               &                       this%divp_z(1,i,j,k)*this%divw_z(-1,i,j,k+1)/this%rho_W(i,j,k+1)+&
-               &                       this%divp_z(0,i,j,k)*this%divw_z( 0,i,j,k  )/this%rho_W(i,j,k  )
-               this%psolv%opr(2,i,j,k)=this%divp_x(1,i,j,k)*this%divu_x( 0,i+1,j,k)/this%rho_U(i+1,j,k)
-               this%psolv%opr(3,i,j,k)=this%divp_x(0,i,j,k)*this%divu_x(-1,i  ,j,k)/this%rho_U(i  ,j,k)
-               this%psolv%opr(4,i,j,k)=this%divp_y(1,i,j,k)*this%divv_y( 0,i,j+1,k)/this%rho_V(i,j+1,k)
-               this%psolv%opr(5,i,j,k)=this%divp_y(0,i,j,k)*this%divv_y(-1,i,j  ,k)/this%rho_V(i,j  ,k)
-               this%psolv%opr(6,i,j,k)=this%divp_z(1,i,j,k)*this%divw_z( 0,i,j,k+1)/this%rho_W(i,j,k+1)
-               this%psolv%opr(7,i,j,k)=this%divp_z(0,i,j,k)*this%divw_z(-1,i,j,k  )/this%rho_W(i,j,k  )
-               ! Scale it by the cell volume
                this%psolv%opr(:,i,j,k)=-this%psolv%opr(:,i,j,k)*this%cfg%vol(i,j,k)
             end do
          end do
@@ -1325,14 +1275,11 @@ contains
       do k=this%cfg%kmin_,this%cfg%kmax_
          do j=this%cfg%jmin_,this%cfg%jmax_
             do i=this%cfg%imin_,this%cfg%imax_
-               !do s1=0,1
-               !   div(i,j,k)=div(i,j,k)+dt*this%divp_x(s1,i,j,k)*this%DPjx(i+s1,j,k)/sum(this%itpr_x(:,i+s1,j,k)*this%rho(i+s1-1:i+s1,j,k))
-               !   div(i,j,k)=div(i,j,k)+dt*this%divp_y(s1,i,j,k)*this%DPjy(i,j+s1,k)/sum(this%itpr_y(:,i,j+s1,k)*this%rho(i,j+s1-1:j+s1,k))
-               !   div(i,j,k)=div(i,j,k)+dt*this%divp_z(s1,i,j,k)*this%DPjz(i,j,k+s1)/sum(this%itpr_z(:,i,j,k+s1)*this%rho(i,j,k+s1-1:k+s1))
-               !end do
-               div(i,j,k)=div(i,j,k)+dt*(sum(this%divp_x(:,i,j,k)*this%DPjx(i:i+1,j,k)/this%rho_U(i:i+1,j,k))&
-               &                        +sum(this%divp_y(:,i,j,k)*this%DPjy(i,j:j+1,k)/this%rho_V(i,j:j+1,k))&
-               &                        +sum(this%divp_z(:,i,j,k)*this%DPjz(i,j,k:k+1)/this%rho_W(i,j,k:k+1)))
+               do s1=0,1
+                  div(i,j,k)=div(i,j,k)+dt*this%divp_x(s1,i,j,k)*this%DPjx(i+s1,j,k)/sum(this%itpr_x(:,i+s1,j,k)*this%rho(i+s1-1:i+s1,j,k))
+                  div(i,j,k)=div(i,j,k)+dt*this%divp_y(s1,i,j,k)*this%DPjy(i,j+s1,k)/sum(this%itpr_y(:,i,j+s1,k)*this%rho(i,j+s1-1:j+s1,k))
+                  div(i,j,k)=div(i,j,k)+dt*this%divp_z(s1,i,j,k)*this%DPjz(i,j,k+s1)/sum(this%itpr_z(:,i,j,k+s1)*this%rho(i,j,k+s1-1:k+s1))
+               end do
             end do
          end do
       end do
@@ -1890,8 +1837,7 @@ contains
       real(WP) :: rhoUp,rhoUm,rhoVp,rhoVm,rhoWp,rhoWm
       
       ! Solve implicit U problem
-      !this%implicit%opr(1,:,:,:)=sum(this%itpr_x(:,i,j,k)*this%rho(i-1:i,j,k)); this%implicit%opr(2:,:,:,:)=0.0_WP
-      this%implicit%opr(1,:,:,:)=this%rho_U; this%implicit%opr(2:,:,:,:)=0.0_WP
+      this%implicit%opr(1,:,:,:)=sum(this%itpr_x(:,i,j,k)*this%rho(i-1:i,j,k)); this%implicit%opr(2:,:,:,:)=0.0_WP
       do k=this%cfg%kmin_,this%cfg%kmax_
          do j=this%cfg%jmin_,this%cfg%jmax_
             do i=this%cfg%imin_,this%cfg%imax_
@@ -1941,8 +1887,7 @@ contains
       resU=this%implicit%sol
       
       ! Solve implicit V problem
-      !this%implicit%opr(1,:,:,:)=sum(this%itpr_y(:,i,j,k)*this%rho(i,j-1:j,k)); this%implicit%opr(2:,:,:,:)=0.0_WP
-      this%implicit%opr(1,:,:,:)=this%rho_V; this%implicit%opr(2:,:,:,:)=0.0_WP
+      this%implicit%opr(1,:,:,:)=sum(this%itpr_y(:,i,j,k)*this%rho(i,j-1:j,k)); this%implicit%opr(2:,:,:,:)=0.0_WP
       do k=this%cfg%kmin_,this%cfg%kmax_
          do j=this%cfg%jmin_,this%cfg%jmax_
             do i=this%cfg%imin_,this%cfg%imax_
@@ -1992,8 +1937,7 @@ contains
       resV=this%implicit%sol
       
       ! Solve implicit W problem
-      !this%implicit%opr(1,:,:,:)=sum(this%itpr_z(:,i,j,k)*this%rho(i,j,k-1:k)); this%implicit%opr(2:,:,:,:)=0.0_WP
-      this%implicit%opr(1,:,:,:)=this%rho_W; this%implicit%opr(2:,:,:,:)=0.0_WP
+      this%implicit%opr(1,:,:,:)=sum(this%itpr_z(:,i,j,k)*this%rho(i,j,k-1:k)); this%implicit%opr(2:,:,:,:)=0.0_WP
       do k=this%cfg%kmin_,this%cfg%kmax_
          do j=this%cfg%jmin_,this%cfg%jmax_
             do i=this%cfg%imin_,this%cfg%imax_
@@ -2049,45 +1993,6 @@ contains
       
    end subroutine solve_implicit
    
-
-   !> Prepare staggered density arrays from rho
-   subroutine get_staggered_density(this)
-      use vfs_class, only: vfs
-      implicit none
-      class(tpns), intent(inout) :: this
-      integer :: i,j,k
-      ! Calculate rho_U/V/W using interpolation
-      do k=this%cfg%kmino_  ,this%cfg%kmaxo_
-         do j=this%cfg%jmino_  ,this%cfg%jmaxo_
-            do i=this%cfg%imino_+1,this%cfg%imaxo_
-               this%rho_U(i,j,k)=sum(this%itpr_x(:,i,j,k)*this%rho(i-1:i,j,k))
-            end do
-         end do
-      end do
-      do k=this%cfg%kmino_  ,this%cfg%kmaxo_
-         do j=this%cfg%jmino_+1,this%cfg%jmaxo_
-            do i=this%cfg%imino_  ,this%cfg%imaxo_
-               this%rho_V(i,j,k)=sum(this%itpr_y(:,i,j,k)*this%rho(i,j-1:j,k))
-            end do
-         end do
-      end do
-      do k=this%cfg%kmino_+1,this%cfg%kmaxo_
-         do j=this%cfg%jmino_  ,this%cfg%jmaxo_
-            do i=this%cfg%imino_  ,this%cfg%imaxo_
-               this%rho_W(i,j,k)=sum(this%itpr_z(:,i,j,k)*this%rho(i,j,k-1:k))
-            end do
-         end do
-      end do
-      ! Handle non-periodic borders
-      if (.not.this%cfg%xper.and.this%cfg%iproc.eq.1) this%rho_U(this%cfg%imino,:,:)=this%rho(this%cfg%imino,:,:)
-      if (.not.this%cfg%yper.and.this%cfg%jproc.eq.1) this%rho_V(:,this%cfg%jmino,:)=this%rho(:,this%cfg%jmino,:)
-      if (.not.this%cfg%zper.and.this%cfg%kproc.eq.1) this%rho_W(:,:,this%cfg%kmino)=this%rho(:,:,this%cfg%kmino)
-      ! Synchronize boundaries
-      call this%cfg%sync(this%rho_U)
-      call this%cfg%sync(this%rho_V)
-      call this%cfg%sync(this%rho_W)
-   end subroutine get_staggered_density
-
    
    !> Prepare viscosity arrays from vfs object
    subroutine get_viscosity(this,vf)
@@ -2147,12 +2052,9 @@ contains
       do k=this%cfg%kmin_,this%cfg%kmax_
          do j=this%cfg%jmin_,this%cfg%jmax_
             do i=this%cfg%imin_,this%cfg%imax_
-               !if (this%umask(i,j,k).eq.0) resU(i,j,k)=resU(i,j,k)+sum(this%itpr_x(:,i,j,k)*this%rho(i-1:i,j,k))*this%gravity(1)
-               !if (this%vmask(i,j,k).eq.0) resV(i,j,k)=resV(i,j,k)+sum(this%itpr_y(:,i,j,k)*this%rho(i,j-1:j,k))*this%gravity(2)
-               !if (this%wmask(i,j,k).eq.0) resW(i,j,k)=resW(i,j,k)+sum(this%itpr_z(:,i,j,k)*this%rho(i,j,k-1:k))*this%gravity(3)
-               if (this%umask(i,j,k).eq.0) resU(i,j,k)=resU(i,j,k)+this%rho_U(i,j,k)*this%gravity(1)
-               if (this%vmask(i,j,k).eq.0) resV(i,j,k)=resV(i,j,k)+this%rho_V(i,j,k)*this%gravity(2)
-               if (this%wmask(i,j,k).eq.0) resW(i,j,k)=resW(i,j,k)+this%rho_W(i,j,k)*this%gravity(3)
+               if (this%umask(i,j,k).eq.0) resU(i,j,k)=resU(i,j,k)+sum(this%itpr_x(:,i,j,k)*this%rho(i-1:i,j,k))*this%gravity(1)
+               if (this%vmask(i,j,k).eq.0) resV(i,j,k)=resV(i,j,k)+sum(this%itpr_y(:,i,j,k)*this%rho(i,j-1:j,k))*this%gravity(2)
+               if (this%wmask(i,j,k).eq.0) resW(i,j,k)=resW(i,j,k)+sum(this%itpr_z(:,i,j,k)*this%rho(i,j,k-1:k))*this%gravity(3)
             end do
          end do
       end do

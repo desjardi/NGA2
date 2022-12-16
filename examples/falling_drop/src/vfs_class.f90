@@ -759,6 +759,18 @@ contains
                      vol_now=calculateVolume(flux_polyhedron); ctr_now=calculateCentroid(flux_polyhedron)
                      call construct(this%face_flux(1,i,j,k),[crude_VF*vol_now,crude_VF*vol_now*ctr_now,(1.0_WP-crude_VF)*vol_now,(1.0_WP-crude_VF)*vol_now*ctr_now])
                   end if
+                  ! Store superficial liquid and gas fluxing velocities for momentum solver
+                  this%UFl(1,i,j,k)=getVolumePtr(this%face_flux(1,i,j,k),0)/(this%cfg%dy(j)*this%cfg%dz(k)*dt)
+                  this%UFg(1,i,j,k)=getVolumePtr(this%face_flux(1,i,j,k),1)/(this%cfg%dy(j)*this%cfg%dz(k)*dt)
+               else
+                  ! Simple superficial velocity
+                  if (maxval(this%band(i-1:i,j,k)).lt.0) then
+                     this%UFl(1,i,j,k)=0.0_WP
+                     this%UFg(1,i,j,k)=U(i,j,k)
+                  else if (minval(this%band(i-1:i,j,k)).gt.0) then
+                     this%UFl(1,i,j,k)=U(i,j,k)
+                     this%UFg(1,i,j,k)=0.0_WP
+                  end if
                end if
                
                ! Y flux
@@ -787,6 +799,18 @@ contains
                      ! Simpler flux calculation
                      vol_now=calculateVolume(flux_polyhedron); ctr_now=calculateCentroid(flux_polyhedron)
                      call construct(this%face_flux(2,i,j,k),[crude_VF*vol_now,crude_VF*vol_now*ctr_now,(1.0_WP-crude_VF)*vol_now,(1.0_WP-crude_VF)*vol_now*ctr_now])
+                  end if
+                  ! Store superficial liquid and gas fluxing velocities for momentum solver
+                  this%UFl(2,i,j,k)=getVolumePtr(this%face_flux(2,i,j,k),0)/(this%cfg%dz(k)*this%cfg%dx(i)*dt)
+                  this%UFg(2,i,j,k)=getVolumePtr(this%face_flux(2,i,j,k),1)/(this%cfg%dz(k)*this%cfg%dx(i)*dt)
+               else
+                  ! Simple superficial velocity
+                  if (maxval(this%band(i,j-1:j,k)).lt.0) then
+                     this%UFl(2,i,j,k)=0.0_WP
+                     this%UFg(2,i,j,k)=V(i,j,k)
+                  else if (minval(this%band(i,j-1:j,k)).gt.0) then
+                     this%UFl(2,i,j,k)=V(i,j,k)
+                     this%UFg(2,i,j,k)=0.0_WP
                   end if
                end if
                
@@ -817,15 +841,19 @@ contains
                      vol_now=calculateVolume(flux_polyhedron); ctr_now=calculateCentroid(flux_polyhedron)
                      call construct(this%face_flux(3,i,j,k),[crude_VF*vol_now,crude_VF*vol_now*ctr_now,(1.0_WP-crude_VF)*vol_now,(1.0_WP-crude_VF)*vol_now*ctr_now])
                   end if
+                  ! Store superficial liquid and gas fluxing velocities for momentum solver
+                  this%UFl(3,i,j,k)=getVolumePtr(this%face_flux(3,i,j,k),0)/(this%cfg%dx(i)*this%cfg%dy(j)*dt)
+                  this%UFg(3,i,j,k)=getVolumePtr(this%face_flux(3,i,j,k),1)/(this%cfg%dx(i)*this%cfg%dy(j)*dt)
+               else
+                  ! Simple superficial velocity
+                  if (maxval(this%band(i,j,k-1:k)).lt.0) then
+                     this%UFl(3,i,j,k)=0.0_WP
+                     this%UFg(3,i,j,k)=W(i,j,k)
+                  else if (minval(this%band(i,j,k-1:k)).gt.0) then
+                     this%UFl(3,i,j,k)=W(i,j,k)
+                     this%UFg(3,i,j,k)=0.0_WP
+                  end if
                end if
-               
-               ! Store superficial liquid and gas fluxing velocities for momentum solver
-               this%UFl(1,i,j,k)=getVolumePtr(this%face_flux(1,i,j,k),0)/(this%cfg%dy(j)*this%cfg%dz(k)*dt)
-               this%UFl(2,i,j,k)=getVolumePtr(this%face_flux(2,i,j,k),0)/(this%cfg%dz(k)*this%cfg%dx(i)*dt)
-               this%UFl(3,i,j,k)=getVolumePtr(this%face_flux(3,i,j,k),0)/(this%cfg%dx(i)*this%cfg%dy(j)*dt)
-               this%UFg(1,i,j,k)=getVolumePtr(this%face_flux(1,i,j,k),1)/(this%cfg%dy(j)*this%cfg%dz(k)*dt)
-               this%UFg(2,i,j,k)=getVolumePtr(this%face_flux(2,i,j,k),1)/(this%cfg%dz(k)*this%cfg%dx(i)*dt)
-               this%UFg(3,i,j,k)=getVolumePtr(this%face_flux(3,i,j,k),1)/(this%cfg%dx(i)*this%cfg%dy(j)*dt)
                
             end do
 

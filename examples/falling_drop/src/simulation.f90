@@ -136,8 +136,7 @@ contains
       
       ! Create a two-phase flow solver without bconds
       create_and_initialize_flow_solver: block
-         use ils_class, only: gmres_amg
-         use mathtools, only: Pi
+         use ils_class, only: gmres_amg,pcg_pfmg
          ! Create flow solver
          fs=tpns(cfg=cfg,name='Two-phase NS')
          ! Assign constant viscosity to each phase
@@ -148,8 +147,6 @@ contains
          call param_read('Gas density',fs%rho_g)
          ! Read in surface tension coefficient
          call param_read('Surface tension coefficient',fs%sigma)
-         call param_read('Static contact angle',fs%contact_angle)
-         fs%contact_angle=fs%contact_angle*Pi/180.0_WP
          ! Assign acceleration of gravity
          call param_read('Gravity',fs%gravity)
          ! Configure pressure solver
@@ -159,11 +156,12 @@ contains
          call param_read('Implicit iteration',fs%implicit%maxit)
          call param_read('Implicit tolerance',fs%implicit%rcvg)
          ! Setup the solver
-         call fs%setup(pressure_ils=gmres_amg,implicit_ils=gmres_amg)
+         fs%psolv%maxlevel=10
+         call fs%setup(pressure_ils=pcg_pfmg,implicit_ils=gmres_amg)
          ! Zero initial field
          fs%U=0.0_WP; fs%V=0.0_WP; fs%W=0.0_WP
          ! Initial density from VOF
-         fs%rho=fs%rho_l*vf%VF+fs%rho_g*(1.0_WP-vf%VF)
+         fs%rho=fs%rho_l*vf%VF+fs%rho_g*(1.0_WP-vf%VF); call fs%get_staggered_density()
          ! Calculate cell-centered velocities and divergence
          call fs%interp_vel(Ui,Vi,Wi)
          call fs%get_div()
@@ -179,7 +177,11 @@ contains
          call param_read('Ensight output period',ens_evt%tper)
          ! Add variables to output
          call ens_out%add_vector('velocity',Ui,Vi,Wi)
+         call ens_out%add_vector('momentum',fs%rhoU,fs%rhoV,fs%rhoW)
+         call ens_out%add_scalar('RHO',fs%rho)
          call ens_out%add_scalar('VOF',vf%VF)
+         call ens_out%add_scalar('div',fs%div)
+         call ens_out%add_scalar('pressure',fs%P)
          call ens_out%add_scalar('curvature',vf%curv)
          ! Output to ensight
          if (ens_evt%occurs()) call ens_out%write_data(time%t)
@@ -230,7 +232,6 @@ contains
    !> Perform an NGA2 simulation - this mimicks NGA's old time integration for multiphase
    subroutine simulation_run
       implicit none
-      integer :: i,j,k
       
       ! Perform time integration
       do while (.not.time%done())
@@ -245,6 +246,9 @@ contains
          
          ! Remember old velocity and density
          fs%rhoold=fs%rho
+         fs%rho_Uold=fs%rho_U
+         fs%rho_Vold=fs%rho_V
+         fs%rho_Wold=fs%rho_W
          fs%Uold=fs%U
          fs%Vold=fs%V
          fs%Wold=fs%W
@@ -259,11 +263,11 @@ contains
          call fs%get_viscosity(vf=vf)
          
          ! Transfer consistent density and mass fluxes to momentum solver
-         fs%rho=fs%rho_l*vf%VF+fs%rho_g*(1.0_WP-vf%VF)
+         fs%rho =fs%rho_l*vf%VF+fs%rho_g*(1.0_WP-vf%VF); call fs%get_staggered_density()
          fs%rhoU=fs%rho_l*vf%UFl(1,:,:,:)+fs%rho_g*vf%UFg(1,:,:,:)
          fs%rhoV=fs%rho_l*vf%UFl(2,:,:,:)+fs%rho_g*vf%UFg(2,:,:,:)
          fs%rhoW=fs%rho_l*vf%UFl(3,:,:,:)+fs%rho_g*vf%UFg(3,:,:,:)
-         
+
          ! Perform sub-iterations
          do while (time%it.le.time%itmax)
             
@@ -279,15 +283,9 @@ contains
             call fs%addsrc_gravity(resU,resV,resW)
             
             ! Assemble explicit residual
-            do k=fs%cfg%kmino_,fs%cfg%kmaxo_
-               do j=fs%cfg%jmino_,fs%cfg%jmaxo_
-                  do i=fs%cfg%imino_,fs%cfg%imaxo_
-                     resU(i,j,k)=-2.0_WP*sum(fs%itpr_x(:,i,j,k)*fs%rho(i-1:i,j,k))*fs%U(i,j,k)+sum(fs%itpr_x(:,i,j,k)*(fs%rhoold(i-1:i,j,k)+fs%rho(i-1:i,j,k)))*fs%Uold(i,j,k)+time%dt*resU(i,j,k)
-                     resV(i,j,k)=-2.0_WP*sum(fs%itpr_y(:,i,j,k)*fs%rho(i,j-1:j,k))*fs%V(i,j,k)+sum(fs%itpr_y(:,i,j,k)*(fs%rhoold(i,j-1:j,k)+fs%rho(i,j-1:j,k)))*fs%Vold(i,j,k)+time%dt*resV(i,j,k)
-                     resW(i,j,k)=-2.0_WP*sum(fs%itpr_z(:,i,j,k)*fs%rho(i,j,k-1:k))*fs%W(i,j,k)+sum(fs%itpr_z(:,i,j,k)*(fs%rhoold(i,j,k-1:k)+fs%rho(i,j,k-1:k)))*fs%Wold(i,j,k)+time%dt*resW(i,j,k)
-                  end do
-               end do
-            end do
+            resU=-2.0_WP*fs%rho_U*fs%U+(fs%rho_Uold+fs%rho_U)*fs%Uold+time%dt*resU
+            resV=-2.0_WP*fs%rho_V*fs%V+(fs%rho_Vold+fs%rho_V)*fs%Vold+time%dt*resV
+            resW=-2.0_WP*fs%rho_W*fs%W+(fs%rho_Wold+fs%rho_W)*fs%Wold+time%dt*resW
             
             ! Form implicit residuals
             call fs%solve_implicit(time%dt,resU,resV,resW)
@@ -313,15 +311,9 @@ contains
             ! Correct velocity
             call fs%get_pgrad(fs%psolv%sol,resU,resV,resW)
             fs%P=fs%P+fs%psolv%sol
-            do k=fs%cfg%kmino_,fs%cfg%kmaxo_
-               do j=fs%cfg%jmino_,fs%cfg%jmaxo_
-                  do i=fs%cfg%imino_,fs%cfg%imaxo_
-                     fs%U(i,j,k)=fs%U(i,j,k)-time%dt*resU(i,j,k)/sum(fs%itpr_x(:,i,j,k)*fs%rho(i-1:i,j,k))
-                     fs%V(i,j,k)=fs%V(i,j,k)-time%dt*resV(i,j,k)/sum(fs%itpr_y(:,i,j,k)*fs%rho(i,j-1:j,k))
-                     fs%W(i,j,k)=fs%W(i,j,k)-time%dt*resW(i,j,k)/sum(fs%itpr_z(:,i,j,k)*fs%rho(i,j,k-1:k))
-                  end do
-               end do
-            end do
+            fs%U=fs%U-time%dt*resU/fs%rho_U
+            fs%V=fs%V-time%dt*resV/fs%rho_V
+            fs%W=fs%W-time%dt*resW/fs%rho_W
             
             ! Increment sub-iteration counter
             time%it=time%it+1
