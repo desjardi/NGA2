@@ -169,6 +169,7 @@ contains
     allocate(self%np_proc(1:self%cfg%nproc)); self%np_proc=0
     self%np_=0; self%np=0
     call self%resize(0)
+    self%np_new=0; self%np_out=0
 
     ! Initialize MPI derived datatype for a particle
     call prepare_mpi_part()
@@ -444,7 +445,7 @@ contains
          rnv=dot_product(v1,n12)
          r_influ=min(2.0_WP*abs(rnv)*dt,0.2_WP*d1)
          delta_n=min(0.5_WP*d1+r_influ-d12,this%clip_col*0.5_WP*d1)
-
+         
          ! Assess if there is collision
          if (delta_n.gt.0.0_WP) then
             ! Normal collision
@@ -524,6 +525,7 @@ contains
 
   !> Advance the particle equations by a specified time step dt
   subroutine advance(this,dt,U,V,W,rho,visc)
+    use mpi_f08, only : MPI_SUM,MPI_INTEGER
     use mathtools, only: Pi
     implicit none
     class(lpt), intent(inout) :: this
@@ -533,7 +535,7 @@ contains
     real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: W     !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
     real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: rho   !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
     real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: visc  !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
-    integer :: i
+    integer :: i,ierr
     real(WP) :: mydt,dt_done,deng
     real(WP), dimension(3) :: acc,dmom
     type(part) :: pold
@@ -543,6 +545,9 @@ contains
     this%srcV=0.0_WP
     this%srcW=0.0_WP
     this%srcE=0.0_WP
+
+    ! Zero out number of particles removed
+    this%np_out=0
 
     ! Advance the equations
     do i=1,this%np_
@@ -583,10 +588,15 @@ contains
        if (this%p(i)%pos(3).lt.this%cfg%z(this%cfg%kmin).or.this%p(i)%pos(3).gt.this%cfg%z(this%cfg%kmax+1)) this%p(i)%flag=1
        ! Relocalize the particle
        this%p(i)%ind=this%cfg%get_ijk_global(this%p(i)%pos,this%p(i)%ind)
+       ! Count number of particles removed
+       if (this%p(i)%flag.eq.1) this%np_out=this%np_out+1
     end do
 
     ! Communicate particles
     call this%sync()
+
+    ! Sum up particles removed
+    call MPI_ALLREDUCE(this%np_out,i,1,MPI_INTEGER,MPI_SUM,this%cfg%comm,ierr); this%np_out=i
 
     ! Divide source arrays by volume, sum at boundaries, and volume filter
     this%srcU=this%srcU/this%cfg%vol; call this%cfg%syncsum(this%srcU); call this%filter(this%srcU)
@@ -827,6 +837,7 @@ contains
     
     ! Initial number of particles
     np0_=this%np_
+    this%np_new=0
 
     ! Get the particle mass that should be added to the system
     Mgoal  = this%mfr*dt+previous_error
@@ -947,6 +958,8 @@ contains
              buf = buf + this%rho*Pi/6.0_WP*this%p(i)%d**3
              ! Update the max particle id
              maxid = max(maxid,this%p(i)%id)
+             ! Increment counter
+             this%np_new=this%np_new+1
           end if
        end do
        ! Total mass added
@@ -961,6 +974,9 @@ contains
 
     ! Remember the error
     previous_error = Mgoal-Madded
+
+    ! Sum up injected particles
+    call MPI_ALLREDUCE(this%np_new,i,1,MPI_INTEGER,MPI_SUM,this%cfg%comm,ierr); this%np_new=i
 
     if (allocated(p2)) deallocate(p2)
 

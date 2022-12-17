@@ -45,7 +45,7 @@ contains
          end do
          
          ! General serial grid object
-         grid=sgrid(coord=cartesian,no=2,x=x,y=y,z=z,xper=.true.,yper=.true.,zper=.true.,name='Particles')
+         grid=sgrid(coord=cartesian,no=2,x=x,y=y,z=z,xper=.false.,yper=.false.,zper=.false.,name='Particles')
          
       end block create_grid
       
@@ -71,7 +71,7 @@ contains
          do k=cfg%kmino_,cfg%kmaxo_
             do j=cfg%jmino_,cfg%jmaxo_
                do i=cfg%imino_,cfg%imaxo_
-                  if (cfg%xm(i).gt.cfg%xL) cfg%VF(i,j,k)=0.0_WP
+                  if (i.ge.cfg%imax) cfg%VF(i,j,k)=0.0_WP
                end do
             end do
          end do

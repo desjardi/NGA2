@@ -146,6 +146,8 @@ contains
          call mfile%add_column(time%t,'Time')
          call mfile%add_column(time%dt,'Timestep size')
          call mfile%add_column(lp%np,'Particle number')
+         call mfile%add_column(lp%np_new,'Npart new')
+         call mfile%add_column(lp%np_out,'Npart removed')
          call mfile%add_column(lp%ncol,'Particle collisions')
          call mfile%add_column(lp%VFmean,'Mean VF')
          call mfile%add_column(lp%Umin,'Particle Umin')
