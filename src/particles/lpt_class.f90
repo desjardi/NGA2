@@ -427,7 +427,7 @@ contains
 
       ! Precompute ln(e_n) and Pi^2+ln(e_n)^2
       lne=log(this%e_n); pilne2=Pi**2+lne**2
-      lne_w=log(this%e_w); pilne2_w=Pi**2+lne**2
+      lne_w=log(this%e_w); pilne2_w=Pi**2+lne_w**2
 
       ! Loop over all local particles
       do i1=1,this%np_
@@ -449,8 +449,10 @@ contains
          ! Assess if there is collision
          if (delta_n.gt.0.0_WP) then
             ! Normal collision
-            k_n=m1/(this%Tcol**2*pilne2_w)
-            eta_n=-2.0_WP*lne_w*sqrt(m1*k_n)/pilne2_w
+            !k_n=m1/(this%Tcol**2*pilne2_w)
+            k_n=m1/this%Tcol**2*pilne2_w
+            !eta_n=-2.0_WP*lne_w*sqrt(m1*k_n)/pilne2_w
+            eta_n=-2.0_WP*lne_w*m1/this%Tcol
             f_n=-k_n*delta_n*n12-eta_n*rnv*n12
             ! Calculate collision force
             this%p(i1)%col=this%p(i1)%col+f_n/m1
@@ -494,8 +496,10 @@ contains
                      if (delta_n.gt.0.0_WP) then
                         ! Normal collision
                         m12=m1*m2/(m1+m2)
-                        k_n=m12/(this%Tcol**2*pilne2)
-                        eta_n=-2.0_WP*lne*sqrt(m12*k_n)/pilne2
+                        !k_n=m12/(this%Tcol**2*pilne2)
+                        k_n=m12/this%Tcol**2*pilne2
+                        !eta_n=-2.0_WP*lne*sqrt(m12*k_n)/pilne2
+                        eta_n=-2.0_WP*lne*m12/this%Tcol
                         f_n=-k_n*delta_n*n12-eta_n*rnv*n12
                         ! Calculate collision force
                         this%p(i1)%col=this%p(i1)%col+f_n/m1
