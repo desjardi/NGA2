@@ -192,6 +192,7 @@ contains
       lp%Tcol=5.0_WP*time%dt
       ! Set coefficient of restitution
       call param_read('Coefficient of restitution',lp%e_n)
+      call param_read('Wall restitution',lp%e_w,default=lp%e_n)
       ! Set gravity
       call param_read('Gravity',lp%gravity)
       if (lp%cfg%amRoot) then
