@@ -65,6 +65,9 @@ module lpt_class
      integer :: ng_                                      !< Local number of ghosts
      type(part), dimension(:), allocatable :: g          !< Array of ghosts of type part
 
+     ! CFL numbers
+     real(WP) :: CFLp_x,CFLp_y,CFLp_z,CFL_col            !< CFL numbers
+
      ! Particle density
      real(WP) :: rho                                     !< Density of particle
 
@@ -134,6 +137,7 @@ module lpt_class
      procedure :: read                                   !< Parallel read particles from file
      procedure :: write                                  !< Parallel write particles to file
      procedure :: get_max                                !< Extract various monitoring data
+     procedure :: get_cfl                                !< Calculate maximum CFL
      procedure :: update_VF                              !< Compute particle volume fraction
      procedure :: filter                                 !< Apply volume filtering to field
      procedure :: inject                                 !< Inject particles at a prescribed boundary
@@ -939,7 +943,7 @@ contains
                 np_tmp=np_tmp-1
              else
                 ! Localize the particle
-                this%p(count)%ind(1)=1; this%p(count)%ind(2)=1; this%p(count)%ind(3)=1
+                this%p(count)%ind(1)=this%cfg%imin; this%p(count)%ind(2)=this%cfg%jmin; this%p(count)%ind(3)=this%cfg%kmin
                 this%p(count)%ind=this%cfg%get_ijk_global(this%p(count)%pos,this%p(count)%ind)
                 ! Give it a velocity
                 this%p(count)%vel=this%inj_vel
@@ -1023,6 +1027,45 @@ contains
     end function get_position
 
   end subroutine inject
+  
+  
+  !> Calculate the CFL
+  subroutine get_cfl(this,dt,cfl)
+    use mpi_f08,  only: MPI_ALLREDUCE,MPI_MAX
+    use parallel, only: MPI_REAL_WP
+    implicit none
+    class(lpt), intent(inout) :: this
+    real(WP), intent(in)  :: dt
+    real(WP), intent(out) :: cfl
+    integer :: i,ierr
+    real(WP) :: my_CFLp_x,my_CFLp_y,my_CFLp_z,my_CFL_col
+
+    ! Set the CFLs to zero
+    my_CFLp_x=0.0_WP; my_CFLp_y=0.0_WP; my_CFLp_z=0.0_WP; my_CFL_col=0.0_WP
+    do i=1,this%np_
+       my_CFLp_x=max(my_CFLp_x,abs(this%p(i)%vel(1))*this%cfg%dxmi(this%p(i)%ind(1)))
+       my_CFLp_y=max(my_CFLp_y,abs(this%p(i)%vel(2))*this%cfg%dymi(this%p(i)%ind(2)))
+       my_CFLp_z=max(my_CFLp_z,abs(this%p(i)%vel(3))*this%cfg%dzmi(this%p(i)%ind(3)))
+       my_CFL_col=max(my_CFL_col,sqrt(sum(this%p(i)%vel**2))/this%p(i)%d)
+    end do
+    my_CFLp_x=my_CFLp_x*dt; my_CFLp_y=my_CFLp_y*dt; my_CFLp_z=my_CFLp_z*dt
+
+    ! Get the parallel max
+    call MPI_ALLREDUCE(my_CFLp_x,this%CFLp_x,1,MPI_REAL_WP,MPI_MAX,this%cfg%comm,ierr)
+    call MPI_ALLREDUCE(my_CFLp_y,this%CFLp_y,1,MPI_REAL_WP,MPI_MAX,this%cfg%comm,ierr)
+    call MPI_ALLREDUCE(my_CFLp_z,this%CFLp_z,1,MPI_REAL_WP,MPI_MAX,this%cfg%comm,ierr)
+
+    ! Return the maximum convective CFL
+    cfl=max(this%CFLp_x,this%CFLp_y,this%CFLp_z)
+    if (this%use_col) then
+       my_CFL_col=10.0_WP*my_CFL_col*dt
+       call MPI_ALLREDUCE(my_CFL_col,this%CFL_col,1,MPI_REAL_WP,MPI_MAX,this%cfg%comm,ierr)
+       cfl = max(cfl,this%CFL_col)
+    else
+       this%CFL_col=0.0_WP
+    end if
+
+  end subroutine get_cfl
 
 
   !> Extract various monitoring data from particle field
