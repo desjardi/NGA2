@@ -97,7 +97,7 @@ contains
          ! Get initial particle volume fraction
          call lp%update_VF()
          ! Set collision timescale
-         lp%Tcol=5.0_WP*time%dt
+         lp%tau_col=5.0_WP*time%dt
          lp%e_n=0.7_WP
          ! Set gravity
          call param_read('Gravity',lp%gravity)

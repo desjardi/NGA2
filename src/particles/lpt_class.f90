@@ -29,7 +29,9 @@ module lpt_class
      real(WP) :: d                        !< Particle diameter
      real(WP), dimension(3) :: pos        !< Particle center coordinates
      real(WP), dimension(3) :: vel        !< Velocity of particle
-     real(WP), dimension(3) :: col        !< Collision force
+     real(WP), dimension(3) :: angVel     !< Angular velocity of particle
+     real(WP), dimension(3) :: col        !< Normal collision force
+     real(WP), dimension(3) :: Tcol       !< Collision torque
      real(WP) :: T                        !< Temperature
      real(WP) :: dt                       !< Time step size for the particle
      !> MPI_INTEGER data
@@ -38,7 +40,7 @@ module lpt_class
   end type part
   !> Number of blocks, block length, and block types in a particle
   integer, parameter                         :: part_nblock=3
-  integer           , dimension(part_nblock) :: part_lblock=[1,12,4]
+  integer           , dimension(part_nblock) :: part_lblock=[1,18,4]
   type(MPI_Datatype), dimension(part_nblock) :: part_tblock=[MPI_INTEGER8,MPI_DOUBLE_PRECISION,MPI_INTEGER]
   !> MPI_PART derived datatype and size
   type(MPI_Datatype) :: MPI_PART
@@ -77,10 +79,11 @@ module lpt_class
      ! Solver parameters
      real(WP) :: nstep=1                                 !< Number of substeps (default=1)
      character(len=str_medium), public :: drag_model     !< Drag model
+     logical :: use_lift=.false.                         !< Compute lift force on particles
 
      ! Collisional parameters
      logical :: use_col=.true.                           !< Flag for collisions
-     real(WP) :: Tcol                                    !< Characteristic collision time scale
+     real(WP) :: tau_col                                 !< Characteristic collision time scale
      real(WP) :: e_n                                     !< Normal restitution coefficient
      real(WP) :: e_w                                     !< Wall restitution coefficient
      real(WP) :: mu_f                                    !< Friction coefficient
@@ -141,6 +144,7 @@ module lpt_class
      procedure :: update_VF                              !< Compute particle volume fraction
      procedure :: filter                                 !< Apply volume filtering to field
      procedure :: inject                                 !< Inject particles at a prescribed boundary
+     !procedure :: get_vorticity                          !< Calculate vorticity
   end type lpt
 
 
@@ -193,6 +197,9 @@ contains
 
     ! Set default drag
     self%drag_model='Schiller-Naumann'
+
+    ! Zero friction by default
+    self%mu_f=0.0_WP
 
     ! Allocate finite volume divergence operators
     allocate(self%div_x(0:+1,self%cfg%imin_:self%cfg%imax_,self%cfg%jmin_:self%cfg%jmax_,self%cfg%kmin_:self%cfg%kmax_)) !< Cell-centered
@@ -355,7 +362,7 @@ contains
 
 
   !> Resolve collisional interaction between particles
-  !> Requires Tcol, e_n, and e_w to be set beforehand
+  !> Requires tau_col, e_n, e_w and mu_f to be set beforehand
   subroutine collide(this,dt)
     implicit none
     class(lpt), intent(inout) :: this
@@ -368,6 +375,7 @@ contains
       integer :: i
       do i=1,this%np_
          this%p(i)%col=0.0_WP
+         this%p(i)%Tcol=0.0_WP
       end do
     end block zero_force
 
@@ -420,25 +428,31 @@ contains
     ! Finally, calculate collision force
     collision_force: block
       use mpi_f08
-      use mathtools, only: Pi,normalize
+      use mathtools, only: Pi,normalize,cross_product
       integer :: i1,i2,ii,jj,kk,nn,ierr
       real(WP) :: d1,m1,d2,m2,d12,m12
-      real(WP), dimension(3) :: r1,v1,r2,v2,v12,n12,f_n
-      real(WP) :: k_n,eta_n,lne,pilne2,lne_w,pilne2_w,rnv,r_influ,delta_n
+      real(WP), dimension(3) :: r1,v1,w1,r2,v2,w2,v12,n12,f_n,t12,f_t
+      real(WP) :: k_n,eta_n,k_coeff,eta_coeff,k_coeff_w,eta_coeff_w,rnv,r_influ,delta_n,rtv
+      real(WP), parameter :: aclipnorm=1.0e-6_WP
+      real(WP), parameter :: acliptan=1.0e-9_WP
+      real(WP), parameter :: rcliptan=0.05_WP
 
       ! Reset collision counter
       this%ncol=0
 
-      ! Precompute ln(e_n) and Pi^2+ln(e_n)^2
-      lne=log(this%e_n); pilne2=Pi**2+lne**2
-      lne_w=log(this%e_w); pilne2_w=Pi**2+lne_w**2
+      ! Precompute coefficients for k and eta
+      k_coeff=(Pi**2+log(this%e_n)**2)/this%tau_col**2
+      eta_coeff=-2.0_WP*log(this%e_n)/this%tau_col
+      k_coeff_w=(Pi**2+log(this%e_w)**2)/this%tau_col**2
+      eta_coeff_w=-2.0_WP*log(this%e_w)/this%tau_col
 
       ! Loop over all local particles
       do i1=1,this%np_
-
+         
          ! Store particle data
          r1=this%p(i1)%pos
          v1=this%p(i1)%vel
+         w1=this%p(i1)%angVel
          d1=this%p(i1)%d
          m1=this%rho*Pi/6.0_WP*d1**3
 
@@ -449,17 +463,30 @@ contains
          rnv=dot_product(v1,n12)
          r_influ=min(2.0_WP*abs(rnv)*dt,0.2_WP*d1)
          delta_n=min(0.5_WP*d1+r_influ-d12,this%clip_col*0.5_WP*d1)
-         
+
          ! Assess if there is collision
          if (delta_n.gt.0.0_WP) then
             ! Normal collision
-            !k_n=m1/(this%Tcol**2*pilne2_w)
-            k_n=m1/this%Tcol**2*pilne2_w
-            !eta_n=-2.0_WP*lne_w*sqrt(m1*k_n)/pilne2_w
-            eta_n=-2.0_WP*lne_w*m1/this%Tcol
+            k_n=m1*k_coeff_w
+            eta_n=m1*eta_coeff_w
             f_n=-k_n*delta_n*n12-eta_n*rnv*n12
+            ! Tangential collision
+            f_t=0.0_WP
+            if (this%mu_f.gt.0.0_WP) then
+               t12 = v1-rnv*n12+cross_product(0.5_WP*d1*w1,n12)
+               rtv = sqrt(sum(t12*t12))
+               if (rnv*dt/d1.gt.aclipnorm) then
+                  if (rtv/rnv.lt.rcliptan) rtv=0.0_WP
+               else
+                  if (rtv*dt/d1.lt.acliptan) rtv=0.0_WP
+               end if
+               if (rtv.gt.0.0_WP) f_t=-this%mu_f*sqrt(sum(f_n*f_n))*t12/rtv
+            end if
             ! Calculate collision force
-            this%p(i1)%col=this%p(i1)%col+f_n/m1
+            f_n=f_n/m1; f_t=f_t/m1
+            this%p(i1)%col=this%p(i1)%col+f_n+f_t
+            ! Calculate collision torque
+            this%p(i1)%Tcol=this%p(i1)%Tcol+cross_product(0.5_WP*d1*n12,f_t)
          end if
 
          ! Loop over nearest cells
@@ -477,12 +504,14 @@ contains
                      if (i2.gt.0) then
                         r2=this%p(i2)%pos
                         v2=this%p(i2)%vel
+                        w2=this%p(i2)%angVel
                         d2=this%p(i2)%d
                         m2=this%rho*Pi/6.0_WP*d2**3
                      else if (i2.lt.0) then
                         i2=-i2
                         r2=this%g(i2)%pos
                         v2=this%g(i2)%vel
+                        w2=this%g(i2)%angVel
                         d2=this%g(i2)%d
                         m2=this%rho*Pi/6.0_WP*d2**3
                      end if
@@ -500,13 +529,27 @@ contains
                      if (delta_n.gt.0.0_WP) then
                         ! Normal collision
                         m12=m1*m2/(m1+m2)
-                        !k_n=m12/(this%Tcol**2*pilne2)
-                        k_n=m12/this%Tcol**2*pilne2
-                        !eta_n=-2.0_WP*lne*sqrt(m12*k_n)/pilne2
-                        eta_n=-2.0_WP*lne*m12/this%Tcol
+                        k_n=m12*k_coeff
+                        eta_n=m12*eta_coeff
                         f_n=-k_n*delta_n*n12-eta_n*rnv*n12
+                        ! Tangential collision
+                        f_t=0.0_WP
+                        if (this%mu_f.gt.0.0_WP) then
+                           t12 = v12-rnv*n12+cross_product(0.5_WP*(d1*w1+d2*w2),n12)
+                           rtv = sqrt(sum(t12*t12))
+                           if (rnv*dt*2.0_WP/(d1+d2).gt.aclipnorm) then
+                              if (rtv/rnv.lt.rcliptan) rtv=0.0_WP
+                           else
+                              if (rtv*dt*2.0_WP/(d1+d2).lt.acliptan) rtv=0.0_WP
+                           end if
+                           if (rtv.gt.0.0_WP) f_t=-this%mu_f*sqrt(sum(f_n*f_n))*t12/rtv
+                        end if
                         ! Calculate collision force
-                        this%p(i1)%col=this%p(i1)%col+f_n/m1
+                        f_n=f_n/m1; f_t=f_t/m1
+                        this%p(i1)%col=this%p(i1)%col+f_n+f_t
+                        ! Calculate collision torque
+                        this%p(i1)%Tcol=this%p(i1)%Tcol+cross_product(0.5_WP*d1*n12,f_t)
+                        ! Add up the collisions
                         this%ncol=this%ncol+1
                      end if
 
@@ -543,9 +586,9 @@ contains
     real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: W     !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
     real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: rho   !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
     real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: visc  !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
-    integer :: i,ierr
-    real(WP) :: mydt,dt_done,deng
-    real(WP), dimension(3) :: acc,dmom
+    integer :: i,j,k,ierr
+    real(WP) :: mydt,dt_done,deng,Ip
+    real(WP), dimension(3) :: acc,torque,dmom
     type(part) :: pold
 
     ! Zero out source term arrays
@@ -557,6 +600,9 @@ contains
     ! Zero out number of particles removed
     this%np_out=0
 
+    ! Get fluid vorticity if needed
+    !if (this%use_torque) call get_vorticity(U,V,W,vort)
+
     ! Advance the equations
     do i=1,this%np_
        ! Time-integrate until dt_done=dt
@@ -566,12 +612,15 @@ contains
           mydt=min(this%p(i)%dt,dt-dt_done)
           ! Remember the particle
           pold=this%p(i)
+          ! Particle moment of inertia per unit mass
+          Ip = 0.1_WP*this%p(i)%d**2
           ! Advance with Euler prediction
-          call this%get_rhs(U=U,V=V,W=W,rho=rho,visc=visc,p=this%p(i),acc=acc,opt_dt=this%p(i)%dt)
+          call this%get_rhs(U=U,V=V,W=W,rho=rho,visc=visc,p=this%p(i),acc=acc,torque=torque,opt_dt=this%p(i)%dt)
           this%p(i)%pos=pold%pos+0.5_WP*mydt*this%p(i)%vel
           this%p(i)%vel=pold%vel+0.5_WP*mydt*(acc+this%gravity+this%p(i)%col)
+          this%p(i)%angVel=pold%angVel+0.5_WP*mydt*(torque+this%p(i)%Tcol)/Ip
           ! Correct with midpoint rule
-          call this%get_rhs(U=U,V=V,W=W,rho=rho,visc=visc,p=this%p(i),acc=acc,opt_dt=this%p(i)%dt)
+          call this%get_rhs(U=U,V=V,W=W,rho=rho,visc=visc,p=this%p(i),acc=acc,torque=torque,opt_dt=this%p(i)%dt)
           this%p(i)%pos=pold%pos+mydt*this%p(i)%vel
           this%p(i)%vel=pold%vel+mydt*(acc+this%gravity+this%p(i)%col)
           ! Relocalize
@@ -633,7 +682,7 @@ contains
 
 
   !> Calculate RHS of the particle ODEs
-  subroutine get_rhs(this,U,V,W,rho,visc,T,p,acc,opt_dt)
+  subroutine get_rhs(this,U,V,W,rho,visc,T,p,acc,torque,opt_dt)
     implicit none
     class(lpt), intent(inout) :: this
     real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: U     !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
@@ -643,58 +692,83 @@ contains
     real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: visc  !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
     real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout), optional :: T  !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
     type(part), intent(in) :: p
-    real(WP), dimension(3), intent(out) :: acc
+    real(WP), dimension(3), intent(out) :: acc,torque
     real(WP), intent(out) :: opt_dt
-    real(WP) :: corr,Re,tau
     real(WP) :: fvisc,frho,pVF,fVF,fT
-    real(WP), dimension(3) :: fvel
-    ! Interpolate the fluid phase velocity to the particle location
-    fvel=this%cfg%get_velocity(pos=p%pos,i0=p%ind(1),j0=p%ind(2),k0=p%ind(3),U=U,V=V,W=W)
-    ! Interpolate the fluid phase viscosity to the particle location
-    fvisc=this%cfg%get_scalar(pos=p%pos,i0=p%ind(1),j0=p%ind(2),k0=p%ind(3),S=visc,bc='n')
-    fvisc=fvisc+epsilon(1.0_WP)
-    ! Interpolate the fluid phase density to the particle location
-    frho=this%cfg%get_scalar(pos=p%pos,i0=p%ind(1),j0=p%ind(2),k0=p%ind(3),S=rho,bc='n')
-    ! Interpolate the particle volume fraction to the particle location
-    pVF=this%cfg%get_scalar(pos=p%pos,i0=p%ind(1),j0=p%ind(2),k0=p%ind(3),S=this%VF,bc='n')
-    fVF=1.0_WP-pVF
-    ! Interpolate the fluid temperature to the particle location if present
-    if (present(T)) fT=this%cfg%get_scalar(pos=p%pos,i0=p%ind(1),j0=p%ind(2),k0=p%ind(3),S=T,bc='n')
-    ! Particle Reynolds number
-    Re=frho*norm2(p%vel-fvel)*p%d/fvisc+epsilon(1.0_WP)
-    ! Drag correction
-    corr=drag_correction()
-    ! Particle response time
-    tau=this%rho*p%d**2/(18.0_WP*fvisc*corr)
-    ! Return acceleration and optimal timestep size
-    acc=(fvel-p%vel)/tau
-    opt_dt=tau/real(this%nstep,WP)
+    real(WP), dimension(3) :: fvel,fvort
 
-  contains
+    ! Interpolate fluid quantities to particle location
+    interpolate: block
+      ! Interpolate the fluid phase velocity to the particle location
+      fvel=this%cfg%get_velocity(pos=p%pos,i0=p%ind(1),j0=p%ind(2),k0=p%ind(3),U=U,V=V,W=W)
+      ! Interpolate the fluid phase viscosity to the particle location
+      fvisc=this%cfg%get_scalar(pos=p%pos,i0=p%ind(1),j0=p%ind(2),k0=p%ind(3),S=visc,bc='n')
+      fvisc=fvisc+epsilon(1.0_WP)
+      ! Interpolate the fluid phase density to the particle location
+      frho=this%cfg%get_scalar(pos=p%pos,i0=p%ind(1),j0=p%ind(2),k0=p%ind(3),S=rho,bc='n')
+      ! Interpolate the particle volume fraction to the particle location
+      pVF=this%cfg%get_scalar(pos=p%pos,i0=p%ind(1),j0=p%ind(2),k0=p%ind(3),S=this%VF,bc='n')
+      fVF=1.0_WP-pVF
+      ! Interpolate the fluid temperature to the particle location if present
+      if (present(T)) fT=this%cfg%get_scalar(pos=p%pos,i0=p%ind(1),j0=p%ind(2),k0=p%ind(3),S=T,bc='n')
+      ! Interpolate the fluid vorticity to the particle location if needed
+      if (this%use_lift) fvort=this%cfg%get_velocity(pos=p%pos,i0=p%ind(1),j0=p%ind(2),k0=p%ind(3),U=U,V=V,W=W)
+    end block interpolate
 
-    function drag_correction() result(F)
-      real(WP) :: F
-      real(WP) :: Ma,Kn,b1,b2
-
+    ! Compute acceleration due to drag
+    compute_drag: block
+      real(WP) :: Re,tau,corr,b1,b2
+      ! Particle Reynolds number
+      Re=frho*norm2(p%vel-fvel)*p%d/fvisc+epsilon(1.0_WP)
+      ! Drag correction
       select case(trim(this%drag_model))
       case('None','none')
-         F=epsilon(1.0_WP)
+         corr=epsilon(1.0_WP)
       case('Stokes')
-         F=1.0_WP
+         corr=1.0_WP
       case('Schiller-Naumann','Schiller Naumann','SN')
-         F=1.0_WP+0.15_WP*Re**(0.687_WP)
+         corr=1.0_WP+0.15_WP*Re**(0.687_WP)
       case('Tenneti')
          ! Tenneti and Subramaniam (2011)
          b1=5.81_WP*pVF/fVF**3+0.48_WP*pVF**(1.0_WP/3.0_WP)/fVF**4
          b2=pVF**3*Re*(0.95_WP+0.61_WP*pVF**3/fVF**2)
-         F=fVF*(1.0_WP+0.15_WP*Re**(0.687_WP)/fVF**3+b1+b2)           
+         corr=fVF*(1.0_WP+0.15_WP*Re**(0.687_WP)/fVF**3+b1+b2)           
       case('Khalloufi Capecelatro','KC')
-         F=0.0_WP
+         !> Todo
       case default
-         F=1.0_WP
+         corr=1.0_WP
       end select
+      ! Particle response time
+      tau=this%rho*p%d**2/(18.0_WP*fvisc*corr)
+      ! Return acceleration and optimal timestep size
+      acc=(fvel-p%vel)/tau
+      opt_dt=tau/real(this%nstep,WP)
+    end block compute_drag
 
-    end function drag_correction
+    ! Compute acceleration due to Saffman lift
+    compute_lift: block
+      use mathtools, only: Pi,cross_product
+      real(WP) :: omegag,Cl,Reg
+      if (this%use_lift) then
+         omegag=sqrt(sum(fvort**2))
+         if (omegag.gt.0.0_WP) then
+            Reg = p%d**2*omegag*frho/fvisc
+            Cl = 9.69_WP/Pi/p%d**2/this%rho*fvisc/omegag*sqrt(Reg)
+            acc=acc+Cl*cross_product(fvel-p%vel,fvort)
+         end if
+      end if
+    end block compute_lift
+
+    ! Compute fluid torque (assumed Stokes drag)
+    compute_torque: block
+      torque=0.0_WP!6.0_WP*fvisc*(0.5_WP*fvort-p%angVel)/this%rho
+    end block compute_torque
+
+    ! Compute heat transfer
+    compute_heat_transfer: block
+      !> Todo
+    end block compute_heat_transfer
+
   end subroutine get_rhs
 
 
@@ -824,6 +898,76 @@ contains
   end subroutine filter
 
 
+!!$  !> Calculate vorticity
+!!$   subroutine get_vorticity(this,U,V,W,vort)
+!!$      use messager, only: die
+!!$      implicit none
+!!$      class(lowmach), intent(inout) :: this
+!!$      real(WP), dimension   (this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in ) :: U     !< Needs to be     (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+!!$      real(WP), dimension   (this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in ) :: V     !< Needs to be     (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+!!$      real(WP), dimension   (this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in ) :: W     !< Needs to be     (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+!!$      real(WP), dimension(1:,this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(out) :: vort  !< Needs to be (1:3,imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+!!$      integer :: i,j,k
+!!$      real(WP) :: Uxm,Uxp,Uym,Uyp,Uzm,Uzp
+!!$      real(WP) :: Vxm,Vxp,Vym,Vyp,Vzm,Vzp
+!!$      real(WP) :: Wxm,Wxp,Wym,Wyp,Wzm,Wzp
+!!$      real(WP), dimension(3,3) :: dUdx
+!!$      
+!!$      ! Check vort's first dimension
+!!$      if (size(vort,dim=1).ne.3) call die('[lpt get_vorticity] vort should be of size (1:3,imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)')
+!!$      
+!!$      ! Calculate inside
+!!$      do k=this%cfg%kmin_,this%cfg%kmax_
+!!$         do j=this%cfg%jmin_,this%cfg%jmax_
+!!$            do i=this%cfg%imin_,this%cfg%imax_
+!!$               ! Rebuild face velocities from interpolated velocities
+!!$               Uxm=sum(this%itpi_x(:,i,j,k)*Ui(i-1:i,j,k)); Uxp=sum(this%itpi_x(:,i+1,j,k)*Ui(i:i+1,j,k)); Uym=sum(this%itpi_y(:,i,j,k)*Ui(i,j-1:j,k)); Uyp=sum(this%itpi_y(:,i,j+1,k)*Ui(i,j:j+1,k)); Uzm=sum(this%itpi_z(:,i,j,k)*Ui(i,j,k-1:k)); Uzp=sum(this%itpi_z(:,i,j,k+1)*Ui(i,j,k:k+1))
+!!$               Vxm=sum(this%itpi_x(:,i,j,k)*Vi(i-1:i,j,k)); Vxp=sum(this%itpi_x(:,i+1,j,k)*Vi(i:i+1,j,k)); Vym=sum(this%itpi_y(:,i,j,k)*Vi(i,j-1:j,k)); Vyp=sum(this%itpi_y(:,i,j+1,k)*Vi(i,j:j+1,k)); Vzm=sum(this%itpi_z(:,i,j,k)*Vi(i,j,k-1:k)); Vzp=sum(this%itpi_z(:,i,j,k+1)*Vi(i,j,k:k+1))
+!!$               Wxm=sum(this%itpi_x(:,i,j,k)*Wi(i-1:i,j,k)); Wxp=sum(this%itpi_x(:,i+1,j,k)*Wi(i:i+1,j,k)); Wym=sum(this%itpi_y(:,i,j,k)*Wi(i,j-1:j,k)); Wyp=sum(this%itpi_y(:,i,j+1,k)*Wi(i,j:j+1,k)); Wzm=sum(this%itpi_z(:,i,j,k)*Wi(i,j,k-1:k)); Wzp=sum(this%itpi_z(:,i,j,k+1)*Wi(i,j,k:k+1))
+!!$               ! Get velocity gradient tensor
+!!$               dUdx(1,1)=this%cfg%dxi(i)*(Uxp-Uxm); dUdx(1,2)=this%cfg%dyi(j)*(Uyp-Uym); dUdx(1,3)=this%cfg%dzi(k)*(Uzp-Uzm)
+!!$               dUdx(2,1)=this%cfg%dxi(i)*(Vxp-Vxm); dUdx(2,2)=this%cfg%dyi(j)*(Vyp-Vym); dUdx(2,3)=this%cfg%dzi(k)*(Vzp-Vzm)
+!!$               dUdx(3,1)=this%cfg%dxi(i)*(Wxp-Wxm); dUdx(3,2)=this%cfg%dyi(j)*(Wyp-Wym); dUdx(3,3)=this%cfg%dzi(k)*(Wzp-Wzm)
+!!$               ! Assemble the strain rate
+!!$               SR(1,i,j,k)=dUdx(1,1)-(dUdx(1,1)+dUdx(2,2)+dUdx(3,3))/3.0_WP
+!!$               SR(2,i,j,k)=dUdx(2,2)-(dUdx(1,1)+dUdx(2,2)+dUdx(3,3))/3.0_WP
+!!$               SR(3,i,j,k)=dUdx(3,3)-(dUdx(1,1)+dUdx(2,2)+dUdx(3,3))/3.0_WP
+!!$               SR(4,i,j,k)=0.5_WP*(dUdx(1,2)+dUdx(2,1))
+!!$               SR(5,i,j,k)=0.5_WP*(dUdx(2,3)+dUdx(3,2))
+!!$               SR(6,i,j,k)=0.5_WP*(dUdx(3,1)+dUdx(1,3))
+!!$            end do
+!!$         end do
+!!$      end do
+!!$      
+!!$      ! Apply a Neumann condition in non-periodic directions
+!!$      if (.not.this%cfg%xper) then
+!!$         if (this%cfg%iproc.eq.1)            SR(:,this%cfg%imin-1,:,:)=SR(:,this%cfg%imin,:,:)
+!!$         if (this%cfg%iproc.eq.this%cfg%npx) SR(:,this%cfg%imax+1,:,:)=SR(:,this%cfg%imax,:,:)
+!!$      end if
+!!$      if (.not.this%cfg%yper) then
+!!$         if (this%cfg%jproc.eq.1)            SR(:,:,this%cfg%jmin-1,:)=SR(:,:,this%cfg%jmin,:)
+!!$         if (this%cfg%jproc.eq.this%cfg%npy) SR(:,:,this%cfg%jmax+1,:)=SR(:,:,this%cfg%jmax,:)
+!!$      end if
+!!$      if (.not.this%cfg%zper) then
+!!$         if (this%cfg%kproc.eq.1)            SR(:,:,:,this%cfg%kmin-1)=SR(:,:,:,this%cfg%kmin)
+!!$         if (this%cfg%kproc.eq.this%cfg%npz) SR(:,:,:,this%cfg%kmax+1)=SR(:,:,:,this%cfg%kmax)
+!!$      end if
+!!$      
+!!$      ! Ensure zero in walls
+!!$      do k=this%cfg%kmino_,this%cfg%kmaxo_
+!!$         do j=this%cfg%jmino_,this%cfg%jmaxo_
+!!$            do i=this%cfg%imino_,this%cfg%imaxo_
+!!$               if (this%mask(i,j,k).eq.1) SR(:,i,j,k)=0.0_WP
+!!$            end do
+!!$         end do
+!!$      end do
+!!$      
+!!$      ! Sync it
+!!$      call this%cfg%sync(SR)
+!!$      
+!!$   end subroutine get_vorticity
+
+
   !> Inject particles from a prescribed location with given mass flowrate
   !> Requires injection parameters to be set beforehand
   subroutine inject(this,dt)
@@ -918,10 +1062,11 @@ contains
              ! Generate a diameter
              this%p(count)%d=get_diameter()
              ! Set various parameters for the particle
-             this%p(count)%id =maxid+int(np_tmp,8)
-             this%p(count)%dt =0.0_WP
-             this%p(count)%col=0.0_WP
-             this%p(count)%T  = this%inj_T
+             this%p(count)%id    =maxid+int(np_tmp,8)
+             this%p(count)%dt    =0.0_WP
+             this%p(count)%col   =0.0_WP
+             this%p(count)%T     =this%inj_T
+             this%p(count)%angVel=0.0_WP
              ! Give a position at the injector to the particle
              this%p(count)%pos=get_position(0.6_WP*this%p(count)%d)
              overlap=.false.

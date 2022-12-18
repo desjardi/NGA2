@@ -188,8 +188,8 @@ contains
       ! Get initial particle volume fraction
       call lp%update_VF()
       ! Set collision timescale
-      call param_read('Collision timescale',lp%Tcol,default=5.0_WP*time%dt)
-      lp%Tcol=5.0_WP*time%dt
+      call param_read('Collision timescale',lp%tau_col,default=5.0_WP*time%dt)
+      lp%tau_col=5.0_WP*time%dt
       ! Set coefficient of restitution
       call param_read('Coefficient of restitution',lp%e_n)
       call param_read('Wall restitution',lp%e_w,default=lp%e_n)

@@ -66,7 +66,7 @@ contains
       ! Get initial particle volume fraction
       call lp%update_VF()
       ! Set collision timescale
-      lp%Tcol=15.0_WP*time%dt
+      lp%tau_col=5.0_WP*time%dt
       ! Set coefficient of restitution
       call param_read('Coefficient of restitution',lp%e_n)
       call param_read('Wall restitution',lp%e_w)
@@ -110,13 +110,15 @@ contains
     ! Create partmesh object for Lagrangian particle output
     create_pmesh: block
       integer :: i
-      pmesh=partmesh(nvar=1,nvec=1,name='lpt')
+      pmesh=partmesh(nvar=1,nvec=2,name='lpt')
       pmesh%varname(1)='diameter'
       pmesh%vecname(1)='velocity'
+      pmesh%vecname(2)='ang_vel'
       call lp%update_partmesh(pmesh)
       do i=1,lp%np_
          pmesh%var(1,i)=lp%p(i)%d
          pmesh%vec(:,1,i)=lp%p(i)%vel
+         pmesh%vec(:,2,i)=lp%p(i)%angVel
       end do
     end block create_pmesh
 
@@ -204,6 +206,7 @@ contains
             do i=1,lp%np_
                pmesh%var(1,i)=lp%p(i)%d
                pmesh%vec(:,1,i)=lp%p(i)%vel
+               pmesh%vec(:,2,i)=lp%p(i)%angVel
             end do
           end block update_pmesh
           call ens_out%write_data(time%t)

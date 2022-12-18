@@ -90,7 +90,7 @@ contains
          ! Get initial particle volume fraction
          call lp%update_VF()
          ! Set collision timescale
-         lp%Tcol=5.0_WP*time%dt
+         lp%tau_col=5.0_WP*time%dt
       end block initialize_lpt
       
       
