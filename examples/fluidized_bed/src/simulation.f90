@@ -21,7 +21,6 @@ module simulation
   type(partmesh) :: pmesh
   type(ensight)  :: ens_out
   type(event)    :: ens_evt
-  integer, dimension(:,:,:), allocatable :: cpu_rank
 
   !> Simulation monitor file
   type(monitor) :: mfile,cflfile
@@ -31,7 +30,7 @@ module simulation
 
   !> Work arrays and fluid properties
   real(WP), dimension(:,:,:), allocatable :: resU,resV,resW
-  real(WP), dimension(:,:,:), allocatable :: Ui,Vi,Wi,dRHOdt
+  real(WP), dimension(:,:,:), allocatable :: Ui,Vi,Wi,rho0,dRHOdt
   real(WP) :: visc,rho,inlet_velocity
 
 contains
@@ -112,14 +111,8 @@ contains
       allocate(Ui      (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
       allocate(Vi      (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
       allocate(Wi      (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+      allocate(rho0    (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
     end block allocate_work_arrays
-
-
-    ! Store processor decomposition for visualization
-    store_cpu_rank: block
-      allocate(cpu_rank(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
-      cpu_rank=cfg%rank
-    end block store_cpu_rank
 
 
     ! Initialize our LPT solver
@@ -174,7 +167,8 @@ contains
             ! Give zero velocity
             lp%p(i)%vel=0.0_WP
             ! Give zero collision force
-            lp%p(i)%col=0.0_WP
+            lp%p(i)%Acol=0.0_WP
+            lp%p(i)%Tcol=0.0_WP
             ! Give zero dt
             lp%p(i)%dt=0.0_WP
             ! Locate the particle on the mesh
@@ -188,11 +182,11 @@ contains
       ! Get initial particle volume fraction
       call lp%update_VF()
       ! Set collision timescale
-      call param_read('Collision timescale',lp%tau_col,default=5.0_WP*time%dt)
-      lp%tau_col=5.0_WP*time%dt
+      call param_read('Collision timescale',lp%tau_col,default=15.0_WP*time%dt)
       ! Set coefficient of restitution
       call param_read('Coefficient of restitution',lp%e_n)
       call param_read('Wall restitution',lp%e_w,default=lp%e_n)
+      call param_read('Friction coefficient',lp%mu_f,default=0.0_WP)
       ! Set gravity
       call param_read('Gravity',lp%gravity)
       if (lp%cfg%amRoot) then
@@ -232,8 +226,9 @@ contains
          fs%rhoU(i,j,k)=inlet_velocity
          fs%U(i,j,k)   =inlet_velocity
       end do
-      ! Set density from particle volume fraction
+      ! Set density from particle volume fraction and store initial density
       fs%rho=rho*(1.0_WP-lp%VF)
+      rho0=rho
       ! Form momentum
       call fs%rho_multiply
       ! Apply all other boundary conditions
@@ -257,7 +252,6 @@ contains
       call ens_out%add_vector('velocity',Ui,Vi,Wi)
       call ens_out%add_scalar('epsp',lp%VF)
       call ens_out%add_scalar('pressure',fs%P)
-      call ens_out%add_scalar('CPU',cpu_rank)
       ! Output to ensight
       if (ens_evt%occurs()) call ens_out%write_data(time%t)
     end block create_ensight
@@ -333,10 +327,12 @@ contains
        fs%Vold=fs%V; fs%rhoVold=fs%rhoV
        fs%Wold=fs%W; fs%rhoWold=fs%rhoW
 
+       ! Get fluid stress
+       call fs%get_div_stress(resU,resV,resW)
+
        ! Collide and advance particles
        call lp%collide(dt=time%dtmid)
-       resU=rho
-       call lp%advance(dt=time%dtmid,U=fs%U,V=fs%V,W=fs%W,rho=resU,visc=fs%visc)
+       call lp%advance(dt=time%dtmid,U=fs%U,V=fs%V,W=fs%W,rho=rho0,visc=fs%visc,stress_x=resU,stress_y=resV,stress_z=resW)
 
        ! Update density based on particle volume fraction
        fs%rho=rho*(1.0_WP-lp%VF)

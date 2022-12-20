@@ -5,9 +5,9 @@ Partition :	1 2 2
 Lx : 0.007
 Ly : 0.01792
 Lz : 0.01792
-nx : 50
-ny : 128
-nz : 128
+nx : 70
+ny : 180
+nz : 180
 
 # Time integration
 Max timestep size :	1e-5
@@ -20,20 +20,20 @@ Density :   1
 
 # Particle parameters
 Particle mean diameter :        37.515e-6
-Particle standard deviation :   1.7894e-5
-Particle min diameter :         8.1e-6
+Particle standard deviation :   17.894e-6
+Particle min diameter :         10e-6
 Particle max diameter :         139.1e-6
 Particle diameter shift :       0
 Particle density :              2250
 
 # Particle collisions
-Coefficient of restitution :    0.85
+Coefficient of restitution :    0.5
 Wall restitution :              0.1
 Friction coefficient :          0.5
 
 # Particle injection
 Particle inject diameter:       0.00127
-Particle mass flow rate:        0.00001
+Particle mass flow rate:        0.00002
 Particle velocity:              0.18 0 0
 
 # Ensight output
