@@ -1352,8 +1352,6 @@ contains
       end do
       ! Sync it
       call this%cfg%sync(divz)
-
-      print *, minval(divx),maxval(divx), minval(divy),maxval(divy), minval(divz),maxval(divz)
       
       ! Deallocate flux arrays
       deallocate(FX,FY,FZ)

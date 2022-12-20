@@ -223,7 +223,7 @@ contains
       call fs%get_bcond('inflow',mybc)
       do n=1,mybc%itr%no_
          i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
-         fs%rhoU(i,j,k)=inlet_velocity
+         fs%rhoU(i,j,k)=rho*inlet_velocity
          fs%U(i,j,k)   =inlet_velocity
       end do
       ! Set density from particle volume fraction and store initial density
@@ -392,7 +392,7 @@ contains
             call fs%get_bcond('inflow',mybc)
             do n=1,mybc%itr%no_
                i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
-               fs%rhoU(i,j,k)=inlet_velocity
+               fs%rhoU(i,j,k)=rho*inlet_velocity
                fs%U(i,j,k)   =inlet_velocity
             end do
           end block dirichlet_velocity
