@@ -70,6 +70,7 @@ contains
       time=timetracker(amRoot=cfg%amRoot)
       call param_read('Max timestep size',time%dtmax)
       call param_read('Max time',time%tmax)
+      call param_read('Max cfl number',time%cflmax)
       time%dt=time%dtmax
       time%itmax=2
     end block initialize_timetracker
@@ -200,13 +201,17 @@ contains
     ! Create partmesh object for Lagrangian particle output
     create_pmesh: block
       integer :: i
-      pmesh=partmesh(nvar=1,nvec=1,name='lpt')
+      pmesh=partmesh(nvar=1,nvec=3,name='lpt')
       pmesh%varname(1)='diameter'
       pmesh%vecname(1)='velocity'
+      pmesh%vecname(2)='ang_vel'
+      pmesh%vecname(3)='Fcol'
       call lp%update_partmesh(pmesh)
       do i=1,lp%np_
          pmesh%var(1,i)=lp%p(i)%d
          pmesh%vec(:,1,i)=lp%p(i)%vel
+         pmesh%vec(:,2,i)=lp%p(i)%angVel
+         pmesh%vec(:,3,i)=lp%p(i)%Acol
       end do
     end block create_pmesh
 
@@ -260,6 +265,7 @@ contains
     create_monitor: block
       ! Prepare some info about fields
       call fs%get_cfl(time%dt,time%cfl)
+      call lp%get_cfl(time%dt,time%cfl)
       call fs%get_max()
       call lp%get_max()
       ! Create simulation monitor
@@ -286,6 +292,7 @@ contains
       call cflfile%add_column(fs%CFLv_x,'Viscous xCFL')
       call cflfile%add_column(fs%CFLv_y,'Viscous yCFL')
       call cflfile%add_column(fs%CFLv_z,'Viscous zCFL')
+      call cflfile%add_column(lp%CFL_col,'Collision CFL')
       call cflfile%write()
       ! Create LPT monitor
       lptfile=monitor(amroot=lp%cfg%amRoot,name='lpt')
@@ -318,6 +325,7 @@ contains
 
        ! Increment time
        call fs%get_cfl(time%dt,time%cfl)
+       call lp%get_cfl(time%dt,time%cfl)
        call time%adjust_dt()
        call time%increment()
 
@@ -430,6 +438,8 @@ contains
             do i=1,lp%np_
                pmesh%var(1,i)=lp%p(i)%d
                pmesh%vec(:,1,i)=lp%p(i)%vel
+               pmesh%vec(:,2,i)=lp%p(i)%angVel
+               pmesh%vec(:,3,i)=lp%p(i)%Acol
             end do
           end block update_pmesh
           call ens_out%write_data(time%t)
