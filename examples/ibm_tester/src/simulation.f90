@@ -136,7 +136,7 @@ contains
          ! Distribute marker particles
          do i=1,np
             ! Set various parameters for the marker
-            df%p(i)%id  =int(1,kind=8)
+            df%p(i)%id  =1
             df%p(i)%vel =0.0_WP
             ! Set position
             theta=real(i-1,WP)*twoPi/real(np,WP)

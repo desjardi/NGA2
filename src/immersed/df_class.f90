@@ -23,21 +23,20 @@ module df_class
 
   !> Basic marker particle definition
   type :: part
-     !> MPI_INTEGER8 data
-     integer(kind=8) :: id                !< Particle ID
      !> MPI_DOUBLE_PRECISION data
      real(WP) :: dA                       !< Element area
      real(WP), dimension(3) :: norm       !< Outward normal vector
      real(WP), dimension(3) :: pos        !< Particle center coordinates
      real(WP), dimension(3) :: vel        !< Velocity of particle
      !> MPI_INTEGER data
+     integer :: id                        !< ID the object is associated with
      integer , dimension(3) :: ind        !< Index of cell containing particle center
-     integer  :: flag                     !< Control parameter (0=normal, 1=done->will be removed)
+     integer :: flag                      !< Control parameter (0=normal, 1=done->will be removed)
   end type part
   !> Number of blocks, block length, and block types in a particle
-  integer, parameter                         :: part_nblock=3
-  integer           , dimension(part_nblock) :: part_lblock=[1,10,4]
-  type(MPI_Datatype), dimension(part_nblock) :: part_tblock=[MPI_INTEGER8,MPI_DOUBLE_PRECISION,MPI_INTEGER]
+  integer, parameter                         :: part_nblock=2
+  integer           , dimension(part_nblock) :: part_lblock=[10,5]
+  type(MPI_Datatype), dimension(part_nblock) :: part_tblock=[MPI_DOUBLE_PRECISION,MPI_INTEGER]
   !> MPI_PART derived datatype and size
   type(MPI_Datatype) :: MPI_PART
   integer :: MPI_PART_SIZE
@@ -179,7 +178,7 @@ contains
     ! Determine number of objects based on marker ID
     n=0
     do i=1,this%np_
-       n=max(n,int(this%p(i)%id))
+       n=max(n,this%p(i)%id)
     end do
     call MPI_ALLREDUCE(n,this%nobj,1,MPI_INTEGER,MPI_MAX,this%cfg%comm,ierr)
 
