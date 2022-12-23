@@ -10,6 +10,7 @@ module mathtools
    public :: cross_product
    public :: normalize
    public :: qrotate
+   public :: arctan
    
    ! Trigonometric parameters
    real(WP), parameter :: Pi   =3.1415926535897932385_WP
@@ -146,7 +147,25 @@ contains
       w(3)= 2.0_WP*(q(2)*q(4)-q(1)*q(3))        *v(1)+&
       &     2.0_WP*(q(3)*q(4)+q(1)*q(2))        *v(2)+&
       &    (2.0_WP*(q(1)*q(1)+q(4)*q(4))-1.0_WP)*v(3)
-   end function
+    end function qrotate
+
+    
+    ! Safe arctan
+    function arctan(dx,dy)
+      implicit none
+      real(WP), intent(in) :: dx,dy
+      real(WP) :: arctan
+      if (abs(dx)+abs(dy).lt.1.0e-9_WP) then
+         arctan = 0.0_WP
+      else
+         arctan = atan(dy/dx)
+      end if
+      if (dx.le.0.0_WP) then
+         arctan = Pi+arctan
+      elseif (dy.le.0.0_WP .and. dx.gt.0.0_WP) then
+         arctan = twoPi+arctan
+      end if
+  end function arctan
    
    
 end module mathtools
