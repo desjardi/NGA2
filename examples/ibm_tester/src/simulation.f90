@@ -119,8 +119,8 @@ contains
 
     ! Initialize our direct forcing solver
     initialize_df: block
-      use mathtools, only: twoPi
-      integer :: i,np
+      use mathtools, only: twoPi,arctan
+      integer :: i,j,k,np
       real(WP) :: Dcyl,Xcyl,amp,freq,theta,r
       ! Create solver
       df=dfibm(cfg=cfg,name='IBM')
@@ -163,6 +163,18 @@ contains
 
       ! All processes initialize IBM objects
       call df%setup_obj()
+
+      ! Define levelset (only used for visualization)
+      do k=df%cfg%kmin_,df%cfg%kmax_
+         do j=df%cfg%jmin_,df%cfg%jmax_
+            do i=df%cfg%imin_,df%cfg%imax_
+               theta=arctan(df%cfg%xm(i),df%cfg%ym(j))
+               r=0.5_WP*Dcyl+amp*sin(freq*theta)
+               df%levelset(i,j,k)=sqrt((df%cfg%xm(i)-Xcyl)**2+df%cfg%ym(j)**2)-r
+            end do
+         end do
+      end do
+      call df%cfg%sync(df%levelset)
 
       if (df%cfg%amRoot) then
          print*,"===== Direct Forcing Setup Description ====="
@@ -219,9 +231,10 @@ contains
       ens_evt=event(time=time,name='Ensight output')
       call param_read('Ensight output period',ens_evt%tper)
       ! Add variables to output
-      call ens_out%add_particle('particles',pmesh)
+      call ens_out%add_particle('markers',pmesh)
       call ens_out%add_vector('velocity',Ui,Vi,Wi)
       call ens_out%add_scalar('VF',df%VF)
+      call ens_out%add_scalar('levelset',df%levelset)
       call ens_out%add_scalar('pressure',fs%P)
       ! Output to ensight
       if (ens_evt%occurs()) call ens_out%write_data(time%t)
@@ -264,13 +277,16 @@ contains
       call ibmfile%add_column(time%t,'Time')
       call ibmfile%add_column(df%VFmin,'VF min')
       call ibmfile%add_column(df%VFmax,'VF max')
-      call ibmfile%add_column(df%np,'Particle number')
-      call ibmfile%add_column(df%Umin,'Particle Umin')
-      call ibmfile%add_column(df%Umax,'Particle Umax')
-      call ibmfile%add_column(df%Vmin,'Particle Vmin')
-      call ibmfile%add_column(df%Vmax,'Particle Vmax')
-      call ibmfile%add_column(df%Wmin,'Particle Wmin')
-      call ibmfile%add_column(df%Wmax,'Particle Wmax')
+      call ibmfile%add_column(df%Fx,'Fx')
+      call ibmfile%add_column(df%Fy,'Fy')
+      call ibmfile%add_column(df%Fz,'Fz')
+      call ibmfile%add_column(df%np,'Marker number')
+      call ibmfile%add_column(df%Umin,'Marker Umin')
+      call ibmfile%add_column(df%Umax,'Marker Umax')
+      call ibmfile%add_column(df%Vmin,'Marker Vmin')
+      call ibmfile%add_column(df%Vmax,'Marker Vmax')
+      call ibmfile%add_column(df%Wmin,'Marker Wmin')
+      call ibmfile%add_column(df%Wmax,'Marker Wmax')
       call ibmfile%write()
     end block create_monitor
 
@@ -322,7 +338,8 @@ contains
           ! Add momentum source term from direct forcing
           ibm_correction: block
             integer :: i,j,k
-            call df%get_source(dt=time%dt,U=fs%U,V=fs%V,W=fs%W)
+            resU=fs%rho
+            call df%get_source(dt=time%dt,U=fs%U,V=fs%V,W=fs%W,rho=resU)
             do k=fs%cfg%kmin_,fs%cfg%kmax_
                do j=fs%cfg%jmin_,fs%cfg%jmax_
                   do i=fs%cfg%imin_,fs%cfg%imax_

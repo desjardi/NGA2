@@ -81,6 +81,7 @@ module df_class
      real(WP) :: Umin,Umax,Umean                    !< U velocity info
      real(WP) :: Vmin,Vmax,Vmean                    !< V velocity info
      real(WP) :: Wmin,Wmax,Wmean                    !< W velocity info
+     real(WP) :: Fx,Fy,Fz                           !< Total force
 
      ! Volume fraction associated with IBM projection
      real(WP), dimension(:,:,:), allocatable :: VF       !< Volume fraction, cell-centered
@@ -175,14 +176,12 @@ contains
     implicit none
     class(dfibm), intent(inout) :: this
     integer :: i,n,ibuf,ierr
-
     ! Determine number of objects based on marker ID
-    n=0
+    n=1
     do i=1,this%np_
        n=max(n,this%p(i)%id)
     end do
     call MPI_ALLREDUCE(n,this%nobj,1,MPI_INTEGER,MPI_MAX,this%cfg%comm,ierr)
-
     ! Allocate and zero out the object array
     allocate(this%o(1:this%nobj))
     do i=1,this%nobj
@@ -191,22 +190,23 @@ contains
        this%o(i)%angVel=0.0_WP
        this%o(i)%F=0.0_WP
     end do
-
   end subroutine setup_obj
   
-
+  
   !> Compute direct forcing source by a specified time step dt
-  subroutine get_source(this,dt,U,V,W)
-    use mpi_f08, only : MPI_SUM,MPI_INTEGER
+  subroutine get_source(this,dt,U,V,W,rho)
+    use mpi_f08,  only: MPI_SUM,MPI_ALLREDUCE
+    use parallel, only: MPI_REAL_WP
     use mathtools, only: Pi
     implicit none
     class(dfibm), intent(inout) :: this
     real(WP), intent(inout) :: dt  !< Timestep size over which to advance
-    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: U         !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
-    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: V         !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
-    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: W         !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in) :: U         !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in) :: V         !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in) :: W         !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in) :: rho       !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
     integer :: i,j,k,ierr
-    real(WP) :: dV
+    real(WP) :: dti,rho_,dV
     real(WP), dimension(3) :: vel,src
 
     ! Zero out source term arrays
@@ -220,15 +220,18 @@ contains
     end do
 
     ! Advance the equations
+    dti=1.0_WP/dt
     do i=1,this%np_
        ! Interpolate the velocity to the particle location
        vel=0.0_WP
-       if (this%cfg%nx.gt.1) call this%interpolate(A=U,xp=this%p(i)%pos(1),yp=this%p(i)%pos(2),zp=this%p(i)%pos(3),&
-            ip=this%p(i)%ind(1),jp=this%p(i)%ind(2),kp=this%p(i)%ind(3),Ap=vel(1),dir='U')
-       if (this%cfg%ny.gt.1) call this%interpolate(A=V,xp=this%p(i)%pos(1),yp=this%p(i)%pos(2),zp=this%p(i)%pos(3),&
-            ip=this%p(i)%ind(1),jp=this%p(i)%ind(2),kp=this%p(i)%ind(3),Ap=vel(2),dir='V')
-       if (this%cfg%nz.gt.1) call this%interpolate(A=W,xp=this%p(i)%pos(1),yp=this%p(i)%pos(2),zp=this%p(i)%pos(3),&
-            ip=this%p(i)%ind(1),jp=this%p(i)%ind(2),kp=this%p(i)%ind(3),Ap=vel(3),dir='W')
+       if (this%cfg%nx.gt.1) vel(1)=this%interpolate(A=U,xp=this%p(i)%pos(1),yp=this%p(i)%pos(2),zp=this%p(i)%pos(3),&
+            ip=this%p(i)%ind(1),jp=this%p(i)%ind(2),kp=this%p(i)%ind(3),dir='U')
+       if (this%cfg%ny.gt.1) vel(2)=this%interpolate(A=V,xp=this%p(i)%pos(1),yp=this%p(i)%pos(2),zp=this%p(i)%pos(3),&
+            ip=this%p(i)%ind(1),jp=this%p(i)%ind(2),kp=this%p(i)%ind(3),dir='V')
+       if (this%cfg%nz.gt.1) vel(3)=this%interpolate(A=W,xp=this%p(i)%pos(1),yp=this%p(i)%pos(2),zp=this%p(i)%pos(3),&
+            ip=this%p(i)%ind(1),jp=this%p(i)%ind(2),kp=this%p(i)%ind(3),dir='W')
+       rho_=this%interpolate(A=rho,xp=this%p(i)%pos(1),yp=this%p(i)%pos(2),zp=this%p(i)%pos(3),&
+            ip=this%p(i)%ind(1),jp=this%p(i)%ind(2),kp=this%p(i)%ind(3),dir='SC')
        ! Compute the source term
        src=(this%p(i)%vel-vel)
        ! Get element volume
@@ -237,18 +240,26 @@ contains
             (this%cfg%dym(this%p(i)%ind(2))*this%p(i)%norm(2))**2 + &
             (this%cfg%dzm(this%p(i)%ind(3))*this%p(i)%norm(3))**2 )
        ! Send source term back to the mesh
-       if (this%cfg%nx.gt.1) call this%extrapolate(A=this%srcU,xp=this%p(i)%pos(1),yp=this%p(i)%pos(2),zp=this%p(i)%pos(3),&
-            ip=this%p(i)%ind(1),jp=this%p(i)%ind(2),kp=this%p(i)%ind(3),Ap=src(1)*dV,dir='U')
-       if (this%cfg%ny.gt.1) call this%extrapolate(A=this%srcV,xp=this%p(i)%pos(1),yp=this%p(i)%pos(2),zp=this%p(i)%pos(3),&
-            ip=this%p(i)%ind(1),jp=this%p(i)%ind(2),kp=this%p(i)%ind(3),Ap=src(2)*dV,dir='V')
-       if (this%cfg%nz.gt.1) call this%extrapolate(A=this%srcW,xp=this%p(i)%pos(1),yp=this%p(i)%pos(2),zp=this%p(i)%pos(3),&
-            ip=this%p(i)%ind(1),jp=this%p(i)%ind(2),kp=this%p(i)%ind(3),Ap=src(3)*dV,dir='W')
+       if (this%cfg%nx.gt.1) call this%extrapolate(Ap=src(1)*dV,xp=this%p(i)%pos(1),yp=this%p(i)%pos(2),zp=this%p(i)%pos(3),&
+            ip=this%p(i)%ind(1),jp=this%p(i)%ind(2),kp=this%p(i)%ind(3),A=this%srcU,dir='U')
+       if (this%cfg%ny.gt.1) call this%extrapolate(Ap=src(2)*dV,xp=this%p(i)%pos(1),yp=this%p(i)%pos(2),zp=this%p(i)%pos(3),&
+            ip=this%p(i)%ind(1),jp=this%p(i)%ind(2),kp=this%p(i)%ind(3),A=this%srcV,dir='V')
+       if (this%cfg%nz.gt.1) call this%extrapolate(Ap=src(3)*dV,xp=this%p(i)%pos(1),yp=this%p(i)%pos(2),zp=this%p(i)%pos(3),&
+            ip=this%p(i)%ind(1),jp=this%p(i)%ind(2),kp=this%p(i)%ind(3),A=this%srcW,dir='W')
+       ! Sum up force on object (Newton's 3rd law)
+       j=max(this%p(i)%id,1)
+       this%o(j)%F=this%o(j)%F-rho_*src*dV*dti
     end do
 
     ! Sum at boundaries
     call this%cfg%syncsum(this%srcU)
     call this%cfg%syncsum(this%srcV)
     call this%cfg%syncsum(this%srcW)
+
+    ! Sum over each object
+    do j=1,this%nobj
+       call MPI_ALLREDUCE(this%o(j)%F,src,3,MPI_REAL_WP,MPI_SUM,this%cfg%comm,ierr); this%o(j)%F=src
+    end do
 
     ! Recompute volume fraction
     call this%update_VF()
@@ -289,8 +300,8 @@ contains
             (this%cfg%dym(this%p(i)%ind(2))*this%p(i)%norm(2))**2 + &
             (this%cfg%dzm(this%p(i)%ind(3))*this%p(i)%norm(3))**2 )
        ! Transfer volume to mesh
-       call this%extrapolate(A=this%VF,xp=this%p(i)%pos(1),yp=this%p(i)%pos(2),zp=this%p(i)%pos(3),&
-            ip=this%p(i)%ind(1),jp=this%p(i)%ind(2),kp=this%p(i)%ind(3),Ap=dV,dir='SC')
+       call this%extrapolate(Ap=dV,xp=this%p(i)%pos(1),yp=this%p(i)%pos(2),zp=this%p(i)%pos(3),&
+            ip=this%p(i)%ind(1),jp=this%p(i)%ind(2),kp=this%p(i)%ind(3),A=this%VF,dir='SC')
     end do
     ! Sum at boundaries
     call this%cfg%syncsum(this%VF)
@@ -303,7 +314,7 @@ contains
     class(dfibm), intent(inout) :: this
     real(WP), intent(out) :: delta   !< Return delta function
     integer, intent(in) :: ic,jc,kc  !< Cell index
-    real(WP), intent(in) :: xp,yp,zp !< Position of marker particle
+    real(WP), intent(in) :: xp,yp,zp !< Position of marker 
     character(len=*) :: dir
     real(WP) :: deltax,deltay,deltaz,r
 
@@ -357,23 +368,21 @@ contains
 
 
   !> Interpolation routine
-  subroutine interpolate(this,A,xp,yp,zp,ip,jp,kp,Ap,dir)
+  function interpolate(this,A,xp,yp,zp,ip,jp,kp,dir) result(Ap)
     implicit none
     class(dfibm), intent(inout) :: this
     real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in) :: A         !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
     real(WP), intent(in) :: xp,yp,zp
     integer, intent(in) :: ip,jp,kp
-    real(WP), intent(out) :: Ap
     character(len=*) :: dir
+    real(WP) :: Ap
     integer :: di,dj,dk
     integer :: i1,i2,j1,j2,k1,k2
     real(WP), dimension(-2:+2,-2:+2,-2:+2) :: delta
-
     ! Get the interpolation points
     i1=ip-2; i2=ip+2
     j1=jp-2; j2=jp+2
     k1=kp-2; k2=kp+2
-
     ! Loop over neighboring cells and compute regularized delta function
     do dk=-2,+2
        do dj=-2,+2
@@ -382,26 +391,23 @@ contains
           end do
        end do
     end do
-
     ! Perform the actual interpolation on Ap
     Ap = sum(delta*A(i1:i2,j1:j2,k1:k2))*this%cfg%vol(ip,jp,kp)
-
-  end subroutine interpolate
+  end function interpolate
   
 
   !> Extrapolation routine
-  subroutine extrapolate(this,A,xp,yp,zp,ip,jp,kp,Ap,dir)
+  subroutine extrapolate(this,Ap,xp,yp,zp,ip,jp,kp,A,dir)
      use messager, only: die
     implicit none
     class(dfibm), intent(inout) :: this
-    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(out) :: A         !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:) :: A         !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
     real(WP), intent(in) :: xp,yp,zp
     integer, intent(in) :: ip,jp,kp
     real(WP), intent(in) :: Ap
     character(len=*) :: dir
     real(WP), dimension(-2:+2,-2:+2,-2:+2) :: delta
     integer  :: di,dj,dk
-
     ! If particle has left processor domain or reached last ghost cell, kill job
     if ( ip.lt.this%cfg%imin_-1.or.ip.gt.this%cfg%imax_+1.or.&
          jp.lt.this%cfg%jmin_-1.or.jp.gt.this%cfg%jmax_+1.or.&
@@ -409,7 +415,6 @@ contains
        write(*,*) ip,jp,kp,xp,yp,zp
        call die('[df extrapolate] Particle has left the domain')
     end if
-
     ! Loop over neighboring cells and compute regularized delta function
     do dk=-2,+2
        do dj=-2,+2
@@ -418,10 +423,8 @@ contains
           end do
        end do
     end do
-
     ! Perform the actual extrapolation on A
     A(ip-2:ip+2,jp-2:jp+2,kp-2:kp+2)=A(ip-2:ip+2,jp-2:jp+2,kp-2:kp+2)+delta*Ap
-
   end subroutine extrapolate
   
 
@@ -493,22 +496,29 @@ contains
     call MPI_ALLREDUCE(this%Wmax ,buf,1,MPI_REAL_WP,MPI_MAX,this%cfg%comm,ierr); this%Wmax =buf
     call MPI_ALLREDUCE(this%Wmean,buf,1,MPI_REAL_WP,MPI_SUM,this%cfg%comm,ierr); this%Wmean=buf/safe_np
 
-    ! Get mean, max, and min volume fraction
+    ! Get mean, max, and min volume fraction and total force
     this%VFmean=0.0_WP
     this%VFmax =-huge(1.0_WP)
     this%VFmin =+huge(1.0_WP)
+    this%Fx=0.0_WP; this%Fy=0.0_WP; this%Fz=0.0_WP
     do k=this%cfg%kmin_,this%cfg%kmax_
        do j=this%cfg%jmin_,this%cfg%jmax_
           do i=this%cfg%imin_,this%cfg%imax_
              this%VFmean=this%VFmean+this%cfg%VF(i,j,k)*this%cfg%vol(i,j,k)*this%VF(i,j,k)
              this%VFmax =max(this%VFmax,this%VF(i,j,k))
              this%VFmin =min(this%VFmin,this%VF(i,j,k))
+             this%Fx=this%Fx+sum(this%o(:)%F(1))*this%cfg%vol(i,j,k)
+             this%Fy=this%Fy+sum(this%o(:)%F(2))*this%cfg%vol(i,j,k)
+             this%Fz=this%Fz+sum(this%o(:)%F(3))*this%cfg%vol(i,j,k)
           end do
        end do
     end do
     call MPI_ALLREDUCE(this%VFmean,buf,1,MPI_REAL_WP,MPI_SUM,this%cfg%comm,ierr); this%VFmean=buf/this%cfg%vol_total
     call MPI_ALLREDUCE(this%VFmax ,buf,1,MPI_REAL_WP,MPI_MAX,this%cfg%comm,ierr); this%VFmax =buf
     call MPI_ALLREDUCE(this%VFmin ,buf,1,MPI_REAL_WP,MPI_MIN,this%cfg%comm,ierr); this%VFmin =buf
+    call MPI_ALLREDUCE(this%Fx    ,buf,1,MPI_REAL_WP,MPI_SUM,this%cfg%comm,ierr); this%Fx=buf/this%cfg%vol_total
+    call MPI_ALLREDUCE(this%Fy    ,buf,1,MPI_REAL_WP,MPI_SUM,this%cfg%comm,ierr); this%Fy=buf/this%cfg%vol_total
+    call MPI_ALLREDUCE(this%Fz    ,buf,1,MPI_REAL_WP,MPI_SUM,this%cfg%comm,ierr); this%Fz=buf/this%cfg%vol_total
 
   end subroutine get_max
 
