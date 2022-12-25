@@ -1,10 +1,9 @@
-!> Basicdirect forcing IBM class:
+!> Basic direct forcing IBM class:
 !> Provides support for Lagrangian marker particles
 module df_class
   use precision,      only: WP
   use string,         only: str_medium
   use config_class,   only: config
-  use diag_class,     only: diag
   use mpi_f08,        only: MPI_Datatype,MPI_INTEGER8,MPI_INTEGER,MPI_DOUBLE_PRECISION
   implicit none
   private
@@ -56,8 +55,6 @@ module df_class
 
      ! This is our underlying config
      class(config), pointer :: cfg                       !< This is the config the solver is build for
-
-     type(diag) :: tridiag                               !< Tridiagonal solver for implicit filter
 
      ! This is the name of the solver
      character(len=str_medium) :: name='UNNAMED_DFIBM'   !< Solver name (default=UNNAMED_DFIBM
