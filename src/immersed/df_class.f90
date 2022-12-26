@@ -236,9 +236,9 @@ contains
        src=(this%p(i)%vel-vel)
        ! Get element volume
        dV = this%p(i)%dA * sqrt( &
-            (this%cfg%dxm(this%p(i)%ind(1))*this%p(i)%norm(1))**2 + &
-            (this%cfg%dym(this%p(i)%ind(2))*this%p(i)%norm(2))**2 + &
-            (this%cfg%dzm(this%p(i)%ind(3))*this%p(i)%norm(3))**2 )
+            (this%cfg%dx(this%p(i)%ind(1))*this%p(i)%norm(1))**2 + &
+            (this%cfg%dy(this%p(i)%ind(2))*this%p(i)%norm(2))**2 + &
+            (this%cfg%dz(this%p(i)%ind(3))*this%p(i)%norm(3))**2 )
        ! Send source term back to the mesh
        if (this%cfg%nx.gt.1) call this%extrapolate(Ap=src(1)*dV,xp=this%p(i)%pos(1),yp=this%p(i)%pos(2),zp=this%p(i)%pos(3),&
             ip=this%p(i)%ind(1),jp=this%p(i)%ind(2),kp=this%p(i)%ind(3),A=this%srcU,dir='U')
@@ -296,9 +296,9 @@ contains
        if (this%p(i)%flag.eq.1) cycle
        ! Get element volume
        dV = this%p(i)%dA * sqrt( &
-            (this%cfg%dxm(this%p(i)%ind(1))*this%p(i)%norm(1))**2 + &
-            (this%cfg%dym(this%p(i)%ind(2))*this%p(i)%norm(2))**2 + &
-            (this%cfg%dzm(this%p(i)%ind(3))*this%p(i)%norm(3))**2 )
+            (this%cfg%dx(this%p(i)%ind(1))*this%p(i)%norm(1))**2 + &
+            (this%cfg%dy(this%p(i)%ind(2))*this%p(i)%norm(2))**2 + &
+            (this%cfg%dz(this%p(i)%ind(3))*this%p(i)%norm(3))**2 )
        ! Transfer volume to mesh
        call this%extrapolate(Ap=dV,xp=this%p(i)%pos(1),yp=this%p(i)%pos(2),zp=this%p(i)%pos(3),&
             ip=this%p(i)%ind(1),jp=this%p(i)%ind(2),kp=this%p(i)%ind(3),A=this%VF,dir='SC')
@@ -448,9 +448,9 @@ contains
     ! Set the CFLs to zero
     my_CFLp_x=0.0_WP; my_CFLp_y=0.0_WP; my_CFLp_z=0.0_WP
     do i=1,this%np_
-       my_CFLp_x=max(my_CFLp_x,abs(this%p(i)%vel(1))*this%cfg%dxmi(this%p(i)%ind(1)))
-       my_CFLp_y=max(my_CFLp_y,abs(this%p(i)%vel(2))*this%cfg%dymi(this%p(i)%ind(2)))
-       my_CFLp_z=max(my_CFLp_z,abs(this%p(i)%vel(3))*this%cfg%dzmi(this%p(i)%ind(3)))
+       my_CFLp_x=max(my_CFLp_x,abs(this%p(i)%vel(1))*this%cfg%dxi(this%p(i)%ind(1)))
+       my_CFLp_y=max(my_CFLp_y,abs(this%p(i)%vel(2))*this%cfg%dyi(this%p(i)%ind(2)))
+       my_CFLp_z=max(my_CFLp_z,abs(this%p(i)%vel(3))*this%cfg%dzi(this%p(i)%ind(3)))
     end do
     my_CFLp_x=my_CFLp_x*dt; my_CFLp_y=my_CFLp_y*dt; my_CFLp_z=my_CFLp_z*dt
 

@@ -657,7 +657,7 @@ contains
           if (this%cfg%nx.gt.1) call this%cfg%set_scalar(Sp=-dmom(1),pos=myp%pos,i0=myp%ind(1),j0=myp%ind(2),k0=myp%ind(3),S=this%srcU,bc='n')
           if (this%cfg%ny.gt.1) call this%cfg%set_scalar(Sp=-dmom(2),pos=myp%pos,i0=myp%ind(1),j0=myp%ind(2),k0=myp%ind(3),S=this%srcV,bc='n')
           if (this%cfg%nz.gt.1) call this%cfg%set_scalar(Sp=-dmom(3),pos=myp%pos,i0=myp%ind(1),j0=myp%ind(2),k0=myp%ind(3),S=this%srcW,bc='n')
-          call this%cfg%set_scalar(Sp=-deng   ,pos=myp%pos,i0=myp%ind(1),j0=myp%ind(2),k0=myp%ind(3),S=this%srcE,bc='n')
+          !call this%cfg%set_scalar(Sp=-deng   ,pos=myp%pos,i0=myp%ind(1),j0=myp%ind(2),k0=myp%ind(3),S=this%srcE,bc='n')
           ! Increment
           dt_done=dt_done+mydt
        end do
@@ -687,7 +687,7 @@ contains
     this%srcU=this%srcU/this%cfg%vol; call this%cfg%syncsum(this%srcU); call this%filter(this%srcU)
     this%srcV=this%srcV/this%cfg%vol; call this%cfg%syncsum(this%srcV); call this%filter(this%srcV)
     this%srcW=this%srcW/this%cfg%vol; call this%cfg%syncsum(this%srcW); call this%filter(this%srcW)
-    this%srcE=this%srcE/this%cfg%vol; call this%cfg%syncsum(this%srcE); call this%filter(this%srcE)
+    !this%srcE=this%srcE/this%cfg%vol; call this%cfg%syncsum(this%srcE); call this%filter(this%srcE)
 
     ! Recompute volume fraction
     call this%update_VF()
@@ -745,7 +745,7 @@ contains
       ! Interpolate the fluid temperature to the particle location if present
       if (present(T)) fT=this%cfg%get_scalar(pos=p%pos,i0=p%ind(1),j0=p%ind(2),k0=p%ind(3),S=T,bc='n')
       ! Interpolate the fluid vorticity to the particle location if needed
-      if (this%use_lift) fvort=this%cfg%get_velocity(pos=p%pos,i0=p%ind(1),j0=p%ind(2),k0=p%ind(3),U=U,V=V,W=W)
+      !if (this%use_lift) fvort=this%cfg%get_velocity(pos=p%pos,i0=p%ind(1),j0=p%ind(2),k0=p%ind(3),U=U,V=V,W=W)
     end block interpolate
 
     ! Compute acceleration due to drag
@@ -1151,9 +1151,9 @@ contains
     ! Set the CFLs to zero
     my_CFLp_x=0.0_WP; my_CFLp_y=0.0_WP; my_CFLp_z=0.0_WP; my_CFL_col=0.0_WP
     do i=1,this%np_
-       my_CFLp_x=max(my_CFLp_x,abs(this%p(i)%vel(1))*this%cfg%dxmi(this%p(i)%ind(1)))
-       my_CFLp_y=max(my_CFLp_y,abs(this%p(i)%vel(2))*this%cfg%dymi(this%p(i)%ind(2)))
-       my_CFLp_z=max(my_CFLp_z,abs(this%p(i)%vel(3))*this%cfg%dzmi(this%p(i)%ind(3)))
+       my_CFLp_x=max(my_CFLp_x,abs(this%p(i)%vel(1))*this%cfg%dxi(this%p(i)%ind(1)))
+       my_CFLp_y=max(my_CFLp_y,abs(this%p(i)%vel(2))*this%cfg%dyi(this%p(i)%ind(2)))
+       my_CFLp_z=max(my_CFLp_z,abs(this%p(i)%vel(3))*this%cfg%dzi(this%p(i)%ind(3)))
        my_CFL_col=max(my_CFL_col,sqrt(sum(this%p(i)%vel**2))/this%p(i)%d)
     end do
     my_CFLp_x=my_CFLp_x*dt; my_CFLp_y=my_CFLp_y*dt; my_CFLp_z=my_CFLp_z*dt
