@@ -26,8 +26,7 @@ module simulation
   type(event)    :: ens_evt
 
   !> Simulation monitor file
-  type(monitor) :: mfile,cflfile
-  type(monitor) :: ibmfile
+  type(monitor) :: mfile,cflfile,ibmfile
 
   public :: simulation_init,simulation_run,simulation_final
 
@@ -295,7 +294,6 @@ contains
 
   !> Perform an NGA2 simulation
   subroutine simulation_run
-    use mathtools, only: twoPi
     implicit none
 
     ! Perform time integration
@@ -349,6 +347,9 @@ contains
                   end do
                end do
             end do
+            call fs%cfg%sync(fs%U)
+            call fs%cfg%sync(fs%V)
+            call fs%cfg%sync(fs%W)
           end block ibm_correction
 
           ! Apply other boundary conditions on the resulting fields
