@@ -168,14 +168,18 @@ contains
     end block logging
 
   end function constructor
-
-
+  
+  
   !> Setup IBM objects, each processors own all objects
   subroutine setup_obj(this)
-    use mpi_f08, only : MPI_MAX,MPI_INTEGER
+    use mpi_f08
+    use parallel, only: MPI_REAL_WP
+    use mathtools, only: Pi
     implicit none
     class(dfibm), intent(inout) :: this
-    integer :: i,n,ibuf,ierr
+    integer :: i,j,n,ibuf,ierr
+    real(WP) :: myVol,dV,fac
+    real(WP), dimension(3) :: pos0,dist
     ! Determine number of objects based on marker ID
     n=1
     do i=1,this%np_
@@ -184,15 +188,44 @@ contains
     call MPI_ALLREDUCE(n,this%nobj,1,MPI_INTEGER,MPI_MAX,this%cfg%comm,ierr)
     ! Allocate and zero out the object array
     allocate(this%o(1:this%nobj))
+    if (this%cfg%nx.gt.1.and.this%cfg%ny.gt.1.and.this%cfg%nz.gt.1) then
+       fac=1.0_WP/3.0_WP
+    else
+       fac=1.0_WP/2.0_WP
+    end if
     do i=1,this%nobj
+       ! Zero-out object properties
        this%o(i)%pos=0.0_WP
        this%o(i)%vel=0.0_WP
        this%o(i)%angVel=0.0_WP
        this%o(i)%F=0.0_WP
+       ! Compute center of mass
+       myVol=0.0_WP
+       do j=1,this%np_
+          ! Determine particle associated with object
+          if (this%p(j)%id.eq.i) then
+             myVol=myVol+this%p(j)%dA
+             this%o(i)%pos=this%o(i)%pos+this%p(j)%pos*this%p(j)%dA
+          end if
+       end do
+       call MPI_ALLREDUCE(myVol,dV,1,MPI_REAL_WP,MPI_SUM,this%cfg%comm,ierr)
+       call MPI_ALLREDUCE(this%o(i)%pos,pos0,3,MPI_REAL_WP,MPI_SUM,this%cfg%comm,ierr); this%o(i)%pos=pos0/dV
+       ! Determine object volume
+       myVol=0.0_WP
+       do j=1,this%np_
+          if (this%p(j)%id.eq.i) then
+             dist=abs((this%p(j)%pos-this%o(i)%pos)*this%p(j)%norm)
+             if (this%cfg%xper) dist(1)=min(dist(1),this%cfg%xL-abs((this%p(j)%pos(1)-this%o(i)%pos(1))*this%p(j)%norm(1)))
+             if (this%cfg%yper) dist(2)=min(dist(2),this%cfg%yL-abs((this%p(j)%pos(2)-this%o(i)%pos(2))*this%p(j)%norm(2)))
+             if (this%cfg%zper) dist(3)=min(dist(3),this%cfg%zL-abs((this%p(j)%pos(3)-this%o(i)%pos(3))*this%p(j)%norm(3)))
+             myVol=myVol+fac*sum(dist)*this%p(j)%dA
+          end if
+       end do
+       call MPI_ALLREDUCE(myVol,dV,1,MPI_REAL_WP,MPI_SUM,this%cfg%comm,ierr); this%o(i)%vol=dV
     end do
   end subroutine setup_obj
-  
-  
+
+
   !> Compute direct forcing source by a specified time step dt
   subroutine get_source(this,dt,U,V,W,rho)
     use mpi_f08,  only: MPI_SUM,MPI_ALLREDUCE
