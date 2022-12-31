@@ -2,15 +2,13 @@
 Partition :	4 1 1
 
 # Mesh definition
-Lx :	4
-Ly :	1.5
-Lz :	0.015625
+Pipe diameter : 1
+Pipe length   : 4
 nx :	256
 ny :	96
 nz :	1
 
 # Pipe properties
-Pipe diameter     : 1
 Target velocity   : 1
 Fluctuation amp  : 0.2
 

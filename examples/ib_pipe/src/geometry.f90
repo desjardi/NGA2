@@ -24,15 +24,30 @@ contains
       ! Create a grid from input params
       create_grid: block
          use sgrid_class, only: cartesian
-         integer :: i,j,k,nx,ny,nz
-         real(WP) :: Lx,Ly,Lz
+         integer :: i,j,k,nx,ny,nz,no
+         real(WP) :: Lx,Ly,Lz,D,dx
          real(WP), dimension(:), allocatable :: x,y,z
          
          ! Read in grid definition
-         call param_read('Lx',Lx); call param_read('nx',nx); allocate(x(nx+1))
-         call param_read('Ly',Ly); call param_read('ny',ny); allocate(y(ny+1))
-         call param_read('Lz',Lz); call param_read('nz',nz); allocate(z(nz+1))
-         
+         call param_read('Pipe length',Lx)
+         call param_read('Pipe diameter',D)
+         call param_read('ny',ny); allocate(y(ny+1))
+         call param_read('nx',nx); allocate(x(nx+1))
+         call param_read('nz',nz); allocate(z(nz+1))
+
+         dx=Lx/real(nx,WP)
+         no=6
+         if (ny.gt.1) then
+            Ly=D+real(2*no,WP)*D/real(ny-2*no,WP)
+         else
+            Ly=dx
+         end if
+         if (nz.gt.1) then
+            Lz=D+real(2*no,WP)*D/real(ny-2*no,WP)
+         else
+            Lz=dx
+         end if
+
          ! Create simple rectilinear grid
          do i=1,nx+1
             x(i)=real(i-1,WP)/real(nx,WP)*Lx

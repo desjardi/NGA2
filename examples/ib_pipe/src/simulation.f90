@@ -339,7 +339,7 @@ contains
        r=sqrt(fs%cfg%ym(j)**2+fs%cfg%zm(k)**2)
        norm(1)=0.0_WP; norm(2)=fs%cfg%ym(j)/r; norm(3)=fs%cfg%zm(k)/r
     end select
-    lam=sum(abs(norm));  eta=0.065_WP*(1.0_WP-lam**2)+0.39_WP
+    lam=sum(abs(norm)); eta=0.065_WP*(1.0_WP-lam**2)+0.39_WP
     VF=0.5_WP*(1.0_WP-tanh((r-0.5_WP*Dpipe)/(sqrt(2.0_WP)*lam*eta*delta)))
   end function get_VF
 
