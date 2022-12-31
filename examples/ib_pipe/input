@@ -12,6 +12,7 @@ nz :	1
 # Pipe properties
 Pipe diameter     : 1
 Target velocity   : 1
+Fluctuation amp  : 0.2
 
 # Time integration
 Max timestep size :	0.008

@@ -91,11 +91,28 @@ contains
     ! Initialize our velocity field
     initialize_velocity: block
       use mathtools, only: twoPi
+      use random, only: random_uniform
       integer :: i,j,k
+      real(WP) :: amp
       ! Initial fields
       call param_read('Pipe diameter',Dpipe)
       call param_read('Target velocity',target_velocity)
-      fs%U=target_velocity; fs%V=0.0_WP; fs%W=0.0_WP; fs%P=0.0_WP
+      call param_read('Fluctuation amp',amp,default=0.0_WP)
+      fs%U=0.0_WP; fs%V=0.0_WP; fs%W=0.0_WP; fs%P=0.0_WP
+      ! For faster transition
+      do k=fs%cfg%kmin_,fs%cfg%kmax_
+         do j=fs%cfg%jmin_,fs%cfg%jmax_
+            do i=fs%cfg%imin_,fs%cfg%imax_
+               fs%U(i,j,k)=target_velocity*(1.0_WP+random_uniform(lo=-0.5_WP*amp,hi=0.5_WP*amp))
+               fs%V(i,j,k)=target_velocity*random_uniform(lo=-0.5_WP*amp,hi=0.5_WP*amp)
+               fs%U(i,j,k)=fs%U(i,j,k)+amp*target_velocity*cos(8.0_WP*twoPi*fs%cfg%zm(k)/fs%cfg%zL)*cos(8.0_WP*twoPi*fs%cfg%ym(j)/fs%cfg%yL)
+               fs%V(i,j,k)=fs%V(i,j,k)+amp*target_velocity*cos(8.0_WP*twoPi*fs%cfg%xm(i)/fs%cfg%xL)
+            end do
+         end do
+      end do
+      call fs%cfg%sync(fs%U)
+      call fs%cfg%sync(fs%V)
+      call fs%cfg%sync(fs%W)
       ! Compute cell-centered velocity
       call fs%interp_vel(Ui,Vi,Wi)
       ! Compute divergence
