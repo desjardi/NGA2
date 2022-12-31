@@ -169,11 +169,11 @@ contains
             do i=df%cfg%imin_,df%cfg%imax_
                theta=arctan(df%cfg%xm(i),df%cfg%ym(j))
                r=0.5_WP*Dcyl+amp*sin(freq*theta)
-               df%levelset(i,j,k)=sqrt((df%cfg%xm(i)-Xcyl)**2+df%cfg%ym(j)**2)-r
+               df%F(i,j,k)=sqrt((df%cfg%xm(i)-Xcyl)**2+df%cfg%ym(j)**2)-r
             end do
          end do
       end do
-      call df%cfg%sync(df%levelset)
+      call df%cfg%sync(df%G)
 
       if (df%cfg%amRoot) then
          print*,"===== Direct Forcing Setup Description ====="
@@ -233,7 +233,7 @@ contains
       call ens_out%add_particle('markers',pmesh)
       call ens_out%add_vector('velocity',Ui,Vi,Wi)
       call ens_out%add_scalar('VF',df%VF)
-      call ens_out%add_scalar('levelset',df%levelset)
+      call ens_out%add_scalar('levelset',df%G)
       call ens_out%add_scalar('pressure',fs%P)
       ! Output to ensight
       if (ens_evt%occurs()) call ens_out%write_data(time%t)

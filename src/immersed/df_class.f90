@@ -91,8 +91,8 @@ module df_class
      real(WP), dimension(:,:,:), allocatable :: srcV     !< V momentum source on mesh, cell-centered
      real(WP), dimension(:,:,:), allocatable :: srcW     !< W momentum source on mesh, cell-centered
 
-     ! Levelset for visualization and collision detection
-     real(WP), dimension(:,:,:), allocatable :: levelset !< Levelset, cell-centered
+     ! Distance levelset for visualization and collision detection
+     real(WP), dimension(:,:,:), allocatable :: G !< Levelset, cell-centered
 
    contains
      procedure :: update_partmesh                        !< Update a partmesh object using current particles
@@ -143,7 +143,7 @@ contains
     call prepare_mpi_part()
 
     ! Allocate levelset, VF and src arrays on cfg mesh
-    allocate(self%levelset(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%levelset=huge(1.0_WP)
+    allocate(self%G(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%G=huge(1.0_WP)
     allocate(self%VF      (self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%VF  =0.0_WP
     allocate(self%srcU    (self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%srcU=0.0_WP
     allocate(self%srcV    (self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%srcV=0.0_WP
