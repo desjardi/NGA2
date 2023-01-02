@@ -39,7 +39,7 @@ stat/
 
 # Ignore all content of examples
 examples/*/*
-examples/*/GNUmakefile
+!examples/*/GNUmakefile
 !examples/*/input*
 examples/*/input*~
 !examples/*/README
