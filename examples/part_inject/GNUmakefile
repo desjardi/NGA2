@@ -6,7 +6,7 @@ PRECISION = DOUBLE
 USE_MPI   = TRUE
 USE_HYPRE = TRUE
 USE_LAPACK= TRUE
-USE_IRL   = TRUE
+USE_IRL   = FALSE
 PROFILE   = TRUE
 DEBUG     = FALSE
 COMP      = gnu
@@ -26,7 +26,6 @@ VPATH_LOCATIONS   += $(Ulocs)
 #HDF5_DIR = /Users/desjardi/Builds/hdf5
 LAPACK_DIR= /Users/jcaps/Research/Codes/Builds/hypre
 HYPRE_DIR = /Users/jcaps/Research/Codes/Builds/hypre
-IRL_DIR   = /Users/jcaps/Research/Codes/Builds/IRL
 
 # NGA compilation definitions
 include $(NGA_HOME)/tools/GNUMake/Make.defs
