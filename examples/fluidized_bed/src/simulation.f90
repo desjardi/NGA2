@@ -23,8 +23,7 @@ module simulation
   type(event)    :: ens_evt
 
   !> Simulation monitor file
-  type(monitor) :: mfile,cflfile
-  type(monitor) :: lptfile
+  type(monitor) :: mfile,cflfile,lptfile,tfile
 
   public :: simulation_init,simulation_run,simulation_final
 
@@ -32,6 +31,10 @@ module simulation
   real(WP), dimension(:,:,:), allocatable :: resU,resV,resW
   real(WP), dimension(:,:,:), allocatable :: Ui,Vi,Wi,rho0,dRHOdt
   real(WP) :: visc,rho,inlet_velocity
+
+  !> Wallclock time for monitor
+  real(WP) :: wt_total,wt_time,wt_fs,wt_lpt,wt_rest
+  real(WP) :: wt_fs_pct,wt_lpt_pct,wt_rest_pct
 
 contains
 
@@ -244,7 +247,7 @@ contains
       call fs%get_mfr()
     end block initialize_velocity
 
-
+    
     ! Add Ensight output
     create_ensight: block
       ! Create Ensight output from cfg
@@ -261,7 +264,8 @@ contains
       if (ens_evt%occurs()) call ens_out%write_data(time%t)
     end block create_ensight
 
-    ! Create a monitor file
+    
+    ! Create monitor filea
     create_monitor: block
       ! Prepare some info about fields
       call fs%get_cfl(time%dt,time%cfl)
@@ -310,6 +314,18 @@ contains
       call lptfile%add_column(lp%dmin,'Particle dmin')
       call lptfile%add_column(lp%dmax,'Particle dmax')
       call lptfile%write()
+      ! Create timing monitor
+      tfile=monitor(amroot=fs%cfg%amRoot,name='timing')
+      call tfile%add_column(time%n,'Timestep number')
+      call tfile%add_column(time%t,'Time')
+      call tfile%add_column(wt_total,'Total [s]')
+      call tfile%add_column(wt_fs,'Flow solver [s]')
+      call tfile%add_column(wt_fs_pct,'Flow solver [%]')
+      call tfile%add_column(wt_lpt,'LPT [s]')
+      call tfile%add_column(wt_lpt_pct,'LPT [%]')
+      call tfile%add_column(wt_rest,'Rest [s]')
+      call tfile%add_column(wt_rest_pct,'Rest [%]')
+      call tfile%write()
     end block create_monitor
 
   end subroutine simulation_init
@@ -318,16 +334,23 @@ contains
   !> Perform an NGA2 simulation
   subroutine simulation_run
     use mathtools, only: twoPi
+    use parallel, only: parallel_time
     implicit none
+    real(WP) :: wt,wti
 
     ! Perform time integration
     do while (.not.time%done())
 
+       ! Initial wallclock time
+       wti=parallel_time()
+
        ! Increment time
+       wt=parallel_time()
        call fs%get_cfl(time%dt,time%cfl)
        call lp%get_cfl(time%dt,time%cfl)
        call time%adjust_dt()
        call time%increment()
+       wt_time=parallel_time()-wt
 
        ! Remember old density, velocity, and momentum
        fs%rhoold=fs%rho
@@ -336,6 +359,7 @@ contains
        fs%Wold=fs%W; fs%rhoWold=fs%rhoW
 
        ! Get fluid stress
+       wt=parallel_time()
        call fs%get_div_stress(resU,resV,resW)
 
        ! Collide and advance particles
@@ -345,8 +369,10 @@ contains
        ! Update density based on particle volume fraction
        fs%rho=rho*(1.0_WP-lp%VF)
        dRHOdt=(fs%RHO-fs%RHOold)/time%dtmid
+       wt_lpt=parallel_time()-wt
 
        ! Perform sub-iterations
+       wt=parallel_time()
        do while (time%it.le.time%itmax)
 
           ! Build mid-time velocity and momentum
@@ -429,6 +455,7 @@ contains
        ! Recompute interpolated velocity and divergence
        call fs%interp_vel(Ui,Vi,Wi)
        call fs%get_div(drhodt=dRHOdt)
+       wt_fs=parallel_time()-wt
 
        ! Output to ensight
        if (ens_evt%occurs()) then
@@ -451,6 +478,14 @@ contains
        call mfile%write()
        call cflfile%write()
        call lptfile%write()
+
+       ! Monitor timing
+       wt_total=parallel_time()-wti
+       wt_fs_pct=wt_fs/wt_total*100.0_WP
+       wt_lpt_pct=wt_lpt/wt_total*100.0_WP
+       wt_rest=wt_total-wt_fs-wt_lpt
+       wt_rest_pct=wt_rest/wt_total*100.0_WP
+       call tfile%write()
 
     end do
 
