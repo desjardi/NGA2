@@ -201,6 +201,7 @@ contains
     real(WP), dimension(:,:,:), allocatable :: recvbuf1
     real(WP), dimension(:,:),   allocatable :: recvbuf2
     integer,  dimension(:),     allocatable :: ngroup
+    real(WP), dimension(:,:),   allocatable :: buf1,buf2,buf3,buf4,buf5,buf6
     ! Stuff
     integer :: i,igroup
     integer :: k1,L,k2,nk
@@ -316,10 +317,22 @@ contains
 
     ! Solve reduced systems
     if (.not.nper) then
-       call pentadiagonal_serial(&
-            recvbuf1(:,1,2:2*proc-1),recvbuf1(:,2,2:2*proc-1),recvbuf1(:,3,2:2*proc-1),&
-            recvbuf1(:,4,2:2*proc-1),recvbuf1(:,5,2:2*proc-1),recvbuf1(:,6,2:2*proc-1),&
-            2*proc-2,nlot)
+       ! Store in buf to avoid creating a temporary array (there must be a better way to do this)
+       allocate(buf1(nlot,2*proc),buf2(nlot,2*proc),buf3(nlot,2*proc),buf4(nlot,2*proc),buf5(nlot,2*proc),buf6(nlot,2*proc))
+       buf1=recvbuf1(:,1,2:2*proc-1)
+       buf2=recvbuf1(:,2,2:2*proc-1)
+       buf3=recvbuf1(:,3,2:2*proc-1)
+       buf4=recvbuf1(:,4,2:2*proc-1)
+       buf5=recvbuf1(:,5,2:2*proc-1)
+       buf6=recvbuf1(:,6,2:2*proc-1)
+       call pentadiagonal_serial(buf1,buf2,buf3,buf4,buf5,buf6,2*proc-2,nlot)
+       recvbuf1(:,1,2:2*proc-1)=buf1
+       recvbuf1(:,2,2:2*proc-1)=buf2
+       recvbuf1(:,3,2:2*proc-1)=buf3
+       recvbuf1(:,4,2:2*proc-1)=buf4
+       recvbuf1(:,5,2:2*proc-1)=buf5
+       recvbuf1(:,6,2:2*proc-1)=buf6
+       deallocate(buf1,buf2,buf3,buf4,buf5,buf6)
     else
        call pentadiagonal_periodic_serial(&
             recvbuf1(:,1,:),recvbuf1(:,2,:),recvbuf1(:,3,:),&

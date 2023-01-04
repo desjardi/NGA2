@@ -191,8 +191,8 @@ contains
     ! Set filter width to zero by default
     self%filter_width=0.0_WP
 
-    ! Solve explicitly by default
-    self%implicit_filter=.false.
+    ! Solve implicitly by default
+    self%implicit_filter=.true.
 
     ! Set default drag
     self%drag_model='Schiller-Naumann'
