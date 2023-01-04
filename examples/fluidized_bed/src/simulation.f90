@@ -30,6 +30,7 @@ module simulation
   !> Work arrays and fluid properties
   real(WP), dimension(:,:,:), allocatable :: resU,resV,resW
   real(WP), dimension(:,:,:), allocatable :: Ui,Vi,Wi,rho0,dRHOdt
+  real(WP), dimension(:,:,:), allocatable :: srcUlp,srcVlp,srcWlp
   real(WP) :: visc,rho,inlet_velocity
 
   !> Wallclock time for monitoring
@@ -126,6 +127,9 @@ contains
       allocate(resU    (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
       allocate(resV    (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
       allocate(resW    (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+      allocate(srcUlp  (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+      allocate(srcVlp  (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+      allocate(srcWlp  (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
       allocate(Ui      (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
       allocate(Vi      (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
       allocate(Wi      (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
@@ -377,7 +381,8 @@ contains
 
        ! Collide and advance particles
        call lp%collide(dt=time%dtmid)
-       call lp%advance(dt=time%dtmid,U=fs%U,V=fs%V,W=fs%W,rho=rho0,visc=fs%visc,stress_x=resU,stress_y=resV,stress_z=resW)
+       call lp%advance(dt=time%dtmid,U=fs%U,V=fs%V,W=fs%W,rho=rho0,visc=fs%visc,stress_x=resU,stress_y=resV,stress_z=resW,&
+            srcU=srcUlp,srcV=srcVlp,srcW=srcWlp)
 
        ! Update density based on particle volume fraction
        fs%rho=rho*(1.0_WP-lp%VF)
@@ -411,9 +416,9 @@ contains
             do k=fs%cfg%kmin_,fs%cfg%kmax_
                do j=fs%cfg%jmin_,fs%cfg%jmax_
                   do i=fs%cfg%imin_,fs%cfg%imax_
-                     resU(i,j,k)=resU(i,j,k)+sum(fs%itpr_x(:,i,j,k)*lp%srcU(i-1:i,j,k))
-                     resV(i,j,k)=resV(i,j,k)+sum(fs%itpr_y(:,i,j,k)*lp%srcV(i,j-1:j,k))
-                     resW(i,j,k)=resW(i,j,k)+sum(fs%itpr_z(:,i,j,k)*lp%srcW(i,j,k-1:k))
+                     resU(i,j,k)=resU(i,j,k)+sum(fs%itpr_x(:,i,j,k)*srcUlp(i-1:i,j,k))
+                     resV(i,j,k)=resV(i,j,k)+sum(fs%itpr_y(:,i,j,k)*srcVlp(i,j-1:j,k))
+                     resW(i,j,k)=resW(i,j,k)+sum(fs%itpr_z(:,i,j,k)*srcWlp(i,j,k-1:k))
                   end do
                end do
             end do
@@ -528,7 +533,7 @@ contains
     ! timetracker
 
     ! Deallocate work arrays
-    deallocate(resU,resV,resW,Ui,Vi,Wi,dRHOdt)
+    deallocate(resU,resV,resW,srcUlp.srcVlp,srcWlp,Ui,Vi,Wi,dRHOdt)
 
   end subroutine simulation_final
 

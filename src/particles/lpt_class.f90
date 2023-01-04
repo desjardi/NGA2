@@ -115,12 +115,6 @@ module lpt_class
      ! Particle volume fraction
      real(WP), dimension(:,:,:), allocatable :: VF       !< Particle volume fraction, cell-centered
 
-     ! Momentum source
-     real(WP), dimension(:,:,:), allocatable :: srcU     !< U momentum source on mesh, cell-centered
-     real(WP), dimension(:,:,:), allocatable :: srcV     !< V momentum source on mesh, cell-centered
-     real(WP), dimension(:,:,:), allocatable :: srcW     !< W momentum source on mesh, cell-centered
-     real(WP), dimension(:,:,:), allocatable :: srcE     !< E momentum source on mesh, cell-centered
-
      ! Filtering operation
      logical :: implicit_filter                          !< Solve implicitly
      real(WP) :: filter_width                            !< Characteristic filter width
@@ -183,10 +177,6 @@ contains
 
     ! Allocate VF and src arrays on cfg mesh
     allocate(self%VF  (self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%VF  =0.0_WP
-    allocate(self%srcU(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%srcU=0.0_WP
-    allocate(self%srcV(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%srcV=0.0_WP
-    allocate(self%srcW(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%srcW=0.0_WP
-    allocate(self%srcE(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%srcE=0.0_WP
 
     ! Set filter width to zero by default
     self%filter_width=0.0_WP
@@ -591,7 +581,7 @@ contains
   !> Advance the particle equations by a specified time step dt
   !> p%id=0 => no coll, no solve
   !> p%id=-1=> no coll, no move
-  subroutine advance(this,dt,U,V,W,rho,visc,stress_x,stress_y,stress_z,vortx,vorty,vortz,T)
+  subroutine advance(this,dt,U,V,W,rho,visc,stress_x,stress_y,stress_z,vortx,vorty,vortz,T,srcU,srcV,srcW,srcE)
     use mpi_f08, only : MPI_SUM,MPI_INTEGER
     use mathtools, only: Pi
     implicit none
@@ -609,16 +599,20 @@ contains
     real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout), optional :: vorty  !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
     real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout), optional :: vortz  !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
     real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout), optional :: T      !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout), optional :: srcU   !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout), optional :: srcV   !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout), optional :: srcW   !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout), optional :: srcE   !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
     integer :: i,j,k,ierr
     real(WP) :: mydt,dt_done,deng,Ip
     real(WP), dimension(3) :: acc,torque,dmom
     type(part) :: myp,pold
 
     ! Zero out source term arrays
-    this%srcU=0.0_WP
-    this%srcV=0.0_WP
-    this%srcW=0.0_WP
-    this%srcE=0.0_WP
+    if (present(srcU)) srcU=0.0_WP
+    if (present(srcV)) srcV=0.0_WP
+    if (present(srcW)) srcW=0.0_WP
+    if (present(srcE)) srcE=0.0_WP
 
     ! Zero out number of particles removed
     this%np_out=0
@@ -654,10 +648,10 @@ contains
           ! Send source term back to the mesh
           dmom=mydt*acc*this%rho*Pi/6.0_WP*myp%d**3
           deng=sum(dmom*myp%vel)
-          if (this%cfg%nx.gt.1) call this%cfg%set_scalar(Sp=-dmom(1),pos=myp%pos,i0=myp%ind(1),j0=myp%ind(2),k0=myp%ind(3),S=this%srcU,bc='n')
-          if (this%cfg%ny.gt.1) call this%cfg%set_scalar(Sp=-dmom(2),pos=myp%pos,i0=myp%ind(1),j0=myp%ind(2),k0=myp%ind(3),S=this%srcV,bc='n')
-          if (this%cfg%nz.gt.1) call this%cfg%set_scalar(Sp=-dmom(3),pos=myp%pos,i0=myp%ind(1),j0=myp%ind(2),k0=myp%ind(3),S=this%srcW,bc='n')
-          !call this%cfg%set_scalar(Sp=-deng   ,pos=myp%pos,i0=myp%ind(1),j0=myp%ind(2),k0=myp%ind(3),S=this%srcE,bc='n')
+          if (this%cfg%nx.gt.1.and.present(srcU)) call this%cfg%set_scalar(Sp=-dmom(1),pos=myp%pos,i0=myp%ind(1),j0=myp%ind(2),k0=myp%ind(3),S=srcU,bc='n')
+          if (this%cfg%ny.gt.1.and.present(srcV)) call this%cfg%set_scalar(Sp=-dmom(2),pos=myp%pos,i0=myp%ind(1),j0=myp%ind(2),k0=myp%ind(3),S=srcV,bc='n')
+          if (this%cfg%nz.gt.1.and.present(srcW)) call this%cfg%set_scalar(Sp=-dmom(3),pos=myp%pos,i0=myp%ind(1),j0=myp%ind(2),k0=myp%ind(3),S=srcW,bc='n')
+          if (present(srcE))                      call this%cfg%set_scalar(Sp=-deng   ,pos=myp%pos,i0=myp%ind(1),j0=myp%ind(2),k0=myp%ind(3),S=srcE,bc='n')
           ! Increment
           dt_done=dt_done+mydt
        end do
@@ -683,11 +677,19 @@ contains
     ! Sum up particles removed
     call MPI_ALLREDUCE(this%np_out,i,1,MPI_INTEGER,MPI_SUM,this%cfg%comm,ierr); this%np_out=i
 
-    ! Divide source arrays by volume, sum at boundaries, and volume filter
-    this%srcU=this%srcU/this%cfg%vol; call this%cfg%syncsum(this%srcU); call this%filter(this%srcU)
-    this%srcV=this%srcV/this%cfg%vol; call this%cfg%syncsum(this%srcV); call this%filter(this%srcV)
-    this%srcW=this%srcW/this%cfg%vol; call this%cfg%syncsum(this%srcW); call this%filter(this%srcW)
-    !this%srcE=this%srcE/this%cfg%vol; call this%cfg%syncsum(this%srcE); call this%filter(this%srcE)
+    ! Divide source arrays by volume, sum at boundaries, and volume filter if present
+    if (present(srcU)) then
+       srcU=srcU/this%cfg%vol; call this%cfg%syncsum(srcU); call this%filter(srcU)
+    end if
+    if (present(srcV)) then
+       srcV=srcV/this%cfg%vol; call this%cfg%syncsum(srcV); call this%filter(srcV)
+    end if
+    if (present(srcW)) then
+       srcW=srcW/this%cfg%vol; call this%cfg%syncsum(srcW); call this%filter(srcW)
+    end if
+    if (present(srcE)) then
+       srcE=srcE/this%cfg%vol; call this%cfg%syncsum(srcE); call this%filter(srcE)
+    end if
 
     ! Recompute volume fraction
     call this%update_VF()
