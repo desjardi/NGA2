@@ -893,8 +893,6 @@ contains
              end do
           end do
        end do
-       ! Sync A
-       call this%cfg%sync(A)
     else  !< Apply filter explicitly
        ! Allocate flux arrays
        allocate(FX(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
@@ -921,12 +919,13 @@ contains
                 end do
              end do
           end do
-          ! Sync A
-          call this%cfg%sync(A)
        end do
        ! Deallocate flux arrays
        deallocate(FX,FY,FZ)
     end if
+
+    ! Sync A
+    call this%cfg%sync(A)
 
   end subroutine filter
 
