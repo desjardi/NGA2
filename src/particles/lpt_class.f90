@@ -853,7 +853,7 @@ contains
                 this%tridiag%Ax(j,k,i,-1) = - this%div_x(0,i,j,k) * filter_coeff * this%grd_x(-1,i,j,k)
                 this%tridiag%Ax(j,k,i, 0) = 1.0_WP - (this%div_x(0,i,j,k) * filter_coeff * this%grd_x(0,i,j,k) &
                      + this%div_x(1,i,j,k) * filter_coeff * this%grd_x(-1,i+1,j,k))
-                this%tridiag%Ax(j,k,i,+1) = - this%div_x(1,i,j,k) * filter_coeff * this%grd_x(i+1,i,j,k)
+                this%tridiag%Ax(j,k,i,+1) = - this%div_x(1,i,j,k) * filter_coeff * this%grd_x(0,i+1,j,k)
                 this%tridiag%Rx(j,k,i) = A(i,j,k)
              end do
           end do
@@ -865,7 +865,7 @@ contains
              do i=this%cfg%imin_,this%cfg%imax_
                 this%tridiag%Ay(i,k,j,-1) = - this%div_y(0,i,j,k) * filter_coeff * this%grd_y(-1,i,j,k)
                 this%tridiag%Ay(i,k,j, 0) = 1.0_WP - (this%div_y(0,i,j,k)* filter_coeff * this%grd_y(0,i,j,k) &
-                     + this%div_y(1,i,j,k)* filter_coeff * this%grd_y(-1,i,j+1,k))
+                     + this%div_y(1,i,j,k) * filter_coeff * this%grd_y(-1,i,j+1,k))
                 this%tridiag%Ay(i,k,j,+1) = - this%div_y(1,i,j,k) * filter_coeff * this%grd_y(0,i,j+1,k)
                 this%tridiag%Ry(i,k,j) = this%tridiag%Rx(j,k,i)
              end do
@@ -880,7 +880,7 @@ contains
                 this%tridiag%Az(i,j,k, 0) = 1.0_WP - (this%div_z(0,i,j,k) * filter_coeff * this%grd_z(0,i,j,k) &
                      + this%div_z(1,i,j,k) * filter_coeff * this%grd_z(-1,i,j,k))
                 this%tridiag%Az(i,j,k,+1) = - this%div_z(1,i,j,k) * filter_coeff * this%grd_z(0,i,j,k)
-                this%tridiag% Rz(i,j,k) = this%tridiag%Ry(i,k,j)
+                this%tridiag%Rz(i,j,k) = this%tridiag%Ry(i,k,j)
              end do
           end do
        end do
