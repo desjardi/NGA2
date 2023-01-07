@@ -9,7 +9,7 @@ ny :	96
 nz :	1
 
 # Pipe properties
-Target velocity   : 1
+Bulk velocity    : 1
 Fluctuation amp  : 0.2
 
 # Time integration

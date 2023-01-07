@@ -30,7 +30,7 @@ module simulation
   real(WP), dimension(:,:,:), allocatable :: resU,resV,resW
   real(WP), dimension(:,:,:), allocatable :: Ui,Vi,Wi
   real(WP), dimension(:,:,:), allocatable :: G,VF
-  real(WP) :: target_velocity,Umean,Dpipe
+  real(WP) :: Ubulk,Umean,Dpipe
 
 contains
 
@@ -96,17 +96,17 @@ contains
       real(WP) :: amp
       ! Initial fields
       call param_read('Pipe diameter',Dpipe)
-      call param_read('Target velocity',target_velocity)
+      call param_read('Bulk velocity',Ubulk); Umean=Ubulk
       call param_read('Fluctuation amp',amp,default=0.0_WP)
       fs%U=0.0_WP; fs%V=0.0_WP; fs%W=0.0_WP; fs%P=0.0_WP
       ! For faster transition
       do k=fs%cfg%kmin_,fs%cfg%kmax_
          do j=fs%cfg%jmin_,fs%cfg%jmax_
             do i=fs%cfg%imin_,fs%cfg%imax_
-               fs%U(i,j,k)=target_velocity*(1.0_WP+random_uniform(lo=-0.5_WP*amp,hi=0.5_WP*amp))
-               fs%V(i,j,k)=target_velocity*random_uniform(lo=-0.5_WP*amp,hi=0.5_WP*amp)
-               fs%U(i,j,k)=fs%U(i,j,k)+amp*target_velocity*cos(8.0_WP*twoPi*fs%cfg%zm(k)/fs%cfg%zL)*cos(8.0_WP*twoPi*fs%cfg%ym(j)/fs%cfg%yL)
-               fs%V(i,j,k)=fs%V(i,j,k)+amp*target_velocity*cos(8.0_WP*twoPi*fs%cfg%xm(i)/fs%cfg%xL)
+               fs%U(i,j,k)=Ubulk*(1.0_WP+random_uniform(lo=-0.5_WP*amp,hi=0.5_WP*amp))
+               fs%V(i,j,k)=Ubulk*random_uniform(lo=-0.5_WP*amp,hi=0.5_WP*amp)
+               fs%U(i,j,k)=fs%U(i,j,k)+amp*Ubulk*cos(8.0_WP*twoPi*fs%cfg%zm(k)/fs%cfg%zL)*cos(8.0_WP*twoPi*fs%cfg%ym(j)/fs%cfg%yL)
+               fs%V(i,j,k)=fs%V(i,j,k)+amp*Ubulk*cos(8.0_WP*twoPi*fs%cfg%xm(i)/fs%cfg%xL)
             end do
          end do
       end do
@@ -156,7 +156,6 @@ contains
       ! Prepare some info about fields
       call fs%get_cfl(time%dt,time%cfl)
       call fs%get_max()
-      call get_Umean
       ! Create simulation monitor
       mfile=monitor(fs%cfg%amRoot,'simulation')
       call mfile%add_column(time%n,'Timestep number')
@@ -221,6 +220,27 @@ contains
           resV=-2.0_WP*(fs%rho*fs%V-fs%rho*fs%Vold)+time%dt*resV
           resW=-2.0_WP*(fs%rho*fs%W-fs%rho*fs%Wold)+time%dt*resW
 
+          ! Add body forcing
+          forcing: block
+            use mpi_f08,  only: MPI_SUM,MPI_ALLREDUCE
+            use parallel, only: MPI_REAL_WP
+            integer :: i,j,k,ierr
+            real(WP) :: myU,myUvol,Uvol,VFx
+            myU=0.0_WP; myUvol=0.0_WP
+            do k=fs%cfg%kmin_,fs%cfg%kmax_
+               do j=fs%cfg%jmin_,fs%cfg%jmax_
+                  do i=fs%cfg%imin_,fs%cfg%imax_
+                     VFx=get_VF(i,j,k,'U')
+                     myU   =myU   +fs%cfg%dxm(i)*fs%cfg%dy(j)*fs%cfg%dz(k)*VFx*(2.0_WP*fs%U(i,j,k)-fs%Uold(i,j,k))
+                     myUvol=myUvol+fs%cfg%dxm(i)*fs%cfg%dy(j)*fs%cfg%dz(k)*VFx
+                  end do
+               end do
+            end do
+            call MPI_ALLREDUCE(myUvol,Uvol ,1,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr)
+            call MPI_ALLREDUCE(myU   ,Umean,1,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr); Umean=Umean/Uvol
+            resU=resU+Ubulk-Umean
+          end block forcing
+
           ! Form implicit residuals
           call fs%solve_implicit(time%dt,resU,resV,resW)
 
@@ -251,23 +271,6 @@ contains
             call fs%cfg%sync(fs%W)
             call fs%cfg%sync(VF)
           end block ibm_correction
-
-          ! Enforce constant mass flow rate
-          mfr_correction: block
-            integer :: i,j,k
-            real(WP) :: VFx
-            ! Add forcing
-            call get_Umean
-            do k=fs%cfg%kmin_,fs%cfg%kmax_
-               do j=fs%cfg%jmin_,fs%cfg%jmax_
-                  do i=fs%cfg%imin_,fs%cfg%imax_
-                     VFx=get_VF(i,j,k,'U')
-                     fs%U(i,j,k)=fs%U(i,j,k)+Vfx*(target_velocity-Umean)
-                  end do
-               end do
-            end do
-            call fs%cfg%sync(fs%U)
-          end block mfr_correction
 
           ! Apply other boundary conditions on the resulting fields
           call fs%apply_bcond(time%t,time%dt)
@@ -303,7 +306,6 @@ contains
        if (ens_evt%occurs()) call ens_out%write_data(time%t)
 
        ! Perform and output monitoring
-       call get_Umean
        call fs%get_max()
        call mfile%write()
        call cflfile%write()
@@ -342,27 +344,6 @@ contains
     lam=sum(abs(norm)); eta=0.065_WP*(1.0_WP-lam**2)+0.39_WP
     VF=0.5_WP*(1.0_WP-tanh((r-0.5_WP*Dpipe)/(sqrt(2.0_WP)*lam*eta*delta)))
   end function get_VF
-
-  
-  !> Calculate mean velocity
-  subroutine get_Umean
-    use mpi_f08,  only: MPI_ALLREDUCE,MPI_SUM
-    use parallel, only: MPI_REAL_WP
-    real(WP) :: VFx,myVol,vol
-    integer :: i,j,k,ierr
-    Umean=0.0_WP
-    do k=fs%cfg%kmin_,fs%cfg%kmax_
-       do j=fs%cfg%jmin_,fs%cfg%jmax_
-          do i=fs%cfg%imin_,fs%cfg%imax_
-             VFx=get_VF(i,j,k,'U')
-             myVol=myVol+fs%cfg%vol(i,j,k)*VFx
-             Umean=Umean+fs%cfg%vol(i,j,k)*VFx*fs%U(i,j,k)
-          end do
-       end do
-    end do
-    call MPI_ALLREDUCE(myVol,vol,1,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr)
-    call MPI_ALLREDUCE(Umean,myVol,1,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr); Umean=myVol/vol
-  end subroutine get_Umean
 
 
   !> Finalize the NGA2 simulation
