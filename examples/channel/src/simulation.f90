@@ -2,6 +2,7 @@
 module simulation
    use precision,         only: WP
    use geometry,          only: cfg
+   use hypre_str_class,   only: hypre_str
    use incomp_class,      only: incomp
    use timetracker_class, only: timetracker
    use ensight_class,     only: ensight
@@ -13,6 +14,8 @@ module simulation
    !> Single-phase incompressible flow solver and corresponding time tracker
    type(incomp),      public :: fs
    type(timetracker), public :: time
+   type(hypre_str),   public :: ps
+   type(hypre_str),   public :: vs
    
    !> Ensight postprocessing
    type(ensight) :: ens_out
@@ -120,7 +123,7 @@ contains
       
       ! Create a single-phase flow solver without bconds
       create_and_initialize_flow_solver: block
-         use ils_class, only: gmres_amg,pcg_pfmg
+        use hypre_str_class, only: pcg_pfmg,gmres_pfmg
          use mathtools, only: twoPi
          integer :: i,j,k
          real(WP) :: amp,vel
@@ -131,13 +134,16 @@ contains
          ! Assign constant density
          call param_read('Density',fs%rho)
          ! Configure pressure solver
-         call param_read('Pressure iteration',fs%psolv%maxit)
-         call param_read('Pressure tolerance',fs%psolv%rcvg)
+         ps=hypre_str(cfg=cfg,name='Pressure',method=pcg_pfmg,nst=7)
+         ps%maxlevel=10
+         call param_read('Pressure iteration',ps%maxit)
+         call param_read('Pressure tolerance',ps%rcvg)
          ! Configure implicit velocity solver
-         call param_read('Implicit iteration',fs%implicit%maxit)
-         call param_read('Implicit tolerance',fs%implicit%rcvg)
+         vs=hypre_str(cfg=cfg,name='Velocity',method=gmres_pfmg,nst=7)
+         call param_read('Implicit iteration',vs%maxit)
+         call param_read('Implicit tolerance',vs%rcvg)
          ! Setup the solver
-         call fs%setup(pressure_ils=pcg_pfmg,implicit_ils=pcg_pfmg)
+         call fs%setup(pressure_solver=ps,implicit_solver=vs)
          ! Initialize velocity based on specified bulk
          call param_read('Ubulk',Ubulk)
          call param_read('Wbulk',Wbulk)
