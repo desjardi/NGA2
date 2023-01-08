@@ -30,7 +30,7 @@ module lpt_class
      real(WP), dimension(3) :: pos        !< Particle center coordinates
      real(WP), dimension(3) :: vel        !< Velocity of particle
      real(WP), dimension(3) :: angVel     !< Angular velocity of particle
-     real(WP), dimension(3) :: col        !< Normal collision force
+     real(WP), dimension(3) :: Acol       !< Collision acceleration
      real(WP), dimension(3) :: Tcol       !< Collision torque
      real(WP) :: T                        !< Temperature
      real(WP) :: dt                       !< Time step size for the particle
@@ -115,12 +115,6 @@ module lpt_class
      ! Particle volume fraction
      real(WP), dimension(:,:,:), allocatable :: VF       !< Particle volume fraction, cell-centered
 
-     ! Momentum source
-     real(WP), dimension(:,:,:), allocatable :: srcU     !< U momentum source on mesh, cell-centered
-     real(WP), dimension(:,:,:), allocatable :: srcV     !< V momentum source on mesh, cell-centered
-     real(WP), dimension(:,:,:), allocatable :: srcW     !< W momentum source on mesh, cell-centered
-     real(WP), dimension(:,:,:), allocatable :: srcE     !< E momentum source on mesh, cell-centered
-
      ! Filtering operation
      logical :: implicit_filter                          !< Solve implicitly
      real(WP) :: filter_width                            !< Characteristic filter width
@@ -144,7 +138,6 @@ module lpt_class
      procedure :: update_VF                              !< Compute particle volume fraction
      procedure :: filter                                 !< Apply volume filtering to field
      procedure :: inject                                 !< Inject particles at a prescribed boundary
-     !procedure :: get_vorticity                          !< Calculate vorticity
   end type lpt
 
 
@@ -184,16 +177,12 @@ contains
 
     ! Allocate VF and src arrays on cfg mesh
     allocate(self%VF  (self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%VF  =0.0_WP
-    allocate(self%srcU(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%srcU=0.0_WP
-    allocate(self%srcV(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%srcV=0.0_WP
-    allocate(self%srcW(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%srcW=0.0_WP
-    allocate(self%srcE(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%srcE=0.0_WP
 
     ! Set filter width to zero by default
     self%filter_width=0.0_WP
 
-    ! Solve explicitly by default
-    self%implicit_filter=.false.
+    ! Solve implicitly by default
+    self%implicit_filter=.true.
 
     ! Set default drag
     self%drag_model='Schiller-Naumann'
@@ -359,7 +348,7 @@ contains
     end block logging
 
   end function constructor
-
+  
 
   !> Resolve collisional interaction between particles
   !> Requires tau_col, e_n, e_w and mu_f to be set beforehand
@@ -374,7 +363,7 @@ contains
     zero_force: block
       integer :: i
       do i=1,this%np_
-         this%p(i)%col=0.0_WP
+         this%p(i)%Acol=0.0_WP
          this%p(i)%Tcol=0.0_WP
       end do
     end block zero_force
@@ -447,7 +436,10 @@ contains
       eta_coeff_w=-2.0_WP*log(this%e_w)/this%tau_col
 
       ! Loop over all local particles
-      do i1=1,this%np_
+      collision: do i1=1,this%np_
+
+         ! Cycle if id<=0
+         if (this%p(i1)%id.le.0) cycle collision
          
          ! Store particle data
          r1=this%p(i1)%pos
@@ -484,7 +476,7 @@ contains
             end if
             ! Calculate collision force
             f_n=f_n/m1; f_t=f_t/m1
-            this%p(i1)%col=this%p(i1)%col+f_n+f_t
+            this%p(i1)%Acol=this%p(i1)%Acol+f_n+f_t
             ! Calculate collision torque
             this%p(i1)%Tcol=this%p(i1)%Tcol+cross_product(0.5_WP*d1*n12,f_t)
          end if
@@ -546,13 +538,13 @@ contains
                         end if
                         ! Calculate collision force
                         f_n=f_n/m1; f_t=f_t/m1
-                        this%p(i1)%col=this%p(i1)%col+f_n+f_t
+                        this%p(i1)%Acol=this%p(i1)%Acol+f_n+f_t
                         ! Calculate collision torque
                         this%p(i1)%Tcol=this%p(i1)%Tcol+cross_product(0.5_WP*d1*n12,f_t)
                         ! Add up the collisions
                         this%ncol=this%ncol+1
                      end if
-
+                     
                   end do
 
                end do
@@ -560,11 +552,23 @@ contains
          end do
 
          ! Deal with dimensionality
-         if (this%cfg%nx.eq.1) this%p(i1)%col(1)=0.0_WP
-         if (this%cfg%ny.eq.1) this%p(i1)%col(2)=0.0_WP
-         if (this%cfg%nz.eq.1) this%p(i1)%col(3)=0.0_WP
+         if (this%cfg%nx.eq.1) then
+            this%p(i1)%Acol(1)=0.0_WP
+            this%p(i1)%Tcol(2)=0.0_WP
+            this%p(i1)%Tcol(3)=0.0_WP
+         end if
+         if (this%cfg%ny.eq.1) then
+            this%p(i1)%Tcol(1)=0.0_WP
+            this%p(i1)%Acol(2)=0.0_WP
+            this%p(i1)%Tcol(3)=0.0_WP
+         end if
+         if (this%cfg%nz.eq.1) then
+            this%p(i1)%Tcol(1)=0.0_WP
+            this%p(i1)%Tcol(2)=0.0_WP
+            this%p(i1)%Acol(3)=0.0_WP
+         end if
 
-      end do
+      end do collision
 
       ! Determine total number of collisions
       call MPI_ALLREDUCE(this%ncol,nn,1,MPI_INTEGER,MPI_SUM,this%cfg%comm,ierr); this%ncol=nn/2
@@ -575,78 +579,96 @@ contains
 
 
   !> Advance the particle equations by a specified time step dt
-  subroutine advance(this,dt,U,V,W,rho,visc)
+  !> p%id=0 => no coll, no solve
+  !> p%id=-1=> no coll, no move
+  subroutine advance(this,dt,U,V,W,rho,visc,stress_x,stress_y,stress_z,vortx,vorty,vortz,T,srcU,srcV,srcW,srcE)
     use mpi_f08, only : MPI_SUM,MPI_INTEGER
     use mathtools, only: Pi
     implicit none
     class(lpt), intent(inout) :: this
     real(WP), intent(inout) :: dt  !< Timestep size over which to advance
-    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: U     !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
-    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: V     !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
-    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: W     !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
-    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: rho   !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
-    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: visc  !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: U         !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: V         !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: W         !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: rho       !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: visc      !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: stress_x  !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: stress_y  !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: stress_z  !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout), optional :: vortx  !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout), optional :: vorty  !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout), optional :: vortz  !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout), optional :: T      !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout), optional :: srcU   !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout), optional :: srcV   !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout), optional :: srcW   !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout), optional :: srcE   !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
     integer :: i,j,k,ierr
     real(WP) :: mydt,dt_done,deng,Ip
     real(WP), dimension(3) :: acc,torque,dmom
-    type(part) :: pold
+    type(part) :: myp,pold
 
     ! Zero out source term arrays
-    this%srcU=0.0_WP
-    this%srcV=0.0_WP
-    this%srcW=0.0_WP
-    this%srcE=0.0_WP
+    if (present(srcU)) srcU=0.0_WP
+    if (present(srcV)) srcV=0.0_WP
+    if (present(srcW)) srcW=0.0_WP
+    if (present(srcE)) srcE=0.0_WP
 
     ! Zero out number of particles removed
     this%np_out=0
 
-    ! Get fluid vorticity if needed
-    !if (this%use_torque) call get_vorticity(U,V,W,vort)
-
     ! Advance the equations
     do i=1,this%np_
+       ! Avoid particles with id=0
+       if (this%p(i)%id.eq.0) cycle
+       ! Create local copy of particle
+       myp=this%p(i)
        ! Time-integrate until dt_done=dt
        dt_done=0.0_WP
        do while (dt_done.lt.dt)
           ! Decide the timestep size
-          mydt=min(this%p(i)%dt,dt-dt_done)
+          mydt=min(myp%dt,dt-dt_done)
           ! Remember the particle
-          pold=this%p(i)
+          pold=myp
           ! Particle moment of inertia per unit mass
-          Ip = 0.1_WP*this%p(i)%d**2
+          Ip = 0.1_WP*myp%d**2
           ! Advance with Euler prediction
-          call this%get_rhs(U=U,V=V,W=W,rho=rho,visc=visc,p=this%p(i),acc=acc,torque=torque,opt_dt=this%p(i)%dt)
-          this%p(i)%pos=pold%pos+0.5_WP*mydt*this%p(i)%vel
-          this%p(i)%vel=pold%vel+0.5_WP*mydt*(acc+this%gravity+this%p(i)%col)
-          this%p(i)%angVel=pold%angVel+0.5_WP*mydt*(torque+this%p(i)%Tcol)/Ip
+          call this%get_rhs(U=U,V=V,W=W,rho=rho,visc=visc,stress_x=stress_x,stress_y=stress_y,stress_z=stress_z,p=myp,acc=acc,torque=torque,opt_dt=myp%dt)
+          !if (this%use_lift.and.present(vortx).and.present(vorty).and.present(vortz)) call this%get_lift(vortx,vorty,vortz,acc=acc)
+          myp%pos=pold%pos+0.5_WP*mydt*myp%vel
+          myp%vel=pold%vel+0.5_WP*mydt*(acc+this%gravity+myp%Acol)
+          myp%angVel=pold%angVel+0.5_WP*mydt*(torque+myp%Tcol)/Ip
           ! Correct with midpoint rule
-          call this%get_rhs(U=U,V=V,W=W,rho=rho,visc=visc,p=this%p(i),acc=acc,torque=torque,opt_dt=this%p(i)%dt)
-          this%p(i)%pos=pold%pos+mydt*this%p(i)%vel
-          this%p(i)%vel=pold%vel+mydt*(acc+this%gravity+this%p(i)%col)
+          call this%get_rhs(U=U,V=V,W=W,rho=rho,visc=visc,stress_x=stress_x,stress_y=stress_y,stress_z=stress_z,p=myp,acc=acc,torque=torque,opt_dt=myp%dt)
+          myp%pos=pold%pos+mydt*myp%vel
+          myp%vel=pold%vel+mydt*(acc+this%gravity+myp%Acol)
+          myp%angVel=pold%angVel+mydt*(torque+myp%Tcol)/Ip
           ! Relocalize
-          this%p(i)%ind=this%cfg%get_ijk_global(this%p(i)%pos,this%p(i)%ind)
+          myp%ind=this%cfg%get_ijk_global(myp%pos,myp%ind)
           ! Send source term back to the mesh
-          dmom=mydt*acc*this%rho*Pi/6.0_WP*this%p(i)%d**3
-          deng=sum(dmom*this%p(i)%vel)
-          if (this%cfg%nx.gt.1) call this%cfg%set_scalar(Sp=-dmom(1),pos=this%p(i)%pos,i0=this%p(i)%ind(1),j0=this%p(i)%ind(2),k0=this%p(i)%ind(3),S=this%srcU,bc='n')
-          if (this%cfg%ny.gt.1) call this%cfg%set_scalar(Sp=-dmom(2),pos=this%p(i)%pos,i0=this%p(i)%ind(1),j0=this%p(i)%ind(2),k0=this%p(i)%ind(3),S=this%srcV,bc='n')
-          if (this%cfg%nz.gt.1) call this%cfg%set_scalar(Sp=-dmom(3),pos=this%p(i)%pos,i0=this%p(i)%ind(1),j0=this%p(i)%ind(2),k0=this%p(i)%ind(3),S=this%srcW,bc='n')
-          call this%cfg%set_scalar(Sp=-deng   ,pos=this%p(i)%pos,i0=this%p(i)%ind(1),j0=this%p(i)%ind(2),k0=this%p(i)%ind(3),S=this%srcE,bc='n')
+          dmom=mydt*acc*this%rho*Pi/6.0_WP*myp%d**3
+          deng=sum(dmom*myp%vel)
+          if (this%cfg%nx.gt.1.and.present(srcU)) call this%cfg%set_scalar(Sp=-dmom(1),pos=myp%pos,i0=myp%ind(1),j0=myp%ind(2),k0=myp%ind(3),S=srcU,bc='n')
+          if (this%cfg%ny.gt.1.and.present(srcV)) call this%cfg%set_scalar(Sp=-dmom(2),pos=myp%pos,i0=myp%ind(1),j0=myp%ind(2),k0=myp%ind(3),S=srcV,bc='n')
+          if (this%cfg%nz.gt.1.and.present(srcW)) call this%cfg%set_scalar(Sp=-dmom(3),pos=myp%pos,i0=myp%ind(1),j0=myp%ind(2),k0=myp%ind(3),S=srcW,bc='n')
+          if (present(srcE))                      call this%cfg%set_scalar(Sp=-deng   ,pos=myp%pos,i0=myp%ind(1),j0=myp%ind(2),k0=myp%ind(3),S=srcE,bc='n')
           ! Increment
           dt_done=dt_done+mydt
        end do
        ! Correct the position to take into account periodicity
-       if (this%cfg%xper) this%p(i)%pos(1)=this%cfg%x(this%cfg%imin)+modulo(this%p(i)%pos(1)-this%cfg%x(this%cfg%imin),this%cfg%xL)
-       if (this%cfg%yper) this%p(i)%pos(2)=this%cfg%y(this%cfg%jmin)+modulo(this%p(i)%pos(2)-this%cfg%y(this%cfg%jmin),this%cfg%yL)
-       if (this%cfg%zper) this%p(i)%pos(3)=this%cfg%z(this%cfg%kmin)+modulo(this%p(i)%pos(3)-this%cfg%z(this%cfg%kmin),this%cfg%zL)
+       if (this%cfg%xper) myp%pos(1)=this%cfg%x(this%cfg%imin)+modulo(myp%pos(1)-this%cfg%x(this%cfg%imin),this%cfg%xL)
+       if (this%cfg%yper) myp%pos(2)=this%cfg%y(this%cfg%jmin)+modulo(myp%pos(2)-this%cfg%y(this%cfg%jmin),this%cfg%yL)
+       if (this%cfg%zper) myp%pos(3)=this%cfg%z(this%cfg%kmin)+modulo(myp%pos(3)-this%cfg%z(this%cfg%kmin),this%cfg%zL)
        ! Handle particles that have left the domain
-       if (this%p(i)%pos(1).lt.this%cfg%x(this%cfg%imin).or.this%p(i)%pos(1).gt.this%cfg%x(this%cfg%imax+1)) this%p(i)%flag=1
-       if (this%p(i)%pos(2).lt.this%cfg%y(this%cfg%jmin).or.this%p(i)%pos(2).gt.this%cfg%y(this%cfg%jmax+1)) this%p(i)%flag=1
-       if (this%p(i)%pos(3).lt.this%cfg%z(this%cfg%kmin).or.this%p(i)%pos(3).gt.this%cfg%z(this%cfg%kmax+1)) this%p(i)%flag=1
+       if (myp%pos(1).lt.this%cfg%x(this%cfg%imin).or.myp%pos(1).gt.this%cfg%x(this%cfg%imax+1)) myp%flag=1
+       if (myp%pos(2).lt.this%cfg%y(this%cfg%jmin).or.myp%pos(2).gt.this%cfg%y(this%cfg%jmax+1)) myp%flag=1
+       if (myp%pos(3).lt.this%cfg%z(this%cfg%kmin).or.myp%pos(3).gt.this%cfg%z(this%cfg%kmax+1)) myp%flag=1
        ! Relocalize the particle
-       this%p(i)%ind=this%cfg%get_ijk_global(this%p(i)%pos,this%p(i)%ind)
+       myp%ind=this%cfg%get_ijk_global(myp%pos,myp%ind)
        ! Count number of particles removed
-       if (this%p(i)%flag.eq.1) this%np_out=this%np_out+1
+       if (myp%flag.eq.1) this%np_out=this%np_out+1
+       ! Copy back to particle
+       if (myp%id.ne.-1) this%p(i)=myp
     end do
 
     ! Communicate particles
@@ -655,11 +677,19 @@ contains
     ! Sum up particles removed
     call MPI_ALLREDUCE(this%np_out,i,1,MPI_INTEGER,MPI_SUM,this%cfg%comm,ierr); this%np_out=i
 
-    ! Divide source arrays by volume, sum at boundaries, and volume filter
-    this%srcU=this%srcU/this%cfg%vol; call this%cfg%syncsum(this%srcU); call this%filter(this%srcU)
-    this%srcV=this%srcV/this%cfg%vol; call this%cfg%syncsum(this%srcV); call this%filter(this%srcV)
-    this%srcW=this%srcW/this%cfg%vol; call this%cfg%syncsum(this%srcW); call this%filter(this%srcW)
-    this%srcE=this%srcE/this%cfg%vol; call this%cfg%syncsum(this%srcE); call this%filter(this%srcE)
+    ! Divide source arrays by volume, sum at boundaries, and volume filter if present
+    if (present(srcU)) then
+       srcU=srcU/this%cfg%vol; call this%cfg%syncsum(srcU); call this%filter(srcU)
+    end if
+    if (present(srcV)) then
+       srcV=srcV/this%cfg%vol; call this%cfg%syncsum(srcV); call this%filter(srcV)
+    end if
+    if (present(srcW)) then
+       srcW=srcW/this%cfg%vol; call this%cfg%syncsum(srcW); call this%filter(srcW)
+    end if
+    if (present(srcE)) then
+       srcE=srcE/this%cfg%vol; call this%cfg%syncsum(srcE); call this%filter(srcE)
+    end if
 
     ! Recompute volume fraction
     call this%update_VF()
@@ -682,25 +712,30 @@ contains
 
 
   !> Calculate RHS of the particle ODEs
-  subroutine get_rhs(this,U,V,W,rho,visc,T,p,acc,torque,opt_dt)
+  subroutine get_rhs(this,U,V,W,rho,visc,stress_x,stress_y,stress_z,T,p,acc,torque,opt_dt)
     implicit none
     class(lpt), intent(inout) :: this
-    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: U     !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
-    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: V     !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
-    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: W     !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
-    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: rho   !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
-    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: visc  !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: U         !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: V         !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: W         !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: rho       !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: visc      !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: stress_x  !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: stress_y  !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: stress_z  !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
     real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout), optional :: T  !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
     type(part), intent(in) :: p
     real(WP), dimension(3), intent(out) :: acc,torque
     real(WP), intent(out) :: opt_dt
     real(WP) :: fvisc,frho,pVF,fVF,fT
-    real(WP), dimension(3) :: fvel,fvort
+    real(WP), dimension(3) :: fvel,fstress,fvort
 
     ! Interpolate fluid quantities to particle location
     interpolate: block
       ! Interpolate the fluid phase velocity to the particle location
       fvel=this%cfg%get_velocity(pos=p%pos,i0=p%ind(1),j0=p%ind(2),k0=p%ind(3),U=U,V=V,W=W)
+      ! Interpolate the fluid phase stress to the particle location
+      fstress=this%cfg%get_velocity(pos=p%pos,i0=p%ind(1),j0=p%ind(2),k0=p%ind(3),U=stress_x,V=stress_y,W=stress_z)
       ! Interpolate the fluid phase viscosity to the particle location
       fvisc=this%cfg%get_scalar(pos=p%pos,i0=p%ind(1),j0=p%ind(2),k0=p%ind(3),S=visc,bc='n')
       fvisc=fvisc+epsilon(1.0_WP)
@@ -712,7 +747,7 @@ contains
       ! Interpolate the fluid temperature to the particle location if present
       if (present(T)) fT=this%cfg%get_scalar(pos=p%pos,i0=p%ind(1),j0=p%ind(2),k0=p%ind(3),S=T,bc='n')
       ! Interpolate the fluid vorticity to the particle location if needed
-      if (this%use_lift) fvort=this%cfg%get_velocity(pos=p%pos,i0=p%ind(1),j0=p%ind(2),k0=p%ind(3),U=U,V=V,W=W)
+      !if (this%use_lift) fvort=this%cfg%get_velocity(pos=p%pos,i0=p%ind(1),j0=p%ind(2),k0=p%ind(3),U=U,V=V,W=W)
     end block interpolate
 
     ! Compute acceleration due to drag
@@ -741,7 +776,7 @@ contains
       ! Particle response time
       tau=this%rho*p%d**2/(18.0_WP*fvisc*corr)
       ! Return acceleration and optimal timestep size
-      acc=(fvel-p%vel)/tau
+      acc=(fvel-p%vel)/tau+fstress/this%rho
       opt_dt=tau/real(this%nstep,WP)
     end block compute_drag
 
@@ -820,7 +855,7 @@ contains
                 this%tridiag%Ax(j,k,i,-1) = - this%div_x(0,i,j,k) * filter_coeff * this%grd_x(-1,i,j,k)
                 this%tridiag%Ax(j,k,i, 0) = 1.0_WP - (this%div_x(0,i,j,k) * filter_coeff * this%grd_x(0,i,j,k) &
                      + this%div_x(1,i,j,k) * filter_coeff * this%grd_x(-1,i+1,j,k))
-                this%tridiag%Ax(j,k,i,+1) = - this%div_x(1,i,j,k) * filter_coeff * this%grd_x(i+1,i,j,k)
+                this%tridiag%Ax(j,k,i,+1) = - this%div_x(1,i,j,k) * filter_coeff * this%grd_x(0,i+1,j,k)
                 this%tridiag%Rx(j,k,i) = A(i,j,k)
              end do
           end do
@@ -832,7 +867,7 @@ contains
              do i=this%cfg%imin_,this%cfg%imax_
                 this%tridiag%Ay(i,k,j,-1) = - this%div_y(0,i,j,k) * filter_coeff * this%grd_y(-1,i,j,k)
                 this%tridiag%Ay(i,k,j, 0) = 1.0_WP - (this%div_y(0,i,j,k)* filter_coeff * this%grd_y(0,i,j,k) &
-                     + this%div_y(1,i,j,k)* filter_coeff * this%grd_y(-1,i,j+1,k))
+                     + this%div_y(1,i,j,k) * filter_coeff * this%grd_y(-1,i,j+1,k))
                 this%tridiag%Ay(i,k,j,+1) = - this%div_y(1,i,j,k) * filter_coeff * this%grd_y(0,i,j+1,k)
                 this%tridiag%Ry(i,k,j) = this%tridiag%Rx(j,k,i)
              end do
@@ -847,7 +882,7 @@ contains
                 this%tridiag%Az(i,j,k, 0) = 1.0_WP - (this%div_z(0,i,j,k) * filter_coeff * this%grd_z(0,i,j,k) &
                      + this%div_z(1,i,j,k) * filter_coeff * this%grd_z(-1,i,j,k))
                 this%tridiag%Az(i,j,k,+1) = - this%div_z(1,i,j,k) * filter_coeff * this%grd_z(0,i,j,k)
-                this%tridiag% Rz(i,j,k) = this%tridiag%Ry(i,k,j)
+                this%tridiag%Rz(i,j,k) = this%tridiag%Ry(i,k,j)
              end do
           end do
        end do
@@ -860,8 +895,6 @@ contains
              end do
           end do
        end do
-       ! Sync A
-       call this%cfg%sync(A)
     else  !< Apply filter explicitly
        ! Allocate flux arrays
        allocate(FX(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
@@ -888,84 +921,15 @@ contains
                 end do
              end do
           end do
-          ! Sync A
-          call this%cfg%sync(A)
        end do
        ! Deallocate flux arrays
        deallocate(FX,FY,FZ)
     end if
 
+    ! Sync A
+    call this%cfg%sync(A)
+
   end subroutine filter
-
-
-!!$  !> Calculate vorticity
-!!$   subroutine get_vorticity(this,U,V,W,vort)
-!!$      use messager, only: die
-!!$      implicit none
-!!$      class(lowmach), intent(inout) :: this
-!!$      real(WP), dimension   (this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in ) :: U     !< Needs to be     (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
-!!$      real(WP), dimension   (this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in ) :: V     !< Needs to be     (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
-!!$      real(WP), dimension   (this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in ) :: W     !< Needs to be     (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
-!!$      real(WP), dimension(1:,this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(out) :: vort  !< Needs to be (1:3,imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
-!!$      integer :: i,j,k
-!!$      real(WP) :: Uxm,Uxp,Uym,Uyp,Uzm,Uzp
-!!$      real(WP) :: Vxm,Vxp,Vym,Vyp,Vzm,Vzp
-!!$      real(WP) :: Wxm,Wxp,Wym,Wyp,Wzm,Wzp
-!!$      real(WP), dimension(3,3) :: dUdx
-!!$      
-!!$      ! Check vort's first dimension
-!!$      if (size(vort,dim=1).ne.3) call die('[lpt get_vorticity] vort should be of size (1:3,imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)')
-!!$      
-!!$      ! Calculate inside
-!!$      do k=this%cfg%kmin_,this%cfg%kmax_
-!!$         do j=this%cfg%jmin_,this%cfg%jmax_
-!!$            do i=this%cfg%imin_,this%cfg%imax_
-!!$               ! Rebuild face velocities from interpolated velocities
-!!$               Uxm=sum(this%itpi_x(:,i,j,k)*Ui(i-1:i,j,k)); Uxp=sum(this%itpi_x(:,i+1,j,k)*Ui(i:i+1,j,k)); Uym=sum(this%itpi_y(:,i,j,k)*Ui(i,j-1:j,k)); Uyp=sum(this%itpi_y(:,i,j+1,k)*Ui(i,j:j+1,k)); Uzm=sum(this%itpi_z(:,i,j,k)*Ui(i,j,k-1:k)); Uzp=sum(this%itpi_z(:,i,j,k+1)*Ui(i,j,k:k+1))
-!!$               Vxm=sum(this%itpi_x(:,i,j,k)*Vi(i-1:i,j,k)); Vxp=sum(this%itpi_x(:,i+1,j,k)*Vi(i:i+1,j,k)); Vym=sum(this%itpi_y(:,i,j,k)*Vi(i,j-1:j,k)); Vyp=sum(this%itpi_y(:,i,j+1,k)*Vi(i,j:j+1,k)); Vzm=sum(this%itpi_z(:,i,j,k)*Vi(i,j,k-1:k)); Vzp=sum(this%itpi_z(:,i,j,k+1)*Vi(i,j,k:k+1))
-!!$               Wxm=sum(this%itpi_x(:,i,j,k)*Wi(i-1:i,j,k)); Wxp=sum(this%itpi_x(:,i+1,j,k)*Wi(i:i+1,j,k)); Wym=sum(this%itpi_y(:,i,j,k)*Wi(i,j-1:j,k)); Wyp=sum(this%itpi_y(:,i,j+1,k)*Wi(i,j:j+1,k)); Wzm=sum(this%itpi_z(:,i,j,k)*Wi(i,j,k-1:k)); Wzp=sum(this%itpi_z(:,i,j,k+1)*Wi(i,j,k:k+1))
-!!$               ! Get velocity gradient tensor
-!!$               dUdx(1,1)=this%cfg%dxi(i)*(Uxp-Uxm); dUdx(1,2)=this%cfg%dyi(j)*(Uyp-Uym); dUdx(1,3)=this%cfg%dzi(k)*(Uzp-Uzm)
-!!$               dUdx(2,1)=this%cfg%dxi(i)*(Vxp-Vxm); dUdx(2,2)=this%cfg%dyi(j)*(Vyp-Vym); dUdx(2,3)=this%cfg%dzi(k)*(Vzp-Vzm)
-!!$               dUdx(3,1)=this%cfg%dxi(i)*(Wxp-Wxm); dUdx(3,2)=this%cfg%dyi(j)*(Wyp-Wym); dUdx(3,3)=this%cfg%dzi(k)*(Wzp-Wzm)
-!!$               ! Assemble the strain rate
-!!$               SR(1,i,j,k)=dUdx(1,1)-(dUdx(1,1)+dUdx(2,2)+dUdx(3,3))/3.0_WP
-!!$               SR(2,i,j,k)=dUdx(2,2)-(dUdx(1,1)+dUdx(2,2)+dUdx(3,3))/3.0_WP
-!!$               SR(3,i,j,k)=dUdx(3,3)-(dUdx(1,1)+dUdx(2,2)+dUdx(3,3))/3.0_WP
-!!$               SR(4,i,j,k)=0.5_WP*(dUdx(1,2)+dUdx(2,1))
-!!$               SR(5,i,j,k)=0.5_WP*(dUdx(2,3)+dUdx(3,2))
-!!$               SR(6,i,j,k)=0.5_WP*(dUdx(3,1)+dUdx(1,3))
-!!$            end do
-!!$         end do
-!!$      end do
-!!$      
-!!$      ! Apply a Neumann condition in non-periodic directions
-!!$      if (.not.this%cfg%xper) then
-!!$         if (this%cfg%iproc.eq.1)            SR(:,this%cfg%imin-1,:,:)=SR(:,this%cfg%imin,:,:)
-!!$         if (this%cfg%iproc.eq.this%cfg%npx) SR(:,this%cfg%imax+1,:,:)=SR(:,this%cfg%imax,:,:)
-!!$      end if
-!!$      if (.not.this%cfg%yper) then
-!!$         if (this%cfg%jproc.eq.1)            SR(:,:,this%cfg%jmin-1,:)=SR(:,:,this%cfg%jmin,:)
-!!$         if (this%cfg%jproc.eq.this%cfg%npy) SR(:,:,this%cfg%jmax+1,:)=SR(:,:,this%cfg%jmax,:)
-!!$      end if
-!!$      if (.not.this%cfg%zper) then
-!!$         if (this%cfg%kproc.eq.1)            SR(:,:,:,this%cfg%kmin-1)=SR(:,:,:,this%cfg%kmin)
-!!$         if (this%cfg%kproc.eq.this%cfg%npz) SR(:,:,:,this%cfg%kmax+1)=SR(:,:,:,this%cfg%kmax)
-!!$      end if
-!!$      
-!!$      ! Ensure zero in walls
-!!$      do k=this%cfg%kmino_,this%cfg%kmaxo_
-!!$         do j=this%cfg%jmino_,this%cfg%jmaxo_
-!!$            do i=this%cfg%imino_,this%cfg%imaxo_
-!!$               if (this%mask(i,j,k).eq.1) SR(:,i,j,k)=0.0_WP
-!!$            end do
-!!$         end do
-!!$      end do
-!!$      
-!!$      ! Sync it
-!!$      call this%cfg%sync(SR)
-!!$      
-!!$   end subroutine get_vorticity
 
 
   !> Inject particles from a prescribed location with given mass flowrate
@@ -1007,7 +971,7 @@ contains
        allocate(nrecv(this%cfg%nproc))
        count=0
        inj_min(1)=this%cfg%x(this%cfg%imino)
-       inj_max(1)=this%cfg%x(this%cfg%imin+1)+this%inj_dmax
+       inj_max(1)=this%inj_pos(1)+this%inj_dmax
        inj_min(2)=this%inj_pos(2)-0.5_WP*this%inj_d-this%inj_dmax
        inj_max(2)=this%inj_pos(2)+0.5_WP*this%inj_d+this%inj_dmax
        inj_min(3)=this%inj_pos(3)-0.5_WP*this%inj_d-this%inj_dmax
@@ -1064,11 +1028,12 @@ contains
              ! Set various parameters for the particle
              this%p(count)%id    =maxid+int(np_tmp,8)
              this%p(count)%dt    =0.0_WP
-             this%p(count)%col   =0.0_WP
+             this%p(count)%Acol  =0.0_WP
+             this%p(count)%Tcol  =0.0_WP
              this%p(count)%T     =this%inj_T
              this%p(count)%angVel=0.0_WP
              ! Give a position at the injector to the particle
-             this%p(count)%pos=get_position(0.6_WP*this%p(count)%d)
+             this%p(count)%pos=get_position()
              overlap=.false.
              ! Check overlap with particles recently injected
              if (this%use_col) then
@@ -1147,16 +1112,15 @@ contains
     end function get_diameter
 
     ! Position for bulk injection of particles
-    function get_position(mind) result(pos)
+    function get_position() result(pos)
       use random, only: random_uniform
       use mathtools, only: twoPi
       implicit none
-      real(WP), intent(in) :: mind
       real(WP), dimension(3) :: pos
       real(WP) :: rand,r,theta
       integer :: ip,jp,kp
       ! Set x position
-      pos(1) = this%cfg%x(this%cfg%imin)+mind
+      pos(1) = this%inj_pos(1)
       ! Random y & z position within a circular region
       if (this%cfg%nz.eq.1) then
          pos(2)=random_uniform(lo=this%inj_pos(2)-0.5_WP*this%inj_d,hi=this%inj_pos(3)+0.5_WP*this%inj_d)
@@ -1188,9 +1152,9 @@ contains
     ! Set the CFLs to zero
     my_CFLp_x=0.0_WP; my_CFLp_y=0.0_WP; my_CFLp_z=0.0_WP; my_CFL_col=0.0_WP
     do i=1,this%np_
-       my_CFLp_x=max(my_CFLp_x,abs(this%p(i)%vel(1))*this%cfg%dxmi(this%p(i)%ind(1)))
-       my_CFLp_y=max(my_CFLp_y,abs(this%p(i)%vel(2))*this%cfg%dymi(this%p(i)%ind(2)))
-       my_CFLp_z=max(my_CFLp_z,abs(this%p(i)%vel(3))*this%cfg%dzmi(this%p(i)%ind(3)))
+       my_CFLp_x=max(my_CFLp_x,abs(this%p(i)%vel(1))*this%cfg%dxi(this%p(i)%ind(1)))
+       my_CFLp_y=max(my_CFLp_y,abs(this%p(i)%vel(2))*this%cfg%dyi(this%p(i)%ind(2)))
+       my_CFLp_z=max(my_CFLp_z,abs(this%p(i)%vel(3))*this%cfg%dzi(this%p(i)%ind(3)))
        my_CFL_col=max(my_CFL_col,sqrt(sum(this%p(i)%vel**2))/this%p(i)%d)
     end do
     my_CFLp_x=my_CFLp_x*dt; my_CFLp_y=my_CFLp_y*dt; my_CFLp_z=my_CFLp_z*dt
