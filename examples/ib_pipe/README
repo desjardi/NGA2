@@ -1,0 +1,2 @@
+Simple periodic pipe flow simulation using a direct forcing immersed boundary approach following:
+Bigot, B., Bonometti, T., Lacaze, L., & Thual, O. (2014). A simple immersed-boundary method for solid–fluid interaction in constant-and stratified-density flows. Computers & Fluids, 97, 126-142.
