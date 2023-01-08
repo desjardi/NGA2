@@ -84,7 +84,8 @@ contains
          lp%inj_dmax=lp%inj_dmean
       end if
       call param_read('Particle inject diameter',lp%inj_d)
-      lp%inj_pos=0.0_WP
+      lp%inj_pos(1)=lp%cfg%x(lp%cfg%imin)+lp%inj_dmax
+      lp%inj_pos(2:3)=0.0_WP
       lp%inj_T=300.0_WP
     end block initialize_lpt
 
@@ -110,13 +111,15 @@ contains
     ! Create partmesh object for Lagrangian particle output
     create_pmesh: block
       integer :: i
-      pmesh=partmesh(nvar=1,nvec=2,name='lpt')
-      pmesh%varname(1)='diameter'
+      pmesh=partmesh(nvar=2,nvec=2,name='lpt')
+      pmesh%varname(1)='id'
+      pmesh%varname(2)='diameter'
       pmesh%vecname(1)='velocity'
       pmesh%vecname(2)='ang_vel'
       call lp%update_partmesh(pmesh)
       do i=1,lp%np_
-         pmesh%var(1,i)=lp%p(i)%d
+         pmesh%var(1,i)=real(lp%p(i)%id,WP)
+         pmesh%var(2,i)=lp%p(i)%d
          pmesh%vec(:,1,i)=lp%p(i)%vel
          pmesh%vec(:,2,i)=lp%p(i)%angVel
       end do
@@ -153,7 +156,7 @@ contains
       call mfile%add_column(lp%np_new,'Npart new')
       call mfile%add_column(lp%np_out,'Npart removed')
       call mfile%add_column(lp%ncol,'Particle collisions')
-      call mfile%add_column(lp%VFmean,'Mean VF')
+      call mfile%add_column(lp%VFmax,'Max VF')
       call mfile%add_column(lp%Umin,'Particle Umin')
       call mfile%add_column(lp%Umax,'Particle Umax')
       call mfile%add_column(lp%Vmin,'Particle Vmin')
@@ -196,7 +199,8 @@ contains
        call lp%collide(dt=time%dt)
 
        ! Advance particles by dt
-       call lp%advance(dt=time%dt,U=U,V=V,W=W,rho=rho,visc=visc)
+       U=0.0_WP; V=0.0_WP; W=0.0_WP
+       call lp%advance(dt=time%dt,U=U,V=V,W=W,rho=rho,visc=visc,stress_x=U,stress_y=V,stress_z=W)
 
        ! Output to ensight
        if (ens_evt%occurs()) then
@@ -204,7 +208,8 @@ contains
             integer :: i
             call lp%update_partmesh(pmesh)
             do i=1,lp%np_
-               pmesh%var(1,i)=lp%p(i)%d
+               pmesh%var(1,i)=real(lp%p(i)%id,WP)
+               pmesh%var(2,i)=lp%p(i)%d
                pmesh%vec(:,1,i)=lp%p(i)%vel
                pmesh%vec(:,2,i)=lp%p(i)%angVel
             end do
