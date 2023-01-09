@@ -326,15 +326,15 @@ contains
     select case(trim(dir))
     case('U')
        delta=(fs%cfg%dxm(i)*fs%cfg%dy(j)*fs%cfg%dz(k))**(1.0_WP/3.0_WP)
-       r=sqrt(fs%cfg%ym(j)**2+fs%cfg%zm(k)**2)
+       r=sqrt(fs%cfg%ym(j)**2+fs%cfg%zm(k)**2)+epsilon(1.0_WP)
        norm(1)=0.0_WP; norm(2)=fs%cfg%ym(j)/r; norm(3)=fs%cfg%zm(k)/r
     case('V')
        delta=(fs%cfg%dx(i)*fs%cfg%dym(j)*fs%cfg%dz(k))**(1.0_WP/3.0_WP)
-       r=sqrt(fs%cfg%y(j)**2+fs%cfg%zm(k)**2)
+       r=sqrt(fs%cfg%y(j)**2+fs%cfg%zm(k)**2)+epsilon(1.0_WP)
        norm(1)=0.0_WP; norm(2)=fs%cfg%y(j)/r; norm(3)=fs%cfg%zm(k)/r
     case('W')
        delta=(fs%cfg%dx(i)*fs%cfg%dy(j)*fs%cfg%dzm(k))**(1.0_WP/3.0_WP)
-       r=sqrt(fs%cfg%ym(j)**2+fs%cfg%z(k)**2)
+       r=sqrt(fs%cfg%ym(j)**2+fs%cfg%z(k)**2)+epsilon(1.0_WP)
        norm(1)=0.0_WP; norm(2)=fs%cfg%ym(j)/r; norm(3)=fs%cfg%z(k)/r
     case default
        delta=(fs%cfg%dx(i)*fs%cfg%dy(j)*fs%cfg%dz(k))**(1.0_WP/3.0_WP)
@@ -342,7 +342,7 @@ contains
        norm(1)=0.0_WP; norm(2)=fs%cfg%ym(j)/r; norm(3)=fs%cfg%zm(k)/r
     end select
     lam=sum(abs(norm)); eta=0.065_WP*(1.0_WP-lam**2)+0.39_WP
-    VF=0.5_WP*(1.0_WP-tanh((r-0.5_WP*Dpipe)/(sqrt(2.0_WP)*lam*eta*delta)))
+    VF=0.5_WP*(1.0_WP-tanh((r-0.5_WP*Dpipe)/(sqrt(2.0_WP)*lam*eta*delta+epsilon(1.0_WP))))
   end function get_VF
 
 
