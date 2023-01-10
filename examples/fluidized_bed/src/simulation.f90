@@ -533,7 +533,7 @@ contains
     ! timetracker
 
     ! Deallocate work arrays
-    deallocate(resU,resV,resW,srcUlp.srcVlp,srcWlp,Ui,Vi,Wi,dRHOdt)
+    deallocate(resU,resV,resW,srcUlp,srcVlp,srcWlp,Ui,Vi,Wi,dRHOdt)
 
   end subroutine simulation_final
 

@@ -23,7 +23,6 @@ INCLUDE_LOCATIONS += $(Ulocs)
 VPATH_LOCATIONS   += $(Ulocs)
 
 # Define external libraries - this can also be in .profile
-#HDF5_DIR = /Users/desjardi/Builds/hdf5
 LAPACK_DIR= /Users/jcaps/Research/Codes/Builds/hypre
 HYPRE_DIR = /Users/jcaps/Research/Codes/Builds/hypre
 

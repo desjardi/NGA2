@@ -30,7 +30,7 @@ HYPRE_DIR = /Users/jcaps/Research/Codes/Builds/hypre/
 include $(NGA_HOME)/tools/GNUMake/Make.defs
 
 # Include NGA base code
-Bdirs   := variable_density particles core data solver config grid libraries
+Bdirs   := constant_density immersed core data solver config grid libraries
 Bpack   += $(foreach dir, $(Bdirs), $(NGA_HOME)/src/$(dir)/Make.package)
 include $(Bpack)
 
