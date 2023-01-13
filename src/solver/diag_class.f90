@@ -334,10 +334,22 @@ contains
        recvbuf1(:,6,2:2*proc-1)=buf6
        deallocate(buf1,buf2,buf3,buf4,buf5,buf6)
     else
-       call pentadiagonal_periodic_serial(&
-            recvbuf1(:,1,:),recvbuf1(:,2,:),recvbuf1(:,3,:),&
-            recvbuf1(:,4,:),recvbuf1(:,5,:),recvbuf1(:,6,:),&
+       allocate(buf1(nlot,2*proc),buf2(nlot,2*proc),buf3(nlot,2*proc),buf4(nlot,2*proc),buf5(nlot,2*proc),buf6(nlot,2*proc))
+       buf1=recvbuf1(:,1,:)
+       buf2=recvbuf1(:,2,:)
+       buf3=recvbuf1(:,3,:)
+       buf4=recvbuf1(:,4,:)
+       buf5=recvbuf1(:,5,:)
+       buf6=recvbuf1(:,6,:)
+       call pentadiagonal_periodic_serial(buf1,buf2,buf3,buf4,buf5,buf6,&
             2*proc,nlot,sendbuf(1),sendbuf(2*proc*nlot+1))
+       recvbuf1(:,1,:)=buf1
+       recvbuf1(:,2,:)=buf2
+       recvbuf1(:,3,:)=buf3
+       recvbuf1(:,4,:)=buf4
+       recvbuf1(:,5,:)=buf5
+       recvbuf1(:,6,:)=buf6
+       deallocate(buf1,buf2,buf3,buf4,buf5,buf6)
     end if
 
     ! Move solution to first slot
