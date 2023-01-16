@@ -32,7 +32,7 @@ module simulation
    integer  :: relax_model
    !> Problem definition
    real(WP), dimension(3) :: dctr
-   real(WP) :: ddrop, Pref, lam_wave, Grho0, gamm_g, Pmax, Ls
+   real(WP) :: ddrop, Pref, lam_wave, Grho0, gamm_g, Pmax, Ls, f_wave, c0
    
    !> Monitor input variables
    real(WP), dimension(3) :: prob_loc = (/0.0_WP,0.25_WP,0.0_WP/)
@@ -67,6 +67,93 @@ contains
      isIn=.false.
      if (j.eq.pg%jmin-1) isIn=.true.
    end function btm_of_domain
+
+   !> Function that localizes top sponge
+   function top_sponge(pg,i,j,k) result(isIn)
+     use pgrid_class, only: pgrid
+     implicit none
+     class(pgrid), intent(in) :: pg
+     integer, intent(in) :: i,j,k
+     logical :: isIn
+     isIn=.false.
+     if (pg%y(pg%jmax+1)-pg%ym(j).le.Ls) isIn=.true.
+   end function top_sponge
+
+   !> Function that localizes bottom sponge
+   function btm_sponge(pg,i,j,k) result(isIn)
+     use pgrid_class, only: pgrid
+     implicit none
+     class(pgrid), intent(in) :: pg
+     integer, intent(in) :: i,j,k
+     logical :: isIn
+     isIn=.false.
+     if (pg%ym(j)-pg%y(pg%jmin).le.Ls) isIn=.true.
+   end function btm_sponge
+
+   subroutine apply_sponges(t)
+     use mathtools,  only: Pi
+     implicit none
+     real(WP), intent(in) :: t
+     integer :: i,j,k
+     logical :: in_sponge
+     real(WP) :: swt, ps, rhos, us, vs, ws
+
+     do k=fs%cfg%kmin_,fs%cfg%kmax_
+       do j=fs%cfg%jmin_,fs%cfg%jmax_
+         do i=fs%cfg%imin_,fs%cfg%imax_
+           in_sponge = .false.
+           ! Check top sponge
+           if (top_sponge(fs%cfg,i,j,k)) then
+             in_sponge = .true.
+             ! Get sponge coefficient
+             swt = min(1.0_WP,max(0.0_WP,1.0_WP/Ls*(fs%cfg%ym(j)-Ls)+0.5_WP))**2
+           end if
+           ! Check bottom sponge
+           if (btm_sponge(fs%cfg,i,j,k)) then
+             in_sponge = .true.
+             ! Get sponge coefficient
+             swt = min(1.0_WP,max(0.0_WP,1.0_WP/Ls*(-fs%cfg%ym(j)-Ls)+0.5_WP))**2
+           end if
+           if (in_sponge) then
+             ! Get sponge solution if within a sponge
+             ps = Pref + Pmax*sin(2.0_WP*pi*fs%cfg%ym(j)/(c0/f_wave))*cos(2.0_WP*pi*f_wave*t)
+             rhos = Grho0 + (ps-Pref)/(gamm_g*ps/Grho0)
+             us = 0.0_WP; ws = 0.0_WP
+             vs = 0.0_WP - Pmax/sqrt(rhos*gamm_g*ps)*cos(2.0_WP*pi*fs%cfg%ym(j)/(c0/f_wave))*sin(2.0_WP*pi*f_wave*t)
+             ! Apply changes to variables
+             fs%Grho (i,j,k) = fs%Grho (i,j,k) - swt*(fs%Grho(i,j,k)-rhos)
+             fs%Ui   (i,j,k) = fs%Ui   (i,j,k) - swt*(fs%Ui(i,j,k)-us)
+             fs%Vi   (i,j,k) = fs%Vi   (i,j,k) - swt*(fs%Vi(i,j,k)-vs)
+             fs%Wi   (i,j,k) = fs%Wi   (i,j,k) - swt*(fs%Wi(i,j,k)-ws)
+             fs%GP   (i,j,k) = fs%GP   (i,j,k) - swt*(fs%GP(i,j,k)-ps)
+             fs%GrhoE(i,j,k) = fs%GrhoE(i,j,k) - swt*(fs%GrhoE(i,j,k)-matmod%EOS_energy(ps,rhos,us,vs,ws,'gas'))
+             ! Update related quantities
+             fs%RHO  (i,j,k) = fs%Grho(i,j,k)
+             fs%rhoUi(i,j,k) = fs%RHO(i,j,k)*fs%Ui(i,j,k)
+             fs%rhoVi(i,j,k) = fs%RHO(i,j,k)*fs%Vi(i,j,k)
+             fs%rhoWi(i,j,k) = fs%RHO(i,j,k)*fs%Wi(i,j,k)
+             ! Remove liquid
+             vf%VF   (i,j,k) = 0.0_WP
+             fs%Lrho (i,j,k) = 0.0_WP
+             fs%LP   (i,j,k) = 0.0_WP
+             fs%LrhoE(i,j,k) = 0.0_WP
+           end if
+
+         end do
+       end do
+     end do
+
+     ! Reset interface-based quantities due to VF changes
+     call vf%remove_flotsams()
+     call vf%advect_interface(0.0_WP,fs%U,fs%V,fs%W)
+     call vf%build_interface()
+     call vf%remove_sheets()
+     call vf%polygonalize_interface()
+     call vf%subcell_vol()
+     call vf%get_curvature()
+     call vf%reset_moments()
+
+   end subroutine
   
    !> Updates quantities specific to the monitor of this case
    subroutine lev_drop_update()
@@ -258,7 +345,7 @@ contains
          integer :: i,j,k,n,si,sj,sk
          real(WP), dimension(3,8) :: cube_vertex
          real(WP), dimension(3) :: v_cent,a_cent
-         real(WP) :: vol,area,c0,f_wave
+         real(WP) :: vol,area
          integer, parameter :: amr_ref_lvl=4
          ! Create a VOF solver with lvira reconstruction
          vf=vfs(cfg=cfg,reconstruction_method=elvira,name='VOF')
@@ -582,6 +669,7 @@ contains
             call fs%diffusion_src_explicit_step(time%dt,vf,matmod)
 
             ! Perform sponge forcing
+            call apply_sponges(time%t)
 
             ! Prepare pressure projection
             call fs%pressureproj_prepare(time%dt,vf,matmod)
