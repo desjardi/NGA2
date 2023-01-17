@@ -167,7 +167,7 @@ contains
      integer  :: ierr,i,j,k,ii,jj,kk,nplane,n
      
      ! Initialize
-     Lvol_buf = 0.0_WP
+     Lvol_buf = 0.0_WP; r_drop = 0.0_WP
      p_buf = 0.0_WP; A_buf = 0.0_WP
      x_drop = 0.0_WP; y_drop = 0.0_WP; z_drop = 0.0_WP
      f_vec = 0.0_WP
@@ -353,7 +353,7 @@ contains
          call param_read('Droplet diameter',ddrop)
          call param_read('Droplet relative location',dctr)
          ! Set the energy based on background pressure
-         call param_read('Reference pressure', Pref)
+         call param_read('Background pressure', Pref)
          ! Calculate the corresponding speed of sound
          call param_read('Gas gamma',gamm_g)
          call param_read('Gas density',Grho0)
@@ -481,7 +481,7 @@ contains
 
          ! Get sponge parameters
          call param_read('Sponge max pressure',Pmax)
-         call param_read('Sponge thickness',Ls)
+         call param_read('Sponge length',Ls)
 
          ! Initialize velocity and gas phase
          fs%Ui = 0.0_WP; fs%Vi = 0.0_WP; fs%Wi = 0.0_WP
@@ -530,7 +530,7 @@ contains
       ! Add Ensight output
       create_ensight: block
          ! Create Ensight output from cfg
-         ens_out=ensight(cfg=cfg,name='MASTdrop')
+         ens_out=ensight(cfg=cfg,name='lev_drop')
          ! Create event for Ensight output
          ens_evt=event(time=time,name='Ensight output')
          call param_read('Ensight output period',ens_evt%tper)

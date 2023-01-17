@@ -44,6 +44,7 @@ contains
          end do
 
          ! Create grid in y, with stretching if specified
+         dy = Ly/ny
          if (param_exists('Stretching ratio in y')) then
             call param_read('Stretching ratio in y',ry)
             call param_read('Stretching begins at y',y_uni)
