@@ -1,0 +1,56 @@
+# Parallelization
+Partition :	4 1 1
+
+# Mesh definition
+Lx :	24e-3
+Ly :	24e-3
+Lz :	3e-3
+nx :	80
+ny :	80
+nz :	1
+Stretching ratio in y:	1.1
+Stretching begins at y: 8e-3
+
+# Flow setup
+Droplet diameter :           2.917e-3
+Droplet relative location :  0 -0.0375 0
+Background pressure :  	     1.01325e5
+Gravity :  	       	     0 -9.81 0
+
+# Initial condition and sponge forcing
+Wave frequency :         21.76e3
+Sponge max pressure :    4200
+Sponge length :       	 7e-3
+Liquid density :         998
+Gas density :  		 1.2
+
+# Fluid properties
+Gas gamma : 		      1.4
+Gas dynamic viscosity :       1.813e-5
+Liquid dynamic viscosity :    9e-3
+Liquid gamma :        	      1.19
+Liquid Pref :         	      7.028e8
+Liquid q :            	      -1.178e6
+Liquid b :            	      6.61e-4
+Surface tension coefficient : 0.0726
+
+# Time integration
+Max timestep size : 8e-7
+Max cfl number :    0.9
+Max time :     	    1
+Max steps :	    100000
+
+# Pressure solver
+Pressure tolerance : 1e-6
+Pressure iteration : 100
+
+# Implicit velocity solver
+Implicit tolerance : 1e-6
+Implicit iteration : 100
+
+# Ensight output
+Ensight output period : 0.9999999e-4
+
+# Case specific monitor
+Probe relative location:  0 0.25 0
+Probe diameter:		  1e-3
