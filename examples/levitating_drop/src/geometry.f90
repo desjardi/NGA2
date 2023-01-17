@@ -17,6 +17,7 @@ contains
    subroutine geometry_init
       use sgrid_class, only: sgrid
       use param,       only: param_read,param_exists
+      use parallel,    only: amRoot
       use mathtools,   only: pi
       implicit none
       type(sgrid) :: grid
@@ -59,7 +60,7 @@ contains
                y_tmp = y_tmp + dy_tmp
             end do
             ny_uni = ceiling(y_uni/dy)
-            print*,'ny with stretched mesh',ny
+            if (amRoot) print*,'ny with stretched mesh',ny
             allocate(y(ny+1))
             y(ny/2+1) = 0.0_WP
             do j=ny/2+2,ny/2+ny_uni+1

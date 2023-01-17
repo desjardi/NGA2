@@ -342,6 +342,7 @@ contains
       create_and_initialize_vof: block
          use mms_geom, only: cube_refine_vol
          use vfs_class, only: r2p,lvira,elvira,VFhi,VFlo
+         use parallel,    only: amRoot
          integer :: i,j,k,n,si,sj,sk
          real(WP), dimension(3,8) :: cube_vertex
          real(WP), dimension(3) :: v_cent,a_cent
@@ -362,6 +363,7 @@ contains
          call param_read('Wave frequency',f_wave)
          ! Calculate wavelength
          lam_wave = c0/f_wave
+         if (amRoot) print*, 'standing wavelength', lam_wave
          ! Reference center scaled by wavelength
          dctr = dctr*lam_wave
          ! Droplet always initialized at center

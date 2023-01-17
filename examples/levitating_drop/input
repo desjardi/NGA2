@@ -8,6 +8,8 @@ Lz :	3e-3
 nx :	80
 ny :	80
 nz :	1
+Stretching ratio in y:	1.1
+Stretching begins at y: 8e-3
 
 # Flow setup
 Droplet diameter :           2.917e-3
