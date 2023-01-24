@@ -592,9 +592,9 @@ contains
     real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: W         !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
     real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: rho       !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
     real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: visc      !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
-    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: stress_x  !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
-    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: stress_y  !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
-    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: stress_z  !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout), optional :: stress_x  !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout), optional :: stress_y  !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout), optional :: stress_z  !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
     real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout), optional :: vortx  !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
     real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout), optional :: vorty  !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
     real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout), optional :: vortz  !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
@@ -606,6 +606,7 @@ contains
     integer :: i,j,k,ierr
     real(WP) :: mydt,dt_done,deng,Ip
     real(WP), dimension(3) :: acc,torque,dmom
+    real(WP), dimension(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo) :: sx,sy,sz
     type(part) :: myp,pold
 
     ! Zero out source term arrays
@@ -613,6 +614,23 @@ contains
     if (present(srcV)) srcV=0.0_WP
     if (present(srcW)) srcW=0.0_WP
     if (present(srcE)) srcE=0.0_WP
+    
+    ! Get fluid stress
+    if (present(stress_x)) then
+       sx=stress_x
+    else
+       sx=0.0_WP
+    end if
+    if (present(stress_y)) then
+       sy=stress_y
+    else
+       sy=0.0_WP
+    end if
+    if (present(stress_z)) then
+       sz=stress_z
+    else
+       sz=0.0_WP
+    end if
 
     ! Zero out number of particles removed
     this%np_out=0
@@ -633,13 +651,13 @@ contains
           ! Particle moment of inertia per unit mass
           Ip = 0.1_WP*myp%d**2
           ! Advance with Euler prediction
-          call this%get_rhs(U=U,V=V,W=W,rho=rho,visc=visc,stress_x=stress_x,stress_y=stress_y,stress_z=stress_z,p=myp,acc=acc,torque=torque,opt_dt=myp%dt)
+          call this%get_rhs(U=U,V=V,W=W,rho=rho,visc=visc,stress_x=sx,stress_y=sy,stress_z=sz,p=myp,acc=acc,torque=torque,opt_dt=myp%dt)
           !if (this%use_lift.and.present(vortx).and.present(vorty).and.present(vortz)) call this%get_lift(vortx,vorty,vortz,acc=acc)
           myp%pos=pold%pos+0.5_WP*mydt*myp%vel
           myp%vel=pold%vel+0.5_WP*mydt*(acc+this%gravity+myp%Acol)
           myp%angVel=pold%angVel+0.5_WP*mydt*(torque+myp%Tcol)/Ip
           ! Correct with midpoint rule
-          call this%get_rhs(U=U,V=V,W=W,rho=rho,visc=visc,stress_x=stress_x,stress_y=stress_y,stress_z=stress_z,p=myp,acc=acc,torque=torque,opt_dt=myp%dt)
+          call this%get_rhs(U=U,V=V,W=W,rho=rho,visc=visc,stress_x=sx,stress_y=sy,stress_z=sz,p=myp,acc=acc,torque=torque,opt_dt=myp%dt)
           myp%pos=pold%pos+mydt*myp%vel
           myp%vel=pold%vel+mydt*(acc+this%gravity+myp%Acol)
           myp%angVel=pold%angVel+mydt*(torque+myp%Tcol)/Ip
