@@ -131,7 +131,7 @@ module vfs_class
       integer, dimension(:,:,:), allocatable :: vmask     !< Integer array used for enforcing bconds - for vertices
       
       ! Monitoring quantities
-      real(WP) :: VFmax,VFmin,VFint                       !< Maximum, minimum, and integral volume fraction
+      real(WP) :: VFmax,VFmin,VFint,SDint                 !< Maximum, minimum, and integral volume fraction and surface density
 
       ! Old arrays that are needed for the compressible MAST solver
       real(WP), dimension(:,:,:,:), allocatable :: Lbaryold  !< Liquid barycenter
@@ -2949,6 +2949,7 @@ contains
       my_VFmax=maxval(this%VF); call MPI_ALLREDUCE(my_VFmax,this%VFmax,1,MPI_REAL_WP,MPI_MAX,this%cfg%comm,ierr)
       my_VFmin=minval(this%VF); call MPI_ALLREDUCE(my_VFmin,this%VFmin,1,MPI_REAL_WP,MPI_MIN,this%cfg%comm,ierr)
       call this%cfg%integrate(this%VF,integral=this%VFint)
+      call this%cfg%integrate(this%SD,integral=this%SDint)
    end subroutine get_max
    
    

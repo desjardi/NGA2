@@ -165,6 +165,9 @@ module mast_class
       ! Temporary arrays for viscous routine (may be used for more in the future)
       real(WP), dimension(:,:,:), pointer :: tmp4,tmp5,tmp6,tmp7,tmp8,tmp9,tmp10
       
+      ! Temporary arrays for viscous routine (may be used for more in the future)
+      real(WP), dimension(:,:,:), pointer :: tmp4,tmp5,tmp6,tmp7,tmp8,tmp9,tmp10
+      
       ! Pressure solver
       type(ils) :: psolv                                  !< Iterative linear solver object for the pressure Helmholtz equation
       
@@ -2593,24 +2596,23 @@ contains
        call matmod%update_temperature(vf,this%Tmptr)
        ! Calculate viscosity
        if (n.lt.nCFL) call this%get_viscosity(vf,matmod,sgs_visc,visc_x,visc_y,visc_z)
-    end do
+     end do
+     
+     ! Nullify...
 
-    ! Nullify...
+   contains
 
-  contains
-
-    subroutine diffusion_src_explicit_substep()
+     subroutine diffusion_src_explicit_substep()
       implicit none
-
+      
       real(WP) :: VISCforceX,VISCforceY,VISCforceZ,spongeX
       real(WP) :: VISCIntEnergy,VISCKinEnergy,HEATIntEnergy
       real(WP) :: dUdx,dUdy,dUdz,dVdx,dVdy,dVdz,dWdx,dWdy,dWdz
       real(WP) :: dMUdx,dMUdy,dMUdz
       real(WP) :: div2U,div2V,div2W
       real(WP) :: ddilatationdx,ddilatationdy,ddilatationdz
-
       integer :: i,j,k,n
-
+      
       ! Viscous routine operates on face velocities, need to be updated each time
       ! Update traditional face velocity (just interpolated)
       call this%interp_vel_basic(vf,this%Ui,this%Vi,this%Wi,this%U,this%V,this%W)

@@ -1,0 +1,34 @@
+# Parallelization
+Partition :	4 1 1
+
+# Mesh definition
+Lx :	10
+Ly :	5
+Lz :	0.05
+nx :	200
+ny :	100
+nz :	1
+
+# Fluid properties
+Dynamic viscosity :	  0.001
+Dynamic diffusivity : 0.001
+Jet density :     1.0
+Coflow density :  1.0
+Jet diameter :    1.0
+Jet velocity :    1.0
+Coflow velocity : 0.1
+
+# Time integration
+Max timestep size :	5e-2
+Max cfl number :	1
+
+# Pressure solver
+Pressure tolerance : 	1e-6
+Pressure iteration : 	100
+
+# Implicit velocity solver
+Implicit tolerance : 	1e-6
+Implicit iteration : 	100
+
+# Ensight output
+Ensight output period : 1e-1
