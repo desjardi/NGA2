@@ -30,18 +30,18 @@ VERBOSE=TRUE
 # But I want the opposite.  That is ccache is used by default unless
 # USE_CCACHE is FALSE.  But if I am using UPC++, I would like to turn
 # ccache off.
-ifeq ($(USE_CCACHE),FALSE)
-  CCACHE =
+ifeq ($(USE_CCACHE),TRUE)
+  CCACHE = ccache
 else ifeq ($(USE_UPCXX),TRUE)
   CCACHE =
 else
-  CCACHE = ccache
+  CCACHE =
 endif
 
 
 # When I run on my local desktop, I like to add this gfortran flag.
-FFLAGS   += -fcheck=array-temps
-F90FLAGS += -fcheck=array-temps
+FFLAGS   += -fcheck=array-temps -fallow-argument-mismatch
+F90FLAGS += -fcheck=array-temps -fallow-argument-mismatch
 
 
 # Instead of linking to static gfortran library, I like to use shared libraries.

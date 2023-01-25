@@ -3,7 +3,7 @@ module simulation
    use precision,         only: WP
    use geometry,          only: cfg
    use pfft3d_class,      only: pfft3d
-   use hypre_str_class,   only: hypre_str
+   !use hypre_str_class,   only: hypre_str
    use incomp_class,      only: incomp
    use lpt_class,         only: lpt
    use timetracker_class, only: timetracker
@@ -15,8 +15,8 @@ module simulation
    private
    
    !> Single-phase incompressible flow solver, pressure and implicit solvers, and a time tracker
-   !type(pfft3d),      public :: ps
-   type(hypre_str),   public :: ps
+   type(pfft3d),      public :: ps
+   !type(hypre_str),   public :: ps
    type(incomp),      public :: fs
    type(timetracker), public :: time
    type(lpt),         public :: lp
@@ -72,7 +72,7 @@ contains
       
       ! Create a single-phase flow solver without bconds
       create_and_initialize_flow_solver: block
-         use hypre_str_class, only: pcg_pfmg
+         !use hypre_str_class, only: pcg_pfmg
          ! Create flow solver
          fs=incomp(cfg=cfg,name='NS solver')
          ! Assign constant viscosity
@@ -80,11 +80,11 @@ contains
          ! Assign constant density
          call param_read('Density',fs%rho)
          ! Prepare and configure pressure solver
-         !ps=pfft3d(cfg=cfg,name='Pressure')
-         ps=hypre_str(cfg=cfg,name='Pressure',method=pcg_pfmg,nst=7)
-         ps%maxlevel=10
-         call param_read('Pressure iteration',ps%maxit)
-         call param_read('Pressure tolerance',ps%rcvg)
+         !ps=hypre_str(cfg=cfg,name='Pressure',method=pcg_pfmg,nst=7)
+         ps=pfft3d(cfg, 'Pressure Solver', 7)
+         !ps%maxlevel=10 <- uncomment for other solvers
+         !call param_read('Pressure iteration',ps%maxit)
+         !call param_read('Pressure tolerance',ps%rcvg)
          ! Setup the solver
          call fs%setup(pressure_solver=ps)
       end block create_and_initialize_flow_solver
@@ -185,7 +185,7 @@ contains
 
       ! Create partmesh object for Lagrangian particle output
       create_pmesh: block
-         pmesh=partmesh(nvar=0,name='lpt')
+         pmesh=partmesh(nvar=0,name='lpt',nvec=0)
          call lp%update_partmesh(pmesh)
       end block create_pmesh
 

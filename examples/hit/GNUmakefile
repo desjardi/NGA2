@@ -2,15 +2,16 @@
 NGA_HOME ?= ../..
 
 # Compilation parameters
-PRECISION = DOUBLE
-USE_MPI   = TRUE
-USE_FFTW  = TRUE
-USE_HYPRE = TRUE
-USE_LAPACK= TRUE
-PROFILE   = FALSE
-DEBUG     = FALSE
-COMP      = gnu
-EXEBASE   = nga
+PRECISION   = DOUBLE
+USE_MPI     = TRUE
+USE_FFTW    = TRUE
+USE_P3DFFT  = TRUE
+USE_HYPRE   = TRUE
+USE_LAPACK  = TRUE
+PROFILE     = FALSE
+DEBUG       = TRUE
+COMP        = gnu
+EXEBASE     = nga
 
 # Directories that contain user-defined code
 Udirs   := src
@@ -23,9 +24,11 @@ INCLUDE_LOCATIONS += $(Ulocs)
 VPATH_LOCATIONS   += $(Ulocs)
 
 # Define external libraries - this can also be in .profile
-LAPACK_DIR= /usr/local/Cellar/lapack/3.10.1_1
-HYPRE_DIR = /Users/rgrawe/NGA2hypre
-FFTW_DIR  = /usr/local/Cellar/fftw/3.3.10_1
+HDF5_DIR =  /opt/hdf5
+HYPRE_DIR = /opt/hypre
+LAPACK_DIR = /opt/lapack-3.10.1
+FFTW_DIR = /opt/fftw-3.3.10
+P3DFFT_DIR = /opt/p3dfft-3/build
 
 # NGA compilation definitions
 include $(NGA_HOME)/tools/GNUMake/Make.defs
@@ -47,3 +50,4 @@ all: $(executable)
 
 # NGA compilation rules
 include $(NGA_HOME)/tools/GNUMake/Make.rules
+

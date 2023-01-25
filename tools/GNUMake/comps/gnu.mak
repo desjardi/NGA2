@@ -40,8 +40,9 @@ ifeq ($(DEBUG),TRUE)
   CXXFLAGS += -Og -fno-inline -ggdb -Wshadow -Wall -Wno-sign-compare -ftrapv -Wno-unused-but-set-variable
   CFLAGS   += -Og -fno-inline -ggdb -Wshadow -Wall -Wno-sign-compare -ftrapv
 
-  FFLAGS   += -Og -ggdb -pedantic -fcheck=all -fbacktrace -Wall -Wuninitialized -Wunused -ffpe-trap=invalid,zero -finit-real=snan -finit-integer=2147483647 -ftrapv
-  F90FLAGS += -Og -ggdb -pedantic -fcheck=all -fbacktrace -Wall -Wuninitialized -Wunused -ffpe-trap=invalid,zero -finit-real=snan -finit-integer=2147483647 -ftrapv
+  # TODO I don't like removing -pedantic from these, but it's needed to get p3dfft to compile
+  FFLAGS   += -Og -ggdb -fcheck=all -fbacktrace -Wall -Wuninitialized -Wunused -ffpe-trap=invalid,zero -finit-real=snan -finit-integer=2147483647 -ftrapv
+  F90FLAGS += -Og -ggdb -fcheck=all -fbacktrace -Wall -Wuninitialized -Wunused -ffpe-trap=invalid,zero -finit-real=snan -finit-integer=2147483647 -ftrapv
 
   ifneq ($(gcc_major_version),$(filter $(gcc_major_version),4 5))
     CXXFLAGS += -Wnull-dereference

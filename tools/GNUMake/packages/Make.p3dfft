@@ -1,0 +1,12 @@
+# Add appropriate P3DFFT includes and libraries
+ifdef P3DFFT_DIR
+  ifndef FFTW_DIR
+    $(error FFTW required for P3DFFT)
+  endif
+  INCLUDE_LOCATIONS += $(P3DFFT_DIR)
+  LIBRARY_LOCATIONS += $(P3DFFT_DIR)
+  LIBRARIES += -lp3dfft.3 -lfftw3 -lfftw3f -lmpi_cxx -lstdc++
+else
+  $(error P3DFFT_DIR not defined, but it is currently required by NGA2)
+endif
+
