@@ -154,8 +154,15 @@ module mast_class
       real(WP), dimension(:,:,:), allocatable :: Hpjump  ! < Helmholtz pressure jump
       real(WP), dimension(:,:,:), allocatable :: dHpjump ! < Helmholtz pressure jump increment, also used for old Hpjump
 
+      ! Visualization arrays
+      real(WP), dimension(:,:,:), allocatable :: divU     !< Dilatation
+      real(WP), dimension(:,:,:), allocatable :: Mach     !< Mach number
+
       ! Temporary arrays for a few things
       real(WP), dimension(:,:,:), pointer :: tmp1,tmp2,tmp3
+
+      ! Temporary arrays for viscous routine (may be used for more in the future)
+      real(WP), dimension(:,:,:), pointer :: tmp4,tmp5,tmp6,tmp7,tmp8,tmp9,tmp10
       
       ! Temporary arrays for viscous routine (may be used for more in the future)
       real(WP), dimension(:,:,:), pointer :: tmp4,tmp5,tmp6,tmp7,tmp8,tmp9,tmp10
@@ -237,6 +244,7 @@ module mast_class
       ! Miscellaneous
       procedure :: get_cfl                                !< Calculate maximum CFL
       procedure :: get_max                                !< Calculate maximum field values
+      procedure :: get_viz                                !< Calculate various quantities for visualization
       
    end type mast
    
@@ -293,6 +301,8 @@ contains
       allocate(self%dPjy(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%dPjy=0.0_WP
       allocate(self%dPjz(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%dPjz=0.0_WP
       allocate(self%Tmptr(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%Tmptr=25.0_WP
+      allocate(self%divU(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%divU=0.0_WP
+      allocate(self%Mach(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%Mach=0.0_WP
       allocate(self%rho_U(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%rho_U=0.0_WP
       allocate(self%rho_V(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%rho_V=0.0_WP
       allocate(self%rho_W(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%rho_W=0.0_WP
@@ -2518,7 +2528,7 @@ contains
        
    end subroutine advection_step
    
-   subroutine diffusion_src_explicit_step(this,dt,vf,matmod,sgs_visc)
+   subroutine diffusion_src_explicit_step(this,dt,vf,matmod,sgs_visc,srcU,srcV,srcW,srcE)
      use mpi_f08,   only: MPI_ALLREDUCE,MPI_MAX
      use parallel,  only: MPI_REAL_WP
      use vfs_class, only: vfs
@@ -2528,6 +2538,10 @@ contains
      class(vfs),  intent(inout) :: vf     !< The volume fraction solver
      class(matm), intent(inout) :: matmod !< The material models for this solver
      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in), optional :: sgs_visc !< The subgrid-scale modeling, passed in
+     real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in), optional :: srcU !< Source term from LPT
+     real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in), optional :: srcV !< Source term from LPT
+     real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in), optional :: srcW !< Source term from LPT
+     real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in), optional :: srcE !< Source term from LPT
      real(WP),    intent(in)    :: dt     !< Timestep size over which to advance
      real(WP), dimension(:,:,:), pointer :: div       !< divergence calculated each substep
      real(WP), dimension(:,:,:), pointer :: Uf_y,Uf_z !< X velocity interpolated to other faces
@@ -2571,7 +2585,7 @@ contains
      
      ! Calculate sub-step for viscous solver
      nCFL=ceiling(myCFL)
-     mydt=dt/(real(nCFL,WP)+epsilon(1.0_WP)) ! This would divide by zero if there is no viscosity, so I added the epsilond
+     mydt=dt/(real(nCFL,WP)+epsilon(1.0_WP)) ! This would divide by zero if there is no viscosity, so I added the epsilon
      
      ! Sub-step for stability
      do n=1,nCFL
@@ -2584,28 +2598,28 @@ contains
      end do
      
      ! Nullify...
-     
-   contains
-     
+
+contains
+
      subroutine diffusion_src_explicit_substep()
-       implicit none
-       
-       real(WP) :: VISCforceX,VISCforceY,VISCforceZ,spongeX
-       real(WP) :: VISCIntEnergy,VISCKinEnergy,HEATIntEnergy
-       real(WP) :: dUdx,dUdy,dUdz,dVdx,dVdy,dVdz,dWdx,dWdy,dWdz
-       real(WP) :: dMUdx,dMUdy,dMUdz
-       real(WP) :: div2U,div2V,div2W
-       real(WP) :: ddilatationdx,ddilatationdy,ddilatationdz
-       
-       integer :: i,j,k,n
-       
-       ! Viscous routine operates on face velocities, need to be updated each time
-       ! Update traditional face velocity (just interpolated)
-       call this%interp_vel_basic(vf,this%Ui,this%Vi,this%Wi,this%U,this%V,this%W)
-       ! Apply boundary condtions
-       bc_scope = 'velocity'
-       call this%apply_bcond(dt,bc_scope)
-       ! Calculate other interpolated face velocities (ignore masks)
+      implicit none
+      
+      real(WP) :: VISCforceX,VISCforceY,VISCforceZ,spongeX
+      real(WP) :: VISCIntEnergy,VISCKinEnergy,HEATIntEnergy
+      real(WP) :: dUdx,dUdy,dUdz,dVdx,dVdy,dVdz,dWdx,dWdy,dWdz
+      real(WP) :: dMUdx,dMUdy,dMUdz
+      real(WP) :: div2U,div2V,div2W
+      real(WP) :: ddilatationdx,ddilatationdy,ddilatationdz
+      
+      integer :: i,j,k,n
+      
+      ! Viscous routine operates on face velocities, need to be updated each time
+      ! Update traditional face velocity (just interpolated)
+      call this%interp_vel_basic(vf,this%Ui,this%Vi,this%Wi,this%U,this%V,this%W)
+      ! Apply boundary condtions
+      bc_scope = 'velocity'
+      call this%apply_bcond(dt,bc_scope)
+      ! Calculate other interpolated face velocities (ignore masks)
        call this%interp_vel_basic(vf,this%Vi,this%Wi,this%Ui,Vf_x,Wf_y,Uf_z,use_masks=.false.)
        call this%interp_vel_basic(vf,this%Wi,this%Ui,this%Vi,Wf_x,Uf_y,Vf_z,use_masks=.false.)
        ! BCs not needed, masks are already addressed, nothing used from within boundary
@@ -2750,14 +2764,14 @@ contains
                   +this%gravity(2)*(this%Vi(i,j,k)+0.5_WP*mydt*this%gravity(2)) &
                   +this%gravity(3)*(this%Wi(i,j,k)+0.5_WP*mydt*this%gravity(3)))
              ! Include source terms from LPT
-             !rhoU(i,j,k)=rhoU(i,j,k) + srcUi(i,j,k)/real(nCFL,WP)
-             !rhoV(i,j,k)=rhoV(i,j,k) + srcVi(i,j,k)/real(nCFL,WP)
-             !rhoW(i,j,k)=rhoW(i,j,k) + srcWi(i,j,k)/real(nCFL,WP)
-             !GrhoE(i,j,k)=GrhoE(i,j,k)+srcE (i,j,k)/real(nCFL,WP)
+             if (present(srcU)) this%rhoUi(i,j,k)=this%rhoUi(i,j,k) + srcU(i,j,k)/real(nCFL,WP)
+             if (present(srcV)) this%rhoVi(i,j,k)=this%rhoVi(i,j,k) + srcV(i,j,k)/real(nCFL,WP)
+             if (present(srcW)) this%rhoWi(i,j,k)=this%rhoWi(i,j,k) + srcW(i,j,k)/real(nCFL,WP)
+             if (present(srcE)) this%GrhoE(i,j,k)=this%GrhoE(i,j,k) + srcE(i,j,k)/real(nCFL,WP)
              ! LPT are liquid droplets, only get energy from gas phase
-             
-           end do
-         end do
+
+          end do
+       end do
        end do
        
        ! BCs and communication for updated variables
@@ -4074,7 +4088,33 @@ contains
       call MPI_ALLREDUCE(my_Pmax,this%Pmax,1,MPI_REAL_WP,MPI_MAX,this%cfg%comm,ierr)
       call MPI_ALLREDUCE(my_Tmax,this%Tmax,1,MPI_REAL_WP,MPI_MAX,this%cfg%comm,ierr)
       
-   end subroutine get_max
+    end subroutine get_max
+
+
+    !> Calculate various quantities for visualization purposes
+    subroutine get_viz(this)
+      implicit none
+      class(mast), intent(inout) :: this
+      integer :: i,j,k
+
+      do k=this%cfg%kmino_,this%cfg%kmax_
+         do j=this%cfg%jmin_,this%cfg%jmax_
+            do i=this%cfg%imin_,this%cfg%imax_
+               ! Dilatation
+               this%divU(i,j,k)=( sum(this%divp_x(:,i,j,k)*this%U(i:i+1,j,k)) &
+                    + sum(this%divp_y(:,i,j,k)*this%V(i,j:j+1,k)) &
+                    + sum(this%divp_z(:,i,j,k)*this%W(i,j,k:k+1)) )
+               ! Mach number
+               this%Mach(i,j,k)=sqrt(this%Ui(i,j,k)**2+this%Vi(i,j,k)**2+this%Wi(i,j,k)**2)&
+                    /sqrt(this%RHOSS2(i,j,k)/this%RHO(i,j,k))
+            end do
+         end do
+      end do
+      call this%cfg%sync(this%divU)
+      call this%cfg%sync(this%Mach)
+
+    end subroutine get_viz
+    
    
    !> Prepare viscosity arrays from vfs, matm, and sgsmodel objects
    subroutine get_viscosity(this,vf,matmod,sgs_visc,visc_x,visc_y,visc_z)

@@ -97,7 +97,7 @@ contains
          ! Get initial particle volume fraction
          call lp%update_VF()
          ! Set collision timescale
-         lp%Tcol=5.0_WP*time%dt
+         lp%tau_col=5.0_WP*time%dt
          lp%e_n=0.7_WP
          ! Set gravity
          call param_read('Gravity',lp%gravity)
@@ -122,7 +122,7 @@ contains
       ! Create partmesh object for Lagrangian particle output
       create_pmesh: block
          integer :: i
-         pmesh=partmesh(nvar=1,name='lpt')
+         pmesh=partmesh(nvar=1,nvec=0,name='lpt')
          pmesh%varname(1)='radius'
          call lp%update_partmesh(pmesh)
          do i=1,lp%np_
