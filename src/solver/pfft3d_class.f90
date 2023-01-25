@@ -103,9 +103,7 @@ contains
     ! Set up stencil size and map
     self%nst = nst; allocate(self%stc(self%nst,3));
 
-    ! Allocate rhs, operator, transformed operator diagonal, and solution
-    allocate(self%factored_operator(imn_:imx_,jmn_:jmx_,kmn_:kmx_))
-    allocate(self%transformed_rhs(imn_:imx_,jmn_:jmx_,kmn_:kmx_))
+    ! Allocate rhs, operator and solution
     allocate(self%unstrided_rhs(imn_:imx_,jmn_:jmx_,kmn_:kmx_))
     allocate(self%unstrided_sol(imn_:imx_,jmn_:jmx_,kmn_:kmx_))
     allocate(self%opr(self%nst,imno_:imxo_,jmno_:jmxo_,kmno_:kmxo_))
@@ -212,13 +210,17 @@ contains
     ! tag process with zero wavenumber
     this%oddball = all((/ this%cfg%iproc, this%cfg%jproc, this%cfg%kproc /) .eq. 1)
 
+    ! allocate fourier space arrays
+    allocate(this%factored_operator(ldims_fourier(1), ldims_fourier(2), ldims_fourier(3)))
+    allocate(this%transformed_rhs(ldims_fourier(1), ldims_fourier(2), ldims_fourier(3)))
+
   end subroutine pfft3d_init
 
   !> Setup solver - done everytime the operator changes
   subroutine pfft3d_setup(this)
-    use mpi_f08, only:  MPI_BCAST
-    use parallel, only: MPI_REAL_WP, rank
-    use messager, only: die
+    use mpi_f08, only:          MPI_BCAST, MPI_COMM_WORLD, MPI_ALLREDUCE, MPI_INTEGER, MPI_SUM
+    use parallel, only:         MPI_REAL_WP
+    use messager, only:         die
     implicit none
     integer :: i, j, k, n, stx1, stx2, sty1, sty2, stz1, stz2, ierr
     class(pfft3d), intent(inout) :: this
@@ -239,7 +241,6 @@ contains
     ! check circulent operator
     if (this%cfg%amRoot) ref_stencil = this%opr(:,1,1,1)
     call MPI_BCAST(ref_stencil, this%nst, MPI_REAL_WP, 0, this%cfg%comm, ierr)
-    write(*,*) rank, ": ", ref_stencil
     !TODO if (ierr .ne. 0) call die("[p
     circulent = .true.
     do k = this%cfg%kmin_, this%cfg%kmax_
@@ -256,19 +257,34 @@ contains
     ! build
     opr_col(:,:,:) = 0.0_C_DOUBLE
     do n = 1, this%nst
-      i = modulo(this%stc(n,1) - this%cfg%imin_ + 1, this%cfg%nx_) + this%cfg%imin_
-      j = modulo(this%stc(n,2) - this%cfg%jmin_ + 1, this%cfg%ny_) + this%cfg%jmin_
-      k = modulo(this%stc(n,3) - this%cfg%kmin_ + 1, this%cfg%nz_) + this%cfg%kmin_
-      opr_col(i,j,k) = opr_col(i,j,k) + real(ref_stencil(n), C_DOUBLE)
+      i = modulo(this%stc(n,1) - this%cfg%imin, this%cfg%nx) + this%cfg%imin
+      j = modulo(this%stc(n,2) - this%cfg%jmin, this%cfg%ny) + this%cfg%jmin
+      k = modulo(this%stc(n,3) - this%cfg%kmin, this%cfg%nz) + this%cfg%kmin
+      if (                                                                    &
+        this%cfg%imin_ .le. i .and. i .le. this%cfg%imax_ .and.               &
+        this%cfg%jmin_ .le. j .and. j .le. this%cfg%jmax_ .and.               &
+        this%cfg%kmin_ .le. k .and. k .le. this%cfg%kmax_                     &
+        ) opr_col(i,j,k) = opr_col(i,j,k) + real(ref_stencil(n), C_DOUBLE)
     end do
-    
+
     ! take transform of operator
     call p3dfft_3Dtrans_double(this%trans_f, opr_col, this%factored_operator, 0)
-    this%factored_operator = 1.0_C_DOUBLE / this%factored_operator
 
     ! make zero wavenumber not zero
-    if (this%oddball) this%factored_operator(this%cfg%imin_,this%cfg%jmin_,   &
-      this%cfg%kmin_) = 1.0_WP
+    if (this%oddball) this%factored_operator(1,1,1) = 1.0_C_DOUBLE
+
+    ! make sure other wavenumbers not close to zero
+    i = count(abs(this%factored_operator) .lt. 1000 * epsilon(1.0_C_DOUBLE))
+    call MPI_ALLREDUCE(i, j, 1, MPI_INTEGER, MPI_SUM, this%cfg%comm, ierr)
+    if (j .gt. 0) call die("[pf3dft] elements of transformed operator near zero")
+
+    ! divide now instead of later
+    this%factored_operator = 1.0_C_DOUBLE / this%factored_operator
+
+    ! check for division issues
+    i = count(isnan(abs(this%factored_operator)))
+    call MPI_ALLREDUCE(i, j, 1, MPI_INTEGER, MPI_SUM, this%cfg%comm, ierr)
+    if (j .gt. 0) call die("[pf3dft] elements of transformed operator are nan")
 
     ! Set setup-flag to true
     this%setup_done = .true.
@@ -277,17 +293,20 @@ contains
 
   !> do the solve
   subroutine pfft3d_solve(this)
+    use messager, only: die
     use param,    only: verbose
     implicit none
     class(pfft3d), intent(inout) :: this
-    integer :: imn, imx, jmn, jmx, kmn, kmx
+    integer :: imn_, imx_, jmn_, jmx_, kmn_, kmx_
 
-    imn = this%cfg%imin_; imx = this%cfg%imax_;
-    jmn = this%cfg%jmin_; jmx = this%cfg%jmax_;
-    kmn = this%cfg%kmin_; kmx = this%cfg%kmax_;
+    if (.not. this%setup_done) call die("[pfftd3] solve called before setup")
+
+    imn_ = this%cfg%imin_; imx_ = this%cfg%imax_;
+    jmn_ = this%cfg%jmin_; jmx_ = this%cfg%jmax_;
+    kmn_ = this%cfg%kmin_; kmx_ = this%cfg%kmax_;
 
     ! copy to unstrided array
-    this%unstrided_rhs(:,:,:) = this%rhs(imn:imx,jmn:jmx,kmn:kmx)
+    this%unstrided_rhs(:,:,:) = this%rhs(imn_:imx_,jmn_:jmx_,kmn_:kmx_)
 
     ! do forward transform
     call p3dfft_3Dtrans_double(this%trans_f, this%unstrided_rhs, this%transformed_rhs, 0)
@@ -296,13 +315,13 @@ contains
     this%transformed_rhs = this%transformed_rhs * this%factored_operator
 
     ! fix zero wavenumber
-    if (this%oddball) this%transformed_rhs(imn,jmn,kmn) = (0.0_WP, 0.0_WP)
+    if (this%oddball) this%transformed_rhs(1,1,1) = (0.0_WP, 0.0_WP)
 
     ! do backward transform
     call p3dfft_3Dtrans_double(this%trans_b, this%transformed_rhs, this%unstrided_sol, 0)
 
     ! copy to strided output
-    this%sol(:,:,:) = this%unstrided_sol(imn:imx,jmn:jmx,kmn:kmx)
+    this%sol(imn_:imx_,jmn_:jmx_,kmn_:kmx_) = this%unstrided_sol(:,:,:)
 
     ! sync
     call this%cfg%sync(this%sol)

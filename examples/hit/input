@@ -1,9 +1,9 @@
 # Parallelization
-Partition :	1 2 2
+Partition :	1 2 1
 
 # Mesh definition
 Lx :	1
-nx :	64
+nx :	4
 
 # Fluid properties
 Dynamic viscosity :    0.01
@@ -14,7 +14,7 @@ Eddy turnover time :   0.1
 # Particle properties
 Particle density :     0.018
 Particle diameter :    1
-Number of particles :  100000
+Number of particles :  0
 
 # Time integration
 Max timestep size : 1e-3
@@ -26,3 +26,4 @@ Implicit iteration : 100
 
 # Ensight output
 Ensight output period : 0.01
+
