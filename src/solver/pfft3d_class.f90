@@ -129,7 +129,7 @@ contains
     implicit none
     include "mpif.h"
     class(pfft3d), intent(inout) :: this
-    integer :: type_ccr, type_rcc, trans_f_tmp, trans_b_tmp
+    integer :: type_ccr, type_rcc
     integer(C_INT) :: p3dfft_grid, grid_real, grid_fourier
     integer, dimension(3) :: type_ids_f, type_ids_b,                          &
       glob_start_real, glob_start_fourier
@@ -206,18 +206,7 @@ contains
       gdims_fourier, 0, p3dfft_grid, dmap_fourier, mem_order_fourier)
 
     ! Plan transforms
-    trans_f_tmp = this%trans_f
-    write(*,*) this%trans_f
-    write(*,*) grid_real
-    write(*,*) grid_fourier
-    write(*,*) type_rcc
-    call p3dfft_plan_3Dtrans(trans_f_tmp, grid_real, grid_fourier, type_rcc)
-    write(*,*) "============"
-    write(*,*) this%trans_f
-    write(*,*) grid_real
-    write(*,*) grid_fourier
-    write(*,*) type_rcc
-    this%trans_f = trans_f_tmp
+    call p3dfft_plan_3Dtrans(this%trans_f, grid_real, grid_fourier, type_rcc)
     call p3dfft_plan_3Dtrans(this%trans_b, grid_fourier, grid_real, type_ccr)
 
     ! tag process with zero wavenumber
@@ -227,9 +216,11 @@ contains
 
   !> Setup solver - done everytime the operator changes
   subroutine pfft3d_setup(this)
+    use mpi_f08, only:  MPI_BCAST
+    use parallel, only: MPI_REAL_WP, rank
     use messager, only: die
     implicit none
-    integer :: i, j, k, n, stx1, stx2, sty1, sty2, stz1, stz2
+    integer :: i, j, k, n, stx1, stx2, sty1, sty2, stz1, stz2, ierr
     class(pfft3d), intent(inout) :: this
     logical :: circulent
     real(WP), dimension(this%nst) :: ref_stencil
@@ -246,7 +237,10 @@ contains
     end do
 
     ! check circulent operator
-    ref_stencil = this%opr(:,1,1,1)
+    if (this%cfg%amRoot) ref_stencil = this%opr(:,1,1,1)
+    call MPI_BCAST(ref_stencil, this%nst, MPI_REAL_WP, 0, this%cfg%comm, ierr)
+    write(*,*) rank, ": ", ref_stencil
+    !TODO if (ierr .ne. 0) call die("[p
     circulent = .true.
     do k = this%cfg%kmin_, this%cfg%kmax_
       do j = this%cfg%jmin_, this%cfg%jmax_
