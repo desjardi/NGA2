@@ -1,1 +1,0 @@
-This is a test case for a shock wave interacting with Lagrangian particles. Uses multiphase solver and hard-codes VF to 0 or 1 based on chosen phase.
