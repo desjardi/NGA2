@@ -2,7 +2,12 @@
 ifdef IRL_DIR
   INCLUDE_LOCATIONS += $(IRL_DIR)/include/irl_fortran
   LIBRARY_LOCATIONS += $(IRL_DIR)/lib
-  LIBRARIES += -lirl_fortran -lirl_c -lirl -labsl_all -lc++
+  is_gnu = $(shell expr `mpicc --version | awk '{print substr($$1,1,3); exit}'` = 'gcc')
+  ifeq ($(is_gnu), 1)
+    LIBRARIES += -lirl_fortran -lirl_c -lirl -labsl_all -lstdc++
+  else
+    LIBRARIES += -lirl_fortran -lirl_c -lirl -labsl_all -lc++
+  endif
   ifeq ($(os_name), Darwin)
     LIBRARIES += -framework CoreFoundation
   endif
