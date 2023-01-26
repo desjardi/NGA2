@@ -122,7 +122,7 @@ contains
       
       
       ! Create a single-phase flow solver without bconds
-      create_and_initialize_flow_solver: block]
+      create_and_initialize_flow_solver: block
          use hypre_str_class, only: pcg_pfmg,gmres_pfmg
          use mathtools, only: twoPi
          integer :: i,j,k
