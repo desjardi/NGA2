@@ -3,8 +3,8 @@ ifdef P3DFFT_DIR
   ifndef FFTW_DIR
     $(error FFTW required for P3DFFT)
   endif
-  INCLUDE_LOCATIONS += $(P3DFFT_DIR)
-  LIBRARY_LOCATIONS += $(P3DFFT_DIR)
+  INCLUDE_LOCATIONS += $(P3DFFT_DIR)/include
+  LIBRARY_LOCATIONS += $(P3DFFT_DIR)/lib
   LIBRARIES += -lp3dfft.3 -lfftw3 -lfftw3f -lmpi_cxx -lstdc++
 else
   $(error P3DFFT_DIR not defined, but it is currently required by NGA2)
