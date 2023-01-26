@@ -5,7 +5,7 @@ ifdef P3DFFT_DIR
   endif
   INCLUDE_LOCATIONS += $(P3DFFT_DIR)/include
   LIBRARY_LOCATIONS += $(P3DFFT_DIR)/lib
-  LIBRARIES += -lp3dfft.3 -lfftw3 -lfftw3f -lmpi_cxx -lstdc++
+  LIBRARIES += -lp3dfft.3 -lfftw3 -lfftw3f -lstdc++
 else
   $(error P3DFFT_DIR not defined, but it is currently required by NGA2)
 endif
