@@ -7,8 +7,11 @@ module geometry
    
    !> Single config
    type(config), public :: cfg
+
+   !> Pipe diameter
+   real(WP), public :: D
    
-   public :: geometry_init
+   public :: geometry_init, get_VF
    
 contains
    
@@ -25,7 +28,7 @@ contains
       create_grid: block
          use sgrid_class, only: cartesian
          integer :: i,j,k,nx,ny,nz,no
-         real(WP) :: Lx,Ly,Lz,D,dx
+         real(WP) :: Lx,Ly,Lz,dx
          real(WP), dimension(:), allocatable :: x,y,z
          
          ! Read in grid definition
@@ -81,11 +84,49 @@ contains
       
       ! Create masks for this config
       create_walls: block
-         cfg%VF=1.0_WP
+        integer :: i,j,k
+        do k=cfg%kmino_,cfg%kmaxo_
+           do j=cfg%jmino_,cfg%jmaxo_
+              do i=cfg%imino_,cfg%imaxo_
+                 cfg%VF(i,j,k)=get_VF(i,j,k,'SC')
+              end do
+           end do
+        end do
       end block create_walls
       
       
-   end subroutine geometry_init
-   
-   
-end module geometry
+    end subroutine geometry_init
+
+
+    !> Get volume fraction for direct forcing
+    function get_VF(i,j,k,dir) result(VF)
+      implicit none
+      integer, intent(in)    :: i,j,k
+      character(len=*)       :: dir
+      real(WP)               :: VF
+      real(WP)               :: r,eta,lam,delta,VFx,VFy,VFz
+      real(WP), dimension(3) :: norm
+      select case(trim(dir))
+      case('U')
+         delta=(cfg%dxm(i)*cfg%dy(j)*cfg%dz(k))**(1.0_WP/3.0_WP)
+         r=sqrt(cfg%ym(j)**2+cfg%zm(k)**2)+epsilon(1.0_WP)
+         norm(1)=0.0_WP; norm(2)=cfg%ym(j)/r; norm(3)=cfg%zm(k)/r
+      case('V')
+         delta=(cfg%dx(i)*cfg%dym(j)*cfg%dz(k))**(1.0_WP/3.0_WP)
+         r=sqrt(cfg%y(j)**2+cfg%zm(k)**2)+epsilon(1.0_WP)
+         norm(1)=0.0_WP; norm(2)=cfg%y(j)/r; norm(3)=cfg%zm(k)/r
+      case('W')
+         delta=(cfg%dx(i)*cfg%dy(j)*cfg%dzm(k))**(1.0_WP/3.0_WP)
+         r=sqrt(cfg%ym(j)**2+cfg%z(k)**2)+epsilon(1.0_WP)
+         norm(1)=0.0_WP; norm(2)=cfg%ym(j)/r; norm(3)=cfg%z(k)/r
+      case default
+         delta=(cfg%dx(i)*cfg%dy(j)*cfg%dz(k))**(1.0_WP/3.0_WP)
+         r=sqrt(cfg%ym(j)**2+cfg%zm(k)**2)
+         norm(1)=0.0_WP; norm(2)=cfg%ym(j)/r; norm(3)=cfg%zm(k)/r
+      end select
+      lam=sum(abs(norm)); eta=0.065_WP*(1.0_WP-lam**2)+0.39_WP
+      VF=0.5_WP*(1.0_WP-tanh((r-0.5_WP*D)/(sqrt(2.0_WP)*lam*eta*delta+epsilon(1.0_WP))))
+    end function get_VF
+
+
+  end module geometry

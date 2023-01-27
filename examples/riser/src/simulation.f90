@@ -2,7 +2,7 @@
 module simulation
   use string,            only: str_medium
   use precision,         only: WP
-  use geometry,          only: cfg
+  use geometry,          only: cfg,D,get_VF
   use lowmach_class,     only: lowmach
   use lpt_class,         only: lpt
   use timetracker_class, only: timetracker
@@ -41,8 +41,8 @@ module simulation
   real(WP), dimension(:,:,:), allocatable :: resU,resV,resW
   real(WP), dimension(:,:,:), allocatable :: Ui,Vi,Wi,rho0,dRHOdt
   real(WP), dimension(:,:,:), allocatable :: srcUlp,srcVlp,srcWlp
-  real(WP), dimension(:,:,:), allocatable :: G,VF
-  real(WP) :: visc,rho,Dpipe,mfr,mfr_target,bforce
+  real(WP), dimension(:,:,:), allocatable :: G
+  real(WP) :: visc,rho,mfr,mfr_target,bforce
 
   !> Wallclock time for monitoring
   type :: timer
@@ -230,7 +230,6 @@ contains
       allocate(Wi      (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
       allocate(rho0    (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
       allocate(G       (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
-      allocate(VF      (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
     end block allocate_work_arrays
 
 
@@ -251,7 +250,6 @@ contains
       ! Create solver
       lp=lpt(cfg=cfg,name='LPT')
       ! Get pipe diameter from input
-      call param_read('Pipe diameter',Dpipe)
       ! Get mean volume fraction from input
       call param_read('Particle volume fraction',VFavg)
       ! Get drag model from input
@@ -337,7 +335,7 @@ contains
             end do
             ! Check if particle is within the pipe
             r=sqrt(lp%p(i)%pos(2)**2+lp%p(i)%pos(3)**2)
-            if (r.le.0.5_WP*(Dpipe-lp%p(i)%d)) then
+            if (r.le.0.5_WP*(D-lp%p(i)%d)) then
                ! Activate the particle
                lp%p(i)%flag=0
                ip=lp%p(i)%ind(1); jp=lp%p(i)%ind(2); kp=lp%p(i)%ind(3)
@@ -371,7 +369,7 @@ contains
          end do
          ! Get mean diameter and volume fraction
          call MPI_ALLREDUCE(meand,buf,1,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr); meand=buf/real(lp%np,WP)
-         call MPI_ALLREDUCE(sumVolp,VFavg,1,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr); VFavg=VFavg/(Pi*Dpipe**2/4.0_WP*lp%cfg%xL)
+         call MPI_ALLREDUCE(sumVolp,VFavg,1,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr); VFavg=VFavg/(Pi*D**2/4.0_WP*lp%cfg%xL)
          if (lp%cfg%amRoot) then
             print*,"===== Particle Setup Description ====="
             print*,'Number of particles', lp%np
@@ -434,20 +432,18 @@ contains
     end block initialize_velocity
 
 
-    ! Initialize IBM fields
-    initialize_ibm: block
+    ! Initialize levelset
+    initialize_G: block
       integer :: i,j,k
       do k=fs%cfg%kmin_,fs%cfg%kmax_
          do j=fs%cfg%jmin_,fs%cfg%jmax_
             do i=fs%cfg%imin_,fs%cfg%imax_
-               VF(i,j,k)=get_VF(i,j,k,'SC')
-               G(i,j,k)=0.5_WP*Dpipe-sqrt(fs%cfg%ym(j)**2+fs%cfg%zm(k)**2)
+               G(i,j,k)=0.5_WP*D-sqrt(fs%cfg%ym(j)**2+fs%cfg%zm(k)**2)
             end do
          end do
       end do
-      call fs%cfg%sync(VF)
       call fs%cfg%sync(G)
-    end block initialize_ibm
+    end block initialize_G
 
     ! Add Ensight output
     create_ensight: block
@@ -460,7 +456,7 @@ contains
       call ens_out%add_particle('particles',pmesh)
       call ens_out%add_vector('velocity',Ui,Vi,Wi)
       call ens_out%add_scalar('levelset',G)
-      call ens_out%add_scalar('ibm_vf',VF)
+      call ens_out%add_scalar('ibm_vf',fs%cfg%VF)
       call ens_out%add_scalar('pressure',fs%P)
       call ens_out%add_scalar('epsp',lp%VF)
       ! Output to ensight
@@ -641,7 +637,6 @@ contains
             do k=fs%cfg%kmin_,fs%cfg%kmax_
                do j=fs%cfg%jmin_,fs%cfg%jmax_
                   do i=fs%cfg%imin_,fs%cfg%imax_
-                     VF(i,j,k)=get_VF(i,j,k,'SC')
                      VFx      =get_VF(i,j,k,'U')
                      VFy      =get_VF(i,j,k,'V')
                      VFz      =get_VF(i,j,k,'W')
@@ -654,7 +649,6 @@ contains
             call fs%cfg%sync(fs%U)
             call fs%cfg%sync(fs%V)
             call fs%cfg%sync(fs%W)
-            call fs%cfg%sync(VF)
           end block ibm_correction
 
           ! Apply other boundary conditions and update momentum
@@ -758,37 +752,6 @@ contains
   end subroutine simulation_run
 
 
-  !> Get volume fraction for direct forcing
-  function get_VF(i,j,k,dir) result(VF)
-    implicit none
-    integer, intent(in)    :: i,j,k
-    character(len=*)       :: dir
-    real(WP)               :: VF
-    real(WP)               :: r,eta,lam,delta,VFx,VFy,VFz
-    real(WP), dimension(3) :: norm
-    select case(trim(dir))
-    case('U')
-       delta=(fs%cfg%dxm(i)*fs%cfg%dy(j)*fs%cfg%dz(k))**(1.0_WP/3.0_WP)
-       r=sqrt(fs%cfg%ym(j)**2+fs%cfg%zm(k)**2)+epsilon(1.0_WP)
-       norm(1)=0.0_WP; norm(2)=fs%cfg%ym(j)/r; norm(3)=fs%cfg%zm(k)/r
-    case('V')
-       delta=(fs%cfg%dx(i)*fs%cfg%dym(j)*fs%cfg%dz(k))**(1.0_WP/3.0_WP)
-       r=sqrt(fs%cfg%y(j)**2+fs%cfg%zm(k)**2)+epsilon(1.0_WP)
-       norm(1)=0.0_WP; norm(2)=fs%cfg%y(j)/r; norm(3)=fs%cfg%zm(k)/r
-    case('W')
-       delta=(fs%cfg%dx(i)*fs%cfg%dy(j)*fs%cfg%dzm(k))**(1.0_WP/3.0_WP)
-       r=sqrt(fs%cfg%ym(j)**2+fs%cfg%z(k)**2)+epsilon(1.0_WP)
-       norm(1)=0.0_WP; norm(2)=fs%cfg%ym(j)/r; norm(3)=fs%cfg%z(k)/r
-    case default
-       delta=(fs%cfg%dx(i)*fs%cfg%dy(j)*fs%cfg%dz(k))**(1.0_WP/3.0_WP)
-       r=sqrt(fs%cfg%ym(j)**2+fs%cfg%zm(k)**2)
-       norm(1)=0.0_WP; norm(2)=fs%cfg%ym(j)/r; norm(3)=fs%cfg%zm(k)/r
-    end select
-    lam=sum(abs(norm)); eta=0.065_WP*(1.0_WP-lam**2)+0.39_WP
-    VF=0.5_WP*(1.0_WP-tanh((r-0.5_WP*Dpipe)/(sqrt(2.0_WP)*lam*eta*delta+epsilon(1.0_WP))))
-  end function get_VF
-
-
   !> Finalize the NGA2 simulation
   subroutine simulation_final
     implicit none
@@ -799,7 +762,7 @@ contains
     ! timetracker
 
     ! Deallocate work arrays
-    deallocate(resU,resV,resW,srcUlp,srcVlp,srcWlp,Ui,Vi,Wi,dRHOdt,G,VF)
+    deallocate(resU,resV,resW,srcUlp,srcVlp,srcWlp,Ui,Vi,Wi,dRHOdt,G)
 
   end subroutine simulation_final
 
