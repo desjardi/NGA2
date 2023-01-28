@@ -316,6 +316,11 @@ contains
     ! do backward transform
     call p3dfft_3Dtrans_double(this%trans_b, this%transformed_rhs, this%unstrided_sol, 0)
 
+    ! rescale
+    ! p3dfft might have a sign error, check -1
+    this%unstrided_sol = (-1.0_WP / (this%cfg%nx * this%cfg%ny * this%cfg%nz))&
+      * this%unstrided_sol
+
     ! copy to strided output
     this%sol(imn_:imx_,jmn_:jmx_,kmn_:kmx_) = this%unstrided_sol(:,:,:)
 
