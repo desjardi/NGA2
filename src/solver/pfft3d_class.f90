@@ -16,7 +16,6 @@ module pfft3d_class
   !> pfft3d object definition
   type, extends(linsol) :: pfft3d
 
-    logical :: oddball
     integer :: trans_f, trans_b
     complex(C_DOUBLE_COMPLEX), dimension(:,:,:), allocatable :: factored_operator, transformed_rhs
     real(C_DOUBLE), dimension(:,:,:), allocatable :: unstrided_rhs, unstrided_sol
@@ -207,9 +206,6 @@ contains
     call p3dfft_plan_3Dtrans(this%trans_f, grid_real, grid_fourier, type_rcc)
     call p3dfft_plan_3Dtrans(this%trans_b, grid_fourier, grid_real, type_ccr)
 
-    ! tag process with zero wavenumber
-    this%oddball = all((/ this%cfg%iproc, this%cfg%jproc, this%cfg%kproc /) .eq. 1)
-
     ! allocate fourier space arrays
     allocate(this%factored_operator(ldims_fourier(1), ldims_fourier(2), ldims_fourier(3)))
     allocate(this%transformed_rhs(ldims_fourier(1), ldims_fourier(2), ldims_fourier(3)))
@@ -218,9 +214,9 @@ contains
 
   !> Setup solver - done everytime the operator changes
   subroutine pfft3d_setup(this)
-    use mpi_f08, only:          MPI_BCAST, MPI_COMM_WORLD, MPI_ALLREDUCE, MPI_INTEGER, MPI_SUM
-    use parallel, only:         MPI_REAL_WP
-    use messager, only:         die
+    use mpi_f08, only:  MPI_BCAST, MPI_COMM_WORLD, MPI_ALLREDUCE, MPI_INTEGER, MPI_SUM
+    use parallel, only: MPI_REAL_WP
+    use messager, only: die
     implicit none
     integer :: i, j, k, n, stx1, stx2, sty1, sty2, stz1, stz2, ierr
     class(pfft3d), intent(inout) :: this
@@ -241,7 +237,6 @@ contains
     ! check circulent operator
     if (this%cfg%amRoot) ref_stencil = this%opr(:,1,1,1)
     call MPI_BCAST(ref_stencil, this%nst, MPI_REAL_WP, 0, this%cfg%comm, ierr)
-    !TODO if (ierr .ne. 0) call die("[p
     circulent = .true.
     do k = this%cfg%kmin_, this%cfg%kmax_
       do j = this%cfg%jmin_, this%cfg%jmax_
@@ -257,9 +252,9 @@ contains
     ! build
     opr_col(:,:,:) = 0.0_C_DOUBLE
     do n = 1, this%nst
-      i = modulo(this%stc(n,1) - this%cfg%imin, this%cfg%nx) + this%cfg%imin
-      j = modulo(this%stc(n,2) - this%cfg%jmin, this%cfg%ny) + this%cfg%jmin
-      k = modulo(this%stc(n,3) - this%cfg%kmin, this%cfg%nz) + this%cfg%kmin
+      i = modulo(this%stc(n,1) - this%cfg%imin + 1, this%cfg%nx) + this%cfg%imin
+      j = modulo(this%stc(n,2) - this%cfg%jmin + 1, this%cfg%ny) + this%cfg%jmin
+      k = modulo(this%stc(n,3) - this%cfg%kmin + 1, this%cfg%nz) + this%cfg%kmin
       if (                                                                    &
         this%cfg%imin_ .le. i .and. i .le. this%cfg%imax_ .and.               &
         this%cfg%jmin_ .le. j .and. j .le. this%cfg%jmax_ .and.               &
@@ -271,7 +266,11 @@ contains
     call p3dfft_3Dtrans_double(this%trans_f, opr_col, this%factored_operator, 0)
 
     ! make zero wavenumber not zero
-    if (this%oddball) this%factored_operator(1,1,1) = 1.0_C_DOUBLE
+    ! setting this to one has the nice side effect of returning a solution with
+    ! the same integral
+    if (all((/ this%cfg%iproc, this%cfg%jproc, this%cfg%kproc /) .eq. 1)) then
+      this%factored_operator(1,1,1) = 1.0_C_DOUBLE
+    end if
 
     ! make sure other wavenumbers not close to zero
     i = count(abs(this%factored_operator) .lt. 1000 * epsilon(1.0_C_DOUBLE))
@@ -314,11 +313,13 @@ contains
     ! divide
     this%transformed_rhs = this%transformed_rhs * this%factored_operator
 
-    ! fix zero wavenumber
-    if (this%oddball) this%transformed_rhs(1,1,1) = (0.0_WP, 0.0_WP)
-
     ! do backward transform
     call p3dfft_3Dtrans_double(this%trans_b, this%transformed_rhs, this%unstrided_sol, 0)
+
+    ! rescale
+    ! p3dfft might have a sign error, check -1
+    this%unstrided_sol = (-1.0_WP / (this%cfg%nx * this%cfg%ny * this%cfg%nz))&
+      * this%unstrided_sol
 
     ! copy to strided output
     this%sol(imn_:imx_,jmn_:jmx_,kmn_:kmx_) = this%unstrided_sol(:,:,:)
@@ -327,8 +328,8 @@ contains
     call this%cfg%sync(this%sol)
 
     ! If verbose run, log and or print info
-    if (verbose.gt.0) call this%log
-    if (verbose.gt.1) call this%print_short
+    if (verbose .gt. 0) call this%log
+    if (verbose .gt. 1) call this%print_short
 
   end subroutine pfft3d_solve
 
