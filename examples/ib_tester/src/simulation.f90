@@ -341,12 +341,9 @@ contains
                do k=fs%cfg%kmin_,fs%cfg%kmax_
                   do j=fs%cfg%jmin_,fs%cfg%jmax_
                      do i=fs%cfg%imin_,fs%cfg%imax_
-                        !fs%U(i,j,k)=fs%U(i,j,k)+sum(fs%itpi_x(:,i,j,k)*df%srcU(i-1:i,j,k))
-                        !fs%V(i,j,k)=fs%V(i,j,k)+sum(fs%itpi_y(:,i,j,k)*df%srcV(i,j-1:j,k))
-                        !fs%W(i,j,k)=fs%W(i,j,k)+sum(fs%itpi_z(:,i,j,k)*df%srcW(i,j,k-1:k))
-                        fs%U(i,j,k)=fs%U(i,j,k)+sum(0.5_WP*df%srcU(i-1:i,j,k))
-                        fs%V(i,j,k)=fs%V(i,j,k)+sum(0.5_WP*df%srcV(i,j-1:j,k))
-                        fs%W(i,j,k)=fs%W(i,j,k)+sum(0.5_WP*df%srcW(i,j,k-1:k))
+                        fs%U(i,j,k)=fs%U(i,j,k)+sum(fs%itpr_x(:,i,j,k)*df%srcU(i-1:i,j,k))
+                        fs%V(i,j,k)=fs%V(i,j,k)+sum(fs%itpr_y(:,i,j,k)*df%srcV(i,j-1:j,k))
+                        fs%W(i,j,k)=fs%W(i,j,k)+sum(fs%itpr_z(:,i,j,k)*df%srcW(i,j,k-1:k))
                      end do
                   end do
                end do
