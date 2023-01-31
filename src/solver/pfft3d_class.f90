@@ -290,7 +290,6 @@ contains
 
     ! Take transform of operator
     if (this%serial_fft) then
-       this%factored_operator=opr_col
        this%inout_serial=opr_col
        call dfftw_execute_dft(this%fplan_serial,this%inout_serial,this%inout_serial)
        this%factored_operator=this%inout_serial
@@ -352,18 +351,17 @@ contains
 
     ! Divide
     this%transformed_rhs = this%transformed_rhs * this%factored_operator
-
     ! Do backward transform and rescale
     if (this%serial_fft) then
        this%inout_serial=this%transformed_rhs
        call dfftw_execute_dft(this%bplan_serial,this%inout_serial,this%inout_serial)
-       !this%unstrided_sol=this%transformed_rhs
-       this%unstrided_sol=1/real(this%cfg%nx*this%cfg%ny*this%cfg%nz,WP)*this%inout_serial
+       this%unstrided_sol=this%inout_serial
     else
        call p3dfft_3Dtrans_double(this%trans_b, this%transformed_rhs, this%unstrided_sol, 0)
-       this%unstrided_sol = (-1 / (this%cfg%nx * this%cfg%ny * this%cfg%nz))&
-            * this%unstrided_sol
     end if
+
+    ! Rescale
+    this%unstrided_sol = this%unstrided_sol/real(this%cfg%nx * this%cfg%ny * this%cfg%nz,WP)
 
     ! Copy to strided output
     this%sol(imn_:imx_,jmn_:jmx_,kmn_:kmx_) = this%unstrided_sol(:,:,:)
