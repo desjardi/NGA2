@@ -8,6 +8,7 @@ module pfft3d_class
   use config_class, only: config
   use linsol_class, only: linsol
   implicit none
+  include 'fftw3.f'
   private
 
   ! Expose type/constructor/methods
@@ -16,9 +17,17 @@ module pfft3d_class
   !> pfft3d object definition
   type, extends(linsol) :: pfft3d
 
-    integer :: trans_f, trans_b
-    complex(C_DOUBLE_COMPLEX), dimension(:,:,:), allocatable :: factored_operator, transformed_rhs
-    real(C_DOUBLE), dimension(:,:,:), allocatable :: unstrided_rhs, unstrided_sol
+     !> Parallel FFT (p3dfft) variables
+     integer :: trans_f, trans_b
+     complex(C_DOUBLE_COMPLEX), dimension(:,:,:), allocatable :: factored_operator, transformed_rhs
+
+     !> Serial FFT (fftw) variables
+     logical :: serial_fft
+     integer(KIND=8) :: fplan_serial,bplan_serial
+     complex(C_DOUBLE_COMPLEX), dimension(:,:,:), allocatable :: inout_serial
+
+     !> Work arrays
+     real(C_DOUBLE), dimension(:,:,:), allocatable :: unstrided_rhs, unstrided_sol
 
   contains
 
@@ -53,6 +62,7 @@ contains
 
   end subroutine pfft3d_log
 
+  
   !> Print pfft3d info to the screen
   subroutine pfft3d_print(this)
     use, intrinsic :: iso_fortran_env, only: output_unit
@@ -66,6 +76,7 @@ contains
 
   end subroutine pfft3d_print
 
+  
   !> Short print of pfft3d info to the screen
   subroutine pfft3d_print_short(this)
     use, intrinsic :: iso_fortran_env, only: output_unit
@@ -77,6 +88,7 @@ contains
 
   end subroutine pfft3d_print_short
 
+  
   !> Constructor for an pfft3d object
   function pfft3d_from_args(cfg, name, nst) result(self)
     use messager, only: die
@@ -114,9 +126,11 @@ contains
 
     ! Setup is not done
     self%setup_done = .false.
+    self%serial_fft = .false.
 
   end function pfft3d_from_args
 
+  
   !> Initialize grid and stencil - done at start-up only as long as the stencil or cfg does not change
   !> When calling, zero values of this%opr(1,:,:,:) indicate cells that do not participate in the solver
   !> Only the stencil needs to be defined at this point
@@ -155,6 +169,17 @@ contains
 
     end block check_solver_is_useable
 
+    ! Check if FFT should be handled in serial
+    if (this%cfg%nproc.eq.1) then
+       this%serial_fft=.true.
+       allocate(this%inout_serial(this%cfg%nx,this%cfg%ny,this%cfg%nz))
+       call dfftw_plan_dft_3d(this%fplan_serial,this%cfg%nx,this%cfg%ny,this%cfg%nz,&
+            this%inout_serial,this%inout_serial,FFTW_FORWARD,FFTW_MEASURE)
+       call dfftw_plan_dft_3d(this%bplan_serial,this%cfg%nx,this%cfg%ny,this%cfg%nz,&
+            this%inout_serial,this%inout_serial,FFTW_BACKWARD,FFTW_MEASURE)
+       return
+    end if
+
     ! Set up work structures for P3DFFT
     call p3dfft_setup
 
@@ -188,7 +213,7 @@ contains
     ! from your program default communicator.
     p3dfft_grid = p3dfft_init_proc_grid(pdims, MPI_COMM_WORLD)
 
-    ! Initialize initial grid, no conjugate symmetry (-1)
+    ! Initialize grid, no conjugate symmetry (-1)
     call p3dfft_init_data_grid(grid_real, ldims_real, glob_start_real,        &
       gdims_real, -1, p3dfft_grid, dmap_real, mem_order_real)
 
@@ -206,12 +231,13 @@ contains
     call p3dfft_plan_3Dtrans(this%trans_f, grid_real, grid_fourier, type_rcc)
     call p3dfft_plan_3Dtrans(this%trans_b, grid_fourier, grid_real, type_ccr)
 
-    ! allocate fourier space arrays
+    ! Allocate fourier space arrays
     allocate(this%factored_operator(ldims_fourier(1), ldims_fourier(2), ldims_fourier(3)))
     allocate(this%transformed_rhs(ldims_fourier(1), ldims_fourier(2), ldims_fourier(3)))
 
   end subroutine pfft3d_init
 
+  
   !> Setup solver - done everytime the operator changes
   subroutine pfft3d_setup(this)
     use mpi_f08, only:  MPI_BCAST, MPI_COMM_WORLD, MPI_ALLREDUCE, MPI_INTEGER, MPI_SUM
@@ -223,15 +249,15 @@ contains
     logical :: circulent
     real(WP), dimension(this%nst) :: ref_stencil
     real(C_DOUBLE), dimension(this%cfg%imin_:this%cfg%imax_,this%cfg%jmin_:   &
-      this%cfg%jmax_,this%cfg%kmin_:this%cfg%kmax_) :: opr_col
+         this%cfg%jmax_,this%cfg%kmin_:this%cfg%kmax_) :: opr_col
 
-    ! compute stencil inverse
+    ! Compute stencil inverse
     stx1 = minval(this%stc(:,1)); stx2 = maxval(this%stc(:,1));
     sty1 = minval(this%stc(:,2)); sty2 = maxval(this%stc(:,2));
     stz1 = minval(this%stc(:,3)); stz2 = maxval(this%stc(:,3));
     allocate(this%stmap(stx1:stx2,sty1:sty2,stz1:stz2))
     do n = 1, this%nst
-      this%stmap(this%stc(n,1),this%stc(n,2),this%stc(n,3)) = n
+       this%stmap(this%stc(n,1),this%stc(n,2),this%stc(n,3)) = n
     end do
 
     ! check circulent operator
@@ -239,48 +265,55 @@ contains
     call MPI_BCAST(ref_stencil, this%nst, MPI_REAL_WP, 0, this%cfg%comm, ierr)
     circulent = .true.
     do k = this%cfg%kmin_, this%cfg%kmax_
-      do j = this%cfg%jmin_, this%cfg%jmax_
-        do i = this%cfg%imin_, this%cfg%imax_
-          if (any(this%opr(:,i,j,k) .ne. ref_stencil(:))) circulent = .false.
-        end do
-      end do
+       do j = this%cfg%jmin_, this%cfg%jmax_
+          do i = this%cfg%imin_, this%cfg%imax_
+             if (any(this%opr(:,i,j,k) .ne. ref_stencil(:))) circulent = .false.
+          end do
+       end do
     end do
     if (.not. circulent) then
-      call die("[pf3dft] stencil must be uniform in space")
+       call die("[pf3dft] stencil must be uniform in space")
     end if
 
-    ! build
+    ! Build the operator
     opr_col(:,:,:) = 0.0_C_DOUBLE
     do n = 1, this%nst
-      i = modulo(this%stc(n,1) - this%cfg%imin + 1, this%cfg%nx) + this%cfg%imin
-      j = modulo(this%stc(n,2) - this%cfg%jmin + 1, this%cfg%ny) + this%cfg%jmin
-      k = modulo(this%stc(n,3) - this%cfg%kmin + 1, this%cfg%nz) + this%cfg%kmin
-      if (                                                                    &
-        this%cfg%imin_ .le. i .and. i .le. this%cfg%imax_ .and.               &
-        this%cfg%jmin_ .le. j .and. j .le. this%cfg%jmax_ .and.               &
-        this%cfg%kmin_ .le. k .and. k .le. this%cfg%kmax_                     &
-        ) opr_col(i,j,k) = opr_col(i,j,k) + real(ref_stencil(n), C_DOUBLE)
+       i = modulo(this%stc(n,1) - this%cfg%imin + 1, this%cfg%nx) + this%cfg%imin
+       j = modulo(this%stc(n,2) - this%cfg%jmin + 1, this%cfg%ny) + this%cfg%jmin
+       k = modulo(this%stc(n,3) - this%cfg%kmin + 1, this%cfg%nz) + this%cfg%kmin
+       if (                                                                    &
+            this%cfg%imin_ .le. i .and. i .le. this%cfg%imax_ .and.               &
+            this%cfg%jmin_ .le. j .and. j .le. this%cfg%jmax_ .and.               &
+            this%cfg%kmin_ .le. k .and. k .le. this%cfg%kmax_                     &
+            ) opr_col(i,j,k) = opr_col(i,j,k) + real(ref_stencil(n), C_DOUBLE)
     end do
 
-    ! take transform of operator
-    call p3dfft_3Dtrans_double(this%trans_f, opr_col, this%factored_operator, 0)
-
-    ! make zero wavenumber not zero
-    ! setting this to one has the nice side effect of returning a solution with
-    ! the same integral
-    if (all((/ this%cfg%iproc, this%cfg%jproc, this%cfg%kproc /) .eq. 1)) then
-      this%factored_operator(1,1,1) = 1.0_C_DOUBLE
+    ! Take transform of operator
+    if (this%serial_fft) then
+       this%factored_operator=opr_col
+       this%inout_serial=opr_col
+       call dfftw_execute_dft(this%fplan_serial,this%inout_serial,this%inout_serial)
+       this%factored_operator=this%inout_serial
+    else
+       call p3dfft_3Dtrans_double(this%trans_f, opr_col, this%factored_operator, 0)
     end if
 
-    ! make sure other wavenumbers not close to zero
+    ! Make zero wavenumber not zero
+    ! Setting this to one has the nice side effect of returning a solution with
+    ! the same integral
+    if (all((/ this%cfg%iproc, this%cfg%jproc, this%cfg%kproc /) .eq. 1)) then
+       this%factored_operator(1,1,1) = 1.0_C_DOUBLE
+    end if
+
+    ! Make sure other wavenumbers are not close to zero
     i = count(abs(this%factored_operator) .lt. 1000 * epsilon(1.0_C_DOUBLE))
     call MPI_ALLREDUCE(i, j, 1, MPI_INTEGER, MPI_SUM, this%cfg%comm, ierr)
     if (j .gt. 0) call die("[pf3dft] elements of transformed operator near zero")
 
-    ! divide now instead of later
+    ! Divide now instead of later
     this%factored_operator = 1.0_C_DOUBLE / this%factored_operator
 
-    ! check for division issues
+    ! Check for division issues
     i = count(isnan(abs(this%factored_operator)))
     call MPI_ALLREDUCE(i, j, 1, MPI_INTEGER, MPI_SUM, this%cfg%comm, ierr)
     if (j .gt. 0) call die("[pf3dft] elements of transformed operator are nan")
@@ -290,6 +323,7 @@ contains
 
   end subroutine pfft3d_setup
 
+  
   !> do the solve
   subroutine pfft3d_solve(this)
     use messager, only: die
@@ -304,27 +338,37 @@ contains
     jmn_ = this%cfg%jmin_; jmx_ = this%cfg%jmax_;
     kmn_ = this%cfg%kmin_; kmx_ = this%cfg%kmax_;
 
-    ! copy to unstrided array
+    ! Copy to unstrided array
     this%unstrided_rhs(:,:,:) = this%rhs(imn_:imx_,jmn_:jmx_,kmn_:kmx_)
 
-    ! do forward transform
-    call p3dfft_3Dtrans_double(this%trans_f, this%unstrided_rhs, this%transformed_rhs, 0)
+    ! Do forward transform
+    if (this%serial_fft) then
+       this%inout_serial=this%unstrided_rhs
+       call dfftw_execute_dft(this%fplan_serial,this%inout_serial,this%inout_serial)
+       this%transformed_rhs=this%inout_serial
+    else
+       call p3dfft_3Dtrans_double(this%trans_f, this%unstrided_rhs, this%transformed_rhs, 0)
+    end if
 
-    ! divide
+    ! Divide
     this%transformed_rhs = this%transformed_rhs * this%factored_operator
 
-    ! do backward transform
-    call p3dfft_3Dtrans_double(this%trans_b, this%transformed_rhs, this%unstrided_sol, 0)
+    ! Do backward transform and rescale
+    if (this%serial_fft) then
+       this%inout_serial=this%transformed_rhs
+       call dfftw_execute_dft(this%bplan_serial,this%inout_serial,this%inout_serial)
+       !this%unstrided_sol=this%transformed_rhs
+       this%unstrided_sol=1/real(this%cfg%nx*this%cfg%ny*this%cfg%nz,WP)*this%inout_serial
+    else
+       call p3dfft_3Dtrans_double(this%trans_b, this%transformed_rhs, this%unstrided_sol, 0)
+       this%unstrided_sol = (-1 / (this%cfg%nx * this%cfg%ny * this%cfg%nz))&
+            * this%unstrided_sol
+    end if
 
-    ! rescale
-    ! p3dfft might have a sign error, check -1
-    this%unstrided_sol = (-1.0_WP / (this%cfg%nx * this%cfg%ny * this%cfg%nz))&
-      * this%unstrided_sol
-
-    ! copy to strided output
+    ! Copy to strided output
     this%sol(imn_:imx_,jmn_:jmx_,kmn_:kmx_) = this%unstrided_sol(:,:,:)
 
-    ! sync
+    ! Sync
     call this%cfg%sync(this%sol)
 
     ! If verbose run, log and or print info
@@ -333,12 +377,19 @@ contains
 
   end subroutine pfft3d_solve
 
+  
   subroutine pfft3d_destroy(this)
     implicit none
     class(pfft3d), intent(inout) :: this
 
     ! do nothing; included for consistency with other methods
     this%setup_done = .false.
+
+    if (this%serial_fft) then
+       call dfftw_destroy_plan(this%fplan_serial)
+       call dfftw_destroy_plan(this%bplan_serial)
+    end if
+    this%serial_fft=.false.
 
   end subroutine pfft3d_destroy
 
