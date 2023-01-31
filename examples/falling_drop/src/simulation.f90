@@ -71,6 +71,7 @@ module simulation
 		  time=timetracker(amRoot=cfg%amRoot)
 		  call param_read('Max timestep size',time%dtmax)
 		  call param_read('Max cfl number',time%cflmax)
+		  call param_read('Max time',time%tmax)
 		  time%dt=time%dtmax
 		  time%itmax=2
 	   end block initialize_timetracker
@@ -136,7 +137,7 @@ module simulation
 	   
 	   ! Create a two-phase flow solver without bconds
 	   create_and_initialize_flow_solver: block
-		  use ils_class, only: gmres_amg
+		  use ils_class, only: gmres_amg,pcg_pfmg
 		  use mathtools, only: Pi
 		  ! Create flow solver
 		  fs=tpns(cfg=cfg,name='Two-phase NS')
@@ -159,7 +160,7 @@ module simulation
 		  call param_read('Implicit iteration',fs%implicit%maxit)
 		  call param_read('Implicit tolerance',fs%implicit%rcvg)
 		  ! Setup the solver
-		  call fs%setup(pressure_ils=gmres_amg,implicit_ils=gmres_amg)
+		  call fs%setup(pressure_ils=pcg_pfmg,implicit_ils=gmres_amg)
 		  ! Zero initial field
 		  fs%U=0.0_WP; fs%V=0.0_WP; fs%W=0.0_WP
 		  ! Calculate cell-centered velocities and divergence

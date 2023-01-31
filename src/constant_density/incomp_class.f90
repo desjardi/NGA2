@@ -75,6 +75,7 @@ module incomp_class
       
       ! Metrics
       real(WP), dimension(:,:,:,:,:), allocatable :: itp_xy,itp_yz,itp_xz !< Interpolation for viscosity
+      real(WP), dimension(:,:,:,:), allocatable :: itpr_x,itpr_y,itpr_z   !< Interpolation for density
       real(WP), dimension(:,:,:,:), allocatable :: itpu_x,itpu_y,itpu_z   !< Interpolation for U
       real(WP), dimension(:,:,:,:), allocatable :: itpv_x,itpv_y,itpv_z   !< Interpolation for V
       real(WP), dimension(:,:,:,:), allocatable :: itpw_x,itpw_y,itpw_z   !< Interpolation for W
@@ -115,6 +116,7 @@ module incomp_class
       procedure :: interp_vel                             !< Calculate interpolated velocity
       procedure :: get_strainrate                         !< Calculate deviatoric part of strain rate tensor
       procedure :: get_gradu                              !< Calculate velocity gradient tensor
+      procedure :: get_vorticity                          !< Calculate vorticity tensor
       procedure :: get_mfr                                !< Calculate outgoing MFR through each bcond
       procedure :: correct_mfr                            !< Correct for mfr mismatch to ensure global conservation
       procedure :: shift_p                                !< Shift pressure to have zero average
@@ -249,6 +251,21 @@ contains
       integer :: i,j,k,st1,st2
       real(WP), dimension(-1:0) :: itpx,itpy,itpz
       
+      ! Allocate finite difference density (or other things) interpolation coefficients
+      allocate(this%itpr_x(-1:0,this%cfg%imin_:this%cfg%imax_+1,this%cfg%jmin_:this%cfg%jmax_+1,this%cfg%kmin_:this%cfg%kmax_+1)) !< X-face-centered
+      allocate(this%itpr_y(-1:0,this%cfg%imin_:this%cfg%imax_+1,this%cfg%jmin_:this%cfg%jmax_+1,this%cfg%kmin_:this%cfg%kmax_+1)) !< Y-face-centered
+      allocate(this%itpr_z(-1:0,this%cfg%imin_:this%cfg%imax_+1,this%cfg%jmin_:this%cfg%jmax_+1,this%cfg%kmin_:this%cfg%kmax_+1)) !< Z-face-centered
+      ! Create density (or other things) interpolation coefficients to cell face
+      do k=this%cfg%kmin_,this%cfg%kmax_+1
+         do j=this%cfg%jmin_,this%cfg%jmax_+1
+            do i=this%cfg%imin_,this%cfg%imax_+1
+               this%itpr_x(:,i,j,k)=this%cfg%dxmi(i)*[this%cfg%xm(i)-this%cfg%x(i),this%cfg%x(i)-this%cfg%xm(i-1)] !< Linear interpolation in x from [xm,ym,zm] to [x,ym,zm]
+               this%itpr_y(:,i,j,k)=this%cfg%dymi(j)*[this%cfg%ym(j)-this%cfg%y(j),this%cfg%y(j)-this%cfg%ym(j-1)] !< Linear interpolation in y from [xm,ym,zm] to [xm,y,zm]
+               this%itpr_z(:,i,j,k)=this%cfg%dzmi(k)*[this%cfg%zm(k)-this%cfg%z(k),this%cfg%z(k)-this%cfg%zm(k-1)] !< Linear interpolation in z from [xm,ym,zm] to [xm,ym,z]
+            end do
+         end do
+      end do
+
       ! Allocate finite difference viscosity interpolation coefficients
       allocate(this%itp_xy(-1:0,-1:0,this%cfg%imino_+1:this%cfg%imaxo_,this%cfg%jmino_+1:this%cfg%jmaxo_,this%cfg%kmino_+1:this%cfg%kmaxo_)) !< Edge-centered (xy)
       allocate(this%itp_yz(-1:0,-1:0,this%cfg%imino_+1:this%cfg%imaxo_,this%cfg%jmino_+1:this%cfg%jmaxo_,this%cfg%kmino_+1:this%cfg%kmaxo_)) !< Edge-centered (yz)
@@ -443,6 +460,27 @@ contains
       if (.not.this%cfg%xper.and.this%cfg%iproc.eq.1) this%umask(this%cfg%imino,:,:)=this%umask(this%cfg%imino+1,:,:)
       if (.not.this%cfg%yper.and.this%cfg%jproc.eq.1) this%vmask(:,this%cfg%jmino,:)=this%vmask(:,this%cfg%jmino+1,:)
       if (.not.this%cfg%zper.and.this%cfg%kproc.eq.1) this%wmask(:,:,this%cfg%kmino)=this%wmask(:,:,this%cfg%kmino+1)
+      
+      ! I am assuming here that we do not really need to zero out wall cells
+      ! as they could be used for Dirichlet (then the density needs to be available! could be problematic if we do not have an explicit BC for scalars, e.g. for a Couette flow)
+      ! or outflow condition (then the density needs to be available but it should be directly calculated)
+      ! or used for a real no-slip wall (then density is always multiplied by zero)
+      ! Adjust density interpolation coefficients to cell faces in the presence of walls (only walls!)
+      !do k=this%cfg%kmin_,this%cfg%kmax_+1
+      !   do j=this%cfg%jmin_,this%cfg%jmax_+1
+      !      do i=this%cfg%imin_,this%cfg%imax_+1
+      !         ! Linear interpolation in x
+      !         if (this%cfg%VF(i,j,k).eq.0.0_WP.and.this%cfg%VF(i-1,j,k).gt.0.0_WP) this%itpr_x(:,i,j,k)=[1.0_WP,0.0_WP]
+      !         if (this%cfg%VF(i,j,k).gt.0.0_WP.and.this%cfg%VF(i-1,j,k).eq.0.0_WP) this%itpr_x(:,i,j,k)=[0.0_WP,1.0_WP]
+      !         ! Linear interpolation in y
+      !         if (this%cfg%VF(i,j,k).eq.0.0_WP.and.this%cfg%VF(i,j-1,k).gt.0.0_WP) this%itpr_y(:,i,j,k)=[1.0_WP,0.0_WP]
+      !         if (this%cfg%VF(i,j,k).gt.0.0_WP.and.this%cfg%VF(i,j-1,k).eq.0.0_WP) this%itpr_y(:,i,j,k)=[0.0_WP,1.0_WP]
+      !         ! Linear interpolation in z
+      !         if (this%cfg%VF(i,j,k).eq.0.0_WP.and.this%cfg%VF(i,j,k-1).gt.0.0_WP) this%itpr_z(:,i,j,k)=[1.0_WP,0.0_WP]
+      !         if (this%cfg%VF(i,j,k).gt.0.0_WP.and.this%cfg%VF(i,j,k-1).eq.0.0_WP) this%itpr_z(:,i,j,k)=[0.0_WP,1.0_WP]
+      !      end do
+      !   end do
+      !end do
       
       ! Adjust interpolation coefficients to cell centers in the presence of walls (only walls!)
       do k=this%cfg%kmino_,this%cfg%kmaxo_
@@ -1303,7 +1341,7 @@ contains
       real(WP), dimension(:,:,:), allocatable :: dudy,dudz,dvdx,dvdz,dwdx,dwdy
       
       ! Check gradu's first two dimensions
-	   if (size(gradu,dim=1).ne.3.or.size(gradu,dim=2).ne.3) call die('[incomp get_strainrate] gradu should be of size (1:3,1:3,imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)')
+	   if (size(gradu,dim=1).ne.3.or.size(gradu,dim=2).ne.3) call die('[incomp get_gradu] gradu should be of size (1:3,1:3,imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)')
       
       ! Compute dudx, dvdy, and dwdz first
 	   do k=this%cfg%kmin_,this%cfg%kmax_
@@ -1382,6 +1420,83 @@ contains
 	   deallocate(dudy,dudz,dvdx,dvdz,dwdx,dwdy)
       
    end subroutine get_gradu
+   
+   
+   !> Calculate vorticity vector
+   subroutine get_vorticity(this,vort)
+      use messager, only: die
+      implicit none
+      class(incomp), intent(inout) :: this
+      real(WP), dimension(1:,this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(out) :: vort  !< Needs to be (1:3,imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      integer :: i,j,k
+      real(WP), dimension(:,:,:), allocatable :: dudy,dudz,dvdx,dvdz,dwdx,dwdy
+      
+      ! Check vort's first two dimensions
+      if (size(vort,dim=1).ne.3) call die('[incomp get_vorticity] vort should be of size (1:3,imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)')
+
+      ! Allocate velocity gradient components
+      allocate(dudy(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
+      allocate(dudz(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
+      allocate(dvdx(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
+      allocate(dvdz(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
+      allocate(dwdx(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
+      allocate(dwdy(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
+
+      ! Calculate components of the velocity gradient at their natural locations with an extra cell for interpolation
+      do k=this%cfg%kmin_,this%cfg%kmax_+1
+         do j=this%cfg%jmin_,this%cfg%jmax_+1
+            do i=this%cfg%imin_,this%cfg%imax_+1
+               dudy(i,j,k)=sum(this%grdu_y(:,i,j,k)*this%U(i,j-1:j,k))
+               dudz(i,j,k)=sum(this%grdu_z(:,i,j,k)*this%U(i,j,k-1:k))
+               dvdx(i,j,k)=sum(this%grdv_x(:,i,j,k)*this%V(i-1:i,j,k))
+               dvdz(i,j,k)=sum(this%grdv_z(:,i,j,k)*this%V(i,j,k-1:k))
+               dwdx(i,j,k)=sum(this%grdw_x(:,i,j,k)*this%W(i-1:i,j,k))
+               dwdy(i,j,k)=sum(this%grdw_y(:,i,j,k)*this%W(i,j-1:j,k))
+            end do
+         end do
+      end do
+
+      ! Interpolate off-diagonal components of the velocity gradient to the cell center
+      do k=this%cfg%kmin_,this%cfg%kmax_
+         do j=this%cfg%jmin_,this%cfg%jmax_
+            do i=this%cfg%imin_,this%cfg%imax_
+               vort(1,i,j,k)=0.25_WP*(sum(dwdy(i,j:j+1,k:k+1))-sum(dvdz(i,j:j+1,k:k+1)))
+               vort(2,i,j,k)=0.25_WP*(sum(dudz(i:i+1,j,k:k+1))-sum(dwdx(i:i+1,j,k:k+1)))
+               vort(3,i,j,k)=0.25_WP*(sum(dvdx(i:i+1,j:j+1,k))-sum(dudy(i:i+1,j:j+1,k)))
+            end do
+         end do
+      end do
+      
+      ! Apply a Neumann condition in non-periodic directions
+	   if (.not.this%cfg%xper) then
+         if (this%cfg%iproc.eq.1)            vort(:,this%cfg%imin-1,:,:)=vort(:,this%cfg%imin,:,:)
+         if (this%cfg%iproc.eq.this%cfg%npx) vort(:,this%cfg%imax+1,:,:)=vort(:,this%cfg%imax,:,:)
+      end if
+      if (.not.this%cfg%yper) then
+         if (this%cfg%jproc.eq.1)            vort(:,:,this%cfg%jmin-1,:)=vort(:,:,this%cfg%jmin,:)
+         if (this%cfg%jproc.eq.this%cfg%npy) vort(:,:,this%cfg%jmax+1,:)=vort(:,:,this%cfg%jmax,:)
+      end if
+      if (.not.this%cfg%zper) then
+         if (this%cfg%kproc.eq.1)            vort(:,:,:,this%cfg%kmin-1)=vort(:,:,:,this%cfg%kmin)
+         if (this%cfg%kproc.eq.this%cfg%npz) vort(:,:,:,this%cfg%kmax+1)=vort(:,:,:,this%cfg%kmax)
+      end if
+      
+      ! Ensure zero in walls
+      do k=this%cfg%kmino_,this%cfg%kmaxo_
+         do j=this%cfg%jmino_,this%cfg%jmaxo_
+            do i=this%cfg%imino_,this%cfg%imaxo_
+               if (this%mask(i,j,k).eq.1) vort(:,i,j,k)=0.0_WP
+            end do
+         end do
+      end do
+
+      ! Sync it
+      call this%cfg%sync(vort)
+
+      ! Deallocate velocity gradient storage
+      deallocate(dudy,dudz,dvdx,dvdz,dwdx,dwdy)
+
+   end subroutine get_vorticity
    
    
    !> Calculate the CFL

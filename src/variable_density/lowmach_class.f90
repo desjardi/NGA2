@@ -121,8 +121,6 @@ module lowmach_class
       procedure :: get_dmomdt                             !< Calculate dmom/dt
       procedure :: get_div                                !< Calculate velocity divergence
       procedure :: get_pgrad                              !< Calculate pressure gradient
-      procedure :: get_div_stress                         !< Calculate divergence of stress
-      procedure :: get_vorticity                          !< Calculate vorticity tensor
       procedure :: rho_divide                             !< Form U from rhoU
       procedure :: rho_multiply                           !< Form rhoU from U
       procedure :: get_cfl                                !< Calculate maximum CFL
@@ -130,6 +128,8 @@ module lowmach_class
       procedure :: interp_vel                             !< Calculate interpolated velocity
       procedure :: get_strainrate                         !< Calculate deviatoric part of strain rate tensor
       procedure :: get_gradu                              !< Calculate velocity gradient tensor
+      procedure :: get_div_stress                         !< Calculate divergence of stress
+      procedure :: get_vorticity                          !< Calculate vorticity tensor
       procedure :: get_mfr                                !< Calculate outgoing MFR through each bcond
       procedure :: correct_mfr                            !< Correct for mfr mismatch to ensure global conservation
       procedure :: shift_p                                !< Shift pressure to have zero average
@@ -1218,183 +1218,6 @@ contains
       call this%cfg%sync(Pgrady)
       call this%cfg%sync(Pgradz)
    end subroutine get_pgrad
-
-
-   !> Calculate divergence of stress based on U/V/W/P (needed by LPT class)
-   subroutine get_div_stress(this,divx,divy,divz)
-      implicit none
-      class(lowmach), intent(inout) :: this
-      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(out) :: divx !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
-      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(out) :: divy !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
-      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(out) :: divz !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
-      integer :: i,j,k,ii,jj,kk
-      real(WP), dimension(:,:,:), allocatable :: FX,FY,FZ
-      
-      ! Allocate flux arrays
-      allocate(FX(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
-      allocate(FY(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
-      allocate(FZ(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
-      
-      ! Stress tensor in X
-      do kk=this%cfg%kmin_,this%cfg%kmax_+1
-         do jj=this%cfg%jmin_,this%cfg%jmax_+1
-            do ii=this%cfg%imin_,this%cfg%imax_+1
-               ! Fluxes on x-face
-               i=ii-1; j=jj-1; k=kk-1
-               FX(i,j,k)=+this%visc(i,j,k)*(sum(this%grdu_x(:,i,j,k)*this%U(i:i+1,j,k))+sum(this%grdu_x(:,i,j,k)*this%U(i:i+1,j,k)) &
-               &         -2.0_WP/3.0_WP*(sum(this%divp_x(:,i,j,k)*this%U(i:i+1,j,k))+sum(this%divp_y(:,i,j,k)*this%V(i,j:j+1,k))+sum(this%divp_z(:,i,j,k)*this%W(i,j,k:k+1)))) &
-               &         -this%P(i,j,k)
-               ! Fluxes on y-face
-               i=ii; j=jj; k=kk
-               FY(i,j,k)=+sum(this%itp_xy(:,:,i,j,k)*this%visc(i-1:i,j-1:j,k))*(sum(this%grdu_y(:,i,j,k)*this%U(i,j-1:j,k))+sum(this%grdv_x(:,i,j,k)*this%V(i-1:i,j,k)))
-               ! Fluxes on z-face
-               i=ii; j=jj; k=kk
-               FZ(i,j,k)=+sum(this%itp_xz(:,:,i,j,k)*this%visc(i-1:i,j,k-1:k))*(sum(this%grdu_z(:,i,j,k)*this%U(i,j,k-1:k))+sum(this%grdw_x(:,i,j,k)*this%W(i-1:i,j,k)))
-            end do
-         end do
-      end do
-      ! Divergence of X stress
-      do k=this%cfg%kmin_,this%cfg%kmax_
-         do j=this%cfg%jmin_,this%cfg%jmax_
-            do i=this%cfg%imin_,this%cfg%imax_
-               divx(i,j,k)=sum(this%divu_x(:,i,j,k)*FX(i-1:i,j,k))+&
-               &           sum(this%divu_y(:,i,j,k)*FY(i,j:j+1,k))+&
-               &           sum(this%divu_z(:,i,j,k)*FZ(i,j,k:k+1))
-            end do
-         end do
-      end do
-      ! Sync it
-      call this%cfg%sync(divx)
-      
-      ! Stress tensor in Y
-      do kk=this%cfg%kmin_,this%cfg%kmax_+1
-         do jj=this%cfg%jmin_,this%cfg%jmax_+1
-            do ii=this%cfg%imin_,this%cfg%imax_+1
-               ! Fluxes on x-face
-               i=ii; j=jj; k=kk
-               FX(i,j,k)=+sum(this%itp_xy(:,:,i,j,k)*this%visc(i-1:i,j-1:j,k))*(sum(this%grdv_x(:,i,j,k)*this%V(i-1:i,j,k))+sum(this%grdu_y(:,i,j,k)*this%U(i,j-1:j,k)))
-               ! Fluxes on y-face
-               i=ii-1; j=jj-1; k=kk-1
-               FY(i,j,k)=+this%visc(i,j,k)*(sum(this%grdv_y(:,i,j,k)*this%V(i,j:j+1,k))+sum(this%grdv_y(:,i,j,k)*this%V(i,j:j+1,k)) &
-               &         -2.0_WP/3.0_WP*(sum(this%divp_x(:,i,j,k)*this%U(i:i+1,j,k))+sum(this%divp_y(:,i,j,k)*this%V(i,j:j+1,k))+sum(this%divp_z(:,i,j,k)*this%W(i,j,k:k+1)))) &
-               &         -this%P(i,j,k)
-               ! Fluxes on z-face
-               i=ii; j=jj; k=kk
-               FZ(i,j,k)=+sum(this%itp_yz(:,:,i,j,k)*this%visc(i,j-1:j,k-1:k))*(sum(this%grdv_z(:,i,j,k)*this%V(i,j,k-1:k))+sum(this%grdw_y(:,i,j,k)*this%W(i,j-1:j,k)))
-            end do
-         end do
-      end do
-      ! Divergence of Y stress
-      do k=this%cfg%kmin_,this%cfg%kmax_
-         do j=this%cfg%jmin_,this%cfg%jmax_
-            do i=this%cfg%imin_,this%cfg%imax_
-               divy(i,j,k)=sum(this%divv_x(:,i,j,k)*FX(i:i+1,j,k))+&
-               &           sum(this%divv_y(:,i,j,k)*FY(i,j-1:j,k))+&
-               &           sum(this%divv_z(:,i,j,k)*FZ(i,j,k:k+1))
-            end do
-         end do
-      end do
-      ! Sync it
-      call this%cfg%sync(divy)
-      
-      ! Stress tensor in Z
-      do kk=this%cfg%kmin_,this%cfg%kmax_+1
-         do jj=this%cfg%jmin_,this%cfg%jmax_+1
-            do ii=this%cfg%imin_,this%cfg%imax_+1
-               ! Fluxes on x-face
-               i=ii; j=jj; k=kk
-               FX(i,j,k)=+sum(this%itp_xz(:,:,i,j,k)*this%visc(i-1:i,j,k-1:k))*(sum(this%grdw_x(:,i,j,k)*this%W(i-1:i,j,k))+sum(this%grdu_z(:,i,j,k)*this%U(i,j,k-1:k)))
-               ! Fluxes on y-face
-               i=ii; j=jj; k=kk
-               FY(i,j,k)=-+sum(this%itp_yz(:,:,i,j,k)*this%visc(i,j-1:j,k-1:k))*(sum(this%grdw_y(:,i,j,k)*this%W(i,j-1:j,k))+sum(this%grdv_z(:,i,j,k)*this%V(i,j,k-1:k)))
-               ! Fluxes on z-face
-               i=ii-1; j=jj-1; k=kk-1
-               FZ(i,j,k)=+this%visc(i,j,k)*(sum(this%grdw_z(:,i,j,k)*this%W(i,j,k:k+1))+sum(this%grdw_z(:,i,j,k)*this%W(i,j,k:k+1)) &
-               &         -2.0_WP/3.0_WP*(sum(this%divp_x(:,i,j,k)*this%U(i:i+1,j,k))+sum(this%divp_y(:,i,j,k)*this%V(i,j:j+1,k))+sum(this%divp_z(:,i,j,k)*this%W(i,j,k:k+1)))) &
-               &         -this%P(i,j,k)
-            end do
-         end do
-      end do
-      ! Divergence in Z
-      do k=this%cfg%kmin_,this%cfg%kmax_
-         do j=this%cfg%jmin_,this%cfg%jmax_
-            do i=this%cfg%imin_,this%cfg%imax_
-               divz(i,j,k)=sum(this%divw_x(:,i,j,k)*FX(i:i+1,j,k))+&
-               &           sum(this%divw_y(:,i,j,k)*FY(i,j:j+1,k))+&
-               &           sum(this%divw_z(:,i,j,k)*FZ(i,j,k-1:k))
-            end do
-         end do
-      end do
-      ! Sync it
-      call this%cfg%sync(divz)
-      
-      ! Deallocate flux arrays
-      deallocate(FX,FY,FZ)
-      
-   end subroutine get_div_stress
-   
-   
-   !> Calculate vorticity vector
-   subroutine get_vorticity(this,vort)
-      use messager, only: die
-      implicit none
-      class(lowmach), intent(inout) :: this
-      real(WP), dimension(1:,this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(out) :: vort  !< Needs to be (1:3,imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
-      integer :: i,j,k
-      real(WP), dimension(:,:,:), allocatable :: dudy,dudz,dvdx,dvdz,dwdx,dwdy
-      
-      ! Check vort's first two dimensions
-      if (size(vort,dim=1).ne.3) call die('[lowmach get_vorticity] vort should be of size (1:3,imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)')
-
-      ! Allocate velocity gradient components
-      allocate(dudy(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
-      allocate(dudz(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
-      allocate(dvdx(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
-      allocate(dvdz(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
-      allocate(dwdx(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
-      allocate(dwdy(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
-
-      ! Calculate components of the velocity gradient at their natural locations with an extra cell for interpolation
-      do k=this%cfg%kmin_,this%cfg%kmax_+1
-         do j=this%cfg%jmin_,this%cfg%jmax_+1
-            do i=this%cfg%imin_,this%cfg%imax_+1
-               dudy(i,j,k)=sum(this%grdu_y(:,i,j,k)*this%U(i,j-1:j,k))
-               dudz(i,j,k)=sum(this%grdu_z(:,i,j,k)*this%U(i,j,k-1:k))
-               dvdx(i,j,k)=sum(this%grdv_x(:,i,j,k)*this%V(i-1:i,j,k))
-               dvdz(i,j,k)=sum(this%grdv_z(:,i,j,k)*this%V(i,j,k-1:k))
-               dwdx(i,j,k)=sum(this%grdw_x(:,i,j,k)*this%W(i-1:i,j,k))
-               dwdy(i,j,k)=sum(this%grdw_y(:,i,j,k)*this%W(i,j-1:j,k))
-            end do
-         end do
-      end do
-
-      ! Interpolate off-diagonal components of the velocity gradient to the cell center
-      do k=this%cfg%kmin_,this%cfg%kmax_
-         do j=this%cfg%jmin_,this%cfg%jmax_
-            do i=this%cfg%imin_,this%cfg%imax_
-               vort(1,i,j,k)=0.25_WP*(sum(dwdy(i,j:j+1,k:k+1))-sum(dvdz(i,j:j+1,k:k+1)))
-               vort(2,i,j,k)=0.25_WP*(sum(dudz(i:i+1,j,k:k+1))-sum(dwdx(i:i+1,j,k:k+1)))
-               vort(3,i,j,k)=0.25_WP*(sum(dvdx(i:i+1,j:j+1,k))-sum(dudy(i:i+1,j:j+1,k)))
-            end do
-         end do
-      end do
-
-      ! Ensure zero in walls
-      do k=this%cfg%kmino_,this%cfg%kmaxo_
-         do j=this%cfg%jmino_,this%cfg%jmaxo_
-            do i=this%cfg%imino_,this%cfg%imaxo_
-               if (this%mask(i,j,k).eq.1) vort(:,i,j,k)=0.0_WP
-            end do
-         end do
-      end do
-
-      ! Sync it
-      call this%cfg%sync(vort)
-
-      ! Deallocate velocity gradient storage
-      deallocate(dudy,dudz,dvdx,dvdz,dwdx,dwdy)
-
-   end subroutine get_vorticity
    
    
    !> Divide momentum by rho to form velocity
@@ -1590,7 +1413,7 @@ contains
       real(WP), dimension(:,:,:), allocatable :: dudy,dudz,dvdx,dvdz,dwdx,dwdy
       
       ! Check gradu's first two dimensions
-	   if (size(gradu,dim=1).ne.3.or.size(gradu,dim=2).ne.3) call die('[incomp get_strainrate] gradu should be of size (1:3,1:3,imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)')
+	   if (size(gradu,dim=1).ne.3.or.size(gradu,dim=2).ne.3) call die('[lowmach get_gradu] gradu should be of size (1:3,1:3,imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)')
       
       ! Compute dudx, dvdy, and dwdz first
 	   do k=this%cfg%kmin_,this%cfg%kmax_
@@ -1670,6 +1493,197 @@ contains
       
    end subroutine get_gradu
    
+   
+   !> Calculate divergence of stress based on U/V/W/P (needed by LPT class)
+   subroutine get_div_stress(this,divx,divy,divz)
+      implicit none
+      class(lowmach), intent(inout) :: this
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(out) :: divx !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(out) :: divy !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(out) :: divz !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      integer :: i,j,k,ii,jj,kk
+      real(WP), dimension(:,:,:), allocatable :: FX,FY,FZ
+      
+      ! Allocate flux arrays
+      allocate(FX(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
+      allocate(FY(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
+      allocate(FZ(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
+      
+      ! Stress tensor in X
+      do kk=this%cfg%kmin_,this%cfg%kmax_+1
+         do jj=this%cfg%jmin_,this%cfg%jmax_+1
+            do ii=this%cfg%imin_,this%cfg%imax_+1
+               ! Fluxes on x-face
+               i=ii-1; j=jj-1; k=kk-1
+               FX(i,j,k)=+this%visc(i,j,k)*(sum(this%grdu_x(:,i,j,k)*this%U(i:i+1,j,k))+sum(this%grdu_x(:,i,j,k)*this%U(i:i+1,j,k)) &
+               &         -2.0_WP/3.0_WP*(sum(this%divp_x(:,i,j,k)*this%U(i:i+1,j,k))+sum(this%divp_y(:,i,j,k)*this%V(i,j:j+1,k))+sum(this%divp_z(:,i,j,k)*this%W(i,j,k:k+1)))) &
+               &         -this%P(i,j,k)
+               ! Fluxes on y-face
+               i=ii; j=jj; k=kk
+               FY(i,j,k)=+sum(this%itp_xy(:,:,i,j,k)*this%visc(i-1:i,j-1:j,k))*(sum(this%grdu_y(:,i,j,k)*this%U(i,j-1:j,k))+sum(this%grdv_x(:,i,j,k)*this%V(i-1:i,j,k)))
+               ! Fluxes on z-face
+               i=ii; j=jj; k=kk
+               FZ(i,j,k)=+sum(this%itp_xz(:,:,i,j,k)*this%visc(i-1:i,j,k-1:k))*(sum(this%grdu_z(:,i,j,k)*this%U(i,j,k-1:k))+sum(this%grdw_x(:,i,j,k)*this%W(i-1:i,j,k)))
+            end do
+         end do
+      end do
+      ! Divergence of X stress
+      do k=this%cfg%kmin_,this%cfg%kmax_
+         do j=this%cfg%jmin_,this%cfg%jmax_
+            do i=this%cfg%imin_,this%cfg%imax_
+               divx(i,j,k)=sum(this%divu_x(:,i,j,k)*FX(i-1:i,j,k))+&
+               &           sum(this%divu_y(:,i,j,k)*FY(i,j:j+1,k))+&
+               &           sum(this%divu_z(:,i,j,k)*FZ(i,j,k:k+1))
+            end do
+         end do
+      end do
+      ! Sync it
+      call this%cfg%sync(divx)
+      
+      ! Stress tensor in Y
+      do kk=this%cfg%kmin_,this%cfg%kmax_+1
+         do jj=this%cfg%jmin_,this%cfg%jmax_+1
+            do ii=this%cfg%imin_,this%cfg%imax_+1
+               ! Fluxes on x-face
+               i=ii; j=jj; k=kk
+               FX(i,j,k)=+sum(this%itp_xy(:,:,i,j,k)*this%visc(i-1:i,j-1:j,k))*(sum(this%grdv_x(:,i,j,k)*this%V(i-1:i,j,k))+sum(this%grdu_y(:,i,j,k)*this%U(i,j-1:j,k)))
+               ! Fluxes on y-face
+               i=ii-1; j=jj-1; k=kk-1
+               FY(i,j,k)=+this%visc(i,j,k)*(sum(this%grdv_y(:,i,j,k)*this%V(i,j:j+1,k))+sum(this%grdv_y(:,i,j,k)*this%V(i,j:j+1,k)) &
+               &         -2.0_WP/3.0_WP*(sum(this%divp_x(:,i,j,k)*this%U(i:i+1,j,k))+sum(this%divp_y(:,i,j,k)*this%V(i,j:j+1,k))+sum(this%divp_z(:,i,j,k)*this%W(i,j,k:k+1)))) &
+               &         -this%P(i,j,k)
+               ! Fluxes on z-face
+               i=ii; j=jj; k=kk
+               FZ(i,j,k)=+sum(this%itp_yz(:,:,i,j,k)*this%visc(i,j-1:j,k-1:k))*(sum(this%grdv_z(:,i,j,k)*this%V(i,j,k-1:k))+sum(this%grdw_y(:,i,j,k)*this%W(i,j-1:j,k)))
+            end do
+         end do
+      end do
+      ! Divergence of Y stress
+      do k=this%cfg%kmin_,this%cfg%kmax_
+         do j=this%cfg%jmin_,this%cfg%jmax_
+            do i=this%cfg%imin_,this%cfg%imax_
+               divy(i,j,k)=sum(this%divv_x(:,i,j,k)*FX(i:i+1,j,k))+&
+               &           sum(this%divv_y(:,i,j,k)*FY(i,j-1:j,k))+&
+               &           sum(this%divv_z(:,i,j,k)*FZ(i,j,k:k+1))
+            end do
+         end do
+      end do
+      ! Sync it
+      call this%cfg%sync(divy)
+      
+      ! Stress tensor in Z
+      do kk=this%cfg%kmin_,this%cfg%kmax_+1
+         do jj=this%cfg%jmin_,this%cfg%jmax_+1
+            do ii=this%cfg%imin_,this%cfg%imax_+1
+               ! Fluxes on x-face
+               i=ii; j=jj; k=kk
+               FX(i,j,k)=+sum(this%itp_xz(:,:,i,j,k)*this%visc(i-1:i,j,k-1:k))*(sum(this%grdw_x(:,i,j,k)*this%W(i-1:i,j,k))+sum(this%grdu_z(:,i,j,k)*this%U(i,j,k-1:k)))
+               ! Fluxes on y-face
+               i=ii; j=jj; k=kk
+               FY(i,j,k)=-+sum(this%itp_yz(:,:,i,j,k)*this%visc(i,j-1:j,k-1:k))*(sum(this%grdw_y(:,i,j,k)*this%W(i,j-1:j,k))+sum(this%grdv_z(:,i,j,k)*this%V(i,j,k-1:k)))
+               ! Fluxes on z-face
+               i=ii-1; j=jj-1; k=kk-1
+               FZ(i,j,k)=+this%visc(i,j,k)*(sum(this%grdw_z(:,i,j,k)*this%W(i,j,k:k+1))+sum(this%grdw_z(:,i,j,k)*this%W(i,j,k:k+1)) &
+               &         -2.0_WP/3.0_WP*(sum(this%divp_x(:,i,j,k)*this%U(i:i+1,j,k))+sum(this%divp_y(:,i,j,k)*this%V(i,j:j+1,k))+sum(this%divp_z(:,i,j,k)*this%W(i,j,k:k+1)))) &
+               &         -this%P(i,j,k)
+            end do
+         end do
+      end do
+      ! Divergence in Z
+      do k=this%cfg%kmin_,this%cfg%kmax_
+         do j=this%cfg%jmin_,this%cfg%jmax_
+            do i=this%cfg%imin_,this%cfg%imax_
+               divz(i,j,k)=sum(this%divw_x(:,i,j,k)*FX(i:i+1,j,k))+&
+               &           sum(this%divw_y(:,i,j,k)*FY(i,j:j+1,k))+&
+               &           sum(this%divw_z(:,i,j,k)*FZ(i,j,k-1:k))
+            end do
+         end do
+      end do
+      ! Sync it
+      call this%cfg%sync(divz)
+      
+      ! Deallocate flux arrays
+      deallocate(FX,FY,FZ)
+      
+   end subroutine get_div_stress
+   
+   
+   !> Calculate vorticity vector
+   subroutine get_vorticity(this,vort)
+      use messager, only: die
+      implicit none
+      class(lowmach), intent(inout) :: this
+      real(WP), dimension(1:,this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(out) :: vort  !< Needs to be (1:3,imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      integer :: i,j,k
+      real(WP), dimension(:,:,:), allocatable :: dudy,dudz,dvdx,dvdz,dwdx,dwdy
+      
+      ! Check vort's first two dimensions
+      if (size(vort,dim=1).ne.3) call die('[lowmach get_vorticity] vort should be of size (1:3,imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)')
+
+      ! Allocate velocity gradient components
+      allocate(dudy(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
+      allocate(dudz(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
+      allocate(dvdx(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
+      allocate(dvdz(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
+      allocate(dwdx(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
+      allocate(dwdy(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
+
+      ! Calculate components of the velocity gradient at their natural locations with an extra cell for interpolation
+      do k=this%cfg%kmin_,this%cfg%kmax_+1
+         do j=this%cfg%jmin_,this%cfg%jmax_+1
+            do i=this%cfg%imin_,this%cfg%imax_+1
+               dudy(i,j,k)=sum(this%grdu_y(:,i,j,k)*this%U(i,j-1:j,k))
+               dudz(i,j,k)=sum(this%grdu_z(:,i,j,k)*this%U(i,j,k-1:k))
+               dvdx(i,j,k)=sum(this%grdv_x(:,i,j,k)*this%V(i-1:i,j,k))
+               dvdz(i,j,k)=sum(this%grdv_z(:,i,j,k)*this%V(i,j,k-1:k))
+               dwdx(i,j,k)=sum(this%grdw_x(:,i,j,k)*this%W(i-1:i,j,k))
+               dwdy(i,j,k)=sum(this%grdw_y(:,i,j,k)*this%W(i,j-1:j,k))
+            end do
+         end do
+      end do
+
+      ! Interpolate off-diagonal components of the velocity gradient to the cell center
+      do k=this%cfg%kmin_,this%cfg%kmax_
+         do j=this%cfg%jmin_,this%cfg%jmax_
+            do i=this%cfg%imin_,this%cfg%imax_
+               vort(1,i,j,k)=0.25_WP*(sum(dwdy(i,j:j+1,k:k+1))-sum(dvdz(i,j:j+1,k:k+1)))
+               vort(2,i,j,k)=0.25_WP*(sum(dudz(i:i+1,j,k:k+1))-sum(dwdx(i:i+1,j,k:k+1)))
+               vort(3,i,j,k)=0.25_WP*(sum(dvdx(i:i+1,j:j+1,k))-sum(dudy(i:i+1,j:j+1,k)))
+            end do
+         end do
+      end do
+      
+      ! Apply a Neumann condition in non-periodic directions
+	   if (.not.this%cfg%xper) then
+         if (this%cfg%iproc.eq.1)            vort(:,this%cfg%imin-1,:,:)=vort(:,this%cfg%imin,:,:)
+         if (this%cfg%iproc.eq.this%cfg%npx) vort(:,this%cfg%imax+1,:,:)=vort(:,this%cfg%imax,:,:)
+      end if
+      if (.not.this%cfg%yper) then
+         if (this%cfg%jproc.eq.1)            vort(:,:,this%cfg%jmin-1,:)=vort(:,:,this%cfg%jmin,:)
+         if (this%cfg%jproc.eq.this%cfg%npy) vort(:,:,this%cfg%jmax+1,:)=vort(:,:,this%cfg%jmax,:)
+      end if
+      if (.not.this%cfg%zper) then
+         if (this%cfg%kproc.eq.1)            vort(:,:,:,this%cfg%kmin-1)=vort(:,:,:,this%cfg%kmin)
+         if (this%cfg%kproc.eq.this%cfg%npz) vort(:,:,:,this%cfg%kmax+1)=vort(:,:,:,this%cfg%kmax)
+      end if
+      
+      ! Ensure zero in walls
+      do k=this%cfg%kmino_,this%cfg%kmaxo_
+         do j=this%cfg%jmino_,this%cfg%jmaxo_
+            do i=this%cfg%imino_,this%cfg%imaxo_
+               if (this%mask(i,j,k).eq.1) vort(:,i,j,k)=0.0_WP
+            end do
+         end do
+      end do
+
+      ! Sync it
+      call this%cfg%sync(vort)
+
+      ! Deallocate velocity gradient storage
+      deallocate(dudy,dudz,dvdx,dvdz,dwdx,dwdy)
+
+   end subroutine get_vorticity
+
    
    !> Calculate the CFL
    subroutine get_cfl(this,dt,cflc,cfl)
