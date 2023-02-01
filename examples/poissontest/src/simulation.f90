@@ -129,10 +129,48 @@ contains
         end if
       end do
 
+      ! Consistent with NGA2 solver
+      ps%rhs=-ps%rhs
+      
     end block rhs_setup
 
     ! Solve Poisson equation
+    ps%sol=0.0_WP
     call ps%solve()
+
+    shift_p: block
+      use mpi_f08,  only: MPI_ALLREDUCE,MPI_SUM
+      use parallel, only: MPI_REAL_WP
+      integer :: i,j,k,ierr
+      real(WP) :: vol_tot,pressure_tot,my_vol_tot,my_pressure_tot
+      ! Loop over domain and integrate volume and pressure
+      my_vol_tot=0.0_WP
+      my_pressure_tot=0.0_WP
+      do k=cfg%kmin_,cfg%kmax_
+         do j=cfg%jmin_,cfg%jmax_
+            do i=cfg%imin_,cfg%imax_
+               my_vol_tot     =my_vol_tot     +cfg%vol(i,j,k)*cfg%VF(i,j,k)
+               my_pressure_tot=my_pressure_tot+cfg%vol(i,j,k)*cfg%VF(i,j,k)*ps%sol(i,j,k)
+            end do
+         end do
+      end do
+      call MPI_ALLREDUCE(my_vol_tot     ,vol_tot     ,1,MPI_REAL_WP,MPI_SUM,cfg%comm,ierr)
+      call MPI_ALLREDUCE(my_pressure_tot,pressure_tot,1,MPI_REAL_WP,MPI_SUM,cfg%comm,ierr)
+      pressure_tot=pressure_tot/vol_tot
+
+      ! Shift the pressure
+      do k=cfg%kmin_,cfg%kmax_
+         do j=cfg%jmin_,cfg%jmax_
+            do i=cfg%imin_,cfg%imax_
+               if (cfg%VF(i,j,k).gt.0.0_WP) ps%sol(i,j,k)=ps%sol(i,j,k)-pressure_tot
+            end do
+         end do
+      end do
+      call cfg%sync(ps%sol)
+    end block shift_p
+
+    ! Consistent with NGA2 solver
+    ps%rhs=-ps%rhs
 
     ! Output to ensight
     call ens_out%write_data(0.0_WP)
