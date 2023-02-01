@@ -66,7 +66,7 @@ contains
       
       ! Create masks for this config
       create_walls: block
-        cfg%VF=1.0_WP
+         cfg%VF=1.0_WP
       end block create_walls
       
       

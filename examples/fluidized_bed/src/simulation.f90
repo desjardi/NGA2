@@ -11,33 +11,33 @@ module simulation
   use monitor_class,     only: monitor
   implicit none
   private
-
+  
   !> Get an LPT solver, a lowmach solver, and corresponding time tracker
   type(lowmach),     public :: fs
   type(lpt),         public :: lp
   type(timetracker), public :: time
-
+  
   !> Ensight postprocessing
   type(partmesh) :: pmesh
   type(ensight)  :: ens_out
   type(event)    :: ens_evt
-
+  
   !> Simulation monitor file
   type(monitor) :: mfile,cflfile,lptfile,tfile
-
+  
   public :: simulation_init,simulation_run,simulation_final
-
+  
   !> Work arrays and fluid properties
   real(WP), dimension(:,:,:), allocatable :: resU,resV,resW
   real(WP), dimension(:,:,:), allocatable :: Ui,Vi,Wi,rho0,dRHOdt
   real(WP), dimension(:,:,:), allocatable :: srcUlp,srcVlp,srcWlp
   real(WP) :: visc,rho,inlet_velocity
-
+  
   !> Wallclock time for monitoring
   type :: timer
-     real(WP) :: time_in
-     real(WP) :: time
-     real(WP) :: percent
+    real(WP) :: time_in
+    real(WP) :: time
+    real(WP) :: percent
   end type timer
   type(timer) :: wt_total,wt_vel,wt_pres,wt_lpt,wt_rest
 
@@ -96,7 +96,7 @@ contains
 
     ! Create a low Mach flow solver with bconds
     create_flow_solver: block
-      use ils_class,     only: pcg_pfmg,pcg_amg
+      use ils_class,     only: pcg_pfmg,gmres_amg
       use lowmach_class, only: dirichlet,clipped_neumann
       ! Create flow solver
       fs=lowmach(cfg=cfg,name='Variable density low Mach NS')
@@ -117,7 +117,7 @@ contains
       call param_read('Implicit iteration',fs%implicit%maxit)
       call param_read('Implicit tolerance',fs%implicit%rcvg)
       ! Setup the solver
-      call fs%setup(pressure_ils=pcg_amg,implicit_ils=pcg_pfmg)
+      call fs%setup(pressure_ils=gmres_amg,implicit_ils=pcg_pfmg)
     end block create_flow_solver
 
 

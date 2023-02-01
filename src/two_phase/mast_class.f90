@@ -165,9 +165,6 @@ module mast_class
       ! Temporary arrays for viscous routine (may be used for more in the future)
       real(WP), dimension(:,:,:), pointer :: tmp4,tmp5,tmp6,tmp7,tmp8,tmp9,tmp10
       
-      ! Temporary arrays for viscous routine (may be used for more in the future)
-      real(WP), dimension(:,:,:), pointer :: tmp4,tmp5,tmp6,tmp7,tmp8,tmp9,tmp10
-      
       ! Pressure solver
       type(ils) :: psolv                                  !< Iterative linear solver object for the pressure Helmholtz equation
       
