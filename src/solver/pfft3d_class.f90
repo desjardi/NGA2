@@ -140,8 +140,8 @@ contains
     implicit none
     include "mpif.h"
     class(pfft3d), intent(inout) :: this
-    integer :: type_ccr, type_rcc
-    integer(C_INT) :: p3dfft_grid, grid_real, grid_fourier
+    integer :: type_ccr, type_rcc, contig_dim, buf_int
+    integer(C_INT) :: p3dfft_grid, grid_real, grid_fourier, buf_cint
     integer, dimension(3) :: type_ids_f, type_ids_b,                          &
       glob_start_real, glob_start_fourier
     integer(C_INT), dimension(3) :: pdims, ldims_real, ldims_fourier,         &
@@ -156,16 +156,11 @@ contains
 
     ! Various checks to ensure we can use this solver
     check_solver_is_useable: block
-      integer :: ndcp, ndims
 
       ! Periodicity and uniformity of mesh
       if (.not.(this%cfg%xper.and.this%cfg%uniform_x)) call die('[pfft3d constructor] Need x-direction needs to be periodic and uniform')
       if (.not.(this%cfg%yper.and.this%cfg%uniform_y)) call die('[pfft3d constructor] Need y-direction needs to be periodic and uniform')
       if (.not.(this%cfg%zper.and.this%cfg%uniform_z)) call die('[pfft3d constructor] Need z-direction needs to be periodic and uniform')
-
-      ! Ensure that we have at least one non-decomposed direction
-      ndims = count(gdims_real .gt. 1); ndcp = count(pdims .gt. 1);
-      if (ndcp .ge. ndims) call die('[pdfft3 constructor] Need at least one NON-decomposed direction')
 
     end block check_solver_is_useable
 
@@ -180,23 +175,36 @@ contains
        return
     end if
 
+    ! Various checks for parallel FFT
+    check_psolver_is_useable: block
+
+      ! Check (restrictive) processor decomp
+      if (modulo(this%cfg%nx,this%cfg%npx).ne.0) call die('[pfft3d constructor] Need nx to evenly divide into npx')
+      if (modulo(this%cfg%ny,this%cfg%npy).ne.0) call die('[pfft3d constructor] Need ny to evenly divide into npy')
+      if (modulo(this%cfg%nz,this%cfg%npz).ne.0) call die('[pfft3d constructor] Need nz to evenly divide into npz')
+
+      ! Ensure that we have at least one non-decomposed direction
+      contig_dim = findloc((/this%cfg%npx, this%cfg%npy, this%cfg%npz /), value=1, dim=1)
+      if (contig_dim.eq.0) call die('[pdfft3 constructor] Need at least one NON-decomposed direction')
+
+      ! Possible bug in p3dfft library
+      if (this%cfg%nz.eq.1. .and. this%cfg%npx.gt.1) call die('[pfft3d constructor] 2D case requires npx=1')
+
+    end block check_psolver_is_useable
+
     ! Set up work structures for P3DFFT
     call p3dfft_setup
 
     ! Set up 2 transform types for 3D transforms
-    type_ids_f(:) = (/ P3DFFT_R2CFFT_D, P3DFFT_CFFT_FORWARD_D, P3DFFT_CFFT_FORWARD_D /)
-    type_ids_b(:) = (/ P3DFFT_C2RFFT_D, P3DFFT_CFFT_BACKWARD_D, P3DFFT_CFFT_BACKWARD_D /)
-
-    ! Now initialize 3D transforms (forward and backward) with these types
-    call p3dfft_init_3Dtype(type_rcc, type_ids_f)
-    call p3dfft_init_3Dtype(type_ccr, type_ids_b)
+    type_ids_f(:) = P3DFFT_CFFT_FORWARD_D;  type_ids_f(contig_dim) = P3DFFT_R2CFFT_D
+    type_ids_b(:) = P3DFFT_CFFT_BACKWARD_D; type_ids_b(contig_dim) = P3DFFT_C2RFFT_D
 
     ! Set up processor order and memory ordering, as well as the final global
     ! grid dimensions.  These will be different from the original dimensions in
     ! one dimension due to conjugate symmetry, since we are doing
     ! real-to-complex transform.
     gdims_fourier(:) = gdims_real(:)
-    gdims_fourier(1) = gdims_fourier(1) / 2 + 1
+    gdims_fourier(contig_dim) = gdims_fourier(contig_dim) / 2 + 1
     mem_order_real(:) = (/ 0, 1, 2 /)
 
     ! Set up memory order for the final grid layout (for complex array in
@@ -209,13 +217,17 @@ contains
     mem_order_fourier(:) = (/ 1, 2, 0 /)
     dmap_real(:) = (/ 0, 1, 2 /); dmap_fourier(:) = (/ 1, 2, 0 /);
 
+    ! Now initialize 3D transforms (forward and backward) with these types
+    call p3dfft_init_3Dtype(type_rcc, type_ids_f)
+    call p3dfft_init_3Dtype(type_ccr, type_ids_b)
+
     ! Specify the default communicator for P3DFFT++. This can be different
     ! from your program default communicator.
     p3dfft_grid = p3dfft_init_proc_grid(pdims, MPI_COMM_WORLD)
 
     ! Initialize grid, no conjugate symmetry (-1)
     call p3dfft_init_data_grid(grid_real, ldims_real, glob_start_real,        &
-      gdims_real, -1, p3dfft_grid, dmap_real, mem_order_real)
+         gdims_real, -1, p3dfft_grid, dmap_real, mem_order_real)
 
     ! Check ldims_real against pgrid
     if (.not. all((/ this%cfg%nx_, this%cfg%ny_, this%cfg%nz_ /) .eq.         &
@@ -225,7 +237,7 @@ contains
 
     ! Final grid has conjugate symmetry in X dimension (0)
     call p3dfft_init_data_grid(grid_fourier, ldims_fourier, glob_start_fourier,&
-      gdims_fourier, 0, p3dfft_grid, dmap_fourier, mem_order_fourier)
+         gdims_fourier, 0, p3dfft_grid, dmap_fourier, mem_order_fourier)
 
     ! Plan transforms
     call p3dfft_plan_3Dtrans(this%trans_f, grid_real, grid_fourier, type_rcc)
@@ -351,6 +363,7 @@ contains
 
     ! Divide
     this%transformed_rhs = this%transformed_rhs * this%factored_operator
+    
     ! Do backward transform and rescale
     if (this%serial_fft) then
        this%inout_serial=this%transformed_rhs
@@ -380,7 +393,6 @@ contains
     implicit none
     class(pfft3d), intent(inout) :: this
 
-    ! do nothing; included for consistency with other methods
     this%setup_done = .false.
 
     if (this%serial_fft) then
