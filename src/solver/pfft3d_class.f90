@@ -196,15 +196,22 @@ contains
     call p3dfft_setup
 
     ! Set up 2 transform types for 3D transforms
-    type_ids_f(:) = P3DFFT_CFFT_FORWARD_D;  type_ids_f(contig_dim) = P3DFFT_R2CFFT_D
-    type_ids_b(:) = P3DFFT_CFFT_BACKWARD_D; type_ids_b(contig_dim) = P3DFFT_C2RFFT_D
+    !type_ids_f(:) = P3DFFT_CFFT_FORWARD_D;  type_ids_f(contig_dim) = P3DFFT_R2CFFT_D
+    !type_ids_b(:) = P3DFFT_CFFT_BACKWARD_D; type_ids_b(contig_dim) = P3DFFT_C2RFFT_D
+    type_ids_f(:) = (/ P3DFFT_R2CFFT_D, P3DFFT_CFFT_FORWARD_D, P3DFFT_CFFT_FORWARD_D /)
+    type_ids_b(:) = (/ P3DFFT_C2RFFT_D, P3DFFT_CFFT_BACKWARD_D, P3DFFT_CFFT_BACKWARD_D /)
+
+    ! Now initialize 3D transforms (forward and backward) with these types
+    call p3dfft_init_3Dtype(type_rcc, type_ids_f)
+    call p3dfft_init_3Dtype(type_ccr, type_ids_b)
 
     ! Set up processor order and memory ordering, as well as the final global
     ! grid dimensions.  These will be different from the original dimensions in
     ! one dimension due to conjugate symmetry, since we are doing
     ! real-to-complex transform.
     gdims_fourier(:) = gdims_real(:)
-    gdims_fourier(contig_dim) = gdims_fourier(contig_dim) / 2 + 1
+    gdims_fourier(1) = gdims_fourier(1) / 2 + 1
+    !gdims_fourier(contig_dim) = gdims_fourier(contig_dim) / 2 + 1
     mem_order_real(:) = (/ 0, 1, 2 /)
 
     ! Set up memory order for the final grid layout (for complex array in
@@ -216,10 +223,6 @@ contains
     ! the memory ordering is specified in C indices, i.e. starting from 0.
     mem_order_fourier(:) = (/ 1, 2, 0 /)
     dmap_real(:) = (/ 0, 1, 2 /); dmap_fourier(:) = (/ 1, 2, 0 /);
-
-    ! Now initialize 3D transforms (forward and backward) with these types
-    call p3dfft_init_3Dtype(type_rcc, type_ids_f)
-    call p3dfft_init_3Dtype(type_ccr, type_ids_b)
 
     ! Specify the default communicator for P3DFFT++. This can be different
     ! from your program default communicator.
