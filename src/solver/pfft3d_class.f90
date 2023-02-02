@@ -282,7 +282,7 @@ contains
     do k = this%cfg%kmin_, this%cfg%kmax_
        do j = this%cfg%jmin_, this%cfg%jmax_
           do i = this%cfg%imin_, this%cfg%imax_
-             if (any(abs(this%opr(:,i,j,k)-ref_stencil(:)).gt.10.0_WP*epsilon(1.0_WP)/this%cfg%min_meshsize**2)) circulent = .false.
+             if (any(abs(this%opr(:,i,j,k)-ref_stencil(:)).gt.6.0_WP*epsilon(1.0_WP)/this%cfg%min_meshsize**4)) circulent = .false.
           end do
        end do
     end do
