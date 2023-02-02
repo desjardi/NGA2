@@ -275,21 +275,21 @@ contains
        this%stmap(this%stc(n,1),this%stc(n,2),this%stc(n,3)) = n
     end do
 
-    ! check circulent operator
+    ! Check circulent operator
     if (this%cfg%amRoot) ref_stencil = this%opr(:,1,1,1)
     call MPI_BCAST(ref_stencil, this%nst, MPI_REAL_WP, 0, this%cfg%comm, ierr)
     circulent = .true.
     do k = this%cfg%kmin_, this%cfg%kmax_
        do j = this%cfg%jmin_, this%cfg%jmax_
           do i = this%cfg%imin_, this%cfg%imax_
-             if (any(this%opr(:,i,j,k) .ne. ref_stencil(:))) circulent = .false.
+             if (any(abs(this%opr(:,i,j,k)-ref_stencil(:)).gt.10.0_WP*epsilon(1.0_WP)/this%cfg%min_meshsize**2)) circulent = .false.
           end do
        end do
     end do
     if (.not. circulent) then
        call die("[pf3dft] stencil must be uniform in space")
     end if
-
+    
     ! Build the operator
     opr_col(:,:,:) = 0.0_C_DOUBLE
     do n = 1, this%nst
