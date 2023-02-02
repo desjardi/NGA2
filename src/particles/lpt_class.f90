@@ -352,12 +352,21 @@ contains
 
   !> Resolve collisional interaction between particles
   !> Requires tau_col, e_n, e_w and mu_f to be set beforehand
-  subroutine collide(this,dt)
+  subroutine collide(this,dt,pipe_D,pipe_pos,pipe_dir)
     implicit none
     class(lpt), intent(inout) :: this
     real(WP), intent(inout) :: dt  !< Timestep size over which to advance
     integer, dimension(:,:,:), allocatable :: npic      !< Number of particle in cell
     integer, dimension(:,:,:,:), allocatable :: ipic    !< Index of particle in cell
+    real(WP), intent(in), optional :: pipe_D,pipe_pos(2)
+    character(len=*), intent(in), optional :: pipe_dir
+
+    ! Check if all pipe properties are provided
+    check_pipe: block
+      use messager, only: die
+      if (present(pipe_D).and.(.not.present(pipe_pos).or..not.present(pipe_dir))) &
+           call die('[lpt collide] Missing pipe parameters')
+    end block check_pipe
 
     ! Start by zeroing out the collision force
     zero_force: block
@@ -419,7 +428,7 @@ contains
       use mpi_f08
       use mathtools, only: Pi,normalize,cross_product
       integer :: i1,i2,ii,jj,kk,nn,ierr
-      real(WP) :: d1,m1,d2,m2,d12,m12
+      real(WP) :: d1,m1,d2,m2,d12,m12,buf
       real(WP), dimension(3) :: r1,v1,w1,r2,v2,w2,v12,n12,f_n,t12,f_t
       real(WP) :: k_n,eta_n,k_coeff,eta_coeff,k_coeff_w,eta_coeff_w,rnv,r_influ,delta_n,rtv
       real(WP), parameter :: aclipnorm=1.0e-6_WP
@@ -479,6 +488,57 @@ contains
             this%p(i1)%Acol=this%p(i1)%Acol+f_n+f_t
             ! Calculate collision torque
             this%p(i1)%Tcol=this%p(i1)%Tcol+cross_product(0.5_WP*d1*n12,f_t)
+         end if
+         
+         ! Collide with pipe walls
+         if (present(pipe_D)) then
+            select case(trim(pipe_dir))
+            case('x')
+               d12=0.5_WP*pipe_D-sqrt((r1(2)-pipe_pos(1))**2+(r1(3)-pipe_pos(2))**2)
+               n12(1) = 0.0_WP
+               n12(2) = pipe_pos(1) - r1(2)
+               n12(3) = pipe_pos(2) - r1(3)
+            case('y')
+               d12=0.5_WP*pipe_D-sqrt((r1(1)-pipe_pos(1))**2+(r1(3)-pipe_pos(2))**2)
+               n12(1) = pipe_pos(1) - r1(1)
+               n12(2) = 0.0_WP 
+               n12(3) = pipe_pos(2) - r1(3)
+            case('z')
+               d12=0.5_WP*pipe_D-sqrt((r1(1)-pipe_pos(1))**2+(r1(2)-pipe_pos(2))**2)
+               n12(1) = pipe_pos(1) - r1(1)
+               n12(2) = pipe_pos(2) - r1(2)
+               n12(3) = 0.0_WP
+            end select
+            buf = sqrt(sum(n12*n12))+epsilon(1.0_WP)
+            n12 = -n12/buf
+            rnv=dot_product(v1,n12)
+            r_influ=min(2.0_WP*abs(rnv)*dt,0.2_WP*d1)
+            delta_n=min(0.5_WP*d1+r_influ-d12,this%clip_col*0.5_WP*d1)
+
+            ! Assess if there is collision
+            if (delta_n.gt.0.0_WP) then
+               ! Normal collision
+               k_n=m1*k_coeff_w
+               eta_n=m1*eta_coeff_w
+               f_n=-k_n*delta_n*n12-eta_n*rnv*n12
+               ! Tangential collision
+               f_t=0.0_WP
+               if (this%mu_f.gt.0.0_WP) then
+                  t12 = v1-rnv*n12+cross_product(0.5_WP*d1*w1,n12)
+                  rtv = sqrt(sum(t12*t12))
+                  if (rnv*dt/d1.gt.aclipnorm) then
+                     if (rtv/rnv.lt.rcliptan) rtv=0.0_WP
+                  else
+                     if (rtv*dt/d1.lt.acliptan) rtv=0.0_WP
+                  end if
+                  if (rtv.gt.0.0_WP) f_t=-this%mu_f*sqrt(sum(f_n*f_n))*t12/rtv
+               end if
+               ! Calculate collision force
+               f_n=f_n/m1; f_t=f_t/m1
+               this%p(i1)%Acol=this%p(i1)%Acol+f_n+f_t
+               ! Calculate collision torque
+               this%p(i1)%Tcol=this%p(i1)%Tcol+cross_product(0.5_WP*d1*n12,f_t)
+            end if
          end if
 
          ! Loop over nearest cells
@@ -1201,7 +1261,7 @@ contains
     use parallel, only: MPI_REAL_WP
     implicit none
     class(lpt), intent(inout) :: this
-    real(WP) :: buf,safe_np
+    real(WP) :: buf,safe_np,vol_total
     integer :: i,j,k,ierr
 
     ! Create safe np
@@ -1248,19 +1308,22 @@ contains
     call MPI_ALLREDUCE(this%Wvar,buf,1,MPI_REAL_WP,MPI_SUM,this%cfg%comm,ierr); this%Wvar=buf/safe_np
 
     ! Get mean, max, and min volume fraction
+    vol_total=0.0_WP
     this%VFmean=0.0_WP
     this%VFmax =-huge(1.0_WP)
     this%VFmin =+huge(1.0_WP)
     do k=this%cfg%kmin_,this%cfg%kmax_
        do j=this%cfg%jmin_,this%cfg%jmax_
           do i=this%cfg%imin_,this%cfg%imax_
+             vol_total=vol_total+this%cfg%VF(i,j,k)*this%cfg%vol(i,j,k)
              this%VFmean=this%VFmean+this%cfg%VF(i,j,k)*this%cfg%vol(i,j,k)*this%VF(i,j,k)
              this%VFmax =max(this%VFmax,this%VF(i,j,k))
              this%VFmin =min(this%VFmin,this%VF(i,j,k))
           end do
        end do
     end do
-    call MPI_ALLREDUCE(this%VFmean,buf,1,MPI_REAL_WP,MPI_SUM,this%cfg%comm,ierr); this%VFmean=buf/this%cfg%vol_total
+    call MPI_ALLREDUCE(vol_total,buf,1,MPI_REAL_WP,MPI_SUM,this%cfg%comm,ierr); vol_total=buf
+    call MPI_ALLREDUCE(this%VFmean,buf,1,MPI_REAL_WP,MPI_SUM,this%cfg%comm,ierr); this%VFmean=buf/vol_total
     call MPI_ALLREDUCE(this%VFmax ,buf,1,MPI_REAL_WP,MPI_MAX,this%cfg%comm,ierr); this%VFmax =buf
     call MPI_ALLREDUCE(this%VFmin ,buf,1,MPI_REAL_WP,MPI_MIN,this%cfg%comm,ierr); this%VFmin =buf
 
@@ -1273,7 +1336,7 @@ contains
           end do
        end do
     end do
-    call MPI_ALLREDUCE(this%VFvar,buf,1,MPI_REAL_WP,MPI_SUM,this%cfg%comm,ierr); this%VFvar=buf/this%cfg%vol_total
+    call MPI_ALLREDUCE(this%VFvar,buf,1,MPI_REAL_WP,MPI_SUM,this%cfg%comm,ierr); this%VFvar=buf/vol_total
 
   end subroutine get_max
 

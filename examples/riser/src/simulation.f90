@@ -573,7 +573,7 @@ contains
        resU=resU+bforce
 
        ! Collide and advance particles
-       call lp%collide(dt=time%dtmid)
+       call lp%collide(dt=time%dtmid,pipe_D=D,pipe_pos=(/0.0_WP,0.0_WP/),pipe_dir='x')
        call lp%advance(dt=time%dtmid,U=fs%U,V=fs%V,W=fs%W,rho=rho0,visc=fs%visc,stress_x=resU,stress_y=resV,stress_z=resW,&
             srcU=srcUlp,srcV=srcVlp,srcW=srcWlp)
 
@@ -617,6 +617,27 @@ contains
             end do
           end block add_lpt_src
 
+          ! Apply direct forcing to enforce BC at the pipe walls
+          ibm_correction: block
+            integer :: i,j,k
+            real(WP) :: VFx,VFy,VFz,RHOx,RHOy,RHOz
+            do k=fs%cfg%kmino_,fs%cfg%kmaxo_
+               do j=fs%cfg%jmino_,fs%cfg%jmaxo_
+                  do i=fs%cfg%imino_,fs%cfg%imaxo_
+                     VFx=get_VF(i,j,k,'U')
+                     VFy=get_VF(i,j,k,'V')
+                     VFz=get_VF(i,j,k,'W')
+                     RHOx=sum(fs%itpr_x(:,i,j,k)*fs%rho(i-1:i,j,k))
+                     RHOy=sum(fs%itpr_y(:,i,j,k)*fs%rho(i,j-1:j,k))
+                     RHOz=sum(fs%itpr_z(:,i,j,k)*fs%rho(i,j,k-1:k))
+                     resU(i,j,k)=resU(i,j,k)-(1.0_WP-VFx)*RHOx*fs%U(i,j,k)
+                     resV(i,j,k)=resV(i,j,k)-(1.0_WP-VFy)*RHOy*fs%V(i,j,k)
+                     resW(i,j,k)=resW(i,j,k)-(1.0_WP-VFz)*RHOz*fs%W(i,j,k)
+                  end do
+               end do
+            end do
+          end block ibm_correction
+
           ! Add body forcing
           call bodyforce_mfr(resU)
           bforce=(mfr_target-mfr)/time%dtmid
@@ -629,27 +650,6 @@ contains
           fs%U=2.0_WP*fs%U-fs%Uold+resU
           fs%V=2.0_WP*fs%V-fs%Vold+resV
           fs%W=2.0_WP*fs%W-fs%Wold+resW
-
-          ! Apply direct forcing to enforce BC at the pipe walls
-          ibm_correction: block
-            integer :: i,j,k
-            real(WP) :: VFx,VFy,VFz
-            do k=fs%cfg%kmin_,fs%cfg%kmax_
-               do j=fs%cfg%jmin_,fs%cfg%jmax_
-                  do i=fs%cfg%imin_,fs%cfg%imax_
-                     VFx      =get_VF(i,j,k,'U')
-                     VFy      =get_VF(i,j,k,'V')
-                     VFz      =get_VF(i,j,k,'W')
-                     fs%U(i,j,k)=VFx*fs%U(i,j,k)
-                     fs%V(i,j,k)=VFy*fs%V(i,j,k)
-                     fs%W(i,j,k)=VFz*fs%W(i,j,k)
-                  end do
-               end do
-            end do
-            call fs%cfg%sync(fs%U)
-            call fs%cfg%sync(fs%V)
-            call fs%cfg%sync(fs%W)
-          end block ibm_correction
 
           ! Apply other boundary conditions and update momentum
           call fs%apply_bcond(time%tmid,time%dtmid)
