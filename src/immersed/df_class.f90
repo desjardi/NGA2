@@ -351,29 +351,29 @@ contains
       
       ! Compute in X
       if (trim(adjustl(dir)).eq.'U') then
-         r = (xp-this%cfg%x(ic))*this%cfg%dxmi(ic)
-         deltax = roma_kernel(r)*this%cfg%dxmi(ic)
+         r=(xp-this%cfg%x(ic))*this%cfg%dxmi(ic)
+         deltax=roma_kernel(r)*this%cfg%dxmi(ic)
       else
-         r = (xp-this%cfg%xm(ic))*this%cfg%dxi(ic)
-         deltax = roma_kernel(r)*this%cfg%dxi(ic)
+         r=(xp-this%cfg%xm(ic))*this%cfg%dxi(ic)
+         deltax=roma_kernel(r)*this%cfg%dxi(ic)
       end if
       
       ! Compute in Y
       if (trim(adjustl(dir)).eq.'V') then
-         r = (yp-this%cfg%y(jc))*this%cfg%dymi(jc)
-         deltay = roma_kernel(r)*this%cfg%dymi(jc)
+         r=(yp-this%cfg%y(jc))*this%cfg%dymi(jc)
+         deltay=roma_kernel(r)*this%cfg%dymi(jc)
       else
-         r = (yp-this%cfg%ym(jc))*this%cfg%dyi(jc)
-         deltay = roma_kernel(r)*this%cfg%dyi(jc)
+         r=(yp-this%cfg%ym(jc))*this%cfg%dyi(jc)
+         deltay=roma_kernel(r)*this%cfg%dyi(jc)
       end if
       
       ! Compute in Z
       if (trim(adjustl(dir)).eq.'W') then
-         r = (zp-this%cfg%z(kc))*this%cfg%dzmi(kc)
-         deltaz = roma_kernel(r)*this%cfg%dzmi(kc)
+         r=(zp-this%cfg%z(kc))*this%cfg%dzmi(kc)
+         deltaz=roma_kernel(r)*this%cfg%dzmi(kc)
       else
-         r = (zp-this%cfg%zm(kc))*this%cfg%dzi(kc)
-         deltaz = roma_kernel(r)*this%cfg%dzi(kc)
+         r=(zp-this%cfg%zm(kc))*this%cfg%dzi(kc)
+         deltaz=roma_kernel(r)*this%cfg%dzi(kc)
       end if
       
       ! Put it all together
@@ -387,11 +387,11 @@ contains
          real(WP), intent(in) :: r
          real(WP)             :: phi
          if (abs(r).le.0.5_WP) then
-            phi = 1.0_WP/3.0_WP*(1.0_WP+sqrt(-3.0_WP*r**2+1.0_WP))
+            phi=1.0_WP/3.0_WP*(1.0_WP+sqrt(-3.0_WP*r**2+1.0_WP))
          else if (abs(r).gt.0.5_WP .and. abs(r).le.1.5_WP) then
-            phi = 1.0_WP/6.0_WP*(5.0_WP-3.0_WP*abs(r)-sqrt(-3.0_WP*(1.0_WP-abs(r))**2+1.0_WP))
+            phi=1.0_WP/6.0_WP*(5.0_WP-3.0_WP*abs(r)-sqrt(-3.0_WP*(1.0_WP-abs(r))**2+1.0_WP))
          else
-            phi = 0.0_WP
+            phi=0.0_WP
          end if
       end function roma_kernel
       
