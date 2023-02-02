@@ -85,13 +85,14 @@ contains
       ! Create masks for this config
       create_walls: block
         integer :: i,j,k
-        do k=cfg%kmino_,cfg%kmaxo_
-           do j=cfg%jmino_,cfg%jmaxo_
-              do i=cfg%imino_,cfg%imaxo_
+        do k=cfg%kmin_,cfg%kmax_
+           do j=cfg%jmin_,cfg%jmax_
+              do i=cfg%imin_,cfg%imax_
                  cfg%VF(i,j,k)=get_VF(i,j,k,'SC')
               end do
            end do
         end do
+        call cfd%sync(cfg%VF)
       end block create_walls
       
       
