@@ -29,7 +29,7 @@ module simulation
    !> Work arrays
    real(WP), dimension(:,:,:), allocatable :: resU,resV,resW
    real(WP), dimension(:,:,:), allocatable :: Ui,Vi,Wi
-   real(WP), dimension(:,:,:), allocatable :: G,VF
+   real(WP), dimension(:,:,:), allocatable :: G
    real(WP) :: mfr_target,mfr,bforce
    
    
@@ -121,7 +121,6 @@ contains
          allocate(Vi  (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
          allocate(Wi  (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
          allocate(G   (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
-         allocate(VF  (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
       end block allocate_work_arrays
       
       
@@ -141,6 +140,7 @@ contains
                do i=fs%cfg%imin_,fs%cfg%imax_
                   fs%U(i,j,k)=fs%U(i,j,k)+Ubulk*random_uniform(lo=-0.5_WP*amp,hi=0.5_WP*amp)+amp*Ubulk*cos(8.0_WP*twoPi*fs%cfg%zm(k)/fs%cfg%zL)*cos(8.0_WP*twoPi*fs%cfg%ym(j)/fs%cfg%yL)
                   fs%V(i,j,k)=fs%V(i,j,k)+Ubulk*random_uniform(lo=-0.5_WP*amp,hi=0.5_WP*amp)+amp*Ubulk*cos(8.0_WP*twoPi*fs%cfg%xm(i)/fs%cfg%xL)
+                  fs%W(i,j,k)=fs%W(i,j,k)+Ubulk*random_uniform(lo=-0.5_WP*amp,hi=0.5_WP*amp)+amp*Ubulk*cos(8.0_WP*twoPi*fs%cfg%xm(i)/fs%cfg%xL)
                end do
             end do
          end do
@@ -161,16 +161,13 @@ contains
       ! Initialize IBM fields
       initialize_ibm: block
          integer :: i,j,k
-         do k=fs%cfg%kmin_,fs%cfg%kmax_
-            do j=fs%cfg%jmin_,fs%cfg%jmax_
-               do i=fs%cfg%imin_,fs%cfg%imax_
-                  VF(i,j,k)=get_VF(i,j,k,'SC')
+         do k=fs%cfg%kmino_,fs%cfg%kmaxo_
+            do j=fs%cfg%jmino_,fs%cfg%jmaxo_
+               do i=fs%cfg%imino_,fs%cfg%imaxo_
                   G(i,j,k)=0.5_WP*D-sqrt(fs%cfg%ym(j)**2+fs%cfg%zm(k)**2)
                end do
             end do
          end do
-         call fs%cfg%sync(VF)
-         call fs%cfg%sync(G)
       end block initialize_ibm
       
 
@@ -184,7 +181,6 @@ contains
          ! Add variables to output
          call ens_out%add_vector('velocity',Ui,Vi,Wi)
          call ens_out%add_scalar('levelset',G)
-         call ens_out%add_scalar('VF',VF)
          call ens_out%add_scalar('pressure',fs%P)
          ! Output to ensight
          if (ens_evt%occurs()) call ens_out%write_data(time%t)
