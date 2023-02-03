@@ -29,7 +29,7 @@ HYPRE_DIR = /Users/desjardi/Repositories/Builds/hypre/
 include $(NGA_HOME)/tools/GNUMake/Make.defs
 
 # Include NGA base code
-Bdirs   := constant_density core data solver config grid libraries
+Bdirs   := subgrid constant_density core data solver config grid libraries
 Bpack   += $(foreach dir, $(Bdirs), $(NGA_HOME)/src/$(dir)/Make.package)
 include $(Bpack)
 

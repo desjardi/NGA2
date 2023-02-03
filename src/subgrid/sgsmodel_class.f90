@@ -26,7 +26,7 @@ module sgsmodel_class
       integer :: imax_in,jmax_in,kmax_in                        !< Safe max in each direction
 
       ! Some clipping parameters
-      real(WP) :: Cs_ref=0.1_WP
+      real(WP) :: Cs_ref=0.17_WP
       
       ! LM and MM tensor norms and eddy viscosity
       real(WP), dimension(:,:,:), allocatable :: LM,MM          !< LM and MM tensor norms
@@ -463,42 +463,47 @@ contains
       implicit none
       class(sgsmodel), intent(inout) :: this
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in) :: rho         !< Density including all ghosts
-      real(WP), dimension(1:,1:,this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in) :: gradu !< Velocity gradient 
-      real(WP), dimension(:,:,:), allocatable :: alph2                                                   !< velocity gradient tensor squared
-      real(WP) :: C,B,beta11,beta22,beta33,beta12,beta13,beta23
-      integer :: i,j,k
+      real(WP), dimension(1:,1:,this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in) :: gradu !< Velocity gradient
+      real(WP) :: A,B,C
+      real(WP), dimension(1:3,1:3) :: beta
+      integer :: i,j,k,ii,jj
       
-      allocate(alph2(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
-      alph2 = gradu(1,1,:,:,:)**2 + gradu(1,2,:,:,:)**2 + gradu(1,3,:,:,:)**2 + &
-      &       gradu(2,1,:,:,:)**2 + gradu(2,2,:,:,:)**2 + gradu(2,3,:,:,:)**2 + &
-      &       gradu(3,1,:,:,:)**2 + gradu(3,2,:,:,:)**2 + gradu(3,3,:,:,:)**2
-      
-      ! Model constant - FOR HIT c \approx 0.07
-      ! For complex flows c = 2.5*Cs**2
-      C = 2.5_WP*this%Cs_ref**2
+      ! Model constant is c=2.5*Cs_ref**2
+      ! Vreman uses c=0.07 which corresponds to Cs_ref=0.17
+      C=2.5_WP*this%Cs_ref**2
 
       ! Compute the eddy viscosity
       do k=this%cfg%kmin_,this%cfg%kmax_
          do j=this%cfg%jmin_,this%cfg%jmax_
             do i=this%cfg%imin_,this%cfg%imax_
-               beta11 = this%delta(i,j,k)**2*(gradu(1,1,i,j,k)**2 + gradu(2,1,i,j,k)**2 + gradu(3,1,i,j,k)**2)
-               beta22 = this%delta(i,j,k)**2*(gradu(1,2,i,j,k)**2 + gradu(2,2,i,j,k)**2 + gradu(3,2,i,j,k)**2)
-               beta33 = this%delta(i,j,k)**2*(gradu(1,3,i,j,k)**2 + gradu(2,3,i,j,k)**2 + gradu(3,3,i,j,k)**2)
-               beta12 = this%delta(i,j,k)**2*(gradu(1,1,i,j,k)*gradu(1,2,i,j,k) + gradu(2,1,i,j,k)*gradu(2,2,i,j,k) + gradu(3,1,i,j,k)*gradu(3,2,i,j,k))
-               beta13 = this%delta(i,j,k)**2*(gradu(1,1,i,j,k)*gradu(1,3,i,j,k) + gradu(2,1,i,j,k)*gradu(2,3,i,j,k) + gradu(3,1,i,j,k)*gradu(3,3,i,j,k))
-               beta23 = this%delta(i,j,k)**2*(gradu(1,2,i,j,k)*gradu(1,3,i,j,k) + gradu(2,2,i,j,k)*gradu(2,3,i,j,k) + gradu(3,2,i,j,k)*gradu(3,3,i,j,k))
-               
-               B = beta11*beta22 - beta12**2 + beta11*beta33 - beta13**2 + beta22*beta33 - beta23**2
-               this%visc(i,j,k) = C*sqrt(B/alph2(i,j,k))
+               ! Compute A=gradu_ij*gradu_ij invariant
+               A=gradu(1,1,i,j,k)**2+gradu(1,2,i,j,k)**2+gradu(1,3,i,j,k)**2+&
+               & gradu(2,1,i,j,k)**2+gradu(2,2,i,j,k)**2+gradu(2,3,i,j,k)**2+&
+               & gradu(3,1,i,j,k)**2+gradu(3,2,i,j,k)**2+gradu(3,3,i,j,k)**2
+               ! Compute beta_ij=dx_m*dx_m*gradu_mi*gradu_mj
+               do jj=1,3
+                  do ii=1,3
+                     beta(ii,jj)=this%cfg%dx(i)**2*gradu(1,ii,i,j,k)*gradu(1,jj,i,j,k)&
+                     &          +this%cfg%dy(j)**2*gradu(2,ii,i,j,k)*gradu(2,jj,i,j,k)&
+                     &          +this%cfg%dz(k)**2*gradu(3,ii,i,j,k)*gradu(3,jj,i,j,k)
+                  end do
+               end do
+               ! Compute B invariant
+               B=beta(1,1)*beta(2,2)-beta(1,2)**2&
+               &+beta(1,1)*beta(3,3)-beta(1,3)**2&
+               &+beta(2,2)*beta(3,3)-beta(2,3)**2
+               ! Assemble algebraic eddy viscosity model
+               if (B.lt.1.0e-8_WP) then
+                  this%visc(i,j,k)=0.0_WP
+               else
+                  this%visc(i,j,k)=rho(i,j,k)*C*sqrt(B/A)
+               end if
             end do
          end do
       end do
       
       ! Synchronize visc
       call this%cfg%sync(this%visc)
-      
-      ! Deallocate work arrays
-      deallocate(alph2)
       
    end subroutine visc_vreman
    

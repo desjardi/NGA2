@@ -4,6 +4,7 @@ module simulation
    use geometry,          only: cfg,D,get_VF
    use hypre_str_class,   only: hypre_str
    use incomp_class,      only: incomp
+   use sgsmodel_class,    only: sgsmodel
    use timetracker_class, only: timetracker
    use ensight_class,     only: ensight
    use event_class,       only: event
@@ -15,6 +16,7 @@ module simulation
    type(incomp),      public :: fs
    type(hypre_str),   public :: ps
    type(hypre_str),   public :: vs
+   type(sgsmodel),    public :: sgs
    type(timetracker), public :: time
    
    !> Ensight postprocessing
@@ -27,10 +29,11 @@ module simulation
    public :: simulation_init,simulation_run,simulation_final
    
    !> Work arrays
+   real(WP), dimension(:,:,:,:,:), allocatable :: gradU
    real(WP), dimension(:,:,:), allocatable :: resU,resV,resW
    real(WP), dimension(:,:,:), allocatable :: Ui,Vi,Wi
    real(WP), dimension(:,:,:), allocatable :: G
-   real(WP) :: mfr_target,mfr,bforce
+   real(WP) :: visc,mfr_target,mfr,bforce
    
    
 contains
@@ -92,7 +95,6 @@ contains
       ! Create an incompressible flow solver without bconds
       create_flow_solver: block
          use hypre_str_class, only: pcg_pfmg
-         real(WP) :: visc
          ! Create flow solver
          fs=incomp(cfg=cfg,name='Incompressible NS')
          ! Set the flow properties
@@ -114,6 +116,7 @@ contains
       
       ! Allocate work arrays
       allocate_work_arrays: block
+         allocate(gradU(1:3,1:3,cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))   
          allocate(resU(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
          allocate(resV(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
          allocate(resW(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
@@ -170,6 +173,12 @@ contains
          end do
       end block initialize_ibm
       
+      
+      ! Create an LES model
+      create_sgs: block
+         sgs=sgsmodel(cfg=fs%cfg,umask=fs%umask,vmask=fs%vmask,wmask=fs%wmask)
+      end block create_sgs
+
 
       ! Add Ensight output
       create_ensight: block
@@ -182,6 +191,7 @@ contains
          call ens_out%add_vector('velocity',Ui,Vi,Wi)
          call ens_out%add_scalar('levelset',G)
          call ens_out%add_scalar('pressure',fs%P)
+         call ens_out%add_scalar('visc_sgs',sgs%visc)
          ! Output to ensight
          if (ens_evt%occurs()) call ens_out%write_data(time%t)
       end block create_ensight
@@ -240,6 +250,15 @@ contains
          fs%Uold=fs%U
          fs%Vold=fs%V
          fs%Wold=fs%W
+         
+         ! Turbulence modeling
+         sgs_modeling: block
+               use sgsmodel_class, only: vreman
+               resU=fs%rho
+               call fs%get_gradu(gradU)
+               call sgs%get_visc(type=vreman,dt=time%dtold,rho=resU,gradu=gradU)
+               fs%visc=visc+sgs%visc
+         end block sgs_modeling
          
          ! Perform sub-iterations
          do while (time%it.le.time%itmax)
@@ -354,7 +373,7 @@ contains
       ! timetracker
       
       ! Deallocate work arrays
-      deallocate(resU,resV,resW,Ui,Vi,Wi)
+      deallocate(resU,resV,resW,Ui,Vi,Wi,gradU)
       
    end subroutine simulation_final
    
