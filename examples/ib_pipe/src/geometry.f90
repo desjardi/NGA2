@@ -92,7 +92,7 @@ contains
               end do
            end do
         end do
-        call cfd%sync(cfg%VF)
+        call cfg%sync(cfg%VF)
       end block create_walls
       
       
