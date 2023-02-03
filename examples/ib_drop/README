@@ -1,0 +1,1 @@
+This is a direct forcing IBM case that tests the interaction between IB and the two-phase flow solvers. It simulates a drop impacting a bumpy cylinder.

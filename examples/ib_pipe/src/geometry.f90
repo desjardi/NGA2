@@ -7,12 +7,13 @@ module geometry
    
    !> Single config
    type(config), public :: cfg
-
+   
    !> Pipe diameter
    real(WP), public :: D
    
-   public :: geometry_init, get_VF
+   public :: geometry_init,get_VF
    
+
 contains
    
    
@@ -37,7 +38,7 @@ contains
          call param_read('ny',ny); allocate(y(ny+1))
          call param_read('nx',nx); allocate(x(nx+1))
          call param_read('nz',nz); allocate(z(nz+1))
-
+         
          dx=Lx/real(nx,WP)
          no=6
          if (ny.gt.1) then
@@ -50,7 +51,7 @@ contains
          else
             Lz=dx
          end if
-
+         
          ! Create simple rectilinear grid
          do i=1,nx+1
             x(i)=real(i-1,WP)/real(nx,WP)*Lx
@@ -66,7 +67,7 @@ contains
          grid=sgrid(coord=cartesian,no=2,x=x,y=y,z=z,xper=.true.,yper=.true.,zper=.true.,name='pipe')
          
       end block create_grid
-      
+         
       
       ! Create a config from that grid on our entire group
       create_cfg: block
@@ -84,23 +85,23 @@ contains
       
       ! Create masks for this config
       create_walls: block
-        integer :: i,j,k
-        do k=cfg%kmin_,cfg%kmax_
-           do j=cfg%jmin_,cfg%jmax_
-              do i=cfg%imin_,cfg%imax_
-                 cfg%VF(i,j,k)=get_VF(i,j,k,'SC')
-              end do
-           end do
-        end do
-        call cfg%sync(cfg%VF)
+         integer :: i,j,k
+         do k=cfg%kmin_,cfg%kmax_
+            do j=cfg%jmin_,cfg%jmax_
+               do i=cfg%imin_,cfg%imax_
+                  cfg%VF(i,j,k)=get_VF(i,j,k,'SC')
+               end do
+            end do
+         end do
+         call cfg%sync(cfg%VF)
       end block create_walls
       
       
-    end subroutine geometry_init
-
-
-    !> Get volume fraction for direct forcing
-    function get_VF(i,j,k,dir) result(VF)
+   end subroutine geometry_init
+   
+   
+   !> Get volume fraction for direct forcing
+   function get_VF(i,j,k,dir) result(VF)
       implicit none
       integer, intent(in)    :: i,j,k
       character(len=*)       :: dir
@@ -108,15 +109,15 @@ contains
       real(WP)               :: r,eta,lam,delta,VFx,VFy,VFz
       real(WP), dimension(3) :: norm
       select case(trim(dir))
-      case('U')
+      case('U','u')
          delta=(cfg%dxm(i)*cfg%dy(j)*cfg%dz(k))**(1.0_WP/3.0_WP)
          r=sqrt(cfg%ym(j)**2+cfg%zm(k)**2)+epsilon(1.0_WP)
          norm(1)=0.0_WP; norm(2)=cfg%ym(j)/r; norm(3)=cfg%zm(k)/r
-      case('V')
+      case('V','v')
          delta=(cfg%dx(i)*cfg%dym(j)*cfg%dz(k))**(1.0_WP/3.0_WP)
          r=sqrt(cfg%y(j)**2+cfg%zm(k)**2)+epsilon(1.0_WP)
          norm(1)=0.0_WP; norm(2)=cfg%y(j)/r; norm(3)=cfg%zm(k)/r
-      case('W')
+      case('W','w')
          delta=(cfg%dx(i)*cfg%dy(j)*cfg%dzm(k))**(1.0_WP/3.0_WP)
          r=sqrt(cfg%ym(j)**2+cfg%z(k)**2)+epsilon(1.0_WP)
          norm(1)=0.0_WP; norm(2)=cfg%ym(j)/r; norm(3)=cfg%z(k)/r
@@ -127,7 +128,7 @@ contains
       end select
       lam=sum(abs(norm)); eta=0.065_WP*(1.0_WP-lam**2)+0.39_WP
       VF=0.5_WP*(1.0_WP-tanh((r-0.5_WP*D)/(sqrt(2.0_WP)*lam*eta*delta+epsilon(1.0_WP))))
-    end function get_VF
-
-
-  end module geometry
+   end function get_VF
+   
+   
+end module geometry
