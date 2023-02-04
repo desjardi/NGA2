@@ -178,11 +178,6 @@ contains
     ! Various checks for parallel FFT
     check_psolver_is_useable: block
 
-      ! Check (restrictive) processor decomp
-      if (modulo(this%cfg%nx,this%cfg%npx).ne.0) call die('[pfft3d constructor] Need nx to evenly divide into npx')
-      if (modulo(this%cfg%ny,this%cfg%npy).ne.0) call die('[pfft3d constructor] Need ny to evenly divide into npy')
-      if (modulo(this%cfg%nz,this%cfg%npz).ne.0) call die('[pfft3d constructor] Need nz to evenly divide into npz')
-
       ! Ensure that we have at least one non-decomposed direction
       contig_dim = findloc((/this%cfg%npx, this%cfg%npy, this%cfg%npz /), value=1, dim=1)
       if (contig_dim.eq.0) call die('[pdfft3 constructor] Need at least one NON-decomposed direction')

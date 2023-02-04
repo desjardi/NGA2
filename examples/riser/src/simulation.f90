@@ -4,6 +4,8 @@ module simulation
   use precision,         only: WP
   use geometry,          only: cfg,D,get_VF
   use lowmach_class,     only: lowmach
+  use pfft3d_class,      only: pfft3d
+  use hypre_str_class,   only: hypre_str
   use lpt_class,         only: lpt
   use timetracker_class, only: timetracker
   use ensight_class,     only: ensight
@@ -16,6 +18,8 @@ module simulation
 
   !> Get an LPT solver, a lowmach solver, and corresponding time tracker
   type(lowmach),     public :: fs
+  type(pfft3d),      public :: ps
+  type(hypre_str),   public :: vs
   type(lpt),         public :: lp
   type(timetracker), public :: time
 
@@ -102,29 +106,40 @@ contains
 !!$      ! Deallocate work arrays
 !!$      deallocate(Uavg,Uavg_,vol,vol_)
     end subroutine postproc
-
+    
 
   !> Compute massflow rate
-  subroutine bodyforce_mfr(srcU)
-    use mpi_f08,  only: MPI_SUM,MPI_ALLREDUCE
-    use parallel, only: MPI_REAL_WP
-    real(WP), dimension(fs%cfg%imino_:,fs%cfg%jmino_:,fs%cfg%kmino_:), intent(in), optional :: srcU !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
-    integer :: i,j,k,ierr
-    real(WP) :: vol,myRhoU,myUvol,Uvol
-    myRhoU=0.0_WP; myUvol=0.0_WP
-    do k=fs%cfg%kmin_,fs%cfg%kmax_
-       do j=fs%cfg%jmin_,fs%cfg%jmax_
-          do i=fs%cfg%imin_,fs%cfg%imax_
-             vol=fs%cfg%dxm(i)*fs%cfg%dy(j)*fs%cfg%dz(k)*get_VF(i,j,k,'U')
-             myUvol=myUvol+vol
-             myRhoU=myRhoU+vol*(2.0_WP*fs%rhoU(i,j,k)-fs%rhoUold(i,j,k))
-             if (present(srcU)) myRhoU=myRhoU+vol*srcU(i,j,k)
-          end do
-       end do
-    end do
-    call MPI_ALLREDUCE(myUvol,Uvol ,1,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr)
-    call MPI_ALLREDUCE(myRhoU,mfr,1,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr); mfr=mfr/Uvol
-  end subroutine bodyforce_mfr
+   function get_bodyforce_mfr(srcU) result(mfr)
+      use mpi_f08,  only: MPI_SUM,MPI_ALLREDUCE
+      use parallel, only: MPI_REAL_WP
+      real(WP), dimension(fs%cfg%imino_:,fs%cfg%jmino_:,fs%cfg%kmino_:), intent(in), optional :: srcU !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      integer :: i,j,k,ierr
+      real(WP) :: vol,myRhoU,myUvol,Uvol,mfr
+      myRhoU=0.0_WP; myUvol=0.0_WP
+      if (present(srcU)) then
+         do k=fs%cfg%kmin_,fs%cfg%kmax_
+            do j=fs%cfg%jmin_,fs%cfg%jmax_
+               do i=fs%cfg%imin_,fs%cfg%imax_
+                  vol=fs%cfg%dxm(i)*fs%cfg%dy(j)*fs%cfg%dz(k)*get_VF(i,j,k,'U')
+                  myUvol=myUvol+vol
+                  myRhoU=myRhoU+vol*(fs%rhoU(i,j,k)+srcU(i,j,k))
+               end do
+            end do
+         end do
+      else
+         do k=fs%cfg%kmin_,fs%cfg%kmax_
+            do j=fs%cfg%jmin_,fs%cfg%jmax_
+               do i=fs%cfg%imin_,fs%cfg%imax_
+                  vol=fs%cfg%dxm(i)*fs%cfg%dy(j)*fs%cfg%dz(k)*get_VF(i,j,k,'U')
+                  myUvol=myUvol+vol
+                  myRhoU=myRhoU+vol*fs%rhoU(i,j,k)
+               end do
+            end do
+         end do
+      end if
+      call MPI_ALLREDUCE(myUvol,Uvol,1,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr)
+      call MPI_ALLREDUCE(myRhoU,mfr ,1,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr); mfr=mfr/Uvol
+   end function get_bodyforce_mfr
 
 
   !> Initialization of problem solver
@@ -195,7 +210,7 @@ contains
 
     ! Create a low Mach flow solver with bconds
     create_flow_solver: block
-      use ils_class,     only: pcg_pfmg,pcg_amg
+      use hypre_str_class, only: pcg_pfmg
       ! Create flow solver
       fs=lowmach(cfg=cfg,name='Variable density low Mach NS')
 
@@ -206,13 +221,13 @@ contains
       ! Assign acceleration of gravity
       call param_read('Gravity',fs%gravity)
       ! Configure pressure solver
-      call param_read('Pressure iteration',fs%psolv%maxit)
-      call param_read('Pressure tolerance',fs%psolv%rcvg)
+      ps=pfft3d(cfg=cfg,name='Pressure',nst=7)
       ! Configure implicit velocity solver
-      call param_read('Implicit iteration',fs%implicit%maxit)
-      call param_read('Implicit tolerance',fs%implicit%rcvg)
+      vs=hypre_str(cfg=cfg,name='Velocity',method=pcg_pfmg,nst=7)
+      call param_read('Implicit iteration',vs%maxit)
+      call param_read('Implicit tolerance',vs%rcvg)
       ! Setup the solver
-      call fs%setup(pressure_ils=pcg_amg,implicit_ils=pcg_pfmg)
+      call fs%setup(pressure_solver=ps,implicit_solver=vs)
     end block create_flow_solver
 
 
@@ -425,7 +440,7 @@ contains
          call df%pullval(name='mfr',val=mfr)
          call df%pullval(name='bforce',val=bforce)
       else
-         call bodyforce_mfr()
+         mfr=get_bodyforce_mfr()
          bforce=0.0_WP
       end if
       mfr_target=mfr
@@ -615,33 +630,38 @@ contains
                   end do
                end do
             end do
+            call fs%cfg%sync(resU)
+            call fs%cfg%sync(resV)
+            call fs%cfg%sync(resW)
           end block add_lpt_src
 
-          ! Apply direct forcing to enforce BC at the pipe walls
-          ibm_correction: block
-            integer :: i,j,k
-            real(WP) :: VFx,VFy,VFz,RHOx,RHOy,RHOz
-            do k=fs%cfg%kmino_,fs%cfg%kmaxo_
-               do j=fs%cfg%jmino_,fs%cfg%jmaxo_
-                  do i=fs%cfg%imino_,fs%cfg%imaxo_
-                     VFx=get_VF(i,j,k,'U')
-                     VFy=get_VF(i,j,k,'V')
-                     VFz=get_VF(i,j,k,'W')
-                     RHOx=sum(fs%itpr_x(:,i,j,k)*fs%rho(i-1:i,j,k))
-                     RHOy=sum(fs%itpr_y(:,i,j,k)*fs%rho(i,j-1:j,k))
-                     RHOz=sum(fs%itpr_z(:,i,j,k)*fs%rho(i,j,k-1:k))
-                     resU(i,j,k)=resU(i,j,k)-(1.0_WP-VFx)*RHOx*fs%U(i,j,k)
-                     resV(i,j,k)=resV(i,j,k)-(1.0_WP-VFy)*RHOy*fs%V(i,j,k)
-                     resW(i,j,k)=resW(i,j,k)-(1.0_WP-VFz)*RHOz*fs%W(i,j,k)
-                  end do
-               end do
-            end do
-          end block ibm_correction
+!!$          ! Apply direct forcing to enforce BC at the pipe walls
+!!$          ibm_correction: block
+!!$            integer :: i,j,k
+!!$            real(WP) :: VFx,VFy,VFz,RHOx,RHOy,RHOz
+!!$            do k=fs%cfg%kmin_,fs%cfg%kmax_
+!!$               do j=fs%cfg%jmin_,fs%cfg%jmax_
+!!$                  do i=fs%cfg%imin_,fs%cfg%imax_
+!!$                     VFx=get_VF(i,j,k,'U')
+!!$                     VFy=get_VF(i,j,k,'V')
+!!$                     VFz=get_VF(i,j,k,'W')
+!!$                     RHOx=sum(fs%itpr_x(:,i,j,k)*fs%rho(i-1:i,j,k))
+!!$                     RHOy=sum(fs%itpr_y(:,i,j,k)*fs%rho(i,j-1:j,k))
+!!$                     RHOz=sum(fs%itpr_z(:,i,j,k)*fs%rho(i,j,k-1:k))
+!!$                     resU(i,j,k)=resU(i,j,k)-(1.0_WP-VFx)*RHOx*fs%U(i,j,k)
+!!$                     resV(i,j,k)=resV(i,j,k)-(1.0_WP-VFy)*RHOy*fs%V(i,j,k)
+!!$                     resW(i,j,k)=resW(i,j,k)-(1.0_WP-VFz)*RHOz*fs%W(i,j,k)
+!!$                  end do
+!!$               end do
+!!$            end do
+!!$          end block ibm_correction
 
           ! Add body forcing
-          call bodyforce_mfr(resU)
-          bforce=(mfr_target-mfr)/time%dtmid
-          resU=resU+time%dtmid*bforce
+          bodyforcing: block
+            mfr=get_bodyforce_mfr(resU)
+            bforce=(mfr_target-mfr)/time%dtmid
+            resU=resU+time%dtmid*bforce
+          end block bodyforcing
 
           ! Form implicit residuals
           call fs%solve_implicit(time%dtmid,resU,resV,resW)
@@ -650,6 +670,27 @@ contains
           fs%U=2.0_WP*fs%U-fs%Uold+resU
           fs%V=2.0_WP*fs%V-fs%Vold+resV
           fs%W=2.0_WP*fs%W-fs%Wold+resW
+
+          ! Apply direct forcing to enforce BC at the pipe walls
+          ibm_correction: block
+            integer :: i,j,k
+            real(WP) :: VFx,VFy,VFz
+            do k=fs%cfg%kmin_,fs%cfg%kmax_
+               do j=fs%cfg%jmin_,fs%cfg%jmax_
+                  do i=fs%cfg%imin_,fs%cfg%imax_
+                     VFx=get_VF(i,j,k,'U')
+                     VFy=get_VF(i,j,k,'V')
+                     VFz=get_VF(i,j,k,'W')
+                     fs%U(i,j,k)=fs%U(i,j,k)*VFx
+                     fs%V(i,j,k)=fs%V(i,j,k)*VFy
+                     fs%W(i,j,k)=fs%W(i,j,k)*VFz
+                  end do
+               end do
+            end do
+            call fs%cfg%sync(fs%U)
+            call fs%cfg%sync(fs%V)
+            call fs%cfg%sync(fs%W)
+          end block ibm_correction
 
           ! Apply other boundary conditions and update momentum
           call fs%apply_bcond(time%tmid,time%dtmid)
@@ -686,6 +727,9 @@ contains
        call fs%interp_vel(Ui,Vi,Wi)
        call fs%get_div(drhodt=dRHOdt)
        wt_vel%time=wt_vel%time+parallel_time()-wt_vel%time_in
+
+       ! Recompute massflow rate
+       mfr=get_bodyforce_mfr()
 
        ! Output to ensight
        if (ens_evt%occurs()) then
