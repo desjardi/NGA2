@@ -347,6 +347,9 @@ contains
          ! Recompute interpolated velocity and divergence
          call fs%interp_vel(Ui,Vi,Wi)
          call fs%get_div()
+
+         ! Recompute mass flowrate for monitor
+         mfr=get_bodyforce_mfr()
          
          ! Output to ensight
          if (ens_evt%occurs()) call ens_out%write_data(time%t)
