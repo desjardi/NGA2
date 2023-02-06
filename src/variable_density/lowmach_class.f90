@@ -1917,23 +1917,11 @@ contains
       implicit none
       class(lowmach), intent(in) :: this
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: pressure !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
-      real(WP) :: vol_tot,pressure_tot,my_vol_tot,my_pressure_tot
-      integer :: i,j,k,ierr
+      real(WP) :: pressure_tot
+      integer :: i,j,k
       
-      ! Loop over domain and integrate volume and pressure
-      my_vol_tot=0.0_WP
-      my_pressure_tot=0.0_WP
-      do k=this%cfg%kmin_,this%cfg%kmax_
-         do j=this%cfg%jmin_,this%cfg%jmax_
-            do i=this%cfg%imin_,this%cfg%imax_
-               my_vol_tot     =my_vol_tot     +this%cfg%vol(i,j,k)*this%cfg%VF(i,j,k)
-               my_pressure_tot=my_pressure_tot+this%cfg%vol(i,j,k)*this%cfg%VF(i,j,k)*pressure(i,j,k)
-            end do
-         end do
-      end do
-      call MPI_ALLREDUCE(my_vol_tot     ,vol_tot     ,1,MPI_REAL_WP,MPI_SUM,this%cfg%comm,ierr)
-      call MPI_ALLREDUCE(my_pressure_tot,pressure_tot,1,MPI_REAL_WP,MPI_SUM,this%cfg%comm,ierr)
-      pressure_tot=pressure_tot/vol_tot
+      ! Compute volume-averaged pressure
+      call this%cfg%integrate(A=pressure,integral=pressure_tot); pressure_tot=pressure_tot/this%cfg%fluid_vol
       
       ! Shift the pressure
       do k=this%cfg%kmin_,this%cfg%kmax_
