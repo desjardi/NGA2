@@ -837,7 +837,7 @@ contains
     ! Transfer particle volume
     do i=1,this%np_
        ! Skip inactive particle
-       if (this%p(i)%flag.eq.1) cycle
+       if (this%p(i)%flag.eq.1.or.this%p(i)%id.eq.0) cycle
        ! Transfer particle volume
        Vp=Pi/6.0_WP*this%p(i)%d**3
        call this%cfg%set_scalar(Sp=Vp,pos=this%p(i)%pos,i0=this%p(i)%ind(1),j0=this%p(i)%ind(2),k0=this%p(i)%ind(3),S=this%VF,bc='n')
