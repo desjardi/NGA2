@@ -1,0 +1,40 @@
+# Parallelization
+Partition :	8 1 1
+
+# Domain definition
+Lx : 1.0e-3
+Ly : 1.0e-3
+Lz : 1.0e-3
+nx : 100
+ny : 100
+nz : 100
+
+# Problem definition
+Inner radius :    0.5025e-4
+Outer radius :    1.05e-4
+Liquid velocity : 22.75
+Swirl ratio :     1.2
+
+# Fluid properties - Dimensional case
+Gravity :                     -9.81 0 0
+Liquid dynamic viscosity :    1.1074e-3
+Gas dynamic viscosity :       1.821e-5
+Liquid density :              786.1
+Gas density :                 1.205
+Surface tension coefficient : 0.02198
+
+# Time integration
+Max timestep size : 5e-7
+Max cfl number :    0.8
+Max time :          1000
+
+# Pressure solver
+Pressure tolerance : 1e-4
+Pressure iteration : 100
+
+# Implicit velocity solver
+Implicit tolerance : 1e-4
+Implicit iteration : 100
+
+# Ensight output
+Ensight output period : 1e-5
