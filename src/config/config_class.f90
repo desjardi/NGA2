@@ -19,11 +19,13 @@ module config_class
       
       ! Geometry
       real(WP), dimension(:,:,:), allocatable :: VF            !< Volume fraction info (VF=1 is fluid, VF=0 is wall)
+      real(WP) :: fluid_vol                                    !< Total fluid volume in the config
       
    contains
       procedure :: print=>config_print                         !< Output configuration information to the screen
       procedure :: write=>config_write                         !< Write out config files: grid and geometry
       procedure, private :: prep=>config_prep                  !< Finish preparing config after the partitioned grid is loaded
+      procedure :: calc_fluid_vol                              !< Compute fluid_vol after VF has been set
       procedure :: VF_extend                                   !< Extend VF array into the non-periodic domain overlaps
       procedure :: integrate                                   !< Integrate a variable on config while accounting for VF
       procedure :: set_scalar                                  !< Subroutine that extrapolates a provided scalar value at a point to a pgrid field
@@ -43,7 +45,7 @@ contains
    
    
    !> Single-grid config constructor from a serial grid
-   function construct_from_sgrid(grp,decomp,grid) result(self)
+   function construct_from_sgrid(grp,decomp,grid,strat) result(self)
       use sgrid_class, only: sgrid
       use string,      only: str_medium
       use mpi_f08,     only: MPI_Group
@@ -52,8 +54,13 @@ contains
       type(sgrid), intent(in) :: grid
       type(MPI_Group), intent(in) :: grp
       integer, dimension(3), intent(in) :: decomp
+      integer, intent(in), optional :: strat
       ! Create a partitioned grid with the provided group and decomposition
-      self%pgrid=pgrid(grid,grp,decomp)
+      if (present(strat)) then
+         self%pgrid=pgrid(grid,grp,decomp,strat)
+      else
+         self%pgrid=pgrid(grid,grp,decomp)
+      end if
       ! Finish preparing the config
       call self%prep
    end function construct_from_sgrid
@@ -83,6 +90,8 @@ contains
          call geomfile%pullvar('VF',self%VF)
          ! Perform an extension in the overlap
          call self%VF_extend()
+         ! Update fluid_vol
+         call self%calc_fluid_vol()
       end block read_VF
    end function construct_from_file
    
@@ -122,6 +131,7 @@ contains
       
       ! Allocate wall geometry - assume all fluid until told otherwise
       allocate(this%VF(this%imino_:this%imaxo_,this%jmino_:this%jmaxo_,this%kmino_:this%kmaxo_)); this%VF=1.0_WP
+      this%fluid_vol=this%vol_total
       
    end subroutine config_prep
    
@@ -166,6 +176,26 @@ contains
       end if
    end subroutine VF_extend
    
+
+   !> Calculate the total fluid volume by integrating VF
+   subroutine calc_fluid_vol(this)
+      use mpi_f08,  only: MPI_ALLREDUCE,MPI_SUM
+      use parallel, only: MPI_REAL_WP
+      implicit none
+      class(config), intent(inout) :: this
+      integer :: i,j,k,ierr
+      real(WP) :: buf
+      buf=0.0_WP
+      do k=this%kmin_,this%kmax_
+         do j=this%jmin_,this%jmax_
+            do i=this%imin_,this%imax_
+               buf=buf+this%vol(i,j,k)*this%VF(i,j,k)
+            end do
+         end do
+      end do
+      call MPI_ALLREDUCE(buf,this%fluid_vol,1,MPI_REAL_WP,MPI_SUM,this%comm,ierr)
+   end subroutine calc_fluid_vol
+
    
    !> Calculate the integral of a field on the config while accounting for VF
    subroutine integrate(this,A,integral)

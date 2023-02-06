@@ -3,6 +3,7 @@ module simulation
    use precision,         only: WP
    use geometry,          only: cfg,D,get_VF
    use hypre_str_class,   only: hypre_str
+   !use pfft3d_class,      only: pfft3d
    use incomp_class,      only: incomp
    use sgsmodel_class,    only: sgsmodel
    use timetracker_class, only: timetracker
@@ -15,6 +16,7 @@ module simulation
    !> Get an an incompressible solver, pressure solver, and corresponding time tracker
    type(incomp),      public :: fs
    type(hypre_str),   public :: ps
+   !type(pfft3d),      public :: ps
    type(hypre_str),   public :: vs
    type(sgsmodel),    public :: sgs
    type(timetracker), public :: time
@@ -90,7 +92,7 @@ contains
          time%dt=time%dtmax
          time%itmax=2
       end block initialize_timetracker
-      
+
       
       ! Create an incompressible flow solver without bconds
       create_flow_solver: block
@@ -101,6 +103,7 @@ contains
          call param_read('Density',fs%rho)
          call param_read('Dynamic viscosity',visc); fs%visc=visc
          ! Configure pressure solver
+         !ps=pfft3d(cfg=cfg,name='Pressure',nst=7)
          ps=hypre_str(cfg=cfg,name='Pressure',method=pcg_pfmg,nst=7)
          ps%maxlevel=14
          call param_read('Pressure iteration',ps%maxit)

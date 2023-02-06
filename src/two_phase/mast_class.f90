@@ -115,6 +115,7 @@ module mast_class
       real(WP), dimension(:,:,:), allocatable :: dPjy     !< dPressure jump to add to -ddP/dy
       real(WP), dimension(:,:,:), allocatable :: dPjz     !< dPressure jump to add to -ddP/dz
       real(WP), dimension(:,:,:), allocatable :: Tmptr    !< Temperature of mixture
+      
       ! Flow variables - individual phases
       real(WP), dimension(:,:,:), allocatable :: Grho,   Lrho    !< phase density arrays
       real(WP), dimension(:,:,:), allocatable :: GrhoE,  LrhoE   !< phase energy arrays
@@ -2526,100 +2527,100 @@ contains
    end subroutine advection_step
    
    subroutine diffusion_src_explicit_step(this,dt,vf,matmod,sgs_visc,srcU,srcV,srcW,srcE)
-     use mpi_f08,   only: MPI_ALLREDUCE,MPI_MAX
-     use parallel,  only: MPI_REAL_WP
-     use vfs_class, only: vfs
-     use matm_class, only: matm
-     implicit none
-     class(mast), intent(inout) :: this   !< The two-phase all-Mach flow solver
-     class(vfs),  intent(inout) :: vf     !< The volume fraction solver
-     class(matm), intent(inout) :: matmod !< The material models for this solver
-     real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in), optional :: sgs_visc !< The subgrid-scale modeling, passed in
-     real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in), optional :: srcU !< Source term from LPT
-     real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in), optional :: srcV !< Source term from LPT
-     real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in), optional :: srcW !< Source term from LPT
-     real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in), optional :: srcE !< Source term from LPT
-     real(WP),    intent(in)    :: dt     !< Timestep size over which to advance
-     real(WP), dimension(:,:,:), pointer :: div       !< divergence calculated each substep
-     real(WP), dimension(:,:,:), pointer :: Uf_y,Uf_z !< X velocity interpolated to other faces
-     real(WP), dimension(:,:,:), pointer :: Vf_x,Vf_z !< Y velocity interpolated to other faces
-     real(WP), dimension(:,:,:), pointer :: Wf_x,Wf_y !< Z velocity interpolated to other faces
-     real(WP), dimension(:,:,:), pointer :: visc_x,visc_y,visc_z !< viscosity interpolated to faces
-     integer  :: i,j,k,n,nCFL,ierr
-     real(WP) :: buf,myCFL,mydt,spec_heat
-     
-     ! Set up intermediate divergence
-     div =>this%tmp1
-     ! Set up temporary face velocity
-     Uf_y=>this%tmp2; Vf_z=>this%tmp4; Wf_x=>this%tmp6
-     Uf_z=>this%tmp3; Vf_x=>this%tmp5; Wf_y=>this%tmp7
-     ! Set up face viscosities
-     visc_x=>this%tmp8; visc_y=>this%tmp9; visc_z=>this%tmp10
-     
-     ! Update temperature
-     call matmod%update_temperature(vf,this%Tmptr)
-     ! Viscosity and thermal conductivity updated using new temperature and VOF
-     call this%get_viscosity(vf,matmod,sgs_visc,visc_x,visc_y,visc_z)
-     
-     ! Estimate CFL from explicit diffusive and source terms
-     buf=0.0_WP
-     do k=this%cfg%kmin_,this%cfg%kmax_
-       do j=this%cfg%jmin_,this%cfg%jmax_
-         do i=this%cfg%imin_,this%cfg%imax_
-           ! Viscous CFL
-           buf=max(buf,4.0_WP*dt*this%visc(i,j,k)*max(this%cfg%dxi(i),this%cfg%dyi(j),this%cfg%dzi(k))**2/this%RHO(i,j,k))
-           spec_heat = ((1.0_WP-vf%VF(i,j,k))*matmod%spec_heat_gas   (this%Tmptr(i,j,k))*this%Grho(i,j,k) &
-                       +(       vf%VF(i,j,k))*matmod%spec_heat_liquid(this%Tmptr(i,j,k))*this%Lrho(i,j,k) )
-           buf=max(buf,4.0_WP*dt*this%therm_cond(i,j,k)*max(this%cfg%dxi(i),this%cfg%dyi(j),this%cfg%dzi(k))**2/spec_heat)
-           ! Gravity CFL (check this)
-           buf=max(buf,dt**2*abs(this%gravity(1))*this%cfg%dxi(i), &
-                       dt**2*abs(this%gravity(2))*this%cfg%dyi(j), &
-                       dt**2*abs(this%gravity(3))*this%cfg%dzi(k))
-         end do
-       end do
-     end do
-     call MPI_ALLREDUCE(buf,myCFL,1,MPI_REAL_WP,MPI_MAX,this%cfg%comm,ierr)
-     
-     ! Calculate sub-step for viscous solver
-     nCFL=ceiling(myCFL)
-     mydt=dt/(real(nCFL,WP)+epsilon(1.0_WP)) ! This would divide by zero if there is no viscosity, so I added the epsilon
-     
-     ! Sub-step for stability
-     do n=1,nCFL
-       ! Perform viscous step
-       call diffusion_src_explicit_substep()
-       ! Update temperature
-       call matmod%update_temperature(vf,this%Tmptr)
-       ! Calculate viscosity
-       if (n.lt.nCFL) call this%get_viscosity(vf,matmod,sgs_visc,visc_x,visc_y,visc_z)
-     end do
-     
-     ! Nullify...
-
-contains
-
-     subroutine diffusion_src_explicit_substep()
+      use mpi_f08,   only: MPI_ALLREDUCE,MPI_MAX
+      use parallel,  only: MPI_REAL_WP
+      use vfs_class, only: vfs
+      use matm_class, only: matm
       implicit none
+      class(mast), intent(inout) :: this   !< The two-phase all-Mach flow solver
+      class(vfs),  intent(inout) :: vf     !< The volume fraction solver
+      class(matm), intent(inout) :: matmod !< The material models for this solver
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in), optional :: sgs_visc !< The subgrid-scale modeling, passed in
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in), optional :: srcU !< Source term from LPT
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in), optional :: srcV !< Source term from LPT
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in), optional :: srcW !< Source term from LPT
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in), optional :: srcE !< Source term from LPT
+      real(WP),    intent(in)    :: dt     !< Timestep size over which to advance
+      real(WP), dimension(:,:,:), pointer :: div       !< divergence calculated each substep
+      real(WP), dimension(:,:,:), pointer :: Uf_y,Uf_z !< X velocity interpolated to other faces
+      real(WP), dimension(:,:,:), pointer :: Vf_x,Vf_z !< Y velocity interpolated to other faces
+      real(WP), dimension(:,:,:), pointer :: Wf_x,Wf_y !< Z velocity interpolated to other faces
+      real(WP), dimension(:,:,:), pointer :: visc_x,visc_y,visc_z !< viscosity interpolated to faces
+      integer  :: i,j,k,n,nCFL,ierr
+      real(WP) :: buf,myCFL,mydt,spec_heat
       
-      real(WP) :: VISCforceX,VISCforceY,VISCforceZ,spongeX
-      real(WP) :: VISCIntEnergy,VISCKinEnergy,HEATIntEnergy
-      real(WP) :: dUdx,dUdy,dUdz,dVdx,dVdy,dVdz,dWdx,dWdy,dWdz
-      real(WP) :: dMUdx,dMUdy,dMUdz
-      real(WP) :: div2U,div2V,div2W
-      real(WP) :: ddilatationdx,ddilatationdy,ddilatationdz
+      ! Set up intermediate divergence
+      div =>this%tmp1
+      ! Set up temporary face velocity
+      Uf_y=>this%tmp2; Vf_z=>this%tmp4; Wf_x=>this%tmp6
+      Uf_z=>this%tmp3; Vf_x=>this%tmp5; Wf_y=>this%tmp7
+      ! Set up face viscosities
+      visc_x=>this%tmp8; visc_y=>this%tmp9; visc_z=>this%tmp10
       
-      integer :: i,j,k,n
+      ! Update temperature
+      call matmod%update_temperature(vf,this%Tmptr)
+      ! Viscosity and thermal conductivity updated using new temperature and VOF
+      call this%get_viscosity(vf,matmod,sgs_visc,visc_x,visc_y,visc_z)
       
-      ! Viscous routine operates on face velocities, need to be updated each time
-      ! Update traditional face velocity (just interpolated)
-      call this%interp_vel_basic(vf,this%Ui,this%Vi,this%Wi,this%U,this%V,this%W)
-      ! Apply boundary condtions
-      bc_scope = 'velocity'
-      call this%apply_bcond(dt,bc_scope)
-      ! Calculate other interpolated face velocities (ignore masks)
-       call this%interp_vel_basic(vf,this%Vi,this%Wi,this%Ui,Vf_x,Wf_y,Uf_z,use_masks=.false.)
-       call this%interp_vel_basic(vf,this%Wi,this%Ui,this%Vi,Wf_x,Uf_y,Vf_z,use_masks=.false.)
-       ! BCs not needed, masks are already addressed, nothing used from within boundary
+      ! Estimate CFL from explicit diffusive and source terms
+      buf=0.0_WP
+      do k=this%cfg%kmin_,this%cfg%kmax_
+         do j=this%cfg%jmin_,this%cfg%jmax_
+            do i=this%cfg%imin_,this%cfg%imax_
+               ! Viscous CFL
+               buf=max(buf,4.0_WP*dt*this%visc(i,j,k)*max(this%cfg%dxi(i),this%cfg%dyi(j),this%cfg%dzi(k))**2/this%RHO(i,j,k))
+               spec_heat = ((1.0_WP-vf%VF(i,j,k))*matmod%spec_heat_gas   (this%Tmptr(i,j,k))*this%Grho(i,j,k) &
+               &           +(       vf%VF(i,j,k))*matmod%spec_heat_liquid(this%Tmptr(i,j,k))*this%Lrho(i,j,k) )
+               buf=max(buf,4.0_WP*dt*this%therm_cond(i,j,k)*max(this%cfg%dxi(i),this%cfg%dyi(j),this%cfg%dzi(k))**2/spec_heat)
+               ! Gravity CFL (check this)
+               buf=max(buf,dt**2*abs(this%gravity(1))*this%cfg%dxi(i), &
+               &           dt**2*abs(this%gravity(2))*this%cfg%dyi(j), &
+               &           dt**2*abs(this%gravity(3))*this%cfg%dzi(k))
+            end do
+         end do
+      end do
+      call MPI_ALLREDUCE(buf,myCFL,1,MPI_REAL_WP,MPI_MAX,this%cfg%comm,ierr)
+      
+      ! Calculate sub-step for viscous solver
+      nCFL=ceiling(myCFL)
+      mydt=dt/(real(nCFL,WP)+epsilon(1.0_WP)) ! This would divide by zero if there is no viscosity, so I added the epsilon
+      
+      ! Sub-step for stability
+      do n=1,nCFL
+         ! Perform viscous step
+         call diffusion_src_explicit_substep()
+         ! Update temperature
+         call matmod%update_temperature(vf,this%Tmptr)
+         ! Calculate viscosity
+         if (n.lt.nCFL) call this%get_viscosity(vf,matmod,sgs_visc,visc_x,visc_y,visc_z)
+      end do
+      
+      ! Nullify...
+      
+   contains
+   
+      subroutine diffusion_src_explicit_substep()
+         implicit none
+         
+         real(WP) :: VISCforceX,VISCforceY,VISCforceZ,spongeX
+         real(WP) :: VISCIntEnergy,VISCKinEnergy,HEATIntEnergy
+         real(WP) :: dUdx,dUdy,dUdz,dVdx,dVdy,dVdz,dWdx,dWdy,dWdz
+         real(WP) :: dMUdx,dMUdy,dMUdz
+         real(WP) :: div2U,div2V,div2W
+         real(WP) :: ddilatationdx,ddilatationdy,ddilatationdz
+         
+         integer :: i,j,k,n
+         
+         ! Viscous routine operates on face velocities, need to be updated each time
+         ! Update traditional face velocity (just interpolated)
+         call this%interp_vel_basic(vf,this%Ui,this%Vi,this%Wi,this%U,this%V,this%W)
+         ! Apply boundary condtions
+         bc_scope = 'velocity'
+         call this%apply_bcond(dt,bc_scope)
+         ! Calculate other interpolated face velocities (ignore masks)
+         call this%interp_vel_basic(vf,this%Vi,this%Wi,this%Ui,Vf_x,Wf_y,Uf_z,use_masks=.false.)
+         call this%interp_vel_basic(vf,this%Wi,this%Ui,this%Vi,Wf_x,Uf_y,Vf_z,use_masks=.false.)
+         ! BCs not needed, masks are already addressed, nothing used from within boundary
        
        ! Compute divergence and SGS isotropic tensor in each cell
        do k=this%cfg%kmin_,this%cfg%kmax_

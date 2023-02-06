@@ -71,14 +71,15 @@ contains
       
       ! Create a config from that grid on our entire group
       create_cfg: block
-         use parallel, only: group
+         use parallel,    only: group
+         use pgrid_class, only: p3dfft_decomp
          integer, dimension(3) :: partition
          
          ! Read in partition
          call param_read('Partition',partition,short='p')
          
          ! Create partitioned grid
-         cfg=config(grp=group,decomp=partition,grid=grid)
+         cfg=config(grp=group,decomp=partition,grid=grid,strat=p3dfft_decomp)
          
       end block create_cfg
       
@@ -89,11 +90,12 @@ contains
          do k=cfg%kmin_,cfg%kmax_
             do j=cfg%jmin_,cfg%jmax_
                do i=cfg%imin_,cfg%imax_
-                  cfg%VF(i,j,k)=get_VF(i,j,k,'SC')
+                  cfg%VF(i,j,k)=max(get_VF(i,j,k,'SC'),epsilon(1.0_WP))
                end do
             end do
          end do
          call cfg%sync(cfg%VF)
+         call cfg%calc_fluid_vol()
       end block create_walls
       
       

@@ -8,12 +8,12 @@ module pgrid_class
    implicit none
    private
    
-   !> Default parallelization strategy
-   character(len=str_medium), parameter :: defstrat='fewest_dir'
-   integer, parameter :: defmincell=4
-   
    ! Expose type/constructor/methods
    public :: pgrid
+   
+   !> Parallelization strategy
+   integer, parameter, public :: default_decomp=1
+   integer, parameter, public ::  p3dfft_decomp=2
    
    !> Partitioned grid type
    type, extends(sgrid) :: pgrid
@@ -112,7 +112,7 @@ contains
    
    
    !> Partitioned grid constructor from file
-   function construct_pgrid_from_file(no,file,grp,decomp) result(self)
+   function construct_pgrid_from_file(no,file,grp,decomp,strat) result(self)
       use string,   only: lowercase
       use messager, only: die
       use param,    only: verbose
@@ -123,6 +123,7 @@ contains
       character(len=*), intent(in) :: file              !< Grid file
       type(MPI_Group), intent(in) :: grp                !< MPI group
       integer, dimension(3), intent(in) :: decomp       !< Desired decomposition
+      integer, intent(in), optional :: strat            !< Optional decomposition strategy
       integer :: ierr
       character(len=str_medium) :: simu_name
       integer :: nx,ny,nz,coord
@@ -179,7 +180,11 @@ contains
       self%npx=decomp(1); self%npy=decomp(2); self%npz=decomp(3)
       
       ! Perform actual domain decomposition of grid
-      call self%domain_decomp()
+      if (present(strat)) then
+         call self%domain_decomp(strat=strat)
+      else
+         call self%domain_decomp(strat=default_decomp)
+      end if
       
       ! If verbose run, log and or print grid
       if (verbose.gt.0) call self%log
@@ -190,7 +195,7 @@ contains
    
    
    !> Partitioned grid constructor from sgrid
-   function construct_pgrid_from_sgrid(grid,grp,decomp) result(self)
+   function construct_pgrid_from_sgrid(grid,grp,decomp,strat) result(self)
       use string,   only: lowercase
       use messager, only: die
       use param,    only: verbose
@@ -199,7 +204,8 @@ contains
       type(sgrid), intent(in) :: grid                   !< Base grid
       type(MPI_Group), intent(in) :: grp                !< MPI group
       integer, dimension(3), intent(in) :: decomp       !< Requested domain decomposition
-      
+      integer, intent(in), optional :: strat            !< Optional decomposition strategy
+
       ! Initialize MPI environment
       self%group=grp; call self%init_mpi
       
@@ -211,7 +217,11 @@ contains
       self%npx=decomp(1); self%npy=decomp(2); self%npz=decomp(3)
       
       ! Perform actual domain decomposition of grid
-      call self%domain_decomp()
+      if (present(strat)) then
+         call self%domain_decomp(strat=strat)
+      else
+         call self%domain_decomp(strat=default_decomp)
+      end if
       
       ! If verbose run, log and or print grid
       if (verbose.gt.0) call self%log
@@ -243,12 +253,13 @@ contains
    
    
    !> Prepares the domain decomposition of the pgrid
-   subroutine pgrid_domain_decomp(self)
+   subroutine pgrid_domain_decomp(self,strat)
       use messager, only: die
       use parallel, only: MPI_REAL_WP,MPI_REAL_SP
       implicit none
       class(pgrid), intent(inout) :: self
-      integer :: ierr,q,r
+      integer, intent(in) :: strat
+      integer :: strat_,ierr,q,r
       type(MPI_Comm) :: tmp_comm
       integer, parameter :: ndims=3
       logical, parameter :: reorder=.true.
@@ -285,32 +296,65 @@ contains
       call MPI_CART_SUB(self%comm,dir,self%zxcomm,ierr)
       call MPI_COMM_RANK(self%zxcomm,self%zxrank,ierr)
       
-      ! Perform decomposition in x
-      q=self%nx/self%npx; r=mod(self%nx,self%npx)
-      self%imin_ =self%imin+ coords(1)   *q+min(coords(1)  ,r)
-      self%imax_ =self%imin+(coords(1)+1)*q+min(coords(1)+1,r)-1
-      self%nx_   =self%imax_-self%imin_+1
-      self%nxo_  =self%nx_+2*self%no
-      self%imino_=self%imin_-self%no
-      self%imaxo_=self%imax_+self%no
-      
-      ! Perform decomposition in y
-      q=self%ny/self%npy; r=mod(self%ny,self%npy)
-      self%jmin_ =self%jmin+ coords(2)   *q+min(coords(2)  ,r)
-      self%jmax_ =self%jmin+(coords(2)+1)*q+min(coords(2)+1,r)-1
-      self%ny_   =self%jmax_-self%jmin_+1
-      self%nyo_  =self%ny_+2*self%no
-      self%jmino_=self%jmin_-self%no
-      self%jmaxo_=self%jmax_+self%no
-      
-      ! Perform decomposition in z
-      q=self%nz/self%npz; r=mod(self%nz,self%npz)
-      self%kmin_ =self%kmin+ coords(3)   *q+min(coords(3)  ,r)
-      self%kmax_ =self%kmin+(coords(3)+1)*q+min(coords(3)+1,r)-1
-      self%nz_   =self%kmax_-self%kmin_+1
-      self%nzo_  =self%nz_+2*self%no
-      self%kmino_=self%kmin_-self%no
-      self%kmaxo_=self%kmax_+self%no
+      ! Choose a decomposition strategy
+      select case(strat)
+      case(default_decomp)
+         ! Perform decomposition in x
+         q=self%nx/self%npx; r=mod(self%nx,self%npx)
+         self%imin_ =self%imin+ coords(1)   *q+min(coords(1)  ,r)
+         self%imax_ =self%imin+(coords(1)+1)*q+min(coords(1)+1,r)-1
+         self%nx_   =self%imax_-self%imin_+1
+         self%nxo_  =self%nx_+2*self%no
+         self%imino_=self%imin_-self%no
+         self%imaxo_=self%imax_+self%no
+         
+         ! Perform decomposition in y
+         q=self%ny/self%npy; r=mod(self%ny,self%npy)
+         self%jmin_ =self%jmin+ coords(2)   *q+min(coords(2)  ,r)
+         self%jmax_ =self%jmin+(coords(2)+1)*q+min(coords(2)+1,r)-1
+         self%ny_   =self%jmax_-self%jmin_+1
+         self%nyo_  =self%ny_+2*self%no
+         self%jmino_=self%jmin_-self%no
+         self%jmaxo_=self%jmax_+self%no
+         
+         ! Perform decomposition in z
+         q=self%nz/self%npz; r=mod(self%nz,self%npz)
+         self%kmin_ =self%kmin+ coords(3)   *q+min(coords(3)  ,r)
+         self%kmax_ =self%kmin+(coords(3)+1)*q+min(coords(3)+1,r)-1
+         self%nz_   =self%kmax_-self%kmin_+1
+         self%nzo_  =self%nz_+2*self%no
+         self%kmino_=self%kmin_-self%no
+         self%kmaxo_=self%kmax_+self%no
+      case(p3dfft_decomp)
+         ! Perform p3dfft compatible decomposition in x
+         q=self%nx/self%npx; r=mod(self%nx,self%npx)
+         self%imin_ =self%imax+1-q*(self%npx-coords(1)  )-min(self%npx-coords(1),r)
+         self%imax_ =self%imax  -q*(self%npx-coords(1)-1)-min(self%npx-coords(1)-1,r)
+         self%nx_   =self%imax_-self%imin_+1
+         self%nxo_  =self%nx_+2*self%no
+         self%imino_=self%imin_-self%no
+         self%imaxo_=self%imax_+self%no
+         
+         ! Perform p3dfft compatible decomposition in y
+         q=self%ny/self%npy; r=mod(self%ny,self%npy)
+         self%jmin_ =self%jmax+1-q*(self%npy-coords(2)  )-min(self%npy-coords(2),r)
+         self%jmax_ =self%jmax  -q*(self%npy-coords(2)-1)-min(self%npy-coords(2)-1,r)
+         self%ny_   =self%jmax_-self%jmin_+1
+         self%nyo_  =self%ny_+2*self%no
+         self%jmino_=self%jmin_-self%no
+         self%jmaxo_=self%jmax_+self%no
+         
+         ! Perform p3dfft compatible decomposition in z
+         q=self%nz/self%npz; r=mod(self%nz,self%npz)
+         self%kmin_ =self%kmax+1-q*(self%npz-coords(3)  )-min(self%npz-coords(3),r)
+         self%kmax_ =self%kmax  -q*(self%npz-coords(3)-1)-min(self%npz-coords(3)-1,r)
+         self%nz_   =self%kmax_-self%kmin_+1
+         self%nzo_  =self%nz_+2*self%no
+         self%kmino_=self%kmin_-self%no
+         self%kmaxo_=self%kmax_+self%no
+      case default
+         call die('[pgrid domain decomp] Unknown parallel decomposition strategy provided')
+      end select
       
       ! We also need to prepare communication buffers
       allocate(self%syncbuf_x1(self%no,self%jmino_:self%jmaxo_,self%kmino_:self%kmaxo_))

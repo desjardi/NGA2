@@ -354,7 +354,7 @@ contains
       do k=this%cfg%kmino_  ,this%cfg%kmaxo_
          do j=this%cfg%jmino_  ,this%cfg%jmaxo_
             do i=this%cfg%imino_+1,this%cfg%imaxo_
-               this%itpr_x(:,i,j,k)=this%cfg%dxmi(i)*[this%cfg%xm(i)-this%cfg%x(i),this%cfg%x(i)-this%cfg%xm(i-1)] !< Linear interpolation in x from [xm,ym,zm] to [x,ym,zm]
+               this%itpr_x(:,i,j,k)=this%cfg%dxmi(i)*[this%cfg%xm(i)-this%cfg%x(i),this%cfg%x(i)-this%cfg%xm(i-1)] !< Linear interpolation in x from [xm,ym,zm] to [x,ym,zm]
             end do
          end do
       end do

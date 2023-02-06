@@ -3,7 +3,7 @@ module simulation
    use precision,         only: WP
    use geometry,          only: cfg
    use pfft3d_class,      only: pfft3d
-   use hypre_str_class,   only: hypre_str
+   !use hypre_str_class,   only: hypre_str
    use incomp_class,      only: incomp
    use lpt_class,         only: lpt
    use timetracker_class, only: timetracker
@@ -15,8 +15,8 @@ module simulation
    private
    
    !> Single-phase incompressible flow solver, pressure and implicit solvers, and a time tracker
-   !type(pfft3d),      public :: ps
-   type(hypre_str),   public :: ps
+   type(pfft3d),      public :: ps
+   !type(hypre_str),   public :: ps
    type(incomp),      public :: fs
    type(timetracker), public :: time
    type(lpt),         public :: lp
@@ -80,11 +80,11 @@ contains
          ! Assign constant density
          call param_read('Density',fs%rho)
          ! Prepare and configure pressure solver
-         !ps=pfft3d(cfg=cfg,name='Pressure')
-         ps=hypre_str(cfg=cfg,name='Pressure',method=pcg_pfmg,nst=7)
-         ps%maxlevel=10
-         call param_read('Pressure iteration',ps%maxit)
-         call param_read('Pressure tolerance',ps%rcvg)
+         ps=pfft3d(cfg=cfg,name='Pressure')
+         !ps=hypre_str(cfg=cfg,name='Pressure',method=pcg_pfmg,nst=7)
+         !ps%maxlevel=10
+         !call param_read('Pressure iteration',ps%maxit)
+         !call param_read('Pressure tolerance',ps%rcvg)
          ! Setup the solver
          call fs%setup(pressure_solver=ps)
       end block create_and_initialize_flow_solver
@@ -185,7 +185,7 @@ contains
 
       ! Create partmesh object for Lagrangian particle output
       create_pmesh: block
-         pmesh=partmesh(nvar=0,name='lpt')
+         pmesh=partmesh(nvar=0,nvec=0,name='lpt')
          call lp%update_partmesh(pmesh)
       end block create_pmesh
 
@@ -316,9 +316,9 @@ contains
                end do
                call MPI_ALLREDUCE(myKE,KE,1,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr)
                ! Calculate mean velocity
-               call fs%cfg%integrate(A=fs%U,integral=meanU); meanU=meanU/fs%cfg%vol_total
-               call fs%cfg%integrate(A=fs%V,integral=meanV); meanV=meanV/fs%cfg%vol_total
-               call fs%cfg%integrate(A=fs%W,integral=meanW); meanW=meanW/fs%cfg%vol_total
+               call fs%cfg%integrate(A=fs%U,integral=meanU); meanU=meanU/fs%cfg%fluid_vol
+               call fs%cfg%integrate(A=fs%V,integral=meanV); meanV=meanV/fs%cfg%fluid_vol
+               call fs%cfg%integrate(A=fs%W,integral=meanW); meanW=meanW/fs%cfg%fluid_vol
                ! Add forcing term
                resU=resU+time%dt*KE0/KE*(fs%U-meanU)/(2.0_WP*tau_eddy)
                resV=resV+time%dt*KE0/KE*(fs%V-meanV)/(2.0_WP*tau_eddy)
