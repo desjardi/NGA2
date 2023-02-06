@@ -187,8 +187,6 @@ contains
          call param_read('Gas density'   ,fs%rho_g)
          ! Read in surface tension coefficient
          call param_read('Surface tension coefficient',fs%sigma)
-         ! Assign acceleration of gravity
-         call param_read('Gravity',fs%gravity)
          ! Inflow on the left of domain
          call fs%add_bcond(name='inflow',type=dirichlet,      face='x',dir=-1,canCorrect=.false.,locator=xm_locator)
          ! Clipped Neumann outflow on the right of domain
