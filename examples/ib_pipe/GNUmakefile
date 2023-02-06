@@ -24,10 +24,7 @@ include $(Upack)
 INCLUDE_LOCATIONS += $(Ulocs)
 VPATH_LOCATIONS   += $(Ulocs)
 
-# Define external libraries - this can also be in .profile
-HYPRE_DIR  = /Users/desjardi/Repositories/Builds/hypre
-FFTW_DIR   = /opt/homebrew/Cellar/fftw/3.3.10_1
-P3DFFT_DIR = /Users/desjardi/Repositories/Builds/p3dfft
+# External libraries are defined in .profile/.bashrc/.zshrc, but could be defined here as well
 
 # NGA compilation definitions
 include $(NGA_HOME)/tools/GNUMake/Make.defs

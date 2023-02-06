@@ -20,9 +20,7 @@ include $(Upack)
 INCLUDE_LOCATIONS += $(Ulocs)
 VPATH_LOCATIONS   += $(Ulocs)
 
-# Define external libraries - this can also be in .profile
-#HDF5_DIR = /Users/desjardi/Builds/hdf5
-HYPRE_DIR = /Users/desjardi/Builds/hypre
+# External libraries are defined in .profile/.bashrc/.zshrc, but could be defined here as well
 
 # NGA compilation definitions
 include $(NGA_HOME)/tools/GNUMake/Make.defs
