@@ -45,7 +45,7 @@ contains
    
    
    !> Single-grid config constructor from a serial grid
-   function construct_from_sgrid(grp,decomp,grid,strat) result(self)
+   function construct_from_sgrid(grp,decomp,grid) result(self)
       use sgrid_class, only: sgrid
       use string,      only: str_medium
       use mpi_f08,     only: MPI_Group
@@ -54,13 +54,8 @@ contains
       type(sgrid), intent(in) :: grid
       type(MPI_Group), intent(in) :: grp
       integer, dimension(3), intent(in) :: decomp
-      integer, intent(in), optional :: strat
       ! Create a partitioned grid with the provided group and decomposition
-      if (present(strat)) then
-         self%pgrid=pgrid(grid,grp,decomp,strat)
-      else
-         self%pgrid=pgrid(grid,grp,decomp)
-      end if
+      self%pgrid=pgrid(grid,grp,decomp)
       ! Finish preparing the config
       call self%prep
    end function construct_from_sgrid

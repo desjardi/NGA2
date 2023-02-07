@@ -71,15 +71,14 @@ contains
       
       ! Create a config from that grid on our entire group
       create_cfg: block
-         use parallel,    only: group
-         use pgrid_class, only: p3dfft_decomp
+         use parallel, only: group
          integer, dimension(3) :: partition
          
          ! Read in partition
          call param_read('Partition',partition,short='p')
          
          ! Create partitioned grid
-         cfg=config(grp=group,decomp=partition,grid=grid,strat=p3dfft_decomp)
+         cfg=config(grp=group,decomp=partition,grid=grid)
          
       end block create_cfg
       
