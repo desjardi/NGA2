@@ -80,7 +80,7 @@ contains
          ! Assign constant density
          call param_read('Density',fs%rho)
          ! Prepare and configure pressure solver
-         ps=pfft3d(cfg=cfg,name='Pressure')
+         ps=pfft3d(cfg=cfg,name='Pressure',nst=7)
          !ps=hypre_str(cfg=cfg,name='Pressure',method=pcg_pfmg,nst=7)
          !ps%maxlevel=10
          !call param_read('Pressure iteration',ps%maxit)

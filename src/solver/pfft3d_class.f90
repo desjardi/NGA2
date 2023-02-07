@@ -8,7 +8,6 @@ module pfft3d_class
    use config_class, only: config
    use linsol_class, only: linsol
    implicit none
-   include 'fftw3.f'
    private
    
    ! Expose type/constructor/methods
@@ -136,6 +135,7 @@ contains
    subroutine pfft3d_init(this)
       use messager, only: die
       implicit none
+      include 'fftw3.f03'
       class(pfft3d), intent(inout) :: this
       integer :: type_ccr,type_rcc,contig_dim,buf_int
       integer(C_INT) :: p3dfft_grid,grid_real,grid_fourier,buf_cint
@@ -263,7 +263,7 @@ contains
       end if
       
       ! Build the operator
-      opr_col(:,:,:)=0.0_C_DOUBLE
+      opr_col=0.0_C_DOUBLE
       do n=1,this%nst
          i=modulo(this%stc(n,1)-this%cfg%imin+1,this%cfg%nx)+this%cfg%imin
          j=modulo(this%stc(n,2)-this%cfg%jmin+1,this%cfg%ny)+this%cfg%jmin
@@ -315,9 +315,9 @@ contains
       
       if (.not.this%setup_done) call die('[pfftd3] solve called before setup')
       
-      imn_=this%cfg%imin_; imx_=this%cfg%imax_;
-      jmn_=this%cfg%jmin_; jmx_=this%cfg%jmax_;
-      kmn_=this%cfg%kmin_; kmx_=this%cfg%kmax_;
+      imn_=this%cfg%imin_; imx_=this%cfg%imax_
+      jmn_=this%cfg%jmin_; jmx_=this%cfg%jmax_
+      kmn_=this%cfg%kmin_; kmx_=this%cfg%kmax_
       
       ! Copy to unstrided array
       this%unstrided_rhs=this%rhs(imn_:imx_,jmn_:jmx_,kmn_:kmx_)
