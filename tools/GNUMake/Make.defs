@@ -270,10 +270,6 @@ ifeq ($(USE_FFTW),TRUE)
   $(info Loading $(NGA_HOME)/tools/GNUMake/packages/Make.fftw...)
   include        $(NGA_HOME)/tools/GNUMake/packages/Make.fftw
 endif
-ifeq ($(USE_P3DFFT),TRUE)
-  $(info Loading $(NGA_HOME)/tools/GNUMake/packages/Make.p3dfft...)
-  include        $(NGA_HOME)/tools/GNUMake/packages/Make.p3dfft
-endif
 ###############################################################
 
 

@@ -5,9 +5,6 @@ endif
 ifeq ($(USE_FFTW),TRUE)
   f90EXE_sources += fourier3d_class.f90
 endif
-ifeq ($(USE_P3DFFT),TRUE)
-  f90EXE_sources += pfft3d_class.f90
-endif
 
 INCLUDE_LOCATIONS += $(NGA_HOME)/src/solver
 VPATH_LOCATIONS   += $(NGA_HOME)/src/solver

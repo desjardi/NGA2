@@ -28,9 +28,6 @@ VPATH_LOCATIONS   += $(Ulocs)
 # NGA compilation definitions
 include $(NGA_HOME)/tools/GNUMake/Make.defs
 
-# Needed for linking to P3DFFT... We'll need to sort that out!
-F90FLAGS += -fallow-argument-mismatch
-
 # Include NGA base code
 Bdirs   := particles core constant_density data solver config grid libraries
 Bpack   += $(foreach dir, $(Bdirs), $(NGA_HOME)/src/$(dir)/Make.package)
