@@ -23,9 +23,9 @@ module fourier3d_class
       logical :: oddball
       
       ! Data storage for FFTW plans
-      real(C_DOUBLE), dimension(:), allocatable :: in_x,out_x
-      real(C_DOUBLE), dimension(:), allocatable :: in_y,out_y
-      real(C_DOUBLE), dimension(:), allocatable :: in_z,out_z
+      complex(WP), dimension(:), allocatable :: in_x,out_x
+      complex(WP), dimension(:), allocatable :: in_y,out_y
+      complex(WP), dimension(:), allocatable :: in_z,out_z
       
       ! FFTW plans
       type(C_PTR) :: fplan_x,bplan_x
@@ -33,20 +33,20 @@ module fourier3d_class
       type(C_PTR) :: fplan_z,bplan_z
       
       !> Unstrided arrays
-      real(WP), dimension(:,:,:), allocatable :: factored_operator
-      real(WP), dimension(:,:,:), allocatable :: transformed_rhs
+      complex(WP), dimension(:,:,:), allocatable :: factored_operator
+      complex(WP), dimension(:,:,:), allocatable :: transformed_rhs
       
       ! Storage for transposed data
-      real(WP), dimension(:,:,:), allocatable :: xtrans
-      real(WP), dimension(:,:,:), allocatable :: ytrans
-      real(WP), dimension(:,:,:), allocatable :: ztrans
+      complex(WP), dimension(:,:,:), allocatable :: xtrans
+      complex(WP), dimension(:,:,:), allocatable :: ytrans
+      complex(WP), dimension(:,:,:), allocatable :: ztrans
       
       ! Transpose partition - X
       integer, dimension(:), allocatable :: imin_x,imax_x
       integer, dimension(:), allocatable :: jmin_x,jmax_x
       integer, dimension(:), allocatable :: kmin_x,kmax_x
       integer, dimension(:), allocatable :: nx_x,ny_x,nz_x
-      real(WP), dimension(:,:,:,:), allocatable :: sendbuf_x,recvbuf_x
+      complex(WP), dimension(:,:,:,:), allocatable :: sendbuf_x,recvbuf_x
       integer :: sendcount_x,recvcount_x
       character(len=str_short) :: xdir
       
@@ -55,7 +55,7 @@ module fourier3d_class
       integer, dimension(:), allocatable :: jmin_y,jmax_y
       integer, dimension(:), allocatable :: kmin_y,kmax_y
       integer, dimension(:), allocatable :: nx_y,ny_y,nz_y
-      real(WP), dimension(:,:,:,:), allocatable :: sendbuf_y,recvbuf_y
+      complex(WP), dimension(:,:,:,:), allocatable :: sendbuf_y,recvbuf_y
       integer :: sendcount_y,recvcount_y
       character(len=str_short) :: ydir
       
@@ -64,7 +64,7 @@ module fourier3d_class
       integer, dimension(:), allocatable :: jmin_z,jmax_z
       integer, dimension(:), allocatable :: kmin_z,kmax_z
       integer, dimension(:), allocatable :: nx_z,ny_z,nz_z
-      real(WP), dimension(:,:,:,:), allocatable :: sendbuf_z,recvbuf_z
+      complex(WP), dimension(:,:,:,:), allocatable :: sendbuf_z,recvbuf_z
       integer :: sendcount_z,recvcount_z
       character(len=str_short) :: zdir
       
@@ -189,24 +189,24 @@ contains
       if (this%cfg%nx.gt.1) then
          call this%fourier3d_xtranspose_init()
          allocate(this%in_x(this%cfg%nx),this%out_x(this%cfg%nx))
-         this%fplan_x=fftw_plan_r2r_1d(this%cfg%nx,this%in_x,this%out_x,FFTW_R2HC,FFTW_MEASURE)
-         this%bplan_x=fftw_plan_r2r_1d(this%cfg%nx,this%in_x,this%out_x,FFTW_HC2R,FFTW_MEASURE)
+         this%fplan_x=fftw_plan_dft_1d(this%cfg%nx,this%in_x,this%out_x,FFTW_FORWARD,FFTW_MEASURE)
+         this%bplan_x=fftw_plan_dft_1d(this%cfg%nx,this%in_x,this%out_x,FFTW_BACKWARD,FFTW_MEASURE)
       end if
       
       ! Initialize transpose and FFTW plans in y
       if (this%cfg%ny.gt.1) then
          call this%fourier3d_ytranspose_init()
          allocate(this%in_y(this%cfg%ny),this%out_y(this%cfg%ny))
-         this%fplan_y=fftw_plan_r2r_1d(this%cfg%ny,this%in_y,this%out_y,FFTW_R2HC,FFTW_MEASURE)
-         this%bplan_y=fftw_plan_r2r_1d(this%cfg%ny,this%in_y,this%out_y,FFTW_HC2R,FFTW_MEASURE)
+         this%fplan_y=fftw_plan_dft_1d(this%cfg%ny,this%in_y,this%out_y,FFTW_FORWARD,FFTW_MEASURE)
+         this%bplan_y=fftw_plan_dft_1d(this%cfg%ny,this%in_y,this%out_y,FFTW_BACKWARD,FFTW_MEASURE)
       end if
       
       ! Initialize transpose and FFTW plans in z
       if (this%cfg%nz.gt.1) then
          call this%fourier3d_ztranspose_init()
          allocate(this%in_z(this%cfg%nz),this%out_z(this%cfg%nz))
-         this%fplan_z=fftw_plan_r2r_1d(this%cfg%nz,this%in_z,this%out_z,FFTW_R2HC,FFTW_MEASURE)
-         this%bplan_z=fftw_plan_r2r_1d(this%cfg%nz,this%in_z,this%out_z,FFTW_HC2R,FFTW_MEASURE)
+         this%fplan_z=fftw_plan_dft_1d(this%cfg%nz,this%in_z,this%out_z,FFTW_FORWARD,FFTW_MEASURE)
+         this%bplan_z=fftw_plan_dft_1d(this%cfg%nz,this%in_z,this%out_z,FFTW_BACKWARD,FFTW_MEASURE)
       end if
       
       ! Find who owns the oddball
@@ -576,8 +576,8 @@ contains
       use parallel, only: MPI_REAL_WP
       implicit none
       class(fourier3d), intent(inout) :: this
-      real(WP), dimension(this%cfg%imin_:,this%cfg%jmin_:,this%cfg%kmin_:), intent(in) :: A
-      real(WP), dimension(this%cfg%imin :,this%jmin_x(this%cfg%iproc):,this%kmin_x(this%cfg%iproc):), intent(out) :: At
+      complex(WP), dimension(this%cfg%imin_:,this%cfg%jmin_:,this%cfg%kmin_:), intent(in) :: A
+      complex(WP), dimension(this%cfg%imin :,this%jmin_x(this%cfg%iproc):,this%kmin_x(this%cfg%iproc):), intent(out) :: At
       integer :: i,j,k,ip,ii,jj,kk,ierr
       
       select case (trim(this%xdir))
@@ -597,7 +597,7 @@ contains
                end do
             end do
          end do
-         call MPI_AllToAll(this%sendbuf_x,this%sendcount_x,MPI_REAL_WP,this%recvbuf_x,this%recvcount_x,MPI_REAL_WP,this%cfg%xcomm,ierr)
+         call MPI_AllToAll(this%sendbuf_x,this%sendcount_x,MPI_DOUBLE_COMPLEX,this%recvbuf_x,this%recvcount_x,MPI_DOUBLE_COMPLEX,this%cfg%xcomm,ierr)
          do ip=1,this%cfg%npx
             do k=this%cfg%kmin_,this%cfg%kmax_
                do j=this%jmin_x(this%cfg%iproc),this%jmax_x(this%cfg%iproc)
@@ -622,7 +622,7 @@ contains
                end do
             end do
          end do
-         call MPI_AllToAll(this%sendbuf_x,this%sendcount_x,MPI_REAL_WP,this%recvbuf_x,this%recvcount_x,MPI_REAL_WP,this%cfg%xcomm,ierr)
+         call MPI_AllToAll(this%sendbuf_x,this%sendcount_x,MPI_DOUBLE_COMPLEX,this%recvbuf_x,this%recvcount_x,MPI_DOUBLE_COMPLEX,this%cfg%xcomm,ierr)
          do ip=1,this%cfg%npx
             do k=this%kmin_x(this%cfg%iproc),this%kmax_x(this%cfg%iproc)
                do j=this%cfg%jmin_,this%cfg%jmax_
@@ -645,8 +645,8 @@ contains
       use parallel, only: MPI_REAL_WP
       implicit none
       class(fourier3d), intent(inout) :: this
-      real(WP), dimension(this%cfg%imin_:,this%cfg%jmin_:,this%cfg%kmin_:), intent(in) :: A
-      real(WP), dimension(this%imin_y(this%cfg%jproc):,this%cfg%jmin:,this%kmin_y(this%cfg%jproc):), intent(out) :: At
+      complex(WP), dimension(this%cfg%imin_:,this%cfg%jmin_:,this%cfg%kmin_:), intent(in) :: A
+      complex(WP), dimension(this%imin_y(this%cfg%jproc):,this%cfg%jmin:,this%kmin_y(this%cfg%jproc):), intent(out) :: At
       integer :: i,j,k,jp,ii,jj,kk,ierr
       
       select case (trim(this%ydir))
@@ -663,7 +663,7 @@ contains
                end do
             end do
          end do
-         call MPI_AllToAll(this%sendbuf_y,this%sendcount_y,MPI_REAL_WP,this%recvbuf_y,this%recvcount_y,MPI_REAL_WP,this%cfg%ycomm,ierr)
+         call MPI_AllToAll(this%sendbuf_y,this%sendcount_y,MPI_DOUBLE_COMPLEX,this%recvbuf_y,this%recvcount_y,MPI_DOUBLE_COMPLEX,this%cfg%ycomm,ierr)
          do jp=1,this%cfg%npy
             do k=this%cfg%kmin_,this%cfg%kmax_
                do j=this%jmin_y(jp),this%jmax_y(jp)
@@ -691,7 +691,7 @@ contains
                end do
             end do
          end do
-         call MPI_AllToAll(this%sendbuf_y,this%sendcount_y,MPI_REAL_WP,this%recvbuf_y,this%recvcount_y,MPI_REAL_WP,this%cfg%ycomm,ierr)
+         call MPI_AllToAll(this%sendbuf_y,this%sendcount_y,MPI_DOUBLE_COMPLEX,this%recvbuf_y,this%recvcount_y,MPI_DOUBLE_COMPLEX,this%cfg%ycomm,ierr)
          do jp=1,this%cfg%npy
             do k=this%kmin_y(this%cfg%jproc),this%kmax_y(this%cfg%jproc)
                do j=this%jmin_y(jp),this%jmax_y(jp)
@@ -714,8 +714,8 @@ contains
       use parallel, only: MPI_REAL_WP
       implicit none
       class(fourier3d), intent(inout) :: this
-      real(WP), dimension(this%cfg%imin_:,this%cfg%jmin_:,this%cfg%kmin_:), intent(in) :: A
-      real(WP), dimension(this%imin_z(this%cfg%kproc):,this%jmin_z(this%cfg%kproc):,this%cfg%kmin:), intent(out) :: At
+      complex(WP), dimension(this%cfg%imin_:,this%cfg%jmin_:,this%cfg%kmin_:), intent(in) :: A
+      complex(WP), dimension(this%imin_z(this%cfg%kproc):,this%jmin_z(this%cfg%kproc):,this%cfg%kmin:), intent(out) :: At
       integer :: i,j,k,kp,ii,jj,kk,ierr
       
       select case (trim(this%zdir))
@@ -732,7 +732,7 @@ contains
                end do
             end do
          end do
-         call MPI_AllToAll(this%sendbuf_z,this%sendcount_z,MPI_REAL_WP,this%recvbuf_z,this%recvcount_z,MPI_REAL_WP,this%cfg%zcomm,ierr)
+         call MPI_AllToAll(this%sendbuf_z,this%sendcount_z,MPI_DOUBLE_COMPLEX,this%recvbuf_z,this%recvcount_z,MPI_DOUBLE_COMPLEX,this%cfg%zcomm,ierr)
          do kp=1,this%cfg%npz
             do k=this%kmin_z(kp),this%kmax_z(kp)
                do j=this%cfg%jmin_,this%cfg%jmax_
@@ -757,7 +757,7 @@ contains
                end do
             end do
          end do
-         call MPI_AllToAll(this%sendbuf_z,this%sendcount_z,MPI_REAL_WP,this%recvbuf_z,this%recvcount_z,MPI_REAL_WP,this%cfg%zcomm,ierr)
+         call MPI_AllToAll(this%sendbuf_z,this%sendcount_z,MPI_DOUBLE_COMPLEX,this%recvbuf_z,this%recvcount_z,MPI_DOUBLE_COMPLEX,this%cfg%zcomm,ierr)
          do kp=1,this%cfg%npz
             do k=this%kmin_z(kp),this%kmax_z(kp)
                do j=this%jmin_z(this%cfg%kproc),this%jmax_z(this%cfg%kproc)
@@ -783,8 +783,8 @@ contains
       use parallel, only: MPI_REAL_WP
       implicit none
       class(fourier3d), intent(inout) :: this
-      real(WP), dimension(this%cfg%imin :,this%jmin_x(this%cfg%iproc):,this%kmin_x(this%cfg%iproc):), intent(in) :: At
-      real(WP), dimension(this%cfg%imin_:,this%cfg%jmin_:,this%cfg%kmin_:), intent(out) :: A
+      complex(WP), dimension(this%cfg%imin :,this%jmin_x(this%cfg%iproc):,this%kmin_x(this%cfg%iproc):), intent(in) :: At
+      complex(WP), dimension(this%cfg%imin_:,this%cfg%jmin_:,this%cfg%kmin_:), intent(out) :: A
       integer :: i,j,k,ip,ii,jj,kk,ierr
       
       select case (trim(this%xdir))
@@ -804,7 +804,7 @@ contains
                end do
             end do
          end do
-         call MPI_AllToAll(this%sendbuf_x,this%sendcount_x,MPI_REAL_WP,this%recvbuf_x,this%recvcount_x,MPI_REAL_WP,this%cfg%xcomm,ierr)
+         call MPI_AllToAll(this%sendbuf_x,this%sendcount_x,MPI_DOUBLE_COMPLEX,this%recvbuf_x,this%recvcount_x,MPI_DOUBLE_COMPLEX,this%cfg%xcomm,ierr)
          do ip=1,this%cfg%npx
             do k=this%cfg%kmin_,this%cfg%kmax_
                do j=this%jmin_x(ip),this%jmax_x(ip)
@@ -829,7 +829,7 @@ contains
                end do
             end do
          end do
-         call MPI_AllToAll(this%sendbuf_x,this%sendcount_x,MPI_REAL_WP,this%recvbuf_x,this%recvcount_x,MPI_REAL_WP,this%cfg%xcomm,ierr)
+         call MPI_AllToAll(this%sendbuf_x,this%sendcount_x,MPI_DOUBLE_COMPLEX,this%recvbuf_x,this%recvcount_x,MPI_DOUBLE_COMPLEX,this%cfg%xcomm,ierr)
          do ip=1,this%cfg%npx
             do k=this%kmin_x(ip),this%kmax_x(ip)
                do j=this%cfg%jmin_,this%cfg%jmax_
@@ -852,8 +852,8 @@ contains
       use parallel, only: MPI_REAL_WP
       implicit none
       class(fourier3d), intent(inout) :: this
-      real(WP), dimension(this%imin_y(this%cfg%jproc):,this%cfg%jmin:,this%kmin_y(this%cfg%jproc):), intent(in) :: At
-      real(WP), dimension(this%cfg%imin_:,this%cfg%jmin_:,this%cfg%kmin_:), intent(out) :: A
+      complex(WP), dimension(this%imin_y(this%cfg%jproc):,this%cfg%jmin:,this%kmin_y(this%cfg%jproc):), intent(in) :: At
+      complex(WP), dimension(this%cfg%imin_:,this%cfg%jmin_:,this%cfg%kmin_:), intent(out) :: A
       integer :: i,j,k,jp,ii,jj,kk,ierr
       
       select case (trim(this%ydir))
@@ -870,7 +870,7 @@ contains
                end do
             end do
          end do
-         call MPI_AllToAll(this%sendbuf_y,this%sendcount_y,MPI_REAL_WP,this%recvbuf_y,this%recvcount_y,MPI_REAL_WP,this%cfg%ycomm,ierr)
+         call MPI_AllToAll(this%sendbuf_y,this%sendcount_y,MPI_DOUBLE_COMPLEX,this%recvbuf_y,this%recvcount_y,MPI_DOUBLE_COMPLEX,this%cfg%ycomm,ierr)
          do jp=1,this%cfg%npy
             do k=this%cfg%kmin_,this%cfg%kmax_
                do j=this%jmin_y(this%cfg%jproc),this%jmax_y(this%cfg%jproc)
@@ -898,7 +898,7 @@ contains
                end do
             end do
          end do
-         call MPI_AllToAll(this%sendbuf_y,this%sendcount_y,MPI_REAL_WP,this%recvbuf_y,this%recvcount_y,MPI_REAL_WP,this%cfg%ycomm,ierr)
+         call MPI_AllToAll(this%sendbuf_y,this%sendcount_y,MPI_DOUBLE_COMPLEX,this%recvbuf_y,this%recvcount_y,MPI_DOUBLE_COMPLEX,this%cfg%ycomm,ierr)
          do jp=1,this%cfg%npy
             do k=this%kmin_y(jp),this%kmax_y(jp)
                do j=this%jmin_y(this%cfg%jproc),this%jmax_y(this%cfg%jproc)
@@ -921,8 +921,8 @@ contains
       use parallel, only: MPI_REAL_WP
       implicit none
       class(fourier3d), intent(inout) :: this
-      real(WP), dimension(this%imin_z(this%cfg%kproc):,this%jmin_z(this%cfg%kproc):,this%cfg%kmin:), intent(in) :: At
-      real(WP), dimension(this%cfg%imin_:,this%cfg%jmin_:,this%cfg%kmin_:), intent(out) :: A
+      complex(WP), dimension(this%imin_z(this%cfg%kproc):,this%jmin_z(this%cfg%kproc):,this%cfg%kmin:), intent(in) :: At
+      complex(WP), dimension(this%cfg%imin_:,this%cfg%jmin_:,this%cfg%kmin_:), intent(out) :: A
       integer :: i,j,k,kp,ii,jj,kk,ierr
       
       select case (trim(this%zdir))
@@ -939,7 +939,7 @@ contains
                end do
             end do
          end do
-         call MPI_AllToAll(this%sendbuf_z,this%sendcount_z,MPI_REAL_WP,this%recvbuf_z,this%recvcount_z,MPI_REAL_WP,this%cfg%zcomm,ierr)
+         call MPI_AllToAll(this%sendbuf_z,this%sendcount_z,MPI_DOUBLE_COMPLEX,this%recvbuf_z,this%recvcount_z,MPI_DOUBLE_COMPLEX,this%cfg%zcomm,ierr)
          do kp=1,this%cfg%npz
             do k=this%kmin_z(this%cfg%kproc),this%kmax_z(this%cfg%kproc)
                do j=this%cfg%jmin_,this%cfg%jmax_
@@ -964,7 +964,7 @@ contains
                end do
             end do
          end do
-         call MPI_AllToAll(this%sendbuf_z,this%sendcount_z,MPI_REAL_WP,this%recvbuf_z,this%recvcount_z,MPI_REAL_WP,this%cfg%zcomm,ierr)
+         call MPI_AllToAll(this%sendbuf_z,this%sendcount_z,MPI_DOUBLE_COMPLEX,this%recvbuf_z,this%recvcount_z,MPI_DOUBLE_COMPLEX,this%cfg%zcomm,ierr)
          do kp=1,this%cfg%npz
             do k=this%kmin_z(this%cfg%kproc),this%kmax_z(this%cfg%kproc)
                do j=this%jmin_z(kp),this%jmax_z(kp)
@@ -988,7 +988,7 @@ contains
    subroutine fourier3d_fourier_transform(this,A)
       implicit none
       class(fourier3d), intent(inout) :: this
-      real(WP), dimension(this%cfg%imin_:,this%cfg%jmin_:,this%cfg%kmin_:), intent(inout) :: A         !< Needs to be (imin_:imax_,jmin_:jmax_,kmin_:kmax_)
+      complex(WP), dimension(this%cfg%imin_:,this%cfg%jmin_:,this%cfg%kmin_:), intent(inout) :: A         !< Needs to be (imin_:imax_,jmin_:jmax_,kmin_:kmax_)
       integer :: i,j,k
       include 'fftw3.f03'
       
@@ -999,7 +999,7 @@ contains
          do k=this%kmin_x(this%cfg%iproc),this%kmax_x(this%cfg%iproc)
             do j=this%jmin_x(this%cfg%iproc),this%jmax_x(this%cfg%iproc)
                this%in_x=this%xtrans(:,j,k)
-               call fftw_execute_r2r(this%fplan_x,this%in_x,this%out_x)
+               call fftw_execute_dft(this%fplan_x,this%in_x,this%out_x)
                this%xtrans(:,j,k)=this%out_x
             end do
          end do
@@ -1014,7 +1014,7 @@ contains
          do k=this%kmin_y(this%cfg%jproc),this%kmax_y(this%cfg%jproc)
             do i=this%imin_y(this%cfg%jproc),this%imax_y(this%cfg%jproc)
                this%in_y=this%ytrans(i,:,k)
-               call fftw_execute_r2r(this%fplan_y,this%in_y,this%out_y)
+               call fftw_execute_dft(this%fplan_y,this%in_y,this%out_y)
                this%ytrans(i,:,k)=this%out_y
             end do
          end do
@@ -1029,7 +1029,7 @@ contains
          do j=this%jmin_z(this%cfg%kproc),this%jmax_z(this%cfg%kproc)
             do i=this%imin_z(this%cfg%kproc),this%imax_z(this%cfg%kproc)
                this%in_z=this%ztrans(i,j,:)
-               call fftw_execute_r2r(this%fplan_z,this%in_z,this%out_z)
+               call fftw_execute_dft(this%fplan_z,this%in_z,this%out_z)
                this%ztrans(i,j,:)=this%out_z
             end do
          end do
@@ -1047,7 +1047,7 @@ contains
    subroutine fourier3d_inverse_transform(this,A)
       implicit none
       class(fourier3d), intent(inout) :: this
-      real(WP), dimension(this%cfg%imin_:,this%cfg%jmin_:,this%cfg%kmin_:), intent(inout) :: A         !< Needs to be (imin_:imax_,jmin_:jmax_,kmin_:kmax_)
+      complex(WP), dimension(this%cfg%imin_:,this%cfg%jmin_:,this%cfg%kmin_:), intent(inout) :: A         !< Needs to be (imin_:imax_,jmin_:jmax_,kmin_:kmax_)
       integer :: i,j,k
       include 'fftw3.f03'
       
@@ -1058,7 +1058,7 @@ contains
          do k=this%kmin_x(this%cfg%iproc),this%kmax_x(this%cfg%iproc)
             do j=this%jmin_x(this%cfg%iproc),this%jmax_x(this%cfg%iproc)
                this%in_x=this%xtrans(:,j,k)
-               call fftw_execute_r2r(this%bplan_x,this%in_x,this%out_x)
+               call fftw_execute_dft(this%bplan_x,this%in_x,this%out_x)
                this%xtrans(:,j,k)=this%out_x/this%cfg%nx
             end do
          end do
@@ -1073,7 +1073,7 @@ contains
          do k=this%kmin_y(this%cfg%jproc),this%kmax_y(this%cfg%jproc)
             do i=this%imin_y(this%cfg%jproc),this%imax_y(this%cfg%jproc)
                this%in_y=this%ytrans(i,:,k)
-               call fftw_execute_r2r(this%bplan_y,this%in_y,this%out_y)
+               call fftw_execute_dft(this%bplan_y,this%in_y,this%out_y)
                this%ytrans(i,:,k)=this%out_y/this%cfg%ny
             end do
          end do
@@ -1088,7 +1088,7 @@ contains
          do j=this%jmin_z(this%cfg%kproc),this%jmax_z(this%cfg%kproc)
             do i=this%imin_z(this%cfg%kproc),this%imax_z(this%cfg%kproc)
                this%in_z=this%ztrans(i,j,:)
-               call fftw_execute_r2r(this%bplan_z,this%in_z,this%out_z)
+               call fftw_execute_dft(this%bplan_z,this%in_z,this%out_z)
                this%ztrans(i,j,:)=this%out_z/this%cfg%nz
             end do
          end do
@@ -1109,8 +1109,6 @@ end subroutine fourier3d_inverse_transform
       real(WP), dimension(1:this%nst) :: ref_opr
       logical :: circulant
       integer :: i,j,k,n,ierr
-      integer,  dimension(:), allocatable :: row
-      real(WP), dimension(:), allocatable :: val
       
       ! If the solver has already been setup, destroy it first
       if (this%setup_done) call this%destroy()
@@ -1129,14 +1127,14 @@ end subroutine fourier3d_inverse_transform
       if (.not.circulant) call die('[fourier3d setup] operator must be uniform in space')
       
       ! Build the operator
-      this%factored_operator=0.0_C_DOUBLE
+      this%factored_operator=0.0_WP
       do n=1,this%nst
          i=modulo(this%stc(n,1)-this%cfg%imin+1,this%cfg%nx)+this%cfg%imin
          j=modulo(this%stc(n,2)-this%cfg%jmin+1,this%cfg%ny)+this%cfg%jmin
          k=modulo(this%stc(n,3)-this%cfg%kmin+1,this%cfg%nz)+this%cfg%kmin
          if (this%cfg%imin_.le.i.and.i.le.this%cfg%imax_.and.&
          &   this%cfg%jmin_.le.j.and.j.le.this%cfg%jmax_.and.&
-         &   this%cfg%kmin_.le.k.and.k.le.this%cfg%kmax_) this%factored_operator(i,j,k)=this%factored_operator(i,j,k)+real(ref_opr(n),C_DOUBLE)
+         &   this%cfg%kmin_.le.k.and.k.le.this%cfg%kmax_) this%factored_operator(i,j,k)=this%factored_operator(i,j,k)+real(ref_opr(n),WP)
       end do
       
       ! Take transform of operator
@@ -1147,7 +1145,7 @@ end subroutine fourier3d_inverse_transform
       if (this%oddball) this%factored_operator(this%cfg%imin_,this%cfg%jmin_,this%cfg%kmin_)=1.0_C_DOUBLE
       
       ! Make sure other wavenumbers are not close to zero
-      i=count(abs(this%factored_operator).lt.1000_WP*epsilon(1.0_C_DOUBLE))
+      i=count(abs(this%factored_operator).lt.1000_WP*epsilon(1.0_WP))
       call MPI_ALLREDUCE(i,j,1,MPI_INTEGER,MPI_SUM,this%cfg%comm,ierr)
       if (j.gt.0) then
          print*,j
@@ -1155,7 +1153,7 @@ end subroutine fourier3d_inverse_transform
       end if
       
       ! Divide now instead of later
-      this%factored_operator=1.0_C_DOUBLE/this%factored_operator
+      this%factored_operator=1.0_WP/this%factored_operator
       
       ! Check for division issues
       i=count(isnan(abs(this%factored_operator)))
