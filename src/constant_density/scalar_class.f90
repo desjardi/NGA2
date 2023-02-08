@@ -5,7 +5,7 @@ module scalar_class
    use precision,      only: WP
    use string,         only: str_medium
    use config_class,   only: config
-   use ils_class,      only: ils
+   use linsol_class,   only: linsol
    use iterator_class, only: iterator
    implicit none
    private
@@ -59,7 +59,7 @@ module scalar_class
       real(WP), dimension(:,:,:), allocatable :: SCold    !< SCold array
       
       ! Implicit scalar solver
-      type(ils) :: implicit                               !< Iterative linear solver object for an implicit prediction of the scalar residual
+      class(linsol), pointer :: implicit                  !< Iterative linear solver object for an implicit prediction of the scalar residual
       integer, dimension(:,:,:), allocatable :: stmap     !< Inverse map from stencil shift to index location
       
       ! Metrics
@@ -74,7 +74,7 @@ module scalar_class
       real(WP), dimension(:,:,:,:), allocatable :: itp_x ,itp_y ,itp_z   !< Second order interpolation for SC diffusivity
       
       ! Bquick requires additional storage
-	  real(WP), dimension(:,:,:,:), allocatable :: bitp_xp,bitp_yp,bitp_zp  !< Plus interpolation for SC  - backup
+	   real(WP), dimension(:,:,:,:), allocatable :: bitp_xp,bitp_yp,bitp_zp  !< Plus interpolation for SC  - backup
       real(WP), dimension(:,:,:,:), allocatable :: bitp_xm,bitp_ym,bitp_zm  !< Minus interpolation for SC - backup
 
       ! Masking info for metric modification
@@ -91,8 +91,8 @@ module scalar_class
       procedure :: apply_bcond                            !< Apply all boundary conditions
       procedure :: init_metrics                           !< Initialize metrics
       procedure :: adjust_metrics                         !< Adjust metrics
-	  procedure :: metric_reset                           !< Reset adaptive metrics like bquick
-	  procedure :: metric_adjust                          !< Adjust adaptive metrics like bquick
+      procedure :: metric_reset                           !< Reset adaptive metrics like bquick
+      procedure :: metric_adjust                          !< Adjust adaptive metrics like bquick
       procedure :: get_drhoSCdt                           !< Calculate drhoSC/dt
       procedure :: get_max                                !< Calculate maximum field values
       procedure :: get_int                                !< Calculate integral field values
@@ -136,13 +136,13 @@ contains
       ! Prepare advection scheme
       self%scheme=scheme
       select case (self%scheme)
-	  case (upwind)
-		 ! Check current overlap
-		 if (self%cfg%no.lt.1) call die('[scalar constructor] Scalar transport scheme requires larger overlap')
-		 ! Set interpolation stencil sizes
-		 self%nst=1
-		 self%stp1=-(self%nst+1)/2; self%stp2=self%nst+self%stp1-1
-		 self%stm1=-(self%nst-1)/2; self%stm2=self%nst+self%stm1-1
+      case (upwind)
+         ! Check current overlap
+		   if (self%cfg%no.lt.1) call die('[scalar constructor] Scalar transport scheme requires larger overlap')
+         ! Set interpolation stencil sizes
+		   self%nst=1
+         self%stp1=-(self%nst+1)/2; self%stp2=self%nst+self%stp1-1
+         self%stm1=-(self%nst-1)/2; self%stm2=self%nst+self%stm1-1
       case (quick)
          ! Check current overlap
          if (self%cfg%no.lt.2) call die('[scalar constructor] Scalar transport scheme requires larger overlap')
@@ -150,19 +150,16 @@ contains
          self%nst=3
          self%stp1=-(self%nst+1)/2; self%stp2=self%nst+self%stp1-1
          self%stm1=-(self%nst-1)/2; self%stm2=self%nst+self%stm1-1
-	  case (bquick)
-	     ! Check current overlap
-	     if (self%cfg%no.lt.2) call die('[scalar constructor] Scalar transport scheme requires larger overlap')
-	     ! Set interpolation stencil sizes
-	     self%nst=3
-	     self%stp1=-(self%nst+1)/2; self%stp2=self%nst+self%stp1-1
-	     self%stm1=-(self%nst-1)/2; self%stm2=self%nst+self%stm1-1
+      case (bquick)
+         ! Check current overlap
+	      if (self%cfg%no.lt.2) call die('[scalar constructor] Scalar transport scheme requires larger overlap')
+	      ! Set interpolation stencil sizes
+	      self%nst=3
+	      self%stp1=-(self%nst+1)/2; self%stp2=self%nst+self%stp1-1
+	      self%stm1=-(self%nst-1)/2; self%stm2=self%nst+self%stm1-1
       case default
          call die('[scalar constructor] Unknown scalar transport scheme selected')
       end select
-      
-      ! Create implicit scalar solver object
-      self%implicit=ils(cfg=self%cfg,name='Scalar',nst=1+6*abs(self%stp1))
       
       ! Prepare default metrics
       call self%init_metrics()
@@ -224,10 +221,10 @@ contains
       allocate(this%itp_zm(this%stm1:this%stm2,this%cfg%imin_:this%cfg%imax_+1,this%cfg%jmin_:this%cfg%jmax_+1,this%cfg%kmin_:this%cfg%kmax_+1)) !< Z-face-centered
       ! Create scalar interpolation coefficients to cell faces
       select case (this%scheme)
-	  case (upwind)
-		 this%itp_xp=1.0_WP; this%itp_xm=1.0_WP
-		 this%itp_yp=1.0_WP; this%itp_ym=1.0_WP
-		 this%itp_zp=1.0_WP; this%itp_zm=1.0_WP
+      case (upwind)
+         this%itp_xp=1.0_WP; this%itp_xm=1.0_WP
+         this%itp_yp=1.0_WP; this%itp_ym=1.0_WP
+         this%itp_zp=1.0_WP; this%itp_zm=1.0_WP
       case (quick,bquick)
          do k=this%cfg%kmin_,this%cfg%kmax_+1
             do j=this%cfg%jmin_,this%cfg%jmax_+1
@@ -382,42 +379,50 @@ contains
    
    
    !> Finish setting up the scalar solver now that bconds have been defined
-   subroutine setup(this,implicit_ils)
+   subroutine setup(this,implicit_solver)
       implicit none
       class(scalar), intent(inout) :: this
-      integer, intent(in) :: implicit_ils
+      class(linsol), target, intent(in), optional :: implicit_solver
       integer :: count,st
       
       ! Adjust metrics based on mask array
       call this%adjust_metrics()
       
       ! Bquick needs to remember the quick coefficients
-	  select case (this%scheme)
+	   select case (this%scheme)
       case (bquick)
-		 allocate(this%bitp_xp(this%stp1:this%stp2,this%cfg%imin_:this%cfg%imax_+1,this%cfg%jmin_:this%cfg%jmax_+1,this%cfg%kmin_:this%cfg%kmax_+1)); this%bitp_xp=this%itp_xp
-		 allocate(this%bitp_xm(this%stm1:this%stm2,this%cfg%imin_:this%cfg%imax_+1,this%cfg%jmin_:this%cfg%jmax_+1,this%cfg%kmin_:this%cfg%kmax_+1)); this%bitp_xm=this%itp_xm
-		 allocate(this%bitp_yp(this%stp1:this%stp2,this%cfg%imin_:this%cfg%imax_+1,this%cfg%jmin_:this%cfg%jmax_+1,this%cfg%kmin_:this%cfg%kmax_+1)); this%bitp_yp=this%itp_yp
-		 allocate(this%bitp_ym(this%stm1:this%stm2,this%cfg%imin_:this%cfg%imax_+1,this%cfg%jmin_:this%cfg%jmax_+1,this%cfg%kmin_:this%cfg%kmax_+1)); this%bitp_ym=this%itp_ym
-		 allocate(this%bitp_zp(this%stp1:this%stp2,this%cfg%imin_:this%cfg%imax_+1,this%cfg%jmin_:this%cfg%jmax_+1,this%cfg%kmin_:this%cfg%kmax_+1)); this%bitp_zp=this%itp_zp
-		 allocate(this%bitp_zm(this%stm1:this%stm2,this%cfg%imin_:this%cfg%imax_+1,this%cfg%jmin_:this%cfg%jmax_+1,this%cfg%kmin_:this%cfg%kmax_+1)); this%bitp_zm=this%itp_zm
+         allocate(this%bitp_xp(this%stp1:this%stp2,this%cfg%imin_:this%cfg%imax_+1,this%cfg%jmin_:this%cfg%jmax_+1,this%cfg%kmin_:this%cfg%kmax_+1)); this%bitp_xp=this%itp_xp
+         allocate(this%bitp_xm(this%stm1:this%stm2,this%cfg%imin_:this%cfg%imax_+1,this%cfg%jmin_:this%cfg%jmax_+1,this%cfg%kmin_:this%cfg%kmax_+1)); this%bitp_xm=this%itp_xm
+         allocate(this%bitp_yp(this%stp1:this%stp2,this%cfg%imin_:this%cfg%imax_+1,this%cfg%jmin_:this%cfg%jmax_+1,this%cfg%kmin_:this%cfg%kmax_+1)); this%bitp_yp=this%itp_yp
+         allocate(this%bitp_ym(this%stm1:this%stm2,this%cfg%imin_:this%cfg%imax_+1,this%cfg%jmin_:this%cfg%jmax_+1,this%cfg%kmin_:this%cfg%kmax_+1)); this%bitp_ym=this%itp_ym
+         allocate(this%bitp_zp(this%stp1:this%stp2,this%cfg%imin_:this%cfg%imax_+1,this%cfg%jmin_:this%cfg%jmax_+1,this%cfg%kmin_:this%cfg%kmax_+1)); this%bitp_zp=this%itp_zp
+         allocate(this%bitp_zm(this%stm1:this%stm2,this%cfg%imin_:this%cfg%imax_+1,this%cfg%jmin_:this%cfg%jmax_+1,this%cfg%kmin_:this%cfg%kmax_+1)); this%bitp_zm=this%itp_zm
       end select
-
-      ! Set dynamic stencil map for the scalar solver
-      count=1; this%implicit%stc(count,:)=[0,0,0]
-      do st=1,abs(this%stp1)
-         count=count+1; this%implicit%stc(count,:)=[+st,0,0]
-         count=count+1; this%implicit%stc(count,:)=[-st,0,0]
-         count=count+1; this%implicit%stc(count,:)=[0,+st,0]
-         count=count+1; this%implicit%stc(count,:)=[0,-st,0]
-         count=count+1; this%implicit%stc(count,:)=[0,0,+st]
-         count=count+1; this%implicit%stc(count,:)=[0,0,-st]
-      end do
       
-      ! Set the diagonal to 1 to make sure all cells participate in solver
-      this%implicit%opr(1,:,:,:)=1.0_WP
-      
-      ! Initialize the implicit scalar solver
-      call this%implicit%init(implicit_ils)
+      ! Prepare implicit solver if it had been provided
+      if (present(implicit_solver)) then
+         
+         ! Point to implicit solver linsol object
+         this%implicit=>implicit_solver
+         
+         ! Set dynamic stencil map for the scalar solver
+         count=1; this%implicit%stc(count,:)=[0,0,0]
+         do st=1,abs(this%stp1)
+            count=count+1; this%implicit%stc(count,:)=[+st,0,0]
+            count=count+1; this%implicit%stc(count,:)=[-st,0,0]
+            count=count+1; this%implicit%stc(count,:)=[0,+st,0]
+            count=count+1; this%implicit%stc(count,:)=[0,-st,0]
+            count=count+1; this%implicit%stc(count,:)=[0,0,+st]
+            count=count+1; this%implicit%stc(count,:)=[0,0,-st]
+         end do
+         
+         ! Set the diagonal to 1 to make sure all cells participate in solver
+         this%implicit%opr(1,:,:,:)=1.0_WP
+         
+         ! Initialize the implicit velocity solver
+         call this%implicit%init()
+         
+      end if
       
    end subroutine setup
    
@@ -705,53 +710,53 @@ contains
 	     this%itp_zm=this%bitp_zm
 	  end select
    end subroutine metric_reset
-
-
+   
+   
    !> Adjust adaptive metrics like bquick
    subroutine metric_adjust(this,SC,SCmin,SCmax)
-	  implicit none
-	  class(scalar), intent(inout) :: this
+      implicit none
+      class(scalar), intent(inout) :: this
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in) :: SC !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
-	  real(WP), optional :: SCmin
-	  real(WP), optional :: SCmax
-	  integer :: i,j,k
-	  select case (this%scheme)
-	  case (bquick)
-	     if (present(SCmin)) then
-		    do k=this%cfg%kmin_,this%cfg%kmax_+1
-		       do j=this%cfg%jmin_,this%cfg%jmax_+1
-			      do i=this%cfg%imin_,this%cfg%imax_+1
-			         if (SC(i,j,k).lt.SCmin) then
-					    !this%itp_xp(i:i+1,j,k)=[0.0_WP,1.0_WP,0.0_WP]
+      real(WP), optional :: SCmin
+      real(WP), optional :: SCmax
+      integer :: i,j,k
+      select case (this%scheme)
+      case (bquick)
+         if (present(SCmin)) then
+            do k=this%cfg%kmin_,this%cfg%kmax_+1
+               do j=this%cfg%jmin_,this%cfg%jmax_+1
+                  do i=this%cfg%imin_,this%cfg%imax_+1
+                     if (SC(i,j,k).lt.SCmin) then
+                        !this%itp_xp(i:i+1,j,k)=[0.0_WP,1.0_WP,0.0_WP]
                         !this%itp_xm(i:i+1,j,k)=[0.0_WP,1.0_WP,0.0_WP]
                         !this%itp_yp(i,j:j+1,k)=[0.0_WP,1.0_WP,0.0_WP]
                         !this%itp_ym(i,j:j+1,k)=[0.0_WP,1.0_WP,0.0_WP]
                         !this%itp_zp(i,j,k:k+1)=[0.0_WP,1.0_WP,0.0_WP]
                         !this%itp_zm(i,j,k:k+1)=[0.0_WP,1.0_WP,0.0_WP]
-					 end if
-			      end do
-			   end do
-		    end do
-	     end if
+					      end if
+                  end do
+               end do
+            end do
+         end if
          if (present(SCmax)) then
-	        do k=this%cfg%kmin_,this%cfg%kmax_+1
-		       do j=this%cfg%jmin_,this%cfg%jmax_+1
-			      do i=this%cfg%imin_,this%cfg%imax_+1
-				     if (SC(i,j,k).gt.SCmax) then
-				        !this%itp_xp(i:i+1,j,k)=[0.0_WP,1.0_WP,0.0_WP]
-					    !this%itp_xm(i:i+1,j,k)=[0.0_WP,1.0_WP,0.0_WP]
-					    !this%itp_yp(i,j:j+1,k)=[0.0_WP,1.0_WP,0.0_WP]
-					    !this%itp_ym(i,j:j+1,k)=[0.0_WP,1.0_WP,0.0_WP]
-					    !this%itp_zp(i,j,k:k+1)=[0.0_WP,1.0_WP,0.0_WP]
-					    !this%itp_zm(i,j,k:k+1)=[0.0_WP,1.0_WP,0.0_WP]
-				     end if
-			      end do
-		       end do
-		    end do
-	     end if
-	  end select
+            do k=this%cfg%kmin_,this%cfg%kmax_+1
+               do j=this%cfg%jmin_,this%cfg%jmax_+1
+                  do i=this%cfg%imin_,this%cfg%imax_+1
+                     if (SC(i,j,k).gt.SCmax) then
+                        !this%itp_xp(i:i+1,j,k)=[0.0_WP,1.0_WP,0.0_WP]
+					         !this%itp_xm(i:i+1,j,k)=[0.0_WP,1.0_WP,0.0_WP]
+					         !this%itp_yp(i,j:j+1,k)=[0.0_WP,1.0_WP,0.0_WP]
+					         !this%itp_ym(i,j:j+1,k)=[0.0_WP,1.0_WP,0.0_WP]
+					         !this%itp_zp(i,j,k:k+1)=[0.0_WP,1.0_WP,0.0_WP]
+					         !this%itp_zm(i,j,k:k+1)=[0.0_WP,1.0_WP,0.0_WP]
+				         end if
+                  end do
+               end do
+            end do
+         end if
+      end select
    end subroutine metric_adjust
-
+   
    
    !> Print out info for scalar solver
    subroutine scalar_print(this)

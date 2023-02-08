@@ -5,7 +5,7 @@ module vdscalar_class
    use precision,      only: WP
    use string,         only: str_medium
    use config_class,   only: config
-   use ils_class,      only: ils
+   use linsol_class,   only: linsol
    use iterator_class, only: iterator
    implicit none
    private
@@ -60,7 +60,7 @@ module vdscalar_class
       real(WP), dimension(:,:,:), allocatable :: rhoSCold   !< rhoSCold array
       
       ! Implicit scalar solver
-      type(ils) :: implicit                                 !< Iterative linear solver object for an implicit prediction of the scalar residual
+      class(linsol), pointer :: implicit                    !< Iterative linear solver object for an implicit prediction of the scalar residual
       integer, dimension(:,:,:), allocatable :: stmap       !< Inverse map from stencil shift to index location
       
       ! Metrics
@@ -150,9 +150,6 @@ contains
       case default
          call die('[scalar constructor] Unknown vdscalar transport scheme selected')
       end select
-      
-      ! Create implicit scalar solver object
-      self%implicit=ils(cfg=self%cfg,name='Scalar',nst=1+6*abs(self%stp1))
       
       ! Prepare default metrics
       call self%init_metrics()
@@ -368,31 +365,39 @@ contains
    
    
    !> Finish setting up the variable density scalar solver now that bconds have been defined
-   subroutine setup(this,implicit_ils)
+   subroutine setup(this,implicit_solver)
       implicit none
       class(vdscalar), intent(inout) :: this
-      integer, intent(in) :: implicit_ils
+      class(linsol), target, intent(in), optional :: implicit_solver
       integer :: count,st
       
       ! Adjust metrics based on mask array
       call this%adjust_metrics()
       
-      ! Set dynamic stencil map for the scalar solver
-      count=1; this%implicit%stc(count,:)=[0,0,0]
-      do st=1,abs(this%stp1)
-         count=count+1; this%implicit%stc(count,:)=[+st,0,0]
-         count=count+1; this%implicit%stc(count,:)=[-st,0,0]
-         count=count+1; this%implicit%stc(count,:)=[0,+st,0]
-         count=count+1; this%implicit%stc(count,:)=[0,-st,0]
-         count=count+1; this%implicit%stc(count,:)=[0,0,+st]
-         count=count+1; this%implicit%stc(count,:)=[0,0,-st]
-      end do
-      
-      ! Set the diagonal to 1 to make sure all cells participate in solver
-      this%implicit%opr(1,:,:,:)=1.0_WP
-      
-      ! Initialize the implicit scalar solver
-      call this%implicit%init(implicit_ils)
+      ! Prepare implicit solver if it had been provided
+      if (present(implicit_solver)) then
+         
+         ! Point to implicit solver linsol object
+         this%implicit=>implicit_solver
+         
+         ! Set dynamic stencil map for the scalar solver
+         count=1; this%implicit%stc(count,:)=[0,0,0]
+         do st=1,abs(this%stp1)
+            count=count+1; this%implicit%stc(count,:)=[+st,0,0]
+            count=count+1; this%implicit%stc(count,:)=[-st,0,0]
+            count=count+1; this%implicit%stc(count,:)=[0,+st,0]
+            count=count+1; this%implicit%stc(count,:)=[0,-st,0]
+            count=count+1; this%implicit%stc(count,:)=[0,0,+st]
+            count=count+1; this%implicit%stc(count,:)=[0,0,-st]
+         end do
+         
+         ! Set the diagonal to 1 to make sure all cells participate in solver
+         this%implicit%opr(1,:,:,:)=1.0_WP
+         
+         ! Initialize the implicit velocity solver
+         call this%implicit%init()
+         
+      end if
       
    end subroutine setup
    
