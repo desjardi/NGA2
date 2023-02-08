@@ -145,7 +145,7 @@ contains
     ! Create a monitor file
     create_monitor: block
       ! Prepare some info about fields
-      call lp%get_cfl(time%dt,time%cfl)
+      call lp%get_cfl(time%dt,cflc=time%cfl,cfl=time%cfl)
       call lp%get_max()
       ! Create simulation monitor
       mfile=monitor(amroot=lp%cfg%amRoot,name='simulation')
@@ -188,12 +188,12 @@ contains
     do while (.not.time%done())
 
        ! Increment time
-       call lp%get_cfl(time%dt,time%cfl)
+       call lp%get_cfl(time%dt,cflc=time%cfl,cfl=time%cfl)
        call time%adjust_dt()
        call time%increment()
 
        ! Inject particles
-       call lp%inject(dt=time%dt)
+       call lp%inject(dt=time%dt,avoid_overlap=.true.)
 
        ! Collide particles
        call lp%collide(dt=time%dt)

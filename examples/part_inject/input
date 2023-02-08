@@ -1,5 +1,5 @@
 # Parallelization
-Partition :	1 2 2
+Partition :	2 2 2
 
 # Mesh definition
 Lx : 0.007

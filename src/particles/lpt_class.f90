@@ -79,10 +79,8 @@ module lpt_class
      ! Solver parameters
      real(WP) :: nstep=1                                 !< Number of substeps (default=1)
      character(len=str_medium), public :: drag_model     !< Drag model
-     logical :: use_lift=.false.                         !< Compute lift force on particles
-
+     
      ! Collisional parameters
-     logical :: use_col=.true.                           !< Flag for collisions
      real(WP) :: tau_col                                 !< Characteristic collision time scale
      real(WP) :: e_n                                     !< Normal restitution coefficient
      real(WP) :: e_w                                     !< Wall restitution coefficient
@@ -378,10 +376,7 @@ contains
         this%p(i)%Tcol=0.0_WP
      end do
    end block zero_force
-
-   ! Return if not used
-   if (.not.this%use_col) return
-
+   
    ! Then share particles across overlap
    call this%share()
 
@@ -701,7 +696,6 @@ contains
           Ip = 0.1_WP*myp%d**2
           ! Advance with Euler prediction
           call this%get_rhs(U=U,V=V,W=W,rho=rho,visc=visc,stress_x=sx,stress_y=sy,stress_z=sz,p=myp,acc=acc,torque=torque,opt_dt=myp%dt)
-          !if (this%use_lift.and.present(vortx).and.present(vorty).and.present(vortz)) call this%get_lift(vortx,vorty,vortz,acc=acc)
           myp%pos=pold%pos+0.5_WP*mydt*myp%vel
           myp%vel=pold%vel+0.5_WP*mydt*(acc+this%gravity+myp%Acol)
           myp%angVel=pold%angVel+0.5_WP*mydt*(torque+myp%Tcol)/Ip
@@ -813,8 +807,6 @@ contains
       fVF=1.0_WP-pVF
       ! Interpolate the fluid temperature to the particle location if present
       if (present(T)) fT=this%cfg%get_scalar(pos=p%pos,i0=p%ind(1),j0=p%ind(2),k0=p%ind(3),S=T,bc='n')
-      ! Interpolate the fluid vorticity to the particle location if needed
-      !if (this%use_lift) fvort=this%cfg%get_velocity(pos=p%pos,i0=p%ind(1),j0=p%ind(2),k0=p%ind(3),U=U,V=V,W=W)
     end block interpolate
 
     ! Compute acceleration due to drag
@@ -848,18 +840,18 @@ contains
     end block compute_drag
 
     ! Compute acceleration due to Saffman lift
-    compute_lift: block
-      use mathtools, only: Pi,cross_product
-      real(WP) :: omegag,Cl,Reg
-      if (this%use_lift) then
-         omegag=sqrt(sum(fvort**2))
-         if (omegag.gt.0.0_WP) then
-            Reg = p%d**2*omegag*frho/fvisc
-            Cl = 9.69_WP/Pi/p%d**2/this%rho*fvisc/omegag*sqrt(Reg)
-            acc=acc+Cl*cross_product(fvel-p%vel,fvort)
-         end if
-      end if
-    end block compute_lift
+    !compute_lift: block
+   !   use mathtools, only: Pi,cross_product
+   !   real(WP) :: omegag,Cl,Reg
+   !   if (this%use_lift) then
+   !      omegag=sqrt(sum(fvort**2))
+   !      if (omegag.gt.0.0_WP) then
+   !         Reg = p%d**2*omegag*frho/fvisc
+   !         Cl = 9.69_WP/Pi/p%d**2/this%rho*fvisc/omegag*sqrt(Reg)
+   !         acc=acc+Cl*cross_product(fvel-p%vel,fvort)
+   !      end if
+   !   end if
+    !end block compute_lift
 
     ! Compute fluid torque (assumed Stokes drag)
     compute_torque: block
@@ -1001,22 +993,23 @@ contains
 
   !> Inject particles from a prescribed location with given mass flowrate
   !> Requires injection parameters to be set beforehand
-  subroutine inject(this,dt)
+  subroutine inject(this,dt,avoid_overlap)
     use mpi_f08
     use parallel, only: MPI_REAL_WP
     use mathtools, only: Pi
     implicit none
     class(lpt), intent(inout) :: this
-    real(WP), intent(inout) :: dt              !< Timestep size over which to advance
-    real(WP) :: inj_min(3),inj_max(3)          !< Min/max extents of injection
-    real(WP) :: Mgoal,Madded,Mtmp,buf          !< Mass flow rate parameters
-    real(WP), save :: previous_error=0.0_WP    !< Store mass left over from previous timestep
-    integer(kind=8) :: maxid_,maxid            !< Keep track of maximum particle id
+    real(WP), intent(inout) :: dt                  !< Timestep size over which to advance
+    logical, intent(in), optional :: avoid_overlap !< Option to avoid overlap during injection
+    real(WP) :: inj_min(3),inj_max(3)              !< Min/max extents of injection
+    real(WP) :: Mgoal,Madded,Mtmp,buf              !< Mass flow rate parameters
+    real(WP), save :: previous_error=0.0_WP        !< Store mass left over from previous timestep
+    integer(kind=8) :: maxid_,maxid                !< Keep track of maximum particle id
     integer :: i,j,np0_,np2,np_tmp,count,ierr
     integer, dimension(:), allocatable :: nrecv
     type(part), dimension(:), allocatable :: p2
     type(MPI_Status) :: status
-    logical :: overlap
+    logical :: avoid_overlap_,overlap
     
     ! Initial number of particles
     np0_=this%np_
@@ -1034,7 +1027,9 @@ contains
     call MPI_ALLREDUCE(maxid_,maxid,1,MPI_INTEGER8,MPI_MAX,this%cfg%comm,ierr)
 
     ! Communicate nearby particles to check for overlap
-    if (this%use_col) then
+    avoid_overlap_=.false.
+    if (present(avoid_overlap)) avoid_overlap_=avoid_overlap
+    if (avoid_overlap_) then
        allocate(nrecv(this%cfg%nproc))
        count=0
        inj_min(1)=this%cfg%x(this%cfg%imino)
@@ -1103,7 +1098,7 @@ contains
              this%p(count)%pos=get_position()
              overlap=.false.
              ! Check overlap with particles recently injected
-             if (this%use_col) then
+             if (avoid_overlap_) then
                 do j=1,np_tmp-1
                    if (norm2(this%p(count)%pos-this%p(j)%pos).lt.0.5_WP*(this%p(count)%d+this%p(j)%d)) overlap=.true.
                 end do
@@ -1206,13 +1201,14 @@ contains
   
   
   !> Calculate the CFL
-  subroutine get_cfl(this,dt,cfl)
+  subroutine get_cfl(this,dt,cflc,cfl)
     use mpi_f08,  only: MPI_ALLREDUCE,MPI_MAX
     use parallel, only: MPI_REAL_WP
     implicit none
     class(lpt), intent(inout) :: this
     real(WP), intent(in)  :: dt
-    real(WP), intent(out) :: cfl
+    real(WP), intent(out) :: cflc
+    real(WP), optional :: cfl
     integer :: i,ierr
     real(WP) :: my_CFLp_x,my_CFLp_y,my_CFLp_z,my_CFL_col
 
@@ -1232,15 +1228,15 @@ contains
     call MPI_ALLREDUCE(my_CFLp_z,this%CFLp_z,1,MPI_REAL_WP,MPI_MAX,this%cfg%comm,ierr)
 
     ! Return the maximum convective CFL
-    cfl=max(this%CFLp_x,this%CFLp_y,this%CFLp_z)
-    if (this%use_col) then
-       my_CFL_col=10.0_WP*my_CFL_col*dt
-       call MPI_ALLREDUCE(my_CFL_col,this%CFL_col,1,MPI_REAL_WP,MPI_MAX,this%cfg%comm,ierr)
-       cfl = max(cfl,this%CFL_col)
-    else
-       this%CFL_col=0.0_WP
-    end if
+    cflc=max(this%CFLp_x,this%CFLp_y,this%CFLp_z)
 
+    ! Compute collision CFL
+    my_CFL_col=10.0_WP*my_CFL_col*dt
+    call MPI_ALLREDUCE(my_CFL_col,this%CFL_col,1,MPI_REAL_WP,MPI_MAX,this%cfg%comm,ierr)
+
+    ! If asked for, also return the maximum overall CFL
+    if (present(CFL)) cfl=max(cflc,this%CFL_col)
+    
   end subroutine get_cfl
 
 

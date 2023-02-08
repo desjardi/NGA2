@@ -3,6 +3,8 @@ module simulation
   use precision,         only: WP
   use geometry,          only: cfg
   use lpt_class,         only: lpt
+  use hypre_uns_class,   only: hypre_uns
+  use hypre_str_class,   only: hypre_str
   use lowmach_class,     only: lowmach
   use timetracker_class, only: timetracker
   use ensight_class,     only: ensight
@@ -12,7 +14,9 @@ module simulation
   implicit none
   private
   
-  !> Get an LPT solver, a lowmach solver, and corresponding time tracker
+  !> Get an LPT solver, a lowmach solver, and corresponding time tracker, plus a couple of linear solvers
+  type(hypre_uns),   public :: ps
+  type(hypre_str),   public :: vs
   type(lowmach),     public :: fs
   type(lpt),         public :: lp
   type(timetracker), public :: time
@@ -96,14 +100,14 @@ contains
 
     ! Create a low Mach flow solver with bconds
     create_flow_solver: block
-      use ils_class,     only: pcg_pfmg,gmres_amg
-      use lowmach_class, only: dirichlet,clipped_neumann
+      use hypre_uns_class, only: gmres_amg  
+      use hypre_str_class, only: pcg_pfmg
+      use lowmach_class,   only: dirichlet,clipped_neumann
       ! Create flow solver
       fs=lowmach(cfg=cfg,name='Variable density low Mach NS')
       ! Define boundary conditions
       call fs%add_bcond(name= 'inflow',type=dirichlet      ,locator=left_of_domain ,face='x',dir=-1,canCorrect=.false.)
       call fs%add_bcond(name='outflow',type=clipped_neumann,locator=right_of_domain,face='x',dir=+1,canCorrect=.true. )
-
       ! Assign constant density
       call param_read('Density',rho); fs%rho=rho
       ! Assign constant viscosity
@@ -111,13 +115,15 @@ contains
       ! Assign acceleration of gravity
       call param_read('Gravity',fs%gravity)
       ! Configure pressure solver
-      call param_read('Pressure iteration',fs%psolv%maxit)
-      call param_read('Pressure tolerance',fs%psolv%rcvg)
+      ps=hypre_uns(cfg=cfg,name='Pressure',method=gmres_amg,nst=7)
+      call param_read('Pressure iteration',ps%maxit)
+      call param_read('Pressure tolerance',ps%rcvg)
       ! Configure implicit velocity solver
-      call param_read('Implicit iteration',fs%implicit%maxit)
-      call param_read('Implicit tolerance',fs%implicit%rcvg)
+      vs=hypre_str(cfg=cfg,name='Velocity',method=pcg_pfmg,nst=7)
+      call param_read('Implicit iteration',vs%maxit)
+      call param_read('Implicit tolerance',vs%rcvg)
       ! Setup the solver
-      call fs%setup(pressure_ils=gmres_amg,implicit_ils=pcg_pfmg)
+      call fs%setup(pressure_solver=ps,implicit_solver=vs)
     end block create_flow_solver
 
 
@@ -286,8 +292,9 @@ contains
     ! Create monitor filea
     create_monitor: block
       ! Prepare some info about fields
-      call fs%get_cfl(time%dt,time%cfl)
-      call lp%get_cfl(time%dt,time%cfl)
+      real(WP) :: cfl
+      call lp%get_cfl(time%dt,cflc=time%cfl,cfl=time%cfl)
+      call fs%get_cfl(time%dt,cfl); time%cfl=max(time%cfl,cfl)
       call fs%get_max()
       call lp%get_max()
       ! Create simulation monitor
@@ -356,6 +363,7 @@ contains
     use mathtools, only: twoPi
     use parallel, only: parallel_time
     implicit none
+    real(WP) :: cfl
 
     ! Perform time integration
     do while (.not.time%done())
@@ -364,8 +372,8 @@ contains
        wt_total%time_in=parallel_time()
 
        ! Increment time
-       call fs%get_cfl(time%dt,time%cfl)
-       call lp%get_cfl(time%dt,time%cfl)
+       call lp%get_cfl(time%dt,cflc=time%cfl,cfl=time%cfl)
+       call fs%get_cfl(time%dt,cfl); time%cfl=max(time%cfl,cfl)
        call time%adjust_dt()
        call time%increment()
 

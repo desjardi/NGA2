@@ -2092,7 +2092,7 @@ contains
       cflc=max(this%CFLc_x,this%CFLc_y,this%CFLc_z,this%CFLst)
       
       ! If asked for, also return the maximum overall CFL
-      if (present(CFL)) cfl =max(this%CFLc_x,this%CFLc_y,this%CFLc_z,this%CFLv_x,this%CFLv_y,this%CFLv_z,this%CFLst)
+      if (present(CFL)) cfl=max(this%CFLc_x,this%CFLc_y,this%CFLc_z,this%CFLv_x,this%CFLv_y,this%CFLv_z,this%CFLst)
       
    end subroutine get_cfl
    
