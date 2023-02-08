@@ -998,9 +998,9 @@ contains
          ! Forward transform - X
          do k=this%kmin_x(this%cfg%iproc),this%kmax_x(this%cfg%iproc)
             do j=this%jmin_x(this%cfg%iproc),this%jmax_x(this%cfg%iproc)
-               this%in_x =this%xtrans(:,j,k)
-               call dfftw_execute(this%fplan_x,this%in_x,this%out_x)
-               this%xtrans(:,j,k) = this%out_x
+               this%in_x=this%xtrans(:,j,k)
+               call fftw_execute_r2r(this%fplan_x,this%in_x,this%out_x)
+               this%xtrans(:,j,k)=this%out_x
             end do
          end do
          ! Transpose back
@@ -1013,9 +1013,9 @@ contains
          ! Forward transform - Y
          do k=this%kmin_y(this%cfg%jproc),this%kmax_y(this%cfg%jproc)
             do i=this%imin_y(this%cfg%jproc),this%imax_y(this%cfg%jproc)
-               this%in_y = this%ytrans(i,:,k)
-               call dfftw_execute(this%fplan_y,this%in_y,this%out_y)
-               this%ytrans(i,:,k) = this%out_y
+               this%in_y=this%ytrans(i,:,k)
+               call fftw_execute_r2r(this%fplan_y,this%in_y,this%out_y)
+               this%ytrans(i,:,k)=this%out_y
             end do
          end do
          ! Transpose back
@@ -1028,9 +1028,9 @@ contains
          ! Forward transform - Z
          do j=this%jmin_z(this%cfg%kproc),this%jmax_z(this%cfg%kproc)
             do i=this%imin_z(this%cfg%kproc),this%imax_z(this%cfg%kproc)
-               this%in_z = this%ztrans(i,j,:)
-               call dfftw_execute(this%fplan_z,this%in_z,this%out_z)
-               this%ztrans(i,j,:) = this%out_z
+               this%in_z=this%ztrans(i,j,:)
+               call fftw_execute_r2r(this%fplan_z,this%in_z,this%out_z)
+               this%ztrans(i,j,:)=this%out_z
             end do
          end do
          ! Transpose back
@@ -1038,7 +1038,7 @@ contains
       end if
       
       ! Oddball
-      if (this%oddball) A(this%cfg%imin_,this%cfg%jmin_,this%cfg%kmin_) = 0.0_WP
+      if (this%oddball) A(this%cfg%imin_,this%cfg%jmin_,this%cfg%kmin_)=0.0_WP
       
    end subroutine fourier3d_fourier_transform
    
@@ -1057,9 +1057,9 @@ contains
          ! Inverse transform
          do k=this%kmin_x(this%cfg%iproc),this%kmax_x(this%cfg%iproc)
             do j=this%jmin_x(this%cfg%iproc),this%jmax_x(this%cfg%iproc)
-               this%in_x = this%xtrans(:,j,k)
-               call dfftw_execute(this%bplan_x,this%in_x,this%out_x)
-               this%xtrans(:,j,k) = this%out_x/this%cfg%nx
+               this%in_x=this%xtrans(:,j,k)
+               call fftw_execute_r2r(this%bplan_x,this%in_x,this%out_x)
+               this%xtrans(:,j,k)=this%out_x/this%cfg%nx
             end do
          end do
          ! Transpose back
@@ -1072,9 +1072,9 @@ contains
          ! Inverse transform
          do k=this%kmin_y(this%cfg%jproc),this%kmax_y(this%cfg%jproc)
             do i=this%imin_y(this%cfg%jproc),this%imax_y(this%cfg%jproc)
-               this%in_y = this%ytrans(i,:,k)
-               call dfftw_execute(this%bplan_y,this%in_y,this%out_y)
-               this%ytrans(i,:,k) = this%out_y/this%cfg%ny
+               this%in_y=this%ytrans(i,:,k)
+               call fftw_execute_r2r(this%bplan_y,this%in_y,this%out_y)
+               this%ytrans(i,:,k)=this%out_y/this%cfg%ny
             end do
          end do
          ! Transpose back
@@ -1087,9 +1087,9 @@ contains
          ! Inverse transform
          do j=this%jmin_z(this%cfg%kproc),this%jmax_z(this%cfg%kproc)
             do i=this%imin_z(this%cfg%kproc),this%imax_z(this%cfg%kproc)
-               this%in_z = this%ztrans(i,j,:)
-               call dfftw_execute(this%bplan_z,this%in_z,this%out_z)
-               this%ztrans(i,j,:) = this%out_z/this%cfg%nz
+               this%in_z=this%ztrans(i,j,:)
+               call fftw_execute_r2r(this%bplan_z,this%in_z,this%out_z)
+               this%ztrans(i,j,:)=this%out_z/this%cfg%nz
             end do
          end do
          ! Transpose back
@@ -1149,7 +1149,10 @@ end subroutine fourier3d_inverse_transform
       ! Make sure other wavenumbers are not close to zero
       i=count(abs(this%factored_operator).lt.1000_WP*epsilon(1.0_C_DOUBLE))
       call MPI_ALLREDUCE(i,j,1,MPI_INTEGER,MPI_SUM,this%cfg%comm,ierr)
-      if (j.gt.0) call die('[fourier3d setup] elements of transformed operator near zero')
+      if (j.gt.0) then
+         print*,j
+         call die('[fourier3d setup] elements of transformed operator near zero')
+      end if
       
       ! Divide now instead of later
       this%factored_operator=1.0_C_DOUBLE/this%factored_operator
