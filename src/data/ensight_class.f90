@@ -432,7 +432,7 @@ contains
       
       ! Write all the variable information
       write(iunit,'(a)') 'VARIABLE'
-      write(iunit,'(a)') 'scalar per element: wall geometry.wall'
+      write(iunit,'(a)') 'scalar per element: fvf geometry.fvf'
       my_scl=>this%first_scl
       do while (associated(my_scl))
          write(iunit,'(a)') 'scalar per element: 1 '//trim(my_scl%name)//' '//trim(my_scl%name)//'/'//trim(my_scl%name)//'.******'
@@ -517,13 +517,13 @@ contains
          
       end if
       
-      ! Root process starts writing the file header for wall data
+      ! Root process starts writing the file header for VF data
       if (cfg%amRoot) then
          ! Open the file
-         open(newunit=iunit,file='ensight/'//trim(this%name)//'/'//trim(name)//'.wall',form='unformatted',status='replace',access='stream',iostat=ierr)
-         if (ierr.ne.0) call die('[ensight write data] Could not open file: '//'ensight/'//trim(this%name)//'/'//trim(name)//'.wall')
+         open(newunit=iunit,file='ensight/'//trim(this%name)//'/'//trim(name)//'.fvf',form='unformatted',status='replace',access='stream',iostat=ierr)
+         if (ierr.ne.0) call die('[ensight write data] Could not open file: '//'ensight/'//trim(this%name)//'/'//trim(name)//'.fvf')
          ! Write the header
-         cbuff='wall'           ; write(iunit) cbuff
+         cbuff='fvf'            ; write(iunit) cbuff
          cbuff='part'           ; write(iunit) cbuff
          ibuff=1                ; write(iunit) ibuff
          cbuff='block'          ; write(iunit) cbuff
@@ -534,9 +534,9 @@ contains
       ! Prepare the SP buffer
       allocate(spbuff(cfg%imin_:cfg%imax_,cfg%jmin_:cfg%jmax_,cfg%kmin_:cfg%kmax_))
       
-      ! Now parallel-write the wall data
-      call MPI_FILE_OPEN(cfg%comm,'ensight/'//trim(this%name)//'/'//trim(name)//'.wall',IOR(MPI_MODE_WRONLY,MPI_MODE_APPEND),info_mpiio,ifile,ierr)
-      if (ierr.ne.0) call die('[ensight write geom] Problem encountered while parallel writing wall data file: '//'ensight/'//trim(this%name)//'/'//trim(name)//'.wall')
+      ! Now parallel-write the VF data
+      call MPI_FILE_OPEN(cfg%comm,'ensight/'//trim(this%name)//'/'//trim(name)//'.fvf',IOR(MPI_MODE_WRONLY,MPI_MODE_APPEND),info_mpiio,ifile,ierr)
+      if (ierr.ne.0) call die('[ensight write geom] Problem encountered while parallel writing fvf data file: '//'ensight/'//trim(this%name)//'/'//trim(name)//'.fvf')
       call MPI_FILE_GET_POSITION(ifile,disp,ierr)
       call MPI_FILE_SET_VIEW(ifile,disp,MPI_REAL_SP,cfg%SPview,'native',info_mpiio,ierr)
       spbuff(cfg%imin_:cfg%imax_,cfg%jmin_:cfg%jmax_,cfg%kmin_:cfg%kmax_)=real(cfg%VF(cfg%imin_:cfg%imax_,cfg%jmin_:cfg%jmax_,cfg%kmin_:cfg%kmax_),SP)

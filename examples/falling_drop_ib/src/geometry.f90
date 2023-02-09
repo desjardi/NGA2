@@ -1,12 +1,12 @@
 !> Various definitions and tools for initializing NGA2 config
 module geometry
-   use config_class, only: config
-   use precision,    only: WP
+   use ibconfig_class, only: ibconfig
+   use precision,      only: WP
    implicit none
    private
    
    !> Single config
-   type(config), public :: cfg
+   type(ibconfig), public :: cfg
    
    public :: geometry_init
    
@@ -57,30 +57,27 @@ contains
          ! Read in partition
          call param_read('Partition',partition,short='p')
          ! Create partitioned grid
-         cfg=config(grp=group,decomp=partition,grid=grid)
+         cfg=ibconfig(grp=group,decomp=partition,grid=grid)
       end block create_cfg
       
       
-      ! Create masks for this config
+      ! Create IB walls for this config
       create_walls: block
+         use mathtools,      only: twoPi
+         use ibconfig_class, only: bigot
          integer :: i,j,k
-         real(WP) :: lambda,eta,dist
-         real(WP), dimension(3) :: norm
+         ! Create IB field
          do k=cfg%kmino_,cfg%kmaxo_
             do j=cfg%jmino_,cfg%jmaxo_
                do i=cfg%imino_,cfg%imaxo_
-                  ! Create a wall IB
-                  dist=0.02_WP-cfg%ym(j)
-                  norm=[0.0_WP,1.0_WP,0.0_WP]
-                  ! Smeared VF model
-                  lambda=sum(abs(norm)); eta=0.065_WP*(1.0_WP-lambda**2)+0.39_WP
-                  cfg%VF(i,j,k)=0.5_WP*(1.0_WP-tanh(dist/(lambda*eta*cfg%meshsize(i,j,k))))
-                  ! Ensure non-zero VF to not completely remove the cell
-                  cfg%VF(i,j,k)=max(cfg%VF(i,j,k),epsilon(1.0_WP))
+                  cfg%Gib(i,j,k)=0.02_WP+0.01_WP*cos(3.0_WP*twoPi*cfg%zm(k)/cfg%zL)-cfg%ym(j)
                end do
             end do
          end do
-         call cfg%calc_fluid_vol()
+         ! Get normal vector
+         call cfg%calculate_normal()
+         ! Get VF field
+         call cfg%calculate_vf(method=bigot)
       end block create_walls
       
       
