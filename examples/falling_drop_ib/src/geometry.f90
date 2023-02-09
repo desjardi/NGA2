@@ -70,7 +70,7 @@ contains
          do k=cfg%kmino_,cfg%kmaxo_
             do j=cfg%jmino_,cfg%jmaxo_
                do i=cfg%imino_,cfg%imaxo_
-                  cfg%Gib(i,j,k)=0.02_WP+0.01_WP*cos(3.0_WP*twoPi*cfg%zm(k)/cfg%zL)-cfg%ym(j)
+                  cfg%Gib(i,j,k)=0.02_WP+0.01_WP*cos(3.0_WP*twoPi*cfg%zm(k)/cfg%zL)*cos(3.0_WP*twoPi*cfg%xm(i)/cfg%xL)-cfg%ym(j)
                end do
             end do
          end do
