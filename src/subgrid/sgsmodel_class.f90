@@ -413,7 +413,7 @@ contains
                else
                   Cs=0.0_WP
                end if
-               this%visc(i,j,k)=rho(i,j,k)*S_(i,j,k)*(Cs*this%delta(i,j,k))**2
+               this%visc(i,j,k)=rho(i,j,k)*S_(i,j,k)*Cs*this%delta(i,j,k)**2
             end do
          end do
       end do
