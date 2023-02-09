@@ -9,9 +9,9 @@ module geometry
    type(config), public :: cfg
    
    !> Pipe diameter
-   real(WP), public :: D
+   real(WP) :: D
    
-   public :: geometry_init,get_VF
+   public :: geometry_init,get_VF,D
    
 
 contains
@@ -64,7 +64,7 @@ contains
          end do
          
          ! General serial grid object
-         grid=sgrid(coord=cartesian,no=2,x=x,y=y,z=z,xper=.true.,yper=.true.,zper=.true.,name='pipe')
+         grid=sgrid(coord=cartesian,no=3,x=x,y=y,z=z,xper=.true.,yper=.true.,zper=.true.,name='pipe')
          
       end block create_grid
          
@@ -72,14 +72,13 @@ contains
       ! Create a config from that grid on our entire group
       create_cfg: block
          use parallel,    only: group
-         use pgrid_class, only: p3dfft_decomp
          integer, dimension(3) :: partition
          
          ! Read in partition
          call param_read('Partition',partition,short='p')
          
          ! Create partitioned grid
-         cfg=config(grp=group,decomp=partition,grid=grid,strat=p3dfft_decomp)
+         cfg=config(grp=group,decomp=partition,grid=grid)
          
       end block create_cfg
       

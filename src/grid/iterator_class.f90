@@ -10,7 +10,7 @@ module iterator_class
    private
    
    ! Expose type/constructor/methods
-   public :: iterator
+   public :: iterator,locator_ftype
    
    !> itr object definition
    type :: iterator
@@ -33,6 +33,14 @@ module iterator_class
       procedure :: print=>iterator_print                  !< Output iterator to the screen
    end type iterator
    
+   !> Type of the locator function used to generate an iterator
+   interface
+      logical function locator_ftype(pargrid,ind1,ind2,ind3)
+         use pgrid_class, only: pgrid
+         class(pgrid), intent(in) :: pargrid
+         integer, intent(in) :: ind1,ind2,ind3
+      end function locator_ftype
+   end interface
    
    !> Declare single-grid iterator constructor
    interface iterator
@@ -50,14 +58,7 @@ contains
       type(iterator) :: self
       class(pgrid), target, intent(in) :: pg
       character(len=*), intent(in) :: name
-      external :: locator
-      interface
-         logical function locator(pargrid,ind1,ind2,ind3)
-            use pgrid_class, only: pgrid
-            class(pgrid), intent(in) :: pargrid
-            integer, intent(in) :: ind1,ind2,ind3
-         end function locator
-      end interface
+      procedure(locator_ftype) :: locator
       character(len=1), optional :: face
       integer :: i,j,k,cnt
       integer :: color,key,ierr
