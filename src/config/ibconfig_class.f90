@@ -11,6 +11,7 @@ module ibconfig_class
    
    ! List of known available methods for calculating VF from G
    integer, parameter, public :: bigot=1
+   integer, parameter, public :: sharp=2
    
    !> Config object definition as an extension of config
    type, extends(config) :: ibconfig
@@ -144,6 +145,35 @@ contains
                end do
             end do
          end block bigot
+      case (sharp)
+         ! Get fluid volume fraction from G using marching tets
+         sharp: block
+            use mms_geom, only: marching_tets
+            integer :: i,j,k,n,si,sj,sk
+            real(WP), dimension(3,8) :: hex_vertex
+            real(WP), dimension(8) :: G
+            real(WP), dimension(3) :: v_cent,a_cent
+            real(WP) :: vol,area
+            do k=this%kmino_+1,this%kmaxo_-1
+               do j=this%jmino_+1,this%jmaxo_-1
+                  do i=this%imino_+1,this%imaxo_-1
+                     ! Build hexahedron
+				         n=0
+                     do sk=0,1
+                        do sj=0,1
+                           do si=0,1
+                              n=n+1
+                              hex_vertex(:,n)=[this%x(i+si),this%y(j+sj),this%z(k+sk)]
+                              G(n)=-this%Gib(i+si,j+sj,k+sk)  !< THIS IS INCORRECT, BUT ALLOWS BASIC TESTING
+                           end do
+                        end do
+                     end do
+                     call marching_tets(hex_vertex,G,vol,area,v_cent,a_cent)
+                     this%VF(i,j,k)=max(vol/this%vol(i,j,k),epsilon(1.0_WP))
+                  end do
+               end do
+            end do
+         end block sharp
       case default
          call die('[ibconfig calculate_vf] Unknown method to calculate VF')
       end select

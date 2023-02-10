@@ -1641,7 +1641,7 @@ contains
                else
                   mycurv=0.0_WP
                end if
-               this%Pjx(i,j,k)=this%sigma*mycurv*sum(this%divu_x(:,i,j,k)*vf%VF(i-1:i,j,k))
+               this%Pjx(i,j,k)=this%sigma*mycurv*sum(this%divu_x(:,i,j,k)*vf%VF(i-1:i,j,k))!*2.0_WP*this%rho_U(i,j,k)/(this%rho_l+this%rho_g)
                ! Y face
                mysurf=sum(vf%SD(i,j-1:j,k)*this%cfg%vol(i,j-1:j,k))
                if (mysurf.gt.0.0_WP) then
@@ -1649,7 +1649,7 @@ contains
                else
                   mycurv=0.0_WP
                end if
-               this%Pjy(i,j,k)=this%sigma*mycurv*sum(this%divv_y(:,i,j,k)*vf%VF(i,j-1:j,k))
+               this%Pjy(i,j,k)=this%sigma*mycurv*sum(this%divv_y(:,i,j,k)*vf%VF(i,j-1:j,k))!*2.0_WP*this%rho_V(i,j,k)/(this%rho_l+this%rho_g)
                ! Z face
                mysurf=sum(vf%SD(i,j,k-1:k)*this%cfg%vol(i,j,k-1:k))
                if (mysurf.gt.0.0_WP) then
@@ -1657,7 +1657,7 @@ contains
                else
                   mycurv=0.0_WP
                end if
-               this%Pjz(i,j,k)=this%sigma*mycurv*sum(this%divw_z(:,i,j,k)*vf%VF(i,j,k-1:k))
+               this%Pjz(i,j,k)=this%sigma*mycurv*sum(this%divw_z(:,i,j,k)*vf%VF(i,j,k-1:k))!*2.0_WP*this%rho_W(i,j,k)/(this%rho_l+this%rho_g)
             end do
          end do
       end do
