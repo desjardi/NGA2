@@ -64,7 +64,7 @@ contains
       ! Create IB walls for this config
       create_walls: block
          use mathtools,      only: twoPi
-         use ibconfig_class, only: bigot
+         use ibconfig_class, only: bigot,sharp
          integer :: i,j,k
          ! Create IB field
          do k=cfg%kmino_,cfg%kmaxo_
@@ -77,7 +77,7 @@ contains
          ! Get normal vector
          call cfg%calculate_normal()
          ! Get VF field
-         call cfg%calculate_vf(method=bigot)
+         call cfg%calculate_vf(method=sharp)
       end block create_walls
       
       

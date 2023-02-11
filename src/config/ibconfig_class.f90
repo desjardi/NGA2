@@ -154,17 +154,16 @@ contains
             real(WP), dimension(8) :: G
             real(WP), dimension(3) :: v_cent,a_cent
             real(WP) :: vol,area
-            do k=this%kmino_+1,this%kmaxo_-1
-               do j=this%jmino_+1,this%jmaxo_-1
-                  do i=this%imino_+1,this%imaxo_-1
-                     ! Build hexahedron
+            do k=this%kmino_,this%kmaxo_
+               do j=this%jmino_,this%jmaxo_
+                  do i=this%imino_,this%imaxo_
 				         n=0
                      do sk=0,1
                         do sj=0,1
                            do si=0,1
                               n=n+1
                               hex_vertex(:,n)=[this%x(i+si),this%y(j+sj),this%z(k+sk)]
-                              G(n)=-this%Gib(i+si,j+sj,k+sk)  !< THIS IS INCORRECT, BUT ALLOWS BASIC TESTING
+                              G(n)=-this%get_scalar(hex_vertex(:,n),i,j,k,this%Gib,'n')
                            end do
                         end do
                      end do
@@ -173,6 +172,7 @@ contains
                   end do
                end do
             end do
+            call this%sync(this%VF) !< Sync needed because of the Gib interpolation above
          end block sharp
       case default
          call die('[ibconfig calculate_vf] Unknown method to calculate VF')
