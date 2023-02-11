@@ -121,11 +121,12 @@ contains
    
    
    !> Calculation of VF from G
-   subroutine calculate_vf(this,method)
+   subroutine calculate_vf(this,method,allow_zero_vf)
       use messager, only: die
       implicit none
       class(ibconfig), intent(inout) :: this
       integer, intent(in) :: method
+      logical, intent(in), optional :: allow_zero_vf
       
       ! Select the method
       select case (method)
@@ -140,7 +141,6 @@ contains
                      lambda=sum(abs(this%Nib(:,i,j,k)))
                      eta=0.065_WP*(1.0_WP-lambda**2)+0.39_WP
                      this%VF(i,j,k)=0.5_WP*(1.0_WP-tanh(this%Gib(i,j,k)/(lambda*eta*this%meshsize(i,j,k))))
-                     this%VF(i,j,k)=max(this%VF(i,j,k),epsilon(1.0_WP))
                   end do
                end do
             end do
@@ -168,7 +168,7 @@ contains
                         end do
                      end do
                      call marching_tets(hex_vertex,G,vol,area,v_cent,a_cent)
-                     this%VF(i,j,k)=max(vol/this%vol(i,j,k),epsilon(1.0_WP))
+                     this%VF(i,j,k)=vol/this%vol(i,j,k)
                   end do
                end do
             end do
@@ -177,6 +177,11 @@ contains
       case default
          call die('[ibconfig calculate_vf] Unknown method to calculate VF')
       end select
+      
+      ! Check if VF=0 is allowed
+      if (present(allow_zero_vf)) then
+         if (.not.allow_zero_vf) this%VF=max(this%VF,epsilon(1.0_WP))
+      end if
       
       ! Update total fluid volume
       call this%calc_fluid_vol()
