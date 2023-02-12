@@ -31,6 +31,7 @@ module simulation
 	!> Private work arrays
 	real(WP), dimension(:,:,:), allocatable :: resU,resV,resW
 	real(WP), dimension(:,:,:), allocatable :: Ui,Vi,Wi
+	!real(WP), dimension(:,:,:), allocatable :: Uslip,Vslip,Wslip
 	
 	!> Droplet definition
 	real(WP), dimension(3) :: center
@@ -166,7 +167,17 @@ contains
 		   call fs%get_div()
 	   end block create_and_initialize_flow_solver
 	   
+
+		! Slip velocity model for contact line
+		init_slip_velocity: block
+		   use mathtools, only: Pi
+		   !allocate(Uslip(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_)); Uslip=0.0_WP
+			!allocate(Vslip(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_)); Vslip=0.0_WP
+			!allocate(Wslip(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_)); Wslip=0.0_WP
+			call param_read('Static contact angle',fs%contact_angle); fs%contact_angle=fs%contact_angle*Pi/180.0_WP
+		end block init_slip_velocity
 	   
+
 	   ! Add Ensight output
 	   create_ensight: block
 		   ! Create Ensight output from cfg
@@ -180,6 +191,7 @@ contains
 		   call ens_out%add_scalar('pressure',fs%P)
 		   call ens_out%add_scalar('curvature',vf%curv)
 			call ens_out%add_scalar('Gib',cfg%Gib)
+			!call ens_out%add_vector('slip',Uslip,Vslip,Wslip)
 		   ! Output to ensight
 		   if (ens_evt%occurs()) call ens_out%write_data(time%t)
 	   end block create_ensight
@@ -228,6 +240,7 @@ contains
 	
 	!> Perform an NGA2 simulation - this mimicks NGA's old time integration for multiphase
 	subroutine simulation_run
+		use tpns_class, only: static_contact
 		implicit none
 		
 		! Perform time integration
@@ -257,6 +270,32 @@ contains
 			
 			! Prepare new staggered viscosity (at n+1)
 		   call fs%get_viscosity(vf=vf)
+			
+			! Evaluate IB slip velocity due to contact lien
+         !calc_slip_velocity: block
+			!  use irl_fortran_interface
+			!	use mathtools, only: normalize
+			!  integer :: i,j,k
+			!	real(WP), dimension(3) :: nw,ni,nt
+			!	real(WP), parameter :: beta=10.0_WP
+			!	real(WP) :: slip
+			!	do k=fs%cfg%kmino_,fs%cfg%kmaxo_
+			!		do j=fs%cfg%jmino_,fs%cfg%jmaxo_
+			!			do i=fs%cfg%imino_,fs%cfg%imaxo_
+			!				! Zero out Uslip if there's no interface or wall in the cell
+			!				Uslip(i,j,k)=0.0_WP; Vslip(i,j,k)=0.0_WP; Wslip(i,j,k)=0.0_WP
+			!				if (getNumberOfVertices(vf%interface_polygon(1,i,j,k)).eq.0.or.cfg%VF(i,j,k).eq.1.0_WP) cycle
+			!				! There is an interface and a wall, find the slip velocity
+			!				nw=cfg%Nib(:,i,j,k); ni=calculateNormal(vf%interface_polygon(1,i,j,k))
+			!				slip=beta*fs%sigma*(cos(fs%contact_angle)-dot_product(ni,nw))
+			!				! Find slip direction
+			!				nt=normalize(ni-dot_product(ni,nw)*nw)
+			!				! Set slip velocity
+			!				Uslip(i,j,k)=slip*nt(1); Vslip(i,j,k)=slip*nt(2); Wslip(i,j,k)=slip*nt(3)
+			!		   end do
+			!		end do
+			!	end do
+			!end block calc_slip_velocity
 			
 		   ! Perform sub-iterations
 		   do while (time%it.le.time%itmax)
@@ -294,9 +333,14 @@ contains
 					do k=fs%cfg%kmin_,fs%cfg%kmax_
 						do j=fs%cfg%jmin_,fs%cfg%jmax_
 							do i=fs%cfg%imin_,fs%cfg%imax_
+								! Set IB velocity to zero
 								fs%U(i,j,k)=sum(fs%itpr_x(:,i,j,k)*cfg%VF(i-1:i,j,k))*fs%U(i,j,k)
 								fs%V(i,j,k)=sum(fs%itpr_y(:,i,j,k)*cfg%VF(i,j-1:j,k))*fs%V(i,j,k)
 								fs%W(i,j,k)=sum(fs%itpr_z(:,i,j,k)*cfg%VF(i,j,k-1:k))*fs%W(i,j,k)
+								! Also add slip velocity for contact line
+								!fs%U(i,j,k)=fs%U(i,j,k)+(1.0_WP-sum(fs%itpr_x(:,i,j,k)*cfg%VF(i-1:i,j,k)))*sum(fs%itpr_x(:,i,j,k)*Uslip(i-1:i,j,k))
+								!fs%V(i,j,k)=fs%V(i,j,k)+(1.0_WP-sum(fs%itpr_y(:,i,j,k)*cfg%VF(i,j-1:j,k)))*sum(fs%itpr_y(:,i,j,k)*Vslip(i,j-1:j,k))
+								!fs%W(i,j,k)=fs%W(i,j,k)+(1.0_WP-sum(fs%itpr_z(:,i,j,k)*cfg%VF(i,j,k-1:k)))*sum(fs%itpr_z(:,i,j,k)*Wslip(i,j,k-1:k))
 							end do
 						end do
 					end do
@@ -312,7 +356,7 @@ contains
 			   call fs%update_laplacian()
 				call fs%correct_mfr()
 				call fs%get_div()
-				call fs%add_surface_tension_jump(dt=time%dt,div=fs%div,vf=vf)
+				call fs%add_surface_tension_jump(dt=time%dt,div=fs%div,vf=vf,contact_model=static_contact)
 				fs%psolv%rhs=-fs%cfg%vol*fs%div/time%dt
 				fs%psolv%sol=0.0_WP
 				call fs%psolv%solve()
