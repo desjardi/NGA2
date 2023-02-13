@@ -1,7 +1,7 @@
 !> Various definitions and tools for running an NGA2 simulation
 module simulation
    use precision,         only: WP
-   use geometry,          only: cfg
+   use geometry,          only: cfg,Dout
    use hypre_str_class,   only: hypre_str
    use fourier3d_class,   only: fourier3d
    use incomp_class,      only: incomp
@@ -34,10 +34,38 @@ module simulation
    real(WP), dimension(:,:,:,:,:), allocatable :: gradU
    real(WP), dimension(:,:,:), allocatable :: resU,resV,resW
    real(WP), dimension(:,:,:), allocatable :: Ui,Vi,Wi
-   real(WP) :: visc,bforce,rhoU_tgt,rhoU_avg,rhoS_tgt,rhoS_avg
+   real(WP) :: visc,bforce,rhoUaxial_tgt,rhoUaxial_avg,rhoUtheta_tgt,rhoUtheta_avg
+   real(WP) :: swirl_number
    
    
 contains
+   
+   
+   !> Function that computes swirl number
+   function get_swirl_number(U,V,W,R) result(SN)
+      use mpi_f08,  only: MPI_ALLREDUCE,MPI_SUM
+      use parallel, only: MPI_REAL_WP
+      real(WP), dimension(cfg%imino_:,cfg%jmino_:,cfg%kmino_:), intent(in) :: U,V,W !< Cell-centered velocity field
+      real(WP), intent(in) :: R     !< Typically the outer radius
+      real(WP) :: SN
+      integer :: i,j,k,ierr
+      real(WP) :: theta,radius
+      real(WP) :: myaxialflux,mythetaflux,axialflux,thetaflux
+      myaxialflux=0.0_WP; mythetaflux=0.0_WP
+      do k=cfg%kmin_,cfg%kmax_
+         do j=cfg%jmin_,cfg%jmax_
+            do i=cfg%imin_,cfg%imax_
+               radius=sqrt(cfg%ym(j)**2+cfg%zm(k)**2)
+               theta=atan2(cfg%ym(j),cfg%zm(k))
+               myaxialflux=myaxialflux+cfg%vol(i,j,k)*cfg%VF(i,j,k)*fs%rho*Ui(i,j,k)*(Vi(i,j,k)*cos(theta)-Wi(i,j,k)*sin(theta))*radius
+               mythetaflux=mythetaflux+cfg%vol(i,j,k)*cfg%VF(i,j,k)*fs%rho*Ui(i,j,k)**2
+            end do
+         end do
+      end do
+      call MPI_ALLREDUCE(myaxialflux,axialflux,1,MPI_REAL_WP,MPI_SUM,cfg%comm,ierr)
+      call MPI_ALLREDUCE(mythetaflux,thetaflux,1,MPI_REAL_WP,MPI_SUM,cfg%comm,ierr)
+      SN=axialflux/(R*max(thetaflux,epsilon(1.0_WP)))
+   end function get_swirl_number
    
    
    !> Initialization of problem solver
@@ -97,25 +125,25 @@ contains
          use mathtools, only: twoPi
          use random,    only: random_uniform
          integer :: i,j,k
-         real(WP) :: Ubulk,swirl,amp,rhoU_avg,theta
+         real(WP) :: Uaxial,Utheta,amp,theta
          ! Zero out velocity
          fs%U=0.0_WP; fs%V=0.0_WP; fs%W=0.0_WP; fs%P=0.0_WP
          ! Read velocity field parameters
-         call param_read('Bulk velocity',Ubulk)
-         call param_read('Swirl ratio',swirl)
+         call param_read('Bulk axial velocity',Uaxial)
+         call param_read('Bulk theta velocity',Utheta)
          call param_read('Fluctuation amp',amp,default=0.0_WP)
          ! Initialize velocity
          do k=fs%cfg%kmin_,fs%cfg%kmax_
             do j=fs%cfg%jmin_,fs%cfg%jmax_
                do i=fs%cfg%imin_,fs%cfg%imax_
                   ! U velocity
-                  fs%U(i,j,k)=Ubulk+Ubulk*random_uniform(lo=-0.5_WP*amp,hi=0.5_WP*amp)+amp*Ubulk*cos(8.0_WP*twoPi*fs%cfg%zm(k)/fs%cfg%zL)*cos(8.0_WP*twoPi*fs%cfg%ym(j)/fs%cfg%yL)
+                  fs%U(i,j,k)=+Uaxial+Uaxial*random_uniform(lo=-0.5_WP*amp,hi=0.5_WP*amp)+amp*Uaxial*cos(8.0_WP*twoPi*fs%cfg%zm(k)/fs%cfg%zL)*cos(8.0_WP*twoPi*fs%cfg%ym(j)/fs%cfg%yL)
                   ! V velocity
                   theta=atan2(cfg%y(j),cfg%zm(k))
-                  fs%V(i,j,k)=+swirl*Ubulk*cos(theta)+Ubulk*random_uniform(lo=-0.5_WP*amp,hi=0.5_WP*amp)+amp*Ubulk*cos(8.0_WP*twoPi*fs%cfg%xm(i)/fs%cfg%xL)
+                  fs%V(i,j,k)=+Utheta*cos(theta)+Uaxial*random_uniform(lo=-0.5_WP*amp,hi=0.5_WP*amp)+amp*Uaxial*cos(8.0_WP*twoPi*fs%cfg%xm(i)/fs%cfg%xL)
                   ! W velocity
                   theta=atan2(cfg%ym(j),cfg%z(k))
-                  fs%W(i,j,k)=-swirl*Ubulk*sin(theta)+Ubulk*random_uniform(lo=-0.5_WP*amp,hi=0.5_WP*amp)+amp*Ubulk*cos(8.0_WP*twoPi*fs%cfg%xm(i)/fs%cfg%xL)
+                  fs%W(i,j,k)=-Utheta*sin(theta)+Uaxial*random_uniform(lo=-0.5_WP*amp,hi=0.5_WP*amp)+amp*Uaxial*cos(8.0_WP*twoPi*fs%cfg%xm(i)/fs%cfg%xL)
                end do
             end do
          end do
@@ -126,10 +154,10 @@ contains
          call fs%interp_vel(Ui,Vi,Wi)
          ! Compute divergence
          call fs%get_div()
-         ! Get target rhoU
-         call cfg%integrate(A=fs%rho*Ui,integral=rhoU_avg); rhoU_avg=rhoU_avg/cfg%fluid_vol
-         rhoU_tgt=rhoU_avg
-         ! Get target rhoS
+         ! Get target rhoUaxial
+         call cfg%integrate(A=fs%rho*Ui,integral=rhoUaxial_avg); rhoUaxial_avg=rhoUaxial_avg/cfg%fluid_vol
+         rhoUaxial_tgt=rhoUaxial_avg
+         ! Get target rhoUtheta
          resU=0.0_WP
          do k=fs%cfg%kmin_,fs%cfg%kmax_
             do j=fs%cfg%jmin_,fs%cfg%jmax_
@@ -139,11 +167,13 @@ contains
                end do
             end do
          end do
-         call cfg%integrate(A=resU,integral=rhoS_avg); rhoS_avg=rhoS_avg/cfg%fluid_vol
-         rhoS_tgt=rhoS_avg
+         call cfg%integrate(A=resU,integral=rhoUtheta_avg); rhoUtheta_avg=rhoUtheta_avg/cfg%fluid_vol
+         rhoUtheta_tgt=rhoUtheta_avg
+         ! Compute swirl number
+         swirl_number=get_swirl_number(U=Ui,V=Vi,W=Wi,R=0.5_WP*Dout)
       end block initialize_velocity
       
-
+      
       ! Create an LES model
       create_sgs: block
          sgs=sgsmodel(cfg=fs%cfg,umask=fs%umask,vmask=fs%vmask,wmask=fs%wmask)
@@ -178,10 +208,9 @@ contains
          call mfile%add_column(time%t,'Time')
          call mfile%add_column(time%dt,'Timestep size')
          call mfile%add_column(time%cfl,'Maximum CFL')
-         call mfile%add_column(rhoU_avg,'Average rhoU')
-         call mfile%add_column(rhoU_tgt,'Target rhoU')
-         call mfile%add_column(rhoS_avg,'Average rhoUtheta')
-         call mfile%add_column(rhoS_tgt,'Target rhoUtheta')
+         call mfile%add_column(rhoUaxial_avg,'Average rhoUaxial')
+         call mfile%add_column(rhoUtheta_avg,'Average rhoUtheta')
+         call mfile%add_column(swirl_number,'Swirl number')
          call mfile%add_column(fs%Umax,'Umax')
          call mfile%add_column(fs%Vmax,'Vmax')
          call mfile%add_column(fs%Wmax,'Wmax')
@@ -236,7 +265,7 @@ contains
          calc_bodyforcing: block
             integer :: i,j,k
             real(WP) :: theta
-            call cfg%integrate(A=fs%rho*Ui,integral=rhoU_avg); rhoU_avg=rhoU_avg/cfg%fluid_vol
+            call cfg%integrate(A=fs%rho*Ui,integral=rhoUaxial_avg); rhoUaxial_avg=rhoUaxial_avg/cfg%fluid_vol
             resU=0.0_WP
             do k=fs%cfg%kmin_,fs%cfg%kmax_
                do j=fs%cfg%jmin_,fs%cfg%jmax_
@@ -246,7 +275,7 @@ contains
                   end do
                end do
             end do
-            call cfg%integrate(A=resU,integral=rhoS_avg); rhoS_avg=rhoS_avg/cfg%fluid_vol
+            call cfg%integrate(A=resU,integral=rhoUtheta_avg); rhoUtheta_avg=rhoUtheta_avg/cfg%fluid_vol
          end block calc_bodyforcing
          
          ! Perform sub-iterations
@@ -269,14 +298,14 @@ contains
             add_bodyforcing: block
                integer :: i,j,k
                real(WP) :: theta
-               resU=resU+(rhoU_tgt-rhoU_avg)
+               resU=resU+(rhoUaxial_tgt-rhoUaxial_avg)
                do k=fs%cfg%kmin_,fs%cfg%kmax_
                   do j=fs%cfg%jmin_,fs%cfg%jmax_
                      do i=fs%cfg%imin_,fs%cfg%imax_
                         theta=atan2(cfg%y(j),cfg%zm(k))
-                        resV(i,j,k)=resV(i,j,k)+(rhoS_tgt-rhoS_avg)*cos(theta)
+                        resV(i,j,k)=resV(i,j,k)+(rhoUtheta_tgt-rhoUtheta_avg)*cos(theta)
                         theta=atan2(cfg%ym(j),cfg%z(k))
-                        resW(i,j,k)=resW(i,j,k)-(rhoS_tgt-rhoS_avg)*sin(theta)
+                        resW(i,j,k)=resW(i,j,k)-(rhoUtheta_tgt-rhoUtheta_avg)*sin(theta)
                      end do
                   end do
                end do
@@ -339,6 +368,9 @@ contains
          
          ! Output to ensight
          if (ens_evt%occurs()) call ens_out%write_data(time%t)
+         
+         ! Compute swirl number
+         swirl_number=get_swirl_number(U=Ui,V=Vi,W=Wi,R=0.5_WP*Dout)
          
          ! Perform and output monitoring
          call fs%get_max()

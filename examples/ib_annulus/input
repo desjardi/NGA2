@@ -2,17 +2,18 @@
 Partition :	8 1 1
 
 # Mesh definition
-Pipe outer diameter : 1
-Pipe inner diameter : 0.6
+Pipe outer diameter : 1.2
+Pipe inner diameter : 0.8
 Pipe length   : 4
 nx : 256
-ny : 64
-nz : 64
+ny : 96
+nz : 96
 
 # Pipe properties
-Bulk velocity    :   1
-Swirl ratio :        1.2
-Fluctuation amp  :   0.2
+Bulk axial velocity : 1
+Bulk theta velocity : 1.421
+!!! Note that for uniform velocity: SN=2/3*u_theta/u_x*(Rout^3-Rin^3)/(Rout*(Rout^2-Rin^2))
+Fluctuation amp  :    0.1
 
 # Time integration
 Max timestep size :	0.01
