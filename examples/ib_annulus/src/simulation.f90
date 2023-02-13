@@ -35,7 +35,7 @@ module simulation
    real(WP), dimension(:,:,:), allocatable :: resU,resV,resW
    real(WP), dimension(:,:,:), allocatable :: Ui,Vi,Wi
    real(WP) :: visc,bforce,rhoUaxial_tgt,rhoUaxial_avg,rhoUtheta_tgt,rhoUtheta_avg
-   real(WP) :: swirl_number
+   real(WP) :: swirl_number,swirl_number_tgt
    
    
 contains
@@ -57,14 +57,14 @@ contains
             do i=cfg%imin_,cfg%imax_
                radius=sqrt(cfg%ym(j)**2+cfg%zm(k)**2)
                theta=atan2(cfg%ym(j),cfg%zm(k))
-               myaxialflux=myaxialflux+cfg%vol(i,j,k)*cfg%VF(i,j,k)*fs%rho*Ui(i,j,k)*(Vi(i,j,k)*cos(theta)-Wi(i,j,k)*sin(theta))*radius
-               mythetaflux=mythetaflux+cfg%vol(i,j,k)*cfg%VF(i,j,k)*fs%rho*Ui(i,j,k)**2
+               myaxialflux=myaxialflux+cfg%vol(i,j,k)*cfg%VF(i,j,k)*fs%rho*Ui(i,j,k)**2
+               mythetaflux=mythetaflux+cfg%vol(i,j,k)*cfg%VF(i,j,k)*fs%rho*Ui(i,j,k)*(Vi(i,j,k)*cos(theta)-Wi(i,j,k)*sin(theta))
             end do
          end do
       end do
       call MPI_ALLREDUCE(myaxialflux,axialflux,1,MPI_REAL_WP,MPI_SUM,cfg%comm,ierr)
       call MPI_ALLREDUCE(mythetaflux,thetaflux,1,MPI_REAL_WP,MPI_SUM,cfg%comm,ierr)
-      SN=axialflux/(R*max(thetaflux,epsilon(1.0_WP)))
+      SN=thetaflux/(R*max(axialflux,epsilon(1.0_WP)))
    end function get_swirl_number
    
    
@@ -125,7 +125,7 @@ contains
          use mathtools, only: twoPi
          use random,    only: random_uniform
          integer :: i,j,k
-         real(WP) :: Uaxial,Utheta,amp,theta
+         real(WP) :: Uaxial,Utheta,amp,theta,radius
          ! Zero out velocity
          fs%U=0.0_WP; fs%V=0.0_WP; fs%W=0.0_WP; fs%P=0.0_WP
          ! Read velocity field parameters
@@ -139,11 +139,13 @@ contains
                   ! U velocity
                   fs%U(i,j,k)=+Uaxial+Uaxial*random_uniform(lo=-0.5_WP*amp,hi=0.5_WP*amp)+amp*Uaxial*cos(8.0_WP*twoPi*fs%cfg%zm(k)/fs%cfg%zL)*cos(8.0_WP*twoPi*fs%cfg%ym(j)/fs%cfg%yL)
                   ! V velocity
+                  radius=sqrt(cfg%y(j)**2+cfg%zm(k)**2)
                   theta=atan2(cfg%y(j),cfg%zm(k))
-                  fs%V(i,j,k)=+Utheta*cos(theta)+Uaxial*random_uniform(lo=-0.5_WP*amp,hi=0.5_WP*amp)+amp*Uaxial*cos(8.0_WP*twoPi*fs%cfg%xm(i)/fs%cfg%xL)
+                  fs%V(i,j,k)=+Utheta*radius*cos(theta)+Utheta*radius*random_uniform(lo=-0.5_WP*amp,hi=0.5_WP*amp)+amp*Utheta*radius*cos(8.0_WP*twoPi*fs%cfg%xm(i)/fs%cfg%xL)
                   ! W velocity
+                  radius=sqrt(cfg%ym(j)**2+cfg%z(k)**2)
                   theta=atan2(cfg%ym(j),cfg%z(k))
-                  fs%W(i,j,k)=-Utheta*sin(theta)+Uaxial*random_uniform(lo=-0.5_WP*amp,hi=0.5_WP*amp)+amp*Uaxial*cos(8.0_WP*twoPi*fs%cfg%xm(i)/fs%cfg%xL)
+                  fs%W(i,j,k)=-Utheta*radius*sin(theta)+Utheta*radius*random_uniform(lo=-0.5_WP*amp,hi=0.5_WP*amp)+amp*Utheta*radius*cos(8.0_WP*twoPi*fs%cfg%xm(i)/fs%cfg%xL)
                end do
             end do
          end do
@@ -162,15 +164,17 @@ contains
          do k=fs%cfg%kmin_,fs%cfg%kmax_
             do j=fs%cfg%jmin_,fs%cfg%jmax_
                do i=fs%cfg%imin_,fs%cfg%imax_
+                  radius=sqrt(cfg%ym(j)**2+cfg%zm(k)**2)
                   theta=atan2(cfg%ym(j),cfg%zm(k))
-                  resU(i,j,k)=(Vi(i,j,k)*cos(theta)-Wi(i,j,k)*sin(theta))
+                  if (radius.gt.0.0_WP) resU(i,j,k)=(Vi(i,j,k)*cos(theta)-Wi(i,j,k)*sin(theta))/radius
                end do
             end do
          end do
          call cfg%integrate(A=resU,integral=rhoUtheta_avg); rhoUtheta_avg=rhoUtheta_avg/cfg%fluid_vol
          rhoUtheta_tgt=rhoUtheta_avg
-         ! Compute swirl number
+         ! Compute swirl number and coeff
          swirl_number=get_swirl_number(U=Ui,V=Vi,W=Wi,R=0.5_WP*Dout)
+         swirl_number_tgt=swirl_number
       end block initialize_velocity
       
       
@@ -264,14 +268,15 @@ contains
          ! Calculate body forcing
          calc_bodyforcing: block
             integer :: i,j,k
-            real(WP) :: theta
+            real(WP) :: theta,radius
             call cfg%integrate(A=fs%rho*Ui,integral=rhoUaxial_avg); rhoUaxial_avg=rhoUaxial_avg/cfg%fluid_vol
             resU=0.0_WP
             do k=fs%cfg%kmin_,fs%cfg%kmax_
                do j=fs%cfg%jmin_,fs%cfg%jmax_
                   do i=fs%cfg%imin_,fs%cfg%imax_
+                     radius=sqrt(cfg%ym(j)**2+cfg%zm(k)**2)
                      theta=atan2(cfg%ym(j),cfg%zm(k))
-                     resU(i,j,k)=(Vi(i,j,k)*cos(theta)-Wi(i,j,k)*sin(theta))
+                     if (radius.gt.0.0_WP) resU(i,j,k)=(Vi(i,j,k)*cos(theta)-Wi(i,j,k)*sin(theta))/radius
                   end do
                end do
             end do
@@ -297,15 +302,17 @@ contains
             ! Add body forcing (do we need to time it by the volume?)
             add_bodyforcing: block
                integer :: i,j,k
-               real(WP) :: theta
+               real(WP) :: theta,radius
                resU=resU+(rhoUaxial_tgt-rhoUaxial_avg)
                do k=fs%cfg%kmin_,fs%cfg%kmax_
                   do j=fs%cfg%jmin_,fs%cfg%jmax_
                      do i=fs%cfg%imin_,fs%cfg%imax_
+                        radius=sqrt(cfg%y(j)**2+cfg%zm(k)**2)
                         theta=atan2(cfg%y(j),cfg%zm(k))
-                        resV(i,j,k)=resV(i,j,k)+(rhoUtheta_tgt-rhoUtheta_avg)*cos(theta)
+                        resV(i,j,k)=resV(i,j,k)+(swirl_number_tgt-swirl_number)*rhoUaxial_tgt*radius*cos(theta)
+                        radius=sqrt(cfg%ym(j)**2+cfg%z(k)**2)
                         theta=atan2(cfg%ym(j),cfg%z(k))
-                        resW(i,j,k)=resW(i,j,k)-(rhoUtheta_tgt-rhoUtheta_avg)*sin(theta)
+                        resW(i,j,k)=resW(i,j,k)-(swirl_number_tgt-swirl_number)*rhoUaxial_tgt*radius*sin(theta)
                      end do
                   end do
                end do
