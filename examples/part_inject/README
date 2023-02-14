@@ -1,0 +1,1 @@
+This is a particle injection case, intended to test the particle injection routine with polydisperse particles injected randomly within a circular region at a given mass flow rate. The injection routine checks overlap to avoid placing particles on top of others.

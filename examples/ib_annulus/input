@@ -1,0 +1,36 @@
+# Parallelization
+Partition :	8 1 1
+
+# Mesh definition
+Pipe outer diameter : 1.2
+Pipe inner diameter : 0.8
+Pipe length   : 4
+nx : 256
+ny : 96
+nz : 96
+
+# Pipe properties
+Bulk axial velocity : 1
+Bulk theta velocity : 1.421
+!!! Note that for uniform velocity: SN=2/3*u_theta/u_x*(Rout^3-Rin^3)/(Rout*(Rout^2-Rin^2))
+Fluctuation amp  :    0.1
+
+# Time integration
+Max timestep size :	0.01
+Max cfl number :	   0.9
+Max time : 		      1000
+
+# Fluid properties
+Dynamic viscosity :  2e-4
+Density           :  1
+
+# Pressure solver
+Pressure tolerance : 1e-4
+Pressure iteration : 100
+
+# Implicit velocity solver
+Implicit tolerance : 1e-4
+Implicit iteration : 100
+
+# Ensight output
+Ensight output period : 1

@@ -19,9 +19,16 @@ module mast_class
    integer, parameter, public :: neumann=3           !< Zero normal gradient
    !integer, parameter, public :: convective=4        !< Convective outflow condition
    integer, parameter, public :: clipped_neumann=5   !< Clipped Neumann condition (outflow only)
+   !integer, parameter, public :: adiabatic=6
+   !integer, parameter, public :: pressure_dirichlet=7 
    
    ! List of available contact line models for this solver
    integer, parameter, public :: static_contact=1    !< Static contact line model
+   
+   ! List of available pressure relaxation implementations
+   integer, parameter, public :: mech_egy_mech_hhz=1       !< Mechanical for energy, mechanical for helmholtz
+   integer, parameter, public :: thermmech_egy_mech_hhz=2  !< Thermo-mechanical for energy, mechanical for helmholtz
+   !integer, parameter, public :: thermmech_egy_therm_hhz=3 !< Thermo-mechanical for energy, thermal for helmholtz
 
    ! Buffer for labeling BCs
    character(len=str_medium), public :: bc_scope
@@ -33,12 +40,13 @@ module mast_class
       integer :: type                                     !< Bcond type
       type(iterator) :: itr                               !< This is the iterator for the bcond - this identifies the (i,j,k)
       character(len=1) :: face                            !< Bcond face (x/y/z)
-      integer :: dir                                      !< Bcond direction (+1,-1,0 for interior)
-      real(WP) :: rdir                                    !< Bcond direction (real variable)
+      integer :: dir_rhs,dir_lhs,fdir_rhs,fdir_lhs        !< Bcond key for shift array based on direction and face
+      character(len=2) :: celldir                         !< Bcond cell and direction (e.g. x+ or xp)
+      integer :: dir                                      !< Bcond direction (-1 or +1)
    end type bcond
 
    !> Bcond shift value
-   integer, dimension(3,6), parameter :: shift=reshape([+1,0,0,-1,0,0,0,+1,0,0,-1,0,0,0,+1,0,0,-1],shape(shift))
+   integer, dimension(3,10), parameter :: shift=reshape([+1,0,0,-1,0,0,0,+1,0,0,-1,0,0,0,+1,0,0,-1,-2,0,0,0,-2,0,0,0,-2,0,0,0],shape(shift))
    
    !> Two-phase compressible solver object definition ([M]ultiphase [A]ll-Mach [S]emi-Lagrangian [T]ransport)
    type :: mast
@@ -56,11 +64,6 @@ module mast_class
       real(WP) :: contact_angle                           !< This is our static contact angle
       real(WP) :: sigma                                   !< This is our constant surface tension coefficient
 
-      ! Variable or constant fluid properties
-      real(WP) :: visc_l0,visc_g0                         !< These are our constant/initial dynamic viscosities in liquid and gas
-      real(WP) :: cv_l0,cv_g0                             !< These are our constant/initial specific heats (constant volume) in liquid and gas
-      real(WP) :: kappa_l0,kappa_g0                       !< These are our constant/initial thermal conductivities in liquid and gas
-      
       ! Gravitational acceleration
       real(WP), dimension(3) :: gravity=0.0_WP            !< Acceleration of gravity
       
@@ -84,11 +87,12 @@ module mast_class
       real(WP), dimension(:,:,:), allocatable :: P_V      !< Pressure field array on V-cell
       real(WP), dimension(:,:,:), allocatable :: P_W      !< Pressure field array on W-cell
       
-      ! Viscosity fields
+      ! Viscosity
       real(WP), dimension(:,:,:), allocatable :: visc     !< Viscosity field on P-cell
-      real(WP), dimension(:,:,:), allocatable :: visc_xy  !< Viscosity field on U-cell
-      real(WP), dimension(:,:,:), allocatable :: visc_yz  !< Viscosity field on V-cell
-      real(WP), dimension(:,:,:), allocatable :: visc_zx  !< Viscosity field on W-cell
+      ! Thermal conductivity
+      real(WP), dimension(:,:,:), allocatable :: therm_cond !< Viscosity field on P-cell
+      
+      ! Note: conserved variables are rhoUi, rhoVi, rhoWi, Grho, GrhoE, Lrho, LrhoE
       
       ! Flow variables - harmonized/mixture
       real(WP), dimension(:,:,:), allocatable :: RHO      !< density array
@@ -110,6 +114,8 @@ module mast_class
       real(WP), dimension(:,:,:), allocatable :: dPjx     !< dPressure jump to add to -ddP/dx
       real(WP), dimension(:,:,:), allocatable :: dPjy     !< dPressure jump to add to -ddP/dy
       real(WP), dimension(:,:,:), allocatable :: dPjz     !< dPressure jump to add to -ddP/dz
+      real(WP), dimension(:,:,:), allocatable :: Tmptr    !< Temperature of mixture
+      
       ! Flow variables - individual phases
       real(WP), dimension(:,:,:), allocatable :: Grho,   Lrho    !< phase density arrays
       real(WP), dimension(:,:,:), allocatable :: GrhoE,  LrhoE   !< phase energy arrays
@@ -130,6 +136,7 @@ module mast_class
       real(WP), dimension(:,:,:), allocatable :: F_GrhoE,F_LrhoE         !< Energy fluxes
       real(WP), dimension(:,:,:), allocatable :: F_GP,   F_LP            !< Pressure fluxes
       real(WP), dimension(:,:,:), allocatable :: F_VOL,  F_VF            !< Volume fluxes
+      real(WP), dimension(:,:,:,:), allocatable :: F_Gbary, F_Lbary      !< Barycenter fluxes
 
       ! Density flux arrays
       real(WP), dimension(:,:,:,:), allocatable :: GrhoFf                !< Gas density flux (used for SC advection)
@@ -142,20 +149,30 @@ module mast_class
       real(WP), dimension(:,:,:,:), allocatable :: gradLrhoU,gradLrhoV,gradLrhoW     !< Gradients: Liquid momentum
 
       ! Hybrid advection
-      integer,  dimension(:,:,:,:), allocatable :: sl_face ! < Flag for flux method switching
+      integer,  dimension(:,:,:), allocatable :: sl_x,sl_y,sl_z ! < Flag for flux method switching
       ! Terms needed for pressure relaxation
       real(WP), dimension(:,:,:), allocatable :: srcVF   ! < Predicted volume exchange during advection
       real(WP), dimension(:,:,:), allocatable :: Hpjump  ! < Helmholtz pressure jump
       real(WP), dimension(:,:,:), allocatable :: dHpjump ! < Helmholtz pressure jump increment, also used for old Hpjump
 
+      ! Visualization arrays
+      real(WP), dimension(:,:,:), allocatable :: divU     !< Dilatation
+      real(WP), dimension(:,:,:), allocatable :: Mach     !< Mach number
+
       ! Temporary arrays for a few things
       real(WP), dimension(:,:,:), pointer :: tmp1,tmp2,tmp3
+
+      ! Temporary arrays for viscous routine (may be used for more in the future)
+      real(WP), dimension(:,:,:), pointer :: tmp4,tmp5,tmp6,tmp7,tmp8,tmp9,tmp10
       
       ! Pressure solver
       type(ils) :: psolv                                  !< Iterative linear solver object for the pressure Helmholtz equation
       
       ! Implicit momentum solver
       type(ils) :: implicit                               !< Iterative linear solver object for an implicit prediction of the advection residual
+      ! Variables to save information for monitor
+      integer  :: impl_it_x,   impl_it_y
+      real(WP) :: impl_rerr_x, impl_rerr_y
       
       ! Metrics
       real(WP), dimension(:,:,:,:), allocatable :: itpi_x,itpi_y,itpi_z   !< Interpolation fom cell center to face (for scalars, e.g. pressure)
@@ -177,12 +194,14 @@ module mast_class
       real(WP) :: CFLv_x,CFLv_y,CFLv_z                                    !< Viscous CFL numbers
       
       ! Monitoring quantities
-      real(WP) :: Umax,Vmax,Wmax,Pmax,RHOmax                              !< Maximum velocity, pressure, density
+      real(WP) :: RHOmin,RHOmax,Umax,Vmax,Wmax,Pmax,Tmax                  !< Minimum density; Maximum density, velocity, pressure, density, temperature
       
    contains
       procedure :: print=>mast_print                      !< Output solver to the screen
       procedure :: get_bcond                              !< Get a boundary condition
       procedure :: apply_bcond                            !< Apply boundary conditions as specified
+      procedure :: apply_bcond_vf                         !< Apply boundary conditions for VF field
+      procedure :: apply_bcond_facepressure               !< Apply boundary conditions to face pressure field
       procedure :: add_static_contact                     !< Add static contact line model to surface tension jump
 
       ! For initialization of simulation
@@ -200,7 +219,9 @@ module mast_class
       procedure :: advection_step                         !< Full, hybrid advection step
       ! For convenience in advection routines
       procedure :: GKEold, LKEold                         !< Calculate kinetic energy at timestep 'n'
-      ! For viscous/dissipative/body forces (will address later)
+      ! For viscous/dissipative/body forces
+      procedure :: diffusion_src_explicit_step            !< Explicit approach to incorporating body forces and diffusion
+      procedure :: get_viscosity                          !< Calculates diffusive terms at required locations
       ! For setting up pressure solve
       procedure :: pressureproj_prepare                   !< Overall subroutine for pressure solve setup
       procedure :: interp_pressure_density                !< Calculate pressure and density interpolated to face
@@ -216,10 +237,12 @@ module mast_class
       ! For pressure relaxation
       procedure :: pressure_relax                         !< Loop to relax pressure, change VF and phase values, at end of timetep
       procedure :: pressure_relax_one                     !< Routine to perform mechanical relaxation for an individual cell
+      procedure :: pressure_thermal_relax_one                     !< Routine to perform thermo-mechanical relaxation for an individual cell
 
       ! Miscellaneous
       procedure :: get_cfl                                !< Calculate maximum CFL
       procedure :: get_max                                !< Calculate maximum field values
+      procedure :: get_viz                                !< Calculate various quantities for visualization
       
    end type mast
    
@@ -275,6 +298,9 @@ contains
       allocate(self%dPjx(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%dPjx=0.0_WP
       allocate(self%dPjy(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%dPjy=0.0_WP
       allocate(self%dPjz(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%dPjz=0.0_WP
+      allocate(self%Tmptr(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%Tmptr=25.0_WP
+      allocate(self%divU(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%divU=0.0_WP
+      allocate(self%Mach(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%Mach=0.0_WP
       allocate(self%rho_U(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%rho_U=0.0_WP
       allocate(self%rho_V(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%rho_V=0.0_WP
       allocate(self%rho_W(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%rho_W=0.0_WP
@@ -282,9 +308,7 @@ contains
       allocate(self%P_V(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%P_V=0.0_WP
       allocate(self%P_W(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%P_W=0.0_WP
       allocate(self%visc   (self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%visc   =0.0_WP
-      allocate(self%visc_xy(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%visc_xy=0.0_WP
-      allocate(self%visc_yz(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%visc_yz=0.0_WP
-      allocate(self%visc_zx(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%visc_zx=0.0_WP
+      allocate(self%therm_cond(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%therm_cond=0.0_WP
       ! Two-phase
       allocate(self%Grho (self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%Grho =0.0_WP
       allocate(self%Lrho (self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%Lrho =0.0_WP
@@ -322,6 +346,10 @@ contains
       allocate(self%F_GP   (self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%F_GP   =0.0_WP
       allocate(self%F_LP   (self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%F_LP   =0.0_WP
 
+      ! Flux sum arrays for barycenters
+      allocate(self%F_Gbary(3,self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%F_Gbary=0.0_WP
+      allocate(self%F_Lbary(3,self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%F_Lbary=0.0_WP
+
       ! Density flux arrays
       allocate(self%GrhoFf (self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_,3)); self%GrhoFf =0.0_WP
       allocate(self%LrhoFf (self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_,3)); self%LrhoFf =0.0_WP
@@ -343,16 +371,25 @@ contains
       allocate(self%gradLrhoW(3,self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%gradLrhoW=0.0_WP
 
       ! Hybrid advection
-      allocate(self%sl_face(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_,3)); self%sl_face=0
+      allocate(self%sl_x(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%sl_x=0
+      allocate(self%sl_y(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%sl_y=0
+      allocate(self%sl_z(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%sl_z=0
       ! Pressure relaxation
       allocate(self%srcVF(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%srcVF=0.0_WP
       allocate(self%Hpjump(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%Hpjump=0.0_WP
       allocate(self%dHpjump(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%dHpjump=0.0_WP
 
       ! Arrays employed temporarily in a few places
-      allocate(self%tmp1(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%tmp1   =0.0_WP
-      allocate(self%tmp2(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%tmp2   =0.0_WP
-      allocate(self%tmp3(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%tmp3   =0.0_WP
+      allocate(self%tmp1 (self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%tmp1  =0.0_WP
+      allocate(self%tmp2 (self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%tmp2  =0.0_WP
+      allocate(self%tmp3 (self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%tmp3  =0.0_WP
+      allocate(self%tmp4 (self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%tmp4  =0.0_WP
+      allocate(self%tmp5 (self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%tmp5  =0.0_WP
+      allocate(self%tmp6 (self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%tmp6  =0.0_WP
+      allocate(self%tmp7 (self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%tmp7  =0.0_WP
+      allocate(self%tmp8 (self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%tmp8  =0.0_WP
+      allocate(self%tmp9 (self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%tmp9  =0.0_WP
+      allocate(self%tmp10(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%tmp10 =0.0_WP
       
       ! Allocate vfs objects that are required for the MAST solver
       call vf%allocate_supplement()
@@ -444,8 +481,7 @@ contains
    subroutine init_metrics(this)
       implicit none
       class(mast), intent(inout) :: this
-      integer :: i,j,k,st1,st2
-      real(WP), dimension(-1:0) :: itpx,itpy,itpz
+      integer :: i,j,k
       
       ! Allocate interpolation coefficients for center to cell face
       allocate(this%itpi_x(-1:0,this%cfg%imin_:this%cfg%imax_+1,this%cfg%jmin_:this%cfg%jmax_+1,this%cfg%kmin_:this%cfg%kmax_+1)) !< X-face-centered
@@ -513,8 +549,7 @@ contains
    subroutine adjust_metrics(this)
       implicit none
       class(mast), intent(inout) :: this
-      integer :: i,j,k,st1,st2
-      real(WP) :: delta,mysum
+      integer :: i,j,k
       
       ! Sync up u/v/wmasks
       call this%cfg%sync(this%umask)
@@ -648,44 +683,93 @@ contains
    
    
    !> Add a boundary condition
-   subroutine add_bcond(this,name,type,locator,face,dir)
-      use string,   only: lowercase
-      use messager, only: die
+   subroutine add_bcond(this,name,type,locator,face,dir,celldir)
+      use string,         only: lowercase
+      use messager,       only: die
+      use iterator_class, only: locator_ftype
       implicit none
       class(mast), intent(inout) :: this
       character(len=*), intent(in) :: name
       integer, intent(in) :: type
-      external :: locator
-      interface
-         logical function locator(pargrid,ind1,ind2,ind3)
-            use pgrid_class, only: pgrid
-            class(pgrid), intent(in) :: pargrid
-            integer, intent(in) :: ind1,ind2,ind3
-         end function locator
-      end interface
-      character(len=1), intent(in) :: face
-      integer, intent(in) :: dir
+      procedure(locator_ftype) :: locator
+      character(len=1), intent(in), optional :: face
+      integer, intent(in), optional :: dir
+      character(len=2), intent(in), optional :: celldir
       type(bcond), pointer :: new_bc
       integer :: i,j,k,n
       
-      ! Prepare new bcond
-      allocate(new_bc)
-      new_bc%name=trim(adjustl(name))
-      new_bc%type=type
-      select case (lowercase(face))
-      case ('x'); new_bc%face='x'
-      case ('y'); new_bc%face='y'
-      case ('z'); new_bc%face='z'
-      case default; call die('[mast add_bcond] Unknown bcond face - expecting x, y, or z')
-      end select
-      new_bc%itr=iterator(pg=this%cfg,name=new_bc%name,locator=locator,face=new_bc%face)
-      select case (dir) ! Outward-oriented
-      case (+1); new_bc%dir=+1
-      case (-1); new_bc%dir=-1
-      case ( 0); new_bc%dir= 0
-      case default; call die('[mast add_bcond] Unknown bcond dir - expecting -1, +1, or 0')
-      end select
-      new_bc%rdir=real(new_bc%dir,WP)
+      ! Check face or cell specification
+      if (present(face).and.present(celldir)) call die('[mast add_bcond] Specification of bcond must be by face or cell, not both')
+      if ((.not.present(face)).and.(.not.present(celldir))) call die('[mast add_bcond] Specification of bcond must be by face or cell')
+      
+      ! BC specified using face locator; cell BC is implied
+      if (present(face)) then
+        ! Check presence of dir
+        if (.not.present(dir)) call die('[mast add_bcond] Specification of bcond by face must include dir')
+        ! Check direction parameter
+        select case (dir) ! Outward-oriented
+        case (+1,-1)
+        case default; call die('[mast add_bcond] Unknown bcond dir - expecting -1 or +1')
+        end select
+        ! Create BC
+        allocate(new_bc)
+        new_bc%name=trim(adjustl(name))
+        new_bc%type=type
+        ! Check face parameter
+        select case (lowercase(face))
+        case ('x')
+          new_bc%fdir_rhs=1+max(0,-dir) ! 1 and 2
+          new_bc%dir_lhs=(1-max(0,-dir))*10 + max(0,-dir)*1 ! 10 and 1
+          new_bc%dir_rhs=(1-max(0,-dir))*1 + max(0,-dir)*10 ! 1 and 10
+        case ('y')
+          new_bc%fdir_rhs=3+max(0,-dir) ! 3 and 4
+          new_bc%dir_lhs=(1-max(0,-dir))*10 + max(0,-dir)*3 ! 10 and 3
+          new_bc%dir_rhs=(1-max(0,-dir))*3 + max(0,-dir)*10 ! 3 and 10
+        case ('z')
+          new_bc%fdir_rhs=5+max(0,-dir) ! 5 and 6
+          new_bc%dir_lhs=(1-max(0,-dir))*10 + max(0,-dir)*5 ! 10 and 5
+          new_bc%dir_rhs=(1-max(0,-dir))*5 + max(0,-dir)*10 ! 5 and 10
+        case default
+          call die('[mast add_bcond] Unknown bcond face - expecting x, y, or z')
+        end select
+        ! Prepare new bcond
+        new_bc%fdir_lhs=10 ! no shifts for face lhs
+        new_bc%face=face
+        new_bc%itr=iterator(pg=this%cfg,name=new_bc%name,locator=locator,face=face)
+        new_bc%dir=dir
+      end if
+      ! BC specified using cell locator; face BC is implied
+      if (present(celldir)) then
+        ! Create BC
+        allocate(new_bc)
+        new_bc%name=trim(adjustl(name))
+        new_bc%type=type
+        ! Check celldir string; direction tells which face is included
+        select case (lowercase(celldir))
+        case ('+x','x+','xp','px')
+          new_bc%dir_rhs =1;  new_bc%dir=+1; new_bc%face='x'
+          new_bc%fdir_lhs=10; new_bc%fdir_rhs=1
+        case ('-x','x-','xm','mx')
+          new_bc%dir_rhs =2;  new_bc%dir=-1; new_bc%face='x'
+          new_bc%fdir_lhs=2;  new_bc%fdir_rhs=7
+        case ('+y','y+','yp','py')
+          new_bc%dir_rhs =3;  new_bc%dir=+1; new_bc%face='y'
+          new_bc%fdir_lhs=10; new_bc%fdir_rhs=3
+        case ('-y','y-','ym','my')
+          new_bc%dir_rhs =4;  new_bc%dir=-1; new_bc%face='y'
+          new_bc%fdir_lhs=4;  new_bc%fdir_rhs=8
+        case ('+z','z+','zp','pz')
+          new_bc%dir_rhs =5;  new_bc%dir=+1; new_bc%face='z'
+          new_bc%fdir_lhs=10; new_bc%fdir_rhs=5
+        case ('-z','z-','zm','mz')
+          new_bc%dir_rhs =6;  new_bc%dir=-1; new_bc%face='z'
+          new_bc%fdir_lhs=6;  new_bc%fdir_rhs=9
+        case default; call die('[vfs add_bcond] Unknown bcond celldir')
+        end select
+        ! Prepare new bcond
+        new_bc%dir_lhs=10 ! no shifts for cell lhs
+        new_bc%itr=iterator(pg=this%cfg,name=new_bc%name,locator=locator,face='c')
+      end if
       
       ! Insert it up front
       new_bc%next=>this%first_bc
@@ -696,39 +780,78 @@ contains
 
       ! For this collocated solver, BCs specify cell-centered values and behavior,
       ! and the behavior of the face-centered values depends on the type of BC.
-      ! (For now, dirichlet BCs always enforce the flowrate, i.e., mask face velocities,
-      !  and clipped neumann BCs modify the sl_face flags to what works best at the outlet.)
 
-      ! To work properly with n_ and locators, dirichlets work by specifying the face that is
-      ! a part of the dirichlet, and the cell behind it (determined by the direction) is included.
+      ! BC locators can be specified using faces or cells, and this is interpreted by
+      ! which parameters are used when add_bcond is called. For pure neumann conditions,
+      ! face velocities are untouched, but for clipped neumann conditions, face quantities
+      ! are modified to limit reflection from the boundary. For dirichlet conditions,
+      ! the cell and corresponding face values are masked, and the user must be aware of 
+      ! which indices are being used in the locator in order to set the values within
+      ! the simulation file.
       
       ! Now adjust the metrics accordingly
       select case (new_bc%type)
       case (dirichlet)
          do n=1,new_bc%itr%n_
             i=new_bc%itr%map(1,n); j=new_bc%itr%map(2,n); k=new_bc%itr%map(3,n)
-            select case(face)
-            case('x')
-               ! Mask face
-               this%umask(i,j,k)=2
-               ! Mask cell
-               this%mask(i+min(0,dir),j,k)=2
-            case('y')
-               ! Mask face
-               this%vmask(i,j,k)=2
-               ! Mask cell
-               this%mask(i,j+min(0,dir),k)=2
-            case('z')
-               ! Mask face
-               this%wmask(i,j,k)=2
-               ! Mask cell
-               this%mask(i,j,k+min(0,dir))=2
-            end select
+            if (present(face)) then
+              select case(face)
+              case('x')
+                ! Mask face
+                this%umask(i,j,k)=2
+                ! Mask cell
+                this%mask(i+min(0,dir),j,k)=2
+              case('y')
+                ! Mask face
+                this%vmask(i,j,k)=2
+                ! Mask cell
+                this%mask(i,j+min(0,dir),k)=2
+              case('z')
+                ! Mask face
+                this%wmask(i,j,k)=2
+                ! Mask cell
+                this%mask(i,j,k+min(0,dir))=2
+              end select
+            else
+              select case(celldir)
+              case('+x','x+','xp','px')
+                ! Mask cell
+                this%mask(i,j,k)=2
+                ! Mask face
+                this%umask(i,j,k)=2
+              case('-x','x-','xm','mx')
+                ! Mask cell
+                this%mask(i,j,k)=2
+                ! Mask face
+                this%umask(i+1,j,k)=2
+              case('+y','y+','yp','py')
+                ! Mask cell
+                this%mask(i,j,k)=2
+                ! Mask face
+                this%vmask(i,j,k)=2
+              case('-y','y-','ym','my')
+                ! Mask cell
+                this%mask(i,j,k)=2
+                ! Mask face
+                this%vmask(i,j+1,k)=2
+              case('+z','z+','zp','pz')
+                ! Mask cell
+                this%mask(i,j,k)=2
+                ! Mask face
+                this%wmask(i,j,k)=2
+              case('-z','z-','zm','mz')
+                ! Mask cell
+                this%mask(i,j,k)=2
+                ! Mask face
+                this%wmask(i,j,k+1)=2
+              end select
+            end if
          end do
          
       case (neumann) !< Neumann has to be at existing wall or at domain boundary!
       case (clipped_neumann)
       !case (convective)
+      !case (adiabatic)
       case default
          call die('[mast add_bcond] Unknown bcond type')
       end select
@@ -758,7 +881,7 @@ contains
       implicit none
       class(mast), intent(inout) :: this
       real(WP), intent(in) :: dt
-      integer :: i,j,k,n,stag,ii
+      integer :: i,j,k,n,ii,factor
       type(bcond), pointer :: my_bc
       character(len=str_medium) :: scope
       
@@ -779,74 +902,111 @@ contains
                
                ! This is done by the user directly for conseerved quantities and face velocity
 
-               ! Condition is necessary for sl_face
+               ! Condition is necessary for sl_ flags
                if (trim(adjustl(scope)).eq.'flag') then
-                  ! Usage of SL scheme is same for dirichlet and neumann
                   do n=1,my_bc%itr%n_
                      i=my_bc%itr%map(1,n); j=my_bc%itr%map(2,n); k=my_bc%itr%map(3,n)
                      select case (my_bc%face)
                      case ('x')
-                        do ii = 0,abs(2*my_bc%dir)
-                           this%sl_face(i-ii*my_bc%dir,j,k,1) = 1
-                        end do
+                        this%sl_x(i-shift(1,my_bc%fdir_lhs),j,k)=1
                      case ('y')
-                        do ii = 0,abs(2*my_bc%dir)
-                           this%sl_face(i,j+ii*my_bc%dir,k,2) = 1
-                        end do
+                        this%sl_y(i,j-shift(2,my_bc%fdir_lhs),k)=1
                      case ('z')
-                        do ii = 0,abs(2*my_bc%dir)
-                           this%sl_face(i,j,k-ii*my_bc%dir,3) = 1
-                        end do
+                        this%sl_z(i,j,k-shift(3,my_bc%fdir_lhs))=1
                      end select
                   end do
                end if
                
             case (neumann,clipped_neumann) !< Apply Neumann condition to all 3 components
-               ! Handle index shift due to staggering
-               stag=min(my_bc%dir,0)
                ! Implement based on bcond direction
                do n=1,my_bc%itr%n_
                   i=my_bc%itr%map(1,n); j=my_bc%itr%map(2,n); k=my_bc%itr%map(3,n)
                   select case (trim(adjustl(scope)))
                   case('density')
-                     this%Grho(i,j,k)=this%Grho(i-shift(1,my_bc%dir),j-shift(2,my_bc%dir),k-shift(3,my_bc%dir))
-                     this%Lrho(i,j,k)=this%Lrho(i-shift(1,my_bc%dir),j-shift(2,my_bc%dir),k-shift(3,my_bc%dir))
+                     this%Grho     (i-shift(1,my_bc%dir_lhs),j-shift(2,my_bc%dir_lhs),k-shift(3,my_bc%dir_lhs)) &
+                         =this%Grho(i-shift(1,my_bc%dir_rhs),j-shift(2,my_bc%dir_rhs),k-shift(3,my_bc%dir_rhs))
+                     this%Lrho     (i-shift(1,my_bc%dir_lhs),j-shift(2,my_bc%dir_lhs),k-shift(3,my_bc%dir_lhs)) &
+                         =this%Lrho(i-shift(1,my_bc%dir_rhs),j-shift(2,my_bc%dir_rhs),k-shift(3,my_bc%dir_rhs))
                   case('momentum')
-                     this%rhoUi(i,j,k)=this%rhoUi(i-shift(1,my_bc%dir),j-shift(2,my_bc%dir),k-shift(3,my_bc%dir))
-                     this%rhoVi(i,j,k)=this%rhoVi(i-shift(1,my_bc%dir),j-shift(2,my_bc%dir),k-shift(3,my_bc%dir))
-                     this%rhoWi(i,j,k)=this%rhoWi(i-shift(1,my_bc%dir),j-shift(2,my_bc%dir),k-shift(3,my_bc%dir))
+                     this%rhoUi     (i-shift(1,my_bc%dir_lhs),j-shift(2,my_bc%dir_lhs),k-shift(3,my_bc%dir_lhs)) &
+                         =this%rhoUi(i-shift(1,my_bc%dir_rhs),j-shift(2,my_bc%dir_rhs),k-shift(3,my_bc%dir_rhs))
+                     this%rhoVi     (i-shift(1,my_bc%dir_lhs),j-shift(2,my_bc%dir_lhs),k-shift(3,my_bc%dir_lhs)) &
+                         =this%rhoVi(i-shift(1,my_bc%dir_rhs),j-shift(2,my_bc%dir_rhs),k-shift(3,my_bc%dir_rhs))
+                     this%rhoWi     (i-shift(1,my_bc%dir_lhs),j-shift(2,my_bc%dir_lhs),k-shift(3,my_bc%dir_lhs)) &
+                         =this%rhoWi(i-shift(1,my_bc%dir_rhs),j-shift(2,my_bc%dir_rhs),k-shift(3,my_bc%dir_rhs))
                   case('energy')
-                     this%GrhoE(i,j,k)=this%GrhoE(i-shift(1,my_bc%dir),j-shift(2,my_bc%dir),k-shift(3,my_bc%dir))
-                     this%LrhoE(i,j,k)=this%LrhoE(i-shift(1,my_bc%dir),j-shift(2,my_bc%dir),k-shift(3,my_bc%dir))
+                     this%GrhoE     (i-shift(1,my_bc%dir_lhs),j-shift(2,my_bc%dir_lhs),k-shift(3,my_bc%dir_lhs)) &
+                         =this%GrhoE(i-shift(1,my_bc%dir_rhs),j-shift(2,my_bc%dir_rhs),k-shift(3,my_bc%dir_rhs))
+                     this%LrhoE     (i-shift(1,my_bc%dir_lhs),j-shift(2,my_bc%dir_lhs),k-shift(3,my_bc%dir_lhs)) &
+                         =this%LrhoE(i-shift(1,my_bc%dir_rhs),j-shift(2,my_bc%dir_rhs),k-shift(3,my_bc%dir_rhs))
                   case('velocity')
-                     select case (my_bc%face)
-                     case ('x')
-                        this%U(i     ,j    ,k    )=this%U(i-my_bc%dir     ,j    ,k    )
-                        this%V(i+stag,j:j+1,k    )=this%V(i-my_bc%dir+stag,j:j+1,k    )
-                        this%W(i+stag,j    ,k:k+1)=this%W(i-my_bc%dir+stag,j    ,k:k+1)
-                     case ('y')
-                        this%U(i:i+1,j+stag,k    )=this%U(i:i+1,j-my_bc%dir+stag,k    )
-                        this%V(i    ,j     ,k    )=this%V(i    ,j-my_bc%dir     ,k    )
-                        this%W(i    ,j+stag,k:k+1)=this%W(i    ,j-my_bc%dir+stag,k:k+1)
-                     case ('z')
-                        this%U(i:i+1,j    ,k+stag)=this%U(i:i+1,j    ,k-my_bc%dir+stag)
-                        this%V(i    ,j:j+1,k+stag)=this%V(i    ,j:j+1,k-my_bc%dir+stag)
-                        this%W(i    ,j    ,k     )=this%W(i    ,j    ,k-my_bc%dir     )
-                     end select
+                    ! Neumann only applied to face velocity for clipped_neumann,
+                    ! otherwise the value comes from the cell-centered velocity
+                    if (my_bc%type.eq.clipped_neumann) then
+                      select case (my_bc%face)
+                      case ('x')
+                        this%U     (i-shift(1,my_bc%fdir_lhs),j,k) &
+                            =this%U(i-shift(1,my_bc%fdir_rhs),j,k)
+                        this%V     (i-shift(1,my_bc%dir_lhs),j:j+1,k) &
+                            =this%V(i-shift(1,my_bc%dir_rhs),j:j+1,k)
+                        this%W     (i-shift(1,my_bc%dir_lhs),j,k:k+1) &
+                            =this%W(i-shift(1,my_bc%dir_rhs),j,k:k+1)
+                      case ('y')
+                        this%U     (i:i+1,j-shift(2,my_bc%dir_lhs),k) &
+                            =this%U(i:i+1,j-shift(2,my_bc%dir_rhs),k)
+                        this%V     (i,j-shift(2,my_bc%fdir_lhs),k) &
+                            =this%V(i,j-shift(2,my_bc%fdir_rhs),k)
+                        this%W     (i,j-shift(2,my_bc%dir_lhs),k:k+1) &
+                            =this%W(i,j-shift(2,my_bc%dir_rhs),k:k+1)
+                      case ('z')
+                        this%U     (i:i+1,j,k-shift(3,my_bc%dir_lhs)) &
+                            =this%U(i:i+1,j,k-shift(3,my_bc%dir_rhs))
+                        this%V     (i,j:j+1,k-shift(3,my_bc%dir_lhs)) &
+                            =this%V(i,j:j+1,k-shift(3,my_bc%dir_rhs))
+                        this%W     (i,j,k-shift(3,my_bc%fdir_lhs)) &
+                            =this%W(i,j,k-shift(3,my_bc%fdir_rhs))
+                      end select
+                    else
+                      select case (my_bc%face)
+                      case ('x')
+                        this%U     (i-shift(1,my_bc%fdir_lhs),j,k) &
+                            =this%Ui(i-shift(1,my_bc%dir_rhs),j,k)
+                        this%V     (i-shift(1,my_bc%dir_lhs),j:j+1,k) &
+                            =this%V(i-shift(1,my_bc%dir_rhs),j:j+1,k)
+                        this%W     (i-shift(1,my_bc%dir_lhs),j,k:k+1) &
+                            =this%W(i-shift(1,my_bc%dir_rhs),j,k:k+1)
+                      case ('y')
+                        this%U     (i:i+1,j-shift(2,my_bc%dir_lhs),k) &
+                            =this%U(i:i+1,j-shift(2,my_bc%dir_rhs),k)
+                        this%V     (i,j-shift(2,my_bc%fdir_lhs),k) &
+                            =this%Vi(i,j-shift(2,my_bc%dir_rhs),k)
+                        this%W     (i,j-shift(2,my_bc%dir_lhs),k:k+1) &
+                            =this%W(i,j-shift(2,my_bc%dir_rhs),k:k+1)
+                      case ('z')
+                        this%U     (i:i+1,j,k-shift(3,my_bc%dir_lhs)) &
+                            =this%U(i:i+1,j,k-shift(3,my_bc%dir_rhs))
+                        this%V     (i,j:j+1,k-shift(3,my_bc%dir_lhs)) &
+                            =this%V(i,j:j+1,k-shift(3,my_bc%dir_rhs))
+                        this%W     (i,j,k-shift(3,my_bc%fdir_lhs)) &
+                            =this%Wi(i,j,k-shift(3,my_bc%dir_rhs))
+                      end select
+                    end if
                   case('flag')
-                     ! Extend 
+                     ! Extend if clipped neumann
+                     factor = 0
+                     if (my_bc%type.eq.clipped_neumann) factor = 2
                      select case (my_bc%face)
                      case ('x')
-                        do ii = 0,abs(2*my_bc%dir)
-                           this%sl_face(i-ii*my_bc%dir ,j     ,k     ,1     ) = 1
+                        do ii = 0,abs(factor*my_bc%dir)
+                           this%sl_x(i-shift(1,my_bc%fdir_lhs)-ii*my_bc%dir,j,k)=1
                         end do
                      case ('y')
-                        do ii = 0,abs(2*my_bc%dir)
-                           this%sl_face(i     ,j-ii*my_bc%dir ,k     ,2     ) = 1
+                        do ii = 0,abs(factor*my_bc%dir)
+                           this%sl_y(i,j-shift(2,my_bc%fdir_lhs)-ii*my_bc%dir,k)=1
                         end do
                      case ('z')
-                        do ii = 0,abs(2*my_bc%dir)
-                           this%sl_face(i     ,j     ,k-ii*my_bc%dir ,3     ) = 1
+                        do ii = 0,abs(factor*my_bc%dir)
+                           this%sl_z(i,j,k-shift(3,my_bc%fdir_lhs)-ii*my_bc%dir)=1
                         end do
                      end select
                   end select
@@ -855,15 +1015,20 @@ contains
                if (my_bc%type.eq.clipped_neumann.and.trim(adjustl(scope)).eq.'velocity') then
                   select case (my_bc%face)
                   case ('x')
-                     if (this%U(i,j,k)*my_bc%rdir.lt.0.0_WP) this%U(i,j,k)=0.0_WP
+                     if (this%U(i-shift(1,my_bc%fdir_lhs),j,k)*real(my_bc%dir,WP).lt.0.0_WP) &
+                         this%U(i-shift(1,my_bc%fdir_lhs),j,k)=0.0_WP
                   case ('y')
-                     if (this%V(i,j,k)*my_bc%rdir.lt.0.0_WP) this%V(i,j,k)=0.0_WP
+                     if (this%V(i,j-shift(2,my_bc%fdir_lhs),k)*real(my_bc%dir,WP).lt.0.0_WP) &
+                         this%V(i,j-shift(2,my_bc%fdir_lhs),k)=0.0_WP
                   case ('z')
-                     if (this%W(i,j,k)*my_bc%rdir.lt.0.0_WP) this%W(i,j,k)=0.0_WP
+                     if (this%W(i,j,k-shift(3,my_bc%fdir_lhs))*real(my_bc%dir,WP).lt.0.0_WP) &
+                         this%W(i,j,k-shift(3,my_bc%fdir_lhs))=0.0_WP
                   end select
                end if
                
             !case (convective)   ! Not implemented yet!
+            
+            !case (adiabatic)    ! Not implemented yet!
                
             case default
                call die('[mast apply_bcond] Unknown bcond type')
@@ -871,34 +1036,123 @@ contains
             
          end if
          
-         ! Sync full fields after each bcond (Needs to be done anyways)
-         select case(trim(adjustl(scope)))
-         case('density')
-            call this%cfg%sync(this%Grho)
-            call this%cfg%sync(this%Lrho)
-         case('momentum')
-            call this%cfg%sync(this%rhoUi)
-            call this%cfg%sync(this%rhoVi)
-            call this%cfg%sync(this%rhoWi)
-         case('energy')
-            call this%cfg%sync(this%GrhoE)
-            call this%cfg%sync(this%LrhoE)
-         case('velocity')
-            call this%cfg%sync(this%U)
-            call this%cfg%sync(this%V)
-            call this%cfg%sync(this%W)
-         case('flag')
-            call this%cfg%sync(this%sl_face(:,:,:,1))
-            call this%cfg%sync(this%sl_face(:,:,:,2))
-            call this%cfg%sync(this%sl_face(:,:,:,3))
-         end select
-         
          ! Move on to the next bcond
          my_bc=>my_bc%next
          
       end do
       
+      ! Sync full fields after all bconds
+      select case(trim(adjustl(scope)))
+      case('density')
+         call this%cfg%sync(this%Grho)
+         call this%cfg%sync(this%Lrho)
+      case('momentum')
+         call this%cfg%sync(this%rhoUi)
+         call this%cfg%sync(this%rhoVi)
+         call this%cfg%sync(this%rhoWi)
+      case('energy')
+         call this%cfg%sync(this%GrhoE)
+         call this%cfg%sync(this%LrhoE)
+      case('velocity')
+         call this%cfg%sync(this%U)
+         call this%cfg%sync(this%V)
+         call this%cfg%sync(this%W)
+      case('flag')
+         call this%cfg%sync(this%sl_x)
+         call this%cfg%sync(this%sl_y)
+         call this%cfg%sync(this%sl_z)
+      end select
+      
    end subroutine apply_bcond
+   
+   !> Enforce boundary condition on vf%VF
+   subroutine apply_bcond_vf(this,vf)
+      use messager, only: die
+      use vfs_class, only: vfs
+      implicit none
+      class(mast), intent(inout) :: this
+      class(vfs), intent(inout) :: vf
+      integer :: i,j,k,n
+      type(bcond), pointer :: my_bc
+
+      ! Traverse bcond list
+      my_bc=>this%first_bc
+      do while (associated(my_bc))
+         ! Only processes inside the bcond work here
+         if (my_bc%itr%amIn) then
+            ! Select appropriate action based on the bcond type
+            select case (my_bc%type)
+            case (dirichlet)               !< Apply Dirichlet conditions (nothing to do here)
+            case (neumann,clipped_neumann) !< Apply Neumann condition
+              do n=1,my_bc%itr%n_
+                i=my_bc%itr%map(1,n); j=my_bc%itr%map(2,n); k=my_bc%itr%map(3,n)
+                vf%VF   (i-shift(1,my_bc%dir_lhs),j-shift(2,my_bc%dir_lhs),k-shift(3,my_bc%dir_lhs)) &
+                  =vf%VF(i-shift(1,my_bc%dir_rhs),j-shift(2,my_bc%dir_rhs),k-shift(3,my_bc%dir_rhs))
+              end do
+            !case (convective)   ! Not implemented yet!
+            !case (adiabatic)    ! Not implemented yet!
+            case default
+               call die('[mast apply_bcond_vf] Unknown bcond type')
+            end select
+         end if
+         ! Move on to the next bcond
+         my_bc=>my_bc%next
+      end do
+      
+      ! Sync field
+      call this%cfg%sync(vf%VF)
+      
+   end subroutine apply_bcond_vf
+   
+   !> Enforce boundary conditions face pressure, if specified
+   subroutine apply_bcond_facepressure(this,Px,Py,Pz)
+      use messager, only: die
+      implicit none
+      class(mast), intent(inout) :: this
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: Px,Py,Pz
+      integer :: i,j,k,n
+      type(bcond), pointer :: my_bc
+
+      ! Traverse bcond list
+      my_bc=>this%first_bc
+      do while (associated(my_bc))
+         ! Only processes inside the bcond work here
+         if (my_bc%itr%amIn) then
+            ! Select appropriate action based on the bcond type
+            select case (my_bc%type)
+            case (dirichlet)               !< Apply Dirichlet conditions (nothing to do here)
+            case (neumann)                 !< no treatment of face pressure with neumann
+            case (clipped_neumann)         !< Apply clipped Neumann condition
+              do n=1,my_bc%itr%n_
+                i=my_bc%itr%map(1,n); j=my_bc%itr%map(2,n); k=my_bc%itr%map(3,n)
+                select case (my_bc%face)
+                case ('x')
+                  Px   (i-shift(1,my_bc%fdir_lhs),j,k) &
+                    =Px(i-shift(1,my_bc%fdir_rhs),j,k)
+                case ('y')
+                  Py   (i,j-shift(2,my_bc%fdir_lhs),k) &
+                    =Py(i,j-shift(2,my_bc%fdir_rhs),k)
+                case ('z')
+                  Pz   (i,j,k-shift(3,my_bc%fdir_lhs)) &
+                    =Pz(i,j,k-shift(3,my_bc%fdir_rhs))
+                end select
+              end do
+            !case (convective)   ! Not implemented yet!
+            !case (adiabatic)    ! Not implemented yet!
+            case default
+               call die('[mast apply_bcond_facepressure] Unknown bcond type')
+            end select
+         end if
+         ! Move on to the next bcond
+         my_bc=>my_bc%next
+      end do
+      
+      ! Sync fields
+      call this%cfg%sync(Px)
+      call this%cfg%sync(Py)
+      call this%cfg%sync(Pz)
+      
+   end subroutine apply_bcond_facepressure
 
    ! Function to more easily calculate gas kinetic energy
    function GKEold(this,i,j,k) result(val)
@@ -932,7 +1186,7 @@ contains
 
      n_band = 1 !ceiling(max_CFL)
 
-     this%sl_face = 0
+     this%sl_x = 0; this%sl_y = 0; this%sl_z = 0
      ! 1 is for semi-Lagrangian, 0 is for centered scheme
 
      ! Loop over the domain and determine multiphase locations within band and shock locations
@@ -960,13 +1214,11 @@ contains
                     ! If change of phase is not found in band, check shock sensor
                     if (shock_sensor(i,j,k).gt.0) then
                        ! If shock is indicated, set values to negative, band will be extended around these cells
-                       this%sl_face(i,j,k,1:3)=-1
-                       this%sl_face(i+1,j,k,1)=-1; this%sl_face(i,j+1,k,2)=-1; this%sl_face(i,j,k+1,3)=-1;
+                       this%sl_x(i:i+1,j,k)=-1; this%sl_y(i,j:j+1,k)=-1; this%sl_z(i,j,k:k+1)=-1
                     end if
                  else
                     ! If change of phase is found in band, turn on SL fluxing
-                    this%sl_face(i,j,k,1:3)=1
-                    this%sl_face(i+1,j,k,1)=1; this%sl_face(i,j+1,k,2)=1; this%sl_face(i,j,k+1,3)=1;
+                    this%sl_x(i:i+1,j,k)=1; this%sl_y(i,j:j+1,k)=1; this%sl_z(i,j,k:k+1)=1
                  end if
               elseif (vf%VFold(i,j,k).gt.VFhi) then
                  ! In fully liquid cells, check in band for change in phase
@@ -989,18 +1241,15 @@ contains
                     ! If change of phase is not found in band, check shock sensor
                     if (shock_sensor(i,j,k).gt.0.0_WP) then
                        ! If shock is indicated, set values to negative, band will be extended around these cells
-                       this%sl_face(i,j,k,1:3)=-1
-                       this%sl_face(i+1,j,k,1)=-1; this%sl_face(i,j+1,k,2)=-1; this%sl_face(i,j,k+1,3)=-1;
+                       this%sl_x(i:i+1,j,k)=-1; this%sl_y(i,j:j+1,k)=-1; this%sl_z(i,j,k:k+1)=-1
                     end if
                  else
                     ! If change of phase is found in band, turn on SL fluxing
-                    this%sl_face(i,j,k,1:3)=1
-                    this%sl_face(i+1,j,k,1)=1; this%sl_face(i,j+1,k,2)=1; this%sl_face(i,j,k+1,3)=1;
+                    this%sl_x(i:i+1,j,k)=1; this%sl_y(i,j:j+1,k)=1; this%sl_z(i,j,k:k+1)=1
                  end if
               else
                  ! If cell is multiphase, turn on SL fluxing
-                 this%sl_face(i,j,k,1:3)=1
-                 this%sl_face(i+1,j,k,1)=1; this%sl_face(i,j+1,k,2)=1; this%sl_face(i,j,k+1,3)=1;
+                 this%sl_x(i:i+1,j,k)=1; this%sl_y(i,j:j+1,k)=1; this%sl_z(i,j,k:k+1)=1
               end if
            end do
         end do
@@ -1014,14 +1263,22 @@ contains
      do k=this%cfg%kmin_,this%cfg%kmax_
         do j=this%cfg%jmin_,this%cfg%jmax_
            do i=this%cfg%imin_,this%cfg%imax_
-              if (this%sl_face(i,j,k,1).eq.0.or.this%sl_face(i,j,k,2).eq.0.or.this%sl_face(i,j,k,3).eq.0) then
+              if (minval(this%sl_x(i:i+1,j,k)).eq.0.or. &
+                  minval(this%sl_y(i,j:j+1,k)).eq.0.or. &
+                  minval(this%sl_z(i,j,k:k+1)).eq.0) then
                  shock_check = 0
                  do ni=-n_band,n_band
                     do nj=-n_band,n_band
-                       do nk=-n_band,n_band
-                          if (minval(this%sl_face(max(this%cfg%imino_,min(i+ni,this%cfg%imaxo_)), &
-                               max(this%cfg%jmino_,min(j+nj,this%cfg%jmaxo_)), &
-                               max(this%cfg%kmino_,min(k+nk,this%cfg%kmaxo_)),:)).eq.-1) then
+                      do nk=-n_band,n_band
+                        if (min(this%sl_x(max(this%cfg%imino_,min(i+ni,this%cfg%imaxo_)), &
+                            max(this%cfg%jmino_,min(j+nj,this%cfg%jmaxo_)), &
+                            max(this%cfg%kmino_,min(k+nk,this%cfg%kmaxo_))), &
+                            this%sl_y(max(this%cfg%imino_,min(i+ni,this%cfg%imaxo_)), &
+                            max(this%cfg%jmino_,min(j+nj,this%cfg%jmaxo_)), &
+                            max(this%cfg%kmino_,min(k+nk,this%cfg%kmaxo_))), &
+                            this%sl_z(max(this%cfg%imino_,min(i+ni,this%cfg%imaxo_)), &
+                            max(this%cfg%jmino_,min(j+nj,this%cfg%jmaxo_)), &
+                            max(this%cfg%kmino_,min(k+nk,this%cfg%kmaxo_)))).eq.-1) then
                              shock_check = 1
                           end if
                        end do
@@ -1030,12 +1287,12 @@ contains
                  if (shock_check.eq.1) then
                     ! If shock is found in band, turn on SL fluxing, but only in faces where shock is not indicated
                     ! I want 0 to go to 1, 1 to stay at 1, and -1 to stay at -1
-                    this%sl_face(i  ,j,k,1)=min(1,2*this%sl_face(i  ,j,k,1)+1)
-                    this%sl_face(i+1,j,k,1)=min(1,2*this%sl_face(i+1,j,k,1)+1)
-                    this%sl_face(i,j  ,k,2)=min(1,2*this%sl_face(i,j  ,k,2)+1)
-                    this%sl_face(i,j+1,k,2)=min(1,2*this%sl_face(i,j+1,k,2)+1)
-                    this%sl_face(i,j,k  ,3)=min(1,2*this%sl_face(i,j,k  ,3)+1)
-                    this%sl_face(i,j,k+1,3)=min(1,2*this%sl_face(i,j,k+1,3)+1)
+                    this%sl_x(i  ,j,k)=min(1,2*this%sl_x(i  ,j,k)+1)
+                    this%sl_x(i+1,j,k)=min(1,2*this%sl_x(i+1,j,k)+1)
+                    this%sl_y(i,j  ,k)=min(1,2*this%sl_y(i,j  ,k)+1)
+                    this%sl_y(i,j+1,k)=min(1,2*this%sl_y(i,j+1,k)+1)
+                    this%sl_z(i,j,k  )=min(1,2*this%sl_z(i,j,k  )+1)
+                    this%sl_z(i,j,k+1)=min(1,2*this%sl_z(i,j,k+1)+1)
                  end if
               end if
            end do
@@ -1043,7 +1300,7 @@ contains
      end do
 
      ! Make all the negatives positive
-     this%sl_face = abs(this%sl_face)
+     this%sl_x = abs(this%sl_x); this%sl_y = abs(this%sl_y); this%sl_z = abs(this%sl_z)
 
      ! BCs again
      bc_scope = 'flag'
@@ -1059,9 +1316,9 @@ contains
        ! wt weights how important the acoustic scale is
        cb=abs(sum(this%divp_x(:,i,j,k)*this%U(i:i+1,j,k)) &
             + sum(this%divp_y(:,i,j,k)*this%V(i,j:j+1,k)) &
-            + sum(this%divp_z(:,i,j,k)*this%W(i,j,k:k+1)) &
-            )-min(this%cfg%dxi(i),this%cfg%dyi(j),this%cfg%dzi(k)) &
-            / sqrt(this%RHOSS2(i,j,k)/this%RHO(i,j,k)) / this%shs_wt
+            + sum(this%divp_z(:,i,j,k)*this%W(i,j,k:k+1)))&
+            - min(this%cfg%dxi(i),this%cfg%dyi(j),this%cfg%dzi(k)) &
+            * sqrt(this%RHOSS2(i,j,k)/this%RHO(i,j,k)) / this%shs_wt
 
      end function shock_sensor
 
@@ -1098,9 +1355,9 @@ contains
      this%gradLP   =0.0_WP
 
      ! Gradients for linear reconstruction
-     do k=this%cfg%kmin_,this%cfg%kmax_
-        do j=this%cfg%jmin_,this%cfg%jmax_
-           do i=this%cfg%imin_,this%cfg%imax_
+     do k=this%cfg%kmino_+1,this%cfg%kmaxo_-1
+        do j=this%cfg%jmino_+1,this%cfg%jmaxo_-1
+           do i=this%cfg%imino_+1,this%cfg%imaxo_-1
               ! No need to calculate gradient inside of wall cell
               if (this%mask(i,j,k).eq.1) cycle
               ! Cycle through directions
@@ -1219,6 +1476,7 @@ contains
      class(matm), intent(inout) :: matmod !< The material models for this solver
      real(WP),    intent(inout) :: dt     !< Timestep size over which to advance
      real(WP),   dimension(14)  :: flux   !< Passes flux to and from routines
+     real(WP),  dimension(3,2)  :: b_flux !< Passes barycenter fluxes
      real(WP), dimension(:,:,:), pointer :: PgradX,PgradY,PgradZ
      type(CapDod_type) :: fp              !< Object for flux polyhedron
      type(TagAccVM_SepVM_type) :: ffm     !< Object for flux moments
@@ -1242,6 +1500,13 @@ contains
      this%F_LrhoV=this%Lrhoold*this%Viold*((       vf%VFold)*this%cfg%vol)
      this%F_LrhoW=this%Lrhoold*this%Wiold*((       vf%VFold)*this%cfg%vol)
      this%F_LP   =this%LPold   *((       vf%VFold)*this%cfg%vol)
+     
+     this%F_Gbary(1,:,:,:)=  vf%Gbaryold(1,:,:,:)*((1.0_WP-vf%VFold)*this%cfg%vol)
+     this%F_Gbary(2,:,:,:)=  vf%Gbaryold(2,:,:,:)*((1.0_WP-vf%VFold)*this%cfg%vol)
+     this%F_Gbary(3,:,:,:)=  vf%Gbaryold(3,:,:,:)*((1.0_WP-vf%VFold)*this%cfg%vol)
+     this%F_Lbary(1,:,:,:)=  vf%Lbaryold(1,:,:,:)*         vf%VFold *this%cfg%vol
+     this%F_Lbary(2,:,:,:)=  vf%Lbaryold(2,:,:,:)*         vf%VFold *this%cfg%vol
+     this%F_Lbary(3,:,:,:)=  vf%Lbaryold(3,:,:,:)*         vf%VFold *this%cfg%vol
 
      ! Allocate flux_polyhedron that will be used for fluxes
      call new(fp)
@@ -1251,7 +1516,11 @@ contains
      ! Designate the use of temporary arrays for pressure gradients
      PgradX => this%tmp1; PgradY => this%tmp2; PgradZ =>this%tmp3
      PgradX = 0.0_WP;     PgradY = 0.0_WP;     PgradZ = 0.0_WP
-
+     
+     ! New barycenters are old by default, will be changed in multiphase cells
+     ! (necessary for any iteration beyond the first)
+     vf%Gbary = vf%Gbaryold
+     vf%Lbary = vf%Lbaryold
 
      !! ---------------------------------------!!
      !! 1. SL and TTSL flux calculations       !!
@@ -1261,25 +1530,25 @@ contains
            do i=this%cfg%imin_,this%cfg%imax_+1
               
               !! ---- LEFT X(I) FACE ---- !!
-              select case(this%sl_face(i,j,k,1))
-              case(1); call SL_advect  (flux,fp,ffm                                        ,i,j,k,'x')
-              case(0); call TTSL_advect(flux,[this%cfg%x (i),this%cfg%ym(j),this%cfg%zm(k)],i,j,k,'x')
+              select case(this%sl_x(i,j,k))
+              case(1); call SL_advect  (flux,b_flux,fp,ffm                                        ,i,j,k,'x')
+              case(0); call TTSL_advect(flux,b_flux,[this%cfg%x (i),this%cfg%ym(j),this%cfg%zm(k)],i,j,k,'x')
               end select
-              call add_fluxes(flux,i,j,k,'x')
+              call add_fluxes(flux,b_flux,i,j,k,'x')
 
               !! ---- BOTTOM Y(J) FACE ---- !!
-              select case(this%sl_face(i,j,k,2))
-              case(1); call SL_advect  (flux,fp,ffm                                        ,i,j,k,'y')
-              case(0); call TTSL_advect(flux,[this%cfg%xm(i),this%cfg%y (j),this%cfg%zm(k)],i,j,k,'y')
+              select case(this%sl_y(i,j,k))
+              case(1); call SL_advect  (flux,b_flux,fp,ffm                                        ,i,j,k,'y')
+              case(0); call TTSL_advect(flux,b_flux,[this%cfg%xm(i),this%cfg%y (j),this%cfg%zm(k)],i,j,k,'y')
               end select
-              call add_fluxes(flux,i,j,k,'y')
+              call add_fluxes(flux,b_flux,i,j,k,'y')
 
               !! ---- BACK Z(K) FACE ---- !!
-              select case(this%sl_face(i,j,k,3))
-              case(1); call SL_advect  (flux,fp,ffm                                        ,i,j,k,'z')
-              case(0); call TTSL_advect(flux,[this%cfg%xm(i),this%cfg%ym(j),this%cfg%z (k)],i,j,k,'z')
+              select case(this%sl_z(i,j,k))
+              case(1); call SL_advect  (flux,b_flux,fp,ffm                                        ,i,j,k,'z')
+              case(0); call TTSL_advect(flux,b_flux,[this%cfg%xm(i),this%cfg%ym(j),this%cfg%z (k)],i,j,k,'z')
               end select
-              call add_fluxes(flux,i,j,k,'z')
+              call add_fluxes(flux,b_flux,i,j,k,'z')
 
            end do
         end do
@@ -1364,6 +1633,13 @@ contains
                     ! Calculate density, incorporating volume change
                     this%Grho (i,j,k)   = this%F_Grho (i,j,k)/((1.0_WP-vf%VF(i,j,k))*this%cfg%vol(i,j,k))
                     this%Lrho (i,j,k)   = this%F_Lrho (i,j,k)/(        vf%VF(i,j,k) *this%cfg%vol(i,j,k))
+                    ! Calculate barycenters from source
+                    vf%Gbary(:,i,j,k) = this%F_Gbary(:,i,j,k)/(this%F_VOL(i,j,k)-this%F_VF(i,j,k))
+                    vf%Lbary(:,i,j,k) = this%F_Lbary(:,i,j,k)/(                  this%F_VF(i,j,k))
+                    ! Project forward in time
+                    vf%Gbary(:,i,j,k)=vf%project(vf%Gbary(:,i,j,k),i,j,k,dt,this%U,this%V,this%W)
+                    vf%Lbary(:,i,j,k)=vf%project(vf%Lbary(:,i,j,k),i,j,k,dt,this%U,this%V,this%W)
+                    
                  end if
               end if
 
@@ -1371,8 +1647,8 @@ contains
         end do
      end do
 
-     ! Boundaries for VF, phase density, phase pressure
-     call vf%cfg%sync(vf%VF)
+     ! Boundaries for VF
+     call this%apply_bcond_vf(vf)
      
      ! Update phase interface to match VF field, etc.
      ! (Mimics the end of vf%advance())
@@ -1386,6 +1662,7 @@ contains
      !call vf%distance_from_polygon()
      call vf%subcell_vol()
      call vf%get_curvature()
+     call vf%reset_moments()
      ! Band and distance information should not be needed
 
      ! Boundary conditions density
@@ -1412,7 +1689,7 @@ contains
 
               !! ---- LEFT X(I) FACE ---- !!
               ! Advection term
-              if (this%sl_face(i,j,k,1).eq.0) then
+              if (this%sl_x(i,j,k).eq.0) then
                  call SubCan_mom_RHS_flux(i,j,k,'x')
 
                  ! Calculate coefficients to go into alap array
@@ -1434,7 +1711,7 @@ contains
 
               !! ---- BOTTOM Y(J) FACE ---- !!
               ! Advection term
-              if (this%sl_face(i,j,k,2).eq.0) then
+              if (this%sl_y(i,j,k).eq.0) then
                  call SubCan_mom_RHS_flux(i,j,k,'y')
 
                  ! Calculate coefficients to go into alap array
@@ -1454,7 +1731,7 @@ contains
 
               !! ---- BACK Z(K) FACE ---- !!
               ! Advection term
-              if (this%sl_face(i,j,k,3).eq.0) then
+              if (this%sl_z(i,j,k).eq.0) then
                  call SubCan_mom_RHS_flux(i,j,k,'z')
 
                  ! Calculate coefficients to go into alap array
@@ -1465,7 +1742,7 @@ contains
                  else
                     ! Current cell (in front of face)
                     this%implicit%opr(1,i,j,k  ) = this%implicit%opr(1,i,j,k  ) + (1.0_WP-vf%VF(i,j,k  ))*Ga_i + vf%VF(i,j,k  )*La_i
-                    this%implicit%opr(7,i,j,k  ) = this%implicit%opr(5,i,j,k  ) + (1.0_WP-vf%VF(i,j,k  ))*Ga_nb+ vf%VF(i,j,k  )*La_nb
+                    this%implicit%opr(7,i,j,k  ) = this%implicit%opr(7,i,j,k  ) + (1.0_WP-vf%VF(i,j,k  ))*Ga_nb+ vf%VF(i,j,k  )*La_nb
                     ! Left cell (behind face)
                     this%implicit%opr(1,i,j,k-1) = this%implicit%opr(1,i,j,k-1) - (1.0_WP-vf%VF(i,j,k-1))*Ga_nb- vf%VF(i,j,k-1)*La_nb
                     this%implicit%opr(6,i,j,k-1) = this%implicit%opr(6,i,j,k-1) - (1.0_WP-vf%VF(i,j,k-1))*Ga_i - vf%VF(i,j,k-1)*La_i
@@ -1480,6 +1757,9 @@ contains
      do k=this%cfg%kmin_,this%cfg%kmax_
         do j=this%cfg%jmin_,this%cfg%jmax_
            do i=this%cfg%imin_,this%cfg%imax_
+              PgradX(i,j,k)=0.0_WP; PgradY(i,j,k)=0.0_WP; PgradZ(i,j,k)=0.0_WP
+              ! Skip wall cells and masked BC cells
+              if (this%mask(i,j,k).gt.0) cycle
               ! Pressure jump, gradient for x
               rho_l=sum(vf%Gvol(0,:,:,i,j,k))*this%Grho(i,j,k)+sum(vf%Lvol(0,:,:,i,j,k))*this%Lrho(i,j,k)
               rho_r=sum(vf%Gvol(1,:,:,i,j,k))*this%Grho(i,j,k)+sum(vf%Lvol(1,:,:,i,j,k))*this%Lrho(i,j,k)
@@ -1509,18 +1789,21 @@ contains
      this%implicit%sol=this%rhoUi
      call this%implicit%solve()
      this%rhoUi=this%implicit%sol
+     this%impl_it_x = this%implicit%it; this%impl_rerr_x=this%implicit%rerr ! monitor info
      ! Solve for y-momentum
      call this%implicit%setup()
      this%implicit%rhs=this%F_GrhoV+this%F_LrhoV-dt*this%cfg%vol*PgradY
      this%implicit%sol=this%rhoVi
      call this%implicit%solve()
      this%rhoVi=this%implicit%sol
+     this%impl_it_y = this%implicit%it; this%impl_rerr_y=this%implicit%rerr ! monitor info
      ! Solve for z-momentum
      call this%implicit%setup()
      this%implicit%rhs=this%F_GrhoW+this%F_LrhoW-dt*this%cfg%vol*PgradZ
      this%implicit%sol=this%rhoWi
      call this%implicit%solve()
      this%rhoWi=this%implicit%sol
+     ! monitor info retained by solver
 
      ! Nullify pointers
      nullify(PgradX,PgradY,PgradZ)
@@ -1542,17 +1825,17 @@ contains
            do i=this%cfg%imin_,this%cfg%imax_+1
 
               !! ---- LEFT X(I) FACE ---- !!
-              if (this%sl_face(i,j,k,1).eq.0) then
+              if (this%sl_x(i,j,k).eq.0) then
                  call SubCan_KE_RHS_flux(i,j,k,'x')
               end if
 
               !! ---- BOTTOM Y(J) FACE ---- !!
-              if (this%sl_face(i,j,k,2).eq.0) then
+              if (this%sl_y(i,j,k).eq.0) then
                  call SubCan_KE_RHS_flux(i,j,k,'y')
               end if
 
               !! ---- BACK Z(K) FACE ---- !!
-              if (this%sl_face(i,j,k,3).eq.0) then
+              if (this%sl_z(i,j,k).eq.0) then
                  call SubCan_KE_RHS_flux(i,j,k,'z')
               end if
 
@@ -1585,7 +1868,7 @@ contains
                    ( this%P(i,j,k)*(1.0_WP-this%Grho(i,j,k)/this%RHO(i,j,k)) &
                    - this%Hpjump(i,j,k)*(       vf%VF(i,j,k))) )
 
-	      this%F_LrhoE(i,j,k) = this%F_LrhoE(i,j,k) &
+	            this%F_LrhoE(i,j,k) = this%F_LrhoE(i,j,k) &
                    - dt*this%cfg%vol(i,j,k)*(       vf%VF(i,j,k))*(this%Lrho(i,j,k)/this%RHO(i,j,k)*&
                    ( sum(this%divp_x(:,i,j,k)*this%U(i:i+1,j,k)*this%P_U(i:i+1,j,k)) &
                    + sum(this%divp_y(:,i,j,k)*this%V(i,j:j+1,k)*this%P_V(i,j:j+1,k)) &
@@ -1624,10 +1907,11 @@ contains
      ! ================================================================= !
      ! Construct flux hexahedron, perform cutting, call flux calculation !
      ! ================================================================= !
-     subroutine SL_advect(flux,a_flux_polyhedron,some_face_flux_moments,i,j,k,dir)
+     subroutine SL_advect(flux,b_flux,a_flux_polyhedron,some_face_flux_moments,i,j,k,dir)
        character(len=1) :: dir
        integer :: i,j,k,idir
-       real(WP), dimension(14) :: flux
+       real(WP), dimension(14)  :: flux
+       real(WP), dimension(3,2) :: b_flux
 
        type(CapDod_type) :: a_flux_polyhedron
        type(TagAccVM_SepVM_type) :: some_face_flux_moments
@@ -1645,7 +1929,7 @@ contains
        call vf%fluxpoly_project_getmoments(i,j,k,dt,dir,this%U,this%V,this%W,&
             a_flux_polyhedron,vf%localized_separator_linkold(i,j,k),some_face_flux_moments)
        ! Calculate fluxes from volume moments
-       call SL_getFaceFlux(some_face_flux_moments, flux)
+       call SL_getFaceFlux(some_face_flux_moments, flux, b_flux)
        ! Store face density terms
        this%GrhoFf(i,j,k,idir) = flux(3)
        this%LrhoFf(i,j,k,idir) = flux(8)
@@ -1656,20 +1940,21 @@ contains
      ! ====================================================== !
      ! Given a flux hexahedron, calculate and return the flux !
      ! ====================================================== !
-     subroutine SL_getFaceFlux(f_moments, flux)
+     subroutine SL_getFaceFlux(f_moments, flux, b_flux)
        use irl_fortran_interface, only: getSize
        integer  :: ii,jj,kk,n
-       integer  :: list_size,uniq_id
-       integer,  dimension(3) :: ind
+       integer  :: list_size
        real(WP) :: my_Gvol,my_Lvol
        real(WP), dimension(3) :: my_Gbary,my_Lbary
        real(WP), dimension(14)  :: flux
+       real(WP), dimension(3,2) :: b_flux
        type(TagAccVM_SepVM_type) :: f_moments
        logical  :: skip_flag
 
        !..... Using geometry, calculate fluxes .....!
        ! Initialize at zero
        flux = 0.0_WP
+       b_flux = 0.0_WP
        ! Get number of tags (elements) in the f_moments
        list_size = getSize(f_moments)
        ! Loop through tags in the list
@@ -1682,8 +1967,8 @@ contains
           if (skip_flag) cycle
 
           ! Store barycenter fluxes
-          !b_flux(:,1) = b_flux(:,1) + my_Gvol*my_Gbary
-          !b_flux(:,2) = b_flux(:,2) + my_Lvol*my_Lbary
+          b_flux(:,1) = b_flux(:,1) + my_Gvol*my_Gbary
+          b_flux(:,2) = b_flux(:,2) + my_Lvol*my_Lbary
 
           ! Bound barycenters by the cell dimensions
           my_Lbary(1) = max(this%cfg%x(ii),min(this%cfg%x(ii+1),my_Lbary(1)))
@@ -1724,25 +2009,27 @@ contains
      ! ===================================================== !
      ! Project the center of the face, call flux calculation !
      ! ===================================================== !
-     subroutine TTSL_advect(flux,pt_f,i,j,k,dir)
+     subroutine TTSL_advect(flux,b_flux,pt_f,i,j,k,dir)
        implicit none
-       real(WP), dimension(3) :: pt_f,pt_p
-       real(WP), dimension(14):: flux
-       integer,  dimension(3) :: ind_p
+       real(WP), dimension(3)   :: pt_f,pt_p
+       real(WP), dimension(14)  :: flux
+       real(WP), dimension(3,2) :: b_flux
+       integer,  dimension(3)   :: ind_p
        real(WP) :: vol_f,vol_check
        character(len=1) :: dir
-       integer :: n,i,j,k,idir
+       integer :: i,j,k,idir
 
        ! Trajectory-Tracing Semi-Lagrangian scheme
 
-       ! Initialize flux at 0
+       ! Initialize fluxes at 0
        flux = 0.0_WP
+       b_flux = 0.0_WP
 
        ! Get projected point
        pt_p = vf%project(pt_f,i,j,k,-dt,this%U,this%V,this%W)
 
        ! Get approximate barycenter of flux volume, assign to one phase
-       ! b_flux(:,ceiling(oldVOF(i,j,k))+1) = 0.5_WP*(pt_p+pt_f)
+       b_flux(:,ceiling(vf%VFold(i,j,k))+1) = 0.5_WP*(pt_p+pt_f)
 
        select case (trim(dir))
        case('x')
@@ -1765,8 +2052,8 @@ contains
           vol_check = abs(dt*this%W(i,j,k)*this%cfg%dzi(k))
        end select
        
-       ! Calculate barycenter fluxes
-       !b_flux = b_flux*vol_f
+       ! Calculate barycenter fluxes by multiplying integration volume
+       b_flux = b_flux*vol_f
        
        ! Calculate fluxes (if there is any flux to calculate)
        if (vol_check.gt.epsilon(1.0_WP)) then
@@ -1786,7 +2073,7 @@ contains
      ! ===================================================== !
      subroutine TTSL_getFaceFlux(pt_p,pt_f,ind_p,vol_f, flux)
        implicit none
-       real(WP), dimension(3) :: pt_f,pt_p,pt_c,dx_f
+       real(WP), dimension(3) :: pt_f,pt_p,pt_c
        real(WP), dimension(14):: flux
        integer,  dimension(3) :: ind_p,ind_c
        real(WP) :: vol_f,l_f,l_c,l_d,l_s
@@ -1857,13 +2144,12 @@ contains
 
      ! Routine to find intesections with mesh and calculate distances
      subroutine mesh_intersect(pt_p,pt_f,ind_p, pt_c,ind_c)
-       integer :: i,j,k,min_d
+       integer :: min_d
        real(WP) :: slope_factor
        real(WP), dimension(3) :: pt_p,pt_f,pt_c,vec
        integer,  dimension(3) :: ind_p,ind_c,ind_m
        real(WP), dimension(3) :: xint,yint,zint
        real(WP), dimension(4) :: dint
-       logical :: p_flag
 
        ! Direction of intersection
        vec = pt_f - pt_p
@@ -1935,9 +2221,10 @@ contains
        end if
      end function VF_src_quad
 
-     subroutine add_fluxes(flux,i,j,k,dir)
+     subroutine add_fluxes(flux,b_flux,i,j,k,dir)
        implicit none
-       real(WP), dimension(14) :: flux
+       real(WP), dimension(14)  :: flux
+       real(WP), dimension(3,2) :: b_flux
        character(len=1) :: dir
        integer :: i,j,k,st_i,st_j,st_k
 
@@ -1949,6 +2236,12 @@ contains
        case('z')
           st_i = 0; st_j = 0; st_k =-1
        end select
+       
+       ! Barycenter fluxes
+       this%F_Gbary(:,i,j,k)=this%F_Gbary(:,i,j,k) +b_flux(:,1)
+       this%F_Lbary(:,i,j,k)=this%F_Lbary(:,i,j,k) +b_flux(:,2)
+       this%F_Gbary(:,i+st_i,j+st_j,k+st_k)=this%F_Gbary(:,i+st_i,j+st_j,k+st_k) -b_flux(:,1)
+       this%F_Lbary(:,i+st_i,j+st_j,k+st_k)=this%F_Lbary(:,i+st_i,j+st_j,k+st_k) -b_flux(:,2)
 
        ! Store update for right cell from face
        this%F_VOL  (i,j,k)=this%F_VOL  (i,j,k) +flux( 1)
@@ -2226,6 +2519,307 @@ contains
      end subroutine calculate_ustar
        
    end subroutine advection_step
+   
+   subroutine diffusion_src_explicit_step(this,dt,vf,matmod,sgs_visc,srcU,srcV,srcW,srcE)
+      use mpi_f08,   only: MPI_ALLREDUCE,MPI_MAX
+      use parallel,  only: MPI_REAL_WP
+      use vfs_class, only: vfs
+      use matm_class, only: matm
+      implicit none
+      class(mast), intent(inout) :: this   !< The two-phase all-Mach flow solver
+      class(vfs),  intent(inout) :: vf     !< The volume fraction solver
+      class(matm), intent(inout) :: matmod !< The material models for this solver
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in), optional :: sgs_visc !< The subgrid-scale modeling, passed in
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in), optional :: srcU !< Source term from LPT
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in), optional :: srcV !< Source term from LPT
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in), optional :: srcW !< Source term from LPT
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in), optional :: srcE !< Source term from LPT
+      real(WP),    intent(in)    :: dt     !< Timestep size over which to advance
+      real(WP), dimension(:,:,:), pointer :: div       !< divergence calculated each substep
+      real(WP), dimension(:,:,:), pointer :: Uf_y,Uf_z !< X velocity interpolated to other faces
+      real(WP), dimension(:,:,:), pointer :: Vf_x,Vf_z !< Y velocity interpolated to other faces
+      real(WP), dimension(:,:,:), pointer :: Wf_x,Wf_y !< Z velocity interpolated to other faces
+      real(WP), dimension(:,:,:), pointer :: visc_x,visc_y,visc_z !< viscosity interpolated to faces
+      integer  :: i,j,k,n,nCFL,ierr
+      real(WP) :: buf,myCFL,mydt,spec_heat
+      
+      ! Set up intermediate divergence
+      div =>this%tmp1
+      ! Set up temporary face velocity
+      Uf_y=>this%tmp2; Vf_z=>this%tmp4; Wf_x=>this%tmp6
+      Uf_z=>this%tmp3; Vf_x=>this%tmp5; Wf_y=>this%tmp7
+      ! Set up face viscosities
+      visc_x=>this%tmp8; visc_y=>this%tmp9; visc_z=>this%tmp10
+      
+      ! Update temperature
+      call matmod%update_temperature(vf,this%Tmptr)
+      ! Viscosity and thermal conductivity updated using new temperature and VOF
+      call this%get_viscosity(vf,matmod,sgs_visc,visc_x,visc_y,visc_z)
+      
+      ! Estimate CFL from explicit diffusive and source terms
+      buf=0.0_WP
+      do k=this%cfg%kmin_,this%cfg%kmax_
+         do j=this%cfg%jmin_,this%cfg%jmax_
+            do i=this%cfg%imin_,this%cfg%imax_
+               ! Viscous CFL
+               buf=max(buf,4.0_WP*dt*this%visc(i,j,k)*max(this%cfg%dxi(i),this%cfg%dyi(j),this%cfg%dzi(k))**2/this%RHO(i,j,k))
+               spec_heat = ((1.0_WP-vf%VF(i,j,k))*matmod%spec_heat_gas   (this%Tmptr(i,j,k))*this%Grho(i,j,k) &
+               &           +(       vf%VF(i,j,k))*matmod%spec_heat_liquid(this%Tmptr(i,j,k))*this%Lrho(i,j,k) )
+               buf=max(buf,4.0_WP*dt*this%therm_cond(i,j,k)*max(this%cfg%dxi(i),this%cfg%dyi(j),this%cfg%dzi(k))**2/spec_heat)
+               ! Gravity CFL (check this)
+               buf=max(buf,dt**2*abs(this%gravity(1))*this%cfg%dxi(i), &
+               &           dt**2*abs(this%gravity(2))*this%cfg%dyi(j), &
+               &           dt**2*abs(this%gravity(3))*this%cfg%dzi(k))
+            end do
+         end do
+      end do
+      call MPI_ALLREDUCE(buf,myCFL,1,MPI_REAL_WP,MPI_MAX,this%cfg%comm,ierr)
+      
+      ! Calculate sub-step for viscous solver
+      nCFL=ceiling(myCFL)
+      mydt=dt/(real(nCFL,WP)+epsilon(1.0_WP)) ! This would divide by zero if there is no viscosity, so I added the epsilon
+      
+      ! Sub-step for stability
+      do n=1,nCFL
+         ! Perform viscous step
+         call diffusion_src_explicit_substep()
+         ! Update temperature
+         call matmod%update_temperature(vf,this%Tmptr)
+         ! Calculate viscosity
+         if (n.lt.nCFL) call this%get_viscosity(vf,matmod,sgs_visc,visc_x,visc_y,visc_z)
+      end do
+      
+      ! Nullify...
+      
+   contains
+   
+      subroutine diffusion_src_explicit_substep()
+         implicit none
+         
+         real(WP) :: VISCforceX,VISCforceY,VISCforceZ,spongeX
+         real(WP) :: VISCIntEnergy,VISCKinEnergy,HEATIntEnergy
+         real(WP) :: dUdx,dUdy,dUdz,dVdx,dVdy,dVdz,dWdx,dWdy,dWdz
+         real(WP) :: dMUdx,dMUdy,dMUdz
+         real(WP) :: div2U,div2V,div2W
+         real(WP) :: ddilatationdx,ddilatationdy,ddilatationdz
+         
+         integer :: i,j,k,n
+         
+         ! Viscous routine operates on face velocities, need to be updated each time
+         ! Update traditional face velocity (just interpolated)
+         call this%interp_vel_basic(vf,this%Ui,this%Vi,this%Wi,this%U,this%V,this%W)
+         ! Apply boundary condtions
+         bc_scope = 'velocity'
+         call this%apply_bcond(dt,bc_scope)
+         ! Calculate other interpolated face velocities (ignore masks)
+         call this%interp_vel_basic(vf,this%Vi,this%Wi,this%Ui,Vf_x,Wf_y,Uf_z,use_masks=.false.)
+         call this%interp_vel_basic(vf,this%Wi,this%Ui,this%Vi,Wf_x,Uf_y,Vf_z,use_masks=.false.)
+         ! BCs not needed, masks are already addressed, nothing used from within boundary
+       
+       ! Compute divergence and SGS isotropic tensor in each cell
+       do k=this%cfg%kmin_,this%cfg%kmax_
+         do j=this%cfg%jmin_,this%cfg%jmax_
+           do i=this%cfg%imin_,this%cfg%imax_
+             div(i,j,k)=( sum(this%divp_x(:,i,j,k)*this%U(i:i+1,j,k)) &
+                        + sum(this%divp_y(:,i,j,k)*this%V(i,j:j+1,k)) &
+                        + sum(this%divp_z(:,i,j,k)*this%W(i,j,k:k+1)) )
+             !tau_kk(i,j,k) = 2.0_WP*CI_visc(i,j,k)*RHO(i,j,k)*(delta_3D(i,j,k)*S(i,j,k))**2
+             ! Zero values near wall cells
+             !if (minval(vol(i-3:i+3,j-3:j+3,k-3:k+3)).eq.0.0_WP) then
+             !eddyVISC(i,j,k) = 0.0_WP
+             !   tau_kk  (i,j,k) = 0.0_WP
+             !end if
+           end do
+         end do
+       end do
+       ! Communicate
+       call this%cfg%sync(div)
+       !call compressible_boundary_update(tau_kk)
+       
+       ! Perform viscous update over substep
+       do k=this%cfg%kmin_,this%cfg%kmax_
+         do j=this%cfg%jmin_,this%cfg%jmax_
+           do i=this%cfg%imin_,this%cfg%imax_
+             
+             dMUdx= sum(this%divp_x(:,i,j,k)*visc_x(i:i+1,j,k))
+             dMUdy= sum(this%divp_y(:,i,j,k)*visc_y(i,j:j+1,k))
+             dMUdz= sum(this%divp_z(:,i,j,k)*visc_z(i,j,k:k+1))
+
+             dUdx = sum(this%divp_x(:,i,j,k)*this%U(i:i+1,j,k))
+             dVdx = sum(this%divp_x(:,i,j,k)*Vf_x  (i:i+1,j,k))
+             dWdx = sum(this%divp_x(:,i,j,k)*Wf_x  (i:i+1,j,k))
+             
+             dUdy = sum(this%divp_y(:,i,j,k)*Uf_y  (i,j:j+1,k))
+             dVdy = sum(this%divp_y(:,i,j,k)*this%V(i,j:j+1,k))
+             dWdy = sum(this%divp_y(:,i,j,k)*Wf_y  (i,j:j+1,k))
+             
+             dUdz = sum(this%divp_z(:,i,j,k)*Uf_z  (i,j,k:k+1))
+             dVdz = sum(this%divp_z(:,i,j,k)*Vf_z  (i,j,k:k+1))
+             dWdz = sum(this%divp_z(:,i,j,k)*this%W(i,j,k:k+1))
+             
+             div2U = 2.0_WP*( &
+                     this%divp_x(1,i,j,k)*(this%divp_x(1,i,j,k)*this%U (i+1,j,k) + this%divp_x(0,i,j,k)*this%Ui(i,j,k)) +&
+                     this%divp_x(0,i,j,k)*(this%divp_x(1,i,j,k)*this%Ui(i,j,k)   + this%divp_x(0,i,j,k)*this%U (i,j,k)) +&
+                     this%divp_x(1,i,j,k)*(this%divp_y(1,i,j,k)*Uf_y   (i,j+1,k) + this%divp_y(0,i,j,k)*this%Ui(i,j,k)) +&
+                     this%divp_y(0,i,j,k)*(this%divp_y(1,i,j,k)*this%Ui(i,j,k)   + this%divp_y(0,i,j,k)*Uf_y   (i,j,k)) +&
+                     this%divp_z(1,i,j,k)*(this%divp_z(1,i,j,k)*Uf_z   (i,j,k+1) + this%divp_z(0,i,j,k)*this%Ui(i,j,k)) +&
+                     this%divp_z(0,i,j,k)*(this%divp_z(1,i,j,k)*this%Ui(i,j,k)   + this%divp_z(0,i,j,k)*Uf_z   (i,j,k)) )
+             div2V = 2.0_WP*( &
+                     this%divp_x(1,i,j,k)*(this%divp_x(1,i,j,k)*Vf_x   (i+1,j,k) + this%divp_x(0,i,j,k)*this%Vi(i,j,k)) +&
+                     this%divp_x(0,i,j,k)*(this%divp_x(1,i,j,k)*this%Vi(i,j,k)   + this%divp_x(0,i,j,k)*Vf_x   (i,j,k)) +&
+                     this%divp_x(1,i,j,k)*(this%divp_y(1,i,j,k)*this%V (i,j+1,k) + this%divp_y(0,i,j,k)*this%Vi(i,j,k)) +&
+                     this%divp_y(0,i,j,k)*(this%divp_y(1,i,j,k)*this%Vi(i,j,k)   + this%divp_y(0,i,j,k)*this%V (i,j,k)) +&
+                     this%divp_z(1,i,j,k)*(this%divp_z(1,i,j,k)*Vf_z   (i,j,k+1) + this%divp_z(0,i,j,k)*this%Vi(i,j,k)) +&
+                     this%divp_z(0,i,j,k)*(this%divp_z(1,i,j,k)*this%Vi(i,j,k)   + this%divp_z(0,i,j,k)*Vf_z   (i,j,k)) )
+             div2W = 2.0_WP*( &
+                     this%divp_x(1,i,j,k)*(this%divp_x(1,i,j,k)*Wf_x   (i+1,j,k) + this%divp_x(0,i,j,k)*this%Wi(i,j,k)) +&
+                     this%divp_x(0,i,j,k)*(this%divp_x(1,i,j,k)*this%Wi(i,j,k)   + this%divp_x(0,i,j,k)*Wf_x   (i,j,k)) +&
+                     this%divp_x(1,i,j,k)*(this%divp_y(1,i,j,k)*Wf_y   (i,j+1,k) + this%divp_y(0,i,j,k)*this%Wi(i,j,k)) +&
+                     this%divp_y(0,i,j,k)*(this%divp_y(1,i,j,k)*this%Wi(i,j,k)   + this%divp_y(0,i,j,k)*Wf_y   (i,j,k)) +&
+                     this%divp_z(1,i,j,k)*(this%divp_z(1,i,j,k)*this%W (i,j,k+1) + this%divp_z(0,i,j,k)*this%Wi(i,j,k)) +&
+                     this%divp_z(0,i,j,k)*(this%divp_z(1,i,j,k)*this%Wi(i,j,k)   + this%divp_z(0,i,j,k)*this%W (i,j,k)) )
+             
+             ddilatationdx = this%divp_x(0,i,j,k)*sum(this%itpi_x(:,i  ,j,k)*div(i-1:i,j,k)) &
+                            +this%divp_x(1,i,j,k)*sum(this%itpi_x(:,i+1,j,k)*div(i:i+1,j,k))
+             ddilatationdy = this%divp_y(0,i,j,k)*sum(this%itpi_y(:,i,j  ,k)*div(i,j-1:j,k)) &
+                            +this%divp_y(1,i,j,k)*sum(this%itpi_y(:,i,j+1,k)*div(i,j:j+1,k))
+             ddilatationdz = this%divp_z(0,i,j,k)*sum(this%itpi_z(:,i,j,k  )*div(i,j,k-1:k)) &
+                            +this%divp_z(1,i,j,k)*sum(this%itpi_z(:,i,j,k+1)*div(i,j,k:k+1))
+             
+             ! Compute d/dx_j (tau_ij) for i = 1
+             ! (x-direction)
+             VISCforceX=dMUdx*(dUdx+dUdx) & ! j = 1
+             +dMUdy*(dUdy+dVdx) & ! j = 2
+             +dMUdz*(dUdz+dWdx) & ! j = 3
+             +this%visc(i,j,k)*div2U &
+             -(2.0_WP/3.0_WP)*dMUdx*div(i,j,k) &
+             +(1.0_WP/3.0_WP)*this%visc(i,j,k)*ddilatationdx
+             
+             ! Compute d/dx_j (tau_ij) for i = 2
+             ! (y-direction)
+             VISCforceY=dMUdx*(dVdx+dUdy) & ! j = 1
+             +dMUdy*(dVdy+dVdy) & ! j = 2
+             +dMUdz*(dVdz+dWdy) & ! j = 3
+             +this%visc(i,j,k)*div2V &
+             -(2.0_WP/3.0_WP)*dMUdy*div(i,j,k) &
+             +(1.0_WP/3.0_WP)*this%visc(i,j,k)*ddilatationdy
+             
+             ! Compute d/dx_j (tau_ij) for i = 3
+             ! (z-direction)
+             VISCforceZ=dMUdx*(dWdx+dUdz) & ! j = 1
+             +dMUdy*(dWdy+dVdz) & ! j = 2
+             +dMUdz*(dWdz+dWdz) & ! j = 3
+             +this%visc(i,j,k)*div2W &
+             -(2.0_WP/3.0_WP)*dMUdz*div(i,j,k) &
+             +(1.0_WP/3.0_WP)*this%visc(i,j,k)*ddilatationdz
+             
+             ! Compute the energy source/sink due to viscous effects
+             ! d/dx_j (tau_ij  u_i) = tau_ij d/dx_i u_j + u_i d/dx_j (tau_ij)
+             !                        ^{internal energy}  ^{kinetic energy}
+             VISCKinEnergy=this%Ui(i,j,k)*VISCforceX+this%Vi(i,j,k)*VISCforceY+this%Wi(i,j,k)*VISCforceZ
+             ! ^ needs to be multiplied by density ratio
+             VISCIntEnergy= this%visc(i,j,k)*(&
+             (dUdx*(dUdx+dUdx)+dUdy*(dVdx+dUdy)+dUdz*(dWdx+dUdz) &
+             +dVdx*(dUdy+dVdx)+dVdy*(dVdy+dVdy)+dVdz*(dWdy+dVdz) &
+             +dWdx*(dUdz+dWdx)+dWdy*(dVdz+dWdy)+dWdz*(dWdz+dWdz))&
+             -(2.0_WP/3.0_WP)*div(i,j,k)**2)
+             HEATIntEnergy=therm_diffterm(i,j,k)
+             ! ^ phase-specific terms are included
+             
+             ! Add sponge
+             !spongeX=(RHO(i,j,k)*sp_vel-rhoU(i,j,k))*sp_coeff*0.5_WP*(tanh((xm(i)-sp_loc)/(2.0_WP*min_meshsize))+1.0_WP)
+             ! Perform update from viscous forces
+             this%rhoUi(i,j,k)=this%rhoUi(i,j,k)+mydt*VISCforceX!+mydt*eddyVISCforceX+mydt*spongeX!+mydt*STforceX
+             this%rhoVi(i,j,k)=this%rhoVi(i,j,k)+mydt*VISCforceY!+mydt*eddyVISCforceY!+mydt*STforceY
+             this%rhoWi(i,j,k)=this%rhoWi(i,j,k)+mydt*VISCforceZ!+mydt*eddyVISCforceZ!+mydt*STforceZ
+             this%GrhoE(i,j,k)=this%GrhoE(i,j,k) &
+                +mydt*this%Grho(i,j,k)/this%RHO(i,j,k)*VISCKinEnergy &
+                +mydt*(VISCIntEnergy+HEATIntEnergy)*real(ceiling(1.0_WP-vf%VF(i,j,k)),WP)
+             this%LrhoE(i,j,k)=this%LrhoE(i,j,k) &
+                +mydt*this%Lrho(i,j,k)/this%RHO(i,j,k)*VISCKinEnergy &
+                +mydt*(VISCIntEnergy+HEATIntEnergy)*real(ceiling(       vf%VF(i,j,k)),WP)
+             this%GP   (i,j,k)=this%GP   (i,j,k)+mydt*matmod%EOS_gas   (i,j,k,'v')* &
+             (VISCIntEnergy + HEATIntEnergy)*real(ceiling(1.0_WP-vf%VF(i,j,k)),WP)
+             this%LP   (i,j,k)=this%LP   (i,j,k)+mydt*matmod%EOS_liquid(i,j,k,'v')* &
+             (VISCIntEnergy + HEATIntEnergy)*real(ceiling(       vf%VF(i,j,k)),WP)
+             
+             ! Update with gravity
+             this%rhoUi(i,j,k)=this%rhoUi(i,j,k)+mydt*this%RHO (i,j,k)*this%gravity(1)
+             this%rhoVi(i,j,k)=this%rhoVi(i,j,k)+mydt*this%RHO (i,j,k)*this%gravity(2)
+             this%rhoWi(i,j,k)=this%rhoWi(i,j,k)+mydt*this%RHO (i,j,k)*this%gravity(3)
+             this%GrhoE(i,j,k)=this%GrhoE(i,j,k)+mydt*this%Grho(i,j,k)* &
+                  (this%gravity(1)*(this%Ui(i,j,k)+0.5_WP*mydt*this%gravity(1)) &
+                  +this%gravity(2)*(this%Vi(i,j,k)+0.5_WP*mydt*this%gravity(2)) &
+                  +this%gravity(3)*(this%Wi(i,j,k)+0.5_WP*mydt*this%gravity(3)))
+             this%LrhoE(i,j,k)=this%LrhoE(i,j,k)+mydt*this%Lrho(i,j,k)* &
+                  (this%gravity(1)*(this%Ui(i,j,k)+0.5_WP*mydt*this%gravity(1)) &
+                  +this%gravity(2)*(this%Vi(i,j,k)+0.5_WP*mydt*this%gravity(2)) &
+                  +this%gravity(3)*(this%Wi(i,j,k)+0.5_WP*mydt*this%gravity(3)))
+             ! Include source terms from LPT
+             if (present(srcU)) this%rhoUi(i,j,k)=this%rhoUi(i,j,k) + srcU(i,j,k)/real(nCFL,WP)
+             if (present(srcV)) this%rhoVi(i,j,k)=this%rhoVi(i,j,k) + srcV(i,j,k)/real(nCFL,WP)
+             if (present(srcW)) this%rhoWi(i,j,k)=this%rhoWi(i,j,k) + srcW(i,j,k)/real(nCFL,WP)
+             if (present(srcE)) this%GrhoE(i,j,k)=this%GrhoE(i,j,k) + srcE(i,j,k)/real(nCFL,WP)
+             ! LPT are liquid droplets, only get energy from gas phase
+
+          end do
+       end do
+       end do
+       
+       ! BCs and communication for updated variables
+       bc_scope = 'momentum'
+       call this%apply_bcond(dt,bc_scope)
+       bc_scope = 'energy'
+       call this%apply_bcond(dt,bc_scope)
+       call this%cfg%sync(this%GP)
+       call this%cfg%sync(this%LP)
+       
+       ! Synchronize velocity with momeentum
+       this%Ui=this%rhoUi/this%RHO
+       this%Vi=this%rhoVi/this%RHO
+       this%Wi=this%rhoWi/this%RHO
+       
+       return
+     end subroutine diffusion_src_explicit_substep
+     
+     function therm_diffterm(i,j,k) result(heat_term)
+       implicit none
+       integer  :: i,j,k
+       real(WP) :: heat_term
+       real(WP) :: div2T,dTdx,dTdy,dTdz
+       real(WP) :: dkdx,dkdy,dkdz
+       
+       ! Calculate finite difference derivatives
+       
+       div2T = this%divp_x(0,i,j,k)*sum(this%divu_x(:,i  ,j,k)*this%Tmptr(i-1:i,j,k)) &
+              +this%divp_x(1,i,j,k)*sum(this%divu_x(:,i+1,j,k)*this%Tmptr(i:i+1,j,k)) &
+              +this%divp_y(0,i,j,k)*sum(this%divv_y(:,i,j  ,k)*this%Tmptr(i,j-1:j,k)) &
+              +this%divp_y(1,i,j,k)*sum(this%divv_y(:,i,j+1,k)*this%Tmptr(i,j:j+1,k)) &
+              +this%divp_z(0,i,j,k)*sum(this%divw_z(:,i,j,k  )*this%Tmptr(i,j,k-1:k)) &
+              +this%divp_z(1,i,j,k)*sum(this%divw_z(:,i,j,k+1)*this%Tmptr(i,j,k:k+1))
+       
+       dTdx = this%divp_x(0,i,j,k)*sum(this%itpi_x(:,i  ,j,k)*this%Tmptr(i-1:i,j,k)) &
+             +this%divp_x(1,i,j,k)*sum(this%itpi_x(:,i+1,j,k)*this%Tmptr(i:i+1,j,k))
+       dTdy = this%divp_y(0,i,j,k)*sum(this%itpi_y(:,i,j  ,k)*this%Tmptr(i,j-1:j,k)) &
+             +this%divp_y(1,i,j,k)*sum(this%itpi_y(:,i,j+1,k)*this%Tmptr(i,j:j+1,k))
+       dTdz = this%divp_z(0,i,j,k)*sum(this%itpi_z(:,i,j,k  )*this%Tmptr(i,j,k-1:k)) &
+             +this%divp_z(1,i,j,k)*sum(this%itpi_z(:,i,j,k+1)*this%Tmptr(i,j,k:k+1))
+             
+       dkdx = this%divp_x(0,i,j,k)*sum(this%itpi_x(:,i  ,j,k)*this%therm_cond(i-1:i,j,k)) &
+             +this%divp_x(1,i,j,k)*sum(this%itpi_x(:,i+1,j,k)*this%therm_cond(i:i+1,j,k))
+       dkdy = this%divp_y(0,i,j,k)*sum(this%itpi_y(:,i,j  ,k)*this%therm_cond(i,j-1:j,k)) &
+             +this%divp_y(1,i,j,k)*sum(this%itpi_y(:,i,j+1,k)*this%therm_cond(i,j:j+1,k))
+       dkdz = this%divp_z(0,i,j,k)*sum(this%itpi_z(:,i,j,k  )*this%therm_cond(i,j,k-1:k)) &
+             +this%divp_z(1,i,j,k)*sum(this%itpi_z(:,i,j,k+1)*this%therm_cond(i,j,k:k+1))
+       
+       ! Calculate heat conduction term
+       heat_term = dkdx*dTdx+dkdy*dTdy+dkdz*dTdz+this%therm_cond(i,j,k)*div2T
+       
+       return
+     end function therm_diffterm
+
+     
+   end subroutine diffusion_src_explicit_step
 
    subroutine pressureproj_prepare(this,dt,vf,matmod,contact_model)
      use vfs_class, only : vfs
@@ -2339,6 +2933,7 @@ contains
       ! BCs
       bc_scope = 'velocity'
       call this%apply_bcond(dt,bc_scope)
+      call this%apply_bcond_facepressure(DP_U,DP_V,DP_W)
 
      ! Correct cell-centered quantities
      do k=this%cfg%kmin_,this%cfg%kmax_
@@ -2419,15 +3014,16 @@ contains
 
    end subroutine pressureproj_correct
 
-   subroutine pressure_relax(this,vf,matmod)
+   subroutine pressure_relax(this,vf,matmod,relax_model)
      use vfs_class,  only: vfs, VFlo, VFhi
      use matm_class, only: matm
      implicit none
      class(mast), intent(inout) :: this
      class(vfs),  intent(inout) :: vf
      class(matm), intent(inout) :: matmod
+     integer, intent(in) :: relax_model
      real(WP) :: KE
-     logical  :: Gflag, Lflag
+     logical  :: Gflag, Lflag, Gf, Lf
      integer  :: i,j,k
 
      ! Loop through domain and relax multiphase cells
@@ -2438,16 +3034,17 @@ contains
               if (this%mask(i,j,k).gt.0) cycle
               ! Determine if multiphase cell
               if ((vf%VF(i,j,k).ge.VFlo).and.(vf%VF(i,j,k).le.VFhi)) then
-                 if (.true.) then !(mult_iso) then
-                    ! Mechanical relaxation
-                    call this%pressure_relax_one(vf,matmod,i,j,k)
-                 else
-                    ! Thermal relaxation
-                    ! call pressure_thermal_relax_one(i,j,k)
-                 end if
-                 ! Refresh temperature and temperature-dependent variables
-                 ! call therm_refresh_one(i,j,k)
+                select case (relax_model)
+                case (mech_egy_mech_hhz)
+                  ! Mechanical relaxation
+                  call this%pressure_relax_one(vf,matmod,i,j,k)
+                case (thermmech_egy_mech_hhz) !,thermmech_egy_therm_hhz
+                  ! Thermo-mechanical relaxation
+                  call this%pressure_thermal_relax_one(vf,matmod,i,j,k)
+                end select
               end if
+              ! Update temperature globally, having changed during prior iteration and relaxation
+              this%Tmptr(i,j,k)=matmod%get_local_temperature(vf,i,j,k,this%Tmptr(i,j,k))
            end do
         end do
      end do
@@ -2463,6 +3060,7 @@ contains
      !call vf%distance_from_polygon()
      call vf%subcell_vol()
      call vf%get_curvature()
+     call vf%reset_moments()
      ! * Band and distance information should not be needed
      ! * Interface information won't be used before interface changes
      !   Just VOF and barycenter values
@@ -2479,7 +3077,12 @@ contains
                  ! Calculate kinematic KE
                  KE = 0.5_WP*(this%Ui(i,j,k)**2+this%Vi(i,j,k)**2+this%Wi(i,j,k)**2)
                  ! Alter energy if needed
+                 Gf = .false.; Lf = .false.
                  call matmod%fix_energy(vf%VF(i,j,k),KE,this%P(i,j,k),this%sigma*vf%curv(i,j,k),i,j,k,Gflag,Lflag)
+                 ! If energy has been altered, update temperature
+                 if (Gf.or.Lf) this%Tmptr(i,j,k) = matmod%get_local_temperature(vf,i,j,k,this%Tmptr(i,j,k))
+                 ! Update flags
+                 Gflag = (Gflag.or.Gf); Lflag = (Lflag.or.Lf)
               end do
            end do
         end do
@@ -2528,7 +3131,7 @@ contains
         if (i.ge.this%cfg%imin_.and.i.le.this%cfg%imax_.and. &
              j.ge.this%cfg%jmin_.and.j.le.this%cfg%jmax_.and. &
              k.ge.this%cfg%kmin_.and.k.le.this%cfg%kmax_) then
-           print*,'Ptherm relax could not be performed',i,j,k,'oVF',oVF, &
+           print*,'Ptherm relax could not be performed(1)',i,j,k,'oVF',oVF, &
                 'detmnt',detmnt,'Pliq',matmod%EOS_liquid(i,j,k,'p'),'Pgas',matmod%EOS_gas(i,j,k,'p')
         end if
         return
@@ -2546,7 +3149,7 @@ contains
         if (i.ge.this%cfg%imin_.and.i.le.this%cfg%imax_.and. &
              j.ge.this%cfg%jmin_.and.j.le.this%cfg%jmax_.and. &
              k.ge.this%cfg%kmin_.and.k.le.this%cfg%kmax_) then
-           print*,'P relax could not be performed',i,j,k,'oVF',oVF,'VF*',buf_VF, &
+           print*,'P relax could not be performed(2)',i,j,k,'oVF',oVF,'VF*',buf_VF, &
                 'Peq',Peq,'Pliq',matmod%EOS_liquid(i,j,k,'p'),'Pgas',matmod%EOS_gas(i,j,k,'p')
         end if
         return
@@ -2559,7 +3162,7 @@ contains
      ! Use the VF increment and Pint to calculate the change of the internal energy
      ! Store "relaxed" values with prefix r
      if (buf_VF.le.VFhi.and.buf_VF.ge.VFlo) then
-        ! Calculate future energy unless VF is out of bounds
+        ! Calculate total energy 
         rLrhoE = (oVF*this%LrhoE(i,j,k) - Pint*dVF)/buf_VF
         rGrhoE = ((1.0_WP-oVF)*this%GrhoE(i,j,k) + Pint*dVF)/(1.0_WP-buf_VF)
         ! Adjust phase quantities now that the volume fraction has changed
@@ -2573,7 +3176,6 @@ contains
      ! Go through cases according to the values found
      ! Check for VF bounds, then for bad values
      if (buf_VF.gt.VFhi) then
-        ! If equilibrium pressure or relaxed energy is negative, let liquid phase take gas energy
         vf%VF(i,j,k) = 1.0_WP
         this%LrhoE(i,j,k) = oVF*this%LrhoE(i,j,k) + (1.0_WP-oVF)*this%GrhoE(i,j,k)
         this%GrhoE(i,j,k) = 0.0_WP
@@ -2586,11 +3188,11 @@ contains
         this%Grho (i,j,k) = (1.0_WP-oVF)*this%Grho(i,j,k)
         this%Lrho (i,j,k) = 0.0_WP
      else if (rGIE.lt.Plo.and.oVF.gt.gelim) then
-        ! If equilibrium energy is negative, leave other values unchanged
+        ! If equilibrium gas energy is negative, leave other values unchanged
         if (i.ge.this%cfg%imin_.and.i.le.this%cfg%imax_.and. &
              j.ge.this%cfg%jmin_.and.j.le.this%cfg%jmax_.and. &
              k.ge.this%cfg%kmin_.and.k.le.this%cfg%kmax_) then
-           print*,'Gas phase eliminated in P relax',i,j,k,'oVF',oVF,'VF*',buf_VF, &
+           print*,'Gas phase eliminated in P relax(3)',i,j,k,'oVF',oVF,'VF*',buf_VF, &
                 'Peq-pjump',Peq-my_pjump,'Pliq',matmod%EOS_liquid(i,j,k,'p'), &
                 'Grhoe0',this%GrhoE(i,j,k)-this%Grho(i,j,k)*KE,'Grho0',this%Grho(i,j,k)
         end if
@@ -2600,11 +3202,11 @@ contains
         this%Lrho (i,j,k) = this%Lrho(i,j,k)
         this%Grho (i,j,k) = 0.0_WP
      else if (rLIE.lt.Plo.and.oVF.lt.lelim) then
-        ! If equilibrium pressure is negative, leave other values unchanged
+        ! If equilibrium liquid energy is negative, leave other values unchanged
         if (i.ge.this%cfg%imin_.and.i.le.this%cfg%imax_.and. &
              j.ge.this%cfg%jmin_.and.j.le.this%cfg%jmax_.and. &
              k.ge.this%cfg%kmin_.and.k.le.this%cfg%kmax_) then
-           print*,'Liq phase eliminated in P relax',i,j,k,'oVF',oVF,'VF*',buf_VF, &
+           print*,'Liq phase eliminated in P relax(4)',i,j,k,'oVF',oVF,'VF*',buf_VF, &
                 'Peq',Peq,'Pgas',matmod%EOS_gas(i,j,k,'p'), &
                 'Lrhoe0',this%LrhoE(i,j,k)-this%Lrho(i,j,k)*KE,'Lrho0',this%Lrho(i,j,k)
         end if
@@ -2618,7 +3220,7 @@ contains
         if (i.ge.this%cfg%imin_.and.i.le.this%cfg%imax_.and. &
              j.ge.this%cfg%jmin_.and.j.le.this%cfg%jmax_.and. &
              k.ge.this%cfg%kmin_.and.k.le.this%cfg%kmax_) then
-           print*,'Gas phase eliminated in P relax',i,j,k,'oVF',oVF,'VF*',buf_VF, &
+           print*,'Gas phase eliminated in P relax(5)',i,j,k,'oVF',oVF,'VF*',buf_VF, &
                 'Peq-pjump',Peq-my_pjump,'Pliq',matmod%EOS_liquid(i,j,k,'p'), &
                 'Grhoe0',this%GrhoE(i,j,k)-this%Grho(i,j,k)*KE,'Grho0',this%Grho(i,j,k)
         end if
@@ -2632,7 +3234,7 @@ contains
         if (i.ge.this%cfg%imin_.and.i.le.this%cfg%imax_.and. &
              j.ge.this%cfg%jmin_.and.j.le.this%cfg%jmax_.and. &
              k.ge.this%cfg%kmin_.and.k.le.this%cfg%kmax_) then
-           print*,'Liq phase eliminated in P relax',i,j,k,'oVF',oVF,'VF*',buf_VF, &
+           print*,'Liq phase eliminated in P relax(6)',i,j,k,'oVF',oVF,'VF*',buf_VF, &
                 'Peq',Peq,'Pgas',matmod%EOS_gas(i,j,k,'p'), &
                 'Lrhoe0',this%LrhoE(i,j,k)-this%Lrho(i,j,k)*KE,'Lrho0',this%Lrho(i,j,k)
         end if
@@ -2647,7 +3249,7 @@ contains
            if (i.ge.this%cfg%imin_.and.i.le.this%cfg%imax_.and. &
                 j.ge.this%cfg%jmin_.and.j.le.this%cfg%jmax_.and. &
                 k.ge.this%cfg%kmin_.and.k.le.this%cfg%kmax_) then
-              print*,'P relax could not be performed',i,j,k,'oVF',oVF,'VF*',buf_VF, &
+              print*,'P relax could not be performed(7)',i,j,k,'oVF',oVF,'VF*',buf_VF, &
                    'Peq+Pref_l',Peq+matmod%Pref_l,'Peq+Pref_g-pjump',Peq+matmod%Pref_g-my_pjump, &
                    'rGrhoe',rGIE,'rLrhoe',rLIE
            end if
@@ -2664,6 +3266,213 @@ contains
      
      return
    end subroutine pressure_relax_one
+   
+   subroutine pressure_thermal_relax_one(this,vf,matmod,i,j,k)
+     use vfs_class, only: vfs, VFlo, VFhi
+     use matm_class, only: matm, constant
+     implicit none
+     class(mast), intent(inout) :: this
+     class(vfs),  intent(inout) :: vf
+     class(matm), intent(inout) :: matmod
+     integer,     intent(in)    :: i,j,k
+     integer  :: n
+     real(WP) :: KE,buf_VF,detmnt,cvg_p,re1,re2,T1,T2
+     real(WP) :: Peq,Pold,Pnorm,oVF,my_pjump
+     real(WP) :: rGrhoE,rLrhoE,rGrho,rLrho,rGIE,rLIE,D_rhoe
+     real(WP), dimension(4) :: VF_terms
+     real(WP), dimension(3) :: quad_terms
+     integer , parameter :: n_loop = 10
+     real(WP), parameter :: tol_p = 1e-5
+     real(WP), parameter :: lelim = 0.1_WP
+     real(WP), parameter :: gelim = 1.0_WP-lelim
+     real(WP), parameter :: Plo = 1e-8_WP
+
+     ! Calculate kinetic energy without the density
+     KE  = 0.5_WP*(this%Ui(i,j,k)**2+this%Vi(i,j,k)**2+this%Wi(i,j,k)**2)
+
+     ! Store old VF value
+     oVF = vf%VF(i,j,k)
+     ! Store pressure jump
+     my_pjump = this%sigma*vf%curv(i,j,k)
+     ! Set initial guesses and loop quantities
+     this%Tmptr(i,j,k) = matmod%get_local_temperature(vf,i,j,k,this%Tmptr(i,j,k))
+     T1 = this%Tmptr(i,j,k); T2 = this%Tmptr(i,j,k)
+     Pnorm = abs(oVF*matmod%EOS_liquid(i,j,k,'p') + (1.0_WP-oVF)*matmod%EOS_gas(i,j,k,'p'))
+     n = 0; cvg_p = 1.0_WP; Pold = Pnorm
+     
+     ! Begin loop (for temperature-dependent cv)
+     do while (cvg_p.gt.tol_p.and.n.lt.n_loop)
+       
+       ! Get coefficients for quadratic equation
+       call matmod%EOS_thermal_relax_quad(i,j,k,oVF,my_pjump, &
+                 matmod%spec_heat_liquid(T1),matmod%spec_heat_gas(T2), &
+                 VF_terms,quad_terms)
+       
+       ! Check if solution can exist
+       detmnt = quad_terms(2)**2-4.0_WP*quad_terms(1)*quad_terms(3)
+       if (detmnt.lt.0.0_WP) then
+         if (i.ge.this%cfg%imin_.and.i.le.this%cfg%imax_.and. &
+             j.ge.this%cfg%jmin_.and.j.le.this%cfg%jmax_.and. &
+             k.ge.this%cfg%kmin_.and.k.le.this%cfg%kmax_) then
+             print*,'Ptherm relax could not be performed(1)',i,j,k,'oVF',oVF, &
+             'detmnt',detmnt,'Pliq',matmod%EOS_liquid(i,j,k,'p'),'Pgas',matmod%EOS_gas(i,j,k,'p')
+         end if
+         return
+       end if
+     
+       ! Solve quadratic equation for equilibrium pressure
+       Peq = (-quad_terms(2) + sqrt(detmnt))/(2.0_WP*quad_terms(1))
+       ! Use equilibrium pressure to calculate the new VF
+       buf_VF = (VF_terms(1)*Peq+VF_terms(2))/(VF_terms(3)*Peq+VF_terms(4))
+       
+       ! Check if new VF not NaN. Let bounds be handled later.
+       if (buf_VF.ne.buf_VF.or.&
+          (Peq+matmod%Pref_g-my_pjump.lt.Plo.and.oVF.le.gelim).or.&
+          (Peq+matmod%Pref_l.lt.Plo.and.oVF.ge.lelim)) then
+          if (i.ge.this%cfg%imin_.and.i.le.this%cfg%imax_.and. &
+              j.ge.this%cfg%jmin_.and.j.le.this%cfg%jmax_.and. &
+              k.ge.this%cfg%kmin_.and.k.le.this%cfg%kmax_) then
+              print*,'P relax could not be performed(2)',i,j,k,'oVF',oVF,'VF*',buf_VF, &
+              'Peq',Peq,'Pliq',matmod%EOS_liquid(i,j,k,'p'),'Pgas',matmod%EOS_gas(i,j,k,'p')
+          end if
+          return
+       end if
+       
+       ! If cell becomes single-phase, exit
+       if ((buf_VF.gt.VFhi).or.(buf_VF.lt.VFlo)) exit
+       
+       ! Calculate relaxed phase densities
+       rLrho  = (       oVF)*this%Lrho(i,j,k)/(       buf_VF)
+       rGrho  = (1.0_WP-oVF)*this%Grho(i,j,k)/(1.0_WP-buf_VF)
+       ! Update temperature of each phase according to equilibrium pressure
+       T1 = matmod%EOS_temp(Peq         ,rLrho,matmod%spec_heat_liquid(T1),'liquid')
+       T2 = matmod%EOS_temp(Peq-my_pjump,rGrho,matmod%spec_heat_gas(T2),   'gas')
+       
+       ! If properties are constant, exit after one iteration
+       if ((matmod%M_cv_l.eq.constant).and.(matmod%M_cv_g.eq.constant)) exit
+       
+       ! Prepare for next iteration and calculate loop criteria
+       n = n + 1
+       cvg_p = abs(Peq-Pold)/Pnorm
+       Pold = Peq
+
+     end do
+     
+     ! Store "relaxed" values with prefix r
+     if (buf_VF.le.VFhi.and.buf_VF.ge.VFlo) then
+       ! Use the new VOF and the EOS to calculate the energy exchange
+       ! If statement is to reduce the likelihood of round-off error
+       re1 = (       oVF)*(this%LrhoE(i,j,k)-this%Lrho(i,j,k)*KE)
+       re2 = (1.0_WP-oVF)*(this%GrhoE(i,j,k)-this%Grho(i,j,k)*KE)
+       if (abs(re1).gt.abs(re2)) then
+         D_rhoe = -(1.0_WP-buf_VF)*matmod%EOS_energy(Peq-my_pjump,rGrho, &
+                    0.0_WP,0.0_WP,0.0_WP,'gas'   ) + re2
+       else
+         D_rhoe = +(       buf_VF)*matmod%EOS_energy(Peq         ,rLrho, &
+                    0.0_WP,0.0_WP,0.0_WP,'liquid') - re1
+       end if
+       ! Calculate relaxed energy
+       rLrhoE = ((       oVF)*this%LrhoE(i,j,k) + D_rhoe)/(       buf_VF)
+       rGrhoE = ((1.0_WP-oVF)*this%GrhoE(i,j,k) - D_rhoe)/(1.0_WP-buf_VF)
+       ! Calculate relaxed internal energy of each phase
+       rLIE   = rLrhoE-rLrho*KE
+       rGIE   = rGrhoE-rGrho*KE
+     end if
+
+     ! Go through cases according to the values found
+     ! Check for VF bounds, then for bad values
+     if (buf_VF.gt.VFhi) then
+        vf%VF(i,j,k) = 1.0_WP
+        this%LrhoE(i,j,k) = oVF*this%LrhoE(i,j,k) + (1.0_WP-oVF)*this%GrhoE(i,j,k)
+        this%GrhoE(i,j,k) = 0.0_WP
+        this%Lrho (i,j,k) = oVF*this%Lrho(i,j,k)
+        this%Grho (i,j,k) = 0.0_WP
+     else if (buf_VF.lt.VFlo) then
+        vf%VF(i,j,k) = 0.0_WP
+        this%GrhoE(i,j,k) = (1.0_WP-oVF)*this%GrhoE(i,j,k) + oVF*this%LrhoE(i,j,k)
+        this%LrhoE(i,j,k) = 0.0_WP
+        this%Grho (i,j,k) = (1.0_WP-oVF)*this%Grho(i,j,k)
+        this%Lrho (i,j,k) = 0.0_WP
+     else if (rGIE.lt.Plo.and.oVF.gt.gelim) then
+        ! If equilibrium energy is negative, leave other values unchanged
+        if (i.ge.this%cfg%imin_.and.i.le.this%cfg%imax_.and. &
+             j.ge.this%cfg%jmin_.and.j.le.this%cfg%jmax_.and. &
+             k.ge.this%cfg%kmin_.and.k.le.this%cfg%kmax_) then
+           print*,'Gas phase eliminated in P relax(3)',i,j,k,'oVF',oVF,'VF*',buf_VF, &
+                'Peq-pjump',Peq-my_pjump,'Pliq',matmod%EOS_liquid(i,j,k,'p'), &
+                'Grhoe0',this%GrhoE(i,j,k)-this%Grho(i,j,k)*KE,'Grho0',this%Grho(i,j,k)
+        end if
+        vf%VF(i,j,k) = 1.0_WP
+        this%LrhoE(i,j,k) = this%LrhoE(i,j,k)
+        this%GrhoE(i,j,k) = 0.0_WP
+        this%Lrho (i,j,k) = this%Lrho(i,j,k)
+        this%Grho (i,j,k) = 0.0_WP
+     else if (rLIE.lt.Plo.and.oVF.lt.lelim) then
+        ! If equilibrium pressure is negative, leave other values unchanged
+        if (i.ge.this%cfg%imin_.and.i.le.this%cfg%imax_.and. &
+             j.ge.this%cfg%jmin_.and.j.le.this%cfg%jmax_.and. &
+             k.ge.this%cfg%kmin_.and.k.le.this%cfg%kmax_) then
+           print*,'Liq phase eliminated in P relax(4)',i,j,k,'oVF',oVF,'VF*',buf_VF, &
+                'Peq',Peq,'Pgas',matmod%EOS_gas(i,j,k,'p'), &
+                'Lrhoe0',this%LrhoE(i,j,k)-this%Lrho(i,j,k)*KE,'Lrho0',this%Lrho(i,j,k)
+        end if
+        vf%VF(i,j,k) = 0.0_WP
+        this%GrhoE(i,j,k) = this%GrhoE(i,j,k)
+        this%LrhoE(i,j,k) = 0.0_WP
+        this%Grho (i,j,k) = this%Grho(i,j,k)
+        this%Lrho (i,j,k) = 0.0_WP
+     else if (Peq+matmod%Pref_g-my_pjump.lt.Plo.and.oVF.gt.gelim) then
+        ! If equilibrium pressure is negative, let liquid phase take the energy
+        if (i.ge.this%cfg%imin_.and.i.le.this%cfg%imax_.and. &
+             j.ge.this%cfg%jmin_.and.j.le.this%cfg%jmax_.and. &
+             k.ge.this%cfg%kmin_.and.k.le.this%cfg%kmax_) then
+           print*,'Gas phase eliminated in P relax(5)',i,j,k,'oVF',oVF,'VF*',buf_VF, &
+                'Peq-pjump',Peq-my_pjump,'Pliq',matmod%EOS_liquid(i,j,k,'p'), &
+                'Grhoe0',this%GrhoE(i,j,k)-this%Grho(i,j,k)*KE,'Grho0',this%Grho(i,j,k)
+        end if
+        vf%VF(i,j,k) = 1.0_WP
+        this%LrhoE(i,j,k) = oVF*this%LrhoE(i,j,k) + max((1.0_WP-oVF)*this%GrhoE(i,j,k),0.0_WP)
+        this%GrhoE(i,j,k) = 0.0_WP
+        this%Lrho (i,j,k) = oVF*this%Lrho(i,j,k) ! + (1.0_WP-oVF)*Grho(i,j,k)
+        this%Grho (i,j,k) = 0.0_WP
+     else if (Peq+matmod%Pref_l.lt.Plo.and.oVF.lt.lelim) then
+        ! If equilibrium pressure is negative, let gas phase take energy
+        if (i.ge.this%cfg%imin_.and.i.le.this%cfg%imax_.and. &
+             j.ge.this%cfg%jmin_.and.j.le.this%cfg%jmax_.and. &
+             k.ge.this%cfg%kmin_.and.k.le.this%cfg%kmax_) then
+           print*,'Liq phase eliminated in P relax(6)',i,j,k,'oVF',oVF,'VF*',buf_VF, &
+                'Peq',Peq,'Pgas',matmod%EOS_gas(i,j,k,'p'), &
+                'Lrhoe0',this%LrhoE(i,j,k)-this%Lrho(i,j,k)*KE,'Lrho0',this%Lrho(i,j,k)
+        end if
+        vf%VF(i,j,k) = 0.0_WP
+        this%GrhoE(i,j,k) = (1.0_WP-oVF)*this%GrhoE(i,j,k) + max(oVF*this%LrhoE(i,j,k),0.0_WP)
+        this%LrhoE(i,j,k) = 0.0_WP
+        this%Grho (i,j,k) = (1.0_WP-oVF)*this%Grho(i,j,k) ! + oVF*Lrho(i,j,k)
+        this%Lrho (i,j,k) = 0.0_WP
+     else
+        ! Check for errant energy values
+        if (min(rGIE,rLIE,Peq+matmod%Pref_g-my_pjump,Peq+matmod%Pref_l).lt.Plo) then
+           if (i.ge.this%cfg%imin_.and.i.le.this%cfg%imax_.and. &
+                j.ge.this%cfg%jmin_.and.j.le.this%cfg%jmax_.and. &
+                k.ge.this%cfg%kmin_.and.k.le.this%cfg%kmax_) then
+              print*,'P relax could not be performed(7)',i,j,k,'oVF',oVF,'VF*',buf_VF, &
+                   'Peq+Pref_l',Peq+matmod%Pref_l,'Peq+Pref_g-pjump',Peq+matmod%Pref_g-my_pjump, &
+                   'rGrhoe',rGIE,'rLrhoe',rLIE
+           end if
+           return
+        end if
+
+        ! Set VF, rhoE, rho to relaxed values (made it past all the conditionals)
+        vf%VF(i,j,k) = buf_VF
+        this%LrhoE(i,j,k) = rLrhoE
+        this%GrhoE(i,j,k) = rGrhoE
+        this%Lrho (i,j,k) = rLrho
+        this%Grho (i,j,k) = rGrho
+        this%Tmptr(i,j,k) = T1 ! = T2
+     end if
+     
+     return
+   end subroutine pressure_thermal_relax_one
 
    !> Combine phase pressures and bulk moduli according to mixture rules, add additional terms to PA
    subroutine harmonize_advpressure_bulkmod(this,vf,matmod)
@@ -2676,9 +3485,9 @@ contains
      real(WP) :: rhoc2_lI,rhoc2_gI,denom
      integer :: i,j,k
 
-     do k=this%cfg%kmin_,this%cfg%kmax_+1
-        do j=this%cfg%jmin_,this%cfg%jmax_+1
-           do i=this%cfg%imin_,this%cfg%imax_+1
+     do k=this%cfg%kmin_,this%cfg%kmax_
+        do j=this%cfg%jmin_,this%cfg%jmax_
+           do i=this%cfg%imin_,this%cfg%imax_
               ! Intermediate variables for mechanical equilibrium projection
               rhoc2_lI = this%LrhoSS2(i,j,k); rhoc2_gI = this%GrhoSS2(i,j,k)
               if (vf%VF(i,j,k).ge.VFlo.and.vf%VF(i,j,k).le.VFhi) call matmod%bulkmod_intf(i,j,k,rhoc2_lI,rhoc2_gI)
@@ -2696,6 +3505,8 @@ contains
            end do
         end do
      end do
+     
+     call this%cfg%sync(this%RHOSS2)
 
    end subroutine harmonize_advpressure_bulkmod
 
@@ -2829,11 +3640,14 @@ contains
             end do
          end do
       end do
+      
+      ! Boundary conditions for pressure at faces (helps outflow)
+      call this%apply_bcond_facepressure(this%P_U,this%P_V,this%P_W)
 
     end subroutine interp_pressure_density
 
    !> Calculate the interpolated velocity, which is the velocity at the face
-   subroutine interp_vel_basic(this,vf,Ui,Vi,Wi,U,V,W)
+   subroutine interp_vel_basic(this,vf,Ui,Vi,Wi,U,V,W,use_masks)
      use vfs_class, only : vfs
      implicit none
      class(mast), intent(in) :: this
@@ -2844,9 +3658,17 @@ contains
      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(out) :: U
      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(out) :: V
      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(out) :: W
+     logical, intent(in), optional :: use_masks
      integer  :: i,j,k
      real(WP) :: vol_r,vol_l,rho_r,rho_l
+     logical  :: flag
 
+     ! Determine whether masks should matter or use global interpolation
+     if (present(use_masks)) then
+        flag = .not.use_masks
+     else
+        flag = .false.
+      end if
 
      do k=this%cfg%kmin_,this%cfg%kmax_+1
         do j=this%cfg%jmin_,this%cfg%jmax_+1
@@ -2857,7 +3679,7 @@ contains
               rho_r=sum(vf%Gvol(0,:,:,i  ,j,k))*this%Grho(i  ,j,k)+sum(vf%Lvol(0,:,:,i  ,j,k))*this%Lrho(i  ,j,k)
               rho_l=sum(vf%Gvol(1,:,:,i-1,j,k))*this%Grho(i-1,j,k)+sum(vf%Lvol(1,:,:,i-1,j,k))*this%Lrho(i-1,j,k)
               if (min(vol_l,vol_r).gt.0.0_WP) then
-                 if (this%umask(i,j,k).ne.2) U(i,j,k)=(rho_l*Ui(i-1,j,k)+rho_r*Ui(i,j,k))/(rho_l+rho_r)
+                 if (this%umask(i,j,k).ne.2.or.flag) U(i,j,k)=(rho_l*Ui(i-1,j,k)+rho_r*Ui(i,j,k))/(rho_l+rho_r)
               else
                  U(i,j,k)=0.0_WP
               end if
@@ -2867,7 +3689,7 @@ contains
               rho_r=sum(vf%Gvol(:,0,:,i,j  ,k))*this%Grho(i,j  ,k)+sum(vf%Lvol(:,0,:,i,j  ,k))*this%Lrho(i,j  ,k)
               rho_l=sum(vf%Gvol(:,1,:,i,j-1,k))*this%Grho(i,j-1,k)+sum(vf%Lvol(:,1,:,i,j-1,k))*this%Lrho(i,j-1,k)
               if (min(vol_l,vol_r).gt.0.0_WP) then
-                 if (this%vmask(i,j,k).ne.2) V(i,j,k)=(rho_l*Vi(i,j-1,k)+rho_r*Vi(i,j,k))/(rho_l+rho_r)
+                 if (this%vmask(i,j,k).ne.2.or.flag) V(i,j,k)=(rho_l*Vi(i,j-1,k)+rho_r*Vi(i,j,k))/(rho_l+rho_r)
               else
                  V(i,j,k)=0.0_WP
               end if
@@ -2877,7 +3699,7 @@ contains
               rho_r=sum(vf%Gvol(:,:,0,i,j,k  ))*this%Grho(i,j,k  )+sum(vf%Lvol(:,:,0,i,j,k  ))*this%Lrho(i,j,k  )
               rho_l=sum(vf%Gvol(:,:,1,i,j,k-1))*this%Grho(i,j,k-1)+sum(vf%Lvol(:,:,1,i,j,k-1))*this%Lrho(i,j,k-1)
               if (min(vol_l,vol_r).gt.0.0_WP) then
-                 if (this%wmask(i,j,k).ne.2) W(i,j,k)=(rho_l*Wi(i,j,k-1)+rho_r*Wi(i,j,k))/(rho_l+rho_r)
+                 if (this%wmask(i,j,k).ne.2.or.flag) W(i,j,k)=(rho_l*Wi(i,j,k-1)+rho_r*Wi(i,j,k))/(rho_l+rho_r)
               else
                  W(i,j,k)=0.0_WP
               end if
@@ -2920,7 +3742,7 @@ contains
               rho_r=sum(vf%Gvol(0,:,:,i  ,j,k))*this%Grho(i  ,j,k)+sum(vf%Lvol(0,:,:,i  ,j,k))*this%Lrho(i  ,j,k)
               rho_l=sum(vf%Gvol(1,:,:,i-1,j,k))*this%Grho(i-1,j,k)+sum(vf%Lvol(1,:,:,i-1,j,k))*this%Lrho(i-1,j,k)
               if (min(vol_l,vol_r).gt.0.0_WP) then
-                 if (this%sl_face(i,j,k,1).eq.1) then
+                 if (this%sl_x(i,j,k).eq.1) then
                     subtract_l = dt*termU(i-1,j,k)
                     subtract_r = dt*termU(i  ,j,k)
                     add = -dt*sum(this%divu_x(:,i,j,k)*this%P(i-1:i,j,k))/this%rho_U(i,j,k)&
@@ -2939,7 +3761,7 @@ contains
               rho_r=sum(vf%Gvol(:,0,:,i,j  ,k))*this%Grho(i,j  ,k)+sum(vf%Lvol(:,0,:,i,j  ,k))*this%Lrho(i,j  ,k)
               rho_l=sum(vf%Gvol(:,1,:,i,j-1,k))*this%Grho(i,j-1,k)+sum(vf%Lvol(:,1,:,i,j-1,k))*this%Lrho(i,j-1,k)
               if (min(vol_l,vol_r).gt.0.0_WP) then
-                 if (this%sl_face(i,j,k,2).eq.1) then
+                 if (this%sl_y(i,j,k).eq.1) then
                     subtract_l = dt*termV(i,j-1,k)
                     subtract_r = dt*termV(i,j  ,k)
                     add = -dt*sum(this%divv_y(:,i,j,k)*this%P(i,j-1:j,k))/this%rho_V(i,j,k)&
@@ -2958,7 +3780,7 @@ contains
               rho_r=sum(vf%Gvol(:,:,0,i,j,k  ))*this%Grho(i,j,k  )+sum(vf%Lvol(:,:,0,i,j,k  ))*this%Lrho(i,j,k  )
               rho_l=sum(vf%Gvol(:,:,1,i,j,k-1))*this%Grho(i,j,k-1)+sum(vf%Lvol(:,:,1,i,j,k-1))*this%Lrho(i,j,k-1)
               if (min(vol_l,vol_r).gt.0.0_WP) then
-                 if (this%sl_face(i,j,k,3).eq.1) then
+                 if (this%sl_z(i,j,k).eq.1) then
                     subtract_l = dt*termW(i,j,k-1)
                     subtract_r = dt*termW(i,j,k  )
                     add = -dt*sum(this%divw_z(:,i,j,k)*this%P(i,j,k-1:k))/this%rho_W(i,j,k)&
@@ -2989,7 +3811,7 @@ contains
      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: termV
      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: termW
      integer  :: i,j,k
-     real(WP) :: vol_r,vol_l,rho_r,rho_l
+     real(WP) :: rho_r,rho_l
      real(WP), dimension(0:1) :: jumpx,jumpy,jumpz
 
      ! Begin at zero every time
@@ -3139,12 +3961,14 @@ contains
    end subroutine update_Helmholtz_RHS
    
    !> Calculate the CFL
-   subroutine get_cfl(this,dt,cflc,cfl)
+   subroutine get_cfl(this,dt,cflc,cfl,matmod)
       use mpi_f08,   only: MPI_ALLREDUCE,MPI_MAX,MPI_MIN
       use parallel,  only: MPI_REAL_WP
       use mathtools, only: Pi
+      use matm_class, only: matm
       implicit none
       class(mast), intent(inout) :: this
+      class(matm), intent(inout), optional :: matmod
       real(WP), intent(in)  :: dt
       real(WP), intent(out) :: cflc
       real(WP), optional :: cfl
@@ -3167,9 +3991,6 @@ contains
       call MPI_ALLREDUCE(my_CFLst,this%CFLst,1,MPI_REAL_WP,MPI_MIN,this%cfg%comm,ierr)
       this%CFLst=dt/this%CFLst
       
-      ! Get largest kinematic viscosity
-      !max_nu=max(this%visc_l/this%rho_l,this%visc_g/this%rho_g)
-      max_nu = 0.0 ! for now
       ! Set the CFLs to zero
       my_CFLc_x=0.0_WP; my_CFLc_y=0.0_WP; my_CFLc_z=0.0_WP
       my_CFLv_x=0.0_WP; my_CFLv_y=0.0_WP; my_CFLv_z=0.0_WP
@@ -3183,6 +4004,16 @@ contains
                my_CFLa_x=max(my_CFLa_x,abs(this%U(i,j,k)+sqrt(this%RHOSS2(i,j,k)/this%RHO(i,j,k)))*this%cfg%dxmi(i))
                my_CFLa_y=max(my_CFLa_y,abs(this%V(i,j,k)+sqrt(this%RHOSS2(i,j,k)/this%RHO(i,j,k)))*this%cfg%dymi(j))
                my_CFLa_z=max(my_CFLa_z,abs(this%W(i,j,k)+sqrt(this%RHOSS2(i,j,k)/this%RHO(i,j,k)))*this%cfg%dzmi(k))
+               
+               max_nu = this%VISC(i,j,k)/this%RHO(i,j,k)
+               if (present(matmod)) then
+                 if (this%Lrho(i,j,k).gt.0.0_WP) then 
+                   max_nu = max(max_nu,matmod%viscosity_liquid(this%Tmptr(i,j,k))/this%Lrho(i,j,k)) 
+                 end if
+                 if (this%Grho(i,j,k).gt.0.0_WP) then 
+                   max_nu = max(max_nu,matmod%viscosity_gas   (this%Tmptr(i,j,k))/this%Grho(i,j,k)) 
+                 end if
+               end if
                my_CFLv_x=max(my_CFLv_x,4.0_WP*max_nu*this%cfg%dxi(i)**2)
                my_CFLv_y=max(my_CFLv_y,4.0_WP*max_nu*this%cfg%dyi(j)**2)
                my_CFLv_z=max(my_CFLv_z,4.0_WP*max_nu*this%cfg%dzi(k)**2)
@@ -3193,7 +4024,7 @@ contains
       my_CFLa_x=my_CFLa_x*dt; my_CFLa_y=my_CFLa_y*dt; my_CFLa_z=my_CFLa_z*dt
       my_CFLv_x=my_CFLv_x*dt; my_CFLv_y=my_CFLv_y*dt; my_CFLv_z=my_CFLv_z*dt
       
-      ! Get the parallel max
+      ! Get the parallel min, max
       call MPI_ALLREDUCE(my_CFLc_x,this%CFLc_x,1,MPI_REAL_WP,MPI_MAX,this%cfg%comm,ierr)
       call MPI_ALLREDUCE(my_CFLc_y,this%CFLc_y,1,MPI_REAL_WP,MPI_MAX,this%cfg%comm,ierr)
       call MPI_ALLREDUCE(my_CFLc_z,this%CFLc_z,1,MPI_REAL_WP,MPI_MAX,this%cfg%comm,ierr)
@@ -3216,82 +4047,177 @@ contains
    
    !> Calculate the max of our fields
    subroutine get_max(this)
-      use mpi_f08,  only: MPI_ALLREDUCE,MPI_MAX
+      use mpi_f08,  only: MPI_ALLREDUCE,MPI_MAX,MPI_MIN
       use parallel, only: MPI_REAL_WP
       implicit none
       class(mast), intent(inout) :: this
       integer :: i,j,k,ierr
-      real(WP) :: my_Umax,my_Vmax,my_Wmax,my_Pmax,my_divmax
+      real(WP) :: my_RHOmin,my_RHOmax,my_Umax,my_Vmax,my_Wmax,my_Pmax,my_Tmax
       
       ! Set all to zero
-      my_Umax=0.0_WP; my_Vmax=0.0_WP; my_Wmax=0.0_WP; my_Pmax=0.0_WP; my_divmax=0.0_WP
+      my_RHOmin=huge(1.0_WP); my_RHOmax = 0.0_WP
+      my_Umax=0.0_WP; my_Vmax=0.0_WP; my_Wmax=0.0_WP; my_Pmax=0.0_WP; my_Tmax=0.0_WP
       do k=this%cfg%kmin_,this%cfg%kmax_
          do j=this%cfg%jmin_,this%cfg%jmax_
             do i=this%cfg%imin_,this%cfg%imax_
                my_Umax=max(my_Umax,abs(this%U(i,j,k)))
                my_Vmax=max(my_Vmax,abs(this%V(i,j,k)))
                my_Wmax=max(my_Wmax,abs(this%W(i,j,k)))
-               if (this%cfg%VF(i,j,k).gt.0.0_WP) my_Pmax  =max(my_Pmax  ,abs(this%P(i,j,k)  ))
-               !if (this%cfg%VF(i,j,k).gt.0.0_WP) my_divmax=max(my_divmax,abs(this%div(i,j,k)))
+               if (this%cfg%VF(i,j,k).gt.0.0_WP) my_RHOmin=min(my_RHOmin,abs(this%RHO(i,j,k)))
+               if (this%cfg%VF(i,j,k).gt.0.0_WP) my_RHOmax=max(my_RHOmax,abs(this%RHO(i,j,k)))
+               if (this%cfg%VF(i,j,k).gt.0.0_WP) my_Pmax=max(my_Pmax,abs(this%P(i,j,k)))
+               if (this%cfg%VF(i,j,k).gt.0.0_WP) my_Tmax=max(my_Tmax,abs(this%Tmptr(i,j,k)))
             end do
          end do
       end do
       
       ! Get the parallel max
-      call MPI_ALLREDUCE(my_Umax  ,this%Umax  ,1,MPI_REAL_WP,MPI_MAX,this%cfg%comm,ierr)
-      call MPI_ALLREDUCE(my_Vmax  ,this%Vmax  ,1,MPI_REAL_WP,MPI_MAX,this%cfg%comm,ierr)
-      call MPI_ALLREDUCE(my_Wmax  ,this%Wmax  ,1,MPI_REAL_WP,MPI_MAX,this%cfg%comm,ierr)
-      call MPI_ALLREDUCE(my_Pmax  ,this%Pmax  ,1,MPI_REAL_WP,MPI_MAX,this%cfg%comm,ierr)
-      !call MPI_ALLREDUCE(my_divmax,this%divmax,1,MPI_REAL_WP,MPI_MAX,this%cfg%comm,ierr)
+      call MPI_ALLREDUCE(my_RHOmin,this%RHOmin,1,MPI_REAL_WP,MPI_MIN,this%cfg%comm,ierr)
+      call MPI_ALLREDUCE(my_RHOmax,this%RHOmax,1,MPI_REAL_WP,MPI_MAX,this%cfg%comm,ierr)
+      call MPI_ALLREDUCE(my_Umax,this%Umax,1,MPI_REAL_WP,MPI_MAX,this%cfg%comm,ierr)
+      call MPI_ALLREDUCE(my_Vmax,this%Vmax,1,MPI_REAL_WP,MPI_MAX,this%cfg%comm,ierr)
+      call MPI_ALLREDUCE(my_Wmax,this%Wmax,1,MPI_REAL_WP,MPI_MAX,this%cfg%comm,ierr)
+      call MPI_ALLREDUCE(my_Pmax,this%Pmax,1,MPI_REAL_WP,MPI_MAX,this%cfg%comm,ierr)
+      call MPI_ALLREDUCE(my_Tmax,this%Tmax,1,MPI_REAL_WP,MPI_MAX,this%cfg%comm,ierr)
       
-   end subroutine get_max
-   
-   !> Prepare viscosity arrays from vfs object
-   subroutine get_viscosity(this,vf)
-      use vfs_class, only: vfs
+    end subroutine get_max
+
+
+    !> Calculate various quantities for visualization purposes
+    subroutine get_viz(this)
       implicit none
       class(mast), intent(inout) :: this
-      class(vfs), intent(in) :: vf
       integer :: i,j,k
-      real(WP) :: liq_vol,gas_vol,tot_vol
-      ! ! Compute harmonically-averaged staggered viscosities using subcell phasic volumes
-      ! do k=this%cfg%kmino_+1,this%cfg%kmaxo_
-      !    do j=this%cfg%jmino_+1,this%cfg%jmaxo_
-      !       do i=this%cfg%imino_+1,this%cfg%imaxo_
-      !          ! VISC at [xm,ym,zm] - direct sum in x/y/z
-      !          liq_vol=sum(vf%Lvol(:,:,:,i,j,k))
-      !          gas_vol=sum(vf%Gvol(:,:,:,i,j,k))
-      !          tot_vol=gas_vol+liq_vol
-      !          this%visc(i,j,k)=0.0_WP
-      !          if (tot_vol.gt.0.0_WP) this%visc(i,j,k)=this%visc_g*this%visc_l/(this%visc_l*gas_vol/tot_vol+this%visc_g*liq_vol/tot_vol+epsilon(1.0_WP))
-      !          ! VISC_xy at [x,y,zm] - direct sum in z, staggered sum in x/y
-      !          liq_vol=sum(vf%Lvol(0,0,:,i,j,k))+sum(vf%Lvol(1,0,:,i-1,j,k))+sum(vf%Lvol(0,1,:,i,j-1,k))+sum(vf%Lvol(1,1,:,i-1,j-1,k))
-      !          gas_vol=sum(vf%Gvol(0,0,:,i,j,k))+sum(vf%Gvol(1,0,:,i-1,j,k))+sum(vf%Gvol(0,1,:,i,j-1,k))+sum(vf%Gvol(1,1,:,i-1,j-1,k))
-      !          tot_vol=gas_vol+liq_vol
-      !          this%visc_xy(i,j,k)=0.0_WP
-      !          if (tot_vol.gt.0.0_WP) this%visc_xy(i,j,k)=this%visc_g*this%visc_l/(this%visc_l*gas_vol/tot_vol+this%visc_g*liq_vol/tot_vol+epsilon(1.0_WP))
-      !          ! VISC_yz at [xm,y,z] - direct sum in x, staggered sum in y/z
-      !          liq_vol=sum(vf%Lvol(:,0,0,i,j,k))+sum(vf%Lvol(:,1,0,i,j-1,k))+sum(vf%Lvol(:,0,1,i,j,k-1))+sum(vf%Lvol(:,1,1,i,j-1,k-1))
-      !          gas_vol=sum(vf%Gvol(:,0,0,i,j,k))+sum(vf%Gvol(:,1,0,i,j-1,k))+sum(vf%Gvol(:,0,1,i,j,k-1))+sum(vf%Gvol(:,1,1,i,j-1,k-1))
-      !          tot_vol=gas_vol+liq_vol
-      !          this%visc_yz(i,j,k)=0.0_WP
-      !          if (tot_vol.gt.0.0_WP) this%visc_yz(i,j,k)=this%visc_g*this%visc_l/(this%visc_l*gas_vol/tot_vol+this%visc_g*liq_vol/tot_vol+epsilon(1.0_WP))
-      !          ! VISC_zx at [x,ym,z] - direct sum in y, staggered sum in z/x
-      !          liq_vol=sum(vf%Lvol(0,:,0,i,j,k))+sum(vf%Lvol(0,:,1,i,j,k-1))+sum(vf%Lvol(1,:,0,i-1,j,k))+sum(vf%Lvol(1,:,1,i-1,j,k-1))
-      !          gas_vol=sum(vf%Gvol(0,:,0,i,j,k))+sum(vf%Gvol(0,:,1,i,j,k-1))+sum(vf%Gvol(1,:,0,i-1,j,k))+sum(vf%Gvol(1,:,1,i-1,j,k-1))
-      !          tot_vol=gas_vol+liq_vol
-      !          this%visc_zx(i,j,k)=0.0_WP
-      !          if (tot_vol.gt.0.0_WP) this%visc_zx(i,j,k)=this%visc_g*this%visc_l/(this%visc_l*gas_vol/tot_vol+this%visc_g*liq_vol/tot_vol+epsilon(1.0_WP))
-      !       end do
-      !    end do
-      ! end do
-      ! ! Synchronize boundaries - not really needed...
-      ! call this%cfg%sync(this%visc)
-      ! call this%cfg%sync(this%visc_xy)
-      ! call this%cfg%sync(this%visc_yz)
-      ! call this%cfg%sync(this%visc_zx)
-   end subroutine get_viscosity
+
+      do k=this%cfg%kmino_,this%cfg%kmax_
+         do j=this%cfg%jmin_,this%cfg%jmax_
+            do i=this%cfg%imin_,this%cfg%imax_
+               ! Dilatation
+               this%divU(i,j,k)=( sum(this%divp_x(:,i,j,k)*this%U(i:i+1,j,k)) &
+                    + sum(this%divp_y(:,i,j,k)*this%V(i,j:j+1,k)) &
+                    + sum(this%divp_z(:,i,j,k)*this%W(i,j,k:k+1)) )
+               ! Mach number
+               this%Mach(i,j,k)=sqrt(this%Ui(i,j,k)**2+this%Vi(i,j,k)**2+this%Wi(i,j,k)**2)&
+                    /sqrt(this%RHOSS2(i,j,k)/this%RHO(i,j,k))
+            end do
+         end do
+      end do
+      call this%cfg%sync(this%divU)
+      call this%cfg%sync(this%Mach)
+
+    end subroutine get_viz
+    
    
+   !> Prepare viscosity arrays from vfs, matm, and sgsmodel objects
+   subroutine get_viscosity(this,vf,matmod,sgs_visc,visc_x,visc_y,visc_z)
+     use vfs_class,  only: vfs, VFhi, VFlo
+     use matm_class, only: matm
+     implicit none
+     class(mast), intent(inout) :: this   !< The two-phase all-Mach flow solver
+     class(vfs),  intent(inout) :: vf     !< The volume fraction solver
+     class(matm), intent(inout) :: matmod !< The material models for this solver
+     real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in), optional :: sgs_visc
+     real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: visc_x
+     real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: visc_y
+     real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: visc_z
+     real(WP) :: visc_g,visc_l,kappa_g,kappa_l
+     real(WP) :: liq_vol,gas_vol,tot_vol
+     integer :: i,j,k
+     
+     ! Initialize face viscosities
+     visc_x = 0.0_WP; visc_y = 0.0_WP; visc_z = 0.0_WP
+     ! Initialize cell-centered diffusion parameters
+     this%visc = 0.0_WP;
+     this%therm_cond = 0.0_WP;
+     
+     do k=this%cfg%kmin_-1,this%cfg%kmax_+2
+       do j=this%cfg%jmin_-1,this%cfg%jmax_+2
+         do i=this%cfg%imin_-1,this%cfg%imax_+2
+           
+           ! Update thermal conductivity and viscosity of each phase
+           ! Set to unity if phase not present for sake of harmonic average
+           if (vf%VF(i,j,k).ge.VFlo) then
+             kappa_l = matmod%therm_cond_liquid(this%Tmptr(i,j,k))
+             visc_l = matmod%viscosity_liquid(this%Tmptr(i,j,k))
+           else
+             kappa_l = 1.0_WP; visc_l = 1.0_WP
+           end if
+           if (vf%VF(i,j,k).le.VFhi) then
+             kappa_g = matmod%therm_cond_gas(this%Tmptr(i,j,k))
+             visc_g = matmod%viscosity_gas(this%Tmptr(i,j,k))
+           else
+             kappa_g = 1.0_WP; visc_g = 1.0_WP
+           end if
+           
+           ! Contribute eddy viscosity to each phase viscosity
+           if (present(sgs_visc)) then
+             visc_g = visc_g + this%Grho(i,j,k)*sgs_visc(i,j,k)
+             visc_l = visc_l + this%Lrho(i,j,k)*sgs_visc(i,j,k)
+           end if
+           
+           !! -- CELL CENTER -- !!
+           liq_vol=sum(vf%Lvol(:,:,:,i,j,k))
+           gas_vol=sum(vf%Gvol(:,:,:,i,j,k))
+           tot_vol=gas_vol+liq_vol
+           if (tot_vol.gt.0.0_WP) then
+             this%therm_cond(i,j,k)=kappa_g*kappa_l/(kappa_l*gas_vol/tot_vol+kappa_g*liq_vol/tot_vol+epsilon(1.0_WP))
+             this%visc(i,j,k)=visc_g*visc_l/(visc_l*gas_vol/tot_vol+visc_g*liq_vol/tot_vol+epsilon(1.0_WP))
+           end if
+           
+           ! Skip if inviscid
+           if (.not.(visc_g.gt.0.0_WP .and. visc_l.gt.0.0_WP)) cycle
+           
+           !! -- X FACE -- !!
+           ! Left half contribution
+           liq_vol=sum(vf%Lvol(1,:,:,i,j,k))
+           gas_vol=sum(vf%Gvol(1,:,:,i,j,k))
+           visc_x(i+1,j,k) = visc_x(i+1,j,k) + gas_vol/visc_g + liq_vol/visc_l
+           ! Right half contribution
+           liq_vol=sum(vf%Lvol(0,:,:,i,j,k))
+           gas_vol=sum(vf%Gvol(0,:,:,i,j,k))
+           visc_x(i  ,j,k) = visc_x(i  ,j,k) + gas_vol/visc_g + liq_vol/visc_l
+           ! Perform harmonic average (reciprocal)
+           tot_vol = sum(vf%Gvol(0,:,:,i,j,k)) + sum(vf%Lvol(0,:,:,i,j,k)) + sum(vf%Gvol(1,:,:,i-1,j,k)) + sum(vf%Lvol(1,:,:,i-1,j,k))
+           if (tot_vol.gt.0.0_WP) visc_x(i,j,k) = tot_vol / visc_x(i,j,k);
+           
+           !! -- Y FACE -- !!
+           ! Left half contribution
+           liq_vol=sum(vf%Lvol(:,1,:,i,j,k))
+           gas_vol=sum(vf%Gvol(:,1,:,i,j,k))
+           visc_y(i,j+1,k) = visc_y(i,j+1,k) + gas_vol/visc_g + liq_vol/visc_l
+           ! Right half contribution
+           liq_vol=sum(vf%Lvol(:,0,:,i,j,k))
+           gas_vol=sum(vf%Gvol(:,0,:,i,j,k))
+           visc_y(i,j  ,k) = visc_y(i,j  ,k) + gas_vol/visc_g + liq_vol/visc_l
+           ! Perform harmonic average (reciprocal)
+           tot_vol = sum(vf%Gvol(:,0,:,i,j,k)) + sum(vf%Lvol(:,0,:,i,j,k)) + sum(vf%Gvol(:,1,:,i,j-1,k)) + sum(vf%Lvol(:,1,:,i,j-1,k))
+           if (tot_vol.gt.0.0_WP) visc_y(i,j,k) = tot_vol / visc_y(i,j,k);
+           
+           !! -- Z FACE -- !!
+           ! Left half contribution
+           liq_vol=sum(vf%Lvol(:,:,1,i,j,k))
+           gas_vol=sum(vf%Gvol(:,:,1,i,j,k))
+           visc_z(i,j,k+1) = visc_z(i,j,k+1) + gas_vol/visc_g + liq_vol/visc_l
+           ! Right half contribution
+           liq_vol=sum(vf%Lvol(:,:,0,i,j,k))
+           gas_vol=sum(vf%Gvol(:,:,0,i,j,k))
+           visc_z(i,j,k  ) = visc_z(i,j,k  ) + gas_vol/visc_g + liq_vol/visc_l
+           ! Perform harmonic average (reciprocal)
+           tot_vol = sum(vf%Gvol(:,:,0,i,j,k)) + sum(vf%Lvol(:,:,0,i,j,k)) + sum(vf%Gvol(:,:,1,i,j,k-1)) + sum(vf%Lvol(:,:,1,i,j,k-1))
+           if (tot_vol.gt.0.0_WP) visc_z(i,j,k) = tot_vol / visc_z(i,j,k);
+           
+         end do
+       end do
+     end do
+     
+     !call this%cfg%sync(this%therm_cond)
+     !call this%cfg%sync(this%visc)
+     !call this%cfg%sync(visc_x)
+     !call this%cfg%sync(visc_y)
+     !call this%cfg%sync(visc_z)
+
+     return
+   end subroutine get_viscosity
 
    ! !> Add gravity source term - assumes that rho_[UVW] have been generated before
    ! subroutine addsrc_gravity(this,resU,resV,resW)

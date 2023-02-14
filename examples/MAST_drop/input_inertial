@@ -1,0 +1,44 @@
+# Case is intended as a useful sanity check, can also
+# be used as a verification test when density ratio is >= 10^6
+Gas velocity :                0.0 0 0
+Liquid velocity :             1.0 0 0
+Gas density :		      1.0
+Liquid density :	      1000.0
+Surface tension coefficient : 0
+
+# Parallelization
+Partition :	4 1 1
+
+# Mesh definition
+Lx :	1
+Ly :	1
+nx :	64
+ny :	64
+
+# Flow setup
+Droplet diameter :   0.2
+Background pressure :  1.01325e5
+
+# Fluid properties
+Liquid dynamic viscosity :    0
+Gas dynamic viscosity :       0
+Liquid gamma :	      	      4.4
+Liquid Pref :		      6e8
+Gas gamma : 		      1.4
+
+# Time integration
+Max timestep size : 5e-3
+Max cfl number :    0.9
+Max time :     	    1
+Max steps :	    100000
+
+# Pressure solver
+Pressure tolerance : 1e-10
+Pressure iteration : 100
+
+# Implicit velocity solver
+Implicit tolerance : 1e-10
+Implicit iteration : 100
+
+# Ensight output
+Ensight output period : 5e-2

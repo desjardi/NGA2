@@ -1,0 +1,33 @@
+# Parallelization
+Partition :	1 1 1
+
+# Mesh definition
+nx :	32
+
+# Flow setup
+Background pressure : 59.76143
+
+# Fluid properties
+Liquid gamma :	      	      4.4
+Liquid Pref :		      6e3
+Gas gamma : 		      1.4
+Gas dynamic viscosity :	      0
+
+# Initial conditions
+Gas density :                 1
+
+# Time integration
+Max timestep size : 0.01
+Max cfl number :    1
+Max time :          3.9999999
+
+# Pressure solver
+Pressure tolerance : 1e-6
+Pressure iteration : 100
+
+# Implicit velocity solver
+Implicit tolerance : 1e-6
+Implicit iteration : 100
+
+# Ensight output
+Ensight output period : 5e-4

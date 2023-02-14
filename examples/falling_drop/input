@@ -1,26 +1,26 @@
 # Parallelization
-Partition :	1 1 4
+Partition :	1 1 8
 
 # Mesh definition
-Lx :	0.01
-Ly :	1
-Lz :	1
+Lx :	0.001
+Ly :	0.1
+Lz :	0.1
 nx :	1
 ny :	100
 nz :	100
 
 # Fluid properties
-Gravity :                     0 -1 0
+Gravity :                     0 -9.81 0
 Liquid dynamic viscosity :    1.137e-3
 Gas dynamic viscosity :       1.780e-5
 Liquid density :              1000
 Gas density :                 1.226
 Surface tension coefficient : 0.0728
-Static contact angle :        70
 
 # Time integration
-Max timestep size : 1e-2
+Max timestep size : 1e-3
 Max cfl number :    0.9
+Max time : 5
 
 # Pressure solver
 Pressure tolerance : 1e-6
@@ -31,4 +31,4 @@ Implicit tolerance : 1e-6
 Implicit iteration : 100
 
 # Ensight output
-Ensight output period : 1e-1
+Ensight output period : 1e-2

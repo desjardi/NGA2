@@ -24,13 +24,14 @@ module simulation
    type(event)   :: ens_evt
    
    !> Simulation monitor file
-   type(monitor) :: mfile,cflfile
+   type(monitor) :: mfile,cflfile,cvgfile
    
    public :: simulation_init,simulation_run,simulation_final
    
    !> Problem definition
    real(WP) :: l0,l1
    real(WP) :: discloc,v0,v1,p0,p1
+   integer  :: relax_model
    
 contains
 
@@ -123,7 +124,8 @@ contains
       
       ! Create a compressible two-phase flow solver
       create_and_initialize_flow_solver: block
-         use mast_class, only: clipped_neumann,dirichlet,bc_scope,bcond
+         use mast_class, only: clipped_neumann,dirichlet,bc_scope,bcond,mech_egy_mech_hhz
+         use matm_class, only: none
          use ils_class,  only: gmres_amg,pcg_bbox
          use mathtools,  only: Pi
          integer :: i,j,k,n
@@ -144,11 +146,10 @@ contains
          ! Register flow solver variables with material models
          call matmod%register_thermoflow_variables('liquid',fs%Lrho,fs%Ui,fs%Vi,fs%Wi,fs%LrhoE,fs%LP)
          call matmod%register_thermoflow_variables('gas'   ,fs%Grho,fs%Ui,fs%Vi,fs%Wi,fs%GrhoE,fs%GP)
-         ! Assign constant viscosity to each phase
-         call param_read('Liquid dynamic viscosity',fs%visc_l0)
-         call param_read('Gas dynamic viscosity',fs%visc_g0)
-         ! Read in surface tension coefficient
-         call param_read('Surface tension coefficient',fs%sigma)
+         ! As a shocktube case, it is intended to be inviscid, no diffusion
+         call matmod%register_diffusion_thermo_models(viscmodel_liquid=none,viscmodel_gas=none,hdffmodel_liquid=none,hdffmodel_gas=none)
+         ! Surface tension should be set to 0, it is a 1D case
+         fs%sigma = 0.0_WP
          ! Configure pressure solver
          call param_read('Pressure iteration',fs%psolv%maxit)
          call param_read('Pressure tolerance',fs%psolv%rcvg)
@@ -201,7 +202,8 @@ contains
          fs%RHO   = (1.0_WP-vf%VF)*fs%Grho  + vf%VF*fs%Lrho
          fs%rhoUi = fs%RHO*fs%Ui; fs%rhoVi = fs%RHO*fs%Vi; fs%rhoWi = fs%RHO*fs%Wi
          ! Perform initial pressure relax
-         call fs%pressure_relax(vf,matmod)
+         relax_model = mech_egy_mech_hhz
+         call fs%pressure_relax(vf,matmod,relax_model)
          ! Calculate initial phase and bulk moduli
          call fs%init_phase_bulkmod(vf,matmod)
          call fs%reinit_phase_pressure(vf,matmod)
@@ -259,13 +261,20 @@ contains
          call mfile%add_column(fs%Vmax,'Vmax')
          call mfile%add_column(fs%Wmax,'Wmax')
          call mfile%add_column(fs%Pmax,'Pmax')
-         call mfile%add_column(vf%VFmax,'VOF maximum')
-         call mfile%add_column(vf%VFmin,'VOF minimum')
-         call mfile%add_column(vf%VFint,'VOF integral')
-         !call mfile%add_column(fs%divmax,'Maximum divergence')
-         call mfile%add_column(fs%psolv%it,'Pressure iteration')
-         call mfile%add_column(fs%psolv%rerr,'Pressure error')
          call mfile%write()
+         ! Create convergence monitor
+         cvgfile=monitor(fs%cfg%amRoot,'cvg')
+         call cvgfile%add_column(time%n,'Timestep number')
+         call cvgfile%add_column(time%it,'Iteration')
+         call cvgfile%add_column(time%t,'Time')
+         call cvgfile%add_column(fs%impl_it_x,'Impl_x iteration')
+         call cvgfile%add_column(fs%impl_rerr_x,'Impl_x error')
+         call cvgfile%add_column(fs%impl_it_y,'Impl_y iteration')
+         call cvgfile%add_column(fs%impl_rerr_y,'Impl_y error')
+         call cvgfile%add_column(fs%implicit%it,'Impl_z iteration')
+         call cvgfile%add_column(fs%implicit%rerr,'Impl_z error')
+         call cvgfile%add_column(fs%psolv%it,'Pressure iteration')
+         call cvgfile%add_column(fs%psolv%rerr,'Pressure error')
          ! Create CFL monitor
          cflfile=monitor(fs%cfg%amRoot,'cfl')
          call cflfile%add_column(time%n,'Timestep number')
@@ -311,10 +320,6 @@ contains
          ! Create in-cell reconstruction
          call fs%flow_reconstruct(vf)
 
-         ! Get boundary conditions at current time
-
-         ! Other routines to add later: sgs, lpt, prescribe
-
          ! Zero variables that will change during subiterations
          fs%P = 0.0_WP
          fs%Pjx = 0.0_WP; fs%Pjy = 0.0_WP; fs%Pjz = 0.0_WP
@@ -329,9 +334,7 @@ contains
             ! Predictor step, involving advection and pressure terms
             call fs%advection_step(time%dt,vf,matmod)
 
-            ! Insert viscous step here, or possibly incorporate into predictor above
-
-            ! Insert sponge step here
+            ! No diffusion in this test
             
             ! Prepare pressure projection
             call fs%pressureproj_prepare(time%dt,vf,matmod)
@@ -344,13 +347,15 @@ contains
             fs%P=fs%P+fs%psolv%sol
             call fs%pressureproj_correct(time%dt,vf,fs%psolv%sol)
             
+            ! Record convergence monitor
+            call cvgfile%write()
             ! Increment sub-iteration counter
             time%it=time%it+1
             
          end do
 
          ! Pressure relaxation
-         call fs%pressure_relax(vf,matmod)
+         call fs%pressure_relax(vf,matmod,relax_model)
          
          ! Output to ensight
          if (ens_evt%occurs()) call ens_out%write_data(time%t)

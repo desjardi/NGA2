@@ -10,7 +10,7 @@ module iterator_class
    private
    
    ! Expose type/constructor/methods
-   public :: iterator
+   public :: iterator,locator_ftype
    
    !> itr object definition
    type :: iterator
@@ -33,6 +33,14 @@ module iterator_class
       procedure :: print=>iterator_print                  !< Output iterator to the screen
    end type iterator
    
+   !> Type of the locator function used to generate an iterator
+   interface
+      logical function locator_ftype(pargrid,ind1,ind2,ind3)
+         use pgrid_class, only: pgrid
+         class(pgrid), intent(in) :: pargrid
+         integer, intent(in) :: ind1,ind2,ind3
+      end function locator_ftype
+   end interface
    
    !> Declare single-grid iterator constructor
    interface iterator
@@ -50,18 +58,12 @@ contains
       type(iterator) :: self
       class(pgrid), target, intent(in) :: pg
       character(len=*), intent(in) :: name
-      external :: locator
-      interface
-         logical function locator(pargrid,ind1,ind2,ind3)
-            use pgrid_class, only: pgrid
-            class(pgrid), intent(in) :: pargrid
-            integer, intent(in) :: ind1,ind2,ind3
-         end function locator
-      end interface
+      procedure(locator_ftype) :: locator
       character(len=1), optional :: face
       integer :: i,j,k,cnt
       integer :: color,key,ierr
       integer :: f_imax_,f_jmax_,f_kmax_
+      integer :: f_imin_,f_jmin_,f_kmin_
       
       ! Set the name for the iterator
       self%name=trim(adjustl(name))
@@ -76,14 +78,20 @@ contains
          case('x'); self%face='x'
          case('y'); self%face='y'
          case('z'); self%face='z'
+         case('c'); self%face='c' ! for cell-centered boundary conditions
          case default; call die('[iterator constructor] Unknown face value - if provided, expecting x, y, or z')
          end select
       end if
       
-      ! Modify iteration upper bounds to handle face-specific limits -> this considers more faces to be *inside* our domain
-      f_imax_=self%pg%imax_; if (.not.self%pg%xper.and.self%pg%iproc.eq.self%pg%npx.and.self%face.eq.'x') f_imax_=f_imax_+1
-      f_jmax_=self%pg%jmax_; if (.not.self%pg%yper.and.self%pg%jproc.eq.self%pg%npy.and.self%face.eq.'y') f_jmax_=f_jmax_+1
-      f_kmax_=self%pg%kmax_; if (.not.self%pg%zper.and.self%pg%kproc.eq.self%pg%npz.and.self%face.eq.'z') f_kmax_=f_kmax_+1
+      ! Modify iteration upper bounds to include faces at boundary and cells just past boundary
+      f_imax_=self%pg%imax_; if (.not.self%pg%xper.and.self%pg%iproc.eq.self%pg%npx.and.(self%face.eq.'c'.or.self%face.eq.'x')) f_imax_=f_imax_+1
+      f_jmax_=self%pg%jmax_; if (.not.self%pg%yper.and.self%pg%jproc.eq.self%pg%npy.and.(self%face.eq.'c'.or.self%face.eq.'y')) f_jmax_=f_jmax_+1
+      f_kmax_=self%pg%kmax_; if (.not.self%pg%zper.and.self%pg%kproc.eq.self%pg%npz.and.(self%face.eq.'c'.or.self%face.eq.'z')) f_kmax_=f_kmax_+1
+      
+      ! Modify iteration lower bounds to include cells just past boundary, faces remain at boundary
+      f_imin_=self%pg%imin_; if (.not.self%pg%xper.and.self%pg%iproc.eq.1.and.self%face.eq.'c') f_imin_=f_imin_-1
+      f_jmin_=self%pg%jmin_; if (.not.self%pg%yper.and.self%pg%jproc.eq.1.and.self%face.eq.'c') f_jmin_=f_jmin_-1
+      f_kmin_=self%pg%kmin_; if (.not.self%pg%zper.and.self%pg%kproc.eq.1.and.self%face.eq.'c') f_kmin_=f_kmin_-1
       
       ! Loop over local domain with overlap to count iterator cells
       self%n_=0; self%no_=0
@@ -92,9 +100,9 @@ contains
             do i=self%pg%imino_,self%pg%imaxo_
                if (locator(self%pg,i,j,k)) then
                   self%no_=self%no_+1
-                  if (i.ge.self%pg%imin_.and.i.le.f_imax_.and.&
-                  &   j.ge.self%pg%jmin_.and.j.le.f_jmax_.and.&
-                  &   k.ge.self%pg%kmin_.and.k.le.f_kmax_) self%n_=self%n_+1
+                  if (i.ge.f_imin_.and.i.le.f_imax_.and.&
+                  &   j.ge.f_jmin_.and.j.le.f_jmax_.and.&
+                  &   k.ge.f_kmin_.and.k.le.f_kmax_) self%n_=self%n_+1
                end if
             end do
          end do
@@ -128,9 +136,9 @@ contains
       ! Create unstructured mapping to iterator cells - first inside cells then overlap
       allocate(self%map(1:3,1:self%no_))
       cnt=0
-      do k=self%pg%kmin_,f_kmax_
-         do j=self%pg%jmin_,f_jmax_
-            do i=self%pg%imin_,f_imax_
+      do k=f_kmin_,f_kmax_
+         do j=f_jmin_,f_jmax_
+            do i=f_imin_,f_imax_
                if (locator(self%pg,i,j,k)) then
                   cnt=cnt+1
                   self%map(1:3,cnt)=[i,j,k]
@@ -142,9 +150,9 @@ contains
          do j=self%pg%jmino_,self%pg%jmaxo_
             do i=self%pg%imino_,self%pg%imaxo_
                ! Skip inside cells
-               if (i.ge.self%pg%imin_.and.i.le.f_imax_.and. &
-               &   j.ge.self%pg%jmin_.and.j.le.f_jmax_.and. &
-               &   k.ge.self%pg%kmin_.and.k.le.f_kmax_) cycle
+               if (i.ge.f_imin_.and.i.le.f_imax_.and. &
+               &   j.ge.f_jmin_.and.j.le.f_jmax_.and. &
+               &   k.ge.f_kmin_.and.k.le.f_kmax_) cycle
                ! Only consider overlap cells
                if (locator(self%pg,i,j,k)) then
                   cnt=cnt+1

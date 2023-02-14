@@ -383,7 +383,7 @@ contains
       create_pmesh: block
          integer :: i
          ! Include an extra variable for droplet diameter
-         pmesh=partmesh(nvar=1,name='lpt')
+         pmesh=partmesh(nvar=1,nvec=0,name='lpt')
          pmesh%varname(1)='diameter'
          ! Transfer particles to pmesh
          call lp%update_partmesh(pmesh)
@@ -814,7 +814,8 @@ contains
                ! Add the drop
                lp%p(np)%id  =int(0,8)                                                                                 !< Give id (maybe based on break-up model?)
                lp%p(np)%dt  =0.0_WP                                                                                   !< Let the drop find it own integration time
-               lp%p(np)%col =0.0_WP                                                                                   !< Give zero collision force
+               lp%p(np)%Acol=0.0_WP                                                                                   !< Give zero collision force (axial)
+               lp%p(np)%Tcol=0.0_WP                                                                                   !< Give zero collision force (tangential)
                lp%p(np)%d   =diam                                                                                     !< Assign diameter to account for full volume
                lp%p(np)%pos =[cc%meta_structures_list(m)%x,cc%meta_structures_list(m)%y,cc%meta_structures_list(m)%z] !< Place the drop at the liquid barycenter
                lp%p(np)%vel =[cc%meta_structures_list(m)%u,cc%meta_structures_list(m)%v,cc%meta_structures_list(m)%w] !< Assign mean structure velocity as drop velocity

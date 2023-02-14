@@ -6,6 +6,7 @@ module simulation
    use vfs_class,         only: vfs
    use timetracker_class, only: timetracker
    use ensight_class,     only: ensight
+   use surfmesh_class,    only: surfmesh
    use event_class,       only: event
    use monitor_class,     only: monitor
    implicit none
@@ -19,6 +20,7 @@ module simulation
    !> Ensight postprocessing
    type(ensight) :: ens_out
    type(event)   :: ens_evt
+   type(surfmesh) :: smesh
    
    !> Simulation monitor file
    type(monitor) :: mfile,cflfile
@@ -88,7 +90,7 @@ contains
          vf=vfs(cfg=cfg,reconstruction_method=r2p,name='VOF')
          ! Initialize to a thin film
          call param_read('Film thickness',Hfilm)
-         amp0=1.0e-5_WP
+         amp0=1.0e-3_WP
          do k=vf%cfg%kmino_,vf%cfg%kmaxo_
             do j=vf%cfg%jmino_,vf%cfg%jmaxo_
                do i=vf%cfg%imino_,vf%cfg%imaxo_
@@ -119,6 +121,8 @@ contains
          call vf%update_band()
          ! Perform interface reconstruction from VOF field
          call vf%build_interface()
+         ! Set interface planes at the boundaries
+         call vf%set_full_bcond()
          ! Create discontinuous polygon mesh from IRL interface
          call vf%polygonalize_interface()
          ! Calculate distance from polygons
@@ -162,6 +166,32 @@ contains
          call fs%get_div()
       end block create_and_initialize_flow_solver
       
+
+      ! Create surfmesh object for interface polygon output
+      create_smesh: block
+         use irl_fortran_interface
+         integer :: i,j,k,nplane,np
+         ! Include an extra variable for number of planes
+         smesh=surfmesh(nvar=1,name='plic')
+         smesh%varname(1)='nplane'
+         ! Transfer polygons to smesh
+         call vf%update_surfmesh(smesh)
+         ! Also populate nplane variable
+         smesh%var(1,:)=1.0_WP
+         np=0
+         do k=vf%cfg%kmin_,vf%cfg%kmax_
+            do j=vf%cfg%jmin_,vf%cfg%jmax_
+               do i=vf%cfg%imin_,vf%cfg%imax_
+                  do nplane=1,getNumberOfPlanes(vf%liquid_gas_interface(i,j,k))
+                     if (getNumberOfVertices(vf%interface_polygon(nplane,i,j,k)).gt.0) then
+                        np=np+1; smesh%var(1,np)=real(getNumberOfPlanes(vf%liquid_gas_interface(i,j,k)),WP)
+                     end if
+                  end do
+               end do
+            end do
+         end do
+      end block create_smesh
+
       
       ! Add Ensight output
       create_ensight: block
@@ -174,6 +204,7 @@ contains
          call ens_out%add_vector('velocity',Ui,Vi,Wi)
          call ens_out%add_scalar('VOF',vf%VF)
          call ens_out%add_scalar('curvature',vf%curv)
+         call ens_out%add_surface('vofplic',smesh)
          ! Output to ensight
          if (ens_evt%occurs()) call ens_out%write_data(time%t)
       end block create_ensight
@@ -310,6 +341,28 @@ contains
          ! Recompute interpolated velocity and divergence
          call fs%interp_vel(Ui,Vi,Wi)
          call fs%get_div()
+         
+         ! Update surfmesh object
+         update_smesh: block
+            use irl_fortran_interface
+            integer :: nplane,np,i,j,k
+            ! Transfer polygons to smesh
+            call vf%update_surfmesh(smesh)
+            ! Also populate nplane variable
+            smesh%var(1,:)=1.0_WP
+            np=0
+            do k=vf%cfg%kmin_,vf%cfg%kmax_
+               do j=vf%cfg%jmin_,vf%cfg%jmax_
+                  do i=vf%cfg%imin_,vf%cfg%imax_
+                     do nplane=1,getNumberOfPlanes(vf%liquid_gas_interface(i,j,k))
+                        if (getNumberOfVertices(vf%interface_polygon(nplane,i,j,k)).gt.0) then
+                           np=np+1; smesh%var(1,np)=real(getNumberOfPlanes(vf%liquid_gas_interface(i,j,k)),WP)
+                        end if
+                     end do
+                  end do
+               end do
+            end do
+         end block update_smesh
          
          ! Output to ensight
          if (ens_evt%occurs()) call ens_out%write_data(time%t)

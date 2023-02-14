@@ -131,7 +131,7 @@ module vfs_class
       integer, dimension(:,:,:), allocatable :: vmask     !< Integer array used for enforcing bconds - for vertices
       
       ! Monitoring quantities
-      real(WP) :: VFmax,VFmin,VFint                       !< Maximum, minimum, and integral volume fraction
+      real(WP) :: VFmax,VFmin,VFint,SDint                 !< Maximum, minimum, and integral volume fraction and surface density
 
       ! Old arrays that are needed for the compressible MAST solver
       real(WP), dimension(:,:,:,:), allocatable :: Lbaryold  !< Liquid barycenter
@@ -175,6 +175,7 @@ module vfs_class
       procedure :: distance_from_polygon                  !< Build a signed distance field from the polygonalized interface
       procedure :: subcell_vol                            !< Build subcell phasic volumes from reconstructed interface
       procedure :: reset_volume_moments                   !< Reconstruct volume moments from IRL interfaces
+      procedure :: reset_moments                          !< Reconstruct first-order moments from IRL interfaces
       procedure :: update_surfmesh                        !< Update a surfmesh object using current polygons
       procedure :: get_curvature                          !< Compute curvature from IRL surface polygons
       procedure :: paraboloid_fit                         !< Perform local paraboloid fit of IRL surface using IRL barycenter data
@@ -568,20 +569,14 @@ contains
    
    !> Add a boundary condition
    subroutine add_bcond(this,name,type,locator,dir)
-      use string,   only: lowercase
-      use messager, only: die
+      use string,         only: lowercase
+      use messager,       only: die
+      use iterator_class, only: locator_ftype
       implicit none
       class(vfs), intent(inout) :: this
       character(len=*), intent(in) :: name
       integer,  intent(in) :: type
-      external :: locator
-      interface
-         logical function locator(pargrid,ind1,ind2,ind3)
-            use pgrid_class, only: pgrid
-            class(pgrid), intent(in) :: pargrid
-            integer, intent(in) :: ind1,ind2,ind3
-         end function locator
-      end interface
+      procedure(locator_ftype) :: locator
       character(len=2), optional :: dir
       type(bcond), pointer :: new_bc
       integer :: i,j,k,n
@@ -604,7 +599,7 @@ contains
          if (new_bc%type.eq.neumann) call die('[vfs apply_bcond] Neumann requires a direction')
          new_bc%dir=0
       end if
-      new_bc%itr=iterator(this%cfg,new_bc%name,locator)
+      new_bc%itr=iterator(this%cfg,new_bc%name,locator,'c')
       
       ! Insert it up front
       new_bc%next=>this%first_bc
@@ -2510,6 +2505,48 @@ contains
       
    end subroutine reset_volume_moments
    
+   ! Reset only moments, leave VF unchanged
+   subroutine reset_moments(this)
+      implicit none
+      class(vfs), intent(inout) :: this
+      integer :: i,j,k
+      type(RectCub_type) :: cell
+      type(SepVM_type) :: separated_volume_moments
+      
+      ! Calculate volume moments and store
+      call new(cell)
+      call new(separated_volume_moments)
+      do k=this%cfg%kmino_,this%cfg%kmaxo_
+         do j=this%cfg%jmino_,this%cfg%jmaxo_
+            do i=this%cfg%imino_,this%cfg%imaxo_
+               ! Handle pure wall cells
+               if (this%mask(i,j,k).eq.1) then
+                  this%Lbary(:,i,j,k)=[this%cfg%xm(i),this%cfg%ym(j),this%cfg%zm(k)]
+                  this%Gbary(:,i,j,k)=[this%cfg%xm(i),this%cfg%ym(j),this%cfg%zm(k)]
+                  cycle
+               end if
+               ! Form the grid cell
+               call construct_2pt(cell,[this%cfg%x(i),this%cfg%y(j),this%cfg%z(k)],[this%cfg%x(i+1),this%cfg%y(j+1),this%cfg%z(k+1)])
+               ! Cut it by the current interface(s)
+               call getNormMoments(cell,this%liquid_gas_interface(i,j,k),separated_volume_moments)
+               ! Recover relevant moments
+               this%Lbary(:,i,j,k)=getCentroid(separated_volume_moments,0)
+               this%Gbary(:,i,j,k)=getCentroid(separated_volume_moments,1)
+               ! Clean up
+               if (this%VF(i,j,k).lt.VFlo) then
+                  this%Lbary(:,i,j,k)=[this%cfg%xm(i),this%cfg%ym(j),this%cfg%zm(k)]
+                  this%Gbary(:,i,j,k)=[this%cfg%xm(i),this%cfg%ym(j),this%cfg%zm(k)]
+               end if
+               if (this%VF(i,j,k).gt.VFhi) then
+                  this%Lbary(:,i,j,k)=[this%cfg%xm(i),this%cfg%ym(j),this%cfg%zm(k)]
+                  this%Gbary(:,i,j,k)=[this%cfg%xm(i),this%cfg%ym(j),this%cfg%zm(k)]
+               end if
+            end do
+         end do
+      end do
+      
+   end subroutine reset_moments
+   
    
    !> Compute curvature from a least squares fit of the IRL surface
    subroutine get_curvature(this)
@@ -2906,6 +2943,7 @@ contains
       my_VFmax=maxval(this%VF); call MPI_ALLREDUCE(my_VFmax,this%VFmax,1,MPI_REAL_WP,MPI_MAX,this%cfg%comm,ierr)
       my_VFmin=minval(this%VF); call MPI_ALLREDUCE(my_VFmin,this%VFmin,1,MPI_REAL_WP,MPI_MIN,this%cfg%comm,ierr)
       call this%cfg%integrate(this%VF,integral=this%VFint)
+      call this%cfg%integrate(this%SD,integral=this%SDint)
    end subroutine get_max
    
    
