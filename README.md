@@ -21,4 +21,5 @@ Future developments will focus on providing support for:
 - chemical kinetics and combustion models
 
 NGA2 is open-sourced under the [MIT license](./LICENSE).
+
 Documentation is (will be) provided [here](https://nga2.readthedocs.io).
