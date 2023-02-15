@@ -77,7 +77,7 @@ contains
          ! Get normal vector
          call cfg%calculate_normal()
          ! Get VF field
-         call cfg%calculate_vf(method=sharp)
+         call cfg%calculate_vf(method=sharp,allow_zero_vf=.true.)
       end block create_walls
       
       

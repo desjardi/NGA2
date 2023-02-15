@@ -31,7 +31,7 @@ module simulation
 	!> Private work arrays
 	real(WP), dimension(:,:,:), allocatable :: resU,resV,resW
 	real(WP), dimension(:,:,:), allocatable :: Ui,Vi,Wi
-	!real(WP), dimension(:,:,:), allocatable :: Uslip,Vslip,Wslip
+	real(WP), dimension(:,:,:), allocatable :: Uslip,Vslip,Wslip
 	
 	!> Droplet definition
 	real(WP), dimension(3) :: center
@@ -171,9 +171,9 @@ contains
 		! Slip velocity model for contact line
 		init_slip_velocity: block
 		   use mathtools, only: Pi
-		   !allocate(Uslip(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_)); Uslip=0.0_WP
-			!allocate(Vslip(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_)); Vslip=0.0_WP
-			!allocate(Wslip(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_)); Wslip=0.0_WP
+		   allocate(Uslip(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_)); Uslip=0.0_WP
+			allocate(Vslip(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_)); Vslip=0.0_WP
+			allocate(Wslip(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_)); Wslip=0.0_WP
 			call param_read('Static contact angle',fs%contact_angle); fs%contact_angle=fs%contact_angle*Pi/180.0_WP
 		end block init_slip_velocity
 	   
@@ -191,7 +191,7 @@ contains
 		   call ens_out%add_scalar('pressure',fs%P)
 		   call ens_out%add_scalar('curvature',vf%curv)
 			call ens_out%add_scalar('Gib',cfg%Gib)
-			!call ens_out%add_vector('slip',Uslip,Vslip,Wslip)
+			call ens_out%add_vector('slip',Uslip,Vslip,Wslip)
 		   ! Output to ensight
 		   if (ens_evt%occurs()) call ens_out%write_data(time%t)
 	   end block create_ensight
@@ -272,30 +272,33 @@ contains
 		   call fs%get_viscosity(vf=vf)
 			
 			! Evaluate IB slip velocity due to contact lien
-         !calc_slip_velocity: block
-			!  use irl_fortran_interface
-			!	use mathtools, only: normalize
-			!  integer :: i,j,k
-			!	real(WP), dimension(3) :: nw,ni,nt
-			!	real(WP), parameter :: beta=10.0_WP
-			!	real(WP) :: slip
-			!	do k=fs%cfg%kmino_,fs%cfg%kmaxo_
-			!		do j=fs%cfg%jmino_,fs%cfg%jmaxo_
-			!			do i=fs%cfg%imino_,fs%cfg%imaxo_
-			!				! Zero out Uslip if there's no interface or wall in the cell
-			!				Uslip(i,j,k)=0.0_WP; Vslip(i,j,k)=0.0_WP; Wslip(i,j,k)=0.0_WP
-			!				if (getNumberOfVertices(vf%interface_polygon(1,i,j,k)).eq.0.or.cfg%VF(i,j,k).eq.1.0_WP) cycle
-			!				! There is an interface and a wall, find the slip velocity
-			!				nw=cfg%Nib(:,i,j,k); ni=calculateNormal(vf%interface_polygon(1,i,j,k))
-			!				slip=beta*fs%sigma*(cos(fs%contact_angle)-dot_product(ni,nw))
-			!				! Find slip direction
-			!				nt=normalize(ni-dot_product(ni,nw)*nw)
-			!				! Set slip velocity
-			!				Uslip(i,j,k)=slip*nt(1); Vslip(i,j,k)=slip*nt(2); Wslip(i,j,k)=slip*nt(3)
-			!		   end do
-			!		end do
-			!	end do
-			!end block calc_slip_velocity
+         calc_slip_velocity: block
+			   use irl_fortran_interface
+				use mathtools, only: normalize
+				integer :: i,j,k
+				real(WP), dimension(3) :: nw,ni,nt
+				real(WP), parameter :: beta=10.0_WP
+				real(WP) :: slip
+				do k=fs%cfg%kmino_,fs%cfg%kmaxo_
+					do j=fs%cfg%jmin_+1,fs%cfg%jmaxo_
+						do i=fs%cfg%imino_,fs%cfg%imaxo_
+							! Zero out Uslip if there's no interface or wall in the cell
+							Uslip(i,j,k)=0.0_WP; Vslip(i,j,k)=0.0_WP; Wslip(i,j,k)=0.0_WP
+							!if (getNumberOfVertices(vf%interface_polygon(1,i,j,k)).eq.0.or.cfg%VF(i,j,k).eq.1.0_WP) cycle
+							! There is an interface and a wall, find the slip velocity
+							!nw=cfg%Nib(:,i,j,k); ni=calculateNormal(vf%interface_polygon(1,i,j,k))
+							!slip=beta*fs%sigma*(cos(fs%contact_angle)-dot_product(ni,nw))
+							! Mess around with simple test
+							slip=0.1_WP
+							nw=cfg%Nib(:,i,j,k); ni=[0.0_WP,0.0_WP,1.0_WP]
+							! Find slip direction
+							nt=normalize(ni-dot_product(ni,nw)*nw)
+							! Set slip velocity
+							Uslip(i,j,k)=slip*nt(1); Vslip(i,j,k)=slip*nt(2); Wslip(i,j,k)=slip*nt(3)
+					   end do
+					end do
+				end do
+			end block calc_slip_velocity
 			
 		   ! Perform sub-iterations
 		   do while (time%it.le.time%itmax)
@@ -319,6 +322,20 @@ contains
 				resV=-2.0_WP*fs%rho_V*fs%V+(fs%rho_Vold+fs%rho_V)*fs%Vold+time%dt*resV
 				resW=-2.0_WP*fs%rho_W*fs%W+(fs%rho_Wold+fs%rho_W)*fs%Wold+time%dt*resW
 				
+				! Apply IB forcing to enforce BC at the pipe walls
+            !ibforcing: block
+            !   integer :: i,j,k
+            !   do k=fs%cfg%kmin_,fs%cfg%kmax_
+            !      do j=fs%cfg%jmin_,fs%cfg%jmax_
+            !         do i=fs%cfg%imin_,fs%cfg%imax_
+            !            resU(i,j,k)=resU(i,j,k)-(1.0_WP-sum(fs%itpr_x(:,i,j,k)*cfg%VF(i-1:i,j,k)))*fs%rho_U(i,j,k)*fs%U(i,j,k)
+            !            resV(i,j,k)=resV(i,j,k)-(1.0_WP-sum(fs%itpr_y(:,i,j,k)*cfg%VF(i,j-1:j,k)))*fs%rho_V(i,j,k)*fs%V(i,j,k)
+            !            resW(i,j,k)=resW(i,j,k)-(1.0_WP-sum(fs%itpr_z(:,i,j,k)*cfg%VF(i,j,k-1:k)))*fs%rho_W(i,j,k)*fs%W(i,j,k)
+            !         end do
+            !      end do
+            !   end do
+            !end block ibforcing
+				
 				! Form implicit residuals
 			   call fs%solve_implicit(time%dt,resU,resV,resW)
 				
@@ -338,9 +355,9 @@ contains
 								fs%V(i,j,k)=sum(fs%itpr_y(:,i,j,k)*cfg%VF(i,j-1:j,k))*fs%V(i,j,k)
 								fs%W(i,j,k)=sum(fs%itpr_z(:,i,j,k)*cfg%VF(i,j,k-1:k))*fs%W(i,j,k)
 								! Also add slip velocity for contact line
-								!fs%U(i,j,k)=fs%U(i,j,k)+(1.0_WP-sum(fs%itpr_x(:,i,j,k)*cfg%VF(i-1:i,j,k)))*sum(fs%itpr_x(:,i,j,k)*Uslip(i-1:i,j,k))
-								!fs%V(i,j,k)=fs%V(i,j,k)+(1.0_WP-sum(fs%itpr_y(:,i,j,k)*cfg%VF(i,j-1:j,k)))*sum(fs%itpr_y(:,i,j,k)*Vslip(i,j-1:j,k))
-								!fs%W(i,j,k)=fs%W(i,j,k)+(1.0_WP-sum(fs%itpr_z(:,i,j,k)*cfg%VF(i,j,k-1:k)))*sum(fs%itpr_z(:,i,j,k)*Wslip(i,j,k-1:k))
+								fs%U(i,j,k)=fs%U(i,j,k)+(1.0_WP-sum(fs%itpr_x(:,i,j,k)*cfg%VF(i-1:i,j,k)))*sum(fs%itpr_x(:,i,j,k)*Uslip(i-1:i,j,k))
+								fs%V(i,j,k)=fs%V(i,j,k)+(1.0_WP-sum(fs%itpr_y(:,i,j,k)*cfg%VF(i,j-1:j,k)))*sum(fs%itpr_y(:,i,j,k)*Vslip(i,j-1:j,k))
+								fs%W(i,j,k)=fs%W(i,j,k)+(1.0_WP-sum(fs%itpr_z(:,i,j,k)*cfg%VF(i,j,k-1:k)))*sum(fs%itpr_z(:,i,j,k)*Wslip(i,j,k-1:k))
 							end do
 						end do
 					end do

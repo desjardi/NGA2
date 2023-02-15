@@ -701,7 +701,7 @@ contains
          write(iunit,'(a,/,a,/,/,a,/,a,/,a,/)') 'FORMAT','type: ensight gold','GEOMETRY','model: geometry','measured: 1 '//trim(part%name)//'/particle.******'
          ! Write the variables
          write(iunit,'(a)') 'VARIABLE'
-         write(iunit,'(a)') 'scalar per element: wall geometry.wall'
+         write(iunit,'(a)') 'scalar per element: fvf geometry.fvf'
          do n=1,part%ptr%nvar
             write(iunit,'(a)') 'scalar per measured node: 1 '//trim(part%ptr%varname(n))//' '//trim(part%name)//'/'//trim(part%ptr%varname(n))//'.******'
          end do
