@@ -122,6 +122,8 @@ contains
 		   call vf%update_band()
 			! Perform interface reconstruction from VOF field
 		   call vf%build_interface()
+			! Set interface planes at the boundaries
+         call vf%set_full_bcond()
 			! Create discontinuous polygon mesh from IRL interface
 		   call vf%polygonalize_interface()
 			! Calculate distance from polygons
@@ -280,7 +282,7 @@ contains
 				real(WP), parameter :: beta=10.0_WP
 				real(WP) :: slip
 				do k=fs%cfg%kmino_,fs%cfg%kmaxo_
-					do j=fs%cfg%jmin_+1,fs%cfg%jmaxo_
+					do j=fs%cfg%jmino_,fs%cfg%jmaxo_
 						do i=fs%cfg%imino_,fs%cfg%imaxo_
 							! Zero out Uslip if there's no interface or wall in the cell
 							Uslip(i,j,k)=0.0_WP; Vslip(i,j,k)=0.0_WP; Wslip(i,j,k)=0.0_WP
@@ -375,6 +377,14 @@ contains
 				call fs%get_div()
 				call fs%add_surface_tension_jump(dt=time%dt,div=fs%div,vf=vf,contact_model=static_contact)
 				fs%psolv%rhs=-fs%cfg%vol*fs%div/time%dt
+				test: block
+				   real(WP) :: int
+				   call cfg%integrate(A=fs%psolv%rhs,integral=int)
+				   if (cfg%amroot) print*,'>>>   initial integral of pressure RHS=',int
+					fs%psolv%rhs=fs%psolv%rhs-int/cfg%fluid_vol
+					call cfg%integrate(A=fs%psolv%rhs,integral=int)
+				   if (cfg%amroot) print*,'>>> corrected integral of pressure RHS=',int
+				end block test
 				fs%psolv%sol=0.0_WP
 				call fs%psolv%solve()
 				call fs%shift_p(fs%psolv%sol)

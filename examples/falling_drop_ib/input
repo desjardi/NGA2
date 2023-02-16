@@ -15,7 +15,7 @@ Liquid dynamic viscosity :    1.137e-3
 Gas dynamic viscosity :       1.780e-5
 Liquid density :              1000
 Gas density :                 1.226
-Surface tension coefficient : 0.0728
+Surface tension coefficient : 0!.0728
 Static contact angle :        30
 
 # Time integration

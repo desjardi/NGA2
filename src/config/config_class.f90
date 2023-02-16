@@ -28,6 +28,7 @@ module config_class
       procedure :: calc_fluid_vol                              !< Compute fluid_vol after VF has been set
       procedure :: VF_extend                                   !< Extend VF array into the non-periodic domain overlaps
       procedure :: integrate                                   !< Integrate a variable on config while accounting for VF
+      procedure :: integrate_without_VF                        !< Integrate a variable on config while ignoring VF
       procedure :: set_scalar                                  !< Subroutine that extrapolates a provided scalar value at a point to a pgrid field
       procedure :: get_velocity                                !< Function that interpolates a provided velocity field staggered on the pgrid to a point
       procedure :: get_scalar                                  !< Function that interpolates a provided scalar field centered on the pgrid to a point
@@ -212,6 +213,28 @@ contains
       end do
       call MPI_ALLREDUCE(my_int,integral,1,MPI_REAL_WP,MPI_SUM,this%comm,ierr)
    end subroutine integrate
+
+
+   !> Calculate the integral of a field on the config while ignoring VF
+   subroutine integrate_without_VF(this,A,integral)
+      use mpi_f08,  only: MPI_ALLREDUCE,MPI_SUM
+      use parallel, only: MPI_REAL_WP
+      implicit none
+      class(config), intent(inout) :: this
+      real(WP), dimension(this%imino_:,this%jmino_:,this%kmino_:), intent(in) :: A      !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      real(WP), intent(out) :: integral
+      integer :: i,j,k,ierr
+      real(WP) :: my_int
+      my_int=0.0_WP
+      do k=this%kmin_,this%kmax_
+         do j=this%jmin_,this%jmax_
+            do i=this%imin_,this%imax_
+               my_int=my_int+this%vol(i,j,k)*A(i,j,k)
+            end do
+         end do
+      end do
+      call MPI_ALLREDUCE(my_int,integral,1,MPI_REAL_WP,MPI_SUM,this%comm,ierr)
+   end subroutine integrate_without_VF
    
    
    !> Subroutine that performs trilinear interpolation of provided scalar field S

@@ -28,15 +28,52 @@ module surfmesh_class
    
    !> Declare surface mesh constructor
    interface surfmesh
-      procedure constructor
+      module procedure construct_empty
+      module procedure construct_from_ply 
    end interface surfmesh
    
    
 contains
    
    
-   !> Constructor for surface mesh object
-   function constructor(nvar,name) result(self)
+   !> Constructor for surface mesh object from a .ply file
+   function construct_from_ply(plyfile,nvar,name) result(self)
+      use messager, only: die
+      implicit none
+      type(surfmesh) :: self
+      character(len=*), intent(in) :: plyfile
+      integer, intent(in) :: nvar
+      character(len=*), optional :: name
+      integer :: iunit,ierr
+      character(len=100) :: cbuf
+
+      ! Set the name of the surface mesh
+      if (present(name)) self%name=trim(adjustl(name))
+
+      ! Default to 0 size
+      self%nVert=0
+      self%nPoly=0
+
+      ! Initialize additional variables
+      self%nvar=nvar
+      allocate(self%varname(self%nvar))
+      self%varname='' !< Users will set the name themselves
+      
+      ! Open the ply file
+      open(newunit=iunit,file=trim(adjustl(plyfile)),form='unformatted',status='old',access='stream',iostat=ierr)
+      if (ierr.ne.0) call die('[surfmesh constructor from file] Could not open file: '//trim(plyfile))
+
+      ! Read the ply header
+      read(iunit) cbuf
+
+      ! Close the plyfile
+      close(iunit)
+      
+   end function construct_from_ply
+   
+
+   !> Constructor for an empty surface mesh object
+   function construct_empty(nvar,name) result(self)
       implicit none
       type(surfmesh) :: self
       integer, intent(in) :: nvar
@@ -50,7 +87,7 @@ contains
       self%nvar=nvar
       allocate(self%varname(self%nvar))
       self%varname='' !< Users will set the name themselves
-   end function constructor
+   end function construct_empty
    
    
    !> Reset mesh storage

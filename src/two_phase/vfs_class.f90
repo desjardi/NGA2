@@ -2505,6 +2505,7 @@ contains
       
    end subroutine reset_volume_moments
    
+
    ! Reset only moments, leave VF unchanged
    subroutine reset_moments(this)
       implicit none
