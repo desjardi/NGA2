@@ -24,6 +24,7 @@ nga.*.exe
 
 # Build stuff
 build/
+*.mod
 
 # Doc stuff
 doc/
