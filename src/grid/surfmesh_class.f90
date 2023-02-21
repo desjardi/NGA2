@@ -45,7 +45,6 @@ contains
       integer, intent(in) :: nvar
       character(len=*), optional :: name
       integer :: iunit,ierr
-      character(len=100) :: cbuf
 
       ! Set the name of the surface mesh
       if (present(name)) self%name=trim(adjustl(name))
@@ -64,11 +63,73 @@ contains
       if (ierr.ne.0) call die('[surfmesh constructor from file] Could not open file: '//trim(plyfile))
 
       ! Read the ply header
-      read(iunit) cbuf
+      read_header: block
+         use string, only: str_medium
+         character(len=str_medium) :: line=''
+         character :: cbuf
+         integer :: i,sp1,sp2
+         ! Read one line at a time
+         do while (trim(line).ne.'end_header')
+            ! Prepare to read a new line
+            i=0; line=''
+            do
+               read(iunit) cbuf
+               if (cbuf.eq.new_line(cbuf)) then
+                  exit
+               else
+                  i=i+1; line(i:i)=cbuf
+               end if
+            end do
+            ! Understand the line
+            sp1=scan(line,' ')
+            if (line(1:sp1).eq.'element') then
+               sp2=scan(line(sp1+1:),' '); sp2=sp1+sp2
+               if (line(sp1+1:sp2).eq.'vertex') then
+                  read(line(sp2+1:),*) self%nVert
+               else if (line(sp1+1:sp2).eq.'face') then
+                  read(line(sp2+1:),*) self%nPoly
+               end if
+            end if
+         end do
+      end block read_header
+
+      ! Resize my surfmesh
+      call self%set_size(nvert=self%nVert,npoly=self%nPoly)
+      
+      ! Read the ply vertices
+      read_vertices: block
+         use precision, only: SP
+         real(SP), dimension(4,self%nVert) :: myVert
+         integer :: n
+         read(iunit) myVert
+         do n=1,self%nVert
+            self%xVert(n)=myVert(1,n)
+            self%yVert(n)=myVert(2,n)
+            self%zVert(n)=myVert(3,n)
+         end do
+      end block read_vertices
+      
+      ! Read the ply faces
+      read_faces: block
+         use precision, only: SP
+         character(1) :: ibuf
+         real(SP) :: buffer
+         integer :: nf,nv
+         ! Upper bound for connectivity
+         allocate(self%polyConn(self%nVert))
+         do nf=1,self%nPoly
+            read(iunit) ibuf
+            read(ibuf,*) self%polySize(nf)
+            read(iunit) self%polyConn(sum(self%polySize(1:nf-1))+1:sum(self%polySize(1:nf-1))+self%polySize(nf)),buffer
+            print*,self%polySize(nf),self%polyConn(sum(self%polySize(1:nf-1))+1:sum(self%polySize(1:nf-1))+self%polySize(nf))
+         end do
+         
+      end block read_faces
 
       ! Close the plyfile
       close(iunit)
       
+      stop
    end function construct_from_ply
    
 
