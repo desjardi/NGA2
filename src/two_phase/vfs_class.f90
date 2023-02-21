@@ -29,6 +29,7 @@ module vfs_class
    integer, parameter, public :: art=6               !< ART scheme
    integer, parameter, public :: youngs=7            !< Youngs' scheme
    integer, parameter, public :: lvlset=8            !< Levelset-based scheme
+   integer, parameter, public :: jibben=9            !< Jibben scheme
    
    ! IRL cutting moment calculation method
    integer, parameter, public :: recursive_simplex=0 !< Recursive simplex cutting
@@ -99,6 +100,7 @@ module vfs_class
       integer, dimension(0:nband) :: band_count           !< Number of cells per band value
       
       ! Interface reconstruction method
+      logical :: is_planar                        !< Is reconstruction planar?
       integer :: reconstruction_method                    !< Interface reconstruction method
       real(WP) :: twoplane_threshold=0.95_WP              !< Threshold for r2p to switch from one-plane to two-planes
       real(WP) :: art_threshold=1.30_WP                   !< Threshold for art to switch from r2p to lvira
@@ -113,33 +115,43 @@ module vfs_class
       ! IRL objects
       type(ByteBuffer_type) :: send_byte_buffer
       type(ByteBuffer_type) :: recv_byte_buffer
-      type(ObjServer_PlanarSep_type)  :: planar_separator_allocation
-      type(ObjServer_PlanarLoc_type)  :: planar_localizer_allocation
-      type(ObjServer_LocSepLink_type) :: localized_separator_link_allocation
-      type(ObjServer_LocLink_type)    :: localizer_link_allocation
-      type(PlanarLoc_type),   dimension(:,:,:),   allocatable :: localizer
-      type(PlanarSep_type),   dimension(:,:,:),   allocatable :: liquid_gas_interface
-      type(LocSepLink_type),  dimension(:,:,:),   allocatable :: localized_separator_link
-      type(ListVM_VMAN_type), dimension(:,:,:),   allocatable :: triangle_moments_storage
-      type(LocLink_type),     dimension(:,:,:),   allocatable :: localizer_link
-      type(Poly_type),        dimension(:,:,:,:), allocatable :: interface_polygon
-      type(Poly_type),        dimension(:,:,:,:), allocatable :: polyface
-      type(SepVM_type),       dimension(:,:,:,:), allocatable :: face_flux
-      
+      type(ObjServer_PlanarSep_type)    :: planar_separator_allocation
+      type(ObjServer_Paraboloid_type)   :: paraboloid_allocation
+      type(ObjServer_TriangulatedParaboloid_type)   :: triangulated_paraboloid_allocation
+      type(ObjServer_PlanarLoc_type)    :: planar_localizer_allocation
+      type(ObjServer_LocSepLink_type)   :: localized_separator_link_allocation
+      type(ObjServer_LocParabLink_type) :: localized_paraboloid_link_allocation
+      type(ObjServer_LocLink_type)      :: localizer_link_allocation
+      type(PlanarLoc_type),    dimension(:,:,:),   allocatable :: localizer
+      type(PlanarSep_type),    dimension(:,:,:),   allocatable :: liquid_gas_interface
+      type(Paraboloid_type),   dimension(:,:,:),   allocatable :: liquid_gas_parabolic_interface
+      type(LocSepLink_type),   dimension(:,:,:),   allocatable :: localized_separator_link
+      type(LocParabLink_type), dimension(:,:,:),   allocatable :: localized_paraboloid_link
+      type(ListVM_VMAN_type),  dimension(:,:,:),   allocatable :: triangle_moments_storage
+      type(LocLink_type),      dimension(:,:,:),   allocatable :: localizer_link
+      type(Poly_type),         dimension(:,:,:,:), allocatable :: interface_polygon
+      type(Poly_type),         dimension(:,:,:,:), allocatable :: polyface
+      type(SepVM_type),        dimension(:,:,:,:), allocatable :: face_flux
+      type(TriangulatedParaboloid_type), dimension(:,:,:), allocatable :: interface_triangulated_paraboloid
+
       ! Masking info for metric modification
       integer, dimension(:,:,:), allocatable :: mask      !< Integer array used for enforcing bconds
       integer, dimension(:,:,:), allocatable :: vmask     !< Integer array used for enforcing bconds - for vertices
       
-      ! Monitoring quantities
+      ! Monitoring quantities 
       real(WP) :: VFmax,VFmin,VFint,SDint                 !< Maximum, minimum, and integral volume fraction and surface density
 
       ! Old arrays that are needed for the compressible MAST solver
       real(WP), dimension(:,:,:,:), allocatable :: Lbaryold  !< Liquid barycenter
       real(WP), dimension(:,:,:,:), allocatable :: Gbaryold  !< Gas barycenter
       type(PlanarSep_type),   dimension(:,:,:),   allocatable :: liquid_gas_interfaceold
+      type(Paraboloid_type),  dimension(:,:,:),   allocatable :: liquid_gas_parabolic_interfaceold
       type(LocSepLink_type),  dimension(:,:,:),   allocatable :: localized_separator_linkold
-      type(ObjServer_PlanarSep_type)  :: planar_separatorold_allocation
-      type(ObjServer_LocSepLink_type) :: localized_separator_linkold_allocation
+      type(LocParabLink_type),dimension(:,:,:),   allocatable :: localized_paraboloid_linkold
+      type(ObjServer_PlanarSep_type)    :: planar_separatorold_allocation
+      type(ObjServer_Paraboloid_type)   :: planar_paraboloidold_allocation
+      type(ObjServer_LocSepLink_type)   :: localized_separator_linkold_allocation
+      type(ObjServer_LocParabLink_type) :: localized_paraboloid_linkold_allocation
       
    contains
       procedure :: print=>vfs_print                       !< Output solver to the screen
@@ -162,6 +174,7 @@ module vfs_class
       procedure :: write_interface                        !< Write an IRL interface to a file
       procedure :: advance                                !< Advance VF to next step
       procedure :: advect_interface                       !< Advance IRL surface to next step
+      procedure :: build_parabolic_interface              !< Reconstruct IRL interface from VF field 
       procedure :: build_interface                        !< Reconstruct IRL interface from VF field
       procedure :: build_elvira                           !< ELVIRA reconstruction of the interface from VF field
       procedure :: build_lvira                            !< LVIRA reconstruction of the interface from VF field
@@ -244,6 +257,13 @@ contains
       
       ! Set reconstruction method
       self%reconstruction_method=reconstruction_method
+
+      ! Determine order of reconstruction
+      if (self%reconstruction_method.eq.jibben) then 
+         self%is_planar=.false.
+      else
+         self%is_planar=.true.
+      end if
       
       ! Initialize IRL
       call self%initialize_irl()
@@ -319,12 +339,19 @@ contains
       
       ! Allocate IRL arrays
       allocate(this%localizer               (this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
-      allocate(this%liquid_gas_interface    (this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
-      allocate(this%localized_separator_link(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
-      allocate(this%triangle_moments_storage(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
       allocate(this%localizer_link          (this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
+      allocate(this%liquid_gas_interface    (this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
+      allocate(this%triangle_moments_storage(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
       allocate(this%interface_polygon(1:max_interface_planes,this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
-      allocate(this%polyface            (1:3,this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
+      allocate(this%polyface(1:3,this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
+
+      if (this%is_planar) then
+         allocate(this%localized_separator_link(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
+      else 
+         allocate(this%liquid_gas_parabolic_interface(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
+         allocate(this%localized_paraboloid_link     (this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
+         allocate(this%interface_triangulated_paraboloid(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
+      end if      
       
       ! Work arrays for face fluxes
       allocate(this%face_flux(1:3,this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
@@ -341,13 +368,20 @@ contains
       ! Precomputed face correction velocities
       !> allocate(face_correct_velocity(1:3,1:3,imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_))
       
-      ! Initialize size for IRL
+      ! Initialize size for IRL 
       total_cells=int(this%cfg%nxo_,8)*int(this%cfg%nyo_,8)*int(this%cfg%nzo_,8)
       call new(this%planar_localizer_allocation,total_cells)
-      call new(this%planar_separator_allocation,total_cells)
-      call new(this%localized_separator_link_allocation,total_cells)
       call new(this%localizer_link_allocation,total_cells)
-      
+      call new(this%planar_separator_allocation,total_cells)
+ 
+      if (this%is_planar) then 
+         call new(this%localized_separator_link_allocation,total_cells)
+      else
+         call new(this%paraboloid_allocation,total_cells)
+         call new(this%triangulated_paraboloid_allocation,total_cells)
+         call new(this%localized_paraboloid_link_allocation,total_cells)
+      end if
+ 
       ! Initialize arrays and setup linking
       do k=this%cfg%kmino_,this%cfg%kmaxo_
          do j=this%cfg%jmino_,this%cfg%jmaxo_
@@ -357,15 +391,22 @@ contains
                call setFromRectangularCuboid(this%localizer(i,j,k),[this%cfg%x(i),this%cfg%y(j),this%cfg%z(k)],[this%cfg%x(i+1),this%cfg%y(j+1),this%cfg%z(k+1)])
                ! PLIC interface(s)
                call new(this%liquid_gas_interface(i,j,k),this%planar_separator_allocation)
-               ! PLIC+mesh with connectivity (i.e., link)
-               call new(this%localized_separator_link(i,j,k),this%localized_separator_link_allocation,this%localizer(i,j,k),this%liquid_gas_interface(i,j,k))
                ! For transport surface
                call new(this%triangle_moments_storage(i,j,k))
-               ! Mesh with connectivity
+               if (this%is_planar) then
+                  ! PLIC+mesh with connectivity (i.e., link)
+                  call new(this%localized_separator_link(i,j,k),this%localized_separator_link_allocation,this%localizer(i,j,k),this%liquid_gas_interface(i,j,k))
+               else
+                  ! PPIC interface
+                  call new(this%liquid_gas_parabolic_interface(i,j,k),this%paraboloid_allocation)
+                  ! PPIC+mesh with connectivity (i.e., link)
+                  call new(this%localized_paraboloid_link(i,j,k),this%localized_paraboloid_link_allocation,this%localizer(i,j,k),this%liquid_gas_parabolic_interface(i,j,k))
+               end if
+               ! Mesh with connectivity 
                call new(this%localizer_link(i,j,k),this%localizer_link_allocation,this%localizer(i,j,k))
             end do
          end do
-      end do
+      end do 
       
       ! Polygonal representation of the surface
       do k=this%cfg%kmino_,this%cfg%kmaxo_
@@ -374,9 +415,12 @@ contains
                do n=1,max_interface_planes
                   call new(this%interface_polygon(n,i,j,k))
                end do
+               if (.not.this%is_planar) then
+                  call new(this%interface_triangulated_paraboloid(i,j,k), this%triangulated_paraboloid_allocation)
+               end if
             end do
          end do
-      end do
+      end do 
       
       ! Polygonal representation of cell faces
       do k=this%cfg%kmino_,this%cfg%kmaxo_
@@ -415,7 +459,11 @@ contains
          do j=this%cfg%jmino_,this%cfg%jmaxo_
             do i=this%cfg%imino_,this%cfg%imaxo_
                tag=this%cfg%get_lexico_from_ijk([i,j,k])
-               call setId(this%localized_separator_link(i,j,k),tag)
+               if (this%is_planar) then
+                  call setId(this%localized_separator_link(i,j,k),tag)
+               else
+                  call setId(this%localized_paraboloid_link(i,j,k),tag)
+               end if
                call setId(this%localizer_link(i,j,k),tag)
             end do
          end do
@@ -427,32 +475,56 @@ contains
             do i=this%cfg%imino_,this%cfg%imaxo_
                ! In the x- direction
                if (i.gt.this%cfg%imino_) then
-                  call setEdgeConnectivity(this%localized_separator_link(i,j,k),0,this%localized_separator_link(i-1,j,k))
+                  if (this%is_planar) then
+                     call setEdgeConnectivity(this%localized_separator_link(i,j,k),0,this%localized_separator_link(i-1,j,k))
+                  else
+                     call setEdgeConnectivity(this%localized_paraboloid_link(i,j,k),0,this%localized_paraboloid_link(i-1,j,k))
+                  end if
                   call setEdgeConnectivity(this%localizer_link(i,j,k),0,this%localizer_link(i-1,j,k))
                end if
                ! In the x+ direction
                if (i.lt.this%cfg%imaxo_) then
-                  call setEdgeConnectivity(this%localized_separator_link(i,j,k),1,this%localized_separator_link(i+1,j,k))
+                  if (this%is_planar) then
+                     call setEdgeConnectivity(this%localized_separator_link(i,j,k),1,this%localized_separator_link(i+1,j,k))
+                  else
+                     call setEdgeConnectivity(this%localized_paraboloid_link(i,j,k),1,this%localized_paraboloid_link(i+1,j,k))
+                  end if
                   call setEdgeConnectivity(this%localizer_link(i,j,k),1,this%localizer_link(i+1,j,k))
                end if
                ! In the y- direction
                if (j.gt.this%cfg%jmino_) then
-                  call setEdgeConnectivity(this%localized_separator_link(i,j,k),2,this%localized_separator_link(i,j-1,k))
+                  if (this%is_planar) then
+                     call setEdgeConnectivity(this%localized_separator_link(i,j,k),2,this%localized_separator_link(i,j-1,k))
+                  else
+                     call setEdgeConnectivity(this%localized_paraboloid_link(i,j,k),2,this%localized_paraboloid_link(i,j-1,k))
+                  end if
                   call setEdgeConnectivity(this%localizer_link(i,j,k),2,this%localizer_link(i,j-1,k))
                end if
                ! In the y+ direction
                if (j.lt.this%cfg%jmaxo_) then
-                  call setEdgeConnectivity(this%localized_separator_link(i,j,k),3,this%localized_separator_link(i,j+1,k))
+                  if (this%is_planar) then
+                     call setEdgeConnectivity(this%localized_separator_link(i,j,k),3,this%localized_separator_link(i,j+1,k))
+                  else
+                     call setEdgeConnectivity(this%localized_paraboloid_link(i,j,k),3,this%localized_paraboloid_link(i,j+1,k))
+                  end if
                   call setEdgeConnectivity(this%localizer_link(i,j,k),3,this%localizer_link(i,j+1,k))
                end if
                ! In the z- direction
                if (k.gt.this%cfg%kmino_) then
-                  call setEdgeConnectivity(this%localized_separator_link(i,j,k),4,this%localized_separator_link(i,j,k-1))
+                  if (this%is_planar) then
+                     call setEdgeConnectivity(this%localized_separator_link(i,j,k),4,this%localized_separator_link(i,j,k-1))
+                  else
+                     call setEdgeConnectivity(this%localized_paraboloid_link(i,j,k),4,this%localized_paraboloid_link(i,j,k-1))
+                  end if
                   call setEdgeConnectivity(this%localizer_link(i,j,k),4,this%localizer_link(i,j,k-1))
                end if
                ! In the z+ direction
                if (k.lt.this%cfg%kmaxo_) then
-                  call setEdgeConnectivity(this%localized_separator_link(i,j,k),5,this%localized_separator_link(i,j,k+1))
+                  if (this%is_planar) then
+                     call setEdgeConnectivity(this%localized_separator_link(i,j,k),5,this%localized_separator_link(i,j,k+1))
+                  else
+                     call setEdgeConnectivity(this%localized_paraboloid_link(i,j,k),5,this%localized_paraboloid_link(i,j,k+1))
+                  end if
                   call setEdgeConnectivity(this%localizer_link(i,j,k),5,this%localizer_link(i,j,k+1))
                end if
             end do
@@ -468,10 +540,15 @@ contains
 
    ! Set up additional arrays needed for the compressible MAST solver
    subroutine allocate_supplement(this)
-     implicit none
+      use messager, only: die
+      implicit none
      class(vfs), intent(inout) :: this
      integer  :: i,j,k,tag
      integer(IRL_LargeOffsetIndex_t) :: total_cells
+
+     if (.not.this%is_planar) then
+      call die('[vfs allocate supplement] This routines had not yet been adapted to parabolic interfaces')
+     end if
      
      ! Allocate arrays for storing old variables
      allocate(this%liquid_gas_interfaceold    (this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
@@ -543,9 +620,14 @@ contains
    
    ! Store old liquid_gas_interface at the beginning of every timestep
    subroutine copy_interface_to_old(this)
-     implicit none
+      use messager, only: die
+      implicit none
      class(vfs), intent(inout) :: this
      integer :: i,j,k
+
+     if (.not.this%is_planar) then
+      call die('[vfs allocate supplement] This routines had not yet been adapted to parabolic interfaces')
+     end if
 
      ! Copy interface
      do k=this%cfg%kmino_,this%cfg%kmaxo_
@@ -699,6 +781,7 @@ contains
    
    !> Calculate the new VF based on U/V/W and dt
    subroutine advance(this,dt,U,V,W)
+      use messager, only: die
       implicit none
       class(vfs), intent(inout) :: this
       real(WP), intent(inout) :: dt  !< Timestep size over which to advance
@@ -714,6 +797,8 @@ contains
       real(WP) :: vol_now,crude_VF
       real(WP), dimension(3) :: ctr_now
       real(WP), dimension(3,2) :: bounding_pts
+      real(WP) :: mycurv
+      real(WP), dimension(6) :: sol
       integer, dimension(3,2) :: bb_indices
       
       ! Allocate
@@ -745,7 +830,24 @@ contains
                   crude_VF=this%crude_phase_test(bb_indices)
                   if (crude_VF.lt.0.0_WP) then
                      ! Need full geometric flux
-                     call getMoments(flux_polyhedron,this%localized_separator_link(i,j,k),this%face_flux(1,i,j,k))
+                     if (this%is_planar) then
+                        call getMoments(flux_polyhedron,this%localized_separator_link(i,j,k),this%face_flux(1,i,j,k))
+                     else
+                        call getMoments(flux_polyhedron,this%localized_paraboloid_link(i,j,k),this%face_flux(1,i,j,k))
+                     end if
+                     if (dt*U(i,j,k)*this%cfg%dy(j)*this%cfg%dz(k).gt.0) then
+                        if (isnan(getVolumePtr(this%face_flux(1,i,j,k),0)).or.getVolumePtr(this%face_flux(1,i,j,k),0).gt.1.0e-13_WP+dt*U(i,j,k)*this%cfg%dy(j)*this%cfg%dz(k)) then
+                           print "(e15.6)", dt*U(i,j,k)*this%cfg%dy(j)*this%cfg%dz(k)
+                           print "(e15.6)", getVolumePtr(this%face_flux(1,i,j,k),0)
+                           call die('[vfs advance] Impossible X flux')
+                        end if
+                     else
+                        if (isnan(getVolumePtr(this%face_flux(1,i,j,k),0)).or.getVolumePtr(this%face_flux(1,i,j,k),0).lt.-1.0e-13_WP+dt*U(i,j,k)*this%cfg%dy(j)*this%cfg%dz(k)) then
+                           print "(e15.6)", dt*U(i,j,k)*this%cfg%dy(j)*this%cfg%dz(k)
+                           print "(e15.6)", getVolumePtr(this%face_flux(1,i,j,k),0)
+                           call die('[vfs advance] Impossible X flux')
+                        end if
+                     end if
                   else
                      ! Simpler flux calculation
                      vol_now=calculateVolume(flux_polyhedron); ctr_now=calculateCentroid(flux_polyhedron)
@@ -753,7 +855,7 @@ contains
                   end if
                end if
                
-               ! Y flux
+               ! Y flux 
                if (minval(abs(this%band(i,j-1:j,k))).le.advect_band) then
                   ! Construct and project face
                   face(:,1)=[this%cfg%x(i+1),this%cfg%y(j  ),this%cfg%z(k  )]; face(:,5)=this%project(face(:,1),i,j,k,-dt,U,V,W); if (this%vmask(i+1,j  ,k  ).eq.1) face(:,5)=face(:,1)
@@ -774,7 +876,24 @@ contains
                   crude_VF=this%crude_phase_test(bb_indices)
                   if (crude_VF.lt.0.0_WP) then
                      ! Need full geometric flux
-                     call getMoments(flux_polyhedron,this%localized_separator_link(i,j,k),this%face_flux(2,i,j,k))
+                     if (this%is_planar) then
+                        call getMoments(flux_polyhedron,this%localized_separator_link(i,j,k),this%face_flux(2,i,j,k))
+                     else
+                        call getMoments(flux_polyhedron,this%localized_paraboloid_link(i,j,k),this%face_flux(2,i,j,k))
+                     end if
+                     if (dt*V(i,j,k)*this%cfg%dx(i)*this%cfg%dz(k).gt.0) then
+                        if (isnan(getVolumePtr(this%face_flux(2,i,j,k),0)).or.getVolumePtr(this%face_flux(2,i,j,k),0).gt.1.0e-13_WP+dt*V(i,j,k)*this%cfg%dx(i)*this%cfg%dz(k)) then
+                           print "(e15.6)", dt*V(i,j,k)*this%cfg%dx(i)*this%cfg%dz(k)
+                           print "(e15.6)", getVolumePtr(this%face_flux(2,i,j,k),0)
+                           call die('[vfs advance] Impossible Yflux')
+                        end if
+                     else
+                        if (isnan(getVolumePtr(this%face_flux(2,i,j,k),0)).or.getVolumePtr(this%face_flux(2,i,j,k),0).lt.-1.0e-13_WP+dt*V(i,j,k)*this%cfg%dx(i)*this%cfg%dz(k)) then
+                           print "(e15.6)", dt*V(i,j,k)*this%cfg%dx(i)*this%cfg%dz(k)
+                           print "(e15.6)", getVolumePtr(this%face_flux(2,i,j,k),0)
+                           call die('[vfs advance] Impossible Y flux')
+                        end if
+                     end if
                   else
                      ! Simpler flux calculation
                      vol_now=calculateVolume(flux_polyhedron); ctr_now=calculateCentroid(flux_polyhedron)
@@ -803,7 +922,24 @@ contains
                   crude_VF=this%crude_phase_test(bb_indices)
                   if (crude_VF.lt.0.0_WP) then
                      ! Need full geometric flux
-                     call getMoments(flux_polyhedron,this%localized_separator_link(i,j,k),this%face_flux(3,i,j,k))
+                     if (this%is_planar) then
+                        call getMoments(flux_polyhedron,this%localized_separator_link(i,j,k),this%face_flux(3,i,j,k))
+                     else
+                        call getMoments(flux_polyhedron,this%localized_paraboloid_link(i,j,k),this%face_flux(3,i,j,k))
+                     end if        
+                     if (dt*W(i,j,k)*this%cfg%dx(i)*this%cfg%dy(j).gt.0) then
+                        if (isnan(getVolumePtr(this%face_flux(3,i,j,k),0)).or.getVolumePtr(this%face_flux(3,i,j,k),0).gt.1.0e-13_WP+dt*W(i,j,k)*this%cfg%dx(i)*this%cfg%dy(j)) then
+                           print "(e15.6)", dt*W(i,j,k)*this%cfg%dx(i)*this%cfg%dy(j)
+                           print "(e15.6)", getVolumePtr(this%face_flux(3,i,j,k),0)
+                           call die('[vfs advance] Impossible Z flux')
+                        end if
+                     else
+                        if (isnan(getVolumePtr(this%face_flux(3,i,j,k),0)).or.getVolumePtr(this%face_flux(3,i,j,k),0).lt.-1.0e-13_WP+dt*W(i,j,k)*this%cfg%dx(i)*this%cfg%dy(j)) then
+                           print "(e15.6)", dt*W(i,j,k)*this%cfg%dx(i)*this%cfg%dy(j)
+                           print "(e15.6)", getVolumePtr(this%face_flux(3,i,j,k),0)
+                           call die('[vfs advance] Impossible Z flux')
+                        end if
+                     end if
                   else
                      ! Simpler flux calculation
                      vol_now=calculateVolume(flux_polyhedron); ctr_now=calculateCentroid(flux_polyhedron)
@@ -840,15 +976,25 @@ contains
          Lvolnew=Lvolold+Lvolinc
          Gvolnew=Gvolold+Gvolinc
          
-         ! Compute new liquid volume fraction
+         ! Compute new liquid volume fraction 
          this%VF(i,j,k)=Lvolnew/(Lvolnew+Gvolnew)
          
          ! Only work on higher order moments if VF is in [VFlo,VFhi]
          if (this%VF(i,j,k).lt.VFlo) then
+            if (this%VF(i,j,k).lt.-VFlo) then
+               print "(i5 i5 i5)", i,j,k
+               print "(e15.6)", this%VF(i,j,k)
+               call die('[vfs advance] VF unbounded')
+            end if 
             this%VF(i,j,k)=0.0_WP
-         else if (this%VF(i,j,k).gt.VFhi) then
+         else if (this%VF(i,j,k).gt.VFhi) then  
             this%VF(i,j,k)=1.0_WP
-         else
+            if (this%VF(i,j,k).gt.1.0_WP+VFlo) then
+               print "(i5 i5 i5)", i,j,k
+               print "(e15.6)", this%VF(i,j,k) 
+               call die('[vfs advance] VF unbounded')
+            end if  
+         else 
             ! Compute old phase barycenters
             this%Lbary(:,i,j,k)=(this%Lbary(:,i,j,k)*Lvolold-getCentroidPtr(this%face_flux(1,i+1,j,k),0)+getCentroidPtr(this%face_flux(1,i,j,k),0) &
             &                                               -getCentroidPtr(this%face_flux(2,i,j+1,k),0)+getCentroidPtr(this%face_flux(2,i,j,k),0) &
@@ -864,7 +1010,7 @@ contains
       
       ! Synchronize VF field
       call this%cfg%sync(this%VF)
-      
+       
       ! Remove flotsams if needed
       call this%remove_flotsams()
       
@@ -875,8 +1021,8 @@ contains
       call this%advect_interface(dt,U,V,W)
       
       ! Update the band
-      call this%update_band()
-      
+      call this%update_band() 
+       
       ! Perform interface reconstruction from transported moments
       call this%build_interface()
       
@@ -884,11 +1030,17 @@ contains
       call this%remove_sheets()
       
       ! Create discontinuous polygon mesh from IRL interface
-      call this%polygonalize_interface()
-      
+      call this%polygonalize_interface() 
+        
+      if (.not.this%is_planar) then
+         call this%build_parabolic_interface()
+      end if
+
+      call this%polygonalize_interface() 
+
       ! Calculate distance from polygons
       call this%distance_from_polygon()
-      
+
       ! Calculate subcell phasic volumes
       call this%subcell_vol()
       
@@ -1136,6 +1288,9 @@ contains
                   do n=1,max_interface_planes
                      call zeroPolygon(this%interface_polygon(n,i,j,k))
                   end do
+                  if (.not.this%is_planar) then
+                     call zeroTriangulatedParaboloid(this%interface_triangulated_paraboloid(i,j,k))
+                  end if
                else if (this%VF(i,j,k).gt.VFhi) then
                   ! Pure liquid moments
                   this%VF(i,j,k)=1.0_WP
@@ -1148,6 +1303,9 @@ contains
                   do n=1,max_interface_planes
                      call zeroPolygon(this%interface_polygon(n,i,j,k))
                   end do
+                  if (.not.this%is_planar) then
+                     call zeroTriangulatedParaboloid(this%interface_triangulated_paraboloid(i,j,k))
+                  end if
                end if
             end do
          end do
@@ -1443,7 +1601,94 @@ contains
       
    end subroutine update_band
    
-   
+   !> Reconstruct paraboloid using Jibben's method
+   subroutine build_parabolic_interface(this)
+      implicit none
+      class(vfs), intent(inout) :: this
+      real(WP), dimension(3) :: tmp_vert
+      real(WP), dimension(3*27*12) :: poly_vert_coord_list
+      real(WP), dimension(27) :: poly_vfrac
+      integer, dimension(27) :: poly_nvert
+      integer :: npoly,nvert,tmp_nvert
+      integer :: i,j,k,ii,jj,kk,n
+      type(RectCub_type) :: cell
+
+      ! Create a cell object
+      call new(cell)
+
+      do k=this%cfg%kmin_,this%cfg%kmax_ 
+         do j=this%cfg%jmin_,this%cfg%jmax_
+            do i=this%cfg%imin_,this%cfg%imax_
+               if (this%mask(i,j,k).ne.0) cycle
+               call setParaboloidFromPlanarSep(this%liquid_gas_parabolic_interface(i,j,k),this%liquid_gas_interface(i,j,k),[this%cfg%xm(i),this%cfg%ym(j),this%cfg%zm(k)])
+               if (this%VF(i,j,k).ge.VFlo.and.this%VF(i,j,k).le.VFhi) then
+                  ! > Count polygons and vertices
+                  npoly=0;nvert=0 
+                  do kk=k-1,k+1
+                     do jj=j-1,j+1
+                        do ii=i-1,i+1
+                           tmp_nvert=getNumberOfVertices(this%interface_polygon(1,ii,jj,kk))
+                           if (tmp_nvert.gt.0) then
+                              npoly=npoly+1 
+                              nvert=nvert+tmp_nvert
+                           end if 
+                        end do
+                     end do
+                  end do
+
+                  ! > Fill in coordinates of polygon vertices
+                  npoly=0;nvert=0
+                  tmp_nvert=getNumberOfVertices(this%interface_polygon(1,i,j,k))
+                  if (tmp_nvert.gt.0) then
+                     npoly=npoly+1
+                     poly_vfrac(npoly)=this%VF(i,j,k) 
+                     poly_nvert(npoly)=tmp_nvert
+                     do n=1,tmp_nvert
+                        tmp_vert=getPt(this%interface_polygon(1,i,j,k),n-1) 
+                        poly_vert_coord_list(nvert*3+1)=tmp_vert(1) 
+                        poly_vert_coord_list(nvert*3+2)=tmp_vert(2) 
+                        poly_vert_coord_list(nvert*3+3)=tmp_vert(3)
+                        nvert=nvert+1 
+                     end do
+                     do kk=k-1,k+1 
+                        do jj=j-1,j+1
+                           do ii=i-1,i+1 
+                              if (i.eq.ii.and.j.eq.jj.and.k.eq.kk) cycle  
+                              tmp_nvert=getNumberOfVertices(this%interface_polygon(1,ii,jj,kk))
+                              if (tmp_nvert.gt.0) then 
+                                 npoly=npoly+1 
+                                 poly_vfrac(npoly)=this%VF(ii,jj,kk)
+                                 poly_nvert(npoly)=tmp_nvert  
+                                 do n=1,tmp_nvert 
+                                    tmp_vert=getPt(this%interface_polygon(1,ii,jj,kk),n-1)   
+                                    poly_vert_coord_list(nvert*3+1)=tmp_vert(1) 
+                                    poly_vert_coord_list(nvert*3+2)=tmp_vert(2)
+                                    poly_vert_coord_list(nvert*3+3)=tmp_vert(3)
+                                    nvert=nvert+1
+                                 end do  
+                              end if
+                           end do 
+                        end do  
+                     end do
+                     call construct_2pt(cell,[this%cfg%x(i),this%cfg%y(j),this%cfg%z(k)],[this%cfg%x(i+1),this%cfg%y(j+1),this%cfg%z(k+1)])
+                     call setParaboloidJibben(this%liquid_gas_parabolic_interface(i,j,k),this%liquid_gas_interface(i,j,k),cell,npoly,poly_vfrac,poly_nvert,poly_vert_coord_list)
+                  else 
+                     call setParaboloidFromPlanarSep(this%liquid_gas_parabolic_interface(i,j,k),this%liquid_gas_interface(i,j,k),[this%cfg%xm(i),this%cfg%ym(j),this%cfg%zm(k)])
+                  end if   
+               else if (this%VF(i,j,k).gt.VFhi) then 
+                  call setParaboloidFull(this%liquid_gas_parabolic_interface(i,j,k)) 
+               else if (this%VF(i,j,k).lt.VFlo) then
+                  call setParaboloidEmpty(this%liquid_gas_parabolic_interface(i,j,k)) 
+               end if
+            end do
+         end do
+      end do
+
+      ! Communicate interfaces
+      call this%sync_interface()
+
+   end subroutine
+
    !> Reconstruct an IRL interface from the VF field distribution
    subroutine build_interface(this)
       use messager, only: die
@@ -1458,12 +1703,12 @@ contains
       case (swartz)
          call this%build_lvira()
          call this%smooth_interface()
-      case (youngs); call this%build_youngs()
-      !case (lvlset); call this%build_lvlset()
+      case (youngs); call this%build_youngs() 
+      case (jibben); call this%build_lvira()
+         !case (lvlset); call this%build_lvlset()
       case default; call die('[vfs build interface] Unknown interface reconstruction scheme')
       end select
    end subroutine build_interface
-   
    
    !> ELVIRA reconstruction of a planar interface in mixed cells
    subroutine build_elvira(this)
@@ -2180,8 +2425,11 @@ contains
             do i=this%cfg%imino_,this%cfg%imaxo_
                ! Zero out the polygons
                do n=1,max_interface_planes
-                  call zeroPolygon(this%interface_polygon(n,i,j,k))
+                  call zeroPolygon(this%interface_polygon(n,i,j,k)) 
                end do
+               if (.not.this%is_planar) then
+                  call zeroTriangulatedParaboloid(this%interface_triangulated_paraboloid(i,j,k))
+               end if
                ! Skip wall cells only here
                if (this%mask(i,j,k).eq.1) cycle
                ! Create polygons for cells with interfaces, zero for those without
@@ -2190,12 +2438,15 @@ contains
                   do n=1,getNumberOfPlanes(this%liquid_gas_interface(i,j,k))
                      call getPoly(cell,this%liquid_gas_interface(i,j,k),n-1,this%interface_polygon(n,i,j,k))
                   end do
+                  if (.not.this%is_planar) then 
+                     call triangulateInsideCuboid(this%liquid_gas_parabolic_interface(i,j,k),cell,this%interface_triangulated_paraboloid(i,j,k))
+                  end if 
                end if
-            end do
-         end do
+            end do 
+         end do  
       end do
-      
-      ! Find inferface between filled and empty cells on x-face
+ 
+      ! Find inferface between filled and empty cells on x-face 
       do k=this%cfg%kmino_,this%cfg%kmaxo_
          do j=this%cfg%jmino_,this%cfg%jmaxo_
             do i=this%cfg%imino_+1,this%cfg%imaxo_
@@ -2284,7 +2535,7 @@ contains
       implicit none
       class(vfs), intent(inout) :: this
       class(surfmesh), intent(inout) :: smesh
-      integer :: i,j,k,n,shape,nv,np,nplane
+      integer :: i,j,k,n,d,shape,nv,np,nplane
       real(WP), dimension(3) :: tmp_vert
       
       ! Reset surface mesh storage
@@ -2295,17 +2546,25 @@ contains
       do k=this%cfg%kmin_,this%cfg%kmax_
          do j=this%cfg%jmin_,this%cfg%jmax_
             do i=this%cfg%imin_,this%cfg%imax_
-               do nplane=1,getNumberOfPlanes(this%liquid_gas_interface(i,j,k))
-                  shape=getNumberOfVertices(this%interface_polygon(nplane,i,j,k))
+               if (this%is_planar) then
+                  do nplane=1,getNumberOfPlanes(this%liquid_gas_interface(i,j,k))
+                     shape=getNumberOfVertices(this%interface_polygon(nplane,i,j,k))
+                     if (shape.gt.0) then
+                        nv=nv+shape
+                        np=np+1
+                     end if
+                  end do
+               else
+                  shape=getNumberOfTriangles(this%interface_triangulated_paraboloid(i,j,k))
                   if (shape.gt.0) then
-                     nv=nv+shape
-                     np=np+1
+                     np=np+shape
+                     nv=nv+3*shape
                   end if
-               end do
+               end if
             end do
          end do
       end do
-      
+
       ! Reallocate storage and fill out arrays
       if (np.gt.0) then
          call smesh%set_size(nvert=nv,npoly=np)
@@ -2314,24 +2573,42 @@ contains
          do k=this%cfg%kmin_,this%cfg%kmax_
             do j=this%cfg%jmin_,this%cfg%jmax_
                do i=this%cfg%imin_,this%cfg%imax_
-                  do nplane=1,getNumberOfPlanes(this%liquid_gas_interface(i,j,k))
-                     shape=getNumberOfVertices(this%interface_polygon(nplane,i,j,k))
+                  if (this%is_planar) then
+                     do nplane=1,getNumberOfPlanes(this%liquid_gas_interface(i,j,k))
+                        shape=getNumberOfVertices(this%interface_polygon(nplane,i,j,k))
+                        if (shape.gt.0) then
+                           ! Increment polygon counter
+                           np=np+1
+                           smesh%polySize(np)=shape
+                           ! Loop over its vertices and add them
+                           do n=1,shape
+                              tmp_vert=getPt(this%interface_polygon(nplane,i,j,k),n-1)
+                              ! Increment node counter
+                              nv=nv+1
+                              smesh%xVert(nv)=tmp_vert(1) 
+                              smesh%yVert(nv)=tmp_vert(2)
+                              smesh%zVert(nv)=tmp_vert(3)
+                              smesh%polyConn(nv)=nv
+                           end do
+                        end if
+                     end do
+                  else
+                     shape=getNumberOfTriangles(this%interface_triangulated_paraboloid(i,j,k))
                      if (shape.gt.0) then
-                        ! Increment polygon counter
-                        np=np+1
-                        smesh%polySize(np)=shape
-                        ! Loop over its vertices and add them
                         do n=1,shape
-                           tmp_vert=getPt(this%interface_polygon(nplane,i,j,k),n-1)
-                           ! Increment node counter
-                           nv=nv+1
-                           smesh%xVert(nv)=tmp_vert(1)
-                           smesh%yVert(nv)=tmp_vert(2)
-                           smesh%zVert(nv)=tmp_vert(3)
-                           smesh%polyConn(nv)=nv
+                           np=np+1
+                           smesh%polySize(np)=3
+                           do d=1,3
+                              tmp_vert=getPt(this%interface_triangulated_paraboloid(i,j,k),n-1,d-1)
+                              nv=nv+1
+                              smesh%xVert(nv)=tmp_vert(1)
+                              smesh%yVert(nv)=tmp_vert(2)
+                              smesh%zVert(nv)=tmp_vert(3)
+                              smesh%polyConn(nv)=nv
+                           end do
                         end do
                      end if
-                  end do
+                  end if
                end do
             end do
          end do
@@ -2347,7 +2624,7 @@ contains
          smesh%polyConn(1:3)=[1,2,3]
       end if
       
-   end subroutine update_surfmesh
+   end subroutine update_surfmesh 
    
    
    !> Calculate distance from polygonalized interface inside the band
@@ -2483,7 +2760,11 @@ contains
                ! Form the grid cell
                call construct_2pt(cell,[this%cfg%x(i),this%cfg%y(j),this%cfg%z(k)],[this%cfg%x(i+1),this%cfg%y(j+1),this%cfg%z(k+1)])
                ! Cut it by the current interface(s)
-               call getNormMoments(cell,this%liquid_gas_interface(i,j,k),separated_volume_moments)
+               if (this%is_planar) then 
+                  call getNormMoments(cell,this%liquid_gas_interface(i,j,k),separated_volume_moments)
+               else
+                  call getNormMoments(cell,this%liquid_gas_parabolic_interface(i,j,k),separated_volume_moments)
+               end if
                ! Recover relevant moments
                this%VF(i,j,k)     =getVolumePtr(separated_volume_moments,0)/this%cfg%vol(i,j,k)
                this%Lbary(:,i,j,k)=getCentroid(separated_volume_moments,0)
@@ -2737,15 +3018,17 @@ contains
 
 
    !> Perform local paraboloid fit of IRL surface in integral sense
-   subroutine paraboloid_integral_fit(this,i,j,k,iplane,mycurv)
+   subroutine paraboloid_integral_fit(this,i,j,k,iplane,mycurv,sol)
       use mathtools, only: normalize,cross_product
       implicit none
       ! In/out variables
       class(vfs), intent(inout) :: this
       integer,  intent(in)  :: i,j,k,iplane
       real(WP), intent(out) :: mycurv
+      real(WP), dimension(6), intent(out) :: sol
       ! Variables used to process the polygons
-      real(WP), dimension(3) :: pref,nref,tref,sref
+      real(WP), dimension(3) :: pref,tref,sref,nref
+      real(WP), dimension(4) :: planeref,planeloc
       real(WP), dimension(3) :: vert1,vert2,ploc,nloc
       real(WP), dimension(3) :: buf,reconst_plane_coeffs
       integer :: nplane,shape,n,ii,jj,kk,ai,aj
@@ -2755,7 +3038,7 @@ contains
       real(WP), dimension(6,6) :: A
       integer , dimension(6)   :: ipiv
       real(WP), dimension(6)   :: b
-      real(WP), dimension(6)   :: sol
+      ! real(WP), dimension(6)   :: sol
       real(WP), dimension(:), allocatable :: work
       real(WP), dimension(1)   :: lwork_query
       integer  :: lwork,info
@@ -2766,7 +3049,9 @@ contains
       pref=calculateCentroid(this%interface_polygon(iplane,i,j,k))
       
       ! Create local basis from polygon normal
-      nref=calculateNormal(this%interface_polygon(iplane,i,j,k))
+      ! nref=calculateNormal(this%interface_polygon(iplane,i,j,k))
+      planeref=getPlane(this%liquid_gas_interface(i,j,k),iplane-1)
+      nref=[planeref(1),planeref(2),planeref(3)]
       select case (maxloc(abs(nref),1))
       case (1); tref=normalize([+nref(2),-nref(1),0.0_WP])
       case (2); tref=normalize([0.0_WP,+nref(3),-nref(2)])
@@ -2791,8 +3076,10 @@ contains
                   if (shape.eq.0) cycle
                   
                   ! Get local polygon normal and skip if normal is not aligned with center polygon normal
-                  nloc=calculateNormal(this%interface_polygon(nplane,ii,jj,kk))
-                  if (dot_product(nloc,nref).le.0.0_WP) cycle
+                  ! nloc=calculateNormal(this%interface_polygon(nplane,ii,jj,kk))
+                  planeloc=getPlane(this%liquid_gas_interface(ii,jj,kk),nplane-1)
+                  nloc=[planeloc(1),planeloc(2),planeloc(3)]
+                  if (dot_product(nloc,nref).le.0.0_WP) cycle 
                   
                   ! Get local polygon centroid
                   ploc=calculateCentroid(this%interface_polygon(nplane,ii,jj,kk))
@@ -2829,7 +3116,7 @@ contains
                   b_dot_sum=b_dot_sum+dot_product(reconst_plane_coeffs,integrals(1:3))
                   
                   ! Get weighting
-                  ww=wgauss(sqrt(dot_product(ploc,ploc)),2.5_WP)
+                  ww=wgauss(sqrt(dot_product(ploc,ploc)),2.5_WP) 
                   
                   ! Add to symmetric matrix and RHS
                   do aj=1,6
@@ -3263,6 +3550,7 @@ contains
       class(vfs), intent(inout) :: this
       integer :: i,j,k,ni
       real(WP), dimension(1:4) :: plane
+      real(WP), dimension(1:3) :: datum
       integer , dimension(2,3) :: send_range,recv_range
       ! Synchronize in x
       if (this%cfg%nx.eq.1) then
@@ -3270,6 +3558,9 @@ contains
             do j=this%cfg%jmino_,this%cfg%jmaxo_
                do i=this%cfg%imino_,this%cfg%imaxo_
                   call copy(this%liquid_gas_interface(i,j,k),this%liquid_gas_interface(this%cfg%imin,j,k))
+                  if (.not.this%is_planar) then
+                     call copy(this%liquid_gas_parabolic_interface(i,j,k),this%liquid_gas_parabolic_interface(this%cfg%imin,j,k))
+                  end if
                end do
             end do
          end do
@@ -3297,6 +3588,9 @@ contains
             do j=this%cfg%jmino_,this%cfg%jmaxo_
                do i=this%cfg%imino_,this%cfg%imaxo_
                   call copy(this%liquid_gas_interface(i,j,k),this%liquid_gas_interface(i,this%cfg%jmin,k))
+                  if (.not.this%is_planar) then
+                     call copy(this%liquid_gas_parabolic_interface(i,j,k),this%liquid_gas_parabolic_interface(i,this%cfg%jmin,k))
+                  end if
                end do
             end do
          end do
@@ -3324,6 +3618,9 @@ contains
             do j=this%cfg%jmino_,this%cfg%jmaxo_
                do i=this%cfg%imino_,this%cfg%imaxo_
                   call copy(this%liquid_gas_interface(i,j,k),this%liquid_gas_interface(i,j,this%cfg%kmin))
+                  if (.not.this%is_planar) then
+                     call copy(this%liquid_gas_parabolic_interface(i,j,k),this%liquid_gas_parabolic_interface(i,j,this%cfg%kmin))
+                  end if
                end do
             end do
          end do
@@ -3355,6 +3652,11 @@ contains
                      plane(4)=plane(4)-plane(1)*this%cfg%xL
                      call setPlane(this%liquid_gas_interface(i,j,k),ni,plane(1:3),plane(4))
                   end do
+                  if (.not.this%is_planar) then
+                     datum=getDatum(this%liquid_gas_parabolic_interface(i,j,k))
+                     datum(1)=datum(1)-this%cfg%xL
+                     call setDatum(this%liquid_gas_parabolic_interface(i,j,k),datum)
+                  end if
                end do
             end do
          end do
@@ -3368,6 +3670,11 @@ contains
                      plane(4)=plane(4)+plane(1)*this%cfg%xL
                      call setPlane(this%liquid_gas_interface(i,j,k),ni,plane(1:3),plane(4))
                   end do
+                  if (.not.this%is_planar) then
+                     datum=getDatum(this%liquid_gas_parabolic_interface(i,j,k))
+                     datum(1)=datum(1)+this%cfg%xL
+                     call setDatum(this%liquid_gas_parabolic_interface(i,j,k),datum)
+                  end if
                end do
             end do
          end do
@@ -3382,6 +3689,11 @@ contains
                      plane(4)=plane(4)-plane(2)*this%cfg%yL
                      call setPlane(this%liquid_gas_interface(i,j,k),ni,plane(1:3),plane(4))
                   end do
+                  if (.not.this%is_planar) then
+                     datum=getDatum(this%liquid_gas_parabolic_interface(i,j,k))
+                     datum(2)=datum(2)-this%cfg%yL
+                     call setDatum(this%liquid_gas_parabolic_interface(i,j,k),datum)
+                  end if
                end do
             end do
          end do
@@ -3395,6 +3707,11 @@ contains
                      plane(4)=plane(4)+plane(2)*this%cfg%yL
                      call setPlane(this%liquid_gas_interface(i,j,k),ni,plane(1:3),plane(4))
                   end do
+                  if (.not.this%is_planar) then
+                     datum=getDatum(this%liquid_gas_parabolic_interface(i,j,k))
+                     datum(2)=datum(2)+this%cfg%yL
+                     call setDatum(this%liquid_gas_parabolic_interface(i,j,k),datum)
+                  end if
                end do
             end do
          end do
@@ -3409,6 +3726,11 @@ contains
                      plane(4)=plane(4)-plane(3)*this%cfg%zL
                      call setPlane(this%liquid_gas_interface(i,j,k),ni,plane(1:3),plane(4))
                   end do
+                  if (.not.this%is_planar) then
+                     datum=getDatum(this%liquid_gas_parabolic_interface(i,j,k))
+                     datum(3)=datum(3)-this%cfg%zL
+                     call setDatum(this%liquid_gas_parabolic_interface(i,j,k),datum)
+                  end if
                end do
             end do
          end do
@@ -3422,6 +3744,11 @@ contains
                      plane(4)=plane(4)+plane(3)*this%cfg%zL
                      call setPlane(this%liquid_gas_interface(i,j,k),ni,plane(1:3),plane(4))
                   end do
+                  if (.not.this%is_planar) then
+                     datum=getDatum(this%liquid_gas_parabolic_interface(i,j,k))
+                     datum(3)=datum(3)+this%cfg%zL
+                     call setDatum(this%liquid_gas_parabolic_interface(i,j,k),datum)
+                  end if
                end do
             end do
          end do
@@ -3446,6 +3773,9 @@ contains
          do j=a_send_range(1,2),a_send_range(2,2)
             do i=a_send_range(1,1),a_send_range(2,1)
                call serializeAndPack(this%liquid_gas_interface(i,j,k),this%send_byte_buffer)
+               if (.not.this%is_planar) then
+                  call serializeAndPack(this%liquid_gas_parabolic_interface(i,j,k),this%send_byte_buffer)
+               end if
             end do
          end do
       end do
@@ -3458,6 +3788,9 @@ contains
             do j=a_recv_range(1,2),a_recv_range(2,2)
                do i=a_recv_range(1,1),a_recv_range(2,1)
                   call unpackAndStore(this%liquid_gas_interface(i,j,k),this%recv_byte_buffer)
+                  if (.not.this%is_planar) then
+                     call unpackAndStore(this%liquid_gas_parabolic_interface(i,j,k),this%recv_byte_buffer)
+                  end if
                end do
             end do
          end do
