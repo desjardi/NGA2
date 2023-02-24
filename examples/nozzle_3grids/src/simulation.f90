@@ -921,7 +921,7 @@ contains
       create_pmesh3: block
          integer :: i
          ! Include an extra variable for droplet diameter
-         pmesh3=partmesh(nvar=1,name='lpt')
+         pmesh3=partmesh(nvar=1,nvec=0,name='lpt')
          pmesh3%varname(1)='diameter'
          ! Transfer particles to pmesh
          call lp3%update_partmesh(pmesh3)
@@ -1627,7 +1627,8 @@ contains
                ! Add the drop
                lp3%p(np)%id  =int(0,8)                                   !< Give id (maybe based on break-up model?)
                lp3%p(np)%dt  =0.0_WP                                     !< Let the drop find it own integration time
-               lp3%p(np)%col =0.0_WP                                     !< Give zero collision force
+               lp3%p(np)%Acol=0.0_WP                                     !< Give zero collision force (axial)
+               lp3%p(np)%Tcol=0.0_WP                                     !< Give zero collision force (tangential)
                lp3%p(np)%d   =(6.0_WP*Vl/pi)**(1.0_WP/3.0_WP)            !< Assign diameter based on remaining liquid volume
                lp3%p(np)%pos =vf2%Lbary(:,i,j,k)                         !< Place the drop at the liquid barycenter
                lp3%p(np)%vel =fs2%cfg%get_velocity(pos=lp3%p(np)%pos,i0=i,j0=j,k0=k,U=fs2%U,V=fs2%V,W=fs2%W) !< Interpolate local cell velocity as drop velocity

@@ -76,7 +76,8 @@ contains
                ! Give zero velocity
                lp%p(i)%vel=0.0_WP
                ! Give zero collision force
-               lp%p(i)%col=0.0_WP
+               lp%p(i)%Acol=0.0_WP
+               lp%p(i)%Tcol=0.0_WP
                ! Give zero dt
                lp%p(i)%dt=0.0_WP
                ! Locate the particle on the mesh
@@ -90,7 +91,7 @@ contains
          ! Get initial particle volume fraction
          call lp%update_VF()
          ! Set collision timescale
-         lp%Tcol=5.0_WP*time%dt
+         lp%tau_col=5.0_WP*time%dt
       end block initialize_lpt
       
       
@@ -137,7 +138,7 @@ contains
       
       ! Create partmesh object for Lagrangian particle output
       create_pmesh: block
-         pmesh=partmesh(nvar=0,name='lpt')
+         pmesh=partmesh(nvar=0,nvec=0,name='lpt')
          call lp%update_partmesh(pmesh)
       end block create_pmesh
       

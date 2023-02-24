@@ -19,13 +19,16 @@ module config_class
       
       ! Geometry
       real(WP), dimension(:,:,:), allocatable :: VF            !< Volume fraction info (VF=1 is fluid, VF=0 is wall)
+      real(WP) :: fluid_vol                                    !< Total fluid volume in the config
       
    contains
       procedure :: print=>config_print                         !< Output configuration information to the screen
       procedure :: write=>config_write                         !< Write out config files: grid and geometry
       procedure, private :: prep=>config_prep                  !< Finish preparing config after the partitioned grid is loaded
+      procedure :: calc_fluid_vol                              !< Compute fluid_vol after VF has been set
       procedure :: VF_extend                                   !< Extend VF array into the non-periodic domain overlaps
       procedure :: integrate                                   !< Integrate a variable on config while accounting for VF
+      procedure :: integrate_without_VF                        !< Integrate a variable on config while ignoring VF
       procedure :: set_scalar                                  !< Subroutine that extrapolates a provided scalar value at a point to a pgrid field
       procedure :: get_velocity                                !< Function that interpolates a provided velocity field staggered on the pgrid to a point
       procedure :: get_scalar                                  !< Function that interpolates a provided scalar field centered on the pgrid to a point
@@ -83,6 +86,8 @@ contains
          call geomfile%pullvar('VF',self%VF)
          ! Perform an extension in the overlap
          call self%VF_extend()
+         ! Update fluid_vol
+         call self%calc_fluid_vol()
       end block read_VF
    end function construct_from_file
    
@@ -122,6 +127,7 @@ contains
       
       ! Allocate wall geometry - assume all fluid until told otherwise
       allocate(this%VF(this%imino_:this%imaxo_,this%jmino_:this%jmaxo_,this%kmino_:this%kmaxo_)); this%VF=1.0_WP
+      this%fluid_vol=this%vol_total
       
    end subroutine config_prep
    
@@ -166,6 +172,26 @@ contains
       end if
    end subroutine VF_extend
    
+
+   !> Calculate the total fluid volume by integrating VF
+   subroutine calc_fluid_vol(this)
+      use mpi_f08,  only: MPI_ALLREDUCE,MPI_SUM
+      use parallel, only: MPI_REAL_WP
+      implicit none
+      class(config), intent(inout) :: this
+      integer :: i,j,k,ierr
+      real(WP) :: buf
+      buf=0.0_WP
+      do k=this%kmin_,this%kmax_
+         do j=this%jmin_,this%jmax_
+            do i=this%imin_,this%imax_
+               buf=buf+this%vol(i,j,k)*this%VF(i,j,k)
+            end do
+         end do
+      end do
+      call MPI_ALLREDUCE(buf,this%fluid_vol,1,MPI_REAL_WP,MPI_SUM,this%comm,ierr)
+   end subroutine calc_fluid_vol
+
    
    !> Calculate the integral of a field on the config while accounting for VF
    subroutine integrate(this,A,integral)
@@ -187,6 +213,28 @@ contains
       end do
       call MPI_ALLREDUCE(my_int,integral,1,MPI_REAL_WP,MPI_SUM,this%comm,ierr)
    end subroutine integrate
+
+
+   !> Calculate the integral of a field on the config while ignoring VF
+   subroutine integrate_without_VF(this,A,integral)
+      use mpi_f08,  only: MPI_ALLREDUCE,MPI_SUM
+      use parallel, only: MPI_REAL_WP
+      implicit none
+      class(config), intent(inout) :: this
+      real(WP), dimension(this%imino_:,this%jmino_:,this%kmino_:), intent(in) :: A      !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      real(WP), intent(out) :: integral
+      integer :: i,j,k,ierr
+      real(WP) :: my_int
+      my_int=0.0_WP
+      do k=this%kmin_,this%kmax_
+         do j=this%jmin_,this%jmax_
+            do i=this%imin_,this%imax_
+               my_int=my_int+this%vol(i,j,k)*A(i,j,k)
+            end do
+         end do
+      end do
+      call MPI_ALLREDUCE(my_int,integral,1,MPI_REAL_WP,MPI_SUM,this%comm,ierr)
+   end subroutine integrate_without_VF
    
    
    !> Subroutine that performs trilinear interpolation of provided scalar field S

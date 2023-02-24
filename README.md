@@ -10,7 +10,7 @@ NGA2 is a high performance computing research library that provides a variety of
 - overset and multi-block meshes via parallel coupler
 - Lagrangian particle tracking
 - large-eddy simulation models
-
+- immersed boundaries
 
 Currently, NGA2 supports cartesian meshes only. However, because it is object-oriented, multiple meshes can be used simultaneously and interactively.
 
@@ -19,6 +19,7 @@ Future developments will focus on providing support for:
 - dynamic remeshing
 - basic unstructured meshes
 - chemical kinetics and combustion models
-- immersed boundaries
 
 NGA2 is open-sourced under the [MIT license](./LICENSE).
+
+Documentation is (will be) provided [here](https://nga2.readthedocs.io).

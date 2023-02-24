@@ -1,0 +1,40 @@
+# Parallelization
+Partition :	2 2 2
+
+# Mesh definition
+Lx : 0.007
+Ly : 0.01792
+Lz : 0.01792
+nx : 70
+ny : 180
+nz : 180
+
+# Time integration
+Max timestep size :	1e-5
+Max cfl number :	1
+
+# Fluid properties
+Gravity :   9.81 0 0
+Viscosity : 1.8e-5
+Density :   1
+
+# Particle parameters
+Particle mean diameter :        37.515e-6
+Particle standard deviation :   17.894e-6
+Particle min diameter :         10e-6
+Particle max diameter :         139.1e-6
+Particle diameter shift :       0
+Particle density :              2250
+
+# Particle collisions
+Coefficient of restitution :    0.5
+Wall restitution :              0.1
+Friction coefficient :          0.5
+
+# Particle injection
+Particle inject diameter:       0.00127
+Particle mass flow rate:        0.00002
+Particle velocity:              0.18 0 0
+
+# Ensight output
+Ensight output period : 40e-5

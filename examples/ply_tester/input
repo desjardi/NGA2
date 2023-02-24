@@ -1,0 +1,13 @@
+# Parallelization
+Partition :	1 1 1
+
+# Mesh definition
+Lx :	1
+Ly :	1
+Lz :	1
+nx :	100
+ny :	100
+nz :	100
+
+# PLY file
+ply filename : sample_ply.ply
