@@ -2,6 +2,7 @@
 module simulation
    use precision,         only: WP
    use geometry,          only: cfg
+   use hypre_str_class,   only: hypre_str
    use tpns_class,        only: tpns
    use vfs_class,         only: vfs
    use timetracker_class, only: timetracker
@@ -9,19 +10,21 @@ module simulation
    use surfmesh_class,    only: surfmesh
    use event_class,       only: event
    use monitor_class,     only: monitor
+   use irl_fortran_interface
    implicit none
    private
    
    !> Single two-phase flow solver and volume fraction solver and corresponding time tracker
+   type(hypre_str),   public :: ps,vs
    type(tpns),        public :: fs
    type(vfs),         public :: vf
    type(timetracker), public :: time
    
-   !> Ensight postprocessing
-   type(surfmesh) :: smesh
+   !> Ensight postprocessing  
+   type(surfmesh) :: smesh 
    type(ensight)  :: ens_out
    type(event)    :: ens_evt
-   
+    
    !> Simulation monitor file
    type(monitor) :: mfile,cflfile
    
@@ -84,14 +87,16 @@ contains
       ! Initialize our VOF solver and field
       create_and_initialize_vof: block
          use mms_geom, only: cube_refine_vol
-         use vfs_class, only: r2p,lvira,VFhi,VFlo
+         use vfs_class, only: r2p,elvira,lvira,jibben,VFhi,VFlo
          integer :: i,j,k,n,si,sj,sk
          real(WP), dimension(3,8) :: cube_vertex
          real(WP), dimension(3) :: v_cent,a_cent
-         real(WP) :: vol,area
+         real(WP) :: vol,area,mycurv
+         real(WP), dimension(6) :: sol
          integer, parameter :: amr_ref_lvl=4
+
          ! Create a VOF solver with r2p reconstruction
-         vf=vfs(cfg=cfg,reconstruction_method=r2p,name='VOF')
+         vf=vfs(cfg=cfg,reconstruction_method=jibben,name='VOF')
          ! Initialize two droplets
          call param_read('Droplet 1 diameter',radius1); radius1=0.5_WP*radius1
          call param_read('Droplet 1 position',center1)
@@ -116,12 +121,12 @@ contains
                   if (vf%VF(i,j,k).ge.VFlo.and.vf%VF(i,j,k).le.VFhi) then
                      vf%Lbary(:,i,j,k)=v_cent
                      vf%Gbary(:,i,j,k)=([vf%cfg%xm(i),vf%cfg%ym(j),vf%cfg%zm(k)]-vf%VF(i,j,k)*vf%Lbary(:,i,j,k))/(1.0_WP-vf%VF(i,j,k))
-                  else
+                  else  
                      vf%Lbary(:,i,j,k)=[vf%cfg%xm(i),vf%cfg%ym(j),vf%cfg%zm(k)]
                      vf%Gbary(:,i,j,k)=[vf%cfg%xm(i),vf%cfg%ym(j),vf%cfg%zm(k)]
                   end if
                end do
-            end do
+            end do 
          end do
          ! Update the band
          call vf%update_band()
@@ -129,6 +134,10 @@ contains
          call vf%build_interface()
          ! Create discontinuous polygon mesh from IRL interface
          call vf%polygonalize_interface()
+         if (.not.vf%is_planar) then
+            call vf%build_parabolic_interface() 
+         end if
+         call vf%polygonalize_interface() 
          ! Calculate distance from polygons
          call vf%distance_from_polygon()
          ! Calculate subcell phasic volumes
@@ -142,7 +151,7 @@ contains
       
       ! Create a two-phase flow solver without bconds
       create_and_initialize_flow_solver: block
-         use ils_class, only: gmres_amg
+         use hypre_str_class, only: pcg_pfmg
          use mathtools, only: Pi
          integer :: i,j,k
          real(WP), dimension(3) :: xyz
@@ -157,13 +166,15 @@ contains
          ! Read in surface tension coefficient
          call param_read('Surface tension coefficient',fs%sigma)
          ! Configure pressure solver
-         call param_read('Pressure iteration',fs%psolv%maxit)
-         call param_read('Pressure tolerance',fs%psolv%rcvg)
+         ps=hypre_str(cfg=cfg,name='Pressure',method=pcg_pfmg,nst=7)
+         call param_read('Pressure iteration',ps%maxit)
+         call param_read('Pressure tolerance',ps%rcvg)
          ! Configure implicit velocity solver
-         call param_read('Implicit iteration',fs%implicit%maxit)
-         call param_read('Implicit tolerance',fs%implicit%rcvg)
+         vs=hypre_str(cfg=cfg,name='Velocity',method=pcg_pfmg,nst=7)
+         call param_read('Implicit iteration',vs%maxit)
+         call param_read('Implicit tolerance',vs%rcvg)
          ! Setup the solver
-         call fs%setup(pressure_ils=gmres_amg,implicit_ils=gmres_amg)
+         call fs%setup(pressure_solver=ps,implicit_solver=vs)
          ! Initial droplet velocity
          call param_read('Droplet 1 velocity',vel1)
          call param_read('Droplet 2 velocity',vel2)
@@ -196,24 +207,30 @@ contains
          use irl_fortran_interface
          integer :: i,j,k,nplane,np
          ! Include an extra variable for number of planes
-         smesh=surfmesh(nvar=1,name='plic')
-         smesh%varname(1)='nplane'
+         if (vf%is_planar) then
+            smesh=surfmesh(nvar=1,name='plic')
+            smesh%varname(1)='nplane'
+         else
+            smesh=surfmesh(nvar=0,name='ppic')
+         end if
          ! Transfer polygons to smesh
          call vf%update_surfmesh(smesh)
          ! Also populate nplane variable
-         smesh%var(1,:)=1.0_WP
-         np=0
-         do k=vf%cfg%kmin_,vf%cfg%kmax_
-            do j=vf%cfg%jmin_,vf%cfg%jmax_
-               do i=vf%cfg%imin_,vf%cfg%imax_
-                  do nplane=1,getNumberOfPlanes(vf%liquid_gas_interface(i,j,k))
-                     if (getNumberOfVertices(vf%interface_polygon(nplane,i,j,k)).gt.0) then
-                        np=np+1; smesh%var(1,np)=real(getNumberOfPlanes(vf%liquid_gas_interface(i,j,k)),WP)
-                     end if
+         if (vf%is_planar) then
+            smesh%var(1,:)=1.0_WP
+            np=0
+            do k=vf%cfg%kmin_,vf%cfg%kmax_
+               do j=vf%cfg%jmin_,vf%cfg%jmax_
+                  do i=vf%cfg%imin_,vf%cfg%imax_
+                     do nplane=1,getNumberOfPlanes(vf%liquid_gas_interface(i,j,k))
+                        if (getNumberOfVertices(vf%interface_polygon(nplane,i,j,k)).gt.0) then
+                           np=np+1; smesh%var(1,np)=real(getNumberOfPlanes(vf%liquid_gas_interface(i,j,k)),WP)
+                        end if
+                     end do
                   end do
                end do
             end do
-         end do
+         end if
       end block create_smesh
       
       
@@ -228,7 +245,11 @@ contains
          call ens_out%add_vector('velocity',Ui,Vi,Wi)
          call ens_out%add_scalar('VOF',vf%VF)
          call ens_out%add_scalar('curvature',vf%curv)
-         call ens_out%add_surface('vofplic',smesh)
+         if (vf%is_planar) then
+            call ens_out%add_surface('vofplic',smesh) 
+         else
+            call ens_out%add_surface('vofppic',smesh) 
+         end if
          ! Output to ensight
          if (ens_evt%occurs()) call ens_out%write_data(time%t)
       end block create_ensight
@@ -278,7 +299,7 @@ contains
    !> Perform an NGA2 simulation - this mimicks NGA's old time integration for multiphase
    subroutine simulation_run
       implicit none
-      
+
       ! Perform time integration
       do while (.not.time%done())
          
@@ -302,8 +323,10 @@ contains
          call fs%get_olddensity(vf=vf)
          
          ! VOF solver step
+         ! print *,'Starting VOF'
          call vf%advance(dt=time%dt,U=fs%U,V=fs%V,W=fs%W)
-         
+         ! print *,'Finished VOF'
+
          ! Prepare new staggered viscosity (at n+1)
          call fs%get_viscosity(vf=vf)
          
@@ -324,7 +347,7 @@ contains
             ! Assemble explicit residual
             resU=-2.0_WP*fs%rho_U*fs%U+(fs%rho_Uold+fs%rho_U)*fs%Uold+time%dt*resU
             resV=-2.0_WP*fs%rho_V*fs%V+(fs%rho_Vold+fs%rho_V)*fs%Vold+time%dt*resV
-            resW=-2.0_WP*fs%rho_W*fs%W+(fs%rho_Wold+fs%rho_W)*fs%Wold+time%dt*resW
+            resW=-2.0_WP*fs%rho_W*fs%W+(fs%rho_Wold+fs%rho_W)*fs%Wold+time%dt*resW   
             
             ! Form implicit residuals
             call fs%solve_implicit(time%dt,resU,resV,resW)
@@ -334,7 +357,7 @@ contains
             fs%V=2.0_WP*fs%V-fs%Vold+resV
             fs%W=2.0_WP*fs%W-fs%Wold+resW
             
-            ! Apply other boundary conditions
+            ! Apply other boundary conditions      
             call fs%apply_bcond(time%t,time%dt)
             
             ! Solve Poisson equation
@@ -370,21 +393,25 @@ contains
                use irl_fortran_interface
                integer :: i,j,k,nplane,np
                ! Transfer polygons to smesh
+               ! print *,'Starting mesh output'
                call vf%update_surfmesh(smesh)
+               ! print *,'Finished mesh output'
                ! Also populate nplane variable
-               smesh%var(1,:)=1.0_WP
-               np=0
-               do k=vf%cfg%kmin_,vf%cfg%kmax_
-                  do j=vf%cfg%jmin_,vf%cfg%jmax_
-                     do i=vf%cfg%imin_,vf%cfg%imax_
-                        do nplane=1,getNumberOfPlanes(vf%liquid_gas_interface(i,j,k))
-                           if (getNumberOfVertices(vf%interface_polygon(nplane,i,j,k)).gt.0) then
-                              np=np+1; smesh%var(1,np)=real(getNumberOfPlanes(vf%liquid_gas_interface(i,j,k)),WP)
-                           end if
+               if (vf%is_planar) then
+                  smesh%var(1,:)=1.0_WP
+                  np=0
+                  do k=vf%cfg%kmin_,vf%cfg%kmax_
+                     do j=vf%cfg%jmin_,vf%cfg%jmax_
+                        do i=vf%cfg%imin_,vf%cfg%imax_
+                           do nplane=1,getNumberOfPlanes(vf%liquid_gas_interface(i,j,k))
+                              if (getNumberOfVertices(vf%interface_polygon(nplane,i,j,k)).gt.0) then
+                                 np=np+1; smesh%var(1,np)=real(getNumberOfPlanes(vf%liquid_gas_interface(i,j,k)),WP)
+                              end if
+                           end do  
                         end do
                      end do
                   end do
-               end do
+               end if         
             end block update_smesh
             ! Perform ensight output
             call ens_out%write_data(time%t)
