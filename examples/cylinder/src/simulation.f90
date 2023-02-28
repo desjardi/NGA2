@@ -29,7 +29,7 @@ module simulation
 	!> Private work arrays
 	real(WP), dimension(:,:,:), allocatable :: resU,resV,resW
 	real(WP), dimension(:,:,:), allocatable :: Ui,Vi,Wi
-	real(WP), dimension(:,:,:), allocatable :: Uib,Vib,Wib
+	real(WP), dimension(:,:,:), allocatable :: Uib,Vib,Wib,srcM
 	
 	
 contains
@@ -76,6 +76,7 @@ contains
 			allocate(Uib (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
 			allocate(Vib (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
 			allocate(Wib (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+			allocate(srcM(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
 		end block allocate_work_arrays
 		
 		
@@ -117,6 +118,45 @@ contains
 	   end block create_flow_solver
 	   
 
+		! Evaluate IB velocity and mass source
+		calc_ib_velocity: block
+			integer :: i,j,k
+			real(WP) :: Uradius,Utheta,Vradius,Vtheta,Wradius,Wtheta
+			do k=fs%cfg%kmino_,fs%cfg%kmaxo_
+				do j=fs%cfg%jmino_,fs%cfg%jmaxo_
+					do i=fs%cfg%imino_,fs%cfg%imaxo_
+						! Cylindrical coordinates per component
+					   Uradius=sqrt(cfg%x(i)**2+cfg%ym(j)**2)
+						Utheta=atan2(cfg%ym(j),cfg%x(i))
+						Vradius=sqrt(cfg%xm(i)**2+cfg%y(j)**2)
+						Vtheta=atan2(cfg%y(j),cfg%xm(i))
+						Wradius=sqrt(cfg%xm(i)**2+cfg%ym(j)**2)
+						Wtheta=atan2(cfg%ym(j),cfg%xm(i))
+						! Pure rotation
+					   !Uib(i,j,k)=-2.0_WP*Uradius*sin(Utheta)
+					   !Vib(i,j,k)=+2.0_WP*Vradius*cos(Vtheta)
+					   !Wib(i,j,k)= 0.0_WP
+					   ! Pure blowing
+					   Uib(i,j,k)=+0.3_WP*cos(Utheta)
+						Vib(i,j,k)=+0.3_WP*sin(Vtheta)
+						Wib(i,j,k)= 0.0_WP
+					end do
+				end do
+			end do
+			! Compute IB mass source
+		   do k=fs%cfg%kmin_,fs%cfg%kmax_
+				do j=fs%cfg%jmin_,fs%cfg%jmax_
+					do i=fs%cfg%imin_,fs%cfg%imax_
+						srcM(i,j,k)=(1.0_WP-cfg%VF(i,j,k))*(sum(fs%divp_x(:,i,j,k)*Uib(i:i+1,j,k))+&
+						&                                   sum(fs%divp_y(:,i,j,k)*Vib(i,j:j+1,k))+&
+						&                                   sum(fs%divp_z(:,i,j,k)*Wib(i,j,k:k+1)))
+					end do
+				end do
+			end do
+			call cfg%sync(srcM)
+		end block calc_ib_velocity
+
+
 		! Initialize our velocity field
       initialize_velocity: block
          use incomp_class, only: bcond
@@ -130,14 +170,14 @@ contains
             i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
             fs%U(i,j,k)=Uin
          end do
-         ! Compute MFR through all boundary conditions
+			! Compute MFR through all boundary conditions
          call fs%get_mfr()
          ! Adjust MFR for global mass balance
-         call fs%correct_mfr()
+         call fs%correct_mfr(src=srcM)
          ! Compute cell-centered velocity
          call fs%interp_vel(Ui,Vi,Wi)
          ! Compute divergence
-         call fs%get_div()
+         call fs%get_div(src=srcM)
       end block initialize_velocity
 
 
@@ -152,7 +192,6 @@ contains
 		   call ens_out%add_vector('velocity',Ui,Vi,Wi)
 		   call ens_out%add_scalar('pressure',fs%P)
 			call ens_out%add_scalar('Gib',cfg%Gib)
-			call ens_out%add_vector('Uib',Uib,Vib,Wib)
 		   ! Output to ensight
 		   if (ens_evt%occurs()) call ens_out%write_data(time%t)
 	   end block create_ensight
@@ -211,30 +250,6 @@ contains
 			fs%Vold=fs%V
 			fs%Wold=fs%W
 			
-			! Evaluate IB velocity
-         calc_ib_velocity: block
-			   use mathtools, only: normalize
-				integer :: i,j,k
-				real(WP) :: radius,theta
-				do k=fs%cfg%kmino_,fs%cfg%kmaxo_
-					do j=fs%cfg%jmino_,fs%cfg%jmaxo_
-						do i=fs%cfg%imino_,fs%cfg%imaxo_
-							! Cylindrical coordinates
-							radius=sqrt(cfg%xm(i)**2+cfg%ym(j)**2)
-							theta=atan2(cfg%ym(j),cfg%xm(i))
-							! Pure rotation
-							!Uib(i,j,k)=-4.0_WP*radius*sin(theta)
-							!Vib(i,j,k)=+4.0_WP*radius*cos(theta)
-							!Wib(i,j,k)= 0.0_WP
-							! Pure blowing
-							Uib(i,j,k)=+1.0_WP*cos(theta)
-							Vib(i,j,k)=+1.0_WP*sin(theta)
-							Wib(i,j,k)= 0.0_WP
-					   end do
-					end do
-				end do
-			end block calc_ib_velocity
-			
 		   ! Perform sub-iterations
 		   do while (time%it.le.time%itmax)
 				
@@ -262,17 +277,18 @@ contains
 				! Apply direct IB forcing
             ibforcing: block
 				   integer :: i,j,k
+					real(WP) :: VFx,VFy,VFz
 					do k=fs%cfg%kmin_,fs%cfg%kmax_
 						do j=fs%cfg%jmin_,fs%cfg%jmax_
 							do i=fs%cfg%imin_,fs%cfg%imax_
-								! Set IB velocity to zero
-								fs%U(i,j,k)=sum(fs%itpr_x(:,i,j,k)*cfg%VF(i-1:i,j,k))*fs%U(i,j,k)
-								fs%V(i,j,k)=sum(fs%itpr_y(:,i,j,k)*cfg%VF(i,j-1:j,k))*fs%V(i,j,k)
-								fs%W(i,j,k)=sum(fs%itpr_z(:,i,j,k)*cfg%VF(i,j,k-1:k))*fs%W(i,j,k)
-								! Also add IB velocity
-								fs%U(i,j,k)=fs%U(i,j,k)+(1.0_WP-sum(fs%itpr_x(:,i,j,k)*cfg%VF(i-1:i,j,k)))*sum(fs%itpr_x(:,i,j,k)*Uib(i-1:i,j,k))
-								fs%V(i,j,k)=fs%V(i,j,k)+(1.0_WP-sum(fs%itpr_y(:,i,j,k)*cfg%VF(i,j-1:j,k)))*sum(fs%itpr_y(:,i,j,k)*Vib(i,j-1:j,k))
-								fs%W(i,j,k)=fs%W(i,j,k)+(1.0_WP-sum(fs%itpr_z(:,i,j,k)*cfg%VF(i,j,k-1:k)))*sum(fs%itpr_z(:,i,j,k)*Wib(i,j,k-1:k))
+								! Compute staggered VF
+								VFx=sum(fs%itpr_x(:,i,j,k)*cfg%VF(i-1:i,j,k))
+								VFy=sum(fs%itpr_y(:,i,j,k)*cfg%VF(i,j-1:j,k))
+								VFz=sum(fs%itpr_z(:,i,j,k)*cfg%VF(i,j,k-1:k))
+								! Enforce IB velocity
+								fs%U(i,j,k)=VFx*fs%U(i,j,k)+(1.0_WP-VFx)*Uib(i,j,k)
+								fs%V(i,j,k)=VFy*fs%V(i,j,k)+(1.0_WP-VFy)*Vib(i,j,k)
+								fs%W(i,j,k)=VFz*fs%W(i,j,k)+(1.0_WP-VFz)*Wib(i,j,k)
 							end do
 						end do
 					end do
@@ -285,16 +301,9 @@ contains
 			   call fs%apply_bcond(time%t,time%dt)
 				
 				! Solve Poisson equation
-            call fs%correct_mfr()
-            call fs%get_div()
+            call fs%correct_mfr(src=srcM)
+            call fs%get_div(src=srcM)
             fs%psolv%rhs=-fs%cfg%vol*fs%div*fs%rho/time%dt
-				block
-					real(WP) :: int
-					call cfg%integrate(A=fs%psolv%rhs,integral=int)
-					if (cfg%amRoot) print*,'>> VF-weighted integral of RHS=',int
-					call cfg%integrate_without_VF(A=fs%psolv%rhs,integral=int)
-					if (cfg%amRoot) print*,'>>       no-VF integral of RHS=',int
-				end block
             fs%psolv%sol=0.0_WP
             call fs%psolv%solve()
             call fs%shift_p(fs%psolv%sol)
@@ -313,7 +322,7 @@ contains
 			
 			! Recompute interpolated velocity and divergence
 		   call fs%interp_vel(Ui,Vi,Wi)
-			call fs%get_div()
+			call fs%get_div(src=srcM)
 			
 			! Output to ensight
 		   if (ens_evt%occurs()) call ens_out%write_data(time%t)
@@ -339,7 +348,7 @@ contains
 	   ! timetracker
 	   
 	   ! Deallocate work arrays
-	   deallocate(resU,resV,resW,Ui,Vi,Wi,Uib,Vib,Wib)
+	   deallocate(resU,resV,resW,Ui,Vi,Wi,Uib,Vib,Wib,srcM)
 	   
 	end subroutine simulation_final
 	
