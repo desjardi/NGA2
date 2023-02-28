@@ -10,4 +10,4 @@ ny :	100
 nz :	100
 
 # PLY file
-ply filename : sample_ply.ply
+ply filename : Atomizer_Lorenzo_plyBF.ply

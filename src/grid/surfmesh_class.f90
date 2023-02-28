@@ -99,7 +99,8 @@ contains
       ! Read the ply vertices
       read_vertices: block
          use precision, only: SP
-         real(SP), dimension(4,self%nVert) :: myVert
+         !real(SP), dimension(4,self%nVert) :: myVert
+         real(SP), dimension(3,self%nVert) :: myVert
          integer :: n
          read(iunit) myVert
          do n=1,self%nVert
@@ -114,22 +115,54 @@ contains
          use precision, only: SP
          character(1) :: ibuf
          real(SP) :: buffer
+         integer, dimension(:), allocatable :: temp
          integer :: nf,nv
-         ! Upper bound for connectivity
-         allocate(self%polyConn(self%nVert))
          do nf=1,self%nPoly
+            ! Read polygon size
             read(iunit) ibuf
-            read(ibuf,*) self%polySize(nf)
-            read(iunit) self%polyConn(sum(self%polySize(1:nf-1))+1:sum(self%polySize(1:nf-1))+self%polySize(nf)),buffer
-            print*,self%polySize(nf),self%polyConn(sum(self%polySize(1:nf-1))+1:sum(self%polySize(1:nf-1))+self%polySize(nf))
+            self%polySize(nf)=ichar(ibuf)
+            ! Extend allocation of connectivity
+            call resize_polyConn(sum(self%polySize(1:nf)))
+            ! Read connectivity
+            read(iunit) self%polyConn(sum(self%polySize(1:nf-1))+1:sum(self%polySize(1:nf-1))+self%polySize(nf))!,buffer
          end do
-         
+         ! First vertex is number 1, not 0
+         self%polyConn=self%polyConn+1
       end block read_faces
 
       ! Close the plyfile
       close(iunit)
       
-      stop
+   contains
+   
+      !> Adaptation of polyConn array size
+      subroutine resize_polyConn(n)
+         implicit none
+         integer, intent(in) :: n
+         real(WP), parameter :: coeff_up=1.5_WP      !< Connectivity array size increase factor
+         real(WP), parameter :: coeff_dn=0.7_WP      !< Connectivity array size decrease factor
+         integer, dimension(:), allocatable :: tmp
+         integer :: size_now,size_new
+         ! Resize particle array to size n
+         if (.not.allocated(self%polyConn)) then
+            ! Allocate directly to size n
+            allocate(self%polyConn(n))
+         else
+            ! Update from a non-zero size to another non-zero size
+            size_now=size(self%polyConn,dim=1)
+            if (n.gt.size_now) then
+               size_new=max(n,int(real(size_now,WP)*coeff_up))
+               allocate(tmp(size_new))
+               tmp(1:size_now)=self%polyConn
+               call move_alloc(tmp,self%polyConn)
+            else if (n.lt.int(real(size_now,WP)*coeff_dn)) then
+               allocate(tmp(n))
+               tmp(1:n)=self%polyConn(1:n)
+               call move_alloc(tmp,self%polyConn)
+            end if
+         end if
+      end subroutine resize_polyConn
+      
    end function construct_from_ply
    
 
