@@ -1,12 +1,17 @@
 !> Various definitions and tools for initializing NGA2 config
 module geometry
-   use config_class, only: config
-   use precision,    only: WP
+   use ibconfig_class, only: ibconfig
+   use precision,      only: WP
+   use surfmesh_class, only: surfmesh
+   use ensight_class,  only: ensight
    implicit none
    private
    
-   !> Single config
-   type(config), public :: cfg
+   !> IB config
+   type(ibconfig), public :: cfg
+   
+   !> Surface mesh
+   type(surfmesh), public :: plymesh
    
    public :: geometry_init
    
@@ -60,18 +65,106 @@ contains
          call param_read('Partition',partition,short='p')
          
          ! Create partitioned grid
-         cfg=config(grp=group,decomp=partition,grid=grid)
+         cfg=ibconfig(grp=group,decomp=partition,grid=grid)
          
       end block create_cfg
       
+
+      ! Read in the PLY geometry
+      read_ply: block
+         use string, only: str_medium
+         use param,  only: param_read
+         character(len=str_medium) :: plyfile
+
+         ! Read in ply filename
+         call param_read('ply filename',plyfile)
+
+         ! Create surface meshg from ply
+         plymesh=surfmesh(plyfile=plyfile,nvar=0,name='ply')
+
+      end block read_ply
       
-      ! Create masks for this config
+      
+      ! Create IB walls for this config
       create_walls: block
-         cfg%VF=1.0_WP
+         use ibconfig_class, only: sharp
+         use messager,       only: die
+         use mathtools,      only: cross_product,normalize
+         use irl_fortran_interface
+         real(WP), parameter :: safe_coeff=3.0_WP
+         integer :: i,j,k,np,nv,iv,ip
+         real(WP) :: mydist
+         real(WP), dimension(3) :: pos,nearest_pt,mynearest,mynorm
+         type(Poly_type), dimension(:), allocatable :: poly
+         real(WP), dimension(:,:), allocatable :: bary,vert,nvec
+         
+         ! Preprocess surface mesh data using IRL
+         allocate(poly(1:plymesh%nPoly))
+         allocate(vert(1:3,1:maxval(plymesh%polySize)))
+         allocate(bary(1:3,1:plymesh%nPoly))
+         allocate(nvec(1:3,1:plymesh%nPoly))
+         do np=1,plymesh%nPoly
+            ! Allocate polygon
+            call new(poly(np))
+            ! Fill it up
+            do nv=1,plymesh%polySize(np)
+               iv=sum(plymesh%polySize(1:np-1))+nv
+               vert(:,nv)=[plymesh%xVert(plymesh%polyConn(iv)),plymesh%yVert(plymesh%polyConn(iv)),plymesh%zVert(plymesh%polyConn(iv))]
+            end do
+            call construct(poly(np),plymesh%polySize(np),vert(1:3,1:plymesh%polySize(np)))
+            mynorm=normalize(cross_product(vert(:,2)-vert(:,1),vert(:,3)-vert(:,2)))
+            mydist=dot_product(mynorm,vert(:,1))
+            call setPlaneOfExistence(poly(np),[mynorm(1),mynorm(2),mynorm(3),mydist])
+            ! Also store its barycenter
+            bary(:,np)=calculateCentroid(poly(np))
+            nvec(:,np)=calculateNormal  (poly(np))
+         end do
+         deallocate(vert)
+
+         ! Create IB distance field using IRL
+         cfg%Gib=huge(1.0_WP)
+         do k=cfg%kmino_,cfg%kmaxo_
+            do j=cfg%jmino_,cfg%jmaxo_
+               do i=cfg%imino_,cfg%imaxo_
+                  ! Store cell center position
+                  pos=[cfg%xm(i),cfg%ym(j),cfg%zm(k)]
+                  ! Traverse all polygons
+                  do np=1,plymesh%nPoly
+                     ! Calculate distance to centroid
+                     nearest_pt=pos-bary(:,np)
+                     mydist=dot_product(nearest_pt,nearest_pt)
+                     ! If close enough, compute exact distance to the polygon instead
+                     if (mydist.lt.(safe_coeff*cfg%min_meshsize)**2) then
+                        nearest_pt=calculateNearestPtOnSurface(poly(np),pos)
+                        nearest_pt=pos-nearest_pt
+                        mydist=dot_product(nearest_pt,nearest_pt)
+                     end if
+                     ! Remember closest distance
+                     if (mydist.lt.cfg%Gib(i,j,k)) then
+                        cfg%Gib(i,j,k)=mydist
+                        mynearest=nearest_pt
+                        ip=np
+                     end if
+                  end do
+                  ! Take the square root
+                  cfg%Gib(i,j,k)=sqrt(cfg%Gib(i,j,k))
+                  ! Find the sign
+                  if (dot_product(mynearest,nvec(:,ip)).gt.0.0_WP) cfg%Gib(i,j,k)=-cfg%Gib(i,j,k)
+               end do
+            end do
+         end do
+         deallocate(bary,nvec,poly)
+         
+         ! Get normal vector
+         call cfg%calculate_normal()
+         
+         ! Get VF field
+         call cfg%calculate_vf(method=sharp,allow_zero_vf=.true.)
+         
       end block create_walls
       
       
    end subroutine geometry_init
    
-   
+
 end module geometry
