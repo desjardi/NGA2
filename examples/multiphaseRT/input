@@ -1,5 +1,5 @@
 # Parallelization
-Partition :	4 1 1
+Partition :	8 1 1
 
 # Mesh definition
 Lx :	1e-2
@@ -15,10 +15,10 @@ Liquid dynamic viscosity :    0
 Gas dynamic viscosity :       0
 Liquid density :              10
 Gas density :                 1
-Surface tension coefficient : 0.00
+Surface tension coefficient : 0.00001
 
 # Time integration
-Max timestep size : 1e-5
+Max timestep size : 1e-3
 Max cfl number :    0.9
 
 # Pressure solver
