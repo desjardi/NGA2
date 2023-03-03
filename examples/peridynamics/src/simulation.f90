@@ -156,31 +156,17 @@ contains
             call df%resize(np)
             ! Distribute marker particles
             do i=1,np
-               ! Set various parameters for the marker
-               !df%p(i)%id =1
-               !df%p(i)%vel=0.0_WP
-               ! Set position
-               !theta =real(i-1,WP)*twoPi/real(np,WP)
-               !df%p(i)%pos(1)=0.5_WP*cos(theta)
-               !df%p(i)%pos(2)=0.5_WP*sin(theta)
-               !df%p(i)%pos(3)=0.0_WP
-               ! Assign element area
-               !df%p(i)%dA=Pi/real(np,WP)*df%cfg%zL
-               ! Assign outward normal vector
-               !df%p(i)%norm=2.0_WP*df%p(i)%pos
-               ! Locate the particle on the mesh
-               !df%p(i)%ind=df%cfg%get_ijk_global(df%p(i)%pos,[df%cfg%imin,df%cfg%jmin,df%cfg%kmin])
-               ! Activate the particle
-               !df%p(i)%flag=0
 					! Set various parameters for the marker
                df%p(i)%id =1
-               df%p(i)%vel=0.0_WP
                ! Set position
 					radius=huge(1.0_WP)
 					do while (radius.gt.0.5_WP)
 						df%p(i)%pos=[random_uniform(-0.5_WP,+0.5_WP),random_uniform(-0.5_WP,+0.5_WP),0.0_WP]
 						radius=sqrt(dot_product(df%p(i)%pos,df%p(i)%pos))
+						theta=atan2(df%p(i)%pos(2),df%p(i)%pos(1))
 					end do
+					! Assign velocity
+					df%p(i)%vel=0.0_WP
                ! Assign element volume
                df%p(i)%dV=0.25_WP*Pi*df%cfg%zL/real(np,WP)
                ! Locate the particle on the mesh

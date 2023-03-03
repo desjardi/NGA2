@@ -1,6 +1,6 @@
-f90EXE_sources += linsol_class.f90 bbmg_class.f90 diag_class.f90
+f90EXE_sources += linsol_class.f90 diag_class.f90
 ifeq ($(USE_HYPRE),TRUE)
-  f90EXE_sources += hypre_str_class.f90 hypre_uns_class.f90 ils_class.f90
+  f90EXE_sources += hypre_str_class.f90 hypre_uns_class.f90
 endif
 ifeq ($(USE_FFTW),TRUE)
   f90EXE_sources += fourier3d_class.f90

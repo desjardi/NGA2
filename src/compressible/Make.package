@@ -1,0 +1,4 @@
+f90EXE_sources += matm_class.f90 mast_class.f90
+
+INCLUDE_LOCATIONS += $(NGA_HOME)/src/compressible
+VPATH_LOCATIONS   += $(NGA_HOME)/src/compressible
