@@ -56,13 +56,6 @@ contains
          
          ! General serial grid object
          grid=sgrid(coord=cartesian,no=2,x=x,y=y,z=z,xper=.false.,yper=.false.,zper=.false.,name='nozzle')
-         
-         ! Also read in injector locations
-         call param_read('Axial injector xdist',   axial_xdist)
-         call param_read('Axial injector diameter',axial_diam)
-         call param_read('Swirl injector xdist',   swirl_xdist)
-         call param_read('Swirl injector diameter',swirl_diam)
-         call param_read('Swirl injector offset',  swirl_offset)
 
       end block create_grid
       
@@ -79,6 +72,16 @@ contains
          cfg=ibconfig(grp=group,decomp=partition,grid=grid)
          
       end block create_cfg
+
+
+      ! Read in location of injectors - note here that the diameters are padded to avoid stair-stepping
+      read_injector: block
+         call param_read('Axial injector xdist',   axial_xdist)
+         call param_read('Axial injector diameter',axial_diam); axial_diam=axial_diam+2.0_WP*cfg%min_meshsize
+         call param_read('Swirl injector xdist',   swirl_xdist)
+         call param_read('Swirl injector diameter',swirl_diam); swirl_diam=swirl_diam+2.0_WP*cfg%min_meshsize
+         call param_read('Swirl injector offset',  swirl_offset)
+      end block read_injector
       
 
       ! Read in the PLY geometry
