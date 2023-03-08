@@ -158,6 +158,8 @@ contains
             do i=1,np
 					! Set various parameters for the marker
                df%p(i)%id =1
+					! Give zero dt
+               df%p(i)%dt=huge(1.0_WP)
                ! Set position
 					radius=huge(1.0_WP)
 					do while (radius.gt.0.5_WP)
@@ -166,7 +168,8 @@ contains
 						theta=atan2(df%p(i)%pos(2),df%p(i)%pos(1))
 					end do
 					! Assign velocity
-					df%p(i)%vel=0.0_WP
+					!df%p(i)%vel=1.0_WP*[cos(theta),sin(theta),0.0_WP]
+					df%p(i)%vel=[0.0_WP,0.0_WP,0.0_WP]
                ! Assign element volume
                df%p(i)%dV=0.25_WP*Pi*df%cfg%zL/real(np,WP)
                ! Locate the particle on the mesh
@@ -294,6 +297,15 @@ contains
 			fs%Vold=fs%V
 			fs%Wold=fs%W
 			
+         ! Move particles
+			ib_moving: block
+			   integer :: i
+			   do i=1,df%np_
+					df%p(i)%vel=[cos(time%t),0.0_WP,0.0_WP]
+				end do
+				call df%advance(time%dt)
+			end block ib_moving
+
 		   ! Perform sub-iterations
 		   do while (time%it.le.time%itmax)
 				
@@ -365,7 +377,17 @@ contains
 			call fs%get_div()
 			
 			! Output to ensight
-		   if (ens_evt%occurs()) call ens_out%write_data(time%t)
+		   if (ens_evt%occurs()) then
+				update_pmesh: block
+				   integer :: i
+					call df%update_partmesh(pmesh)
+					do i=1,df%np_
+						pmesh%var(1,i)=df%p(i)%dV
+						pmesh%vec(:,1,i)=df%p(i)%vel
+					end do
+				end block update_pmesh
+				call ens_out%write_data(time%t)
+			end if
 			
 			! Perform and output monitoring
 		   call fs%get_max()

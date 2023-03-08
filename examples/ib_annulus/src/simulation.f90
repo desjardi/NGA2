@@ -74,7 +74,7 @@ contains
       implicit none
       
       
-      ! Initialize time tracker with 1 subiterations
+      ! Initialize time tracker with 2 subiterations
       initialize_timetracker: block
          time=timetracker(amRoot=cfg%amRoot)
          call param_read('Max timestep size',time%dtmax)

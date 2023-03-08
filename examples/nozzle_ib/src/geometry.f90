@@ -12,6 +12,10 @@ module geometry
    
    !> Surface mesh
    type(surfmesh), public :: plymesh
+
+   !> Geometry information
+   real(WP), public :: axial_xdist,axial_diam
+   real(WP), public :: swirl_xdist,swirl_diam,swirl_offset
    
    public :: geometry_init
    
@@ -51,8 +55,15 @@ contains
          end do
          
          ! General serial grid object
-         grid=sgrid(coord=cartesian,no=2,x=x,y=y,z=z,xper=.false.,yper=.true.,zper=.true.,name='nozzle')
+         grid=sgrid(coord=cartesian,no=2,x=x,y=y,z=z,xper=.false.,yper=.false.,zper=.false.,name='nozzle')
          
+         ! Also read in injector locations
+         call param_read('Axial injector xdist',   axial_xdist)
+         call param_read('Axial injector diameter',axial_diam)
+         call param_read('Swirl injector xdist',   swirl_xdist)
+         call param_read('Swirl injector diameter',swirl_diam)
+         call param_read('Swirl injector offset',  swirl_offset)
+
       end block create_grid
       
       
