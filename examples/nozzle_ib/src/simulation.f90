@@ -371,7 +371,7 @@ contains
       ! Add Ensight output
       create_ensight: block
          ! Output ply mesh
-         ply_out=ensight(cfg=cfg,name='nozzle')
+         ply_out=ensight(cfg=cfg,name='plygeom')
          call ply_out%add_surface('ply',plymesh)
          call ply_out%add_scalar('levelset',cfg%Gib)
          call ply_out%write_data(time%t)
