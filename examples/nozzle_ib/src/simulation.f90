@@ -373,6 +373,7 @@ contains
          ! Output ply mesh
          ply_out=ensight(cfg=cfg,name='nozzle')
          call ply_out%add_surface('ply',plymesh)
+         call ply_out%add_scalar('levelset',cfg%Gib)
          call ply_out%write_data(time%t)
          ! Create Ensight output from cfg
          ens_out=ensight(cfg=cfg,name='nozzle')
@@ -381,10 +382,8 @@ contains
          call param_read('Ensight output period',ens_evt%tper)
          ! Add variables to output
          call ens_out%add_vector('velocity',Ui,Vi,Wi)
-         call ens_out%add_scalar('levelset',cfg%Gib)
          call ens_out%add_scalar('pressure',fs%P)
          call ens_out%add_scalar('visc_sgs',sgs%visc)
-         call ens_out%add_scalar('div',fs%div)
          ! Output to ensight
          if (ens_evt%occurs()) call ens_out%write_data(time%t)
       end block create_ensight
