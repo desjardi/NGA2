@@ -16,12 +16,12 @@ module simulation
    
    !> Get an an incompressible solver, pressure solver, and corresponding time tracker
    type(incomp),      public :: fs
-   type(hypre_str),   public :: ps,vs
+   type(hypre_str),   public :: ps
    type(sgsmodel),    public :: sgs
    type(timetracker), public :: time
    
    !> Ensight postprocessing
-   type(ensight)  :: ens_out
+   type(ensight)  :: ens_out,ply_out
    type(event)    :: ens_evt
    
    !> Simulation monitor file
@@ -57,7 +57,7 @@ contains
       use pgrid_class, only: pgrid
       class(pgrid), intent(in) :: pg
       integer, intent(in) :: i,j,k
-      real(WP) ::hyp,rise,run
+      real(WP) :: hyp,rise,run
       logical :: isIn
       isIn=.false.
       ! Check injector x-z plane
@@ -73,7 +73,7 @@ contains
       use pgrid_class, only: pgrid
       class(pgrid), intent(in) :: pg
       integer, intent(in) :: i,j,k
-      real(WP) ::hyp,rise,run
+      real(WP) :: hyp,rise,run
       logical :: isIn
       isIn=.false.
       ! Check injector x-z plane
@@ -89,7 +89,7 @@ contains
       use pgrid_class, only: pgrid
       class(pgrid), intent(in) :: pg
       integer, intent(in) :: i,j,k
-      real(WP) ::hyp,rise,run
+      real(WP) :: hyp,rise,run
       logical :: isIn
       isIn=.false.
       ! Check injector x-y plane
@@ -105,15 +105,79 @@ contains
       use pgrid_class, only: pgrid
       class(pgrid), intent(in) :: pg
       integer, intent(in) :: i,j,k
-      real(WP) ::hyp,rise,run
+      real(WP) :: hyp,rise,run
       logical :: isIn
       isIn=.false.
       ! Check injector x-y plane
-      hyp =norm2([pg%xm(i),pg%ym(j),pg%zm(k)]-[axial_xdist,0.0_WP,0.0_WP] )
+      hyp =norm2([pg%xm(i),pg%ym(j),pg%zm(k)]-[axial_xdist,0.0_WP,0.0_WP])
       rise=abs(pg%zm(k))
       run =sqrt(hyp**2-rise**2)
       if (run.le.axial_diam/2.0_WP.and.k.eq.pg%kmax+1) isIn=.true.
-   end function axial_zp 
+   end function axial_zp
+
+
+   !> Function that localizes swirl injector at -y
+   function swirl_ym(pg,i,j,k) result(isIn)
+      use pgrid_class, only: pgrid
+      class(pgrid), intent(in) :: pg
+      integer, intent(in) :: i,j,k
+      real(WP) :: hyp,rise,run
+      logical :: isIn
+      isIn=.false.
+      ! Check injector x-z plane
+      hyp =norm2([pg%xm(i),pg%ym(j),pg%zm(k)]-[swirl_xdist,0.0_WP,+swirl_offset])
+      rise=abs(pg%ym(j))
+      run =sqrt(hyp**2-rise**2)
+      if (run.le.swirl_diam/2.0_WP.and.j.eq.pg%jmin) isIn=.true.
+   end function swirl_ym
+   
+   
+   !> Function that localizes swirl injector at +y
+   function swirl_yp(pg,i,j,k) result(isIn)
+      use pgrid_class, only: pgrid
+      class(pgrid), intent(in) :: pg
+      integer, intent(in) :: i,j,k
+      real(WP) :: hyp,rise,run
+      logical :: isIn
+      isIn=.false.
+      ! Check injector x-z plane
+      hyp =norm2([pg%xm(i),pg%ym(j),pg%zm(k)]-[swirl_xdist,0.0_WP,-swirl_offset])
+      rise=abs(pg%ym(j))
+      run =sqrt(hyp**2-rise**2)
+      if (run.le.swirl_diam/2.0_WP.and.j.eq.pg%jmax+1) isIn=.true.
+   end function swirl_yp
+   
+
+   !> Function that localizes swirl injector at -z
+   function swirl_zm(pg,i,j,k) result(isIn)
+      use pgrid_class, only: pgrid
+      class(pgrid), intent(in) :: pg
+      integer, intent(in) :: i,j,k
+      real(WP) :: hyp,rise,run
+      logical :: isIn
+      isIn=.false.
+      ! Check injector x-y plane
+      hyp =norm2([pg%xm(i),pg%ym(j),pg%zm(k)]-[swirl_xdist,-swirl_offset,0.0_WP])
+      rise=abs(pg%zm(k))
+      run =sqrt(hyp**2-rise**2)
+      if (run.le.swirl_diam/2.0_WP.and.k.eq.pg%kmin) isIn=.true.
+   end function swirl_zm
+   
+
+   !> Function that localizes swirl injector at +z
+   function swirl_zp(pg,i,j,k) result(isIn)
+      use pgrid_class, only: pgrid
+      class(pgrid), intent(in) :: pg
+      integer, intent(in) :: i,j,k
+      real(WP) :: hyp,rise,run
+      logical :: isIn
+      isIn=.false.
+      ! Check injector x-y plane
+      hyp =norm2([pg%xm(i),pg%ym(j),pg%zm(k)]-[swirl_xdist,+swirl_offset,0.0_WP])
+      rise=abs(pg%zm(k))
+      run =sqrt(hyp**2-rise**2)
+      if (run.le.swirl_diam/2.0_WP.and.k.eq.pg%kmax+1) isIn=.true.
+   end function swirl_zp
    
 
    !> Initialization of problem solver
@@ -158,6 +222,10 @@ contains
          call fs%add_bcond(name='axial_yp',type=dirichlet,face='y',dir=+1,canCorrect=.false.,locator=axial_yp)
          call fs%add_bcond(name='axial_zm',type=dirichlet,face='z',dir=-1,canCorrect=.false.,locator=axial_zm)
          call fs%add_bcond(name='axial_zp',type=dirichlet,face='z',dir=+1,canCorrect=.false.,locator=axial_zp)
+         call fs%add_bcond(name='swirl_ym',type=dirichlet,face='y',dir=-1,canCorrect=.false.,locator=swirl_ym)
+         call fs%add_bcond(name='swirl_yp',type=dirichlet,face='y',dir=+1,canCorrect=.false.,locator=swirl_yp)
+         call fs%add_bcond(name='swirl_zm',type=dirichlet,face='z',dir=-1,canCorrect=.false.,locator=swirl_zm)
+         call fs%add_bcond(name='swirl_zp',type=dirichlet,face='z',dir=+1,canCorrect=.false.,locator=swirl_zp)
          ! Outflow on the right
          call fs%add_bcond(name='outflow',type=clipped_neumann,face='x',dir=+1,canCorrect=.true.,locator=right_boundary)
          ! Configure pressure solver
@@ -165,12 +233,8 @@ contains
          !ps%maxlevel=14
          call param_read('Pressure iteration',ps%maxit)
          call param_read('Pressure tolerance',ps%rcvg)
-         ! Configure implicit velocity solver
-         vs=hypre_str(cfg=cfg,name='Velocity',method=pcg_pfmg,nst=7)
-         call param_read('Implicit iteration',vs%maxit)
-         call param_read('Implicit tolerance',vs%rcvg)
          ! Setup the solver
-         call fs%setup(pressure_solver=ps,implicit_solver=vs)
+         call fs%setup(pressure_solver=ps)
       end block create_flow_solver
       
 
@@ -182,14 +246,14 @@ contains
          use incomp_class, only: bcond
          type(bcond), pointer :: mybc
          integer  :: n,i,j,k,ierr
-         real(WP) :: Uaxial,myAaxial,Aaxial
-         real(WP) :: Q_SLPM,Q_SI
+         real(WP) :: Uaxial,myAaxial,Aaxial,Uswirl,myAswirl,Aswirl
+         real(WP) :: Qaxial,Qswirl
          real(WP), parameter :: SLPM2SI=1.66667E-5_WP
          ! Zero initial field
          fs%U=0.0_WP; fs%V=0.0_WP; fs%W=0.0_WP
          ! Read in axial gas flow rate and convert to SI
-         call param_read('Gas axial flow rate (SLPM)',Q_SLPM)
-         Q_SI=Q_SLPM*SLPM2SI
+         call param_read('Axial flow rate (SLPM)',Qaxial)
+         Qaxial=Qaxial*SLPM2SI
          ! Calculate axial flow area
          myAaxial=0.0_WP
          call fs%get_bcond('axial_ym',mybc)
@@ -214,7 +278,7 @@ contains
          end do
          call MPI_ALLREDUCE(myAaxial,Aaxial,1,MPI_REAL_WP,MPI_SUM,cfg%comm,ierr)
          ! Calculate bulk axial velocity
-         Uaxial=Q_SI/Aaxial
+         Uaxial=Qaxial/Aaxial
          ! Apply Dirichlet at 4 axial injector ports
          call fs%get_bcond('axial_ym',mybc)
          do n=1,mybc%itr%no_
@@ -235,6 +299,55 @@ contains
          do n=1,mybc%itr%no_
             i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
             fs%W(i,j,k)=-sum(fs%itpr_z(:,i,j,k)*cfg%VF(i,j,k-1:k))*Uaxial
+         end do
+         ! Read in swirl gas flow rate and convert to SI
+         call param_read('Axial flow rate (SLPM)',Qswirl)
+         Qswirl=Qswirl*SLPM2SI
+         ! Calculate swirl flow area
+         myAswirl=0.0_WP
+         call fs%get_bcond('swirl_ym',mybc)
+         do n=1,mybc%itr%no_
+            i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
+            myAswirl=myAswirl+cfg%dz(k)*cfg%dx(i)*sum(fs%itpr_y(:,i,j,k)*cfg%VF(i,j-1:j,k))
+         end do
+         call fs%get_bcond('swirl_yp',mybc)
+         do n=1,mybc%itr%no_
+            i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
+            myAswirl=myAswirl+cfg%dz(k)*cfg%dx(i)*sum(fs%itpr_y(:,i,j,k)*cfg%VF(i,j-1:j,k))
+         end do
+         call fs%get_bcond('swirl_zm',mybc)
+         do n=1,mybc%itr%no_
+            i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
+            myAswirl=myAswirl+cfg%dx(i)*cfg%dy(j)*sum(fs%itpr_z(:,i,j,k)*cfg%VF(i,j,k-1:k))
+         end do
+         call fs%get_bcond('swirl_zp',mybc)
+         do n=1,mybc%itr%no_
+            i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
+            myAswirl=myAswirl+cfg%dx(i)*cfg%dy(j)*sum(fs%itpr_z(:,i,j,k)*cfg%VF(i,j,k-1:k))
+         end do
+         call MPI_ALLREDUCE(myAswirl,Aswirl,1,MPI_REAL_WP,MPI_SUM,cfg%comm,ierr)
+         ! Calculate bulk axial velocity
+         Uswirl=Qswirl/Aswirl
+         ! Apply Dirichlet at 4 axial injector ports
+         call fs%get_bcond('swirl_ym',mybc)
+         do n=1,mybc%itr%no_
+            i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
+            fs%V(i,j,k)=+sum(fs%itpr_y(:,i,j,k)*cfg%VF(i,j-1:j,k))*Uswirl
+         end do
+         call fs%get_bcond('swirl_yp',mybc)
+         do n=1,mybc%itr%no_
+            i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
+            fs%V(i,j,k)=-sum(fs%itpr_y(:,i,j,k)*cfg%VF(i,j-1:j,k))*Uswirl
+         end do
+         call fs%get_bcond('swirl_zm',mybc)
+         do n=1,mybc%itr%no_
+            i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
+            fs%W(i,j,k)=+sum(fs%itpr_z(:,i,j,k)*cfg%VF(i,j,k-1:k))*Uswirl
+         end do
+         call fs%get_bcond('swirl_zp',mybc)
+         do n=1,mybc%itr%no_
+            i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
+            fs%W(i,j,k)=-sum(fs%itpr_z(:,i,j,k)*cfg%VF(i,j,k-1:k))*Uswirl
          end do
          ! Apply all other boundary conditions
          call fs%apply_bcond(time%t,time%dt)
@@ -257,6 +370,10 @@ contains
 
       ! Add Ensight output
       create_ensight: block
+         ! Output ply mesh
+         ply_out=ensight(cfg=cfg,name='nozzle')
+         call ply_out%add_surface('ply',plymesh)
+         call ply_out%write_data(time%t)
          ! Create Ensight output from cfg
          ens_out=ensight(cfg=cfg,name='nozzle')
          ! Create event for Ensight output
@@ -267,7 +384,7 @@ contains
          call ens_out%add_scalar('levelset',cfg%Gib)
          call ens_out%add_scalar('pressure',fs%P)
          call ens_out%add_scalar('visc_sgs',sgs%visc)
-         call ens_out%add_surface('ply',plymesh)
+         call ens_out%add_scalar('div',fs%div)
          ! Output to ensight
          if (ens_evt%occurs()) call ens_out%write_data(time%t)
       end block create_ensight
@@ -352,12 +469,12 @@ contains
             resW=-2.0_WP*(fs%rho*fs%W-fs%rho*fs%Wold)+time%dt*resW
             
             ! Form implicit residuals
-            call fs%solve_implicit(time%dt,resU,resV,resW)
+            !call fs%solve_implicit(time%dt,resU,resV,resW)
             
             ! Apply these residuals
-            fs%U=2.0_WP*fs%U-fs%Uold+resU
-            fs%V=2.0_WP*fs%V-fs%Vold+resV
-            fs%W=2.0_WP*fs%W-fs%Wold+resW
+            fs%U=2.0_WP*fs%U-fs%Uold+resU/fs%rho
+            fs%V=2.0_WP*fs%V-fs%Vold+resV/fs%rho
+            fs%W=2.0_WP*fs%W-fs%Wold+resW/fs%rho
             
             ! Apply IB forcing to enforce BC at the pipe walls
             ibforcing: block

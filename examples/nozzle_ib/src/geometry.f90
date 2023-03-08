@@ -170,7 +170,7 @@ contains
          call cfg%calculate_normal()
          
          ! Get VF field
-         call cfg%calculate_vf(method=sharp,allow_zero_vf=.true.)
+         call cfg%calculate_vf(method=sharp,allow_zero_vf=.false.)
          
       end block create_walls
       
