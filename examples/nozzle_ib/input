@@ -23,15 +23,15 @@ Axial flow rate (SLPM) : 150
 Swirl flow rate (SLPM) : 150
 
 # Fluid properties
-Density :           1.2
-Dynamic viscosity : 1.8e-5
+Density :           1.226
+Dynamic viscosity : 1.780e-5
 
 # Time integration
 Max timestep size : 1e-5
 Max cfl number :    0.8
 
 # Pressure solver
-Pressure tolerance : 1e-6
+Pressure tolerance : 1e-5
 Pressure iteration : 100
 
 # Ensight output
