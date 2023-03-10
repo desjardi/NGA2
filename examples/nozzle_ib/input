@@ -6,32 +6,27 @@ X shift : 0.085
 Lx :	0.1
 Ly :	0.08
 Lz :	0.08
-nx :	100
-ny :	80
-nz :	80
+nx :	200
+ny :  160
+nz :	160
 
-# PLY file and geometry
-ply filename : atomizer.ply
-Axial injector xdist :    -0.06394704
-Axial injector diameter :  0.016
-Swirl injector xdist :    -0.06394704
-Swirl injector diameter :  0.010
-Swirl injector offset :    0.0294513
+# PLY file
+PLY filename : atomizer.ply
 
 # Flow conditions
-Axial flow rate (SLPM) : 150
-Swirl flow rate (SLPM) : 150
+Axial flow rate (SLPM) : 85.7
+Swirl flow rate (SLPM) : 64.3
 
 # Fluid properties
 Density :           1.226
 Dynamic viscosity : 1.780e-5
 
 # Time integration
-Max timestep size : 1e-5
-Max cfl number :    0.8
+Max timestep size : 5e-6
+Max cfl number :    0.9
 
 # Pressure solver
-Pressure tolerance : 1e-5
+Pressure tolerance : 1e-4
 Pressure iteration : 100
 
 # Ensight output
