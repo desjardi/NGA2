@@ -1,6 +1,7 @@
 !> Definition for a nozzle class
 module nozzle_class
    use precision,         only: WP
+   use inputfile_class,   only: inputfile
    use ibconfig_class,    only: ibconfig
    use surfmesh_class,    only: surfmesh
    use ensight_class,     only: ensight
@@ -17,7 +18,10 @@ module nozzle_class
    
    !> Nozzle object
    type :: nozzle
-   
+      
+      !> Input file for the simulation
+      type(inputfile) :: input
+      
       !> Config with IB
       type(ibconfig) :: cfg
       
@@ -69,9 +73,13 @@ contains
    
    !> Initialization of nozzle simulation
    subroutine init(this)
+      use parallel, only: amRoot
 		implicit none
 		class(nozzle), intent(inout) :: this
 		
+      ! Read the input
+      this%input=inputfile(amRoot=amRoot,filename='input_nozzle')
+
 		! Initialize the geometry
 		call this%geometry_init()
 
@@ -84,7 +92,6 @@ contains
 	!> Initialize geometry
    subroutine geometry_init(this)
 		use sgrid_class, only: sgrid
-		use param,       only: param_read
 		implicit none
 		class(nozzle) :: this
 		type(sgrid) :: grid
@@ -97,9 +104,9 @@ contains
          real(WP), dimension(:), allocatable :: x,y,z
          
          ! Read in grid definition
-         call param_read('Lx',Lx); call param_read('nx',nx); allocate(x(nx+1)); call param_read('X shift',xshift)
-         call param_read('Ly',Ly); call param_read('ny',ny); allocate(y(ny+1))
-         call param_read('Lz',Lz); call param_read('nz',nz); allocate(z(nz+1))
+         call this%input%read('Lx',Lx); call this%input%read('nx',nx); allocate(x(nx+1)); call this%input%read('X shift',xshift)
+         call this%input%read('Ly',Ly); call this%input%read('ny',ny); allocate(y(ny+1))
+         call this%input%read('Lz',Lz); call this%input%read('nz',nz); allocate(z(nz+1))
          
          ! Create simple rectilinear grid
          do i=1,nx+1
@@ -124,7 +131,7 @@ contains
          integer, dimension(3) :: partition
          
          ! Read in partition
-         call param_read('Partition',partition,short='p')
+         call this%input%read('Partition',partition)
          
          ! Create partitioned grid
          this%cfg=ibconfig(grp=group,decomp=partition,grid=grid)
@@ -139,7 +146,7 @@ contains
          character(len=str_medium) :: plyfile
 
          ! Read in ply filename
-         call param_read('PLY filename',plyfile)
+         call this%input%read('PLY filename',plyfile)
 
          ! Create surface mesh from ply
          this%plymesh=surfmesh(plyfile=plyfile,nvar=0,name='ply')
@@ -231,7 +238,6 @@ contains
 	
 	!> Initialize simulation
 	subroutine simulation_init(this)
-		use param, only: param_read
 		implicit none
 		class(nozzle), intent(inout) :: this
 		
@@ -239,8 +245,8 @@ contains
 		! Initialize time tracker with 2 subiterations
       initialize_timetracker: block
 		   this%time=timetracker(amRoot=this%cfg%amRoot)
-         call param_read('Max timestep size',this%time%dtmax)
-         call param_read('Max cfl number',this%time%cflmax)
+         call this%input%read('Max timestep size',this%time%dtmax)
+         call this%input%read('Max cfl number',this%time%cflmax)
          this%time%dt=this%time%dtmax
          this%time%itmax=2
       end block initialize_timetracker
@@ -265,8 +271,8 @@ contains
          ! Create flow solver
          this%fs=incomp(cfg=this%cfg,name='Incompressible NS')
          ! Set the flow properties
-         call param_read('Density',this%fs%rho)
-         call param_read('Dynamic viscosity',this%visc); this%fs%visc=this%visc
+         call this%input%read('Density',this%fs%rho)
+         call this%input%read('Dynamic viscosity',this%visc); this%fs%visc=this%visc
          ! Define gas port boundary conditions
          call this%fs%add_bcond(name='axial_ym',type=dirichlet,face='y',dir=-1,canCorrect=.false.,locator=axial_ym)
          call this%fs%add_bcond(name='axial_yp',type=dirichlet,face='y',dir=+1,canCorrect=.false.,locator=axial_yp)
@@ -282,8 +288,8 @@ contains
          this%ps=hypre_str(cfg=this%cfg,name='Pressure',method=pcg_pfmg,nst=7)
          this%ps%maxlevel=20
          !ps%maxlevel=14
-         call param_read('Pressure iteration',this%ps%maxit)
-         call param_read('Pressure tolerance',this%ps%rcvg)
+         call this%input%read('Pressure iteration',this%ps%maxit)
+         call this%input%read('Pressure tolerance',this%ps%rcvg)
          ! Setup the solver
          call this%fs%setup(pressure_solver=this%ps)
       end block create_flow_solver
@@ -302,7 +308,7 @@ contains
          ! Zero initial field
          this%fs%U=0.0_WP; this%fs%V=0.0_WP; this%fs%W=0.0_WP
          ! Read in axial gas flow rate and convert to SI
-         call param_read('Axial flow rate (SLPM)',Qaxial)
+         call this%input%read('Axial flow rate (SLPM)',Qaxial)
          Qaxial=Qaxial*SLPM2SI
          ! Calculate axial flow area
          myAaxial=0.0_WP
@@ -351,7 +357,7 @@ contains
             this%fs%W(i,j,k)=-sum(this%fs%itpr_z(:,i,j,k)*this%cfg%VF(i,j,k-1:k))*Uaxial
          end do
          ! Read in swirl gas flow rate and convert to SI
-         call param_read('Axial flow rate (SLPM)',Qswirl)
+         call this%input%read('Axial flow rate (SLPM)',Qswirl)
          Qswirl=Qswirl*SLPM2SI
          ! Calculate swirl flow area
          myAswirl=0.0_WP
@@ -429,7 +435,7 @@ contains
          this%ens_out=ensight(cfg=this%cfg,name='nozzle')
          ! Create event for Ensight output
          this%ens_evt=event(time=this%time,name='Ensight output')
-         call param_read('Ensight output period',this%ens_evt%tper)
+         call this%input%read('Ensight output period',this%ens_evt%tper)
          ! Add variables to output
          call this%ens_out%add_vector('velocity',this%Ui,this%Vi,this%Wi)
          call this%ens_out%add_scalar('pressure',this%fs%P)

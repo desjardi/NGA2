@@ -16,8 +16,11 @@ module inputfile_class
    !> inputfile object definition
    type :: inputfile
       
+      !< We need to know who's the boss
+      logical :: amRoot
+      
       !> Name of file to parse
-      character(len=*) :: filename
+      character(len=str_medium) :: filename
       
       !> Array of parameters
       type(param_type), dimension(:), allocatable :: params
@@ -36,8 +39,8 @@ module inputfile_class
       procedure, private :: readchar         !< Read in a string
       procedure, private :: readchararray    !< Read in a string array
       generic :: read=>readlogical,readint,readintarray,readfloat,readfloatarray,readfloatarray2D,readchar,readchararray !< Generic routine to read a parameter
-      procedure :: log                       !< Log content of inputfile object
-      procedure :: print                     !< Print out content of inputfile object
+      procedure :: print                     !< Print out all parameters
+      procedure :: log=>inputlog             !< Log all parameters
    end type inputfile
    
    
@@ -51,10 +54,11 @@ contains
    
    
    !> Constructor of inputfile object
-   function constructor(filename) result(this)
+   function constructor(amRoot,filename) result(this)
       use messager, only: die
       implicit none
       type(inputfile) :: this
+      logical, intent(in) :: amRoot
       character(len=*), intent(in) :: filename
       integer :: iunit,ierr,limiter,nlines,i,j,ntags,comment
       integer, dimension(:), allocatable :: limit,line
@@ -62,9 +66,10 @@ contains
       character(len=str_long), dimension(:), allocatable :: file
       character(len=str_long) :: val
       character(len=str_medium) :: tag
-
-      ! Store the file name
-      call this%filename=trim(adjustl(filename))
+      
+      ! Store the root and file name
+      this%amRoot=amRoot
+      this%filename=trim(adjustl(filename))
       
       ! Empty object
       this%nparams=0
@@ -132,11 +137,14 @@ contains
          read(buffer(1:limit(i)-1),'(a)') tag
          read(buffer(limit(i)+1:),'(a)') val
          ! Add parameter
-         call this%param_add(adjustl(trim(tag)),adjustl(trim(val)))
+         call this%add_param(adjustl(trim(tag)),adjustl(trim(val)))
       end do
 
       ! Deallocate
       deallocate(file,limit,line)
+      
+      ! Log this info
+      call this%log()
 
    end function constructor
    
@@ -160,7 +168,7 @@ contains
       else
          ! Resize the parameter array
          allocate(temp(this%nparams+1))
-         if (nparams.gt.0) temp(1:this%nparams)=this%params
+         if (this%nparams.gt.0) temp(1:this%nparams)=this%params
          call move_alloc(temp,this%params)
          ! Add parameter
          this%nparams=this%nparams+1
@@ -426,53 +434,77 @@ contains
       ! If still here, we have not found a value to read
       call die('[inputfile read] Did not find required parameter: '//trim(tag))
    end subroutine readchararray
-   
-   
-   !> Print all user-defined parameters if root
+
+
+   !> Print out parameters
    subroutine print(this)
+      use, intrinsic :: iso_fortran_env, only: output_unit
+      implicit none
+      class(inputfile), intent(in) :: this
+      integer :: i
+      integer, parameter :: colwidth=30
+      character(len=colwidth) :: tag,val,sep
+      if (this%amRoot) then
+         write(output_unit,'("Input file [",a,"] content:")') trim(this%filename)
+         do i=1,colwidth
+            sep(i:i)='_'
+         end do
+         write(output_unit,'(1x,"_",a,"___",a,"_",1x)') sep,sep
+         tag='Parameter tag name'; val='Assigned value'
+         write(output_unit,'("| ",a," | ",a," |")') tag,val
+         do i=1,this%nparams
+            ! Check for truncation of strings
+            if (len_trim(this%params(i)%tag).gt.colwidth) then
+               tag=this%params(i)%tag(1:colwidth-3)//'...'
+            else
+               tag=''; tag=this%params(i)%tag(1:len_trim(this%params(i)%tag))
+            end if
+            if (len_trim(this%params(i)%val).gt.colwidth) then
+               val=this%params(i)%val(1:colwidth-3)//'...'
+            else
+               val=''; val=this%params(i)%val(1:len_trim(this%params(i)%val))
+            end if
+            write(output_unit,'("| ",a," | ",a," |")') tag,val
+         end do
+         write(output_unit,'("|_",a,"_|_",a,"_|")') sep,sep
+      end if
+   end subroutine print
+
+
+   !> Log parameters
+   subroutine inputlog(this)
       use messager, only: log
-      use parallel, only: amRoot
       implicit none
       class(inputfile), intent(in) :: this
       integer :: i
       integer, parameter :: colwidth=30
       character(len=colwidth) :: tag,val,sep
       character(len=str_long) :: message
-      ! Loop over all options and print then out
-      if (amRoot) then
-         if (this%nparams.eq.0) then
-            call log('NGA was called without any user-defined parameter.')
-         else
-            write(message,'(a,1x,i0,1x,a)') 'NGA was called with',nparams,'user-defined parameters:'; call log(message)
-            do i=1,colwidth
-               sep(i:i)='_'
-            end do
-            write(message,'(1x,"_",a,"___",a,"___",a,"_",1x)') sep,sep,sep; call log(message)
-            tag='Parameter tag name'; val='Assigned value'; src='Source'
-            write(message,'("| ",a," | ",a," | ",a," |")') tag,val,src; call log(message)
-            do i=1,nparams
-               ! Check for truncation of strings
-               if (len_trim(params(i)%tag).gt.colwidth) then
-                  tag=params(i)%tag(1:colwidth-3)//'...'
-               else
-                  tag=''; tag=params(i)%tag(1:len_trim(params(i)%tag))
-               end if
-               if (len_trim(params(i)%val).gt.colwidth) then
-                  val=params(i)%val(1:colwidth-3)//'...'
-               else
-                  val=''; val=params(i)%val(1:len_trim(params(i)%val))
-               end if
-               if (len_trim(params(i)%src).gt.colwidth) then
-                  src=params(i)%src(1:colwidth-3)//'...'
-               else
-                  src=''; src=params(i)%src(1:len_trim(params(i)%src))
-               end if
-               write(message,'("| ",a," | ",a," | ",a," |")') tag,val,src; call log(message)
-            end do
-            write(message,'("|_",a,"_|_",a,"_|_",a,"_|")') sep,sep,sep; call log(message)
-         end if
+      if (this%amRoot) then
+         write(message,'("Input file [",a,"] content:")') trim(this%filename); call log(message)
+         do i=1,colwidth
+            sep(i:i)='_'
+         end do
+         write(message,'(1x,"_",a,"___",a,"_",1x)') sep,sep; call log(message)
+         tag='Parameter tag name'; val='Assigned value'
+         write(message,'("| ",a," | ",a," |")') tag,val; call log(message)
+         do i=1,this%nparams
+            ! Check for truncation of strings
+            if (len_trim(this%params(i)%tag).gt.colwidth) then
+               tag=this%params(i)%tag(1:colwidth-3)//'...'
+            else
+               tag=''; tag=this%params(i)%tag(1:len_trim(this%params(i)%tag))
+            end if
+            if (len_trim(this%params(i)%val).gt.colwidth) then
+               val=this%params(i)%val(1:colwidth-3)//'...'
+            else
+               val=''; val=this%params(i)%val(1:len_trim(this%params(i)%val))
+            end if
+            write(message,'("| ",a," | ",a," |")') tag,val; call log(message)
+         end do
+         write(message,'("|_",a,"_|_",a,"_|")') sep,sep; call log(message)
       end if
-   end subroutine print
+   end subroutine inputlog
    
    
 end module inputfile_class
