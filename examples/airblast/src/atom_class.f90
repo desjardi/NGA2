@@ -1,12 +1,13 @@
-!> Definition for a nozzle class
-module nozzle_class
+!> Definition for an atomization class
+module atom_class
    use precision,         only: WP
    use inputfile_class,   only: inputfile
    use ibconfig_class,    only: ibconfig
    use surfmesh_class,    only: surfmesh
    use ensight_class,     only: ensight
    use hypre_str_class,   only: hypre_str
-   use incomp_class,      only: incomp
+   use vfs_class,         only: vfs
+   use tpns_class,        only: tpns
    use sgsmodel_class,    only: sgsmodel
    use timetracker_class, only: timetracker
    use event_class,       only: event
@@ -14,10 +15,10 @@ module nozzle_class
    implicit none
    private
    
-   public :: nozzle
+   public :: atom
    
-   !> Nozzle object
-   type :: nozzle
+   !> Atom object
+   type :: atom
       
       !> Input file for the simulation
       type(inputfile) :: input
@@ -29,15 +30,18 @@ module nozzle_class
       type(surfmesh) :: plymesh
       
 		!> Flow solver
-		type(incomp)      :: fs    !< Incompressible flow solver
+		type(vfs)         :: vf    !< Volume fraction solver
+      type(tpns)        :: fs    !< Two-phase flow solver
 		type(hypre_str)   :: ps    !< Structured Hypre linear solver for pressure
+      type(hypre_str)   :: vs    !< Structured Hypre linear solver for velocity
       type(sgsmodel)    :: sgs   !< SGS model for eddy viscosity
 		type(timetracker) :: time  !< Time info
 		
 		!> Ensight postprocessing
-      type(ensight) :: ply_out  !< Ensight output for the IB surface
-		type(ensight) :: ens_out  !< Ensight output for flow variables
-		type(event)   :: ens_evt  !< Event trigger for Ensight output
+      type(surfmesh) :: smesh    !< Surface mesh for interface
+      type(ensight)  :: ply_out  !< Ensight output for the IB surface
+		type(ensight)  :: ens_out  !< Ensight output for flow variables
+		type(event)    :: ens_evt  !< Event trigger for Ensight output
 		
 		!> Simulation monitor file
       type(monitor) :: mfile    !< General simulation monitoring
@@ -57,32 +61,34 @@ module nozzle_class
       procedure :: init                            !< Initialize nozzle simulation
       procedure :: step                            !< Advance nozzle simulation by one time step
       procedure :: final                           !< Finalize nozzle simulation
-   end type nozzle
+   end type atom
 
 	
-	!> Hardcode nozzle inlet positions used in locator functions
-	real(WP), parameter, public :: axial_xdist =-0.06394704_WP
-	real(WP), parameter, public :: axial_diam  =+0.01600000_WP*1.2_WP  ! 20% larger to avoid stairstepping
-	real(WP), parameter, public :: swirl_xdist =-0.06394704_WP
-	real(WP), parameter, public :: swirl_diam  =+0.01000000_WP*1.2_WP  ! 20% larger to avoid stairstepping
-	real(WP), parameter, public :: swirl_offset=+0.02945130_WP
+	!> Hardcode inlet positions used in locator functions at x=-0.01
+	real(WP), parameter, public :: dl=0.0025_WP   ! Liquid pipe diameter ~(inner+outer)/2
+   real(WP), parameter, public :: dg=0.0206_WP   ! Gas pipe diameter ~(inner+outer)/2
+   
+   
+   !> Hardcode inlet positions used in locator functions at x=0.0
+	!real(WP), parameter, public :: dl=0.0025_WP   ! Liquid pipe diameter ~(inner+outer)/2
+   !real(WP), parameter, public :: dg=0.0120_WP   ! Gas pipe diameter ~(inner+outer)/2
 	
-
+   
 contains
    
    
-   !> Initialization of nozzle simulation
+   !> Initialization of atom simulation
    subroutine init(this)
       use parallel, only: amRoot
 		implicit none
-		class(nozzle), intent(inout) :: this
+		class(atom), intent(inout) :: this
 		
       ! Read the input
-      this%input=inputfile(amRoot=amRoot,filename='input_nozzle')
+      this%input=inputfile(amRoot=amRoot,filename='input_atom')
       
 		! Initialize the geometry
 		call this%geometry_init()
-
+      
 		! Initialize the simulation
 		call this%simulation_init()
 		
@@ -93,7 +99,7 @@ contains
    subroutine geometry_init(this)
 		use sgrid_class, only: sgrid
 		implicit none
-		class(nozzle) :: this
+		class(atom) :: this
 		type(sgrid) :: grid
 		
 		! Create a grid from input params
@@ -120,8 +126,8 @@ contains
          end do
          
          ! General serial grid object
-         grid=sgrid(coord=cartesian,no=1,x=x,y=y,z=z,xper=.false.,yper=.false.,zper=.false.,name='nozzle')
-
+         grid=sgrid(coord=cartesian,no=3,x=x,y=y,z=z,xper=.false.,yper=.false.,zper=.false.,name='atom')
+         
       end block create_grid
       
       
@@ -144,13 +150,13 @@ contains
          use string, only: str_medium
          use param,  only: param_read
          character(len=str_medium) :: plyfile
-
+         
          ! Read in ply filename
          call this%input%read('PLY filename',plyfile)
-
+         
          ! Create surface mesh from ply
          this%plymesh=surfmesh(plyfile=plyfile,nvar=0,name='ply')
-
+         
       end block read_ply
       
       
@@ -239,7 +245,7 @@ contains
 	!> Initialize simulation
 	subroutine simulation_init(this)
 		implicit none
-		class(nozzle), intent(inout) :: this
+		class(atom), intent(inout) :: this
 		
 		
 		! Initialize time tracker with 2 subiterations
@@ -264,24 +270,63 @@ contains
       end block allocate_work_arrays
       
       
+      ! Initialize our VOF solver and field
+      create_and_initialize_vof: block
+         use vfs_class, only: lvira,r2p
+         integer :: i,j,k
+         real(WP) :: xloc,rad
+         ! Create a VOF solver with LVIRA
+         this%vf=vfs(cfg=this%cfg,reconstruction_method=lvira,name='VOF')
+         ! Initialize to flat interface in liquid needle
+         xloc=0.0_WP !< Interface initially at x=0
+         do k=this%vf%cfg%kmino_,this%vf%cfg%kmaxo_
+            do j=this%vf%cfg%jmino_,this%vf%cfg%jmaxo_
+               do i=this%vf%cfg%imino_,this%vf%cfg%imaxo_
+                  rad=sqrt(this%vf%cfg%ym(j)**2+this%vf%cfg%zm(k)**2)
+                  if (this%vf%cfg%xm(i).lt.xloc.and.rad.le.0.5_WP*dl) then
+                     this%vf%VF(i,j,k)=1.0_WP
+                  else
+                     this%vf%VF(i,j,k)=0.0_WP
+                  end if
+                  this%vf%Lbary(:,i,j,k)=[this%vf%cfg%xm(i),this%vf%cfg%ym(j),this%vf%cfg%zm(k)]
+                  this%vf%Gbary(:,i,j,k)=[this%vf%cfg%xm(i),this%vf%cfg%ym(j),this%vf%cfg%zm(k)]
+               end do
+            end do
+         end do
+         ! Update the band
+         call this%vf%update_band()
+         ! Perform interface reconstruction from VOF field
+         call this%vf%build_interface()
+         ! Set interface planes at the boundaries
+         call this%vf%set_full_bcond()
+         ! Create discontinuous polygon mesh from IRL interface
+         call this%vf%polygonalize_interface()
+         ! Calculate distance from polygons
+         call this%vf%distance_from_polygon()
+         ! Calculate subcell phasic volumes
+         call this%vf%subcell_vol()
+         ! Calculate curvature
+         call this%vf%get_curvature()
+         ! Reset moments to guarantee compatibility with interface reconstruction
+         call this%vf%reset_volume_moments()
+      end block create_and_initialize_vof
+
+      
       ! Create an incompressible flow solver with bconds
       create_flow_solver: block
          use hypre_str_class, only: pcg_pfmg
          use incomp_class,    only: dirichlet,clipped_neumann
          ! Create flow solver
-         this%fs=incomp(cfg=this%cfg,name='Incompressible NS')
+         this%fs=tpns(cfg=this%cfg,name='Two-phase NS')
          ! Set the flow properties
-         call this%input%read('Density',this%fs%rho)
-         call this%input%read('Dynamic viscosity',this%visc); this%fs%visc=this%visc
-         ! Define gas port boundary conditions
-         call this%fs%add_bcond(name='axial_ym',type=dirichlet,face='y',dir=-1,canCorrect=.false.,locator=axial_ym)
-         call this%fs%add_bcond(name='axial_yp',type=dirichlet,face='y',dir=+1,canCorrect=.false.,locator=axial_yp)
-         call this%fs%add_bcond(name='axial_zm',type=dirichlet,face='z',dir=-1,canCorrect=.false.,locator=axial_zm)
-         call this%fs%add_bcond(name='axial_zp',type=dirichlet,face='z',dir=+1,canCorrect=.false.,locator=axial_zp)
-         call this%fs%add_bcond(name='swirl_ym',type=dirichlet,face='y',dir=-1,canCorrect=.false.,locator=swirl_ym)
-         call this%fs%add_bcond(name='swirl_yp',type=dirichlet,face='y',dir=+1,canCorrect=.false.,locator=swirl_yp)
-         call this%fs%add_bcond(name='swirl_zm',type=dirichlet,face='z',dir=-1,canCorrect=.false.,locator=swirl_zm)
-         call this%fs%add_bcond(name='swirl_zp',type=dirichlet,face='z',dir=+1,canCorrect=.false.,locator=swirl_zp)
+         call this%input%read('Liquid dynamic viscosity',this%fs%visc_l)
+         call this%input%read('Gas dynamic viscosity'   ,this%fs%visc_g)
+         call this%input%read('Liquid density',this%fs%rho_l)
+         call this%input%read('Gas density'   ,this%fs%rho_g)
+         call this%input%read('Surface tension coefficient',this%fs%sigma)
+         ! Define gas and liquid inlet boundary conditions
+         call this%fs%add_bcond(name='gas_inlet',type=dirichlet,face='x',dir=-1,canCorrect=.false.,locator=gas_inlet)
+         call this%fs%add_bcond(name='liq_inlet',type=dirichlet,face='x',dir=-1,canCorrect=.false.,locator=liq_inlet)
          ! Outflow on the right
          call this%fs%add_bcond(name='outflow',type=clipped_neumann,face='x',dir=+1,canCorrect=.true.,locator=right_boundary)
          ! Configure pressure solver
@@ -289,120 +334,64 @@ contains
          this%ps%maxlevel=20
          call this%input%read('Pressure iteration',this%ps%maxit)
          call this%input%read('Pressure tolerance',this%ps%rcvg)
+         ! Configure implicit velocity solver
+         this%vs=hypre_str(cfg=this%cfg,name='Velocity',method=pcg_pfmg,nst=7)
+         call this%input%read('Implicit iteration',this%vs%maxit)
+         call this%input%read('Implicit tolerance',this%vs%rcvg)
          ! Setup the solver
-         call this%fs%setup(pressure_solver=this%ps)
+         call this%fs%setup(pressure_solver=this%ps,implicit_solver=this%vs)
       end block create_flow_solver
       
 
       ! Initialize our velocity field
       initialize_velocity: block
-         use mpi_f08,      only: MPI_ALLREDUCE,MPI_SUM
-         use parallel,     only: MPI_REAL_WP
-         use incomp_class, only: bcond
+         use mpi_f08,    only: MPI_ALLREDUCE,MPI_SUM
+         use parallel,   only: MPI_REAL_WP
+         use tpns_class, only: bcond
          type(bcond), pointer :: mybc
          integer  :: n,i,j,k,ierr
-         real(WP) :: Uaxial,myAaxial,Aaxial,Uswirl,myAswirl,Aswirl
-         real(WP) :: Qaxial,Qswirl
+         real(WP) :: Ugas,myAgas,Agas,Uliq,myAliq,Aliq
+         real(WP) :: Qgas,Qliq
          real(WP), parameter :: SLPM2SI=1.66667E-5_WP
          ! Zero initial field
          this%fs%U=0.0_WP; this%fs%V=0.0_WP; this%fs%W=0.0_WP
-         ! Read in axial gas flow rate and convert to SI
-         call this%input%read('Axial flow rate (SLPM)',Qaxial)
-         Qaxial=Qaxial*SLPM2SI
-         ! Calculate axial flow area
-         myAaxial=0.0_WP
-         call this%fs%get_bcond('axial_ym',mybc)
+         ! Read in gas flow rate and convert to SI
+         call this%input%read('Gas flow rate (SLPM)',Qgas)
+         Qgas=Qgas*SLPM2SI
+         ! Calculate gas flow area
+         myAgas=0.0_WP
+         call this%fs%get_bcond('gas_inlet',mybc)
          do n=1,mybc%itr%no_
             i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
-            myAaxial=myAaxial+this%cfg%dz(k)*this%cfg%dx(i)*sum(this%fs%itpr_y(:,i,j,k)*this%cfg%VF(i,j-1:j,k))
+            myAgas=myAgas+this%cfg%dy(j)*this%cfg%dz(k)*sum(this%fs%itpr_x(:,i,j,k)*this%cfg%VF(i-1:i,j,k))
          end do
-         call this%fs%get_bcond('axial_yp',mybc)
+         call MPI_ALLREDUCE(myAgas,Agas,1,MPI_REAL_WP,MPI_SUM,this%cfg%comm,ierr)
+         ! Calculate bulk gas velocity
+         Ugas=Qgas/Agas
+         ! Apply Dirichlet at gas inlet
+         call this%fs%get_bcond('gas_inlet',mybc)
          do n=1,mybc%itr%no_
             i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
-            myAaxial=myAaxial+this%cfg%dz(k)*this%cfg%dx(i)*sum(this%fs%itpr_y(:,i,j,k)*this%cfg%VF(i,j-1:j,k))
+            this%fs%U(i,j,k)=+sum(this%fs%itpr_x(:,i,j,k)*this%cfg%VF(i-1:i,j,k))*Ugas
          end do
-         call this%fs%get_bcond('axial_zm',mybc)
+         ! Read in liquid flow rate and convert to SI
+         call this%input%read('Liquid flow rate (SLPM)',Qliq)
+         Qliq=Qliq*SLPM2SI
+         ! Calculate liquid flow area
+         myAliq=0.0_WP
+         call this%fs%get_bcond('liq_inlet',mybc)
          do n=1,mybc%itr%no_
             i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
-            myAaxial=myAaxial+this%cfg%dx(i)*this%cfg%dy(j)*sum(this%fs%itpr_z(:,i,j,k)*this%cfg%VF(i,j,k-1:k))
+            myAliq=myAliq+this%cfg%dy(j)*this%cfg%dz(k)*sum(this%fs%itpr_x(:,i,j,k)*this%cfg%VF(i-1:i,j,k))
          end do
-         call this%fs%get_bcond('axial_zp',mybc)
-         do n=1,mybc%itr%no_
-            i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
-            myAaxial=myAaxial+this%cfg%dx(i)*this%cfg%dy(j)*sum(this%fs%itpr_z(:,i,j,k)*this%cfg%VF(i,j,k-1:k))
-         end do
-         call MPI_ALLREDUCE(myAaxial,Aaxial,1,MPI_REAL_WP,MPI_SUM,this%cfg%comm,ierr)
+         call MPI_ALLREDUCE(myAliq,Aliq,1,MPI_REAL_WP,MPI_SUM,this%cfg%comm,ierr)
          ! Calculate bulk axial velocity
-         Uaxial=Qaxial/Aaxial
+         Uliq=Qliq/Aliq
          ! Apply Dirichlet at 4 axial injector ports
-         call this%fs%get_bcond('axial_ym',mybc)
+         call this%fs%get_bcond('liq_inlet',mybc)
          do n=1,mybc%itr%no_
             i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
-            this%fs%V(i,j,k)=+sum(this%fs%itpr_y(:,i,j,k)*this%cfg%VF(i,j-1:j,k))*Uaxial
-         end do
-         call this%fs%get_bcond('axial_yp',mybc)
-         do n=1,mybc%itr%no_
-            i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
-            this%fs%V(i,j,k)=-sum(this%fs%itpr_y(:,i,j,k)*this%cfg%VF(i,j-1:j,k))*Uaxial
-         end do
-         call this%fs%get_bcond('axial_zm',mybc)
-         do n=1,mybc%itr%no_
-            i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
-            this%fs%W(i,j,k)=+sum(this%fs%itpr_z(:,i,j,k)*this%cfg%VF(i,j,k-1:k))*Uaxial
-         end do
-         call this%fs%get_bcond('axial_zp',mybc)
-         do n=1,mybc%itr%no_
-            i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
-            this%fs%W(i,j,k)=-sum(this%fs%itpr_z(:,i,j,k)*this%cfg%VF(i,j,k-1:k))*Uaxial
-         end do
-         ! Read in swirl gas flow rate and convert to SI
-         call this%input%read('Axial flow rate (SLPM)',Qswirl)
-         Qswirl=Qswirl*SLPM2SI
-         ! Calculate swirl flow area
-         myAswirl=0.0_WP
-         call this%fs%get_bcond('swirl_ym',mybc)
-         do n=1,mybc%itr%no_
-            i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
-            myAswirl=myAswirl+this%cfg%dz(k)*this%cfg%dx(i)*sum(this%fs%itpr_y(:,i,j,k)*this%cfg%VF(i,j-1:j,k))
-         end do
-         call this%fs%get_bcond('swirl_yp',mybc)
-         do n=1,mybc%itr%no_
-            i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
-            myAswirl=myAswirl+this%cfg%dz(k)*this%cfg%dx(i)*sum(this%fs%itpr_y(:,i,j,k)*this%cfg%VF(i,j-1:j,k))
-         end do
-         call this%fs%get_bcond('swirl_zm',mybc)
-         do n=1,mybc%itr%no_
-            i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
-            myAswirl=myAswirl+this%cfg%dx(i)*this%cfg%dy(j)*sum(this%fs%itpr_z(:,i,j,k)*this%cfg%VF(i,j,k-1:k))
-         end do
-         call this%fs%get_bcond('swirl_zp',mybc)
-         do n=1,mybc%itr%no_
-            i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
-            myAswirl=myAswirl+this%cfg%dx(i)*this%cfg%dy(j)*sum(this%fs%itpr_z(:,i,j,k)*this%cfg%VF(i,j,k-1:k))
-         end do
-         call MPI_ALLREDUCE(myAswirl,Aswirl,1,MPI_REAL_WP,MPI_SUM,this%cfg%comm,ierr)
-         ! Calculate bulk axial velocity
-         Uswirl=Qswirl/Aswirl
-         ! Apply Dirichlet at 4 axial injector ports
-         call this%fs%get_bcond('swirl_ym',mybc)
-         do n=1,mybc%itr%no_
-            i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
-            this%fs%V(i,j,k)=+sum(this%fs%itpr_y(:,i,j,k)*this%cfg%VF(i,j-1:j,k))*Uswirl
-         end do
-         call this%fs%get_bcond('swirl_yp',mybc)
-         do n=1,mybc%itr%no_
-            i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
-            this%fs%V(i,j,k)=-sum(this%fs%itpr_y(:,i,j,k)*this%cfg%VF(i,j-1:j,k))*Uswirl
-         end do
-         call this%fs%get_bcond('swirl_zm',mybc)
-         do n=1,mybc%itr%no_
-            i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
-            this%fs%W(i,j,k)=+sum(this%fs%itpr_z(:,i,j,k)*this%cfg%VF(i,j,k-1:k))*Uswirl
-         end do
-         call this%fs%get_bcond('swirl_zp',mybc)
-         do n=1,mybc%itr%no_
-            i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
-            this%fs%W(i,j,k)=-sum(this%fs%itpr_z(:,i,j,k)*this%cfg%VF(i,j,k-1:k))*Uswirl
+            this%fs%U(i,j,k)=+sum(this%fs%itpr_x(:,i,j,k)*this%cfg%VF(i-1:i,j,k))*Uliq
          end do
          ! Apply all other boundary conditions
          call this%fs%apply_bcond(this%time%t,this%time%dt)
@@ -421,24 +410,34 @@ contains
       create_sgs: block
 		   this%sgs=sgsmodel(cfg=this%fs%cfg,umask=this%fs%umask,vmask=this%fs%vmask,wmask=this%fs%wmask)
       end block create_sgs
+      
+      
+      ! Create surfmesh object for interface polygon output
+      create_smesh: block
+         this%smesh=surfmesh(nvar=0,name='plic')
+         call this%vf%update_surfmesh(this%smesh)
+      end block create_smesh
 
 
       ! Add Ensight output
       create_ensight: block
          ! Output ply mesh
-         this%ply_out=ensight(cfg=this%cfg,name='plygeom')
+         this%ply_out=ensight(cfg=this%cfg,name='tip_geom')
          call this%ply_out%add_surface('ply',this%plymesh)
          call this%ply_out%add_scalar('levelset',this%cfg%Gib)
          call this%ply_out%write_data(this%time%t)
          ! Create Ensight output from cfg
-         this%ens_out=ensight(cfg=this%cfg,name='nozzle')
+         this%ens_out=ensight(cfg=this%cfg,name='atom')
          ! Create event for Ensight output
          this%ens_evt=event(time=this%time,name='Ensight output')
          call this%input%read('Ensight output period',this%ens_evt%tper)
          ! Add variables to output
          call this%ens_out%add_vector('velocity',this%Ui,this%Vi,this%Wi)
          call this%ens_out%add_scalar('pressure',this%fs%P)
+         call this%ens_out%add_scalar('VOF',this%vf%VF)
+         call this%ens_out%add_scalar('curvature',this%vf%curv)
          call this%ens_out%add_scalar('visc_sgs',this%sgs%visc)
+         call this%ens_out%add_surface('plic',this%smesh)
          ! Output to ensight
          if (this%ens_evt%occurs()) call this%ens_out%write_data(this%time%t)
       end block create_ensight
@@ -449,8 +448,9 @@ contains
          ! Prepare some info about fields
          call this%fs%get_cfl(this%time%dt,this%time%cfl)
          call this%fs%get_max()
+         call this%vf%get_max()
          ! Create simulation monitor
-         this%mfile=monitor(this%fs%cfg%amRoot,'simulation_nozzle')
+         this%mfile=monitor(this%fs%cfg%amRoot,'simulation_atom')
          call this%mfile%add_column(this%time%n,'Timestep number')
          call this%mfile%add_column(this%time%t,'Time')
          call this%mfile%add_column(this%time%dt,'Timestep size')
@@ -459,6 +459,10 @@ contains
          call this%mfile%add_column(this%fs%Vmax,'Vmax')
          call this%mfile%add_column(this%fs%Wmax,'Wmax')
          call this%mfile%add_column(this%fs%Pmax,'Pmax')
+         call this%mfile%add_column(this%vf%VFmax,'VOF maximum')
+         call this%mfile%add_column(this%vf%VFmin,'VOF minimum')
+         call this%mfile%add_column(this%vf%VFint,'VOF integral')
+         call this%mfile%add_column(this%vf%SDint,'SD integral')
          call this%mfile%add_column(this%fs%divmax,'Maximum divergence')
          call this%mfile%add_column(this%fs%psolv%it,'Pressure iteration')
          call this%mfile%add_column(this%fs%psolv%rerr,'Pressure error')
@@ -467,6 +471,7 @@ contains
          this%cflfile=monitor(this%fs%cfg%amRoot,'cfl_nozzle')
          call this%cflfile%add_column(this%time%n,'Timestep number')
          call this%cflfile%add_column(this%time%t,'Time')
+         call this%cflfile%add_column(this%fs%CFLst,'STension CFL')
          call this%cflfile%add_column(this%fs%CFLc_x,'Convective xCFL')
          call this%cflfile%add_column(this%fs%CFLc_y,'Convective yCFL')
          call this%cflfile%add_column(this%fs%CFLc_z,'Convective zCFL')
@@ -483,7 +488,7 @@ contains
 	!> Take one time step
 	subroutine step(this)
 		implicit none
-		class(nozzle), intent(inout) :: this
+		class(atom), intent(inout) :: this
 		
 		
 		! Increment time
@@ -491,18 +496,40 @@ contains
 		call this%time%adjust_dt()
 		call this%time%increment()
 		
+      ! Remember old VOF
+      this%vf%VFold=this%vf%VF
+
 		! Remember old velocity
 		this%fs%Uold=this%fs%U
 		this%fs%Vold=this%fs%V
 		this%fs%Wold=this%fs%W
 		
+      ! Prepare old staggered density (at n)
+      call this%fs%get_olddensity(vf=this%vf)
+         
+      ! VOF solver step
+      call this%vf%advance(dt=this%time%dt,U=this%fs%U,V=this%fs%V,W=this%fs%W)
+      
+      ! Prepare new staggered viscosity (at n+1)
+      call this%fs%get_viscosity(vf=this%vf)
+
 		! Turbulence modeling
 		sgs_modeling: block
 			use sgsmodel_class, only: vreman
-			this%resU=this%fs%rho
+         integer :: i,j,k
+			this%resU=this%fs%rho_g
 			call this%fs%get_gradu(this%gradU)
 			call this%sgs%get_visc(type=vreman,dt=this%time%dtold,rho=this%resU,gradu=this%gradU)
-			this%fs%visc=this%visc+this%sgs%visc
+         do k=this%fs%cfg%kmino_+1,this%fs%cfg%kmaxo_
+            do j=this%fs%cfg%jmino_+1,this%fs%cfg%jmaxo_
+               do i=this%fs%cfg%imino_+1,this%fs%cfg%imaxo_
+                  this%fs%visc(i,j,k)   =this%fs%visc(i,j,k)   +this%sgs%visc(i,j,k)
+                  this%fs%visc_xy(i,j,k)=this%fs%visc_xy(i,j,k)+sum(this%fs%itp_xy(:,:,i,j,k)*this%sgs%visc(i-1:i,j-1:j,k))
+                  this%fs%visc_yz(i,j,k)=this%fs%visc_yz(i,j,k)+sum(this%fs%itp_yz(:,:,i,j,k)*this%sgs%visc(i,j-1:j,k-1:k))
+                  this%fs%visc_zx(i,j,k)=this%fs%visc_zx(i,j,k)+sum(this%fs%itp_xz(:,:,i,j,k)*this%sgs%visc(i-1:i,j,k-1:k))
+               end do
+            end do
+         end do
 		end block sgs_modeling
 		
 		! Perform sub-iterations
@@ -513,21 +540,24 @@ contains
 			this%fs%V=0.5_WP*(this%fs%V+this%fs%Vold)
 			this%fs%W=0.5_WP*(this%fs%W+this%fs%Wold)
 			
+         ! Preliminary mass and momentum transport step at the interface
+         call this%fs%prepare_advection_upwind(dt=this%time%dt)
+         
 			! Explicit calculation of drho*u/dt from NS
 			call this%fs%get_dmomdt(this%resU,this%resV,this%resW)
 			
 			! Assemble explicit residual
-			this%resU=-2.0_WP*(this%fs%rho*this%fs%U-this%fs%rho*this%fs%Uold)+this%time%dt*this%resU
-			this%resV=-2.0_WP*(this%fs%rho*this%fs%V-this%fs%rho*this%fs%Vold)+this%time%dt*this%resV
-			this%resW=-2.0_WP*(this%fs%rho*this%fs%W-this%fs%rho*this%fs%Wold)+this%time%dt*this%resW
-			
+			this%resU=-2.0_WP*this%fs%rho_U*this%fs%U+(this%fs%rho_Uold+this%fs%rho_U)*this%fs%Uold+this%time%dt*this%resU
+         this%resV=-2.0_WP*this%fs%rho_V*this%fs%V+(this%fs%rho_Vold+this%fs%rho_V)*this%fs%Vold+this%time%dt*this%resV
+         this%resW=-2.0_WP*this%fs%rho_W*this%fs%W+(this%fs%rho_Wold+this%fs%rho_W)*this%fs%Wold+this%time%dt*this%resW   
+         
 			! Form implicit residuals
-			!call this%fs%solve_implicit(this%time%dt,this%resU,this%resV,this%resW)
+			call this%fs%solve_implicit(this%time%dt,this%resU,this%resV,this%resW)
 			
 			! Apply these residuals
-			this%fs%U=2.0_WP*this%fs%U-this%fs%Uold+this%resU/this%fs%rho
-			this%fs%V=2.0_WP*this%fs%V-this%fs%Vold+this%resV/this%fs%rho
-			this%fs%W=2.0_WP*this%fs%W-this%fs%Wold+this%resW/this%fs%rho
+			this%fs%U=2.0_WP*this%fs%U-this%fs%Uold+this%resU
+			this%fs%V=2.0_WP*this%fs%V-this%fs%Vold+this%resV
+			this%fs%W=2.0_WP*this%fs%W-this%fs%Wold+this%resW
 			
 			! Apply IB forcing to enforce BC at the pipe walls
 			ibforcing: block
@@ -550,9 +580,11 @@ contains
 			call this%fs%apply_bcond(this%time%t,this%time%dt)
 			
 			! Solve Poisson equation
+         call this%fs%update_laplacian()
 			call this%fs%correct_mfr()
 			call this%fs%get_div()
-			this%fs%psolv%rhs=-this%fs%cfg%vol*this%fs%div*this%fs%rho/this%time%dt
+         call this%fs%add_surface_tension_jump(dt=this%time%dt,div=this%fs%div,vf=this%vf)
+			this%fs%psolv%rhs=-this%fs%cfg%vol*this%fs%div/this%time%dt
 			this%fs%psolv%sol=0.0_WP
 			call this%fs%psolv%solve()
 			call this%fs%shift_p(this%fs%psolv%sol)
@@ -560,9 +592,9 @@ contains
 			! Correct velocity
 			call this%fs%get_pgrad(this%fs%psolv%sol,this%resU,this%resV,this%resW)
 			this%fs%P=this%fs%P+this%fs%psolv%sol
-			this%fs%U=this%fs%U-this%time%dt*this%resU/this%fs%rho
-			this%fs%V=this%fs%V-this%time%dt*this%resV/this%fs%rho
-			this%fs%W=this%fs%W-this%time%dt*this%resW/this%fs%rho
+			this%fs%U=this%fs%U-this%time%dt*this%resU/this%fs%rho_U
+			this%fs%V=this%fs%V-this%time%dt*this%resV/this%fs%rho_V
+			this%fs%W=this%fs%W-this%time%dt*this%resW/this%fs%rho_W
 			
 			! Increment sub-iteration counter
 			this%time%it=this%time%it+1
@@ -574,10 +606,14 @@ contains
 		call this%fs%get_div()
 		
 		! Output to ensight
-		if (this%ens_evt%occurs()) call this%ens_out%write_data(this%time%t)
+		if (this%ens_evt%occurs()) then
+         call this%vf%update_surfmesh(this%smesh)
+         call this%ens_out%write_data(this%time%t)
+      end if
 		
 		! Perform and output monitoring
 		call this%fs%get_max()
+      call this%vf%get_max()
 		call this%mfile%write()
 		call this%cflfile%write()
 		
@@ -588,7 +624,7 @@ contains
    !> Finalize nozzle simulation
    subroutine final(this)
 		implicit none
-		class(nozzle), intent(inout) :: this
+		class(atom), intent(inout) :: this
 		
 		! Deallocate work arrays
 		deallocate(this%resU,this%resV,this%resW,this%Ui,this%Vi,this%Wi,this%gradU)
@@ -607,132 +643,30 @@ contains
    end function right_boundary
    
 
-   !> Function that localizes axial injector at -y
-   function axial_ym(pg,i,j,k) result(isIn)
+   !> Function that localizes liquid stream at -x
+   function liq_inlet(pg,i,j,k) result(isIn)
       use pgrid_class, only: pgrid
       class(pgrid), intent(in) :: pg
       integer, intent(in) :: i,j,k
-      real(WP) :: hyp,rise,run
       logical :: isIn
+      real(WP) :: rad
       isIn=.false.
-      ! Check injector x-z plane
-      hyp =norm2([pg%xm(i),pg%ym(j),pg%zm(k)]-[axial_xdist,0.0_WP,0.0_WP])
-      rise=abs(pg%ym(j))
-      run =sqrt(hyp**2-rise**2)
-      if (run.le.axial_diam/2.0_WP.and.j.eq.pg%jmin) isIn=.true.
-   end function axial_ym
+      rad=sqrt(pg%ym(j)**2+pg%zm(k)**2)
+      if (rad.lt.0.5_WP*dl.and.i.eq.pg%imin) isIn=.true.
+   end function liq_inlet
    
    
-   !> Function that localizes axial injector at +y
-   function axial_yp(pg,i,j,k) result(isIn)
+   !> Function that localizes gas stream at -x
+   function gas_inlet(pg,i,j,k) result(isIn)
       use pgrid_class, only: pgrid
       class(pgrid), intent(in) :: pg
       integer, intent(in) :: i,j,k
-      real(WP) :: hyp,rise,run
       logical :: isIn
+      real(WP) :: rad
       isIn=.false.
-      ! Check injector x-z plane
-      hyp =norm2([pg%xm(i),pg%ym(j),pg%zm(k)]-[axial_xdist,0.0_WP,0.0_WP])
-      rise=abs(pg%ym(j))
-      run =sqrt(hyp**2-rise**2)
-      if (run.le.axial_diam/2.0_WP.and.j.eq.pg%jmax+1) isIn=.true.
-   end function axial_yp
-   
-
-   !> Function that localizes axial injector at -z
-   function axial_zm(pg,i,j,k) result(isIn)
-      use pgrid_class, only: pgrid
-      class(pgrid), intent(in) :: pg
-      integer, intent(in) :: i,j,k
-      real(WP) :: hyp,rise,run
-      logical :: isIn
-      isIn=.false.
-      ! Check injector x-y plane
-      hyp =norm2([pg%xm(i),pg%ym(j),pg%zm(k)]-[axial_xdist,0.0_WP,0.0_WP])
-      rise=abs(pg%zm(k))
-      run =sqrt(hyp**2-rise**2)
-      if (run.le.axial_diam/2.0_WP.and.k.eq.pg%kmin) isIn=.true.
-   end function axial_zm
-   
-
-   !> Function that localizes axial injector at +z
-   function axial_zp(pg,i,j,k) result(isIn)
-      use pgrid_class, only: pgrid
-      class(pgrid), intent(in) :: pg
-      integer, intent(in) :: i,j,k
-      real(WP) :: hyp,rise,run
-      logical :: isIn
-      isIn=.false.
-      ! Check injector x-y plane
-      hyp =norm2([pg%xm(i),pg%ym(j),pg%zm(k)]-[axial_xdist,0.0_WP,0.0_WP])
-      rise=abs(pg%zm(k))
-      run =sqrt(hyp**2-rise**2)
-      if (run.le.axial_diam/2.0_WP.and.k.eq.pg%kmax+1) isIn=.true.
-   end function axial_zp
-
-
-   !> Function that localizes swirl injector at -y
-   function swirl_ym(pg,i,j,k) result(isIn)
-      use pgrid_class, only: pgrid
-      class(pgrid), intent(in) :: pg
-      integer, intent(in) :: i,j,k
-      real(WP) :: hyp,rise,run
-      logical :: isIn
-      isIn=.false.
-      ! Check injector x-z plane
-      hyp =norm2([pg%xm(i),pg%ym(j),pg%zm(k)]-[swirl_xdist,0.0_WP,+swirl_offset])
-      rise=abs(pg%ym(j))
-      run =sqrt(hyp**2-rise**2)
-      if (run.le.swirl_diam/2.0_WP.and.j.eq.pg%jmin) isIn=.true.
-   end function swirl_ym
-   
-   
-   !> Function that localizes swirl injector at +y
-   function swirl_yp(pg,i,j,k) result(isIn)
-      use pgrid_class, only: pgrid
-      class(pgrid), intent(in) :: pg
-      integer, intent(in) :: i,j,k
-      real(WP) :: hyp,rise,run
-      logical :: isIn
-      isIn=.false.
-      ! Check injector x-z plane
-      hyp =norm2([pg%xm(i),pg%ym(j),pg%zm(k)]-[swirl_xdist,0.0_WP,-swirl_offset])
-      rise=abs(pg%ym(j))
-      run =sqrt(hyp**2-rise**2)
-      if (run.le.swirl_diam/2.0_WP.and.j.eq.pg%jmax+1) isIn=.true.
-   end function swirl_yp
-   
-
-   !> Function that localizes swirl injector at -z
-   function swirl_zm(pg,i,j,k) result(isIn)
-      use pgrid_class, only: pgrid
-      class(pgrid), intent(in) :: pg
-      integer, intent(in) :: i,j,k
-      real(WP) :: hyp,rise,run
-      logical :: isIn
-      isIn=.false.
-      ! Check injector x-y plane
-      hyp =norm2([pg%xm(i),pg%ym(j),pg%zm(k)]-[swirl_xdist,-swirl_offset,0.0_WP])
-      rise=abs(pg%zm(k))
-      run =sqrt(hyp**2-rise**2)
-      if (run.le.swirl_diam/2.0_WP.and.k.eq.pg%kmin) isIn=.true.
-   end function swirl_zm
-   
-
-   !> Function that localizes swirl injector at +z
-   function swirl_zp(pg,i,j,k) result(isIn)
-      use pgrid_class, only: pgrid
-      class(pgrid), intent(in) :: pg
-      integer, intent(in) :: i,j,k
-      real(WP) :: hyp,rise,run
-      logical :: isIn
-      isIn=.false.
-      ! Check injector x-y plane
-      hyp =norm2([pg%xm(i),pg%ym(j),pg%zm(k)]-[swirl_xdist,+swirl_offset,0.0_WP])
-      rise=abs(pg%zm(k))
-      run =sqrt(hyp**2-rise**2)
-      if (run.le.swirl_diam/2.0_WP.and.k.eq.pg%kmax+1) isIn=.true.
-   end function swirl_zp
+      rad=sqrt(pg%ym(j)**2+pg%zm(k)**2)
+      if (rad.ge.0.5_WP*dl.and.rad.lt.0.5_WP*dg.and.i.eq.pg%imin) isIn=.true.
+   end function gas_inlet
 	
 
-end module nozzle_class
+end module atom_class
