@@ -50,4 +50,4 @@ examples/*/input*~
 !examples/nozzle_internal/cad
 !examples/nozzle_2phase/cad
 !examples/nozzle_2grids/cad
-!examples/nozzle_ib/atomizer.ply
+!examples/airblast/atomizer.ply
