@@ -346,7 +346,7 @@ contains
       
       ! Create an incompressible flow solver with bconds
       create_flow_solver: block
-         use hypre_str_class, only: pcg_pfmg,pcg_smg
+         use hypre_str_class, only: pcg_pfmg
          use tpns_class,      only: dirichlet,clipped_neumann,slip
          ! Create flow solver
          this%fs=tpns(cfg=this%cfg,name='Two-phase NS')
