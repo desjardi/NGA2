@@ -250,8 +250,6 @@ contains
          
          ! Create PFMG solver
          call HYPRE_StructPFMGCreate       (this%cfg%comm,this%hypre_solver,ierr)
-         call HYPRE_StructPFMGSetRelaxType (this%hypre_solver,2,ierr)
-         call HYPRE_StructPFMGSetRAPType   (this%hypre_solver,1,ierr)
          if (this%maxlevel.gt.0) call HYPRE_StructPFMGSetMaxLevels(this%hypre_solver,this%maxlevel,ierr)
          call HYPRE_StructPFMGSetMaxIter   (this%hypre_solver,this%maxit,ierr)
          call HYPRE_StructPFMGSetTol       (this%hypre_solver,this%rcvg ,ierr)
@@ -267,8 +265,6 @@ contains
          call HYPRE_StructPFMGCreate      (this%cfg%comm,this%hypre_precond,ierr)
          call HYPRE_StructPFMGSetMaxIter  (this%hypre_precond,1,ierr)
          call HYPRE_StructPFMGSetTol      (this%hypre_precond,0.0_WP,ierr)
-         call HYPRE_StructPFMGSetRelaxType(this%hypre_precond,2,ierr)
-         call HYPRE_StructPFMGSetRAPType  (this%hypre_precond,1,ierr)
          if (this%maxlevel.gt.0) call HYPRE_StructPFMGSetMaxLevels(this%hypre_precond,this%maxlevel,ierr)
          
          ! Create PCG solver
@@ -289,8 +285,6 @@ contains
          call HYPRE_StructPFMGCreate      (this%cfg%comm,this%hypre_precond,ierr)
          call HYPRE_StructPFMGSetMaxIter  (this%hypre_precond,1,ierr)
          call HYPRE_StructPFMGSetTol      (this%hypre_precond,0.0_WP,ierr)
-         call HYPRE_StructPFMGSetRelaxType(this%hypre_precond,2,ierr)
-         call HYPRE_StructPFMGSetRAPType  (this%hypre_precond,1,ierr)
          if (this%maxlevel.gt.0) call HYPRE_StructPFMGSetMaxLevels(this%hypre_precond,this%maxlevel,ierr)
          
          ! Create GMRES solver
