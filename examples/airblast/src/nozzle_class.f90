@@ -35,7 +35,6 @@ module nozzle_class
 		type(timetracker) :: time  !< Time info
 		
 		!> Ensight postprocessing
-      type(ensight) :: ply_out  !< Ensight output for the IB surface
 		type(ensight) :: ens_out  !< Ensight output for flow variables
 		type(event)   :: ens_evt  !< Event trigger for Ensight output
 		
@@ -425,11 +424,6 @@ contains
 
       ! Add Ensight output
       create_ensight: block
-         ! Output ply mesh
-         this%ply_out=ensight(cfg=this%cfg,name='plygeom')
-         call this%ply_out%add_surface('ply',this%plymesh)
-         call this%ply_out%add_scalar('levelset',this%cfg%Gib)
-         call this%ply_out%write_data(this%time%t)
          ! Create Ensight output from cfg
          this%ens_out=ensight(cfg=this%cfg,name='nozzle')
          ! Create event for Ensight output
@@ -437,8 +431,6 @@ contains
          call this%input%read('Ensight output period',this%ens_evt%tper)
          ! Add variables to output
          call this%ens_out%add_vector('velocity',this%Ui,this%Vi,this%Wi)
-         call this%ens_out%add_scalar('pressure',this%fs%P)
-         call this%ens_out%add_scalar('visc_sgs',this%sgs%visc)
          ! Output to ensight
          if (this%ens_evt%occurs()) call this%ens_out%write_data(this%time%t)
       end block create_ensight

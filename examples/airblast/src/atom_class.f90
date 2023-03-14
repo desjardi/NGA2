@@ -39,8 +39,7 @@ module atom_class
 		
 		!> Ensight postprocessing
       type(surfmesh) :: smesh    !< Surface mesh for interface
-      type(ensight)  :: ply_out  !< Ensight output for the IB surface
-		type(ensight)  :: ens_out  !< Ensight output for flow variables
+      type(ensight)  :: ens_out  !< Ensight output for flow variables
 		type(event)    :: ens_evt  !< Event trigger for Ensight output
 		
 		!> Simulation monitor file
@@ -68,11 +67,6 @@ module atom_class
 	real(WP), parameter, public :: dl=0.0025_WP   ! Liquid pipe diameter ~(inner+outer)/2
    real(WP), parameter, public :: dg=0.0206_WP   ! Gas pipe diameter ~(inner+outer)/2
    
-   
-   !> Hardcode inlet positions used in locator functions at x=0.0
-	!real(WP), parameter, public :: dl=0.0025_WP   ! Liquid pipe diameter ~(inner+outer)/2
-   !real(WP), parameter, public :: dg=0.0120_WP   ! Gas pipe diameter ~(inner+outer)/2
-	
    
 contains
    
@@ -421,11 +415,6 @@ contains
 
       ! Add Ensight output
       create_ensight: block
-         ! Output ply mesh
-         this%ply_out=ensight(cfg=this%cfg,name='tip_geom')
-         call this%ply_out%add_surface('ply',this%plymesh)
-         call this%ply_out%add_scalar('levelset',this%cfg%Gib)
-         call this%ply_out%write_data(this%time%t)
          ! Create Ensight output from cfg
          this%ens_out=ensight(cfg=this%cfg,name='atom')
          ! Create event for Ensight output
@@ -435,8 +424,6 @@ contains
          call this%ens_out%add_vector('velocity',this%Ui,this%Vi,this%Wi)
          call this%ens_out%add_scalar('pressure',this%fs%P)
          call this%ens_out%add_scalar('VOF',this%vf%VF)
-         call this%ens_out%add_scalar('curvature',this%vf%curv)
-         call this%ens_out%add_scalar('visc_sgs',this%sgs%visc)
          call this%ens_out%add_surface('plic',this%smesh)
          ! Output to ensight
          if (this%ens_evt%occurs()) call this%ens_out%write_data(this%time%t)
