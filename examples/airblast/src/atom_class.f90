@@ -3,6 +3,7 @@ module atom_class
    use precision,         only: WP
    use inputfile_class,   only: inputfile
    use ibconfig_class,    only: ibconfig
+   use iterator_class,    only: iterator
    use surfmesh_class,    only: surfmesh
    use ensight_class,     only: ensight
    use hypre_str_class,   only: hypre_str
@@ -51,9 +52,11 @@ module atom_class
 		real(WP), dimension(:,:,:), allocatable :: resU,resV,resW      !< Residuals
 		real(WP), dimension(:,:,:), allocatable :: Ui,Vi,Wi            !< Cell-centered velocities
 		
-		!> Fluid definition
-      real(WP) :: visc
-		
+      !> Iterator for VOF removal
+      type(iterator) :: vof_removal_layer  !< Edge of domain where we actively remove VOF
+      real(WP) :: vof_removed              !< Integral of VOF removed
+
+
    contains
 	   procedure, private :: geometry_init          !< Initialize geometry for nozzle
 		procedure, private :: simulation_init        !< Initialize simulation for nozzle
@@ -67,6 +70,9 @@ module atom_class
 	real(WP), parameter, public :: dl=0.0025_WP   ! Liquid pipe diameter ~(inner+outer)/2
    real(WP), parameter, public :: dg=0.0206_WP   ! Gas pipe diameter ~(inner+outer)/2
    
+
+   !> Hardcode size of buffer layer for VOF removal
+   integer, parameter :: nlayer=4
    
 contains
    
@@ -99,24 +105,49 @@ contains
 		! Create a grid from input params
       create_grid: block
          use sgrid_class, only: cartesian
-         integer :: i,j,k,nx,ny,nz
-         real(WP) :: Lx,Ly,Lz,xshift
+         integer :: i,j,k,nx,ny,nz,ns_yz,ns_x
+         real(WP) :: Lx,Ly,Lz,xshift,sratio_yz,sratio_x
+         real(WP), dimension(:), allocatable :: x_uni,y_uni,z_uni
          real(WP), dimension(:), allocatable :: x,y,z
          
          ! Read in grid definition
-         call this%input%read('Lx',Lx); call this%input%read('nx',nx); allocate(x(nx+1)); call this%input%read('X shift',xshift)
-         call this%input%read('Ly',Ly); call this%input%read('ny',ny); allocate(y(ny+1))
-         call this%input%read('Lz',Lz); call this%input%read('nz',nz); allocate(z(nz+1))
+         call this%input%read('Lx',Lx); call this%input%read('nx',nx); allocate(x_uni(nx+1)); call this%input%read('X shift',xshift)
+         call this%input%read('Ly',Ly); call this%input%read('ny',ny); allocate(y_uni(ny+1))
+         call this%input%read('Lz',Lz); call this%input%read('nz',nz); allocate(z_uni(nz+1))
          
          ! Create simple rectilinear grid
          do i=1,nx+1
-            x(i)=real(i-1,WP)/real(nx,WP)*Lx-xshift
+            x_uni(i)=real(i-1,WP)/real(nx,WP)*Lx-xshift
          end do
          do j=1,ny+1
-            y(j)=real(j-1,WP)/real(ny,WP)*Ly-0.5_WP*Ly
+            y_uni(j)=real(j-1,WP)/real(ny,WP)*Ly-0.5_WP*Ly
          end do
          do k=1,nz+1
-            z(k)=real(k-1,WP)/real(nz,WP)*Lz-0.5_WP*Lz
+            z_uni(k)=real(k-1,WP)/real(nz,WP)*Lz-0.5_WP*Lz
+         end do
+         
+         ! Add stretching
+         call this%input%read('Stretched cells in yz',ns_yz,default=0)
+         if (ns_yz.gt.0) call this%input%read('Stretch ratio in yz',sratio_yz)
+         call this%input%read('Stretched cells in x' ,ns_x ,default=0)
+         if (ns_x .gt.0) call this%input%read('Stretch ratio in x' ,sratio_x )
+         allocate(x(nx+1+1*ns_x )); x(      1:      1+nx)=x_uni
+         allocate(y(ny+1+2*ns_yz)); y(ns_yz+1:ns_yz+1+ny)=y_uni
+         allocate(z(nz+1+2*ns_yz)); z(ns_yz+1:ns_yz+1+nz)=z_uni
+         do i=nx+2,nx+1+ns_x
+            x(i)=x(i-1)+sratio_x*(x(i-1)-x(i-2))
+         end do
+         do j=ns_yz,1,-1
+            y(j)=y(j+1)+sratio_yz*(y(j+1)-y(j+2))
+         end do
+         do j=ns_yz+2+ny,ny+1+2*ns_yz
+            y(j)=y(j-1)+sratio_yz*(y(j-1)-y(j-2))
+         end do
+         do k=ns_yz,1,-1
+            z(k)=z(k+1)+sratio_yz*(z(k+1)-z(k+2))
+         end do
+         do k=ns_yz+2+nz,nz+1+2*ns_yz
+            z(k)=z(k-1)+sratio_yz*(z(k-1)-z(k-2))
          end do
          
          ! General serial grid object
@@ -304,6 +335,13 @@ contains
          ! Reset moments to guarantee compatibility with interface reconstruction
          call this%vf%reset_volume_moments()
       end block create_and_initialize_vof
+      
+      
+      ! Create an iterator for removing VOF at edges
+      create_iterator: block
+         this%vof_removal_layer=iterator(this%cfg,'VOF removal',vof_removal_layer_locator)
+         this%vof_removed=0.0_WP
+      end block create_iterator
 
       
       ! Create an incompressible flow solver with bconds
@@ -325,7 +363,7 @@ contains
          call this%fs%add_bcond(name='outflow',type=clipped_neumann,face='x',dir=+1,canCorrect=.true.,locator=right_boundary)
          ! Configure pressure solver
          this%ps=hypre_str(cfg=this%cfg,name='Pressure',method=pcg_pfmg,nst=7)
-         this%ps%maxlevel=20
+         this%ps%maxlevel=16
          call this%input%read('Pressure iteration',this%ps%maxit)
          call this%input%read('Pressure tolerance',this%ps%rcvg)
          ! Configure implicit velocity solver
@@ -449,6 +487,7 @@ contains
          call this%mfile%add_column(this%vf%VFmax,'VOF maximum')
          call this%mfile%add_column(this%vf%VFmin,'VOF minimum')
          call this%mfile%add_column(this%vf%VFint,'VOF integral')
+         call this%mfile%add_column(this%vof_removed,'VOF removed')
          call this%mfile%add_column(this%vf%SDint,'SD integral')
          call this%mfile%add_column(this%fs%divmax,'Maximum divergence')
          call this%mfile%add_column(this%fs%psolv%it,'Pressure iteration')
@@ -592,6 +631,23 @@ contains
 		call this%fs%interp_vel(this%Ui,this%Vi,this%Wi)
 		call this%fs%get_div()
 		
+      ! Remove VOF at edge of domain
+      remove_vof: block
+         use mpi_f08,  only: MPI_ALLREDUCE,MPI_SUM
+         use parallel, only: MPI_REAL_WP
+         integer :: n,i,j,k,ierr
+         real(WP) :: my_vof_removed
+         my_vof_removed=0.0_WP
+         do n=1,this%vof_removal_layer%no_
+            i=this%vof_removal_layer%map(1,n)
+            j=this%vof_removal_layer%map(2,n)
+            k=this%vof_removal_layer%map(3,n)
+            my_vof_removed=my_vof_removed+this%cfg%vol(i,j,k)*this%vf%VF(i,j,k)
+            this%vf%VF(i,j,k)=0.0_WP
+         end do
+         call MPI_ALLREDUCE(my_vof_removed,this%vof_removed,1,MPI_REAL_WP,MPI_SUM,this%cfg%comm,ierr)
+      end block remove_vof
+      
 		! Output to ensight
 		if (this%ens_evt%occurs()) then
          call this%vf%update_surfmesh(this%smesh)
@@ -654,6 +710,21 @@ contains
       rad=sqrt(pg%ym(j)**2+pg%zm(k)**2)
       if (rad.ge.0.5_WP*dl.and.rad.lt.0.5_WP*dg.and.i.eq.pg%imin) isIn=.true.
    end function gas_inlet
+
+
+   !> Function that localizes region of VOF removal
+   function vof_removal_layer_locator(pg,i,j,k) result(isIn)
+      use pgrid_class, only: pgrid
+      class(pgrid), intent(in) :: pg
+      integer, intent(in) :: i,j,k
+      logical :: isIn
+      isIn=.false.
+      if (i.ge.pg%imax-nlayer.or.&
+      &   j.le.pg%jmin+nlayer.or.&
+      &   j.ge.pg%jmax-nlayer.or.&
+      &   k.le.pg%kmin+nlayer.or.&
+      &   k.ge.pg%kmax-nlayer) isIn=.true.
+   end function vof_removal_layer_locator
 	
 
 end module atom_class
