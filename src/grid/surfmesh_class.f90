@@ -61,14 +61,15 @@ contains
       ! Open the ply file
       open(newunit=iunit,file=trim(adjustl(plyfile)),form='unformatted',status='old',access='stream',iostat=ierr)
       if (ierr.ne.0) call die('[surfmesh constructor from file] Could not open file: '//trim(plyfile))
-
+      
       ! Read the ply header
       read_header: block
          use string, only: str_medium
-         character(len=str_medium) :: line=''
+         character(len=str_medium) :: line
          character :: cbuf
          integer :: i,sp1,sp2
          ! Read one line at a time
+         line=''
          do while (trim(line).ne.'end_header')
             ! Prepare to read a new line
             i=0; line=''
@@ -92,7 +93,7 @@ contains
             end if
          end do
       end block read_header
-
+      
       ! Resize my surfmesh
       call self%set_size(nvert=self%nVert,npoly=self%nPoly)
       
@@ -112,24 +113,24 @@ contains
       
       ! Read the ply faces
       read_faces: block
-         use precision, only: SP
+         !use precision, only: SP
+         !real(SP) :: buffer
          character(1) :: ibuf
-         real(SP) :: buffer
-         integer, dimension(:), allocatable :: temp
-         integer :: nf,nv
-         do nf=1,self%nPoly
+         integer :: np,current_size
+         do np=1,self%nPoly
             ! Read polygon size
             read(iunit) ibuf
-            self%polySize(nf)=ichar(ibuf)
+            self%polySize(np)=ichar(ibuf)
             ! Extend allocation of connectivity
-            call resize_polyConn(sum(self%polySize(1:nf)))
+            current_size=sum(self%polySize(1:np))
+            call resize_polyConn(current_size)
             ! Read connectivity
-            read(iunit) self%polyConn(sum(self%polySize(1:nf-1))+1:sum(self%polySize(1:nf-1))+self%polySize(nf))!,buffer
+            read(iunit) self%polyConn(current_size-self%polySize(np)+1:current_size)!,buffer
          end do
          ! First vertex is number 1, not 0
          self%polyConn=self%polyConn+1
       end block read_faces
-
+      
       ! Close the plyfile
       close(iunit)
       

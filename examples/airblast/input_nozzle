@@ -6,9 +6,9 @@ X shift : 0.085
 Lx :	0.1
 Ly :	0.08
 Lz :	0.08
-nx :	200
-ny :  160
-nz :	160
+nx :	100  !200
+ny :  80   !160
+nz :	80   !160
 
 # PLY file
 PLY filename : atomizer.ply

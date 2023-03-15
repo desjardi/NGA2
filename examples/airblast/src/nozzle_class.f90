@@ -81,7 +81,7 @@ contains
       
 		! Initialize the geometry
 		call this%geometry_init()
-
+      
 		! Initialize the simulation
 		call this%simulation_init()
 		

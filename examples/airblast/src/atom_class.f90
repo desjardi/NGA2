@@ -499,7 +499,7 @@ contains
          call this%mfile%add_column(this%fs%psolv%rerr,'Pressure error')
          call this%mfile%write()
          ! Create CFL monitor
-         this%cflfile=monitor(this%fs%cfg%amRoot,'cfl_nozzle')
+         this%cflfile=monitor(this%fs%cfg%amRoot,'cfl_atom')
          call this%cflfile%add_column(this%time%n,'Timestep number')
          call this%cflfile%add_column(this%time%t,'Time')
          call this%cflfile%add_column(this%fs%CFLst,'STension CFL')
