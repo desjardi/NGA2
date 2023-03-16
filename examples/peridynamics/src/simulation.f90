@@ -174,11 +174,16 @@ contains
                df%p(i)%dV=0.25_WP*Pi*df%cfg%zL/real(np,WP)
                ! Locate the particle on the mesh
                df%p(i)%ind=df%cfg%get_ijk_global(df%p(i)%pos,[df%cfg%imin,df%cfg%jmin,df%cfg%kmin])
+               ! Assign a unique integer to particle
+               df%p(i)%i=i
                ! Activate the particle
                df%p(i)%flag=0
             end do
          end if
          call df%sync()
+         
+         ! Initalize bonds
+         call df%bond_init(delta=2.0_WP*df%cfg%min_meshsize)
          
          ! Get initial volume fraction
          call df%update_VF()

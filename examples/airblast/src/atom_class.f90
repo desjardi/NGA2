@@ -69,7 +69,7 @@ module atom_class
 	!> Hardcode inlet positions used in locator functions at x=-0.01
 	real(WP), parameter, public :: dl=0.0025_WP   ! Liquid pipe diameter ~(inner+outer)/2
    real(WP), parameter, public :: dg=0.0206_WP   ! Gas pipe diameter ~(inner+outer)/2
-   
+   real(WP), parameter, public :: rl=0.0010_WP   ! Liquid pipe inner radius
 
    !> Hardcode size of buffer layer for VOF removal
    integer, parameter :: nlayer=4
@@ -297,11 +297,11 @@ contains
       
       ! Initialize our VOF solver and field
       create_and_initialize_vof: block
-         use vfs_class, only: lvira,r2p
+         use vfs_class, only: elvira,r2p
          integer :: i,j,k
          real(WP) :: xloc,rad
          ! Create a VOF solver with LVIRA
-         this%vf=vfs(cfg=this%cfg,reconstruction_method=lvira,name='VOF')
+         this%vf=vfs(cfg=this%cfg,reconstruction_method=elvira,name='VOF')
          ! Initialize to flat interface in liquid needle
          xloc=0.0_WP !< Interface initially at x=0
          do k=this%vf%cfg%kmino_,this%vf%cfg%kmaxo_
@@ -388,7 +388,7 @@ contains
          type(bcond), pointer :: mybc
          integer  :: n,i,j,k,ierr
          real(WP) :: Ugas,myAgas,Agas,Uliq,myAliq,Aliq
-         real(WP) :: Qgas,Qliq
+         real(WP) :: Qgas,Qliq,myU
          real(WP), parameter :: SLPM2SI=1.66667E-5_WP
          ! Zero initial field
          this%fs%U=0.0_WP; this%fs%V=0.0_WP; this%fs%W=0.0_WP
@@ -428,7 +428,8 @@ contains
          call this%fs%get_bcond('liq_inlet',mybc)
          do n=1,mybc%itr%no_
             i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
-            this%fs%U(i,j,k)=+sum(this%fs%itpr_x(:,i,j,k)*this%cfg%VF(i-1:i,j,k))*Uliq
+            myU=2.0_WP*Uliq*(1.0_WP-min((this%fs%cfg%ym(j)**2+this%fs%cfg%zm(k)**2)/rl**2,1.0_WP))
+            this%fs%U(i,j,k)=+sum(this%fs%itpr_x(:,i,j,k)*this%cfg%VF(i-1:i,j,k))*myU
          end do
          ! Apply all other boundary conditions
          call this%fs%apply_bcond(this%time%t,this%time%dt)

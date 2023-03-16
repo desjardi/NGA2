@@ -20,22 +20,31 @@ module df_class
    !> I/O chunk size to read at a time
    integer, parameter :: part_chunk_size=1000  !< Read 1000 particles at a time before redistributing
    
+   !> Maximum number of bonds per particle
+   integer, parameter :: max_bond=25           !< Assumes a 5x5 stencil in 2D
+   !integer, parameter :: max_bond=125          !< Assumes a 5x5x5 stencil in 3D
+
    !> Basic marker particle definition
    type :: part
       !> MPI_DOUBLE_PRECISION data
-      real(WP) :: dV                       !< Element volume
-      real(WP), dimension(3) :: pos        !< Particle center coordinates
-      real(WP), dimension(3) :: vel        !< Velocity of particle
-      real(WP), dimension(3) :: Fbond      !< Bound force for particle
-      real(WP) :: dt                       !< Time step size for the particle
+      real(WP) :: dV                         !< Element volume
+      real(WP) :: mw                         !< Weighted volume
+      real(WP) :: dil                        !< Element dilatation
+      real(WP), dimension(max_bond) :: dbond !< Length of initial bonds
+      real(WP), dimension(3) :: pos          !< Particle center coordinates
+      real(WP), dimension(3) :: vel          !< Velocity of particle
+      real(WP), dimension(3) :: Fbond        !< Bound force for particle
+      real(WP) :: dt                         !< Time step size for the particle
       !> MPI_INTEGER data
-      integer :: id                        !< ID the object is associated with
-      integer , dimension(3) :: ind        !< Index of cell containing particle center
-      integer :: flag                      !< Control parameter (0=normal, 1=done->will be removed)
+      integer :: id                          !< ID the object is associated with
+      integer :: i                           !< Unique index of particle (assumed >0)
+      integer, dimension(max_bond) :: ibond  !< Indices of initially bonded particles (0 values ignored)
+      integer , dimension(3) :: ind          !< Index of cell containing particle center
+      integer :: flag                        !< Control parameter (0=normal, 1=done->will be removed)
    end type part
    !> Number of blocks, block length, and block types in a particle
    integer, parameter                         :: part_nblock=2
-   integer           , dimension(part_nblock) :: part_lblock=[11,5]
+   integer           , dimension(part_nblock) :: part_lblock=[12+max_bond,6+max_bond]
    type(MPI_Datatype), dimension(part_nblock) :: part_tblock=[MPI_DOUBLE_PRECISION,MPI_INTEGER]
    !> MPI_PART derived datatype and size
    type(MPI_Datatype) :: MPI_PART
@@ -101,6 +110,7 @@ module df_class
       procedure :: update_partmesh                        !< Update a partmesh object using current particles
       procedure :: setup_obj                              !< Setup IBM object
       procedure :: get_source                             !< Compute direct forcing source
+      procedure :: bond_init                              !< Setup initial interparticle bonds
       procedure :: bond_force                             !< Evaluate interparticle bond force
       procedure :: advance                                !< Step forward the particle ODEs
       procedure :: resize                                 !< Resize particle array to given size
@@ -215,6 +225,88 @@ contains
    end subroutine setup_obj
    
    
+   !> Resolve bond force between particles
+   subroutine bond_init(this,delta)
+      implicit none
+      class(dfibm), intent(inout) :: this
+      real(WP), intent(in) :: delta        !< Neighborhood horizon
+      integer :: i,j,k,ii,jj,kk
+      integer :: i1,i2,n,nn,in
+      integer, dimension(:,:,:),   allocatable :: npic    !< Number of particle in cell
+      integer, dimension(:,:,:,:), allocatable :: ipic    !< Index of particle in cell
+      
+      ! Communicate particles in ghost cells
+      call this%share()
+      
+      ! We can now assemble particle-in-cell information
+      pic_prep: block
+         use mpi_f08
+         integer :: i,ip,jp,kp,ierr
+         integer :: mymax_npic,max_npic
+         
+         ! Allocate number of particle in cell
+         allocate(npic(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_)); npic=0
+         
+         ! Count particles and ghosts per cell
+         do i=1,this%np_
+            ip=this%p(i)%ind(1); jp=this%p(i)%ind(2); kp=this%p(i)%ind(3)
+            npic(ip,jp,kp)=npic(ip,jp,kp)+1
+         end do
+         do i=1,this%ng_
+            ip=this%g(i)%ind(1); jp=this%g(i)%ind(2); kp=this%g(i)%ind(3)
+            npic(ip,jp,kp)=npic(ip,jp,kp)+1
+         end do
+         
+         ! Get maximum number of particle in cell
+         mymax_npic=maxval(npic); call MPI_ALLREDUCE(mymax_npic,max_npic,1,MPI_INTEGER,MPI_MAX,this%cfg%comm,ierr)
+         
+         ! Allocate pic map
+         allocate(ipic(1:max_npic,this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_)); ipic=0
+         
+         ! Assemble pic map
+         npic=0
+         do i=1,this%np_
+            ip=this%p(i)%ind(1); jp=this%p(i)%ind(2); kp=this%p(i)%ind(3)
+            npic(ip,jp,kp)=npic(ip,jp,kp)+1
+            ipic(npic(ip,jp,kp),ip,jp,kp)=i
+         end do
+         do i=1,this%ng_
+            ip=this%g(i)%ind(1); jp=this%g(i)%ind(2); kp=this%g(i)%ind(3)
+            npic(ip,jp,kp)=npic(ip,jp,kp)+1
+            ipic(npic(ip,jp,kp),ip,jp,kp)=-i
+         end do
+         
+      end block pic_prep
+
+      ! Loop over particles
+      do n=1,this%np_
+         ! Store particle info
+         i=this%p(n)%ind(1); j=this%p(n)%ind(2); k=this%p(n)%ind(3)
+         i1=this%p(n)%i
+         ! Loop over neighbor cells
+         do kk=k-2,k+2
+            do jj=j-2,j+2
+               do ii=i-2,i+2
+                  ! Loop over particles in that cell
+                  do nn=1,npic(ii,jj,kk)
+                     ! Get index of neighbor particle
+                     in=ipic(nn,ii,jj,kk)
+                     ! Get relevant data from correct storage
+                     if (in.gt.0) then
+                        i2=this%p(in)%i
+                     else if (i2.lt.0) then
+                        i2=this%g(in)%i
+                     end if
+                  end do
+               end do
+            end do
+         end do
+
+      end do
+
+   end subroutine bond_init
+
+
    !> Resolve bond force between particles
    subroutine bond_force(this,dt)
       implicit none
@@ -778,10 +870,10 @@ contains
       if (present(nover)) then
          no=nover
          if (no.gt.this%cfg%no) then
-            call warn('[lpt_class share] Specified overlap is larger than that of cfg - reducing no')
+            call warn('[df_class share] Specified overlap is larger than that of cfg - reducing no')
             no=this%cfg%no
          else if (no.le.0) then
-            call die('[lpt_class share] Specified overlap cannot be less or equal to zero')
+            call die('[df_class share] Specified overlap cannot be less or equal to zero')
          end if
       else
          no=1

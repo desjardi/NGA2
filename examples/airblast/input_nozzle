@@ -6,9 +6,9 @@ X shift : 0.085
 Lx :	0.1
 Ly :	0.08
 Lz :	0.08
-nx :	100  !200
-ny :  80   !160
-nz :	80   !160
+nx :	200 !400
+ny :  160 !320
+nz :	160 !320
 
 # PLY file
 PLY filename : atomizer.ply
@@ -22,7 +22,7 @@ Density :           1.226
 Dynamic viscosity : 1.780e-5
 
 # Time integration
-Max timestep size : 5e-6
+Max timestep size : 5e-6  !2e-6
 Max cfl number :    0.9
 
 # Pressure solver

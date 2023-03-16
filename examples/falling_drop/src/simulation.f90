@@ -7,6 +7,7 @@ module simulation
 	use vfs_class,         only: vfs
 	use timetracker_class, only: timetracker
 	use ensight_class,     only: ensight
+   use surfmesh_class,    only: surfmesh
 	use event_class,       only: event
 	use monitor_class,     only: monitor
 	implicit none
@@ -20,8 +21,9 @@ module simulation
 	type(timetracker), public :: time
 	
 	!> Ensight postprocessing
-	type(ensight) :: ens_out
-	type(event)   :: ens_evt
+   type(surfmesh) :: smesh
+	type(ensight)  :: ens_out
+	type(event)    :: ens_evt
 	
 	!> Simulation monitor file
 	type(monitor) :: mfile,cflfile
@@ -48,7 +50,7 @@ contains
 		! Create the droplet
 	   G=radius-sqrt(sum((xyz-center)**2))
 	   ! Add the pool
-	   G=max(G,depth-xyz(2))
+	   !G=max(G,depth-xyz(2))
 	end function levelset_falling_drop
 	
 	
@@ -143,6 +145,7 @@ contains
 		! Create a two-phase flow solver without bconds
 	   create_and_initialize_flow_solver: block
 		   use hypre_str_class, only: pcg_pfmg
+         use mathtools,       only: Pi
 			! Create flow solver
 		   fs=tpns(cfg=cfg,name='Two-phase NS')
 		   ! Assign constant viscosity to each phase
@@ -153,10 +156,13 @@ contains
 			call param_read('Gas density',fs%rho_g)
 			! Read in surface tension coefficient
 		   call param_read('Surface tension coefficient',fs%sigma)
+         call param_read('Static contact angle',fs%contact_angle)
+         fs%contact_angle=fs%contact_angle*Pi/180.0_WP
 		   ! Assign acceleration of gravity
 		   call param_read('Gravity',fs%gravity)
 			! Configure pressure solver
 			ps=hypre_str(cfg=cfg,name='Pressure',method=pcg_pfmg,nst=7)
+         ps%maxlevel=12
          call param_read('Pressure iteration',ps%maxit)
          call param_read('Pressure tolerance',ps%rcvg)
          ! Configure implicit velocity solver
@@ -172,7 +178,14 @@ contains
 		   call fs%get_div()
 	   end block create_and_initialize_flow_solver
 	   
-	   
+
+	   ! Create surfmesh object for interface polygon output
+      create_smesh: block
+         smesh=surfmesh(nvar=0,name='plic')
+         call vf%update_surfmesh(smesh)
+      end block create_smesh
+
+
 	   ! Add Ensight output
 	   create_ensight: block
 		   ! Create Ensight output from cfg
@@ -185,6 +198,7 @@ contains
 		   call ens_out%add_scalar('VOF',vf%VF)
 		   call ens_out%add_scalar('pressure',fs%P)
 		   call ens_out%add_scalar('curvature',vf%curv)
+         call ens_out%add_surface('plic',smesh)
 		   ! Output to ensight
 		   if (ens_evt%occurs()) call ens_out%write_data(time%t)
 	   end block create_ensight
@@ -233,6 +247,7 @@ contains
 	
 	!> Perform an NGA2 simulation - this mimicks NGA's old time integration for multiphase
 	subroutine simulation_run
+      use tpns_class, only: static_contact
 		implicit none
 		
 		! Perform time integration
@@ -300,7 +315,7 @@ contains
 			   call fs%update_laplacian()
 				call fs%correct_mfr()
 				call fs%get_div()
-				call fs%add_surface_tension_jump(dt=time%dt,div=fs%div,vf=vf)
+				call fs%add_surface_tension_jump(dt=time%dt,div=fs%div,vf=vf,contact_model=static_contact)
 				fs%psolv%rhs=-fs%cfg%vol*fs%div/time%dt
 				fs%psolv%sol=0.0_WP
 				call fs%psolv%solve()
@@ -323,7 +338,10 @@ contains
 			call fs%get_div()
 			
 			! Output to ensight
-		   if (ens_evt%occurs()) call ens_out%write_data(time%t)
+		   if (ens_evt%occurs()) then
+            call vf%update_surfmesh(smesh)
+            call ens_out%write_data(time%t)
+         end if
 			
 			! Perform and output monitoring
 		   call fs%get_max()
