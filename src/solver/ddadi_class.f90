@@ -80,10 +80,7 @@ contains
       self%it=1
       self%aerr=0.0_WP
       self%rerr=0.0_WP
-
-      ! Initialize diagonal solver - assumes purely diagonal stencil
-      self%dsol=diag(cfg=self%cfg,name=self%name,n=(nst-1)/3+1)
-
+      
       ! Setup is not done
       self%setup_done=.false.
       
@@ -107,6 +104,10 @@ contains
       do st=1,this%nst
          this%stmap(this%stc(st,1),this%stc(st,2),this%stc(st,3))=st
       end do
+      
+      ! Initialize diagonal solver now that we know the stencil size
+      st=max(abs(stx1),abs(stx2),abs(sty1),abs(sty2),abs(stz1),abs(stz2))
+      this%dsol=diag(cfg=this%cfg,name=this%name,n=2*st+1)
       
    end subroutine ddadi_init
    
