@@ -3,6 +3,7 @@ module simulation
 	use precision,         only: WP
 	use geometry,          only: cfg
 	use hypre_str_class,   only: hypre_str
+   use ddadi_class,       only: ddadi
 	use tpns_class,        only: tpns
 	use vfs_class,         only: vfs
 	use timetracker_class, only: timetracker
@@ -15,7 +16,7 @@ module simulation
 	
 	!> Get a couple linear solvers, a two-phase flow solver and volume fraction solver and corresponding time tracker
 	type(hypre_str),   public :: ps
-	type(hypre_str),   public :: vs
+	type(ddadi),       public :: vs
 	type(tpns),        public :: fs
 	type(vfs),         public :: vf
 	type(timetracker), public :: time
@@ -94,8 +95,8 @@ contains
 			! Create a VOF solver
 		   vf=vfs(cfg=cfg,reconstruction_method=lvira,name='VOF')
 		   ! Initialize to a droplet and a pool
-		   center=[0.0_WP,0.05_WP,0.0_WP]
-		   radius=0.01_WP
+		   center=[0.0_WP,0.01_WP,0.0_WP]
+		   radius=0.002_WP
 		   depth =0.02_WP
 			do k=vf%cfg%kmino_,vf%cfg%kmaxo_
 				do j=vf%cfg%jmino_,vf%cfg%jmaxo_
@@ -162,14 +163,12 @@ contains
 		   call param_read('Gravity',fs%gravity)
 			! Configure pressure solver
 			ps=hypre_str(cfg=cfg,name='Pressure',method=pcg_pfmg,nst=7)
-         ps%maxlevel=12
+         ps%maxlevel=10
          call param_read('Pressure iteration',ps%maxit)
          call param_read('Pressure tolerance',ps%rcvg)
          ! Configure implicit velocity solver
-         vs=hypre_str(cfg=cfg,name='Velocity',method=pcg_pfmg,nst=7)
-         call param_read('Implicit iteration',vs%maxit)
-         call param_read('Implicit tolerance',vs%rcvg)
-			! Setup the solver
+         vs=ddadi(cfg=cfg,name='Velocity',nst=7)
+         ! Setup the solver
 		   call fs%setup(pressure_solver=ps,implicit_solver=vs)
 		   ! Zero initial field
 		   fs%U=0.0_WP; fs%V=0.0_WP; fs%W=0.0_WP

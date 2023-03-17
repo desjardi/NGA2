@@ -7,6 +7,7 @@ module atom_class
    use surfmesh_class,    only: surfmesh
    use ensight_class,     only: ensight
    use hypre_str_class,   only: hypre_str
+   use ddadi_class,       only: ddadi
    use vfs_class,         only: vfs
    use tpns_class,        only: tpns
    use sgsmodel_class,    only: sgsmodel
@@ -34,7 +35,7 @@ module atom_class
 		type(vfs)         :: vf    !< Volume fraction solver
       type(tpns)        :: fs    !< Two-phase flow solver
 		type(hypre_str)   :: ps    !< Structured Hypre linear solver for pressure
-      type(hypre_str)   :: vs    !< Structured Hypre linear solver for velocity
+      type(ddadi)       :: vs    !< DDADI solver for velocity
       type(sgsmodel)    :: sgs   !< SGS model for eddy viscosity
 		type(timetracker) :: time  !< Time info
 		
@@ -372,9 +373,7 @@ contains
          call this%input%read('Pressure iteration',this%ps%maxit)
          call this%input%read('Pressure tolerance',this%ps%rcvg)
          ! Configure implicit velocity solver
-         this%vs=hypre_str(cfg=this%cfg,name='Velocity',method=pcg_pfmg,nst=7)
-         call this%input%read('Implicit iteration',this%vs%maxit)
-         call this%input%read('Implicit tolerance',this%vs%rcvg)
+         this%vs=ddadi(cfg=this%cfg,name='Velocity',nst=7)
          ! Setup the solver
          call this%fs%setup(pressure_solver=this%ps,implicit_solver=this%vs)
       end block create_flow_solver
