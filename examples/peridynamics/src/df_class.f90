@@ -44,7 +44,7 @@ module df_class
    end type part
    !> Number of blocks, block length, and block types in a particle
    integer, parameter                         :: part_nblock=2
-   integer           , dimension(part_nblock) :: part_lblock=[12+max_bond,6+max_bond]
+   integer           , dimension(part_nblock) :: part_lblock=[13+max_bond,6+max_bond]
    type(MPI_Datatype), dimension(part_nblock) :: part_tblock=[MPI_DOUBLE_PRECISION,MPI_INTEGER]
    !> MPI_PART derived datatype and size
    type(MPI_Datatype) :: MPI_PART
@@ -135,8 +135,23 @@ module df_class
    end interface dfibm
    
 contains
-
-
+   
+   
+   !> Mollification kernel based on Roma A, Peskin C and Berger M 1999 J. Comput. Phys. 153 509–534
+   function kernel(r) result(phi)
+      implicit none
+      real(WP), intent(in) :: r
+      real(WP)             :: phi
+      if (abs(r).le.0.5_WP) then
+         phi=1.0_WP/3.0_WP*(1.0_WP+sqrt(-3.0_WP*r**2+1.0_WP))
+      else if (abs(r).gt.0.5_WP .and. abs(r).le.1.5_WP) then
+         phi=1.0_WP/6.0_WP*(5.0_WP-3.0_WP*abs(r)-sqrt(-3.0_WP*(1.0_WP-abs(r))**2+1.0_WP))
+      else
+         phi=0.0_WP
+      end if
+   end function kernel
+   
+   
    !> Default constructor for direct forcing solver
    function constructor(cfg,name) result(self)
       implicit none
@@ -226,18 +241,17 @@ contains
    
    
    !> Resolve bond force between particles
-   subroutine bond_init(this,delta)
+   !> Neighborhood horizon is set by mollification kernel (Roma),
+   !> i.e., dist/dx.lt.1.5_WP
+   subroutine bond_init(this)
       implicit none
       class(dfibm), intent(inout) :: this
-      real(WP), intent(in) :: delta        !< Neighborhood horizon
-      integer :: i,j,k,ii,jj,kk
-      integer :: i1,i2,n,nn,in
       integer, dimension(:,:,:),   allocatable :: npic    !< Number of particle in cell
       integer, dimension(:,:,:,:), allocatable :: ipic    !< Index of particle in cell
       
       ! Communicate particles in ghost cells
       call this%share()
-      
+
       ! We can now assemble particle-in-cell information
       pic_prep: block
          use mpi_f08
@@ -277,33 +291,57 @@ contains
          end do
          
       end block pic_prep
+      
+      ! Establish initial bonds
+      create_bonds: block
+         integer :: i,j,k,n1,nn,n2
+         type(part) :: p1,p2
+         real(WP), dimension(3) :: rpos
+         real(WP) :: dist
+         integer :: nbond
 
-      ! Loop over particles
-      do n=1,this%np_
-         ! Store particle info
-         i=this%p(n)%ind(1); j=this%p(n)%ind(2); k=this%p(n)%ind(3)
-         i1=this%p(n)%i
-         ! Loop over neighbor cells
-         do kk=k-2,k+2
-            do jj=j-2,j+2
-               do ii=i-2,i+2
-                  ! Loop over particles in that cell
-                  do nn=1,npic(ii,jj,kk)
-                     ! Get index of neighbor particle
-                     in=ipic(nn,ii,jj,kk)
-                     ! Get relevant data from correct storage
-                     if (in.gt.0) then
-                        i2=this%p(in)%i
-                     else if (i2.lt.0) then
-                        i2=this%g(in)%i
-                     end if
+         ! Loop over particles
+         do n1=1,this%np_
+            ! Create copy of our particle
+            p1=this%p(n1)
+            ! Zero out weighted volume
+            p1%mw=0.0_WP
+            ! Loop over neighbor cells
+            do k=p1%ind(3)-2,p1%ind(3)+2
+               do j=p1%ind(2)-2,p1%ind(2)+2
+                  do i=p1%ind(1)-2,p1%ind(1)+2
+                     ! Loop over particles in that cell
+                     do nn=1,npic(i,j,k)
+                        ! Create copy of our neighbor
+                        n2=ipic(nn,i,j,k)
+                        if (n2.gt.0) then
+                           p2=this%p(n2)
+                        else if (n2.lt.0) then
+                           n2=-n2
+                           p2=this%g(n2)
+                        end if
+                        ! Check interparticle distance
+                        rpos=p1%pos-p2%pos
+                        dist=sqrt(dot_product(rpos,rpos))
+                        nbond=0
+                        if (dist.lt.1.5_WP*this%cfg%min_meshsize) then
+                           ! According to a Roma kernel, this particle should be bonded
+                           nbond=nbond+1
+                           if (nbond.gt.max_bond) call die('[df_class bond_init] Number of detected bonds is larger than max allowed')
+                           p1%ibond(nbond)=p2%i
+                           p1%dbond(nbond)=dist
+                           ! Increment weighted volume
+                           p1%mw=p1%mw+kernel(dist/this%cfg%min_meshsize)*dist**2*p1%dV
+                           ! Get dilatation
+                           p1%dil=0.0_WP
+                        end if
+                     end do
                   end do
                end do
             end do
          end do
-
-      end do
-
+      end block create_bonds
+      
    end subroutine bond_init
 
 
@@ -604,48 +642,32 @@ contains
       ! Compute in X
       if (trim(adjustl(dir)).eq.'U') then
          r=(xp-this%cfg%x(ic))*this%cfg%dxmi(ic)
-         deltax=roma_kernel(r)*this%cfg%dxmi(ic)
+         deltax=kernel(r)*this%cfg%dxmi(ic)
       else
          r=(xp-this%cfg%xm(ic))*this%cfg%dxi(ic)
-         deltax=roma_kernel(r)*this%cfg%dxi(ic)
+         deltax=kernel(r)*this%cfg%dxi(ic)
       end if
       
       ! Compute in Y
       if (trim(adjustl(dir)).eq.'V') then
          r=(yp-this%cfg%y(jc))*this%cfg%dymi(jc)
-         deltay=roma_kernel(r)*this%cfg%dymi(jc)
+         deltay=kernel(r)*this%cfg%dymi(jc)
       else
          r=(yp-this%cfg%ym(jc))*this%cfg%dyi(jc)
-         deltay=roma_kernel(r)*this%cfg%dyi(jc)
+         deltay=kernel(r)*this%cfg%dyi(jc)
       end if
       
       ! Compute in Z
       if (trim(adjustl(dir)).eq.'W') then
          r=(zp-this%cfg%z(kc))*this%cfg%dzmi(kc)
-         deltaz=roma_kernel(r)*this%cfg%dzmi(kc)
+         deltaz=kernel(r)*this%cfg%dzmi(kc)
       else
          r=(zp-this%cfg%zm(kc))*this%cfg%dzi(kc)
-         deltaz=roma_kernel(r)*this%cfg%dzi(kc)
+         deltaz=kernel(r)*this%cfg%dzi(kc)
       end if
       
       ! Put it all together
       delta=deltax*deltay*deltaz
-      
-   contains
-      ! Mollification kernel
-      ! Roma A, Peskin C and Berger M 1999 J. Comput. Phys. 153 509–534
-      function roma_kernel(r) result(phi)
-         implicit none
-         real(WP), intent(in) :: r
-         real(WP)             :: phi
-         if (abs(r).le.0.5_WP) then
-            phi=1.0_WP/3.0_WP*(1.0_WP+sqrt(-3.0_WP*r**2+1.0_WP))
-         else if (abs(r).gt.0.5_WP .and. abs(r).le.1.5_WP) then
-            phi=1.0_WP/6.0_WP*(5.0_WP-3.0_WP*abs(r)-sqrt(-3.0_WP*(1.0_WP-abs(r))**2+1.0_WP))
-         else
-            phi=0.0_WP
-         end if
-      end function roma_kernel
       
    end subroutine get_delta
    

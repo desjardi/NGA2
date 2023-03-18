@@ -3,6 +3,7 @@ module simulation
 	use precision,         only: WP
 	use geometry,          only: cfg
 	use hypre_str_class,   only: hypre_str
+   use ddadi_class,       only: ddadi
 	use incomp_class,      only: incomp
 	use df_class,          only: dfibm
 	use timetracker_class, only: timetracker
@@ -15,7 +16,7 @@ module simulation
 	
 	!> Get a couple linear solvers, an incompressible flow solver and corresponding time tracker
 	type(hypre_str),   public :: ps
-	type(hypre_str),   public :: vs
+	type(ddadi),       public :: vs
 	type(incomp),      public :: fs
 	type(dfibm),       public :: df
 	type(timetracker), public :: time
@@ -109,9 +110,7 @@ contains
 			call param_read('Pressure iteration',ps%maxit)
 			call param_read('Pressure tolerance',ps%rcvg)
 			! Configure implicit velocity solver
-		   vs=hypre_str(cfg=cfg,name='Velocity',method=pcg_pfmg,nst=7)
-			call param_read('Implicit iteration',vs%maxit)
-			call param_read('Implicit tolerance',vs%rcvg)
+		   vs=ddadi(cfg=cfg,name='Velocity',nst=7)
 			! Setup the solver
 		   call fs%setup(pressure_solver=ps,implicit_solver=vs)
 	   end block create_flow_solver
@@ -183,7 +182,7 @@ contains
          call df%sync()
          
          ! Initalize bonds
-         call df%bond_init(delta=2.0_WP*df%cfg%min_meshsize)
+         call df%bond_init()
          
          ! Get initial volume fraction
          call df%update_VF()

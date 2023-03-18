@@ -21,13 +21,6 @@ module ddadi_class
       !> Diagonal object
       class(diag), allocatable :: dsol
       
-      !> Directional operators
-      real(WP), dimension(:,:,:), allocatable :: Ax,Ay,Az
-      
-      !> Directional solution arrays
-      real(WP), dimension(:,:,:), allocatable :: Rx,Ry,Rz
-      
-      
    contains
       
       procedure :: print_short=>ddadi_print_short !< One-line printing of solver status

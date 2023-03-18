@@ -14,7 +14,7 @@ Cylinder radius : 0.5
 Inlet velocity :  1
 
 # Particles
-Number of markers : 500
+Number of markers : 100
 
 # Fluid properties
 Dynamic viscosity : 0.01
@@ -28,10 +28,6 @@ Max time :          100
 # Pressure solver
 Pressure tolerance : 1e-5
 Pressure iteration : 100
-
-# Implicit velocity solver
-Implicit tolerance : 1e-5
-Implicit iteration : 100
 
 # Ensight output
 Ensight output period : 1
