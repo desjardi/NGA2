@@ -99,8 +99,7 @@ contains
       end do
       
       ! Initialize diagonal solver now that we know the stencil size
-      st=max(abs(stx1),abs(stx2),abs(sty1),abs(sty2),abs(stz1),abs(stz2))
-      this%dsol=diag(cfg=this%cfg,name=this%name,n=2*st+1)
+      this%dsol=diag(cfg=this%cfg,name=this%name,n=2*maxval(abs(this%stc))+1)
       
    end subroutine ddadi_init
    
@@ -119,20 +118,16 @@ contains
       stz1=minval(this%stc(:,3)); stz2=maxval(this%stc(:,3))
 
       ! Update DDADI operators
+      this%dsol%Ax=0.0_WP
+      this%dsol%Ay=0.0_WP
+      this%dsol%Az=0.0_WP
       do k=this%cfg%kmin_,this%cfg%kmax_
          do j=this%cfg%jmin_,this%cfg%jmax_
             do i=this%cfg%imin_,this%cfg%imax_
-               ! X operator
-               do st=stx1,stx2
-                  this%dsol%Ax(j,k,i,st)=this%opr(this%stmap(st,0,0),i,j,k)
-               end do
-               ! Y operator
-               do st=sty1,sty2
-                  this%dsol%Ay(i,k,j,st)=this%opr(this%stmap(0,st,0),i,j,k)
-               end do
-               ! Z operator
-               do st=stz1,stz2
-                  this%dsol%Az(i,j,k,st)=this%opr(this%stmap(0,0,st),i,j,k)
+               do st=1,this%nst
+                  this%dsol%Ax(j,k,i,this%stc(st,1))=this%dsol%Ax(j,k,i,this%stc(st,1))+this%opr(st,i,j,k)
+                  this%dsol%Ay(i,k,j,this%stc(st,2))=this%dsol%Ay(i,k,j,this%stc(st,2))+this%opr(st,i,j,k)
+                  this%dsol%Az(i,j,k,this%stc(st,3))=this%dsol%Az(i,j,k,this%stc(st,3))+this%opr(st,i,j,k)
                end do
             end do
          end do
@@ -169,7 +164,7 @@ contains
       do k=this%cfg%kmin_,this%cfg%kmax_
          do j=this%cfg%jmin_,this%cfg%jmax_
             do i=this%cfg%imin_,this%cfg%imax_
-               this%dsol%Ry(i,k,j)=this%dsol%Rx(j,k,i)*this%opr(1,i,j,k)
+               this%dsol%Ry(i,k,j)=this%dsol%Rx(j,k,i)*sum(this%opr(:,i,j,k))
             end do
          end do
       end do
@@ -179,7 +174,7 @@ contains
       do k=this%cfg%kmin_,this%cfg%kmax_
          do j=this%cfg%jmin_,this%cfg%jmax_
             do i=this%cfg%imin_,this%cfg%imax_
-               this%dsol%Rz(i,j,k)=this%dsol%Ry(i,k,j)*this%opr(1,i,j,k)
+               this%dsol%Rz(i,j,k)=this%dsol%Ry(i,k,j)*sum(this%opr(:,i,j,k))
             end do
          end do
       end do
