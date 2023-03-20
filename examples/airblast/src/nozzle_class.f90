@@ -230,13 +230,6 @@ contains
          call this%cfg%calculate_vf(method=sharp,allow_zero_vf=.false.)
          
       end block create_walls
-
-
-      this%ens_out=ensight(cfg=this%cfg,name='nozzle')
-      call this%ens_out%add_scalar('Gib',this%cfg%Gib)
-      call this%ens_out%add_surface('ply',this%plymesh)
-      call this%ens_out%write_data(0.0_WP)
-      stop
       
       
 	end subroutine geometry_init
