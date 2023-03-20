@@ -143,13 +143,13 @@ contains
          use string, only: str_medium
          use param,  only: param_read
          character(len=str_medium) :: plyfile
-
+         
          ! Read in ply filename
          call this%input%read('PLY filename',plyfile)
-
+         
          ! Create surface mesh from ply
-         this%plymesh=surfmesh(plyfile=plyfile,nvar=0,name='ply')
-
+         this%plymesh=surfmesh(comm=this%cfg%comm,plyfile=plyfile,nvar=0,name='ply')
+         
       end block read_ply
       
       
@@ -230,8 +230,15 @@ contains
          call this%cfg%calculate_vf(method=sharp,allow_zero_vf=.false.)
          
       end block create_walls
-		
 
+
+      this%ens_out=ensight(cfg=this%cfg,name='nozzle')
+      call this%ens_out%add_scalar('Gib',this%cfg%Gib)
+      call this%ens_out%add_surface('ply',this%plymesh)
+      call this%ens_out%write_data(0.0_WP)
+      stop
+      
+      
 	end subroutine geometry_init
 	
 	

@@ -181,7 +181,7 @@ contains
          call this%input%read('PLY filename',plyfile)
          
          ! Create surface mesh from ply
-         this%plymesh=surfmesh(plyfile=plyfile,nvar=0,name='ply')
+         this%plymesh=surfmesh(comm=this%cfg%comm,plyfile=plyfile,nvar=0,name='ply')
          
       end block read_ply
       
