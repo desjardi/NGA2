@@ -141,7 +141,6 @@ contains
       ! Read in the PLY geometry
       read_ply: block
          use string,   only: str_medium
-         use param,    only: param_read
          use parallel, only: MPI_REAL_WP
          use mpi_f08
          character(len=str_medium) :: plyfile
