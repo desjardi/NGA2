@@ -140,15 +140,35 @@ contains
 		
       ! Read in the PLY geometry
       read_ply: block
-         use string, only: str_medium
-         use param,  only: param_read
+         use string,   only: str_medium
+         use param,    only: param_read
+         use parallel, only: MPI_REAL_WP
+         use mpi_f08
          character(len=str_medium) :: plyfile
+         integer :: ierr,size_conn
          
          ! Read in ply filename
          call this%input%read('PLY filename',plyfile)
          
-         ! Create surface mesh from ply
-         this%plymesh=surfmesh(comm=this%cfg%comm,plyfile=plyfile,nvar=0,name='ply')
+         ! Root creates surface mesh from ply, other process create empty surface mesh
+         if (this%cfg%amRoot) then
+            this%plymesh=surfmesh(plyfile=plyfile,nvar=0,name='ply')
+         else
+            this%plymesh=surfmesh(nvar=0,name='ply')
+         end if
+
+         ! Go through parallel broadcast of surface mesh
+         call MPI_BCAST(this%plymesh%nVert   ,1                 ,MPI_INTEGER,0,this%cfg%comm,ierr)
+         call MPI_BCAST(this%plymesh%nPoly   ,1                 ,MPI_INTEGER,0,this%cfg%comm,ierr)
+         if (.not.this%cfg%amRoot) call this%plymesh%set_size(nvert=this%plymesh%nVert,npoly=this%plymesh%nPoly)
+         call MPI_BCAST(this%plymesh%xVert   ,this%plymesh%nVert,MPI_REAL_WP,0,this%cfg%comm,ierr)
+         call MPI_BCAST(this%plymesh%yVert   ,this%plymesh%nVert,MPI_REAL_WP,0,this%cfg%comm,ierr)
+         call MPI_BCAST(this%plymesh%zVert   ,this%plymesh%nVert,MPI_REAL_WP,0,this%cfg%comm,ierr)
+         call MPI_BCAST(this%plymesh%polySize,this%plymesh%nPoly,MPI_INTEGER,0,this%cfg%comm,ierr)
+         if (this%cfg%amRoot) size_conn=size(this%plymesh%polyConn)
+         call MPI_BCAST(size_conn            ,1                 ,MPI_INTEGER,0,this%cfg%comm,ierr)
+         if (.not.this%cfg%amRoot) allocate(this%plymesh%polyConn(size_conn))
+         call MPI_BCAST(this%plymesh%polyConn,size_conn         ,MPI_INTEGER,0,this%cfg%comm,ierr)
          
       end block read_ply
       

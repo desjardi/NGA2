@@ -21,7 +21,7 @@ module df_class
    integer, parameter :: part_chunk_size=1000  !< Read 1000 particles at a time before redistributing
    
    !> Maximum number of bonds per particle
-   integer, parameter :: max_bond=25           !< Assumes a 5x5 stencil in 2D
+   integer, parameter :: max_bond=50           !< Assumes a 5x5 stencil in 2D
    !integer, parameter :: max_bond=125          !< Assumes a 5x5x5 stencil in 3D
 
    !> Basic marker particle definition
@@ -82,6 +82,12 @@ module df_class
       ! Object data
       integer :: nobj                                     !< Global number of objects
       type(obj), dimension(:), allocatable :: o           !< Array of objects of type obj
+      
+      ! Material properties
+      real(WP) :: elastic_modulus                         !< Elastic modulus of the material
+      real(WP) :: poisson_ratio                           !< Poisson's ratio of the material
+      real(WP) :: shear_modulus                           !< Shear modulus of the material
+      real(WP) :: bulk_modulus                            !< Bulk modulus of the material
       
       ! CFL numbers
       real(WP) :: CFLp_x,CFLp_y,CFLp_z                    !< CFL numbers
@@ -244,6 +250,7 @@ contains
    !> Neighborhood horizon is set by mollification kernel (Roma),
    !> i.e., dist/dx.lt.1.5_WP
    subroutine bond_init(this)
+      use messager, only: die
       implicit none
       class(dfibm), intent(inout) :: this
       integer, dimension(:,:,:),   allocatable :: npic    !< Number of particle in cell
@@ -306,6 +313,8 @@ contains
             p1=this%p(n1)
             ! Zero out weighted volume
             p1%mw=0.0_WP
+            ! Initialize number of bonds
+            nbond=0
             ! Loop over neighbor cells
             do k=p1%ind(3)-2,p1%ind(3)+2
                do j=p1%ind(2)-2,p1%ind(2)+2
@@ -321,9 +330,8 @@ contains
                            p2=this%g(n2)
                         end if
                         ! Check interparticle distance
-                        rpos=p1%pos-p2%pos
+                        rpos=p2%pos-p1%pos
                         dist=sqrt(dot_product(rpos,rpos))
-                        nbond=0
                         if (dist.lt.1.5_WP*this%cfg%min_meshsize) then
                            ! According to a Roma kernel, this particle should be bonded
                            nbond=nbond+1
@@ -331,7 +339,7 @@ contains
                            p1%ibond(nbond)=p2%i
                            p1%dbond(nbond)=dist
                            ! Increment weighted volume
-                           p1%mw=p1%mw+kernel(dist/this%cfg%min_meshsize)*dist**2*p1%dV
+                           p1%mw=p1%mw+kernel(dist/this%cfg%min_meshsize)*dist**2*p2%dV
                            ! Get dilatation
                            p1%dil=0.0_WP
                         end if
@@ -339,6 +347,8 @@ contains
                   end do
                end do
             end do
+            ! Copy back the particle
+            this%p(n1)=p1
          end do
       end block create_bonds
       
@@ -346,13 +356,11 @@ contains
 
 
    !> Resolve bond force between particles
-   subroutine bond_force(this,dt)
+   subroutine bond_force(this)
       implicit none
       class(dfibm), intent(inout) :: this
-      real(WP), intent(inout) :: dt  !< Timestep size over which to advance
       integer, dimension(:,:,:),   allocatable :: npic    !< Number of particle in cell
       integer, dimension(:,:,:,:), allocatable :: ipic    !< Index of particle in cell
-      
       
       ! Start by zeroing out the collision force
       zero_force: block
@@ -362,10 +370,9 @@ contains
          end do
       end block zero_force
       
-
-      ! Then share particles across overlap
+      ! Communicate particles in ghost cells
       call this%share()
-      
+
       ! We can now assemble particle-in-cell information
       pic_prep: block
          use mpi_f08
@@ -406,40 +413,124 @@ contains
          
       end block pic_prep
       
-      
-      ! Finally, calculate collision force
-      ablock: block
-         use mpi_f08
-         use mathtools, only: Pi,normalize,cross_product
-         integer :: i1,i2,ii,jj,kk,nn
-         
-         ! Loop over all local particles
-         do i1=1,this%np_
-            
-            ! Cycle if id<=0
-            if (this%p(i1)%id.le.0) cycle
-            
-            
-            ! Loop over nearest cells
-            do kk=this%p(i1)%ind(3)-1,this%p(i1)%ind(3)+1
-               do jj=this%p(i1)%ind(2)-1,this%p(i1)%ind(2)+1
-                  do ii=this%p(i1)%ind(1)-1,this%p(i1)%ind(1)+1
-                     
-                     ! Loop over particles in that cell
-                     do nn=1,npic(ii,jj,kk)
-                        
-                        ! Get index of neighbor particle
-                        i2=ipic(nn,ii,jj,kk)
-                        
-                     end do
+      ! Update weighted volume and dilatation
+      update_weighted_vol_and_dilatation: block
+         integer :: i,j,k,n1,nn,n2
+         type(part) :: p1,p2
+         integer :: nb,nbond
+         real(WP), dimension(3) :: rpos
+         real(WP) :: dist
 
+         ! Loop over particles
+         do n1=1,this%np_
+            ! Create copy of our particle
+            p1=this%p(n1)
+            ! Zero out weighted volume and dilatation
+            p1%mw=0.0_WP
+            p1%dil=0.0_WP
+            ! Loop over neighbor cells
+            do k=p1%ind(3)-2,p1%ind(3)+2
+               do j=p1%ind(2)-2,p1%ind(2)+2
+                  do i=p1%ind(1)-2,p1%ind(1)+2
+                     ! Loop over particles in that cell
+                     do nn=1,npic(i,j,k)
+                        ! Create copy of our neighbor
+                        n2=ipic(nn,i,j,k)
+                        if (n2.gt.0) then
+                           p2=this%p(n2)
+                        else if (n2.lt.0) then
+                           n2=-n2
+                           p2=this%g(n2)
+                        end if
+                        ! Check if a bond exists
+                        do nb=1,max_bond
+                           if (p1%ibond(nb).eq.p2%i) then
+                              ! Increment weighted volume
+                              p1%mw=p1%mw+kernel(p1%dbond(nb)/this%cfg%min_meshsize)*p1%dbond(nb)**2*p2%dV
+                              ! Get current distance
+                              rpos=p2%pos-p1%pos
+                              dist=sqrt(dot_product(rpos,rpos))
+                              ! Increment dilatation
+                              p1%dil=p1%dil+kernel(p1%dbond(nb)/this%cfg%min_meshsize)*p1%dbond(nb)*(dist-p1%dbond(nb))*p2%dV
+                           end if
+                        end do
+                     end do
                   end do
                end do
             end do
-
+            ! Rescale dilatation
+            p1%dil=p1%dil*3.0_WP/p1%mw
+            ! Copy back the particle
+            this%p(n1)=p1
          end do
+      end block update_weighted_vol_and_dilatation
+      
+      ! Re-communicate particles in ghost cells to update dil and mw
+      call this%share()
+      
+      ! Update bond force
+      update_bond_force: block
+         integer :: i,j,k,n1,nn,n2
+         type(part) :: p1,p2
+         real(WP), dimension(3) :: rpos,t12,t21
+         real(WP) :: dist,beta,alpha,ed
+         integer :: nb,nbond
 
-      end block ablock
+         ! Loop over particles
+         do n1=1,this%np_
+            ! Create copy of our particle
+            p1=this%p(n1)
+            ! Zero out bond force
+            p1%Fbond=0.0_WP
+            ! Loop over neighbor cells
+            do k=p1%ind(3)-2,p1%ind(3)+2
+               do j=p1%ind(2)-2,p1%ind(2)+2
+                  do i=p1%ind(1)-2,p1%ind(1)+2
+                     ! Loop over particles in that cell
+                     do nn=1,npic(i,j,k)
+                        ! Create copy of our neighbor
+                        n2=ipic(nn,i,j,k)
+                        if (n2.gt.0) then
+                           p2=this%p(n2)
+                        else if (n2.lt.0) then
+                           n2=-n2
+                           p2=this%g(n2)
+                        end if
+                        ! Check if a bond exists
+                        do nb=1,max_bond
+                           if (p1%ibond(nb).eq.p2%i) then
+                              ! Current distance
+                              rpos=p2%pos-p1%pos
+                              dist=sqrt(dot_product(rpos,rpos))
+                              ! Beta1
+                              beta=3.0_WP*this%bulk_modulus*p1%dil
+                              ! Alpha1
+                              alpha=15.0_WP*this%shear_modulus/p1%mw
+                              ! Extension1
+                              ed=dist-p1%dbond(nb)*(1.0_WP+p1%dil/3.0_WP)
+                              ! Force density 1->2
+                              t12=+kernel(p1%dbond(nb)/this%cfg%min_meshsize)*(beta/p1%mw*p1%dbond(nb)+alpha*ed)*rpos/dist
+                              ! Beta2
+                              beta=3.0_WP*this%bulk_modulus*p2%dil
+                              ! Alpha2
+                              alpha=15.0_WP*this%shear_modulus/p2%mw
+                              ! Extension2
+                              ed=dist-p2%dbond(nb)*(1.0_WP+p2%dil/3.0_WP)
+                              ! Force density 2->1
+                              t21=-kernel(p2%dbond(nb)/this%cfg%min_meshsize)*(beta/p2%mw*p2%dbond(nb)+alpha*ed)*rpos/dist
+                              ! Increment bond force
+                              p1%Fbond=p1%Fbond+(t12-t21)*p2%dV
+                           end if
+                        end do
+                     end do
+                  end do
+               end do
+            end do
+            ! Copy back the particle
+            this%p(n1)=p1
+         end do
+      end block update_bond_force
+
       
    end subroutine bond_force
 
@@ -460,6 +551,9 @@ contains
       
       ! Zero out number of particles removed
       this%np_out=0
+      
+      ! Calculate bond force
+      call this%bond_force()
       
       ! Advance the equations
       do i=1,this%np_

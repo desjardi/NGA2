@@ -29,16 +29,16 @@ module surfmesh_class
    !> Declare surface mesh constructor
    interface surfmesh
       module procedure construct_empty
-      module procedure construct_from_ply
-      module procedure construct_from_ply_parallel
+      module procedure construct_from_ply_serial_read
+      module procedure construct_from_ply_parallel_read
    end interface surfmesh
    
    
 contains
    
    
-   !> Constructor for surface mesh object from a .ply file - parallel version
-   function construct_from_ply_parallel(comm,plyfile,nvar,name) result(self)
+   !> Constructor for surface mesh object from a .ply file - parallel read version
+   function construct_from_ply_parallel_read(comm,plyfile,nvar,name) result(self)
       use parallel, only: info_mpiio,MPI_REAL_SP
       use messager, only: die
       use mpi_f08
@@ -170,11 +170,11 @@ contains
          end if
       end subroutine resize_polyConn
       
-   end function construct_from_ply_parallel
+   end function construct_from_ply_parallel_read
    
 
-   !> Constructor for surface mesh object from a .ply file - serial version
-   function construct_from_ply(plyfile,nvar,name) result(self)
+   !> Constructor for surface mesh object from a .ply file - serial read version
+   function construct_from_ply_serial_read(plyfile,nvar,name) result(self)
       use messager, only: die
       implicit none
       type(surfmesh) :: self
@@ -301,7 +301,7 @@ contains
          end if
       end subroutine resize_polyConn
       
-   end function construct_from_ply
+   end function construct_from_ply_serial_read
    
 
    !> Constructor for an empty surface mesh object
