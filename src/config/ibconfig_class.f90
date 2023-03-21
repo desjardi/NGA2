@@ -157,6 +157,7 @@ contains
             do k=this%kmino_,this%kmaxo_
                do j=this%jmino_,this%jmaxo_
                   do i=this%imino_,this%imaxo_
+                     ! Form an hexahedron with corresponding distance info
 				         n=0
                      do sk=0,1
                         do sj=0,1
@@ -167,8 +168,14 @@ contains
                            end do
                         end do
                      end do
+                     ! Rescale by min_meshsize and shift
+                     do n=1,8
+                        hex_vertex(:,n)=(hex_vertex(:,n)-[this%x(i),this%y(j),this%z(k)])/this%min_meshsize
+                        G(n)=G(n)/this%min_meshsize
+                     end do
+                     ! Use marching tets to get volume fraction
                      call marching_tets(hex_vertex,G,vol,area,v_cent,a_cent)
-                     this%VF(i,j,k)=vol/this%vol(i,j,k)
+                     this%VF(i,j,k)=vol/this%vol(i,j,k)*(this%min_meshsize)**3
                   end do
                end do
             end do
