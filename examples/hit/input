@@ -11,9 +11,9 @@ Density :           1
 Forcing constant :  50.0
 
 # Particle properties
-Particle density :     0.018
-Particle diameter :    1
-Number of particles :  0!100000
+Particle density :     2000
+Particle diameter :    300e-6
+Number of particles :  100000
 
 # Time integration
 Max timestep size : 1e-4

@@ -83,9 +83,9 @@ contains
       
       ! Compute standard parameters for HIT
       Urms=sqrt(2.0_WP/3.0_WP*TKE)
-      Re_L=TKE**2.0_WP/EPS/visc
+      Re_L=TKE**2.0_WP/EPS/(visc/fs%rho)
       Re_lambda=sqrt(20.0_WP*Re_L/3.0_WP)
-      eta=(visc**3.0_WP/EPS)**0.25_WP
+      eta=((visc/fs%rho)**3.0_WP/EPS)**0.25_WP
       ell=(0.6667_WP*TKE)**1.5_WP/EPS
       
       ! Some more useful info
@@ -152,7 +152,7 @@ contains
          use messager,  only: die
          use, intrinsic :: iso_fortran_env, only: output_unit
          integer :: i,j,k
-         real(WP) :: myKE
+         real(WP) :: myKE,taueta
          ! Read in forcing, grid, and initial velocity field parameters
          call param_read('Forcing constant',G)
          dx=Lx/real(nx,WP)
@@ -165,8 +165,9 @@ contains
             EPS0=(visc/fs%rho)**3*(Pi*cfg%nx/(1.5_WP*Lx))**4
             TKE0=1.5_WP*(0.2_WP*Lx*EPS0)**(0.6667_WP)
          end if
-         Re_max=sqrt(15.0_WP*sqrt(0.6667_WP*TKE0)*0.2_WP*Lx/visc)
+         Re_max=sqrt(15.0_WP*sqrt(0.6667_WP*TKE0)*0.2_WP*Lx/(visc/fs%rho))
          tauinf=2.0_WP*TKE0/(3.0_WP*EPS0)
+         taueta=sqrt((visc/fs%rho)/EPS0)
          Gdtau =G/tauinf
          Gdtaui=1.0_WP/Gdtau
          if (Gdtaui.lt.time%dt) call die('[linear_forcing] Controller time constant less than timestep')
@@ -176,7 +177,8 @@ contains
             write(output_unit,'("Expected turbulence properties:")')
             write(output_unit,'("Re_lambda = ",es12.5)') Re_max
             write(output_unit,'("tau_eddy  = ",es12.5)') tauinf
-            write(output_unit,'("Urms      = ",es12.5)')  Urms0
+            write(output_unit,'("Urms      = ",es12.5)') Urms0
+            write(output_unit,'("tau_eta   = ",es12.5)') taueta
          end if
          ! Gaussian initial field
          do k=fs%cfg%kmin_,fs%cfg%kmax_
@@ -246,6 +248,10 @@ contains
                &            random_uniform(lp%cfg%z(lp%cfg%kmin),lp%cfg%z(lp%cfg%kmax+1))]
                ! Give zero velocity
                lp%p(i)%vel=0.0_WP
+               lp%p(i)%angVel=0.0_WP
+               ! Zero out collision forces
+               lp%p(i)%Acol=0.0_WP
+               lp%p(i)%Tcol=0.0_WP
                ! Give zero dt
                lp%p(i)%dt=0.0_WP
                ! Locate the particle on the mesh
@@ -256,6 +262,8 @@ contains
          end if
          ! Distribute particles
          call lp%sync()
+         ! Get initial particle volume fraction
+         call lp%update_VF()
       end block initialize_lpt
       
 
@@ -275,7 +283,6 @@ contains
          call param_read('Ensight output period',ens_evt%tper)
          ! Add variables to output
          call ens_out%add_vector('velocity',Ui,Vi,Wi)
-         call ens_out%add_scalar('pressure',fs%P)
          call ens_out%add_particle('particles',pmesh)
          ! Output to ensight
          if (ens_evt%occurs()) call ens_out%write_data(time%t)
