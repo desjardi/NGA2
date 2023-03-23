@@ -522,8 +522,8 @@ contains
       real(WP), dimension(:,:),   allocatable :: sendbuf
       real(WP), dimension(:,:),   allocatable :: recvbuf
       integer,  dimension(:),     allocatable :: ngroup
-      real(WP), dimension(:,:,:), allocatable :: AA
-      real(WP), dimension(:,:),   allocatable :: swap
+      real(WP), dimension(:,:,:), allocatable :: AA,AAbuf1
+      real(WP), dimension(:,:),   allocatable :: swap,AAbuf2
       
       ! Stuff
       integer :: i,igroup,j,k,m
@@ -750,10 +750,24 @@ contains
       
       ! Solve reduced systems
       if (.not.nper) then
-         call polydiagonal_serial(5, AA(:,3:4*proc-2,-5:+5), AA(:,3:4*proc-2,6), (2*proc-2)*2, nlot)
+         allocate(AAbuf1(nlot,3:4*proc-2,-5:+5))
+         AAbuf1=AA(:,3:4*proc-2,-5:+5)
+         allocate(AAbuf2(nlot,3:4*proc-2))
+         AAbuf2=AA(:,3:4*proc-2,6)
+         call polydiagonal_serial(5, AAbuf1, AAbuf2, (2*proc-2)*2, nlot)
+         AA(:,3:4*proc-2,-5:+5)=AAbuf1
+         AA(:,3:4*proc-2,6)=AAbuf2
+         deallocate(AAbuf1,AAbuf2)
       else
          if (proc.lt.3) stop 'Pentadiagonal solver needs more proc for this problem'
-         call polydiagonal_periodic_serial(5, AA(:,:,-5:+5), AA(:,:,6), (2*proc)*2, nlot, sendbuf)
+         allocate(AAbuf1(nlot,4*proc,-5:5))
+         AAbuf1=AA(:,:,-5:+5)
+         allocate(AAbuf2(nlot,4*proc))
+         AAbuf2=AA(:,:,6)
+         call polydiagonal_periodic_serial(5, AAbuf1, AAbuf2, (2*proc)*2, nlot, sendbuf)
+         AA(:,:,-5:+5)=AAbuf1
+         AA(:,:,6)=AAbuf2
+         deallocate(AAbuf1,AAbuf2)
       end if
       
       ! Move solution to beginning of recvbuf

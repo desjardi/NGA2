@@ -939,8 +939,8 @@ contains
              do i=this%cfg%imin_,this%cfg%imax_
                 this%tridiag%Az(i,j,k,-1) = - this%div_z(0,i,j,k) * filter_coeff * this%grd_z(-1,i,j,k)
                 this%tridiag%Az(i,j,k, 0) = 1.0_WP - (this%div_z(0,i,j,k) * filter_coeff * this%grd_z(0,i,j,k) &
-                     + this%div_z(1,i,j,k) * filter_coeff * this%grd_z(-1,i,j,k))
-                this%tridiag%Az(i,j,k,+1) = - this%div_z(1,i,j,k) * filter_coeff * this%grd_z(0,i,j,k)
+                     + this%div_z(1,i,j,k) * filter_coeff * this%grd_z(-1,i,j,k+1))
+                this%tridiag%Az(i,j,k,+1) = - this%div_z(1,i,j,k) * filter_coeff * this%grd_z(0,i,j,k+1)
                 this%tridiag%Rz(i,j,k) = this%tridiag%Ry(i,k,j)
              end do
           end do

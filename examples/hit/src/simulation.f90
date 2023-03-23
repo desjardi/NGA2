@@ -1,7 +1,7 @@
 !> Various definitions and tools for running an NGA2 simulation
 module simulation
    use precision,         only: WP
-   use geometry,          only: cfg
+   use geometry,          only: cfg,nx,Lx
    use fourier3d_class,   only: fourier3d
    use incomp_class,      only: incomp
    use lpt_class,         only: lpt
@@ -25,20 +25,78 @@ module simulation
    type(event)    :: ens_evt
    
    !> Simulation monitor file
-   type(monitor) :: mfile,cflfile,lptfile
+   type(monitor) :: mfile,cflfile,lptfile,hitfile,cvgfile
    
    public :: simulation_init,simulation_run,simulation_final
    
    !> Private work arrays
    real(WP), dimension(:,:,:), allocatable :: resU,resV,resW
    real(WP), dimension(:,:,:), allocatable :: Ui,Vi,Wi
+   real(WP), dimension(:,:,:,:), allocatable :: SR
+   real(WP), dimension(:,:,:,:,:), allocatable :: gradU
    
-   !> Fluid and forcing parameters
-   real(WP) :: visc
-   real(WP) :: Urms0,KE0,KE
-   real(WP) :: tau_eddy
+   !> Fluid, forcing, and particle parameters
+   real(WP) :: visc,meanU,meanV,meanW
+   real(WP) :: Urms0,TKE0,EPS0,Re_max
+   real(WP) :: TKE,URMS
+   real(WP) :: tauinf,G,Gdtau,Gdtaui,dx
    
+   !> For monitoring
+   real(WP) :: EPS
+   real(WP) :: Re_L,Re_lambda
+   real(WP) :: eta,ell
+   real(WP) :: dx_eta,ell_Lx,Re_ratio,eps_ratio,tke_ratio,nondtime
+   
+
 contains
+   
+   
+   !> Compute turbulence stats
+   subroutine compute_stats()
+      use mpi_f08,  only: MPI_ALLREDUCE,MPI_SUM
+      use parallel, only: MPI_REAL_WP
+      real(WP) :: myTKE,myEPS
+      integer :: i,j,k,ierr
+      
+      ! Compute mean velocities
+      call fs%cfg%integrate(A=Ui,integral=meanU); meanU=meanU/fs%cfg%vol_total
+      call fs%cfg%integrate(A=Vi,integral=meanV); meanV=meanV/fs%cfg%vol_total
+      call fs%cfg%integrate(A=Wi,integral=meanW); meanW=meanW/fs%cfg%vol_total
+      
+      ! Compute strainrate and grad(u)
+      call fs%get_strainrate(SR=SR)
+      call fs%get_gradu(gradu=gradU)
+      
+      ! Compute current TKE and dissipation rate
+      myTKE=0.0_WP
+      myEPS=0.0_WP
+      do k=fs%cfg%kmin_,fs%cfg%kmax_
+         do j=fs%cfg%jmin_,fs%cfg%jmax_
+            do i=fs%cfg%imin_,fs%cfg%imax_
+               myTKE=myTKE+0.5_WP*((Ui(i,j,k)-meanU)**2+(Vi(i,j,k)-meanV)**2+(Wi(i,j,k)-meanW)**2)*fs%cfg%vol(i,j,k)
+               myEPS=myEPS+2.0_WP*fs%visc(i,j,k)*fs%cfg%vol(i,j,k)*(SR(1,i,j,k)**2+SR(2,i,j,k)**2+SR(3,i,j,k)**2+2.0_WP*(SR(4,i,j,k)**2+SR(5,i,j,k)**2+SR(6,i,j,k)**2))/fs%rho
+            end do
+         end do
+      end do
+      call MPI_ALLREDUCE(myTKE,TKE,1,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr); TKE=TKE/fs%cfg%vol_total
+      call MPI_ALLREDUCE(myEPS,EPS,1,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr); EPS=EPS/fs%cfg%vol_total
+      
+      ! Compute standard parameters for HIT
+      Urms=sqrt(2.0_WP/3.0_WP*TKE)
+      Re_L=TKE**2.0_WP/EPS/visc
+      Re_lambda=sqrt(20.0_WP*Re_L/3.0_WP)
+      eta=(visc**3.0_WP/EPS)**0.25_WP
+      ell=(0.6667_WP*TKE)**1.5_WP/EPS
+      
+      ! Some more useful info
+      nondtime =time%t/tauinf
+      dx_eta   =dx/eta
+      eps_ratio=EPS/EPS0
+      tke_ratio=TKE/TKE0
+      ell_Lx   =ell/Lx
+      Re_ratio =Re_lambda/Re_max
+      
+   end subroutine compute_stats
    
    
    !> Initialization of problem solver
@@ -55,6 +113,8 @@ contains
          allocate(Ui  (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
          allocate(Vi  (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
          allocate(Wi  (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+         allocate(SR  (1:6,cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+         allocate(gradU(1:3,1:3,cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
       end block allocate_work_arrays
       
       
@@ -86,14 +146,38 @@ contains
 
       ! Prepare initial velocity field
       initialize_velocity: block
-         use random,   only: random_normal
-         use mpi_f08,  only: MPI_ALLREDUCE,MPI_SUM
-         use parallel, only: MPI_REAL_WP
-         integer :: i,j,k,ierr
+         use random,    only: random_normal
+         use param,     only: param_exists
+         use mathtools, only: Pi
+         use messager,  only: die
+         use, intrinsic :: iso_fortran_env, only: output_unit
+         integer :: i,j,k
          real(WP) :: myKE
-         ! Read in velocity rms and forcing time scale
-         call param_read('Initial rms',Urms0)
-         call param_read('Eddy turnover time',tau_eddy)
+         ! Read in forcing, grid, and initial velocity field parameters
+         call param_read('Forcing constant',G)
+         dx=Lx/real(nx,WP)
+         if (param_exists('Steady-state TKE')) then
+            ! A target TKE was provided
+            call param_read('Steady-state TKE',TKE0)
+            EPS0=5.0_WP*(0.6667_WP*TKE0)**1.5_WP/Lx
+         else
+            ! Force to maximum Re_lambda
+            EPS0=(visc/fs%rho)**3*(Pi*cfg%nx/(1.5_WP*Lx))**4
+            TKE0=1.5_WP*(0.2_WP*Lx*EPS0)**(0.6667_WP)
+         end if
+         Re_max=sqrt(15.0_WP*sqrt(0.6667_WP*TKE0)*0.2_WP*Lx/visc)
+         tauinf=2.0_WP*TKE0/(3.0_WP*EPS0)
+         Gdtau =G/tauinf
+         Gdtaui=1.0_WP/Gdtau
+         if (Gdtaui.lt.time%dt) call die('[linear_forcing] Controller time constant less than timestep')
+         Urms0=sqrt(0.6667_WP*TKE0)
+         ! Print out some expected turbulence properties
+         if (fs%cfg%amRoot) then
+            write(output_unit,'("Expected turbulence properties:")')
+            write(output_unit,'("Re_lambda = ",es12.5)') Re_max
+            write(output_unit,'("tau_eddy  = ",es12.5)') tauinf
+            write(output_unit,'("Urms      = ",es12.5)')  Urms0
+         end if
          ! Gaussian initial field
          do k=fs%cfg%kmin_,fs%cfg%kmax_
             do j=fs%cfg%jmin_,fs%cfg%jmax_
@@ -107,6 +191,13 @@ contains
          call fs%cfg%sync(fs%U)
          call fs%cfg%sync(fs%V)
          call fs%cfg%sync(fs%W)
+         ! Compute mean and remove it from the velocity field to obtain <U>=0
+         call fs%cfg%integrate(A=fs%U,integral=meanU); meanU=meanU/fs%cfg%vol_total
+         call fs%cfg%integrate(A=fs%V,integral=meanV); meanV=meanV/fs%cfg%vol_total
+         call fs%cfg%integrate(A=fs%W,integral=meanW); meanW=meanW/fs%cfg%vol_total
+         fs%U=fs%U-meanU
+         fs%V=fs%V-meanV
+         fs%W=fs%W-meanW
          ! Project to ensure divergence-free
          call fs%get_div()
          fs%psolv%rhs=-fs%cfg%vol*fs%div*fs%rho/time%dt
@@ -121,17 +212,8 @@ contains
          ! Calculate cell-centered velocities and divergence
          call fs%interp_vel(Ui,Vi,Wi)
          call fs%get_div()
-         ! Calculate KE0
-         myKE=0.0_WP
-         do k=fs%cfg%kmin_,fs%cfg%kmax_
-            do j=fs%cfg%jmin_,fs%cfg%jmax_
-               do i=fs%cfg%imin_,fs%cfg%imax_
-                  myKE=myKE+0.5_WP*(Ui(i,j,k)**2+Vi(i,j,k)**2+Wi(i,j,k)**2)
-               end do
-            end do
-         end do
-         call MPI_ALLREDUCE(myKE,KE,1,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr)
-         KE0=KE
+         ! Compute turbulence stats
+         call compute_stats()
       end block initialize_velocity
       
       
@@ -215,7 +297,6 @@ contains
          call mfile%add_column(fs%Vmax,'Vmax')
          call mfile%add_column(fs%Wmax,'Wmax')
          call mfile%add_column(fs%Pmax,'Pmax')
-         call mfile%add_column(KE,'Kinetic energy')
          call mfile%add_column(fs%divmax,'Maximum divergence')
          call mfile%add_column(fs%psolv%it,'Pressure iteration')
          call mfile%add_column(fs%psolv%rerr,'Pressure error')
@@ -246,6 +327,29 @@ contains
          call lptfile%add_column(lp%dmin,'Particle dmin')
          call lptfile%add_column(lp%dmax,'Particle dmax')
          call lptfile%write()
+         ! Create hit monitor
+         hitfile=monitor(fs%cfg%amRoot,'hit')
+         call hitfile%add_column(time%n,'Timestep number')
+         call hitfile%add_column(time%t,'Time')
+         call hitfile%add_column(Re_L,'Re_L')
+         call hitfile%add_column(Re_lambda,'Re_lambda')
+         call hitfile%add_column(eta,'eta')
+         call hitfile%add_column(TKE,'TKE')
+         call hitfile%add_column(URMS,'Urms')
+         call hitfile%add_column(EPS,'EPS')
+         call hitfile%add_column(ell,'L')
+         call hitfile%write()
+         ! Create hit convergence monitor
+         cvgfile=monitor(fs%cfg%amRoot,'convergence')
+         call cvgfile%add_column(time%n,'Timestep number')
+         call cvgfile%add_column(time%t,'Time')
+         call cvgfile%add_column(nondtime,'Time/t_int')
+         call cvgfile%add_column(Re_ratio,'Re_ratio')
+         call cvgfile%add_column(eps_ratio,'EPS_ratio')
+         call cvgfile%add_column(tke_ratio,'TKE_ratio')
+         call cvgfile%add_column(dx_eta,'dx/eta')
+         call cvgfile%add_column(ell_Lx,'ell/Lx')
+         call cvgfile%write()
       end block create_monitor
       
       
@@ -273,9 +377,6 @@ contains
          fs%Vold=fs%V
          fs%Wold=fs%W
          
-         ! Apply time-varying Dirichlet conditions
-         ! This is where time-dpt Dirichlet would be enforced
-         
          ! Perform sub-iterations
          do while (time%it.le.time%itmax)
             
@@ -292,33 +393,38 @@ contains
             resV=-2.0_WP*(fs%rho*fs%V-fs%rho*fs%Vold)+time%dt*resV
             resW=-2.0_WP*(fs%rho*fs%W-fs%rho*fs%Wold)+time%dt*resW
             
-            ! Add linear forcing term
+            ! Add linear forcing term based on Bassenne et al. (2016)
             linear_forcing: block
                use mpi_f08,  only: MPI_ALLREDUCE,MPI_SUM
                use parallel, only: MPI_REAL_WP
-               real(WP) :: meanU,meanV,meanW,myKE
+               real(WP) :: myTKE,A,myEPSp,EPSp
                integer :: i,j,k,ierr
-               ! Calculate KE
+               ! Calculate mean velocity
+               call fs%cfg%integrate(A=fs%U,integral=meanU); meanU=meanU/fs%cfg%vol_total
+               call fs%cfg%integrate(A=fs%V,integral=meanV); meanV=meanV/fs%cfg%vol_total
+               call fs%cfg%integrate(A=fs%W,integral=meanW); meanW=meanW/fs%cfg%vol_total
+               ! Calculate TKE and pseudo-EPS
                call fs%interp_vel(Ui,Vi,Wi)
-               myKE=0.0_WP
+               call fs%get_gradu(gradu=gradU)
+               myTKE=0.0_WP; myEPSp=0.0_WP
                do k=fs%cfg%kmin_,fs%cfg%kmax_
                   do j=fs%cfg%jmin_,fs%cfg%jmax_
                      do i=fs%cfg%imin_,fs%cfg%imax_
-                        myKE=myKE+0.5_WP*(Ui(i,j,k)**2+Vi(i,j,k)**2+Wi(i,j,k)**2)
+                        myTKE =myTKE +0.5_WP*((Ui(i,j,k)-meanU)**2+(Vi(i,j,k)-meanV)**2+(Wi(i,j,k)-meanW)**2)*fs%cfg%vol(i,j,k)
+                        myEPSp=myEPSp+fs%cfg%vol(i,j,k)*fs%visc(i,j,k)*(gradU(1,1,i,j,k)**2+gradU(1,2,i,j,k)**2+gradU(1,3,i,j,k)**2+&
+                        &                                               gradU(2,1,i,j,k)**2+gradU(2,2,i,j,k)**2+gradU(2,3,i,j,k)**2+&
+                        &                                               gradU(3,1,i,j,k)**2+gradU(3,2,i,j,k)**2+gradU(3,3,i,j,k)**2)
                      end do
                   end do
                end do
-               call MPI_ALLREDUCE(myKE,KE,1,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr)
-               ! Calculate mean velocity
-               call fs%cfg%integrate(A=fs%U,integral=meanU); meanU=meanU/fs%cfg%fluid_vol
-               call fs%cfg%integrate(A=fs%V,integral=meanV); meanV=meanV/fs%cfg%fluid_vol
-               call fs%cfg%integrate(A=fs%W,integral=meanW); meanW=meanW/fs%cfg%fluid_vol
-               ! Add forcing term
-               resU=resU+time%dt*KE0/KE*(fs%U-meanU)/(2.0_WP*tau_eddy)
-               resV=resV+time%dt*KE0/KE*(fs%V-meanV)/(2.0_WP*tau_eddy)
-               resW=resW+time%dt*KE0/KE*(fs%W-meanW)/(2.0_WP*tau_eddy)
+               call MPI_ALLREDUCE(myTKE ,TKE ,1,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr); TKE =TKE /fs%cfg%vol_total
+               call MPI_ALLREDUCE(myEPSp,EPSp,1,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr); EPSp=EPSp/fs%cfg%vol_total/fs%rho
+               A=(EPSp-Gdtau*(TKE-TKE0))/(2.0_WP*TKE)*fs%rho
+               resU=resU+time%dt*(fs%U-meanU)*A
+               resV=resV+time%dt*(fs%V-meanV)*A
+               resW=resW+time%dt*(fs%W-meanW)*A
             end block linear_forcing
-
+            
             ! Apply these residuals
             fs%U=2.0_WP*fs%U-fs%Uold+resU/fs%rho
             fs%V=2.0_WP*fs%V-fs%Vold+resV/fs%rho
@@ -358,11 +464,14 @@ contains
          end if
          
          ! Perform and output monitoring
+         call compute_stats()
          call fs%get_max()
          call mfile%write()
          call cflfile%write()
          call lp%get_max()
          call lptfile%write()
+         call hitfile%write()
+         call cvgfile%write()
          
       end do
       
@@ -380,7 +489,7 @@ contains
       ! timetracker
       
       ! Deallocate work arrays
-      deallocate(resU,resV,resW,Ui,Vi,Wi)
+      deallocate(resU,resV,resW,Ui,Vi,Wi,SR,gradU)
       
    end subroutine simulation_final
    

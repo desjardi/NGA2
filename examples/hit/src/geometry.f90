@@ -8,7 +8,11 @@ module geometry
    !> Single config
    type(config), public :: cfg
    
-   public :: geometry_init
+   !> Mesh info
+   integer :: nx
+   real(WP) :: Lx
+
+   public :: geometry_init,nx,Lx
    
 contains
    
@@ -23,8 +27,7 @@ contains
       ! Create a grid from input params
       create_grid: block
          use sgrid_class, only: cartesian
-         integer :: i,nx
-         real(WP) :: Lx
+         integer :: i
          real(WP), dimension(:), allocatable :: x
          ! Read in grid definition
          call param_read('Lx',Lx)
