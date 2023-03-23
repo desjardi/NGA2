@@ -145,10 +145,16 @@ contains
          use mathtools, only: twoPi,Pi
 			use random,    only: random_uniform
          integer :: i,j,k,np
-         real(WP) :: radius,theta
+         real(WP) :: radius
+
          ! Create solver
          df=dfibm(cfg=cfg,name='IBM')
-         ! Read cylinder properties
+         
+         ! Set material properties
+         df%elastic_modulus=1.0e6_WP
+         df%poisson_ratio  =0.333_WP
+         
+         ! Read sphere properties
          call param_read('Number of markers',np)
          ! Root process initializes marker particles
          if (df%cfg%amRoot) then
@@ -156,21 +162,19 @@ contains
             ! Distribute marker particles
             do i=1,np
 					! Set various parameters for the marker
-               df%p(i)%id =1
+               df%p(i)%id=1
 					! Give zero dt
                df%p(i)%dt=huge(1.0_WP)
                ! Set position
 					radius=huge(1.0_WP)
 					do while (radius.gt.0.5_WP)
-						df%p(i)%pos=[random_uniform(-0.5_WP,+0.5_WP),random_uniform(-0.5_WP,+0.5_WP),0.0_WP]
+						df%p(i)%pos=[random_uniform(-0.5_WP,+0.5_WP),random_uniform(-0.5_WP,+0.5_WP),random_uniform(-0.5_WP,+0.5_WP)]
 						radius=sqrt(dot_product(df%p(i)%pos,df%p(i)%pos))
-						theta=atan2(df%p(i)%pos(2),df%p(i)%pos(1))
 					end do
 					! Assign velocity
-					!df%p(i)%vel=1.0_WP*[cos(theta),sin(theta),0.0_WP]
 					df%p(i)%vel=[0.0_WP,0.0_WP,0.0_WP]
                ! Assign element volume
-               df%p(i)%dV=0.25_WP*Pi*df%cfg%zL/real(np,WP)
+               df%p(i)%dV=Pi/(6.0_WP*real(np,WP))
                ! Locate the particle on the mesh
                df%p(i)%ind=df%cfg%get_ijk_global(df%p(i)%pos,[df%cfg%imin,df%cfg%jmin,df%cfg%kmin])
                ! Assign a unique integer to particle
@@ -201,14 +205,22 @@ contains
 
       ! Create partmesh object for Lagrangian particle output
       create_pmesh: block
-		   integer :: i
-         pmesh=partmesh(nvar=1,nvec=1,name='ibm')
-         pmesh%varname(1)='dV'
+         use df_class, only: max_bond
+		   integer :: i,n
+         pmesh=partmesh(nvar=2,nvec=2,name='ibm')
+         pmesh%varname(1)='nbond'
+         pmesh%varname(2)='dilatation'
          pmesh%vecname(1)='velocity'
+         pmesh%vecname(2)='bond_force'
          call df%update_partmesh(pmesh)
          do i=1,df%np_
-            pmesh%var(1,i)=df%p(i)%dV
+            pmesh%var(1,i)=0.0_WP
+            do n=1,max_bond
+               if (df%p(i)%ibond(n).gt.0) pmesh%var(1,i)=pmesh%var(1,i)+1.0_WP
+            end do
+            pmesh%var(2,i)=df%p(i)%dil
             pmesh%vec(:,1,i)=df%p(i)%vel
+            pmesh%vec(:,2,i)=df%p(i)%Fbond
          end do
 		end block create_pmesh
 
@@ -305,7 +317,7 @@ contains
 			ib_moving: block
 			   integer :: i
 			   do i=1,df%np_
-					df%p(i)%vel=[cos(time%t),0.0_WP,0.0_WP]
+					df%p(i)%vel=[0.1_WP*cos(time%t)*df%p(i)%pos(1),0.0_WP,0.0_WP]
 				end do
 				call df%advance(time%dt)
 			end block ib_moving
@@ -383,11 +395,17 @@ contains
 			! Output to ensight
 		   if (ens_evt%occurs()) then
 				update_pmesh: block
-				   integer :: i
+               use df_class, only: max_bond
+				   integer :: i,n
 					call df%update_partmesh(pmesh)
 					do i=1,df%np_
-						pmesh%var(1,i)=df%p(i)%dV
+						pmesh%var(1,i)=0.0_WP
+                  do n=1,max_bond
+                     if (df%p(i)%ibond(n).gt.0) pmesh%var(1,i)=pmesh%var(1,i)+1.0_WP
+                  end do
+                  pmesh%var(2,i)=df%p(i)%dil
 						pmesh%vec(:,1,i)=df%p(i)%vel
+                  pmesh%vec(:,2,i)=df%p(i)%Fbond
 					end do
 				end block update_pmesh
 				call ens_out%write_data(time%t)

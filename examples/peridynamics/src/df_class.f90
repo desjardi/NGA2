@@ -21,8 +21,8 @@ module df_class
    integer, parameter :: part_chunk_size=1000  !< Read 1000 particles at a time before redistributing
    
    !> Maximum number of bonds per particle
-   integer, parameter :: max_bond=50           !< Assumes a 5x5 stencil in 2D
-   !integer, parameter :: max_bond=125          !< Assumes a 5x5x5 stencil in 3D
+   !integer, parameter, public :: max_bond=50   !< Assumes a 5x5 stencil in 2D
+   integer, parameter, public :: max_bond=1000   !< Assumes a 5x5x5 stencil in 3D
 
    !> Basic marker particle definition
    type :: part
@@ -86,8 +86,6 @@ module df_class
       ! Material properties
       real(WP) :: elastic_modulus                         !< Elastic modulus of the material
       real(WP) :: poisson_ratio                           !< Poisson's ratio of the material
-      real(WP) :: shear_modulus                           !< Shear modulus of the material
-      real(WP) :: bulk_modulus                            !< Bulk modulus of the material
       
       ! CFL numbers
       real(WP) :: CFLp_x,CFLp_y,CFLp_z                    !< CFL numbers
@@ -333,6 +331,8 @@ contains
                         rpos=p2%pos-p1%pos
                         dist=sqrt(dot_product(rpos,rpos))
                         if (dist.lt.1.5_WP*this%cfg%min_meshsize) then
+                           ! Cannot self-bond
+                           if (p1%i.eq.p2%i) cycle
                            ! According to a Roma kernel, this particle should be bonded
                            nbond=nbond+1
                            if (nbond.gt.max_bond) call die('[df_class bond_init] Number of detected bonds is larger than max allowed')
@@ -340,13 +340,13 @@ contains
                            p1%dbond(nbond)=dist
                            ! Increment weighted volume
                            p1%mw=p1%mw+kernel(dist/this%cfg%min_meshsize)*dist**2*p2%dV
-                           ! Get dilatation
-                           p1%dil=0.0_WP
                         end if
                      end do
                   end do
                end do
             end do
+            ! Zero out initial dilatation
+            p1%dil=0.0_WP
             ! Copy back the particle
             this%p(n1)=p1
          end do
@@ -503,21 +503,21 @@ contains
                               rpos=p2%pos-p1%pos
                               dist=sqrt(dot_product(rpos,rpos))
                               ! Beta1
-                              beta=3.0_WP*this%bulk_modulus*p1%dil
+                              beta=(this%elastic_modulus/(1.0_WP-2.0_WP*this%poisson_ratio))*p1%dil
                               ! Alpha1
-                              alpha=15.0_WP*this%shear_modulus/p1%mw
+                              alpha=7.5_WP*(this%elastic_modulus/(1.0_WP+this%poisson_ratio))/p1%mw
                               ! Extension1
                               ed=dist-p1%dbond(nb)*(1.0_WP+p1%dil/3.0_WP)
                               ! Force density 1->2
                               t12=+kernel(p1%dbond(nb)/this%cfg%min_meshsize)*(beta/p1%mw*p1%dbond(nb)+alpha*ed)*rpos/dist
                               ! Beta2
-                              beta=3.0_WP*this%bulk_modulus*p2%dil
+                              beta=(this%elastic_modulus/(1.0_WP-2.0_WP*this%poisson_ratio))*p2%dil
                               ! Alpha2
-                              alpha=15.0_WP*this%shear_modulus/p2%mw
+                              alpha=7.5_WP*(this%elastic_modulus/(1.0_WP+this%poisson_ratio))/p2%mw
                               ! Extension2
-                              ed=dist-p2%dbond(nb)*(1.0_WP+p2%dil/3.0_WP)
+                              ed=dist-p1%dbond(nb)*(1.0_WP+p2%dil/3.0_WP)
                               ! Force density 2->1
-                              t21=-kernel(p2%dbond(nb)/this%cfg%min_meshsize)*(beta/p2%mw*p2%dbond(nb)+alpha*ed)*rpos/dist
+                              t21=-kernel(p1%dbond(nb)/this%cfg%min_meshsize)*(beta/p2%mw*p1%dbond(nb)+alpha*ed)*rpos/dist
                               ! Increment bond force
                               p1%Fbond=p1%Fbond+(t12-t21)*p2%dV
                            end if

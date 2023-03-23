@@ -4,17 +4,16 @@ Partition :	8 1 1
 # Mesh definition
 Lx :	20
 Ly :	10
-Lz :	0.1
-nx :	200
-ny :	100
-nz :	1
+Lz :	10
+nx :	100
+ny :	50
+nz :	50
 
 # Case definition
-Cylinder radius : 0.5
 Inlet velocity :  1
 
 # Particles
-Number of markers : 100
+Number of markers : 1000
 
 # Fluid properties
 Dynamic viscosity : 0.01
@@ -30,4 +29,4 @@ Pressure tolerance : 1e-5
 Pressure iteration : 100
 
 # Ensight output
-Ensight output period : 1
+Ensight output period : 0.1
