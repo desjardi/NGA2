@@ -2,16 +2,18 @@
 Partition :	8 1 1
 
 # Mesh definition
-Lx :	1e-1
-Ly :	1e-1
-Lz :	1e-4
-nx :	1000
-ny :	1000
-nz :	1
-Film height : 0.01
+Lx :	1e-2
+Ly :	2e-2
+Lz :	1e-2
+nx :	50
+ny :	100
+nz :	50
+
+Film height :     0.005
+Inflow velocity : 0.2
 
 # Fluid properties
-Angular velocity :            200  !< This is Omega
+Angular velocity :            100  !< This is Omega
 Centrifugal acceleration :    1000  !< This is Omega^2*Distance_to_rotation_axis
 Liquid dynamic viscosity :    1.137e-3
 Gas dynamic viscosity :       1.780e-5

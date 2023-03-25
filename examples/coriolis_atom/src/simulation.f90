@@ -2,7 +2,8 @@
 module simulation
    use precision,         only: WP
    use geometry,          only: cfg
-   use hypre_str_class,   only: hypre_str
+   use iterator_class,    only: iterator
+   use hypre_uns_class,   only: hypre_uns
    use ddadi_class,       only: ddadi
    use tpns_class,        only: tpns
    use vfs_class,         only: vfs
@@ -14,7 +15,7 @@ module simulation
    private
    
    !> Single two-phase flow solver and volume fraction solver and corresponding time tracker
-   type(hypre_str),   public :: ps
+   type(hypre_uns),   public :: ps
 	type(ddadi),       public :: vs
    type(tpns),        public :: fs
    type(vfs),         public :: vf
@@ -35,12 +36,15 @@ module simulation
    
    !> Problem definition
    integer :: nwaveX,nwaveZ
-   real(WP) :: Hfilm
+   real(WP) :: Hfilm,Uin
    real(WP), dimension(:),   allocatable :: wnumbX,wshiftX,wnumbZ,wshiftZ
    real(WP), dimension(:,:), allocatable :: wamp
    real(WP) :: centrifugal_acc,angular_velocity
    
-   
+   !> Iterator for VOF removal
+   type(iterator) :: vof_removal_layer  !< Edge of domain where we actively remove VOF
+   integer, parameter :: nlayer=4
+
 contains
    
    
@@ -59,6 +63,39 @@ contains
       end do
    end function levelset_wavy
    
+   
+   !> Function that localizes the top (y+) of the domain
+   function yp_locator(pg,i,j,k) result(isIn)
+      use pgrid_class, only: pgrid
+      class(pgrid), intent(in) :: pg
+      integer, intent(in) :: i,j,k
+      logical :: isIn
+      isIn=.false.
+      if (j.eq.pg%jmax+1) isIn=.true.
+   end function yp_locator
+   
+
+   !> Function that localizes the bottom (y-) of the domain boundary
+   function ym_locator(pg,i,j,k) result(isIn)
+      use pgrid_class, only: pgrid
+      class(pgrid), intent(in) :: pg
+      integer, intent(in) :: i,j,k
+      logical :: isIn
+      isIn=.false.
+      if (j.le.pg%jmin) isIn=.true.
+   end function ym_locator
+   
+   
+   !> Function that localizes region of VOF removal
+   function vof_removal_layer_locator(pg,i,j,k) result(isIn)
+      use pgrid_class, only: pgrid
+      class(pgrid), intent(in) :: pg
+      integer, intent(in) :: i,j,k
+      logical :: isIn
+      isIn=.false.
+      if (j.ge.pg%jmax-nlayer) isIn=.true.
+   end function vof_removal_layer_locator
+
    
    !> Initialization of problem solver
    subroutine simulation_init
@@ -170,9 +207,16 @@ contains
       end block create_and_initialize_vof
       
       
+      ! Create an iterator for removing VOF at edges
+      create_iterator: block
+         vof_removal_layer=iterator(cfg,'VOF removal',vof_removal_layer_locator)
+      end block create_iterator
+      
+
       ! Create a two-phase flow solver without bconds
       create_and_initialize_flow_solver: block
-         use hypre_str_class, only: pcg_pfmg
+         use hypre_uns_class, only: pcg_amg
+         use tpns_class,      only: dirichlet,clipped_neumann
          ! Create flow solver
          fs=tpns(cfg=cfg,name='Two-phase NS')
          ! Assign constant viscosity to each phase
@@ -187,22 +231,49 @@ contains
          call param_read('Centrifugal acceleration',centrifugal_acc)
          ! Also read in angular velocity
          call param_read('Angular velocity',angular_velocity)
+         ! Dirichlet inflow on the bottom, clipped Neumann outflow on the top
+         call fs%add_bcond(name='inflow' ,type=dirichlet      ,face='y',dir=-1,canCorrect=.false.,locator=ym_locator)
+         call fs%add_bcond(name='outflow',type=clipped_neumann,face='y',dir=+1,canCorrect=.true. ,locator=yp_locator)
          ! Configure pressure solver
-			ps=hypre_str(cfg=cfg,name='Pressure',method=pcg_pfmg,nst=7)
+         ps=hypre_uns(cfg=cfg,name='Pressure',method=pcg_amg,nst=7)
          call param_read('Pressure iteration',ps%maxit)
          call param_read('Pressure tolerance',ps%rcvg)
          ! Configure implicit velocity solver
          vs=ddadi(cfg=cfg,name='Velocity',nst=7)
          ! Setup the solver
          call fs%setup(pressure_solver=ps,implicit_solver=vs)
-         ! Zero initial field
-         fs%U=0.0_WP; fs%V=0.0_WP; fs%W=0.0_WP
-         ! Calculate cell-centered velocities and divergence
-         call fs%interp_vel(Ui,Vi,Wi)
-         call fs%get_div()
       end block create_and_initialize_flow_solver
       
       
+      ! Initialize our velocity field
+      initialize_velocity: block
+         use tpns_class, only: bcond
+         type(bcond), pointer :: mybc
+         real(WP) :: r,theta
+         integer  :: n,i,j,k
+         ! Zero initial field in the domain
+         fs%U=0.0_WP; fs%V=0.0_WP; fs%W=0.0_WP
+         ! Read in inflow parameters
+         call param_read('Inflow velocity',Uin)
+         ! Apply Dirichlet at inlet
+         call fs%get_bcond('inflow',mybc)
+         do n=1,mybc%itr%no_
+            i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
+            fs%V(i,j,k)=Uin
+         end do
+         ! Apply all other boundary conditions
+         call fs%apply_bcond(time%t,time%dt)
+         ! Compute MFR through all boundary conditions
+         call fs%get_mfr()
+         ! Adjust MFR for global mass balance
+         call fs%correct_mfr()
+         ! Compute cell-centered velocity
+         call fs%interp_vel(Ui,Vi,Wi)
+         ! Compute divergence
+         call fs%get_div()
+      end block initialize_velocity
+      
+
       ! Add Ensight output
       create_ensight: block
          ! Create Ensight output from cfg
@@ -360,6 +431,17 @@ contains
          ! Recompute interpolated velocity and divergence
          call fs%interp_vel(Ui,Vi,Wi)
          call fs%get_div()
+         
+         ! Remove VOF at top of domain
+         remove_vof: block
+            integer :: n,i,j,k
+            do n=1,vof_removal_layer%no_
+               i=vof_removal_layer%map(1,n)
+               j=vof_removal_layer%map(2,n)
+               k=vof_removal_layer%map(3,n)
+               vf%VF(i,j,k)=0.0_WP
+            end do
+         end block remove_vof
          
          ! Output to ensight
          if (ens_evt%occurs()) call ens_out%write_data(time%t)
