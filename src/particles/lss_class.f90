@@ -1,6 +1,6 @@
-!> Basic direct forcing IBM class:
-!> Provides support for Lagrangian marker particles
-module df_class
+!> Lagrangian solid solver object
+!> Implements peridynamics equations
+module lss_class
    use precision,      only: WP
    use string,         only: str_medium
    use config_class,   only: config
@@ -10,21 +10,22 @@ module df_class
    
    
    ! Expose type/constructor/methods
-   public :: dfibm
+   public :: lss
    
    
    !> Memory adaptation parameter
    real(WP), parameter :: coeff_up=1.3_WP      !< Particle array size increase factor
    real(WP), parameter :: coeff_dn=0.7_WP      !< Particle array size decrease factor
    
+
    !> I/O chunk size to read at a time
    integer, parameter :: part_chunk_size=1000  !< Read 1000 particles at a time before redistributing
    
-   !> Maximum number of bonds per particle
-   !integer, parameter, public :: max_bond=50   !< Assumes a 5x5 stencil in 2D
-   integer, parameter, public :: max_bond=1000   !< Assumes a 5x5x5 stencil in 3D
 
-   !> Basic marker particle definition
+   !> Maximum number of bonds per particle
+   integer, parameter, public :: max_bond=500  !< Assumes something like a 7x7x7 stencil in 3D
+
+   !> Bonded solide particle definition
    type :: part
       !> MPI_DOUBLE_PRECISION data
       real(WP) :: dV                         !< Element volume
@@ -33,8 +34,7 @@ module df_class
       real(WP), dimension(max_bond) :: dbond !< Length of initial bonds
       real(WP), dimension(3) :: pos          !< Particle center coordinates
       real(WP), dimension(3) :: vel          !< Velocity of particle
-      real(WP), dimension(3) :: Abond        !< Bound acceleration for particle
-      real(WP), dimension(3) :: Afluid       !< Fluid acceleration for particle
+      real(WP), dimension(3) :: Abond        !< Bond acceleration for particle
       real(WP) :: dt                         !< Time step size for the particle
       !> MPI_INTEGER data
       integer :: id                          !< ID the object is associated with
@@ -45,32 +45,32 @@ module df_class
    end type part
    !> Number of blocks, block length, and block types in a particle
    integer, parameter                         :: part_nblock=2
-   integer           , dimension(part_nblock) :: part_lblock=[16+max_bond,6+max_bond]
+   integer           , dimension(part_nblock) :: part_lblock=[13+max_bond,6+max_bond]
    type(MPI_Datatype), dimension(part_nblock) :: part_tblock=[MPI_DOUBLE_PRECISION,MPI_INTEGER]
    !> MPI_PART derived datatype and size
    type(MPI_Datatype) :: MPI_PART
    integer :: MPI_PART_SIZE
    
-   !> Basic ibm object definition
-   type :: obj
-      !> MPI_DOUBLE_PRECISION data
-      real(WP) :: vol                      !< Object volume
-      real(WP), dimension(3) :: pos        !< Center of mass
-      real(WP), dimension(3) :: vel        !< Translational velocity of the object
-      real(WP), dimension(3) :: angVel     !< Angular velocity of the object
-      real(WP), dimension(3) :: F          !< Hydrodynamic force
-   end type obj
    
-   !> Direct forcing IBM solver object definition
-   type :: dfibm
+   !> Lagrangian solid solver object definition
+   type :: lss
    
-      ! This is our underlying config
-      class(config), pointer :: cfg                       !< This is the config the solver is build for
+      ! This config is used for parallelization and for calculating bond/collision forces
+      class(config), pointer :: cfg
       
       ! This is the name of the solver
-      character(len=str_medium) :: name='UNNAMED_DFIBM'   !< Solver name (default=UNNAMED_DFIBM
+      character(len=str_medium) :: name='UNNAMED_LSS'
       
-      ! Marker particle data
+      ! Solid material properties
+      real(WP) :: elastic_modulus                         !< Elastic modulus of the material
+      real(WP) :: poisson_ratio                           !< Poisson's ratio of the material
+      real(WP) :: rho                                     !< Density of the material
+
+      ! Bonding parameters
+      real(WP) :: delta                                   !< Bonding horizon (distance)
+      integer :: nb                                       !< Cell-based horizon 
+      
+      ! Global and local particle data
       integer :: np                                       !< Global number of particles
       integer :: np_                                      !< Local number of particles
       integer, dimension(:), allocatable :: np_proc       !< Number of particles on each processor
@@ -80,91 +80,62 @@ module df_class
       integer :: ng_                                      !< Local number of ghosts
       type(part), dimension(:), allocatable :: g          !< Array of ghosts of type part
       
-      ! Object data
-      integer :: nobj                                     !< Global number of objects
-      type(obj), dimension(:), allocatable :: o           !< Array of objects of type obj
-      
-      ! Material properties
-      real(WP) :: elastic_modulus                         !< Elastic modulus of the material
-      real(WP) :: poisson_ratio                           !< Poisson's ratio of the material
-      real(WP) :: rho                                     !< Density of the material
-      
       ! Gravitational acceleration
-      real(WP), dimension(3) :: gravity=0.0_WP            !< Acceleration of gravity
+      real(WP), dimension(3) :: gravity=0.0_WP
       
       ! CFL numbers
-      real(WP) :: CFLp_x,CFLp_y,CFLp_z                    !< CFL numbers
+      real(WP) :: CFLp_x,CFLp_y,CFLp_z
       
-      ! Solver parameters
-      real(WP) :: nstep=1                                 !< Number of substeps (default=1)
-      logical :: can_move                                 !< Flag to allow moving IBM objects
+      ! Number of substeps for time integrator
+      real(WP) :: nstep=1
       
       ! Monitoring info
-      real(WP) :: VFmin,VFmax,VFmean                 !< Volume fraction info
       real(WP) :: Umin,Umax,Umean                    !< U velocity info
       real(WP) :: Vmin,Vmax,Vmean                    !< V velocity info
       real(WP) :: Wmin,Wmax,Wmean                    !< W velocity info
-      real(WP) :: Fx,Fy,Fz                           !< Total force
       integer  :: np_out                             !< Number of particles leaving the domain
       
-      ! Volume fraction associated with IBM projection
-      real(WP), dimension(:,:,:), allocatable :: VF       !< Volume fraction, cell-centered
-      
-      ! Momentum source
-      real(WP), dimension(:,:,:), allocatable :: srcU     !< U momentum source on mesh, cell-centered
-      real(WP), dimension(:,:,:), allocatable :: srcV     !< V momentum source on mesh, cell-centered
-      real(WP), dimension(:,:,:), allocatable :: srcW     !< W momentum source on mesh, cell-centered
-      
    contains
-      procedure :: update_partmesh                        !< Update a partmesh object using current particles
-      procedure :: setup_obj                              !< Setup IBM object
-      procedure :: bond_init                              !< Setup initial interparticle bonds
-      procedure :: get_bond_force                         !< Compute interparticle bond force
-      procedure :: get_fluid_force                        !< Compute particle-fluid direct force
-      procedure :: advance                                !< Step forward the particle ODEs
-      procedure :: resize                                 !< Resize particle array to given size
-      procedure :: resize_ghost                           !< Resize ghost array to given size
-      procedure :: recycle                                !< Recycle particle array by removing flagged particles
-      procedure :: sync                                   !< Synchronize particles across interprocessor boundaries
-      procedure :: share                                  !< Share particles across interprocessor boundaries
-      procedure :: read                                   !< Parallel read particles from file
-      procedure :: write                                  !< Parallel write particles to file
-      procedure :: get_max                                !< Extract various monitoring data
-      procedure :: get_cfl                                !< Calculate maximum CFL
-      procedure :: update_VF                              !< Compute volume fraction
-      procedure :: get_delta                              !< Compute regularized delta function
-      procedure :: interpolate                            !< Interpolation routine from mesh=>marker
-      procedure :: extrapolate                            !< Extrapolation routine from marker=>mesh
-   end type dfibm
+      procedure :: bond_init                         !< Setup initial interparticle bonds
+      procedure :: get_bond_force                    !< Compute interparticle bond force
+      procedure :: advance                           !< Step forward the particle ODEs
+      procedure :: get_cfl                           !< Calculate maximum CFL
+      procedure :: get_max                           !< Extract various monitoring data
+      procedure :: update_partmesh                   !< Update a partmesh object using current particles
+      procedure :: share                             !< Share particles across interprocessor boundaries
+      procedure :: sync                              !< Synchronize particles across interprocessor boundaries
+      procedure :: resize                            !< Resize particle array to given size
+      procedure :: resize_ghost                      !< Resize ghost array to given size
+      procedure :: recycle                           !< Recycle particle array by removing flagged particles
+      procedure :: write                             !< Parallel write particles to file
+      procedure :: read                              !< Parallel read particles from file
+   end type lss
    
    
-   !> Declare df solver constructor
-   interface dfibm
+   !> Declare lss constructor
+   interface lss
       procedure constructor
-   end interface dfibm
+   end interface lss
    
 contains
    
    
-   !> Mollification kernel based on Roma A, Peskin C and Berger M 1999 J. Comput. Phys. 153 509–534
-   function kernel(r) result(phi)
+   ! Quasi-Gaussian weighting function - h is the cut-off
+   real(WP) function wgauss(d,h)
       implicit none
-      real(WP), intent(in) :: r
-      real(WP)             :: phi
-      if (abs(r).le.0.5_WP) then
-         phi=1.0_WP/3.0_WP*(1.0_WP+sqrt(-3.0_WP*r**2+1.0_WP))
-      else if (abs(r).gt.0.5_WP .and. abs(r).le.1.5_WP) then
-         phi=1.0_WP/6.0_WP*(5.0_WP-3.0_WP*abs(r)-sqrt(-3.0_WP*(1.0_WP-abs(r))**2+1.0_WP))
+      real(WP), intent(in) :: d,h
+      if (d.ge.h) then
+         wgauss=0.0_WP
       else
-         phi=0.0_WP
+         wgauss=(1.0_WP+4.0_WP*d/h)*(1.0_WP-d/h)**4
       end if
-   end function kernel
+   end function wgauss
    
    
-   !> Default constructor for direct forcing solver
+   !> Default constructor for Lagrangian solid solver
    function constructor(cfg,name) result(self)
       implicit none
-      type(dfibm) :: self
+      type(lss) :: self
       class(config), target, intent(in) :: cfg
       character(len=*), optional :: name
       integer :: i,j,k
@@ -183,16 +154,6 @@ contains
       ! Initialize MPI derived datatype for a particle
       call prepare_mpi_part()
       
-      ! Allocate VF and src arrays on cfg mesh
-      allocate(self%VF  (self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%VF  =0.0_WP
-      allocate(self%srcU(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%srcU=0.0_WP
-      allocate(self%srcV(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%srcV=0.0_WP
-      allocate(self%srcW(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%srcW=0.0_WP
-      
-      ! Initialize object
-      self%can_move=.false.
-      self%nobj=0
-      
       ! Log/screen output
       logging: block
          use, intrinsic :: iso_fortran_env, only: output_unit
@@ -201,7 +162,7 @@ contains
          use string,   only: str_long
          character(len=str_long) :: message
          if (self%cfg%amRoot) then
-            write(message,'("IBM solver [",a,"] on partitioned grid [",a,"]")') trim(self%name),trim(self%cfg%name)
+            write(message,'("LSS object [",a,"] on partitioned grid [",a,"]")') trim(self%name),trim(self%cfg%name)
             if (verbose.gt.1) write(output_unit,'(a)') trim(message)
             if (verbose.gt.0) call log(message)
          end if
@@ -210,52 +171,11 @@ contains
    end function constructor
    
    
-   !> Setup IBM objects, each processors own all objects
-   subroutine setup_obj(this)
-      use mpi_f08
-      use parallel, only: MPI_REAL_WP
-      use mathtools, only: Pi
-      implicit none
-      class(dfibm), intent(inout) :: this
-      integer :: i,j,n,ibuf,ierr
-      real(WP) :: myVol,dV
-      real(WP), dimension(3) :: pos0,dist
-      ! Determine number of objects based on marker ID
-      n=1
-      do i=1,this%np_
-         n=max(n,this%p(i)%id)
-      end do
-      call MPI_ALLREDUCE(n,this%nobj,1,MPI_INTEGER,MPI_MAX,this%cfg%comm,ierr)
-      ! Allocate and zero out the object array
-      allocate(this%o(1:this%nobj))
-      do i=1,this%nobj
-         ! Zero-out object properties
-         this%o(i)%pos=0.0_WP
-         this%o(i)%vel=0.0_WP
-         this%o(i)%angVel=0.0_WP
-         this%o(i)%F=0.0_WP
-         ! Compute center of mass and volume
-         myVol=0.0_WP
-         do j=1,this%np_
-            ! Determine if particle associated with object
-            if (this%p(j)%id.eq.i) then
-               myVol=myVol+this%p(j)%dV
-               this%o(i)%pos=this%o(i)%pos+this%p(j)%pos*this%p(j)%dV
-            end if
-         end do
-         call MPI_ALLREDUCE(myVol,dV,1,MPI_REAL_WP,MPI_SUM,this%cfg%comm,ierr); this%o(i)%vol=dV
-         call MPI_ALLREDUCE(this%o(i)%pos,pos0,3,MPI_REAL_WP,MPI_SUM,this%cfg%comm,ierr); this%o(i)%pos=pos0/dV
-      end do
-   end subroutine setup_obj
-   
-   
-   !> Resolve bond force between particles
-   !> Neighborhood horizon is set by mollification kernel (Roma),
-   !> i.e., dist/dx.lt.1.5_WP
+   !> Initialize bond force between particles
    subroutine bond_init(this)
       use messager, only: die
       implicit none
-      class(dfibm), intent(inout) :: this
+      class(lss), intent(inout) :: this
       integer, dimension(:,:,:),   allocatable :: npic    !< Number of particle in cell
       integer, dimension(:,:,:,:), allocatable :: ipic    !< Index of particle in cell
       
@@ -335,16 +255,16 @@ contains
                         ! Check interparticle distance
                         rpos=p2%pos-p1%pos
                         dist=sqrt(dot_product(rpos,rpos))
-                        if (dist.lt.1.5_WP*this%cfg%min_meshsize) then
+                        if (dist.lt.this%delta) then
                            ! Cannot self-bond
                            if (p1%i.eq.p2%i) cycle
-                           ! According to a Roma kernel, this particle should be bonded
+                           ! This particle is in horizon, create a bond
                            nbond=nbond+1
-                           if (nbond.gt.max_bond) call die('[df_class bond_init] Number of detected bonds is larger than max allowed')
+                           if (nbond.gt.max_bond) call die('[lss_class bond_init] Number of detected bonds is larger than max allowed')
                            p1%ibond(nbond)=p2%i
                            p1%dbond(nbond)=dist
                            ! Increment weighted volume
-                           p1%mw=p1%mw+kernel(dist/this%cfg%min_meshsize)*dist**2*p2%dV
+                           p1%mw=p1%mw+wgauss(dist,this%delta)*dist**2*p2%dV
                         end if
                      end do
                   end do
@@ -363,7 +283,7 @@ contains
    !> Calculate bond force between particles
    subroutine get_bond_force(this)
       implicit none
-      class(dfibm), intent(inout) :: this
+      class(lss), intent(inout) :: this
       integer, dimension(:,:,:),   allocatable :: npic    !< Number of particle in cell
       integer, dimension(:,:,:,:), allocatable :: ipic    !< Index of particle in cell
       
@@ -443,12 +363,12 @@ contains
                         do nb=1,max_bond
                            if (p1%ibond(nb).eq.p2%i) then
                               ! Increment weighted volume
-                              p1%mw=p1%mw+kernel(p1%dbond(nb)/this%cfg%min_meshsize)*p1%dbond(nb)**2*p2%dV
+                              p1%mw=p1%mw+wgauss(p1%dbond(nb),this%delta)*p1%dbond(nb)**2*p2%dV
                               ! Get current distance
                               rpos=p2%pos-p1%pos
                               dist=sqrt(dot_product(rpos,rpos))
                               ! Increment dilatation
-                              p1%dil=p1%dil+kernel(p1%dbond(nb)/this%cfg%min_meshsize)*p1%dbond(nb)*(dist-p1%dbond(nb))*p2%dV
+                              p1%dil=p1%dil+wgauss(p1%dbond(nb),this%delta)*p1%dbond(nb)*(dist-p1%dbond(nb))*p2%dV
                            end if
                         end do
                      end do
@@ -506,7 +426,7 @@ contains
                               ! Extension1
                               ed=dist-p1%dbond(nb)*(1.0_WP+p1%dil/3.0_WP)
                               ! Force density 1->2
-                              t12=+kernel(p1%dbond(nb)/this%cfg%min_meshsize)*(beta/p1%mw*p1%dbond(nb)+alpha*ed)*rpos/dist
+                              t12=+wgauss(p1%dbond(nb),this%delta)*(beta/p1%mw*p1%dbond(nb)+alpha*ed)*rpos/dist
                               ! Beta2
                               beta=(this%elastic_modulus/(1.0_WP-2.0_WP*this%poisson_ratio))*p2%dil
                               ! Alpha2
@@ -514,7 +434,7 @@ contains
                               ! Extension2
                               ed=dist-p1%dbond(nb)*(1.0_WP+p2%dil/3.0_WP)
                               ! Force density 2->1
-                              t21=-kernel(p1%dbond(nb)/this%cfg%min_meshsize)*(beta/p2%mw*p1%dbond(nb)+alpha*ed)*rpos/dist
+                              t21=-wgauss(p1%dbond(nb),this%delta)*(beta/p2%mw*p1%dbond(nb)+alpha*ed)*rpos/dist
                               ! Increment bond force
                               p1%Abond=p1%Abond+(t12-t21)*p2%dV/this%rho
                            end if
@@ -539,7 +459,7 @@ contains
       use mpi_f08, only : MPI_SUM,MPI_INTEGER
       use mathtools, only: Pi
       implicit none
-      class(dfibm), intent(inout) :: this
+      class(lss), intent(inout) :: this
       real(WP), intent(inout) :: dt  !< Timestep size over which to advance
       integer :: i,j,k,ierr
       real(WP) :: mydt,dt_done
@@ -567,10 +487,10 @@ contains
             pold=myp
             ! Advance with Euler prediction
             myp%pos=pold%pos+0.5_WP*mydt*myp%vel
-            myp%vel=pold%vel+0.5_WP*mydt*(this%gravity+myp%Abond+myp%Afluid)
+            myp%vel=pold%vel+0.5_WP*mydt*(this%gravity+myp%Abond)
             ! Correct with midpoint rule
             myp%pos=pold%pos+mydt*myp%vel
-            myp%vel=pold%vel+mydt*(this%gravity+myp%Abond+myp%Afluid)
+            myp%vel=pold%vel+mydt*(this%gravity+myp%Abond)
             ! Relocalize
             myp%ind=this%cfg%get_ijk_global(myp%pos,myp%ind)
             ! Increment
@@ -598,9 +518,6 @@ contains
       ! Sum up particles removed
       call MPI_ALLREDUCE(this%np_out,i,1,MPI_INTEGER,MPI_SUM,this%cfg%comm,ierr); this%np_out=i
       
-      ! Recompute volume fraction
-      call this%update_VF()
-      
       ! Log/screen output
       logging: block
          use, intrinsic :: iso_fortran_env, only: output_unit
@@ -618,214 +535,16 @@ contains
    end subroutine advance
    
    
-   !> Compute direct forcing source by a specified time step dt
-   subroutine get_fluid_force(this,dt,U,V,W,rho)
-      use mpi_f08,  only: MPI_SUM,MPI_ALLREDUCE
-      use parallel, only: MPI_REAL_WP
-      use mathtools, only: Pi
-      implicit none
-      class(dfibm), intent(inout) :: this
-      real(WP), intent(inout) :: dt  !< Timestep size over which to advance
-      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in) :: U         !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
-      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in) :: V         !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
-      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in) :: W         !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
-      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in) :: rho       !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
-      integer :: i,j,k,ierr
-      real(WP) :: dti,rho_
-      real(WP), dimension(3) :: vel,src
-      
-      ! Zero out source term arrays
-      this%srcU=0.0_WP
-      this%srcV=0.0_WP
-      this%srcW=0.0_WP
-      
-      ! Zero-out forces on objects
-      do i=1,this%nobj
-         this%o(i)%F=0.0_WP
-      end do
-      
-      ! Advance the equations
-      dti=1.0_WP/dt
-      do i=1,this%np_
-         ! Interpolate the velocity to the particle location
-         vel=0.0_WP
-         if (this%cfg%nx.gt.1) vel(1)=this%interpolate(A=U,xp=this%p(i)%pos(1),yp=this%p(i)%pos(2),zp=this%p(i)%pos(3),&
-         &                                                 ip=this%p(i)%ind(1),jp=this%p(i)%ind(2),kp=this%p(i)%ind(3),dir='U')
-         if (this%cfg%ny.gt.1) vel(2)=this%interpolate(A=V,xp=this%p(i)%pos(1),yp=this%p(i)%pos(2),zp=this%p(i)%pos(3),&
-         &                                                 ip=this%p(i)%ind(1),jp=this%p(i)%ind(2),kp=this%p(i)%ind(3),dir='V')
-         if (this%cfg%nz.gt.1) vel(3)=this%interpolate(A=W,xp=this%p(i)%pos(1),yp=this%p(i)%pos(2),zp=this%p(i)%pos(3),&
-         &                                                 ip=this%p(i)%ind(1),jp=this%p(i)%ind(2),kp=this%p(i)%ind(3),dir='W')
-         rho_=this%interpolate(A=rho,xp=this%p(i)%pos(1),yp=this%p(i)%pos(2),zp=this%p(i)%pos(3),&
-         &                           ip=this%p(i)%ind(1),jp=this%p(i)%ind(2),kp=this%p(i)%ind(3),dir='SC')
-         ! Compute the source term
-         src=(this%p(i)%vel-vel)*this%p(i)%dV !< works but should involve VF...
-         this%p(i)%Afluid=0.0_WP              !< Need to think more about that
-         ! Send source term back to the mesh
-         if (this%cfg%nx.gt.1) call this%extrapolate(Ap=src(1),xp=this%p(i)%pos(1),yp=this%p(i)%pos(2),zp=this%p(i)%pos(3),&
-         &                                                     ip=this%p(i)%ind(1),jp=this%p(i)%ind(2),kp=this%p(i)%ind(3),A=this%srcU,dir='U')
-         if (this%cfg%ny.gt.1) call this%extrapolate(Ap=src(2),xp=this%p(i)%pos(1),yp=this%p(i)%pos(2),zp=this%p(i)%pos(3),&
-         &                                                     ip=this%p(i)%ind(1),jp=this%p(i)%ind(2),kp=this%p(i)%ind(3),A=this%srcV,dir='V')
-         if (this%cfg%nz.gt.1) call this%extrapolate(Ap=src(3),xp=this%p(i)%pos(1),yp=this%p(i)%pos(2),zp=this%p(i)%pos(3),&
-         &                                                     ip=this%p(i)%ind(1),jp=this%p(i)%ind(2),kp=this%p(i)%ind(3),A=this%srcW,dir='W')
-         ! Sum up force on object (Newton's 3rd law)
-         j=max(this%p(i)%id,1)
-         this%o(j)%F=this%o(j)%F-rho_*src*this%p(i)%dV*dti
-      end do
-      
-      ! Sum at boundaries
-      call this%cfg%syncsum(this%srcU)
-      call this%cfg%syncsum(this%srcV)
-      call this%cfg%syncsum(this%srcW)
-      
-      ! Sum over each object
-      do j=1,this%nobj
-         call MPI_ALLREDUCE(this%o(j)%F,src,3,MPI_REAL_WP,MPI_SUM,this%cfg%comm,ierr); this%o(j)%F=src
-      end do
-      
-   end subroutine get_fluid_force
-   
-   
-   !> Update particle volume fraction using our current particles
-   subroutine update_VF(this)
-      use mathtools, only: Pi
-      implicit none
-      class(dfibm), intent(inout) :: this
-      integer :: i
-      ! Reset volume fraction
-      this%VF=0.0_WP
-      ! Transfer particle volume
-      do i=1,this%np_
-         ! Skip inactive particle
-         if (this%p(i)%flag.eq.1) cycle
-         ! Transfer volume to mesh
-         call this%extrapolate(Ap=this%p(i)%dV,xp=this%p(i)%pos(1),yp=this%p(i)%pos(2),zp=this%p(i)%pos(3),&
-         &                                     ip=this%p(i)%ind(1),jp=this%p(i)%ind(2),kp=this%p(i)%ind(3),A=this%VF,dir='SC')
-      end do
-      ! Sum at boundaries
-      call this%cfg%syncsum(this%VF)
-   end subroutine update_VF
-   
-   
-   !> Compute regularized delta function
-   subroutine get_delta(this,delta,ic,jc,kc,xp,yp,zp,dir)
-      implicit none
-      class(dfibm), intent(inout) :: this
-      real(WP), intent(out) :: delta   !< Return delta function
-      integer, intent(in) :: ic,jc,kc  !< Cell index
-      real(WP), intent(in) :: xp,yp,zp !< Position of marker 
-      character(len=*) :: dir
-      real(WP) :: deltax,deltay,deltaz,r
-      
-      ! Compute in X
-      if (trim(adjustl(dir)).eq.'U') then
-         r=(xp-this%cfg%x(ic))*this%cfg%dxmi(ic)
-         deltax=kernel(r)*this%cfg%dxmi(ic)
-      else
-         r=(xp-this%cfg%xm(ic))*this%cfg%dxi(ic)
-         deltax=kernel(r)*this%cfg%dxi(ic)
-      end if
-      
-      ! Compute in Y
-      if (trim(adjustl(dir)).eq.'V') then
-         r=(yp-this%cfg%y(jc))*this%cfg%dymi(jc)
-         deltay=kernel(r)*this%cfg%dymi(jc)
-      else
-         r=(yp-this%cfg%ym(jc))*this%cfg%dyi(jc)
-         deltay=kernel(r)*this%cfg%dyi(jc)
-      end if
-      
-      ! Compute in Z
-      if (trim(adjustl(dir)).eq.'W') then
-         r=(zp-this%cfg%z(kc))*this%cfg%dzmi(kc)
-         deltaz=kernel(r)*this%cfg%dzmi(kc)
-      else
-         r=(zp-this%cfg%zm(kc))*this%cfg%dzi(kc)
-         deltaz=kernel(r)*this%cfg%dzi(kc)
-      end if
-      
-      ! Put it all together
-      delta=deltax*deltay*deltaz
-      
-   end subroutine get_delta
-   
-   
-   !> Interpolation routine
-   function interpolate(this,A,xp,yp,zp,ip,jp,kp,dir) result(Ap)
-      implicit none
-      class(dfibm), intent(inout) :: this
-      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in) :: A         !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
-      real(WP), intent(in) :: xp,yp,zp
-      integer, intent(in) :: ip,jp,kp
-      character(len=*) :: dir
-      real(WP) :: Ap
-      integer :: di,dj,dk
-      integer :: i1,i2,j1,j2,k1,k2
-      real(WP), dimension(-2:+2,-2:+2,-2:+2) :: delta
-      ! Get the interpolation points
-      i1=ip-2; i2=ip+2
-      j1=jp-2; j2=jp+2
-      k1=kp-2; k2=kp+2
-      ! Loop over neighboring cells and compute regularized delta function
-      do dk=-2,+2
-         do dj=-2,+2
-            do di=-2,+2
-               call this%get_delta(delta=delta(di,dj,dk),ic=ip+di,jc=jp+dj,kc=kp+dk,xp=xp,yp=yp,zp=zp,dir=trim(dir))
-            end do
-         end do
-      end do
-      ! Perform the actual interpolation on Ap
-      Ap = sum(delta*A(i1:i2,j1:j2,k1:k2))*this%cfg%vol(ip,jp,kp)
-   end function interpolate
-   
-   
-   !> Extrapolation routine
-   subroutine extrapolate(this,Ap,xp,yp,zp,ip,jp,kp,A,dir)
-      use messager, only: die
-      implicit none
-      class(dfibm), intent(inout) :: this
-      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:) :: A         !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
-      real(WP), intent(in) :: xp,yp,zp
-      integer, intent(in) :: ip,jp,kp
-      real(WP), intent(in) :: Ap
-      character(len=*) :: dir
-      real(WP), dimension(-2:+2,-2:+2,-2:+2) :: delta
-      integer  :: di,dj,dk
-      ! If particle has left processor domain or reached last ghost cell, kill job
-      if ( ip.lt.this%cfg%imin_-1.or.ip.gt.this%cfg%imax_+1.or.&
-      &    jp.lt.this%cfg%jmin_-1.or.jp.gt.this%cfg%jmax_+1.or.&
-      &    kp.lt.this%cfg%kmin_-1.or.kp.gt.this%cfg%kmax_+1) then
-         write(*,*) ip,jp,kp,xp,yp,zp
-         call die('[df extrapolate] Particle has left the domain')
-      end if
-      ! Loop over neighboring cells and compute regularized delta function
-      do dk=-2,+2
-         do dj=-2,+2
-            do di=-2,+2
-               call this%get_delta(delta=delta(di,dj,dk),ic=ip+di,jc=jp+dj,kc=kp+dk,xp=xp,yp=yp,zp=zp,dir=trim(dir))
-            end do
-         end do
-      end do
-      ! Perform the actual extrapolation on A
-      A(ip-2:ip+2,jp-2:jp+2,kp-2:kp+2)=A(ip-2:ip+2,jp-2:jp+2,kp-2:kp+2)+delta*Ap
-   end subroutine extrapolate
-   
-   
    !> Calculate the CFL
    subroutine get_cfl(this,dt,cfl)
       use mpi_f08,  only: MPI_ALLREDUCE,MPI_MAX
       use parallel, only: MPI_REAL_WP
       implicit none
-      class(dfibm), intent(inout) :: this
+      class(lss), intent(inout) :: this
       real(WP), intent(in)  :: dt
       real(WP), intent(out) :: cfl
       integer :: i,ierr
       real(WP) :: my_CFLp_x,my_CFLp_y,my_CFLp_z
-      
-      ! Return if not used
-      if (.not.this%can_move) then
-         cfl=0.0_WP
-         return
-      end if
       
       ! Set the CFLs to zero
       my_CFLp_x=0.0_WP; my_CFLp_y=0.0_WP; my_CFLp_z=0.0_WP
@@ -852,7 +571,7 @@ contains
       use mpi_f08,  only: MPI_ALLREDUCE,MPI_MAX,MPI_MIN,MPI_SUM
       use parallel, only: MPI_REAL_WP
       implicit none
-      class(dfibm), intent(inout) :: this
+      class(lss), intent(inout) :: this
       real(WP) :: buf,safe_np
       integer :: i,j,k,ierr
       
@@ -878,30 +597,6 @@ contains
       call MPI_ALLREDUCE(this%Wmax ,buf,1,MPI_REAL_WP,MPI_MAX,this%cfg%comm,ierr); this%Wmax =buf
       call MPI_ALLREDUCE(this%Wmean,buf,1,MPI_REAL_WP,MPI_SUM,this%cfg%comm,ierr); this%Wmean=buf/safe_np
       
-      ! Get mean, max, and min volume fraction and total force
-      this%VFmean=0.0_WP
-      this%VFmax =-huge(1.0_WP)
-      this%VFmin =+huge(1.0_WP)
-      this%Fx=0.0_WP; this%Fy=0.0_WP; this%Fz=0.0_WP
-      do k=this%cfg%kmin_,this%cfg%kmax_
-         do j=this%cfg%jmin_,this%cfg%jmax_
-            do i=this%cfg%imin_,this%cfg%imax_
-               this%VFmean=this%VFmean+this%cfg%VF(i,j,k)*this%cfg%vol(i,j,k)*this%VF(i,j,k)
-               this%VFmax =max(this%VFmax,this%VF(i,j,k))
-               this%VFmin =min(this%VFmin,this%VF(i,j,k))
-               this%Fx=this%Fx+sum(this%o(:)%F(1))*this%cfg%vol(i,j,k)
-               this%Fy=this%Fy+sum(this%o(:)%F(2))*this%cfg%vol(i,j,k)
-               this%Fz=this%Fz+sum(this%o(:)%F(3))*this%cfg%vol(i,j,k)
-            end do
-         end do
-      end do
-      call MPI_ALLREDUCE(this%VFmean,buf,1,MPI_REAL_WP,MPI_SUM,this%cfg%comm,ierr); this%VFmean=buf/this%cfg%vol_total
-      call MPI_ALLREDUCE(this%VFmax ,buf,1,MPI_REAL_WP,MPI_MAX,this%cfg%comm,ierr); this%VFmax =buf
-      call MPI_ALLREDUCE(this%VFmin ,buf,1,MPI_REAL_WP,MPI_MIN,this%cfg%comm,ierr); this%VFmin =buf
-      call MPI_ALLREDUCE(this%Fx    ,buf,1,MPI_REAL_WP,MPI_SUM,this%cfg%comm,ierr); this%Fx=buf/this%cfg%vol_total
-      call MPI_ALLREDUCE(this%Fy    ,buf,1,MPI_REAL_WP,MPI_SUM,this%cfg%comm,ierr); this%Fy=buf/this%cfg%vol_total
-      call MPI_ALLREDUCE(this%Fz    ,buf,1,MPI_REAL_WP,MPI_SUM,this%cfg%comm,ierr); this%Fz=buf/this%cfg%vol_total
-      
    end subroutine get_max
    
    
@@ -909,7 +604,7 @@ contains
    subroutine update_partmesh(this,pmesh)
       use partmesh_class, only: partmesh
       implicit none
-      class(dfibm), intent(inout) :: this
+      class(lss), intent(inout) :: this
       class(partmesh), intent(inout) :: pmesh
       integer :: i
       ! Reset particle mesh storage
@@ -945,7 +640,7 @@ contains
       call MPI_Type_create_resized(MPI_PART_TMP,lb,extent,MPI_PART,ierr)
       call MPI_Type_commit(MPI_PART,ierr)
       ! If a problem was encountered, say it
-      if (ierr.ne.0) call die('[dfibm prepare_mpi_part] MPI Particle type creation failed')
+      if (ierr.ne.0) call die('[lss prepare_mpi_part] MPI Particle type creation failed')
       ! Get the size of this type
       call MPI_type_size(MPI_PART,MPI_PART_SIZE,ierr)
    end subroutine prepare_mpi_part
@@ -956,7 +651,7 @@ contains
       use mpi_f08
       use messager, only: warn,die
       implicit none
-      class(dfibm), intent(inout) :: this
+      class(lss), intent(inout) :: this
       integer, optional :: nover
       type(part), dimension(:), allocatable :: tosend
       type(part), dimension(:), allocatable :: torecv
@@ -969,10 +664,10 @@ contains
       if (present(nover)) then
          no=nover
          if (no.gt.this%cfg%no) then
-            call warn('[df_class share] Specified overlap is larger than that of cfg - reducing no')
+            call warn('[lss share] Specified overlap is larger than that of cfg - reducing no')
             no=this%cfg%no
          else if (no.le.0) then
-            call die('[df_class share] Specified overlap cannot be less or equal to zero')
+            call die('[lss share] Specified overlap cannot be less or equal to zero')
          end if
       else
          no=1
@@ -1156,7 +851,7 @@ contains
    subroutine sync(this)
       use mpi_f08
       implicit none
-      class(dfibm), intent(inout) :: this
+      class(lss), intent(inout) :: this
       integer, dimension(0:this%cfg%nproc-1) :: nsend_proc,nrecv_proc
       integer, dimension(0:this%cfg%nproc-1) :: nsend_disp,nrecv_disp
       integer :: n,prank,ierr
@@ -1208,7 +903,7 @@ contains
    !> Adaptation of particle array size
    subroutine resize(this,n)
       implicit none
-      class(dfibm), intent(inout) :: this
+      class(lss), intent(inout) :: this
       integer, intent(in) :: n
       type(part), dimension(:), allocatable :: tmp
       integer :: size_now,size_new
@@ -1238,7 +933,7 @@ contains
    !> Adaptation of ghost array size
    subroutine resize_ghost(this,n)
       implicit none
-      class(dfibm), intent(inout) :: this
+      class(lss), intent(inout) :: this
       integer, intent(in) :: n
       type(part), dimension(:), allocatable :: tmp
       integer :: size_now,size_new
@@ -1268,7 +963,7 @@ contains
    !> Clean-up of particle array by removing flag=1 particles
    subroutine recycle(this)
       implicit none
-      class(dfibm), intent(inout) :: this
+      class(lss), intent(inout) :: this
       integer :: new_size,i,ierr
       ! Compact all active particles at the beginning of the array
       new_size=0
@@ -1298,7 +993,7 @@ contains
       use messager, only: die
       use parallel, only: info_mpiio
       implicit none
-      class(dfibm), intent(inout) :: this
+      class(lss), intent(inout) :: this
       character(len=*), intent(in) :: filename
       type(MPI_File) :: ifile
       type(MPI_Status):: status
@@ -1309,7 +1004,7 @@ contains
       if (this%cfg%amRoot) then
          ! Open the file
          open(newunit=iunit,file=trim(filename),form='unformatted',status='replace',access='stream',iostat=ierr)
-         if (ierr.ne.0) call die('[dfibm write] Problem encountered while serial-opening data file: '//trim(filename))
+         if (ierr.ne.0) call die('[lss write] Problem encountered while serial-opening data file: '//trim(filename))
          ! Number of particles and particle object size
          write(iunit) this%np,MPI_PART_SIZE
          ! Done with the header
@@ -1318,7 +1013,7 @@ contains
       
       ! The rest is done in parallel
       call MPI_FILE_OPEN(this%cfg%comm,trim(filename),IOR(MPI_MODE_WRONLY,MPI_MODE_APPEND),info_mpiio,ifile,ierr)
-      if (ierr.ne.0) call die('[dfibm write] Problem encountered while parallel-opening data file: '//trim(filename))
+      if (ierr.ne.0) call die('[lss write] Problem encountered while parallel-opening data file: '//trim(filename))
       
       ! Get current position
       call MPI_FILE_GET_POSITION(ifile,offset,ierr)
@@ -1340,7 +1035,7 @@ contains
          use string,   only: str_long
          character(len=str_long) :: message
          if (this%cfg%amRoot) then
-            write(message,'("Wrote ",i0," particles to file [",a,"] on partitioned grid [",a,"]")') this%np,trim(filename),trim(this%cfg%name)
+            write(message,'("[lss write] Wrote ",i0," particles to file [",a,"] on partitioned grid [",a,"]")') this%np,trim(filename),trim(this%cfg%name)
             if (verbose.gt.2) write(output_unit,'(a)') trim(message)
             if (verbose.gt.1) call log(message)
          end if
@@ -1355,7 +1050,7 @@ contains
       use messager, only: die
       use parallel, only: info_mpiio
       implicit none
-      class(dfibm), intent(inout) :: this
+      class(lss), intent(inout) :: this
       character(len=*), intent(in) :: filename
       type(MPI_File) :: ifile
       type(MPI_Status):: status
@@ -1365,7 +1060,7 @@ contains
       
       ! First open the file in parallel
       call MPI_FILE_OPEN(this%cfg%comm,trim(filename),MPI_MODE_RDONLY,info_mpiio,ifile,ierr)
-      if (ierr.ne.0) call die('[dfibm read] Problem encountered while reading data file: '//trim(filename))
+      if (ierr.ne.0) call die('[lss read] Problem encountered while reading data file: '//trim(filename))
       
       ! Read file header first
       call MPI_FILE_READ_ALL(ifile,npadd,1,MPI_INTEGER,status,ierr)
@@ -1375,7 +1070,7 @@ contains
       call MPI_FILE_GET_POSITION(ifile,header_offset,ierr)
       
       ! Check compatibility of particle type
-      if (psize.ne.MPI_PART_SIZE) call die('[dfibm read] Particle type unreadable')
+      if (psize.ne.MPI_PART_SIZE) call die('[lss read] Particle type unreadable')
       
       ! Naively share reading task among all processors
       nchunk=int(npadd/(this%cfg%nproc*part_chunk_size))+1
@@ -1417,7 +1112,7 @@ contains
          use string,   only: str_long
          character(len=str_long) :: message
          if (this%cfg%amRoot) then
-            write(message,'("Read ",i0," particles from file [",a,"] on partitioned grid [",a,"]")') npadd,trim(filename),trim(this%cfg%name)
+            write(message,'("[lss read] Read ",i0," particles from file [",a,"] on partitioned grid [",a,"]")') npadd,trim(filename),trim(this%cfg%name)
             if (verbose.gt.2) write(output_unit,'(a)') trim(message)
             if (verbose.gt.1) call log(message)
          end if
@@ -1426,4 +1121,4 @@ contains
    end subroutine read
    
    
-end module df_class
+end module lss_class

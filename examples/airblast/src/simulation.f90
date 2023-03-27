@@ -72,7 +72,7 @@ contains
             end do
          end block coupling_i2a
          
-         ! Advance atomization simulation first
+         ! Advance atomization simulation
          call atomization%step()
          
       end do

@@ -20,7 +20,7 @@ Dynamic viscosity : 0.01
 Density :           1
 
 # Time integration
-Max timestep size : 5e-2
+Max timestep size : 1e-3
 Max cfl number :    0.9
 Max time :          100
 
@@ -29,4 +29,4 @@ Pressure tolerance : 1e-5
 Pressure iteration : 100
 
 # Ensight output
-Ensight output period : 0.1
+Ensight output period : 1e-3

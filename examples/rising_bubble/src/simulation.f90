@@ -2,7 +2,8 @@
 module simulation
 	use precision,         only: WP
 	use geometry,          only: cfg
-	use hypre_str_class,   only: hypre_str
+	!use hypre_str_class,   only: hypre_str
+   use hypre_uns_class,   only: hypre_uns
    use ddadi_class,       only: ddadi
 	use tpns_class,        only: tpns
 	use vfs_class,         only: vfs
@@ -15,7 +16,8 @@ module simulation
 	private
 	
 	!> Get a couple linear solvers, a two-phase flow solver and volume fraction solver and corresponding time tracker
-	type(hypre_str),   public :: ps
+	!type(hypre_str),   public :: ps
+   type(hypre_uns),   public :: ps
 	type(ddadi),       public :: vs
 	type(tpns),        public :: fs
 	type(vfs),         public :: vf
@@ -142,8 +144,9 @@ contains
 		
 		! Create a two-phase flow solver without bconds
 	   create_and_initialize_flow_solver: block
-		   use hypre_str_class, only: pcg_pfmg
-			! Create flow solver
+		   !use hypre_str_class, only: pcg_pfmg,pcg_smg
+         use hypre_uns_class, only: gmres_amg,pcg_amg
+         ! Create flow solver
 		   fs=tpns(cfg=cfg,name='Two-phase NS')
 		   ! Assign constant viscosity to each phase
 		   call param_read('Liquid dynamic viscosity',fs%visc_l)
@@ -156,8 +159,9 @@ contains
 		   ! Assign acceleration of gravity
 		   call param_read('Gravity',fs%gravity)
 			! Configure pressure solver
-			ps=hypre_str(cfg=cfg,name='Pressure',method=pcg_pfmg,nst=7)
-         ps%maxlevel=16
+			!ps=hypre_str(cfg=cfg,name='Pressure',method=pcg_smg,nst=7)
+         !ps%maxlevel=16
+         ps=hypre_uns(cfg=cfg,name='Pressure',method=pcg_amg,nst=7)
          call param_read('Pressure iteration',ps%maxit)
          call param_read('Pressure tolerance',ps%rcvg)
          ! Configure implicit velocity solver
