@@ -1,0 +1,22 @@
+# Parallelization
+Partition :	2 2 2
+
+# Mesh definition
+Lx :	5
+Ly :	5
+Lz :	5
+nx :	50
+ny :	50
+nz :	50
+
+# Solid sphere
+Sphere diameter :       1
+Elements per diameter : 32
+
+# Time integration
+Max timestep size : 1e-4
+Max cfl number :    0.9
+Max time :          100
+
+# Ensight output
+Ensight output period : 1e-3

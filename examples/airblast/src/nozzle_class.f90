@@ -25,47 +25,47 @@ module nozzle_class
       !> Config with IB
       type(ibconfig) :: cfg
       
-		!> Surface mesh for IB
+      !> Surface mesh for IB
       type(surfmesh) :: plymesh
       
-		!> Flow solver
-		type(incomp)      :: fs    !< Incompressible flow solver
-		type(hypre_str)   :: ps    !< Structured Hypre linear solver for pressure
+      !> Flow solver
+      type(incomp)      :: fs    !< Incompressible flow solver
+      type(hypre_str)   :: ps    !< Structured Hypre linear solver for pressure
       type(sgsmodel)    :: sgs   !< SGS model for eddy viscosity
-		type(timetracker) :: time  !< Time info
-		
-		!> Ensight postprocessing
-		type(ensight) :: ens_out  !< Ensight output for flow variables
-		type(event)   :: ens_evt  !< Event trigger for Ensight output
-		
-		!> Simulation monitor file
+      type(timetracker) :: time  !< Time info
+      
+      !> Ensight postprocessing
+      type(ensight) :: ens_out  !< Ensight output for flow variables
+      type(event)   :: ens_evt  !< Event trigger for Ensight output
+      
+      !> Simulation monitor file
       type(monitor) :: mfile    !< General simulation monitoring
-		type(monitor) :: cflfile  !< CFL monitoring
-		
-		!> Work arrays
+      type(monitor) :: cflfile  !< CFL monitoring
+      
+      !> Work arrays
       real(WP), dimension(:,:,:,:,:), allocatable :: gradU           !< Velocity gradient
-		real(WP), dimension(:,:,:), allocatable :: resU,resV,resW      !< Residuals
-		real(WP), dimension(:,:,:), allocatable :: Ui,Vi,Wi            !< Cell-centered velocities
-		
-		!> Fluid definition
+      real(WP), dimension(:,:,:), allocatable :: resU,resV,resW      !< Residuals
+      real(WP), dimension(:,:,:), allocatable :: Ui,Vi,Wi            !< Cell-centered velocities
+      
+      !> Fluid definition
       real(WP) :: visc
-		
+      
    contains
-	   procedure, private :: geometry_init          !< Initialize geometry for nozzle
-		procedure, private :: simulation_init        !< Initialize simulation for nozzle
+      procedure, private :: geometry_init          !< Initialize geometry for nozzle
+      procedure, private :: simulation_init        !< Initialize simulation for nozzle
       procedure :: init                            !< Initialize nozzle simulation
       procedure :: step                            !< Advance nozzle simulation by one time step
       procedure :: final                           !< Finalize nozzle simulation
    end type nozzle
 
-	
-	!> Hardcode nozzle inlet positions used in locator functions
-	real(WP), parameter, public :: axial_xdist =-0.06394704_WP
-	real(WP), parameter, public :: axial_diam  =+0.01600000_WP*1.2_WP  ! 20% larger to avoid stairstepping
-	real(WP), parameter, public :: swirl_xdist =-0.06394704_WP
-	real(WP), parameter, public :: swirl_diam  =+0.01000000_WP*1.2_WP  ! 20% larger to avoid stairstepping
-	real(WP), parameter, public :: swirl_offset=+0.02945130_WP
-	
+   
+   !> Hardcode nozzle inlet positions used in locator functions
+   real(WP), parameter, public :: axial_xdist =-0.06394704_WP
+   real(WP), parameter, public :: axial_diam  =+0.01600000_WP*1.2_WP  ! 20% larger to avoid stairstepping
+   real(WP), parameter, public :: swirl_xdist =-0.06394704_WP
+   real(WP), parameter, public :: swirl_diam  =+0.01000000_WP*1.2_WP  ! 20% larger to avoid stairstepping
+   real(WP), parameter, public :: swirl_offset=+0.02945130_WP
+   
 
 contains
    
@@ -73,29 +73,29 @@ contains
    !> Initialization of nozzle simulation
    subroutine init(this)
       use parallel, only: amRoot
-		implicit none
-		class(nozzle), intent(inout) :: this
-		
+      implicit none
+      class(nozzle), intent(inout) :: this
+      
       ! Read the input
       this%input=inputfile(amRoot=amRoot,filename='input_nozzle')
       
-		! Initialize the geometry
-		call this%geometry_init()
+      ! Initialize the geometry
+      call this%geometry_init()
       
-		! Initialize the simulation
-		call this%simulation_init()
-		
-	end subroutine init
+      ! Initialize the simulation
+      call this%simulation_init()
+      
+   end subroutine init
 
 
-	!> Initialize geometry
+   !> Initialize geometry
    subroutine geometry_init(this)
-		use sgrid_class, only: sgrid
-		implicit none
-		class(nozzle) :: this
-		type(sgrid) :: grid
-		
-		! Create a grid from input params
+      use sgrid_class, only: sgrid
+      implicit none
+      class(nozzle) :: this
+      type(sgrid) :: grid
+      
+      ! Create a grid from input params
       create_grid: block
          use sgrid_class, only: cartesian
          integer :: i,j,k,nx,ny,nz
@@ -137,7 +137,7 @@ contains
          
       end block create_cfg
       
-		
+      
       ! Read in the PLY geometry
       read_ply: block
          use string,   only: str_medium
@@ -251,18 +251,18 @@ contains
       end block create_walls
       
       
-	end subroutine geometry_init
-	
-	
-	!> Initialize simulation
-	subroutine simulation_init(this)
-		implicit none
-		class(nozzle), intent(inout) :: this
-		
-		
-		! Initialize time tracker with 2 subiterations
+   end subroutine geometry_init
+   
+   
+   !> Initialize simulation
+   subroutine simulation_init(this)
+      implicit none
+      class(nozzle), intent(inout) :: this
+      
+      
+      ! Initialize time tracker with 2 subiterations
       initialize_timetracker: block
-		   this%time=timetracker(amRoot=this%cfg%amRoot)
+         this%time=timetracker(amRoot=this%cfg%amRoot)
          call this%input%read('Max timestep size',this%time%dtmax)
          call this%input%read('Max cfl number',this%time%cflmax)
          this%time%dt=this%time%dtmax
@@ -437,7 +437,7 @@ contains
 
       ! Create an LES model
       create_sgs: block
-		   this%sgs=sgsmodel(cfg=this%fs%cfg,umask=this%fs%umask,vmask=this%fs%vmask,wmask=this%fs%wmask)
+         this%sgs=sgsmodel(cfg=this%fs%cfg,umask=this%fs%umask,vmask=this%fs%vmask,wmask=this%fs%wmask)
       end block create_sgs
 
 
@@ -486,128 +486,128 @@ contains
          call this%cflfile%add_column(this%fs%CFLv_z,'Viscous zCFL')
          call this%cflfile%write()
       end block create_monitor
-		
-		
-	end subroutine simulation_init
-	
+      
+      
+   end subroutine simulation_init
+   
 
-	!> Take one time step
-	subroutine step(this)
-		implicit none
-		class(nozzle), intent(inout) :: this
-		
-		
-		! Increment time
-		call this%fs%get_cfl(this%time%dt,this%time%cfl)
-		call this%time%adjust_dt()
-		call this%time%increment()
-		
-		! Remember old velocity
-		this%fs%Uold=this%fs%U
-		this%fs%Vold=this%fs%V
-		this%fs%Wold=this%fs%W
-		
-		! Turbulence modeling
-		sgs_modeling: block
-			use sgsmodel_class, only: vreman
-			this%resU=this%fs%rho
-			call this%fs%get_gradu(this%gradU)
-			call this%sgs%get_visc(type=vreman,dt=this%time%dtold,rho=this%resU,gradu=this%gradU)
-			this%fs%visc=this%visc+this%sgs%visc
-		end block sgs_modeling
-		
-		! Perform sub-iterations
-		do while (this%time%it.le.this%time%itmax)
-			
-			! Build mid-time velocity
-			this%fs%U=0.5_WP*(this%fs%U+this%fs%Uold)
-			this%fs%V=0.5_WP*(this%fs%V+this%fs%Vold)
-			this%fs%W=0.5_WP*(this%fs%W+this%fs%Wold)
-			
-			! Explicit calculation of drho*u/dt from NS
-			call this%fs%get_dmomdt(this%resU,this%resV,this%resW)
-			
-			! Assemble explicit residual
-			this%resU=-2.0_WP*(this%fs%rho*this%fs%U-this%fs%rho*this%fs%Uold)+this%time%dt*this%resU
-			this%resV=-2.0_WP*(this%fs%rho*this%fs%V-this%fs%rho*this%fs%Vold)+this%time%dt*this%resV
-			this%resW=-2.0_WP*(this%fs%rho*this%fs%W-this%fs%rho*this%fs%Wold)+this%time%dt*this%resW
-			
-			! Form implicit residuals
-			!call this%fs%solve_implicit(this%time%dt,this%resU,this%resV,this%resW)
-			
-			! Apply these residuals
-			this%fs%U=2.0_WP*this%fs%U-this%fs%Uold+this%resU/this%fs%rho
-			this%fs%V=2.0_WP*this%fs%V-this%fs%Vold+this%resV/this%fs%rho
-			this%fs%W=2.0_WP*this%fs%W-this%fs%Wold+this%resW/this%fs%rho
-			
-			! Apply IB forcing to enforce BC at the pipe walls
-			ibforcing: block
-				integer :: i,j,k
-				do k=this%fs%cfg%kmin_,this%fs%cfg%kmax_
-					do j=this%fs%cfg%jmin_,this%fs%cfg%jmax_
-						do i=this%fs%cfg%imin_,this%fs%cfg%imax_
-							if (this%fs%umask(i,j,k).eq.0) this%fs%U(i,j,k)=sum(this%fs%itpr_x(:,i,j,k)*this%cfg%VF(i-1:i,j,k))*this%fs%U(i,j,k)
-							if (this%fs%vmask(i,j,k).eq.0) this%fs%V(i,j,k)=sum(this%fs%itpr_y(:,i,j,k)*this%cfg%VF(i,j-1:j,k))*this%fs%V(i,j,k)
-							if (this%fs%wmask(i,j,k).eq.0) this%fs%W(i,j,k)=sum(this%fs%itpr_z(:,i,j,k)*this%cfg%VF(i,j,k-1:k))*this%fs%W(i,j,k)
-						end do
-					end do
-				end do
-				call this%fs%cfg%sync(this%fs%U)
-				call this%fs%cfg%sync(this%fs%V)
-				call this%fs%cfg%sync(this%fs%W)
-			end block ibforcing
-		  
-			! Apply other boundary conditions on the resulting fields
-			call this%fs%apply_bcond(this%time%t,this%time%dt)
-			
-			! Solve Poisson equation
-			call this%fs%correct_mfr()
-			call this%fs%get_div()
-			this%fs%psolv%rhs=-this%fs%cfg%vol*this%fs%div*this%fs%rho/this%time%dt
-			this%fs%psolv%sol=0.0_WP
-			call this%fs%psolv%solve()
-			call this%fs%shift_p(this%fs%psolv%sol)
-			
-			! Correct velocity
-			call this%fs%get_pgrad(this%fs%psolv%sol,this%resU,this%resV,this%resW)
-			this%fs%P=this%fs%P+this%fs%psolv%sol
-			this%fs%U=this%fs%U-this%time%dt*this%resU/this%fs%rho
-			this%fs%V=this%fs%V-this%time%dt*this%resV/this%fs%rho
-			this%fs%W=this%fs%W-this%time%dt*this%resW/this%fs%rho
-			
-			! Increment sub-iteration counter
-			this%time%it=this%time%it+1
-			
-		end do
-		
-		! Recompute interpolated velocity and divergence
-		call this%fs%interp_vel(this%Ui,this%Vi,this%Wi)
-		call this%fs%get_div()
-		
-		! Output to ensight
-		if (this%ens_evt%occurs()) call this%ens_out%write_data(this%time%t)
-		
-		! Perform and output monitoring
-		call this%fs%get_max()
-		call this%mfile%write()
-		call this%cflfile%write()
-		
-		
-	end subroutine step
-	
+   !> Take one time step
+   subroutine step(this)
+      implicit none
+      class(nozzle), intent(inout) :: this
+      
+      
+      ! Increment time
+      call this%fs%get_cfl(this%time%dt,this%time%cfl)
+      call this%time%adjust_dt()
+      call this%time%increment()
+      
+      ! Remember old velocity
+      this%fs%Uold=this%fs%U
+      this%fs%Vold=this%fs%V
+      this%fs%Wold=this%fs%W
+      
+      ! Turbulence modeling
+      sgs_modeling: block
+         use sgsmodel_class, only: vreman
+         this%resU=this%fs%rho
+         call this%fs%get_gradu(this%gradU)
+         call this%sgs%get_visc(type=vreman,dt=this%time%dtold,rho=this%resU,gradu=this%gradU)
+         this%fs%visc=this%visc+this%sgs%visc
+      end block sgs_modeling
+      
+      ! Perform sub-iterations
+      do while (this%time%it.le.this%time%itmax)
+         
+         ! Build mid-time velocity
+         this%fs%U=0.5_WP*(this%fs%U+this%fs%Uold)
+         this%fs%V=0.5_WP*(this%fs%V+this%fs%Vold)
+         this%fs%W=0.5_WP*(this%fs%W+this%fs%Wold)
+         
+         ! Explicit calculation of drho*u/dt from NS
+         call this%fs%get_dmomdt(this%resU,this%resV,this%resW)
+         
+         ! Assemble explicit residual
+         this%resU=-2.0_WP*(this%fs%rho*this%fs%U-this%fs%rho*this%fs%Uold)+this%time%dt*this%resU
+         this%resV=-2.0_WP*(this%fs%rho*this%fs%V-this%fs%rho*this%fs%Vold)+this%time%dt*this%resV
+         this%resW=-2.0_WP*(this%fs%rho*this%fs%W-this%fs%rho*this%fs%Wold)+this%time%dt*this%resW
+         
+         ! Form implicit residuals
+         !call this%fs%solve_implicit(this%time%dt,this%resU,this%resV,this%resW)
+         
+         ! Apply these residuals
+         this%fs%U=2.0_WP*this%fs%U-this%fs%Uold+this%resU/this%fs%rho
+         this%fs%V=2.0_WP*this%fs%V-this%fs%Vold+this%resV/this%fs%rho
+         this%fs%W=2.0_WP*this%fs%W-this%fs%Wold+this%resW/this%fs%rho
+         
+         ! Apply IB forcing to enforce BC at the pipe walls
+         ibforcing: block
+            integer :: i,j,k
+            do k=this%fs%cfg%kmin_,this%fs%cfg%kmax_
+               do j=this%fs%cfg%jmin_,this%fs%cfg%jmax_
+                  do i=this%fs%cfg%imin_,this%fs%cfg%imax_
+                     if (this%fs%umask(i,j,k).eq.0) this%fs%U(i,j,k)=sum(this%fs%itpr_x(:,i,j,k)*this%cfg%VF(i-1:i,j,k))*this%fs%U(i,j,k)
+                     if (this%fs%vmask(i,j,k).eq.0) this%fs%V(i,j,k)=sum(this%fs%itpr_y(:,i,j,k)*this%cfg%VF(i,j-1:j,k))*this%fs%V(i,j,k)
+                     if (this%fs%wmask(i,j,k).eq.0) this%fs%W(i,j,k)=sum(this%fs%itpr_z(:,i,j,k)*this%cfg%VF(i,j,k-1:k))*this%fs%W(i,j,k)
+                  end do
+               end do
+            end do
+            call this%fs%cfg%sync(this%fs%U)
+            call this%fs%cfg%sync(this%fs%V)
+            call this%fs%cfg%sync(this%fs%W)
+         end block ibforcing
+        
+         ! Apply other boundary conditions on the resulting fields
+         call this%fs%apply_bcond(this%time%t,this%time%dt)
+         
+         ! Solve Poisson equation
+         call this%fs%correct_mfr()
+         call this%fs%get_div()
+         this%fs%psolv%rhs=-this%fs%cfg%vol*this%fs%div*this%fs%rho/this%time%dt
+         this%fs%psolv%sol=0.0_WP
+         call this%fs%psolv%solve()
+         call this%fs%shift_p(this%fs%psolv%sol)
+         
+         ! Correct velocity
+         call this%fs%get_pgrad(this%fs%psolv%sol,this%resU,this%resV,this%resW)
+         this%fs%P=this%fs%P+this%fs%psolv%sol
+         this%fs%U=this%fs%U-this%time%dt*this%resU/this%fs%rho
+         this%fs%V=this%fs%V-this%time%dt*this%resV/this%fs%rho
+         this%fs%W=this%fs%W-this%time%dt*this%resW/this%fs%rho
+         
+         ! Increment sub-iteration counter
+         this%time%it=this%time%it+1
+         
+      end do
+      
+      ! Recompute interpolated velocity and divergence
+      call this%fs%interp_vel(this%Ui,this%Vi,this%Wi)
+      call this%fs%get_div()
+      
+      ! Output to ensight
+      if (this%ens_evt%occurs()) call this%ens_out%write_data(this%time%t)
+      
+      ! Perform and output monitoring
+      call this%fs%get_max()
+      call this%mfile%write()
+      call this%cflfile%write()
+      
+      
+   end subroutine step
+   
 
    !> Finalize nozzle simulation
    subroutine final(this)
-		implicit none
-		class(nozzle), intent(inout) :: this
-		
-		! Deallocate work arrays
-		deallocate(this%resU,this%resV,this%resW,this%Ui,this%Vi,this%Wi,this%gradU)
-		
-	end subroutine final
+      implicit none
+      class(nozzle), intent(inout) :: this
+      
+      ! Deallocate work arrays
+      deallocate(this%resU,this%resV,this%resW,this%Ui,this%Vi,this%Wi,this%gradU)
+      
+   end subroutine final
    
    
-	!> Function that localizes the right domain boundary
+   !> Function that localizes the right domain boundary
    function right_boundary(pg,i,j,k) result(isIn)
       use pgrid_class, only: pgrid
       class(pgrid), intent(in) :: pg
@@ -744,6 +744,6 @@ contains
       run =sqrt(hyp**2-rise**2)
       if (run.le.swirl_diam/2.0_WP.and.k.eq.pg%kmax+1) isIn=.true.
    end function swirl_zp
-	
+   
 
 end module nozzle_class

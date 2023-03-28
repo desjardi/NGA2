@@ -23,7 +23,8 @@ module lss_class
    
 
    !> Maximum number of bonds per particle
-   integer, parameter, public :: max_bond=500  !< Assumes something like a 7x7x7 stencil in 3D
+   integer, parameter, public :: max_bond=350  !< Assumes something like a 7x7x7 stencil in 3D
+   
 
    !> Bonded solide particle definition
    type :: part
@@ -35,7 +36,6 @@ module lss_class
       real(WP), dimension(3) :: pos          !< Particle center coordinates
       real(WP), dimension(3) :: vel          !< Velocity of particle
       real(WP), dimension(3) :: Abond        !< Bond acceleration for particle
-      real(WP) :: dt                         !< Time step size for the particle
       !> MPI_INTEGER data
       integer :: id                          !< ID the object is associated with
       integer :: i                           !< Unique index of particle (assumed >0)
@@ -45,7 +45,7 @@ module lss_class
    end type part
    !> Number of blocks, block length, and block types in a particle
    integer, parameter                         :: part_nblock=2
-   integer           , dimension(part_nblock) :: part_lblock=[13+max_bond,6+max_bond]
+   integer           , dimension(part_nblock) :: part_lblock=[12+max_bond,6+max_bond]
    type(MPI_Datatype), dimension(part_nblock) :: part_tblock=[MPI_DOUBLE_PRECISION,MPI_INTEGER]
    !> MPI_PART derived datatype and size
    type(MPI_Datatype) :: MPI_PART
@@ -146,6 +146,10 @@ contains
       ! Point to pgrid object
       self%cfg=>cfg
       
+      ! Set default bonding horizon based on underlying mesh
+      self%delta=self%cfg%min_meshsize
+      self%nb=1
+      
       ! Allocate variables
       allocate(self%np_proc(1:self%cfg%nproc)); self%np_proc=0
       self%np_=0; self%np=0
@@ -236,12 +240,13 @@ contains
             p1=this%p(n1)
             ! Zero out weighted volume
             p1%mw=0.0_WP
-            ! Initialize number of bonds
+            ! Zero out bonds
+            p1%ibond=0
             nbond=0
             ! Loop over neighbor cells
-            do k=p1%ind(3)-2,p1%ind(3)+2
-               do j=p1%ind(2)-2,p1%ind(2)+2
-                  do i=p1%ind(1)-2,p1%ind(1)+2
+            do k=p1%ind(3)-this%nb,p1%ind(3)+this%nb
+               do j=p1%ind(2)-this%nb,p1%ind(2)+this%nb
+                  do i=p1%ind(1)-this%nb,p1%ind(1)+this%nb
                      ! Loop over particles in that cell
                      do nn=1,npic(i,j,k)
                         ! Create copy of our neighbor
@@ -346,9 +351,9 @@ contains
             p1%mw=0.0_WP
             p1%dil=0.0_WP
             ! Loop over neighbor cells
-            do k=p1%ind(3)-2,p1%ind(3)+2
-               do j=p1%ind(2)-2,p1%ind(2)+2
-                  do i=p1%ind(1)-2,p1%ind(1)+2
+            do k=p1%ind(3)-this%nb,p1%ind(3)+this%nb
+               do j=p1%ind(2)-this%nb,p1%ind(2)+this%nb
+                  do i=p1%ind(1)-this%nb,p1%ind(1)+this%nb
                      ! Loop over particles in that cell
                      do nn=1,npic(i,j,k)
                         ! Create copy of our neighbor
@@ -400,9 +405,9 @@ contains
             ! Zero out bond force
             p1%Abond=0.0_WP
             ! Loop over neighbor cells
-            do k=p1%ind(3)-2,p1%ind(3)+2
-               do j=p1%ind(2)-2,p1%ind(2)+2
-                  do i=p1%ind(1)-2,p1%ind(1)+2
+            do k=p1%ind(3)-this%nb,p1%ind(3)+this%nb
+               do j=p1%ind(2)-this%nb,p1%ind(2)+this%nb
+                  do i=p1%ind(1)-this%nb,p1%ind(1)+this%nb
                      ! Loop over particles in that cell
                      do nn=1,npic(i,j,k)
                         ! Create copy of our neighbor
@@ -478,24 +483,16 @@ contains
          if (this%p(i)%id.eq.0) cycle
          ! Create local copy of particle
          myp=this%p(i)
-         ! Time-integrate until dt_done=dt
-         dt_done=0.0_WP
-         do while (dt_done.lt.dt)
-            ! Decide the timestep size
-            mydt=min(myp%dt,dt-dt_done)
-            ! Remember the particle
-            pold=myp
-            ! Advance with Euler prediction
-            myp%pos=pold%pos+0.5_WP*mydt*myp%vel
-            myp%vel=pold%vel+0.5_WP*mydt*(this%gravity+myp%Abond)
-            ! Correct with midpoint rule
-            myp%pos=pold%pos+mydt*myp%vel
-            myp%vel=pold%vel+mydt*(this%gravity+myp%Abond)
-            ! Relocalize
-            myp%ind=this%cfg%get_ijk_global(myp%pos,myp%ind)
-            ! Increment
-            dt_done=dt_done+mydt
-         end do
+         ! Remember the particle
+         pold=myp
+         ! Advance with Euler prediction
+         myp%pos=pold%pos+0.5_WP*dt*myp%vel
+         myp%vel=pold%vel+0.5_WP*dt*(this%gravity+myp%Abond)
+         ! Correct with midpoint rule
+         myp%pos=pold%pos+dt*myp%vel
+         myp%vel=pold%vel+dt*(this%gravity+myp%Abond)
+         ! Relocalize
+         myp%ind=this%cfg%get_ijk_global(myp%pos,myp%ind)
          ! Correct the position to take into account periodicity
          if (this%cfg%xper) myp%pos(1)=this%cfg%x(this%cfg%imin)+modulo(myp%pos(1)-this%cfg%x(this%cfg%imin),this%cfg%xL)
          if (this%cfg%yper) myp%pos(2)=this%cfg%y(this%cfg%jmin)+modulo(myp%pos(2)-this%cfg%y(this%cfg%jmin),this%cfg%yL)

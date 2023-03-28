@@ -12,9 +12,7 @@ module simsolid_class
    implicit none
    private
    
-   
    public :: simsolid
-   
 
    !> Solid simulation object
    type :: simsolid
@@ -58,7 +56,33 @@ contains
       
       ! Create a config
       initialize_cfg: block
-         !this%cfg=config
+         use sgrid_class, only: sgrid,cartesian
+         use parallel,    only: group
+         integer :: i,j,k,nx,ny,nz
+         real(WP) :: Lx,Ly,Lz
+         real(WP), dimension(:), allocatable :: x,y,z
+         type(sgrid) :: grid
+         integer, dimension(3) :: partition
+         ! Read in grid definition
+         call this%input%read('Lx',Lx); call this%input%read('nx',nx); allocate(x(nx+1))
+         call this%input%read('Ly',Ly); call this%input%read('ny',ny); allocate(y(ny+1))
+         call this%input%read('Lz',Lz); call this%input%read('nz',nz); allocate(z(nz+1))
+         ! Create simple rectilinear grid
+         do i=1,nx+1
+            x(i)=real(i-1,WP)/real(nx,WP)*Lx-0.5_WP*Lx
+         end do
+         do j=1,ny+1
+            y(j)=real(j-1,WP)/real(ny,WP)*Ly-0.5_WP*Ly
+         end do
+         do k=1,nz+1
+            z(k)=real(k-1,WP)/real(nz,WP)*Lz-0.5_WP*Lz
+         end do
+         ! General serial grid object
+         grid=sgrid(coord=cartesian,no=1,x=x,y=y,z=z,xper=.false.,yper=.false.,zper=.false.,name='solid')
+         ! Read in partition
+         call this%input%read('Partition',partition)
+         ! Create partitioned grid
+         this%cfg=config(grp=group,decomp=partition,grid=grid)
       end block initialize_cfg
       
       ! Initialize time tracker
@@ -67,60 +91,79 @@ contains
          call this%input%read('Max timestep size',this%time%dtmax)
          call this%input%read('Max cfl number',this%time%cflmax)
          call this%input%read('Max time',this%time%tmax)
+         this%time%dt=this%time%dtmax
       end block initialize_timetracker
-
+      
       ! Initialize Lagrangian solid solver
       initialize_lss: block
-         use mathtools, only: twoPi,Pi
-         use random,    only: random_uniform
-         integer :: i,j,k,np
-         real(WP) :: radius
-         
+         use sgrid_class, only: sgrid,cartesian
+         use mathtools,   only: twoPi,Pi
+         use random,      only: random_uniform
+         integer :: i,j,k,np,nd
+         real(WP) :: radius,diam
+         real(WP), dimension(:), allocatable :: x
+         real(WP), dimension(3) :: pos
+         type(sgrid) :: grid
+
          ! Create solver
          this%ls=lss(cfg=this%cfg,name='solid')
-         
+
          ! Set material properties
          this%ls%elastic_modulus=1.0e5_WP
          this%ls%poisson_ratio=0.333_WP
          this%ls%rho=1000.0_WP
-         
-         ! Read sphere properties
-         call this%input%read('Number of markers',np)
-         ! Root process initializes marker particles
+
+         ! Only root process initializes solid particles
          if (this%ls%cfg%amRoot) then
-            call this%ls%resize(np)
-            ! Distribute marker particles
-            do i=1,np
-               ! Set object id
-               this%ls%p(i)%id=1
-               ! Give zero dt
-               this%ls%p(i)%dt=1.0e-3_WP
-               ! Set position
-               radius=huge(1.0_WP)
-               do while (radius.gt.0.5_WP)
-                  this%ls%p(i)%pos=[random_uniform(-0.5_WP,+0.5_WP),random_uniform(-0.5_WP,+0.5_WP),random_uniform(-0.5_WP,+0.5_WP)]
-                  radius=sqrt(dot_product(this%ls%p(i)%pos,this%ls%p(i)%pos))
+            ! Discretize sphere
+            call this%input%read('Elements per diameter',nd)
+            call this%input%read('Sphere diameter',diam)
+            ! Create simple rectilinear grid
+            allocate(x(1:nd+1))
+            do i=1,nd+1
+               x(i)=real(i-1,WP)/real(nd,WP)*diam-0.5_WP*diam
+            end do
+            ! General serial grid object
+            grid=sgrid(coord=cartesian,no=1,x=x,y=x,z=x,xper=.false.,yper=.false.,zper=.false.,name='elements')
+            ! Loop over mesh and create particles
+            np=0
+            do k=1,nd
+               do j=1,nd
+                  do i=1,nd
+                     ! Check if inside sphere
+                     pos=[grid%xm(i),grid%ym(j),grid%zm(k)]
+                     radius=sqrt(dot_product(pos,pos))
+                     if (radius.ge.0.5_WP*diam) cycle
+                     ! Increment particle
+                     np=np+1
+                     call this%ls%resize(np)
+                     ! Set object id
+                     this%ls%p(np)%id=1
+                     ! Set position
+                     this%ls%p(np)%pos=pos
+                     ! Assign velocity
+                     this%ls%p(np)%vel=[0.1_WP*this%ls%p(np)%pos(1),0.0_WP,0.0_WP]
+                     ! Assign element volume
+                     this%ls%p(np)%dV=grid%dx(i)*grid%dy(j)*grid%dz(k)
+                     ! Locate the particle on the mesh
+                     this%ls%p(np)%ind=this%ls%cfg%get_ijk_global(this%ls%p(np)%pos,[this%ls%cfg%imin,this%ls%cfg%jmin,this%ls%cfg%kmin])
+                     ! Assign a unique integer to particle
+                     this%ls%p(np)%i=np
+                     ! Activate the particle
+                     this%ls%p(np)%flag=0
+                  end do
                end do
-               ! Assign velocity
-               this%ls%p(i)%vel=[0.1_WP*this%ls%p(i)%pos(1),0.0_WP,0.0_WP]
-               ! Assign element volume
-               this%ls%p(i)%dV=Pi/(6.0_WP*real(np,WP))
-               ! Locate the particle on the mesh
-               this%ls%p(i)%ind=this%ls%cfg%get_ijk_global(this%ls%p(i)%pos,[this%ls%cfg%imin,this%ls%cfg%jmin,this%ls%cfg%kmin])
-               ! Assign a unique integer to particle
-               this%ls%p(i)%i=i
-               ! Activate the particle
-               this%ls%p(i)%flag=0
             end do
          end if
+         
+         ! Communicate particles
          call this%ls%sync()
          
          ! Initalize bonds
          call this%ls%bond_init()
          
       end block initialize_lss
-
-
+      
       ! Create partmesh object for visualizing Lagrangian particles
       create_pmesh: block
          use lss_class, only: max_bond
@@ -141,8 +184,7 @@ contains
             this%pmesh%vec(:,2,i)=this%ls%p(i)%Abond
          end do
       end block create_pmesh
-
-
+      
       ! Add Ensight output
       create_ensight: block
          ! Create Ensight output from cfg
@@ -150,11 +192,11 @@ contains
          ! Create event for Ensight output
          this%ens_evt=event(time=this%time,name='Ensight output')
          call this%input%read('Ensight output period',this%ens_evt%tper)
+         ! Only output the particles
          call this%ens_out%add_particle('particles',this%pmesh)
          ! Output to ensight
          if (this%ens_evt%occurs()) call this%ens_out%write_data(this%time%t)
       end block create_ensight
-      
       
       ! Create a monitor file
       create_monitor: block
@@ -176,7 +218,6 @@ contains
          call this%mfile%add_column(this%ls%Wmax,'Particle Wmax')
          call this%mfile%write()
       end block create_monitor
-
       
    end subroutine init
    
@@ -185,6 +226,11 @@ contains
 	subroutine step(this)
 		implicit none
 		class(simsolid), intent(inout) :: this
+      
+      ! Increment time
+      call this%ls%get_cfl(this%time%dt,this%time%cfl)
+      call this%time%adjust_dt()
+      call this%time%increment()
       
       ! Advance solid solver
       call this%ls%advance(this%time%dt)
