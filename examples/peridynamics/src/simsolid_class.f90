@@ -99,51 +99,54 @@ contains
          use sgrid_class, only: sgrid,cartesian
          use mathtools,   only: twoPi,Pi
          use random,      only: random_uniform
-         integer :: i,j,k,np,nd
-         real(WP) :: radius,diam
-         real(WP), dimension(:), allocatable :: x
-         real(WP), dimension(3) :: pos
+         integer :: i,j,k,np,nd,nh
+         real(WP) :: radius,diam,height
+         real(WP), dimension(:), allocatable :: x,y
          type(sgrid) :: grid
 
          ! Create solver
          this%ls=lss(cfg=this%cfg,name='solid')
          
-         ! Discretize sphere
+         ! Discretize cylinder
          call this%input%read('Elements per diameter',nd)
-         call this%input%read('Sphere diameter',diam)
+         call this%input%read('Cylinder diameter',diam)
+         call this%input%read('Cylinder height',height)
 
          ! Set material properties
-         this%ls%elastic_modulus=1.0e6_WP
+         this%ls%elastic_modulus=1.0e4_WP
          this%ls%poisson_ratio=0.333_WP
          this%ls%rho=1000.0_WP
-         this%ls%crit_energy=1.0e5_WP
+         this%ls%crit_energy=1.0e3_WP
          this%ls%dV=(diam/real(nd,WP))**3
 
          ! Only root process initializes solid particles
          if (this%ls%cfg%amRoot) then
             ! Create simple rectilinear grid
-            allocate(x(1:nd+1))
+            nh=ceiling(height/(diam/real(nd,WP)))
+            allocate(x(1:nd+1),y(1:nh+1))
             do i=1,nd+1
                x(i)=real(i-1,WP)/real(nd,WP)*diam-0.5_WP*diam
             end do
+            do j=1,nh+1
+               y(j)=real(j-1,WP)/real(nh,WP)*height-0.5_WP*height
+            end do
             ! General serial grid object
-            grid=sgrid(coord=cartesian,no=1,x=x,y=x,z=x,xper=.false.,yper=.false.,zper=.false.,name='elements')
+            grid=sgrid(coord=cartesian,no=1,x=x,y=y,z=x,xper=.false.,yper=.false.,zper=.false.,name='elements')
             ! Loop over mesh and create particles
             np=0
             do k=1,nd
-               do j=1,nd
+               do j=1,nh
                   do i=1,nd
                      ! Check if inside sphere
-                     pos=[grid%xm(i),grid%ym(j),grid%zm(k)]
-                     radius=sqrt(dot_product(pos,pos))
-                     if (radius.ge.0.5_WP*diam) cycle
+                     radius=sqrt(grid%xm(i)**2+grid%zm(k)**2)
+                     if (radius.ge.0.5_WP*diam.or.abs(grid%ym(j)).ge.0.5_WP*height) cycle
                      ! Increment particle
                      np=np+1
                      call this%ls%resize(np)
                      ! Set object id
                      this%ls%p(np)%id=1
                      ! Set position
-                     this%ls%p(np)%pos=pos
+                     this%ls%p(np)%pos=[grid%xm(i),grid%ym(j),grid%zm(k)]
                      ! Assign velocity
                      this%ls%p(np)%vel=[0.0_WP,0.0_WP,0.0_WP]
                      ! Locate the particle on the mesh
@@ -154,7 +157,7 @@ contains
                      this%ls%p(np)%flag=0
                      
                      ! Deactivate solver on top and bottom to enable boundary conditions
-                     if (abs(this%ls%p(np)%pos(2)).gt.0.45_WP) this%ls%p(np)%id=0
+                     if (abs(this%ls%p(np)%pos(2)).gt.0.45_WP*height) this%ls%p(np)%id=0
 
                   end do
                end do
@@ -248,8 +251,8 @@ contains
          integer :: n
          do n=1,this%ls%np_
             if (this%ls%p(n)%id.eq.0) then
-               if (this%ls%p(n)%pos(2).gt.0.0_WP) this%ls%p(n)%pos(2)=this%ls%p(n)%pos(2)-0.1_WP*this%time%t
-               if (this%ls%p(n)%pos(2).lt.0.0_WP) this%ls%p(n)%pos(2)=this%ls%p(n)%pos(2)+0.1_WP*this%time%t
+               if (this%ls%p(n)%pos(2).gt.0.0_WP) this%ls%p(n)%pos(2)=this%ls%p(n)%pos(2)+1.0e-3_WP*this%time%t
+               if (this%ls%p(n)%pos(2).lt.0.0_WP) this%ls%p(n)%pos(2)=this%ls%p(n)%pos(2)-1.0e-3_WP*this%time%t
             end if
          end do
       end block apply_bc
