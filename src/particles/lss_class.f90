@@ -23,7 +23,7 @@ module lss_class
    
 
    !> Maximum number of bonds per particle
-   integer, parameter, public :: max_bond=350  !< Assumes something like a 7x7x7 stencil in 3D
+   integer, parameter, public :: max_bond=200  !< Assumes something like a 7x7x7 stencil in 3D
    
 
    !> Bonded solide particle definition
@@ -263,6 +263,8 @@ contains
                         if (dist.lt.this%delta) then
                            ! Cannot self-bond
                            if (p1%i.eq.p2%i) cycle
+                           ! Cannot bond with different id
+                           if (p1%id.ne.p2%id) cycle
                            ! This particle is in horizon, create a bond
                            p1%nbond=p1%nbond+1
                            if (p1%nbond.gt.max_bond) call die('[lss_class bond_init] Number of detected bonds is larger than max allowed')
@@ -275,8 +277,9 @@ contains
                   end do
                end do
             end do
-            ! Zero out initial dilatation
+            ! Zero out initial dilatation and bond force
             p1%dil=0.0_WP
+            p1%Abond=0.0_WP
             ! Copy back the particle
             this%p(n1)=p1
          end do
@@ -443,8 +446,6 @@ contains
                                  p1%dbond(nb)=0.0_WP
                                  cycle
                               end if
-                              ! If still here, we have an active bond
-                              found_bond=.true.
                               ! Beta1
                               beta=3.0_WP*kk*p1%dil
                               ! Alpha1
@@ -463,11 +464,14 @@ contains
                               t21=-wgauss(p1%dbond(nb),this%delta)*(beta/p2%mw*p1%dbond(nb)+alpha*ed)*rpos/dist
                               ! Increment bond force
                               p1%Abond=p1%Abond+(t12-t21)*this%dV/this%rho
+                              ! If still here, we have an active bond
+                              found_bond=.true.
+                              cycle
                            end if
                         end do
-                        ! And collision force now
+                        ! Add collision force now
                         if (.not.found_bond.and.p1%i.ne.p2%i.and.dist.lt.rc) then
-                           p1%Abond=p1%Abond+kc*((rc/dist)**nc-1.0_WP)*(rpos/dist)/this%rho
+                           p1%Abond=p1%Abond-kc*((rc/dist)**nc-1.0_WP)*(rpos/dist)*this%dV/this%rho
                         end if
                      end do
                   end do
@@ -483,62 +487,60 @@ contains
 
    
    !> Advance the particle equations by a specified time step dt
-   !> p%id=0 => no coll, no solve
-   !> p%id=-1=> no coll, no move
+   !> p%id=0 => no solve
    subroutine advance(this,dt)
       use mpi_f08, only : MPI_SUM,MPI_INTEGER
       use mathtools, only: Pi
       implicit none
       class(lss), intent(inout) :: this
       real(WP), intent(inout) :: dt  !< Timestep size over which to advance
-      integer :: i,j,k,ierr
-      real(WP) :: mydt,dt_done
-      real(WP), dimension(3) :: acc,torque,dmom
+      integer :: n,ierr
       type(part) :: myp,pold
       
       ! Zero out number of particles removed
       this%np_out=0
       
+      ! Advance velocity based on old force and position based on mid-velocity
+      do n=1,this%np_
+         ! Skip particles with id=0
+         if (this%p(n)%id.eq.0) cycle
+         ! Advance with Verlet scheme
+         this%p(n)%vel=this%p(n)%vel+0.5_WP*dt*(this%gravity+this%p(n)%Abond)
+         this%p(n)%pos=this%p(n)%pos+dt*this%p(n)%vel
+         ! Relocalize
+         this%p(n)%ind=this%cfg%get_ijk_global(this%p(n)%pos,this%p(n)%ind)
+      end do
+      
       ! Calculate bond force
       call this%get_bond_force()
       
-      ! Advance the equations
-      do i=1,this%np_
+      ! Advance velocity based on new force
+      do n=1,this%np_
          ! Avoid particles with id=0
-         if (this%p(i)%id.eq.0) cycle
-         ! Create local copy of particle
-         myp=this%p(i)
-         ! Remember the particle
-         pold=myp
-         ! Advance with Euler prediction
-         myp%pos=pold%pos+0.5_WP*dt*myp%vel
-         myp%vel=pold%vel+0.5_WP*dt*(this%gravity+myp%Abond)
-         ! Correct with midpoint rule
-         myp%pos=pold%pos+dt*myp%vel
-         myp%vel=pold%vel+dt*(this%gravity+myp%Abond)
+         if (this%p(n)%id.eq.0) cycle
+         ! Advance with Verlet scheme
+         this%p(n)%vel=this%p(n)%vel+0.5_WP*dt*(this%gravity+this%p(n)%Abond)
          ! Relocalize
-         myp%ind=this%cfg%get_ijk_global(myp%pos,myp%ind)
+         this%p(n)%ind=this%cfg%get_ijk_global(this%p(n)%pos,this%p(n)%ind)
          ! Correct the position to take into account periodicity
-         if (this%cfg%xper) myp%pos(1)=this%cfg%x(this%cfg%imin)+modulo(myp%pos(1)-this%cfg%x(this%cfg%imin),this%cfg%xL)
-         if (this%cfg%yper) myp%pos(2)=this%cfg%y(this%cfg%jmin)+modulo(myp%pos(2)-this%cfg%y(this%cfg%jmin),this%cfg%yL)
-         if (this%cfg%zper) myp%pos(3)=this%cfg%z(this%cfg%kmin)+modulo(myp%pos(3)-this%cfg%z(this%cfg%kmin),this%cfg%zL)
+         if (this%cfg%xper) this%p(n)%pos(1)=this%cfg%x(this%cfg%imin)+modulo(this%p(n)%pos(1)-this%cfg%x(this%cfg%imin),this%cfg%xL)
+         if (this%cfg%yper) this%p(n)%pos(2)=this%cfg%y(this%cfg%jmin)+modulo(this%p(n)%pos(2)-this%cfg%y(this%cfg%jmin),this%cfg%yL)
+         if (this%cfg%zper) this%p(n)%pos(3)=this%cfg%z(this%cfg%kmin)+modulo(this%p(n)%pos(3)-this%cfg%z(this%cfg%kmin),this%cfg%zL)
          ! Handle particles that have left the domain
-         if (myp%pos(1).lt.this%cfg%x(this%cfg%imin).or.myp%pos(1).gt.this%cfg%x(this%cfg%imax+1)) myp%flag=1
-         if (myp%pos(2).lt.this%cfg%y(this%cfg%jmin).or.myp%pos(2).gt.this%cfg%y(this%cfg%jmax+1)) myp%flag=1
-         if (myp%pos(3).lt.this%cfg%z(this%cfg%kmin).or.myp%pos(3).gt.this%cfg%z(this%cfg%kmax+1)) myp%flag=1
+         if (this%p(n)%pos(1).lt.this%cfg%x(this%cfg%imin).or.this%p(n)%pos(1).gt.this%cfg%x(this%cfg%imax+1)) this%p(n)%flag=1
+         if (this%p(n)%pos(2).lt.this%cfg%y(this%cfg%jmin).or.this%p(n)%pos(2).gt.this%cfg%y(this%cfg%jmax+1)) this%p(n)%flag=1
+         if (this%p(n)%pos(3).lt.this%cfg%z(this%cfg%kmin).or.this%p(n)%pos(3).gt.this%cfg%z(this%cfg%kmax+1)) this%p(n)%flag=1
          ! Relocalize the particle
-         myp%ind=this%cfg%get_ijk_global(myp%pos,myp%ind)
+         this%p(n)%ind=this%cfg%get_ijk_global(this%p(n)%pos,this%p(n)%ind)
          ! Count number of particles removed
-         if (myp%flag.eq.1) this%np_out=this%np_out+1
-         ! Copy back to particle
-         if (myp%id.ne.-1) this%p(i)=myp
+         if (this%p(n)%flag.eq.1) this%np_out=this%np_out+1
       end do
       
       ! Communicate particles
       call this%sync()
       
       ! Sum up particles removed
-      call MPI_ALLREDUCE(this%np_out,i,1,MPI_INTEGER,MPI_SUM,this%cfg%comm,ierr); this%np_out=i
+      call MPI_ALLREDUCE(this%np_out,n,1,MPI_INTEGER,MPI_SUM,this%cfg%comm,ierr); this%np_out=n
       
       ! Log/screen output
       logging: block

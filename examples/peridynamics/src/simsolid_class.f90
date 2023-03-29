@@ -99,8 +99,8 @@ contains
          use sgrid_class, only: sgrid,cartesian
          use mathtools,   only: twoPi,Pi
          use random,      only: random_uniform
-         integer :: i,j,k,np,nd,nh
-         real(WP) :: radius,diam,height
+         integer :: i,j,k,nx,ny,np
+         real(WP) :: length,width,dx
          real(WP), dimension(:), allocatable :: x,y
          type(sgrid) :: grid
 
@@ -108,47 +108,50 @@ contains
          this%ls=lss(cfg=this%cfg,name='solid')
          
          ! Discretize cylinder
-         call this%input%read('Elements per diameter',nd)
-         call this%input%read('Cylinder diameter',diam)
-         call this%input%read('Cylinder height',height)
+         call this%input%read('Solid dx',dx)
+         call this%input%read('Bar length',length)
+         call this%input%read('Bar width',width)
 
          ! Set material properties
-         this%ls%elastic_modulus=1.0e4_WP
-         this%ls%poisson_ratio=0.333_WP
-         this%ls%rho=1000.0_WP
-         this%ls%crit_energy=1.0e3_WP
-         this%ls%dV=(diam/real(nd,WP))**3
-
+         this%ls%elastic_modulus=75.0e9_WP
+         this%ls%poisson_ratio=0.25_WP
+         this%ls%rho=2700.0_WP
+         this%ls%crit_energy=1.0e9_WP
+         this%ls%dV=dx**3
+         this%ls%delta=3.0_WP*dx
+         
          ! Only root process initializes solid particles
          if (this%ls%cfg%amRoot) then
             ! Create simple rectilinear grid
-            nh=ceiling(height/(diam/real(nd,WP)))
-            allocate(x(1:nd+1),y(1:nh+1))
-            do i=1,nd+1
-               x(i)=real(i-1,WP)/real(nd,WP)*diam-0.5_WP*diam
+            nx=2*int(length/dx)
+            ny=int(width/dx)
+            allocate(x(1:nx+1),y(1:ny+1))
+            do i=1,nx+1
+               x(i)=real(i-1,WP)*dx-length
             end do
-            do j=1,nh+1
-               y(j)=real(j-1,WP)/real(nh,WP)*height-0.5_WP*height
+            do j=1,ny+1
+               y(j)=real(j-1,WP)*dx-0.5_WP*width
             end do
             ! General serial grid object
-            grid=sgrid(coord=cartesian,no=1,x=x,y=y,z=x,xper=.false.,yper=.false.,zper=.false.,name='elements')
+            grid=sgrid(coord=cartesian,no=1,x=x,y=y,z=y,xper=.false.,yper=.false.,zper=.false.,name='elements')
             ! Loop over mesh and create particles
             np=0
-            do k=1,nd
-               do j=1,nh
-                  do i=1,nd
-                     ! Check if inside sphere
-                     radius=sqrt(grid%xm(i)**2+grid%zm(k)**2)
-                     if (radius.ge.0.5_WP*diam.or.abs(grid%ym(j)).ge.0.5_WP*height) cycle
+            do k=1,ny
+               do j=1,ny
+                  do i=1,nx
                      ! Increment particle
                      np=np+1
                      call this%ls%resize(np)
-                     ! Set object id
-                     this%ls%p(np)%id=1
                      ! Set position
                      this%ls%p(np)%pos=[grid%xm(i),grid%ym(j),grid%zm(k)]
-                     ! Assign velocity
-                     this%ls%p(np)%vel=[0.0_WP,0.0_WP,0.0_WP]
+                     ! Set object id and velocity
+                     if (grid%xm(i).gt.0.0_WP) then
+                        this%ls%p(np)%id=1
+                        this%ls%p(np)%vel=[-10.0_WP,0.0_WP,0.0_WP]
+                     else
+                        this%ls%p(np)%id=2
+                        this%ls%p(np)%vel=[+10.0_WP,0.0_WP,0.0_WP]
+                     end if
                      ! Locate the particle on the mesh
                      this%ls%p(np)%ind=this%ls%cfg%get_ijk_global(this%ls%p(np)%pos,[this%ls%cfg%imin,this%ls%cfg%jmin,this%ls%cfg%kmin])
                      ! Assign a unique integer to particle
@@ -157,7 +160,10 @@ contains
                      this%ls%p(np)%flag=0
                      
                      ! Deactivate solver on top and bottom to enable boundary conditions
-                     if (abs(this%ls%p(np)%pos(2)).gt.0.45_WP*height) this%ls%p(np)%id=0
+                     !if (abs(this%ls%p(np)%pos(2)).gt.0.45_WP*height) this%ls%p(np)%id=0
+                     ! Tag top and bottom particles to apply extra force
+                     !if (abs(this%ls%p(np)%pos(2)).gt.0.45_WP*height) this%ls%p(np)%id=2
+
 
                   end do
                end do
@@ -247,15 +253,15 @@ contains
       call this%time%increment()
       
       ! Enforce boundary conditions
-      apply_bc: block
-         integer :: n
-         do n=1,this%ls%np_
-            if (this%ls%p(n)%id.eq.0) then
-               if (this%ls%p(n)%pos(2).gt.0.0_WP) this%ls%p(n)%pos(2)=this%ls%p(n)%pos(2)+1.0e-3_WP*this%time%t
-               if (this%ls%p(n)%pos(2).lt.0.0_WP) this%ls%p(n)%pos(2)=this%ls%p(n)%pos(2)-1.0e-3_WP*this%time%t
-            end if
-         end do
-      end block apply_bc
+      !apply_bc: block
+      !   integer :: n
+      !   do n=1,this%ls%np_
+      !      if (this%ls%p(n)%id.eq.0) then
+      !         if (this%ls%p(n)%pos(2).gt.0.0_WP) this%ls%p(n)%pos(2)=this%ls%p(n)%pos(2)+1.0e-2_WP*this%time%dt
+      !         if (this%ls%p(n)%pos(2).lt.0.0_WP) this%ls%p(n)%pos(2)=this%ls%p(n)%pos(2)-1.0e-2_WP*this%time%dt
+      !      end if
+      !   end do
+      !end block apply_bc
       
       ! Advance solid solver
       call this%ls%advance(this%time%dt)
