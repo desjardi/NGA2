@@ -107,18 +107,20 @@ contains
 
          ! Create solver
          this%ls=lss(cfg=this%cfg,name='solid')
+         
+         ! Discretize sphere
+         call this%input%read('Elements per diameter',nd)
+         call this%input%read('Sphere diameter',diam)
 
          ! Set material properties
-         this%ls%elastic_modulus=1.0e5_WP
+         this%ls%elastic_modulus=1.0e6_WP
          this%ls%poisson_ratio=0.333_WP
          this%ls%rho=1000.0_WP
-         this%ls%crit_energy=100.0_WP
+         this%ls%crit_energy=1.0e5_WP
+         this%ls%dV=(diam/real(nd,WP))**3
 
          ! Only root process initializes solid particles
          if (this%ls%cfg%amRoot) then
-            ! Discretize sphere
-            call this%input%read('Elements per diameter',nd)
-            call this%input%read('Sphere diameter',diam)
             ! Create simple rectilinear grid
             allocate(x(1:nd+1))
             do i=1,nd+1
@@ -144,8 +146,6 @@ contains
                      this%ls%p(np)%pos=pos
                      ! Assign velocity
                      this%ls%p(np)%vel=[0.0_WP,0.0_WP,0.0_WP]
-                     ! Assign element volume
-                     this%ls%p(np)%dV=grid%dx(i)*grid%dy(j)*grid%dz(k)
                      ! Locate the particle on the mesh
                      this%ls%p(np)%ind=this%ls%cfg%get_ijk_global(this%ls%p(np)%pos,[this%ls%cfg%imin,this%ls%cfg%jmin,this%ls%cfg%kmin])
                      ! Assign a unique integer to particle
@@ -172,18 +172,24 @@ contains
       ! Create partmesh object for visualizing Lagrangian particles
       create_pmesh: block
          use lss_class, only: max_bond
-         integer :: i,n
+         integer :: i,n,nbond
          this%pmesh=partmesh(nvar=2,nvec=2,name='solid')
-         this%pmesh%varname(1)='nbond'
+         this%pmesh%varname(1)='failfrac'
          this%pmesh%varname(2)='dilatation'
          this%pmesh%vecname(1)='velocity'
          this%pmesh%vecname(2)='bond_force'
          call this%ls%update_partmesh(this%pmesh)
          do i=1,this%ls%np_
             this%pmesh%var(1,i)=0.0_WP
+            nbond=0
             do n=1,max_bond
-               if (this%ls%p(i)%ibond(n).gt.0) this%pmesh%var(1,i)=this%pmesh%var(1,i)+1.0_WP
+               if (this%ls%p(i)%ibond(n).gt.0) nbond=nbond+1
             end do
+            if (this%ls%p(i)%nbond.gt.0) then
+               this%pmesh%var(1,i)=1.0_WP-real(nbond,WP)/real(this%ls%p(i)%nbond,WP)
+            else
+               this%pmesh%var(1,i)=0.0_WP
+            end if
             this%pmesh%var(2,i)  =this%ls%p(i)%dil
             this%pmesh%vec(:,1,i)=this%ls%p(i)%vel
             this%pmesh%vec(:,2,i)=this%ls%p(i)%Abond
@@ -255,13 +261,18 @@ contains
       if (this%ens_evt%occurs()) then
          update_pmesh: block
             use lss_class, only: max_bond
-            integer :: i,n
+            integer :: i,n,nbond
             call this%ls%update_partmesh(this%pmesh)
             do i=1,this%ls%np_
-               this%pmesh%var(1,i)=0.0_WP
+               nbond=0
                do n=1,max_bond
-                  if (this%ls%p(i)%ibond(n).gt.0) this%pmesh%var(1,i)=this%pmesh%var(1,i)+1.0_WP
+                  if (this%ls%p(i)%ibond(n).gt.0) nbond=nbond+1
                end do
+               if (this%ls%p(i)%nbond.gt.0) then
+                  this%pmesh%var(1,i)=1.0_WP-real(nbond,WP)/real(this%ls%p(i)%nbond,WP)
+               else
+                  this%pmesh%var(1,i)=0.0_WP
+               end if
                this%pmesh%var(2,i)  =this%ls%p(i)%dil
                this%pmesh%vec(:,1,i)=this%ls%p(i)%vel
                this%pmesh%vec(:,2,i)=this%ls%p(i)%Abond

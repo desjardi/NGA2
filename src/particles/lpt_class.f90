@@ -81,8 +81,8 @@ module lpt_class
      
      ! Collisional parameters
      real(WP) :: tau_col                                 !< Characteristic collision time scale
-     real(WP) :: e_n                                     !< Normal restitution coefficient
-     real(WP) :: e_w                                     !< Wall restitution coefficient
+     real(WP) :: e_n=1.0_WP                              !< Normal restitution coefficient
+     real(WP) :: e_w=1.0_WP                              !< Wall restitution coefficient
      real(WP) :: mu_f                                    !< Friction coefficient
      real(WP) :: clip_col=0.2_WP                         !< Maximum allowable overlap
      real(WP), dimension(:,:,:),   allocatable :: Wdist  !< Signed wall distance - naive for now (could be redone with FMM)

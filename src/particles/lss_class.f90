@@ -29,7 +29,6 @@ module lss_class
    !> Bonded solide particle definition
    type :: part
       !> MPI_DOUBLE_PRECISION data
-      real(WP) :: dV                         !< Element volume
       real(WP) :: mw                         !< Weighted volume
       real(WP) :: dil                        !< Element dilatation
       real(WP), dimension(max_bond) :: dbond !< Length of initial bonds
@@ -39,13 +38,14 @@ module lss_class
       !> MPI_INTEGER data
       integer :: id                          !< ID the object is associated with
       integer :: i                           !< Unique index of particle (assumed >0)
+      integer :: nbond                           !< Number of initial bonds
       integer, dimension(max_bond) :: ibond  !< Indices of initially bonded particles (0 values ignored)
       integer , dimension(3) :: ind          !< Index of cell containing particle center
       integer :: flag                        !< Control parameter (0=normal, 1=done->will be removed)
    end type part
    !> Number of blocks, block length, and block types in a particle
    integer, parameter                         :: part_nblock=2
-   integer           , dimension(part_nblock) :: part_lblock=[12+max_bond,6+max_bond]
+   integer           , dimension(part_nblock) :: part_lblock=[11+max_bond,7+max_bond]
    type(MPI_Datatype), dimension(part_nblock) :: part_tblock=[MPI_DOUBLE_PRECISION,MPI_INTEGER]
    !> MPI_PART derived datatype and size
    type(MPI_Datatype) :: MPI_PART
@@ -66,6 +66,7 @@ module lss_class
       real(WP) :: poisson_ratio                           !< Poisson's ratio of the material
       real(WP) :: rho                                     !< Density of the material
       real(WP) :: crit_energy                             !< Critical energy release
+      real(WP) :: dV                                      !< Element volume
 
       ! Bonding parameters
       real(WP) :: delta                                   !< Bonding horizon (distance)
@@ -233,7 +234,6 @@ contains
          type(part) :: p1,p2
          real(WP), dimension(3) :: rpos
          real(WP) :: dist
-         integer :: nbond
 
          ! Loop over particles
          do n1=1,this%np_
@@ -243,7 +243,7 @@ contains
             p1%mw=0.0_WP
             ! Zero out bonds
             p1%ibond=0
-            nbond=0
+            p1%nbond=0
             ! Loop over neighbor cells
             do k=p1%ind(3)-this%nb,p1%ind(3)+this%nb
                do j=p1%ind(2)-this%nb,p1%ind(2)+this%nb
@@ -264,12 +264,12 @@ contains
                            ! Cannot self-bond
                            if (p1%i.eq.p2%i) cycle
                            ! This particle is in horizon, create a bond
-                           nbond=nbond+1
-                           if (nbond.gt.max_bond) call die('[lss_class bond_init] Number of detected bonds is larger than max allowed')
-                           p1%ibond(nbond)=p2%i
-                           p1%dbond(nbond)=dist
+                           p1%nbond=p1%nbond+1
+                           if (p1%nbond.gt.max_bond) call die('[lss_class bond_init] Number of detected bonds is larger than max allowed')
+                           p1%ibond(p1%nbond)=p2%i
+                           p1%dbond(p1%nbond)=dist
                            ! Increment weighted volume
-                           p1%mw=p1%mw+wgauss(dist,this%delta)*dist**2*p2%dV
+                           p1%mw=p1%mw+wgauss(dist,this%delta)*dist**2*this%dV
                         end if
                      end do
                   end do
@@ -367,12 +367,12 @@ contains
                         do nb=1,max_bond
                            if (p1%ibond(nb).eq.p2%i) then
                               ! Increment weighted volume
-                              p1%mw=p1%mw+wgauss(p1%dbond(nb),this%delta)*p1%dbond(nb)**2*p2%dV
+                              p1%mw=p1%mw+wgauss(p1%dbond(nb),this%delta)*p1%dbond(nb)**2*this%dV
                               ! Get current distance
                               rpos=p2%pos-p1%pos
                               dist=sqrt(dot_product(rpos,rpos))
                               ! Increment dilatation
-                              p1%dil=p1%dil+wgauss(p1%dbond(nb),this%delta)*p1%dbond(nb)*(dist-p1%dbond(nb))*p2%dV
+                              p1%dil=p1%dil+wgauss(p1%dbond(nb),this%delta)*p1%dbond(nb)*(dist-p1%dbond(nb))*this%dV
                            end if
                         end do
                      end do
@@ -389,19 +389,25 @@ contains
       ! Re-communicate particles in ghost cells to update dil and mw
       call this%share()
       
-      ! Update bond force
+      ! Update bond force, including collision force
       update_bond_force: block
+         use mathtools, only: Pi
          integer :: i,j,k,n1,nn,n2
          type(part) :: p1,p2
          real(WP), dimension(3) :: rpos,t12,t21
          real(WP) :: dist,beta,alpha,ed
          real(WP) :: stretch,max_stretch,mu,kk
+         real(WP) :: nc,rc,kc
          integer :: nb,nbond
+         logical :: found_bond
          
          ! Recompute a few physical parameters
          mu=this%elastic_modulus/(2.0_WP+2.0_WP*this%poisson_ratio)
          kk=this%elastic_modulus/(3.0_WP-6.0_WP*this%poisson_ratio)
          max_stretch=sqrt(this%crit_energy/((3.0_WP*mu+(kk-5.0_WP*mu/3.0_WP)*0.75_WP**4)*this%delta))
+         rc=this%dV**(1.0_WP/3.0_WP)
+         nc=1.0_WP
+         kc=15.0_WP*12.0_WP*this%elastic_modulus/(Pi*this%delta**4)
          
          ! Loop over particles
          do n1=1,this%np_
@@ -422,13 +428,14 @@ contains
                         else if (n2.lt.0) then
                            p2=this%g(-n2)
                         end if
+                        ! Current distance
+                        rpos=p2%pos-p1%pos
+                        dist=sqrt(dot_product(rpos,rpos))
                         ! Check if a bond exists
+                        found_bond=.false.
                         do nb=1,max_bond
                            if (p1%ibond(nb).eq.p2%i) then
-                              ! Current distance
-                              rpos=p2%pos-p1%pos
-                              dist=sqrt(dot_product(rpos,rpos))
-                              ! Check for breakage
+                              ! Check for breakage first
                               stretch=(dist-p1%dbond(nb))/p1%dbond(nb)
                               if (stretch.gt.max_stretch) then
                                  ! Remove the bond
@@ -436,6 +443,8 @@ contains
                                  p1%dbond(nb)=0.0_WP
                                  cycle
                               end if
+                              ! If still here, we have an active bond
+                              found_bond=.true.
                               ! Beta1
                               beta=3.0_WP*kk*p1%dil
                               ! Alpha1
@@ -453,9 +462,13 @@ contains
                               ! Force density 2->1
                               t21=-wgauss(p1%dbond(nb),this%delta)*(beta/p2%mw*p1%dbond(nb)+alpha*ed)*rpos/dist
                               ! Increment bond force
-                              p1%Abond=p1%Abond+(t12-t21)*p2%dV/this%rho
+                              p1%Abond=p1%Abond+(t12-t21)*this%dV/this%rho
                            end if
                         end do
+                        ! And collision force now
+                        if (.not.found_bond.and.p1%i.ne.p2%i.and.dist.lt.rc) then
+                           p1%Abond=p1%Abond+kc*((rc/dist)**nc-1.0_WP)*(rpos/dist)/this%rho
+                        end if
                      end do
                   end do
                end do

@@ -14,9 +14,9 @@ Sphere diameter :       1
 Elements per diameter : 32
 
 # Time integration
-Max timestep size : 1e-4
+Max timestep size : 1e-5
 Max cfl number :    0.9
 Max time :          100
 
 # Ensight output
-Ensight output period : 1e-3
+Ensight output period : 1e-4
