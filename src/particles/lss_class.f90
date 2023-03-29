@@ -65,6 +65,7 @@ module lss_class
       real(WP) :: elastic_modulus                         !< Elastic modulus of the material
       real(WP) :: poisson_ratio                           !< Poisson's ratio of the material
       real(WP) :: rho                                     !< Density of the material
+      real(WP) :: crit_energy                             !< Critical energy release
 
       ! Bonding parameters
       real(WP) :: delta                                   !< Bonding horizon (distance)
@@ -185,7 +186,7 @@ contains
       
       ! Communicate particles in ghost cells
       call this%share()
-
+      
       ! We can now assemble particle-in-cell information
       pic_prep: block
          use mpi_f08
@@ -216,7 +217,7 @@ contains
          do i=1,this%np_
             ip=this%p(i)%ind(1); jp=this%p(i)%ind(2); kp=this%p(i)%ind(3)
             npic(ip,jp,kp)=npic(ip,jp,kp)+1
-            ipic(npic(ip,jp,kp),ip,jp,kp)=i
+            ipic(npic(ip,jp,kp),ip,jp,kp)=+i
          end do
          do i=1,this%ng_
             ip=this%g(i)%ind(1); jp=this%g(i)%ind(2); kp=this%g(i)%ind(3)
@@ -248,14 +249,17 @@ contains
                do j=p1%ind(2)-this%nb,p1%ind(2)+this%nb
                   do i=p1%ind(1)-this%nb,p1%ind(1)+this%nb
                      ! Loop over particles in that cell
+                     if (p1%ind(1).eq.26.and.p1%ind(2).eq.26.and.p1%ind(3).eq.26) then
+                        print*,'proc#',this%cfg%rank,'in cell',p1%ind
+                        print*,'neighbor',i,j,k,'has',npic(i,j,k),'particles'
+                     end if
                      do nn=1,npic(i,j,k)
                         ! Create copy of our neighbor
                         n2=ipic(nn,i,j,k)
                         if (n2.gt.0) then
-                           p2=this%p(n2)
+                           p2=this%p(+n2)
                         else if (n2.lt.0) then
-                           n2=-n2
-                           p2=this%g(n2)
+                           p2=this%g(-n2)
                         end if
                         ! Check interparticle distance
                         rpos=p2%pos-p1%pos
@@ -325,7 +329,7 @@ contains
          do i=1,this%np_
             ip=this%p(i)%ind(1); jp=this%p(i)%ind(2); kp=this%p(i)%ind(3)
             npic(ip,jp,kp)=npic(ip,jp,kp)+1
-            ipic(npic(ip,jp,kp),ip,jp,kp)=i
+            ipic(npic(ip,jp,kp),ip,jp,kp)=+i
          end do
          do i=1,this%ng_
             ip=this%g(i)%ind(1); jp=this%g(i)%ind(2); kp=this%g(i)%ind(3)
@@ -359,10 +363,9 @@ contains
                         ! Create copy of our neighbor
                         n2=ipic(nn,i,j,k)
                         if (n2.gt.0) then
-                           p2=this%p(n2)
+                           p2=this%p(+n2)
                         else if (n2.lt.0) then
-                           n2=-n2
-                           p2=this%g(n2)
+                           p2=this%g(-n2)
                         end if
                         ! Check if a bond exists
                         do nb=1,max_bond
@@ -396,8 +399,14 @@ contains
          type(part) :: p1,p2
          real(WP), dimension(3) :: rpos,t12,t21
          real(WP) :: dist,beta,alpha,ed
+         real(WP) :: stretch,max_stretch,mu,kk
          integer :: nb,nbond
-
+         
+         ! Recompute a few physical parameters
+         mu=this%elastic_modulus/(2.0_WP+2.0_WP*this%poisson_ratio)
+         kk=this%elastic_modulus/(3.0_WP-6.0_WP*this%poisson_ratio)
+         max_stretch=sqrt(this%crit_energy/((3.0_WP*mu+(kk-5.0_WP*mu/3.0_WP)*0.75_WP**4)*this%delta))
+         
          ! Loop over particles
          do n1=1,this%np_
             ! Create copy of our particle
@@ -413,10 +422,9 @@ contains
                         ! Create copy of our neighbor
                         n2=ipic(nn,i,j,k)
                         if (n2.gt.0) then
-                           p2=this%p(n2)
+                           p2=this%p(+n2)
                         else if (n2.lt.0) then
-                           n2=-n2
-                           p2=this%g(n2)
+                           p2=this%g(-n2)
                         end if
                         ! Check if a bond exists
                         do nb=1,max_bond
@@ -424,18 +432,26 @@ contains
                               ! Current distance
                               rpos=p2%pos-p1%pos
                               dist=sqrt(dot_product(rpos,rpos))
+                              ! Check for breakage
+                              stretch=(dist-p1%dbond(nb))/p1%dbond(nb)
+                              if (stretch.gt.max_stretch) then
+                                 ! Remove the bond
+                                 p1%ibond(nb)=0
+                                 p1%dbond(nb)=0.0_WP
+                                 cycle
+                              end if
                               ! Beta1
-                              beta=(this%elastic_modulus/(1.0_WP-2.0_WP*this%poisson_ratio))*p1%dil
+                              beta=3.0_WP*kk*p1%dil
                               ! Alpha1
-                              alpha=7.5_WP*(this%elastic_modulus/(1.0_WP+this%poisson_ratio))/p1%mw
+                              alpha=15.0_WP*mu/p1%mw
                               ! Extension1
                               ed=dist-p1%dbond(nb)*(1.0_WP+p1%dil/3.0_WP)
                               ! Force density 1->2
                               t12=+wgauss(p1%dbond(nb),this%delta)*(beta/p1%mw*p1%dbond(nb)+alpha*ed)*rpos/dist
                               ! Beta2
-                              beta=(this%elastic_modulus/(1.0_WP-2.0_WP*this%poisson_ratio))*p2%dil
+                              beta=3.0_WP*kk*p2%dil
                               ! Alpha2
-                              alpha=7.5_WP*(this%elastic_modulus/(1.0_WP+this%poisson_ratio))/p2%mw
+                              alpha=15.0_WP*mu/p2%mw
                               ! Extension2
                               ed=dist-p1%dbond(nb)*(1.0_WP+p2%dil/3.0_WP)
                               ! Force density 2->1
@@ -673,7 +689,7 @@ contains
       ! Clean up ghost array
       call this%resize_ghost(n=0); this%ng_=0
       
-      ! Share ghost particles to the left in x
+      ! Share ghost particles in -x (no ghosts are sent here)
       nsend=0
       do n=1,this%np_
          if (this%p(n)%ind(1).lt.this%cfg%imin_+no) nsend=nsend+1
@@ -701,7 +717,7 @@ contains
       if (allocated(tosend)) deallocate(tosend)
       if (allocated(torecv)) deallocate(torecv)
       
-      ! Share ghost particles to the right in x
+      ! Share ghost particles in +x (no ghosts are sent here)
       nsend=0
       do n=1,this%np_
          if (this%p(n)%ind(1).gt.this%cfg%imax_-no) nsend=nsend+1
@@ -729,10 +745,13 @@ contains
       if (allocated(tosend)) deallocate(tosend)
       if (allocated(torecv)) deallocate(torecv)
       
-      ! Share ghost particles to the left in y
+      ! Share ghost particles in -y (ghosts need to be sent now)
       nsend=0
       do n=1,this%np_
          if (this%p(n)%ind(2).lt.this%cfg%jmin_+no) nsend=nsend+1
+      end do
+      do n=1,this%ng_
+         if (this%g(n)%ind(2).lt.this%cfg%jmin_+no) nsend=nsend+1
       end do
       allocate(tosend(nsend))
       nsend=0
@@ -740,6 +759,16 @@ contains
          if (this%p(n)%ind(2).lt.this%cfg%jmin_+no) then
             nsend=nsend+1
             tosend(nsend)=this%p(n)
+            if (this%cfg%yper.and.tosend(nsend)%ind(2).lt.this%cfg%jmin+no) then
+               tosend(nsend)%pos(2)=tosend(nsend)%pos(2)+this%cfg%yL
+               tosend(nsend)%ind(2)=tosend(nsend)%ind(2)+this%cfg%ny
+            end if
+         end if
+      end do
+      do n=1,this%ng_
+         if (this%g(n)%ind(2).lt.this%cfg%jmin_+no) then
+            nsend=nsend+1
+            tosend(nsend)=this%g(n)
             if (this%cfg%yper.and.tosend(nsend)%ind(2).lt.this%cfg%jmin+no) then
                tosend(nsend)%pos(2)=tosend(nsend)%pos(2)+this%cfg%yL
                tosend(nsend)%ind(2)=tosend(nsend)%ind(2)+this%cfg%ny
@@ -757,9 +786,12 @@ contains
       if (allocated(tosend)) deallocate(tosend)
       if (allocated(torecv)) deallocate(torecv)
       
-      ! Share ghost particles to the right in y
+      ! Share ghost particles in +y (ghosts need to be sent now - but not newly received ghosts!)
       nsend=0
       do n=1,this%np_
+         if (this%p(n)%ind(2).gt.this%cfg%jmax_-no) nsend=nsend+1
+      end do
+      do n=1,this%ng_-nrecv
          if (this%p(n)%ind(2).gt.this%cfg%jmax_-no) nsend=nsend+1
       end do
       allocate(tosend(nsend))
@@ -768,6 +800,16 @@ contains
          if (this%p(n)%ind(2).gt.this%cfg%jmax_-no) then
             nsend=nsend+1
             tosend(nsend)=this%p(n)
+            if (this%cfg%yper.and.tosend(nsend)%ind(2).gt.this%cfg%jmax-no) then
+               tosend(nsend)%pos(2)=tosend(nsend)%pos(2)-this%cfg%yL
+               tosend(nsend)%ind(2)=tosend(nsend)%ind(2)-this%cfg%ny
+            end if
+         end if
+      end do
+      do n=1,this%ng_-nrecv
+         if (this%g(n)%ind(2).gt.this%cfg%jmax_-no) then
+            nsend=nsend+1
+            tosend(nsend)=this%g(n)
             if (this%cfg%yper.and.tosend(nsend)%ind(2).gt.this%cfg%jmax-no) then
                tosend(nsend)%pos(2)=tosend(nsend)%pos(2)-this%cfg%yL
                tosend(nsend)%ind(2)=tosend(nsend)%ind(2)-this%cfg%ny
@@ -785,10 +827,13 @@ contains
       if (allocated(tosend)) deallocate(tosend)
       if (allocated(torecv)) deallocate(torecv)
       
-      ! Share ghost particles to the left in z
+      ! Share ghost particles in -z (ghosts need to be sent now)
       nsend=0
       do n=1,this%np_
          if (this%p(n)%ind(3).lt.this%cfg%kmin_+no) nsend=nsend+1
+      end do
+      do n=1,this%ng_
+         if (this%g(n)%ind(3).lt.this%cfg%kmin_+no) nsend=nsend+1
       end do
       allocate(tosend(nsend))
       nsend=0
@@ -796,6 +841,16 @@ contains
          if (this%p(n)%ind(3).lt.this%cfg%kmin_+no) then
             nsend=nsend+1
             tosend(nsend)=this%p(n)
+            if (this%cfg%zper.and.tosend(nsend)%ind(3).lt.this%cfg%kmin+no) then
+               tosend(nsend)%pos(3)=tosend(nsend)%pos(3)+this%cfg%zL
+               tosend(nsend)%ind(3)=tosend(nsend)%ind(3)+this%cfg%nz
+            end if
+         end if
+      end do
+      do n=1,this%ng_
+         if (this%g(n)%ind(3).lt.this%cfg%kmin_+no) then
+            nsend=nsend+1
+            tosend(nsend)=this%g(n)
             if (this%cfg%zper.and.tosend(nsend)%ind(3).lt.this%cfg%kmin+no) then
                tosend(nsend)%pos(3)=tosend(nsend)%pos(3)+this%cfg%zL
                tosend(nsend)%ind(3)=tosend(nsend)%ind(3)+this%cfg%nz
@@ -813,10 +868,13 @@ contains
       if (allocated(tosend)) deallocate(tosend)
       if (allocated(torecv)) deallocate(torecv)
       
-      ! Share ghost particles to the right in z
+      ! Share ghost particles in +z (ghosts need to be sent now - but not newly received ghosts!)
       nsend=0
       do n=1,this%np_
          if (this%p(n)%ind(3).gt.this%cfg%kmax_-no) nsend=nsend+1
+      end do
+      do n=1,this%ng_-nrecv
+         if (this%g(n)%ind(3).gt.this%cfg%kmax_-no) nsend=nsend+1
       end do
       allocate(tosend(nsend))
       nsend=0
@@ -824,6 +882,16 @@ contains
          if (this%p(n)%ind(3).gt.this%cfg%kmax_-no) then
             nsend=nsend+1
             tosend(nsend)=this%p(n)
+            if (this%cfg%zper.and.tosend(nsend)%ind(3).gt.this%cfg%kmax-no) then
+               tosend(nsend)%pos(3)=tosend(nsend)%pos(3)-this%cfg%zL
+               tosend(nsend)%ind(3)=tosend(nsend)%ind(3)-this%cfg%nz
+            end if
+         end if
+      end do
+      do n=1,this%ng_-nrecv
+         if (this%g(n)%ind(3).gt.this%cfg%kmax_-no) then
+            nsend=nsend+1
+            tosend(nsend)=this%g(n)
             if (this%cfg%zper.and.tosend(nsend)%ind(3).gt.this%cfg%kmax-no) then
                tosend(nsend)%pos(3)=tosend(nsend)%pos(3)-this%cfg%zL
                tosend(nsend)%ind(3)=tosend(nsend)%ind(3)-this%cfg%nz
@@ -840,7 +908,7 @@ contains
       this%ng_=this%ng_+nrecv
       if (allocated(tosend)) deallocate(tosend)
       if (allocated(torecv)) deallocate(torecv)
-      
+
    end subroutine share
    
    

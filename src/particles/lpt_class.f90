@@ -1417,239 +1417,291 @@ contains
     deallocate(buf_send)
     ! Recycle to remove duplicate particles
     call this%recycle()
-  end subroutine sync
-
-
-  !> Share particles across processor boundaries
-  subroutine share(this,nover)
-    use mpi_f08
-    use messager, only: warn,die
-    implicit none
-    class(lpt), intent(inout) :: this
-    integer, optional :: nover
-    type(part), dimension(:), allocatable :: tosend
-    type(part), dimension(:), allocatable :: torecv
-    integer :: no,nsend,nrecv
-    type(MPI_Status) :: status
-    integer :: icnt,isrc,idst,ierr
-    integer :: i,n
-
-    ! Check overlap size
-    if (present(nover)) then
-       no=nover
-       if (no.gt.this%cfg%no) then
-          call warn('[lpt_class share] Specified overlap is larger than that of cfg - reducing no')
-          no=this%cfg%no
-       else if (no.le.0) then
-          call die('[lpt_class share] Specified overlap cannot be less or equal to zero')
-       end if
-    else
-       no=1
-    end if
-
-    ! Clean up ghost array
-    call this%resize_ghost(n=0); this%ng_=0
-
-    ! Share ghost particles to the left in x
-    nsend=0
-    do n=1,this%np_
-       if (this%p(n)%ind(1).lt.this%cfg%imin_+no) nsend=nsend+1
-    end do
-    allocate(tosend(nsend))
-    nsend=0
-    do n=1,this%np_
-       if (this%p(n)%ind(1).lt.this%cfg%imin_+no) then
-          nsend=nsend+1
-          tosend(nsend)=this%p(n)
-          if (this%cfg%xper.and.tosend(nsend)%ind(1).lt.this%cfg%imin+no) then
-             tosend(nsend)%pos(1)=tosend(nsend)%pos(1)+this%cfg%xL
-             tosend(nsend)%ind(1)=tosend(nsend)%ind(1)+this%cfg%nx
-          end if
-       end if
-    end do
-    nrecv=0
-    call MPI_CART_SHIFT(this%cfg%comm,0,-1,isrc,idst,ierr)
-    call MPI_SENDRECV(nsend,1,MPI_INTEGER,idst,0,nrecv,1,MPI_INTEGER,isrc,0,this%cfg%comm,status,ierr)
-    allocate(torecv(nrecv))
-    call MPI_SENDRECV(tosend,nsend,MPI_PART,idst,0,torecv,nrecv,MPI_PART,isrc,0,this%cfg%comm,status,ierr)
-    call this%resize_ghost(this%ng_+nrecv)
-    this%g(this%ng_+1:this%ng_+nrecv)=torecv
-    this%ng_=this%ng_+nrecv
-    if (allocated(tosend)) deallocate(tosend)
-    if (allocated(torecv)) deallocate(torecv)
-
-    ! Share ghost particles to the right in x
-    nsend=0
-    do n=1,this%np_
-       if (this%p(n)%ind(1).gt.this%cfg%imax_-no) nsend=nsend+1
-    end do
-    allocate(tosend(nsend))
-    nsend=0
-    do n=1,this%np_
-       if (this%p(n)%ind(1).gt.this%cfg%imax_-no) then
-          nsend=nsend+1
-          tosend(nsend)=this%p(n)
-          if (this%cfg%xper.and.tosend(nsend)%ind(1).gt.this%cfg%imax-no) then
-             tosend(nsend)%pos(1)=tosend(nsend)%pos(1)-this%cfg%xL
-             tosend(nsend)%ind(1)=tosend(nsend)%ind(1)-this%cfg%nx
-          end if
-       end if
-    end do
-    nrecv=0
-    call MPI_CART_SHIFT(this%cfg%comm,0,+1,isrc,idst,ierr)
-    call MPI_SENDRECV(nsend,1,MPI_INTEGER,idst,0,nrecv,1,MPI_INTEGER,isrc,0,this%cfg%comm,status,ierr)
-    allocate(torecv(nrecv))
-    call MPI_SENDRECV(tosend,nsend,MPI_PART,idst,0,torecv,nrecv,MPI_PART,isrc,0,this%cfg%comm,status,ierr)
-    call this%resize_ghost(this%ng_+nrecv)
-    this%g(this%ng_+1:this%ng_+nrecv)=torecv
-    this%ng_=this%ng_+nrecv
-    if (allocated(tosend)) deallocate(tosend)
-    if (allocated(torecv)) deallocate(torecv)
-
-    ! Share ghost particles to the left in y
-    nsend=0
-    do n=1,this%np_
-       if (this%p(n)%ind(2).lt.this%cfg%jmin_+no) nsend=nsend+1
-    end do
-    allocate(tosend(nsend))
-    nsend=0
-    do n=1,this%np_
-       if (this%p(n)%ind(2).lt.this%cfg%jmin_+no) then
-          nsend=nsend+1
-          tosend(nsend)=this%p(n)
-          if (this%cfg%yper.and.tosend(nsend)%ind(2).lt.this%cfg%jmin+no) then
-             tosend(nsend)%pos(2)=tosend(nsend)%pos(2)+this%cfg%yL
-             tosend(nsend)%ind(2)=tosend(nsend)%ind(2)+this%cfg%ny
-          end if
-       end if
-    end do
-    nrecv=0
-    call MPI_CART_SHIFT(this%cfg%comm,1,-1,isrc,idst,ierr)
-    call MPI_SENDRECV(nsend,1,MPI_INTEGER,idst,0,nrecv,1,MPI_INTEGER,isrc,0,this%cfg%comm,status,ierr)
-    allocate(torecv(nrecv))
-    call MPI_SENDRECV(tosend,nsend,MPI_PART,idst,0,torecv,nrecv,MPI_PART,isrc,0,this%cfg%comm,status,ierr)
-    call this%resize_ghost(this%ng_+nrecv)
-    this%g(this%ng_+1:this%ng_+nrecv)=torecv
-    this%ng_=this%ng_+nrecv
-    if (allocated(tosend)) deallocate(tosend)
-    if (allocated(torecv)) deallocate(torecv)
-
-    ! Share ghost particles to the right in y
-    nsend=0
-    do n=1,this%np_
-       if (this%p(n)%ind(2).gt.this%cfg%jmax_-no) nsend=nsend+1
-    end do
-    allocate(tosend(nsend))
-    nsend=0
-    do n=1,this%np_
-       if (this%p(n)%ind(2).gt.this%cfg%jmax_-no) then
-          nsend=nsend+1
-          tosend(nsend)=this%p(n)
-          if (this%cfg%yper.and.tosend(nsend)%ind(2).gt.this%cfg%jmax-no) then
-             tosend(nsend)%pos(2)=tosend(nsend)%pos(2)-this%cfg%yL
-             tosend(nsend)%ind(2)=tosend(nsend)%ind(2)-this%cfg%ny
-          end if
-       end if
-    end do
-    nrecv=0
-    call MPI_CART_SHIFT(this%cfg%comm,1,+1,isrc,idst,ierr)
-    call MPI_SENDRECV(nsend,1,MPI_INTEGER,idst,0,nrecv,1,MPI_INTEGER,isrc,0,this%cfg%comm,status,ierr)
-    allocate(torecv(nrecv))
-    call MPI_SENDRECV(tosend,nsend,MPI_PART,idst,0,torecv,nrecv,MPI_PART,isrc,0,this%cfg%comm,status,ierr)
-    call this%resize_ghost(this%ng_+nrecv)
-    this%g(this%ng_+1:this%ng_+nrecv)=torecv
-    this%ng_=this%ng_+nrecv
-    if (allocated(tosend)) deallocate(tosend)
-    if (allocated(torecv)) deallocate(torecv)
-
-    ! Share ghost particles to the left in z
-    nsend=0
-    do n=1,this%np_
-       if (this%p(n)%ind(3).lt.this%cfg%kmin_+no) nsend=nsend+1
-    end do
-    allocate(tosend(nsend))
-    nsend=0
-    do n=1,this%np_
-       if (this%p(n)%ind(3).lt.this%cfg%kmin_+no) then
-          nsend=nsend+1
-          tosend(nsend)=this%p(n)
-          if (this%cfg%zper.and.tosend(nsend)%ind(3).lt.this%cfg%kmin+no) then
-             tosend(nsend)%pos(3)=tosend(nsend)%pos(3)+this%cfg%zL
-             tosend(nsend)%ind(3)=tosend(nsend)%ind(3)+this%cfg%nz
-          end if
-       end if
-    end do
-    nrecv=0
-    call MPI_CART_SHIFT(this%cfg%comm,2,-1,isrc,idst,ierr)
-    call MPI_SENDRECV(nsend,1,MPI_INTEGER,idst,0,nrecv,1,MPI_INTEGER,isrc,0,this%cfg%comm,status,ierr)
-    allocate(torecv(nrecv))
-    call MPI_SENDRECV(tosend,nsend,MPI_PART,idst,0,torecv,nrecv,MPI_PART,isrc,0,this%cfg%comm,status,ierr)
-    call this%resize_ghost(this%ng_+nrecv)
-    this%g(this%ng_+1:this%ng_+nrecv)=torecv
-    this%ng_=this%ng_+nrecv
-    if (allocated(tosend)) deallocate(tosend)
-    if (allocated(torecv)) deallocate(torecv)
-
-    ! Share ghost particles to the right in z
-    nsend=0
-    do n=1,this%np_
-       if (this%p(n)%ind(3).gt.this%cfg%kmax_-no) nsend=nsend+1
-    end do
-    allocate(tosend(nsend))
-    nsend=0
-    do n=1,this%np_
-       if (this%p(n)%ind(3).gt.this%cfg%kmax_-no) then
-          nsend=nsend+1
-          tosend(nsend)=this%p(n)
-          if (this%cfg%zper.and.tosend(nsend)%ind(3).gt.this%cfg%kmax-no) then
-             tosend(nsend)%pos(3)=tosend(nsend)%pos(3)-this%cfg%zL
-             tosend(nsend)%ind(3)=tosend(nsend)%ind(3)-this%cfg%nz
-          end if
-       end if
-    end do
-    nrecv=0
-    call MPI_CART_SHIFT(this%cfg%comm,2,+1,isrc,idst,ierr)
-    call MPI_SENDRECV(nsend,1,MPI_INTEGER,idst,0,nrecv,1,MPI_INTEGER,isrc,0,this%cfg%comm,status,ierr)
-    allocate(torecv(nrecv))
-    call MPI_SENDRECV(tosend,nsend,MPI_PART,idst,0,torecv,nrecv,MPI_PART,isrc,0,this%cfg%comm,status,ierr)
-    call this%resize_ghost(this%ng_+nrecv)
-    this%g(this%ng_+1:this%ng_+nrecv)=torecv
-    this%ng_=this%ng_+nrecv
-    if (allocated(tosend)) deallocate(tosend)
-    if (allocated(torecv)) deallocate(torecv)
-
-  end subroutine share
-
-
-  !> Adaptation of particle array size
-  subroutine resize(this,n)
-    implicit none
-    class(lpt), intent(inout) :: this
-    integer, intent(in) :: n
-    type(part), dimension(:), allocatable :: tmp
-    integer :: size_now,size_new
-    ! Resize particle array to size n
-    if (.not.allocated(this%p)) then
-       ! Allocate directly to size n
-       allocate(this%p(n))
-       this%p(1:n)%flag=1
-    else
-       ! Update from a non-zero size to another non-zero size
-       size_now=size(this%p,dim=1)
-       if (n.gt.size_now) then
-          size_new=max(n,int(real(size_now,WP)*coeff_up))
-          allocate(tmp(size_new))
-          tmp(1:size_now)=this%p
-          tmp(size_now+1:)%flag=1
-          call move_alloc(tmp,this%p)
-       else if (n.lt.int(real(size_now,WP)*coeff_dn)) then
-          allocate(tmp(n))
-          tmp(1:n)=this%p(1:n)
-          call move_alloc(tmp,this%p)
-       end if
-    end if
-  end subroutine resize
-
+   end subroutine sync
+   
+   
+   !> Share particles across processor boundaries
+   subroutine share(this,nover)
+      use mpi_f08
+      use messager, only: warn,die
+      implicit none
+      class(lpt), intent(inout) :: this
+      integer, optional :: nover
+      type(part), dimension(:), allocatable :: tosend
+      type(part), dimension(:), allocatable :: torecv
+      integer :: no,nsend,nrecv
+      type(MPI_Status) :: status
+      integer :: icnt,isrc,idst,ierr
+      integer :: i,n
+      
+      ! Check overlap size
+      if (present(nover)) then
+         no=nover
+         if (no.gt.this%cfg%no) then
+            call warn('[lpt_class share] Specified overlap is larger than that of cfg - reducing no')
+            no=this%cfg%no
+         else if (no.le.0) then
+            call die('[lpt_class share] Specified overlap cannot be less or equal to zero')
+         end if
+      else
+         no=1
+      end if
+      
+      ! Clean up ghost array
+      call this%resize_ghost(n=0); this%ng_=0
+      
+      ! Share ghost particles in -x (no ghosts are sent here)
+      nsend=0
+      do n=1,this%np_
+         if (this%p(n)%ind(1).lt.this%cfg%imin_+no) nsend=nsend+1
+      end do
+      allocate(tosend(nsend))
+      nsend=0
+      do n=1,this%np_
+         if (this%p(n)%ind(1).lt.this%cfg%imin_+no) then
+            nsend=nsend+1
+            tosend(nsend)=this%p(n)
+            if (this%cfg%xper.and.tosend(nsend)%ind(1).lt.this%cfg%imin+no) then
+               tosend(nsend)%pos(1)=tosend(nsend)%pos(1)+this%cfg%xL
+               tosend(nsend)%ind(1)=tosend(nsend)%ind(1)+this%cfg%nx
+            end if
+         end if
+      end do
+      nrecv=0
+      call MPI_CART_SHIFT(this%cfg%comm,0,-1,isrc,idst,ierr)
+      call MPI_SENDRECV(nsend,1,MPI_INTEGER,idst,0,nrecv,1,MPI_INTEGER,isrc,0,this%cfg%comm,status,ierr)
+      allocate(torecv(nrecv))
+      call MPI_SENDRECV(tosend,nsend,MPI_PART,idst,0,torecv,nrecv,MPI_PART,isrc,0,this%cfg%comm,status,ierr)
+      call this%resize_ghost(this%ng_+nrecv)
+      this%g(this%ng_+1:this%ng_+nrecv)=torecv
+      this%ng_=this%ng_+nrecv
+      if (allocated(tosend)) deallocate(tosend)
+      if (allocated(torecv)) deallocate(torecv)
+      
+      ! Share ghost particles in +x (no ghosts are sent here)
+      nsend=0
+      do n=1,this%np_
+         if (this%p(n)%ind(1).gt.this%cfg%imax_-no) nsend=nsend+1
+      end do
+      allocate(tosend(nsend))
+      nsend=0
+      do n=1,this%np_
+         if (this%p(n)%ind(1).gt.this%cfg%imax_-no) then
+            nsend=nsend+1
+            tosend(nsend)=this%p(n)
+            if (this%cfg%xper.and.tosend(nsend)%ind(1).gt.this%cfg%imax-no) then
+               tosend(nsend)%pos(1)=tosend(nsend)%pos(1)-this%cfg%xL
+               tosend(nsend)%ind(1)=tosend(nsend)%ind(1)-this%cfg%nx
+            end if
+         end if
+      end do
+      nrecv=0
+      call MPI_CART_SHIFT(this%cfg%comm,0,+1,isrc,idst,ierr)
+      call MPI_SENDRECV(nsend,1,MPI_INTEGER,idst,0,nrecv,1,MPI_INTEGER,isrc,0,this%cfg%comm,status,ierr)
+      allocate(torecv(nrecv))
+      call MPI_SENDRECV(tosend,nsend,MPI_PART,idst,0,torecv,nrecv,MPI_PART,isrc,0,this%cfg%comm,status,ierr)
+      call this%resize_ghost(this%ng_+nrecv)
+      this%g(this%ng_+1:this%ng_+nrecv)=torecv
+      this%ng_=this%ng_+nrecv
+      if (allocated(tosend)) deallocate(tosend)
+      if (allocated(torecv)) deallocate(torecv)
+      
+      ! Share ghost particles in -y (ghosts need to be sent now)
+      nsend=0
+      do n=1,this%np_
+         if (this%p(n)%ind(2).lt.this%cfg%jmin_+no) nsend=nsend+1
+      end do
+      do n=1,this%ng_
+         if (this%g(n)%ind(2).lt.this%cfg%jmin_+no) nsend=nsend+1
+      end do
+      allocate(tosend(nsend))
+      nsend=0
+      do n=1,this%np_
+         if (this%p(n)%ind(2).lt.this%cfg%jmin_+no) then
+            nsend=nsend+1
+            tosend(nsend)=this%p(n)
+            if (this%cfg%yper.and.tosend(nsend)%ind(2).lt.this%cfg%jmin+no) then
+               tosend(nsend)%pos(2)=tosend(nsend)%pos(2)+this%cfg%yL
+               tosend(nsend)%ind(2)=tosend(nsend)%ind(2)+this%cfg%ny
+            end if
+         end if
+      end do
+      do n=1,this%ng_
+         if (this%g(n)%ind(2).lt.this%cfg%jmin_+no) then
+            nsend=nsend+1
+            tosend(nsend)=this%g(n)
+            if (this%cfg%yper.and.tosend(nsend)%ind(2).lt.this%cfg%jmin+no) then
+               tosend(nsend)%pos(2)=tosend(nsend)%pos(2)+this%cfg%yL
+               tosend(nsend)%ind(2)=tosend(nsend)%ind(2)+this%cfg%ny
+            end if
+         end if
+      end do
+      nrecv=0
+      call MPI_CART_SHIFT(this%cfg%comm,1,-1,isrc,idst,ierr)
+      call MPI_SENDRECV(nsend,1,MPI_INTEGER,idst,0,nrecv,1,MPI_INTEGER,isrc,0,this%cfg%comm,status,ierr)
+      allocate(torecv(nrecv))
+      call MPI_SENDRECV(tosend,nsend,MPI_PART,idst,0,torecv,nrecv,MPI_PART,isrc,0,this%cfg%comm,status,ierr)
+      call this%resize_ghost(this%ng_+nrecv)
+      this%g(this%ng_+1:this%ng_+nrecv)=torecv
+      this%ng_=this%ng_+nrecv
+      if (allocated(tosend)) deallocate(tosend)
+      if (allocated(torecv)) deallocate(torecv)
+      
+      ! Share ghost particles in +y (ghosts need to be sent now - but not newly received ghosts!)
+      nsend=0
+      do n=1,this%np_
+         if (this%p(n)%ind(2).gt.this%cfg%jmax_-no) nsend=nsend+1
+      end do
+      do n=1,this%ng_-nrecv
+         if (this%p(n)%ind(2).gt.this%cfg%jmax_-no) nsend=nsend+1
+      end do
+      allocate(tosend(nsend))
+      nsend=0
+      do n=1,this%np_
+         if (this%p(n)%ind(2).gt.this%cfg%jmax_-no) then
+            nsend=nsend+1
+            tosend(nsend)=this%p(n)
+            if (this%cfg%yper.and.tosend(nsend)%ind(2).gt.this%cfg%jmax-no) then
+               tosend(nsend)%pos(2)=tosend(nsend)%pos(2)-this%cfg%yL
+               tosend(nsend)%ind(2)=tosend(nsend)%ind(2)-this%cfg%ny
+            end if
+         end if
+      end do
+      do n=1,this%ng_-nrecv
+         if (this%g(n)%ind(2).gt.this%cfg%jmax_-no) then
+            nsend=nsend+1
+            tosend(nsend)=this%g(n)
+            if (this%cfg%yper.and.tosend(nsend)%ind(2).gt.this%cfg%jmax-no) then
+               tosend(nsend)%pos(2)=tosend(nsend)%pos(2)-this%cfg%yL
+               tosend(nsend)%ind(2)=tosend(nsend)%ind(2)-this%cfg%ny
+            end if
+         end if
+      end do
+      nrecv=0
+      call MPI_CART_SHIFT(this%cfg%comm,1,+1,isrc,idst,ierr)
+      call MPI_SENDRECV(nsend,1,MPI_INTEGER,idst,0,nrecv,1,MPI_INTEGER,isrc,0,this%cfg%comm,status,ierr)
+      allocate(torecv(nrecv))
+      call MPI_SENDRECV(tosend,nsend,MPI_PART,idst,0,torecv,nrecv,MPI_PART,isrc,0,this%cfg%comm,status,ierr)
+      call this%resize_ghost(this%ng_+nrecv)
+      this%g(this%ng_+1:this%ng_+nrecv)=torecv
+      this%ng_=this%ng_+nrecv
+      if (allocated(tosend)) deallocate(tosend)
+      if (allocated(torecv)) deallocate(torecv)
+      
+      ! Share ghost particles in -z (ghosts need to be sent now)
+      nsend=0
+      do n=1,this%np_
+         if (this%p(n)%ind(3).lt.this%cfg%kmin_+no) nsend=nsend+1
+      end do
+      do n=1,this%ng_
+         if (this%g(n)%ind(3).lt.this%cfg%kmin_+no) nsend=nsend+1
+      end do
+      allocate(tosend(nsend))
+      nsend=0
+      do n=1,this%np_
+         if (this%p(n)%ind(3).lt.this%cfg%kmin_+no) then
+            nsend=nsend+1
+            tosend(nsend)=this%p(n)
+            if (this%cfg%zper.and.tosend(nsend)%ind(3).lt.this%cfg%kmin+no) then
+               tosend(nsend)%pos(3)=tosend(nsend)%pos(3)+this%cfg%zL
+               tosend(nsend)%ind(3)=tosend(nsend)%ind(3)+this%cfg%nz
+            end if
+         end if
+      end do
+      do n=1,this%ng_
+         if (this%g(n)%ind(3).lt.this%cfg%kmin_+no) then
+            nsend=nsend+1
+            tosend(nsend)=this%g(n)
+            if (this%cfg%zper.and.tosend(nsend)%ind(3).lt.this%cfg%kmin+no) then
+               tosend(nsend)%pos(3)=tosend(nsend)%pos(3)+this%cfg%zL
+               tosend(nsend)%ind(3)=tosend(nsend)%ind(3)+this%cfg%nz
+            end if
+         end if
+      end do
+      nrecv=0
+      call MPI_CART_SHIFT(this%cfg%comm,2,-1,isrc,idst,ierr)
+      call MPI_SENDRECV(nsend,1,MPI_INTEGER,idst,0,nrecv,1,MPI_INTEGER,isrc,0,this%cfg%comm,status,ierr)
+      allocate(torecv(nrecv))
+      call MPI_SENDRECV(tosend,nsend,MPI_PART,idst,0,torecv,nrecv,MPI_PART,isrc,0,this%cfg%comm,status,ierr)
+      call this%resize_ghost(this%ng_+nrecv)
+      this%g(this%ng_+1:this%ng_+nrecv)=torecv
+      this%ng_=this%ng_+nrecv
+      if (allocated(tosend)) deallocate(tosend)
+      if (allocated(torecv)) deallocate(torecv)
+      
+      ! Share ghost particles in +z (ghosts need to be sent now - but not newly received ghosts!)
+      nsend=0
+      do n=1,this%np_
+         if (this%p(n)%ind(3).gt.this%cfg%kmax_-no) nsend=nsend+1
+      end do
+      do n=1,this%ng_-nrecv
+         if (this%g(n)%ind(3).gt.this%cfg%kmax_-no) nsend=nsend+1
+      end do
+      allocate(tosend(nsend))
+      nsend=0
+      do n=1,this%np_
+         if (this%p(n)%ind(3).gt.this%cfg%kmax_-no) then
+            nsend=nsend+1
+            tosend(nsend)=this%p(n)
+            if (this%cfg%zper.and.tosend(nsend)%ind(3).gt.this%cfg%kmax-no) then
+               tosend(nsend)%pos(3)=tosend(nsend)%pos(3)-this%cfg%zL
+               tosend(nsend)%ind(3)=tosend(nsend)%ind(3)-this%cfg%nz
+            end if
+         end if
+      end do
+      do n=1,this%ng_-nrecv
+         if (this%g(n)%ind(3).gt.this%cfg%kmax_-no) then
+            nsend=nsend+1
+            tosend(nsend)=this%g(n)
+            if (this%cfg%zper.and.tosend(nsend)%ind(3).gt.this%cfg%kmax-no) then
+               tosend(nsend)%pos(3)=tosend(nsend)%pos(3)-this%cfg%zL
+               tosend(nsend)%ind(3)=tosend(nsend)%ind(3)-this%cfg%nz
+            end if
+         end if
+      end do
+      nrecv=0
+      call MPI_CART_SHIFT(this%cfg%comm,2,+1,isrc,idst,ierr)
+      call MPI_SENDRECV(nsend,1,MPI_INTEGER,idst,0,nrecv,1,MPI_INTEGER,isrc,0,this%cfg%comm,status,ierr)
+      allocate(torecv(nrecv))
+      call MPI_SENDRECV(tosend,nsend,MPI_PART,idst,0,torecv,nrecv,MPI_PART,isrc,0,this%cfg%comm,status,ierr)
+      call this%resize_ghost(this%ng_+nrecv)
+      this%g(this%ng_+1:this%ng_+nrecv)=torecv
+      this%ng_=this%ng_+nrecv
+      if (allocated(tosend)) deallocate(tosend)
+      if (allocated(torecv)) deallocate(torecv)
+      
+   end subroutine share
+   
+   
+   !> Adaptation of particle array size
+   subroutine resize(this,n)
+      implicit none
+      class(lpt), intent(inout) :: this
+      integer, intent(in) :: n
+      type(part), dimension(:), allocatable :: tmp
+      integer :: size_now,size_new
+      ! Resize particle array to size n
+      if (.not.allocated(this%p)) then
+         ! Allocate directly to size n
+         allocate(this%p(n))
+         this%p(1:n)%flag=1
+      else
+         ! Update from a non-zero size to another non-zero size
+         size_now=size(this%p,dim=1)
+         if (n.gt.size_now) then
+            size_new=max(n,int(real(size_now,WP)*coeff_up))
+            allocate(tmp(size_new))
+            tmp(1:size_now)=this%p
+            tmp(size_now+1:)%flag=1
+            call move_alloc(tmp,this%p)
+         else if (n.lt.int(real(size_now,WP)*coeff_dn)) then
+            allocate(tmp(n))
+            tmp(1:n)=this%p(1:n)
+            call move_alloc(tmp,this%p)
+         end if
+      end if
+   end subroutine resize
+   
 
   !> Adaptation of ghost array size
   subroutine resize_ghost(this,n)

@@ -112,6 +112,7 @@ contains
          this%ls%elastic_modulus=1.0e5_WP
          this%ls%poisson_ratio=0.333_WP
          this%ls%rho=1000.0_WP
+         this%ls%crit_energy=1.0_WP
 
          ! Only root process initializes solid particles
          if (this%ls%cfg%amRoot) then
@@ -142,7 +143,7 @@ contains
                      ! Set position
                      this%ls%p(np)%pos=pos
                      ! Assign velocity
-                     this%ls%p(np)%vel=[0.1_WP*this%ls%p(np)%pos(1),0.0_WP,0.0_WP]
+                     this%ls%p(np)%vel=[1.0_WP+0.1_WP*this%ls%p(np)%pos(1),0.0_WP,0.0_WP]
                      ! Assign element volume
                      this%ls%p(np)%dV=grid%dx(i)*grid%dy(j)*grid%dz(k)
                      ! Locate the particle on the mesh
