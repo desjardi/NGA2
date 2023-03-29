@@ -112,7 +112,7 @@ contains
          this%ls%elastic_modulus=1.0e5_WP
          this%ls%poisson_ratio=0.333_WP
          this%ls%rho=1000.0_WP
-         this%ls%crit_energy=1.0_WP
+         this%ls%crit_energy=0.00001_WP
 
          ! Only root process initializes solid particles
          if (this%ls%cfg%amRoot) then

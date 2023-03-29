@@ -249,10 +249,6 @@ contains
                do j=p1%ind(2)-this%nb,p1%ind(2)+this%nb
                   do i=p1%ind(1)-this%nb,p1%ind(1)+this%nb
                      ! Loop over particles in that cell
-                     if (p1%ind(1).eq.26.and.p1%ind(2).eq.26.and.p1%ind(3).eq.26) then
-                        print*,'proc#',this%cfg%rank,'in cell',p1%ind
-                        print*,'neighbor',i,j,k,'has',npic(i,j,k),'particles'
-                     end if
                      do nn=1,npic(i,j,k)
                         ! Create copy of our neighbor
                         n2=ipic(nn,i,j,k)
