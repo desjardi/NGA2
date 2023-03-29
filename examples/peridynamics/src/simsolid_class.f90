@@ -109,10 +109,10 @@ contains
          this%ls=lss(cfg=this%cfg,name='solid')
 
          ! Set material properties
-         this%ls%elastic_modulus=1.0e4_WP
+         this%ls%elastic_modulus=1.0e5_WP
          this%ls%poisson_ratio=0.333_WP
          this%ls%rho=1000.0_WP
-         this%ls%crit_energy=1.0_WP
+         this%ls%crit_energy=100.0_WP
 
          ! Only root process initializes solid particles
          if (this%ls%cfg%amRoot) then
@@ -238,9 +238,15 @@ contains
       call this%time%increment()
       
       ! Enforce boundary conditions
-      !do n=1,this%ls%np_
-      !   if 
-      !end do
+      apply_bc: block
+         integer :: n
+         do n=1,this%ls%np_
+            if (this%ls%p(n)%id.eq.0) then
+               if (this%ls%p(n)%pos(2).gt.0.0_WP) this%ls%p(n)%pos(2)=this%ls%p(n)%pos(2)-0.1_WP*this%time%t
+               if (this%ls%p(n)%pos(2).lt.0.0_WP) this%ls%p(n)%pos(2)=this%ls%p(n)%pos(2)+0.1_WP*this%time%t
+            end if
+         end do
+      end block apply_bc
       
       ! Advance solid solver
       call this%ls%advance(this%time%dt)
