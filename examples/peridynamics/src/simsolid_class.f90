@@ -109,10 +109,10 @@ contains
          this%ls=lss(cfg=this%cfg,name='solid')
 
          ! Set material properties
-         this%ls%elastic_modulus=1.0e5_WP
+         this%ls%elastic_modulus=1.0e4_WP
          this%ls%poisson_ratio=0.333_WP
          this%ls%rho=1000.0_WP
-         this%ls%crit_energy=0.00001_WP
+         this%ls%crit_energy=1.0_WP
 
          ! Only root process initializes solid particles
          if (this%ls%cfg%amRoot) then
@@ -143,7 +143,7 @@ contains
                      ! Set position
                      this%ls%p(np)%pos=pos
                      ! Assign velocity
-                     this%ls%p(np)%vel=[1.0_WP+0.1_WP*this%ls%p(np)%pos(1),0.0_WP,0.0_WP]
+                     this%ls%p(np)%vel=[0.0_WP,0.0_WP,0.0_WP]
                      ! Assign element volume
                      this%ls%p(np)%dV=grid%dx(i)*grid%dy(j)*grid%dz(k)
                      ! Locate the particle on the mesh
@@ -152,6 +152,10 @@ contains
                      this%ls%p(np)%i=np
                      ! Activate the particle
                      this%ls%p(np)%flag=0
+                     
+                     ! Deactivate solver on top and bottom to enable boundary conditions
+                     if (abs(this%ls%p(np)%pos(2)).gt.0.45_WP) this%ls%p(np)%id=0
+
                   end do
                end do
             end do
@@ -232,6 +236,11 @@ contains
       call this%ls%get_cfl(this%time%dt,this%time%cfl)
       call this%time%adjust_dt()
       call this%time%increment()
+      
+      ! Enforce boundary conditions
+      !do n=1,this%ls%np_
+      !   if 
+      !end do
       
       ! Advance solid solver
       call this%ls%advance(this%time%dt)

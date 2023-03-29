@@ -1553,7 +1553,7 @@ contains
          if (this%p(n)%ind(2).gt.this%cfg%jmax_-no) nsend=nsend+1
       end do
       do n=1,this%ng_-nrecv
-         if (this%p(n)%ind(2).gt.this%cfg%jmax_-no) nsend=nsend+1
+         if (this%g(n)%ind(2).gt.this%cfg%jmax_-no) nsend=nsend+1
       end do
       allocate(tosend(nsend))
       nsend=0
