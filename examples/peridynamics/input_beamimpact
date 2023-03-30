@@ -15,7 +15,7 @@ Bar width :  0.01
 Solid dx : 0.001
 
 # Time integration
-Max timestep size : 5e-8
+Max timestep size : 1e-7
 Max cfl number :    0.9
 Max time :          5e-5
 

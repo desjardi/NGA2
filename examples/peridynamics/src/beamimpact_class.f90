@@ -1,5 +1,5 @@
 !> Definition of a solid simulation superclass that drives an lss_class object
-module simsolid_class
+module beamimpact_class
    use precision,         only: WP
    use inputfile_class,   only: inputfile
    use config_class,      only: config
@@ -12,10 +12,10 @@ module simsolid_class
    implicit none
    private
    
-   public :: simsolid
+   public :: beamimpact
 
    !> Solid simulation object
-   type :: simsolid
+   type :: beamimpact
       
       !> Input file for the simulation
       type(inputfile) :: input
@@ -34,25 +34,66 @@ module simsolid_class
       
       !> Monitor file
       type(monitor) :: mfile
-      
+      real(WP) :: Xbeam1,Xbeam2
+      integer :: ibeam1,ibeam2
+
    contains
+      procedure, private :: postproc       !< Postprocess beam position
       procedure :: init                    !< Initialize solid simulation
       procedure :: step                    !< Advance solid simulation by one time step
       procedure :: final                   !< Finalize solid simulation
-   end type simsolid
+   end type beamimpact
    
    
 contains
    
    
+   
+   ! Postprocess beam position
+   subroutine postproc(this)
+      use mpi_f08,  only: MPI_ALLREDUCE,MPI_SUM,MPI_INTEGER
+      use parallel, only: MPI_REAL_WP
+      implicit none
+      class(beamimpact), intent(inout) :: this
+      integer :: n,ierr
+      real(WP) :: myx1,myx2
+      !integer :: myn1,myn2,n1,n2
+      !myn1=0; myn2=0
+      myx1=0.0_WP; myx2=0.0_WP
+      do n=1,this%ls%np_
+         !if (this%ls%p(n)%id.eq.1) then
+         !   myn1=myn1+1; myx1=myx1+this%ls%p(n)%pos(1)
+         !else if (this%ls%p(n)%id.eq.2) then
+         !   myn2=myn2+1; myx2=myx2+this%ls%p(n)%pos(1)
+         !end if
+         if (this%ls%p(n)%i.eq.this%ibeam1) myx1=this%ls%p(n)%pos(1)
+         if (this%ls%p(n)%i.eq.this%ibeam2) myx2=this%ls%p(n)%pos(1)
+      end do
+      !call MPI_ALLREDUCE(myn1,n1,1,MPI_INTEGER,MPI_SUM,this%ls%cfg%comm,ierr)
+      call MPI_ALLREDUCE(myx1,this%Xbeam1,1,MPI_REAL_WP,MPI_SUM,this%ls%cfg%comm,ierr)
+      !if (n1.gt.0) then
+      !   this%Xbeam1=this%Xbeam1/real(n1,WP)
+      !else
+      !   this%Xbeam1=0.0_WP
+      !end if
+      !call MPI_ALLREDUCE(myn2,n2,1,MPI_INTEGER,MPI_SUM,this%ls%cfg%comm,ierr)
+      call MPI_ALLREDUCE(myx2,this%Xbeam2,1,MPI_REAL_WP,MPI_SUM,this%ls%cfg%comm,ierr)
+      !if (n2.gt.0) then
+      !   this%Xbeam2=this%Xbeam2/real(n2,WP)
+      !else
+      !   this%Xbeam2=0.0_WP
+      !end if
+   end subroutine postproc
+   
+
    !> Initialization of solid simulation
    subroutine init(this)
       use parallel, only: amRoot
       implicit none
-      class(simsolid), intent(inout) :: this
+      class(beamimpact), intent(inout) :: this
       
       ! Read the input
-      this%input=inputfile(amRoot=amRoot,filename='input_solid')
+      this%input=inputfile(amRoot=amRoot,filename='input_beamimpact')
       
       ! Create a config
       initialize_cfg: block
@@ -99,7 +140,8 @@ contains
          use sgrid_class, only: sgrid,cartesian
          use mathtools,   only: twoPi,Pi
          use random,      only: random_uniform
-         integer :: i,j,k,nx,ny,np
+         use mpi_f08,     only: MPI_BCAST,MPI_INTEGER
+         integer :: i,j,k,nx,ny,np,ierr
          real(WP) :: length,width,dx
          real(WP), dimension(:), allocatable :: x,y
          type(sgrid) :: grid
@@ -158,17 +200,15 @@ contains
                      this%ls%p(np)%i=np
                      ! Activate the particle
                      this%ls%p(np)%flag=0
-                     
-                     ! Deactivate solver on top and bottom to enable boundary conditions
-                     !if (abs(this%ls%p(np)%pos(2)).gt.0.45_WP*height) this%ls%p(np)%id=0
-                     ! Tag top and bottom particles to apply extra force
-                     !if (abs(this%ls%p(np)%pos(2)).gt.0.45_WP*height) this%ls%p(np)%id=2
-
-
+                     ! ID the COM of both beams
+                     if (i.eq.1*nx/4.and.j.eq.ny/2.and.k.eq.ny/2) this%ibeam1=np
+                     if (i.eq.3*nx/4.and.j.eq.ny/2.and.k.eq.ny/2) this%ibeam2=np
                   end do
                end do
             end do
          end if
+         call MPI_BCAST(this%ibeam1,1,MPI_INTEGER,0,this%ls%cfg%comm,ierr)
+         call MPI_BCAST(this%ibeam2,1,MPI_INTEGER,0,this%ls%cfg%comm,ierr)
          
          ! Communicate particles
          call this%ls%sync()
@@ -223,12 +263,15 @@ contains
          ! Prepare some info about fields
          call this%ls%get_cfl(this%time%dt,this%time%cfl)
          call this%ls%get_max()
+         call this%postproc()
          ! Create simulation monitor
-         this%mfile=monitor(this%cfg%amRoot,'simulation_solid')
+         this%mfile=monitor(this%cfg%amRoot,'beamimpact')
          call this%mfile%add_column(this%time%n,'Timestep number')
          call this%mfile%add_column(this%time%t,'Time')
          call this%mfile%add_column(this%time%dt,'Timestep size')
          call this%mfile%add_column(this%time%cfl,'Maximum CFL')
+         call this%mfile%add_column(this%xbeam1,'X beam1')
+         call this%mfile%add_column(this%xbeam2,'X beam2')
          call this%mfile%add_column(this%ls%np,'Particle number')
          call this%mfile%add_column(this%ls%Umin,'Particle Umin')
          call this%mfile%add_column(this%ls%Umax,'Particle Umax')
@@ -245,7 +288,7 @@ contains
    !> Take one time step of the solid simulation
 	subroutine step(this)
 		implicit none
-		class(simsolid), intent(inout) :: this
+		class(beamimpact), intent(inout) :: this
       
       ! Increment time
       call this%ls%get_cfl(this%time%dt,this%time%cfl)
@@ -292,6 +335,7 @@ contains
       
       ! Perform and output monitoring
       call this%ls%get_max()
+      call this%postproc()
       call this%mfile%write()
       
    end subroutine step
@@ -300,11 +344,11 @@ contains
    !> Finalize solid simulation
    subroutine final(this)
 		implicit none
-		class(simsolid), intent(inout) :: this
+		class(beamimpact), intent(inout) :: this
 		
 		! Deallocate work arrays
 		
 	end subroutine final
    
    
-end module simsolid_class
+end module beamimpact_class

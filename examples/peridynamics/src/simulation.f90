@@ -1,11 +1,11 @@
 !> Various definitions and tools for running an NGA2 simulation
 module simulation
-   use simsolid_class, only: simsolid
+   use beamimpact_class, only: beamimpact
    implicit none
    private
    
    !> Solid simulation
-   type(simsolid) :: solid
+   type(beamimpact) :: solid
    
    public :: simulation_init,simulation_run,simulation_final
    
