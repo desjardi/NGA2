@@ -509,19 +509,6 @@ contains
          this%p(n)%pos=this%p(n)%pos+dt*this%p(n)%vel
          ! Relocalize
          this%p(n)%ind=this%cfg%get_ijk_global(this%p(n)%pos,this%p(n)%ind)
-      end do
-      
-      ! Calculate bond force
-      call this%get_bond_force()
-      
-      ! Advance velocity based on new force
-      do n=1,this%np_
-         ! Avoid particles with id=0
-         if (this%p(n)%id.eq.0) cycle
-         ! Advance with Verlet scheme
-         this%p(n)%vel=this%p(n)%vel+0.5_WP*dt*(this%gravity+this%p(n)%Abond)
-         ! Relocalize
-         this%p(n)%ind=this%cfg%get_ijk_global(this%p(n)%pos,this%p(n)%ind)
          ! Correct the position to take into account periodicity
          if (this%cfg%xper) this%p(n)%pos(1)=this%cfg%x(this%cfg%imin)+modulo(this%p(n)%pos(1)-this%cfg%x(this%cfg%imin),this%cfg%xL)
          if (this%cfg%yper) this%p(n)%pos(2)=this%cfg%y(this%cfg%jmin)+modulo(this%p(n)%pos(2)-this%cfg%y(this%cfg%jmin),this%cfg%yL)
@@ -541,6 +528,17 @@ contains
       
       ! Sum up particles removed
       call MPI_ALLREDUCE(this%np_out,n,1,MPI_INTEGER,MPI_SUM,this%cfg%comm,ierr); this%np_out=n
+      
+      ! Calculate bond force
+      call this%get_bond_force()
+      
+      ! Advance velocity only based on new force
+      do n=1,this%np_
+         ! Avoid particles with id=0
+         if (this%p(n)%id.eq.0) cycle
+         ! Advance with Verlet scheme
+         this%p(n)%vel=this%p(n)%vel+0.5_WP*dt*(this%gravity+this%p(n)%Abond)
+      end do
       
       ! Log/screen output
       logging: block
