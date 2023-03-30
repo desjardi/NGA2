@@ -254,17 +254,6 @@ contains
       call this%time%adjust_dt()
       call this%time%increment()
       
-      ! Enforce boundary conditions
-      !apply_bc: block
-      !   integer :: n
-      !   do n=1,this%ls%np_
-      !      if (this%ls%p(n)%id.eq.0) then
-      !         if (this%ls%p(n)%pos(2).gt.0.0_WP) this%ls%p(n)%pos(2)=this%ls%p(n)%pos(2)+1.0e-2_WP*this%time%dt
-      !         if (this%ls%p(n)%pos(2).lt.0.0_WP) this%ls%p(n)%pos(2)=this%ls%p(n)%pos(2)-1.0e-2_WP*this%time%dt
-      !      end if
-      !   end do
-      !end block apply_bc
-      
       ! Advance solid solver
       call this%ls%advance(this%time%dt)
       
