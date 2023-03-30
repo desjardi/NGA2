@@ -1,11 +1,13 @@
 !> Various definitions and tools for running an NGA2 simulation
 module simulation
-   use beamimpact_class, only: beamimpact
+   use beamimpact_class,   only: beamimpact
+   use fracturetest_class, only: fracturetest
    implicit none
    private
    
    !> Solid simulation
-   type(beamimpact) :: solid
+   !type(beamimpact) :: solid
+   type(fracturetest) :: solid
    
    public :: simulation_init,simulation_run,simulation_final
    

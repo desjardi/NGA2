@@ -1,5 +1,5 @@
 !> Definition of a solid simulation superclass that drives an lss_class object
-module beamimpact_class
+module fracturetest_class
    use precision,         only: WP
    use inputfile_class,   only: inputfile
    use config_class,      only: config
@@ -12,10 +12,10 @@ module beamimpact_class
    implicit none
    private
    
-   public :: beamimpact
+   public :: fracturetest
 
    !> Solid simulation object
-   type :: beamimpact
+   type :: fracturetest
       
       !> Input file for the simulation
       type(inputfile) :: input
@@ -42,7 +42,7 @@ module beamimpact_class
       procedure :: init                    !< Initialize solid simulation
       procedure :: step                    !< Advance solid simulation by one time step
       procedure :: final                   !< Finalize solid simulation
-   end type beamimpact
+   end type fracturetest
    
    
 contains
@@ -54,7 +54,7 @@ contains
       use mpi_f08,  only: MPI_ALLREDUCE,MPI_SUM,MPI_INTEGER
       use parallel, only: MPI_REAL_WP
       implicit none
-      class(beamimpact), intent(inout) :: this
+      class(fracturetest), intent(inout) :: this
       integer :: n,ierr
       real(WP) :: myx1,myx2
       !integer :: myn1,myn2,n1,n2
@@ -90,10 +90,10 @@ contains
    subroutine init(this)
       use parallel, only: amRoot
       implicit none
-      class(beamimpact), intent(inout) :: this
+      class(fracturetest), intent(inout) :: this
       
       ! Read the input
-      this%input=inputfile(amRoot=amRoot,filename='input_beamimpact')
+      this%input=inputfile(amRoot=amRoot,filename='input_fracturetest')
       
       ! Create a config
       initialize_cfg: block
@@ -248,7 +248,7 @@ contains
       ! Add Ensight output
       create_ensight: block
          ! Create Ensight output from cfg
-         this%ens_out=ensight(cfg=this%cfg,name='beamimpact')
+         this%ens_out=ensight(cfg=this%cfg,name='fracturetest')
          ! Create event for Ensight output
          this%ens_evt=event(time=this%time,name='Ensight output')
          call this%input%read('Ensight output period',this%ens_evt%tper)
@@ -265,7 +265,7 @@ contains
          call this%ls%get_max()
          call this%postproc()
          ! Create simulation monitor
-         this%mfile=monitor(this%cfg%amRoot,'beamimpact')
+         this%mfile=monitor(this%cfg%amRoot,'fracturetest')
          call this%mfile%add_column(this%time%n,'Timestep number')
          call this%mfile%add_column(this%time%t,'Time')
          call this%mfile%add_column(this%time%dt,'Timestep size')
@@ -288,7 +288,7 @@ contains
    !> Take one time step of the solid simulation
 	subroutine step(this)
 		implicit none
-		class(beamimpact), intent(inout) :: this
+		class(fracturetest), intent(inout) :: this
       
       ! Increment time
       call this%ls%get_cfl(this%time%dt,this%time%cfl)
@@ -344,11 +344,11 @@ contains
    !> Finalize solid simulation
    subroutine final(this)
 		implicit none
-		class(beamimpact), intent(inout) :: this
+		class(fracturetest), intent(inout) :: this
 		
 		! Deallocate work arrays
 		
 	end subroutine final
    
    
-end module beamimpact_class
+end module fracturetest_class
