@@ -1,5 +1,5 @@
 # Parallelization
-Partition : 1 1 4
+Partition : 1 1 8
 
 # Mesh definition
 Lx : 5
@@ -24,10 +24,6 @@ Max time :          5
 # Pressure solver
 Pressure tolerance : 1e-6
 Pressure iteration : 100
-
-# Implicit velocity solver
-Implicit tolerance : 1e-6
-Implicit iteration : 100
 
 # Ensight output
 Ensight output period : 5e-2
