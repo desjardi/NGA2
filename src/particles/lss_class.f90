@@ -263,8 +263,8 @@ contains
                         if (dist.lt.this%delta) then
                            ! Cannot self-bond
                            if (p1%i.eq.p2%i) cycle
-                           ! Cannot bond with different id
-                           if (p1%id.ne.p2%id) cycle
+                           ! Cannot bond with different id except <=0 (<=0 bonds with everyone)
+                           if (p1%id.ne.p2%id.and.p1%id.ge.0.and.p2%id.ge.0) cycle
                            ! This particle is in horizon, create a bond
                            p1%nbond=p1%nbond+1
                            if (p1%nbond.gt.max_bond) call die('[lss_class bond_init] Number of detected bonds is larger than max allowed')
@@ -277,9 +277,8 @@ contains
                   end do
                end do
             end do
-            ! Zero out initial dilatation and bond force
+            ! Zero out initial dilatation
             p1%dil=0.0_WP
-            p1%Abond=0.0_WP
             ! Copy back the particle
             this%p(n1)=p1
          end do
@@ -414,6 +413,8 @@ contains
          
          ! Loop over particles
          do n1=1,this%np_
+            ! Particles marked 0 do not update their forces
+            if (this%p(n1)%id.eq.0) cycle
             ! Create copy of our particle
             p1=this%p(n1)
             ! Zero out bond force
@@ -487,7 +488,9 @@ contains
 
    
    !> Advance the particle equations by a specified time step dt
-   !> p%id=0 => no solve
+   !> p%id=-2 => do not solve for position nor velocity
+   !> p%id=-1 => do not solve for velocity
+   !> p%id= 0 => do not update force
    subroutine advance(this,dt)
       use mpi_f08, only : MPI_SUM,MPI_INTEGER
       use mathtools, only: Pi
@@ -502,11 +505,9 @@ contains
       
       ! Advance velocity based on old force and position based on mid-velocity
       do n=1,this%np_
-         ! Skip particles with id=0
-         if (this%p(n)%id.eq.0) cycle
          ! Advance with Verlet scheme
-         this%p(n)%vel=this%p(n)%vel+0.5_WP*dt*(this%gravity+this%p(n)%Abond)
-         this%p(n)%pos=this%p(n)%pos+dt*this%p(n)%vel
+         if (this%p(n)%id.gt.-1) this%p(n)%vel=this%p(n)%vel+0.5_WP*dt*(this%gravity+this%p(n)%Abond)
+         if (this%p(n)%id.gt.-2) this%p(n)%pos=this%p(n)%pos+dt*this%p(n)%vel
          ! Relocalize
          this%p(n)%ind=this%cfg%get_ijk_global(this%p(n)%pos,this%p(n)%ind)
          ! Correct the position to take into account periodicity
@@ -534,10 +535,8 @@ contains
       
       ! Advance velocity only based on new force
       do n=1,this%np_
-         ! Avoid particles with id=0
-         if (this%p(n)%id.eq.0) cycle
          ! Advance with Verlet scheme
-         this%p(n)%vel=this%p(n)%vel+0.5_WP*dt*(this%gravity+this%p(n)%Abond)
+         if (this%p(n)%id.gt.-1) this%p(n)%vel=this%p(n)%vel+0.5_WP*dt*(this%gravity+this%p(n)%Abond)
       end do
       
       ! Log/screen output

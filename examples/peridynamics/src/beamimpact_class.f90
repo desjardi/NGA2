@@ -194,6 +194,8 @@ contains
                         this%ls%p(np)%id=2
                         this%ls%p(np)%vel=[+10.0_WP,0.0_WP,0.0_WP]
                      end if
+                     ! Zero out force
+                     this%ls%p(np)%Abond=0.0_WP
                      ! Locate the particle on the mesh
                      this%ls%p(np)%ind=this%ls%cfg%get_ijk_global(this%ls%p(np)%pos,[this%ls%cfg%imin,this%ls%cfg%jmin,this%ls%cfg%kmin])
                      ! Assign a unique integer to particle
