@@ -104,14 +104,14 @@ contains
          real(WP) :: Lx,Ly,Lz
          real(WP), dimension(:), allocatable :: x,y,z
          type(sgrid) :: grid
-
+         
          ! Create solver
          this%ls=lss(cfg=this%cfg,name='solid')
          
          ! Discretize plate
          call this%input%read('Solid dx',dx)
          Lx=0.2_WP; Ly=0.1_WP; Lz=0.025_WP
-
+         
          ! Set material properties
          this%ls%elastic_modulus=190.0e9_WP
          this%ls%poisson_ratio=0.25_WP
