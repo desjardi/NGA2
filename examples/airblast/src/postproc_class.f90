@@ -145,6 +145,7 @@ contains
    subroutine analyze(this,flag)
       use parallel, only: amRoot
       use string,   only: str_medium
+      use messager, only: log
       implicit none
       class(postproc), intent(inout) :: this
       logical :: flag
@@ -224,11 +225,16 @@ contains
       ! Run on all files available
       do nfile=1,188
          filename='ensight/atom/VOF/VOF.'; write(filename(len_trim(filename)+1:len_trim(filename)+6),'(i6.6)') nfile
+         call log('Postprocessing file '//trim(filename)//'...')
          call this%read_ensight_scalar(filename,this%VOF)
+         call log('|----> File read successfully')
          call this%cc%build_lists(VF=this%VOF,U=this%U,V=this%U,W=this%U)
+         call log('|----> CCL analysis done')
          call this%extract_core()
+         call log('|----> Core extracted')
          call this%cc%deallocate_lists()
          call this%ens_out%write_data(time=real(nfile,WP)*1.0e-3_WP)
+         call log('|----> Ensight output done')
       end do
       
    end subroutine analyze
