@@ -1,8 +1,9 @@
 !> Various definitions and tools for running an NGA2 simulation
 module simulation
-   use nozzle_class,  only: nozzle
-   use atom_class,    only: atom
-   use coupler_class, only: coupler
+   use postproc_class, only: postproc
+   use nozzle_class,   only: nozzle
+   use atom_class,     only: atom
+   use coupler_class,  only: coupler
    implicit none
    private
    
@@ -15,6 +16,10 @@ module simulation
    !> Couplers from injector to atomization
    type(coupler) :: xcpl_i2a,ycpl_i2a,zcpl_i2a
    
+   !> Postprocessing tool
+   type(postproc) :: pproc
+   logical :: only_pproc=.false.
+   
    public :: simulation_init,simulation_run,simulation_final
 
 contains
@@ -23,6 +28,10 @@ contains
    !> Initialization of our simulation
    subroutine simulation_init
       implicit none
+      
+      ! Postproc handling
+      call pproc%analyze(only_pproc)
+      if (only_pproc) return
       
       ! Initialize injector simulation
       call injector%init()
@@ -44,6 +53,9 @@ contains
    !> Run the simulation
    subroutine simulation_run
       implicit none
+      
+      ! Postproc handling
+      if (only_pproc) return
       
       ! Atomization drives overall time integration
       do while (.not.atomization%time%done())
@@ -84,6 +96,9 @@ contains
    subroutine simulation_final
       implicit none
       
+      ! Postproc handling
+      if (only_pproc) return
+
       ! Finalize injector simulation
       call injector%final()
       
