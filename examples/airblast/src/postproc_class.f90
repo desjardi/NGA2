@@ -1,11 +1,12 @@
 !> Definition for a postproc class
 module postproc_class
-   use precision,         only: WP
+   use precision,         only: WP,SP
    use inputfile_class,   only: inputfile
    use config_class,      only: config
    use partmesh_class,    only: partmesh
    use ensight_class,     only: ensight
    use timetracker_class, only: timetracker
+   use ccl_class,         only: ccl
    implicit none
    private
    
@@ -22,22 +23,134 @@ module postproc_class
       !> Ensight postprocessing
       type(partmesh) :: pmesh    !< Particle mesh for core output
       type(ensight)  :: ens_out  !< Ensight output for flow variables
+      !> CCL analysis
+      type(ccl)  :: cc
       !> Data arrays
       real(WP), dimension(:,:,:), allocatable :: VOF
+      real(WP), dimension(:,:,:), allocatable :: U
+      real(WP), dimension(:), allocatable :: bv,by,bz
    contains
       procedure :: analyze
+      procedure, private :: read_ensight_scalar
+      procedure, private :: extract_core
    end type postproc
       
 contains
    
    
+   !> Read a scalar ensight file to an WP array - handle ghost cells as well
+   subroutine read_ensight_scalar(this,filename,SC)
+      use mpi_f08
+      use parallel, only: group,info_mpiio,MPI_REAL_SP
+      use string,   only: str_medium
+      use messager, only: die
+      class(postproc), intent(inout) :: this
+      character(len=str_medium), intent(in) :: filename
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(out) :: SC
+      integer(kind=MPI_OFFSET_KIND) :: disp
+      real(SP), dimension(:,:,:), allocatable :: spbuff
+      type(MPI_Status):: status
+      type(MPI_File) :: ifile
+      integer :: ierr,i
+      ! Zero out SC
+      SC=0.0_WP
+      ! Parallel read the file
+      call MPI_FILE_OPEN(this%cfg%comm,trim(filename),MPI_MODE_RDONLY,info_mpiio,ifile,ierr)
+      if (ierr.ne.0) call die('[postproc read_ensight_scalar] Problem encountered while parallel reading data file '//trim(filename))
+      disp=244
+      call MPI_FILE_SET_VIEW(ifile,disp,MPI_REAL_SP,this%cfg%SPview,'native',info_mpiio,ierr)
+      allocate(spbuff(this%cfg%imin_:this%cfg%imax_,this%cfg%jmin_:this%cfg%jmax_,this%cfg%kmin_:this%cfg%kmax_))
+      call MPI_FILE_READ_ALL(ifile,spbuff,this%cfg%nx_*this%cfg%ny_*this%cfg%nz_,MPI_REAL_SP,status,ierr)
+      SC(this%cfg%imin_:this%cfg%imax_,this%cfg%jmin_:this%cfg%jmax_,this%cfg%kmin_:this%cfg%kmax_)=real(spbuff(this%cfg%imin_:this%cfg%imax_,this%cfg%jmin_:this%cfg%jmax_,this%cfg%kmin_:this%cfg%kmax_),WP)
+      call MPI_FILE_CLOSE(ifile,ierr)
+      deallocate(spbuff)
+      ! Update ghost cells
+      call this%cfg%sync(this%VOF)
+      if (this%cfg%iproc.eq.1) then
+         do i=this%cfg%imino_,this%cfg%imin_-1
+            this%VOF(i,:,:)=this%VOF(this%cfg%imin_,:,:)
+         end do
+      end if
+   end subroutine read_ensight_scalar
+   
+   
+   !> Extract a pmesh skeleton of the liquid core from CCL data
+   subroutine extract_core(this)
+      use mpi_f08,   only: MPI_ALLREDUCE,MPI_SUM
+      use parallel,  only: MPI_REAL_WP
+      use mathtools, only: twoPi
+      implicit none
+      class(postproc), intent(inout) :: this
+      real(WP) :: maxvol
+      integer :: nbig,n,l,i,j,k,ierr,np
+      real(WP), dimension(:), allocatable :: mybv
+      real(WP), dimension(:), allocatable :: myby
+      real(WP), dimension(:), allocatable :: mybz
+      ! Find index of biggest structure
+      maxvol=0.0_WP
+      do n=1,this%cc%n_meta_struct
+         if (this%cc%meta_structures_list(n)%vol.gt.maxvol) then
+            maxvol=this%cc%meta_structures_list(n)%vol
+            nbig=n
+         end if
+      end do
+      ! Find its barycenter as a function of x
+      allocate(mybv(this%cfg%imino:this%cfg%imaxo)); mybv=0.0_WP
+      allocate(myby(this%cfg%imino:this%cfg%imaxo)); myby=0.0_WP
+      allocate(mybz(this%cfg%imino:this%cfg%imaxo)); mybz=0.0_WP
+      do n=this%cc%sync_offset+1,this%cc%sync_offset+this%cc%n_struct
+         if (this%cc%struct_list(this%cc%struct_map_(n))%parent.ne.this%cc%meta_structures_list(nbig)%id) cycle
+         do l=1,this%cc%struct_list(this%cc%struct_map_(n))%nnode
+            i=this%cc%struct_list(this%cc%struct_map_(n))%node(1,l)
+            j=this%cc%struct_list(this%cc%struct_map_(n))%node(2,l)
+            k=this%cc%struct_list(this%cc%struct_map_(n))%node(3,l)
+            ! Integrate barycenter
+            mybv(i)=mybv(i)+this%VOF(i,j,k)*this%cfg%vol(i,j,k)
+            myby(i)=myby(i)+this%VOF(i,j,k)*this%cfg%vol(i,j,k)*this%cfg%ym(j)
+            mybz(i)=mybz(i)+this%VOF(i,j,k)*this%cfg%vol(i,j,k)*this%cfg%zm(k)
+         end do
+      end do
+      this%bv=0.0_WP; call MPI_ALLREDUCE(mybv,this%bv,this%cfg%nxo,MPI_REAL_WP,MPI_SUM,this%cfg%comm,ierr)
+      this%by=0.0_WP; call MPI_ALLREDUCE(myby,this%by,this%cfg%nxo,MPI_REAL_WP,MPI_SUM,this%cfg%comm,ierr)
+      this%bz=0.0_WP; call MPI_ALLREDUCE(mybz,this%bz,this%cfg%nxo,MPI_REAL_WP,MPI_SUM,this%cfg%comm,ierr)
+      np=0
+      do i=this%cfg%imino,this%cfg%imaxo
+         if (this%bv(i).gt.0.0_WP) then
+            this%by(i)=this%by(i)/this%bv(i)
+            this%bz(i)=this%bz(i)/this%bv(i)
+            np=np+1
+         else
+            this%by(i)=0.0_WP
+            this%bz(i)=0.0_WP
+         end if
+      end do
+      ! Now transfer to pmesh
+      if (this%cfg%amRoot) then
+         call this%pmesh%reset()
+         call this%pmesh%set_size(size=np)
+         np=0
+         do i=this%cfg%imino,this%cfg%imaxo
+            if (this%bv(i).gt.0.0_WP) then
+               np=np+1
+               this%pmesh%pos(:,np)=[this%cfg%xm(i),this%by(i),this%bz(i)]
+               this%pmesh%var(1,np)=this%bv(i)*this%cfg%dxi(i)
+               this%pmesh%var(2,np)=sqrt(this%pmesh%var(1,np)/twoPi)
+            end if
+         end do
+      end if
+   end subroutine extract_core
+   
+   
    !> Analysis of atom simulation
    subroutine analyze(this,flag)
       use parallel, only: amRoot
+      use string,   only: str_medium
       implicit none
       class(postproc), intent(inout) :: this
       logical :: flag
-      
+      character(len=str_medium) :: filename
+      integer :: nfile
+
       ! Switch flag to true
       flag=.true.
       
@@ -77,30 +190,46 @@ contains
       
       ! Allocate work arrays
       allocate_data: block
-         allocate(this%VOF(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
+         allocate(this%VOF(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_)); this%VOF=0.0_WP
+         allocate(this%U(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_)); this%U=0.0_WP
+         allocate(this%bv(this%cfg%imino:this%cfg%imaxo)); this%bv=0.0_WP
+         allocate(this%by(this%cfg%imino:this%cfg%imaxo)); this%by=0.0_WP
+         allocate(this%bz(this%cfg%imino:this%cfg%imaxo)); this%bz=0.0_WP
       end block allocate_data
       
-      
-      
-      
-      
-      
-      
-      ! Create partmesh object for core output
-      create_pmesh: block
-         this%pmesh=partmesh(nvar=0,nvec=0,name='core')
-         ! Transfer stuff here
-      end block create_pmesh
-      
-      ! Perform Ensight output
+      ! Create partmesh and ensight object for core output
       create_ensight: block
-         ! Create Ensight output from cfg
+         this%pmesh=partmesh(nvar=2,nvec=0,name='core')
+         this%pmesh%varname(1)='area'
+         this%pmesh%varname(2)='radius'
          this%ens_out=ensight(cfg=this%cfg,name='postproc')
-         ! Add variables to output
          call this%ens_out%add_particle('core',this%pmesh)
-         ! Output to ensight
-         call this%ens_out%write_data(time=0.0_WP)
       end block create_ensight
+
+      ! Create CCL
+      create_ccl: block
+         this%cc=ccl(cfg=this%cfg,name='struct')
+         this%cc%max_interface_planes=1
+         this%cc%VFlo=1.0e-12_WP
+      end block create_ccl
+      
+      ! Run on one file
+      !call this%input%read('VOF file',filename)
+      !call this%read_ensight_scalar(filename,this%VOF)
+      !call this%cc%build_lists(VF=this%VOF,U=this%U,V=this%U,W=this%U)
+      !call this%extract_core()
+      !call this%cc%deallocate_lists()
+      !call this%ens_out%write_data(time=0.0_WP)
+      
+      ! Run on all files available
+      do nfile=1,188
+         filename='ensight/atom/VOF/VOF.'; write(filename(len_trim(filename)+1:len_trim(filename)+6),'(i6.6)') nfile
+         call this%read_ensight_scalar(filename,this%VOF)
+         call this%cc%build_lists(VF=this%VOF,U=this%U,V=this%U,W=this%U)
+         call this%extract_core()
+         call this%cc%deallocate_lists()
+         call this%ens_out%write_data(time=real(nfile,WP)*1.0e-3_WP)
+      end do
       
    end subroutine analyze
    
