@@ -26,6 +26,10 @@ module tpns_class
    ! List of available contact line models for this solver
    integer, parameter, public :: static_contact=1    !< Static contact line model
    
+   ! List of available averaging strategies for viscosity
+   integer, parameter, public :: harmonic_visc=1     !< Harmonically-averaged viscosity
+   integer, parameter, public :: arithmetic_visc=2   !< Arithmetically-averaged viscosity
+   
    ! Parameter for switching schemes around the interface
    real(WP), parameter :: rhoeps_coeff=1.0e-3_WP     !< Parameter for deciding when to switch to upwinded transport
    
@@ -2566,44 +2570,96 @@ contains
    
    
    !> Prepare viscosity arrays from vfs object
-   subroutine get_viscosity(this,vf)
+   subroutine get_viscosity(this,vf,strat)
       use vfs_class, only: vfs
+      use messager,  only: die
       implicit none
       class(tpns), intent(inout) :: this
       class(vfs), intent(in) :: vf
-      integer :: i,j,k
+      integer :: i,j,k,mystrat
       real(WP) :: liq_vol,gas_vol,tot_vol
-      ! Compute harmonically-averaged staggered viscosities using subcell phasic volumes
-      do k=this%cfg%kmino_+1,this%cfg%kmaxo_
-         do j=this%cfg%jmino_+1,this%cfg%jmaxo_
-            do i=this%cfg%imino_+1,this%cfg%imaxo_
-               ! VISC at [xm,ym,zm] - direct sum in x/y/z
-               liq_vol=sum(vf%Lvol(:,:,:,i,j,k))
-               gas_vol=sum(vf%Gvol(:,:,:,i,j,k))
-               tot_vol=gas_vol+liq_vol
-               this%visc(i,j,k)=0.0_WP
-               if (tot_vol.gt.0.0_WP) this%visc(i,j,k)=this%visc_g*this%visc_l/(this%visc_l*gas_vol/tot_vol+this%visc_g*liq_vol/tot_vol+epsilon(1.0_WP))
-               ! VISC_xy at [x,y,zm] - direct sum in z, staggered sum in x/y
-               liq_vol=sum(vf%Lvol(0,0,:,i,j,k))+sum(vf%Lvol(1,0,:,i-1,j,k))+sum(vf%Lvol(0,1,:,i,j-1,k))+sum(vf%Lvol(1,1,:,i-1,j-1,k))
-               gas_vol=sum(vf%Gvol(0,0,:,i,j,k))+sum(vf%Gvol(1,0,:,i-1,j,k))+sum(vf%Gvol(0,1,:,i,j-1,k))+sum(vf%Gvol(1,1,:,i-1,j-1,k))
-               tot_vol=gas_vol+liq_vol
-               this%visc_xy(i,j,k)=0.0_WP
-               if (tot_vol.gt.0.0_WP) this%visc_xy(i,j,k)=this%visc_g*this%visc_l/(this%visc_l*gas_vol/tot_vol+this%visc_g*liq_vol/tot_vol+epsilon(1.0_WP))
-               ! VISC_yz at [xm,y,z] - direct sum in x, staggered sum in y/z
-               liq_vol=sum(vf%Lvol(:,0,0,i,j,k))+sum(vf%Lvol(:,1,0,i,j-1,k))+sum(vf%Lvol(:,0,1,i,j,k-1))+sum(vf%Lvol(:,1,1,i,j-1,k-1))
-               gas_vol=sum(vf%Gvol(:,0,0,i,j,k))+sum(vf%Gvol(:,1,0,i,j-1,k))+sum(vf%Gvol(:,0,1,i,j,k-1))+sum(vf%Gvol(:,1,1,i,j-1,k-1))
-               tot_vol=gas_vol+liq_vol
-               this%visc_yz(i,j,k)=0.0_WP
-               if (tot_vol.gt.0.0_WP) this%visc_yz(i,j,k)=this%visc_g*this%visc_l/(this%visc_l*gas_vol/tot_vol+this%visc_g*liq_vol/tot_vol+epsilon(1.0_WP))
-               ! VISC_zx at [x,ym,z] - direct sum in y, staggered sum in z/x
-               liq_vol=sum(vf%Lvol(0,:,0,i,j,k))+sum(vf%Lvol(0,:,1,i,j,k-1))+sum(vf%Lvol(1,:,0,i-1,j,k))+sum(vf%Lvol(1,:,1,i-1,j,k-1))
-               gas_vol=sum(vf%Gvol(0,:,0,i,j,k))+sum(vf%Gvol(0,:,1,i,j,k-1))+sum(vf%Gvol(1,:,0,i-1,j,k))+sum(vf%Gvol(1,:,1,i-1,j,k-1))
-               tot_vol=gas_vol+liq_vol
-               this%visc_zx(i,j,k)=0.0_WP
-               if (tot_vol.gt.0.0_WP) this%visc_zx(i,j,k)=this%visc_g*this%visc_l/(this%visc_l*gas_vol/tot_vol+this%visc_g*liq_vol/tot_vol+epsilon(1.0_WP))
+      integer, optional :: strat
+      ! Choose viscosity averaging strategy
+      if (present(strat)) then
+         mystrat=strat
+      else
+         mystrat=harmonic_visc
+      end if
+      ! Check what strategy should be used
+      select case (mystrat)
+      case (harmonic_visc)
+         ! Compute harmonically-averaged staggered viscosities using subcell phasic volumes
+         do k=this%cfg%kmino_+1,this%cfg%kmaxo_
+            do j=this%cfg%jmino_+1,this%cfg%jmaxo_
+               do i=this%cfg%imino_+1,this%cfg%imaxo_
+                  ! VISC at [xm,ym,zm] - direct sum in x/y/z
+                  liq_vol=sum(vf%Lvol(:,:,:,i,j,k))
+                  gas_vol=sum(vf%Gvol(:,:,:,i,j,k))
+                  tot_vol=gas_vol+liq_vol
+                  this%visc(i,j,k)=0.0_WP
+                  if (tot_vol.gt.0.0_WP) this%visc(i,j,k)=this%visc_g*this%visc_l/(this%visc_l*gas_vol/tot_vol+this%visc_g*liq_vol/tot_vol+epsilon(1.0_WP))
+                  ! VISC_xy at [x,y,zm] - direct sum in z, staggered sum in x/y
+                  liq_vol=sum(vf%Lvol(0,0,:,i,j,k))+sum(vf%Lvol(1,0,:,i-1,j,k))+sum(vf%Lvol(0,1,:,i,j-1,k))+sum(vf%Lvol(1,1,:,i-1,j-1,k))
+                  gas_vol=sum(vf%Gvol(0,0,:,i,j,k))+sum(vf%Gvol(1,0,:,i-1,j,k))+sum(vf%Gvol(0,1,:,i,j-1,k))+sum(vf%Gvol(1,1,:,i-1,j-1,k))
+                  tot_vol=gas_vol+liq_vol
+                  this%visc_xy(i,j,k)=0.0_WP
+                  if (tot_vol.gt.0.0_WP) this%visc_xy(i,j,k)=this%visc_g*this%visc_l/(this%visc_l*gas_vol/tot_vol+this%visc_g*liq_vol/tot_vol+epsilon(1.0_WP))
+                  if (this%cfg%x(i).eq.0.0_WP.and.this%cfg%y(j).eq.2.0_WP) then
+                     print*,'wall visc half-way:',this%visc_xy(i,j,k),'vols:',sum(vf%Lvol(:,:,:,i-1,j,k)),sum(vf%Lvol(:,:,:,i,j,k))
+                  end if
+                  if (this%cfg%x(i).eq.0.0_WP.and.this%cfg%y(j).eq.-1.0_WP) then
+                     print*,'wall visc atbottom:',this%visc_xy(i,j,k),'vols:',sum(vf%Lvol(:,:,:,i-1,j,k)),sum(vf%Lvol(:,:,:,i,j,k))
+                  end if
+                  ! VISC_yz at [xm,y,z] - direct sum in x, staggered sum in y/z
+                  liq_vol=sum(vf%Lvol(:,0,0,i,j,k))+sum(vf%Lvol(:,1,0,i,j-1,k))+sum(vf%Lvol(:,0,1,i,j,k-1))+sum(vf%Lvol(:,1,1,i,j-1,k-1))
+                  gas_vol=sum(vf%Gvol(:,0,0,i,j,k))+sum(vf%Gvol(:,1,0,i,j-1,k))+sum(vf%Gvol(:,0,1,i,j,k-1))+sum(vf%Gvol(:,1,1,i,j-1,k-1))
+                  tot_vol=gas_vol+liq_vol
+                  this%visc_yz(i,j,k)=0.0_WP
+                  if (tot_vol.gt.0.0_WP) this%visc_yz(i,j,k)=this%visc_g*this%visc_l/(this%visc_l*gas_vol/tot_vol+this%visc_g*liq_vol/tot_vol+epsilon(1.0_WP))
+                  ! VISC_zx at [x,ym,z] - direct sum in y, staggered sum in z/x
+                  liq_vol=sum(vf%Lvol(0,:,0,i,j,k))+sum(vf%Lvol(0,:,1,i,j,k-1))+sum(vf%Lvol(1,:,0,i-1,j,k))+sum(vf%Lvol(1,:,1,i-1,j,k-1))
+                  gas_vol=sum(vf%Gvol(0,:,0,i,j,k))+sum(vf%Gvol(0,:,1,i,j,k-1))+sum(vf%Gvol(1,:,0,i-1,j,k))+sum(vf%Gvol(1,:,1,i-1,j,k-1))
+                  tot_vol=gas_vol+liq_vol
+                  this%visc_zx(i,j,k)=0.0_WP
+                  if (tot_vol.gt.0.0_WP) this%visc_zx(i,j,k)=this%visc_g*this%visc_l/(this%visc_l*gas_vol/tot_vol+this%visc_g*liq_vol/tot_vol+epsilon(1.0_WP))
+               end do
             end do
          end do
-      end do
+      case (arithmetic_visc)
+         ! Compute arithmetically-averaged staggered viscosities using subcell phasic volumes
+         do k=this%cfg%kmino_+1,this%cfg%kmaxo_
+            do j=this%cfg%jmino_+1,this%cfg%jmaxo_
+               do i=this%cfg%imino_+1,this%cfg%imaxo_
+                  ! VISC at [xm,ym,zm] - direct sum in x/y/z
+                  liq_vol=sum(vf%Lvol(:,:,:,i,j,k))
+                  gas_vol=sum(vf%Gvol(:,:,:,i,j,k))
+                  tot_vol=gas_vol+liq_vol
+                  this%visc(i,j,k)=0.0_WP
+                  if (tot_vol.gt.0.0_WP) this%visc(i,j,k)=(this%visc_l*liq_vol+this%visc_g*gas_vol)/tot_vol
+                  ! VISC_xy at [x,y,zm] - direct sum in z, staggered sum in x/y
+                  liq_vol=sum(vf%Lvol(0,0,:,i,j,k))+sum(vf%Lvol(1,0,:,i-1,j,k))+sum(vf%Lvol(0,1,:,i,j-1,k))+sum(vf%Lvol(1,1,:,i-1,j-1,k))
+                  gas_vol=sum(vf%Gvol(0,0,:,i,j,k))+sum(vf%Gvol(1,0,:,i-1,j,k))+sum(vf%Gvol(0,1,:,i,j-1,k))+sum(vf%Gvol(1,1,:,i-1,j-1,k))
+                  tot_vol=gas_vol+liq_vol
+                  this%visc_xy(i,j,k)=0.0_WP
+                  if (tot_vol.gt.0.0_WP) this%visc_xy(i,j,k)=(this%visc_l*liq_vol+this%visc_g*gas_vol)/tot_vol
+                  ! VISC_yz at [xm,y,z] - direct sum in x, staggered sum in y/z
+                  liq_vol=sum(vf%Lvol(:,0,0,i,j,k))+sum(vf%Lvol(:,1,0,i,j-1,k))+sum(vf%Lvol(:,0,1,i,j,k-1))+sum(vf%Lvol(:,1,1,i,j-1,k-1))
+                  gas_vol=sum(vf%Gvol(:,0,0,i,j,k))+sum(vf%Gvol(:,1,0,i,j-1,k))+sum(vf%Gvol(:,0,1,i,j,k-1))+sum(vf%Gvol(:,1,1,i,j-1,k-1))
+                  tot_vol=gas_vol+liq_vol
+                  this%visc_yz(i,j,k)=0.0_WP
+                  if (tot_vol.gt.0.0_WP) this%visc_yz(i,j,k)=(this%visc_l*liq_vol+this%visc_g*gas_vol)/tot_vol
+                  ! VISC_zx at [x,ym,z] - direct sum in y, staggered sum in z/x
+                  liq_vol=sum(vf%Lvol(0,:,0,i,j,k))+sum(vf%Lvol(0,:,1,i,j,k-1))+sum(vf%Lvol(1,:,0,i-1,j,k))+sum(vf%Lvol(1,:,1,i-1,j,k-1))
+                  gas_vol=sum(vf%Gvol(0,:,0,i,j,k))+sum(vf%Gvol(0,:,1,i,j,k-1))+sum(vf%Gvol(1,:,0,i-1,j,k))+sum(vf%Gvol(1,:,1,i-1,j,k-1))
+                  tot_vol=gas_vol+liq_vol
+                  this%visc_zx(i,j,k)=0.0_WP
+                  if (tot_vol.gt.0.0_WP) this%visc_zx(i,j,k)=(this%visc_l*liq_vol+this%visc_g*gas_vol)/tot_vol
+               end do
+            end do
+         end do
+      case default
+         call die('[tpns get_viscosity] Unknown viscosity averaging strategy')
+      end select
       ! Synchronize boundaries - not really needed...
       call this%cfg%sync(this%visc)
       call this%cfg%sync(this%visc_xy)
