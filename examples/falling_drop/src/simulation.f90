@@ -95,7 +95,7 @@ contains
 			! Create a VOF solver
 		   vf=vfs(cfg=cfg,reconstruction_method=lvira,name='VOF')
 		   ! Initialize to a droplet and a pool
-		   center=[0.0_WP,0.01_WP,0.0_WP]
+		   center=[-0.01_WP,0.01_WP,0.0_WP]
 		   radius=0.002_WP
 		   depth =0.02_WP
 			do k=vf%cfg%kmino_,vf%cfg%kmaxo_
@@ -246,7 +246,7 @@ contains
 	
 	!> Perform an NGA2 simulation - this mimicks NGA's old time integration for multiphase
 	subroutine simulation_run
-      use tpns_class, only: static_contact
+      use tpns_class, only: static_contact,arithmetic_visc
 		implicit none
 		
 		! Perform time integration
@@ -275,7 +275,7 @@ contains
 		   call vf%advance(dt=time%dt,U=fs%U,V=fs%V,W=fs%W)
 			
 			! Prepare new staggered viscosity (at n+1)
-		   call fs%get_viscosity(vf=vf)
+		   call fs%get_viscosity(vf=vf,strat=arithmetic_visc)
 			
 		   ! Perform sub-iterations
 		   do while (time%it.le.time%itmax)
