@@ -284,6 +284,10 @@ contains
          end do
       end block create_bonds
       
+      ! Clean up
+      if (allocated(npic)) deallocate(npic)
+      if (allocated(ipic)) deallocate(ipic)
+
    end subroutine bond_init
 
 
@@ -482,7 +486,10 @@ contains
             this%p(n1)=p1
          end do
       end block update_bond_force
-
+      
+      ! Clean up
+      if (allocated(npic)) deallocate(npic)
+      if (allocated(ipic)) deallocate(ipic)
       
    end subroutine get_bond_force
 
