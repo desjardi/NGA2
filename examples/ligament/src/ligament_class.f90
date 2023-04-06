@@ -44,9 +44,6 @@ module ligament_class
       !> Iterator for VOF removal
       type(iterator) :: vof_removal_layer  !< Edge of domain where we actively remove VOF
       
-      !> Convective velocity
-      real(WP) :: Uconv
-      
       
    contains
       procedure :: init                            !< Initialize nozzle simulation
@@ -57,9 +54,6 @@ module ligament_class
    
    !> Hardcode size of buffer layer for VOF removal
    integer, parameter :: nlayer=5
-
-   !> Ligament radius needs to be outside the object for now
-   real(WP) :: rlig
    
 
 contains
@@ -71,7 +65,7 @@ contains
 		real(WP), dimension(3),intent(in) :: xyz
 		real(WP), intent(in) :: t
 		real(WP) :: G
-	   G=rlig-sqrt(xyz(1)**2+xyz(2)**2)
+	   G=0.5_WP-sqrt(xyz(1)**2+xyz(2)**2)
 	end function levelset_ligament
    
    
@@ -81,30 +75,29 @@ contains
       class(ligament), intent(inout) :: this
       
       
-      ! Create the HIT mesh
+      ! Create the ligament mesh
       create_config: block
          use sgrid_class, only: cartesian,sgrid
          use param,       only: param_read
          use parallel,    only: group
-         real(WP), dimension(:), allocatable :: x,y
+         real(WP), dimension(:), allocatable :: x,y,z
          integer, dimension(3) :: partition
          type(sgrid) :: grid
-         integer :: i,j,nx,ny
-         real(WP) :: Lx,dx,xlig
-         ! Read in grid size
-         call param_read('Number of cells',ny)
-         call param_read('Domain length',Lx)
-         ! Domain length is set to Lx and width to 5x5
-         call param_read('Ligament location',xlig)
-         dx=5.0_WP/real(ny,WP)
-         nx=int(Lx/dx)
+         integer :: i,j,k,nx,ny,nz
+         real(WP) :: Lx,Ly,Lz,xlig
+         ! Read in grid definition
+         call param_read('Lx',Lx); call param_read('nx',nx); allocate(x(nx+1)); call param_read('X ligament',xlig)
+         call param_read('Ly',Ly); call param_read('ny',ny); allocate(y(ny+1))
+         call param_read('Lz',Lz); call param_read('nz',nz); allocate(z(nz+1))
          ! Create simple rectilinear grid
-         allocate(x(nx+1),y(ny+1))
          do i=1,nx+1
             x(i)=real(i-1,WP)/real(nx,WP)*Lx-xlig
          end do
          do j=1,ny+1
-            y(j)=real(j-1,WP)/real(ny,WP)*5.0_WP-2.5_WP !< Domain is of width 5 to get l_turb=1
+            y(j)=real(j-1,WP)/real(ny,WP)*Ly-0.5_WP*Ly
+         end do
+         do k=1,nz+1
+            z(k)=real(k-1,WP)/real(nz,WP)*Lz-0.5_WP*Lz
          end do
          ! General serial grid object
          grid=sgrid(coord=cartesian,no=3,x=x,y=y,z=y,xper=.false.,yper=.true.,zper=.true.,name='Ligament')
@@ -150,7 +143,6 @@ contains
          ! Create a VOF solver with LVIRA
          this%vf=vfs(cfg=this%cfg,reconstruction_method=elvira,name='VOF')
          ! Initialize to a ligament
-         call param_read('Ligament radius',rlig)
 		   do k=this%vf%cfg%kmino_,this%vf%cfg%kmaxo_
 				do j=this%vf%cfg%jmino_,this%vf%cfg%jmaxo_
 					do i=this%vf%cfg%imino_,this%vf%cfg%imaxo_
@@ -213,13 +205,10 @@ contains
          ! Create flow solver
          this%fs=tpns(cfg=this%cfg,name='Two-phase NS')
          ! Set fluid properties
-         this%fs%rho_l=1.0_WP
-         call param_read('Density ratio',this%fs%rho_g); this%fs%rho_g=this%fs%rho_l/this%fs%rho_g
-         this%fs%visc_l=(1.5_WP*this%cfg%min_meshsize/Pi)**(4.0_WP/3.0_WP)
-         call param_read('Viscosity ratio',this%fs%visc_g); this%fs%visc_g=this%fs%visc_l/this%fs%visc_g
+         this%fs%rho_g=1.0_WP; call param_read('Density ratio',this%fs%rho_l)
+         call param_read('Reynolds number',this%fs%visc_g); this%fs%visc_g=1.0_WP/this%fs%visc_g
+         call param_read('Viscosity ratio',this%fs%visc_l); this%fs%visc_l=this%fs%visc_g*this%fs%visc_l
          call param_read('Weber number',this%fs%sigma); this%fs%sigma=1.0_WP/this%fs%sigma
-         ! Read in convective velocity
-         call param_read('Convective velocity',this%Uconv)
          ! Define inflow boundary condition on the left
          call this%fs%add_bcond(name='inflow',type=dirichlet,face='x',dir=-1,canCorrect=.false.,locator=xm_locator)
          ! Define outflow boundary condition on the right
@@ -239,7 +228,7 @@ contains
          call this%fs%get_bcond('inflow',mybc)
          do n=1,mybc%itr%no_
             i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
-            this%fs%U(i,j,k)=this%Uconv
+            this%fs%U(i,j,k)=1.0_WP
          end do
          ! Compute cell-centered velocity
          call this%fs%interp_vel(this%Ui,this%Vi,this%Wi)

@@ -1,5 +1,6 @@
 !> Various definitions and tools for running an NGA2 simulation
 module simulation
+   use precision,      only: WP
    use hit_class,      only: hit
    use ligament_class, only: ligament
    implicit none
@@ -51,8 +52,20 @@ contains
          end if
       end block create_hit_group
       
-      ! Initialize HIT simulation
-      if (isInHITGrp) call turb%init(group=hit_group)
+      ! Prepare HIT simulation
+      if (isInHITGrp) then
+         prepare_hit: block
+            real(WP) :: dt
+            ! Initialize HIT
+            call turb%init(group=hit_group)
+            ! Run HIT until t/tau_eddy=10
+            dt=0.15_WP*turb%cfg%min_meshsize/turb%Urms_tgt !< Estimate maximum stable dt
+            do while (turb%time%t.lt.10.0_WP*turb%tau_tgt)
+               call turb%step(dt)
+            end do
+         end block prepare_hit
+      end if
+
       
    end subroutine simulation_init
    
@@ -80,7 +93,7 @@ contains
                do n=1,mybc%itr%no_
                   i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
                   ihit=i-atom%fs%cfg%imin+turb%fs%cfg%imax+1
-                  atom%fs%U(i  ,j,k)=turb%fs%U(ihit  ,j,k)+atom%Uconv
+                  atom%fs%U(i  ,j,k)=1.0_WP+turb%fs%U(ihit,j,k)
                   atom%fs%V(i-1,j,k)=turb%fs%V(ihit-1,j,k)
                   atom%fs%W(i-1,j,k)=turb%fs%W(ihit-1,j,k)
                end do

@@ -25,9 +25,14 @@ module hit_class
       real(WP), dimension(:,:,:,:,:), allocatable :: gradU           !< Velocity gradient
       real(WP), dimension(:,:,:,:), allocatable :: SR                !< Strain rate tensor
       real(WP), dimension(:,:,:), allocatable :: resU,resV,resW      !< Residuals
-      !> Fluid and forcing parameters
-      real(WP) :: visc,meanU,meanV,meanW,Urms
-      real(WP) :: Re_max,TKE,EPS,Re_turb,Re_lambda,eta,ell
+      !> Turbulence parameters
+      real(WP) :: visc,meanU,meanV,meanW
+      real(WP) :: Urms_tgt,tke_tgt,eps_tgt      ! u',k, and dissipation rate
+      real(WP) :: tko_tgt,eta_tgt               ! Kolmogorov time and length scales
+      real(WP) :: Rel_tgt,Ret_tgt               ! Lambda and turbulent Reynolds numbers
+      real(WP) :: tau_tgt                       ! Eddy turnover time
+      real(WP) :: Urms,tke,eps,Ret,Rel,eta,ell  ! Current turbulence parameters (ell is large eddy size)
+      !> Forcing constant
       real(WP) :: forcing
    contains
       procedure, private :: compute_stats          !< Turbulence information
@@ -40,7 +45,7 @@ module hit_class
 contains
    
    
-   !> Compute turbulence stats
+   !> Compute turbulence stats (assumes rho=1)
    subroutine compute_stats(this)
       use mpi_f08,  only: MPI_ALLREDUCE,MPI_SUM
       use parallel, only: MPI_REAL_WP
@@ -65,14 +70,14 @@ contains
             end do
          end do
       end do
-      call MPI_ALLREDUCE(myTKE,this%TKE,1,MPI_REAL_WP,MPI_SUM,this%fs%cfg%comm,ierr); this%TKE=this%TKE/this%fs%cfg%vol_total
-      call MPI_ALLREDUCE(myEPS,this%EPS,1,MPI_REAL_WP,MPI_SUM,this%fs%cfg%comm,ierr); this%EPS=this%EPS*this%visc/this%fs%cfg%vol_total
+      call MPI_ALLREDUCE(myTKE,this%tke,1,MPI_REAL_WP,MPI_SUM,this%fs%cfg%comm,ierr); this%tke=this%tke/this%fs%cfg%vol_total
+      call MPI_ALLREDUCE(myEPS,this%eps,1,MPI_REAL_WP,MPI_SUM,this%fs%cfg%comm,ierr); this%eps=this%eps*this%visc/this%fs%cfg%vol_total
       ! Compute standard parameters for HIT
-      this%Urms=sqrt(2.0_WP/3.0_WP*this%TKE)
-      this%Re_turb=this%TKE**2.0_WP/(this%visc*this%EPS)
-      this%Re_lambda=sqrt(20.0_WP*this%Re_turb/3.0_WP)
-      this%eta=((this%visc)**3.0_WP/this%EPS)**0.25_WP
-      this%ell=(2.0_WP*this%TKE/3.0_WP)**1.5_WP/this%EPS
+      this%Urms=sqrt(2.0_WP/3.0_WP*this%tke)
+      this%Ret=this%tke**2.0_WP/(this%visc*this%eps)
+      this%Rel=sqrt(20.0_WP*this%Ret/3.0_WP)
+      this%eta=((this%visc)**3.0_WP/this%eps)**0.25_WP
+      this%ell=(2.0_WP*this%tke/3.0_WP)**1.5_WP/this%eps
    end subroutine compute_stats
    
    
@@ -83,32 +88,29 @@ contains
       class(hit), intent(inout)   :: this
       type(MPI_Group), intent(in) :: group
       
-      
       ! Create the HIT mesh
       create_config: block
          use sgrid_class, only: cartesian,sgrid
          use param,       only: param_read
-         real(WP), dimension(:), allocatable :: x
+         use parallel,    only: group
+         real(WP), dimension(:), allocatable :: y
          integer, dimension(3) :: partition
          type(sgrid) :: grid
-         integer :: i,nx
-         ! Read in grid size
-         call param_read('Number of cells',nx)
-         ! Domain length is set to 5 so that l_turb=1
-         allocate(x(nx+1))
+         integer :: j,ny
+         real(WP) :: Ly
+         ! Read in grid definition
+         call param_read('Ly',Ly); call param_read('ny',ny); allocate(y(ny+1))
          ! Create simple rectilinear grid
-         do i=1,nx+1
-            x(i)=real(i-1,WP)/real(nx,WP)*5.0_WP !< Domain is of width 5 to get l_turb=1
+         do j=1,ny+1
+            y(j)=real(j-1,WP)/real(ny,WP)*Ly-0.5_WP*Ly
          end do
          ! General serial grid object
-         grid=sgrid(coord=cartesian,no=1,x=x,y=x,z=x,xper=.true.,yper=.true.,zper=.true.,name='HIT')
+         grid=sgrid(coord=cartesian,no=1,x=y,y=y,z=y,xper=.true.,yper=.true.,zper=.true.,name='HIT')
          ! Read in partition
-         call param_read('Partition',partition,short='p')
-         partition(1)=1
+         call param_read('Partition',partition,short='p'); partition(1)=1
          ! Create partitioned grid without walls
          this%cfg=config(grp=group,decomp=partition,grid=grid)
       end block create_config
-      
 
       ! Initialize the work arrays
       allocate_work_arrays: block
@@ -134,12 +136,13 @@ contains
       ! Create a single-phase periodic flow solver
       create_flow_solver: block
          use mathtools, only: Pi
+         use param,     only: param_read
          ! Create flow solver
          this%fs=incomp(cfg=this%cfg,name='NS solver')
          ! Set density to 1.0
          this%fs%rho=1.0_WP
-         ! Set viscosity so that u'=1.0, dx/eta=pi/1.5
-         this%visc=(1.5_WP*this%cfg%min_meshsize/Pi)**(4.0_WP/3.0_WP)
+         ! Set viscosity from Reynolds number
+         call param_read('Reynolds number',this%visc); this%visc=1.0_WP/this%visc
          this%fs%visc=this%visc
          ! Prepare and configure pressure solver
          this%ps=fourier3d(cfg=this%cfg,name='Pressure',nst=7)
@@ -147,36 +150,48 @@ contains
          call this%fs%setup(pressure_solver=this%ps)
       end block create_flow_solver
       
-
-      ! Initialize turbulence forcing
-      initialize_forcing: block
-         use param, only: param_read
-         use messager, only: log
-         use string,   only: str_long
-         character(str_long) :: message
-         ! Read in forcing parameter
-         call param_read('Forcing constant',this%forcing,default=50.0_WP) ! We need G*dt<1 for stability
-         ! Output nominal turbulence parameters
-         if (this%cfg%amRoot) then
-            write(message,'("[HIT setup] => Fluid viscosity   =",es12.5)') this%visc              ; call log(message)
-            write(message,'("[HIT setup] => Maximum Re_lambda =",es12.5)') sqrt(15.0_WP/this%visc); call log(message)
-            write(message,'("[HIT setup] => Kolmogorov lscale =",es12.5)') (this%visc)**(0.75_WP) ; call log(message)
-            write(message,'("[HIT setup] => Kolmogorov tscale =",es12.5)') sqrt(this%visc)        ; call log(message)
-         end if
-      end block initialize_forcing
-      
       
       ! Prepare initial velocity field
       initialize_velocity: block
-         use random, only: random_normal
+         use random,    only: random_normal
+         use mathtools, only: Pi
+         use param,     only: param_read,param_exists
+         use messager,  only: log
+         use string,    only: str_long
+         character(str_long) :: message
+         real(WP) :: max_forcing_estimate
          integer :: i,j,k
+         ! Read in target Urms
+         call param_read('Turbulence intensity',this%Urms_tgt)
+         ! Calculate other target quantities assuming l=0.2*xL
+         this%tke_tgt=1.5_WP*this%Urms_tgt**2
+         this%eps_tgt=5.0_WP*this%Urms_tgt**3/this%cfg%xL
+         this%tko_tgt=sqrt(this%visc/this%eps_tgt)
+         this%eta_tgt=(this%visc**3/this%eps_tgt)**(0.25_WP)
+         this%Rel_tgt=sqrt(3.0_WP*this%Urms_tgt*this%cfg%xL/this%visc)
+         this%Ret_tgt=this%tke_tgt**2/(this%eps_tgt*this%visc)
+         this%tau_tgt=2.0_WP*this%tke_tgt/(3.0_WP*this%eps_tgt)
+         ! Read in forcing parameter (we need dt<tau_tgt/forcing)
+         max_forcing_estimate=5.0_WP*this%tau_tgt*this%Urms_tgt/this%cfg%min_meshsize
+         call param_read('Forcing constant',this%forcing,default=max_forcing_estimate)
+         ! Output nominal turbulence parameters
+         if (this%cfg%amRoot) then
+            write(message,'("Target turbulence parameters:")'); call log(message)
+            write(message,'("[HIT setup] => Urms              =",es12.5)') this%Urms_tgt; call log(message)
+            write(message,'("[HIT setup] => Re_lambda         =",es12.5)') this%Rel_tgt; call log(message)
+            write(message,'("[HIT setup] => Re_turb           =",es12.5)') this%Ret_tgt; call log(message)
+            write(message,'("[HIT setup] => Kolmogorov Lscale =",es12.5)') this%eta_tgt; call log(message)
+            write(message,'("[HIT setup] => Kolmogorov Tscale =",es12.5)') this%tko_tgt; call log(message)
+            write(message,'("[HIT setup] => Epsilon           =",es12.5)') this%eps_tgt; call log(message)
+            write(message,'("[HIT setup] => Eddyturnover time =",es12.5)') this%tau_tgt; call log(message)
+         end if
          ! Gaussian initial field
          do k=this%fs%cfg%kmin_,this%fs%cfg%kmax_
             do j=this%fs%cfg%jmin_,this%fs%cfg%jmax_
                do i=this%fs%cfg%imin_,this%fs%cfg%imax_
-                  this%fs%U(i,j,k)=random_normal(m=0.0_WP,sd=1.0_WP)
-                  this%fs%V(i,j,k)=random_normal(m=0.0_WP,sd=1.0_WP)
-                  this%fs%W(i,j,k)=random_normal(m=0.0_WP,sd=1.0_WP)
+                  this%fs%U(i,j,k)=random_normal(m=0.0_WP,sd=this%Urms_tgt)
+                  this%fs%V(i,j,k)=random_normal(m=0.0_WP,sd=this%Urms_tgt)
+                  this%fs%W(i,j,k)=random_normal(m=0.0_WP,sd=this%Urms_tgt)
                end do
             end do
          end do
@@ -216,12 +231,12 @@ contains
          call this%mfile%add_column(this%fs%Umax,'Umax')
          call this%mfile%add_column(this%fs%Vmax,'Vmax')
          call this%mfile%add_column(this%fs%Wmax,'Wmax')
-         call this%mfile%add_column(this%Re_turb,'Re_turb')
-         call this%mfile%add_column(this%Re_lambda,'Re_lambda')
+         call this%mfile%add_column(this%Ret,'Re_turb')
+         call this%mfile%add_column(this%Rel,'Re_lambda')
          call this%mfile%add_column(this%Urms,'Urms')
          call this%mfile%add_column(this%TKE,'TKE')
          call this%mfile%add_column(this%EPS,'Epsilon')
-         call this%mfile%add_column(this%ell,'Integral length')
+         call this%mfile%add_column(this%ell,'Large eddy size')
          call this%mfile%add_column(this%eta,'Kolmogorov length')
          call this%mfile%write()
       end block create_monitor
@@ -283,9 +298,9 @@ contains
                   end do
                end do
             end do
-            call MPI_ALLREDUCE(myTKE,this%TKE,1,MPI_REAL_WP,MPI_SUM,this%fs%cfg%comm,ierr); this%TKE=this%TKE/this%fs%cfg%vol_total
+            call MPI_ALLREDUCE(myTKE,this%tke,1,MPI_REAL_WP,MPI_SUM,this%fs%cfg%comm,ierr); this%tke=this%tke/this%fs%cfg%vol_total
             call MPI_ALLREDUCE(myEPSp,EPSp,1,MPI_REAL_WP,MPI_SUM,this%fs%cfg%comm,ierr); EPSp=EPSp*this%visc/this%fs%cfg%vol_total
-            A=(EPSp-this%forcing*(this%TKE-1.5_WP))/(2.0_WP*this%TKE)
+            A=(EPSp-this%forcing*(this%tke-this%tke_tgt)/this%tau_tgt)/(2.0_WP*this%tke)
             this%resU=this%resU+A*this%time%dt*(this%fs%U-this%meanU)
             this%resV=this%resV+A*this%time%dt*(this%fs%V-this%meanV)
             this%resW=this%resW+A*this%time%dt*(this%fs%W-this%meanW)

@@ -2,21 +2,24 @@
 Partition :	1 1 8
 
 # Mesh definition
-Domain length :   10
-Number of cells : 64
+X ligament : 2
+Lx : 20
+Ly : 10
+Lz : 10
+nx : 128
+ny : 64
+nz : 64
 
-# Fluid properties
-Weber number :    100
-Viscosity ratio : 10
-Density ratio :   10
+# Flow conditions
+Reynolds number :      100
+Turbulence intensity : 0.5
+Weber number :         5
+Viscosity ratio :      50
+Density ratio :        1000
 
-# Problem parameters
-Convective velocity : 1
-Ligament radius :     0.5
-Ligament location :   1
 
 # Time integration
-Max timestep size : 1e-2
+Max timestep size : 5e-2
 Max cfl number :    0.9
 
 # Pressure solver
