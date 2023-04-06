@@ -262,10 +262,10 @@ contains
       self%zL=self%z(self%kmax+1)-self%z(self%kmin)
       self%vol_total=self%xL*self%yL*self%zL
       
-      ! Check mesh uniformity - using 10*epsilon to test equality here
-      self%uniform_x=.false.; if (abs(maxval(self%dx)-minval(self%dx)).lt.10.0_WP*epsilon(maxval(self%dx))) self%uniform_x=.true.
-      self%uniform_y=.false.; if (abs(maxval(self%dy)-minval(self%dy)).lt.10.0_WP*epsilon(maxval(self%dy))) self%uniform_y=.true.
-      self%uniform_z=.false.; if (abs(maxval(self%dz)-minval(self%dz)).lt.10.0_WP*epsilon(maxval(self%dz))) self%uniform_z=.true.
+      ! Check mesh uniformity - using 20*epsilon to test equality here
+      self%uniform_x=.false.; if (abs(maxval(self%dx)-minval(self%dx)).lt.20.0_WP*epsilon(1.0_WP)) self%uniform_x=.true.
+      self%uniform_y=.false.; if (abs(maxval(self%dy)-minval(self%dy)).lt.20.0_WP*epsilon(1.0_WP)) self%uniform_y=.true.
+      self%uniform_z=.false.; if (abs(maxval(self%dz)-minval(self%dz)).lt.20.0_WP*epsilon(1.0_WP)) self%uniform_z=.true.
       
       ! If verbose run, log and or print grid
       if (verbose.gt.2) call self%log
