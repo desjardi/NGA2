@@ -6,9 +6,9 @@ X ligament : 2
 Lx : 20  !40
 Ly : 10  !20
 Lz : 10  !20
-nx : 128 !512
-ny : 64  !256
-nz : 64  !256
+nx : 128 !480
+ny : 64  !240
+nz : 64  !240
 
 # Flow conditions
 Reynolds number :      100
