@@ -1,2 +1,1 @@
-This is an implementation of a Rayleigh-Taylor instability. This is currently intended as a test of
-the variable density velocity and scalar solvers.
+This is a variable density jet.

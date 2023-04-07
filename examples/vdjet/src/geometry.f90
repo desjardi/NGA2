@@ -45,7 +45,7 @@ contains
          end do
          
          ! General serial grid object
-         grid=sgrid(coord=cartesian,no=2,x=x,y=y,z=z,xper=.false.,yper=.true.,zper=.true.,name='vdjet')
+         grid=sgrid(coord=cartesian,no=2,x=x,y=y,z=z,xper=.false.,yper=.false.,zper=.false.,name='vdjet')
          
       end block create_grid
       
@@ -66,7 +66,7 @@ contains
       
       ! Create masks for this config
       create_walls: block
-         cfg%VF=0.0_WP
+         cfg%VF=1.0_WP
       end block create_walls
       
       

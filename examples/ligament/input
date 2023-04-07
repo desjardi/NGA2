@@ -13,7 +13,7 @@ nz : 64  !240
 # Flow conditions
 Reynolds number :      100
 Turbulence intensity : 0.5
-Weber number :         5
+Weber number :         20
 Viscosity ratio :      50
 Density ratio :        1000
 
@@ -22,7 +22,7 @@ Max timestep size : 5e-2 !2e-2
 Max cfl number :    0.9
 
 # Pressure solver
-Pressure tolerance : 1e-6
+Pressure tolerance : 1e-5
 Pressure iteration : 100
 
 # Ensight output

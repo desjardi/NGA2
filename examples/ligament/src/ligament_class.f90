@@ -241,7 +241,7 @@ contains
       create_ensight: block
          use param, only: param_read
          ! Create Ensight output from cfg
-         this%ens_out=ensight(cfg=this%cfg,name='Ligament')
+         this%ens_out=ensight(cfg=this%cfg,name='ligament')
          ! Create event for Ensight output
          this%ens_evt=event(time=this%time,name='Ensight output')
          call param_read('Ensight output period',this%ens_evt%tper)

@@ -9,12 +9,12 @@ module simulation
    !> HIT simulation
    type(hit) :: turb
    logical :: isInHITGrp
-
+   
    !> Ligament atomization simulation
    type(ligament) :: atom
    
    public :: simulation_init,simulation_run,simulation_final
-
+   
 contains
    
    
@@ -65,7 +65,7 @@ contains
             end do
          end block prepare_hit
       end if
-
+      
       
    end subroutine simulation_init
    
@@ -117,5 +117,5 @@ contains
       
    end subroutine simulation_final
    
-
+   
 end module simulation
