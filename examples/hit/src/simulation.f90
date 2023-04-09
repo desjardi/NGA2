@@ -2,7 +2,7 @@
 module simulation
    use precision,         only: WP
    use geometry,          only: cfg,nx,Lx
-   use fourier3d_class,   only: fourier3d
+   use fftxyz_class,      only: fftxyz
    use incomp_class,      only: incomp
    use lpt_class,         only: lpt
    use timetracker_class, only: timetracker
@@ -14,7 +14,7 @@ module simulation
    private
    
    !> Single-phase incompressible flow solver, pressure and implicit solvers, and a time tracker
-   type(fourier3d),   public :: ps
+   type(fftxyz),      public :: ps
    type(incomp),      public :: fs
    type(timetracker), public :: time
    type(lpt),         public :: lp
@@ -130,7 +130,6 @@ contains
       
       ! Create a single-phase flow solver without bconds
       create_and_initialize_flow_solver: block
-         use hypre_str_class, only: pcg_pfmg
          ! Create flow solver
          fs=incomp(cfg=cfg,name='NS solver')
          ! Assign constant viscosity
@@ -138,7 +137,7 @@ contains
          ! Assign constant density
          call param_read('Density',fs%rho)
          ! Prepare and configure pressure solver
-         ps=fourier3d(cfg=cfg,name='Pressure',nst=7)
+         ps=fftxyz(cfg=cfg,name='Pressure',nst=7)
          ! Setup the solver
          call fs%setup(pressure_solver=ps)
       end block create_and_initialize_flow_solver

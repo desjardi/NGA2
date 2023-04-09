@@ -1,3 +1,10 @@
+!>*********************************************************
+!>* THiS CLASS IS NOW DEPRECATED AND WILL BE REMOVED SOON *
+!>*          Please use the fftxyz solver instead         *
+!>*********************************************************
+
+
+
 !> 3D FFT pressure solver concept is defined by extension of the linsol class
 !> This solver is specifically intended to be a FFT-based pressure Poisson solver
 !> for 3D periodic uniform computational domains decomposed in at most 2 directions
