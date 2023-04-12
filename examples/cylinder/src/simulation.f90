@@ -2,7 +2,8 @@
 module simulation
 	use precision,         only: WP
 	use geometry,          only: cfg
-	use hypre_str_class,   only: hypre_str
+   use fft2d_class,       only: fft2d
+   use ddadi_class,       only: ddadi
 	use incomp_class,      only: incomp
 	use timetracker_class, only: timetracker
 	use ensight_class,     only: ensight
@@ -12,8 +13,8 @@ module simulation
 	private
 	
 	!> Get a couple linear solvers, an incompressible flow solver and corresponding time tracker
-	type(hypre_str),   public :: ps
-	type(hypre_str),   public :: vs
+	type(fft2d),       public :: ps
+	type(ddadi),       public :: vs
 	type(incomp),      public :: fs
 	type(timetracker), public :: time
 	
@@ -93,8 +94,7 @@ contains
 		
 		! Create a two-phase flow solver without bconds
 	   create_flow_solver: block
-		   use hypre_str_class, only: pcg_pfmg
-			use incomp_class,    only: dirichlet,clipped_neumann
+			use incomp_class, only: dirichlet,clipped_neumann
 			real(WP) :: visc
 			! Create flow solver
 		   fs=incomp(cfg=cfg,name='Incompressible NS')
@@ -105,14 +105,9 @@ contains
 		   call fs%add_bcond(name='inflow', type=dirichlet      ,locator=left_of_domain ,face='x',dir=-1,canCorrect=.false.)
 			call fs%add_bcond(name='outflow',type=clipped_neumann,locator=right_of_domain,face='x',dir=+1,canCorrect=.true. )
 		   ! Configure pressure solver
-		   ps=hypre_str(cfg=cfg,name='Pressure',method=pcg_pfmg,nst=7)
-			ps%maxlevel=10
-			call param_read('Pressure iteration',ps%maxit)
-			call param_read('Pressure tolerance',ps%rcvg)
+		   ps=fft2d(cfg=cfg,name='Pressure',nst=7)
 			! Configure implicit velocity solver
-		   vs=hypre_str(cfg=cfg,name='Velocity',method=pcg_pfmg,nst=7)
-			call param_read('Implicit iteration',vs%maxit)
-			call param_read('Implicit tolerance',vs%rcvg)
+		   vs=ddadi(cfg=cfg,name='Velocity',nst=7)
 			! Setup the solver
 		   call fs%setup(pressure_solver=ps,implicit_solver=vs)
 	   end block create_flow_solver
@@ -132,14 +127,18 @@ contains
 						Vtheta=atan2(cfg%y(j),cfg%xm(i))
 						Wradius=sqrt(cfg%xm(i)**2+cfg%ym(j)**2)
 						Wtheta=atan2(cfg%ym(j),cfg%xm(i))
+                  ! Zero velocity
+                  Uib(i,j,k)=0.0_WP
+					   Vib(i,j,k)=0.0_WP
+					   Wib(i,j,k)=0.0_WP
 						! Pure rotation
 					   !Uib(i,j,k)=-2.0_WP*Uradius*sin(Utheta)
 					   !Vib(i,j,k)=+2.0_WP*Vradius*cos(Vtheta)
 					   !Wib(i,j,k)= 0.0_WP
 					   ! Pure blowing
-					   Uib(i,j,k)=+0.3_WP*cos(Utheta)
-						Vib(i,j,k)=+0.3_WP*sin(Vtheta)
-						Wib(i,j,k)= 0.0_WP
+					   !Uib(i,j,k)=+0.3_WP*cos(Utheta)
+						!Vib(i,j,k)=+0.3_WP*sin(Vtheta)
+						!Wib(i,j,k)= 0.0_WP
 					end do
 				end do
 			end do

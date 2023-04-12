@@ -1,5 +1,5 @@
 ifeq ($(USE_FFTW),TRUE)
-  f90EXE_sources += fourier_class.f90
+  f90EXE_sources += cfourier_class.f90 rfourier_class.f90
 endif
 
 INCLUDE_LOCATIONS += $(NGA_HOME)/src/transform

@@ -110,13 +110,7 @@ contains
       implicit none
       class(ddadi), intent(inout) :: this
       integer :: i,j,k,st
-      integer :: stx1,stx2,sty1,sty2,stz1,stz2
       
-      ! Get directional stencil size
-      stx1=minval(this%stc(:,1)); stx2=maxval(this%stc(:,1))
-      sty1=minval(this%stc(:,2)); sty2=maxval(this%stc(:,2))
-      stz1=minval(this%stc(:,3)); stz2=maxval(this%stc(:,3))
-
       ! Update DDADI operators
       this%dsol%Ax=0.0_WP
       this%dsol%Ay=0.0_WP

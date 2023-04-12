@@ -2,7 +2,7 @@
 module hit_class
    use precision,         only: WP
    use config_class,      only: config
-   use fftxyz_class,      only: fftxyz
+   use fft3d_class,       only: fft3d
    use incomp_class,      only: incomp
    use timetracker_class, only: timetracker
    use monitor_class,     only: monitor
@@ -17,7 +17,7 @@ module hit_class
       type(config)      :: cfg   !< Mesh for solver
       !> Flow solver
       type(incomp)      :: fs    !< Incompressible flow solver
-      type(fftxyz)      :: ps    !< FFT-based linear solver
+      type(fft3d)       :: ps    !< FFT-based linear solver
       type(timetracker) :: time  !< Time info
       !> Simulation monitor file
       type(monitor) :: mfile     !< General simulation monitoring
@@ -145,7 +145,7 @@ contains
          call param_read('Reynolds number',this%visc); this%visc=1.0_WP/this%visc
          this%fs%visc=this%visc
          ! Prepare and configure pressure solver
-         this%ps=fftxyz(cfg=this%cfg,name='Pressure',nst=7)
+         this%ps=fft3d(cfg=this%cfg,name='Pressure',nst=7)
          ! Setup the solver
          call this%fs%setup(pressure_solver=this%ps)
       end block create_flow_solver

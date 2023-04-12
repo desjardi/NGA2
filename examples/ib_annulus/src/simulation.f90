@@ -3,7 +3,7 @@ module simulation
    use precision,         only: WP
    use geometry,          only: cfg,Dout
    use hypre_str_class,   only: hypre_str
-   use fftxyz_class,      only: fftxyz
+   use fft3d_class,       only: fft3d
    use incomp_class,      only: incomp
    use sgsmodel_class,    only: sgsmodel
    use timetracker_class, only: timetracker
@@ -16,7 +16,7 @@ module simulation
    !> Get an an incompressible solver, pressure solver, and corresponding time tracker
    type(incomp),      public :: fs
    !type(hypre_str),   public :: ps
-   type(fftxyz),      public :: ps
+   type(fft3d),       public :: ps
    type(hypre_str),   public :: vs
    type(sgsmodel),    public :: sgs
    type(timetracker), public :: time
@@ -94,7 +94,7 @@ contains
          call param_read('Density',fs%rho)
          call param_read('Dynamic viscosity',visc); fs%visc=visc
          ! Configure pressure solver
-         ps=fftxyz(cfg=cfg,name='Pressure',nst=7)
+         ps=fft3d(cfg=cfg,name='Pressure',nst=7)
          !ps=hypre_str(cfg=cfg,name='Pressure',method=pcg_pfmg,nst=7)
          !ps%maxlevel=14
          !call param_read('Pressure iteration',ps%maxit)

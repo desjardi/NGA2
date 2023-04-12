@@ -1,10 +1,10 @@
 !> FFT for periodic uniform computational domains decomposed in at most 2 directions.
-!> Makes use of FFTW and in-house parallel transpose operations.
+!> Makes use of complex to complex FFTW and in-house parallel transpose operations.
 !>
 !> Unlike FFTW (and several other libaries), the transforms provided by this class have the correct
 !> scaling and sign. Forward and backward are truly inverses no further multiplication is necessary.
 !> Real-space integral and Fourier-space zero value is preserved through forward & inverse transforms.
-module fourier_class
+module cfourier_class
    use precision,    only: WP
    use pgrid_class,  only: pgrid
    use string,       only: str_short
@@ -14,11 +14,11 @@ module fourier_class
    
    
    ! Expose type/constructor/methods
-   public :: fourier
+   public :: cfourier
    
    
-   !> Fourier object definition
-   type :: fourier
+   !> cfourier object definition
+   type :: cfourier
       
       !> Pointer to our pgrid
       class(pgrid), pointer :: pg
@@ -93,28 +93,28 @@ module fourier_class
       procedure, private :: ytranspose_backward       !< Backward transpose in y
       procedure, private :: ztranspose_backward       !< Backward transpose in z
       
-      procedure :: print=>fourier_print               !< Long-form printing of transform status
-      procedure :: log=>fourier_log                   !< Long-form logging of transform status
-      final :: fourier_destroy                        !< Destructor
+      procedure :: print=>cfourier_print               !< Long-form printing of transform status
+      procedure :: log=>cfourier_log                   !< Long-form logging of transform status
+      final :: cfourier_destroy                        !< Destructor
       
-   end type fourier
+   end type cfourier
    
    
-   !> Declare fourier constructor
-   interface fourier
-      procedure fourier_from_args
-   end interface fourier
+   !> Declare cfourier constructor
+   interface cfourier
+      procedure cfourier_from_args
+   end interface cfourier
    
    
 contains
    
    
-   !> Constructor for a fourier object
-   function fourier_from_args(pg) result(self)
+   !> Constructor for a cfourier object
+   function cfourier_from_args(pg) result(self)
       use messager, only: die
       use param,    only: verbose
       implicit none
-      type(fourier) :: self
+      type(cfourier) :: self
       class(pgrid), target, intent(in) :: pg
       include 'fftw3.f03'
       
@@ -159,21 +159,23 @@ contains
          self%bplan_z=fftw_plan_dft_1d(self%pg%nz,self%in_z,self%out_z,FFTW_BACKWARD,FFTW_MEASURE)
       end if
       
-      ! Find who owns the oddball
-      self%oddball=all([self%pg%iproc,self%pg%jproc,self%pg%kproc].eq.1)
+      ! Find which process owns the oddball, if any
+      self%oddball=.false.
+      if (all([self%xfft_avail,self%yfft_avail,self%zfft_avail]).and.&
+      &   all([self%pg%iproc,self%pg%jproc,self%pg%kproc].eq.1)) self%oddball=.true.
       
       ! If verbose run, log and or print grid
       if (verbose.gt.1) call self%log()
       if (verbose.gt.2) call self%print()
       
-   end function fourier_from_args
+   end function cfourier_from_args
    
    
    !> Initialize transpose tool in x
    subroutine xtranspose_init(this)
-      use mpi_f08
+      use mpi_f08, only: MPI_AllGather,MPI_INTEGER
       implicit none
-      class(fourier), intent(inout) :: this
+      class(cfourier), intent(inout) :: this
       integer :: ierr,ip,q,r
       
       ! Determine non-decomposed direction to use for transpose
@@ -289,9 +291,9 @@ contains
    
    !> Initialize transpose tool in y
    subroutine ytranspose_init(this)
-      use mpi_f08
+      use mpi_f08, only: MPI_AllGather,MPI_INTEGER
       implicit none
-      class(fourier), intent(inout) :: this
+      class(cfourier), intent(inout) :: this
       integer :: ierr,jp,q,r
       
       ! Determine non-decomposed direction to use for transpose
@@ -407,9 +409,9 @@ contains
    
    !> Initialize transpose tool in z
    subroutine ztranspose_init(this)
-      use mpi_f08
+      use mpi_f08, only: MPI_AllGather,MPI_INTEGER
       implicit none
-      class(fourier), intent(inout) :: this
+      class(cfourier), intent(inout) :: this
       integer :: ierr,kp,q,r
       
       ! Determine non-decomposed direction to use for transpose
@@ -525,9 +527,10 @@ contains
    
    !> Perform forward transpose in x
    subroutine xtranspose_forward(this,A,At)
-      use mpi_f08
+      use mpi_f08,  only: MPI_AllToAll
+      use parallel, only: MPI_COMPLEX_WP
       implicit none
-      class(fourier), intent(inout) :: this
+      class(cfourier), intent(inout) :: this
       complex(WP), dimension(this%pg%imin_:,this%pg%jmin_:,this%pg%kmin_:), intent(in) :: A
       complex(WP), dimension(this%pg%imin :,this%jmin_x(this%pg%iproc):,this%kmin_x(this%pg%iproc):), intent(out) :: At
       integer :: i,j,k,ip,ii,jj,kk,ierr
@@ -549,7 +552,7 @@ contains
                end do
             end do
          end do
-         call MPI_AllToAll(this%sendbuf_x,this%sendcount_x,MPI_DOUBLE_COMPLEX,this%recvbuf_x,this%recvcount_x,MPI_DOUBLE_COMPLEX,this%pg%xcomm,ierr)
+         call MPI_AllToAll(this%sendbuf_x,this%sendcount_x,MPI_COMPLEX_WP,this%recvbuf_x,this%recvcount_x,MPI_COMPLEX_WP,this%pg%xcomm,ierr)
          do ip=1,this%pg%npx
             do k=this%pg%kmin_,this%pg%kmax_
                do j=this%jmin_x(this%pg%iproc),this%jmax_x(this%pg%iproc)
@@ -574,7 +577,7 @@ contains
                end do
             end do
          end do
-         call MPI_AllToAll(this%sendbuf_x,this%sendcount_x,MPI_DOUBLE_COMPLEX,this%recvbuf_x,this%recvcount_x,MPI_DOUBLE_COMPLEX,this%pg%xcomm,ierr)
+         call MPI_AllToAll(this%sendbuf_x,this%sendcount_x,MPI_COMPLEX_WP,this%recvbuf_x,this%recvcount_x,MPI_COMPLEX_WP,this%pg%xcomm,ierr)
          do ip=1,this%pg%npx
             do k=this%kmin_x(this%pg%iproc),this%kmax_x(this%pg%iproc)
                do j=this%pg%jmin_,this%pg%jmax_
@@ -593,9 +596,10 @@ contains
    
    !> Perform forward transpose in y
    subroutine ytranspose_forward(this,A,At)
-      use mpi_f08
+      use mpi_f08,  only: MPI_AllToAll
+      use parallel, only: MPI_COMPLEX_WP
       implicit none
-      class(fourier), intent(inout) :: this
+      class(cfourier), intent(inout) :: this
       complex(WP), dimension(this%pg%imin_:,this%pg%jmin_:,this%pg%kmin_:), intent(in) :: A
       complex(WP), dimension(this%imin_y(this%pg%jproc):,this%pg%jmin:,this%kmin_y(this%pg%jproc):), intent(out) :: At
       integer :: i,j,k,jp,ii,jj,kk,ierr
@@ -614,7 +618,7 @@ contains
                end do
             end do
          end do
-         call MPI_AllToAll(this%sendbuf_y,this%sendcount_y,MPI_DOUBLE_COMPLEX,this%recvbuf_y,this%recvcount_y,MPI_DOUBLE_COMPLEX,this%pg%ycomm,ierr)
+         call MPI_AllToAll(this%sendbuf_y,this%sendcount_y,MPI_COMPLEX_WP,this%recvbuf_y,this%recvcount_y,MPI_COMPLEX_WP,this%pg%ycomm,ierr)
          do jp=1,this%pg%npy
             do k=this%pg%kmin_,this%pg%kmax_
                do j=this%jmin_y(jp),this%jmax_y(jp)
@@ -642,7 +646,7 @@ contains
                end do
             end do
          end do
-         call MPI_AllToAll(this%sendbuf_y,this%sendcount_y,MPI_DOUBLE_COMPLEX,this%recvbuf_y,this%recvcount_y,MPI_DOUBLE_COMPLEX,this%pg%ycomm,ierr)
+         call MPI_AllToAll(this%sendbuf_y,this%sendcount_y,MPI_COMPLEX_WP,this%recvbuf_y,this%recvcount_y,MPI_COMPLEX_WP,this%pg%ycomm,ierr)
          do jp=1,this%pg%npy
             do k=this%kmin_y(this%pg%jproc),this%kmax_y(this%pg%jproc)
                do j=this%jmin_y(jp),this%jmax_y(jp)
@@ -661,9 +665,10 @@ contains
    
    !> Perform forward transpose in z
    subroutine ztranspose_forward(this,A,At)
-      use mpi_f08
+      use mpi_f08,  only: MPI_AllToAll
+      use parallel, only: MPI_COMPLEX_WP
       implicit none
-      class(fourier), intent(inout) :: this
+      class(cfourier), intent(inout) :: this
       complex(WP), dimension(this%pg%imin_:,this%pg%jmin_:,this%pg%kmin_:), intent(in) :: A
       complex(WP), dimension(this%imin_z(this%pg%kproc):,this%jmin_z(this%pg%kproc):,this%pg%kmin:), intent(out) :: At
       integer :: i,j,k,kp,ii,jj,kk,ierr
@@ -682,7 +687,7 @@ contains
                end do
             end do
          end do
-         call MPI_AllToAll(this%sendbuf_z,this%sendcount_z,MPI_DOUBLE_COMPLEX,this%recvbuf_z,this%recvcount_z,MPI_DOUBLE_COMPLEX,this%pg%zcomm,ierr)
+         call MPI_AllToAll(this%sendbuf_z,this%sendcount_z,MPI_COMPLEX_WP,this%recvbuf_z,this%recvcount_z,MPI_COMPLEX_WP,this%pg%zcomm,ierr)
          do kp=1,this%pg%npz
             do k=this%kmin_z(kp),this%kmax_z(kp)
                do j=this%pg%jmin_,this%pg%jmax_
@@ -707,7 +712,7 @@ contains
                end do
             end do
          end do
-         call MPI_AllToAll(this%sendbuf_z,this%sendcount_z,MPI_DOUBLE_COMPLEX,this%recvbuf_z,this%recvcount_z,MPI_DOUBLE_COMPLEX,this%pg%zcomm,ierr)
+         call MPI_AllToAll(this%sendbuf_z,this%sendcount_z,MPI_COMPLEX_WP,this%recvbuf_z,this%recvcount_z,MPI_COMPLEX_WP,this%pg%zcomm,ierr)
          do kp=1,this%pg%npz
             do k=this%kmin_z(kp),this%kmax_z(kp)
                do j=this%jmin_z(this%pg%kproc),this%jmax_z(this%pg%kproc)
@@ -729,9 +734,10 @@ contains
    
    !> Perform backward transpose in x
    subroutine xtranspose_backward(this,At,A)
-      use mpi_f08
+      use mpi_f08,  only: MPI_AllToAll
+      use parallel, only: MPI_COMPLEX_WP
       implicit none
-      class(fourier), intent(inout) :: this
+      class(cfourier), intent(inout) :: this
       complex(WP), dimension(this%pg%imin :,this%jmin_x(this%pg%iproc):,this%kmin_x(this%pg%iproc):), intent(in) :: At
       complex(WP), dimension(this%pg%imin_:,this%pg%jmin_:,this%pg%kmin_:), intent(out) :: A
       integer :: i,j,k,ip,ii,jj,kk,ierr
@@ -753,7 +759,7 @@ contains
                end do
             end do
          end do
-         call MPI_AllToAll(this%sendbuf_x,this%sendcount_x,MPI_DOUBLE_COMPLEX,this%recvbuf_x,this%recvcount_x,MPI_DOUBLE_COMPLEX,this%pg%xcomm,ierr)
+         call MPI_AllToAll(this%sendbuf_x,this%sendcount_x,MPI_COMPLEX_WP,this%recvbuf_x,this%recvcount_x,MPI_COMPLEX_WP,this%pg%xcomm,ierr)
          do ip=1,this%pg%npx
             do k=this%pg%kmin_,this%pg%kmax_
                do j=this%jmin_x(ip),this%jmax_x(ip)
@@ -778,7 +784,7 @@ contains
                end do
             end do
          end do
-         call MPI_AllToAll(this%sendbuf_x,this%sendcount_x,MPI_DOUBLE_COMPLEX,this%recvbuf_x,this%recvcount_x,MPI_DOUBLE_COMPLEX,this%pg%xcomm,ierr)
+         call MPI_AllToAll(this%sendbuf_x,this%sendcount_x,MPI_COMPLEX_WP,this%recvbuf_x,this%recvcount_x,MPI_COMPLEX_WP,this%pg%xcomm,ierr)
          do ip=1,this%pg%npx
             do k=this%kmin_x(ip),this%kmax_x(ip)
                do j=this%pg%jmin_,this%pg%jmax_
@@ -797,9 +803,10 @@ contains
    
    !> Perform backward transpose in y
    subroutine ytranspose_backward(this,At,A)
-      use mpi_f08
+      use mpi_f08,  only: MPI_AllToAll
+      use parallel, only: MPI_COMPLEX_WP
       implicit none
-      class(fourier), intent(inout) :: this
+      class(cfourier), intent(inout) :: this
       complex(WP), dimension(this%imin_y(this%pg%jproc):,this%pg%jmin:,this%kmin_y(this%pg%jproc):), intent(in) :: At
       complex(WP), dimension(this%pg%imin_:,this%pg%jmin_:,this%pg%kmin_:), intent(out) :: A
       integer :: i,j,k,jp,ii,jj,kk,ierr
@@ -818,7 +825,7 @@ contains
                end do
             end do
          end do
-         call MPI_AllToAll(this%sendbuf_y,this%sendcount_y,MPI_DOUBLE_COMPLEX,this%recvbuf_y,this%recvcount_y,MPI_DOUBLE_COMPLEX,this%pg%ycomm,ierr)
+         call MPI_AllToAll(this%sendbuf_y,this%sendcount_y,MPI_COMPLEX_WP,this%recvbuf_y,this%recvcount_y,MPI_COMPLEX_WP,this%pg%ycomm,ierr)
          do jp=1,this%pg%npy
             do k=this%pg%kmin_,this%pg%kmax_
                do j=this%jmin_y(this%pg%jproc),this%jmax_y(this%pg%jproc)
@@ -846,7 +853,7 @@ contains
                end do
             end do
          end do
-         call MPI_AllToAll(this%sendbuf_y,this%sendcount_y,MPI_DOUBLE_COMPLEX,this%recvbuf_y,this%recvcount_y,MPI_DOUBLE_COMPLEX,this%pg%ycomm,ierr)
+         call MPI_AllToAll(this%sendbuf_y,this%sendcount_y,MPI_COMPLEX_WP,this%recvbuf_y,this%recvcount_y,MPI_COMPLEX_WP,this%pg%ycomm,ierr)
          do jp=1,this%pg%npy
             do k=this%kmin_y(jp),this%kmax_y(jp)
                do j=this%jmin_y(this%pg%jproc),this%jmax_y(this%pg%jproc)
@@ -865,9 +872,10 @@ contains
    
    !> Perform backward transpose in z
    subroutine ztranspose_backward(this,At,A)
-      use mpi_f08
+      use mpi_f08,  only: MPI_AllToAll
+      use parallel, only: MPI_COMPLEX_WP
       implicit none
-      class(fourier), intent(inout) :: this
+      class(cfourier), intent(inout) :: this
       complex(WP), dimension(this%imin_z(this%pg%kproc):,this%jmin_z(this%pg%kproc):,this%pg%kmin:), intent(in) :: At
       complex(WP), dimension(this%pg%imin_:,this%pg%jmin_:,this%pg%kmin_:), intent(out) :: A
       integer :: i,j,k,kp,ii,jj,kk,ierr
@@ -886,7 +894,7 @@ contains
                end do
             end do
          end do
-         call MPI_AllToAll(this%sendbuf_z,this%sendcount_z,MPI_DOUBLE_COMPLEX,this%recvbuf_z,this%recvcount_z,MPI_DOUBLE_COMPLEX,this%pg%zcomm,ierr)
+         call MPI_AllToAll(this%sendbuf_z,this%sendcount_z,MPI_COMPLEX_WP,this%recvbuf_z,this%recvcount_z,MPI_COMPLEX_WP,this%pg%zcomm,ierr)
          do kp=1,this%pg%npz
             do k=this%kmin_z(this%pg%kproc),this%kmax_z(this%pg%kproc)
                do j=this%pg%jmin_,this%pg%jmax_
@@ -911,7 +919,7 @@ contains
                end do
             end do
          end do
-         call MPI_AllToAll(this%sendbuf_z,this%sendcount_z,MPI_DOUBLE_COMPLEX,this%recvbuf_z,this%recvcount_z,MPI_DOUBLE_COMPLEX,this%pg%zcomm,ierr)
+         call MPI_AllToAll(this%sendbuf_z,this%sendcount_z,MPI_COMPLEX_WP,this%recvbuf_z,this%recvcount_z,MPI_COMPLEX_WP,this%pg%zcomm,ierr)
          do kp=1,this%pg%npz
             do k=this%kmin_z(this%pg%kproc),this%kmax_z(this%pg%kproc)
                do j=this%jmin_z(kp),this%jmax_z(kp)
@@ -935,12 +943,12 @@ contains
    subroutine xtransform_forward(this,A)
       use messager, only: die
       implicit none
-      class(fourier), intent(inout) :: this
+      class(cfourier), intent(inout) :: this
       complex(WP), dimension(this%pg%imin_:,this%pg%jmin_:,this%pg%kmin_:), intent(inout) :: A         !< Needs to be (imin_:imax_,jmin_:jmax_,kmin_:kmax_)
       integer :: j,k
       include 'fftw3.f03'
       ! Check availability of fft in x
-      if (.not.this%xfft_avail) call die('[fourier] Fourier transform is not available in x')
+      if (.not.this%xfft_avail) call die('[cfourier] Fourier transform is not available in x')
       ! Nothing to do if single cell
       if (this%pg%nx.eq.1) return
       ! Transpose in X
@@ -962,12 +970,12 @@ contains
    subroutine ytransform_forward(this,A)
       use messager, only: die
       implicit none
-      class(fourier), intent(inout) :: this
+      class(cfourier), intent(inout) :: this
       complex(WP), dimension(this%pg%imin_:,this%pg%jmin_:,this%pg%kmin_:), intent(inout) :: A         !< Needs to be (imin_:imax_,jmin_:jmax_,kmin_:kmax_)
       integer :: i,k
       include 'fftw3.f03'
       ! Check availability of fft in y
-      if (.not.this%yfft_avail) call die('[fourier] Fourier transform is not available in y')
+      if (.not.this%yfft_avail) call die('[cfourier] Fourier transform is not available in y')
       ! Nothing to do if single cell
       if (this%pg%ny.eq.1) return
       ! Transpose in Y
@@ -989,12 +997,12 @@ contains
    subroutine ztransform_forward(this,A)
       use messager, only: die
       implicit none
-      class(fourier), intent(inout) :: this
+      class(cfourier), intent(inout) :: this
       complex(WP), dimension(this%pg%imin_:,this%pg%jmin_:,this%pg%kmin_:), intent(inout) :: A         !< Needs to be (imin_:imax_,jmin_:jmax_,kmin_:kmax_)
       integer :: i,j
       include 'fftw3.f03'
       ! Check availability of fft in z
-      if (.not.this%zfft_avail) call die('[fourier] Fourier transform is not available in z')
+      if (.not.this%zfft_avail) call die('[cfourier] Fourier transform is not available in z')
       ! Nothing to do if single cell
       if (this%pg%nz.eq.1) return
       ! Transpose in Z
@@ -1016,12 +1024,12 @@ contains
    subroutine xtransform_backward(this,A)
       use messager, only: die
       implicit none
-      class(fourier), intent(inout) :: this
+      class(cfourier), intent(inout) :: this
       complex(WP), dimension(this%pg%imin_:,this%pg%jmin_:,this%pg%kmin_:), intent(inout) :: A         !< Needs to be (imin_:imax_,jmin_:jmax_,kmin_:kmax_)
       integer :: j,k
       include 'fftw3.f03'
       ! Check availability of fft in x
-      if (.not.this%xfft_avail) call die('[fourier] Fourier transform is not available in x')
+      if (.not.this%xfft_avail) call die('[cfourier] Fourier transform is not available in x')
       ! Nothing to do if single cell
       if (this%pg%nx.eq.1) return
       ! Transpose in X
@@ -1031,7 +1039,7 @@ contains
          do j=this%jmin_x(this%pg%iproc),this%jmax_x(this%pg%iproc)
             this%in_x=this%xtrans(:,j,k)
             call fftw_execute_dft(this%bplan_x,this%in_x,this%out_x)
-            this%xtrans(:,j,k)=this%out_x/this%pg%nx
+            this%xtrans(:,j,k)=this%out_x/real(this%pg%nx,WP)
          end do
       end do
       ! Transpose back
@@ -1043,12 +1051,12 @@ contains
    subroutine ytransform_backward(this,A)
       use messager, only: die
       implicit none
-      class(fourier), intent(inout) :: this
+      class(cfourier), intent(inout) :: this
       complex(WP), dimension(this%pg%imin_:,this%pg%jmin_:,this%pg%kmin_:), intent(inout) :: A         !< Needs to be (imin_:imax_,jmin_:jmax_,kmin_:kmax_)
       integer :: i,k
       include 'fftw3.f03'
       ! Check availability of fft in y
-      if (.not.this%yfft_avail) call die('[fourier] Fourier transform is not available in y')
+      if (.not.this%yfft_avail) call die('[cfourier] Fourier transform is not available in y')
       ! Nothing to do if single cell
       if (this%pg%ny.eq.1) return
       ! Transpose in Y
@@ -1058,7 +1066,7 @@ contains
          do i=this%imin_y(this%pg%jproc),this%imax_y(this%pg%jproc)
             this%in_y=this%ytrans(i,:,k)
             call fftw_execute_dft(this%bplan_y,this%in_y,this%out_y)
-            this%ytrans(i,:,k)=this%out_y/this%pg%ny
+            this%ytrans(i,:,k)=this%out_y/real(this%pg%ny,WP)
          end do
       end do
       ! Transpose back
@@ -1070,12 +1078,12 @@ contains
    subroutine ztransform_backward(this,A)
       use messager, only: die
       implicit none
-      class(fourier), intent(inout) :: this
+      class(cfourier), intent(inout) :: this
       complex(WP), dimension(this%pg%imin_:,this%pg%jmin_:,this%pg%kmin_:), intent(inout) :: A         !< Needs to be (imin_:imax_,jmin_:jmax_,kmin_:kmax_)
       integer :: i,j
       include 'fftw3.f03'
       ! Check availability of fft in z
-      if (.not.this%zfft_avail) call die('[fourier] Fourier transform is not available in z')
+      if (.not.this%zfft_avail) call die('[cfourier] Fourier transform is not available in z')
       ! Nothing to do if single cell
       if (this%pg%nz.eq.1) return
       ! Transpose in Z
@@ -1085,7 +1093,7 @@ contains
          do i=this%imin_z(this%pg%kproc),this%imax_z(this%pg%kproc)
             this%in_z=this%ztrans(i,j,:)
             call fftw_execute_dft(this%bplan_z,this%in_z,this%out_z)
-            this%ztrans(i,j,:)=this%out_z/this%pg%nz
+            this%ztrans(i,j,:)=this%out_z/real(this%pg%nz,WP)
          end do
       end do
       ! Transpose back
@@ -1093,10 +1101,10 @@ contains
    end subroutine ztransform_backward
    
    
-   !> Destroy fourier object
-   subroutine fourier_destroy(this)
+   !> Destroy cfourier object
+   subroutine cfourier_destroy(this)
       implicit none
-      type(fourier) :: this
+      type(cfourier) :: this
       include 'fftw3.f03'
       if (this%pg%nx.gt.1.and.this%xfft_avail) then
          call fftw_destroy_plan(this%fplan_x)
@@ -1113,15 +1121,15 @@ contains
          call fftw_destroy_plan(this%bplan_z)
          deallocate(this%in_z,this%out_z,this%ztrans,this%imin_z,this%imax_z,this%jmin_z,this%jmax_z,this%kmin_z,this%kmax_z,this%nx_z,this%ny_z,this%nz_z,this%sendbuf_z,this%recvbuf_z)
       end if
-   end subroutine fourier_destroy
+   end subroutine cfourier_destroy
    
    
-   !> Log fourier info
-   subroutine fourier_log(this)
+   !> Log cfourier info
+   subroutine cfourier_log(this)
       use string,   only: str_long
       use messager, only: log
       implicit none
-      class(fourier), intent(in) :: this
+      class(cfourier), intent(in) :: this
       character(len=str_long) :: message
       character(len=3) :: dir
       if (this%pg%amRoot) then
@@ -1129,25 +1137,25 @@ contains
          if (this%xfft_avail) dir(1:1)='x'
          if (this%yfft_avail) dir(2:2)='y'
          if (this%zfft_avail) dir(3:3)='z'
-         write(message,'("Fourier for pgrid [",a,"] available in directions [",a,"]")') trim(this%pg%name),dir; call log(message)
+         write(message,'("cfourier for pgrid [",a,"] available in directions [",a,"]")') trim(this%pg%name),dir; call log(message)
       end if
-   end subroutine fourier_log
+   end subroutine cfourier_log
    
    
-   !> Print fourier info to the screen
-   subroutine fourier_print(this)
+   !> Print cfourier info to the screen
+   subroutine cfourier_print(this)
       use, intrinsic :: iso_fortran_env, only: output_unit
       implicit none
-      class(fourier), intent(in) :: this
+      class(cfourier), intent(in) :: this
       character(len=3) :: dir
       if (this%pg%amRoot) then
          dir=''
          if (this%xfft_avail) dir(1:1)='x'
          if (this%yfft_avail) dir(2:2)='y'
          if (this%zfft_avail) dir(3:3)='z'
-         write(output_unit,'("Fourier for pgrid [",a,"] available in directions [",a,"]")') trim(this%pg%name),dir
+         write(output_unit,'("cfourier for pgrid [",a,"] available in directions [",a,"]")') trim(this%pg%name),dir
       end if
-   end subroutine fourier_print
+   end subroutine cfourier_print
    
    
-end module fourier_class
+end module cfourier_class

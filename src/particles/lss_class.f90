@@ -348,7 +348,7 @@ contains
          integer :: nb,nbond
          real(WP), dimension(3) :: rpos
          real(WP) :: dist
-
+         
          ! Loop over particles
          do n1=1,this%np_
             ! Create copy of our particle
@@ -499,7 +499,7 @@ contains
    !> p%id=-1 => do not solve for velocity
    !> p%id= 0 => do not update force
    subroutine advance(this,dt)
-      use mpi_f08, only : MPI_SUM,MPI_INTEGER
+      use mpi_f08,   only : MPI_SUM,MPI_INTEGER
       use mathtools, only: Pi
       implicit none
       class(lss), intent(inout) :: this

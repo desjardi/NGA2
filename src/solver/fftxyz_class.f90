@@ -3,10 +3,10 @@
 !> for 3D periodic uniform computational domains decomposed in at most 2 directions
 !> Uses fourier_class for Fourier transform
 module fftxyz_class
-   use precision,     only: WP
-   use config_class,  only: config
-   use fourier_class, only: fourier
-   use linsol_class,  only: linsol
+   use precision,      only: WP
+   use config_class,   only: config
+   use cfourier_class, only: cfourier
+   use linsol_class,   only: linsol
    implicit none
    private
    
@@ -19,7 +19,7 @@ module fftxyz_class
    type, extends(linsol) :: fftxyz
       
       !> Fourier object
-      class(fourier), allocatable :: dft
+      class(cfourier), allocatable :: dft
       
       !> Unstrided arrays
       complex(WP), dimension(:,:,:), allocatable :: factored_operator
@@ -82,8 +82,9 @@ contains
       allocate(self%factored_operator(self%cfg%imin_:self%cfg%imax_,self%cfg%jmin_:self%cfg%jmax_,self%cfg%kmin_:self%cfg%kmax_))
       allocate(self%transformed_rhs  (self%cfg%imin_:self%cfg%imax_,self%cfg%jmin_:self%cfg%jmax_,self%cfg%kmin_:self%cfg%kmax_))
       
-      ! Create a fourier object
-      self%dft=fourier(self%cfg)
+      ! Create a cfourier object
+      self%dft=cfourier(self%cfg)
+      if (.not.all([self%dft%xfft_avail,self%dft%yfft_avail,self%dft%zfft_avail])) call die('[fftxyz constructor] FFT must be available in x, y, and z')
       
       ! Setup is not done
       self%setup_done=.false.
@@ -138,7 +139,7 @@ contains
                end do
             end do
          end do
-         if (.not.circulant) call die('[fftxyz setup] operator must be uniform in space')
+         if (.not.circulant) call die('[fftxyz setup] operator must be uniform in xyz')
       end block checkcirc
       
       ! Build the operator
@@ -184,31 +185,31 @@ contains
    
    !> Solve the linear system
    subroutine fftxyz_solve(this)
-     use messager, only: die
-     use param,    only: verbose
-     implicit none
-     class(fftxyz), intent(inout) :: this
-     ! Check that setup was done
-     if (.not.this%setup_done) call die('[fftxyz solve] Solver has not been setup.')
-     ! Copy to unstrided array
-     this%transformed_rhs=this%rhs(this%cfg%imin_:this%cfg%imax_,this%cfg%jmin_:this%cfg%jmax_,this%cfg%kmin_:this%cfg%kmax_)
-     ! Forward transform in xyz
-     call this%dft%xtransform_forward(this%transformed_rhs)
-     call this%dft%ytransform_forward(this%transformed_rhs)
-     call this%dft%ztransform_forward(this%transformed_rhs)
-     ! Divide
-     this%transformed_rhs=this%transformed_rhs*this%factored_operator
-     ! Backward transform in xyz
-     call this%dft%xtransform_backward(this%transformed_rhs)
-     call this%dft%ytransform_backward(this%transformed_rhs)
-     call this%dft%ztransform_backward(this%transformed_rhs)
-     ! Copy to strided output
-     this%sol(this%cfg%imin_:this%cfg%imax_,this%cfg%jmin_:this%cfg%jmax_,this%cfg%kmin_:this%cfg%kmax_)=realpart(this%transformed_rhs)
-     ! Sync the solution vector
-     call this%cfg%sync(this%sol)
-     ! If verbose run, log and or print info
-     if (verbose.gt.0) call this%log
-     if (verbose.gt.1) call this%print_short
+      use messager, only: die
+      use param,    only: verbose
+      implicit none
+      class(fftxyz), intent(inout) :: this
+      ! Check that setup was done
+      if (.not.this%setup_done) call die('[fftxyz solve] Solver has not been setup.')
+      ! Copy to unstrided array
+      this%transformed_rhs=this%rhs(this%cfg%imin_:this%cfg%imax_,this%cfg%jmin_:this%cfg%jmax_,this%cfg%kmin_:this%cfg%kmax_)
+      ! Forward transform in xyz
+      call this%dft%xtransform_forward(this%transformed_rhs)
+      call this%dft%ytransform_forward(this%transformed_rhs)
+      call this%dft%ztransform_forward(this%transformed_rhs)
+      ! Divide
+      this%transformed_rhs=this%transformed_rhs*this%factored_operator
+      ! Backward transform in xyz
+      call this%dft%xtransform_backward(this%transformed_rhs)
+      call this%dft%ytransform_backward(this%transformed_rhs)
+      call this%dft%ztransform_backward(this%transformed_rhs)
+      ! Copy to strided output
+      this%sol(this%cfg%imin_:this%cfg%imax_,this%cfg%jmin_:this%cfg%jmax_,this%cfg%kmin_:this%cfg%kmax_)=realpart(this%transformed_rhs)
+      ! Sync the solution vector
+      call this%cfg%sync(this%sol)
+      ! If verbose run, log and or print info
+      if (verbose.gt.0) call this%log
+      if (verbose.gt.1) call this%print_short
    end subroutine fftxyz_solve
    
    

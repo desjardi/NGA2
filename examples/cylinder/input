@@ -26,9 +26,5 @@ Max time :          100
 Pressure tolerance : 1e-5
 Pressure iteration : 100
 
-# Implicit velocity solver
-Implicit tolerance : 1e-5
-Implicit iteration : 100
-
 # Ensight output
 Ensight output period : 1

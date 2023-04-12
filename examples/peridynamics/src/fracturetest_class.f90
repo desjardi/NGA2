@@ -163,9 +163,15 @@ contains
                      this%ls%p(np)%flag=0
 
                      ! Prescribe velocity on side
+                     !if (this%ls%p(np)%pos(2).gt.-3.0_WP*dx.and.abs(this%ls%p(np)%pos(1)).lt.0.025_WP) then
+                     !   this%ls%p(np)%id=-1
+                     !   this%ls%p(np)%vel=[0.0_WP,-22.0_WP,0.0_WP]
+                     !end if
+                     
+                     ! Prescribe force on side
                      if (this%ls%p(np)%pos(2).gt.-3.0_WP*dx.and.abs(this%ls%p(np)%pos(1)).lt.0.025_WP) then
-                        this%ls%p(np)%id=-1
-                        this%ls%p(np)%vel=[0.0_WP,-22.0_WP,0.0_WP]
+                        this%ls%p(np)%id=0
+                        this%ls%p(np)%Abond=[0.0_WP,-1.0e6_WP,0.0_WP]
                      end if
                   end do
                end do
