@@ -52,3 +52,4 @@ examples/*/input*~
 !examples/nozzle_2grids/cad
 !examples/airblast/atomizer.ply
 !examples/airblast/atomizer_tip.ply
+!examples/airblast/atomizer_box.ply

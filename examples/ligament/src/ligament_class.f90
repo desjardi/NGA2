@@ -4,6 +4,7 @@ module ligament_class
    use config_class,      only: config
    use iterator_class,    only: iterator
    use ensight_class,     only: ensight
+   !use fft2d_class,       only: fft2d
    use hypre_str_class,   only: hypre_str
    use ddadi_class,       only: ddadi
    use vfs_class,         only: vfs
@@ -25,6 +26,7 @@ module ligament_class
       !> Flow solver
       type(vfs)         :: vf    !< Volume fraction solver
       type(tpns)        :: fs    !< Two-phase flow solver
+      !type(fft2d)       :: ps    !< FFT-accelerated linear solver for pressure
       type(hypre_str)   :: ps    !< Structured Hypre linear solver for pressure
       type(ddadi)       :: vs    !< DDADI solver for velocity
       type(timetracker) :: time  !< Time info
@@ -198,8 +200,8 @@ contains
       create_flow_solver: block
          use mathtools,       only: Pi
          use param,           only: param_read
-         use hypre_str_class, only: pcg_pfmg
          use tpns_class,      only: dirichlet,clipped_neumann,bcond
+         use hypre_str_class, only: pcg_pfmg
          type(bcond), pointer :: mybc
          integer :: n,i,j,k      
          ! Create flow solver
@@ -214,6 +216,7 @@ contains
          ! Define outflow boundary condition on the right
          call this%fs%add_bcond(name='outflow',type=clipped_neumann,face='x',dir=+1,canCorrect=.true.,locator=xp_locator)
          ! Configure pressure solver
+         !this%ps=fft2d(cfg=this%cfg,name='Pressure',nst=7)
          this%ps=hypre_str(cfg=this%cfg,name='Pressure',method=pcg_pfmg,nst=7)
          this%ps%maxlevel=20
          call param_read('Pressure iteration',this%ps%maxit)
@@ -337,9 +340,6 @@ contains
          ! Explicit calculation of drho*u/dt from NS
          call this%fs%get_dmomdt(this%resU,this%resV,this%resW)
          
-         ! Add momentum source terms
-			call this%fs%addsrc_gravity(this%resU,this%resV,this%resW)
-         
          ! Assemble explicit residual
          this%resU=-2.0_WP*this%fs%rho_U*this%fs%U+(this%fs%rho_Uold+this%fs%rho_U)*this%fs%Uold+this%time%dt*this%resU
          this%resV=-2.0_WP*this%fs%rho_V*this%fs%V+(this%fs%rho_Vold+this%fs%rho_V)*this%fs%Vold+this%time%dt*this%resV
@@ -352,6 +352,51 @@ contains
          this%fs%U=2.0_WP*this%fs%U-this%fs%Uold+this%resU
          this%fs%V=2.0_WP*this%fs%V-this%fs%Vold+this%resV
          this%fs%W=2.0_WP*this%fs%W-this%fs%Wold+this%resW
+         
+         ! ! Solve Poisson equation - step 1: div(grad(q))=RHS
+         ! poisson_step1: block
+         !    call this%fs%correct_mfr()
+         !    call this%fs%get_div()
+         !    call this%fs%add_surface_tension_jump(dt=this%time%dt,div=this%fs%div,vf=this%vf)
+         !    this%fs%psolv%rhs=-this%fs%cfg%vol*this%fs%div/this%time%dt
+         !    this%fs%psolv%sol=0.0_WP
+         !    call this%fs%psolv%solve() !< this%fs%psolv%sol now contains q
+         ! end block poisson_step1
+
+         ! ! Solve Poisson equation - step 2: div(grad(p))=div(rho*grad(q))
+         ! poisson_step2: block
+         !    integer :: i,j,k
+         !    ! Compute rho*grad(q)
+         !    this%resU=0.0_WP; this%resV=0.0_WP; this%resW=0.0_WP
+         !    do k=this%fs%cfg%kmin_,this%fs%cfg%kmax_
+         !       do j=this%fs%cfg%jmin_,this%fs%cfg%jmax_
+         !          do i=this%fs%cfg%imin_,this%fs%cfg%imax_
+         !             this%resU(i,j,k)=this%fs%rho_U(i,j,k)*sum(this%fs%divu_x(:,i,j,k)*this%fs%psolv%sol(i-1:i,j,k))
+         !             this%resV(i,j,k)=this%fs%rho_V(i,j,k)*sum(this%fs%divv_y(:,i,j,k)*this%fs%psolv%sol(i,j-1:j,k))
+         !             this%resW(i,j,k)=this%fs%rho_W(i,j,k)*sum(this%fs%divw_z(:,i,j,k)*this%fs%psolv%sol(i,j,k-1:k))
+         !          end do
+         !       end do
+         !    end do
+         !    call this%cfg%sync(this%resU)
+         !    call this%cfg%sync(this%resV)
+         !    call this%cfg%sync(this%resW)
+         !    ! Compute div(rho*grad(q))
+         !    do k=this%fs%cfg%kmin_,this%fs%cfg%kmax_
+         !       do j=this%fs%cfg%jmin_,this%fs%cfg%jmax_
+         !          do i=this%fs%cfg%imin_,this%fs%cfg%imax_
+         !             this%fs%div(i,j,k)=sum(this%fs%divp_x(:,i,j,k)*this%resU(i:i+1,j,k))+&
+         !             &                  sum(this%fs%divp_y(:,i,j,k)*this%resV(i,j:j+1,k))+&
+         !             &                  sum(this%fs%divp_z(:,i,j,k)*this%resW(i,j,k:k+1))
+         !          end do
+         !       end do
+         !    end do
+         !    call this%fs%cfg%sync(this%fs%div)
+         !    ! Solve again
+         !    this%fs%psolv%rhs=-this%fs%cfg%vol*this%fs%div
+         !    this%fs%psolv%sol=0.0_WP
+         !    call this%fs%psolv%solve()
+         !    call this%fs%shift_p(this%fs%psolv%sol)
+         ! end block poisson_step2
          
          ! Solve Poisson equation
          call this%fs%update_laplacian()

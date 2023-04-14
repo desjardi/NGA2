@@ -11,6 +11,8 @@ NGA2 is a high performance computing research library that provides a variety of
 - Lagrangian particle tracking
 - large-eddy simulation models
 - immersed boundaries
+- peridynamics solver
+- fft-accelerated linear solvers
 
 Currently, NGA2 supports cartesian meshes only. However, because it is object-oriented, multiple meshes can be used simultaneously and interactively.
 

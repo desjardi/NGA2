@@ -26,4 +26,4 @@ Pressure tolerance : 1e-5
 Pressure iteration : 100
 
 # Ensight output
-Ensight output period : 1
+Ensight output period : 1e-3

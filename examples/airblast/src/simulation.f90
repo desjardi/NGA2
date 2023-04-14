@@ -30,12 +30,13 @@ contains
       implicit none
       
       ! Postproc handling
-      call pproc%analyze(only_pproc)
+      !call pproc%analyze(only_pproc)
       if (only_pproc) return
       
       ! Initialize injector simulation
       call injector%init()
-      
+      return
+
       ! Initialize atomization simulation
       call atomization%init()
       
@@ -54,12 +55,17 @@ contains
    subroutine simulation_run
       implicit none
       
+      do while (.not.injector%time%done())
+         call injector%step()
+      end do
+      return
+      
       ! Postproc handling
       if (only_pproc) return
       
       ! Atomization drives overall time integration
       do while (.not.atomization%time%done())
-
+         
          ! Advance injector simulation until it's caught up
          do while (injector%time%t.le.atomization%time%t)
             call injector%step()
@@ -101,6 +107,7 @@ contains
 
       ! Finalize injector simulation
       call injector%final()
+      return
       
       ! Finalize atomization simulation
       call atomization%final()
