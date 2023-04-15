@@ -74,7 +74,7 @@ module nozzle_class
    real(WP), parameter :: Xaxial=-0.06394704_WP
    real(WP), parameter :: Daxial=+0.01600000_WP
    real(WP), parameter :: Xswirl=-0.06394704_WP
-   real(WP), parameter :: Dswirl=+0.00710000_WP
+   real(WP), parameter :: Dswirl=+0.00711200_WP
    real(WP), parameter :: Lswirl=+0.02945130_WP
    real(WP), parameter :: sidewall=0.041_WP         !< For abs(y) and abs(z)>sidewall, set to wall
    real(WP), parameter :: nspread=2.0_WP            !< Spread IB velocity over a few cells (is it needed?)
