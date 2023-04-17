@@ -144,8 +144,6 @@ contains
 
    !> Extract a liquid droplets from CCL data
    subroutine extract_drops(this)
-      use mpi_f08,   only: MPI_ALLREDUCE,MPI_SUM
-      use parallel,  only: MPI_REAL_WP
       use mathtools, only: Pi
       implicit none
       class(postproc), intent(inout) :: this
@@ -153,9 +151,11 @@ contains
       real(WP) :: vol,diam,ecc,lmin,lmax
       ! Only root process works
       if (.not.this%cfg%amRoot) return
-      ! Traverse structures and output those with x>0.03
+      ! Open a text file
+      open(newunit=iunit,file='drop.stat',form='formatted',status='old',access='stream',position='append',iostat=ierr)
+      ! Traverse structures and output those with x>0.025
       do n=1,this%cc%n_meta_struct
-         if (this%cc%meta_structures_list(n)%x.gt.0.03_WP) then
+         if (this%cc%meta_structures_list(n)%x.gt.0.025_WP) then
             ! Store volume
             vol=this%cc%meta_structures_list(n)%vol
             ! Compute equivalent diameter
@@ -165,12 +165,11 @@ contains
             lmax=this%cc%meta_structures_list(n)%lengths(1)
             ecc=sqrt(1.0_WP-lmin**2/lmax**2)
             ! Output structure to a text file
-            open(newunit=iunit,file='drop.stat',form='formatted',status='old',access='stream',position='append',iostat=ierr)
             write(iunit,'(999999(es12.5,x))') diam,vol,ecc
-            close(iunit)
          end if
       end do
-      
+      ! Close the file
+      close(iunit)
    end subroutine extract_drops
    
    
