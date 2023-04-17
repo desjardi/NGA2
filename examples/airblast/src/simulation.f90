@@ -30,7 +30,7 @@ contains
       implicit none
       
       ! Postproc handling
-      !call pproc%analyze(only_pproc)
+      call pproc%analyze(only_pproc)
       if (only_pproc) return
       
       ! Initialize injector simulation
@@ -55,10 +55,10 @@ contains
    subroutine simulation_run
       implicit none
       
-      do while (.not.injector%time%done())
-         call injector%step()
-      end do
-      return
+      !do while (.not.injector%time%done())
+      !   call injector%step()
+      !end do
+      !return
       
       ! Postproc handling
       if (only_pproc) return
