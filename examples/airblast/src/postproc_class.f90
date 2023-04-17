@@ -162,7 +162,11 @@ contains
             diam=(6.0_WP*vol/Pi)**(1.0_WP/3.0_WP)
             ! Compute eccentricity
             lmin=this%cc%meta_structures_list(n)%lengths(3)
-            lmax=this%cc%meta_structures_list(n)%lengths(1)
+            if (this%cc%meta_structures_list(n)%lengths(1).eq.0.0_WP) then
+               lmax=this%cc%meta_structures_list(n)%lengths(2)
+            else
+               lmax=this%cc%meta_structures_list(n)%lengths(1)
+            end if
             ecc=sqrt(1.0_WP-lmin**2/lmax**2)
             ! Output structure to a text file
             write(iunit,'(999999(es12.5,x))') diam,vol,ecc
