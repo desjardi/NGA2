@@ -86,11 +86,11 @@ module scalar_class
    contains
       procedure :: print=>scalar_print                    !< Output solver to the screen
       procedure :: setup                                  !< Finish configuring the scalar solver
+      procedure, private :: init_metrics                  !< Initialize metrics
+      procedure, private :: adjust_metrics                !< Adjust metrics
       procedure :: add_bcond                              !< Add a boundary condition
       procedure :: get_bcond                              !< Get a boundary condition
       procedure :: apply_bcond                            !< Apply all boundary conditions
-      procedure :: init_metrics                           !< Initialize metrics
-      procedure :: adjust_metrics                         !< Adjust metrics
       procedure :: metric_reset                           !< Reset adaptive metrics like bquick
       procedure :: metric_adjust                          !< Adjust adaptive metrics like bquick
       procedure :: get_drhoSCdt                           !< Calculate drhoSC/dt
@@ -720,14 +720,18 @@ contains
             do k=this%cfg%kmin_,this%cfg%kmax_+1
                do j=this%cfg%jmin_,this%cfg%jmax_+1
                   do i=this%cfg%imin_,this%cfg%imax_+1
-                     if (SC(i,j,k).lt.SCmin) then
-                        !this%itp_xp(i:i+1,j,k)=[0.0_WP,1.0_WP,0.0_WP]
-                        !this%itp_xm(i:i+1,j,k)=[0.0_WP,1.0_WP,0.0_WP]
-                        !this%itp_yp(i,j:j+1,k)=[0.0_WP,1.0_WP,0.0_WP]
-                        !this%itp_ym(i,j:j+1,k)=[0.0_WP,1.0_WP,0.0_WP]
-                        !this%itp_zp(i,j,k:k+1)=[0.0_WP,1.0_WP,0.0_WP]
-                        !this%itp_zm(i,j,k:k+1)=[0.0_WP,1.0_WP,0.0_WP]
-					      end if
+                     if (minval(SC(i-1:i,j,k)).lt.SCmin) then
+                        this%itp_xp(:,i,j,k)=[0.0_WP,1.0_WP,0.0_WP]
+                        this%itp_xm(:,i,j,k)=[0.0_WP,1.0_WP,0.0_WP]
+                     end if
+                     if (minval(SC(i,j-1:j,k)).lt.SCmin) then
+                        this%itp_yp(:,i,j,k)=[0.0_WP,1.0_WP,0.0_WP]
+                        this%itp_ym(:,i,j,k)=[0.0_WP,1.0_WP,0.0_WP]
+                     end if
+                     if (minval(SC(i,j,k-1:k)).lt.SCmin) then
+                        this%itp_zp(:,i,j,k)=[0.0_WP,1.0_WP,0.0_WP]
+                        this%itp_zm(:,i,j,k)=[0.0_WP,1.0_WP,0.0_WP]
+                     end if
                   end do
                end do
             end do
@@ -736,14 +740,18 @@ contains
             do k=this%cfg%kmin_,this%cfg%kmax_+1
                do j=this%cfg%jmin_,this%cfg%jmax_+1
                   do i=this%cfg%imin_,this%cfg%imax_+1
-                     if (SC(i,j,k).gt.SCmax) then
-                        !this%itp_xp(i:i+1,j,k)=[0.0_WP,1.0_WP,0.0_WP]
-					         !this%itp_xm(i:i+1,j,k)=[0.0_WP,1.0_WP,0.0_WP]
-					         !this%itp_yp(i,j:j+1,k)=[0.0_WP,1.0_WP,0.0_WP]
-					         !this%itp_ym(i,j:j+1,k)=[0.0_WP,1.0_WP,0.0_WP]
-					         !this%itp_zp(i,j,k:k+1)=[0.0_WP,1.0_WP,0.0_WP]
-					         !this%itp_zm(i,j,k:k+1)=[0.0_WP,1.0_WP,0.0_WP]
-				         end if
+                     if (maxval(SC(i-1:i,j,k)).gt.SCmax) then
+                        this%itp_xp(:,i,j,k)=[0.0_WP,1.0_WP,0.0_WP]
+                        this%itp_xm(:,i,j,k)=[0.0_WP,1.0_WP,0.0_WP]
+                     end if
+                     if (maxval(SC(i,j-1:j,k)).gt.SCmax) then
+                        this%itp_yp(:,i,j,k)=[0.0_WP,1.0_WP,0.0_WP]
+                        this%itp_ym(:,i,j,k)=[0.0_WP,1.0_WP,0.0_WP]
+                     end if
+                     if (maxval(SC(i,j,k-1:k)).gt.SCmax) then
+                        this%itp_zp(:,i,j,k)=[0.0_WP,1.0_WP,0.0_WP]
+                        this%itp_zm(:,i,j,k)=[0.0_WP,1.0_WP,0.0_WP]
+                     end if
                   end do
                end do
             end do
