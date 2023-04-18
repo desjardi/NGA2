@@ -1,4 +1,4 @@
-f90EXE_sources += incomp_class.f90 scalar_class.f90
+f90EXE_sources += incomp_class.f90 scalar_class.f90 multiscalar_class.f90
 
 INCLUDE_LOCATIONS += $(NGA_HOME)/src/constant_density
 VPATH_LOCATIONS   += $(NGA_HOME)/src/constant_density
