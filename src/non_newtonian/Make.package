@@ -1,0 +1,4 @@
+f90EXE_sources += fene_class.f90
+
+INCLUDE_LOCATIONS += $(NGA_HOME)/src/non_newtonian
+VPATH_LOCATIONS   += $(NGA_HOME)/src/non_newtonian
