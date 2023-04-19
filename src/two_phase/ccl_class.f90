@@ -2661,7 +2661,7 @@ contains
                ! Calculate edge normal
                c_local = Lbary(:,i,j,k)
                c_filter = [x_vol,y_vol,z_vol]/vol_total
-               this%film_edge_normal(:,i,j,k) = (c_local-c_filter)/norm2(c_local-c_filter)
+               this%film_edge_normal(:,i,j,k) = (c_local-c_filter)/(norm2(c_local-c_filter)+tiny(1.0_WP))
             end do
          else ! Gas film
             do n=1,this%film_list(this%film_map_(m))%nnode
