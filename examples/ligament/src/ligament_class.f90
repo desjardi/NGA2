@@ -4,7 +4,7 @@ module ligament_class
    use config_class,      only: config
    use iterator_class,    only: iterator
    use ensight_class,     only: ensight
-   !use fft2d_class,       only: fft2d
+   use surfmesh_class,    only: surfmesh
    use hypre_str_class,   only: hypre_str
    use ddadi_class,       only: ddadi
    use vfs_class,         only: vfs
@@ -26,12 +26,12 @@ module ligament_class
       !> Flow solver
       type(vfs)         :: vf    !< Volume fraction solver
       type(tpns)        :: fs    !< Two-phase flow solver
-      !type(fft2d)       :: ps    !< FFT-accelerated linear solver for pressure
       type(hypre_str)   :: ps    !< Structured Hypre linear solver for pressure
       type(ddadi)       :: vs    !< DDADI solver for velocity
       type(timetracker) :: time  !< Time info
       
       !> Ensight postprocessing
+      type(surfmesh) :: smesh    !< Surface mesh for interface
       type(ensight)  :: ens_out  !< Ensight output for flow variables
       type(event)    :: ens_evt  !< Event trigger for Ensight output
       
@@ -67,7 +67,7 @@ contains
 		real(WP), dimension(3),intent(in) :: xyz
 		real(WP), intent(in) :: t
 		real(WP) :: G
-	   G=0.5_WP-sqrt(xyz(1)**2+xyz(2)**2)
+	   G=0.5_WP-sqrt(xyz(1)**2+xyz(2)**2+xyz(3)**2)
 	end function levelset_ligament
    
    
@@ -134,7 +134,7 @@ contains
       
       ! Initialize our VOF solver and field
       create_and_initialize_vof: block
-         use vfs_class, only: elvira,VFlo,VFhi
+         use vfs_class, only: VFlo,VFhi,elvira,r2p
          use mms_geom,  only: cube_refine_vol
          use param,     only: param_read
 			integer :: i,j,k,n,si,sj,sk
@@ -143,7 +143,7 @@ contains
 			real(WP) :: vol,area
 			integer, parameter :: amr_ref_lvl=4
          ! Create a VOF solver with LVIRA
-         this%vf=vfs(cfg=this%cfg,reconstruction_method=elvira,name='VOF')
+         this%vf=vfs(cfg=this%cfg,reconstruction_method=r2p,name='VOF')
          ! Initialize to a ligament
 		   do k=this%vf%cfg%kmino_,this%vf%cfg%kmaxo_
 				do j=this%vf%cfg%jmino_,this%vf%cfg%jmaxo_
@@ -216,7 +216,6 @@ contains
          ! Define outflow boundary condition on the right
          call this%fs%add_bcond(name='outflow',type=clipped_neumann,face='x',dir=+1,canCorrect=.true.,locator=xp_locator)
          ! Configure pressure solver
-         !this%ps=fft2d(cfg=this%cfg,name='Pressure',nst=7)
          this%ps=hypre_str(cfg=this%cfg,name='Pressure',method=pcg_pfmg,nst=7)
          this%ps%maxlevel=20
          call param_read('Pressure iteration',this%ps%maxit)
@@ -240,6 +239,13 @@ contains
       end block create_flow_solver
       
 
+      ! Create surfmesh object for interface polygon output
+      create_smesh: block
+         this%smesh=surfmesh(nvar=0,name='plic')
+         call this%vf%update_surfmesh(this%smesh)
+      end block create_smesh
+
+
       ! Add Ensight output
       create_ensight: block
          use param, only: param_read
@@ -253,6 +259,7 @@ contains
          call this%ens_out%add_scalar('VOF',this%vf%VF)
          call this%ens_out%add_scalar('curvature',this%vf%curv)
          call this%ens_out%add_scalar('pressure',this%fs%P)
+         call this%ens_out%add_surface('plic',this%smesh)
          ! Output to ensight
          if (this%ens_evt%occurs()) call this%ens_out%write_data(this%time%t)
       end block create_ensight

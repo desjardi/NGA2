@@ -26,6 +26,7 @@ module hit_class
       real(WP), dimension(:,:,:,:), allocatable :: SR                !< Strain rate tensor
       real(WP), dimension(:,:,:), allocatable :: resU,resV,resW      !< Residuals
       !> Turbulence parameters
+      real(WP) :: ti                            ! Turbulence intensity
       real(WP) :: visc,meanU,meanV,meanW
       real(WP) :: Urms_tgt,tke_tgt,eps_tgt      ! u',k, and dissipation rate
       real(WP) :: tko_tgt,eta_tgt               ! Kolmogorov time and length scales
@@ -161,8 +162,11 @@ contains
          character(str_long) :: message
          real(WP) :: max_forcing_estimate
          integer :: i,j,k
-         ! Read in target Urms
-         call param_read('Turbulence intensity',this%Urms_tgt)
+         ! Read in turbulence intensity for turbulence injection
+         call param_read('Turbulence intensity',this%ti)
+         ! Read in target Re_lambda and convert to target Urms
+         call param_read('Target Re_lambda',this%Urms_tgt)
+         this%Urms_tgt=this%visc/(3.0_WP*this%cfg%xL)*this%Urms_tgt**2
          ! Calculate other target quantities assuming l=0.2*xL
          this%tke_tgt=1.5_WP*this%Urms_tgt**2
          this%eps_tgt=5.0_WP*this%Urms_tgt**3/this%cfg%xL
