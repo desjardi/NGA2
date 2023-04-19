@@ -18,8 +18,8 @@ Gas density :                 1.226
 Surface tension coefficient : 0.0728
 
 # Non-Newtonian modeling
-Polymer viscosity :             0.1
-Polymer relaxation time :       1e-2
+Polymer viscosity :             1
+Polymer relaxation time :       1e-1
 Maximum polymer extensibility : 10
 
 # Time integration

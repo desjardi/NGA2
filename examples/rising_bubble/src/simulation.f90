@@ -340,6 +340,37 @@ contains
             ! Explicit calculation of drhoSC/dt from scalar equation
             call nn%get_drhoSCdt(resSC,fs%Uold,fs%Vold,fs%Wold)
             
+            ! Perform bquick procedure
+            bquick: block
+               integer :: i,j,k
+               logical, dimension(:,:,:), allocatable :: flag
+               ! Allocate work array
+               allocate(flag(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+               ! Assemble explicit residual
+               resSC=-2.0_WP*nn%rho*(nn%SC-nn%SCold)+time%dt*resSC
+               ! Apply it to get explicit scalar prediction
+               SCtmp=2.0_WP*nn%SC-nn%SCold+resSC
+               ! Check cells that require bquick
+               do k=nn%cfg%kmino_,nn%cfg%kmaxo_
+                  do j=nn%cfg%jmino_,nn%cfg%jmaxo_
+                     do i=nn%cfg%imino_,nn%cfg%imaxo_
+                        if (SCtmp(i,j,k,1).le.0.0_WP.or.SCtmp(i,j,k,4).le.0.0_WP.or.SCtmp(i,j,k,6).le.0.0_WP.or.&
+                        &   SCtmp(i,j,k,1)+SCtmp(i,j,k,4)+SCtmp(i,j,k,6).ge.nn%Lmax**2) then
+                           flag(i,j,k)=.true.
+                        else
+                           flag(i,j,k)=.false.
+                        end if
+                     end do
+                  end do
+               end do
+               ! Adjust metrics
+               call nn%metric_adjust(SCtmp,flag)
+               ! Clean up
+               deallocate(flag)
+               ! Recompute drhoSC/dt
+               call nn%get_drhoSCdt(resSC,fs%Uold,fs%Vold,fs%Wold)
+            end block bquick
+            
             ! Add fene sources
             call fs%get_gradU(gradU)
             call nn%addsrc_CgradU(gradU,resSC)
@@ -374,37 +405,51 @@ contains
             ! Add momentum source terms
             call fs%addsrc_gravity(resU,resV,resW)
             
-            ! Add in polymer stress
-            polymer: block
-               integer :: i,j,k
-               ! Calculate the relaxation function
-               !call fm%get_relaxationFunction(fR,Lmax)
-               ! Build stress tensor
-               !do k=fs%cfg%kmino_,fs%cfg%kmaxo_
-               !   do j=fs%cfg%jmino_,fs%cfg%jmaxo_
-               !      do i=fs%cfg%imino_,fs%cfg%imaxo_
-               !         fm%T(i,j,k,1)=(visc_p(i,j,k)/lambda)*fR(i,j,k,1)
-               !         fm%T(i,j,k,2)=(visc_p(i,j,k)/lambda)*fR(i,j,k,2)
-               !         fm%T(i,j,k,3)=(visc_p(i,j,k)/lambda)*fR(i,j,k,3)
-               !         fm%T(i,j,k,4)=(visc_p(i,j,k)/lambda)*fR(i,j,k,4)
-               !         fm%T(i,j,k,5)=(visc_p(i,j,k)/lambda)*fR(i,j,k,5)
-               !         fm%T(i,j,k,6)=(visc_p(i,j,k)/lambda)*fR(i,j,k,6)
-               !      end do
-               !   end do
-               !end do
-               ! Get its divergence
-               !call fm%get_divT(fs)
-               ! Add divT to momentum equation
-               !do k=fs%cfg%kmin_,fs%cfg%kmax_
-               !   do j=fs%cfg%jmin_,fs%cfg%jmax_
-               !      do i=fs%cfg%imin_,fs%cfg%imax_
-               !         if (fs%umask(i,j,k).eq.0) resU(i,j,k)=resU(i,j,k)+sum(fs%itpr_x(:,i,j,k)*vf%VF(i,j,k))*fm%divT(i,j,k,1)*time%dt !> x face/U velocity
-               !         if (fs%vmask(i,j,k).eq.0) resV(i,j,k)=resV(i,j,k)+sum(fs%itpr_y(:,i,j,k)*vf%VF(i,j,k))*fm%divT(i,j,k,2)*time%dt !> y face/V velocity
-               !         if (fs%wmask(i,j,k).eq.0) resW(i,j,k)=resW(i,j,k)+sum(fs%itpr_z(:,i,j,k)*vf%VF(i,j,k))*fm%divT(i,j,k,3)*time%dt !> z face/W velocity
-               !      end do
-               !   end do
-               !end do
-            end block polymer
+            ! Add polymer stress term
+            polymer_stress: block
+               integer :: i,j,k,n
+               real(WP), dimension(:,:,:), allocatable :: Txy,Tyz,Tzx
+               real(WP), dimension(:,:,:,:), allocatable :: stress
+               ! Allocate work arrays
+               allocate(stress(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_,1:6)); stress=0.0_WP
+               allocate(Txy   (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+               allocate(Tyz   (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+               allocate(Tzx   (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+               ! Calculate the polymer relaxation
+               call nn%addsrc_relax(stress)
+               ! Build liquid stress tensor
+               do n=1,6
+                  stress(:,:,:,n)=-nn%visc*vf%VF*stress(:,:,:,n)
+               end do
+               ! Interpolate tensor components to cell edges
+               do k=cfg%kmin_,cfg%kmax_+1
+                  do j=cfg%jmin_,cfg%jmax_+1
+                     do i=cfg%imin_,cfg%imax_+1
+                        Txy(i,j,k)=sum(fs%itp_xy(:,:,i,j,k)*stress(i-1:i,j-1:j,k,2))
+                        Tyz(i,j,k)=sum(fs%itp_yz(:,:,i,j,k)*stress(i,j-1:j,k-1:k,5))
+                        Tzx(i,j,k)=sum(fs%itp_xz(:,:,i,j,k)*stress(i-1:i,j,k-1:k,3))
+                     end do
+                  end do
+               end do
+               ! Add divergence of stress to residual
+               do k=fs%cfg%kmin_,fs%cfg%kmax_
+                  do j=fs%cfg%jmin_,fs%cfg%jmax_
+                     do i=fs%cfg%imin_,fs%cfg%imax_
+                        if (fs%umask(i,j,k).eq.0) resU(i,j,k)=resU(i,j,k)+sum(fs%divu_x(:,i,j,k)*stress(i-1:i,j,k,1))&
+                        &                                                +sum(fs%divu_y(:,i,j,k)*Txy(i,j:j+1,k))     &
+                        &                                                +sum(fs%divu_z(:,i,j,k)*Tzx(i,j,k:k+1))
+                        if (fs%vmask(i,j,k).eq.0) resV(i,j,k)=resV(i,j,k)+sum(fs%divv_x(:,i,j,k)*Txy(i:i+1,j,k))     &
+                        &                                                +sum(fs%divv_y(:,i,j,k)*stress(i,j-1:j,k,4))&
+                        &                                                +sum(fs%divv_z(:,i,j,k)*Tyz(i,j,k:k+1))
+                        if (fs%wmask(i,j,k).eq.0) resW(i,j,k)=resW(i,j,k)+sum(fs%divw_x(:,i,j,k)*Tzx(i:i+1,j,k))     &
+                        &                                                +sum(fs%divw_y(:,i,j,k)*Tyz(i,j:j+1,k))     &                  
+                        &                                                +sum(fs%divw_z(:,i,j,k)*stress(i,j,k-1:k,6))        
+                     end do
+                  end do
+               end do
+               ! Clean up
+               deallocate(stress,Txy,Tyz,Tzx)
+            end block polymer_stress
             
             ! Assemble explicit residual
             resU=-2.0_WP*fs%rho_U*fs%U+(fs%rho_Uold+fs%rho_U)*fs%Uold+time%dt*resU
