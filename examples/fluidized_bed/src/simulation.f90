@@ -190,8 +190,6 @@ contains
             lp%p(i)%id=int(i,8)
             ! Set the diameter
             lp%p(i)%d=dp
-            ! Set the temperature
-            lp%p(i)%T=Tp
             ! Give zero velocity
             lp%p(i)%vel=0.0_WP
             ! Give zero collision force
