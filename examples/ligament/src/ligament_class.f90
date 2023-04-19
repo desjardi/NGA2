@@ -396,7 +396,10 @@ contains
       end block remove_vof
       
       ! Output to ensight
-      if (this%ens_evt%occurs()) call this%ens_out%write_data(this%time%t)
+      if (this%ens_evt%occurs()) then
+         call this%vf%update_surfmesh(this%smesh)
+         call this%ens_out%write_data(this%time%t)
+      end if
       
       ! Perform and output monitoring
       call this%fs%get_max()
