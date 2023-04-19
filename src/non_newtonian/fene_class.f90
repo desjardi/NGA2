@@ -105,12 +105,12 @@ contains
                   if (this%mask(i,j,k).ne.0) cycle          !< Skip non-solved cells
                   coeff=(this%Lmax**2-3.00_WP)/(this%Lmax**2-(this%SC(i,j,k,1)+this%SC(i,j,k,4)+this%SC(i,j,k,6)))
                   coeff=coeff/this%lambda                   !< Divide by relaxation time scale
-                  resSC(i,j,k,1)=resSC(i,j,k,1)-coeff*this%SC(i,j,k,1)-1.0_WP !< xx tensor component
+                  resSC(i,j,k,1)=resSC(i,j,k,1)-coeff*this%SC(i,j,k,1)+1.0_WP !< xx tensor component
                   resSC(i,j,k,2)=resSC(i,j,k,2)-coeff*this%SC(i,j,k,2)        !< xy tensor component
                   resSC(i,j,k,3)=resSC(i,j,k,3)-coeff*this%SC(i,j,k,3)        !< xz tensor component
-                  resSC(i,j,k,4)=resSC(i,j,k,4)-coeff*this%SC(i,j,k,4)-1.0_WP !< yy tensor component
+                  resSC(i,j,k,4)=resSC(i,j,k,4)-coeff*this%SC(i,j,k,4)+1.0_WP !< yy tensor component
                   resSC(i,j,k,5)=resSC(i,j,k,5)-coeff*this%SC(i,j,k,5)        !< yz tensor component
-                  resSC(i,j,k,6)=resSC(i,j,k,6)-coeff*this%SC(i,j,k,6)-1.0_WP !< zz tensor component
+                  resSC(i,j,k,6)=resSC(i,j,k,6)-coeff*this%SC(i,j,k,6)+1.0_WP !< zz tensor component
                end do
             end do
          end do

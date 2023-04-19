@@ -186,12 +186,12 @@ contains
       ! Create a FENE model 
       create_fene: block 
          use multiscalar_class, only: bquick
-         use fene_class,        only: fenep
+         use fene_class,        only: fenecr
          integer :: i,j,k
          ! Create FENE model solver
-         nn=fene(cfg=cfg,model=fenep,scheme=bquick,name='FENE')
-         ! Assign liquid density
-         nn%rho=fs%rho_l
+         nn=fene(cfg=cfg,model=fenecr,scheme=bquick,name='FENE')
+         ! Assign unity density for simplicity
+         nn%rho=1.0_WP
          ! Maximum extensibility of polymer chain
          call param_read('Maximum polymer extensibility',nn%Lmax)
          ! Relaxation time for polymer
@@ -314,9 +314,6 @@ contains
          ! Remember old scalars
          nn%SCold=nn%SC
          
-         ! Apply time-varying Dirichlet conditions
-         ! This is where time-dpt Dirichlet would be enforced
-         
          ! Prepare old staggered density (at n)
          call fs%get_olddensity(vf=vf)
          
@@ -325,6 +322,9 @@ contains
          
          ! Prepare new staggered viscosity (at n+1)
          call fs%get_viscosity(vf=vf,strat=arithmetic_visc)
+         
+         ! Calculate grad(U)
+         call fs%get_gradU(gradU)
          
          ! Perform sub-iterations
          do while (time%it.le.time%itmax)
@@ -347,7 +347,7 @@ contains
                ! Allocate work array
                allocate(flag(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
                ! Assemble explicit residual
-               resSC=-2.0_WP*nn%rho*(nn%SC-nn%SCold)+time%dt*resSC
+               resSC=-2.0_WP*(nn%SC-nn%SCold)+time%dt*resSC
                ! Apply it to get explicit scalar prediction
                SCtmp=2.0_WP*nn%SC-nn%SCold+resSC
                ! Check cells that require bquick
@@ -372,12 +372,11 @@ contains
             end block bquick
             
             ! Add fene sources
-            call fs%get_gradU(gradU)
             call nn%addsrc_CgradU(gradU,resSC)
             call nn%addsrc_relax(resSC)
             
             ! Assemble explicit residual
-            resSC=-2.0_WP*nn%rho*(nn%SC-nn%SCold)+time%dt*resSC
+            resSC=-2.0_WP*(nn%SC-nn%SCold)+time%dt*resSC
             
             ! Form implicit residual
             call nn%solve_implicit(time%dt,resSC,fs%Uold,fs%Vold,fs%Wold)
@@ -385,6 +384,25 @@ contains
             ! Update scalars
             nn%SC=2.0_WP*nn%SC-nn%SCold+resSC
             
+            ! Force the gas scalar to identity
+            gas_scalar_forcing: block
+               integer :: i,j,k
+               do k=nn%cfg%kmino_,nn%cfg%kmaxo_
+                  do j=nn%cfg%jmino_,nn%cfg%jmaxo_
+                     do i=nn%cfg%imino_,nn%cfg%imaxo_
+                        if (nn%mask(i,j,k).eq.0) then
+                           nn%SC(i,j,k,1)=vf%VF(i,j,k)*nn%SC(i,j,k,1)+(1.0_WP-vf%VF(i,j,k))*1.0_WP
+                           nn%SC(i,j,k,2)=vf%VF(i,j,k)*nn%SC(i,j,k,2)
+                           nn%SC(i,j,k,3)=vf%VF(i,j,k)*nn%SC(i,j,k,3)
+                           nn%SC(i,j,k,4)=vf%VF(i,j,k)*nn%SC(i,j,k,4)+(1.0_WP-vf%VF(i,j,k))*1.0_WP
+                           nn%SC(i,j,k,5)=vf%VF(i,j,k)*nn%SC(i,j,k,5)
+                           nn%SC(i,j,k,6)=vf%VF(i,j,k)*nn%SC(i,j,k,6)+(1.0_WP-vf%VF(i,j,k))*1.0_WP
+                        end if
+                     end do
+                  end do
+               end do
+            end block gas_scalar_forcing
+
             ! Apply all other boundary conditions on the resulting field
             call nn%apply_bcond(time%t,time%dt)
             ! ===================================================
@@ -411,12 +429,12 @@ contains
                real(WP), dimension(:,:,:), allocatable :: Txy,Tyz,Tzx
                real(WP), dimension(:,:,:,:), allocatable :: stress
                ! Allocate work arrays
-               allocate(stress(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_,1:6)); stress=0.0_WP
+               allocate(stress(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_,1:6))
                allocate(Txy   (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
                allocate(Tyz   (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
                allocate(Tzx   (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
                ! Calculate the polymer relaxation
-               call nn%addsrc_relax(stress)
+               stress=0.0_WP; call nn%addsrc_relax(stress)
                ! Build liquid stress tensor
                do n=1,6
                   stress(:,:,:,n)=-nn%visc*vf%VF*stress(:,:,:,n)
@@ -439,7 +457,7 @@ contains
                         &                                                +sum(fs%divu_y(:,i,j,k)*Txy(i,j:j+1,k))     &
                         &                                                +sum(fs%divu_z(:,i,j,k)*Tzx(i,j,k:k+1))
                         if (fs%vmask(i,j,k).eq.0) resV(i,j,k)=resV(i,j,k)+sum(fs%divv_x(:,i,j,k)*Txy(i:i+1,j,k))     &
-                        &                                                +sum(fs%divv_y(:,i,j,k)*stress(i,j-1:j,k,4))&
+                                                                        +sum(fs%divv_y(:,i,j,k)*stress(i,j-1:j,k,4))&
                         &                                                +sum(fs%divv_z(:,i,j,k)*Tyz(i,j,k:k+1))
                         if (fs%wmask(i,j,k).eq.0) resW(i,j,k)=resW(i,j,k)+sum(fs%divw_x(:,i,j,k)*Tzx(i:i+1,j,k))     &
                         &                                                +sum(fs%divw_y(:,i,j,k)*Tyz(i,j:j+1,k))     &                  
