@@ -103,6 +103,9 @@ module vfs_class
       real(WP) :: twoplane_threshold=0.95_WP              !< Threshold for r2p to switch from one-plane to two-planes
       real(WP) :: classification_threshold=1.50_WP        !< Threshold for classifying spheres/ligaments/sheets
       
+      ! Local cell classification
+      real(WP), dimension(:,:,:), allocatable :: type    !< Local interface type (0: no interface, 1:spheroid, 2:ligament, 3:sheet)
+      
       ! Curvature clipping parameter
       real(WP) :: maxcurv_times_mesh=1.0_WP               !< Clipping parameter for maximum curvature (classically set to 1, but should be larger since we resolve more)
       
@@ -163,6 +166,7 @@ module vfs_class
       procedure :: advance                                !< Advance VF to next step
       procedure :: advect_interface                       !< Advance IRL surface to next step
       procedure :: build_interface                        !< Reconstruct IRL interface from VF field
+      procedure :: classify_type                          !< Classify type of interface in the cell
       procedure :: build_elvira                           !< ELVIRA reconstruction of the interface from VF field
       procedure :: build_lvira                            !< LVIRA reconstruction of the interface from VF field
       procedure :: build_r2p                              !< R2P reconstruction of the interface from VF field
@@ -230,6 +234,7 @@ contains
       allocate(self%SD   (  self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%SD   =0.0_WP
       allocate(self%G    (  self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%G    =0.0_WP
       allocate(self%curv (  self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%curv =0.0_WP
+      allocate(self%type (  self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%type =0.0_WP
       
       ! Set clipping distance
       self%Gclip=real(distance_band+1,WP)*self%cfg%min_meshsize
@@ -1443,6 +1448,8 @@ contains
       use messager, only: die
       implicit none
       class(vfs), intent(inout) :: this
+      ! First perform interface type classification
+      call this%classify_type()
       ! Reconstruct interface - will need to support various methods
       select case (this%reconstruction_method)
       case (elvira); call this%build_elvira()
@@ -1458,6 +1465,78 @@ contains
       end select
    end subroutine build_interface
    
+   
+   !> Classify the type of interface in the cell
+   subroutine classify_type(this)
+      implicit none
+      class(vfs), intent(inout) :: this
+      integer :: i,j,k,ii,jj,kk,info
+      real(WP) :: fvol,xtmp,ytmp,ztmp
+      real(WP), dimension(3)     :: fbary
+      real(WP), dimension(3,3)   :: Imom
+      real(WP), dimension(3)     :: d
+      integer , parameter        :: order=3
+      integer , parameter        :: lwork=102 ! dsyev optimal length (nb+2)*order, where block size nb=32
+      real(WP), dimension(lwork) :: work
+      
+      ! Default value is 0
+      this%type=0.0_WP
+      
+      ! Traverse domain and classify
+      do k=this%cfg%kmin_,this%cfg%kmax_
+         do j=this%cfg%jmin_,this%cfg%jmax_
+            do i=this%cfg%imin_,this%cfg%imax_
+               
+               ! Skip wall/bcond cells
+               if (this%mask(i,j,k).ne.0) cycle
+               
+               ! Skip full cells
+               if (this%VF(i,j,k).lt.VFlo.or.this%VF(i,j,k).gt.VFhi) cycle
+               
+               ! Extract moment of inertia
+               fvol=0.0_WP; fbary=0.0_WP; Imom=0.0_WP
+               do kk=k-1,k+1
+                  do jj=j-1,j+1
+                     do ii=i-1,i+1
+                        fvol =fvol +this%cfg%vol(ii,jj,kk)*this%VF(ii,jj,kk)
+                        fbary=fbary+this%cfg%vol(ii,jj,kk)*this%VF(ii,jj,kk)*this%Lbary(:,ii,jj,kk)
+                     end do
+                  end do
+               end do
+               fbary=fbary/fvol
+               do kk=k-1,k+1
+                  do jj=j-1,j+1
+                     do ii=i-1,i+1
+                        xtmp=this%Lbary(1,ii,jj,kk)-fbary(1)
+                        ytmp=this%Lbary(2,ii,jj,kk)-fbary(2)
+                        ztmp=this%Lbary(3,ii,jj,kk)-fbary(3)
+                        Imom(1,1)=Imom(1,1)+(ytmp**2+ztmp**2)*this%cfg%vol(ii,jj,kk)*this%VF(ii,jj,kk)
+                        Imom(2,2)=Imom(2,2)+(ztmp**2+xtmp**2)*this%cfg%vol(ii,jj,kk)*this%VF(ii,jj,kk)
+                        Imom(3,3)=Imom(3,3)+(xtmp**2+ytmp**2)*this%cfg%vol(ii,jj,kk)*this%VF(ii,jj,kk)
+                        Imom(1,2)=Imom(1,2)-xtmp*ytmp*this%cfg%vol(ii,jj,kk)*this%VF(ii,jj,kk)
+                        Imom(1,3)=Imom(1,3)-ztmp*xtmp*this%cfg%vol(ii,jj,kk)*this%VF(ii,jj,kk)
+                        Imom(2,3)=Imom(2,3)-ytmp*ztmp*this%cfg%vol(ii,jj,kk)*this%VF(ii,jj,kk)
+                     end do
+                  end do
+               end do
+               
+               ! Compute sorted eigenvalues
+               call dsyev('V','U',order,Imom,order,d,work,lwork,info); d=max(0.0_WP,d)
+               
+               ! Perform classification
+               this%type(i,j,k)=1.0_WP
+               if (d(3).gt.this%classification_threshold*d(1)) this%type(i,j,k)=this%type(i,j,k)+1.0_WP
+               if (d(3).gt.this%classification_threshold*d(2)) this%type(i,j,k)=this%type(i,j,k)+1.0_WP
+               
+            end do
+         end do
+      end do
+      
+      ! Communicate
+      call this%cfg%sync(this%type)
+      
+   end subroutine classify_type
+
    
    !> ELVIRA reconstruction of a planar interface in mixed cells
    subroutine build_elvira(this)
@@ -1896,7 +1975,7 @@ contains
       implicit none
       class(vfs), intent(inout) :: this
       integer(IRL_SignedIndex_t) :: i,j,k
-      integer :: ind,ii,jj,kk,icenter,info
+      integer :: ind,ii,jj,kk,icenter
       type(LVIRANeigh_RectCub_type) :: nh_lvr
       type(R2PNeigh_RectCub_type)   :: nh_r2p
       type(RectCub_type), dimension(0:26) :: neighborhood_cells
@@ -1907,14 +1986,6 @@ contains
       real(IRL_double), dimension(3) :: initial_norm
       real(IRL_double) :: initial_dist
       logical :: is_wall
-      integer :: classification
-      real(WP) :: fvol,xtmp,ytmp,ztmp
-      real(WP), dimension(3)     :: fbary
-      real(WP), dimension(3,3)   :: Imom
-      real(WP), dimension(3)     :: d
-      integer , parameter        :: order=3
-      integer , parameter        :: lwork=102 ! dsyev optimal length (nb+2)*order, where block size nb=32
-      real(WP), dimension(lwork) :: work
       
       ! Get storage for volume moments and normal
       call new(volume_moments_and_normal)
@@ -1951,40 +2022,9 @@ contains
                      end do
                   end do
                end do
-
-               ! Now identify the local topology from moments of inertia
-               fvol=0.0_WP; fbary=0.0_WP; Imom=0.0_WP
-               do kk=k-1,k+1
-                  do jj=j-1,j+1
-                     do ii=i-1,i+1
-                        fvol =fvol +this%cfg%vol(ii,jj,kk)*this%VF(ii,jj,kk)
-                        fbary=fbary+this%cfg%vol(ii,jj,kk)*this%VF(ii,jj,kk)*this%Lbary(:,ii,jj,kk)
-                     end do
-                  end do
-               end do
-               fbary=fbary/fvol
-               do kk=k-1,k+1
-                  do jj=j-1,j+1
-                     do ii=i-1,i+1
-                        xtmp=this%Lbary(1,ii,jj,kk)-fbary(1)
-                        ytmp=this%Lbary(2,ii,jj,kk)-fbary(2)
-                        ztmp=this%Lbary(3,ii,jj,kk)-fbary(3)
-                        Imom(1,1)=Imom(1,1)+(ytmp**2+ztmp**2)*this%cfg%vol(ii,jj,kk)*this%VF(ii,jj,kk)
-                        Imom(2,2)=Imom(2,2)+(ztmp**2+xtmp**2)*this%cfg%vol(ii,jj,kk)*this%VF(ii,jj,kk)
-                        Imom(3,3)=Imom(3,3)+(xtmp**2+ytmp**2)*this%cfg%vol(ii,jj,kk)*this%VF(ii,jj,kk)
-                        Imom(1,2)=Imom(1,2)-xtmp*ytmp*this%cfg%vol(ii,jj,kk)*this%VF(ii,jj,kk)
-                        Imom(1,3)=Imom(1,3)-ztmp*xtmp*this%cfg%vol(ii,jj,kk)*this%VF(ii,jj,kk)
-                        Imom(2,3)=Imom(2,3)-ytmp*ztmp*this%cfg%vol(ii,jj,kk)*this%VF(ii,jj,kk)
-                     end do
-                  end do
-               end do
-               call dsyev('V','U',order,Imom,order,d,work,lwork,info); d=max(0.0_WP,d)
-               classification=0
-               if (d(3).gt.this%classification_threshold*d(1)) classification=classification+1
-               if (d(3).gt.this%classification_threshold*d(2)) classification=classification+1
-
+               
                ! Apply different reconstruction for different topologies
-               if (classification.eq.1.or.is_wall) then
+               if (this%type(i,j,k).eq.2.0_WP.or.is_wall) then
                   
                   ! ===================================== !
                   ! THE SHAPE IS LIGAMENT-LIKE, USE LVIRA !

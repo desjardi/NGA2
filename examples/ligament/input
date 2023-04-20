@@ -3,16 +3,16 @@ Partition :	1 1 8
 
 # Mesh definition
 X ligament : 2
-Lx : 20  !40
-Ly : 10  !20
-Lz : 10  !20
-nx : 200 !480
-ny : 100 !240
-nz : 100 !240
+Lx : 10  !40
+Ly :  5  !20
+Lz :  5  !20
+nx : 100 !480
+ny :  50 !240
+nz :  50 !240
 
 # Flow conditions
 Reynolds number :      100
-Target Re_lambda :     45
+Target Re_lambda :     30 !45
 Turbulence intensity : 0.02
 Weber number :         20
 Viscosity ratio :      50
