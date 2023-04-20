@@ -116,6 +116,7 @@ contains
          this%time=timetracker(amRoot=this%cfg%amRoot)
          call param_read('Max timestep size',this%time%dtmax)
          call param_read('Max cfl number',this%time%cflmax)
+         call param_read('Max time',this%time%tmax)
          this%time%dt=this%time%dtmax
          this%time%itmax=2
       end block initialize_timetracker
@@ -134,7 +135,7 @@ contains
       
       ! Initialize our VOF solver and field
       create_and_initialize_vof: block
-         use vfs_class, only: VFlo,VFhi,elvira,r2p
+         use vfs_class, only: VFlo,VFhi,elvira,r2p,art
          use mms_geom,  only: cube_refine_vol
          use param,     only: param_read
 			integer :: i,j,k,n,si,sj,sk
@@ -142,8 +143,8 @@ contains
 			real(WP), dimension(3) :: v_cent,a_cent
 			real(WP) :: vol,area
 			integer, parameter :: amr_ref_lvl=4
-         ! Create a VOF solver with LVIRA
-         this%vf=vfs(cfg=this%cfg,reconstruction_method=r2p,name='VOF')
+         ! Create a VOF solver
+         this%vf=vfs(cfg=this%cfg,reconstruction_method=art,name='VOF')
          ! Initialize to a ligament
 		   do k=this%vf%cfg%kmino_,this%vf%cfg%kmaxo_
 				do j=this%vf%cfg%jmino_,this%vf%cfg%jmaxo_
@@ -241,8 +242,68 @@ contains
 
       ! Create surfmesh object for interface polygon output
       create_smesh: block
-         this%smesh=surfmesh(nvar=0,name='plic')
+         use irl_fortran_interface
+         integer :: i,j,k,nplane,np
+         integer :: ii,jj,kk,info
+         real(WP) :: fvol,xtmp,ytmp,ztmp
+         real(WP), dimension(3)     :: fbary
+         real(WP), dimension(3,3)   :: Imom
+         real(WP), dimension(3)     :: d
+         integer , parameter        :: order=3
+         integer , parameter        :: lwork=102 ! dsyev optimal length (nb+2)*order, where block size nb=32
+         real(WP), dimension(lwork) :: work
+         ! Include an extra variable for number of planes
+         this%smesh=surfmesh(nvar=2,name='plic')
+         this%smesh%varname(1)='nplane'
+         this%smesh%varname(2)='type'
+         ! Transfer polygons to smesh
          call this%vf%update_surfmesh(this%smesh)
+         ! Also populate nplane variable
+         this%smesh%var(1,:)=1.0_WP
+         np=0
+         do k=this%vf%cfg%kmin_,this%vf%cfg%kmax_
+            do j=this%vf%cfg%jmin_,this%vf%cfg%jmax_
+               do i=this%vf%cfg%imin_,this%vf%cfg%imax_
+                  do nplane=1,getNumberOfPlanes(this%vf%liquid_gas_interface(i,j,k))
+                     if (getNumberOfVertices(this%vf%interface_polygon(nplane,i,j,k)).gt.0) then
+                        np=np+1; this%smesh%var(1,np)=real(getNumberOfPlanes(this%vf%liquid_gas_interface(i,j,k)),WP)
+
+                        ! Now identify the local topology from moments of inertia
+                        fvol=0.0_WP; fbary=0.0_WP; Imom=0.0_WP
+                        do kk=k-1,k+1
+                           do jj=j-1,j+1
+                              do ii=i-1,i+1
+                                 fvol =fvol +this%vf%cfg%vol(ii,jj,kk)*this%vf%VF(ii,jj,kk)
+                                 fbary=fbary+this%vf%cfg%vol(ii,jj,kk)*this%vf%VF(ii,jj,kk)*this%vf%Lbary(:,ii,jj,kk)
+                              end do
+                           end do
+                        end do
+                        fbary=fbary/fvol
+                        do kk=k-1,k+1
+                           do jj=j-1,j+1
+                              do ii=i-1,i+1
+                                 xtmp=this%vf%Lbary(1,ii,jj,kk)-fbary(1)
+                                 ytmp=this%vf%Lbary(2,ii,jj,kk)-fbary(2)
+                                 ztmp=this%vf%Lbary(3,ii,jj,kk)-fbary(3)
+                                 Imom(1,1)=Imom(1,1)+(ytmp**2+ztmp**2)*this%vf%cfg%vol(ii,jj,kk)*this%vf%VF(ii,jj,kk)
+                                 Imom(2,2)=Imom(2,2)+(ztmp**2+xtmp**2)*this%vf%cfg%vol(ii,jj,kk)*this%vf%VF(ii,jj,kk)
+                                 Imom(3,3)=Imom(3,3)+(xtmp**2+ytmp**2)*this%vf%cfg%vol(ii,jj,kk)*this%vf%VF(ii,jj,kk)
+                                 Imom(1,2)=Imom(1,2)-xtmp*ytmp*this%vf%cfg%vol(ii,jj,kk)*this%vf%VF(ii,jj,kk)
+                                 Imom(1,3)=Imom(1,3)-ztmp*xtmp*this%vf%cfg%vol(ii,jj,kk)*this%vf%VF(ii,jj,kk)
+                                 Imom(2,3)=Imom(2,3)-ytmp*ztmp*this%vf%cfg%vol(ii,jj,kk)*this%vf%VF(ii,jj,kk)
+                              end do
+                           end do
+                        end do
+                        call dsyev('V','U',order,Imom,order,d,work,lwork,info); d=max(d,0.0_WP)
+                        this%smesh%var(2,np)=0.0_WP
+                        if (d(3).gt.1.5_WP*d(1)) this%smesh%var(2,np)=this%smesh%var(2,np)+1.0_WP
+                        if (d(3).gt.1.5_WP*d(2)) this%smesh%var(2,np)=this%smesh%var(2,np)+1.0_WP
+
+                     end if
+                  end do
+               end do
+            end do
+         end do
       end block create_smesh
 
 
@@ -397,7 +458,68 @@ contains
       
       ! Output to ensight
       if (this%ens_evt%occurs()) then
-         call this%vf%update_surfmesh(this%smesh)
+         ! Update surfmesh object
+         update_smesh: block
+            use irl_fortran_interface
+            integer :: i,j,k,nplane,np
+            integer :: ii,jj,kk,info
+            real(WP) :: fvol,xtmp,ytmp,ztmp
+            real(WP), dimension(3)     :: fbary
+            real(WP), dimension(3,3)   :: Imom
+            real(WP), dimension(3)     :: d
+            integer , parameter        :: order=3
+            integer , parameter        :: lwork=102 ! dsyev optimal length (nb+2)*order, where block size nb=32
+            real(WP), dimension(lwork) :: work
+            ! Transfer polygons to smesh
+            call this%vf%update_surfmesh(this%smesh)
+            ! Also populate nplane variable
+            this%smesh%var(1,:)=1.0_WP
+            np=0
+            do k=this%vf%cfg%kmin_,this%vf%cfg%kmax_
+               do j=this%vf%cfg%jmin_,this%vf%cfg%jmax_
+                  do i=this%vf%cfg%imin_,this%vf%cfg%imax_
+                     do nplane=1,getNumberOfPlanes(this%vf%liquid_gas_interface(i,j,k))
+                        if (getNumberOfVertices(this%vf%interface_polygon(nplane,i,j,k)).gt.0) then
+                           np=np+1; this%smesh%var(1,np)=real(getNumberOfPlanes(this%vf%liquid_gas_interface(i,j,k)),WP)
+
+                           ! Now identify the local topology from moments of inertia
+                           fvol=0.0_WP; fbary=0.0_WP; Imom=0.0_WP
+                           do kk=k-1,k+1
+                              do jj=j-1,j+1
+                                 do ii=i-1,i+1
+                                    fvol =fvol +this%vf%cfg%vol(ii,jj,kk)*this%vf%VF(ii,jj,kk)
+                                    fbary=fbary+this%vf%cfg%vol(ii,jj,kk)*this%vf%VF(ii,jj,kk)*this%vf%Lbary(:,ii,jj,kk)
+                                 end do
+                              end do
+                           end do
+                           fbary=fbary/fvol
+                           do kk=k-1,k+1
+                              do jj=j-1,j+1
+                                 do ii=i-1,i+1
+                                    xtmp=this%vf%Lbary(1,ii,jj,kk)-fbary(1)
+                                    ytmp=this%vf%Lbary(2,ii,jj,kk)-fbary(2)
+                                    ztmp=this%vf%Lbary(3,ii,jj,kk)-fbary(3)
+                                    Imom(1,1)=Imom(1,1)+(ytmp**2+ztmp**2)*this%vf%cfg%vol(ii,jj,kk)*this%vf%VF(ii,jj,kk)
+                                    Imom(2,2)=Imom(2,2)+(ztmp**2+xtmp**2)*this%vf%cfg%vol(ii,jj,kk)*this%vf%VF(ii,jj,kk)
+                                    Imom(3,3)=Imom(3,3)+(xtmp**2+ytmp**2)*this%vf%cfg%vol(ii,jj,kk)*this%vf%VF(ii,jj,kk)
+                                    Imom(1,2)=Imom(1,2)-xtmp*ytmp*this%vf%cfg%vol(ii,jj,kk)*this%vf%VF(ii,jj,kk)
+                                    Imom(1,3)=Imom(1,3)-ztmp*xtmp*this%vf%cfg%vol(ii,jj,kk)*this%vf%VF(ii,jj,kk)
+                                    Imom(2,3)=Imom(2,3)-ytmp*ztmp*this%vf%cfg%vol(ii,jj,kk)*this%vf%VF(ii,jj,kk)
+                                 end do
+                              end do
+                           end do
+                           call dsyev('V','U',order,Imom,order,d,work,lwork,info); d=max(d,0.0_WP)
+                           this%smesh%var(2,np)=0.0_WP
+                           if (d(3).gt.1.5_WP*d(1)) this%smesh%var(2,np)=this%smesh%var(2,np)+1.0_WP
+                           if (d(3).gt.1.5_WP*d(2)) this%smesh%var(2,np)=this%smesh%var(2,np)+1.0_WP
+                           
+                        end if
+                     end do
+                  end do
+               end do
+            end do
+         end block update_smesh
+         ! Perform ensight output
          call this%ens_out%write_data(this%time%t)
       end if
       

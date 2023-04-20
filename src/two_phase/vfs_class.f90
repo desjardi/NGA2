@@ -101,7 +101,7 @@ module vfs_class
       ! Interface reconstruction method
       integer :: reconstruction_method                    !< Interface reconstruction method
       real(WP) :: twoplane_threshold=0.95_WP              !< Threshold for r2p to switch from one-plane to two-planes
-      real(WP) :: art_threshold=1.30_WP                   !< Threshold for art to switch from r2p to lvira
+      real(WP) :: classification_threshold=1.50_WP        !< Threshold for classifying spheres/ligaments/sheets
       
       ! Curvature clipping parameter
       real(WP) :: maxcurv_times_mesh=1.0_WP               !< Clipping parameter for maximum curvature (classically set to 1, but should be larger since we resolve more)
@@ -1906,6 +1906,8 @@ contains
       real(WP) :: surface_area
       real(IRL_double), dimension(3) :: initial_norm
       real(IRL_double) :: initial_dist
+      logical :: is_wall
+      integer :: classification
       real(WP) :: fvol,xtmp,ytmp,ztmp
       real(WP), dimension(3)     :: fbary
       real(WP), dimension(3,3)   :: Imom
@@ -1914,7 +1916,7 @@ contains
       integer , parameter        :: lwork=102 ! dsyev optimal length (nb+2)*order, where block size nb=32
       real(WP), dimension(lwork) :: work
       
-      ! Get storage for voluem moments and normal
+      ! Get storage for volume moments and normal
       call new(volume_moments_and_normal)
       
       ! Give ourselves an R2P and an LVIRA neighborhood of 27 cells along with separated volume moments
@@ -1940,6 +1942,16 @@ contains
                   cycle
                end if
                
+               ! Check whether a wall is in our neighborhood
+               is_wall=.false.
+               do kk=k-1,k+1
+                  do jj=j-1,j+1
+                     do ii=i-1,i+1
+                        if (this%mask(ii,jj,kk).eq.1) is_wall=.true.
+                     end do
+                  end do
+               end do
+
                ! Now identify the local topology from moments of inertia
                fvol=0.0_WP; fbary=0.0_WP; Imom=0.0_WP
                do kk=k-1,k+1
@@ -1958,21 +1970,68 @@ contains
                         ytmp=this%Lbary(2,ii,jj,kk)-fbary(2)
                         ztmp=this%Lbary(3,ii,jj,kk)-fbary(3)
                         Imom(1,1)=Imom(1,1)+(ytmp**2+ztmp**2)*this%cfg%vol(ii,jj,kk)*this%VF(ii,jj,kk)
-                        Imom(2,2)=Imom(2,2)+(xtmp**2+ztmp**2)*this%cfg%vol(ii,jj,kk)*this%VF(ii,jj,kk)
+                        Imom(2,2)=Imom(2,2)+(ztmp**2+xtmp**2)*this%cfg%vol(ii,jj,kk)*this%VF(ii,jj,kk)
                         Imom(3,3)=Imom(3,3)+(xtmp**2+ytmp**2)*this%cfg%vol(ii,jj,kk)*this%VF(ii,jj,kk)
                         Imom(1,2)=Imom(1,2)-xtmp*ytmp*this%cfg%vol(ii,jj,kk)*this%VF(ii,jj,kk)
-                        Imom(1,3)=Imom(1,3)-xtmp*ztmp*this%cfg%vol(ii,jj,kk)*this%VF(ii,jj,kk)
+                        Imom(1,3)=Imom(1,3)-ztmp*xtmp*this%cfg%vol(ii,jj,kk)*this%VF(ii,jj,kk)
                         Imom(2,3)=Imom(2,3)-ytmp*ztmp*this%cfg%vol(ii,jj,kk)*this%VF(ii,jj,kk)
                      end do
                   end do
                end do
                call dsyev('V','U',order,Imom,order,d,work,lwork,info); d=max(0.0_WP,d)
-               
+               classification=0
+               if (d(3).gt.this%classification_threshold*d(1)) classification=classification+1
+               if (d(3).gt.this%classification_threshold*d(2)) classification=classification+1
+
                ! Apply different reconstruction for different topologies
-               if (d(2).lt.this%art_threshold*sqrt(d(1)*d(3))) then
+               if (classification.eq.1.or.is_wall) then
+                  
+                  ! ===================================== !
+                  ! THE SHAPE IS LIGAMENT-LIKE, USE LVIRA !
+                  ! Also, a wall may have been found...   !
+                  ! ===================================== !
+                  ! Set neighborhood_cells and liquid_volume_fraction to current correct values
+                  ind=0
+                  do kk=k-1,k+1
+                     do jj=j-1,j+1
+                        do ii=i-1,i+1
+                           ! Skip true wall cells - bconds can be used here
+                           if (this%mask(ii,jj,kk).eq.1) cycle
+                           ! Add cell to neighborhood
+                           call addMember(nh_lvr,neighborhood_cells(ind),liquid_volume_fraction(ind))
+                           ! Build the cell
+                           call construct_2pt(neighborhood_cells(ind),[this%cfg%x(ii),this%cfg%y(jj),this%cfg%z(kk)],[this%cfg%x(ii+1),this%cfg%y(jj+1),this%cfg%z(kk+1)])
+                           ! Assign volume fraction
+                           liquid_volume_fraction(ind)=this%VF(ii,jj,kk)
+                           ! Trap and set stencil center
+                           if (ii.eq.i.and.jj.eq.j.and.kk.eq.k) then
+                              icenter=ind
+                              call setCenterOfStencil(nh_lvr,icenter)
+                           end if
+                           ! Increment counter
+                           ind=ind+1
+                        end do
+                     end do
+                  end do
+                  
+                  ! Formulate initial guess
+                  call setNumberOfPlanes(this%liquid_gas_interface(i,j,k),1)
+                  initial_norm=normalize(this%Gbary(:,i,j,k)-this%Lbary(:,i,j,k))
+                  initial_dist=dot_product(initial_norm,[this%cfg%xm(i),this%cfg%ym(j),this%cfg%zm(k)])
+                  call setPlane(this%liquid_gas_interface(i,j,k),0,initial_norm,initial_dist)
+                  call matchVolumeFraction(neighborhood_cells(icenter),this%VF(i,j,k),this%liquid_gas_interface(i,j,k))
+                  
+                  ! Perform the reconstruction
+                  call reconstructLVIRA3D(nh_lvr,this%liquid_gas_interface(i,j,k))
+                  
+                  ! Clean up neighborhood
+                  call emptyNeighborhood(nh_lvr)
+                  
+               else
                   
                   ! ==================================================== !
                   ! THE SHAPE COULD BE SPHEROIDAL OR SHEET-LIKE, USE R2P !
+                  ! Also, no wall was found in the neighborhood...       !
                   ! ==================================================== !
                   ! Prepare R2P neighborhood
                   ind=0
@@ -2025,48 +2084,6 @@ contains
                   
                   ! Clean up neighborhood
                   call emptyNeighborhood(nh_r2p)
-                  
-               else
-                  
-                  ! ===================================== !
-                  ! THE SHAPE IS LIGAMENT-LIKE, USE LVIRA !
-                  ! ===================================== !
-                  ! Set neighborhood_cells and liquid_volume_fraction to current correct values
-                  ind=0
-                  do kk=k-1,k+1
-                     do jj=j-1,j+1
-                        do ii=i-1,i+1
-                           ! Skip true wall cells - bconds can be used here
-                           if (this%mask(ii,jj,kk).eq.1) cycle
-                           ! Add cell to neighborhood
-                           call addMember(nh_lvr,neighborhood_cells(ind),liquid_volume_fraction(ind))
-                           ! Build the cell
-                           call construct_2pt(neighborhood_cells(ind),[this%cfg%x(ii),this%cfg%y(jj),this%cfg%z(kk)],[this%cfg%x(ii+1),this%cfg%y(jj+1),this%cfg%z(kk+1)])
-                           ! Assign volume fraction
-                           liquid_volume_fraction(ind)=this%VF(ii,jj,kk)
-                           ! Trap and set stencil center
-                           if (ii.eq.i.and.jj.eq.j.and.kk.eq.k) then
-                              icenter=ind
-                              call setCenterOfStencil(nh_lvr,icenter)
-                           end if
-                           ! Increment counter
-                           ind=ind+1
-                        end do
-                     end do
-                  end do
-                  
-                  ! Formulate initial guess
-                  call setNumberOfPlanes(this%liquid_gas_interface(i,j,k),1)
-                  initial_norm=normalize(this%Gbary(:,i,j,k)-this%Lbary(:,i,j,k))
-                  initial_dist=dot_product(initial_norm,[this%cfg%xm(i),this%cfg%ym(j),this%cfg%zm(k)])
-                  call setPlane(this%liquid_gas_interface(i,j,k),0,initial_norm,initial_dist)
-                  call matchVolumeFraction(neighborhood_cells(icenter),this%VF(i,j,k),this%liquid_gas_interface(i,j,k))
-                  
-                  ! Perform the reconstruction
-                  call reconstructLVIRA3D(nh_lvr,this%liquid_gas_interface(i,j,k))
-                  
-                  ! Clean up neighborhood
-                  call emptyNeighborhood(nh_lvr)
                   
                end if
                

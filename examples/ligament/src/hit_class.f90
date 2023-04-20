@@ -176,7 +176,7 @@ contains
          this%Ret_tgt=this%tke_tgt**2/(this%eps_tgt*this%visc)
          this%tau_tgt=2.0_WP*this%tke_tgt/(3.0_WP*this%eps_tgt)
          ! Read in forcing parameter (we need dt<tau_tgt/forcing)
-         max_forcing_estimate=5.0_WP*this%tau_tgt*this%Urms_tgt/this%cfg%min_meshsize
+         max_forcing_estimate=3.0_WP*this%tau_tgt*this%Urms_tgt/this%cfg%min_meshsize
          call param_read('Forcing constant',this%forcing,default=max_forcing_estimate)
          ! Output nominal turbulence parameters
          if (this%cfg%amRoot) then
