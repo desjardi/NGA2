@@ -20,7 +20,7 @@ Density :   1
 Gravity :   0 -1 0
 
 # Particle parameters
-Number of particles : 100000
+Number of particles : 3000
 Particle density :  1000
 Particle diameter : 0.01
 
