@@ -6,12 +6,12 @@ Domain length :   10
 Number of cells : 64
 
 # Fluid properties
-Weber number :    100
+Weber number :    200
 Bond number  :    120      # 12 Pi^2 should be most unstable
-Viscosity ratio : 10
-Density ratio :   10
+Viscosity ratio : 50
+Density ratio :   1000
 
-Convective velocity : 0.1
+Convective velocity : 3
 
 # Time integration
 Max timestep size : 1e-2
@@ -22,4 +22,4 @@ Pressure tolerance : 1e-6
 Pressure iteration : 100
 
 # Ensight output
-Ensight output period : 1
+Ensight output period : 0.1
