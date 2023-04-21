@@ -7,7 +7,7 @@ Number of cells : 64
 
 # Fluid properties
 Weber number :    100
-Bond number  :    1
+Bond number  :    120      # 12 Pi^2 should be most unstable
 Viscosity ratio : 10
 Density ratio :   10
 
