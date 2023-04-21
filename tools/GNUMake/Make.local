@@ -58,7 +58,7 @@ CXXFLAGS := $(subst -O0,-O2,$(CXXFLAGS))
 
 # I don't like the CFLAGS shown by `print-CFLAGS`.  So I am going to
 # completely replace it with my own flags.
-CFLAGS = MY_AWESOME_CFLAGS
+CFLAGS = 
 
 
 # This compiler has a bug.  I have to remove an option from CXXFLAGS.

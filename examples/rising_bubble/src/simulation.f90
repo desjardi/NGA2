@@ -457,7 +457,7 @@ contains
                         &                                                +sum(fs%divu_y(:,i,j,k)*Txy(i,j:j+1,k))     &
                         &                                                +sum(fs%divu_z(:,i,j,k)*Tzx(i,j,k:k+1))
                         if (fs%vmask(i,j,k).eq.0) resV(i,j,k)=resV(i,j,k)+sum(fs%divv_x(:,i,j,k)*Txy(i:i+1,j,k))     &
-                                                                        +sum(fs%divv_y(:,i,j,k)*stress(i,j-1:j,k,4))&
+                        &                                                +sum(fs%divv_y(:,i,j,k)*stress(i,j-1:j,k,4))&
                         &                                                +sum(fs%divv_z(:,i,j,k)*Tyz(i,j,k:k+1))
                         if (fs%wmask(i,j,k).eq.0) resW(i,j,k)=resW(i,j,k)+sum(fs%divw_x(:,i,j,k)*Tzx(i:i+1,j,k))     &
                         &                                                +sum(fs%divw_y(:,i,j,k)*Tyz(i,j:j+1,k))     &                  

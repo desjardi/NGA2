@@ -100,7 +100,7 @@ module vfs_class
       
       ! Interface reconstruction method
       integer :: reconstruction_method                    !< Interface reconstruction method
-      real(WP) :: twoplane_threshold=0.95_WP              !< Threshold for r2p to switch from one-plane to two-planes
+      real(WP) :: twoplane_threshold=0.99_WP              !< Threshold for r2p to switch from one-plane to two-planes
       real(WP) :: classification_threshold=1.50_WP        !< Threshold for classifying spheres/ligaments/sheets
       
       ! Local cell classification
@@ -1470,7 +1470,7 @@ contains
    subroutine classify_type(this)
       implicit none
       class(vfs), intent(inout) :: this
-      integer :: i,j,k,ii,jj,kk,info
+      integer :: n,i,j,k,ii,jj,kk,info,ni,nl
       real(WP) :: fvol,xtmp,ytmp,ztmp
       real(WP), dimension(3)     :: fbary
       real(WP), dimension(3,3)   :: Imom
@@ -1478,7 +1478,9 @@ contains
       integer , parameter        :: order=3
       integer , parameter        :: lwork=102 ! dsyev optimal length (nb+2)*order, where block size nb=32
       real(WP), dimension(lwork) :: work
-      
+      integer, parameter :: ngrow=2
+      real(WP), dimension(:,:,:), allocatable :: newtype
+
       ! Default value is 0
       this%type=0.0_WP
       
@@ -1495,18 +1497,18 @@ contains
                
                ! Extract moment of inertia
                fvol=0.0_WP; fbary=0.0_WP; Imom=0.0_WP
-               do kk=k-1,k+1
-                  do jj=j-1,j+1
-                     do ii=i-1,i+1
+               do kk=k-2,k+2
+                  do jj=j-2,j+2
+                     do ii=i-2,i+2
                         fvol =fvol +this%cfg%vol(ii,jj,kk)*this%VF(ii,jj,kk)
                         fbary=fbary+this%cfg%vol(ii,jj,kk)*this%VF(ii,jj,kk)*this%Lbary(:,ii,jj,kk)
                      end do
                   end do
                end do
                fbary=fbary/fvol
-               do kk=k-1,k+1
-                  do jj=j-1,j+1
-                     do ii=i-1,i+1
+               do kk=k-2,k+2
+                  do jj=j-2,j+2
+                     do ii=i-2,i+2
                         xtmp=this%Lbary(1,ii,jj,kk)-fbary(1)
                         ytmp=this%Lbary(2,ii,jj,kk)-fbary(2)
                         ztmp=this%Lbary(3,ii,jj,kk)-fbary(3)
@@ -1535,6 +1537,29 @@ contains
       ! Communicate
       call this%cfg%sync(this%type)
       
+      ! Apply band growth on sheet type to avoid early tearing
+      allocate(newtype(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
+      do n=1,ngrow
+         ! Initialize based on current type
+         newtype=this%type
+         ! Growth type=3 to diurect neighbors
+         do k=this%cfg%kmin_,this%cfg%kmax_
+            do j=this%cfg%jmin_,this%cfg%jmax_
+               do i=this%cfg%imin_,this%cfg%imax_
+                  ! Only work on interface cells
+                  if (this%type(i,j,k).eq.0.0_WP) cycle
+                  ! Look around for type=3
+                  if (maxval(this%type(i-1:i+1,j-1:j+1,k-1:k+1)).eq.3.0_WP) newtype(i,j,k)=3.0_WP
+               end do
+            end do
+         end do
+         ! Copy back
+         this%type=newtype
+         ! Communicate
+         call this%cfg%sync(this%type)
+      end do
+      deallocate(newtype)
+
    end subroutine classify_type
 
    
