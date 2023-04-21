@@ -11,7 +11,7 @@ Bond number  :    120      # 12 Pi^2 should be most unstable
 Viscosity ratio : 10
 Density ratio :   10
 
-Convective velocity : 0
+Convective velocity : 0.1
 
 # Time integration
 Max timestep size : 1e-2

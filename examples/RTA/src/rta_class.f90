@@ -125,15 +125,13 @@ contains
       create_and_initialize_vof: block
          use vfs_class, only: elvira
          integer :: i,j,k
-         real(WP) :: xloc
          ! Create a VOF solver with LVIRA
          this%vf=vfs(cfg=this%cfg,reconstruction_method=elvira,name='VOF')
-         ! Initialize to flat interface in liquid needle
-         xloc=0.5_WP*this%cfg%xL
+         ! Initialize to flat interface at inlet
          do k=this%vf%cfg%kmino_,this%vf%cfg%kmaxo_
             do j=this%vf%cfg%jmino_,this%vf%cfg%jmaxo_
                do i=this%vf%cfg%imino_,this%vf%cfg%imaxo_
-                  if (this%vf%cfg%xm(i).lt.xloc) then
+                  if (this%vf%cfg%xm(i).lt.0.0_WP) then
                      this%vf%VF(i,j,k)=1.0_WP
                   else
                      this%vf%VF(i,j,k)=0.0_WP
