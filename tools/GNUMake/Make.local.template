@@ -27,15 +27,10 @@ VERBOSE=TRUE
 
 
 # By default ccache is not used unless USE_CCACHE is TRUE.
-# But I want the opposite.  That is ccache is used by default unless
-# USE_CCACHE is FALSE.  But if I am using UPC++, I would like to turn
-# ccache off.
-ifeq ($(USE_CCACHE),FALSE)
-  CCACHE =
-else ifeq ($(USE_UPCXX),TRUE)
-  CCACHE =
-else
+ifeq ($(USE_CCACHE),TRUE)
   CCACHE = ccache
+else
+  CCACHE =
 endif
 
 
@@ -58,7 +53,7 @@ CXXFLAGS := $(subst -O0,-O2,$(CXXFLAGS))
 
 # I don't like the CFLAGS shown by `print-CFLAGS`.  So I am going to
 # completely replace it with my own flags.
-CFLAGS = MY_AWESOME_CFLAGS
+CFLAGS =
 
 
 # This compiler has a bug.  I have to remove an option from CXXFLAGS.
