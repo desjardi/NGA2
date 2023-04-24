@@ -12,11 +12,11 @@ nz : 100 !240
 
 # Flow conditions
 Reynolds number :      100
-Target Re_lambda :     45
-Turbulence intensity : 0.02
 Weber number :         20
 Viscosity ratio :      50
 Density ratio :        1000
+Target Re_lambda :     45
+Turbulence intensity : 0.02
 
 # Time integration
 Max timestep size : 2e-2
