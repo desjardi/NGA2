@@ -121,8 +121,8 @@ contains
       ! Throw error if size mismatch
       if ((dims(1).ne.self%pg%nx).or.(dims(2).ne.self%pg%ny).or.(dims(3).ne.self%pg%nz)) then
          if (self%pg%amRoot) then
-            print*, 'grid size = ',self%pg%nx,self%pg%ny,self%pg%nz
-            print*, 'data size = ',dims(1),dims(2),dims(3)
+            print*,'grid size = ',self%pg%nx,self%pg%ny,self%pg%nz
+            print*,'data size = ',dims(1),dims(2),dims(3)
          end if
          call die('[datafile constructor] Size of datafile ['//trim(self%filename)//'] does not match pgrid ['//self%pg%name//']')
       end if

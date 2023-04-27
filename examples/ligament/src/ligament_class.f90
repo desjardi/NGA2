@@ -61,14 +61,24 @@ module ligament_class
 contains
    
    
+   !> Function that defines a level set function for a droplet
+   function levelset_droplet(xyz,t) result(G)
+      implicit none
+      real(WP), dimension(3),intent(in) :: xyz
+      real(WP), intent(in) :: t
+      real(WP) :: G
+      G=0.5_WP-sqrt(xyz(1)**2+xyz(2)**2+xyz(3)**2)
+   end function levelset_droplet
+
+
    !> Function that defines a level set function for a ligament
-	function levelset_ligament(xyz,t) result(G)
-		implicit none
-		real(WP), dimension(3),intent(in) :: xyz
-		real(WP), intent(in) :: t
-		real(WP) :: G
-	   G=0.5_WP-sqrt(xyz(1)**2+xyz(2)**2+xyz(3)**2)
-	end function levelset_ligament
+   function levelset_ligament(xyz,t) result(G)
+      implicit none
+      real(WP), dimension(3),intent(in) :: xyz
+      real(WP), intent(in) :: t
+      real(WP) :: G
+      G=0.5_WP-sqrt(xyz(1)**2+xyz(2)**2)
+   end function levelset_ligament
    
    
    !> Initialization of ligament simulation
@@ -138,40 +148,40 @@ contains
          use vfs_class, only: VFlo,VFhi,elvira,r2p,art
          use mms_geom,  only: cube_refine_vol
          use param,     only: param_read
-			integer :: i,j,k,n,si,sj,sk
-			real(WP), dimension(3,8) :: cube_vertex
-			real(WP), dimension(3) :: v_cent,a_cent
-			real(WP) :: vol,area
-			integer, parameter :: amr_ref_lvl=4
+         integer :: i,j,k,n,si,sj,sk
+         real(WP), dimension(3,8) :: cube_vertex
+         real(WP), dimension(3) :: v_cent,a_cent
+         real(WP) :: vol,area
+         integer, parameter :: amr_ref_lvl=4
          ! Create a VOF solver
          this%vf=vfs(cfg=this%cfg,reconstruction_method=art,name='VOF')
          ! Initialize to a ligament
-		   do k=this%vf%cfg%kmino_,this%vf%cfg%kmaxo_
-				do j=this%vf%cfg%jmino_,this%vf%cfg%jmaxo_
-					do i=this%vf%cfg%imino_,this%vf%cfg%imaxo_
-						! Set cube vertices
-				      n=0
-						do sk=0,1
-							do sj=0,1
-								do si=0,1
-									n=n+1; cube_vertex(:,n)=[this%vf%cfg%x(i+si),this%vf%cfg%y(j+sj),this%vf%cfg%z(k+sk)]
-								end do
-							end do
-						end do
-						! Call adaptive refinement code to get volume and barycenters recursively
-				      vol=0.0_WP; area=0.0_WP; v_cent=0.0_WP; a_cent=0.0_WP
-						call cube_refine_vol(cube_vertex,vol,area,v_cent,a_cent,levelset_ligament,0.0_WP,amr_ref_lvl)
-						this%vf%VF(i,j,k)=vol/this%vf%cfg%vol(i,j,k)
-						if (this%vf%VF(i,j,k).ge.VFlo.and.this%vf%VF(i,j,k).le.VFhi) then
-							this%vf%Lbary(:,i,j,k)=v_cent
-							this%vf%Gbary(:,i,j,k)=([this%vf%cfg%xm(i),this%vf%cfg%ym(j),this%vf%cfg%zm(k)]-this%vf%VF(i,j,k)*this%vf%Lbary(:,i,j,k))/(1.0_WP-this%vf%VF(i,j,k))
-						else
-							this%vf%Lbary(:,i,j,k)=[this%vf%cfg%xm(i),this%vf%cfg%ym(j),this%vf%cfg%zm(k)]
-							this%vf%Gbary(:,i,j,k)=[this%vf%cfg%xm(i),this%vf%cfg%ym(j),this%vf%cfg%zm(k)]
-						end if
-					end do
-				end do
-			end do
+         do k=this%vf%cfg%kmino_,this%vf%cfg%kmaxo_
+            do j=this%vf%cfg%jmino_,this%vf%cfg%jmaxo_
+               do i=this%vf%cfg%imino_,this%vf%cfg%imaxo_
+                  ! Set cube vertices
+                  n=0
+                  do sk=0,1
+                     do sj=0,1
+                        do si=0,1
+                           n=n+1; cube_vertex(:,n)=[this%vf%cfg%x(i+si),this%vf%cfg%y(j+sj),this%vf%cfg%z(k+sk)]
+                        end do
+                     end do
+                  end do
+                  ! Call adaptive refinement code to get volume and barycenters recursively
+                  vol=0.0_WP; area=0.0_WP; v_cent=0.0_WP; a_cent=0.0_WP
+                  call cube_refine_vol(cube_vertex,vol,area,v_cent,a_cent,levelset_ligament,0.0_WP,amr_ref_lvl)
+                  this%vf%VF(i,j,k)=vol/this%vf%cfg%vol(i,j,k)
+                  if (this%vf%VF(i,j,k).ge.VFlo.and.this%vf%VF(i,j,k).le.VFhi) then
+                     this%vf%Lbary(:,i,j,k)=v_cent
+                     this%vf%Gbary(:,i,j,k)=([this%vf%cfg%xm(i),this%vf%cfg%ym(j),this%vf%cfg%zm(k)]-this%vf%VF(i,j,k)*this%vf%Lbary(:,i,j,k))/(1.0_WP-this%vf%VF(i,j,k))
+                  else
+                     this%vf%Lbary(:,i,j,k)=[this%vf%cfg%xm(i),this%vf%cfg%ym(j),this%vf%cfg%zm(k)]
+                     this%vf%Gbary(:,i,j,k)=[this%vf%cfg%xm(i),this%vf%cfg%ym(j),this%vf%cfg%zm(k)]
+                  end if
+               end do
+            end do
+         end do
          ! Update the band
          call this%vf%update_band()
          ! Perform interface reconstruction from VOF field
