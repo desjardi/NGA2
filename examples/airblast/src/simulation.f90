@@ -17,8 +17,8 @@ module simulation
    type(coupler) :: xcpl_i2a,ycpl_i2a,zcpl_i2a
    
    !> Postprocessing tool
-   type(postproc) :: pproc
-   logical :: only_pproc=.false.
+   !type(postproc) :: pproc
+   !logical :: only_pproc=.false.
    
    public :: simulation_init,simulation_run,simulation_final
 
@@ -30,15 +30,18 @@ contains
       implicit none
       
       ! Postproc handling
-      call pproc%analyze(only_pproc)
-      if (only_pproc) return
+      !call pproc%analyze(only_pproc)
+      !if (only_pproc) return
       
       ! Initialize injector simulation
       call injector%init()
-      return
-
+      
       ! Initialize atomization simulation
       call atomization%init()
+      
+      ! If restarting, the domains could be out of sync, so resync
+      ! time by forcing injector to be at same time as atomization
+      injector%time%t=atomization%time%t
       
       ! Initialize couplers from injector to atomization
       create_coupler_i2a: block
@@ -55,13 +58,8 @@ contains
    subroutine simulation_run
       implicit none
       
-      !do while (.not.injector%time%done())
-      !   call injector%step()
-      !end do
-      !return
-      
       ! Postproc handling
-      if (only_pproc) return
+      !if (only_pproc) return
       
       ! Atomization drives overall time integration
       do while (.not.atomization%time%done())
@@ -103,11 +101,10 @@ contains
       implicit none
       
       ! Postproc handling
-      if (only_pproc) return
+      !if (only_pproc) return
 
       ! Finalize injector simulation
       call injector%final()
-      return
       
       ! Finalize atomization simulation
       call atomization%final()

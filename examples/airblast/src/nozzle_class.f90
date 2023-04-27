@@ -454,7 +454,7 @@ contains
             call this%df%pullvar(name='U',var=this%fs%U)
             call this%df%pullvar(name='V',var=this%fs%V)
             call this%df%pullvar(name='W',var=this%fs%W)
-            call this%df%pullvar(name='P',var=this%fs%P)
+            !call this%df%pullvar(name='P',var=this%fs%P)  !< Reset pressure upon restart because I've noticed IB is causing drift...
             ! Apply Neumann outflow condition
             call this%fs%apply_bcond(this%time%t,this%time%dt)
          end if
