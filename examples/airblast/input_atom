@@ -1,14 +1,14 @@
 # Parallelization
-Partition :	8 1 1
+Partition :	35 1 12
 
 # Mesh definition
 X shift : 0.01
 Lx :  0.04
 Ly :  0.04
 Lz :  0.04
-nx :  400
-ny :  400
-nz :  400
+nx :  420
+ny :  420
+nz :  420
 
 # PLY file
 PLY filename : atomizer_tip.ply
