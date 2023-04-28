@@ -29,8 +29,9 @@ module simulation
    real(WP), dimension(:,:,:), allocatable :: U,V,W
    real(WP), dimension(:,:,:), allocatable :: rho,visc
    
-   !> Particle barycenter
+   !> Particle barycenter and reference diameter
    real(WP) :: mean_y
+   real(WP) :: dp
    
 contains
    
@@ -75,7 +76,6 @@ contains
       ! Initialize our LPT solver
       initialize_lpt: block
          use random, only: random_uniform
-         real(WP) :: dp
          integer :: i,np
          ! Create solver
          lp=lpt(cfg=cfg,name='LPT')
