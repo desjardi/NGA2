@@ -15,11 +15,11 @@ module pgrid_class
    type, extends(sgrid) :: pgrid
       
       ! Parallelization information
-      type(MPI_Group)    :: group                             !< Group of processors working on the pgrid
-      type(MPI_Comm)     :: comm  =MPI_COMM_NULL              !< Communicator for our group
-      type(MPI_Datatype) :: view  =MPI_DATATYPE_NULL          !< Local to global array mapping info - real(WP)
-      type(MPI_Datatype) :: Iview =MPI_DATATYPE_NULL          !< Local to global array mapping info - integer
-      type(MPI_Datatype) :: SPview=MPI_DATATYPE_NULL          !< Local to global array mapping info - real(SP)
+      type(MPI_Group)    :: group           !< Group of processors working on the pgrid
+      type(MPI_Comm)     :: comm            !< Communicator for our group
+      type(MPI_Datatype) :: view            !< Local to global array mapping info - real(WP)
+      type(MPI_Datatype) :: Iview           !< Local to global array mapping info - integer
+      type(MPI_Datatype) :: SPview          !< Local to global array mapping info - real(SP)
       integer :: nproc                      !< Number of processors
       integer :: rank                       !< Processor grid rank
       logical :: amRoot                     !< Am I grid root?
@@ -29,15 +29,15 @@ module pgrid_class
       integer :: iproc=0                    !< Coordinate location of processor in x
       integer :: jproc=0                    !< Coordinate location of processor in y
       integer :: kproc=0                    !< Coordinate location of processor in z
-      type(MPI_Comm) :: xcomm=MPI_COMM_NULL !< 1D x-communicator
-      type(MPI_Comm) :: ycomm=MPI_COMM_NULL !< 1D y-communicator
-      type(MPI_Comm) :: zcomm=MPI_COMM_NULL !< 1D z-communicator
+      type(MPI_Comm) :: xcomm               !< 1D x-communicator
+      type(MPI_Comm) :: ycomm               !< 1D y-communicator
+      type(MPI_Comm) :: zcomm               !< 1D z-communicator
       integer :: xrank=MPI_UNDEFINED        !< 1D rank for xcomm
       integer :: yrank=MPI_UNDEFINED        !< 1D rank for ycomm
       integer :: zrank=MPI_UNDEFINED        !< 1D rank for zcomm
-      type(MPI_Comm) :: xycomm=MPI_COMM_NULL!< 2D xy-communicator
-      type(MPI_Comm) :: yzcomm=MPI_COMM_NULL!< 2D yz-communicator
-      type(MPI_Comm) :: zxcomm=MPI_COMM_NULL!< 2D zx-communicator
+      type(MPI_Comm) :: xycomm              !< 2D xy-communicator
+      type(MPI_Comm) :: yzcomm              !< 2D yz-communicator
+      type(MPI_Comm) :: zxcomm              !< 2D zx-communicator
       integer :: xyrank=MPI_UNDEFINED       !< 2D rank for xycomm
       integer :: yzrank=MPI_UNDEFINED       !< 2D rank for yzcomm
       integer :: zxrank=MPI_UNDEFINED       !< 2D rank for zxcomm
@@ -224,6 +224,17 @@ contains
       implicit none
       class(pgrid), intent(inout) :: self
       integer :: ierr
+      ! Set null comm/datatype values
+      self%comm  =MPI_COMM_NULL
+      self%xcomm =MPI_COMM_NULL
+      self%ycomm =MPI_COMM_NULL
+      self%zcomm =MPI_COMM_NULL
+      self%xycomm=MPI_COMM_NULL
+      self%yzcomm=MPI_COMM_NULL
+      self%zxcomm=MPI_COMM_NULL
+      self%view  =MPI_DATATYPE_NULL
+      self%Iview =MPI_DATATYPE_NULL
+      self%SPview=MPI_DATATYPE_NULL
       ! Get group size
       call MPI_GROUP_SIZE(self%group,self%nproc,ierr)
       if (self%nproc.eq.0) call die('[pgrid constructor] A non-empty group is required')

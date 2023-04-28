@@ -17,9 +17,10 @@ module pardata_class
       ! pardata has two partitioned grid
       type(pgrid), pointer     :: pg                                  !< Original partitioned grid
       type(pgrid), allocatable :: pg_io                               !< Partitioned grid for I/O
-      ! MPI group for I/O
+      ! I/O partition info
       type(MPI_Group) :: grp_io
-      logical :: inIOgrp
+      logical :: ingrp_io
+      integer, dimension(3) :: partition_io
       ! Filename for read/write operations
       character(len=str_medium) :: filename
       ! A pardata stores scalar values
@@ -77,20 +78,23 @@ contains
       integer, dimension(3,1) :: iorange
       integer :: ierr
       
+      ! Store IO partition
+      this%partition_io=iopartition
+      
       ! Basic checks on the partition
-      if (product(iopartition).le.0) call die('[pardata constructor] At least one process must be assigned to IO')
-      if (product(iopartition).gt.this%pg%nproc) call die('[pardata constructor] Number of IO processes must be less or equal to pgrid processes')
+      if (product(this%partition_io).le.0) call die('[pardata constructor] At least one process must be assigned to IO')
+      if (product(this%partition_io).gt.this%pg%nproc) call die('[pardata constructor] Number of IO processes must be less or equal to pgrid processes')
       
       ! Create IO MPI group using the first ranks (could explore other strategies here)
-      iorange(:,1)=[0,product(iopartition)-1,1]
+      iorange(:,1)=[0,product(this%partition_io)-1,1]
       call MPI_Group_range_incl(this%pg%group,1,iorange,this%grp_io,ierr)
 
       ! Create IO logical
-      this%inIOgrp=.false.
-      if (this%pg%rank.le.product(iopartition)-1) this%inIOgrp=.true.
+      this%ingrp_io=.false.
+      if (this%pg%rank.le.product(this%partition_io)-1) this%ingrp_io=.true.
       
       ! Create IO pgrid
-      if (this%inIOgrp) this%pg_io=pgrid(this%pg%sgrid,this%grp_io,iopartition)
+      if (this%ingrp_io) this%pg_io=pgrid(this%pg%sgrid,this%grp_io,this%partition_io)
       
       ! Prepare communication map
       
