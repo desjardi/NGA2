@@ -28,9 +28,32 @@ module simulation
    !> Fluid info
    real(WP), dimension(:,:,:), allocatable :: U,V,W
    real(WP), dimension(:,:,:), allocatable :: rho,visc
-
+   
+   !> Particle barycenter
+   real(WP) :: mean_y
    
 contains
+   
+   
+   !> Calculation of average particle position
+   subroutine calc_barycenter
+      use mpi_f08,  only: MPI_ALLREDUCE,MPI_SUM,MPI_INTEGER
+      use parallel, only: MPI_REAL_WP
+      implicit none
+      integer :: n,ierr
+      integer :: my_number_particles,number_particles
+      real(WP) :: my_mean_y
+      ! Loop over local particles
+      my_number_particles=0
+      my_mean_y=0.0_WP
+      do n=1,lp%np_
+         my_number_particles=my_number_particles+1
+         my_mean_y=my_mean_y+lp%p(n)%pos(2)
+      end do
+      call MPI_ALLREDUCE(my_number_particles,number_particles,1,MPI_INTEGER,MPI_SUM,lp%cfg%comm,ierr)
+      call MPI_ALLREDUCE(my_mean_y,mean_y,1,MPI_REAL_WP,MPI_SUM,lp%cfg%comm,ierr)
+      mean_y=mean_y/real(max(number_particles,1),WP)
+   end subroutine calc_barycenter
    
    
    !> Initialization of problem solver
@@ -159,12 +182,14 @@ contains
       create_monitor: block
          ! Prepare some info about fields
          call lp%get_max()
+         call calc_barycenter()
          ! Create simulation monitor
          mfile=monitor(amroot=lp%cfg%amRoot,name='simulation')
          call mfile%add_column(time%n,'Timestep number')
          call mfile%add_column(time%t,'Time')
          call mfile%add_column(time%dt,'Timestep size')
          call mfile%add_column(lp%np,'Particle number')
+         call mfile%add_column(mean_y,'Mean y')
          call mfile%add_column(lp%VFmean,'Mean VF')
          call mfile%add_column(lp%Umin,'Particle Umin')
          call mfile%add_column(lp%Umax,'Particle Umax')
@@ -213,11 +238,12 @@ contains
          
          ! Perform and output monitoring
          call lp%get_max()
+         call calc_barycenter()
          call mfile%write()
          
       end do
       
-      ! Ouput particle bed
+      ! Output particle bed
       call lp%write(filename='part.file')
       
    end subroutine simulation_run
