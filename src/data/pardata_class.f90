@@ -1,9 +1,10 @@
 !> Parallel data file concept is defined here: given a partitioned grid and
 !> an I/O partition, it provides efficient parallel I/O access to a data file
 module pardata_class
-   use precision,   only: WP
-   use string,      only: str_short,str_medium
-   use pgrid_class, only: pgrid
+   use precision,     only: WP
+   use string,        only: str_short,str_medium
+   use pgrid_class,   only: pgrid
+   use coupler_class, only: coupler
    implicit none
    private
    
@@ -18,9 +19,10 @@ module pardata_class
       type(pgrid), pointer     :: pg                                  !< Original partitioned grid
       type(pgrid), allocatable :: pg_io                               !< Partitioned grid for I/O
       ! I/O partition info
-      type(MPI_Group) :: grp_io
       logical :: ingrp_io
       integer, dimension(3) :: partition_io
+      ! Couplers for transfering data for reading and writing
+      type(coupler), allocatable :: wcpl,rcpl
       ! Filename for read/write operations
       character(len=str_medium) :: filename
       ! A pardata stores scalar values
@@ -75,6 +77,7 @@ contains
       implicit none
       class(pardata) :: this
       integer, dimension(3), intent(in) :: iopartition
+      type(MPI_Group) :: iogrp
       integer, dimension(3,1) :: iorange
       integer :: ierr
       
@@ -87,17 +90,24 @@ contains
       
       ! Create IO MPI group using the first ranks (could explore other strategies here)
       iorange(:,1)=[0,product(this%partition_io)-1,1]
-      call MPI_Group_range_incl(this%pg%group,1,iorange,this%grp_io,ierr)
-
+      call MPI_Group_range_incl(this%pg%group,1,iorange,iogrp,ierr)
+      
       ! Create IO logical
       this%ingrp_io=.false.
       if (this%pg%rank.le.product(this%partition_io)-1) this%ingrp_io=.true.
       
       ! Create IO pgrid
-      if (this%ingrp_io) this%pg_io=pgrid(this%pg%sgrid,this%grp_io,this%partition_io)
+      if (this%ingrp_io) this%pg_io=pgrid(this%pg%sgrid,iogrp,this%partition_io)
       
-      ! Prepare communication map
+      ! Prepare coupler for writing
+      this%wcpl=coupler(src_grp=this%pg%group,dst_grp=this%pg_io%group,name='write')
+      call this%wcpl%set_src(this%pg); if (this%ingrp_io) call this%wcpl%set_dst(this%pg_io)
+      call this%wcpl%initialize()
       
+      ! Prepare coupler for reading
+      this%rcpl=coupler(src_grp=this%pg_io%group,dst_grp=this%pg%group,name='read')
+      if (this%ingrp_io) call this%rcpl%set_src(this%pg_io); call this%rcpl%set_dst(this%pg)
+      call this%rcpl%initialize()
       
    end subroutine prep_iomap
    
