@@ -1,0 +1,35 @@
+# Parallelization
+Partition :	1 1 8
+
+# Mesh definition
+Lx :	0.05
+Ly :	0.05
+Lz :	0.05
+nx :	50 !100
+ny :	50 !100
+nz :	50 !100
+
+# Case description
+Jet radius :   5e-3
+Jet velocity : 0.1
+Box height :   0.04
+
+# Fluid properties
+Gravity :                     0 -9.81 0
+Liquid dynamic viscosity :    0.1      # water=1.137e-3 / oil=0.1 / honey=1
+Gas dynamic viscosity :       1.780e-5
+Liquid density :              1000
+Gas density :                 1.226
+Surface tension coefficient : 0.0728
+
+# Time integration
+Max timestep size : 5e-4
+Max cfl number :    0.9
+Max time :          10
+
+# Pressure solver
+Pressure tolerance : 1e-4
+Pressure iteration : 10
+
+# Ensight output
+Ensight output period : 1e-2
