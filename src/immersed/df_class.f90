@@ -82,6 +82,7 @@ module df_class
       real(WP) :: Vmin,Vmax,Vmean                    !< V velocity info
       real(WP) :: Wmin,Wmax,Wmean                    !< W velocity info
       real(WP) :: Fx,Fy,Fz                           !< Total force
+      integer  :: np_out                             !< Number of particles leaving the domain
       
       ! Volume fraction associated with IBM projection
       real(WP), dimension(:,:,:), allocatable :: VF       !< Volume fraction, cell-centered
@@ -92,12 +93,13 @@ module df_class
       real(WP), dimension(:,:,:), allocatable :: srcW     !< W momentum source on mesh, cell-centered
       
       ! Distance levelset for visualization and collision detection
-      real(WP), dimension(:,:,:), allocatable :: G !< Levelset, cell-centered
+      real(WP), dimension(:,:,:), allocatable :: G        !< Levelset, cell-centered
       
    contains
       procedure :: update_partmesh                        !< Update a partmesh object using current particles
       procedure :: setup_obj                              !< Setup IBM object
       procedure :: get_source                             !< Compute direct forcing source
+      procedure :: advance                                !< Step forward the particle ODEs
       procedure :: resize                                 !< Resize particle array to given size
       procedure :: recycle                                !< Recycle particle array by removing flagged particles
       procedure :: sync                                   !< Synchronize particles across interprocessor boundaries
@@ -118,8 +120,8 @@ module df_class
    end interface dfibm
    
 contains
-
-
+   
+   
    !> Default constructor for direct forcing solver
    function constructor(cfg,name) result(self)
       implicit none
@@ -459,6 +461,71 @@ contains
    end subroutine extrapolate
    
    
+   !> Advance the particle equations by a specified time step dt
+   subroutine advance(this,dt)
+      use mpi_f08, only : MPI_SUM,MPI_INTEGER
+      implicit none
+      class(dfibm), intent(inout) :: this
+      real(WP), intent(inout) :: dt  !< Timestep size over which to advance
+      integer :: i,j,k,ierr
+      real(WP) :: mydt,dt_done
+      type(part) :: myp
+      
+      ! Zero out number of particles removed
+      this%np_out=0
+      
+      ! Advance the equations
+      do i=1,this%np_
+         ! Avoid particles with id=0
+         if (this%p(i)%id.eq.0) cycle
+         ! Create local copy of particle
+         myp=this%p(i)
+         ! Advance with Euler prediction
+         myp%pos=myp%pos+dt*myp%vel
+         ! Relocalize
+         myp%ind=this%cfg%get_ijk_global(myp%pos,myp%ind)
+         ! Correct the position to take into account periodicity
+         if (this%cfg%xper) myp%pos(1)=this%cfg%x(this%cfg%imin)+modulo(myp%pos(1)-this%cfg%x(this%cfg%imin),this%cfg%xL)
+         if (this%cfg%yper) myp%pos(2)=this%cfg%y(this%cfg%jmin)+modulo(myp%pos(2)-this%cfg%y(this%cfg%jmin),this%cfg%yL)
+         if (this%cfg%zper) myp%pos(3)=this%cfg%z(this%cfg%kmin)+modulo(myp%pos(3)-this%cfg%z(this%cfg%kmin),this%cfg%zL)
+         ! Handle particles that have left the domain
+         if (myp%pos(1).lt.this%cfg%x(this%cfg%imin).or.myp%pos(1).gt.this%cfg%x(this%cfg%imax+1)) myp%flag=1
+         if (myp%pos(2).lt.this%cfg%y(this%cfg%jmin).or.myp%pos(2).gt.this%cfg%y(this%cfg%jmax+1)) myp%flag=1
+         if (myp%pos(3).lt.this%cfg%z(this%cfg%kmin).or.myp%pos(3).gt.this%cfg%z(this%cfg%kmax+1)) myp%flag=1
+         ! Relocalize the particle
+         myp%ind=this%cfg%get_ijk_global(myp%pos,myp%ind)
+         ! Count number of particles removed
+         if (myp%flag.eq.1) this%np_out=this%np_out+1
+         ! Copy back to particle
+         if (myp%id.ne.-1) this%p(i)=myp
+      end do
+      
+      ! Communicate particles
+      call this%sync()
+      
+      ! Sum up particles removed
+      call MPI_ALLREDUCE(this%np_out,i,1,MPI_INTEGER,MPI_SUM,this%cfg%comm,ierr); this%np_out=i
+      
+      ! Recompute volume fraction
+      call this%update_VF()
+      
+      ! Log/screen output
+      logging: block
+         use, intrinsic :: iso_fortran_env, only: output_unit
+         use param,    only: verbose
+         use messager, only: log
+         use string,   only: str_long
+         character(len=str_long) :: message
+         if (this%cfg%amRoot) then
+            write(message,'("dfibm solver [",a,"] on partitioned grid [",a,"]: ",i0," particles were advanced")') trim(this%name),trim(this%cfg%name),this%np
+            if (verbose.gt.1) write(output_unit,'(a)') trim(message)
+            if (verbose.gt.0) call log(message)
+         end if
+      end block logging
+      
+   end subroutine advance
+
+
    !> Calculate the CFL
    subroutine get_cfl(this,dt,cfl)
       use mpi_f08,  only: MPI_ALLREDUCE,MPI_MAX

@@ -16,7 +16,7 @@ Box height :   0.04
 
 # Fluid properties
 Gravity :                     0 -9.81 0
-Liquid dynamic viscosity :    0.1      # water=1.137e-3 / oil=0.1 / honey=1
+Liquid dynamic viscosity :    1      # water=1.137e-3 / oil=0.1 / honey=1
 Gas dynamic viscosity :       1.780e-5
 Liquid density :              1000
 Gas density :                 1.226
