@@ -46,6 +46,9 @@ module rta_class
       
       !> Convective velocity
       real(WP) :: Uconv
+
+      !> Acceleration layer
+      real(WP) :: acc_start,acc_stop
       
    contains
       procedure :: init                            !< Initialize nozzle simulation
@@ -183,6 +186,9 @@ contains
          call param_read('Viscosity ratio',this%fs%visc_g); this%fs%visc_g=this%fs%visc_l/this%fs%visc_g
          call param_read('Weber number',this%fs%sigma); this%fs%sigma=1.0_WP/this%fs%sigma
          call param_read('Bond number',this%fs%gravity(1)); this%fs%gravity(1)=this%fs%gravity(1)*this%fs%sigma
+         ! Setup default sponge layer
+         this%acc_start=0.1_WP*this%cfg%xL
+         this%acc_stop =0.9_WP*this%cfg%xL
          ! Read in convective velocity
          call param_read('Convective velocity',this%Uconv)
          ! Define inflow boundary condition on the left
@@ -313,8 +319,21 @@ contains
          ! Explicit calculation of drho*u/dt from NS
          call this%fs%get_dmomdt(this%resU,this%resV,this%resW)
          
-         ! Add momentum source terms
-			call this%fs%addsrc_gravity(this%resU,this%resV,this%resW)
+         ! Add acceleration here
+         acceleration_src: block
+            integer :: i,j,k
+            do k=this%fs%cfg%kmin_,this%fs%cfg%kmax_
+               do j=this%fs%cfg%jmin_,this%fs%cfg%jmax_
+                  do i=this%fs%cfg%imin_,this%fs%cfg%imax_
+                     if (this%cfg%xm(i).ge.this%acc_start.and.this%cfg%xm(i).le.this%acc_stop) then
+                        if (this%fs%umask(i,j,k).eq.0) this%resU(i,j,k)=this%resU(i,j,k)+this%fs%rho_U(i,j,k)*this%fs%gravity(1)
+                        if (this%fs%vmask(i,j,k).eq.0) this%resV(i,j,k)=this%resV(i,j,k)+this%fs%rho_V(i,j,k)*this%fs%gravity(2)
+                        if (this%fs%wmask(i,j,k).eq.0) this%resW(i,j,k)=this%resW(i,j,k)+this%fs%rho_W(i,j,k)*this%fs%gravity(3)
+                     end if
+                  end do
+               end do
+            end do
+         end block acceleration_src
          
          ! Assemble explicit residual
          this%resU=-2.0_WP*this%fs%rho_U*this%fs%U+(this%fs%rho_Uold+this%fs%rho_U)*this%fs%Uold+this%time%dt*this%resU
