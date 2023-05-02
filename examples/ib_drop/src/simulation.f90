@@ -36,20 +36,21 @@ module simulation
    real(WP), dimension(:,:,:), allocatable :: Ui,Vi,Wi
 
    !> Problem definition
-	real(WP), dimension(3) :: center
-	real(WP) :: radius
+   real(WP), dimension(3) :: center
+   real(WP) :: radius
 
 contains
 
 
    !> Function that defines a level set function for a falling drop problem
-	function levelset_falling_drop(xyz,t) result(G)
-		implicit none
-		real(WP), dimension(3),intent(in) :: xyz
-		real(WP), intent(in) :: t
-		real(WP) :: G
-	   G=radius-sqrt(sum((xyz-center)**2))
-	end function levelset_falling_drop
+   function levelset_falling_drop(xyz,t) result(G)
+      implicit none
+      real(WP), dimension(3),intent(in) :: xyz
+      real(WP), intent(in) :: t
+      real(WP) :: G
+      !G=radius-sqrt(sum((xyz-center)**2))
+      G=0.03_WP-xyz(2)
+   end function levelset_falling_drop
    
 
    !> Initialization of problem solver
@@ -81,7 +82,7 @@ contains
       
 
       ! Initialize our VOF solver and field
-	   create_and_initialize_vof: block
+      create_and_initialize_vof: block
          use mms_geom, only: cube_refine_vol
          use vfs_class, only: lvira,VFhi,VFlo
          integer :: i,j,k,n,si,sj,sk
@@ -138,7 +139,7 @@ contains
 
       
       ! Create a two-phase flow solver without bconds
-	   create_and_initialize_flow_solver: block
+      create_and_initialize_flow_solver: block
          use hypre_str_class, only: pcg_pfmg
          ! Create flow solver
          fs=tpns(cfg=cfg,name='Two-phase NS')
@@ -267,7 +268,7 @@ contains
          call ens_out%add_vector('velocity',Ui,Vi,Wi)
          call ens_out%add_scalar('GIB',df%G)
          call ens_out%add_scalar('VOF',vf%VF)
-		   call ens_out%add_scalar('curvature',vf%curv)
+         call ens_out%add_scalar('curvature',vf%curv)
          call ens_out%add_scalar('pressure',fs%P)
          ! Output to ensight
          if (ens_evt%occurs()) call ens_out%write_data(time%t)
@@ -292,8 +293,8 @@ contains
          call mfile%add_column(fs%Wmax,'Wmax')
          call mfile%add_column(fs%Pmax,'Pmax')
          call mfile%add_column(vf%VFmax,'VOF maximum')
-		   call mfile%add_column(vf%VFmin,'VOF minimum')
-		   call mfile%add_column(vf%VFint,'VOF integral')
+         call mfile%add_column(vf%VFmin,'VOF minimum')
+         call mfile%add_column(vf%VFint,'VOF integral')
          call mfile%add_column(fs%divmax,'Maximum divergence')
          call mfile%add_column(fs%psolv%it,'Pressure iteration')
          call mfile%add_column(fs%psolv%rerr,'Pressure error')
@@ -334,6 +335,7 @@ contains
    
    !> Perform an NGA2 simulation
    subroutine simulation_run
+      use tpns_class, only: arithmetic_visc
       implicit none
       
       ! Perform time integration
@@ -345,21 +347,31 @@ contains
          call time%increment()
          
          ! Remember old VOF
-		   vf%VFold=vf%VF
+         vf%VFold=vf%VF
 
          ! Remember old velocity
          fs%Uold=fs%U
          fs%Vold=fs%V
          fs%Wold=fs%W
          
+         ! Move the IB particles
+         ib_moving: block
+            use mathtools, only: twoPi
+            integer :: i
+            do i=1,df%np_
+               df%p(i)%vel=[0.0_WP,1.0_WP*cos(twoPi*time%t/0.1_WP),0.0_WP]
+            end do
+            call df%advance(time%dt)
+         end block ib_moving
+
          ! Prepare old staggered density (at n)
-		   call fs%get_olddensity(vf=vf)
-			
-			! VOF solver step
-		   call vf%advance(dt=time%dt,U=fs%U,V=fs%V,W=fs%W)
-			
-			! Prepare new staggered viscosity (at n+1)
-		   call fs%get_viscosity(vf=vf)
+         call fs%get_olddensity(vf=vf)
+         
+         ! VOF solver step
+         call vf%advance(dt=time%dt,U=fs%U,V=fs%V,W=fs%W)
+         
+         ! Prepare new staggered viscosity (at n+1)
+         call fs%get_viscosity(vf=vf,strat=arithmetic_visc)
          
          ! Perform sub-iterations
          do while (time%it.le.time%itmax)
@@ -370,19 +382,19 @@ contains
             fs%W=0.5_WP*(fs%W+fs%Wold)
             
             ! Preliminary mass and momentum transport step at the interface
-			   call fs%prepare_advection_upwind(dt=time%dt)
+            call fs%prepare_advection_upwind(dt=time%dt)
 
             ! Explicit calculation of drho*u/dt from NS
             call fs%get_dmomdt(resU,resV,resW)
             
             ! Add momentum source terms
-			   call fs%addsrc_gravity(resU,resV,resW)
+            call fs%addsrc_gravity(resU,resV,resW)
             
             ! Assemble explicit residual
-			   resU=-2.0_WP*fs%rho_U*fs%U+(fs%rho_Uold+fs%rho_U)*fs%Uold+time%dt*resU
-				resV=-2.0_WP*fs%rho_V*fs%V+(fs%rho_Vold+fs%rho_V)*fs%Vold+time%dt*resV
-				resW=-2.0_WP*fs%rho_W*fs%W+(fs%rho_Wold+fs%rho_W)*fs%Wold+time%dt*resW
-				
+            resU=-2.0_WP*fs%rho_U*fs%U+(fs%rho_Uold+fs%rho_U)*fs%Uold+time%dt*resU
+            resV=-2.0_WP*fs%rho_V*fs%V+(fs%rho_Vold+fs%rho_V)*fs%Vold+time%dt*resV
+            resW=-2.0_WP*fs%rho_W*fs%W+(fs%rho_Wold+fs%rho_W)*fs%Wold+time%dt*resW
+            
             ! Form implicit residuals
             call fs%solve_implicit(time%dt,resU,resV,resW)
             
@@ -422,20 +434,20 @@ contains
             
             ! Solve Poisson equation
             call fs%update_laplacian()
-				call fs%correct_mfr()
-				call fs%get_div()
-				call fs%add_surface_tension_jump(dt=time%dt,div=fs%div,vf=vf)
-				fs%psolv%rhs=-fs%cfg%vol*fs%div/time%dt
-				fs%psolv%sol=0.0_WP
-				call fs%psolv%solve()
-				call fs%shift_p(fs%psolv%sol)
+            call fs%correct_mfr()
+            call fs%get_div()
+            call fs%add_surface_tension_jump(dt=time%dt,div=fs%div,vf=vf)
+            fs%psolv%rhs=-fs%cfg%vol*fs%div/time%dt
+            fs%psolv%sol=0.0_WP
+            call fs%psolv%solve()
+            call fs%shift_p(fs%psolv%sol)
             
             ! Correct velocity
             call fs%get_pgrad(fs%psolv%sol,resU,resV,resW)
-				fs%P=fs%P+fs%psolv%sol
-				fs%U=fs%U-time%dt*resU/fs%rho_U
-				fs%V=fs%V-time%dt*resV/fs%rho_V
-				fs%W=fs%W-time%dt*resW/fs%rho_W
+            fs%P=fs%P+fs%psolv%sol
+            fs%U=fs%U-time%dt*resU/fs%rho_U
+            fs%V=fs%V-time%dt*resV/fs%rho_V
+            fs%W=fs%W-time%dt*resW/fs%rho_W
             
             ! Increment sub-iteration counter
             time%it=time%it+1
