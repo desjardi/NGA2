@@ -3,16 +3,16 @@ Partition :	1 1 8
 
 # Mesh definition
 Lx :	0.05
-Ly :	0.05
+Ly :	0.10
 Lz :	0.05
 nx :	50 !100
-ny :	50 !100
+ny : 100 !100
 nz :	50 !100
 
 # Case description
 Jet radius :   5e-3
 Jet velocity : 0.1
-Box height :   0.04
+Box height :   0.05
 
 # Fluid properties
 Gravity :                     0 -9.81 0
@@ -21,6 +21,11 @@ Gas dynamic viscosity :       1.780e-5
 Liquid density :              1000
 Gas density :                 1.226
 Surface tension coefficient : 0.0728
+
+# Non-Newtonian modeling
+Polymer viscosity :             1
+Polymer relaxation time :       0.1
+Maximum polymer extensibility : 10
 
 # Time integration
 Max timestep size : 5e-4
