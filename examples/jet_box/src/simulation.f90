@@ -218,9 +218,11 @@ contains
          ! Maximum extensibility of polymer chain
          call param_read('Maximum polymer extensibility',nn%Lmax)
          ! Relaxation time for polymer
-         call param_read('Polymer relaxation time',nn%lambda)
-         ! Polymer viscosity
+         call param_read('Polymer relaxation time',nn%trelax)
+         ! Polymer viscosity at zero strain rate
          call param_read('Polymer viscosity',nn%visc)
+         ! Powerlaw coefficient in Carreau model
+         call param_read('Carreau powerlaw',nn%ncoeff)
          ! Configure implicit scalar solver
          ss=ddadi(cfg=cfg,name='scalar',nst=13)
          ! Setup the solver
@@ -243,6 +245,7 @@ contains
          ! Add variables to output
          call ens_out%add_vector('velocity',Ui,Vi,Wi)
          call ens_out%add_scalar('VOF',vf%VF)
+         call ens_out%add_scalar('viscosity',fs%visc)
          call ens_out%add_scalar('pressure',fs%P)
          call ens_out%add_scalar('curvature',vf%curv)
          do nsc=1,nn%nscalar
@@ -307,7 +310,6 @@ contains
    
    !> Perform an NGA2 simulation - this mimicks NGA's old time integration for multiphase
    subroutine simulation_run
-      use tpns_class, only: arithmetic_visc
       implicit none
       
       ! Perform time integration
@@ -334,9 +336,6 @@ contains
          
          ! VOF solver step
          call vf%advance(dt=time%dt,U=fs%U,V=fs%V,W=fs%W)
-         
-         ! Prepare new staggered viscosity (at n+1)
-         call fs%get_viscosity(vf=vf,strat=arithmetic_visc)
          
          ! Calculate grad(U)
          call fs%get_gradU(gradU)
@@ -421,13 +420,62 @@ contains
             ! Apply all other boundary conditions on the resulting field
             call nn%apply_bcond(time%t,time%dt)
             ! ===================================================
-
+            
+            
             ! ============ VELOCITY SOLVER ======================
             
             ! Build mid-time velocity
             fs%U=0.5_WP*(fs%U+fs%Uold)
             fs%V=0.5_WP*(fs%V+fs%Vold)
             fs%W=0.5_WP*(fs%W+fs%Wold)
+            
+            ! Include shear-thinning effect here by adjusting viscosity based on mid-time strain-rate
+            ! fs%visc_l is the solvent viscosity, nn%visc is the zero strainrate polymer viscosity
+            shear_thinning: block
+               integer :: i,j,k
+               real(WP) :: liq_vol,gas_vol,tot_vol
+               real(WP) :: visc_l
+               real(WP), dimension(:,:,:,:), allocatable :: SR
+               ! Allocate SR array
+               allocate(SR(1:6,cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+               ! Calculate strain rate
+               call fs%get_strainrate(SR)
+               ! Update polymer viscosity using Carreau model
+               call nn%update_visc_p(SR)
+               ! Handle mixture viscosity
+               do k=fs%cfg%kmino_+1,fs%cfg%kmaxo_
+                  do j=fs%cfg%jmino_+1,fs%cfg%jmaxo_
+                     do i=fs%cfg%imino_+1,fs%cfg%imaxo_
+                        ! VISC at [xm,ym,zm] - direct sum in x/y/z
+                        liq_vol=sum(vf%Lvol(:,:,:,i,j,k))
+                        gas_vol=sum(vf%Gvol(:,:,:,i,j,k))
+                        tot_vol=gas_vol+liq_vol
+                        visc_l=fs%visc_l+nn%visc_p(i,j,k)
+                        fs%visc(i,j,k)=0.0_WP; if (tot_vol.gt.0.0_WP) fs%visc(i,j,k)=(visc_l*liq_vol+fs%visc_g*gas_vol)/tot_vol
+                        ! VISC_xy at [x,y,zm] - direct sum in z, staggered sum in x/y
+                        liq_vol=sum(vf%Lvol(0,0,:,i,j,k))+sum(vf%Lvol(1,0,:,i-1,j,k))+sum(vf%Lvol(0,1,:,i,j-1,k))+sum(vf%Lvol(1,1,:,i-1,j-1,k))
+                        gas_vol=sum(vf%Gvol(0,0,:,i,j,k))+sum(vf%Gvol(1,0,:,i-1,j,k))+sum(vf%Gvol(0,1,:,i,j-1,k))+sum(vf%Gvol(1,1,:,i-1,j-1,k))
+                        tot_vol=gas_vol+liq_vol
+                        visc_l=fs%visc_l+sum(fs%itp_xy(:,:,i,j,k)*nn%visc_p(i-1:i,j-1:j,k))
+                        fs%visc_xy(i,j,k)=0.0_WP; if (tot_vol.gt.0.0_WP) fs%visc_xy(i,j,k)=(visc_l*liq_vol+fs%visc_g*gas_vol)/tot_vol
+                        ! VISC_yz at [xm,y,z] - direct sum in x, staggered sum in y/z
+                        liq_vol=sum(vf%Lvol(:,0,0,i,j,k))+sum(vf%Lvol(:,1,0,i,j-1,k))+sum(vf%Lvol(:,0,1,i,j,k-1))+sum(vf%Lvol(:,1,1,i,j-1,k-1))
+                        gas_vol=sum(vf%Gvol(:,0,0,i,j,k))+sum(vf%Gvol(:,1,0,i,j-1,k))+sum(vf%Gvol(:,0,1,i,j,k-1))+sum(vf%Gvol(:,1,1,i,j-1,k-1))
+                        tot_vol=gas_vol+liq_vol
+                        visc_l=fs%visc_l+sum(fs%itp_yz(:,:,i,j,k)*nn%visc_p(i,j-1:j,k-1:k))
+                        fs%visc_yz(i,j,k)=0.0_WP; if (tot_vol.gt.0.0_WP) fs%visc_yz(i,j,k)=(visc_l*liq_vol+fs%visc_g*gas_vol)/tot_vol
+                        ! VISC_zx at [x,ym,z] - direct sum in y, staggered sum in z/x
+                        liq_vol=sum(vf%Lvol(0,:,0,i,j,k))+sum(vf%Lvol(0,:,1,i,j,k-1))+sum(vf%Lvol(1,:,0,i-1,j,k))+sum(vf%Lvol(1,:,1,i-1,j,k-1))
+                        gas_vol=sum(vf%Gvol(0,:,0,i,j,k))+sum(vf%Gvol(0,:,1,i,j,k-1))+sum(vf%Gvol(1,:,0,i-1,j,k))+sum(vf%Gvol(1,:,1,i-1,j,k-1))
+                        tot_vol=gas_vol+liq_vol
+                        visc_l=fs%visc_l+sum(fs%itp_xz(:,:,i,j,k)*nn%visc_p(i-1:i,j,k-1:k))
+                        fs%visc_zx(i,j,k)=0.0_WP; if (tot_vol.gt.0.0_WP) fs%visc_zx(i,j,k)=(visc_l*liq_vol+fs%visc_g*gas_vol)/tot_vol
+                     end do
+                  end do
+               end do
+               ! Deallocate SR array
+               deallocate(SR)
+            end block shear_thinning
             
             ! Preliminary mass and momentum transport step at the interface
             call fs%prepare_advection_upwind(dt=time%dt)
@@ -452,7 +500,7 @@ contains
                stress=0.0_WP; call nn%addsrc_relax(stress)
                ! Build liquid stress tensor
                do n=1,6
-                  stress(:,:,:,n)=-nn%visc*vf%VF*stress(:,:,:,n)
+                  stress(:,:,:,n)=-nn%visc_p(:,:,:)*vf%VF*stress(:,:,:,n)
                end do
                ! Interpolate tensor components to cell edges
                do k=cfg%kmin_,cfg%kmax_+1

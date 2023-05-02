@@ -18,10 +18,14 @@ module fene_class
    type, extends(multiscalar) :: fene
       ! Model parameters
       integer  :: model                                    !< Closure model of FENE
-      real(WP) :: lambda                                   !< Polymer relaxation timescale
-      real(WP) :: visc                                     !< Polymer viscosity
+      real(WP) :: ncoeff                                   !< Carreau powerlaw coefficient
+      real(WP) :: trelax                                   !< Polymer relaxation timescale
+      real(WP) :: visc                                     !< Polymer viscosity at zero strain rate
       real(WP) :: Lmax                                     !< Polymer maximum extensibility
+      ! Polymer viscosity
+      real(WP), dimension(:,:,:), allocatable :: visc_p    !< Polymer viscosity
    contains
+      procedure :: update_visc_p                           !< Update visc_p given strain rate tensor using Carreau model
       procedure :: addsrc_CgradU                           !< Add C.gradU source term to residual
       procedure :: addsrc_relax                            !< Calculate FENE relaxation term
    end type fene
@@ -53,8 +57,30 @@ contains
       self%SCname(6)='Czz'
       ! Assign closure model for FENE
       self%model=model
+      ! Allocate and set polymer viscosity
+      allocate(self%visc_p(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%visc_p=0.0_WP
    end function construct_fene_from_args
    
+   
+   !> Compute visc_p from SR using Carreau model
+   subroutine update_visc_p(this,SR)
+      implicit none
+      class(fene), intent(inout) :: this
+      real(WP), dimension(1:,this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in) :: SR
+      real(WP) :: SRmag
+      integer :: i,j,k
+      do k=this%cfg%kmino_,this%cfg%kmaxo_
+         do j=this%cfg%jmino_,this%cfg%jmaxo_
+            do i=this%cfg%imino_,this%cfg%imaxo_
+               ! Compute magnitude of strain rate tensor
+               SRmag=sqrt(SR(1,i,j,k)**2+SR(2,i,j,k)**2+SR(3,i,j,k)**2+2.0_WP*(SR(4,i,j,k)**2+SR(5,i,j,k)**2+SR(6,i,j,k)**2))
+               ! Compute polymer viscosity
+               this%visc_p(i,j,k)=this%visc*(1.0_WP+(this%trelax*SRmag)**2)**(0.5_WP*this%ncoeff-0.5_WP)
+            end do
+         end do
+      end do
+   end subroutine update_visc_p
+
 
    !> Add C.gradU source terms to multiscalar residual
    subroutine addsrc_CgradU(this,gradU,resSC)
@@ -104,7 +130,7 @@ contains
                do i=this%cfg%imino_,this%cfg%imaxo_
                   if (this%mask(i,j,k).ne.0) cycle          !< Skip non-solved cells
                   coeff=(this%Lmax**2-3.00_WP)/(this%Lmax**2-(this%SC(i,j,k,1)+this%SC(i,j,k,4)+this%SC(i,j,k,6)))
-                  coeff=coeff/this%lambda                   !< Divide by relaxation time scale
+                  coeff=coeff/this%trelax                   !< Divide by relaxation time scale
                   resSC(i,j,k,1)=resSC(i,j,k,1)-coeff*this%SC(i,j,k,1)+1.0_WP !< xx tensor component
                   resSC(i,j,k,2)=resSC(i,j,k,2)-coeff*this%SC(i,j,k,2)        !< xy tensor component
                   resSC(i,j,k,3)=resSC(i,j,k,3)-coeff*this%SC(i,j,k,3)        !< xz tensor component
@@ -120,7 +146,7 @@ contains
                do i=this%cfg%imino_,this%cfg%imaxo_
                   if (this%mask(i,j,k).ne.0) cycle          !< Skip non-solved cells
                   coeff=this%Lmax**2/(this%Lmax**2-(this%SC(i,j,k,1)+this%SC(i,j,k,4)+this%SC(i,j,k,6)))
-                  coeff=coeff/this%lambda                   !< Divide by relaxation time scale
+                  coeff=coeff/this%trelax                   !< Divide by relaxation time scale
                   resSC(i,j,k,1)=resSC(i,j,k,1)-coeff*(this%SC(i,j,k,1)-1.0_WP) !> xx tensor component
                   resSC(i,j,k,2)=resSC(i,j,k,2)-coeff* this%SC(i,j,k,2)         !> xy tensor component
                   resSC(i,j,k,3)=resSC(i,j,k,3)-coeff* this%SC(i,j,k,3)         !> xz tensor component
