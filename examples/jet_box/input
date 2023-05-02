@@ -24,7 +24,7 @@ Surface tension coefficient : 0.0728
 
 # Non-Newtonian modeling
 Polymer viscosity :             1
-Polymer relaxation time :       0.1
+Polymer relaxation time :       0.05
 Maximum polymer extensibility : 10
 
 # Time integration
