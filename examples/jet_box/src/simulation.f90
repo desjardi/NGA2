@@ -416,7 +416,7 @@ contains
                   end do
                end do
             end block gas_scalar_forcing
-
+            
             ! Apply all other boundary conditions on the resulting field
             call nn%apply_bcond(time%t,time%dt)
             ! ===================================================
