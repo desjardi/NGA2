@@ -1,13 +1,13 @@
 # Parallelization
-Partition :	1 8 1
+Partition :	1 1 8
 
 # Mesh definition
 Lx :	0.05
 Ly :	0.10
 Lz :	0.05
-nx :	64
-ny :  128
-nz :	64
+nx :	100
+ny :  200
+nz :	100
 
 # Case description
 Jet radius :   5e-3

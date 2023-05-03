@@ -435,7 +435,7 @@ contains
          ! Set the diagonal to 1 to make sure all cells participate in solver
          this%implicit%opr(1,:,:,:)=1.0_WP
          
-         ! Initialize the implicit velocity solver
+         ! Initialize the implicit scalar solver
          call this%implicit%init()
          
       end if

@@ -74,7 +74,7 @@ contains
       allocate(self%Rx(self%cfg%jmin_:self%cfg%jmax_,self%cfg%kmin_:self%cfg%kmax_,self%cfg%imin_:self%cfg%imax_))
       allocate(self%Ry(self%cfg%imin_:self%cfg%imax_,self%cfg%kmin_:self%cfg%kmax_,self%cfg%jmin_:self%cfg%jmax_))
       allocate(self%Rz(self%cfg%imin_:self%cfg%imax_,self%cfg%jmin_:self%cfg%jmax_,self%cfg%kmin_:self%cfg%kmax_))
-      allocate(self%stackmem((self%cfg%imaxo_-self%cfg%imino_)*(self%cfg%jmaxo_-self%cfg%jmino_)*(self%cfg%kmaxo_-self%cfg%kmino_),nst+1))
+      allocate(self%stackmem(self%cfg%nx_*self%cfg%ny_*self%cfg%nz_,self%ndiags-1))
       
    end function diag_from_args
    
