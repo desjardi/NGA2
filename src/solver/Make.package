@@ -1,4 +1,4 @@
-f90EXE_sources += linsol_class.f90 diag_class.f90 ddadi_class.f90
+f90EXE_sources += linsol_class.f90 diag_class.f90 ddadi_class.f90 bbmg_class.f90 bbox_class.f90
 ifeq ($(USE_HYPRE),TRUE)
   f90EXE_sources += hypre_str_class.f90 hypre_uns_class.f90
 endif
