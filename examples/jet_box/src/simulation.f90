@@ -152,7 +152,7 @@ contains
       
       ! Create a two-phase flow solver without bconds
       create_and_initialize_flow_solver: block
-         use hypre_str_class, only: gmres_pfmg
+         use hypre_str_class, only: pcg_pfmg
          use tpns_class,      only: bcond,dirichlet,clipped_neumann
          type(bcond), pointer :: mybc
          integer :: n,i,j,k
@@ -176,8 +176,7 @@ contains
          call fs%add_bcond(name='bc_zp',type=clipped_neumann,face='z',dir=+1,canCorrect=.true.,locator=zp_locator)
          call fs%add_bcond(name='bc_zm',type=clipped_neumann,face='z',dir=-1,canCorrect=.true.,locator=zm_locator)
          ! Configure pressure solver
-         ps=hypre_str(cfg=cfg,name='Pressure',method=gmres_pfmg,nst=7)
-         ps%maxlevel=16
+         ps=hypre_str(cfg=cfg,name='Pressure',method=pcg_pfmg,nst=7)
          call param_read('Pressure iteration',ps%maxit)
          call param_read('Pressure tolerance',ps%rcvg)
          ! Configure implicit velocity solver
@@ -204,7 +203,7 @@ contains
       ! Create a FENE model 
       create_fene: block 
          use multiscalar_class, only: bquick
-         use fene_class,        only: fenecr
+         use fene_class,        only: fenecr,oldroydb,clipped_fenecr
          integer :: i,j,k
          ! Create FENE model solver
          nn=fene(cfg=cfg,model=fenecr,scheme=bquick,name='FENE')
@@ -292,6 +291,8 @@ contains
          scfile=monitor(nn%cfg%amRoot,'scalar')
          call scfile%add_column(time%n,'Timestep number')
          call scfile%add_column(time%t,'Time')
+         call scfile%add_column(nn%visc_pmax,'Maximum visc_p')
+         call scfile%add_column(nn%visc_pmin,'Minimum visc_p')
          do nsc=1,nn%nscalar
             call scfile%add_column(nn%SCmin(nsc),trim(nn%SCname(nsc))//'_min')
             call scfile%add_column(nn%SCmax(nsc),trim(nn%SCname(nsc))//'_max')
@@ -382,7 +383,7 @@ contains
             
             ! Add fene sources
             call nn%addsrc_CgradU(gradU,resSC)
-            call nn%addsrc_relax(resSC)
+            call nn%addsrc_relax(resSC,time%dt)
             
             ! Assemble explicit residual
             resSC=-2.0_WP*(nn%SC-nn%SCold)+time%dt*resSC
@@ -492,7 +493,7 @@ contains
                allocate(Tyz   (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
                allocate(Tzx   (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
                ! Calculate the polymer relaxation
-               stress=0.0_WP; call nn%addsrc_relax(stress)
+               stress=0.0_WP; call nn%addsrc_relax(stress,time%dt)
                ! Build liquid stress tensor
                do n=1,6
                   stress(:,:,:,n)=-nn%visc_p(:,:,:)*vf%VF*stress(:,:,:,n)
@@ -543,12 +544,13 @@ contains
             ! Apply other boundary conditions
             call fs%apply_bcond(time%t,time%dt)
             
-            ! Solve Poisson equation
-            call fs%update_laplacian()
+            ! Solve Poisson equation - pinned version
+            call fs%update_laplacian(pinpoint=[fs%cfg%imin,fs%cfg%jmin,fs%cfg%kmin])
             call fs%correct_mfr()
             call fs%get_div()
             call fs%add_surface_tension_jump(dt=time%dt,div=fs%div,vf=vf)
             fs%psolv%rhs=-fs%cfg%vol*fs%div/time%dt
+            if (cfg%amRoot) fs%psolv%rhs(cfg%imin,cfg%jmin,cfg%kmin)=0.0_WP
             fs%psolv%sol=0.0_WP
             call fs%psolv%solve()
             call fs%shift_p(fs%psolv%sol)

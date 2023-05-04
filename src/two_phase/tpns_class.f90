@@ -1610,11 +1610,12 @@ contains
    end subroutine get_dmomdt
    
    
-   !> Update pressure Poisson operator
-   subroutine update_laplacian(this)
+   !> Update pressure Poisson operator - option is given to pin a point
+   subroutine update_laplacian(this,pinpoint)
       implicit none
       class(tpns), intent(inout) :: this
       integer :: i,j,k
+      integer, dimension(3), optional :: pinpoint
       ! Setup the scaled Laplacian operator from  metrics: lap(*)=-vol.div(grad(*)/rho)
       do k=this%cfg%kmin_,this%cfg%kmax_
          do j=this%cfg%jmin_,this%cfg%jmax_
@@ -1637,6 +1638,15 @@ contains
             end do
          end do
       end do
+      ! Pin one point
+      if (present(pinpoint)) then
+         if (pinpoint(1).ge.this%cfg%imin_.and.pinpoint(1).le.this%cfg%imax_.and.&
+         &   pinpoint(2).ge.this%cfg%jmin_.and.pinpoint(2).le.this%cfg%jmax_.and.&
+         &   pinpoint(3).ge.this%cfg%kmin_.and.pinpoint(3).le.this%cfg%kmax_) then
+            this%psolv%opr(:,pinpoint(1),pinpoint(2),pinpoint(3))=0.0_WP
+            this%psolv%opr(1,pinpoint(1),pinpoint(2),pinpoint(3))=1.0_WP
+         end if
+      end if
       ! Initialize the pressure Poisson solver
       call this%psolv%setup()
    end subroutine update_laplacian

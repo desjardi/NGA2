@@ -32,6 +32,7 @@ module config_class
       procedure :: set_scalar                                  !< Subroutine that extrapolates a provided scalar value at a point to a pgrid field
       procedure :: get_velocity                                !< Function that interpolates a provided velocity field staggered on the pgrid to a point
       procedure :: get_scalar                                  !< Function that interpolates a provided scalar field centered on the pgrid to a point
+      procedure :: maximum                                     !< Find global max of variable on config for VF>0
    end type config
    
    
@@ -191,6 +192,28 @@ contains
       end do
       call MPI_ALLREDUCE(buf,this%fluid_vol,1,MPI_REAL_WP,MPI_SUM,this%comm,ierr)
    end subroutine calc_fluid_vol
+   
+   
+   !> Find global max of variable on config for VF>0
+   subroutine maximum(this,A,globalmax)
+      use mpi_f08,  only: MPI_ALLREDUCE,MPI_MAX
+      use parallel, only: MPI_REAL_WP
+      implicit none
+      class(config), intent(inout) :: this
+      real(WP), dimension(this%imino_:,this%jmino_:,this%kmino_:), intent(in) :: A      !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      real(WP), intent(out) :: globalmax
+      integer :: i,j,k,ierr
+      real(WP) :: my_max
+      my_max=0.0_WP
+      do k=this%kmin_,this%kmax_
+         do j=this%jmin_,this%jmax_
+            do i=this%imin_,this%imax_
+               if (this%VF(i,j,k).gt.0.0_WP) my_max=max(my_max,A(i,j,k))
+            end do
+         end do
+      end do
+      call MPI_ALLREDUCE(my_max,globalmax,1,MPI_REAL_WP,MPI_MAX,this%comm,ierr)
+   end subroutine maximum
 
    
    !> Calculate the integral of a field on the config while accounting for VF
