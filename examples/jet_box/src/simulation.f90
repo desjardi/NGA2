@@ -155,6 +155,7 @@ contains
          use hypre_str_class, only: pcg_pfmg
          use tpns_class,      only: bcond,dirichlet,clipped_neumann
          type(bcond), pointer :: mybc
+         real(WP) :: myr
          integer :: n,i,j,k
          ! Create flow solver
          fs=tpns(cfg=cfg,name='Two-phase NS')
@@ -190,7 +191,8 @@ contains
          call fs%get_bcond('bc_yp',mybc)
          do n=1,mybc%itr%no_
             i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
-            fs%V(i,j,k)=-vf%VF(i,j,k)*Ujet
+            myr=sqrt(fs%cfg%xm(i)**2+fs%cfg%zm(k)**2)/radius
+            fs%V(i,j,k)=min(0.0_WP,-2.0_WP*Ujet*(1.0_WP-myr**2))
          end do
          ! Adjust MFR for global mass balance
          call fs%correct_mfr()
