@@ -100,11 +100,13 @@ contains
       
       ! Initialize our VOF solver and field
       create_and_initialize_vof: block
-         use vfs_class, only: elvira
+         use vfs_class, only: elvira,neumann
          integer :: i,j,k
          real(WP) :: depth
          ! Create a VOF solver
          vf=vfs(cfg=cfg,reconstruction_method=elvira,name='VOF')
+         ! Outflow on the right
+         call vf%add_bcond(name='outflow',type=neumann,locator=xp_locator,dir='+x')
          ! Set liquid layer
          call param_read('Liquid depth',depth)
          do k=vf%cfg%kmino_,vf%cfg%kmaxo_
@@ -159,9 +161,9 @@ contains
          ! Inlet on the left of domain
          call fs%add_bcond(name='inlet',type=dirichlet,face='x',dir=-1,canCorrect=.false.,locator=xm_locator)
          ! Clipped Neumann outflow on the right of domain
-         call fs%add_bcond(name='outlet',type=clipped_neumann,face='x',dir=+1,canCorrect=.true.,locator=xp_locator)
-         ! Slip boundary on the side of domain
-         call fs%add_bcond(name='top',type=slip,face='y',dir=+1,canCorrect=.false.,locator=yp_locator)
+         call fs%add_bcond(name='outlet',type=clipped_neumann,face='x',dir=+1,canCorrect=.false.,locator=xp_locator)
+         ! Slip boundary on the top of domain
+         call fs%add_bcond(name='top',type=slip,face='y',dir=+1,canCorrect=.true.,locator=yp_locator)
          ! Configure pressure solver
          ps=hypre_str(cfg=cfg,name='Pressure',method=pcg_pfmg,nst=7)
          ps%maxlevel=12
@@ -280,6 +282,7 @@ contains
          
          ! VOF solver step
          call vf%advance(dt=time%dt,U=fs%U,V=fs%V,W=fs%W)
+         call vf%apply_bcond(time%t,time%dt)
          
          ! Prepare new staggered viscosity (at n+1)
          call fs%get_viscosity(vf=vf,strat=arithmetic_visc)

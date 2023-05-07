@@ -100,8 +100,7 @@ contains
       
       ! Initialize our VOF solver and field
       create_and_initialize_vof: block
-         use vfs_class, only: elvira
-         use vfs_class, only: neumann
+         use vfs_class, only: elvira,neumann
          integer :: i,j,k
          real(WP) :: depth
          ! Create a VOF solver
