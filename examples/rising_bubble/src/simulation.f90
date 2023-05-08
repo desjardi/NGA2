@@ -310,7 +310,7 @@ contains
          fs%Uold=fs%U
          fs%Vold=fs%V
          fs%Wold=fs%W
-
+         
          ! Remember old scalars
          nn%SCold=nn%SC
          

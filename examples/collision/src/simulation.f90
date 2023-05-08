@@ -88,14 +88,14 @@ contains
       ! Initialize our VOF solver and field
       create_and_initialize_vof: block
          use mms_geom, only: cube_refine_vol
-         use vfs_class, only: r2p,lvira,VFhi,VFlo
+         use vfs_class, only: r2p,elvira,VFhi,VFlo
          integer :: i,j,k,n,si,sj,sk
          real(WP), dimension(3,8) :: cube_vertex
          real(WP), dimension(3) :: v_cent,a_cent
          real(WP) :: vol,area
          integer, parameter :: amr_ref_lvl=4
          ! Create a VOF solver with r2p reconstruction
-         vf=vfs(cfg=cfg,reconstruction_method=r2p,name='VOF')
+         vf=vfs(cfg=cfg,reconstruction_method=elvira,name='VOF')
          ! Initialize two droplets
          call param_read('Droplet 1 diameter',radius1); radius1=0.5_WP*radius1
          call param_read('Droplet 1 position',center1)
