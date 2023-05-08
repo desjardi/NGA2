@@ -1109,17 +1109,23 @@ contains
       if (this%pg%nx.gt.1.and.this%xfft_avail) then
          call fftw_destroy_plan(this%fplan_x)
          call fftw_destroy_plan(this%bplan_x)
-         deallocate(this%in_x,this%out_x,this%xtrans,this%imin_x,this%imax_x,this%jmin_x,this%jmax_x,this%kmin_x,this%kmax_x,this%nx_x,this%ny_x,this%nz_x,this%sendbuf_x,this%recvbuf_x)
+         deallocate(this%in_x,this%out_x,this%xtrans,this%imin_x,this%imax_x,this%jmin_x,this%jmax_x,this%kmin_x,this%kmax_x,this%nx_x,this%ny_x,this%nz_x)
+         if (allocated(this%sendbuf_x)) deallocate(this%sendbuf_x)
+         if (allocated(this%recvbuf_x)) deallocate(this%recvbuf_x)
       end if
       if (this%pg%ny.gt.1.and.this%yfft_avail) then
          call fftw_destroy_plan(this%fplan_y)
          call fftw_destroy_plan(this%bplan_y)
-         deallocate(this%in_y,this%out_y,this%ytrans,this%imin_y,this%imax_y,this%jmin_y,this%jmax_y,this%kmin_y,this%kmax_y,this%nx_y,this%ny_y,this%nz_y,this%sendbuf_y,this%recvbuf_y)
+         deallocate(this%in_y,this%out_y,this%ytrans,this%imin_y,this%imax_y,this%jmin_y,this%jmax_y,this%kmin_y,this%kmax_y,this%nx_y,this%ny_y,this%nz_y)
+         if (allocated(this%sendbuf_y)) deallocate(this%sendbuf_y)
+         if (allocated(this%recvbuf_y)) deallocate(this%recvbuf_y)
       end if
       if (this%pg%nz.gt.1.and.this%zfft_avail) then
          call fftw_destroy_plan(this%fplan_z)
          call fftw_destroy_plan(this%bplan_z)
-         deallocate(this%in_z,this%out_z,this%ztrans,this%imin_z,this%imax_z,this%jmin_z,this%jmax_z,this%kmin_z,this%kmax_z,this%nx_z,this%ny_z,this%nz_z,this%sendbuf_z,this%recvbuf_z)
+         deallocate(this%in_z,this%out_z,this%ztrans,this%imin_z,this%imax_z,this%jmin_z,this%jmax_z,this%kmin_z,this%kmax_z,this%nx_z,this%ny_z,this%nz_z)
+         if (allocated(this%sendbuf_z)) deallocate(this%sendbuf_z)
+         if (allocated(this%recvbuf_z)) deallocate(this%recvbuf_z)
       end if
    end subroutine rfourier_destroy
    
