@@ -118,7 +118,7 @@ contains
          call fs%get_bcond('inflow',mybc)
          do n=1,mybc%itr%no_
             i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
-            fs%U(i,j,k)=sum(fs%itpr_x(:,i,j,k)*cfg%VF(i-1:i,j,k))*Uin
+            fs%U(i,j,k)=cfg%VF(i,j,k)*Uin
          end do
          ! Correct MFR
          call fs%correct_mfr()
