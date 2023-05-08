@@ -263,9 +263,9 @@ contains
       self%vol_total=self%xL*self%yL*self%zL
       
       ! Check mesh uniformity - using 20*epsilon to test equality here
-      self%uniform_x=.false.; if (abs(maxval(self%dx)-minval(self%dx)).lt.20.0_WP*epsilon(1.0_WP)) self%uniform_x=.true.
-      self%uniform_y=.false.; if (abs(maxval(self%dy)-minval(self%dy)).lt.20.0_WP*epsilon(1.0_WP)) self%uniform_y=.true.
-      self%uniform_z=.false.; if (abs(maxval(self%dz)-minval(self%dz)).lt.20.0_WP*epsilon(1.0_WP)) self%uniform_z=.true.
+      self%uniform_x=.false.; if (abs(maxval(self%dx)-minval(self%dx)).lt.50.0_WP*epsilon(1.0_WP)) self%uniform_x=.true.
+      self%uniform_y=.false.; if (abs(maxval(self%dy)-minval(self%dy)).lt.50.0_WP*epsilon(1.0_WP)) self%uniform_y=.true.
+      self%uniform_z=.false.; if (abs(maxval(self%dz)-minval(self%dz)).lt.50.0_WP*epsilon(1.0_WP)) self%uniform_z=.true.
       
       ! If verbose run, log and or print grid
       if (verbose.gt.2) call self%log

@@ -4,24 +4,28 @@ module simulation
    use geometry,          only: cfg
    use incomp_class,      only: incomp
    use fft2d_class,       only: fft2d
+   use lpt_class,         only: lpt
    use timetracker_class, only: timetracker
+   use partmesh_class,    only: partmesh
    use ensight_class,     only: ensight
    use event_class,       only: event
    use monitor_class,     only: monitor
    implicit none
    private
    
-   !> Single two-phase flow solver and volume fraction solver and corresponding time tracker
+   !> Single-phase flow solver and particle solver and corresponding time tracker
    type(incomp),      public :: fs
    type(fft2d),       public :: ps
    type(timetracker), public :: time
+   type(lpt),         public :: lp
    
    !> Ensight postprocessing
-   type(ensight) :: ens_out
-   type(event)   :: ens_evt
+   type(partmesh) :: pmesh
+   type(ensight)  :: ens_out
+   type(event)    :: ens_evt
    
    !> Simulation monitor file
-   type(monitor) :: mfile,cflfile
+   type(monitor) :: mfile,cflfile,lptfile
    
    public :: simulation_init,simulation_run,simulation_final
    
@@ -30,33 +34,38 @@ module simulation
    real(WP), dimension(:,:,:), allocatable :: Ui,Vi,Wi
    
    !> Problem definition
-   real(WP) :: visc,delta
+   real(WP) :: visc,delta,Udiff
    integer :: nwaveX,nwaveZ
    real(WP), dimension(:), allocatable :: wnumbX,wshiftX,wampX,wnumbZ,wshiftZ,wampZ
    
-   
+
 contains
    
    
-   !> Function that defines a level set function for a initial wavy interface
-   function levelset_wavy(xyz,t) result(G)
-      implicit none
-      real(WP), dimension(3),intent(in) :: xyz
-      real(WP), intent(in) :: t
-      real(WP) :: G
-      integer :: nX,nZ
-      G=-xyz(2)
-      do nX=1,nwaveX
-         do nZ=1,nwaveZ
-            G=G+wampX(nX)*cos(wnumbX(nX)*(xyz(1)-wshiftX(nX)))*wampZ(nZ)*cos(wnumbZ(nZ)*(xyz(3)-wshiftZ(nZ)))
-         end do
-      end do
-   end function levelset_wavy
+   !> Function that localizes the top (y+) of the domain
+   function yp_locator(pg,i,j,k) result(isIn)
+      use pgrid_class, only: pgrid
+      class(pgrid), intent(in) :: pg
+      integer, intent(in) :: i,j,k
+      logical :: isIn
+      isIn=.false.
+      if (j.eq.pg%jmax+1) isIn=.true.
+   end function yp_locator
+
+
+   !> Function that localizes the bottom (y-) of the domain
+   function ym_locator(pg,i,j,k) result(isIn)
+      use pgrid_class, only: pgrid
+      class(pgrid), intent(in) :: pg
+      integer, intent(in) :: i,j,k
+      logical :: isIn
+      isIn=.false.
+      if (j.eq.pg%jmin) isIn=.true.
+   end function ym_locator
    
    
    !> Initialization of problem solver
    subroutine simulation_init
-      use param, only: param_read
       implicit none
       
       
@@ -73,6 +82,7 @@ contains
       
       ! Initialize time tracker with 2 subiterations
       initialize_timetracker: block
+         use param, only: param_read
          time=timetracker(amRoot=cfg%amRoot)
          call param_read('Max timestep size',time%dtmax)
          call param_read('Max cfl number',time%cflmax)
@@ -82,94 +92,19 @@ contains
       end block initialize_timetracker
       
       
-      ! Initialize our VOF solver and field
-      create_and_initialize_vof: block
-         use mms_geom,  only: cube_refine_vol
-         use vfs_class, only: lvira,VFhi,VFlo
-         use mathtools, only: twoPi
-         use random,    only: random_uniform
-         use parallel,  only: MPI_REAL_WP
-         use mpi_f08
-         integer :: i,j,k,n,si,sj,sk,ierr
-         real(WP), dimension(3,8) :: cube_vertex
-         real(WP), dimension(3) :: v_cent,a_cent
-         real(WP) :: vol,area
-         integer, parameter :: amr_ref_lvl=4
-         ! Create a VOF solver
-         vf=vfs(cfg=cfg,reconstruction_method=lvira,name='VOF')
-         ! Prepare initialize interface parameters
-         nwaveX=6
-         allocate(wnumbX(nwaveX),wshiftX(nwaveX),wampX(nwaveX))
-         wampX=0.3_WP/real(nwaveX,WP)
-         wnumbX=[3.0_WP,4.0_WP,5.0_WP,6.0_WP,7.0_WP,8.0_WP]*twoPi/cfg%xL
-         if (cfg%amRoot) then
-            do n=1,nwaveX
-               wshiftX(n)=random_uniform(lo=-0.5_WP*cfg%xL,hi=+0.5_WP*cfg%xL)
-            end do
-         end if
-         call MPI_BCAST(wshiftX,nwaveX,MPI_REAL_WP,0,cfg%comm,ierr)
-         nwaveZ=6
-         allocate(wnumbZ(nwaveZ),wshiftZ(nwaveZ),wampZ(nwaveZ))
-         wampZ=0.3_WP/real(nwaveZ,WP)
-         wnumbZ=[3.0_WP,4.0_WP,5.0_WP,6.0_WP,7.0_WP,8.0_WP]*twoPi/cfg%zL
-         if (cfg%amRoot) then
-            do n=1,nwaveZ
-               wshiftZ(n)=random_uniform(lo=-0.5_WP*cfg%zL,hi=+0.5_WP*cfg%zL)
-            end do
-         end if
-         call MPI_BCAST(wshiftZ,nwaveZ,MPI_REAL_WP,0,cfg%comm,ierr)
-         ! Create the wavy interface
-         do k=vf%cfg%kmino_,vf%cfg%kmaxo_
-            do j=vf%cfg%jmino_,vf%cfg%jmaxo_
-               do i=vf%cfg%imino_,vf%cfg%imaxo_
-                  ! Set cube vertices
-                  n=0
-                  do sk=0,1
-                     do sj=0,1
-                        do si=0,1
-                           n=n+1; cube_vertex(:,n)=[vf%cfg%x(i+si),vf%cfg%y(j+sj),vf%cfg%z(k+sk)]
-                        end do
-                     end do
-                  end do
-                  ! Call adaptive refinement code to get volume and barycenters recursively
-                  vol=0.0_WP; area=0.0_WP; v_cent=0.0_WP; a_cent=0.0_WP
-                  call cube_refine_vol(cube_vertex,vol,area,v_cent,a_cent,levelset_wavy,0.0_WP,amr_ref_lvl)
-                  vf%VF(i,j,k)=vol/vf%cfg%vol(i,j,k)
-                  if (vf%VF(i,j,k).ge.VFlo.and.vf%VF(i,j,k).le.VFhi) then
-                     vf%Lbary(:,i,j,k)=v_cent
-                     vf%Gbary(:,i,j,k)=([vf%cfg%xm(i),vf%cfg%ym(j),vf%cfg%zm(k)]-vf%VF(i,j,k)*vf%Lbary(:,i,j,k))/(1.0_WP-vf%VF(i,j,k))
-                  else
-                     vf%Lbary(:,i,j,k)=[vf%cfg%xm(i),vf%cfg%ym(j),vf%cfg%zm(k)]
-                     vf%Gbary(:,i,j,k)=[vf%cfg%xm(i),vf%cfg%ym(j),vf%cfg%zm(k)]
-                  end if
-               end do
-            end do
-         end do
-         ! Update the band
-         call vf%update_band()
-         ! Perform interface reconstruction from VOF field
-         call vf%build_interface()
-         ! Create discontinuous polygon mesh from IRL interface
-         call vf%polygonalize_interface()
-         ! Calculate distance from polygons
-         call vf%distance_from_polygon()
-         ! Calculate subcell phasic volumes
-         call vf%subcell_vol()
-         ! Calculate curvature
-         call vf%get_curvature()
-         ! Reset moments to guarantee compatibility with interface reconstruction
-         call vf%reset_volume_moments()
-      end block create_and_initialize_vof
-      
-      
       ! Create an incompressible flow solver with slip conditions top and bottom
       create_flow_solver: block
+         use param, only: param_read
+         use incomp_class, only: slip
          integer :: i,j,k
          ! Create flow solver
          fs=incomp(cfg=cfg,name='mixing_layer')
          ! Read in fluid parameters
          call param_read('Density',fs%rho)
          call param_read('Dynamic viscosity',visc); fs%visc=visc
+         ! Add slip conditions top and bottom
+         call fs%add_bcond(name='ymslip',type=slip,face='y',dir=-1,canCorrect=.false.,locator=ym_locator)
+         call fs%add_bcond(name='ypslip',type=slip,face='y',dir=+1,canCorrect=.false.,locator=yp_locator)
          ! Create pressure solver
          ps=fft2d(cfg=cfg,name='Pressure',nst=7)
          ! Setup the solver
@@ -179,7 +114,12 @@ contains
       
       ! Initialize velocity field
       initialize_velocity: block
-         integer :: i,j,k,n
+         use param,     only: param_read
+         use parallel,  only: MPI_REAL_WP
+         use random,    only: random_uniform
+         use mathtools, only: twoPi
+         integer :: i,j,k,n,ierr,nX,nZ
+         real(WP) :: y0
          ! Prepare parameters for perturbed shear layer
          nwaveX=6
          allocate(wnumbX(nwaveX),wshiftX(nwaveX),wampX(nwaveX))
@@ -202,11 +142,18 @@ contains
          end if
          call MPI_BCAST(wshiftZ,nwaveZ,MPI_REAL_WP,0,cfg%comm,ierr)
          ! Set initial velocity field
-         fs%U=0.0_WP; fs%V=0.0_WP; fs%W=0.0_WP
+         call param_read('Velocity difference',Udiff)
+         call param_read('Vorticity thickness',delta)
          do k=fs%cfg%kmino_,fs%cfg%kmaxo_
             do j=fs%cfg%jmino_,fs%cfg%jmaxo_
                do i=fs%cfg%imino_,fs%cfg%imaxo_
-                  fs%U(i,j,k)=Udiff*tanh(fs%cfg%ym(j)/delta_l)
+                  y0=fs%cfg%ym(j)
+                  do nX=1,nwaveX
+                     do nZ=1,nwaveZ
+                        y0=y0+wampX(nX)*cos(wnumbX(nX)*(fs%cfg%xm(i)-wshiftX(nX)))*wampZ(nZ)*cos(wnumbZ(nZ)*(fs%cfg%zm(k)-wshiftZ(nZ)))
+                     end do
+                  end do
+                  fs%U(i,j,k)=0.5_WP*Udiff*tanh(y0/(0.5_WP*delta))
                end do
             end do
          end do
@@ -216,8 +163,67 @@ contains
       end block initialize_velocity
       
       
+      ! Initialize LPT solver
+      initialize_lpt: block
+         use param,  only: param_read
+         use random, only: random_uniform
+         real(WP) :: dp
+         integer :: i,np
+         ! Create solver
+         lp=lpt(cfg=cfg,name='LPT')
+         ! Get drag model from the inpit
+         call param_read('Drag model',lp%drag_model,default='Schiller-Naumann')
+         ! Get particle density from the input
+         call param_read('Particle density',lp%rho)
+         ! Get particle diameter from the input
+         call param_read('Particle diameter',dp)
+         ! Get number of particles
+         call param_read('Number of particles',np)
+         ! Root process initializes np particles randomly
+         if (lp%cfg%amRoot) then
+            call lp%resize(np)
+            do i=1,np
+               ! Give id
+               lp%p(i)%id=int(i,8)
+               ! Set the diameter
+               lp%p(i)%d=dp
+               ! Assign random position in the bottom half of domain
+               lp%p(i)%pos=[random_uniform(lp%cfg%x(lp%cfg%imin),lp%cfg%x(lp%cfg%imax+1)),&
+               &            random_uniform(lp%cfg%y(lp%cfg%jmin),0.0_WP),&
+               &            random_uniform(lp%cfg%z(lp%cfg%kmin),lp%cfg%z(lp%cfg%kmax+1))]
+               if (lp%cfg%nx.eq.1) lp%p(i)%pos(1)=0.0_WP
+               if (lp%cfg%nz.eq.1) lp%p(i)%pos(3)=0.0_WP
+               ! Give zero velocity
+               lp%p(i)%vel=0.0_WP
+               lp%p(i)%angVel=0.0_WP
+               ! Zero out collision forces
+               lp%p(i)%Acol=0.0_WP
+               lp%p(i)%Tcol=0.0_WP
+               ! Give zero dt
+               lp%p(i)%dt=0.0_WP
+               ! Locate the particle on the mesh
+               lp%p(i)%ind=lp%cfg%get_ijk_global(lp%p(i)%pos,[lp%cfg%imin,lp%cfg%jmin,lp%cfg%kmin])
+               ! Activate the particle
+               lp%p(i)%flag=0
+            end do
+         end if
+         ! Distribute particles
+         call lp%sync()
+         ! Get initial particle volume fraction
+         call lp%update_VF()
+      end block initialize_lpt
+      
+
+      ! Create partmesh object for Lagrangian particle output
+      create_pmesh: block
+         pmesh=partmesh(nvar=0,nvec=0,name='lpt')
+         call lp%update_partmesh(pmesh)
+      end block create_pmesh
+
+      
       ! Add Ensight output
       create_ensight: block
+         use param, only: param_read
          ! Create Ensight output from cfg
          ens_out=ensight(cfg=cfg,name='mixing_layer')
          ! Create event for Ensight output
@@ -225,6 +231,7 @@ contains
          call param_read('Ensight output period',ens_evt%tper)
          ! Add variables to output
          call ens_out%add_vector('velocity',Ui,Vi,Wi)
+         call ens_out%add_particle('particles',pmesh)
          ! Output to ensight
          if (ens_evt%occurs()) call ens_out%write_data(time%t)
       end block create_ensight
@@ -235,7 +242,6 @@ contains
          ! Prepare some info about fields
          call fs%get_cfl(time%dt,time%cfl)
          call fs%get_max()
-         call vf%get_max()
          ! Create simulation monitor
          mfile=monitor(fs%cfg%amRoot,'simulation')
          call mfile%add_column(time%n,'Timestep number')
@@ -246,9 +252,6 @@ contains
          call mfile%add_column(fs%Vmax,'Vmax')
          call mfile%add_column(fs%Wmax,'Wmax')
          call mfile%add_column(fs%Pmax,'Pmax')
-         call mfile%add_column(vf%VFmax,'VOF maximum')
-         call mfile%add_column(vf%VFmin,'VOF minimum')
-         call mfile%add_column(vf%VFint,'VOF integral')
          call mfile%add_column(fs%divmax,'Maximum divergence')
          call mfile%add_column(fs%psolv%it,'Pressure iteration')
          call mfile%add_column(fs%psolv%rerr,'Pressure error')
@@ -257,7 +260,6 @@ contains
          cflfile=monitor(fs%cfg%amRoot,'cfl')
          call cflfile%add_column(time%n,'Timestep number')
          call cflfile%add_column(time%t,'Time')
-         call cflfile%add_column(fs%CFLst,'STension CFL')
          call cflfile%add_column(fs%CFLc_x,'Convective xCFL')
          call cflfile%add_column(fs%CFLc_y,'Convective yCFL')
          call cflfile%add_column(fs%CFLc_z,'Convective zCFL')
@@ -265,6 +267,21 @@ contains
          call cflfile%add_column(fs%CFLv_y,'Viscous yCFL')
          call cflfile%add_column(fs%CFLv_z,'Viscous zCFL')
          call cflfile%write()
+         ! Create LPT monitor
+         call lp%get_max()
+         lptfile=monitor(amroot=lp%cfg%amRoot,name='lpt')
+         call lptfile%add_column(time%n,'Timestep number')
+         call lptfile%add_column(time%t,'Time')
+         call lptfile%add_column(lp%np,'Particle number')
+         call lptfile%add_column(lp%Umin,'Particle Umin')
+         call lptfile%add_column(lp%Umax,'Particle Umax')
+         call lptfile%add_column(lp%Vmin,'Particle Vmin')
+         call lptfile%add_column(lp%Vmax,'Particle Vmax')
+         call lptfile%add_column(lp%Wmin,'Particle Wmin')
+         call lptfile%add_column(lp%Wmax,'Particle Wmax')
+         call lptfile%add_column(lp%dmin,'Particle dmin')
+         call lptfile%add_column(lp%dmax,'Particle dmax')
+         call lptfile%write()
       end block create_monitor
       
       
@@ -276,32 +293,21 @@ contains
       implicit none
       
       ! Perform time integration
-      do while (.not.time%done())!.and.amp.lt.0.1_WP*vf%cfg%yL.and.time%t.lt.20.0_WP*tau)
+      do while (.not.time%done())
          
          ! Increment time
          call fs%get_cfl(time%dt,time%cfl)
          call time%adjust_dt()
          call time%increment()
          
-         ! Remember old VOF
-         vf%VFold=vf%VF
+         ! Advance particles by dt
+         resU=fs%rho; resV=fs%visc
+         call lp%advance(dt=time%dt,U=fs%U,V=fs%V,W=fs%W,rho=resU,visc=resV)
          
          ! Remember old velocity
          fs%Uold=fs%U
          fs%Vold=fs%V
          fs%Wold=fs%W
-         
-         ! Apply time-varying Dirichlet conditions
-         ! This is where time-dpt Dirichlet would be enforced
-         
-         ! Prepare old staggered density (at n)
-         call fs%get_olddensity(vf=vf)
-         
-         ! VOF solver step
-         call vf%advance(dt=time%dt,U=fs%U,V=fs%V,W=fs%W)
-         
-         ! Prepare new staggered viscosity (at n+1)
-         call fs%get_viscosity(vf=vf)
          
          ! Perform sub-iterations
          do while (time%it.le.time%itmax)
@@ -311,37 +317,26 @@ contains
             fs%V=0.5_WP*(fs%V+fs%Vold)
             fs%W=0.5_WP*(fs%W+fs%Wold)
             
-            ! Preliminary mass and momentum transport step at the interface
-            call fs%prepare_advection_upwind(dt=time%dt)
-            
             ! Explicit calculation of drho*u/dt from NS
             call fs%get_dmomdt(resU,resV,resW)
             
-            ! Add momentum source terms
-            call fs%addsrc_gravity(resU,resV,resW)
-            
             ! Assemble explicit residual
-            resU=-2.0_WP*fs%rho_U*fs%U+(fs%rho_Uold+fs%rho_U)*fs%Uold+time%dt*resU
-            resV=-2.0_WP*fs%rho_V*fs%V+(fs%rho_Vold+fs%rho_V)*fs%Vold+time%dt*resV
-            resW=-2.0_WP*fs%rho_W*fs%W+(fs%rho_Wold+fs%rho_W)*fs%Wold+time%dt*resW
-            
-            ! Form implicit residuals
-            call fs%solve_implicit(time%dt,resU,resV,resW)
+            resU=-2.0_WP*(fs%rho*fs%U-fs%rho*fs%Uold)+time%dt*resU
+            resV=-2.0_WP*(fs%rho*fs%V-fs%rho*fs%Vold)+time%dt*resV
+            resW=-2.0_WP*(fs%rho*fs%W-fs%rho*fs%Wold)+time%dt*resW
             
             ! Apply these residuals
-            fs%U=2.0_WP*fs%U-fs%Uold+resU
-            fs%V=2.0_WP*fs%V-fs%Vold+resV
-            fs%W=2.0_WP*fs%W-fs%Wold+resW
+            fs%U=2.0_WP*fs%U-fs%Uold+resU/fs%rho
+            fs%V=2.0_WP*fs%V-fs%Vold+resV/fs%rho
+            fs%W=2.0_WP*fs%W-fs%Wold+resW/fs%rho
             
-            ! Apply other boundary conditions
+            ! Apply other boundary conditions on the resulting fields
             call fs%apply_bcond(time%t,time%dt)
             
             ! Solve Poisson equation
-            call fs%update_laplacian()
             call fs%correct_mfr()
             call fs%get_div()
-            call fs%add_surface_tension_jump(dt=time%dt,div=fs%div,vf=vf)
-            fs%psolv%rhs=-fs%cfg%vol*fs%div/time%dt
+            fs%psolv%rhs=-fs%cfg%vol*fs%div*fs%rho/time%dt
             fs%psolv%sol=0.0_WP
             call fs%psolv%solve()
             call fs%shift_p(fs%psolv%sol)
@@ -349,9 +344,9 @@ contains
             ! Correct velocity
             call fs%get_pgrad(fs%psolv%sol,resU,resV,resW)
             fs%P=fs%P+fs%psolv%sol
-            fs%U=fs%U-time%dt*resU/fs%rho_U
-            fs%V=fs%V-time%dt*resV/fs%rho_V
-            fs%W=fs%W-time%dt*resW/fs%rho_W
+            fs%U=fs%U-time%dt*resU/fs%rho
+            fs%V=fs%V-time%dt*resV/fs%rho
+            fs%W=fs%W-time%dt*resW/fs%rho
             
             ! Increment sub-iteration counter
             time%it=time%it+1
@@ -363,134 +358,22 @@ contains
          call fs%get_div()
          
          ! Output to ensight
-         if (ens_evt%occurs()) call ens_out%write_data(time%t)
+         if (ens_evt%occurs()) then
+            call lp%update_partmesh(pmesh)
+            call ens_out%write_data(time%t)
+         end if
          
          ! Perform and output monitoring
          call fs%get_max()
-         call vf%get_max()
+         call lp%get_max()
          call mfile%write()
          call cflfile%write()
+         call lptfile%write()
          
       end do
       
-      ! Post-process growth rate using ODRPACK
-      ! odr_fit: block
-      !    use, intrinsic :: iso_fortran_env, only: output_unit
-      !    use mathtools, only: twoPi
-      !    use messager,  only: log
-      !    use string,    only: str_long
-      !    character(len=str_long) :: message
-      !    integer :: i
-      !    ! ODRPACK variables - explicit model based on exponential of time
-      !    integer                       :: N                      !> Number of observations (number of polygons)
-      !    integer , parameter           :: M=1                    !> Number of elements per explanatory variables (1 time)
-      !    integer , parameter           :: NP=2                   !> Number of parameters in our model (2 for a normalized exponential in time with time shift)
-      !    integer , parameter           :: NQ=1                   !> Number of response per observation (only 1, the normalized amplitude)
-      !    real(WP), dimension(NP)       :: BETA=0.0_WP            !> Array of model parameter values (the growth rate and time shift)
-      !    real(WP), dimension(:,:)  , allocatable :: YY           !> Value of response variable (of size LDYYxNQ)
-      !    integer                       :: LDYY                   !> Leading dimension of YY (equals N since an explicit model is used)
-      !    real(WP), dimension(:,:)  , allocatable :: XX           !> Value of explanatory variable (of size LDXXxM)
-      !    integer                       :: LDXX                   !> Leading dimension of XX (equals N)
-      !    real(WP), dimension(:,:,:), allocatable :: WE           !> Weighting of response data (of size LDWExLD2WExNQ)
-      !    integer                       :: LDWE                   !> Leading dimension of WE (equals N since an explicit model is used)
-      !    integer                       :: LD2WE                  !> Second dimension of WE (equals NQ)
-      !    real(WP), dimension(:,:,:), allocatable :: WD           !> Weighting of explanatory data (of size LDWDxLD2WDxM)
-      !    integer                       :: LDWD                   !> Leading dimension of WD (equals N)
-      !    integer                       :: LD2WD                  !> Second dimension of WD (equals 1)
-      !    integer , dimension(NP)       :: IFIXB=-1               !> Whether any model parameters has to be kept constant
-      !    integer , parameter           :: LDIFX=1                !> Leading dimension of IFIXX (equals 1)
-      !    integer , dimension(LDIFX,M)  :: IFIXX=-1               !> Whether any explanatory variable data is to be treated as "fixed"
-      !    integer                       :: JOB=00030              !> 5-digit parameter flag that controls execution (this invokes analytical Jacobian with explicit model)
-      !    integer                       :: NDIGIT=1               !> Number of reliable digits in our model - let ODRPACK figure it out on its own
-      !    real(WP)                      :: TAUFAC=0.0_WP          !> To control size of first step (ignored here)
-      !    real(WP)                      :: SSTOL=-1.0_WP          !> Relative cvg of sum of squares: this sets it to 1e-8             ********* Need to change to sth else
-      !    real(WP)                      :: PARTOL=-1.0_WP         !> Relative cvg for model parameters: this sets it to 1e-11         ********* Need to change to sth else
-      !    integer                       :: MAXIT=-1               !> Maximum number of iterations                                     ********* Need to change to sth else
-      !    integer                       :: IPRINT=0               !> 4-digit parameter flag for controlling printing (default is -1)
-      !    integer                       :: LUNERR=10              !> Logical unit for error reporting (6 by default)
-      !    integer                       :: LUNRPT=10              !> Logical unit for reporting
-      !    real(WP), dimension(NP)       :: STPB=0.0_WP            !> Relative step sizes for Jacobian for model parameters (here, default)
-      !    integer , parameter           :: LDSTPD=1               !> Leading dimension of STPD, either 1 or N (here, 1)
-      !    real(WP), dimension(LDSTPD,1) :: STPD=0.0_WP            !> Relative step sizes for Jacobian for input errors (here, default)
-      !    real(WP), dimension(NP)       :: SCLB=1.0_WP            !> Scaling for the model parameters (here, not default but set to 1.0 to avoid rescaling 0 coefficients)
-      !    real(WP), dimension(:,:)  , allocatable :: SCLD         !> Scaling for the input errors (here, not default but set to 1.0 to avoid rescaling 0 coefficients)
-      !    integer                       :: LDSCLD                 !> Leading dimension of SCLD, either 1 or N (here, N)
-      !    integer                       :: LWORK                  !> Size of WORK array
-      !    real(WP), dimension(:)    , allocatable :: WORK         !> WORK array
-      !    integer , parameter           :: LiWORK=20+NP+NQ*(NP+M) !> Size of IWORK array
-      !    integer , dimension(LiWORK)   :: iWORK                  !> iWORK array
-      !    integer                       :: INFO                   !> Why the calculations stopped
-      !    ! Copy over data and sizes
-      !    N=size(all_time,dim=1)
-      !    LDYY=N; allocate(YY(LDYY,NQ)); YY(:,1)=all_amp/amp0
-      !    LDXX=N; allocate(XX(LDXX,M )); XX(:,1)=all_time
-      !    LDWE=N; LD2WE=NQ; allocate(WE(LDWE,LD2WE,NQ)); WE=1.0_WP
-      !    LDWD=N; LD2WD=1 ; allocate(WD(LDWD,LD2WD,M )); WD=1.0_WP
-      !    LDSCLD=N; allocate(SCLD(LDSCLD,M)); SCLD=1.0_WP
-      !    LWORK=18+11*NP+NP**2+M+M**2+4*N*NQ+6*N*M+2*N*NQ*NP+2*N*NQ*M+NQ**2+5*NQ+NQ*(NP+M)+(LDWE*LD2WE)*NQ; allocate(WORK(LWORK))
-      !    ! Call ODRPACK to find time shift
-      !    call DODRC(exponential_model,N,M,NP,NQ,BETA,YY,LDYY,XX,LDXX,WE,LDWE,LD2WE,WD,LDWD,LD2WD,IFIXB,IFIXX,LDIFX,JOB,NDIGIT,TAUFAC,&
-      !    &          SSTOL,PARTOL,MAXIT,IPRINT,LUNERR,LUNRPT,STPB,STPD,LDSTPD,SCLB,SCLD,LDSCLD,WORK,LWORK,iWORK,LiWORK,INFO)
-      !    ! Adjust weights to eliminate the early non-exponential part
-      !    do i=1,size(all_time,dim=1)
-      !       if (all_time(i).le.2.0_WP*BETA(2)) then
-      !          WE(i,1,1)=0.0_WP
-      !          WD(i,1,1)=0.0_WP
-      !       end if
-      !    end do
-      !    ! Call ODRPACK again to find growth rate
-      !    call DODRC(exponential_model,N,M,NP,NQ,BETA,YY,LDYY,XX,LDXX,WE,LDWE,LD2WE,WD,LDWD,LD2WD,IFIXB,IFIXX,LDIFX,JOB,NDIGIT,TAUFAC,&
-      !    &          SSTOL,PARTOL,MAXIT,IPRINT,LUNERR,LUNRPT,STPB,STPD,LDSTPD,SCLB,SCLD,LDSCLD,WORK,LWORK,iWORK,LiWORK,INFO)
-      !    ! Get back growth rate
-      !    if (fs%cfg%amRoot) then
-      !       write(output_unit,'(es12.5,x,es12.5,x,es12.5,x,es12.5)') lc,tau,twoPi/fs%cfg%xL*lc,BETA(1)*tau
-      !       write(message    ,'("Reference time scale   = ",es12.5)') tau               ; call log(message)
-      !       write(message    ,'("Cut-off length scale   = ",es12.5)') lc                ; call log(message)
-      !       write(message    ,'("Normalized growth rate = ",es12.5)') BETA(1)*tau       ; call log(message)
-      !       write(message    ,'("Normalized wave number = ",es12.5)') twoPi/fs%cfg%xL*lc; call log(message)
-      !    end if
-      ! end block odr_fit
-      
       
    end subroutine simulation_run
-   
-   
-   !> Definition of our exponential function of time model
-   subroutine exponential_model(N,M,NP,NQ,LDN,LDM,LDNP,BETA,XPLUSD,IFIXB,IFIXX,LDFIX,IDEVAL,F,FJACB,FJACD,ISTOP)
-      implicit none
-      ! Input parameters
-      integer , intent(in) :: IDEVAL,LDFIX,LDM,LDN,LDNP,M,N,NP,NQ
-      integer , dimension(NP)     , intent(in) :: IFIXB
-      integer , dimension(LDFIX,M), intent(in) :: IFIXX
-      real(WP), dimension(NP)     , intent(in) :: BETA
-      real(WP), dimension(LDN,M)  , intent(in) :: XPLUSD
-      ! Output parameters
-      real(WP), dimension(LDN,NQ) :: F
-      real(WP), dimension(LDN,LDNP,NQ) :: FJACB
-      real(WP), dimension(LDN,LDM ,NQ) :: FJACD
-      integer :: ISTOP,i
-      ! Check stopping condition - all values are acceptable
-      ISTOP=0
-      ! Compute model value
-      if (mod(IDEVAL,10).ge.1) then
-         do i=1,N
-            F(i,1)=exp(BETA(1)*(XPLUSD(i,1)-BETA(2)))
-         end do
-      end if
-      ! Compute model derivatives with respect to BETA
-      if (mod(IDEVAL/10,10).GE.1) then
-         do i=1,N
-            FJACB(i,1,1)=(XPLUSD(i,1)-BETA(2))*exp(BETA(1)*(XPLUSD(i,1)-BETA(2)))
-            FJACB(i,2,1)=            -BETA(1) *exp(BETA(1)*(XPLUSD(i,1)-BETA(2)))
-         end do
-      end if
-      ! Compute model derivatives with respect to input
-      if (mod(IDEVAL/100,10).GE.1) then
-         do i=1,N
-            FJACD(i,1,1)=BETA(1)*exp(BETA(1)*(XPLUSD(i,1)-BETA(2)))
-         end do
-      end if
-   end subroutine exponential_model
    
    
    !> Finalize the NGA2 simulation
