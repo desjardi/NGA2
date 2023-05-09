@@ -83,7 +83,7 @@ contains
       allocate(self%transformed_rhs(self%cfg%imin_:self%cfg%imax_,self%cfg%jmin_:self%cfg%jmax_,self%cfg%kmin_:self%cfg%kmax_))
       
       ! Create a rfourier object
-      self%dft=rfourier(self%cfg)
+      allocate(self%dft,source=rfourier(self%cfg))
 
       ! Check FFT is available in all directions
       if (self%cfg%nx.gt.1.and..not.self%dft%xfft_avail) call die('[fft3d constructor] FFT is not available in x')
