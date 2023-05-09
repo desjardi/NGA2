@@ -99,7 +99,7 @@ contains
       end do
       
       ! Initialize diagonal solver now that we know the stencil size
-      this%dsol=diag(cfg=this%cfg,name=this%name,n=2*maxval(abs(this%stc))+1)
+      allocate(this%dsol,source=diag(cfg=this%cfg,name=this%name,n=2*maxval(abs(this%stc))+1))
       
    end subroutine ddadi_init
    

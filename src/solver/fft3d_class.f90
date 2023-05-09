@@ -84,7 +84,7 @@ contains
       
       ! Create a rfourier object
       allocate(self%dft,source=rfourier(self%cfg))
-
+      
       ! Check FFT is available in all directions
       if (self%cfg%nx.gt.1.and..not.self%dft%xfft_avail) call die('[fft3d constructor] FFT is not available in x')
       if (self%cfg%ny.gt.1.and..not.self%dft%yfft_avail) call die('[fft3d constructor] FFT is not available in y')

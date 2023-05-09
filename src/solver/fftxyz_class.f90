@@ -83,7 +83,7 @@ contains
       allocate(self%transformed_rhs  (self%cfg%imin_:self%cfg%imax_,self%cfg%jmin_:self%cfg%jmax_,self%cfg%kmin_:self%cfg%kmax_))
       
       ! Create a cfourier object
-      self%dft=cfourier(self%cfg)
+      allocate(self%dft,source=cfourier(self%cfg))
       if (.not.all([self%dft%xfft_avail,self%dft%yfft_avail,self%dft%zfft_avail])) call die('[fftxyz constructor] FFT must be available in x, y, and z')
       
       ! Setup is not done
