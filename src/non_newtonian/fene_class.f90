@@ -77,8 +77,8 @@ contains
       do k=this%cfg%kmino_,this%cfg%kmaxo_
          do j=this%cfg%jmino_,this%cfg%jmaxo_
             do i=this%cfg%imino_,this%cfg%imaxo_
-               ! Compute magnitude of strain rate tensor
-               SRmag=sqrt(SR(1,i,j,k)**2+SR(2,i,j,k)**2+SR(3,i,j,k)**2+2.0_WP*(SR(4,i,j,k)**2+SR(5,i,j,k)**2+SR(6,i,j,k)**2))
+               ! Compute second invariant of strain rate tensor = sqrt(2*SR**2)
+               SRmag=sqrt(2.0_WP*(SR(1,i,j,k)**2+SR(2,i,j,k)**2+SR(3,i,j,k)**2+2.0_WP*(SR(4,i,j,k)**2+SR(5,i,j,k)**2+SR(6,i,j,k)**2)))
                ! Compute polymer viscosity
                this%visc_p(i,j,k)=this%visc*(1.0_WP+(this%trelax*SRmag)**2)**(0.5_WP*this%ncoeff-0.5_WP)
             end do
