@@ -40,7 +40,7 @@ contains
             & +dt(2)*31_I8*24*60*60*1000+dt(3)*24_I8*60*60*1000 &
             & +dt(5)*60*60*1000+dt(6)*60*1000+dt(7)*1000+dt(8)
          end if
-         pid=getpid()
+         pid=getpid() ! Note that this is not part of 2018 standard
          t=ieor(t,int(pid,kind(t)))
          do i=1,n
             seed(i)=lcg(t)

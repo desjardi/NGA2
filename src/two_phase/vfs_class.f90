@@ -145,6 +145,7 @@ module vfs_class
       type(ObjServer_LocSepLink_type) :: localized_separator_linkold_allocation
       
    contains
+      procedure :: initialize                             !< Initialize the vfs object
       procedure :: print=>vfs_print                       !< Output solver to the screen
       procedure :: initialize_irl                         !< Initialize the IRL objects
       procedure :: add_bcond                              !< Add a boundary condition
@@ -301,8 +302,110 @@ contains
       if (.not.self%cfg%xper.and.self%cfg%iproc.eq.1) self%vmask(self%cfg%imino,:,:)=self%vmask(self%cfg%imino+1,:,:)
       if (.not.self%cfg%yper.and.self%cfg%jproc.eq.1) self%vmask(:,self%cfg%jmino,:)=self%vmask(:,self%cfg%jmino+1,:)
       if (.not.self%cfg%zper.and.self%cfg%kproc.eq.1) self%vmask(:,:,self%cfg%kmino)=self%vmask(:,:,self%cfg%kmino+1)
-      
+
    end function constructor
+
+
+   !> Initialization for volume fraction solver
+   subroutine initialize(this,cfg,reconstruction_method,name)
+      use messager, only: die
+      implicit none
+      class(vfs), intent(inout) :: this
+      class(config), target, intent(in) :: cfg
+      integer, intent(in) :: reconstruction_method
+      character(len=*), optional :: name
+      integer :: i,j,k
+      
+      ! Set the name for the solver
+      if (present(name)) this%name=trim(adjustl(name))
+      
+      ! Check that we have at least 3 overlap cells - we can push that to 2 with limited work!
+      if (cfg%no.lt.3) call die('[vfs initialize] The config requires at least 3 overlap cells')
+      
+      ! Point to pgrid object
+      this%cfg=>cfg
+      
+      ! Nullify bcond list
+      this%nbc=0
+      this%first_bc=>NULL()
+      
+      ! Allocate variables
+      allocate(this%VF   (  this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_)); this%VF   =0.0_WP
+      allocate(this%VFold(  this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_)); this%VFold=0.0_WP
+      allocate(this%Lbary(3,this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_)); this%Lbary=0.0_WP
+      allocate(this%Gbary(3,this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_)); this%Gbary=0.0_WP
+      allocate(this%SD   (  this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_)); this%SD   =0.0_WP
+      allocate(this%G    (  this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_)); this%G    =0.0_WP
+      allocate(this%curv (  this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_)); this%curv =0.0_WP
+      allocate(this%type (  this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_)); this%type =0.0_WP
+      
+      ! Set clipping distance
+      this%Gclip=real(distance_band+1,WP)*this%cfg%min_meshsize
+      
+      ! Subcell phasic volumes
+      allocate(this%Lvol(0:1,0:1,0:1,this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_)); this%Lvol=0.0_WP
+      allocate(this%Gvol(0:1,0:1,0:1,this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_)); this%Gvol=0.0_WP
+      
+      ! Prepare the band arrays
+      allocate(this%band(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_)); this%band=0
+      if (allocated(this%band_map)) deallocate(this%band_map)
+      
+      ! Set reconstruction method
+      this%reconstruction_method=reconstruction_method
+      
+      ! Initialize IRL
+      call this%initialize_irl()
+      
+      ! Prepare mask for VF
+      allocate(this%mask(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_)); this%mask=0
+      if (.not.this%cfg%xper) then
+         if (this%cfg%iproc.eq.           1) this%mask(:this%cfg%imin-1,:,:)=2
+         if (this%cfg%iproc.eq.this%cfg%npx) this%mask(this%cfg%imax+1:,:,:)=2
+      end if
+      if (.not.this%cfg%yper) then
+         if (this%cfg%jproc.eq.           1) this%mask(:,:this%cfg%jmin-1,:)=2
+         if (this%cfg%jproc.eq.this%cfg%npy) this%mask(:,this%cfg%jmax+1:,:)=2
+      end if
+      if (.not.this%cfg%zper) then
+         if (this%cfg%kproc.eq.           1) this%mask(:,:,:this%cfg%kmin-1)=2
+         if (this%cfg%kproc.eq.this%cfg%npz) this%mask(:,:,this%cfg%kmax+1:)=2
+      end if
+      do k=this%cfg%kmino_,this%cfg%kmaxo_
+         do j=this%cfg%jmino_,this%cfg%jmaxo_
+            do i=this%cfg%imino_,this%cfg%imaxo_
+               if (this%cfg%VF(i,j,k).eq.0.0_WP) this%mask(i,j,k)=1
+            end do
+         end do
+      end do
+      call this%cfg%sync(this%mask)
+      
+      ! Prepare mask for vertices
+      allocate(this%vmask(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_)); this%vmask=0
+      if (.not.this%cfg%xper) then
+         if (this%cfg%iproc.eq.           1) this%vmask(               :this%cfg%imin,:,:)=2
+         if (this%cfg%iproc.eq.this%cfg%npx) this%vmask(this%cfg%imax+1:             ,:,:)=2
+      end if
+      if (.not.this%cfg%yper) then
+         if (this%cfg%jproc.eq.           1) this%vmask(:,               :this%cfg%jmin,:)=2
+         if (this%cfg%jproc.eq.this%cfg%npy) this%vmask(:,this%cfg%jmax+1:             ,:)=2
+      end if
+      if (.not.this%cfg%zper) then
+         if (this%cfg%kproc.eq.           1) this%vmask(:,:,               :this%cfg%kmin)=2
+         if (this%cfg%kproc.eq.this%cfg%npz) this%vmask(:,:,this%cfg%kmax+1:             )=2
+      end if
+      do k=this%cfg%kmino_+1,this%cfg%kmaxo_
+         do j=this%cfg%jmino_+1,this%cfg%jmaxo_
+            do i=this%cfg%imino_+1,this%cfg%imaxo_
+               if (minval(this%cfg%VF(i-1:i,j-1:j,k-1:k)).eq.0.0_WP) this%vmask(i,j,k)=1
+            end do
+         end do
+      end do
+      call this%cfg%sync(this%vmask)
+      if (.not.this%cfg%xper.and.this%cfg%iproc.eq.1) this%vmask(this%cfg%imino,:,:)=this%vmask(this%cfg%imino+1,:,:)
+      if (.not.this%cfg%yper.and.this%cfg%jproc.eq.1) this%vmask(:,this%cfg%jmino,:)=this%vmask(:,this%cfg%jmino+1,:)
+      if (.not.this%cfg%zper.and.this%cfg%kproc.eq.1) this%vmask(:,:,this%cfg%kmino)=this%vmask(:,:,this%cfg%kmino+1)
+      
+   end subroutine initialize
     
 
    !> Initialize the IRL representation of our interfaces
