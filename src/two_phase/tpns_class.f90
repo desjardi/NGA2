@@ -2637,12 +2637,6 @@ contains
                   tot_vol=gas_vol+liq_vol
                   this%visc_xy(i,j,k)=0.0_WP
                   if (tot_vol.gt.0.0_WP) this%visc_xy(i,j,k)=this%visc_g*this%visc_l/(this%visc_l*gas_vol/tot_vol+this%visc_g*liq_vol/tot_vol+epsilon(1.0_WP))
-                  if (this%cfg%x(i).eq.0.0_WP.and.this%cfg%y(j).eq.2.0_WP) then
-                     print*,'wall visc half-way:',this%visc_xy(i,j,k),'vols:',sum(vf%Lvol(:,:,:,i-1,j,k)),sum(vf%Lvol(:,:,:,i,j,k))
-                  end if
-                  if (this%cfg%x(i).eq.0.0_WP.and.this%cfg%y(j).eq.-1.0_WP) then
-                     print*,'wall visc atbottom:',this%visc_xy(i,j,k),'vols:',sum(vf%Lvol(:,:,:,i-1,j,k)),sum(vf%Lvol(:,:,:,i,j,k))
-                  end if
                   ! VISC_yz at [xm,y,z] - direct sum in x, staggered sum in y/z
                   liq_vol=sum(vf%Lvol(:,0,0,i,j,k))+sum(vf%Lvol(:,1,0,i,j-1,k))+sum(vf%Lvol(:,0,1,i,j,k-1))+sum(vf%Lvol(:,1,1,i,j-1,k-1))
                   gas_vol=sum(vf%Gvol(:,0,0,i,j,k))+sum(vf%Gvol(:,1,0,i,j-1,k))+sum(vf%Gvol(:,0,1,i,j,k-1))+sum(vf%Gvol(:,1,1,i,j-1,k-1))
