@@ -5,9 +5,9 @@ Partition :	1 8 1
 Lx :	0.025
 Ly :	0.05
 Lz :	0.025
-nx :	50
-ny :	100
-nz :	50
+nx :	100
+ny :	200
+nz :	100
 
 # Fluid properties
 Gravity :                     0 -9.81 0
@@ -18,18 +18,18 @@ Gas density :                 1.226
 Surface tension coefficient : 0.0728
 
 # Bubble definition
-Bubble radius :   1.655e-3
+Bubble volume :   45.8    # in mm^3
 Bubble position : 0 0.01 0
 
 # Non-Newtonian modeling                     # w=0.8 case    # w=0.3 case
-Carreau powerlaw :              0.57         # 0.33          # 0.57
-Polymer viscosity :             0.096511     # 1.5122        # 0.096511
-Polymer relaxation time :       0.45         # 1.4           # 0.45
+Carreau powerlaw :              0.33         # 0.33          # 0.57
+Polymer viscosity :             1.5122       # 1.5122        # 0.096511
+Polymer relaxation time :       1.4          # 1.4           # 0.45
 Maximum polymer extensibility : 10
 
 # Time integration
 Max timestep size : 2e-4
-Max cfl number :    0.9
+Max cfl number :    2
 Max time :          2
 
 # Pressure solver
