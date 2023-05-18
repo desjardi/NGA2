@@ -126,10 +126,13 @@ contains
    real(WP) function wgauss(d,h)
       implicit none
       real(WP), intent(in) :: d,h
-      if (d.ge.h) then
+      real(WP), parameter :: coeff=2.6_WP
+      real(WP) :: hh
+      hh=coeff*h
+      if (d.ge.hh) then
          wgauss=0.0_WP
       else
-         wgauss=(1.0_WP+4.0_WP*d/h)*(1.0_WP-d/h)**4
+         wgauss=(1.0_WP+4.0_WP*d/hh)*(1.0_WP-d/hh)**4
       end if
    end function wgauss
    
