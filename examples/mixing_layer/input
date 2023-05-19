@@ -1,0 +1,31 @@
+# Parallelization
+Partition :	8 1 1
+
+# Mesh definition
+Lx :	      50
+Ly :	      50
+Lz :	      0.25
+nx :	      200
+ny :	      200
+nz :	      1
+
+# Inital profile
+Velocity difference :  1
+Vorticity thickness :  1
+
+# Fluid properties
+Dynamic viscosity :    0.005
+Density :              1
+
+# Particle properties
+Particle density :     1000
+Particle diameter :    0.01
+Number of particles :  10000
+
+# Time integration
+Max timestep size : 0.25
+Max cfl number :    0.8
+Max time :          200
+
+# Ensight output
+Ensight output period : 1

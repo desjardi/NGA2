@@ -1,0 +1,30 @@
+# Parallelization
+Partition :	8 1 1
+
+# Mesh definition
+Lx :	20
+Ly :	10
+Lz :	0.05!10
+nx :	400
+ny :	200
+nz :	1!200
+
+# Case definition
+Cylinder radius : 0.5
+Inlet velocity :  1
+
+# Fluid properties
+Dynamic viscosity : 0.001
+Density :           1
+
+# Time integration
+Max timestep size : 2e-2
+Max cfl number :    0.9
+Max time :          100
+
+# Pressure solver
+Pressure tolerance : 1e-5
+Pressure iteration : 100
+
+# Ensight output
+Ensight output period : 1

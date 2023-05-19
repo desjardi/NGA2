@@ -1,4 +1,4 @@
-f90EXE_sources += config_class.f90
+f90EXE_sources += config_class.f90 ibconfig_class.f90
 
 INCLUDE_LOCATIONS += $(NGA_HOME)/src/config
 VPATH_LOCATIONS   += $(NGA_HOME)/src/config

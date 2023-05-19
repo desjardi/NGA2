@@ -13,3 +13,6 @@ parallel coupler has been implemented, so multi-block simulations are now fully
 supported. Lagrangian particle tracking has been added.
 
 March 2022 - Compressible multiphase solver added by Michael Kuhn.
+
+April 2023 - Major updates including immersed boundaries, fft solvers, updated
+particles and VOF, new peridynamics solver, new strategy for multi-domain simulations.

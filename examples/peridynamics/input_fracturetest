@@ -1,0 +1,21 @@
+# Parallelization
+Partition :	8 1 1
+
+# Mesh definition
+Lx :	0.2
+Ly :	0.12
+Lz :	0.06
+nx :	50
+ny :	30
+nz :	15
+
+# Solid model
+Solid dx : 0.001
+
+# Time integration
+Max timestep size : 1e-7
+Max cfl number :    0.9
+Max time :          1e-4
+
+# Ensight output
+Ensight output period : 1e-6

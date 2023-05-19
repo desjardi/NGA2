@@ -1,13 +1,13 @@
 # Parallelization
-Partition :	2 2 1
+Partition :	2 4 1
 
 # Mesh definition
 Lx :	0.5
 Ly :	1
-Lz :	0.02
+Lz :	0.02  !0.5
 nx :	25
 ny :	50
-nz :	1
+nz :  1     !25
 
 # Time integration
 Max timestep size :	1e-4

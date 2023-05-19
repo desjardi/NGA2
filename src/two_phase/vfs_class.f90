@@ -100,8 +100,11 @@ module vfs_class
       
       ! Interface reconstruction method
       integer :: reconstruction_method                    !< Interface reconstruction method
-      real(WP) :: twoplane_threshold=0.95_WP              !< Threshold for r2p to switch from one-plane to two-planes
-      real(WP) :: art_threshold=1.30_WP                   !< Threshold for art to switch from r2p to lvira
+      real(WP) :: twoplane_threshold=0.99_WP              !< Threshold for r2p to switch from one-plane to two-planes
+      real(WP) :: classification_threshold=1.50_WP        !< Threshold for classifying spheres/ligaments/sheets
+      
+      ! Local cell classification
+      real(WP), dimension(:,:,:), allocatable :: type    !< Local interface type (0: no interface, 1:spheroid, 2:ligament, 3:sheet)
       
       ! Curvature clipping parameter
       real(WP) :: maxcurv_times_mesh=1.0_WP               !< Clipping parameter for maximum curvature (classically set to 1, but should be larger since we resolve more)
@@ -131,7 +134,7 @@ module vfs_class
       integer, dimension(:,:,:), allocatable :: vmask     !< Integer array used for enforcing bconds - for vertices
       
       ! Monitoring quantities
-      real(WP) :: VFmax,VFmin,VFint                       !< Maximum, minimum, and integral volume fraction
+      real(WP) :: VFmax,VFmin,VFint,SDint                 !< Maximum, minimum, and integral volume fraction and surface density
 
       ! Old arrays that are needed for the compressible MAST solver
       real(WP), dimension(:,:,:,:), allocatable :: Lbaryold  !< Liquid barycenter
@@ -142,6 +145,7 @@ module vfs_class
       type(ObjServer_LocSepLink_type) :: localized_separator_linkold_allocation
       
    contains
+      procedure :: initialize                             !< Initialize the vfs object
       procedure :: print=>vfs_print                       !< Output solver to the screen
       procedure :: initialize_irl                         !< Initialize the IRL objects
       procedure :: add_bcond                              !< Add a boundary condition
@@ -163,6 +167,7 @@ module vfs_class
       procedure :: advance                                !< Advance VF to next step
       procedure :: advect_interface                       !< Advance IRL surface to next step
       procedure :: build_interface                        !< Reconstruct IRL interface from VF field
+      procedure :: classify_type                          !< Classify type of interface in the cell
       procedure :: build_elvira                           !< ELVIRA reconstruction of the interface from VF field
       procedure :: build_lvira                            !< LVIRA reconstruction of the interface from VF field
       procedure :: build_r2p                              !< R2P reconstruction of the interface from VF field
@@ -230,6 +235,7 @@ contains
       allocate(self%SD   (  self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%SD   =0.0_WP
       allocate(self%G    (  self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%G    =0.0_WP
       allocate(self%curv (  self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%curv =0.0_WP
+      allocate(self%type (  self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%type =0.0_WP
       
       ! Set clipping distance
       self%Gclip=real(distance_band+1,WP)*self%cfg%min_meshsize
@@ -296,8 +302,110 @@ contains
       if (.not.self%cfg%xper.and.self%cfg%iproc.eq.1) self%vmask(self%cfg%imino,:,:)=self%vmask(self%cfg%imino+1,:,:)
       if (.not.self%cfg%yper.and.self%cfg%jproc.eq.1) self%vmask(:,self%cfg%jmino,:)=self%vmask(:,self%cfg%jmino+1,:)
       if (.not.self%cfg%zper.and.self%cfg%kproc.eq.1) self%vmask(:,:,self%cfg%kmino)=self%vmask(:,:,self%cfg%kmino+1)
-      
+
    end function constructor
+
+
+   !> Initialization for volume fraction solver
+   subroutine initialize(this,cfg,reconstruction_method,name)
+      use messager, only: die
+      implicit none
+      class(vfs), intent(inout) :: this
+      class(config), target, intent(in) :: cfg
+      integer, intent(in) :: reconstruction_method
+      character(len=*), optional :: name
+      integer :: i,j,k
+      
+      ! Set the name for the solver
+      if (present(name)) this%name=trim(adjustl(name))
+      
+      ! Check that we have at least 3 overlap cells - we can push that to 2 with limited work!
+      if (cfg%no.lt.3) call die('[vfs initialize] The config requires at least 3 overlap cells')
+      
+      ! Point to pgrid object
+      this%cfg=>cfg
+      
+      ! Nullify bcond list
+      this%nbc=0
+      this%first_bc=>NULL()
+      
+      ! Allocate variables
+      allocate(this%VF   (  this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_)); this%VF   =0.0_WP
+      allocate(this%VFold(  this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_)); this%VFold=0.0_WP
+      allocate(this%Lbary(3,this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_)); this%Lbary=0.0_WP
+      allocate(this%Gbary(3,this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_)); this%Gbary=0.0_WP
+      allocate(this%SD   (  this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_)); this%SD   =0.0_WP
+      allocate(this%G    (  this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_)); this%G    =0.0_WP
+      allocate(this%curv (  this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_)); this%curv =0.0_WP
+      allocate(this%type (  this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_)); this%type =0.0_WP
+      
+      ! Set clipping distance
+      this%Gclip=real(distance_band+1,WP)*this%cfg%min_meshsize
+      
+      ! Subcell phasic volumes
+      allocate(this%Lvol(0:1,0:1,0:1,this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_)); this%Lvol=0.0_WP
+      allocate(this%Gvol(0:1,0:1,0:1,this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_)); this%Gvol=0.0_WP
+      
+      ! Prepare the band arrays
+      allocate(this%band(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_)); this%band=0
+      if (allocated(this%band_map)) deallocate(this%band_map)
+      
+      ! Set reconstruction method
+      this%reconstruction_method=reconstruction_method
+      
+      ! Initialize IRL
+      call this%initialize_irl()
+      
+      ! Prepare mask for VF
+      allocate(this%mask(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_)); this%mask=0
+      if (.not.this%cfg%xper) then
+         if (this%cfg%iproc.eq.           1) this%mask(:this%cfg%imin-1,:,:)=2
+         if (this%cfg%iproc.eq.this%cfg%npx) this%mask(this%cfg%imax+1:,:,:)=2
+      end if
+      if (.not.this%cfg%yper) then
+         if (this%cfg%jproc.eq.           1) this%mask(:,:this%cfg%jmin-1,:)=2
+         if (this%cfg%jproc.eq.this%cfg%npy) this%mask(:,this%cfg%jmax+1:,:)=2
+      end if
+      if (.not.this%cfg%zper) then
+         if (this%cfg%kproc.eq.           1) this%mask(:,:,:this%cfg%kmin-1)=2
+         if (this%cfg%kproc.eq.this%cfg%npz) this%mask(:,:,this%cfg%kmax+1:)=2
+      end if
+      do k=this%cfg%kmino_,this%cfg%kmaxo_
+         do j=this%cfg%jmino_,this%cfg%jmaxo_
+            do i=this%cfg%imino_,this%cfg%imaxo_
+               if (this%cfg%VF(i,j,k).eq.0.0_WP) this%mask(i,j,k)=1
+            end do
+         end do
+      end do
+      call this%cfg%sync(this%mask)
+      
+      ! Prepare mask for vertices
+      allocate(this%vmask(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_)); this%vmask=0
+      if (.not.this%cfg%xper) then
+         if (this%cfg%iproc.eq.           1) this%vmask(               :this%cfg%imin,:,:)=2
+         if (this%cfg%iproc.eq.this%cfg%npx) this%vmask(this%cfg%imax+1:             ,:,:)=2
+      end if
+      if (.not.this%cfg%yper) then
+         if (this%cfg%jproc.eq.           1) this%vmask(:,               :this%cfg%jmin,:)=2
+         if (this%cfg%jproc.eq.this%cfg%npy) this%vmask(:,this%cfg%jmax+1:             ,:)=2
+      end if
+      if (.not.this%cfg%zper) then
+         if (this%cfg%kproc.eq.           1) this%vmask(:,:,               :this%cfg%kmin)=2
+         if (this%cfg%kproc.eq.this%cfg%npz) this%vmask(:,:,this%cfg%kmax+1:             )=2
+      end if
+      do k=this%cfg%kmino_+1,this%cfg%kmaxo_
+         do j=this%cfg%jmino_+1,this%cfg%jmaxo_
+            do i=this%cfg%imino_+1,this%cfg%imaxo_
+               if (minval(this%cfg%VF(i-1:i,j-1:j,k-1:k)).eq.0.0_WP) this%vmask(i,j,k)=1
+            end do
+         end do
+      end do
+      call this%cfg%sync(this%vmask)
+      if (.not.this%cfg%xper.and.this%cfg%iproc.eq.1) this%vmask(this%cfg%imino,:,:)=this%vmask(this%cfg%imino+1,:,:)
+      if (.not.this%cfg%yper.and.this%cfg%jproc.eq.1) this%vmask(:,this%cfg%jmino,:)=this%vmask(:,this%cfg%jmino+1,:)
+      if (.not.this%cfg%zper.and.this%cfg%kproc.eq.1) this%vmask(:,:,this%cfg%kmino)=this%vmask(:,:,this%cfg%kmino+1)
+      
+   end subroutine initialize
     
 
    !> Initialize the IRL representation of our interfaces
@@ -569,20 +677,14 @@ contains
    
    !> Add a boundary condition
    subroutine add_bcond(this,name,type,locator,dir)
-      use string,   only: lowercase
-      use messager, only: die
+      use string,         only: lowercase
+      use messager,       only: die
+      use iterator_class, only: locator_ftype
       implicit none
       class(vfs), intent(inout) :: this
       character(len=*), intent(in) :: name
       integer,  intent(in) :: type
-      external :: locator
-      interface
-         logical function locator(pargrid,ind1,ind2,ind3)
-            use pgrid_class, only: pgrid
-            class(pgrid), intent(in) :: pargrid
-            integer, intent(in) :: ind1,ind2,ind3
-         end function locator
-      end interface
+      procedure(locator_ftype) :: locator
       character(len=2), optional :: dir
       type(bcond), pointer :: new_bc
       integer :: i,j,k,n
@@ -605,7 +707,7 @@ contains
          if (new_bc%type.eq.neumann) call die('[vfs apply_bcond] Neumann requires a direction')
          new_bc%dir=0
       end if
-      new_bc%itr=iterator(this%cfg,new_bc%name,locator)
+      new_bc%itr=iterator(this%cfg,new_bc%name,locator,'c')
       
       ! Insert it up front
       new_bc%next=>this%first_bc
@@ -1449,6 +1551,8 @@ contains
       use messager, only: die
       implicit none
       class(vfs), intent(inout) :: this
+      ! First perform interface type classification
+      call this%classify_type()
       ! Reconstruct interface - will need to support various methods
       select case (this%reconstruction_method)
       case (elvira); call this%build_elvira()
@@ -1464,6 +1568,103 @@ contains
       end select
    end subroutine build_interface
    
+   
+   !> Classify the type of interface in the cell
+   subroutine classify_type(this)
+      implicit none
+      class(vfs), intent(inout) :: this
+      integer :: n,i,j,k,ii,jj,kk,info,ni,nl
+      real(WP) :: fvol,xtmp,ytmp,ztmp
+      real(WP), dimension(3)     :: fbary
+      real(WP), dimension(3,3)   :: Imom
+      real(WP), dimension(3)     :: d
+      integer , parameter        :: order=3
+      integer , parameter        :: lwork=102 ! dsyev optimal length (nb+2)*order, where block size nb=32
+      real(WP), dimension(lwork) :: work
+      integer, parameter :: ngrow=2
+      real(WP), dimension(:,:,:), allocatable :: newtype
+
+      ! Default value is 0
+      this%type=0.0_WP
+      
+      ! Traverse domain and classify
+      do k=this%cfg%kmin_,this%cfg%kmax_
+         do j=this%cfg%jmin_,this%cfg%jmax_
+            do i=this%cfg%imin_,this%cfg%imax_
+               
+               ! Skip wall/bcond cells
+               if (this%mask(i,j,k).ne.0) cycle
+               
+               ! Skip full cells
+               if (this%VF(i,j,k).lt.VFlo.or.this%VF(i,j,k).gt.VFhi) cycle
+               
+               ! Extract moment of inertia
+               fvol=0.0_WP; fbary=0.0_WP; Imom=0.0_WP
+               do kk=k-2,k+2
+                  do jj=j-2,j+2
+                     do ii=i-2,i+2
+                        fvol =fvol +this%cfg%vol(ii,jj,kk)*this%VF(ii,jj,kk)
+                        fbary=fbary+this%cfg%vol(ii,jj,kk)*this%VF(ii,jj,kk)*this%Lbary(:,ii,jj,kk)
+                     end do
+                  end do
+               end do
+               fbary=fbary/fvol
+               do kk=k-2,k+2
+                  do jj=j-2,j+2
+                     do ii=i-2,i+2
+                        xtmp=this%Lbary(1,ii,jj,kk)-fbary(1)
+                        ytmp=this%Lbary(2,ii,jj,kk)-fbary(2)
+                        ztmp=this%Lbary(3,ii,jj,kk)-fbary(3)
+                        Imom(1,1)=Imom(1,1)+(ytmp**2+ztmp**2)*this%cfg%vol(ii,jj,kk)*this%VF(ii,jj,kk)
+                        Imom(2,2)=Imom(2,2)+(ztmp**2+xtmp**2)*this%cfg%vol(ii,jj,kk)*this%VF(ii,jj,kk)
+                        Imom(3,3)=Imom(3,3)+(xtmp**2+ytmp**2)*this%cfg%vol(ii,jj,kk)*this%VF(ii,jj,kk)
+                        Imom(1,2)=Imom(1,2)-xtmp*ytmp*this%cfg%vol(ii,jj,kk)*this%VF(ii,jj,kk)
+                        Imom(1,3)=Imom(1,3)-ztmp*xtmp*this%cfg%vol(ii,jj,kk)*this%VF(ii,jj,kk)
+                        Imom(2,3)=Imom(2,3)-ytmp*ztmp*this%cfg%vol(ii,jj,kk)*this%VF(ii,jj,kk)
+                     end do
+                  end do
+               end do
+               
+               ! Compute sorted eigenvalues
+               call dsyev('V','U',order,Imom,order,d,work,lwork,info); d=max(0.0_WP,d)
+               
+               ! Perform classification
+               this%type(i,j,k)=1.0_WP
+               if (d(3).gt.this%classification_threshold*d(1)) this%type(i,j,k)=this%type(i,j,k)+1.0_WP
+               if (d(3).gt.this%classification_threshold*d(2)) this%type(i,j,k)=this%type(i,j,k)+1.0_WP
+               
+            end do
+         end do
+      end do
+      
+      ! Communicate
+      call this%cfg%sync(this%type)
+      
+      ! Apply band growth on sheet type to avoid early tearing
+      allocate(newtype(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
+      do n=1,ngrow
+         ! Initialize based on current type
+         newtype=this%type
+         ! Growth type=3 to diurect neighbors
+         do k=this%cfg%kmin_,this%cfg%kmax_
+            do j=this%cfg%jmin_,this%cfg%jmax_
+               do i=this%cfg%imin_,this%cfg%imax_
+                  ! Only work on interface cells
+                  if (this%type(i,j,k).eq.0.0_WP) cycle
+                  ! Look around for type=3
+                  if (maxval(this%type(i-1:i+1,j-1:j+1,k-1:k+1)).eq.3.0_WP) newtype(i,j,k)=3.0_WP
+               end do
+            end do
+         end do
+         ! Copy back
+         this%type=newtype
+         ! Communicate
+         call this%cfg%sync(this%type)
+      end do
+      deallocate(newtype)
+
+   end subroutine classify_type
+
    
    !> ELVIRA reconstruction of a planar interface in mixed cells
    subroutine build_elvira(this)
@@ -1902,7 +2103,7 @@ contains
       implicit none
       class(vfs), intent(inout) :: this
       integer(IRL_SignedIndex_t) :: i,j,k
-      integer :: ind,ii,jj,kk,icenter,info
+      integer :: ind,ii,jj,kk,icenter
       type(LVIRANeigh_RectCub_type) :: nh_lvr
       type(R2PNeigh_RectCub_type)   :: nh_r2p
       type(RectCub_type), dimension(0:26) :: neighborhood_cells
@@ -1912,15 +2113,9 @@ contains
       real(WP) :: surface_area
       real(IRL_double), dimension(3) :: initial_norm
       real(IRL_double) :: initial_dist
-      real(WP) :: fvol,xtmp,ytmp,ztmp
-      real(WP), dimension(3)     :: fbary
-      real(WP), dimension(3,3)   :: Imom
-      real(WP), dimension(3)     :: d
-      integer , parameter        :: order=3
-      integer , parameter        :: lwork=102 ! dsyev optimal length (nb+2)*order, where block size nb=32
-      real(WP), dimension(lwork) :: work
+      logical :: is_wall
       
-      ! Get storage for voluem moments and normal
+      ! Get storage for volume moments and normal
       call new(volume_moments_and_normal)
       
       ! Give ourselves an R2P and an LVIRA neighborhood of 27 cells along with separated volume moments
@@ -1946,39 +2141,65 @@ contains
                   cycle
                end if
                
-               ! Now identify the local topology from moments of inertia
-               fvol=0.0_WP; fbary=0.0_WP; Imom=0.0_WP
+               ! Check whether a wall is in our neighborhood
+               is_wall=.false.
                do kk=k-1,k+1
                   do jj=j-1,j+1
                      do ii=i-1,i+1
-                        fvol =fvol +this%cfg%vol(ii,jj,kk)*this%VF(ii,jj,kk)
-                        fbary=fbary+this%cfg%vol(ii,jj,kk)*this%VF(ii,jj,kk)*this%Lbary(:,ii,jj,kk)
+                        if (this%mask(ii,jj,kk).eq.1) is_wall=.true.
                      end do
                   end do
                end do
-               fbary=fbary/fvol
-               do kk=k-1,k+1
-                  do jj=j-1,j+1
-                     do ii=i-1,i+1
-                        xtmp=this%Lbary(1,ii,jj,kk)-fbary(1)
-                        ytmp=this%Lbary(2,ii,jj,kk)-fbary(2)
-                        ztmp=this%Lbary(3,ii,jj,kk)-fbary(3)
-                        Imom(1,1)=Imom(1,1)+(ytmp**2+ztmp**2)*this%cfg%vol(ii,jj,kk)*this%VF(ii,jj,kk)
-                        Imom(2,2)=Imom(2,2)+(xtmp**2+ztmp**2)*this%cfg%vol(ii,jj,kk)*this%VF(ii,jj,kk)
-                        Imom(3,3)=Imom(3,3)+(xtmp**2+ytmp**2)*this%cfg%vol(ii,jj,kk)*this%VF(ii,jj,kk)
-                        Imom(1,2)=Imom(1,2)-xtmp*ytmp*this%cfg%vol(ii,jj,kk)*this%VF(ii,jj,kk)
-                        Imom(1,3)=Imom(1,3)-xtmp*ztmp*this%cfg%vol(ii,jj,kk)*this%VF(ii,jj,kk)
-                        Imom(2,3)=Imom(2,3)-ytmp*ztmp*this%cfg%vol(ii,jj,kk)*this%VF(ii,jj,kk)
-                     end do
-                  end do
-               end do
-               call dsyev('V','U',order,Imom,order,d,work,lwork,info); d=max(0.0_WP,d)
                
                ! Apply different reconstruction for different topologies
-               if (d(2).lt.this%art_threshold*sqrt(d(1)*d(3))) then
+               if (this%type(i,j,k).eq.2.0_WP.or.is_wall) then
+                  
+                  ! ===================================== !
+                  ! THE SHAPE IS LIGAMENT-LIKE, USE LVIRA !
+                  ! Also, a wall may have been found...   !
+                  ! ===================================== !
+                  ! Set neighborhood_cells and liquid_volume_fraction to current correct values
+                  ind=0
+                  do kk=k-1,k+1
+                     do jj=j-1,j+1
+                        do ii=i-1,i+1
+                           ! Skip true wall cells - bconds can be used here
+                           if (this%mask(ii,jj,kk).eq.1) cycle
+                           ! Add cell to neighborhood
+                           call addMember(nh_lvr,neighborhood_cells(ind),liquid_volume_fraction(ind))
+                           ! Build the cell
+                           call construct_2pt(neighborhood_cells(ind),[this%cfg%x(ii),this%cfg%y(jj),this%cfg%z(kk)],[this%cfg%x(ii+1),this%cfg%y(jj+1),this%cfg%z(kk+1)])
+                           ! Assign volume fraction
+                           liquid_volume_fraction(ind)=this%VF(ii,jj,kk)
+                           ! Trap and set stencil center
+                           if (ii.eq.i.and.jj.eq.j.and.kk.eq.k) then
+                              icenter=ind
+                              call setCenterOfStencil(nh_lvr,icenter)
+                           end if
+                           ! Increment counter
+                           ind=ind+1
+                        end do
+                     end do
+                  end do
+                  
+                  ! Formulate initial guess
+                  call setNumberOfPlanes(this%liquid_gas_interface(i,j,k),1)
+                  initial_norm=normalize(this%Gbary(:,i,j,k)-this%Lbary(:,i,j,k))
+                  initial_dist=dot_product(initial_norm,[this%cfg%xm(i),this%cfg%ym(j),this%cfg%zm(k)])
+                  call setPlane(this%liquid_gas_interface(i,j,k),0,initial_norm,initial_dist)
+                  call matchVolumeFraction(neighborhood_cells(icenter),this%VF(i,j,k),this%liquid_gas_interface(i,j,k))
+                  
+                  ! Perform the reconstruction
+                  call reconstructLVIRA3D(nh_lvr,this%liquid_gas_interface(i,j,k))
+                  
+                  ! Clean up neighborhood
+                  call emptyNeighborhood(nh_lvr)
+                  
+               else
                   
                   ! ==================================================== !
                   ! THE SHAPE COULD BE SPHEROIDAL OR SHEET-LIKE, USE R2P !
+                  ! Also, no wall was found in the neighborhood...       !
                   ! ==================================================== !
                   ! Prepare R2P neighborhood
                   ind=0
@@ -2031,48 +2252,6 @@ contains
                   
                   ! Clean up neighborhood
                   call emptyNeighborhood(nh_r2p)
-                  
-               else
-                  
-                  ! ===================================== !
-                  ! THE SHAPE IS LIGAMENT-LIKE, USE LVIRA !
-                  ! ===================================== !
-                  ! Set neighborhood_cells and liquid_volume_fraction to current correct values
-                  ind=0
-                  do kk=k-1,k+1
-                     do jj=j-1,j+1
-                        do ii=i-1,i+1
-                           ! Skip true wall cells - bconds can be used here
-                           if (this%mask(ii,jj,kk).eq.1) cycle
-                           ! Add cell to neighborhood
-                           call addMember(nh_lvr,neighborhood_cells(ind),liquid_volume_fraction(ind))
-                           ! Build the cell
-                           call construct_2pt(neighborhood_cells(ind),[this%cfg%x(ii),this%cfg%y(jj),this%cfg%z(kk)],[this%cfg%x(ii+1),this%cfg%y(jj+1),this%cfg%z(kk+1)])
-                           ! Assign volume fraction
-                           liquid_volume_fraction(ind)=this%VF(ii,jj,kk)
-                           ! Trap and set stencil center
-                           if (ii.eq.i.and.jj.eq.j.and.kk.eq.k) then
-                              icenter=ind
-                              call setCenterOfStencil(nh_lvr,icenter)
-                           end if
-                           ! Increment counter
-                           ind=ind+1
-                        end do
-                     end do
-                  end do
-                  
-                  ! Formulate initial guess
-                  call setNumberOfPlanes(this%liquid_gas_interface(i,j,k),1)
-                  initial_norm=normalize(this%Gbary(:,i,j,k)-this%Lbary(:,i,j,k))
-                  initial_dist=dot_product(initial_norm,[this%cfg%xm(i),this%cfg%ym(j),this%cfg%zm(k)])
-                  call setPlane(this%liquid_gas_interface(i,j,k),0,initial_norm,initial_dist)
-                  call matchVolumeFraction(neighborhood_cells(icenter),this%VF(i,j,k),this%liquid_gas_interface(i,j,k))
-                  
-                  ! Perform the reconstruction
-                  call reconstructLVIRA3D(nh_lvr,this%liquid_gas_interface(i,j,k))
-                  
-                  ! Clean up neighborhood
-                  call emptyNeighborhood(nh_lvr)
                   
                end if
                
@@ -2511,6 +2690,7 @@ contains
       
    end subroutine reset_volume_moments
    
+
    ! Reset only moments, leave VF unchanged
    subroutine reset_moments(this)
       implicit none
@@ -2949,6 +3129,7 @@ contains
       my_VFmax=maxval(this%VF); call MPI_ALLREDUCE(my_VFmax,this%VFmax,1,MPI_REAL_WP,MPI_MAX,this%cfg%comm,ierr)
       my_VFmin=minval(this%VF); call MPI_ALLREDUCE(my_VFmin,this%VFmin,1,MPI_REAL_WP,MPI_MIN,this%cfg%comm,ierr)
       call this%cfg%integrate(this%VF,integral=this%VFint)
+      call this%cfg%integrate(this%SD,integral=this%SDint)
    end subroutine get_max
    
    

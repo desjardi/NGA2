@@ -28,9 +28,33 @@ module simulation
    !> Fluid info
    real(WP), dimension(:,:,:), allocatable :: U,V,W
    real(WP), dimension(:,:,:), allocatable :: rho,visc
-
+   
+   !> Particle barycenter and reference diameter
+   real(WP) :: mean_y
+   real(WP) :: dp
    
 contains
+   
+   
+   !> Calculation of average particle position
+   subroutine calc_barycenter
+      use mpi_f08,  only: MPI_ALLREDUCE,MPI_SUM,MPI_INTEGER
+      use parallel, only: MPI_REAL_WP
+      implicit none
+      integer :: n,ierr
+      integer :: my_number_particles,number_particles
+      real(WP) :: my_mean_y
+      ! Loop over local particles
+      my_number_particles=0
+      my_mean_y=0.0_WP
+      do n=1,lp%np_
+         my_number_particles=my_number_particles+1
+         my_mean_y=my_mean_y+lp%p(n)%pos(2)
+      end do
+      call MPI_ALLREDUCE(my_number_particles,number_particles,1,MPI_INTEGER,MPI_SUM,lp%cfg%comm,ierr)
+      call MPI_ALLREDUCE(my_mean_y,mean_y,1,MPI_REAL_WP,MPI_SUM,lp%cfg%comm,ierr)
+      mean_y=mean_y/real(max(number_particles,1),WP)
+   end subroutine calc_barycenter
    
    
    !> Initialization of problem solver
@@ -52,7 +76,6 @@ contains
       ! Initialize our LPT solver
       initialize_lpt: block
          use random, only: random_uniform
-         real(WP) :: dp
          integer :: i,np
          ! Create solver
          lp=lpt(cfg=cfg,name='LPT')
@@ -79,11 +102,12 @@ contains
                lp%p(i)%pos=[random_uniform(lp%cfg%x(lp%cfg%imin),lp%cfg%x(lp%cfg%imax+1)),&
                &            random_uniform(lp%cfg%y(lp%cfg%jmin),lp%cfg%y(lp%cfg%jmax+1)),&
                &            random_uniform(lp%cfg%z(lp%cfg%kmin),lp%cfg%z(lp%cfg%kmax+1))]
-               lp%p(i)%pos(3)=lp%cfg%zm(lp%cfg%kmin_)
+               if (cfg%nz.eq.1) lp%p(i)%pos(3)=lp%cfg%zm(lp%cfg%kmin_)
                ! Give zero velocity
                lp%p(i)%vel=0.0_WP
                ! Give zero collision force
-               lp%p(i)%col=0.0_WP
+               lp%p(i)%Acol=0.0_WP
+               lp%p(i)%Tcol=0.0_WP
                ! Give zero dt
                lp%p(i)%dt=0.0_WP
                ! Locate the particle on the mesh
@@ -93,14 +117,18 @@ contains
             end do
          end if
          call lp%sync()
-
+         
          ! Get initial particle volume fraction
          call lp%update_VF()
          ! Set collision timescale
-         lp%Tcol=5.0_WP*time%dt
-         lp%e_n=0.7_WP
+         call param_read('Collision timescale',lp%tau_col,default=15.0_WP*time%dt)
+         ! Set coefficient of restitution
+         call param_read('Coefficient of restitution',lp%e_n,default=0.7_WP)
+         call param_read('Wall restitution',lp%e_w,default=lp%e_n)
+         call param_read('Friction coefficient',lp%mu_f,default=0.0_WP)
          ! Set gravity
          call param_read('Gravity',lp%gravity)
+         
       end block initialize_lpt
       
 
@@ -108,7 +136,7 @@ contains
       initialize_fluid: block
          real(WP) :: rhof,viscf
          ! Allocate arrays
-         allocate(rho (lp%cfg%imino_:lp%cfg%imaxo_,lp%cfg%jmino_:lp%cfg%jmaxo_,lp%cfg%kmino_:lp%cfg%kmaxo_)); rho =0.0_WP
+         allocate(rho (lp%cfg%imino_:lp%cfg%imaxo_,lp%cfg%jmino_:lp%cfg%jmaxo_,lp%cfg%kmino_:lp%cfg%kmaxo_)); rho =1.0_WP
          allocate(visc(lp%cfg%imino_:lp%cfg%imaxo_,lp%cfg%jmino_:lp%cfg%jmaxo_,lp%cfg%kmino_:lp%cfg%kmaxo_)); visc=0.0_WP
          allocate(U   (lp%cfg%imino_:lp%cfg%imaxo_,lp%cfg%jmino_:lp%cfg%jmaxo_,lp%cfg%kmino_:lp%cfg%kmaxo_)); U   =0.0_WP
          allocate(V   (lp%cfg%imino_:lp%cfg%imaxo_,lp%cfg%jmino_:lp%cfg%jmaxo_,lp%cfg%kmino_:lp%cfg%kmaxo_)); V   =0.0_WP
@@ -122,11 +150,15 @@ contains
       ! Create partmesh object for Lagrangian particle output
       create_pmesh: block
          integer :: i
-         pmesh=partmesh(nvar=1,name='lpt')
+         pmesh=partmesh(nvar=1,nvec=2,name='lpt')
          pmesh%varname(1)='radius'
+         pmesh%vecname(1)='velocity'
+         pmesh%vecname(2)='Fcol'
          call lp%update_partmesh(pmesh)
          do i=1,lp%np_
-            pmesh%var(1,i)=0.5_WP*lp%p(i)%d
+            pmesh%var(  1,i)=0.5_WP*lp%p(i)%d
+            pmesh%vec(:,1,i)=lp%p(i)%vel
+            pmesh%vec(:,2,i)=lp%p(i)%Acol
          end do
       end block create_pmesh
       
@@ -139,6 +171,7 @@ contains
          ens_evt=event(time=time,name='Ensight output')
          call param_read('Ensight output period',ens_evt%tper)
          ! Add variables to output
+         call ens_out%add_scalar('epsp',lp%VF)
          call ens_out%add_particle('particles',pmesh)
          ! Output to ensight
          if (ens_evt%occurs()) call ens_out%write_data(time%t)
@@ -149,12 +182,14 @@ contains
       create_monitor: block
          ! Prepare some info about fields
          call lp%get_max()
+         call calc_barycenter()
          ! Create simulation monitor
          mfile=monitor(amroot=lp%cfg%amRoot,name='simulation')
          call mfile%add_column(time%n,'Timestep number')
          call mfile%add_column(time%t,'Time')
          call mfile%add_column(time%dt,'Timestep size')
          call mfile%add_column(lp%np,'Particle number')
+         call mfile%add_column(mean_y,'Mean y')
          call mfile%add_column(lp%VFmean,'Mean VF')
          call mfile%add_column(lp%Umin,'Particle Umin')
          call mfile%add_column(lp%Umax,'Particle Umax')
@@ -193,7 +228,9 @@ contains
                integer :: i
                call lp%update_partmesh(pmesh)
                do i=1,lp%np_
-                  pmesh%var(1,i)=0.5_WP*lp%p(i)%d
+                  pmesh%var(  1,i)=0.5_WP*lp%p(i)%d
+                  pmesh%vec(:,1,i)=lp%p(i)%vel
+                  pmesh%vec(:,2,i)=lp%p(i)%Acol
                end do
             end block update_pmesh
             call ens_out%write_data(time%t)
@@ -201,11 +238,12 @@ contains
          
          ! Perform and output monitoring
          call lp%get_max()
+         call calc_barycenter()
          call mfile%write()
          
       end do
       
-      ! Ouput particle bed
+      ! Output particle bed
       call lp%write(filename='part.file')
       
    end subroutine simulation_run

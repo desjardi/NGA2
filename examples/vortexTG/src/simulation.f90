@@ -294,10 +294,6 @@ contains
          ! Create in-cell reconstruction
          call fs%flow_reconstruct(vf)
 
-         ! Get boundary conditions at current time
-
-         ! Other routines to add later: sgs, lpt, prescribe
-
          ! Zero variables that will change during subiterations
          fs%P = 0.0_WP
          fs%Pjx = 0.0_WP; fs%Pjy = 0.0_WP; fs%Pjz = 0.0_WP
@@ -314,7 +310,6 @@ contains
 
             ! Insert viscous step here, or possibly incorporate into predictor above
             call fs%diffusion_src_explicit_step(time%dt,vf,matmod)
-            ! Insert sponge step here
             
             ! Prepare pressure projection
             call fs%pressureproj_prepare(time%dt,vf,matmod)
@@ -331,9 +326,8 @@ contains
             time%it=time%it+1
             
          end do
-
-         ! Pressure relaxation
-         call fs%pressure_relax(vf,matmod)
+         
+         ! Single-phase, no need for relaxation
          
          ! Output to ensight
          if (ens_evt%occurs()) call ens_out%write_data(time%t)

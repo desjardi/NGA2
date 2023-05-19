@@ -1,0 +1,4 @@
+This is a simulation of the Spray Control MURI's airblast atomization case.
+It includes:
+   1- a single-phase LES of the swirling flow in the nozzle
+   2- a two-phase high-resolution LES of the atomization outside the nozzle

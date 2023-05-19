@@ -1,0 +1,4 @@
+f90EXE_sources += df_class.f90
+
+INCLUDE_LOCATIONS += $(NGA_HOME)/src/immersed
+VPATH_LOCATIONS   += $(NGA_HOME)/src/immersed

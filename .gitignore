@@ -25,6 +25,7 @@ nga.*.exe
 # Build stuff
 build/
 Make.local
+*.mod
 
 # Doc stuff
 doc/
@@ -50,3 +51,6 @@ examples/*/input*~
 !examples/nozzle_internal/cad
 !examples/nozzle_2phase/cad
 !examples/nozzle_2grids/cad
+!examples/airblast/atomizer.ply
+!examples/airblast/atomizer_tip.ply
+!examples/airblast/atomizer_box.ply

@@ -4,7 +4,7 @@ NGA_HOME ?= ../..
 # Compilation parameters
 PRECISION = DOUBLE
 USE_MPI   = TRUE
-USE_FFTW  = TRUE
+USE_FFTW  = #TRUE
 USE_HYPRE = TRUE
 USE_LAPACK= TRUE
 PROFILE   = FALSE
@@ -22,10 +22,7 @@ include $(Upack)
 INCLUDE_LOCATIONS += $(Ulocs)
 VPATH_LOCATIONS   += $(Ulocs)
 
-# Define external libraries - this can also be in .profile
-HYPRE_DIR = /Users/desjardi/Builds/hypre
-FFTW_DIR  = /Users/desjardi/Builds/fftw
-LAPACK_DIR= /Users/desjardi/Builds/lapack
+# External libraries are defined in .profile/.bashrc/.zshrc, but could be defined here as well
 
 # NGA compilation definitions
 include $(NGA_HOME)/tools/GNUMake/Make.defs

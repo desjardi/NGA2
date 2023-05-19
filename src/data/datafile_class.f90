@@ -22,13 +22,13 @@ module datafile_class
       integer :: nval                                                 !< Number of scalar values
       character(len=str_short), dimension(:), allocatable :: valname  !< Name of scalar values
       real(WP), dimension(:), allocatable :: val                      !< Values
-      ! A datafile stores real(WP) variables pgrid-compatible size
+      ! A datafile stores real(WP) variables of pgrid-compatible size
       integer :: nvar                                                 !< Number of field variables
       character(len=str_short), dimension(:), allocatable :: varname  !< Name of field variables
-      real(WP), dimension(:,:,:,:), allocatable :: var                !< Variables (with overlap!)
+      real(WP), dimension(:,:,:,:), allocatable :: var                !< Variables (without overlap!)
    contains
-      procedure :: findval                       !< Function that returns val index if name is found, zero otherwise
-      procedure :: findvar                       !< Function that returns var index if name is found, zero otherwise
+      procedure, private :: findval              !< Function that returns val index if name is found, zero otherwise
+      procedure, private :: findvar              !< Function that returns var index if name is found, zero otherwise
       procedure :: pushval=>datafile_pushval     !< Push data to datafile
       procedure :: pullval=>datafile_pullval     !< Pull data from datafile
       procedure :: pushvar=>datafile_pushvar     !< Push data to datafile
@@ -121,8 +121,8 @@ contains
       ! Throw error if size mismatch
       if ((dims(1).ne.self%pg%nx).or.(dims(2).ne.self%pg%ny).or.(dims(3).ne.self%pg%nz)) then
          if (self%pg%amRoot) then
-            print*, 'grid size = ',self%pg%nx,self%pg%ny,self%pg%nz
-            print*, 'data size = ',dims(1),dims(2),dims(3)
+            print*,'grid size = ',self%pg%nx,self%pg%ny,self%pg%nz
+            print*,'data size = ',dims(1),dims(2),dims(3)
          end if
          call die('[datafile constructor] Size of datafile ['//trim(self%filename)//'] does not match pgrid ['//self%pg%name//']')
       end if

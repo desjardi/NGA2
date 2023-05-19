@@ -22,16 +22,13 @@ include $(Upack)
 INCLUDE_LOCATIONS += $(Ulocs)
 VPATH_LOCATIONS   += $(Ulocs)
 
-# Define external libraries - this can also be in .profile
-HYPRE_DIR = /Users/desjardi/Builds/hypre
-IRL_DIR   = /Users/desjardi/Builds/IRL
-LAPACK_DIR= /Users/desjardi/Builds/lapack
+# External libraries are defined in .profile/.bashrc/.zshrc, but could be defined here as well
 
 # NGA compilation definitions
 include $(NGA_HOME)/tools/GNUMake/Make.defs
 
 # Include NGA base code
-Bdirs   := core two_phase data solver config grid libraries
+Bdirs   := compressible core two_phase data old_solver solver config grid libraries
 Bpack   += $(foreach dir, $(Bdirs), $(NGA_HOME)/src/$(dir)/Make.package)
 include $(Bpack)
 

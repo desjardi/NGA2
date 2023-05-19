@@ -2,6 +2,8 @@
 module simulation
    use precision,         only: WP
    use geometry,          only: cfg
+   use hypre_str_class,   only: hypre_str
+   use ddadi_class,       only: ddadi
    use tpns_class,        only: tpns
    use vfs_class,         only: vfs
    use timetracker_class, only: timetracker
@@ -12,6 +14,8 @@ module simulation
    private
    
    !> Single two-phase flow solver and volume fraction solver and corresponding time tracker
+   type(hypre_str),   public :: ps
+	type(ddadi),       public :: vs
    type(tpns),        public :: fs
    type(vfs),         public :: vf
    type(timetracker), public :: time
@@ -163,6 +167,8 @@ contains
          call vf%update_band()
          ! Perform interface reconstruction from VOF field
          call vf%build_interface()
+         ! Set interface planes at the boundaries
+         call vf%set_full_bcond()
          ! Create discontinuous polygon mesh from IRL interface
          call vf%polygonalize_interface()
          ! Calculate distance from polygons
@@ -178,7 +184,7 @@ contains
       
       ! Create a two-phase flow solver without bconds
       create_and_initialize_flow_solver: block
-         use ils_class, only: pcg_pfmg
+         use hypre_str_class, only: pcg_pfmg
          ! Create flow solver
          fs=tpns(cfg=cfg,name='Two-phase NS')
          ! Assign constant viscosity to each phase
@@ -192,13 +198,13 @@ contains
          ! Assign acceleration of gravity
          call param_read('Gravity',fs%gravity)
          ! Configure pressure solver
-         call param_read('Pressure iteration',fs%psolv%maxit)
-         call param_read('Pressure tolerance',fs%psolv%rcvg)
+			ps=hypre_str(cfg=cfg,name='Pressure',method=pcg_pfmg,nst=7)
+         call param_read('Pressure iteration',ps%maxit)
+         call param_read('Pressure tolerance',ps%rcvg)
          ! Configure implicit velocity solver
-         call param_read('Implicit iteration',fs%implicit%maxit)
-         call param_read('Implicit tolerance',fs%implicit%rcvg)
+         vs=ddadi(cfg=cfg,name='Velocity',nst=7)
          ! Setup the solver
-         call fs%setup(pressure_ils=pcg_pfmg,implicit_ils=pcg_pfmg)
+         call fs%setup(pressure_solver=ps,implicit_solver=vs)
          ! Zero initial field
          fs%U=0.0_WP; fs%V=0.0_WP; fs%W=0.0_WP
          ! Calculate cell-centered velocities and divergence

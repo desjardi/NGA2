@@ -45,7 +45,7 @@ ifeq ($(USE_MPI),TRUE)
     mpif90_link_flags := $(shell $(F90) -showme:link)
     LIBRARIES += $(mpif90_link_flags)
 
-  else ifneq ($(findstring Spectrum MPI, $(shell $(F90) -showme:version 2>&1)),1)
+  else ifneq ($(findstring Spectrum MPI, $(shell $(F90) -showme:version 2>&1)),)
 
     #
     # Spectrum MPI

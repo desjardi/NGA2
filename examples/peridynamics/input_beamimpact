@@ -1,0 +1,23 @@
+# Parallelization
+Partition :	2 2 2
+
+# Mesh definition
+Lx :	0.2
+Ly :	0.1
+Lz :	0.1
+nx :	50
+ny :	25
+nz :	25
+
+# Bar impact
+Bar length : 0.05
+Bar width :  0.01
+Solid dx : 0.001
+
+# Time integration
+Max timestep size : 1e-7
+Max cfl number :    0.9
+Max time :          5e-5
+
+# Ensight output
+Ensight output period : 1e-6

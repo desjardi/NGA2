@@ -1,0 +1,35 @@
+# Parallelization
+Partition :	8 1 1
+
+# Domain definition
+Lx : 5
+Ly : 10
+Lz : 0.05
+Length of channel : 2
+nx : 100
+ny : 200
+nz : 1
+
+# Fluid properties
+Liquid dynamic viscosity :    2e-4    !< This is 1/Re_l
+Gas dynamic viscosity :       2e-6
+Liquid density :              1
+Gas density :                 1e-3
+Surface tension coefficient : 1e-4    !< This is 1/We_l
+Static contact angle :        100
+
+# Time integration
+Max timestep size : 1e-2
+Max cfl number :    0.9
+Max time :          100
+
+# Pressure solver
+Pressure tolerance : 1e-5
+Pressure iteration : 100
+
+# Implicit velocity solver
+Implicit tolerance : 1e-3
+Implicit iteration : 100
+
+# Ensight output
+Ensight output period : 1e-1

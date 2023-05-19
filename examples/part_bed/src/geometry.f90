@@ -67,7 +67,8 @@ contains
       ! Create masks for this config
       create_walls: block
          cfg%VF=1.0_WP
-         if (cfg%jproc.eq.1) cfg%VF(:,cfg%jmino:cfg%jmin-1,:)=0.0_WP
+         if (cfg%jproc.eq.1)       cfg%VF(:,cfg%jmino:cfg%jmin-1,:)=0.0_WP
+         if (cfg%jproc.eq.cfg%npy) cfg%VF(:,cfg%jmax+1:cfg%jmaxo,:)=0.0_WP
       end block create_walls
       
       

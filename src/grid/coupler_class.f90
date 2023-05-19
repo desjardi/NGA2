@@ -184,10 +184,6 @@ contains
             ny=this%dst%ny
             nz=this%dst%nz
             no=this%dst%no
-            this%dnproc=this%dst%nproc
-            this%dnpx=this%dst%npx
-            this%dnpy=this%dst%npy
-            this%dnpz=this%dst%npz
          end if
          
          ! Then it broadcasts it to our group
@@ -200,10 +196,6 @@ contains
          call MPI_BCAST(ny       ,1             ,MPI_INTEGER  ,this%droot,this%comm,ierr)
          call MPI_BCAST(nz       ,1             ,MPI_INTEGER  ,this%droot,this%comm,ierr)
          call MPI_BCAST(no       ,1             ,MPI_INTEGER  ,this%droot,this%comm,ierr)
-         call MPI_BCAST(this%dnpx,1             ,MPI_INTEGER  ,this%droot,this%comm,ierr)
-         call MPI_BCAST(this%dnpy,1             ,MPI_INTEGER  ,this%droot,this%comm,ierr)
-         call MPI_BCAST(this%dnpz,1             ,MPI_INTEGER  ,this%droot,this%comm,ierr)
-         call MPI_BCAST(this%dnproc,1           ,MPI_INTEGER  ,this%droot,this%comm,ierr)
          
          ! Allocate x/y/z, fill it, and bcast
          allocate(x(1:nx+1),y(1:ny+1),z(1:nz+1))
@@ -349,9 +341,9 @@ contains
                         case ('z'); call get_weights_and_indices_z(this%src,pt,this%src%imin_,this%src%jmin_,this%src%kmin_,this%w(:,count),this%srcind(:,count))
                         end select
                         ! Find coords of the dst processor
-                        coords(1)=0; do while (i.ge.this%dst%imin+(coords(1)+1)*qx+min(coords(1)+1,rx).and.coords(1)+1.lt.this%dst%npx); coords(1)=coords(1)+1; end do
-                        coords(2)=0; do while (j.ge.this%dst%jmin+(coords(2)+1)*qy+min(coords(2)+1,ry).and.coords(2)+1.lt.this%dst%npy); coords(2)=coords(2)+1; end do
-                        coords(3)=0; do while (k.ge.this%dst%kmin+(coords(3)+1)*qz+min(coords(3)+1,rz).and.coords(3)+1.lt.this%dst%npz); coords(3)=coords(3)+1; end do
+                        coords(1)=0; do while (i.ge.this%dst%imin+(coords(1)+1)*qx+min(coords(1)+1,rx).and.coords(1)+1.lt.this%dnpx); coords(1)=coords(1)+1; end do
+                        coords(2)=0; do while (j.ge.this%dst%jmin+(coords(2)+1)*qy+min(coords(2)+1,ry).and.coords(2)+1.lt.this%dnpy); coords(2)=coords(2)+1; end do
+                        coords(3)=0; do while (k.ge.this%dst%kmin+(coords(3)+1)*qz+min(coords(3)+1,rz).and.coords(3)+1.lt.this%dnpz); coords(3)=coords(3)+1; end do
                         ! Convert into a rank and store
                         rk(count)=this%rankmap(coords(1)+1,coords(2)+1,coords(3)+1)
                         ! Also store the dstind

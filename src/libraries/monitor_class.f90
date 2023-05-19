@@ -161,8 +161,8 @@ contains
       ! Dump the line tp the file
       write(this%iunit,'(a)') trim(line)
       
-      ! Flush file
-      call flush(this%iunit)
+      ! Flush file (the flush statement is part of the 2003 standard)
+      flush(this%iunit)
       
    end subroutine write
    
