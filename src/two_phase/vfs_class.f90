@@ -2064,7 +2064,7 @@ contains
                   call setSurfaceArea(nh_r2p,surface_area)
                   
                   ! Made it this far, we need a reconstruction - this builds the initial guess
-                  if (getSize(this%triangle_moments_storage(i,j,k)).gt.0) then
+                  if (surface_area.gt.0.0_WP) then
                      call reconstructAdvectedNormals(this%triangle_moments_storage(i,j,k),nh_r2p,this%twoplane_threshold,this%liquid_gas_interface(i,j,k))
                      if (getNumberOfPlanes(this%liquid_gas_interface(i,j,k)).eq.1) then
                         call setNumberOfPlanes(this%liquid_gas_interface(i,j,k),1)
@@ -2231,7 +2231,7 @@ contains
                   call setSurfaceArea(nh_r2p,surface_area)
                   
                   ! Made it this far, we need a reconstruction - this builds the initial guess
-                  if (getSize(this%triangle_moments_storage(i,j,k)).gt.0) then
+                  if (surface_area.gt.0.0_WP) then
                      call reconstructAdvectedNormals(this%triangle_moments_storage(i,j,k),nh_r2p,this%twoplane_threshold,this%liquid_gas_interface(i,j,k))
                      if (getNumberOfPlanes(this%liquid_gas_interface(i,j,k)).eq.1) then
                         call setNumberOfPlanes(this%liquid_gas_interface(i,j,k),1)

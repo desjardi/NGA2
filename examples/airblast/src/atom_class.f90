@@ -413,10 +413,10 @@ contains
          ! Read in gas flow rate and convert to SI
          call this%input%read('Gas flow rate (SLPM)',Qgas)
          Qgas=Qgas*SLPM2SI
-         ! Calculate gas flow area
+         ! Calculate gas flow area - no overlap here!
          myAgas=0.0_WP
          call this%fs%get_bcond('gas_inlet',mybc)
-         do n=1,mybc%itr%no_
+         do n=1,mybc%itr%n_
             i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
             myAgas=myAgas+this%cfg%dy(j)*this%cfg%dz(k)*sum(this%fs%itpr_x(:,i,j,k)*this%cfg%VF(i-1:i,j,k))
          end do
@@ -432,17 +432,17 @@ contains
          ! Read in liquid flow rate and convert to SI
          call this%input%read('Liquid flow rate (SLPM)',Qliq)
          Qliq=Qliq*SLPM2SI
-         ! Calculate liquid flow area
+         ! Calculate liquid flow area - no overlap here!
          myAliq=0.0_WP
          call this%fs%get_bcond('liq_inlet',mybc)
-         do n=1,mybc%itr%no_
+         do n=1,mybc%itr%n_
             i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
             myAliq=myAliq+this%cfg%dy(j)*this%cfg%dz(k)*sum(this%fs%itpr_x(:,i,j,k)*this%cfg%VF(i-1:i,j,k))
          end do
          call MPI_ALLREDUCE(myAliq,Aliq,1,MPI_REAL_WP,MPI_SUM,this%cfg%comm,ierr)
          ! Calculate bulk axial velocity
          Uliq=Qliq/Aliq
-         ! Apply Dirichlet at 4 axial injector ports
+         ! Apply Dirichlet at liquid injector port
          call this%fs%get_bcond('liq_inlet',mybc)
          do n=1,mybc%itr%no_
             i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
