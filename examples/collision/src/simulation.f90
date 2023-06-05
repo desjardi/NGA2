@@ -95,7 +95,7 @@ contains
          real(WP) :: vol,area
          integer, parameter :: amr_ref_lvl=4
          ! Create a VOF solver with r2p reconstruction
-         vf=vfs(cfg=cfg,reconstruction_method=elvira,name='VOF')
+         call vf%initialize(cfg=cfg,reconstruction_method=elvira,name='VOF')
          ! Initialize two droplets
          call param_read('Droplet 1 diameter',radius1); radius1=0.5_WP*radius1
          call param_read('Droplet 1 position',center1)
