@@ -531,9 +531,9 @@ contains
          end do
       end do
       
-      ! Prepare byte storage for synchronization
-      call new(this%send_byte_buffer)
-      call new(this%recv_byte_buffer)
+      ! ! Prepare byte storage for synchronization
+      ! call new(this%send_byte_buffer)
+      ! call new(this%recv_byte_buffer)
       
    end subroutine initialize_irl
    
@@ -829,19 +829,19 @@ contains
                      else
                         call getMoments(flux_polyhedron,this%localized_paraboloid_link(i,j,k),this%face_flux(1,i,j,k))
                      end if
-                     if (dt*U(i,j,k)*this%cfg%dy(j)*this%cfg%dz(k).gt.0) then
-                        if (isnan(getVolumePtr(this%face_flux(1,i,j,k),0)).or.getVolumePtr(this%face_flux(1,i,j,k),0).gt.1.0e-13_WP+dt*U(i,j,k)*this%cfg%dy(j)*this%cfg%dz(k)) then
-                           print "(e15.6)", dt*U(i,j,k)*this%cfg%dy(j)*this%cfg%dz(k)
-                           print "(e15.6)", getVolumePtr(this%face_flux(1,i,j,k),0)
-                           call die('[vfs advance] Impossible X flux')
-                        end if
-                     else
-                        if (isnan(getVolumePtr(this%face_flux(1,i,j,k),0)).or.getVolumePtr(this%face_flux(1,i,j,k),0).lt.-1.0e-13_WP+dt*U(i,j,k)*this%cfg%dy(j)*this%cfg%dz(k)) then
-                           print "(e15.6)", dt*U(i,j,k)*this%cfg%dy(j)*this%cfg%dz(k)
-                           print "(e15.6)", getVolumePtr(this%face_flux(1,i,j,k),0)
-                           call die('[vfs advance] Impossible X flux')
-                        end if
-                     end if
+                     ! if (dt*U(i,j,k)*this%cfg%dy(j)*this%cfg%dz(k).gt.0) then
+                     !    if (isnan(getVolumePtr(this%face_flux(1,i,j,k),0)).or.getVolumePtr(this%face_flux(1,i,j,k),0).gt.1.0e-13_WP+dt*U(i,j,k)*this%cfg%dy(j)*this%cfg%dz(k)) then
+                     !       print "(e15.6)", dt*U(i,j,k)*this%cfg%dy(j)*this%cfg%dz(k)
+                     !       print "(e15.6)", getVolumePtr(this%face_flux(1,i,j,k),0)
+                     !       call die('[vfs advance] Impossible X flux')
+                     !    end if
+                     ! else
+                     !    if (isnan(getVolumePtr(this%face_flux(1,i,j,k),0)).or.getVolumePtr(this%face_flux(1,i,j,k),0).lt.-1.0e-13_WP+dt*U(i,j,k)*this%cfg%dy(j)*this%cfg%dz(k)) then
+                     !       print "(e15.6)", dt*U(i,j,k)*this%cfg%dy(j)*this%cfg%dz(k)
+                     !       print "(e15.6)", getVolumePtr(this%face_flux(1,i,j,k),0)
+                     !       call die('[vfs advance] Impossible X flux')
+                     !    end if
+                     ! end if
                   else
                      ! Simpler flux calculation
                      vol_now=calculateVolume(flux_polyhedron); ctr_now=calculateCentroid(flux_polyhedron)
@@ -875,19 +875,19 @@ contains
                      else
                         call getMoments(flux_polyhedron,this%localized_paraboloid_link(i,j,k),this%face_flux(2,i,j,k))
                      end if
-                     if (dt*V(i,j,k)*this%cfg%dx(i)*this%cfg%dz(k).gt.0) then
-                        if (isnan(getVolumePtr(this%face_flux(2,i,j,k),0)).or.getVolumePtr(this%face_flux(2,i,j,k),0).gt.1.0e-13_WP+dt*V(i,j,k)*this%cfg%dx(i)*this%cfg%dz(k)) then
-                           print "(e15.6)", dt*V(i,j,k)*this%cfg%dx(i)*this%cfg%dz(k)
-                           print "(e15.6)", getVolumePtr(this%face_flux(2,i,j,k),0)
-                           call die('[vfs advance] Impossible Yflux')
-                        end if
-                     else
-                        if (isnan(getVolumePtr(this%face_flux(2,i,j,k),0)).or.getVolumePtr(this%face_flux(2,i,j,k),0).lt.-1.0e-13_WP+dt*V(i,j,k)*this%cfg%dx(i)*this%cfg%dz(k)) then
-                           print "(e15.6)", dt*V(i,j,k)*this%cfg%dx(i)*this%cfg%dz(k)
-                           print "(e15.6)", getVolumePtr(this%face_flux(2,i,j,k),0)
-                           call die('[vfs advance] Impossible Y flux')
-                        end if
-                     end if
+                     ! if (dt*V(i,j,k)*this%cfg%dx(i)*this%cfg%dz(k).gt.0) then
+                     !    if (isnan(getVolumePtr(this%face_flux(2,i,j,k),0)).or.getVolumePtr(this%face_flux(2,i,j,k),0).gt.1.0e-13_WP+dt*V(i,j,k)*this%cfg%dx(i)*this%cfg%dz(k)) then
+                     !       print "(e15.6)", dt*V(i,j,k)*this%cfg%dx(i)*this%cfg%dz(k)
+                     !       print "(e15.6)", getVolumePtr(this%face_flux(2,i,j,k),0)
+                     !       call die('[vfs advance] Impossible Yflux')
+                     !    end if
+                     ! else
+                     !    if (isnan(getVolumePtr(this%face_flux(2,i,j,k),0)).or.getVolumePtr(this%face_flux(2,i,j,k),0).lt.-1.0e-13_WP+dt*V(i,j,k)*this%cfg%dx(i)*this%cfg%dz(k)) then
+                     !       print "(e15.6)", dt*V(i,j,k)*this%cfg%dx(i)*this%cfg%dz(k)
+                     !       print "(e15.6)", getVolumePtr(this%face_flux(2,i,j,k),0)
+                     !       call die('[vfs advance] Impossible Y flux')
+                     !    end if
+                     ! end if
                   else
                      ! Simpler flux calculation
                      vol_now=calculateVolume(flux_polyhedron); ctr_now=calculateCentroid(flux_polyhedron)
@@ -921,19 +921,19 @@ contains
                      else
                         call getMoments(flux_polyhedron,this%localized_paraboloid_link(i,j,k),this%face_flux(3,i,j,k))
                      end if        
-                     if (dt*W(i,j,k)*this%cfg%dx(i)*this%cfg%dy(j).gt.0) then
-                        if (isnan(getVolumePtr(this%face_flux(3,i,j,k),0)).or.getVolumePtr(this%face_flux(3,i,j,k),0).gt.1.0e-13_WP+dt*W(i,j,k)*this%cfg%dx(i)*this%cfg%dy(j)) then
-                           print "(e15.6)", dt*W(i,j,k)*this%cfg%dx(i)*this%cfg%dy(j)
-                           print "(e15.6)", getVolumePtr(this%face_flux(3,i,j,k),0)
-                           call die('[vfs advance] Impossible Z flux')
-                        end if
-                     else
-                        if (isnan(getVolumePtr(this%face_flux(3,i,j,k),0)).or.getVolumePtr(this%face_flux(3,i,j,k),0).lt.-1.0e-13_WP+dt*W(i,j,k)*this%cfg%dx(i)*this%cfg%dy(j)) then
-                           print "(e15.6)", dt*W(i,j,k)*this%cfg%dx(i)*this%cfg%dy(j)
-                           print "(e15.6)", getVolumePtr(this%face_flux(3,i,j,k),0)
-                           call die('[vfs advance] Impossible Z flux')
-                        end if
-                     end if
+                     ! if (dt*W(i,j,k)*this%cfg%dx(i)*this%cfg%dy(j).gt.0) then
+                     !    if (isnan(getVolumePtr(this%face_flux(3,i,j,k),0)).or.getVolumePtr(this%face_flux(3,i,j,k),0).gt.1.0e-13_WP+dt*W(i,j,k)*this%cfg%dx(i)*this%cfg%dy(j)) then
+                     !       print "(e15.6)", dt*W(i,j,k)*this%cfg%dx(i)*this%cfg%dy(j)
+                     !       print "(e15.6)", getVolumePtr(this%face_flux(3,i,j,k),0)
+                     !       call die('[vfs advance] Impossible Z flux')
+                     !    end if
+                     ! else
+                     !    if (isnan(getVolumePtr(this%face_flux(3,i,j,k),0)).or.getVolumePtr(this%face_flux(3,i,j,k),0).lt.-1.0e-13_WP+dt*W(i,j,k)*this%cfg%dx(i)*this%cfg%dy(j)) then
+                     !       print "(e15.6)", dt*W(i,j,k)*this%cfg%dx(i)*this%cfg%dy(j)
+                     !       print "(e15.6)", getVolumePtr(this%face_flux(3,i,j,k),0)
+                     !       call die('[vfs advance] Impossible Z flux')
+                     !    end if
+                     ! end if
                   else
                      ! Simpler flux calculation
                      vol_now=calculateVolume(flux_polyhedron); ctr_now=calculateCentroid(flux_polyhedron)
@@ -975,19 +975,19 @@ contains
          
          ! Only work on higher order moments if VF is in [VFlo,VFhi]
          if (this%VF(i,j,k).lt.VFlo) then
-            if (this%VF(i,j,k).lt.-VFlo) then
-               print "(i5 i5 i5)", i,j,k
-               print "(e15.6)", this%VF(i,j,k)
-               call die('[vfs advance] VF unbounded')
-            end if 
+            ! if (this%VF(i,j,k).lt.-VFlo) then
+            !    print "(i5 i5 i5)", i,j,k
+            !    print "(e15.6)", this%VF(i,j,k)
+            !    call die('[vfs advance] VF unbounded')
+            ! end if 
             this%VF(i,j,k)=0.0_WP
          else if (this%VF(i,j,k).gt.VFhi) then  
             this%VF(i,j,k)=1.0_WP
-            if (this%VF(i,j,k).gt.1.0_WP+VFlo) then
-               print "(i5 i5 i5)", i,j,k
-               print "(e15.6)", this%VF(i,j,k) 
-               call die('[vfs advance] VF unbounded')
-            end if  
+            ! if (this%VF(i,j,k).gt.1.0_WP+VFlo) then
+            !    print "(i5 i5 i5)", i,j,k
+            !    print "(e15.6)", this%VF(i,j,k) 
+            !    call die('[vfs advance] VF unbounded')
+            ! end if  
          else 
             ! Compute old phase barycenters
             this%Lbary(:,i,j,k)=(this%Lbary(:,i,j,k)*Lvolold-getCentroidPtr(this%face_flux(1,i+1,j,k),0)+getCentroidPtr(this%face_flux(1,i,j,k),0) &
@@ -1600,9 +1600,9 @@ contains
       implicit none
       class(vfs), intent(inout) :: this
       real(WP), dimension(3) :: tmp_vert
-      real(WP), dimension(3*27*12) :: poly_vert_coord_list
-      real(WP), dimension(27) :: poly_vfrac
-      integer, dimension(27) :: poly_nvert
+      real(WP), dimension(3*125*12) :: poly_vert_coord_list
+      real(WP), dimension(125) :: poly_vfrac
+      integer, dimension(125) :: poly_nvert
       integer :: npoly,nvert,tmp_nvert
       integer :: i,j,k,ii,jj,kk,n
       type(RectCub_type) :: cell
@@ -1618,9 +1618,10 @@ contains
                if (this%VF(i,j,k).ge.VFlo.and.this%VF(i,j,k).le.VFhi) then
                   ! > Count polygons and vertices
                   npoly=0;nvert=0 
-                  do kk=k-1,k+1
-                     do jj=j-1,j+1
-                        do ii=i-1,i+1
+                  do kk=k-2,k+2
+                     do jj=j-2,j+2
+                        do ii=i-2,i+2
+                           if (this%mask(ii,jj,kk).eq.1) cycle
                            tmp_nvert=getNumberOfVertices(this%interface_polygon(1,ii,jj,kk))
                            if (tmp_nvert.gt.0) then
                               npoly=npoly+1 
@@ -1644,10 +1645,11 @@ contains
                         poly_vert_coord_list(nvert*3+3)=tmp_vert(3)
                         nvert=nvert+1 
                      end do
-                     do kk=k-1,k+1 
-                        do jj=j-1,j+1
-                           do ii=i-1,i+1 
+                     do kk=k-2,k+2 
+                        do jj=j-2,j+2
+                           do ii=i-2,i+2 
                               if (i.eq.ii.and.j.eq.jj.and.k.eq.kk) cycle  
+                              if (this%mask(ii,jj,kk).eq.1) cycle
                               tmp_nvert=getNumberOfVertices(this%interface_polygon(1,ii,jj,kk))
                               if (tmp_nvert.gt.0) then 
                                  npoly=npoly+1 
@@ -2510,11 +2512,16 @@ contains
             do i=this%cfg%imino_,this%cfg%imaxo_
                if (this%mask(i,j,k).eq.1) cycle
                tsd=0.0_WP
-               do n=1,getNumberOfPlanes(this%liquid_gas_interface(i,j,k))
-                  if (getNumberOfVertices(this%interface_polygon(n,i,j,k)).gt.0) then
-                     tsd=tsd+abs(calculateVolume(this%interface_polygon(n,i,j,k)))
-                  end if
-               end do
+               if (this%is_planar) then
+                  do n=1,getNumberOfPlanes(this%liquid_gas_interface(i,j,k))
+                     if (getNumberOfVertices(this%interface_polygon(n,i,j,k)).gt.0) then
+                        tsd=tsd+abs(calculateVolume(this%interface_polygon(n,i,j,k)))
+                     end if
+                  end do
+               else
+                  call construct_2pt(cell,[this%cfg%x(i),this%cfg%y(j),this%cfg%z(k)],[this%cfg%x(i+1),this%cfg%y(j+1),this%cfg%z(k+1)])
+                  tsd=getSurfaceArea(this%liquid_gas_parabolic_interface(i,j,k),cell);
+               end if
                this%SD(i,j,k)=tsd/this%cfg%vol(i,j,k)
             end do
          end do
@@ -2838,6 +2845,11 @@ contains
       real(WP), dimension(max_interface_planes) :: mycurv,mysurf
       real(WP), dimension(max_interface_planes,3) :: mynorm
       real(WP), dimension(3) :: csn,sn
+      type(RectCub_type) :: cell
+      
+      ! Create a cell object
+      call new(cell)
+      
       ! Reset curvature
       this%curv=0.0_WP
       ! Traverse interior domain and compute curvature in cells with polygons
@@ -2846,14 +2858,22 @@ contains
             do i=this%cfg%imin_,this%cfg%imax_
                ! Zero out curvature and surface storage
                mycurv=0.0_WP; mysurf=0.0_WP; mynorm=0.0_WP
+               if (.not.this%is_planar) then
+                  if (this%VF(i,j,k).ge.VFlo.and.this%VF(i,j,k).le.VFhi) then
+                     call construct_2pt(cell,[this%cfg%x(i),this%cfg%y(j),this%cfg%z(k)],[this%cfg%x(i+1),this%cfg%y(j+1),this%cfg%z(k+1)])
+                     this%curv(i,j,k)=getMeanCurvature(this%liquid_gas_parabolic_interface(i,j,k),cell)
+                     this%curv(i,j,k)=max(min(this%curv(i,j,k),this%maxcurv_times_mesh/this%cfg%meshsize(i,j,k)),-this%maxcurv_times_mesh/this%cfg%meshsize(i,j,k))
+                     cycle
+                  end if
+               end if
                ! Get a curvature for each plane
                do n=1,getNumberOfPlanes(this%liquid_gas_interface(i,j,k))
                   ! Skip empty polygon
                   if (getNumberOfVertices(this%interface_polygon(n,i,j,k)).eq.0) cycle
                   ! Perform LSQ PLIC barycenter fitting to get curvature
-                  call this%paraboloid_fit(i,j,k,n,mycurv(n))
+                  ! call this%paraboloid_fit(i,j,k,n,mycurv(n))
                   ! Perform PLIC surface fitting to get curvature
-                  !call this%paraboloid_integral_fit(i,j,k,n,mycurv(n))
+                  call this%paraboloid_integral_fit(i,j,k,n,mycurv(n))
                   ! Also store surface and normal
                   mysurf(n)  =abs(calculateVolume(this%interface_polygon(n,i,j,k)))
                   mynorm(n,:)=    calculateNormal(this%interface_polygon(n,i,j,k))
@@ -3013,14 +3033,14 @@ contains
 
 
    !> Perform local paraboloid fit of IRL surface in integral sense
-   subroutine paraboloid_integral_fit(this,i,j,k,iplane,mycurv,sol)
+   subroutine paraboloid_integral_fit(this,i,j,k,iplane,mycurv)
       use mathtools, only: normalize,cross_product
       implicit none
       ! In/out variables
       class(vfs), intent(inout) :: this
       integer,  intent(in)  :: i,j,k,iplane
       real(WP), intent(out) :: mycurv
-      real(WP), dimension(6), intent(out) :: sol
+      ! real(WP), dimension(6), intent(out) :: sol
       ! Variables used to process the polygons
       real(WP), dimension(3) :: pref,tref,sref,nref
       real(WP), dimension(4) :: planeref,planeloc
@@ -3033,7 +3053,7 @@ contains
       real(WP), dimension(6,6) :: A
       integer , dimension(6)   :: ipiv
       real(WP), dimension(6)   :: b
-      ! real(WP), dimension(6)   :: sol
+      real(WP), dimension(6)   :: sol
       real(WP), dimension(:), allocatable :: work
       real(WP), dimension(1)   :: lwork_query
       integer  :: lwork,info
@@ -3761,6 +3781,7 @@ contains
       integer, intent(in) :: a_direction
       integer :: i,j,k
       logical :: something_received
+
       ! Pack the buffer
       call resetBufferPointer(this%send_byte_buffer)
       call setSize(this%send_byte_buffer,int(0,8))
@@ -3790,6 +3811,7 @@ contains
             end do
          end do
       end if
+
    end subroutine sync_side
    
    
