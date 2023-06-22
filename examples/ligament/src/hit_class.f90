@@ -93,7 +93,6 @@ contains
       create_config: block
          use sgrid_class, only: cartesian,sgrid
          use param,       only: param_read
-         use parallel,    only: group
          real(WP), dimension(:), allocatable :: y
          integer, dimension(3) :: partition
          type(sgrid) :: grid

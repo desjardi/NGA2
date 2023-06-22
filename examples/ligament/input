@@ -16,7 +16,7 @@ Weber number :         20 !15
 Viscosity ratio :      50
 Density ratio :        1000
 Target Re_lambda :     45
-Turbulence intensity : 0!0.1
+Turbulence intensity : 0.05
 
 # Time integration
 Max timestep size : 5e-2

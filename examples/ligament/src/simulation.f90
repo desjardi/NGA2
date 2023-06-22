@@ -57,12 +57,12 @@ contains
          prepare_hit: block
             real(WP) :: dt
             ! Initialize HIT
-            !call turb%init(group=hit_group)
+            call turb%init(group=hit_group)
             ! Run HIT until t/tau_eddy=20
-            !dt=0.15_WP*turb%cfg%min_meshsize/turb%Urms_tgt !< Estimate maximum stable dt
-            !do while (turb%time%t.lt.20.0_WP*turb%tau_tgt)
-            !   call turb%step(dt)
-            !end do
+            dt=0.15_WP*turb%cfg%min_meshsize/turb%Urms_tgt !< Estimate maximum stable dt
+            do while (turb%time%t.lt.20.0_WP*turb%tau_tgt)
+               call turb%step(dt)
+            end do
          end block prepare_hit
       end if
       
@@ -82,22 +82,27 @@ contains
          
          ! Advance HIT simulation and transfer velocity info
          if (isInHITGrp) then
-            ! Advance HIT
-            !call turb%step(atom%time%dt)
-            ! Transfer turbulent velocity from hit to rta
+            ! Advance HIT with maximum stable dt until caught up
+            advance_hit: block
+               real(WP) :: dt
+               dt=0.15_WP*turb%cfg%min_meshsize/turb%Urms_tgt
+               do while (turb%time%t.lt.atom%time%t+20.0_WP*turb%tau_tgt); call turb%step(dt); end do
+            end block advance_hit
+            ! Transfer turbulent velocity from hit to atomization region
             apply_boundary_condition: block
                use tpns_class, only: bcond
                type(bcond), pointer :: mybc
                integer :: n,i,j,k,ihit
-               real(WP) :: rescaling
+               real(WP) :: rescaling,tinterp
                rescaling=turb%ti/turb%Urms_tgt
+               tinterp=(turb%time%t-(atom%time%t+20.0_WP*turb%tau_tgt))/(turb%time%t-turb%time%told)
                call atom%fs%get_bcond('inflow',mybc)
                do n=1,mybc%itr%no_
                   i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
                   ihit=i-atom%fs%cfg%imin+turb%fs%cfg%imax+1
-                  atom%fs%U(i  ,j,k)=1.0_WP!+turb%fs%U(ihit  ,j,k)*rescaling
-                  !atom%fs%V(i-1,j,k)=       turb%fs%V(ihit-1,j,k)*rescaling
-                  !atom%fs%W(i-1,j,k)=       turb%fs%W(ihit-1,j,k)*rescaling
+                  atom%fs%U(i  ,j,k)=1.0_WP+rescaling*((1.0_WP-tinterp)*turb%fs%U(ihit  ,j,k)+tinterp*turb%fs%Uold(ihit  ,j,k))
+                  atom%fs%V(i-1,j,k)=       rescaling*((1.0_WP-tinterp)*turb%fs%V(ihit-1,j,k)+tinterp*turb%fs%Vold(ihit-1,j,k))
+                  atom%fs%W(i-1,j,k)=       rescaling*((1.0_WP-tinterp)*turb%fs%W(ihit-1,j,k)+tinterp*turb%fs%Wold(ihit-1,j,k))
                end do
             end block apply_boundary_condition
          end if
@@ -115,7 +120,7 @@ contains
       call atom%final()
       
       ! Finalize HIT simulation
-      !if (isInHITGrp) call turb%final()
+      if (isInHITGrp) call turb%final()
       
    end subroutine simulation_final
    
