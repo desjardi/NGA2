@@ -57,12 +57,12 @@ contains
          prepare_hit: block
             real(WP) :: dt
             ! Initialize HIT
-            call turb%init(group=hit_group)
+            !call turb%init(group=hit_group)
             ! Run HIT until t/tau_eddy=20
-            dt=0.15_WP*turb%cfg%min_meshsize/turb%Urms_tgt !< Estimate maximum stable dt
-            do while (turb%time%t.lt.20.0_WP*turb%tau_tgt)
-               call turb%step(dt)
-            end do
+            !dt=0.15_WP*turb%cfg%min_meshsize/turb%Urms_tgt !< Estimate maximum stable dt
+            !do while (turb%time%t.lt.20.0_WP*turb%tau_tgt)
+            !   call turb%step(dt)
+            !end do
          end block prepare_hit
       end if
       
@@ -83,7 +83,7 @@ contains
          ! Advance HIT simulation and transfer velocity info
          if (isInHITGrp) then
             ! Advance HIT
-            call turb%step(atom%time%dt)
+            !call turb%step(atom%time%dt)
             ! Transfer turbulent velocity from hit to rta
             apply_boundary_condition: block
                use tpns_class, only: bcond
@@ -95,9 +95,9 @@ contains
                do n=1,mybc%itr%no_
                   i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
                   ihit=i-atom%fs%cfg%imin+turb%fs%cfg%imax+1
-                  atom%fs%U(i  ,j,k)=1.0_WP+turb%fs%U(ihit  ,j,k)*rescaling
-                  atom%fs%V(i-1,j,k)=       turb%fs%V(ihit-1,j,k)*rescaling
-                  atom%fs%W(i-1,j,k)=       turb%fs%W(ihit-1,j,k)*rescaling
+                  atom%fs%U(i  ,j,k)=1.0_WP!+turb%fs%U(ihit  ,j,k)*rescaling
+                  !atom%fs%V(i-1,j,k)=       turb%fs%V(ihit-1,j,k)*rescaling
+                  !atom%fs%W(i-1,j,k)=       turb%fs%W(ihit-1,j,k)*rescaling
                end do
             end block apply_boundary_condition
          end if
@@ -115,7 +115,7 @@ contains
       call atom%final()
       
       ! Finalize HIT simulation
-      if (isInHITGrp) call turb%final()
+      !if (isInHITGrp) call turb%final()
       
    end subroutine simulation_final
    

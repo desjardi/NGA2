@@ -840,19 +840,20 @@ contains
       opt_dt=tau/real(this%nstep,WP)
     end block compute_drag
 
-    ! Compute acceleration due to Saffman lift
-    !compute_lift: block
+   ! Compute acceleration due to Saffman lift
+   !compute_lift: block
    !   use mathtools, only: Pi,cross_product
    !   real(WP) :: omegag,Cl,Reg
    !   if (this%use_lift) then
    !      omegag=sqrt(sum(fvort**2))
    !      if (omegag.gt.0.0_WP) then
    !         Reg = p%d**2*omegag*frho/fvisc
-   !         Cl = 9.69_WP/Pi/p%d**2/this%rho*fvisc/omegag*sqrt(Reg)
-   !         acc=acc+Cl*cross_product(fvel-p%vel,fvort)
+   !         Cl = 9.69_WP/Pi/p%d**2/this%rho*fvisc*sqrt(Reg)
+   !         acc=acc+Cl*cross_product(fvel-p%vel,fvort/omegag)
+   !         opt_dt=min(opt_dt,1.0_WP/(Cl*real(this%nstep,WP)))
    !      end if
    !   end if
-    !end block compute_lift
+   !end block compute_lift
 
     ! Compute fluid torque (assumed Stokes drag)
     compute_torque: block

@@ -8,8 +8,8 @@ module event_class
    ! Expose type/constructor/methods
    public :: event
    
-   !> Safety coefficient to avoid barely missing an occurence due to round off
-   real(WP), parameter :: csafe=100.0_WP
+   !> Safety parameter to avoid barely missing an occurence due to round off
+   real(WP), parameter :: dtsafe=1.0e-6_WP
    
    !> Event object
    type :: event
@@ -58,7 +58,7 @@ contains
          if (mod(this%time%n,this%nper).eq.0) occurs=.true.
       end if
       if (this%tper.gt.0.0_WP) then
-         if (mod(this%time%t+csafe*epsilon(this%time%t),this%tper).lt.this%time%dt) occurs=.true.
+         if (mod(this%time%t+dtsafe*this%time%dt,this%tper).lt.this%time%dt*(1.0_WP-dtsafe)) occurs=.true.
       end if
    end function occurs
    

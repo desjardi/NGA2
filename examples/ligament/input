@@ -1,5 +1,5 @@
 # Parallelization
-Partition :	1 1 8
+Partition :	2 2 2
 
 # Mesh definition
 X ligament : 2
@@ -12,20 +12,20 @@ nz : 100 !240
 
 # Flow conditions
 Reynolds number :      100
-Weber number :         10
+Weber number :         20 !15
 Viscosity ratio :      50
 Density ratio :        1000
 Target Re_lambda :     45
-Turbulence intensity : 0.1
+Turbulence intensity : 0!0.1
 
 # Time integration
-Max timestep size : 2e-2
+Max timestep size : 5e-2
 Max cfl number :    0.9
 Max time :          200
 
 # Pressure solver
-Pressure tolerance : 1e-5
-Pressure iteration : 100
+Pressure tolerance : 1e-3
+Pressure iteration : 20
 
 # Ensight output
 Ensight output period : 1

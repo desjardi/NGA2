@@ -178,6 +178,7 @@ module tpns_class
       
       procedure :: addsrc_gravity                         !< Add gravitational body force
       procedure :: add_surface_tension_jump               !< Add surface tension jump
+      procedure :: add_surface_tension_jump_thin          !< Add surface tension jump - thin region version
       procedure :: add_static_contact                     !< Add static contact line model to surface tension jump
       
    end type tpns
@@ -1748,6 +1749,159 @@ contains
       end do
       
    end subroutine add_surface_tension_jump
+
+
+   !> Add surface tension jump term using CSF
+   !> Account for thin regions
+   subroutine add_surface_tension_jump_thin(this,dt,div,vf)
+      use messager,  only: die
+      use vfs_class, only: vfs
+      use irl_fortran_interface
+      implicit none
+      class(tpns), intent(inout) :: this
+      real(WP), intent(inout) :: dt     !< Timestep size over which to advance
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: div  !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      class(vfs), intent(inout) :: vf
+      integer :: i,j,k,n,np1,np2,ind
+      real(WP) :: mycurv,mysurf
+      real(WP), dimension(3) :: n1,n2
+      real(WP), dimension(:,:,:), allocatable :: alpha  !< Modified volume fraction field
+      
+      ! Store old jump
+      this%DPjx=this%Pjx
+      this%DPjy=this%Pjy
+      this%DPjz=this%Pjz
+      
+      ! Prepare modified volume fraction field that accounts for thin regions
+      allocate(alpha(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
+      do k=this%cfg%kmino_,this%cfg%kmaxo_
+         do j=this%cfg%jmino_,this%cfg%jmaxo_
+            do i=this%cfg%imino_,this%cfg%imaxo_
+               if (vf%thin_sensor(i,j,k).eq.1.0_WP) then
+                  alpha(i,j,k)=1.0_WP !< Thin liquid region
+               else if (vf%thin_sensor(i,j,k).eq.2.0_WP) then
+                  alpha(i,j,k)=0.0_WP !< Thin gas region
+               else
+                  alpha(i,j,k)=vf%VF(i,j,k) !< Resolved region
+               end if
+            end do
+         end do
+      end do
+      
+      ! Calculate pressure jump
+      do k=this%cfg%kmin_,this%cfg%kmax_+1
+         do j=this%cfg%jmin_,this%cfg%jmax_+1
+            do i=this%cfg%imin_,this%cfg%imax_+1
+               ! Count my planes
+               np1=0
+               do n=1,getNumberOfPlanes(vf%liquid_gas_interface(i,j,k))
+                  if (getNumberOfVertices(vf%interface_polygon(n,i,j,k)).gt.0) np1=np1+1
+               end do
+               ! X face ===========================================
+               mysurf=sum(vf%SD(i-1:i,j,k)*this%cfg%vol(i-1:i,j,k))
+               if (mysurf.gt.0.0_WP) then
+                  mycurv=sum(vf%SD(i-1:i,j,k)*vf%curv(i-1:i,j,k)*this%cfg%vol(i-1:i,j,k))/mysurf
+               else
+                  mycurv=0.0_WP
+               end if
+               ! Count neighbor's planes
+               np2=0
+               do n=1,getNumberOfPlanes(vf%liquid_gas_interface(i-1,j,k))
+                  if (getNumberOfVertices(vf%interface_polygon(n,i-1,j,k)).gt.0) np2=np2+1
+               end do
+               ! Assign correct curvature
+               if (np1.eq.2.and.np2.eq.0) then
+                  n1=calculateNormal(vf%interface_polygon(1,i,j,k))
+                  n2=calculateNormal(vf%interface_polygon(2,i,j,k))
+                  ind=maxloc([dot_product(n1,[-1.0_WP,0.0_WP,0.0_WP]),dot_product(n2,[-1.0_WP,0.0_WP,0.0_WP])],dim=1)
+                  mycurv=vf%curv2p(ind,i,j,k)
+               end if
+               if (np1.eq.0.and.np2.eq.2) then
+                  n1=calculateNormal(vf%interface_polygon(1,i-1,j,k))
+                  n2=calculateNormal(vf%interface_polygon(2,i-1,j,k))
+                  ind=maxloc([dot_product(n1,[+1.0_WP,0.0_WP,0.0_WP]),dot_product(n2,[+1.0_WP,0.0_WP,0.0_WP])],dim=1)
+                  mycurv=vf%curv2p(ind,i-1,j,k)
+               end if
+               ! Assemble pressure jump
+               this%Pjx(i,j,k)=this%sigma*mycurv*sum(this%divu_x(:,i,j,k)*alpha(i-1:i,j,k))
+               ! Y face ===========================================
+               mysurf=sum(vf%SD(i,j-1:j,k)*this%cfg%vol(i,j-1:j,k))
+               if (mysurf.gt.0.0_WP) then
+                  mycurv=sum(vf%SD(i,j-1:j,k)*vf%curv(i,j-1:j,k)*this%cfg%vol(i,j-1:j,k))/mysurf
+               else
+                  mycurv=0.0_WP
+               end if
+               ! Count neighbor's planes
+               np2=0
+               do n=1,getNumberOfPlanes(vf%liquid_gas_interface(i,j-1,k))
+                  if (getNumberOfVertices(vf%interface_polygon(n,i,j-1,k)).gt.0) np2=np2+1
+               end do
+               ! Assign correct curvature
+               if (np1.eq.2.and.np2.eq.0) then
+                  n1=calculateNormal(vf%interface_polygon(1,i,j,k))
+                  n2=calculateNormal(vf%interface_polygon(2,i,j,k))
+                  ind=maxloc([dot_product(n1,[0.0_WP,-1.0_WP,0.0_WP]),dot_product(n2,[0.0_WP,-1.0_WP,0.0_WP])],dim=1)
+                  mycurv=vf%curv2p(ind,i,j,k)
+               end if
+               if (np1.eq.0.and.np2.eq.2) then
+                  n1=calculateNormal(vf%interface_polygon(1,i,j-1,k))
+                  n2=calculateNormal(vf%interface_polygon(2,i,j-1,k))
+                  ind=maxloc([dot_product(n1,[0.0_WP,+1.0_WP,0.0_WP]),dot_product(n2,[0.0_WP,+1.0_WP,0.0_WP])],dim=1)
+                  mycurv=vf%curv2p(ind,i,j-1,k)
+               end if
+               ! Assemble pressure jump
+               this%Pjy(i,j,k)=this%sigma*mycurv*sum(this%divv_y(:,i,j,k)*alpha(i,j-1:j,k))
+               ! Z face ===========================================
+               mysurf=sum(vf%SD(i,j,k-1:k)*this%cfg%vol(i,j,k-1:k))
+               if (mysurf.gt.0.0_WP) then
+                  mycurv=sum(vf%SD(i,j,k-1:k)*vf%curv(i,j,k-1:k)*this%cfg%vol(i,j,k-1:k))/mysurf
+               else
+                  mycurv=0.0_WP
+               end if
+               ! Count neighbor's planes
+               np2=0
+               do n=1,getNumberOfPlanes(vf%liquid_gas_interface(i,j,k-1))
+                  if (getNumberOfVertices(vf%interface_polygon(n,i,j,k-1)).gt.0) np2=np2+1
+               end do
+               ! Assign correct curvature
+               if (np1.eq.2.and.np2.eq.0) then
+                  n1=calculateNormal(vf%interface_polygon(1,i,j,k))
+                  n2=calculateNormal(vf%interface_polygon(2,i,j,k))
+                  ind=maxloc([dot_product(n1,[0.0_WP,0.0_WP,-1.0_WP]),dot_product(n2,[0.0_WP,0.0_WP,-1.0_WP])],dim=1)
+                  mycurv=vf%curv2p(ind,i,j,k)
+               end if
+               if (np1.eq.0.and.np2.eq.2) then
+                  n1=calculateNormal(vf%interface_polygon(1,i,j,k-1))
+                  n2=calculateNormal(vf%interface_polygon(2,i,j,k-1))
+                  ind=maxloc([dot_product(n1,[0.0_WP,0.0_WP,+1.0_WP]),dot_product(n2,[0.0_WP,0.0_WP,+1.0_WP])],dim=1)
+                  mycurv=vf%curv2p(ind,i,j,k-1)
+               end if
+               ! Assemble pressure jump
+               this%Pjz(i,j,k)=this%sigma*mycurv*sum(this%divw_z(:,i,j,k)*alpha(i,j,k-1:k))
+            end do
+         end do
+      end do
+
+      ! Deallocate alpha
+      deallocate(alpha)
+      
+      ! Compute jump of DP
+      this%DPjx=this%Pjx-this%DPjx
+      this%DPjy=this%Pjy-this%DPjy
+      this%DPjz=this%Pjz-this%DPjz
+      
+      ! Add div(Pjump) to RP
+      do k=this%cfg%kmin_,this%cfg%kmax_
+         do j=this%cfg%jmin_,this%cfg%jmax_
+            do i=this%cfg%imin_,this%cfg%imax_
+               div(i,j,k)=div(i,j,k)+dt*(sum(this%divp_x(:,i,j,k)*this%DPjx(i:i+1,j,k)/this%rho_U(i:i+1,j,k))&
+               &                        +sum(this%divp_y(:,i,j,k)*this%DPjy(i,j:j+1,k)/this%rho_V(i,j:j+1,k))&
+               &                        +sum(this%divp_z(:,i,j,k)*this%DPjz(i,j,k:k+1)/this%rho_W(i,j,k:k+1)))
+            end do
+         end do
+      end do
+      
+   end subroutine add_surface_tension_jump_thin
    
    
    !> Calculate the pressure gradient based on P
