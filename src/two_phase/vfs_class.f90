@@ -103,11 +103,13 @@ module vfs_class
       integer :: reconstruction_method                    !< Interface reconstruction method
       logical :: two_planes                               !< Whether we're using a 2-plane reconstruction approach
       real(WP) :: twoplane_threshold=0.99_WP              !< Threshold for r2p to switch from one-plane to two-planes
-      real(WP) :: two_plane_threshold_nbr=0.4_WP          !< Threshold above which r2p switches to LVIRA
+      real(WP) :: two_plane_threshold_nbr=0.25_WP         !< Threshold above which r2p switches to LVIRA
+      ! 0.1 tears up right away
+      ! 0.2 looks good, less pointy rim and somewhat earlier tearing (especially with turbulence)
+      ! 0.3 looks good, kinda pointy rim
       real(WP) :: thin_threshold_dotprod=-0.5_WP          !< Maximum dot product of two interface normals for their respective cells to be considered thin region cells
       real(WP) :: thin_threshold_thickness=0.8_WP         !< Maximum local thickness to be considered a thin region cell
       real(WP) :: edge_threshold=1.20_WP                  !< Threshold for classifying edges
-      !real(WP) :: ligament_threshold=1.50_WP              !< Threshold for classifying ligaments
       
       ! Interface sensing variables
       real(WP), dimension(:,:,:), allocatable :: thin_sensor     !< Thin structure sensing (=1 is liquid, =2 is gas)
@@ -183,7 +185,6 @@ module vfs_class
       procedure :: sense_interface                        !< Calculate various surface sensors
       procedure :: detect_thin_regions                    !< Detect thin regions
       procedure :: detect_edge_regions                    !< Detect edge regions
-      !procedure :: detect_ligaments                       !< Detect ligaments
       procedure :: build_youngs                           !< Youngs' reconstruction of the interface from VF field
       !procedure :: build_lvlset                           !< LVLSET-based reconstruction of the interface from VF field
       procedure :: smooth_interface                       !< Interface smoothing based on Swartz idea
@@ -1616,8 +1617,6 @@ contains
       call this%detect_thin_regions()
       ! Identify edge regions
       call this%detect_edge_regions()
-      ! Identify ligament regions
-      !call this%detect_ligaments()
    end subroutine sense_interface
    
    
@@ -1822,66 +1821,6 @@ contains
       call this%cfg%sync(this%edge_sensor)
    end subroutine detect_edge_regions
    
-   
-   !> Detect ligament-like regions of the interface
-   !subroutine detect_ligaments(this)
-   !   implicit none
-   !   class(vfs), intent(inout) :: this
-   !   integer :: n,i,j,k,ii,jj,kk,info,ni,nl
-   !   real(WP) :: fvol,xtmp,ytmp,ztmp
-   !   real(WP), dimension(3)     :: fbary
-   !   real(WP), dimension(3,3)   :: Imom
-   !   real(WP), dimension(3)     :: d
-   !   integer , parameter        :: order=3
-   !   integer , parameter        :: lwork=102 ! dsyev optimal length (nb+2)*order, where block size nb=32
-   !   real(WP), dimension(lwork) :: work
-   !   ! Default value is 0
-   !   this%ligament_sensor=0.0_WP
-   !   ! Traverse domain and classify based on moment of inertia
-   !   do k=this%cfg%kmin_,this%cfg%kmax_
-   !      do j=this%cfg%jmin_,this%cfg%jmax_
-   !         do i=this%cfg%imin_,this%cfg%imax_
-   !            ! Skip wall/bcond cells
-   !            if (this%mask(i,j,k).ne.0) cycle
-   !            ! Skip full cells
-   !            if (this%VF(i,j,k).lt.VFlo.or.this%VF(i,j,k).gt.VFhi) cycle
-   !            ! Extract moment of inertia
-   !            fvol=0.0_WP; fbary=0.0_WP; Imom=0.0_WP
-   !            do kk=k-2,k+2
-   !               do jj=j-2,j+2
-   !                  do ii=i-2,i+2
-   !                     fvol =fvol +this%cfg%vol(ii,jj,kk)*this%VF(ii,jj,kk)
-   !                     fbary=fbary+this%cfg%vol(ii,jj,kk)*this%VF(ii,jj,kk)*this%Lbary(:,ii,jj,kk)
-   !                  end do
-   !               end do
-   !            end do
-   !            fbary=fbary/fvol
-   !            do kk=k-2,k+2
-   !               do jj=j-2,j+2
-   !                  do ii=i-2,i+2
-   !                     xtmp=this%Lbary(1,ii,jj,kk)-fbary(1)
-   !                     ytmp=this%Lbary(2,ii,jj,kk)-fbary(2)
-   !                     ztmp=this%Lbary(3,ii,jj,kk)-fbary(3)
-   !                     Imom(1,1)=Imom(1,1)+(ytmp**2+ztmp**2)*this%cfg%vol(ii,jj,kk)*this%VF(ii,jj,kk)
-   !                     Imom(2,2)=Imom(2,2)+(ztmp**2+xtmp**2)*this%cfg%vol(ii,jj,kk)*this%VF(ii,jj,kk)
-   !                     Imom(3,3)=Imom(3,3)+(xtmp**2+ytmp**2)*this%cfg%vol(ii,jj,kk)*this%VF(ii,jj,kk)
-   !                     Imom(1,2)=Imom(1,2)-xtmp*ytmp*this%cfg%vol(ii,jj,kk)*this%VF(ii,jj,kk)
-   !                     Imom(1,3)=Imom(1,3)-ztmp*xtmp*this%cfg%vol(ii,jj,kk)*this%VF(ii,jj,kk)
-   !                     Imom(2,3)=Imom(2,3)-ytmp*ztmp*this%cfg%vol(ii,jj,kk)*this%VF(ii,jj,kk)
-   !                  end do
-   !               end do
-   !            end do
-   !            ! Compute sorted eigenvalues
-   !            call dsyev('V','U',order,Imom,order,d,work,lwork,info); d=max(0.0_WP,d)
-   !            ! Perform classification
-   !            this%ligament_sensor(i,j,k)=d(2)/(sqrt(d(1)*d(3))+epsilon(1.0_WP))
-   !         end do
-   !      end do
-   !   end do
-   !   ! Communicate
-   !   call this%cfg%sync(this%ligament_sensor)
-   !end subroutine detect_ligaments
-
    
    !> ELVIRA reconstruction of a planar interface in mixed cells
    subroutine build_elvira(this)
@@ -2273,11 +2212,10 @@ contains
       real(IRL_double)  , dimension(0:26) :: liquid_volume_fraction
       type(SepVM_type)  , dimension(0:26) :: separated_volume_moments
       type(VMAN_type) :: volume_moments_and_normal
-
-      type(R2PWeighting_type) :: r2p_weight
+      
       real(WP) :: surface_area,surface_area_nbr,norm_mag_nbr
-      real(WP) :: vf_nbr,lvol,tvol,l2g_weight
       real(WP), dimension(3) :: surface_norm_nbr
+      real(WP), dimension(:,:,:), allocatable :: surf_norm_mag
       
       real(IRL_double), dimension(3) :: initial_norm
       real(IRL_double) :: initial_dist
@@ -2287,13 +2225,39 @@ contains
       call new(volume_moments_and_normal)
       
       ! Give ourselves an R2P and an LVIRA neighborhood of 27 cells along with separated volume moments
-      call new(r2p_weight)
       call new(nh_r2p)
       call new(nh_lvr)
       do i=0,26
          call new(neighborhood_cells(i))
          call new(separated_volume_moments(i))
       end do
+      
+      ! Preprocess surface normal data
+      allocate(surf_norm_mag(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_)); surf_norm_mag=1.0_WP
+      do k=this%cfg%kmin_,this%cfg%kmax_
+         do j=this%cfg%jmin_,this%cfg%jmax_
+            do i=this%cfg%imin_,this%cfg%imax_
+               ! Handle walls and full cells
+               if (this%mask(i,j,k).ne.0) cycle
+               if (this%VF(i,j,k).lt.VFlo.or.this%VF(i,j,k).gt.VFhi) cycle
+               ! Gather neighborhood surface moments
+               surface_area_nbr=0.0_WP; surface_norm_nbr=0.0_WP
+               do kk=k-1,k+1; do jj=j-1,j+1; do ii=i-1,i+1
+                  do ind=0,getSize(this%triangle_moments_storage(ii,jj,kk))-1
+                     call getMoments(this%triangle_moments_storage(ii,jj,kk),ind,volume_moments_and_normal)
+                     surface_area_nbr=surface_area_nbr+getVolume(volume_moments_and_normal)
+                     surface_norm_nbr=surface_norm_nbr+getNormal(volume_moments_and_normal)
+                  end do
+               end do; end do; end do
+               if (surface_area_nbr.gt.surface_epsilon_factor*this%cfg%meshsize(i,j,k)**2) then
+                  surf_norm_mag(i,j,k)=norm2(surface_norm_nbr/surface_area_nbr)
+               else
+                  surf_norm_mag(i,j,k)=0.0_WP
+               end if
+            end do
+         end do
+      end do
+      call this%cfg%sync(surf_norm_mag)
       
       ! Traverse domain and reconstruct interface
       do k=this%cfg%kmin_,this%cfg%kmax_
@@ -2347,25 +2311,8 @@ contains
                   cycle
                end if
                
-               ! Gather neighborhood surface moments
-               surface_area_nbr=0.0_WP; surface_norm_nbr=0.0_WP
-               lvol=0.0_WP; tvol=0.0_WP
-               do kk=k-1,k+1; do jj=j-1,j+1; do ii=i-1,i+1
-                  lvol=lvol+this%cfg%vol(ii,jj,kk)*this%VF(ii,jj,kk)
-                  tvol=tvol+this%cfg%vol(ii,jj,kk)
-                  do ind=0,getSize(this%triangle_moments_storage(ii,jj,kk))-1
-                     call getMoments(this%triangle_moments_storage(ii,jj,kk),ind,volume_moments_and_normal)
-                     surface_area_nbr=surface_area_nbr+getVolume  (volume_moments_and_normal)
-                     surface_norm_nbr=surface_norm_nbr+getNormal  (volume_moments_and_normal)
-                  end do
-               end do; end do; end do
-               if (surface_area_nbr.gt.surface_epsilon_factor*this%cfg%meshsize(i,j,k)**2) then
-                  surface_norm_nbr=surface_norm_nbr/surface_area_nbr
-               else
-                  surface_norm_nbr=0.0_WP
-               end if
-               norm_mag_nbr=norm2(surface_norm_nbr)
-               vf_nbr=lvol/tvol
+               ! Use minimum surf_norm_mag in the neighborhood
+               norm_mag_nbr=minval(surf_norm_mag(i-1:i+1,j-1:j+1,k-1:k+1))
                
                ! If the neighborhood normals are sufficiently consistent, just use LVIRA
                if (norm_mag_nbr.gt.this%two_plane_threshold_nbr) then
@@ -2410,7 +2357,7 @@ contains
                surface_area=0.0_WP
                do ind=0,getSize(this%triangle_moments_storage(i,j,k))-1
                   call getMoments(this%triangle_moments_storage(i,j,k),ind,volume_moments_and_normal)
-                  surface_area=surface_area+getVolume  (volume_moments_and_normal)
+                  surface_area=surface_area+getVolume(volume_moments_and_normal)
                end do
                if (surface_area.gt.surface_epsilon_factor*this%cfg%meshsize(i,j,k)**2) then
                   ! Local normals are available, reconstruction from surface data
@@ -2430,12 +2377,7 @@ contains
                end if
                
                ! Perform R2P reconstruction
-               l2g_weight=0.5_WP
-               if (vf_nbr.lt.0.1_WP) l2g_weight=1.0_WP
-               if (vf_nbr.gt.0.9_WP) l2g_weight=0.0_WP
-               !l2g_weight=min(max(0.5_WP+1.25_WP*(0.5_WP-vf_nbr),0.0_WP),1.0_WP)
-               call setImportances(r2p_weight,[0.0_WP,l2g_weight,1.0_WP,-1.0_WP])
-               call reconstructR2P3D(nh_r2p,this%liquid_gas_interface(i,j,k),r2p_weight)
+               call reconstructR2P3D(nh_r2p,this%liquid_gas_interface(i,j,k))
                
             end do
          end do
@@ -2443,6 +2385,9 @@ contains
       
       ! Synchronize across boundaries
       call this%sync_interface()
+      
+      ! Free up memory
+      deallocate(surf_norm_mag)
       
    end subroutine build_r2p
    
@@ -2973,6 +2918,7 @@ contains
       end do
       ! Synchronize boundaries
       call this%cfg%sync(this%curv)
+      if (this%two_planes) call this%cfg%sync(this%curv2p)
    end subroutine get_curvature
    
    
