@@ -83,29 +83,32 @@ contains
    
    
    !> Initialization of HIT simulation
-   subroutine init(this,group)
+   subroutine init(this,group,xend)
       use mpi_f08, only: MPI_Group
       implicit none
       class(hit), intent(inout)   :: this
       type(MPI_Group), intent(in) :: group
+      real(WP) :: xend
       
       ! Create the HIT mesh
       create_config: block
          use sgrid_class, only: cartesian,sgrid
          use param,       only: param_read
-         real(WP), dimension(:), allocatable :: y
+         real(WP), dimension(:), allocatable :: x,y
          integer, dimension(3) :: partition
          type(sgrid) :: grid
          integer :: j,ny
          real(WP) :: Ly
          ! Read in grid definition
-         call param_read('Ly',Ly); call param_read('ny',ny); allocate(y(ny+1))
-         ! Create simple rectilinear grid
+         call param_read('Ly',Ly); call param_read('ny',ny); allocate(y(ny+1)); allocate(x(ny+1))
+         ! Create simple rectilinear grid in y and z
          do j=1,ny+1
             y(j)=real(j-1,WP)/real(ny,WP)*Ly-0.5_WP*Ly
          end do
+         ! Same grid in x, but shifted so it ends at xend
+         x=y-y(ny+1)+xend
          ! General serial grid object
-         grid=sgrid(coord=cartesian,no=1,x=y,y=y,z=y,xper=.true.,yper=.true.,zper=.true.,name='HIT')
+         grid=sgrid(coord=cartesian,no=1,x=x,y=y,z=y,xper=.true.,yper=.true.,zper=.true.,name='HIT')
          ! Read in partition
          call param_read('Partition',partition,short='p'); partition(1)=1
          ! Create partitioned grid without walls

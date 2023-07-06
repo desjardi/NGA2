@@ -635,7 +635,7 @@ contains
    
    
    !> Finish setting up the flow solver now that bconds have been defined
-   subroutine setup(this,,pressure_solver,implicit_solver)
+   subroutine setup(this,pressure_solver,implicit_solver)
       implicit none
       class(mast), intent(inout) :: this
       class(linsol), target, intent(in) :: pressure_solver                      !< A pressure solver is required
