@@ -1,0 +1,44 @@
+# Parallelization
+Partition :	48 1 1
+
+# Mesh definition
+Lx :	      64
+Liquid Ly :	  16
+Gas Ly :	  16
+Lz :	      16
+nx :	      320
+ny :	      160
+nz :	      80
+
+# Fluid properties and inital profile
+Gas gamma : 1.4
+Liquid gamma : 4.4
+Gas Reynolds number :  1000
+Gas Weber number :     10
+Viscosity ratio :      10      !< This is mu_l/mu_g
+Density ratio :        1000      !< This is rho_l/rho_g
+Velocity ratio :       0.01     !< This is U_l/U_g
+Gas Mach number :      1
+Liquid Mach number :   0.1
+
+# Sponge Zone properties
+Sponge length :        2.0       !< This is arbitrary for now 
+
+# Time integration
+Max timestep size : 2e-1
+Max cfl number :    0.8
+Max time :          1500
+
+# Pressure solver
+Pressure tolerance : 1e-6
+Pressure iteration : 100
+
+# Implicit velocity solver
+Implicit tolerance : 1e-6
+Implicit iteration : 100
+
+# Ensight output
+Ensight output period : 5
+
+# Post-processing output
+Postproc output period : 5

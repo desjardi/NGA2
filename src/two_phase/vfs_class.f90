@@ -103,7 +103,7 @@ module vfs_class
       integer :: reconstruction_method                    !< Interface reconstruction method
       logical :: two_planes                               !< Whether we're using a 2-plane reconstruction approach
       real(WP) :: twoplane_threshold=0.99_WP              !< Threshold for r2p to switch from one-plane to two-planes
-      real(WP) :: two_plane_threshold_nbr=0.25_WP         !< Threshold above which r2p switches to LVIRA
+      real(WP) :: two_plane_threshold_nbr=0.3_WP          !< Threshold above which r2p switches to LVIRA
       ! 0.1 tears up right away
       ! 0.2 looks good, less pointy rim and somewhat earlier tearing (especially with turbulence)
       ! 0.3 looks good, kinda pointy rim
@@ -113,14 +113,15 @@ module vfs_class
       
       ! Interface sensing variables
       real(WP), dimension(:,:,:), allocatable :: thin_sensor     !< Thin structure sensing (=1 is liquid, =2 is gas)
-      real(WP), dimension(:,:,:), allocatable :: edge_sensor     !< Edge sensing (higher is edge)
       real(WP), dimension(:,:,:), allocatable :: thickness       !< Local thickness of thin region
+      real(WP), dimension(:,:,:)  , allocatable :: edge_sensor   !< Edge sensing (higher is edge)
+      real(WP), dimension(:,:,:,:), allocatable :: edge_normal   !< Edge normal
       
       ! Curvature clipping parameter
       real(WP) :: maxcurv_times_mesh=1.0_WP               !< Clipping parameter for maximum curvature (classically set to 1, but should be larger since we resolve more)
       
       ! Flotsam removal parameter - turned off by default
-      real(WP) :: VFflot=0.0_WP                           !< Threshold VF parameter for flotsam removal (0.0=off)
+      real(WP) :: VFflot=1.0_WP                           !< Threshold VF parameter for flotsam removal (0.0=off)
       real(WP) :: VFsheet=0.0_WP                          !< Threshold VF parameter for sheet removal (0.0=off)
       
       ! IRL objects
@@ -145,6 +146,7 @@ module vfs_class
       
       ! Monitoring quantities
       real(WP) :: VFmax,VFmin,VFint,SDint                 !< Maximum, minimum, and integral volume fraction and surface density
+      real(WP) :: flotsam_error                           !< Integral of flotsam removal error
 
       ! Old arrays that are needed for the compressible MAST solver
       real(WP), dimension(:,:,:,:), allocatable :: Lbaryold  !< Liquid barycenter
@@ -267,11 +269,18 @@ contains
          self%two_planes=.false.
       case (r2p)
          self%reconstruction_method=reconstruction_method
+         ! Allocate extra curvature storage
          self%two_planes=.true.
-         allocate(self%curv2p (1:2,self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%curv2p=0.0_WP
-         allocate(self%thin_sensor(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%thin_sensor=0.0_WP
-         allocate(self%edge_sensor(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%edge_sensor=0.0_WP
+         allocate(self%curv2p(1:2,self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%curv2p=0.0_WP
+         ! Allocate extra sensors
          allocate(self%thickness  (self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%thickness=0.0_WP
+         allocate(self%thin_sensor(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%thin_sensor=0.0_WP
+         allocate(self%edge_sensor(    self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%edge_sensor=0.0_WP
+         allocate(self%edge_normal(1:3,self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%edge_normal=0.0_WP
+         ! By default, use flotsam removal
+         self%VFflot=1.0e-3_WP !< This considers any separated structure around dx/10 and below as bogus
+         ! Also allow for larger curvatures to be calculated
+         self%maxcurv_times_mesh=2.0_WP
       case default
          call die('[vfs constructor] Unknown interface reconstruction scheme.')
       end select
@@ -382,11 +391,18 @@ contains
          this%two_planes=.false.
       case (r2p)
          this%reconstruction_method=reconstruction_method
+         ! Allocate extra curvature storage
          this%two_planes=.true.
-         allocate(this%curv2p (1:2,this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_)); this%curv2p=0.0_WP
+         allocate(this%curv2p(1:2,this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_)); this%curv2p=0.0_WP
+         ! Allocate extra sensors
          allocate(this%thin_sensor(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_)); this%thin_sensor=0.0_WP
-         allocate(this%edge_sensor(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_)); this%edge_sensor=0.0_WP
          allocate(this%thickness  (this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_)); this%thickness  =0.0_WP
+         allocate(this%edge_sensor(    this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_)); this%edge_sensor=0.0_WP
+         allocate(this%edge_normal(1:3,this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_)); this%edge_normal=0.0_WP
+         ! By default, use flotsam removal
+         this%VFflot=1.0e-3_WP !< This considers any separated structure around dx/10 and below as bogus
+         ! Also allow for larger curvatures to be calculated
+         this%maxcurv_times_mesh=2.0_WP
       case default
          call die('[vfs initialize] Unknown interface reconstruction scheme.')
       end select
@@ -1172,15 +1188,19 @@ contains
 
    !> Remove flotsams explicitly - careful, this is not conservative!
    subroutine remove_flotsams(this)
+      use mpi_f08,  only: MPI_ALLREDUCE,MPI_SUM
+      use parallel, only: MPI_REAL_WP
       implicit none
       class(vfs), intent(inout) :: this
-      integer :: i,j,k,ii,jj,kk
-      real(WP) :: FSlo,FShi
+      integer :: i,j,k,ii,jj,kk,ierr
+      real(WP) :: FSlo,FShi,myerror
       ! Do not do anything if VFflot<=0.0_WP
       if (this%VFflot.le.0.0_WP) return
       ! Build lo and hi values
       FSlo=this%VFflot
       FShi=1.0_WP-this%VFflot
+      ! Reset error monitoring
+      this%flotsam_error=0.0_WP
       ! Loop inside and remove flotsams
       do k=this%cfg%kmin_,this%cfg%kmax_
          do j=this%cfg%jmin_,this%cfg%jmax_
@@ -1191,11 +1211,13 @@ contains
                   do kk=k-1,k+1
                      do jj=j-1,j+1
                         do ii=i-1,i+1
-                           if (this%VF(ii,jj,kk).ge.FSlo) cycle oloop
+                           if (i.eq.ii.and.j.eq.jj.and.k.eq.kk) cycle
+                           if (this%VF(ii,jj,kk).ge.VFlo) cycle oloop
                         end do
                      end do
                   end do
-                  ! None was found, everything is below FSlo
+                  ! None was found, we have an isolated flotsam
+                  this%flotsam_error=this%flotsam_error+(this%VF(i,j,k)-0.0_WP)*this%cfg%vol(i,j,k)
                   this%VF(i,j,k)=0.0_WP
                end if
                ! Handle gas flotsams
@@ -1204,11 +1226,13 @@ contains
                   do kk=k-1,k+1
                      do jj=j-1,j+1
                         do ii=i-1,i+1
-                           if (this%VF(ii,jj,kk).le.FShi) cycle oloop
+                           if (i.eq.ii.and.j.eq.jj.and.k.eq.kk) cycle
+                           if (this%VF(ii,jj,kk).le.VFhi) cycle oloop
                         end do
                      end do
                   end do
-                  ! None was found, everything is above FShi
+                  ! None was found, we have an isolated flotsam
+                  this%flotsam_error=this%flotsam_error+(this%VF(i,j,k)-1.0_WP)*this%cfg%vol(i,j,k)
                   this%VF(i,j,k)=1.0_WP
                end if
             end do oloop
@@ -1216,6 +1240,8 @@ contains
       end do
       ! Synchronize VF field
       call this%cfg%sync(this%VF)
+      ! Gather error
+      call MPI_ALLREDUCE(this%flotsam_error,myerror,1,MPI_REAL_WP,MPI_SUM,this%cfg%comm,ierr); this%flotsam_error=myerror
    end subroutine remove_flotsams
    
    
@@ -1419,6 +1445,7 @@ contains
       real(IRL_double), dimension(1:4) :: plane_data
       integer, dimension(3) :: ind
       real(IRL_double), dimension(1:3,1:3) :: tri_vert
+      type(VMAN_type) :: volume_moments_and_normal
       
       ! Clear moments from before
       do k=this%cfg%kmino_,this%cfg%kmaxo_
@@ -1434,6 +1461,7 @@ contains
       call new(moments_list_from_tri)
       call new(divided_polygon)
       call new(triangle)
+      call new(volume_moments_and_normal)
       
       ! Loop over domain to forward transport interface
       do k=this%cfg%kmino_,this%cfg%kmaxo_
@@ -1484,6 +1512,21 @@ contains
             end do
          end do
       end do
+
+      ! Recompute surface density from advected interface
+      this%SD=0.0_WP
+      do k=this%cfg%kmin_,this%cfg%kmax_
+         do j=this%cfg%jmin_,this%cfg%jmax_
+            do i=this%cfg%imin_,this%cfg%imax_
+               do ii=0,getSize(this%triangle_moments_storage(i,j,k))-1
+                  call getMoments(this%triangle_moments_storage(i,j,k),ii,volume_moments_and_normal)
+                  this%SD(i,j,k)=this%SD(i,j,k)+getVolume(volume_moments_and_normal)
+               end do
+               this%SD(i,j,k)=this%SD(i,j,k)/this%cfg%vol(i,j,k)
+            end do
+         end do
+      end do
+      call this%cfg%sync(this%SD)
       
    end subroutine advect_interface
    
@@ -1616,7 +1659,7 @@ contains
       ! Identify thin regions
       call this%detect_thin_regions()
       ! Identify edge regions
-      call this%detect_edge_regions()
+      !call this%detect_edge_regions()
    end subroutine sense_interface
    
    
@@ -1632,7 +1675,7 @@ contains
 
       ! Default value is 0
       this%thin_sensor=0.0_WP
-      this%thickness  =0.0_WP
+      !this%thickness  =0.0_WP
 
       ! First pass to handle 2-plane cells
       do k=this%cfg%kmino_,this%cfg%kmaxo_
@@ -1643,9 +1686,9 @@ contains
                ! Skip full cells
                if (this%VF(i,j,k).lt.VFlo.or.this%VF(i,j,k).gt.VFhi) cycle
                ! Detect thin regions from local polygon data
-               n1=calculateNormal  (this%interface_polygon(1,i,j,k))
+               n1=calculateNormal(this%interface_polygon(1,i,j,k))
                if (getNumberOfVertices(this%interface_polygon(2,i,j,k)).gt.0) then
-                  n2=calculateNormal  (this%interface_polygon(2,i,j,k))
+                  n2=calculateNormal(this%interface_polygon(2,i,j,k))
                   ! Check normal orientation to identify thin regions
                   if (dot_product(n1,n2).lt.this%thin_threshold_dotprod) then
                      ! Check if liquid or gas
@@ -1731,25 +1774,25 @@ contains
                if (this%mask(i,j,k).ne.0) cycle
                ! Skip full cells
                if (this%VF(i,j,k).lt.VFlo.or.this%VF(i,j,k).gt.VFhi) cycle
-               ! Estimate thickness
-               fvol=0.0_WP; fsrf=0.0_WP
-               do kk=k-1,k+1
-                  do jj=j-1,j+1
-                     do ii=i-1,i+1
-                        fvol=fvol+this%VF(ii,jj,kk)
-                        fsrf=fsrf+this%SD(ii,jj,kk)
-                     end do
-                  end do
-               end do
-               ! Estimate smallest thickness
-               this%thickness(i,j,k)=2.0_WP*min(fvol,(27.0_WP-fvol))/(fsrf+epsilon(1.0_WP))
-               ! Apply cut-off for thick enough regions
+      !         ! Estimate thickness
+      !         fvol=0.0_WP; fsrf=0.0_WP
+      !         do kk=k-1,k+1
+      !            do jj=j-1,j+1
+      !               do ii=i-1,i+1
+      !                  fvol=fvol+this%VF(ii,jj,kk)
+      !                  fsrf=fsrf+this%SD(ii,jj,kk)
+      !               end do
+      !            end do
+      !         end do
+      !         ! Estimate smallest thickness
+      !         this%thickness(i,j,k)=2.0_WP*min(fvol,(27.0_WP-fvol))/(fsrf+epsilon(1.0_WP))
+      !         ! Apply cut-off for thick enough regions
                if (this%thickness(i,j,k).gt.this%thin_threshold_thickness*this%cfg%meshsize(i,j,k)) this%thin_sensor(i,j,k)=0.0_WP
             end do
          end do
       end do
       call this%cfg%sync(this%thin_sensor)
-      call this%cfg%sync(this%thickness  )
+      !call this%cfg%sync(this%thickness  )
       
    end subroutine detect_thin_regions
    
@@ -1763,6 +1806,7 @@ contains
       real(WP), dimension(3) :: fbary,mybary
       ! Default value is 0
       this%edge_sensor=0.0_WP
+      this%edge_normal=0.0_WP
       ! Traverse domain and compute sensors
       do k=this%cfg%kmin_,this%cfg%kmax_
          do j=this%cfg%jmin_,this%cfg%jmax_
@@ -1810,15 +1854,20 @@ contains
                end do
                fbary=fbary/fvol
                surface_sensor=norm2(fbary-mybary)/this%cfg%meshsize(i,j,k)
-               ! Agregate into a single edge sensor
+               ! Aggregate into an edge sensor
                this%edge_sensor(i,j,k)=volume_sensor*surface_sensor
                ! Clip based on thickness
                if (this%thickness(i,j,k).gt.this%thin_threshold_thickness*this%cfg%meshsize(i,j,k)) this%edge_sensor(i,j,k)=0.0_WP
+               ! Finally, store edge orientation
+               if (this%edge_sensor(i,j,k).gt.0.0_WP) then
+                  this%edge_normal(:,i,j,k)=(fbary-mybary)/norm2(fbary-mybary)
+               end if
             end do
          end do
       end do
       ! Communicate
       call this%cfg%sync(this%edge_sensor)
+      call this%cfg%sync(this%edge_normal)
    end subroutine detect_edge_regions
    
    
@@ -2213,13 +2262,23 @@ contains
       type(SepVM_type)  , dimension(0:26) :: separated_volume_moments
       type(VMAN_type) :: volume_moments_and_normal
       
-      real(WP) :: surface_area,surface_area_nbr,norm_mag_nbr
+      real(WP) :: surface_area,surface_area_nbr,weight
       real(WP), dimension(3) :: surface_norm_nbr
+      !integer, dimension(:,:,:), allocatable :: norm_nbr,my_norm_nbr
       real(WP), dimension(:,:,:), allocatable :: surf_norm_mag
+      
+      real(WP), dimension(3) :: surf_bary1,surf_bary2
+      real(WP) :: surf_area1,surf_area2
+
+      integer :: dim,dir
+      integer, dimension(3) :: pos
       
       real(IRL_double), dimension(3) :: initial_norm
       real(IRL_double) :: initial_dist
       logical :: is_wall
+      
+      real(WP) :: lvol,gvol,area
+      real(WP), dimension(:,:,:), allocatable :: tmp,mag
       
       ! Get storage for voluem moments and normal
       call new(volume_moments_and_normal)
@@ -2231,7 +2290,6 @@ contains
          call new(neighborhood_cells(i))
          call new(separated_volume_moments(i))
       end do
-      
       ! Preprocess surface normal data
       allocate(surf_norm_mag(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_)); surf_norm_mag=1.0_WP
       do k=this%cfg%kmin_,this%cfg%kmax_
@@ -2249,15 +2307,148 @@ contains
                      surface_norm_nbr=surface_norm_nbr+getNormal(volume_moments_and_normal)
                   end do
                end do; end do; end do
-               if (surface_area_nbr.gt.surface_epsilon_factor*this%cfg%meshsize(i,j,k)**2) then
-                  surf_norm_mag(i,j,k)=norm2(surface_norm_nbr/surface_area_nbr)
-               else
-                  surf_norm_mag(i,j,k)=0.0_WP
-               end if
+               
             end do
          end do
       end do
       call this%cfg%sync(surf_norm_mag)
+      ! Compute thickness and filtered normal magnitude
+      this%thickness=0.0_WP
+      surf_norm_mag=0.0_WP
+      do k=this%cfg%kmin_,this%cfg%kmax_
+         do j=this%cfg%jmin_,this%cfg%jmax_
+            do i=this%cfg%imin_,this%cfg%imax_
+               ! Skip wall/bcond/full cells
+               if (this%mask(i,j,k).ne.0) cycle
+               if (this%VF(i,j,k).lt.VFlo.or.this%VF(i,j,k).gt.VFhi) cycle
+               ! Extract thickness estimate from local phasic volumes and surface area
+               lvol=0.0_WP; gvol=0.0_WP; area=0.0_WP
+               do kk=k-1,k+1; do jj=j-1,j+1; do ii=i-1,i+1
+                  lvol=lvol+(       this%VF(ii,jj,kk))*this%cfg%vol(ii,jj,kk)
+                  gvol=gvol+(1.0_WP-this%VF(ii,jj,kk))*this%cfg%vol(ii,jj,kk)
+                  area=area+        this%SD(ii,jj,kk) *this%cfg%vol(ii,jj,kk)
+               end do; end do; end do
+               if (area.gt.0.0_WP) this%thickness(i,j,k)=2.0_WP*min(lvol,gvol)/area
+               ! Extract average normal magnitude from neighborhood surface moments
+               surface_norm_nbr=0.0_WP
+               do kk=k-1,k+1; do jj=j-1,j+1; do ii=i-1,i+1
+                  do ind=0,getSize(this%triangle_moments_storage(ii,jj,kk))-1
+                     call getMoments(this%triangle_moments_storage(ii,jj,kk),ind,volume_moments_and_normal)
+                     surface_norm_nbr=surface_norm_nbr+getNormal(volume_moments_and_normal)
+                  end do
+               end do; end do; end do
+               if (area.gt.0.0_WP) surf_norm_mag(i,j,k)=norm2(surface_norm_nbr/area)
+            end do
+         end do
+      end do
+      call this%cfg%sync(this%thickness)
+      call this%cfg%sync(surf_norm_mag)
+      
+      ! Filter thickness and normal magnitude
+      allocate(tmp(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_)); tmp=0.0_WP
+      allocate(mag(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_)); mag=0.0_WP
+      do k=this%cfg%kmin_,this%cfg%kmax_
+         do j=this%cfg%jmin_,this%cfg%jmax_
+            do i=this%cfg%imin_,this%cfg%imax_
+               ! Skip wall/bcond/full cells
+               if (this%mask(i,j,k).ne.0) cycle
+               if (this%VF(i,j,k).lt.VFlo.or.this%VF(i,j,k).gt.VFhi) cycle
+               ! Surface-average thickness
+               area=0.0_WP
+               do kk=k-1,k+1; do jj=j-1,j+1; do ii=i-1,i+1
+                  area      =area      +this%SD(ii,jj,kk)*this%cfg%vol(ii,jj,kk)
+                  tmp(i,j,k)=tmp(i,j,k)+this%SD(ii,jj,kk)*this%cfg%vol(ii,jj,kk)*this%thickness(ii,jj,kk)
+                  mag(i,j,k)=mag(i,j,k)+this%SD(ii,jj,kk)*this%cfg%vol(ii,jj,kk)*surf_norm_mag(ii,jj,kk)
+               end do; end do; end do
+               ! Estimate minimum thickness
+               if (area.gt.0.0_WP) tmp(i,j,k)=tmp(i,j,k)/area
+               if (area.gt.0.0_WP) mag(i,j,k)=mag(i,j,k)/area
+            end do
+         end do
+      end do
+      call this%cfg%sync(tmp)
+      this%thickness=tmp
+      deallocate(tmp)
+      call this%cfg%sync(mag)
+      surf_norm_mag=mag
+      deallocate(mag)
+      this%edge_sensor=surf_norm_mag
+
+      ! Preprocess surface normal data
+      !allocate(norm_nbr(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_)); norm_nbr=0
+      !do k=this%cfg%kmin_,this%cfg%kmax_
+      !   do j=this%cfg%jmin_,this%cfg%jmax_
+      !      do i=this%cfg%imin_,this%cfg%imax_
+      !         ! Handle walls and full cells
+      !         if (this%mask(i,j,k).ne.0) cycle
+      !         if (this%VF(i,j,k).lt.VFlo.or.this%VF(i,j,k).gt.VFhi) cycle
+      !         ! Gather neighborhood surface normal
+      !         surface_area_nbr=0.0_WP; surface_norm_nbr=0.0_WP
+      !         do kk=k-1,k+1; do jj=j-1,j+1; do ii=i-1,i+1
+      !            do ind=0,getSize(this%triangle_moments_storage(ii,jj,kk))-1
+      !               call getMoments(this%triangle_moments_storage(ii,jj,kk),ind,volume_moments_and_normal)
+      !               call normalizeByVolume(volume_moments_and_normal)
+      !               surface_area=getVolume(volume_moments_and_normal)
+      !               if (surface_area.le.0.0_WP) cycle
+      !               !weight=wgauss(norm2(getCentroid(volume_moments_and_normal)-[this%cfg%xm(i),this%cfg%ym(j),this%cfg%zm(k)])/this%cfg%meshsize(i,j,k),5.0_WP)
+      !               surface_area_nbr=surface_area_nbr+surface_area
+      !               surface_norm_nbr=surface_norm_nbr+surface_area*getNormal(volume_moments_and_normal)
+      !            end do
+      !         end do; end do; end do
+      !         ! Check if we have enough data
+      !         if (surface_area_nbr.gt.surface_epsilon_factor*this%cfg%meshsize(i,j,k)**2) then
+      !            ! Build average normal direction
+      !            surface_norm_nbr=surface_norm_nbr/surface_area_nbr
+      !            ! Check magnitude of average normal
+      !            if (norm2(surface_norm_nbr).gt.this%two_plane_threshold_nbr) then
+      !               norm_nbr(i,j,k)=1 !< Use LVIRA
+      !            else
+      !               norm_nbr(i,j,k)=2 !< Use R2P
+      !            end if
+      !         else
+      !            ! No neighborhood surface data
+      !            norm_nbr(i,j,k)=1    !< Use LVIRA
+      !         end if
+      !         ! Output current test !!!!
+      !         !surface_norm_nbr=surface_norm_nbr/norm2(surface_norm_nbr)
+      !         !do kk=k-1,k+1; do jj=j-1,j+1; do ii=i-1,i+1
+      !         !   do ind=0,getSize(this%triangle_moments_storage(ii,jj,kk))-1
+      !         !      call getMoments(this%triangle_moments_storage(ii,jj,kk),ind,volume_moments_and_normal)
+      !         !      call normalizeByVolume(volume_moments_and_normal)
+      !         !      surface_area=getVolume(volume_moments_and_normal)
+      !         !      if (surface_area.le.0.0_WP) cycle
+      !         !      !weight=wgauss(norm2(getCentroid(volume_moments_and_normal)-[this%cfg%xm(i),this%cfg%ym(j),this%cfg%zm(k)])/this%cfg%meshsize(i,j,k),5.0_WP)
+      !         !      this%edge_sensor(i,j,k)=this%edge_sensor(i,j,k)+surface_area*(0.5_WP-0.5_WP*dot_product(getNormal(volume_moments_and_normal),surface_norm_nbr))**2
+      !         !   end do
+      !         !end do; end do; end do
+      !         !if (surface_area_nbr.gt.surface_epsilon_factor*this%cfg%meshsize(i,j,k)**2) this%edge_sensor(i,j,k)=this%edge_sensor(i,j,k)/surface_area_nbr
+      !         ! Reset the trigger
+      !         !if (this%edge_sensor(i,j,k).lt.0.1_WP) then
+      !         !   norm_nbr(i,j,k)=1
+      !         !else
+      !         !   norm_nbr(i,j,k)=2
+      !         !end if
+      !      end do
+      !   end do
+      !end do
+      !call this%cfg%sync(norm_nbr)
+      
+      ! Extend norm_nbr sensor
+      !allocate(my_norm_nbr(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
+      !do ind=1,1
+      !   my_norm_nbr=norm_nbr
+      !   do k=this%cfg%kmin_,this%cfg%kmax_; do j=this%cfg%jmin_,this%cfg%jmax_; do i=this%cfg%imin_,this%cfg%imax_
+      !      if (my_norm_nbr(i,j,k).eq.0) cycle
+      !      if (my_norm_nbr(i,j,k).eq.1) then
+      !         do dim=1,3; do dir=-1,1,2
+      !            pos=0; pos(dim)=dir; ii=i+pos(1); jj=j+pos(2); kk=k+pos(3)
+      !            if (my_norm_nbr(ii,jj,kk).eq.2) norm_nbr(i,j,k)=2
+      !         end do; end do
+      !      end if
+      !   end do; end do; end do
+      !   call this%cfg%sync(norm_nbr)
+      !end do
+      !deallocate(my_norm_nbr)
       
       ! Traverse domain and reconstruct interface
       do k=this%cfg%kmin_,this%cfg%kmax_
@@ -2311,11 +2502,14 @@ contains
                   cycle
                end if
                
-               ! Use minimum surf_norm_mag in the neighborhood
-               norm_mag_nbr=minval(surf_norm_mag(i-1:i+1,j-1:j+1,k-1:k+1))
-               
                ! If the neighborhood normals are sufficiently consistent, just use LVIRA
-               if (norm_mag_nbr.gt.this%two_plane_threshold_nbr) then
+               !if (norm_nbr(i,j,k).eq.1) then
+
+               ! If the local thickness is sufficiently large, just use LVIRA
+               !if (this%thickness(i,j,k).gt.1.5_WP*this%cfg%meshsize(i,j,k)) then
+
+               ! If the neighborhood normals are sufficiently consistent, just use LVIRA
+               if (surf_norm_mag(i,j,k).gt.0.2_WP) then
                   ! Build LVIRA neighborhood
                   ind=0; call emptyNeighborhood(nh_lvr)
                   do kk=k-1,k+1; do jj=j-1,j+1; do ii=i-1,i+1
@@ -2387,8 +2581,19 @@ contains
       call this%sync_interface()
       
       ! Free up memory
-      deallocate(surf_norm_mag)
+      !deallocate(norm_nbr)
       
+   !contains
+   !   ! Quasi-Gaussian weighting function - h=2.6 behaves like exp(-d^2)
+   !   real(WP) function wgauss(d,h)
+   !      implicit none
+   !      real(WP), intent(in) :: d,h
+   !      if (d.ge.h) then
+   !         wgauss=0.0_WP
+   !      else
+   !         wgauss=(1.0_WP+4.0_WP*d/h)*(1.0_WP-d/h)**4
+   !      end if
+   !   end function wgauss
    end subroutine build_r2p
    
    

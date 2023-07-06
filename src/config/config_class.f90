@@ -360,9 +360,9 @@ contains
       do while (pos(3)-this%zm(k  ).lt.0.0_WP.and.k  .gt.this%kmino_); k=k-1; end do
       do while (pos(3)-this%zm(k+1).ge.0.0_WP.and.k+1.lt.this%kmaxo_); k=k+1; end do
       ! For exact conservation, all information needs to be placed *inside* the domain
-      if (.not.this%xper) i=max(this%imin,min(this%imax-1,i))
-      if (.not.this%yper) j=max(this%jmin,min(this%jmax-1,j))
-      if (.not.this%zper) k=max(this%kmin,min(this%kmax-1,k))
+      !if (.not.this%xper) i=max(this%imin,min(this%imax-1,i))
+      !if (.not.this%yper) j=max(this%jmin,min(this%jmax-1,j))
+      !if (.not.this%zper) k=max(this%kmin,min(this%kmax-1,k))
       ! Prepare tri-linear extrapolation coefficients
       wx1=(pos(1)-this%xm(i))/(this%xm(i+1)-this%xm(i)); wx2=1.0_WP-wx1
       wy1=(pos(2)-this%ym(j))/(this%ym(j+1)-this%ym(j)); wy2=1.0_WP-wy1

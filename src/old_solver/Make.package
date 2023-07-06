@@ -1,8 +1,0 @@
-f90EXE_sources += bbmg_class.f90
-
-ifeq ($(USE_HYPRE),TRUE)
-  f90EXE_sources += ils_class.f90
-endif
-
-INCLUDE_LOCATIONS += $(NGA_HOME)/src/old_solver
-VPATH_LOCATIONS   += $(NGA_HOME)/src/old_solver

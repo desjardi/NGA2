@@ -5,7 +5,7 @@ module mast_class
    use precision,      only: WP
    use string,         only: str_medium
    use config_class,   only: config
-   use ils_class,      only: ils
+   use linsol_class,   only: linsol
    use iterator_class, only: iterator
    implicit none
    private
@@ -156,8 +156,8 @@ module mast_class
       real(WP), dimension(:,:,:), allocatable :: dHpjump ! < Helmholtz pressure jump increment, also used for old Hpjump
 
       ! Visualization arrays
-      real(WP), dimension(:,:,:), allocatable :: divU     !< Dilatation
-      real(WP), dimension(:,:,:), allocatable :: Mach     !< Mach number
+      real(WP), dimension(:,:,:), allocatable :: divU    !< Dilatation
+      real(WP), dimension(:,:,:), allocatable :: Mach    !< Mach number
 
       ! Temporary arrays for a few things
       real(WP), dimension(:,:,:), pointer :: tmp1,tmp2,tmp3
@@ -166,10 +166,11 @@ module mast_class
       real(WP), dimension(:,:,:), pointer :: tmp4,tmp5,tmp6,tmp7,tmp8,tmp9,tmp10
       
       ! Pressure solver
-      type(ils) :: psolv                                  !< Iterative linear solver object for the pressure Helmholtz equation
+      class(linsol), pointer :: psolv                    !< Iterative linear solver object for the pressure Helmholtz equation
       
       ! Implicit momentum solver
-      type(ils) :: implicit                               !< Iterative linear solver object for an implicit prediction of the advection residual
+      class(linsol), pointer :: implicit                 !< Iterative linear solver object for an implicit prediction of the advection residual
+      
       ! Variables to save information for monitor
       integer  :: impl_it_x,   impl_it_y
       real(WP) :: impl_rerr_x, impl_rerr_y
@@ -393,12 +394,6 @@ contains
       
       ! Allocate vfs objects that are required for the MAST solver
       call vf%allocate_supplement()
-      
-      ! Create pressure solver object
-      self%psolv   =ils(cfg=self%cfg,name='Pressure')
-      
-      ! Create implicit velocity solver object
-      self%implicit=ils(cfg=self%cfg,name='Momentum')
       
       ! Prepare default metrics
       call self%init_metrics()
@@ -640,15 +635,18 @@ contains
    
    
    !> Finish setting up the flow solver now that bconds have been defined
-   subroutine setup(this,pressure_ils,implicit_ils)
+   subroutine setup(this,,pressure_solver,implicit_solver)
       implicit none
       class(mast), intent(inout) :: this
-      integer, intent(in) :: pressure_ils
-      integer, intent(in) :: implicit_ils
-      
+      class(linsol), target, intent(in) :: pressure_solver                      !< A pressure solver is required
+      class(linsol), target, intent(in), optional :: implicit_solver            !< An implicit solver can be provided
+
       ! Adjust metrics based on bcflag array
       call this%adjust_metrics()
       
+      ! Point to pressure solver linsol object
+      this%psolv=>pressure_solver
+
       ! Set 7-pt stencil map for the pressure solver
       this%psolv%stc(1,:)=[ 0, 0, 0]
       this%psolv%stc(2,:)=[+1, 0, 0]
@@ -661,9 +659,13 @@ contains
       ! Set the diagonal to VF to make sure all needed cells participate in solver
       this%psolv%opr(1,:,:,:)=this%cfg%VF
       
-      ! Initialize the pressure Poisson solver
-      call this%psolv%init(pressure_ils)
+      ! Initialize the pressure solver
+      call this%psolv%init()
+      call this%psolv%setup()
       
+      ! Point to implicit solver linsol object
+      this%implicit=>implicit_solver
+
       ! Set 7-pt stencil map for the velocity solver
       this%implicit%stc(1,:)=[ 0, 0, 0]
       this%implicit%stc(2,:)=[+1, 0, 0]
@@ -677,7 +679,7 @@ contains
       this%implicit%opr(1,:,:,:)=1.0_WP
       
       ! Initialize the implicit velocity solver
-      call this%implicit%init(implicit_ils)
+      call this%implicit%init()
       
    end subroutine setup
    
