@@ -327,6 +327,7 @@ contains
          call this%mfile%add_column(this%vf%VFmin,'VOF minimum')
          call this%mfile%add_column(this%vf%VFint,'VOF integral')
          call this%mfile%add_column(this%vf%flotsam_error,'Flotsam error')
+         call this%mfile%add_column(this%vf%thinstruct_error,'Film error')
          call this%mfile%add_column(this%vf%SDint,'SD integral')
          call this%mfile%add_column(this%fs%divmax,'Maximum divergence')
          call this%mfile%add_column(this%fs%psolv%it,'Pressure iteration')
