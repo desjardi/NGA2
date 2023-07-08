@@ -1830,6 +1830,9 @@ contains
       integer :: i,j,k,ii,jj,kk,ni
       real(WP) :: fvol,myvol,volume_sensor,surface_sensor
       real(WP), dimension(3) :: fbary,mybary
+      real(WP), dimension(:,:,:)  , allocatable :: s_tmp
+      real(WP), dimension(:,:,:,:), allocatable :: v_tmp
+      real(WP) :: surface_area
       ! Default value is 0
       this%edge_sensor=0.0_WP
       this%edge_normal=0.0_WP
@@ -1886,7 +1889,7 @@ contains
                if (this%thickness(i,j,k).gt.this%thin_thld_max*this%cfg%meshsize(i,j,k)) this%edge_sensor(i,j,k)=0.0_WP
                ! Finally, store edge orientation
                if (this%edge_sensor(i,j,k).gt.0.0_WP) then
-                  this%edge_normal(:,i,j,k)=(fbary-mybary)/norm2(fbary-mybary)
+                  this%edge_normal(:,i,j,k)=(fbary-mybary)/(norm2(fbary-mybary)+epsilon(1.0_WP))
                end if
             end do
          end do
@@ -1894,6 +1897,32 @@ contains
       ! Communicate
       call this%cfg%sync(this%edge_sensor)
       call this%cfg%sync(this%edge_normal)
+      ! Apply an extra step of surface smoothing to our edge info
+      allocate(s_tmp(    this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_)); s_tmp=0.0_WP
+      allocate(v_tmp(1:3,this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_)); v_tmp=0.0_WP
+      do k=this%cfg%kmin_,this%cfg%kmax_
+         do j=this%cfg%jmin_,this%cfg%jmax_
+            do i=this%cfg%imin_,this%cfg%imax_
+               ! Skip wall/bcond/full cells
+               if (this%mask(i,j,k).ne.0) cycle
+               if (this%VF(i,j,k).lt.VFlo.or.this%VF(i,j,k).gt.VFhi) cycle
+               ! Surface-averaged normal magnitude
+               surface_area=0.0_WP
+               do kk=k-1,k+1; do jj=j-1,j+1; do ii=i-1,i+1
+                  surface_area  =  surface_area+this%SD(ii,jj,kk)*this%cfg%vol(ii,jj,kk)
+                  s_tmp  (i,j,k)=s_tmp  (i,j,k)+this%SD(ii,jj,kk)*this%cfg%vol(ii,jj,kk)*this%edge_sensor  (ii,jj,kk)
+                  v_tmp(:,i,j,k)=v_tmp(:,i,j,k)+this%SD(ii,jj,kk)*this%cfg%vol(ii,jj,kk)*this%edge_normal(:,ii,jj,kk)
+               end do; end do; end do
+               if (surface_area.gt.0.0_WP) then
+                  s_tmp  (i,j,k)=s_tmp  (i,j,k)/surface_area
+                  v_tmp(:,i,j,k)=v_tmp(:,i,j,k)/surface_area
+                  v_tmp(:,i,j,k)=v_tmp(:,i,j,k)/(norm2(v_tmp(:,i,j,k))+epsilon(1.0_WP))
+               end if
+            end do
+         end do
+      end do
+      call this%cfg%sync(s_tmp); this%edge_sensor=s_tmp; deallocate(s_tmp)
+      call this%cfg%sync(v_tmp); this%edge_normal=v_tmp; deallocate(v_tmp)
    end subroutine detect_edge_regions
    
    
