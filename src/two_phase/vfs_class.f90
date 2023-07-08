@@ -108,7 +108,7 @@ module vfs_class
       ! Parameters for SGS modeling of thin structures
       logical  :: two_planes                              !< Whether we're using a 2-plane reconstruction approach
       real(WP) :: twoplane_thld1=0.99_WP                  !< Average normal magnitude threshold for r2p to switch from one-plane to two-planes (purely local)
-      real(WP) :: twoplane_thld2=0.5_WP                   !< Average normal magnitude threshold above which r2p switches to LVIRA (based on 3x3x3 stencil)
+      real(WP) :: twoplane_thld2=0.7_WP                   !< Average normal magnitude threshold above which r2p switches to LVIRA (based on 3x3x3 stencil)
       real(WP) :: thin_thld_dotprod=-0.5_WP               !< Maximum dot product of two interface normals for their respective cells to be considered thin region cells
       real(WP) :: thin_thld_max=0.8_WP                    !< Maximum local thickness to be considered a thin region cell (as a factor of mesh size)
       real(WP) :: thin_thld_min=0.0_WP                    !< Minimum local thickness for thin structure removal (0.0=off, as a factor of mesh size)
@@ -374,8 +374,7 @@ contains
       allocate(this%SD   (  this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_)); this%SD   =0.0_WP
       allocate(this%G    (  this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_)); this%G    =0.0_WP
       allocate(this%curv (  this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_)); this%curv =0.0_WP
-      !allocate(this%ligament_sensor(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_)); this%ligament_sensor=0.0_WP
-
+      
       ! Set clipping distance
       this%Gclip=real(distance_band+1,WP)*this%cfg%min_meshsize
       
@@ -1382,13 +1381,14 @@ contains
       implicit none
       class(vfs), intent(inout) :: this
       integer :: i,j,k
-      ! Clean up barycenters everywhere
+      ! Clean up barycenters everywhere - SD too...
       do k=this%cfg%kmino_,this%cfg%kmaxo_
          do j=this%cfg%jmino_,this%cfg%jmaxo_
             do i=this%cfg%imino_,this%cfg%imaxo_
                if (this%VF(i,j,k).lt.VFlo.or.this%VF(i,j,k).gt.VFhi) then
                   this%Lbary(:,i,j,k)=[this%cfg%xm(i),this%cfg%ym(j),this%cfg%zm(k)]
                   this%Gbary(:,i,j,k)=[this%cfg%xm(i),this%cfg%ym(j),this%cfg%zm(k)]
+                  this%SD(i,j,k)=0.0_WP
                end if
             end do
          end do
@@ -1712,7 +1712,7 @@ contains
       ! Identify thin regions
       call this%detect_thin_regions()
       ! Identify edge regions
-      !call this%detect_edge_regions()
+      call this%detect_edge_regions()
    end subroutine sense_interface
    
    
@@ -2288,7 +2288,8 @@ contains
       type(SepVM_type)  , dimension(0:26) :: separated_volume_moments
       type(VMAN_type) :: volume_moments_and_normal
       
-      real(WP) :: surface_area,area
+      !type(R2PWeighting_type) :: r2p_weight
+      real(WP) :: surface_area,area!,l2g_weight
       real(WP), dimension(3) :: surface_norm
       real(WP), dimension(:,:,:), allocatable :: surf_norm_mag,tmp
       
@@ -2298,6 +2299,9 @@ contains
       
       ! Get storage for voluem moments and normal
       call new(volume_moments_and_normal)
+
+      ! Get r2p object for optimization weights
+      !call new(r2p_weight)
       
       ! Give ourselves an R2P and an LVIRA neighborhood of 27 cells along with separated volume moments
       call new(nh_r2p)
@@ -2349,9 +2353,6 @@ contains
          end do
       end do
       call this%cfg%sync(tmp); surf_norm_mag=tmp; deallocate(tmp)
-
-      ! This is purely for testing!!!!
-      this%edge_sensor=surf_norm_mag
       
       ! Traverse domain and reconstruct interface
       do k=this%cfg%kmin_,this%cfg%kmax_
@@ -2468,7 +2469,13 @@ contains
                end if
                
                ! Perform R2P reconstruction
-               call reconstructR2P3D(nh_r2p,this%liquid_gas_interface(i,j,k))
+               !l2g_weight=0.5_WP
+               !if (this%VF(i,j,k).lt.0.1_WP) l2g_weight=1.0_WP
+               !if (this%VF(i,j,k).gt.0.9_WP) l2g_weight=0.0_WP
+               !l2g_weight=min(max(0.5_WP+1.25_WP*(0.5_WP-vf_nbr),0.0_WP),1.0_WP)
+               !call setImportances(r2p_weight,[0.0_WP,l2g_weight,1.0_WP,-1.0_WP])
+               !call setImportances(r2p_weight,[0.0_WP,l2g_weight,1.0_WP,0.0_WP])
+               call reconstructR2P3D(nh_r2p,this%liquid_gas_interface(i,j,k))!,r2p_weight)
                
             end do
          end do
