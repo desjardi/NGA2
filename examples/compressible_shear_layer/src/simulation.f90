@@ -441,30 +441,30 @@ contains
          end do
 
          ! Set velocity potential perturbation
-         mode_low = 5; nwave=71
+         mode_low = 5; nwave=12
          allocate(wnumbX(nwave),wshiftX(nwave))
          if (cfg%amRoot) then
-            do n=1,nwave
+            do n=1,nwave-mode_low
                wnumbX(n)=(mode_low+n-1)*twoPi/cfg%xL
                wshiftX(n)=random_uniform(lo=0.0_WP,hi=twoPi)
             end do
          end if
-         call MPI_BCAST(wshiftX,nwave,MPI_REAL_WP,0,cfg%comm,ierr)
-         call MPI_BCAST(wnumbX,nwave,MPI_REAL_WP,0,cfg%comm,ierr)
+         call MPI_BCAST(wshiftX,nwave-mode_low,MPI_REAL_WP,0,cfg%comm,ierr)
+         call MPI_BCAST(wnumbX,nwave-mode_low,MPI_REAL_WP,0,cfg%comm,ierr)
          allocate(wnumbZ(nwave),wshiftZ(nwave))
          if (cfg%amRoot) then
-            do n=1,nwave
+            do n=1,nwave-mode_low
                wnumbZ(n)=(mode_low+n-1)*twoPi/cfg%zL
                wshiftZ(n)=random_uniform(lo=0.0_WP,hi=twoPi)
             end do
          end if
-         call MPI_BCAST(wshiftZ,nwave,MPI_REAL_WP,0,cfg%comm,ierr)
-         call MPI_BCAST(wnumbZ,nwave,MPI_REAL_WP,0,cfg%comm,ierr)
+         call MPI_BCAST(wshiftZ,nwave-mode_low,MPI_REAL_WP,0,cfg%comm,ierr)
+         call MPI_BCAST(wnumbZ,nwave-mode_low,MPI_REAL_WP,0,cfg%comm,ierr)
 
          do k=fs%cfg%kmino_,fs%cfg%kmaxo_
             do j=fs%cfg%jmino_,fs%cfg%jmaxo_
                do i=fs%cfg%imino_,fs%cfg%imaxo_
-                  do n=1,nwave
+                  do n=1,nwave-mode_low
                   fs%Ui(i,j,k)=fs%Ui(i,j,k) + 0.15_WP/(4.0_WP*Pi**2.0_WP*wnumbX(n)*wnumbZ(n))*wnumbX(n)*sin(wnumbX(n)*fs%cfg%xm(i)+wshiftX(n)) &
                   *cos(wnumbZ(n)*fs%cfg%zm(k) + wshiftZ(n))*EXP(-5.0_WP*fs%cfg%ym(j)**2.0_WP)*(sin(fs%cfg%ym(j))+10.0_WP*fs%cfg%ym(j)*cos(fs%cfg%ym(j))) 
 
@@ -482,8 +482,8 @@ contains
          do k=vf%cfg%kmino_,vf%cfg%kmaxo_
             do j=vf%cfg%jmino_,vf%cfg%jmaxo_
                do i=vf%cfg%imino_,vf%cfg%imaxo_
-                  fs%GrhoE(i,j,k) = matmod%EOS_energy(GP,Grho,fs%Ui(i,j,k),0.0_WP,0.0_WP,'gas')
-                  fs%LrhoE(i,j,k) = matmod%EOS_energy(LP,Lrho,fs%Ui(i,j,k),0.0_WP,0.0_WP,'liquid')
+                  fs%GrhoE(i,j,k) = matmod%EOS_energy(GP,Grho,fs%Ui(i,j,k),fs%Vi(i,j,k),fs%Wi(i,j,k),'gas')
+                  fs%LrhoE(i,j,k) = matmod%EOS_energy(LP,Lrho,fs%Ui(i,j,k),fs%Vi(i,j,k),fs%Wi(i,j,k),'liquid')
                end do
             end do
          end do
@@ -585,8 +585,6 @@ contains
          ! Perform the output
          ! if (ppevt%occurs()) call growth_rate()
       end block create_postproc 
-
-
 
    end subroutine simulation_init
 
