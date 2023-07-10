@@ -178,7 +178,7 @@ contains
       call vf%remove_flotsams()
       call vf%advect_interface(0.0_WP,fs%U,fs%V,fs%W)
       call vf%build_interface()
-      call vf%remove_sheets()
+      call vf%remove_thinstruct()
       call vf%polygonalize_interface()
       call vf%subcell_vol()
       call vf%get_curvature()
