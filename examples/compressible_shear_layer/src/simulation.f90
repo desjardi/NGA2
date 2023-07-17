@@ -149,7 +149,7 @@ contains
                end if
                if (in_sponge_btm) then
                   ! Get sponge solution if within a sponge
-                  psponge = LP
+                  psponge = GP
                   rhos = Lrho
                   us = -r_vel; ws = 0.0_WP; vs = 0.0_WP
                   ! Apply changes to variables
@@ -383,8 +383,12 @@ contains
          use parallel,        only: MPI_REAL_WP
          use mpi_f08
          integer :: i,j,k,n,ierr
-         real(WP) :: gamm_l,gamm_g,visc_l,visc_g
+         real(WP) :: gamm_l,gamm_g,visc_l,visc_g,cv_g,cv_l,T
          real(WP) :: Ma_g,Ma_l
+         real(WP) :: diffx_left,diffx_right,diffy_left,diffy_right,diffz_left,diffz_right
+         real(WP), dimension(:,:,:), allocatable :: Upert,Vpert,Wpert
+         real(WP), dimension(:), allocatable :: test
+
          ! Create material model class
          matmod=matm(cfg=cfg,name='Liquid-gas models')
          ! Get nondimensional parameters from input
@@ -394,8 +398,8 @@ contains
          call param_read('Viscosity ratio',r_visc); visc_l=r_visc*visc_g
          call param_read('Density ratio',r_rho); Grho=1.0_WP; Lrho=r_rho*Grho
          call param_read('Velocity ratio',r_vel); delta_l=r_visc*r_vel
-         call param_read('Gas Mach number',Ma_g); LP = 1.0_WP/(gamm_g*Ma_g**2.0_WP); GP = 1.0_WP/(gamm_g*Ma_g**2.0_WP)
-         call param_read('Liquid Mach number',Ma_l); Pref_l = ((r_rho*r_vel**2)/(gamm_l*Ma_l**2.0_WP)) - LP
+         call param_read('Gas Mach number',Ma_g); GP = 1.0_WP/(gamm_g*Ma_g**2.0_WP)
+         call param_read('Liquid Mach number',Ma_l); Pref_l = ((r_rho*r_vel**2)/(gamm_l*Ma_l**2.0_WP)) - GP
          ! Register equations of state
          call matmod%register_stiffenedgas('liquid',gamm_l,Pref_l)
          call matmod%register_idealgas('gas',gamm_g)
@@ -406,7 +410,7 @@ contains
          call matmod%register_thermoflow_variables('gas'   ,fs%Grho,fs%Ui,fs%Vi,fs%Wi,fs%GrhoE,fs%GP)
          call matmod%register_diffusion_thermo_models(viscconst_gas=visc_g,viscconst_liquid=visc_l)
          ! Set initial fields
-         fs%Lrho = Lrho; fs%Grho = Grho; fs%LP = LP; fs%GP = GP
+         fs%Lrho = Lrho; fs%Grho = Grho; fs%LP = GP; fs%GP = GP
          ! Read in necessary geometry
          call param_read('Sponge length',Ls)
          call param_read('Liquid Ly',Lyl)
@@ -423,7 +427,6 @@ contains
          call param_read('Implicit tolerance',vs%rcvg)
          ! Setup the solver
          call fs%setup(pressure_solver=ps,implicit_solver=vs)
-
          ! Set initial velocity field
          fs%Ui=0.0_WP; fs%Vi=0.0_WP; fs%Wi=0.0_WP
          do k=fs%cfg%kmino_,fs%cfg%kmaxo_
@@ -440,8 +443,78 @@ contains
             end do
          end do
 
+         ! ! Allocate velocity potential perturbations for central differencing
+         ! allocate(Upert(fs%cfg%imino_:fs%cfg%imaxo_,fs%cfg%jmino_:fs%cfg%jmaxo_,fs%cfg%kmino_:fs%cfg%kmaxo_))
+         ! allocate(Vpert(fs%cfg%imino_:fs%cfg%imaxo_,fs%cfg%jmino_:fs%cfg%jmaxo_,fs%cfg%kmino_:fs%cfg%kmaxo_))
+         ! allocate(Wpert(fs%cfg%imino_:fs%cfg%imaxo_,fs%cfg%jmino_:fs%cfg%jmaxo_,fs%cfg%kmino_:fs%cfg%kmaxo_))
+         ! Upert=0.0_WP;Vpert=0.0_WP;Wpert=0.0_WP
+
+         ! ! Set velocity potential perturbation
+         ! mode_low = 1; nwave=6
+         ! allocate(wnumbX(nwave),wshiftX(nwave))
+         ! if (cfg%amRoot) then
+         !    do n=1,nwave-mode_low
+         !       wnumbX(n)=(mode_low+n-1)*twoPi/cfg%xL
+         !       wshiftX(n)=random_uniform(lo=0.0_WP,hi=twoPi)
+         !    end do
+         ! end if
+         ! call MPI_BCAST(wshiftX,nwave-mode_low,MPI_REAL_WP,0,cfg%comm,ierr)
+         ! call MPI_BCAST(wnumbX,nwave-mode_low,MPI_REAL_WP,0,cfg%comm,ierr)
+         ! allocate(wnumbZ(nwave),wshiftZ(nwave))
+         ! if (cfg%amRoot) then
+         !    do n=1,nwave-mode_low
+         !       wnumbZ(n)=(mode_low+n-1)*twoPi/cfg%zL
+         !       wshiftZ(n)=random_uniform(lo=0.0_WP,hi=twoPi)
+         !    end do
+         ! end if
+         ! call MPI_BCAST(wshiftZ,nwave-mode_low,MPI_REAL_WP,0,cfg%comm,ierr)
+         ! call MPI_BCAST(wnumbZ,nwave-mode_low,MPI_REAL_WP,0,cfg%comm,ierr)
+
+         ! do k=fs%cfg%kmin_,fs%cfg%kmax_
+         !    do j=fs%cfg%jmin_,fs%cfg%jmax_
+         !       do i=fs%cfg%imin_,fs%cfg%imax_
+         !          do n=1,nwave-mode_low
+         !             diffx_left = - 0.15_WP/(4.0_WP*Pi**2.0_WP*wnumbX(n)*wnumbZ(n))&
+         !             *cos(wnumbX(n)*fs%cfg%xm(i-1) + wshiftX(n))*cos(wnumbZ(n)*fs%cfg%zm(k) + wshiftZ(n))&
+         !             *EXP(-5.0_WP*fs%cfg%ym(j)**2.0_WP)*(sin(fs%cfg%ym(j))+10.0_WP*fs%cfg%ym(j)*cos(fs%cfg%ym(j)))
+
+         !             diffx_right = - 0.15_WP/(4.0_WP*Pi**2.0_WP*wnumbX(n)*wnumbZ(n))&
+         !             *cos(wnumbX(n)*fs%cfg%xm(i+1) + wshiftX(n))*cos(wnumbZ(n)*fs%cfg%zm(k) + wshiftZ(n))&
+         !             *EXP(-5.0_WP*fs%cfg%ym(j)**2.0_WP)*(sin(fs%cfg%ym(j))+10.0_WP*fs%cfg%ym(j)*cos(fs%cfg%ym(j)))
+
+         !             Upert(i,j,k) = Upert(i,j,k) + (diffx_right - diffx_left)/(2.0_WP*fs%cfg%dx(i))
+
+         !             diffy_left = - 0.15_WP/(4.0_WP*Pi**2.0_WP*wnumbX(n)*wnumbZ(n))&
+         !             *cos(wnumbX(n)*fs%cfg%xm(i) + wshiftX(n))*cos(wnumbZ(n)*fs%cfg%zm(k) + wshiftZ(n))&
+         !             *EXP(-5.0_WP*fs%cfg%ym(j-1)**2.0_WP)*(sin(fs%cfg%ym(j-1))+10.0_WP*fs%cfg%ym(j-1)*cos(fs%cfg%ym(j-1)))
+
+         !             diffy_right = - 0.15_WP/(4.0_WP*Pi**2.0_WP*wnumbX(n)*wnumbZ(n))&
+         !             *cos(wnumbX(n)*fs%cfg%xm(i) + wshiftX(n))*cos(wnumbZ(n)*fs%cfg%zm(k) + wshiftZ(n))&
+         !             *EXP(-5.0_WP*fs%cfg%ym(j+1)**2.0_WP)*(sin(fs%cfg%ym(j+1))+10.0_WP*fs%cfg%ym(j+1)*cos(fs%cfg%ym(j+1)))
+
+         !             Vpert(i,j,k) = Vpert(i,j,k) + (diffy_right - diffy_left)/(2.0_WP*fs%cfg%dy(j))
+
+         !             diffz_left = - 0.15_WP/(4.0_WP*Pi**2.0_WP*wnumbX(n)*wnumbZ(n))&
+         !             *cos(wnumbX(n)*fs%cfg%xm(i) + wshiftX(n))*cos(wnumbZ(n)*fs%cfg%zm(k-1) + wshiftZ(n))&
+         !             *EXP(-5.0_WP*fs%cfg%ym(j)**2.0_WP)*(sin(fs%cfg%ym(j))+10.0_WP*fs%cfg%ym(j)*cos(fs%cfg%ym(j)))
+
+         !             diffz_right = - 0.15_WP/(4.0_WP*Pi**2.0_WP*wnumbX(n)*wnumbZ(n))&
+         !             *cos(wnumbX(n)*fs%cfg%xm(i) + wshiftX(n))*cos(wnumbZ(n)*fs%cfg%zm(k+1) + wshiftZ(n))&
+         !             *EXP(-5.0_WP*fs%cfg%ym(j)**2.0_WP)*(sin(fs%cfg%ym(j))+10.0_WP*fs%cfg%ym(j)*cos(fs%cfg%ym(j)))
+                     
+         !             Wpert(i,j,k) = Wpert(i,j,k) + (diffz_right - diffz_left)/(2.0_WP*fs%cfg%dz(k))
+         !          end do
+         !       end do
+         !    end do
+         ! end do
+
+         ! fs%Ui = fs%Ui + Upert
+         ! fs%Vi = fs%Vi + Vpert
+         ! fs%Wi = fs%Wi + Wpert
+
+
          ! Set velocity potential perturbation
-         mode_low = 5; nwave=12
+         mode_low = 1; nwave=20
          allocate(wnumbX(nwave),wshiftX(nwave))
          if (cfg%amRoot) then
             do n=1,nwave-mode_low
@@ -482,8 +555,13 @@ contains
          do k=vf%cfg%kmino_,vf%cfg%kmaxo_
             do j=vf%cfg%jmino_,vf%cfg%jmaxo_
                do i=vf%cfg%imino_,vf%cfg%imaxo_
-                  fs%GrhoE(i,j,k) = matmod%EOS_energy(GP,Grho,fs%Ui(i,j,k),fs%Vi(i,j,k),fs%Wi(i,j,k),'gas')
-                  fs%LrhoE(i,j,k) = matmod%EOS_energy(LP,Lrho,fs%Ui(i,j,k),fs%Vi(i,j,k),fs%Wi(i,j,k),'liquid')
+                  if (fs%cfg%ym(j).le.0.0_WP) then
+                     fs%LrhoE(i,j,k) = matmod%EOS_energy(GP,Lrho,fs%Ui(i,j,k),fs%Vi(i,j,k),fs%Wi(i,j,k),'liquid')
+                     fs%LP(i,j,k) = matmod%EOS_liquid(i,j,k,'p')
+                  else
+                     fs%GrhoE(i,j,k) = matmod%EOS_energy(GP,Grho,fs%Ui(i,j,k),fs%Vi(i,j,k),fs%Wi(i,j,k),'gas')
+                     fs%GP(i,j,k) = matmod%EOS_gas(i,j,k,'p')
+                  end if
                end do
             end do
          end do
@@ -491,7 +569,8 @@ contains
          ! Define BCs at top and bottom - though sponges will determine bdy behavior
          call fs%add_bcond(name='top_y'   ,type=clipped_neumann,locator=top_of_domain  ,celldir='yp')
          call fs%add_bcond(name='btm_y'   ,type=clipped_neumann,locator=btm_of_domain  ,celldir='ym')
-
+         ! Calculate face velocities
+         call fs%interp_vel_basic(vf,fs%Ui,fs%Vi,fs%Wi,fs%U,fs%V,fs%W)
          ! Use mechanical energy relaxation
          relax_model = mech_egy_mech_hhz
          ! Calculate mixture density and momenta
@@ -505,8 +584,6 @@ contains
          call fs%harmonize_advpressure_bulkmod(vf,matmod)
          ! Set initial pressure to harmonized field based on internal energy
          fs%P = fs%PA
-         ! Calculate initial temperature
-         call matmod%update_temperature(vf,fs%Tmptr)
          ! Initialize first guess for pressure (0 works best)
          fs%psolv%sol=0.0_WP
       end block create_and_initialize_flow_solver
@@ -521,20 +598,21 @@ contains
          call param_read('Ensight output period',ens_evt%tper)
          ! Add variables to output
          call ens_out%add_vector('velocity',fs%Ui,fs%Vi,fs%Wi)
-         ! call ens_out%add_scalar('L_Pres',fs%LP)
-         ! call ens_out%add_scalar('G_Pres',fs%GP)
-         ! call ens_out%add_scalar('L_Energy',fs%LrhoE)
-         ! call ens_out%add_scalar('G_Energy',fs%GrhoE)
-         ! call ens_out%add_scalar('PA',fs%PA)
+         call ens_out%add_scalar('L_Pres',fs%LP)
+         call ens_out%add_scalar('G_Pres',fs%GP)
+         call ens_out%add_scalar('L_Energy',fs%LrhoE)
+         call ens_out%add_scalar('G_Energy',fs%GrhoE)
+         call ens_out%add_scalar('PA',fs%PA)
          call ens_out%add_scalar('P',fs%P)
          call ens_out%add_scalar('Grho',fs%Grho)
-         ! call ens_out%add_scalar('Lrho',fs%Lrho)
+         call ens_out%add_scalar('Lrho',fs%Lrho)
          call ens_out%add_scalar('Density',fs%RHO)
          call ens_out%add_vector('Momentum',fs%rhoUi,fs%rhoVi,fs%rhoWi)
          call ens_out%add_scalar('VOF',vf%VF)
          call ens_out%add_scalar('curvature',vf%curv)
          call ens_out%add_scalar('Mach',fs%Mach)
-         ! call ens_out%add_scalar('BulkMod',fs%RHOSS2)
+         call ens_out%add_scalar('BulkMod',fs%RHOSS2)
+         call ens_out%add_scalar('Temp',fs%Tmptr)
          ! Output to ensight
          if (ens_evt%occurs()) call ens_out%write_data(time%t)
       end block create_ensight
