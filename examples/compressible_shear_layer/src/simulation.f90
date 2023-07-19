@@ -40,7 +40,7 @@ module simulation
    integer :: nwaveX,nwaveZ,nwave,mode_low
    real(WP), dimension(:), allocatable :: wnumbX,wshiftX,wampX,wnumbZ,wshiftZ,wampZ
    type(event) :: ppevt
-   integer :: iunit
+   integer :: junit
    character(len=str_medium) :: filename,timestamp
 
 
@@ -191,8 +191,9 @@ contains
       use mpi_f08,    only: MPI_ALLREDUCE,MPI_SUM 
       use parallel,   only: MPI_REAL_WP 
       use param,      only: param_read
+      use string,     only: str_medium
       implicit none
-      integer :: i,j,k,ierr,nproc,nx,nz
+      integer :: i,j,k,ierr,iunit
       real(WP), dimension(:), allocatable :: localrho,  totalrho
       real(WP), dimension(:), allocatable :: localrhoU, totalrhoU
       real(WP), dimension(:), allocatable :: localrhoV, totalrhoV
@@ -201,88 +202,118 @@ contains
       real(WP), dimension(:), allocatable :: localrhoUU, totalrhoUU
       real(WP), dimension(:), allocatable :: localrhoVV, totalrhoVV
       real(WP), dimension(:), allocatable :: localrhoUV, totalrhoUV
-      real(WP) :: localdmthick, totaldmthick
-      ! Get number of processes
-      call MPI_COMM_SIZE(fs%cfg%comm,nproc)
-      ! Get x and z dimensions
-      call param_read('nx',nx)
-      call param_read('nz',nz)
+      real(WP), dimension(:), allocatable :: localU, totalU
+      real(WP), dimension(:), allocatable :: localV, totalV
+      real(WP), dimension(:), allocatable :: dudy_favre,dudy_mean
+      real(WP) :: localdmthick,totaldmthick,grate,totaldwthick
+      character(len=str_medium) :: filename,timestamp
       ! Allocate and initialize to zero
-      allocate(localvol(fs%cfg%jmin:fs%cfg%jmax)); localvol=0.0_WP
-      allocate(totalvol(fs%cfg%jmin:fs%cfg%jmax)); totalvol=0.0_WP
-      allocate(localrho(fs%cfg%jmin:fs%cfg%jmax)); localrho=0.0_WP
-      allocate(totalrho(fs%cfg%jmin:fs%cfg%jmax)); totalrho=0.0_WP
-      allocate(localrhoU(fs%cfg%jmin:fs%cfg%jmax)); localrhoU=0.0_WP
-      allocate(totalrhoU(fs%cfg%jmin:fs%cfg%jmax)); totalrhoU=0.0_WP
-      allocate(localrhoV(fs%cfg%jmin:fs%cfg%jmax)); localrhoV=0.0_WP
-      allocate(totalrhoV(fs%cfg%jmin:fs%cfg%jmax)); totalrhoV=0.0_WP
+      allocate(localvol(fs%cfg%jmin:fs%cfg%jmax));   localvol=0.0_WP
+      allocate(totalvol(fs%cfg%jmin:fs%cfg%jmax));   totalvol=0.0_WP
+      allocate(localrho(fs%cfg%jmin:fs%cfg%jmax));   localrho=0.0_WP
+      allocate(totalrho(fs%cfg%jmin:fs%cfg%jmax));   totalrho=0.0_WP
+      allocate(localrhoU(fs%cfg%jmin:fs%cfg%jmax));  localrhoU=0.0_WP
+      allocate(totalrhoU(fs%cfg%jmin:fs%cfg%jmax));  totalrhoU=0.0_WP
+      allocate(localrhoV(fs%cfg%jmin:fs%cfg%jmax));  localrhoV=0.0_WP
+      allocate(totalrhoV(fs%cfg%jmin:fs%cfg%jmax));  totalrhoV=0.0_WP
       allocate(localrhoUU(fs%cfg%jmin:fs%cfg%jmax)); localrhoUU=0.0_WP
       allocate(totalrhoUU(fs%cfg%jmin:fs%cfg%jmax)); totalrhoUU=0.0_WP
       allocate(localrhoVV(fs%cfg%jmin:fs%cfg%jmax)); localrhoVV=0.0_WP
       allocate(totalrhoVV(fs%cfg%jmin:fs%cfg%jmax)); totalrhoVV=0.0_WP
       allocate(localrhoUV(fs%cfg%jmin:fs%cfg%jmax)); localrhoUV=0.0_WP
       allocate(totalrhoUV(fs%cfg%jmin:fs%cfg%jmax)); totalrhoUV=0.0_WP
-      allocate(localmass(fs%cfg%jmin:fs%cfg%jmax)); localmass=0.0_WP
-      allocate(totalmass(fs%cfg%jmin:fs%cfg%jmax)); totalmass=0.0_WP
-      localdmthick=0.0_WP
-      totaldmthick=0.0_WP
+      allocate(localmass(fs%cfg%jmin:fs%cfg%jmax));  localmass=0.0_WP
+      allocate(totalmass(fs%cfg%jmin:fs%cfg%jmax));  totalmass=0.0_WP
+      allocate(dudy_favre(fs%cfg%jmin:fs%cfg%jmax)); dudy_favre=0.0_WP
+      allocate(dudy_mean(fs%cfg%jmin:fs%cfg%jmax));  dudy_mean=0.0_WP
+      allocate(localU(fs%cfg%jmin:fs%cfg%jmax));     localU=0.0_WP
+      allocate(totalU(fs%cfg%jmin:fs%cfg%jmax));     totalU=0.0_WP
+      allocate(localV(fs%cfg%jmin:fs%cfg%jmax));     localV=0.0_WP
+      allocate(totalV(fs%cfg%jmin:fs%cfg%jmax));     totalV=0.0_WP
+      localdmthick=0.0_WP;totaldmthick=0.0_WP;grate=0.0_WP;
       ! Calculate spatial averages
       do k=fs%cfg%kmin_,fs%cfg%kmax_
          do j=fs%cfg%jmin_,fs%cfg%jmax_
             do i=fs%cfg%imin_,fs%cfg%imax_
                localmass(j) = localmass(j) + fs%RHO(i,j,k)*fs%cfg%dx(i)*fs%cfg%dy(j)*fs%cfg%dz(k)
-               localvol(j) = localvol(j) + fs%cfg%dx(i)*fs%cfg%dy(j)*fs%cfg%dz(k)
-               localrhoU(j) = localrhoU(j) + fs%RHO(i,j,k)!*fs%Ui(i,j,k)*fs%cfg%dx(i)*fs%cfg%dy(j)*fs%cfg%dz(k)
+               localvol(j)  = localvol(j) + fs%cfg%dx(i)*fs%cfg%dy(j)*fs%cfg%dz(k)
+               localrhoU(j) = localrhoU(j) + fs%RHO(i,j,k)*fs%Ui(i,j,k)*fs%cfg%dx(i)*fs%cfg%dy(j)*fs%cfg%dz(k)
                localrhoV(j) = localrhoV(j) + fs%RHO(i,j,k)*fs%Vi(i,j,k)*fs%cfg%dx(i)*fs%cfg%dy(j)*fs%cfg%dz(k)
+               localU(j)    = localU(j) + fs%Ui(i,j,k)*fs%cfg%dx(i)*fs%cfg%dy(j)*fs%cfg%dz(k)
+               localV(j)    = localV(j) + fs%Vi(i,j,k)*fs%cfg%dx(i)*fs%cfg%dy(j)*fs%cfg%dz(k)
             end do
          end do
       end do
-      ! localrho = localmass / localvol
-      ! localrho = localrho/localvol
-      ! localrhoU = localrhoU/localvol
-      ! localrhoV = localrhoV/localvol
-      ! localrhoW = localrhoW/localvol
       ! All-reduce the data
-      ! call MPI_ALLREDUCE(localrho,totalrho,fs%cfg%ny,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr)
       call MPI_ALLREDUCE(localmass,totalmass,fs%cfg%ny,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr)
       call MPI_ALLREDUCE(localvol,totalvol,fs%cfg%ny,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr)
       call MPI_ALLREDUCE(localrhoU,totalrhoU,fs%cfg%ny,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr)
       call MPI_ALLREDUCE(localrhoV,totalrhoV,fs%cfg%ny,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr)
-      totalrho = totalmass/totalvol
-      ! totalrhoU = totalrhoU/totalvol
-      ! totalrhoV = totalrhoV/totalvol
-      ! totalrho  = totalrho/totalvol
-      ! totalrhoU = totalrhoU/totalvol
-      ! totalrhoV = totalrhoV/totalvol
-      ! totalrhoW = totalrhoW/totalvol
-      ! totalrho  = totalrho/(nx*nz)
-      totalrhoU = totalrhoU/(nx*nz)
-      ! print*, totalrhoU
-      ! totalrhoV = totalrhoV/(nx*nz)
-      ! totalrhoW = totalrhoW/(nx*nz)
+      call MPI_ALLREDUCE(localU,totalU,fs%cfg%ny,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr)
+      call MPI_ALLREDUCE(localV,totalV,fs%cfg%ny,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr)
+      totalrho  = totalmass/totalvol
+      totalrhoU = totalrhoU/totalvol
+      totalrhoV = totalrhoV/totalvol
+      totalU    = totalU/totalvol
+      totalV    = totalV/totalvol
       ! Calculate Momentum thickness
       do j=fs%cfg%jmin_,fs%cfg%jmax_
-         localdmthick = localdmthick + (totalrho(j)*(1.0_WP - (totalrhoU(j)/totalrho(j)))*((totalrhoU(j)/totalrho(j)) + r_vel))*vf%cfg%dy(j)
+         ! localdmthick = localdmthick + (totalrho(j)*(1.0_WP - (totalrhoU(j)/totalrho(j)))*((totalrhoU(j)/totalrho(j)) + r_vel))*vf%cfg%dy(j)
+         ! localdmthick = localdmthick + (1.0_WP/(totalrho(j)*(1.0_WP+r_vel)))*(totalrho(j)*(1.0_WP - (totalrhoU(j)/totalrho(j)))*((totalrhoU(j)/totalrho(j)) + r_vel))*vf%cfg%dy(j)
+         totaldmthick = totaldmthick + (1.0_WP/(totalrho(j)*(1.0_WP+r_vel)**2.0_WP))*(totalrho(j)*(1.0_WP - (totalrhoU(j)/totalrho(j)))*((totalrhoU(j)/totalrho(j)) + r_vel))*vf%cfg%dy(j)
+         ! totaldmthick = totaldmthick + (totalrho(j)*(1.0_WP - (totalrhoU(j)/totalrho(j)))*((totalrhoU(j)/totalrho(j)) + r_vel))*vf%cfg%dy(j)
+         ! totaldmthick = totaldmthick + (1.0_WP/(totalrho(j)*totalU(j)**2.0_WP))*(totalrho(j)*(1.0_WP - (totalrhoU(j)/totalrho(j)))*((totalrhoU(j)/totalrho(j)) + r_vel))*vf%cfg%dy(j)
       end do
+      ! Calculate vorticity thickness
+      do j=fs%cfg%jmin_+1,fs%cfg%jmax_-1
+         dudy_mean(j) = ABS((totalU(j+1) - totalU(j-1))/(2.0_WP*fs%cfg%dy(j)))
+      end do
+      totaldwthick = (1.0_WP + r_vel) / MAXVAL(dudy_mean)
       ! Calculate Reynolds Stresses
       do k=fs%cfg%kmin_,fs%cfg%kmax_
          do j=fs%cfg%jmin_,fs%cfg%jmax_
             do i=fs%cfg%imin_,fs%cfg%imax_
-               localrhoUU(j) = localrhoUU(j) + fs%RHO(i,j,k)*(fs%Ui(i,j,k) - totalrhoU(j)/totalrho(j))**2*vf%cfg%dy(j)
-               localrhoVV(j) = localrhoVV(j) + fs%RHO(i,j,k)*(fs%Vi(i,j,k) - totalrhoV(j)/totalrho(j))**2*vf%cfg%dy(j)
+               localrhoUU(j) = localrhoUU(j) + fs%RHO(i,j,k)*(fs%Ui(i,j,k) - totalrhoU(j)/totalrho(j))**2 &
+                  *fs%cfg%dx(i)*fs%cfg%dy(j)*fs%cfg%dz(k)
+               localrhoVV(j) = localrhoVV(j) + fs%RHO(i,j,k)*(fs%Vi(i,j,k) - totalrhoV(j)/totalrho(j))**2 &
+                  *fs%cfg%dx(i)*fs%cfg%dy(j)*fs%cfg%dz(k)
                localrhoUV(j) = localrhoUV(j) + fs%RHO(i,j,k)*(fs%Ui(i,j,k) - totalrhoU(j)/totalrho(j)) &
-                  *(fs%Vi(i,j,k) - totalrhoV(j)/totalrho(j))*vf%cfg%dy(j)
+                  *(fs%Vi(i,j,k) - totalrhoV(j)/totalrho(j))*fs%cfg%dx(i)*fs%cfg%dy(j)*fs%cfg%dz(k)
             end do
          end do
       end do
+      do j=fs%cfg%jmin_+1,fs%cfg%jmax_-1
+         dudy_favre(j) = ((totalrhoU(j+1)/totalrho(j+1)) - (totalrhoU(j-1)/totalrho(j-1)))/(2.0_WP*fs%cfg%dy(j))
+      end do
       ! All-reduce the data
-      call MPI_ALLREDUCE(localdmthick,totaldmthick,1,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr)
-      call MPI_ALLREDUCE(localrhoUU,totalrhoUU,1,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr)
-      call MPI_ALLREDUCE(localrhoVV,totalrhoVV,1,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr)
-      call MPI_ALLREDUCE(localrhoUV,totalrhoUV,1,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr)
+      ! call MPI_ALLREDUCE(localdmthick,totaldmthick,1,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr)
+      call MPI_ALLREDUCE(localrhoUU,totalrhoUU,fs%cfg%ny,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr)
+      call MPI_ALLREDUCE(localrhoVV,totalrhoVV,fs%cfg%ny,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr)
+      call MPI_ALLREDUCE(localrhoUV,totalrhoUV,fs%cfg%ny,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr)
+      totalrhoUU = totalrhoUU/totalvol
+      totalrhoVV = totalrhoVV/totalvol
+      totalrhoUV = totalrhoUV/totalvol
+      ! Calculate Growth Rate
+      do j=fs%cfg%jmin_,fs%cfg%jmax_
+         ! grate = grate - (totalrhoUV(j)*dudy_favre(j))*vf%cfg%dy(j)
+         grate = grate - (2.0_WP/(totalrho(j)*(1.0_WP+r_vel)**2))*(totalrhoUV(j)*dudy_favre(j+3))*vf%cfg%dy(j)
+      end do
       ! If root, print it out
       if (fs%cfg%amRoot) then
-         write(iunit,'(es12.5,3x,es12.5,3x)') time%t,totaldmthick
+         ! Momentum thickness and growth rate
+         write(junit,'(es12.5,3x,es12.5,3x,es12.5,3x,es12.5)') time%t,totaldmthick,totaldwthick,grate
+         ! Reynolds Stresses
+         call execute_command_line('mkdir -p PostProc')
+         filename='PostProc_'
+         write(timestamp,'(f6.1)') time%t
+         open(newunit=iunit,file='PostProc/'//trim(adjustl(filename))//trim(adjustl(timestamp)),form='formatted',status='replace',access='stream',iostat=ierr)
+         write(iunit,'(a12,3x,a12,3x,a12,3x,a12,3x,a12,3x,a12,3x,a12,3x,a12,3x,a12,3x,a12,3x,a12)') &
+            'Height','totalrho','totalrhoU','totalrhoV','totalU','totalV','R11','R22','R12','dudy_favre','dudy_mean'
+         do j=fs%cfg%jmin_,fs%cfg%jmax_
+            write(iunit,'(es12.5,3x,es12.5,3x,es12.5,3x,es12.5,3x,es12.5,3x,es12.5,3x,es12.5,3x,es12.5,3x,es12.5,3x,es12.5,3x,es12.5)') & 
+               fs%cfg%ym(j),totalrho(j),totalrhoU(j),totalrhoV(j),totalU(j),totalV(j),totalrhoUU(j),totalrhoVV(j),totalrhoUV(j),dudy_favre(j),dudy_mean(j)
+         end do
+         close(iunit)
       end if
       ! Deallocate work arrays
       deallocate(localrho,totalrho)
@@ -293,6 +324,9 @@ contains
       deallocate(localrhoVV,totalrhoVV)
       deallocate(localrhoUV,totalrhoUV)
       deallocate(localmass,totalmass)
+      deallocate(dudy_favre,dudy_mean)
+      deallocate(localU,totalU)
+      deallocate(localV,totalV)
    end subroutine growth_rate
 
 
@@ -381,7 +415,7 @@ contains
          use string,          only: str_medium
          use random,          only: random_uniform
          use parallel,        only: MPI_REAL_WP
-         use mpi_f08
+         use mpi_f08,         only: MPI_BCAST
          integer :: i,j,k,n,ierr
          real(WP) :: gamm_l,gamm_g,visc_l,visc_g,cv_g,cv_l,T
          real(WP) :: Ma_g,Ma_l
@@ -514,7 +548,7 @@ contains
 
 
          ! Set velocity potential perturbation
-         mode_low = 1; nwave=20
+         mode_low = 3; nwave=20
          allocate(wnumbX(nwave),wshiftX(nwave))
          if (cfg%amRoot) then
             do n=1,nwave-mode_low
@@ -586,6 +620,12 @@ contains
          fs%P = fs%PA
          ! Initialize first guess for pressure (0 works best)
          fs%psolv%sol=0.0_WP
+         ! Store momentum thickness results
+         if (fs%cfg%amRoot) then
+            open(newunit=junit,file='thickness.csv',status='unknown')
+            write(junit,'(a12,3x,a12,3x,a12,3x,a12)') 'Time','d_m','d_w','Growth Rate'
+         end if
+         call growth_rate
       end block create_and_initialize_flow_solver
 
 
@@ -600,9 +640,9 @@ contains
          call ens_out%add_vector('velocity',fs%Ui,fs%Vi,fs%Wi)
          call ens_out%add_scalar('L_Pres',fs%LP)
          call ens_out%add_scalar('G_Pres',fs%GP)
-         call ens_out%add_scalar('L_Energy',fs%LrhoE)
-         call ens_out%add_scalar('G_Energy',fs%GrhoE)
-         call ens_out%add_scalar('PA',fs%PA)
+         ! call ens_out%add_scalar('L_Energy',fs%LrhoE)
+         ! call ens_out%add_scalar('G_Energy',fs%GrhoE)
+         ! call ens_out%add_scalar('PA',fs%PA)
          call ens_out%add_scalar('P',fs%P)
          call ens_out%add_scalar('Grho',fs%Grho)
          call ens_out%add_scalar('Lrho',fs%Lrho)
@@ -612,7 +652,7 @@ contains
          call ens_out%add_scalar('curvature',vf%curv)
          call ens_out%add_scalar('Mach',fs%Mach)
          call ens_out%add_scalar('BulkMod',fs%RHOSS2)
-         call ens_out%add_scalar('Temp',fs%Tmptr)
+         ! call ens_out%add_scalar('Temp',fs%Tmptr)
          ! Output to ensight
          if (ens_evt%occurs()) call ens_out%write_data(time%t)
       end block create_ensight
@@ -661,7 +701,7 @@ contains
          ppevt=event(time=time,name='Postproc output')
          call param_read('Postproc output period',ppevt%tper)
          ! Perform the output
-         ! if (ppevt%occurs()) call growth_rate()
+         if (ppevt%occurs()) call growth_rate()
       end block create_postproc 
 
    end subroutine simulation_init
@@ -671,11 +711,6 @@ contains
    subroutine simulation_run
       implicit none
       integer :: i,j,k
-
-      ! Store momentum thickness results
-      filename='thickness'
-      open(newunit=iunit,file='thickness.csv',status='unknown')
-      write(iunit,'(a12,3x,a12,3x)') 'Time','Thickness'
 
       ! Perform time integration
       do while (.not.time%done())
@@ -754,11 +789,11 @@ contains
          call mfile%write()
          call cflfile%write()
          call dfile%write()
-         ! if (ppevt%occurs()) call growth_rate()
+         if (ppevt%occurs()) call growth_rate()
 
       end do
 
-      close(iunit)
+      close(junit)
 
    end subroutine simulation_run
 
