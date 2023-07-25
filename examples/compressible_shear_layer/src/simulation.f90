@@ -12,7 +12,7 @@ module simulation
    use string,            only: str_medium
    use hypre_str_class,   only: hypre_str
    use mathtools,         only: Pi
-   ! use iterator_class,    only: iterator
+   use iterator_class,    only: iterator
    implicit none
    private
 
@@ -25,7 +25,7 @@ module simulation
    type(matm),        public :: matmod
    type(hypre_str),   public :: ps
    type(hypre_str),   public :: vs
-   ! type(iterator) :: top_layer, btm_layer 
+   type(iterator) :: top_layer, btm_layer 
 
    !> Ensight postprocessing
    type(ensight) :: ens_out
@@ -108,145 +108,145 @@ contains
       use mathtools,  only: Pi
       implicit none
       real(WP), intent(in) :: t
-      integer :: i,j,k,n
+      integer :: i,j,k,n,m
       logical :: in_sponge_top, in_sponge_btm
-      real(WP) :: swt_top, swt_btm, psponge, rhos, us, vs, ws
+      real(WP) :: swt_top, swt_btm, psponge, rhos, usponge, vsponge, wsponge
 
-      ! do n=1,top_layer%no_
-      !    swt_top = min(1.0_WP,max(0.0_WP,(fs%cfg%ym(top_layer%map(2,n)) - Lyg + Ls)/Ls))**2
-      !    ! Get sponge solution if within a sponge
-      !    psponge = GP
-      !    rhos = Grho
-      !    us = 1.0_WP; ws = 0.0_WP; vs = 0.0_WP
-      !    ! Apply changes to variables
-      !    ! Grho_old = fs%Grho (i,j,k)
-      !    fs%Grho (top_layer%map(1,n),top_layer%map(2,n),top_layer%map(3,n)) = fs%Grho (top_layer%map(1,n),top_layer%map(2,n),top_layer%map(3,n)) & 
-      !       - swt_top*(fs%Grho(top_layer%map(1,n),top_layer%map(2,n),top_layer%map(3,n))-rhos)
-      !    fs%Ui   (top_layer%map(1,n),top_layer%map(2,n),top_layer%map(3,n)) = fs%Ui   (top_layer%map(1,n),top_layer%map(2,n),top_layer%map(3,n)) & 
-      !       - swt_top*(fs%Ui(top_layer%map(1,n),top_layer%map(2,n),top_layer%map(3,n))-us)
-      !    fs%Vi   (top_layer%map(1,n),top_layer%map(2,n),top_layer%map(3,n)) = fs%Vi   (top_layer%map(1,n),top_layer%map(2,n),top_layer%map(3,n)) & 
-      !       - swt_top*(fs%Vi(top_layer%map(1,n),top_layer%map(2,n),top_layer%map(3,n))-vs)
-      !    fs%Wi   (top_layer%map(1,n),top_layer%map(2,n),top_layer%map(3,n)) = fs%Wi   (top_layer%map(1,n),top_layer%map(2,n),top_layer%map(3,n)) & 
-      !       - swt_top*(fs%Wi(top_layer%map(1,n),top_layer%map(2,n),top_layer%map(3,n))-ws)
-      !    fs%GP   (top_layer%map(1,n),top_layer%map(2,n),top_layer%map(3,n)) = fs%GP   (top_layer%map(1,n),top_layer%map(2,n),top_layer%map(3,n)) & 
-      !       - swt_top*(fs%GP(top_layer%map(1,n),top_layer%map(2,n),top_layer%map(3,n))-psponge)
-      !    fs%GrhoE(top_layer%map(1,n),top_layer%map(2,n),top_layer%map(3,n)) = fs%GrhoE(top_layer%map(1,n),top_layer%map(2,n),top_layer%map(3,n)) & 
-      !       - swt_top*(fs%GrhoE(top_layer%map(1,n),top_layer%map(2,n),top_layer%map(3,n))-matmod%EOS_energy(psponge,rhos,us,vs,ws,'gas'))
-      !    ! Update related quantities
-      !    fs%RHO  (top_layer%map(1,n),top_layer%map(2,n),top_layer%map(3,n)) = fs%Grho(top_layer%map(1,n),top_layer%map(2,n),top_layer%map(3,n))
-      !    fs%rhoUi(top_layer%map(1,n),top_layer%map(2,n),top_layer%map(3,n)) = fs%RHO(top_layer%map(1,n),top_layer%map(2,n),top_layer%map(3,n)) &
-      !       *fs%Ui(top_layer%map(1,n),top_layer%map(2,n),top_layer%map(3,n))
-      !    fs%rhoVi(top_layer%map(1,n),top_layer%map(2,n),top_layer%map(3,n)) = fs%RHO(top_layer%map(1,n),top_layer%map(2,n),top_layer%map(3,n)) &
-      !       *fs%Vi(top_layer%map(1,n),top_layer%map(2,n),top_layer%map(3,n))
-      !    fs%rhoWi(top_layer%map(1,n),top_layer%map(2,n),top_layer%map(3,n)) = fs%RHO(top_layer%map(1,n),top_layer%map(2,n),top_layer%map(3,n)) &
-      !       *fs%Wi(top_layer%map(1,n),top_layer%map(2,n),top_layer%map(3,n))
-      !    ! Remove liquid
-      !    vf%VF   (top_layer%map(1,n),top_layer%map(2,n),top_layer%map(3,n)) = 0.0_WP
-      !    fs%Lrho (top_layer%map(1,n),top_layer%map(2,n),top_layer%map(3,n)) = 0.0_WP
-      !    fs%LP   (top_layer%map(1,n),top_layer%map(2,n),top_layer%map(3,n)) = 0.0_WP
-      !    fs%LrhoE(top_layer%map(1,n),top_layer%map(2,n),top_layer%map(3,n)) = 0.0_WP
-      ! end do
-
-      ! do n=1,btm_layer%no_
-      !    swt_btm = min(1.0_WP,max(0.0_WP,(-fs%cfg%ym(btm_layer%map(2,n)) - Lyl + Ls)/Ls))**2
-      !    ! Get sponge solution if within a sponge
-      !    psponge = LP
-      !    rhos = Lrho
-      !    us = -r_vel; ws = 0.0_WP; vs = 0.0_WP
-      !    ! Apply changes to variables
-      !    !   LP_old = fs%LP (i,j,k)
-      !    fs%Lrho (btm_layer%map(1,n),btm_layer%map(2,n),btm_layer%map(3,n)) = fs%Lrho (btm_layer%map(1,n),btm_layer%map(2,n),btm_layer%map(3,n)) &
-      !       - swt_btm*(fs%Lrho(btm_layer%map(1,n),btm_layer%map(2,n),btm_layer%map(3,n))-rhos)
-      !    fs%Ui   (btm_layer%map(1,n),btm_layer%map(2,n),btm_layer%map(3,n)) = fs%Ui   (btm_layer%map(1,n),btm_layer%map(2,n),btm_layer%map(3,n)) &
-      !       - swt_btm*(fs%Ui(btm_layer%map(1,n),btm_layer%map(2,n),btm_layer%map(3,n))-us)
-      !    fs%Vi   (btm_layer%map(1,n),btm_layer%map(2,n),btm_layer%map(3,n)) = fs%Vi   (btm_layer%map(1,n),btm_layer%map(2,n),btm_layer%map(3,n)) &
-      !       - swt_btm*(fs%Vi(btm_layer%map(1,n),btm_layer%map(2,n),btm_layer%map(3,n))-vs)
-      !    fs%Wi   (btm_layer%map(1,n),btm_layer%map(2,n),btm_layer%map(3,n)) = fs%Wi   (btm_layer%map(1,n),btm_layer%map(2,n),btm_layer%map(3,n)) &
-      !       - swt_btm*(fs%Wi(btm_layer%map(1,n),btm_layer%map(2,n),btm_layer%map(3,n))-ws)
-      !    fs%LP   (btm_layer%map(1,n),btm_layer%map(2,n),btm_layer%map(3,n)) = fs%LP   (btm_layer%map(1,n),btm_layer%map(2,n),btm_layer%map(3,n)) &
-      !       - swt_btm*(fs%LP(btm_layer%map(1,n),btm_layer%map(2,n),btm_layer%map(3,n))-psponge)
-      !    fs%LrhoE(btm_layer%map(1,n),btm_layer%map(2,n),btm_layer%map(3,n)) = fs%LrhoE(btm_layer%map(1,n),btm_layer%map(2,n),btm_layer%map(3,n)) &
-      !       - swt_btm*(fs%LrhoE(btm_layer%map(1,n),btm_layer%map(2,n),btm_layer%map(3,n))-matmod%EOS_energy(psponge,rhos,us,vs,ws,'liquid'))
-      !    ! Update related quantities
-      !    fs%RHO  (btm_layer%map(1,n),btm_layer%map(2,n),btm_layer%map(3,n)) = fs%Lrho(btm_layer%map(1,n),btm_layer%map(2,n),btm_layer%map(3,n))
-      !    fs%rhoUi(btm_layer%map(1,n),btm_layer%map(2,n),btm_layer%map(3,n)) = fs%RHO(btm_layer%map(1,n),btm_layer%map(2,n),btm_layer%map(3,n)) &
-      !       *fs%Ui(btm_layer%map(1,n),btm_layer%map(2,n),btm_layer%map(3,n))
-      !    fs%rhoVi(btm_layer%map(1,n),btm_layer%map(2,n),btm_layer%map(3,n)) = fs%RHO(btm_layer%map(1,n),btm_layer%map(2,n),btm_layer%map(3,n)) &
-      !       *fs%Vi(btm_layer%map(1,n),btm_layer%map(2,n),btm_layer%map(3,n))
-      !    fs%rhoWi(btm_layer%map(1,n),btm_layer%map(2,n),btm_layer%map(3,n)) = fs%RHO(btm_layer%map(1,n),btm_layer%map(2,n),btm_layer%map(3,n)) &
-      !       *fs%Wi(btm_layer%map(1,n),btm_layer%map(2,n),btm_layer%map(3,n))
-      !    ! Remove gas
-      !    vf%VF   (btm_layer%map(1,n),btm_layer%map(2,n),btm_layer%map(3,n)) = 1.0_WP
-      !    fs%Grho (btm_layer%map(1,n),btm_layer%map(2,n),btm_layer%map(3,n)) = 0.0_WP
-      !    fs%GP   (btm_layer%map(1,n),btm_layer%map(2,n),btm_layer%map(3,n)) = 0.0_WP
-      !    fs%GrhoE(btm_layer%map(1,n),btm_layer%map(2,n),btm_layer%map(3,n)) = 0.0_WP
-      ! end do
-
-      ! Apply sponges
-      do k=fs%cfg%kmin_,fs%cfg%kmax_
-         do j=fs%cfg%jmin_,fs%cfg%jmax_
-            do i=fs%cfg%imin_,fs%cfg%imax_
-               in_sponge_btm = .false.
-               in_sponge_top = .false.
-               ! Check top sponge
-               if (top_sponge(fs%cfg,i,j,k)) then
-                  in_sponge_top = .true.
-                  swt_top = min(1.0_WP,max(0.0_WP,(fs%cfg%ym(j) - Lyg + Ls)/Ls))**2
-               end if
-               ! Check bottom sponge
-               if (btm_sponge(fs%cfg,i,j,k)) then
-                  in_sponge_btm = .true.
-                  swt_btm = min(1.0_WP,max(0.0_WP,(-fs%cfg%ym(j) - Lyl + Ls)/Ls))**2
-               end if
-               if (in_sponge_top) then
-                  ! Get sponge solution if within a sponge
-                  psponge = GP
-                  rhos = Grho
-                  us = 1.0_WP; ws = 0.0_WP; vs = 0.0_WP
-                  ! Apply changes to variables
-                  fs%Grho (i,j,k) = fs%Grho (i,j,k) - swt_top*(fs%Grho(i,j,k)-rhos)
-                  fs%Ui   (i,j,k) = fs%Ui   (i,j,k) - swt_top*(fs%Ui(i,j,k)-us)
-                  fs%Vi   (i,j,k) = fs%Vi   (i,j,k) - swt_top*(fs%Vi(i,j,k)-vs)
-                  fs%Wi   (i,j,k) = fs%Wi   (i,j,k) - swt_top*(fs%Wi(i,j,k)-ws)
-                  fs%GP   (i,j,k) = fs%GP   (i,j,k) - swt_top*(fs%GP(i,j,k)-psponge)
-                  fs%GrhoE(i,j,k) = fs%GrhoE(i,j,k) - swt_top*(fs%GrhoE(i,j,k)-matmod%EOS_energy(psponge,rhos,us,vs,ws,'gas'))
-                  ! Update related quantities
-                  fs%RHO  (i,j,k) = fs%Grho(i,j,k)
-                  fs%rhoUi(i,j,k) = fs%RHO(i,j,k)*fs%Ui(i,j,k)
-                  fs%rhoVi(i,j,k) = fs%RHO(i,j,k)*fs%Vi(i,j,k)
-                  fs%rhoWi(i,j,k) = fs%RHO(i,j,k)*fs%Wi(i,j,k)
-                  ! Remove liquid
-                  vf%VF   (i,j,k) = 0.0_WP
-                  fs%Lrho (i,j,k) = 0.0_WP
-                  fs%LP   (i,j,k) = 0.0_WP
-                  fs%LrhoE(i,j,k) = 0.0_WP
-               end if
-               if (in_sponge_btm) then
-                  ! Get sponge solution if within a sponge
-                  psponge = GP
-                  rhos = Lrho
-                  us = -r_vel; ws = 0.0_WP; vs = 0.0_WP
-                  ! Apply changes to variables
-                  fs%Lrho (i,j,k) = fs%Lrho (i,j,k) - swt_btm*(fs%Lrho(i,j,k)-rhos)
-                  fs%Ui   (i,j,k) = fs%Ui   (i,j,k) - swt_btm*(fs%Ui(i,j,k)-us)
-                  fs%Vi   (i,j,k) = fs%Vi   (i,j,k) - swt_btm*(fs%Vi(i,j,k)-vs)
-                  fs%Wi   (i,j,k) = fs%Wi   (i,j,k) - swt_btm*(fs%Wi(i,j,k)-ws)
-                  fs%LP   (i,j,k) = fs%LP   (i,j,k) - swt_btm*(fs%LP(i,j,k)-psponge)
-                  fs%LrhoE(i,j,k) = fs%LrhoE(i,j,k) - swt_btm*(fs%LrhoE(i,j,k)-matmod%EOS_energy(psponge,rhos,us,vs,ws,'liquid'))
-                  ! Update related quantities
-                  fs%RHO  (i,j,k) = fs%Lrho(i,j,k)
-                  fs%rhoUi(i,j,k) = fs%RHO(i,j,k)*fs%Ui(i,j,k)
-                  fs%rhoVi(i,j,k) = fs%RHO(i,j,k)*fs%Vi(i,j,k)
-                  fs%rhoWi(i,j,k) = fs%RHO(i,j,k)*fs%Wi(i,j,k)
-                  ! Remove gas?
-                  vf%VF   (i,j,k) = 1.0_WP
-                  fs%Grho (i,j,k) = 0.0_WP
-                  fs%GP   (i,j,k) = 0.0_WP
-                  fs%GrhoE(i,j,k) = 0.0_WP
-               end if
-            end do
-         end do
+      do n=1,top_layer%n_
+         swt_top = min(1.0_WP,max(0.0_WP,(fs%cfg%ym(top_layer%map(2,n)) - Lyg + Ls)/Ls))**2
+         ! Get sponge solution if within a sponge
+         psponge = GP
+         rhos = Grho
+         usponge = 1.0_WP; wsponge = 0.0_WP; vsponge = 0.0_WP
+         ! Apply changes to variables
+         ! Grho_old = fs%Grho (i,j,k)
+         fs%Grho (top_layer%map(1,n),top_layer%map(2,n),top_layer%map(3,n)) = fs%Grho (top_layer%map(1,n),top_layer%map(2,n),top_layer%map(3,n)) & 
+            - swt_top*(fs%Grho(top_layer%map(1,n),top_layer%map(2,n),top_layer%map(3,n))-rhos)
+         fs%Ui   (top_layer%map(1,n),top_layer%map(2,n),top_layer%map(3,n)) = fs%Ui   (top_layer%map(1,n),top_layer%map(2,n),top_layer%map(3,n)) & 
+            - swt_top*(fs%Ui(top_layer%map(1,n),top_layer%map(2,n),top_layer%map(3,n))-usponge)
+         fs%Vi   (top_layer%map(1,n),top_layer%map(2,n),top_layer%map(3,n)) = fs%Vi   (top_layer%map(1,n),top_layer%map(2,n),top_layer%map(3,n)) & 
+            - swt_top*(fs%Vi(top_layer%map(1,n),top_layer%map(2,n),top_layer%map(3,n))-vsponge)
+         fs%Wi   (top_layer%map(1,n),top_layer%map(2,n),top_layer%map(3,n)) = fs%Wi   (top_layer%map(1,n),top_layer%map(2,n),top_layer%map(3,n)) & 
+            - swt_top*(fs%Wi(top_layer%map(1,n),top_layer%map(2,n),top_layer%map(3,n))-wsponge)
+         fs%GP   (top_layer%map(1,n),top_layer%map(2,n),top_layer%map(3,n)) = fs%GP   (top_layer%map(1,n),top_layer%map(2,n),top_layer%map(3,n)) & 
+            - swt_top*(fs%GP(top_layer%map(1,n),top_layer%map(2,n),top_layer%map(3,n))-psponge)
+         fs%GrhoE(top_layer%map(1,n),top_layer%map(2,n),top_layer%map(3,n)) = fs%GrhoE(top_layer%map(1,n),top_layer%map(2,n),top_layer%map(3,n)) & 
+            - swt_top*(fs%GrhoE(top_layer%map(1,n),top_layer%map(2,n),top_layer%map(3,n))-matmod%EOS_energy(psponge,rhos,usponge,vsponge,wsponge,'gas'))
+         ! Update related quantities
+         fs%RHO  (top_layer%map(1,n),top_layer%map(2,n),top_layer%map(3,n)) = fs%Grho(top_layer%map(1,n),top_layer%map(2,n),top_layer%map(3,n))
+         fs%rhoUi(top_layer%map(1,n),top_layer%map(2,n),top_layer%map(3,n)) = fs%RHO(top_layer%map(1,n),top_layer%map(2,n),top_layer%map(3,n)) &
+            *fs%Ui(top_layer%map(1,n),top_layer%map(2,n),top_layer%map(3,n))
+         fs%rhoVi(top_layer%map(1,n),top_layer%map(2,n),top_layer%map(3,n)) = fs%RHO(top_layer%map(1,n),top_layer%map(2,n),top_layer%map(3,n)) &
+            *fs%Vi(top_layer%map(1,n),top_layer%map(2,n),top_layer%map(3,n))
+         fs%rhoWi(top_layer%map(1,n),top_layer%map(2,n),top_layer%map(3,n)) = fs%RHO(top_layer%map(1,n),top_layer%map(2,n),top_layer%map(3,n)) &
+            *fs%Wi(top_layer%map(1,n),top_layer%map(2,n),top_layer%map(3,n))
+         ! Remove liquid
+         vf%VF   (top_layer%map(1,n),top_layer%map(2,n),top_layer%map(3,n)) = 0.0_WP
+         fs%Lrho (top_layer%map(1,n),top_layer%map(2,n),top_layer%map(3,n)) = 0.0_WP
+         fs%LP   (top_layer%map(1,n),top_layer%map(2,n),top_layer%map(3,n)) = 0.0_WP
+         fs%LrhoE(top_layer%map(1,n),top_layer%map(2,n),top_layer%map(3,n)) = 0.0_WP
       end do
+
+      do n=1,btm_layer%n_
+         swt_btm = min(1.0_WP,max(0.0_WP,(-fs%cfg%ym(btm_layer%map(2,n)) - Lyl + Ls)/Ls))**2
+         ! Get sponge solution if within a sponge
+         psponge = GP
+         rhos = Lrho
+         usponge = -r_vel; wsponge = 0.0_WP; vsponge = 0.0_WP
+         ! Apply changes to variables
+         !   LP_old = fs%LP (i,j,k)
+         fs%Lrho (btm_layer%map(1,n),btm_layer%map(2,n),btm_layer%map(3,n)) = fs%Lrho (btm_layer%map(1,n),btm_layer%map(2,n),btm_layer%map(3,n)) &
+            - swt_btm*(fs%Lrho(btm_layer%map(1,n),btm_layer%map(2,n),btm_layer%map(3,n))-rhos)
+         fs%Ui   (btm_layer%map(1,n),btm_layer%map(2,n),btm_layer%map(3,n)) = fs%Ui   (btm_layer%map(1,n),btm_layer%map(2,n),btm_layer%map(3,n)) &
+            - swt_btm*(fs%Ui(btm_layer%map(1,n),btm_layer%map(2,n),btm_layer%map(3,n))-usponge)
+         fs%Vi   (btm_layer%map(1,n),btm_layer%map(2,n),btm_layer%map(3,n)) = fs%Vi   (btm_layer%map(1,n),btm_layer%map(2,n),btm_layer%map(3,n)) &
+            - swt_btm*(fs%Vi(btm_layer%map(1,n),btm_layer%map(2,n),btm_layer%map(3,n))-vsponge)
+         fs%Wi   (btm_layer%map(1,n),btm_layer%map(2,n),btm_layer%map(3,n)) = fs%Wi   (btm_layer%map(1,n),btm_layer%map(2,n),btm_layer%map(3,n)) &
+            - swt_btm*(fs%Wi(btm_layer%map(1,n),btm_layer%map(2,n),btm_layer%map(3,n))-wsponge)
+         fs%LP   (btm_layer%map(1,n),btm_layer%map(2,n),btm_layer%map(3,n)) = fs%LP   (btm_layer%map(1,n),btm_layer%map(2,n),btm_layer%map(3,n)) &
+            - swt_btm*(fs%LP(btm_layer%map(1,n),btm_layer%map(2,n),btm_layer%map(3,n))-psponge)
+         fs%LrhoE(btm_layer%map(1,n),btm_layer%map(2,n),btm_layer%map(3,n)) = fs%LrhoE(btm_layer%map(1,n),btm_layer%map(2,n),btm_layer%map(3,n)) &
+            - swt_btm*(fs%LrhoE(btm_layer%map(1,n),btm_layer%map(2,n),btm_layer%map(3,n))-matmod%EOS_energy(psponge,rhos,usponge,vsponge,wsponge,'liquid'))
+         ! Update related quantities
+         fs%RHO  (btm_layer%map(1,n),btm_layer%map(2,n),btm_layer%map(3,n)) = fs%Lrho(btm_layer%map(1,n),btm_layer%map(2,n),btm_layer%map(3,n))
+         fs%rhoUi(btm_layer%map(1,n),btm_layer%map(2,n),btm_layer%map(3,n)) = fs%RHO(btm_layer%map(1,n),btm_layer%map(2,n),btm_layer%map(3,n)) &
+            *fs%Ui(btm_layer%map(1,n),btm_layer%map(2,n),btm_layer%map(3,n))
+         fs%rhoVi(btm_layer%map(1,n),btm_layer%map(2,n),btm_layer%map(3,n)) = fs%RHO(btm_layer%map(1,n),btm_layer%map(2,n),btm_layer%map(3,n)) &
+            *fs%Vi(btm_layer%map(1,n),btm_layer%map(2,n),btm_layer%map(3,n))
+         fs%rhoWi(btm_layer%map(1,n),btm_layer%map(2,n),btm_layer%map(3,n)) = fs%RHO(btm_layer%map(1,n),btm_layer%map(2,n),btm_layer%map(3,n)) &
+            *fs%Wi(btm_layer%map(1,n),btm_layer%map(2,n),btm_layer%map(3,n))
+         ! Remove gas
+         vf%VF   (btm_layer%map(1,n),btm_layer%map(2,n),btm_layer%map(3,n)) = 1.0_WP
+         fs%Grho (btm_layer%map(1,n),btm_layer%map(2,n),btm_layer%map(3,n)) = 0.0_WP
+         fs%GP   (btm_layer%map(1,n),btm_layer%map(2,n),btm_layer%map(3,n)) = 0.0_WP
+         fs%GrhoE(btm_layer%map(1,n),btm_layer%map(2,n),btm_layer%map(3,n)) = 0.0_WP
+      end do
+
+      ! ! Apply sponges
+      ! do k=fs%cfg%kmin_,fs%cfg%kmax_
+      !    do j=fs%cfg%jmin_,fs%cfg%jmax_
+      !       do i=fs%cfg%imin_,fs%cfg%imax_
+      !          in_sponge_btm = .false.
+      !          in_sponge_top = .false.
+      !          ! Check top sponge
+      !          if (top_sponge(fs%cfg,i,j,k)) then
+      !             in_sponge_top = .true.
+      !             swt_top = min(1.0_WP,max(0.0_WP,(fs%cfg%ym(j) - Lyg + Ls)/Ls))**2
+      !          end if
+      !          ! Check bottom sponge
+      !          if (btm_sponge(fs%cfg,i,j,k)) then
+      !             in_sponge_btm = .true.
+      !             swt_btm = min(1.0_WP,max(0.0_WP,(-fs%cfg%ym(j) - Lyl + Ls)/Ls))**2
+      !          end if
+      !          if (in_sponge_top) then
+      !             ! Get sponge solution if within a sponge
+      !             psponge = GP
+      !             rhos = Grho
+      !             us = 1.0_WP; ws = 0.0_WP; vs = 0.0_WP
+      !             ! Apply changes to variables
+      !             fs%Grho (i,j,k) = fs%Grho (i,j,k) - swt_top*(fs%Grho(i,j,k)-rhos)
+      !             fs%Ui   (i,j,k) = fs%Ui   (i,j,k) - swt_top*(fs%Ui(i,j,k)-us)
+      !             fs%Vi   (i,j,k) = fs%Vi   (i,j,k) - swt_top*(fs%Vi(i,j,k)-vs)
+      !             fs%Wi   (i,j,k) = fs%Wi   (i,j,k) - swt_top*(fs%Wi(i,j,k)-ws)
+      !             fs%GP   (i,j,k) = fs%GP   (i,j,k) - swt_top*(fs%GP(i,j,k)-psponge)
+      !             fs%GrhoE(i,j,k) = fs%GrhoE(i,j,k) - swt_top*(fs%GrhoE(i,j,k)-matmod%EOS_energy(psponge,rhos,us,vs,ws,'gas'))
+      !             ! Update related quantities
+      !             fs%RHO  (i,j,k) = fs%Grho(i,j,k)
+      !             fs%rhoUi(i,j,k) = fs%RHO(i,j,k)*fs%Ui(i,j,k)
+      !             fs%rhoVi(i,j,k) = fs%RHO(i,j,k)*fs%Vi(i,j,k)
+      !             fs%rhoWi(i,j,k) = fs%RHO(i,j,k)*fs%Wi(i,j,k)
+      !             ! Remove liquid
+      !             vf%VF   (i,j,k) = 0.0_WP
+      !             fs%Lrho (i,j,k) = 0.0_WP
+      !             fs%LP   (i,j,k) = 0.0_WP
+      !             fs%LrhoE(i,j,k) = 0.0_WP
+      !          end if
+      !          if (in_sponge_btm) then
+      !             ! Get sponge solution if within a sponge
+      !             psponge = GP
+      !             rhos = Lrho
+      !             us = -r_vel; ws = 0.0_WP; vs = 0.0_WP
+      !             ! Apply changes to variables
+      !             fs%Lrho (i,j,k) = fs%Lrho (i,j,k) - swt_btm*(fs%Lrho(i,j,k)-rhos)
+      !             fs%Ui   (i,j,k) = fs%Ui   (i,j,k) - swt_btm*(fs%Ui(i,j,k)-us)
+      !             fs%Vi   (i,j,k) = fs%Vi   (i,j,k) - swt_btm*(fs%Vi(i,j,k)-vs)
+      !             fs%Wi   (i,j,k) = fs%Wi   (i,j,k) - swt_btm*(fs%Wi(i,j,k)-ws)
+      !             fs%LP   (i,j,k) = fs%LP   (i,j,k) - swt_btm*(fs%LP(i,j,k)-psponge)
+      !             fs%LrhoE(i,j,k) = fs%LrhoE(i,j,k) - swt_btm*(fs%LrhoE(i,j,k)-matmod%EOS_energy(psponge,rhos,us,vs,ws,'liquid'))
+      !             ! Update related quantities
+      !             fs%RHO  (i,j,k) = fs%Lrho(i,j,k)
+      !             fs%rhoUi(i,j,k) = fs%RHO(i,j,k)*fs%Ui(i,j,k)
+      !             fs%rhoVi(i,j,k) = fs%RHO(i,j,k)*fs%Vi(i,j,k)
+      !             fs%rhoWi(i,j,k) = fs%RHO(i,j,k)*fs%Wi(i,j,k)
+      !             ! Remove gas?
+      !             vf%VF   (i,j,k) = 1.0_WP
+      !             fs%Grho (i,j,k) = 0.0_WP
+      !             fs%GP   (i,j,k) = 0.0_WP
+      !             fs%GrhoE(i,j,k) = 0.0_WP
+      !          end if
+      !       end do
+      !    end do
+      ! end do
 
       ! Reset interface-based quantities due to VF changes
       call vf%remove_flotsams()
@@ -332,18 +332,9 @@ contains
       totalV    = totalV/totalvol
       ! Calculate Momentum thickness
       do j=fs%cfg%jmin_,fs%cfg%jmax_
-         ! localdmthick = localdmthick + (totalrho(j)*(1.0_WP - (totalrhoU(j)/totalrho(j)))*((totalrhoU(j)/totalrho(j)) + r_vel))*vf%cfg%dy(j)
-         ! localdmthick = localdmthick + (1.0_WP/(totalrho(j)*(1.0_WP+r_vel)))*(totalrho(j)*(1.0_WP - (totalrhoU(j)/totalrho(j)))*((totalrhoU(j)/totalrho(j)) + r_vel))*vf%cfg%dy(j)
-         ! totaldmthick = totaldmthick + (1.0_WP/(totalrho(j)*(1.0_WP+r_vel)**2.0_WP))*(totalrho(j)*(1.0_WP - (totalrhoU(j)/totalrho(j)))*((totalrhoU(j)/totalrho(j)) + r_vel))*vf%cfg%dy(j)
-         totaldmthick = totaldmthick + (1.0_WP/((1.0_WP+r_vel)**2.0_WP))*(totalrho(j)*(1.0_WP - (totalrhoU(j)/totalrho(j)))*((totalrhoU(j)/totalrho(j)) + r_vel))*vf%cfg%dy(j)
-         ! totaldmthick = totaldmthick + (totalrho(j)*(1.0_WP - (totalrhoU(j)/totalrho(j)))*((totalrhoU(j)/totalrho(j)) + r_vel))*vf%cfg%dy(j)
-         ! totaldmthick = totaldmthick + (1.0_WP/(totalrho(j)*totalU(j)**2.0_WP))*(totalrho(j)*(1.0_WP - (totalrhoU(j)/totalrho(j)))*((totalrhoU(j)/totalrho(j)) + r_vel))*vf%cfg%dy(j)
+         totaldmthick = totaldmthick + (1.0_WP/(totalrho(j)*(1.0_WP+r_vel)**2.0_WP))*(totalrho(j)*(1.0_WP - (totalrhoU(j)/totalrho(j)))*((totalrhoU(j)/totalrho(j)) + r_vel))*vf%cfg%dy(j)
+         ! totaldmthick = totaldmthick + (1.0_WP/((1.0_WP+r_vel)**2.0_WP))*(totalrho(j)*(1.0_WP - (totalrhoU(j)/totalrho(j)))*((totalrhoU(j)/totalrho(j)) + r_vel))*vf%cfg%dy(j)
       end do
-      ! Calculate vorticity thickness
-      do j=fs%cfg%jmin_+1,fs%cfg%jmax_-1
-         dudy_mean(j) = ABS((totalU(j+1) - totalU(j-1))/(2.0_WP*fs%cfg%dy(j)))
-      end do
-      totaldwthick = (1.0_WP + r_vel) / MAXVAL(dudy_mean)
       ! Calculate Reynolds Stresses
       do k=fs%cfg%kmin_,fs%cfg%kmax_
          do j=fs%cfg%jmin_,fs%cfg%jmax_
@@ -357,9 +348,12 @@ contains
             end do
          end do
       end do
+      ! Calculate vorticity thickness and favre velocity gradient component
       do j=fs%cfg%jmin_+1,fs%cfg%jmax_-1
+         dudy_mean(j) = ABS((totalU(j+1) - totalU(j-1))/(2.0_WP*fs%cfg%dy(j)))
          dudy_favre(j) = ((totalrhoU(j+1)/totalrho(j+1)) - (totalrhoU(j-1)/totalrho(j-1)))/(2.0_WP*fs%cfg%dy(j))
       end do
+      totaldwthick = (1.0_WP + r_vel) / MAXVAL(dudy_mean)
       ! All-reduce the data
       ! call MPI_ALLREDUCE(localdmthick,totaldmthick,1,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr)
       call MPI_ALLREDUCE(localrhoUU,totalrhoUU,fs%cfg%ny,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr)
@@ -371,7 +365,7 @@ contains
       ! Calculate Growth Rate
       do j=fs%cfg%jmin_,fs%cfg%jmax_
          ! grate = grate - (totalrhoUV(j)*dudy_favre(j))*vf%cfg%dy(j)
-         grate = grate - (2.0_WP/(totalrho(j)*(1.0_WP+r_vel)**2))*(totalrhoUV(j)*dudy_favre(j+3))*vf%cfg%dy(j)
+         grate = grate - (2.0_WP/(1.0_WP+r_vel)**2)*(totalrhoUV(j)*dudy_favre(j+3))*vf%cfg%dy(j)
       end do
       ! If root, print it out
       if (fs%cfg%amRoot) then
@@ -419,15 +413,6 @@ contains
          time%dt=time%dtmax
          time%itmax=2
       end block initialize_timetracker
-
-      ! ! Create an iterator for imposing the bottom and top sponges
-      ! create_iterator_top: block
-      !    top_layer = iterator(cfg,'Top Sponge',top_sponge)
-      ! end block create_iterator_top
-
-      ! create_iterator_btm: block
-      !    btm_layer = iterator(cfg,'Bottom Sponge',btm_sponge)
-      ! end block create_iterator_btm
 
       ! Initialize our VOF solver and field
       create_and_initialize_vof: block
@@ -534,8 +519,8 @@ contains
          call param_read('Sponge length',Ls)
          call param_read('Liquid Ly',Lyl)
          call param_read('Gas Ly',Lyg)
-         ! call param_read('Gas Weber number',Weg); fs%sigma=1.0_WP/(Weg+epsilon(Weg))
-         fs%sigma=0.0_WP
+         call param_read('Gas Weber number',Weg); fs%sigma=1.0_WP/(Weg+epsilon(Weg))
+         ! fs%sigma=0.0_WP
          ! Configure pressure solver
          ps=hypre_str(cfg=cfg,name='Pressure',method=pcg_pfmg,nst=7)
          ps%maxlevel=10
@@ -793,6 +778,15 @@ contains
          ! Perform the output
          if (ppevt%occurs()) call growth_rate()
       end block create_postproc 
+
+      ! Create an iterator for imposing the bottom and top sponges
+      create_iterator_top: block
+         top_layer = iterator(pg=fs%cfg,name='Top Sponge',locator=top_sponge)
+      end block create_iterator_top
+
+      create_iterator_btm: block
+         btm_layer = iterator(pg=fs%cfg,name='Bottom Sponge',locator=btm_sponge)
+      end block create_iterator_btm
 
    end subroutine simulation_init
 
