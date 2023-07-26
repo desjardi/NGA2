@@ -16,8 +16,6 @@ module simulation
    implicit none
    private
 
-   !> Iterator stuff in lines 28, 115 to 183, and 422 to 430 
-
    !> Single two-phase flow solver and volume fraction solver and corresponding time tracker
    type(mast),        public :: fs
    type(vfs),         public :: vf
@@ -119,7 +117,6 @@ contains
          rhos = Grho
          usponge = 1.0_WP; wsponge = 0.0_WP; vsponge = 0.0_WP
          ! Apply changes to variables
-         ! Grho_old = fs%Grho (i,j,k)
          fs%Grho (top_layer%map(1,n),top_layer%map(2,n),top_layer%map(3,n)) = fs%Grho (top_layer%map(1,n),top_layer%map(2,n),top_layer%map(3,n)) & 
             - swt_top*(fs%Grho(top_layer%map(1,n),top_layer%map(2,n),top_layer%map(3,n))-rhos)
          fs%Ui   (top_layer%map(1,n),top_layer%map(2,n),top_layer%map(3,n)) = fs%Ui   (top_layer%map(1,n),top_layer%map(2,n),top_layer%map(3,n)) & 
@@ -154,7 +151,6 @@ contains
          rhos = Lrho
          usponge = -r_vel; wsponge = 0.0_WP; vsponge = 0.0_WP
          ! Apply changes to variables
-         !   LP_old = fs%LP (i,j,k)
          fs%Lrho (btm_layer%map(1,n),btm_layer%map(2,n),btm_layer%map(3,n)) = fs%Lrho (btm_layer%map(1,n),btm_layer%map(2,n),btm_layer%map(3,n)) &
             - swt_btm*(fs%Lrho(btm_layer%map(1,n),btm_layer%map(2,n),btm_layer%map(3,n))-rhos)
          fs%Ui   (btm_layer%map(1,n),btm_layer%map(2,n),btm_layer%map(3,n)) = fs%Ui   (btm_layer%map(1,n),btm_layer%map(2,n),btm_layer%map(3,n)) &
@@ -325,6 +321,7 @@ contains
       call MPI_ALLREDUCE(localrhoV,totalrhoV,fs%cfg%ny,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr)
       call MPI_ALLREDUCE(localU,totalU,fs%cfg%ny,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr)
       call MPI_ALLREDUCE(localV,totalV,fs%cfg%ny,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr)
+      ! Volume-average for each plane
       totalrho  = totalmass/totalvol
       totalrhoU = totalrhoU/totalvol
       totalrhoV = totalrhoV/totalvol
@@ -350,12 +347,11 @@ contains
       end do
       ! Calculate vorticity thickness and favre velocity gradient component
       do j=fs%cfg%jmin_+1,fs%cfg%jmax_-1
-         dudy_mean(j) = ABS((totalU(j+1) - totalU(j-1))/(2.0_WP*fs%cfg%dy(j)))
+         dudy_mean(j)  = ABS((totalU(j+1) - totalU(j-1))/(2.0_WP*fs%cfg%dy(j)))
          dudy_favre(j) = ((totalrhoU(j+1)/totalrho(j+1)) - (totalrhoU(j-1)/totalrho(j-1)))/(2.0_WP*fs%cfg%dy(j))
       end do
       totaldwthick = (1.0_WP + r_vel) / MAXVAL(dudy_mean)
       ! All-reduce the data
-      ! call MPI_ALLREDUCE(localdmthick,totaldmthick,1,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr)
       call MPI_ALLREDUCE(localrhoUU,totalrhoUU,fs%cfg%ny,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr)
       call MPI_ALLREDUCE(localrhoVV,totalrhoVV,fs%cfg%ny,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr)
       call MPI_ALLREDUCE(localrhoUV,totalrhoUV,fs%cfg%ny,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr)
@@ -372,7 +368,6 @@ contains
          ! Momentum thickness and growth rate
          write(junit,'(es12.5,3x,es12.5,3x,es12.5,3x,es12.5)') time%t,totaldmthick,totaldwthick,grate
          ! Reynolds Stresses
-         call execute_command_line('mkdir -p PostProc')
          filename='PostProc_'
          write(timestamp,'(f6.1)') time%t
          open(newunit=iunit,file='PostProc/'//trim(adjustl(filename))//trim(adjustl(timestamp)),form='formatted',status='replace',access='stream',iostat=ierr)
@@ -491,7 +486,6 @@ contains
          real(WP) :: diffx_left,diffx_right,diffy_left,diffy_right,diffz_left,diffz_right
          real(WP), dimension(:,:,:), allocatable :: Upert,Vpert,Wpert
          real(WP), dimension(:), allocatable :: test
-
          ! Create material model class
          matmod=matm(cfg=cfg,name='Liquid-gas models')
          ! Get nondimensional parameters from input
@@ -502,8 +496,7 @@ contains
          call param_read('Density ratio',r_rho); Grho=1.0_WP; Lrho=r_rho*Grho
          call param_read('Velocity ratio',r_vel); delta_l=r_visc*r_vel
          call param_read('Gas Mach number',Ma_g); GP = 1.0_WP/(gamm_g*Ma_g**2.0_WP)
-         Pref_l=0.0_WP
-         ! call param_read('Liquid Mach number',Ma_l); Pref_l = ((r_rho*r_vel**2)/(gamm_l*Ma_l**2.0_WP)) - GP
+         call param_read('Liquid Mach number',Ma_l); Pref_l = ((r_rho*r_vel**2)/(gamm_l*Ma_l**2.0_WP)) - GP
          ! Register equations of state
          call matmod%register_stiffenedgas('liquid',gamm_l,Pref_l)
          call matmod%register_idealgas('gas',gamm_g)
@@ -520,7 +513,6 @@ contains
          call param_read('Liquid Ly',Lyl)
          call param_read('Gas Ly',Lyg)
          call param_read('Gas Weber number',Weg); fs%sigma=1.0_WP/(Weg+epsilon(Weg))
-         ! fs%sigma=0.0_WP
          ! Configure pressure solver
          ps=hypre_str(cfg=cfg,name='Pressure',method=pcg_pfmg,nst=7)
          ps%maxlevel=10
@@ -642,7 +634,7 @@ contains
          end if
          call MPI_BCAST(wshiftZ,nwave-mode_low,MPI_REAL_WP,0,cfg%comm,ierr)
          call MPI_BCAST(wnumbZ,nwave-mode_low,MPI_REAL_WP,0,cfg%comm,ierr)
-
+         ! Add components of velocity potential to mean flow
          do k=fs%cfg%kmino_,fs%cfg%kmaxo_
             do j=fs%cfg%jmino_,fs%cfg%jmaxo_
                do i=fs%cfg%imino_,fs%cfg%imaxo_
@@ -660,7 +652,7 @@ contains
                end do
             end do
          end do
-
+         ! Initialize pressure and energy based on modified velocity field
          do k=vf%cfg%kmino_,vf%cfg%kmaxo_
             do j=vf%cfg%jmino_,vf%cfg%jmaxo_
                do i=vf%cfg%imino_,vf%cfg%imaxo_
@@ -699,6 +691,7 @@ contains
          if (fs%cfg%amRoot) then
             open(newunit=junit,file='thickness.csv',status='unknown')
             write(junit,'(a12,3x,a12,3x,a12,3x,a12)') 'Time','d_m','d_w','Growth Rate'
+            call execute_command_line('mkdir -p PostProc')
          end if
          call growth_rate
       end block create_and_initialize_flow_solver
