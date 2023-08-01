@@ -6,7 +6,7 @@ ifdef IRL_DIR
   ifeq ($(is_gnu), 1)
     LIBRARIES += -lirl_fortran -lirl_c -lirl -labsl_all -lstdc++
   else
-    LIBRARIES += -lirl_fortran -lirl_c -lirl -labsl_all -lc++
+    LIBRARIES += -lirl_fortran -lirl_c -lirl -labsl_all -lstdc++
   endif
   ifeq ($(os_name), Darwin)
     LIBRARIES += -framework CoreFoundation
