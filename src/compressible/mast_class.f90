@@ -1654,12 +1654,12 @@ contains
      
      ! Update phase interface to match VF field, etc.
      ! (Mimics the end of vf%advance())
-     call vf%remove_flotsams()
-     call vf%sync_and_clean_barycenters()
      call vf%advect_interface(dt,this%U,this%V,this%W)
-     call vf%build_interface()
-     !call vf%update_band()
+     call vf%remove_flotsams()
      call vf%remove_thinstruct()
+     call vf%sync_and_clean_barycenters()
+     !call vf%update_band()
+     call vf%build_interface()
      call vf%polygonalize_interface()
      !call vf%distance_from_polygon()
      call vf%subcell_vol()
