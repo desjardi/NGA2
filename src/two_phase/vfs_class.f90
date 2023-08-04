@@ -108,11 +108,11 @@ module vfs_class
       ! Parameters for SGS modeling of thin structures
       logical  :: two_planes                              !< Whether we're using a 2-plane reconstruction approach
       real(WP) :: twoplane_thld1=0.99_WP                  !< Average normal magnitude threshold for r2p to switch from one-plane to two-planes (purely local)
-      real(WP) :: twoplane_thld2=0.7_WP                   !< Average normal magnitude threshold above which r2p switches to LVIRA (based on 3x3x3 stencil)
+      real(WP) :: twoplane_thld2=0.5_WP                   !< Average normal magnitude threshold above which r2p switches to LVIRA (based on 3x3x3 stencil)
       real(WP) :: thin_thld_dotprod=-0.5_WP               !< Maximum dot product of two interface normals for their respective cells to be considered thin region cells
       real(WP) :: thin_thld_max=0.8_WP                    !< Maximum local thickness to be considered a thin region cell (as a factor of mesh size)
       real(WP) :: thin_thld_min=0.0_WP                    !< Minimum local thickness for thin structure removal (0.0=off, as a factor of mesh size)
-      real(WP) :: edge_thld=1.20_WP                       !< Threshold for classifying edges
+      real(WP) :: edge_thld=0.80_WP                       !< Threshold for classifying edges
       
       ! Interface sensing variables
       real(WP), dimension(:,:,:), allocatable :: thin_sensor     !< Thin structure sensing (=1 is liquid, =2 is gas)
@@ -3040,6 +3040,8 @@ contains
                this%curv(i,j,k)=max(min(this%curv(i,j,k),this%maxcurv_times_mesh/this%cfg%meshsize(i,j,k)),-this%maxcurv_times_mesh/this%cfg%meshsize(i,j,k))
                ! Also store 2-plane curvature if needed
                if (this%two_planes) this%curv2p(:,i,j,k)=max(min(mycurv,this%maxcurv_times_mesh/this%cfg%meshsize(i,j,k)),-this%maxcurv_times_mesh/this%cfg%meshsize(i,j,k))
+               ! Model edge curvature at 1/thickness
+               !if (this%two_planes.and.this%edge_sensor(i,j,k).gt.this%edge_thld) this%curv2p(:,i,j,k)=sign(1.0_WP/this%thickness(i,j,k),0.5_WP-this%VF(i,j,k))
             end do
          end do
       end do
