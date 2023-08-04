@@ -110,6 +110,7 @@ contains
       logical :: in_sponge_top, in_sponge_btm
       real(WP) :: swt_top, swt_btm, psponge, rhos, usponge, vsponge, wsponge
 
+      ! Apply sponges using iterators
       do n=1,top_layer%n_
          swt_top = min(1.0_WP,max(0.0_WP,(fs%cfg%ym(top_layer%map(2,n)) - Lyg + Ls)/Ls))**2
          ! Get sponge solution if within a sponge
@@ -178,72 +179,6 @@ contains
          fs%GrhoE(btm_layer%map(1,n),btm_layer%map(2,n),btm_layer%map(3,n)) = 0.0_WP
       end do
 
-      ! ! Apply sponges
-      ! do k=fs%cfg%kmin_,fs%cfg%kmax_
-      !    do j=fs%cfg%jmin_,fs%cfg%jmax_
-      !       do i=fs%cfg%imin_,fs%cfg%imax_
-      !          in_sponge_btm = .false.
-      !          in_sponge_top = .false.
-      !          ! Check top sponge
-      !          if (top_sponge(fs%cfg,i,j,k)) then
-      !             in_sponge_top = .true.
-      !             swt_top = min(1.0_WP,max(0.0_WP,(fs%cfg%ym(j) - Lyg + Ls)/Ls))**2
-      !          end if
-      !          ! Check bottom sponge
-      !          if (btm_sponge(fs%cfg,i,j,k)) then
-      !             in_sponge_btm = .true.
-      !             swt_btm = min(1.0_WP,max(0.0_WP,(-fs%cfg%ym(j) - Lyl + Ls)/Ls))**2
-      !          end if
-      !          if (in_sponge_top) then
-      !             ! Get sponge solution if within a sponge
-      !             psponge = GP
-      !             rhos = Grho
-      !             us = 1.0_WP; ws = 0.0_WP; vs = 0.0_WP
-      !             ! Apply changes to variables
-      !             fs%Grho (i,j,k) = fs%Grho (i,j,k) - swt_top*(fs%Grho(i,j,k)-rhos)
-      !             fs%Ui   (i,j,k) = fs%Ui   (i,j,k) - swt_top*(fs%Ui(i,j,k)-us)
-      !             fs%Vi   (i,j,k) = fs%Vi   (i,j,k) - swt_top*(fs%Vi(i,j,k)-vs)
-      !             fs%Wi   (i,j,k) = fs%Wi   (i,j,k) - swt_top*(fs%Wi(i,j,k)-ws)
-      !             fs%GP   (i,j,k) = fs%GP   (i,j,k) - swt_top*(fs%GP(i,j,k)-psponge)
-      !             fs%GrhoE(i,j,k) = fs%GrhoE(i,j,k) - swt_top*(fs%GrhoE(i,j,k)-matmod%EOS_energy(psponge,rhos,us,vs,ws,'gas'))
-      !             ! Update related quantities
-      !             fs%RHO  (i,j,k) = fs%Grho(i,j,k)
-      !             fs%rhoUi(i,j,k) = fs%RHO(i,j,k)*fs%Ui(i,j,k)
-      !             fs%rhoVi(i,j,k) = fs%RHO(i,j,k)*fs%Vi(i,j,k)
-      !             fs%rhoWi(i,j,k) = fs%RHO(i,j,k)*fs%Wi(i,j,k)
-      !             ! Remove liquid
-      !             vf%VF   (i,j,k) = 0.0_WP
-      !             fs%Lrho (i,j,k) = 0.0_WP
-      !             fs%LP   (i,j,k) = 0.0_WP
-      !             fs%LrhoE(i,j,k) = 0.0_WP
-      !          end if
-      !          if (in_sponge_btm) then
-      !             ! Get sponge solution if within a sponge
-      !             psponge = GP
-      !             rhos = Lrho
-      !             us = -r_vel; ws = 0.0_WP; vs = 0.0_WP
-      !             ! Apply changes to variables
-      !             fs%Lrho (i,j,k) = fs%Lrho (i,j,k) - swt_btm*(fs%Lrho(i,j,k)-rhos)
-      !             fs%Ui   (i,j,k) = fs%Ui   (i,j,k) - swt_btm*(fs%Ui(i,j,k)-us)
-      !             fs%Vi   (i,j,k) = fs%Vi   (i,j,k) - swt_btm*(fs%Vi(i,j,k)-vs)
-      !             fs%Wi   (i,j,k) = fs%Wi   (i,j,k) - swt_btm*(fs%Wi(i,j,k)-ws)
-      !             fs%LP   (i,j,k) = fs%LP   (i,j,k) - swt_btm*(fs%LP(i,j,k)-psponge)
-      !             fs%LrhoE(i,j,k) = fs%LrhoE(i,j,k) - swt_btm*(fs%LrhoE(i,j,k)-matmod%EOS_energy(psponge,rhos,us,vs,ws,'liquid'))
-      !             ! Update related quantities
-      !             fs%RHO  (i,j,k) = fs%Lrho(i,j,k)
-      !             fs%rhoUi(i,j,k) = fs%RHO(i,j,k)*fs%Ui(i,j,k)
-      !             fs%rhoVi(i,j,k) = fs%RHO(i,j,k)*fs%Vi(i,j,k)
-      !             fs%rhoWi(i,j,k) = fs%RHO(i,j,k)*fs%Wi(i,j,k)
-      !             ! Remove gas?
-      !             vf%VF   (i,j,k) = 1.0_WP
-      !             fs%Grho (i,j,k) = 0.0_WP
-      !             fs%GP   (i,j,k) = 0.0_WP
-      !             fs%GrhoE(i,j,k) = 0.0_WP
-      !          end if
-      !       end do
-      !    end do
-      ! end do
-
       ! Reset interface-based quantities due to VF changes
       call vf%remove_flotsams()
       call vf%advect_interface(0.0_WP,fs%U,fs%V,fs%W)
@@ -267,15 +202,30 @@ contains
       real(WP), dimension(:), allocatable :: localrho,  totalrho
       real(WP), dimension(:), allocatable :: localrhoU, totalrhoU
       real(WP), dimension(:), allocatable :: localrhoV, totalrhoV
+      real(WP), dimension(:), allocatable :: localrhoW, totalrhoW
       real(WP), dimension(:), allocatable :: localvol,  totalvol
       real(WP), dimension(:), allocatable :: localmass, totalmass
       real(WP), dimension(:), allocatable :: localrhoUU, totalrhoUU
       real(WP), dimension(:), allocatable :: localrhoVV, totalrhoVV
       real(WP), dimension(:), allocatable :: localrhoUV, totalrhoUV
+      real(WP), dimension(:), allocatable :: localrhoWW, totalrhoWW
       real(WP), dimension(:), allocatable :: localU, totalU
       real(WP), dimension(:), allocatable :: localV, totalV
+      real(WP), dimension(:), allocatable :: localW, totalW
+      real(WP), dimension(:), allocatable :: localGvol, totalGvol
+      real(WP), dimension(:), allocatable :: localLvol, totalLvol
+      real(WP), dimension(:), allocatable :: localGmass, totalGmass
+      real(WP), dimension(:), allocatable :: localLmass, totalLmass
+      real(WP), dimension(:), allocatable :: totalGrho,totalLrho
+      real(WP), dimension(:), allocatable :: localGrhoU, totalGrhoU
+      real(WP), dimension(:), allocatable :: localLrhoU, totalLrhoU
+      real(WP), dimension(:), allocatable :: tempGrho,tempLrho
+      real(WP), dimension(:), allocatable :: tempGvol,tempLvol
+      real(WP), dimension(:), allocatable :: testGrho,testLrho
       real(WP), dimension(:), allocatable :: dudy_favre,dudy_mean
-      real(WP) :: localdmthick,totaldmthick,grate,totaldwthick
+      real(WP) :: localdmthick,totaldmthick,grate,totaldwthick,totaldgthick,totaldlthick
+      real(WP) :: localnu, totalnu, Re_mom, Re_vort, Re_lambda, TKE, Reg_mom
+      real(WP) :: uprime1, uprime2, up2, dupdx2, tmp, lambda
       character(len=str_medium) :: filename,timestamp
       ! Allocate and initialize to zero
       allocate(localvol(fs%cfg%jmin:fs%cfg%jmax));   localvol=0.0_WP
@@ -286,12 +236,16 @@ contains
       allocate(totalrhoU(fs%cfg%jmin:fs%cfg%jmax));  totalrhoU=0.0_WP
       allocate(localrhoV(fs%cfg%jmin:fs%cfg%jmax));  localrhoV=0.0_WP
       allocate(totalrhoV(fs%cfg%jmin:fs%cfg%jmax));  totalrhoV=0.0_WP
+      allocate(localrhoW(fs%cfg%jmin:fs%cfg%jmax));  localrhoW=0.0_WP
+      allocate(totalrhoW(fs%cfg%jmin:fs%cfg%jmax));  totalrhoW=0.0_WP
       allocate(localrhoUU(fs%cfg%jmin:fs%cfg%jmax)); localrhoUU=0.0_WP
       allocate(totalrhoUU(fs%cfg%jmin:fs%cfg%jmax)); totalrhoUU=0.0_WP
       allocate(localrhoVV(fs%cfg%jmin:fs%cfg%jmax)); localrhoVV=0.0_WP
       allocate(totalrhoVV(fs%cfg%jmin:fs%cfg%jmax)); totalrhoVV=0.0_WP
       allocate(localrhoUV(fs%cfg%jmin:fs%cfg%jmax)); localrhoUV=0.0_WP
       allocate(totalrhoUV(fs%cfg%jmin:fs%cfg%jmax)); totalrhoUV=0.0_WP
+      allocate(localrhoWW(fs%cfg%jmin:fs%cfg%jmax)); localrhoWW=0.0_WP
+      allocate(totalrhoWW(fs%cfg%jmin:fs%cfg%jmax)); totalrhoWW=0.0_WP
       allocate(localmass(fs%cfg%jmin:fs%cfg%jmax));  localmass=0.0_WP
       allocate(totalmass(fs%cfg%jmin:fs%cfg%jmax));  totalmass=0.0_WP
       allocate(dudy_favre(fs%cfg%jmin:fs%cfg%jmax)); dudy_favre=0.0_WP
@@ -300,17 +254,52 @@ contains
       allocate(totalU(fs%cfg%jmin:fs%cfg%jmax));     totalU=0.0_WP
       allocate(localV(fs%cfg%jmin:fs%cfg%jmax));     localV=0.0_WP
       allocate(totalV(fs%cfg%jmin:fs%cfg%jmax));     totalV=0.0_WP
-      localdmthick=0.0_WP;totaldmthick=0.0_WP;grate=0.0_WP;
+      allocate(localW(fs%cfg%jmin:fs%cfg%jmax));     localW=0.0_WP
+      allocate(totalW(fs%cfg%jmin:fs%cfg%jmax));     totalW=0.0_WP
+      allocate(localGvol(fs%cfg%jmin:fs%cfg%jmax));   localGvol=0.0_WP
+      allocate(totalGvol(fs%cfg%jmin:fs%cfg%jmax));   totalGvol=0.0_WP
+      allocate(localLvol(fs%cfg%jmin:fs%cfg%jmax));   localLvol=0.0_WP
+      allocate(totalLvol(fs%cfg%jmin:fs%cfg%jmax));   totalLvol=0.0_WP
+      allocate(localGmass(fs%cfg%jmin:fs%cfg%jmax));   localGmass=0.0_WP
+      allocate(totalGmass(fs%cfg%jmin:fs%cfg%jmax));   totalGmass=0.0_WP
+      allocate(localLmass(fs%cfg%jmin:fs%cfg%jmax));   localLmass=0.0_WP
+      allocate(totalLmass(fs%cfg%jmin:fs%cfg%jmax));   totalLmass=0.0_WP
+      allocate(totalGrho(fs%cfg%jmin:fs%cfg%jmax));   totalGrho=0.0_WP
+      allocate(totalLrho(fs%cfg%jmin:fs%cfg%jmax));   totalLrho=0.0_WP
+      allocate(localGrhoU(fs%cfg%jmin:fs%cfg%jmax));  localGrhoU=0.0_WP
+      allocate(totalGrhoU(fs%cfg%jmin:fs%cfg%jmax));  totalGrhoU=0.0_WP
+      allocate(localLrhoU(fs%cfg%jmin:fs%cfg%jmax));  localLrhoU=0.0_WP
+      allocate(totalLrhoU(fs%cfg%jmin:fs%cfg%jmax));  totalLrhoU=0.0_WP
+      allocate(tempGvol(fs%cfg%jmin:fs%cfg%jmax));  tempGvol=0.0_WP
+      allocate(tempLvol(fs%cfg%jmin:fs%cfg%jmax));  tempLvol=0.0_WP
+      allocate(tempGrho(fs%cfg%jmin:fs%cfg%jmax));  tempGrho=0.0_WP
+      allocate(tempLrho(fs%cfg%jmin:fs%cfg%jmax));  tempLrho=0.0_WP
+      allocate(testGrho(fs%cfg%jmin:fs%cfg%jmax));  testGrho=0.0_WP
+      allocate(testLrho(fs%cfg%jmin:fs%cfg%jmax));  testLrho=0.0_WP
+      localdmthick=0.0_WP;totaldmthick=0.0_WP;grate=0.0_WP;totaldgthick=0.0_WP;totaldlthick=0.0_WP
+      Re_mom=0.0_WP;Re_vort=0.0_WP;Re_lambda=0.0_WP;TKE=0.0_WP;localnu=0.0_WP;totalnu=0.0_WP
+      uprime1=0.0_WP;uprime2=0.0_WP;up2=0.0_WP;dupdx2=0.0_WP;tmp=0.0_WP;lambda=0.0_WP
       ! Calculate spatial averages
       do k=fs%cfg%kmin_,fs%cfg%kmax_
          do j=fs%cfg%jmin_,fs%cfg%jmax_
             do i=fs%cfg%imin_,fs%cfg%imax_
-               localmass(j) = localmass(j) + fs%RHO(i,j,k)*fs%cfg%dx(i)*fs%cfg%dy(j)*fs%cfg%dz(k)
-               localvol(j)  = localvol(j) + fs%cfg%dx(i)*fs%cfg%dy(j)*fs%cfg%dz(k)
-               localrhoU(j) = localrhoU(j) + fs%RHO(i,j,k)*fs%Ui(i,j,k)*fs%cfg%dx(i)*fs%cfg%dy(j)*fs%cfg%dz(k)
-               localrhoV(j) = localrhoV(j) + fs%RHO(i,j,k)*fs%Vi(i,j,k)*fs%cfg%dx(i)*fs%cfg%dy(j)*fs%cfg%dz(k)
-               localU(j)    = localU(j) + fs%Ui(i,j,k)*fs%cfg%dx(i)*fs%cfg%dy(j)*fs%cfg%dz(k)
-               localV(j)    = localV(j) + fs%Vi(i,j,k)*fs%cfg%dx(i)*fs%cfg%dy(j)*fs%cfg%dz(k)
+               localmass(j) = localmass(j) + fs%RHO(i,j,k)*fs%cfg%dx(i)*fs%cfg%dy(j)*fs%cfg%dz(k) !*fs%cfg%vol(i,j,k)
+               localvol(j)  = localvol(j) + fs%cfg%dx(i)*fs%cfg%dy(j)*fs%cfg%dz(k) !*fs%cfg%vol(i,j,k)
+               localrhoU(j) = localrhoU(j) + fs%RHO(i,j,k)*fs%Ui(i,j,k)*fs%cfg%dx(i)*fs%cfg%dy(j)*fs%cfg%dz(k) !*fs%cfg%vol(i,j,k)
+               localrhoV(j) = localrhoV(j) + fs%RHO(i,j,k)*fs%Vi(i,j,k)*fs%cfg%dx(i)*fs%cfg%dy(j)*fs%cfg%dz(k) !*fs%cfg%vol(i,j,k)
+               localrhoW(j) = localrhoW(j) + fs%RHO(i,j,k)*fs%Wi(i,j,k)*fs%cfg%vol(i,j,k)
+               localU(j)    = localU(j) + fs%Ui(i,j,k)*fs%cfg%dx(i)*fs%cfg%dy(j)*fs%cfg%dz(k) !*fs%cfg%vol(i,j,k)
+               localV(j)    = localV(j) + fs%Vi(i,j,k)*fs%cfg%dx(i)*fs%cfg%dy(j)*fs%cfg%dz(k) !*fs%cfg%vol(i,j,k)
+               localW(j)    = localW(j) + fs%Wi(i,j,k)*fs%cfg%vol(i,j,k)
+               ! Volume fraction specific calculations
+               localGvol(j) = localGvol(j) + (1.0_WP - vf%VF(i,j,k))*fs%cfg%dx(i)*fs%cfg%dy(j)*fs%cfg%dz(k) !*fs%cfg%vol(i,j,k)
+               localLvol(j) = localLvol(j) + vf%VF(i,j,k)*fs%cfg%dx(i)*fs%cfg%dy(j)*fs%cfg%dz(k) !*fs%cfg%vol(i,j,k)
+               localGmass(j) = localGmass(j) + (1.0_WP - vf%VF(i,j,k))*fs%Grho(i,j,k)*fs%cfg%dx(i)*fs%cfg%dy(j)*fs%cfg%dz(k) !*fs%cfg%vol(i,j,k)
+               localLmass(j) = localLmass(j) + vf%VF(i,j,k)*fs%Lrho(i,j,k)*fs%cfg%dx(i)*fs%cfg%dy(j)*fs%cfg%dz(k) !*fs%cfg%vol(i,j,k)
+               localGrhoU(j) = localGrhoU(j) + (1.0_WP - vf%VF(i,j,k))*fs%Grho(i,j,k)*fs%Ui(i,j,k)*fs%cfg%dx(i)*fs%cfg%dy(j)*fs%cfg%dz(k) !*fs%cfg%vol(i,j,k)
+               localLrhoU(j) = localLrhoU(j) + vf%VF(i,j,k)*fs%Lrho(i,j,k)*fs%Ui(i,j,k)*fs%cfg%dx(i)*fs%cfg%dy(j)*fs%cfg%dz(k) !*fs%cfg%vol(i,j,k)
+               ! Kinematic viscosity calculations
+               localnu = localnu + fs%visc(i,j,k)*fs%cfg%vol(i,j,k)/fs%RHO(i,j,k)
             end do
          end do
       end do
@@ -319,29 +308,86 @@ contains
       call MPI_ALLREDUCE(localvol,totalvol,fs%cfg%ny,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr)
       call MPI_ALLREDUCE(localrhoU,totalrhoU,fs%cfg%ny,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr)
       call MPI_ALLREDUCE(localrhoV,totalrhoV,fs%cfg%ny,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr)
+      call MPI_ALLREDUCE(localrhoW,totalrhoW,fs%cfg%ny,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr)
       call MPI_ALLREDUCE(localU,totalU,fs%cfg%ny,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr)
       call MPI_ALLREDUCE(localV,totalV,fs%cfg%ny,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr)
+      call MPI_ALLREDUCE(localW,totalW,fs%cfg%ny,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr)
+      call MPI_ALLREDUCE(localGmass,totalGmass,fs%cfg%ny,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr)
+      call MPI_ALLREDUCE(localGvol,totalGvol,fs%cfg%ny,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr)
+      call MPI_ALLREDUCE(localLmass,totalLmass,fs%cfg%ny,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr)
+      call MPI_ALLREDUCE(localLvol,totalLvol,fs%cfg%ny,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr)
+      call MPI_ALLREDUCE(localGrhoU,totalGrhoU,fs%cfg%ny,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr)
+      call MPI_ALLREDUCE(localLrhoU,totalLrhoU,fs%cfg%ny,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr)
+      call MPI_ALLREDUCE(localnu,totalnu,1,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr)
+      ! tempGvol = totalGvol
+      ! tempLvol = totalLvol
+      do j=fs%cfg%jmin_,fs%cfg%jmax_
+         if (totalGvol(j) .ne. 0.0_WP) then
+            testGrho(j) = totalGmass(j)/totalGvol(j)
+            totalGrhoU(j) = totalGrhoU(j)/totalGvol(j) 
+         end if
+         if (totalLvol(j) .ne. 0.0_WP) then
+            testLrho(j) = totalLmass(j)/totalLvol(j)
+            totalLrhoU(j) = totalLrhoU(j)/totalLvol(j)
+         end if
+      end do
       ! Volume-average for each plane
       totalrho  = totalmass/totalvol
       totalrhoU = totalrhoU/totalvol
       totalrhoV = totalrhoV/totalvol
+      totalrhoW = totalrhoW/totalvol
       totalU    = totalU/totalvol
       totalV    = totalV/totalvol
+      totalGrho = totalGmass/totalvol
+      totalLrho = totalLmass/totalvol
+      ! totalGrhoU = totalGrhoU/totalvol
+      ! totalLrhoU = totalLrhoU/totalvol
+      ! tempGrho = totalGrho
+      ! tempLrho = totalLrho
+      ! Average kinematic viscosity
+      totalnu   = totalnu/fs%cfg%vol_total
       ! Calculate Momentum thickness
       do j=fs%cfg%jmin_,fs%cfg%jmax_
-         totaldmthick = totaldmthick + (1.0_WP/(totalrho(j)*(1.0_WP+r_vel)**2.0_WP))*(totalrho(j)*(1.0_WP - (totalrhoU(j)/totalrho(j)))*((totalrhoU(j)/totalrho(j)) + r_vel))*vf%cfg%dy(j)
-         ! totaldmthick = totaldmthick + (1.0_WP/((1.0_WP+r_vel)**2.0_WP))*(totalrho(j)*(1.0_WP - (totalrhoU(j)/totalrho(j)))*((totalrhoU(j)/totalrho(j)) + r_vel))*vf%cfg%dy(j)
+         if (totalGrho(j) .ne. 0.0_WP) then
+            ! totaldgthick = totaldgthick + (1.0_WP/(Grho*(1.0_WP+r_vel)**2.0_WP))*(totalGrho(j)*(1.0_WP - (totalGrhoU(j)/testGrho(j)))*((totalGrhoU(j)/testGrho(j)) + r_vel))*vf%cfg%dy(j)
+            ! totaldgthick = totaldgthick + (1.0_WP/(totalrho(j)*(1.0_WP+r_vel)**2.0_WP))*(totalGrho(j)*(1.0_WP - (totalGrhoU(j)/testGrho(j)))*((totalGrhoU(j)/testGrho(j)) + r_vel))*vf%cfg%dy(j)
+            ! This is method 1
+            totaldgthick = totaldgthick + (1.0_WP/(Grho*(1.0_WP+r_vel)**2.0_WP))*(totalGrho(j)*(1.0_WP - (totalGrhoU(j)/testGrho(j)))*((totalGrhoU(j)/testGrho(j)) + r_vel))*vf%cfg%dy(j)
+            ! This is method 2
+            ! totaldgthick = totaldgthick + (1.0_WP/(((Grho+Lrho)/2.0_WP)*(1.0_WP+r_vel)**2.0_WP))*(totalGrho(j)*(1.0_WP - (totalrhoU(j)/totalrho(j)))*((totalrhoU(j)/totalrho(j)) + r_vel))*vf%cfg%dy(j)
+         end if
+         if (totalLrho(j) .ne. 0.0_WP) then
+            ! totaldlthick = totaldlthick + (1.0_WP/(Lrho*(1.0_WP+r_vel)**2.0_WP))*(totalLrho(j)*(1.0_WP - (totalLrhoU(j)/testLrho(j)))*((totalLrhoU(j)/testLrho(j)) + r_vel))*vf%cfg%dy(j)
+            ! totaldlthick = totaldlthick + (1.0_WP/(Lrho*(1.0_WP+r_vel)**2.0_WP))*(totalLrho(j)*(1.0_WP - (totalLrhoU(j)/testLrho(j)))*((totalLrhoU(j)/testLrho(j)) + r_vel))*vf%cfg%dy(j)
+            ! This is method 1
+            totaldlthick = totaldlthick + (1.0_WP/(Lrho*(1.0_WP+r_vel)**2.0_WP))*(totalLrho(j)*(1.0_WP - (totalLrhoU(j)/testLrho(j)))*((totalLrhoU(j)/testLrho(j)) + r_vel))*vf%cfg%dy(j)
+            ! This is method 2
+            ! totaldlthick = totaldlthick + (1.0_WP/(((Grho+Lrho)/2.0_WP)*(1.0_WP+r_vel)**2.0_WP))*(totalLrho(j)*(1.0_WP - (totalrhoU(j)/totalrho(j)))*((totalrhoU(j)/totalrho(j)) + r_vel))*vf%cfg%dy(j)
+         end if
+         ! totaldmthick = totaldmthick + (1.0_WP/(totalrho(j)*(1.0_WP+r_vel)**2.0_WP))*(totalrho(j)*(1.0_WP - (totalrhoU(j)/totalrho(j)))*((totalrhoU(j)/totalrho(j)) + r_vel))*vf%cfg%dy(j)
+         totaldmthick = totaldmthick + (1.0_WP/(((Grho+Lrho)/2.0_WP)*(1.0_WP+r_vel)**2.0_WP))*(totalrho(j)*(1.0_WP - (totalrhoU(j)/totalrho(j)))*((totalrhoU(j)/totalrho(j)) + r_vel))*vf%cfg%dy(j)
+         ! totaldgthick = totaldgthick + (1.0_WP/(Grho*(1.0_WP+r_vel)**2.0_WP))*(totalGrho(j)*(1.0_WP - (totalGrhoU(j)/tempGrho(j)))*((totalGrhoU(j)/tempGrho(j)) + r_vel))*vf%cfg%dy(j)
+         ! totaldlthick = totaldlthick + (1.0_WP/(Lrho*(1.0_WP+r_vel)**2.0_WP))*(totalLrho(j)*(1.0_WP - (totalLrhoU(j)/tempLrho(j)))*((totalLrhoU(j)/tempLrho(j)) + r_vel))*vf%cfg%dy(j)
       end do
       ! Calculate Reynolds Stresses
       do k=fs%cfg%kmin_,fs%cfg%kmax_
          do j=fs%cfg%jmin_,fs%cfg%jmax_
             do i=fs%cfg%imin_,fs%cfg%imax_
-               localrhoUU(j) = localrhoUU(j) + fs%RHO(i,j,k)*(fs%Ui(i,j,k) - totalrhoU(j)/totalrho(j))**2 &
+               ! localrhoUU(j) = localrhoUU(j) + fs%RHO(i,j,k)*(fs%Ui(i,j,k) - totalrhoU(j)/totalrho(j))**2 &
+               !    *fs%cfg%dx(i)*fs%cfg%dy(j)*fs%cfg%dz(k)
+               ! localrhoVV(j) = localrhoVV(j) + fs%RHO(i,j,k)*(fs%Vi(i,j,k) - totalrhoV(j)/totalrho(j))**2 &
+               !    *fs%cfg%dx(i)*fs%cfg%dy(j)*fs%cfg%dz(k)
+               ! localrhoUV(j) = localrhoUV(j) + fs%RHO(i,j,k)*(fs%Ui(i,j,k) - totalrhoU(j)/totalrho(j)) &
+               !    *(fs%Vi(i,j,k) - totalrhoV(j)/totalrho(j))*fs%cfg%dx(i)*fs%cfg%dy(j)*fs%cfg%dz(k)
+               ! Alternative attempt for Reynolds Stresses
+               localrhoUU(j) = localrhoUU(j) + (fs%Ui(i,j,k) - totalrhoU(j)/totalrho(j))**2 &
                   *fs%cfg%dx(i)*fs%cfg%dy(j)*fs%cfg%dz(k)
-               localrhoVV(j) = localrhoVV(j) + fs%RHO(i,j,k)*(fs%Vi(i,j,k) - totalrhoV(j)/totalrho(j))**2 &
+               localrhoVV(j) = localrhoVV(j) + (fs%Vi(i,j,k) - totalrhoV(j)/totalrho(j))**2 &
                   *fs%cfg%dx(i)*fs%cfg%dy(j)*fs%cfg%dz(k)
-               localrhoUV(j) = localrhoUV(j) + fs%RHO(i,j,k)*(fs%Ui(i,j,k) - totalrhoU(j)/totalrho(j)) &
+               localrhoUV(j) = localrhoUV(j) + (fs%Ui(i,j,k) - totalrhoU(j)/totalrho(j)) &
                   *(fs%Vi(i,j,k) - totalrhoV(j)/totalrho(j))*fs%cfg%dx(i)*fs%cfg%dy(j)*fs%cfg%dz(k)
+               localrhoWW(j) = localrhoWW(j) + (fs%Wi(i,j,k) - totalrhoW(j)/totalrho(j))**2 &
+                  *fs%cfg%dx(i)*fs%cfg%dy(j)*fs%cfg%dz(k)
             end do
          end do
       end do
@@ -355,27 +401,66 @@ contains
       call MPI_ALLREDUCE(localrhoUU,totalrhoUU,fs%cfg%ny,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr)
       call MPI_ALLREDUCE(localrhoVV,totalrhoVV,fs%cfg%ny,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr)
       call MPI_ALLREDUCE(localrhoUV,totalrhoUV,fs%cfg%ny,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr)
-      totalrhoUU = totalrhoUU/totalvol
-      totalrhoVV = totalrhoVV/totalvol
-      totalrhoUV = totalrhoUV/totalvol
+      call MPI_ALLREDUCE(localrhoWW,totalrhoWW,fs%cfg%ny,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr)
+      totalrhoUU = (totalrho*totalrhoUU)/totalvol
+      totalrhoVV = (totalrho*totalrhoVV)/totalvol
+      totalrhoUV = (totalrho*totalrhoUV)/totalvol
+      totalrhoWW = (totalrho*totalrhoWW)/totalvol
       ! Calculate Growth Rate
       do j=fs%cfg%jmin_,fs%cfg%jmax_
          ! grate = grate - (totalrhoUV(j)*dudy_favre(j))*vf%cfg%dy(j)
-         grate = grate - (2.0_WP/(1.0_WP+r_vel)**2)*(totalrhoUV(j)*dudy_favre(j+3))*vf%cfg%dy(j)
+         grate = grate - (2.0_WP/(((Grho + Lrho)/2)*(1.0_WP+r_vel)**2))*(totalrhoUV(j)*dudy_favre(j+3))*vf%cfg%dy(j)
       end do
+      ! Calculate Reynolds Numbers and Taylor microscale (lambda)
+      Re_mom = totaldmthick*(1.0_WP + r_vel)/(totalnu+epsilon(1.0_WP))
+      Re_vort = totaldwthick*(1.0_WP + r_vel)/(totalnu+epsilon(1.0_WP))
+      ! Reg_mom = totaldgthick*1.0_WP/(visc_g+epsilon(1.0_WP))
+      j = (fs%cfg%nyo-1)/2+1
+      ! Check whether the Tayler microscale changes with compressibility 
+      if (j.ge.fs%cfg%jmin_ .and. j.le.fs%cfg%jmax_) then
+         do k=fs%cfg%kmin_,fs%cfg%kmax_
+            do i=fs%cfg%imin_,fs%cfg%imax_
+               uprime1 = fs%Ui(i,j,k)-totalU(j)
+               uprime2 = fs%Ui(i+1,j,k)-totalU(j)
+               up2 = up2 + ((uprime1+uprime2)/2.0_WP)**2
+               dupdx2 = dupdx2 + ((uprime2-uprime1)/fs%cfg%dx(i))**2
+            end do
+         end do
+      else
+         up2  = 0.0_WP
+         dupdx2 = 0.0_WP
+      end if
+      call MPI_ALLREDUCE(up2,tmp,1,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr)
+      up2 = tmp
+      call MPI_ALLREDUCE(dupdx2,tmp,1,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr)
+      dupdx2 = tmp
+      lambda = sqrt( up2/(dupdx2+epsilon(1.0_WP)) )
+      Re_lambda = lambda*up2**(0.5)/(totalnu+epsilon(1.0_WP))
+      ! Calculate turbulent kinetic energy
+      tmp=0.0_WP
+      do k=fs%cfg%kmin_,fs%cfg%kmax_
+         do j=fs%cfg%jmin_,fs%cfg%jmax_
+            do i=fs%cfg%imin_,fs%cfg%imax_
+               tmp = tmp + fs%cfg%vol(i,j,k)*(fs%Ui(i,j,k)-(totalrhoU(j)/totalrho(j)))**2 & 
+                  + (fs%Vi(i,j,k)-(totalrhoV(j)/totalrho(j)))**2 + (fs%Wi(i,j,k)-(totalrhoW(j)/totalrho(j)))**2
+            end do
+         end do
+      end do
+      call MPI_ALLREDUCE(tmp,TKE,1,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr)
+      TKE = TKE/(2.0_WP*fs%cfg%vol_total)
       ! If root, print it out
       if (fs%cfg%amRoot) then
          ! Momentum thickness and growth rate
-         write(junit,'(es12.5,3x,es12.5,3x,es12.5,3x,es12.5)') time%t,totaldmthick,totaldwthick,grate
+         write(junit,'(es12.5,3x,es12.5,3x,es12.5,3x,es12.5,3x,es12.5,3x,es12.5,3x,es12.5,3x,es12.5,3x,es12.5,3x,es12.5)') time%t,totaldmthick,totaldwthick,grate,totaldgthick,totaldlthick,Re_mom,TKE
          ! Reynolds Stresses
          filename='PostProc_'
          write(timestamp,'(f6.1)') time%t
          open(newunit=iunit,file='PostProc/'//trim(adjustl(filename))//trim(adjustl(timestamp)),form='formatted',status='replace',access='stream',iostat=ierr)
-         write(iunit,'(a12,3x,a12,3x,a12,3x,a12,3x,a12,3x,a12,3x,a12,3x,a12,3x,a12,3x,a12,3x,a12)') &
-            'Height','totalrho','totalrhoU','totalrhoV','totalU','totalV','R11','R22','R12','dudy_favre','dudy_mean'
+         write(iunit,'(a12,3x,a12,3x,a12,3x,a12,3x,a12,3x,a12,3x,a12,3x,a12,3x,a12,3x,a12,3x,a12,3x,a12,3x,a12)') &
+            'Height','totalrho','totalrhoU','R11','R22','R12','R33','Grho','Lrho','GrhoU','LrhoU','U_favreG','U_favreL'
          do j=fs%cfg%jmin_,fs%cfg%jmax_
-            write(iunit,'(es12.5,3x,es12.5,3x,es12.5,3x,es12.5,3x,es12.5,3x,es12.5,3x,es12.5,3x,es12.5,3x,es12.5,3x,es12.5,3x,es12.5)') & 
-               fs%cfg%ym(j),totalrho(j),totalrhoU(j),totalrhoV(j),totalU(j),totalV(j),totalrhoUU(j),totalrhoVV(j),totalrhoUV(j),dudy_favre(j),dudy_mean(j)
+            write(iunit,'(es12.5,3x,es12.5,3x,es12.5,3x,es12.5,3x,es12.5,3x,es12.5,3x,es12.5,3x,es12.5,3x,es12.5,3x,es12.5,3x,es12.5,3x,es12.5,3x,es12.5)') & 
+               fs%cfg%ym(j),totalrho(j),totalrhoU(j),totalrhoUU(j),totalrhoVV(j),totalrhoUV(j),totalrhoWW(j),totalGrho(j),totalLrho(j),totalGrhoU(j),totalLrhoU(j),totalGrhoU(j)/totalGrho(j),totalLrhoU(j)/totalLrho(j)
          end do
          close(iunit)
       end if
@@ -384,13 +469,25 @@ contains
       deallocate(localrhoU,totalrhoU)
       deallocate(localvol,totalvol)
       deallocate(localrhoV,totalrhoV)
+      deallocate(localrhoW,totalrhoW)
       deallocate(localrhoUU,totalrhoUU)
       deallocate(localrhoVV,totalrhoVV)
+      deallocate(localrhoWW,totalrhoWW)
       deallocate(localrhoUV,totalrhoUV)
       deallocate(localmass,totalmass)
       deallocate(dudy_favre,dudy_mean)
       deallocate(localU,totalU)
       deallocate(localV,totalV)
+      deallocate(localW,totalW)
+      deallocate(localGvol,totalGvol)
+      deallocate(localLvol,totalLvol)
+      deallocate(localGmass,totalGmass)
+      deallocate(localLmass,totalLmass)
+      deallocate(totalGrho,totalLrho)
+      deallocate(localGrhoU,totalGrhoU)
+      deallocate(localLrhoU,totalLrhoU)
+      deallocate(tempGrho,tempLrho)
+      deallocate(tempGvol,tempLvol)
    end subroutine growth_rate
 
 
@@ -480,9 +577,10 @@ contains
          use random,          only: random_uniform
          use parallel,        only: MPI_REAL_WP
          use mpi_f08,         only: MPI_BCAST
+         use c_interface
          integer :: i,j,k,n,ierr
          real(WP) :: gamm_l,gamm_g,visc_l,visc_g,cv_g,cv_l,T
-         real(WP) :: Ma_g,Ma_l
+         real(WP) :: Ma_g,Ma_l,c
          real(WP) :: diffx_left,diffx_right,diffy_left,diffy_right,diffz_left,diffz_right
          real(WP), dimension(:,:,:), allocatable :: Upert,Vpert,Wpert
          real(WP), dimension(:), allocatable :: test
@@ -497,6 +595,7 @@ contains
          call param_read('Velocity ratio',r_vel); delta_l=r_visc*r_vel
          call param_read('Gas Mach number',Ma_g); GP = 1.0_WP/(gamm_g*Ma_g**2.0_WP)
          call param_read('Liquid Mach number',Ma_l); Pref_l = ((r_rho*r_vel**2)/(gamm_l*Ma_l**2.0_WP)) - GP
+         Pref_l = 0.0_WP
          ! Register equations of state
          call matmod%register_stiffenedgas('liquid',gamm_l,Pref_l)
          call matmod%register_idealgas('gas',gamm_g)
@@ -513,6 +612,7 @@ contains
          call param_read('Liquid Ly',Lyl)
          call param_read('Gas Ly',Lyg)
          call param_read('Gas Weber number',Weg); fs%sigma=1.0_WP/(Weg+epsilon(Weg))
+         fs%sigma = 0.0_WP
          ! Configure pressure solver
          ps=hypre_str(cfg=cfg,name='Pressure',method=pcg_pfmg,nst=7)
          ps%maxlevel=10
@@ -525,6 +625,7 @@ contains
          ! Setup the solver
          call fs%setup(pressure_solver=ps,implicit_solver=vs)
          ! Set initial velocity field
+         c = (1.0_WP + r_vel)**2.0_WP / ((r_vel*LOG(2.0_WP) - (LOG(2.0_WP) - 1.0_WP)))
          fs%Ui=0.0_WP; fs%Vi=0.0_WP; fs%Wi=0.0_WP
          do k=fs%cfg%kmino_,fs%cfg%kmaxo_
             do j=fs%cfg%jmino_,fs%cfg%jmaxo_
@@ -543,77 +644,6 @@ contains
                end do
             end do
          end do
-
-         ! ! Allocate velocity potential perturbations for central differencing
-         ! allocate(Upert(fs%cfg%imino_:fs%cfg%imaxo_,fs%cfg%jmino_:fs%cfg%jmaxo_,fs%cfg%kmino_:fs%cfg%kmaxo_))
-         ! allocate(Vpert(fs%cfg%imino_:fs%cfg%imaxo_,fs%cfg%jmino_:fs%cfg%jmaxo_,fs%cfg%kmino_:fs%cfg%kmaxo_))
-         ! allocate(Wpert(fs%cfg%imino_:fs%cfg%imaxo_,fs%cfg%jmino_:fs%cfg%jmaxo_,fs%cfg%kmino_:fs%cfg%kmaxo_))
-         ! Upert=0.0_WP;Vpert=0.0_WP;Wpert=0.0_WP
-
-         ! ! Set velocity potential perturbation
-         ! mode_low = 1; nwave=6
-         ! allocate(wnumbX(nwave),wshiftX(nwave))
-         ! if (cfg%amRoot) then
-         !    do n=1,nwave-mode_low
-         !       wnumbX(n)=(mode_low+n-1)*twoPi/cfg%xL
-         !       wshiftX(n)=random_uniform(lo=0.0_WP,hi=twoPi)
-         !    end do
-         ! end if
-         ! call MPI_BCAST(wshiftX,nwave-mode_low,MPI_REAL_WP,0,cfg%comm,ierr)
-         ! call MPI_BCAST(wnumbX,nwave-mode_low,MPI_REAL_WP,0,cfg%comm,ierr)
-         ! allocate(wnumbZ(nwave),wshiftZ(nwave))
-         ! if (cfg%amRoot) then
-         !    do n=1,nwave-mode_low
-         !       wnumbZ(n)=(mode_low+n-1)*twoPi/cfg%zL
-         !       wshiftZ(n)=random_uniform(lo=0.0_WP,hi=twoPi)
-         !    end do
-         ! end if
-         ! call MPI_BCAST(wshiftZ,nwave-mode_low,MPI_REAL_WP,0,cfg%comm,ierr)
-         ! call MPI_BCAST(wnumbZ,nwave-mode_low,MPI_REAL_WP,0,cfg%comm,ierr)
-
-         ! do k=fs%cfg%kmin_,fs%cfg%kmax_
-         !    do j=fs%cfg%jmin_,fs%cfg%jmax_
-         !       do i=fs%cfg%imin_,fs%cfg%imax_
-         !          do n=1,nwave-mode_low
-         !             diffx_left = - 0.15_WP/(4.0_WP*Pi**2.0_WP*wnumbX(n)*wnumbZ(n))&
-         !             *cos(wnumbX(n)*fs%cfg%xm(i-1) + wshiftX(n))*cos(wnumbZ(n)*fs%cfg%zm(k) + wshiftZ(n))&
-         !             *EXP(-5.0_WP*fs%cfg%ym(j)**2.0_WP)*(sin(fs%cfg%ym(j))+10.0_WP*fs%cfg%ym(j)*cos(fs%cfg%ym(j)))
-
-         !             diffx_right = - 0.15_WP/(4.0_WP*Pi**2.0_WP*wnumbX(n)*wnumbZ(n))&
-         !             *cos(wnumbX(n)*fs%cfg%xm(i+1) + wshiftX(n))*cos(wnumbZ(n)*fs%cfg%zm(k) + wshiftZ(n))&
-         !             *EXP(-5.0_WP*fs%cfg%ym(j)**2.0_WP)*(sin(fs%cfg%ym(j))+10.0_WP*fs%cfg%ym(j)*cos(fs%cfg%ym(j)))
-
-         !             Upert(i,j,k) = Upert(i,j,k) + (diffx_right - diffx_left)/(2.0_WP*fs%cfg%dx(i))
-
-         !             diffy_left = - 0.15_WP/(4.0_WP*Pi**2.0_WP*wnumbX(n)*wnumbZ(n))&
-         !             *cos(wnumbX(n)*fs%cfg%xm(i) + wshiftX(n))*cos(wnumbZ(n)*fs%cfg%zm(k) + wshiftZ(n))&
-         !             *EXP(-5.0_WP*fs%cfg%ym(j-1)**2.0_WP)*(sin(fs%cfg%ym(j-1))+10.0_WP*fs%cfg%ym(j-1)*cos(fs%cfg%ym(j-1)))
-
-         !             diffy_right = - 0.15_WP/(4.0_WP*Pi**2.0_WP*wnumbX(n)*wnumbZ(n))&
-         !             *cos(wnumbX(n)*fs%cfg%xm(i) + wshiftX(n))*cos(wnumbZ(n)*fs%cfg%zm(k) + wshiftZ(n))&
-         !             *EXP(-5.0_WP*fs%cfg%ym(j+1)**2.0_WP)*(sin(fs%cfg%ym(j+1))+10.0_WP*fs%cfg%ym(j+1)*cos(fs%cfg%ym(j+1)))
-
-         !             Vpert(i,j,k) = Vpert(i,j,k) + (diffy_right - diffy_left)/(2.0_WP*fs%cfg%dy(j))
-
-         !             diffz_left = - 0.15_WP/(4.0_WP*Pi**2.0_WP*wnumbX(n)*wnumbZ(n))&
-         !             *cos(wnumbX(n)*fs%cfg%xm(i) + wshiftX(n))*cos(wnumbZ(n)*fs%cfg%zm(k-1) + wshiftZ(n))&
-         !             *EXP(-5.0_WP*fs%cfg%ym(j)**2.0_WP)*(sin(fs%cfg%ym(j))+10.0_WP*fs%cfg%ym(j)*cos(fs%cfg%ym(j)))
-
-         !             diffz_right = - 0.15_WP/(4.0_WP*Pi**2.0_WP*wnumbX(n)*wnumbZ(n))&
-         !             *cos(wnumbX(n)*fs%cfg%xm(i) + wshiftX(n))*cos(wnumbZ(n)*fs%cfg%zm(k+1) + wshiftZ(n))&
-         !             *EXP(-5.0_WP*fs%cfg%ym(j)**2.0_WP)*(sin(fs%cfg%ym(j))+10.0_WP*fs%cfg%ym(j)*cos(fs%cfg%ym(j)))
-                     
-         !             Wpert(i,j,k) = Wpert(i,j,k) + (diffz_right - diffz_left)/(2.0_WP*fs%cfg%dz(k))
-         !          end do
-         !       end do
-         !    end do
-         ! end do
-
-         ! fs%Ui = fs%Ui + Upert
-         ! fs%Vi = fs%Vi + Vpert
-         ! fs%Wi = fs%Wi + Wpert
-
-
          ! Set velocity potential perturbation
          mode_low = 3; nwave=20
          allocate(wnumbX(nwave),wshiftX(nwave))
@@ -690,10 +720,11 @@ contains
          ! Store momentum thickness results
          if (fs%cfg%amRoot) then
             open(newunit=junit,file='thickness.csv',status='unknown')
-            write(junit,'(a12,3x,a12,3x,a12,3x,a12)') 'Time','d_m','d_w','Growth Rate'
+            write(junit,'(a12,3x,a12,3x,a12,3x,a12,3x,a12,3x,a12,3x,a12,3x,a12,3x,a12,3x,a12)') 'Time','d_m','d_w','Growth Rate','d_g','d_l','Re_mom','TKE'
             call execute_command_line('mkdir -p PostProc')
+            ! if the execute_command_line intrinsic still gives me trouble, use the following
+            ! call F_mkdir('PostProc')
          end if
-         call growth_rate
       end block create_and_initialize_flow_solver
 
 
@@ -769,7 +800,9 @@ contains
          ppevt=event(time=time,name='Postproc output')
          call param_read('Postproc output period',ppevt%tper)
          ! Perform the output
-         if (ppevt%occurs()) call growth_rate()
+         if (ppevt%occurs()) then 
+            call growth_rate()
+         end if
       end block create_postproc 
 
       ! Create an iterator for imposing the bottom and top sponges
@@ -866,8 +899,9 @@ contains
          call mfile%write()
          call cflfile%write()
          call dfile%write()
-         if (ppevt%occurs()) call growth_rate()
-
+         if (ppevt%occurs()) then
+            call growth_rate()
+         end if
       end do
 
       close(junit)
