@@ -1,4 +1,4 @@
-f90EXE_sources += lpt_class.f90 lss_class.f90
+f90EXE_sources += lpt_class.f90 lss_class.f90 tracer_class.f90
 
 INCLUDE_LOCATIONS += $(NGA_HOME)/src/particles
 VPATH_LOCATIONS   += $(NGA_HOME)/src/particles

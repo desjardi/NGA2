@@ -402,7 +402,7 @@ contains
          allocate(this%edge_sensor(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_)); this%edge_sensor=0.0_WP
          allocate(this%edge_normal(1:3,this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_)); this%edge_normal=0.0_WP
          ! By default, use thin structure removal
-         this%thin_thld_min=1.0e-3_WP !< This removes any thin structure with thickness below dx/1000
+         this%thin_thld_min=1.0e-4_WP !< This removes any thin structure with thickness below dx/1000
          ! By default, use flotsam removal
          this%flotsam_thld=1.0e-3_WP  !< This considers any separated structure around dx/10 and below as bogus
          ! Also allow for larger curvatures to be calculated
