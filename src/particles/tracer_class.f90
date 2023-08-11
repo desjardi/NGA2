@@ -3,7 +3,7 @@
 module tracer_class
    use precision,      only: WP
    use string,         only: str_medium
-   use config_class,   only: config
+   use config_class,    only: config
    use mpi_f08,        only: MPI_Datatype,MPI_INTEGER8,MPI_INTEGER,MPI_DOUBLE_PRECISION
    implicit none
    private
@@ -28,15 +28,13 @@ module tracer_class
       real(WP), dimension(3) :: pos        !< Particle center coordinates
       real(WP), dimension(3) :: vel        !< Velocity of particle
       real(WP), dimension(3) :: acc        !< Acceleration of particle
-      real(WP) :: rho                      !< Density at particle location
-      real(WP) :: P                        !< Pressure at particle locatiom
       !> MPI_INTEGER data
       integer , dimension(3) :: ind        !< Index of cell containing particle center
       integer  :: flag                     !< Control parameter (0=normal, 1=done->will be removed)
    end type part
    !> Number of blocks, block length, and block types in a particle
    integer, parameter                         :: part_nblock=3
-   integer           , dimension(part_nblock) :: part_lblock=[1,11,4]
+   integer           , dimension(part_nblock) :: part_lblock=[1,9,4]
    type(MPI_Datatype), dimension(part_nblock) :: part_tblock=[MPI_INTEGER8,MPI_DOUBLE_PRECISION,MPI_INTEGER]
    !> MPI_PART derived datatype and size
    type(MPI_Datatype) :: MPI_PART
@@ -79,7 +77,7 @@ module tracer_class
       procedure :: read                                   !< Parallel read particles from file
       procedure :: write                                  !< Parallel write particles to file
       procedure :: get_max                                !< Extract various monitoring data
-      procedure :: get_cfl                                !< Calculate maximum CFL
+      procedure :: get_cfl                                 !< Calculate maximum CFL
       procedure :: inject                                 !< Inject particles at a prescribed boundary
    end type tracer
 
@@ -133,7 +131,7 @@ contains
    
    
    !> Advance the particle equations by a specified time step dt
-   subroutine advance(this,dt,U,V,W,rho,P)
+   subroutine advance(this,dt,U,V,W)
       use mpi_f08, only : MPI_SUM,MPI_INTEGER
       use mathtools, only: Pi
       implicit none
@@ -142,8 +140,6 @@ contains
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: U         !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: V         !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: W         !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
-      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: rho       !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
-      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: P         !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       type(part) :: pold
       integer :: i,ierr
       
@@ -165,6 +161,10 @@ contains
          this%p(i)%pos=this%p(i)%pos+dt*this%p(i)%vel
          ! Update acceleration
          this%p(i)%acc=(this%p(i)%vel-pold%vel)/dt
+         ! Relocalize the particle
+         this%p(i)%ind=this%cfg%get_ijk_global(this%p(i)%pos,this%p(i)%ind)
+         ! Handle particles in walls
+         if (this%cfg%VF(this%p(i)%ind(1),this%p(i)%ind(2),this%p(i)%ind(3)).le.0.0_WP) this%p(i)%flag=1
          ! Correct the position to take into account periodicity
          if (this%cfg%xper) this%p(i)%pos(1)=this%cfg%x(this%cfg%imin)+modulo(this%p(i)%pos(1)-this%cfg%x(this%cfg%imin),this%cfg%xL)
          if (this%cfg%yper) this%p(i)%pos(2)=this%cfg%y(this%cfg%jmin)+modulo(this%p(i)%pos(2)-this%cfg%y(this%cfg%jmin),this%cfg%yL)
@@ -175,16 +175,12 @@ contains
          if (this%p(i)%pos(1).lt.this%cfg%x(this%cfg%imin).or.this%p(i)%pos(1).gt.this%cfg%x(this%cfg%imax+1)) this%p(i)%flag=1
          if (this%p(i)%pos(2).lt.this%cfg%y(this%cfg%jmin).or.this%p(i)%pos(2).gt.this%cfg%y(this%cfg%jmax+1)) this%p(i)%flag=1
          if (this%p(i)%pos(3).lt.this%cfg%z(this%cfg%kmin).or.this%p(i)%pos(3).gt.this%cfg%z(this%cfg%kmax+1)) this%p(i)%flag=1
-         ! Handle particles in walls
-         if (this%cfg%VF(this%p(i)%ind(1),this%p(i)%ind(2),this%p(i)%ind(3)).le.0.0_WP) this%p(i)%flag=1
          if (this%p(i)%flag.eq.1) then
             ! Count number of particles removed
             this%np_out=this%np_out+1
          else
             ! Interpolate fluid quantities to particle location
             this%p(i)%vel=this%cfg%get_velocity(pos=this%p(i)%pos,i0=this%p(i)%ind(1),j0=this%p(i)%ind(2),k0=this%p(i)%ind(3),U=U,V=V,W=W)
-            this%p(i)%rho=this%cfg%get_scalar(pos=this%p(i)%pos,i0=this%p(i)%ind(1),j0=this%p(i)%ind(2),k0=this%p(i)%ind(3),S=rho,bc='n')
-            this%p(i)%P=this%cfg%get_scalar(pos=this%p(i)%pos,i0=this%p(i)%ind(1),j0=this%p(i)%ind(2),k0=this%p(i)%ind(3),S=P,bc='n')
          end if
       end do
       
@@ -213,7 +209,7 @@ contains
    
    !> Inject particles from a prescribed location with given injection rate
    !> Requires injection parameters to be set beforehand
-   subroutine inject(this,dt,U,V,W,rho,P)
+   subroutine inject(this,dt,U,V,W)
       use mpi_f08
       implicit none
       class(tracer), intent(inout) :: this
@@ -221,8 +217,6 @@ contains
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: U         !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: V         !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: W         !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
-      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: rho       !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
-      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: P         !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       real(WP) :: Ngoal,Nadded                       !< Injection rate parameters
       real(WP), save :: previous_error=0.0_WP        !< Store number of particles left over from previous timestep
       integer(kind=8) :: maxid_,maxid                !< Keep track of maximum particle id
@@ -246,7 +240,7 @@ contains
       ! Add new particles until desired number is achieved
       do while (Nadded.lt.Ngoal)
          
-         if (this%cfg%amRoot) then
+      if (this%cfg%amRoot) then
             ! Initialize parameters
             np_tmp = 0
             ! Loop while the added volume is not sufficient
@@ -254,25 +248,23 @@ contains
                ! Increment counter
                np_tmp=np_tmp+1
                count = np0_+np_tmp
-               ! Create space for new particle
+         ! Create space for new particle
                call this%resize(count)
-               ! Set particle ID
+            ! Set particle ID
                this%p(count)%id=maxid+int(np_tmp,8)
-               ! Give a position at the injector to the particle
+            ! Give a position at the injector to the particle
                this%p(count)%pos=get_position()
-               ! Localize the particle
+            ! Localize the particle
                this%p(count)%ind(1)=this%cfg%imin; this%p(count)%ind(2)=this%cfg%jmin; this%p(count)%ind(3)=this%cfg%kmin
                this%p(count)%ind=this%cfg%get_ijk_global(this%p(count)%pos,this%p(count)%ind)
                ! Interpolate fluid quantities to particle location
                this%p(count)%vel=this%cfg%get_velocity(pos=this%p(count)%pos,i0=this%p(count)%ind(1),j0=this%p(count)%ind(2),k0=this%p(count)%ind(3),U=U,V=V,W=W)
-               this%p(count)%rho=this%cfg%get_scalar(pos=this%p(count)%pos,i0=this%p(count)%ind(1),j0=this%p(count)%ind(2),k0=this%p(count)%ind(3),S=rho,bc='n')
-               this%p(count)%P=this%cfg%get_scalar(pos=this%p(count)%pos,i0=this%p(count)%ind(1),j0=this%p(count)%ind(2),k0=this%p(count)%ind(3),S=P,bc='n')
-               ! Make it an "official" particle
+            ! Make it an "official" particle
                this%p(count)%flag=0
-            end do
-         end if
-         ! Communicate particles
-         call this%sync()
+         end do
+      end if
+      ! Communicate particles
+      call this%sync()
          ! Loop through newly created particles
          buf=0
          do i=np0_+1,this%np_
@@ -412,12 +404,12 @@ contains
       ! Reset particle mesh storage
       call pmesh%reset()
       ! Nothing else to do if no particle is present
-      if (this%np_.eq.0) return
-      ! Copy particle info
-      call pmesh%set_size(this%np_)
-      do i=1,this%np_
-         pmesh%pos(:,i)=this%p(i)%pos
-      end do
+         if (this%np_.eq.0) return
+         ! Copy particle info
+         call pmesh%set_size(this%np_)
+         do i=1,this%np_
+            pmesh%pos(:,i)=this%p(i)%pos
+         end do
    end subroutine update_partmesh
    
    
@@ -569,7 +561,7 @@ contains
       type(MPI_Status):: status
       integer(kind=MPI_OFFSET_KIND) :: offset
       integer :: i,ierr,iunit
-      
+
       ! Root serial-writes the file header
       if (this%cfg%amRoot) then
          ! Open the file
