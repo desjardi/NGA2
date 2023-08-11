@@ -57,6 +57,7 @@ contains
       real(WP) :: G
       real(WP) :: epsilon, theta, costheta, R
       epsilon = 0.08_WP
+      center = [0.0_WP,0.0_WP,0.0_WP]
       ! Create droplet
       theta=atan2(xyz(2)-center(2),xyz(1)-center(1))
       costheta=cos(theta)
