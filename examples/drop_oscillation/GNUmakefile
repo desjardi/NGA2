@@ -1,5 +1,5 @@
 # NGA location if not yet defined
-NGA_HOME ?= /Users/fabien/workspace/code/NGA2_fork_FE/NGA2
+NGA_HOME ?= ../..
 
 # Compilation parameters
 PRECISION = DOUBLE
@@ -23,9 +23,9 @@ INCLUDE_LOCATIONS += $(Ulocs)
 VPATH_LOCATIONS   += $(Ulocs)
 
 # Define external libraries - this can also be in .profile
-HYPRE_DIR = /Users/fabien/workspace/code/hypre/src/hypre
-IRL_DIR   = /Users/fabien/workspace/code/interface-reconstruction-library/install
-LAPACK_DIR= /opt/homebrew/Cellar/lapack/3.11
+#HYPRE_DIR = 
+#IRL_DIR   = 
+#LAPACK_DIR= 
 
 # NGA compilation definitions
 include $(NGA_HOME)/tools/GNUMake/Make.defs
