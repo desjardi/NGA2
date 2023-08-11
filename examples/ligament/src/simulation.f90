@@ -64,7 +64,7 @@ contains
             call turb%init(group=hit_group,xend=atom%cfg%x(atom%cfg%imin))
            ! Run HIT until t/tau_eddy=20
             dt=0.15_WP*turb%cfg%min_meshsize/turb%Urms_tgt !< Estimate maximum stable dt
-            !do while (turb%time%t.lt.20.0_WP*turb%tau_tgt); call turb%step(dt); end do
+            do while (turb%time%t.lt.20.0_WP*turb%tau_tgt); call turb%step(dt); end do
          end block prepare_hit
       end if
       
@@ -101,7 +101,7 @@ contains
             advance_hit: block
                real(WP) :: dt
                dt=0.15_WP*turb%cfg%min_meshsize/turb%Urms_tgt
-               !do while (turb%time%t.lt.atom%time%t+20.0_WP*turb%tau_tgt); call turb%step(dt); end do
+               do while (turb%time%t.lt.atom%time%t+20.0_WP*turb%tau_tgt); call turb%step(dt); end do
             end block advance_hit
             ! Transfer turbulent velocity from hit to atomization region
             push_velocity: block
@@ -127,9 +127,9 @@ contains
             call atom%fs%get_bcond('inflow',mybc)
             do n=1,mybc%itr%no_
                i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
-               atom%fs%U(i  ,j,k)=1.0_WP!+atom%resU(i  ,j,k)
-               !atom%fs%V(i-1,j,k)=       atom%resV(i-1,j,k)
-               !atom%fs%W(i-1,j,k)=       atom%resW(i-1,j,k)
+               atom%fs%U(i  ,j,k)=1.0_WP+atom%resU(i  ,j,k)
+               atom%fs%V(i-1,j,k)=       atom%resV(i-1,j,k)
+               atom%fs%W(i-1,j,k)=       atom%resW(i-1,j,k)
             end do
          end block apply_boundary_condition
       end do
