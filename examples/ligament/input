@@ -6,9 +6,9 @@ X ligament : 2
 Lx : 20  !40
 Ly : 10  !20
 Lz : 10  !20
-nx : 256 !480
-ny : 128 !240
-nz : 128 !240
+nx : 320 !512
+ny : 160 !256
+nz : 160 !256
 
 # Flow conditions
 Reynolds number :      100
@@ -19,7 +19,7 @@ Target Re_lambda :     45
 Turbulence intensity : 0.05
 
 # Time integration
-Max timestep size : 5e-2
+Max timestep size : 2.5e-2
 Max cfl number :    0.9
 Max time :          200
 

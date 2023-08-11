@@ -3,7 +3,7 @@
 module tracer_class
    use precision,      only: WP
    use string,         only: str_medium
-   use config_class,    only: config
+   use config_class,   only: config
    use mpi_f08,        only: MPI_Datatype,MPI_INTEGER8,MPI_INTEGER,MPI_DOUBLE_PRECISION
    implicit none
    private
@@ -42,7 +42,7 @@ module tracer_class
    
    !> Fluid tracer solver object definition
    type :: tracer
-   
+      
       ! This is our underlying config
       class(config), pointer :: cfg                       !< This is the config the solver is build for
       
@@ -77,17 +77,17 @@ module tracer_class
       procedure :: read                                   !< Parallel read particles from file
       procedure :: write                                  !< Parallel write particles to file
       procedure :: get_max                                !< Extract various monitoring data
-      procedure :: get_cfl                                 !< Calculate maximum CFL
+      procedure :: get_cfl                                !< Calculate maximum CFL
       procedure :: inject                                 !< Inject particles at a prescribed boundary
    end type tracer
-
-
-  !> Declare tracer solver constructor
-  interface tracer
-     procedure constructor
-  end interface tracer
-  
-
+   
+   
+   !> Declare tracer solver constructor
+   interface tracer
+      procedure constructor
+   end interface tracer
+   
+   
 contains
    
    
@@ -227,8 +227,8 @@ contains
       this%np_new=0
       
       ! Get the particle number density that should be added to the system
-      Ngoal  = this%inj_rate*dt+previous_error
-      Nadded = 0.0_WP
+      Ngoal =this%inj_rate*dt+previous_error
+      Nadded=0.0_WP
       
       ! Determine id to assign to particle
       maxid_=0
@@ -239,8 +239,7 @@ contains
       
       ! Add new particles until desired number is achieved
       do while (Nadded.lt.Ngoal)
-         
-      if (this%cfg%amRoot) then
+         if (this%cfg%amRoot) then
             ! Initialize parameters
             np_tmp = 0
             ! Loop while the added volume is not sufficient
@@ -248,23 +247,23 @@ contains
                ! Increment counter
                np_tmp=np_tmp+1
                count = np0_+np_tmp
-         ! Create space for new particle
+               ! Create space for new particle
                call this%resize(count)
-            ! Set particle ID
+               ! Set particle ID
                this%p(count)%id=maxid+int(np_tmp,8)
-            ! Give a position at the injector to the particle
+               ! Give a position at the injector to the particle
                this%p(count)%pos=get_position()
-            ! Localize the particle
+               ! Localize the particle
                this%p(count)%ind(1)=this%cfg%imin; this%p(count)%ind(2)=this%cfg%jmin; this%p(count)%ind(3)=this%cfg%kmin
                this%p(count)%ind=this%cfg%get_ijk_global(this%p(count)%pos,this%p(count)%ind)
                ! Interpolate fluid quantities to particle location
                this%p(count)%vel=this%cfg%get_velocity(pos=this%p(count)%pos,i0=this%p(count)%ind(1),j0=this%p(count)%ind(2),k0=this%p(count)%ind(3),U=U,V=V,W=W)
-            ! Make it an "official" particle
+               ! Make it an "official" particle
                this%p(count)%flag=0
-         end do
-      end if
-      ! Communicate particles
-      call this%sync()
+            end do
+         end if
+         ! Communicate particles
+         call this%sync()
          ! Loop through newly created particles
          buf=0
          do i=np0_+1,this%np_
@@ -272,9 +271,9 @@ contains
             if (this%cfg%VF(this%p(i)%ind(1),this%p(i)%ind(2),this%p(i)%ind(3)).le.0.0_WP) this%p(i)%flag=1
             if (this%p(i)%flag.eq.0) then
                ! Update the added number for the timestep
-               buf = buf + 1
+               buf=buf+1
                ! Update the max particle id
-               maxid = max(maxid,this%p(i)%id)
+               maxid=max(maxid,this%p(i)%id)
                ! Increment counter
                this%np_new=this%np_new+1
             end if
@@ -290,7 +289,7 @@ contains
       end do
       
       ! Remember the error
-      previous_error = Ngoal-Nadded
+      previous_error=Ngoal-Nadded
       
       ! Sum up injected particles
       call MPI_ALLREDUCE(this%np_new,i,1,MPI_INTEGER,MPI_SUM,this%cfg%comm,ierr); this%np_new=i
@@ -491,6 +490,7 @@ contains
       ! Recycle to remove duplicate particles
       call this%recycle()
    end subroutine sync
+   
    
    !> Adaptation of particle array size
    subroutine resize(this,n)
