@@ -1083,6 +1083,9 @@ contains
       integer :: i,j,k,ii,jj,kk
       real(WP), dimension(:,:,:), allocatable :: FX,FY,FZ
       
+      ! Zero out drhoUVW/dt arrays
+      drhoUdt=0.0_WP; drhoVdt=0.0_WP; drhoWdt=0.0_WP
+      
       ! Allocate flux arrays
       allocate(FX(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
       allocate(FY(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
