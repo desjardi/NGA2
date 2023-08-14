@@ -158,7 +158,7 @@ contains
          this%p(i)%pos=pold%pos+0.5_WP*dt*this%p(i)%vel
          ! Correct with midpoint rule
          this%p(i)%vel=this%cfg%get_velocity(pos=this%p(i)%pos,i0=this%p(i)%ind(1),j0=this%p(i)%ind(2),k0=this%p(i)%ind(3),U=U,V=V,W=W)
-         this%p(i)%pos=this%p(i)%pos+dt*this%p(i)%vel
+         this%p(i)%pos=pold%pos+dt*this%p(i)%vel
          ! Update acceleration
          this%p(i)%acc=(this%p(i)%vel-pold%vel)/dt
          ! Relocalize the particle
