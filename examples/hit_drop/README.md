@@ -11,6 +11,7 @@ $$\mathrm{Re_\lambda}=\dfrac{\mathrm{U_rms}\lambda}{\nu}$$
 
         - If not specified, $\mathrm{Re}_\lambda$ will be chosen as the maximum value allowed by the number of grid points.
     - The `Number of tracers` *(optional)*, specifying how many fluid tracers we want to be seeded on the droplet's surface.
+    - The `Remove tangential motion` *(optional)*, specifying whether to remove the tracer motion tangential to the interface or not (T=true, F=false, default=T)
 
 <p align="center"><img src="./snap_t2.png"/></p>
 <p align="center">Snaphost of the simulation at $t = 2\tau_L$ (after two eddy-turnover times).</p>

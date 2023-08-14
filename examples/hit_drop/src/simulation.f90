@@ -49,6 +49,7 @@ module simulation
    real(WP), dimension(3) :: center
    real(WP) :: radius
    integer :: npart
+   logical :: normal_only
 
    !> For monitoring
    real(WP) :: EPS
@@ -276,6 +277,7 @@ contains
             write(output_unit,'("[Drop setup] => sigma             =",es12.5)') fs%sigma
          end if
          ! Gaussian initial field
+         ! call random_init(.true., .true.)
          do k=fs%cfg%kmin_,fs%cfg%kmax_
             do j=fs%cfg%jmin_,fs%cfg%jmax_
                do i=fs%cfg%imin_,fs%cfg%imax_
@@ -317,6 +319,8 @@ contains
       initialize_pt: block
          ! Get number of particles
          call param_read('Number of tracers',npart)
+         ! Remove tangential component
+         call param_read('Remove tangential motion',normal_only,default=.true.)
          ! Create solver
          pt=tracer(cfg=cfg,name='PT')
          ! Initialize with zero particles
@@ -348,6 +352,7 @@ contains
          call ens_out%add_scalar('divergence',fs%div)
          call ens_out%add_scalar('pressure',fs%P)
          call ens_out%add_scalar('VOF',vf%VF)
+         call ens_out%add_scalar('signeddist',vf%G)
          call ens_out%add_scalar('curvature',vf%curv)
          call ens_out%add_surface('vofplic',smesh) 
          call ens_out%add_particle('particles',pmesh)
@@ -426,10 +431,6 @@ contains
          call time%adjust_dt()
          call time%increment()
          
-         ! Advance and project tracer particles on the interface
-         call pt%advance(dt=time%dtmid,U=fs%U,V=fs%V,W=fs%W)
-         call project_tracers(vf=vf,pt=pt)
-
          ! Insert droplet once
          if (.not.droplet_inserted.and.time%t.gt.inject_time) then
             ! Initialize VOF field of droplet
@@ -494,6 +495,92 @@ contains
          
          ! VOF solver step
          call vf%advance(dt=time%dt,U=fs%U,V=fs%V,W=fs%W)
+
+         ! Advance and project tracer particles on the interface
+         if (.not.normal_only) then
+            call pt%advance(dt=time%dtmid,U=fs%U,V=fs%V,W=fs%W)
+         else
+            advance_tracers_normally: block
+               use mathtools, only: Pi,normalize
+               use mpi_f08,  only: MPI_ALLREDUCE,MPI_SUM
+               use parallel, only: MPI_REAL_WP
+               real(WP), dimension(3) :: old_vel,old_pos,mymassvel,massvel
+               real(WP), dimension(3) :: normal
+               real(WP) :: mymass,mass,norm
+               integer :: i,j,k,ierr
+
+               ! Interpolate velocity at cell center
+               call fs%interp_vel(Ui,Vi,Wi)
+
+               ! Get gradient of distance function to the interface
+               call fs%get_pgrad(vf%G,resU,resV,resW)
+
+               ! Compute center of mass velocity
+               mymassvel=[0.0_WP,0.0_WP,0.0_WP]; mymass=0.0_WP
+               do k=fs%cfg%kmin_,fs%cfg%kmax_
+                  do j=fs%cfg%jmin_,fs%cfg%jmax_
+                     do i=fs%cfg%imin_,fs%cfg%imax_
+                        mymass=mymass+vf%VF(i,j,k)
+                        mymassvel=mymassvel+vf%VF(i,j,k)*[Ui(i,j,k),Vi(i,j,k),Wi(i,j,k)]
+                     end do
+                  end do
+               end do
+               call MPI_ALLREDUCE(mymass,mass,1,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr);
+               call MPI_ALLREDUCE(mymassvel,massvel,3,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr); massvel=massvel/mass
+               
+               ! Advance the equations
+               do i=1,pt%np_
+                  ! Avoid particles with id=0
+                  if (pt%p(i)%id.eq.0) cycle
+                  ! Remember the particle
+                  old_vel=pt%p(i)%vel
+                  old_pos=pt%p(i)%pos
+                  ! Interpolate fluid velocity to particle location
+                  normal=normalize([cfg%get_scalar(pos=pt%p(i)%pos,i0=pt%p(i)%ind(1),j0=pt%p(i)%ind(2),k0=pt%p(i)%ind(3),S=resU,bc='n'),&
+                  &                 cfg%get_scalar(pos=pt%p(i)%pos,i0=pt%p(i)%ind(1),j0=pt%p(i)%ind(2),k0=pt%p(i)%ind(3),S=resV,bc='n'),&
+                  &                 cfg%get_scalar(pos=pt%p(i)%pos,i0=pt%p(i)%ind(1),j0=pt%p(i)%ind(2),k0=pt%p(i)%ind(3),S=resW,bc='n')])
+                  pt%p(i)%vel=cfg%get_velocity(pos=pt%p(i)%pos,i0=pt%p(i)%ind(1),j0=pt%p(i)%ind(2),k0=pt%p(i)%ind(3),U=fs%U,V=fs%V,W=fs%W)
+                  pt%p(i)%vel=dot_product(pt%p(i)%vel-massvel,normal)*normal+massvel
+                  ! Advance with Euler prediction
+                  pt%p(i)%pos=old_pos+0.5_WP*time%dtmid*pt%p(i)%vel
+                  ! Correct with midpoint rule
+                  normal=normalize([cfg%get_scalar(pos=pt%p(i)%pos,i0=pt%p(i)%ind(1),j0=pt%p(i)%ind(2),k0=pt%p(i)%ind(3),S=resU,bc='n'),&
+                  &                 cfg%get_scalar(pos=pt%p(i)%pos,i0=pt%p(i)%ind(1),j0=pt%p(i)%ind(2),k0=pt%p(i)%ind(3),S=resV,bc='n'),&
+                  &                 cfg%get_scalar(pos=pt%p(i)%pos,i0=pt%p(i)%ind(1),j0=pt%p(i)%ind(2),k0=pt%p(i)%ind(3),S=resW,bc='n')])
+                  pt%p(i)%vel=cfg%get_velocity(pos=pt%p(i)%pos,i0=pt%p(i)%ind(1),j0=pt%p(i)%ind(2),k0=pt%p(i)%ind(3),U=fs%U,V=fs%V,W=fs%W)
+                  pt%p(i)%vel=dot_product(pt%p(i)%vel-massvel,normal)*normal+massvel
+                  pt%p(i)%pos=old_pos+time%dtmid*pt%p(i)%vel
+                  ! Relocalize the particle
+                  pt%p(i)%ind=cfg%get_ijk_global(pt%p(i)%pos,pt%p(i)%ind)
+                  ! Correct the position to take into account periodicity
+                  if (cfg%xper) pt%p(i)%pos(1)=cfg%x(cfg%imin)+modulo(pt%p(i)%pos(1)-cfg%x(cfg%imin),cfg%xL)
+                  if (cfg%yper) pt%p(i)%pos(2)=cfg%y(cfg%jmin)+modulo(pt%p(i)%pos(2)-cfg%y(cfg%jmin),cfg%yL)
+                  if (cfg%zper) pt%p(i)%pos(3)=cfg%z(cfg%kmin)+modulo(pt%p(i)%pos(3)-cfg%z(cfg%kmin),cfg%zL)
+                  ! Relocalize the particle
+                  pt%p(i)%ind=cfg%get_ijk_global(pt%p(i)%pos,pt%p(i)%ind)
+                  ! Interpolate fluid quantities to particle location
+                  pt%p(i)%vel=cfg%get_velocity(pos=pt%p(i)%pos,i0=pt%p(i)%ind(1),j0=pt%p(i)%ind(2),k0=pt%p(i)%ind(3),U=fs%U,V=fs%V,W=fs%W)
+                  ! Update acceleration
+                  pt%p(i)%acc=(pt%p(i)%vel-old_vel)/time%dtmid
+               end do
+               ! Communicate particles
+               call pt%sync()
+               ! Log/screen output
+               logging: block
+                  use, intrinsic :: iso_fortran_env, only: output_unit
+                  use param,    only: verbose
+                  use messager, only: log
+                  use string,   only: str_long
+                  character(len=str_long) :: message
+                  if (cfg%amRoot) then
+                     write(message,'("Tracer solver [",a,"] on partitioned grid [",a,"]: ",i0," particles were advanced")') trim(pt%name),trim(cfg%name),pt%np
+                     if (verbose.gt.1) write(output_unit,'(a)') trim(message)
+                     if (verbose.gt.0) call log(message)
+                  end if
+               end block logging
+            end block advance_tracers_normally
+         end if
+         call project_tracers(vf=vf,pt=pt)
 
          ! Prepare new staggered viscosity (at n+1)
          call fs%get_viscosity(vf=vf)
@@ -708,12 +795,13 @@ contains
 
    ! Project tracers on the interface
    subroutine project_tracers(vf,pt)
+      use mathtools, only: normalize
       implicit none
       class(vfs), intent(inout) :: vf
       class(tracer), intent(inout) :: pt
       integer :: i, j, maxit
       real(WP) :: distx, disty, distz, dist, maxdist
-      real(WP), dimension(3) :: oldvel
+      real(WP), dimension(3) :: oldvel, oldpos, normal
       ! Maximum projection iterations
       maxit=10
       ! Maximum distance from the interface wanted
@@ -721,31 +809,35 @@ contains
       ! Get gradient of distance function to the interface
       call fs%get_pgrad(vf%G,resU,resV,resW)
       ! Loop over local tracers
-      do i=1,pt%np_
-         ! Avoid particles with id=0
-         if (pt%p(i)%id.eq.0) cycle
-         j=0; dist=cfg%get_scalar(pos=pt%p(i)%pos,i0=pt%p(i)%ind(1),j0=pt%p(i)%ind(2),k0=pt%p(i)%ind(3),S=vf%G,bc='n')
-         do while (j.lt.maxit.and.abs(dist).gt.maxdist)
-            j=j+1
-            ! Interpolate distance function and gradient
+      do j=1,maxit
+         do i=1,pt%np_
+            ! Avoid particles with id=0
+            if (pt%p(i)%id.eq.0) cycle
+            oldpos=pt%p(i)%pos
+            ! Interpolate distance function
             dist=cfg%get_scalar(pos=pt%p(i)%pos,i0=pt%p(i)%ind(1),j0=pt%p(i)%ind(2),k0=pt%p(i)%ind(3),S=vf%G,bc='n')
-            distx=cfg%get_scalar(pos=pt%p(i)%pos,i0=pt%p(i)%ind(1),j0=pt%p(i)%ind(2),k0=pt%p(i)%ind(3),S=resU,bc='n')
-            disty=cfg%get_scalar(pos=pt%p(i)%pos,i0=pt%p(i)%ind(1),j0=pt%p(i)%ind(2),k0=pt%p(i)%ind(3),S=resV,bc='n')
-            distz=cfg%get_scalar(pos=pt%p(i)%pos,i0=pt%p(i)%ind(1),j0=pt%p(i)%ind(2),k0=pt%p(i)%ind(3),S=resW,bc='n')
-            ! Move tracer along distance function gradient
-            pt%p(i)%pos=pt%p(i)%pos-dist*[distx,disty,distz]
-            ! Correct the position to take into account periodicity
-            pt%p(i)%pos(1)=cfg%x(cfg%imin)+modulo(pt%p(i)%pos(1)-cfg%x(cfg%imin),cfg%xL)
-            pt%p(i)%pos(2)=cfg%y(cfg%jmin)+modulo(pt%p(i)%pos(2)-cfg%y(cfg%jmin),cfg%yL)
-            pt%p(i)%pos(3)=cfg%z(cfg%kmin)+modulo(pt%p(i)%pos(3)-cfg%z(cfg%kmin),cfg%zL)
-            ! Relocalize the tracer
-            pt%p(i)%ind=cfg%get_ijk_global(pt%p(i)%pos,pt%p(i)%ind)
+            if (abs(dist).gt.maxdist) then
+               ! Interpolate interface normal
+               normal=normalize([cfg%get_scalar(pos=pt%p(i)%pos,i0=pt%p(i)%ind(1),j0=pt%p(i)%ind(2),k0=pt%p(i)%ind(3),S=resU,bc='n'),&
+               &                 cfg%get_scalar(pos=pt%p(i)%pos,i0=pt%p(i)%ind(1),j0=pt%p(i)%ind(2),k0=pt%p(i)%ind(3),S=resV,bc='n'),&
+               &                 cfg%get_scalar(pos=pt%p(i)%pos,i0=pt%p(i)%ind(1),j0=pt%p(i)%ind(2),k0=pt%p(i)%ind(3),S=resW,bc='n')])
+               ! Move tracer along distance function gradient
+               pt%p(i)%pos=pt%p(i)%pos-dist*normal
+               ! Correct the position to take into account periodicity
+               pt%p(i)%pos(1)=cfg%x(cfg%imin)+modulo(pt%p(i)%pos(1)-cfg%x(cfg%imin),cfg%xL)
+               pt%p(i)%pos(2)=cfg%y(cfg%jmin)+modulo(pt%p(i)%pos(2)-cfg%y(cfg%jmin),cfg%yL)
+               pt%p(i)%pos(3)=cfg%z(cfg%kmin)+modulo(pt%p(i)%pos(3)-cfg%z(cfg%kmin),cfg%zL)
+               ! Relocalize the tracer
+               pt%p(i)%ind=cfg%get_ijk_global(pt%p(i)%pos,pt%p(i)%ind)
+            end if
          end do
-         ! Update velocity
+         ! Communicate tracers across procs
+         call pt%sync()
+      end do
+      do i=1,pt%np_
+         ! Interpolate fluid quantities to particle location
          pt%p(i)%vel=cfg%get_velocity(pos=pt%p(i)%pos,i0=pt%p(i)%ind(1),j0=pt%p(i)%ind(2),k0=pt%p(i)%ind(3),U=fs%U,V=fs%V,W=fs%W)
       end do
-      ! Communicate tracers across procs
-      call pt%sync()
    end subroutine project_tracers
 
    !> Finalize the NGA2 simulation
