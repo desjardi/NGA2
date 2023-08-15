@@ -8,12 +8,13 @@ nx : 64
 # Droplet properties
 Droplet diameter :        2.0
 Droplet position :        2.5 2.5 2.5
-Droplet injection time :  1                ! is multiplied by eddy turnover-time
+Droplet injection time :  0                ! is multiplied by eddy turnover-time
 Weber number :            3
 ! Reynolds number :         50             ! is not specified Re_lambda is chosen based on grid size
 
 # Particle properties
-Number of tracers :       100000
+Number of tracers :        10000
+Remove tangential motion : F               ! flag for removing tracer motion tangential to the interface (T=true, F=false)
 
 # Time integration
 Max timestep size : 5e-3
