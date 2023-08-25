@@ -2,15 +2,15 @@
 Partition :	8 1 1
 
 # Mesh definition
-Lx :	0.04
+Lx :	0.02
 Ly :	0.02
 Lz :	0.0002
 nx :	200
-ny :	100
+ny :	200
 nz :	1
 
 # Fluid properties
-Gravity :                     3.16 -3.16 0!0 -9.81 0
+Gravity :                     0 -9.81 0
 Liquid dynamic viscosity :    1.137e-3
 Gas dynamic viscosity :       1.780e-5
 Liquid density :              1000

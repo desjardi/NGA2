@@ -6,7 +6,7 @@ module random
    private
    
    ! Function and subroutines
-   public :: random_uniform,random_normal,random_lognormal
+   public :: random_uniform,random_normal,random_lognormal,random_gamma
    public :: random_initialize
    
 contains
@@ -164,6 +164,83 @@ contains
       x    =random_normal(mlog,sdlog)
       res=exp(x)
    end function random_lognormal
+   
+   
+   !> Function that generates a random gamma variate given a shape parameter s>0
+   !> Adapted from the book:
+   !     Dagpunar, J. 'Principles of random variate generation'
+   !     Clarendon Press, Oxford, 1988. ISBN 0-19-852202-9
+   function random_gamma(s) result(val)
+      use messager,  only: die
+      use precision, only: WP
+      real(WP), intent(in) :: s
+      real(WP) :: val
+      ! Handle improper shape parameter
+      if (s.lt.tiny(1.0_WP)) call die('[random_gamma] shape parameter s>=tiny(1.0) is required')
+      ! Perform appropriate calculation based on s
+      if (s.gt.1.0_WP) then
+         gamma1: block
+            real(WP) :: c,d,u,v,x
+            d=s-1.0_WP/3.0_WP
+            c=1.0_WP/sqrt(9.0_WP*d)
+            try_gamma1: do
+               inner_try_gamma1: do
+                  x=random_normal(0.0_WP,1.0_WP)
+                  v=(1.0_WP+c*x)**3
+                  if (v.gt.0.0_WP) exit inner_try_gamma1
+               end do inner_try_gamma1
+               call random_number(u)
+               if (u.lt.1.0_WP-0.0331_WP*x**4) then
+                  val=d*v
+                  exit try_gamma1
+               else if (log(u).lt.0.5_WP*x**2+d*(1.0_WP-v+log(v))) then
+                  val=d*v
+                  exit try_gamma1
+               end if
+            end do try_gamma1
+         end block gamma1
+      else if (s.lt.1.0_WP) then
+         gamma2: block
+            real(WP) :: r,x,w,a,p,c,uf,vr,d
+            a=1.0_WP-s
+            p=a/(a+s*exp(-a))
+            c=1.0_WP/s
+            uf=p*(tiny(1.0_WP)/a)**s
+            vr=1.0_WP-tiny(1.0_WP)
+            d=a*log(a)
+            try_gamma2: do
+               call random_number(r)
+               if (r.ge.vr) then
+                  cycle try_gamma2
+               else if (r.gt.p) then
+                  x=a-log((1.0_WP-r)/(1.0_WP-p))
+                  w=a*log(x)-d
+               else if (r.gt.uf) then
+                  x=a*(r/p)**c
+                  w=x
+               else
+                  val=0.0_WP
+                  return
+               end if
+               call random_number(r)
+               if (1.0_WP-r.le.w.and.r.gt.0.0_WP) then
+                  if (r*(w+1.0_WP).ge.1.0_WP) cycle try_gamma2
+                  if (-log(r).le.w) cycle try_gamma2
+               end if
+               exit try_gamma2
+            end do try_gamma2
+            val=x
+         end block gamma2
+      else
+         exponential: block
+            try_exponential: do 
+               call random_number(val)
+               if (val.gt.0.0_WP) exit try_exponential
+            end do try_exponential
+            val=-log(val)
+         end block exponential
+      end if
+   end function random_gamma
    
    
 end module random
