@@ -1,4 +1,4 @@
-f90EXE_sources += sgrid_class.f90 pgrid_class.f90 iterator_class.f90 surfmesh_class.f90 partmesh_class.f90 coupler_class.f90
+f90EXE_sources += sgrid_class.f90 pgrid_class.f90 iterator_class.f90 surfmesh_class.f90 partmesh_class.f90 coupler_class.f90 cclabel_class.f90
 
 INCLUDE_LOCATIONS += $(NGA_HOME)/src/grid
 VPATH_LOCATIONS   += $(NGA_HOME)/src/grid

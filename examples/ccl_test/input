@@ -1,0 +1,11 @@
+Partition : 8 1 1
+
+! Mesh size (nx^3)
+nx :    100
+
+! Number of particles
+np :    10
+
+! Particle diameter range
+dmin :  0.333
+dmax :  0.333
