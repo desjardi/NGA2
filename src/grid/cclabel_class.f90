@@ -78,17 +78,18 @@ contains
       integer, dimension(:), allocatable :: parent_all         !< Resolving structure id across procs
       integer, dimension(:), allocatable :: parent_own         !< Resolving structure id across procs
       
-      ! Start by allocating struct to a default size
-      if (.not.allocated(this%struct)) then
-         nstruct_=0
-         allocate(this%struct(min_struct_size))
-         this%struct(:)%parent=0
-         this%struct(:)%per(1)=0
-         this%struct(:)%per(2)=0
-         this%struct(:)%per(3)=0
-         this%struct(:)%n_=0
-      end if
-
+      ! Start by cleaning up
+      call this%empty()
+      
+      ! Then allocate struct to a default size
+      nstruct_=0
+      allocate(this%struct(min_struct_size))
+      this%struct(:)%parent=0
+      this%struct(:)%per(1)=0
+      this%struct(:)%per(2)=0
+      this%struct(:)%per(3)=0
+      this%struct(:)%n_=0
+      
       ! Allocate periodicity work array
       allocate(idp(3,this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_)); idp=0
       
@@ -579,11 +580,13 @@ contains
       class(cclabel), intent(inout) :: this
       integer :: n
       ! Loop over all structures and deallocate maps
-      do n=1,this%nstruct
-         if (allocated(this%struct(n)%map)) deallocate(this%struct(n)%map)
-      end do
-      ! Deallocate structure array
-      deallocate(this%struct)
+      if (allocated(this%struct)) then
+         do n=1,size(this%struct,dim=1)
+            if (allocated(this%struct(n)%map)) deallocate(this%struct(n)%map)
+         end do
+         ! Deallocate structure array
+         deallocate(this%struct)
+      end if
       ! Zero structures
       this%nstruct=0
    end subroutine empty
