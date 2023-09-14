@@ -37,9 +37,8 @@ module cclabel_class
       ! ID of the structure that contains each cell
       integer, dimension(:,:,:), allocatable :: id
       ! Array of structures
-      integer :: nstruct_,nstruct
+      integer :: nstruct
       type(struct_type), dimension(:), allocatable :: struct
-      integer :: stmin,stmax
    contains
       procedure :: initialize
       procedure :: build
@@ -65,7 +64,7 @@ contains
       ! Allocate and initialize ID array
       allocate(this%id(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_)); this%id=0
       ! Zero structures
-      this%nstruct_=0; this%nstruct=0
+      this%nstruct=0
    end subroutine initialize
    
 
@@ -73,6 +72,7 @@ contains
    subroutine build(this)
       implicit none
       class(cclabel), intent(inout) :: this
+      integer :: nstruct_,stmin,stmax
       integer, dimension(:,:,:,:), allocatable :: idp          !< Periodicity treatment
       integer, dimension(:), allocatable :: parent             !< Resolving structure id across procs
       integer, dimension(:), allocatable :: parent_all         !< Resolving structure id across procs
@@ -80,7 +80,7 @@ contains
       
       ! Start by allocating struct to a default size
       if (.not.allocated(this%struct)) then
-         this%nstruct_=0
+         nstruct_=0
          allocate(this%struct(min_struct_size))
          this%struct(:)%parent=0
          this%struct(:)%per(1)=0
@@ -149,25 +149,25 @@ contains
          integer, dimension(:), allocatable :: my_nstruct,all_nstruct,idmap
          type(struct_type), dimension(:), allocatable :: tmp
          ! Count exact number of local structures
-         this%nstruct_=0
+         nstruct_=0
          do n=1,size(this%struct,dim=1)
-            if (this%struct(n)%n_.gt.0) this%nstruct_=this%nstruct_+1
+            if (this%struct(n)%n_.gt.0) nstruct_=nstruct_+1
          end do
          ! Gather this info to ensure unique index
-         allocate( my_nstruct(0:this%cfg%nproc-1)); my_nstruct=0; my_nstruct(this%cfg%rank)=this%nstruct_
+         allocate( my_nstruct(0:this%cfg%nproc-1)); my_nstruct=0; my_nstruct(this%cfg%rank)=nstruct_
          allocate(all_nstruct(0:this%cfg%nproc-1)); call MPI_ALLREDUCE(my_nstruct,all_nstruct,this%cfg%nproc,MPI_INTEGER,MPI_SUM,this%cfg%comm,ierr)
-         this%stmin=1
-         if (this%cfg%rank.gt.0) this%stmin=this%stmin+sum(all_nstruct(0:this%cfg%rank-1))
+         stmin=1
+         if (this%cfg%rank.gt.0) stmin=stmin+sum(all_nstruct(0:this%cfg%rank-1))
          this%nstruct=sum(all_nstruct)
          deallocate(my_nstruct,all_nstruct)
-         this%stmax=this%stmin+this%nstruct_-1
+         stmax=stmin+nstruct_-1
          ! Generate an index map
          allocate(idmap(1:size(this%struct,dim=1))); idmap=0
-         this%nstruct_=0
+         nstruct_=0
          do n=1,size(this%struct,dim=1)
             if (this%struct(n)%n_.gt.0) then
-               this%nstruct_=this%nstruct_+1
-               idmap(n)=this%stmin+this%nstruct_-1
+               nstruct_=nstruct_+1
+               idmap(n)=stmin+nstruct_-1
             end if
          end do
          ! Update id array to new index
@@ -176,13 +176,13 @@ contains
          end do; end do; end do
          deallocate(idmap)
          ! Finish compacting and renumbering
-         allocate(tmp(this%stmin:this%stmax))
-         this%nstruct_=0
+         allocate(tmp(stmin:stmax))
+         nstruct_=0
          do n=1,size(this%struct,dim=1)
             if (this%struct(n)%n_.gt.0) then
-               this%nstruct_=this%nstruct_+1
-               tmp(this%stmin+this%nstruct_-1)=this%struct(n)
-               allocate(tmp(this%stmin+this%nstruct_-1)%map(3,tmp(this%stmin+this%nstruct_-1)%n_))
+               nstruct_=nstruct_+1
+               tmp(stmin+nstruct_-1)=this%struct(n)
+               allocate(tmp(stmin+nstruct_-1)%map(3,tmp(stmin+nstruct_-1)%n_))
             end if
          end do
          call move_alloc(tmp,this%struct)
@@ -192,7 +192,7 @@ contains
       node_map: block
          integer :: i,j,k
          integer, dimension(:), allocatable :: counter
-         allocate(counter(this%stmin:this%stmax)); counter=0
+         allocate(counter(stmin:stmax)); counter=0
          do k=this%cfg%kmin_,this%cfg%kmax_; do j=this%cfg%jmin_,this%cfg%jmax_; do i=this%cfg%imin_,this%cfg%imax_
             if (this%id(i,j,k).gt.0) then
                counter(this%id(i,j,k))=counter(this%id(i,j,k))+1
@@ -283,7 +283,7 @@ contains
             call MPI_ALLREDUCE(stop_,stop_global,1,MPI_INTEGER,MPI_MAX,this%cfg%comm,ierr)
          end do
          ! Update this%struct%parent by pointing all parents to root and update id
-         do n=this%stmin,this%stmax
+         do n=stmin,stmax
             this%struct(n)%parent=rootify_parent(parent(n))
             do m=1,this%struct(n)%n_
                this%id(this%struct(n)%map(1,m),this%struct(n)%map(2,m),this%struct(n)%map(3,m))=this%struct(n)%parent
@@ -300,7 +300,7 @@ contains
          allocate(ownper(1:3,this%nstruct)); ownper=0
          allocate(allper(1:3,this%nstruct)); allper=0
          ! Fill ownper array
-         do n=this%stmin,this%stmax
+         do n=stmin,stmax
             ownper(:,n)=this%struct(n)%per
          end do
          ! Communicate per
@@ -310,11 +310,13 @@ contains
             allper(:,parent(n))=max(allper(:,parent(n)),allper(:,n))
          end do
          ! Update idp array
-         do n=this%stmin,this%stmax
+         do n=stmin,stmax
             do m=1,this%struct(n)%n_
                idp(:,this%struct(n)%map(1,m),this%struct(n)%map(2,m),this%struct(n)%map(3,m))=allper(:,this%id(this%struct(n)%map(1,m),this%struct(n)%map(2,m),this%struct(n)%map(3,m)))
             end do
          end do
+         ! Clean up
+         deallocate(ownper,allper)
       end block periodicity_update
 
       ! One more pass for domain boundaries
@@ -388,7 +390,7 @@ contains
             call MPI_ALLREDUCE(stop_,stop_global,1,MPI_INTEGER,MPI_MAX,this%cfg%comm,ierr)
          end do
          ! Update this%struct%parent and point all parents to root and update id
-         do n=this%stmin,this%stmax
+         do n=stmin,stmax
             this%struct(n)%parent=rootify_parent(parent(n))
             do m=1,this%struct(n)%n_
                this%id(this%struct(n)%map(1,m),this%struct(n)%map(2,m),this%struct(n)%map(3,m))=this%struct(n)%parent
@@ -396,6 +398,8 @@ contains
          end do
          ! Update ghost cells
          call this%cfg%sync(this%id)
+         ! Clean up parent info
+         deallocate(parent,parent_all,parent_own)
       end block boundary_handling
       
       ! Now we need to compact the data based on id only
@@ -485,23 +489,23 @@ contains
          type(struct_type), dimension(:), allocatable :: tmp
          ! Check if there is enough room for storing a new structure
          size_now=size(this%struct,dim=1)
-         if (this%nstruct_.eq.size_now) then
+         if (nstruct_.eq.size_now) then
             size_new=int(real(size_now,WP)*coeff_up)
             allocate(tmp(size_new))
-            tmp(1:this%nstruct_)=this%struct
-            tmp(this%nstruct_+1:)%parent=0
-            tmp(this%nstruct_+1:)%per(1)=0
-            tmp(this%nstruct_+1:)%per(2)=0
-            tmp(this%nstruct_+1:)%per(3)=0
-            tmp(this%nstruct_+1:)%n_=0
+            tmp(1:nstruct_)=this%struct
+            tmp(nstruct_+1:)%parent=0
+            tmp(nstruct_+1:)%per(1)=0
+            tmp(nstruct_+1:)%per(2)=0
+            tmp(nstruct_+1:)%per(3)=0
+            tmp(nstruct_+1:)%n_=0
             call move_alloc(tmp,this%struct)
          end if
          ! Add new root
-         this%nstruct_=this%nstruct_+1
-         this%struct(this%nstruct_)%parent=this%nstruct_
-         this%struct(this%nstruct_)%per=0
-         this%struct(this%nstruct_)%n_=0
-         x=this%nstruct_
+         nstruct_=nstruct_+1
+         this%struct(nstruct_)%parent=nstruct_
+         this%struct(nstruct_)%per=0
+         this%struct(nstruct_)%n_=0
+         x=nstruct_
       end function add
       
       !> This recursive function points global parent to root and returns that root
@@ -575,13 +579,13 @@ contains
       class(cclabel), intent(inout) :: this
       integer :: n
       ! Loop over all structures and deallocate maps
-      do n=this%stmin,this%stmax
+      do n=1,this%nstruct
          if (allocated(this%struct(n)%map)) deallocate(this%struct(n)%map)
       end do
       ! Deallocate structure array
       deallocate(this%struct)
       ! Zero structures
-      this%nstruct_=0; this%nstruct=0
+      this%nstruct=0
    end subroutine empty
    
    
