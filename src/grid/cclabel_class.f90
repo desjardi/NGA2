@@ -406,8 +406,8 @@ contains
       ! Now we need to compact the data based on id only
       compact_struct: block
          use mpi_f08, only: MPI_ALLREDUCE,MPI_MAX,MPI_INTEGER
-         integer :: i,j,k,n,ierr,count
-         integer, dimension(:), allocatable :: my_idmap,idmap
+         integer :: i,j,k,n,nn,ierr,count
+         integer, dimension(:), allocatable :: my_idmap,idmap,counter
          type(struct_type), dimension(:), allocatable :: tmp
          ! Prepare global id map
          allocate(my_idmap(1:this%nstruct)); my_idmap=0
@@ -432,30 +432,47 @@ contains
             if (this%id(i,j,k).gt.0) this%id(i,j,k)=idmap(this%id(i,j,k))
          end do; end do; end do
          call this%cfg%sync(this%id)
-         deallocate(idmap)
          ! Allocate temporary storage for structure
          allocate(tmp(this%nstruct))
-         allocate(idmap(this%nstruct)); idmap=0
+         allocate(counter(this%nstruct)); counter=0
          do k=this%cfg%kmin_,this%cfg%kmax_; do j=this%cfg%jmin_,this%cfg%jmax_; do i=this%cfg%imin_,this%cfg%imax_
-            if (this%id(i,j,k).gt.0) idmap(this%id(i,j,k))=idmap(this%id(i,j,k))+1
+            if (this%id(i,j,k).gt.0) counter(this%id(i,j,k))=counter(this%id(i,j,k))+1
          end do; end do; end do
          do n=1,this%nstruct
             tmp(n)%parent=n
-            tmp(n)%n_=idmap(n)
+            tmp(n)%n_=counter(n)
             allocate(tmp(n)%map(1:3,1:tmp(n)%n_))
-            tmp(n)%per=0
          end do
+         ! Transfer periodicity info
+         do n=stmin,stmax
+            if (idmap(n).gt.0) then
+               tmp(idmap(n))%per=this%struct(n)%per
+            end if
+         end do
+         deallocate(idmap)
          ! Store the map
-         idmap=0
+         counter=0
          do k=this%cfg%kmin_,this%cfg%kmax_; do j=this%cfg%jmin_,this%cfg%jmax_; do i=this%cfg%imin_,this%cfg%imax_
             if (this%id(i,j,k).gt.0) then
-               idmap(this%id(i,j,k))=idmap(this%id(i,j,k))+1
-               tmp(this%id(i,j,k))%map(:,idmap(this%id(i,j,k)))=[i,j,k]
+               counter(this%id(i,j,k))=counter(this%id(i,j,k))+1
+               tmp(this%id(i,j,k))%map(:,counter(this%id(i,j,k)))=[i,j,k]
             end if
          end do; end do; end do
-         deallocate(idmap)
+         deallocate(counter)
          ! Transfer allocation
          call move_alloc(tmp,this%struct)
+         ! Final pass to fix periodicity info
+         do n=1,this%nstruct
+            do nn=1,this%struct(n)%n_
+               i=this%struct(n)%map(1,nn)
+               j=this%struct(n)%map(2,nn)
+               k=this%struct(n)%map(3,nn)
+               this%struct(n)%per(1)=max(this%struct(n)%per(1),idp(1,i,j,k))
+               this%struct(n)%per(2)=max(this%struct(n)%per(2),idp(2,i,j,k))
+               this%struct(n)%per(3)=max(this%struct(n)%per(3),idp(3,i,j,k))
+            end do
+         end do
+         deallocate(idp)
       end block compact_struct
       
    contains
