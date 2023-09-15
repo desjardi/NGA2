@@ -2,7 +2,7 @@
 module simulation
    use precision,         only: WP
    use geometry,          only: cfg
-   use hypre_uns_class,   only: hypre_uns
+   use hypre_str_class,   only: hypre_str
    use ddadi_class,       only: ddadi
    use tpns_class,        only: tpns
    use vfs_class,         only: vfs
@@ -15,7 +15,7 @@ module simulation
    private
    
    !> Get a couple linear solvers, a two-phase flow solver and volume fraction solver and corresponding time tracker
-   type(hypre_uns),   public :: ps
+   type(hypre_str),   public :: ps
    type(ddadi),       public :: vs,ss
    type(tpns),        public :: fs
    type(vfs),         public :: vf
@@ -38,7 +38,7 @@ module simulation
    real(WP), dimension(:,:,:,:,:), allocatable :: gradU
    
    !> Problem definition
-   real(WP), dimension(3) :: center
+   real(WP), dimension(3) :: center,gravity
    real(WP) :: radius,Ycent,Vrise
    
 contains
@@ -176,7 +176,7 @@ contains
       
       ! Create a two-phase flow solver without bconds
       create_and_initialize_flow_solver: block
-         use hypre_uns_class, only: pcg_amg
+         use hypre_str_class, only: pcg_pfmg2
          ! Create flow solver
          fs=tpns(cfg=cfg,name='Two-phase NS')
          ! Assign constant viscosity to each phase
@@ -188,9 +188,10 @@ contains
          ! Read in surface tension coefficient
          call param_read('Surface tension coefficient',fs%sigma)
          ! Assign acceleration of gravity
-         call param_read('Gravity',fs%gravity)
+         call param_read('Gravity',gravity); fs%gravity=gravity
          ! Configure pressure solver
-         ps=hypre_uns(cfg=cfg,name='Pressure',method=pcg_amg,nst=7)
+         ps=hypre_str(cfg=cfg,name='Pressure',method=pcg_pfmg2,nst=7)
+         ps%maxlevel=12
          call param_read('Pressure iteration',ps%maxit)
          call param_read('Pressure tolerance',ps%rcvg)
          ! Configure implicit velocity solver
@@ -390,8 +391,17 @@ contains
             end block bquick
             
             ! Add fene sources
-            call nn%addsrc_CgradU(gradU,resSC)
-            call nn%addsrc_relax(resSC,time%dt)
+            add_source: block
+               integer :: n
+               call nn%get_CgradU(gradU,SCtmp)
+               do n=1,6
+                  resSC(:,:,:,n)=resSC(:,:,:,n)+vf%VF(:,:,:)*SCtmp(:,:,:,n)
+               end do
+               call nn%get_relax(resSC,time%dt)
+               do n=1,6
+                  resSC(:,:,:,n)=resSC(:,:,:,n)+vf%VF(:,:,:)*SCtmp(:,:,:,n)
+               end do
+            end block add_source
             
             ! Assemble explicit residual
             resSC=-2.0_WP*(nn%SC-nn%SCold)+time%dt*resSC
@@ -490,7 +500,7 @@ contains
             ! Explicit calculation of drho*u/dt from NS
             call fs%get_dmomdt(resU,resV,resW)
             
-            ! Add momentum source terms
+            ! Add momentum source terms - adjust gravity if accelerating frame of reference
             call fs%addsrc_gravity(resU,resV,resW)
             
             ! Add polymer stress term
@@ -504,7 +514,7 @@ contains
                allocate(Tyz   (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
                allocate(Tzx   (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
                ! Calculate the polymer relaxation
-               stress=0.0_WP; call nn%addsrc_relax(stress,time%dt)
+               call nn%get_relax(stress,time%dt)
                ! Build liquid stress tensor
                do n=1,6
                   stress(:,:,:,n)=-nn%visc_p(:,:,:)*vf%VF*stress(:,:,:,n)
@@ -556,12 +566,11 @@ contains
             call fs%apply_bcond(time%t,time%dt)
             
             ! Solve Poisson equation - pinned version
-            call fs%update_laplacian(pinpoint=[fs%cfg%imin,fs%cfg%jmin,fs%cfg%kmin])
+            call fs%update_laplacian()
             call fs%correct_mfr()
             call fs%get_div()
             call fs%add_surface_tension_jump(dt=time%dt,div=fs%div,vf=vf)
             fs%psolv%rhs=-fs%cfg%vol*fs%div/time%dt
-            if (cfg%amRoot) fs%psolv%rhs(cfg%imin,cfg%jmin,cfg%kmin)=0.0_WP
             fs%psolv%sol=0.0_WP
             call fs%psolv%solve()
             call fs%shift_p(fs%psolv%sol)

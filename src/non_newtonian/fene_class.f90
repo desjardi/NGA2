@@ -30,8 +30,8 @@ module fene_class
       real(WP) :: visc_pmin,visc_pmax                      !< Min and max polymer viscosity
    contains
       procedure :: update_visc_p                           !< Update visc_p given strain rate tensor using Carreau model
-      procedure :: addsrc_CgradU                           !< Add C.gradU source term to residual
-      procedure :: addsrc_relax                            !< Calculate FENE relaxation term
+      procedure :: get_CgradU                              !< Add C.gradU source term to residual
+      procedure :: get_relax                               !< Calculate FENE relaxation term
       procedure :: get_max=>fene_get_max                   !< Augment multiscalar's default monitoring
    end type fene
    
@@ -87,41 +87,42 @@ contains
    end subroutine update_visc_p
 
 
-   !> Add C.gradU source terms to multiscalar residual
-   subroutine addsrc_CgradU(this,gradU,resSC)
+   !> Get C.gradU source terms to multiscalar residual
+   subroutine get_CgradU(this,gradU,resSC)
       implicit none
       class(fene), intent(inout) :: this
       real(WP), dimension(1:,1:,this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in) :: gradU
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:,1:), intent(inout) :: resSC
       integer :: i,j,k
+      resSC=0.0_WP
       do k=this%cfg%kmino_,this%cfg%kmaxo_
          do j=this%cfg%jmino_,this%cfg%jmaxo_
             do i=this%cfg%imino_,this%cfg%imaxo_
                ! Skip non-solved cells
                if (this%mask(i,j,k).ne.0) cycle
                ! xx tensor component
-               resSC(i,j,k,1)=resSC(i,j,k,1)+2.0_WP*(this%SC(i,j,k,1)*gradU(1,1,i,j,k)+this%SC(i,j,k,2)*gradU(2,1,i,j,k)+this%SC(i,j,k,3)*gradU(3,1,i,j,k))
+               resSC(i,j,k,1)=2.0_WP*(this%SC(i,j,k,1)*gradU(1,1,i,j,k)+this%SC(i,j,k,2)*gradU(2,1,i,j,k)+this%SC(i,j,k,3)*gradU(3,1,i,j,k))
                ! xy tensor component
-               resSC(i,j,k,2)=resSC(i,j,k,2)+(this%SC(i,j,k,2)*gradU(1,1,i,j,k)+this%SC(i,j,k,4)*gradU(2,1,i,j,k)+this%SC(i,j,k,5)*gradU(3,1,i,j,k))+&
-               &                             (this%SC(i,j,k,1)*gradU(1,2,i,j,k)+this%SC(i,j,k,2)*gradU(2,2,i,j,k)+this%SC(i,j,k,3)*gradU(3,2,i,j,k))
+               resSC(i,j,k,2)=(this%SC(i,j,k,2)*gradU(1,1,i,j,k)+this%SC(i,j,k,4)*gradU(2,1,i,j,k)+this%SC(i,j,k,5)*gradU(3,1,i,j,k))+&
+               &              (this%SC(i,j,k,1)*gradU(1,2,i,j,k)+this%SC(i,j,k,2)*gradU(2,2,i,j,k)+this%SC(i,j,k,3)*gradU(3,2,i,j,k))
                ! xz tensor component
-               resSC(i,j,k,3)=resSC(i,j,k,3)+(this%SC(i,j,k,3)*gradU(1,1,i,j,k)+this%SC(i,j,k,5)*gradU(2,1,i,j,k)+this%SC(i,j,k,6)*gradU(3,1,i,j,k))+&
-               &                             (this%SC(i,j,k,1)*gradU(1,3,i,j,k)+this%SC(i,j,k,2)*gradU(2,3,i,j,k)+this%SC(i,j,k,3)*gradU(3,3,i,j,k))
+               resSC(i,j,k,3)=(this%SC(i,j,k,3)*gradU(1,1,i,j,k)+this%SC(i,j,k,5)*gradU(2,1,i,j,k)+this%SC(i,j,k,6)*gradU(3,1,i,j,k))+&
+               &              (this%SC(i,j,k,1)*gradU(1,3,i,j,k)+this%SC(i,j,k,2)*gradU(2,3,i,j,k)+this%SC(i,j,k,3)*gradU(3,3,i,j,k))
                ! yy tensor component
-               resSC(i,j,k,4)=resSC(i,j,k,4)+2.0_WP*(this%SC(i,j,k,2)*gradU(1,2,i,j,k)+this%SC(i,j,k,4)*gradU(2,2,i,j,k)+this%SC(i,j,k,5)*gradU(3,2,i,j,k))
+               resSC(i,j,k,4)=2.0_WP*(this%SC(i,j,k,2)*gradU(1,2,i,j,k)+this%SC(i,j,k,4)*gradU(2,2,i,j,k)+this%SC(i,j,k,5)*gradU(3,2,i,j,k))
                ! yz tensor component
-               resSC(i,j,k,5)=resSC(i,j,k,5)+(this%SC(i,j,k,2)*gradU(1,3,i,j,k)+this%SC(i,j,k,4)*gradU(2,3,i,j,k)+this%SC(i,j,k,5)*gradU(3,3,i,j,k))+&
-               &                             (this%SC(i,j,k,3)*gradU(1,2,i,j,k)+this%SC(i,j,k,5)*gradU(2,2,i,j,k)+this%SC(i,j,k,6)*gradU(3,2,i,j,k))
+               resSC(i,j,k,5)=(this%SC(i,j,k,2)*gradU(1,3,i,j,k)+this%SC(i,j,k,4)*gradU(2,3,i,j,k)+this%SC(i,j,k,5)*gradU(3,3,i,j,k))+&
+               &              (this%SC(i,j,k,3)*gradU(1,2,i,j,k)+this%SC(i,j,k,5)*gradU(2,2,i,j,k)+this%SC(i,j,k,6)*gradU(3,2,i,j,k))
                ! zz tensor component
-               resSC(i,j,k,6)=resSC(i,j,k,6)+2.0_WP*(this%SC(i,j,k,3)*gradU(1,3,i,j,k)+this%SC(i,j,k,5)*gradU(2,3,i,j,k)+this%SC(i,j,k,6)*gradU(3,3,i,j,k))
+               resSC(i,j,k,6)=2.0_WP*(this%SC(i,j,k,3)*gradU(1,3,i,j,k)+this%SC(i,j,k,5)*gradU(2,3,i,j,k)+this%SC(i,j,k,6)*gradU(3,3,i,j,k))
             end do
          end do
       end do
-   end subroutine addsrc_CgradU
+   end subroutine get_CgradU
    
 
    !> Add fene relaxation source
-   subroutine addsrc_relax(this,resSC,dt)
+   subroutine get_relax(this,resSC,dt)
       use messager, only: die
       implicit none
       class(fene), intent(inout) :: this
@@ -130,6 +131,7 @@ contains
       integer :: i,j,k
       real(WP) :: coeff
       real(WP), parameter :: safety_margin=10.0_WP
+      resSC=0.0_WP
       select case (this%model)
       case (fenep) ! Add relaxation source for FENE-P (f(r)*C-I)
          do k=this%cfg%kmino_,this%cfg%kmaxo_
@@ -137,13 +139,12 @@ contains
                do i=this%cfg%imino_,this%cfg%imaxo_
                   if (this%mask(i,j,k).ne.0) cycle                            !< Skip non-solved cells
                   coeff=(this%Lmax**2-3.00_WP)/(this%Lmax**2-(this%SC(i,j,k,1)+this%SC(i,j,k,4)+this%SC(i,j,k,6)))
-                  coeff=coeff/this%trelax                                     !< Divide by relaxation time scale
-                  resSC(i,j,k,1)=resSC(i,j,k,1)-coeff*this%SC(i,j,k,1)+1.0_WP !< xx tensor component
-                  resSC(i,j,k,2)=resSC(i,j,k,2)-coeff*this%SC(i,j,k,2)        !< xy tensor component
-                  resSC(i,j,k,3)=resSC(i,j,k,3)-coeff*this%SC(i,j,k,3)        !< xz tensor component
-                  resSC(i,j,k,4)=resSC(i,j,k,4)-coeff*this%SC(i,j,k,4)+1.0_WP !< yy tensor component
-                  resSC(i,j,k,5)=resSC(i,j,k,5)-coeff*this%SC(i,j,k,5)        !< yz tensor component
-                  resSC(i,j,k,6)=resSC(i,j,k,6)-coeff*this%SC(i,j,k,6)+1.0_WP !< zz tensor component
+                  resSC(i,j,k,1)=-(coeff*this%SC(i,j,k,1)-1.0_WP)/this%trelax !< xx tensor component
+                  resSC(i,j,k,2)=-(coeff*this%SC(i,j,k,2)-0.0_WP)/this%trelax !< xy tensor component
+                  resSC(i,j,k,3)=-(coeff*this%SC(i,j,k,3)-0.0_WP)/this%trelax !< xz tensor component
+                  resSC(i,j,k,4)=-(coeff*this%SC(i,j,k,4)-1.0_WP)/this%trelax !< yy tensor component
+                  resSC(i,j,k,5)=-(coeff*this%SC(i,j,k,5)-0.0_WP)/this%trelax !< yz tensor component
+                  resSC(i,j,k,6)=-(coeff*this%SC(i,j,k,6)-1.0_WP)/this%trelax !< zz tensor component
                end do
             end do
          end do
@@ -156,12 +157,12 @@ contains
                   coeff=max(epsilon(1.0_WP),min(coeff,1.0_WP))*this%trelax      !< Build a safe adjusted relaxation time scale
                   coeff=max(coeff,safety_margin*dt)                             !< Further clip based on current time step size for stability
                   coeff=1.0_WP/coeff                                            !< Inverse coeff
-                  resSC(i,j,k,1)=resSC(i,j,k,1)-coeff*(this%SC(i,j,k,1)-1.0_WP) !> xx tensor component
-                  resSC(i,j,k,2)=resSC(i,j,k,2)-coeff* this%SC(i,j,k,2)         !> xy tensor component
-                  resSC(i,j,k,3)=resSC(i,j,k,3)-coeff* this%SC(i,j,k,3)         !> xz tensor component
-                  resSC(i,j,k,4)=resSC(i,j,k,4)-coeff*(this%SC(i,j,k,4)-1.0_WP) !> yy tensor component
-                  resSC(i,j,k,5)=resSC(i,j,k,5)-coeff* this%SC(i,j,k,5)         !> yz tensor component
-                  resSC(i,j,k,6)=resSC(i,j,k,6)-coeff*(this%SC(i,j,k,6)-1.0_WP) !> zz tensor component
+                  resSC(i,j,k,1)=-coeff*(this%SC(i,j,k,1)-1.0_WP) !> xx tensor component
+                  resSC(i,j,k,2)=-coeff*(this%SC(i,j,k,2)-0.0_WP) !> xy tensor component
+                  resSC(i,j,k,3)=-coeff*(this%SC(i,j,k,3)-0.0_WP) !> xz tensor component
+                  resSC(i,j,k,4)=-coeff*(this%SC(i,j,k,4)-1.0_WP) !> yy tensor component
+                  resSC(i,j,k,5)=-coeff*(this%SC(i,j,k,5)-0.0_WP) !> yz tensor component
+                  resSC(i,j,k,6)=-coeff*(this%SC(i,j,k,6)-1.0_WP) !> zz tensor component
                end do
             end do
          end do
@@ -182,12 +183,12 @@ contains
                   coeff=max(epsilon(1.0_WP),min(coeff,1.0_WP))*this%trelax      !< Build a safe adjusted relaxation time scale
                   coeff=max(coeff,safety_margin*dt)                             !< Further clip based on current time step size for stability
                   coeff=1.0_WP/coeff                                            !< Inverse coeff
-                  resSC(i,j,k,1)=resSC(i,j,k,1)-coeff*(this%SC(i,j,k,1)-1.0_WP) !> xx tensor component
-                  resSC(i,j,k,2)=resSC(i,j,k,2)-coeff* this%SC(i,j,k,2)         !> xy tensor component
-                  resSC(i,j,k,3)=resSC(i,j,k,3)-coeff* this%SC(i,j,k,3)         !> xz tensor component
-                  resSC(i,j,k,4)=resSC(i,j,k,4)-coeff*(this%SC(i,j,k,4)-1.0_WP) !> yy tensor component
-                  resSC(i,j,k,5)=resSC(i,j,k,5)-coeff* this%SC(i,j,k,5)         !> yz tensor component
-                  resSC(i,j,k,6)=resSC(i,j,k,6)-coeff*(this%SC(i,j,k,6)-1.0_WP) !> zz tensor component
+                  resSC(i,j,k,1)=-coeff*(this%SC(i,j,k,1)-1.0_WP) !> xx tensor component
+                  resSC(i,j,k,2)=-coeff*(this%SC(i,j,k,2)-0.0_WP) !> xy tensor component
+                  resSC(i,j,k,3)=-coeff*(this%SC(i,j,k,3)-0.0_WP) !> xz tensor component
+                  resSC(i,j,k,4)=-coeff*(this%SC(i,j,k,4)-1.0_WP) !> yy tensor component
+                  resSC(i,j,k,5)=-coeff*(this%SC(i,j,k,5)-0.0_WP) !> yz tensor component
+                  resSC(i,j,k,6)=-coeff*(this%SC(i,j,k,6)-1.0_WP) !> zz tensor component
                end do
             end do
          end do
@@ -197,19 +198,19 @@ contains
                do i=this%cfg%imino_,this%cfg%imaxo_
                   if (this%mask(i,j,k).ne.0) cycle                              !< Skip non-solved cells
                   coeff=1.0_WP/this%trelax                                      !< Inverse of relaxation time
-                  resSC(i,j,k,1)=resSC(i,j,k,1)-coeff*(this%SC(i,j,k,1)-1.0_WP) !> xx tensor component
-                  resSC(i,j,k,2)=resSC(i,j,k,2)-coeff* this%SC(i,j,k,2)         !> xy tensor component
-                  resSC(i,j,k,3)=resSC(i,j,k,3)-coeff* this%SC(i,j,k,3)         !> xz tensor component
-                  resSC(i,j,k,4)=resSC(i,j,k,4)-coeff*(this%SC(i,j,k,4)-1.0_WP) !> yy tensor component
-                  resSC(i,j,k,5)=resSC(i,j,k,5)-coeff* this%SC(i,j,k,5)         !> yz tensor component
-                  resSC(i,j,k,6)=resSC(i,j,k,6)-coeff*(this%SC(i,j,k,6)-1.0_WP) !> zz tensor component
+                  resSC(i,j,k,1)=-coeff*(this%SC(i,j,k,1)-1.0_WP) !> xx tensor component
+                  resSC(i,j,k,2)=-coeff*(this%SC(i,j,k,2)-0.0_WP) !> xy tensor component
+                  resSC(i,j,k,3)=-coeff*(this%SC(i,j,k,3)-0.0_WP) !> xz tensor component
+                  resSC(i,j,k,4)=-coeff*(this%SC(i,j,k,4)-1.0_WP) !> yy tensor component
+                  resSC(i,j,k,5)=-coeff*(this%SC(i,j,k,5)-0.0_WP) !> yz tensor component
+                  resSC(i,j,k,6)=-coeff*(this%SC(i,j,k,6)-1.0_WP) !> zz tensor component
                end do
             end do
          end do
       case default
-         call die('[FENE addsrc_relax] Unknown FENE model selected')
+         call die('[FENE get_relax] Unknown FENE model selected')
       end select
-   end subroutine addsrc_relax
+   end subroutine get_relax
    
 
    !> Calculate the min and max of our SC field
