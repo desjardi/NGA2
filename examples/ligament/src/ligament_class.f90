@@ -9,6 +9,8 @@ module ligament_class
    !use ddadi_class,       only: ddadi
    use vfs_class,         only: vfs
    use tpns_class,        only: tpns
+   use lpt_class,         only: lpt
+   use breakup_class,     only: breakup
    use timetracker_class, only: timetracker
    use event_class,       only: event
    use monitor_class,     only: monitor
@@ -30,6 +32,10 @@ module ligament_class
       !type(ddadi)       :: vs    !< DDADI solver for velocity
       type(timetracker) :: time  !< Time info
       
+      !> Break-up modeling
+      type(lpt)         :: lp    !< Lagrangian particle solver
+      type(breakup)     :: bu    !< SGS break-up model
+
       !> Ensight postprocessing
       type(surfmesh) :: smesh    !< Surface mesh for interface
       type(ensight)  :: ens_out  !< Ensight output for flow variables
@@ -249,6 +255,21 @@ contains
          ! Compute divergence
          call this%fs%get_div()
       end block create_flow_solver
+      
+      
+      ! Create lpt solver
+      create_lpt_solver: block
+         ! Create the solver
+         this%lp=lpt(cfg=this%cfg,name='spray')
+         ! Get particle density from the flow solver
+         this%lp%rho=this%fs%rho_l
+      end block create_lpt_solver
+      
+      
+      ! Create breakup model
+      create_breakup: block
+         call this%bu%initialize(vf=this%vf,fs=this%fs,lp=this%lp)
+      end block create_breakup
       
 
       ! Create surfmesh object for interface polygon output

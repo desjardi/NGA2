@@ -4,7 +4,6 @@ NGA_HOME ?= ../..
 # Compilation parameters
 PRECISION = DOUBLE
 USE_MPI   = TRUE
-USE_FFTW  = TRUE
 USE_HYPRE = TRUE
 USE_LAPACK= TRUE
 USE_IRL   = TRUE
@@ -23,13 +22,16 @@ include $(Upack)
 INCLUDE_LOCATIONS += $(Ulocs)
 VPATH_LOCATIONS   += $(Ulocs)
 
-# External libraries are defined in .profile/.bashrc/.zshrc, but could be defined here as well
+# Define external libraries - this can also be in .profile
+#HYPRE_DIR = 
+#IRL_DIR   = 
+#LAPACK_DIR= 
 
 # NGA compilation definitions
 include $(NGA_HOME)/tools/GNUMake/Make.defs
 
 # Include NGA base code
-Bdirs   := core two_phase particles constant_density data transform solver config grid libraries
+Bdirs   := core two_phase data solver config grid libraries
 Bpack   += $(foreach dir, $(Bdirs), $(NGA_HOME)/src/$(dir)/Make.package)
 include $(Bpack)
 

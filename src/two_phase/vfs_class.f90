@@ -1718,12 +1718,14 @@ contains
    
    !> Detect thin regions of the interface
    subroutine detect_thin_regions(this)
+      use mathtools, only: normalize
       implicit none
       class(vfs), intent(inout) :: this
       integer :: i,j,k,ii,jj,kk,dim,dir,ni
       integer , dimension(3) :: pos
       real(WP), dimension(3) :: n1,n2,c1,c2
       real(WP), dimension(:,:,:), allocatable :: mysensor
+      real(WP) :: a1,a2
       ! Default value is 0
       this%thin_sensor=0.0_WP
       ! First pass to handle 2-plane cells
@@ -1793,17 +1795,43 @@ contains
                   do dim=1,3
                      do dir=-1,1,2
                         pos=0; pos(dim)=dir; ii=i+pos(1); jj=j+pos(2); kk=k+pos(3)
-                        ! Skip full cells and 2-plane cells
-                        if (this%VF(ii,jj,kk).lt.VFlo.or.this%VF(ii,jj,kk).gt.VFhi.or. &
-                        &   getNumberOfPlanes(this%liquid_gas_interface(ii,jj,kk)).eq.2) cycle
+                        ! Skip full cells
+                        if (this%VF(ii,jj,kk).lt.VFlo.or.this%VF(ii,jj,kk).gt.VFhi) cycle
                         ! Check normal orientation to identify thin regions
-                        n2=calculateNormal(this%interface_polygon(1,ii,jj,kk))
-                        if (dot_product(n1,n2).lt.this%thin_thld_dotprod) then
-                           ! Check if liquid or gas
-                           c1=calculateCentroid(this%interface_polygon(1,i ,j ,k ))
-                           c2=calculateCentroid(this%interface_polygon(1,ii,jj,kk))
-                           if (dot_product(c2-c1,n2).gt.0.0_WP.and.dot_product(c1-c2,n1).gt.0.0_WP) this%thin_sensor(i,j,k)=1.0_WP
-                           if (dot_product(c2-c1,n2).lt.0.0_WP.and.dot_product(c1-c2,n1).lt.0.0_WP) this%thin_sensor(i,j,k)=2.0_WP
+                        ! If neighbor has two planes, then surface-average its normals and centroids
+                        if (getNumberOfVertices(this%interface_polygon(2,ii,jj,kk)).gt.0) then
+                           a1=calculateVolume(this%interface_polygon(1,ii,jj,kk))/this%cfg%meshsize(ii,jj,kk)
+                           a2=calculateVolume(this%interface_polygon(2,ii,jj,kk))/this%cfg%meshsize(ii,jj,kk)
+                           n2=normalize(a1*calculateNormal(this%interface_polygon(1,ii,jj,kk))&
+                           &           +a2*calculateNormal(this%interface_polygon(2,ii,jj,kk)))
+                           if (dot_product(n1,n2).lt.this%thin_thld_dotprod) then
+                              c1=calculateCentroid(this%interface_polygon(1,i ,j ,k ))
+                              c2=(a1*calculateCentroid(this%interface_polygon(1,ii,jj,kk))&
+                              &  +a2*calculateCentroid(this%interface_polygon(2,ii,jj,kk)))/(a1+a2)
+                              ! Check if liquid or gas
+                              if (dot_product(c2-c1,n2).gt.0.0_WP.and.dot_product(c1-c2,n1).gt.0.0_WP) then
+                                 this%thin_sensor(i,j,k)=1.0_WP
+                              else if (dot_product(c2-c1,n2).lt.0.0_WP.and.dot_product(c1-c2,n1).lt.0.0_WP) then
+                                 this%thin_sensor(i,j,k)=2.0_WP
+                              else
+                                 this%thin_sensor(i,j,k)=this%thin_sensor(ii,jj,kk) ! what if it hasn't been assigned a thin sensor value yet?                          
+                              end if
+                           end if
+                        else
+                           n2=calculateNormal(this%interface_polygon(1,ii,jj,kk))
+                           if (dot_product(n1,n2).lt.this%thin_thld_dotprod) then
+                              ! Check if liquid or gas
+                              c1=calculateCentroid(this%interface_polygon(1,i ,j ,k ))
+                              c2=calculateCentroid(this%interface_polygon(1,ii,jj,kk))
+                              ! Check if liquid or gas
+                              if (dot_product(c2-c1,n2).gt.0.0_WP.and.dot_product(c1-c2,n1).gt.0.0_WP) then
+                                 this%thin_sensor(i,j,k)=1.0_WP
+                              else if (dot_product(c2-c1,n2).lt.0.0_WP.and.dot_product(c1-c2,n1).lt.0.0_WP) then
+                                 this%thin_sensor(i,j,k)=2.0_WP
+                              else
+                                 this%thin_sensor(i,j,k)=this%thin_sensor(ii,jj,kk) ! what if it hasn't been assigned a thin sensor value yet?                          
+                              end if
+                           end if
                         end if
                      end do
                   end do
