@@ -1319,7 +1319,7 @@ contains
        cb=abs(sum(this%divp_x(:,i,j,k)*this%U(i:i+1,j,k)) &
             + sum(this%divp_y(:,i,j,k)*this%V(i,j:j+1,k)) &
             + sum(this%divp_z(:,i,j,k)*this%W(i,j,k:k+1)))&
-            - min(this%cfg%dxi(i),this%cfg%dyi(j),this%cfg%dzi(k)) &
+            - max(this%cfg%dxi(i),this%cfg%dyi(j),this%cfg%dzi(k)) &
             * sqrt(this%RHOSS2(i,j,k)/this%RHO(i,j,k)) / this%shs_wt
 
      end function shock_sensor
