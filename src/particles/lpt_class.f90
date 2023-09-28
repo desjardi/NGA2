@@ -1339,8 +1339,9 @@ contains
       do i=1,this%np_
          pmesh%pos(:,i)=this%p(i)%pos
       end do
-    else
-      ! Add a zero-diameter particle if this proc doesn't have one
+    end if
+    ! Root adds a particle if there are none
+    if (this%np.eq.0.and.this%cfg%amRoot) then
       call pmesh%set_size(1)
       pmesh%pos(1,1)=this%cfg%x(this%cfg%imin)
       pmesh%pos(2,1)=this%cfg%y(this%cfg%jmin)

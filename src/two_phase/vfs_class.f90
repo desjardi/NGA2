@@ -1221,20 +1221,20 @@ contains
      real(WP) :: my_Gvol,my_Lvol
      real(WP), dimension(3) :: my_Gbary,my_Lbary
      logical  :: skip_flag
-
+     
      skip_flag = .false.
      ! Get unique id of current cell
      localizer_id = getTagForIndex(f_moments,n)
      ! Convert unique id to indices ii,jj,kk
      ind=this%cfg%get_ijk_from_lexico(localizer_id)
      ii = ind(1); jj = ind(2); kk = ind(3)
-
+     
      ! If inside wall, nothing should be added to flux
      if (this%mask(ii,jj,kk).eq.1) then
         skip_flag = .true.
         return
      end if
-
+     
      ! If bringing material back from beyond outflow boundary, skip
      !if (backflow_flux_flag(ii,jj,kk)) cycle
 
