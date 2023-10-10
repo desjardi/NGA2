@@ -336,90 +336,38 @@ contains
       implicit none
       class(sml), intent(inout) :: this
       integer :: i,j,k,ii,jj,kk
-      real(WP) :: Umean,Vmean,Wmean
       real(WP), dimension(:,:,:), allocatable :: FX,FY,FZ
-      
-      ! Calculate mean velocity
-      call this%cfg%integrate(A=this%fs%U,integral=Umean); Umean=Umean/this%cfg%vol_total
-      call this%cfg%integrate(A=this%fs%V,integral=Vmean); Vmean=Vmean/this%cfg%vol_total
-      call this%cfg%integrate(A=this%fs%W,integral=Wmean); Wmean=Wmean/this%cfg%vol_total
       
       ! Allocate flux arrays
       allocate(FX(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
       allocate(FY(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
       allocate(FZ(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
       
-      ! Flux of U
-      do kk=this%cfg%kmin_,this%cfg%kmax_+1
-         do jj=this%cfg%jmin_,this%cfg%jmax_+1
-            do ii=this%cfg%imin_,this%cfg%imax_+1
-               ! Fluxes on x-face
-               i=ii-1; j=jj-1; k=kk-1
-               FX(i,j,k)=-this%fs%rho*this%meanU(j)*sum(this%fs%itpu_x(:,i,j,k)*(this%fs%U(i:i+1,j,k)-Umean))&
-               &         -this%fs%rho*sum(this%fs%itpu_x(:,i,j,k)*(this%fs%U(i:i+1,j,k)-Umean))*this%meanU(j)
-               ! Fluxes on y-face
-               i=ii; j=jj; k=kk
-               FY(i,j,k)=-this%fs%rho*sum(this%fs%itpu_y(:,i,j,k)*this%meanU(j-1:j))*sum(this%fs%itpv_x(:,i,j,k)*(this%fs%V(i-1:i,j,k)-Vmean))
-               ! Fluxes on z-face
-               i=ii; j=jj; k=kk
-               FZ(i,j,k)=-this%fs%rho*this%meanU(j)*sum(this%fs%itpw_x(:,i,j,k)*(this%fs%W(i-1:i,j,k)-Wmean))
-            end do
-         end do
-      end do
-      ! Time derivative of rhoU
-      do k=this%cfg%kmin_,this%cfg%kmax_
-         do j=this%cfg%jmin_,this%cfg%jmax_
-            do i=this%cfg%imin_,this%cfg%imax_
-               this%resU(i,j,k)=this%resU(i,j,k)+this%time%dt*(sum(this%fs%divu_x(:,i,j,k)*FX(i-1:i,j,k))+&
-               &                                               sum(this%fs%divu_y(:,i,j,k)*FY(i,j:j+1,k))+&
-               &                                               sum(this%fs%divu_z(:,i,j,k)*FZ(i,j,k:k+1)))
-            end do
-         end do
-      end do
-      ! Sync it
-      call this%cfg%sync(this%resU)
-      
-      ! Flux of rhoV
-      do kk=this%cfg%kmin_,this%cfg%kmax_+1
-         do jj=this%cfg%jmin_,this%cfg%jmax_+1
-            do ii=this%cfg%imin_,this%cfg%imax_+1
-               ! Fluxes on x-face
-               i=ii; j=jj; k=kk
-               FX(i,j,k)=-this%fs%rho*sum(this%fs%itpv_x(:,i,j,k)*(this%fs%V(i-1:i,j,k)-Vmean))*sum(this%fs%itpu_y(:,i,j,k)*this%meanU(j-1:j))
-            end do
-         end do
-      end do
-      ! Time derivative of rhoV
-      do k=this%cfg%kmin_,this%cfg%kmax_
-         do j=this%cfg%jmin_,this%cfg%jmax_
-            do i=this%cfg%imin_,this%cfg%imax_
-               this%resV(i,j,k)=this%resV(i,j,k)+this%time%dt*sum(this%fs%divv_x(:,i,j,k)*FX(i:i+1,j,k))
-            end do
-         end do
-      end do
-      ! Sync it
-      call this%cfg%sync(this%resV)
-      
-      ! Flux of rhoW
-      do kk=this%cfg%kmin_,this%cfg%kmax_+1
-         do jj=this%cfg%jmin_,this%cfg%jmax_+1
-            do ii=this%cfg%imin_,this%cfg%imax_+1
-               ! Fluxes on x-face
-               i=ii; j=jj; k=kk
-               FX(i,j,k)=-this%fs%rho*sum(this%fs%itpw_x(:,i,j,k)*(this%fs%W(i-1:i,j,k)-Wmean))*this%meanU(j)
-            end do
-         end do
-      end do
-      ! Time derivative of rhoW
-      do k=this%cfg%kmin_,this%cfg%kmax_
-         do j=this%cfg%jmin_,this%cfg%jmax_
-            do i=this%cfg%imin_,this%cfg%imax_
-               this%resW(i,j,k)=this%resW(i,j,k)+this%time%dt*sum(this%fs%divw_x(:,i,j,k)*FX(i:i+1,j,k))
-            end do
-         end do
-      end do
-      ! Sync it
-      call this%cfg%sync(this%resW)
+      ! Force u' by -div(meanU u')-div(u' meanU)
+      do kk=this%cfg%kmin_,this%cfg%kmax_+1; do jj=this%cfg%jmin_,this%cfg%jmax_+1; do ii=this%cfg%imin_,this%cfg%imax_+1
+         ! Fluxes on x-face
+         i=ii-1; j=jj-1; k=kk-1; FX(i,j,k)=-this%fs%rho*this%meanU(j)*sum(this%fs%itpu_x(:,i,j,k)*this%fs%U(i:i+1,j,k))&
+         &                                 -this%fs%rho*sum(this%fs%itpu_x(:,i,j,k)*this%fs%U(i:i+1,j,k))*this%meanU(j)
+         i=ii  ; j=jj  ; k=kk  ; FY(i,j,k)=-this%fs%rho*sum(this%fs%itpu_y(:,i,j,k)*this%meanU(j-1:j))*sum(this%fs%itpv_x(:,i,j,k)*this%fs%V(i-1:i,j,k))
+         i=ii  ; j=jj  ; k=kk  ; FZ(i,j,k)=-this%fs%rho*this%meanU(j)*sum(this%fs%itpw_x(:,i,j,k)*this%fs%W(i-1:i,j,k))
+      end do; end do; end do
+      do k=this%cfg%kmin_,this%cfg%kmax_; do j=this%cfg%jmin_,this%cfg%jmax_; do i=this%cfg%imin_,this%cfg%imax_
+         this%resU(i,j,k)=this%resU(i,j,k)+this%time%dt*(sum(this%fs%divu_x(:,i,j,k)*FX(i-1:i,j,k))+sum(this%fs%divu_y(:,i,j,k)*FY(i,j:j+1,k))+sum(this%fs%divu_z(:,i,j,k)*FZ(i,j,k:k+1)))
+      end do; end do; end do
+      ! Force v' by -div(meanU u')-div(u' meanU)
+      do kk=this%cfg%kmin_,this%cfg%kmax_+1; do jj=this%cfg%jmin_,this%cfg%jmax_+1; do ii=this%cfg%imin_,this%cfg%imax_+1
+         i=ii  ; j=jj  ; k=kk  ; FX(i,j,k)=-this%fs%rho*sum(this%fs%itpv_x(:,i,j,k)*this%fs%V(i-1:i,j,k))*sum(this%fs%itpu_y(:,i,j,k)*this%meanU(j-1:j))
+      end do; end do; end do
+      do k=this%cfg%kmin_,this%cfg%kmax_; do j=this%cfg%jmin_,this%cfg%jmax_; do i=this%cfg%imin_,this%cfg%imax_
+         this%resV(i,j,k)=this%resV(i,j,k)+this%time%dt*sum(this%fs%divv_x(:,i,j,k)*FX(i:i+1,j,k))
+      end do; end do; end do
+      ! Force w' by -div(meanU u')-div(u' meanU)
+      do kk=this%cfg%kmin_,this%cfg%kmax_+1; do jj=this%cfg%jmin_,this%cfg%jmax_+1; do ii=this%cfg%imin_,this%cfg%imax_+1
+         i=ii  ; j=jj  ; k=kk  ; FX(i,j,k)=-this%fs%rho*sum(this%fs%itpw_x(:,i,j,k)*this%fs%W(i-1:i,j,k))*this%meanU(j)
+      end do; end do; end do
+      do k=this%cfg%kmin_,this%cfg%kmax_; do j=this%cfg%jmin_,this%cfg%jmax_; do i=this%cfg%imin_,this%cfg%imax_
+         this%resW(i,j,k)=this%resW(i,j,k)+this%time%dt*sum(this%fs%divw_x(:,i,j,k)*FX(i:i+1,j,k))
+      end do; end do; end do
       
       ! Deallocate flux arrays
       deallocate(FX,FY,FZ)
