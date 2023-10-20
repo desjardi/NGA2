@@ -155,8 +155,8 @@ module vfs_class
       ! Old arrays that are needed for the compressible MAST solver
       real(WP), dimension(:,:,:,:), allocatable :: Lbaryold  !< Liquid barycenter
       real(WP), dimension(:,:,:,:), allocatable :: Gbaryold  !< Gas barycenter
-      type(PlanarSep_type),   dimension(:,:,:),   allocatable :: liquid_gas_interfaceold
-      type(LocSepLink_type),  dimension(:,:,:),   allocatable :: localized_separator_linkold
+      type(PlanarSep_type),  dimension(:,:,:), allocatable :: liquid_gas_interfaceold
+      type(LocSepLink_type), dimension(:,:,:), allocatable :: localized_separator_linkold
       type(ObjServer_PlanarSep_type)  :: planar_separatorold_allocation
       type(ObjServer_LocSepLink_type) :: localized_separator_linkold_allocation
       
@@ -363,7 +363,7 @@ contains
       
       ! Set optional detailed flux info
       if (present(store_detailed_flux)) this%store_detailed_flux=store_detailed_flux
-
+      
       ! Check that we have at least 3 overlap cells - we can push that to 2 with limited work!
       if (cfg%no.lt.3) call die('[vfs initialize] The config requires at least 3 overlap cells')
       
@@ -511,7 +511,7 @@ contains
             end do
          end do
       end do
-
+      
       ! If needed, allocate detailed flux data storage
       if (this%store_detailed_flux) then
          allocate(this%detailed_face_flux(1:3,this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
@@ -894,7 +894,7 @@ contains
       real(WP) :: Lvolinc,Gvolinc
       real(WP) :: Lvolnew,Gvolnew
       real(WP) :: vol_now,crude_VF
-      real(WP) :: lvol,gvol,myvol
+      real(WP) :: lvol,gvol
       real(WP), dimension(3) :: ctr_now,lbar,gbar
       real(WP), dimension(3,2) :: bounding_pts
       integer, dimension(3,2) :: bb_indices
@@ -902,6 +902,19 @@ contains
       
       ! Allocate
       call new(flux_polyhedron)
+
+      ! Clean up detailed fluxes if necessary
+      if (this%store_detailed_flux) then
+         do k=this%cfg%kmino_,this%cfg%kmaxo_
+            do j=this%cfg%jmino_,this%cfg%jmaxo_
+               do i=this%cfg%imino_,this%cfg%imaxo_
+                  call clear(this%detailed_face_flux(1,i,j,k))
+                  call clear(this%detailed_face_flux(2,i,j,k))
+                  call clear(this%detailed_face_flux(3,i,j,k))
+               end do
+            end do
+         end do
+      end if
       
       ! Loop over the domain and compute fluxes using semi-Lagrangian algorithm
       do k=this%cfg%kmin_,this%cfg%kmax_+1
@@ -930,13 +943,13 @@ contains
                   if (crude_VF.lt.0.0_WP) then
                      ! Need full geometric flux
                      if (this%store_detailed_flux) then
-                        call getNormMoments(flux_polyhedron,this%localized_separator_link(i,j,k),this%detailed_face_flux(1,i,j,k))
+                        call getMoments(flux_polyhedron,this%localized_separator_link(i,j,k),this%detailed_face_flux(1,i,j,k))
                         ! Rebuild face flux from detailed face flux
                         lvol=0.0_WP; gvol=0.0_WP; lbar=0.0_WP; gbar=0.0_WP
                         do n=0,getSize(this%detailed_face_flux(1,i,j,k))-1
                            call getSepVMAtIndex(this%detailed_face_flux(1,i,j,k),n,my_SepVM)
-                           myvol=getVolume(my_SepVM,0); lvol=lvol+myvol; lbar=lbar+myvol*getCentroid(my_SepVM,0)
-                           myvol=getVolume(my_SepVM,1); gvol=gvol+myvol; gbar=gbar+myvol*getCentroid(my_SepVM,1)
+                           lvol=lvol+getVolume(my_SepVM,0); lbar=lbar+getCentroid(my_SepVM,0)
+                           gvol=gvol+getVolume(my_SepVM,1); gbar=gbar+getCentroid(my_SepVM,1)
                         end do
                         call construct(this%face_flux(1,i,j,k),[lvol,lbar,gvol,gbar])
                      else
@@ -971,13 +984,13 @@ contains
                   if (crude_VF.lt.0.0_WP) then
                      ! Need full geometric flux
                      if (this%store_detailed_flux) then
-                        call getNormMoments(flux_polyhedron,this%localized_separator_link(i,j,k),this%detailed_face_flux(2,i,j,k))
+                        call getMoments(flux_polyhedron,this%localized_separator_link(i,j,k),this%detailed_face_flux(2,i,j,k))
                         ! Rebuild face flux from detailed face flux
                         lvol=0.0_WP; gvol=0.0_WP; lbar=0.0_WP; gbar=0.0_WP
                         do n=0,getSize(this%detailed_face_flux(2,i,j,k))-1
                            call getSepVMAtIndex(this%detailed_face_flux(2,i,j,k),n,my_SepVM)
-                           myvol=getVolume(my_SepVM,0); lvol=lvol+myvol; lbar=lbar+myvol*getCentroid(my_SepVM,0)
-                           myvol=getVolume(my_SepVM,1); gvol=gvol+myvol; gbar=gbar+myvol*getCentroid(my_SepVM,1)
+                           lvol=lvol+getVolume(my_SepVM,0); lbar=lbar+getCentroid(my_SepVM,0)
+                           gvol=gvol+getVolume(my_SepVM,1); gbar=gbar+getCentroid(my_SepVM,1)
                         end do
                         call construct(this%face_flux(2,i,j,k),[lvol,lbar,gvol,gbar])
                      else
@@ -1012,13 +1025,13 @@ contains
                   if (crude_VF.lt.0.0_WP) then
                      ! Need full geometric flux
                      if (this%store_detailed_flux) then
-                        call getNormMoments(flux_polyhedron,this%localized_separator_link(i,j,k),this%detailed_face_flux(3,i,j,k))
+                        call getMoments(flux_polyhedron,this%localized_separator_link(i,j,k),this%detailed_face_flux(3,i,j,k))
                         ! Rebuild face flux from detailed face flux
                         lvol=0.0_WP; gvol=0.0_WP; lbar=0.0_WP; gbar=0.0_WP
                         do n=0,getSize(this%detailed_face_flux(3,i,j,k))-1
                            call getSepVMAtIndex(this%detailed_face_flux(3,i,j,k),n,my_SepVM)
-                           myvol=getVolume(my_SepVM,0); lvol=lvol+myvol; lbar=lbar+myvol*getCentroid(my_SepVM,0)
-                           myvol=getVolume(my_SepVM,1); gvol=gvol+myvol; gbar=gbar+myvol*getCentroid(my_SepVM,1)
+                           lvol=lvol+getVolume(my_SepVM,0); lbar=lbar+getCentroid(my_SepVM,0)
+                           gvol=gvol+getVolume(my_SepVM,1); gbar=gbar+getCentroid(my_SepVM,1)
                         end do
                         call construct(this%face_flux(3,i,j,k),[lvol,lbar,gvol,gbar])
                      else
