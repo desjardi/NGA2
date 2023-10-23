@@ -42,7 +42,7 @@ module tpscalar_class
       character(len=str_medium) :: name='UNNAMED_SCALAR'  !< Solver name (default=UNNAMED_SCALAR)
       
       ! Constant property fluid, but diffusivity is still a field due to LES modeling
-      integer, dimension(:) :: phase                      !< This is the phase for each scalar (0=gas, 1=liquid)
+      integer, dimension(:), allocatable :: phase         !< This is the phase for each scalar (0=gas, 1=liquid)
       real(WP), dimension(:,:,:,:), allocatable :: diff   !< These is our constant+SGS dynamic diffusivity for the scalar
       
       ! Boundary condition list
@@ -95,14 +95,14 @@ contains
    subroutine initialize(this,cfg,nscalar,name)
       use messager, only: die
       implicit none
-      type(tpscalar) :: this
+      class(tpscalar) :: this
       class(config), target, intent(in) :: cfg
       integer, intent(in) :: nscalar
       character(len=*), optional :: name
       integer :: i,j,k
       
       ! Set the name for the solver
-      if (present(name)) self%name=trim(adjustl(name))
+      if (present(name)) this%name=trim(adjustl(name))
       
       ! Set the number of scalars
       this%nscalar=nscalar
@@ -124,9 +124,9 @@ contains
       this%first_bc=>NULL()
       
       ! Allocate variables
-      allocate(this%SC   (this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_,1:this%nscalar)); self%SC   =0.0_WP
-      allocate(this%SCold(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_,1:this%nscalar)); self%SCold=0.0_WP
-      allocate(this%diff (this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_,1:this%nscalar)); self%diff =0.0_WP
+      allocate(this%SC   (this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_,1:this%nscalar)); this%SC   =0.0_WP
+      allocate(this%SCold(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_,1:this%nscalar)); this%SCold=0.0_WP
+      allocate(this%diff (this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_,1:this%nscalar)); this%diff =0.0_WP
       
       ! Check current overlap
 		if (this%cfg%no.lt.1) call die('[tpscalar constructor] Scalar transport scheme requires larger overlap')
@@ -138,7 +138,7 @@ contains
       allocate(this%mask(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_)); this%mask=0
       if (.not.this%cfg%xper) then
          if (this%cfg%iproc.eq.           1) this%mask(:this%cfg%imin-1,:,:)=2
-         if (this%cfg%iproc.eq.self%cfg%npx) this%mask(this%cfg%imax+1:,:,:)=2
+         if (this%cfg%iproc.eq.this%cfg%npx) this%mask(this%cfg%imax+1:,:,:)=2
       end if
       if (.not.this%cfg%yper) then
          if (this%cfg%jproc.eq.           1) this%mask(:,:this%cfg%jmin-1,:)=2
@@ -146,7 +146,7 @@ contains
       end if
       if (.not.this%cfg%zper) then
          if (this%cfg%kproc.eq.           1) this%mask(:,:,:this%cfg%kmin-1)=2
-         if (this%cfg%kproc.eq.self%cfg%npz) this%mask(:,:,this%cfg%kmax+1:)=2
+         if (this%cfg%kproc.eq.this%cfg%npz) this%mask(:,:,this%cfg%kmax+1:)=2
       end if
       do k=this%cfg%kmino_,this%cfg%kmaxo_
          do j=this%cfg%jmino_,this%cfg%jmaxo_
@@ -288,6 +288,7 @@ contains
    
    !> Finish setting up the scalar solver now that bconds have been defined
    subroutine setup(this,implicit_solver)
+      use messager, only: die
       implicit none
       class(tpscalar), intent(inout) :: this
       class(linsol), target, intent(in), optional :: implicit_solver
@@ -460,7 +461,7 @@ contains
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:)   , intent(in)  :: U        !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:)   , intent(in)  :: V        !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:)   , intent(in)  :: W        !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
-      type(TagAccVM_SepVM_type), dimension(1:,this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in) :: detailed_face_flux !< Needs to be (1:3,imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      type(TagAccVM_SepVM_type), dimension(1:,this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:) :: detailed_face_flux !< Needs to be (1:3,imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       real(WP), intent(in) :: dt  !< This is the time step size that was used to generate the detailed_face_flux geometric data
       type(SepVM_type) :: my_SepVM
       integer :: i,j,k,nsc,n
@@ -471,13 +472,13 @@ contains
       ! Zero out dSC/dt array
       dSCdt=0.0_WP
       ! Allocate flux arrays
-      allocate(FX(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
-      allocate(FY(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
-      allocate(FZ(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
+      allocate(FX(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_)); FX=0.0_WP
+      allocate(FY(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_)); FY=0.0_WP
+      allocate(FZ(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_)); FZ=0.0_WP
       ! Work on each scalar
       do nsc=1,this%nscalar
          ! Calculate minmod-limited gradient of SC
-
+         ! For second-order transport
          ! Convective flux of SC
          do k=this%cfg%kmin_,this%cfg%kmax_+1
             do j=this%cfg%jmin_,this%cfg%jmax_+1
@@ -494,19 +495,60 @@ contains
                         my_bar=getCentroid(my_SepVM,this%phase(nsc))
                         my_vol=getVolume  (my_SepVM,this%phase(nsc))
                         ! Increment flux
-                        FX(i,j,k)=FX(i,j,k)+my_vol*this%SCold(ind(1),ind(2),ind(3)) ! First order estimate
-                        !FX(i,j,k)=FX(i,j,k)+my_vol*(this%SCold(ind(1),ind(2),ind(3))+sum(gradSC(:,ii,jj,kk)*my_bar(:)-my_barold(:)))
+                        FX(i,j,k)=FX(i,j,k)-my_vol*this%SCold(ind(1),ind(2),ind(3),nsc) ! First order estimate for now
+                        !FX(i,j,k)=FX(i,j,k)+my_vol*(this%SCold(ind(1),ind(2),ind(3),nsc)+sum(gradSC(:,ii,jj,kk)*my_bar(:)-my_barold(:)))
                      end do
                      ! Scale by cell face area and time step size
                      FX(i,j,k)=FX(i,j,k)/(dt*this%cfg%dy(j)*this%cfg%dz(k))
                   else
                      ! No detailed geometric flux is available, use MUSCL flux
-                     FX(i,j,k)=
+                     FX(i,j,k)=-0.5_WP*(U(i,j,k)+abs(U(i,j,k)))*this%SC(i-1,j,k,nsc)&
+                     &         -0.5_WP*(U(i,j,k)-abs(U(i,j,k)))*this%SC(i  ,j,k,nsc)    ! First order upwind for now
                   end if
                   ! Flux on y-face
-                  FY(i,j,k)=
+                  if (getSize(detailed_face_flux(2,i,j,k)).gt.0) then
+                     ! Detailed geometric flux is available, use geometric fluxing
+                     do n=0,getSize(detailed_face_flux(2,i,j,k))-1
+                        ! Get cell index for nth object
+                        ind=this%cfg%get_ijk_from_lexico(getTagForIndex(detailed_face_flux(2,i,j,k),n))
+                        ! Get SepVM for nth object
+                        call getSepVMAtIndex(detailed_face_flux(2,i,j,k),n,my_SepVM)
+                        ! Extra volume and barycenter for relevant phase
+                        my_bar=getCentroid(my_SepVM,this%phase(nsc))
+                        my_vol=getVolume  (my_SepVM,this%phase(nsc))
+                        ! Increment flux
+                        FY(i,j,k)=FY(i,j,k)-my_vol*this%SCold(ind(1),ind(2),ind(3),nsc) ! First order estimate for now
+                        !FY(i,j,k)=FY(i,j,k)+my_vol*(this%SCold(ind(1),ind(2),ind(3),nsc)+sum(gradSC(:,ii,jj,kk)*my_bar(:)-my_barold(:)))
+                     end do
+                     ! Scale by cell face area and time step size
+                     FY(i,j,k)=FY(i,j,k)/(dt*this%cfg%dx(i)*this%cfg%dz(k))
+                  else
+                     ! No detailed geometric flux is available, use MUSCL flux
+                     FY(i,j,k)=-0.5_WP*(V(i,j,k)+abs(V(i,j,k)))*this%SC(i,j-1,k,nsc)&
+                     &         -0.5_WP*(V(i,j,k)-abs(V(i,j,k)))*this%SC(i,j  ,k,nsc)    ! First order upwind for now
+                  end if
                   ! Flux on z-face
-                  FZ(i,j,k)=
+                  if (getSize(detailed_face_flux(3,i,j,k)).gt.0) then
+                     ! Detailed geometric flux is available, use geometric fluxing
+                     do n=0,getSize(detailed_face_flux(3,i,j,k))-1
+                        ! Get cell index for nth object
+                        ind=this%cfg%get_ijk_from_lexico(getTagForIndex(detailed_face_flux(3,i,j,k),n))
+                        ! Get SepVM for nth object
+                        call getSepVMAtIndex(detailed_face_flux(3,i,j,k),n,my_SepVM)
+                        ! Extra volume and barycenter for relevant phase
+                        my_bar=getCentroid(my_SepVM,this%phase(nsc))
+                        my_vol=getVolume  (my_SepVM,this%phase(nsc))
+                        ! Increment flux
+                        FZ(i,j,k)=FZ(i,j,k)-my_vol*this%SCold(ind(1),ind(2),ind(3),nsc) ! First order estimate for now
+                        !FZ(i,j,k)=FZ(i,j,k)+my_vol*(this%SCold(ind(1),ind(2),ind(3),nsc)+sum(gradSC(:,ii,jj,kk)*my_bar(:)-my_barold(:)))
+                     end do
+                     ! Scale by cell face area and time step size
+                     FZ(i,j,k)=FZ(i,j,k)/(dt*this%cfg%dx(i)*this%cfg%dy(j))
+                  else
+                     ! No detailed geometric flux is available, use MUSCL flux
+                     FZ(i,j,k)=-0.5_WP*(W(i,j,k)+abs(W(i,j,k)))*this%SC(i,j,k-1,nsc)&
+                     &         -0.5_WP*(W(i,j,k)-abs(W(i,j,k)))*this%SC(i,j,k  ,nsc)    ! First order upwind for now
+                  end if
                end do
             end do
          end do
@@ -622,4 +664,4 @@ contains
    end subroutine multiscalar_print
    
    
-end module multiscalar_class
+end module tpscalar_class

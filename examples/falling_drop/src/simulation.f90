@@ -6,6 +6,7 @@ module simulation
    use ddadi_class,       only: ddadi
 	use tpns_class,        only: tpns
 	use vfs_class,         only: vfs
+   use tpscalar_class,    only: tpscalar
 	use timetracker_class, only: timetracker
 	use ensight_class,     only: ensight
    use surfmesh_class,    only: surfmesh
@@ -19,6 +20,7 @@ module simulation
 	type(ddadi),       public :: vs
 	type(tpns),        public :: fs
 	type(vfs),         public :: vf
+   type(tpscalar),    public :: sc
 	type(timetracker), public :: time
 	
 	!> Ensight postprocessing
@@ -32,7 +34,8 @@ module simulation
 	public :: simulation_init,simulation_run,simulation_final
 	
 	!> Private work arrays
-	real(WP), dimension(:,:,:), allocatable :: resU,resV,resW
+	real(WP), dimension(:,:,:,:), allocatable :: resSC
+   real(WP), dimension(:,:,:), allocatable :: resU,resV,resW
 	real(WP), dimension(:,:,:), allocatable :: Ui,Vi,Wi
 	
 	!> Problem definition
@@ -63,12 +66,13 @@ contains
 		
 		! Allocate work arrays
 	   allocate_work_arrays: block
-		   allocate(resU(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
-			allocate(resV(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
-			allocate(resW(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
-			allocate(Ui  (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
-			allocate(Vi  (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
-			allocate(Wi  (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+         allocate(resSC(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_,1))
+		   allocate(resU (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+			allocate(resV (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+			allocate(resW (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+			allocate(Ui   (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+			allocate(Vi   (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+			allocate(Wi   (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
 		end block allocate_work_arrays
 		
 		
@@ -94,7 +98,7 @@ contains
 			integer, parameter :: amr_ref_lvl=4
 			! Create a VOF solver
 		   !vf=vfs(cfg=cfg,reconstruction_method=lvira,name='VOF')
-         call vf%initialize(cfg=cfg,reconstruction_method=lvira,name='VOF')
+         call vf%initialize(cfg=cfg,reconstruction_method=lvira,name='VOF',store_detailed_flux=.true.)
 		   ! Initialize to a droplet and a pool
 		   center=[0.0_WP,0.01_WP,0.0_WP]
 		   radius=0.002_WP
@@ -178,7 +182,39 @@ contains
 		   call fs%get_div()
 	   end block create_and_initialize_flow_solver
 	   
-
+      
+      ! Create a liquid scalar solver
+      create_scalar: block
+         integer :: i,j,k
+         ! Create scalar solver
+         call sc%initialize(cfg=cfg,nscalar=1,name='test')
+         ! Make it liquid and give it a name
+         sc%SCname(1)='Z'
+         sc%phase(1)=0 ! 0 for liquid-only scalar
+         ! Assign zero diffusivity
+         sc%diff=0.0_WP
+         ! Setup without an implicit solver
+         call sc%setup()
+         ! Initialize the scalar field
+         do k=cfg%kmino_,cfg%kmaxo_
+            do j=cfg%jmino_,cfg%jmaxo_
+               do i=cfg%imino_,cfg%imaxo_
+                  if (vf%VF(i,j,k).gt.0.0_WP) then
+                     ! We are in the liquid
+                     if (cfg%ym(j).gt.depth) then
+                        ! We are above the pool
+                        sc%SC(i,j,k,1)=1.0_WP
+                     else
+                        ! We are in the pool
+                        sc%SC(i,j,k,1)=2.0_WP
+                     end if
+                  end if
+               end do
+            end do
+         end do
+      end block create_scalar
+      
+      
 	   ! Create surfmesh object for interface polygon output
       create_smesh: block
          smesh=surfmesh(nvar=0,name='plic')
@@ -199,6 +235,7 @@ contains
 		   call ens_out%add_scalar('pressure',fs%P)
 		   call ens_out%add_scalar('curvature',vf%curv)
          call ens_out%add_surface('plic',smesh)
+         call ens_out%add_scalar('scalar',sc%SC(:,:,:,1))
 		   ! Output to ensight
 		   if (ens_evt%occurs()) call ens_out%write_data(time%t)
 	   end block create_ensight
@@ -260,7 +297,10 @@ contains
 			
 			! Remember old VOF
 		   vf%VFold=vf%VF
-			
+         
+         ! Remember old SC
+         sc%SCold=sc%SC
+         
 			! Remember old velocity
 		   fs%Uold=fs%U
 			fs%Vold=fs%V
@@ -277,6 +317,14 @@ contains
 			
 			! Prepare new staggered viscosity (at n+1)
 		   call fs%get_viscosity(vf=vf,strat=arithmetic_visc)
+
+         ! Now transport our liquid-only scalar
+         call sc%get_dSCdt(dSCdt=resSC,U=fs%U,V=fs%V,W=fs%W,detailed_face_flux=vf%detailed_face_flux,dt=time%dt)
+         where (vf%VF.gt.0.0_WP)
+            sc%SC(:,:,:,1)=(vf%VFold*sc%SCold(:,:,:,1)+time%dt*resSC(:,:,:,1))/vf%VF
+         elsewhere
+            sc%SC(:,:,:,1)=0.0_WP
+         endwhere
 			
 		   ! Perform sub-iterations
 		   do while (time%it.le.time%itmax)
@@ -365,7 +413,7 @@ contains
 	   ! timetracker
 	   
 	   ! Deallocate work arrays
-	   deallocate(resU,resV,resW,Ui,Vi,Wi)
+	   deallocate(resSC,resU,resV,resW,Ui,Vi,Wi)
 	   
 	end subroutine simulation_final
 	
