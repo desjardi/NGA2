@@ -82,8 +82,7 @@ module tpscalar_class
       procedure :: get_bcond                              !< Get a boundary condition
       procedure :: apply_bcond                            !< Apply all boundary conditions
       procedure :: get_dSCdt                              !< Calculate drhoSC/dt
-      procedure :: get_max                                !< Calculate maximum field values
-      procedure :: get_int                                !< Calculate integral field values
+      procedure :: get_max                                !< Calculate maximum and integral field values
       procedure :: solve_implicit                         !< Solve for the scalar residuals implicitly
    end type tpscalar
    
@@ -472,11 +471,13 @@ contains
       ! Zero out dSC/dt array
       dSCdt=0.0_WP
       ! Allocate flux arrays
-      allocate(FX(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_)); FX=0.0_WP
-      allocate(FY(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_)); FY=0.0_WP
-      allocate(FZ(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_)); FZ=0.0_WP
+      allocate(FX(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
+      allocate(FY(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
+      allocate(FZ(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
       ! Work on each scalar
       do nsc=1,this%nscalar
+         ! Reset fluxes to zero
+         FX=0.0_WP; FY=0.0_WP; FZ=0.0_WP
          ! Calculate minmod-limited gradient of SC
          ! For second-order transport
          ! Convective flux of SC
@@ -580,30 +581,29 @@ contains
    end subroutine get_dSCdt
    
    
-   !> Calculate the min and max of our SC field
-   subroutine get_max(this)
+   !> Calculate the min, max, and int of our SC field
+   subroutine get_max(this,VF)
       use mpi_f08,  only: MPI_ALLREDUCE,MPI_MAX,MPI_MIN
       use parallel, only: MPI_REAL_WP
       implicit none
       class(tpscalar), intent(inout) :: this
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in) :: VF        !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       integer :: ierr,nsc
       real(WP) :: my_SCmax,my_SCmin
+      real(WP), dimension(:,:,:), allocatable :: tmp
+      allocate(tmp(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
       do nsc=1,this%nscalar
          my_SCmax=maxval(this%SC(:,:,:,nsc)); call MPI_ALLREDUCE(my_SCmax,this%SCmax(nsc),1,MPI_REAL_WP,MPI_MAX,this%cfg%comm,ierr)
          my_SCmin=minval(this%SC(:,:,:,nsc)); call MPI_ALLREDUCE(my_SCmin,this%SCmin(nsc),1,MPI_REAL_WP,MPI_MIN,this%cfg%comm,ierr)
+         if      (this%phase(nsc).eq.0) then ! Liquid scalar
+            tmp=this%SC(:,:,:,nsc)*(       VF(:,:,:))
+         else if (this%phase(nsc).eq.1) then ! Gas scalar
+            tmp=this%SC(:,:,:,nsc)*(1.0_WP-VF(:,:,:))
+         end if
+         call this%cfg%integrate(A=tmp,integral=this%SCint(nsc))
       end do
+      deallocate(tmp)
    end subroutine get_max
-   
-   
-   !> Calculate the integral of our SC field
-   subroutine get_int(this)
-      implicit none
-      class(tpscalar), intent(inout) :: this
-      integer :: nsc
-      do nsc=1,this%nscalar
-         call this%cfg%integrate(this%SC(:,:,:,nsc),integral=this%SCint(nsc))
-      end do
-   end subroutine get_int
    
    
    !> Solve for implicit scalar residual

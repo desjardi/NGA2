@@ -29,7 +29,7 @@ module simulation
 	type(event)    :: ens_evt
 	
 	!> Simulation monitor file
-	type(monitor) :: mfile,cflfile
+	type(monitor) :: mfile,cflfile,scfile
 	
 	public :: simulation_init,simulation_run,simulation_final
 	
@@ -66,7 +66,7 @@ contains
 		
 		! Allocate work arrays
 	   allocate_work_arrays: block
-         allocate(resSC(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_,1))
+         allocate(resSC(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_,2))
 		   allocate(resU (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
 			allocate(resV (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
 			allocate(resW (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
@@ -86,7 +86,7 @@ contains
 			time%itmax=2
 		end block initialize_timetracker
 		
-		
+      
 		! Initialize our VOF solver and field
 	   create_and_initialize_vof: block
 		   use mms_geom, only: cube_refine_vol
@@ -187,18 +187,19 @@ contains
       create_scalar: block
          integer :: i,j,k
          ! Create scalar solver
-         call sc%initialize(cfg=cfg,nscalar=1,name='test')
+         call sc%initialize(cfg=cfg,nscalar=2,name='tpscalar_test')
          ! Make it liquid and give it a name
-         sc%SCname(1)='Z'
-         sc%phase(1)=0 ! 0 for liquid-only scalar
+         sc%SCname=['Zl','Zg']
+         sc%phase =[  0 ,  1 ]
          ! Assign zero diffusivity
          sc%diff=0.0_WP
          ! Setup without an implicit solver
          call sc%setup()
-         ! Initialize the scalar field
+         ! Initialize scalar fields
          do k=cfg%kmino_,cfg%kmaxo_
             do j=cfg%jmino_,cfg%jmaxo_
                do i=cfg%imino_,cfg%imaxo_
+                  ! Liquid scalar
                   if (vf%VF(i,j,k).gt.0.0_WP) then
                      ! We are in the liquid
                      if (cfg%ym(j).gt.depth) then
@@ -208,6 +209,11 @@ contains
                         ! We are in the pool
                         sc%SC(i,j,k,1)=2.0_WP
                      end if
+                  end if
+                  ! Gas scalar
+                  if (vf%VF(i,j,k).lt.1.0_WP) then
+                     ! We are in the gas
+                     sc%SC(i,j,k,2)=(cfg%ym(j)-depth)/(cfg%yL-depth)
                   end if
                end do
             end do
@@ -224,6 +230,7 @@ contains
 
 	   ! Add Ensight output
 	   create_ensight: block
+         integer :: nsc
 		   ! Create Ensight output from cfg
 		   ens_out=ensight(cfg=cfg,name='FallingDrop')
 			! Create event for Ensight output
@@ -235,7 +242,9 @@ contains
 		   call ens_out%add_scalar('pressure',fs%P)
 		   call ens_out%add_scalar('curvature',vf%curv)
          call ens_out%add_surface('plic',smesh)
-         call ens_out%add_scalar('scalar',sc%SC(:,:,:,1))
+         do nsc=1,sc%nscalar
+            call ens_out%add_scalar(trim(sc%SCname(nsc)),sc%SC(:,:,:,nsc))
+         end do
 		   ! Output to ensight
 		   if (ens_evt%occurs()) call ens_out%write_data(time%t)
 	   end block create_ensight
@@ -243,10 +252,12 @@ contains
 	   
 	   ! Create a monitor file
 	   create_monitor: block
+         integer :: nsc
 		   ! Prepare some info about fields
 		   call fs%get_cfl(time%dt,time%cfl)
 		   call fs%get_max()
 		   call vf%get_max()
+         call sc%get_max(VF=vf%VF)
 		   ! Create simulation monitor
 		   mfile=monitor(fs%cfg%amRoot,'simulation')
 		   call mfile%add_column(time%n,'Timestep number')
@@ -276,6 +287,16 @@ contains
 		   call cflfile%add_column(fs%CFLv_y,'Viscous yCFL')
 		   call cflfile%add_column(fs%CFLv_z,'Viscous zCFL')
 		   call cflfile%write()
+         ! Create scalar monitor
+         scfile=monitor(sc%cfg%amRoot,'scalar')
+         call scfile%add_column(time%n,'Timestep number')
+         call scfile%add_column(time%t,'Time')
+         do nsc=1,sc%nscalar
+            call scfile%add_column(sc%SCmin(nsc),trim(sc%SCname(nsc))//'_min')
+            call scfile%add_column(sc%SCmax(nsc),trim(sc%SCname(nsc))//'_max')
+            call scfile%add_column(sc%SCint(nsc),trim(sc%SCname(nsc))//'_int')
+         end do
+         call scfile%write()
 	   end block create_monitor
 	   
 	   
@@ -318,14 +339,34 @@ contains
 			! Prepare new staggered viscosity (at n+1)
 		   call fs%get_viscosity(vf=vf,strat=arithmetic_visc)
 
-         ! Now transport our liquid-only scalar
-         call sc%get_dSCdt(dSCdt=resSC,U=fs%U,V=fs%V,W=fs%W,detailed_face_flux=vf%detailed_face_flux,dt=time%dt)
-         where (vf%VF.gt.0.0_WP)
-            sc%SC(:,:,:,1)=(vf%VFold*sc%SCold(:,:,:,1)+time%dt*resSC(:,:,:,1))/vf%VF
-         elsewhere
-            sc%SC(:,:,:,1)=0.0_WP
-         endwhere
-			
+         ! Now transport our phase-specific scalars
+         advance_scalar: block
+            use vfs_class, only: VFlo,VFhi
+            integer :: nsc
+            ! Explicit calculation of dSC/dt from scalar equation
+            call sc%get_dSCdt(dSCdt=resSC,U=fs%U,V=fs%V,W=fs%W,detailed_face_flux=vf%detailed_face_flux,dt=time%dt)
+            ! Advance scalar fields
+            do nsc=1,sc%nscalar
+               if (sc%phase(nsc).eq.0) then
+                  ! Liquid scalar
+                  where (vf%VF.gt.VFlo)
+                     sc%SC(:,:,:,nsc)=(vf%VFold*sc%SCold(:,:,:,nsc)+time%dt*resSC(:,:,:,nsc))/vf%VF
+                  else where
+                     sc%SC(:,:,:,nsc)=0.0_WP
+                  end where
+               else if (sc%phase(nsc).eq.1) then
+                  ! Gas scalar
+                  where (vf%VF.lt.VFhi)
+                     sc%SC(:,:,:,nsc)=((1.0_WP-vf%VFold)*sc%SCold(:,:,:,nsc)+time%dt*resSC(:,:,:,nsc))/(1.0_WP-vf%VF)
+                  else where
+                     sc%SC(:,:,:,nsc)=0.0_WP
+                  end where
+               end if
+            end do
+            ! Apply boundary conditions
+            call sc%apply_bcond(time%t,time%dt)
+         end block advance_scalar
+         
 		   ! Perform sub-iterations
 		   do while (time%it.le.time%itmax)
 				
@@ -394,8 +435,10 @@ contains
 			! Perform and output monitoring
 		   call fs%get_max()
 			call vf%get_max()
+         call sc%get_max(VF=vf%VF)
 			call mfile%write()
 			call cflfile%write()
+         call scfile%write()
 			
 		end do
 		

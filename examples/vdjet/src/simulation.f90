@@ -451,7 +451,7 @@ contains
             ! Form implicit residual
             call sc%solve_implicit(time%dt,resSC,fs%rhoU,fs%rhoV,fs%rhoW)
             
-            ! Re-apply Dirichlet BCs
+            ! Advance scalar field
             sc%SC=2.0_WP*sc%SC-sc%SCold+resSC
             
             ! Apply all other boundary conditions on the resulting field
