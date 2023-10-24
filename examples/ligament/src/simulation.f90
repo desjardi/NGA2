@@ -62,7 +62,7 @@ contains
             real(WP) :: dt
             ! Initialize HIT
             call turb%init(group=hit_group,xend=atom%cfg%x(atom%cfg%imin))
-           ! Run HIT until t/tau_eddy=20
+            ! Run HIT until t/tau_eddy=20
             dt=0.15_WP*turb%cfg%min_meshsize/turb%Urms_tgt !< Estimate maximum stable dt
             do while (turb%time%t.lt.20.0_WP*turb%tau_tgt); call turb%step(dt); end do
          end block prepare_hit
