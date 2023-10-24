@@ -558,12 +558,14 @@ contains
             
          end if
          
-         ! Sync full fields after each bcond - this should be optimized
-         call this%cfg%sync(this%SC)
-         
          ! Move on to the next bcond
          my_bc=>my_bc%next
          
+      end do
+      
+      ! Sync full fields after all bcond
+      do nsc=1,this%nscalar
+         call this%cfg%sync(this%SC(:,:,:,nsc))
       end do
       
    end subroutine apply_bcond

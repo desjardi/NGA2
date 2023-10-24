@@ -66,7 +66,7 @@ contains
 		
 		! Allocate work arrays
 	   allocate_work_arrays: block
-         allocate(resSC(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_,2))
+         allocate(resSC(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_,1:2))
 		   allocate(resU (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
 			allocate(resV (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
 			allocate(resW (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
@@ -349,17 +349,21 @@ contains
             do nsc=1,sc%nscalar
                if (sc%phase(nsc).eq.0) then
                   ! Liquid scalar
-                  where (vf%VF.gt.VFlo)
-                     sc%SC(:,:,:,nsc)=(vf%VFold*sc%SCold(:,:,:,nsc)+time%dt*resSC(:,:,:,nsc))/vf%VF
-                  else where
-                     sc%SC(:,:,:,nsc)=0.0_WP
+                  where (sc%mask.eq.0)
+                     where (vf%VF.ge.VFlo)
+                        sc%SC(:,:,:,nsc)=(vf%VFold*sc%SCold(:,:,:,nsc)+time%dt*resSC(:,:,:,nsc))/vf%VF
+                     else where
+                        sc%SC(:,:,:,nsc)=0.0_WP
+                     end where
                   end where
                else if (sc%phase(nsc).eq.1) then
                   ! Gas scalar
-                  where (vf%VF.lt.VFhi)
-                     sc%SC(:,:,:,nsc)=((1.0_WP-vf%VFold)*sc%SCold(:,:,:,nsc)+time%dt*resSC(:,:,:,nsc))/(1.0_WP-vf%VF)
-                  else where
-                     sc%SC(:,:,:,nsc)=0.0_WP
+                  where (sc%mask.eq.0)
+                     where (vf%VF.le.VFhi)
+                        sc%SC(:,:,:,nsc)=((1.0_WP-vf%VFold)*sc%SCold(:,:,:,nsc)+time%dt*resSC(:,:,:,nsc))/(1.0_WP-vf%VF)
+                     else where
+                        sc%SC(:,:,:,nsc)=0.0_WP
+                     end where
                   end where
                end if
             end do
