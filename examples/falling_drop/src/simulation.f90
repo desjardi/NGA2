@@ -336,44 +336,28 @@ contains
 			! VOF solver step
 		   call vf%advance(dt=time%dt,U=fs%U,V=fs%V,W=fs%W)
 			
-			! Prepare new staggered viscosity (at n+1)
-		   call fs%get_viscosity(vf=vf,strat=arithmetic_visc)
-
          ! Now transport our phase-specific scalars
          advance_scalar: block
-            use vfs_class, only: VFlo,VFhi
             integer :: nsc
+            real(WP) :: p,q
             ! Explicit calculation of dSC/dt from scalar equation
-            call sc%get_dSCdt(dSCdt=resSC,U=fs%U,V=fs%V,W=fs%W,detailed_face_flux=vf%detailed_face_flux,dt=time%dt)
+            call sc%get_dSCdt(dSCdt=resSC,U=fs%U,V=fs%V,W=fs%W,VFold=vf%VFold,VF=vf%VF,detailed_face_flux=vf%detailed_face_flux,dt=time%dt)
             ! Advance scalar fields
             do nsc=1,sc%nscalar
-               if (sc%phase(nsc).eq.0) then
-                  ! Liquid scalar
-                  where (sc%mask.eq.0)
-                     where (vf%VF.ge.VFlo)
-                        sc%SC(:,:,:,nsc)=(vf%VFold*sc%SCold(:,:,:,nsc)+time%dt*resSC(:,:,:,nsc))/vf%VF
-                     else where
-                        sc%SC(:,:,:,nsc)=0.0_WP
-                     end where
-                  end where
-               else if (sc%phase(nsc).eq.1) then
-                  ! Gas scalar
-                  where (sc%mask.eq.0)
-                     where (vf%VF.le.VFhi)
-                        sc%SC(:,:,:,nsc)=((1.0_WP-vf%VFold)*sc%SCold(:,:,:,nsc)+time%dt*resSC(:,:,:,nsc))/(1.0_WP-vf%VF)
-                     else where
-                        sc%SC(:,:,:,nsc)=0.0_WP
-                     end where
-                  end where
-               end if
+               p=real(sc%phase(nsc),WP); q=1.0_WP-2.0_WP*p
+               where (sc%mask.eq.0.and.vf%VF.ne.p) sc%SC(:,:,:,nsc)=((p+q*vf%VFold)*sc%SCold(:,:,:,nsc)+time%dt*resSC(:,:,:,nsc))/(p+q*vf%VF)
+               where (vf%VF.eq.p) sc%SC(:,:,:,nsc)=0.0_WP
             end do
             ! Apply boundary conditions
             call sc%apply_bcond(time%t,time%dt)
          end block advance_scalar
          
+			! Prepare new staggered viscosity (at n+1)
+		   call fs%get_viscosity(vf=vf,strat=arithmetic_visc)
+         
 		   ! Perform sub-iterations
 		   do while (time%it.le.time%itmax)
-				
+            
 				! Build mid-time velocity
 			   fs%U=0.5_WP*(fs%U+fs%Uold)
 				fs%V=0.5_WP*(fs%V+fs%Vold)
