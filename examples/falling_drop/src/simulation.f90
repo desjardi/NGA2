@@ -97,12 +97,11 @@ contains
 			real(WP) :: vol,area
 			integer, parameter :: amr_ref_lvl=4
 			! Create a VOF solver
-		   !vf=vfs(cfg=cfg,reconstruction_method=lvira,name='VOF')
          call vf%initialize(cfg=cfg,reconstruction_method=lvira,name='VOF',store_detailed_flux=.true.)
 		   ! Initialize to a droplet and a pool
-		   center=[0.0_WP,0.01_WP,0.0_WP]
-		   radius=0.002_WP
-		   depth =0.005_WP
+		   center=[0.0_WP,0.05_WP,0.0_WP]
+		   radius=0.01_WP
+		   depth =0.025_WP
 			do k=vf%cfg%kmino_,vf%cfg%kmaxo_
 				do j=vf%cfg%jmino_,vf%cfg%jmaxo_
 					do i=vf%cfg%imino_,vf%cfg%imaxo_
@@ -150,7 +149,7 @@ contains
 		
 		! Create a two-phase flow solver without bconds
 	   create_and_initialize_flow_solver: block
-		   use hypre_str_class, only: pcg_pfmg
+		   use hypre_str_class, only: pcg_pfmg2
          use mathtools,       only: Pi
 			! Create flow solver
 		   fs=tpns(cfg=cfg,name='Two-phase NS')
@@ -167,7 +166,7 @@ contains
 		   ! Assign acceleration of gravity
 		   call param_read('Gravity',fs%gravity)
 			! Configure pressure solver
-			ps=hypre_str(cfg=cfg,name='Pressure',method=pcg_pfmg,nst=7)
+			ps=hypre_str(cfg=cfg,name='Pressure',method=pcg_pfmg2,nst=7)
          ps%maxlevel=10
          call param_read('Pressure iteration',ps%maxit)
          call param_read('Pressure tolerance',ps%rcvg)
