@@ -1333,13 +1333,20 @@ contains
     integer :: i
     ! Reset particle mesh storage
     call pmesh%reset()
-    ! Nothing else to do if no particle is present
-    if (this%np_.eq.0) return
-    ! Copy particle info
-    call pmesh%set_size(this%np_)
-    do i=1,this%np_
-       pmesh%pos(:,i)=this%p(i)%pos
-    end do
+    if (this%np_.gt.0) then
+      ! Copy particle info
+      call pmesh%set_size(this%np_)
+      do i=1,this%np_
+         pmesh%pos(:,i)=this%p(i)%pos
+      end do
+    end if
+    ! Root adds a particle if there are none
+    if (this%np.eq.0.and.this%cfg%amRoot) then
+      call pmesh%set_size(1)
+      pmesh%pos(1,1)=this%cfg%x(this%cfg%imin)
+      pmesh%pos(2,1)=this%cfg%y(this%cfg%jmin)
+      pmesh%pos(3,1)=this%cfg%z(this%cfg%kmin)
+    end if
   end subroutine update_partmesh
 
 

@@ -147,12 +147,16 @@ module vfs_class
       real(WP) :: VFmax,VFmin,VFint,SDint                 !< Maximum, minimum, and integral volume fraction and surface density
       real(WP) :: flotsam_error                           !< Integral of flotsam removal error
       real(WP) :: thinstruct_error                        !< Integral of thin structure removal error
-
+      
+      ! Additional storage option for geometric transport of auxiliary quantities
+      logical :: store_detailed_flux=.false.                                              !< Flag to turn on detailed fluxing data storage (default=.false.)
+      type(TagAccVM_SepVM_type), dimension(:,:,:,:), allocatable :: detailed_face_flux    !< Cell-decomposed face flux geometric data
+      
       ! Old arrays that are needed for the compressible MAST solver
       real(WP), dimension(:,:,:,:), allocatable :: Lbaryold  !< Liquid barycenter
       real(WP), dimension(:,:,:,:), allocatable :: Gbaryold  !< Gas barycenter
-      type(PlanarSep_type),   dimension(:,:,:),   allocatable :: liquid_gas_interfaceold
-      type(LocSepLink_type),  dimension(:,:,:),   allocatable :: localized_separator_linkold
+      type(PlanarSep_type),  dimension(:,:,:), allocatable :: liquid_gas_interfaceold
+      type(LocSepLink_type), dimension(:,:,:), allocatable :: localized_separator_linkold
       type(ObjServer_PlanarSep_type)  :: planar_separatorold_allocation
       type(ObjServer_LocSepLink_type) :: localized_separator_linkold_allocation
       
@@ -344,17 +348,21 @@ contains
 
 
    !> Initialization for volume fraction solver
-   subroutine initialize(this,cfg,reconstruction_method,name)
+   subroutine initialize(this,cfg,reconstruction_method,name,store_detailed_flux)
       use messager, only: die
       implicit none
       class(vfs), intent(inout) :: this
       class(config), target, intent(in) :: cfg
       integer, intent(in) :: reconstruction_method
       character(len=*), optional :: name
+      logical, optional :: store_detailed_flux
       integer :: i,j,k
       
       ! Set the name for the solver
       if (present(name)) this%name=trim(adjustl(name))
+      
+      ! Set optional detailed flux info
+      if (present(store_detailed_flux)) this%store_detailed_flux=store_detailed_flux
       
       ! Check that we have at least 3 overlap cells - we can push that to 2 with limited work!
       if (cfg%no.lt.3) call die('[vfs initialize] The config requires at least 3 overlap cells')
@@ -503,6 +511,20 @@ contains
             end do
          end do
       end do
+      
+      ! If needed, allocate detailed flux data storage
+      if (this%store_detailed_flux) then
+         allocate(this%detailed_face_flux(1:3,this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
+         do k=this%cfg%kmino_,this%cfg%kmaxo_
+            do j=this%cfg%jmino_,this%cfg%jmaxo_
+               do i=this%cfg%imino_,this%cfg%imaxo_
+                  do n=1,3
+                     call new(this%detailed_face_flux(n,i,j,k))
+                  end do
+               end do
+            end do
+         end do
+      end if
       
       ! Precomputed face correction velocities
       !> allocate(face_correct_velocity(1:3,1:3,imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_))
@@ -865,19 +887,34 @@ contains
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: U     !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: V     !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: W     !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
-      integer :: i,j,k,index
+      integer :: i,j,k,index,n
       real(IRL_double), dimension(3,9) :: face
       type(CapDod_type) :: flux_polyhedron
       real(WP) :: Lvolold,Gvolold
       real(WP) :: Lvolinc,Gvolinc
       real(WP) :: Lvolnew,Gvolnew
       real(WP) :: vol_now,crude_VF
-      real(WP), dimension(3) :: ctr_now
+      real(WP) :: lvol,gvol
+      real(WP), dimension(3) :: ctr_now,lbar,gbar
       real(WP), dimension(3,2) :: bounding_pts
       integer, dimension(3,2) :: bb_indices
+      type(SepVM_type) :: my_SepVM
       
       ! Allocate
       call new(flux_polyhedron)
+
+      ! Clean up detailed fluxes if necessary
+      if (this%store_detailed_flux) then
+         do k=this%cfg%kmino_,this%cfg%kmaxo_
+            do j=this%cfg%jmino_,this%cfg%jmaxo_
+               do i=this%cfg%imino_,this%cfg%imaxo_
+                  call clear(this%detailed_face_flux(1,i,j,k))
+                  call clear(this%detailed_face_flux(2,i,j,k))
+                  call clear(this%detailed_face_flux(3,i,j,k))
+               end do
+            end do
+         end do
+      end if
       
       ! Loop over the domain and compute fluxes using semi-Lagrangian algorithm
       do k=this%cfg%kmin_,this%cfg%kmax_+1
@@ -905,7 +942,19 @@ contains
                   crude_VF=this%crude_phase_test(bb_indices)
                   if (crude_VF.lt.0.0_WP) then
                      ! Need full geometric flux
-                     call getMoments(flux_polyhedron,this%localized_separator_link(i,j,k),this%face_flux(1,i,j,k))
+                     if (this%store_detailed_flux) then
+                        call getMoments(flux_polyhedron,this%localized_separator_link(i,j,k),this%detailed_face_flux(1,i,j,k))
+                        ! Rebuild face flux from detailed face flux
+                        lvol=0.0_WP; gvol=0.0_WP; lbar=0.0_WP; gbar=0.0_WP
+                        do n=0,getSize(this%detailed_face_flux(1,i,j,k))-1
+                           call getSepVMAtIndex(this%detailed_face_flux(1,i,j,k),n,my_SepVM)
+                           lvol=lvol+getVolume(my_SepVM,0); lbar=lbar+getCentroid(my_SepVM,0)
+                           gvol=gvol+getVolume(my_SepVM,1); gbar=gbar+getCentroid(my_SepVM,1)
+                        end do
+                        call construct(this%face_flux(1,i,j,k),[lvol,lbar,gvol,gbar])
+                     else
+                        call getMoments(flux_polyhedron,this%localized_separator_link(i,j,k),this%face_flux(1,i,j,k))
+                     end if
                   else
                      ! Simpler flux calculation
                      vol_now=calculateVolume(flux_polyhedron); ctr_now=calculateCentroid(flux_polyhedron)
@@ -934,7 +983,19 @@ contains
                   crude_VF=this%crude_phase_test(bb_indices)
                   if (crude_VF.lt.0.0_WP) then
                      ! Need full geometric flux
-                     call getMoments(flux_polyhedron,this%localized_separator_link(i,j,k),this%face_flux(2,i,j,k))
+                     if (this%store_detailed_flux) then
+                        call getMoments(flux_polyhedron,this%localized_separator_link(i,j,k),this%detailed_face_flux(2,i,j,k))
+                        ! Rebuild face flux from detailed face flux
+                        lvol=0.0_WP; gvol=0.0_WP; lbar=0.0_WP; gbar=0.0_WP
+                        do n=0,getSize(this%detailed_face_flux(2,i,j,k))-1
+                           call getSepVMAtIndex(this%detailed_face_flux(2,i,j,k),n,my_SepVM)
+                           lvol=lvol+getVolume(my_SepVM,0); lbar=lbar+getCentroid(my_SepVM,0)
+                           gvol=gvol+getVolume(my_SepVM,1); gbar=gbar+getCentroid(my_SepVM,1)
+                        end do
+                        call construct(this%face_flux(2,i,j,k),[lvol,lbar,gvol,gbar])
+                     else
+                        call getMoments(flux_polyhedron,this%localized_separator_link(i,j,k),this%face_flux(2,i,j,k))
+                     end if
                   else
                      ! Simpler flux calculation
                      vol_now=calculateVolume(flux_polyhedron); ctr_now=calculateCentroid(flux_polyhedron)
@@ -963,7 +1024,19 @@ contains
                   crude_VF=this%crude_phase_test(bb_indices)
                   if (crude_VF.lt.0.0_WP) then
                      ! Need full geometric flux
-                     call getMoments(flux_polyhedron,this%localized_separator_link(i,j,k),this%face_flux(3,i,j,k))
+                     if (this%store_detailed_flux) then
+                        call getMoments(flux_polyhedron,this%localized_separator_link(i,j,k),this%detailed_face_flux(3,i,j,k))
+                        ! Rebuild face flux from detailed face flux
+                        lvol=0.0_WP; gvol=0.0_WP; lbar=0.0_WP; gbar=0.0_WP
+                        do n=0,getSize(this%detailed_face_flux(3,i,j,k))-1
+                           call getSepVMAtIndex(this%detailed_face_flux(3,i,j,k),n,my_SepVM)
+                           lvol=lvol+getVolume(my_SepVM,0); lbar=lbar+getCentroid(my_SepVM,0)
+                           gvol=gvol+getVolume(my_SepVM,1); gbar=gbar+getCentroid(my_SepVM,1)
+                        end do
+                        call construct(this%face_flux(3,i,j,k),[lvol,lbar,gvol,gbar])
+                     else
+                        call getMoments(flux_polyhedron,this%localized_separator_link(i,j,k),this%face_flux(3,i,j,k))
+                     end if
                   else
                      ! Simpler flux calculation
                      vol_now=calculateVolume(flux_polyhedron); ctr_now=calculateCentroid(flux_polyhedron)
@@ -1161,20 +1234,20 @@ contains
      real(WP) :: my_Gvol,my_Lvol
      real(WP), dimension(3) :: my_Gbary,my_Lbary
      logical  :: skip_flag
-
+     
      skip_flag = .false.
      ! Get unique id of current cell
      localizer_id = getTagForIndex(f_moments,n)
      ! Convert unique id to indices ii,jj,kk
      ind=this%cfg%get_ijk_from_lexico(localizer_id)
      ii = ind(1); jj = ind(2); kk = ind(3)
-
+     
      ! If inside wall, nothing should be added to flux
      if (this%mask(ii,jj,kk).eq.1) then
         skip_flag = .true.
         return
      end if
-
+     
      ! If bringing material back from beyond outflow boundary, skip
      !if (backflow_flux_flag(ii,jj,kk)) cycle
 
@@ -1718,12 +1791,14 @@ contains
    
    !> Detect thin regions of the interface
    subroutine detect_thin_regions(this)
+      use mathtools, only: normalize
       implicit none
       class(vfs), intent(inout) :: this
       integer :: i,j,k,ii,jj,kk,dim,dir,ni
       integer , dimension(3) :: pos
       real(WP), dimension(3) :: n1,n2,c1,c2
       real(WP), dimension(:,:,:), allocatable :: mysensor
+      real(WP) :: a1,a2
       ! Default value is 0
       this%thin_sensor=0.0_WP
       ! First pass to handle 2-plane cells
@@ -1793,17 +1868,43 @@ contains
                   do dim=1,3
                      do dir=-1,1,2
                         pos=0; pos(dim)=dir; ii=i+pos(1); jj=j+pos(2); kk=k+pos(3)
-                        ! Skip full cells and 2-plane cells
-                        if (this%VF(ii,jj,kk).lt.VFlo.or.this%VF(ii,jj,kk).gt.VFhi.or. &
-                        &   getNumberOfPlanes(this%liquid_gas_interface(ii,jj,kk)).eq.2) cycle
+                        ! Skip full cells
+                        if (this%VF(ii,jj,kk).lt.VFlo.or.this%VF(ii,jj,kk).gt.VFhi) cycle
                         ! Check normal orientation to identify thin regions
-                        n2=calculateNormal(this%interface_polygon(1,ii,jj,kk))
-                        if (dot_product(n1,n2).lt.this%thin_thld_dotprod) then
-                           ! Check if liquid or gas
-                           c1=calculateCentroid(this%interface_polygon(1,i ,j ,k ))
-                           c2=calculateCentroid(this%interface_polygon(1,ii,jj,kk))
-                           if (dot_product(c2-c1,n2).gt.0.0_WP.and.dot_product(c1-c2,n1).gt.0.0_WP) this%thin_sensor(i,j,k)=1.0_WP
-                           if (dot_product(c2-c1,n2).lt.0.0_WP.and.dot_product(c1-c2,n1).lt.0.0_WP) this%thin_sensor(i,j,k)=2.0_WP
+                        ! If neighbor has two planes, then surface-average its normals and centroids
+                        if (getNumberOfVertices(this%interface_polygon(2,ii,jj,kk)).gt.0) then
+                           a1=calculateVolume(this%interface_polygon(1,ii,jj,kk))/this%cfg%meshsize(ii,jj,kk)
+                           a2=calculateVolume(this%interface_polygon(2,ii,jj,kk))/this%cfg%meshsize(ii,jj,kk)
+                           n2=normalize(a1*calculateNormal(this%interface_polygon(1,ii,jj,kk))&
+                           &           +a2*calculateNormal(this%interface_polygon(2,ii,jj,kk)))
+                           if (dot_product(n1,n2).lt.this%thin_thld_dotprod) then
+                              c1=calculateCentroid(this%interface_polygon(1,i ,j ,k ))
+                              c2=(a1*calculateCentroid(this%interface_polygon(1,ii,jj,kk))&
+                              &  +a2*calculateCentroid(this%interface_polygon(2,ii,jj,kk)))/(a1+a2)
+                              ! Check if liquid or gas
+                              if (dot_product(c2-c1,n2).gt.0.0_WP.and.dot_product(c1-c2,n1).gt.0.0_WP) then
+                                 this%thin_sensor(i,j,k)=1.0_WP
+                              else if (dot_product(c2-c1,n2).lt.0.0_WP.and.dot_product(c1-c2,n1).lt.0.0_WP) then
+                                 this%thin_sensor(i,j,k)=2.0_WP
+                              else
+                                 this%thin_sensor(i,j,k)=this%thin_sensor(ii,jj,kk) ! what if it hasn't been assigned a thin sensor value yet?                          
+                              end if
+                           end if
+                        else
+                           n2=calculateNormal(this%interface_polygon(1,ii,jj,kk))
+                           if (dot_product(n1,n2).lt.this%thin_thld_dotprod) then
+                              ! Check if liquid or gas
+                              c1=calculateCentroid(this%interface_polygon(1,i ,j ,k ))
+                              c2=calculateCentroid(this%interface_polygon(1,ii,jj,kk))
+                              ! Check if liquid or gas
+                              if (dot_product(c2-c1,n2).gt.0.0_WP.and.dot_product(c1-c2,n1).gt.0.0_WP) then
+                                 this%thin_sensor(i,j,k)=1.0_WP
+                              else if (dot_product(c2-c1,n2).lt.0.0_WP.and.dot_product(c1-c2,n1).lt.0.0_WP) then
+                                 this%thin_sensor(i,j,k)=2.0_WP
+                              else
+                                 this%thin_sensor(i,j,k)=this%thin_sensor(ii,jj,kk) ! what if it hasn't been assigned a thin sensor value yet?                          
+                              end if
+                           end if
                         end if
                      end do
                   end do

@@ -1,4 +1,8 @@
-f90EXE_sources += fene_class.f90
+f90EXE_sources += carreau_class.f90 viscoelastic_class.f90
+
+ifeq ($(filter two_phase,$(Bdirs)),two_phase)
+  f90EXE_sources += tpviscoelastic_class.f90
+endif
 
 INCLUDE_LOCATIONS += $(NGA_HOME)/src/non_newtonian
 VPATH_LOCATIONS   += $(NGA_HOME)/src/non_newtonian

@@ -1,2 +1,2 @@
 # List here the extra files here
-f90EXE_sources += simulation.f90 hit_class.f90 ligament_class.f90
+f90EXE_sources += simulation.f90 hit_class.f90 ligament_class.f90 breakup_class.f90

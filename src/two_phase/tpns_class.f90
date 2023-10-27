@@ -1124,15 +1124,15 @@ contains
             
          end if
          
-         ! Sync full fields after each bcond - this should be optimized
-         call this%cfg%sync(this%U)
-         call this%cfg%sync(this%V)
-         call this%cfg%sync(this%W)
-         
          ! Move on to the next bcond
          my_bc=>my_bc%next
          
       end do
+      
+      ! Sync full fields after all bcond
+      call this%cfg%sync(this%U)
+      call this%cfg%sync(this%V)
+      call this%cfg%sync(this%W)
       
    end subroutine apply_bcond
    
@@ -1767,7 +1767,7 @@ contains
       class(vfs), intent(inout) :: vf
       integer :: i,j,k,n,np1,np2,ind
       real(WP) :: mycurv,mysurf
-      real(WP), dimension(3) :: n1,n2
+      real(WP), dimension(3) :: n1,n2,nf
       real(WP), dimension(:,:,:), allocatable :: alpha  !< Modified volume fraction field
       
       ! Store old jump
@@ -1816,13 +1816,15 @@ contains
                if (np1.eq.2.and.np2.eq.0) then
                   n1=calculateNormal(vf%interface_polygon(1,i,j,k))
                   n2=calculateNormal(vf%interface_polygon(2,i,j,k))
-                  ind=maxloc([dot_product(n1,[-1.0_WP,0.0_WP,0.0_WP]),dot_product(n2,[-1.0_WP,0.0_WP,0.0_WP])],dim=1)
+                  nf=sign(1.0_WP,alpha(i-1,j,k)-0.5_WP)*[+1.0_WP,0.0_WP,0.0_WP]
+                  ind=maxloc([dot_product(n1,nf),dot_product(n2,nf)],dim=1)
                   mycurv=vf%curv2p(ind,i,j,k)
                end if
                if (np1.eq.0.and.np2.eq.2) then
                   n1=calculateNormal(vf%interface_polygon(1,i-1,j,k))
                   n2=calculateNormal(vf%interface_polygon(2,i-1,j,k))
-                  ind=maxloc([dot_product(n1,[+1.0_WP,0.0_WP,0.0_WP]),dot_product(n2,[+1.0_WP,0.0_WP,0.0_WP])],dim=1)
+                  nf=sign(1.0_WP,alpha(i,j,k)-0.5_WP)*[-1.0_WP,0.0_WP,0.0_WP]
+                  ind=maxloc([dot_product(n1,nf),dot_product(n2,nf)],dim=1)
                   mycurv=vf%curv2p(ind,i-1,j,k)
                end if
                ! Assemble pressure jump
@@ -1843,13 +1845,15 @@ contains
                if (np1.eq.2.and.np2.eq.0) then
                   n1=calculateNormal(vf%interface_polygon(1,i,j,k))
                   n2=calculateNormal(vf%interface_polygon(2,i,j,k))
-                  ind=maxloc([dot_product(n1,[0.0_WP,-1.0_WP,0.0_WP]),dot_product(n2,[0.0_WP,-1.0_WP,0.0_WP])],dim=1)
+                  nf=sign(1.0_WP,alpha(i,j-1,k)-0.5_WP)*[0.0_WP,+1.0_WP,0.0_WP]
+                  ind=maxloc([dot_product(n1,nf),dot_product(n2,nf)],dim=1)
                   mycurv=vf%curv2p(ind,i,j,k)
                end if
                if (np1.eq.0.and.np2.eq.2) then
                   n1=calculateNormal(vf%interface_polygon(1,i,j-1,k))
                   n2=calculateNormal(vf%interface_polygon(2,i,j-1,k))
-                  ind=maxloc([dot_product(n1,[0.0_WP,+1.0_WP,0.0_WP]),dot_product(n2,[0.0_WP,+1.0_WP,0.0_WP])],dim=1)
+                  nf=sign(1.0_WP,alpha(i,j,k)-0.5_WP)*[0.0_WP,-1.0_WP,0.0_WP]
+                  ind=maxloc([dot_product(n1,nf),dot_product(n2,nf)],dim=1)
                   mycurv=vf%curv2p(ind,i,j-1,k)
                end if
                ! Assemble pressure jump
@@ -1870,13 +1874,15 @@ contains
                if (np1.eq.2.and.np2.eq.0) then
                   n1=calculateNormal(vf%interface_polygon(1,i,j,k))
                   n2=calculateNormal(vf%interface_polygon(2,i,j,k))
-                  ind=maxloc([dot_product(n1,[0.0_WP,0.0_WP,-1.0_WP]),dot_product(n2,[0.0_WP,0.0_WP,-1.0_WP])],dim=1)
+                  nf=sign(1.0_WP,alpha(i,j,k-1)-0.5_WP)*[0.0_WP,0.0_WP,+1.0_WP]
+                  ind=maxloc([dot_product(n1,nf),dot_product(n2,nf)],dim=1)
                   mycurv=vf%curv2p(ind,i,j,k)
                end if
                if (np1.eq.0.and.np2.eq.2) then
                   n1=calculateNormal(vf%interface_polygon(1,i,j,k-1))
                   n2=calculateNormal(vf%interface_polygon(2,i,j,k-1))
-                  ind=maxloc([dot_product(n1,[0.0_WP,0.0_WP,+1.0_WP]),dot_product(n2,[0.0_WP,0.0_WP,+1.0_WP])],dim=1)
+                  nf=sign(1.0_WP,alpha(i,j,k)-0.5_WP)*[0.0_WP,0.0_WP,-1.0_WP]
+                  ind=maxloc([dot_product(n1,nf),dot_product(n2,nf)],dim=1)
                   mycurv=vf%curv2p(ind,i,j,k-1)
                end if
                ! Assemble pressure jump

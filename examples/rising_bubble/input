@@ -5,8 +5,8 @@ Partition :	1 8 1
 Lx :	0.025
 Ly :	0.1
 Lz :	0.00025
-nx :	100
-ny :	400
+nx :	128
+ny :	512
 nz :	1
 
 # Fluid properties
@@ -29,7 +29,7 @@ Maximum polymer extensibility : 10
 
 # Time integration
 Max timestep size : 2e-4
-Max cfl number :    2
+Max cfl number :    2.5
 Max time :          2
 
 # Pressure solver

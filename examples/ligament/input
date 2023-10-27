@@ -19,8 +19,8 @@ Target Re_lambda :     45
 Turbulence intensity : 0.05
 
 # Time integration
-Max timestep size : 2.5e-2
-Max cfl number :    0.9
+Max timestep size : 4e-2
+Max cfl number :    1.0
 Max time :          200
 
 # Pressure solver

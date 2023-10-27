@@ -86,6 +86,7 @@ module multiscalar_class
       real(WP), dimension(:), allocatable :: SCmax,SCmin,SCint   !< Maximum and minimum, integral scalar
       
    contains
+      procedure :: initialize                             !< Initialize the scalar solver
       procedure :: print=>multiscalar_print               !< Output solver to the screen
       procedure, private :: init_metrics                  !< Initialize metrics
       procedure, private :: adjust_metrics                !< Adjust metrics
@@ -204,6 +205,102 @@ contains
       allocate(self%SCmax(1:self%nscalar))
       
    end function constructor
+
+
+   !> Initialization for multiscalar solver
+   subroutine initialize(this,cfg,scheme,nscalar,name)
+      use messager, only: die
+      implicit none
+      class(multiscalar), intent(inout) :: this
+      class(config), target, intent(in) :: cfg
+      integer, intent(in) :: scheme
+      integer, intent(in) :: nscalar
+      character(len=*), optional :: name
+      integer :: i,j,k
+      
+      ! Set the name for the solver
+      if (present(name)) this%name=trim(adjustl(name))
+      
+      ! Set the number of scalars
+      this%nscalar=nscalar
+      if (this%nscalar.le.0) call die('[multiscalar initialize] Multiscalar object requires at least 1 scalar')
+
+      ! Initialize scalar names
+      allocate(this%SCname(1:this%nscalar))
+      this%SCname='' ! User will set names
+
+      ! Point to pgrid object
+      this%cfg=>cfg
+      
+      ! Nullify bcond list
+      this%nbc=0
+      this%first_bc=>NULL()
+      
+      ! Allocate variables
+      allocate(this%SC   (this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_,1:this%nscalar)); this%SC   =0.0_WP
+      allocate(this%SCold(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_,1:this%nscalar)); this%SCold=0.0_WP
+      allocate(this%diff (this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_,1:this%nscalar)); this%diff =0.0_WP
+      
+      ! Prepare advection scheme
+      this%scheme=scheme
+      select case (this%scheme)
+      case (upwind)
+         ! Check current overlap
+		   if (this%cfg%no.lt.1) call die('[multiscalar initialize] Scalar transport scheme requires larger overlap')
+         ! Set interpolation stencil sizes
+		   this%nst=1
+         this%stp1=-(this%nst+1)/2; this%stp2=this%nst+this%stp1-1
+         this%stm1=-(this%nst-1)/2; this%stm2=this%nst+this%stm1-1
+      case (quick)
+         ! Check current overlap
+         if (this%cfg%no.lt.2) call die('[multiscalar initialize] Scalar transport scheme requires larger overlap')
+         ! Set interpolation stencil sizes
+         this%nst=3
+         this%stp1=-(this%nst+1)/2; this%stp2=this%nst+this%stp1-1
+         this%stm1=-(this%nst-1)/2; this%stm2=this%nst+this%stm1-1
+      case (bquick)
+         ! Check current overlap
+	      if (this%cfg%no.lt.2) call die('[multiscalar initialize] Scalar transport scheme requires larger overlap')
+	      ! Set interpolation stencil sizes
+	      this%nst=3
+	      this%stp1=-(this%nst+1)/2; this%stp2=this%nst+this%stp1-1
+	      this%stm1=-(this%nst-1)/2; this%stm2=this%nst+this%stm1-1
+      case default
+         call die('[multiscalar initialize] Unknown scalar transport scheme selected')
+      end select
+      
+      ! Prepare default metrics
+      call this%init_metrics()
+      
+      ! Prepare mask for SC
+      allocate(this%mask(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_)); this%mask=0
+      if (.not.this%cfg%xper) then
+         if (this%cfg%iproc.eq.           1) this%mask(:this%cfg%imin-1,:,:)=2
+         if (this%cfg%iproc.eq.this%cfg%npx) this%mask(this%cfg%imax+1:,:,:)=2
+      end if
+      if (.not.this%cfg%yper) then
+         if (this%cfg%jproc.eq.           1) this%mask(:,:this%cfg%jmin-1,:)=2
+         if (this%cfg%jproc.eq.this%cfg%npy) this%mask(:,this%cfg%jmax+1:,:)=2
+      end if
+      if (.not.this%cfg%zper) then
+         if (this%cfg%kproc.eq.           1) this%mask(:,:,:this%cfg%kmin-1)=2
+         if (this%cfg%kproc.eq.this%cfg%npz) this%mask(:,:,this%cfg%kmax+1:)=2
+      end if
+      do k=this%cfg%kmino_,this%cfg%kmaxo_
+         do j=this%cfg%jmino_,this%cfg%jmaxo_
+            do i=this%cfg%imino_,this%cfg%imaxo_
+               if (this%cfg%VF(i,j,k).eq.0.0_WP) this%mask(i,j,k)=1
+            end do
+         end do
+      end do
+      call this%cfg%sync(this%mask)
+      
+      ! Monitoring data needs to be allocated
+      allocate(this%SCint(1:this%nscalar))
+      allocate(this%SCmin(1:this%nscalar))
+      allocate(this%SCmax(1:this%nscalar))
+      
+   end subroutine initialize
       
    
    !> Metric initialization with no awareness of walls nor bcond
@@ -558,12 +655,14 @@ contains
             
          end if
          
-         ! Sync full fields after each bcond - this should be optimized
-         call this%cfg%sync(this%SC)
-         
          ! Move on to the next bcond
          my_bc=>my_bc%next
          
+      end do
+      
+      ! Sync full fields after all bcond
+      do nsc=1,this%nscalar
+         call this%cfg%sync(this%SC(:,:,:,nsc))
       end do
       
    end subroutine apply_bcond

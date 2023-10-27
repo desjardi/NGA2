@@ -34,10 +34,13 @@ module simulation
    real(WP), dimension(:,:,:), allocatable :: Ui,Vi,Wi
    
    !> Equation of state
-   real(WP) :: rho0,rho1
+   real(WP) :: Zst,rho0,rho1,rhost
    real(WP) :: Z_jet,Z_cof
    real(WP) :: D_jet,D_cof
    real(WP) :: U_jet,U_cof
+   
+   !> Integral of pressure residual
+   real(WP) :: int_RP=0.0_WP
    
 contains
    
@@ -153,21 +156,32 @@ contains
    end function coflowsc
 
    
-   !> Define here our equation of state
+   !> Obtain density from equation of state based on Burke-Schumann
    subroutine get_rho()
       implicit none
       integer :: i,j,k
-      real(WP) :: Z
-      ! Calculate density
       do k=sc%cfg%kmino_,sc%cfg%kmaxo_
          do j=sc%cfg%jmino_,sc%cfg%jmaxo_
             do i=sc%cfg%imino_,sc%cfg%imaxo_
-               Z=min(max(sc%SC(i,j,k),0.0_WP),1.0_WP)
-               sc%rho(i,j,k)=rho0*rho1/((1.0_WP-Z)*rho1+Z*rho0)
+               sc%rho(i,j,k)=burke_schumann(sc%SC(i,j,k))
             end do
          end do
       end do
    end subroutine get_rho
+
+
+   !> Burke-Schumann EOS
+   function burke_schumann(Z) result(rho)
+      real(WP), intent(in) :: Z
+      real(WP) :: rho
+      real(WP) :: Zclip
+      Zclip=min(max(Z,0.0_WP),1.0_WP)
+      if (Zclip.le.Zst) then
+         rho=Zst*rho0*rhost/(rhost*(Zst-Zclip)+rho0*Zclip)
+      else
+         rho=(1.0_WP-Zst)*rhost*rho1/(rho1*(1.0_WP-Zclip)+rhost*(Zclip-Zst))
+      end if
+   end function burke_schumann
    
    
    !> Initialization of problem solver
@@ -179,6 +193,11 @@ contains
       ! Read in the EOS info
       call param_read('rho0',rho0)
       call param_read('rho1',rho1)
+      call param_read('rhost',rhost)
+      call param_read('Zst',Zst)
+      if (Zst.le.0.0_WP) Zst=0.0_WP+epsilon(Zst)
+      if (Zst.ge.1.0_WP) Zst=1.0_WP-epsilon(Zst)
+      
 
       ! Read in inlet information
       call param_read('Z jet',Z_jet)
@@ -191,7 +210,7 @@ contains
       
       ! Create a low-Mach flow solver with bconds
       create_velocity_solver: block
-         use hypre_str_class, only: pcg_pfmg
+         use hypre_str_class, only: pcg_pfmg2
          use lowmach_class,   only: dirichlet,clipped_neumann,slip
          real(WP) :: visc
          ! Create flow solver
@@ -202,14 +221,15 @@ contains
          call fs%add_bcond(name='jet'   ,type=dirichlet,face='x',dir=-1,canCorrect=.false.,locator=jet   )
          call fs%add_bcond(name='coflow',type=dirichlet,face='x',dir=-1,canCorrect=.false.,locator=coflow)
          ! Use slip on the sides with correction
-         call fs%add_bcond(name='yp',type=slip,face='y',dir=+1,canCorrect=.true.,locator=yp_locator)
-         call fs%add_bcond(name='ym',type=slip,face='y',dir=-1,canCorrect=.true.,locator=ym_locator)
-         call fs%add_bcond(name='zp',type=slip,face='z',dir=+1,canCorrect=.true.,locator=zp_locator)
-         call fs%add_bcond(name='zm',type=slip,face='z',dir=-1,canCorrect=.true.,locator=zm_locator)
+         !call fs%add_bcond(name='yp',type=slip,face='y',dir=+1,canCorrect=.true.,locator=yp_locator)
+         !call fs%add_bcond(name='ym',type=slip,face='y',dir=-1,canCorrect=.true.,locator=ym_locator)
+         !call fs%add_bcond(name='zp',type=slip,face='z',dir=+1,canCorrect=.true.,locator=zp_locator)
+         !call fs%add_bcond(name='zm',type=slip,face='z',dir=-1,canCorrect=.true.,locator=zm_locator)
          ! Outflow on the right
-         call fs%add_bcond(name='outflow',type=clipped_neumann,face='x',dir=+1,canCorrect=.false.,locator=xp_locator)
+         !call fs%add_bcond(name='outflow',type=clipped_neumann,face='x',dir=+1,canCorrect=.false.,locator=xp_locator)
+         call fs%add_bcond(name='outflow',type=clipped_neumann,face='x',dir=+1,canCorrect=.true.,locator=xp_locator)
          ! Configure pressure solver
-         ps=hypre_str(cfg=cfg,name='Pressure',method=pcg_pfmg,nst=7)
+         ps=hypre_str(cfg=cfg,name='Pressure',method=pcg_pfmg2,nst=7)
          ps%maxlevel=18
          call param_read('Pressure iteration',ps%maxit)
          call param_read('Pressure tolerance',ps%rcvg)
@@ -295,26 +315,27 @@ contains
          type(bcond), pointer :: mybc
          ! Zero initial field
          fs%U=0.0_WP; fs%V=0.0_WP; fs%W=0.0_WP
-         ! Apply BCs
-         call fs%get_bcond('jet',mybc)
-         do n=1,mybc%itr%no_
-            i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
-            fs%U(i,j,k)=U_jet
-         end do
-         call fs%get_bcond('coflow',mybc)
-         do n=1,mybc%itr%no_
-            i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
-            fs%U(i,j,k)=U_cof
-         end do
          ! Set density from scalar
          fs%rho=sc%rho
          ! Form momentum
          call fs%rho_multiply
-         ! Apply all other boundary conditions
+         ! Apply BCs
          call fs%apply_bcond(time%t,time%dt)
+         call fs%get_bcond('jet',mybc)
+         do n=1,mybc%itr%no_
+            i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
+            fs%U(i,j,k)   =U_jet
+            fs%rhoU(i,j,k)=U_jet*burke_schumann(Z_jet)
+         end do
+         call fs%get_bcond('coflow',mybc)
+         do n=1,mybc%itr%no_
+            i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
+            fs%U(i,j,k)   =U_cof
+            fs%rhoU(i,j,k)=U_cof*burke_schumann(Z_cof)
+         end do
+         ! Get cell-centered velocities and continuity residual
          call fs%interp_vel(Ui,Vi,Wi)
-         resSC=0.0_WP
-         call fs%get_div(drhodt=resSC)
+         resSC=0.0_WP; call fs%get_div(drhodt=resSC)
          ! Compute MFR through all boundary conditions
          call fs%get_mfr()
       end block initialize_velocity
@@ -359,6 +380,7 @@ contains
          call mfile%add_column(sc%SCmin,'Zmin')
          call mfile%add_column(sc%rhomax,'RHOmax')
          call mfile%add_column(sc%rhomin,'RHOmin')
+         call mfile%add_column(int_RP,'Int(RP)')
          call mfile%add_column(fs%divmax,'Maximum divergence')
          call mfile%add_column(fs%psolv%it,'Pressure iteration')
          call mfile%add_column(fs%psolv%rerr,'Pressure error')
@@ -429,7 +451,7 @@ contains
             ! Form implicit residual
             call sc%solve_implicit(time%dt,resSC,fs%rhoU,fs%rhoV,fs%rhoW)
             
-            ! Re-apply Dirichlet BCs
+            ! Advance scalar field
             sc%SC=2.0_WP*sc%SC-sc%SCold+resSC
             
             ! Apply all other boundary conditions on the resulting field
@@ -488,12 +510,11 @@ contains
             fs%V=2.0_WP*fs%V-fs%Vold+resV
             fs%W=2.0_WP*fs%W-fs%Wold+resW
             
-            ! Apply other boundary conditions and update momentum
-            call fs%apply_bcond(time%tmid,time%dtmid)
+            ! Update momentum
             call fs%rho_multiply()
+
+            ! Apply boundary conditions
             call fs%apply_bcond(time%tmid,time%dtmid)
-            
-            ! Re-apply Dirichlet BCs
             dirichlet_velocity: block
                use lowmach_class, only: bcond
                type(bcond), pointer :: mybc
@@ -501,21 +522,23 @@ contains
                call fs%get_bcond('jet',mybc)
                do n=1,mybc%itr%no_
                   i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
-                  fs%U(i,j,k)=U_jet
+                  fs%U(i,j,k)   =U_jet
+                  fs%rhoU(i,j,k)=U_jet*burke_schumann(Z_jet)
                end do
                call fs%get_bcond('coflow',mybc)
                do n=1,mybc%itr%no_
                   i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
-                  fs%U(i,j,k)=U_cof
+                  fs%U(i,j,k)   =U_cof
+                  fs%rhoU(i,j,k)=U_cof*burke_schumann(Z_cof)
                end do
-               call fs%rho_multiply()
             end block dirichlet_velocity
-               
+            
             ! Solve Poisson equation
             call sc%get_drhodt(dt=time%dt,drhodt=resSC)
             call fs%correct_mfr(drhodt=resSC)
             call fs%get_div(drhodt=resSC)
             fs%psolv%rhs=-fs%cfg%vol*fs%div/time%dtmid
+            call cfg%integrate(A=fs%psolv%rhs,integral=int_RP)
             fs%psolv%sol=0.0_WP
             call fs%psolv%solve()
             call fs%shift_p(fs%psolv%sol)
