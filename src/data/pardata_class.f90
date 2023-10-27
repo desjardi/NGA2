@@ -35,6 +35,7 @@ module pardata_class
       real(WP), dimension(:,:,:,:), allocatable :: var                !< Variables (without overlap!)
       real(WP), dimension(:,:,:,:), allocatable :: var_io             !< Variables for I/O (only allocated when reading/writing)
    contains
+      procedure :: initialize                     !< Initialization for pardata
       procedure, private :: prep_iomap            !< IO group/pgrid/map
       procedure, private :: findval               !< Function that returns val index if name is found, zero otherwise
       procedure, private :: findvar               !< Function that returns var index if name is found, zero otherwise
@@ -47,13 +48,6 @@ module pardata_class
       procedure :: log  =>pardata_log             !< Print out debugging info to log
       final     :: destructor                     !< Destructor for pardata
    end type pardata
-   
-   
-   !> Declare pardata constructor
-   interface pardata
-      procedure pardata_from_args
-      procedure pardata_from_file
-   end interface pardata
    
    
 contains
@@ -112,37 +106,37 @@ contains
    end subroutine prep_iomap
    
    
-   !> Constructor for an empty pardata object
-   function pardata_from_args(pg,filename,nval,nvar,iopartition) result(self)
+   !> Initialization for a pardata object
+   subroutine initialize(this,filename,nval,nvar,iopartition)
       implicit none
-      type(pardata) :: self
+      class(pardata) :: this
       class(pgrid), target, intent(in) :: pg
       character(len=*), intent(in) :: filename
       integer, intent(in) :: nval,nvar
       integer, dimension(3), intent(in) :: iopartition
       
       ! Link the partitioned grid and store the filename
-      self%pg=>pg
-      self%filename=trim(adjustl(filename))
+      this%pg=>pg
+      this%filename=trim(adjustl(filename))
       
       ! Prepare the IO-specialized partition and map
-      call self%prepare_iomap(iopartition)
-
+      call this%prepare_iomap(iopartition)
+      
       ! Allocate storage and store names for vals
-      self%nval=nval
-      allocate(self%valname(self%nval))
-      self%valname=''
-      allocate(self%val(self%nval))
-      self%val=0.0_WP
+      this%nval=nval
+      allocate(this%valname(this%nval))
+      this%valname=''
+      allocate(this%val(this%nval))
+      this%val=0.0_WP
       
       ! Allocate storage and store names for vars
-      self%nvar=nvar
-      allocate(self%varname(self%nvar))
-      self%varname=''
-      allocate(self%var(self%pg%imin_:self%pg%imax_,self%pg%jmin_:self%pg%jmax_,self%pg%kmin_:self%pg%kmax_,self%nvar))
-      self%var=0.0_WP
+      this%nvar=nvar
+      allocate(this%varname(this%nvar))
+      this%varname=''
+      allocate(this%var(this%pg%imin_:this%pg%imax_,this%pg%jmin_:this%pg%jmax_,this%pg%kmin_:this%pg%kmax_,this%nvar))
+      this%var=0.0_WP
       
-   end function pardata_from_args
+   end subroutine initialize
    
    
    !> Constructor for a pardata object based on an existing file

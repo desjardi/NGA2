@@ -1,96 +1,66 @@
-!> FENE model class
-!> Extends multiscalar class for the calculation of source terms
-module fene_class
-   use multiscalar_class, only: multiscalar
-   use config_class,      only: config
-   use precision,         only: WP
+!> Two-phase viscoelastic model class
+!> Extends tpscalar class for calculation of source terms
+module tpviscoelastic_class
+   use tpscalar_class, only: tpscalar
+   use config_class,   only: config
+   use precision,      only: WP
    implicit none
    private
    
+
    ! Expose type/constructor/methods
-   public :: fene
+   public :: tpviscoelastic
    
-   ! List of available FENE models
+
+   ! List of available viscoelastic models
    integer, parameter, public :: fenep =0            !< FENE-P model
    integer, parameter, public :: fenecr=1            !< FENE-CR model
    integer, parameter, public :: clipped_fenecr=2    !< FENE-CR model with clipping
    integer, parameter, public :: oldroydb=3          !< Oldroyd-B model
+   integer, parameter, public :: lptt=4              !< Linear Phan-Thien-Tanner model
+   integer, parameter, public :: eptt=5              !< Exponential Phan-Thien-Tanner model
    
-   !> Constant density fene solver object definition
-   type, extends(multiscalar) :: fene
+
+   !> Constant density viscoelastic solver object definition
+   type, extends(tpscalar) :: tpviscoelastic
       ! Model parameters
-      integer  :: model                                    !< Closure model of FENE
-      real(WP) :: ncoeff                                   !< Carreau powerlaw coefficient
+      integer  :: model                                    !< Closure model
       real(WP) :: trelax                                   !< Polymer relaxation timescale
-      real(WP) :: visc                                     !< Polymer viscosity at zero strain rate
-      real(WP) :: Lmax                                     !< Polymer maximum extensibility
-      ! Polymer viscosity
-      real(WP), dimension(:,:,:), allocatable :: visc_p    !< Polymer viscosity
-      ! Monitoring info
-      real(WP) :: visc_pmin,visc_pmax                      !< Min and max polymer viscosity
+      real(WP) :: visc                                     !< Polymer viscosity
+      real(WP) :: Lmax                                     !< Polymer maximum extensibility in FENE model
+      real(WP) :: affinecoeff                              !< Parameter for affine motion in PTT model
+      real(WP) :: elongvisc                                !< Extensional parameter for elognational viscosity in PTT model
    contains
-      procedure :: update_visc_p                           !< Update visc_p given strain rate tensor using Carreau model
-      procedure :: get_CgradU                              !< Add C.gradU source term to residual
-      procedure :: get_relax                               !< Calculate FENE relaxation term
-      procedure :: get_max=>fene_get_max                   !< Augment multiscalar's default monitoring
-   end type fene
-   
-   !> Declare fene model constructor
-   interface fene
-      procedure construct_fene_from_args
-   end interface fene
+      procedure :: init                                    !< Initialization of tpviscoelastic class (different name is used because of extension...)
+      procedure :: get_CgradU                              !< Calculate streching and distrortion term
+      procedure :: get_relax                               !< Calculate relaxation term
+      procedure :: get_affine                              !< Source term in PTT equation for non-affine motion
+   end type tpviscoelastic
    
    
 contains
    
    
-   !> FENE model constructor from multiscalar
-   function construct_fene_from_args(cfg,model,scheme,name) result(self)
+   !> Viscoelastic model initialization
+   subroutine init(this,cfg,phase,model,name)
       implicit none
-      type(fene) :: self
+      class(tpviscoelastic), intent(inout) :: this
       class(config), target, intent(in) :: cfg
+      integer, intent(in) :: phase
       integer, intent(in) :: model
-      integer, intent(in) :: scheme
       character(len=*), optional :: name
-      ! Create a six-scalar solver for conformation tensor
-      self%multiscalar=multiscalar(cfg=cfg,scheme=scheme,nscalar=6,name=name)
-      self%SCname(1)='Cxx'
-      self%SCname(2)='Cxy'
-      self%SCname(3)='Cxz'
-      self%SCname(4)='Cyy'
-      self%SCname(5)='Cyz'
-      self%SCname(6)='Czz'
-      ! Assign closure model for FENE
-      self%model=model
-      ! Allocate and set polymer viscosity
-      allocate(self%visc_p(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%visc_p=0.0_WP
-   end function construct_fene_from_args
+      ! Create a six-scalar solver for conformation tensor in the liquid
+      call this%tpscalar%initialize(cfg=cfg,nscalar=6,name=name)
+      this%phase=phase; this%SCname=['Cxx','Cxy','Cxz','Cyy','Cyz','Czz']
+      ! Assign closure model for viscoelastic fluid
+      this%model=model
+   end subroutine init
    
    
-   !> Compute visc_p from SR using Carreau model
-   subroutine update_visc_p(this,SR)
-      implicit none
-      class(fene), intent(inout) :: this
-      real(WP), dimension(1:,this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in) :: SR
-      real(WP) :: SRmag
-      integer :: i,j,k
-      do k=this%cfg%kmino_,this%cfg%kmaxo_
-         do j=this%cfg%jmino_,this%cfg%jmaxo_
-            do i=this%cfg%imino_,this%cfg%imaxo_
-               ! Compute second invariant of strain rate tensor = sqrt(2*SR**2)
-               SRmag=sqrt(2.0_WP*(SR(1,i,j,k)**2+SR(2,i,j,k)**2+SR(3,i,j,k)**2+2.0_WP*(SR(4,i,j,k)**2+SR(5,i,j,k)**2+SR(6,i,j,k)**2)))
-               ! Compute polymer viscosity
-               this%visc_p(i,j,k)=this%visc*(1.0_WP+(this%trelax*SRmag)**2)**(0.5_WP*this%ncoeff-0.5_WP)
-            end do
-         end do
-      end do
-   end subroutine update_visc_p
-
-
-   !> Get C.gradU source terms to multiscalar residual
+   !> Get CgradU source terms to add to multiscalar residual
    subroutine get_CgradU(this,gradU,resSC)
       implicit none
-      class(fene), intent(inout) :: this
+      class(tpviscoelastic), intent(inout) :: this
       real(WP), dimension(1:,1:,this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in) :: gradU
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:,1:), intent(inout) :: resSC
       integer :: i,j,k
@@ -121,11 +91,45 @@ contains
    end subroutine get_CgradU
    
 
-   !> Add fene relaxation source
+   !> Get S*C terms for PTT equation
+   subroutine get_affine(this,SR,resSC)
+      implicit none
+      class(tpviscoelastic), intent(inout) :: this
+      real(WP), dimension(1:,this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in) :: SR
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:,1:), intent(inout) :: resSC
+      integer :: i,j,k
+      resSC=0.0_WP
+      do k=this%cfg%kmino_,this%cfg%kmaxo_
+         do j=this%cfg%jmino_,this%cfg%jmaxo_
+            do i=this%cfg%imino_,this%cfg%imaxo_
+               ! Skip non-solved cells
+               if (this%mask(i,j,k).ne.0) cycle
+               ! xx tensor component
+               resSC(i,j,k,1)=-this%affinecoeff*2.0_WP*(SR(1,i,j,k)*this%SC(i,j,k,1)+SR(4,i,j,k)*this%SC(i,j,k,2)+SR(6,i,j,k)*this%SC(i,j,k,3))
+               ! xy tensor component
+               resSC(i,j,k,2)=-this%affinecoeff*((SR(4,i,j,k)*this%SC(i,j,k,1)+SR(2,i,j,k)*this%SC(i,j,k,2)+SR(5,i,j,k)*this%SC(i,j,k,3))+&
+               &                                 (SR(1,i,j,k)*this%SC(i,j,k,2)+SR(4,i,j,k)*this%SC(i,j,k,4)+SR(6,i,j,k)*this%SC(i,j,k,5)))
+               ! xz tensor component
+               resSC(i,j,k,3)=-this%affinecoeff*((SR(6,i,j,k)*this%SC(i,j,k,1)+SR(5,i,j,k)*this%SC(i,j,k,2)+SR(3,i,j,k)*this%SC(i,j,k,3))+&
+               &                                 (SR(1,i,j,k)*this%SC(i,j,k,3)+SR(4,i,j,k)*this%SC(i,j,k,5)+SR(6,i,j,k)*this%SC(i,j,k,6)))
+               ! yy tensor component
+               resSC(i,j,k,4)=-this%affinecoeff*2.0_WP*(SR(4,i,j,k)*this%SC(i,j,k,2)+SR(2,i,j,k)*this%SC(i,j,k,4)+SR(5,i,j,k)*this%SC(i,j,k,5))
+               ! yz tensor component
+               resSC(i,j,k,5)=-this%affinecoeff*((SR(6,i,j,k)*this%SC(i,j,k,2)+SR(5,i,j,k)*this%SC(i,j,k,4)+SR(3,i,j,k)*this%SC(i,j,k,5))+&
+               &                                 (SR(4,i,j,k)*this%SC(i,j,k,3)+SR(2,i,j,k)*this%SC(i,j,k,5)+SR(5,i,j,k)*this%SC(i,j,k,6)))
+               ! zz tensor component
+               resSC(i,j,k,6)=-this%affinecoeff*2.0_WP*(SR(6,i,j,k)*this%SC(i,j,k,3)+SR(5,i,j,k)*this%SC(i,j,k,5)+SR(3,i,j,k)*this%SC(i,j,k,6))
+            end do
+         end do
+      end do
+   end subroutine get_affine
+   
+
+   !> Add viscoelastic relaxation source
    subroutine get_relax(this,resSC,dt)
       use messager, only: die
       implicit none
-      class(fene), intent(inout) :: this
+      class(tpviscoelastic), intent(inout) :: this
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:,1:), intent(inout) :: resSC
       real(WP), intent(in) :: dt
       integer :: i,j,k
@@ -133,11 +137,11 @@ contains
       real(WP), parameter :: safety_margin=10.0_WP
       resSC=0.0_WP
       select case (this%model)
-      case (fenep) ! Add relaxation source for FENE-P (f(r)*C-I)
+      case (fenep) ! Add relaxation source for FENE-P (1/lambda)(f(r)*C-I)
          do k=this%cfg%kmino_,this%cfg%kmaxo_
             do j=this%cfg%jmino_,this%cfg%jmaxo_
                do i=this%cfg%imino_,this%cfg%imaxo_
-                  if (this%mask(i,j,k).ne.0) cycle                            !< Skip non-solved cells
+                  if (this%mask(i,j,k).ne.0) cycle                              !< Skip non-solved cells
                   coeff=(this%Lmax**2-3.00_WP)/(this%Lmax**2-(this%SC(i,j,k,1)+this%SC(i,j,k,4)+this%SC(i,j,k,6)))
                   resSC(i,j,k,1)=-(coeff*this%SC(i,j,k,1)-1.0_WP)/this%trelax !< xx tensor component
                   resSC(i,j,k,2)=-(coeff*this%SC(i,j,k,2)-0.0_WP)/this%trelax !< xy tensor component
@@ -148,7 +152,7 @@ contains
                end do
             end do
          end do
-      case (fenecr) ! Add relaxation source for FENE-CR (f(r)*(C-I))
+      case (fenecr) ! Add relaxation source for FENE-CR (f(r)/lambda*(C-I))
          do k=this%cfg%kmino_,this%cfg%kmaxo_
             do j=this%cfg%jmino_,this%cfg%jmaxo_
                do i=this%cfg%imino_,this%cfg%imaxo_
@@ -183,16 +187,16 @@ contains
                   coeff=max(epsilon(1.0_WP),min(coeff,1.0_WP))*this%trelax      !< Build a safe adjusted relaxation time scale
                   coeff=max(coeff,safety_margin*dt)                             !< Further clip based on current time step size for stability
                   coeff=1.0_WP/coeff                                            !< Inverse coeff
-                  resSC(i,j,k,1)=-coeff*(this%SC(i,j,k,1)-1.0_WP) !> xx tensor component
-                  resSC(i,j,k,2)=-coeff*(this%SC(i,j,k,2)-0.0_WP) !> xy tensor component
-                  resSC(i,j,k,3)=-coeff*(this%SC(i,j,k,3)-0.0_WP) !> xz tensor component
-                  resSC(i,j,k,4)=-coeff*(this%SC(i,j,k,4)-1.0_WP) !> yy tensor component
-                  resSC(i,j,k,5)=-coeff*(this%SC(i,j,k,5)-0.0_WP) !> yz tensor component
-                  resSC(i,j,k,6)=-coeff*(this%SC(i,j,k,6)-1.0_WP) !> zz tensor component
+                  resSC(i,j,k,1)=resSC(i,j,k,1)-coeff*(this%SC(i,j,k,1)-1.0_WP) !> xx tensor component
+                  resSC(i,j,k,2)=resSC(i,j,k,2)-coeff* this%SC(i,j,k,2)         !> xy tensor component
+                  resSC(i,j,k,3)=resSC(i,j,k,3)-coeff* this%SC(i,j,k,3)         !> xz tensor component
+                  resSC(i,j,k,4)=resSC(i,j,k,4)-coeff*(this%SC(i,j,k,4)-1.0_WP) !> yy tensor component
+                  resSC(i,j,k,5)=resSC(i,j,k,5)-coeff* this%SC(i,j,k,5)         !> yz tensor component
+                  resSC(i,j,k,6)=resSC(i,j,k,6)-coeff*(this%SC(i,j,k,6)-1.0_WP) !> zz tensor component
                end do
             end do
          end do
-      case (oldroydb) ! Add relaxation source for FENE-CR ((C-I)/t_relax)
+      case (oldroydb) ! Add relaxation source for Oldroyd-B (1/t_relax)(C-I)
          do k=this%cfg%kmino_,this%cfg%kmaxo_
             do j=this%cfg%jmino_,this%cfg%jmaxo_
                do i=this%cfg%imino_,this%cfg%imaxo_
@@ -207,28 +211,42 @@ contains
                end do
             end do
          end do
+      case (lptt) ! Add relaxation source term for lPTT model
+         do k=this%cfg%kmino_,this%cfg%kmaxo_
+            do j=this%cfg%jmino_,this%cfg%jmaxo_
+               do i=this%cfg%imino_,this%cfg%imaxo_
+                  if (this%mask(i,j,k).ne.0) cycle                              !< Skip non-solved cells
+                  coeff=1.00_WP+(this%elongvisc/(1.0_WP-this%affinecoeff))*((this%SC(i,j,k,1)+this%SC(i,j,k,4)+this%SC(i,j,k,6))-3.0_WP)
+                  coeff=coeff/this%trelax                   !< Divide by relaxation time scale
+                  resSC(i,j,k,1)=-coeff*(this%SC(i,j,k,1)-1.0_WP) !> xx tensor component
+                  resSC(i,j,k,2)=-coeff*(this%SC(i,j,k,2)-0.0_WP) !> xy tensor component
+                  resSC(i,j,k,3)=-coeff*(this%SC(i,j,k,3)-0.0_WP) !> xz tensor component
+                  resSC(i,j,k,4)=-coeff*(this%SC(i,j,k,4)-1.0_WP) !> yy tensor component
+                  resSC(i,j,k,5)=-coeff*(this%SC(i,j,k,5)-0.0_WP) !> yz tensor component
+                  resSC(i,j,k,6)=-coeff*(this%SC(i,j,k,6)-1.0_WP) !> zz tensor component
+               end do
+            end do
+         end do
+      case (eptt) ! Add relaxation source term for ePTT model
+         do k=this%cfg%kmino_,this%cfg%kmaxo_
+            do j=this%cfg%jmino_,this%cfg%jmaxo_
+               do i=this%cfg%imino_,this%cfg%imaxo_
+                  if (this%mask(i,j,k).ne.0) cycle                              !< Skip non-solved cells
+                  coeff=exp(this%elongvisc/(1.0_WP-this%affinecoeff)*((this%SC(i,j,k,1)+this%SC(i,j,k,4)+this%SC(i,j,k,6))-3.0_WP))
+                  coeff=coeff/this%trelax                   !< Divide by relaxation time scale
+                  resSC(i,j,k,1)=-coeff*(this%SC(i,j,k,1)-1.0_WP) !> xx tensor component
+                  resSC(i,j,k,2)=-coeff*(this%SC(i,j,k,2)-0.0_WP) !> xy tensor component
+                  resSC(i,j,k,3)=-coeff*(this%SC(i,j,k,3)-0.0_WP) !> xz tensor component
+                  resSC(i,j,k,4)=-coeff*(this%SC(i,j,k,4)-1.0_WP) !> yy tensor component
+                  resSC(i,j,k,5)=-coeff*(this%SC(i,j,k,5)-0.0_WP) !> yz tensor component
+                  resSC(i,j,k,6)=-coeff*(this%SC(i,j,k,6)-1.0_WP) !> zz tensor component
+               end do
+            end do
+         end do
       case default
-         call die('[FENE get_relax] Unknown FENE model selected')
+         call die('[tpviscoelastic get_relax] Unknown viscoelastic model selected')
       end select
    end subroutine get_relax
    
-
-   !> Calculate the min and max of our SC field
-   subroutine fene_get_max(this)
-      use mpi_f08,  only: MPI_ALLREDUCE,MPI_MAX,MPI_MIN
-      use parallel, only: MPI_REAL_WP
-      implicit none
-      class(fene), intent(inout) :: this
-      integer :: ierr,nsc
-      real(WP) :: my_SCmax,my_SCmin
-      real(WP) :: my_visc_pmax,my_visc_pmin
-      do nsc=1,this%nscalar
-         my_SCmax=maxval(this%SC(:,:,:,nsc)); call MPI_ALLREDUCE(my_SCmax,this%SCmax(nsc),1,MPI_REAL_WP,MPI_MAX,this%cfg%comm,ierr)
-         my_SCmin=minval(this%SC(:,:,:,nsc)); call MPI_ALLREDUCE(my_SCmin,this%SCmin(nsc),1,MPI_REAL_WP,MPI_MIN,this%cfg%comm,ierr)
-      end do
-      my_visc_pmax=maxval(this%visc_p); call MPI_ALLREDUCE(my_visc_pmax,this%visc_pmax,1,MPI_REAL_WP,MPI_MAX,this%cfg%comm,ierr)
-      my_visc_pmin=minval(this%visc_p); call MPI_ALLREDUCE(my_visc_pmin,this%visc_pmin,1,MPI_REAL_WP,MPI_MIN,this%cfg%comm,ierr)
-   end subroutine fene_get_max
-
-
-end module fene_class
+   
+end module tpviscoelastic_class

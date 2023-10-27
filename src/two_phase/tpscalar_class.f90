@@ -73,10 +73,10 @@ module tpscalar_class
       real(WP), dimension(:), allocatable :: SCmax,SCmin,SCint   !< Maximum and minimum, integral scalar
       
    contains
+      procedure :: initialize                             !< Initialization of the scalar solver
       procedure :: print=>multiscalar_print               !< Output solver to the screen
       procedure, private :: init_metrics                  !< Initialize metrics
       procedure, private :: adjust_metrics                !< Adjust metrics
-      procedure :: initialize                             !< Initialization of the scalar solver
       procedure :: setup                                  !< Finish configuring the scalar solver
       procedure :: add_bcond                              !< Add a boundary condition
       procedure :: get_bcond                              !< Get a boundary condition
@@ -94,7 +94,7 @@ contains
    subroutine initialize(this,cfg,nscalar,name)
       use messager, only: die
       implicit none
-      class(tpscalar) :: this
+      class(tpscalar), intent(inout) :: this
       class(config), target, intent(in) :: cfg
       integer, intent(in) :: nscalar
       character(len=*), optional :: name
