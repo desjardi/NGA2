@@ -1,30 +1,32 @@
 !> Various definitions and tools for running an NGA2 simulation
 module simulation
-   use precision,         only: WP
-   use geometry,          only: cfg
-   use hypre_str_class,   only: hypre_str
-   use ddadi_class,       only: ddadi
-   use tpns_class,        only: tpns
-   use vfs_class,         only: vfs
-   use fene_class,        only: fene
-   use timetracker_class, only: timetracker
-   use ensight_class,     only: ensight
-   use event_class,       only: event
-   use monitor_class,     only: monitor
+   use precision,            only: WP
+   use geometry,             only: cfg
+   use hypre_str_class,      only: hypre_str
+   use ddadi_class,          only: ddadi
+   use tpns_class,           only: tpns
+   use vfs_class,            only: vfs
+   use tpviscoelastic_class, only: tpviscoelastic
+   use carreau_class,        only: carreau
+   use timetracker_class,    only: timetracker
+   use ensight_class,        only: ensight
+   use event_class,          only: event
+   use monitor_class,        only: monitor
    implicit none
    private
    
    !> Get a couple linear solvers, a two-phase flow solver and volume fraction solver and corresponding time tracker
-   type(hypre_str),   public :: ps
-   type(ddadi),       public :: vs,ss
-   type(tpns),        public :: fs
-   type(vfs),         public :: vf
-   type(fene),        public :: nn
-   type(timetracker), public :: time
+   type(hypre_str),      public :: ps
+   type(ddadi),          public :: vs
+   type(tpns),           public :: fs
+   type(vfs),            public :: vf
+   type(tpviscoelastic), public :: ve
+   type(carreau),        public :: nn
+   type(timetracker),    public :: time
    
    !> Ensight postprocessing
-   type(ensight)  :: ens_out
-   type(event)    :: ens_evt
+   type(ensight) :: ens_out
+   type(event)   :: ens_evt
    
    !> Simulation monitor file
    type(monitor) :: mfile,cflfile,scfile
@@ -123,7 +125,6 @@ contains
          real(WP) :: vol,area
          integer, parameter :: amr_ref_lvl=4
          ! Create a VOF solver
-         !allocate(vf,source=vfs(cfg=cfg,reconstruction_method=elvira,name='VOF'))
          call vf%initialize(cfg=cfg,reconstruction_method=elvira,name='VOF')
          ! Initialize a bubble
          call param_read('Bubble position',center)
@@ -206,32 +207,39 @@ contains
       end block create_and_initialize_flow_solver
       
       
-      ! Create a FENE model 
-      create_fene: block 
-         use multiscalar_class, only: bquick
-         use fene_class,        only: fenecr
+      ! Create a viscoleastic model
+      create_viscoelastic: block
+         use viscoelastic_class, only: fenecr
          integer :: i,j,k
-         ! Create FENE model solver
-         nn=fene(cfg=cfg,model=fenecr,scheme=bquick,name='FENE')
-         ! Assign unity density for simplicity
-         nn%rho=1.0_WP
+         ! Create viscoelastic model solver
+         call ve%init(cfg=cfg,model=fenecr,phase=0,name='viscoelastic')
          ! Maximum extensibility of polymer chain
-         call param_read('Maximum polymer extensibility',nn%Lmax)
+         call param_read('Maximum polymer extensibility',ve%Lmax)
          ! Relaxation time for polymer
-         call param_read('Polymer relaxation time',nn%trelax)
+         call param_read('Polymer relaxation time',ve%trelax)
+         ! Setup without an implicit solver
+         call ve%setup()
+         ! Initialize scalar fields
+         do k=cfg%kmino_,cfg%kmaxo_
+            do j=cfg%jmino_,cfg%jmaxo_
+               do i=cfg%imino_,cfg%imaxo_
+                  if (vf%VF(i,j,k).gt.0.0_WP) then
+                     ve%SC(i,j,k,1)=1.0_WP !< Cxx
+                     ve%SC(i,j,k,4)=1.0_WP !< Cyy
+                     ve%SC(i,j,k,6)=1.0_WP !< Czz
+                  end if
+               end do
+            end do
+         end do
+         ! Create Carreau model
+         call nn%initialize(cfg=cfg)
          ! Polymer viscosity at zero strain rate
-         call param_read('Polymer viscosity',nn%visc)
+         call param_read('Polymer viscosity',nn%visc_zero)
          ! Powerlaw coefficient in Carreau model
          call param_read('Carreau powerlaw',nn%ncoeff)
-         ! Configure implicit scalar solver
-         ss=ddadi(cfg=cfg,name='scalar',nst=13)
-         ! Setup the solver
-         call nn%setup(implicit_solver=ss)
-         ! Initialize conformation tensor to identity
-         nn%SC(:,:,:,1)=1.0_WP !< Cxx
-         nn%SC(:,:,:,4)=1.0_WP !< Cyy
-         nn%SC(:,:,:,6)=1.0_WP !< Czz
-      end block create_fene
+         ! Set timescale
+         nn%tref=ve%trelax
+      end block create_viscoelastic
       
       
       ! Add Ensight output
@@ -248,8 +256,8 @@ contains
          call ens_out%add_scalar('viscosity',fs%visc)
          call ens_out%add_scalar('pressure',fs%P)
          call ens_out%add_scalar('curvature',vf%curv)
-         do nsc=1,nn%nscalar
-            call ens_out%add_scalar(trim(nn%SCname(nsc)),nn%SC(:,:,:,nsc))
+         do nsc=1,ve%nscalar
+            call ens_out%add_scalar(trim(ve%SCname(nsc)),ve%SC(:,:,:,nsc))
          end do
          ! Output to ensight
          if (ens_evt%occurs()) call ens_out%write_data(time%t)
@@ -263,7 +271,7 @@ contains
          call fs%get_cfl(time%dt,time%cfl)
          call fs%get_max()
          call vf%get_max()
-         call nn%get_max()
+         call ve%get_max(vf%VF)
          call rise_vel()
          ! Create simulation monitor
          mfile=monitor(fs%cfg%amRoot,'simulation')
@@ -297,14 +305,14 @@ contains
          call cflfile%add_column(fs%CFLv_z,'Viscous zCFL')
          call cflfile%write()
          ! Create scalar monitor
-         scfile=monitor(nn%cfg%amRoot,'scalar')
+         scfile=monitor(ve%cfg%amRoot,'scalar')
          call scfile%add_column(time%n,'Timestep number')
          call scfile%add_column(time%t,'Time')
-         call scfile%add_column(nn%visc_pmax,'Maximum visc_p')
-         call scfile%add_column(nn%visc_pmin,'Minimum visc_p')
-         do nsc=1,nn%nscalar
-            call scfile%add_column(nn%SCmin(nsc),trim(nn%SCname(nsc))//'_min')
-            call scfile%add_column(nn%SCmax(nsc),trim(nn%SCname(nsc))//'_max')
+         call scfile%add_column(nn%visc_max,'Maximum visc_p')
+         call scfile%add_column(nn%visc_min,'Minimum visc_p')
+         do nsc=1,ve%nscalar
+            call scfile%add_column(ve%SCmin(nsc),trim(ve%SCname(nsc))//'_min')
+            call scfile%add_column(ve%SCmax(nsc),trim(ve%SCname(nsc))//'_max')
          end do
          call scfile%write()
       end block create_monitor
@@ -334,7 +342,7 @@ contains
          fs%Wold=fs%W
          
          ! Remember old scalars
-         nn%SCold=nn%SC
+         ve%SCold=ve%SC
          
          ! Prepare old staggered density (at n)
          call fs%get_olddensity(vf=vf)
@@ -345,97 +353,34 @@ contains
          ! Calculate grad(U)
          call fs%get_gradU(gradU)
          
+         ! Transport our liquid conformation tensor
+         advance_scalar: block
+            integer :: nsc
+            ! Explicit calculation of dSC/dt from scalar equation
+            call ve%get_dSCdt(dSCdt=resSC,U=fs%U,V=fs%V,W=fs%W,VFold=vf%VFold,VF=vf%VF,detailed_face_flux=vf%detailed_face_flux,dt=time%dt)
+            ! Add streching and distortion term
+            call ve%get_CgradU(gradU,SCtmp)
+            do nsc=1,6
+               resSC(:,:,:,nsc)=resSC(:,:,:,nsc)+vf%VF*SCtmp(:,:,:,nsc)
+            end do
+            ! Add relaxation term
+            call ve%get_relax(SCtmp,time%dt)
+            do nsc=1,6
+               resSC(:,:,:,nsc)=resSC(:,:,:,nsc)+vf%VF*SCtmp(:,:,:,nsc)
+            end do
+            ! Update our scalars
+            do nsc=1,ve%nscalar
+               where (ve%mask.eq.0.and.vf%VF.ne.0.0_WP) ve%SC(:,:,:,nsc)=(vf%VFold*ve%SCold(:,:,:,nsc)+time%dt*resSC(:,:,:,nsc))/vf%VF
+               where (vf%VF.eq.0.0_WP) ve%SC(:,:,:,nsc)=0.0_WP
+            end do
+            ! Apply boundary conditions
+            call ve%apply_bcond(time%t,time%dt)
+         end block advance_scalar
+
+         ! ===================================================
+         
          ! Perform sub-iterations
          do while (time%it.le.time%itmax)
-            
-            ! ============= SCALAR SOLVER =======================
-            
-            ! Reset interpolation metrics to QUICK scheme
-            call nn%metric_reset()
-            
-            ! Build mid-time scalar
-            nn%SC=0.5_WP*(nn%SC+nn%SCold)
-            
-            ! Explicit calculation of drhoSC/dt from scalar equation
-            call nn%get_drhoSCdt(resSC,fs%Uold,fs%Vold,fs%Wold)
-            
-            ! Perform bquick procedure
-            bquick: block
-               integer :: i,j,k
-               logical, dimension(:,:,:), allocatable :: flag
-               ! Allocate work array
-               allocate(flag(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
-               ! Assemble explicit residual
-               resSC=-2.0_WP*(nn%SC-nn%SCold)+time%dt*resSC
-               ! Apply it to get explicit scalar prediction
-               SCtmp=2.0_WP*nn%SC-nn%SCold+resSC
-               ! Check cells that require bquick
-               do k=nn%cfg%kmino_,nn%cfg%kmaxo_
-                  do j=nn%cfg%jmino_,nn%cfg%jmaxo_
-                     do i=nn%cfg%imino_,nn%cfg%imaxo_
-                        if (SCtmp(i,j,k,1).le.0.0_WP.or.SCtmp(i,j,k,4).le.0.0_WP.or.SCtmp(i,j,k,6).le.0.0_WP.or.&
-                        &   SCtmp(i,j,k,1)+SCtmp(i,j,k,4)+SCtmp(i,j,k,6).ge.nn%Lmax**2) then
-                           flag(i,j,k)=.true.
-                        else
-                           flag(i,j,k)=.false.
-                        end if
-                     end do
-                  end do
-               end do
-               ! Adjust metrics
-               call nn%metric_adjust(SCtmp,flag)
-               ! Clean up
-               deallocate(flag)
-               ! Recompute drhoSC/dt
-               call nn%get_drhoSCdt(resSC,fs%Uold,fs%Vold,fs%Wold)
-            end block bquick
-            
-            ! Add fene sources
-            add_source: block
-               integer :: n
-               call nn%get_CgradU(gradU,SCtmp)
-               do n=1,6
-                  resSC(:,:,:,n)=resSC(:,:,:,n)+vf%VF(:,:,:)*SCtmp(:,:,:,n)
-               end do
-               call nn%get_relax(resSC,time%dt)
-               do n=1,6
-                  resSC(:,:,:,n)=resSC(:,:,:,n)+vf%VF(:,:,:)*SCtmp(:,:,:,n)
-               end do
-            end block add_source
-            
-            ! Assemble explicit residual
-            resSC=-2.0_WP*(nn%SC-nn%SCold)+time%dt*resSC
-            
-            ! Form implicit residual
-            call nn%solve_implicit(time%dt,resSC,fs%Uold,fs%Vold,fs%Wold)
-            
-            ! Update scalars
-            nn%SC=2.0_WP*nn%SC-nn%SCold+resSC
-            
-            ! Force the gas scalar to identity
-            gas_scalar_forcing: block
-               integer :: i,j,k
-               do k=nn%cfg%kmino_,nn%cfg%kmaxo_
-                  do j=nn%cfg%jmino_,nn%cfg%jmaxo_
-                     do i=nn%cfg%imino_,nn%cfg%imaxo_
-                        if (nn%mask(i,j,k).eq.0) then
-                           nn%SC(i,j,k,1)=vf%VF(i,j,k)*nn%SC(i,j,k,1)+(1.0_WP-vf%VF(i,j,k))*1.0_WP
-                           nn%SC(i,j,k,2)=vf%VF(i,j,k)*nn%SC(i,j,k,2)
-                           nn%SC(i,j,k,3)=vf%VF(i,j,k)*nn%SC(i,j,k,3)
-                           nn%SC(i,j,k,4)=vf%VF(i,j,k)*nn%SC(i,j,k,4)+(1.0_WP-vf%VF(i,j,k))*1.0_WP
-                           nn%SC(i,j,k,5)=vf%VF(i,j,k)*nn%SC(i,j,k,5)
-                           nn%SC(i,j,k,6)=vf%VF(i,j,k)*nn%SC(i,j,k,6)+(1.0_WP-vf%VF(i,j,k))*1.0_WP
-                        end if
-                     end do
-                  end do
-               end do
-            end block gas_scalar_forcing
-            
-            ! Apply all other boundary conditions on the resulting field
-            call nn%apply_bcond(time%t,time%dt)
-            ! ===================================================
-
-            ! ============ VELOCITY SOLVER ======================
             
             ! Build mid-time velocity
             fs%U=0.5_WP*(fs%U+fs%Uold)
@@ -454,7 +399,7 @@ contains
                ! Calculate strain rate
                call fs%get_strainrate(SR)
                ! Update polymer viscosity using Carreau model
-               call nn%update_visc_p(SR)
+               call nn%update_visc(SR)
                ! Handle mixture viscosity
                do k=fs%cfg%kmino_+1,fs%cfg%kmaxo_
                   do j=fs%cfg%jmino_+1,fs%cfg%jmaxo_
@@ -463,28 +408,28 @@ contains
                         liq_vol=sum(vf%Lvol(:,:,:,i,j,k))
                         gas_vol=sum(vf%Gvol(:,:,:,i,j,k))
                         tot_vol=gas_vol+liq_vol
-                        visc_l=fs%visc_l+nn%visc_p(i,j,k)
+                        visc_l=fs%visc_l+nn%visc(i,j,k)
                         fs%visc(i,j,k)=0.0_WP; if (tot_vol.gt.0.0_WP) fs%visc(i,j,k)=(visc_l*liq_vol+fs%visc_g*gas_vol)/tot_vol
                         !fs%visc(i,j,k)=0.0_WP; if (tot_vol.gt.0.0_WP) fs%visc(i,j,k)=fs%visc_g*visc_l/(visc_l*gas_vol/tot_vol+fs%visc_g*liq_vol/tot_vol+epsilon(1.0_WP))
                         ! VISC_xy at [x,y,zm] - direct sum in z, staggered sum in x/y
                         liq_vol=sum(vf%Lvol(0,0,:,i,j,k))+sum(vf%Lvol(1,0,:,i-1,j,k))+sum(vf%Lvol(0,1,:,i,j-1,k))+sum(vf%Lvol(1,1,:,i-1,j-1,k))
                         gas_vol=sum(vf%Gvol(0,0,:,i,j,k))+sum(vf%Gvol(1,0,:,i-1,j,k))+sum(vf%Gvol(0,1,:,i,j-1,k))+sum(vf%Gvol(1,1,:,i-1,j-1,k))
                         tot_vol=gas_vol+liq_vol
-                        visc_l=fs%visc_l+sum(fs%itp_xy(:,:,i,j,k)*nn%visc_p(i-1:i,j-1:j,k))
+                        visc_l=fs%visc_l+sum(fs%itp_xy(:,:,i,j,k)*nn%visc(i-1:i,j-1:j,k))
                         fs%visc_xy(i,j,k)=0.0_WP; if (tot_vol.gt.0.0_WP) fs%visc_xy(i,j,k)=(visc_l*liq_vol+fs%visc_g*gas_vol)/tot_vol
                         !fs%visc_xy(i,j,k)=0.0_WP; if (tot_vol.gt.0.0_WP) fs%visc_xy(i,j,k)=fs%visc_g*visc_l/(visc_l*gas_vol/tot_vol+fs%visc_g*liq_vol/tot_vol+epsilon(1.0_WP))
                         ! VISC_yz at [xm,y,z] - direct sum in x, staggered sum in y/z
                         liq_vol=sum(vf%Lvol(:,0,0,i,j,k))+sum(vf%Lvol(:,1,0,i,j-1,k))+sum(vf%Lvol(:,0,1,i,j,k-1))+sum(vf%Lvol(:,1,1,i,j-1,k-1))
                         gas_vol=sum(vf%Gvol(:,0,0,i,j,k))+sum(vf%Gvol(:,1,0,i,j-1,k))+sum(vf%Gvol(:,0,1,i,j,k-1))+sum(vf%Gvol(:,1,1,i,j-1,k-1))
                         tot_vol=gas_vol+liq_vol
-                        visc_l=fs%visc_l+sum(fs%itp_yz(:,:,i,j,k)*nn%visc_p(i,j-1:j,k-1:k))
+                        visc_l=fs%visc_l+sum(fs%itp_yz(:,:,i,j,k)*nn%visc(i,j-1:j,k-1:k))
                         fs%visc_yz(i,j,k)=0.0_WP; if (tot_vol.gt.0.0_WP) fs%visc_yz(i,j,k)=(visc_l*liq_vol+fs%visc_g*gas_vol)/tot_vol
                         !fs%visc_yz(i,j,k)=0.0_WP; if (tot_vol.gt.0.0_WP) fs%visc_yz(i,j,k)=fs%visc_g*visc_l/(visc_l*gas_vol/tot_vol+fs%visc_g*liq_vol/tot_vol+epsilon(1.0_WP))
                         ! VISC_zx at [x,ym,z] - direct sum in y, staggered sum in z/x
                         liq_vol=sum(vf%Lvol(0,:,0,i,j,k))+sum(vf%Lvol(0,:,1,i,j,k-1))+sum(vf%Lvol(1,:,0,i-1,j,k))+sum(vf%Lvol(1,:,1,i-1,j,k-1))
                         gas_vol=sum(vf%Gvol(0,:,0,i,j,k))+sum(vf%Gvol(0,:,1,i,j,k-1))+sum(vf%Gvol(1,:,0,i-1,j,k))+sum(vf%Gvol(1,:,1,i-1,j,k-1))
                         tot_vol=gas_vol+liq_vol
-                        visc_l=fs%visc_l+sum(fs%itp_xz(:,:,i,j,k)*nn%visc_p(i-1:i,j,k-1:k))
+                        visc_l=fs%visc_l+sum(fs%itp_xz(:,:,i,j,k)*nn%visc(i-1:i,j,k-1:k))
                         fs%visc_zx(i,j,k)=0.0_WP; if (tot_vol.gt.0.0_WP) fs%visc_zx(i,j,k)=(visc_l*liq_vol+fs%visc_g*gas_vol)/tot_vol
                         !fs%visc_zx(i,j,k)=0.0_WP; if (tot_vol.gt.0.0_WP) fs%visc_zx(i,j,k)=fs%visc_g*visc_l/(visc_l*gas_vol/tot_vol+fs%visc_g*liq_vol/tot_vol+epsilon(1.0_WP))
                      end do
@@ -505,6 +450,7 @@ contains
             
             ! Add polymer stress term
             polymer_stress: block
+               use tpviscoelastic_class, only: fenecr,oldroydb,lptt,eptt
                integer :: i,j,k,n
                real(WP), dimension(:,:,:), allocatable :: Txy,Tyz,Tzx
                real(WP), dimension(:,:,:,:), allocatable :: stress
@@ -514,10 +460,10 @@ contains
                allocate(Tyz   (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
                allocate(Tzx   (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
                ! Calculate the polymer relaxation
-               call nn%get_relax(stress,time%dt)
+               call ve%get_relax(stress,time%dt)
                ! Build liquid stress tensor
                do n=1,6
-                  stress(:,:,:,n)=-nn%visc_p(:,:,:)*vf%VF*stress(:,:,:,n)
+                  stress(:,:,:,n)=-nn%visc(:,:,:)*vf%VF*stress(:,:,:,n)
                end do
                ! Interpolate tensor components to cell edges
                do k=cfg%kmin_,cfg%kmax_+1
@@ -565,7 +511,7 @@ contains
             ! Apply other boundary conditions
             call fs%apply_bcond(time%t,time%dt)
             
-            ! Solve Poisson equation - pinned version
+            ! Solve Poisson equation
             call fs%update_laplacian()
             call fs%correct_mfr()
             call fs%get_div()
@@ -595,7 +541,7 @@ contains
          if (ens_evt%occurs()) call ens_out%write_data(time%t)
          
          ! Perform and output monitoring
-         call nn%get_max()
+         call ve%get_max(vf%VF)
          call fs%get_max()
          call vf%get_max()
          call rise_vel()

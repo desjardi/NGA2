@@ -18,7 +18,7 @@ Gas density :                 1.226
 Surface tension coefficient : 0.0728
 
 # Bubble definition
-Bubble volume :   19    # in mm^3
+Bubble volume :   45    # in mm^3
 Bubble position : 0 0.01 0
 
 # Non-Newtonian modeling                     # w=0.8 case    # w=0.3 case

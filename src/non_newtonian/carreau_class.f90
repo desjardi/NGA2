@@ -11,12 +11,12 @@ module carreau_class
    !> Carreau model object definition
    type :: carreau
       ! This is our config
-      class(config), pointer :: cfg                       !< This is the config the model is build for
+      class(config), pointer :: cfg                        !< This is the config the model is build for
       ! Model parameters
       real(WP) :: ncoeff                                   !< Powerlaw coefficient
       real(WP) :: tref                                     !< Reference fluid timescale
       real(WP) :: visc_zero                                !< Zero shear rate  viscosity
-      real(WP) :: visc_inf                                 !< Infinite shear rate viscosity
+      real(WP) :: visc_inf=0.0_WP                          !< Infinite shear rate viscosity (0 by default)
       ! Viscosity
       real(WP), dimension(:,:,:), allocatable :: visc      !< Carreau viscosity
       ! Monitoring info
@@ -30,15 +30,12 @@ contains
    
    
    !> Carreau model initialization
-   subroutine initialize(this,cfg,ncoeff,tref,visc_zero,visc_inf)
+   subroutine initialize(this,cfg)
       implicit none
       class(carreau), intent(inout) :: this
       class(config), target, intent(in) :: cfg
-      real(WP), intent(in) :: ncoeff,tref,visc_zero,visc_inf
       ! Store pointer to cfg
       this%cfg=>cfg
-      ! Pass parameters
-      this%ncoeff=ncoeff; this%tref=tref; this%visc_zero=visc_zero; this%visc_inf=visc_inf
       ! Allocate storage for rate dependent viscosity
       allocate(this%visc(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_)); this%visc=0.0_WP
    end subroutine initialize
