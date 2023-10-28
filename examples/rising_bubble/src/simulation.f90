@@ -125,7 +125,7 @@ contains
          real(WP) :: vol,area
          integer, parameter :: amr_ref_lvl=4
          ! Create a VOF solver
-         call vf%initialize(cfg=cfg,reconstruction_method=elvira,name='VOF')
+         call vf%initialize(cfg=cfg,reconstruction_method=elvira,name='VOF',store_detailed_flux=.true.)
          ! Initialize a bubble
          call param_read('Bubble position',center)
          call param_read('Bubble volume',radius)
@@ -233,11 +233,8 @@ contains
          end do
          ! Create Carreau model
          call nn%initialize(cfg=cfg)
-         ! Polymer viscosity at zero strain rate
          call param_read('Polymer viscosity',nn%visc_zero)
-         ! Powerlaw coefficient in Carreau model
          call param_read('Carreau powerlaw',nn%ncoeff)
-         ! Set timescale
          nn%tref=ve%trelax
       end block create_viscoelastic
       
@@ -341,9 +338,6 @@ contains
          fs%Vold=fs%V
          fs%Wold=fs%W
          
-         ! Remember old scalars
-         ve%SCold=ve%SC
-         
          ! Prepare old staggered density (at n)
          call fs%get_olddensity(vf=vf)
          
@@ -356,18 +350,14 @@ contains
          ! Transport our liquid conformation tensor
          advance_scalar: block
             integer :: nsc
+            ! First add streching/distortion term and relaxation term
+            call ve%get_CgradU(gradU,SCtmp);  resSC=SCtmp
+            call ve%get_relax(SCtmp,time%dt); resSC=resSC+SCtmp
+            ve%SC=ve%SC+time%dt*resSC
+            call ve%apply_bcond(time%t,time%dt)
+            ve%SCold=ve%SC
             ! Explicit calculation of dSC/dt from scalar equation
             call ve%get_dSCdt(dSCdt=resSC,U=fs%U,V=fs%V,W=fs%W,VFold=vf%VFold,VF=vf%VF,detailed_face_flux=vf%detailed_face_flux,dt=time%dt)
-            ! Add streching and distortion term
-            call ve%get_CgradU(gradU,SCtmp)
-            do nsc=1,6
-               resSC(:,:,:,nsc)=resSC(:,:,:,nsc)+vf%VF*SCtmp(:,:,:,nsc)
-            end do
-            ! Add relaxation term
-            call ve%get_relax(SCtmp,time%dt)
-            do nsc=1,6
-               resSC(:,:,:,nsc)=resSC(:,:,:,nsc)+vf%VF*SCtmp(:,:,:,nsc)
-            end do
             ! Update our scalars
             do nsc=1,ve%nscalar
                where (ve%mask.eq.0.and.vf%VF.ne.0.0_WP) ve%SC(:,:,:,nsc)=(vf%VFold*ve%SCold(:,:,:,nsc)+time%dt*resSC(:,:,:,nsc))/vf%VF
@@ -376,8 +366,6 @@ contains
             ! Apply boundary conditions
             call ve%apply_bcond(time%t,time%dt)
          end block advance_scalar
-
-         ! ===================================================
          
          ! Perform sub-iterations
          do while (time%it.le.time%itmax)

@@ -28,7 +28,7 @@ Polymer relaxation time :       0.45         # 1.4           # 0.45
 Maximum polymer extensibility : 10
 
 # Time integration
-Max timestep size : 2e-4
+Max timestep size : 1e-4
 Max cfl number :    2.5
 Max time :          2
 
