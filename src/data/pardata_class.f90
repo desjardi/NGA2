@@ -1,10 +1,11 @@
 !> Parallel data file concept is defined here: given a partitioned grid and
 !> an I/O partition, it provides efficient parallel I/O access to a data file
 module pardata_class
-   use precision,     only: WP
-   use string,        only: str_short,str_medium
-   use pgrid_class,   only: pgrid
-   use coupler_class, only: coupler
+   use precision,      only: WP
+   use string,         only: str_short,str_medium
+   use pgrid_class,    only: pgrid
+   use coupler_class,  only: coupler
+   use datafile_class, only: datafile
    implicit none
    private
    
@@ -22,7 +23,7 @@ module pardata_class
       logical :: ingrp_io
       integer, dimension(3) :: partition_io
       ! Couplers for transfering data for reading and writing
-      type(coupler), allocatable :: wcpl,rcpl
+      type(coupler) :: wcpl,rcpl
       ! Filename for read/write operations
       character(len=str_medium) :: filename
       ! A pardata stores scalar values
@@ -33,20 +34,23 @@ module pardata_class
       integer :: nvar                                                 !< Number of field variables
       character(len=str_short), dimension(:), allocatable :: varname  !< Name of field variables
       real(WP), dimension(:,:,:,:), allocatable :: var                !< Variables (without overlap!)
-      real(WP), dimension(:,:,:,:), allocatable :: var_io             !< Variables for I/O (only allocated when reading/writing)
+      ! A pardata uses a datafile object on the I/O partition
+      type(datafile) :: df                                            !< Datafile object on pg_io for actual i/o
    contains
-      procedure :: initialize                     !< Initialization for pardata
-      procedure, private :: prep_iomap            !< IO group/pgrid/map
-      procedure, private :: findval               !< Function that returns val index if name is found, zero otherwise
-      procedure, private :: findvar               !< Function that returns var index if name is found, zero otherwise
-      procedure :: pushval=>pardata_pushval       !< Push data to pardata
-      procedure :: pullval=>pardata_pullval       !< Pull data from pardata
-      procedure :: pushvar=>pardata_pushvar       !< Push data to pardata
-      procedure :: pullvar=>pardata_pullvar       !< Pull data from pardata
-      procedure :: write=>pardata_write           !< Parallel write a pardata object to disk
-      procedure :: print=>pardata_print           !< Print out debugging info to screen
-      procedure :: log  =>pardata_log             !< Print out debugging info to log
-      final     :: destructor                     !< Destructor for pardata
+      generic :: initialize=>init_from_args,init_from_file            !< Generic initialization for pardata
+      procedure, private :: init_from_args                            !< Initialize an empty pardata object from arguments
+      procedure, private :: init_from_file                            !< Initialize a pardata object from an existing file
+      procedure, private :: prep_iomap                                !< IO group/pgrid/map
+      procedure, private :: findval                                   !< Function that returns val index if name is found, zero otherwise
+      procedure, private :: findvar                                   !< Function that returns var index if name is found, zero otherwise
+      procedure :: pushval=>pardata_pushval                           !< Push data to pardata
+      procedure :: pullval=>pardata_pullval                           !< Pull data from pardata
+      procedure :: pushvar=>pardata_pushvar                           !< Push data to pardata
+      procedure :: pullvar=>pardata_pullvar                           !< Pull data from pardata
+      procedure :: write=>pardata_write                               !< Parallel write a pardata object to disk
+      procedure :: print=>pardata_print                               !< Print out debugging info to screen
+      procedure :: log  =>pardata_log                                 !< Print out debugging info to log
+      final     :: destructor                                         !< Destructor for pardata
    end type pardata
    
    
@@ -64,10 +68,10 @@ contains
    end subroutine destructor
    
    
-   !> Prepare the io group/pgrid/map
+   !> Prepare the io group and its pgrid, along with the couplers
    subroutine prep_iomap(this,iopartition)
       use messager, only: die
-      use mpi_f08,  only: MPI_Group_range_incl
+      use mpi_f08,  only: MPI_Group_range_incl,MPI_Group
       implicit none
       class(pardata) :: this
       integer, dimension(3), intent(in) :: iopartition
@@ -106,21 +110,18 @@ contains
    end subroutine prep_iomap
    
    
-   !> Initialization for a pardata object
-   subroutine initialize(this,filename,nval,nvar,iopartition)
+   !> Initialization for an empty pardata object using user-provided arguments
+   subroutine init_from_args(this,pg,iopartition,filename,nval,nvar)
       implicit none
-      class(pardata) :: this
+      class(pardata), intent(inout) :: this
       class(pgrid), target, intent(in) :: pg
+      integer, dimension(3), intent(in) :: iopartition
       character(len=*), intent(in) :: filename
       integer, intent(in) :: nval,nvar
-      integer, dimension(3), intent(in) :: iopartition
       
       ! Link the partitioned grid and store the filename
       this%pg=>pg
       this%filename=trim(adjustl(filename))
-      
-      ! Prepare the IO-specialized partition and map
-      call this%prepare_iomap(iopartition)
       
       ! Allocate storage and store names for vals
       this%nval=nval
@@ -136,152 +137,101 @@ contains
       allocate(this%var(this%pg%imin_:this%pg%imax_,this%pg%jmin_:this%pg%jmax_,this%pg%kmin_:this%pg%kmax_,this%nvar))
       this%var=0.0_WP
       
-   end subroutine initialize
-   
-   
-   !> Constructor for a pardata object based on an existing file
-   function pardata_from_file(pg,fdata) result(self)
-      use param,    only: verbose
-      use messager, only: die
-      use parallel, only: info_mpiio,MPI_REAL_WP
-      use mpi_f08
+      ! Prepare the IO-specialized partition and couplers
+      call this%prep_iomap(iopartition)
+      
+      ! IO processes create a datafile object
+      if (this%ingrp_io) then
+         this%df=datafile(this%pg_io,filename,nval,nvar)
+         deallocate(this%df%var) !< Reduce memory footprint
+      end if
+      
+   end subroutine init_from_args
+
+
+   !> Initialization for a pardata object based on an existing file
+   subroutine init_from_file(this,pg,iopartition,fdata)
+      use parallel, only: MPI_REAL_WP
+      use mpi_f08,  only: MPI_BCAST,MPI_INTEGER,MPI_CHARACTER
       implicit none
-      type(pardata) :: self
-      character(len=*), intent(in) :: fdata
+      class(pardata), intent(inout) :: this
       class(pgrid), target, intent(in) :: pg
+      integer, dimension(3), intent(in) :: iopartition
+      character(len=*), intent(in) :: fdata
       integer :: ierr,n
-      type(MPI_File) :: ifile
-      type(MPI_Status) :: status
-      integer, dimension(5) :: dims
-      integer(kind=MPI_OFFSET_KIND) :: disp
       
       ! Link the partitioned grid and store the filename
-      self%pg=>pg
-      self%filename=trim(adjustl(fdata))
+      this%pg=>pg
+      this%filename=trim(adjustl(fdata))
       
-      ! Prepare the IO-specialized partition and map
-      call self%prepare_iomap(iopartition)
+      ! Prepare the IO-specialized partition and couplers
+      call this%prep_iomap(iopartition)
+      
+      ! IO processes create a datafile object from the file
+      if (this%ingrp_io) this%df=datafile(this%pg_io,fdata)
+      
+      ! Root on pgio (i.e., source root on rcpl) copies this%df serial data into pardata object and broadcasts
+      ! Transfer nval
+      if (this%rcpl%amRoot) this%nval   =this%df%nval   ; call MPI_BCAST(this%nval,1,MPI_INTEGER,this%rcpl%sroot,this%rcpl%comm,ierr)
+      ! Transfer valname
+      allocate(this%valname(this%nval))
+      if (this%rcpl%amRoot) this%valname=this%df%valname; call MPI_BCAST(this%valname,str_short*this%nval,MPI_CHARACTER,this%rcpl%sroot,this%rcpl%comm,ierr)
+      ! Transfer val
+      allocate(this%val(this%nval))
+      if (this%rcpl%amRoot) this%val    =this%df%val    ; call MPI_BCAST(this%val,this%nval,MPI_REAL_WP,this%rcpl%sroot,this%rcpl%comm,ierr)
+      ! Transfer nvar
+      if (this%rcpl%amRoot) this%nvar   =this%df%nvar   ; call MPI_BCAST(this%nvar,1,MPI_INTEGER,this%rcpl%sroot,this%rcpl%comm,ierr)
+      ! Transfer varname
+      allocate(this%varname(this%nvar))
+      if (this%rcpl%amRoot) this%varname=this%df%varname; call MPI_BCAST(this%varname,str_short*this%nval,MPI_CHARACTER,this%rcpl%sroot,this%rcpl%comm,ierr)
+      
+      ! Transfer parallel data using the rcpl
+      allocate(this%var(this%pg%imin_:this%pg%imax_,this%pg%jmin_:this%pg%jmax_,this%pg%kmin_:this%pg%kmax_,this%nvar))
+      do n=1,this%nvar
+         if (this%ingrp_io) call this%rcpl%push(this%df%var(:,:,:,n))
+         call this%rcpl%transfer()
+         call this%rcpl%pull(this%var(:,:,:,n))
+      end do
+      
+      ! Reduce memory footprint
+      deallocate(this%df%var)
 
-      ! First open the file in parallel
-      call MPI_FILE_OPEN(self%pg%comm,trim(self%filename),MPI_MODE_RDONLY,info_mpiio,ifile,ierr)
-      if (ierr.ne.0) call die('[datafile constructor] Problem encountered while reading data file: '//trim(self%filename))
-      
-      ! Read file header first
-      call MPI_FILE_READ_ALL(ifile,dims,5,MPI_INTEGER,status,ierr)
-      
-      ! Throw error if size mismatch
-      if ((dims(1).ne.self%pg%nx).or.(dims(2).ne.self%pg%ny).or.(dims(3).ne.self%pg%nz)) then
-         if (self%pg%amRoot) then
-            print*,'grid size = ',self%pg%nx,self%pg%ny,self%pg%nz
-            print*,'data size = ',dims(1),dims(2),dims(3)
-         end if
-         call die('[datafile constructor] Size of datafile ['//trim(self%filename)//'] does not match pgrid ['//self%pg%name//']')
-      end if
-      if (dims(4).lt.0) call die('[datafile constructor] Number of values cannot be negative')
-      if (dims(5).lt.0) call die('[datafile constructor] Number of variables cannot be negative')
-      
-      ! Allocate necessary storage
-      self%nval=dims(4); allocate(self%valname(self%nval)); allocate(self%val(self%nval))
-      self%nvar=dims(5); allocate(self%varname(self%nvar)); allocate(self%var(self%pg%imin_:self%pg%imax_,self%pg%jmin_:self%pg%jmax_,self%pg%kmin_:self%pg%kmax_,self%nvar))
-      
-      ! Read the names for all the values
-      do n=1,self%nval
-         call MPI_FILE_READ_ALL(ifile,self%valname(n),str_short,MPI_CHARACTER,status,ierr)
-      end do
-      
-      ! Read all the values
-      do n=1,self%nval
-         call MPI_FILE_READ_ALL(ifile,self%val(n),1,MPI_REAL_WP,status,ierr)
-      end do
-      
-      ! Read the names for all the variables
-      do n=1,self%nvar
-         call MPI_FILE_READ_ALL(ifile,self%varname(n),str_short,MPI_CHARACTER,status,ierr)
-      end do
-      
-      ! Read the data for all the variables
-      call MPI_FILE_GET_POSITION(ifile,disp,ierr)
-      do n=1,self%nvar
-         call MPI_FILE_SET_VIEW(ifile,disp,MPI_REAL_WP,self%pg%view,'native',info_mpiio,ierr)
-         call MPI_FILE_READ_ALL(ifile,self%var(:,:,:,n),self%pg%nx_*self%pg%ny_*self%pg%nz_,MPI_REAL_WP,status,ierr)
-         disp=disp+int(self%pg%nx,MPI_OFFSET_KIND)*int(self%pg%ny,MPI_OFFSET_KIND)*int(self%pg%nz,MPI_OFFSET_KIND)*int(WP,MPI_OFFSET_KIND)
-      end do
-      
-      ! Close the file
-      call MPI_FILE_CLOSE(ifile,ierr)
-      
-      ! If verbose run, log and or print grid
-      if (verbose.gt.1) call self%log('Read')
-      if (verbose.gt.2) call self%print('Read')
-      
-   end function pardata_from_file
+   end subroutine init_from_file
    
    
    !> Write a pardata object to a file
    subroutine pardata_write(this,fdata)
-      use param,    only: verbose
-      use messager, only: die
-      use parallel, only: info_mpiio,MPI_REAL_WP
-      use mpi_f08
       implicit none
-      class(pardata), intent(in) :: this
+      class(pardata), intent(inout) :: this
       character(len=*), optional :: fdata
-      integer :: ierr,n,iunit
-      type(MPI_File) :: ifile
-      type(MPI_Status):: status
-      integer(kind=MPI_OFFSET_KIND) :: disp
-      character(len=str_medium) :: filename
+      integer :: n
       
-      ! Choose the filename
-      if (present(fdata)) then
-         filename=trim(adjustl(fdata))
-      else
-         filename=trim(adjustl(this%filename))
+      ! Transfer serial data to this%df
+      if (this%ingrp_io) then
+         this%df%valname=this%valname
+         this%df%val    =this%val
+         this%df%varname=this%varname
+         if (.not.allocated(this%df%var)) allocate(this%df%var(this%df%pg%imin_:this%df%pg%imax_,this%df%pg%jmin_:this%df%pg%jmax_,this%df%pg%kmin_:this%df%pg%kmax_,this%df%nvar))
+         this%df%var=0.0_WP
       end if
       
-      ! Root serial-writes the file header
-      if (this%pg%amRoot) then
-         ! Open the file
-         open(newunit=iunit,file=trim(filename),form='unformatted',status='replace',access='stream',iostat=ierr)
-         if (ierr.ne.0) call die('[datafile write] Problem encountered while serial-opening data file: '//trim(filename))
-         ! Dimensions
-         write(iunit) this%pg%nx,this%pg%ny,this%pg%nz,this%nval,this%nvar
-         ! Name of all values
-         do n=1,this%nval
-            write(iunit) this%valname(n)
-         end do
-         ! Write all values
-         do n=1,this%nval
-            write(iunit) this%val(n)
-         end do
-         ! Name of all variables
-         do n=1,this%nvar
-            write(iunit) this%varname(n)
-         end do
-         ! Close the file
-         close(iunit)
-      end if
-      
-      ! The rest is done in parallel
-      call MPI_FILE_OPEN(this%pg%comm,trim(filename),IOR(MPI_MODE_WRONLY,MPI_MODE_APPEND),info_mpiio,ifile,ierr)
-      if (ierr.ne.0) call die('[datafile write] Problem encountered while parallel-opening data file: '//trim(filename))
-      
-      ! Get current position
-      call MPI_FILE_GET_POSITION(ifile,disp,ierr)
-      
-      ! Write all variables
-      do n=1,this%nvar
-         call MPI_FILE_SET_VIEW(ifile,disp,MPI_REAL_WP,this%pg%view,'native',info_mpiio,ierr)
-         call MPI_FILE_WRITE_ALL(ifile,this%var(:,:,:,n),this%pg%nx_*this%pg%ny_*this%pg%nz_,MPI_REAL_WP,status,ierr)
-         disp=disp+int(this%pg%nx,MPI_OFFSET_KIND)*int(this%pg%ny,MPI_OFFSET_KIND)*int(this%pg%nz,MPI_OFFSET_KIND)*int(WP,MPI_OFFSET_KIND)
+      ! Transfer parallel data using the wcpl
+      do n=1,this%df%nvar
+         call this%wcpl%push(this%var(:,:,:,n))
+         call this%wcpl%transfer()
+         if (this%ingrp_io) call this%wcpl%pull(this%df%var(:,:,:,n))
       end do
-      
-      ! Close the file
-      call MPI_FILE_CLOSE(ifile,ierr)
-      
-      ! If verbose run, log and or print grid
-      if (verbose.gt.1) call this%log('Wrote')
-      if (verbose.gt.2) call this%print('Wrote')
+
+      ! Now perform write operation on pgio
+      if (this%ingrp_io) then
+         if (present(fdata)) then
+            call this%df%write(fdata)
+         else
+            call this%df%write()
+         end if
+         ! Reduce memory footprint
+         deallocate(this%df%var)
+      end if
       
    end subroutine pardata_write
    
