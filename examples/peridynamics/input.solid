@@ -1,0 +1,25 @@
+# Parallelization
+Partition :	8 1 1
+
+# Mesh definition
+Lx :	5
+Ly :	2
+Lz :	0.025
+nx :	200
+ny :	80
+nz :	1
+
+# Solid model
+Solid dx : 0.0125
+Elastic Modulus : 192.0e9
+Poisson Ratio : 0.25
+Density : 8000.0
+Critical Energy Release Rate : 147456.0
+
+# Time integration
+Max timestep size : 1e-2
+Max cfl number :    0.9
+Max time :          10
+
+# Ensight output
+Ensight output period :  1e-1
