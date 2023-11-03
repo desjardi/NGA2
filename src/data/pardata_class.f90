@@ -43,10 +43,12 @@ module pardata_class
       procedure, private :: prep_iomap                                !< IO group/pgrid/map
       procedure, private :: findval                                   !< Function that returns val index if name is found, zero otherwise
       procedure, private :: findvar                                   !< Function that returns var index if name is found, zero otherwise
-      procedure :: pushval=>pardata_pushval                           !< Push data to pardata
-      procedure :: pullval=>pardata_pullval                           !< Pull data from pardata
-      procedure :: pushvar=>pardata_pushvar                           !< Push data to pardata
-      procedure :: pullvar=>pardata_pullvar                           !< Pull data from pardata
+      generic :: push=>pushval,pushvar                                !< Generic data push
+      procedure, private :: pushval                                   !< Push data to pardata
+      procedure, private :: pushvar                                   !< Push data to pardata
+      generic :: pull=>pullval,pullvar                                !< Generic data pull
+      procedure, private :: pullval                                   !< Pull data from pardata
+      procedure, private :: pullvar                                   !< Pull data from pardata
       procedure :: write=>pardata_write                               !< Parallel write a pardata object to disk
       procedure :: print=>pardata_print                               !< Print out debugging info to screen
       procedure :: log  =>pardata_log                                 !< Print out debugging info to log
@@ -287,7 +289,7 @@ contains
    
    
    !> Push data to a val
-   subroutine pardata_pushval(this,name,val)
+   subroutine pushval(this,name,val)
       use messager, only: die
       implicit none
       class(pardata), intent(inout) :: this
@@ -300,11 +302,11 @@ contains
       else
          call die('[pardata pushval] Val does not exist in the data file: '//name)
       end if
-   end subroutine pardata_pushval
+   end subroutine pushval
    
    
    !> Pull data from a val
-   subroutine pardata_pullval(this,name,val)
+   subroutine pullval(this,name,val)
       use messager, only: die
       implicit none
       class(pardata), intent(in) :: this
@@ -317,7 +319,7 @@ contains
       else
          call die('[pardata pullval] Val does not exist in the data file: '//name)
       end if
-   end subroutine pardata_pullval
+   end subroutine pullval
    
    
    !> Index finding for var
@@ -335,7 +337,7 @@ contains
    
    
    !> Push data to a var
-   subroutine pardata_pushvar(this,name,var)
+   subroutine pushvar(this,name,var)
       use messager, only: die
       implicit none
       class(pardata), intent(inout) :: this
@@ -348,11 +350,11 @@ contains
       else
          call die('[pardata pushvar] Var does not exist in the data file: '//name)
       end if
-   end subroutine pardata_pushvar
+   end subroutine pushvar
    
    
    !> Pull data from a var and synchronize it
-   subroutine pardata_pullvar(this,name,var)
+   subroutine pullvar(this,name,var)
       use messager, only: die
       implicit none
       class(pardata), intent(in) :: this
@@ -366,7 +368,7 @@ contains
       else
          call die('[pardata pullvar] Var does not exist in the data file: '//name)
       end if
-   end subroutine pardata_pullvar
+   end subroutine pullvar
    
    
 end module pardata_class
