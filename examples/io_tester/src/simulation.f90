@@ -94,7 +94,7 @@ contains
          call wf%write()
       end block create_pardata_write
       
-
+      
       ! Create another pardata object for reading
       create_pardata_read: block
          use param, only: param_read
@@ -106,14 +106,15 @@ contains
          call rf%initialize(pg=cfg,iopartition=iopartition,fdata='test.file')
          ! Compare our data
          allocate(test(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
-         call rf%pull(name='val1',val=val ); if (cfg%amRoot) print*,'val1 error',abs(test-1.0_WP)
-         call rf%pull(name='val2',val=val ); if (cfg%amRoot) print*,'val2 error',abs(test-2.0_WP)
-         call rf%pull(name='var1',var=Var1); 
-         call rf%pull(name='var2',var=Var2); 
-         call rf%pull(name='var3',var=Var3); 
+         call rf%pull(name='val1',val=val ); if (cfg%amRoot) print*,'val1 error',abs(val-1.0_WP)
+         call rf%pull(name='val2',val=val ); if (cfg%amRoot) print*,'val2 error',abs(val-2.0_WP)
+         call rf%pull(name='var1',var=test); call cfg%integrate(A=abs(test-Var1),integral=val); if (cfg%amRoot) print*,'var1 error',val
+         call rf%pull(name='var2',var=test); call cfg%integrate(A=abs(test-Var2),integral=val); if (cfg%amRoot) print*,'var2 error',val
+         call rf%pull(name='var3',var=test); call cfg%integrate(A=abs(test-Var3),integral=val); if (cfg%amRoot) print*,'var3 error',val
          ! Try writing again to another name
          call rf%write(fdata='another.file')
       end block create_pardata_read
+      
       
    end subroutine simulation_init
    

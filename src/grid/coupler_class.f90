@@ -460,7 +460,7 @@ contains
       real(WP), dimension(this%src%imino_:,this%src%jmino_:,this%src%kmino_:), intent(in) :: A !< Needs to be (src%imino_:src%imaxo_,src%jmino_:src%jmaxo_,src%kmino_:src%kmaxo_)
       integer :: n
       ! Allocate send buffer
-      if (this%nsend.gt.0) allocate(this%data_send(this%nsend))
+      if (.not.allocated(this%data_send)) allocate(this%data_send(this%nsend))
       ! Fill buffer
       do n=1,this%nsend
          this%data_send(n)=(       this%w(3,n))*((       this%w(2,n))*((       this%w(1,n))*A(this%srcind(1,n)+1,this%srcind(2,n)+1,this%srcind(3,n)+1)  + &
@@ -500,8 +500,9 @@ contains
       implicit none
       class(coupler), intent(inout) :: this
       integer :: ierr
-      ! Allocate recv buffer
-      if (this%nrecv.gt.0) allocate(this%data_recv(this%nrecv))
+      ! Allocate recv buffer (and maybe send buffer too)
+      if (.not.allocated(this%data_recv)) allocate(this%data_recv(this%nrecv))
+      if (.not.allocated(this%data_send)) allocate(this%data_send(this%nsend))
       ! Transfer data
       call MPI_ALLtoALLv(this%data_send,this%nsend_proc,this%nsend_disp,MPI_REAL_WP,this%data_recv,this%nrecv_proc,this%nrecv_disp,MPI_REAL_WP,this%comm,ierr)
       ! Deallocate send buffer

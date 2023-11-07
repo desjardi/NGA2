@@ -33,7 +33,7 @@ module pardata_class
       ! A pardata stores real(WP) variables of pgrid-compatible size
       integer :: nvar                                                 !< Number of field variables
       character(len=str_short), dimension(:), allocatable :: varname  !< Name of field variables
-      real(WP), dimension(:,:,:,:), allocatable :: var                !< Variables (without overlap!)
+      real(WP), dimension(:,:,:,:), allocatable :: var                !< Variables (this is with overlap!)
       ! A pardata uses a datafile object on the I/O partition
       type(datafile) :: df                                            !< Datafile object on pg_io for actual i/o
    contains
@@ -100,12 +100,12 @@ contains
       if (this%ingrp_io) this%pg_io=pgrid(this%pg%sgrid,iogrp,this%partition_io)
       
       ! Prepare coupler for writing
-      this%wcpl=coupler(src_grp=this%pg%group,dst_grp=this%pg_io%group,name='write')
+      this%wcpl=coupler(src_grp=this%pg%group,dst_grp=iogrp,name='write')
       call this%wcpl%set_src(this%pg); if (this%ingrp_io) call this%wcpl%set_dst(this%pg_io)
       call this%wcpl%initialize()
       
       ! Prepare coupler for reading
-      this%rcpl=coupler(src_grp=this%pg_io%group,dst_grp=this%pg%group,name='read')
+      this%rcpl=coupler(src_grp=iogrp,dst_grp=this%pg%group,name='read')
       if (this%ingrp_io) call this%rcpl%set_src(this%pg_io); call this%rcpl%set_dst(this%pg)
       call this%rcpl%initialize()
       
@@ -136,7 +136,7 @@ contains
       this%nvar=nvar
       allocate(this%varname(this%nvar))
       this%varname=''
-      allocate(this%var(this%pg%imin_:this%pg%imax_,this%pg%jmin_:this%pg%jmax_,this%pg%kmin_:this%pg%kmax_,this%nvar))
+      allocate(this%var(this%pg%imino_:this%pg%imaxo_,this%pg%jmino_:this%pg%jmaxo_,this%pg%kmino_:this%pg%kmaxo_,this%nvar))
       this%var=0.0_WP
       
       ! Prepare the IO-specialized partition and couplers
@@ -154,12 +154,13 @@ contains
    !> Initialization for a pardata object based on an existing file
    subroutine init_from_file(this,pg,iopartition,fdata)
       use parallel, only: MPI_REAL_WP
-      use mpi_f08,  only: MPI_BCAST,MPI_INTEGER,MPI_CHARACTER
+      use mpi_f08,  only: MPI_BARRIER,MPI_BCAST,MPI_INTEGER,MPI_CHARACTER
       implicit none
       class(pardata), intent(inout) :: this
       class(pgrid), target, intent(in) :: pg
       integer, dimension(3), intent(in) :: iopartition
       character(len=*), intent(in) :: fdata
+      real(WP), dimension(:,:,:), allocatable :: temp
       integer :: ierr,n
       
       ! Link the partitioned grid and store the filename
@@ -170,7 +171,10 @@ contains
       call this%prep_iomap(iopartition)
       
       ! IO processes create a datafile object from the file
-      if (this%ingrp_io) this%df=datafile(this%pg_io,fdata)
+      if (this%ingrp_io) then
+         this%df=datafile(this%pg_io,fdata)
+         allocate(temp(this%df%pg%imino_:this%df%pg%imaxo_,this%df%pg%jmino_:this%df%pg%jmaxo_,this%df%pg%kmino_:this%df%pg%kmaxo_))
+      end if
       
       ! Root on pgio (i.e., source root on rcpl) copies this%df serial data into pardata object and broadcasts
       ! Transfer nval
@@ -185,28 +189,35 @@ contains
       if (this%rcpl%amRoot) this%nvar   =this%df%nvar   ; call MPI_BCAST(this%nvar,1,MPI_INTEGER,this%rcpl%sroot,this%rcpl%comm,ierr)
       ! Transfer varname
       allocate(this%varname(this%nvar))
-      if (this%rcpl%amRoot) this%varname=this%df%varname; call MPI_BCAST(this%varname,str_short*this%nval,MPI_CHARACTER,this%rcpl%sroot,this%rcpl%comm,ierr)
+      if (this%rcpl%amRoot) this%varname=this%df%varname; call MPI_BCAST(this%varname,str_short*this%nvar,MPI_CHARACTER,this%rcpl%sroot,this%rcpl%comm,ierr)
       
       ! Transfer parallel data using the rcpl
-      allocate(this%var(this%pg%imin_:this%pg%imax_,this%pg%jmin_:this%pg%jmax_,this%pg%kmin_:this%pg%kmax_,this%nvar))
+      allocate(this%var(this%pg%imino_:this%pg%imaxo_,this%pg%jmino_:this%pg%jmaxo_,this%pg%kmino_:this%pg%kmaxo_,this%nvar))
       do n=1,this%nvar
-         if (this%ingrp_io) call this%rcpl%push(this%df%var(:,:,:,n))
+         if (this%ingrp_io) then
+            temp(this%df%pg%imin_:this%df%pg%imax_,this%df%pg%jmin_:this%df%pg%jmax_,this%df%pg%kmin_:this%df%pg%kmax_)=this%df%var(:,:,:,n)
+            call this%df%pg%sync(temp)
+            call this%rcpl%push(temp)
+         end if
          call this%rcpl%transfer()
          call this%rcpl%pull(this%var(:,:,:,n))
+         call MPI_BARRIER(this%pg%comm,ierr)
       end do
       
       ! Reduce memory footprint
-      deallocate(this%df%var)
-
+      if (this%ingrp_io) deallocate(this%df%var,temp)
+      
    end subroutine init_from_file
    
    
    !> Write a pardata object to a file
    subroutine pardata_write(this,fdata)
+      use mpi_f08, only: MPI_BARRIER
       implicit none
       class(pardata), intent(inout) :: this
       character(len=*), optional :: fdata
-      integer :: n
+      real(WP), dimension(:,:,:), allocatable :: temp
+      integer :: n,ierr
       
       ! Transfer serial data to this%df
       if (this%ingrp_io) then
@@ -214,16 +225,21 @@ contains
          this%df%val    =this%val
          this%df%varname=this%varname
          if (.not.allocated(this%df%var)) allocate(this%df%var(this%df%pg%imin_:this%df%pg%imax_,this%df%pg%jmin_:this%df%pg%jmax_,this%df%pg%kmin_:this%df%pg%kmax_,this%df%nvar))
+         allocate(temp(this%df%pg%imino_:this%df%pg%imaxo_,this%df%pg%jmino_:this%df%pg%jmaxo_,this%df%pg%kmino_:this%df%pg%kmaxo_))
          this%df%var=0.0_WP
       end if
       
       ! Transfer parallel data using the wcpl
-      do n=1,this%df%nvar
+      do n=1,this%nvar
          call this%wcpl%push(this%var(:,:,:,n))
          call this%wcpl%transfer()
-         if (this%ingrp_io) call this%wcpl%pull(this%df%var(:,:,:,n))
+         if (this%ingrp_io) then
+            call this%wcpl%pull(temp)
+            this%df%var(:,:,:,n)=temp(this%df%pg%imin_:this%df%pg%imax_,this%df%pg%jmin_:this%df%pg%jmax_,this%df%pg%kmin_:this%df%pg%kmax_)
+         end if
+         call MPI_BARRIER(this%pg%comm,ierr)
       end do
-
+      
       ! Now perform write operation on pgio
       if (this%ingrp_io) then
          if (present(fdata)) then
@@ -232,7 +248,7 @@ contains
             call this%df%write()
          end if
          ! Reduce memory footprint
-         deallocate(this%df%var)
+         deallocate(this%df%var,temp)
       end if
       
    end subroutine pardata_write
@@ -346,7 +362,7 @@ contains
       integer :: n
       n=this%findvar(name)
       if (n.gt.0) then
-         this%var(:,:,:,n)=var(this%pg%imin_:this%pg%imax_,this%pg%jmin_:this%pg%jmax_,this%pg%kmin_:this%pg%kmax_)
+         this%var(:,:,:,n)=var
       else
          call die('[pardata pushvar] Var does not exist in the data file: '//name)
       end if
@@ -363,7 +379,7 @@ contains
       integer :: n
       n=this%findvar(name)
       if (n.gt.0) then
-         var(this%pg%imin_:this%pg%imax_,this%pg%jmin_:this%pg%jmax_,this%pg%kmin_:this%pg%kmax_)=this%var(:,:,:,n)
+         var=this%var(:,:,:,n)
          call this%pg%sync(var)
       else
          call die('[pardata pullvar] Var does not exist in the data file: '//name)
