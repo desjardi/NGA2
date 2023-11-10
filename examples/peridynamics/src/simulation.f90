@@ -29,7 +29,7 @@ contains
       call solid%init()
 
       ! Initialize fluid simulation
-      call fluid%init()
+      !call fluid%init()
       
    end subroutine simulation_init
    
@@ -45,7 +45,7 @@ contains
          call solid%step()
          
          ! Advance fluid simulation
-         call fluid%step(ls=solid%ls)
+         !call fluid%step(ls=solid%ls)
          
       end do
       
@@ -60,7 +60,7 @@ contains
       call solid%final()
 
       ! Finalize fluid simulation
-      call fluid%final()
+      !call fluid%final()
       
    end subroutine simulation_final
    

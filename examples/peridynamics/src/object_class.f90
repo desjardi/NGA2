@@ -120,7 +120,7 @@ contains
          call this%input%read('Critical Energy Release Rate',this%ls%crit_energy)
          
          this%ls%dV=dx**3
-         this%ls%delta=0.0016_WP
+         this%ls%delta=3.0_WP*dx
          
          ! Only root process initializes solid particles
          if (this%ls%cfg%amRoot) then
@@ -130,7 +130,7 @@ contains
             nz=int(Lz/dx)
             allocate(x(1:nx+1),y(1:ny+1),z(1:nz+1))
             do i=1,nx+1
-               x(i)=real(i-1,WP)*dx-0.5_WP*Lx
+               x(i)=real(i-1,WP)*dx-0.5_WP*Lx-0.25_WP*this%cfg%xL
             end do
             do j=1,ny+1
                y(j)=real(j-1,WP)*dx-0.5_WP*Ly
@@ -151,7 +151,7 @@ contains
                      ! Set position
                      this%ls%p(np)%pos=[grid%xm(i),grid%ym(j),grid%zm(k)]
                      ! Set object id and velocity
-                     this%ls%p(np)%id=-2
+                     this%ls%p(np)%id=1
                      this%ls%p(np)%vel=0.0_WP
                      ! Zero out force
                      this%ls%p(np)%Abond=0.0_WP

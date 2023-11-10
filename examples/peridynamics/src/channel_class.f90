@@ -121,6 +121,7 @@ contains
       create_flow_solver: block
          use incomp_class, only: dirichlet,clipped_neumann
          use incomp_class, only: bcond
+         use random,       only: random_normal
          type(bcond), pointer :: mybc
          integer :: i,j,k,n
          real(WP) :: visc,Uin
@@ -136,10 +137,21 @@ contains
          this%ps=fft2d(cfg=this%cfg,name='Pressure',nst=7)
          ! Setup the solver
          call this%fs%setup(pressure_solver=this%ps)
-         ! Zero initial field
-         this%fs%U=0.0_WP; this%fs%V=0.0_WP; this%fs%W=0.0_WP
          ! Read inflow velocity
          call this%input%read('Inlet velocity',Uin)
+         ! Random initial field
+         do k=this%fs%cfg%kmin_,this%fs%cfg%kmax_
+            do j=this%fs%cfg%jmin_,this%fs%cfg%jmax_
+               do i=this%fs%cfg%imin_,this%fs%cfg%imax_
+                  this%fs%U(i,j,k)=random_normal(m=0.0_WP,sd=0.01_WP*Uin)
+                  this%fs%V(i,j,k)=random_normal(m=0.0_WP,sd=0.01_WP*Uin)
+                  this%fs%W(i,j,k)=random_normal(m=0.0_WP,sd=0.01_WP*Uin)
+               end do
+            end do
+         end do
+         call this%fs%cfg%sync(this%fs%U)
+         call this%fs%cfg%sync(this%fs%V)
+         call this%fs%cfg%sync(this%fs%W)
          ! Apply inflow condition
          call this%fs%get_bcond('inflow',mybc)
          do n=1,mybc%itr%no_
