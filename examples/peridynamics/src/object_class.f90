@@ -111,7 +111,7 @@ contains
          
          ! Discretize plate
          call this%input%read('Solid dx',dx)
-         Lx=0.20_WP; Ly=0.20_WP; Lz=0.025_WP
+         Lx=0.20_WP; Ly=0.20_WP; Lz=0.20_WP
          
          ! Set material properties
          call this%input%read('Elastic Modulus',this%ls%elastic_modulus)

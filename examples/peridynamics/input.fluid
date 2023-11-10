@@ -4,14 +4,14 @@ Partition :	8 1 1
 # Mesh definition
 Lx :	5
 Ly :	2
-Lz :	0.025
+Lz :	2
 nx :	200
 ny :	80
-nz :	1
+nz :	80
 
 # Fluid properties and velocity
 Density :             1
-Dynamic viscosity :   0.002
+Dynamic viscosity :   0.001
 Inlet velocity :      1
 
 # Pressure solver
