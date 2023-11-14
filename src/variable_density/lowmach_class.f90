@@ -1035,16 +1035,19 @@ contains
                      do n=1,my_bc%itr%n_
                         i=my_bc%itr%map(1,n); j=my_bc%itr%map(2,n); k=my_bc%itr%map(3,n)
                         this%U(i,j,k)=0.0_WP
+                        this%rhoU(i,j,k)=0.0_WP
                      end do
                   case ('y')
                      do n=1,my_bc%itr%n_
                         i=my_bc%itr%map(1,n); j=my_bc%itr%map(2,n); k=my_bc%itr%map(3,n)
                         this%V(i,j,k)=0.0_WP
+                        this%rhoV(i,j,k)=0.0_WP
                      end do
                   case ('z')
                      do n=1,my_bc%itr%n_
                         i=my_bc%itr%map(1,n); j=my_bc%itr%map(2,n); k=my_bc%itr%map(3,n)
                         this%W(i,j,k)=0.0_WP
+                        this%rhoW(i,j,k)=0.0_WP
                      end do
                   end select
                end if
