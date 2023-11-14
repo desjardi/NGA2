@@ -35,6 +35,7 @@ module lss_class
       real(WP), dimension(3) :: pos          !< Particle center coordinates
       real(WP), dimension(3) :: vel          !< Velocity of particle
       real(WP), dimension(3) :: Abond        !< Bond acceleration for particle
+      real(WP), dimension(3) :: Afluid       !< Fluid acceleration for particle
       !> MPI_INTEGER data
       integer :: id                          !< ID the object is associated with
       integer :: i                           !< Unique index of particle (assumed >0)
@@ -45,7 +46,7 @@ module lss_class
    end type part
    !> Number of blocks, block length, and block types in a particle
    integer, parameter                         :: part_nblock=2
-   integer           , dimension(part_nblock) :: part_lblock=[11+max_bond,7+max_bond]
+   integer           , dimension(part_nblock) :: part_lblock=[14+max_bond,7+max_bond]
    type(MPI_Datatype), dimension(part_nblock) :: part_tblock=[MPI_DOUBLE_PRECISION,MPI_INTEGER]
    !> MPI_PART derived datatype and size
    type(MPI_Datatype) :: MPI_PART
@@ -535,7 +536,7 @@ contains
       ! Advance velocity based on old force and position based on mid-velocity
       do n=1,this%np_
          ! Advance with Verlet scheme
-         if (this%p(n)%id.gt.-1) this%p(n)%vel=this%p(n)%vel+0.5_WP*dt*(this%gravity+this%p(n)%Abond)
+         if (this%p(n)%id.gt.-1) this%p(n)%vel=this%p(n)%vel+0.5_WP*dt*(this%gravity+this%p(n)%Abond+this%p(n)%Afluid)
          if (this%p(n)%id.gt.-2) this%p(n)%pos=this%p(n)%pos+dt*this%p(n)%vel
          ! Relocalize
          this%p(n)%ind=this%cfg%get_ijk_global(this%p(n)%pos,this%p(n)%ind)
@@ -565,7 +566,7 @@ contains
       ! Advance velocity only based on new force
       do n=1,this%np_
          ! Advance with Verlet scheme
-         if (this%p(n)%id.gt.-1) this%p(n)%vel=this%p(n)%vel+0.5_WP*dt*(this%gravity+this%p(n)%Abond)
+         if (this%p(n)%id.gt.-1) this%p(n)%vel=this%p(n)%vel+0.5_WP*dt*(this%gravity+this%p(n)%Abond+this%p(n)%Afluid)
       end do
       
       ! Log/screen output
@@ -606,6 +607,8 @@ contains
       ! Advance the equations
       dti=1.0_WP/dt
       do i=1,this%np_
+         ! Zero out fluid force
+         this%p(i)%Afluid=0.0_WP
          ! Interpolate the velocity to the particle location
          vel=0.0_WP
          if (this%cfg%nx.gt.1) vel(1)=this%interpolate(A=U,xp=this%p(i)%pos(1),yp=this%p(i)%pos(2),zp=this%p(i)%pos(3),ip=this%p(i)%ind(1),jp=this%p(i)%ind(2),kp=this%p(i)%ind(3),dir='U')
@@ -618,6 +621,8 @@ contains
          if (this%cfg%nx.gt.1) call this%extrapolate(Ap=src(1),xp=this%p(i)%pos(1),yp=this%p(i)%pos(2),zp=this%p(i)%pos(3),ip=this%p(i)%ind(1),jp=this%p(i)%ind(2),kp=this%p(i)%ind(3),A=this%srcU,dir='U')
          if (this%cfg%ny.gt.1) call this%extrapolate(Ap=src(2),xp=this%p(i)%pos(1),yp=this%p(i)%pos(2),zp=this%p(i)%pos(3),ip=this%p(i)%ind(1),jp=this%p(i)%ind(2),kp=this%p(i)%ind(3),A=this%srcV,dir='V')
          if (this%cfg%nz.gt.1) call this%extrapolate(Ap=src(3),xp=this%p(i)%pos(1),yp=this%p(i)%pos(2),zp=this%p(i)%pos(3),ip=this%p(i)%ind(1),jp=this%p(i)%ind(2),kp=this%p(i)%ind(3),A=this%srcW,dir='W')
+         ! Form the force on particle
+         this%p(i)%Afluid=-rho_*src*dti/this%rho
       end do
       
       ! Sum at boundaries
