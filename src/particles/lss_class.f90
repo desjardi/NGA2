@@ -622,7 +622,7 @@ contains
          if (this%cfg%ny.gt.1) call this%extrapolate(Ap=src(2),xp=this%p(i)%pos(1),yp=this%p(i)%pos(2),zp=this%p(i)%pos(3),ip=this%p(i)%ind(1),jp=this%p(i)%ind(2),kp=this%p(i)%ind(3),A=this%srcV,dir='V')
          if (this%cfg%nz.gt.1) call this%extrapolate(Ap=src(3),xp=this%p(i)%pos(1),yp=this%p(i)%pos(2),zp=this%p(i)%pos(3),ip=this%p(i)%ind(1),jp=this%p(i)%ind(2),kp=this%p(i)%ind(3),A=this%srcW,dir='W')
          ! Form the force on particle
-         this%p(i)%Afluid=-rho_*src*dti/this%rho
+         this%p(i)%Afluid=-rho_*src*dti/(this%rho*this%dV)
       end do
       
       ! Sum at boundaries

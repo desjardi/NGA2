@@ -11,15 +11,15 @@ nz :	80
 
 # Solid model
 Solid dx : 0.0125
-Elastic Modulus : 4
+Elastic Modulus : 100
 Poisson Ratio : 0.25
-Density : 2
+Density : 100
 Critical Energy Release Rate : 1000
 
 # Time integration
 Max timestep size : 1e-2
 Max cfl number :    0.9
-Max time :          10
+Max time :          100
 
 # Ensight output
 Ensight output period :  1e-1
