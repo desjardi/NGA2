@@ -143,9 +143,9 @@ contains
          do k=this%fs%cfg%kmin_,this%fs%cfg%kmax_
             do j=this%fs%cfg%jmin_,this%fs%cfg%jmax_
                do i=this%fs%cfg%imin_,this%fs%cfg%imax_
-                  this%fs%U(i,j,k)=random_normal(m=0.0_WP,sd=0.01_WP*Uin)
-                  this%fs%V(i,j,k)=random_normal(m=0.0_WP,sd=0.01_WP*Uin)
-                  this%fs%W(i,j,k)=random_normal(m=0.0_WP,sd=0.01_WP*Uin)
+                  this%fs%U(i,j,k)=Uin+random_normal(m=0.0_WP,sd=0.01_WP*Uin)
+                  this%fs%V(i,j,k)=    random_normal(m=0.0_WP,sd=0.01_WP*Uin)
+                  this%fs%W(i,j,k)=    random_normal(m=0.0_WP,sd=0.01_WP*Uin)
                end do
             end do
          end do

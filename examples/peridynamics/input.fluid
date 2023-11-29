@@ -11,7 +11,7 @@ nz :	80
 
 # Fluid properties and velocity
 Density :             1
-Dynamic viscosity :   0.0007
+Dynamic viscosity :   0.0005
 Inlet velocity :      1
 
 # Pressure solver

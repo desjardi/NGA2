@@ -99,19 +99,11 @@ contains
       ! Initialize Lagrangian solid solver
       initialize_lss: block
          use sgrid_class, only: sgrid,cartesian
-         integer :: i,j,k,nx,ny,nz,np
-         real(WP) :: dx
-         real(WP) :: Lx,Ly,Lz
-         real(WP) :: ft
-         real(WP), dimension(:), allocatable :: x,y,z
-         type(sgrid) :: grid
+         real(WP) :: dx,mu,kk,max_stretch
+         integer :: np
          
          ! Create solver
          this%ls=lss(cfg=this%cfg,name='solid')
-         
-         ! Discretize plate
-         call this%input%read('Solid dx',dx)
-         Lx=0.20_WP; Ly=0.20_WP; Lz=0.20_WP
          
          ! Set material properties
          call this%input%read('Elastic Modulus',this%ls%elastic_modulus)
@@ -119,52 +111,119 @@ contains
          call this%input%read('Density',this%ls%rho)
          call this%input%read('Critical Energy Release Rate',this%ls%crit_energy)
          
+         ! Discretization
+         call this%input%read('Solid dx',dx)
          this%ls%dV=dx**3
          this%ls%delta=3.0_WP*dx
-         
+
+         ! Output some info on stretch
+         mu=this%ls%elastic_modulus/(2.0_WP+2.0_WP*this%ls%poisson_ratio)
+         kk=this%ls%elastic_modulus/(3.0_WP-6.0_WP*this%ls%poisson_ratio)
+         max_stretch=sqrt(this%ls%crit_energy/((3.0_WP*mu+(kk-5.0_WP*mu/3.0_WP)*0.75_WP**4)*this%ls%delta))
+         if (this%ls%cfg%amRoot) print*,'Maximum stretching =',max_stretch
+
          ! Only root process initializes solid particles
          if (this%ls%cfg%amRoot) then
-            ! Create simple rectilinear grid
-            nx=int(Lx/dx)
-            ny=int(Ly/dx)
-            nz=int(Lz/dx)
-            allocate(x(1:nx+1),y(1:ny+1),z(1:nz+1))
-            do i=1,nx+1
-               x(i)=real(i-1,WP)*dx-0.5_WP*Lx-0.25_WP*this%cfg%xL
-            end do
-            do j=1,ny+1
-               y(j)=real(j-1,WP)*dx-0.5_WP*Ly
-            end do
-            do k=1,nz+1
-               z(k)=real(k-1,WP)*dx-0.5_WP*Lz
-            end do
-            ! General serial grid object
-            grid=sgrid(coord=cartesian,no=1,x=x,y=y,z=z,xper=.false.,yper=.false.,zper=.false.,name='elements')
-            ! Loop over mesh and create particles
-            np=0
-            do k=1,nz
-               do j=1,ny
-                  do i=1,nx
-                     ! Increment particle
-                     np=np+1
-                     call this%ls%resize(np)
-                     ! Set position
-                     this%ls%p(np)%pos=[grid%xm(i),grid%ym(j),grid%zm(k)]
-                     ! Set object id and velocity
-                     this%ls%p(np)%id=1
-                     this%ls%p(np)%vel=0.0_WP
-                     ! Zero out force
-                     this%ls%p(np)%Abond=0.0_WP
-                     this%ls%p(np)%Afluid=0.0_WP
-                     ! Locate the particle on the mesh
-                     this%ls%p(np)%ind=this%ls%cfg%get_ijk_global(this%ls%p(np)%pos,[this%ls%cfg%imin,this%ls%cfg%jmin,this%ls%cfg%kmin])
-                     ! Assign a unique integer to particle
-                     this%ls%p(np)%i=np
-                     ! Activate the particle
-                     this%ls%p(np)%flag=0
+            ! First object =====================
+            object1: block
+               integer :: i,j,k,nx,ny,nz
+               real(WP) :: Lx,Ly,Lz
+               real(WP), dimension(:), allocatable :: x,y,z
+               type(sgrid) :: grid
+               ! Object size
+               Lx=0.20_WP; Ly=0.20_WP; Lz=0.20_WP
+               ! Create simple rectilinear grid
+               nx=int(Lx/dx)
+               ny=int(Ly/dx)
+               nz=int(Lz/dx)
+               allocate(x(1:nx+1),y(1:ny+1),z(1:nz+1))
+               do i=1,nx+1
+                  x(i)=real(i-1,WP)*dx-0.5_WP*Lx-0.25_WP*this%cfg%xL
+               end do
+               do j=1,ny+1
+                  y(j)=real(j-1,WP)*dx-0.5_WP*Ly
+               end do
+               do k=1,nz+1
+                  z(k)=real(k-1,WP)*dx-0.5_WP*Lz
+               end do
+               ! General serial grid object
+               grid=sgrid(coord=cartesian,no=1,x=x,y=y,z=z,xper=.false.,yper=.false.,zper=.false.,name='elements')
+               ! Loop over mesh and create particles
+               np=0
+               do k=1,nz
+                  do j=1,ny
+                     do i=1,nx
+                        ! Increment particle
+                        np=np+1
+                        call this%ls%resize(np)
+                        ! Set position
+                        this%ls%p(np)%pos=[grid%xm(i),grid%ym(j),grid%zm(k)]
+                        ! Set object id and velocity
+                        this%ls%p(np)%id=1
+                        this%ls%p(np)%vel=0.0_WP
+                        ! Zero out force
+                        this%ls%p(np)%Abond=0.0_WP
+                        this%ls%p(np)%Afluid=0.0_WP
+                        ! Locate the particle on the mesh
+                        this%ls%p(np)%ind=this%ls%cfg%get_ijk_global(this%ls%p(np)%pos,[this%ls%cfg%imin,this%ls%cfg%jmin,this%ls%cfg%kmin])
+                        ! Assign a unique integer to particle
+                        this%ls%p(np)%i=np
+                        ! Activate the particle
+                        this%ls%p(np)%flag=0
+                     end do
                   end do
                end do
-            end do
+            end block object1
+            ! Second object =====================
+            object2: block
+               integer :: i,j,k,nx,ny,nz
+               real(WP) :: Lx,Ly,Lz
+               real(WP), dimension(:), allocatable :: x,y,z
+               type(sgrid) :: grid
+               ! Object size
+               Lx=0.20_WP; Ly=0.20_WP; Lz=0.20_WP
+               ! Create simple rectilinear grid
+               nx=int(Lx/dx)
+               ny=int(Ly/dx)
+               nz=int(Lz/dx)
+               allocate(x(1:nx+1),y(1:ny+1),z(1:nz+1))
+               do i=1,nx+1
+                  x(i)=real(i-1,WP)*dx+1.0_WP*Lx-0.25_WP*this%cfg%xL
+               end do
+               do j=1,ny+1
+                  y(j)=real(j-1,WP)*dx-0.3_WP*Ly
+               end do
+               do k=1,nz+1
+                  z(k)=real(k-1,WP)*dx-0.5_WP*Lz
+               end do
+               ! General serial grid object
+               grid=sgrid(coord=cartesian,no=1,x=x,y=y,z=z,xper=.false.,yper=.false.,zper=.false.,name='elements')
+               ! Loop over mesh and create particles
+               !np=this%ls%np
+               do k=1,nz
+                  do j=1,ny
+                     do i=1,nx
+                        ! Increment particle
+                        np=np+1
+                        call this%ls%resize(np)
+                        ! Set position
+                        this%ls%p(np)%pos=[grid%xm(i),grid%ym(j),grid%zm(k)]
+                        ! Set object id and velocity
+                        this%ls%p(np)%id=2
+                        this%ls%p(np)%vel=0.0_WP
+                        ! Zero out force
+                        this%ls%p(np)%Abond=0.0_WP
+                        this%ls%p(np)%Afluid=0.0_WP
+                        ! Locate the particle on the mesh
+                        this%ls%p(np)%ind=this%ls%cfg%get_ijk_global(this%ls%p(np)%pos,[this%ls%cfg%imin,this%ls%cfg%jmin,this%ls%cfg%kmin])
+                        ! Assign a unique integer to particle
+                        this%ls%p(np)%i=np
+                        ! Activate the particle
+                        this%ls%p(np)%flag=0
+                     end do
+                  end do
+               end do
+            end block object2
          end if
          
          ! Communicate particles
