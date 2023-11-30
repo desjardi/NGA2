@@ -170,7 +170,7 @@ contains
                         this%ls%p(np)%pos=[grid%xm(i),grid%ym(j),grid%zm(k)]
                         ! Set object id and velocity
                         if (this%ls%p(np)%pos(2).gt.10.0_WP*dx) then
-                           this%ls%p(np)%id=0
+                           this%ls%p(np)%id=+1
                         else
                            this%ls%p(np)%id=-2
                         end if

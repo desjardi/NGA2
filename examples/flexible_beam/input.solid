@@ -11,10 +11,10 @@ nz :	128
 
 # Solid model
 Solid dx : 0.04
-Elastic Modulus : 10
+Elastic Modulus : 1e3
 Poisson Ratio : 0.25
-Density : 100
-Critical Energy Release Rate : 1
+Density : 1e3
+Critical Energy Release Rate : 1e8
 
 # Time integration
 Max timestep size : 1e-2
