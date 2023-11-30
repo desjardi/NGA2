@@ -169,7 +169,11 @@ contains
                         ! Set position
                         this%ls%p(np)%pos=[grid%xm(i),grid%ym(j),grid%zm(k)]
                         ! Set object id and velocity
-                        this%ls%p(np)%id=-2
+                        if (this%ls%p(np)%pos(2).gt.10.0_WP*dx) then
+                           this%ls%p(np)%id=0
+                        else
+                           this%ls%p(np)%id=-2
+                        end if
                         this%ls%p(np)%vel=0.0_WP
                         ! Zero out force
                         this%ls%p(np)%Abond=0.0_WP
