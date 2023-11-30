@@ -394,9 +394,6 @@ contains
                      if (this%fs%umask(i,j,k).eq.0) this%fs%U(i,j,k)=this%fs%U(i,j,k)+ls%srcU(i,j,k)
                      if (this%fs%vmask(i,j,k).eq.0) this%fs%V(i,j,k)=this%fs%V(i,j,k)+ls%srcV(i,j,k)
                      if (this%fs%wmask(i,j,k).eq.0) this%fs%W(i,j,k)=this%fs%W(i,j,k)+ls%srcW(i,j,k)
-                     !if (this%fs%umask(i,j,k).eq.0) this%fs%U(i,j,k)=(1.0_WP-ls%VF(i,j,k))*this%fs%U(i,j,k)
-                     !if (this%fs%vmask(i,j,k).eq.0) this%fs%V(i,j,k)=(1.0_WP-ls%VF(i,j,k))*this%fs%V(i,j,k)
-                     !if (this%fs%wmask(i,j,k).eq.0) this%fs%W(i,j,k)=(1.0_WP-ls%VF(i,j,k))*this%fs%W(i,j,k)
                   end do
                end do
             end do
