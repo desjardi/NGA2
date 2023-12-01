@@ -1,20 +1,21 @@
 # Parallelization
-Partition :	8 1 1
+Partition :	4 1 2
 
 # Mesh definition
-Lx :	20
+Lx :	10
 Ly :	10
 Lz :	10
-nx :	256
+nx :	128
 ny :	128
 nz :	128
 
 # Droplet position
-Droplet position : -5 3 0
+Droplet position : -4 4 -0.5
+Gravity : 0 -0.1 0
 
-# Fluid properties and velocity
-Reynolds number :      100
-Weber number :         10
+# Fluid properties
+Reynolds number :      200
+Weber number :         20
 Viscosity ratio :      50
 Density ratio :        1000
 

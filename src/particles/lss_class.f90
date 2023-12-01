@@ -68,7 +68,7 @@ module lss_class
       real(WP) :: rho                                     !< Density of the material
       real(WP) :: crit_energy                             !< Critical energy release
       real(WP) :: dV                                      !< Element volume
-
+      
       ! Bonding parameters
       real(WP) :: delta                                   !< Bonding horizon (distance)
       integer :: nb                                       !< Cell-based horizon 

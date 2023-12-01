@@ -230,6 +230,7 @@ contains
          call this%input%read('Reynolds number',this%fs%visc_g); this%fs%visc_g=1.0_WP/this%fs%visc_g
          call this%input%read('Viscosity ratio',this%fs%visc_l); this%fs%visc_l=this%fs%visc_g*this%fs%visc_l
          call this%input%read('Weber number',this%fs%sigma); this%fs%sigma=1.0_WP/this%fs%sigma
+         call this%input%read('Gravity',this%fs%gravity)
          ! Define inflow boundary condition on the left
          call this%fs%add_bcond(name='inflow',type=dirichlet,face='x',dir=-1,canCorrect=.false.,locator=xm_locator)
          ! Define outflow boundary condition on the right
@@ -245,13 +246,15 @@ contains
          this%vs=ddadi(cfg=this%cfg,name='Velocity',nst=7)
          ! Setup the solver
          call this%fs%setup(pressure_solver=this%ps,implicit_solver=this%vs)
-         ! Apply convective velocity
-         call this%fs%get_bcond('inflow',mybc)
-         do n=1,mybc%itr%no_
-            i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
-            this%fs%U(i,j,k)=1.0_WP
-         end do
-         where (this%cfg%VF.gt.0.0_WP) this%fs%U=1.0_WP
+         ! Apply initial velocity everywhere
+         !call this%fs%get_bcond('inflow',mybc)
+         !do n=1,mybc%itr%no_
+         !   i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
+         !   this%fs%U(i,j,k)=1.0_WP
+         !end do
+         !where (this%cfg%VF.gt.0.0_WP) this%fs%U=1.0_WP
+         ! Apply initial velocity to the droplet only
+         where (this%vf%VF.gt.0.0_WP) this%fs%U=1.0_WP
          ! Compute cell-centered velocity
          call this%fs%interp_vel(this%Ui,this%Vi,this%Wi)
          ! Compute divergence
@@ -361,6 +364,9 @@ contains
          
          ! Explicit calculation of drho*u/dt from NS
          call this%fs%get_dmomdt(this%resU,this%resV,this%resW)
+         
+         ! Add momentum source terms
+			call this%fs%addsrc_gravity(this%resU,this%resV,this%resW)
          
          ! Assemble explicit residual
          this%resU=-2.0_WP*this%fs%rho_U*this%fs%U+(this%fs%rho_Uold+this%fs%rho_U)*this%fs%Uold+this%time%dt*this%resU

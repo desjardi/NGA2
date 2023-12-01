@@ -120,6 +120,7 @@ contains
          call this%input%read('Poisson Ratio',this%ls%poisson_ratio)
          call this%input%read('Density',this%ls%rho)
          call this%input%read('Critical Energy Release Rate',this%ls%crit_energy)
+         call this%input%read('Gravity',this%ls%gravity)
          
          ! Discretization
          call this%input%read('Solid dx',dx)
