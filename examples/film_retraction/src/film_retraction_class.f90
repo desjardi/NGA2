@@ -55,6 +55,9 @@ module film_retraction_class
       procedure :: final                           !< Finalize nozzle simulation
    end type film_retraction
    
+   ! Initial sheet edge
+   integer :: nwave
+   real(WP), dimension(:), allocatable :: wnumb,wshift,wamp
    
    !> Hardcode size of buffer layer for VOF removal
    integer, parameter :: nlayer=5
@@ -68,11 +71,18 @@ contains
       implicit none
       real(WP), dimension(3),intent(in) :: xyz
       real(WP), intent(in) :: t
-      real(WP) :: G
-      if (xyz(1).lt.0.0_WP) then
+      real(WP) :: G,edge
+      integer :: n
+      ! Get edge location as a function of z
+      edge=0.0_WP
+      do n=1,nwave
+         edge=edge+wamp(n)*cos(wnumb(n)*(xyz(3)-wshift(n)))
+      end do
+      ! Build sheet
+      if (xyz(1).lt.edge) then
          G=0.5_WP-abs(xyz(2))
       else
-         G=0.5_WP-sqrt(xyz(1)**2+xyz(2)**2)
+         G=0.5_WP-sqrt((xyz(1)-edge)**2+xyz(2)**2)
       end if
    end function levelset_film
    
@@ -144,14 +154,27 @@ contains
          use vfs_class, only: VFlo,VFhi,elvira,r2p
          use mms_geom,  only: cube_refine_vol
          use param,     only: param_read
-         integer :: i,j,k,n,si,sj,sk
+         use mathtools, only: twoPi
+         use random,    only: random_uniform
+         use parallel,  only: MPI_REAL_WP
+         use mpi_f08
+         integer :: i,j,k,n,si,sj,sk,ierr
          real(WP), dimension(3,8) :: cube_vertex
          real(WP), dimension(3) :: v_cent,a_cent
          real(WP) :: vol,area
          integer, parameter :: amr_ref_lvl=4
          ! Create a VOF solver
          call this%vf%initialize(cfg=this%cfg,reconstruction_method=elvira,name='VOF')
-         ! Initialize to a ligament
+         ! Generate sheet distortion
+         nwave=6
+         allocate(wnumb(nwave),wshift(nwave),wamp(nwave))
+         wamp=1.0_WP
+         wnumb=[3.0_WP,4.0_WP,5.0_WP,6.0_WP,7.0_WP,8.0_WP]*twoPi/this%cfg%zL
+         do n=1,6
+            wshift(n)=random_uniform(lo=-0.5_WP*this%cfg%zL,hi=+0.5_WP*this%cfg%zL)
+         end do
+         call MPI_BCAST(wshift,nwave,MPI_REAL_WP,0,this%cfg%comm,ierr)
+         ! Initialize to a distorted sheet
          do k=this%vf%cfg%kmino_,this%vf%cfg%kmaxo_
             do j=this%vf%cfg%jmino_,this%vf%cfg%jmaxo_
                do i=this%vf%cfg%imino_,this%vf%cfg%imaxo_
@@ -209,7 +232,6 @@ contains
          use param,           only: param_read
          use tpns_class,      only: dirichlet,clipped_neumann,slip
          use hypre_str_class, only: pcg_pfmg2
-         integer :: n,i,j,k      
          ! Create flow solver
          this%fs=tpns(cfg=this%cfg,name='Two-phase NS')
          ! Set fluid properties

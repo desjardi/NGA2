@@ -2,20 +2,20 @@
 Partition :	1 1 8
 
 # Mesh definition
-Lx : 42.666666667
-Ly : 21.333333333
-Lz : 42.666666667
-nx : 256
-ny : 128
-nz : 256
+Lx : 32
+Ly : 16
+Lz : 32
+nx : 128
+ny : 64
+nz : 128
 
 # Physical parameters
-Ohnesorge number : 0.1
-Density ratio :    1000
-Viscosity ratio :  50
+Ohnesorge number :     0.1
+Density ratio :        1000
+Viscosity ratio :      50
 
 # Time integration
-Max timestep size : 1e-2
+Max timestep size : 2.5e-2
 Max cfl number :    1.0
 Max time :          200
 
