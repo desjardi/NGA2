@@ -232,6 +232,7 @@ contains
          use param,           only: param_read
          use tpns_class,      only: dirichlet,clipped_neumann,slip
          use hypre_str_class, only: pcg_pfmg2
+         integer :: i,j,k
          ! Create flow solver
          this%fs=tpns(cfg=this%cfg,name='Two-phase NS')
          ! Set fluid properties
@@ -240,6 +241,8 @@ contains
          this%fs%sigma=1.0_WP
          call param_read('Ohnesorge number',this%fs%visc_l)
          call param_read('Viscosity ratio',this%fs%visc_g); this%fs%visc_g=this%fs%visc_l/this%fs%visc_g
+         ! Assign acceleration
+         call param_read('Acceleration',this%fs%gravity)
          ! Define inflow boundary condition on the left
          call this%fs%add_bcond(name='inflow' ,type=dirichlet      ,face='x',dir=-1,canCorrect=.false.,locator=xm_locator)
          ! Define outflow boundary condition on the right
@@ -259,7 +262,13 @@ contains
          ! Read in the inflow velocity
          call param_read('Inflow velocity',this%Uin,default=sqrt(2.0_WP))
          ! Apply inflow velocity everywhere
-         this%fs%U=this%Uin
+         do k=this%cfg%kmino_,this%cfg%kmaxo_
+            do j=this%cfg%jmino_,this%cfg%jmaxo_
+               do i=this%cfg%imino_,this%cfg%imaxo_
+                  if (this%vf%VF(i,j,k).gt.0.0_WP) this%fs%U(i,j,k)=this%Uin
+               end do
+            end do
+         end do
          ! Compute cell-centered velocity
          call this%fs%interp_vel(this%Ui,this%Vi,this%Wi)
          ! Compute divergence
@@ -375,6 +384,9 @@ contains
          
          ! Explicit calculation of drho*u/dt from NS
          call this%fs%get_dmomdt(this%resU,this%resV,this%resW)
+         
+         ! Add acceleration source term
+         call this%fs%addsrc_gravity(this%resU,this%resV,this%resW)
          
          ! Assemble explicit residual
          this%resU=-2.0_WP*this%fs%rho_U*this%fs%U+(this%fs%rho_Uold+this%fs%rho_U)*this%fs%Uold+this%time%dt*this%resU
