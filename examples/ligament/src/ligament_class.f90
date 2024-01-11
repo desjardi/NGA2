@@ -161,8 +161,6 @@ contains
          integer, parameter :: amr_ref_lvl=4
          ! Create a VOF solver
          call this%vf%initialize(cfg=this%cfg,reconstruction_method=r2p,name='VOF')
-         this%vf%thin_thld_max=1.5_WP
-         this%vf%twoplane_thld2=0.8_WP
          ! Initialize to a ligament
          do k=this%vf%cfg%kmino_,this%vf%cfg%kmaxo_
             do j=this%vf%cfg%jmino_,this%vf%cfg%jmaxo_
