@@ -1,0 +1,24 @@
+# Parallelization
+Partition :	1 1 8 
+
+# Mesh definition
+Lx : 5
+nx : 96
+
+# Droplet properties
+Droplet diameter :        2.0
+Droplet injection time :  2                ! is multiplied by eddy turnover-time
+Weber number :            50
+Viscosity ratio :         1
+Density ratio :           1
+
+# Time integration
+Max timestep size : 5e-3
+Max cfl number :    0.9
+
+# Pressure solver parameters
+Pressure iteration : 20
+Pressure tolerance : 1e-5
+
+# Ensight output
+Ensight output period : 1e-1

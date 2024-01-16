@@ -108,24 +108,18 @@ contains
          end do
       end block create_distance
       
-
+      
       ! Create CCL
       create_ccl: block
-         integer :: i,j,k
          ! Initialize CCL
          call ccl%initialize(cfg=cfg,name='ccl_test')
-         ! Tag the cells
-         do k=cfg%kmino_,cfg%kmaxo_
-            do j=cfg%jmino_,cfg%jmaxo_
-               do i=cfg%imino_,cfg%imaxo_
-                  if (G(i,j,k).lt.0.0_WP) ccl%tagged(i,j,k)=.true.
-               end do
-            end do
-         end do
-         ! Perform CCL
-         call ccl%build()
+         ! Tag the cells and perform CCL
+         ccl%tagged=.false.; where(G.lt.0.0_WP) ccl%tagged=.true.; call ccl%build()
+         ! Do it again to check robustness
+         ccl%tagged=.false.; where(G.lt.0.0_WP) ccl%tagged=.true.; call ccl%build()
       end block create_ccl
       
+
       ! Ensight output
       ensight_output: block
          ens=ensight(cfg=cfg,name='ccl_test')

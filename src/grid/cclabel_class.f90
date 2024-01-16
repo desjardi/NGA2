@@ -127,7 +127,7 @@ contains
             end if
          end do; end do; end do
       end block first_pass
-
+      
       ! Now collapse the tree, count the cells and resolve periodicity in each structure
       collapse_tree: block
          integer :: i,j,k
@@ -319,7 +319,7 @@ contains
          ! Clean up
          deallocate(ownper,allper)
       end block periodicity_update
-
+      
       ! One more pass for domain boundaries
       boundary_handling: block
          use mpi_f08, only: MPI_ALLREDUCE,MPI_MIN,MPI_MAX,MPI_INTEGER
@@ -606,6 +606,8 @@ contains
       end if
       ! Zero structures
       this%nstruct=0
+      ! Reset id to zero
+      this%id=0
    end subroutine empty
    
    
