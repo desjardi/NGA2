@@ -188,7 +188,7 @@ contains
 
       ! Initialize our VOF solver
       create_vof: block
-         use vfs_class,only: r2p,lvira,VFhi,VFlo
+         use vfs_class,only: r2p,elvira,VFhi,VFlo
          use mpi_f08,  only: MPI_WTIME
          use string,   only: str_medium,lowercase
          integer :: i,j,k,n,si,sj,sk,curvature_method,stencil_size,hf_backup_method
@@ -199,7 +199,7 @@ contains
          integer, parameter :: amr_ref_lvl=5
          real(WP) :: start, finish
          ! Create a VOF solver with r2p reconstruction
-         call vf%initialize(cfg=cfg,reconstruction_method=lvira,name='VOF')
+         call vf%initialize(cfg=cfg,reconstruction_method=elvira,name='VOF')
          ! Initialize droplet parameters
          call param_read('Droplet diameter',radius); radius=0.5_WP*radius
          call param_read('Droplet position',center,default=[0.5_WP*cfg%xL,0.5_WP*cfg%yL,0.5_WP*cfg%zL])
@@ -244,19 +244,7 @@ contains
          call fs%interp_vel(Ui,Vi,Wi)
          call fs%get_div()
       end block create_and_initialize_flow_solver
-
-      ! Create surfmesh object for interface polygon output
-      create_smesh: block
-         use irl_fortran_interface
-         integer :: i,j,k,nplane,np
-         ! Include an extra variable for number of planes
-         smesh=surfmesh(nvar=1,name='plic')
-         smesh%varname(1)='curv'
-         ! Transfer polygons to smesh
-         call vf%update_surfmesh(smesh)
-         call add_surfgrid_variable(smesh,1,vf%curv)      
-      end block create_smesh
-
+      
       ! Prepare initial velocity field
       initialize_velocity: block
          use random,    only: random_normal
@@ -325,6 +313,31 @@ contains
          ! Tag liquid cells and perform CCL
          ccl%tagged=.false.; where (vf%VF.gt.0.0_WP) ccl%tagged=.true.; call ccl%build()
       end block create_ccl
+
+      ! Create surfmesh object for interface polygon output
+      create_smesh: block
+         use irl_fortran_interface
+         integer :: i,j,k,nplane,np
+         ! Include an extra variable for number of planes
+         smesh=surfmesh(nvar=1,name='plic')
+         smesh%varname(1)='id'
+         ! Transfer polygons to smesh
+         call vf%update_surfmesh(smesh)
+         ! Also populate id variable
+         smesh%var(1,:)=0.0_WP
+         np=0
+         do k=vf%cfg%kmin_,vf%cfg%kmax_
+            do j=vf%cfg%jmin_,vf%cfg%jmax_
+               do i=vf%cfg%imin_,vf%cfg%imax_
+                  do nplane=1,getNumberOfPlanes(vf%liquid_gas_interface(i,j,k))
+                     if (getNumberOfVertices(vf%interface_polygon(nplane,i,j,k)).gt.0) then
+                        np=np+1; smesh%var(1,np)=real(ccl%id(i,j,k),WP)
+                     end if
+                  end do
+               end do
+            end do
+         end do
+      end block create_smesh
 
       ! Add Ensight output
       create_ensight: block
@@ -532,10 +545,24 @@ contains
          if (ens_evt%occurs()) then
             ! Update surfmesh object
             update_smesh: block
+               use irl_fortran_interface
+               integer :: i,j,k,nplane,np
                ! Transfer polygons to smesh
                call vf%update_surfmesh(smesh)
-               ! Populate curv variable
-               call add_surfgrid_variable(smesh,1,vf%curv)      
+               ! Also populate id variable
+               smesh%var(1,:)=0.0_WP
+               np=0
+               do k=vf%cfg%kmin_,vf%cfg%kmax_
+                  do j=vf%cfg%jmin_,vf%cfg%jmax_
+                     do i=vf%cfg%imin_,vf%cfg%imax_
+                        do nplane=1,getNumberOfPlanes(vf%liquid_gas_interface(i,j,k))
+                           if (getNumberOfVertices(vf%interface_polygon(nplane,i,j,k)).gt.0) then
+                              np=np+1; smesh%var(1,np)=real(ccl%id(i,j,k),WP)
+                           end if
+                        end do
+                     end do
+                  end do
+               end do
             end block update_smesh
             call ens_out%write_data(time%t)
          end if
@@ -551,39 +578,6 @@ contains
       end do
       
    end subroutine simulation_run
-
-   !> Make a surface scalar variable
-   subroutine add_surfgrid_variable(smesh,var_index,A)
-      use irl_fortran_interface, only: getNumberOfPlanes,getNumberOfVertices
-      implicit none
-      class(surfmesh), intent(inout) :: smesh
-      integer, intent(in) :: var_index
-      real(WP), dimension(vf%cfg%imino_:vf%cfg%imaxo_,vf%cfg%jmino_:vf%cfg%jmaxo_,vf%cfg%kmino_:vf%cfg%kmaxo_), intent(in) :: A 
-      integer :: i,j,k,shape,np,nplane
-      
-      ! Fill out arrays
-      if (smesh%nPoly.gt.0) then
-         np=0
-         do k=vf%cfg%kmin_,vf%cfg%kmax_
-            do j=vf%cfg%jmin_,vf%cfg%jmax_
-               do i=vf%cfg%imin_,vf%cfg%imax_
-                  do nplane=1,getNumberOfPlanes(vf%liquid_gas_interface(i,j,k))
-                     shape=getNumberOfVertices(vf%interface_polygon(nplane,i,j,k))
-                     if (shape.gt.0) then
-                        ! Increment polygon counter
-                        np=np+1
-                        ! Set nplane variable
-                        smesh%var(var_index,np)=A(i,j,k)
-                     end if
-                  end do
-               end do
-            end do
-         end do
-      else
-         smesh%var(var_index,1)=1
-      end if
-
-   end subroutine add_surfgrid_variable
    
    ! Initialize our VOF field
    subroutine insert_drop(vf)
