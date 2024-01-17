@@ -1,6 +1,7 @@
 # Break-up of a Droplet in Homogeneous-Isotropic-Turbulence
 
-- The density and viscosity ratios are variable.
+- The density ratio is kept equal to unity.
+- The viscosity ratio is variable.
 - The specific quantities to set in the `input` file are:
     - `Droplet diameter`, `position`, and `injection time` (which is expressed in terms of eddy-turnover times)
     - The `Weber number`, defined as in [Risso, F. & Fabre, J. 1998 Oscillations and breakup of a bubble immersed in a turbulent field. J. Fluid Mech. 372, 323–355](https://doi.org/10.1017/S0022112098002705)

@@ -6,6 +6,7 @@ PRECISION = DOUBLE
 USE_MPI   = TRUE
 USE_HYPRE = TRUE
 USE_IRL   = TRUE
+USE_FFTW  = TRUE
 USE_LAPACK= TRUE
 PROFILE   = FALSE
 DEBUG     = FALSE
@@ -26,7 +27,7 @@ VPATH_LOCATIONS   += $(Ulocs)
 include $(NGA_HOME)/tools/GNUMake/Make.defs
 
 # Include NGA base code
-Bdirs   := core two_phase data solver config grid libraries
+Bdirs   := core two_phase data transform solver config grid libraries
 Bpack   += $(foreach dir, $(Bdirs), $(NGA_HOME)/src/$(dir)/Make.package)
 include $(Bpack)
 

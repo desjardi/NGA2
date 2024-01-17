@@ -2,7 +2,7 @@
 module simulation
    use precision,         only: WP
    use geometry,          only: cfg,nx,Lx
-   use hypre_str_class,   only: hypre_str
+   use fft3d_class,       only: fft3d
    use tpns_class,        only: tpns
    use vfs_class,         only: vfs
    use timetracker_class, only: timetracker
@@ -15,7 +15,7 @@ module simulation
    private
    
    !> Single-phase incompressible flow solver, pressure and implicit solvers, and a time tracker
-   type(hypre_str),   public :: ps
+   type(fft3d),       public :: ps
    type(tpns),        public :: fs
    type(timetracker), public :: time
    type(vfs),         public :: vf
@@ -25,7 +25,7 @@ module simulation
  
    !> Ensight postprocessing
    type(ensight)  :: ens_out
-   type(event)    :: ens_evt
+   type(event)    :: ens_evt,inj_evt
    type(surfmesh) :: smesh
   
    !> Simulation monitor file
@@ -57,6 +57,21 @@ module simulation
 
 contains
    
+   !> Function that identifies cells that need a label
+   logical function make_label(i,j,k)
+      integer, intent(in) :: i,j,k
+      if (vf%VF(i,j,k).gt.0.0_WP) then
+         make_label=.true.
+      else
+         make_label=.false.
+      end if
+   end function make_label
+
+   !> Function that identifies if cell pairs have same label
+   logical function same_label(i1,j1,k1,i2,j2,k2)
+      integer, intent(in) :: i1,j1,k1,i2,j2,k2
+      same_label=.true.
+   end function same_label
    
    !> Function that defines a level set function for a cylinder
    function levelset_sphere(xyz,t) result(G)
@@ -123,13 +138,13 @@ contains
       
       ! Allocate work arrays
       allocate_work_arrays: block
-         allocate(resU(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
-         allocate(resV(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
-         allocate(resW(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
-         allocate(Ui  (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
-         allocate(Vi  (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
-         allocate(Wi  (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
-         allocate(SR  (1:6,cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+         allocate(resU         (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+         allocate(resV         (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+         allocate(resW         (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+         allocate(Ui           (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+         allocate(Vi           (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+         allocate(Wi           (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+         allocate(SR       (1:6,cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
          allocate(gradU(1:3,1:3,cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
       end block allocate_work_arrays
       
@@ -182,10 +197,12 @@ contains
          call param_read('Forcing constant',G,default=max_forcing_estimate)
          Gdtau =G/tauinf
          Gdtaui=1.0_WP/Gdtau
-         ! Droplet injection time (in terms of eddy turnover)
+         ! Read in droplet injection time (in terms of eddy turnover)
          call param_read('Droplet injection time',inject_time,default=1.0_WP); inject_time=inject_time*tauinf
+         ! Create event for droplet injection
+         inj_evt=event(time=time,name='Droplet injection'); inj_evt%tper=inject_time
       end block initialize_hit
-
+      
       ! Initialize our VOF solver
       create_vof: block
          use vfs_class,only: r2p,elvira,VFhi,VFlo
@@ -218,10 +235,9 @@ contains
          ! Reset moments to guarantee compatibility with interface reconstruction
          call vf%reset_volume_moments()
       end block create_vof
-
+      
       ! Create a single-phase flow solver without bconds
       create_and_initialize_flow_solver: block
-         use hypre_str_class, only: pcg_pfmg2
          ! Create flow solver
          fs=tpns(cfg=cfg,name='Two-phase NS')
          ! Assign constant viscosity to each phase
@@ -229,15 +245,12 @@ contains
          call param_read('Viscosity ratio',fs%visc_l); fs%visc_l=fs%visc_l*visc
          ! Assign constant density to each phase
          fs%rho_g=rho
-         call param_read('Density ratio',fs%rho_l); fs%rho_l=fs%rho_l*rho
+         fs%rho_l=rho
          ! Read in surface tension coefficient
          call param_read('Weber number',We_tgt)
-         fs%sigma=2.0_WP*fs%rho_g*EPS0**(2.0_WP/3.0_WP)*(2.0_WP*radius)**(5.0_WP/3.0_WP)/We_tgt ! Based on Risso and Fabre (1998)
+         fs%sigma=2.0_WP*rho*EPS0**(2.0_WP/3.0_WP)*(2.0_WP*radius)**(5.0_WP/3.0_WP)/We_tgt ! Based on Risso and Fabre (1998)
          ! Prepare and configure pressure solver
-         ps=hypre_str(cfg=cfg,name='Pressure',method=pcg_pfmg2,nst=7)
-         ps%maxlevel=16
-         call param_read('Pressure iteration',ps%maxit)
-         call param_read('Pressure tolerance',ps%rcvg)
+         ps=fft3d(cfg=cfg,name='Pressure',nst=7)
          ! Setup the solver
          call fs%setup(pressure_solver=ps)
          ! Calculate cell-centered velocities and divergence
@@ -310,10 +323,9 @@ contains
       ! Create CCL
       create_ccl: block
          call ccl%initialize(cfg=cfg,name='ccl_test')
-         ! Tag liquid cells and perform CCL
-         ccl%tagged=.false.; where (vf%VF.gt.0.0_WP) ccl%tagged=.true.; call ccl%build()
+         call ccl%build(make_label,same_label)
       end block create_ccl
-
+      
       ! Create surfmesh object for interface polygon output
       create_smesh: block
          use irl_fortran_interface
@@ -338,7 +350,7 @@ contains
             end do
          end do
       end block create_smesh
-
+      
       ! Add Ensight output
       create_ensight: block
          ! Create Ensight output from cfg
@@ -363,6 +375,7 @@ contains
          ! Prepare some info about fields
          call fs%get_cfl(time%dt,time%cfl)
          call fs%get_max()
+         call vf%get_max()
          ! Create simulation monitor
          mfile=monitor(fs%cfg%amRoot,'simulation')
          call mfile%add_column(time%n,'Timestep number')
@@ -373,6 +386,12 @@ contains
          call mfile%add_column(fs%Vmax,'Vmax')
          call mfile%add_column(fs%Wmax,'Wmax')
          call mfile%add_column(fs%Pmax,'Pmax')
+         call mfile%add_column(vf%VFmax,'VOF maximum')
+         call mfile%add_column(vf%VFmin,'VOF minimum')
+         call mfile%add_column(vf%VFint,'VOF integral')
+         call mfile%add_column(vf%flotsam_error,'Flotsam error')
+         call mfile%add_column(vf%thinstruct_error,'Film error')
+         call mfile%add_column(vf%SDint,'SD integral')
          call mfile%add_column(fs%divmax,'Maximum divergence')
          call mfile%add_column(fs%psolv%it,'Pressure iteration')
          call mfile%add_column(fs%psolv%rerr,'Pressure error')
@@ -381,6 +400,7 @@ contains
          cflfile=monitor(fs%cfg%amRoot,'cfl')
          call cflfile%add_column(time%n,'Timestep number')
          call cflfile%add_column(time%t,'Time')
+         call cflfile%add_column(fs%CFLst,'STension CFL')
          call cflfile%add_column(fs%CFLc_x,'Convective xCFL')
          call cflfile%add_column(fs%CFLc_y,'Convective yCFL')
          call cflfile%add_column(fs%CFLc_z,'Convective zCFL')
@@ -421,7 +441,7 @@ contains
       use tpns_class, only: arithmetic_visc
       implicit none
       logical :: droplet_inserted=.false.
-
+      
       ! Perform time integration
       do while (.not.time%done())
          
@@ -431,14 +451,32 @@ contains
          call time%increment()
          
          ! Insert droplet
-         if (.not.droplet_inserted.and.time%t.ge.inject_time) then
-            call insert_drop(vf=vf)
-            droplet_inserted=.true.
+         if (.not.droplet_inserted) then
+            if (inj_evt%occurs()) then
+               ! Insert droplet
+               droplet_injection: block
+                  integer :: i,j,k
+                  call insert_drop(vf=vf)
+                  droplet_inserted=.true.
+                  do k=fs%cfg%kmin_,fs%cfg%kmax_
+                     do j=fs%cfg%jmin_,fs%cfg%jmax_
+                        do i=fs%cfg%imin_,fs%cfg%imax_
+                           if (maxval(vf%VF(i-1:i,j,k)).gt.0.0_WP) fs%U(i,j,k)=0.0_WP
+                           if (maxval(vf%VF(i,j-1:j,k)).gt.0.0_WP) fs%V(i,j,k)=0.0_WP
+                           if (maxval(vf%VF(i,j,k-1:k)).gt.0.0_WP) fs%W(i,j,k)=0.0_WP
+                        end do
+                     end do
+                  end do
+                  call fs%cfg%sync(fs%U)
+                  call fs%cfg%sync(fs%V)
+                  call fs%cfg%sync(fs%W)
+               end block droplet_injection
+            end if
          end if
-
+         
          ! Remember old VOF
          vf%VFold=vf%VF
-
+         
          ! Remember old velocity
          fs%Uold=fs%U
          fs%Vold=fs%V
@@ -473,47 +511,48 @@ contains
             resW=-2.0_WP*fs%rho_W*fs%W+(fs%rho_Wold+fs%rho_W)*fs%Wold+time%dt*resW
             
             ! Add linear forcing term based on Bassenne et al. (2016)
-            linear_forcing: block
-               use mpi_f08,  only: MPI_ALLREDUCE,MPI_SUM
-               use parallel, only: MPI_REAL_WP
-               real(WP) :: myTKE,A,myEPSp,EPSp
-               integer :: i,j,k,ierr
-               ! Calculate mean velocity
-               call fs%cfg%integrate(A=fs%U,integral=meanU); meanU=meanU/fs%cfg%vol_total
-               call fs%cfg%integrate(A=fs%V,integral=meanV); meanV=meanV/fs%cfg%vol_total
-               call fs%cfg%integrate(A=fs%W,integral=meanW); meanW=meanW/fs%cfg%vol_total
-               ! Calculate TKE and pseudo-EPS
-               call fs%interp_vel(Ui,Vi,Wi)
-               call fs%get_gradu(gradu=gradU)
-               myTKE=0.0_WP; myEPSp=0.0_WP
-               do k=fs%cfg%kmin_,fs%cfg%kmax_
-                  do j=fs%cfg%jmin_,fs%cfg%jmax_
-                     do i=fs%cfg%imin_,fs%cfg%imax_
-                        myTKE =myTKE +0.5_WP*((Ui(i,j,k)-meanU)**2+(Vi(i,j,k)-meanV)**2+(Wi(i,j,k)-meanW)**2)*fs%cfg%vol(i,j,k)
-                        myEPSp=myEPSp+fs%cfg%vol(i,j,k)*visc*(gradU(1,1,i,j,k)**2+gradU(1,2,i,j,k)**2+gradU(1,3,i,j,k)**2+&
-                        &                                     gradU(2,1,i,j,k)**2+gradU(2,2,i,j,k)**2+gradU(2,3,i,j,k)**2+&
-                        &                                     gradU(3,1,i,j,k)**2+gradU(3,2,i,j,k)**2+gradU(3,3,i,j,k)**2)
+            !if (.not.droplet_inserted) then
+               linear_forcing: block
+                  use mpi_f08,  only: MPI_ALLREDUCE,MPI_SUM
+                  use parallel, only: MPI_REAL_WP
+                  real(WP) :: myTKE,A,myEPSp,EPSp
+                  integer :: i,j,k,ierr
+                  ! Calculate mean velocity
+                  call fs%cfg%integrate(A=fs%U,integral=meanU); meanU=meanU/fs%cfg%vol_total
+                  call fs%cfg%integrate(A=fs%V,integral=meanV); meanV=meanV/fs%cfg%vol_total
+                  call fs%cfg%integrate(A=fs%W,integral=meanW); meanW=meanW/fs%cfg%vol_total
+                  ! Calculate TKE and pseudo-EPS
+                  call fs%interp_vel(Ui,Vi,Wi)
+                  call fs%get_gradu(gradu=gradU)
+                  myTKE=0.0_WP; myEPSp=0.0_WP
+                  do k=fs%cfg%kmin_,fs%cfg%kmax_
+                     do j=fs%cfg%jmin_,fs%cfg%jmax_
+                        do i=fs%cfg%imin_,fs%cfg%imax_
+                           myTKE =myTKE +0.5_WP*((Ui(i,j,k)-meanU)**2+(Vi(i,j,k)-meanV)**2+(Wi(i,j,k)-meanW)**2)*fs%cfg%vol(i,j,k)
+                           myEPSp=myEPSp+fs%cfg%vol(i,j,k)*visc*(gradU(1,1,i,j,k)**2+gradU(1,2,i,j,k)**2+gradU(1,3,i,j,k)**2+&
+                           &                                     gradU(2,1,i,j,k)**2+gradU(2,2,i,j,k)**2+gradU(2,3,i,j,k)**2+&
+                           &                                     gradU(3,1,i,j,k)**2+gradU(3,2,i,j,k)**2+gradU(3,3,i,j,k)**2)
+                        end do
                      end do
                   end do
-               end do
-               call MPI_ALLREDUCE(myTKE ,TKE ,1,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr); TKE =TKE /fs%cfg%vol_total
-               call MPI_ALLREDUCE(myEPSp,EPSp,1,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr); EPSp=EPSp/fs%cfg%vol_total/rho
-               A=(EPSp-Gdtau*(TKE-TKE0))/(2.0_WP*TKE)
-               resU=resU+time%dt*(fs%U-meanU)*A*fs%rho_U
-               resV=resV+time%dt*(fs%V-meanV)*A*fs%rho_V
-               resW=resW+time%dt*(fs%W-meanW)*A*fs%rho_W
-            end block linear_forcing
+                  call MPI_ALLREDUCE(myTKE ,TKE ,1,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr); TKE =TKE /fs%cfg%vol_total
+                  call MPI_ALLREDUCE(myEPSp,EPSp,1,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr); EPSp=EPSp/fs%cfg%vol_total/rho
+                  A=(EPSp-Gdtau*(TKE-TKE0))/(2.0_WP*TKE)
+                  resU=resU+time%dt*(fs%U-meanU)*A*fs%rho_U
+                  resV=resV+time%dt*(fs%V-meanV)*A*fs%rho_V
+                  resW=resW+time%dt*(fs%W-meanW)*A*fs%rho_W
+               end block linear_forcing
+            !end if
             
             ! Apply these residuals
-            fs%U=2.0_WP*fs%U-fs%Uold+resU/fs%rho_U
-            fs%V=2.0_WP*fs%V-fs%Vold+resV/fs%rho_V
-            fs%W=2.0_WP*fs%W-fs%Wold+resW/fs%rho_W
+            fs%U=2.0_WP*fs%U-fs%Uold+resU!/fs%rho_U
+            fs%V=2.0_WP*fs%V-fs%Vold+resV!/fs%rho_V
+            fs%W=2.0_WP*fs%W-fs%Wold+resW!/fs%rho_W
             
             ! Apply other boundary conditions on the resulting fields
             call fs%apply_bcond(time%t,time%dt)
             
             ! Solve Poisson equation
-            call fs%update_laplacian()
             call fs%correct_mfr()
             call fs%get_div()
             call fs%add_surface_tension_jump(dt=time%dt,div=fs%div,vf=vf)
@@ -525,9 +564,9 @@ contains
             ! Correct velocity
             call fs%get_pgrad(fs%psolv%sol,resU,resV,resW)
             fs%P=fs%P+fs%psolv%sol
-            fs%U=fs%U-time%dt*resU/fs%rho_U
-            fs%V=fs%V-time%dt*resV/fs%rho_V
-            fs%W=fs%W-time%dt*resW/fs%rho_W
+            fs%U=fs%U-time%dt*resU!/fs%rho_U
+            fs%V=fs%V-time%dt*resV!/fs%rho_V
+            fs%W=fs%W-time%dt*resW!/fs%rho_W
             
             ! Increment sub-iteration counter
             time%it=time%it+1
@@ -538,8 +577,8 @@ contains
          call fs%interp_vel(Ui,Vi,Wi)
          call fs%get_div()
          
-         ! Tag liquid cells and perform CCL
-         ccl%tagged=.false.; where (vf%VF.gt.0.0_WP) ccl%tagged=.true.; call ccl%build()
+         ! Perform CCL
+         call ccl%build(make_label,same_label)
          
          ! Output to ensight
          if (ens_evt%occurs()) then

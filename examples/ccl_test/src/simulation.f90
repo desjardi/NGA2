@@ -13,6 +13,7 @@ module simulation
    
    !> A level set array
    real(WP), dimension(:,:,:), allocatable :: G
+   integer,  dimension(:,:,:), allocatable :: number
    
    !> Global array of particles
    integer :: np
@@ -25,6 +26,28 @@ module simulation
    public :: simulation_init,simulation_run,simulation_final
    
 contains
+   
+   
+   !> Function that identifies cells that need a label
+   logical function make_label(i,j,k)
+      integer, intent(in) :: i,j,k
+      if (G(i,j,k).lt.0.0_WP) then
+         make_label=.true.
+      else
+         make_label=.false.
+      end if
+   end function make_label
+   
+
+   !> Function that identifies if cell pairs have same label
+   logical function same_label(i1,j1,k1,i2,j2,k2)
+      integer, intent(in) :: i1,j1,k1,i2,j2,k2
+      if (number(i1,j1,k1).eq.number(i2,j2,k2)) then
+         same_label=.true.
+      else
+         same_label=.false.
+      end if
+   end function same_label
    
    
    !> Initialization of our simulation
@@ -90,8 +113,10 @@ contains
       create_distance: block
          integer :: n,i,j,k
          real(WP), dimension(3) :: pos
-         ! Allocate array
+         real(WP) :: dist
+         ! Allocate arrays
          allocate(G(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_)); G=huge(1.0_WP)
+         allocate(number(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_)); number=0
          ! Measure distance from each particle
          do k=cfg%kmino_,cfg%kmaxo_
             do j=cfg%jmino_,cfg%jmaxo_
@@ -101,7 +126,11 @@ contains
                      pos(1)=cfg%xm(i)-xp(1,n); if (pos(1).gt.0.5_WP*cfg%xL) pos(1)=pos(1)-cfg%xL; if (pos(1).lt.-0.5_WP*cfg%xL) pos(1)=pos(1)+cfg%xL
                      pos(2)=cfg%ym(j)-xp(2,n); if (pos(2).gt.0.5_WP*cfg%yL) pos(2)=pos(2)-cfg%yL; if (pos(2).lt.-0.5_WP*cfg%yL) pos(2)=pos(2)+cfg%yL
                      pos(3)=cfg%zm(k)-xp(3,n); if (pos(3).gt.0.5_WP*cfg%zL) pos(3)=pos(3)-cfg%zL; if (pos(3).lt.-0.5_WP*cfg%zL) pos(3)=pos(3)+cfg%zL
-                     G(i,j,k)=min(G(i,j,k),norm2(pos)-0.5_WP*dp(n))
+                     dist=norm2(pos)-0.5_WP*dp(n)
+                     if (dist.lt.G(i,j,k)) then
+                        G(i,j,k)=dist
+                        number(i,j,k)=n
+                     end if
                   end do
                end do
             end do
@@ -113,10 +142,8 @@ contains
       create_ccl: block
          ! Initialize CCL
          call ccl%initialize(cfg=cfg,name='ccl_test')
-         ! Tag the cells and perform CCL
-         ccl%tagged=.false.; where(G.lt.0.0_WP) ccl%tagged=.true.; call ccl%build()
-         ! Do it again to check robustness
-         ccl%tagged=.false.; where(G.lt.0.0_WP) ccl%tagged=.true.; call ccl%build()
+         ! Perform CCL
+         call ccl%build(make_label,same_label)
       end block create_ccl
       
 
@@ -124,6 +151,7 @@ contains
       ensight_output: block
          ens=ensight(cfg=cfg,name='ccl_test')
          call ens%add_scalar('G',G)
+         call ens%add_scalar('number',number)
          call ens%add_scalar('id',ccl%id)
          call ens%write_data(0.0_WP)
       end block ensight_output
