@@ -4,10 +4,10 @@ Partition :	8 1 1
 # Mesh definition
 Lx :	0.1
 Ly :	0.1
-Lz :	0.1
+Lz :	0.001
 nx :	96
 ny :	96
-nz :	96
+nz :	1
 
 # Fluid properties
 Gravity :                     0 -9.81 0
