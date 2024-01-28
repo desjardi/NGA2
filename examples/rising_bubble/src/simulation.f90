@@ -8,6 +8,7 @@ module simulation
    use vfs_class,            only: vfs
    use timetracker_class,    only: timetracker
    use ensight_class,        only: ensight
+   use surfmesh_class,       only: surfmesh
    use event_class,          only: event
    use monitor_class,        only: monitor
    implicit none
@@ -21,11 +22,12 @@ module simulation
    type(timetracker),    public :: time
    
    !> Ensight postprocessing
-   type(ensight) :: ens_out
-   type(event)   :: ens_evt
+   type(surfmesh) :: smesh
+   type(ensight)  :: ens_out
+   type(event)    :: ens_evt
    
    !> Simulation monitor file
-   type(monitor) :: mfile,cflfile
+   type(monitor) :: mfile,cflfile,bubblefile
    
    public :: simulation_init,simulation_run,simulation_final
    
@@ -197,7 +199,14 @@ contains
          call fs%get_div()
       end block create_and_initialize_flow_solver
       
-
+      
+      ! Create surfmesh object for interface polygon output
+      create_smesh: block
+         smesh=surfmesh(nvar=0,name='plic')
+         call vf%update_surfmesh(smesh)
+      end block create_smesh
+      
+      
       ! Add Ensight output
       create_ensight: block
          integer :: nsc
@@ -211,6 +220,7 @@ contains
          call ens_out%add_scalar('VOF',vf%VF)
          call ens_out%add_scalar('pressure',fs%P)
          call ens_out%add_scalar('curvature',vf%curv)
+         call ens_out%add_surface('plic',smesh)
          ! Output to ensight
          if (ens_evt%occurs()) call ens_out%write_data(time%t)
       end block create_ensight
@@ -228,8 +238,6 @@ contains
          mfile=monitor(fs%cfg%amRoot,'simulation')
          call mfile%add_column(time%n,'Timestep number')
          call mfile%add_column(time%t,'Time')
-         call mfile%add_column(Ycent,'Y centroid')
-         call mfile%add_column(Vrise,'Rise velocity')
          call mfile%add_column(time%dt,'Timestep size')
          call mfile%add_column(time%cfl,'Maximum CFL')
          call mfile%add_column(fs%Umax,'Umax')
@@ -255,6 +263,12 @@ contains
          call cflfile%add_column(fs%CFLv_y,'Viscous yCFL')
          call cflfile%add_column(fs%CFLv_z,'Viscous zCFL')
          call cflfile%write()
+         ! Create bubble monitor
+         bubblefile=monitor(fs%cfg%amRoot,'bubble')
+         call bubblefile%add_column(time%n,'Timestep number')
+         call bubblefile%add_column(time%t,'Time')
+         call bubblefile%add_column(Ycent,'Y centroid')
+         call bubblefile%add_column(Vrise,'Rise velocity')
       end block create_monitor
       
       
@@ -289,7 +303,7 @@ contains
          call vf%advance(dt=time%dt,U=fs%U,V=fs%V,W=fs%W)
          
          ! Prepare new staggered viscosity (at n+1)
-         call fs%get_viscosity(vf=vf,strat=arithmetic_visc)
+         call fs%get_viscosity(vf=vf,strat=harmonic_visc)
          
          ! Perform sub-iterations
          do while (time%it.le.time%itmax)
@@ -351,7 +365,10 @@ contains
          call fs%get_div()
          
          ! Output to ensight
-         if (ens_evt%occurs()) call ens_out%write_data(time%t)
+         if (ens_evt%occurs()) then
+            call vf%update_surfmesh(smesh)
+            call ens_out%write_data(time%t)
+         end if
          
          ! Perform and output monitoring
          call fs%get_max()
@@ -359,6 +376,7 @@ contains
          call rise_vel()
          call mfile%write()
          call cflfile%write()
+         call bubblefile%write()
          
       end do
       
