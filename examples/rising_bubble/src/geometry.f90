@@ -7,6 +7,7 @@ module geometry
    
    !> Single config
    type(config), public :: cfg
+   logical, public :: moving_domain
    
    public :: geometry_init
    
@@ -20,6 +21,8 @@ contains
       implicit none
       type(sgrid) :: grid
       
+      ! Check first if we use a moving domain
+      call param_read('Moving domain',moving_domain,default=.false.)
       
       ! Create a grid from input params
       create_grid: block
@@ -38,7 +41,7 @@ contains
             x(i)=real(i-1,WP)/real(nx,WP)*Lx-0.5_WP*Lx
          end do
          do j=1,ny+1
-            y(j)=real(j-1,WP)/real(ny,WP)*Ly
+            y(j)=real(j-1,WP)/real(ny,WP)*Ly-0.5_WP*Ly
          end do
          do k=1,nz+1
             z(k)=real(k-1,WP)/real(nz,WP)*Lz-0.5_WP*Lz
@@ -64,8 +67,6 @@ contains
       ! Create masks for this config
       create_walls: block
          cfg%VF=1.0_WP
-         if (cfg%jproc.eq.1)       cfg%VF(:,cfg%jmino:cfg%jmin-1,:)=0.0_WP
-         if (cfg%jproc.eq.cfg%npy) cfg%VF(:,cfg%jmax+1:cfg%jmaxo,:)=0.0_WP
       end block create_walls
       
       

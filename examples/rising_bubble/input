@@ -1,12 +1,15 @@
 # Parallelization
 Partition :	1 8 1
 
+# Are we using a moving domain?
+Moving domain : .true.
+
 # Mesh definition
 Lx :	0.2
-Ly :	0.4
+Ly :	0.2
 Lz :	0.2
 nx :	128
-ny :	256
+ny :	128
 nz :	128
 
 # Fluid properties
@@ -19,7 +22,7 @@ Surface tension coefficient : 0.0775
 
 # Bubble definition
 Bubble volume :   9.3e-6    # in m^3
-Bubble position : 0 0.1 0
+Bubble position : 0 0 0
 
 # Time integration
 Max timestep size : 2e-3

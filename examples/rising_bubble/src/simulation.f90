@@ -1,7 +1,7 @@
 !> Various definitions and tools for running an NGA2 simulation
 module simulation
    use precision,            only: WP
-   use geometry,             only: cfg
+   use geometry,             only: cfg,moving_domain
    use hypre_str_class,      only: hypre_str
    use ddadi_class,          only: ddadi
    use tpns_class,           only: tpns
@@ -38,6 +38,7 @@ module simulation
    !> Problem definition
    real(WP), dimension(3) :: center,gravity
    real(WP) :: volume,radius,Ycent,Vrise
+   real(WP) :: Vin,Vin_old,Vrise_ref,Ycent_ref,G,ti
    
 contains
 
@@ -51,6 +52,30 @@ contains
       ! Create the bubble
       G=-radius+sqrt(sum((xyz-center)**2))
    end function levelset_rising_bubble
+   
+   
+   !> Function that localizes the y+ side of the domain
+   function yp_locator(pg,i,j,k) result(isIn)
+      use pgrid_class, only: pgrid
+      implicit none
+      class(pgrid), intent(in) :: pg
+      integer, intent(in) :: i,j,k
+      logical :: isIn
+      isIn=.false.
+      if (j.eq.pg%jmax+1) isIn=.true.
+   end function yp_locator
+   
+   
+   !> Function that localizes the y- side of the domain
+   function ym_locator(pg,i,j,k) result(isIn)
+      use pgrid_class, only: pgrid
+      implicit none
+      class(pgrid), intent(in) :: pg
+      integer, intent(in) :: i,j,k
+      logical :: isIn
+      isIn=.false.
+      if (j.eq.pg%jmin) isIn=.true.
+   end function ym_locator
    
    
    !> Routine that computes rise velocity
@@ -118,9 +143,9 @@ contains
          real(WP) :: vol,area
          integer, parameter :: amr_ref_lvl=4
          ! Create a VOF solver
-         call vf%initialize(cfg=cfg,reconstruction_method=elvira,name='VOF',store_detailed_flux=.true.)
+         call vf%initialize(cfg=cfg,reconstruction_method=elvira,name='VOF')
          ! Initialize a bubble
-         call param_read('Bubble position',center)
+         call param_read('Bubble position',center,default=[0.0_WP,0.0_WP,0.0_WP])
          call param_read('Bubble volume',radius)
          radius=(radius*3.0_WP/(4.0_WP*Pi))**(1.0_WP/3.0_WP)
          do k=vf%cfg%kmino_,vf%cfg%kmaxo_
@@ -167,10 +192,24 @@ contains
          call vf%reset_volume_moments()
       end block create_and_initialize_vof
       
+
+      ! Prepare PID controller if domain is moving
+      if (moving_domain) then
+         prepare_controller: block
+            ! Store target data
+            Ycent_ref=center(2)
+            Vrise_ref=0.0_WP
+            ! Controller parameters
+            G=0.5_WP
+            ti=time%dtmax
+         end block prepare_controller
+      end if
+      
       
       ! Create a two-phase flow solver without bconds
       create_and_initialize_flow_solver: block
          use hypre_str_class, only: pcg_pfmg2
+         use tpns_class,      only: clipped_neumann,dirichlet
          ! Create flow solver
          fs=tpns(cfg=cfg,name='Two-phase NS')
          ! Assign constant viscosity to each phase
@@ -183,6 +222,11 @@ contains
          call param_read('Surface tension coefficient',fs%sigma)
          ! Assign acceleration of gravity
          call param_read('Gravity',gravity); fs%gravity=gravity
+         ! Dirichlet inflow at the top and clipped Neumann outflow at the bottom
+         if (moving_domain) then
+            call fs%add_bcond(name='inflow' ,type=dirichlet      ,face='y',dir=+1,canCorrect=.false.,locator=yp_locator)
+            call fs%add_bcond(name='outflow',type=clipped_neumann,face='y',dir=-1,canCorrect=.true. ,locator=ym_locator)
+         end if
          ! Configure pressure solver
          ps=hypre_str(cfg=cfg,name='Pressure',method=pcg_pfmg2,nst=7)
          ps%maxlevel=12
@@ -194,6 +238,8 @@ contains
          call fs%setup(pressure_solver=ps,implicit_solver=vs)
          ! Zero initial field
          fs%U=0.0_WP; fs%V=0.0_WP; fs%W=0.0_WP
+         ! Zero inflow velocity
+         Vin=0.0_WP
          ! Calculate cell-centered velocities and divergence
          call fs%interp_vel(Ui,Vi,Wi)
          call fs%get_div()
@@ -209,7 +255,6 @@ contains
       
       ! Add Ensight output
       create_ensight: block
-         integer :: nsc
          ! Create Ensight output from cfg
          ens_out=ensight(cfg=cfg,name='RisingBubble')
          ! Create event for Ensight output
@@ -269,6 +314,7 @@ contains
          call bubblefile%add_column(time%t,'Time')
          call bubblefile%add_column(Ycent,'Y centroid')
          call bubblefile%add_column(Vrise,'Rise velocity')
+         call bubblefile%add_column(Vin,'Inflow velocity')
       end block create_monitor
       
       
@@ -277,7 +323,7 @@ contains
    
    !> Perform an NGA2 simulation
    subroutine simulation_run
-      use tpns_class, only: arithmetic_visc,harmonic_visc
+      use tpns_class, only: harmonic_visc
       implicit none
       
       ! Perform time integration
@@ -287,6 +333,24 @@ contains
          call fs%get_cfl(time%dt,time%cfl)
          call time%adjust_dt()
          call time%increment()
+         
+         ! Control inflow condition
+         if (moving_domain) then
+            control_inflow: block
+               use tpns_class, only: bcond
+               type(bcond), pointer :: mybc
+               integer  :: n,i,j,k
+               ! Get new inflow velocity
+               Vin_old=Vin
+               Vin=G*((Vrise_ref-Vrise)+(Ycent_ref-Ycent)/ti)
+               ! Apply inflow at top
+               call fs%get_bcond('inflow',mybc)
+               do n=1,mybc%itr%no_
+                  i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
+                  fs%V(i,j,k)=Vin
+               end do
+            end block control_inflow
+         end if
          
          ! Remember old VOF
          vf%VFold=vf%VF
@@ -320,6 +384,7 @@ contains
             call fs%get_dmomdt(resU,resV,resW)
             
             ! Add momentum source terms - adjust gravity if accelerating frame of reference
+            if (moving_domain) fs%gravity(2)=gravity(2)+(Vin-Vin_old)/time%dt
             call fs%addsrc_gravity(resU,resV,resW)
             
             ! Assemble explicit residual
