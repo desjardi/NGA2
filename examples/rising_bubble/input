@@ -1,16 +1,16 @@
 # Parallelization
-Partition :	1 8 1
+Partition : 1 8 1
 
 # Are we using a moving domain?
 Moving domain : .true.
 
 # Mesh definition
-Lx :	0.2
-Ly :	0.2
-Lz :	0.2
-nx :	128
-ny :	128
-nz :	128
+Lx : 0.2
+Ly : 0.2
+Lz : 0.2
+nx : 128
+ny : 128
+nz : 128
 
 # Fluid properties
 Gravity :                     0 -9.81 0
