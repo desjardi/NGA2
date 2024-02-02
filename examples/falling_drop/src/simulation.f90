@@ -89,7 +89,7 @@ contains
       
       ! Initialize our VOF solver and field
       create_and_initialize_vof: block
-         use mms_geom, only: cube_refine_vol
+         use mms_geom,  only: cube_refine_vol
          use vfs_class, only: lvira,VFhi,VFlo
          integer :: i,j,k,n,si,sj,sk
          real(WP), dimension(3,8) :: cube_vertex
@@ -100,8 +100,9 @@ contains
          call vf%initialize(cfg=cfg,reconstruction_method=lvira,name='VOF',store_detailed_flux=.true.)
          ! Initialize to a droplet and a pool
          center=[0.0_WP,0.05_WP,0.0_WP]
-         radius=0.01_WP
-         depth =0.025_WP
+         !radius=0.005_WP
+         call param_read('Droplet diameter',radius); radius=radius/2.0_WP
+         depth =0.02_WP
          do k=vf%cfg%kmino_,vf%cfg%kmaxo_
             do j=vf%cfg%jmino_,vf%cfg%jmaxo_
                do i=vf%cfg%imino_,vf%cfg%imaxo_

@@ -2,12 +2,15 @@
 Partition :	8 1 1
 
 # Mesh definition
-Lx :	0.1
-Ly :	0.1
-Lz :	0.1
-nx :	128
-ny :	128
-nz :	128
+Lx :	0.06
+Ly :	0.06
+Lz :	0.06
+nx :	64
+ny :	64
+nz :	64
+
+# Case parameters
+Droplet diameter : 0.01
 
 # Fluid properties
 Gravity :                     0 -9.81 0
