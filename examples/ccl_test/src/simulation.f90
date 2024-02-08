@@ -141,7 +141,7 @@ contains
       ! Create CCL
       create_ccl: block
          ! Initialize CCL
-         call ccl%initialize(cfg=cfg,name='ccl_test')
+         call ccl%initialize(pg=cfg%pgrid,name='ccl_test')
          ! Perform CCL
          call ccl%build(make_label,same_label)
       end block create_ccl
