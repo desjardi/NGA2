@@ -7,7 +7,6 @@ module geometry
    
    !> Single config
    type(config), public :: cfg
-   logical, public :: moving_domain
    
    public :: geometry_init
    
@@ -20,9 +19,6 @@ contains
       use param,       only: param_read
       implicit none
       type(sgrid) :: grid
-      
-      ! Check first if we use a moving domain
-      call param_read('Moving domain',moving_domain,default=.false.)
       
       ! Create a grid from input params
       create_grid: block

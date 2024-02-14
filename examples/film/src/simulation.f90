@@ -3,8 +3,9 @@ module simulation
    use precision,         only: WP
    use geometry,          only: cfg
    use tpns_class,        only: tpns
+   use hypre_str_class,   only: hypre_str
    use vfs_class,         only: vfs
-   use ccl_class,         only: ccl
+   !use ccl_class,         only: ccl
    use timetracker_class, only: timetracker
    use surfmesh_class,    only: surfmesh
    use ensight_class,     only: ensight
@@ -13,13 +14,14 @@ module simulation
    implicit none
    private
    
-   !> Single two-phase flow solver and volume fraction solver and corresponding time tracker
-   type(tpns),        public :: fs
-   type(vfs),         public :: vf
-   type(timetracker), public :: time
+   !> Two-phase flow solver, linear solver for pressure, volume fraction solver, and a time tracker
+   type(tpns)        :: fs
+   type(hypre_str)   :: ps
+   type(vfs)         :: vf
+   type(timetracker) :: time
 
    !> CCL framework
-   type(ccl),         public :: cc
+   !type(ccl),         public :: cc
    
    !> Ensight postprocessing
    type(surfmesh) :: smesh
@@ -41,11 +43,11 @@ module simulation
    real(WP), dimension(:,:), allocatable :: ph
    
    !> Post-processing info
-   integer :: ndrop
-   real(WP), dimension(:), allocatable :: drop_diam
-   real(WP) :: mean_diam,min_diam,max_diam
-   type(event) :: drop_evt
-   type(monitor) :: dropfile
+   !integer :: ndrop
+   !real(WP), dimension(:), allocatable :: drop_diam
+   !real(WP) :: mean_diam,min_diam,max_diam
+   !type(event) :: drop_evt
+   !type(monitor) :: dropfile
 
 contains
    
@@ -217,7 +219,7 @@ contains
       
       ! Create a two-phase flow solver without bconds
       create_and_initialize_flow_solver: block
-         use ils_class, only: pcg_pfmg
+         use hypre_str_class, only: pcg_pfmg2
          ! Create flow solver
          fs=tpns(cfg=cfg,name='Two-phase NS')
          ! Assign constant density and viscosity to each phase
@@ -225,14 +227,13 @@ contains
          fs%visc_l=1.0_WP; call param_read('Viscosity ratio', visc_ratio); fs%visc_g=fs%visc_l/visc_ratio
          ! Read in Ohnesorge number and assign surface tension coefficient
          call param_read('Oh',Oh); fs%sigma=Oh**(-2)
-         ! Configure pressure solver
-         call param_read('Pressure iteration',fs%psolv%maxit)
-         call param_read('Pressure tolerance',fs%psolv%rcvg)
-         ! Configure implicit velocity solver
-         call param_read('Implicit iteration',fs%implicit%maxit)
-         call param_read('Implicit tolerance',fs%implicit%rcvg)
+         ! Prepare and configure pressure solver
+         ps=hypre_str(cfg=cfg,name='Pressure',method=pcg_pfmg2,nst=7)
+         ps%maxlevel=16
+         call param_read('Pressure iteration',ps%maxit)
+         call param_read('Pressure tolerance',ps%rcvg)
          ! Setup the solver
-         call fs%setup(pressure_ils=pcg_pfmg,implicit_ils=pcg_pfmg)
+         call fs%setup(pressure_solver=ps)
          ! Zero initial field
          fs%U=0.0_WP; fs%V=0.0_WP; fs%W=0.0_WP
          ! Calculate cell-centered velocities and divergence
@@ -266,20 +267,20 @@ contains
       
       
       ! Prepare drop post-processing
-      postprocess_drop: block
-         use vfs_class, only: VFlo
-         ! Creat CCL object
-         cc=ccl(cfg=cfg,name='CCL')
-         cc%max_interface_planes=1
-         cc%VFlo=VFlo
-         ! Create event for drop size output
-         drop_evt=event(time=time,name='Drop output')
-         call param_read('Drop output period',drop_evt%tper)
-         ! Prepare directory for drop size output
-         if (vf%cfg%amRoot) call execute_command_line('mkdir -p drops')
-         ! Perform first analysis
-         call analyze_drops()
-      end block postprocess_drop
+      !postprocess_drop: block
+      !   use vfs_class, only: VFlo
+      !   ! Creat CCL object
+      !   cc=ccl(cfg=cfg,name='CCL')
+      !   cc%max_interface_planes=1
+      !   cc%VFlo=VFlo
+      !   ! Create event for drop size output
+      !   drop_evt=event(time=time,name='Drop output')
+      !   call param_read('Drop output period',drop_evt%tper)
+      !   ! Prepare directory for drop size output
+      !   if (vf%cfg%amRoot) call execute_command_line('mkdir -p drops')
+      !   ! Perform first analysis
+      !   call analyze_drops()
+      !end block postprocess_drop
       
       
       ! Create a monitor file
@@ -318,14 +319,14 @@ contains
          call cflfile%add_column(fs%CFLv_z,'Viscous zCFL')
          call cflfile%write()
          ! Create drop monitor
-         dropfile=monitor(vf%cfg%amRoot,'drop')
-         call dropfile%add_column(time%n,'Timestep number')
-         call dropfile%add_column(time%t,'Time')
-         call dropfile%add_column(ndrop,'Ndrop')
-         call dropfile%add_column( min_diam, 'Min diameter')
-         call dropfile%add_column(mean_diam,'Mean diameter')
-         call dropfile%add_column( max_diam, 'Max diameter')
-         call dropfile%write()
+         !dropfile=monitor(vf%cfg%amRoot,'drop')
+         !call dropfile%add_column(time%n,'Timestep number')
+         !call dropfile%add_column(time%t,'Time')
+         !call dropfile%add_column(ndrop,'Ndrop')
+         !call dropfile%add_column( min_diam, 'Min diameter')
+         !call dropfile%add_column(mean_diam,'Mean diameter')
+         !call dropfile%add_column( max_diam, 'Max diameter')
+         !call dropfile%write()
       end block create_monitor
       
       
@@ -387,12 +388,12 @@ contains
             resW=-2.0_WP*fs%rho_W*fs%W+(fs%rho_Wold+fs%rho_W)*fs%Wold+time%dt*resW
             
             ! Form implicit residuals
-            call fs%solve_implicit(time%dt,resU,resV,resW)
+            !call fs%solve_implicit(time%dt,resU,resV,resW)
             
             ! Apply these residuals
-            fs%U=2.0_WP*fs%U-fs%Uold+resU
-            fs%V=2.0_WP*fs%V-fs%Vold+resV
-            fs%W=2.0_WP*fs%W-fs%Wold+resW
+            fs%U=2.0_WP*fs%U-fs%Uold+resU/fs%rho_U
+            fs%V=2.0_WP*fs%V-fs%Vold+resV/fs%rho_V
+            fs%W=2.0_WP*fs%W-fs%Wold+resW/fs%rho_W
             
             ! Apply other boundary conditions
             call fs%apply_bcond(time%t,time%dt)
@@ -434,8 +435,8 @@ contains
          call cflfile%write()
 
          ! Count drops and get mean diameter
-         call analyze_drops()
-         call dropfile%write()
+         !call analyze_drops()
+         !call dropfile%write()
 
       end do
       
@@ -444,46 +445,46 @@ contains
    
    
    !> Analyze VOF field for drops
-   subroutine analyze_drops()
-      use mathtools, only: Pi
-      use string,    only: str_medium
-      implicit none
-      integer :: n,iunit,ierr
-      character(len=str_medium) :: filename,timestamp
-      
-      ! Perform CCL on VOF field
-      call cc%build_lists(VF=vf%VF,U=fs%U,V=fs%V,W=fs%W)
-      
-      ! Store number of droplets and allocate diameter
-      ndrop=cc%n_meta_struct
-      if (allocated(drop_diam)) deallocate(drop_diam)
-      allocate(drop_diam(ndrop))
-      
-      ! Loops over identified structures and get equivalent diameter
-      mean_diam=0.0_WP
-      do n=1,ndrop
-         drop_diam(n)=(6.0_WP*cc%meta_structures_list(n)%vol/Pi)**(1.0_WP/3.0_WP)
-         mean_diam=mean_diam+drop_diam(n)
-      end do
-      if (ndrop.gt.0) mean_diam=mean_diam/real(ndrop,WP)
-      min_diam=minval(drop_diam)
-      max_diam=maxval(drop_diam)
-      
-      ! Clean up CCL
-      call cc%deallocate_lists()
-      
-      ! If root and if event triggers, print out drop sizes
-      if (vf%cfg%amRoot.and.drop_evt%occurs()) then
-         filename='diameter_'
-         write(timestamp,'(es12.5)') time%t
-         open(newunit=iunit,file='drops/'//trim(adjustl(filename))//trim(adjustl(timestamp)),form='formatted',status='replace',access='stream',iostat=ierr)
-         do n=1,ndrop
-            write(iunit,'(es12.5)') drop_diam(n)
-         end do
-         close(iunit)
-      end if
-
-   end subroutine analyze_drops
+   !subroutine analyze_drops()
+   !   use mathtools, only: Pi
+   !   use string,    only: str_medium
+   !   implicit none
+   !   integer :: n,iunit,ierr
+   !   character(len=str_medium) :: filename,timestamp
+   !   
+   !   ! Perform CCL on VOF field
+   !   call cc%build_lists(VF=vf%VF,U=fs%U,V=fs%V,W=fs%W)
+   !   
+   !   ! Store number of droplets and allocate diameter
+   !   ndrop=cc%n_meta_struct
+   !   if (allocated(drop_diam)) deallocate(drop_diam)
+   !   allocate(drop_diam(ndrop))
+   !   
+   !   ! Loops over identified structures and get equivalent diameter
+   !   mean_diam=0.0_WP
+   !   do n=1,ndrop
+   !      drop_diam(n)=(6.0_WP*cc%meta_structures_list(n)%vol/Pi)**(1.0_WP/3.0_WP)
+   !      mean_diam=mean_diam+drop_diam(n)
+   !   end do
+   !   if (ndrop.gt.0) mean_diam=mean_diam/real(ndrop,WP)
+   !   min_diam=minval(drop_diam)
+   !   max_diam=maxval(drop_diam)
+   !   
+   !   ! Clean up CCL
+   !   call cc%deallocate_lists()
+   !   
+   !   ! If root and if event triggers, print out drop sizes
+   !   if (vf%cfg%amRoot.and.drop_evt%occurs()) then
+   !      filename='diameter_'
+   !      write(timestamp,'(es12.5)') time%t
+   !      open(newunit=iunit,file='drops/'//trim(adjustl(filename))//trim(adjustl(timestamp)),form='formatted',status='replace',access='stream',iostat=ierr)
+   !      do n=1,ndrop
+   !         write(iunit,'(es12.5)') drop_diam(n)
+   !      end do
+   !      close(iunit)
+   !   end if
+   !
+   !end subroutine analyze_drops
    
    
    !> Finalize the NGA2 simulation

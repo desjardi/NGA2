@@ -30,6 +30,7 @@ contains
    
    !> Function that identifies cells that need a label
    logical function make_label(i,j,k)
+      implicit none
       integer, intent(in) :: i,j,k
       if (G(i,j,k).lt.0.0_WP) then
          make_label=.true.
@@ -41,6 +42,7 @@ contains
 
    !> Function that identifies if cell pairs have same label
    logical function same_label(i1,j1,k1,i2,j2,k2)
+      implicit none
       integer, intent(in) :: i1,j1,k1,i2,j2,k2
       if (number(i1,j1,k1).eq.number(i2,j2,k2)) then
          same_label=.true.

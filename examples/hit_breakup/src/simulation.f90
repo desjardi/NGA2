@@ -8,7 +8,7 @@ module simulation
    use timetracker_class, only: timetracker
    use ensight_class,     only: ensight
    use surfmesh_class,    only: surfmesh
-   use cclabel_class,     only: cclabel
+   use stracker_class,    only: stracker
    use event_class,       only: event
    use monitor_class,     only: monitor
    implicit none
@@ -20,8 +20,8 @@ module simulation
    type(timetracker), public :: time
    type(vfs),         public :: vf
 
-   !> Include CCL
-   type(cclabel) :: ccl
+   !> Include structure tracker
+   type(stracker) :: strack
  
    !> Ensight postprocessing
    type(ensight)  :: ens_out
@@ -59,6 +59,7 @@ contains
    
    !> Function that identifies cells that need a label
    logical function make_label(i,j,k)
+      implicit none
       integer, intent(in) :: i,j,k
       if (vf%VF(i,j,k).gt.0.0_WP) then
          make_label=.true.
@@ -69,11 +70,12 @@ contains
 
    !> Function that identifies if cell pairs have same label
    logical function same_label(i1,j1,k1,i2,j2,k2)
+      implicit none
       integer, intent(in) :: i1,j1,k1,i2,j2,k2
       same_label=.true.
    end function same_label
    
-   !> Function that defines a level set function for a cylinder
+   !> Function that defines a level set function for a sphere
    function levelset_sphere(xyz,t) result(G)
       implicit none
       real(WP), dimension(3),intent(in) :: xyz
@@ -320,11 +322,10 @@ contains
          call compute_stats()
       end block initialize_velocity
       
-      ! Create CCL
-      create_ccl: block
-         call ccl%initialize(cfg=cfg,name='ccl_test')
-         call ccl%build(make_label,same_label)
-      end block create_ccl
+      ! Create structure tracker
+      create_strack: block
+         call strack%init(vf=vf,phase=0,name='stracker_test')
+      end block create_strack
       
       ! Create surfmesh object for interface polygon output
       create_smesh: block
