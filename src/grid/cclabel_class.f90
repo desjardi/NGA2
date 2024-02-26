@@ -89,7 +89,6 @@ contains
       integer, dimension(:), allocatable :: parent             !< Resolving structure id across procs
       integer, dimension(:), allocatable :: parent_all         !< Resolving structure id across procs
       integer, dimension(:), allocatable :: parent_own         !< Resolving structure id across procs
-      
 
       ! Start by cleaning up
       call this%empty()

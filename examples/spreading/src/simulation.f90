@@ -209,7 +209,7 @@ contains
          integer, parameter :: amr_ref_lvl=4
          character(len=str_long) :: message
          ! Create a VOF solver
-         vf=vfs(cfg=cfg,reconstruction_method=lvira,name='VOF')
+         call vf%initialize(cfg=cfg,reconstruction_method=lvira,name='VOF')
          ! Prepare the analytical calculation of a sphere on a wall
          call param_read('Initial drop radius',Rdrop,default=1.0_WP)
          call param_read('Initial contact angle',contact,default=180.0_WP); contact=contact*Pi/180.0_WP
@@ -278,7 +278,7 @@ contains
       ! Create a two-phase flow solver without bconds
       create_and_initialize_flow_solver: block
          use tpns_class,      only: clipped_neumann,dirichlet
-         use hypre_str_class, only: pcg_pfmg
+         use hypre_str_class, only: pcg_pfmg2
          use mathtools,       only: Pi
          integer :: i,j,k,n
          ! Create flow solver
@@ -295,7 +295,7 @@ contains
          call fs%add_bcond(name='bc_zp',type=clipped_neumann,face='z',dir=+1,canCorrect=.true.,locator=zp_locator)
          call fs%add_bcond(name='bc_zm',type=clipped_neumann,face='z',dir=-1,canCorrect=.true.,locator=zm_locator)
          ! Configure pressure solver
-         ps=hypre_str(cfg=cfg,name='Pressure',method=pcg_pfmg,nst=7)
+         ps=hypre_str(cfg=cfg,name='Pressure',method=pcg_pfmg2,nst=7)
          ps%maxlevel=10
          call param_read('Pressure iteration',ps%maxit)
          call param_read('Pressure tolerance',ps%rcvg)

@@ -5,9 +5,9 @@ Partition : 1 8 1
 Lx : 0.2
 Ly : 0.2
 Lz : 0.2
-nx : 128
-ny : 128
-nz : 128
+nx : 96 !128
+ny : 96 !128
+nz : 96 !128
 
 # Are we using a moving domain?
 Moving domain : .true.
