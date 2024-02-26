@@ -156,8 +156,8 @@ module vfs_class
       real(WP) :: thinstruct_error                        !< Integral of thin structure removal error
       
       ! Additional storage option for geometric transport of auxiliary quantities
-      logical :: store_detailed_flux=.false.                                              !< Flag to turn on detailed fluxing data storage (default=.false.)
       type(TagAccVM_SepVM_type), dimension(:,:,:,:), allocatable :: detailed_face_flux    !< Cell-decomposed face flux geometric data
+      type(TagAccVM_SepVM_type), dimension(:,:,:),   allocatable :: detailed_remap        !< Cell-decomposed remapped cell geometric data
       
       ! Old arrays that are needed for the compressible MAST solver
       real(WP), dimension(:,:,:,:), allocatable :: Lbaryold  !< Liquid barycenter
@@ -191,6 +191,7 @@ module vfs_class
       procedure :: transport_cflux                        !< Transport VF using conservative geometric fluxing
       procedure :: transport_cflux_storage                !< Transport VF using conservative geometric fluxing with storage
       procedure :: transport_ccell                        !< Transport VF using conservative geometric cell remap
+      procedure :: transport_ccell_storage                !< Transport VF using conservative geometric cell remap with storage
       procedure :: advect_interface                       !< Advance IRL surface to next step
       procedure :: build_interface                        !< Reconstruct IRL interface from VF field
       procedure :: build_elvira                           !< ELVIRA reconstruction of the interface from VF field
@@ -389,7 +390,8 @@ contains
       
       ! Work arrays for flux-based transport
       select case (this%transport_method)
-      case (Cflux) ! Work arrays for face fluxes
+      case (Cflux)
+         ! Arrays for storing face fluxes
          allocate(this%face_flux(1:3,this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
          do k=this%cfg%kmino_,this%cfg%kmaxo_
             do j=this%cfg%jmino_,this%cfg%jmaxo_
@@ -400,7 +402,8 @@ contains
                end do
             end do
          end do
-      case (Cflux_storage) ! Work arrays for face fluxes and detailed flux data storage
+      case (Cflux_storage)
+         ! Arrays for storing face fluxes and detailed flux geometry
          allocate(this%face_flux         (1:3,this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
          allocate(this%detailed_face_flux(1:3,this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
          do k=this%cfg%kmino_,this%cfg%kmaxo_
@@ -413,8 +416,18 @@ contains
                end do
             end do
          end do
-      case (Ccell) ! No storage needed
-      !case (Ccell_storage) ! Work array for detailed remap cell storage
+      case (Ccell)
+         ! No storage needed
+      case (Ccell_storage)
+         ! Array for storing detailed remapped cell geometry
+         allocate(this%detailed_remap(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
+         do k=this%cfg%kmino_,this%cfg%kmaxo_
+            do j=this%cfg%jmino_,this%cfg%jmaxo_
+               do i=this%cfg%imino_,this%cfg%imaxo_
+                  call new(this%detailed_remap(i,j,k))
+               end do
+            end do
+         end do
       case default
          call die('[vfs initialize IRL] Unknown transport method')
       end select
@@ -789,8 +802,8 @@ contains
          call this%transport_cflux_storage(dt,U,V,W)
       case (Ccell)
          call this%transport_ccell(dt,U,V,W)
-      !case (Ccell_storage)
-      !   call this%transport_ccell_storage(dt,U,V,W)
+      case (Ccell_storage)
+         call this%transport_ccell_storage(dt,U,V,W)
       end select
       
       ! Advect interface polygons
@@ -971,7 +984,166 @@ contains
       call this%sync_and_clean_barycenters()
       
    end subroutine transport_ccell
+   
+   
+   !> Perform conservative cell-based transport of VF based on U/V/W and dt
+   !> Include storage of detailed geometry of remapped cell
+   subroutine transport_ccell_storage(this,dt,U,V,W)
+      implicit none
+      class(vfs), intent(inout) :: this
+      real(WP), intent(inout) :: dt  !< Timestep size over which to advance
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: U     !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: V     !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: W     !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      integer :: i,j,k,index,n
+      real(IRL_double), dimension(3,14) :: cell
+      real(IRL_double), dimension(3, 9) :: face
+      type(Poly24_type) :: remap_cell
+      type(CapDod_type) :: remap_face
+      real(WP) :: vol_now,crude_VF
+      real(WP) :: lvol,gvol
+      real(WP), dimension(3,2) :: bounding_pts
+      integer, dimension(3,2) :: bb_indices
+      real(WP), dimension(3) :: lbar,gbar
+      type(SepVM_type) :: my_SepVM
+      
+      ! Clean up detailed remap data
+      do k=this%cfg%kmino_,this%cfg%kmaxo_
+         do j=this%cfg%jmino_,this%cfg%jmaxo_
+            do i=this%cfg%imino_,this%cfg%imaxo_
+               call clear(this%detailed_remap(i,j,k))
+            end do
+         end do
+      end do
 
+      ! Allocate poly24 and capdod, as well as SepVM objects
+      call new(remap_cell)
+      call new(remap_face)
+      
+      ! Loop over the advection band and compute conservative cell-based remap using semi-Lagrangian algorithm
+      do index=1,sum(this%band_count(0:advect_band))
+         i=this%band_map(1,index)
+         j=this%band_map(2,index)
+         k=this%band_map(3,index)
+         
+         ! Construct and project cell
+         cell(:,1)=[this%cfg%x(i+1),this%cfg%y(j  ),this%cfg%z(k+1)]; if (this%vmask(i+1,j  ,k+1).ne.1) cell(:,1)=this%project(cell(:,1),i,j,k,-dt,U,V,W)
+         cell(:,2)=[this%cfg%x(i+1),this%cfg%y(j  ),this%cfg%z(k  )]; if (this%vmask(i+1,j  ,k  ).ne.1) cell(:,2)=this%project(cell(:,2),i,j,k,-dt,U,V,W)
+         cell(:,3)=[this%cfg%x(i+1),this%cfg%y(j+1),this%cfg%z(k  )]; if (this%vmask(i+1,j+1,k  ).ne.1) cell(:,3)=this%project(cell(:,3),i,j,k,-dt,U,V,W)
+         cell(:,4)=[this%cfg%x(i+1),this%cfg%y(j+1),this%cfg%z(k+1)]; if (this%vmask(i+1,j+1,k+1).ne.1) cell(:,4)=this%project(cell(:,4),i,j,k,-dt,U,V,W)
+         cell(:,5)=[this%cfg%x(i  ),this%cfg%y(j  ),this%cfg%z(k+1)]; if (this%vmask(i  ,j  ,k+1).ne.1) cell(:,5)=this%project(cell(:,5),i,j,k,-dt,U,V,W)
+         cell(:,6)=[this%cfg%x(i  ),this%cfg%y(j  ),this%cfg%z(k  )]; if (this%vmask(i  ,j  ,k  ).ne.1) cell(:,6)=this%project(cell(:,6),i,j,k,-dt,U,V,W)
+         cell(:,7)=[this%cfg%x(i  ),this%cfg%y(j+1),this%cfg%z(k  )]; if (this%vmask(i  ,j+1,k  ).ne.1) cell(:,7)=this%project(cell(:,7),i,j,k,-dt,U,V,W)
+         cell(:,8)=[this%cfg%x(i  ),this%cfg%y(j+1),this%cfg%z(k+1)]; if (this%vmask(i  ,j+1,k+1).ne.1) cell(:,8)=this%project(cell(:,8),i,j,k,-dt,U,V,W)
+         
+         ! Correct volume of x- face
+         face(:,1)=[this%cfg%x(i  ),this%cfg%y(j  ),this%cfg%z(k+1)]; face(:,5)=cell(:,5)
+         face(:,2)=[this%cfg%x(i  ),this%cfg%y(j  ),this%cfg%z(k  )]; face(:,6)=cell(:,6)
+         face(:,3)=[this%cfg%x(i  ),this%cfg%y(j+1),this%cfg%z(k  )]; face(:,7)=cell(:,7)
+         face(:,4)=[this%cfg%x(i  ),this%cfg%y(j+1),this%cfg%z(k+1)]; face(:,8)=cell(:,8)
+         face(:,9)=0.25_WP*(face(:,5)+face(:,6)+face(:,7)+face(:,8))
+         call construct(remap_face,face)
+         call adjustCapToMatchVolume(remap_face,dt*U(i,j,k)*this%cfg%dy(j)*this%cfg%dz(k))
+         cell(:,14)=getPt(remap_face,8)
+         
+         ! Correct volume of x+ face
+         face(:,1)=[this%cfg%x(i+1),this%cfg%y(j  ),this%cfg%z(k+1)]; face(:,5)=cell(:,1)
+         face(:,2)=[this%cfg%x(i+1),this%cfg%y(j  ),this%cfg%z(k  )]; face(:,6)=cell(:,2)
+         face(:,3)=[this%cfg%x(i+1),this%cfg%y(j+1),this%cfg%z(k  )]; face(:,7)=cell(:,3)
+         face(:,4)=[this%cfg%x(i+1),this%cfg%y(j+1),this%cfg%z(k+1)]; face(:,8)=cell(:,4)
+         face(:,9)=0.25_WP*(face(:,5)+face(:,6)+face(:,7)+face(:,8))
+         call construct(remap_face,face)
+         call adjustCapToMatchVolume(remap_face,dt*U(i+1,j,k)*this%cfg%dy(j)*this%cfg%dz(k))
+         cell(:, 9)=getPt(remap_face,8)
+         
+         ! Correct volume of y- face
+         face(:,1)=[this%cfg%x(i+1),this%cfg%y(j  ),this%cfg%z(k  )]; face(:,5)=cell(:,2)
+         face(:,2)=[this%cfg%x(i  ),this%cfg%y(j  ),this%cfg%z(k  )]; face(:,6)=cell(:,6)
+         face(:,3)=[this%cfg%x(i  ),this%cfg%y(j  ),this%cfg%z(k+1)]; face(:,7)=cell(:,5)
+         face(:,4)=[this%cfg%x(i+1),this%cfg%y(j  ),this%cfg%z(k+1)]; face(:,8)=cell(:,1)
+         face(:,9)=0.25_WP*(face(:,5)+face(:,6)+face(:,7)+face(:,8))
+         call construct(remap_face,face)
+         call adjustCapToMatchVolume(remap_face,dt*V(i,j,k)*this%cfg%dx(i)*this%cfg%dz(k))
+         cell(:,10)=getPt(remap_face,8)
+         
+         ! Correct volume of y+ face
+         face(:,1)=[this%cfg%x(i+1),this%cfg%y(j+1),this%cfg%z(k  )]; face(:,5)=cell(:,3)
+         face(:,2)=[this%cfg%x(i  ),this%cfg%y(j+1),this%cfg%z(k  )]; face(:,6)=cell(:,7)
+         face(:,3)=[this%cfg%x(i  ),this%cfg%y(j+1),this%cfg%z(k+1)]; face(:,7)=cell(:,8)
+         face(:,4)=[this%cfg%x(i+1),this%cfg%y(j+1),this%cfg%z(k+1)]; face(:,8)=cell(:,4)
+         face(:,9)=0.25_WP*(face(:,5)+face(:,6)+face(:,7)+face(:,8))
+         call construct(remap_face,face)
+         call adjustCapToMatchVolume(remap_face,dt*V(i,j+1,k)*this%cfg%dx(i)*this%cfg%dz(k))
+         cell(:,12)=getPt(remap_face,8)
+         
+         ! Correct volume of z- face
+         face(:,1)=[this%cfg%x(i  ),this%cfg%y(j+1),this%cfg%z(k  )]; face(:,5)=cell(:,7)
+         face(:,2)=[this%cfg%x(i  ),this%cfg%y(j  ),this%cfg%z(k  )]; face(:,6)=cell(:,6)
+         face(:,3)=[this%cfg%x(i+1),this%cfg%y(j  ),this%cfg%z(k  )]; face(:,7)=cell(:,2)
+         face(:,4)=[this%cfg%x(i+1),this%cfg%y(j+1),this%cfg%z(k  )]; face(:,8)=cell(:,3)
+         face(:,9)=0.25_WP*(face(:,5)+face(:,6)+face(:,7)+face(:,8))
+         call construct(remap_face,face)
+         call adjustCapToMatchVolume(remap_face,dt*W(i,j,k)*this%cfg%dx(i)*this%cfg%dy(j))
+         cell(:,11)=getPt(remap_face,8)
+         
+         ! Correct volume of z+ face
+         face(:,1)=[this%cfg%x(i  ),this%cfg%y(j+1),this%cfg%z(k+1)]; face(:,5)=cell(:,8)
+         face(:,2)=[this%cfg%x(i  ),this%cfg%y(j  ),this%cfg%z(k+1)]; face(:,6)=cell(:,5)
+         face(:,3)=[this%cfg%x(i+1),this%cfg%y(j  ),this%cfg%z(k+1)]; face(:,7)=cell(:,1)
+         face(:,4)=[this%cfg%x(i+1),this%cfg%y(j+1),this%cfg%z(k+1)]; face(:,8)=cell(:,4)
+         face(:,9)=0.25_WP*(face(:,5)+face(:,6)+face(:,7)+face(:,8))
+         call construct(remap_face,face)
+         call adjustCapToMatchVolume(remap_face,dt*W(i,j,k+1)*this%cfg%dx(i)*this%cfg%dy(j))
+         cell(:,13)=getPt(remap_face,8)
+         
+         ! Form remapped cell in IRL
+         call construct(remap_cell,cell)
+         
+         ! Get bounding box for our remapped cell
+         call getBoundingPts(remap_cell,bounding_pts(:,1),bounding_pts(:,2))
+         bb_indices(:,1)=this%cfg%get_ijk_local(bounding_pts(:,1),[i,j,k])
+         bb_indices(:,2)=this%cfg%get_ijk_local(bounding_pts(:,2),[i,j,k])
+         
+         ! Crudely check phase information for remapped cell and skip cells where nothing is changing
+         crude_VF=this%crude_phase_test(bb_indices)
+         if (crude_VF.ge.0.0_WP) cycle
+         
+         ! Need full geometric flux
+         call getMoments(remap_cell,this%localized_separator_link(i,j,k),this%detailed_remap(i,j,k))
+         
+         ! Rebuild face flux from detailed face flux
+         lvol=0.0_WP; gvol=0.0_WP; lbar=0.0_WP; gbar=0.0_WP
+         do n=1,getSize(this%detailed_remap(i,j,k))
+            call getSepVMAtIndex(this%detailed_remap(i,j,k),n-1,my_SepVM)
+            lvol=lvol+getVolume(my_SepVM,0); lbar=lbar+getCentroid(my_SepVM,0)
+            gvol=gvol+getVolume(my_SepVM,1); gbar=gbar+getCentroid(my_SepVM,1)
+         end do
+         
+         ! Compute new liquid volume fraction
+         this%VF(i,j,k)=lvol/(lvol+gvol)
+         
+         ! Only work on higher order moments if VF is in [VFlo,VFhi]
+         if (this%VF(i,j,k).lt.VFlo) then
+            this%VF(i,j,k)=0.0_WP
+         else if (this%VF(i,j,k).gt.VFhi) then
+            this%VF(i,j,k)=1.0_WP
+         else
+            ! Get old phasic barycenters
+            this%Lbary(:,i,j,k)=lbar/lvol
+            this%Gbary(:,i,j,k)=gbar/gvol
+            ! Project then forward in time
+            this%Lbary(:,i,j,k)=this%project(this%Lbary(:,i,j,k),i,j,k,dt,U,V,W)
+            this%Gbary(:,i,j,k)=this%project(this%Gbary(:,i,j,k),i,j,k,dt,U,V,W)
+         end if
+         
+      end do
+
+      ! Synchronize VF and barycenter fields
+      call this%cfg%sync(this%VF)
+      call this%sync_and_clean_barycenters()
+      
+   end subroutine transport_ccell_storage
+   
    
    !> Perform conservative flux-based transport of VF based on U/V/W and dt
    subroutine transport_cflux(this,dt,U,V,W)
