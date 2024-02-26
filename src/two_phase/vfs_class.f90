@@ -949,7 +949,6 @@ contains
          lvol=getVolumePtr(my_SepVM,0)
          gvol=getVolumePtr(my_SepVM,1)
          this%VF(i,j,k)=lvol/(lvol+gvol)
-         print*,'volume error =',abs((lvol+gvol)-this%cfg%vol(i,j,k))/this%cfg%vol(i,j,k)
          
          ! Only work on higher order moments if VF is in [VFlo,VFhi]
          if (this%VF(i,j,k).lt.VFlo) then
