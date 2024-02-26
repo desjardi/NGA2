@@ -6,6 +6,7 @@ module vfs_class
    use string,         only: str_medium
    use config_class,   only: config
    use iterator_class, only: iterator
+   use reconstruct_nn_class, only: reconstruct_nn
    use irl_fortran_interface
    implicit none
    private
@@ -15,6 +16,9 @@ module vfs_class
    
    ! Also expose the min and max VF values
    public :: VFhi,VFlo
+
+   ! Reconstruction neural network
+   type(reconstruct_nn) :: nn
    
    ! List of known available bcond for this solver
    integer, parameter, public :: dirichlet=2         !< Dirichlet condition
@@ -29,6 +33,7 @@ module vfs_class
    integer, parameter, public :: swartz=6            !< Swartz scheme
    integer, parameter, public :: youngs=7            !< Youngs' scheme
    integer, parameter, public :: lvlset=8            !< Levelset-based scheme
+   integer, parameter, public :: ml=9                !< ML reconstruction
    
    ! IRL cutting moment calculation method
    integer, parameter, public :: recursive_simplex=0 !< Recursive simplex cutting
@@ -194,6 +199,7 @@ module vfs_class
       procedure :: detect_edge_regions                    !< Detect edge regions
       procedure :: build_youngs                           !< Youngs' reconstruction of the interface from VF field
       !procedure :: build_lvlset                           !< LVLSET-based reconstruction of the interface from VF field
+      procedure :: build_ml                               !< Machine learning reconstruction of the interface from VF field
       procedure :: smooth_interface                       !< Interface smoothing based on Swartz idea
       procedure :: set_full_bcond                         !< Full liq/gas plane-setting for boundary cells - this is stair-stepped
       procedure :: polygonalize_interface                 !< Build a discontinuous polygonal representation of the IRL interface
@@ -269,9 +275,12 @@ contains
       
       ! Set reconstruction method
       select case (reconstruction_method)
-      case (lvira,elvira,swartz,youngs,mof,wmof)
+      case (lvira,elvira,swartz,youngs,mof,wmof,ml)
          self%reconstruction_method=reconstruction_method
          self%two_planes=.false.
+         if (reconstruction_method.eq.ml) then
+            nn = reconstruct_nn(cfg=self%cfg,fdata='./model_nga',name='nn')
+         end if
       case (r2p)
          self%reconstruction_method=reconstruction_method
          ! Allocate extra curvature storage
@@ -396,9 +405,12 @@ contains
       
       ! Set reconstruction method
       select case (reconstruction_method)
-      case (lvira,elvira,swartz,youngs,mof,wmof)
+      case (lvira,elvira,swartz,youngs,mof,wmof,ml)
          this%reconstruction_method=reconstruction_method
          this%two_planes=.false.
+         if (reconstruction_method.eq.ml) then
+            nn = reconstruct_nn(cfg=this%cfg,fdata='./model_nga',name='nn')
+         end if
       case (r2p)
          this%reconstruction_method=reconstruction_method
          ! Allocate extra curvature storage
@@ -904,17 +916,17 @@ contains
       call new(flux_polyhedron)
 
       ! Clean up detailed fluxes if necessary
-      if (this%store_detailed_flux) then
-         do k=this%cfg%kmino_,this%cfg%kmaxo_
-            do j=this%cfg%jmino_,this%cfg%jmaxo_
-               do i=this%cfg%imino_,this%cfg%imaxo_
-                  call clear(this%detailed_face_flux(1,i,j,k))
-                  call clear(this%detailed_face_flux(2,i,j,k))
-                  call clear(this%detailed_face_flux(3,i,j,k))
-               end do
-            end do
-         end do
-      end if
+      ! if (this%store_detailed_flux) then
+      !    do k=this%cfg%kmino_,this%cfg%kmaxo_
+      !       do j=this%cfg%jmino_,this%cfg%jmaxo_
+      !          do i=this%cfg%imino_,this%cfg%imaxo_
+      !             call clear(this%detailed_face_flux(1,i,j,k))
+      !             call clear(this%detailed_face_flux(2,i,j,k))
+      !             call clear(this%detailed_face_flux(3,i,j,k))
+      !          end do
+      !       end do
+      !    end do
+      ! end if
       
       ! Loop over the domain and compute fluxes using semi-Lagrangian algorithm
       do k=this%cfg%kmin_,this%cfg%kmax_+1
@@ -941,20 +953,20 @@ contains
                   ! Crudely check phase information for flux polyhedron
                   crude_VF=this%crude_phase_test(bb_indices)
                   if (crude_VF.lt.0.0_WP) then
-                     ! Need full geometric flux
-                     if (this%store_detailed_flux) then
-                        call getMoments(flux_polyhedron,this%localized_separator_link(i,j,k),this%detailed_face_flux(1,i,j,k))
-                        ! Rebuild face flux from detailed face flux
-                        lvol=0.0_WP; gvol=0.0_WP; lbar=0.0_WP; gbar=0.0_WP
-                        do n=0,getSize(this%detailed_face_flux(1,i,j,k))-1
-                           call getSepVMAtIndex(this%detailed_face_flux(1,i,j,k),n,my_SepVM)
-                           lvol=lvol+getVolume(my_SepVM,0); lbar=lbar+getCentroid(my_SepVM,0)
-                           gvol=gvol+getVolume(my_SepVM,1); gbar=gbar+getCentroid(my_SepVM,1)
-                        end do
-                        call construct(this%face_flux(1,i,j,k),[lvol,lbar,gvol,gbar])
-                     else
+                  !    ! Need full geometric flux
+                  !    if (this%store_detailed_flux) then
+                  !       call getMoments(flux_polyhedron,this%localized_separator_link(i,j,k),this%detailed_face_flux(1,i,j,k))
+                  !       ! Rebuild face flux from detailed face flux
+                  !       lvol=0.0_WP; gvol=0.0_WP; lbar=0.0_WP; gbar=0.0_WP
+                  !       do n=0,getSize(this%detailed_face_flux(1,i,j,k))-1
+                  !          call getSepVMAtIndex(this%detailed_face_flux(1,i,j,k),n,my_SepVM)
+                  !          lvol=lvol+getVolume(my_SepVM,0); lbar=lbar+getCentroid(my_SepVM,0)
+                  !          gvol=gvol+getVolume(my_SepVM,1); gbar=gbar+getCentroid(my_SepVM,1)
+                  !       end do
+                  !       call construct(this%face_flux(1,i,j,k),[lvol,lbar,gvol,gbar])
+                  !    else
                         call getMoments(flux_polyhedron,this%localized_separator_link(i,j,k),this%face_flux(1,i,j,k))
-                     end if
+                  !   end if
                   else
                      ! Simpler flux calculation
                      vol_now=calculateVolume(flux_polyhedron); ctr_now=calculateCentroid(flux_polyhedron)
@@ -983,19 +995,19 @@ contains
                   crude_VF=this%crude_phase_test(bb_indices)
                   if (crude_VF.lt.0.0_WP) then
                      ! Need full geometric flux
-                     if (this%store_detailed_flux) then
-                        call getMoments(flux_polyhedron,this%localized_separator_link(i,j,k),this%detailed_face_flux(2,i,j,k))
-                        ! Rebuild face flux from detailed face flux
-                        lvol=0.0_WP; gvol=0.0_WP; lbar=0.0_WP; gbar=0.0_WP
-                        do n=0,getSize(this%detailed_face_flux(2,i,j,k))-1
-                           call getSepVMAtIndex(this%detailed_face_flux(2,i,j,k),n,my_SepVM)
-                           lvol=lvol+getVolume(my_SepVM,0); lbar=lbar+getCentroid(my_SepVM,0)
-                           gvol=gvol+getVolume(my_SepVM,1); gbar=gbar+getCentroid(my_SepVM,1)
-                        end do
-                        call construct(this%face_flux(2,i,j,k),[lvol,lbar,gvol,gbar])
-                     else
+                     ! if (this%store_detailed_flux) then
+                     !    call getMoments(flux_polyhedron,this%localized_separator_link(i,j,k),this%detailed_face_flux(2,i,j,k))
+                     !    ! Rebuild face flux from detailed face flux
+                     !    lvol=0.0_WP; gvol=0.0_WP; lbar=0.0_WP; gbar=0.0_WP
+                     !    do n=0,getSize(this%detailed_face_flux(2,i,j,k))-1
+                     !       call getSepVMAtIndex(this%detailed_face_flux(2,i,j,k),n,my_SepVM)
+                     !       lvol=lvol+getVolume(my_SepVM,0); lbar=lbar+getCentroid(my_SepVM,0)
+                     !       gvol=gvol+getVolume(my_SepVM,1); gbar=gbar+getCentroid(my_SepVM,1)
+                     !    end do
+                     !    call construct(this%face_flux(2,i,j,k),[lvol,lbar,gvol,gbar])
+                     ! else
                         call getMoments(flux_polyhedron,this%localized_separator_link(i,j,k),this%face_flux(2,i,j,k))
-                     end if
+                     !end if
                   else
                      ! Simpler flux calculation
                      vol_now=calculateVolume(flux_polyhedron); ctr_now=calculateCentroid(flux_polyhedron)
@@ -1024,19 +1036,19 @@ contains
                   crude_VF=this%crude_phase_test(bb_indices)
                   if (crude_VF.lt.0.0_WP) then
                      ! Need full geometric flux
-                     if (this%store_detailed_flux) then
-                        call getMoments(flux_polyhedron,this%localized_separator_link(i,j,k),this%detailed_face_flux(3,i,j,k))
-                        ! Rebuild face flux from detailed face flux
-                        lvol=0.0_WP; gvol=0.0_WP; lbar=0.0_WP; gbar=0.0_WP
-                        do n=0,getSize(this%detailed_face_flux(3,i,j,k))-1
-                           call getSepVMAtIndex(this%detailed_face_flux(3,i,j,k),n,my_SepVM)
-                           lvol=lvol+getVolume(my_SepVM,0); lbar=lbar+getCentroid(my_SepVM,0)
-                           gvol=gvol+getVolume(my_SepVM,1); gbar=gbar+getCentroid(my_SepVM,1)
-                        end do
-                        call construct(this%face_flux(3,i,j,k),[lvol,lbar,gvol,gbar])
-                     else
+                     ! if (this%store_detailed_flux) then
+                     !    call getMoments(flux_polyhedron,this%localized_separator_link(i,j,k),this%detailed_face_flux(3,i,j,k))
+                     !    ! Rebuild face flux from detailed face flux
+                     !    lvol=0.0_WP; gvol=0.0_WP; lbar=0.0_WP; gbar=0.0_WP
+                     !    do n=0,getSize(this%detailed_face_flux(3,i,j,k))-1
+                     !       call getSepVMAtIndex(this%detailed_face_flux(3,i,j,k),n,my_SepVM)
+                     !       lvol=lvol+getVolume(my_SepVM,0); lbar=lbar+getCentroid(my_SepVM,0)
+                     !       gvol=gvol+getVolume(my_SepVM,1); gbar=gbar+getCentroid(my_SepVM,1)
+                     !    end do
+                     !    call construct(this%face_flux(3,i,j,k),[lvol,lbar,gvol,gbar])
+                     ! else
                         call getMoments(flux_polyhedron,this%localized_separator_link(i,j,k),this%face_flux(3,i,j,k))
-                     end if
+                     !end if
                   else
                      ! Simpler flux calculation
                      vol_now=calculateVolume(flux_polyhedron); ctr_now=calculateCentroid(flux_polyhedron)
@@ -1771,6 +1783,7 @@ contains
          call this%smooth_interface()
       case (youngs); call this%build_youngs()
       !case (lvlset); call this%build_lvlset()
+      case (ml); call this%build_ml()
       case default; call die('[vfs build interface] Unknown interface reconstruction scheme')
       end select
    end subroutine build_interface
@@ -2092,6 +2105,122 @@ contains
       call this%sync_interface()
       
    end subroutine build_elvira
+
+   
+   !> Machine learning reconstruction of a planar interface in mixed cells
+   subroutine build_ml(this)
+      use mathtools, only: normalize
+      implicit none
+      class(vfs), intent(inout) :: this
+      integer(IRL_SignedIndex_t) :: i,j,k
+      integer :: ind,ii,jj,kk,icenter
+      real(IRL_double), dimension(0:2) :: normal
+      real(IRL_double), dimension(0:188) :: fractions
+      integer :: direction
+      logical :: flip
+      real(IRL_double) :: m000, m100, m010, m001
+      real(IRL_double), dimension(0:2) :: center
+      real(IRL_double), dimension(0:0) :: vf_center
+      real(IRL_double), dimension(0:5) :: cell_bounds
+      
+      ! Traverse domain and reconstruct interface
+      do k=this%cfg%kmin_,this%cfg%kmax_
+         do j=this%cfg%jmin_,this%cfg%jmax_
+            do i=this%cfg%imin_,this%cfg%imax_
+               ! Skip wall/bcond cells - bconds need to be provided elsewhere directly!
+               if (this%mask(i,j,k).ne.0) cycle
+               
+               ! Handle full cells differently
+               if (this%VF(i,j,k).lt.VFlo.or.this%VF(i,j,k).gt.VFhi) then
+                  call setNumberOfPlanes(this%liquid_gas_interface(i,j,k),1)
+                  call setPlane(this%liquid_gas_interface(i,j,k),0,[0.0_WP,0.0_WP,0.0_WP],sign(1.0_WP,this%VF(i,j,k)-0.5_WP))
+                  cycle
+               end if
+               
+               ! Liquid-gas symmetry
+               flip = .false.
+               if (this%VF(i,j,k).ge.0.5) then
+                  flip = .true.
+               end if
+               m000=0
+               m100=0
+               m010=0
+               m001=0
+               ! Construct neighborhood of volume moments
+               do kk=k-1,k+1
+                  do jj=j-1,j+1
+                     do ii=i-1,i+1
+                        if (flip.eqv..false.) then
+                           fractions(7*((ii+1-i)*9+(jj+1-j)*3+(kk+1-k)))=this%VF(ii,jj,kk)
+                           fractions(7*((ii+1-i)*9+(jj+1-j)*3+(kk+1-k))+1)=(this%Lbary(1,ii,jj,kk) - this%cfg%xm(ii))/this%cfg%dx(ii)
+                           fractions(7*((ii+1-i)*9+(jj+1-j)*3+(kk+1-k))+2)=(this%Lbary(2,ii,jj,kk) - this%cfg%ym(jj))/this%cfg%dy(jj)
+                           fractions(7*((ii+1-i)*9+(jj+1-j)*3+(kk+1-k))+3)=(this%Lbary(3,ii,jj,kk) - this%cfg%zm(kk))/this%cfg%dz(kk)
+                           fractions(7*((ii+1-i)*9+(jj+1-j)*3+(kk+1-k))+4)=(this%Gbary(1,ii,jj,kk) - this%cfg%xm(ii))/this%cfg%dx(ii)
+                           fractions(7*((ii+1-i)*9+(jj+1-j)*3+(kk+1-k))+5)=(this%Gbary(2,ii,jj,kk) - this%cfg%ym(jj))/this%cfg%dy(jj)
+                           fractions(7*((ii+1-i)*9+(jj+1-j)*3+(kk+1-k))+6)=(this%Gbary(3,ii,jj,kk) - this%cfg%zm(kk))/this%cfg%dz(kk)
+                        else
+                           fractions(7*((ii+1-i)*9+(jj+1-j)*3+(kk+1-k)))=1-this%VF(ii,jj,kk)
+                           fractions(7*((ii+1-i)*9+(jj+1-j)*3+(kk+1-k))+1)=(this%Gbary(1,ii,jj,kk) - this%cfg%xm(ii))/this%cfg%dx(ii)
+                           fractions(7*((ii+1-i)*9+(jj+1-j)*3+(kk+1-k))+2)=(this%Gbary(2,ii,jj,kk) - this%cfg%ym(jj))/this%cfg%dy(jj)
+                           fractions(7*((ii+1-i)*9+(jj+1-j)*3+(kk+1-k))+3)=(this%Gbary(3,ii,jj,kk) - this%cfg%zm(kk))/this%cfg%dz(kk)
+                           fractions(7*((ii+1-i)*9+(jj+1-j)*3+(kk+1-k))+4)=(this%Lbary(1,ii,jj,kk) - this%cfg%xm(ii))/this%cfg%dx(ii)
+                           fractions(7*((ii+1-i)*9+(jj+1-j)*3+(kk+1-k))+5)=(this%Lbary(2,ii,jj,kk) - this%cfg%ym(jj))/this%cfg%dy(jj)
+                           fractions(7*((ii+1-i)*9+(jj+1-j)*3+(kk+1-k))+6)=(this%Lbary(3,ii,jj,kk) - this%cfg%zm(kk))/this%cfg%dz(kk)
+                        end if
+                        ! Calculate geometric moments of neighborhood
+                        m000 = m000 + (fractions(7*((ii+1-i)*9+(jj+1-j)*3+(kk+1-k))))
+                        m100 = m100 + (fractions(7*((ii+1-i)*9+(jj+1-j)*3+(kk+1-k))+1)+(ii-i))*(fractions(7*((ii+1-i)*9+(jj+1-j)*3+(kk+1-k))))
+                        m010 = m010 + (fractions(7*((ii+1-i)*9+(jj+1-j)*3+(kk+1-k))+2)+(jj-j))*(fractions(7*((ii+1-i)*9+(jj+1-j)*3+(kk+1-k))))
+                        m001 = m001 + (fractions(7*((ii+1-i)*9+(jj+1-j)*3+(kk+1-k))+3)+(kk-k))*(fractions(7*((ii+1-i)*9+(jj+1-j)*3+(kk+1-k))))
+                     end do
+                  end do
+               end do
+               ! Calculate geometric center of neighborhood
+               center(0) = m100 / m000
+               center(1) = m010 / m000
+               center(2) = m001 / m000
+               ! Symmetry about Cartesian planes
+               call rotate_fractions(fractions,center,direction)
+               ! Get PLIC normal vector from neural network
+               call nn%get_normal(fractions,normal)
+               normal = normalize(normal)
+               ! Rotate normal vector to original octant
+               if (direction.eq.1) then
+                  normal(0) = -normal(0)
+               else if (direction.eq.2) then
+                  normal(1) = -normal(1)
+               else if (direction.eq.3) then
+                  normal(2) = -normal(2)
+               else if (direction.eq.4) then
+                  normal(0) = -normal(0)
+                  normal(1) = -normal(1)
+               else if (direction.eq.5) then
+                  normal(0) = -normal(0)
+                  normal(2) = -normal(2)
+               else if (direction.eq.6) then
+                  normal(1) = -normal(1)
+                  normal(2) = -normal(2)
+               else if (direction.eq.7) then
+                  normal(0) = -normal(0)
+                  normal(1) = -normal(1)
+                  normal(2) = -normal(2)
+               end if
+               if (flip.eqv..false.) then
+                  normal(0) = -normal(0)
+                  normal(1) = -normal(1)
+                  normal(2) = -normal(2)
+               end if
+               vf_center = this%VF(i,j,k)
+               cell_bounds = [this%cfg%x(i),this%cfg%y(j),this%cfg%z(k),this%cfg%x(i+1),this%cfg%y(j+1),this%cfg%z(k+1)]
+               ! Locate PLIC plane in cell
+               call reconstructML(normal, vf_center, cell_bounds, this%liquid_gas_interface(i,j,k))
+            end do
+         end do
+      end do
+      
+      ! Synchronize across boundaries
+      call this%sync_interface()
+   end subroutine build_ml
 
    
    !> Smoothing of an IRL interface based on Swartz-like algorithm
@@ -4085,6 +4214,419 @@ contains
          write(output_unit,'("Volume fraction solver [",a,"] for config [",a,"]")') trim(this%name),trim(this%cfg%name)
       end if
    end subroutine vfs_print
+
+
+   !> Rotate volume moments to first octant
+   subroutine rotate_fractions(fractions, center,direction)
+      implicit none
+      real(IRL_double), dimension(0:188), intent(inout) :: fractions
+      real(IRL_double), dimension(0:2), intent(in) :: center
+      integer, intent(out) :: direction
+      integer :: i,j,k
+      real(IRL_double) :: temp
+
+      direction = 0
+      if (center(0).lt.0.and.center(1).ge.0.and.center(2).ge.0) then
+         direction = 1
+         do k=0,2
+            do j=0,2
+               do i=0,2
+                  if (i.eq.0) then
+                     temp = fractions(7*(i*9+j*3+k)+0)
+                     fractions(7*(i*9+j*3+k)+0) = fractions(7*(2*9+j*3+k)+0)
+                     fractions(7*(2*9+j*3+k)+0) = temp
+                     temp = fractions(7*(i*9+j*3+k)+1)
+                     fractions(7*(i*9+j*3+k)+1) = -fractions(7*(2*9+j*3+k)+1)
+                     fractions(7*(2*9+j*3+k)+1) = -temp
+                     temp = fractions(7*(i*9+j*3+k)+2)
+                     fractions(7*(i*9+j*3+k)+2) = fractions(7*(2*9+j*3+k)+2)
+                     fractions(7*(2*9+j*3+k)+2) = temp
+                     temp = fractions(7*(i*9+j*3+k)+3)
+                     fractions(7*(i*9+j*3+k)+3) = fractions(7*(2*9+j*3+k)+3)
+                     fractions(7*(2*9+j*3+k)+3) = temp
+                     temp = fractions(7*(i*9+j*3+k)+4)
+                     fractions(7*(i*9+j*3+k)+4) = -fractions(7*(2*9+j*3+k)+4)
+                     fractions(7*(2*9+j*3+k)+4) = -temp
+                     temp = fractions(7*(i*9+j*3+k)+5)
+                     fractions(7*(i*9+j*3+k)+5) = fractions(7*(2*9+j*3+k)+5)
+                     fractions(7*(2*9+j*3+k)+5) = temp
+                     temp = fractions(7*(i*9+j*3+k)+6)
+                     fractions(7*(i*9+j*3+k)+6) = fractions(7*(2*9+j*3+k)+6)
+                     fractions(7*(2*9+j*3+k)+6) = temp
+                  else if (i.eq.1) then
+                     fractions(7*(i*9+j*3+k)+1) = -fractions(7*(i*9+j*3+k)+1)
+                     fractions(7*(i*9+j*3+k)+4) = -fractions(7*(i*9+j*3+k)+4)
+                  end if
+               end do
+            end do
+         end do
+      else if (center(0).ge.0.and.center(1).lt.0.and.center(2).ge.0) then
+         direction = 2
+         do k=0,2
+            do j=0,2
+               do i=0,2
+                  if (j.eq.0) then
+                     temp = fractions(7*(i*9+j*3+k)+0)
+                     fractions(7*(i*9+j*3+k)+0) = fractions(7*(i*9+2*3+k)+0)
+                     fractions(7*(i*9+2*3+k)+0) = temp
+                     temp = fractions(7*(i*9+j*3+k)+1)
+                     fractions(7*(i*9+j*3+k)+1) = fractions(7*(i*9+2*3+k)+1)
+                     fractions(7*(i*9+2*3+k)+1) = temp
+                     temp = fractions(7*(i*9+j*3+k)+2)
+                     fractions(7*(i*9+j*3+k)+2) = -fractions(7*(i*9+2*3+k)+2)
+                     fractions(7*(i*9+2*3+k)+2) = -temp
+                     temp = fractions(7*(i*9+j*3+k)+3)
+                     fractions(7*(i*9+j*3+k)+3) = fractions(7*(i*9+2*3+k)+3)
+                     fractions(7*(i*9+2*3+k)+3) = temp
+                     temp = fractions(7*(i*9+j*3+k)+4)
+                     fractions(7*(i*9+j*3+k)+4) = fractions(7*(i*9+2*3+k)+4)
+                     fractions(7*(i*9+2*3+k)+4) = temp
+                     temp = fractions(7*(i*9+j*3+k)+5)
+                     fractions(7*(i*9+j*3+k)+5) = -fractions(7*(i*9+2*3+k)+5)
+                     fractions(7*(i*9+2*3+k)+5) = -temp
+                     temp = fractions(7*(i*9+j*3+k)+6)
+                     fractions(7*(i*9+j*3+k)+6) = fractions(7*(i*9+2*3+k)+6)
+                     fractions(7*(i*9+2*3+k)+6) = temp
+                  else if (j.eq.1) then
+                     fractions(7*(i*9+j*3+k)+2) = -fractions(7*(i*9+j*3+k)+2)
+                     fractions(7*(i*9+j*3+k)+5) = -fractions(7*(i*9+j*3+k)+5)
+                  end if
+               end do
+            end do
+         end do
+      else if (center(0).ge.0.and.center(1).ge.0.and.center(2).lt.0) then
+         direction = 3
+         do k=0,2
+            do j=0,2
+               do i=0,2
+                  if (k.eq.0) then
+                     temp = fractions(7*(i*9+j*3+k)+0)
+                     fractions(7*(i*9+j*3+k)+0) = fractions(7*(i*9+j*3+2)+0)
+                     fractions(7*(i*9+j*3+2)+0) = temp
+                     temp = fractions(7*(i*9+j*3+k)+1)
+                     fractions(7*(i*9+j*3+k)+1) = fractions(7*(i*9+j*3+2)+1)
+                     fractions(7*(i*9+j*3+2)+1) = temp
+                     temp = fractions(7*(i*9+j*3+k)+2)
+                     fractions(7*(i*9+j*3+k)+2) = fractions(7*(i*9+j*3+2)+2)
+                     fractions(7*(i*9+j*3+2)+2) = temp
+                     temp = fractions(7*(i*9+j*3+k)+3)
+                     fractions(7*(i*9+j*3+k)+3) = -fractions(7*(i*9+j*3+2)+3)
+                     fractions(7*(i*9+j*3+2)+3) = -temp
+                     temp = fractions(7*(i*9+j*3+k)+4)
+                     fractions(7*(i*9+j*3+k)+4) = fractions(7*(i*9+j*3+2)+4)
+                     fractions(7*(i*9+j*3+2)+4) = temp
+                     temp = fractions(7*(i*9+j*3+k)+5)
+                     fractions(7*(i*9+j*3+k)+5) = fractions(7*(i*9+j*3+2)+5)
+                     fractions(7*(i*9+j*3+2)+5) = temp
+                     temp = fractions(7*(i*9+j*3+k)+6)
+                     fractions(7*(i*9+j*3+k)+6) = -fractions(7*(i*9+j*3+2)+6)
+                     fractions(7*(i*9+j*3+2)+6) = -temp
+                  else if (k.eq.1) then
+                     fractions(7*(i*9+j*3+k)+3) = -fractions(7*(i*9+j*3+k)+3)
+                     fractions(7*(i*9+j*3+k)+6) = -fractions(7*(i*9+j*3+k)+6)
+                  end if
+               end do
+            end do
+         end do
+      else if (center(0).lt.0.and.center(1).lt.0.and.center(2).ge.0) then
+         direction = 4
+         do k=0,2
+            do j=0,2
+               do i=0,2
+                  if (i.eq.0) then
+                     temp = fractions(7*(i*9+j*3+k)+0)
+                     fractions(7*(i*9+j*3+k)+0) = fractions(7*(2*9+j*3+k)+0)
+                     fractions(7*(2*9+j*3+k)+0) = temp
+                     temp = fractions(7*(i*9+j*3+k)+1)
+                     fractions(7*(i*9+j*3+k)+1) = -fractions(7*(2*9+j*3+k)+1)
+                     fractions(7*(2*9+j*3+k)+1) = -temp
+                     temp = fractions(7*(i*9+j*3+k)+2)
+                     fractions(7*(i*9+j*3+k)+2) = fractions(7*(2*9+j*3+k)+2)
+                     fractions(7*(2*9+j*3+k)+2) = temp
+                     temp = fractions(7*(i*9+j*3+k)+3)
+                     fractions(7*(i*9+j*3+k)+3) = fractions(7*(2*9+j*3+k)+3)
+                     fractions(7*(2*9+j*3+k)+3) = temp
+                     temp = fractions(7*(i*9+j*3+k)+4)
+                     fractions(7*(i*9+j*3+k)+4) = -fractions(7*(2*9+j*3+k)+4)
+                     fractions(7*(2*9+j*3+k)+4) = -temp
+                     temp = fractions(7*(i*9+j*3+k)+5)
+                     fractions(7*(i*9+j*3+k)+5) = fractions(7*(2*9+j*3+k)+5)
+                     fractions(7*(2*9+j*3+k)+5) = temp
+                     temp = fractions(7*(i*9+j*3+k)+6)
+                     fractions(7*(i*9+j*3+k)+6) = fractions(7*(2*9+j*3+k)+6)
+                     fractions(7*(2*9+j*3+k)+6) = temp
+                  else if (i.eq.1) then
+                     fractions(7*(i*9+j*3+k)+1) = -fractions(7*(i*9+j*3+k)+1)
+                     fractions(7*(i*9+j*3+k)+4) = -fractions(7*(i*9+j*3+k)+4)
+                  end if
+               end do
+            end do
+         end do
+         do k=0,2
+            do j=0,2
+               do i=0,2
+                  if (j.eq.0) then
+                     temp = fractions(7*(i*9+j*3+k)+0)
+                     fractions(7*(i*9+j*3+k)+0) = fractions(7*(i*9+2*3+k)+0)
+                     fractions(7*(i*9+2*3+k)+0) = temp
+                     temp = fractions(7*(i*9+j*3+k)+1)
+                     fractions(7*(i*9+j*3+k)+1) = fractions(7*(i*9+2*3+k)+1)
+                     fractions(7*(i*9+2*3+k)+1) = temp
+                     temp = fractions(7*(i*9+j*3+k)+2)
+                     fractions(7*(i*9+j*3+k)+2) = -fractions(7*(i*9+2*3+k)+2)
+                     fractions(7*(i*9+2*3+k)+2) = -temp
+                     temp = fractions(7*(i*9+j*3+k)+3)
+                     fractions(7*(i*9+j*3+k)+3) = fractions(7*(i*9+2*3+k)+3)
+                     fractions(7*(i*9+2*3+k)+3) = temp
+                     temp = fractions(7*(i*9+j*3+k)+4)
+                     fractions(7*(i*9+j*3+k)+4) = fractions(7*(i*9+2*3+k)+4)
+                     fractions(7*(i*9+2*3+k)+4) = temp
+                     temp = fractions(7*(i*9+j*3+k)+5)
+                     fractions(7*(i*9+j*3+k)+5) = -fractions(7*(i*9+2*3+k)+5)
+                     fractions(7*(i*9+2*3+k)+5) = -temp
+                     temp = fractions(7*(i*9+j*3+k)+6)
+                     fractions(7*(i*9+j*3+k)+6) = fractions(7*(i*9+2*3+k)+6)
+                     fractions(7*(i*9+2*3+k)+6) = temp
+                  else if (j.eq.1) then
+                     fractions(7*(i*9+j*3+k)+2) = -fractions(7*(i*9+j*3+k)+2)
+                     fractions(7*(i*9+j*3+k)+5) = -fractions(7*(i*9+j*3+k)+5)
+                  end if
+               end do
+            end do
+         end do
+      else if (center(0).lt.0.and.center(1).ge.0.and.center(2).lt.0) then
+         direction = 5
+         do k=0,2
+            do j=0,2
+               do i=0,2
+                  if (i.eq.0) then
+                     temp = fractions(7*(i*9+j*3+k)+0)
+                     fractions(7*(i*9+j*3+k)+0) = fractions(7*(2*9+j*3+k)+0)
+                     fractions(7*(2*9+j*3+k)+0) = temp
+                     temp = fractions(7*(i*9+j*3+k)+1)
+                     fractions(7*(i*9+j*3+k)+1) = -fractions(7*(2*9+j*3+k)+1)
+                     fractions(7*(2*9+j*3+k)+1) = -temp
+                     temp = fractions(7*(i*9+j*3+k)+2)
+                     fractions(7*(i*9+j*3+k)+2) = fractions(7*(2*9+j*3+k)+2)
+                     fractions(7*(2*9+j*3+k)+2) = temp
+                     temp = fractions(7*(i*9+j*3+k)+3)
+                     fractions(7*(i*9+j*3+k)+3) = fractions(7*(2*9+j*3+k)+3)
+                     fractions(7*(2*9+j*3+k)+3) = temp
+                     temp = fractions(7*(i*9+j*3+k)+4)
+                     fractions(7*(i*9+j*3+k)+4) = -fractions(7*(2*9+j*3+k)+4)
+                     fractions(7*(2*9+j*3+k)+4) = -temp
+                     temp = fractions(7*(i*9+j*3+k)+5)
+                     fractions(7*(i*9+j*3+k)+5) = fractions(7*(2*9+j*3+k)+5)
+                     fractions(7*(2*9+j*3+k)+5) = temp
+                     temp = fractions(7*(i*9+j*3+k)+6)
+                     fractions(7*(i*9+j*3+k)+6) = fractions(7*(2*9+j*3+k)+6)
+                     fractions(7*(2*9+j*3+k)+6) = temp
+                  else if (i.eq.1) then
+                     fractions(7*(i*9+j*3+k)+1) = -fractions(7*(i*9+j*3+k)+1)
+                     fractions(7*(i*9+j*3+k)+4) = -fractions(7*(i*9+j*3+k)+4)
+                  end if
+               end do
+            end do
+         end do
+         do k=0,2
+            do j=0,2
+               do i=0,2
+                  if (k.eq.0) then
+                     temp = fractions(7*(i*9+j*3+k)+0)
+                     fractions(7*(i*9+j*3+k)+0) = fractions(7*(i*9+j*3+2)+0)
+                     fractions(7*(i*9+j*3+2)+0) = temp
+                     temp = fractions(7*(i*9+j*3+k)+1)
+                     fractions(7*(i*9+j*3+k)+1) = fractions(7*(i*9+j*3+2)+1)
+                     fractions(7*(i*9+j*3+2)+1) = temp
+                     temp = fractions(7*(i*9+j*3+k)+2)
+                     fractions(7*(i*9+j*3+k)+2) = fractions(7*(i*9+j*3+2)+2)
+                     fractions(7*(i*9+j*3+2)+2) = temp
+                     temp = fractions(7*(i*9+j*3+k)+3)
+                     fractions(7*(i*9+j*3+k)+3) = -fractions(7*(i*9+j*3+2)+3)
+                     fractions(7*(i*9+j*3+2)+3) = -temp
+                     temp = fractions(7*(i*9+j*3+k)+4)
+                     fractions(7*(i*9+j*3+k)+4) = fractions(7*(i*9+j*3+2)+4)
+                     fractions(7*(i*9+j*3+2)+4) = temp
+                     temp = fractions(7*(i*9+j*3+k)+5)
+                     fractions(7*(i*9+j*3+k)+5) = fractions(7*(i*9+j*3+2)+5)
+                     fractions(7*(i*9+j*3+2)+5) = temp
+                     temp = fractions(7*(i*9+j*3+k)+6)
+                     fractions(7*(i*9+j*3+k)+6) = -fractions(7*(i*9+j*3+2)+6)
+                     fractions(7*(i*9+j*3+2)+6) = -temp
+                  else if (k.eq.1) then
+                     fractions(7*(i*9+j*3+k)+3) = -fractions(7*(i*9+j*3+k)+3)
+                     fractions(7*(i*9+j*3+k)+6) = -fractions(7*(i*9+j*3+k)+6)
+                  end if
+               end do
+            end do
+         end do
+      else if (center(0).ge.0.and.center(1).lt.0.and.center(2).lt.0) then
+         direction = 6
+         do k=0,2
+            do j=0,2
+               do i=0,2
+                  if (j.eq.0) then
+                     temp = fractions(7*(i*9+j*3+k)+0)
+                     fractions(7*(i*9+j*3+k)+0) = fractions(7*(i*9+2*3+k)+0)
+                     fractions(7*(i*9+2*3+k)+0) = temp
+                     temp = fractions(7*(i*9+j*3+k)+1)
+                     fractions(7*(i*9+j*3+k)+1) = fractions(7*(i*9+2*3+k)+1)
+                     fractions(7*(i*9+2*3+k)+1) = temp
+                     temp = fractions(7*(i*9+j*3+k)+2)
+                     fractions(7*(i*9+j*3+k)+2) = -fractions(7*(i*9+2*3+k)+2)
+                     fractions(7*(i*9+2*3+k)+2) = -temp
+                     temp = fractions(7*(i*9+j*3+k)+3)
+                     fractions(7*(i*9+j*3+k)+3) = fractions(7*(i*9+2*3+k)+3)
+                     fractions(7*(i*9+2*3+k)+3) = temp
+                     temp = fractions(7*(i*9+j*3+k)+4)
+                     fractions(7*(i*9+j*3+k)+4) = fractions(7*(i*9+2*3+k)+4)
+                     fractions(7*(i*9+2*3+k)+4) = temp
+                     temp = fractions(7*(i*9+j*3+k)+5)
+                     fractions(7*(i*9+j*3+k)+5) = -fractions(7*(i*9+2*3+k)+5)
+                     fractions(7*(i*9+2*3+k)+5) = -temp
+                     temp = fractions(7*(i*9+j*3+k)+6)
+                     fractions(7*(i*9+j*3+k)+6) = fractions(7*(i*9+2*3+k)+6)
+                     fractions(7*(i*9+2*3+k)+6) = temp
+                  else if (j.eq.1) then
+                     fractions(7*(i*9+j*3+k)+2) = -fractions(7*(i*9+j*3+k)+2)
+                     fractions(7*(i*9+j*3+k)+5) = -fractions(7*(i*9+j*3+k)+5)
+                  end if
+               end do
+            end do
+         end do
+         do k=0,2
+            do j=0,2
+               do i=0,2
+                  if (k.eq.0) then
+                     temp = fractions(7*(i*9+j*3+k)+0)
+                     fractions(7*(i*9+j*3+k)+0) = fractions(7*(i*9+j*3+2)+0)
+                     fractions(7*(i*9+j*3+2)+0) = temp
+                     temp = fractions(7*(i*9+j*3+k)+1)
+                     fractions(7*(i*9+j*3+k)+1) = fractions(7*(i*9+j*3+2)+1)
+                     fractions(7*(i*9+j*3+2)+1) = temp
+                     temp = fractions(7*(i*9+j*3+k)+2)
+                     fractions(7*(i*9+j*3+k)+2) = fractions(7*(i*9+j*3+2)+2)
+                     fractions(7*(i*9+j*3+2)+2) = temp
+                     temp = fractions(7*(i*9+j*3+k)+3)
+                     fractions(7*(i*9+j*3+k)+3) = -fractions(7*(i*9+j*3+2)+3)
+                     fractions(7*(i*9+j*3+2)+3) = -temp
+                     temp = fractions(7*(i*9+j*3+k)+4)
+                     fractions(7*(i*9+j*3+k)+4) = fractions(7*(i*9+j*3+2)+4)
+                     fractions(7*(i*9+j*3+2)+4) = temp
+                     temp = fractions(7*(i*9+j*3+k)+5)
+                     fractions(7*(i*9+j*3+k)+5) = fractions(7*(i*9+j*3+2)+5)
+                     fractions(7*(i*9+j*3+2)+5) = temp
+                     temp = fractions(7*(i*9+j*3+k)+6)
+                     fractions(7*(i*9+j*3+k)+6) = -fractions(7*(i*9+j*3+2)+6)
+                     fractions(7*(i*9+j*3+2)+6) = -temp
+                  else if (k.eq.1) then
+                     fractions(7*(i*9+j*3+k)+3) = -fractions(7*(i*9+j*3+k)+3)
+                     fractions(7*(i*9+j*3+k)+6) = -fractions(7*(i*9+j*3+k)+6)
+                  end if
+               end do
+            end do
+         end do
+      else if (center(0).lt.0.and.center(1).lt.0.and.center(2).lt.0) then
+         direction = 7
+         do k=0,2
+            do j=0,2
+               do i=0,2
+                  if (i.eq.0) then
+                     temp = fractions(7*(i*9+j*3+k)+0)
+                     fractions(7*(i*9+j*3+k)+0) = fractions(7*(2*9+j*3+k)+0)
+                     fractions(7*(2*9+j*3+k)+0) = temp
+                     temp = fractions(7*(i*9+j*3+k)+1)
+                     fractions(7*(i*9+j*3+k)+1) = -fractions(7*(2*9+j*3+k)+1)
+                     fractions(7*(2*9+j*3+k)+1) = -temp
+                     temp = fractions(7*(i*9+j*3+k)+2)
+                     fractions(7*(i*9+j*3+k)+2) = fractions(7*(2*9+j*3+k)+2)
+                     fractions(7*(2*9+j*3+k)+2) = temp
+                     temp = fractions(7*(i*9+j*3+k)+3)
+                     fractions(7*(i*9+j*3+k)+3) = fractions(7*(2*9+j*3+k)+3)
+                     fractions(7*(2*9+j*3+k)+3) = temp
+                     temp = fractions(7*(i*9+j*3+k)+4)
+                     fractions(7*(i*9+j*3+k)+4) = -fractions(7*(2*9+j*3+k)+4)
+                     fractions(7*(2*9+j*3+k)+4) = -temp
+                     temp = fractions(7*(i*9+j*3+k)+5)
+                     fractions(7*(i*9+j*3+k)+5) = fractions(7*(2*9+j*3+k)+5)
+                     fractions(7*(2*9+j*3+k)+5) = temp
+                     temp = fractions(7*(i*9+j*3+k)+6)
+                     fractions(7*(i*9+j*3+k)+6) = fractions(7*(2*9+j*3+k)+6)
+                     fractions(7*(2*9+j*3+k)+6) = temp
+                  else if (i.eq.1) then
+                     fractions(7*(i*9+j*3+k)+1) = -fractions(7*(i*9+j*3+k)+1)
+                     fractions(7*(i*9+j*3+k)+4) = -fractions(7*(i*9+j*3+k)+4)
+                  end if
+               end do
+            end do
+         end do
+         do k=0,2
+            do j=0,2
+               do i=0,2
+                  if (j.eq.0) then
+                     temp = fractions(7*(i*9+j*3+k)+0)
+                     fractions(7*(i*9+j*3+k)+0) = fractions(7*(i*9+2*3+k)+0)
+                     fractions(7*(i*9+2*3+k)+0) = temp
+                     temp = fractions(7*(i*9+j*3+k)+1)
+                     fractions(7*(i*9+j*3+k)+1) = fractions(7*(i*9+2*3+k)+1)
+                     fractions(7*(i*9+2*3+k)+1) = temp
+                     temp = fractions(7*(i*9+j*3+k)+2)
+                     fractions(7*(i*9+j*3+k)+2) = -fractions(7*(i*9+2*3+k)+2)
+                     fractions(7*(i*9+2*3+k)+2) = -temp
+                     temp = fractions(7*(i*9+j*3+k)+3)
+                     fractions(7*(i*9+j*3+k)+3) = fractions(7*(i*9+2*3+k)+3)
+                     fractions(7*(i*9+2*3+k)+3) = temp
+                     temp = fractions(7*(i*9+j*3+k)+4)
+                     fractions(7*(i*9+j*3+k)+4) = fractions(7*(i*9+2*3+k)+4)
+                     fractions(7*(i*9+2*3+k)+4) = temp
+                     temp = fractions(7*(i*9+j*3+k)+5)
+                     fractions(7*(i*9+j*3+k)+5) = -fractions(7*(i*9+2*3+k)+5)
+                     fractions(7*(i*9+2*3+k)+5) = -temp
+                     temp = fractions(7*(i*9+j*3+k)+6)
+                     fractions(7*(i*9+j*3+k)+6) = fractions(7*(i*9+2*3+k)+6)
+                     fractions(7*(i*9+2*3+k)+6) = temp
+                  else if (j.eq.1) then
+                     fractions(7*(i*9+j*3+k)+2) = -fractions(7*(i*9+j*3+k)+2)
+                     fractions(7*(i*9+j*3+k)+5) = -fractions(7*(i*9+j*3+k)+5)
+                  end if
+               end do
+            end do
+         end do
+         do k=0,2
+            do j=0,2
+               do i=0,2
+                  if (k.eq.0) then
+                     temp = fractions(7*(i*9+j*3+k)+0)
+                     fractions(7*(i*9+j*3+k)+0) = fractions(7*(i*9+j*3+2)+0)
+                     fractions(7*(i*9+j*3+2)+0) = temp
+                     temp = fractions(7*(i*9+j*3+k)+1)
+                     fractions(7*(i*9+j*3+k)+1) = fractions(7*(i*9+j*3+2)+1)
+                     fractions(7*(i*9+j*3+2)+1) = temp
+                     temp = fractions(7*(i*9+j*3+k)+2)
+                     fractions(7*(i*9+j*3+k)+2) = fractions(7*(i*9+j*3+2)+2)
+                     fractions(7*(i*9+j*3+2)+2) = temp
+                     temp = fractions(7*(i*9+j*3+k)+3)
+                     fractions(7*(i*9+j*3+k)+3) = -fractions(7*(i*9+j*3+2)+3)
+                     fractions(7*(i*9+j*3+2)+3) = -temp
+                     temp = fractions(7*(i*9+j*3+k)+4)
+                     fractions(7*(i*9+j*3+k)+4) = fractions(7*(i*9+j*3+2)+4)
+                     fractions(7*(i*9+j*3+2)+4) = temp
+                     temp = fractions(7*(i*9+j*3+k)+5)
+                     fractions(7*(i*9+j*3+k)+5) = fractions(7*(i*9+j*3+2)+5)
+                     fractions(7*(i*9+j*3+2)+5) = temp
+                     temp = fractions(7*(i*9+j*3+k)+6)
+                     fractions(7*(i*9+j*3+k)+6) = -fractions(7*(i*9+j*3+2)+6)
+                     fractions(7*(i*9+j*3+2)+6) = -temp
+                  else if (k.eq.1) then
+                     fractions(7*(i*9+j*3+k)+3) = -fractions(7*(i*9+j*3+k)+3)
+                     fractions(7*(i*9+j*3+k)+6) = -fractions(7*(i*9+j*3+k)+6)
+                  end if
+               end do
+            end do
+         end do
+      end if
+
+   end subroutine
    
 
 end module vfs_class
