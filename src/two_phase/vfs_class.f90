@@ -2120,8 +2120,8 @@ contains
       logical :: flip
       real(IRL_double) :: m000, m100, m010, m001
       real(IRL_double), dimension(0:2) :: center
-      real(IRL_double), dimension(0:0) :: vf_center
-      real(IRL_double), dimension(0:5) :: cell_bounds
+      real(IRL_double) :: initial_dist
+      type(RectCub_type) :: cell
       
       ! Traverse domain and reconstruct interface
       do k=this%cfg%kmin_,this%cfg%kmax_
@@ -2210,10 +2210,13 @@ contains
                   normal(1) = -normal(1)
                   normal(2) = -normal(2)
                end if
-               vf_center = this%VF(i,j,k)
-               cell_bounds = [this%cfg%x(i),this%cfg%y(j),this%cfg%z(k),this%cfg%x(i+1),this%cfg%y(j+1),this%cfg%z(k+1)]
                ! Locate PLIC plane in cell
-               call reconstructML(normal, vf_center, cell_bounds, this%liquid_gas_interface(i,j,k))
+               call new(cell)
+               call construct_2pt(cell, [this%cfg%x(i),this%cfg%y(j),this%cfg%z(k)], [this%cfg%x(i+1),this%cfg%y(j+1),this%cfg%z(k+1)])
+               initial_dist=dot_product(normal,[this%cfg%xm(i),this%cfg%ym(j),this%cfg%zm(k)])
+               call setNumberOfPlanes(this%liquid_gas_interface(i,j,k),1)
+               call setPlane(this%liquid_gas_interface(i,j,k),0,normal,initial_dist)
+               call matchVolumeFraction(cell, this%VF(i,j,k), this%liquid_gas_interface(i,j,k))
             end do
          end do
       end do
