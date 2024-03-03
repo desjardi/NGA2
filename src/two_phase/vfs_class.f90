@@ -29,12 +29,12 @@ module vfs_class
    integer, parameter, public :: swartz=6            !< Swartz scheme
    integer, parameter, public :: youngs=7            !< Youngs' scheme
    integer, parameter, public :: lvlset=8            !< Levelset-based scheme
-
+   
    ! List of available interface trasnport schemes for VF
-   integer, parameter, public :: Cflux=1             !< Conservative flux-based geometric transport
-   integer, parameter, public :: Cflux_storage=2     !< Conservative flux-based geometric transport with storage of detailed face fluxes
-   integer, parameter, public :: Ccell=3             !< Conservative cell-based geometric transport (faster but fluxes are not available)
-   integer, parameter, public :: Ccell_storage=4     !< Conservative cell-based geometric transport with storage of detailed volume moments
+   integer, parameter, public :: flux=1             !< Flux-based geometric transport
+   integer, parameter, public :: flux_storage=2     !< Flux-based geometric transport with storage of detailed face fluxes
+   integer, parameter, public :: remap=3            !< Cell-based geometric transport (faster but fluxes are not available)
+   integer, parameter, public :: remap_storage=4    !< Cell-based geometric transport with storage of detailed volume moments
    
    ! IRL cutting moment calculation method
    integer, parameter, public :: recursive_simplex=0 !< Recursive simplex cutting
@@ -108,6 +108,7 @@ module vfs_class
       ! Interface handling methods
       integer :: reconstruction_method                    !< Interface reconstruction method
       integer :: transport_method                         !< Interface transport method
+      logical :: cons_correct=.true.                      !< Conservative correction (true by default)
       
       ! Flotsam removal parameter
       real(WP) :: flotsam_thld=0.0_WP                     !< Threshold VF parameter for flotsam removal (0.0=off by default)
@@ -188,10 +189,10 @@ module vfs_class
       procedure :: read_interface                         !< Read an IRL interface from a file
       procedure :: write_interface                        !< Write an IRL interface to a file
       procedure :: advance                                !< Advance VF to next step
-      procedure :: transport_cflux                        !< Transport VF using conservative geometric fluxing
-      procedure :: transport_cflux_storage                !< Transport VF using conservative geometric fluxing with storage
-      procedure :: transport_ccell                        !< Transport VF using conservative geometric cell remap
-      procedure :: transport_ccell_storage                !< Transport VF using conservative geometric cell remap with storage
+      procedure :: transport_flux                         !< Transport VF using geometric fluxing
+      procedure :: transport_flux_storage                 !< Transport VF using geometric fluxing with storage
+      procedure :: transport_remap                        !< Transport VF using geometric cell remap
+      procedure :: transport_remap_storage                !< Transport VF using geometric cell remap with storage
       procedure :: advect_interface                       !< Advance IRL surface to next step
       procedure :: build_interface                        !< Reconstruct IRL interface from VF field
       procedure :: build_elvira                           !< ELVIRA reconstruction of the interface from VF field
@@ -244,11 +245,11 @@ contains
       ! Set the name for the solver
       if (present(name)) this%name=trim(adjustl(name))
       
-      ! Set optional detailed flux info
+      ! Set transport scheme
       if (present(transport_method)) then
          this%transport_method=transport_method
       else
-         this%transport_method=Cflux ! Set conservative flux-based geometric transport as default (should change at some point)
+         this%transport_method=flux ! Set flux-based geometric transport as default (could change at some point)
       end if
       
       ! Check that we have at least 3 overlap cells - we can push that to 2 with limited work!
@@ -390,7 +391,7 @@ contains
       
       ! Work arrays for flux-based transport
       select case (this%transport_method)
-      case (Cflux)
+      case (flux)
          ! Arrays for storing face fluxes
          allocate(this%face_flux(1:3,this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
          do k=this%cfg%kmino_,this%cfg%kmaxo_
@@ -402,7 +403,7 @@ contains
                end do
             end do
          end do
-      case (Cflux_storage)
+      case (flux_storage)
          ! Arrays for storing face fluxes and detailed flux geometry
          allocate(this%face_flux         (1:3,this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
          allocate(this%detailed_face_flux(1:3,this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
@@ -416,9 +417,9 @@ contains
                end do
             end do
          end do
-      case (Ccell)
+      case (remap)
          ! No storage needed
-      case (Ccell_storage)
+      case (remap_storage)
          ! Array for storing detailed remapped cell geometry
          allocate(this%detailed_remap(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
          do k=this%cfg%kmino_,this%cfg%kmaxo_
@@ -796,14 +797,14 @@ contains
       
       ! First perform transport
       select case (this%transport_method)
-      case (Cflux)
-         call this%transport_cflux(dt,U,V,W)
-      case (Cflux_storage)
-         call this%transport_cflux_storage(dt,U,V,W)
-      case (Ccell)
-         call this%transport_ccell(dt,U,V,W)
-      case (Ccell_storage)
-         call this%transport_ccell_storage(dt,U,V,W)
+      case (flux)
+         call this%transport_flux(dt,U,V,W)
+      case (flux_storage)
+         call this%transport_flux_storage(dt,U,V,W)
+      case (remap)
+         call this%transport_remap(dt,U,V,W)
+      case (remap_storage)
+         call this%transport_remap_storage(dt,U,V,W)
       end select
       
       ! Advect interface polygons
@@ -843,8 +844,8 @@ contains
    end subroutine advance
    
 
-   !> Perform conservative cell-based transport of VF based on U/V/W and dt
-   subroutine transport_ccell(this,dt,U,V,W)
+   !> Perform cell-based transport of VF based on U/V/W and dt
+   subroutine transport_remap(this,dt,U,V,W)
       implicit none
       class(vfs), intent(inout) :: this
       real(WP), intent(inout) :: dt  !< Timestep size over which to advance
@@ -890,7 +891,7 @@ contains
          face(:,4)=[this%cfg%x(i  ),this%cfg%y(j+1),this%cfg%z(k+1)]; face(:,8)=cell(:,8)
          face(:,9)=0.25_WP*(face(:,5)+face(:,6)+face(:,7)+face(:,8))
          call construct(remap_face,face)
-         call adjustCapToMatchVolume(remap_face,dt*U(i,j,k)*this%cfg%dy(j)*this%cfg%dz(k))
+         if (this%cons_correct) call adjustCapToMatchVolume(remap_face,dt*U(i,j,k)*this%cfg%dy(j)*this%cfg%dz(k))
          cell(:,14)=getPt(remap_face,8)
          
          ! Correct volume of x+ face
@@ -900,7 +901,7 @@ contains
          face(:,4)=[this%cfg%x(i+1),this%cfg%y(j+1),this%cfg%z(k+1)]; face(:,8)=cell(:,4)
          face(:,9)=0.25_WP*(face(:,5)+face(:,6)+face(:,7)+face(:,8))
          call construct(remap_face,face)
-         call adjustCapToMatchVolume(remap_face,dt*U(i+1,j,k)*this%cfg%dy(j)*this%cfg%dz(k))
+         if (this%cons_correct) call adjustCapToMatchVolume(remap_face,dt*U(i+1,j,k)*this%cfg%dy(j)*this%cfg%dz(k))
          cell(:, 9)=getPt(remap_face,8)
          
          ! Correct volume of y- face
@@ -910,7 +911,7 @@ contains
          face(:,4)=[this%cfg%x(i+1),this%cfg%y(j  ),this%cfg%z(k+1)]; face(:,8)=cell(:,1)
          face(:,9)=0.25_WP*(face(:,5)+face(:,6)+face(:,7)+face(:,8))
          call construct(remap_face,face)
-         call adjustCapToMatchVolume(remap_face,dt*V(i,j,k)*this%cfg%dx(i)*this%cfg%dz(k))
+         if (this%cons_correct) call adjustCapToMatchVolume(remap_face,dt*V(i,j,k)*this%cfg%dx(i)*this%cfg%dz(k))
          cell(:,10)=getPt(remap_face,8)
          
          ! Correct volume of y+ face
@@ -920,7 +921,7 @@ contains
          face(:,4)=[this%cfg%x(i+1),this%cfg%y(j+1),this%cfg%z(k+1)]; face(:,8)=cell(:,4)
          face(:,9)=0.25_WP*(face(:,5)+face(:,6)+face(:,7)+face(:,8))
          call construct(remap_face,face)
-         call adjustCapToMatchVolume(remap_face,dt*V(i,j+1,k)*this%cfg%dx(i)*this%cfg%dz(k))
+         if (this%cons_correct) call adjustCapToMatchVolume(remap_face,dt*V(i,j+1,k)*this%cfg%dx(i)*this%cfg%dz(k))
          cell(:,12)=getPt(remap_face,8)
          
          ! Correct volume of z- face
@@ -930,7 +931,7 @@ contains
          face(:,4)=[this%cfg%x(i+1),this%cfg%y(j+1),this%cfg%z(k  )]; face(:,8)=cell(:,3)
          face(:,9)=0.25_WP*(face(:,5)+face(:,6)+face(:,7)+face(:,8))
          call construct(remap_face,face)
-         call adjustCapToMatchVolume(remap_face,dt*W(i,j,k)*this%cfg%dx(i)*this%cfg%dy(j))
+         if (this%cons_correct) call adjustCapToMatchVolume(remap_face,dt*W(i,j,k)*this%cfg%dx(i)*this%cfg%dy(j))
          cell(:,11)=getPt(remap_face,8)
          
          ! Correct volume of z+ face
@@ -940,7 +941,7 @@ contains
          face(:,4)=[this%cfg%x(i+1),this%cfg%y(j+1),this%cfg%z(k+1)]; face(:,8)=cell(:,4)
          face(:,9)=0.25_WP*(face(:,5)+face(:,6)+face(:,7)+face(:,8))
          call construct(remap_face,face)
-         call adjustCapToMatchVolume(remap_face,dt*W(i,j,k+1)*this%cfg%dx(i)*this%cfg%dy(j))
+         if (this%cons_correct) call adjustCapToMatchVolume(remap_face,dt*W(i,j,k+1)*this%cfg%dx(i)*this%cfg%dy(j))
          cell(:,13)=getPt(remap_face,8)
          
          ! Form remapped cell in IRL
@@ -983,12 +984,12 @@ contains
       call this%cfg%sync(this%VF)
       call this%sync_and_clean_barycenters()
       
-   end subroutine transport_ccell
+   end subroutine transport_remap
    
    
-   !> Perform conservative cell-based transport of VF based on U/V/W and dt
+   !> Perform cell-based transport of VF based on U/V/W and dt
    !> Include storage of detailed geometry of remapped cell
-   subroutine transport_ccell_storage(this,dt,U,V,W)
+   subroutine transport_remap_storage(this,dt,U,V,W)
       implicit none
       class(vfs), intent(inout) :: this
       real(WP), intent(inout) :: dt  !< Timestep size over which to advance
@@ -1043,7 +1044,7 @@ contains
          face(:,4)=[this%cfg%x(i  ),this%cfg%y(j+1),this%cfg%z(k+1)]; face(:,8)=cell(:,8)
          face(:,9)=0.25_WP*(face(:,5)+face(:,6)+face(:,7)+face(:,8))
          call construct(remap_face,face)
-         call adjustCapToMatchVolume(remap_face,dt*U(i,j,k)*this%cfg%dy(j)*this%cfg%dz(k))
+         if (this%cons_correct) call adjustCapToMatchVolume(remap_face,dt*U(i,j,k)*this%cfg%dy(j)*this%cfg%dz(k))
          cell(:,14)=getPt(remap_face,8)
          
          ! Correct volume of x+ face
@@ -1053,7 +1054,7 @@ contains
          face(:,4)=[this%cfg%x(i+1),this%cfg%y(j+1),this%cfg%z(k+1)]; face(:,8)=cell(:,4)
          face(:,9)=0.25_WP*(face(:,5)+face(:,6)+face(:,7)+face(:,8))
          call construct(remap_face,face)
-         call adjustCapToMatchVolume(remap_face,dt*U(i+1,j,k)*this%cfg%dy(j)*this%cfg%dz(k))
+         if (this%cons_correct) call adjustCapToMatchVolume(remap_face,dt*U(i+1,j,k)*this%cfg%dy(j)*this%cfg%dz(k))
          cell(:, 9)=getPt(remap_face,8)
          
          ! Correct volume of y- face
@@ -1063,7 +1064,7 @@ contains
          face(:,4)=[this%cfg%x(i+1),this%cfg%y(j  ),this%cfg%z(k+1)]; face(:,8)=cell(:,1)
          face(:,9)=0.25_WP*(face(:,5)+face(:,6)+face(:,7)+face(:,8))
          call construct(remap_face,face)
-         call adjustCapToMatchVolume(remap_face,dt*V(i,j,k)*this%cfg%dx(i)*this%cfg%dz(k))
+         if (this%cons_correct) call adjustCapToMatchVolume(remap_face,dt*V(i,j,k)*this%cfg%dx(i)*this%cfg%dz(k))
          cell(:,10)=getPt(remap_face,8)
          
          ! Correct volume of y+ face
@@ -1073,7 +1074,7 @@ contains
          face(:,4)=[this%cfg%x(i+1),this%cfg%y(j+1),this%cfg%z(k+1)]; face(:,8)=cell(:,4)
          face(:,9)=0.25_WP*(face(:,5)+face(:,6)+face(:,7)+face(:,8))
          call construct(remap_face,face)
-         call adjustCapToMatchVolume(remap_face,dt*V(i,j+1,k)*this%cfg%dx(i)*this%cfg%dz(k))
+         if (this%cons_correct) call adjustCapToMatchVolume(remap_face,dt*V(i,j+1,k)*this%cfg%dx(i)*this%cfg%dz(k))
          cell(:,12)=getPt(remap_face,8)
          
          ! Correct volume of z- face
@@ -1083,7 +1084,7 @@ contains
          face(:,4)=[this%cfg%x(i+1),this%cfg%y(j+1),this%cfg%z(k  )]; face(:,8)=cell(:,3)
          face(:,9)=0.25_WP*(face(:,5)+face(:,6)+face(:,7)+face(:,8))
          call construct(remap_face,face)
-         call adjustCapToMatchVolume(remap_face,dt*W(i,j,k)*this%cfg%dx(i)*this%cfg%dy(j))
+         if (this%cons_correct) call adjustCapToMatchVolume(remap_face,dt*W(i,j,k)*this%cfg%dx(i)*this%cfg%dy(j))
          cell(:,11)=getPt(remap_face,8)
          
          ! Correct volume of z+ face
@@ -1093,7 +1094,7 @@ contains
          face(:,4)=[this%cfg%x(i+1),this%cfg%y(j+1),this%cfg%z(k+1)]; face(:,8)=cell(:,4)
          face(:,9)=0.25_WP*(face(:,5)+face(:,6)+face(:,7)+face(:,8))
          call construct(remap_face,face)
-         call adjustCapToMatchVolume(remap_face,dt*W(i,j,k+1)*this%cfg%dx(i)*this%cfg%dy(j))
+         if (this%cons_correct) call adjustCapToMatchVolume(remap_face,dt*W(i,j,k+1)*this%cfg%dx(i)*this%cfg%dy(j))
          cell(:,13)=getPt(remap_face,8)
          
          ! Form remapped cell in IRL
@@ -1142,11 +1143,11 @@ contains
       call this%cfg%sync(this%VF)
       call this%sync_and_clean_barycenters()
       
-   end subroutine transport_ccell_storage
+   end subroutine transport_remap_storage
    
    
-   !> Perform conservative flux-based transport of VF based on U/V/W and dt
-   subroutine transport_cflux(this,dt,U,V,W)
+   !> Perform flux-based transport of VF based on U/V/W and dt
+   subroutine transport_flux(this,dt,U,V,W)
       implicit none
       class(vfs), intent(inout) :: this
       real(WP), intent(inout) :: dt  !< Timestep size over which to advance
@@ -1184,7 +1185,7 @@ contains
                   ! Form flux polyhedron
                   call construct(flux_polyhedron,face)
                   ! Add solenoidal correction
-                  call adjustCapToMatchVolume(flux_polyhedron,dt*U(i,j,k)*this%cfg%dy(j)*this%cfg%dz(k))
+                  if (this%cons_correct) call adjustCapToMatchVolume(flux_polyhedron,dt*U(i,j,k)*this%cfg%dy(j)*this%cfg%dz(k))
                   ! Get bounds for flux polyhedron
                   call getBoundingPts(flux_polyhedron,bounding_pts(:,1),bounding_pts(:,2))
                   bb_indices(:,1)=this%cfg%get_ijk_local(bounding_pts(:,1),[i,j,k])
@@ -1213,7 +1214,7 @@ contains
                   ! Form flux polyhedron
                   call construct(flux_polyhedron,face)
                   ! Add solenoidal correction
-                  call adjustCapToMatchVolume(flux_polyhedron,dt*V(i,j,k)*this%cfg%dx(i)*this%cfg%dz(k))
+                  if (this%cons_correct) call adjustCapToMatchVolume(flux_polyhedron,dt*V(i,j,k)*this%cfg%dx(i)*this%cfg%dz(k))
                   ! Get bounds for flux polyhedron
                   call getBoundingPts(flux_polyhedron,bounding_pts(:,1),bounding_pts(:,2))
                   bb_indices(:,1)=this%cfg%get_ijk_local(bounding_pts(:,1),[i,j,k])
@@ -1242,7 +1243,7 @@ contains
                   ! Form flux polyhedron
                   call construct(flux_polyhedron,face)
                   ! Add solenoidal correction
-                  call adjustCapToMatchVolume(flux_polyhedron,dt*W(i,j,k)*this%cfg%dx(i)*this%cfg%dy(j))
+                  if (this%cons_correct) call adjustCapToMatchVolume(flux_polyhedron,dt*W(i,j,k)*this%cfg%dx(i)*this%cfg%dy(j))
                   ! Get bounds for flux polyhedron
                   call getBoundingPts(flux_polyhedron,bounding_pts(:,1),bounding_pts(:,2))
                   bb_indices(:,1)=this%cfg%get_ijk_local(bounding_pts(:,1),[i,j,k])
@@ -1314,12 +1315,12 @@ contains
       call this%cfg%sync(this%VF)
       call this%sync_and_clean_barycenters()
       
-   end subroutine transport_cflux
+   end subroutine transport_flux
 
 
-   !> Perform conservative flux-based transport of VF based on U/V/W and dt
+   !> Perform flux-based transport of VF based on U/V/W and dt
    !> Include storage of detailed fluxes
-   subroutine transport_cflux_storage(this,dt,U,V,W)
+   subroutine transport_flux_storage(this,dt,U,V,W)
       implicit none
       class(vfs), intent(inout) :: this
       real(WP), intent(inout) :: dt  !< Timestep size over which to advance
@@ -1370,7 +1371,7 @@ contains
                   ! Form flux polyhedron
                   call construct(flux_polyhedron,face)
                   ! Add solenoidal correction
-                  call adjustCapToMatchVolume(flux_polyhedron,dt*U(i,j,k)*this%cfg%dy(j)*this%cfg%dz(k))
+                  if (this%cons_correct) call adjustCapToMatchVolume(flux_polyhedron,dt*U(i,j,k)*this%cfg%dy(j)*this%cfg%dz(k))
                   ! Get bounds for flux polyhedron
                   call getBoundingPts(flux_polyhedron,bounding_pts(:,1),bounding_pts(:,2))
                   bb_indices(:,1)=this%cfg%get_ijk_local(bounding_pts(:,1),[i,j,k])
@@ -1407,7 +1408,7 @@ contains
                   ! Form flux polyhedron
                   call construct(flux_polyhedron,face)
                   ! Add solenoidal correction
-                  call adjustCapToMatchVolume(flux_polyhedron,dt*V(i,j,k)*this%cfg%dx(i)*this%cfg%dz(k))
+                  if (this%cons_correct) call adjustCapToMatchVolume(flux_polyhedron,dt*V(i,j,k)*this%cfg%dx(i)*this%cfg%dz(k))
                   ! Get bounds for flux polyhedron
                   call getBoundingPts(flux_polyhedron,bounding_pts(:,1),bounding_pts(:,2))
                   bb_indices(:,1)=this%cfg%get_ijk_local(bounding_pts(:,1),[i,j,k])
@@ -1444,7 +1445,7 @@ contains
                   ! Form flux polyhedron
                   call construct(flux_polyhedron,face)
                   ! Add solenoidal correction
-                  call adjustCapToMatchVolume(flux_polyhedron,dt*W(i,j,k)*this%cfg%dx(i)*this%cfg%dy(j))
+                  if (this%cons_correct) call adjustCapToMatchVolume(flux_polyhedron,dt*W(i,j,k)*this%cfg%dx(i)*this%cfg%dy(j))
                   ! Get bounds for flux polyhedron
                   call getBoundingPts(flux_polyhedron,bounding_pts(:,1),bounding_pts(:,2))
                   bb_indices(:,1)=this%cfg%get_ijk_local(bounding_pts(:,1),[i,j,k])
@@ -1524,7 +1525,7 @@ contains
       call this%cfg%sync(this%VF)
       call this%sync_and_clean_barycenters()
       
-   end subroutine transport_cflux_storage
+   end subroutine transport_flux_storage
    
    
    !> Project a single face to get flux polyhedron and get its moments

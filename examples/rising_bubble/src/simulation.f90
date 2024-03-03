@@ -140,7 +140,7 @@ contains
       ! Initialize our VOF solver and field
       create_and_initialize_vof: block
          use mms_geom,  only: cube_refine_vol
-         use vfs_class, only: elvira,VFhi,VFlo,Ccell,Cflux,Ccell_storage
+         use vfs_class, only: elvira,VFhi,VFlo,remap
          use mathtools, only: Pi
          integer :: i,j,k,n,si,sj,sk
          real(WP), dimension(3,8) :: cube_vertex
@@ -148,7 +148,8 @@ contains
          real(WP) :: vol,area
          integer, parameter :: amr_ref_lvl=4
          ! Create a VOF solver
-         call vf%initialize(cfg=cfg,reconstruction_method=elvira,transport_method=Ccell_storage,name='VOF')
+         call vf%initialize(cfg=cfg,reconstruction_method=elvira,transport_method=remap,name='VOF')
+         !vf%cons_correct=.false.
          ! Initialize a bubble
          call param_read('Bubble position',center,default=[0.0_WP,0.0_WP,0.0_WP])
          call param_read('Bubble volume',radius); radius=(radius*3.0_WP/(4.0_WP*Pi))**(1.0_WP/3.0_WP)
