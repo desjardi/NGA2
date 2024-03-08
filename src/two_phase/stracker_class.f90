@@ -1,8 +1,8 @@
 !> Two-phase structure tracking class
-!> Augment cclabel object with scalar solver persistent indexing of structures
+!> Based on cclabel object with greometric transport of index for persistent tracking of structures
 module stracker_class
-   use precision,      only: WP
-   use vfs_class,      only: vfs
+   use precision, only: WP
+   use vfs_class, only: vfs
    implicit none
    private
    
@@ -10,20 +10,20 @@ module stracker_class
    ! Expose type/constructor/methods
    public :: stracker,make_label_ftype
    
-
+   
    ! Some parameters for memory management
    integer , parameter :: min_struct_size=100 !< Default minimum size of structure storage
    real(WP), parameter :: coeff_up=1.5_WP     !< When we run out of structure storage, increase by 50%
    
-
+   
    !> Structure object
    type :: struct_type
-      integer :: parent                                   !< ID of parent struct
+      integer :: id                                       !< Persistent ID of struct
       integer :: n_                                       !< Number of local cells contained in struct
       integer, dimension(:,:), allocatable :: map         !< List of cells contained in struct, dimension(1:3,1:n_)
       integer, dimension(3) :: per                        !< Periodicity array - per(dim)=1 if structure is periodic in dim direction
    end type struct_type
-
+   
    
    !> Structure tracker object definition
    type :: stracker
@@ -31,6 +31,8 @@ module stracker_class
       class(vfs), pointer :: vf
       ! This is the name of the stracker
       character(len=str_medium) :: name='UNNAMED_STRACKER'
+      ! Phase containing the tracked structures
+      integer :: phase                !< 0 is liquid, 1 is gas
       ! ID of the structure that contains each cell
       integer, dimension(:,:,:), allocatable :: id
       ! Array of structures
@@ -42,13 +44,12 @@ module stracker_class
       integer :: nstruct_old
       type(struct_type), dimension(:), allocatable :: struct_old
    contains
-      procedure :: initialize
-      procedure :: build
-      procedure :: empty             
-      !procedure :: advance           !< Advance labels based on Lagrangian remap transport
+      procedure :: initialize         !< Initialization of stracker based on a provided VFS object
+      procedure, private :: build     !< Private cclabel step without persistent id
+      procedure :: advance            !< Perform cclabel step with persistent id
    end type stracker
    
-
+   
    !> Type of the make_label function used to generate a structure - user-provided
    abstract interface
       logical function make_label_ftype(ind1,ind2,ind3)
@@ -56,13 +57,14 @@ module stracker_class
       end function make_label_ftype
    end interface
    
-
+   
 contains
    
    
    !> Structure tracker initialization
    subroutine initialize(this,vf,phase,make_label,name)
-      use messager, only: die
+      use messager,  only: die
+      use vfs_class, only: remap_storage
       implicit none
       class(stracker), intent(inout) :: this
       class(vfs), target, intent(in) :: vf
@@ -71,53 +73,137 @@ contains
       character(len=*), optional :: name
       ! Set the name for the object
       if (present(name)) this%name=trim(adjustl(name))
+      ! Set the phase
+      this%phase=phase
       ! Point to our vfs object
       this%vf=>vf
-      ! Check vfs object stores the old interface
-      if (.not.this%vf%store_old_interface) call die('[stracker initialize] Our vfs needs to store the old interface')
+      ! Check vfs object uses cell remap with storage
+      if (this%vf%transport_method.ne.remap_storage) call die('[stracker initialize] Our vfs needs to use full cell remap with storage')
       ! Allocate and initialize ID array
-      allocate(this%id(this%pg%imino_:this%pg%imaxo_,this%pg%jmino_:this%pg%jmaxo_,this%pg%kmino_:this%pg%kmaxo_)); this%id=0
-      allocate(this%id_old(this%pg%imino_:this%pg%imaxo_,this%pg%jmino_:this%pg%jmaxo_,this%pg%kmino_:this%pg%kmaxo_)); this%id_old=0
+      allocate(this%id    (this%vf%cfg%imino_:this%vf%cfg%imaxo_,this%vf%cfg%jmino_:this%vf%cfg%jmaxo_,this%vf%cfg%kmino_:this%vf%cfg%kmaxo_)); this%id    =0
+      allocate(this%id_old(this%vf%cfg%imino_:this%vf%cfg%imaxo_,this%vf%cfg%jmino_:this%vf%cfg%jmaxo_,this%vf%cfg%kmino_:this%vf%cfg%kmaxo_)); this%id_old=0
       ! Zero structures
-      this%nstruct=0
+      this%nstruct    =0
       this%nstruct_old=0
       ! Perform a first CCL
       call this%build(make_label)
    end subroutine initialize
    
+
+   !> Structure tracking step
+   subroutine advance(this,make_label)
+      implicit none
+      class(stracker), intent(inout) :: this
+      procedure(make_label_ftype) :: make_label
+      integer, dimension(:,:,:), allocatable :: id_remap
+      
+      ! Copy old structure data - may not be needed
+      copy_to_old: block
+         integer :: n
+         this%id_old=this%id
+         this%nstruct_old=this%nstruct
+         if (allocated(this%struct_old)) then
+            do n=1,size(this%struct_old,dim=1)
+               if (allocated(this%struct_old(n)%map)) deallocate(this%struct_old(n)%map)
+            end do
+            deallocate(this%struct_old)
+         end if
+         allocate(this%struct_old(this%nstruct_old))
+         do n=1,size(this%struct,dim=1)
+            this%struct_old(n)%id =this%struct(n)%id
+            this%struct_old(n)%per=this%struct(n)%per
+            this%struct_old(n)%n_ =this%struct(n)%n_
+            allocate(this%struct_old(n)%map(this%struct_old(n)%n_))
+            this%struct_old(n)%map=this%struct(n)%map
+         end do
+      end block copy_to_old
+      
+      ! Remap id using VF geometry data to identify merge events
+      remap_id: block
+         use irl_fortran_interface
+         integer :: i,j,k,n
+         integer, dimension(3) :: ind
+         type(SepVM_type) :: my_SepVM
+         integer :: my_id
+         ! Allocate remapped id array
+         allocate(id_remap(this%vf%cfg%imino_:this%vf%cfg%imaxo_,this%vf%cfg%jmino_:this%vf%cfg%jmaxo_,this%vf%cfg%kmino_:this%vf%cfg%kmaxo_)); id_remap=0
+         ! Perform remapping step
+         do k=this%vf%cfg%kmin_,this%vf%cfg%kmax_; do j=this%vf%cfg%jmin_,this%vf%cfg%jmax_; do i=this%vf%cfg%imin_,this%vf%cfg%imax_
+            ! Check if detailed remap geometry is available
+            if (getSize(this%vf%detailed_remap(i,j,k)).gt.0) then
+               ! It is, so analyze it for merge events
+               do n=0,getSize(this%vf%detailed_remap(i,j,k))-1
+                  ! Get SepVM for nth object
+                  call getSepVMAtIndex(this%vf%detailed_remap(i,j,k),n,my_SepVM)
+                  ! Verify volume of tracked cell is non-zero
+                  if (getVolume(my_SepVM,this%phase).eq.0.0_WP) cycle
+                  ! Get cell index for nth object
+                  ind=this%vf%cfg%get_ijk_from_lexico(getTagForIndex(this%vf%detailed_remap(i,j,k),n))
+                  ! Get the id
+                  my_id=this%id(ind(1),ind(2),ind(3))
+               end do
+               ! Get remapped id
+               id_remap(i,j,k)=my_id
+            end if
+         end do; end do; end do
+      end block remap_id
+
+      ! Perform a CCL build
+      call this%build(make_label)
+
+      ! Resolve persistent id
+      new_id: block
+      
+      end block new_id
+      
+   end subroutine advance
+
    
-   !> Build structure using the user-set test functions
+   !> Build structure using the user-set test function
    subroutine build(this,make_label)
       implicit none
-      class(cclabel), intent(inout) :: this
+      class(stracker), intent(inout) :: this
       procedure(make_label_ftype) :: make_label
       integer :: nstruct_,stmin,stmax
       integer, dimension(:,:,:,:), allocatable :: idp          !< Periodicity treatment
       integer, dimension(:), allocatable :: parent             !< Resolving structure id across procs
       integer, dimension(:), allocatable :: parent_all         !< Resolving structure id across procs
       integer, dimension(:), allocatable :: parent_own         !< Resolving structure id across procs
-
-      ! Start by cleaning up
-      call this%empty()
       
-      ! Then allocate struct to a default size
-      nstruct_=0
-      allocate(this%struct(min_struct_size))
-      this%struct(:)%parent=0
-      this%struct(:)%per(1)=0
-      this%struct(:)%per(2)=0
-      this%struct(:)%per(3)=0
-      this%struct(:)%n_=0
+      ! Cleanup of storage before doing CCL
+      cleanup: block
+         integer :: n
+         ! First loop over all structures and deallocate maps
+         if (allocated(this%struct)) then
+            do n=1,size(this%struct,dim=1)
+               if (allocated(this%struct(n)%map)) deallocate(this%struct(n)%map)
+            end do
+            ! Deallocate structure array
+            deallocate(this%struct)
+         end if
+         ! Zero structures
+         this%nstruct=0
+         ! Reset id to zero
+         this%id=0
+         ! Then allocate struct to a default size
+         nstruct_=0
+         allocate(this%struct(min_struct_size))
+         this%struct(:)%id    =0
+         this%struct(:)%per(1)=0
+         this%struct(:)%per(2)=0
+         this%struct(:)%per(3)=0
+         this%struct(:)%n_=0
+      end block cleanup
       
       ! Allocate periodicity work array
-      allocate(idp(3,this%pg%imino_:this%pg%imaxo_,this%pg%jmino_:this%pg%jmaxo_,this%pg%kmino_:this%pg%kmaxo_)); idp=0
+      allocate(idp(3,this%vf%cfg%imino_:this%vf%cfg%imaxo_,this%vf%cfg%jmino_:this%vf%cfg%jmaxo_,this%vf%cfg%kmino_:this%vf%cfg%kmaxo_)); idp=0
       
       ! Perform a first pass to build proc-local structures and corresponding tree
       first_pass: block
          integer :: i,j,k,ii,jj,kk,dim
          integer, dimension(3) :: pos
          ! Perform local loop
-         do k=this%pg%kmin_,this%pg%kmax_; do j=this%pg%jmin_,this%pg%jmax_; do i=this%pg%imin_,this%pg%imax_
+         do k=this%vf%cfg%kmin_,this%vf%cfg%kmax_; do j=this%vf%cfg%jmin_,this%vf%cfg%jmax_; do i=this%vf%cfg%imin_,this%vf%cfg%imax_
             ! Find next cell in a structure
             if (make_label(i,j,k)) then
                ! Loop through one-sided neighbors
@@ -143,9 +229,9 @@ contains
                ! If no neighbor was labeled, we need a new structure
                if (this%id(i,j,k).eq.0) this%id(i,j,k)=add()
                ! Identify periodicity cases
-               if (this%pg%xper.and.i.eq.this%pg%imax) this%struct(this%id(i,j,k))%per(1)=1
-               if (this%pg%yper.and.j.eq.this%pg%jmax) this%struct(this%id(i,j,k))%per(2)=1
-               if (this%pg%zper.and.k.eq.this%pg%kmax) this%struct(this%id(i,j,k))%per(3)=1
+               if (this%vf%cfg%xper.and.i.eq.this%vf%cfg%imax) this%struct(this%id(i,j,k))%per(1)=1
+               if (this%vf%cfg%yper.and.j.eq.this%vf%cfg%jmax) this%struct(this%id(i,j,k))%per(2)=1
+               if (this%vf%cfg%zper.and.k.eq.this%vf%cfg%kmax) this%struct(this%id(i,j,k))%per(3)=1
                idp(:,i,j,k)=this%struct(this%id(i,j,k))%per
             end if
          end do; end do; end do
@@ -154,7 +240,7 @@ contains
       ! Now collapse the tree, count the cells and resolve periodicity in each structure
       collapse_tree: block
          integer :: i,j,k
-         do k=this%pg%kmin_,this%pg%kmax_; do j=this%pg%jmin_,this%pg%jmax_; do i=this%pg%imin_,this%pg%imax_
+         do k=this%vf%cfg%kmin_,this%vf%cfg%kmax_; do j=this%vf%cfg%jmin_,this%vf%cfg%jmax_; do i=this%vf%cfg%imin_,this%vf%cfg%imax_
             if (this%id(i,j,k).gt.0) then
                this%id(i,j,k)=rootify_struct(this%id(i,j,k))
                this%struct(this%id(i,j,k))%n_=this%struct(this%id(i,j,k))%n_+1
@@ -178,10 +264,10 @@ contains
             if (this%struct(n)%n_.gt.0) nstruct_=nstruct_+1
          end do
          ! Gather this info to ensure unique index
-         allocate( my_nstruct(0:this%pg%nproc-1)); my_nstruct=0; my_nstruct(this%pg%rank)=nstruct_
-         allocate(all_nstruct(0:this%pg%nproc-1)); call MPI_ALLREDUCE(my_nstruct,all_nstruct,this%pg%nproc,MPI_INTEGER,MPI_SUM,this%pg%comm,ierr)
+         allocate( my_nstruct(0:this%vf%cfg%nproc-1)); my_nstruct=0; my_nstruct(this%vf%cfg%rank)=nstruct_
+         allocate(all_nstruct(0:this%vf%cfg%nproc-1)); call MPI_ALLREDUCE(my_nstruct,all_nstruct,this%vf%cfg%nproc,MPI_INTEGER,MPI_SUM,this%vf%cfg%comm,ierr)
          stmin=1
-         if (this%pg%rank.gt.0) stmin=stmin+sum(all_nstruct(0:this%pg%rank-1))
+         if (this%vf%cfg%rank.gt.0) stmin=stmin+sum(all_nstruct(0:this%vf%cfg%rank-1))
          this%nstruct=sum(all_nstruct)
          deallocate(my_nstruct,all_nstruct)
          stmax=stmin+nstruct_-1
@@ -195,7 +281,7 @@ contains
             end if
          end do
          ! Update id array to new index
-         do k=this%pg%kmin_,this%pg%kmax_; do j=this%pg%jmin_,this%pg%jmax_; do i=this%pg%imin_,this%pg%imax_
+         do k=this%vf%cfg%kmin_,this%vf%cfg%kmax_; do j=this%vf%cfg%jmin_,this%vf%cfg%jmax_; do i=this%vf%cfg%imin_,this%vf%cfg%imax_
             if (this%id(i,j,k).gt.0) this%id(i,j,k)=idmap(this%id(i,j,k))
          end do; end do; end do
          deallocate(idmap)
@@ -217,7 +303,7 @@ contains
          integer :: i,j,k
          integer, dimension(:), allocatable :: counter
          allocate(counter(stmin:stmax)); counter=0
-         do k=this%pg%kmin_,this%pg%kmax_; do j=this%pg%jmin_,this%pg%jmax_; do i=this%pg%imin_,this%pg%imax_
+         do k=this%vf%cfg%kmin_,this%vf%cfg%kmax_; do j=this%vf%cfg%jmin_,this%vf%cfg%jmax_; do i=this%vf%cfg%imin_,this%vf%cfg%imax_
             if (this%id(i,j,k).gt.0) then
                counter(this%id(i,j,k))=counter(this%id(i,j,k))+1
                this%struct(this%id(i,j,k))%map(:,counter(this%id(i,j,k)))=[i,j,k]
@@ -239,28 +325,28 @@ contains
             parent(n)=n
          end do
          ! Synchronize id array
-         call this%pg%sync(this%id)
+         call this%vf%cfg%sync(this%id)
          ! Handle imin_ border
-         if (this%pg%imin_.ne.this%pg%imin) then
-            do k=this%pg%kmin_,this%pg%kmax_; do j=this%pg%jmin_,this%pg%jmax_
-               if (this%id(this%pg%imin_,j,k).gt.0.and.this%id(this%pg%imin_-1,j,k).gt.0) then
-                  if (same_label(this%pg%imin_,j,k,this%pg%imin_-1,j,k)) call union_parent(this%id(this%pg%imin_,j,k),this%id(this%pg%imin_-1,j,k))
+         if (this%vf%cfg%imin_.ne.this%vf%cfg%imin) then
+            do k=this%vf%cfg%kmin_,this%vf%cfg%kmax_; do j=this%vf%cfg%jmin_,this%vf%cfg%jmax_
+               if (this%id(this%vf%cfg%imin_,j,k).gt.0.and.this%id(this%vf%cfg%imin_-1,j,k).gt.0) then
+                  if (same_label(this%vf%cfg%imin_,j,k,this%vf%cfg%imin_-1,j,k)) call union_parent(this%id(this%vf%cfg%imin_,j,k),this%id(this%vf%cfg%imin_-1,j,k))
                end if
             end do; end do
          end if
          ! Handle jmin_ border
-         if (this%pg%jmin_.ne.this%pg%jmin) then
-            do k=this%pg%kmin_,this%pg%kmax_; do i=this%pg%imin_,this%pg%imax_
-               if (this%id(i,this%pg%jmin_,k).gt.0.and.this%id(i,this%pg%jmin_-1,k).gt.0) then
-                  if (same_label(i,this%pg%jmin_,k,i,this%pg%jmin_-1,k)) call union_parent(this%id(i,this%pg%jmin_,k),this%id(i,this%pg%jmin_-1,k))
+         if (this%vf%cfg%jmin_.ne.this%vf%cfg%jmin) then
+            do k=this%vf%cfg%kmin_,this%vf%cfg%kmax_; do i=this%vf%cfg%imin_,this%vf%cfg%imax_
+               if (this%id(i,this%vf%cfg%jmin_,k).gt.0.and.this%id(i,this%vf%cfg%jmin_-1,k).gt.0) then
+                  if (same_label(i,this%vf%cfg%jmin_,k,i,this%vf%cfg%jmin_-1,k)) call union_parent(this%id(i,this%vf%cfg%jmin_,k),this%id(i,this%vf%cfg%jmin_-1,k))
                end if
             end do; end do
          end if
          ! Handle kmin_ border
-         if (this%pg%kmin_.ne.this%pg%kmin) then
-            do j=this%pg%jmin_,this%pg%jmax_; do i=this%pg%imin_,this%pg%imax_
-               if (this%id(i,j,this%pg%kmin_).gt.0.and.this%id(i,j,this%pg%kmin_-1).gt.0) then
-                  if (same_label(i,j,this%pg%kmin_,i,j,this%pg%kmin_-1)) call union_parent(this%id(i,j,this%pg%kmin_),this%id(i,j,this%pg%kmin_-1))
+         if (this%vf%cfg%kmin_.ne.this%vf%cfg%kmin) then
+            do j=this%vf%cfg%jmin_,this%vf%cfg%jmax_; do i=this%vf%cfg%imin_,this%vf%cfg%imax_
+               if (this%id(i,j,this%vf%cfg%kmin_).gt.0.and.this%id(i,j,this%vf%cfg%kmin_-1).gt.0) then
+                  if (same_label(i,j,this%vf%cfg%kmin_,i,j,this%vf%cfg%kmin_-1)) call union_parent(this%id(i,j,this%vf%cfg%kmin_),this%id(i,j,this%vf%cfg%kmin_-1))
                end if
             end do; end do
          end if
@@ -278,7 +364,7 @@ contains
                if (parent(n).eq.n) parent(n)=huge(1)
             end do
             ! Take global min
-            call MPI_ALLREDUCE(parent,parent_all,this%nstruct,MPI_INTEGER,MPI_MIN,this%pg%comm,ierr)
+            call MPI_ALLREDUCE(parent,parent_all,this%nstruct,MPI_INTEGER,MPI_MIN,this%vf%cfg%comm,ierr)
             ! Set self-parents back to selves
             do n=1,this%nstruct
                if (parent_all(n).eq.huge(1)) parent_all(n)=n
@@ -304,13 +390,13 @@ contains
                end if
             end do
             ! Check if we did some changes
-            call MPI_ALLREDUCE(stop_,stop_global,1,MPI_INTEGER,MPI_MAX,this%pg%comm,ierr)
+            call MPI_ALLREDUCE(stop_,stop_global,1,MPI_INTEGER,MPI_MAX,this%vf%cfg%comm,ierr)
          end do
-         ! Update this%struct%parent by pointing all parents to root and update id
+         ! Update this%struct%id by pointing all parents to root and update id
          do n=stmin,stmax
-            this%struct(n)%parent=rootify_parent(parent(n))
+            this%struct(n)%id=rootify_parent(parent(n))
             do m=1,this%struct(n)%n_
-               this%id(this%struct(n)%map(1,m),this%struct(n)%map(2,m),this%struct(n)%map(3,m))=this%struct(n)%parent
+               this%id(this%struct(n)%map(1,m),this%struct(n)%map(2,m),this%struct(n)%map(3,m))=this%struct(n)%id
             end do
          end do
       end block interproc_handling
@@ -328,7 +414,7 @@ contains
             ownper(:,n)=this%struct(n)%per
          end do
          ! Communicate per
-         call MPI_ALLREDUCE(ownper,allper,3*this%nstruct,MPI_INTEGER,MPI_MAX,this%pg%comm,ierr)
+         call MPI_ALLREDUCE(ownper,allper,3*this%nstruct,MPI_INTEGER,MPI_MAX,this%vf%cfg%comm,ierr)
          ! Update parent per
          do n=1,this%nstruct
             allper(:,parent(n))=max(allper(:,parent(n)),allper(:,n))
@@ -348,26 +434,26 @@ contains
          use mpi_f08, only: MPI_ALLREDUCE,MPI_MIN,MPI_MAX,MPI_INTEGER
          integer :: i,j,k,stop_global,stop_,counter,n,m,ierr,find_parent,find_parent_own
          ! Handle imin border
-         if (this%pg%imin_.eq.this%pg%imin) then
-            do k=this%pg%kmin_,this%pg%kmax_; do j=this%pg%jmin_,this%pg%jmax_
-               if (this%id(this%pg%imin_,j,k).gt.0.and.this%id(this%pg%imin_-1,j,k).gt.0) then
-                  if (same_label(this%pg%imin_,j,k,this%pg%imin_-1,j,k)) call union_parent(this%id(this%pg%imin_,j,k),this%id(this%pg%imin_-1,j,k))
+         if (this%vf%cfg%imin_.eq.this%vf%cfg%imin) then
+            do k=this%vf%cfg%kmin_,this%vf%cfg%kmax_; do j=this%vf%cfg%jmin_,this%vf%cfg%jmax_
+               if (this%id(this%vf%cfg%imin_,j,k).gt.0.and.this%id(this%vf%cfg%imin_-1,j,k).gt.0) then
+                  if (same_label(this%vf%cfg%imin_,j,k,this%vf%cfg%imin_-1,j,k)) call union_parent(this%id(this%vf%cfg%imin_,j,k),this%id(this%vf%cfg%imin_-1,j,k))
                end if
             end do; end do
          end if
          ! Handle jmin border
-         if (this%pg%jmin_.eq.this%pg%jmin) then
-            do k=this%pg%kmin_,this%pg%kmax_; do i=this%pg%imin_,this%pg%imax_
-               if (this%id(i,this%pg%jmin_,k).gt.0.and.this%id(i,this%pg%jmin_-1,k).gt.0) then
-                  if (same_label(i,this%pg%jmin_,k,i,this%pg%jmin_-1,k)) call union_parent(this%id(i,this%pg%jmin_,k),this%id(i,this%pg%jmin_-1,k))
+         if (this%vf%cfg%jmin_.eq.this%vf%cfg%jmin) then
+            do k=this%vf%cfg%kmin_,this%vf%cfg%kmax_; do i=this%vf%cfg%imin_,this%vf%cfg%imax_
+               if (this%id(i,this%vf%cfg%jmin_,k).gt.0.and.this%id(i,this%vf%cfg%jmin_-1,k).gt.0) then
+                  if (same_label(i,this%vf%cfg%jmin_,k,i,this%vf%cfg%jmin_-1,k)) call union_parent(this%id(i,this%vf%cfg%jmin_,k),this%id(i,this%vf%cfg%jmin_-1,k))
                end if
             end do; end do
          end if
          ! Handle kmin border
-         if (this%pg%kmin_.eq.this%pg%kmin) then
-            do j=this%pg%jmin_,this%pg%jmax_; do i=this%pg%imin_,this%pg%imax_
-               if (this%id(i,j,this%pg%kmin_).gt.0.and.this%id(i,j,this%pg%kmin_-1).gt.0) then
-                  if (same_label(i,j,this%pg%kmin_,i,j,this%pg%kmin_-1)) call union_parent(this%id(i,j,this%pg%kmin_),this%id(i,j,this%pg%kmin_-1))
+         if (this%vf%cfg%kmin_.eq.this%vf%cfg%kmin) then
+            do j=this%vf%cfg%jmin_,this%vf%cfg%jmax_; do i=this%vf%cfg%imin_,this%vf%cfg%imax_
+               if (this%id(i,j,this%vf%cfg%kmin_).gt.0.and.this%id(i,j,this%vf%cfg%kmin_-1).gt.0) then
+                  if (same_label(i,j,this%vf%cfg%kmin_,i,j,this%vf%cfg%kmin_-1)) call union_parent(this%id(i,j,this%vf%cfg%kmin_),this%id(i,j,this%vf%cfg%kmin_-1))
                end if
             end do; end do
          end if
@@ -385,7 +471,7 @@ contains
                if (parent(n).eq.n) parent(n)=huge(1)
             end do
             ! Take global min
-            call MPI_ALLREDUCE(parent,parent_all,this%nstruct,MPI_INTEGER,MPI_MIN,this%pg%comm,ierr)
+            call MPI_ALLREDUCE(parent,parent_all,this%nstruct,MPI_INTEGER,MPI_MIN,this%vf%cfg%comm,ierr)
             ! Set self-parents back to selves
             do n=1,this%nstruct
                if (parent_all(n).eq.huge(1)) parent_all(n)=n
@@ -411,17 +497,17 @@ contains
                end if
             end do
             ! Check if we did some changes
-            call MPI_ALLREDUCE(stop_,stop_global,1,MPI_INTEGER,MPI_MAX,this%pg%comm,ierr)
+            call MPI_ALLREDUCE(stop_,stop_global,1,MPI_INTEGER,MPI_MAX,this%vf%cfg%comm,ierr)
          end do
-         ! Update this%struct%parent and point all parents to root and update id
+         ! Update this%struct%id and point all parents to root and update id
          do n=stmin,stmax
-            this%struct(n)%parent=rootify_parent(parent(n))
+            this%struct(n)%id=rootify_parent(parent(n))
             do m=1,this%struct(n)%n_
-               this%id(this%struct(n)%map(1,m),this%struct(n)%map(2,m),this%struct(n)%map(3,m))=this%struct(n)%parent
+               this%id(this%struct(n)%map(1,m),this%struct(n)%map(2,m),this%struct(n)%map(3,m))=this%struct(n)%id
             end do
          end do
          ! Update ghost cells
-         call this%pg%sync(this%id)
+         call this%vf%cfg%sync(this%id)
          ! Clean up parent info
          deallocate(parent,parent_all,parent_own)
       end block boundary_handling
@@ -436,10 +522,10 @@ contains
          allocate(my_idmap(1:this%nstruct)); my_idmap=0
          allocate(   idmap(1:this%nstruct));    idmap=0
          ! Traverse id array and tag used id values
-         do k=this%pg%kmin_,this%pg%kmax_; do j=this%pg%jmin_,this%pg%jmax_; do i=this%pg%imin_,this%pg%imax_
+         do k=this%vf%cfg%kmin_,this%vf%cfg%kmax_; do j=this%vf%cfg%jmin_,this%vf%cfg%jmax_; do i=this%vf%cfg%imin_,this%vf%cfg%imax_
             if (this%id(i,j,k).gt.0) my_idmap(this%id(i,j,k))=1
          end do; end do; end do
-         call MPI_ALLREDUCE(my_idmap,idmap,this%nstruct,MPI_INTEGER,MPI_MAX,this%pg%comm,ierr)
+         call MPI_ALLREDUCE(my_idmap,idmap,this%nstruct,MPI_INTEGER,MPI_MAX,this%vf%cfg%comm,ierr)
          deallocate(my_idmap)
          ! Count number of used structures and create the map
          this%nstruct=sum(idmap)
@@ -451,18 +537,18 @@ contains
             end if
          end do
          ! Rename all structures
-         do k=this%pg%kmin_,this%pg%kmax_; do j=this%pg%jmin_,this%pg%jmax_; do i=this%pg%imin_,this%pg%imax_
+         do k=this%vf%cfg%kmin_,this%vf%cfg%kmax_; do j=this%vf%cfg%jmin_,this%vf%cfg%jmax_; do i=this%vf%cfg%imin_,this%vf%cfg%imax_
             if (this%id(i,j,k).gt.0) this%id(i,j,k)=idmap(this%id(i,j,k))
          end do; end do; end do
-         call this%pg%sync(this%id)
+         call this%vf%cfg%sync(this%id)
          ! Allocate temporary storage for structure
          allocate(tmp(this%nstruct))
          allocate(counter(this%nstruct)); counter=0
-         do k=this%pg%kmin_,this%pg%kmax_; do j=this%pg%jmin_,this%pg%jmax_; do i=this%pg%imin_,this%pg%imax_
+         do k=this%vf%cfg%kmin_,this%vf%cfg%kmax_; do j=this%vf%cfg%jmin_,this%vf%cfg%jmax_; do i=this%vf%cfg%imin_,this%vf%cfg%imax_
             if (this%id(i,j,k).gt.0) counter(this%id(i,j,k))=counter(this%id(i,j,k))+1
          end do; end do; end do
          do n=1,this%nstruct
-            tmp(n)%parent=n
+            tmp(n)%id=n
             tmp(n)%n_=counter(n)
             allocate(tmp(n)%map(1:3,1:tmp(n)%n_))
          end do
@@ -475,7 +561,7 @@ contains
          deallocate(idmap)
          ! Store the map
          counter=0
-         do k=this%pg%kmin_,this%pg%kmax_; do j=this%pg%jmin_,this%pg%jmax_; do i=this%pg%imin_,this%pg%imax_
+         do k=this%vf%cfg%kmin_,this%vf%cfg%kmax_; do j=this%vf%cfg%jmin_,this%vf%cfg%jmax_; do i=this%vf%cfg%imin_,this%vf%cfg%imax_
             if (this%id(i,j,k).gt.0) then
                counter(this%id(i,j,k))=counter(this%id(i,j,k))+1
                tmp(this%id(i,j,k))%map(:,counter(this%id(i,j,k)))=[i,j,k]
@@ -506,9 +592,9 @@ contains
          integer, intent(in) :: x
          integer :: y
          y=x
-         if (y.ne.this%struct(y)%parent) then
-            this%struct(y)%parent=rootify_struct(this%struct(y)%parent)
-            y=this%struct(y)%parent
+         if (y.ne.this%struct(y)%id) then
+            this%struct(y)%id=rootify_struct(this%struct(y)%id)
+            y=this%struct(y)%id
          end if
       end function rootify_struct
       
@@ -519,7 +605,7 @@ contains
          integer :: rx,ry,rmin,rmax
          rx=rootify_struct(x); ry=rootify_struct(y)
          rmin=min(rx,ry); rmax=max(rx,ry)
-         this%struct(rmax)%parent=rmin
+         this%struct(rmax)%id=rmin
       end function union_struct
       
       !> This function adds one new root while dynamically handling storage space
@@ -534,7 +620,7 @@ contains
             size_new=int(real(size_now,WP)*coeff_up)
             allocate(tmp(size_new))
             tmp(1:nstruct_)=this%struct
-            tmp(nstruct_+1:)%parent=0
+            tmp(nstruct_+1:)%id    =0
             tmp(nstruct_+1:)%per(1)=0
             tmp(nstruct_+1:)%per(2)=0
             tmp(nstruct_+1:)%per(3)=0
@@ -543,9 +629,9 @@ contains
          end if
          ! Add new root
          nstruct_=nstruct_+1
-         this%struct(nstruct_)%parent=nstruct_
+         this%struct(nstruct_)%id =nstruct_
          this%struct(nstruct_)%per=0
-         this%struct(nstruct_)%n_=0
+         this%struct(nstruct_)%n_ =0
          x=nstruct_
       end function add
       
