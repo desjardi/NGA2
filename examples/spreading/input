@@ -12,9 +12,9 @@ nz : 50
 # Non-dimensional fluid properties
 Density ratio :   1000
 Viscosity ratio : 50
-Oh : 1e-2  #<<< Oh=mu_l/sqrt(rho_l*R*sigma)
-CA : 30
-Initial contact angle : 180
+Oh : 0.1    #<<< Oh=mu_l/sqrt(rho_l*R*sigma)
+CA : 60
+Initial contact angle : 60 !180
 
 # Time integration
 Max timestep size : 1e-2
