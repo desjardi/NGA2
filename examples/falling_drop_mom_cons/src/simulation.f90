@@ -202,7 +202,7 @@ contains
                   ! Liquid scalar
                   if (vf%VF(i,j,k).gt.0.0_WP) then
                      ! We are in the liquid
-                     if (cfg%ym(j).gt.depth+cfg%dy(j)) then
+                     if (cfg%ym(j).gt.depth) then
                         ! We are above the pool
                         sc%SC(i,j,k,1)=1.0_WP
                      else

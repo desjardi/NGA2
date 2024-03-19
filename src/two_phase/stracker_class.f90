@@ -2,6 +2,7 @@
 !> Based on cclabel object with greometric transport of index for persistent tracking of structures
 module stracker_class
    use precision, only: WP
+   use string,    only: str_medium
    use vfs_class, only: vfs
    implicit none
    private
@@ -33,6 +34,9 @@ module stracker_class
       character(len=str_medium) :: name='UNNAMED_STRACKER'
       ! Phase containing the tracked structures
       integer :: phase                !< 0 is liquid, 1 is gas
+      ! Merging events
+      integer :: nmerge
+      integer, dimension(:,:), allocatable :: merge
       ! ID of the structure that contains each cell
       integer, dimension(:,:,:), allocatable :: id
       ! Array of structures
@@ -118,33 +122,63 @@ contains
          end do
       end block copy_to_old
       
+      ! Reset merge event storage
+      reset_merge: block
+         this%nmerge=0
+         if (allocated(this%merge)) deallocate(this%merge)
+         allocate(this%merge(1:2,1:this%nstruct))
+      end block reset_merge
+      
       ! Remap id using VF geometry data to identify merge events
       remap_id: block
          use irl_fortran_interface
          integer :: i,j,k,n
          integer, dimension(3) :: ind
          type(SepVM_type) :: my_SepVM
-         integer :: my_id
+         real(WP), dimension(0:1) :: vols
+         integer, dimension(:), allocatable :: ids
+         integer :: nid,nobj,my_id
          ! Allocate remapped id array
-         allocate(id_remap(this%vf%cfg%imino_:this%vf%cfg%imaxo_,this%vf%cfg%jmino_:this%vf%cfg%jmaxo_,this%vf%cfg%kmino_:this%vf%cfg%kmaxo_)); id_remap=0
+         allocate(id_remap(this%vf%cfg%imino_:this%vf%cfg%imaxo_,this%vf%cfg%jmino_:this%vf%cfg%jmaxo_,this%vf%cfg%kmino_:this%vf%cfg%kmaxo_)); id_remap=this%id
          ! Perform remapping step
          do k=this%vf%cfg%kmin_,this%vf%cfg%kmax_; do j=this%vf%cfg%jmin_,this%vf%cfg%jmax_; do i=this%vf%cfg%imin_,this%vf%cfg%imax_
-            ! Check if detailed remap geometry is available
-            if (getSize(this%vf%detailed_remap(i,j,k)).gt.0) then
-               ! It is, so analyze it for merge events
-               do n=0,getSize(this%vf%detailed_remap(i,j,k))-1
-                  ! Get SepVM for nth object
-                  call getSepVMAtIndex(this%vf%detailed_remap(i,j,k),n,my_SepVM)
-                  ! Verify volume of tracked cell is non-zero
-                  if (getVolume(my_SepVM,this%phase).eq.0.0_WP) cycle
-                  ! Get cell index for nth object
-                  ind=this%vf%cfg%get_ijk_from_lexico(getTagForIndex(this%vf%detailed_remap(i,j,k),n))
-                  ! Get the id
-                  my_id=this%id(ind(1),ind(2),ind(3))
-               end do
-               ! Get remapped id
-               id_remap(i,j,k)=my_id
-            end if
+            ! Check detailed remap geometry to get nobj
+            nobj=getSize(this%vf%detailed_remap(i,j,k))
+            ! Skip cell if no detailed remap geometry is available
+            if (nobj.eq.0) cycle
+            ! Allocate sufficient ids storage
+            allocate(ids(nobj)); ids=0
+            ! Counter for ids
+            nid=0
+            ! Initialize id_remap
+            id_remap(i,j,k)=0
+            ! Traverse every object and check for phase presence
+            do n=1,nobj
+               ! Get SepVM for nth object
+               call getSepVMAtIndex(this%vf%detailed_remap(i,j,k),n-1,my_SepVM)
+               ! Verify volume fraction for our phase of interest is non-zero
+               vols(0)=getVolume(my_SepVM,0); vols(1)=getVolume(my_SepVM,1)
+               if (vols(this%phase)/sum(vols).lt.VFlo) cycle
+               ! Get cell index for nth object
+               ind=this%vf%cfg%get_ijk_from_lexico(getTagForIndex(this%vf%detailed_remap(i,j,k),n-1))
+               ! Get the local id
+               my_id=this%id(ind(1),ind(2),ind(3))
+               ! Add it if it's non-zero, otherwise cycle
+               if (my_id.eq.0) cycle
+               nid=nid+1; ids(nid)=my_id
+            end do
+            ! If no ids were encountered, done
+            if (nid.eq.0) cycle
+            ! Set id_remap to smallest non-zero id encountered
+            id_remap(i,j,k)=minval(ids(1:nid))
+            ! Create max(nid-1,0) merging events
+            do n=1,nid
+               if (id_remap(i,j,k).eq.ids(n)) cycle
+               this%merge(:,this%nmerge+1)=[id_remap(i,j,k),ids(n)]
+               this%nmerge=this%nmerge+1
+            end do
+            ! Deallocate ids
+            deallocate(ids)
          end do; end do; end do
       end block remap_id
 
