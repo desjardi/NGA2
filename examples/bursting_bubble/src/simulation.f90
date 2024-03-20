@@ -51,6 +51,8 @@ contains
 		real(WP) :: G
 		! Create the droplet
 	   G=sqrt(sum((xyz-center)**2))-radius
+      G=min(G,sqrt(sum((xyz-(center+[-1.2e-3_WP,-0.75e-3_WP,-0.86e-3_WP]))**2))-1.1_WP*radius)
+      G=min(G,sqrt(sum((xyz-(center+[-0.3e-3_WP,-1.1e-3_WP,+1.0e-3_WP]))**2))-0.6_WP*radius)
 	   ! Add the pool
 	   G=min(G,depth-xyz(2))
 	end function levelset_bursting_bubble
@@ -87,14 +89,15 @@ contains
 		! Initialize our VOF solver and field
 	   create_and_initialize_vof: block
 		   use mms_geom,  only: cube_refine_vol
-		   use vfs_class, only: VFhi,VFlo,lvira,r2p
+		   use vfs_class, only: VFhi,VFlo,lvira,r2p,remap
 			integer :: i,j,k,n,si,sj,sk
 			real(WP), dimension(3,8) :: cube_vertex
 			real(WP), dimension(3) :: v_cent,a_cent
 			real(WP) :: vol,area
 			integer, parameter :: amr_ref_lvl=4
 			! Create a VOF solver
-         call vf%initialize(cfg=cfg,reconstruction_method=r2p,name='VOF')
+         call vf%initialize(cfg=cfg,reconstruction_method=r2p,transport_method=remap,name='VOF')
+         vf%cons_correct=.false.
          vf%thin_thld_max=1.5_WP
          vf%twoplane_thld2=0.8_WP
 		   ! Initialize to a bubble in a pool
