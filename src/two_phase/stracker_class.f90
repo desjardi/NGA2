@@ -126,34 +126,38 @@ contains
       reset_merge: block
          this%nmerge=0
          if (allocated(this%merge)) deallocate(this%merge)
-         allocate(this%merge(1:2,1:this%nstruct))
+         allocate(this%merge(1:2,1:min_struct_size)); this%merge=0
       end block reset_merge
       
       ! Remap id using VF geometry data to identify merge events
       remap_id: block
          use irl_fortran_interface
-         integer :: i,j,k,n
          integer, dimension(3) :: ind
          type(SepVM_type) :: my_SepVM
          real(WP), dimension(0:1) :: vols
          integer, dimension(:), allocatable :: ids
+         integer :: i,j,k,n,nn
          integer :: nid,nobj,my_id
          ! Allocate remapped id array
          allocate(id_remap(this%vf%cfg%imino_:this%vf%cfg%imaxo_,this%vf%cfg%jmino_:this%vf%cfg%jmaxo_,this%vf%cfg%kmino_:this%vf%cfg%kmaxo_)); id_remap=this%id
+         ! Allocate ids storage
+         nobj=0
+         do k=this%vf%cfg%kmin_,this%vf%cfg%kmax_; do j=this%vf%cfg%jmin_,this%vf%cfg%jmax_; do i=this%vf%cfg%imin_,this%vf%cfg%imax_
+            nobj=max(count,getSize(this%vf%detailed_remap(i,j,k)))
+         end do; end do; end do
+         allocate(ids(nobj))
          ! Perform remapping step
          do k=this%vf%cfg%kmin_,this%vf%cfg%kmax_; do j=this%vf%cfg%jmin_,this%vf%cfg%jmax_; do i=this%vf%cfg%imin_,this%vf%cfg%imax_
             ! Check detailed remap geometry to get nobj
             nobj=getSize(this%vf%detailed_remap(i,j,k))
             ! Skip cell if no detailed remap geometry is available
             if (nobj.eq.0) cycle
-            ! Allocate sufficient ids storage
-            allocate(ids(nobj)); ids=0
-            ! Counter for ids
-            nid=0
+            ! Zero out ids and reset counter
+            nid=0; ids=0
             ! Initialize id_remap
             id_remap(i,j,k)=0
             ! Traverse every object and check for phase presence
-            do n=1,nobj
+            obj_loop: do n=1,nobj
                ! Get SepVM for nth object
                call getSepVMAtIndex(this%vf%detailed_remap(i,j,k),n-1,my_SepVM)
                ! Verify volume fraction for our phase of interest is non-zero
@@ -163,24 +167,59 @@ contains
                ind=this%vf%cfg%get_ijk_from_lexico(getTagForIndex(this%vf%detailed_remap(i,j,k),n-1))
                ! Get the local id
                my_id=this%id(ind(1),ind(2),ind(3))
-               ! Add it if it's non-zero, otherwise cycle
-               if (my_id.eq.0) cycle
+               ! If my_id is zero, cycle
+               if (my_id.eq.0) cycle obj_loop
+               ! If my_id has already been encountered, cycle
+               do nn=1,nid
+                  if (ids(nn).eq.my_id) cycle obj_loop
+               end do
+               ! Increment the ids array
                nid=nid+1; ids(nid)=my_id
-            end do
+            end do obj_loop
             ! If no ids were encountered, done
             if (nid.eq.0) cycle
             ! Set id_remap to smallest non-zero id encountered
             id_remap(i,j,k)=minval(ids(1:nid))
-            ! Create max(nid-1,0) merging events
+            ! Create max(nid-1,0) merging events - this should be based on a binary search tree instead
             do n=1,nid
-               if (id_remap(i,j,k).eq.ids(n)) cycle
-               this%merge(:,this%nmerge+1)=[id_remap(i,j,k),ids(n)]
-               this%nmerge=this%nmerge+1
+               call add_merge(id_remap(i,j,k),ids(n))
             end do
-            ! Deallocate ids
-            deallocate(ids)
          end do; end do; end do
+         ! Deallocate ids
+         deallocate(ids)
       end block remap_id
+
+      ! Gather all merge events
+      gather_merge: block
+         use mpi_f08, only: MPI_ALLREDUCE,MPI_SUM,MPI_IN_PLACE,MPI_INTEGER
+         integer, dimension(:), allocatable :: nmerge_proc
+         integer, dimension(:,:), allocatable :: merge_all
+         integer :: ierr,nmerge,n
+         ! Sum all merge events
+         allocate(nmerge_proc(1:this%vf%cfg%nproc)); nmerge_proc=0; nmerge_proc(this%vf%cfg%rank+1)=this%nmerge
+         call MPI_ALLREDUCE(MPI_IN_PLACE,nmerge_proc,this%vf%cfg%nproc,MPI_INTEGER,MPI_SUM,this%vf%cfg%comm,ierr)
+         nmerge=sum(nmerge_proc)
+         ! Gather all merge events
+         allocate(merge_all(1:2,1:nmerge)); merge_all=0; merge_all(:,sum(nmerge_proc(1:this%vf%cfg%rank))+1:sum(nmerge_proc(1:this%vf%cfg%rank+1)))=this%merge(:,1:this%nmerge)
+         call MPI_ALLREDUCE(MPI_IN_PLACE,merge_all,2*nmerge,MPI_INTEGER,MPI_SUM,this%vf%cfg%comm,ierr)
+         ! Reset merge data
+         this%nmerge=0; deallocate(this%merge)
+         allocate(this%merge(1:2,1:min_struct_size)); this%merge=0
+         ! Compress merge_all array
+         do n=1,nmerge
+            call add_merge(merge_all(1,n),merge_all(2,n))
+         end do
+         ! Deallocate
+         deallocate(nmerge_proc,merge_all)
+      end block gather_merge
+
+      ! Execute all merges
+      execute_merge: block
+         integer :: n,nn
+         do n=1,this%nmerge
+            
+         end do
+      end block execute_merge
 
       ! Perform a CCL build
       call this%build(make_label)
@@ -189,6 +228,33 @@ contains
       new_id: block
       
       end block new_id
+      
+   contains
+      
+      !> Subroutine that adds a new merge event (id1<id2 required)
+      subroutine add_merge(id1,id2)
+         implicit none
+         integer, intent(in) :: id1,id2
+         integer :: n,size_now,size_new
+         integer, dimension(:,:), allocatable :: tmp
+         ! Skip self-merge
+         if (id1.eq.id2) return
+         ! Skip redundant merge
+         do n=1,this%nmerge
+            if (all(this%merge(:,n).eq.[id1,id2])) return
+         end do
+         ! Create new merge event
+         size_now=size(this%merge,dim=2)
+         if (this%nmerge.eq.size_now) then
+            size_new=int(real(size_now,WP)*coeff_up)
+            allocate(tmp(1:2,1:size_new))
+            tmp(:,1:this%nmerge)=this%merge
+            tmp(:,this%nmerge+1:)=0
+            call move_alloc(tmp,this%merge)
+         end if
+         this%nmerge=this%nmerge+1
+         this%merge(:,this%nmerge)=[id1,id2]
+      end subroutine add_merge
       
    end subroutine advance
 
