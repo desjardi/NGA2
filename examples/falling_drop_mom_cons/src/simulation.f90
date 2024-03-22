@@ -6,7 +6,6 @@ module simulation
    use ddadi_class,       only: ddadi
    use tpns_class,        only: tpns
    use vfs_class,         only: vfs
-   use tpscalar_class,    only: tpscalar
    use timetracker_class, only: timetracker
    use ensight_class,     only: ensight
    use surfmesh_class,    only: surfmesh
@@ -20,7 +19,6 @@ module simulation
    type(ddadi),       public :: vs
    type(tpns),        public :: fs
    type(vfs),         public :: vf
-   type(tpscalar),    public :: sc
    type(timetracker), public :: time
    
    !> Ensight postprocessing
@@ -29,12 +27,11 @@ module simulation
    type(event)    :: ens_evt
    
    !> Simulation monitor file
-   type(monitor) :: mfile,cflfile,scfile
+   type(monitor) :: mfile,cflfile
    
    public :: simulation_init,simulation_run,simulation_final
    
    !> Private work arrays
-   real(WP), dimension(:,:,:,:), allocatable :: resSC
    real(WP), dimension(:,:,:), allocatable :: resU,resV,resW
    real(WP), dimension(:,:,:), allocatable :: Ui,Vi,Wi
    
@@ -66,7 +63,6 @@ contains
       
       ! Allocate work arrays
       allocate_work_arrays: block
-         allocate(resSC(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_,1:2))
          allocate(resU (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
          allocate(resV (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
          allocate(resW (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
@@ -153,7 +149,7 @@ contains
          use hypre_str_class, only: pcg_pfmg2
          use mathtools,       only: Pi
          ! Create flow solver
-         fs=tpns(cfg=cfg,name='Two-phase NS')
+         call fs%initialize(cfg=cfg,name='Two-phase NS')
          ! Assign constant viscosity to each phase
          call param_read('Liquid dynamic viscosity',fs%visc_l)
          call param_read('Gas dynamic viscosity',fs%visc_g)
@@ -172,53 +168,17 @@ contains
          call param_read('Pressure iteration',ps%maxit)
          call param_read('Pressure tolerance',ps%rcvg)
          ! Configure implicit velocity solver
-         vs=ddadi(cfg=cfg,name='Velocity',nst=7)
+         !vs=ddadi(cfg=cfg,name='Velocity',nst=7)
          ! Setup the solver
-         call fs%setup(pressure_solver=ps,implicit_solver=vs)
+         call fs%setup(pressure_solver=ps)!,implicit_solver=vs)
+         ! Initialize density
+         fs%rho=fs%rho_l*vf%VF+fs%rho_g*(1.0_WP-vf%VF)
          ! Zero initial field
          fs%U=0.0_WP; fs%V=0.0_WP; fs%W=0.0_WP
          ! Calculate cell-centered velocities and divergence
          call fs%interp_vel(Ui,Vi,Wi)
          call fs%get_div()
       end block create_and_initialize_flow_solver
-      
-      
-      ! Create a liquid scalar solver
-      create_scalar: block
-         integer :: i,j,k
-         ! Create scalar solver
-         call sc%initialize(cfg=cfg,nscalar=2,name='tpscalar_test')
-         ! Make it liquid and give it a name
-         sc%SCname=['Zl','Zg']
-         sc%phase =[  0 ,  1 ]
-         ! Assign zero diffusivity
-         sc%diff=0.0_WP
-         ! Setup without an implicit solver
-         call sc%setup()
-         ! Initialize scalar fields
-         do k=cfg%kmino_,cfg%kmaxo_
-            do j=cfg%jmino_,cfg%jmaxo_
-               do i=cfg%imino_,cfg%imaxo_
-                  ! Liquid scalar
-                  if (vf%VF(i,j,k).gt.0.0_WP) then
-                     ! We are in the liquid
-                     if (cfg%ym(j).gt.depth) then
-                        ! We are above the pool
-                        sc%SC(i,j,k,1)=1.0_WP
-                     else
-                        ! We are in the pool
-                        sc%SC(i,j,k,1)=2.0_WP
-                     end if
-                  end if
-                  ! Gas scalar
-                  if (vf%VF(i,j,k).lt.1.0_WP) then
-                     ! We are in the gas
-                     sc%SC(i,j,k,2)=(cfg%ym(j)-depth)/(cfg%yL-depth)
-                  end if
-               end do
-            end do
-         end do
-      end block create_scalar
       
       
       ! Create surfmesh object for interface polygon output
@@ -242,9 +202,6 @@ contains
          call ens_out%add_scalar('pressure',fs%P)
          call ens_out%add_scalar('curvature',vf%curv)
          call ens_out%add_surface('plic',smesh)
-         do nsc=1,sc%nscalar
-            call ens_out%add_scalar(trim(sc%SCname(nsc)),sc%SC(:,:,:,nsc))
-         end do
          ! Output to ensight
          if (ens_evt%occurs()) call ens_out%write_data(time%t)
       end block create_ensight
@@ -257,7 +214,6 @@ contains
          call fs%get_cfl(time%dt,time%cfl)
          call fs%get_max()
          call vf%get_max()
-         call sc%get_max(VF=vf%VF)
          ! Create simulation monitor
          mfile=monitor(fs%cfg%amRoot,'simulation')
          call mfile%add_column(time%n,'Timestep number')
@@ -287,16 +243,6 @@ contains
          call cflfile%add_column(fs%CFLv_y,'Viscous yCFL')
          call cflfile%add_column(fs%CFLv_z,'Viscous zCFL')
          call cflfile%write()
-         ! Create scalar monitor
-         scfile=monitor(sc%cfg%amRoot,'scalar')
-         call scfile%add_column(time%n,'Timestep number')
-         call scfile%add_column(time%t,'Time')
-         do nsc=1,sc%nscalar
-            call scfile%add_column(sc%SCmin(nsc),trim(sc%SCname(nsc))//'_min')
-            call scfile%add_column(sc%SCmax(nsc),trim(sc%SCname(nsc))//'_max')
-            call scfile%add_column(sc%SCint(nsc),trim(sc%SCname(nsc))//'_int')
-         end do
-         call scfile%write()
       end block create_monitor
       
       
@@ -305,7 +251,7 @@ contains
    
    !> Perform an NGA2 simulation - this mimicks NGA's old time integration for multiphase
    subroutine simulation_run
-      use tpns_class, only: static_contact,harmonic_visc
+      use tpns_class, only: harmonic_visc
       implicit none
       
       ! Perform time integration
@@ -319,38 +265,23 @@ contains
          ! Remember old VOF
          vf%VFold=vf%VF
          
-         ! Remember old SC
-         sc%SCold=sc%SC
+         ! Remember old velocity and momentum
+         fs%Uold=fs%U; fs%rhoUold=fs%rhoU
+         fs%Vold=fs%V; fs%rhoVold=fs%rhoV
+         fs%Wold=fs%W; fs%rhoWold=fs%rhoW
          
-         ! Remember old velocity
-         fs%Uold=fs%U
-         fs%Vold=fs%V
-         fs%Wold=fs%W
+         ! Remember old density
+         fs%rhoold=fs%rho
          
          ! Apply time-varying Dirichlet conditions
          ! This is where time-dpt Dirichlet would be enforced
          
-         ! Prepare old staggered density (at n)
-         call fs%get_olddensity(vf=vf)
-         
          ! VOF solver step
          call vf%advance(dt=time%dt,U=fs%U,V=fs%V,W=fs%W)
          
-         ! Now transport our phase-specific scalars
-         advance_scalar: block
-            integer :: nsc
-            real(WP) :: p,q
-            ! Explicit calculation of dSC/dt from scalar equation
-            call sc%get_dSCdt(dSCdt=resSC,U=fs%U,V=fs%V,W=fs%W,VFold=vf%VFold,VF=vf%VF,detailed_face_flux=vf%detailed_face_flux,dt=time%dt)
-            ! Advance scalar fields
-            do nsc=1,sc%nscalar
-               p=real(sc%phase(nsc),WP); q=1.0_WP-2.0_WP*p
-               where (sc%mask.eq.0.and.vf%VF.ne.p) sc%SC(:,:,:,nsc)=((p+q*vf%VFold)*sc%SCold(:,:,:,nsc)+time%dt*resSC(:,:,:,nsc))/(p+q*vf%VF)
-               where (vf%VF.eq.p) sc%SC(:,:,:,nsc)=0.0_WP
-            end do
-            ! Apply boundary conditions
-            call sc%apply_bcond(time%t,time%dt)
-         end block advance_scalar
+         ! Build new density and momentum
+         call fs%update_density(dt=time%dt,vf=vf)
+         call fs%get_face_density()
          
          ! Prepare new staggered viscosity (at n+1)
          call fs%get_viscosity(vf=vf,strat=harmonic_visc)
@@ -364,7 +295,7 @@ contains
             fs%W=0.5_WP*(fs%W+fs%Wold)
             
             ! Preliminary mass and momentum transport step at the interface
-            call fs%prepare_advection_upwind(dt=time%dt)
+            !call fs%prepare_advection_upwind(dt=time%dt)
             
             ! Explicit calculation of drho*u/dt from NS
             call fs%get_dmomdt(resU,resV,resW)
@@ -373,17 +304,17 @@ contains
             call fs%addsrc_gravity(resU,resV,resW)
             
             ! Assemble explicit residual
-            resU=-2.0_WP*fs%rho_U*fs%U+(fs%rho_Uold+fs%rho_U)*fs%Uold+time%dt*resU
-            resV=-2.0_WP*fs%rho_V*fs%V+(fs%rho_Vold+fs%rho_V)*fs%Vold+time%dt*resV
-            resW=-2.0_WP*fs%rho_W*fs%W+(fs%rho_Wold+fs%rho_W)*fs%Wold+time%dt*resW
+            resU=-fs%rho_U*(2.0_WP*fs%U-fs%Uold)+fs%rhoUold+time%dt*resU
+            resV=-fs%rho_V*(2.0_WP*fs%V-fs%Vold)+fs%rhoVold+time%dt*resV
+            resW=-fs%rho_W*(2.0_WP*fs%W-fs%Wold)+fs%rhoWold+time%dt*resW
             
             ! Form implicit residuals
-            call fs%solve_implicit(time%dt,resU,resV,resW)
+            !call fs%solve_implicit(time%dt,resU,resV,resW)
             
             ! Apply these residuals
-            fs%U=2.0_WP*fs%U-fs%Uold+resU
-            fs%V=2.0_WP*fs%V-fs%Vold+resV
-            fs%W=2.0_WP*fs%W-fs%Wold+resW
+            fs%U=2.0_WP*fs%U-fs%Uold+resU/fs%rho_U
+            fs%V=2.0_WP*fs%V-fs%Vold+resV/fs%rho_V
+            fs%W=2.0_WP*fs%W-fs%Wold+resW/fs%rho_W
             
             ! Apply other boundary conditions
             call fs%apply_bcond(time%t,time%dt)
@@ -392,7 +323,7 @@ contains
             call fs%update_laplacian()
             call fs%correct_mfr()
             call fs%get_div()
-            call fs%add_surface_tension_jump(dt=time%dt,div=fs%div,vf=vf,contact_model=static_contact)
+            call fs%add_surface_tension_jump(dt=time%dt,div=fs%div,vf=vf)
             fs%psolv%rhs=-fs%cfg%vol*fs%div/time%dt
             fs%psolv%sol=0.0_WP
             call fs%psolv%solve()
@@ -423,10 +354,8 @@ contains
          ! Perform and output monitoring
          call fs%get_max()
          call vf%get_max()
-         call sc%get_max(VF=vf%VF)
          call mfile%write()
          call cflfile%write()
-         call scfile%write()
          
       end do
       
@@ -444,7 +373,7 @@ contains
       ! timetracker
       
       ! Deallocate work arrays
-      deallocate(resSC,resU,resV,resW,Ui,Vi,Wi)
+      deallocate(resU,resV,resW,Ui,Vi,Wi)
       
    end subroutine simulation_final
    
