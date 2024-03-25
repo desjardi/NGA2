@@ -3,10 +3,10 @@ module simulation
    use precision,         only: WP
    use geometry,          only: cfg
    use hypre_str_class,   only: hypre_str
-   use ddadi_class,       only: ddadi
+   !use ddadi_class,       only: ddadi
    use tpns_class,        only: tpns
    use vfs_class,         only: vfs
-   use tpscalar_class,    only: tpscalar
+   !use tpscalar_class,    only: tpscalar
    use timetracker_class, only: timetracker
    use ensight_class,     only: ensight
    use surfmesh_class,    only: surfmesh
@@ -17,10 +17,10 @@ module simulation
    
    !> Get a couple linear solvers, a two-phase flow solver and volume fraction solver and corresponding time tracker
    type(hypre_str),   public :: ps
-   type(ddadi),       public :: vs
+   !type(ddadi),       public :: vs
    type(tpns),        public :: fs
    type(vfs),         public :: vf
-   type(tpscalar),    public :: sc
+   !type(tpscalar),    public :: sc
    type(timetracker), public :: time
    
    !> Ensight postprocessing
@@ -34,7 +34,7 @@ module simulation
    public :: simulation_init,simulation_run,simulation_final
    
    !> Private work arrays
-   real(WP), dimension(:,:,:,:), allocatable :: resSC
+   !real(WP), dimension(:,:,:,:), allocatable :: resSC
    real(WP), dimension(:,:,:), allocatable :: resU,resV,resW
    real(WP), dimension(:,:,:), allocatable :: Ui,Vi,Wi
    
@@ -54,7 +54,7 @@ contains
       ! Create the droplet
       G=radius-sqrt(sum((xyz-center)**2))
       ! Add the pool
-      G=max(G,depth-xyz(2))
+      !G=max(G,depth-xyz(2))
    end function levelset_falling_drop
    
    
@@ -66,7 +66,7 @@ contains
       
       ! Allocate work arrays
       allocate_work_arrays: block
-         allocate(resSC(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_,1:2))
+         !allocate(resSC(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_,1:2))
          allocate(resU (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
          allocate(resV (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
          allocate(resW (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
@@ -90,17 +90,19 @@ contains
       ! Initialize our VOF solver and field
       create_and_initialize_vof: block
          use mms_geom,  only: cube_refine_vol
-         use vfs_class, only: lvira,VFhi,VFlo,flux_storage
+         use vfs_class, only: lvira,VFhi,VFlo,remap!,flux_storage
          integer :: i,j,k,n,si,sj,sk
          real(WP), dimension(3,8) :: cube_vertex
          real(WP), dimension(3) :: v_cent,a_cent
          real(WP) :: vol,area
          integer, parameter :: amr_ref_lvl=4
          ! Create a VOF solver
-         call vf%initialize(cfg=cfg,reconstruction_method=lvira,transport_method=flux_storage,name='VOF')
+         !call vf%initialize(cfg=cfg,reconstruction_method=lvira,transport_method=flux_storage,name='VOF')
+         call vf%initialize(cfg=cfg,reconstruction_method=lvira,transport_method=remap,name='VOF')
+         vf%cons_correct=.false.
          ! Initialize to a droplet and a pool
-         center=[0.0_WP,0.05_WP,0.0_WP]
-         !radius=0.005_WP
+         !center=[0.0_WP,0.05_WP,0.0_WP]
+         call param_read('Droplet center',center)
          call param_read('Droplet diameter',radius); radius=radius/2.0_WP
          depth =0.02_WP
          do k=vf%cfg%kmino_,vf%cfg%kmaxo_
@@ -172,9 +174,9 @@ contains
          call param_read('Pressure iteration',ps%maxit)
          call param_read('Pressure tolerance',ps%rcvg)
          ! Configure implicit velocity solver
-         vs=ddadi(cfg=cfg,name='Velocity',nst=7)
+         !vs=ddadi(cfg=cfg,name='Velocity',nst=7)
          ! Setup the solver
-         call fs%setup(pressure_solver=ps,implicit_solver=vs)
+         call fs%setup(pressure_solver=ps)!,implicit_solver=vs)
          ! Zero initial field
          fs%U=0.0_WP; fs%V=0.0_WP; fs%W=0.0_WP
          ! Calculate cell-centered velocities and divergence
@@ -184,41 +186,41 @@ contains
       
       
       ! Create a liquid scalar solver
-      create_scalar: block
-         integer :: i,j,k
-         ! Create scalar solver
-         call sc%initialize(cfg=cfg,nscalar=2,name='tpscalar_test')
-         ! Make it liquid and give it a name
-         sc%SCname=['Zl','Zg']
-         sc%phase =[  0 ,  1 ]
-         ! Assign zero diffusivity
-         sc%diff=0.0_WP
-         ! Setup without an implicit solver
-         call sc%setup()
-         ! Initialize scalar fields
-         do k=cfg%kmino_,cfg%kmaxo_
-            do j=cfg%jmino_,cfg%jmaxo_
-               do i=cfg%imino_,cfg%imaxo_
-                  ! Liquid scalar
-                  if (vf%VF(i,j,k).gt.0.0_WP) then
-                     ! We are in the liquid
-                     if (cfg%ym(j).gt.depth+cfg%dy(j)) then
-                        ! We are above the pool
-                        sc%SC(i,j,k,1)=1.0_WP
-                     else
-                        ! We are in the pool
-                        sc%SC(i,j,k,1)=2.0_WP
-                     end if
-                  end if
-                  ! Gas scalar
-                  if (vf%VF(i,j,k).lt.1.0_WP) then
-                     ! We are in the gas
-                     sc%SC(i,j,k,2)=(cfg%ym(j)-depth)/(cfg%yL-depth)
-                  end if
-               end do
-            end do
-         end do
-      end block create_scalar
+      !create_scalar: block
+      !   integer :: i,j,k
+      !   ! Create scalar solver
+      !   call sc%initialize(cfg=cfg,nscalar=2,name='tpscalar_test')
+      !   ! Make it liquid and give it a name
+      !   sc%SCname=['Zl','Zg']
+      !   sc%phase =[  0 ,  1 ]
+      !   ! Assign zero diffusivity
+      !   sc%diff=0.0_WP
+      !   ! Setup without an implicit solver
+      !   call sc%setup()
+      !   ! Initialize scalar fields
+      !   do k=cfg%kmino_,cfg%kmaxo_
+      !      do j=cfg%jmino_,cfg%jmaxo_
+      !         do i=cfg%imino_,cfg%imaxo_
+      !            ! Liquid scalar
+      !            if (vf%VF(i,j,k).gt.0.0_WP) then
+      !               ! We are in the liquid
+      !               if (cfg%ym(j).gt.depth+cfg%dy(j)) then
+      !                  ! We are above the pool
+      !                  sc%SC(i,j,k,1)=1.0_WP
+      !               else
+      !                  ! We are in the pool
+      !                  sc%SC(i,j,k,1)=2.0_WP
+      !               end if
+      !            end if
+      !            ! Gas scalar
+      !            if (vf%VF(i,j,k).lt.1.0_WP) then
+      !               ! We are in the gas
+      !               sc%SC(i,j,k,2)=(cfg%ym(j)-depth)/(cfg%yL-depth)
+      !            end if
+      !         end do
+      !      end do
+      !   end do
+      !end block create_scalar
       
       
       ! Create surfmesh object for interface polygon output
@@ -242,9 +244,9 @@ contains
          call ens_out%add_scalar('pressure',fs%P)
          call ens_out%add_scalar('curvature',vf%curv)
          call ens_out%add_surface('plic',smesh)
-         do nsc=1,sc%nscalar
-            call ens_out%add_scalar(trim(sc%SCname(nsc)),sc%SC(:,:,:,nsc))
-         end do
+         !do nsc=1,sc%nscalar
+         !   call ens_out%add_scalar(trim(sc%SCname(nsc)),sc%SC(:,:,:,nsc))
+         !end do
          ! Output to ensight
          if (ens_evt%occurs()) call ens_out%write_data(time%t)
       end block create_ensight
@@ -257,7 +259,7 @@ contains
          call fs%get_cfl(time%dt,time%cfl)
          call fs%get_max()
          call vf%get_max()
-         call sc%get_max(VF=vf%VF)
+         !call sc%get_max(VF=vf%VF)
          ! Create simulation monitor
          mfile=monitor(fs%cfg%amRoot,'simulation')
          call mfile%add_column(time%n,'Timestep number')
@@ -288,15 +290,15 @@ contains
          call cflfile%add_column(fs%CFLv_z,'Viscous zCFL')
          call cflfile%write()
          ! Create scalar monitor
-         scfile=monitor(sc%cfg%amRoot,'scalar')
-         call scfile%add_column(time%n,'Timestep number')
-         call scfile%add_column(time%t,'Time')
-         do nsc=1,sc%nscalar
-            call scfile%add_column(sc%SCmin(nsc),trim(sc%SCname(nsc))//'_min')
-            call scfile%add_column(sc%SCmax(nsc),trim(sc%SCname(nsc))//'_max')
-            call scfile%add_column(sc%SCint(nsc),trim(sc%SCname(nsc))//'_int')
-         end do
-         call scfile%write()
+         !scfile=monitor(sc%cfg%amRoot,'scalar')
+         !call scfile%add_column(time%n,'Timestep number')
+         !call scfile%add_column(time%t,'Time')
+         !do nsc=1,sc%nscalar
+         !   call scfile%add_column(sc%SCmin(nsc),trim(sc%SCname(nsc))//'_min')
+         !   call scfile%add_column(sc%SCmax(nsc),trim(sc%SCname(nsc))//'_max')
+         !   call scfile%add_column(sc%SCint(nsc),trim(sc%SCname(nsc))//'_int')
+         !end do
+         !call scfile%write()
       end block create_monitor
       
       
@@ -320,7 +322,7 @@ contains
          vf%VFold=vf%VF
          
          ! Remember old SC
-         sc%SCold=sc%SC
+         !sc%SCold=sc%SC
          
          ! Remember old velocity
          fs%Uold=fs%U
@@ -337,20 +339,20 @@ contains
          call vf%advance(dt=time%dt,U=fs%U,V=fs%V,W=fs%W)
          
          ! Now transport our phase-specific scalars
-         advance_scalar: block
-            integer :: nsc
-            real(WP) :: p,q
-            ! Explicit calculation of dSC/dt from scalar equation
-            call sc%get_dSCdt(dSCdt=resSC,U=fs%U,V=fs%V,W=fs%W,VFold=vf%VFold,VF=vf%VF,detailed_face_flux=vf%detailed_face_flux,dt=time%dt)
-            ! Advance scalar fields
-            do nsc=1,sc%nscalar
-               p=real(sc%phase(nsc),WP); q=1.0_WP-2.0_WP*p
-               where (sc%mask.eq.0.and.vf%VF.ne.p) sc%SC(:,:,:,nsc)=((p+q*vf%VFold)*sc%SCold(:,:,:,nsc)+time%dt*resSC(:,:,:,nsc))/(p+q*vf%VF)
-               where (vf%VF.eq.p) sc%SC(:,:,:,nsc)=0.0_WP
-            end do
-            ! Apply boundary conditions
-            call sc%apply_bcond(time%t,time%dt)
-         end block advance_scalar
+         !advance_scalar: block
+         !   integer :: nsc
+         !   real(WP) :: p,q
+         !   ! Explicit calculation of dSC/dt from scalar equation
+         !   call sc%get_dSCdt(dSCdt=resSC,U=fs%U,V=fs%V,W=fs%W,VFold=vf%VFold,VF=vf%VF,detailed_face_flux=vf%detailed_face_flux,dt=time%dt)
+         !   ! Advance scalar fields
+         !   do nsc=1,sc%nscalar
+         !      p=real(sc%phase(nsc),WP); q=1.0_WP-2.0_WP*p
+         !      where (sc%mask.eq.0.and.vf%VF.ne.p) sc%SC(:,:,:,nsc)=((p+q*vf%VFold)*sc%SCold(:,:,:,nsc)+time%dt*resSC(:,:,:,nsc))/(p+q*vf%VF)
+         !      where (vf%VF.eq.p) sc%SC(:,:,:,nsc)=0.0_WP
+         !   end do
+         !   ! Apply boundary conditions
+         !   call sc%apply_bcond(time%t,time%dt)
+         !end block advance_scalar
          
          ! Prepare new staggered viscosity (at n+1)
          call fs%get_viscosity(vf=vf,strat=harmonic_visc)
@@ -378,12 +380,12 @@ contains
             resW=-2.0_WP*fs%rho_W*fs%W+(fs%rho_Wold+fs%rho_W)*fs%Wold+time%dt*resW
             
             ! Form implicit residuals
-            call fs%solve_implicit(time%dt,resU,resV,resW)
+            !call fs%solve_implicit(time%dt,resU,resV,resW)
             
             ! Apply these residuals
-            fs%U=2.0_WP*fs%U-fs%Uold+resU
-            fs%V=2.0_WP*fs%V-fs%Vold+resV
-            fs%W=2.0_WP*fs%W-fs%Wold+resW
+            fs%U=2.0_WP*fs%U-fs%Uold+resU/fs%rho_U
+            fs%V=2.0_WP*fs%V-fs%Vold+resV/fs%rho_V
+            fs%W=2.0_WP*fs%W-fs%Wold+resW/fs%rho_W
             
             ! Apply other boundary conditions
             call fs%apply_bcond(time%t,time%dt)
@@ -423,10 +425,10 @@ contains
          ! Perform and output monitoring
          call fs%get_max()
          call vf%get_max()
-         call sc%get_max(VF=vf%VF)
+         !call sc%get_max(VF=vf%VF)
          call mfile%write()
          call cflfile%write()
-         call scfile%write()
+         !call scfile%write()
          
       end do
       
@@ -444,7 +446,7 @@ contains
       ! timetracker
       
       ! Deallocate work arrays
-      deallocate(resSC,resU,resV,resW,Ui,Vi,Wi)
+      deallocate(resU,resV,resW,Ui,Vi,Wi)!,resSC)
       
    end subroutine simulation_final
    

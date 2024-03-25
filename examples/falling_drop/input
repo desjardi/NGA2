@@ -11,6 +11,7 @@ nz :	64
 
 # Case parameters
 Droplet diameter : 0.01
+Droplet center : 0 0.05 0
 
 # Fluid properties
 Gravity :                     0 -9.81 0
