@@ -37,6 +37,9 @@ module stracker_class
       ! Merging events
       integer :: nmerge
       integer, dimension(:,:), allocatable :: merge
+      ! Merging2 events
+      integer :: nmerge2
+      integer, dimension(:,:), allocatable :: merge2
       ! ID of the structure that contains each cell
       integer, dimension(:,:,:), allocatable :: id
       ! Array of structures
@@ -44,6 +47,8 @@ module stracker_class
       type(struct_type), dimension(:), allocatable :: struct
       ! Old ID of the structure that contains each cell
       integer, dimension(:,:,:), allocatable :: id_old
+      ! Remapped old ID of the structure that contains each cell
+      integer, dimension(:,:,:), allocatable :: id_rmp
       ! Array of structures
       integer :: nstruct_old
       type(struct_type), dimension(:), allocatable :: struct_old
@@ -86,6 +91,7 @@ contains
       ! Allocate and initialize ID array
       allocate(this%id    (this%vf%cfg%imino_:this%vf%cfg%imaxo_,this%vf%cfg%jmino_:this%vf%cfg%jmaxo_,this%vf%cfg%kmino_:this%vf%cfg%kmaxo_)); this%id    =0
       allocate(this%id_old(this%vf%cfg%imino_:this%vf%cfg%imaxo_,this%vf%cfg%jmino_:this%vf%cfg%jmaxo_,this%vf%cfg%kmino_:this%vf%cfg%kmaxo_)); this%id_old=0
+      allocate(this%id_rmp(this%vf%cfg%imino_:this%vf%cfg%imaxo_,this%vf%cfg%jmino_:this%vf%cfg%jmaxo_,this%vf%cfg%kmino_:this%vf%cfg%kmaxo_)); this%id_rmp=0
       ! Zero structures
       this%nstruct    =0
       this%nstruct_old=0
@@ -99,7 +105,6 @@ contains
       implicit none
       class(stracker), intent(inout) :: this
       procedure(make_label_ftype) :: make_label
-      integer, dimension(:,:,:), allocatable :: id_remap
       
       ! Copy old structure data - may not be needed
       copy_to_old: block
@@ -127,6 +132,9 @@ contains
          this%nmerge=0
          if (allocated(this%merge)) deallocate(this%merge)
          allocate(this%merge(1:2,1:min_struct_size)); this%merge=0
+         this%nmerge2=0
+         if (allocated(this%merge2)) deallocate(this%merge2)
+         allocate(this%merge2(1:2,1:min_struct_size)); this%merge2=0
       end block reset_merge
       
       ! Remap id using VF geometry data to identify merge events
@@ -138,8 +146,6 @@ contains
          integer, dimension(:), allocatable :: ids
          integer :: i,j,k,n,nn
          integer :: nid,nobj,my_id
-         ! Allocate remapped id array
-         allocate(id_remap(this%vf%cfg%imino_:this%vf%cfg%imaxo_,this%vf%cfg%jmino_:this%vf%cfg%jmaxo_,this%vf%cfg%kmino_:this%vf%cfg%kmaxo_)); id_remap=this%id
          ! Allocate ids storage
          nobj=0
          do k=this%vf%cfg%kmin_,this%vf%cfg%kmax_; do j=this%vf%cfg%jmin_,this%vf%cfg%jmax_; do i=this%vf%cfg%imin_,this%vf%cfg%imax_
@@ -154,8 +160,8 @@ contains
             if (nobj.eq.0) cycle
             ! Zero out ids and reset counter
             nid=0; ids=0
-            ! Initialize id_remap
-            id_remap(i,j,k)=0
+            ! Initialize id_rmp
+            this%id_rmp(i,j,k)=0
             ! Traverse every object and check for phase presence
             obj_loop: do n=1,nobj
                ! Get SepVM for nth object
@@ -178,11 +184,11 @@ contains
             end do obj_loop
             ! If no ids were encountered, done
             if (nid.eq.0) cycle
-            ! Set id_remap to smallest non-zero id encountered
-            id_remap(i,j,k)=minval(ids(1:nid))
+            ! Set id_rmp to smallest non-zero id encountered
+            this%id_rmp(i,j,k)=minval(ids(1:nid))
             ! Create max(nid-1,0) merging events - this should be based on a binary search tree instead
             do n=1,nid
-               call add_merge(id_remap(i,j,k),ids(n))
+               call add_merge(this%id_rmp(i,j,k),ids(n))
             end do
          end do; end do; end do
          ! Deallocate ids
@@ -215,20 +221,106 @@ contains
 
       ! Execute all merges
       execute_merge: block
-         integer :: n,nn
-         do n=1,this%nmerge
-            
-         end do
+         integer :: i,j,k,n
+         ! Loop over full domain and update id based on merge events
+         do k=this%vf%cfg%kmino_,this%vf%cfg%kmaxo_; do j=this%vf%cfg%jmino_,this%vf%cfg%jmaxo_; do i=this%vf%cfg%imino_,this%vf%cfg%imaxo_
+            ! Skip empty cells
+            if (this%id_rmp(i,j,k).eq.0) cycle
+            ! If id_rmp is non-zero, check if it's involved in a merge
+            do n=1,this%nmerge
+               ! If it's involved in a merge event, rename the structure
+               if (this%id_rmp(i,j,k).eq.this%merge(2,n)) this%id_rmp(i,j,k)=this%merge(1,n)
+            end do
+         end do; end do; end do
       end block execute_merge
-
-      ! Perform a CCL build
+      
+      ! Perform a CCL build - same_label is false if id_rmp are different and non-zero
       call this%build(make_label)
-
-      ! Resolve persistent id
+      
+      ! Resolve persistent id:
+      ! For each new structure, build a list of all distinct id_rmp that are contained
+      ! Zeros are ignored here - if more than one non-zero id_rmp value, then another
+      ! merging step is needed
       new_id: block
-      
+         integer :: n,nn,nnn,nid,my_id,nobj
+         integer, dimension(:), allocatable :: ids
+         ! Allocate maximum storage for id_rmp values
+         nobj=0
+         do n=1,this%nstruct
+            nobj=max(nobj,this%struct(n)%n_)
+         end do
+         allocate(ids(nobj))
+         ! Traverse each new structure and gather list of potential id
+         do n=1,this%nstruct
+            ! Zero out ids and reset counter
+            nid=0; ids=0
+            ! Loop over local cells in the structure
+            str_loop: do nn=1,this%struct(n)%n_
+               ! Local cell id_rmp value
+               my_id=this%id_rmp(this%struct(n)%map(1,nn),this%struct(n)%map(2,nn),this%struct(n)%map(3,nn))
+               ! Ignore zeros
+               if (my_id.eq.0) cycle
+               ! If my_id has already been encountered, cycle
+               do nnn=1,nid
+                  if (ids(nnn).eq.my_id) cycle str_loop
+               end do
+               ! Increment the ids array
+               nid=nid+1; ids(nid)=my_id
+            end do str_loop
+            ! If no ids were encountered, done - we may need a brand new id
+            if (nid.eq.0) cycle
+            ! Set id_rmp to smallest non-zero id encountered
+            this%struct(n)%id=minval(ids(1:nid))
+            ! Create max(nid-1,0) merging events - this should be based on a binary search tree instead
+            do nnn=1,nid
+               call add_merge2(this%struct(n)%id,ids(nnn))
+            end do
+         end do
       end block new_id
+
+      ! Gather all merge2 events
+      gather_merge2: block
+         use mpi_f08, only: MPI_ALLREDUCE,MPI_SUM,MPI_IN_PLACE,MPI_INTEGER
+         integer, dimension(:), allocatable :: nmerge2_proc
+         integer, dimension(:,:), allocatable :: merge2_all
+         integer :: ierr,nmerge2,n
+         ! Sum all merge2 events
+         allocate(nmerge2_proc(1:this%vf%cfg%nproc)); nmerge2_proc=0; nmerge2_proc(this%vf%cfg%rank+1)=this%nmerge2
+         call MPI_ALLREDUCE(MPI_IN_PLACE,nmerge2_proc,this%vf%cfg%nproc,MPI_INTEGER,MPI_SUM,this%vf%cfg%comm,ierr)
+         nmerge2=sum(nmerge2_proc)
+         ! Gather all merge2 events
+         allocate(merge2_all(1:2,1:nmerge2)); merge2_all=0; merge2_all(:,sum(nmerge2_proc(1:this%vf%cfg%rank))+1:sum(nmerge2_proc(1:this%vf%cfg%rank+1)))=this%merge2(:,1:this%nmerge2)
+         call MPI_ALLREDUCE(MPI_IN_PLACE,merge2_all,2*nmerge2,MPI_INTEGER,MPI_SUM,this%vf%cfg%comm,ierr)
+         ! Reset merge2 data
+         this%nmerge2=0; deallocate(this%merge2)
+         allocate(this%merge2(1:2,1:min_struct_size)); this%merge2=0
+         ! Compress merge2_all array
+         do n=1,nmerge2
+            call add_merge2(merge2_all(1,n),merge2_all(2,n))
+         end do
+         ! Deallocate
+         deallocate(nmerge2_proc,merge2_all)
+      end block gather_merge2
+
+      ! Execute all merge2
+      execute_merge2: block
+         integer :: n,nn
+         ! Loop over structures and update id based on merge2 events
+         do n=1,this%nstruct
+            ! If id_rmp is non-zero, check if it's involved in a merge
+            do nn=1,this%nmerge2
+               ! If it's involved in a merge event, rename the structure
+               if (this%struct(n)%id.eq.this%merge2(2,nn)) this%struct(n)%id=this%merge2(1,nn)
+            end do
+         end do; end do; end do
+      end block execute_merge2
       
+      ! Now deal with splits - case where two structs share the same id
+
+
+      ! Finally, one last pass to give unique id to structs with id=0
+
+
    contains
       
       !> Subroutine that adds a new merge event (id1<id2 required)
@@ -255,6 +347,31 @@ contains
          this%nmerge=this%nmerge+1
          this%merge(:,this%nmerge)=[id1,id2]
       end subroutine add_merge
+
+      !> Subroutine that adds a new merge2 event (id1<id2 required)
+      subroutine add_merge2(id1,id2)
+         implicit none
+         integer, intent(in) :: id1,id2
+         integer :: n,size_now,size_new
+         integer, dimension(:,:), allocatable :: tmp
+         ! Skip self-merge2
+         if (id1.eq.id2) return
+         ! Skip redundant merge2
+         do n=1,this%nmerge2
+            if (all(this%merge2(:,n).eq.[id1,id2])) return
+         end do
+         ! Create new merge2 event
+         size_now=size(this%merge2,dim=2)
+         if (this%nmerge2.eq.size_now) then
+            size_new=int(real(size_now,WP)*coeff_up)
+            allocate(tmp(1:2,1:size_new))
+            tmp(:,1:this%nmerge2)=this%merge2
+            tmp(:,this%nmerge2+1:)=0
+            call move_alloc(tmp,this%merge2)
+         end if
+         this%nmerge2=this%nmerge2+1
+         this%merge2(:,this%nmerge2)=[id1,id2]
+      end subroutine add_merge2
       
    end subroutine advance
 
@@ -648,7 +765,7 @@ contains
             if (this%id(i,j,k).gt.0) counter(this%id(i,j,k))=counter(this%id(i,j,k))+1
          end do; end do; end do
          do n=1,this%nstruct
-            tmp(n)%id=n
+            tmp(n)%id=0 !< This is different from CCLABEL, our id is initialized to zero here
             tmp(n)%n_=counter(n)
             allocate(tmp(n)%map(1:3,1:tmp(n)%n_))
          end do
@@ -797,6 +914,16 @@ contains
          end if
       end function find_own
       
+      !> Function that identifies if cell pairs have same label
+      logical function same_label(i1,j1,k1,i2,j2,k2)
+         implicit none
+         integer, intent(in) :: i1,j1,k1,i2,j2,k2
+         ! True by default
+         same_label=.true.
+         ! Exception is if pair carries distinct non-zero remapped ids
+         if (this%id_rmp(i1,j1,k1)*this%id_rmp(i2,j2,k2).gt.0.and.this%id_rmp(i1,j1,k1).ne.this%id_rmp(i2,j2,k2)) same_label=.false.
+      end function same_label
+
    end subroutine build
    
    
