@@ -221,17 +221,20 @@ contains
 
       ! Execute all merges
       execute_merge: block
-         integer :: i,j,k,n
-         ! Loop over full domain and update id based on merge events
-         do k=this%vf%cfg%kmino_,this%vf%cfg%kmaxo_; do j=this%vf%cfg%jmino_,this%vf%cfg%jmaxo_; do i=this%vf%cfg%imino_,this%vf%cfg%imaxo_
-            ! Skip empty cells
-            if (this%id_rmp(i,j,k).eq.0) cycle
-            ! If id_rmp is non-zero, check if it's involved in a merge
-            do n=1,this%nmerge
-               ! If it's involved in a merge event, rename the structure
+         integer :: i,j,k,n,m
+         ! Traverse merge list
+         do n=1,this%nmerge
+            ! Loop over full domain and update id based on that merge event
+            do k=this%vf%cfg%kmino_,this%vf%cfg%kmaxo_; do j=this%vf%cfg%jmino_,this%vf%cfg%jmaxo_; do i=this%vf%cfg%imino_,this%vf%cfg%imaxo_
                if (this%id_rmp(i,j,k).eq.this%merge(2,n)) this%id_rmp(i,j,k)=this%merge(1,n)
+            end do; end do; end do
+            ! Loop over remaining merge events and update id based on that merge event
+            do m=1,this%merge
+               if (this%merge(1,m).eq.this%merge(2,n)) this%merge(1,m)=this%merge(1,n)
+               if (this%merge(2,m).eq.this%merge(2,n)) this%merge(2,m)=this%merge(1,n)
+               i=minval(this%merge(:,m)); j=maxval(this%merge(:,m)); this%merge(:,m)=[i,j]
             end do
-         end do; end do; end do
+         end do
       end block execute_merge
       
       ! Perform a CCL build - same_label is false if id_rmp are different and non-zero
@@ -304,23 +307,28 @@ contains
 
       ! Execute all merge2
       execute_merge2: block
-         integer :: n,nn
-         ! Loop over structures and update id based on merge2 events
-         do n=1,this%nstruct
-            ! If id_rmp is non-zero, check if it's involved in a merge
-            do nn=1,this%nmerge2
-               ! If it's involved in a merge event, rename the structure
-               if (this%struct(n)%id.eq.this%merge2(2,nn)) this%struct(n)%id=this%merge2(1,nn)
+         integer :: i,j,n,m
+         ! Traverse merge2 list
+         do n=1,this%nmerge2
+            ! Loop over structures and update id based on merge2 events
+            do nn=1,this%nstruct
+               if (this%struct(nn)%id.eq.this%merge2(2,n)) this%struct(nn)%id=this%merge2(1,n)
             end do
-         end do; end do; end do
+            ! Loop over remaining merge events and update id based on that merge2 event
+            do m=1,this%merge2
+               if (this%merge2(1,m).eq.this%merge2(2,n)) this%merge2(1,m)=this%merge2(1,n)
+               if (this%merge2(2,m).eq.this%merge2(2,n)) this%merge2(2,m)=this%merge2(1,n)
+               i=minval(this%merge2(:,m)); j=maxval(this%merge2(:,m)); this%merge2(:,m)=[i,j]
+            end do
+         end do
       end block execute_merge2
       
       ! Now deal with splits - case where two structs share the same id
-
-
+      
+      
       ! Finally, one last pass to give unique id to structs with id=0
-
-
+      
+      
    contains
       
       !> Subroutine that adds a new merge event (id1<id2 required)

@@ -4,8 +4,8 @@ module simulation
    use geometry,          only: cfg
    use tpns_class,        only: tpns
    use hypre_str_class,   only: hypre_str
+   use ddadi_class,       only: ddadi
    use vfs_class,         only: vfs
-   !use ccl_class,         only: ccl
    use timetracker_class, only: timetracker
    use surfmesh_class,    only: surfmesh
    use ensight_class,     only: ensight
@@ -17,11 +17,9 @@ module simulation
    !> Two-phase flow solver, linear solver for pressure, volume fraction solver, and a time tracker
    type(tpns)        :: fs
    type(hypre_str)   :: ps
+   type(ddadi)       :: vs
    type(vfs)         :: vf
    type(timetracker) :: time
-
-   !> CCL framework
-   !type(ccl),         public :: cc
    
    !> Ensight postprocessing
    type(surfmesh) :: smesh
@@ -73,11 +71,17 @@ contains
          if (myh(1)-pos(1).lt.-0.5_WP*cfg%xL) myh(1)=myh(1)+cfg%xL
          if (myh(3)-pos(3).gt.+0.5_WP*cfg%zL) myh(3)=myh(3)-cfg%zL
          if (myh(3)-pos(3).lt.-0.5_WP*cfg%zL) myh(3)=myh(3)+cfg%zL
-         ! Check hole is close enough
+         ! Check distance to hole center
          dist=norm2(myh-pos)
+         ! Check if we are right on top of hole, if so move it a bit
+         if (dist.eq.0.0_WP) then
+            myh=myh+[tiny(1.0_WP),0.0_WP,tiny(1.0_WP)]
+            dist=norm2(myh-pos)
+         end if
+         ! Check if hole is close enough
          if (dist.lt.0.5_WP*dh) then
             ! Get closest point on torus
-            c=myh+0.5_WP*dh*(pos-myh)/(dist+tiny(dist))
+            c=myh+0.5_WP*dh*(pos-myh)/dist
             G=0.5_WP-norm2(xyz-c)
          end if
       end do
@@ -126,51 +130,55 @@ contains
          ! Read in the number of holes
          call param_read('Number of holes',nh)
          ! Allocate hole position array
-         allocate(ph(2,nh))
-         ! Root assigns positions to holes
-         if (cfg%amRoot) then
-            n=0
-            do while (n.lt.nh)
-               ! Draw a random position on the film
-               xh=random_uniform(lo=cfg%x(cfg%imin),hi=cfg%x(cfg%imax+1))
-               zh=random_uniform(lo=cfg%z(cfg%kmin),hi=cfg%z(cfg%kmax+1))
-               ! Compare to all previous holes
-               is_overlap=.false.
-               do nn=1,n
-                  ! Get the position of the other hole
-                  xxh=ph(1,nn); zzh=ph(2,nn)
-                  ! Account for periodicity
-                  if (xxh-xh.gt.+0.5_WP*cfg%xL) xxh=xxh-cfg%xL
-                  if (xxh-xh.lt.-0.5_WP*cfg%xL) xxh=xxh+cfg%xL
-                  if (zzh-zh.gt.+0.5_WP*cfg%zL) zzh=zzh-cfg%zL
-                  if (zzh-zh.lt.-0.5_WP*cfg%zL) zzh=zzh+cfg%zL
-                  ! Check for overlap
-                  if (norm2([xxh-xh,zzh-zh]).lt.safety_margin*dh) is_overlap=.true.
+         allocate(ph(2,nh)); ph=0.0_WP
+         ! If only one hole, leave it in the middle
+         if (nh.gt.1) then
+            ! Root assigns random non-overlapping hole positions
+            if (cfg%amRoot) then
+               n=0
+               do while (n.lt.nh)
+                  ! Draw a random position on the film
+                  xh=random_uniform(lo=cfg%x(cfg%imin),hi=cfg%x(cfg%imax+1))
+                  zh=random_uniform(lo=cfg%z(cfg%kmin),hi=cfg%z(cfg%kmax+1))
+                  ! Compare to all previous holes
+                  is_overlap=.false.
+                  do nn=1,n
+                     ! Get the position of the other hole
+                     xxh=ph(1,nn); zzh=ph(2,nn)
+                     ! Account for periodicity
+                     if (xxh-xh.gt.+0.5_WP*cfg%xL) xxh=xxh-cfg%xL
+                     if (xxh-xh.lt.-0.5_WP*cfg%xL) xxh=xxh+cfg%xL
+                     if (zzh-zh.gt.+0.5_WP*cfg%zL) zzh=zzh-cfg%zL
+                     if (zzh-zh.lt.-0.5_WP*cfg%zL) zzh=zzh+cfg%zL
+                     ! Check for overlap
+                     if (norm2([xxh-xh,zzh-zh]).lt.safety_margin*dh) is_overlap=.true.
+                  end do
+                  ! If no overlap was found, add the hole to the list
+                  if (.not.is_overlap) then
+                     n=n+1
+                     ph(1,n)=xh
+                     ph(2,n)=zh
+                  end if
                end do
-               ! If no overlap was found, add the hole to the list
-               if (.not.is_overlap) then
-                  n=n+1
-                  ph(1,n)=xh
-                  ph(2,n)=zh
-               end if
-            end do
+            end if
+            ! Broadcoast the hole positions
+            call MPI_BCAST(ph,2*nh,MPI_REAL_WP,0,cfg%comm,ierr)
          end if
-         ! Broadcoast the hole positions
-         call MPI_BCAST(ph,2*nh,MPI_REAL_WP,0,cfg%comm,ierr)
       end block initialize_holes
 
       
       ! Initialize our VOF solver and field
       create_and_initialize_vof: block
          use mms_geom, only: cube_refine_vol
-         use vfs_class, only: swartz,lvira,elvira,VFhi,VFlo
+         use vfs_class, only: swartz,lvira,elvira,remap,VFhi,VFlo
          integer :: i,j,k,n,si,sj,sk
          real(WP), dimension(3,8) :: cube_vertex
          real(WP), dimension(3) :: v_cent,a_cent
          real(WP) :: vol,area
          integer, parameter :: amr_ref_lvl=4
          ! Create a VOF solver
-         vf=vfs(cfg=cfg,reconstruction_method=elvira,name='VOF')
+         call vf%initialize(cfg=cfg,reconstruction_method=elvira,transport_method=remap,name='VOF')
+         !vf%cons_correct=.false.
          ! Initialize to a film
          do k=vf%cfg%kmino_,vf%cfg%kmaxo_
             do j=vf%cfg%jmino_,vf%cfg%jmaxo_
@@ -229,11 +237,13 @@ contains
          call param_read('Oh',Oh); fs%sigma=Oh**(-2)
          ! Prepare and configure pressure solver
          ps=hypre_str(cfg=cfg,name='Pressure',method=pcg_pfmg2,nst=7)
-         ps%maxlevel=16
+         !ps%maxlevel=16
          call param_read('Pressure iteration',ps%maxit)
          call param_read('Pressure tolerance',ps%rcvg)
+         ! Configure implicit velocity solver
+         vs=ddadi(cfg=cfg,name='Velocity',nst=7)
          ! Setup the solver
-         call fs%setup(pressure_solver=ps)
+         call fs%setup(pressure_solver=ps,implicit_solver=vs)
          ! Zero initial field
          fs%U=0.0_WP; fs%V=0.0_WP; fs%W=0.0_WP
          ! Calculate cell-centered velocities and divergence
@@ -244,8 +254,27 @@ contains
       
       ! Create surfmesh object for interface polygon output
       create_smesh: block
-         smesh=surfmesh(nvar=0,name='plic')
+         use irl_fortran_interface
+         integer :: i,j,k,nplane,np
+         ! Include an extra variable for curvature
+         smesh=surfmesh(nvar=1,name='plic')
+         smesh%varname(1)='curv'
+         ! Transfer polygons to smesh
          call vf%update_surfmesh(smesh)
+         ! Also populate curv variable
+         smesh%var(1,:)=0.0_WP
+         np=0
+         do k=vf%cfg%kmin_,vf%cfg%kmax_
+            do j=vf%cfg%jmin_,vf%cfg%jmax_
+               do i=vf%cfg%imin_,vf%cfg%imax_
+                  do nplane=1,getNumberOfPlanes(vf%liquid_gas_interface(i,j,k))
+                     if (getNumberOfVertices(vf%interface_polygon(nplane,i,j,k)).gt.0) then
+                        np=np+1; smesh%var(1,np)=vf%curv(i,j,k)
+                     end if
+                  end do
+               end do
+            end do
+         end do
       end block create_smesh
       
       
@@ -388,12 +417,12 @@ contains
             resW=-2.0_WP*fs%rho_W*fs%W+(fs%rho_Wold+fs%rho_W)*fs%Wold+time%dt*resW
             
             ! Form implicit residuals
-            !call fs%solve_implicit(time%dt,resU,resV,resW)
+            call fs%solve_implicit(time%dt,resU,resV,resW)
             
             ! Apply these residuals
-            fs%U=2.0_WP*fs%U-fs%Uold+resU/fs%rho_U
-            fs%V=2.0_WP*fs%V-fs%Vold+resV/fs%rho_V
-            fs%W=2.0_WP*fs%W-fs%Wold+resW/fs%rho_W
+            fs%U=2.0_WP*fs%U-fs%Uold+resU
+            fs%V=2.0_WP*fs%V-fs%Vold+resV
+            fs%W=2.0_WP*fs%W-fs%Wold+resW
             
             ! Apply other boundary conditions
             call fs%apply_bcond(time%t,time%dt)
@@ -424,8 +453,28 @@ contains
          call fs%interp_vel(Ui,Vi,Wi)
          call fs%get_div()
          
+         ! Update surfmesh object
+         update_smesh: block
+            use irl_fortran_interface
+            integer :: i,j,k,nplane,np
+            ! Transfer polygons to smesh
+            call vf%update_surfmesh(smesh)
+            ! Also populate curv variable
+            smesh%var(1,:)=0.0_WP
+            np=0
+            do k=vf%cfg%kmin_,vf%cfg%kmax_
+               do j=vf%cfg%jmin_,vf%cfg%jmax_
+                  do i=vf%cfg%imin_,vf%cfg%imax_
+                     do nplane=1,getNumberOfPlanes(vf%liquid_gas_interface(i,j,k))
+                        if (getNumberOfVertices(vf%interface_polygon(nplane,i,j,k)).gt.0) then
+                           np=np+1; smesh%var(1,np)=vf%curv(i,j,k)
+                        end if
+                     end do
+                  end do
+               end do
+            end do
+         end block update_smesh
          ! Output to ensight
-         call vf%update_surfmesh(smesh)
          if (ens_evt%occurs()) call ens_out%write_data(time%t)
          
          ! Perform and output monitoring
