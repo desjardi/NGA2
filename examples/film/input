@@ -31,3 +31,7 @@ Pressure iteration : 100
 
 # Ensight output
 Ensight output period : 1e-1
+
+# Parameters for a priori testing
+Coarsening factor : 32
+Postproc period :   1e-1
