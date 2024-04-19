@@ -1,2 +1,2 @@
 # List here the extra files here
-f90EXE_sources += simulation.f90 nozzle_class.f90 atom_class.f90 ddadi_class.f90 postproc_class.f90
+f90EXE_sources += simulation.f90 nozzle_class.f90 atom_class.f90 ddadi_class.f90 postproc_class.f90 ccl_class.f90
