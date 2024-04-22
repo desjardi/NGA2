@@ -20,6 +20,9 @@ module simulation
    type(surfmesh) :: smesh
    type(ensight)  :: ens_out
    type(event)    :: pproc_evt
+
+   real(WP), dimension(:,:,:), allocatable :: Lbary_x,Lbary_y,Lbary_z
+   real(WP), dimension(:,:,:), allocatable :: Gbary_x,Gbary_y,Gbary_z
    
    public :: simulation_init,simulation_run,simulation_final
 
@@ -62,7 +65,9 @@ contains
          ! Read in partition
          call param_read('Partition',partition,short='p')
          ! Create partitioned grid without walls
+         print*,'here 1'
          cfg=config(grp=group,decomp=partition,grid=grid)
+         print*,'here 2'
       end block coarse_grid
       
       ! Create a coarse VF solver
@@ -86,8 +91,17 @@ contains
       coarse_ensight: block
          ! Create Ensight output from cfg
          ens_out=ensight(cfg=cfg,name='coarse')
+         ! Allocate barycenter storage
+         allocate(Lbary_x(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+         allocate(Lbary_y(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+         allocate(Lbary_z(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+         allocate(Gbary_x(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+         allocate(Gbary_y(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+         allocate(Gbary_z(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
          ! Add variables to output
          call ens_out%add_scalar('VOF',vf%VF)
+         call ens_out%add_vector('Lbary',Lbary_x,Lbary_y,Lbary_z)
+         call ens_out%add_vector('Gbary',Gbary_x,Gbary_y,Gbary_z)
          call ens_out%add_scalar('SD',vf%SD)
          call ens_out%add_surface('r2p',smesh)
       end block coarse_ensight
@@ -354,6 +368,12 @@ contains
       end block update_smesh
       
       ! Perform ensight output
+      Lbary_x=vf%Lbary(1,:,:,:)
+      Lbary_y=vf%Lbary(2,:,:,:)
+      Lbary_z=vf%Lbary(3,:,:,:)
+      Gbary_x=vf%Gbary(1,:,:,:)
+      Gbary_y=vf%Gbary(2,:,:,:)
+      Gbary_z=vf%Gbary(3,:,:,:)
       call ens_out%write_data(dns%time%t)
       
    end subroutine pproc

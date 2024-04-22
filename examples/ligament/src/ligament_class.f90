@@ -10,7 +10,7 @@ module ligament_class
    use vfs_class,         only: vfs
    use tpns_class,        only: tpns
    use lpt_class,         only: lpt
-   use breakup_class,     only: breakup
+   !use breakup_class,     only: breakup
    use timetracker_class, only: timetracker
    use event_class,       only: event
    use monitor_class,     only: monitor
@@ -34,7 +34,7 @@ module ligament_class
       
       !> Break-up modeling
       type(lpt)         :: lp    !< Lagrangian particle solver
-      type(breakup)     :: bu    !< SGS break-up model
+      !type(breakup)     :: bu    !< SGS break-up model
 
       !> Ensight postprocessing
       type(surfmesh) :: smesh    !< Surface mesh for interface
@@ -266,9 +266,9 @@ contains
       
       
       ! Create breakup model
-      create_breakup: block
-         call this%bu%initialize(vf=this%vf,fs=this%fs,lp=this%lp)
-      end block create_breakup
+      !create_breakup: block
+      !   call this%bu%initialize(vf=this%vf,fs=this%fs,lp=this%lp)
+      !end block create_breakup
       
 
       ! Create surfmesh object for interface polygon output

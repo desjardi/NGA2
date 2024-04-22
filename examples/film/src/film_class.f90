@@ -54,9 +54,10 @@ module film_class
    end type film
    
    !> Copy of hole definition and pointer to cfg
-   integer :: nh,dh
+   integer :: nh
    real(WP), dimension(:,:), allocatable :: ph
-   real(WP) :: xL,zL
+   real(WP) :: xL,zL,dh
+   
 
 contains
    
@@ -84,13 +85,12 @@ contains
          if (myh(3)-pos(3).lt.-0.5_WP*zL) myh(3)=myh(3)+zL
          ! Check distance to hole center
          dist=norm2(myh-pos)
-         ! Check if we are right on top of hole, if so move it a bit
-         if (dist.eq.0.0_WP) then
-            myh=myh+[tiny(1.0_WP),0.0_WP,tiny(1.0_WP)]
-            dist=norm2(myh-pos)
-         end if
-         ! Check if hole is close enough
-         if (dist.lt.0.5_WP*dh) then
+         ! Modify level set if close enough to hole
+         if (dist.lt.epsilon(1.0_WP)) then
+            ! Right on top of the hole - move in x
+            c=myh+0.5_WP*dh*[1.0_WP,0.0_WP,0.0_WP]
+            G=0.5_WP-norm2(xyz-c)
+         else if (dist.lt.0.5_WP*dh) then
             ! Get closest point on torus
             c=myh+0.5_WP*dh*(pos-myh)/dist
             G=0.5_WP-norm2(xyz-c)
@@ -137,7 +137,7 @@ contains
          this%cfg=config(grp=group,decomp=partition,grid=grid)
       end block create_config
       
-
+      
       ! Initialize time tracker with 2 subiterations
       initialize_timetracker: block
          use param, only: param_read
@@ -211,7 +211,7 @@ contains
             call MPI_BCAST(this%ph,2*this%nh,MPI_REAL_WP,0,this%cfg%comm,ierr)
          end if
       end block initialize_holes
-
+      
       
       ! Initialize our VOF solver and field
       create_and_initialize_vof: block
