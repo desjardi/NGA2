@@ -88,6 +88,7 @@ contains
          ens_out=ensight(cfg=cfg,name='coarse')
          ! Add variables to output
          call ens_out%add_scalar('VOF',vf%VF)
+         call ens_out%add_scalar('SD',vf%SD)
          call ens_out%add_surface('r2p',smesh)
       end block coarse_ensight
       
@@ -172,7 +173,7 @@ contains
          real(IRL_double), dimension(1:4) :: plane_data
          real(IRL_double), dimension(:,:,:), allocatable :: tri,tmp
          integer, dimension(:), allocatable :: ntri_proc
-         integer :: ntri,list_size,localizer_id,ii
+         integer :: ntri,list_size,localizer_id,ii,count
          real(WP), dimension(3) :: bary
          integer, dimension(3) :: ind
          type(TagAccListVM_VMAN_type) :: accumulated_moments_from_tri
@@ -184,15 +185,6 @@ contains
          call new(accumulated_moments_from_tri)
          call new(moments_list_from_tri)
          call new(volume_moments_and_normal)
-         ! Reset coarse surface moments
-         vf%SD=0.0_WP
-         do ck=cfg%kmino_,cfg%kmaxo_
-            do cj=cfg%jmino_,cfg%jmaxo_
-               do ci=cfg%imino_,cfg%imaxo_
-                  call clear(vf%triangle_moments_storage(ci,cj,ck))
-               end do
-            end do
-         end do
          ! Count the number of surface triangles in DNS and communicate
          allocate(ntri_proc(1:dns%cfg%nproc)); ntri_proc=0
          do fk=dns%cfg%kmin_,dns%cfg%kmax_
@@ -217,7 +209,7 @@ contains
          ! Allocate global storage of our triangles
          allocate(tri(1:3,1:3,ntri)); tri=0.0_WP
          ! Create global triangulation of the DNS interface and communicate
-         ntri=0
+         count=sum(ntri_proc(1:dns%cfg%rank))
          do fk=dns%cfg%kmin_,dns%cfg%kmax_
             do fj=dns%cfg%jmin_,dns%cfg%jmax_
                do fi=dns%cfg%imin_,dns%cfg%imax_
@@ -234,18 +226,17 @@ contains
                      if (abs(1.0_WP-dot_product(calculateNormal(divided_polygon),plane_data(1:3))).gt.1.0_WP) call reversePtOrdering(divided_polygon)
                      ! Loop over triangles from DividedPolygon
                      do t=1,getNumberOfSimplicesInDecomposition(divided_polygon)
-                        ! Increment triangle counter
-                        ntri=ntri+1
                         ! Get the triangle vertices
                         call getSimplexFromDecomposition(divided_polygon,t-1,triangle)
                         ! Store at correct global location
-                        tri(1:3,1:3,sum(ntri_proc(1:dns%cfg%rank))+ntri)=getVertices(triangle)
+                        count=count+1
+                        tri(1:3,1:3,count)=getVertices(triangle)
                      end do
                   end do
                end do
             end do
          end do
-         call MPI_ALLREDUCE(MPI_IN_PLACE,tri,9*dns%cfg%nproc,MPI_REAL_WP,MPI_SUM,dns%cfg%comm,ierr)
+         call MPI_ALLREDUCE(MPI_IN_PLACE,tri,9*ntri,MPI_REAL_WP,MPI_SUM,dns%cfg%comm,ierr)
          ! Finally, deal with periodicity - brute force copy
          allocate(tmp(1:3,1:3,9*ntri)); tmp=0.0_WP
          do n=1,ntri
@@ -276,11 +267,14 @@ contains
             tmp(3,:,7*ntri+n)=tmp(3,:,7*ntri+n)+dns%cfg%zL
             tmp(3,:,8*ntri+n)=tmp(3,:,8*ntri+n)+dns%cfg%zL
          end do
-         deallocate(tri); ntri=9*ntri; allocate(tri(1:3,1:3,ntri)); tri=tmp; deallocate(tmp)
+         ntri=9*ntri; call move_alloc(tmp,tri)
          ! Finally, populate the coarse surface data arrays
          do ck=cfg%kmino_,cfg%kmaxo_
             do cj=cfg%jmino_,cfg%jmaxo_
                do ci=cfg%imino_,cfg%imaxo_
+                  ! Reset storage and surface area
+                  call clear(vf%triangle_moments_storage(ci,cj,ck))
+                  vf%SD(ci,cj,ck)=0.0_WP
                   ! Traverse all DNS triangles and store the ones local to our cell
                   do n=1,ntri
                      ! Get barycenter of triangle
@@ -304,14 +298,7 @@ contains
                         end do
                      end if
                   end do
-               end do
-            end do
-         end do
-         ! Recompute surface density from previously calculated surface moments
-         vf%SD=0.0_WP
-         do ck=cfg%kmino_,cfg%kmaxo_
-            do cj=cfg%jmino_,cfg%jmaxo_
-               do ci=cfg%imino_,cfg%imaxo_
+                  ! Finally compute surface area
                   do ii=0,getSize(vf%triangle_moments_storage(ci,cj,ck))-1
                      call getMoments(vf%triangle_moments_storage(ci,cj,ck),ii,volume_moments_and_normal)
                      vf%SD(ci,cj,ck)=vf%SD(ci,cj,ck)+getVolume(volume_moments_and_normal)
