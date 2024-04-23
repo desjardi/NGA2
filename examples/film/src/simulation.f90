@@ -20,6 +20,9 @@ module simulation
    type(surfmesh) :: smesh
    type(ensight)  :: ens_out
    type(event)    :: pproc_evt
+   real(WP), dimension(:,:,:), allocatable :: Um,Vm,Wm
+   real(WP), dimension(:,:,:), allocatable :: Ul,Vl,Wl
+   real(WP), dimension(:,:,:), allocatable :: Ug,Vg,Wg
    
    public :: simulation_init,simulation_run,simulation_final
 
@@ -86,10 +89,23 @@ contains
       
       ! Also create ensight output
       coarse_ensight: block
+         ! Allocate coarse velocity storage
+         allocate(Um(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+         allocate(Vm(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+         allocate(Wm(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+         allocate(Ul(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+         allocate(Vl(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+         allocate(Wl(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+         allocate(Ug(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+         allocate(Vg(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+         allocate(Wg(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
          ! Create Ensight output from cfg
          ens_out=ensight(cfg=cfg,name='coarse')
          ! Add variables to output
          call ens_out%add_scalar('VOF',vf%VF)
+         call ens_out%add_vector('Um',Um,Vm,Wm)
+         call ens_out%add_vector('Ul',Ul,Vl,Wl)
+         call ens_out%add_vector('Ug',Ug,Vg,Wg)
          call ens_out%add_surface('r2p',smesh)
       end block coarse_ensight
       
@@ -355,6 +371,64 @@ contains
          end do
       end block update_smesh
       
+      ! Integrate velocities from fine to coarse mesh
+      compute_velocities: block
+         use vfs_class, only: VFlo,VFhi
+         integer :: fi,fj,fk
+         integer :: ci,cj,ck
+         ! Reset velocities
+         Um=0.0_WP; Vm=0.0_WP; Wm=0.0_WP
+         Ul=0.0_WP; Vl=0.0_WP; Wl=0.0_WP
+         Ug=0.0_WP; Vg=0.0_WP; Wg=0.0_WP
+         ! Loop over fine mesh, find corresponding coarse mesh cell, integrate velocities
+         do fk=dns%cfg%kmin_,dns%cfg%kmax_
+            ck=cfg%kmin_; do while (dns%cfg%zm(fk).ge.cfg%z(ck+1)); ck=ck+1; end do
+            do fj=dns%cfg%jmin_,dns%cfg%jmax_
+               cj=cfg%jmin_; do while (dns%cfg%ym(fj).ge.cfg%y(cj+1)); cj=cj+1; end do
+               do fi=dns%cfg%imin_,dns%cfg%imax_
+                  ci=cfg%imin_; do while (dns%cfg%xm(fi).ge.cfg%x(ci+1)); ci=ci+1; end do
+                  ! Mixture velocity
+                  Um(ci,cj,ck)=Um(ci,cj,ck)+                             dns%cfg%vol(fi,fj,fk)*dns%Ui(fi,fj,fk)
+                  Vm(ci,cj,ck)=Vm(ci,cj,ck)+                             dns%cfg%vol(fi,fj,fk)*dns%Vi(fi,fj,fk)
+                  Wm(ci,cj,ck)=Wm(ci,cj,ck)+                             dns%cfg%vol(fi,fj,fk)*dns%Wi(fi,fj,fk)
+                  ! Liquid velocity
+                  Ul(ci,cj,ck)=Ul(ci,cj,ck)+(       dns%vf%VF(fi,fj,fk))*dns%cfg%vol(fi,fj,fk)*dns%Ui(fi,fj,fk)
+                  Vl(ci,cj,ck)=Vl(ci,cj,ck)+(       dns%vf%VF(fi,fj,fk))*dns%cfg%vol(fi,fj,fk)*dns%Vi(fi,fj,fk)
+                  Wl(ci,cj,ck)=Wl(ci,cj,ck)+(       dns%vf%VF(fi,fj,fk))*dns%cfg%vol(fi,fj,fk)*dns%Wi(fi,fj,fk)
+                  ! Gas velocity
+                  Ug(ci,cj,ck)=Ug(ci,cj,ck)+(1.0_WP-dns%vf%VF(fi,fj,fk))*dns%cfg%vol(fi,fj,fk)*dns%Ui(fi,fj,fk)
+                  Vg(ci,cj,ck)=Vg(ci,cj,ck)+(1.0_WP-dns%vf%VF(fi,fj,fk))*dns%cfg%vol(fi,fj,fk)*dns%Vi(fi,fj,fk)
+                  Wg(ci,cj,ck)=Wg(ci,cj,ck)+(1.0_WP-dns%vf%VF(fi,fj,fk))*dns%cfg%vol(fi,fj,fk)*dns%Wi(fi,fj,fk)
+               end do
+            end do
+         end do
+         do ck=cfg%kmin_,cfg%kmax_
+            do cj=cfg%jmin_,cfg%jmax_
+               do ci=cfg%imin_,cfg%imax_
+                  ! Mixture velocity
+                  Um(ci,cj,ck)=Um(ci,cj,ck)/cfg%vol(ci,cj,ck)
+                  Vm(ci,cj,ck)=Vm(ci,cj,ck)/cfg%vol(ci,cj,ck)
+                  Wm(ci,cj,ck)=Wm(ci,cj,ck)/cfg%vol(ci,cj,ck)
+                  ! Liquid velocity
+                  if (vf%VF(ci,cj,ck).ge.VFlo) then
+                     Ul(ci,cj,ck)=Ul(ci,cj,ck)/((       vf%VF(ci,cj,ck))*cfg%vol(ci,cj,ck))
+                     Vl(ci,cj,ck)=Vl(ci,cj,ck)/((       vf%VF(ci,cj,ck))*cfg%vol(ci,cj,ck))
+                     Wl(ci,cj,ck)=Wl(ci,cj,ck)/((       vf%VF(ci,cj,ck))*cfg%vol(ci,cj,ck))
+                  end if
+                  ! Gas velocity
+                  if (vf%VF(ci,cj,ck).le.VFhi) then
+                     Ug(ci,cj,ck)=Ug(ci,cj,ck)/((1.0_WP-vf%VF(ci,cj,ck))*cfg%vol(ci,cj,ck))
+                     Vg(ci,cj,ck)=Vg(ci,cj,ck)/((1.0_WP-vf%VF(ci,cj,ck))*cfg%vol(ci,cj,ck))
+                     Wg(ci,cj,ck)=Wg(ci,cj,ck)/((1.0_WP-vf%VF(ci,cj,ck))*cfg%vol(ci,cj,ck))
+                  end if
+               end do
+            end do
+         end do
+         call cfg%sync(Um); call cfg%sync(Vm); call cfg%sync(Wm)
+         call cfg%sync(Ul); call cfg%sync(Vl); call cfg%sync(Wl)
+         call cfg%sync(Ug); call cfg%sync(Vg); call cfg%sync(Wg)
+      end block compute_velocities
+
       ! Perform ensight output
       call ens_out%write_data(dns%time%t)
       
