@@ -20,9 +20,6 @@ module simulation
    type(surfmesh) :: smesh
    type(ensight)  :: ens_out
    type(event)    :: pproc_evt
-
-   real(WP), dimension(:,:,:), allocatable :: Lbary_x,Lbary_y,Lbary_z
-   real(WP), dimension(:,:,:), allocatable :: Gbary_x,Gbary_y,Gbary_z
    
    public :: simulation_init,simulation_run,simulation_final
 
@@ -48,7 +45,9 @@ contains
          call param_read('Coarsening factor',coarse_factor)
          ! Read in grid definition
          call param_read('Lx',Lx); call param_read('nx',nx); nx=nx/coarse_factor; allocate(x(nx+1))
-         call param_read('Ly',Ly); call param_read('ny',ny); ny=ny/coarse_factor; allocate(y(ny+1))
+         call param_read('Ly',Ly); call param_read('ny',ny)
+         Ly=3.0_WP*Ly; ny=3*ny !< Force the coarse mesh to be 3D
+         ny=ny/coarse_factor; allocate(y(ny+1))
          call param_read('Lz',Lz); call param_read('nz',nz); nz=nz/coarse_factor; allocate(z(nz+1))
          ! Create simple rectilinear grid
          do i=1,nx+1
@@ -89,18 +88,8 @@ contains
       coarse_ensight: block
          ! Create Ensight output from cfg
          ens_out=ensight(cfg=cfg,name='coarse')
-         ! Allocate barycenter storage
-         allocate(Lbary_x(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
-         allocate(Lbary_y(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
-         allocate(Lbary_z(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
-         allocate(Gbary_x(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
-         allocate(Gbary_y(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
-         allocate(Gbary_z(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
          ! Add variables to output
          call ens_out%add_scalar('VOF',vf%VF)
-         call ens_out%add_vector('Lbary',Lbary_x,Lbary_y,Lbary_z)
-         call ens_out%add_vector('Gbary',Gbary_x,Gbary_y,Gbary_z)
-         call ens_out%add_scalar('SD',vf%SD)
          call ens_out%add_surface('r2p',smesh)
       end block coarse_ensight
       
@@ -330,12 +319,12 @@ contains
          call vf%update_band()
          ! Perform interface reconstruction from VOF field
          call vf%build_interface()
-         ! Set interface planes at the boundaries
-         !call vf%set_full_bcond()
          ! Create discontinuous polygon mesh from IRL interface
          call vf%polygonalize_interface()
+         ! Perform interface sensing
+         call vf%sense_interface()
          ! Calculate curvature
-         !call vf%get_curvature()
+         call vf%get_curvature()
          ! Reset moments to guarantee compatibility with interface reconstruction
          !call vf%reset_volume_moments()
       end block update_vf
@@ -367,12 +356,6 @@ contains
       end block update_smesh
       
       ! Perform ensight output
-      Lbary_x=vf%Lbary(1,:,:,:)
-      Lbary_y=vf%Lbary(2,:,:,:)
-      Lbary_z=vf%Lbary(3,:,:,:)
-      Gbary_x=vf%Gbary(1,:,:,:)
-      Gbary_y=vf%Gbary(2,:,:,:)
-      Gbary_z=vf%Gbary(3,:,:,:)
       call ens_out%write_data(dns%time%t)
       
    end subroutine pproc
