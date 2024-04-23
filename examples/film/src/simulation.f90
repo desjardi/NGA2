@@ -65,9 +65,7 @@ contains
          ! Read in partition
          call param_read('Partition',partition,short='p')
          ! Create partitioned grid without walls
-         print*,'here 1'
          cfg=config(grp=group,decomp=partition,grid=grid)
-         print*,'here 2'
       end block coarse_grid
       
       ! Create a coarse VF solver
@@ -144,6 +142,7 @@ contains
       
       ! Integrate volume moments from fine to coarse mesh
       compute_volume_moments: block
+         use vfs_class, only: VFlo,VFhi
          integer :: fi,fj,fk
          integer :: ci,cj,ck
          ! Reset coarse volume moments
@@ -165,8 +164,8 @@ contains
             do cj=cfg%jmin_,cfg%jmax_
                do ci=cfg%imin_,cfg%imax_
                   vf%VF(ci,cj,ck)=vf%VF(ci,cj,ck)/cfg%vol(ci,cj,ck)
-                  vf%Lbary(:,ci,cj,ck)=vf%Lbary(:,ci,cj,ck)/cfg%vol(ci,cj,ck)
-                  vf%Gbary(:,ci,cj,ck)=vf%Gbary(:,ci,cj,ck)/cfg%vol(ci,cj,ck)
+                  if (vf%VF(ci,cj,ck).ge.VFlo) vf%Lbary(:,ci,cj,ck)=vf%Lbary(:,ci,cj,ck)/((       vf%VF(ci,cj,ck))*cfg%vol(ci,cj,ck))
+                  if (vf%VF(ci,cj,ck).le.VFhi) vf%Gbary(:,ci,cj,ck)=vf%Gbary(:,ci,cj,ck)/((1.0_WP-vf%VF(ci,cj,ck))*cfg%vol(ci,cj,ck))
                end do
             end do
          end do
@@ -332,13 +331,13 @@ contains
          ! Perform interface reconstruction from VOF field
          call vf%build_interface()
          ! Set interface planes at the boundaries
-         call vf%set_full_bcond()
+         !call vf%set_full_bcond()
          ! Create discontinuous polygon mesh from IRL interface
          call vf%polygonalize_interface()
          ! Calculate curvature
-         call vf%get_curvature()
+         !call vf%get_curvature()
          ! Reset moments to guarantee compatibility with interface reconstruction
-         call vf%reset_volume_moments()
+         !call vf%reset_volume_moments()
       end block update_vf
 
       ! Update smesh data
