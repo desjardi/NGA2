@@ -26,7 +26,6 @@ module viscoelastic_class
       ! Model parameters
       integer  :: model                                    !< Closure model
       real(WP) :: trelax                                   !< Polymer relaxation timescale
-      real(WP) :: visc                                     !< Polymer viscosity
       real(WP) :: Lmax                                     !< Polymer maximum extensibility in FENE model
       real(WP) :: affinecoeff                              !< Parameter for affine motion in PTT model
       real(WP) :: elongvisc                                !< Extensional parameter for elognational viscosity in PTT model

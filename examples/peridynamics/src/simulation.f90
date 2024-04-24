@@ -1,13 +1,19 @@
 !> Various definitions and tools for running an NGA2 simulation
 module simulation
-   use beamimpact_class,   only: beamimpact
-   use fracturetest_class, only: fracturetest
+   !use beamimpact_class,   only: beamimpact
+   !use fracturetest_class, only: fracturetest
+   use object_class,  only: object
+   use channel_class, only: channel
    implicit none
    private
    
    !> Solid simulation
    !type(beamimpact) :: solid
-   type(fracturetest) :: solid
+   !type(fracturetest) :: solid
+   type(object) :: solid
+   
+   !> Fluid simulation
+   type(channel) :: fluid
    
    public :: simulation_init,simulation_run,simulation_final
    
@@ -21,6 +27,9 @@ contains
       
       ! Initialize solid simulation
       call solid%init()
+
+      ! Initialize fluid simulation
+      call fluid%init()
       
    end subroutine simulation_init
    
@@ -35,6 +44,9 @@ contains
          ! Advance solid simulation
          call solid%step()
          
+         ! Advance fluid simulation
+         call fluid%step(ls=solid%ls)
+         
       end do
       
    end subroutine simulation_run
@@ -46,6 +58,9 @@ contains
       
       ! Finalize solid simulation
       call solid%final()
+
+      ! Finalize fluid simulation
+      call fluid%final()
       
    end subroutine simulation_final
    

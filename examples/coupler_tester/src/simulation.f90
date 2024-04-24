@@ -86,7 +86,7 @@ contains
       if (isInGrp2) then
          ens2=ensight(cfg=cfg2,name='grid2')
          call ens2%add_scalar('U',U2)
-         call ens2%add_scalar('overlap',cpl%overlap)
+         !call ens2%add_scalar('overlap',cpl%overlap)
          call ens2%write_data(0.0_WP)
       end if
       

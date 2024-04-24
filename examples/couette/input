@@ -1,0 +1,28 @@
+# Parallelization
+Partition :	8 1 1
+
+# Mesh definition
+Lx :	4
+Ly :	1
+Lz :	0.03125
+nx :	128
+ny :	32
+nz :	1
+
+# Fluid properties (see README.md for details)
+Re : 100
+Oh : 1e10 !0.1
+R :  1    !1000
+M :  1    !50
+CA : 90
+
+# Time integration
+Max timestep size : 1e-2
+Max cfl number :    0.9
+
+# Pressure solver
+Pressure tolerance : 1e-6
+Pressure iteration : 100
+
+# Ensight output
+Ensight output period :  1e-1

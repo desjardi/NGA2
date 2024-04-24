@@ -3,13 +3,13 @@
 module cclabel_class
    use precision,    only: WP
    use string,       only: str_medium
-   use config_class, only: config
+   use pgrid_class,  only: pgrid
    implicit none
    private
    
 
    ! Expose type/constructor/methods
-   public :: cclabel
+   public :: cclabel,make_label_ftype,same_label_ftype
    
 
    ! Some parameters for memory management
@@ -28,12 +28,10 @@ module cclabel_class
 
    !> cclabel object definition
    type :: cclabel
-      ! This is our config
-      class(config), pointer :: cfg
+      ! This is our pgrid
+      class(pgrid), pointer :: pg
       ! This is the name of the CCL
       character(len=str_medium) :: name='UNNAMED_CCL'
-      ! Eulerian field of tagged cells - input set by user
-      logical, dimension(:,:,:), allocatable :: tagged
       ! ID of the structure that contains each cell
       integer, dimension(:,:,:), allocatable :: id
       ! Array of structures
@@ -45,39 +43,53 @@ module cclabel_class
       procedure :: empty
    end type cclabel
    
+   !> Type of the make_label function used to generate a structure
+   interface
+      logical function make_label_ftype(ind1,ind2,ind3)
+         integer, intent(in) :: ind1,ind2,ind3
+      end function make_label_ftype
+   end interface
+   
+   !> Type of the same_label function used to connect two structures
+   interface
+      logical function same_label_ftype(ind1,ind2,ind3,ind4,ind5,ind6)
+         integer, intent(in) :: ind1,ind2,ind3,ind4,ind5,ind6
+      end function same_label_ftype
+   end interface
+   
 
 contains
    
    
    !> Initialization for cclabel class
-   subroutine initialize(this,cfg,name)
+   subroutine initialize(this,pg,name)
       implicit none
       class(cclabel) :: this
-      class(config), target, intent(in) :: cfg
+      class(pgrid), target, intent(in) :: pg
       character(len=*), optional :: name
       ! Set the name for the object
       if (present(name)) this%name=trim(adjustl(name))
-      ! Point to cfg object
-      this%cfg=>cfg
-      ! Allocate and initialize logical array
-      allocate(this%tagged(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_)); this%tagged=.false.
+      ! Point to pgrid object
+      this%pg=>pg
       ! Allocate and initialize ID array
-      allocate(this%id(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_)); this%id=0
+      allocate(this%id(this%pg%imino_:this%pg%imaxo_,this%pg%jmino_:this%pg%jmaxo_,this%pg%kmino_:this%pg%kmaxo_)); this%id=0
       ! Zero structures
       this%nstruct=0
    end subroutine initialize
    
 
-   !> Build structure using the user-set tagged field
-   subroutine build(this)
+   !> Build structure using the user-set test functions
+   subroutine build(this,make_label,same_label)
       implicit none
       class(cclabel), intent(inout) :: this
+      procedure(make_label_ftype) :: make_label
+      procedure(same_label_ftype) :: same_label
       integer :: nstruct_,stmin,stmax
       integer, dimension(:,:,:,:), allocatable :: idp          !< Periodicity treatment
       integer, dimension(:), allocatable :: parent             !< Resolving structure id across procs
       integer, dimension(:), allocatable :: parent_all         !< Resolving structure id across procs
       integer, dimension(:), allocatable :: parent_own         !< Resolving structure id across procs
-      
+
       ! Start by cleaning up
       call this%empty()
       
@@ -91,16 +103,16 @@ contains
       this%struct(:)%n_=0
       
       ! Allocate periodicity work array
-      allocate(idp(3,this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_)); idp=0
+      allocate(idp(3,this%pg%imino_:this%pg%imaxo_,this%pg%jmino_:this%pg%jmaxo_,this%pg%kmino_:this%pg%kmaxo_)); idp=0
       
       ! Perform a first pass to build proc-local structures and corresponding tree
       first_pass: block
          integer :: i,j,k,ii,jj,kk,dim
          integer, dimension(3) :: pos
          ! Perform local loop
-         do k=this%cfg%kmin_,this%cfg%kmax_; do j=this%cfg%jmin_,this%cfg%jmax_; do i=this%cfg%imin_,this%cfg%imax_
-            ! Find next tagged cell
-            if (this%tagged(i,j,k)) then
+         do k=this%pg%kmin_,this%pg%kmax_; do j=this%pg%jmin_,this%pg%jmax_; do i=this%pg%imin_,this%pg%imax_
+            ! Find next cell in a structure
+            if (make_label(i,j,k)) then
                ! Loop through one-sided neighbors
                do dim=1,3
                   pos=0; pos(dim)=-1
@@ -110,28 +122,32 @@ contains
                      ! Neighbor is labeled, but are we?
                      if (this%id(i,j,k).ne.0) then
                         ! We already have a label, perform a union of both labels
-                        this%id(i,j,k)=union_struct(this%id(i,j,k),this%id(ii,jj,kk))
+                        if (same_label(i,j,k,ii,jj,kk)) this%id(i,j,k)=union_struct(this%id(i,j,k),this%id(ii,jj,kk))
                      else
-                        ! We don't have a label, take the neighbor's label
-                        this%id(i,j,k)=this%id(ii,jj,kk)
+                        ! We don't have a label, check if we take the neighbor's label
+                        if (same_label(i,j,k,ii,jj,kk)) then
+                           this%id(i,j,k)=this%id(ii,jj,kk)
+                        else
+                           this%id(i,j,k)=add()
+                        end if
                      end if
                   end if
                end do
                ! If no neighbor was labeled, we need a new structure
                if (this%id(i,j,k).eq.0) this%id(i,j,k)=add()
                ! Identify periodicity cases
-               if (this%cfg%xper.and.i.eq.this%cfg%imax) this%struct(this%id(i,j,k))%per(1)=1
-               if (this%cfg%yper.and.j.eq.this%cfg%jmax) this%struct(this%id(i,j,k))%per(2)=1
-               if (this%cfg%zper.and.k.eq.this%cfg%kmax) this%struct(this%id(i,j,k))%per(3)=1
+               if (this%pg%xper.and.i.eq.this%pg%imax) this%struct(this%id(i,j,k))%per(1)=1
+               if (this%pg%yper.and.j.eq.this%pg%jmax) this%struct(this%id(i,j,k))%per(2)=1
+               if (this%pg%zper.and.k.eq.this%pg%kmax) this%struct(this%id(i,j,k))%per(3)=1
                idp(:,i,j,k)=this%struct(this%id(i,j,k))%per
             end if
          end do; end do; end do
       end block first_pass
-
+      
       ! Now collapse the tree, count the cells and resolve periodicity in each structure
       collapse_tree: block
          integer :: i,j,k
-         do k=this%cfg%kmin_,this%cfg%kmax_; do j=this%cfg%jmin_,this%cfg%jmax_; do i=this%cfg%imin_,this%cfg%imax_
+         do k=this%pg%kmin_,this%pg%kmax_; do j=this%pg%jmin_,this%pg%jmax_; do i=this%pg%imin_,this%pg%imax_
             if (this%id(i,j,k).gt.0) then
                this%id(i,j,k)=rootify_struct(this%id(i,j,k))
                this%struct(this%id(i,j,k))%n_=this%struct(this%id(i,j,k))%n_+1
@@ -155,10 +171,10 @@ contains
             if (this%struct(n)%n_.gt.0) nstruct_=nstruct_+1
          end do
          ! Gather this info to ensure unique index
-         allocate( my_nstruct(0:this%cfg%nproc-1)); my_nstruct=0; my_nstruct(this%cfg%rank)=nstruct_
-         allocate(all_nstruct(0:this%cfg%nproc-1)); call MPI_ALLREDUCE(my_nstruct,all_nstruct,this%cfg%nproc,MPI_INTEGER,MPI_SUM,this%cfg%comm,ierr)
+         allocate( my_nstruct(0:this%pg%nproc-1)); my_nstruct=0; my_nstruct(this%pg%rank)=nstruct_
+         allocate(all_nstruct(0:this%pg%nproc-1)); call MPI_ALLREDUCE(my_nstruct,all_nstruct,this%pg%nproc,MPI_INTEGER,MPI_SUM,this%pg%comm,ierr)
          stmin=1
-         if (this%cfg%rank.gt.0) stmin=stmin+sum(all_nstruct(0:this%cfg%rank-1))
+         if (this%pg%rank.gt.0) stmin=stmin+sum(all_nstruct(0:this%pg%rank-1))
          this%nstruct=sum(all_nstruct)
          deallocate(my_nstruct,all_nstruct)
          stmax=stmin+nstruct_-1
@@ -172,7 +188,7 @@ contains
             end if
          end do
          ! Update id array to new index
-         do k=this%cfg%kmin_,this%cfg%kmax_; do j=this%cfg%jmin_,this%cfg%jmax_; do i=this%cfg%imin_,this%cfg%imax_
+         do k=this%pg%kmin_,this%pg%kmax_; do j=this%pg%jmin_,this%pg%jmax_; do i=this%pg%imin_,this%pg%imax_
             if (this%id(i,j,k).gt.0) this%id(i,j,k)=idmap(this%id(i,j,k))
          end do; end do; end do
          deallocate(idmap)
@@ -194,7 +210,7 @@ contains
          integer :: i,j,k
          integer, dimension(:), allocatable :: counter
          allocate(counter(stmin:stmax)); counter=0
-         do k=this%cfg%kmin_,this%cfg%kmax_; do j=this%cfg%jmin_,this%cfg%jmax_; do i=this%cfg%imin_,this%cfg%imax_
+         do k=this%pg%kmin_,this%pg%kmax_; do j=this%pg%jmin_,this%pg%jmax_; do i=this%pg%imin_,this%pg%imax_
             if (this%id(i,j,k).gt.0) then
                counter(this%id(i,j,k))=counter(this%id(i,j,k))+1
                this%struct(this%id(i,j,k))%map(:,counter(this%id(i,j,k)))=[i,j,k]
@@ -216,28 +232,28 @@ contains
             parent(n)=n
          end do
          ! Synchronize id array
-         call this%cfg%sync(this%id)
+         call this%pg%sync(this%id)
          ! Handle imin_ border
-         if (this%cfg%imin_.ne.this%cfg%imin) then
-            do k=this%cfg%kmin_,this%cfg%kmax_; do j=this%cfg%jmin_,this%cfg%jmax_
-               if (this%id(this%cfg%imin_,j,k).gt.0.and.this%id(this%cfg%imin_-1,j,k).gt.0) then
-                  call union_parent(this%id(this%cfg%imin_,j,k),this%id(this%cfg%imin_-1,j,k))
+         if (this%pg%imin_.ne.this%pg%imin) then
+            do k=this%pg%kmin_,this%pg%kmax_; do j=this%pg%jmin_,this%pg%jmax_
+               if (this%id(this%pg%imin_,j,k).gt.0.and.this%id(this%pg%imin_-1,j,k).gt.0) then
+                  if (same_label(this%pg%imin_,j,k,this%pg%imin_-1,j,k)) call union_parent(this%id(this%pg%imin_,j,k),this%id(this%pg%imin_-1,j,k))
                end if
             end do; end do
          end if
          ! Handle jmin_ border
-         if (this%cfg%jmin_.ne.this%cfg%jmin) then
-            do k=this%cfg%kmin_,this%cfg%kmax_; do i=this%cfg%imin_,this%cfg%imax_
-               if (this%id(i,this%cfg%jmin_,k).gt.0.and.this%id(i,this%cfg%jmin_-1,k).gt.0) then
-                  call union_parent(this%id(i,this%cfg%jmin_,k),this%id(i,this%cfg%jmin_-1,k))
+         if (this%pg%jmin_.ne.this%pg%jmin) then
+            do k=this%pg%kmin_,this%pg%kmax_; do i=this%pg%imin_,this%pg%imax_
+               if (this%id(i,this%pg%jmin_,k).gt.0.and.this%id(i,this%pg%jmin_-1,k).gt.0) then
+                  if (same_label(i,this%pg%jmin_,k,i,this%pg%jmin_-1,k)) call union_parent(this%id(i,this%pg%jmin_,k),this%id(i,this%pg%jmin_-1,k))
                end if
             end do; end do
          end if
          ! Handle kmin_ border
-         if (this%cfg%kmin_.ne.this%cfg%kmin) then
-            do j=this%cfg%jmin_,this%cfg%jmax_; do i=this%cfg%imin_,this%cfg%imax_
-               if (this%id(i,j,this%cfg%kmin_).gt.0.and.this%id(i,j,this%cfg%kmin_-1).gt.0) then
-                  call union_parent(this%id(i,j,this%cfg%kmin_),this%id(i,j,this%cfg%kmin_-1))
+         if (this%pg%kmin_.ne.this%pg%kmin) then
+            do j=this%pg%jmin_,this%pg%jmax_; do i=this%pg%imin_,this%pg%imax_
+               if (this%id(i,j,this%pg%kmin_).gt.0.and.this%id(i,j,this%pg%kmin_-1).gt.0) then
+                  if (same_label(i,j,this%pg%kmin_,i,j,this%pg%kmin_-1)) call union_parent(this%id(i,j,this%pg%kmin_),this%id(i,j,this%pg%kmin_-1))
                end if
             end do; end do
          end if
@@ -255,7 +271,7 @@ contains
                if (parent(n).eq.n) parent(n)=huge(1)
             end do
             ! Take global min
-            call MPI_ALLREDUCE(parent,parent_all,this%nstruct,MPI_INTEGER,MPI_MIN,this%cfg%comm,ierr)
+            call MPI_ALLREDUCE(parent,parent_all,this%nstruct,MPI_INTEGER,MPI_MIN,this%pg%comm,ierr)
             ! Set self-parents back to selves
             do n=1,this%nstruct
                if (parent_all(n).eq.huge(1)) parent_all(n)=n
@@ -281,7 +297,7 @@ contains
                end if
             end do
             ! Check if we did some changes
-            call MPI_ALLREDUCE(stop_,stop_global,1,MPI_INTEGER,MPI_MAX,this%cfg%comm,ierr)
+            call MPI_ALLREDUCE(stop_,stop_global,1,MPI_INTEGER,MPI_MAX,this%pg%comm,ierr)
          end do
          ! Update this%struct%parent by pointing all parents to root and update id
          do n=stmin,stmax
@@ -305,7 +321,7 @@ contains
             ownper(:,n)=this%struct(n)%per
          end do
          ! Communicate per
-         call MPI_ALLREDUCE(ownper,allper,3*this%nstruct,MPI_INTEGER,MPI_MAX,this%cfg%comm,ierr)
+         call MPI_ALLREDUCE(ownper,allper,3*this%nstruct,MPI_INTEGER,MPI_MAX,this%pg%comm,ierr)
          ! Update parent per
          do n=1,this%nstruct
             allper(:,parent(n))=max(allper(:,parent(n)),allper(:,n))
@@ -319,32 +335,32 @@ contains
          ! Clean up
          deallocate(ownper,allper)
       end block periodicity_update
-
+      
       ! One more pass for domain boundaries
       boundary_handling: block
          use mpi_f08, only: MPI_ALLREDUCE,MPI_MIN,MPI_MAX,MPI_INTEGER
          integer :: i,j,k,stop_global,stop_,counter,n,m,ierr,find_parent,find_parent_own
          ! Handle imin border
-         if (this%cfg%imin_.eq.this%cfg%imin) then
-            do k=this%cfg%kmin_,this%cfg%kmax_; do j=this%cfg%jmin_,this%cfg%jmax_
-               if (this%id(this%cfg%imin_,j,k).gt.0.and.this%id(this%cfg%imin_-1,j,k).gt.0) then
-                  call union_parent(this%id(this%cfg%imin_,j,k),this%id(this%cfg%imin_-1,j,k))
+         if (this%pg%imin_.eq.this%pg%imin) then
+            do k=this%pg%kmin_,this%pg%kmax_; do j=this%pg%jmin_,this%pg%jmax_
+               if (this%id(this%pg%imin_,j,k).gt.0.and.this%id(this%pg%imin_-1,j,k).gt.0) then
+                  if (same_label(this%pg%imin_,j,k,this%pg%imin_-1,j,k)) call union_parent(this%id(this%pg%imin_,j,k),this%id(this%pg%imin_-1,j,k))
                end if
             end do; end do
          end if
          ! Handle jmin border
-         if (this%cfg%jmin_.eq.this%cfg%jmin) then
-            do k=this%cfg%kmin_,this%cfg%kmax_; do i=this%cfg%imin_,this%cfg%imax_
-               if (this%id(i,this%cfg%jmin_,k).gt.0.and.this%id(i,this%cfg%jmin_-1,k).gt.0) then
-                  call union_parent(this%id(i,this%cfg%jmin_,k),this%id(i,this%cfg%jmin_-1,k))
+         if (this%pg%jmin_.eq.this%pg%jmin) then
+            do k=this%pg%kmin_,this%pg%kmax_; do i=this%pg%imin_,this%pg%imax_
+               if (this%id(i,this%pg%jmin_,k).gt.0.and.this%id(i,this%pg%jmin_-1,k).gt.0) then
+                  if (same_label(i,this%pg%jmin_,k,i,this%pg%jmin_-1,k)) call union_parent(this%id(i,this%pg%jmin_,k),this%id(i,this%pg%jmin_-1,k))
                end if
             end do; end do
          end if
          ! Handle kmin border
-         if (this%cfg%kmin_.eq.this%cfg%kmin) then
-            do j=this%cfg%jmin_,this%cfg%jmax_; do i=this%cfg%imin_,this%cfg%imax_
-               if (this%id(i,j,this%cfg%kmin_).gt.0.and.this%id(i,j,this%cfg%kmin_-1).gt.0) then
-                  call union_parent(this%id(i,j,this%cfg%kmin_),this%id(i,j,this%cfg%kmin_-1))
+         if (this%pg%kmin_.eq.this%pg%kmin) then
+            do j=this%pg%jmin_,this%pg%jmax_; do i=this%pg%imin_,this%pg%imax_
+               if (this%id(i,j,this%pg%kmin_).gt.0.and.this%id(i,j,this%pg%kmin_-1).gt.0) then
+                  if (same_label(i,j,this%pg%kmin_,i,j,this%pg%kmin_-1)) call union_parent(this%id(i,j,this%pg%kmin_),this%id(i,j,this%pg%kmin_-1))
                end if
             end do; end do
          end if
@@ -362,7 +378,7 @@ contains
                if (parent(n).eq.n) parent(n)=huge(1)
             end do
             ! Take global min
-            call MPI_ALLREDUCE(parent,parent_all,this%nstruct,MPI_INTEGER,MPI_MIN,this%cfg%comm,ierr)
+            call MPI_ALLREDUCE(parent,parent_all,this%nstruct,MPI_INTEGER,MPI_MIN,this%pg%comm,ierr)
             ! Set self-parents back to selves
             do n=1,this%nstruct
                if (parent_all(n).eq.huge(1)) parent_all(n)=n
@@ -388,7 +404,7 @@ contains
                end if
             end do
             ! Check if we did some changes
-            call MPI_ALLREDUCE(stop_,stop_global,1,MPI_INTEGER,MPI_MAX,this%cfg%comm,ierr)
+            call MPI_ALLREDUCE(stop_,stop_global,1,MPI_INTEGER,MPI_MAX,this%pg%comm,ierr)
          end do
          ! Update this%struct%parent and point all parents to root and update id
          do n=stmin,stmax
@@ -398,7 +414,7 @@ contains
             end do
          end do
          ! Update ghost cells
-         call this%cfg%sync(this%id)
+         call this%pg%sync(this%id)
          ! Clean up parent info
          deallocate(parent,parent_all,parent_own)
       end block boundary_handling
@@ -413,10 +429,10 @@ contains
          allocate(my_idmap(1:this%nstruct)); my_idmap=0
          allocate(   idmap(1:this%nstruct));    idmap=0
          ! Traverse id array and tag used id values
-         do k=this%cfg%kmin_,this%cfg%kmax_; do j=this%cfg%jmin_,this%cfg%jmax_; do i=this%cfg%imin_,this%cfg%imax_
+         do k=this%pg%kmin_,this%pg%kmax_; do j=this%pg%jmin_,this%pg%jmax_; do i=this%pg%imin_,this%pg%imax_
             if (this%id(i,j,k).gt.0) my_idmap(this%id(i,j,k))=1
          end do; end do; end do
-         call MPI_ALLREDUCE(my_idmap,idmap,this%nstruct,MPI_INTEGER,MPI_MAX,this%cfg%comm,ierr)
+         call MPI_ALLREDUCE(my_idmap,idmap,this%nstruct,MPI_INTEGER,MPI_MAX,this%pg%comm,ierr)
          deallocate(my_idmap)
          ! Count number of used structures and create the map
          this%nstruct=sum(idmap)
@@ -428,14 +444,14 @@ contains
             end if
          end do
          ! Rename all structures
-         do k=this%cfg%kmin_,this%cfg%kmax_; do j=this%cfg%jmin_,this%cfg%jmax_; do i=this%cfg%imin_,this%cfg%imax_
+         do k=this%pg%kmin_,this%pg%kmax_; do j=this%pg%jmin_,this%pg%jmax_; do i=this%pg%imin_,this%pg%imax_
             if (this%id(i,j,k).gt.0) this%id(i,j,k)=idmap(this%id(i,j,k))
          end do; end do; end do
-         call this%cfg%sync(this%id)
+         call this%pg%sync(this%id)
          ! Allocate temporary storage for structure
          allocate(tmp(this%nstruct))
          allocate(counter(this%nstruct)); counter=0
-         do k=this%cfg%kmin_,this%cfg%kmax_; do j=this%cfg%jmin_,this%cfg%jmax_; do i=this%cfg%imin_,this%cfg%imax_
+         do k=this%pg%kmin_,this%pg%kmax_; do j=this%pg%jmin_,this%pg%jmax_; do i=this%pg%imin_,this%pg%imax_
             if (this%id(i,j,k).gt.0) counter(this%id(i,j,k))=counter(this%id(i,j,k))+1
          end do; end do; end do
          do n=1,this%nstruct
@@ -452,7 +468,7 @@ contains
          deallocate(idmap)
          ! Store the map
          counter=0
-         do k=this%cfg%kmin_,this%cfg%kmax_; do j=this%cfg%jmin_,this%cfg%jmax_; do i=this%cfg%imin_,this%cfg%imax_
+         do k=this%pg%kmin_,this%pg%kmax_; do j=this%pg%jmin_,this%pg%jmax_; do i=this%pg%imin_,this%pg%imax_
             if (this%id(i,j,k).gt.0) then
                counter(this%id(i,j,k))=counter(this%id(i,j,k))+1
                tmp(this%id(i,j,k))%map(:,counter(this%id(i,j,k)))=[i,j,k]
@@ -606,6 +622,8 @@ contains
       end if
       ! Zero structures
       this%nstruct=0
+      ! Reset id to zero
+      this%id=0
    end subroutine empty
    
    

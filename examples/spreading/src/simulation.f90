@@ -197,7 +197,7 @@ contains
       ! Initialize our VOF solver and field
       create_and_initialize_vof: block
          use mms_geom,  only: cube_refine_vol
-         use vfs_class, only: lvira,VFhi,VFlo
+         use vfs_class, only: lvira,VFhi,VFlo,remap
          use mathtools, only: Pi
          use, intrinsic :: iso_fortran_env, only: output_unit
          use string,    only: str_long
@@ -209,7 +209,8 @@ contains
          integer, parameter :: amr_ref_lvl=4
          character(len=str_long) :: message
          ! Create a VOF solver
-         vf=vfs(cfg=cfg,reconstruction_method=lvira,name='VOF')
+         call vf%initialize(cfg=cfg,reconstruction_method=lvira,transport_method=remap,name='VOF')
+         vf%cons_correct=.false.
          ! Prepare the analytical calculation of a sphere on a wall
          call param_read('Initial drop radius',Rdrop,default=1.0_WP)
          call param_read('Initial contact angle',contact,default=180.0_WP); contact=contact*Pi/180.0_WP
@@ -278,7 +279,7 @@ contains
       ! Create a two-phase flow solver without bconds
       create_and_initialize_flow_solver: block
          use tpns_class,      only: clipped_neumann,dirichlet
-         use hypre_str_class, only: pcg_pfmg
+         use hypre_str_class, only: pcg_pfmg2
          use mathtools,       only: Pi
          integer :: i,j,k,n
          ! Create flow solver
@@ -295,7 +296,7 @@ contains
          call fs%add_bcond(name='bc_zp',type=clipped_neumann,face='z',dir=+1,canCorrect=.true.,locator=zp_locator)
          call fs%add_bcond(name='bc_zm',type=clipped_neumann,face='z',dir=-1,canCorrect=.true.,locator=zm_locator)
          ! Configure pressure solver
-         ps=hypre_str(cfg=cfg,name='Pressure',method=pcg_pfmg,nst=7)
+         ps=hypre_str(cfg=cfg,name='Pressure',method=pcg_pfmg2,nst=7)
          ps%maxlevel=10
          call param_read('Pressure iteration',ps%maxit)
          call param_read('Pressure tolerance',ps%rcvg)
@@ -313,8 +314,24 @@ contains
       
       ! Create surfmesh object for interface polygon output
       create_smesh: block
-         smesh=surfmesh(nvar=0,name='plic')
+         use irl_fortran_interface
+         integer :: i,j,k,np,nplane
+         smesh=surfmesh(nvar=1,name='plic')
+         smesh%varname(1)='curv'
          call vf%update_surfmesh(smesh)
+         np=0
+         do k=vf%cfg%kmin_,vf%cfg%kmax_
+            do j=vf%cfg%jmin_,vf%cfg%jmax_
+               do i=vf%cfg%imin_,vf%cfg%imax_
+                  do nplane=1,getNumberOfPlanes(vf%liquid_gas_interface(i,j,k))
+                     if (getNumberOfVertices(vf%interface_polygon(nplane,i,j,k)).gt.0) then
+                        np=np+1
+                        smesh%var(1,np)=vf%curv(i,j,k)
+                     end if
+                  end do
+               end do
+            end do
+         end do
       end block create_smesh
       
       
@@ -490,7 +507,24 @@ contains
          
          ! Output to ensight
          if (ens_evt%occurs()) then
-            call vf%update_surfmesh(smesh)
+            update_smesh: block
+               use irl_fortran_interface
+               integer :: i,j,k,np,nplane
+               call vf%update_surfmesh(smesh)
+               np=0
+               do k=vf%cfg%kmin_,vf%cfg%kmax_
+                  do j=vf%cfg%jmin_,vf%cfg%jmax_
+                     do i=vf%cfg%imin_,vf%cfg%imax_
+                        do nplane=1,getNumberOfPlanes(vf%liquid_gas_interface(i,j,k))
+                           if (getNumberOfVertices(vf%interface_polygon(nplane,i,j,k)).gt.0) then
+                              np=np+1
+                              smesh%var(1,np)=vf%curv(i,j,k)
+                           end if
+                        end do
+                     end do
+                  end do
+               end do
+            end block update_smesh
             call ens_out%write_data(time%t)
          end if
          

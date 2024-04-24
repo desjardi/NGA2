@@ -71,8 +71,6 @@ contains
                do i=cfg%imino_,cfg%imaxo_
                   if (cfg%ym(j).lt.0.0_WP) then
                      cfg%VF(i,j,k)=0.0_WP
-                  !else if (cfg%ym(j).lt.0.001_WP.and.cos(10.0_WP*twoPi*cfg%xm(i)/cfg%xL).lt.0.0_WP) then
-                  !   cfg%VF(i,j,k)=0.0_WP
                   end if
                end do
             end do

@@ -1,0 +1,2 @@
+# List here the extra files here
+f90EXE_sources += simulation.f90 film_retraction_class.f90 hit_class.f90

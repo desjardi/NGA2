@@ -1,0 +1,29 @@
+# Parallelization
+Partition :	1 1 8
+
+# Mesh definition
+Lx : 64
+Ly : 32
+Lz : 128
+nx : 128
+ny : 64
+nz : 256
+
+# Physical parameters
+Ohnesorge number :     0.01
+Density ratio :        1000
+Viscosity ratio :      50
+Acceleration :         -0.2 0 0
+Inflow velocity :      4
+
+# Time integration
+Max timestep size : 1e-1
+Max cfl number :    1.2
+Max time :          200
+
+# Pressure solver
+Pressure tolerance : 1e-5
+Pressure iteration : 100
+
+# Ensight output
+Ensight output period : 1

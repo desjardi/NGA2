@@ -1,503 +1,446 @@
 !> Various definitions and tools for running an NGA2 simulation
 module simulation
-   use precision,         only: WP
-   use geometry,          only: cfg
-   use tpns_class,        only: tpns
-   use vfs_class,         only: vfs
-   use ccl_class,         only: ccl
-   use timetracker_class, only: timetracker
-   use surfmesh_class,    only: surfmesh
-   use ensight_class,     only: ensight
-   use event_class,       only: event
-   use monitor_class,     only: monitor
+   use precision,      only: WP
+   use film_class,     only: film
+   use config_class,   only: config
+   use vfs_class,      only: vfs
+   use surfmesh_class, only: surfmesh
+   use ensight_class,  only: ensight
+   use event_class,    only: event
+   
    implicit none
    private
    
-   !> Single two-phase flow solver and volume fraction solver and corresponding time tracker
-   type(tpns),        public :: fs
-   type(vfs),         public :: vf
-   type(timetracker), public :: time
-
-   !> CCL framework
-   type(ccl),         public :: cc
+   !> Film simulation
+   type(film) :: dns
    
-   !> Ensight postprocessing
+   !> R2P post-processing
+   type(config)   :: cfg
+   type(vfs)      :: vf
    type(surfmesh) :: smesh
-   type(ensight) :: ens_out
-   type(event)   :: ens_evt
-   
-   !> Simulation monitor file
-   type(monitor) :: mfile,cflfile
+   type(ensight)  :: ens_out
+   type(event)    :: pproc_evt
+   real(WP), dimension(:,:,:), allocatable :: Um,Vm,Wm
+   real(WP), dimension(:,:,:), allocatable :: Ul,Vl,Wl
+   real(WP), dimension(:,:,:), allocatable :: Ug,Vg,Wg
    
    public :: simulation_init,simulation_run,simulation_final
-   
-   !> Private work arrays
-   real(WP), dimension(:,:,:), allocatable :: resU,resV,resW
-   real(WP), dimension(:,:,:), allocatable :: Ui,Vi,Wi
-   
-   !> Problem definition
-   real(WP) :: rho_ratio,visc_ratio,Oh,dh
-   integer :: nh
-   real(WP), dimension(:,:), allocatable :: ph
-   
-   !> Post-processing info
-   integer :: ndrop
-   real(WP), dimension(:), allocatable :: drop_diam
-   real(WP) :: mean_diam,min_diam,max_diam
-   type(event) :: drop_evt
-   type(monitor) :: dropfile
 
 contains
    
-   
-   !> Function that defines a level set function for a perforated film
-   function levelset_perf_film(xyz,t) result(G)
-      use mathtools, only: twoPi
-      implicit none
-      real(WP), dimension(3),intent(in) :: xyz
-      real(WP), intent(in) :: t
-      real(WP) :: G,dist
-      real(WP), dimension(3) :: c,pos,myh
-      integer :: n
-      ! Create the film of unity thickness
-      G=0.5_WP-abs(xyz(2))
-      ! Add the holes
-      do n=1,nh
-         ! Store 2D positions
-         pos=[xyz(1) ,0.0_WP,xyz(3) ]
-         myh=[ph(1,n),0.0_WP,ph(2,n)]
-         ! Account for periodicity
-         if (myh(1)-pos(1).gt.+0.5_WP*cfg%xL) myh(1)=myh(1)-cfg%xL
-         if (myh(1)-pos(1).lt.-0.5_WP*cfg%xL) myh(1)=myh(1)+cfg%xL
-         if (myh(3)-pos(3).gt.+0.5_WP*cfg%zL) myh(3)=myh(3)-cfg%zL
-         if (myh(3)-pos(3).lt.-0.5_WP*cfg%zL) myh(3)=myh(3)+cfg%zL
-         ! Check hole is close enough
-         dist=norm2(myh-pos)
-         if (dist.lt.0.5_WP*dh) then
-            ! Get closest point on torus
-            c=myh+0.5_WP*dh*(pos-myh)/(dist+tiny(dist))
-            G=0.5_WP-norm2(xyz-c)
-         end if
-      end do
-   end function levelset_perf_film
-   
-   
-   !> Initialization of problem solver
+   !> Initialization of our simulation
    subroutine simulation_init
-      use param, only: param_read
-      implicit none
       
+      ! Initialize film simulation
+      call dns%init()
       
-      ! Allocate work arrays
-      allocate_work_arrays: block
-         allocate(resU(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
-         allocate(resV(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
-         allocate(resW(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
-         allocate(Ui  (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
-         allocate(Vi  (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
-         allocate(Wi  (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
-      end block allocate_work_arrays
-      
-      
-      ! Initialize time tracker with 2 subiterations
-      initialize_timetracker: block
-         time=timetracker(amRoot=cfg%amRoot)
-         call param_read('Max timestep size',time%dtmax)
-         call param_read('Max cfl number',time%cflmax)
-         call param_read('Max time',time%tmax)
-         time%dt=time%dtmax
-         time%itmax=2
-      end block initialize_timetracker
-      
-
-      ! Prepare random holes for film perforation
-      initialize_holes: block
-         use random,   only: random_uniform
-         use parallel, only: MPI_REAL_WP
-         use mpi_f08,  only: MPI_BCAST
-         integer  :: n,nn,ierr
-         real(WP) :: xh,zh,xxh,zzh
-         logical  :: is_overlap
-         real(WP), parameter :: safety_margin=1.5_WP
-         ! Read in the hole size
-         call param_read('Size of holes',dh)
-         ! Read in the number of holes
-         call param_read('Number of holes',nh)
-         ! Allocate hole position array
-         allocate(ph(2,nh))
-         ! Root assigns positions to holes
-         if (cfg%amRoot) then
-            n=0
-            do while (n.lt.nh)
-               ! Draw a random position on the film
-               xh=random_uniform(lo=cfg%x(cfg%imin),hi=cfg%x(cfg%imax+1))
-               zh=random_uniform(lo=cfg%z(cfg%kmin),hi=cfg%z(cfg%kmax+1))
-               ! Compare to all previous holes
-               is_overlap=.false.
-               do nn=1,n
-                  ! Get the position of the other hole
-                  xxh=ph(1,nn); zzh=ph(2,nn)
-                  ! Account for periodicity
-                  if (xxh-xh.gt.+0.5_WP*cfg%xL) xxh=xxh-cfg%xL
-                  if (xxh-xh.lt.-0.5_WP*cfg%xL) xxh=xxh+cfg%xL
-                  if (zzh-zh.gt.+0.5_WP*cfg%zL) zzh=zzh-cfg%zL
-                  if (zzh-zh.lt.-0.5_WP*cfg%zL) zzh=zzh+cfg%zL
-                  ! Check for overlap
-                  if (norm2([xxh-xh,zzh-zh]).lt.safety_margin*dh) is_overlap=.true.
-               end do
-               ! If no overlap was found, add the hole to the list
-               if (.not.is_overlap) then
-                  n=n+1
-                  ph(1,n)=xh
-                  ph(2,n)=zh
-               end if
-            end do
-         end if
-         ! Broadcoast the hole positions
-         call MPI_BCAST(ph,2*nh,MPI_REAL_WP,0,cfg%comm,ierr)
-      end block initialize_holes
-
-      
-      ! Initialize our VOF solver and field
-      create_and_initialize_vof: block
-         use mms_geom, only: cube_refine_vol
-         use vfs_class, only: swartz,lvira,elvira,VFhi,VFlo
-         integer :: i,j,k,n,si,sj,sk
-         real(WP), dimension(3,8) :: cube_vertex
-         real(WP), dimension(3) :: v_cent,a_cent
-         real(WP) :: vol,area
-         integer, parameter :: amr_ref_lvl=4
-         ! Create a VOF solver
-         vf=vfs(cfg=cfg,reconstruction_method=elvira,name='VOF')
-         ! Initialize to a film
-         do k=vf%cfg%kmino_,vf%cfg%kmaxo_
-            do j=vf%cfg%jmino_,vf%cfg%jmaxo_
-               do i=vf%cfg%imino_,vf%cfg%imaxo_
-                  ! Set cube vertices
-                  n=0
-                  do sk=0,1
-                     do sj=0,1
-                        do si=0,1
-                           n=n+1; cube_vertex(:,n)=[vf%cfg%x(i+si),vf%cfg%y(j+sj),vf%cfg%z(k+sk)]
-                        end do
-                     end do
-                  end do
-                  ! Call adaptive refinement code to get volume and barycenters recursively
-                  vol=0.0_WP; area=0.0_WP; v_cent=0.0_WP; a_cent=0.0_WP
-                  call cube_refine_vol(cube_vertex,vol,area,v_cent,a_cent,levelset_perf_film,0.0_WP,amr_ref_lvl)
-                  vf%VF(i,j,k)=vol/vf%cfg%vol(i,j,k)
-                  if (vf%VF(i,j,k).ge.VFlo.and.vf%VF(i,j,k).le.VFhi) then
-                     vf%Lbary(:,i,j,k)=v_cent
-                     vf%Gbary(:,i,j,k)=([vf%cfg%xm(i),vf%cfg%ym(j),vf%cfg%zm(k)]-vf%VF(i,j,k)*vf%Lbary(:,i,j,k))/(1.0_WP-vf%VF(i,j,k))
-                  else
-                     vf%Lbary(:,i,j,k)=[vf%cfg%xm(i),vf%cfg%ym(j),vf%cfg%zm(k)]
-                     vf%Gbary(:,i,j,k)=[vf%cfg%xm(i),vf%cfg%ym(j),vf%cfg%zm(k)]
-                  end if
-               end do
-            end do
+      ! Create a coarse grid config
+      coarse_grid: block
+         use sgrid_class, only: cartesian,sgrid
+         use param,       only: param_read
+         use parallel,    only: group
+         real(WP), dimension(:), allocatable :: x,y,z
+         integer, dimension(3) :: partition
+         type(sgrid) :: grid
+         integer :: i,j,k,nx,ny,nz,coarse_factor
+         real(WP) :: Lx,Ly,Lz
+         ! Coarsening factor
+         call param_read('Coarsening factor',coarse_factor)
+         ! Read in grid definition
+         call param_read('Lx',Lx); call param_read('nx',nx); nx=nx/coarse_factor; allocate(x(nx+1))
+         call param_read('Ly',Ly); call param_read('ny',ny)
+         Ly=3.0_WP*Ly; ny=3*ny !< Force the coarse mesh to be 3D
+         ny=ny/coarse_factor; allocate(y(ny+1))
+         call param_read('Lz',Lz); call param_read('nz',nz); nz=nz/coarse_factor; allocate(z(nz+1))
+         ! Create simple rectilinear grid
+         do i=1,nx+1
+            x(i)=real(i-1,WP)/real(nx,WP)*Lx-0.5_WP*Lx
          end do
-         ! Update the band
-         call vf%update_band()
-         ! Perform interface reconstruction from VOF field
-         call vf%build_interface()
-         ! Set interface planes at the boundaries
-         call vf%set_full_bcond()
-         ! Create discontinuous polygon mesh from IRL interface
-         call vf%polygonalize_interface()
-         ! Calculate distance from polygons
-         call vf%distance_from_polygon()
-         ! Calculate subcell phasic volumes
-         call vf%subcell_vol()
-         ! Calculate curvature
-         call vf%get_curvature()
-         ! Reset moments to guarantee compatibility with interface reconstruction
-         call vf%reset_volume_moments()
-      end block create_and_initialize_vof
+         do j=1,ny+1
+            y(j)=real(j-1,WP)/real(ny,WP)*Ly-0.5_WP*Ly
+         end do
+         do k=1,nz+1
+            z(k)=real(k-1,WP)/real(nz,WP)*Lz-0.5_WP*Lz
+         end do
+         ! General coarse serial grid object
+         grid=sgrid(coord=cartesian,no=3,x=x,y=y,z=z,xper=.true.,yper=.false.,zper=.true.,name='coarseFilm')
+         ! Read in partition
+         call param_read('Partition',partition,short='p')
+         ! Create partitioned grid without walls
+         cfg=config(grp=group,decomp=partition,grid=grid)
+      end block coarse_grid
+      
+      ! Create a coarse VF solver
+      coarse_vof: block
+         use vfs_class, only: r2p,remap
+         ! Create a VOF solver
+         call vf%initialize(cfg=cfg,reconstruction_method=r2p,transport_method=remap,name='coarseVOF')
+      end block coarse_vof
 
+      ! Create a coarse surfmesh object for interface polygon output
+      coarse_smesh: block
+         smesh=surfmesh(nvar=5,name='plic')
+         smesh%varname(1)='nplane'
+         smesh%varname(2)='curv'
+         smesh%varname(3)='edge_sensor'
+         smesh%varname(4)='thin_sensor'
+         smesh%varname(5)='thickness'
+      end block coarse_smesh
       
-      ! Create a two-phase flow solver without bconds
-      create_and_initialize_flow_solver: block
-         use ils_class, only: pcg_pfmg
-         ! Create flow solver
-         fs=tpns(cfg=cfg,name='Two-phase NS')
-         ! Assign constant density and viscosity to each phase
-         fs%rho_l =1.0_WP; call param_read('Density ratio'  ,  rho_ratio); fs%rho_g =fs%rho_l / rho_ratio
-         fs%visc_l=1.0_WP; call param_read('Viscosity ratio', visc_ratio); fs%visc_g=fs%visc_l/visc_ratio
-         ! Read in Ohnesorge number and assign surface tension coefficient
-         call param_read('Oh',Oh); fs%sigma=Oh**(-2)
-         ! Configure pressure solver
-         call param_read('Pressure iteration',fs%psolv%maxit)
-         call param_read('Pressure tolerance',fs%psolv%rcvg)
-         ! Configure implicit velocity solver
-         call param_read('Implicit iteration',fs%implicit%maxit)
-         call param_read('Implicit tolerance',fs%implicit%rcvg)
-         ! Setup the solver
-         call fs%setup(pressure_ils=pcg_pfmg,implicit_ils=pcg_pfmg)
-         ! Zero initial field
-         fs%U=0.0_WP; fs%V=0.0_WP; fs%W=0.0_WP
-         ! Calculate cell-centered velocities and divergence
-         call fs%interp_vel(Ui,Vi,Wi)
-         call fs%get_div()
-      end block create_and_initialize_flow_solver
-      
-      
-      ! Create surfmesh object for interface polygon output
-      create_smesh: block
-         smesh=surfmesh(nvar=0,name='plic')
-         call vf%update_surfmesh(smesh)
-      end block create_smesh
-      
-      
-      ! Add Ensight output
-      create_ensight: block
+      ! Also create ensight output
+      coarse_ensight: block
+         ! Allocate coarse velocity storage
+         allocate(Um(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+         allocate(Vm(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+         allocate(Wm(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+         allocate(Ul(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+         allocate(Vl(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+         allocate(Wl(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+         allocate(Ug(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+         allocate(Vg(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+         allocate(Wg(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
          ! Create Ensight output from cfg
-         ens_out=ensight(cfg=cfg,name='Film')
-         ! Create event for Ensight output
-         ens_evt=event(time=time,name='Ensight output')
-         call param_read('Ensight output period',ens_evt%tper)
+         ens_out=ensight(cfg=cfg,name='coarse')
          ! Add variables to output
-         call ens_out%add_vector('velocity',Ui,Vi,Wi)
          call ens_out%add_scalar('VOF',vf%VF)
-         call ens_out%add_scalar('curvature',vf%curv)
-         call ens_out%add_surface('vofplic',smesh)
-         ! Output to ensight
-         if (ens_evt%occurs()) call ens_out%write_data(time%t)
-      end block create_ensight
+         call ens_out%add_vector('Um',Um,Vm,Wm)
+         call ens_out%add_vector('Ul',Ul,Vl,Wl)
+         call ens_out%add_vector('Ug',Ug,Vg,Wg)
+         call ens_out%add_surface('r2p',smesh)
+      end block coarse_ensight
       
-      
-      ! Prepare drop post-processing
-      postprocess_drop: block
-         use vfs_class, only: VFlo
-         ! Creat CCL object
-         cc=ccl(cfg=cfg,name='CCL')
-         cc%max_interface_planes=1
-         cc%VFlo=VFlo
-         ! Create event for drop size output
-         drop_evt=event(time=time,name='Drop output')
-         call param_read('Drop output period',drop_evt%tper)
-         ! Prepare directory for drop size output
-         if (vf%cfg%amRoot) call execute_command_line('mkdir -p drops')
-         ! Perform first analysis
-         call analyze_drops()
-      end block postprocess_drop
-      
-      
-      ! Create a monitor file
-      create_monitor: block
-         ! Prepare some info about fields
-         call fs%get_cfl(time%dt,time%cfl)
-         call fs%get_max()
-         call vf%get_max()
-         ! Create simulation monitor
-         mfile=monitor(fs%cfg%amRoot,'simulation')
-         call mfile%add_column(time%n,'Timestep number')
-         call mfile%add_column(time%t,'Time')
-         call mfile%add_column(time%dt,'Timestep size')
-         call mfile%add_column(time%cfl,'Maximum CFL')
-         call mfile%add_column(fs%Umax,'Umax')
-         call mfile%add_column(fs%Vmax,'Vmax')
-         call mfile%add_column(fs%Wmax,'Wmax')
-         call mfile%add_column(fs%Pmax,'Pmax')
-         call mfile%add_column(vf%VFmax,'VOF maximum')
-         call mfile%add_column(vf%VFmin,'VOF minimum')
-         call mfile%add_column(vf%VFint,'VOF integral')
-         call mfile%add_column(fs%divmax,'Maximum divergence')
-         call mfile%add_column(fs%psolv%it,'Pressure iteration')
-         call mfile%add_column(fs%psolv%rerr,'Pressure error')
-         call mfile%write()
-         ! Create CFL monitor
-         cflfile=monitor(fs%cfg%amRoot,'cfl')
-         call cflfile%add_column(time%n,'Timestep number')
-         call cflfile%add_column(time%t,'Time')
-         call cflfile%add_column(fs%CFLst,'STension CFL')
-         call cflfile%add_column(fs%CFLc_x,'Convective xCFL')
-         call cflfile%add_column(fs%CFLc_y,'Convective yCFL')
-         call cflfile%add_column(fs%CFLc_z,'Convective zCFL')
-         call cflfile%add_column(fs%CFLv_x,'Viscous xCFL')
-         call cflfile%add_column(fs%CFLv_y,'Viscous yCFL')
-         call cflfile%add_column(fs%CFLv_z,'Viscous zCFL')
-         call cflfile%write()
-         ! Create drop monitor
-         dropfile=monitor(vf%cfg%amRoot,'drop')
-         call dropfile%add_column(time%n,'Timestep number')
-         call dropfile%add_column(time%t,'Time')
-         call dropfile%add_column(ndrop,'Ndrop')
-         call dropfile%add_column( min_diam, 'Min diameter')
-         call dropfile%add_column(mean_diam,'Mean diameter')
-         call dropfile%add_column( max_diam, 'Max diameter')
-         call dropfile%write()
-      end block create_monitor
-      
+      ! Finally, create event for postprocessing
+      pproc_event: block
+         use param, only: param_read
+         pproc_evt=event(time=dns%time,name='Postproc')
+         call param_read('Postproc period',pproc_evt%tper)
+      end block pproc_event
+
+      ! Perform postprocessing
+      if (pproc_evt%occurs()) call pproc()
       
    end subroutine simulation_init
    
    
-   !> Perform an NGA2 simulation - this mimicks NGA's old time integration for multiphase
+   !> Run the simulation
    subroutine simulation_run
       implicit none
       
-      ! Perform time integration
-      do while (.not.time%done())
-         
-         ! Increment time
-         call fs%get_cfl(time%dt,time%cfl)
-         call time%adjust_dt()
-         call time%increment()
-         
-         ! Remember old VOF
-         vf%VFold=vf%VF
-         
-         ! Remember old velocity
-         fs%Uold=fs%U
-         fs%Vold=fs%V
-         fs%Wold=fs%W
-         
-         ! Apply time-varying Dirichlet conditions
-         ! This is where time-dpt Dirichlet would be enforced
-         
-         ! Prepare old staggered density (at n)
-         call fs%get_olddensity(vf=vf)
-         
-         ! VOF solver step
-         call vf%advance(dt=time%dt,U=fs%U,V=fs%V,W=fs%W)
-         
-         ! Prepare new staggered viscosity (at n+1)
-         call fs%get_viscosity(vf=vf)
-         
-         ! Perform sub-iterations
-         do while (time%it.le.time%itmax)
-            
-            ! Build mid-time velocity
-            fs%U=0.5_WP*(fs%U+fs%Uold)
-            fs%V=0.5_WP*(fs%V+fs%Vold)
-            fs%W=0.5_WP*(fs%W+fs%Wold)
-            
-            ! Preliminary mass and momentum transport step at the interface
-            call fs%prepare_advection_upwind(dt=time%dt)
-            
-            ! Explicit calculation of drho*u/dt from NS
-            call fs%get_dmomdt(resU,resV,resW)
-            
-            ! Add momentum source terms
-            call fs%addsrc_gravity(resU,resV,resW)
-            
-            ! Assemble explicit residual
-            resU=-2.0_WP*fs%rho_U*fs%U+(fs%rho_Uold+fs%rho_U)*fs%Uold+time%dt*resU
-            resV=-2.0_WP*fs%rho_V*fs%V+(fs%rho_Vold+fs%rho_V)*fs%Vold+time%dt*resV
-            resW=-2.0_WP*fs%rho_W*fs%W+(fs%rho_Wold+fs%rho_W)*fs%Wold+time%dt*resW
-            
-            ! Form implicit residuals
-            call fs%solve_implicit(time%dt,resU,resV,resW)
-            
-            ! Apply these residuals
-            fs%U=2.0_WP*fs%U-fs%Uold+resU
-            fs%V=2.0_WP*fs%V-fs%Vold+resV
-            fs%W=2.0_WP*fs%W-fs%Wold+resW
-            
-            ! Apply other boundary conditions
-            call fs%apply_bcond(time%t,time%dt)
-            
-            ! Solve Poisson equation
-            call fs%update_laplacian()
-            call fs%correct_mfr()
-            call fs%get_div()
-            call fs%add_surface_tension_jump(dt=time%dt,div=fs%div,vf=vf)
-            fs%psolv%rhs=-fs%cfg%vol*fs%div/time%dt
-            fs%psolv%sol=0.0_WP
-            call fs%psolv%solve()
-            call fs%shift_p(fs%psolv%sol)
-            
-            ! Correct velocity
-            call fs%get_pgrad(fs%psolv%sol,resU,resV,resW)
-            fs%P=fs%P+fs%psolv%sol
-            fs%U=fs%U-time%dt*resU/fs%rho_U
-            fs%V=fs%V-time%dt*resV/fs%rho_V
-            fs%W=fs%W-time%dt*resW/fs%rho_W
-            
-            ! Increment sub-iteration counter
-            time%it=time%it+1
-            
-         end do
-         
-         ! Recompute interpolated velocity and divergence
-         call fs%interp_vel(Ui,Vi,Wi)
-         call fs%get_div()
-         
-         ! Output to ensight
-         call vf%update_surfmesh(smesh)
-         if (ens_evt%occurs()) call ens_out%write_data(time%t)
-         
-         ! Perform and output monitoring
-         call fs%get_max()
-         call vf%get_max()
-         call mfile%write()
-         call cflfile%write()
+      ! Film drives overall time integration
+      do while (.not.dns%time%done())
 
-         ! Count drops and get mean diameter
-         call analyze_drops()
-         call dropfile%write()
-
+         ! Advance film simulation
+         call dns%step()
+         
+         ! Perform postprocessing
+         if (pproc_evt%occurs()) call pproc()
+         
       end do
-      
       
    end subroutine simulation_run
-   
-   
-   !> Analyze VOF field for drops
-   subroutine analyze_drops()
-      use mathtools, only: Pi
-      use string,    only: str_medium
-      implicit none
-      integer :: n,iunit,ierr
-      character(len=str_medium) :: filename,timestamp
-      
-      ! Perform CCL on VOF field
-      call cc%build_lists(VF=vf%VF,U=fs%U,V=fs%V,W=fs%W)
-      
-      ! Store number of droplets and allocate diameter
-      ndrop=cc%n_meta_struct
-      if (allocated(drop_diam)) deallocate(drop_diam)
-      allocate(drop_diam(ndrop))
-      
-      ! Loops over identified structures and get equivalent diameter
-      mean_diam=0.0_WP
-      do n=1,ndrop
-         drop_diam(n)=(6.0_WP*cc%meta_structures_list(n)%vol/Pi)**(1.0_WP/3.0_WP)
-         mean_diam=mean_diam+drop_diam(n)
-      end do
-      if (ndrop.gt.0) mean_diam=mean_diam/real(ndrop,WP)
-      min_diam=minval(drop_diam)
-      max_diam=maxval(drop_diam)
-      
-      ! Clean up CCL
-      call cc%deallocate_lists()
-      
-      ! If root and if event triggers, print out drop sizes
-      if (vf%cfg%amRoot.and.drop_evt%occurs()) then
-         filename='diameter_'
-         write(timestamp,'(es12.5)') time%t
-         open(newunit=iunit,file='drops/'//trim(adjustl(filename))//trim(adjustl(timestamp)),form='formatted',status='replace',access='stream',iostat=ierr)
-         do n=1,ndrop
-            write(iunit,'(es12.5)') drop_diam(n)
-         end do
-         close(iunit)
-      end if
 
-   end subroutine analyze_drops
+
+   !> Postprocess phasic moments from DNS
+   !> Feed to coarse mesh for R2P reconstruction
+   subroutine pproc()
+      implicit none
+      
+      ! Integrate volume moments from fine to coarse mesh
+      compute_volume_moments: block
+         use vfs_class, only: VFlo,VFhi
+         integer :: fi,fj,fk
+         integer :: ci,cj,ck
+         ! Reset coarse volume moments
+         vf%VF=0.0_WP; vf%Lbary=0.0_WP; vf%Gbary=0.0_WP
+         ! Loop over fine mesh, find corresponding coarse mesh cell, integrate moments
+         do fk=dns%cfg%kmin_,dns%cfg%kmax_
+            ck=cfg%kmin_; do while (dns%cfg%zm(fk).ge.cfg%z(ck+1)); ck=ck+1; end do
+            do fj=dns%cfg%jmin_,dns%cfg%jmax_
+               cj=cfg%jmin_; do while (dns%cfg%ym(fj).ge.cfg%y(cj+1)); cj=cj+1; end do
+               do fi=dns%cfg%imin_,dns%cfg%imax_
+                  ci=cfg%imin_; do while (dns%cfg%xm(fi).ge.cfg%x(ci+1)); ci=ci+1; end do
+                  vf%VF(ci,cj,ck)=vf%VF(ci,cj,ck)+dns%vf%VF(fi,fj,fk)*dns%cfg%vol(fi,fj,fk)
+                  vf%Lbary(:,ci,cj,ck)=vf%Lbary(:,ci,cj,ck)+(       dns%vf%VF(fi,fj,fk))*dns%cfg%vol(fi,fj,fk)*dns%vf%Lbary(:,fi,fj,fk)
+                  vf%Gbary(:,ci,cj,ck)=vf%Gbary(:,ci,cj,ck)+(1.0_WP-dns%vf%VF(fi,fj,fk))*dns%cfg%vol(fi,fj,fk)*dns%vf%Gbary(:,fi,fj,fk)
+               end do
+            end do
+         end do
+         do ck=cfg%kmin_,cfg%kmax_
+            do cj=cfg%jmin_,cfg%jmax_
+               do ci=cfg%imin_,cfg%imax_
+                  vf%VF(ci,cj,ck)=vf%VF(ci,cj,ck)/cfg%vol(ci,cj,ck)
+                  if (vf%VF(ci,cj,ck).ge.VFlo) vf%Lbary(:,ci,cj,ck)=vf%Lbary(:,ci,cj,ck)/((       vf%VF(ci,cj,ck))*cfg%vol(ci,cj,ck))
+                  if (vf%VF(ci,cj,ck).le.VFhi) vf%Gbary(:,ci,cj,ck)=vf%Gbary(:,ci,cj,ck)/((1.0_WP-vf%VF(ci,cj,ck))*cfg%vol(ci,cj,ck))
+               end do
+            end do
+         end do
+         call cfg%sync(vf%VF)
+         call vf%sync_and_clean_barycenters()
+      end block compute_volume_moments
+      
+      ! Integrate surface moments from fine to coarse mesh
+      compute_surface_moments: block
+         use mpi_f08,  only: MPI_ALLREDUCE,MPI_SUM,MPI_IN_PLACE,MPI_INTEGER
+         use parallel, only: MPI_REAL_WP
+         use irl_fortran_interface
+         use vfs_class, only : VFlo,VFhi
+         integer :: fi,fj,fk,n,t,ierr
+         integer :: ci,cj,ck
+         type(DivPoly_type) :: divided_polygon
+         type(Tri_type) :: triangle
+         real(IRL_double), dimension(1:4) :: plane_data
+         real(IRL_double), dimension(:,:,:), allocatable :: tri,tmp
+         integer, dimension(:), allocatable :: ntri_proc
+         integer :: ntri,list_size,localizer_id,ii,count
+         real(WP), dimension(3) :: bary
+         integer, dimension(3) :: ind
+         type(TagAccListVM_VMAN_type) :: accumulated_moments_from_tri
+         type(ListVM_VMAN_type) :: moments_list_from_tri
+         type(VMAN_type) :: volume_moments_and_normal
+         ! Allocate IRL data
+         call new(divided_polygon)
+         call new(triangle)
+         call new(accumulated_moments_from_tri)
+         call new(moments_list_from_tri)
+         call new(volume_moments_and_normal)
+         ! Count the number of surface triangles in DNS and communicate
+         allocate(ntri_proc(1:dns%cfg%nproc)); ntri_proc=0
+         do fk=dns%cfg%kmin_,dns%cfg%kmax_
+            do fj=dns%cfg%jmin_,dns%cfg%jmax_
+               do fi=dns%cfg%imin_,dns%cfg%imax_
+                  ! Skip if no interface
+                  if (dns%vf%VF(fi,fj,fk).lt.VFlo.or.dns%vf%VF(fi,fj,fk).gt.VFhi) cycle
+                  ! Construct triangulation of each interface plane
+                  do n=1,getNumberOfPlanes(dns%vf%liquid_gas_interface(fi,fj,fk))
+                     ! Skip planes outside of the cell
+                     if (getNumberOfVertices(dns%vf%interface_polygon(n,fi,fj,fk)).eq.0) cycle
+                     ! Get DividedPolygon from the plane
+                     call constructFromPolygon(divided_polygon,dns%vf%interface_polygon(n,fi,fj,fk))
+                     ! Increment triangle counter
+                     ntri_proc(dns%cfg%rank+1)=ntri_proc(dns%cfg%rank+1)+getNumberOfSimplicesInDecomposition(divided_polygon)
+                  end do
+               end do
+            end do
+         end do
+         call MPI_ALLREDUCE(MPI_IN_PLACE,ntri_proc,dns%cfg%nproc,MPI_INTEGER,MPI_SUM,dns%cfg%comm,ierr)
+         ntri=sum(ntri_proc)
+         ! Allocate global storage of our triangles
+         allocate(tri(1:3,1:3,ntri)); tri=0.0_WP
+         ! Create global triangulation of the DNS interface and communicate
+         count=sum(ntri_proc(1:dns%cfg%rank))
+         do fk=dns%cfg%kmin_,dns%cfg%kmax_
+            do fj=dns%cfg%jmin_,dns%cfg%jmax_
+               do fi=dns%cfg%imin_,dns%cfg%imax_
+                  ! Skip if no interface
+                  if (dns%vf%VF(fi,fj,fk).lt.VFlo.or.dns%vf%VF(fi,fj,fk).gt.VFhi) cycle
+                  ! Construct triangulation of each interface plane
+                  do n=1,getNumberOfPlanes(dns%vf%liquid_gas_interface(fi,fj,fk))
+                     ! Skip planes outside of the cell
+                     if (getNumberOfVertices(dns%vf%interface_polygon(n,fi,fj,fk)).eq.0) cycle
+                     ! Get DividedPolygon from the plane
+                     call constructFromPolygon(divided_polygon,dns%vf%interface_polygon(n,fi,fj,fk))
+                     ! Check if point ordering correct, flip if not
+                     plane_data=getPlane(dns%vf%liquid_gas_interface(fi,fj,fk),n-1)
+                     if (abs(1.0_WP-dot_product(calculateNormal(divided_polygon),plane_data(1:3))).gt.1.0_WP) call reversePtOrdering(divided_polygon)
+                     ! Loop over triangles from DividedPolygon
+                     do t=1,getNumberOfSimplicesInDecomposition(divided_polygon)
+                        ! Get the triangle vertices
+                        call getSimplexFromDecomposition(divided_polygon,t-1,triangle)
+                        ! Store at correct global location
+                        count=count+1
+                        tri(1:3,1:3,count)=getVertices(triangle)
+                     end do
+                  end do
+               end do
+            end do
+         end do
+         call MPI_ALLREDUCE(MPI_IN_PLACE,tri,9*ntri,MPI_REAL_WP,MPI_SUM,dns%cfg%comm,ierr)
+         ! Finally, deal with periodicity - brute force copy
+         allocate(tmp(1:3,1:3,9*ntri)); tmp=0.0_WP
+         do n=1,ntri
+            ! Original triangle and its 8 copies
+            tmp(:,:,0*ntri+n)=tri(:,:,n) ! Original
+            tmp(:,:,1*ntri+n)=tri(:,:,n) ! x-
+            tmp(:,:,2*ntri+n)=tri(:,:,n) ! x+
+            tmp(:,:,3*ntri+n)=tri(:,:,n) ! z-
+            tmp(:,:,4*ntri+n)=tri(:,:,n) ! z+
+            tmp(:,:,5*ntri+n)=tri(:,:,n) ! x-/z-
+            tmp(:,:,6*ntri+n)=tri(:,:,n) ! x+/z-
+            tmp(:,:,7*ntri+n)=tri(:,:,n) ! x-/z+
+            tmp(:,:,8*ntri+n)=tri(:,:,n) ! x+/z+
+            ! Apply periodicity in x- (1, 5, 7)
+            tmp(1,:,1*ntri+n)=tmp(1,:,1*ntri+n)-dns%cfg%xL
+            tmp(1,:,5*ntri+n)=tmp(1,:,5*ntri+n)-dns%cfg%xL
+            tmp(1,:,7*ntri+n)=tmp(1,:,7*ntri+n)-dns%cfg%xL
+            ! Apply periodicity in x+ (2, 6, 8)
+            tmp(1,:,2*ntri+n)=tmp(1,:,2*ntri+n)+dns%cfg%xL
+            tmp(1,:,6*ntri+n)=tmp(1,:,6*ntri+n)+dns%cfg%xL
+            tmp(1,:,8*ntri+n)=tmp(1,:,8*ntri+n)+dns%cfg%xL
+            ! Apply periodicity in z- (3, 5, 6)
+            tmp(3,:,3*ntri+n)=tmp(3,:,3*ntri+n)-dns%cfg%zL
+            tmp(3,:,5*ntri+n)=tmp(3,:,5*ntri+n)-dns%cfg%zL
+            tmp(3,:,6*ntri+n)=tmp(3,:,6*ntri+n)-dns%cfg%zL
+            ! Apply periodicity in z+ (4, 7, 8)
+            tmp(3,:,4*ntri+n)=tmp(3,:,4*ntri+n)+dns%cfg%zL
+            tmp(3,:,7*ntri+n)=tmp(3,:,7*ntri+n)+dns%cfg%zL
+            tmp(3,:,8*ntri+n)=tmp(3,:,8*ntri+n)+dns%cfg%zL
+         end do
+         ntri=9*ntri; call move_alloc(tmp,tri)
+         ! Finally, populate the coarse surface data arrays
+         do ck=cfg%kmino_,cfg%kmaxo_
+            do cj=cfg%jmino_,cfg%jmaxo_
+               do ci=cfg%imino_,cfg%imaxo_
+                  ! Reset storage and surface area
+                  call clear(vf%triangle_moments_storage(ci,cj,ck))
+                  vf%SD(ci,cj,ck)=0.0_WP
+                  ! Traverse all DNS triangles and store the ones local to our cell
+                  do n=1,ntri
+                     ! Get barycenter of triangle
+                     bary=(tri(:,1,n)+tri(:,2,n)+tri(:,3,n))/3.0_WP
+                     ! Test if it's in our cell
+                     if (bary(1).gt.cfg%x(ci).and.bary(1).lt.cfg%x(ci+1).and.&
+                     &   bary(2).gt.cfg%y(cj).and.bary(2).lt.cfg%y(cj+1).and.&
+                     &   bary(3).gt.cfg%z(ck).and.bary(3).lt.cfg%z(ck+1)) then
+                        ! Add the triangle moments
+                        call construct(triangle,tri(:,:,n))
+                        call calculateAndSetPlaneOfExistence(triangle)
+                        ! Cut it by the mesh
+                        call getMoments(triangle,vf%localizer_link(ci,cj,ck),accumulated_moments_from_tri)
+                        ! Loop through each cell and append to triangle_moments_storage in each cell
+                        list_size=getSize(accumulated_moments_from_tri)
+                        do ii=1,list_size
+                           localizer_id=getTagForIndex(accumulated_moments_from_tri,ii-1)
+                           ind=cfg%get_ijk_from_lexico(localizer_id)
+                           call getListAtIndex(accumulated_moments_from_tri,ii-1,moments_list_from_tri)
+                           call append(vf%triangle_moments_storage(ind(1),ind(2),ind(3)),moments_list_from_tri)
+                        end do
+                     end if
+                  end do
+                  ! Finally compute surface area
+                  do ii=0,getSize(vf%triangle_moments_storage(ci,cj,ck))-1
+                     call getMoments(vf%triangle_moments_storage(ci,cj,ck),ii,volume_moments_and_normal)
+                     vf%SD(ci,cj,ck)=vf%SD(ci,cj,ck)+getVolume(volume_moments_and_normal)
+                  end do
+                  vf%SD(ci,cj,ck)=vf%SD(ci,cj,ck)/cfg%vol(ci,cj,ck)
+               end do
+            end do
+         end do
+      end block compute_surface_moments
+      
+      ! Perform R2P reconstruction on coarse mesh
+      !----> Needs volume moments: VF, Lbary, and Gbary
+      !----> Needs surface moments: triangle_moments_storage and SD
+      update_vf: block
+         ! Update the band
+         call vf%update_band()
+         ! Perform interface reconstruction from VOF field
+         call vf%build_interface()
+         ! Create discontinuous polygon mesh from IRL interface
+         call vf%polygonalize_interface()
+         ! Perform interface sensing
+         call vf%sense_interface()
+         ! Calculate curvature
+         call vf%get_curvature()
+         ! Reset moments to guarantee compatibility with interface reconstruction
+         !call vf%reset_volume_moments()
+      end block update_vf
+
+      ! Update smesh data
+      update_smesh: block
+         use irl_fortran_interface
+         integer :: i,j,k,nplane,np
+         ! Transfer polygons to smesh
+         call vf%update_surfmesh(smesh)
+         ! Also populate nplane variable
+         smesh%var(1,:)=1.0_WP
+         np=0
+         do k=vf%cfg%kmin_,vf%cfg%kmax_
+            do j=vf%cfg%jmin_,vf%cfg%jmax_
+               do i=vf%cfg%imin_,vf%cfg%imax_
+                  do nplane=1,getNumberOfPlanes(vf%liquid_gas_interface(i,j,k))
+                     if (getNumberOfVertices(vf%interface_polygon(nplane,i,j,k)).gt.0) then
+                        np=np+1; smesh%var(1,np)=real(getNumberOfPlanes(vf%liquid_gas_interface(i,j,k)),WP)
+                        smesh%var(2,np)=vf%curv2p(nplane,i,j,k)
+                        smesh%var(3,np)=vf%edge_sensor(i,j,k)
+                        smesh%var(4,np)=vf%thin_sensor(i,j,k)
+                        smesh%var(5,np)=vf%thickness  (i,j,k)
+                     end if
+                  end do
+               end do
+            end do
+         end do
+      end block update_smesh
+      
+      ! Integrate velocities from fine to coarse mesh
+      compute_velocities: block
+         use vfs_class, only: VFlo,VFhi
+         integer :: fi,fj,fk
+         integer :: ci,cj,ck
+         ! Reset velocities
+         Um=0.0_WP; Vm=0.0_WP; Wm=0.0_WP
+         Ul=0.0_WP; Vl=0.0_WP; Wl=0.0_WP
+         Ug=0.0_WP; Vg=0.0_WP; Wg=0.0_WP
+         ! Loop over fine mesh, find corresponding coarse mesh cell, integrate velocities
+         do fk=dns%cfg%kmin_,dns%cfg%kmax_
+            ck=cfg%kmin_; do while (dns%cfg%zm(fk).ge.cfg%z(ck+1)); ck=ck+1; end do
+            do fj=dns%cfg%jmin_,dns%cfg%jmax_
+               cj=cfg%jmin_; do while (dns%cfg%ym(fj).ge.cfg%y(cj+1)); cj=cj+1; end do
+               do fi=dns%cfg%imin_,dns%cfg%imax_
+                  ci=cfg%imin_; do while (dns%cfg%xm(fi).ge.cfg%x(ci+1)); ci=ci+1; end do
+                  ! Mixture velocity
+                  Um(ci,cj,ck)=Um(ci,cj,ck)+                             dns%cfg%vol(fi,fj,fk)*dns%Ui(fi,fj,fk)
+                  Vm(ci,cj,ck)=Vm(ci,cj,ck)+                             dns%cfg%vol(fi,fj,fk)*dns%Vi(fi,fj,fk)
+                  Wm(ci,cj,ck)=Wm(ci,cj,ck)+                             dns%cfg%vol(fi,fj,fk)*dns%Wi(fi,fj,fk)
+                  ! Liquid velocity
+                  Ul(ci,cj,ck)=Ul(ci,cj,ck)+(       dns%vf%VF(fi,fj,fk))*dns%cfg%vol(fi,fj,fk)*dns%Ui(fi,fj,fk)
+                  Vl(ci,cj,ck)=Vl(ci,cj,ck)+(       dns%vf%VF(fi,fj,fk))*dns%cfg%vol(fi,fj,fk)*dns%Vi(fi,fj,fk)
+                  Wl(ci,cj,ck)=Wl(ci,cj,ck)+(       dns%vf%VF(fi,fj,fk))*dns%cfg%vol(fi,fj,fk)*dns%Wi(fi,fj,fk)
+                  ! Gas velocity
+                  Ug(ci,cj,ck)=Ug(ci,cj,ck)+(1.0_WP-dns%vf%VF(fi,fj,fk))*dns%cfg%vol(fi,fj,fk)*dns%Ui(fi,fj,fk)
+                  Vg(ci,cj,ck)=Vg(ci,cj,ck)+(1.0_WP-dns%vf%VF(fi,fj,fk))*dns%cfg%vol(fi,fj,fk)*dns%Vi(fi,fj,fk)
+                  Wg(ci,cj,ck)=Wg(ci,cj,ck)+(1.0_WP-dns%vf%VF(fi,fj,fk))*dns%cfg%vol(fi,fj,fk)*dns%Wi(fi,fj,fk)
+               end do
+            end do
+         end do
+         do ck=cfg%kmin_,cfg%kmax_
+            do cj=cfg%jmin_,cfg%jmax_
+               do ci=cfg%imin_,cfg%imax_
+                  ! Mixture velocity
+                  Um(ci,cj,ck)=Um(ci,cj,ck)/cfg%vol(ci,cj,ck)
+                  Vm(ci,cj,ck)=Vm(ci,cj,ck)/cfg%vol(ci,cj,ck)
+                  Wm(ci,cj,ck)=Wm(ci,cj,ck)/cfg%vol(ci,cj,ck)
+                  ! Liquid velocity
+                  if (vf%VF(ci,cj,ck).ge.VFlo) then
+                     Ul(ci,cj,ck)=Ul(ci,cj,ck)/((       vf%VF(ci,cj,ck))*cfg%vol(ci,cj,ck))
+                     Vl(ci,cj,ck)=Vl(ci,cj,ck)/((       vf%VF(ci,cj,ck))*cfg%vol(ci,cj,ck))
+                     Wl(ci,cj,ck)=Wl(ci,cj,ck)/((       vf%VF(ci,cj,ck))*cfg%vol(ci,cj,ck))
+                  end if
+                  ! Gas velocity
+                  if (vf%VF(ci,cj,ck).le.VFhi) then
+                     Ug(ci,cj,ck)=Ug(ci,cj,ck)/((1.0_WP-vf%VF(ci,cj,ck))*cfg%vol(ci,cj,ck))
+                     Vg(ci,cj,ck)=Vg(ci,cj,ck)/((1.0_WP-vf%VF(ci,cj,ck))*cfg%vol(ci,cj,ck))
+                     Wg(ci,cj,ck)=Wg(ci,cj,ck)/((1.0_WP-vf%VF(ci,cj,ck))*cfg%vol(ci,cj,ck))
+                  end if
+               end do
+            end do
+         end do
+         call cfg%sync(Um); call cfg%sync(Vm); call cfg%sync(Wm)
+         call cfg%sync(Ul); call cfg%sync(Vl); call cfg%sync(Wl)
+         call cfg%sync(Ug); call cfg%sync(Vg); call cfg%sync(Wg)
+      end block compute_velocities
+
+      ! Perform ensight output
+      call ens_out%write_data(dns%time%t)
+      
+   end subroutine pproc
    
-   
+
    !> Finalize the NGA2 simulation
    subroutine simulation_final
       implicit none
       
-      ! Get rid of all objects - need destructors
-      ! monitor
-      ! ensight
-      ! bcond
-      ! timetracker
-      
-      ! Deallocate work arrays
-      deallocate(resU,resV,resW,Ui,Vi,Wi)
+      ! Finalize film simulation
+      call dns%final()
       
    end subroutine simulation_final
    

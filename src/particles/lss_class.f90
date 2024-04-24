@@ -26,7 +26,7 @@ module lss_class
    integer, parameter, public :: max_bond=200  !< Assumes something like a 7x7x7 stencil in 3D
    
 
-   !> Bonded solide particle definition
+   !> Bonded solid particle definition
    type :: part
       !> MPI_DOUBLE_PRECISION data
       real(WP) :: mw                         !< Weighted volume
@@ -35,6 +35,7 @@ module lss_class
       real(WP), dimension(3) :: pos          !< Particle center coordinates
       real(WP), dimension(3) :: vel          !< Velocity of particle
       real(WP), dimension(3) :: Abond        !< Bond acceleration for particle
+      real(WP), dimension(3) :: Afluid       !< Fluid acceleration for particle
       !> MPI_INTEGER data
       integer :: id                          !< ID the object is associated with
       integer :: i                           !< Unique index of particle (assumed >0)
@@ -45,7 +46,7 @@ module lss_class
    end type part
    !> Number of blocks, block length, and block types in a particle
    integer, parameter                         :: part_nblock=2
-   integer           , dimension(part_nblock) :: part_lblock=[11+max_bond,7+max_bond]
+   integer           , dimension(part_nblock) :: part_lblock=[14+max_bond,7+max_bond]
    type(MPI_Datatype), dimension(part_nblock) :: part_tblock=[MPI_DOUBLE_PRECISION,MPI_INTEGER]
    !> MPI_PART derived datatype and size
    type(MPI_Datatype) :: MPI_PART
@@ -67,7 +68,7 @@ module lss_class
       real(WP) :: rho                                     !< Density of the material
       real(WP) :: crit_energy                             !< Critical energy release
       real(WP) :: dV                                      !< Element volume
-
+      
       ! Bonding parameters
       real(WP) :: delta                                   !< Bonding horizon (distance)
       integer :: nb                                       !< Cell-based horizon 
@@ -84,6 +85,14 @@ module lss_class
       
       ! Gravitational acceleration
       real(WP), dimension(3) :: gravity=0.0_WP
+      
+      ! Volume fraction associated with IBM projection
+      real(WP), dimension(:,:,:), allocatable :: VF       !< Volume fraction, cell-centered
+      
+      ! Momentum source
+      real(WP), dimension(:,:,:), allocatable :: srcU     !< U momentum source on mesh, cell-centered
+      real(WP), dimension(:,:,:), allocatable :: srcV     !< V momentum source on mesh, cell-centered
+      real(WP), dimension(:,:,:), allocatable :: srcW     !< W momentum source on mesh, cell-centered
       
       ! CFL numbers
       real(WP) :: CFLp_x,CFLp_y,CFLp_z
@@ -111,6 +120,11 @@ module lss_class
       procedure :: recycle                           !< Recycle particle array by removing flagged particles
       procedure :: write                             !< Parallel write particles to file
       procedure :: read                              !< Parallel read particles from file
+      procedure :: get_source                             !< Compute direct forcing source
+      procedure :: update_VF                              !< Compute volume fraction
+      procedure :: get_delta                              !< Compute regularized delta function
+      procedure :: interpolate                            !< Interpolation routine from mesh=>marker
+      procedure :: extrapolate                            !< Extrapolation routine from marker=>mesh
    end type lss
    
    
@@ -162,6 +176,12 @@ contains
       
       ! Initialize MPI derived datatype for a particle
       call prepare_mpi_part()
+      
+      ! Allocate levelset, VF and src arrays on cfg mesh
+      allocate(self%VF  (self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%VF  =0.0_WP
+      allocate(self%srcU(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%srcU=0.0_WP
+      allocate(self%srcV(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%srcV=0.0_WP
+      allocate(self%srcW(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%srcW=0.0_WP
       
       ! Log/screen output
       logging: block
@@ -516,7 +536,7 @@ contains
       ! Advance velocity based on old force and position based on mid-velocity
       do n=1,this%np_
          ! Advance with Verlet scheme
-         if (this%p(n)%id.gt.-1) this%p(n)%vel=this%p(n)%vel+0.5_WP*dt*(this%gravity+this%p(n)%Abond)
+         if (this%p(n)%id.gt.-1) this%p(n)%vel=this%p(n)%vel+0.5_WP*dt*(this%gravity+this%p(n)%Abond+this%p(n)%Afluid)
          if (this%p(n)%id.gt.-2) this%p(n)%pos=this%p(n)%pos+dt*this%p(n)%vel
          ! Relocalize
          this%p(n)%ind=this%cfg%get_ijk_global(this%p(n)%pos,this%p(n)%ind)
@@ -546,7 +566,7 @@ contains
       ! Advance velocity only based on new force
       do n=1,this%np_
          ! Advance with Verlet scheme
-         if (this%p(n)%id.gt.-1) this%p(n)%vel=this%p(n)%vel+0.5_WP*dt*(this%gravity+this%p(n)%Abond)
+         if (this%p(n)%id.gt.-1) this%p(n)%vel=this%p(n)%vel+0.5_WP*dt*(this%gravity+this%p(n)%Abond+this%p(n)%Afluid)
       end do
       
       ! Log/screen output
@@ -565,7 +585,196 @@ contains
       
    end subroutine advance
    
+
+   !> Compute direct forcing source by a specified time step dt
+   subroutine get_source(this,dt,U,V,W,rho)
+      implicit none
+      class(lss), intent(inout) :: this
+      real(WP), intent(inout) :: dt  !< Timestep size over which to advance
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in) :: U         !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in) :: V         !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in) :: W         !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in) :: rho       !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      integer :: i,j,k,ierr
+      real(WP) :: dti,rho_
+      real(WP), dimension(3) :: vel,src
+      
+      ! Zero out source term arrays
+      this%srcU=0.0_WP
+      this%srcV=0.0_WP
+      this%srcW=0.0_WP
+      
+      ! Advance the equations
+      dti=1.0_WP/dt
+      do i=1,this%np_
+         ! Zero out fluid force
+         this%p(i)%Afluid=0.0_WP
+         ! Interpolate the velocity to the particle location
+         vel=0.0_WP
+         if (this%cfg%nx.gt.1) vel(1)=this%interpolate(A=U,xp=this%p(i)%pos(1),yp=this%p(i)%pos(2),zp=this%p(i)%pos(3),ip=this%p(i)%ind(1),jp=this%p(i)%ind(2),kp=this%p(i)%ind(3),dir='U')
+         if (this%cfg%ny.gt.1) vel(2)=this%interpolate(A=V,xp=this%p(i)%pos(1),yp=this%p(i)%pos(2),zp=this%p(i)%pos(3),ip=this%p(i)%ind(1),jp=this%p(i)%ind(2),kp=this%p(i)%ind(3),dir='V')
+         if (this%cfg%nz.gt.1) vel(3)=this%interpolate(A=W,xp=this%p(i)%pos(1),yp=this%p(i)%pos(2),zp=this%p(i)%pos(3),ip=this%p(i)%ind(1),jp=this%p(i)%ind(2),kp=this%p(i)%ind(3),dir='W')
+         rho_=this%interpolate(A=rho,xp=this%p(i)%pos(1),yp=this%p(i)%pos(2),zp=this%p(i)%pos(3),ip=this%p(i)%ind(1),jp=this%p(i)%ind(2),kp=this%p(i)%ind(3),dir='SC')
+         ! Compute the source term
+         src=(this%p(i)%vel-vel)*this%dV
+         ! Send source term back to the mesh
+         if (this%cfg%nx.gt.1) call this%extrapolate(Ap=src(1),xp=this%p(i)%pos(1),yp=this%p(i)%pos(2),zp=this%p(i)%pos(3),ip=this%p(i)%ind(1),jp=this%p(i)%ind(2),kp=this%p(i)%ind(3),A=this%srcU,dir='U')
+         if (this%cfg%ny.gt.1) call this%extrapolate(Ap=src(2),xp=this%p(i)%pos(1),yp=this%p(i)%pos(2),zp=this%p(i)%pos(3),ip=this%p(i)%ind(1),jp=this%p(i)%ind(2),kp=this%p(i)%ind(3),A=this%srcV,dir='V')
+         if (this%cfg%nz.gt.1) call this%extrapolate(Ap=src(3),xp=this%p(i)%pos(1),yp=this%p(i)%pos(2),zp=this%p(i)%pos(3),ip=this%p(i)%ind(1),jp=this%p(i)%ind(2),kp=this%p(i)%ind(3),A=this%srcW,dir='W')
+         ! Form the force on particle
+         this%p(i)%Afluid=-rho_*src*dti/(this%rho*this%dV)
+      end do
+      
+      ! Sum at boundaries
+      call this%cfg%syncsum(this%srcU)
+      call this%cfg%syncsum(this%srcV)
+      call this%cfg%syncsum(this%srcW)
+      
+      ! Recompute volume fraction
+      call this%update_VF()
+      
+   end subroutine get_source
+
    
+   !> Update particle volume fraction using our current particles
+   subroutine update_VF(this)
+      implicit none
+      class(lss), intent(inout) :: this
+      integer :: i
+      ! Reset volume fraction
+      this%VF=0.0_WP
+      ! Transfer particle volume
+      do i=1,this%np_
+         ! Skip inactive particle
+         if (this%p(i)%flag.eq.1) cycle
+         ! Transfer volume to mesh
+         call this%extrapolate(Ap=this%dV,xp=this%p(i)%pos(1),yp=this%p(i)%pos(2),zp=this%p(i)%pos(3),ip=this%p(i)%ind(1),jp=this%p(i)%ind(2),kp=this%p(i)%ind(3),A=this%VF,dir='SC')
+      end do
+      ! Sum at boundaries
+      call this%cfg%syncsum(this%VF)
+   end subroutine update_VF
+   
+
+   !> Compute regularized delta function
+   subroutine get_delta(this,delta,ic,jc,kc,xp,yp,zp,dir)
+      implicit none
+      class(lss), intent(inout) :: this
+      real(WP), intent(out) :: delta   !< Return delta function
+      integer, intent(in) :: ic,jc,kc  !< Cell index
+      real(WP), intent(in) :: xp,yp,zp !< Position of marker 
+      character(len=*) :: dir
+      real(WP) :: deltax,deltay,deltaz,r
+      
+      ! Compute in X
+      if (trim(adjustl(dir)).eq.'U') then
+         r=(xp-this%cfg%x(ic))*this%cfg%dxmi(ic)
+         deltax=roma_kernel(r)*this%cfg%dxmi(ic)
+      else
+         r=(xp-this%cfg%xm(ic))*this%cfg%dxi(ic)
+         deltax=roma_kernel(r)*this%cfg%dxi(ic)
+      end if
+      
+      ! Compute in Y
+      if (trim(adjustl(dir)).eq.'V') then
+         r=(yp-this%cfg%y(jc))*this%cfg%dymi(jc)
+         deltay=roma_kernel(r)*this%cfg%dymi(jc)
+      else
+         r=(yp-this%cfg%ym(jc))*this%cfg%dyi(jc)
+         deltay=roma_kernel(r)*this%cfg%dyi(jc)
+      end if
+      
+      ! Compute in Z
+      if (trim(adjustl(dir)).eq.'W') then
+         r=(zp-this%cfg%z(kc))*this%cfg%dzmi(kc)
+         deltaz=roma_kernel(r)*this%cfg%dzmi(kc)
+      else
+         r=(zp-this%cfg%zm(kc))*this%cfg%dzi(kc)
+         deltaz=roma_kernel(r)*this%cfg%dzi(kc)
+      end if
+      
+      ! Put it all together
+      delta=deltax*deltay*deltaz
+      
+   contains
+      ! Mollification kernel
+      ! Roma A, Peskin C and Berger M 1999 J. Comput. Phys. 153 509–534
+      function roma_kernel(r) result(phi)
+         implicit none
+         real(WP), intent(in) :: r
+         real(WP)             :: phi
+         if (abs(r).le.0.5_WP) then
+            phi=1.0_WP/3.0_WP*(1.0_WP+sqrt(-3.0_WP*r**2+1.0_WP))
+         else if (abs(r).gt.0.5_WP .and. abs(r).le.1.5_WP) then
+            phi=1.0_WP/6.0_WP*(5.0_WP-3.0_WP*abs(r)-sqrt(-3.0_WP*(1.0_WP-abs(r))**2+1.0_WP))
+         else
+            phi=0.0_WP
+         end if
+      end function roma_kernel
+      
+   end subroutine get_delta
+   
+   
+   !> Interpolation routine
+   function interpolate(this,A,xp,yp,zp,ip,jp,kp,dir) result(Ap)
+      implicit none
+      class(lss), intent(inout) :: this
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in) :: A         !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      real(WP), intent(in) :: xp,yp,zp
+      integer, intent(in) :: ip,jp,kp
+      character(len=*) :: dir
+      real(WP) :: Ap
+      integer :: di,dj,dk
+      integer :: i1,i2,j1,j2,k1,k2
+      real(WP), dimension(-2:+2,-2:+2,-2:+2) :: delta
+      ! Get the interpolation points
+      i1=ip-2; i2=ip+2
+      j1=jp-2; j2=jp+2
+      k1=kp-2; k2=kp+2
+      ! Loop over neighboring cells and compute regularized delta function
+      do dk=-2,+2
+         do dj=-2,+2
+            do di=-2,+2
+               call this%get_delta(delta=delta(di,dj,dk),ic=ip+di,jc=jp+dj,kc=kp+dk,xp=xp,yp=yp,zp=zp,dir=trim(dir))
+            end do
+         end do
+      end do
+      ! Perform the actual interpolation on Ap
+      Ap = sum(delta*A(i1:i2,j1:j2,k1:k2))*this%cfg%vol(ip,jp,kp)
+   end function interpolate
+   
+   
+   !> Extrapolation routine
+   subroutine extrapolate(this,Ap,xp,yp,zp,ip,jp,kp,A,dir)
+      use messager, only: die
+      implicit none
+      class(lss), intent(inout) :: this
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:) :: A         !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      real(WP), intent(in) :: xp,yp,zp
+      integer, intent(in) :: ip,jp,kp
+      real(WP), intent(in) :: Ap
+      character(len=*) :: dir
+      real(WP), dimension(-2:+2,-2:+2,-2:+2) :: delta
+      integer  :: di,dj,dk
+      ! If particle has left processor domain or reached last ghost cell, kill job
+      if ( ip.lt.this%cfg%imin_-1.or.ip.gt.this%cfg%imax_+1.or.&
+      &    jp.lt.this%cfg%jmin_-1.or.jp.gt.this%cfg%jmax_+1.or.&
+      &    kp.lt.this%cfg%kmin_-1.or.kp.gt.this%cfg%kmax_+1) then
+         write(*,*) ip,jp,kp,xp,yp,zp
+         call die('[df extrapolate] Particle has left the domain')
+      end if
+      ! Loop over neighboring cells and compute regularized delta function
+      do dk=-2,+2
+         do dj=-2,+2
+            do di=-2,+2
+               call this%get_delta(delta=delta(di,dj,dk),ic=ip+di,jc=jp+dj,kc=kp+dk,xp=xp,yp=yp,zp=zp,dir=trim(dir))
+            end do
+         end do
+      end do
+      ! Perform the actual extrapolation on A
+      A(ip-2:ip+2,jp-2:jp+2,kp-2:kp+2)=A(ip-2:ip+2,jp-2:jp+2,kp-2:kp+2)+delta*Ap
+   end subroutine extrapolate
+
+
    !> Calculate the CFL
    subroutine get_cfl(this,dt,cfl)
       use mpi_f08,  only: MPI_ALLREDUCE,MPI_MAX

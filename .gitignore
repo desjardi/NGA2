@@ -44,6 +44,7 @@ examples/*/*
 !examples/*/input*
 examples/*/input*~
 !examples/*/README
+!examples/*/README.md
 !examples/*/src
 !examples/*/*.py
 !examples/*/*.sh

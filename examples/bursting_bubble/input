@@ -1,0 +1,34 @@
+# Parallelization
+Partition :	8 1 1
+
+# Mesh definition
+Lx :	4e-3
+Ly :	4e-3
+Lz :	4e-3
+nx :	96
+ny :	96
+nz :	96
+
+# Case configuration
+Bubble radius :   0.5e-3
+Bubble position : 0 1.45e-3 0
+
+# Fluid properties
+Gravity :                     0 -9.81 0
+Liquid dynamic viscosity :    1.137e-3
+Gas dynamic viscosity :       1.780e-5
+Liquid density :              1000
+Gas density :                 1.226
+Surface tension coefficient : 5e-3
+
+# Time integration
+Max timestep size : 2e-5
+Max cfl number :    0.8
+Max time :          5e-2
+
+# Pressure solver
+Pressure tolerance : 1e-4
+Pressure iteration : 100
+
+# Ensight output
+Ensight output period : 2e-4

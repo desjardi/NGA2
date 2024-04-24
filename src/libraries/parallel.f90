@@ -21,7 +21,8 @@ module parallel
    
    !> These are MPI type for our precision
    type(MPI_Datatype), public, protected :: MPI_REAL_WP,MPI_REAL_SP,MPI_COMPLEX_WP
-   
+   type(MPI_Datatype), public, protected :: MPI_2REAL_WP
+
    !> I/O info
    type(MPI_Info), public, protected :: info_mpiio
    
@@ -35,7 +36,7 @@ contains
       use precision, only: SP,WP
       implicit none
       integer :: ierr
-      integer :: size_real,size_dp,size_complex,size_complex_dp
+      integer :: size_real,size_dp,size_complex,size_complex_dp,size_2real,size_2dp
       
       ! Initialize a first basic MPI environment
       call MPI_INIT(ierr)
@@ -75,6 +76,17 @@ contains
          MPI_COMPLEX_WP=MPI_DOUBLE_COMPLEX
       else
          call parallel_kill('Error in parallel_init: no complex WP equivalent in MPI')
+      end if
+      
+      ! Set MPI working precision for pairs - WP
+      call MPI_TYPE_SIZE(MPI_2REAL,size_2real,ierr)
+      call MPI_TYPE_SIZE(MPI_2DOUBLE_PRECISION,size_2dp,ierr)
+      if (2*WP.eq.size_2real) then
+         MPI_2REAL_WP=MPI_2REAL
+      else if (2*WP.eq.size_2dp) then
+         MPI_2REAL_WP=MPI_2DOUBLE_PRECISION
+      else
+         call parallel_kill('Error in parallel_init: no WP equivalent in MPI')
       end if
       
       ! Create shorthand for MPI_COMM_WORLD

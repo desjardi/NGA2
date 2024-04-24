@@ -1,2 +1,2 @@
 # List here the extra files here
-f90EXE_sources += geometry.f90 simulation.f90
+f90EXE_sources += simulation.f90 film_class.f90

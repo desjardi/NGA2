@@ -51,7 +51,7 @@ contains
       this%fs=>fs
       this%lp=>lp
       ! Create a connected-component labeling object
-      call this%cc%initialize(cfg=this%vf%cfg,name='CCL')
+      !call this%cc%initialize(cfg=this%vf%cfg,name='CCL')
    end subroutine initialize
    
    

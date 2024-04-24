@@ -2,23 +2,29 @@
 module simulation
    use precision,         only: WP
    use geometry,          only: cfg
+   use hypre_str_class,   only: hypre_str
+   use ddadi_class,       only: ddadi
    use tpns_class,        only: tpns
    use vfs_class,         only: vfs
    use timetracker_class, only: timetracker
+   use surfmesh_class,    only: surfmesh
    use ensight_class,     only: ensight
    use event_class,       only: event
    use monitor_class,     only: monitor
    implicit none
    private
    
-   !> Single two-phase flow solver and volume fraction solver and corresponding time tracker
-   type(tpns),        public :: fs
-   type(vfs),         public :: vf
-   type(timetracker), public :: time
+   !> Two-phase incompressible flow solver and corresponding time tracker
+   type(tpns)        :: fs
+   type(hypre_str)   :: ps
+   type(ddadi)       :: vs
+   type(vfs)         :: vf
+   type(timetracker) :: time
    
    !> Ensight postprocessing
-   type(ensight) :: ens_out
-   type(event)   :: ens_evt
+   type(surfmesh) :: smesh
+   type(ensight)  :: ens_out
+   type(event)    :: ens_evt
    
    !> Simulation monitor file
    type(monitor) :: mfile,cflfile
@@ -29,24 +35,20 @@ module simulation
    real(WP), dimension(:,:,:), allocatable :: resU,resV,resW
    real(WP), dimension(:,:,:), allocatable :: Ui,Vi,Wi
    
-   !> Problem definition
-   real(WP), dimension(3) :: center
-   real(WP) :: radius,depth
+   !> Case parameters
+   real(WP) :: Oh,Re,R,M
    
 contains
    
    
-   !> Function that defines a level set function for a falling drop problem
-   function levelset_falling_drop(xyz,t) result(G)
+   !> Function that defines a level set function for a slab
+   function levelset_slab(xyz,t) result(G)
       implicit none
       real(WP), dimension(3),intent(in) :: xyz
       real(WP), intent(in) :: t
       real(WP) :: G
-      ! Create the droplet
-      G=radius-sqrt(sum((xyz-center)**2))
-      ! Add the pool
-      G=max(G,depth-xyz(2))
-   end function levelset_falling_drop
+      G=0.5_WP-abs(xyz(1))
+   end function levelset_slab
    
    
    !> Initialization of problem solver
@@ -75,22 +77,19 @@ contains
          time%itmax=2
       end block initialize_timetracker
       
-      
+
       ! Initialize our VOF solver and field
       create_and_initialize_vof: block
          use mms_geom, only: cube_refine_vol
-         use vfs_class, only: lvira,VFhi,VFlo
+         use vfs_class, only: lvira,remap,VFhi,VFlo
          integer :: i,j,k,n,si,sj,sk
          real(WP), dimension(3,8) :: cube_vertex
          real(WP), dimension(3) :: v_cent,a_cent
          real(WP) :: vol,area
          integer, parameter :: amr_ref_lvl=4
          ! Create a VOF solver
-         vf=vfs(cfg=cfg,reconstruction_method=lvira,name='VOF')
-         ! Initialize to a droplet and a pool
-         center=[0.0_WP,0.5_WP,0.0_WP]
-         radius=0.1_WP
-         depth =0.2_WP
+         call vf%initialize(cfg=cfg,reconstruction_method=lvira,transport_method=remap,name='VOF')
+         ! Initialize to a film
          do k=vf%cfg%kmino_,vf%cfg%kmaxo_
             do j=vf%cfg%jmino_,vf%cfg%jmaxo_
                do i=vf%cfg%imino_,vf%cfg%imaxo_
@@ -105,7 +104,7 @@ contains
                   end do
                   ! Call adaptive refinement code to get volume and barycenters recursively
                   vol=0.0_WP; area=0.0_WP; v_cent=0.0_WP; a_cent=0.0_WP
-                  call cube_refine_vol(cube_vertex,vol,area,v_cent,a_cent,levelset_falling_drop,0.0_WP,amr_ref_lvl)
+                  call cube_refine_vol(cube_vertex,vol,area,v_cent,a_cent,levelset_slab,0.0_WP,amr_ref_lvl)
                   vf%VF(i,j,k)=vol/vf%cfg%vol(i,j,k)
                   if (vf%VF(i,j,k).ge.VFlo.and.vf%VF(i,j,k).le.VFhi) then
                      vf%Lbary(:,i,j,k)=v_cent
@@ -121,6 +120,8 @@ contains
          call vf%update_band()
          ! Perform interface reconstruction from VOF field
          call vf%build_interface()
+         ! Set interface planes at the boundaries
+         call vf%set_full_bcond()
          ! Create discontinuous polygon mesh from IRL interface
          call vf%polygonalize_interface()
          ! Calculate distance from polygons
@@ -132,57 +133,93 @@ contains
          ! Reset moments to guarantee compatibility with interface reconstruction
          call vf%reset_volume_moments()
       end block create_and_initialize_vof
-      
+
       
       ! Create a two-phase flow solver without bconds
       create_and_initialize_flow_solver: block
-         use ils_class, only: gmres_amg,pcg_pfmg
+         use hypre_str_class, only: pcg_pfmg2
+         use mathtools,       only: Pi
+         integer :: j
          ! Create flow solver
          fs=tpns(cfg=cfg,name='Two-phase NS')
-         ! Assign constant viscosity to each phase
-         call param_read('Liquid dynamic viscosity',fs%visc_l)
-         call param_read('Gas dynamic viscosity',fs%visc_g)
-         ! Assign constant density to each phase
-         call param_read('Liquid density',fs%rho_l)
-         call param_read('Gas density',fs%rho_g)
-         ! Read in surface tension coefficient
-         call param_read('Surface tension coefficient',fs%sigma)
-         ! Assign acceleration of gravity
-         call param_read('Gravity',fs%gravity)
-         ! Configure pressure solver
-         call param_read('Pressure iteration',fs%psolv%maxit)
-         call param_read('Pressure tolerance',fs%psolv%rcvg)
+         ! Read in all adimensional parameters
+         call param_read('R',R)
+         call param_read('Re',Re)
+         call param_read('M',M)
+         call param_read('Oh',Oh)
+         ! Set flow parameters
+         fs%rho_l=1.0_WP
+         fs%rho_g=fs%rho_l/R
+         fs%visc_l=Re**(-1)
+         fs%visc_g=fs%visc_l/M
+         fs%sigma=(Re*Oh)**(-2)
+         ! Read in contact angle
+         call param_read('CA',fs%contact_angle)
+         fs%contact_angle=fs%contact_angle*Pi/180.0_WP
+         ! Prepare and configure pressure solver
+         ps=hypre_str(cfg=cfg,name='Pressure',method=pcg_pfmg2,nst=7)
+         call param_read('Pressure iteration',ps%maxit)
+         call param_read('Pressure tolerance',ps%rcvg)
          ! Configure implicit velocity solver
-         call param_read('Implicit iteration',fs%implicit%maxit)
-         call param_read('Implicit tolerance',fs%implicit%rcvg)
+         vs=ddadi(cfg=cfg,name='Velocity',nst=7)
          ! Setup the solver
-         fs%psolv%maxlevel=10
-         call fs%setup(pressure_ils=pcg_pfmg,implicit_ils=gmres_amg)
+         call fs%setup(pressure_solver=ps,implicit_solver=vs)
          ! Zero initial field
          fs%U=0.0_WP; fs%V=0.0_WP; fs%W=0.0_WP
-         ! Initial density from VOF
-         fs%rho=fs%rho_l*vf%VF+fs%rho_g*(1.0_WP-vf%VF); call fs%get_staggered_density()
+         ! Impose Couette flow
+         do j=fs%cfg%jmino_,fs%cfg%jmaxo_
+            if (fs%cfg%ym(j).gt.fs%cfg%yL) then
+               fs%U(:,j,:)=1.0_WP
+            else if (fs%cfg%ym(j).le.fs%cfg%yL.and.fs%cfg%ym(j).ge.0.0_WP) then
+               fs%U(:,j,:)=fs%cfg%ym(j)
+            else if (fs%cfg%ym(j).lt.0.0_WP) then
+               fs%U(:,j,:)=0.0_WP
+            end if
+         end do
          ! Calculate cell-centered velocities and divergence
          call fs%interp_vel(Ui,Vi,Wi)
          call fs%get_div()
       end block create_and_initialize_flow_solver
       
       
+      ! Create surfmesh object for interface polygon output
+      create_smesh: block
+         use irl_fortran_interface
+         integer :: i,j,k,nplane,np
+         ! Include an extra variable for curvature
+         smesh=surfmesh(nvar=1,name='plic')
+         smesh%varname(1)='curv'
+         ! Transfer polygons to smesh
+         call vf%update_surfmesh(smesh)
+         ! Also populate curv variable
+         smesh%var(1,:)=0.0_WP
+         np=0
+         do k=vf%cfg%kmin_,vf%cfg%kmax_
+            do j=vf%cfg%jmin_,vf%cfg%jmax_
+               do i=vf%cfg%imin_,vf%cfg%imax_
+                  do nplane=1,getNumberOfPlanes(vf%liquid_gas_interface(i,j,k))
+                     if (getNumberOfVertices(vf%interface_polygon(nplane,i,j,k)).gt.0) then
+                        np=np+1; smesh%var(1,np)=vf%curv(i,j,k)
+                     end if
+                  end do
+               end do
+            end do
+         end do
+      end block create_smesh
+
+
       ! Add Ensight output
       create_ensight: block
          ! Create Ensight output from cfg
-         ens_out=ensight(cfg=cfg,name='FallingDrop')
+         ens_out=ensight(cfg=cfg,name='couette')
          ! Create event for Ensight output
          ens_evt=event(time=time,name='Ensight output')
          call param_read('Ensight output period',ens_evt%tper)
          ! Add variables to output
          call ens_out%add_vector('velocity',Ui,Vi,Wi)
-         call ens_out%add_vector('momentum',fs%rhoU,fs%rhoV,fs%rhoW)
-         call ens_out%add_scalar('RHO',fs%rho)
          call ens_out%add_scalar('VOF',vf%VF)
-         call ens_out%add_scalar('div',fs%div)
-         call ens_out%add_scalar('pressure',fs%P)
          call ens_out%add_scalar('curvature',vf%curv)
+         call ens_out%add_surface('vofplic',smesh)
          ! Output to ensight
          if (ens_evt%occurs()) call ens_out%write_data(time%t)
       end block create_ensight
@@ -225,12 +262,18 @@ contains
          call cflfile%write()
       end block create_monitor
       
+      ! TEST THE REMOVAL OF WALL TREATMENT IN VOF TRANSPORT
+      !vf%vmask=0
+
+      ! TEST THE REMOVAL OF CONSERVATIVE CORRECTION IN SL VOF TRANSPORT
+      vf%cons_correct=.false.
       
    end subroutine simulation_init
    
    
-   !> Perform an NGA2 simulation - this mimicks NGA's old time integration for multiphase
+   !> Time integrate our problem
    subroutine simulation_run
+      use tpns_class, only: arithmetic_visc
       implicit none
       
       ! Perform time integration
@@ -240,15 +283,11 @@ contains
          call fs%get_cfl(time%dt,time%cfl)
          call time%adjust_dt()
          call time%increment()
-         
+
          ! Remember old VOF
          vf%VFold=vf%VF
          
-         ! Remember old velocity and density
-         fs%rhoold=fs%rho
-         fs%rho_Uold=fs%rho_U
-         fs%rho_Vold=fs%rho_V
-         fs%rho_Wold=fs%rho_W
+         ! Remember old velocity
          fs%Uold=fs%U
          fs%Vold=fs%V
          fs%Wold=fs%W
@@ -256,31 +295,23 @@ contains
          ! Apply time-varying Dirichlet conditions
          ! This is where time-dpt Dirichlet would be enforced
          
+         ! Prepare old staggered density (at n)
+         call fs%get_olddensity(vf=vf)
+         
          ! VOF solver step
          call vf%advance(dt=time%dt,U=fs%U,V=fs%V,W=fs%W)
          
          ! Prepare new staggered viscosity (at n+1)
-         call fs%get_viscosity(vf=vf)
+         call fs%get_viscosity(vf=vf,strat=arithmetic_visc)
          
-         ! Transfer consistent density and mass fluxes to momentum solver
-         fs%rho =fs%rho_l*vf%VF+fs%rho_g*(1.0_WP-vf%VF); call fs%get_staggered_density()
-         fs%rhoU=fs%rho_l*vf%UFl(1,:,:,:)+fs%rho_g*vf%UFg(1,:,:,:)
-         fs%rhoV=fs%rho_l*vf%UFl(2,:,:,:)+fs%rho_g*vf%UFg(2,:,:,:)
-         fs%rhoW=fs%rho_l*vf%UFl(3,:,:,:)+fs%rho_g*vf%UFg(3,:,:,:)
-
          ! Perform sub-iterations
          do while (time%it.le.time%itmax)
             
-            ! Build mid-time velocity
-            fs%U=0.5_WP*(fs%U+fs%Uold)
-            fs%V=0.5_WP*(fs%V+fs%Vold)
-            fs%W=0.5_WP*(fs%W+fs%Wold)
+            ! Preliminary mass and momentum transport step at the interface
+            call fs%prepare_advection_upwind(dt=time%dt)
             
             ! Explicit calculation of drho*u/dt from NS
             call fs%get_dmomdt(resU,resV,resW)
-            
-            ! Add momentum source terms
-            call fs%addsrc_gravity(resU,resV,resW)
             
             ! Assemble explicit residual
             resU=-2.0_WP*fs%rho_U*fs%U+(fs%rho_Uold+fs%rho_U)*fs%Uold+time%dt*resU
@@ -325,7 +356,31 @@ contains
          call fs%get_div()
          
          ! Output to ensight
-         if (ens_evt%occurs()) call ens_out%write_data(time%t)
+         if (ens_evt%occurs()) then
+            ! Update surfmesh object
+            update_smesh: block
+               use irl_fortran_interface
+               integer :: i,j,k,nplane,np
+               ! Transfer polygons to smesh
+               call vf%update_surfmesh(smesh)
+               ! Also populate curv variable
+               smesh%var(1,:)=0.0_WP
+               np=0
+               do k=vf%cfg%kmin_,vf%cfg%kmax_
+                  do j=vf%cfg%jmin_,vf%cfg%jmax_
+                     do i=vf%cfg%imin_,vf%cfg%imax_
+                        do nplane=1,getNumberOfPlanes(vf%liquid_gas_interface(i,j,k))
+                           if (getNumberOfVertices(vf%interface_polygon(nplane,i,j,k)).gt.0) then
+                              np=np+1; smesh%var(1,np)=vf%curv(i,j,k)
+                           end if
+                        end do
+                     end do
+                  end do
+               end do
+            end block update_smesh
+            ! Perform ensight output
+            call ens_out%write_data(time%t)
+         end if
          
          ! Perform and output monitoring
          call fs%get_max()
@@ -352,9 +407,6 @@ contains
       deallocate(resU,resV,resW,Ui,Vi,Wi)
       
    end subroutine simulation_final
-   
-   
-   
    
    
 end module simulation
