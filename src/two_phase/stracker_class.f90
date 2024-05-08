@@ -276,6 +276,9 @@ contains
       ! Zeros are ignored here - if more than one non-zero id_rmp value, then another
       ! merging step is needed. This accounts for merging not due to transport (i.e., growth?)
       new_id: block
+         use mpi_f08, only: MPI_ALLREDUCE,MPI_SUM,MPI_IN_PLACE,MPI_INTEGER
+         integer, dimension(:), allocatable :: nid_proc,ids_all
+         integer :: ierr,nid_all,nnnn
          integer :: n,nn,nnn,nid,my_id,nobj
          integer, dimension(:), allocatable :: ids
          ! Allocate maximum storage for id_rmp values
@@ -284,6 +287,8 @@ contains
             nobj=max(nobj,this%struct(n)%n_)
          end do
          allocate(ids(nobj))
+         ! Allocate nid_proc storage
+         allocate(nid_proc(1:this%vf%cfg%nproc))
          ! Traverse each new structure and gather list of potential id
          do n=1,this%nstruct
             ! Zero out ids and reset counter
@@ -301,6 +306,24 @@ contains
                ! Increment the ids array
                nid=nid+1; ids(nid)=my_id
             end do str_loop
+            ! Gather all ids
+            nid_proc=0; nid_proc(this%vf%cfg%rank+1)=nid
+            call MPI_ALLREDUCE(MPI_IN_PLACE,nid_proc,this%vf%cfg%nproc,MPI_INTEGER,MPI_SUM,this%vf%cfg%comm,ierr)
+            nid_all=sum(nid_proc)
+            if (allocated(ids_all)) deallocate(ids_all)
+            allocate(ids_all(nid_all)); ids_all=0; ids_all(sum(nid_proc(1:this%vf%cfg%rank))+1:sum(nid_proc(1:this%vf%cfg%rank+1)))=ids(1:nid)
+            call MPI_ALLREDUCE(MPI_IN_PLACE,ids_all,nid_all,MPI_INTEGER,MPI_SUM,this%vf%cfg%comm,ierr)
+            ! Compact list of ids
+            nid=0; ids=0
+            compact_loop: do nnn=1,nid_all
+               ! Check existing ids for redundancy
+               do nnnn=1,nid
+                  if (ids(nnnn).eq.ids_all(nnn)) cycle compact_loop
+               end do
+               ! Still here, then add the id
+               nid=nid+1
+               ids(nid)=ids_all(nnn)
+            end do compact_loop
             ! If no ids were encountered, done - we may need a brand new id
             if (nid.eq.0) cycle
             ! Set id_rmp to smallest non-zero id encountered
