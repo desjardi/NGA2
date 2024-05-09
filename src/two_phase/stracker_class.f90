@@ -249,7 +249,7 @@ contains
          ! Deallocate
          deallocate(nmerge_proc,merge_all)
       end block gather_merge
-
+      
       ! Execute all merges
       execute_merge: block
          integer :: i,j,k,n,m

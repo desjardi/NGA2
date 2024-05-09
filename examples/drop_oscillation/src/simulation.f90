@@ -49,7 +49,7 @@ module simulation
 contains
    
    
-      !> Function that defines a level set function for a cylinder
+   !> Function that defines a level set function for a cylinder
    function levelset_circle(xyz,t) result(G)
       implicit none
       real(WP), dimension(3),intent(in) :: xyz
