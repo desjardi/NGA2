@@ -13,6 +13,10 @@ module tpscalar_class
    ! Expose type/constructor/methods
    public :: tpscalar,bcond
    
+   ! List of available phase IDs
+   integer, parameter, public :: Lphase=0
+   integer, parameter, public :: Gphase=1
+
    ! List of known available bcond for this solver
    integer, parameter, public :: dirichlet=2         !< Dirichlet condition
    integer, parameter, public :: neumann=3           !< Zero normal gradient
@@ -639,9 +643,9 @@ contains
       do nsc=1,this%nscalar
          my_SCmax=maxval(this%SC(:,:,:,nsc)); call MPI_ALLREDUCE(my_SCmax,this%SCmax(nsc),1,MPI_REAL_WP,MPI_MAX,this%cfg%comm,ierr)
          my_SCmin=minval(this%SC(:,:,:,nsc)); call MPI_ALLREDUCE(my_SCmin,this%SCmin(nsc),1,MPI_REAL_WP,MPI_MIN,this%cfg%comm,ierr)
-         if      (this%phase(nsc).eq.0) then ! Liquid scalar
+         if      (this%phase(nsc).eq.Lphase) then ! Liquid scalar
             tmp=this%SC(:,:,:,nsc)*(       VF(:,:,:))
-         else if (this%phase(nsc).eq.1) then ! Gas scalar
+         else if (this%phase(nsc).eq.Gphase) then ! Gas scalar
             tmp=this%SC(:,:,:,nsc)*(1.0_WP-VF(:,:,:))
          end if
          call this%cfg%integrate(A=tmp,integral=this%SCint(nsc))

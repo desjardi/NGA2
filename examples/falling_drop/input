@@ -25,11 +25,11 @@ Static contact angle :        140
 # Time integration
 Max timestep size : 5e-4
 Max cfl number :    0.9
-Max time :          1
+Max time :          0.5
 
 # Pressure solver
 Pressure tolerance : 1e-4
 Pressure iteration : 100
 
 # Ensight output
-Ensight output period : 5e-3
+Ensight output period : 1e-3
