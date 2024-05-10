@@ -8,7 +8,7 @@ nx : 128
 # Droplet properties
 Droplet diameter :        0.8
 Droplet injection time :  2                ! is multiplied by eddy turnover-time
-Weber number :            1
+Weber number :            10
 Viscosity ratio :         1
 
 # Time integration

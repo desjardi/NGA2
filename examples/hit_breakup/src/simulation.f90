@@ -204,6 +204,9 @@ contains
          use vfs_class, only: elvira,plicnet,remap_storage
          ! Create a VOF solver with stored full-cell Lagrangian remap
          call vf%initialize(cfg=cfg,reconstruction_method=plicnet,transport_method=remap_storage,name='VOF')
+         ! Initialize droplet parameters
+         call param_read('Droplet diameter',radius); radius=0.5_WP*radius
+         call param_read('Droplet position',center,default=[0.5_WP*cfg%xL,0.5_WP*cfg%yL,0.5_WP*cfg%zL])
       end block create_vof
       
       ! Create a single-phase flow solver without bconds
@@ -599,9 +602,6 @@ contains
       real(WP), dimension(3) :: v_cent,a_cent
       real(WP) :: vol,area
       integer, parameter :: amr_ref_lvl=5
-      ! Initialize droplet parameters
-      call param_read('Droplet diameter',radius); radius=0.5_WP*radius
-      call param_read('Droplet position',center,default=[0.5_WP*cfg%xL,0.5_WP*cfg%yL,0.5_WP*cfg%zL])
       ! Initialize droplet
       do k=vf%cfg%kmino_,vf%cfg%kmaxo_
          do j=vf%cfg%jmino_,vf%cfg%jmaxo_
