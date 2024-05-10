@@ -577,6 +577,7 @@ contains
          ! Perform and output monitoring
          call compute_stats()
          call fs%get_max()
+         call vf%get_max()
          call mfile%write()
          call cflfile%write()
          call hitfile%write()
