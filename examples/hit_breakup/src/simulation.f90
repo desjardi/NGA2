@@ -201,9 +201,9 @@ contains
       
       ! Initialize our VOF solver
       create_vof: block
-         use vfs_class, only: elvira,remap_storage
+         use vfs_class, only: elvira,plicnet,remap_storage
          ! Create a VOF solver with stored full-cell Lagrangian remap
-         call vf%initialize(cfg=cfg,reconstruction_method=elvira,transport_method=remap_storage,name='VOF')
+         call vf%initialize(cfg=cfg,reconstruction_method=plicnet,transport_method=remap_storage,name='VOF')
       end block create_vof
       
       ! Create a single-phase flow solver without bconds
