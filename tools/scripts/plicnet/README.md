@@ -39,6 +39,6 @@ pip install torch
 
 Running the Script
 ---------
-1. Provide a Pytorch model file (.pt file) in the same directory as the gen_plic_net.py script. The script expects this file to be named "model.pt" by default. 
+1. Provide a Pytorch model file (.pt file) in the same directory as the generate_plicnet.py script. The script expects this file to be named "model.pt" by default. 
 
-2. Run the script, and the resulting plic_net.f90 will be generated in the same directory. Copy plic_net.f90 to NGA2/src/two_phase
+2. Run the script, and the resulting plicnet.f90 will be generated in the same directory. Copy plicnet.f90 to NGA2/src/two_phase

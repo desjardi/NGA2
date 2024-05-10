@@ -198,7 +198,7 @@ module vfs_class
       procedure :: build_interface                        !< Reconstruct IRL interface from VF field
       procedure :: build_elvira                           !< ELVIRA reconstruction of the interface from VF field
       procedure :: build_lvira                            !< LVIRA reconstruction of the interface from VF field
-      procedure :: build_plic_net                         !< PLIC-Net reconstruction of the interface from VF field
+      procedure :: build_plicnet                         !< PLIC-Net reconstruction of the interface from VF field
       procedure :: build_mof                              !< MOF reconstruction of the interface from VF field
       procedure :: build_wmof                             !< Wide-MOF reconstruction of the interface from VF field
       procedure :: build_r2p                              !< R2P reconstruction of the interface from VF field
@@ -2193,7 +2193,7 @@ contains
          call this%smooth_interface()
       case (youngs); call this%build_youngs()
       !case (lvlset); call this%build_lvlset()
-      case (plicnet); call this%build_plic_net()
+      case (plicnet); call this%build_plicnet()
       case default; call die('[vfs build interface] Unknown interface reconstruction scheme')
       end select
    end subroutine build_interface
@@ -2722,9 +2722,9 @@ contains
    end subroutine build_lvira
    
    !> Machine learning reconstruction of a planar interface in mixed cells
-   subroutine build_plic_net(this)
+   subroutine build_plicnet(this)
       use mathtools, only: normalize
-      use plic_net, only: get_normal, reflect_moments
+      use plicnet, only: get_normal, reflect_moments
       implicit none
       class(vfs), intent(inout) :: this
       integer(IRL_SignedIndex_t) :: i,j,k
@@ -2837,7 +2837,7 @@ contains
       
       ! Synchronize across boundaries
       call this%sync_interface()
-   end subroutine build_plic_net
+   end subroutine build_plicnet
    
    !> MOF reconstruction of a planar interface in mixed cells
    subroutine build_mof(this)
