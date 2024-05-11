@@ -485,7 +485,7 @@ contains
             resW=-2.0_WP*fs%rho_W*fs%W+(fs%rho_Wold+fs%rho_W)*fs%Wold+time%dt*resW
             
             ! Add linear forcing term based on Bassenne et al. (2016)
-            if (.not.droplet_inserted) then
+            !if (.not.droplet_inserted) then
                linear_forcing: block
                   use mpi_f08,  only: MPI_ALLREDUCE,MPI_SUM
                   use parallel, only: MPI_REAL_WP
@@ -516,7 +516,7 @@ contains
                   resV=resV+time%dt*(fs%V-meanV)*A*fs%rho_V
                   resW=resW+time%dt*(fs%W-meanW)*A*fs%rho_W
                end block linear_forcing
-            end if
+            !end if
             
             ! Apply these residuals
             fs%U=2.0_WP*fs%U-fs%Uold+resU!/fs%rho_U
