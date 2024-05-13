@@ -7,13 +7,21 @@ nx : 128
 
 # Droplet properties
 Droplet diameter :        0.8
-Droplet injection time :  10                ! is multiplied by eddy turnover-time
 Weber number :            10
-Viscosity ratio :         5
+Viscosity ratio :         10
+
+# Turbulence file
+Keep forcing :            .true.            ! does forcing continue after injection
+Turbulence file :         hit.file          ! file from which to restart
+Droplet injection time :  0                 ! is multiplied by eddy turnover-time
 
 # Time integration
 Max timestep size : 5e-3
-Max cfl number :    0.9
+Max cfl number :    !0.9
+Max time :          10
 
 # Ensight output
-Ensight output period : 1e-1
+Ensight output period : 5e-2
+
+# Drop analysis
+Drop analysis period : 5e-2
