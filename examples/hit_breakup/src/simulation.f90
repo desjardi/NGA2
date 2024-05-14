@@ -488,13 +488,13 @@ contains
       ! Perform time integration
       do while (.not.time%done())
          
-         ! Inject droplet
-         if (.not.droplet_injected.and.inj_evt%occurs()) call inject_drop()
-         
          ! Increment time
          call fs%get_cfl(time%dt,time%cfl)
          call time%adjust_dt()
          call time%increment()
+         
+         ! Inject droplet
+         if (.not.droplet_injected.and.inj_evt%occurs()) call inject_drop()
          
          ! Remember old VOF
          vf%VFold=vf%VF
