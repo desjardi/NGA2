@@ -240,7 +240,7 @@ contains
       
       ! Initialize our VOF solver
       create_vof: block
-         use vfs_class, only: elvira,plicnet,remap_storage
+         use vfs_class, only: lvira,elvira,plicnet,remap_storage
          ! Create a VOF solver with stored full-cell Lagrangian remap
          call vf%initialize(cfg=cfg,reconstruction_method=plicnet,transport_method=remap_storage,name='VOF')
          ! Initialize droplet parameters
