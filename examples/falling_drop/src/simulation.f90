@@ -188,15 +188,20 @@ contains
       
       ! Create a liquid scalar solver
       create_scalar: block
+        use param, only: param_read
         use tpscalar_class, only: Lphase,Gphase
         integer :: i,j,k
+        real(WP) :: Ldiff,Gdiff
         ! Create scalar solver
         call sc%initialize(cfg=cfg,nscalar=2,name='tpscalar_test')
         ! Make it liquid and give it a name
         sc%SCname=[  'Zl',  'Zg']; iZl=1; iZg=2
         sc%phase =[Lphase,Gphase]
-        ! Assign zero diffusivity
-        sc%diff=0.0_WP
+        ! Read diffusivity
+        call param_read('Liquid diffusivity',Ldiff)
+        sc%diff(:,:,:,iZl)=Ldiff
+        call param_read('Gas diffusivity',   Gdiff)
+        sc%diff(:,:,:,iZg)=Gdiff
         ! Setup without an implicit solver
         call sc%setup()
         ! Initialize scalar fields
@@ -342,18 +347,30 @@ contains
          
          ! Now transport our phase-specific scalars
          advance_scalar: block
-           integer :: nsc
-           real(WP) :: p,q
-           ! Explicit calculation of dSC/dt from scalar equation
-           call sc%get_dSCdt(dSCdt=resSC,U=fs%U,V=fs%V,W=fs%W,VFold=vf%VFold,VF=vf%VF,detailed_face_flux=vf%detailed_face_flux,dt=time%dt)
-           ! Advance scalar fields
-           do nsc=1,sc%nscalar
-              p=real(sc%phase(nsc),WP); q=1.0_WP-2.0_WP*p
-              where (sc%mask.eq.0.and.vf%VF.ne.p) sc%SC(:,:,:,nsc)=((p+q*vf%VFold)*sc%SCold(:,:,:,nsc)+time%dt*resSC(:,:,:,nsc))/(p+q*vf%VF)
-              where (vf%VF.eq.p) sc%SC(:,:,:,nsc)=0.0_WP
-           end do
-           ! Apply boundary conditions
-           call sc%apply_bcond(time%t,time%dt)
+            use tpscalar_class, only: Lphase,Gphase
+            integer :: i,j,k,nsc
+            real(WP) :: p,q
+            ! Get the bary centers
+            ! sc%bary(:,Lphase,:,:,:)=vf%Lbary
+            ! sc%bary(:,Gphase,:,:,:)=vf%Gbary
+            do k=sc%cfg%kmino_,sc%cfg%kmaxo_
+               do j=sc%cfg%jmino_,sc%cfg%jmaxo_
+                  do i=sc%cfg%imino_,sc%cfg%imaxo_
+                     sc%bary(:,Lphase,i,j,k)=vf%Lbary(:,i,j,k)
+                     sc%bary(:,Gphase,i,j,k)=vf%Gbary(:,i,j,k)
+                  end do
+               end do
+            end do
+            ! Explicit calculation of dSC/dt from scalar equation
+            call sc%get_dSCdt(dSCdt=resSC,U=fs%U,V=fs%V,W=fs%W,VFold=vf%VFold,VF=vf%VF,detailed_face_flux=vf%detailed_face_flux,face_flux=vf%face_flux,dt=time%dt)
+            ! Advance scalar fields
+            do nsc=1,sc%nscalar
+               p=real(sc%phase(nsc),WP); q=1.0_WP-2.0_WP*p
+               where (sc%mask.eq.0.and.vf%VF.ne.p) sc%SC(:,:,:,nsc)=((p+q*vf%VFold)*sc%SCold(:,:,:,nsc)+time%dt*resSC(:,:,:,nsc))/(p+q*vf%VF)
+               where (vf%VF.eq.p) sc%SC(:,:,:,nsc)=0.0_WP
+            end do
+            ! Apply boundary conditions
+            call sc%apply_bcond(time%t,time%dt)
          end block advance_scalar
          
          ! Prepare new staggered viscosity (at n+1)
