@@ -3,7 +3,7 @@ module simulation
    use precision,         only: WP
    use geometry,          only: cfg
    use hypre_str_class,   only: hypre_str
-   !use ddadi_class,       only: ddadi
+   use ddadi_class,       only: ddadi
    use tpns_class,        only: tpns
    use vfs_class,         only: vfs
    use tpscalar_class,    only: tpscalar
@@ -18,6 +18,7 @@ module simulation
    !> Get a couple linear solvers, a two-phase flow solver and volume fraction solver and corresponding time tracker
    type(hypre_str),   public :: ps
    !type(ddadi),       public :: vs
+   type(ddadi),       public :: ss
    type(tpns),        public :: fs
    type(vfs),         public :: vf
    type(tpscalar),    public :: sc
@@ -55,7 +56,7 @@ contains
       ! Create the droplet
       G=radius-sqrt(sum((xyz-center)**2))
       ! Add the pool
-      !G=max(G,depth-xyz(2))
+      ! G=max(G,depth-xyz(2))
    end function levelset_falling_drop
    
    
@@ -186,7 +187,7 @@ contains
       end block create_and_initialize_flow_solver
       
       
-      ! Create a liquid scalar solver
+      ! Create a one-sided scalar solver
       create_scalar: block
         use param, only: param_read
         use tpscalar_class, only: Lphase,Gphase
@@ -194,16 +195,21 @@ contains
         real(WP) :: Ldiff,Gdiff
         ! Create scalar solver
         call sc%initialize(cfg=cfg,nscalar=2,name='tpscalar_test')
+        ! Initialize the phase specific VOF
+        sc%PVF(:,:,:,Lphase)=vf%VF
+        sc%PVF(:,:,:,Gphase)=1.0_WP-vf%VF
         ! Make it liquid and give it a name
         sc%SCname=[  'Zl',  'Zg']; iZl=1; iZg=2
         sc%phase =[Lphase,Gphase]
         ! Read diffusivity
         call param_read('Liquid diffusivity',Ldiff)
         sc%diff(:,:,:,iZl)=Ldiff
-        call param_read('Gas diffusivity',   Gdiff)
+        call param_read('Gas diffusivity',Gdiff)
         sc%diff(:,:,:,iZg)=Gdiff
-        ! Setup without an implicit solver
-        call sc%setup()
+        ! Configure implicit scalar solver
+        ss=ddadi(cfg=cfg,name='Scalar',nst=7)
+        ! Setup the solver
+        call sc%setup(implicit_solver=ss)
         ! Initialize scalar fields
         do k=cfg%kmino_,cfg%kmaxo_
            do j=cfg%jmino_,cfg%jmaxo_
@@ -329,7 +335,8 @@ contains
          vf%VFold=vf%VF
          
          ! Remember old SC
-         sc%SCold=sc%SC
+         sc%SCold =sc%SC
+         sc%PVFold=sc%PVF
          
          ! Remember old velocity
          fs%Uold=fs%U
@@ -349,26 +356,37 @@ contains
          advance_scalar: block
             use tpscalar_class, only: Lphase,Gphase
             integer :: i,j,k,nsc
-            real(WP) :: p,q
-            ! Get the bary centers
-            ! sc%bary(:,Lphase,:,:,:)=vf%Lbary
-            ! sc%bary(:,Gphase,:,:,:)=vf%Gbary
-            do k=sc%cfg%kmino_,sc%cfg%kmaxo_
-               do j=sc%cfg%jmino_,sc%cfg%jmaxo_
-                  do i=sc%cfg%imino_,sc%cfg%imaxo_
-                     sc%bary(:,Lphase,i,j,k)=vf%Lbary(:,i,j,k)
-                     sc%bary(:,Gphase,i,j,k)=vf%Gbary(:,i,j,k)
-                  end do
-               end do
-            end do
-            ! Explicit calculation of dSC/dt from scalar equation
-            call sc%get_dSCdt(dSCdt=resSC,U=fs%U,V=fs%V,W=fs%W,VFold=vf%VFold,VF=vf%VF,detailed_face_flux=vf%detailed_face_flux,face_flux=vf%face_flux,dt=time%dt)
-            ! Advance scalar fields
+            real(WP) :: eps
+            eps=1e-6
+            ! Get the phas-specific VOF
+            sc%PVF(:,:,:,Lphase)=vf%VF
+            sc%PVF(:,:,:,Gphase)=1.0_WP-vf%VF
+            ! Explicit calculation of dSC/dt from convective term
+            call sc%get_dSCdt_conv(dSCdt=resSC,U=fs%U,V=fs%V,W=fs%W,VFold=vf%VFold,VF=vf%VF,detailed_face_flux=vf%detailed_face_flux,dt=time%dt)
+            ! Advance convection
             do nsc=1,sc%nscalar
-               p=real(sc%phase(nsc),WP); q=1.0_WP-2.0_WP*p
-               where (sc%mask.eq.0.and.vf%VF.ne.p) sc%SC(:,:,:,nsc)=((p+q*vf%VFold)*sc%SCold(:,:,:,nsc)+time%dt*resSC(:,:,:,nsc))/(p+q*vf%VF)
-               where (vf%VF.eq.p) sc%SC(:,:,:,nsc)=0.0_WP
+               where (sc%PVF(:,:,:,sc%phase(nsc)).gt.eps)
+                  where (sc%mask.eq.0)
+                     sc%SC(:,:,:,nsc)=(sc%PVFold(:,:,:,sc%phase(nsc))*sc%SCold(:,:,:,nsc)+time%dt*resSC(:,:,:,nsc))/sc%PVF(:,:,:,sc%phase(nsc))
+                  end where
+               else where
+                  sc%SC(:,:,:,nsc)=0.0_WP
+               end where
             end do
+            ! Explicit calculation of dSC/dt from diffusive term
+            ! call sc%get_dSCdt_diff(dSCdt=resSC,U=fs%U,V=fs%V,W=fs%W)
+            ! Advance diffusion
+            ! do nsc=1,sc%nscalar
+            !    where (sc%PVF(:,:,:,sc%phase(nsc)).gt.eps)
+            !       where (sc%mask.eq.0)
+            !          sc%SC(:,:,:,nsc)=(sc%PVFold(:,:,:,sc%phase(nsc))*sc%SC(:,:,:,nsc)+time%dt*resSC(:,:,:,nsc))/sc%PVF(:,:,:,sc%phase(nsc))
+            !       end where
+            !    else where
+            !       sc%SC(:,:,:,nsc)=0.0_WP
+            !    end where
+            ! end do
+            ! Form implicit residual
+            call sc%solve_implicit(time%dt,sc%SC)
             ! Apply boundary conditions
             call sc%apply_bcond(time%t,time%dt)
          end block advance_scalar
