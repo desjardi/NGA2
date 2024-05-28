@@ -84,8 +84,9 @@ module pgrid_class
       procedure :: allprint=>pgrid_allprint                                     !< Output grid to screen - blocking and requires all procs...
       procedure :: print   =>pgrid_print                                        !< Output grid to screen
       procedure :: log     =>pgrid_log                                          !< Output grid info to log
-      generic :: sync=>pgrid_rsync,pgrid_rsync_array,pgrid_rsync_tensor,pgrid_rsync_no,pgrid_isync,pgrid_isync_no    !< Commmunicate inner and periodic boundaries - generic
+      generic :: sync=>pgrid_rsync,pgrid_rsync_array,pgrid_rsync_tensor,pgrid_rsync_no,pgrid_isync,pgrid_isync_array,pgrid_isync_no    !< Commmunicate inner and periodic boundaries - generic
       procedure, private :: pgrid_isync,pgrid_isync_no                          !< Commmunicate inner and periodic boundaries for integer
+      procedure, private :: pgrid_isync_array                                   !< Commmunicate inner and periodic boundaries for arrays of integers of the form (:,i,j,k)
       procedure, private :: pgrid_rsync,pgrid_rsync_no                          !< Commmunicate inner and periodic boundaries for real(WP)
       procedure, private :: pgrid_rsync_array                                   !< Commmunicate inner and periodic boundaries for arrays of real(WP) of the form (:,i,j,k)
       procedure, private :: pgrid_rsync_tensor                                  !< Commmunicate inner and periodic boundaries for tensors of real(WP) of the form (:,:,i,j,k)
@@ -527,88 +528,6 @@ contains
    end subroutine pgrid_rsync
    
    
-   !> Synchronization of overlap cells - uses full no
-   !> This routine assumes that the default overlap size is used
-   !> It allows the use of pre-allocated buffers for speed
-   subroutine pgrid_isync(this,A)
-      implicit none
-      class(pgrid), intent(inout) :: this
-      integer, dimension(this%imino_:,this%jmino_:,this%kmino_:), intent(inout) :: A !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
-      type(MPI_Status) :: status
-      integer :: isrc,idst,ierr,isize,i,j,k
-      
-      ! Work in x - is it 2D or 3D?
-      if (this%nx.eq.1) then
-         ! Direct copy if 2D
-         do i=this%imax_+1,this%imaxo_
-            A(i,:,:)=A(this%imin_,:,:)
-         end do
-         do i=this%imino_,this%imin_-1
-            A(i,:,:)=A(this%imin_,:,:)
-         end do
-      else
-         isize=(this%no)*(this%nyo_)*(this%nzo_)
-         ! Send left buffer to left neighbour
-         call MPI_CART_SHIFT(this%comm,0,-1,isrc,idst,ierr)
-         this%isyncbuf_x1=A(this%imin_:this%imin_+this%no-1,:,:)
-         call MPI_SENDRECV(this%isyncbuf_x1,isize,MPI_INTEGER,idst,0,this%isyncbuf_x2,isize,MPI_INTEGER,isrc,0,this%comm,status,ierr)
-         if (isrc.ne.MPI_PROC_NULL) A(this%imax_+1:this%imaxo_,:,:)=this%isyncbuf_x2
-         ! Send right buffer to right neighbour
-         call MPI_CART_SHIFT(this%comm,0,+1,isrc,idst,ierr)
-         this%isyncbuf_x1=A(this%imax_-this%no+1:this%imax_,:,:)
-         call MPI_SENDRECV(this%isyncbuf_x1,isize,MPI_INTEGER,idst,0,this%isyncbuf_x2,isize,MPI_INTEGER,isrc,0,this%comm,status,ierr)
-         if (isrc.ne.MPI_PROC_NULL) A(this%imino_:this%imin_-1,:,:)=this%isyncbuf_x2
-      end if
-      
-      ! Work in y - is it 2D or 3D?
-      if (this%ny.eq.1) then
-         ! Direct copy if 2D
-         do j=this%jmax_+1,this%jmaxo_
-            A(:,j,:)=A(:,this%jmin_,:)
-         end do
-         do j=this%jmino_,this%jmin_-1
-            A(:,j,:)=A(:,this%jmin_,:)
-         end do
-      else
-         isize=(this%nxo_)*(this%no)*(this%nzo_)
-         ! Send left buffer to left neighbour
-         call MPI_CART_SHIFT(this%comm,1,-1,isrc,idst,ierr)
-         this%isyncbuf_y1=A(:,this%jmin_:this%jmin_+this%no-1,:)
-         call MPI_SENDRECV(this%isyncbuf_y1,isize,MPI_INTEGER,idst,0,this%isyncbuf_y2,isize,MPI_INTEGER,isrc,0,this%comm,status,ierr)
-         if (isrc.ne.MPI_PROC_NULL) A(:,this%jmax_+1:this%jmaxo_,:)=this%isyncbuf_y2
-         ! Send right buffer to right neighbour
-         call MPI_CART_SHIFT(this%comm,1,+1,isrc,idst,ierr)
-         this%isyncbuf_y1=A(:,this%jmax_-this%no+1:this%jmax_,:)
-         call MPI_SENDRECV(this%isyncbuf_y1,isize,MPI_INTEGER,idst,0,this%isyncbuf_y2,isize,MPI_INTEGER,isrc,0,this%comm,status,ierr)
-         if (isrc.ne.MPI_PROC_NULL) A(:,this%jmino_:this%jmin_-1,:)=this%isyncbuf_y2
-      end if
-      
-      ! Work in z - is it 2D or 3D?
-      if (this%nz.eq.1) then
-         ! Direct copy if 2D
-         do k=this%kmax_+1,this%kmaxo_
-            A(:,:,k)=A(:,:,this%kmin_)
-         end do
-         do k=this%kmino_,this%kmin_-1
-            A(:,:,k)=A(:,:,this%kmin_)
-         end do
-      else
-         isize=(this%nxo_)*(this%nyo_)*(this%no)
-         ! Send left buffer to left neighbour
-         call MPI_CART_SHIFT(this%comm,2,-1,isrc,idst,ierr)
-         this%isyncbuf_z1=A(:,:,this%kmin_:this%kmin_+this%no-1)
-         call MPI_SENDRECV(this%isyncbuf_z1,isize,MPI_INTEGER,idst,0,this%isyncbuf_z2,isize,MPI_INTEGER,isrc,0,this%comm,status,ierr)
-         if (isrc.ne.MPI_PROC_NULL) A(:,:,this%kmax_+1:this%kmaxo_)=this%isyncbuf_z2
-         ! Send right buffer to right neighbour
-         call MPI_CART_SHIFT(this%comm,2,+1,isrc,idst,ierr)
-         this%isyncbuf_z1=A(:,:,this%kmax_-this%no+1:this%kmax_)
-         call MPI_SENDRECV(this%isyncbuf_z1,isize,MPI_INTEGER,idst,0,this%isyncbuf_z2,isize,MPI_INTEGER,isrc,0,this%comm,status,ierr)
-         if (isrc.ne.MPI_PROC_NULL) A(:,:,this%kmino_:this%kmin_-1)=this%isyncbuf_z2
-      end if
-      
-   end subroutine pgrid_isync
-   
-   
    !> Synchronization of overlap cells
    !> This version is capable of handling any overlap size
    subroutine pgrid_rsync_no(this,A,no)
@@ -902,6 +821,88 @@ contains
    end subroutine pgrid_rsync_tensor
    
    
+   !> Synchronization of overlap cells for integer - uses full no
+   !> This routine assumes that the default overlap size is used
+   !> It allows the use of pre-allocated buffers for speed
+   subroutine pgrid_isync(this,A)
+      implicit none
+      class(pgrid), intent(inout) :: this
+      integer, dimension(this%imino_:,this%jmino_:,this%kmino_:), intent(inout) :: A !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      type(MPI_Status) :: status
+      integer :: isrc,idst,ierr,isize,i,j,k
+      
+      ! Work in x - is it 2D or 3D?
+      if (this%nx.eq.1) then
+         ! Direct copy if 2D
+         do i=this%imax_+1,this%imaxo_
+            A(i,:,:)=A(this%imin_,:,:)
+         end do
+         do i=this%imino_,this%imin_-1
+            A(i,:,:)=A(this%imin_,:,:)
+         end do
+      else
+         isize=(this%no)*(this%nyo_)*(this%nzo_)
+         ! Send left buffer to left neighbour
+         call MPI_CART_SHIFT(this%comm,0,-1,isrc,idst,ierr)
+         this%isyncbuf_x1=A(this%imin_:this%imin_+this%no-1,:,:)
+         call MPI_SENDRECV(this%isyncbuf_x1,isize,MPI_INTEGER,idst,0,this%isyncbuf_x2,isize,MPI_INTEGER,isrc,0,this%comm,status,ierr)
+         if (isrc.ne.MPI_PROC_NULL) A(this%imax_+1:this%imaxo_,:,:)=this%isyncbuf_x2
+         ! Send right buffer to right neighbour
+         call MPI_CART_SHIFT(this%comm,0,+1,isrc,idst,ierr)
+         this%isyncbuf_x1=A(this%imax_-this%no+1:this%imax_,:,:)
+         call MPI_SENDRECV(this%isyncbuf_x1,isize,MPI_INTEGER,idst,0,this%isyncbuf_x2,isize,MPI_INTEGER,isrc,0,this%comm,status,ierr)
+         if (isrc.ne.MPI_PROC_NULL) A(this%imino_:this%imin_-1,:,:)=this%isyncbuf_x2
+      end if
+      
+      ! Work in y - is it 2D or 3D?
+      if (this%ny.eq.1) then
+         ! Direct copy if 2D
+         do j=this%jmax_+1,this%jmaxo_
+            A(:,j,:)=A(:,this%jmin_,:)
+         end do
+         do j=this%jmino_,this%jmin_-1
+            A(:,j,:)=A(:,this%jmin_,:)
+         end do
+      else
+         isize=(this%nxo_)*(this%no)*(this%nzo_)
+         ! Send left buffer to left neighbour
+         call MPI_CART_SHIFT(this%comm,1,-1,isrc,idst,ierr)
+         this%isyncbuf_y1=A(:,this%jmin_:this%jmin_+this%no-1,:)
+         call MPI_SENDRECV(this%isyncbuf_y1,isize,MPI_INTEGER,idst,0,this%isyncbuf_y2,isize,MPI_INTEGER,isrc,0,this%comm,status,ierr)
+         if (isrc.ne.MPI_PROC_NULL) A(:,this%jmax_+1:this%jmaxo_,:)=this%isyncbuf_y2
+         ! Send right buffer to right neighbour
+         call MPI_CART_SHIFT(this%comm,1,+1,isrc,idst,ierr)
+         this%isyncbuf_y1=A(:,this%jmax_-this%no+1:this%jmax_,:)
+         call MPI_SENDRECV(this%isyncbuf_y1,isize,MPI_INTEGER,idst,0,this%isyncbuf_y2,isize,MPI_INTEGER,isrc,0,this%comm,status,ierr)
+         if (isrc.ne.MPI_PROC_NULL) A(:,this%jmino_:this%jmin_-1,:)=this%isyncbuf_y2
+      end if
+      
+      ! Work in z - is it 2D or 3D?
+      if (this%nz.eq.1) then
+         ! Direct copy if 2D
+         do k=this%kmax_+1,this%kmaxo_
+            A(:,:,k)=A(:,:,this%kmin_)
+         end do
+         do k=this%kmino_,this%kmin_-1
+            A(:,:,k)=A(:,:,this%kmin_)
+         end do
+      else
+         isize=(this%nxo_)*(this%nyo_)*(this%no)
+         ! Send left buffer to left neighbour
+         call MPI_CART_SHIFT(this%comm,2,-1,isrc,idst,ierr)
+         this%isyncbuf_z1=A(:,:,this%kmin_:this%kmin_+this%no-1)
+         call MPI_SENDRECV(this%isyncbuf_z1,isize,MPI_INTEGER,idst,0,this%isyncbuf_z2,isize,MPI_INTEGER,isrc,0,this%comm,status,ierr)
+         if (isrc.ne.MPI_PROC_NULL) A(:,:,this%kmax_+1:this%kmaxo_)=this%isyncbuf_z2
+         ! Send right buffer to right neighbour
+         call MPI_CART_SHIFT(this%comm,2,+1,isrc,idst,ierr)
+         this%isyncbuf_z1=A(:,:,this%kmax_-this%no+1:this%kmax_)
+         call MPI_SENDRECV(this%isyncbuf_z1,isize,MPI_INTEGER,idst,0,this%isyncbuf_z2,isize,MPI_INTEGER,isrc,0,this%comm,status,ierr)
+         if (isrc.ne.MPI_PROC_NULL) A(:,:,this%kmino_:this%kmin_-1)=this%isyncbuf_z2
+      end if
+      
+   end subroutine pgrid_isync
+   
+   
    !> Synchronization of overlap cells for integer
    !> This version is capable of handling any overlap size
    subroutine pgrid_isync_no(this,A,no)
@@ -995,6 +996,103 @@ contains
       end if
       
    end subroutine pgrid_isync_no
+   
+   
+   !> Synchronization of overlap cells for integer
+   !> This version is capable of handling an array of the shape (:,i,j,k)
+   subroutine pgrid_isync_array(this,A)
+      implicit none
+      class(pgrid), intent(in) :: this
+      integer, dimension(1:,this%imino_:,this%jmino_:,this%kmino_:), intent(inout) :: A !< Needs to be (:,imin_-no:imax_+no,jmin_-no:jmax_+no,kmin_-no:kmax_+no)
+      type(MPI_Status) :: status
+      integer :: isrc,idst,ierr,isize,i,j,k,dim
+      integer, dimension(:,:,:,:), allocatable :: buf1,buf2
+      
+      ! Get first dimension
+      dim=size(A,DIM=1)
+      
+      ! Work in x - is it 2D or 3D?
+      if (this%nx.eq.1) then
+         ! Direct copy if 2D
+         do i=this%imax_+1,this%imaxo_
+            A(:,i,:,:)=A(:,this%imin_,:,:)
+         end do
+         do i=this%imino_,this%imin_-1
+            A(:,i,:,:)=A(:,this%imin_,:,:)
+         end do
+      else
+         isize=dim*(this%no)*(this%nyo_)*(this%nzo_)
+         allocate(buf1(dim,this%no,this%nyo_,this%nzo_))
+         allocate(buf2(dim,this%no,this%nyo_,this%nzo_))
+         ! Send left buffer to left neighbour
+         call MPI_CART_SHIFT(this%comm,0,-1,isrc,idst,ierr)
+         buf1=A(:,this%imin_:this%imin_+this%no-1,:,:)
+         call MPI_SENDRECV(buf1,isize,MPI_INTEGER,idst,0,buf2,isize,MPI_INTEGER,isrc,0,this%comm,status,ierr)
+         if (isrc.ne.MPI_PROC_NULL) A(:,this%imax_+1:this%imaxo_,:,:)=buf2
+         ! Send right buffer to right neighbour
+         call MPI_CART_SHIFT(this%comm,0,+1,isrc,idst,ierr)
+         buf1=A(:,this%imax_-this%no+1:this%imax_,:,:)
+         call MPI_SENDRECV(buf1,isize,MPI_INTEGER,idst,0,buf2,isize,MPI_INTEGER,isrc,0,this%comm,status,ierr)
+         if (isrc.ne.MPI_PROC_NULL) A(:,this%imino_:this%imin_-1,:,:)=buf2
+         ! Deallocate
+         deallocate(buf1,buf2)
+      end if
+      
+      ! Work in y - is it 2D or 3D?
+      if (this%ny.eq.1) then
+         ! Direct copy if 2D
+         do j=this%jmax_+1,this%jmaxo_
+            A(:,:,j,:)=A(:,:,this%jmin_,:)
+         end do
+         do j=this%jmino_,this%jmin_-1
+            A(:,:,j,:)=A(:,:,this%jmin_,:)
+         end do
+      else
+         isize=dim*(this%nxo_)*(this%no)*(this%nzo_)
+         allocate(buf1(dim,this%nxo_,this%no,this%nzo_))
+         allocate(buf2(dim,this%nxo_,this%no,this%nzo_))
+         ! Send left buffer to left neighbour
+         call MPI_CART_SHIFT(this%comm,1,-1,isrc,idst,ierr)
+         buf1=A(:,:,this%jmin_:this%jmin_+this%no-1,:)
+         call MPI_SENDRECV(buf1,isize,MPI_INTEGER,idst,0,buf2,isize,MPI_INTEGER,isrc,0,this%comm,status,ierr)
+         if (isrc.ne.MPI_PROC_NULL) A(:,:,this%jmax_+1:this%jmaxo_,:)=buf2
+         ! Send right buffer to right neighbour
+         call MPI_CART_SHIFT(this%comm,1,+1,isrc,idst,ierr)
+         buf1=A(:,:,this%jmax_-this%no+1:this%jmax_,:)
+         call MPI_SENDRECV(buf1,isize,MPI_INTEGER,idst,0,buf2,isize,MPI_INTEGER,isrc,0,this%comm,status,ierr)
+         if (isrc.ne.MPI_PROC_NULL) A(:,:,this%jmino_:this%jmin_-1,:)=buf2
+         ! Deallocate
+         deallocate(buf1,buf2)
+      end if
+      
+      ! Work in z - is it 2D or 3D?
+      if (this%nz.eq.1) then
+         ! Direct copy if 2D
+         do k=this%kmax_+1,this%kmaxo_
+            A(:,:,:,k)=A(:,:,:,this%kmin_)
+         end do
+         do k=this%kmino_,this%kmin_-1
+            A(:,:,:,k)=A(:,:,:,this%kmin_)
+         end do
+      else
+         isize=dim*(this%nxo_)*(this%nyo_)*(this%no)
+         allocate(buf1(dim,this%nxo_,this%nyo_,this%no))
+         allocate(buf2(dim,this%nxo_,this%nyo_,this%no))
+         ! Send left buffer to left neighbour
+         call MPI_CART_SHIFT(this%comm,2,-1,isrc,idst,ierr)
+         buf1=A(:,:,:,this%kmin_:this%kmin_+this%no-1)
+         call MPI_SENDRECV(buf1,isize,MPI_INTEGER,idst,0,buf2,isize,MPI_INTEGER,isrc,0,this%comm,status,ierr)
+         if (isrc.ne.MPI_PROC_NULL) A(:,:,:,this%kmax_+1:this%kmaxo_)=buf2
+         ! Send right buffer to right neighbour
+         call MPI_CART_SHIFT(this%comm,2,+1,isrc,idst,ierr)
+         buf1=A(:,:,:,this%kmax_-this%no+1:this%kmax_)
+         call MPI_SENDRECV(buf1,isize,MPI_INTEGER,idst,0,buf2,isize,MPI_INTEGER,isrc,0,this%comm,status,ierr)
+         if (isrc.ne.MPI_PROC_NULL) A(:,:,:,this%kmino_:this%kmin_-1)=buf2
+         ! Deallocate
+         deallocate(buf1,buf2)
+      end if
+      
+   end subroutine pgrid_isync_array
    
    
    !> Synchronization by summation of overlap cells - uses full no
