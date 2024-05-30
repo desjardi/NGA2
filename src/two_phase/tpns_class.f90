@@ -1924,19 +1924,18 @@ contains
       real(WP), intent(inout) :: dt     !< Timestep size over which to advance
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: div  !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       class(vfs), intent(inout) :: vf
-      integer :: i,j,k,n,np1,np2
-      real(WP) :: myvol
+      integer :: i,j,k,ii,jj,kk,n,np1,np2,cn
+      integer, dimension(2,2) :: plane_ind
       real(WP), dimension(2,2) :: VF2p,curv2p,surf2p      
       real(WP), dimension(3,2) :: pos     
       real(WP), dimension(4,2,2) :: normals
-      integer, dimension(2,2) :: plane_ind
       real(WP), dimension(2) :: kalpha_cal
       real(WP), dimension(4) :: plane
-      ! type(RectCub_type) :: cell                           
-      ! type(PlanarSep_type) :: lginterface   
-      ! call new(cell)
-      ! call new(lginterface)
-      ! call setNumberOfPlanes(lginterface,1)
+      type(RectCub_type) :: cell                           
+      type(PlanarSep_type) :: lginterface   
+      call new(cell)
+      call new(lginterface)
+      call setNumberOfPlanes(lginterface,1)
       ! Store old jump
       this%DPjx=this%Pjx
       this%DPjy=this%Pjy
@@ -1950,121 +1949,46 @@ contains
                ! X face ===========================================
                np1=0;np2=0;VF2p=0.0_WP;curv2p=0.0_WP;surf2p=0.0_WP;normals=0.0_WP;plane_ind=0
                ! Get left cell info
-               do n=1,getNumberOfPlanes(vf%liquid_gas_interface(i-1,j,k))
-                  if (getNumberOfVertices(vf%interface_polygon(n,i-1,j,k)).eq.0) cycle
-                  np1=np1+1; plane_ind(n,1) = 1
-                  ! normals(:,n,1)=getPlane(vf%liquid_gas_interface(i-1,j,k),n-1)
-                  ! call setPlane(lginterface,0,normals(1:3,n,1),normals(4,n,1))                           
-                  ! call construct_2pt(cell,[vf%cfg%x(i-1),vf%cfg%y(j),vf%cfg%z(k)],[vf%cfg%x(i),vf%cfg%y(j+1),vf%cfg%z(k+1)])
-                  ! call getNormMoments(cell,lginterface,myvol)
-                  ! VF2p(n,1) = myvol/vf%cfg%vol(i-1,j,k)
-                  VF2p(n,1) = alpha(i-1,j,k,n,plane)
-                  normals(:,n,1) = plane
-                  surf2p(n,1) =abs(calculateVolume(vf%interface_polygon(n,i-1,j,k)))
-                  curv2p(n,1) = vf%curv2p(n,i-1,j,k)
-               end do
+               ii=i-1;jj=j;kk=k;cn=1
+               np1 = prepare_info()
                ! Get cell info from cell, i,j,k
-               do n=1,getNumberOfPlanes(vf%liquid_gas_interface(i,j,k))
-                  if (getNumberOfVertices(vf%interface_polygon(n,i,j,k)).eq.0) cycle
-                  np2=np2+1; plane_ind(n,2) = 1
-                  ! normals(:,n,2)=getPlane(vf%liquid_gas_interface(i,j,k),n-1)
-                  ! call setPlane(lginterface,0,normals(1:3,n,2),normals(4,n,2))                           
-                  ! call construct_2pt(cell,[vf%cfg%x(i),vf%cfg%y(j),vf%cfg%z(k)],[vf%cfg%x(i+1),vf%cfg%y(j+1),vf%cfg%z(k+1)])
-                  ! call getNormMoments(cell,lginterface,myvol)
-                  ! VF2p(n,2) = myvol/vf%cfg%vol(i,j,k)
-                  VF2p(n,2) = alpha(i,j,k,n,plane)
-                  normals(:,n,2) = plane
-                  surf2p(n,2) =abs(calculateVolume(vf%interface_polygon(n,i,j,k)))
-                  curv2p(n,2) = vf%curv2p(n,i,j,k)
-               end do
-               pos(:,1) = [vf%cfg%xm(i-1),vf%cfg%ym(j),vf%cfg%zm(k)]
-               pos(:,2) = [vf%cfg%xm(i),vf%cfg%ym(j),vf%cfg%zm(k)]
+               ii=i;jj=j;kk=k;cn=2
+               np2 = prepare_info()
                ! Assemble pressure jump
                if ((np1.eq.0).and.(np2.eq.0)) then
                   this%Pjx(i,j,k)=0.0_WP
                else
-                  kalpha_cal = get_kalpha(plane_ind,normals,pos,VF2p,curv2p,surf2p,np1,np2)
-                  this%Pjx(i,j,k)=this%sigma*sum(this%divu_x(:,i,j,k)*kalpha_cal)
+                  this%Pjx(i,j,k)=this%sigma*sum(this%divu_x(:,i,j,k)*get_kalpha())
                end if
 
                ! Y face ===========================================
                np1=0;np2=0;VF2p=0.0_WP;curv2p=0.0_WP;surf2p=0.0_WP;normals=0.0_WP;plane_ind=0
                ! Get left cell info
-               do n=1,getNumberOfPlanes(vf%liquid_gas_interface(i,j-1,k))
-                  if (getNumberOfVertices(vf%interface_polygon(n,i,j-1,k)).eq.0) cycle
-                  np1=np1+1; plane_ind(n,1) = 1
-                  ! normals(:,n,1)=getPlane(vf%liquid_gas_interface(i,j-1,k),n-1)
-                  ! call setPlane(lginterface,0,normals(1:3,n,1),normals(4,n,1))                           
-                  ! call construct_2pt(cell,[vf%cfg%x(i),vf%cfg%y(j-1),vf%cfg%z(k)],[vf%cfg%x(i+1),vf%cfg%y(j),vf%cfg%z(k+1)])
-                  ! call getNormMoments(cell,lginterface,myvol)
-                  ! VF2p(n,1) = myvol/vf%cfg%vol(i,j-1,k)
-                  VF2p(n,1) = alpha(i,j-1,k,n,plane)
-                  normals(:,n,1) = plane
-                  surf2p(n,1) =abs(calculateVolume(vf%interface_polygon(n,i,j-1,k)))
-                  curv2p(n,1) = vf%curv2p(n,i,j-1,k)
-               end do
+               ii=i;jj=j-1;kk=k;cn=1
+               np1 = prepare_info()
                ! Get cell info from cell, i,j,k
-               do n=1,getNumberOfPlanes(vf%liquid_gas_interface(i,j,k))
-                  if (getNumberOfVertices(vf%interface_polygon(n,i,j,k)).eq.0) cycle
-                  np2=np2+1; plane_ind(n,2) = 1
-                  ! normals(:,n,2)=getPlane(vf%liquid_gas_interface(i,j,k),n-1)
-                  ! call setPlane(lginterface,0,normals(1:3,n,2),normals(4,n,2))                           
-                  ! call construct_2pt(cell,[vf%cfg%x(i),vf%cfg%y(j),vf%cfg%z(k)],[vf%cfg%x(i+1),vf%cfg%y(j+1),vf%cfg%z(k+1)])
-                  ! call getNormMoments(cell,lginterface,myvol)
-                  ! VF2p(n,2) = myvol/vf%cfg%vol(i,j,k)
-                  VF2p(n,2) = alpha(i,j,k,n,plane)
-                  normals(:,n,2) = plane
-                  surf2p(n,2) =abs(calculateVolume(vf%interface_polygon(n,i,j,k)))
-                  curv2p(n,2) = vf%curv2p(n,i,j,k)
-               end do
-               pos(:,1) = [vf%cfg%xm(i),vf%cfg%ym(j-1),vf%cfg%zm(k)]
-               pos(:,2) = [vf%cfg%xm(i),vf%cfg%ym(j),vf%cfg%zm(k)]
+               ii=i;jj=j;kk=k;cn=2
+               np2 = prepare_info()
                ! Assemble pressure jump
                if ((np1.eq.0).and.(np2.eq.0)) then
                   this%Pjy(i,j,k)=0.0_WP
                else
-                  kalpha_cal = get_kalpha(plane_ind,normals,pos,VF2p,curv2p,surf2p,np1,np2)
-                  this%Pjy(i,j,k)=this%sigma*sum(this%divv_y(:,i,j,k)*kalpha_cal)
+                  this%Pjy(i,j,k)=this%sigma*sum(this%divv_y(:,i,j,k)*get_kalpha())
                end if
 
                ! Z face ===========================================
                np1=0;np2=0;VF2p=0.0_WP;curv2p=0.0_WP;surf2p=0.0_WP;normals=0.0_WP;plane_ind=0
                ! Get left cell info
-               do n=1,getNumberOfPlanes(vf%liquid_gas_interface(i,j,k-1))
-                  if (getNumberOfVertices(vf%interface_polygon(n,i,j,k-1)).eq.0) cycle
-                  np1=np1+1; plane_ind(n,1) = 1
-                  ! normals(:,n,1)=getPlane(vf%liquid_gas_interface(i,j,k-1),n-1)
-                  ! call setPlane(lginterface,0,normals(1:3,n,1),normals(4,n,1))                           
-                  ! call construct_2pt(cell,[vf%cfg%x(i),vf%cfg%y(j),vf%cfg%z(k-1)],[vf%cfg%x(i+1),vf%cfg%y(j+1),vf%cfg%z(k)])
-                  ! call getNormMoments(cell,lginterface,myvol)
-                  ! VF2p(n,1) = myvol/vf%cfg%vol(i,j,k-1)
-                  VF2p(n,1) = alpha(i,j,k-1,n,plane)
-                  normals(:,n,1) = plane
-                  surf2p(n,1) =abs(calculateVolume(vf%interface_polygon(n,i,j,k-1)))
-                  curv2p(n,1) = vf%curv2p(n,i,j,k-1)
-               end do
+               ii=i;jj=j;kk=k-1;cn=1
+               np1 = prepare_info()
                ! Get cell info from cell, i,j,k
-               do n=1,getNumberOfPlanes(vf%liquid_gas_interface(i,j,k))
-                  if (getNumberOfVertices(vf%interface_polygon(n,i,j,k)).eq.0) cycle
-                  np2=np2+1; plane_ind(n,2) = 1
-                  ! normals(:,n,2)=getPlane(vf%liquid_gas_interface(i,j,k),n-1)
-                  ! call setPlane(lginterface,0,normals(1:3,n,2),normals(4,n,2))                           
-                  ! call construct_2pt(cell,[vf%cfg%x(i),vf%cfg%y(j),vf%cfg%z(k)],[vf%cfg%x(i+1),vf%cfg%y(j+1),vf%cfg%z(k+1)])
-                  ! call getNormMoments(cell,lginterface,myvol)
-                  ! VF2p(n,2) = myvol/vf%cfg%vol(i,j,k)
-                  VF2p(n,2) = alpha(i,j,k,n,plane)
-                  normals(:,n,2) = plane
-                  surf2p(n,2) =abs(calculateVolume(vf%interface_polygon(n,i,j,k)))
-                  curv2p(n,2) = vf%curv2p(n,i,j,k)
-               end do
-               pos(:,1) = [vf%cfg%xm(i),vf%cfg%ym(j),vf%cfg%zm(k-1)]
-               pos(:,2) = [vf%cfg%xm(i),vf%cfg%ym(j),vf%cfg%zm(k)]
+               ii=i;jj=j;kk=k;cn=2
+               np2 = prepare_info()
                ! Assemble pressure jump
                if ((np1.eq.0).and.(np2.eq.0)) then
                   this%Pjz(i,j,k)=0.0_WP
                else
-                  kalpha_cal = get_kalpha(plane_ind,normals,pos,VF2p,curv2p,surf2p,np1,np2)
-                  this%Pjz(i,j,k)=this%sigma*sum(this%divw_z(:,i,j,k)*kalpha_cal)
+                  this%Pjz(i,j,k)=this%sigma*sum(this%divw_z(:,i,j,k)*get_kalpha())
                end if
             end do
          end do
@@ -2086,19 +2010,34 @@ contains
       end do
 
       contains 
-         function get_kalpha(plane_ind,normals,pos,VF2p,curv2p,surf2p,np1,np2) result(kalpha)
+         function prepare_info() result(np)
+            implicit none
+            integer :: np
+            real(WP) :: myvol
+            np=0;myvol=0.0_WP
+            do n=1,getNumberOfPlanes(vf%liquid_gas_interface(ii,jj,kk))
+               if (getNumberOfVertices(vf%interface_polygon(n,ii,jj,kk)).eq.0) cycle
+               np=np+1; plane_ind(n,cn) = 1
+               call construct_2pt(cell,[vf%cfg%x(ii),vf%cfg%y(jj),vf%cfg%z(kk)],[vf%cfg%x(ii+1),vf%cfg%y(jj+1),vf%cfg%z(kk+1)])
+               plane=getPlane(vf%liquid_gas_interface(ii,jj,kk),n-1)
+               call setPlane(lginterface,0,plane(1:3),plane(4))
+               call getNormMoments(cell,lginterface,myvol)
+               VF2p(n,cn) = myvol/vf%cfg%vol(ii,jj,kk)
+               normals(:,n,cn) = plane
+               surf2p(n,cn) =abs(calculateVolume(vf%interface_polygon(n,ii,jj,kk)))
+               curv2p(n,cn) = vf%curv2p(n,ii,jj,kk)
+            end do
+            pos(:,cn) = [vf%cfg%xm(ii),vf%cfg%ym(jj),vf%cfg%zm(kk)]
+         end function  prepare_info
+
+         function get_kalpha() result(kalpha)   
             use mathtools, only: normalize
             implicit none
-            integer, dimension(2,2), intent(inout) :: plane_ind
-            real(WP), dimension(4,2,2), intent(inout) :: normals
-            real(WP), dimension(3,2), intent(in) :: pos
-            real(WP), dimension(2,2), intent(inout) :: VF2p,curv2p,surf2p
             real(WP), dimension(3) :: pos_temp
             real(WP), dimension(2) :: kalpha
             integer, dimension(2,2) :: plane_check
-            integer, intent(in) :: np1,np2
             real(WP) :: surfsum,dist
-            integer :: ii,jj,flag
+            integer :: flag
             ! Merge left cell
             if (np1.eq.2) then
                if(dot_product(normals(1:3,1,1),normals(1:3,2,1)).gt.0.0_WP) then
@@ -2231,24 +2170,6 @@ contains
             end do
             kalpha=[sum(VF2p(:,1)*curv2p(:,1)),sum(VF2p(:,2)*curv2p(:,2))]
          end function get_kalpha
-
-         !> Calculate single-plane VF
-         real(WP) function alpha(ii,jj,kk,iplane,plane)
-            implicit none
-            integer, intent(in) :: ii,jj,kk,iplane
-            type(RectCub_type) :: cell
-            real(WP), dimension(4), intent(inout):: plane
-            type(PlanarSep_type) :: lginterface
-            call new(cell)
-            call new(lginterface)
-            call setNumberOfPlanes(lginterface,1)
-            call construct_2pt(cell,[vf%cfg%x(ii),vf%cfg%y(jj),vf%cfg%z(kk)],[vf%cfg%x(ii+1),vf%cfg%y(jj+1),vf%cfg%z(kk+1)])
-            plane=getPlane(vf%liquid_gas_interface(ii,jj,kk),iplane-1)
-            call setPlane(lginterface,0,plane(1:3),plane(4))
-            call getNormMoments(cell,lginterface,alpha)
-            alpha=alpha/vf%cfg%vol(ii,jj,kk)
-         end function alpha
-
    end subroutine add_surface_tension_jump_kalpha
    
    
