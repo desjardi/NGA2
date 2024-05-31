@@ -232,12 +232,65 @@ contains
       set_ib_velocity: block
          use mathtools, only: Pi
          integer  :: i,j,k
-         real(WP) :: Qaxial,Uaxial,Aaxial
-         real(WP) :: Qswirl,Uswirl,Aswirl
-         real(WP), parameter :: SLPM2SI=1.66667E-5_WP
+         real(WP) :: R,mfr,theta,rx,ry,rz,Uin
+         real(WP), dimension(3) :: v1,v2,n1,n2
+         real(WP), dimension(3) :: xf,yf,zf
+         real(WP), dimension(3) :: xp,yp,zp
          ! Zero initial field
          this%Uib=0.0_WP; this%Vib=0.0_WP; this%Wib=0.0_WP
-         ! 
+         ! Define geometry of inlet pipes
+         R=0.000185_WP
+         theta=Pi/180.0_WP*53.0_WP
+         v1=[-0.00442_WP,0.0_WP,+0.001245_WP]; n1=[sin(theta),+cos(theta),0.0_WP]
+         v2=[-0.00442_WP,0.0_WP,-0.001245_WP]; n2=[sin(theta),-cos(theta),0.0_WP]
+         ! Read in mass flow rate
+         call this%input%read('Mass flow rate',mfr)
+         Uin=0.5_WP*mfr/(this%fs%rho*Pi*R**2)
+         ! Apply boundary conditions within the IBs
+         do k=this%cfg%kmino_,this%cfg%kmaxo_
+            do j=this%cfg%jmino_,this%cfg%jmaxo_
+               do i=this%cfg%imino_,this%cfg%imaxo_
+                  ! Inlet pipe 1
+                  ! Staggered positions
+                  xf=[this%cfg%x(i) ,this%cfg%ym(j),this%cfg%zm(k)]-v1
+                  yf=[this%cfg%xm(i),this%cfg%y(j) ,this%cfg%zm(k)]-v1
+                  zf=[this%cfg%xm(i),this%cfg%ym(j),this%cfg%z(k) ]-v1
+                  ! Project onto pipe axis
+                  xp=xf-n1*dot_product(xf,n1)
+                  yp=yf-n1*dot_product(yf,n1)
+                  zp=zf-n1*dot_product(zf,n1)
+                  ! Measure radial position in pipe 1
+                  rx=sqrt(dot_product(xp,xp))/R
+                  ry=sqrt(dot_product(yp,yp))/R
+                  rz=sqrt(dot_product(zp,zp))/R
+                  ! Apply Poiseuille profile
+                  if (xf(1).le.0.0_WP) then
+                     if (rx.le.1.0_WP) this%Uib(i,j,k)=Uin*n1(1)*2.0_WP*(1.0_WP-rx**2)
+                     if (ry.le.1.0_WP) this%Vib(i,j,k)=Uin*n1(2)*2.0_WP*(1.0_WP-ry**2)
+                     if (rz.le.1.0_WP) this%Wib(i,j,k)=Uin*n1(3)*2.0_WP*(1.0_WP-rz**2)
+                  end if
+                  ! Inlet pipe 2
+                  ! Staggered positions
+                  xf=[this%cfg%x(i) ,this%cfg%ym(j),this%cfg%zm(k)]-v2
+                  yf=[this%cfg%xm(i),this%cfg%y(j) ,this%cfg%zm(k)]-v2
+                  zf=[this%cfg%xm(i),this%cfg%ym(j),this%cfg%z(k) ]-v2
+                  ! Project onto pipe axis
+                  xp=xf-n2*dot_product(xf,n2)
+                  yp=yf-n2*dot_product(yf,n2)
+                  zp=zf-n2*dot_product(zf,n2)
+                  ! Measure radial position in pipe 2
+                  rx=sqrt(dot_product(xp,xp))/R
+                  ry=sqrt(dot_product(yp,yp))/R
+                  rz=sqrt(dot_product(zp,zp))/R
+                  ! Apply Poiseuille profile
+                  if (xf(1).le.0.0_WP) then
+                     if (rx.le.1.0_WP) this%Uib(i,j,k)=Uin*n2(1)*2.0_WP*(1.0_WP-rx**2)
+                     if (ry.le.1.0_WP) this%Vib(i,j,k)=Uin*n2(2)*2.0_WP*(1.0_WP-ry**2)
+                     if (rz.le.1.0_WP) this%Wib(i,j,k)=Uin*n2(3)*2.0_WP*(1.0_WP-rz**2)
+                  end if
+               end do
+            end do
+         end do
          ! Compute IB mass source
 		   do k=this%fs%cfg%kmin_,this%fs%cfg%kmax_
 				do j=this%fs%cfg%jmin_,this%fs%cfg%jmax_
@@ -290,7 +343,6 @@ contains
          call this%input%read('Ensight output period',this%ens_evt%tper)
          ! Add variables to output
          call this%ens_out%add_vector('velocity',this%Ui,this%Vi,this%Wi)
-         call this%ens_out%add_scalar('levelset',this%cfg%Gib)
          ! Output to ensight
          if (this%ens_evt%occurs()) call this%ens_out%write_data(this%time%t)
       end block create_ensight

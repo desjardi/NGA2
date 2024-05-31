@@ -19,7 +19,7 @@ contains
       
       ! Initialize simplex simulation
       call spx%init()
-      stop
+      
    end subroutine simulation_init
    
    
