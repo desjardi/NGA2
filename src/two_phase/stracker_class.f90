@@ -40,6 +40,11 @@ module stracker_class
       ! Merging2 events
       integer :: nmerge2
       integer, dimension(:,:), allocatable :: merge2
+      ! Splitting events
+      integer :: nsplit
+      integer, dimension(:,:), allocatable :: split
+      ! Global id counter
+      integer :: idcount
       ! ID of the structure that contains each cell
       integer, dimension(:,:,:), allocatable :: id
       ! Array of structures
@@ -53,9 +58,10 @@ module stracker_class
       integer :: nstruct_old
       type(struct_type), dimension(:), allocatable :: struct_old
    contains
-      procedure :: initialize         !< Initialization of stracker based on a provided VFS object
-      procedure, private :: build     !< Private cclabel step without persistent id
-      procedure :: advance            !< Perform cclabel step with persistent id
+      procedure :: initialize                !< Initialization of stracker based on a provided VFS object
+      procedure, private :: build            !< Private cclabel step without persistent id
+      procedure :: advance                   !< Perform cclabel step with persistent id
+      procedure, private :: generate_new_id  !< Function that increments the global structure counter
    end type stracker
    
    
@@ -70,6 +76,15 @@ module stracker_class
 contains
    
    
+   !> Function that returns a consistent new id value across all processors
+   integer function generate_new_id(this)
+      implicit none
+      class(stracker), intent(inout) :: this
+      this%idcount=this%idcount+1
+      generate_new_id=this%idcount
+   end function generate_new_id
+   
+   
    !> Structure tracker initialization
    subroutine initialize(this,vf,phase,make_label,name)
       use messager,  only: die
@@ -80,6 +95,7 @@ contains
       integer, intent(in) :: phase
       procedure(make_label_ftype) :: make_label
       character(len=*), optional :: name
+      integer :: n,nn,i,j,k
       ! Set the name for the object
       if (present(name)) this%name=trim(adjustl(name))
       ! Set the phase
@@ -95,8 +111,17 @@ contains
       ! Zero structures
       this%nstruct    =0
       this%nstruct_old=0
+      this%idcount=0
       ! Perform a first CCL
       call this%build(make_label)
+      ! Assign persistent id
+      do n=1,this%nstruct
+         if (this%struct(n)%id.eq.0) this%struct(n)%id=this%generate_new_id()
+         do nn=1,this%struct(n)%n_
+            this%id(this%struct(n)%map(1,nn),this%struct(n)%map(2,nn),this%struct(n)%map(3,nn))=this%struct(n)%id
+         end do
+      end do
+      call this%vf%cfg%sync(this%id)
    end subroutine initialize
    
 
@@ -122,24 +147,28 @@ contains
             this%struct_old(n)%id =this%struct(n)%id
             this%struct_old(n)%per=this%struct(n)%per
             this%struct_old(n)%n_ =this%struct(n)%n_
-            allocate(this%struct_old(n)%map(this%struct_old(n)%n_))
+            allocate(this%struct_old(n)%map(3,this%struct_old(n)%n_))
             this%struct_old(n)%map=this%struct(n)%map
          end do
       end block copy_to_old
       
-      ! Reset merge event storage
-      reset_merge: block
+      ! Reset merge and split event storage
+      reset_merge_split: block
          this%nmerge=0
          if (allocated(this%merge)) deallocate(this%merge)
          allocate(this%merge(1:2,1:min_struct_size)); this%merge=0
          this%nmerge2=0
          if (allocated(this%merge2)) deallocate(this%merge2)
          allocate(this%merge2(1:2,1:min_struct_size)); this%merge2=0
-      end block reset_merge
+         this%nsplit=0
+         if (allocated(this%split)) deallocate(this%split)
+         allocate(this%split(1:2,1:min_struct_size)); this%split=0
+      end block reset_merge_split
       
       ! Remap id using VF geometry data to identify merge events
       remap_id: block
          use irl_fortran_interface
+         use vfs_class, only: VFlo
          integer, dimension(3) :: ind
          type(SepVM_type) :: my_SepVM
          real(WP), dimension(0:1) :: vols
@@ -149,9 +178,11 @@ contains
          ! Allocate ids storage
          nobj=0
          do k=this%vf%cfg%kmin_,this%vf%cfg%kmax_; do j=this%vf%cfg%jmin_,this%vf%cfg%jmax_; do i=this%vf%cfg%imin_,this%vf%cfg%imax_
-            nobj=max(count,getSize(this%vf%detailed_remap(i,j,k)))
+            nobj=max(nobj,getSize(this%vf%detailed_remap(i,j,k)))
          end do; end do; end do
          allocate(ids(nobj))
+         ! Initialize remapped id to id
+         this%id_rmp=this%id
          ! Perform remapping step
          do k=this%vf%cfg%kmin_,this%vf%cfg%kmax_; do j=this%vf%cfg%jmin_,this%vf%cfg%jmax_; do i=this%vf%cfg%imin_,this%vf%cfg%imax_
             ! Check detailed remap geometry to get nobj
@@ -194,7 +225,7 @@ contains
          ! Deallocate ids
          deallocate(ids)
       end block remap_id
-
+      
       ! Gather all merge events
       gather_merge: block
          use mpi_f08, only: MPI_ALLREDUCE,MPI_SUM,MPI_IN_PLACE,MPI_INTEGER
@@ -218,7 +249,7 @@ contains
          ! Deallocate
          deallocate(nmerge_proc,merge_all)
       end block gather_merge
-
+      
       ! Execute all merges
       execute_merge: block
          integer :: i,j,k,n,m
@@ -229,7 +260,7 @@ contains
                if (this%id_rmp(i,j,k).eq.this%merge(2,n)) this%id_rmp(i,j,k)=this%merge(1,n)
             end do; end do; end do
             ! Loop over remaining merge events and update id based on that merge event
-            do m=1,this%merge
+            do m=1,this%nmerge
                if (this%merge(1,m).eq.this%merge(2,n)) this%merge(1,m)=this%merge(1,n)
                if (this%merge(2,m).eq.this%merge(2,n)) this%merge(2,m)=this%merge(1,n)
                i=minval(this%merge(:,m)); j=maxval(this%merge(:,m)); this%merge(:,m)=[i,j]
@@ -243,8 +274,11 @@ contains
       ! Resolve persistent id:
       ! For each new structure, build a list of all distinct id_rmp that are contained
       ! Zeros are ignored here - if more than one non-zero id_rmp value, then another
-      ! merging step is needed
+      ! merging step is needed. This accounts for merging not due to transport (i.e., growth?)
       new_id: block
+         use mpi_f08, only: MPI_ALLREDUCE,MPI_SUM,MPI_IN_PLACE,MPI_INTEGER
+         integer, dimension(:), allocatable :: nid_proc,ids_all
+         integer :: ierr,nid_all,nnnn
          integer :: n,nn,nnn,nid,my_id,nobj
          integer, dimension(:), allocatable :: ids
          ! Allocate maximum storage for id_rmp values
@@ -253,6 +287,8 @@ contains
             nobj=max(nobj,this%struct(n)%n_)
          end do
          allocate(ids(nobj))
+         ! Allocate nid_proc storage
+         allocate(nid_proc(1:this%vf%cfg%nproc))
          ! Traverse each new structure and gather list of potential id
          do n=1,this%nstruct
             ! Zero out ids and reset counter
@@ -270,6 +306,24 @@ contains
                ! Increment the ids array
                nid=nid+1; ids(nid)=my_id
             end do str_loop
+            ! Gather all ids
+            nid_proc=0; nid_proc(this%vf%cfg%rank+1)=nid
+            call MPI_ALLREDUCE(MPI_IN_PLACE,nid_proc,this%vf%cfg%nproc,MPI_INTEGER,MPI_SUM,this%vf%cfg%comm,ierr)
+            nid_all=sum(nid_proc)
+            if (allocated(ids_all)) deallocate(ids_all)
+            allocate(ids_all(nid_all)); ids_all=0; ids_all(sum(nid_proc(1:this%vf%cfg%rank))+1:sum(nid_proc(1:this%vf%cfg%rank+1)))=ids(1:nid)
+            call MPI_ALLREDUCE(MPI_IN_PLACE,ids_all,nid_all,MPI_INTEGER,MPI_SUM,this%vf%cfg%comm,ierr)
+            ! Compact list of ids
+            nid=0; ids=0
+            compact_loop: do nnn=1,nid_all
+               ! Check existing ids for redundancy
+               do nnnn=1,nid
+                  if (ids(nnnn).eq.ids_all(nnn)) cycle compact_loop
+               end do
+               ! Still here, then add the id
+               nid=nid+1
+               ids(nid)=ids_all(nnn)
+            end do compact_loop
             ! If no ids were encountered, done - we may need a brand new id
             if (nid.eq.0) cycle
             ! Set id_rmp to smallest non-zero id encountered
@@ -307,7 +361,7 @@ contains
 
       ! Execute all merge2
       execute_merge2: block
-         integer :: i,j,n,m
+         integer :: i,j,n,nn,m
          ! Traverse merge2 list
          do n=1,this%nmerge2
             ! Loop over structures and update id based on merge2 events
@@ -315,7 +369,7 @@ contains
                if (this%struct(nn)%id.eq.this%merge2(2,n)) this%struct(nn)%id=this%merge2(1,n)
             end do
             ! Loop over remaining merge events and update id based on that merge2 event
-            do m=1,this%merge2
+            do m=1,this%nmerge2
                if (this%merge2(1,m).eq.this%merge2(2,n)) this%merge2(1,m)=this%merge2(1,n)
                if (this%merge2(2,m).eq.this%merge2(2,n)) this%merge2(2,m)=this%merge2(1,n)
                i=minval(this%merge2(:,m)); j=maxval(this%merge2(:,m)); this%merge2(:,m)=[i,j]
@@ -324,10 +378,69 @@ contains
       end block execute_merge2
       
       ! Now deal with splits - case where two structs share the same id
-      
+      ! Crude n^2 implementation for now, but an tree sort would be perfect
+      execute_splits: block
+         integer :: n,m,my_id
+         logical :: is_split
+         ! Loop through each structure
+         do n=1,this%nstruct
+            ! Remember the remapped id for that structure
+            my_id=this%struct(n)%id
+            ! Skip zero ids
+            if (my_id.eq.0) cycle
+            ! Reset split flag
+            is_split=.false.
+            ! Check each other structure to see if the same id is used
+            do m=1,this%nstruct
+               ! Skip self-check
+               if (n.eq.m) cycle
+               ! Check ids
+               if (my_id.eq.this%struct(m)%id) then
+                  ! Split happened
+                  is_split=.true.
+                  ! Assign new id 
+                  this%struct(m)%id=this%generate_new_id()
+                  ! Store the splitting event
+                  call add_split(my_id,this%struct(m)%id)
+               end if
+            end do
+            ! Finally, deal with first structure
+            if (is_split) then
+               ! Assign new id 
+               this%struct(n)%id=this%generate_new_id()
+               ! Store the splitting event
+               call add_split(my_id,this%struct(n)%id)
+            end if
+         end do
+      end block execute_splits
       
       ! Finally, one last pass to give unique id to structs with id=0
+      handle_new_ids: block
+         integer :: n
+         ! Loop through each structure
+         do n=1,this%nstruct
+            ! Assign new name zero ids
+            if (this%struct(n)%id.eq.0) this%struct(n)%id=this%generate_new_id()
+         end do
+      end block handle_new_ids
       
+      ! Update id field
+      update_id_field: block
+         integer :: n,nn,i,j,k
+         ! Loop over structures
+         do n=1,this%nstruct
+            ! Loop over local cells in the structure
+            do nn=1,this%struct(n)%n_
+               ! Assign id value
+               this%id(this%struct(n)%map(1,nn),this%struct(n)%map(2,nn),this%struct(n)%map(3,nn))=this%struct(n)%id
+               ! Assign structure number to id_old
+               this%id_old(this%struct(n)%map(1,nn),this%struct(n)%map(2,nn),this%struct(n)%map(3,nn))=n
+            end do
+         end do
+         ! Communicate id
+         call this%vf%cfg%sync(this%id)
+         call this%vf%cfg%sync(this%id_old)
+      end block update_id_field
       
    contains
       
@@ -380,6 +493,25 @@ contains
          this%nmerge2=this%nmerge2+1
          this%merge2(:,this%nmerge2)=[id1,id2]
       end subroutine add_merge2
+
+      !> Subroutine that adds a new split event (id1<id2 required)
+      subroutine add_split(id1,id2)
+         implicit none
+         integer, intent(in) :: id1,id2
+         integer :: n,size_now,size_new
+         integer, dimension(:,:), allocatable :: tmp
+         ! Create new split event
+         size_now=size(this%split,dim=2)
+         if (this%nsplit.eq.size_now) then
+            size_new=int(real(size_now,WP)*coeff_up)
+            allocate(tmp(1:2,1:size_new))
+            tmp(:,1:this%nsplit)=this%split
+            tmp(:,this%nsplit+1:)=0
+            call move_alloc(tmp,this%split)
+         end if
+         this%nsplit=this%nsplit+1
+         this%split(:,this%nsplit)=[id1,id2]
+      end subroutine add_split
       
    end subroutine advance
 
@@ -808,6 +940,9 @@ contains
          end do
          deallocate(idp)
       end block compact_struct
+
+      ! Return zero id array
+      this%id=0
       
    contains
       

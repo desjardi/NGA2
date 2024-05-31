@@ -11,9 +11,9 @@ nz :	1
 
 # Fluid properties (see README.md for details)
 Re : 100
-Oh : 1e10 !0.1
-R :  1    !1000
-M :  1    !50
+Oh : 0.1     !1e10 !0.1
+R :  1000    !1    !1000
+M :  50      !1    !50
 CA : 90
 
 # Time integration

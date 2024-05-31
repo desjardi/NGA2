@@ -83,14 +83,14 @@ contains
       ! Initialize our VOF solver and field
 	   create_and_initialize_vof: block
          use mms_geom, only: cube_refine_vol
-         use vfs_class, only: lvira,VFhi,VFlo
+         use vfs_class, only: lvira,remap,VFhi,VFlo
          integer :: i,j,k,n,si,sj,sk
          real(WP), dimension(3,8) :: cube_vertex
          real(WP), dimension(3) :: v_cent,a_cent
          real(WP) :: vol,area
          integer, parameter :: amr_ref_lvl=4
          ! Create a VOF solver
-         vf=vfs(cfg=cfg,reconstruction_method=lvira,name='VOF')
+         call vf%initialize(cfg=cfg,reconstruction_method=lvira,transport_method=remap,name='VOF')
          ! Initialize based on levelset
          do k=vf%cfg%kmino_,vf%cfg%kmaxo_
             do j=vf%cfg%jmino_,vf%cfg%jmaxo_

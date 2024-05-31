@@ -51,7 +51,7 @@ ifeq ($(DEBUG),TRUE)
 else
 
   CXXFLAGS += -O3 -ftree-vectorize -ffast-math -funroll-loops -fomit-frame-pointer -pipe -fopenmp
-  CFLAGS   += -O3 -ftree-vectorize -ffast-math -funroll-loops -fomit-frame-pointer -pipe -fopenmp
+  CFLAGS   += -O3 -ftree-vectorize -ffast-math -funroll-loops -fomit-frame-pointer -pipe #-fopenmp
   FFLAGS   += -O3 -ftree-vectorize -ffast-math -funroll-loops -fomit-frame-pointer -pipe -fopenmp
   F90FLAGS += -O3 -ftree-vectorize -ffast-math -funroll-loops -fomit-frame-pointer -pipe -fopenmp
 

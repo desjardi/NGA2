@@ -5,9 +5,9 @@ NGA_HOME ?= ../..
 PRECISION = DOUBLE
 USE_MPI   = TRUE
 USE_HYPRE = TRUE
+USE_IRL   = TRUE
 USE_LAPACK= TRUE
 USE_FFTW  = TRUE
-USE_IRL   = FALSE
 PROFILE   = FALSE
 DEBUG     = FALSE
 COMP      = gnu
@@ -23,13 +23,11 @@ include $(Upack)
 INCLUDE_LOCATIONS += $(Ulocs)
 VPATH_LOCATIONS   += $(Ulocs)
 
-# External libraries are defined in .profile/.bashrc/.zshrc, but could be defined here as well
-
 # NGA compilation definitions
 include $(NGA_HOME)/tools/GNUMake/Make.defs
 
 # Include NGA base code
-Bdirs   := subgrid constant_density core data transform solver config grid libraries
+Bdirs   := core two_phase constant_density subgrid data solver transform config grid libraries
 Bpack   += $(foreach dir, $(Bdirs), $(NGA_HOME)/src/$(dir)/Make.package)
 include $(Bpack)
 
