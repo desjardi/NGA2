@@ -42,13 +42,13 @@ module simulation
    !> Problem definition
    real(WP), dimension(3) :: center
    real(WP) :: radius,depth
-   integer :: iZl,iZg
+   integer :: iZl!,iZg
    
 contains
 
 
    !> Function that defines a level set function for a falling drop problem
-   function levelset_falling_drop(xyz,t) result(G)
+   function levelset_static_drop(xyz,t) result(G)
       implicit none
       real(WP), dimension(3),intent(in) :: xyz
       real(WP), intent(in) :: t
@@ -57,7 +57,18 @@ contains
       G=radius-sqrt(sum((xyz-center)**2))
       ! Add the pool
       ! G=max(G,depth-xyz(2))
-   end function levelset_falling_drop
+   end function levelset_static_drop
+
+
+   !> Function that defines a Gaussian scalar distribution
+   function gaussian(xyz) result(G)
+      use mathtools, only: Pi
+      implicit none
+      real(WP), dimension(3),intent(in) :: xyz
+      real(WP), parameter :: zeta=0.05_WP
+      real(WP) :: G
+      G=exp(-sum((xyz-center)**2)/(2.0_WP*zeta**2))/(zeta*sqrt(2.0_WP*Pi))
+   end function gaussian
    
    
    !> Initialization of problem solver
@@ -121,7 +132,7 @@ contains
                   end do
                   ! Call adaptive refinement code to get volume and barycenters recursively
                   vol=0.0_WP; area=0.0_WP; v_cent=0.0_WP; a_cent=0.0_WP
-                  call cube_refine_vol(cube_vertex,vol,area,v_cent,a_cent,levelset_falling_drop,0.0_WP,amr_ref_lvl)
+                  call cube_refine_vol(cube_vertex,vol,area,v_cent,a_cent,levelset_static_drop,0.0_WP,amr_ref_lvl)
                   vf%VF(i,j,k)=vol/vf%cfg%vol(i,j,k)
                   if (vf%VF(i,j,k).ge.VFlo.and.vf%VF(i,j,k).le.VFhi) then
                      vf%Lbary(:,i,j,k)=v_cent
@@ -194,18 +205,21 @@ contains
         integer :: i,j,k
         real(WP) :: Ldiff,Gdiff
         ! Create scalar solver
-        call sc%initialize(cfg=cfg,nscalar=2,name='tpscalar_test')
+      !   call sc%initialize(cfg=cfg,nscalar=2,name='tpscalar_test')
+        call sc%initialize(cfg=cfg,nscalar=1,name='tpscalar_test')
         ! Initialize the phase specific VOF
         sc%PVF(:,:,:,Lphase)=vf%VF
         sc%PVF(:,:,:,Gphase)=1.0_WP-vf%VF
         ! Make it liquid and give it a name
-        sc%SCname=[  'Zl',  'Zg']; iZl=1; iZg=2
-        sc%phase =[Lphase,Gphase]
+      !   sc%SCname=[  'Zl',  'Zg']; iZl=1; iZg=2
+        sc%SCname=['Zl']; iZl=1
+      !   sc%phase =[Lphase,Gphase]
+        sc%phase =[Lphase]
         ! Read diffusivity
-        call param_read('Liquid diffusivity',Ldiff)
+        call param_read('Liquid scalar diffusivity',Ldiff)
         sc%diff(:,:,:,iZl)=Ldiff
-        call param_read('Gas diffusivity',Gdiff)
-        sc%diff(:,:,:,iZg)=Gdiff
+      !   call param_read('Gas scalar diffusivity',Gdiff)
+      !   sc%diff(:,:,:,iZg)=Gdiff
         ! Configure implicit scalar solver
         ss=ddadi(cfg=cfg,name='Scalar',nst=7)
         ! Setup the solver
@@ -217,19 +231,20 @@ contains
                  ! Liquid scalar
                  if (vf%VF(i,j,k).gt.0.0_WP) then
                     ! We are in the liquid
-                    if (cfg%ym(j).gt.depth+cfg%dy(j)) then
-                       ! We are above the pool
-                       sc%SC(i,j,k,iZl)=1.0_WP
-                    else
-                       ! We are in the pool
-                       sc%SC(i,j,k,iZl)=2.0_WP
-                    end if
+                    sc%SC(i,j,k,iZl)=gaussian([cfg%xm(i),cfg%ym(j),cfg%zm(k)])
+                  !   if (cfg%ym(j).gt.depth+cfg%dy(j)) then
+                  !      ! We are above the pool
+                  !      sc%SC(i,j,k,iZl)=1.0_WP
+                  !   else
+                  !      ! We are in the pool
+                  !      sc%SC(i,j,k,iZl)=2.0_WP
+                  !   end if
                  end if
                  ! Gas scalar
-                 if (vf%VF(i,j,k).lt.1.0_WP) then
-                    ! We are in the gas
-                    sc%SC(i,j,k,iZg)=(cfg%ym(j)-depth)/(cfg%yL-depth)
-                 end if
+               !   if (vf%VF(i,j,k).lt.1.0_WP) then
+               !      ! We are in the gas
+               !      sc%SC(i,j,k,iZg)=(cfg%ym(j)-depth)/(cfg%yL-depth)
+               !   end if
               end do
            end do
         end do
@@ -247,7 +262,7 @@ contains
       create_ensight: block
          integer :: nsc
          ! Create Ensight output from cfg
-         ens_out=ensight(cfg=cfg,name='FallingDrop')
+         ens_out=ensight(cfg=cfg,name='tpscalar_diff')
          ! Create event for Ensight output
          ens_evt=event(time=time,name='Ensight output')
          call param_read('Ensight output period',ens_evt%tper)
@@ -347,10 +362,10 @@ contains
          ! This is where time-dpt Dirichlet would be enforced
          
          ! Prepare old staggered density (at n)
-         call fs%get_olddensity(vf=vf)
+         ! call fs%get_olddensity(vf=vf)
          
          ! VOF solver step
-         call vf%advance(dt=time%dt,U=fs%U,V=fs%V,W=fs%W)
+         ! call vf%advance(dt=time%dt,U=fs%U,V=fs%V,W=fs%W)
          
          ! Now transport our phase-specific scalars
          advance_scalar: block
@@ -381,63 +396,63 @@ contains
          call fs%get_viscosity(vf=vf,strat=harmonic_visc)
          
          ! Perform sub-iterations
-         do while (time%it.le.time%itmax)
+         ! do while (time%it.le.time%itmax)
             
-            ! Build mid-time velocity
-            fs%U=0.5_WP*(fs%U+fs%Uold)
-            fs%V=0.5_WP*(fs%V+fs%Vold)
-            fs%W=0.5_WP*(fs%W+fs%Wold)
+         !    ! Build mid-time velocity
+         !    fs%U=0.5_WP*(fs%U+fs%Uold)
+         !    fs%V=0.5_WP*(fs%V+fs%Vold)
+         !    fs%W=0.5_WP*(fs%W+fs%Wold)
             
-            ! Preliminary mass and momentum transport step at the interface
-            call fs%prepare_advection_upwind(dt=time%dt)
+         !    ! Preliminary mass and momentum transport step at the interface
+         !    call fs%prepare_advection_upwind(dt=time%dt)
             
-            ! Explicit calculation of drho*u/dt from NS
-            call fs%get_dmomdt(resU,resV,resW)
+         !    ! Explicit calculation of drho*u/dt from NS
+         !    call fs%get_dmomdt(resU,resV,resW)
             
-            ! Add momentum source terms
-            call fs%addsrc_gravity(resU,resV,resW)
+         !    ! Add momentum source terms
+         !    call fs%addsrc_gravity(resU,resV,resW)
             
-            ! Assemble explicit residual
-            resU=-2.0_WP*fs%rho_U*fs%U+(fs%rho_Uold+fs%rho_U)*fs%Uold+time%dt*resU
-            resV=-2.0_WP*fs%rho_V*fs%V+(fs%rho_Vold+fs%rho_V)*fs%Vold+time%dt*resV
-            resW=-2.0_WP*fs%rho_W*fs%W+(fs%rho_Wold+fs%rho_W)*fs%Wold+time%dt*resW
+         !    ! Assemble explicit residual
+         !    resU=-2.0_WP*fs%rho_U*fs%U+(fs%rho_Uold+fs%rho_U)*fs%Uold+time%dt*resU
+         !    resV=-2.0_WP*fs%rho_V*fs%V+(fs%rho_Vold+fs%rho_V)*fs%Vold+time%dt*resV
+         !    resW=-2.0_WP*fs%rho_W*fs%W+(fs%rho_Wold+fs%rho_W)*fs%Wold+time%dt*resW
             
-            ! Form implicit residuals
-            !call fs%solve_implicit(time%dt,resU,resV,resW)
+         !    ! Form implicit residuals
+         !    !call fs%solve_implicit(time%dt,resU,resV,resW)
             
-            ! Apply these residuals
-            fs%U=2.0_WP*fs%U-fs%Uold+resU/fs%rho_U
-            fs%V=2.0_WP*fs%V-fs%Vold+resV/fs%rho_V
-            fs%W=2.0_WP*fs%W-fs%Wold+resW/fs%rho_W
+         !    ! Apply these residuals
+         !    fs%U=2.0_WP*fs%U-fs%Uold+resU/fs%rho_U
+         !    fs%V=2.0_WP*fs%V-fs%Vold+resV/fs%rho_V
+         !    fs%W=2.0_WP*fs%W-fs%Wold+resW/fs%rho_W
             
-            ! Apply other boundary conditions
-            call fs%apply_bcond(time%t,time%dt)
+         !    ! Apply other boundary conditions
+         !    call fs%apply_bcond(time%t,time%dt)
             
-            ! Solve Poisson equation
-            call fs%update_laplacian()
-            call fs%correct_mfr()
-            call fs%get_div()
-            call fs%add_surface_tension_jump(dt=time%dt,div=fs%div,vf=vf,contact_model=static_contact)
-            fs%psolv%rhs=-fs%cfg%vol*fs%div/time%dt
-            fs%psolv%sol=0.0_WP
-            call fs%psolv%solve()
-            call fs%shift_p(fs%psolv%sol)
+         !    ! Solve Poisson equation
+         !    call fs%update_laplacian()
+         !    call fs%correct_mfr()
+         !    call fs%get_div()
+         !    call fs%add_surface_tension_jump(dt=time%dt,div=fs%div,vf=vf,contact_model=static_contact)
+         !    fs%psolv%rhs=-fs%cfg%vol*fs%div/time%dt
+         !    fs%psolv%sol=0.0_WP
+         !    call fs%psolv%solve()
+         !    call fs%shift_p(fs%psolv%sol)
             
-            ! Correct velocity
-            call fs%get_pgrad(fs%psolv%sol,resU,resV,resW)
-            fs%P=fs%P+fs%psolv%sol
-            fs%U=fs%U-time%dt*resU/fs%rho_U
-            fs%V=fs%V-time%dt*resV/fs%rho_V
-            fs%W=fs%W-time%dt*resW/fs%rho_W
+         !    ! Correct velocity
+         !    call fs%get_pgrad(fs%psolv%sol,resU,resV,resW)
+         !    fs%P=fs%P+fs%psolv%sol
+         !    fs%U=fs%U-time%dt*resU/fs%rho_U
+         !    fs%V=fs%V-time%dt*resV/fs%rho_V
+         !    fs%W=fs%W-time%dt*resW/fs%rho_W
             
-            ! Increment sub-iteration counter
-            time%it=time%it+1
+         !    ! Increment sub-iteration counter
+         !    time%it=time%it+1
             
-         end do
+         ! end do
          
          ! Recompute interpolated velocity and divergence
-         call fs%interp_vel(Ui,Vi,Wi)
-         call fs%get_div()
+         ! call fs%interp_vel(Ui,Vi,Wi)
+         ! call fs%get_div()
          
          ! Output to ensight
          if (ens_evt%occurs()) then
@@ -446,8 +461,8 @@ contains
          end if
          
          ! Perform and output monitoring
-         call fs%get_max()
-         call vf%get_max()
+         ! call fs%get_max()
+         ! call vf%get_max()
          call sc%get_max(VF=vf%VF)
          call mfile%write()
          call cflfile%write()
