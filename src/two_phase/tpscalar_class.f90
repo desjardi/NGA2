@@ -66,6 +66,9 @@ module tpscalar_class
       ! Implicit scalar solver
       class(linsol), pointer :: implicit                  !< Iterative linear solver object for an implicit prediction of the scalar residual
       integer, dimension(:,:,:), allocatable :: stmap     !< Inverse map from stencil shift to index location
+
+      ! Implicit solver for the evaporation source term
+      class(linsol), pointer :: mdot_solver               !< Iterative linear solver object for distributing the mass source away from the interface
       
       ! Metrics
       real(WP), dimension(:,:,:,:), allocatable :: div_x ,div_y ,div_z   !< Divergence for SC
@@ -91,6 +94,7 @@ module tpscalar_class
       ! procedure :: get_dSCdt_diff                         !< Calculate drhoSC/dt from diffusive fluxes
       procedure :: get_max                                !< Calculate maximum and integral field values
       procedure :: solve_implicit                         !< Solve for the scalar residuals implicitly
+      procedure :: redist_mdot                            !< Re-distribute the evaporation mass source term
    end type tpscalar
    
    
@@ -295,11 +299,12 @@ contains
    
    
    !> Finish setting up the scalar solver now that bconds have been defined
-   subroutine setup(this,implicit_solver)
+   subroutine setup(this,implicit_solver,mdot_solver)
       use messager, only: die
       implicit none
       class(tpscalar), intent(inout) :: this
       class(linsol), target, intent(in), optional :: implicit_solver
+      class(linsol), target, intent(in), optional :: mdot_solver
       integer :: count
       
       ! Adjust metrics based on mask array
@@ -328,6 +333,29 @@ contains
          
          ! Initialize the implicit scalar solver
          call this%implicit%init()
+         
+      end if
+
+      ! Prepare implicit distribution solver if it had been provided
+      if (present(mdot_solver)) then
+         
+         ! Point to implicit solver linsol object
+         this%mdot_solver=>mdot_solver
+         
+         ! Check implicit solver size
+         if (this%mdot_solver%nst.ne.7) call die('[tpscalar setup] Implicit distribution solver needs nst=7')
+         
+         ! Set dynamic stencil map
+         count=      1; this%mdot_solver%stc(count,:)=[ 0, 0, 0]
+         count=count+1; this%mdot_solver%stc(count,:)=[+1, 0, 0]
+         count=count+1; this%mdot_solver%stc(count,:)=[-1, 0, 0]
+         count=count+1; this%mdot_solver%stc(count,:)=[ 0,+1, 0]
+         count=count+1; this%mdot_solver%stc(count,:)=[ 0,-1, 0]
+         count=count+1; this%mdot_solver%stc(count,:)=[ 0, 0,+1]
+         count=count+1; this%mdot_solver%stc(count,:)=[ 0, 0,-1]
+         
+         ! Initialize the implicit scalar solver
+         call this%mdot_solver%init()
          
       end if
       
@@ -721,7 +749,7 @@ contains
          do k=this%cfg%kmin_,this%cfg%kmax_
             do j=this%cfg%jmin_,this%cfg%jmax_
                do i=this%cfg%imin_,this%cfg%imax_
-                  if (this%PVF(i,j,k,this%phase(nsc)).gt.0) then
+                  if (this%PVF(i,j,k,this%phase(nsc)).gt.0.0_WP) then
                      this%implicit%opr(1,i,j,k)=this%implicit%opr(1,i,j,k)-dt/this%PVF(i,j,k,this%phase(nsc))*(this%div_x(+1,i,j,k)*sum(this%itp_x(:,i+1,j,k)*this%diff(i  :i+1,j,k,nsc))*this%grd_x(-1,i+1,j,k) *sum(this%itp_x(:,i+1,j,k)*this%PVF(i  :i+1,j,k,this%phase(nsc)))*merge(1.0_WP,0.0_WP,this%PVF(i+1,j,k,this%phase(nsc))>0.0_WP)+&
                      &                                                                                         this%div_x( 0,i,j,k)*sum(this%itp_x(:,i  ,j,k)*this%diff(i-1:i  ,j,k,nsc))*this%grd_x( 0,i  ,j,k) *sum(this%itp_x(:,i  ,j,k)*this%PVF(i-1:i  ,j,k,this%phase(nsc)))*merge(1.0_WP,0.0_WP,this%PVF(i-1,j,k,this%phase(nsc))>0.0_WP)+&
                      &                                                                                         this%div_y(+1,i,j,k)*sum(this%itp_y(:,i,j+1,k)*this%diff(i,j  :j+1,k,nsc))*this%grd_y(-1,i,j+1,k) *sum(this%itp_y(:,i,j+1,k)*this%PVF(i,j  :j+1,k,this%phase(nsc)))*merge(1.0_WP,0.0_WP,this%PVF(i,j+1,k,this%phase(nsc))>0.0_WP)+&
@@ -752,6 +780,48 @@ contains
       end do
       
    end subroutine solve_implicit
+
+
+   !> Distribute the evaporation source term away from the interface
+   subroutine redist_mdot(this,mdot,mdot_new)
+      implicit none
+      class(tpscalar), intent(inout) :: this
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in)  :: mdot     !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(out) :: mdot_new !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      integer :: i,j,k
+   
+      ! Prepare advective operator
+      this%mdot_solver%opr(:,:,:,:)=0.0_WP
+      do k=this%cfg%kmin_,this%cfg%kmax_
+         do j=this%cfg%jmin_,this%cfg%jmax_
+            do i=this%cfg%imin_,this%cfg%imax_
+               this%mdot_solver%opr(1,i,j,k)=this%mdot_solver%opr(1,i,j,k)+this%div_x(+1,i,j,k)*sum(this%grd_x(:,i+1,j,k)*this%PVF(i:i+1,j,k,Lphase))*this%itp_x(-1,i+1,j,k)+&
+               &                                                           this%div_x( 0,i,j,k)*sum(this%grd_x(:,i  ,j,k)*this%PVF(i-1:i,j,k,Lphase))*this%itp_x( 0,i  ,j,k)+&
+               &                                                           this%div_y(+1,i,j,k)*sum(this%grd_y(:,i,j+1,k)*this%PVF(i,j:j+1,k,Lphase))*this%itp_y(-1,i,j+1,k)+&
+               &                                                           this%div_y( 0,i,j,k)*sum(this%grd_y(:,i,j  ,k)*this%PVF(i,j-1:j,k,Lphase))*this%itp_y( 0,i,j  ,k)+&
+               &                                                           this%div_z(+1,i,j,k)*sum(this%grd_z(:,i,j,k+1)*this%PVF(i,j,k:k+1,Lphase))*this%itp_z(-1,i,j,k+1)+&
+               &                                                           this%div_z( 0,i,j,k)*sum(this%grd_z(:,i,j,k  )*this%PVF(i,j,k-1:k,Lphase))*this%itp_z( 0,i,j,k  )
+               this%mdot_solver%opr(2,i,j,k)=this%mdot_solver%opr(2,i,j,k)+this%div_x(+1,i,j,k)*sum(this%grd_x(:,i+1,j,k)*this%PVF(i:i+1,j,k,Lphase))*this%itp_x( 0,i+1,j,k)
+               this%mdot_solver%opr(3,i,j,k)=this%mdot_solver%opr(3,i,j,k)+this%div_x( 0,i,j,k)*sum(this%grd_x(:,i  ,j,k)*this%PVF(i-1:i,j,k,Lphase))*this%itp_x(-1,i  ,j,k)
+               this%mdot_solver%opr(4,i,j,k)=this%mdot_solver%opr(4,i,j,k)+this%div_y(+1,i,j,k)*sum(this%grd_y(:,i,j+1,k)*this%PVF(i,j:j+1,k,Lphase))*this%itp_x( 0,i,j+1,k)
+               this%mdot_solver%opr(5,i,j,k)=this%mdot_solver%opr(5,i,j,k)+this%div_y( 0,i,j,k)*sum(this%grd_y(:,i,j  ,k)*this%PVF(i,j-1:j,k,Lphase))*this%itp_x(-1,i,j  ,k)
+               this%mdot_solver%opr(6,i,j,k)=this%mdot_solver%opr(6,i,j,k)+this%div_z(+1,i,j,k)*sum(this%grd_z(:,i,j,k+1)*this%PVF(i,j,k:k+1,Lphase))*this%itp_x( 0,i,j,k+1)
+               this%mdot_solver%opr(7,i,j,k)=this%mdot_solver%opr(7,i,j,k)+this%div_z( 0,i,j,k)*sum(this%grd_z(:,i,j,k  )*this%PVF(i,j,k-1:k,Lphase))*this%itp_x(-1,i,j,k  )
+            end do
+         end do
+      end do
+      
+      ! Solve the linear system
+      call this%mdot_solver%setup()
+      this%mdot_solver%rhs=0.0_WP
+      this%mdot_solver%sol=mdot
+      call this%mdot_solver%solve()
+      mdot_new=this%mdot_solver%sol
+      
+      ! Sync it
+      call this%cfg%sync(mdot_new)
+      
+   end subroutine redist_mdot
    
    
    !> Print out info for tpscalar solver

@@ -19,6 +19,8 @@ module simulation
    type(hypre_str),   public :: ps
    !type(ddadi),       public :: vs
    type(ddadi),       public :: ss
+   ! type(hypre_str),   public :: ms
+   type(ddadi),   public :: ms
    type(tpns),        public :: fs
    type(vfs),         public :: vf
    type(tpscalar),    public :: sc
@@ -36,8 +38,9 @@ module simulation
    
    !> Private work arrays
    real(WP), dimension(:,:,:,:), allocatable :: resSC
-   real(WP), dimension(:,:,:), allocatable :: resU,resV,resW
-   real(WP), dimension(:,:,:), allocatable :: Ui,Vi,Wi
+   real(WP), dimension(:,:,:),   allocatable :: mdot,mdot_new
+   real(WP), dimension(:,:,:),   allocatable :: resU,resV,resW
+   real(WP), dimension(:,:,:),   allocatable :: Ui,Vi,Wi
    
    !> Problem definition
    real(WP), dimension(3) :: center
@@ -68,13 +71,15 @@ contains
       
       ! Allocate work arrays
       allocate_work_arrays: block
-         allocate(resSC(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_,1:2))
-         allocate(resU (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
-         allocate(resV (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
-         allocate(resW (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
-         allocate(Ui   (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
-         allocate(Vi   (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
-         allocate(Wi   (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+         allocate(resSC   (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_,1:2))
+         allocate(mdot    (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+         allocate(mdot_new(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+         allocate(resU    (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+         allocate(resV    (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+         allocate(resW    (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+         allocate(Ui      (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+         allocate(Vi      (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+         allocate(Wi      (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
       end block allocate_work_arrays
       
       
@@ -189,50 +194,64 @@ contains
       
       ! Create a one-sided scalar solver
       create_scalar: block
-        use param, only: param_read
-        use tpscalar_class, only: Lphase,Gphase
-        integer :: i,j,k
-        real(WP) :: Ldiff,Gdiff
-        ! Create scalar solver
-        call sc%initialize(cfg=cfg,nscalar=2,name='tpscalar_test')
-        ! Initialize the phase specific VOF
-        sc%PVF(:,:,:,Lphase)=vf%VF
-        sc%PVF(:,:,:,Gphase)=1.0_WP-vf%VF
-        ! Make it liquid and give it a name
-        sc%SCname=[  'Zl',  'Zg']; iZl=1; iZg=2
-        sc%phase =[Lphase,Gphase]
-        ! Read diffusivity
-        call param_read('Liquid diffusivity',Ldiff)
-        sc%diff(:,:,:,iZl)=Ldiff
-        call param_read('Gas diffusivity',Gdiff)
-        sc%diff(:,:,:,iZg)=Gdiff
-        ! Configure implicit scalar solver
-        ss=ddadi(cfg=cfg,name='Scalar',nst=7)
-        ! Setup the solver
-        call sc%setup(implicit_solver=ss)
-        ! Initialize scalar fields
-        do k=cfg%kmino_,cfg%kmaxo_
-           do j=cfg%jmino_,cfg%jmaxo_
-              do i=cfg%imino_,cfg%imaxo_
-                 ! Liquid scalar
-                 if (vf%VF(i,j,k).gt.0.0_WP) then
-                    ! We are in the liquid
-                    if (cfg%ym(j).gt.depth+cfg%dy(j)) then
-                       ! We are above the pool
-                       sc%SC(i,j,k,iZl)=1.0_WP
-                    else
-                       ! We are in the pool
-                       sc%SC(i,j,k,iZl)=2.0_WP
-                    end if
-                 end if
-                 ! Gas scalar
-                 if (vf%VF(i,j,k).lt.1.0_WP) then
-                    ! We are in the gas
-                    sc%SC(i,j,k,iZg)=(cfg%ym(j)-depth)/(cfg%yL-depth)
-                 end if
-              end do
-           end do
-        end do
+         use param, only: param_read
+         use tpscalar_class, only: Lphase,Gphase
+         use hypre_str_class, only: pcg_pfmg2,pfmg,gmres_pfmg
+         integer :: i,j,k
+         real(WP) :: Ldiff,Gdiff
+         ! Create scalar solver
+         call sc%initialize(cfg=cfg,nscalar=2,name='tpscalar_test')
+         ! Initialize the phase specific VOF
+         sc%PVF(:,:,:,Lphase)=vf%VF
+         sc%PVF(:,:,:,Gphase)=1.0_WP-vf%VF
+         ! Make it liquid and give it a name
+         sc%SCname=[  'Zl',  'Zg']; iZl=1; iZg=2
+         sc%phase =[Lphase,Gphase]
+         ! Read diffusivity
+         call param_read('Liquid diffusivity',Ldiff)
+         sc%diff(:,:,:,iZl)=Ldiff
+         call param_read('Gas diffusivity',Gdiff)
+         sc%diff(:,:,:,iZg)=Gdiff
+         ! Configure implicit scalar solver
+         ss=ddadi(cfg=cfg,name='Scalar',nst=7)
+         ! Configure implicit scalar solver
+         ms=ddadi(cfg=cfg,name='mdot',nst=7)
+         ! ms=hypre_str(cfg=cfg,name='mdot',method=gmres_pfmg,nst=7)
+         ! ms%maxlevel=10
+         ! ms%maxit=50
+         ! ms%rcvg=1e-6
+         ! Setup the solver
+         call sc%setup(implicit_solver=ss,mdot_solver=ms)
+         ! Initialize scalar fields
+         do k=cfg%kmino_,cfg%kmaxo_
+            do j=cfg%jmino_,cfg%jmaxo_
+               do i=cfg%imino_,cfg%imaxo_
+                  ! Liquid scalar
+                  if (vf%VF(i,j,k).gt.0.0_WP) then
+                     ! We are in the liquid
+                     if (cfg%ym(j).gt.depth+cfg%dy(j)) then
+                        ! We are above the pool
+                        sc%SC(i,j,k,iZl)=1.0_WP
+                     else
+                        ! We are in the pool
+                        sc%SC(i,j,k,iZl)=2.0_WP
+                     end if
+                  end if
+                  ! Gas scalar
+                  if (vf%VF(i,j,k).lt.1.0_WP) then
+                     ! We are in the gas
+                     sc%SC(i,j,k,iZg)=(cfg%ym(j)-depth)/(cfg%yL-depth)
+                  end if
+               end do
+            end do
+         end do
+         ! Initialize the mass source term
+         where ((vf%VF.gt.0.0_WP).and.(vf%VF.lt.1.0_WP))
+            mdot=1.0_WP
+         else where
+            mdot=0.0_WP
+         end where
+         mdot_new=mdot
       end block create_scalar
       
       
@@ -260,6 +279,8 @@ contains
          do nsc=1,sc%nscalar
            call ens_out%add_scalar(trim(sc%SCname(nsc)),sc%SC(:,:,:,nsc))
          end do
+         call ens_out%add_scalar('mdot',mdot)
+         call ens_out%add_scalar('mdot_new',mdot_new)
          ! Output to ensight
          if (ens_evt%occurs()) call ens_out%write_data(time%t)
       end block create_ensight
@@ -370,7 +391,16 @@ contains
             call sc%solve_implicit(time%dt,sc%SC)
             ! Apply boundary conditions
             call sc%apply_bcond(time%t,time%dt)
-         end block advance_scalar
+            ! Update the mass source term
+            where ((vf%VF.gt.0.0_WP).and.(vf%VF.lt.1.0_WP))
+               mdot=1.0_WP
+            else where
+               mdot=0.0_WP
+            end where
+            mdot_new=mdot
+            ! Re-distribute the evaporation mass source term
+            call sc%redist_mdot(mdot,mdot_new)
+            end block advance_scalar
          
          ! Prepare new staggered viscosity (at n+1)
          call fs%get_viscosity(vf=vf,strat=harmonic_visc)
@@ -464,7 +494,7 @@ contains
       ! timetracker
       
       ! Deallocate work arrays
-      deallocate(resU,resV,resW,Ui,Vi,Wi,resSC)
+      deallocate(resU,resV,resW,Ui,Vi,Wi,resSC,mdot,mdot_new)
       
    end subroutine simulation_final
    
