@@ -363,13 +363,8 @@ contains
             call sc%get_dSCdt(dSCdt=resSC,U=fs%U,V=fs%V,W=fs%W,VFold=vf%VFold,VF=vf%VF,detailed_face_flux=vf%detailed_face_flux,dt=time%dt)
             ! Advance advection
             do nsc=1,sc%nscalar
-               where (sc%PVF(:,:,:,sc%phase(nsc)).gt.0.0_WP)
-                  where (sc%mask.eq.0)
-                     sc%SC(:,:,:,nsc)=(sc%PVFold(:,:,:,sc%phase(nsc))*sc%SCold(:,:,:,nsc)+time%dt*resSC(:,:,:,nsc))/sc%PVF(:,:,:,sc%phase(nsc))
-                  end where
-               else where
-                  sc%SC(:,:,:,nsc)=0.0_WP
-               end where
+               where (sc%mask.eq.0.and.sc%PVF(:,:,:,sc%phase(nsc)).gt.0.0_WP) sc%SC(:,:,:,nsc)=((sc%PVFold(:,:,:,sc%phase(nsc)))*sc%SCold(:,:,:,nsc)+time%dt*resSC(:,:,:,nsc))/(sc%PVF(:,:,:,sc%phase(nsc)))
+               where (sc%PVF(:,:,:,sc%phase(nsc)).eq.0.0_WP) sc%SC(:,:,:,nsc)=0.0_WP
             end do
             ! Advance diffusion
             call sc%solve_implicit(time%dt,sc%SC)

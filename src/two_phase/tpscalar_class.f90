@@ -508,7 +508,7 @@ contains
             end do
          end do
          call this%cfg%sync(grad)
-         ! Advective flux of SC
+         ! Convective flux of SC
          do k=this%cfg%kmin_,this%cfg%kmax_+1
             do j=this%cfg%jmin_,this%cfg%jmax_+1
                do i=this%cfg%imin_,this%cfg%imax_+1
