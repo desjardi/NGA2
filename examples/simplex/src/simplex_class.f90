@@ -314,7 +314,7 @@ contains
             call this%df%pull(name='U',var=this%fs%U)
             call this%df%pull(name='V',var=this%fs%V)
             call this%df%pull(name='W',var=this%fs%W)
-            !call this%df%pullvar(name='P',var=this%fs%P)  !< Reset pressure upon restart because I've noticed IB is causing drift...
+            !call this%df%pull(name='P',var=this%fs%P)  !< Reset pressure upon restart because I've noticed IB is causing drift...
             ! Apply boundary conditions
             call this%fs%apply_bcond(this%time%t,this%time%dt)
          end if

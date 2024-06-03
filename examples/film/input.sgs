@@ -1,0 +1,21 @@
+# Parallelization
+Partition :	8 1 1
+
+# Mesh definition
+Lx :	300
+Ly :	30
+Lz :	300
+nx :	30
+ny :	3
+nz :	30
+
+# Initial holes
+Number of holes : 1
+Size of holes :   20
+
+# Time integration
+Max timestep size : 5e-3
+Max time :          10
+
+# Ensight output
+Ensight output period : 1e-1
