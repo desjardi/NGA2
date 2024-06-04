@@ -6,6 +6,8 @@ module simplex_class
    use polygon_class,     only: polygon
    use ensight_class,     only: ensight
    use fft2d_class,       only: fft2d
+   !use hypre_str_class,   only: hypre_str
+   !use hypre_uns_class,   only: hypre_uns
    use incomp_class,      only: incomp
    use sgsmodel_class,    only: sgsmodel
    use timetracker_class, only: timetracker
@@ -35,6 +37,8 @@ module simplex_class
       !> Flow solver
       type(incomp)      :: fs    !< Incompressible flow solver
       type(fft2d)       :: ps    !< FFT-accelerated linear solver for pressure
+      !type(hypre_str)   :: ps    !< HYPRE linear solver for pressure
+      !type(hypre_uns)   :: ps    !< HYPRE linear solver for pressure
       type(sgsmodel)    :: sgs   !< SGS model for eddy viscosity
       type(timetracker) :: time  !< Time info
       
@@ -51,9 +55,6 @@ module simplex_class
       real(WP), dimension(:,:,:), allocatable :: resU,resV,resW      !< Residuals
       real(WP), dimension(:,:,:), allocatable :: Ui,Vi,Wi            !< Cell-centered velocities
       
-      !> IB velocity and mass source
-      real(WP), dimension(:,:,:), allocatable :: Uib,Vib,Wib,srcM
-      
       !> Fluid definition
       real(WP) :: visc
       
@@ -63,6 +64,13 @@ module simplex_class
       procedure :: final                           !< Finalize simplex simulation
    end type simplex
    
+   !> Inlet pipes geometry
+   real(WP), parameter :: Rpipe=0.000185_WP
+   real(WP), dimension(3), parameter :: p1=[-0.00442_WP,0.0_WP,+0.001245_WP]
+   real(WP), dimension(3), parameter :: p2=[-0.00442_WP,0.0_WP,-0.001245_WP]
+   real(WP), dimension(3), parameter :: n1=[+0.79864_WP,+0.601815_WP,0.0_WP]
+   real(WP), dimension(3), parameter :: n2=[+0.79864_WP,-0.601815_WP,0.0_WP]
+   real(WP) :: mfr,Apipe
    
 contains
    
@@ -116,6 +124,8 @@ contains
       create_simplex: block
          use ibconfig_class, only: sharp
          integer :: i,j,k
+         real(WP), dimension(3) :: v,p
+         real(WP) :: r
          ! Create polygon
          call this%poly%initialize(nvert=10,name='simplex')
          this%poly%vert(:, 1)=[-0.01000_WP,0.00000_WP]
@@ -141,7 +151,50 @@ contains
          call this%cfg%calculate_normal()
          ! Get VF field
          call this%cfg%calculate_vf(method=sharp,allow_zero_vf=.false.)
+         ! Carve out stair-stepped inlet pipes
+         do k=this%cfg%kmino_,this%cfg%kmaxo_
+            do j=this%cfg%jmino_,this%cfg%jmaxo_
+               do i=this%cfg%imino_,this%cfg%imaxo_
+                  ! Inlet pipe 1
+                  v=[this%cfg%xm(i),this%cfg%ym(j),this%cfg%zm(k)]-p1
+                  p=v-n1*dot_product(v,n1)
+                  r=sqrt(dot_product(p,p))/Rpipe
+                  if (v(1).le.this%cfg%min_meshsize.and.r.le.1.0_WP) this%cfg%VF(i,j,k)=1.0_WP
+                  ! Inlet pipe 2
+                  v=[this%cfg%xm(i),this%cfg%ym(j),this%cfg%zm(k)]-p2
+                  p=v-n2*dot_product(v,n2)
+                  r=sqrt(dot_product(p,p))/Rpipe
+                  if (v(1).le.this%cfg%min_meshsize.and.r.le.1.0_WP) this%cfg%VF(i,j,k)=1.0_WP
+               end do
+            end do
+         end do
+         ! Apply Neumann on VF at entrance
+         if (this%cfg%iproc.eq.1) this%cfg%VF(this%cfg%imino:this%cfg%imin-1,:,:)=this%cfg%VF(this%cfg%imino:this%cfg%imin,:,:)
+         ! Recompute domain volume
+         call this%cfg%calc_fluid_vol()
       end block create_simplex
+      
+      
+      ! Initialize flow rate
+      set_flow_rate: block
+         use mpi_f08,  only: MPI_ALLREDUCE,MPI_SUM,MPI_IN_PLACE
+         use parallel, only: MPI_REAL_WP
+         integer :: j,k,ierr
+         ! Read mass flow rate
+         call this%input%read('Mass flow rate',mfr)
+         ! Integrate inlet pipe surface area
+         Apipe=0.0_WP
+         if (this%cfg%iproc.eq.1) then
+            do k=this%cfg%kmin_,this%cfg%kmax_
+               do j=this%cfg%jmin_,this%cfg%jmax_
+                  if (sqrt(this%cfg%ym(j)**2+this%cfg%zm(k)**2).lt.0.002_WP) then
+                     Apipe=Apipe+this%cfg%VF(this%cfg%imin-1,j,k)*this%cfg%dy(j)*this%cfg%dz(k)
+                  end if
+               end do
+            end do
+         end if
+         call MPI_ALLREDUCE(MPI_IN_PLACE,Apipe,this%cfg%nproc,MPI_REAL_WP,MPI_SUM,this%cfg%comm,ierr)
+      end block set_flow_rate
       
       
       ! Initialize time tracker with 2 subiterations
@@ -204,109 +257,39 @@ contains
          allocate(this%Ui  (this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
          allocate(this%Vi  (this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
          allocate(this%Wi  (this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
-         allocate(this%Uib (this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
-         allocate(this%Vib (this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
-         allocate(this%Wib (this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
-         allocate(this%srcM(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
       end block allocate_work_arrays
       
       
       ! Create an incompressible flow solver with bconds
       create_flow_solver: block
-         use incomp_class, only: clipped_neumann
+         use incomp_class,    only: clipped_neumann,dirichlet
+         !use hypre_str_class, only: pcg_pfmg2
+         !use hypre_uns_class, only: pcg_amg
          ! Create flow solver
          this%fs=incomp(cfg=this%cfg,name='Incompressible NS')
          ! Set the flow properties
          call this%input%read('Density',this%fs%rho)
          call this%input%read('Dynamic viscosity',this%visc); this%fs%visc=this%visc
+         ! Inlets on the left
+         call this%fs%add_bcond(name='inlets',type=dirichlet,face='x',dir=-1,canCorrect=.false.,locator=pipe_inlets)
          ! Outflow on the right
          call this%fs%add_bcond(name='outflow',type=clipped_neumann,face='x',dir=+1,canCorrect=.true.,locator=right_boundary)
          ! Configure pressure solver
          this%ps=fft2d(cfg=this%cfg,name='Pressure',nst=7)
+         !this%ps=hypre_str(cfg=this%cfg,name='Pressure',method=pcg_pfmg2,nst=7)
+         !this%ps=hypre_uns(cfg=this%cfg,name='Pressure',method=pcg_amg,nst=7)
+         call this%input%read('Pressure iteration',this%ps%maxit)
+         call this%input%read('Pressure tolerance',this%ps%rcvg)
          ! Setup the solver
          call this%fs%setup(pressure_solver=this%ps)
       end block create_flow_solver
       
       
-      ! Initialize our IB velocity field - our Dirichlet boundary conditions
-      set_ib_velocity: block
-         use mathtools, only: Pi
-         integer  :: i,j,k
-         real(WP) :: R,mfr,theta,rx,ry,rz,Uin
-         real(WP), dimension(3) :: v1,v2,n1,n2
-         real(WP), dimension(3) :: xf,yf,zf
-         real(WP), dimension(3) :: xp,yp,zp
-         ! Zero initial field
-         this%Uib=0.0_WP; this%Vib=0.0_WP; this%Wib=0.0_WP
-         ! Define geometry of inlet pipes
-         R=0.000185_WP
-         theta=Pi/180.0_WP*53.0_WP
-         v1=[-0.00442_WP,0.0_WP,+0.001245_WP]; n1=[sin(theta),+cos(theta),0.0_WP]
-         v2=[-0.00442_WP,0.0_WP,-0.001245_WP]; n2=[sin(theta),-cos(theta),0.0_WP]
-         ! Read in mass flow rate
-         call this%input%read('Mass flow rate',mfr)
-         Uin=0.5_WP*mfr/(this%fs%rho*Pi*R**2)
-         ! Apply boundary conditions within the IBs
-         do k=this%cfg%kmino_,this%cfg%kmaxo_
-            do j=this%cfg%jmino_,this%cfg%jmaxo_
-               do i=this%cfg%imino_,this%cfg%imaxo_
-                  ! Inlet pipe 1
-                  ! Staggered positions
-                  xf=[this%cfg%x(i) ,this%cfg%ym(j),this%cfg%zm(k)]-v1
-                  yf=[this%cfg%xm(i),this%cfg%y(j) ,this%cfg%zm(k)]-v1
-                  zf=[this%cfg%xm(i),this%cfg%ym(j),this%cfg%z(k) ]-v1
-                  ! Project onto pipe axis
-                  xp=xf-n1*dot_product(xf,n1)
-                  yp=yf-n1*dot_product(yf,n1)
-                  zp=zf-n1*dot_product(zf,n1)
-                  ! Measure radial position in pipe 1
-                  rx=sqrt(dot_product(xp,xp))/R
-                  ry=sqrt(dot_product(yp,yp))/R
-                  rz=sqrt(dot_product(zp,zp))/R
-                  ! Apply Poiseuille profile
-                  if (xf(1).le.0.0_WP) then
-                     if (rx.le.1.0_WP) this%Uib(i,j,k)=Uin*n1(1)*2.0_WP*(1.0_WP-rx**2)
-                     if (ry.le.1.0_WP) this%Vib(i,j,k)=Uin*n1(2)*2.0_WP*(1.0_WP-ry**2)
-                     if (rz.le.1.0_WP) this%Wib(i,j,k)=Uin*n1(3)*2.0_WP*(1.0_WP-rz**2)
-                  end if
-                  ! Inlet pipe 2
-                  ! Staggered positions
-                  xf=[this%cfg%x(i) ,this%cfg%ym(j),this%cfg%zm(k)]-v2
-                  yf=[this%cfg%xm(i),this%cfg%y(j) ,this%cfg%zm(k)]-v2
-                  zf=[this%cfg%xm(i),this%cfg%ym(j),this%cfg%z(k) ]-v2
-                  ! Project onto pipe axis
-                  xp=xf-n2*dot_product(xf,n2)
-                  yp=yf-n2*dot_product(yf,n2)
-                  zp=zf-n2*dot_product(zf,n2)
-                  ! Measure radial position in pipe 2
-                  rx=sqrt(dot_product(xp,xp))/R
-                  ry=sqrt(dot_product(yp,yp))/R
-                  rz=sqrt(dot_product(zp,zp))/R
-                  ! Apply Poiseuille profile
-                  if (xf(1).le.0.0_WP) then
-                     if (rx.le.1.0_WP) this%Uib(i,j,k)=Uin*n2(1)*2.0_WP*(1.0_WP-rx**2)
-                     if (ry.le.1.0_WP) this%Vib(i,j,k)=Uin*n2(2)*2.0_WP*(1.0_WP-ry**2)
-                     if (rz.le.1.0_WP) this%Wib(i,j,k)=Uin*n2(3)*2.0_WP*(1.0_WP-rz**2)
-                  end if
-               end do
-            end do
-         end do
-         ! Compute IB mass source
-		   do k=this%fs%cfg%kmin_,this%fs%cfg%kmax_
-				do j=this%fs%cfg%jmin_,this%fs%cfg%jmax_
-					do i=this%fs%cfg%imin_,this%fs%cfg%imax_
-						this%srcM(i,j,k)=this%fs%rho*(1.0_WP-this%cfg%VF(i,j,k))*(sum(this%fs%divp_x(:,i,j,k)*this%Uib(i:i+1,j,k))+&
-						&                                                         sum(this%fs%divp_y(:,i,j,k)*this%Vib(i,j:j+1,k))+&
-						&                                                         sum(this%fs%divp_z(:,i,j,k)*this%Wib(i,j,k:k+1)))
-					end do
-				end do
-			end do
-			call this%cfg%sync(this%srcM)
-      end block set_ib_velocity
-      
-      
       ! Initialize our velocity field
       initialize_velocity: block
+         use incomp_class, only: bcond
+         type(bcond), pointer :: mybc
+         integer :: i,j,k,n
          ! Zero velocity except if restarting
          this%fs%U=0.0_WP; this%fs%V=0.0_WP; this%fs%W=0.0_WP
          if (this%restarted) then
@@ -314,20 +297,27 @@ contains
             call this%df%pull(name='U',var=this%fs%U)
             call this%df%pull(name='V',var=this%fs%V)
             call this%df%pull(name='W',var=this%fs%W)
-            !call this%df%pull(name='P',var=this%fs%P)  !< Reset pressure upon restart because I've noticed IB is causing drift...
+            call this%df%pull(name='P',var=this%fs%P)
             ! Apply boundary conditions
             call this%fs%apply_bcond(this%time%t,this%time%dt)
          end if
+         ! Apply Dirichlet condition at pipe inlets
+         call this%fs%get_bcond('inlets',mybc)
+         do n=1,mybc%itr%no_
+            i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
+            this%fs%U(i,j,k)=sum(this%fs%itpr_x(:,i,j,k)*this%cfg%VF(i-1:i,j,k))*mfr/(this%fs%rho*Apipe)
+         end do
+         ! Apply all other boundary conditions
+         call this%fs%apply_bcond(this%time%t,this%time%dt)
          ! Adjust MFR for global mass balance
-         call this%fs%correct_mfr(src=this%srcM)
+         call this%fs%correct_mfr()
          ! Compute divergence
-         this%resU=this%srcM/this%fs%rho      !< Careful, we need to provide
-         call this%fs%get_div(src=this%resU)  !< a volume source term to div
+         call this%fs%get_div()
          ! Compute cell-centered velocity
          call this%fs%interp_vel(this%Ui,this%Vi,this%Wi)
       end block initialize_velocity
       
-      
+
       ! Create an LES model
       create_sgs: block
          this%sgs=sgsmodel(cfg=this%fs%cfg,umask=this%fs%umask,vmask=this%fs%vmask,wmask=this%fs%wmask)
@@ -444,9 +434,9 @@ contains
                      VFy=sum(this%fs%itpr_y(:,i,j,k)*this%cfg%VF(i,j-1:j,k))
                      VFz=sum(this%fs%itpr_z(:,i,j,k)*this%cfg%VF(i,j,k-1:k))
                      ! Enforce IB velocity
-                     if (this%fs%umask(i,j,k).eq.0) this%fs%U(i,j,k)=VFx*this%fs%U(i,j,k)+(1.0_WP-VFx)*this%Uib(i,j,k)
-                     if (this%fs%vmask(i,j,k).eq.0) this%fs%V(i,j,k)=VFy*this%fs%V(i,j,k)+(1.0_WP-VFy)*this%Vib(i,j,k)
-                     if (this%fs%wmask(i,j,k).eq.0) this%fs%W(i,j,k)=VFz*this%fs%W(i,j,k)+(1.0_WP-VFz)*this%Wib(i,j,k)
+                     if (this%fs%umask(i,j,k).eq.0) this%fs%U(i,j,k)=VFx*this%fs%U(i,j,k)
+                     if (this%fs%vmask(i,j,k).eq.0) this%fs%V(i,j,k)=VFy*this%fs%V(i,j,k)
+                     if (this%fs%wmask(i,j,k).eq.0) this%fs%W(i,j,k)=VFz*this%fs%W(i,j,k)
                   end do
                end do
             end do
@@ -459,9 +449,8 @@ contains
          call this%fs%apply_bcond(this%time%t,this%time%dt)
          
          ! Solve Poisson equation
-         call this%fs%correct_mfr(src=this%srcM)
-         this%resU=this%srcM/this%fs%rho      !< Careful, we need to provide
-         call this%fs%get_div(src=this%resU)  !< a volume source term to div
+         call this%fs%correct_mfr()
+         call this%fs%get_div()
          this%fs%psolv%rhs=-this%fs%cfg%vol*this%fs%div*this%fs%rho/this%time%dt
          this%fs%psolv%sol=0.0_WP
          call this%fs%psolv%solve()
@@ -481,8 +470,7 @@ contains
       
       ! Recompute interpolated velocity and divergence
       call this%fs%interp_vel(this%Ui,this%Vi,this%Wi)
-      this%resU=this%srcM/this%fs%rho      !< Careful, we need to provide
-      call this%fs%get_div(src=this%resU)  !< a volume source term to div
+      call this%fs%get_div()
       
       ! Output to ensight
       if (this%ens_evt%occurs()) call this%ens_out%write_data(this%time%t)
@@ -517,11 +505,8 @@ contains
    subroutine final(this)
       implicit none
       class(simplex), intent(inout) :: this
-      
       ! Deallocate work arrays
       deallocate(this%resU,this%resV,this%resW,this%Ui,this%Vi,this%Wi,this%gradU)
-      deallocate(this%Uib,this%Vib,this%Wib,this%srcM)
-      
    end subroutine final
    
    
@@ -534,6 +519,17 @@ contains
       isIn=.false.
       if (i.eq.pg%imax+1) isIn=.true.
    end function right_boundary
+   
+   
+   !> Function that localizes the pipe inlets
+   function pipe_inlets(pg,i,j,k) result(isIn)
+      use pgrid_class, only: pgrid
+      class(pgrid), intent(in) :: pg
+      integer, intent(in) :: i,j,k
+      logical :: isIn
+      isIn=.false.
+      if (i.eq.pg%imin.and.sqrt(pg%ym(j)**2+pg%zm(k)**2).lt.0.002_WP) isIn=.true.
+   end function pipe_inlets
    
    
 end module simplex_class
