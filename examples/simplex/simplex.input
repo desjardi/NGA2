@@ -1,5 +1,5 @@
 # Parallelization
-Partition :	8 1 1
+Partition :	1 1 8
 I/O partition : 1 1 1
 
 # Mesh definition
