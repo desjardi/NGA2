@@ -283,7 +283,7 @@ contains
                   ! Ensure the nozzle is filled with liquid up to the throat
                   if (this%vf%cfg%xm(i).lt.-0.0015_WP.and.rad.le.0.002_WP) then
                      this%vf%VF(i,j,k)=1.0_WP
-                  else if (this%vf%cfg%xm(i).ge.-0.0015_WP.and.this%vf%cfg%xm(i).lt.0.0_WP.and.rad.le.0.0016_WP) then
+                  else if (this%vf%cfg%xm(i).ge.-0.0015_WP.and.this%vf%cfg%xm(i).lt.0.0_WP.and.rad.le.0.00145_WP) then
                      this%vf%VF(i,j,k)=1.0_WP
                   else
                      this%vf%VF(i,j,k)=0.0_WP
