@@ -4,11 +4,13 @@ module simplex_class
    use inputfile_class,   only: inputfile
    use ibconfig_class,    only: ibconfig
    use polygon_class,     only: polygon
+   use surfmesh_class,    only: surfmesh
    use ensight_class,     only: ensight
-   use fft2d_class,       only: fft2d
-   !use hypre_str_class,   only: hypre_str
+   use hypre_str_class,   only: hypre_str
    !use hypre_uns_class,   only: hypre_uns
-   use incomp_class,      only: incomp
+   use tpns_class,        only: tpns
+   use vfs_class,         only: vfs
+   use iterator_class,    only: iterator
    use sgsmodel_class,    only: sgsmodel
    use timetracker_class, only: timetracker
    use event_class,       only: event
@@ -35,16 +37,17 @@ module simplex_class
       type(ibconfig) :: cfg
       
       !> Flow solver
-      type(incomp)      :: fs    !< Incompressible flow solver
-      type(fft2d)       :: ps    !< FFT-accelerated linear solver for pressure
-      !type(hypre_str)   :: ps    !< HYPRE linear solver for pressure
+      type(vfs)         :: vf    !< Volume fraction solver
+      type(tpns)        :: fs    !< Two-phase flow solver
+      type(hypre_str)   :: ps    !< HYPRE linear solver for pressure
       !type(hypre_uns)   :: ps    !< HYPRE linear solver for pressure
       type(sgsmodel)    :: sgs   !< SGS model for eddy viscosity
       type(timetracker) :: time  !< Time info
       
       !> Ensight postprocessing
-      type(ensight) :: ens_out  !< Ensight output for flow variables
-      type(event)   :: ens_evt  !< Event trigger for Ensight output
+      type(surfmesh) :: smesh    !< Surface mesh for interface
+      type(ensight) :: ens_out   !< Ensight output for flow variables
+      type(event)   :: ens_evt   !< Event trigger for Ensight output
       
       !> Simulation monitor file
       type(monitor) :: mfile    !< General simulation monitoring
@@ -55,8 +58,9 @@ module simplex_class
       real(WP), dimension(:,:,:), allocatable :: resU,resV,resW      !< Residuals
       real(WP), dimension(:,:,:), allocatable :: Ui,Vi,Wi            !< Cell-centered velocities
       
-      !> Fluid definition
-      real(WP) :: visc
+      !> Iterator for VOF removal
+      type(iterator) :: vof_removal_layer  !< Edge of domain where we actively remove VOF
+      real(WP) :: vof_removed              !< Integral of VOF removed
       
    contains
       procedure :: init                            !< Initialize simplex simulation
@@ -71,6 +75,9 @@ module simplex_class
    real(WP), dimension(3), parameter :: n1=[+0.6_WP,-0.8_WP,0.0_WP]
    real(WP), dimension(3), parameter :: n2=[+0.6_WP,+0.8_WP,0.0_WP]
    real(WP) :: mfr,Apipe
+   
+   !> Hardcode size of buffer layer for VOF removal
+   integer, parameter :: nlayer=4
    
 contains
    
@@ -112,7 +119,7 @@ contains
             z(k)=real(k-1,WP)/real(nz,WP)*Lz-0.5_WP*Lz
          end do
          ! General serial grid object
-         grid=sgrid(coord=cartesian,no=1,x=x,y=y,z=z,xper=.false.,yper=.true.,zper=.true.,name='simplex')
+         grid=sgrid(coord=cartesian,no=3,x=x,y=y,z=z,xper=.false.,yper=.true.,zper=.true.,name='simplex')
          ! Read in partition
          call this%input%read('Partition',partition)
          ! Create ibconfig
@@ -208,6 +215,7 @@ contains
       
       
       ! Handle restart/saves here
+      !!!! Needs to be modified to handle vfs restart too
       restart_and_save: block
          use string,  only: str_medium
          use filesys, only: makedir,isdir
@@ -260,23 +268,76 @@ contains
       end block allocate_work_arrays
       
       
-      ! Create an incompressible flow solver with bconds
+      ! Initialize our VOF solver and field
+      create_and_initialize_vof: block
+         use vfs_class, only: plicnet,r2p,remap
+         integer :: i,j,k
+         real(WP) :: xloc,rad
+         ! Create a VOF solver with plicnet
+         call this%vf%initialize(cfg=this%cfg,reconstruction_method=plicnet,transport_method=remap,name='VOF')
+         ! Initialize to flat interface in throat
+         xloc=-0.0015_WP
+         do k=this%vf%cfg%kmino_,this%vf%cfg%kmaxo_
+            do j=this%vf%cfg%jmino_,this%vf%cfg%jmaxo_
+               do i=this%vf%cfg%imino_,this%vf%cfg%imaxo_
+                  rad=sqrt(this%vf%cfg%ym(j)**2+this%vf%cfg%zm(k)**2)
+                  if (this%vf%cfg%xm(i).lt.xloc.and.rad.le.0.002_WP) then
+                     this%vf%VF(i,j,k)=1.0_WP
+                  else
+                     this%vf%VF(i,j,k)=0.0_WP
+                  end if
+                  this%vf%Lbary(:,i,j,k)=[this%vf%cfg%xm(i),this%vf%cfg%ym(j),this%vf%cfg%zm(k)]
+                  this%vf%Gbary(:,i,j,k)=[this%vf%cfg%xm(i),this%vf%cfg%ym(j),this%vf%cfg%zm(k)]
+               end do
+            end do
+         end do
+         ! Update the band
+         call this%vf%update_band()
+         ! Perform interface reconstruction from VOF field
+         call this%vf%build_interface()
+         ! Set interface planes at the boundaries
+         call this%vf%set_full_bcond()
+         ! Create discontinuous polygon mesh from IRL interface
+         call this%vf%polygonalize_interface()
+         ! Calculate distance from polygons
+         call this%vf%distance_from_polygon()
+         ! Calculate subcell phasic volumes
+         call this%vf%subcell_vol()
+         ! Calculate curvature
+         call this%vf%get_curvature()
+         ! Reset moments to guarantee compatibility with interface reconstruction
+         call this%vf%reset_volume_moments()
+      end block create_and_initialize_vof
+      
+      
+      ! Create an iterator for removing VOF at edges
+      create_iterator: block
+         this%vof_removal_layer=iterator(this%cfg,'VOF removal',vof_removal_layer_locator)
+         this%vof_removed=0.0_WP
+      end block create_iterator
+
+      
+      ! Create a two-phase flow solver with bconds
+      !!!! Needs to switch to slip sides
       create_flow_solver: block
-         use incomp_class,    only: clipped_neumann,dirichlet
-         !use hypre_str_class, only: pcg_pfmg2
+         use tpns_class,      only: clipped_neumann,dirichlet
+         use hypre_str_class, only: pcg_pfmg2
          !use hypre_uns_class, only: pcg_amg
          ! Create flow solver
-         this%fs=incomp(cfg=this%cfg,name='Incompressible NS')
+         this%fs=tpns(cfg=this%cfg,name='Two-Phase NS')
          ! Set the flow properties
-         call this%input%read('Density',this%fs%rho)
-         call this%input%read('Dynamic viscosity',this%visc); this%fs%visc=this%visc
+         ! Set the flow properties
+         call this%input%read('Liquid dynamic viscosity',this%fs%visc_l)
+         call this%input%read('Gas dynamic viscosity'   ,this%fs%visc_g)
+         call this%input%read('Liquid density',this%fs%rho_l)
+         call this%input%read('Gas density'   ,this%fs%rho_g)
+         call this%input%read('Surface tension coefficient',this%fs%sigma)
          ! Inlets on the left
          call this%fs%add_bcond(name='inlets',type=dirichlet,face='x',dir=-1,canCorrect=.false.,locator=pipe_inlets)
          ! Outflow on the right
          call this%fs%add_bcond(name='outflow',type=clipped_neumann,face='x',dir=+1,canCorrect=.true.,locator=right_boundary)
          ! Configure pressure solver
-         this%ps=fft2d(cfg=this%cfg,name='Pressure',nst=7)
-         !this%ps=hypre_str(cfg=this%cfg,name='Pressure',method=pcg_pfmg2,nst=7)
+         this%ps=hypre_str(cfg=this%cfg,name='Pressure',method=pcg_pfmg2,nst=7)
          !this%ps=hypre_uns(cfg=this%cfg,name='Pressure',method=pcg_amg,nst=7)
          call this%input%read('Pressure iteration',this%ps%maxit)
          call this%input%read('Pressure tolerance',this%ps%rcvg)
@@ -287,7 +348,7 @@ contains
       
       ! Initialize our velocity field
       initialize_velocity: block
-         use incomp_class, only: bcond
+         use tpns_class, only: bcond
          type(bcond), pointer :: mybc
          integer :: i,j,k,n
          ! Zero velocity except if restarting
@@ -305,7 +366,7 @@ contains
          call this%fs%get_bcond('inlets',mybc)
          do n=1,mybc%itr%no_
             i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
-            this%fs%U(i,j,k)=sum(this%fs%itpr_x(:,i,j,k)*this%cfg%VF(i-1:i,j,k))*mfr/(this%fs%rho*Apipe)
+            this%fs%U(i,j,k)=sum(this%fs%itpr_x(:,i,j,k)*this%cfg%VF(i-1:i,j,k))*mfr/(this%fs%rho_l*Apipe)
          end do
          ! Apply all other boundary conditions
          call this%fs%apply_bcond(this%time%t,this%time%dt)
@@ -324,6 +385,13 @@ contains
       end block create_sgs
       
       
+      ! Create surfmesh object for interface polygon output
+      create_smesh: block
+         this%smesh=surfmesh(nvar=0,name='plic')
+         call this%vf%update_surfmesh(this%smesh)
+      end block create_smesh
+
+      
       ! Add Ensight output
       create_ensight: block
          ! Create Ensight output from cfg
@@ -333,6 +401,8 @@ contains
          call this%input%read('Ensight output period',this%ens_evt%tper)
          ! Add variables to output
          call this%ens_out%add_vector('velocity',this%Ui,this%Vi,this%Wi)
+         call this%ens_out%add_scalar('VOF',this%vf%VF)
+         call this%ens_out%add_surface('plic',this%smesh)
          ! Output to ensight
          if (this%ens_evt%occurs()) call this%ens_out%write_data(this%time%t)
       end block create_ensight
@@ -343,6 +413,7 @@ contains
          ! Prepare some info about fields
          call this%fs%get_cfl(this%time%dt,this%time%cfl)
          call this%fs%get_max()
+         call this%vf%get_max()
          ! Create simulation monitor
          this%mfile=monitor(this%fs%cfg%amRoot,'simulation_simplex')
          call this%mfile%add_column(this%time%n,'Timestep number')
@@ -353,6 +424,9 @@ contains
          call this%mfile%add_column(this%fs%Vmax,'Vmax')
          call this%mfile%add_column(this%fs%Wmax,'Wmax')
          call this%mfile%add_column(this%fs%Pmax,'Pmax')
+         call this%mfile%add_column(this%vf%VFint,'VOF integral')
+         call this%mfile%add_column(this%vof_removed,'VOF removed')
+         call this%mfile%add_column(this%vf%SDint,'SD integral')
          call this%mfile%add_column(this%fs%divmax,'Maximum divergence')
          call this%mfile%add_column(this%fs%psolv%it,'Pressure iteration')
          call this%mfile%add_column(this%fs%psolv%rerr,'Pressure error')
@@ -361,6 +435,7 @@ contains
          this%cflfile=monitor(this%fs%cfg%amRoot,'cfl_simplex')
          call this%cflfile%add_column(this%time%n,'Timestep number')
          call this%cflfile%add_column(this%time%t,'Time')
+         call this%cflfile%add_column(this%fs%CFLst,'STension CFL')
          call this%cflfile%add_column(this%fs%CFLc_x,'Convective xCFL')
          call this%cflfile%add_column(this%fs%CFLc_y,'Convective yCFL')
          call this%cflfile%add_column(this%fs%CFLc_z,'Convective zCFL')
@@ -376,6 +451,7 @@ contains
    
    !> Take one time step
    subroutine step(this)
+      use tpns_class, only: arithmetic_visc
       implicit none
       class(simplex), intent(inout) :: this
       
@@ -384,18 +460,40 @@ contains
       call this%time%adjust_dt()
       call this%time%increment()
       
+      ! Remember old VOF
+      this%vf%VFold=this%vf%VF
+      
       ! Remember old velocity
       this%fs%Uold=this%fs%U
       this%fs%Vold=this%fs%V
       this%fs%Wold=this%fs%W
       
+      ! Prepare old staggered density (at n)
+      call this%fs%get_olddensity(vf=this%vf)
+      
+      ! VOF solver step
+      call this%vf%advance(dt=this%time%dt,U=this%fs%U,V=this%fs%V,W=this%fs%W)
+      
+      ! Prepare new staggered viscosity (at n+1)
+      call this%fs%get_viscosity(vf=this%vf,strat=arithmetic_visc)
+      
       ! Turbulence modeling
       sgs_modeling: block
          use sgsmodel_class, only: vreman
-         this%resU=this%fs%rho
+         integer :: i,j,k
+         this%resU=this%vf%VF*this%fs%rho_l+(1.0_WP-this%vf%VF)*this%fs%rho_g
          call this%fs%get_gradu(this%gradU)
          call this%sgs%get_visc(type=vreman,dt=this%time%dtold,rho=this%resU,gradu=this%gradU)
-         this%fs%visc=this%visc+this%sgs%visc
+         do k=this%fs%cfg%kmino_+1,this%fs%cfg%kmaxo_
+            do j=this%fs%cfg%jmino_+1,this%fs%cfg%jmaxo_
+               do i=this%fs%cfg%imino_+1,this%fs%cfg%imaxo_
+                  this%fs%visc(i,j,k)   =this%fs%visc(i,j,k)   +this%sgs%visc(i,j,k)
+                  this%fs%visc_xy(i,j,k)=this%fs%visc_xy(i,j,k)+sum(this%fs%itp_xy(:,:,i,j,k)*this%sgs%visc(i-1:i,j-1:j,k))
+                  this%fs%visc_yz(i,j,k)=this%fs%visc_yz(i,j,k)+sum(this%fs%itp_yz(:,:,i,j,k)*this%sgs%visc(i,j-1:j,k-1:k))
+                  this%fs%visc_zx(i,j,k)=this%fs%visc_zx(i,j,k)+sum(this%fs%itp_xz(:,:,i,j,k)*this%sgs%visc(i-1:i,j,k-1:k))
+               end do
+            end do
+         end do
       end block sgs_modeling
       
       ! Perform sub-iterations
@@ -406,37 +504,34 @@ contains
          this%fs%V=0.5_WP*(this%fs%V+this%fs%Vold)
          this%fs%W=0.5_WP*(this%fs%W+this%fs%Wold)
          
+         ! Preliminary mass and momentum transport step at the interface
+         call this%fs%prepare_advection_upwind(dt=this%time%dt)
+         
          ! Explicit calculation of drho*u/dt from NS
          call this%fs%get_dmomdt(this%resU,this%resV,this%resW)
          
          ! Assemble explicit residual
-         this%resU=-2.0_WP*(this%fs%rho*this%fs%U-this%fs%rho*this%fs%Uold)+this%time%dt*this%resU
-         this%resV=-2.0_WP*(this%fs%rho*this%fs%V-this%fs%rho*this%fs%Vold)+this%time%dt*this%resV
-         this%resW=-2.0_WP*(this%fs%rho*this%fs%W-this%fs%rho*this%fs%Wold)+this%time%dt*this%resW
+         this%resU=-2.0_WP*this%fs%rho_U*this%fs%U+(this%fs%rho_Uold+this%fs%rho_U)*this%fs%Uold+this%time%dt*this%resU
+         this%resV=-2.0_WP*this%fs%rho_V*this%fs%V+(this%fs%rho_Vold+this%fs%rho_V)*this%fs%Vold+this%time%dt*this%resV
+         this%resW=-2.0_WP*this%fs%rho_W*this%fs%W+(this%fs%rho_Wold+this%fs%rho_W)*this%fs%Wold+this%time%dt*this%resW   
          
          ! Form implicit residuals
          !call this%fs%solve_implicit(this%time%dt,this%resU,this%resV,this%resW)
          
          ! Apply these residuals
-         this%fs%U=2.0_WP*this%fs%U-this%fs%Uold+this%resU/this%fs%rho
-         this%fs%V=2.0_WP*this%fs%V-this%fs%Vold+this%resV/this%fs%rho
-         this%fs%W=2.0_WP*this%fs%W-this%fs%Wold+this%resW/this%fs%rho
+         this%fs%U=2.0_WP*this%fs%U-this%fs%Uold+this%resU/this%fs%rho_U
+         this%fs%V=2.0_WP*this%fs%V-this%fs%Vold+this%resV/this%fs%rho_V
+         this%fs%W=2.0_WP*this%fs%W-this%fs%Wold+this%resW/this%fs%rho_W
          
-         ! Apply direct IB forcing
+         ! Apply IB forcing to enforce BC at the pipe walls
          ibforcing: block
             integer :: i,j,k
-            real(WP) :: VFx,VFy,VFz
             do k=this%fs%cfg%kmin_,this%fs%cfg%kmax_
                do j=this%fs%cfg%jmin_,this%fs%cfg%jmax_
                   do i=this%fs%cfg%imin_,this%fs%cfg%imax_
-                     ! Compute staggered VF
-                     VFx=sum(this%fs%itpr_x(:,i,j,k)*this%cfg%VF(i-1:i,j,k))
-                     VFy=sum(this%fs%itpr_y(:,i,j,k)*this%cfg%VF(i,j-1:j,k))
-                     VFz=sum(this%fs%itpr_z(:,i,j,k)*this%cfg%VF(i,j,k-1:k))
-                     ! Enforce IB velocity
-                     if (this%fs%umask(i,j,k).eq.0) this%fs%U(i,j,k)=VFx*this%fs%U(i,j,k)
-                     if (this%fs%vmask(i,j,k).eq.0) this%fs%V(i,j,k)=VFy*this%fs%V(i,j,k)
-                     if (this%fs%wmask(i,j,k).eq.0) this%fs%W(i,j,k)=VFz*this%fs%W(i,j,k)
+                     if (this%fs%umask(i,j,k).eq.0) this%fs%U(i,j,k)=sum(this%fs%itpr_x(:,i,j,k)*this%cfg%VF(i-1:i,j,k))*this%fs%U(i,j,k)
+                     if (this%fs%vmask(i,j,k).eq.0) this%fs%V(i,j,k)=sum(this%fs%itpr_y(:,i,j,k)*this%cfg%VF(i,j-1:j,k))*this%fs%V(i,j,k)
+                     if (this%fs%wmask(i,j,k).eq.0) this%fs%W(i,j,k)=sum(this%fs%itpr_z(:,i,j,k)*this%cfg%VF(i,j,k-1:k))*this%fs%W(i,j,k)
                   end do
                end do
             end do
@@ -444,14 +539,16 @@ contains
             call this%fs%cfg%sync(this%fs%V)
             call this%fs%cfg%sync(this%fs%W)
          end block ibforcing
-         
+        
          ! Apply other boundary conditions on the resulting fields
          call this%fs%apply_bcond(this%time%t,this%time%dt)
          
          ! Solve Poisson equation
+         call this%fs%update_laplacian()
          call this%fs%correct_mfr()
          call this%fs%get_div()
-         this%fs%psolv%rhs=-this%fs%cfg%vol*this%fs%div*this%fs%rho/this%time%dt
+         call this%fs%add_surface_tension_jump(dt=this%time%dt,div=this%fs%div,vf=this%vf)
+         this%fs%psolv%rhs=-this%fs%cfg%vol*this%fs%div/this%time%dt
          this%fs%psolv%sol=0.0_WP
          call this%fs%psolv%solve()
          call this%fs%shift_p(this%fs%psolv%sol)
@@ -459,9 +556,9 @@ contains
          ! Correct velocity
          call this%fs%get_pgrad(this%fs%psolv%sol,this%resU,this%resV,this%resW)
          this%fs%P=this%fs%P+this%fs%psolv%sol
-         this%fs%U=this%fs%U-this%time%dt*this%resU/this%fs%rho
-         this%fs%V=this%fs%V-this%time%dt*this%resV/this%fs%rho
-         this%fs%W=this%fs%W-this%time%dt*this%resW/this%fs%rho
+         this%fs%U=this%fs%U-this%time%dt*this%resU/this%fs%rho_U
+         this%fs%V=this%fs%V-this%time%dt*this%resV/this%fs%rho_V
+         this%fs%W=this%fs%W-this%time%dt*this%resW/this%fs%rho_W
          
          ! Increment sub-iteration counter
          this%time%it=this%time%it+1
@@ -472,11 +569,32 @@ contains
       call this%fs%interp_vel(this%Ui,this%Vi,this%Wi)
       call this%fs%get_div()
       
+      ! Remove VOF at edge of domain
+      remove_vof: block
+         use mpi_f08,  only: MPI_ALLREDUCE,MPI_SUM
+         use parallel, only: MPI_REAL_WP
+         integer :: n,i,j,k,ierr
+         real(WP) :: my_vof_removed
+         my_vof_removed=0.0_WP
+         do n=1,this%vof_removal_layer%no_
+            i=this%vof_removal_layer%map(1,n)
+            j=this%vof_removal_layer%map(2,n)
+            k=this%vof_removal_layer%map(3,n)
+            my_vof_removed=my_vof_removed+this%cfg%vol(i,j,k)*this%vf%VF(i,j,k)
+            this%vf%VF(i,j,k)=0.0_WP
+         end do
+         call MPI_ALLREDUCE(my_vof_removed,this%vof_removed,1,MPI_REAL_WP,MPI_SUM,this%cfg%comm,ierr)
+      end block remove_vof
+      
       ! Output to ensight
-      if (this%ens_evt%occurs()) call this%ens_out%write_data(this%time%t)
+      if (this%ens_evt%occurs()) then
+         call this%vf%update_surfmesh(this%smesh)
+         call this%ens_out%write_data(this%time%t)
+      end if
       
       ! Perform and output monitoring
       call this%fs%get_max()
+      call this%vf%get_max()
       call this%mfile%write()
       call this%cflfile%write()
       
@@ -532,4 +650,67 @@ contains
    end function pipe_inlets
    
    
+   !> Function that localizes region of VOF removal
+   function vof_removal_layer_locator(pg,i,j,k) result(isIn)
+      use pgrid_class, only: pgrid
+      class(pgrid), intent(in) :: pg
+      integer, intent(in) :: i,j,k
+      logical :: isIn
+      isIn=.false.
+      if (i.ge.pg%imax-nlayer.or.&
+      &   j.le.pg%jmin+nlayer.or.&
+      &   j.ge.pg%jmax-nlayer.or.&
+      &   k.le.pg%kmin+nlayer.or.&
+      &   k.ge.pg%kmax-nlayer) isIn=.true.
+   end function vof_removal_layer_locator
+   
+
+   !> Function that localizes the top (y+) of the domain
+   function yp_locator(pg,i,j,k) result(isIn)
+      use pgrid_class, only: pgrid
+      implicit none
+      class(pgrid), intent(in) :: pg
+      integer, intent(in) :: i,j,k
+      logical :: isIn
+      isIn=.false.
+      if (j.eq.pg%jmax+1) isIn=.true.
+   end function yp_locator
+   
+   
+   !> Function that localizes the bottom (y-) of the domain
+   function ym_locator(pg,i,j,k) result(isIn)
+      use pgrid_class, only: pgrid
+      implicit none
+      class(pgrid), intent(in) :: pg
+      integer, intent(in) :: i,j,k
+      logical :: isIn
+      isIn=.false.
+      if (j.eq.pg%jmin) isIn=.true.
+   end function ym_locator
+   
+   
+   !> Function that localizes the top (z+) of the domain
+   function zp_locator(pg,i,j,k) result(isIn)
+      use pgrid_class, only: pgrid
+      implicit none
+      class(pgrid), intent(in) :: pg
+      integer, intent(in) :: i,j,k
+      logical :: isIn
+      isIn=.false.
+      if (k.eq.pg%kmax+1) isIn=.true.
+   end function zp_locator
+   
+   
+   !> Function that localizes the bottom (z-) of the domain
+   function zm_locator(pg,i,j,k) result(isIn)
+      use pgrid_class, only: pgrid
+      implicit none
+      class(pgrid), intent(in) :: pg
+      integer, intent(in) :: i,j,k
+      logical :: isIn
+      isIn=.false.
+      if (k.eq.pg%kmin) isIn=.true.
+   end function zm_locator
+   
+
 end module simplex_class
