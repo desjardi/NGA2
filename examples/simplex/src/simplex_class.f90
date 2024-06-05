@@ -579,6 +579,7 @@ contains
       remove_vof: block
          use mpi_f08,  only: MPI_ALLREDUCE,MPI_SUM
          use parallel, only: MPI_REAL_WP
+         use irl_fortran_interface
          integer :: n,i,j,k,ierr
          real(WP) :: my_vof_removed
          my_vof_removed=0.0_WP
@@ -588,6 +589,10 @@ contains
             k=this%vof_removal_layer%map(3,n)
             my_vof_removed=my_vof_removed+this%cfg%vol(i,j,k)*this%vf%VF(i,j,k)
             this%vf%VF(i,j,k)=0.0_WP
+            this%vf%Lbary(:,i,j,k)=[this%vf%cfg%xm(i),this%vf%cfg%ym(j),this%vf%cfg%zm(k)]
+            this%vf%Gbary(:,i,j,k)=[this%vf%cfg%xm(i),this%vf%cfg%ym(j),this%vf%cfg%zm(k)]
+            call setNumberOfPlanes(this%vf%liquid_gas_interface(i,j,k),1)
+            call setPlane(this%vf%liquid_gas_interface(i,j,k),0,[0.0_WP,0.0_WP,0.0_WP],-1.0_WP)
          end do
          call MPI_ALLREDUCE(my_vof_removed,this%vof_removed,1,MPI_REAL_WP,MPI_SUM,this%cfg%comm,ierr)
       end block remove_vof
