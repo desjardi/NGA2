@@ -68,8 +68,8 @@ module simplex_class
    real(WP), parameter :: Rpipe=0.000185_WP
    real(WP), dimension(3), parameter :: p1=[-0.00442_WP,0.0_WP,+0.001245_WP]
    real(WP), dimension(3), parameter :: p2=[-0.00442_WP,0.0_WP,-0.001245_WP]
-   real(WP), dimension(3), parameter :: n1=[+0.79864_WP,-0.601815_WP,0.0_WP]
-   real(WP), dimension(3), parameter :: n2=[+0.79864_WP,+0.601815_WP,0.0_WP]
+   real(WP), dimension(3), parameter :: n1=[+0.6_WP,-0.8_WP,0.0_WP]
+   real(WP), dimension(3), parameter :: n2=[+0.6_WP,+0.8_WP,0.0_WP]
    real(WP) :: mfr,Apipe
    
 contains
