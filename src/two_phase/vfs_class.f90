@@ -216,6 +216,7 @@ module vfs_class
       procedure :: reset_volume_moments                   !< Reconstruct volume moments from IRL interfaces
       procedure :: reset_moments                          !< Reconstruct first-order moments from IRL interfaces
       procedure :: update_surfmesh                        !< Update a surfmesh object using current polygons
+      procedure :: update_surfmesh_nowall                 !< Update a surfmesh object using current polygons - do not show polygons in walls
       procedure :: get_curvature                          !< Compute curvature from IRL surface polygons
       procedure :: paraboloid_fit                         !< Perform local paraboloid fit of IRL surface using IRL barycenter data
       procedure :: paraboloid_integral_fit                !< Perform local paraboloid fit of IRL surface using surface-integrated IRL data
@@ -3425,6 +3426,80 @@ contains
       end if
       
    end subroutine update_surfmesh
+
+
+   !> Update a surfmesh object from our current polygons - near-empty cells are not shown
+   subroutine update_surfmesh_nowall(this,smesh)
+      use surfmesh_class, only: surfmesh
+      implicit none
+      class(vfs), intent(inout) :: this
+      class(surfmesh), intent(inout) :: smesh
+      integer :: i,j,k,n,shape,nv,np,nplane
+      real(WP), dimension(3) :: tmp_vert
+      
+      ! Reset surface mesh storage
+      call smesh%reset()
+      
+      ! First pass to count how many vertices and polygons are inside our processor
+      nv=0; np=0
+      do k=this%cfg%kmin_,this%cfg%kmax_
+         do j=this%cfg%jmin_,this%cfg%jmax_
+            do i=this%cfg%imin_,this%cfg%imax_
+               if (this%cfg%VF(i,j,k).lt.2.0_WP*epsilon(1.0_WP)) cycle ! Skip near-empty cells
+               do nplane=1,getNumberOfPlanes(this%liquid_gas_interface(i,j,k))
+                  shape=getNumberOfVertices(this%interface_polygon(nplane,i,j,k))
+                  if (shape.gt.0) then
+                     nv=nv+shape
+                     np=np+1
+                  end if
+               end do
+            end do
+         end do
+      end do
+      
+      ! Reallocate storage and fill out arrays
+      if (np.gt.0) then
+         call smesh%set_size(nvert=nv,npoly=np)
+         allocate(smesh%polyConn(smesh%nVert)) ! Also allocate naive connectivity
+         nv=0; np=0
+         do k=this%cfg%kmin_,this%cfg%kmax_
+            do j=this%cfg%jmin_,this%cfg%jmax_
+               do i=this%cfg%imin_,this%cfg%imax_
+                  if (this%cfg%VF(i,j,k).lt.2.0_WP*epsilon(1.0_WP)) cycle ! Skip near-empty cells
+                  do nplane=1,getNumberOfPlanes(this%liquid_gas_interface(i,j,k))
+                     shape=getNumberOfVertices(this%interface_polygon(nplane,i,j,k))
+                     if (shape.gt.0) then
+                        ! Increment polygon counter
+                        np=np+1
+                        smesh%polySize(np)=shape
+                        ! Loop over its vertices and add them
+                        do n=1,shape
+                           tmp_vert=getPt(this%interface_polygon(nplane,i,j,k),n-1)
+                           ! Increment node counter
+                           nv=nv+1
+                           smesh%xVert(nv)=tmp_vert(1)
+                           smesh%yVert(nv)=tmp_vert(2)
+                           smesh%zVert(nv)=tmp_vert(3)
+                           smesh%polyConn(nv)=nv
+                        end do
+                     end if
+                  end do
+               end do
+            end do
+         end do
+      else
+         ! Add a zero-area triangle if this proc doesn't have one
+         np=1; nv=3
+         call smesh%set_size(nvert=nv,npoly=np)
+         allocate(smesh%polyConn(smesh%nVert)) ! Also allocate naive connectivity
+         smesh%xVert(1:3)=this%cfg%x(this%cfg%imin)
+         smesh%yVert(1:3)=this%cfg%y(this%cfg%jmin)
+         smesh%zVert(1:3)=this%cfg%z(this%cfg%kmin)
+         smesh%polySize(1)=3
+         smesh%polyConn(1:3)=[1,2,3]
+      end if
+      
+   end subroutine update_surfmesh_nowall
    
    
    !> Calculate distance from polygonalized interface inside the band

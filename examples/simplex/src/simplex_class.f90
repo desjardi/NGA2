@@ -119,7 +119,7 @@ contains
             z(k)=real(k-1,WP)/real(nz,WP)*Lz-0.5_WP*Lz
          end do
          ! General serial grid object
-         grid=sgrid(coord=cartesian,no=3,x=x,y=y,z=z,xper=.false.,yper=.true.,zper=.true.,name='simplex')
+         grid=sgrid(coord=cartesian,no=3,x=x,y=y,z=z,xper=.false.,yper=.false.,zper=.false.,name='simplex')
          ! Read in partition
          call this%input%read('Partition',partition)
          ! Create ibconfig
@@ -272,16 +272,18 @@ contains
       create_and_initialize_vof: block
          use vfs_class, only: plicnet,r2p,remap
          integer :: i,j,k
-         real(WP) :: xloc,rad
+         real(WP) :: rad
          ! Create a VOF solver with plicnet
          call this%vf%initialize(cfg=this%cfg,reconstruction_method=plicnet,transport_method=remap,name='VOF')
-         ! Initialize to flat interface in throat
-         xloc=-0.0015_WP
+         ! Initialize to flat interface at exit
          do k=this%vf%cfg%kmino_,this%vf%cfg%kmaxo_
             do j=this%vf%cfg%jmino_,this%vf%cfg%jmaxo_
                do i=this%vf%cfg%imino_,this%vf%cfg%imaxo_
                   rad=sqrt(this%vf%cfg%ym(j)**2+this%vf%cfg%zm(k)**2)
-                  if (this%vf%cfg%xm(i).lt.xloc.and.rad.le.0.002_WP) then
+                  ! Ensure the nozzle is filled with liquid up to the throat
+                  if (this%vf%cfg%xm(i).lt.-0.0015_WP.and.rad.le.0.002_WP) then
+                     this%vf%VF(i,j,k)=1.0_WP
+                  else if (this%vf%cfg%xm(i).ge.-0.0015_WP.and.this%vf%cfg%xm(i).lt.0.0_WP.and.rad.le.0.0016_WP) then
                      this%vf%VF(i,j,k)=1.0_WP
                   else
                      this%vf%VF(i,j,k)=0.0_WP
@@ -318,14 +320,12 @@ contains
 
       
       ! Create a two-phase flow solver with bconds
-      !!!! Needs to switch to slip sides
       create_flow_solver: block
-         use tpns_class,      only: clipped_neumann,dirichlet
+         use tpns_class,      only: clipped_neumann,dirichlet,slip
          use hypre_str_class, only: pcg_pfmg2
          !use hypre_uns_class, only: pcg_amg
          ! Create flow solver
          this%fs=tpns(cfg=this%cfg,name='Two-Phase NS')
-         ! Set the flow properties
          ! Set the flow properties
          call this%input%read('Liquid dynamic viscosity',this%fs%visc_l)
          call this%input%read('Gas dynamic viscosity'   ,this%fs%visc_g)
@@ -335,9 +335,15 @@ contains
          ! Inlets on the left
          call this%fs%add_bcond(name='inlets',type=dirichlet,face='x',dir=-1,canCorrect=.false.,locator=pipe_inlets)
          ! Outflow on the right
-         call this%fs%add_bcond(name='outflow',type=clipped_neumann,face='x',dir=+1,canCorrect=.true.,locator=right_boundary)
+         call this%fs%add_bcond(name='outflow',type=clipped_neumann,face='x',dir=+1,canCorrect=.false.,locator=right_boundary)
+         ! Slip on the sides
+         call this%fs%add_bcond(name='bc_yp',type=slip,face='y',dir=+1,canCorrect=.true.,locator=yp_locator)
+         call this%fs%add_bcond(name='bc_ym',type=slip,face='y',dir=-1,canCorrect=.true.,locator=ym_locator)
+         call this%fs%add_bcond(name='bc_zp',type=slip,face='z',dir=+1,canCorrect=.true.,locator=zp_locator)
+         call this%fs%add_bcond(name='bc_zm',type=slip,face='z',dir=-1,canCorrect=.true.,locator=zm_locator)
          ! Configure pressure solver
          this%ps=hypre_str(cfg=this%cfg,name='Pressure',method=pcg_pfmg2,nst=7)
+         this%ps%maxlevel=12
          !this%ps=hypre_uns(cfg=this%cfg,name='Pressure',method=pcg_amg,nst=7)
          call this%input%read('Pressure iteration',this%ps%maxit)
          call this%input%read('Pressure tolerance',this%ps%rcvg)
@@ -388,7 +394,7 @@ contains
       ! Create surfmesh object for interface polygon output
       create_smesh: block
          this%smesh=surfmesh(nvar=0,name='plic')
-         call this%vf%update_surfmesh(this%smesh)
+         call this%vf%update_surfmesh_nowall(this%smesh)
       end block create_smesh
 
       
@@ -588,7 +594,7 @@ contains
       
       ! Output to ensight
       if (this%ens_evt%occurs()) then
-         call this%vf%update_surfmesh(this%smesh)
+         call this%vf%update_surfmesh_nowall(this%smesh)
          call this%ens_out%write_data(this%time%t)
       end if
       
