@@ -55,3 +55,4 @@ examples/*/input*~
 !examples/airblast/atomizer_tip.ply
 !examples/airblast/atomizer_box.ply
 !examples/simplex/simplex.input
+!examples/simplex/SIMPLEX_RSA_2022-10-17.stp
