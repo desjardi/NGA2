@@ -505,6 +505,12 @@ contains
       ! Perform sub-iterations
       do while (this%time%it.le.this%time%itmax)
          
+         ! Reset pressure to zero
+         this%fs%P=0.0_WP
+         this%fs%Pjx=0.0_WP
+         this%fs%Pjy=0.0_WP
+         this%fs%Pjz=0.0_WP
+
          ! Build mid-time velocity
          this%fs%U=0.5_WP*(this%fs%U+this%fs%Uold)
          this%fs%V=0.5_WP*(this%fs%V+this%fs%Vold)
