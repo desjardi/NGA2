@@ -7,7 +7,6 @@ module simplex_class
    use surfmesh_class,    only: surfmesh
    use ensight_class,     only: ensight
    use hypre_str_class,   only: hypre_str
-   !use hypre_uns_class,   only: hypre_uns
    use tpns_class,        only: tpns
    use vfs_class,         only: vfs
    use iterator_class,    only: iterator
@@ -40,7 +39,6 @@ module simplex_class
       type(vfs)         :: vf    !< Volume fraction solver
       type(tpns)        :: fs    !< Two-phase flow solver
       type(hypre_str)   :: ps    !< HYPRE linear solver for pressure
-      !type(hypre_uns)   :: ps    !< HYPRE linear solver for pressure
       type(sgsmodel)    :: sgs   !< SGS model for eddy viscosity
       type(timetracker) :: time  !< Time info
       
@@ -284,7 +282,7 @@ contains
             do j=this%vf%cfg%jmino_,this%vf%cfg%jmaxo_
                do i=this%vf%cfg%imino_,this%vf%cfg%imaxo_
                   rad=sqrt(this%vf%cfg%ym(j)**2+this%vf%cfg%zm(k)**2)
-                  ! Ensure the nozzle is filled with liquid up to the throat
+                  ! Ensure the nozzle is filled with liquid up to the throat with wet walls
                   if (this%vf%cfg%xm(i).lt.-0.0015_WP.and.rad.le.0.002_WP) then
                      this%vf%VF(i,j,k)=1.0_WP
                   else if (this%vf%cfg%xm(i).ge.-0.0015_WP.and.this%vf%cfg%xm(i).lt.0.0_WP.and.rad.le.0.00143_WP) then
@@ -292,6 +290,8 @@ contains
                   else
                      this%vf%VF(i,j,k)=0.0_WP
                   end if
+                  if (this%vf%cfg%xm(i).ge.-0.0015_WP.and.this%vf%cfg%VF(i,j,k).gt.2.0_WP*epsilon(1.0_WP)) this%vf%VF(i,j,k)=0.0_WP
+                  ! Initialize phasic barycenters
                   this%vf%Lbary(:,i,j,k)=[this%vf%cfg%xm(i),this%vf%cfg%ym(j),this%vf%cfg%zm(k)]
                   this%vf%Gbary(:,i,j,k)=[this%vf%cfg%xm(i),this%vf%cfg%ym(j),this%vf%cfg%zm(k)]
                end do
@@ -326,7 +326,7 @@ contains
       ! Create a two-phase flow solver with bconds
       create_flow_solver: block
          use tpns_class,      only: clipped_neumann,dirichlet,slip
-         use hypre_str_class, only: pcg_pfmg2
+         use hypre_str_class, only: gmres_pfmg2
          !use hypre_uns_class, only: pcg_amg
          ! Create flow solver
          this%fs=tpns(cfg=this%cfg,name='Two-Phase NS')
@@ -346,9 +346,8 @@ contains
          call this%fs%add_bcond(name='bc_zp',type=slip,face='z',dir=+1,canCorrect=.true.,locator=zp_locator)
          call this%fs%add_bcond(name='bc_zm',type=slip,face='z',dir=-1,canCorrect=.true.,locator=zm_locator)
          ! Configure pressure solver
-         this%ps=hypre_str(cfg=this%cfg,name='Pressure',method=pcg_pfmg2,nst=7)
+         this%ps=hypre_str(cfg=this%cfg,name='Pressure',method=gmres_pfmg2,nst=7)
          this%ps%maxlevel=12
-         !this%ps=hypre_uns(cfg=this%cfg,name='Pressure',method=pcg_amg,nst=7)
          call this%input%read('Pressure iteration',this%ps%maxit)
          call this%input%read('Pressure tolerance',this%ps%rcvg)
          ! Setup the solver
@@ -398,7 +397,7 @@ contains
       ! Create surfmesh object for interface polygon output
       create_smesh: block
          this%smesh=surfmesh(nvar=0,name='plic')
-         call this%vf%update_surfmesh_nowall(this%smesh)
+         call this%vf%update_surfmesh_nowall(this%smesh,threshold=0.8_WP)
       end block create_smesh
 
       
@@ -603,7 +602,7 @@ contains
       
       ! Output to ensight
       if (this%ens_evt%occurs()) then
-         call this%vf%update_surfmesh_nowall(this%smesh)
+         call this%vf%update_surfmesh_nowall(this%smesh,threshold=0.8_WP)
          call this%ens_out%write_data(this%time%t)
       end if
       

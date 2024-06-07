@@ -14,15 +14,16 @@ module hypre_str_class
    
    
    ! List of known available methods
-   integer, parameter, public ::       pfmg=1
-   integer, parameter, public ::   pcg_pfmg=2
-   integer, parameter, public :: gmres_pfmg=3
-   integer, parameter, public ::        smg=4
-   integer, parameter, public ::    pcg_smg=5
-   integer, parameter, public ::  gmres_smg=6
-   integer, parameter, public ::        pcg=7
-   integer, parameter, public ::      gmres=8
-   integer, parameter, public ::  pcg_pfmg2=9
+   integer, parameter, public ::        pfmg=1
+   integer, parameter, public ::    pcg_pfmg=2
+   integer, parameter, public ::  gmres_pfmg=3
+   integer, parameter, public ::         smg=4
+   integer, parameter, public ::     pcg_smg=5
+   integer, parameter, public ::   gmres_smg=6
+   integer, parameter, public ::         pcg=7
+   integer, parameter, public ::       gmres=8
+   integer, parameter, public ::   pcg_pfmg2=9
+   integer, parameter, public :: gmres_pfmg2=10
    
    
    ! List of key solver parameters
@@ -334,6 +335,28 @@ contains
          
          ! Setup GMRES solver
          call HYPRE_StructGMRESSetup       (this%hypre_solver,this%hypre_mat,this%hypre_rhs,this%hypre_sol,ierr)
+
+      case (gmres_pfmg2)
+         
+         ! Create PFMG preconditioner
+         call HYPRE_StructPFMGCreate      (this%cfg%comm,this%hypre_precond,ierr)
+         call HYPRE_StructPFMGSetMaxIter  (this%hypre_precond,1,ierr)
+         call HYPRE_StructPFMGSetTol      (this%hypre_precond,0.0_WP,ierr)
+         if (this%maxlevel.gt.0) call HYPRE_StructPFMGSetMaxLevels(this%hypre_precond,this%maxlevel,ierr)
+         !call HYPRE_StructPFMGSetRelaxType(this%hypre_precond,2,ierr) ! Set symmetric RBGS as smoother
+         call HYPRE_StructPFMGSetRAPType  (this%hypre_precond,1,ierr) ! Force use of 7-pt coarse stencil
+         
+         ! Create GMRES solver
+         call HYPRE_StructGMRESCreate      (this%cfg%comm,this%hypre_solver,ierr)
+         call HYPRE_StructGMRESSetMaxIter  (this%hypre_solver,this%maxit,ierr)
+         call HYPRE_StructGMRESSetTol      (this%hypre_solver,this%rcvg,ierr)
+         call HYPRE_StructGMRESSetLogging  (this%hypre_solver,1,ierr)
+         
+         ! Set PFMG as preconditioner to GMRES
+         call HYPRE_StructGMRESSetPrecond  (this%hypre_solver,1,this%hypre_precond,ierr)
+         
+         ! Setup GMRES solver
+         call HYPRE_StructGMRESSetup       (this%hypre_solver,this%hypre_mat,this%hypre_rhs,this%hypre_sol,ierr)
          
       case (gmres)
          
@@ -402,7 +425,7 @@ contains
          call HYPRE_StructPCGSolve           (this%hypre_solver,this%hypre_mat,this%hypre_rhs,this%hypre_sol,ierr)
          call HYPRE_StructPCGGetNumIterations(this%hypre_solver,this%it  ,ierr)
          call HYPRE_StructPCGGetFinalRelative(this%hypre_solver,this%rerr,ierr)
-      case (gmres,gmres_smg,gmres_pfmg)
+      case (gmres,gmres_smg,gmres_pfmg,gmres_pfmg2)
          call HYPRE_StructGMRESSolve         (this%hypre_solver,this%hypre_mat,this%hypre_rhs,this%hypre_sol,ierr)
          call HYPRE_StructGMRESGetNumIteratio(this%hypre_solver,this%it  ,ierr)
          call HYPRE_StructGMRESGetFinalRelati(this%hypre_solver,this%rerr,ierr)
@@ -456,7 +479,7 @@ contains
          call HYPRE_StructPCGDestroy(this%hypre_solver,ierr)
       case (gmres)
          call HYPRE_StructGMRESDestroy(this%hypre_solver,ierr)
-      case (gmres_pfmg)
+      case (gmres_pfmg,gmres_pfmg2)
          call HYPRE_StructPFMGDestroy(this%hypre_precond,ierr)
          call HYPRE_StructGMRESDestroy(this%hypre_solver,ierr)
       end select

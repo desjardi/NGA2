@@ -3429,14 +3429,23 @@ contains
 
 
    !> Update a surfmesh object from our current polygons - near-empty cells are not shown
-   subroutine update_surfmesh_nowall(this,smesh)
+   subroutine update_surfmesh_nowall(this,smesh,threshold)
       use surfmesh_class, only: surfmesh
       implicit none
       class(vfs), intent(inout) :: this
       class(surfmesh), intent(inout) :: smesh
+      real(WP), optional :: threshold
+      real(WP) :: VFclip
       integer :: i,j,k,n,shape,nv,np,nplane
       real(WP), dimension(3) :: tmp_vert
       
+      ! Handle VF threshold
+      if (present(threshold)) then
+         VFclip=threshold
+      else
+         VFclip=2.0_WP*epsilon(1.0_WP)
+      end if
+
       ! Reset surface mesh storage
       call smesh%reset()
       
@@ -3445,7 +3454,7 @@ contains
       do k=this%cfg%kmin_,this%cfg%kmax_
          do j=this%cfg%jmin_,this%cfg%jmax_
             do i=this%cfg%imin_,this%cfg%imax_
-               if (this%cfg%VF(i,j,k).lt.2.0_WP*epsilon(1.0_WP)) cycle ! Skip near-empty cells
+               if (this%cfg%VF(i,j,k).lt.VFclip) cycle ! Skip cells below VF threshold
                do nplane=1,getNumberOfPlanes(this%liquid_gas_interface(i,j,k))
                   shape=getNumberOfVertices(this%interface_polygon(nplane,i,j,k))
                   if (shape.gt.0) then
@@ -3465,7 +3474,7 @@ contains
          do k=this%cfg%kmin_,this%cfg%kmax_
             do j=this%cfg%jmin_,this%cfg%jmax_
                do i=this%cfg%imin_,this%cfg%imax_
-                  if (this%cfg%VF(i,j,k).lt.2.0_WP*epsilon(1.0_WP)) cycle ! Skip near-empty cells
+                  if (this%cfg%VF(i,j,k).lt.VFclip) cycle ! Skip cells below VF threshold
                   do nplane=1,getNumberOfPlanes(this%liquid_gas_interface(i,j,k))
                      shape=getNumberOfVertices(this%interface_polygon(nplane,i,j,k))
                      if (shape.gt.0) then
