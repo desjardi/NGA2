@@ -353,7 +353,7 @@ contains
                      else
                         this%vf%VF(i,j,k)=0.0_WP
                      end if
-                     if (this%vf%cfg%xm(i).ge.-0.0015_WP.and.this%vf%cfg%VF(i,j,k).gt.0.5_WP) this%vf%VF(i,j,k)=0.0_WP
+                     if (this%vf%cfg%xm(i).ge.-0.0015_WP.and.this%vf%cfg%VF(i,j,k).gt.2.0_WP*epsilon(1.0_WP)) this%vf%VF(i,j,k)=0.0_WP
                      ! Initialize phasic barycenters
                      this%vf%Lbary(:,i,j,k)=[this%vf%cfg%xm(i),this%vf%cfg%ym(j),this%vf%cfg%zm(k)]
                      this%vf%Gbary(:,i,j,k)=[this%vf%cfg%xm(i),this%vf%cfg%ym(j),this%vf%cfg%zm(k)]
