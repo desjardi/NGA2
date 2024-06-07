@@ -14,6 +14,7 @@ module hypre_str_class
    
    
    ! List of known available methods
+   integer, parameter, public ::       pfmg2=0
    integer, parameter, public ::        pfmg=1
    integer, parameter, public ::    pcg_pfmg=2
    integer, parameter, public ::  gmres_pfmg=3
@@ -262,6 +263,20 @@ contains
          
          ! Setup PFMG solver
          call HYPRE_StructPFMGSetup        (this%hypre_solver,this%hypre_mat,this%hypre_rhs,this%hypre_sol,ierr)
+
+      case (pfmg2)
+         
+         ! Create PFMG solver
+         call HYPRE_StructPFMGCreate       (this%cfg%comm,this%hypre_solver,ierr)
+         if (this%maxlevel.gt.0) call HYPRE_StructPFMGSetMaxLevels(this%hypre_solver,this%maxlevel,ierr)
+         call HYPRE_StructPFMGSetMaxIter   (this%hypre_solver,this%maxit,ierr)
+         call HYPRE_StructPFMGSetTol       (this%hypre_solver,this%rcvg ,ierr)
+         call HYPRE_StructPFMGSetRAPType   (this%hypre_solver,1,ierr) ! Force use of 7-pt coarse stencil
+         call HYPRE_StructPFMGSetLogging   (this%hypre_solver,1,ierr)
+         call HYPRE_StructPFMGSetPrintLevel(this%hypre_solver,sprintlvl,ierr)
+         
+         ! Setup PFMG solver
+         call HYPRE_StructPFMGSetup        (this%hypre_solver,this%hypre_mat,this%hypre_rhs,this%hypre_sol,ierr)
       
       case (pcg_pfmg)
          
@@ -417,7 +432,7 @@ contains
          call HYPRE_StructSMGSolve           (this%hypre_solver,this%hypre_mat,this%hypre_rhs,this%hypre_sol,ierr)
          call HYPRE_StructSMGGetNumIterations(this%hypre_solver,this%it  ,ierr)
          call HYPRE_StructSMGGetFinalRelative(this%hypre_solver,this%rerr,ierr)
-      case (pfmg)
+      case (pfmg,pfmg2)
          call HYPRE_StructPFMGSolve          (this%hypre_solver,this%hypre_mat,this%hypre_rhs,this%hypre_sol,ierr)
          call HYPRE_StructPFMGGetNumIteration(this%hypre_solver,this%it  ,ierr)
          call HYPRE_StructPFMGGetFinalRelativ(this%hypre_solver,this%rerr,ierr)
@@ -470,7 +485,7 @@ contains
       case (gmres_smg)
          call HYPRE_StructSMGDestroy(this%hypre_precond,ierr)
          call HYPRE_StructGMRESDestroy(this%hypre_solver,ierr)
-      case (pfmg)
+      case (pfmg,pfmg2)
          call HYPRE_StructPFMGDestroy(this%hypre_solver,ierr)
       case (pcg)
          call HYPRE_StructPCGDestroy(this%hypre_solver,ierr)

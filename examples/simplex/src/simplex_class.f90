@@ -217,7 +217,6 @@ contains
       
       
       ! Handle restart/saves here
-      !!!! Needs to be modified to handle vfs restart too
       restart_and_save: block
          use string,  only: str_medium
          use filesys, only: makedir,isdir
@@ -241,9 +240,9 @@ contains
                if (.not.isdir('restart')) call makedir('restart')
             end if
             ! Prepare pardata object for saving restart files
-            call this%df%initialize(pg=this%cfg,iopartition=iopartition,filename=trim(this%cfg%name),nval=2,nvar=4)
+            call this%df%initialize(pg=this%cfg,iopartition=iopartition,filename=trim(this%cfg%name),nval=2,nvar=12)
             this%df%valname=['t ','dt']
-            this%df%varname=['U','V','W','P']
+            this%df%varname=['U  ','V  ','W  ','P  ','P11','P12','P13','P14','P21','P22','P23','P24']
          end if
       end block restart_and_save
       
@@ -272,47 +271,112 @@ contains
       
       ! Initialize our VOF solver and field
       create_and_initialize_vof: block
-         use vfs_class, only: plicnet,r2p,remap
+         use vfs_class, only: remap,plicnet,r2p
+         use irl_fortran_interface
          integer :: i,j,k
          real(WP) :: rad
+         real(WP), dimension(:,:,:), allocatable :: P11,P12,P13,P14
+         real(WP), dimension(:,:,:), allocatable :: P21,P22,P23,P24
          ! Create a VOF solver with plicnet
          call this%vf%initialize(cfg=this%cfg,reconstruction_method=plicnet,transport_method=remap,name='VOF')
-         ! Initialize to flat interface at exit
-         do k=this%vf%cfg%kmino_,this%vf%cfg%kmaxo_
-            do j=this%vf%cfg%jmino_,this%vf%cfg%jmaxo_
-               do i=this%vf%cfg%imino_,this%vf%cfg%imaxo_
-                  rad=sqrt(this%vf%cfg%ym(j)**2+this%vf%cfg%zm(k)**2)
-                  ! Ensure the nozzle is filled with liquid up to the throat with wet walls
-                  if (this%vf%cfg%xm(i).lt.-0.0015_WP.and.rad.le.0.002_WP) then
-                     this%vf%VF(i,j,k)=1.0_WP
-                  else if (this%vf%cfg%xm(i).ge.-0.0015_WP.and.this%vf%cfg%xm(i).lt.0.0_WP.and.rad.le.0.00143_WP) then
-                     this%vf%VF(i,j,k)=1.0_WP
-                  else
-                     this%vf%VF(i,j,k)=0.0_WP
-                  end if
-                  if (this%vf%cfg%xm(i).ge.-0.0015_WP.and.this%vf%cfg%VF(i,j,k).gt.2.0_WP*epsilon(1.0_WP)) this%vf%VF(i,j,k)=0.0_WP
-                  ! Initialize phasic barycenters
-                  this%vf%Lbary(:,i,j,k)=[this%vf%cfg%xm(i),this%vf%cfg%ym(j),this%vf%cfg%zm(k)]
-                  this%vf%Gbary(:,i,j,k)=[this%vf%cfg%xm(i),this%vf%cfg%ym(j),this%vf%cfg%zm(k)]
+         ! Initialize the interface inclduing restarts
+         if (this%restarted) then
+            ! Read in the planes directly and set the IRL interface
+            allocate(P11(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_)); call this%df%pull(name='P11',var=P11)
+            allocate(P12(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_)); call this%df%pull(name='P12',var=P12)
+            allocate(P13(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_)); call this%df%pull(name='P13',var=P13)
+            allocate(P14(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_)); call this%df%pull(name='P14',var=P14)
+            if (this%vf%two_planes) then
+               allocate(P21(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_)); call this%df%pull(name='P21',var=P21)
+               allocate(P22(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_)); call this%df%pull(name='P22',var=P22)
+               allocate(P23(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_)); call this%df%pull(name='P23',var=P23)
+               allocate(P24(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_)); call this%df%pull(name='P24',var=P24)
+            end if
+            do k=this%vf%cfg%kmino_,this%vf%cfg%kmaxo_
+               do j=this%vf%cfg%jmino_,this%vf%cfg%jmaxo_
+                  do i=this%vf%cfg%imino_,this%vf%cfg%imaxo_
+                     ! Check if the second plane is meaningful
+                     if (this%vf%two_planes.and.P21(i,j,k)**2+P22(i,j,k)**2+P23(i,j,k)**2.gt.0.0_WP) then
+                        call setNumberOfPlanes(this%vf%liquid_gas_interface(i,j,k),2)
+                        call setPlane(this%vf%liquid_gas_interface(i,j,k),0,[P11(i,j,k),P12(i,j,k),P13(i,j,k)],P14(i,j,k))
+                        call setPlane(this%vf%liquid_gas_interface(i,j,k),1,[P21(i,j,k),P22(i,j,k),P23(i,j,k)],P24(i,j,k))
+                     else
+                        call setNumberOfPlanes(this%vf%liquid_gas_interface(i,j,k),1)
+                        call setPlane(this%vf%liquid_gas_interface(i,j,k),0,[P11(i,j,k),P12(i,j,k),P13(i,j,k)],P14(i,j,k))
+                     end if
+                  end do
                end do
             end do
-         end do
-         ! Update the band
-         call this%vf%update_band()
-         ! Perform interface reconstruction from VOF field
-         call this%vf%build_interface()
-         ! Set interface planes at the boundaries
-         call this%vf%set_full_bcond()
-         ! Create discontinuous polygon mesh from IRL interface
-         call this%vf%polygonalize_interface()
-         ! Calculate distance from polygons
-         call this%vf%distance_from_polygon()
-         ! Calculate subcell phasic volumes
-         call this%vf%subcell_vol()
-         ! Calculate curvature
-         call this%vf%get_curvature()
-         ! Reset moments to guarantee compatibility with interface reconstruction
-         call this%vf%reset_volume_moments()
+            call this%vf%sync_interface()
+            deallocate(P11,P12,P13,P14)
+            if (this%vf%two_planes) deallocate(P21,P22,P23,P24)
+            ! Reset moments
+            call this%vf%reset_volume_moments()
+            ! Ensure that boundaries are correct
+            if (this%vf%cfg%iproc.eq.1)               this%vf%VF(this%vf%cfg%imino:this%vf%cfg%imin-1,:,:)=0.0_WP
+            if (this%vf%cfg%iproc.eq.this%vf%cfg%npx) this%vf%VF(this%vf%cfg%imax+1:this%vf%cfg%imaxo,:,:)=0.0_WP
+            if (this%vf%cfg%jproc.eq.1)               this%vf%VF(:,this%vf%cfg%jmino:this%vf%cfg%jmin-1,:)=0.0_WP
+            if (this%vf%cfg%jproc.eq.this%vf%cfg%npy) this%vf%VF(:,this%vf%cfg%jmax+1:this%vf%cfg%jmaxo,:)=0.0_WP
+            if (this%vf%cfg%kproc.eq.1)               this%vf%VF(:,:,this%vf%cfg%kmino:this%vf%cfg%kmin-1)=0.0_WP
+            if (this%vf%cfg%kproc.eq.this%vf%cfg%npz) this%vf%VF(:,:,this%vf%cfg%kmax+1:this%vf%cfg%kmaxo)=0.0_WP
+            do k=this%vf%cfg%kmino_,this%vf%cfg%kmaxo_
+               do j=this%vf%cfg%jmino_,this%vf%cfg%jmaxo_
+                  do i=this%vf%cfg%imino_,this%vf%cfg%imaxo_
+                     rad=sqrt(this%vf%cfg%ym(j)**2+this%vf%cfg%zm(k)**2)
+                     if (i.lt.this%vf%cfg%imin.and.rad.le.0.002_WP) this%vf%VF(i,j,k)=1.0_WP
+                  end do
+               end do
+            end do
+            ! Update the band
+            call this%vf%update_band()
+            ! Set interface planes at the boundaries
+            call this%vf%set_full_bcond()
+            ! Create discontinuous polygon mesh from IRL interface
+            call this%vf%polygonalize_interface()
+            ! Calculate distance from polygons
+            call this%vf%distance_from_polygon()
+            ! Calculate subcell phasic volumes
+            call this%vf%subcell_vol()
+            ! Calculate curvature
+            call this%vf%get_curvature()
+         else
+            ! Initialize to flat interface at exit
+            do k=this%vf%cfg%kmino_,this%vf%cfg%kmaxo_
+               do j=this%vf%cfg%jmino_,this%vf%cfg%jmaxo_
+                  do i=this%vf%cfg%imino_,this%vf%cfg%imaxo_
+                     rad=sqrt(this%vf%cfg%ym(j)**2+this%vf%cfg%zm(k)**2)
+                     ! Ensure the nozzle is filled with liquid up to the throat with wet walls
+                     if (this%vf%cfg%xm(i).lt.-0.0015_WP.and.rad.le.0.002_WP) then
+                        this%vf%VF(i,j,k)=1.0_WP
+                     else if (this%vf%cfg%xm(i).ge.-0.0015_WP.and.this%vf%cfg%xm(i).lt.0.0_WP.and.rad.le.0.00143_WP) then
+                        this%vf%VF(i,j,k)=1.0_WP
+                     else
+                        this%vf%VF(i,j,k)=0.0_WP
+                     end if
+                     if (this%vf%cfg%xm(i).ge.-0.0015_WP.and.this%vf%cfg%VF(i,j,k).gt.0.5_WP) this%vf%VF(i,j,k)=0.0_WP
+                     ! Initialize phasic barycenters
+                     this%vf%Lbary(:,i,j,k)=[this%vf%cfg%xm(i),this%vf%cfg%ym(j),this%vf%cfg%zm(k)]
+                     this%vf%Gbary(:,i,j,k)=[this%vf%cfg%xm(i),this%vf%cfg%ym(j),this%vf%cfg%zm(k)]
+                  end do
+               end do
+            end do
+            ! Update the band
+            call this%vf%update_band()
+            ! Perform interface reconstruction from VOF field
+            call this%vf%build_interface()
+            ! Set interface planes at the boundaries
+            call this%vf%set_full_bcond()
+            ! Create discontinuous polygon mesh from IRL interface
+            call this%vf%polygonalize_interface()
+            ! Calculate distance from polygons
+            call this%vf%distance_from_polygon()
+            ! Calculate subcell phasic volumes
+            call this%vf%subcell_vol()
+            ! Calculate curvature
+            call this%vf%get_curvature()
+            ! Reset moments to guarantee compatibility with interface reconstruction
+            call this%vf%reset_volume_moments()
+         end if
       end block create_and_initialize_vof
       
       
@@ -326,8 +390,7 @@ contains
       ! Create a two-phase flow solver with bconds
       create_flow_solver: block
          use tpns_class,      only: clipped_neumann,dirichlet,slip
-         use hypre_str_class, only: gmres_pfmg2
-         !use hypre_uns_class, only: pcg_amg
+         use hypre_str_class, only: pcg_pfmg2
          ! Create flow solver
          this%fs=tpns(cfg=this%cfg,name='Two-Phase NS')
          ! Set the flow properties
@@ -346,7 +409,7 @@ contains
          call this%fs%add_bcond(name='bc_zp',type=slip,face='z',dir=+1,canCorrect=.true.,locator=zp_locator)
          call this%fs%add_bcond(name='bc_zm',type=slip,face='z',dir=-1,canCorrect=.true.,locator=zm_locator)
          ! Configure pressure solver
-         this%ps=hypre_str(cfg=this%cfg,name='Pressure',method=gmres_pfmg2,nst=7)
+         this%ps=hypre_str(cfg=this%cfg,name='Pressure',method=pcg_pfmg2,nst=7)
          this%ps%maxlevel=12
          call this%input%read('Pressure iteration',this%ps%maxit)
          call this%input%read('Pressure tolerance',this%ps%rcvg)
@@ -615,18 +678,55 @@ contains
       ! Finally, see if it's time to save restart files
       if (this%save_evt%occurs()) then
          save_restart: block
+            use irl_fortran_interface
             use string, only: str_medium
             character(len=str_medium) :: timestamp
+            real(WP), dimension(:,:,:), allocatable :: P11,P12,P13,P14
+            real(WP), dimension(:,:,:), allocatable :: P21,P22,P23,P24
+            integer :: i,j,k
+            real(WP), dimension(4) :: plane
+            ! Handle IRL data
+            allocate(P11(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
+            allocate(P12(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
+            allocate(P13(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
+            allocate(P14(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
+            allocate(P21(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
+            allocate(P22(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
+            allocate(P23(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
+            allocate(P24(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
+            do k=this%vf%cfg%kmino_,this%vf%cfg%kmaxo_
+               do j=this%vf%cfg%jmino_,this%vf%cfg%jmaxo_
+                  do i=this%vf%cfg%imino_,this%vf%cfg%imaxo_
+                     ! First plane
+                     plane=getPlane(this%vf%liquid_gas_interface(i,j,k),0)
+                     P11(i,j,k)=plane(1); P12(i,j,k)=plane(2); P13(i,j,k)=plane(3); P14(i,j,k)=plane(4)
+                     ! Second plane
+                     plane=0.0_WP
+                     if (getNumberOfPlanes(this%vf%liquid_gas_interface(i,j,k)).eq.2) plane=getPlane(this%vf%liquid_gas_interface(i,j,k),1)
+                     P21(i,j,k)=plane(1); P22(i,j,k)=plane(2); P23(i,j,k)=plane(3); P24(i,j,k)=plane(4)
+                  end do
+               end do
+            end do
             ! Prefix for files
             write(timestamp,'(es12.5)') this%time%t
             ! Populate df and write it
-            call this%df%push(name='t' ,val=this%time%t )
-            call this%df%push(name='dt',val=this%time%dt)
-            call this%df%push(name='U' ,var=this%fs%U   )
-            call this%df%push(name='V' ,var=this%fs%V   )
-            call this%df%push(name='W' ,var=this%fs%W   )
-            call this%df%push(name='P' ,var=this%fs%P   )
+            call this%df%push(name='t'  ,val=this%time%t )
+            call this%df%push(name='dt' ,val=this%time%dt)
+            call this%df%push(name='U'  ,var=this%fs%U   )
+            call this%df%push(name='V'  ,var=this%fs%V   )
+            call this%df%push(name='W'  ,var=this%fs%W   )
+            call this%df%push(name='P'  ,var=this%fs%P   )
+            call this%df%push(name='P11',var=P11         )
+            call this%df%push(name='P12',var=P12         )
+            call this%df%push(name='P13',var=P13         )
+            call this%df%push(name='P14',var=P14         )
+            call this%df%push(name='P21',var=P21         )
+            call this%df%push(name='P22',var=P22         )
+            call this%df%push(name='P23',var=P23         )
+            call this%df%push(name='P24',var=P24         )
             call this%df%write(fdata='restart/data_'//trim(adjustl(timestamp)))
+            ! Deallocate
+            deallocate(P11,P12,P13,P14,P21,P22,P23,P24)
          end block save_restart
       end if
       
