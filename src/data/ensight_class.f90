@@ -293,10 +293,12 @@ contains
          this%time(1)=time
       else
          ! There are time stamps already, check where to insert
-         n=this%ntime+1
-         do i=this%ntime,1,-1
-            if (time.le.this%time(i)) n=n-1
-         end do
+         rewind: do i=this%ntime,1,-1
+            if (this%time(i).lt.time-epsilon(1.0_WP)) then
+               n=i+1
+               exit rewind
+            end if
+         end do rewind
          this%ntime=n; allocate(temp_time(1:this%ntime))
          temp_time=[this%time(1:this%ntime-1),time]
          call move_alloc(temp_time,this%time)
