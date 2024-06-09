@@ -314,8 +314,8 @@ module plicnet
 contains
    subroutine get_normal(moments,normal)
       implicit none
-      real(WP), dimension(:), intent(in ) :: moments !< Needs to be of size (0:188)
-      real(WP), dimension(:), intent(out) :: normal  !< Needs to be of size (0:2)
+      real(WP), dimension(:), intent(in ) :: moments !< Needs to be of size 189
+      real(WP), dimension(:), intent(out) :: normal  !< Needs to be of size 3
       real(WP), dimension(100) :: tmparr
       tmparr=max(0.0_WP,matmul(moments,lay1_weight)+lay1_bias)
       tmparr=max(0.0_WP,matmul(tmparr,lay2_weight)+lay2_bias)
@@ -324,8 +324,8 @@ contains
    end subroutine
    subroutine reflect_moments(moments,center,direction)
       implicit none
-      real(WP), dimension(:), intent(inout) :: moments !< Needs to be of size (0:188)
-      real(WP), dimension(:), intent(in) :: center     !< Needs to be of size (0:2)
+      real(WP), dimension(0:), intent(inout) :: moments !< Needs to be of size (0:188)
+      real(WP), dimension(0:), intent(in) :: center     !< Needs to be of size (0:2)
       integer, intent(out) :: direction
       direction=0
       if (center(0).lt.0.and.center(1).ge.0.and.center(2).ge.0) then
@@ -358,7 +358,7 @@ contains
    end subroutine reflect_moments
    subroutine reflect_moments_x(moments)
       implicit none
-      real(WP), dimension(:), intent(inout) :: moments !< Needs to be of size (0:188)
+      real(WP), dimension(0:), intent(inout) :: moments !< Needs to be of size (0:188)
       integer :: i,j,k,n
       real(WP) :: temp
       do k=0,2
@@ -386,7 +386,7 @@ contains
    end subroutine reflect_moments_x
    subroutine reflect_moments_y(moments)
       implicit none
-      real(WP), dimension(:), intent(inout) :: moments !< Needs to be of size (0:188)
+      real(WP), dimension(0:), intent(inout) :: moments !< Needs to be of size (0:188)
       integer :: i,j,k,n
       real(WP) :: temp
       do k=0,2
@@ -414,7 +414,7 @@ contains
    end subroutine reflect_moments_y
    subroutine reflect_moments_z(moments)
       implicit none
-      real(WP), dimension(:), intent(inout) :: moments !< Needs to be of size (0:188)
+      real(WP), dimension(0:), intent(inout) :: moments !< Needs to be of size (0:188)
       integer :: i,j,k,n
       real(WP) :: temp
       do k=0,2
