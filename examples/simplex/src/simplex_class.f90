@@ -302,6 +302,15 @@ contains
                         call setNumberOfPlanes(this%vf%liquid_gas_interface(i,j,k),1)
                         call setPlane(this%vf%liquid_gas_interface(i,j,k),0,[P11(i,j,k),P12(i,j,k),P13(i,j,k)],P14(i,j,k))
                      end if
+                     ! For this restart, I want to attempt to remove all gas inclusions next to the walls
+                     !rad=sqrt(this%vf%cfg%ym(j)**2+this%vf%cfg%zm(k)**2)
+                     !if (this%vf%cfg%xm(i).lt.-0.0015_WP.and.rad.le.0.002_WP.and.abs(this%cfg%Gib(i,j,k)).lt.2.0_WP*this%cfg%min_meshsize) then
+                     !   call setNumberOfPlanes(this%vf%liquid_gas_interface(i,j,k),1)
+                     !   call setPlane(this%vf%liquid_gas_interface(i,j,k),0,[0.0_WP,0.0_WP,0.0_WP],1.0_WP)
+                     !else if (this%vf%cfg%xm(i).lt.0.0_WP.and.rad.le.0.00143_WP.and.abs(this%cfg%Gib(i,j,k)).lt.2.0_WP*this%cfg%min_meshsize) then
+                     !   call setNumberOfPlanes(this%vf%liquid_gas_interface(i,j,k),1)
+                     !   call setPlane(this%vf%liquid_gas_interface(i,j,k),0,[0.0_WP,0.0_WP,0.0_WP],1.0_WP)
+                     !end if
                   end do
                end do
             end do
@@ -457,7 +466,7 @@ contains
       ! Create surfmesh object for interface polygon output
       create_smesh: block
          this%smesh=surfmesh(nvar=0,name='plic')
-         call this%vf%update_surfmesh_nowall(this%smesh,threshold=0.8_WP)
+         call this%vf%update_surfmesh_nowall(this%smesh)
       end block create_smesh
 
       
@@ -674,7 +683,7 @@ contains
       
       ! Output to ensight
       if (this%ens_evt%occurs()) then
-         call this%vf%update_surfmesh_nowall(this%smesh,threshold=0.8_WP)
+         call this%vf%update_surfmesh_nowall(this%smesh)
          call this%ens_out%write_data(this%time%t)
       end if
       
