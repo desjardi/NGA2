@@ -294,7 +294,7 @@ contains
       else
          ! There are time stamps already, check where to insert
          rewind: do i=this%ntime,1,-1
-            if (this%time(i).lt.time-epsilon(1.0_WP)) then
+            if (this%time(i).lt.time-10.0_WP*epsilon(1.0_WP)) then
                n=i+1
                exit rewind
             end if

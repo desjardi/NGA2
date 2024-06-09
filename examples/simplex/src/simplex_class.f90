@@ -630,18 +630,6 @@ contains
          this%fs%psolv%sol=0.0_WP
          call this%fs%psolv%solve()
          call this%fs%shift_p(this%fs%psolv%sol)
-
-         ! Crude attempt at capturing random HYPRE fails
-         hypre_capture: block
-            use, intrinsic :: iso_fortran_env, only: output_unit
-            ! An identically zero Poisson error is suggestive of an issue, capture it
-            if (this%fs%psolv%aerr.eq.0.0_WP) then
-               ! Generate some output
-               if (this%fs%cfg%amRoot) write(output_unit,'("FAILURE of HYPRE solver [",a,"] for config [",a,"]!!!")') trim(this%fs%psolv%name),trim(this%fs%psolv%cfg%name)
-               ! Just reset the pressure
-               this%fs%P=0.0_WP; this%fs%Pjx=0.0_WP; this%fs%Pjy=0.0_WP; this%fs%Pjz=0.0_WP
-            end if
-         end block hypre_capture
          
          ! Correct velocity
          call this%fs%get_pgrad(this%fs%psolv%sol,this%resU,this%resV,this%resW)
