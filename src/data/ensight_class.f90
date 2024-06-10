@@ -295,6 +295,7 @@ contains
          this%time(1)=time
       else
          ! There are time stamps already, check where to insert
+         n=1
          rewind: do i=this%ntime,1,-1
             ! Convert time to appropriate accuracy before comparing
             ctime=''; write(ctime,'(es12.5)') time; read(ctime,'(es12.5)') rtime
