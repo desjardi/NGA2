@@ -55,8 +55,8 @@ module hypre_str_class
       procedure :: init=>hypre_str_init                  !< Grid and stencil initialization - done once for the grid and stencil
       procedure :: setup=>hypre_str_setup                !< Solver setup (every time the operator changes)
       procedure :: solve=>hypre_str_solve                !< Execute solver (assumes new RHS and initial guess at every call)
-      procedure :: destroy=>hypre_str_destroy            !< Preconditioner destruction (every time the operator changes)
-      procedure :: final=>hypre_str_final                !< Solver destruction - at the very end
+      procedure :: destroy=>hypre_str_destroy            !< Solver destruction (every time the operator changes)
+      
    end type hypre_str
    
    
@@ -130,49 +130,6 @@ contains
       ! Initialize HYPRE
       call HYPRE_Init(ierr)
       
-      ! Create the appropriate solver
-      select case (this%method)
-      case (smg)
-         ! Create SMG solver
-         call HYPRE_StructSMGCreate       (this%cfg%comm,this%hypre_solver,ierr)
-         call HYPRE_StructSMGSetMaxIter   (this%hypre_solver,this%maxit,ierr)
-         call HYPRE_StructSMGSetTol       (this%hypre_solver,this%rcvg ,ierr)
-         !call HYPRE_StructSMGSetPrintLevel(this%hypre_solver,sprintlvl,ierr)
-         !call HYPRE_StructSMGSetLogging   (this%hypre_solver,1,ierr)
-      case (pfmg)
-         ! Create PFMG solver
-         call HYPRE_StructPFMGCreate       (this%cfg%comm,this%hypre_solver,ierr)
-         if (this%maxlevel.gt.0) call HYPRE_StructPFMGSetMaxLevels(this%hypre_solver,this%maxlevel,ierr)
-         call HYPRE_StructPFMGSetMaxIter   (this%hypre_solver,this%maxit,ierr)
-         call HYPRE_StructPFMGSetTol       (this%hypre_solver,this%rcvg ,ierr)
-         !call HYPRE_StructPFMGSetLogging   (this%hypre_solver,1,ierr)
-         !call HYPRE_StructPFMGSetPrintLevel(this%hypre_solver,sprintlvl,ierr)
-      case (pfmg2)
-         ! Create PFMG2 solver
-         call HYPRE_StructPFMGCreate       (this%cfg%comm,this%hypre_solver,ierr)
-         if (this%maxlevel.gt.0) call HYPRE_StructPFMGSetMaxLevels(this%hypre_solver,this%maxlevel,ierr)
-         call HYPRE_StructPFMGSetMaxIter   (this%hypre_solver,this%maxit,ierr)
-         call HYPRE_StructPFMGSetTol       (this%hypre_solver,this%rcvg ,ierr)
-         call HYPRE_StructPFMGSetRAPType   (this%hypre_solver,1,ierr) ! Force use of 7-pt coarse stencil
-         !call HYPRE_StructPFMGSetLogging   (this%hypre_solver,1,ierr)
-         !call HYPRE_StructPFMGSetPrintLevel(this%hypre_solver,sprintlvl,ierr)
-      case (pcg,pcg_smg,pcg_pfmg,pcg_pfmg2)
-         ! Create PCG solver
-         call HYPRE_StructPCGCreate    (this%cfg%comm,this%hypre_solver,ierr)
-         call HYPRE_StructPCGSetMaxIter(this%hypre_solver,this%maxit,ierr)
-         call HYPRE_StructPCGSetTol    (this%hypre_solver,this%rcvg,ierr)
-         !call HYPRE_StructPCGSetLogging(this%hypre_solver,1,ierr)
-      case (gmres,gmres_smg,gmres_pfmg,gmres_pfmg2)
-         ! Create GMRES solver
-         call HYPRE_StructGMRESCreate    (this%cfg%comm,this%hypre_solver,ierr)
-         call HYPRE_StructGMRESSetMaxIter(this%hypre_solver,this%maxit,ierr)
-         call HYPRE_StructGMRESSetTol    (this%hypre_solver,this%rcvg,ierr)
-         !call HYPRE_StructGMRESSetLogging(this%hypre_solver,1,ierr)
-      case default
-         ! Unknown solver
-         call die('[hypre_str_init] Unknown solution method')
-      end select
-      
       ! These use HYPRE's structured environment, which requires that we create a HYPRE grid and stencil
       call HYPRE_StructGridCreate(this%cfg%comm,3,this%hypre_box,ierr)
       call HYPRE_StructGridSetExtents(this%hypre_box,[this%cfg%imin_,this%cfg%jmin_,this%cfg%kmin_],[this%cfg%imax_,this%cfg%jmax_,this%cfg%kmax_],ierr)
@@ -190,18 +147,6 @@ contains
          call HYPRE_StructStencilSetElement(this%hypre_stc,st-1,offset,ierr)
       end do
       
-      ! Prepare structured rhs vector
-      call HYPRE_StructVectorCreate(this%cfg%comm,this%hypre_box,this%hypre_rhs,ierr)
-      call HYPRE_StructVectorInitialize(this%hypre_rhs,ierr)
-      
-      ! Prepare structured solution vector
-      call HYPRE_StructVectorCreate(this%cfg%comm,this%hypre_box,this%hypre_sol,ierr)
-      call HYPRE_StructVectorInitialize(this%hypre_sol,ierr)
-      
-      ! Create a structured matrix
-      call HYPRE_StructMatrixCreate(this%cfg%comm,this%hypre_box,this%hypre_stc,this%hypre_mat,ierr)
-      call HYPRE_StructMatrixInitialize(this%hypre_mat,ierr)
-      
    end subroutine hypre_str_init
    
    
@@ -210,12 +155,16 @@ contains
       use messager, only: die
       implicit none
       class(hypre_str), intent(inout) :: this
-      integer :: ierr,i,j,k,st
+      integer :: i,j,k,st,ierr
       integer,  dimension(:), allocatable :: row
       real(WP), dimension(:), allocatable :: val
       
       ! If the solver has already been setup, destroy it first
       if (this%setup_done) call this%destroy()
+      
+      ! Create a structured matrix
+      call HYPRE_StructMatrixCreate(this%cfg%comm,this%hypre_box,this%hypre_stc,this%hypre_mat,ierr)
+      call HYPRE_StructMatrixInitialize(this%hypre_mat,ierr)
       
       ! Prepare local storage
       allocate(row(1:this%nst),val(1:this%nst))
@@ -242,76 +191,204 @@ contains
       !call HYPRE_StructMatrixPrint('struct_mat'//char(0),this%hypre_mat,0,ierr)
       !call die('Matrix was printed out')
       
-      ! Create any preconditioner, setup the actual solver
+      ! Prepare structured rhs vector
+      call HYPRE_StructVectorCreate(this%cfg%comm,this%hypre_box,this%hypre_rhs,ierr)
+      call HYPRE_StructVectorInitialize(this%hypre_rhs,ierr)
+      
+      ! Prepare structured solution vector
+      call HYPRE_StructVectorCreate(this%cfg%comm,this%hypre_box,this%hypre_sol,ierr)
+      call HYPRE_StructVectorInitialize(this%hypre_sol,ierr)
+      
+      ! Initialize and setup the actual solver
       select case (this%method)
       case (smg)
+         
+         ! Create SMG solver
+         call HYPRE_StructSMGCreate        (this%cfg%comm,this%hypre_solver,ierr)
+         call HYPRE_StructSMGSetPrintLevel (this%hypre_solver,sprintlvl,ierr)
+         call HYPRE_StructSMGSetMaxIter    (this%hypre_solver,this%maxit,ierr)
+         call HYPRE_StructSMGSetTol        (this%hypre_solver,this%rcvg ,ierr)
+         call HYPRE_StructSMGSetLogging    (this%hypre_solver,1,ierr)
+         
          ! Setup SMG solver
-         call HYPRE_StructSMGSetup(this%hypre_solver,this%hypre_mat,this%hypre_rhs,this%hypre_sol,ierr)
+         call HYPRE_StructSMGSetup         (this%hypre_solver,this%hypre_mat,this%hypre_rhs,this%hypre_sol,ierr)
+         
       case (pcg_smg)
+         
          ! Create SMG preconditioner
-         call HYPRE_StructSMGCreate    (this%cfg%comm,this%hypre_precond,ierr)
-         call HYPRE_StructSMGSetMaxIter(this%hypre_precond,1,ierr)
-         call HYPRE_StructSMGSetTol    (this%hypre_precond,0.0_WP,ierr)
-         ! Setup PCG solver with SMG as preconditioner
-         call HYPRE_StructPCGSetPrecond(this%hypre_solver,0,this%hypre_precond,ierr)
-         call HYPRE_StructPCGSetup     (this%hypre_solver,this%hypre_mat,this%hypre_rhs,this%hypre_sol,ierr)
-      case (gmres_smg)
-         ! Create SMG preconditioner
-         call HYPRE_StructSMGCreate    (this%cfg%comm,this%hypre_precond,ierr)
-         call HYPRE_StructSMGSetMaxIter(this%hypre_precond,1,ierr)
-         call HYPRE_StructSMGSetTol    (this%hypre_precond,0.0_WP,ierr)
-         ! Setup GMRES solver with SMG as preconditioner
-         call HYPRE_StructGMRESSetPrecond(this%hypre_solver,0,this%hypre_precond,ierr)
-         call HYPRE_StructGMRESSetup     (this%hypre_solver,this%hypre_mat,this%hypre_rhs,this%hypre_sol,ierr)
-      case (pfmg,pfmg2)
-         ! Setup PFMG solver
-         call HYPRE_StructPFMGSetup(this%hypre_solver,this%hypre_mat,this%hypre_rhs,this%hypre_sol,ierr)
-      case (pcg_pfmg)
-         ! Create PFMG preconditioner
-         call HYPRE_StructPFMGCreate    (this%cfg%comm,this%hypre_precond,ierr)
-         call HYPRE_StructPFMGSetMaxIter(this%hypre_precond,1,ierr)
-         call HYPRE_StructPFMGSetTol    (this%hypre_precond,0.0_WP,ierr)
-         if (this%maxlevel.gt.0) call HYPRE_StructPFMGSetMaxLevels(this%hypre_precond,this%maxlevel,ierr)
-         ! Setup PCG solver with PFMG as preconditioner
-         call HYPRE_StructPCGSetPrecond(this%hypre_solver,1,this%hypre_precond,ierr)
-         call HYPRE_StructPCGSetup     (this%hypre_solver,this%hypre_mat,this%hypre_rhs,this%hypre_sol,ierr)
-      case (pcg_pfmg2)
-         ! Create PFMG2 preconditioner
-         call HYPRE_StructPFMGCreate    (this%cfg%comm,this%hypre_precond,ierr)
-         call HYPRE_StructPFMGSetMaxIter(this%hypre_precond,1,ierr)
-         call HYPRE_StructPFMGSetTol    (this%hypre_precond,0.0_WP,ierr)
-         if (this%maxlevel.gt.0) call HYPRE_StructPFMGSetMaxLevels(this%hypre_precond,this%maxlevel,ierr)
-         !call HYPRE_StructPFMGSetRelaxType(this%hypre_precond,2,ierr) ! Set symmetric RBGS as smoother
-         call HYPRE_StructPFMGSetRAPType(this%hypre_precond,1,ierr) ! Force use of 7-pt coarse stencil
-         ! Setup PCG solver with PFMG as preconditioner
-         call HYPRE_StructPCGSetPrecond(this%hypre_solver,1,this%hypre_precond,ierr)
-         call HYPRE_StructPCGSetup     (this%hypre_solver,this%hypre_mat,this%hypre_rhs,this%hypre_sol,ierr)
-      case (pcg)
+         call HYPRE_StructSMGCreate      (this%cfg%comm,this%hypre_precond,ierr)
+         call HYPRE_StructSMGSetMaxIter  (this%hypre_precond,1,ierr)
+         call HYPRE_StructSMGSetTol      (this%hypre_precond,0.0_WP,ierr)
+         
+         ! Create PCG solver
+         call HYPRE_StructPCGCreate       (this%cfg%comm,this%hypre_solver,ierr)
+         call HYPRE_StructPCGSetMaxIter   (this%hypre_solver,this%maxit,ierr)
+         call HYPRE_StructPCGSetTol       (this%hypre_solver,this%rcvg,ierr)
+         call HYPRE_StructPCGSetLogging   (this%hypre_solver,1,ierr)
+         
+         ! Set SMG as preconditioner to PCG
+         call HYPRE_StructPCGSetPrecond   (this%hypre_solver,0,this%hypre_precond,ierr)
+         
          ! Setup PCG solver
-         call HYPRE_StructPCGSetup(this%hypre_solver,this%hypre_mat,this%hypre_rhs,this%hypre_sol,ierr)
-      case (gmres_pfmg)
+         call HYPRE_StructPCGSetup        (this%hypre_solver,this%hypre_mat,this%hypre_rhs,this%hypre_sol,ierr)
+         
+      case (gmres_smg)
+         
+         ! Create SMG preconditioner
+         call HYPRE_StructSMGCreate      (this%cfg%comm,this%hypre_precond,ierr)
+         call HYPRE_StructSMGSetMaxIter  (this%hypre_precond,1,ierr)
+         call HYPRE_StructSMGSetTol      (this%hypre_precond,0.0_WP,ierr)
+         
+         ! Create GMRES solver
+         call HYPRE_StructGMRESCreate     (this%cfg%comm,this%hypre_solver,ierr)
+         call HYPRE_StructGMRESSetMaxIter (this%hypre_solver,this%maxit,ierr)
+         call HYPRE_StructGMRESSetTol     (this%hypre_solver,this%rcvg,ierr)
+         call HYPRE_StructGMRESSetLogging (this%hypre_solver,1,ierr)
+         
+         ! Set SMG as preconditioner to GMRES
+         call HYPRE_StructGMRESSetPrecond (this%hypre_solver,0,this%hypre_precond,ierr)
+         
+         ! Setup GMRES solver
+         call HYPRE_StructGMRESSetup      (this%hypre_solver,this%hypre_mat,this%hypre_rhs,this%hypre_sol,ierr)
+         
+      case (pfmg)
+         
+         ! Create PFMG solver
+         call HYPRE_StructPFMGCreate       (this%cfg%comm,this%hypre_solver,ierr)
+         if (this%maxlevel.gt.0) call HYPRE_StructPFMGSetMaxLevels(this%hypre_solver,this%maxlevel,ierr)
+         call HYPRE_StructPFMGSetMaxIter   (this%hypre_solver,this%maxit,ierr)
+         call HYPRE_StructPFMGSetTol       (this%hypre_solver,this%rcvg ,ierr)
+         call HYPRE_StructPFMGSetLogging   (this%hypre_solver,1,ierr)
+         call HYPRE_StructPFMGSetPrintLevel(this%hypre_solver,sprintlvl,ierr)
+         
+         ! Setup PFMG solver
+         call HYPRE_StructPFMGSetup        (this%hypre_solver,this%hypre_mat,this%hypre_rhs,this%hypre_sol,ierr)
+
+      case (pfmg2)
+         
+         ! Create PFMG solver
+         call HYPRE_StructPFMGCreate       (this%cfg%comm,this%hypre_solver,ierr)
+         if (this%maxlevel.gt.0) call HYPRE_StructPFMGSetMaxLevels(this%hypre_solver,this%maxlevel,ierr)
+         call HYPRE_StructPFMGSetMaxIter   (this%hypre_solver,this%maxit,ierr)
+         call HYPRE_StructPFMGSetTol       (this%hypre_solver,this%rcvg ,ierr)
+         call HYPRE_StructPFMGSetRAPType   (this%hypre_solver,1,ierr) ! Force use of 7-pt coarse stencil
+         call HYPRE_StructPFMGSetLogging   (this%hypre_solver,1,ierr)
+         call HYPRE_StructPFMGSetPrintLevel(this%hypre_solver,sprintlvl,ierr)
+         
+         ! Setup PFMG solver
+         call HYPRE_StructPFMGSetup        (this%hypre_solver,this%hypre_mat,this%hypre_rhs,this%hypre_sol,ierr)
+      
+      case (pcg_pfmg)
+         
          ! Create PFMG preconditioner
-         call HYPRE_StructPFMGCreate    (this%cfg%comm,this%hypre_precond,ierr)
-         call HYPRE_StructPFMGSetMaxIter(this%hypre_precond,1,ierr)
-         call HYPRE_StructPFMGSetTol    (this%hypre_precond,0.0_WP,ierr)
+         call HYPRE_StructPFMGCreate      (this%cfg%comm,this%hypre_precond,ierr)
+         call HYPRE_StructPFMGSetMaxIter  (this%hypre_precond,1,ierr)
+         call HYPRE_StructPFMGSetTol      (this%hypre_precond,0.0_WP,ierr)
          if (this%maxlevel.gt.0) call HYPRE_StructPFMGSetMaxLevels(this%hypre_precond,this%maxlevel,ierr)
-         ! Setup GMRES solver with PFMG as preconditioner
-         call HYPRE_StructGMRESSetPrecond(this%hypre_solver,1,this%hypre_precond,ierr)
-         call HYPRE_StructGMRESSetup     (this%hypre_solver,this%hypre_mat,this%hypre_rhs,this%hypre_sol,ierr)
-      case (gmres_pfmg2)
-         ! Create PFMG2 preconditioner
-         call HYPRE_StructPFMGCreate    (this%cfg%comm,this%hypre_precond,ierr)
-         call HYPRE_StructPFMGSetMaxIter(this%hypre_precond,1,ierr)
-         call HYPRE_StructPFMGSetTol    (this%hypre_precond,0.0_WP,ierr)
+         
+         ! Create PCG solver
+         call HYPRE_StructPCGCreate       (this%cfg%comm,this%hypre_solver,ierr)
+         call HYPRE_StructPCGSetMaxIter   (this%hypre_solver,this%maxit,ierr)
+         call HYPRE_StructPCGSetTol       (this%hypre_solver,this%rcvg,ierr)
+         call HYPRE_StructPCGSetLogging   (this%hypre_solver,1,ierr)
+         
+         ! Set PFMG as preconditioner to PCG
+         call HYPRE_StructPCGSetPrecond   (this%hypre_solver,1,this%hypre_precond,ierr)
+         
+         ! Setup PCG solver
+         call HYPRE_StructPCGSetup        (this%hypre_solver,this%hypre_mat,this%hypre_rhs,this%hypre_sol,ierr)
+
+      case (pcg_pfmg2)
+         
+         ! Create PFMG preconditioner
+         call HYPRE_StructPFMGCreate      (this%cfg%comm,this%hypre_precond,ierr)
+         call HYPRE_StructPFMGSetMaxIter  (this%hypre_precond,1,ierr)
+         call HYPRE_StructPFMGSetTol      (this%hypre_precond,0.0_WP,ierr)
          if (this%maxlevel.gt.0) call HYPRE_StructPFMGSetMaxLevels(this%hypre_precond,this%maxlevel,ierr)
          !call HYPRE_StructPFMGSetRelaxType(this%hypre_precond,2,ierr) ! Set symmetric RBGS as smoother
-         call HYPRE_StructPFMGSetRAPType(this%hypre_precond,1,ierr) ! Force use of 7-pt coarse stencil
-         ! Setup GMRES solver with PFMG2 as preconditioner
-         call HYPRE_StructGMRESSetPrecond(this%hypre_solver,1,this%hypre_precond,ierr)
-         call HYPRE_StructGMRESSetup     (this%hypre_solver,this%hypre_mat,this%hypre_rhs,this%hypre_sol,ierr)
-      case (gmres)
+         call HYPRE_StructPFMGSetRAPType  (this%hypre_precond,1,ierr) ! Force use of 7-pt coarse stencil
+         
+         ! Create PCG solver
+         call HYPRE_StructPCGCreate       (this%cfg%comm,this%hypre_solver,ierr)
+         call HYPRE_StructPCGSetMaxIter   (this%hypre_solver,this%maxit,ierr)
+         call HYPRE_StructPCGSetTol       (this%hypre_solver,this%rcvg,ierr)
+         call HYPRE_StructPCGSetLogging   (this%hypre_solver,1,ierr)
+         
+         ! Set PFMG as preconditioner to PCG
+         call HYPRE_StructPCGSetPrecond   (this%hypre_solver,1,this%hypre_precond,ierr)
+         
+         ! Setup PCG solver
+         call HYPRE_StructPCGSetup        (this%hypre_solver,this%hypre_mat,this%hypre_rhs,this%hypre_sol,ierr)
+         
+      case (pcg)
+         
+         ! Create PCG solver
+         call HYPRE_StructPCGCreate       (this%cfg%comm,this%hypre_solver,ierr)
+         call HYPRE_StructPCGSetMaxIter   (this%hypre_solver,this%maxit,ierr)
+         call HYPRE_StructPCGSetTol       (this%hypre_solver,this%rcvg,ierr)
+         call HYPRE_StructPCGSetLogging   (this%hypre_solver,1,ierr)
+         
+         ! Setup PCG solver
+         call HYPRE_StructPCGSetup        (this%hypre_solver,this%hypre_mat,this%hypre_rhs,this%hypre_sol,ierr)
+         
+      case (gmres_pfmg)
+         
+         ! Create PFMG preconditioner
+         call HYPRE_StructPFMGCreate      (this%cfg%comm,this%hypre_precond,ierr)
+         call HYPRE_StructPFMGSetMaxIter  (this%hypre_precond,1,ierr)
+         call HYPRE_StructPFMGSetTol      (this%hypre_precond,0.0_WP,ierr)
+         if (this%maxlevel.gt.0) call HYPRE_StructPFMGSetMaxLevels(this%hypre_precond,this%maxlevel,ierr)
+         
+         ! Create GMRES solver
+         call HYPRE_StructGMRESCreate      (this%cfg%comm,this%hypre_solver,ierr)
+         call HYPRE_StructGMRESSetMaxIter  (this%hypre_solver,this%maxit,ierr)
+         call HYPRE_StructGMRESSetTol      (this%hypre_solver,this%rcvg,ierr)
+         call HYPRE_StructGMRESSetLogging  (this%hypre_solver,1,ierr)
+         
+         ! Set PFMG as preconditioner to GMRES
+         call HYPRE_StructGMRESSetPrecond  (this%hypre_solver,1,this%hypre_precond,ierr)
+         
          ! Setup GMRES solver
-         call HYPRE_StructGMRESSetup(this%hypre_solver,this%hypre_mat,this%hypre_rhs,this%hypre_sol,ierr)
+         call HYPRE_StructGMRESSetup       (this%hypre_solver,this%hypre_mat,this%hypre_rhs,this%hypre_sol,ierr)
+
+      case (gmres_pfmg2)
+         
+         ! Create PFMG preconditioner
+         call HYPRE_StructPFMGCreate      (this%cfg%comm,this%hypre_precond,ierr)
+         call HYPRE_StructPFMGSetMaxIter  (this%hypre_precond,1,ierr)
+         call HYPRE_StructPFMGSetTol      (this%hypre_precond,0.0_WP,ierr)
+         if (this%maxlevel.gt.0) call HYPRE_StructPFMGSetMaxLevels(this%hypre_precond,this%maxlevel,ierr)
+         !call HYPRE_StructPFMGSetRelaxType(this%hypre_precond,2,ierr) ! Set symmetric RBGS as smoother
+         call HYPRE_StructPFMGSetRAPType  (this%hypre_precond,1,ierr) ! Force use of 7-pt coarse stencil
+         
+         ! Create GMRES solver
+         call HYPRE_StructGMRESCreate      (this%cfg%comm,this%hypre_solver,ierr)
+         call HYPRE_StructGMRESSetMaxIter  (this%hypre_solver,this%maxit,ierr)
+         call HYPRE_StructGMRESSetTol      (this%hypre_solver,this%rcvg,ierr)
+         call HYPRE_StructGMRESSetLogging  (this%hypre_solver,1,ierr)
+         
+         ! Set PFMG as preconditioner to GMRES
+         call HYPRE_StructGMRESSetPrecond  (this%hypre_solver,1,this%hypre_precond,ierr)
+         
+         ! Setup GMRES solver
+         call HYPRE_StructGMRESSetup       (this%hypre_solver,this%hypre_mat,this%hypre_rhs,this%hypre_sol,ierr)
+         
+      case (gmres)
+         
+         ! Create GMRES solver
+         call HYPRE_StructGMRESCreate      (this%cfg%comm,this%hypre_solver,ierr)
+         call HYPRE_StructGMRESSetMaxIter  (this%hypre_solver,this%maxit,ierr)
+         call HYPRE_StructGMRESSetTol      (this%hypre_solver,this%rcvg,ierr)
+         call HYPRE_StructGMRESSetLogging  (this%hypre_solver,1,ierr)
+         
+         ! Setup GMRES solver
+         call HYPRE_StructGMRESSetup       (this%hypre_solver,this%hypre_mat,this%hypre_rhs,this%hypre_sol,ierr)
+         
+      case default
+         
+         ! Solver is unknown
+         call die('[hypre_str setup] Unknown solution method')
+         
       end select
       
       ! Set setup-flag to true
@@ -388,48 +465,44 @@ contains
    end subroutine hypre_str_solve
    
    
-   !> Destroy preconditioner - done everytime the operator changes
+   !> Destroy solver - done everytime the operator changes
    subroutine hypre_str_destroy(this)
+      use messager, only: die
       implicit none
       class(hypre_str), intent(inout) :: this
       integer :: ierr
-      ! Destroy preconditioner
-      select case (this%method)
-      case (pcg_smg,gmres_smg)
-         call HYPRE_StructSMGDestroy(this%hypre_precond,ierr)
-      case (pcg_pfmg,pcg_pfmg2,gmres_pfmg,gmres_pfmg2)
-         call HYPRE_StructPFMGDestroy(this%hypre_precond,ierr)
-      end select
-      ! Set setup-flag to false
-      this%setup_done=.false.
-   end subroutine hypre_str_destroy
-   
-   
-   !> Finalize solver
-   subroutine hypre_str_final(this)
-      implicit none
-      class(hypre_str), intent(inout) :: this
-      integer :: ierr
-      ! Destroy the preconditioners
-      if (this%setup_done) call this%destroy()
-      ! Deestroy all hypre objects
+      
+      ! Destroy solver, operator, and rhs/sol vectors
       call HYPRE_StructMatrixDestroy(this%hypre_mat,ierr)
       call HYPRE_StructVectorDestroy(this%hypre_rhs,ierr)
       call HYPRE_StructVectorDestroy(this%hypre_sol,ierr)
-      ! Destroy the solvers
       select case (this%method)
       case (smg)
          call HYPRE_StructSMGDestroy(this%hypre_solver,ierr)
+      case (pcg_smg)
+         call HYPRE_StructSMGDestroy(this%hypre_precond,ierr)
+         call HYPRE_StructPCGDestroy(this%hypre_solver,ierr)
+      case (gmres_smg)
+         call HYPRE_StructSMGDestroy(this%hypre_precond,ierr)
+         call HYPRE_StructGMRESDestroy(this%hypre_solver,ierr)
       case (pfmg,pfmg2)
          call HYPRE_StructPFMGDestroy(this%hypre_solver,ierr)
-      case (pcg,pcg_smg,pcg_pfmg,pcg_pfmg2)
+      case (pcg)
          call HYPRE_StructPCGDestroy(this%hypre_solver,ierr)
-      case (gmres,gmres_smg,gmres_pfmg,gmres_pfmg2)
+      case (pcg_pfmg,pcg_pfmg2)
+         call HYPRE_StructPFMGDestroy(this%hypre_precond,ierr)
+         call HYPRE_StructPCGDestroy(this%hypre_solver,ierr)
+      case (gmres)
+         call HYPRE_StructGMRESDestroy(this%hypre_solver,ierr)
+      case (gmres_pfmg,gmres_pfmg2)
+         call HYPRE_StructPFMGDestroy(this%hypre_precond,ierr)
          call HYPRE_StructGMRESDestroy(this%hypre_solver,ierr)
       end select
-      ! Deallocate remaining lin_sol arrays
-      deallocate(this%stc,this%stmap,this%opr,this%rhs,this%sol)
-   end subroutine hypre_str_final
+      
+      ! Set setup-flag to false
+      this%setup_done=.false.
+      
+   end subroutine hypre_str_destroy
    
    
    !> Log hypre_str info

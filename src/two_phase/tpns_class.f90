@@ -179,6 +179,7 @@ module tpns_class
       procedure :: addsrc_gravity                         !< Add gravitational body force
       procedure :: add_surface_tension_jump               !< Add surface tension jump
       procedure :: add_surface_tension_jump_thin          !< Add surface tension jump - thin region version
+      procedure :: add_surface_tension_jump_twoVF         !< Add surface tension jump - two decomposed VF fields
       procedure :: add_static_contact                     !< Add static contact line model to surface tension jump
       
    end type tpns
@@ -1912,6 +1913,259 @@ contains
       
    end subroutine add_surface_tension_jump_thin
    
+   
+   !> Add surface tension jump term using CSF
+   !> Account for thin regions by using building two VF fields
+   subroutine add_surface_tension_jump_twoVF(this,dt,div,vf)
+      use messager,  only: die
+      use vfs_class, only: vfs
+      use irl_fortran_interface
+      implicit none
+      class(tpns), intent(inout) :: this
+      real(WP), intent(inout) :: dt     !< Timestep size over which to advance
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: div  !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      class(vfs), intent(inout) :: vf
+      integer :: i,j,k,ii,jj,kk,n,np1,np2,cn
+      integer, dimension(2,2) :: plane_ind
+      real(WP), dimension(2,2) :: VF2p,curv2p,surf2p
+      real(WP), dimension(3,2) :: pos
+      real(WP), dimension(4,2,2) :: normals
+      real(WP), dimension(4) :: plane
+      type(RectCub_type) :: cell
+      type(PlanarSep_type) :: lginterface
+      
+      ! Store old jump
+      this%DPjx=this%Pjx
+      this%DPjy=this%Pjy
+      this%DPjz=this%Pjz
+      
+      ! Allocate IRL storage
+      call new(cell)
+      call new(lginterface)
+      call setNumberOfPlanes(lginterface,1)
+      
+      ! Calculate pressure jump
+      do k=this%cfg%kmin_,this%cfg%kmax_+1
+         do j=this%cfg%jmin_,this%cfg%jmax_+1
+            do i=this%cfg%imin_,this%cfg%imax_+1
+               ! X face ===========================================
+               np1=0; np2=0; VF2p=0.0_WP; curv2p=0.0_WP; surf2p=0.0_WP; normals=0.0_WP; plane_ind=0
+               ! Get info from cells on each side of the face
+               ii=i-1; jj=j; kk=k; cn=1; np1=prepare_info()
+               ii=i  ; jj=j; kk=k; cn=2; np2=prepare_info()
+               ! Assemble pressure jump
+               if ((np1.eq.0).and.(np2.eq.0)) then
+                  this%Pjx(i,j,k)=0.0_WP
+               else
+                  this%Pjx(i,j,k)=this%sigma*sum(this%divu_x(:,i,j,k)*get_kalpha())
+               end if
+               ! Y face ===========================================
+               np1=0; np2=0; VF2p=0.0_WP; curv2p=0.0_WP; surf2p=0.0_WP; normals=0.0_WP; plane_ind=0
+               ! Get info from cells on each side of the face
+               ii=i; jj=j-1; kk=k; cn=1; np1=prepare_info()
+               ii=i; jj=j  ; kk=k; cn=2; np2=prepare_info()
+               ! Assemble pressure jump
+               if ((np1.eq.0).and.(np2.eq.0)) then
+                  this%Pjy(i,j,k)=0.0_WP
+               else
+                  this%Pjy(i,j,k)=this%sigma*sum(this%divv_y(:,i,j,k)*get_kalpha())
+               end if
+               ! Z face ===========================================
+               np1=0; np2=0; VF2p=0.0_WP; curv2p=0.0_WP; surf2p=0.0_WP; normals=0.0_WP; plane_ind=0
+               ! Get info from cells on each side of the face
+               ii=i; jj=j; kk=k-1; cn=1; np1=prepare_info()
+               ii=i; jj=j; kk=k  ; cn=2; np2=prepare_info()
+               ! Assemble pressure jump
+               if ((np1.eq.0).and.(np2.eq.0)) then
+                  this%Pjz(i,j,k)=0.0_WP
+               else
+                  this%Pjz(i,j,k)=this%sigma*sum(this%divw_z(:,i,j,k)*get_kalpha())
+               end if
+            end do
+         end do
+      end do
+
+      ! Compute jump of DP
+      this%DPjx=this%Pjx-this%DPjx
+      this%DPjy=this%Pjy-this%DPjy
+      this%DPjz=this%Pjz-this%DPjz
+      
+      ! Add div(Pjump) to RP
+      do k=this%cfg%kmin_,this%cfg%kmax_
+         do j=this%cfg%jmin_,this%cfg%jmax_
+            do i=this%cfg%imin_,this%cfg%imax_
+               div(i,j,k)=div(i,j,k)+dt*(sum(this%divp_x(:,i,j,k)*this%DPjx(i:i+1,j,k)/this%rho_U(i:i+1,j,k))&
+               &                        +sum(this%divp_y(:,i,j,k)*this%DPjy(i,j:j+1,k)/this%rho_V(i,j:j+1,k))&
+               &                        +sum(this%divp_z(:,i,j,k)*this%DPjz(i,j,k:k+1)/this%rho_W(i,j,k:k+1)))
+            end do
+         end do
+      end do
+      
+   contains
+      
+      function prepare_info() result(np)
+         implicit none
+         integer :: np
+         real(WP) :: myvol
+         np=0; myvol=0.0_WP
+         do n=1,getNumberOfPlanes(vf%liquid_gas_interface(ii,jj,kk))
+            if (getNumberOfVertices(vf%interface_polygon(n,ii,jj,kk)).eq.0) cycle
+            np=np+1; plane_ind(n,cn) = 1
+            call construct_2pt(cell,[vf%cfg%x(ii),vf%cfg%y(jj),vf%cfg%z(kk)],[vf%cfg%x(ii+1),vf%cfg%y(jj+1),vf%cfg%z(kk+1)])
+            plane=getPlane(vf%liquid_gas_interface(ii,jj,kk),n-1)
+            call setPlane(lginterface,0,plane(1:3),plane(4))
+            call getNormMoments(cell,lginterface,myvol)
+            VF2p(n,cn)=myvol/vf%cfg%vol(ii,jj,kk)
+            normals(:,n,cn)=plane
+            surf2p(n,cn)=abs(calculateVolume(vf%interface_polygon(n,ii,jj,kk)))
+            curv2p(n,cn)=vf%curv2p(n,ii,jj,kk)
+         end do
+         pos(:,cn)=[vf%cfg%xm(ii),vf%cfg%ym(jj),vf%cfg%zm(kk)]
+      end function  prepare_info
+      
+      function get_kalpha() result(kalpha)   
+         use mathtools, only: normalize
+         implicit none
+         real(WP), dimension(3) :: pos_temp
+         real(WP), dimension(2) :: kalpha
+         integer, dimension(2,2) :: plane_check
+         real(WP) :: surfsum,dist
+         integer :: flag
+         ! Merge left cell
+         if (np1.eq.2) then
+            if (dot_product(normals(1:3,1,1),normals(1:3,2,1)).gt.0.0_WP) then
+               surfsum=sum(surf2p(:,1))
+               normals(:,1,1)=(surf2p(1,1)*normals(:,1,1)+surf2p(2,1)*normals(:,2,1))/surfsum
+               normals(:,1,1)=normals(:,1,1)/(norm2(normals(1:3,1,1))+tiny(1.0_WP))
+               normals(:,2,1)=0.0_WP
+               VF2p(:,1)=[sum(surf2p(:,1)*VF2p(:,1))/surfsum,0.0_WP]
+               curv2p(:,1)=[sum(surf2p(:,1)*curv2p(:,1))/surfsum,0.0_WP]
+               surf2p(:,1)=[surfsum,0.0_WP]
+               plane_ind(:,1)=[1,0]
+            end if
+         end if
+         ! Merge right cell
+         if (np2.eq.2) then
+            if (dot_product(normals(1:3,1,2),normals(1:3,2,2)).gt.0.0_WP) then
+               surfsum = sum(surf2p(:,2))
+               normals(:,1,2)=(surf2p(1,2)*normals(:,1,2)+surf2p(2,2)*normals(:,2,2))/surfsum
+               normals(:,1,2)=normals(:,1,2)/(norm2(normals(1:3,1,2))+tiny(1.0_WP))
+               normals(:,2,2)=0.0_WP
+               VF2p(:,2)=[sum(surf2p(:,2)*VF2p(:,2))/surfsum,0.0_WP]
+               curv2p(:,2)=[sum(surf2p(:,2)*curv2p(:,2))/surfsum,0.0_WP]
+               surf2p(:,2)=[surfsum,0.0_WP]
+               plane_ind(:,2)=[1,0]
+            end if
+         end if
+         plane_check=0
+         do ii=1,2
+            if (plane_ind(ii,1).eq.0) cycle    ! If a plane doesn't exist, move on
+            flag=0
+            do jj=1,2
+               if (plane_ind(jj,2).eq.0) cycle ! If a plane doesn't exist, move on
+               if (dot_product(normals(1:3,ii,1),normals(1:3,jj,2)).gt.0.0_WP) then
+                  ! IF two plane aligns, both planes get the surface area weighted curvature
+                  flag=1
+                  curv2p(ii,1)=(curv2p(ii,1)*surf2p(ii,1)+curv2p(jj,2)*surf2p(jj,2))/(surf2p(ii,1)+surf2p(jj,2))
+                  curv2p(jj,2)=curv2p(ii,1)
+                  plane_check(ii,1)=1; plane_check(jj,2)=1
+               end if
+            end do
+            if (flag.eq.0) then ! NO PLANE with the same orientation is found
+               dist=-dot_product(normals(1:3,ii,1),pos(:,2))+normals(4,ii,1)
+               pos_temp=normalize(-dist*normals(1:3,ii,1))
+               ! Set first volume of cell2 based on centroid projection
+               if (plane_ind(1,2).ne.1.and.plane_ind(2,2).eq.1) then
+                  if (dot_product(pos_temp,normals(1:3,ii,1)).le.0.0_WP) then
+                     VF2p(1,2)=1.0_WP
+                  else
+                     VF2p(1,2)=0.0_WP
+                  end if
+                  curv2p(1,2)=curv2p(ii,1)
+                  plane_check(ii,1)=1; plane_check(1,2)=1
+               ! Set second volume of cell2 based on centroid projection
+               else if (plane_ind(2,2).ne.1.and.plane_ind(1,2).eq.1) then
+                  if (dot_product(pos_temp,normals(1:3,ii,1)).le.0.0_WP) then
+                     VF2p(2,2)=1.0_WP
+                  else
+                     VF2p(2,2)=0.0_WP
+                  end if
+                  curv2p(2,2)=curv2p(ii,1)
+                  plane_check(ii,1)=1; plane_check(2,2)=1
+               ! If both cells are empty, pick the cell that hasn't been checked
+               else if (plane_ind(2,2).ne.1.and.plane_ind(1,2).ne.1) then
+                  if (plane_check(1,2).eq.0) then
+                     if (dot_product(pos_temp,normals(1:3,ii,1)).le.0.0_WP) then
+                        VF2p(1,2)=1.0_WP
+                     else
+                        VF2p(1,2)=0.0_WP
+                     end if
+                     curv2p(1,2)=curv2p(ii,1)
+                     plane_check(ii,1)=1; plane_check(1,2)=1
+                  else if (plane_check(2,2).eq.0) then
+                     if (dot_product(pos_temp,normals(1:3,ii,1)).le.0.0_WP) then
+                        VF2p(2,2)=1.0_WP
+                     else
+                        VF2p(2,2)=0.0_WP
+                     end if
+                     curv2p(2,2)=curv2p(ii,1)
+                     plane_check(ii,1)=1; plane_check(2,2)=1
+                  end if
+               else ! don't know what to do, do nothing
+               end if
+            end if
+         end do
+         ! Next loop over all the planes from cell2 
+         do ii=1,2
+            ! If a plane doesn't exist or has been already accounted for, skip
+            if ((plane_ind(ii,2).eq.0).or.(plane_check(ii,2).eq.1)) cycle
+            dist=-dot_product(normals(1:3,ii,2),pos(:,1))+normals(4,ii,2)
+            pos_temp=normalize(-dist*normals(1:3,ii,2))
+            ! Set first volume of cell1 based on centroid projection
+            if (plane_ind(1,1).ne.1.and.plane_ind(2,1).eq.1) then
+               if (dot_product(pos_temp,normals(1:3,ii,2)).le.0.0_WP) then
+                  VF2p(1,1)=1.0_WP
+               else
+                  VF2p(1,1)=0.0_WP
+               end if
+               curv2p(1,1)=curv2p(ii,2)
+               plane_check(ii,2)=1; plane_check(1,1)=1
+            ! Set second volume of cell1 based on centroid projection
+            else if (plane_ind(2,1).ne.1.and.plane_ind(1,1).eq.1) then
+               if (dot_product(pos_temp,normals(1:3,ii,2)).le.0.0_WP) then
+                  VF2p(2,1)=1.0_WP
+               else
+                  VF2p(2,1)=0.0_WP
+               end if
+               curv2p(2,1)=curv2p(ii,2)
+               plane_check(ii,2)=1; plane_check(2,1)=1
+            ! If both cells are empty, pick the cell that hasn't been checked
+            else if (plane_ind(1,1).ne.1.and.plane_ind(2,1).ne.1) then
+               if (plane_check(1,1).eq.0) then
+                  if (dot_product(pos_temp,normals(1:3,ii,2)).le.0.0_WP) then
+                     VF2p(1,1)=1.0_WP
+                  else
+                     VF2p(1,1)=0.0_WP
+                  end if
+                  curv2p(1,1)=curv2p(ii,2)
+                  plane_check(ii,2)=1; plane_check(1,1)=1
+               else if (plane_check(2,1).eq.0) then
+                  if (dot_product(pos_temp,normals(1:3,ii,2)).le.0.0_WP) then
+                     VF2p(2,1)=1.0_WP
+                  else
+                     VF2p(2,1)=0.0_WP
+                  end if
+                  curv2p(2,1)=curv2p(ii,2)
+                  plane_check(ii,2)=1; plane_check(2,1)=1
+               end if
+            else ! don't know what to do, do nothing
+            end if
+         end do
+         kalpha=[sum(VF2p(:,1)*curv2p(:,1)),sum(VF2p(:,2)*curv2p(:,2))]
+      end function get_kalpha
+      
+   end subroutine add_surface_tension_jump_twoVF
+
    
    !> Calculate the pressure gradient based on P
    subroutine get_pgrad(this,P,Pgradx,Pgrady,Pgradz)
