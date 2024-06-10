@@ -124,7 +124,7 @@ contains
          this%cfg=ibconfig(grp=group,decomp=partition,grid=grid)
       end block create_config
       
-
+      
       ! Now initialize simplex nozzle geometry
       create_simplex: block
          use ibconfig_class, only: sharp
@@ -240,9 +240,9 @@ contains
                if (.not.isdir('restart')) call makedir('restart')
             end if
             ! Prepare pardata object for saving restart files
-            call this%df%initialize(pg=this%cfg,iopartition=iopartition,filename=trim(this%cfg%name),nval=2,nvar=12)
+            call this%df%initialize(pg=this%cfg,iopartition=iopartition,filename=trim(this%cfg%name),nval=2,nvar=15)
             this%df%valname=['t ','dt']
-            this%df%varname=['U  ','V  ','W  ','P  ','P11','P12','P13','P14','P21','P22','P23','P24']
+            this%df%varname=['U  ','V  ','W  ','P  ','Pjx','Pjy','Pjz','P11','P12','P13','P14','P21','P22','P23','P24']
          end if
       end block restart_and_save
       
@@ -255,8 +255,8 @@ contains
             this%time%told=this%time%t-this%time%dt
          end if
       end block update_timetracker
-
-
+      
+      
       ! Allocate work arrays
       allocate_work_arrays: block
          allocate(this%gradU(1:3,1:3,this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))   
@@ -391,7 +391,7 @@ contains
          this%vof_removal_layer=iterator(this%cfg,'VOF removal',vof_removal_layer_locator)
          this%vof_removed=0.0_WP
       end block create_iterator
-
+      
       
       ! Create a two-phase flow solver with bconds
       create_flow_solver: block
@@ -437,6 +437,9 @@ contains
             call this%df%pull(name='V',var=this%fs%V)
             call this%df%pull(name='W',var=this%fs%W)
             call this%df%pull(name='P',var=this%fs%P)
+            !call this%df%pull(name='Pjx',var=this%fs%Pjx)
+            !call this%df%pull(name='Pjy',var=this%fs%Pjy)
+            !call this%df%pull(name='Pjz',var=this%fs%Pjz)
             ! Apply boundary conditions
             call this%fs%apply_bcond(this%time%t,this%time%dt)
          end if
@@ -456,7 +459,7 @@ contains
          call this%fs%interp_vel(this%Ui,this%Vi,this%Wi)
       end block initialize_velocity
       
-
+      
       ! Create an LES model
       create_sgs: block
          this%sgs=sgsmodel(cfg=this%fs%cfg,umask=this%fs%umask,vmask=this%fs%vmask,wmask=this%fs%wmask)
@@ -468,7 +471,7 @@ contains
          this%smesh=surfmesh(nvar=0,name='plic')
          call this%vf%update_surfmesh_nowall(this%smesh)
       end block create_smesh
-
+      
       
       ! Add Ensight output
       create_ensight: block
@@ -722,6 +725,9 @@ contains
             call this%df%push(name='V'  ,var=this%fs%V   )
             call this%df%push(name='W'  ,var=this%fs%W   )
             call this%df%push(name='P'  ,var=this%fs%P   )
+            call this%df%push(name='Pjx',var=this%fs%Pjx )
+            call this%df%push(name='Pjy',var=this%fs%Pjy )
+            call this%df%push(name='Pjz',var=this%fs%Pjz )
             call this%df%push(name='P11',var=P11         )
             call this%df%push(name='P12',var=P12         )
             call this%df%push(name='P13',var=P13         )

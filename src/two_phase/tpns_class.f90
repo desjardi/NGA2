@@ -2010,7 +2010,7 @@ contains
          np=0; myvol=0.0_WP
          do n=1,getNumberOfPlanes(vf%liquid_gas_interface(ii,jj,kk))
             if (getNumberOfVertices(vf%interface_polygon(n,ii,jj,kk)).eq.0) cycle
-            np=np+1; plane_ind(n,cn) = 1
+            np=np+1; plane_ind(n,cn)=1
             call construct_2pt(cell,[vf%cfg%x(ii),vf%cfg%y(jj),vf%cfg%z(kk)],[vf%cfg%x(ii+1),vf%cfg%y(jj+1),vf%cfg%z(kk+1)])
             plane=getPlane(vf%liquid_gas_interface(ii,jj,kk),n-1)
             call setPlane(lginterface,0,plane(1:3),plane(4))
