@@ -283,7 +283,7 @@ contains
       type(prt), pointer :: my_prt
       real(SP), dimension(:,:,:), allocatable :: spbuff
       real(WP), dimension(:), allocatable :: temp_time
-      character(len=12) :: ctime
+      character(len=str_medium) :: ctime
       real(WP) :: rtime
 
       ! Check provided time stamp and decide what to do
@@ -297,7 +297,7 @@ contains
          ! There are time stamps already, check where to insert
          rewind: do i=this%ntime,1,-1
             ! Convert time to appropriate accuracy before comparing
-            write(ctime,'(es12.5)') time; read(ctime,'(es12.5)') rtime
+            ctime=''; write(ctime,'(es12.5)') time; read(ctime,'(es12.5)') rtime
             if (this%time(i).lt.rtime) then
                n=i+1; exit rewind
             end if
