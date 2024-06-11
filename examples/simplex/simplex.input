@@ -4,12 +4,12 @@ I/O partition : 1 1 1
 
 # Mesh definition
 X shift : 0.005
-Lx :  0.0075
-Ly :  0.0075
-Lz :  0.0075
-nx :  192
-ny :  192
-nz :  192
+Lx :  0.01
+Ly :  0.01
+Lz :  0.01
+nx :  224
+ny :  224
+nz :  224
 
 # Flow conditions
 Mass flow rate :    2.123e-3
@@ -34,4 +34,4 @@ Ensight output period : 1e-4
 Restart output period : 1e-3
 
 # Data restart
-Restart from : 1.60007E-02
+Restart from : !1.60007E-02

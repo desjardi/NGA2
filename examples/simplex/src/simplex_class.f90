@@ -437,9 +437,9 @@ contains
             call this%df%pull(name='V',var=this%fs%V)
             call this%df%pull(name='W',var=this%fs%W)
             call this%df%pull(name='P',var=this%fs%P)
-            !call this%df%pull(name='Pjx',var=this%fs%Pjx)
-            !call this%df%pull(name='Pjy',var=this%fs%Pjy)
-            !call this%df%pull(name='Pjz',var=this%fs%Pjz)
+            call this%df%pull(name='Pjx',var=this%fs%Pjx)
+            call this%df%pull(name='Pjy',var=this%fs%Pjy)
+            call this%df%pull(name='Pjz',var=this%fs%Pjz)
             ! Apply boundary conditions
             call this%fs%apply_bcond(this%time%t,this%time%dt)
          end if
