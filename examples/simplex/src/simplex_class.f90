@@ -271,14 +271,17 @@ contains
       
       ! Initialize our VOF solver and field
       create_and_initialize_vof: block
-         use vfs_class, only: remap,plicnet,r2p
+         use vfs_class, only: remap,plicnet,r2p,r2pnet
          use irl_fortran_interface
          integer :: i,j,k
          real(WP) :: rad
          real(WP), dimension(:,:,:), allocatable :: P11,P12,P13,P14
          real(WP), dimension(:,:,:), allocatable :: P21,P22,P23,P24
          ! Create a VOF solver with plicnet
-         call this%vf%initialize(cfg=this%cfg,reconstruction_method=plicnet,transport_method=remap,name='VOF')
+         call this%vf%initialize(cfg=this%cfg,reconstruction_method=r2pnet,transport_method=remap,name='VOF')
+         this%vf%thin_thld_max=1.5_WP
+         this%vf%twoplane_thld2=0.8_WP
+         this%vf%thin_thld_min=1.0e-2_WP
          ! Initialize the interface inclduing restarts
          if (this%restarted) then
             ! Read in the planes directly and set the IRL interface
@@ -311,6 +314,16 @@ contains
                      !   call setNumberOfPlanes(this%vf%liquid_gas_interface(i,j,k),1)
                      !   call setPlane(this%vf%liquid_gas_interface(i,j,k),0,[0.0_WP,0.0_WP,0.0_WP],1.0_WP)
                      !end if
+                     ! For this restart, I want to remove all liquid outside the nozzle
+                     if (this%vf%cfg%xm(i).gt.0.0_WP) then
+                        call setNumberOfPlanes(this%vf%liquid_gas_interface(i,j,k),1)
+                        call setPlane(this%vf%liquid_gas_interface(i,j,k),0,[0.0_WP,0.0_WP,0.0_WP],-1.0_WP)
+                     end if
+                     rad=sqrt(this%vf%cfg%ym(j)**2+this%vf%cfg%zm(k)**2)
+                     if (this%vf%cfg%xm(i).gt.-0.0015_WP.and.rad.gt.0.00143_WP) then
+                        call setNumberOfPlanes(this%vf%liquid_gas_interface(i,j,k),1)
+                        call setPlane(this%vf%liquid_gas_interface(i,j,k),0,[0.0_WP,0.0_WP,0.0_WP],-1.0_WP)
+                     end if
                   end do
                end do
             end do
@@ -405,6 +418,8 @@ contains
          call this%input%read('Liquid density',this%fs%rho_l)
          call this%input%read('Gas density'   ,this%fs%rho_g)
          call this%input%read('Surface tension coefficient',this%fs%sigma)
+         ! Set acceleration of gravity
+         call this%input%read('Gravity',this%fs%gravity)
          ! Inlets on the left
          call this%fs%add_bcond(name='inlets',type=dirichlet,face='x',dir=-1,canCorrect=.false.,locator=pipe_inlets)
          ! Outflow on the right
@@ -559,23 +574,23 @@ contains
       call this%fs%get_viscosity(vf=this%vf,strat=arithmetic_visc)
       
       ! Turbulence modeling
-      sgs_modeling: block
-         use sgsmodel_class, only: vreman
-         integer :: i,j,k
-         this%resU=this%vf%VF*this%fs%rho_l+(1.0_WP-this%vf%VF)*this%fs%rho_g
-         call this%fs%get_gradu(this%gradU)
-         call this%sgs%get_visc(type=vreman,dt=this%time%dtold,rho=this%resU,gradu=this%gradU)
-         do k=this%fs%cfg%kmino_+1,this%fs%cfg%kmaxo_
-            do j=this%fs%cfg%jmino_+1,this%fs%cfg%jmaxo_
-               do i=this%fs%cfg%imino_+1,this%fs%cfg%imaxo_
-                  this%fs%visc(i,j,k)   =this%fs%visc(i,j,k)   +this%sgs%visc(i,j,k)
-                  this%fs%visc_xy(i,j,k)=this%fs%visc_xy(i,j,k)+sum(this%fs%itp_xy(:,:,i,j,k)*this%sgs%visc(i-1:i,j-1:j,k))
-                  this%fs%visc_yz(i,j,k)=this%fs%visc_yz(i,j,k)+sum(this%fs%itp_yz(:,:,i,j,k)*this%sgs%visc(i,j-1:j,k-1:k))
-                  this%fs%visc_zx(i,j,k)=this%fs%visc_zx(i,j,k)+sum(this%fs%itp_xz(:,:,i,j,k)*this%sgs%visc(i-1:i,j,k-1:k))
-               end do
-            end do
-         end do
-      end block sgs_modeling
+      !sgs_modeling: block
+      !   use sgsmodel_class, only: vreman
+      !   integer :: i,j,k
+      !   this%resU=this%vf%VF*this%fs%rho_l+(1.0_WP-this%vf%VF)*this%fs%rho_g
+      !   call this%fs%get_gradu(this%gradU)
+      !   call this%sgs%get_visc(type=vreman,dt=this%time%dtold,rho=this%resU,gradu=this%gradU)
+      !   do k=this%fs%cfg%kmino_+1,this%fs%cfg%kmaxo_
+      !      do j=this%fs%cfg%jmino_+1,this%fs%cfg%jmaxo_
+      !         do i=this%fs%cfg%imino_+1,this%fs%cfg%imaxo_
+      !            this%fs%visc(i,j,k)   =this%fs%visc(i,j,k)   +this%sgs%visc(i,j,k)
+      !            this%fs%visc_xy(i,j,k)=this%fs%visc_xy(i,j,k)+sum(this%fs%itp_xy(:,:,i,j,k)*this%sgs%visc(i-1:i,j-1:j,k))
+      !            this%fs%visc_yz(i,j,k)=this%fs%visc_yz(i,j,k)+sum(this%fs%itp_yz(:,:,i,j,k)*this%sgs%visc(i,j-1:j,k-1:k))
+      !            this%fs%visc_zx(i,j,k)=this%fs%visc_zx(i,j,k)+sum(this%fs%itp_xz(:,:,i,j,k)*this%sgs%visc(i-1:i,j,k-1:k))
+      !         end do
+      !      end do
+      !   end do
+      !end block sgs_modeling
       
       ! Perform sub-iterations
       do while (this%time%it.le.this%time%itmax)
@@ -590,6 +605,9 @@ contains
          
          ! Explicit calculation of drho*u/dt from NS
          call this%fs%get_dmomdt(this%resU,this%resV,this%resW)
+         
+         ! Add momentum source terms
+         call this%fs%addsrc_gravity(this%resU,this%resV,this%resW)
          
          ! Assemble explicit residual
          this%resU=-2.0_WP*this%fs%rho_U*this%fs%U+(this%fs%rho_Uold+this%fs%rho_U)*this%fs%Uold+this%time%dt*this%resU
@@ -629,6 +647,8 @@ contains
          call this%fs%correct_mfr()
          call this%fs%get_div()
          call this%fs%add_surface_tension_jump(dt=this%time%dt,div=this%fs%div,vf=this%vf)
+         !call this%fs%add_surface_tension_jump_thin(dt=this%time%dt,div=this%fs%div,vf=this%vf)
+         !call this%fs%add_surface_tension_jump_twoVF(dt=this%time%dt,div=this%fs%div,vf=this%vf)
          this%fs%psolv%rhs=-this%fs%cfg%vol*this%fs%div/this%time%dt
          this%fs%psolv%sol=0.0_WP
          call this%fs%psolv%solve()
