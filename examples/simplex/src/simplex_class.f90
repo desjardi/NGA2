@@ -7,6 +7,7 @@ module simplex_class
    use surfmesh_class,    only: surfmesh
    use ensight_class,     only: ensight
    use hypre_str_class,   only: hypre_str
+   use ddadi_class,       only: ddadi
    use tpns_class,        only: tpns
    use vfs_class,         only: vfs
    use iterator_class,    only: iterator
@@ -39,6 +40,7 @@ module simplex_class
       type(vfs)         :: vf    !< Volume fraction solver
       type(tpns)        :: fs    !< Two-phase flow solver
       type(hypre_str)   :: ps    !< HYPRE linear solver for pressure
+      type(ddadi)       :: vs    !< DDADI linear solver for velocity
       type(sgsmodel)    :: sgs   !< SGS model for eddy viscosity
       type(timetracker) :: time  !< Time info
       
@@ -434,8 +436,10 @@ contains
          this%ps%maxlevel=12
          call this%input%read('Pressure iteration',this%ps%maxit)
          call this%input%read('Pressure tolerance',this%ps%rcvg)
+         ! Configure velocity solver
+         this%vs=ddadi(cfg=this%cfg,name='Velocity',nst=7)
          ! Setup the solver
-         call this%fs%setup(pressure_solver=this%ps)
+         call this%fs%setup(pressure_solver=this%ps,implicit_solver=this%vs)
       end block create_flow_solver
       
       
@@ -611,12 +615,12 @@ contains
          this%resW=-2.0_WP*this%fs%rho_W*this%fs%W+(this%fs%rho_Wold+this%fs%rho_W)*this%fs%Wold+this%time%dt*this%resW   
          
          ! Form implicit residuals
-         !call this%fs%solve_implicit(this%time%dt,this%resU,this%resV,this%resW)
+         call this%fs%solve_implicit(this%time%dt,this%resU,this%resV,this%resW)
          
          ! Apply these residuals
-         this%fs%U=2.0_WP*this%fs%U-this%fs%Uold+this%resU/this%fs%rho_U
-         this%fs%V=2.0_WP*this%fs%V-this%fs%Vold+this%resV/this%fs%rho_V
-         this%fs%W=2.0_WP*this%fs%W-this%fs%Wold+this%resW/this%fs%rho_W
+         this%fs%U=2.0_WP*this%fs%U-this%fs%Uold+this%resU!/this%fs%rho_U
+         this%fs%V=2.0_WP*this%fs%V-this%fs%Vold+this%resV!/this%fs%rho_V
+         this%fs%W=2.0_WP*this%fs%W-this%fs%Wold+this%resW!/this%fs%rho_W
          
          ! Apply IB forcing to enforce BC at the pipe walls
          ibforcing: block
