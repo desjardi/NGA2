@@ -1186,7 +1186,7 @@ contains
       pos(1) = this%inj_pos(1)
       ! Random y & z position within a circular region
       if (this%cfg%nz.eq.1) then
-         pos(2)=random_uniform(lo=this%inj_pos(2)-0.5_WP*this%inj_d,hi=this%inj_pos(3)+0.5_WP*this%inj_d)
+         pos(2) = random_uniform(lo=this%inj_pos(2)-0.5_WP*this%inj_d,hi=this%inj_pos(2)+0.5_WP*this%inj_d)
          pos(3) = this%cfg%zm(this%cfg%kmin_)
       else
          rand=random_uniform(lo=0.0_WP,hi=1.0_WP)
