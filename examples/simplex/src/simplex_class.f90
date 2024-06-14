@@ -774,6 +774,7 @@ contains
          end do
          call MPI_ALLREDUCE(my_vof_removed,this%vof_removed,1,MPI_REAL_WP,MPI_SUM,this%cfg%comm,ierr)
          ! Remove all but core
+         call this%ccl%build(make_label,same_label)
          vof=this%vf%VF; call this%remove_drops()
       end block remove_vof
       
