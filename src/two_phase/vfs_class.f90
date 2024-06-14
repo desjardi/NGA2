@@ -3263,7 +3263,7 @@ contains
          do kk=k-1,k+1; do jj=j-1,j+1; do ii=i-1,i+1
             if (this%mask(ii,jj,kk).eq.1) is_wall=.true.
          end do; end do; end do
-         if (is_wall.or.this%cfg%xm(i).lt.0.0_WP) then
+         if (is_wall.or.this%cfg%xm(i).lt.0.0001_WP) then
             ! PLICNET
             ! Liquid-gas symmetry
             flip=.false.; if (this%VF(i,j,k).ge.0.5_WP) flip=.true.

@@ -281,9 +281,8 @@ contains
          real(WP), dimension(:,:,:), allocatable :: P21,P22,P23,P24
          ! Create a VOF solver with plicnet
          call this%vf%initialize(cfg=this%cfg,reconstruction_method=r2pnet,transport_method=remap,name='VOF')
-         this%vf%thin_thld_max=1.5_WP
-         this%vf%twoplane_thld2=0.8_WP
-         this%vf%thin_thld_min=1.0e-2_WP
+         this%vf%twoplane_thld2=0.3_WP
+         this%vf%thin_thld_min=1.0e-3_WP
          ! Initialize the interface inclduing restarts
          if (this%restarted) then
             ! Read in the planes directly and set the IRL interface
@@ -317,15 +316,15 @@ contains
                      !   call setPlane(this%vf%liquid_gas_interface(i,j,k),0,[0.0_WP,0.0_WP,0.0_WP],1.0_WP)
                      !end if
                      ! For this restart, I want to remove all liquid outside the nozzle
-                     if (this%vf%cfg%xm(i).gt.0.0_WP) then
-                        call setNumberOfPlanes(this%vf%liquid_gas_interface(i,j,k),1)
-                        call setPlane(this%vf%liquid_gas_interface(i,j,k),0,[0.0_WP,0.0_WP,0.0_WP],-1.0_WP)
-                     end if
-                     rad=sqrt(this%vf%cfg%ym(j)**2+this%vf%cfg%zm(k)**2)
-                     if (this%vf%cfg%xm(i).gt.-0.0015_WP.and.rad.gt.0.00143_WP) then
-                        call setNumberOfPlanes(this%vf%liquid_gas_interface(i,j,k),1)
-                        call setPlane(this%vf%liquid_gas_interface(i,j,k),0,[0.0_WP,0.0_WP,0.0_WP],-1.0_WP)
-                     end if
+                     !if (this%vf%cfg%xm(i).gt.0.0_WP) then
+                     !   call setNumberOfPlanes(this%vf%liquid_gas_interface(i,j,k),1)
+                     !   call setPlane(this%vf%liquid_gas_interface(i,j,k),0,[0.0_WP,0.0_WP,0.0_WP],-1.0_WP)
+                     !end if
+                     !rad=sqrt(this%vf%cfg%ym(j)**2+this%vf%cfg%zm(k)**2)
+                     !if (this%vf%cfg%xm(i).gt.-0.0015_WP.and.rad.gt.0.00143_WP) then
+                     !   call setNumberOfPlanes(this%vf%liquid_gas_interface(i,j,k),1)
+                     !   call setPlane(this%vf%liquid_gas_interface(i,j,k),0,[0.0_WP,0.0_WP,0.0_WP],-1.0_WP)
+                     !end if
                   end do
                end do
             end do
@@ -646,9 +645,9 @@ contains
          call this%fs%update_laplacian()
          call this%fs%correct_mfr()
          call this%fs%get_div()
-         call this%fs%add_surface_tension_jump(dt=this%time%dt,div=this%fs%div,vf=this%vf)
+         !call this%fs%add_surface_tension_jump(dt=this%time%dt,div=this%fs%div,vf=this%vf)
          !call this%fs%add_surface_tension_jump_thin(dt=this%time%dt,div=this%fs%div,vf=this%vf)
-         !call this%fs%add_surface_tension_jump_twoVF(dt=this%time%dt,div=this%fs%div,vf=this%vf)
+         call this%fs%add_surface_tension_jump_twoVF(dt=this%time%dt,div=this%fs%div,vf=this%vf)
          this%fs%psolv%rhs=-this%fs%cfg%vol*this%fs%div/this%time%dt
          this%fs%psolv%sol=0.0_WP
          call this%fs%psolv%solve()
