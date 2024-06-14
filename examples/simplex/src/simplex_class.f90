@@ -10,6 +10,7 @@ module simplex_class
    use ddadi_class,       only: ddadi
    use tpns_class,        only: tpns
    use vfs_class,         only: vfs
+   use cclabel_class,     only: cclabel
    use iterator_class,    only: iterator
    use sgsmodel_class,    only: sgsmodel
    use timetracker_class, only: timetracker
@@ -43,6 +44,7 @@ module simplex_class
       type(ddadi)       :: vs    !< DDADI linear solver for velocity
       type(sgsmodel)    :: sgs   !< SGS model for eddy viscosity
       type(timetracker) :: time  !< Time info
+      type(cclabel)     :: ccl   !< CCLabel to transfer droplets
       
       !> Ensight postprocessing
       type(surfmesh) :: smesh    !< Surface mesh for interface
@@ -66,6 +68,7 @@ module simplex_class
       procedure :: init                            !< Initialize simplex simulation
       procedure :: step                            !< Advance simplex simulation by one time step
       procedure :: final                           !< Finalize simplex simulation
+      procedure :: remove_drops                    !< Remove all drops
    end type simplex
    
    !> Inlet pipes geometry
@@ -79,7 +82,76 @@ module simplex_class
    !> Hardcode size of buffer layer for VOF removal
    integer, parameter :: nlayer=4
    
+   !> Weird work array
+   real(WP), dimension(:,:,:), allocatable :: vof
+
 contains
+   
+   
+   !> Function that identifies cells that need a label
+   logical function make_label(i,j,k)
+      implicit none
+      integer, intent(in) :: i,j,k
+      if (vof(i,j,k).gt.0.0_WP) then
+         make_label=.true.
+      else
+         make_label=.false.
+      end if
+   end function make_label
+   
+   
+   !> Function that identifies if cell pairs have same label
+   logical function same_label(i1,j1,k1,i2,j2,k2)
+      implicit none
+      integer, intent(in) :: i1,j1,k1,i2,j2,k2
+      same_label=.true.
+   end function same_label
+   
+   !> Perform droplet removal
+   subroutine remove_drops(this)
+      use mpi_f08,  only: MPI_ALLREDUCE,MPI_SUM,MPI_IN_PLACE
+      use parallel, only: MPI_REAL_WP
+      use irl_fortran_interface
+      class(simplex), intent(inout) :: this
+      real(WP), dimension(:), allocatable :: dvol
+      integer :: n,m,ierr,nmax,i,j,k
+      ! Allocate droplet volume array
+      allocate(dvol(1:this%ccl%nstruct)); dvol=0.0_WP
+      ! Loop over individual structures
+      do n=1,this%ccl%nstruct
+         ! Loop over cells in structure and accumulate volume
+         do m=1,this%ccl%struct(n)%n_
+            i=this%ccl%struct(n)%map(1,m)
+            j=this%ccl%struct(n)%map(2,m)
+            k=this%ccl%struct(n)%map(3,m)
+            dvol(n)=dvol(n)+this%cfg%vol(i,j,k)*this%vf%VF(i,j,k)
+         end do
+      end do
+      ! Reduce volume data
+      call MPI_ALLREDUCE(MPI_IN_PLACE,dvol,this%ccl%nstruct,MPI_REAL_WP,MPI_SUM,this%vf%cfg%comm,ierr)
+      nmax=maxloc(dvol,dim=1)
+      ! Remove all drops
+      do n=1,this%ccl%nstruct
+         ! Skip liquid core
+         if (n.eq.nmax) cycle
+         ! Remove all other structures
+         do m=1,this%ccl%struct(n)%n_
+            i=this%ccl%struct(n)%map(1,m)
+            j=this%ccl%struct(n)%map(2,m)
+            k=this%ccl%struct(n)%map(3,m)
+            this%vf%VF(i,j,k)=0.0_WP
+            this%vf%Lbary(:,i,j,k)=[this%vf%cfg%xm(i),this%vf%cfg%ym(j),this%vf%cfg%zm(k)]
+            this%vf%Gbary(:,i,j,k)=[this%vf%cfg%xm(i),this%vf%cfg%ym(j),this%vf%cfg%zm(k)]
+            call setNumberOfPlanes(this%vf%liquid_gas_interface(i,j,k),1)
+            call setPlane(this%vf%liquid_gas_interface(i,j,k),0,[0.0_WP,0.0_WP,0.0_WP],-1.0_WP)
+         end do
+      end do
+      call this%vf%sync_interface()
+      call this%vf%cfg%sync(this%vf%VF)
+      call this%vf%sync_and_clean_barycenters()
+      ! Deallocate
+      deallocate(dvol)
+   end subroutine remove_drops
    
    
    !> Initialization of simplex simulation
@@ -268,6 +340,7 @@ contains
          allocate(this%Ui  (this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
          allocate(this%Vi  (this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
          allocate(this%Wi  (this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
+         allocate(vof(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
       end block allocate_work_arrays
       
       
@@ -476,6 +549,17 @@ contains
          ! Compute cell-centered velocity
          call this%fs%interp_vel(this%Ui,this%Vi,this%Wi)
       end block initialize_velocity
+      
+      
+      ! Create CCL
+      create_ccl: block
+         ! Initialize CCL
+         call this%ccl%initialize(pg=this%cfg%pgrid,name='ccl')
+         ! Perform CCL
+         call this%ccl%build(make_label,same_label)
+         ! Remove all but core
+         vof=this%vf%VF; call this%remove_drops()
+      end block create_ccl
       
       
       ! Create an LES model
@@ -689,6 +773,8 @@ contains
             call setPlane(this%vf%liquid_gas_interface(i,j,k),0,[0.0_WP,0.0_WP,0.0_WP],-1.0_WP)
          end do
          call MPI_ALLREDUCE(my_vof_removed,this%vof_removed,1,MPI_REAL_WP,MPI_SUM,this%cfg%comm,ierr)
+         ! Remove all but core
+         vof=this%vf%VF; call this%remove_drops()
       end block remove_vof
       
       ! Output to ensight
