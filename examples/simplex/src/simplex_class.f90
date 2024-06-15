@@ -41,7 +41,7 @@ module simplex_class
       type(vfs)         :: vf    !< Volume fraction solver
       type(tpns)        :: fs    !< Two-phase flow solver
       type(hypre_str)   :: ps    !< HYPRE linear solver for pressure
-      type(ddadi)       :: vs    !< DDADI linear solver for velocity
+      !type(ddadi)       :: vs    !< DDADI linear solver for velocity
       type(sgsmodel)    :: sgs   !< SGS model for eddy viscosity
       type(timetracker) :: time  !< Time info
       type(cclabel)     :: ccl   !< CCLabel to transfer droplets
@@ -111,20 +111,17 @@ contains
    subroutine remove_drops(this)
       use mpi_f08,  only: MPI_ALLREDUCE,MPI_SUM,MPI_IN_PLACE
       use parallel, only: MPI_REAL_WP
-      use irl_fortran_interface
       class(simplex), intent(inout) :: this
       real(WP), dimension(:), allocatable :: dvol
-      integer :: n,m,ierr,nmax,i,j,k
+      integer :: n,m,ierr,nmax
       ! Allocate droplet volume array
       allocate(dvol(1:this%ccl%nstruct)); dvol=0.0_WP
       ! Loop over individual structures
       do n=1,this%ccl%nstruct
          ! Loop over cells in structure and accumulate volume
          do m=1,this%ccl%struct(n)%n_
-            i=this%ccl%struct(n)%map(1,m)
-            j=this%ccl%struct(n)%map(2,m)
-            k=this%ccl%struct(n)%map(3,m)
-            dvol(n)=dvol(n)+this%cfg%vol(i,j,k)*this%vf%VF(i,j,k)
+            dvol(n)=dvol(n)+this%cfg%vol(this%ccl%struct(n)%map(1,m),this%ccl%struct(n)%map(2,m),this%ccl%struct(n)%map(3,m))*&
+            &                 this%vf%VF(this%ccl%struct(n)%map(1,m),this%ccl%struct(n)%map(2,m),this%ccl%struct(n)%map(3,m))
          end do
       end do
       ! Reduce volume data
@@ -136,19 +133,11 @@ contains
          if (n.eq.nmax) cycle
          ! Remove all other structures
          do m=1,this%ccl%struct(n)%n_
-            i=this%ccl%struct(n)%map(1,m)
-            j=this%ccl%struct(n)%map(2,m)
-            k=this%ccl%struct(n)%map(3,m)
-            this%vf%VF(i,j,k)=0.0_WP
-            this%vf%Lbary(:,i,j,k)=[this%vf%cfg%xm(i),this%vf%cfg%ym(j),this%vf%cfg%zm(k)]
-            this%vf%Gbary(:,i,j,k)=[this%vf%cfg%xm(i),this%vf%cfg%ym(j),this%vf%cfg%zm(k)]
-            call setNumberOfPlanes(this%vf%liquid_gas_interface(i,j,k),1)
-            call setPlane(this%vf%liquid_gas_interface(i,j,k),0,[0.0_WP,0.0_WP,0.0_WP],-1.0_WP)
+            this%vf%VF(this%ccl%struct(n)%map(1,m),this%ccl%struct(n)%map(2,m),this%ccl%struct(n)%map(3,m))=0.0_WP
          end do
       end do
       call this%vf%sync_interface()
-      call this%vf%cfg%sync(this%vf%VF)
-      call this%vf%sync_and_clean_barycenters()
+      call this%vf%clean_irl_and_band()
       ! Deallocate
       deallocate(dvol)
    end subroutine remove_drops
@@ -340,7 +329,7 @@ contains
          allocate(this%Ui  (this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
          allocate(this%Vi  (this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
          allocate(this%Wi  (this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
-         allocate(vof(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
+         allocate(vof      (this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
       end block allocate_work_arrays
       
       
@@ -509,9 +498,9 @@ contains
          call this%input%read('Pressure iteration',this%ps%maxit)
          call this%input%read('Pressure tolerance',this%ps%rcvg)
          ! Configure velocity solver
-         this%vs=ddadi(cfg=this%cfg,name='Velocity',nst=7)
+         !this%vs=ddadi(cfg=this%cfg,name='Velocity',nst=7)
          ! Setup the solver
-         call this%fs%setup(pressure_solver=this%ps,implicit_solver=this%vs)
+         call this%fs%setup(pressure_solver=this%ps)!,implicit_solver=this%vs)
       end block create_flow_solver
       
       
@@ -698,12 +687,12 @@ contains
          this%resW=-2.0_WP*this%fs%rho_W*this%fs%W+(this%fs%rho_Wold+this%fs%rho_W)*this%fs%Wold+this%time%dt*this%resW   
          
          ! Form implicit residuals
-         call this%fs%solve_implicit(this%time%dt,this%resU,this%resV,this%resW)
+         !call this%fs%solve_implicit(this%time%dt,this%resU,this%resV,this%resW)
          
          ! Apply these residuals
-         this%fs%U=2.0_WP*this%fs%U-this%fs%Uold+this%resU!/this%fs%rho_U
-         this%fs%V=2.0_WP*this%fs%V-this%fs%Vold+this%resV!/this%fs%rho_V
-         this%fs%W=2.0_WP*this%fs%W-this%fs%Wold+this%resW!/this%fs%rho_W
+         this%fs%U=2.0_WP*this%fs%U-this%fs%Uold+this%resU/this%fs%rho_U
+         this%fs%V=2.0_WP*this%fs%V-this%fs%Vold+this%resV/this%fs%rho_V
+         this%fs%W=2.0_WP*this%fs%W-this%fs%Wold+this%resW/this%fs%rho_W
          
          ! Apply IB forcing to enforce BC at the pipe walls
          ibforcing: block
@@ -757,7 +746,6 @@ contains
       remove_vof: block
          use mpi_f08,  only: MPI_ALLREDUCE,MPI_SUM
          use parallel, only: MPI_REAL_WP
-         use irl_fortran_interface
          integer :: n,i,j,k,ierr
          real(WP) :: my_vof_removed
          my_vof_removed=0.0_WP
@@ -767,12 +755,10 @@ contains
             k=this%vof_removal_layer%map(3,n)
             my_vof_removed=my_vof_removed+this%cfg%vol(i,j,k)*this%vf%VF(i,j,k)
             this%vf%VF(i,j,k)=0.0_WP
-            this%vf%Lbary(:,i,j,k)=[this%vf%cfg%xm(i),this%vf%cfg%ym(j),this%vf%cfg%zm(k)]
-            this%vf%Gbary(:,i,j,k)=[this%vf%cfg%xm(i),this%vf%cfg%ym(j),this%vf%cfg%zm(k)]
-            call setNumberOfPlanes(this%vf%liquid_gas_interface(i,j,k),1)
-            call setPlane(this%vf%liquid_gas_interface(i,j,k),0,[0.0_WP,0.0_WP,0.0_WP],-1.0_WP)
          end do
          call MPI_ALLREDUCE(my_vof_removed,this%vof_removed,1,MPI_REAL_WP,MPI_SUM,this%cfg%comm,ierr)
+         call this%vf%sync_interface()
+         call this%vf%clean_irl_and_band()
          ! Remove all but core
          call this%ccl%build(make_label,same_label)
          vof=this%vf%VF; call this%remove_drops()
@@ -856,7 +842,7 @@ contains
       implicit none
       class(simplex), intent(inout) :: this
       ! Deallocate work arrays
-      deallocate(this%resU,this%resV,this%resW,this%Ui,this%Vi,this%Wi,this%gradU)
+      deallocate(this%resU,this%resV,this%resW,this%Ui,this%Vi,this%Wi,this%gradU,vof)
    end subroutine final
    
    
