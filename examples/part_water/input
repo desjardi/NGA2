@@ -26,7 +26,7 @@ Particle standard deviation :   17.894e-6
 Particle min diameter :         10e-6
 Particle max diameter :         139.1e-6
 Particle diameter shift :       0
-Particle density :              2250
+Particle density :              3000
 
 # Particle collisions
 Coefficient of restitution :    0.5
@@ -35,7 +35,7 @@ Friction coefficient :          0.5
 
 # Particle injection
 Particle inject diameter:       0.00127
-Particle mass flow rate:        1e-6 !2e-5
+Particle mass flow rate:        5e-6 !2e-5
 Particle velocity:              0.18 0 0
 
 # Time integration
