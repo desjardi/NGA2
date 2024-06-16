@@ -369,8 +369,8 @@ contains
             allocate(tmp2(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_)); tmp2=0.0_WP
             allocate(tmp3(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_)); tmp3=0.0_WP
             ! Get fluid stress
-            !call fs%get_div_stress(resU,resV,resW)
             resU=0.0_WP; resV=0.0_WP; resW=0.0_WP
+            call fs%get_div_stress(resU,resV,resW)
             ! Zero-out LPT source terms
             srcU=0.0_WP; srcV=0.0_WP; srcW=0.0_WP
             ! Sub-iterate
