@@ -39,13 +39,13 @@ Particle mass flow rate:        5e-6 !2e-5
 Particle velocity:              0.18 0 0
 
 # Time integration
-Particle timestep size : 1e-5
+Particle timestep size : 1e-6
 Max timestep size :      2e-5
 Max cfl number :	       1
 Max time :               0.1
 
 # Pressure solver
-Pressure tolerance : 1e-4
+Pressure tolerance : 1e-5
 Pressure iteration : 100
 
 # Ensight output

@@ -111,7 +111,7 @@ contains
          call param_read('Particle timestep size',lp_dt_max,default=huge(1.0_WP))
          lp_dt=lp_dt_max
          ! Set collision timescale
-         lp%tau_col=5.0_WP*time%dt
+         lp%tau_col=5.0_WP*lp_dt_max
          ! Set coefficient of restitution
          call param_read('Coefficient of restitution',lp%e_n)
          call param_read('Wall restitution',lp%e_w)
