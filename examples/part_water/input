@@ -19,6 +19,7 @@ Gas dynamic viscosity :       1.780e-5
 Liquid density :              1000
 Gas density :                 1.226
 Surface tension coefficient : 0.0728
+Static contact angle :        110
 
 # Particle parameters
 Particle mean diameter :        37.515e-6
@@ -49,4 +50,4 @@ Pressure tolerance : 1e-4
 Pressure iteration : 100
 
 # Ensight output
-Ensight output period : 1e-4
+Ensight output period : 5e-4

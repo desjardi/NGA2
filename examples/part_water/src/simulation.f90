@@ -196,6 +196,7 @@ contains
       
       ! Create a two-phase flow solver without bconds
       create_and_initialize_flow_solver: block
+         use mathtools,       only: Pi
          use tpns_class,      only: clipped_neumann
          use hypre_str_class, only: pcg_pfmg2
          ! Create flow solver
@@ -206,8 +207,14 @@ contains
          ! Assign constant density to each phase
          call param_read('Liquid density',fs%rho_l)
          call param_read('Gas density',fs%rho_g)
-         ! Read in surface tension coefficient
+         ! Read in surface tension coefficient and contact angle
          call param_read('Surface tension coefficient',fs%sigma)
+         call param_read('Static contact angle',fs%contact_angle)
+         fs%contact_angle=fs%contact_angle*Pi/180.0_WP
+         ! Transfer to lpt for surface tension modeling
+         lp%sigma=fs%sigma
+         lp%contact_angle=fs%contact_angle
+         lp%VFst=0.2_WP
          ! Assign acceleration of gravity
          call param_read('Gravity',fs%gravity)
          ! Outlet on the left
@@ -361,6 +368,7 @@ contains
          lpt_step: block
             real(WP) :: dt_done,mydt
             real(WP), dimension(:,:,:), allocatable :: tmp1,tmp2,tmp3,VFold,rho
+            real(WP), dimension(:,:,:), allocatable :: dVFdx,dVFdy,dVFdz
             integer :: i,j,k
             ! Allocate and store rho
             allocate(rho  (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_)); rho  =vf%VF*fs%rho_l+(1.0_WP-vf%VF)*fs%rho_g
@@ -370,6 +378,18 @@ contains
             allocate(tmp1 (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_)); tmp1 =0.0_WP
             allocate(tmp2 (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_)); tmp2 =0.0_WP
             allocate(tmp3 (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_)); tmp3 =0.0_WP
+            ! Allocate grad(VF) storage
+            allocate(dVFdx(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_)); dVFdx=0.0_WP
+            allocate(dVFdy(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_)); dVFdy=0.0_WP
+            allocate(dVFdz(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_)); dVFdz=0.0_WP
+            do k=vf%cfg%kmin_,vf%cfg%kmax_; do j=vf%cfg%jmin_,vf%cfg%jmax_; do i=vf%cfg%imin_,vf%cfg%imax_
+               dVFdx(i,j,k)=sum(fs%divu_x(:,i,j,k)*vf%VF(i-1:i,j,k))
+               dVFdy(i,j,k)=sum(fs%divu_y(:,i,j,k)*vf%VF(i,j-1:j,k))
+               dVFdz(i,j,k)=sum(fs%divu_z(:,i,j,k)*vf%VF(i,j,k-1:k))
+            end do; end do; end do
+            call fs%cfg%sync(dVFdx)
+            call fs%cfg%sync(dVFdy)
+            call fs%cfg%sync(dVFdz)
             ! Get fluid stress
             resU=0.0_WP; resV=0.0_WP; resW=0.0_WP; call fs%get_div_stress(resU,resV,resW)
             ! Zero-out LPT source terms
@@ -384,7 +404,7 @@ contains
                ! Inject, collide and advance particles
                call lp%inject (dt=mydt,avoid_overlap=.true.)
                call lp%collide(dt=mydt)
-               call lp%advance(dt=mydt,U=fs%U,V=fs%V,W=fs%W,rho=rho,visc=fs%visc,stress_x=resU,stress_y=resV,stress_z=resW,srcU=tmp1,srcV=tmp2,srcW=tmp3)
+               call lp%advance(dt=mydt,U=fs%U,V=fs%V,W=fs%W,rho=rho,visc=fs%visc,stress_x=resU,stress_y=resV,stress_z=resW,gradVF_x=dVFdx,gradVF_y=dVFdy,gradVF_z=dVFdz,srcU=tmp1,srcV=tmp2,srcW=tmp3)
                srcU=srcU+tmp1
                srcV=srcV+tmp2
                srcW=srcW+tmp3
@@ -407,7 +427,7 @@ contains
             end do; end do; end do
             call fs%cfg%sync(srcM)
             ! Deallocate
-            deallocate(tmp1,tmp2,tmp3,VFold,rho)
+            deallocate(tmp1,tmp2,tmp3,VFold,rho,dVFdx,dVFdy,dVFdz)
          end block lpt_step
          
          ! Apply time-varying Dirichlet conditions
