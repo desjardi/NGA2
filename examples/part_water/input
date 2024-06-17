@@ -2,15 +2,15 @@
 Partition :	1 8 1
 
 # Mesh definition
-Lx : 0.0064
+Lx : 0.0128
 Ly : 0.0128
 Lz : 1e-4 !0.0128
-nx : 64
+nx : 128
 ny : 128
 nz : 1    !128
 
 # Pool
-Pool depth : 0.002
+Pool depth : 0.0064
 
 # Fluid properties
 Gravity :   9.81 0 0
@@ -34,19 +34,19 @@ Wall restitution :              0.1
 Friction coefficient :          0.5
 
 # Particle injection
-Particle inject diameter:       0.00127
-Particle mass flow rate:        5e-6 !2e-5
-Particle velocity:              0.18 0 0
+Particle inject diameter:       0.00128
+Particle mass flow rate:        1e-5
+Particle velocity:              2 0 0
 
 # Time integration
-Particle timestep size : 1e-6
+Particle timestep size : 2e-6
 Max timestep size :      2e-5
 Max cfl number :	       1
-Max time :               0.1
+Max time :               1
 
 # Pressure solver
-Pressure tolerance : 1e-5
+Pressure tolerance : 1e-4
 Pressure iteration : 100
 
 # Ensight output
-Ensight output period : 40e-5
+Ensight output period : 1e-4
