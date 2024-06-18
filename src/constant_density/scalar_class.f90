@@ -540,13 +540,13 @@ contains
             
          end if
          
-         ! Sync full fields after each bcond - this should be optimized
-         call this%cfg%sync(this%SC)
-         
          ! Move on to the next bcond
          my_bc=>my_bc%next
          
       end do
+      
+      ! Sync full fields after all bcond
+      call this%cfg%sync(this%SC)
       
    end subroutine apply_bcond
    
@@ -561,6 +561,8 @@ contains
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in)  :: rhoW     !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       integer :: i,j,k
       real(WP), dimension(:,:,:), allocatable :: FX,FY,FZ
+      ! Zero out drhoSC/dt array
+      drhoSCdt=0.0_WP
       ! Allocate flux arrays
       allocate(FX(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
       allocate(FY(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))

@@ -317,11 +317,11 @@ contains
       
       ! Initialize our VOF solver and field
       create_and_initialize_vof: block
-         use vfs_class, only: elvira,r2p
+         use vfs_class, only: elvira,r2p,remap
          integer :: i,j,k
          real(WP) :: xloc,rad
          ! Create a VOF solver with LVIRA
-         this%vf=vfs(cfg=this%cfg,reconstruction_method=elvira,name='VOF')
+         call this%vf%initialize(cfg=this%cfg,reconstruction_method=elvira,transport_method=remap,name='VOF')
          ! Initialize to flat interface in liquid needle
          xloc=0.0_WP !< Interface initially at x=0
          do k=this%vf%cfg%kmino_,this%vf%cfg%kmaxo_

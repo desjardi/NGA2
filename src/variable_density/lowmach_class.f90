@@ -767,7 +767,7 @@ contains
       
       ! Point to pressure solver linsol object
       this%psolv=>pressure_solver
-
+      
       ! Set 7-pt stencil map for the pressure solver
       this%psolv%stc(1,:)=[ 0, 0, 0]
       this%psolv%stc(2,:)=[+1, 0, 0]
@@ -875,7 +875,7 @@ contains
       
       ! Now adjust the metrics accordingly
       select case (new_bc%type)
-      case (dirichlet) !< Dirichlet is set one face (i.e., velocit component) at the time
+      case (dirichlet) !< Dirichlet is set one face (i.e., velocity component) at the time
          select case (new_bc%face)
          case ('x')
             do n=1,new_bc%itr%n_
@@ -1035,16 +1035,19 @@ contains
                      do n=1,my_bc%itr%n_
                         i=my_bc%itr%map(1,n); j=my_bc%itr%map(2,n); k=my_bc%itr%map(3,n)
                         this%U(i,j,k)=0.0_WP
+                        this%rhoU(i,j,k)=0.0_WP
                      end do
                   case ('y')
                      do n=1,my_bc%itr%n_
                         i=my_bc%itr%map(1,n); j=my_bc%itr%map(2,n); k=my_bc%itr%map(3,n)
                         this%V(i,j,k)=0.0_WP
+                        this%rhoV(i,j,k)=0.0_WP
                      end do
                   case ('z')
                      do n=1,my_bc%itr%n_
                         i=my_bc%itr%map(1,n); j=my_bc%itr%map(2,n); k=my_bc%itr%map(3,n)
                         this%W(i,j,k)=0.0_WP
+                        this%rhoW(i,j,k)=0.0_WP
                      end do
                   end select
                end if
@@ -1057,18 +1060,18 @@ contains
             
          end if
          
-         ! Sync full fields after each bcond - this should be optimized
-         call this%cfg%sync(this%U)
-         call this%cfg%sync(this%V)
-         call this%cfg%sync(this%W)
-         call this%cfg%sync(this%rhoU)
-         call this%cfg%sync(this%rhoV)
-         call this%cfg%sync(this%rhoW)
-         
          ! Move on to the next bcond
          my_bc=>my_bc%next
          
       end do
+      
+      ! Sync full fields after all bcond
+      call this%cfg%sync(this%U)
+      call this%cfg%sync(this%V)
+      call this%cfg%sync(this%W)
+      call this%cfg%sync(this%rhoU)
+      call this%cfg%sync(this%rhoV)
+      call this%cfg%sync(this%rhoW)
       
    end subroutine apply_bcond
    
@@ -1082,6 +1085,9 @@ contains
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(out) :: drhoWdt !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       integer :: i,j,k,ii,jj,kk
       real(WP), dimension(:,:,:), allocatable :: FX,FY,FZ
+      
+      ! Zero out drhoUVW/dt arrays
+      drhoUdt=0.0_WP; drhoVdt=0.0_WP; drhoWdt=0.0_WP
       
       ! Allocate flux arrays
       allocate(FX(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
@@ -1225,6 +1231,7 @@ contains
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(out) :: Pgrady !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(out) :: Pgradz !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       integer :: i,j,k
+      Pgradx=0.0_WP; Pgrady=0.0_WP; Pgradz=0.0_WP
       do k=this%cfg%kmin_,this%cfg%kmax_
          do j=this%cfg%jmin_,this%cfg%jmax_
             do i=this%cfg%imin_,this%cfg%imax_
@@ -1246,9 +1253,9 @@ contains
       implicit none
       class(lowmach), intent(inout) :: this
       integer :: i,j,k
-      do k=this%cfg%kmin_,this%cfg%kmax_
-         do j=this%cfg%jmin_,this%cfg%jmax_
-            do i=this%cfg%imin_,this%cfg%imax_
+      do k=this%cfg%kmin_,this%cfg%kmax_+1
+         do j=this%cfg%jmin_,this%cfg%jmax_+1
+            do i=this%cfg%imin_,this%cfg%imax_+1
                this%U(i,j,k)=this%rhoU(i,j,k)/sum(this%itpr_x(:,i,j,k)*this%rho(i-1:i,j,k))
                this%V(i,j,k)=this%rhoV(i,j,k)/sum(this%itpr_y(:,i,j,k)*this%rho(i,j-1:j,k))
                this%W(i,j,k)=this%rhoW(i,j,k)/sum(this%itpr_z(:,i,j,k)*this%rho(i,j,k-1:k))
@@ -1267,9 +1274,9 @@ contains
       implicit none
       class(lowmach), intent(inout) :: this
       integer :: i,j,k
-      do k=this%cfg%kmin_,this%cfg%kmax_
-         do j=this%cfg%jmin_,this%cfg%jmax_
-            do i=this%cfg%imin_,this%cfg%imax_
+      do k=this%cfg%kmin_,this%cfg%kmax_+1
+         do j=this%cfg%jmin_,this%cfg%jmax_+1
+            do i=this%cfg%imin_,this%cfg%imax_+1
                this%rhoU(i,j,k)=this%U(i,j,k)*sum(this%itpr_x(:,i,j,k)*this%rho(i-1:i,j,k))
                this%rhoV(i,j,k)=this%V(i,j,k)*sum(this%itpr_y(:,i,j,k)*this%rho(i,j-1:j,k))
                this%rhoW(i,j,k)=this%W(i,j,k)*sum(this%itpr_z(:,i,j,k)*this%rho(i,j,k-1:k))
@@ -1889,7 +1896,7 @@ contains
       type(bcond), pointer :: my_bc
       
       ! Evaluate MFR mismatch and velocity correction
-      call this%cfg%integrate(A=drhodt,integral=dMdt)
+      call this%cfg%integrate_without_vf(A=drhodt,integral=dMdt)
       call this%get_mfr()
       mfr_error=sum(this%mfr)+dMdt
       if (abs(mfr_error).lt.10.0_WP*epsilon(1.0_WP).or.abs(this%correctable_area).lt.10.0_WP*epsilon(1.0_WP)) return

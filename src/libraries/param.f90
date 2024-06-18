@@ -498,13 +498,14 @@ contains
    
    
    !> Read float array value associated with parameter tag
-   subroutine param_readfloatarray(tag,val,short)
+   subroutine param_readfloatarray(tag,val,short,default)
       use messager,  only: die
       use precision, only: WP
       implicit none
       character(len=*), intent(in)            :: tag
       real(WP), dimension(:), intent(out)     :: val
       character(len=*), intent(in) , optional :: short
+      real(WP), dimension(:), intent(in) , optional :: default
       integer :: ind
       ! Get the parameter index
       ind=param_index(tag)
@@ -524,7 +525,11 @@ contains
          end if
       end if
       ! If still here, we have not found a value to read
-      call die('[param_read] Did not find required parameter: '//trim(tag))
+      if (present(default)) then
+         val=default
+      else
+         call die('[param_read] Did not find required parameter: '//trim(tag))
+      end if
    end subroutine param_readfloatarray
    
    

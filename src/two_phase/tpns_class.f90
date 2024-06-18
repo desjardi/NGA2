@@ -168,6 +168,7 @@ module tpns_class
       procedure :: interp_vel                             !< Calculate interpolated velocity
       procedure :: get_strainrate                         !< Calculate deviatoric part of strain rate tensor
       procedure :: get_gradu                              !< Calculate velocity gradient tensor
+      procedure :: get_div_stress                         !< Calculate divergence of stress
       procedure :: get_vorticity                          !< Calculate vorticity tensor
       procedure :: get_mfr                                !< Calculate outgoing MFR through each bcond
       procedure :: correct_mfr                            !< Correct for mfr mismatch to ensure global conservation
@@ -178,6 +179,8 @@ module tpns_class
       
       procedure :: addsrc_gravity                         !< Add gravitational body force
       procedure :: add_surface_tension_jump               !< Add surface tension jump
+      procedure :: add_surface_tension_jump_thin          !< Add surface tension jump - thin region version
+      procedure :: add_surface_tension_jump_twoVF         !< Add surface tension jump - two decomposed VF fields
       procedure :: add_static_contact                     !< Add static contact line model to surface tension jump
       
    end type tpns
@@ -1123,15 +1126,15 @@ contains
             
          end if
          
-         ! Sync full fields after each bcond - this should be optimized
-         call this%cfg%sync(this%U)
-         call this%cfg%sync(this%V)
-         call this%cfg%sync(this%W)
-         
          ! Move on to the next bcond
          my_bc=>my_bc%next
          
       end do
+      
+      ! Sync full fields after all bcond
+      call this%cfg%sync(this%U)
+      call this%cfg%sync(this%V)
+      call this%cfg%sync(this%W)
       
    end subroutine apply_bcond
    
@@ -1502,6 +1505,9 @@ contains
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(out) :: drhoWdt !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       integer :: i,j,k,ii,jj,kk
       
+      ! Zero out drhoUVW/dt arrays
+      drhoUdt=0.0_WP; drhoVdt=0.0_WP; drhoWdt=0.0_WP
+      
       ! Flux of rhoU
       do kk=this%cfg%kmin_,this%cfg%kmax_+1
          do jj=this%cfg%jmin_,this%cfg%jmax_+1
@@ -1653,10 +1659,12 @@ contains
    
    
    !> Calculate the velocity divergence based on U/V/W
-   subroutine get_div(this)
+   subroutine get_div(this,src)
       implicit none
       class(tpns), intent(inout) :: this
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), optional :: src !< Mass source term
       integer :: i,j,k
+      ! Calculate divergence of velocity
       do k=this%cfg%kmin_,this%cfg%kmax_
          do j=this%cfg%jmin_,this%cfg%jmax_
             do i=this%cfg%imin_,this%cfg%imax_
@@ -1666,6 +1674,16 @@ contains
             end do
          end do
       end do
+      ! If present, account for mass source
+      if (present(src)) then
+         do k=this%cfg%kmin_,this%cfg%kmax_
+            do j=this%cfg%jmin_,this%cfg%jmax_
+               do i=this%cfg%imin_,this%cfg%imax_
+                  this%div(i,j,k)=this%div(i,j,k)-src(i,j,k)
+               end do
+            end do
+         end do
+      end if
       ! Sync it
       call this%cfg%sync(this%div)
    end subroutine get_div
@@ -1748,7 +1766,419 @@ contains
       end do
       
    end subroutine add_surface_tension_jump
+
+
+   !> Add surface tension jump term using CSF
+   !> Account for thin regions
+   subroutine add_surface_tension_jump_thin(this,dt,div,vf)
+      use messager,  only: die
+      use vfs_class, only: vfs
+      use irl_fortran_interface
+      implicit none
+      class(tpns), intent(inout) :: this
+      real(WP), intent(inout) :: dt     !< Timestep size over which to advance
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: div  !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      class(vfs), intent(inout) :: vf
+      integer :: i,j,k,n,np1,np2,ind
+      real(WP) :: mycurv,mysurf
+      real(WP), dimension(3) :: n1,n2,nf
+      real(WP), dimension(:,:,:), allocatable :: alpha  !< Modified volume fraction field
+      
+      ! Store old jump
+      this%DPjx=this%Pjx
+      this%DPjy=this%Pjy
+      this%DPjz=this%Pjz
+      
+      ! Prepare modified volume fraction field that accounts for thin regions
+      allocate(alpha(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
+      do k=this%cfg%kmino_,this%cfg%kmaxo_
+         do j=this%cfg%jmino_,this%cfg%jmaxo_
+            do i=this%cfg%imino_,this%cfg%imaxo_
+               if (vf%thin_sensor(i,j,k).eq.1.0_WP) then
+                  alpha(i,j,k)=1.0_WP !< Thin liquid region
+               else if (vf%thin_sensor(i,j,k).eq.2.0_WP) then
+                  alpha(i,j,k)=0.0_WP !< Thin gas region
+               else
+                  alpha(i,j,k)=vf%VF(i,j,k) !< Resolved region
+               end if
+            end do
+         end do
+      end do
+      
+      ! Calculate pressure jump
+      do k=this%cfg%kmin_,this%cfg%kmax_+1
+         do j=this%cfg%jmin_,this%cfg%jmax_+1
+            do i=this%cfg%imin_,this%cfg%imax_+1
+               ! Count my planes
+               np1=0
+               do n=1,getNumberOfPlanes(vf%liquid_gas_interface(i,j,k))
+                  if (getNumberOfVertices(vf%interface_polygon(n,i,j,k)).gt.0) np1=np1+1
+               end do
+               ! X face ===========================================
+               mysurf=sum(vf%SD(i-1:i,j,k)*this%cfg%vol(i-1:i,j,k))
+               if (mysurf.gt.0.0_WP) then
+                  mycurv=sum(vf%SD(i-1:i,j,k)*vf%curv(i-1:i,j,k)*this%cfg%vol(i-1:i,j,k))/mysurf
+               else
+                  mycurv=0.0_WP
+               end if
+               ! Count neighbor's planes
+               np2=0
+               do n=1,getNumberOfPlanes(vf%liquid_gas_interface(i-1,j,k))
+                  if (getNumberOfVertices(vf%interface_polygon(n,i-1,j,k)).gt.0) np2=np2+1
+               end do
+               ! Assign correct curvature
+               if (np1.eq.2.and.np2.eq.0) then
+                  n1=calculateNormal(vf%interface_polygon(1,i,j,k))
+                  n2=calculateNormal(vf%interface_polygon(2,i,j,k))
+                  nf=sign(1.0_WP,alpha(i-1,j,k)-0.5_WP)*[+1.0_WP,0.0_WP,0.0_WP]
+                  ind=maxloc([dot_product(n1,nf),dot_product(n2,nf)],dim=1)
+                  mycurv=vf%curv2p(ind,i,j,k)
+               end if
+               if (np1.eq.0.and.np2.eq.2) then
+                  n1=calculateNormal(vf%interface_polygon(1,i-1,j,k))
+                  n2=calculateNormal(vf%interface_polygon(2,i-1,j,k))
+                  nf=sign(1.0_WP,alpha(i,j,k)-0.5_WP)*[-1.0_WP,0.0_WP,0.0_WP]
+                  ind=maxloc([dot_product(n1,nf),dot_product(n2,nf)],dim=1)
+                  mycurv=vf%curv2p(ind,i-1,j,k)
+               end if
+               ! Assemble pressure jump
+               this%Pjx(i,j,k)=this%sigma*mycurv*sum(this%divu_x(:,i,j,k)*alpha(i-1:i,j,k))
+               ! Y face ===========================================
+               mysurf=sum(vf%SD(i,j-1:j,k)*this%cfg%vol(i,j-1:j,k))
+               if (mysurf.gt.0.0_WP) then
+                  mycurv=sum(vf%SD(i,j-1:j,k)*vf%curv(i,j-1:j,k)*this%cfg%vol(i,j-1:j,k))/mysurf
+               else
+                  mycurv=0.0_WP
+               end if
+               ! Count neighbor's planes
+               np2=0
+               do n=1,getNumberOfPlanes(vf%liquid_gas_interface(i,j-1,k))
+                  if (getNumberOfVertices(vf%interface_polygon(n,i,j-1,k)).gt.0) np2=np2+1
+               end do
+               ! Assign correct curvature
+               if (np1.eq.2.and.np2.eq.0) then
+                  n1=calculateNormal(vf%interface_polygon(1,i,j,k))
+                  n2=calculateNormal(vf%interface_polygon(2,i,j,k))
+                  nf=sign(1.0_WP,alpha(i,j-1,k)-0.5_WP)*[0.0_WP,+1.0_WP,0.0_WP]
+                  ind=maxloc([dot_product(n1,nf),dot_product(n2,nf)],dim=1)
+                  mycurv=vf%curv2p(ind,i,j,k)
+               end if
+               if (np1.eq.0.and.np2.eq.2) then
+                  n1=calculateNormal(vf%interface_polygon(1,i,j-1,k))
+                  n2=calculateNormal(vf%interface_polygon(2,i,j-1,k))
+                  nf=sign(1.0_WP,alpha(i,j,k)-0.5_WP)*[0.0_WP,-1.0_WP,0.0_WP]
+                  ind=maxloc([dot_product(n1,nf),dot_product(n2,nf)],dim=1)
+                  mycurv=vf%curv2p(ind,i,j-1,k)
+               end if
+               ! Assemble pressure jump
+               this%Pjy(i,j,k)=this%sigma*mycurv*sum(this%divv_y(:,i,j,k)*alpha(i,j-1:j,k))
+               ! Z face ===========================================
+               mysurf=sum(vf%SD(i,j,k-1:k)*this%cfg%vol(i,j,k-1:k))
+               if (mysurf.gt.0.0_WP) then
+                  mycurv=sum(vf%SD(i,j,k-1:k)*vf%curv(i,j,k-1:k)*this%cfg%vol(i,j,k-1:k))/mysurf
+               else
+                  mycurv=0.0_WP
+               end if
+               ! Count neighbor's planes
+               np2=0
+               do n=1,getNumberOfPlanes(vf%liquid_gas_interface(i,j,k-1))
+                  if (getNumberOfVertices(vf%interface_polygon(n,i,j,k-1)).gt.0) np2=np2+1
+               end do
+               ! Assign correct curvature
+               if (np1.eq.2.and.np2.eq.0) then
+                  n1=calculateNormal(vf%interface_polygon(1,i,j,k))
+                  n2=calculateNormal(vf%interface_polygon(2,i,j,k))
+                  nf=sign(1.0_WP,alpha(i,j,k-1)-0.5_WP)*[0.0_WP,0.0_WP,+1.0_WP]
+                  ind=maxloc([dot_product(n1,nf),dot_product(n2,nf)],dim=1)
+                  mycurv=vf%curv2p(ind,i,j,k)
+               end if
+               if (np1.eq.0.and.np2.eq.2) then
+                  n1=calculateNormal(vf%interface_polygon(1,i,j,k-1))
+                  n2=calculateNormal(vf%interface_polygon(2,i,j,k-1))
+                  nf=sign(1.0_WP,alpha(i,j,k)-0.5_WP)*[0.0_WP,0.0_WP,-1.0_WP]
+                  ind=maxloc([dot_product(n1,nf),dot_product(n2,nf)],dim=1)
+                  mycurv=vf%curv2p(ind,i,j,k-1)
+               end if
+               ! Assemble pressure jump
+               this%Pjz(i,j,k)=this%sigma*mycurv*sum(this%divw_z(:,i,j,k)*alpha(i,j,k-1:k))
+            end do
+         end do
+      end do
+
+      ! Deallocate alpha
+      deallocate(alpha)
+      
+      ! Compute jump of DP
+      this%DPjx=this%Pjx-this%DPjx
+      this%DPjy=this%Pjy-this%DPjy
+      this%DPjz=this%Pjz-this%DPjz
+      
+      ! Add div(Pjump) to RP
+      do k=this%cfg%kmin_,this%cfg%kmax_
+         do j=this%cfg%jmin_,this%cfg%jmax_
+            do i=this%cfg%imin_,this%cfg%imax_
+               div(i,j,k)=div(i,j,k)+dt*(sum(this%divp_x(:,i,j,k)*this%DPjx(i:i+1,j,k)/this%rho_U(i:i+1,j,k))&
+               &                        +sum(this%divp_y(:,i,j,k)*this%DPjy(i,j:j+1,k)/this%rho_V(i,j:j+1,k))&
+               &                        +sum(this%divp_z(:,i,j,k)*this%DPjz(i,j,k:k+1)/this%rho_W(i,j,k:k+1)))
+            end do
+         end do
+      end do
+      
+   end subroutine add_surface_tension_jump_thin
    
+   
+   !> Add surface tension jump term using CSF
+   !> Account for thin regions by using building two VF fields
+   subroutine add_surface_tension_jump_twoVF(this,dt,div,vf)
+      use messager,  only: die
+      use vfs_class, only: vfs
+      use irl_fortran_interface
+      implicit none
+      class(tpns), intent(inout) :: this
+      real(WP), intent(inout) :: dt     !< Timestep size over which to advance
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: div  !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      class(vfs), intent(inout) :: vf
+      integer :: i,j,k,ii,jj,kk,n,np1,np2,cn
+      integer, dimension(2,2) :: plane_ind
+      real(WP), dimension(2,2) :: VF2p,curv2p,surf2p
+      real(WP), dimension(3,2) :: pos
+      real(WP), dimension(4,2,2) :: normals
+      real(WP), dimension(4) :: plane
+      type(RectCub_type) :: cell
+      type(PlanarSep_type) :: lginterface
+      
+      ! Store old jump
+      this%DPjx=this%Pjx
+      this%DPjy=this%Pjy
+      this%DPjz=this%Pjz
+      
+      ! Allocate IRL storage
+      call new(cell)
+      call new(lginterface)
+      call setNumberOfPlanes(lginterface,1)
+      
+      ! Calculate pressure jump
+      do k=this%cfg%kmin_,this%cfg%kmax_+1
+         do j=this%cfg%jmin_,this%cfg%jmax_+1
+            do i=this%cfg%imin_,this%cfg%imax_+1
+               ! X face ===========================================
+               np1=0; np2=0; VF2p=0.0_WP; curv2p=0.0_WP; surf2p=0.0_WP; normals=0.0_WP; plane_ind=0
+               ! Get info from cells on each side of the face
+               ii=i-1; jj=j; kk=k; cn=1; np1=prepare_info()
+               ii=i  ; jj=j; kk=k; cn=2; np2=prepare_info()
+               ! Assemble pressure jump
+               if ((np1.eq.0).and.(np2.eq.0)) then
+                  this%Pjx(i,j,k)=0.0_WP
+               else
+                  this%Pjx(i,j,k)=this%sigma*sum(this%divu_x(:,i,j,k)*get_kalpha())
+               end if
+               ! Y face ===========================================
+               np1=0; np2=0; VF2p=0.0_WP; curv2p=0.0_WP; surf2p=0.0_WP; normals=0.0_WP; plane_ind=0
+               ! Get info from cells on each side of the face
+               ii=i; jj=j-1; kk=k; cn=1; np1=prepare_info()
+               ii=i; jj=j  ; kk=k; cn=2; np2=prepare_info()
+               ! Assemble pressure jump
+               if ((np1.eq.0).and.(np2.eq.0)) then
+                  this%Pjy(i,j,k)=0.0_WP
+               else
+                  this%Pjy(i,j,k)=this%sigma*sum(this%divv_y(:,i,j,k)*get_kalpha())
+               end if
+               ! Z face ===========================================
+               np1=0; np2=0; VF2p=0.0_WP; curv2p=0.0_WP; surf2p=0.0_WP; normals=0.0_WP; plane_ind=0
+               ! Get info from cells on each side of the face
+               ii=i; jj=j; kk=k-1; cn=1; np1=prepare_info()
+               ii=i; jj=j; kk=k  ; cn=2; np2=prepare_info()
+               ! Assemble pressure jump
+               if ((np1.eq.0).and.(np2.eq.0)) then
+                  this%Pjz(i,j,k)=0.0_WP
+               else
+                  this%Pjz(i,j,k)=this%sigma*sum(this%divw_z(:,i,j,k)*get_kalpha())
+               end if
+            end do
+         end do
+      end do
+
+      ! Compute jump of DP
+      this%DPjx=this%Pjx-this%DPjx
+      this%DPjy=this%Pjy-this%DPjy
+      this%DPjz=this%Pjz-this%DPjz
+      
+      ! Add div(Pjump) to RP
+      do k=this%cfg%kmin_,this%cfg%kmax_
+         do j=this%cfg%jmin_,this%cfg%jmax_
+            do i=this%cfg%imin_,this%cfg%imax_
+               div(i,j,k)=div(i,j,k)+dt*(sum(this%divp_x(:,i,j,k)*this%DPjx(i:i+1,j,k)/this%rho_U(i:i+1,j,k))&
+               &                        +sum(this%divp_y(:,i,j,k)*this%DPjy(i,j:j+1,k)/this%rho_V(i,j:j+1,k))&
+               &                        +sum(this%divp_z(:,i,j,k)*this%DPjz(i,j,k:k+1)/this%rho_W(i,j,k:k+1)))
+            end do
+         end do
+      end do
+      
+   contains
+      
+      function prepare_info() result(np)
+         implicit none
+         integer :: np
+         real(WP) :: myvol
+         np=0; myvol=0.0_WP
+         do n=1,getNumberOfPlanes(vf%liquid_gas_interface(ii,jj,kk))
+            if (getNumberOfVertices(vf%interface_polygon(n,ii,jj,kk)).eq.0) cycle
+            np=np+1; plane_ind(n,cn)=1
+            call construct_2pt(cell,[vf%cfg%x(ii),vf%cfg%y(jj),vf%cfg%z(kk)],[vf%cfg%x(ii+1),vf%cfg%y(jj+1),vf%cfg%z(kk+1)])
+            plane=getPlane(vf%liquid_gas_interface(ii,jj,kk),n-1)
+            call setPlane(lginterface,0,plane(1:3),plane(4))
+            call getNormMoments(cell,lginterface,myvol)
+            VF2p(n,cn)=myvol/vf%cfg%vol(ii,jj,kk)
+            normals(:,n,cn)=plane
+            surf2p(n,cn)=abs(calculateVolume(vf%interface_polygon(n,ii,jj,kk)))
+            curv2p(n,cn)=vf%curv2p(n,ii,jj,kk)
+         end do
+         pos(:,cn)=[vf%cfg%xm(ii),vf%cfg%ym(jj),vf%cfg%zm(kk)]
+      end function  prepare_info
+      
+      function get_kalpha() result(kalpha)   
+         use mathtools, only: normalize
+         implicit none
+         real(WP), dimension(3) :: pos_temp
+         real(WP), dimension(2) :: kalpha
+         integer, dimension(2,2) :: plane_check
+         real(WP) :: surfsum,dist
+         integer :: flag
+         ! Merge left cell
+         if (np1.eq.2) then
+            if (dot_product(normals(1:3,1,1),normals(1:3,2,1)).gt.0.0_WP) then
+               surfsum=sum(surf2p(:,1))
+               normals(:,1,1)=(surf2p(1,1)*normals(:,1,1)+surf2p(2,1)*normals(:,2,1))/surfsum
+               normals(:,1,1)=normals(:,1,1)/(norm2(normals(1:3,1,1))+tiny(1.0_WP))
+               normals(:,2,1)=0.0_WP
+               VF2p(:,1)=[sum(surf2p(:,1)*VF2p(:,1))/surfsum,0.0_WP]
+               curv2p(:,1)=[sum(surf2p(:,1)*curv2p(:,1))/surfsum,0.0_WP]
+               surf2p(:,1)=[surfsum,0.0_WP]
+               plane_ind(:,1)=[1,0]
+            end if
+         end if
+         ! Merge right cell
+         if (np2.eq.2) then
+            if (dot_product(normals(1:3,1,2),normals(1:3,2,2)).gt.0.0_WP) then
+               surfsum = sum(surf2p(:,2))
+               normals(:,1,2)=(surf2p(1,2)*normals(:,1,2)+surf2p(2,2)*normals(:,2,2))/surfsum
+               normals(:,1,2)=normals(:,1,2)/(norm2(normals(1:3,1,2))+tiny(1.0_WP))
+               normals(:,2,2)=0.0_WP
+               VF2p(:,2)=[sum(surf2p(:,2)*VF2p(:,2))/surfsum,0.0_WP]
+               curv2p(:,2)=[sum(surf2p(:,2)*curv2p(:,2))/surfsum,0.0_WP]
+               surf2p(:,2)=[surfsum,0.0_WP]
+               plane_ind(:,2)=[1,0]
+            end if
+         end if
+         plane_check=0
+         do ii=1,2
+            if (plane_ind(ii,1).eq.0) cycle    ! If a plane doesn't exist, move on
+            flag=0
+            do jj=1,2
+               if (plane_ind(jj,2).eq.0) cycle ! If a plane doesn't exist, move on
+               if (dot_product(normals(1:3,ii,1),normals(1:3,jj,2)).gt.0.0_WP) then
+                  ! IF two plane aligns, both planes get the surface area weighted curvature
+                  flag=1
+                  curv2p(ii,1)=(curv2p(ii,1)*surf2p(ii,1)+curv2p(jj,2)*surf2p(jj,2))/(surf2p(ii,1)+surf2p(jj,2))
+                  curv2p(jj,2)=curv2p(ii,1)
+                  plane_check(ii,1)=1; plane_check(jj,2)=1
+               end if
+            end do
+            if (flag.eq.0) then ! NO PLANE with the same orientation is found
+               dist=-dot_product(normals(1:3,ii,1),pos(:,2))+normals(4,ii,1)
+               pos_temp=normalize(-dist*normals(1:3,ii,1))
+               ! Set first volume of cell2 based on centroid projection
+               if (plane_ind(1,2).ne.1.and.plane_ind(2,2).eq.1) then
+                  if (dot_product(pos_temp,normals(1:3,ii,1)).le.0.0_WP) then
+                     VF2p(1,2)=1.0_WP
+                  else
+                     VF2p(1,2)=0.0_WP
+                  end if
+                  curv2p(1,2)=curv2p(ii,1)
+                  plane_check(ii,1)=1; plane_check(1,2)=1
+               ! Set second volume of cell2 based on centroid projection
+               else if (plane_ind(2,2).ne.1.and.plane_ind(1,2).eq.1) then
+                  if (dot_product(pos_temp,normals(1:3,ii,1)).le.0.0_WP) then
+                     VF2p(2,2)=1.0_WP
+                  else
+                     VF2p(2,2)=0.0_WP
+                  end if
+                  curv2p(2,2)=curv2p(ii,1)
+                  plane_check(ii,1)=1; plane_check(2,2)=1
+               ! If both cells are empty, pick the cell that hasn't been checked
+               else if (plane_ind(2,2).ne.1.and.plane_ind(1,2).ne.1) then
+                  if (plane_check(1,2).eq.0) then
+                     if (dot_product(pos_temp,normals(1:3,ii,1)).le.0.0_WP) then
+                        VF2p(1,2)=1.0_WP
+                     else
+                        VF2p(1,2)=0.0_WP
+                     end if
+                     curv2p(1,2)=curv2p(ii,1)
+                     plane_check(ii,1)=1; plane_check(1,2)=1
+                  else if (plane_check(2,2).eq.0) then
+                     if (dot_product(pos_temp,normals(1:3,ii,1)).le.0.0_WP) then
+                        VF2p(2,2)=1.0_WP
+                     else
+                        VF2p(2,2)=0.0_WP
+                     end if
+                     curv2p(2,2)=curv2p(ii,1)
+                     plane_check(ii,1)=1; plane_check(2,2)=1
+                  end if
+               else ! don't know what to do, do nothing
+               end if
+            end if
+         end do
+         ! Next loop over all the planes from cell2 
+         do ii=1,2
+            ! If a plane doesn't exist or has been already accounted for, skip
+            if ((plane_ind(ii,2).eq.0).or.(plane_check(ii,2).eq.1)) cycle
+            dist=-dot_product(normals(1:3,ii,2),pos(:,1))+normals(4,ii,2)
+            pos_temp=normalize(-dist*normals(1:3,ii,2))
+            ! Set first volume of cell1 based on centroid projection
+            if (plane_ind(1,1).ne.1.and.plane_ind(2,1).eq.1) then
+               if (dot_product(pos_temp,normals(1:3,ii,2)).le.0.0_WP) then
+                  VF2p(1,1)=1.0_WP
+               else
+                  VF2p(1,1)=0.0_WP
+               end if
+               curv2p(1,1)=curv2p(ii,2)
+               plane_check(ii,2)=1; plane_check(1,1)=1
+            ! Set second volume of cell1 based on centroid projection
+            else if (plane_ind(2,1).ne.1.and.plane_ind(1,1).eq.1) then
+               if (dot_product(pos_temp,normals(1:3,ii,2)).le.0.0_WP) then
+                  VF2p(2,1)=1.0_WP
+               else
+                  VF2p(2,1)=0.0_WP
+               end if
+               curv2p(2,1)=curv2p(ii,2)
+               plane_check(ii,2)=1; plane_check(2,1)=1
+            ! If both cells are empty, pick the cell that hasn't been checked
+            else if (plane_ind(1,1).ne.1.and.plane_ind(2,1).ne.1) then
+               if (plane_check(1,1).eq.0) then
+                  if (dot_product(pos_temp,normals(1:3,ii,2)).le.0.0_WP) then
+                     VF2p(1,1)=1.0_WP
+                  else
+                     VF2p(1,1)=0.0_WP
+                  end if
+                  curv2p(1,1)=curv2p(ii,2)
+                  plane_check(ii,2)=1; plane_check(1,1)=1
+               else if (plane_check(2,1).eq.0) then
+                  if (dot_product(pos_temp,normals(1:3,ii,2)).le.0.0_WP) then
+                     VF2p(2,1)=1.0_WP
+                  else
+                     VF2p(2,1)=0.0_WP
+                  end if
+                  curv2p(2,1)=curv2p(ii,2)
+                  plane_check(ii,2)=1; plane_check(2,1)=1
+               end if
+            else ! don't know what to do, do nothing
+            end if
+         end do
+         kalpha=[sum(VF2p(:,1)*curv2p(:,1)),sum(VF2p(:,2)*curv2p(:,2))]
+      end function get_kalpha
+      
+   end subroutine add_surface_tension_jump_twoVF
+
    
    !> Calculate the pressure gradient based on P
    subroutine get_pgrad(this,P,Pgradx,Pgrady,Pgradz)
@@ -1759,6 +2189,7 @@ contains
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(out) :: Pgrady !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(out) :: Pgradz !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       integer :: i,j,k
+      Pgradx=0.0_WP; Pgrady=0.0_WP; Pgradz=0.0_WP
       do k=this%cfg%kmin_,this%cfg%kmax_
          do j=this%cfg%jmin_,this%cfg%jmax_
             do i=this%cfg%imin_,this%cfg%imax_
@@ -2005,6 +2436,126 @@ contains
 	   deallocate(dudy,dudz,dvdx,dvdz,dwdx,dwdy)
       
    end subroutine get_gradu
+   
+   
+   !> Calculate divergence of stress based on U/V/W/P/Pj (needed by LPT class)
+   subroutine get_div_stress(this,divx,divy,divz)
+      implicit none
+      class(tpns), intent(inout) :: this
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(out) :: divx !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(out) :: divy !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(out) :: divz !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      integer :: i,j,k,ii,jj,kk
+      real(WP), dimension(:,:,:), allocatable :: FX,FY,FZ
+      
+      ! Allocate flux arrays
+      allocate(FX(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
+      allocate(FY(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
+      allocate(FZ(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
+      
+      ! Flux of rhoU
+      do kk=this%cfg%kmin_,this%cfg%kmax_+1
+         do jj=this%cfg%jmin_,this%cfg%jmax_+1
+            do ii=this%cfg%imin_,this%cfg%imax_+1
+               ! Fluxes on x-face
+               i=ii-1; j=jj-1; k=kk-1
+               FX(i,j,k)=-sum(this%hybu_x(:,i,j,k)*this%rho_Uold(i:i+1,j,k))*sum(this%hybu_x(:,i,j,k)*this%U(i:i+1,j,k))*sum(this%itpu_x(:,i,j,k)*this%U(i:i+1,j,k)) &
+               &         +this%visc   (i,j,k)*(sum(this%grdu_x(:,i,j,k)*this%U(i:i+1,j,k))+sum(this%grdu_x(:,i,j,k)*this%U(i:i+1,j,k))) &
+               &         -this%P(i,j,k)
+               ! Fluxes on y-face
+               i=ii; j=jj; k=kk
+               FY(i,j,k)=-sum(this%hybu_y(:,i,j,k)*this%rho_Uold(i,j-1:j,k))*sum(this%hybu_y(:,i,j,k)*this%U(i,j-1:j,k))*sum(this%itpv_x(:,i,j,k)*this%V(i-1:i,j,k)) &
+               &         +this%visc_xy(i,j,k)*(sum(this%grdu_y(:,i,j,k)*this%U(i,j-1:j,k))+sum(this%grdv_x(:,i,j,k)*this%V(i-1:i,j,k)))
+               ! Fluxes on z-face
+               i=ii; j=jj; k=kk
+               FZ(i,j,k)=-sum(this%hybu_z(:,i,j,k)*this%rho_Uold(i,j,k-1:k))*sum(this%hybu_z(:,i,j,k)*this%U(i,j,k-1:k))*sum(this%itpw_x(:,i,j,k)*this%W(i-1:i,j,k)) &
+               &         +this%visc_zx(i,j,k)*(sum(this%grdu_z(:,i,j,k)*this%U(i,j,k-1:k))+sum(this%grdw_x(:,i,j,k)*this%W(i-1:i,j,k)))
+            end do
+         end do
+      end do
+      ! Time derivative of rhoU
+      do k=this%cfg%kmin_,this%cfg%kmax_
+         do j=this%cfg%jmin_,this%cfg%jmax_
+            do i=this%cfg%imin_,this%cfg%imax_
+               divx(i,j,k)=sum(this%divu_x(:,i,j,k)*FX(i-1:i,j,k))+&
+               &           sum(this%divu_y(:,i,j,k)*FY(i,j:j+1,k))+&
+               &           sum(this%divu_z(:,i,j,k)*FZ(i,j,k:k+1))+this%Pjx(i,j,k)
+            end do
+         end do
+      end do
+      ! Sync it
+      call this%cfg%sync(divx)
+      
+      ! Flux of rhoV
+      do kk=this%cfg%kmin_,this%cfg%kmax_+1
+         do jj=this%cfg%jmin_,this%cfg%jmax_+1
+            do ii=this%cfg%imin_,this%cfg%imax_+1
+               ! Fluxes on x-face
+               i=ii; j=jj; k=kk
+               FX(i,j,k)=-sum(this%hybv_x(:,i,j,k)*this%rho_Vold(i-1:i,j,k))*sum(this%hybv_x(:,i,j,k)*this%V(i-1:i,j,k))*sum(this%itpu_y(:,i,j,k)*this%U(i,j-1:j,k)) &
+               &         +this%visc_xy(i,j,k)*(sum(this%grdv_x(:,i,j,k)*this%V(i-1:i,j,k))+sum(this%grdu_y(:,i,j,k)*this%U(i,j-1:j,k)))
+               ! Fluxes on y-face
+               i=ii-1; j=jj-1; k=kk-1
+               FY(i,j,k)=-sum(this%hybv_y(:,i,j,k)*this%rho_Vold(i,j:j+1,k))*sum(this%hybv_y(:,i,j,k)*this%V(i,j:j+1,k))*sum(this%itpv_y(:,i,j,k)*this%V(i,j:j+1,k)) &
+               &         +this%visc   (i,j,k)*(sum(this%grdv_y(:,i,j,k)*this%V(i,j:j+1,k))+sum(this%grdv_y(:,i,j,k)*this%V(i,j:j+1,k))) &
+               &         -this%P(i,j,k)
+               ! Fluxes on z-face
+               i=ii; j=jj; k=kk
+               FZ(i,j,k)=-sum(this%hybv_z(:,i,j,k)*this%rho_Vold(i,j,k-1:k))*sum(this%hybv_z(:,i,j,k)*this%V(i,j,k-1:k))*sum(this%itpw_y(:,i,j,k)*this%W(i,j-1:j,k)) &
+               &         +this%visc_yz(i,j,k)*(sum(this%grdv_z(:,i,j,k)*this%V(i,j,k-1:k))+sum(this%grdw_y(:,i,j,k)*this%W(i,j-1:j,k)))
+            end do
+         end do
+      end do
+      ! Time derivative of rhoV
+      do k=this%cfg%kmin_,this%cfg%kmax_
+         do j=this%cfg%jmin_,this%cfg%jmax_
+            do i=this%cfg%imin_,this%cfg%imax_
+               divy(i,j,k)=sum(this%divv_x(:,i,j,k)*FX(i:i+1,j,k))+&
+               &           sum(this%divv_y(:,i,j,k)*FY(i,j-1:j,k))+&
+               &           sum(this%divv_z(:,i,j,k)*FZ(i,j,k:k+1))+this%Pjy(i,j,k)
+            end do
+         end do
+      end do
+      ! Sync it
+      call this%cfg%sync(divy)
+      
+      ! Flux of rhoW
+      do kk=this%cfg%kmin_,this%cfg%kmax_+1
+         do jj=this%cfg%jmin_,this%cfg%jmax_+1
+            do ii=this%cfg%imin_,this%cfg%imax_+1
+               ! Fluxes on x-face
+               i=ii; j=jj; k=kk
+               FX(i,j,k)=-sum(this%hybw_x(:,i,j,k)*this%rho_Wold(i-1:i,j,k))*sum(this%hybw_x(:,i,j,k)*this%W(i-1:i,j,k))*sum(this%itpu_z(:,i,j,k)*this%U(i,j,k-1:k)) &
+               &         +this%visc_zx(i,j,k)*(sum(this%grdw_x(:,i,j,k)*this%W(i-1:i,j,k))+sum(this%grdu_z(:,i,j,k)*this%U(i,j,k-1:k)))
+               ! Fluxes on y-face
+               i=ii; j=jj; k=kk
+               FY(i,j,k)=-sum(this%hybw_y(:,i,j,k)*this%rho_Wold(i,j-1:j,k))*sum(this%hybw_y(:,i,j,k)*this%W(i,j-1:j,k))*sum(this%itpv_z(:,i,j,k)*this%V(i,j,k-1:k)) &
+               &         +this%visc_yz(i,j,k)*(sum(this%grdw_y(:,i,j,k)*this%W(i,j-1:j,k))+sum(this%grdv_z(:,i,j,k)*this%V(i,j,k-1:k)))
+               ! Fluxes on z-face
+               i=ii-1; j=jj-1; k=kk-1
+               FZ(i,j,k)=-sum(this%hybw_z(:,i,j,k)*this%rho_Wold(i,j,k:k+1))*sum(this%hybw_z(:,i,j,k)*this%W(i,j,k:k+1))*sum(this%itpw_z(:,i,j,k)*this%W(i,j,k:k+1)) &
+               &         +this%visc   (i,j,k)*(sum(this%grdw_z(:,i,j,k)*this%W(i,j,k:k+1))+sum(this%grdw_z(:,i,j,k)*this%W(i,j,k:k+1))) &
+               &         -this%P(i,j,k)
+            end do
+         end do
+      end do
+      ! Time derivative of rhoW
+      do k=this%cfg%kmin_,this%cfg%kmax_
+         do j=this%cfg%jmin_,this%cfg%jmax_
+            do i=this%cfg%imin_,this%cfg%imax_
+               divz(i,j,k)=sum(this%divw_x(:,i,j,k)*FX(i:i+1,j,k))+&
+               &           sum(this%divw_y(:,i,j,k)*FY(i,j:j+1,k))+&
+               &           sum(this%divw_z(:,i,j,k)*FZ(i,j,k-1:k))+this%Pjz(i,j,k)
+            end do
+         end do
+      end do
+      ! Sync it
+      call this%cfg%sync(divz)
+      
+      ! Deallocate flux arrays
+      deallocate(FX,FY,FZ)
+      
+   end subroutine get_div_stress
    
    
    !> Calculate vorticity vector
@@ -2276,17 +2827,23 @@ contains
    
    
    !> Correct MFR through correctable bconds
-   subroutine correct_mfr(this)
+   subroutine correct_mfr(this,src)
       use mpi_f08, only: MPI_SUM
       implicit none
       class(tpns), intent(inout) :: this
-      real(WP) :: mfr_error,vel_correction
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), optional :: src !< Mass source term
+      real(WP) :: mfr_error,vel_correction,int
       integer :: i,j,k,n
       type(bcond), pointer :: my_bc
       
       ! Evaluate MFR mismatch and velocity correction
       call this%get_mfr()
       mfr_error=sum(this%mfr)
+      if (present(src)) then
+         ! Also account for provided source term
+         call this%cfg%integrate_without_VF(src,int)
+         mfr_error=mfr_error-int
+      end if
       if (abs(mfr_error).lt.10.0_WP*epsilon(1.0_WP).or.abs(this%correctable_area).lt.10.0_WP*epsilon(1.0_WP)) return
       vel_correction=-mfr_error/(this%correctable_area)
       

@@ -158,7 +158,7 @@ contains
                do j=this%jmino_,this%jmaxo_
                   do i=this%imino_,this%imaxo_
                      ! Form an hexahedron with corresponding distance info
-				         n=0
+                     n=0
                      do sk=0,1
                         do sj=0,1
                            do si=0,1

@@ -197,7 +197,7 @@ contains
       ! Initialize our VOF solver and field
       create_and_initialize_vof: block
          use mms_geom,  only: cube_refine_vol
-         use vfs_class, only: lvira,VFhi,VFlo
+         use vfs_class, only: lvira,VFhi,VFlo,remap
          use mathtools, only: Pi
          use, intrinsic :: iso_fortran_env, only: output_unit
          use string,    only: str_long
@@ -209,7 +209,7 @@ contains
          integer, parameter :: amr_ref_lvl=4
          character(len=str_long) :: message
          ! Create a VOF solver
-         vf=vfs(cfg=cfg,reconstruction_method=lvira,name='VOF')
+         call vf%initialize(cfg=cfg,reconstruction_method=lvira,transport_method=remap,name='VOF')
          ! Prepare the analytical calculation of a sphere on a wall
          call param_read('Initial drop radius',Rdrop,default=1.0_WP)
          call param_read('Initial contact angle',contact,default=180.0_WP); contact=contact*Pi/180.0_WP
@@ -278,7 +278,7 @@ contains
       ! Create a two-phase flow solver without bconds
       create_and_initialize_flow_solver: block
          use tpns_class,      only: clipped_neumann,dirichlet
-         use hypre_str_class, only: pcg_pfmg
+         use hypre_str_class, only: pcg_pfmg2
          use mathtools,       only: Pi
          integer :: i,j,k,n
          ! Create flow solver
@@ -295,7 +295,7 @@ contains
          call fs%add_bcond(name='bc_zp',type=clipped_neumann,face='z',dir=+1,canCorrect=.true.,locator=zp_locator)
          call fs%add_bcond(name='bc_zm',type=clipped_neumann,face='z',dir=-1,canCorrect=.true.,locator=zm_locator)
          ! Configure pressure solver
-         ps=hypre_str(cfg=cfg,name='Pressure',method=pcg_pfmg,nst=7)
+         ps=hypre_str(cfg=cfg,name='Pressure',method=pcg_pfmg2,nst=7)
          ps%maxlevel=10
          call param_read('Pressure iteration',ps%maxit)
          call param_read('Pressure tolerance',ps%rcvg)
@@ -313,8 +313,24 @@ contains
       
       ! Create surfmesh object for interface polygon output
       create_smesh: block
-         smesh=surfmesh(nvar=0,name='plic')
+         use irl_fortran_interface
+         integer :: i,j,k,np,nplane
+         smesh=surfmesh(nvar=1,name='plic')
+         smesh%varname(1)='curv'
          call vf%update_surfmesh(smesh)
+         np=0
+         do k=vf%cfg%kmin_,vf%cfg%kmax_
+            do j=vf%cfg%jmin_,vf%cfg%jmax_
+               do i=vf%cfg%imin_,vf%cfg%imax_
+                  do nplane=1,getNumberOfPlanes(vf%liquid_gas_interface(i,j,k))
+                     if (getNumberOfVertices(vf%interface_polygon(nplane,i,j,k)).gt.0) then
+                        np=np+1
+                        smesh%var(1,np)=vf%curv(i,j,k)
+                     end if
+                  end do
+               end do
+            end do
+         end do
       end block create_smesh
       
       
@@ -396,12 +412,18 @@ contains
       end block create_postproc
       
       
+      ! TEST THE REMOVAL OF WALL TREATMENT IN VOF TRANSPORT
+      vf%vmask=0
+      ! TEST THE REMOVAL OF CONSERVATIVE CORRECTION IN SL VOF TRANSPORT
+      vf%cons_correct=.false.
+      
+      
    end subroutine simulation_init
    
    
    !> Perform an NGA2 simulation - this mimicks NGA's old time integration for multiphase
    subroutine simulation_run
-      use tpns_class, only: static_contact
+      use tpns_class, only: static_contact,arithmetic_visc
       implicit none
       
       ! Perform time integration
@@ -412,6 +434,9 @@ contains
          call time%adjust_dt()
          call time%increment()
          
+         ! Implement slip condition for contact line modeling here
+         call contact_slip()
+         
          ! Remember old VOF
          vf%VFold=vf%VF
          
@@ -420,9 +445,6 @@ contains
          fs%Vold=fs%V
          fs%Wold=fs%W
          
-         ! Apply time-varying Dirichlet conditions
-         ! This is where time-dpt Dirichlet would be enforced
-         
          ! Prepare old staggered density (at n)
          call fs%get_olddensity(vf=vf)
          
@@ -430,7 +452,7 @@ contains
          call vf%advance(dt=time%dt,U=fs%U,V=fs%V,W=fs%W)
          
          ! Prepare new staggered viscosity (at n+1)
-         call fs%get_viscosity(vf=vf)
+         call fs%get_viscosity(vf=vf,strat=arithmetic_visc)
          
          ! Perform sub-iterations
          do while (time%it.le.time%itmax)
@@ -466,7 +488,7 @@ contains
             call fs%update_laplacian()
             call fs%correct_mfr()
             call fs%get_div()
-            call fs%add_surface_tension_jump(dt=time%dt,div=fs%div,vf=vf,contact_model=static_contact)
+            call fs%add_surface_tension_jump(dt=time%dt,div=fs%div,vf=vf)!,contact_model=static_contact)
             fs%psolv%rhs=-fs%cfg%vol*fs%div/time%dt
             fs%psolv%sol=0.0_WP
             call fs%psolv%solve()
@@ -490,7 +512,24 @@ contains
          
          ! Output to ensight
          if (ens_evt%occurs()) then
-            call vf%update_surfmesh(smesh)
+            update_smesh: block
+               use irl_fortran_interface
+               integer :: i,j,k,np,nplane
+               call vf%update_surfmesh(smesh)
+               np=0
+               do k=vf%cfg%kmin_,vf%cfg%kmax_
+                  do j=vf%cfg%jmin_,vf%cfg%jmax_
+                     do i=vf%cfg%imin_,vf%cfg%imax_
+                        do nplane=1,getNumberOfPlanes(vf%liquid_gas_interface(i,j,k))
+                           if (getNumberOfVertices(vf%interface_polygon(nplane,i,j,k)).gt.0) then
+                              np=np+1
+                              smesh%var(1,np)=vf%curv(i,j,k)
+                           end if
+                        end do
+                     end do
+                  end do
+               end do
+            end block update_smesh
             call ens_out%write_data(time%t)
          end if
          
@@ -581,6 +620,53 @@ contains
       
       
    end subroutine simulation_run
+   
+   
+   !> Subroutine that updates the slip velocity based on contact line model
+   subroutine contact_slip()
+      use irl_fortran_interface
+      implicit none
+      integer :: i,j,k
+      real(WP), dimension(3) :: nw
+      real(WP) :: mysurf,mycos,cos_contact_angle
+      
+      ! Precalculate cos(contact angle)
+      cos_contact_angle=cos(fs%contact_angle)
+      
+      ! Loop over domain and identify cells that require contact angle model
+      do k=fs%cfg%kmin_,fs%cfg%kmax_+1
+         do j=fs%cfg%jmin_,fs%cfg%jmax_+1
+            do i=fs%cfg%imin_,fs%cfg%imax_+1
+               
+               ! Check if there is a wall in y-
+               if (fs%mask(i,j-1,k).eq.1.and.fs%mask(i-1,j-1,k).eq.1) then
+                  ! Define wall normal
+                  nw=[0.0_WP,+1.0_WP,0.0_WP]
+                  ! Handle U-slip
+                  mysurf=abs(calculateVolume(vf%interface_polygon(1,i-1,j,k)))+abs(calculateVolume(vf%interface_polygon(1,i,j,k)))
+                  if (mysurf.gt.0.0_WP.and.fs%umask(i,j,k).eq.0) then
+                     ! Surface-averaged local cos(CA)
+                     mycos=(abs(calculateVolume(vf%interface_polygon(1,i-1,j,k)))*dot_product(calculateNormal(vf%interface_polygon(1,i-1,j,k)),nw)+&
+                     &      abs(calculateVolume(vf%interface_polygon(1,i  ,j,k)))*dot_product(calculateNormal(vf%interface_polygon(1,i  ,j,k)),nw))/mysurf
+                     ! Apply slip velocity
+                     fs%U(i,j-1,k)=fs%sigma*(mycos-cos_contact_angle)*sum(fs%divu_x(:,i,j,k)*vf%VF(i-1:i,j,k))
+                  end if
+                  ! Handle W-slip
+                  mysurf=abs(calculateVolume(vf%interface_polygon(1,i,j,k-1)))+abs(calculateVolume(vf%interface_polygon(1,i,j,k)))
+                  if (mysurf.gt.0.0_WP.and.fs%wmask(i,j,k).eq.0) then
+                     ! Surface-averaged local cos(CA)
+                     mycos=(abs(calculateVolume(vf%interface_polygon(1,i,j,k-1)))*dot_product(calculateNormal(vf%interface_polygon(1,i,j,k-1)),nw)+&
+                     &      abs(calculateVolume(vf%interface_polygon(1,i,j,k  )))*dot_product(calculateNormal(vf%interface_polygon(1,i,j,k  )),nw))/mysurf
+                     ! Apply slip velocity
+                     fs%W(i,j-1,k)=fs%sigma*(mycos-cos_contact_angle)*sum(fs%divw_z(:,i,j,k)*vf%VF(i,j,k-1:k))
+                  end if
+               end if
+               
+            end do
+         end do
+      end do
+      
+   end subroutine contact_slip
    
    
    !> Definition of our powerlaw function of time model

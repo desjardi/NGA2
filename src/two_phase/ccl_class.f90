@@ -489,7 +489,7 @@ contains
                                  c22 = calculateCentroid(this%poly(2,ii,jj,kk))
                                  n22 = calculateNormal(this%poly(2,ii,jj,kk))
                                  is_contiguous = dot_product((c22-c2),n22).gt.0.0_WP ! .true. if liquid film
-                                 is_film = .true.
+                                 is_film = (dot_product(n22,n2).lt.this%dot_threshold)
                               else
                                  ! If neighbor is one-plane cell
                                  is_contiguous = (dot_product(c2-c1,n2).ge.0.0_WP).or.(dot_product(c1-c2,n1).ge.0.0_WP)

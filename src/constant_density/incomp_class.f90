@@ -1026,15 +1026,15 @@ contains
             
          end if
          
-         ! Sync full fields after each bcond - this should be optimized
-         call this%cfg%sync(this%U)
-         call this%cfg%sync(this%V)
-         call this%cfg%sync(this%W)
-         
          ! Move on to the next bcond
          my_bc=>my_bc%next
          
       end do
+      
+      ! Sync full fields after all bcond
+      call this%cfg%sync(this%U)
+      call this%cfg%sync(this%V)
+      call this%cfg%sync(this%W)
       
    end subroutine apply_bcond
    
@@ -1048,6 +1048,9 @@ contains
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(out) :: drhoWdt !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       integer :: i,j,k,ii,jj,kk
       real(WP), dimension(:,:,:), allocatable :: FX,FY,FZ
+      
+      ! Zero out drhoUVW/dt arrays
+      drhoUdt=0.0_WP; drhoVdt=0.0_WP; drhoWdt=0.0_WP
       
       ! Allocate flux arrays
       allocate(FX(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
@@ -1202,6 +1205,7 @@ contains
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(out) :: Pgrady !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(out) :: Pgradz !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       integer :: i,j,k
+      Pgradx=0.0_WP; Pgrady=0.0_WP; Pgradz=0.0_WP
       do k=this%cfg%kmin_,this%cfg%kmax_
          do j=this%cfg%jmin_,this%cfg%jmax_
             do i=this%cfg%imin_,this%cfg%imax_

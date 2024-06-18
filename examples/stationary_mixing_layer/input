@@ -1,0 +1,21 @@
+# Parallelization
+Partition :	8 1 1
+
+# Mesh definition
+Lx :	      100
+Ly :	      100
+Lz :	       75
+nx :	      200
+ny :	      200
+nz :	      150
+
+# Fluid properties
+Reynolds number : 200
+
+# Time integration
+Max timestep size : 0.25
+Max cfl number :    0.8
+Max time :          200
+
+# Ensight output
+Ensight output period : 1

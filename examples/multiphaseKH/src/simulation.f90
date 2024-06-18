@@ -2,6 +2,8 @@
 module simulation
    use precision,         only: WP
    use geometry,          only: cfg
+   use hypre_str_class,   only: hypre_str
+   use ddadi_class,       only: ddadi
    use tpns_class,        only: tpns
    use vfs_class,         only: vfs
    use timetracker_class, only: timetracker
@@ -12,6 +14,8 @@ module simulation
    private
    
    !> Single two-phase flow solver and volume fraction solver and corresponding time tracker
+   type(hypre_str),   public :: ps
+   type(ddadi),       public :: vs
    type(tpns),        public :: fs
    type(vfs),         public :: vf
    type(timetracker), public :: time
@@ -128,7 +132,7 @@ contains
       ! Initialize our VOF solver and field
       create_and_initialize_vof: block
          use mms_geom,  only: cube_refine_vol
-         use vfs_class, only: lvira,VFhi,VFlo
+         use vfs_class, only: lvira,VFhi,VFlo,remap
          use mathtools, only: twoPi
          use random,    only: random_uniform
          use parallel,  only: MPI_REAL_WP
@@ -139,7 +143,8 @@ contains
          real(WP) :: vol,area
          integer, parameter :: amr_ref_lvl=4
          ! Create a VOF solver
-         vf=vfs(cfg=cfg,reconstruction_method=lvira,name='VOF')
+         call vf%initialize(cfg=cfg,reconstruction_method=lvira,transport_method=remap,name='VOF')
+         !vf%cons_correct=.false.
          ! Prepare initialize interface parameters
          nwaveX=6
          allocate(wnumbX(nwaveX),wshiftX(nwaveX),wampX(nwaveX))
@@ -207,7 +212,7 @@ contains
       
       ! Create a two-phase flow solver without bconds
       create_and_initialize_flow_solver: block
-         use ils_class, only: pcg_pfmg
+         use hypre_str_class, only: pcg_pfmg2
          integer :: i,j,k
          ! Create flow solver
          fs=tpns(cfg=cfg,name='Two-phase NS')
@@ -218,13 +223,13 @@ contains
          call param_read('Gas Weber number',Weg); fs%sigma=1.0_WP/(Weg+epsilon(Weg))
          call param_read('Velocity ratio',r_vel); delta_l=r_visc*r_vel
          ! Configure pressure solver
-         call param_read('Pressure iteration',fs%psolv%maxit)
-         call param_read('Pressure tolerance',fs%psolv%rcvg)
+			ps=hypre_str(cfg=cfg,name='Pressure',method=pcg_pfmg2,nst=7)
+         call param_read('Pressure iteration',ps%maxit)
+         call param_read('Pressure tolerance',ps%rcvg)
          ! Configure implicit velocity solver
-         call param_read('Implicit iteration',fs%implicit%maxit)
-         call param_read('Implicit tolerance',fs%implicit%rcvg)
+         vs=ddadi(cfg=cfg,name='Velocity',nst=7)
          ! Setup the solver
-         call fs%setup(pressure_ils=pcg_pfmg,implicit_ils=pcg_pfmg)
+         call fs%setup(pressure_solver=ps,implicit_solver=vs)
          ! Set initial velocity field
          fs%U=0.0_WP; fs%V=0.0_WP; fs%W=0.0_WP
          do k=fs%cfg%kmino_,fs%cfg%kmaxo_
@@ -348,9 +353,6 @@ contains
             
             ! Explicit calculation of drho*u/dt from NS
             call fs%get_dmomdt(resU,resV,resW)
-            
-            ! Add momentum source terms
-            call fs%addsrc_gravity(resU,resV,resW)
             
             ! Assemble explicit residual
             resU=-2.0_WP*fs%rho_U*fs%U+(fs%rho_Uold+fs%rho_U)*fs%Uold+time%dt*resU

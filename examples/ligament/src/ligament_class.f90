@@ -6,9 +6,11 @@ module ligament_class
    use ensight_class,     only: ensight
    use surfmesh_class,    only: surfmesh
    use hypre_str_class,   only: hypre_str
-   use ddadi_class,       only: ddadi
+   !use ddadi_class,       only: ddadi
    use vfs_class,         only: vfs
    use tpns_class,        only: tpns
+   use lpt_class,         only: lpt
+   !use breakup_class,     only: breakup
    use timetracker_class, only: timetracker
    use event_class,       only: event
    use monitor_class,     only: monitor
@@ -27,9 +29,13 @@ module ligament_class
       type(vfs)         :: vf    !< Volume fraction solver
       type(tpns)        :: fs    !< Two-phase flow solver
       type(hypre_str)   :: ps    !< Structured Hypre linear solver for pressure
-      type(ddadi)       :: vs    !< DDADI solver for velocity
+      !type(ddadi)       :: vs    !< DDADI solver for velocity
       type(timetracker) :: time  !< Time info
       
+      !> Break-up modeling
+      type(lpt)         :: lp    !< Lagrangian particle solver
+      !type(breakup)     :: bu    !< SGS break-up model
+
       !> Ensight postprocessing
       type(surfmesh) :: smesh    !< Surface mesh for interface
       type(ensight)  :: ens_out  !< Ensight output for flow variables
@@ -112,7 +118,7 @@ contains
             z(k)=real(k-1,WP)/real(nz,WP)*Lz-0.5_WP*Lz
          end do
          ! General serial grid object
-         grid=sgrid(coord=cartesian,no=3,x=x,y=y,z=y,xper=.false.,yper=.true.,zper=.true.,name='Ligament')
+         grid=sgrid(coord=cartesian,no=3,x=x,y=y,z=z,xper=.false.,yper=.true.,zper=.true.,name='Ligament')
          ! Read in partition
          call param_read('Partition',partition,short='p')
          ! Create partitioned grid without walls
@@ -145,7 +151,7 @@ contains
       
       ! Initialize our VOF solver and field
       create_and_initialize_vof: block
-         use vfs_class, only: VFlo,VFhi,elvira,r2p,art
+         use vfs_class, only: VFlo,VFhi,elvira,r2p
          use mms_geom,  only: cube_refine_vol
          use param,     only: param_read
          integer :: i,j,k,n,si,sj,sk
@@ -154,7 +160,7 @@ contains
          real(WP) :: vol,area
          integer, parameter :: amr_ref_lvl=4
          ! Create a VOF solver
-         this%vf=vfs(cfg=this%cfg,reconstruction_method=art,name='VOF')
+         call this%vf%initialize(cfg=this%cfg,reconstruction_method=r2p,name='VOF')
          ! Initialize to a ligament
          do k=this%vf%cfg%kmino_,this%vf%cfg%kmaxo_
             do j=this%vf%cfg%jmino_,this%vf%cfg%jmaxo_
@@ -170,7 +176,7 @@ contains
                   end do
                   ! Call adaptive refinement code to get volume and barycenters recursively
                   vol=0.0_WP; area=0.0_WP; v_cent=0.0_WP; a_cent=0.0_WP
-                  call cube_refine_vol(cube_vertex,vol,area,v_cent,a_cent,levelset_ligament,0.0_WP,amr_ref_lvl)
+                  call cube_refine_vol(cube_vertex,vol,area,v_cent,a_cent,levelset_droplet,0.0_WP,amr_ref_lvl)
                   this%vf%VF(i,j,k)=vol/this%vf%cfg%vol(i,j,k)
                   if (this%vf%VF(i,j,k).ge.VFlo.and.this%vf%VF(i,j,k).le.VFhi) then
                      this%vf%Lbary(:,i,j,k)=v_cent
@@ -212,7 +218,7 @@ contains
          use mathtools,       only: Pi
          use param,           only: param_read
          use tpns_class,      only: dirichlet,clipped_neumann,bcond
-         use hypre_str_class, only: pcg_pfmg
+         use hypre_str_class, only: pcg_pfmg2
          type(bcond), pointer :: mybc
          integer :: n,i,j,k      
          ! Create flow solver
@@ -227,14 +233,14 @@ contains
          ! Define outflow boundary condition on the right
          call this%fs%add_bcond(name='outflow',type=clipped_neumann,face='x',dir=+1,canCorrect=.true.,locator=xp_locator)
          ! Configure pressure solver
-         this%ps=hypre_str(cfg=this%cfg,name='Pressure',method=pcg_pfmg,nst=7)
-         this%ps%maxlevel=20
+         this%ps=hypre_str(cfg=this%cfg,name='Pressure',method=pcg_pfmg2,nst=7)
+         this%ps%maxlevel=16
          call param_read('Pressure iteration',this%ps%maxit)
          call param_read('Pressure tolerance',this%ps%rcvg)
          ! Configure implicit velocity solver
-         this%vs=ddadi(cfg=this%cfg,name='Velocity',nst=7)
+         !this%vs=ddadi(cfg=this%cfg,name='Velocity',nst=7)
          ! Setup the solver
-         call this%fs%setup(pressure_solver=this%ps,implicit_solver=this%vs)
+         call this%fs%setup(pressure_solver=this%ps)!,implicit_solver=this%vs)
          ! Zero initial field
          this%fs%U=0.0_WP; this%fs%V=0.0_WP; this%fs%W=0.0_WP
          ! Apply convective velocity
@@ -249,15 +255,33 @@ contains
          call this%fs%get_div()
       end block create_flow_solver
       
+      
+      ! Create lpt solver
+      create_lpt_solver: block
+         ! Create the solver
+         this%lp=lpt(cfg=this%cfg,name='spray')
+         ! Get particle density from the flow solver
+         this%lp%rho=this%fs%rho_l
+      end block create_lpt_solver
+      
+      
+      ! Create breakup model
+      !create_breakup: block
+      !   call this%bu%initialize(vf=this%vf,fs=this%fs,lp=this%lp)
+      !end block create_breakup
+      
 
       ! Create surfmesh object for interface polygon output
       create_smesh: block
          use irl_fortran_interface
          integer :: i,j,k,nplane,np
          ! Include an extra variable for number of planes
-         this%smesh=surfmesh(nvar=2,name='plic')
+         this%smesh=surfmesh(nvar=5,name='plic')
          this%smesh%varname(1)='nplane'
-         this%smesh%varname(2)='type'
+         this%smesh%varname(2)='curv'
+         this%smesh%varname(3)='edge_sensor'
+         this%smesh%varname(4)='thin_sensor'
+         this%smesh%varname(5)='thickness'
          ! Transfer polygons to smesh
          call this%vf%update_surfmesh(this%smesh)
          ! Also populate nplane variable
@@ -269,7 +293,10 @@ contains
                   do nplane=1,getNumberOfPlanes(this%vf%liquid_gas_interface(i,j,k))
                      if (getNumberOfVertices(this%vf%interface_polygon(nplane,i,j,k)).gt.0) then
                         np=np+1; this%smesh%var(1,np)=real(getNumberOfPlanes(this%vf%liquid_gas_interface(i,j,k)),WP)
-                        this%smesh%var(2,np)=this%vf%type(i,j,k)
+                        this%smesh%var(2,np)=this%vf%curv2p(nplane,i,j,k)
+                        this%smesh%var(3,np)=this%vf%edge_sensor(i,j,k)
+                        this%smesh%var(4,np)=this%vf%thin_sensor(i,j,k)
+                        this%smesh%var(5,np)=this%vf%thickness  (i,j,k)
                      end if
                   end do
                end do
@@ -291,6 +318,9 @@ contains
          call this%ens_out%add_scalar('VOF',this%vf%VF)
          call this%ens_out%add_scalar('curvature',this%vf%curv)
          call this%ens_out%add_scalar('pressure',this%fs%P)
+         call this%ens_out%add_scalar('thin_sensor',this%vf%thin_sensor)
+         call this%ens_out%add_scalar('edge_sensor',this%vf%edge_sensor)
+         call this%ens_out%add_vector('edge_normal',this%resU,this%resV,this%resW)
          call this%ens_out%add_surface('plic',this%smesh)
          ! Output to ensight
          if (this%ens_evt%occurs()) call this%ens_out%write_data(this%time%t)
@@ -316,6 +346,8 @@ contains
          call this%mfile%add_column(this%vf%VFmax,'VOF maximum')
          call this%mfile%add_column(this%vf%VFmin,'VOF minimum')
          call this%mfile%add_column(this%vf%VFint,'VOF integral')
+         call this%mfile%add_column(this%vf%flotsam_error,'Flotsam error')
+         call this%mfile%add_column(this%vf%thinstruct_error,'Film error')
          call this%mfile%add_column(this%vf%SDint,'SD integral')
          call this%mfile%add_column(this%fs%divmax,'Maximum divergence')
          call this%mfile%add_column(this%fs%psolv%it,'Pressure iteration')
@@ -340,7 +372,7 @@ contains
    
    !> Take one time step
    subroutine step(this)
-      use tpns_class, only: arithmetic_visc
+      use tpns_class, only: arithmetic_visc,harmonic_visc
       implicit none
       class(ligament), intent(inout) :: this
       
@@ -386,19 +418,25 @@ contains
          this%resW=-2.0_WP*this%fs%rho_W*this%fs%W+(this%fs%rho_Wold+this%fs%rho_W)*this%fs%Wold+this%time%dt*this%resW   
          
          ! Form implicit residuals
-         call this%fs%solve_implicit(this%time%dt,this%resU,this%resV,this%resW)
+         !call this%fs%solve_implicit(this%time%dt,this%resU,this%resV,this%resW)
          
          ! Apply these residuals
-         this%fs%U=2.0_WP*this%fs%U-this%fs%Uold+this%resU
-         this%fs%V=2.0_WP*this%fs%V-this%fs%Vold+this%resV
-         this%fs%W=2.0_WP*this%fs%W-this%fs%Wold+this%resW
+         this%fs%U=2.0_WP*this%fs%U-this%fs%Uold+this%resU/this%fs%rho_U
+         this%fs%V=2.0_WP*this%fs%V-this%fs%Vold+this%resV/this%fs%rho_V
+         this%fs%W=2.0_WP*this%fs%W-this%fs%Wold+this%resW/this%fs%rho_W
+         
+         ! Apply boundary conditions
+         call this%fs%apply_bcond(this%time%t,this%time%dt)
          
          ! Solve Poisson equation
          call this%fs%update_laplacian()
+         !call this%fs%update_laplacian(pinpoint=[this%fs%cfg%imin,this%fs%cfg%jmin,this%fs%cfg%kmin])
          call this%fs%correct_mfr()
          call this%fs%get_div()
-         call this%fs%add_surface_tension_jump(dt=this%time%dt,div=this%fs%div,vf=this%vf)
+         !call this%fs%add_surface_tension_jump(dt=this%time%dt,div=this%fs%div,vf=this%vf)
+         call this%fs%add_surface_tension_jump_thin(dt=this%time%dt,div=this%fs%div,vf=this%vf)
          this%fs%psolv%rhs=-this%fs%cfg%vol*this%fs%div/this%time%dt
+         !if (this%cfg%amRoot) this%fs%psolv%rhs(this%cfg%imin,this%cfg%jmin,this%cfg%kmin)=0.0_WP
          this%fs%psolv%sol=0.0_WP
          call this%fs%psolv%solve()
          call this%fs%shift_p(this%fs%psolv%sol)
@@ -409,6 +447,9 @@ contains
          this%fs%U=this%fs%U-this%time%dt*this%resU/this%fs%rho_U
          this%fs%V=this%fs%V-this%time%dt*this%resV/this%fs%rho_V
          this%fs%W=this%fs%W-this%time%dt*this%resW/this%fs%rho_W
+         
+         ! Apply boundary conditions
+         call this%fs%apply_bcond(this%time%t,this%time%dt)
          
          ! Increment sub-iteration counter
          this%time%it=this%time%it+1
@@ -444,13 +485,20 @@ contains
                      do nplane=1,getNumberOfPlanes(this%vf%liquid_gas_interface(i,j,k))
                         if (getNumberOfVertices(this%vf%interface_polygon(nplane,i,j,k)).gt.0) then
                            np=np+1; this%smesh%var(1,np)=real(getNumberOfPlanes(this%vf%liquid_gas_interface(i,j,k)),WP)
-                           this%smesh%var(2,np)=this%vf%type(i,j,k)
+                           this%smesh%var(2,np)=this%vf%curv2p(nplane,i,j,k)
+                           this%smesh%var(3,np)=this%vf%edge_sensor(i,j,k)
+                           this%smesh%var(4,np)=this%vf%thin_sensor(i,j,k)
+                           this%smesh%var(5,np)=this%vf%thickness  (i,j,k)
                         end if
                      end do
                   end do
                end do
             end do
          end block update_smesh
+         ! Transfer edge normal data
+         this%resU=this%vf%edge_normal(1,:,:,:)
+         this%resV=this%vf%edge_normal(2,:,:,:)
+         this%resW=this%vf%edge_normal(3,:,:,:)
          ! Perform ensight output
          call this%ens_out%write_data(this%time%t)
       end if

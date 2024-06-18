@@ -21,13 +21,5 @@ Max time : 		      1000
 Dynamic viscosity :  2e-4
 Density           :  1
 
-# Pressure solver
-Pressure tolerance : 1e-4
-Pressure iteration : 100
-
-# Implicit velocity solver
-Implicit tolerance : 1e-4
-Implicit iteration : 100
-
 # Ensight output
 Ensight output period : 1

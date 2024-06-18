@@ -1,0 +1,32 @@
+# Parallelization
+Partition :	4 1 2
+
+# Mesh definition
+Lx :	10
+Ly :	10
+Lz :	10
+nx :	128
+ny :	128
+nz :	128
+
+# Droplet position
+Droplet position : -4 4 -0.5
+Gravity : 0 -0.1 0
+
+# Fluid properties
+Reynolds number :      200
+Weber number :         20
+Viscosity ratio :      50
+Density ratio :        1000
+
+# Pressure solver
+Pressure tolerance : 1e-6
+Pressure iteration : 100
+
+# Time integration
+Max timestep size : 1e-2
+Max cfl number :    0.9
+Max time :          100
+
+# Ensight output
+Ensight output period :  1e-1

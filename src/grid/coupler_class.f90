@@ -19,7 +19,7 @@ module coupler_class
       character(len=str_medium) :: name='UNNAMED_CPL'     !< Coupler name (default=UNNAMED_CPL)
       
       ! Overlap visualization
-      real(WP), dimension(:,:,:), allocatable :: overlap  !< Array that identifies overlap in the src and dst, on the dst grid (0=no overlap, 1=overlap)
+      !real(WP), dimension(:,:,:), allocatable :: overlap  !< Array that identifies overlap in the src and dst, on the dst grid (0=no overlap, 1=overlap)
       
       ! These are our two pgrids
       type(pgrid), pointer :: src=>NULL()                 !< Source grid
@@ -419,21 +419,21 @@ contains
       end block share_dstind
       
       ! For visualization, create coupling field=0 if not overlap was found, 1 if overlap was found
-      viz_overlap: block
-         integer :: n
-         if (this%got_dst) then
-            ! Allocate the array
-            allocate(this%overlap(this%dst%imino_:this%dst%imaxo_,this%dst%jmino_:this%dst%jmaxo_,this%dst%kmino_:this%dst%kmaxo_)); this%overlap=0.0_WP
-            ! Fill it up with out dstind info
-            do n=1,this%nrecv
-               this%overlap(this%dstind(1,n),this%dstind(2,n),this%dstind(3,n))=1.0_WP
-            end do
-         end if
-      end block viz_overlap
+      !viz_overlap: block
+      !   integer :: n
+      !   if (this%got_dst) then
+      !      ! Allocate the array
+      !      allocate(this%overlap(this%dst%imino_:this%dst%imaxo_,this%dst%jmino_:this%dst%jmaxo_,this%dst%kmino_:this%dst%kmaxo_)); this%overlap=0.0_WP
+      !      ! Fill it up with out dstind info
+      !      do n=1,this%nrecv
+      !         this%overlap(this%dstind(1,n),this%dstind(2,n),this%dstind(3,n))=1.0_WP
+      !      end do
+      !   end if
+      !end block viz_overlap
       
-      ! Final step is to allocate the data storage
-      allocate(this%data_send(this%nsend))
-      allocate(this%data_recv(this%nrecv))
+      ! Final step is to allocate the data storage - this is done on the fly below
+      !allocate(this%data_send(this%nsend))
+      !allocate(this%data_recv(this%nrecv))
       
       ! Log/screen output
       logging: block
@@ -453,11 +453,15 @@ contains
    
    
    !> Routine that interpolates src data to the send storage - to be called by processors in src_group
+   !> Allocate send buffer here
    subroutine push(this,A)
       implicit none
       class(coupler), intent(inout) :: this
       real(WP), dimension(this%src%imino_:,this%src%jmino_:,this%src%kmino_:), intent(in) :: A !< Needs to be (src%imino_:src%imaxo_,src%jmino_:src%jmaxo_,src%kmino_:src%kmaxo_)
       integer :: n
+      ! Allocate send buffer
+      if (.not.allocated(this%data_send)) allocate(this%data_send(this%nsend))
+      ! Fill buffer
       do n=1,this%nsend
          this%data_send(n)=(       this%w(3,n))*((       this%w(2,n))*((       this%w(1,n))*A(this%srcind(1,n)+1,this%srcind(2,n)+1,this%srcind(3,n)+1)  + &
          &                                                             (1.0_WP-this%w(1,n))*A(this%srcind(1,n)  ,this%srcind(2,n)+1,this%srcind(3,n)+1)) + &
@@ -472,6 +476,7 @@ contains
    
    
    !> Routine that pulls dst data from the receive storage - to be called by processors in dst_group
+   !> Free up recv buffer here
    subroutine pull(this,A)
       implicit none
       class(coupler), intent(inout) :: this
@@ -483,16 +488,25 @@ contains
       end do
       ! Sync it before returning
       call this%dst%sync(A)
+      ! Deallocate recv buffer
+      if (allocated(this%data_recv)) deallocate(this%data_recv)
    end subroutine pull
    
    
    !> Routine that transfers the data from src to dst - both src_group and dst_group processors need to call
+   !> Allocate recv buffer and deallocate send buffer here
    subroutine transfer(this)
       use parallel, only: MPI_REAL_WP
       implicit none
       class(coupler), intent(inout) :: this
       integer :: ierr
+      ! Allocate recv buffer (and maybe send buffer too)
+      if (.not.allocated(this%data_recv)) allocate(this%data_recv(this%nrecv))
+      if (.not.allocated(this%data_send)) allocate(this%data_send(this%nsend))
+      ! Transfer data
       call MPI_ALLtoALLv(this%data_send,this%nsend_proc,this%nsend_disp,MPI_REAL_WP,this%data_recv,this%nrecv_proc,this%nrecv_disp,MPI_REAL_WP,this%comm,ierr)
+      ! Deallocate send buffer
+      if (allocated(this%data_send)) deallocate(this%data_send)
    end subroutine transfer
    
    

@@ -840,19 +840,20 @@ contains
       opt_dt=tau/real(this%nstep,WP)
     end block compute_drag
 
-    ! Compute acceleration due to Saffman lift
-    !compute_lift: block
+   ! Compute acceleration due to Saffman lift
+   !compute_lift: block
    !   use mathtools, only: Pi,cross_product
    !   real(WP) :: omegag,Cl,Reg
    !   if (this%use_lift) then
    !      omegag=sqrt(sum(fvort**2))
    !      if (omegag.gt.0.0_WP) then
    !         Reg = p%d**2*omegag*frho/fvisc
-   !         Cl = 9.69_WP/Pi/p%d**2/this%rho*fvisc/omegag*sqrt(Reg)
-   !         acc=acc+Cl*cross_product(fvel-p%vel,fvort)
+   !         Cl = 9.69_WP/Pi/p%d**2/this%rho*fvisc*sqrt(Reg)
+   !         acc=acc+Cl*cross_product(fvel-p%vel,fvort/omegag)
+   !         opt_dt=min(opt_dt,1.0_WP/(Cl*real(this%nstep,WP)))
    !      end if
    !   end if
-    !end block compute_lift
+   !end block compute_lift
 
     ! Compute fluid torque (assumed Stokes drag)
     compute_torque: block
@@ -1185,7 +1186,7 @@ contains
       pos(1) = this%inj_pos(1)
       ! Random y & z position within a circular region
       if (this%cfg%nz.eq.1) then
-         pos(2)=random_uniform(lo=this%inj_pos(2)-0.5_WP*this%inj_d,hi=this%inj_pos(3)+0.5_WP*this%inj_d)
+         pos(2) = random_uniform(lo=this%inj_pos(2)-0.5_WP*this%inj_d,hi=this%inj_pos(2)+0.5_WP*this%inj_d)
          pos(3) = this%cfg%zm(this%cfg%kmin_)
       else
          rand=random_uniform(lo=0.0_WP,hi=1.0_WP)
@@ -1332,13 +1333,20 @@ contains
     integer :: i
     ! Reset particle mesh storage
     call pmesh%reset()
-    ! Nothing else to do if no particle is present
-    if (this%np_.eq.0) return
-    ! Copy particle info
-    call pmesh%set_size(this%np_)
-    do i=1,this%np_
-       pmesh%pos(:,i)=this%p(i)%pos
-    end do
+    if (this%np_.gt.0) then
+      ! Copy particle info
+      call pmesh%set_size(this%np_)
+      do i=1,this%np_
+         pmesh%pos(:,i)=this%p(i)%pos
+      end do
+    end if
+    ! Root adds a particle if there are none
+    if (this%np.eq.0.and.this%cfg%amRoot) then
+      call pmesh%set_size(1)
+      pmesh%pos(1,1)=this%cfg%x(this%cfg%imin)
+      pmesh%pos(2,1)=this%cfg%y(this%cfg%jmin)
+      pmesh%pos(3,1)=this%cfg%z(this%cfg%kmin)
+    end if
   end subroutine update_partmesh
 
 

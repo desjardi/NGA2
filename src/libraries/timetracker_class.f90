@@ -12,6 +12,8 @@ module timetracker_class
    real(WP), parameter :: alpha = 0.7_WP
    !> Give ourselves 10 minutes to clean up
    real(WP), parameter :: wtsafe= 600.0_WP
+   !> Give ourselves a safety margin to avoid missing end of simulation due to round-off
+   real(WP), parameter :: dtsafe= 1.0e-6_WP
    
    
    !> Timetracker object
@@ -111,7 +113,7 @@ contains
          done=.true.
          write(message,'(" Timetracker [",a,"] reached maximum number of iterations ")') trim(this%name); call log(message)
       end if
-      if (this%t.ge.this%tmax) then
+      if (this%t+dtsafe*this%dt.ge.this%tmax) then
          done=.true.
          write(message,'(" Timetracker [",a,"] reached maximum integration time ")') trim(this%name); call log(message)
       end if

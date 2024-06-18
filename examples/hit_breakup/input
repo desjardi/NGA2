@@ -1,0 +1,27 @@
+# Parallelization
+Partition :	1 1 8 
+
+# Mesh definition
+Lx : 5
+nx : 192
+
+# Droplet properties
+Droplet diameter :        0.8
+Weber number :            10
+Viscosity ratio :         10
+
+# Turbulence file
+Keep forcing :            .true.            ! does forcing continue after injection
+Turbulence file :         hit.192           ! file from which to restart
+Droplet injection time :  0                 ! is multiplied by eddy turnover-time
+
+# Time integration
+Max timestep size : 2.5e-3
+Max cfl number :    !0.9
+Max time :          10
+
+# Ensight output
+Ensight output period : 5e-2
+
+# Drop analysis
+Drop analysis period :  5e-2

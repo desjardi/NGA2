@@ -555,7 +555,7 @@ contains
       class(sgsmodel), intent(in) :: this
       character(len=str_long) :: message
       if (this%cfg%amRoot) then
-         write(message,'("SGS tubulence modeling for config [",a,"] - visc range = [",es12.5,",",es12.5,"]")') trim(this%cfg%name),this%min_visc,this%max_visc; call log(message)
+         write(message,'("SGS turbulence modeling for config [",a,"] - visc range = [",es12.5,",",es12.5,"]")') trim(this%cfg%name),this%min_visc,this%max_visc; call log(message)
       end if
    end subroutine sgs_log
    
@@ -568,7 +568,7 @@ contains
       
       ! Output
       if (this%cfg%amRoot) then
-         write(output_unit,'("SGS tubulence modeling for config [",a,"] - visc range = [",es12.5,",",es12.5,"]")') trim(this%cfg%name),this%min_visc,this%max_visc
+         write(output_unit,'("SGS turbulence modeling for config [",a,"] - visc range = [",es12.5,",",es12.5,"]")') trim(this%cfg%name),this%min_visc,this%max_visc
       end if
       
    end subroutine sgs_print
