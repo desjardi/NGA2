@@ -2,52 +2,53 @@
 Partition :	1 8 1
 
 # Mesh definition
-Lx : 0.0128
-Ly : 0.0128
-Lz : 1e-4 !0.0128
-nx : 128
-ny : 128
-nz : 1    !128
+Lx : 0.0064
+Ly : 0.0064
+Lz : 0.0001
+nx : 64
+ny : 64
+nz : 1
 
 # Pool
-Pool depth : 0.0064
+Pool depth : 0.0048
 
 # Fluid properties
-Gravity :   9.81 0 0
+Gravity :                     9.81 0 0
 Liquid dynamic viscosity :    1.137e-3
 Gas dynamic viscosity :       1.780e-5
 Liquid density :              1000
 Gas density :                 1.226
 Surface tension coefficient : 0.0728
-Static contact angle :        110
+Static contact angle :        90.1
 
 # Particle parameters
-Particle mean diameter :        37.515e-6
-Particle standard deviation :   17.894e-6
-Particle min diameter :         10e-6
-Particle max diameter :         139.1e-6
-Particle diameter shift :       0
-Particle density :              3000
+Particle mean diameter :      50e-6  !37.515e-6
+Particle standard deviation : 1e-6   !17.894e-6
+Particle min diameter :       40e-6  !10e-6
+Particle max diameter :       60e-6  !139.1e-6
+Particle diameter shift :     0
+Particle density :            2000
 
 # Particle collisions
-Coefficient of restitution :    0.5
-Wall restitution :              0.1
-Friction coefficient :          0.5
+Coefficient of restitution :  0.1
+Wall restitution :            0.1
+Friction coefficient :        0.5
 
 # Particle injection
-Particle inject diameter:       0.00128
-Particle mass flow rate:        1e-5
-Particle velocity:              2 0 0
+Particle inject diameter :    0.00128
+Particle mass flow rate :     0.5e-5
+Particle velocity :           0.1 0 0
+Particle injection duration : 1e-2
 
 # Time integration
-Particle timestep size : 2e-6
-Max timestep size :      2e-5
-Max cfl number :	       1
-Max time :               1
+Particle timestep size :      1e-6
+Max timestep size :           1e-5
+Max cfl number :	            1
+Max time :                    1
 
 # Pressure solver
-Pressure tolerance : 1e-4
-Pressure iteration : 100
+Pressure tolerance :          1e-4
+Pressure iteration :          100
 
 # Ensight output
-Ensight output period : 5e-4
+Ensight output period :       5e-4

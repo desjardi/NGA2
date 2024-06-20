@@ -44,7 +44,7 @@ module simulation
    real(WP) :: depth
    
    !> Max timestep size for LPT
-   real(WP) :: lp_dt,lp_dt_max
+   real(WP) :: lp_dt,lp_dt_max,lp_inj_duration
    
 contains
    
@@ -103,6 +103,8 @@ contains
          call param_read('Gravity',lp%gravity)
          ! Set filter scale to 3.5*dx
          lp%filter_width=3.5_WP*cfg%min_meshsize
+         ! Turn off drag (Tenneti blows up?)
+         lp%drag_model='SN'
          ! Initialize with zero particles
          call lp%resize(0)
          ! Get initial particle volume fraction
@@ -111,7 +113,7 @@ contains
          call param_read('Particle timestep size',lp_dt_max,default=huge(1.0_WP))
          lp_dt=lp_dt_max
          ! Set collision timescale
-         lp%tau_col=5.0_WP*lp_dt_max
+         lp%tau_col=7.0_WP*lp_dt_max
          ! Set coefficient of restitution
          call param_read('Coefficient of restitution',lp%e_n)
          call param_read('Wall restitution',lp%e_w)
@@ -132,6 +134,7 @@ contains
          lp%inj_pos(1)=lp%cfg%x(lp%cfg%imin)+lp%inj_dmax
          lp%inj_pos(2:3)=0.0_WP
          lp%inj_T=300.0_WP
+         call param_read('Particle injection duration',lp_inj_duration)
       end block initialize_lpt
       
       
@@ -214,7 +217,7 @@ contains
          ! Transfer to lpt for surface tension modeling
          lp%sigma=fs%sigma
          lp%contact_angle=fs%contact_angle
-         lp%VFst=0.2_WP
+         lp%VFst=0.1_WP
          ! Assign acceleration of gravity
          call param_read('Gravity',fs%gravity)
          ! Outlet on the left
@@ -269,6 +272,7 @@ contains
          call ens_out%add_scalar('epsp',lp%VF)
          call ens_out%add_vector('velocity',Ui,Vi,Wi)
          call ens_out%add_scalar('VOF',vf%VF)
+         call ens_out%add_scalar('curv',vf%curv)
          call ens_out%add_scalar('pressure',fs%P)
          call ens_out%add_surface('plic',smesh)
          ! Output to ensight
@@ -402,7 +406,7 @@ contains
                ! Decide the timestep size
                mydt=min(lp_dt,time%dtmid-dt_done)
                ! Inject, collide and advance particles
-               call lp%inject (dt=mydt,avoid_overlap=.true.)
+               if (time%t.le.lp_inj_duration) call lp%inject(dt=mydt,avoid_overlap=.true.)
                call lp%collide(dt=mydt)
                call lp%advance(dt=mydt,U=fs%U,V=fs%V,W=fs%W,rho=rho,visc=fs%visc,stress_x=resU,stress_y=resV,stress_z=resW,gradVF_x=dVFdx,gradVF_y=dVFdy,gradVF_z=dVFdz,srcU=tmp1,srcV=tmp2,srcW=tmp3)
                srcU=srcU+tmp1
@@ -438,6 +442,9 @@ contains
          
          ! VOF solver step
          call vf%advance(dt=time%dt,U=fs%U,V=fs%V,W=fs%W)
+
+         ! Zero out surface tension in the bed
+         where (lp%VF.gt.lp%VFst) vf%curv=0.0_WP
          
          ! Prepare new staggered viscosity (at n+1)
          call fs%get_viscosity(vf=vf,strat=arithmetic_visc)
@@ -464,9 +471,12 @@ contains
             resV=-2.0_WP*fs%rho_V*fs%V+(fs%rho_Vold+fs%rho_V)*fs%Vold+time%dt*resV
             resW=-2.0_WP*fs%rho_W*fs%W+(fs%rho_Wold+fs%rho_W)*fs%Wold+time%dt*resW
             
-            ! Add momentum source term from lpt
+            ! Add momentum source term from lpt - divide by fluid volume fraction!
             add_lpt_src: block
                integer :: i,j,k
+               srcU=srcU/(1.0_WP-lp%VF)
+               srcV=srcV/(1.0_WP-lp%VF)
+               srcW=srcW/(1.0_WP-lp%VF)
                do k=fs%cfg%kmin_,fs%cfg%kmax_; do j=fs%cfg%jmin_,fs%cfg%jmax_; do i=fs%cfg%imin_,fs%cfg%imax_
                   if (fs%umask(i,j,k).eq.0) resU(i,j,k)=resU(i,j,k)+sum(fs%itpr_x(:,i,j,k)*srcU(i-1:i,j,k))
                   if (fs%vmask(i,j,k).eq.0) resV(i,j,k)=resV(i,j,k)+sum(fs%itpr_y(:,i,j,k)*srcV(i,j-1:j,k))
