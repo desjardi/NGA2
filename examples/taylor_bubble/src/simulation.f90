@@ -1,11 +1,12 @@
 !> Various definitions and tools for running an NGA2 simulation
 module simulation
    use precision,         only: WP
-   use geometry,          only: cfg,D
+   use geometry,          only: cfg,Dpipe,Dinlet
    use hypre_str_class,   only: hypre_str
    use ddadi_class,       only: ddadi
    use tpns_class,        only: tpns
    use vfs_class,         only: vfs
+   use sgsmodel_class,    only: sgsmodel
    use timetracker_class, only: timetracker
    use ensight_class,     only: ensight
    use surfmesh_class,    only: surfmesh
@@ -17,6 +18,7 @@ module simulation
    !> Get a volume fraction and two-phase solver, pressure and velocity solver, and corresponding time tracker
    type(tpns),        public :: fs
    type(vfs),         public :: vf
+   type(sgsmodel),    public :: sgs
    type(hypre_str),   public :: ps
    type(ddadi),       public :: vs
    type(timetracker), public :: time
@@ -32,25 +34,14 @@ module simulation
    public :: simulation_init,simulation_run,simulation_final
    
    !> Work arrays
+   real(WP), dimension(:,:,:,:,:), allocatable :: gradU
    real(WP), dimension(:,:,:), allocatable :: resU,resV,resW
    real(WP), dimension(:,:,:), allocatable :: Ui,Vi,Wi
-   
-   !> Problem definition
-   real(WP) :: radius
-   real(WP), dimension(3) :: center
+
+   !> Inlet parameters
+   real(WP) :: Uin,Ton,Toff
    
 contains
-   
-   
-   !> Function that defines a level set function for a bubble
-   function levelset_bubble(xyz,t) result(G)
-      implicit none
-      real(WP), dimension(3),intent(in) :: xyz
-      real(WP), intent(in) :: t
-      real(WP) :: G
-      ! Create a spherical bubble
-      G=sqrt((xyz(1)-center(1))**2+(xyz(2)-center(2))**2+(xyz(3)-center(3))**2)-radius
-   end function levelset_bubble
    
    
    !> Initialization of problem solver
@@ -61,12 +52,13 @@ contains
       
       ! Allocate work arrays
       allocate_work_arrays: block
-         allocate(resU(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
-         allocate(resV(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
-         allocate(resW(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
-         allocate(Ui  (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
-         allocate(Vi  (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
-         allocate(Wi  (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+         allocate(gradU(1:3,1:3,cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+         allocate(resU (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+         allocate(resV (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+         allocate(resW (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+         allocate(Ui   (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+         allocate(Vi   (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+         allocate(Wi   (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
       end block allocate_work_arrays
       
       
@@ -83,41 +75,21 @@ contains
 
       ! Initialize our VOF solver and field
       create_and_initialize_vof: block
-         use mms_geom,  only: cube_refine_vol
-         use vfs_class, only: plicnet,VFhi,VFlo,remap
-         integer :: i,j,k,n,si,sj,sk
-         real(WP), dimension(3,8) :: cube_vertex
-         real(WP), dimension(3) :: v_cent,a_cent
-         real(WP) :: vol,area
-         integer, parameter :: amr_ref_lvl=4
+         use vfs_class, only: plicnet,remap
+         integer :: i,j,k
          ! Create a VOF solver
          call vf%initialize(cfg=cfg,reconstruction_method=plicnet,transport_method=remap,name='VOF')
-         ! Initialize to a droplet
-         call param_read('Droplet diameter',radius); radius=radius/2.0_WP
-         center=[0.5_WP*D,0.0_WP,0.0_WP]
+         !vf%cons_correct=.false.
+         ! Initialize to flat interface at entrance
          do k=vf%cfg%kmino_,vf%cfg%kmaxo_
             do j=vf%cfg%jmino_,vf%cfg%jmaxo_
                do i=vf%cfg%imino_,vf%cfg%imaxo_
-                  ! Set cube vertices
-                  n=0
-                  do sk=0,1
-                     do sj=0,1
-                        do si=0,1
-                           n=n+1; cube_vertex(:,n)=[vf%cfg%x(i+si),vf%cfg%y(j+sj),vf%cfg%z(k+sk)]
-                        end do
-                     end do
-                  end do
-                  ! Call adaptive refinement code to get volume and barycenters recursively
-                  vol=0.0_WP; area=0.0_WP; v_cent=0.0_WP; a_cent=0.0_WP
-                  call cube_refine_vol(cube_vertex,vol,area,v_cent,a_cent,levelset_bubble,0.0_WP,amr_ref_lvl)
-                  vf%VF(i,j,k)=vol/vf%cfg%vol(i,j,k)
-                  if (vf%VF(i,j,k).ge.VFlo.and.vf%VF(i,j,k).le.VFhi) then
-                     vf%Lbary(:,i,j,k)=v_cent
-                     vf%Gbary(:,i,j,k)=([vf%cfg%xm(i),vf%cfg%ym(j),vf%cfg%zm(k)]-vf%VF(i,j,k)*vf%Lbary(:,i,j,k))/(1.0_WP-vf%VF(i,j,k))
-                  else
-                     vf%Lbary(:,i,j,k)=[vf%cfg%xm(i),vf%cfg%ym(j),vf%cfg%zm(k)]
-                     vf%Gbary(:,i,j,k)=[vf%cfg%xm(i),vf%cfg%ym(j),vf%cfg%zm(k)]
-                  end if
+                  ! Initialize VF to liquid everywhere except at the inlet
+                  vf%VF(i,j,k)=1.0_WP
+                  if (vf%cfg%xm(i).lt.0.0_WP.and.sqrt(vf%cfg%ym(j)**2+vf%cfg%zm(k)**2).le.0.5_WP*Dinlet) vf%VF(i,j,k)=0.0_WP
+                  ! Initialize phasic barycenters
+                  vf%Lbary(:,i,j,k)=[vf%cfg%xm(i),vf%cfg%ym(j),vf%cfg%zm(k)]
+                  vf%Gbary(:,i,j,k)=[vf%cfg%xm(i),vf%cfg%ym(j),vf%cfg%zm(k)]
                end do
             end do
          end do
@@ -140,8 +112,9 @@ contains
       end block create_and_initialize_vof
       
       
-      ! Create a two-phase flow solver without bconds
-      create_and_initialize_flow_solver: block
+      ! Create a two-phase flow solver with bconds
+      create_flow_solver: block
+         use tpns_class,      only: clipped_neumann,dirichlet
          use hypre_str_class, only: pcg_pfmg2
          integer :: i,j,k
          ! Create flow solver
@@ -156,6 +129,10 @@ contains
          call param_read('Surface tension coefficient',fs%sigma)
          ! Read in gravity
          call param_read('Gravity',fs%gravity)
+         ! Inlet on the left
+         call fs%add_bcond(name='inlet',type=dirichlet,face='x',dir=-1,canCorrect=.false.,locator=inlet)
+         ! Outflow on the right
+         call fs%add_bcond(name='outflow',type=clipped_neumann,face='x',dir=+1,canCorrect=.true.,locator=outflow)
          ! Configure pressure solver
          ps=hypre_str(cfg=cfg,name='Pressure',method=pcg_pfmg2,nst=7)
          !ps%maxlevel=10
@@ -165,13 +142,42 @@ contains
          vs=ddadi(cfg=cfg,name='Velocity',nst=7)
          ! Setup the solver
          call fs%setup(pressure_solver=ps,implicit_solver=vs)
-         ! Zero initial velocity
-         fs%U=0.0_WP; fs%V=0.0_WP; fs%W=0.0_WP
-         ! Calculate cell-centered velocities and divergence
-         call fs%interp_vel(Ui,Vi,Wi)
-         call fs%get_div()
-      end block create_and_initialize_flow_solver
+      end block create_flow_solver
       
+      
+      ! Initialize our velocity field
+      initialize_velocity: block
+         use tpns_class, only: bcond
+         type(bcond), pointer :: mybc
+         integer :: i,j,k,n
+         ! Read in inlet parameters
+         call param_read('Inlet velocity',Uin)
+         call param_read('Inlet on duration',Ton)
+         call param_read('Inlet off duration',Toff)
+         ! Zero velocity
+         fs%U=0.0_WP; fs%V=0.0_WP; fs%W=0.0_WP
+         ! Apply Dirichlet condition at inlet
+         call fs%get_bcond('inlet',mybc)
+         do n=1,mybc%itr%no_
+            i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
+            fs%U(i,j,k)=Uin
+         end do
+         ! Apply all other boundary conditions
+         call fs%apply_bcond(time%t,time%dt)
+         ! Adjust MFR for global mass balance
+         call fs%correct_mfr()
+         ! Compute divergence
+         call fs%get_div()
+         ! Compute cell-centered velocity
+         call fs%interp_vel(Ui,Vi,Wi)
+      end block initialize_velocity
+      
+      
+      ! Create an LES model
+      create_sgs: block
+         sgs=sgsmodel(cfg=fs%cfg,umask=fs%umask,vmask=fs%vmask,wmask=fs%wmask)
+      end block create_sgs
+
       
       ! Create surfmesh object for interface polygon output
       create_smesh: block
@@ -240,7 +246,7 @@ contains
    
    !> Perform an NGA2 simulation
    subroutine simulation_run
-      use tpns_class, only: arithmetic_visc
+      use tpns_class, only: harmonic_visc
       implicit none
       
       ! Perform time integration
@@ -251,6 +257,25 @@ contains
          call time%adjust_dt()
          call time%increment()
          
+         ! Apply time-varying Dirichlet conditions
+         update_inlet: block
+            use tpns_class, only: bcond
+            type(bcond), pointer :: mybc
+            integer  :: n,i,j,k
+            call fs%get_bcond('inlet',mybc)
+            if (mod(time%t,(Ton+Toff)).lt.Ton) then
+               do n=1,mybc%itr%no_
+                  i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
+                  fs%U(i,j,k)=Uin
+               end do
+            else
+               do n=1,mybc%itr%no_
+                  i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
+                  fs%U(i,j,k)=0.0_WP
+               end do
+            end if
+         end block update_inlet
+
          ! Remember old VOF
          vf%VFold=vf%VF
          
@@ -259,9 +284,6 @@ contains
          fs%Vold=fs%V
          fs%Wold=fs%W
          
-         ! Apply time-varying Dirichlet conditions
-         ! This is where time-dpt Dirichlet would be enforced
-         
          ! Prepare old staggered density (at n)
          call fs%get_olddensity(vf=vf)
          
@@ -269,7 +291,22 @@ contains
          call vf%advance(dt=time%dt,U=fs%U,V=fs%V,W=fs%W)
          
          ! Prepare new staggered viscosity (at n+1)
-         call fs%get_viscosity(vf=vf,strat=arithmetic_visc)
+         call fs%get_viscosity(vf=vf,strat=harmonic_visc)
+         
+         ! Turbulence modeling
+         sgs_modeling: block
+            use sgsmodel_class, only: vreman
+            integer :: i,j,k
+            resU=vf%VF*fs%rho_l+(1.0_WP-vf%VF)*fs%rho_g
+            call fs%get_gradu(gradU)
+            call sgs%get_visc(type=vreman,dt=time%dtold,rho=resU,gradu=gradU)
+            do k=fs%cfg%kmino_+1,fs%cfg%kmaxo_; do j=fs%cfg%jmino_+1,fs%cfg%jmaxo_; do i=fs%cfg%imino_+1,fs%cfg%imaxo_
+               fs%visc(i,j,k)   =fs%visc(i,j,k)   +sgs%visc(i,j,k)
+               fs%visc_xy(i,j,k)=fs%visc_xy(i,j,k)+sum(fs%itp_xy(:,:,i,j,k)*sgs%visc(i-1:i,j-1:j,k))
+               fs%visc_yz(i,j,k)=fs%visc_yz(i,j,k)+sum(fs%itp_yz(:,:,i,j,k)*sgs%visc(i,j-1:j,k-1:k))
+               fs%visc_zx(i,j,k)=fs%visc_zx(i,j,k)+sum(fs%itp_xz(:,:,i,j,k)*sgs%visc(i-1:i,j,k-1:k))
+            end do; end do; end do
+         end block sgs_modeling
          
          ! Perform sub-iterations
          do while (time%it.le.time%itmax)
@@ -375,8 +412,31 @@ contains
       ! timetracker
       
       ! Deallocate work arrays
-      deallocate(resU,resV,resW,Ui,Vi,Wi)
+      deallocate(gradU,resU,resV,resW,Ui,Vi,Wi)
       
    end subroutine simulation_final
+
+
+   !> Function that localizes the outflow boundary condition
+   function outflow(pg,i,j,k) result(isIn)
+      use pgrid_class, only: pgrid
+      class(pgrid), intent(in) :: pg
+      integer, intent(in) :: i,j,k
+      logical :: isIn
+      isIn=.false.
+      if (i.eq.pg%imax+1.and.sqrt(pg%ym(j)**2+pg%zm(k)**2).lt.0.5_WP*Dpipe) isIn=.true.
+   end function outflow
+   
+   
+   !> Function that localizes the inlet boundary condition
+   function inlet(pg,i,j,k) result(isIn)
+      use pgrid_class, only: pgrid
+      class(pgrid), intent(in) :: pg
+      integer, intent(in) :: i,j,k
+      logical :: isIn
+      isIn=.false.
+      if (i.eq.pg%imin.and.sqrt(pg%ym(j)**2+pg%zm(k)**2).lt.0.5_WP*Dinlet) isIn=.true.
+   end function inlet
+   
    
 end module simulation

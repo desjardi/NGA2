@@ -8,8 +8,8 @@ module geometry
    !> Single config
    type(ibconfig), public :: cfg
    
-   !> Pipe diameter
-   real(WP), public :: D
+   !> Pipe and inlet diameter
+   real(WP), public :: Dpipe,Dinlet
    
    public :: geometry_init
    
@@ -34,20 +34,21 @@ contains
          
          ! Read in grid definition
          call param_read('Pipe length',Lx)
-         call param_read('Pipe diameter',D)
+         call param_read('Pipe diameter',Dpipe)
+         call param_read('Inlet diameter',Dinlet)
          call param_read('ny',ny); allocate(y(ny+1))
          call param_read('nx',nx); allocate(x(nx+1))
          call param_read('nz',nz); allocate(z(nz+1))
          
          dx=Lx/real(nx,WP)
-         no=6
+         no=1
          if (ny.gt.1) then
-            Ly=D+real(2*no,WP)*D/real(ny-2*no,WP)
+            Ly=Dpipe+real(2*no,WP)*Dpipe/real(ny-2*no,WP)
          else
             Ly=dx
          end if
          if (nz.gt.1) then
-            Lz=D+real(2*no,WP)*D/real(ny-2*no,WP)
+            Lz=Dpipe+real(2*no,WP)*Dpipe/real(ny-2*no,WP)
          else
             Lz=dx
          end if
@@ -87,10 +88,11 @@ contains
       create_walls: block
          use ibconfig_class, only: sharp
          integer :: i,j,k
+         real(WP) :: radius
          do k=cfg%kmino_,cfg%kmaxo_
             do j=cfg%jmino_,cfg%jmaxo_
                do i=cfg%imino_,cfg%imaxo_
-                  cfg%Gib(i,j,k)=sqrt(cfg%ym(j)**2+cfg%zm(k)**2)-0.5_WP*D
+                  cfg%Gib(i,j,k)=sqrt(cfg%ym(j)**2+cfg%zm(k)**2)-0.5_WP*Dpipe
                end do
             end do
          end do
@@ -98,6 +100,38 @@ contains
          call cfg%calculate_normal()
          ! Get VF field
          call cfg%calculate_vf(method=sharp,allow_zero_vf=.false.)
+         ! Adjust masks at entrance
+         if (cfg%iproc.eq.1) then
+            do k=cfg%kmino_,cfg%kmaxo_
+               do j=cfg%jmino_,cfg%jmaxo_
+                  radius=sqrt(cfg%ym(j)**2+cfg%zm(k)**2)
+                  do i=cfg%imino,cfg%imin-1
+                     if (radius.le.0.5_WP*Dinlet) then
+                        cfg%VF(i,j,k)=1.0_WP
+                     else
+                        cfg%VF(i,j,k)=epsilon(1.0_WP)
+                     end if
+                  end do
+               end do
+            end do
+         end if
+         ! Adjust masks at exit
+         if (cfg%iproc.eq.cfg%npx) then
+            do k=cfg%kmino_,cfg%kmaxo_
+               do j=cfg%jmino_,cfg%jmaxo_
+                  radius=sqrt(cfg%ym(j)**2+cfg%zm(k)**2)
+                  do i=cfg%imax,cfg%imaxo
+                     if (radius.le.0.5_WP*Dpipe) then
+                        cfg%VF(i,j,k)=1.0_WP
+                     else
+                        cfg%VF(i,j,k)=epsilon(1.0_WP)
+                     end if
+                  end do
+               end do
+            end do
+         end if
+         ! Recompute domain volume
+         call cfg%calc_fluid_vol()
       end block create_walls
       
       
