@@ -444,7 +444,7 @@ contains
          call vf%advance(dt=time%dt,U=fs%U,V=fs%V,W=fs%W)
 
          ! Zero out surface tension in the bed
-         where (lp%VF.gt.lp%VFst) vf%curv=0.0_WP
+         !where (lp%VF.gt.lp%VFst) vf%curv=0.0_WP
          
          ! Prepare new staggered viscosity (at n+1)
          call fs%get_viscosity(vf=vf,strat=arithmetic_visc)

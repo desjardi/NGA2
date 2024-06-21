@@ -1127,7 +1127,7 @@ contains
              ! Create space for new particle
              call this%resize(count)
              ! Generate a diameter
-             this%p(count)%d=get_diameter()
+             this%p(count)%d=this%inj_dmean!get_diameter()
              ! Set various parameters for the particle
              this%p(count)%id    =maxid+int(np_tmp,8)
              this%p(count)%dt    =0.0_WP
@@ -1228,12 +1228,14 @@ contains
          pos(2) = random_uniform(lo=this%inj_pos(2)-0.5_WP*this%inj_d,hi=this%inj_pos(2)+0.5_WP*this%inj_d)
          pos(3) = this%cfg%zm(this%cfg%kmin_)
       else
-         rand=random_uniform(lo=0.0_WP,hi=1.0_WP)
-         r=0.5_WP*this%inj_d*sqrt(rand) !< sqrt(rand) avoids accumulation near the center
-         call random_number(rand)
-         theta=random_uniform(lo=0.0_WP,hi=twoPi)
-         pos(2) = this%inj_pos(2)+r*sin(theta)
-         pos(3) = this%inj_pos(3)+r*cos(theta)
+         !rand=random_uniform(lo=0.0_WP,hi=1.0_WP)
+         !r=0.5_WP*this%inj_d*sqrt(rand) !< sqrt(rand) avoids accumulation near the center
+         !call random_number(rand)
+         !theta=random_uniform(lo=0.0_WP,hi=twoPi)
+         !pos(2) = this%inj_pos(2)+r*sin(theta)
+         !pos(3) = this%inj_pos(3)+r*cos(theta)
+         pos(2) = random_uniform(lo=this%inj_pos(2)-0.5_WP*this%inj_d,hi=this%inj_pos(2)+0.5_WP*this%inj_d)
+         pos(3) = random_uniform(lo=this%cfg%z(this%cfg%kmin),hi=this%cfg%z(this%cfg%kmax+1))
       end if
     end function get_position
 
