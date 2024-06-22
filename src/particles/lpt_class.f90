@@ -85,8 +85,9 @@ module lpt_class
       real(WP) :: e_w=1.0_WP                              !< Wall restitution coefficient
       real(WP) :: mu_f                                    !< Friction coefficient
       real(WP) :: clip_col=0.2_WP                         !< Maximum allowable overlap
-      real(WP), dimension(:,:,:),   allocatable :: Wdist  !< Signed wall distance - naive for now (could be redone with FMM)
-      real(WP), dimension(:,:,:,:), allocatable :: Wnorm  !< Wall normal function - naive for now (could be redone with FMM)
+      real(WP), dimension(:,:,:), allocatable :: xwall    !< Location in x of closest wall in x
+      real(WP), dimension(:,:,:), allocatable :: ywall    !< Location in y of closest wall in y
+      real(WP), dimension(:,:,:), allocatable :: zwall    !< Location in z of closest wall in z
       
       ! Injection parameters
       real(WP) :: mfr                                     !< Mass flow rate for particle injection
@@ -255,78 +256,52 @@ contains
          self%grd_z=0.0_WP
       end if
       
-      ! Generate a wall distance/norm function
-      allocate(self%Wdist(  self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_))
-      allocate(self%Wnorm(3,self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_))
-      ! First pass to set correct sign
+      ! Generate a wall data for collisions
+      allocate(self%xwall(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%xwall=huge(1.0_WP)
+      allocate(self%ywall(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%ywall=huge(1.0_WP)
+      allocate(self%zwall(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%zwall=huge(1.0_WP)
+      ! Get closest wall location in x
       do k=self%cfg%kmino_,self%cfg%kmaxo_
          do j=self%cfg%jmino_,self%cfg%jmaxo_
+            do i=self%cfg%imin_,self%cfg%imax_
+               do l=-1,+2
+                  if ((self%cfg%VF(i+l-1,j,k).eq.0.0_WP.and.self%cfg%VF(i+l,j,k).eq.1.0_WP).or.&
+                  &   (self%cfg%VF(i+l-1,j,k).eq.1.0_WP.and.self%cfg%VF(i+l,j,k).eq.0.0_WP)) then
+                     self%xwall(i,j,k)=min(self%xwall(i,j,k),self%cfg%x(i+l))
+                  end if
+               end do
+            end do
+         end do
+      end do
+      call self%cfg%sync(self%xwall)
+      ! Get closest wall location in y
+      do k=self%cfg%kmino_,self%cfg%kmaxo_
+         do j=self%cfg%jmin_,self%cfg%jmax_
             do i=self%cfg%imino_,self%cfg%imaxo_
-               if (self%cfg%VF(i,j,k).eq.0.0_WP) then
-                  self%Wdist(i,j,k)=-sqrt(self%cfg%xL**2+self%cfg%yL**2+self%cfg%zL**2)
-               else
-                  self%Wdist(i,j,k)=+sqrt(self%cfg%xL**2+self%cfg%yL**2+self%cfg%zL**2)
-               end if
-               self%Wnorm(:,i,j,k)=0.0_WP
-            end do
-         end do
-      end do
-      ! Second pass to compute local distance (get 2 closest cells)
-      do l=1,2
-         do k=self%cfg%kmino_,self%cfg%kmaxo_
-            do j=self%cfg%jmino_,self%cfg%jmaxo_
-               do i=self%cfg%imino_+l,self%cfg%imaxo_
-                  if (self%Wdist(i,j,k)*self%Wdist(i-l,j,k).lt.0.0_WP) then
-                     ! There is a wall at x(i)
-                     if (abs(self%cfg%xm(i  )-self%cfg%x(i-l+1)).lt.abs(self%Wdist(i  ,j,k))) then
-                        self%Wdist(i  ,j,k)=sign(self%cfg%xm(i  )-self%cfg%x(i-l+1),self%Wdist(i  ,j,k))
-                        self%Wnorm(:,i  ,j,k)=[self%cfg%VF(i,j,k)-self%cfg%VF(i-l,j,k),0.0_WP,0.0_WP]
-                     end if
-                     if (abs(self%cfg%xm(i-l)-self%cfg%x(i)).lt.abs(self%Wdist(i-l,j,k))) then
-                        self%Wdist(i-l,j,k)=sign(self%cfg%xm(i-l)-self%cfg%x(i),self%Wdist(i-l,j,k))
-                        self%Wnorm(:,i-l,j,k)=[self%cfg%VF(i,j,k)-self%cfg%VF(i-l,j,k),0.0_WP,0.0_WP]
-                     end if
-                  end if
-               end do
-            end do
-         end do
-         do k=self%cfg%kmino_,self%cfg%kmaxo_
-            do j=self%cfg%jmino_+l,self%cfg%jmaxo_
-               do i=self%cfg%imino_,self%cfg%imaxo_
-                  if (self%Wdist(i,j,k)*self%Wdist(i,j-l,k).lt.0.0_WP) then
-                     ! There is a wall at y(j)
-                     if (abs(self%cfg%ym(j  )-self%cfg%y(j-l+1)).lt.abs(self%Wdist(i,j  ,k))) then
-                        self%Wdist(i,j  ,k)=sign(self%cfg%ym(j  )-self%cfg%y(j-l+1),self%Wdist(i,j  ,k))
-                        self%Wnorm(:,i,j  ,k)=[0.0_WP,self%cfg%VF(i,j,k)-self%cfg%VF(i,j-l,k),0.0_WP]
-                     end if
-                     if (abs(self%cfg%ym(j-l)-self%cfg%y(j)).lt.abs(self%Wdist(i,j-l,k))) then
-                        self%Wdist(i,j-l,k)=sign(self%cfg%ym(j-l)-self%cfg%y(j),self%Wdist(i,j-l,k))
-                        self%Wnorm(:,i,j-l,k)=[0.0_WP,self%cfg%VF(i,j,k)-self%cfg%VF(i,j-l,k),0.0_WP]
-                     end if
-                  end if
-               end do
-            end do
-         end do
-         do k=self%cfg%kmino_+l,self%cfg%kmaxo_
-            do j=self%cfg%jmino_,self%cfg%jmaxo_
-               do i=self%cfg%imino_,self%cfg%imaxo_
-                  if (self%Wdist(i,j,k)*self%Wdist(i,j,k-l).lt.0.0_WP) then
-                     ! There is a wall at z(k)
-                     if (abs(self%cfg%zm(k  )-self%cfg%z(k-l+1)).lt.abs(self%Wdist(i,j,k  ))) then
-                        self%Wdist(i,j,k  )=sign(self%cfg%zm(k  )-self%cfg%z(k-l+1),self%Wdist(i,j,k  ))
-                        self%Wnorm(:,i,j,k  )=[0.0_WP,0.0_WP,self%cfg%VF(i,j,k)-self%cfg%VF(i,j,k-l)]
-                     end if
-                     if (abs(self%cfg%zm(k-l)-self%cfg%z(k)).lt.abs(self%Wdist(i,j,k-l))) then
-                        self%Wdist(i,j,k-l)=sign(self%cfg%zm(k-l)-self%cfg%z(k),self%Wdist(i,j,k-l))
-                        self%Wnorm(:,i,j,k-l)=[0.0_WP,0.0_WP,self%cfg%VF(i,j,k)-self%cfg%VF(i,j,k-l)]
-                     end if
+               do l=-1,+2
+                  if ((self%cfg%VF(i,j+l-1,k).eq.0.0_WP.and.self%cfg%VF(i,j+l,k).eq.1.0_WP).or.&
+                  &   (self%cfg%VF(i,j+l-1,k).eq.1.0_WP.and.self%cfg%VF(i,j+l,k).eq.0.0_WP)) then
+                     self%ywall(i,j,k)=min(self%ywall(i,j,k),self%cfg%y(j+l))
                   end if
                end do
             end do
          end do
       end do
-      call self%cfg%sync(self%Wdist)
-      call self%cfg%sync(self%Wnorm)
+      call self%cfg%sync(self%ywall)
+      ! Get closest wall location in z
+      do k=self%cfg%kmin_,self%cfg%kmax_
+         do j=self%cfg%jmino_,self%cfg%jmaxo_
+            do i=self%cfg%imino_,self%cfg%imaxo_
+               do l=-1,+2
+                  if ((self%cfg%VF(i,j,k+l-1).eq.0.0_WP.and.self%cfg%VF(i,j,k+l).eq.1.0_WP).or.&
+                  &   (self%cfg%VF(i,j,k+l-1).eq.1.0_WP.and.self%cfg%VF(i,j,k+l).eq.0.0_WP)) then
+                     self%zwall(i,j,k)=min(self%zwall(i,j,k),self%cfg%z(k+l))
+                  end if
+               end do
+            end do
+         end do
+      end do
+      call self%cfg%sync(self%zwall)
       
       ! Log/screen output
       logging: block
@@ -440,7 +415,7 @@ contains
          
          ! Loop over all local particles
          collision: do i1=1,this%np_
-         
+            
             ! Cycle if id<=0
             if (this%p(i1)%id.le.0) cycle collision
             
@@ -450,15 +425,75 @@ contains
             w1=this%p(i1)%angVel
             d1=this%p(i1)%d
             m1=this%rho*Pi/6.0_WP*d1**3
-            
-            ! First collide with walls
-            d12=this%cfg%get_scalar(pos=this%p(i1)%pos,i0=this%p(i1)%ind(1),j0=this%p(i1)%ind(2),k0=this%p(i1)%ind(3),S=this%Wdist,bc='d')
-            n12=this%Wnorm(:,this%p(i1)%ind(1),this%p(i1)%ind(2),this%p(i1)%ind(3))
-            n12=-normalize(n12+[epsilon(1.0_WP),epsilon(1.0_WP),epsilon(1.0_WP)])
+
+            ! Collide with walls in x
+            d12=abs(this%xwall(this%p(i1)%ind(1),this%p(i1)%ind(2),this%p(i1)%ind(3))-this%p(i1)%pos(1))
+            n12=[sign(1.0_WP,this%xwall(this%p(i1)%ind(1),this%p(i1)%ind(2),this%p(i1)%ind(3))-this%p(i1)%pos(1)),0.0_WP,0.0_WP]
             rnv=dot_product(v1,n12)
             r_influ=min(2.0_WP*abs(rnv)*dt,0.2_WP*d1)
             delta_n=min(0.5_WP*d1+r_influ-d12,this%clip_col*0.5_WP*d1)
-            
+            ! Assess if there is collision
+            if (delta_n.gt.0.0_WP) then
+               ! Normal collision
+               k_n=m1*k_coeff_w
+               eta_n=m1*eta_coeff_w
+               f_n=-k_n*delta_n*n12-eta_n*rnv*n12
+               ! Tangential collision
+               f_t=0.0_WP
+               if (this%mu_f.gt.0.0_WP) then
+                  t12 = v1-rnv*n12+cross_product(0.5_WP*d1*w1,n12)
+                  rtv = sqrt(sum(t12*t12))
+                  if (rnv*dt/d1.gt.aclipnorm) then
+                     if (rtv/rnv.lt.rcliptan) rtv=0.0_WP
+                  else
+                     if (rtv*dt/d1.lt.acliptan) rtv=0.0_WP
+                  end if
+                  if (rtv.gt.0.0_WP) f_t=-this%mu_f*sqrt(sum(f_n*f_n))*t12/rtv
+               end if
+               ! Calculate collision force
+               f_n=f_n/m1; f_t=f_t/m1
+               this%p(i1)%Acol=this%p(i1)%Acol+f_n+f_t
+               ! Calculate collision torque
+               this%p(i1)%Tcol=this%p(i1)%Tcol+cross_product(0.5_WP*d1*n12,f_t)
+            end if
+
+            ! Collide with walls in y
+            d12=abs(this%ywall(this%p(i1)%ind(1),this%p(i1)%ind(2),this%p(i1)%ind(3))-this%p(i1)%pos(2))
+            n12=[0.0_WP,sign(1.0_WP,this%ywall(this%p(i1)%ind(1),this%p(i1)%ind(2),this%p(i1)%ind(3))-this%p(i1)%pos(2)),0.0_WP]
+            rnv=dot_product(v1,n12)
+            r_influ=min(2.0_WP*abs(rnv)*dt,0.2_WP*d1)
+            delta_n=min(0.5_WP*d1+r_influ-d12,this%clip_col*0.5_WP*d1)
+            ! Assess if there is collision
+            if (delta_n.gt.0.0_WP) then
+               ! Normal collision
+               k_n=m1*k_coeff_w
+               eta_n=m1*eta_coeff_w
+               f_n=-k_n*delta_n*n12-eta_n*rnv*n12
+               ! Tangential collision
+               f_t=0.0_WP
+               if (this%mu_f.gt.0.0_WP) then
+                  t12 = v1-rnv*n12+cross_product(0.5_WP*d1*w1,n12)
+                  rtv = sqrt(sum(t12*t12))
+                  if (rnv*dt/d1.gt.aclipnorm) then
+                     if (rtv/rnv.lt.rcliptan) rtv=0.0_WP
+                  else
+                     if (rtv*dt/d1.lt.acliptan) rtv=0.0_WP
+                  end if
+                  if (rtv.gt.0.0_WP) f_t=-this%mu_f*sqrt(sum(f_n*f_n))*t12/rtv
+               end if
+               ! Calculate collision force
+               f_n=f_n/m1; f_t=f_t/m1
+               this%p(i1)%Acol=this%p(i1)%Acol+f_n+f_t
+               ! Calculate collision torque
+               this%p(i1)%Tcol=this%p(i1)%Tcol+cross_product(0.5_WP*d1*n12,f_t)
+            end if
+
+            ! Collide with walls in z
+            d12=abs(this%zwall(this%p(i1)%ind(1),this%p(i1)%ind(2),this%p(i1)%ind(3))-this%p(i1)%pos(3))
+            n12=[0.0_WP,0.0_WP,sign(1.0_WP,this%zwall(this%p(i1)%ind(1),this%p(i1)%ind(2),this%p(i1)%ind(3))-this%p(i1)%pos(3))]
+            rnv=dot_product(v1,n12)
+            r_influ=min(2.0_WP*abs(rnv)*dt,0.2_WP*d1)
+            delta_n=min(0.5_WP*d1+r_influ-d12,this%clip_col*0.5_WP*d1)
             ! Assess if there is collision
             if (delta_n.gt.0.0_WP) then
                ! Normal collision
