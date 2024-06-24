@@ -95,6 +95,9 @@ module tpscalar_class
       procedure :: get_max                                !< Calculate maximum and integral field values
       procedure :: solve_implicit                         !< Solve for the scalar residuals implicitly
       procedure :: redist_mdot                            !< Re-distribute the evaporation mass source term
+      procedure :: get_dmdotdtau
+      procedure :: get_cfl
+      procedure :: get_grad
    end type tpscalar
    
    
@@ -706,7 +709,7 @@ contains
    !    deallocate(FX,FY,FZ)
       
    ! end subroutine get_dSCdt_diff
-   
+
    
    !> Calculate the min, max, and int of our SC field
    subroutine get_max(this,VF)
@@ -782,38 +785,89 @@ contains
    end subroutine solve_implicit
 
 
-   !> Distribute the evaporation source term away from the interface
+   !> Re-distribute the evaporation source term away from the interface
    subroutine redist_mdot(this,mdot,mdot_new)
       implicit none
       class(tpscalar), intent(inout) :: this
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in)  :: mdot     !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(out) :: mdot_new !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       integer :: i,j,k
-   
+      real(WP) :: vel
+
+      ! integer :: nst,sti,std,stp1,stp2,stm1,stm2
+      ! nst=1
+      ! stp1=-(nst+1)/2; stp2=nst+stp1-1
+      ! stm1=-(nst-1)/2; stm2=nst+stm1-1
+
       ! Prepare advective operator
       this%mdot_solver%opr(:,:,:,:)=0.0_WP
       do k=this%cfg%kmin_,this%cfg%kmax_
          do j=this%cfg%jmin_,this%cfg%jmax_
             do i=this%cfg%imin_,this%cfg%imax_
-               this%mdot_solver%opr(1,i,j,k)=this%mdot_solver%opr(1,i,j,k)+this%div_x(+1,i,j,k)*sum(this%grd_x(:,i+1,j,k)*this%PVF(i:i+1,j,k,Lphase))*this%itp_x(-1,i+1,j,k)+&
-               &                                                           this%div_x( 0,i,j,k)*sum(this%grd_x(:,i  ,j,k)*this%PVF(i-1:i,j,k,Lphase))*this%itp_x( 0,i  ,j,k)+&
-               &                                                           this%div_y(+1,i,j,k)*sum(this%grd_y(:,i,j+1,k)*this%PVF(i,j:j+1,k,Lphase))*this%itp_y(-1,i,j+1,k)+&
-               &                                                           this%div_y( 0,i,j,k)*sum(this%grd_y(:,i,j  ,k)*this%PVF(i,j-1:j,k,Lphase))*this%itp_y( 0,i,j  ,k)+&
-               &                                                           this%div_z(+1,i,j,k)*sum(this%grd_z(:,i,j,k+1)*this%PVF(i,j,k:k+1,Lphase))*this%itp_z(-1,i,j,k+1)+&
-               &                                                           this%div_z( 0,i,j,k)*sum(this%grd_z(:,i,j,k  )*this%PVF(i,j,k-1:k,Lphase))*this%itp_z( 0,i,j,k  )
-               this%mdot_solver%opr(2,i,j,k)=this%mdot_solver%opr(2,i,j,k)+this%div_x(+1,i,j,k)*sum(this%grd_x(:,i+1,j,k)*this%PVF(i:i+1,j,k,Lphase))*this%itp_x( 0,i+1,j,k)
-               this%mdot_solver%opr(3,i,j,k)=this%mdot_solver%opr(3,i,j,k)+this%div_x( 0,i,j,k)*sum(this%grd_x(:,i  ,j,k)*this%PVF(i-1:i,j,k,Lphase))*this%itp_x(-1,i  ,j,k)
-               this%mdot_solver%opr(4,i,j,k)=this%mdot_solver%opr(4,i,j,k)+this%div_y(+1,i,j,k)*sum(this%grd_y(:,i,j+1,k)*this%PVF(i,j:j+1,k,Lphase))*this%itp_x( 0,i,j+1,k)
-               this%mdot_solver%opr(5,i,j,k)=this%mdot_solver%opr(5,i,j,k)+this%div_y( 0,i,j,k)*sum(this%grd_y(:,i,j  ,k)*this%PVF(i,j-1:j,k,Lphase))*this%itp_x(-1,i,j  ,k)
-               this%mdot_solver%opr(6,i,j,k)=this%mdot_solver%opr(6,i,j,k)+this%div_z(+1,i,j,k)*sum(this%grd_z(:,i,j,k+1)*this%PVF(i,j,k:k+1,Lphase))*this%itp_x( 0,i,j,k+1)
-               this%mdot_solver%opr(7,i,j,k)=this%mdot_solver%opr(7,i,j,k)+this%div_z( 0,i,j,k)*sum(this%grd_z(:,i,j,k  )*this%PVF(i,j,k-1:k,Lphase))*this%itp_x(-1,i,j,k  )
+               ! Linear interpolation for the face value of the scalar
+               ! this%mdot_solver%opr(1,i,j,k)=this%mdot_solver%opr(1,i,j,k)+this%div_x(+1,i,j,k)*sum(this%grd_x(:,i+1,j,k)*this%PVF(i:i+1,j,k,Lphase))*this%itp_x(-1,i+1,j,k)+&
+               ! &                                                           this%div_x( 0,i,j,k)*sum(this%grd_x(:,i  ,j,k)*this%PVF(i-1:i,j,k,Lphase))*this%itp_x( 0,i  ,j,k)+&
+               ! &                                                           this%div_y(+1,i,j,k)*sum(this%grd_y(:,i,j+1,k)*this%PVF(i,j:j+1,k,Lphase))*this%itp_y(-1,i,j+1,k)+&
+               ! &                                                           this%div_y( 0,i,j,k)*sum(this%grd_y(:,i,j  ,k)*this%PVF(i,j-1:j,k,Lphase))*this%itp_y( 0,i,j  ,k)+&
+               ! &                                                           this%div_z(+1,i,j,k)*sum(this%grd_z(:,i,j,k+1)*this%PVF(i,j,k:k+1,Lphase))*this%itp_z(-1,i,j,k+1)+&
+               ! &                                                           this%div_z( 0,i,j,k)*sum(this%grd_z(:,i,j,k  )*this%PVF(i,j,k-1:k,Lphase))*this%itp_z( 0,i,j,k  )
+               ! this%mdot_solver%opr(2,i,j,k)=this%mdot_solver%opr(2,i,j,k)+this%div_x(+1,i,j,k)*sum(this%grd_x(:,i+1,j,k)*this%PVF(i:i+1,j,k,Lphase))*this%itp_x( 0,i+1,j,k)
+               ! this%mdot_solver%opr(3,i,j,k)=this%mdot_solver%opr(3,i,j,k)+this%div_x( 0,i,j,k)*sum(this%grd_x(:,i  ,j,k)*this%PVF(i-1:i,j,k,Lphase))*this%itp_x(-1,i  ,j,k)
+               ! this%mdot_solver%opr(4,i,j,k)=this%mdot_solver%opr(4,i,j,k)+this%div_y(+1,i,j,k)*sum(this%grd_y(:,i,j+1,k)*this%PVF(i,j:j+1,k,Lphase))*this%itp_y( 0,i,j+1,k)
+               ! this%mdot_solver%opr(5,i,j,k)=this%mdot_solver%opr(5,i,j,k)+this%div_y( 0,i,j,k)*sum(this%grd_y(:,i,j  ,k)*this%PVF(i,j-1:j,k,Lphase))*this%itp_y(-1,i,j  ,k)
+               ! this%mdot_solver%opr(6,i,j,k)=this%mdot_solver%opr(6,i,j,k)+this%div_z(+1,i,j,k)*sum(this%grd_z(:,i,j,k+1)*this%PVF(i,j,k:k+1,Lphase))*this%itp_z( 0,i,j,k+1)
+               ! this%mdot_solver%opr(7,i,j,k)=this%mdot_solver%opr(7,i,j,k)+this%div_z( 0,i,j,k)*sum(this%grd_z(:,i,j,k  )*this%PVF(i,j,k-1:k,Lphase))*this%itp_z(-1,i,j,k  )
+
+               ! Upwind interpolation for the face value of the scalar
+               vel=sum(this%grd_x(:,i+1,j,k)*this%PVF(i:i+1,j,k,Lphase))
+               ! vel=U(i+1,j,k)
+               this%mdot_solver%opr(1,i,j,k)=this%mdot_solver%opr(1,i,j,k)+this%div_x(+1,i,j,k)*0.5_WP*(vel+abs(vel))
+               this%mdot_solver%opr(2,i,j,k)=this%mdot_solver%opr(2,i,j,k)+this%div_x(+1,i,j,k)*0.5_WP*(vel-abs(vel))
+               vel=sum(this%grd_x(:,i  ,j,k)*this%PVF(i-1:i,j,k,Lphase))
+               ! vel=U(i,j,k)
+               this%mdot_solver%opr(1,i,j,k)=this%mdot_solver%opr(1,i,j,k)+this%div_x( 0,i,j,k)*0.5_WP*(vel-abs(vel))
+               this%mdot_solver%opr(3,i,j,k)=this%mdot_solver%opr(3,i,j,k)+this%div_x( 0,i,j,k)*0.5_WP*(vel+abs(vel))
+               vel=sum(this%grd_y(:,i,j+1,k)*this%PVF(i,j:j+1,k,Lphase))
+               ! vel=V(i,j+1,k)
+               this%mdot_solver%opr(1,i,j,k)=this%mdot_solver%opr(1,i,j,k)+this%div_y(+1,i,j,k)*0.5_WP*(vel+abs(vel))
+               this%mdot_solver%opr(4,i,j,k)=this%mdot_solver%opr(4,i,j,k)+this%div_y(+1,i,j,k)*0.5_WP*(vel-abs(vel))
+               vel=sum(this%grd_y(:,i,j  ,k)*this%PVF(i,j-1:j,k,Lphase))
+               ! vel=V(i,j,k)
+               this%mdot_solver%opr(1,i,j,k)=this%mdot_solver%opr(1,i,j,k)+this%div_y( 0,i,j,k)*0.5_WP*(vel-abs(vel))
+               this%mdot_solver%opr(5,i,j,k)=this%mdot_solver%opr(5,i,j,k)+this%div_y( 0,i,j,k)*0.5_WP*(vel+abs(vel))
+               vel=sum(this%grd_z(:,i,j,k+1)*this%PVF(i,j,k:k+1,Lphase))
+               ! vel=W(i,j,k+1)
+               this%mdot_solver%opr(1,i,j,k)=this%mdot_solver%opr(1,i,j,k)+this%div_z(+1,i,j,k)*0.5_WP*(vel+abs(vel))
+               this%mdot_solver%opr(6,i,j,k)=this%mdot_solver%opr(6,i,j,k)+this%div_z(+1,i,j,k)*0.5_WP*(vel-abs(vel))
+               vel=sum(this%grd_z(:,i,j,k  )*this%PVF(i,j,k-1:k,Lphase))
+               ! vel=W(i,j,k)
+               this%mdot_solver%opr(1,i,j,k)=this%mdot_solver%opr(1,i,j,k)+this%div_z( 0,i,j,k)*0.5_WP*(vel-abs(vel))
+               this%mdot_solver%opr(7,i,j,k)=this%mdot_solver%opr(7,i,j,k)+this%div_z( 0,i,j,k)*0.5_WP*(vel+abs(vel))
+
+
+           
+               ! ! Loop over divergence stencil
+               ! do std=0,1
+               !    ! Loop over plus interpolation stencil
+               !    do sti=stp1,stp2
+               !       this%mdot_solver%opr(this%mdot_solver%stmap(sti+std,0,0),i,j,k)=this%mdot_solver%opr(this%mdot_solver%stmap(sti+std,0,0),i,j,k)+this%div_x(std,i,j,k)*0.5_WP*(U(i+std,j,k)+abs(U(i+std,j,k)))
+               !       this%mdot_solver%opr(this%mdot_solver%stmap(0,sti+std,0),i,j,k)=this%mdot_solver%opr(this%mdot_solver%stmap(0,sti+std,0),i,j,k)+this%div_y(std,i,j,k)*0.5_WP*(V(i,j+std,k)+abs(V(i,j+std,k)))
+               !       this%mdot_solver%opr(this%mdot_solver%stmap(0,0,sti+std),i,j,k)=this%mdot_solver%opr(this%mdot_solver%stmap(0,0,sti+std),i,j,k)+this%div_z(std,i,j,k)*0.5_WP*(W(i,j,k+std)+abs(W(i,j,k+std)))
+               !    end do
+               !    ! Loop over minus interpolation stencil
+               !    do sti=stm1,stm2
+               !       this%mdot_solver%opr(this%mdot_solver%stmap(sti+std,0,0),i,j,k)=this%mdot_solver%opr(this%mdot_solver%stmap(sti+std,0,0),i,j,k)+this%div_x(std,i,j,k)*0.5_WP*(U(i+std,j,k)-abs(U(i+std,j,k)))
+               !       this%mdot_solver%opr(this%mdot_solver%stmap(0,sti+std,0),i,j,k)=this%mdot_solver%opr(this%mdot_solver%stmap(0,sti+std,0),i,j,k)+this%div_y(std,i,j,k)*0.5_WP*(V(i,j+std,k)-abs(V(i,j+std,k)))
+               !       this%mdot_solver%opr(this%mdot_solver%stmap(0,0,sti+std),i,j,k)=this%mdot_solver%opr(this%mdot_solver%stmap(0,0,sti+std),i,j,k)+this%div_z(std,i,j,k)*0.5_WP*(W(i,j,k+std)-abs(W(i,j,k+std)))
+               !    end do
+               ! end do
+                  
             end do
          end do
       end do
-      
+
       ! Solve the linear system
       call this%mdot_solver%setup()
-      this%mdot_solver%rhs=0.0_WP
       this%mdot_solver%sol=mdot
       call this%mdot_solver%solve()
       mdot_new=this%mdot_solver%sol
@@ -822,6 +876,126 @@ contains
       call this%cfg%sync(mdot_new)
       
    end subroutine redist_mdot
+
+   
+   !> Calculate the explicit mdot time derivative based on VOF
+   subroutine get_dmdotdtau(this,U,V,W,mdot,dmdotdtau)
+      implicit none
+      class(tpscalar), intent(inout) :: this
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in)  :: U         !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in)  :: V         !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in)  :: W         !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in)  :: mdot      !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(out) :: dmdotdtau !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      integer :: i,j,k
+      real(WP), dimension(:,:,:), allocatable :: FX,FY,FZ
+      ! Zero out mdotd/tau array
+      dmdotdtau=0.0_WP
+      ! Allocate flux arrays
+      allocate(FX(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
+      allocate(FY(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
+      allocate(FZ(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
+      ! Flux of mdot
+      do k=this%cfg%kmin_,this%cfg%kmax_+1
+         do j=this%cfg%jmin_,this%cfg%jmax_+1
+            do i=this%cfg%imin_,this%cfg%imax_+1
+               ! Upwind interpolation
+               ! Fluxes on x-face
+               FX(i,j,k)=-0.5_WP*(U(i,j,k)+abs(U(i,j,k)))*mdot(i-1,j,k) &
+               &         -0.5_WP*(U(i,j,k)-abs(U(i,j,k)))*mdot(i  ,j,k)
+               ! Fluxes on y-face
+               FY(i,j,k)=-0.5_WP*(V(i,j,k)+abs(V(i,j,k)))*mdot(i,j-1,k) &
+               &         -0.5_WP*(V(i,j,k)-abs(V(i,j,k)))*mdot(i,j  ,k)
+               ! Fluxes on z-face
+               FZ(i,j,k)=-0.5_WP*(W(i,j,k)+abs(W(i,j,k)))*mdot(i,j,k-1) &
+               &         -0.5_WP*(W(i,j,k)-abs(W(i,j,k)))*mdot(i,j,k  )
+
+               ! Linear interpolation
+               ! ! Fluxes on x-face
+               ! FX(i,j,k)=-U(i,j,k)*sum(this%itp_x(:,i,j,k)*mdot(i-1:i,j,k))
+               ! ! Fluxes on y-face
+               ! FY(i,j,k)=-V(i,j,k)*sum(this%itp_y(:,i,j,k)*mdot(i,j-1:j,k))
+               ! ! Fluxes on z-face
+               ! FZ(i,j,k)=-W(i,j,k)*sum(this%itp_z(:,i,j,k)*mdot(i,j,k-1:k))
+            end do
+         end do
+      end do
+      ! Time derivative of mdot
+      do k=this%cfg%kmin_,this%cfg%kmax_
+         do j=this%cfg%jmin_,this%cfg%jmax_
+            do i=this%cfg%imin_,this%cfg%imax_
+               dmdotdtau(i,j,k)=sum(this%div_x(:,i,j,k)*FX(i:i+1,j,k))+&
+               &                sum(this%div_y(:,i,j,k)*FY(i,j:j+1,k))+&
+               &                sum(this%div_z(:,i,j,k)*FZ(i,j,k:k+1))
+            end do
+         end do
+      end do
+      ! Deallocate flux arrays
+      deallocate(FX,FY,FZ)
+      ! Sync residual
+      call this%cfg%sync(dmdotdtau)
+   end subroutine get_dmdotdtau
+
+
+   ! Get the face-centerd gradient of a scalar field
+   subroutine get_grad(this,F,gradX,gradY,gradZ)
+      implicit none
+      class(tpscalar), intent(in) :: this
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(out) :: F     !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(out) :: gradX !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(out) :: gradY !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(out) :: gradZ !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      integer :: i,j,k
+      ! Compute the gradient components
+      do k=this%cfg%kmin_,this%cfg%kmax_+1
+         do j=this%cfg%jmin_,this%cfg%jmax_+1
+            do i=this%cfg%imin_,this%cfg%imax_+1
+               gradX(i,j,k)=sum(this%grd_x(:,i,j,k)*F(i-1:i,j,k))
+               gradY(i,j,k)=sum(this%grd_y(:,i,j,k)*F(i,j-1:j,k))
+               gradZ(i,j,k)=sum(this%grd_z(:,i,j,k)*F(i,j,k-1:k))
+            end do
+         end do
+      end do
+   end subroutine get_grad
+
+
+   !> Calculate the CFL based on the input velocity field
+   subroutine get_cfl(this,U,V,W,dt,cfl)
+      use mpi_f08,  only: MPI_ALLREDUCE,MPI_MAX
+      use parallel, only: MPI_REAL_WP
+      implicit none
+      class(tpscalar), intent(in) :: this
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in) :: U !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in) :: V !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in) :: W !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      real(WP), intent(in)  :: dt
+      real(WP), intent(out) :: cfl
+      integer :: i,j,k,ierr
+      real(WP) :: my_CFL_x,my_CFL_y,my_CFL_z
+      real(WP) :: CFL_x,CFL_y,CFL_z
+      
+      ! Set the CFLs to zero
+      my_CFL_x=0.0_WP; my_CFL_y=0.0_WP; my_CFL_z=0.0_WP
+      do k=this%cfg%kmin_,this%cfg%kmax_
+         do j=this%cfg%jmin_,this%cfg%jmax_
+            do i=this%cfg%imin_,this%cfg%imax_
+               my_CFL_x=max(my_CFL_x,abs(U(i,j,k))*this%cfg%dxmi(i))
+               my_CFL_y=max(my_CFL_y,abs(V(i,j,k))*this%cfg%dymi(j))
+               my_CFL_z=max(my_CFL_z,abs(W(i,j,k))*this%cfg%dzmi(k))
+            end do
+         end do
+      end do
+      my_CFL_x=my_CFL_x*dt; my_CFL_y=my_CFL_y*dt; my_CFL_z=my_CFL_z*dt
+      
+      ! Get the parallel max
+      call MPI_ALLREDUCE(my_CFL_x,CFL_x,1,MPI_REAL_WP,MPI_MAX,this%cfg%comm,ierr)
+      call MPI_ALLREDUCE(my_CFL_y,CFL_y,1,MPI_REAL_WP,MPI_MAX,this%cfg%comm,ierr)
+      call MPI_ALLREDUCE(my_CFL_z,CFL_z,1,MPI_REAL_WP,MPI_MAX,this%cfg%comm,ierr)
+      
+      ! Return the maximum convective CFL
+      cfl=max(CFL_x,CFL_y,CFL_z)
+      
+   end subroutine get_cfl
    
    
    !> Print out info for tpscalar solver

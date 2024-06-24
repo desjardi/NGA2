@@ -20,7 +20,7 @@ module simulation
    !type(ddadi),       public :: vs
    type(ddadi),       public :: ss
    ! type(hypre_str),   public :: ms
-   type(ddadi),   public :: ms
+   ! type(ddadi),   public :: ms
    type(tpns),        public :: fs
    type(vfs),         public :: vf
    type(tpscalar),    public :: sc
@@ -28,17 +28,18 @@ module simulation
    
    !> Ensight postprocessing
    type(surfmesh) :: smesh
-   type(ensight)  :: ens_out
-   type(event)    :: ens_evt
+   type(ensight)  :: ens_out!,ens_mdot_out
+   type(event)    :: ens_evt!,ens_mdot_evt
    
    !> Simulation monitor file
-   type(monitor) :: mfile,cflfile,scfile
+   type(monitor) :: mfile,cflfile,scfile,mdotfile
    
    public :: simulation_init,simulation_run,simulation_final
    
    !> Private work arrays
    real(WP), dimension(:,:,:,:), allocatable :: resSC
-   real(WP), dimension(:,:,:),   allocatable :: mdot,mdot_new
+   real(WP), dimension(:,:,:),   allocatable :: VFgradX,VFgradY,VFgradZ,mdot,mdotL,mdotG,mdotL_old,mdotG_old,resmdotL,resmdotG
+   ! real(WP), dimension(:,:,:),   allocatable :: mdot_err_field
    real(WP), dimension(:,:,:),   allocatable :: resU,resV,resW
    real(WP), dimension(:,:,:),   allocatable :: Ui,Vi,Wi
    
@@ -46,6 +47,9 @@ module simulation
    real(WP), dimension(3) :: center
    real(WP) :: radius,depth
    integer :: iZl,iZg
+   type(timetracker), public :: pseudo_time
+   real(WP) :: mdot_int,mdotL_int,mdotG_int,mdot_err,mdotL_err,mdotG_err,evpsrc_tol,mdotL_int_err,mdotG_int_err
+   real(WP), dimension(:,:,:), allocatable :: k1,k2,k3,k4
    
 contains
 
@@ -71,21 +75,35 @@ contains
       
       ! Allocate work arrays
       allocate_work_arrays: block
-         allocate(resSC   (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_,1:2))
-         allocate(mdot    (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
-         allocate(mdot_new(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
-         allocate(resU    (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
-         allocate(resV    (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
-         allocate(resW    (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
-         allocate(Ui      (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
-         allocate(Vi      (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
-         allocate(Wi      (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+         allocate(resSC    (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_,1:2))
+         allocate(VFgradX  (cfg%imin_:cfg%imax_+1,cfg%jmin_:cfg%jmax_+1,cfg%kmin_:cfg%kmax_+1)); VFgradX=0.0_WP
+         allocate(VFgradY  (cfg%imin_:cfg%imax_+1,cfg%jmin_:cfg%jmax_+1,cfg%kmin_:cfg%kmax_+1)); VFgradY=0.0_WP
+         allocate(VFgradZ  (cfg%imin_:cfg%imax_+1,cfg%jmin_:cfg%jmax_+1,cfg%kmin_:cfg%kmax_+1)); VFgradZ=0.0_WP
+         allocate(mdot     (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+         allocate(mdotL    (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+         ! allocate(mdot_err_field(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_)); mdot_err_field=0.0_WP
+         allocate(mdotG    (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+         allocate(mdotL_old(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+         allocate(mdotG_old(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+         allocate(resmdotL (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+         allocate(resmdotG (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+         allocate(resU     (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+         allocate(resV     (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+         allocate(resW     (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+         allocate(Ui       (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+         allocate(Vi       (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+         allocate(Wi       (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+         ! Allocate the RK4 slopes
+         allocate(k1(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_)); k1 = 0.0_WP
+         allocate(k2(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_)); k2 = 0.0_WP
+         allocate(k3(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_)); k3 = 0.0_WP
+         allocate(k4(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_)); k4 = 0.0_WP
       end block allocate_work_arrays
       
       
       ! Initialize time tracker with 2 subiterations
       initialize_timetracker: block
-         time=timetracker(amRoot=cfg%amRoot)
+         time=timetracker(amRoot=cfg%amRoot,name='Main')
          call param_read('Max timestep size',time%dtmax)
          call param_read('Max cfl number',time%cflmax)
          call param_read('Max time',time%tmax)
@@ -215,13 +233,13 @@ contains
          ! Configure implicit scalar solver
          ss=ddadi(cfg=cfg,name='Scalar',nst=7)
          ! Configure implicit scalar solver
-         ms=ddadi(cfg=cfg,name='mdot',nst=7)
+         ! ms=ddadi(cfg=cfg,name='mdot',nst=7)
          ! ms=hypre_str(cfg=cfg,name='mdot',method=gmres_pfmg,nst=7)
          ! ms%maxlevel=10
          ! ms%maxit=50
          ! ms%rcvg=1e-6
          ! Setup the solver
-         call sc%setup(implicit_solver=ss,mdot_solver=ms)
+         call sc%setup(implicit_solver=ss)!,mdot_solver=ms)
          ! Initialize scalar fields
          do k=cfg%kmino_,cfg%kmaxo_
             do j=cfg%jmino_,cfg%jmaxo_
@@ -245,13 +263,31 @@ contains
                end do
             end do
          end do
-         ! Initialize the mass source term
+         ! Initialize a pseudo time tracker
+         pseudo_time=timetracker(amRoot=cfg%amRoot,name='Pseudo',print_info=.false.)
+         call param_read('Max pseudo timestep size',pseudo_time%dtmax)
+         call param_read('Max pseudo cfl number',pseudo_time%cflmax)
+         call param_read('Max pseudo time steps',pseudo_time%nmax)
+         call param_read('Tolerence',evpsrc_tol)
+         pseudo_time%dt=pseudo_time%dtmax
+         ! Initialize the evaporation mass source term
          where ((vf%VF.gt.0.0_WP).and.(vf%VF.lt.1.0_WP))
             mdot=1.0_WP
+            ! mdot=vf%VF
          else where
             mdot=0.0_WP
          end where
-         mdot_new=mdot
+         mdotL=mdot
+         mdotG=mdot
+         mdot_err =0.0_WP
+         mdotL_err=0.0_WP
+         mdotG_err=0.0_WP
+         mdotL_int_err=0.0_WP
+         mdotG_int_err=0.0_WP
+         ! Integral
+         call cfg%integrate(mdot,mdot_int)
+         call cfg%integrate(mdotL,mdotL_int)
+         call cfg%integrate(mdotG,mdotG_int)
       end block create_scalar
       
       
@@ -269,6 +305,16 @@ contains
          ens_out=ensight(cfg=cfg,name='FallingDrop')
          ! Create event for Ensight output
          ens_evt=event(time=time,name='Ensight output')
+
+         ! ens_mdot_out=ensight(cfg=cfg,name='mdot_ens')
+         ! ens_mdot_evt=event(time=pseudo_time,name='mdot_evt')
+         ! ens_mdot_evt%tper=1e-5
+         ! call ens_mdot_out%add_scalar('mdot' ,mdot)
+         ! call ens_mdot_out%add_scalar('mdotL',mdotL)
+         ! call ens_mdot_out%add_scalar('mdotG',mdotG)
+         ! call ens_mdot_out%add_scalar('mdot_err_field',mdot_err_field)
+         ! if (ens_mdot_evt%occurs()) call ens_mdot_out%write_data(pseudo_time%t)
+
          call param_read('Ensight output period',ens_evt%tper)
          ! Add variables to output
          call ens_out%add_vector('velocity',Ui,Vi,Wi)
@@ -279,8 +325,9 @@ contains
          do nsc=1,sc%nscalar
            call ens_out%add_scalar(trim(sc%SCname(nsc)),sc%SC(:,:,:,nsc))
          end do
-         call ens_out%add_scalar('mdot',mdot)
-         call ens_out%add_scalar('mdot_new',mdot_new)
+         call ens_out%add_scalar('mdot' ,mdot)
+         call ens_out%add_scalar('mdotL',mdotL)
+         call ens_out%add_scalar('mdotG',mdotG)
          ! Output to ensight
          if (ens_evt%occurs()) call ens_out%write_data(time%t)
       end block create_ensight
@@ -333,6 +380,22 @@ contains
            call scfile%add_column(sc%SCint(nsc),trim(sc%SCname(nsc))//'_int')
          end do
          call scfile%write()
+         ! Create mdot monitor
+         mdotfile=monitor(sc%cfg%amRoot,'mdot')
+         call mdotfile%add_column(time%n,'Timestep number')
+         call mdotfile%add_column(time%t,'Time')
+         call mdotfile%add_column(pseudo_time%t,'Pseudo time')
+         call mdotfile%add_column(pseudo_time%dt,'Pseudo time step')
+         call mdotfile%add_column(pseudo_time%cfl,'Maximum pseudo CFL')
+         call mdotfile%add_column(pseudo_time%n,'No. pseudo steps')
+         call mdotfile%add_column(mdot_int,'mdot int')
+         call mdotfile%add_column(mdotL_int,'shifted mdotL int')
+         call mdotfile%add_column(mdotG_int,'shifted mdotG int')
+         call mdotfile%add_column(mdotL_int_err,'mdotL int err')
+         call mdotfile%add_column(mdotG_int_err,'mdotG int err')
+         call mdotfile%add_column(mdotL_err,'max mdotL err')
+         call mdotfile%add_column(mdotG_err,'max mdotG err')
+         call mdotfile%write()
       end block create_monitor
       
       
@@ -346,12 +409,12 @@ contains
       
       ! Perform time integration
       do while (.not.time%done())
-         
+
          ! Increment time
          call fs%get_cfl(time%dt,time%cfl)
          call time%adjust_dt()
          call time%increment()
-         
+
          ! Remember old VOF
          vf%VFold=vf%VF
          
@@ -376,31 +439,124 @@ contains
          ! Now transport our phase-specific scalars
          advance_scalar: block
             use tpscalar_class, only: Lphase,Gphase
-            integer :: i,j,k,nsc
+            use mpi_f08,  only: MPI_ALLREDUCE,MPI_MAX
+            use parallel, only: MPI_REAL_WP
+            integer :: i,j,k,nsc,ierr
+            real(WP) :: my_mdot_err
+
             ! Get the phas-specific VOF
             sc%PVF(:,:,:,Lphase)=vf%VF
             sc%PVF(:,:,:,Gphase)=1.0_WP-vf%VF
+
             ! Explicit calculation of dSC/dt from advective term
             call sc%get_dSCdt(dSCdt=resSC,U=fs%U,V=fs%V,W=fs%W,VFold=vf%VFold,VF=vf%VF,detailed_face_flux=vf%detailed_face_flux,dt=time%dt)
+
             ! Advance advection
             do nsc=1,sc%nscalar
                where (sc%mask.eq.0.and.sc%PVF(:,:,:,sc%phase(nsc)).gt.0.0_WP) sc%SC(:,:,:,nsc)=((sc%PVFold(:,:,:,sc%phase(nsc)))*sc%SCold(:,:,:,nsc)+time%dt*resSC(:,:,:,nsc))/(sc%PVF(:,:,:,sc%phase(nsc)))
                where (sc%PVF(:,:,:,sc%phase(nsc)).eq.0.0_WP) sc%SC(:,:,:,nsc)=0.0_WP
             end do
+
             ! Advance diffusion
             call sc%solve_implicit(time%dt,sc%SC)
+
             ! Apply boundary conditions
             call sc%apply_bcond(time%t,time%dt)
+
             ! Update the mass source term
             where ((vf%VF.gt.0.0_WP).and.(vf%VF.lt.1.0_WP))
                mdot=1.0_WP
+               ! mdot=vf%VF
             else where
                mdot=0.0_WP
             end where
-            mdot_new=mdot
+            mdotL=mdot
+            mdotG=mdot
+
             ! Re-distribute the evaporation mass source term
-            call sc%redist_mdot(mdot,mdot_new)
-            end block advance_scalar
+            ! call sc%redist_mdot(mdot,mdotL)
+
+            ! Reset the pseudo time
+            call pseudo_time%reset()
+
+            ! Get the gradient of VOF
+            call sc%get_grad(vf%VF,VFgradX,VFgradY,VFgradZ)
+
+            ! Get the CFL based on the gradient of the VOF
+            call sc%get_cfl(VFgradX,VFgradY,VFgradZ,pseudo_time%dt,pseudo_time%cfl)
+
+            ! Adjust the pseudo time step
+            call pseudo_time%adjust_dt()
+
+            ! Move the evaporation source term away from the interface
+            do while (.not.pseudo_time%done())
+
+               ! Remember old mdot
+               mdotL_old=mdotL
+               mdotG_old=mdotG
+
+               ! Increment pseudo time
+               call pseudo_time%increment()
+
+               ! Assemble explicit residual
+               call sc%get_dmdotdtau( VFgradX, VFgradY, VFgradZ,mdotL_old,resmdotL)
+               call sc%get_dmdotdtau(-VFgradX,-VFgradY,-VFgradZ,mdotG_old,resmdotG)
+               
+               ! Apply these residuals
+               mdotL=mdotL_old+pseudo_time%dt*resmdotL
+               mdotG=mdotG_old+pseudo_time%dt*resmdotG
+
+               ! ! RK2 on the liquid side
+               ! k1=0.0_WP; k2=0.0_WP
+               ! call sc%get_dmdotdtau(VFgradX,VFgradY,VFgradZ,mdotL_old,k1)
+               ! call sc%get_dmdotdtau(VFgradX,VFgradY,VFgradZ,mdotL_old+0.5_WP*pseudo_time%dt*k1,k2)
+               ! mdotL=mdotL_old+pseudo_time%dt*k2
+               
+               ! ! RK2 on the gas side
+               ! k1=0.0_WP; k2=0.0_WP
+               ! call sc%get_dmdotdtau(-VFgradX,-VFgradY,-VFgradZ,mdotG_old,k1)
+               ! call sc%get_dmdotdtau(-VFgradX,-VFgradY,-VFgradZ,mdotG_old+0.5_WP*pseudo_time%dt*k1,k2)
+               ! mdotG=mdotG_old+pseudo_time%dt*k2
+
+               ! ! RK4 on the liquid side
+               ! k1=0.0_WP; k2=0.0_WP; k3=0.0_WP; k4=0.0_WP
+               ! call sc%get_dmdotdtau(VFgradX,VFgradY,VFgradZ,mdotL_old,k1)
+               ! call sc%get_dmdotdtau(VFgradX,VFgradY,VFgradZ,mdotL_old+0.5_WP*pseudo_time%dt*k1,k2)
+               ! call sc%get_dmdotdtau(VFgradX,VFgradY,VFgradZ,mdotL_old+0.5_WP*pseudo_time%dt*k2,k3)
+               ! call sc%get_dmdotdtau(VFgradX,VFgradY,VFgradZ,mdotL_old+pseudo_time%dt*k3,k4)
+               ! mdotL=mdotL_old+pseudo_time%dt/6.0_WP*(k1+2.0_WP*(k2+k3)+k4)
+               
+               ! ! RK4 on the gas side
+               ! k1=0.0_WP; k2=0.0_WP; k3=0.0_WP; k4=0.0_WP
+               ! call sc%get_dmdotdtau(-VFgradX,-VFgradY,-VFgradZ,mdotG_old,k1)
+               ! call sc%get_dmdotdtau(-VFgradX,-VFgradY,-VFgradZ,mdotG_old+0.5_WP*pseudo_time%dt*k1,k2)
+               ! call sc%get_dmdotdtau(-VFgradX,-VFgradY,-VFgradZ,mdotG_old+0.5_WP*pseudo_time%dt*k2,k3)
+               ! call sc%get_dmdotdtau(-VFgradX,-VFgradY,-VFgradZ,mdotG_old+pseudo_time%dt*k3,k4)
+               ! mdotG=mdotG_old+pseudo_time%dt/6.0_WP*(k1+2.0_WP*(k2+k3)+k4)
+
+               ! Calculate the error
+               my_mdot_err=maxval(abs(mdotL-mdotL_old))
+               call MPI_ALLREDUCE(my_mdot_err,mdotL_err,1,MPI_REAL_WP,MPI_Max,sc%cfg%comm,ierr)
+               my_mdot_err=maxval(abs(mdotG-mdotG_old))
+               call MPI_ALLREDUCE(my_mdot_err,mdotG_err,1,MPI_REAL_WP,MPI_Max,sc%cfg%comm,ierr)
+               mdot_err=max(mdotL_err,mdotG_err)
+               if (mdot_err.lt.evpsrc_tol) exit
+
+               ! mdot_err_field=mdotL-mdotL_old
+               ! if (ens_mdot_evt%occurs()) then
+               !    call ens_mdot_out%write_data(pseudo_time%t)
+               ! end if
+
+            end do
+
+            ! Integral of mdot
+            call cfg%integrate(mdot,mdot_int)
+            call cfg%integrate(mdotL,mdotL_int)
+            call cfg%integrate(mdotG,mdotG_int)
+            mdotL_int_err=abs(mdotL_int-mdot_int)
+            mdotG_int_err=abs(mdotG_int-mdot_int)
+
+         end block advance_scalar
          
          ! Prepare new staggered viscosity (at n+1)
          call fs%get_viscosity(vf=vf,strat=harmonic_visc)
@@ -477,6 +633,7 @@ contains
          call mfile%write()
          call cflfile%write()
          call scfile%write()
+         call mdotfile%write()
          
       end do
       
@@ -494,7 +651,7 @@ contains
       ! timetracker
       
       ! Deallocate work arrays
-      deallocate(resU,resV,resW,Ui,Vi,Wi,resSC,mdot,mdot_new)
+      deallocate(resU,resV,resW,Ui,Vi,Wi,resSC,mdot,mdotL,mdotL_old,mdotG,mdotG_old,resmdotL,resmdotG,k1,k2,k3,k4)
       
    end subroutine simulation_final
    
