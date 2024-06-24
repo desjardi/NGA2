@@ -37,9 +37,11 @@ module stracker_class
       ! Merging events
       integer :: nmerge
       integer, dimension(:,:), allocatable :: merge
+      logical, dimension(:,:), allocatable :: newid
       ! Merging2 events
       integer :: nmerge2
       integer, dimension(:,:), allocatable :: merge2
+      logical, dimension(:,:), allocatable :: newid2
       ! Splitting events
       integer :: nsplit
       integer, dimension(:,:), allocatable :: split
@@ -156,10 +158,14 @@ contains
       reset_merge_split: block
          this%nmerge=0
          if (allocated(this%merge)) deallocate(this%merge)
+         if (allocated(this%newid)) deallocate(this%newid)
          allocate(this%merge(1:2,1:min_struct_size)); this%merge=0
+         allocate(this%newid(1:2,1:min_struct_size)); this%newid=.false.
          this%nmerge2=0
          if (allocated(this%merge2)) deallocate(this%merge2)
+         if (allocated(this%newid2)) deallocate(this%newid2)
          allocate(this%merge2(1:2,1:min_struct_size)); this%merge2=0
+         allocate(this%newid2(1:2,1:min_struct_size)); this%newid2=.false.
          this%nsplit=0
          if (allocated(this%split)) deallocate(this%split)
          allocate(this%split(1:2,1:min_struct_size)); this%split=0
@@ -252,18 +258,29 @@ contains
       
       ! Execute all merges
       execute_merge: block
-         integer :: i,j,k,n,m
+         integer :: i,j,k,n,m,newid
          ! Traverse merge list
          do n=1,this%nmerge
+            ! Reuse a previously new id or make a new one
+            if (this%newid(1,n)) then 
+               newid = this%merge(1,n)
+            elseif (this%newid(2,n)) then
+               newid = this%merge(2,n)
+            else
+               newid=this%generate_new_id()
+            end if
             ! Loop over full domain and update id based on that merge event
             do k=this%vf%cfg%kmino_,this%vf%cfg%kmaxo_; do j=this%vf%cfg%jmino_,this%vf%cfg%jmaxo_; do i=this%vf%cfg%imino_,this%vf%cfg%imaxo_
-               if (this%id_rmp(i,j,k).eq.this%merge(2,n)) this%id_rmp(i,j,k)=this%merge(1,n)
+               if (this%id_rmp(i,j,k).eq.this%merge(1,n)) this%id_rmp(i,j,k)=newid
+               if (this%id_rmp(i,j,k).eq.this%merge(2,n)) this%id_rmp(i,j,k)=newid
             end do; end do; end do
             ! Loop over remaining merge events and update id based on that merge event
             do m=1,this%nmerge
-               if (this%merge(1,m).eq.this%merge(2,n)) this%merge(1,m)=this%merge(1,n)
-               if (this%merge(2,m).eq.this%merge(2,n)) this%merge(2,m)=this%merge(1,n)
-               i=minval(this%merge(:,m)); j=maxval(this%merge(:,m)); this%merge(:,m)=[i,j]
+               if (this%merge(1,m).eq.this%merge(1,n)) this%merge(1,m)=newid
+               if (this%merge(1,m).eq.this%merge(2,n)) this%merge(1,m)=newid
+               if (this%merge(2,m).eq.this%merge(1,n)) this%merge(2,m)=newid
+               if (this%merge(2,m).eq.this%merge(2,n)) this%merge(2,m)=newid
+               !i=minval(this%merge(:,m)); j=maxval(this%merge(:,m)); this%merge(:,m)=[i,j]
             end do
          end do
       end block execute_merge
@@ -361,18 +378,29 @@ contains
 
       ! Execute all merge2
       execute_merge2: block
-         integer :: i,j,n,nn,m
+         integer :: i,j,n,nn,m,newid
          ! Traverse merge2 list
          do n=1,this%nmerge2
+            ! Reuse a previously new id or make a new one
+            if (this%newid2(1,n)) then 
+               newid = this%merge2(1,n)
+            elseif (this%newid2(2,n)) then
+               newid = this%merge2(2,n)
+            else
+               newid=this%generate_new_id()
+            end if
             ! Loop over structures and update id based on merge2 events
             do nn=1,this%nstruct
-               if (this%struct(nn)%id.eq.this%merge2(2,n)) this%struct(nn)%id=this%merge2(1,n)
+               if (this%struct(nn)%id.eq.this%merge2(1,n)) this%struct(nn)%id=newid
+               if (this%struct(nn)%id.eq.this%merge2(2,n)) this%struct(nn)%id=newid
             end do
             ! Loop over remaining merge events and update id based on that merge2 event
             do m=1,this%nmerge2
-               if (this%merge2(1,m).eq.this%merge2(2,n)) this%merge2(1,m)=this%merge2(1,n)
-               if (this%merge2(2,m).eq.this%merge2(2,n)) this%merge2(2,m)=this%merge2(1,n)
-               i=minval(this%merge2(:,m)); j=maxval(this%merge2(:,m)); this%merge2(:,m)=[i,j]
+               if (this%merge2(1,m).eq.this%merge2(1,n)) this%merge2(1,m)=newid
+               if (this%merge2(1,m).eq.this%merge2(2,n)) this%merge2(1,m)=newid
+               if (this%merge2(2,m).eq.this%merge2(1,n)) this%merge2(2,m)=newid
+               if (this%merge2(2,m).eq.this%merge2(2,n)) this%merge2(2,m)=newid
+               !i=minval(this%merge2(:,m)); j=maxval(this%merge2(:,m)); this%merge2(:,m)=[i,j]
             end do
          end do
       end block execute_merge2
@@ -449,7 +477,8 @@ contains
          implicit none
          integer, intent(in) :: id1,id2
          integer :: n,size_now,size_new
-         integer, dimension(:,:), allocatable :: tmp
+         integer, dimension(:,:), allocatable :: tmp_int
+         logical, dimension(:,:), allocatable :: tmp_log
          ! Skip self-merge
          if (id1.eq.id2) return
          ! Skip redundant merge
@@ -460,10 +489,14 @@ contains
          size_now=size(this%merge,dim=2)
          if (this%nmerge.eq.size_now) then
             size_new=int(real(size_now,WP)*coeff_up)
-            allocate(tmp(1:2,1:size_new))
-            tmp(:,1:this%nmerge)=this%merge
-            tmp(:,this%nmerge+1:)=0
-            call move_alloc(tmp,this%merge)
+            allocate(tmp_int(1:2,1:size_new))
+            allocate(tmp_log(1:2,1:size_new))
+            tmp_int(:,1:this%nmerge)=this%merge
+            tmp_log(:,1:this%nmerge)=this%newid
+            tmp_int(:,this%nmerge+1:)=0
+            tmp_log(:,this%nmerge+1:)=.false.
+            call move_alloc(tmp_int,this%merge)
+            call move_alloc(tmp_log,this%newid)
          end if
          this%nmerge=this%nmerge+1
          this%merge(:,this%nmerge)=[id1,id2]
