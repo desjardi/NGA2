@@ -36,12 +36,12 @@ module stracker_class
       integer :: phase                !< 0 is liquid, 1 is gas
       ! Merging events
       integer :: nmerge
-      integer, dimension(:,:), allocatable :: merge
-      logical, dimension(:,:), allocatable :: newid
+      integer, dimension(:,:), allocatable :: merge  
+      integer, dimension(  :), allocatable :: newid
       ! Merging2 events
       integer :: nmerge2
-      integer, dimension(:,:), allocatable :: merge2
-      logical, dimension(:,:), allocatable :: newid2
+      integer, dimension(:,:), allocatable :: merge2 
+      integer, dimension(  :), allocatable :: newid2
       ! Splitting events
       integer :: nsplit
       integer, dimension(:,:), allocatable :: split
@@ -160,12 +160,12 @@ contains
          if (allocated(this%merge)) deallocate(this%merge)
          if (allocated(this%newid)) deallocate(this%newid)
          allocate(this%merge(1:2,1:min_struct_size)); this%merge=0
-         allocate(this%newid(1:2,1:min_struct_size)); this%newid=.false.
+         allocate(this%newid(    1:min_struct_size)); this%newid=0
          this%nmerge2=0
          if (allocated(this%merge2)) deallocate(this%merge2)
          if (allocated(this%newid2)) deallocate(this%newid2)
          allocate(this%merge2(1:2,1:min_struct_size)); this%merge2=0
-         allocate(this%newid2(1:2,1:min_struct_size)); this%newid2=.false.
+         allocate(this%newid2(    1:min_struct_size)); this%newid2=0
          this%nsplit=0
          if (allocated(this%split)) deallocate(this%split)
          allocate(this%split(1:2,1:min_struct_size)); this%split=0
@@ -255,36 +255,56 @@ contains
          ! Deallocate
          deallocate(nmerge_proc,merge_all)
       end block gather_merge
+
+      ! Determine newid for each merge
+      determine_newid: block 
+         integer :: n,m,p,q,removeid
+         ! Traverse merge list 
+         do n=1,this%nmerge
+            ! Generate new id
+            if (this%newid(n).eq.0) this%newid(n)=this%generate_new_id()
+            ! Loop over subsequent merges and populate new id if part of same structure
+            do m=n,this%nmerge; do p=1,2
+               ! Check if this merge is part of the same structures
+               if (any(this%merge(:,m).eq.this%merge(p,n))) then 
+                  ! Check if this merge does not have a new id or already has the same id
+                  if (this%newid(m).eq.0.or.this%newid(m).eq.this%newid(n)) then ! use same new id
+                     this%newid(m)=this%newid(n)
+                  else ! Already has a different new id -> combine merges
+                     removeid=this%newid(m)
+                     this%idcount=this%idcount-1
+                     do q=m,this%nmerge
+                        ! Part of same structure use same newid
+                        if (this%newid(q).eq.this%newid(m)) this%newid(q)=this%newid(n)
+                        ! Shift new id to removed extra new id
+                        if (this%newid(q).gt.removeid) this%newid(q)=this%newid(q)-1
+                     end do
+                  end if
+               end if
+            end do; end do
+         end do
+      end block determine_newid
       
       ! Execute all merges
       execute_merge: block
-         integer :: i,j,k,n,m,newid
+         integer :: i,j,k,n,m
+         integer :: oldid1,oldid2,newid
          ! Traverse merge list
          do n=1,this%nmerge
-            ! Reuse a previously new id or make a new one
-            if (this%newid(1,n)) then 
-               newid = this%merge(1,n)
-            elseif (this%newid(2,n)) then
-               newid = this%merge(2,n)
-            else
-               newid=this%generate_new_id()
-            end if
+            oldid1 = this%merge(1,n)
+            oldid2 = this%merge(2,n)
+            newid  = this%newid(  n)
             ! Loop over full domain and update id based on that merge event
             do k=this%vf%cfg%kmino_,this%vf%cfg%kmaxo_; do j=this%vf%cfg%jmino_,this%vf%cfg%jmaxo_; do i=this%vf%cfg%imino_,this%vf%cfg%imaxo_
-               if (this%id_rmp(i,j,k).eq.this%merge(1,n)) this%id_rmp(i,j,k)=newid
-               if (this%id_rmp(i,j,k).eq.this%merge(2,n)) this%id_rmp(i,j,k)=newid
+               if (this%id_rmp(i,j,k).eq.oldid1) this%id_rmp(i,j,k)=newid
+               if (this%id_rmp(i,j,k).eq.oldid2) this%id_rmp(i,j,k)=newid
             end do; end do; end do
-            ! Loop over remaining merge events and update id based on that merge event
-            do m=1,this%nmerge
-               if (this%merge(1,m).eq.this%merge(1,n)) this%merge(1,m)=newid
-               if (this%merge(1,m).eq.this%merge(2,n)) this%merge(1,m)=newid
-               if (this%merge(2,m).eq.this%merge(1,n)) this%merge(2,m)=newid
-               if (this%merge(2,m).eq.this%merge(2,n)) this%merge(2,m)=newid
-               !i=minval(this%merge(:,m)); j=maxval(this%merge(:,m)); this%merge(:,m)=[i,j]
-            end do
          end do
       end block execute_merge
-      
+
+      ! Communicate id_rmp
+      call this%vf%cfg%sync(this%id_rmp)
+
       ! Perform a CCL build - same_label is false if id_rmp are different and non-zero
       call this%build(make_label)
       
@@ -376,31 +396,48 @@ contains
          deallocate(nmerge2_proc,merge2_all)
       end block gather_merge2
 
+      ! Determine newid for each merge
+      determine_newid2: block 
+         integer :: n,m,p,q,removeid
+         ! Traverse merge list 
+         do n=1,this%nmerge2
+            ! Generate new id
+            if (this%newid2(n).eq.0) this%newid2(n)=this%generate_new_id()
+            ! Loop over subsequent merges and populate new id if part of same structure
+            do m=n,this%nmerge2; do p=1,2
+               ! Check if this merge is part of the same structures
+               if (any(this%merge2(:,m).eq.this%merge2(p,n))) then 
+                  ! Check if this merge does not have a new id or already has the same id
+                  if (this%newid2(m).eq.0.or.this%newid2(m).eq.this%newid2(n)) then ! use same new id
+                     this%newid2(m)=this%newid2(n)
+                  else ! Already has a different new id -> combine merges
+                     removeid=this%newid2(m)
+                     this%idcount=this%idcount-1
+                     do q=m,this%nmerge
+                        ! Part of same structure use same newid
+                        if (this%newid2(q).eq.this%newid2(m)) this%newid2(q)=this%newid2(n)
+                        ! Shift new id to removed extra new id
+                        if (this%newid2(q).gt.removeid) this%newid2(q)=this%newid2(q)-1
+                     end do
+                  end if
+               end if
+            end do; end do
+         end do
+      end block determine_newid2
+
       ! Execute all merge2
       execute_merge2: block
-         integer :: i,j,n,nn,m,newid
+         integer :: i,j,n,nn,m
+         integer :: oldid1,oldid2,newid
          ! Traverse merge2 list
          do n=1,this%nmerge2
-            ! Reuse a previously new id or make a new one
-            if (this%newid2(1,n)) then 
-               newid = this%merge2(1,n)
-            elseif (this%newid2(2,n)) then
-               newid = this%merge2(2,n)
-            else
-               newid=this%generate_new_id()
-            end if
+            oldid1 = this%merge2(1,n)
+            oldid2 = this%merge2(2,n)
+            newid  = this%newid2(  n)
             ! Loop over structures and update id based on merge2 events
             do nn=1,this%nstruct
-               if (this%struct(nn)%id.eq.this%merge2(1,n)) this%struct(nn)%id=newid
-               if (this%struct(nn)%id.eq.this%merge2(2,n)) this%struct(nn)%id=newid
-            end do
-            ! Loop over remaining merge events and update id based on that merge2 event
-            do m=1,this%nmerge2
-               if (this%merge2(1,m).eq.this%merge2(1,n)) this%merge2(1,m)=newid
-               if (this%merge2(1,m).eq.this%merge2(2,n)) this%merge2(1,m)=newid
-               if (this%merge2(2,m).eq.this%merge2(1,n)) this%merge2(2,m)=newid
-               if (this%merge2(2,m).eq.this%merge2(2,n)) this%merge2(2,m)=newid
-               !i=minval(this%merge2(:,m)); j=maxval(this%merge2(:,m)); this%merge2(:,m)=[i,j]
+               if (this%struct(nn)%id.eq.oldid1) this%struct(nn)%id=newid
+               if (this%struct(nn)%id.eq.oldid2) this%struct(nn)%id=newid
             end do
          end do
       end block execute_merge2
@@ -476,30 +513,26 @@ contains
       subroutine add_merge(id1,id2)
          implicit none
          integer, intent(in) :: id1,id2
+         integer :: newid
          integer :: n,size_now,size_new
-         integer, dimension(:,:), allocatable :: tmp_int
-         logical, dimension(:,:), allocatable :: tmp_log
+         integer, dimension(:,:), allocatable :: tmp
          ! Skip self-merge
          if (id1.eq.id2) return
          ! Skip redundant merge
          do n=1,this%nmerge
             if (all(this%merge(:,n).eq.[id1,id2])) return
          end do
-         ! Create new merge event
+         ! Deal with memory
          size_now=size(this%merge,dim=2)
          if (this%nmerge.eq.size_now) then
             size_new=int(real(size_now,WP)*coeff_up)
-            allocate(tmp_int(1:2,1:size_new))
-            allocate(tmp_log(1:2,1:size_new))
-            tmp_int(:,1:this%nmerge)=this%merge
-            tmp_log(:,1:this%nmerge)=this%newid
-            tmp_int(:,this%nmerge+1:)=0
-            tmp_log(:,this%nmerge+1:)=.false.
-            call move_alloc(tmp_int,this%merge)
-            call move_alloc(tmp_log,this%newid)
+            allocate(tmp(1:2,1:size_new))
+            tmp(:,1:this%nmerge)=this%merge
+            tmp(:,this%nmerge+1:)=0
+            call move_alloc(tmp,this%merge)
          end if
          this%nmerge=this%nmerge+1
-         this%merge(:,this%nmerge)=[id1,id2]
+         this%merge(:,this%nmerge)=[id1,id2,newid]
       end subroutine add_merge
 
       !> Subroutine that adds a new merge2 event (id1<id2 required)
