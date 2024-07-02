@@ -90,6 +90,7 @@ module tpscalar_class
       procedure :: add_bcond                              !< Add a boundary condition
       procedure :: get_bcond                              !< Get a boundary condition
       procedure :: apply_bcond                            !< Apply all boundary conditions
+      ! procedure :: apply_bcond_mdot                       !< Apply all boundary conditions for mdot
       procedure :: get_dSCdt                              !< Calculate drhoSC/dt from advective fluxes
       ! procedure :: get_dSCdt_diff                         !< Calculate drhoSC/dt from diffusive fluxes
       procedure :: get_max                                !< Calculate maximum and integral field values
@@ -452,7 +453,7 @@ contains
       ! Traverse bcond list
       my_bc=>this%first_bc
       do while (associated(my_bc))
-         
+
          ! Only processes inside the bcond work here
          if (my_bc%itr%amIn) then
             
@@ -879,16 +880,18 @@ contains
 
    
    !> Calculate the explicit mdot time derivative based on VOF
-   subroutine get_dmdotdtau(this,U,V,W,mdot,dmdotdtau)
+   subroutine get_dmdotdtau(this,U,V,W,SD,mdot,dmdotdtau)
       implicit none
       class(tpscalar), intent(inout) :: this
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in)  :: U         !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in)  :: V         !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in)  :: W         !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in)  :: SD        !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in)  :: mdot      !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(out) :: dmdotdtau !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       integer :: i,j,k
       real(WP), dimension(:,:,:), allocatable :: FX,FY,FZ
+      real(WP) :: mysurf
       ! Zero out mdotd/tau array
       dmdotdtau=0.0_WP
       ! Allocate flux arrays
@@ -917,6 +920,17 @@ contains
                ! FY(i,j,k)=-V(i,j,k)*sum(this%itp_y(:,i,j,k)*mdot(i,j-1:j,k))
                ! ! Fluxes on z-face
                ! FZ(i,j,k)=-W(i,j,k)*sum(this%itp_z(:,i,j,k)*mdot(i,j,k-1:k))
+
+               ! Surface density area averaged flux
+               ! ! Fluxes on x-face
+               ! mysurf=sum(SD(i-1:i,j,k)*this%cfg%vol(i-1:i,j,k))
+               ! FX(i,j,k)=-U(i,j,k)*sum(SD(i-1:i,j,k)*this%cfg%vol(i-1:i,j,k)*mdot(i-1:i,j,k))/mysurf
+               ! ! Fluxes on y-face
+               ! mysurf=sum(SD(i,j-1:j,k)*this%cfg%vol(i,j-1:j,k))
+               ! FY(i,j,k)=-V(i,j,k)*sum(SD(i,j-1:j,k)*this%cfg%vol(i,j-1:j,k)*mdot(i,j-1:j,k))/mysurf
+               ! ! Fluxes on z-face
+               ! mysurf=sum(SD(i,j,k-1:k)*this%cfg%vol(i,j,k-1:k))
+               ! FZ(i,j,k)=-W(i,j,k)*sum(SD(i,j,k-1:k)*this%cfg%vol(i,j,k-1:k)*mdot(i,j,k-1:k))/mysurf
             end do
          end do
       end do
@@ -935,6 +949,59 @@ contains
       ! Sync residual
       call this%cfg%sync(dmdotdtau)
    end subroutine get_dmdotdtau
+
+
+   !> Enforce boundary condition on the mass source term
+   ! subroutine apply_bcond_mdot(this,t,dt,mdotL,mdotG)
+   !    use messager, only: die
+   !    implicit none
+   !    class(tpscalar), intent(inout) :: this
+   !    real(WP), intent(in) :: t,dt
+   !    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: mdotL !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+   !    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: mdotG !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+   !    integer :: i,j,k,n
+   !    type(bcond), pointer :: my_bc
+      
+   !    ! Traverse bcond list
+   !    my_bc=>this%first_bc
+   !    do while (associated(my_bc))
+         
+   !       ! Only processes inside the bcond work here
+   !       if (my_bc%itr%amIn) then
+            
+   !          ! Select appropriate action based on the bcond type
+   !          select case (my_bc%type)
+               
+   !          case (dirichlet)           ! Apply Dirichlet conditions
+               
+   !             ! This is done by the user directly
+   !             ! Unclear whether we want to do this within the solver...
+               
+   !          case (neumann)             ! Apply Neumann condition
+               
+   !             ! Implement based on bcond direction
+   !             do n=1,my_bc%itr%n_
+   !                i=my_bc%itr%map(1,n); j=my_bc%itr%map(2,n); k=my_bc%itr%map(3,n)
+   !                mdotL(i,j,k)=mdotL(i-shift(1,my_bc%dir),j-shift(2,my_bc%dir),k-shift(3,my_bc%dir))
+   !                mdotG(i,j,k)=mdotG(i-shift(1,my_bc%dir),j-shift(2,my_bc%dir),k-shift(3,my_bc%dir))
+   !             end do
+               
+   !          case default
+   !             call die('[tpscalar apply_bcond_mdot] Unknown bcond type')
+   !          end select
+            
+   !       end if
+         
+   !       ! Move on to the next bcond
+   !       my_bc=>my_bc%next
+         
+   !    end do
+      
+   !    ! Sync full fields after all bcond
+   !    call this%cfg%sync(mdotL)
+   !    call this%cfg%sync(mdotG)
+      
+   ! end subroutine apply_bcond_mdot
 
 
    ! Get the face-centerd gradient of a scalar field
@@ -956,6 +1023,9 @@ contains
             end do
          end do
       end do
+      call this%cfg%sync(gradX)
+      call this%cfg%sync(gradY)
+      call this%cfg%sync(gradZ)
    end subroutine get_grad
 
 

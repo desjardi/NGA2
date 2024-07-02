@@ -61,7 +61,7 @@ contains
       real(WP), intent(in) :: t
       real(WP) :: G
       ! Create the droplet
-      G=radius-sqrt(sum((xyz-center)**2))
+      G=radius-abs(xyz(1)-center(1))
       ! Add the pool
       ! G=max(G,depth-xyz(2))
    end function levelset_falling_drop
@@ -76,17 +76,17 @@ contains
       ! Allocate work arrays
       allocate_work_arrays: block
          allocate(resSC    (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_,1:2))
-         allocate(VFgradX  (cfg%imin_:cfg%imax_+1,cfg%jmin_:cfg%jmax_+1,cfg%kmin_:cfg%kmax_+1)); VFgradX=0.0_WP
-         allocate(VFgradY  (cfg%imin_:cfg%imax_+1,cfg%jmin_:cfg%jmax_+1,cfg%kmin_:cfg%kmax_+1)); VFgradY=0.0_WP
-         allocate(VFgradZ  (cfg%imin_:cfg%imax_+1,cfg%jmin_:cfg%jmax_+1,cfg%kmin_:cfg%kmax_+1)); VFgradZ=0.0_WP
-         allocate(mdot     (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
-         allocate(mdotL    (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+         allocate(VFgradX  (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_)); VFgradX=0.0_WP
+         allocate(VFgradY  (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_)); VFgradY=0.0_WP
+         allocate(VFgradZ  (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_)); VFgradZ=0.0_WP
+         allocate(mdot     (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_)); mdot =0.0_WP
+         allocate(mdotL    (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_)); mdotL=0.0_WP
+         allocate(mdotG    (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_)); mdotG=0.0_WP
+         allocate(mdotL_old(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_)); mdotL_old=0.0_WP
+         allocate(mdotG_old(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_)); mdotG_old=0.0_WP
+         allocate(resmdotL (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_)); resmdotL=0.0_WP
+         allocate(resmdotG (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_)); resmdotG=0.0_WP
          ! allocate(mdot_err_field(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_)); mdot_err_field=0.0_WP
-         allocate(mdotG    (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
-         allocate(mdotL_old(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
-         allocate(mdotG_old(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
-         allocate(resmdotL (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
-         allocate(resmdotG (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
          allocate(resU     (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
          allocate(resV     (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
          allocate(resW     (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
@@ -94,10 +94,10 @@ contains
          allocate(Vi       (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
          allocate(Wi       (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
          ! Allocate the RK4 slopes
-         allocate(k1(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_)); k1 = 0.0_WP
-         allocate(k2(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_)); k2 = 0.0_WP
-         allocate(k3(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_)); k3 = 0.0_WP
-         allocate(k4(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_)); k4 = 0.0_WP
+         allocate(k1(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_)); k1=0.0_WP
+         allocate(k2(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_)); k2=0.0_WP
+         allocate(k3(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_)); k3=0.0_WP
+         allocate(k4(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_)); k4=0.0_WP
       end block allocate_work_arrays
       
       
@@ -110,7 +110,7 @@ contains
          time%dt=time%dtmax
          time%itmax=2
       end block initialize_timetracker
-      
+
       
       ! Initialize our VOF solver and field
       create_and_initialize_vof: block
@@ -173,7 +173,7 @@ contains
          ! Reset moments to guarantee compatibility with interface reconstruction
          call vf%reset_volume_moments()
       end block create_and_initialize_vof
-      
+
       
       ! Create a two-phase flow solver without bconds
       create_and_initialize_flow_solver: block
@@ -208,7 +208,7 @@ contains
          call fs%interp_vel(Ui,Vi,Wi)
          call fs%get_div()
       end block create_and_initialize_flow_solver
-      
+
       
       ! Create a one-sided scalar solver
       create_scalar: block
@@ -247,13 +247,13 @@ contains
                   ! Liquid scalar
                   if (vf%VF(i,j,k).gt.0.0_WP) then
                      ! We are in the liquid
-                     if (cfg%ym(j).gt.depth+cfg%dy(j)) then
+                     ! if (cfg%ym(j).gt.depth+cfg%dy(j)) then
                         ! We are above the pool
                         sc%SC(i,j,k,iZl)=1.0_WP
-                     else
-                        ! We are in the pool
-                        sc%SC(i,j,k,iZl)=2.0_WP
-                     end if
+                     ! else
+                     !    ! We are in the pool
+                     !    sc%SC(i,j,k,iZl)=2.0_WP
+                     ! end if
                   end if
                   ! Gas scalar
                   if (vf%VF(i,j,k).lt.1.0_WP) then
@@ -270,6 +270,8 @@ contains
          call param_read('Max pseudo time steps',pseudo_time%nmax)
          call param_read('Tolerence',evpsrc_tol)
          pseudo_time%dt=pseudo_time%dtmax
+         ! Get the gradient of VOF
+         call sc%get_grad(vf%VF,VFgradX,VFgradY,VFgradZ)
          ! Initialize the evaporation mass source term
          where ((vf%VF.gt.0.0_WP).and.(vf%VF.lt.1.0_WP))
             mdot=1.0_WP
@@ -289,7 +291,7 @@ contains
          call cfg%integrate(mdotL,mdotL_int)
          call cfg%integrate(mdotG,mdotG_int)
       end block create_scalar
-      
+
       
       ! Create surfmesh object for interface polygon output
       create_smesh: block
@@ -332,7 +334,7 @@ contains
          ! Output to ensight
          if (ens_evt%occurs()) call ens_out%write_data(time%t)
       end block create_ensight
-      
+
       
       ! Create a monitor file
       create_monitor: block
@@ -398,7 +400,7 @@ contains
          call mdotfile%add_column(mdotG_err,'max mdotG err')
          call mdotfile%write()
       end block create_monitor
-      
+
       
    end subroutine simulation_init
    
@@ -535,11 +537,16 @@ contains
                ! call sc%get_dmdotdtau(-VFgradX,-VFgradY,-VFgradZ,mdotG_old+pseudo_time%dt*k3,k4)
                ! mdotG=mdotG_old+pseudo_time%dt/6.0_WP*(k1+2.0_WP*(k2+k3)+k4)
 
+               ! Apply boundary conditions
+               ! call sc%apply_bcond_mdot(pseudo_time%t,pseudo_time%dt,mdotL,mdotG)
+
                ! Calculate the error
                my_mdot_err=maxval(abs(mdotL-mdotL_old))
                call MPI_ALLREDUCE(my_mdot_err,mdotL_err,1,MPI_REAL_WP,MPI_Max,sc%cfg%comm,ierr)
+               ! if (cfg%amRoot) print*,'max L error = ',mdotL_err
                my_mdot_err=maxval(abs(mdotG-mdotG_old))
                call MPI_ALLREDUCE(my_mdot_err,mdotG_err,1,MPI_REAL_WP,MPI_Max,sc%cfg%comm,ierr)
+               ! if (cfg%amRoot) print*,'max G error = ',mdotG_err
                mdot_err=max(mdotL_err,mdotG_err)
                if (mdot_err.lt.evpsrc_tol) exit
 
