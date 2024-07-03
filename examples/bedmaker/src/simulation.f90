@@ -76,8 +76,8 @@ contains
          ! Set gravity
          call param_read('Gravity',lp%gravity)
       end block initialize_lpt
-
-
+      
+      
       ! Set injection parameters
       injection_parameters: block
          real(WP) :: pmin,pmax
@@ -101,6 +101,26 @@ contains
       end block injection_parameters
       
       
+      ! Restart bed here
+      read_bed: block
+         integer :: i
+         ! Reset injection duration to zero
+         inj_duration=0.0_WP
+         ! Restart from bed file
+         call lp%read(filename='bed.file')
+         ! Loop through particles
+         do i=1,lp%np_
+            ! Remove top of bed
+            if (lp%p(i)%pos(2).gt.0.4_WP) lp%p(i)%flag=1
+            ! Zero out velocity
+            lp%p(i)%vel=0.0_WP
+         end do
+         call lp%sync()
+         ! Recalculate VF
+         call lp%update_VF()
+      end block read_bed
+      
+      
       ! Prepare our fluid phase info based on a Taylor vortex
       initialize_fluid: block
          real(WP) :: rhof,viscf
@@ -119,13 +139,15 @@ contains
       ! Create partmesh object for Lagrangian particle output
       create_pmesh: block
          integer :: i
-         pmesh=partmesh(nvar=1,nvec=2,name='lpt')
+         pmesh=partmesh(nvar=2,nvec=2,name='lpt')
          pmesh%varname(1)='radius'
+         pmesh%varname(2)='id'
          pmesh%vecname(1)='velocity'
          pmesh%vecname(2)='Fcol'
          call lp%update_partmesh(pmesh)
          do i=1,lp%np_
             pmesh%var(  1,i)=0.5_WP*lp%p(i)%d
+            pmesh%var(  2,i)=real(lp%p(i)%id,WP)
             pmesh%vec(:,1,i)=lp%p(i)%vel
             pmesh%vec(:,2,i)=lp%p(i)%Acol
          end do
@@ -214,6 +236,7 @@ contains
                call lp%update_partmesh(pmesh)
                do i=1,lp%np_
                   pmesh%var(  1,i)=0.5_WP*lp%p(i)%d
+                  pmesh%var(  2,i)=real(lp%p(i)%id,WP)
                   pmesh%vec(:,1,i)=lp%p(i)%vel
                   pmesh%vec(:,2,i)=lp%p(i)%Acol
                end do
