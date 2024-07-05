@@ -35,17 +35,17 @@ contains
          
          ! Create simple rectilinear grid
          do i=1,nx+1
-            x(i)=real(i-1,WP)/real(nx,WP)*Lx
+            x(i)=real(i-1,WP)/real(nx,WP)*Lx-0.5_WP*Lx
          end do
          do j=1,ny+1
-            y(j)=real(j-1,WP)/real(ny,WP)*Ly-0.5_WP*Ly
+            y(j)=real(j-1,WP)/real(ny,WP)*Ly
          end do
          do k=1,nz+1
             z(k)=real(k-1,WP)/real(nz,WP)*Lz-0.5_WP*Lz
          end do
          
          ! General serial grid object
-         grid=sgrid(coord=cartesian,no=3,x=x,y=y,z=z,xper=.false.,yper=.true.,zper=.true.,name='Particles')
+         grid=sgrid(coord=cartesian,no=3,x=x,y=y,z=z,xper=.true.,yper=.false.,zper=.false.,name='part_water')
          
       end block create_grid
       
@@ -71,7 +71,9 @@ contains
          do k=cfg%kmino_,cfg%kmaxo_
             do j=cfg%jmino_,cfg%jmaxo_
                do i=cfg%imino_,cfg%imaxo_
-                  if (i.gt.cfg%imax) cfg%VF(i,j,k)=0.0_WP
+                  if (j.lt.cfg%jmin) cfg%VF(i,j,k)=0.0_WP
+                  if (k.lt.cfg%kmin) cfg%VF(i,j,k)=0.0_WP
+                  if (k.gt.cfg%kmax) cfg%VF(i,j,k)=0.0_WP
                end do
             end do
          end do
