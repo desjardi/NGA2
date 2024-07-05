@@ -62,7 +62,7 @@ contains
       real(WP), intent(in) :: t
       real(WP) :: G
       ! Add the pool
-      G=xyz(2)-depth
+      G=depth-xyz(2)
    end function levelset_pool
    
    
@@ -108,8 +108,8 @@ contains
          call param_read('Gravity',lp%gravity)
          ! Set filter scale to 3.5*dx
          lp%filter_width=3.5_WP*cfg%min_meshsize
-         ! Turn off drag (Tenneti blows up?)
-         lp%drag_model='SN'
+         ! Set drag model
+         lp%drag_model='Tenneti'
          ! Initialize with zero particles
          call lp%resize(0)
          ! Get initial particle volume fraction
@@ -178,8 +178,8 @@ contains
                ! Adjust velocity
                tmp(i)%vel=[0.0_WP,-vbed,0.0_WP]
                ! Zero out collisions
-               !tmp(i)%Acol=0.0_WP
-               !tmp(i)%Tcol=0.0_WP
+               tmp(i)%Acol=0.0_WP
+               tmp(i)%Tcol=0.0_WP
                ! Zero out angular velocity
                tmp(i)%angVel=0.0_WP
             end do
@@ -203,7 +203,6 @@ contains
          call vf%initialize(cfg=cfg,reconstruction_method=plicnet,transport_method=remap,name='VOF')
          ! Initialize to a pool
          call param_read('Pool depth',depth)
-         depth=cfg%xL-depth
          do k=vf%cfg%kmino_,vf%cfg%kmaxo_
             do j=vf%cfg%jmino_,vf%cfg%jmaxo_
                do i=vf%cfg%imino_,vf%cfg%imaxo_
