@@ -4,7 +4,7 @@ module simulation
    use geometry,          only: cfg
    use lpt_class,         only: lpt,part,MPI_PART_SIZE,MPI_PART
    use hypre_str_class,   only: hypre_str
-   !use ddadi_class,       only: ddadi
+   use ddadi_class,       only: ddadi
    use tpns_class,        only: tpns
    use vfs_class,         only: vfs
    use timetracker_class, only: timetracker
@@ -19,7 +19,7 @@ module simulation
    !> Two-phase flow solver, volume fraction solver, LPT solver, time tracker
    type(lpt),         public :: lp
    type(hypre_str),   public :: ps
-   !type(ddadi),       public :: vs
+   type(ddadi),       public :: vs
    type(tpns),        public :: fs
    type(vfs),         public :: vf
    type(timetracker), public :: time
@@ -141,6 +141,7 @@ contains
          real(WP), dimension(:), allocatable :: pos
          integer , dimension(:), allocatable :: id
          type(part), dimension(:), allocatable :: tmp
+         real(WP) :: maxpos
          ! Injection parameters
          call param_read('Bed file to inject',bedfile)
          call param_read('Bed injection velocity',vbed)
@@ -166,6 +167,9 @@ contains
                id(i)=i
                pos(i)=pbed(i)%pos(2)
             end do
+            ! Flip the bed
+            maxpos=maxval(pos)
+            pos=maxpos-pos
             ! Apply quicksort
             call quick_sort(A=pos,B=id)
             ! Loop through particles and sort them
@@ -174,7 +178,7 @@ contains
                tmp(i)=pbed(id(i))
                tmp(i)%id=i
                ! Adjust position
-               tmp(i)%pos(2)=tmp(i)%pos(2)+lp%cfg%yL
+               tmp(i)%pos(2)=pos(i)+lp%cfg%yL
                ! Adjust velocity
                tmp(i)%vel=[0.0_WP,-vbed,0.0_WP]
                ! Zero out collisions
@@ -268,7 +272,7 @@ contains
          ! Transfer to lpt for surface tension modeling
          lp%sigma=fs%sigma
          lp%contact_angle=fs%contact_angle
-         lp%VFst=0.1_WP
+         lp%VFst=0.2_WP
          ! Assign acceleration of gravity
          call param_read('Gravity',fs%gravity)
          ! Outlet on the top
@@ -279,9 +283,9 @@ contains
          call param_read('Pressure iteration',ps%maxit)
          call param_read('Pressure tolerance',ps%rcvg)
          ! Configure implicit velocity solver
-         !vs=ddadi(cfg=cfg,name='Velocity',nst=7)
+         vs=ddadi(cfg=cfg,name='Velocity',nst=7)
          ! Setup the solver
-         call fs%setup(pressure_solver=ps)!,implicit_solver=vs)
+         call fs%setup(pressure_solver=ps,implicit_solver=vs)
          ! Zero initial field
          fs%U=0.0_WP; fs%V=0.0_WP; fs%W=0.0_WP
          ! Calculate cell-centered velocities and divergence
@@ -495,7 +499,7 @@ contains
          call vf%advance(dt=time%dt,U=fs%U,V=fs%V,W=fs%W)
 
          ! Zero out surface tension in the bed
-         !where (lp%VF.gt.lp%VFst) vf%curv=0.0_WP
+         where (lp%VF.gt.lp%VFst) vf%curv=0.0_WP
          
          ! Prepare new staggered viscosity (at n+1)
          call fs%get_viscosity(vf=vf,strat=arithmetic_visc)
@@ -539,12 +543,12 @@ contains
             end block add_lpt_src
             
             ! Form implicit residuals
-            !call fs%solve_implicit(time%dt,resU,resV,resW)
+            call fs%solve_implicit(time%dt,resU,resV,resW)
             
             ! Apply these residuals
-            fs%U=2.0_WP*fs%U-fs%Uold+resU/fs%rho_U
-            fs%V=2.0_WP*fs%V-fs%Vold+resV/fs%rho_V
-            fs%W=2.0_WP*fs%W-fs%Wold+resW/fs%rho_W
+            fs%U=2.0_WP*fs%U-fs%Uold+resU!/fs%rho_U
+            fs%V=2.0_WP*fs%V-fs%Vold+resV!/fs%rho_V
+            fs%W=2.0_WP*fs%W-fs%Wold+resW!/fs%rho_W
             
             ! Apply other boundary conditions
             call fs%apply_bcond(time%t,time%dt)
@@ -621,6 +625,7 @@ contains
                call lp%resize(lp%np_+lp%np_new)
                lp%p(lp%np_+lp%np_new)=pbed(ibed)
                lp%p(lp%np_+lp%np_new)%pos(2)=pbed(ibed)%pos(2)-vbed*(tbed+dt)
+               lp%p(lp%np_+lp%np_new)%ind=lp%cfg%get_ijk_global(lp%p(lp%np_+lp%np_new)%pos,[lp%cfg%imin,lp%cfg%jmin,lp%cfg%kmin])
             else
                ! We went too far, rewind and exit
                ibed=ibed-1

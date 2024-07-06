@@ -31,7 +31,7 @@ Friction coefficient :        0.5
 
 # Bed injection
 Bed file to inject :          alban.bed
-Bed injection velocity :      0.03
+Bed injection velocity :      0.06
 
 # Time integration
 Particle timestep size :      1e-5
