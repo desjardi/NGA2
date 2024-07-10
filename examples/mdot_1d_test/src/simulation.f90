@@ -38,6 +38,7 @@ module simulation
    
    !> Private work arrays
    real(WP), dimension(:,:,:,:), allocatable :: resSC
+   real(WP), dimension(:,:,:),   allocatable :: vcVF,fcVF_x,fcVF_y,fcVF_z
    real(WP), dimension(:,:,:),   allocatable :: VFgradX,VFgradY,VFgradZ,mdot,mdotL,mdotG,mdotL_old,mdotG_old,resmdotL,resmdotG
    ! real(WP), dimension(:,:,:),   allocatable :: mdot_err_field
    real(WP), dimension(:,:,:),   allocatable :: resU,resV,resW
@@ -76,6 +77,10 @@ contains
       ! Allocate work arrays
       allocate_work_arrays: block
          allocate(resSC    (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_,1:2))
+         allocate(vcVF     (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_)); vcVF=0.0_WP
+         allocate(fcVF_x   (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_)); fcVF_x=0.0_WP
+         allocate(fcVF_y   (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_)); fcVF_y=0.0_WP
+         allocate(fcVF_z   (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_)); fcVF_z=0.0_WP
          allocate(VFgradX  (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_)); VFgradX=0.0_WP
          allocate(VFgradY  (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_)); VFgradY=0.0_WP
          allocate(VFgradZ  (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_)); VFgradZ=0.0_WP
@@ -146,6 +151,20 @@ contains
                   vol=0.0_WP; area=0.0_WP; v_cent=0.0_WP; a_cent=0.0_WP
                   call cube_refine_vol(cube_vertex,vol,area,v_cent,a_cent,levelset_falling_drop,0.0_WP,amr_ref_lvl)
                   vf%VF(i,j,k)=vol/vf%cfg%vol(i,j,k)
+                  ! if (vf%VF(i,j,k).ge.VFlo.and.vf%VF(i,j,k).le.VFhi) then
+                  !    vf%Lbary(:,i,j,k)=v_cent
+                  !    vf%Gbary(:,i,j,k)=([vf%cfg%xm(i),vf%cfg%ym(j),vf%cfg%zm(k)]-vf%VF(i,j,k)*vf%Lbary(:,i,j,k))/(1.0_WP-vf%VF(i,j,k))
+                  ! else
+                  !    vf%Lbary(:,i,j,k)=[vf%cfg%xm(i),vf%cfg%ym(j),vf%cfg%zm(k)]
+                  !    vf%Gbary(:,i,j,k)=[vf%cfg%xm(i),vf%cfg%ym(j),vf%cfg%zm(k)]
+                  ! end if
+               end do
+            end do
+         end do
+         do k=vf%cfg%kmino_,vf%cfg%kmaxo_
+            do j=vf%cfg%jmino_,vf%cfg%jmaxo_
+               do i=vf%cfg%imino_,vf%cfg%imaxo_
+                  if (vf%VF(i,j,k).gt.0.0_WP.and.vf%VF(i,j,k).lt.1.0_WP) vf%VF(i,j,k)=0.1_WP
                   if (vf%VF(i,j,k).ge.VFlo.and.vf%VF(i,j,k).le.VFhi) then
                      vf%Lbary(:,i,j,k)=v_cent
                      vf%Gbary(:,i,j,k)=([vf%cfg%xm(i),vf%cfg%ym(j),vf%cfg%zm(k)]-vf%VF(i,j,k)*vf%Lbary(:,i,j,k))/(1.0_WP-vf%VF(i,j,k))
@@ -271,7 +290,12 @@ contains
          call param_read('Tolerence',evpsrc_tol)
          pseudo_time%dt=pseudo_time%dtmax
          ! Get the gradient of VOF
-         call sc%get_grad(vf%VF,VFgradX,VFgradY,VFgradZ)
+         ! call sc%get_fcgrad(vf%VF,VFgradX,VFgradY,VFgradZ)
+         call sc%cell_to_vertex(ccf=vf%VF,vcf=vcVF)
+         call sc%vertex_to_face(vcf=vcVF,fcf_x=fcVF_x,fcf_y=fcVF_y,fcf_z=fcVF_z)
+         call sc%get_ccgrad(fcf_x=fcVF_x,fcf_y=fcVF_y,fcf_z=fcVF_z,gradX=VFgradX,gradY=VFgradY,gradZ=VFgradZ)
+         ! fcVF_x=VFgradX; fcVF_y=VFgradY; fcVF_z=VFgradZ
+         ! call sc%cellVec_to_face(ccf_x=fcVF_x,ccf_y=fcVF_y,ccf_z=fcVF_z,fcf_x=VFgradX,fcf_y=VFgradY,fcf_z=VFgradZ)
          ! Initialize the evaporation mass source term
          where ((vf%VF.gt.0.0_WP).and.(vf%VF.lt.1.0_WP))
             mdot=1.0_WP
@@ -483,7 +507,12 @@ contains
             call pseudo_time%reset()
 
             ! Get the gradient of VOF
-            call sc%get_grad(vf%VF,VFgradX,VFgradY,VFgradZ)
+            ! call sc%get_fcgrad(vf%VF,VFgradX,VFgradY,VFgradZ)
+            call sc%cell_to_vertex(ccf=vf%VF,vcf=vcVF)
+            call sc%vertex_to_face(vcf=vcVF,fcf_x=fcVF_x,fcf_y=fcVF_y,fcf_z=fcVF_z)
+            call sc%get_ccgrad(fcf_x=fcVF_x,fcf_y=fcVF_y,fcf_z=fcVF_z,gradX=VFgradX,gradY=VFgradY,gradZ=VFgradZ)
+            ! fcVF_x=VFgradX; fcVF_y=VFgradY; fcVF_z=VFgradZ
+            ! call sc%cellVec_to_face(ccf_x=fcVF_x,ccf_y=fcVF_y,ccf_z=fcVF_z,fcf_x=VFgradX,fcf_y=VFgradY,fcf_z=VFgradZ)
 
             ! Get the CFL based on the gradient of the VOF
             call sc%get_cfl(VFgradX,VFgradY,VFgradZ,pseudo_time%dt,pseudo_time%cfl)

@@ -38,8 +38,9 @@ module simulation
    
    !> Private work arrays
    real(WP), dimension(:,:,:,:), allocatable :: resSC
+   real(WP), dimension(:,:,:),   allocatable :: vcVF,fcVF_x,fcVF_y,fcVF_z
    real(WP), dimension(:,:,:),   allocatable :: VFgradX,VFgradY,VFgradZ,mdot,mdotL,mdotG,mdotL_old,mdotG_old,resmdotL,resmdotG
-   ! real(WP), dimension(:,:,:),   allocatable :: mdot_err_field
+   ! real(WP), dimension(:,:,:),   allocatable :: mdotL_err_field
    real(WP), dimension(:,:,:),   allocatable :: resU,resV,resW
    real(WP), dimension(:,:,:),   allocatable :: Ui,Vi,Wi
    
@@ -49,7 +50,7 @@ module simulation
    integer :: iZl,iZg
    type(timetracker), public :: pseudo_time
    real(WP) :: mdot_int,mdotL_int,mdotG_int,mdot_err,mdotL_err,mdotG_err,evpsrc_tol,mdotL_int_err,mdotG_int_err
-   real(WP), dimension(:,:,:), allocatable :: k1,k2,k3,k4
+   ! real(WP), dimension(:,:,:), allocatable :: k1,k2,k3,k4
    
 contains
 
@@ -67,6 +68,72 @@ contains
    end function levelset_falling_drop
    
    
+   !> Function that localizes the x- boundary 
+   function xm__locator_VF(pg,i,j,k) result(isIn)
+      use pgrid_class, only: pgrid
+      class(pgrid), intent(in) :: pg
+      integer, intent(in) :: i,j,k
+      logical :: isIn
+      isIn=.false.
+      if (i.eq.pg%imin-1) isIn=.true.
+   end function xm__locator_VF
+   
+   
+   !> Function that localizes the x+ boundary 
+   function xp__locator_VF(pg,i,j,k) result(isIn)
+      use pgrid_class, only: pgrid
+      class(pgrid), intent(in) :: pg
+      integer, intent(in) :: i,j,k
+      logical :: isIn
+      isIn=.false.
+      if (i.eq.pg%imax+1) isIn=.true.
+   end function xp__locator_VF
+   
+   
+   !> Function that localizes the y- boundary 
+   function ym__locator_VF(pg,i,j,k) result(isIn)
+      use pgrid_class, only: pgrid
+      class(pgrid), intent(in) :: pg
+      integer, intent(in) :: i,j,k
+      logical :: isIn
+      isIn=.false.
+      if (j.eq.pg%jmin-1) isIn=.true.
+   end function ym__locator_VF
+
+
+   !> Function that localizes the y+ boundary 
+   function yp__locator_VF(pg,i,j,k) result(isIn)
+      use pgrid_class, only: pgrid
+      class(pgrid), intent(in) :: pg
+      integer, intent(in) :: i,j,k
+      logical :: isIn
+      isIn=.false.
+      if (j.eq.pg%jmax+1) isIn=.true.
+   end function yp__locator_VF
+
+
+   !> Function that localizes the z- boundary 
+   function zm__locator_VF(pg,i,j,k) result(isIn)
+      use pgrid_class, only: pgrid
+      class(pgrid), intent(in) :: pg
+      integer, intent(in) :: i,j,k
+      logical :: isIn
+      isIn=.false.
+      if (k.eq.pg%kmin-1) isIn=.true.
+   end function zm__locator_VF
+
+
+   !> Function that localizes the z+ boundary 
+   function zp__locator_VF(pg,i,j,k) result(isIn)
+      use pgrid_class, only: pgrid
+      class(pgrid), intent(in) :: pg
+      integer, intent(in) :: i,j,k
+      logical :: isIn
+      isIn=.false.
+      if (k.eq.pg%kmax+1) isIn=.true.
+   end function zp__locator_VF
+
+
    !> Initialization of problem solver
    subroutine simulation_init
       use param, only: param_read
@@ -76,17 +143,21 @@ contains
       ! Allocate work arrays
       allocate_work_arrays: block
          allocate(resSC    (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_,1:2))
-         allocate(VFgradX  (cfg%imin_:cfg%imax_+1,cfg%jmin_:cfg%jmax_+1,cfg%kmin_:cfg%kmax_+1)); VFgradX=0.0_WP
-         allocate(VFgradY  (cfg%imin_:cfg%imax_+1,cfg%jmin_:cfg%jmax_+1,cfg%kmin_:cfg%kmax_+1)); VFgradY=0.0_WP
-         allocate(VFgradZ  (cfg%imin_:cfg%imax_+1,cfg%jmin_:cfg%jmax_+1,cfg%kmin_:cfg%kmax_+1)); VFgradZ=0.0_WP
-         allocate(mdot     (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
-         allocate(mdotL    (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
-         ! allocate(mdot_err_field(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_)); mdot_err_field=0.0_WP
-         allocate(mdotG    (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
-         allocate(mdotL_old(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
-         allocate(mdotG_old(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
-         allocate(resmdotL (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
-         allocate(resmdotG (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+         allocate(vcVF     (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_)); vcVF=0.0_WP
+         allocate(fcVF_x   (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_)); fcVF_x=0.0_WP
+         allocate(fcVF_y   (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_)); fcVF_y=0.0_WP
+         allocate(fcVF_z   (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_)); fcVF_z=0.0_WP
+         allocate(VFgradX  (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_)); VFgradX=0.0_WP
+         allocate(VFgradY  (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_)); VFgradY=0.0_WP
+         allocate(VFgradZ  (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_)); VFgradZ=0.0_WP
+         allocate(mdot     (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_)); mdot =0.0_WP
+         allocate(mdotL    (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_)); mdotL=0.0_WP
+         allocate(mdotG    (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_)); mdotG=0.0_WP
+         allocate(mdotL_old(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_)); mdotL_old=0.0_WP
+         allocate(mdotG_old(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_)); mdotG_old=0.0_WP
+         allocate(resmdotL (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_)); resmdotL=0.0_WP
+         allocate(resmdotG (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_)); resmdotG=0.0_WP
+         ! allocate(mdotL_err_field(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_)); mdotL_err_field=0.0_WP
          allocate(resU     (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
          allocate(resV     (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
          allocate(resW     (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
@@ -94,10 +165,10 @@ contains
          allocate(Vi       (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
          allocate(Wi       (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
          ! Allocate the RK4 slopes
-         allocate(k1(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_)); k1 = 0.0_WP
-         allocate(k2(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_)); k2 = 0.0_WP
-         allocate(k3(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_)); k3 = 0.0_WP
-         allocate(k4(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_)); k4 = 0.0_WP
+         ! allocate(k1(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_)); k1=0.0_WP
+         ! allocate(k2(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_)); k2=0.0_WP
+         ! allocate(k3(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_)); k3=0.0_WP
+         ! allocate(k4(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_)); k4=0.0_WP
       end block allocate_work_arrays
       
       
@@ -115,7 +186,7 @@ contains
       ! Initialize our VOF solver and field
       create_and_initialize_vof: block
          use mms_geom,  only: cube_refine_vol
-         use vfs_class, only: lvira,VFhi,VFlo,remap,flux_storage
+         use vfs_class, only: lvira,VFhi,VFlo,remap,flux_storage,neumann
          integer :: i,j,k,n,si,sj,sk
          real(WP), dimension(3,8) :: cube_vertex
          real(WP), dimension(3) :: v_cent,a_cent
@@ -125,6 +196,13 @@ contains
          call vf%initialize(cfg=cfg,reconstruction_method=lvira,transport_method=flux_storage,name='VOF')
          ! call vf%initialize(cfg=cfg,reconstruction_method=lvira,transport_method=remap,name='VOF')
          vf%cons_correct=.false.
+         ! Boundary conditions (for interpolation purposes)
+         call vf%add_bcond(name='xp',type=neumann,locator=xp__locator_VF,dir='+x')
+         call vf%add_bcond(name='xm',type=neumann,locator=xm__locator_VF,dir='-x')
+         call vf%add_bcond(name='yp',type=neumann,locator=yp__locator_VF,dir='+y')
+         call vf%add_bcond(name='ym',type=neumann,locator=ym__locator_VF,dir='-y')
+         call vf%add_bcond(name='zp',type=neumann,locator=zp__locator_VF,dir='+z')
+         call vf%add_bcond(name='zm',type=neumann,locator=zm__locator_VF,dir='-z')
          ! Initialize to a droplet and a pool
          !center=[0.0_WP,0.05_WP,0.0_WP]
          call param_read('Droplet center',center)
@@ -144,8 +222,13 @@ contains
                   end do
                   ! Call adaptive refinement code to get volume and barycenters recursively
                   vol=0.0_WP; area=0.0_WP; v_cent=0.0_WP; a_cent=0.0_WP
+                  !debug
                   call cube_refine_vol(cube_vertex,vol,area,v_cent,a_cent,levelset_falling_drop,0.0_WP,amr_ref_lvl)
                   vf%VF(i,j,k)=vol/vf%cfg%vol(i,j,k)
+                  ! vf%VF(1,1,:)=0.1_WP
+                  ! vf%VF(2,1,:)=0.2_WP
+                  ! vf%VF(1,2,:)=0.4_WP
+                  ! vf%VF(2,2,:)=0.3_WP
                   if (vf%VF(i,j,k).ge.VFlo.and.vf%VF(i,j,k).le.VFhi) then
                      vf%Lbary(:,i,j,k)=v_cent
                      vf%Gbary(:,i,j,k)=([vf%cfg%xm(i),vf%cfg%ym(j),vf%cfg%zm(k)]-vf%VF(i,j,k)*vf%Lbary(:,i,j,k))/(1.0_WP-vf%VF(i,j,k))
@@ -172,6 +255,8 @@ contains
          call vf%get_curvature()
          ! Reset moments to guarantee compatibility with interface reconstruction
          call vf%reset_volume_moments()
+         ! Impose boundary conditions
+         call vf%apply_bcond(time%t,time%dt)
       end block create_and_initialize_vof
       
       
@@ -263,6 +348,10 @@ contains
                end do
             end do
          end do
+      end block create_scalar
+      
+      ! Create a solver for shifting the mass source term
+      create_mdot_solver: block
          ! Initialize a pseudo time tracker
          pseudo_time=timetracker(amRoot=cfg%amRoot,name='Pseudo',print_info=.false.)
          call param_read('Max pseudo timestep size',pseudo_time%dtmax)
@@ -270,26 +359,64 @@ contains
          call param_read('Max pseudo time steps',pseudo_time%nmax)
          call param_read('Tolerence',evpsrc_tol)
          pseudo_time%dt=pseudo_time%dtmax
-         ! Initialize the evaporation mass source term
+         ! Get the gradient of VOF
+         ! call sc%get_fcgrad(vf%VF,VFgradX,VFgradY,VFgradZ)
+         call sc%cell_to_vertex(ccf=vf%VF,vcf=vcVF)
+         ! print*,'-----------------------------------------------'
+         ! print*,'shape(itp_x)=',shape(sc%itp_x)
+         ! print*,'shape(itp_y)=',shape(sc%itp_y)
+         ! print*,'shape(itp_z)=',shape(sc%itp_z)
+         ! print*,'-----------------------------------------------'
+         ! print*,'internal: '
+         ! print*,'VOF(1:2,1,1) = ',vf%VF(1:2,1,1)
+         ! print*,'VOF(1:2,2,1) = ',vf%VF(1:2,2,1)
+         ! print*,'VOF(1:2,1,2) = ',vf%VF(1:2,1,2)
+         ! print*,'VOF(1:2,2,2) = ',vf%VF(1:2,2,2)
+         ! print*,'-----------------------------------------------'
+         ! print*,'left boundary: '
+         ! print*,'VOF(0,0:3,1) = ',vf%VF(0,0:3,1)
+         ! print*,'VOF(0,0:3,2) = ',vf%VF(0,0:3,1)
+         ! print*,'right boundary: '
+         ! print*,'VOF(3,0:3,1) = ',vf%VF(3,0:3,1)
+         ! print*,'VOF(3,0:3,2) = ',vf%VF(3,0:3,1)
+         ! print*,'bottom boundary: '
+         ! print*,'VOF(0:3,0,1) = ',vf%VF(0:3,0,1)
+         ! print*,'VOF(0:3,0,2) = ',vf%VF(0:3,0,1)
+         ! print*,'top boundary: '
+         ! print*,'VOF(0:3,3,1) = ',vf%VF(0:3,3,1)
+         ! print*,'VOF(0:3,3,2) = ',vf%VF(0:3,3,1)
+         ! print*,'-----------------------------------------------'
+         ! print*,'vcVF(1:3,1,1) = ',vcVF(1:3,1,1)
+         ! print*,'vcVF(1:3,2,1) = ',vcVF(1:3,2,1)
+         ! print*,'vcVF(1:3,3,1) = ',vcVF(1:3,3,1)
+         ! print*,'-----------------------------------------------'
+         ! print*,'vcVF(1:3,1,2) = ',vcVF(1:3,1,2)
+         ! print*,'vcVF(1:3,2,2) = ',vcVF(1:3,2,2)
+         ! print*,'vcVF(1:3,3,2) = ',vcVF(1:3,3,2)
+         ! print*,'-----------------------------------------------'
+         ! print*,'vcVF(1:3,1,3) = ',vcVF(1:3,1,3)
+         ! print*,'vcVF(1:3,2,3) = ',vcVF(1:3,2,3)
+         ! print*,'vcVF(1:3,3,3) = ',vcVF(1:3,3,3)
+         ! print*,'-----------------------------------------------'
+         call sc%vertex_to_face(vcf=vcVF,fcf_x=fcVF_x,fcf_y=fcVF_y,fcf_z=fcVF_z)
+         call sc%get_ccgrad(fcf_x=fcVF_x,fcf_y=fcVF_y,fcf_z=fcVF_z,gradX=VFgradX,gradY=VFgradY,gradZ=VFgradZ)
+         fcVF_x=VFgradX; fcVF_y=VFgradY; fcVF_z=VFgradZ
+         call sc%cellVec_to_face(ccf_x=fcVF_x,ccf_y=fcVF_y,ccf_z=fcVF_z,fcf_x=VFgradX,fcf_y=VFgradY,fcf_z=VFgradZ)
+         ! Initialize the evaporation mass source term and errors
          where ((vf%VF.gt.0.0_WP).and.(vf%VF.lt.1.0_WP))
             mdot=1.0_WP
             ! mdot=vf%SD
          else where
             mdot=0.0_WP
          end where
-         mdotL=mdot
-         mdotG=mdot
-         mdot_err =0.0_WP
-         mdotL_err=0.0_WP
-         mdotG_err=0.0_WP
-         mdotL_int_err=0.0_WP
-         mdotG_int_err=0.0_WP
+         mdotL=mdot; mdotG=mdot
+         mdot_err =0.0_WP; mdotL_err=0.0_WP; mdotG_err=0.0_WP
+         mdotL_int_err=0.0_WP; mdotG_int_err=0.0_WP
          ! Integral
          call cfg%integrate(mdot,mdot_int)
          call cfg%integrate(mdotL,mdotL_int)
          call cfg%integrate(mdotG,mdotG_int)
-      end block create_scalar
-      
+      end block create_mdot_solver
       
       ! Create surfmesh object for interface polygon output
       create_smesh: block
@@ -312,7 +439,7 @@ contains
          ! call ens_mdot_out%add_scalar('mdot' ,mdot)
          ! call ens_mdot_out%add_scalar('mdotL',mdotL)
          ! call ens_mdot_out%add_scalar('mdotG',mdotG)
-         ! call ens_mdot_out%add_scalar('mdot_err_field',mdot_err_field)
+         ! call ens_mdot_out%add_scalar('mdotL_err_field',mdotL_err_field)
          ! if (ens_mdot_evt%occurs()) call ens_mdot_out%write_data(pseudo_time%t)
 
          call param_read('Ensight output period',ens_evt%tper)
@@ -436,6 +563,7 @@ contains
          
          ! VOF solver step
          call vf%advance(dt=time%dt,U=fs%U,V=fs%V,W=fs%W)
+         call vf%apply_bcond(time%t,time%dt)
          
          ! Now transport our phase-specific scalars
          advance_scalar: block
@@ -481,7 +609,12 @@ contains
             call pseudo_time%reset()
 
             ! Get the gradient of VOF
-            call sc%get_grad(vf%VF,VFgradX,VFgradY,VFgradZ)
+            ! call sc%get_fcgrad(vf%VF,VFgradX,VFgradY,VFgradZ)
+            call sc%cell_to_vertex(ccf=vf%VF,vcf=vcVF)
+            call sc%vertex_to_face(vcf=vcVF,fcf_x=fcVF_x,fcf_y=fcVF_y,fcf_z=fcVF_z)
+            call sc%get_ccgrad(fcf_x=fcVF_x,fcf_y=fcVF_y,fcf_z=fcVF_z,gradX=VFgradX,gradY=VFgradY,gradZ=VFgradZ)
+            fcVF_x=VFgradX; fcVF_y=VFgradY; fcVF_z=VFgradZ
+            call sc%cellVec_to_face(ccf_x=fcVF_x,ccf_y=fcVF_y,ccf_z=fcVF_z,fcf_x=VFgradX,fcf_y=VFgradY,fcf_z=VFgradZ)
 
             ! Get the CFL based on the gradient of the VOF
             call sc%get_cfl(VFgradX,VFgradY,VFgradZ,pseudo_time%dt,pseudo_time%cfl)
@@ -543,7 +676,7 @@ contains
                mdot_err=max(mdotL_err,mdotG_err)
                if (mdot_err.lt.evpsrc_tol) exit
 
-               ! mdot_err_field=mdotL-mdotL_old
+               ! mdotL_err_field=mdotL-mdotL_old
                ! if (ens_mdot_evt%occurs()) then
                !    call ens_mdot_out%write_data(pseudo_time%t)
                ! end if
@@ -652,7 +785,7 @@ contains
       ! timetracker
       
       ! Deallocate work arrays
-      deallocate(resU,resV,resW,Ui,Vi,Wi,resSC,mdot,mdotL,mdotL_old,mdotG,mdotG_old,resmdotL,resmdotG,k1,k2,k3,k4)
+      deallocate(resU,resV,resW,Ui,Vi,Wi,resSC,mdot,mdotL,mdotL_old,mdotG,mdotG_old,resmdotL,resmdotG)!,k1,k2,k3,k4)
       
    end subroutine simulation_final
    

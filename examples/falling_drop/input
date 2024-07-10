@@ -1,5 +1,5 @@
 # Parallelization
-Partition :	8 1 1
+Partition :	1 1 1 ! 4 2 1
 
 # Mesh definition
 Lx :	0.06
@@ -25,15 +25,15 @@ Liquid diffusivity :          1.137e-06
 Gas diffusivity :             1.452e-05
 
 # Time integration
-Max timestep size : 2.5e-4
+Max timestep size : 2.5e-4 ! 8.5e-4
 Max cfl number :    0.9
 Max time :          2.5e-4
 
 # Pseudo time integration
-Max pseudo timestep size : 2e-7
-Max pseudo cfl number :    0.9
-Max pseudo time steps:     2000
-Tolerence:                 1e-3
+Max pseudo timestep size : 2e-7 ! 5e-7
+Max pseudo cfl number :    0.9 ! 0.5
+Max pseudo time steps:     2
+Tolerence:                 1e-6
 
 # Pressure solver
 Pressure tolerance : 1e-4

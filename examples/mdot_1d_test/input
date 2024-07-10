@@ -32,8 +32,8 @@ Max time :          8.5e-5
 # Pseudo time integration
 Max pseudo timestep size : 5e-7
 Max pseudo cfl number :    0.9
-Max pseudo time steps:     5000
-Tolerence:                 1e-12
+Max pseudo time steps:     10
+Tolerence:                 1e-6
 
 # Pressure solver
 Pressure tolerance : 1e-4

@@ -98,7 +98,12 @@ module tpscalar_class
       procedure :: redist_mdot                            !< Re-distribute the evaporation mass source term
       procedure :: get_dmdotdtau
       procedure :: get_cfl
-      procedure :: get_grad
+      procedure :: cell_to_vertex
+      procedure :: cell_to_face
+      procedure :: cellVec_to_face
+      procedure :: vertex_to_face
+      procedure :: get_fcgrad
+      procedure :: get_ccgrad
    end type tpscalar
    
    
@@ -188,9 +193,9 @@ contains
       integer :: i,j,k
       
       ! Allocate finite difference diffusivity interpolation coefficients
-      allocate(this%itp_x(-1:0,this%cfg%imin_:this%cfg%imax_+1,this%cfg%jmin_:this%cfg%jmax_+1,this%cfg%kmin_:this%cfg%kmax_+1)) !< X-face-centered
-      allocate(this%itp_y(-1:0,this%cfg%imin_:this%cfg%imax_+1,this%cfg%jmin_:this%cfg%jmax_+1,this%cfg%kmin_:this%cfg%kmax_+1)) !< Y-face-centered
-      allocate(this%itp_z(-1:0,this%cfg%imin_:this%cfg%imax_+1,this%cfg%jmin_:this%cfg%jmax_+1,this%cfg%kmin_:this%cfg%kmax_+1)) !< Z-face-centered
+      allocate(this%itp_x(-1:0,this%cfg%imin_  :this%cfg%imax_+1,this%cfg%jmin_-1:this%cfg%jmax_+1,this%cfg%kmin_-1:this%cfg%kmax_+1)) !< X-face-centered
+      allocate(this%itp_y(-1:0,this%cfg%imin_-1:this%cfg%imax_+1,this%cfg%jmin_  :this%cfg%jmax_+1,this%cfg%kmin_-1:this%cfg%kmax_+1)) !< Y-face-centered
+      allocate(this%itp_z(-1:0,this%cfg%imin_-1:this%cfg%imax_+1,this%cfg%jmin_-1:this%cfg%jmax_+1,this%cfg%kmin_  :this%cfg%kmax_+1)) !< Z-face-centered
       ! Create diffusivity interpolation coefficients to cell face
       do k=this%cfg%kmin_,this%cfg%kmax_+1
          do j=this%cfg%jmin_,this%cfg%jmax_+1
@@ -201,6 +206,9 @@ contains
             end do
          end do
       end do
+      this%itp_x(:,:,this%cfg%jmin_-1,:)=this%itp_x(:,:,this%cfg%jmin_,:); this%itp_x(:,:,:,this%cfg%kmin_-1)=this%itp_x(:,:,:,this%cfg%kmin_)
+      this%itp_y(:,this%cfg%imin_-1,:,:)=this%itp_y(:,this%cfg%imin_,:,:); this%itp_y(:,:,:,this%cfg%kmin_-1)=this%itp_y(:,:,:,this%cfg%kmin_)
+      this%itp_z(:,this%cfg%imin_-1,:,:)=this%itp_z(:,this%cfg%imin_,:,:); this%itp_z(:,:,this%cfg%jmin_-1,:)=this%itp_z(:,:,this%cfg%jmin_,:)
       
       ! Allocate finite volume divergence operators
       allocate(this%div_x(0:+1,this%cfg%imin_:this%cfg%imax_,this%cfg%jmin_:this%cfg%jmax_,this%cfg%kmin_:this%cfg%kmax_)) !< Cell-centered
@@ -922,7 +930,7 @@ contains
                ! FZ(i,j,k)=-W(i,j,k)*sum(this%itp_z(:,i,j,k)*mdot(i,j,k-1:k))
 
                ! Surface density area averaged flux
-               ! ! Fluxes on x-face
+               ! Fluxes on x-face
                ! mysurf=sum(SD(i-1:i,j,k)*this%cfg%vol(i-1:i,j,k))
                ! FX(i,j,k)=-U(i,j,k)*sum(SD(i-1:i,j,k)*this%cfg%vol(i-1:i,j,k)*mdot(i-1:i,j,k))/mysurf
                ! ! Fluxes on y-face
@@ -1004,31 +1012,6 @@ contains
    ! end subroutine apply_bcond_mdot
 
 
-   ! Get the face-centerd gradient of a scalar field
-   subroutine get_grad(this,F,gradX,gradY,gradZ)
-      implicit none
-      class(tpscalar), intent(in) :: this
-      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(out) :: F     !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
-      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(out) :: gradX !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
-      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(out) :: gradY !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
-      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(out) :: gradZ !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
-      integer :: i,j,k
-      ! Compute the gradient components
-      do k=this%cfg%kmin_,this%cfg%kmax_+1
-         do j=this%cfg%jmin_,this%cfg%jmax_+1
-            do i=this%cfg%imin_,this%cfg%imax_+1
-               gradX(i,j,k)=sum(this%grd_x(:,i,j,k)*F(i-1:i,j,k))
-               gradY(i,j,k)=sum(this%grd_y(:,i,j,k)*F(i,j-1:j,k))
-               gradZ(i,j,k)=sum(this%grd_z(:,i,j,k)*F(i,j,k-1:k))
-            end do
-         end do
-      end do
-      call this%cfg%sync(gradX)
-      call this%cfg%sync(gradY)
-      call this%cfg%sync(gradZ)
-   end subroutine get_grad
-
-
    !> Calculate the CFL based on the input velocity field
    subroutine get_cfl(this,U,V,W,dt,cfl)
       use mpi_f08,  only: MPI_ALLREDUCE,MPI_MAX
@@ -1067,6 +1050,170 @@ contains
       
    end subroutine get_cfl
    
+
+   ! Interpolate a cell-centered field to a vertex-centered field
+   subroutine cell_to_vertex(this,ccf,vcf)
+      implicit none
+      class(tpscalar), intent(in) :: this
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in)  :: ccf !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(out) :: vcf !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      integer :: i,j,k
+      ! Trilinear interpolation
+      do k=this%cfg%kmin_,this%cfg%kmax_+1
+         do j=this%cfg%jmin_,this%cfg%jmax_+1
+            do i=this%cfg%imin_,this%cfg%imax_+1
+               vcf(i,j,k)=sum(this%itp_z(:,i,j,k)*[sum(this%itp_y(:,i,j,k-1)*[sum(this%itp_x(:,i,j-1,k-1)*ccf(i-1:i,j-1,k-1))     ,&
+               &                                                              sum(this%itp_x(:,i,j  ,k-1)*ccf(i-1:i,j  ,k-1))])   ,&
+                                                   sum(this%itp_y(:,i,j,k  )*[sum(this%itp_x(:,i,j-1,k  )*ccf(i-1:i,j-1,k  ))     ,&
+                                                                              sum(this%itp_x(:,i,j  ,k  )*ccf(i-1:i,j  ,k  ))])])
+            end do
+         end do
+      end do
+   end subroutine cell_to_vertex
+
+
+   ! Interpolate a cell-centered field to three face-centered fields (x-face, y-face, and z-face)
+   subroutine cell_to_face(this,ccf,fcf_x,fcf_y,fcf_z)
+      implicit none
+      class(tpscalar), intent(in) :: this
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in)  :: ccf !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(out) :: fcf_x !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(out) :: fcf_y !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(out) :: fcf_z !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      integer :: i,j,k
+      ! Linear interpolation
+      do k=this%cfg%kmin_,this%cfg%kmax_+1
+         do j=this%cfg%jmin_,this%cfg%jmax_+1
+            do i=this%cfg%imin_,this%cfg%imax_+1
+               ! x-face
+               fcf_x(i,j,k)=sum(this%itp_x(:,i,j,k)*ccf(i-1:i,j,k))
+               ! y-face
+               fcf_y(i,j,k)=sum(this%itp_y(:,i,j,k)*ccf(i,j-1:j,k))
+               ! z-face
+               fcf_z(i,j,k)=sum(this%itp_z(:,i,j,k)*ccf(i,j,k-1:k))
+            end do
+         end do
+      end do
+   end subroutine cell_to_face
+
+
+   ! Interpolate a cell-centered vector field to three face-centered fields (x-face, y-face, and z-face)
+   subroutine cellVec_to_face(this,ccf_x,ccf_y,ccf_z,fcf_x,fcf_y,fcf_z)
+      implicit none
+      class(tpscalar), intent(in) :: this
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in)  :: ccf_x !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in)  :: ccf_y !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in)  :: ccf_z !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(out) :: fcf_x !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(out) :: fcf_y !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(out) :: fcf_z !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      integer :: i,j,k
+      ! Linear interpolation
+      do k=this%cfg%kmin_,this%cfg%kmax_+1
+         do j=this%cfg%jmin_,this%cfg%jmax_+1
+            do i=this%cfg%imin_,this%cfg%imax_+1
+               ! x-face
+               fcf_x(i,j,k)=sum(this%itp_x(:,i,j,k)*ccf_x(i-1:i,j,k))
+               ! y-face
+               fcf_y(i,j,k)=sum(this%itp_y(:,i,j,k)*ccf_y(i,j-1:j,k))
+               ! z-face
+               fcf_z(i,j,k)=sum(this%itp_z(:,i,j,k)*ccf_z(i,j,k-1:k))
+            end do
+         end do
+      end do
+      ! Sync it
+      ! call this%cfg%sync(fcf_x)
+      ! call this%cfg%sync(fcf_y)
+      ! call this%cfg%sync(fcf_z)
+   end subroutine cellVec_to_face
+
+
+   ! Interpolate a vertex-centered field to three face-centered fields (x-face, y-face, and z-face)
+   subroutine vertex_to_face(this,vcf,fcf_x,fcf_y,fcf_z)
+      implicit none
+      class(tpscalar), intent(in) :: this
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in)  :: vcf   !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(out) :: fcf_x !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(out) :: fcf_y !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(out) :: fcf_z !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      integer :: i,j,k
+      ! Bilinear interpolation
+      do k=this%cfg%kmin_,this%cfg%kmax_+1
+         do j=this%cfg%jmin_,this%cfg%jmax_+1
+            do i=this%cfg%imin_,this%cfg%imax_+1
+               ! x-face
+               fcf_x(i,j,k)=0.25_WP*(vcf(i,j,k)+vcf(i,j-1,k)+vcf(i,j,k-1)+vcf(i,j-1,k-1))
+               ! y-face
+               fcf_y(i,j,k)=0.25_WP*(vcf(i,j,k)+vcf(i-1,j,k)+vcf(i,j,k-1)+vcf(i-1,j,k-1))
+               ! z-face
+               fcf_z(i,j,k)=0.25_WP*(vcf(i,j,k)+vcf(i,j-1,k)+vcf(i-1,j,k)+vcf(i-1,j-1,k))
+            end do
+         end do
+      end do
+      ! Sync it
+      ! call this%cfg%sync(fcf_x)
+      ! call this%cfg%sync(fcf_y)
+      ! call this%cfg%sync(fcf_z)
+   end subroutine vertex_to_face
+
+
+   ! Get the face-centerd gradient of a cell-centered scalar field
+   subroutine get_fcgrad(this,ccf,gradX,gradY,gradZ)
+      implicit none
+      class(tpscalar), intent(in) :: this
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(out) :: ccf   !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(out) :: gradX !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(out) :: gradY !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(out) :: gradZ !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      integer :: i,j,k
+      ! Compute the gradient components
+      do k=this%cfg%kmin_,this%cfg%kmax_+1
+         do j=this%cfg%jmin_,this%cfg%jmax_+1
+            do i=this%cfg%imin_,this%cfg%imax_+1
+               gradX(i,j,k)=sum(this%grd_x(:,i,j,k)*ccf(i-1:i,j,k))
+               gradY(i,j,k)=sum(this%grd_y(:,i,j,k)*ccf(i,j-1:j,k))
+               gradZ(i,j,k)=sum(this%grd_z(:,i,j,k)*ccf(i,j,k-1:k))
+            end do
+         end do
+      end do
+      ! Sync the gradient components
+      ! call this%cfg%sync(gradX)
+      ! call this%cfg%sync(gradY)
+      ! call this%cfg%sync(gradZ)
+   end subroutine get_fcgrad
+
+
+   ! Get the cell-centerd gradient of a scalar field given the face-centered fields
+   subroutine get_ccgrad(this,fcf_x,fcf_y,fcf_z,gradX,gradY,gradZ)
+      implicit none
+      class(tpscalar), intent(in) :: this
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(out) :: fcf_x !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(out) :: fcf_y !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(out) :: fcf_z !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(out) :: gradX !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(out) :: gradY !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(out) :: gradZ !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      integer :: i,j,k
+      ! Gauss gradient computation
+      gradX=0.0_WP; gradY=0.0_WP; gradZ=0.0_WP
+      do k=this%cfg%kmin_,this%cfg%kmax_+1
+         do j=this%cfg%jmin_,this%cfg%jmax_+1
+            do i=this%cfg%imin_,this%cfg%imax_+1
+               gradX(i-1,j,k)=gradX(i-1,j,k)+fcf_x(i,j,k)/this%cfg%dx(i-1)
+               gradX(i  ,j,k)=gradX(i  ,j,k)-fcf_x(i,j,k)/this%cfg%dx(i  )
+               gradY(i,j-1,k)=gradY(i,j-1,k)+fcf_y(i,j,k)/this%cfg%dy(j-1)
+               gradY(i,j  ,k)=gradY(i,j  ,k)-fcf_y(i,j,k)/this%cfg%dy(j  )
+               gradZ(i,j,k-1)=gradZ(i,j,k-1)+fcf_z(i,j,k)/this%cfg%dz(k-1)
+               gradZ(i,j,k  )=gradZ(i,j,k  )-fcf_z(i,j,k)/this%cfg%dz(k  )
+            end do
+         end do
+      end do
+      ! Sync the gradient components
+      call this%cfg%sync(gradX)
+      call this%cfg%sync(gradY)
+      call this%cfg%sync(gradZ)
+   end subroutine get_ccgrad
+
    
    !> Print out info for tpscalar solver
    subroutine tpscalar_print(this)
