@@ -40,7 +40,7 @@ module simulation
    real(WP), dimension(:,:,:,:), allocatable :: resSC
    real(WP), dimension(:,:,:), allocatable :: vcVF,fcVF_x,fcVF_y,fcVF_z
    real(WP), dimension(:,:,:),   allocatable :: VFgradX,VFgradY,VFgradZ,mdot,mdotL,mdotG,mdotL_old,mdotG_old,resmdotL,resmdotG
-   ! real(WP), dimension(:,:,:),   allocatable :: mdotL_err_field
+   real(WP), dimension(:,:,:),   allocatable :: mdotL_err_field
    real(WP), dimension(:,:,:),   allocatable :: resU,resV,resW
    real(WP), dimension(:,:,:),   allocatable :: Ui,Vi,Wi
    
@@ -67,72 +67,6 @@ contains
    end function levelset_falling_drop
    
    
-   !> Function that localizes the x- boundary 
-   function xm__locator_VF(pg,i,j,k) result(isIn)
-      use pgrid_class, only: pgrid
-      class(pgrid), intent(in) :: pg
-      integer, intent(in) :: i,j,k
-      logical :: isIn
-      isIn=.false.
-      if (i.eq.pg%imin-1) isIn=.true.
-   end function xm__locator_VF
-   
-   
-   !> Function that localizes the x+ boundary 
-   function xp__locator_VF(pg,i,j,k) result(isIn)
-      use pgrid_class, only: pgrid
-      class(pgrid), intent(in) :: pg
-      integer, intent(in) :: i,j,k
-      logical :: isIn
-      isIn=.false.
-      if (i.eq.pg%imax+1) isIn=.true.
-   end function xp__locator_VF
-   
-   
-   !> Function that localizes the y- boundary 
-   function ym__locator_VF(pg,i,j,k) result(isIn)
-      use pgrid_class, only: pgrid
-      class(pgrid), intent(in) :: pg
-      integer, intent(in) :: i,j,k
-      logical :: isIn
-      isIn=.false.
-      if (j.eq.pg%jmin-1) isIn=.true.
-   end function ym__locator_VF
-
-
-   !> Function that localizes the y+ boundary 
-   function yp__locator_VF(pg,i,j,k) result(isIn)
-      use pgrid_class, only: pgrid
-      class(pgrid), intent(in) :: pg
-      integer, intent(in) :: i,j,k
-      logical :: isIn
-      isIn=.false.
-      if (j.eq.pg%jmax+1) isIn=.true.
-   end function yp__locator_VF
-
-
-   !> Function that localizes the z- boundary 
-   function zm__locator_VF(pg,i,j,k) result(isIn)
-      use pgrid_class, only: pgrid
-      class(pgrid), intent(in) :: pg
-      integer, intent(in) :: i,j,k
-      logical :: isIn
-      isIn=.false.
-      if (k.eq.pg%kmin-1) isIn=.true.
-   end function zm__locator_VF
-
-
-   !> Function that localizes the z+ boundary 
-   function zp__locator_VF(pg,i,j,k) result(isIn)
-      use pgrid_class, only: pgrid
-      class(pgrid), intent(in) :: pg
-      integer, intent(in) :: i,j,k
-      logical :: isIn
-      isIn=.false.
-      if (k.eq.pg%kmax+1) isIn=.true.
-   end function zp__locator_VF
-
-
    !> Initialization of problem solver
    subroutine simulation_init
       use param, only: param_read
@@ -152,7 +86,7 @@ contains
          allocate(mdotG_old(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_)); mdotG_old=0.0_WP
          allocate(resmdotL (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_)); resmdotL=0.0_WP
          allocate(resmdotG (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_)); resmdotG=0.0_WP
-         ! allocate(mdotL_err_field(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_)); mdotL_err_field=0.0_WP
+         allocate(mdotL_err_field(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_)); mdotL_err_field=0.0_WP
          allocate(resU     (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
          allocate(resV     (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
          allocate(resW     (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
@@ -190,13 +124,6 @@ contains
          call vf%initialize(cfg=cfg,reconstruction_method=lvira,transport_method=flux_storage,name='VOF')
          ! call vf%initialize(cfg=cfg,reconstruction_method=lvira,transport_method=remap,name='VOF')
          vf%cons_correct=.false.
-         ! Boundary conditions (for interpolation purposes)
-         call vf%add_bcond(name='xp',type=neumann,locator=xp__locator_VF,dir='+x')
-         call vf%add_bcond(name='xm',type=neumann,locator=xm__locator_VF,dir='-x')
-         call vf%add_bcond(name='yp',type=neumann,locator=yp__locator_VF,dir='+y')
-         call vf%add_bcond(name='ym',type=neumann,locator=ym__locator_VF,dir='-y')
-         call vf%add_bcond(name='zp',type=neumann,locator=zp__locator_VF,dir='+z')
-         call vf%add_bcond(name='zm',type=neumann,locator=zm__locator_VF,dir='-z')
          ! Initialize to a droplet and a pool
          !center=[0.0_WP,0.05_WP,0.0_WP]
          call param_read('Droplet center',center)
@@ -217,15 +144,15 @@ contains
                   ! Call adaptive refinement code to get volume and barycenters recursively
                   vol=0.0_WP; area=0.0_WP; v_cent=0.0_WP; a_cent=0.0_WP
                   ! Debug
-                  ! call cube_refine_vol(cube_vertex,vol,area,v_cent,a_cent,levelset_falling_drop,0.0_WP,amr_ref_lvl)
-                  ! vf%VF(i,j,k)=vol/vf%cfg%vol(i,j,k)
+                  call cube_refine_vol(cube_vertex,vol,area,v_cent,a_cent,levelset_falling_drop,0.0_WP,amr_ref_lvl)
+                  vf%VF(i,j,k)=vol/vf%cfg%vol(i,j,k)
                   ! vf%VF(1,1,:)=0.1_WP
                   ! vf%VF(2,1,:)=0.2_WP
                   ! vf%VF(1,2,:)=0.4_WP
                   ! vf%VF(2,2,:)=0.3_WP
                   ! vf%VF(i,j,k)=25000.0_WP*vf%cfg%xm(i)**3+4.0_WP*vf%cfg%xm(i)**2-20.0_WP*vf%cfg%xm(i)+0.3_WP
                   ! vf%VF(i,j,k)=50_WP*vf%cfg%xm(i)**2*50_WP*vf%cfg%ym(j)**2*50_WP*vf%cfg%zm(k)**2
-                  vf%VF(i,j,k)=exp(-200.0_WP*vf%cfg%xm(i)**2)
+                  ! vf%VF(i,j,k)=exp(-200.0_WP*(vf%cfg%xm(i)**2+vf%cfg%ym(j)**2+vf%cfg%zm(k)**2))
                   if (vf%VF(i,j,k).ge.VFlo.and.vf%VF(i,j,k).le.VFhi) then
                      vf%Lbary(:,i,j,k)=v_cent
                      vf%Gbary(:,i,j,k)=([vf%cfg%xm(i),vf%cfg%ym(j),vf%cfg%zm(k)]-vf%VF(i,j,k)*vf%Lbary(:,i,j,k))/(1.0_WP-vf%VF(i,j,k))
@@ -236,7 +163,6 @@ contains
                end do
             end do
          end do
-         call vf%cfg%sync(vf%VF)
          ! Update the band
          call vf%update_band()
          ! Perform interface reconstruction from VOF field
@@ -253,8 +179,6 @@ contains
          call vf%get_curvature()
          ! Reset moments to guarantee compatibility with interface reconstruction
          call vf%reset_volume_moments()
-         ! Impose boundary conditions
-         call vf%apply_bcond(time%t,time%dt)
       end block create_and_initialize_vof
       
       
@@ -362,8 +286,8 @@ contains
          call sc%cell_to_vertex(ccf=vf%VF,vcf=vcVF)
          call sc%vertex_to_face(vcf=vcVF,fcf_x=fcVF_x,fcf_y=fcVF_y,fcf_z=fcVF_z)
          call sc%get_ccgrad(fcf_x=fcVF_x,fcf_y=fcVF_y,fcf_z=fcVF_z,gradX=VFgradX,gradY=VFgradY,gradZ=VFgradZ)
-         ! fcVF_x=VFgradX; fcVF_y=VFgradY; fcVF_z=VFgradZ
-         ! call sc%cellVec_to_face(ccf_x=fcVF_x,ccf_y=fcVF_y,ccf_z=fcVF_z,fcf_x=VFgradX,fcf_y=VFgradY,fcf_z=VFgradZ)
+         fcVF_x=VFgradX; fcVF_y=VFgradY; fcVF_z=VFgradZ
+         call sc%cellVec_to_face(ccf_x=fcVF_x,ccf_y=fcVF_y,ccf_z=fcVF_z,fcf_x=VFgradX,fcf_y=VFgradY,fcf_z=VFgradZ)
          ! print*,'-----------------------------------------------'
          ! print*,'internal: '
          ! print*,'VOF(1:2,1,1) = ',vf%VF(1:2,1,1)
@@ -461,11 +385,12 @@ contains
 
          ! ens_mdot_out=ensight(cfg=cfg,name='mdot_ens')
          ! ens_mdot_evt=event(time=pseudo_time,name='mdot_evt')
-         ! ens_mdot_evt%tper=1e-5
+         ! ens_mdot_evt%tper=2e-7
          ! call ens_mdot_out%add_scalar('mdot' ,mdot)
          ! call ens_mdot_out%add_scalar('mdotL',mdotL)
          ! call ens_mdot_out%add_scalar('mdotG',mdotG)
          ! call ens_mdot_out%add_scalar('mdotL_err_field',mdotL_err_field)
+         ! call ens_mdot_out%add_scalar('VOF',vf%VF)
          ! if (ens_mdot_evt%occurs()) call ens_mdot_out%write_data(pseudo_time%t)
 
          call param_read('Ensight output period',ens_evt%tper)
@@ -481,6 +406,7 @@ contains
          call ens_out%add_scalar('mdot' ,mdot)
          call ens_out%add_scalar('mdotL',mdotL)
          call ens_out%add_scalar('mdotG',mdotG)
+         call ens_out%add_scalar('mdotL_err_field',mdotL_err_field)
          call ens_out%add_vector('VFgrad',VFgradx,VFgrady,VFgradz)
          ! Output to ensight
          if (ens_evt%occurs()) call ens_out%write_data(time%t)
@@ -589,7 +515,6 @@ contains
          
          ! VOF solver step
          call vf%advance(dt=time%dt,U=fs%U,V=fs%V,W=fs%W)
-         call vf%apply_bcond(time%t,time%dt)
          
          ! Now transport our phase-specific scalars
          advance_scalar: block
@@ -704,8 +629,8 @@ contains
                ! mdotG=mdotG_old+pseudo_time%dt/6.0_WP*(k1+2.0_WP*(k2+k3)+k4)
 
                ! Calculate the error
-               ! mdotL_err_field=mdotL-mdotL_old
-               my_mdot_err=maxval(abs(mdotL-mdotL_old))
+               mdotL_err_field=mdotL-mdotL_old
+               my_mdot_err=maxval(abs(mdotL_err_field))
                call MPI_ALLREDUCE(my_mdot_err,mdotL_err,1,MPI_REAL_WP,MPI_Max,sc%cfg%comm,ierr)
                my_mdot_err=maxval(abs(mdotG-mdotG_old))
                call MPI_ALLREDUCE(my_mdot_err,mdotG_err,1,MPI_REAL_WP,MPI_Max,sc%cfg%comm,ierr)

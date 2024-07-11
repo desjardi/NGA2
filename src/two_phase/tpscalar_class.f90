@@ -832,14 +832,23 @@ contains
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in)  :: ccf !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(out) :: vcf !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       integer :: i,j,k
+      real(WP) :: tmp_yp,tmp_ym
+      real(WP) :: tmp_zp,tmp_zm
       ! Trilinear interpolation
       do k=this%cfg%kmin_,this%cfg%kmax_+1
          do j=this%cfg%jmin_,this%cfg%jmax_+1
             do i=this%cfg%imin_,this%cfg%imax_+1
-               vcf(i,j,k)=sum(this%itp_z(:,i,j,k)*[sum(this%itp_y(:,i,j,k-1)*[sum(this%itp_x(:,i,j-1,k-1)*ccf(i-1:i,j-1,k-1))     ,&
-               &                                                              sum(this%itp_x(:,i,j  ,k-1)*ccf(i-1:i,j  ,k-1))])   ,&
-                                                   sum(this%itp_y(:,i,j,k  )*[sum(this%itp_x(:,i,j-1,k  )*ccf(i-1:i,j-1,k  ))     ,&
-                                                                              sum(this%itp_x(:,i,j  ,k  )*ccf(i-1:i,j  ,k  ))])])
+               ! vcf(i,j,k)=sum(this%itp_z(:,i,j,k)*[sum(this%itp_y(:,i,j,k-1)*[sum(this%itp_x(:,i,j-1,k-1)*ccf(i-1:i,j-1,k-1))     ,&
+               ! &                                                              sum(this%itp_x(:,i,j  ,k-1)*ccf(i-1:i,j  ,k-1))])   ,&
+               !                                     sum(this%itp_y(:,i,j,k  )*[sum(this%itp_x(:,i,j-1,k  )*ccf(i-1:i,j-1,k  ))     ,&
+               !                                                                sum(this%itp_x(:,i,j  ,k  )*ccf(i-1:i,j  ,k  ))])])
+               tmp_ym=sum(this%itp_x(:,i,j-1,k-1)*ccf(i-1:i,j-1,k-1))
+               tmp_yp=sum(this%itp_x(:,i,j  ,k-1)*ccf(i-1:i,j  ,k-1))
+               tmp_zm=sum(this%itp_y(:,i,j  ,k-1)*[tmp_ym,tmp_yp])
+               tmp_ym=sum(this%itp_x(:,i,j-1,k)*ccf(i-1:i,j-1,k  ))
+               tmp_yp=sum(this%itp_x(:,i,j  ,k)*ccf(i-1:i,j  ,k  ))
+               tmp_zp=sum(this%itp_y(:,i,j  ,k)*[tmp_ym,tmp_yp])
+               vcf(i,j,k)=sum(this%itp_z(:,i,j,k)*[tmp_zm,tmp_zp])
             end do
          end do
       end do
@@ -1006,6 +1015,79 @@ contains
             end do
          end do
       end do
+      ! Linear extrapolation for boundaries
+      if (this%cfg%iproc.eq.1) then
+         ! xm boundary
+         gradX(this%cfg%imin,:,:)=(gradX(this%cfg%imin+1,:,:)-gradX(this%cfg%imin+2,:,:))/(this%cfg%xm(this%cfg%imin+1)-this%cfg%xm(this%cfg%imin+2))*this%cfg%xm(this%cfg%imin  )+&
+         &                       -(gradX(this%cfg%imin+1,:,:)-gradX(this%cfg%imin+2,:,:))/(this%cfg%xm(this%cfg%imin+1)-this%cfg%xm(this%cfg%imin+2))*this%cfg%xm(this%cfg%imin+1)+&
+         &                         gradX(this%cfg%imin+1,:,:)
+         gradY(this%cfg%imin,:,:)=(gradY(this%cfg%imin+1,:,:)-gradY(this%cfg%imin+2,:,:))/(this%cfg%xm(this%cfg%imin+1)-this%cfg%xm(this%cfg%imin+2))*this%cfg%xm(this%cfg%imin  )+&
+         &                       -(gradY(this%cfg%imin+1,:,:)-gradY(this%cfg%imin+2,:,:))/(this%cfg%xm(this%cfg%imin+1)-this%cfg%xm(this%cfg%imin+2))*this%cfg%xm(this%cfg%imin+1)+&
+         &                         gradY(this%cfg%imin+1,:,:)
+         gradZ(this%cfg%imin,:,:)=(gradZ(this%cfg%imin+1,:,:)-gradZ(this%cfg%imin+2,:,:))/(this%cfg%xm(this%cfg%imin+1)-this%cfg%xm(this%cfg%imin+2))*this%cfg%xm(this%cfg%imin  )+&
+         &                       -(gradZ(this%cfg%imin+1,:,:)-gradZ(this%cfg%imin+2,:,:))/(this%cfg%xm(this%cfg%imin+1)-this%cfg%xm(this%cfg%imin+2))*this%cfg%xm(this%cfg%imin+1)+&
+         &                         gradZ(this%cfg%imin+1,:,:)
+      end if
+      if (this%cfg%iproc.eq.this%cfg%npx) then
+         ! xp boundary
+         gradX(this%cfg%imax,:,:)=(gradX(this%cfg%imax-1,:,:)-gradX(this%cfg%imax-2,:,:))/(this%cfg%xm(this%cfg%imax-1)-this%cfg%xm(this%cfg%imax-2))*this%cfg%xm(this%cfg%imax  )+&
+         &                       -(gradX(this%cfg%imax-1,:,:)-gradX(this%cfg%imax-2,:,:))/(this%cfg%xm(this%cfg%imax-1)-this%cfg%xm(this%cfg%imax-2))*this%cfg%xm(this%cfg%imax-1)+&
+         &                         gradX(this%cfg%imax-1,:,:)
+         gradY(this%cfg%imax,:,:)=(gradY(this%cfg%imax-1,:,:)-gradY(this%cfg%imax-2,:,:))/(this%cfg%xm(this%cfg%imax-1)-this%cfg%xm(this%cfg%imax-2))*this%cfg%xm(this%cfg%imax  )+&
+         &                       -(gradY(this%cfg%imax-1,:,:)-gradY(this%cfg%imax-2,:,:))/(this%cfg%xm(this%cfg%imax-1)-this%cfg%xm(this%cfg%imax-2))*this%cfg%xm(this%cfg%imax-1)+&
+         &                         gradY(this%cfg%imax-1,:,:)
+         gradZ(this%cfg%imax,:,:)=(gradZ(this%cfg%imax-1,:,:)-gradZ(this%cfg%imax-2,:,:))/(this%cfg%xm(this%cfg%imax-1)-this%cfg%xm(this%cfg%imax-2))*this%cfg%xm(this%cfg%imax  )+&
+         &                       -(gradZ(this%cfg%imax-1,:,:)-gradZ(this%cfg%imax-2,:,:))/(this%cfg%xm(this%cfg%imax-1)-this%cfg%xm(this%cfg%imax-2))*this%cfg%xm(this%cfg%imax-1)+&
+         &                         gradZ(this%cfg%imax-1,:,:)
+      end if
+      if (this%cfg%jproc.eq.1) then
+         ! ym boundary
+         gradX(:,this%cfg%jmin,:)=(gradX(:,this%cfg%jmin+1,:)-gradX(:,this%cfg%jmin+2,:))/(this%cfg%ym(this%cfg%jmin+1)-this%cfg%ym(this%cfg%jmin+2))*this%cfg%ym(this%cfg%jmin  )+&
+         &                       -(gradX(:,this%cfg%jmin+1,:)-gradX(:,this%cfg%jmin+2,:))/(this%cfg%ym(this%cfg%jmin+1)-this%cfg%ym(this%cfg%jmin+2))*this%cfg%ym(this%cfg%jmin+1)+&
+         &                         gradX(:,this%cfg%jmin+1,:)
+         gradY(:,this%cfg%jmin,:)=(gradY(:,this%cfg%jmin+1,:)-gradY(:,this%cfg%jmin+2,:))/(this%cfg%ym(this%cfg%jmin+1)-this%cfg%ym(this%cfg%jmin+2))*this%cfg%ym(this%cfg%jmin  )+&
+         &                       -(gradY(:,this%cfg%jmin+1,:)-gradY(:,this%cfg%jmin+2,:))/(this%cfg%ym(this%cfg%jmin+1)-this%cfg%ym(this%cfg%jmin+2))*this%cfg%ym(this%cfg%jmin+1)+&
+         &                         gradY(:,this%cfg%jmin+1,:)
+         gradZ(:,this%cfg%jmin,:)=(gradZ(:,this%cfg%jmin+1,:)-gradZ(:,this%cfg%jmin+2,:))/(this%cfg%ym(this%cfg%jmin+1)-this%cfg%ym(this%cfg%jmin+2))*this%cfg%ym(this%cfg%jmin  )+&
+         &                       -(gradZ(:,this%cfg%jmin+1,:)-gradZ(:,this%cfg%jmin+2,:))/(this%cfg%ym(this%cfg%jmin+1)-this%cfg%ym(this%cfg%jmin+2))*this%cfg%ym(this%cfg%jmin+1)+&
+         &                         gradZ(:,this%cfg%jmin+1,:)
+      end if
+      if (this%cfg%jproc.eq.this%cfg%npy) then
+         ! yp boundary
+         gradX(:,this%cfg%jmax,:)=(gradX(:,this%cfg%jmax-1,:)-gradX(:,this%cfg%jmax-2,:))/(this%cfg%ym(this%cfg%jmax-1)-this%cfg%ym(this%cfg%jmax-2))*this%cfg%ym(this%cfg%jmax  )+&
+         &                       -(gradX(:,this%cfg%jmax-1,:)-gradX(:,this%cfg%jmax-2,:))/(this%cfg%ym(this%cfg%jmax-1)-this%cfg%ym(this%cfg%jmax-2))*this%cfg%ym(this%cfg%jmax-1)+&
+         &                         gradX(:,this%cfg%jmax-1,:)
+         gradY(:,this%cfg%jmax,:)=(gradY(:,this%cfg%jmax-1,:)-gradY(:,this%cfg%jmax-2,:))/(this%cfg%ym(this%cfg%jmax-1)-this%cfg%ym(this%cfg%jmax-2))*this%cfg%ym(this%cfg%jmax  )+&
+         &                       -(gradY(:,this%cfg%jmax-1,:)-gradY(:,this%cfg%jmax-2,:))/(this%cfg%ym(this%cfg%jmax-1)-this%cfg%ym(this%cfg%jmax-2))*this%cfg%ym(this%cfg%jmax-1)+&
+         &                         gradY(:,this%cfg%jmax-1,:)
+         gradZ(:,this%cfg%jmax,:)=(gradZ(:,this%cfg%jmax-1,:)-gradZ(:,this%cfg%jmax-2,:))/(this%cfg%ym(this%cfg%jmax-1)-this%cfg%ym(this%cfg%jmax-2))*this%cfg%ym(this%cfg%jmax  )+&
+         &                       -(gradZ(:,this%cfg%jmax-1,:)-gradZ(:,this%cfg%jmax-2,:))/(this%cfg%ym(this%cfg%jmax-1)-this%cfg%ym(this%cfg%jmax-2))*this%cfg%ym(this%cfg%jmax-1)+&
+         &                         gradZ(:,this%cfg%jmax-1,:)
+      end if
+      if (this%cfg%kproc.eq.1) then
+         ! zm boundary
+         gradX(:,:,this%cfg%kmin)=(gradX(:,:,this%cfg%kmin+1)-gradX(:,:,this%cfg%kmin+2))/(this%cfg%zm(this%cfg%kmin+1)-this%cfg%zm(this%cfg%kmin+2))*this%cfg%zm(this%cfg%kmin  )+&
+         &                       -(gradX(:,:,this%cfg%kmin+1)-gradX(:,:,this%cfg%kmin+2))/(this%cfg%zm(this%cfg%kmin+1)-this%cfg%zm(this%cfg%kmin+2))*this%cfg%zm(this%cfg%kmin+1)+&
+         &                         gradX(:,:,this%cfg%kmin+1)
+         gradY(:,:,this%cfg%kmin)=(gradY(:,:,this%cfg%kmin+1)-gradY(:,:,this%cfg%kmin+2))/(this%cfg%zm(this%cfg%kmin+1)-this%cfg%zm(this%cfg%kmin+2))*this%cfg%zm(this%cfg%kmin  )+&
+         &                       -(gradY(:,:,this%cfg%kmin+1)-gradY(:,:,this%cfg%kmin+2))/(this%cfg%zm(this%cfg%kmin+1)-this%cfg%zm(this%cfg%kmin+2))*this%cfg%zm(this%cfg%kmin+1)+&
+         &                         gradY(:,:,this%cfg%kmin+1)
+         gradZ(:,:,this%cfg%kmin)=(gradZ(:,:,this%cfg%kmin+1)-gradZ(:,:,this%cfg%kmin+2))/(this%cfg%zm(this%cfg%kmin+1)-this%cfg%zm(this%cfg%kmin+2))*this%cfg%zm(this%cfg%kmin  )+&
+         &                       -(gradZ(:,:,this%cfg%kmin+1)-gradZ(:,:,this%cfg%kmin+2))/(this%cfg%zm(this%cfg%kmin+1)-this%cfg%zm(this%cfg%kmin+2))*this%cfg%zm(this%cfg%kmin+1)+&
+         &                         gradZ(:,:,this%cfg%kmin+1)
+      end if
+      if (this%cfg%kproc.eq.this%cfg%npz) then
+         ! zp boundary
+         gradX(:,:,this%cfg%kmax)=(gradX(:,:,this%cfg%kmax-1)-gradX(:,:,this%cfg%kmax-2))/(this%cfg%zm(this%cfg%kmax-1)-this%cfg%zm(this%cfg%kmax-2))*this%cfg%zm(this%cfg%kmax  )+&
+         &                       -(gradX(:,:,this%cfg%kmax-1)-gradX(:,:,this%cfg%kmax-2))/(this%cfg%zm(this%cfg%kmax-1)-this%cfg%zm(this%cfg%kmax-2))*this%cfg%zm(this%cfg%kmax-1)+&
+         &                         gradX(:,:,this%cfg%kmax-1)
+         gradY(:,:,this%cfg%kmax)=(gradY(:,:,this%cfg%kmax-1)-gradY(:,:,this%cfg%kmax-2))/(this%cfg%zm(this%cfg%kmax-1)-this%cfg%zm(this%cfg%kmax-2))*this%cfg%zm(this%cfg%kmax  )+&
+         &                       -(gradY(:,:,this%cfg%kmax-1)-gradY(:,:,this%cfg%kmax-2))/(this%cfg%zm(this%cfg%kmax-1)-this%cfg%zm(this%cfg%kmax-2))*this%cfg%zm(this%cfg%kmax-1)+&
+         &                         gradY(:,:,this%cfg%kmax-1)
+         gradZ(:,:,this%cfg%kmax)=(gradZ(:,:,this%cfg%kmax-1)-gradZ(:,:,this%cfg%kmax-2))/(this%cfg%zm(this%cfg%kmax-1)-this%cfg%zm(this%cfg%kmax-2))*this%cfg%zm(this%cfg%kmax  )+&
+         &                       -(gradZ(:,:,this%cfg%kmax-1)-gradZ(:,:,this%cfg%kmax-2))/(this%cfg%zm(this%cfg%kmax-1)-this%cfg%zm(this%cfg%kmax-2))*this%cfg%zm(this%cfg%kmax-1)+&
+         &                         gradZ(:,:,this%cfg%kmax-1)
+      end if
       ! Sync the gradient components
       call this%cfg%sync(gradX)
       call this%cfg%sync(gradY)
