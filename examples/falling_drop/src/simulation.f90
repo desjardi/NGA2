@@ -38,7 +38,7 @@ module simulation
    
    !> Private work arrays
    real(WP), dimension(:,:,:,:), allocatable :: resSC
-   real(WP), dimension(:,:,:),   allocatable :: vcVF,fcVF_x,fcVF_y,fcVF_z
+   real(WP), dimension(:,:,:), allocatable :: vcVF,fcVF_x,fcVF_y,fcVF_z
    real(WP), dimension(:,:,:),   allocatable :: VFgradX,VFgradY,VFgradZ,mdot,mdotL,mdotG,mdotL_old,mdotG_old,resmdotL,resmdotG
    ! real(WP), dimension(:,:,:),   allocatable :: mdotL_err_field
    real(WP), dimension(:,:,:),   allocatable :: resU,resV,resW
@@ -50,7 +50,6 @@ module simulation
    integer :: iZl,iZg
    type(timetracker), public :: pseudo_time
    real(WP) :: mdot_int,mdotL_int,mdotG_int,mdot_err,mdotL_err,mdotG_err,evpsrc_tol,mdotL_int_err,mdotG_int_err
-   ! real(WP), dimension(:,:,:), allocatable :: k1,k2,k3,k4
    
 contains
 
@@ -143,10 +142,6 @@ contains
       ! Allocate work arrays
       allocate_work_arrays: block
          allocate(resSC    (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_,1:2))
-         allocate(vcVF     (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_)); vcVF=0.0_WP
-         allocate(fcVF_x   (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_)); fcVF_x=0.0_WP
-         allocate(fcVF_y   (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_)); fcVF_y=0.0_WP
-         allocate(fcVF_z   (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_)); fcVF_z=0.0_WP
          allocate(VFgradX  (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_)); VFgradX=0.0_WP
          allocate(VFgradY  (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_)); VFgradY=0.0_WP
          allocate(VFgradZ  (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_)); VFgradZ=0.0_WP
@@ -164,11 +159,10 @@ contains
          allocate(Ui       (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
          allocate(Vi       (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
          allocate(Wi       (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
-         ! Allocate the RK4 slopes
-         ! allocate(k1(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_)); k1=0.0_WP
-         ! allocate(k2(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_)); k2=0.0_WP
-         ! allocate(k3(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_)); k3=0.0_WP
-         ! allocate(k4(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_)); k4=0.0_WP
+         allocate(vcVF  (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_)); vcVF=0.0_WP
+         allocate(fcVF_x(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_)); fcVF_x=0.0_WP
+         allocate(fcVF_y(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_)); fcVF_y=0.0_WP
+         allocate(fcVF_z(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_)); fcVF_z=0.0_WP
       end block allocate_work_arrays
       
       
@@ -222,13 +216,16 @@ contains
                   end do
                   ! Call adaptive refinement code to get volume and barycenters recursively
                   vol=0.0_WP; area=0.0_WP; v_cent=0.0_WP; a_cent=0.0_WP
-                  !debug
-                  call cube_refine_vol(cube_vertex,vol,area,v_cent,a_cent,levelset_falling_drop,0.0_WP,amr_ref_lvl)
-                  vf%VF(i,j,k)=vol/vf%cfg%vol(i,j,k)
+                  ! Debug
+                  ! call cube_refine_vol(cube_vertex,vol,area,v_cent,a_cent,levelset_falling_drop,0.0_WP,amr_ref_lvl)
+                  ! vf%VF(i,j,k)=vol/vf%cfg%vol(i,j,k)
                   ! vf%VF(1,1,:)=0.1_WP
                   ! vf%VF(2,1,:)=0.2_WP
                   ! vf%VF(1,2,:)=0.4_WP
                   ! vf%VF(2,2,:)=0.3_WP
+                  ! vf%VF(i,j,k)=25000.0_WP*vf%cfg%xm(i)**3+4.0_WP*vf%cfg%xm(i)**2-20.0_WP*vf%cfg%xm(i)+0.3_WP
+                  ! vf%VF(i,j,k)=50_WP*vf%cfg%xm(i)**2*50_WP*vf%cfg%ym(j)**2*50_WP*vf%cfg%zm(k)**2
+                  vf%VF(i,j,k)=exp(-200.0_WP*vf%cfg%xm(i)**2)
                   if (vf%VF(i,j,k).ge.VFlo.and.vf%VF(i,j,k).le.VFhi) then
                      vf%Lbary(:,i,j,k)=v_cent
                      vf%Gbary(:,i,j,k)=([vf%cfg%xm(i),vf%cfg%ym(j),vf%cfg%zm(k)]-vf%VF(i,j,k)*vf%Lbary(:,i,j,k))/(1.0_WP-vf%VF(i,j,k))
@@ -239,6 +236,7 @@ contains
                end do
             end do
          end do
+         call vf%cfg%sync(vf%VF)
          ! Update the band
          call vf%update_band()
          ! Perform interface reconstruction from VOF field
@@ -350,8 +348,8 @@ contains
          end do
       end block create_scalar
       
-      ! Create a solver for shifting the mass source term
-      create_mdot_solver: block
+      ! Create a framework for shifting the mass source term
+      create_mdot: block
          ! Initialize a pseudo time tracker
          pseudo_time=timetracker(amRoot=cfg%amRoot,name='Pseudo',print_info=.false.)
          call param_read('Max pseudo timestep size',pseudo_time%dtmax)
@@ -362,10 +360,10 @@ contains
          ! Get the gradient of VOF
          ! call sc%get_fcgrad(vf%VF,VFgradX,VFgradY,VFgradZ)
          call sc%cell_to_vertex(ccf=vf%VF,vcf=vcVF)
-         ! print*,'-----------------------------------------------'
-         ! print*,'shape(itp_x)=',shape(sc%itp_x)
-         ! print*,'shape(itp_y)=',shape(sc%itp_y)
-         ! print*,'shape(itp_z)=',shape(sc%itp_z)
+         call sc%vertex_to_face(vcf=vcVF,fcf_x=fcVF_x,fcf_y=fcVF_y,fcf_z=fcVF_z)
+         call sc%get_ccgrad(fcf_x=fcVF_x,fcf_y=fcVF_y,fcf_z=fcVF_z,gradX=VFgradX,gradY=VFgradY,gradZ=VFgradZ)
+         ! fcVF_x=VFgradX; fcVF_y=VFgradY; fcVF_z=VFgradZ
+         ! call sc%cellVec_to_face(ccf_x=fcVF_x,ccf_y=fcVF_y,ccf_z=fcVF_z,fcf_x=VFgradX,fcf_y=VFgradY,fcf_z=VFgradZ)
          ! print*,'-----------------------------------------------'
          ! print*,'internal: '
          ! print*,'VOF(1:2,1,1) = ',vf%VF(1:2,1,1)
@@ -398,10 +396,38 @@ contains
          ! print*,'vcVF(1:3,2,3) = ',vcVF(1:3,2,3)
          ! print*,'vcVF(1:3,3,3) = ',vcVF(1:3,3,3)
          ! print*,'-----------------------------------------------'
-         call sc%vertex_to_face(vcf=vcVF,fcf_x=fcVF_x,fcf_y=fcVF_y,fcf_z=fcVF_z)
-         call sc%get_ccgrad(fcf_x=fcVF_x,fcf_y=fcVF_y,fcf_z=fcVF_z,gradX=VFgradX,gradY=VFgradY,gradZ=VFgradZ)
-         fcVF_x=VFgradX; fcVF_y=VFgradY; fcVF_z=VFgradZ
-         call sc%cellVec_to_face(ccf_x=fcVF_x,ccf_y=fcVF_y,ccf_z=fcVF_z,fcf_x=VFgradX,fcf_y=VFgradY,fcf_z=VFgradZ)
+         ! print*,'z face 1: '
+         ! print*,'fcVF_z(1,1,1)=',fcVF_z(1,1,1)
+         ! print*,'fcVF_z(2,1,1)=',fcVF_z(2,1,1)
+         ! print*,'fcVF_z(1,2,1)=',fcVF_z(1,2,1)
+         ! print*,'fcVF_z(2,2,1)=',fcVF_z(2,2,1)
+         ! print*,'z face 2: '
+         ! print*,'fcVF_z(1,1,2)=',fcVF_z(1,1,2)
+         ! print*,'fcVF_z(2,1,2)=',fcVF_z(2,1,2)
+         ! print*,'fcVF_z(1,2,2)=',fcVF_z(1,2,2)
+         ! print*,'fcVF_z(2,2,2)=',fcVF_z(2,2,2)
+         ! print*,'z face 3: '
+         ! print*,'fcVF_z(1,1,3)=',fcVF_z(1,1,3)
+         ! print*,'fcVF_z(2,1,3)=',fcVF_z(2,1,3)
+         ! print*,'fcVF_z(1,2,3)=',fcVF_z(1,2,3)
+         ! print*,'fcVF_z(2,2,3)=',fcVF_z(2,2,3)
+         ! print*,'-----------------------------------------------'
+         ! print*,'x face 1: '
+         ! print*,'fcVF_x(1,1,1)=',fcVF_x(1,1,1)
+         ! print*,'fcVF_x(1,2,1)=',fcVF_x(1,2,1)
+         ! print*,'fcVF_x(1,1,2)=',fcVF_x(1,1,2)
+         ! print*,'fcVF_x(1,2,2)=',fcVF_x(1,2,2)
+         ! print*,'x face 2: '
+         ! print*,'fcVF_x(2,1,1)=',fcVF_x(2,1,1)
+         ! print*,'fcVF_x(2,2,1)=',fcVF_x(2,2,1)
+         ! print*,'fcVF_x(2,1,2)=',fcVF_x(2,1,2)
+         ! print*,'fcVF_x(2,2,2)=',fcVF_x(2,2,2)
+         ! print*,'x face 3: '
+         ! print*,'fcVF_x(3,1,1)=',fcVF_x(3,1,1)
+         ! print*,'fcVF_x(3,2,1)=',fcVF_x(3,2,1)
+         ! print*,'fcVF_x(3,1,2)=',fcVF_x(3,1,2)
+         ! print*,'fcVF_x(3,2,2)=',fcVF_x(3,2,2)
+         ! print*,'-----------------------------------------------'
          ! Initialize the evaporation mass source term and errors
          where ((vf%VF.gt.0.0_WP).and.(vf%VF.lt.1.0_WP))
             mdot=1.0_WP
@@ -416,7 +442,7 @@ contains
          call cfg%integrate(mdot,mdot_int)
          call cfg%integrate(mdotL,mdotL_int)
          call cfg%integrate(mdotG,mdotG_int)
-      end block create_mdot_solver
+      end block create_mdot
       
       ! Create surfmesh object for interface polygon output
       create_smesh: block
@@ -568,30 +594,43 @@ contains
          ! Now transport our phase-specific scalars
          advance_scalar: block
             use tpscalar_class, only: Lphase,Gphase
-            use mpi_f08,  only: MPI_ALLREDUCE,MPI_MAX
-            use parallel, only: MPI_REAL_WP
-            integer :: i,j,k,nsc,ierr
-            real(WP) :: my_mdot_err
-
+            integer :: nsc
+            
             ! Get the phas-specific VOF
             sc%PVF(:,:,:,Lphase)=vf%VF
             sc%PVF(:,:,:,Gphase)=1.0_WP-vf%VF
-
+            
             ! Explicit calculation of dSC/dt from advective term
             call sc%get_dSCdt(dSCdt=resSC,U=fs%U,V=fs%V,W=fs%W,VFold=vf%VFold,VF=vf%VF,detailed_face_flux=vf%detailed_face_flux,dt=time%dt)
-
+            
             ! Advance advection
             do nsc=1,sc%nscalar
                where (sc%mask.eq.0.and.sc%PVF(:,:,:,sc%phase(nsc)).gt.0.0_WP) sc%SC(:,:,:,nsc)=((sc%PVFold(:,:,:,sc%phase(nsc)))*sc%SCold(:,:,:,nsc)+time%dt*resSC(:,:,:,nsc))/(sc%PVF(:,:,:,sc%phase(nsc)))
                where (sc%PVF(:,:,:,sc%phase(nsc)).eq.0.0_WP) sc%SC(:,:,:,nsc)=0.0_WP
             end do
-
+               
             ! Advance diffusion
             call sc%solve_implicit(time%dt,sc%SC)
-
+            
             ! Apply boundary conditions
             call sc%apply_bcond(time%t,time%dt)
+               
+         end block advance_scalar
+               
+         ! Shift the mass source term away from the interface
+         shift_mdot: block
+            use mpi_f08,  only: MPI_ALLREDUCE,MPI_MAX
+            use parallel, only: MPI_REAL_WP
+            ! real(WP), dimension(:,:,:), allocatable :: k1,k2,k3,k4
+            integer :: ierr
+            real(WP) :: my_mdot_err
 
+            ! Allocate the RK slopes
+            ! allocate(k1(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_)); k1=0.0_WP
+            ! allocate(k2(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_)); k2=0.0_WP
+            ! allocate(k3(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_)); k3=0.0_WP
+            ! allocate(k4(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_)); k4=0.0_WP
+               
             ! Update the mass source term
             where ((vf%VF.gt.0.0_WP).and.(vf%VF.lt.1.0_WP))
                mdot=1.0_WP
@@ -599,11 +638,7 @@ contains
             else where
                mdot=0.0_WP
             end where
-            mdotL=mdot
-            mdotG=mdot
-
-            ! Re-distribute the evaporation mass source term
-            ! call sc%redist_mdot(mdot,mdotL)
+            mdotL=mdot; mdotG=mdot
 
             ! Reset the pseudo time
             call pseudo_time%reset()
@@ -633,8 +668,8 @@ contains
                call pseudo_time%increment()
 
                ! Assemble explicit residual
-               call sc%get_dmdotdtau( VFgradX, VFgradY, VFgradZ,vf%SD,mdotL_old,resmdotL)
-               call sc%get_dmdotdtau(-VFgradX,-VFgradY,-VFgradZ,vf%SD,mdotG_old,resmdotG)
+               call sc%get_dmdotdtau( VFgradX, VFgradY, VFgradZ,mdotL_old,resmdotL)
+               call sc%get_dmdotdtau(-VFgradX,-VFgradY,-VFgradZ,mdotG_old,resmdotG)
                
                ! Apply these residuals
                mdotL=mdotL_old+pseudo_time%dt*resmdotL
@@ -669,6 +704,7 @@ contains
                ! mdotG=mdotG_old+pseudo_time%dt/6.0_WP*(k1+2.0_WP*(k2+k3)+k4)
 
                ! Calculate the error
+               ! mdotL_err_field=mdotL-mdotL_old
                my_mdot_err=maxval(abs(mdotL-mdotL_old))
                call MPI_ALLREDUCE(my_mdot_err,mdotL_err,1,MPI_REAL_WP,MPI_Max,sc%cfg%comm,ierr)
                my_mdot_err=maxval(abs(mdotG-mdotG_old))
@@ -676,7 +712,7 @@ contains
                mdot_err=max(mdotL_err,mdotG_err)
                if (mdot_err.lt.evpsrc_tol) exit
 
-               ! mdotL_err_field=mdotL-mdotL_old
+               ! Output to ensight
                ! if (ens_mdot_evt%occurs()) then
                !    call ens_mdot_out%write_data(pseudo_time%t)
                ! end if
@@ -690,8 +726,11 @@ contains
             mdotL_int_err=abs(mdotL_int-mdot_int)
             mdotG_int_err=abs(mdotG_int-mdot_int)
 
-         end block advance_scalar
-         
+            ! Deallocate
+            ! deallocate(k1,k2,k3,k4)
+
+         end block shift_mdot
+
          ! Prepare new staggered viscosity (at n+1)
          call fs%get_viscosity(vf=vf,strat=harmonic_visc)
          
@@ -785,8 +824,7 @@ contains
       ! timetracker
       
       ! Deallocate work arrays
-      deallocate(resU,resV,resW,Ui,Vi,Wi,resSC,mdot,mdotL,mdotL_old,mdotG,mdotG_old,resmdotL,resmdotG)!,k1,k2,k3,k4)
-      
+      deallocate(resU,resV,resW,Ui,Vi,Wi,resSC,mdot,mdotL,mdotL_old,mdotG,mdotG_old,resmdotL,resmdotG,vcVF,fcVF_x,fcVF_y,fcVF_z)
    end subroutine simulation_final
    
    

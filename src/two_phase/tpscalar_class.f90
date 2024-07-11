@@ -90,12 +90,9 @@ module tpscalar_class
       procedure :: add_bcond                              !< Add a boundary condition
       procedure :: get_bcond                              !< Get a boundary condition
       procedure :: apply_bcond                            !< Apply all boundary conditions
-      ! procedure :: apply_bcond_mdot                       !< Apply all boundary conditions for mdot
       procedure :: get_dSCdt                              !< Calculate drhoSC/dt from advective fluxes
-      ! procedure :: get_dSCdt_diff                         !< Calculate drhoSC/dt from diffusive fluxes
       procedure :: get_max                                !< Calculate maximum and integral field values
       procedure :: solve_implicit                         !< Solve for the scalar residuals implicitly
-      procedure :: redist_mdot                            !< Re-distribute the evaporation mass source term
       procedure :: get_dmdotdtau
       procedure :: get_cfl
       procedure :: cell_to_vertex
@@ -663,62 +660,6 @@ contains
       
    end subroutine get_dSCdt
 
-
-   !> Calculate the explicit SC time derivative from diffusive term based on U/V/W
-   ! subroutine get_dSCdt_diff(this,dSCdt,U,V,W)
-   !    use irl_fortran_interface
-   !    implicit none
-   !    class(tpscalar), intent(inout) :: this
-   !    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:,1:), intent(out) :: dSCdt    !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_,1:nscalar)
-   !    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:)   , intent(in)  :: U        !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
-   !    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:)   , intent(in)  :: V        !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
-   !    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:)   , intent(in)  :: W        !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
-   !    integer :: i,j,k,nsc
-   !    real(WP), dimension(:,:,:),   allocatable :: FX,FY,FZ
-   !    ! Zero out dSC/dt array
-   !    dSCdt=0.0_WP
-   !    ! Allocate flux arrays
-   !    allocate(FX(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
-   !    allocate(FY(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
-   !    allocate(FZ(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
-   !    ! Work on each scalar
-   !    do nsc=1,this%nscalar
-   !       ! Reset fluxes and gradient to zero
-   !       FX=0.0_WP; FY=0.0_WP; FZ=0.0_WP
-   !       ! Diffusive flux of SC
-   !       do k=this%cfg%kmin_,this%cfg%kmax_+1
-   !          do j=this%cfg%jmin_,this%cfg%jmax_+1
-   !             do i=this%cfg%imin_,this%cfg%imax_+1
-   !                ! Flux on x-face
-   !                FX(i,j,k)=FX(i,j,k)+sum(this%itp_x(:,i,j,k)*this%diff(i-1:i,j,k,nsc))*sum(this%grd_x(:,i,j,k)*this%SC(i-1:i,j,k,nsc))*&
-   !                &                  sum(this%itp_x(:,i,j,k)*this%PVF(i-1:i,j,k,this%phase(nsc)))*merge(1.0_WP,0.0_WP,this%PVF(i-1,j,k,this%phase(nsc))>0.0_WP)*merge(1.0_WP,0.0_WP,this%PVF(i,j,k,this%phase(nsc))>0.0_WP)
-   !                ! Flux on y-face
-   !                FY(i,j,k)=FY(i,j,k)+sum(this%itp_y(:,i,j,k)*this%diff(i,j-1:j,k,nsc))*sum(this%grd_y(:,i,j,k)*this%SC(i,j-1:j,k,nsc))*&
-   !                &                  sum(this%itp_y(:,i,j,k)*this%PVF(i,j-1:j,k,this%phase(nsc)))*merge(1.0_WP,0.0_WP,this%PVF(i,j-1,k,this%phase(nsc))>0.0_WP)*merge(1.0_WP,0.0_WP,this%PVF(i,j,k,this%phase(nsc))>0.0_WP)
-   !                ! Flux on z-face
-   !                FZ(i,j,k)=FZ(i,j,k)+sum(this%itp_z(:,i,j,k)*this%diff(i,j,k-1:k,nsc))*sum(this%grd_z(:,i,j,k)*this%SC(i,j,k-1:k,nsc))*&
-   !                &                  sum(this%itp_z(:,i,j,k)*this%PVF(i,j,k-1:k,this%phase(nsc)))*merge(1.0_WP,0.0_WP,this%PVF(i,j,k-1,this%phase(nsc))>0.0_WP)*merge(1.0_WP,0.0_WP,this%PVF(i,j,k,this%phase(nsc))>0.0_WP)
-   !             end do
-   !          end do
-   !       end do
-   !       ! Time derivative of SC
-   !       do k=this%cfg%kmin_,this%cfg%kmax_
-   !          do j=this%cfg%jmin_,this%cfg%jmax_
-   !             do i=this%cfg%imin_,this%cfg%imax_
-   !                dSCdt(i,j,k,nsc)=sum(this%div_x(:,i,j,k)*FX(i:i+1,j,k))+&
-   !                &                sum(this%div_y(:,i,j,k)*FY(i,j:j+1,k))+&
-   !                &                sum(this%div_z(:,i,j,k)*FZ(i,j,k:k+1))
-   !             end do
-   !          end do
-   !       end do
-   !       ! Sync residual
-   !       call this%cfg%sync(dSCdt(:,:,:,nsc))
-   !    end do
-   !    ! Deallocate flux arrays
-   !    deallocate(FX,FY,FZ)
-      
-   ! end subroutine get_dSCdt_diff
-
    
    !> Calculate the min, max, and int of our SC field
    subroutine get_max(this,VF)
@@ -793,108 +734,14 @@ contains
       
    end subroutine solve_implicit
 
-
-   !> Re-distribute the evaporation source term away from the interface
-   subroutine redist_mdot(this,mdot,mdot_new)
-      implicit none
-      class(tpscalar), intent(inout) :: this
-      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in)  :: mdot     !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
-      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(out) :: mdot_new !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
-      integer :: i,j,k
-      real(WP) :: vel
-
-      ! integer :: nst,sti,std,stp1,stp2,stm1,stm2
-      ! nst=1
-      ! stp1=-(nst+1)/2; stp2=nst+stp1-1
-      ! stm1=-(nst-1)/2; stm2=nst+stm1-1
-
-      ! Prepare advective operator
-      this%mdot_solver%opr(:,:,:,:)=0.0_WP
-      do k=this%cfg%kmin_,this%cfg%kmax_
-         do j=this%cfg%jmin_,this%cfg%jmax_
-            do i=this%cfg%imin_,this%cfg%imax_
-               ! Linear interpolation for the face value of the scalar
-               ! this%mdot_solver%opr(1,i,j,k)=this%mdot_solver%opr(1,i,j,k)+this%div_x(+1,i,j,k)*sum(this%grd_x(:,i+1,j,k)*this%PVF(i:i+1,j,k,Lphase))*this%itp_x(-1,i+1,j,k)+&
-               ! &                                                           this%div_x( 0,i,j,k)*sum(this%grd_x(:,i  ,j,k)*this%PVF(i-1:i,j,k,Lphase))*this%itp_x( 0,i  ,j,k)+&
-               ! &                                                           this%div_y(+1,i,j,k)*sum(this%grd_y(:,i,j+1,k)*this%PVF(i,j:j+1,k,Lphase))*this%itp_y(-1,i,j+1,k)+&
-               ! &                                                           this%div_y( 0,i,j,k)*sum(this%grd_y(:,i,j  ,k)*this%PVF(i,j-1:j,k,Lphase))*this%itp_y( 0,i,j  ,k)+&
-               ! &                                                           this%div_z(+1,i,j,k)*sum(this%grd_z(:,i,j,k+1)*this%PVF(i,j,k:k+1,Lphase))*this%itp_z(-1,i,j,k+1)+&
-               ! &                                                           this%div_z( 0,i,j,k)*sum(this%grd_z(:,i,j,k  )*this%PVF(i,j,k-1:k,Lphase))*this%itp_z( 0,i,j,k  )
-               ! this%mdot_solver%opr(2,i,j,k)=this%mdot_solver%opr(2,i,j,k)+this%div_x(+1,i,j,k)*sum(this%grd_x(:,i+1,j,k)*this%PVF(i:i+1,j,k,Lphase))*this%itp_x( 0,i+1,j,k)
-               ! this%mdot_solver%opr(3,i,j,k)=this%mdot_solver%opr(3,i,j,k)+this%div_x( 0,i,j,k)*sum(this%grd_x(:,i  ,j,k)*this%PVF(i-1:i,j,k,Lphase))*this%itp_x(-1,i  ,j,k)
-               ! this%mdot_solver%opr(4,i,j,k)=this%mdot_solver%opr(4,i,j,k)+this%div_y(+1,i,j,k)*sum(this%grd_y(:,i,j+1,k)*this%PVF(i,j:j+1,k,Lphase))*this%itp_y( 0,i,j+1,k)
-               ! this%mdot_solver%opr(5,i,j,k)=this%mdot_solver%opr(5,i,j,k)+this%div_y( 0,i,j,k)*sum(this%grd_y(:,i,j  ,k)*this%PVF(i,j-1:j,k,Lphase))*this%itp_y(-1,i,j  ,k)
-               ! this%mdot_solver%opr(6,i,j,k)=this%mdot_solver%opr(6,i,j,k)+this%div_z(+1,i,j,k)*sum(this%grd_z(:,i,j,k+1)*this%PVF(i,j,k:k+1,Lphase))*this%itp_z( 0,i,j,k+1)
-               ! this%mdot_solver%opr(7,i,j,k)=this%mdot_solver%opr(7,i,j,k)+this%div_z( 0,i,j,k)*sum(this%grd_z(:,i,j,k  )*this%PVF(i,j,k-1:k,Lphase))*this%itp_z(-1,i,j,k  )
-
-               ! Upwind interpolation for the face value of the scalar
-               vel=sum(this%grd_x(:,i+1,j,k)*this%PVF(i:i+1,j,k,Lphase))
-               ! vel=U(i+1,j,k)
-               this%mdot_solver%opr(1,i,j,k)=this%mdot_solver%opr(1,i,j,k)+this%div_x(+1,i,j,k)*0.5_WP*(vel+abs(vel))
-               this%mdot_solver%opr(2,i,j,k)=this%mdot_solver%opr(2,i,j,k)+this%div_x(+1,i,j,k)*0.5_WP*(vel-abs(vel))
-               vel=sum(this%grd_x(:,i  ,j,k)*this%PVF(i-1:i,j,k,Lphase))
-               ! vel=U(i,j,k)
-               this%mdot_solver%opr(1,i,j,k)=this%mdot_solver%opr(1,i,j,k)+this%div_x( 0,i,j,k)*0.5_WP*(vel-abs(vel))
-               this%mdot_solver%opr(3,i,j,k)=this%mdot_solver%opr(3,i,j,k)+this%div_x( 0,i,j,k)*0.5_WP*(vel+abs(vel))
-               vel=sum(this%grd_y(:,i,j+1,k)*this%PVF(i,j:j+1,k,Lphase))
-               ! vel=V(i,j+1,k)
-               this%mdot_solver%opr(1,i,j,k)=this%mdot_solver%opr(1,i,j,k)+this%div_y(+1,i,j,k)*0.5_WP*(vel+abs(vel))
-               this%mdot_solver%opr(4,i,j,k)=this%mdot_solver%opr(4,i,j,k)+this%div_y(+1,i,j,k)*0.5_WP*(vel-abs(vel))
-               vel=sum(this%grd_y(:,i,j  ,k)*this%PVF(i,j-1:j,k,Lphase))
-               ! vel=V(i,j,k)
-               this%mdot_solver%opr(1,i,j,k)=this%mdot_solver%opr(1,i,j,k)+this%div_y( 0,i,j,k)*0.5_WP*(vel-abs(vel))
-               this%mdot_solver%opr(5,i,j,k)=this%mdot_solver%opr(5,i,j,k)+this%div_y( 0,i,j,k)*0.5_WP*(vel+abs(vel))
-               vel=sum(this%grd_z(:,i,j,k+1)*this%PVF(i,j,k:k+1,Lphase))
-               ! vel=W(i,j,k+1)
-               this%mdot_solver%opr(1,i,j,k)=this%mdot_solver%opr(1,i,j,k)+this%div_z(+1,i,j,k)*0.5_WP*(vel+abs(vel))
-               this%mdot_solver%opr(6,i,j,k)=this%mdot_solver%opr(6,i,j,k)+this%div_z(+1,i,j,k)*0.5_WP*(vel-abs(vel))
-               vel=sum(this%grd_z(:,i,j,k  )*this%PVF(i,j,k-1:k,Lphase))
-               ! vel=W(i,j,k)
-               this%mdot_solver%opr(1,i,j,k)=this%mdot_solver%opr(1,i,j,k)+this%div_z( 0,i,j,k)*0.5_WP*(vel-abs(vel))
-               this%mdot_solver%opr(7,i,j,k)=this%mdot_solver%opr(7,i,j,k)+this%div_z( 0,i,j,k)*0.5_WP*(vel+abs(vel))
-
-
-           
-               ! ! Loop over divergence stencil
-               ! do std=0,1
-               !    ! Loop over plus interpolation stencil
-               !    do sti=stp1,stp2
-               !       this%mdot_solver%opr(this%mdot_solver%stmap(sti+std,0,0),i,j,k)=this%mdot_solver%opr(this%mdot_solver%stmap(sti+std,0,0),i,j,k)+this%div_x(std,i,j,k)*0.5_WP*(U(i+std,j,k)+abs(U(i+std,j,k)))
-               !       this%mdot_solver%opr(this%mdot_solver%stmap(0,sti+std,0),i,j,k)=this%mdot_solver%opr(this%mdot_solver%stmap(0,sti+std,0),i,j,k)+this%div_y(std,i,j,k)*0.5_WP*(V(i,j+std,k)+abs(V(i,j+std,k)))
-               !       this%mdot_solver%opr(this%mdot_solver%stmap(0,0,sti+std),i,j,k)=this%mdot_solver%opr(this%mdot_solver%stmap(0,0,sti+std),i,j,k)+this%div_z(std,i,j,k)*0.5_WP*(W(i,j,k+std)+abs(W(i,j,k+std)))
-               !    end do
-               !    ! Loop over minus interpolation stencil
-               !    do sti=stm1,stm2
-               !       this%mdot_solver%opr(this%mdot_solver%stmap(sti+std,0,0),i,j,k)=this%mdot_solver%opr(this%mdot_solver%stmap(sti+std,0,0),i,j,k)+this%div_x(std,i,j,k)*0.5_WP*(U(i+std,j,k)-abs(U(i+std,j,k)))
-               !       this%mdot_solver%opr(this%mdot_solver%stmap(0,sti+std,0),i,j,k)=this%mdot_solver%opr(this%mdot_solver%stmap(0,sti+std,0),i,j,k)+this%div_y(std,i,j,k)*0.5_WP*(V(i,j+std,k)-abs(V(i,j+std,k)))
-               !       this%mdot_solver%opr(this%mdot_solver%stmap(0,0,sti+std),i,j,k)=this%mdot_solver%opr(this%mdot_solver%stmap(0,0,sti+std),i,j,k)+this%div_z(std,i,j,k)*0.5_WP*(W(i,j,k+std)-abs(W(i,j,k+std)))
-               !    end do
-               ! end do
-                  
-            end do
-         end do
-      end do
-
-      ! Solve the linear system
-      call this%mdot_solver%setup()
-      this%mdot_solver%sol=mdot
-      call this%mdot_solver%solve()
-      mdot_new=this%mdot_solver%sol
-      
-      ! Sync it
-      call this%cfg%sync(mdot_new)
-      
-   end subroutine redist_mdot
-
    
    !> Calculate the explicit mdot time derivative based on VOF
-   subroutine get_dmdotdtau(this,U,V,W,SD,mdot,dmdotdtau)
+   subroutine get_dmdotdtau(this,U,V,W,mdot,dmdotdtau)
       implicit none
       class(tpscalar), intent(inout) :: this
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in)  :: U         !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in)  :: V         !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in)  :: W         !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
-      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in)  :: SD        !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in)  :: mdot      !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(out) :: dmdotdtau !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       integer :: i,j,k
@@ -906,11 +753,10 @@ contains
       allocate(FX(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
       allocate(FY(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
       allocate(FZ(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
-      ! Flux of mdot
+      ! Fluxes of mdot
       do k=this%cfg%kmin_,this%cfg%kmax_+1
          do j=this%cfg%jmin_,this%cfg%jmax_+1
             do i=this%cfg%imin_,this%cfg%imax_+1
-               ! Upwind interpolation
                ! Fluxes on x-face
                FX(i,j,k)=-0.5_WP*(U(i,j,k)+abs(U(i,j,k)))*mdot(i-1,j,k) &
                &         -0.5_WP*(U(i,j,k)-abs(U(i,j,k)))*mdot(i  ,j,k)
@@ -920,25 +766,6 @@ contains
                ! Fluxes on z-face
                FZ(i,j,k)=-0.5_WP*(W(i,j,k)+abs(W(i,j,k)))*mdot(i,j,k-1) &
                &         -0.5_WP*(W(i,j,k)-abs(W(i,j,k)))*mdot(i,j,k  )
-
-               ! Linear interpolation
-               ! ! Fluxes on x-face
-               ! FX(i,j,k)=-U(i,j,k)*sum(this%itp_x(:,i,j,k)*mdot(i-1:i,j,k))
-               ! ! Fluxes on y-face
-               ! FY(i,j,k)=-V(i,j,k)*sum(this%itp_y(:,i,j,k)*mdot(i,j-1:j,k))
-               ! ! Fluxes on z-face
-               ! FZ(i,j,k)=-W(i,j,k)*sum(this%itp_z(:,i,j,k)*mdot(i,j,k-1:k))
-
-               ! Surface density area averaged flux
-               ! Fluxes on x-face
-               ! mysurf=sum(SD(i-1:i,j,k)*this%cfg%vol(i-1:i,j,k))
-               ! FX(i,j,k)=-U(i,j,k)*sum(SD(i-1:i,j,k)*this%cfg%vol(i-1:i,j,k)*mdot(i-1:i,j,k))/mysurf
-               ! ! Fluxes on y-face
-               ! mysurf=sum(SD(i,j-1:j,k)*this%cfg%vol(i,j-1:j,k))
-               ! FY(i,j,k)=-V(i,j,k)*sum(SD(i,j-1:j,k)*this%cfg%vol(i,j-1:j,k)*mdot(i,j-1:j,k))/mysurf
-               ! ! Fluxes on z-face
-               ! mysurf=sum(SD(i,j,k-1:k)*this%cfg%vol(i,j,k-1:k))
-               ! FZ(i,j,k)=-W(i,j,k)*sum(SD(i,j,k-1:k)*this%cfg%vol(i,j,k-1:k)*mdot(i,j,k-1:k))/mysurf
             end do
          end do
       end do
@@ -957,59 +784,6 @@ contains
       ! Sync residual
       call this%cfg%sync(dmdotdtau)
    end subroutine get_dmdotdtau
-
-
-   !> Enforce boundary condition on the mass source term
-   ! subroutine apply_bcond_mdot(this,t,dt,mdotL,mdotG)
-   !    use messager, only: die
-   !    implicit none
-   !    class(tpscalar), intent(inout) :: this
-   !    real(WP), intent(in) :: t,dt
-   !    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: mdotL !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
-   !    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: mdotG !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
-   !    integer :: i,j,k,n
-   !    type(bcond), pointer :: my_bc
-      
-   !    ! Traverse bcond list
-   !    my_bc=>this%first_bc
-   !    do while (associated(my_bc))
-         
-   !       ! Only processes inside the bcond work here
-   !       if (my_bc%itr%amIn) then
-            
-   !          ! Select appropriate action based on the bcond type
-   !          select case (my_bc%type)
-               
-   !          case (dirichlet)           ! Apply Dirichlet conditions
-               
-   !             ! This is done by the user directly
-   !             ! Unclear whether we want to do this within the solver...
-               
-   !          case (neumann)             ! Apply Neumann condition
-               
-   !             ! Implement based on bcond direction
-   !             do n=1,my_bc%itr%n_
-   !                i=my_bc%itr%map(1,n); j=my_bc%itr%map(2,n); k=my_bc%itr%map(3,n)
-   !                mdotL(i,j,k)=mdotL(i-shift(1,my_bc%dir),j-shift(2,my_bc%dir),k-shift(3,my_bc%dir))
-   !                mdotG(i,j,k)=mdotG(i-shift(1,my_bc%dir),j-shift(2,my_bc%dir),k-shift(3,my_bc%dir))
-   !             end do
-               
-   !          case default
-   !             call die('[tpscalar apply_bcond_mdot] Unknown bcond type')
-   !          end select
-            
-   !       end if
-         
-   !       ! Move on to the next bcond
-   !       my_bc=>my_bc%next
-         
-   !    end do
-      
-   !    ! Sync full fields after all bcond
-   !    call this%cfg%sync(mdotL)
-   !    call this%cfg%sync(mdotG)
-      
-   ! end subroutine apply_bcond_mdot
 
 
    !> Calculate the CFL based on the input velocity field
@@ -1076,20 +850,31 @@ contains
    subroutine cell_to_face(this,ccf,fcf_x,fcf_y,fcf_z)
       implicit none
       class(tpscalar), intent(in) :: this
-      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in)  :: ccf !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in)  :: ccf   !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(out) :: fcf_x !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(out) :: fcf_y !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(out) :: fcf_z !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       integer :: i,j,k
-      ! Linear interpolation
-      do k=this%cfg%kmin_,this%cfg%kmax_+1
-         do j=this%cfg%jmin_,this%cfg%jmax_+1
+      ! Linear interpolation x-face
+      do k=this%cfg%kmin_,this%cfg%kmax_
+         do j=this%cfg%jmin_,this%cfg%jmax_
             do i=this%cfg%imin_,this%cfg%imax_+1
-               ! x-face
                fcf_x(i,j,k)=sum(this%itp_x(:,i,j,k)*ccf(i-1:i,j,k))
-               ! y-face
+            end do
+         end do
+      end do
+      ! Linear interpolation y-face
+      do k=this%cfg%kmin_,this%cfg%kmax_
+         do j=this%cfg%jmin_,this%cfg%jmax_+1
+            do i=this%cfg%imin_,this%cfg%imax_
                fcf_y(i,j,k)=sum(this%itp_y(:,i,j,k)*ccf(i,j-1:j,k))
-               ! z-face
+            end do
+         end do
+      end do
+      ! Linear interpolation z-face
+      do k=this%cfg%kmin_,this%cfg%kmax_+1
+         do j=this%cfg%jmin_,this%cfg%jmax_
+            do i=this%cfg%imin_,this%cfg%imax_
                fcf_z(i,j,k)=sum(this%itp_z(:,i,j,k)*ccf(i,j,k-1:k))
             end do
          end do
@@ -1108,23 +893,30 @@ contains
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(out) :: fcf_y !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(out) :: fcf_z !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       integer :: i,j,k
-      ! Linear interpolation
-      do k=this%cfg%kmin_,this%cfg%kmax_+1
-         do j=this%cfg%jmin_,this%cfg%jmax_+1
+      ! Linear interpolation x-face
+      do k=this%cfg%kmin_,this%cfg%kmax_
+         do j=this%cfg%jmin_,this%cfg%jmax_
             do i=this%cfg%imin_,this%cfg%imax_+1
-               ! x-face
                fcf_x(i,j,k)=sum(this%itp_x(:,i,j,k)*ccf_x(i-1:i,j,k))
-               ! y-face
+            end do
+         end do
+      end do
+      ! Linear interpolation y-face
+      do k=this%cfg%kmin_,this%cfg%kmax_
+         do j=this%cfg%jmin_,this%cfg%jmax_+1
+            do i=this%cfg%imin_,this%cfg%imax_
                fcf_y(i,j,k)=sum(this%itp_y(:,i,j,k)*ccf_y(i,j-1:j,k))
-               ! z-face
+            end do
+         end do
+      end do
+      ! Linear interpolation z-face
+      do k=this%cfg%kmin_,this%cfg%kmax_+1
+         do j=this%cfg%jmin_,this%cfg%jmax_
+            do i=this%cfg%imin_,this%cfg%imax_
                fcf_z(i,j,k)=sum(this%itp_z(:,i,j,k)*ccf_z(i,j,k-1:k))
             end do
          end do
       end do
-      ! Sync it
-      ! call this%cfg%sync(fcf_x)
-      ! call this%cfg%sync(fcf_y)
-      ! call this%cfg%sync(fcf_z)
    end subroutine cellVec_to_face
 
 
@@ -1137,23 +929,30 @@ contains
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(out) :: fcf_y !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(out) :: fcf_z !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       integer :: i,j,k
-      ! Bilinear interpolation
-      do k=this%cfg%kmin_,this%cfg%kmax_+1
-         do j=this%cfg%jmin_,this%cfg%jmax_+1
+      ! Bilinear interpolation x-face
+      do k=this%cfg%kmin_,this%cfg%kmax_
+         do j=this%cfg%jmin_,this%cfg%jmax_
             do i=this%cfg%imin_,this%cfg%imax_+1
-               ! x-face
-               fcf_x(i,j,k)=0.25_WP*(vcf(i,j,k)+vcf(i,j-1,k)+vcf(i,j,k-1)+vcf(i,j-1,k-1))
-               ! y-face
-               fcf_y(i,j,k)=0.25_WP*(vcf(i,j,k)+vcf(i-1,j,k)+vcf(i,j,k-1)+vcf(i-1,j,k-1))
-               ! z-face
-               fcf_z(i,j,k)=0.25_WP*(vcf(i,j,k)+vcf(i,j-1,k)+vcf(i-1,j,k)+vcf(i-1,j-1,k))
+               fcf_x(i,j,k)=0.25_WP*(vcf(i,j,k)+vcf(i,j+1,k)+vcf(i,j,k+1)+vcf(i,j+1,k+1))
             end do
          end do
       end do
-      ! Sync it
-      ! call this%cfg%sync(fcf_x)
-      ! call this%cfg%sync(fcf_y)
-      ! call this%cfg%sync(fcf_z)
+      ! Bilinear interpolation y-face
+      do k=this%cfg%kmin_,this%cfg%kmax_
+         do j=this%cfg%jmin_,this%cfg%jmax_+1
+            do i=this%cfg%imin_,this%cfg%imax_
+               fcf_y(i,j,k)=0.25_WP*(vcf(i,j,k)+vcf(i+1,j,k)+vcf(i,j,k+1)+vcf(i+1,j,k+1))
+            end do
+         end do
+      end do
+      ! Bilinear interpolation z-face
+      do k=this%cfg%kmin_,this%cfg%kmax_+1
+         do j=this%cfg%jmin_,this%cfg%jmax_
+            do i=this%cfg%imin_,this%cfg%imax_
+               fcf_z(i,j,k)=0.25_WP*(vcf(i,j,k)+vcf(i,j+1,k)+vcf(i+1,j,k)+vcf(i+1,j+1,k))
+            end do
+         end do
+      end do
    end subroutine vertex_to_face
 
 
@@ -1161,7 +960,7 @@ contains
    subroutine get_fcgrad(this,ccf,gradX,gradY,gradZ)
       implicit none
       class(tpscalar), intent(in) :: this
-      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(out) :: ccf   !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in)  :: ccf   !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(out) :: gradX !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(out) :: gradY !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(out) :: gradZ !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
@@ -1176,10 +975,6 @@ contains
             end do
          end do
       end do
-      ! Sync the gradient components
-      ! call this%cfg%sync(gradX)
-      ! call this%cfg%sync(gradY)
-      ! call this%cfg%sync(gradZ)
    end subroutine get_fcgrad
 
 
@@ -1187,9 +982,9 @@ contains
    subroutine get_ccgrad(this,fcf_x,fcf_y,fcf_z,gradX,gradY,gradZ)
       implicit none
       class(tpscalar), intent(in) :: this
-      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(out) :: fcf_x !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
-      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(out) :: fcf_y !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
-      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(out) :: fcf_z !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in)  :: fcf_x !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in)  :: fcf_y !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in)  :: fcf_z !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(out) :: gradX !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(out) :: gradY !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(out) :: gradZ !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
@@ -1199,10 +994,13 @@ contains
       do k=this%cfg%kmin_,this%cfg%kmax_+1
          do j=this%cfg%jmin_,this%cfg%jmax_+1
             do i=this%cfg%imin_,this%cfg%imax_+1
+               ! x component
                gradX(i-1,j,k)=gradX(i-1,j,k)+fcf_x(i,j,k)/this%cfg%dx(i-1)
                gradX(i  ,j,k)=gradX(i  ,j,k)-fcf_x(i,j,k)/this%cfg%dx(i  )
+               ! y component
                gradY(i,j-1,k)=gradY(i,j-1,k)+fcf_y(i,j,k)/this%cfg%dy(j-1)
                gradY(i,j  ,k)=gradY(i,j  ,k)-fcf_y(i,j,k)/this%cfg%dy(j  )
+               ! z component
                gradZ(i,j,k-1)=gradZ(i,j,k-1)+fcf_z(i,j,k)/this%cfg%dz(k-1)
                gradZ(i,j,k  )=gradZ(i,j,k  )-fcf_z(i,j,k)/this%cfg%dz(k  )
             end do
