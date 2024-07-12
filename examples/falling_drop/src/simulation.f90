@@ -38,7 +38,7 @@ module simulation
    
    !> Private work arrays
    real(WP), dimension(:,:,:,:), allocatable :: resSC
-   real(WP), dimension(:,:,:), allocatable :: vcVF,fcVF_x,fcVF_y,fcVF_z
+   real(WP), dimension(:,:,:),   allocatable :: vcVF,fcVF_x,fcVF_y,fcVF_z
    real(WP), dimension(:,:,:),   allocatable :: VFgradX,VFgradY,VFgradZ,mdot,mdotL,mdotG,mdotL_old,mdotG_old,resmdotL,resmdotG
    real(WP), dimension(:,:,:),   allocatable :: mdotL_err_field
    real(WP), dimension(:,:,:),   allocatable :: resU,resV,resW
@@ -274,6 +274,9 @@ contains
       
       ! Create a framework for shifting the mass source term
       create_mdot: block
+         use irl_fortran_interface, only: calculateNormal,getNumberOfVertices
+         integer :: i,j,k
+         real(WP), dimension(3) :: n1,n2
          ! Initialize a pseudo time tracker
          pseudo_time=timetracker(amRoot=cfg%amRoot,name='Pseudo',print_info=.false.)
          call param_read('Max pseudo timestep size',pseudo_time%dtmax)
@@ -285,7 +288,21 @@ contains
          ! call sc%get_fcgrad(vf%VF,VFgradX,VFgradY,VFgradZ)
          call sc%cell_to_vertex(ccf=vf%VF,vcf=vcVF)
          call sc%vertex_to_face(vcf=vcVF,fcf_x=fcVF_x,fcf_y=fcVF_y,fcf_z=fcVF_z)
-         call sc%get_ccgrad(fcf_x=fcVF_x,fcf_y=fcVF_y,fcf_z=fcVF_z,gradX=VFgradX,gradY=VFgradY,gradZ=VFgradZ)
+         ! call sc%get_ccgrad(fcf_x=fcVF_x,fcf_y=fcVF_y,fcf_z=fcVF_z,gradX=VFgradX,gradY=VFgradY,gradZ=VFgradZ)
+         do k=vf%cfg%kmino_,vf%cfg%kmaxo_
+            do j=vf%cfg%jmino_,vf%cfg%jmaxo_
+               do i=vf%cfg%imino_,vf%cfg%imaxo_
+                  n1=calculateNormal(vf%interface_polygon(1,i,j,k))
+                  if (getNumberOfVertices(vf%interface_polygon(2,i,j,k)).gt.0) then
+                     n2=calculateNormal(vf%interface_polygon(2,i,j,k))
+                     n1=0.5_WP*(n1+n2)
+                  end if
+                  VFgradX(i,j,k)=-n1(1)
+                  VFgradY(i,j,k)=-n1(2)
+                  VFgradZ(i,j,k)=-n1(3)
+               end do
+            end do
+         end do
          fcVF_x=VFgradX; fcVF_y=VFgradY; fcVF_z=VFgradZ
          call sc%cellVec_to_face(ccf_x=fcVF_x,ccf_y=fcVF_y,ccf_z=fcVF_z,fcf_x=VFgradX,fcf_y=VFgradY,fcf_z=VFgradZ)
          ! print*,'-----------------------------------------------'
@@ -546,9 +563,11 @@ contains
          shift_mdot: block
             use mpi_f08,  only: MPI_ALLREDUCE,MPI_MAX
             use parallel, only: MPI_REAL_WP
+            use irl_fortran_interface, only: calculateNormal,getNumberOfVertices
             ! real(WP), dimension(:,:,:), allocatable :: k1,k2,k3,k4
-            integer :: ierr
+            integer :: ierr,i,j,k
             real(WP) :: my_mdot_err
+            real(WP), dimension(3) :: n1,n2
 
             ! Allocate the RK slopes
             ! allocate(k1(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_)); k1=0.0_WP
@@ -572,7 +591,21 @@ contains
             ! call sc%get_fcgrad(vf%VF,VFgradX,VFgradY,VFgradZ)
             call sc%cell_to_vertex(ccf=vf%VF,vcf=vcVF)
             call sc%vertex_to_face(vcf=vcVF,fcf_x=fcVF_x,fcf_y=fcVF_y,fcf_z=fcVF_z)
-            call sc%get_ccgrad(fcf_x=fcVF_x,fcf_y=fcVF_y,fcf_z=fcVF_z,gradX=VFgradX,gradY=VFgradY,gradZ=VFgradZ)
+            ! call sc%get_ccgrad(fcf_x=fcVF_x,fcf_y=fcVF_y,fcf_z=fcVF_z,gradX=VFgradX,gradY=VFgradY,gradZ=VFgradZ)
+            do k=vf%cfg%kmino_,vf%cfg%kmaxo_
+               do j=vf%cfg%jmino_,vf%cfg%jmaxo_
+                  do i=vf%cfg%imino_,vf%cfg%imaxo_
+                     n1=calculateNormal(vf%interface_polygon(1,i,j,k))
+                     if (getNumberOfVertices(vf%interface_polygon(2,i,j,k)).gt.0) then
+                        n2=calculateNormal(vf%interface_polygon(2,i,j,k))
+                        n1=0.5_WP*(n1+n2)
+                     end if
+                     VFgradX(i,j,k)=-n1(1)
+                     VFgradY(i,j,k)=-n1(2)
+                     VFgradZ(i,j,k)=-n1(3)
+                  end do
+               end do
+            end do
             fcVF_x=VFgradX; fcVF_y=VFgradY; fcVF_z=VFgradZ
             call sc%cellVec_to_face(ccf_x=fcVF_x,ccf_y=fcVF_y,ccf_z=fcVF_z,fcf_x=VFgradX,fcf_y=VFgradY,fcf_z=VFgradZ)
 
