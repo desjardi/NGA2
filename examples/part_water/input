@@ -10,39 +10,32 @@ ny : 128
 nz : 6
 
 # Pool
-Pool depth : 0.16
+Pool depth : 0.15
 
 # Fluid properties
-Gravity :                     9.81 0 0
+Gravity :                     0 -9.81 0
 Liquid dynamic viscosity :    1.137e-3
 Gas dynamic viscosity :       1.780e-5
 Liquid density :              1000
 Gas density :                 1.226
 Surface tension coefficient : 0.0728
-Static contact angle :        90!45
+Static contact angle :        90
 
 # Particle parameters
 Particle density :            2500
-Particle mean diameter :      1000e-6 !< This is used directly
-Particle standard deviation : 0
-Particle min diameter :       0
-Particle max diameter :       0
-Particle diameter shift :     0
 
 # Particle collisions
 Coefficient of restitution :  0.1
 Wall restitution :            0.1
 Friction coefficient :        0.5
 
-# Particle injection
-Particle inject diameter :    0.05
-Particle mass flow rate :     0.05
-Particle velocity :           0.03 0 0
-Particle injection duration : 100000!1e-2
+# Bed injection
+Bed file to inject :          alban.bed
+Bed injection velocity :      0.06
 
 # Time integration
-Particle timestep size :      2e-5
-Max timestep size :           2e-4
+Particle timestep size :      1e-5
+Max timestep size :           1e-4
 Max cfl number :	            1
 Max time :                    10
 
@@ -51,4 +44,4 @@ Pressure tolerance :          1e-4
 Pressure iteration :          100
 
 # Ensight output
-Ensight output period :       1e-1
+Ensight output period :       1e-2

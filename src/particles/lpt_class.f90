@@ -11,7 +11,7 @@ module lpt_class
    
    
    ! Expose type/constructor/methods
-   public :: lpt,part,MPI_PART,MPI_PART_SIZE
+   public :: lpt,part,MPI_PART,MPI_PART_SIZE,prepare_mpi_part
    
    
    !> Memory adaptation parameter
@@ -174,7 +174,7 @@ contains
       call prepare_mpi_part()
       
       ! Allocate VF and src arrays on cfg mesh
-      allocate(self%VF  (self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%VF  =0.0_WP
+      allocate(self%VF(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%VF=0.0_WP
       
       ! Set filter width to zero by default
       self%filter_width=0.0_WP

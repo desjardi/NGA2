@@ -11,7 +11,7 @@ module lpt_class
 
 
   ! Expose type/constructor/methods
-  public :: lpt
+  public :: lpt,part,MPI_PART,MPI_PART_SIZE,prepare_mpi_part
 
 
   !> Memory adaptation parameter

@@ -2,9 +2,9 @@
 module simulation
    use precision,         only: WP
    use geometry,          only: cfg
-   use lpt_class,         only: lpt
+   use lpt_class,         only: lpt,part,MPI_PART_SIZE,MPI_PART
    use hypre_str_class,   only: hypre_str
-   !use ddadi_class,       only: ddadi
+   use ddadi_class,       only: ddadi
    use tpns_class,        only: tpns
    use vfs_class,         only: vfs
    use timetracker_class, only: timetracker
@@ -19,7 +19,7 @@ module simulation
    !> Two-phase flow solver, volume fraction solver, LPT solver, time tracker
    type(lpt),         public :: lp
    type(hypre_str),   public :: ps
-   !type(ddadi),       public :: vs
+   type(ddadi),       public :: vs
    type(tpns),        public :: fs
    type(vfs),         public :: vf
    type(timetracker), public :: time
@@ -44,7 +44,13 @@ module simulation
    real(WP) :: depth
    
    !> Max timestep size for LPT
-   real(WP) :: lp_dt,lp_dt_max,lp_inj_duration
+   real(WP) :: lp_dt,lp_dt_max
+
+   !> Particle bed injection
+   integer :: nbed
+   type(part), dimension(:), allocatable :: pbed
+   real(WP) :: vbed
+   
    
 contains
    
@@ -56,7 +62,7 @@ contains
       real(WP), intent(in) :: t
       real(WP) :: G
       ! Add the pool
-      G=xyz(1)-depth
+      G=depth-xyz(2)
    end function levelset_pool
    
    
@@ -94,7 +100,6 @@ contains
       
       ! Initialize our LPT
       initialize_lpt: block
-         use random, only: random_uniform
          ! Create solver
          lp=lpt(cfg=cfg,name='LPT')
          ! Get particle density from the input
@@ -103,8 +108,8 @@ contains
          call param_read('Gravity',lp%gravity)
          ! Set filter scale to 3.5*dx
          lp%filter_width=3.5_WP*cfg%min_meshsize
-         ! Turn off drag (Tenneti blows up?)
-         lp%drag_model='SN'
+         ! Set drag model
+         lp%drag_model='Tenneti'
          ! Initialize with zero particles
          call lp%resize(0)
          ! Get initial particle volume fraction
@@ -113,29 +118,80 @@ contains
          call param_read('Particle timestep size',lp_dt_max,default=huge(1.0_WP))
          lp_dt=lp_dt_max
          ! Set collision timescale
-         lp%tau_col=7.0_WP*lp_dt_max
+         call param_read('Collision timescale',lp%tau_col,default=15.0_WP*time%dt)
          ! Set coefficient of restitution
          call param_read('Coefficient of restitution',lp%e_n)
          call param_read('Wall restitution',lp%e_w)
          call param_read('Friction coefficient',lp%mu_f)
-         ! Injection parameters
-         call param_read('Particle mass flow rate',lp%mfr)
-         call param_read('Particle velocity',lp%inj_vel)
-         call param_read('Particle mean diameter',lp%inj_dmean)
-         call param_read('Particle standard deviation',lp%inj_dsd,default=0.0_WP)
-         call param_read('Particle min diameter',lp%inj_dmin,default=tiny(1.0_WP))
-         call param_read('Particle max diameter',lp%inj_dmax,default=huge(1.0_WP))
-         call param_read('Particle diameter shift',lp%inj_dshift,default=0.0_WP)
-         if (lp%inj_dsd.le.epsilon(1.0_WP)) then
-            lp%inj_dmin=lp%inj_dmean
-            lp%inj_dmax=lp%inj_dmean
-         end if
-         call param_read('Particle inject diameter',lp%inj_d)
-         lp%inj_pos(1)=lp%cfg%x(lp%cfg%imin)+lp%inj_dmax
-         lp%inj_pos(2:3)=0.0_WP
-         lp%inj_T=300.0_WP
-         call param_read('Particle injection duration',lp_inj_duration)
       end block initialize_lpt
+      
+      
+      ! Initialize bed data
+      prepare_bed: block
+         use mpi_f08
+         use messager,  only: die
+         use quicksort, only: quick_sort
+         use string,    only: str_medium
+         use parallel,  only: comm,info_mpiio
+         type(MPI_File) :: ifile
+         type(MPI_Status):: status
+         integer :: ierr,psize,i
+         integer(kind=MPI_OFFSET_KIND) :: offset
+         character(len=str_medium) :: bedfile
+         real(WP), dimension(:), allocatable :: pos
+         integer , dimension(:), allocatable :: id
+         type(part), dimension(:), allocatable :: tmp
+         real(WP) :: maxpos
+         ! Injection parameters
+         call param_read('Bed file to inject',bedfile)
+         call param_read('Bed injection velocity',vbed)
+         ! Read the header of the particle file
+         call MPI_FILE_OPEN(comm,trim(bedfile),MPI_MODE_RDONLY,info_mpiio,ifile,ierr)
+         if (ierr.ne.0) call die('[part_water] Problem encountered while reading bed file: '//trim(bedfile))
+         call MPI_FILE_READ_ALL(ifile,nbed,1,MPI_INTEGER,status,ierr)
+         call MPI_FILE_READ_ALL(ifile,psize,1,MPI_INTEGER,status,ierr)
+         if (psize.ne.MPI_PART_SIZE) call die('[part_water] Particle type unreadable')
+         ! Root reads in the full file and stores the particles
+         if (lp%cfg%amRoot) then
+            allocate(pbed(nbed))
+            call MPI_FILE_GET_POSITION(ifile,offset,ierr)
+            call MPI_FILE_READ_AT(ifile,offset,pbed,nbed,MPI_PART,status,ierr)
+         end if
+         ! Close the bed file
+         call MPI_FILE_CLOSE(ifile,ierr)
+         ! Manipulate the bed particles a bit
+         if (lp%cfg%amRoot) then
+            ! Sort particles
+            allocate(pos(nbed),id(nbed))
+            do i=1,nbed
+               id(i)=i
+               pos(i)=pbed(i)%pos(2)
+            end do
+            ! Flip the bed
+            maxpos=maxval(pos)
+            pos=maxpos-pos
+            ! Apply quicksort
+            call quick_sort(A=pos,B=id)
+            ! Loop through particles and sort them
+            allocate(tmp(nbed))
+            do i=1,nbed
+               tmp(i)=pbed(id(i))
+               tmp(i)%id=i
+               ! Adjust position
+               tmp(i)%pos(2)=pos(i)+lp%cfg%yL
+               ! Adjust velocity
+               tmp(i)%vel=[0.0_WP,-vbed,0.0_WP]
+               ! Zero out collisions
+               tmp(i)%Acol=0.0_WP
+               tmp(i)%Tcol=0.0_WP
+               ! Zero out angular velocity
+               tmp(i)%angVel=0.0_WP
+            end do
+            ! Store the particles
+            pbed=tmp
+            deallocate(tmp,pos,id)
+         end if
+      end block prepare_bed
       
       
       ! Initialize our VOF solver and field
@@ -151,7 +207,6 @@ contains
          call vf%initialize(cfg=cfg,reconstruction_method=plicnet,transport_method=remap,name='VOF')
          ! Initialize to a pool
          call param_read('Pool depth',depth)
-         depth=cfg%xL-depth
          do k=vf%cfg%kmino_,vf%cfg%kmaxo_
             do j=vf%cfg%jmino_,vf%cfg%jmaxo_
                do i=vf%cfg%imino_,vf%cfg%imaxo_
@@ -217,20 +272,20 @@ contains
          ! Transfer to lpt for surface tension modeling
          lp%sigma=fs%sigma
          lp%contact_angle=fs%contact_angle
-         lp%VFst=0.1_WP
+         lp%VFst=0.2_WP
          ! Assign acceleration of gravity
          call param_read('Gravity',fs%gravity)
-         ! Outlet on the left
-         call fs%add_bcond(name='outlet',type=clipped_neumann,face='x',dir=-1,canCorrect=.true.,locator=xm_locator)
+         ! Outlet on the top
+         call fs%add_bcond(name='outlet',type=clipped_neumann,face='y',dir=+1,canCorrect=.true.,locator=yp_locator)
          ! Configure pressure solver
          ps=hypre_str(cfg=cfg,name='Pressure',method=pcg_pfmg2,nst=7)
          ps%maxlevel=12
          call param_read('Pressure iteration',ps%maxit)
          call param_read('Pressure tolerance',ps%rcvg)
          ! Configure implicit velocity solver
-         !vs=ddadi(cfg=cfg,name='Velocity',nst=7)
+         vs=ddadi(cfg=cfg,name='Velocity',nst=7)
          ! Setup the solver
-         call fs%setup(pressure_solver=ps)!,implicit_solver=vs)
+         call fs%setup(pressure_solver=ps,implicit_solver=vs)
          ! Zero initial field
          fs%U=0.0_WP; fs%V=0.0_WP; fs%W=0.0_WP
          ! Calculate cell-centered velocities and divergence
@@ -406,7 +461,7 @@ contains
                ! Decide the timestep size
                mydt=min(lp_dt,time%dtmid-dt_done)
                ! Inject, collide and advance particles
-               if (time%t.le.lp_inj_duration) call lp%inject(dt=mydt,avoid_overlap=.true.)
+               call inject_bed(dt=mydt)
                call lp%collide(dt=mydt)
                call lp%advance(dt=mydt,U=fs%U,V=fs%V,W=fs%W,rho=rho,visc=fs%visc,stress_x=resU,stress_y=resV,stress_z=resW,gradVF_x=dVFdx,gradVF_y=dVFdy,gradVF_z=dVFdz,srcU=tmp1,srcV=tmp2,srcW=tmp3)
                srcU=srcU+tmp1
@@ -444,7 +499,7 @@ contains
          call vf%advance(dt=time%dt,U=fs%U,V=fs%V,W=fs%W)
 
          ! Zero out surface tension in the bed
-         !where (lp%VF.gt.lp%VFst) vf%curv=0.0_WP
+         where (lp%VF.gt.lp%VFst) vf%curv=0.0_WP
          
          ! Prepare new staggered viscosity (at n+1)
          call fs%get_viscosity(vf=vf,strat=arithmetic_visc)
@@ -488,12 +543,12 @@ contains
             end block add_lpt_src
             
             ! Form implicit residuals
-            !call fs%solve_implicit(time%dt,resU,resV,resW)
+            call fs%solve_implicit(time%dt,resU,resV,resW)
             
             ! Apply these residuals
-            fs%U=2.0_WP*fs%U-fs%Uold+resU/fs%rho_U
-            fs%V=2.0_WP*fs%V-fs%Vold+resV/fs%rho_V
-            fs%W=2.0_WP*fs%W-fs%Wold+resW/fs%rho_W
+            fs%U=2.0_WP*fs%U-fs%Uold+resU!/fs%rho_U
+            fs%V=2.0_WP*fs%V-fs%Vold+resV!/fs%rho_V
+            fs%W=2.0_WP*fs%W-fs%Wold+resW!/fs%rho_W
             
             ! Apply other boundary conditions
             call fs%apply_bcond(time%t,time%dt)
@@ -551,6 +606,40 @@ contains
    end subroutine simulation_run
    
    
+   !> Bed injection
+   subroutine inject_bed(dt)
+      implicit none
+      real(WP), intent(in) :: dt
+      integer , save :: ibed=0
+      real(WP), save :: tbed=0.0_WP
+      ! Root process selects particles
+      if (lp%cfg%amRoot) then
+         lp%np_new=0
+         inject_loop: do while (ibed+1.le.nbed)
+            ! Increment counter
+            ibed=ibed+1
+            ! Test if particle should be injected
+            if (pbed(ibed)%pos(2)-vbed*(tbed+dt).lt.lp%cfg%y(lp%cfg%jmax+1)) then
+               ! Add the particle
+               lp%np_new=lp%np_new+1
+               call lp%resize(lp%np_+lp%np_new)
+               lp%p(lp%np_+lp%np_new)=pbed(ibed)
+               lp%p(lp%np_+lp%np_new)%pos(2)=pbed(ibed)%pos(2)-vbed*(tbed+dt)
+               lp%p(lp%np_+lp%np_new)%ind=lp%cfg%get_ijk_global(lp%p(lp%np_+lp%np_new)%pos,[lp%cfg%imin,lp%cfg%jmin,lp%cfg%kmin])
+            else
+               ! We went too far, rewind and exit
+               ibed=ibed-1
+               exit inject_loop
+            end if
+         end do inject_loop
+      end if
+      ! Increment injection time
+      tbed=tbed+dt
+      ! Synchronize
+      call lp%sync()
+   end subroutine inject_bed
+   
+   
    !> Finalize the NGA2 simulation
    subroutine simulation_final
       implicit none
@@ -567,16 +656,16 @@ contains
    end subroutine simulation_final
    
    
-   !> Function that localizes the left (x-) of the domain
-   function xm_locator(pg,i,j,k) result(isIn)
+   !> Function that localizes the top (y+) of the domain
+   function yp_locator(pg,i,j,k) result(isIn)
       use pgrid_class, only: pgrid
       implicit none
       class(pgrid), intent(in) :: pg
       integer, intent(in) :: i,j,k
       logical :: isIn
       isIn=.false.
-      if (i.eq.pg%imin) isIn=.true.
-   end function xm_locator
+      if (j.eq.pg%jmax+1) isIn=.true.
+   end function yp_locator
    
    
 end module simulation
