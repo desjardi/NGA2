@@ -71,9 +71,9 @@ module tpscalar_class
       class(linsol), pointer :: mdot_solver               !< Iterative linear solver object for distributing the mass source away from the interface
       
       ! Metrics
-      real(WP), dimension(:,:,:,:), allocatable :: div_x ,div_y ,div_z   !< Divergence for SC
-      real(WP), dimension(:,:,:,:), allocatable :: grd_x ,grd_y ,grd_z   !< Scalar gradient for SC
-      real(WP), dimension(:,:,:,:), allocatable :: itp_x ,itp_y ,itp_z   !< Second order interpolation for SC diffusivity
+      real(WP), dimension(:,:,:,:), allocatable :: div_x,div_y,div_z   !< Divergence for SC
+      real(WP), dimension(:,:,:,:), allocatable :: grd_x,grd_y,grd_z   !< Scalar gradient for SC
+      real(WP), dimension(:,:,:,:), allocatable :: itp_x,itp_y,itp_z   !< Second order interpolation for SC diffusivity
       
       ! Masking info for metric modification
       integer, dimension(:,:,:), allocatable :: mask             !< Integer array used for modifying SC metrics
@@ -93,14 +93,14 @@ module tpscalar_class
       procedure :: get_dSCdt                              !< Calculate drhoSC/dt from advective fluxes
       procedure :: get_max                                !< Calculate maximum and integral field values
       procedure :: solve_implicit                         !< Solve for the scalar residuals implicitly
-      procedure :: get_dmdotdtau
-      procedure :: get_cfl
-      procedure :: cell_to_vertex
-      procedure :: cell_to_face
-      procedure :: cellVec_to_face
-      procedure :: vertex_to_face
-      procedure :: get_fcgrad
-      procedure :: get_ccgrad
+      procedure :: get_dmdotdtau                          !< Calculate dmdot/dtau
+      procedure :: get_cfl                                !< Calculate the pseudo CFL number
+      procedure :: cell_to_vertex                         !< Interpolate a cell-centered scalar to a vertex-centered one
+      procedure :: cell_to_face                           !< Interpolate a cell-centered scalar to a face-centered one
+      procedure :: cellVec_to_face                        !< Interpolate a cell-centered vector to a face-centered one
+      procedure :: vertex_to_face                         !< Interpolate a vertex-centered scalar to a face-centered one
+      procedure :: get_fcgrad                             !< Get the face-centered gradient of a scalar field
+      procedure :: get_ccgrad                             !< Get the cell-centered gradient of a scalar field
    end type tpscalar
    
    
@@ -838,10 +838,6 @@ contains
       do k=this%cfg%kmin_,this%cfg%kmax_+1
          do j=this%cfg%jmin_,this%cfg%jmax_+1
             do i=this%cfg%imin_,this%cfg%imax_+1
-               ! vcf(i,j,k)=sum(this%itp_z(:,i,j,k)*[sum(this%itp_y(:,i,j,k-1)*[sum(this%itp_x(:,i,j-1,k-1)*ccf(i-1:i,j-1,k-1))     ,&
-               ! &                                                              sum(this%itp_x(:,i,j  ,k-1)*ccf(i-1:i,j  ,k-1))])   ,&
-               !                                     sum(this%itp_y(:,i,j,k  )*[sum(this%itp_x(:,i,j-1,k  )*ccf(i-1:i,j-1,k  ))     ,&
-               !                                                                sum(this%itp_x(:,i,j  ,k  )*ccf(i-1:i,j  ,k  ))])])
                tmp_ym=sum(this%itp_x(:,i,j-1,k-1)*ccf(i-1:i,j-1,k-1))
                tmp_yp=sum(this%itp_x(:,i,j  ,k-1)*ccf(i-1:i,j  ,k-1))
                tmp_zm=sum(this%itp_y(:,i,j  ,k-1)*[tmp_ym,tmp_yp])

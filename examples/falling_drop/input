@@ -2,42 +2,45 @@
 Partition :	4 2 1
 
 # Mesh definition
-Lx :	0.06
-Ly :	0.06
-Lz :	0.06
-nx :	128 ! 64
-ny :	128 ! 64
-nz :	128 ! 64
+Lx : 0.06
+Ly : 0.06
+Lz : 0.06
+nx : 128 ! 64
+ny : 128 ! 64
+nz : 128 ! 64
 
 # Case parameters
 Droplet diameter : 0.01
-Droplet center : 0 0.05 0
+Droplet center   : 0 0.05 0
 
 # Fluid properties
-Gravity :                     0 -9.81 0
-Liquid dynamic viscosity :    1.137e-3
-Gas dynamic viscosity :       1.780e-5
-Liquid density :              1000
-Gas density :                 1.226
+Gravity                     : 0 -9.81 0
+Liquid dynamic viscosity    : 1.137e-3
+Gas dynamic viscosity       : 1.780e-5
+Liquid density              : 1000
+Gas density                 : 1.226
 Surface tension coefficient : 0.0728
-Static contact angle :        140
-Liquid diffusivity :          1.137e-06
-Gas diffusivity :             1.452e-05
+Static contact angle        : 140
+Liquid diffusivity          : 1.137e-06
+Gas diffusivity             : 1.452e-05
 
 # Time integration
 Max timestep size : 2.5e-4 ! 8.5e-4
-Max cfl number :    0.9
-Max time :          2.5e-2
+Max cfl number    : 0.9
+Max time          : 2.5e-4 ! 2.5e-2
 
 # Pseudo time integration
 Max pseudo timestep size : 4e-4 ! 2e-7 ! 5e-7
-Max pseudo cfl number :    0.9 ! 0.5
-Max pseudo time steps:     100
-Tolerence:                 1e-9
+Max pseudo cfl number    : 0.9 ! 0.5
+Max pseudo time steps    : 50
+Tolerence                : 1e-6
 
 # Pressure solver
 Pressure tolerance : 1e-4
 Pressure iteration : 100
 
 # Ensight output
-Ensight output period : 5e-4 ! 2.5e-4
+Ensight output period          : 2.5e-4
+Ensight for mdot evolution     : true
+Ensight output period for mdot : 2e-7
+When to write mdot ensight     : 2.5e-4
