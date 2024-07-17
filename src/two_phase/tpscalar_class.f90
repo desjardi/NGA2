@@ -59,6 +59,7 @@ module tpscalar_class
       real(WP), dimension(:,:,:,:), allocatable :: SC     !< SC array
       real(WP), dimension(:,:,:,:), allocatable :: PVF    !< Phase-specific VOF
       real(WP), dimension(:,:,:,:), allocatable :: PVFold !< Old phase-specific VOF
+      real(WP), dimension(:),       allocatable :: Prho    !< Phase-specific density
       
       ! Old scalar variable
       real(WP), dimension(:,:,:,:), allocatable :: SCold  !< SCold array
@@ -145,6 +146,7 @@ contains
       allocate(this%diff  (this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_,1:this%nscalar)); this%diff  =0.0_WP
       allocate(this%PVF   (this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_,0:1));            this%PVF   =0.0_WP
       allocate(this%PVFold(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_,0:1));            this%PVFold=0.0_WP
+      allocate(this%Prho  (0:1));                                                                                                            this%Prho  =0.0_WP
       
       ! Check current overlap
 		if (this%cfg%no.lt.1) call die('[tpscalar constructor] Scalar transport scheme requires larger overlap')

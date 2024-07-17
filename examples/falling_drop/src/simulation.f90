@@ -46,11 +46,12 @@ module simulation
    !> Problem definition
    real(WP), dimension(3) :: center
    real(WP) :: radius,depth
-   integer  :: iZl,iZg
+   integer  :: iTl,iTg
    real(WP) :: mdot_int,mdot_err,mdot_tol
    real(WP) :: mdotL_int,mdotL_err,mdotL_int_err
    real(WP) :: mdotG_int,mdotG_err,mdotG_int_err
    real(WP) :: mdot_ens_time
+   real(WP) :: evp_src
    
 contains
 
@@ -214,22 +215,25 @@ contains
          integer :: i,j,k
          real(WP) :: Ldiff,Gdiff
          ! Create scalar solver
-         call sc%initialize(cfg=cfg,nscalar=2,name='tpscalar_test')
+         call sc%initialize(cfg=cfg,nscalar=2,name='tpscalar')
          ! Initialize the phase specific VOF
          sc%PVF(:,:,:,Lphase)=vf%VF
          sc%PVF(:,:,:,Gphase)=1.0_WP-vf%VF
-         ! Make it liquid and give it a name
-         sc%SCname=[  'Zl',  'Zg']; iZl=1; iZg=2
+         ! Initialize the phase specific density
+         sc%Prho(Lphase)=fs%rho_l
+         sc%Prho(Gphase)=fs%rho_g
+         ! Temperature on the liquid and gas sides
+         sc%SCname=[  'Tl',  'Tg']; iTl=1; iTg=2
          sc%phase =[Lphase,Gphase]
          ! Read diffusivity
-         call param_read('Liquid diffusivity',Ldiff)
-         sc%diff(:,:,:,iZl)=Ldiff
-         call param_read('Gas diffusivity',Gdiff)
-         sc%diff(:,:,:,iZg)=Gdiff
+         call param_read('Liquid thermal diffusivity',Ldiff)
+         sc%diff(:,:,:,iTl)=Ldiff
+         call param_read('Gas thermal diffusivity',Gdiff)
+         sc%diff(:,:,:,iTg)=Gdiff
          ! Configure implicit scalar solver
          ss=ddadi(cfg=cfg,name='Scalar',nst=7)
          ! Setup the solver
-         call sc%setup(implicit_solver=ss)!,mdot_solver=ms)
+         call sc%setup(implicit_solver=ss)
          ! Initialize scalar fields
          do k=cfg%kmino_,cfg%kmaxo_
             do j=cfg%jmino_,cfg%jmaxo_
@@ -239,16 +243,16 @@ contains
                      ! We are in the liquid
                      if (cfg%ym(j).gt.depth+cfg%dy(j)) then
                         ! We are above the pool
-                        sc%SC(i,j,k,iZl)=1.0_WP
+                        sc%SC(i,j,k,iTl)=1.0_WP
                      else
                         ! We are in the pool
-                        sc%SC(i,j,k,iZl)=2.0_WP
+                        sc%SC(i,j,k,iTl)=2.0_WP
                      end if
                   end if
                   ! Gas scalar
                   if (vf%VF(i,j,k).lt.1.0_WP) then
                      ! We are in the gas
-                     sc%SC(i,j,k,iZg)=(cfg%ym(j)-depth)/(cfg%yL-depth)
+                     sc%SC(i,j,k,iTg)=(cfg%ym(j)-depth)/(cfg%yL-depth)
                   end if
                end do
             end do
@@ -263,9 +267,10 @@ contains
          call param_read('Max pseudo cfl number',pseudo_time%cflmax)
          call param_read('Max pseudo time steps',pseudo_time%nmax)
          call param_read('Tolerence',mdot_tol)
+         call param_read('Evaporation surface mass rate',evp_src)
          pseudo_time%dt=pseudo_time%dtmax
          ! Initialize the evaporation mass source term and errors
-         where ((vf%VF.gt.0.0_WP).and.(vf%VF.lt.1.0_WP)); mdot=1.0_WP; else where; mdot=0.0_WP; end where
+         where ((vf%VF.gt.0.0_WP).and.(vf%VF.lt.1.0_WP)); mdot=evp_src; else where; mdot=0.0_WP; end where
          mdotL=mdot; mdotG=mdot
          mdot_err=0.0_WP; mdotL_err=0.0_WP; mdotG_err=0.0_WP
          mdotL_int_err=0.0_WP; mdotG_int_err=0.0_WP
@@ -431,32 +436,40 @@ contains
          
          ! VOF solver step
          call vf%advance(dt=time%dt,U=fs%U,V=fs%V,W=fs%W)
+
+         ! Update the evaporation source term
+         where ((vf%VF.gt.0.0_WP).and.(vf%VF.lt.1.0_WP)); mdot=evp_src; else where; mdot=0.0_WP; end where
          
-         ! Now transport our phase-specific scalars
-         advance_scalar: block
-            use tpscalar_class, only: Lphase,Gphase
-            integer :: nsc
+         ! ! Now transport our phase-specific scalars
+         ! advance_scalar: block
+         !    use tpscalar_class, only: Lphase,Gphase
+         !    integer :: nsc
             
-            ! Get the phas-specific VOF
-            sc%PVF(:,:,:,Lphase)=vf%VF
-            sc%PVF(:,:,:,Gphase)=1.0_WP-vf%VF
+         !    ! Get the phas-specific VOF
+         !    sc%PVF(:,:,:,Lphase)=vf%VF
+         !    sc%PVF(:,:,:,Gphase)=1.0_WP-vf%VF
             
-            ! Explicit calculation of dSC/dt from advective term
-            call sc%get_dSCdt(dSCdt=resSC,U=fs%U,V=fs%V,W=fs%W,VFold=vf%VFold,VF=vf%VF,detailed_face_flux=vf%detailed_face_flux,dt=time%dt)
+         !    ! Explicit calculation of dSC/dt from advective term
+         !    call sc%get_dSCdt(dSCdt=resSC,U=fs%U,V=fs%V,W=fs%W,VFold=vf%VFold,VF=vf%VF,detailed_face_flux=vf%detailed_face_flux,dt=time%dt)
             
-            ! Advance advection
-            do nsc=1,sc%nscalar
-               where (sc%mask.eq.0.and.sc%PVF(:,:,:,sc%phase(nsc)).gt.0.0_WP) sc%SC(:,:,:,nsc)=((sc%PVFold(:,:,:,sc%phase(nsc)))*sc%SCold(:,:,:,nsc)+time%dt*resSC(:,:,:,nsc))/(sc%PVF(:,:,:,sc%phase(nsc)))
-               where (sc%PVF(:,:,:,sc%phase(nsc)).eq.0.0_WP) sc%SC(:,:,:,nsc)=0.0_WP
-            end do
+         !    ! Advance advection
+         !    do nsc=1,sc%nscalar
+         !       where (sc%mask.eq.0.and.sc%PVF(:,:,:,sc%phase(nsc)).gt.0.0_WP) sc%SC(:,:,:,nsc)=((sc%PVFold(:,:,:,sc%phase(nsc)))*sc%SCold(:,:,:,nsc)+time%dt*resSC(:,:,:,nsc))/(sc%PVF(:,:,:,sc%phase(nsc)))
+         !       where (sc%PVF(:,:,:,sc%phase(nsc)).eq.0.0_WP) sc%SC(:,:,:,nsc)=0.0_WP
+         !    end do
+
+         !    ! Apply the mass/energy transfer source term for the species/temperature
+         !    do nsc=1,sc%nscalar
+         !       where (sc%PVF(:,:,:,sc%phase(nsc)).gt.0.0_WP.and.sc%PVF(:,:,:,sc%phase(nsc)).lt.1.0_WP) sc%SC(:,:,:,nsc)=sc%SC(:,:,:,nsc)-mdot/sc%Prho(sc%phase(nsc))*vf%SD*time%dt
+         !    end do
                
-            ! Advance diffusion
-            call sc%solve_implicit(time%dt,sc%SC)
+         !    ! Advance diffusion
+         !    call sc%solve_implicit(time%dt,sc%SC)
             
-            ! Apply boundary conditions
-            call sc%apply_bcond(time%t,time%dt)
+         !    ! Apply boundary conditions
+         !    call sc%apply_bcond(time%t,time%dt)
                
-         end block advance_scalar
+         ! end block advance_scalar         
                
          ! Shift the mass source term away from the interface
          shift_mdot: block
@@ -472,10 +485,6 @@ contains
             allocate(ccVFgradX(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
             allocate(ccVFgradY(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
             allocate(ccVFgradZ(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
-            
-            ! Update the evaporation source term
-            where ((vf%VF.gt.0.0_WP).and.(vf%VF.lt.1.0_WP)); mdot=1.0_WP; else where; mdot=0.0_WP; end where
-            mdotL=mdot; mdotG=mdot
             
             ! Get the scaled gradient of VOF
             do k=vf%cfg%kmino_,vf%cfg%kmaxo_
@@ -506,6 +515,9 @@ contains
             ! Adjust the pseudo time step
             call pseudo_time%adjust_dt()
             
+            ! Initialize the source terms on the liquid and gas sides
+            mdotL=mdot; mdotG=mdot
+
             ! Move the evaporation source term away from the interface
             do while (.not.pseudo_time%done())
                
@@ -591,8 +603,9 @@ contains
             call fs%update_laplacian()
             call fs%correct_mfr()
             call fs%get_div()
-            call fs%add_surface_tension_jump(dt=time%dt,div=fs%div,vf=vf,contact_model=static_contact)
-            fs%psolv%rhs=-fs%cfg%vol*fs%div/time%dt
+            ! call fs%add_surface_tension_jump(dt=time%dt,div=fs%div,vf=vf,contact_model=static_contact)
+            call fs%add_surface_tension_jump(dt=time%dt,div=fs%div,vf=vf)
+            fs%psolv%rhs=-fs%cfg%vol*(fs%div+(mdotG/fs%rho_g-mdotL/fs%rho_l)*vf%SD)/time%dt ! Evaporation mass source term is taken into account here
             fs%psolv%sol=0.0_WP
             call fs%psolv%solve()
             call fs%shift_p(fs%psolv%sol)
