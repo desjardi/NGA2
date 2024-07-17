@@ -3,10 +3,10 @@ module simulation
    use precision,         only: WP
    use geometry,          only: cfg
    use hypre_str_class,   only: hypre_str
-   use ddadi_class,       only: ddadi
+   !use ddadi_class,       only: ddadi
    use tpns_class,        only: tpns
    use vfs_class,         only: vfs
-   use tpscalar_class,    only: tpscalar
+   !use tpscalar_class,    only: tpscalar
    use timetracker_class, only: timetracker
    use ensight_class,     only: ensight
    use surfmesh_class,    only: surfmesh
@@ -18,40 +18,29 @@ module simulation
    !> Get a couple linear solvers, a two-phase flow solver and volume fraction solver and corresponding time tracker
    type(hypre_str),   public :: ps
    !type(ddadi),       public :: vs
-   type(ddadi),       public :: ss
    type(tpns),        public :: fs
    type(vfs),         public :: vf
-   type(tpscalar),    public :: sc
-   type(timetracker), public :: time,pseudo_time
+   !type(tpscalar),    public :: sc
+   type(timetracker), public :: time
    
    !> Ensight postprocessing
    type(surfmesh) :: smesh
-   type(ensight)  :: ens_out,ens_mdot_out
-   type(event)    :: ens_evt,ens_mdot_evt
+   type(ensight)  :: ens_out
+   type(event)    :: ens_evt
    
    !> Simulation monitor file
-   type(monitor) :: mfile,cflfile,scfile,mdotfile
+   type(monitor) :: mfile,cflfile,scfile
    
    public :: simulation_init,simulation_run,simulation_final
    
    !> Private work arrays
-   real(WP), dimension(:,:,:,:), allocatable :: resSC
-   real(WP), dimension(:,:,:),   allocatable :: resU,resV,resW
-   real(WP), dimension(:,:,:),   allocatable :: Ui,Vi,Wi
-   real(WP), dimension(:,:,:),   allocatable :: VFgradX,VFgradY,VFgradZ
-   real(WP), dimension(:,:,:),   allocatable :: mdot
-   real(WP), dimension(:,:,:),   allocatable :: mdotL,mdotL_old,resmdotL,mdotL_err_field
-   real(WP), dimension(:,:,:),   allocatable :: mdotG,mdotG_old,resmdotG
+   !real(WP), dimension(:,:,:,:), allocatable :: resSC
+   real(WP), dimension(:,:,:), allocatable :: resU,resV,resW
+   real(WP), dimension(:,:,:), allocatable :: Ui,Vi,Wi
    
    !> Problem definition
    real(WP), dimension(3) :: center
    real(WP) :: radius,depth
-   integer  :: iTl,iTg
-   real(WP) :: mdot_int,mdot_err,mdot_tol
-   real(WP) :: mdotL_int,mdotL_err,mdotL_int_err
-   real(WP) :: mdotG_int,mdotG_err,mdotG_int_err
-   real(WP) :: mdot_ens_time
-   real(WP) :: evp_src
    
 contains
 
@@ -65,7 +54,7 @@ contains
       ! Create the droplet
       G=radius-sqrt(sum((xyz-center)**2))
       ! Add the pool
-      ! G=max(G,depth-xyz(2))
+      !G=max(G,depth-xyz(2))
    end function levelset_falling_drop
    
    
@@ -77,30 +66,19 @@ contains
       
       ! Allocate work arrays
       allocate_work_arrays: block
-         allocate(resSC    (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_,1:2))
-         allocate(VFgradX  (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_)); VFgradX=0.0_WP
-         allocate(VFgradY  (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_)); VFgradY=0.0_WP
-         allocate(VFgradZ  (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_)); VFgradZ=0.0_WP
-         allocate(mdot     (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_)); mdot =0.0_WP
-         allocate(mdotL    (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_)); mdotL=0.0_WP
-         allocate(mdotG    (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_)); mdotG=0.0_WP
-         allocate(mdotL_old(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_)); mdotL_old=0.0_WP
-         allocate(mdotG_old(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_)); mdotG_old=0.0_WP
-         allocate(resmdotL (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_)); resmdotL=0.0_WP
-         allocate(resmdotG (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_)); resmdotG=0.0_WP
-         allocate(mdotL_err_field(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_)); mdotL_err_field=0.0_WP
-         allocate(resU     (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
-         allocate(resV     (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
-         allocate(resW     (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
-         allocate(Ui       (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
-         allocate(Vi       (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
-         allocate(Wi       (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+         !allocate(resSC(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_,1:2))
+         allocate(resU (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+         allocate(resV (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+         allocate(resW (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+         allocate(Ui   (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+         allocate(Vi   (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+         allocate(Wi   (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
       end block allocate_work_arrays
       
       
       ! Initialize time tracker with 2 subiterations
       initialize_timetracker: block
-         time=timetracker(amRoot=cfg%amRoot,name='Main')
+         time=timetracker(amRoot=cfg%amRoot)
          call param_read('Max timestep size',time%dtmax)
          call param_read('Max cfl number',time%cflmax)
          call param_read('Max time',time%tmax)
@@ -112,15 +90,15 @@ contains
       ! Initialize our VOF solver and field
       create_and_initialize_vof: block
          use mms_geom,  only: cube_refine_vol
-         use vfs_class, only: lvira,VFhi,VFlo,remap,flux_storage,neumann
+         use vfs_class, only: lvira,VFhi,VFlo,remap!,flux_storage
          integer :: i,j,k,n,si,sj,sk
          real(WP), dimension(3,8) :: cube_vertex
          real(WP), dimension(3) :: v_cent,a_cent
          real(WP) :: vol,area
          integer, parameter :: amr_ref_lvl=4
          ! Create a VOF solver
-         call vf%initialize(cfg=cfg,reconstruction_method=lvira,transport_method=flux_storage,name='VOF')
-         ! call vf%initialize(cfg=cfg,reconstruction_method=lvira,transport_method=remap,name='VOF')
+         !call vf%initialize(cfg=cfg,reconstruction_method=lvira,transport_method=flux_storage,name='VOF')
+         call vf%initialize(cfg=cfg,reconstruction_method=lvira,transport_method=remap,name='VOF')
          vf%cons_correct=.false.
          ! Initialize to a droplet and a pool
          !center=[0.0_WP,0.05_WP,0.0_WP]
@@ -207,80 +185,44 @@ contains
       end block create_and_initialize_flow_solver
       
       
-      ! Create a one-sided scalar solver
-      create_scalar: block
-         use param, only: param_read
-         use tpscalar_class, only: Lphase,Gphase
-         use hypre_str_class, only: pcg_pfmg2,pfmg,gmres_pfmg
-         integer :: i,j,k
-         real(WP) :: Ldiff,Gdiff
-         ! Create scalar solver
-         call sc%initialize(cfg=cfg,nscalar=2,name='tpscalar')
-         ! Initialize the phase specific VOF
-         sc%PVF(:,:,:,Lphase)=vf%VF
-         sc%PVF(:,:,:,Gphase)=1.0_WP-vf%VF
-         ! Initialize the phase specific density
-         sc%Prho(Lphase)=fs%rho_l
-         sc%Prho(Gphase)=fs%rho_g
-         ! Temperature on the liquid and gas sides
-         sc%SCname=[  'Tl',  'Tg']; iTl=1; iTg=2
-         sc%phase =[Lphase,Gphase]
-         ! Read diffusivity
-         call param_read('Liquid thermal diffusivity',Ldiff)
-         sc%diff(:,:,:,iTl)=Ldiff
-         call param_read('Gas thermal diffusivity',Gdiff)
-         sc%diff(:,:,:,iTg)=Gdiff
-         ! Configure implicit scalar solver
-         ss=ddadi(cfg=cfg,name='Scalar',nst=7)
-         ! Setup the solver
-         call sc%setup(implicit_solver=ss)
-         ! Initialize scalar fields
-         do k=cfg%kmino_,cfg%kmaxo_
-            do j=cfg%jmino_,cfg%jmaxo_
-               do i=cfg%imino_,cfg%imaxo_
-                  ! Liquid scalar
-                  if (vf%VF(i,j,k).gt.0.0_WP) then
-                     ! We are in the liquid
-                     if (cfg%ym(j).gt.depth+cfg%dy(j)) then
-                        ! We are above the pool
-                        sc%SC(i,j,k,iTl)=1.0_WP
-                     else
-                        ! We are in the pool
-                        sc%SC(i,j,k,iTl)=2.0_WP
-                     end if
-                  end if
-                  ! Gas scalar
-                  if (vf%VF(i,j,k).lt.1.0_WP) then
-                     ! We are in the gas
-                     sc%SC(i,j,k,iTg)=(cfg%ym(j)-depth)/(cfg%yL-depth)
-                  end if
-               end do
-            end do
-         end do
-      end block create_scalar
+      ! Create a liquid scalar solver
+      !create_scalar: block
+      !   integer :: i,j,k
+      !   ! Create scalar solver
+      !   call sc%initialize(cfg=cfg,nscalar=2,name='tpscalar_test')
+      !   ! Make it liquid and give it a name
+      !   sc%SCname=['Zl','Zg']
+      !   sc%phase =[  0 ,  1 ]
+      !   ! Assign zero diffusivity
+      !   sc%diff=0.0_WP
+      !   ! Setup without an implicit solver
+      !   call sc%setup()
+      !   ! Initialize scalar fields
+      !   do k=cfg%kmino_,cfg%kmaxo_
+      !      do j=cfg%jmino_,cfg%jmaxo_
+      !         do i=cfg%imino_,cfg%imaxo_
+      !            ! Liquid scalar
+      !            if (vf%VF(i,j,k).gt.0.0_WP) then
+      !               ! We are in the liquid
+      !               if (cfg%ym(j).gt.depth+cfg%dy(j)) then
+      !                  ! We are above the pool
+      !                  sc%SC(i,j,k,1)=1.0_WP
+      !               else
+      !                  ! We are in the pool
+      !                  sc%SC(i,j,k,1)=2.0_WP
+      !               end if
+      !            end if
+      !            ! Gas scalar
+      !            if (vf%VF(i,j,k).lt.1.0_WP) then
+      !               ! We are in the gas
+      !               sc%SC(i,j,k,2)=(cfg%ym(j)-depth)/(cfg%yL-depth)
+      !            end if
+      !         end do
+      !      end do
+      !   end do
+      !end block create_scalar
       
-      ! Create a framework for shifting the mass source term
-      initialize_mdot: block
-         ! Initialize a pseudo time tracker
-         pseudo_time=timetracker(amRoot=cfg%amRoot,name='Pseudo',print_info=.false.)
-         call param_read('Max pseudo timestep size',pseudo_time%dtmax)
-         call param_read('Max pseudo cfl number',pseudo_time%cflmax)
-         call param_read('Max pseudo time steps',pseudo_time%nmax)
-         call param_read('Tolerence',mdot_tol)
-         call param_read('Evaporation surface mass rate',evp_src)
-         pseudo_time%dt=pseudo_time%dtmax
-         ! Initialize the evaporation mass source term and errors
-         where ((vf%VF.gt.0.0_WP).and.(vf%VF.lt.1.0_WP)); mdot=evp_src; else where; mdot=0.0_WP; end where
-         mdotL=mdot; mdotG=mdot
-         mdot_err=0.0_WP; mdotL_err=0.0_WP; mdotG_err=0.0_WP
-         mdotL_int_err=0.0_WP; mdotG_int_err=0.0_WP
-         ! Integral
-         call cfg%integrate(mdot,mdot_int)
-         call cfg%integrate(mdotL,mdotL_int)
-         call cfg%integrate(mdotG,mdotG_int)
-      end block initialize_mdot
       
-
       ! Create surfmesh object for interface polygon output
       create_smesh: block
          smesh=surfmesh(nvar=0,name='plic')
@@ -291,8 +233,6 @@ contains
       ! Add Ensight output
       create_ensight: block
          integer :: nsc
-         logical  :: ens_for_mdot
-
          ! Create Ensight output from cfg
          ens_out=ensight(cfg=cfg,name='FallingDrop')
          ! Create event for Ensight output
@@ -304,33 +244,11 @@ contains
          call ens_out%add_scalar('pressure',fs%P)
          call ens_out%add_scalar('curvature',vf%curv)
          call ens_out%add_surface('plic',smesh)
-         do nsc=1,sc%nscalar
-           call ens_out%add_scalar(trim(sc%SCname(nsc)),sc%SC(:,:,:,nsc))
-         end do
-         call ens_out%add_scalar('mdot' ,mdot)
-         call ens_out%add_scalar('mdotL',mdotL)
-         call ens_out%add_scalar('mdotG',mdotG)
-         call ens_out%add_scalar('mdotL_err_field',mdotL_err_field)
-         call ens_out%add_vector('VFgrad',VFgradx,VFgrady,VFgradz)
+         !do nsc=1,sc%nscalar
+         !   call ens_out%add_scalar(trim(sc%SCname(nsc)),sc%SC(:,:,:,nsc))
+         !end do
          ! Output to ensight
          if (ens_evt%occurs()) call ens_out%write_data(time%t)
-
-         ! Creat ensight for mdot evolution
-         call param_read('Ensight for mdot evolution',ens_for_mdot)
-         if (ens_for_mdot) then
-            call param_read('When to write mdot ensight',mdot_ens_time)
-            ens_mdot_out=ensight(cfg=cfg,name='mdotEvolution')
-            ens_mdot_evt=event(time=pseudo_time,name='mdot ensight')
-            call param_read('Ensight output period for mdot',ens_mdot_evt%tper)
-            call ens_mdot_out%add_scalar('VOF'  ,vf%VF)
-            call ens_mdot_out%add_scalar('mdot' ,mdot)
-            call ens_mdot_out%add_scalar('mdotL',mdotL)
-            call ens_mdot_out%add_scalar('mdotG',mdotG)
-            call ens_mdot_out%add_scalar('mdotL_err_field',mdotL_err_field)
-            if (ens_mdot_evt%occurs()) call ens_mdot_out%write_data(pseudo_time%t)
-         else
-            mdot_ens_time=-1.0_WP
-         end if
       end block create_ensight
       
       
@@ -341,7 +259,7 @@ contains
          call fs%get_cfl(time%dt,time%cfl)
          call fs%get_max()
          call vf%get_max()
-         call sc%get_max(VF=vf%VF)
+         !call sc%get_max(VF=vf%VF)
          ! Create simulation monitor
          mfile=monitor(fs%cfg%amRoot,'simulation')
          call mfile%add_column(time%n,'Timestep number')
@@ -372,31 +290,15 @@ contains
          call cflfile%add_column(fs%CFLv_z,'Viscous zCFL')
          call cflfile%write()
          ! Create scalar monitor
-         scfile=monitor(sc%cfg%amRoot,'scalar')
-         call scfile%add_column(time%n,'Timestep number')
-         call scfile%add_column(time%t,'Time')
-         do nsc=1,sc%nscalar
-           call scfile%add_column(sc%SCmin(nsc),trim(sc%SCname(nsc))//'_min')
-           call scfile%add_column(sc%SCmax(nsc),trim(sc%SCname(nsc))//'_max')
-           call scfile%add_column(sc%SCint(nsc),trim(sc%SCname(nsc))//'_int')
-         end do
-         call scfile%write()
-         ! Create mdot monitor
-         mdotfile=monitor(sc%cfg%amRoot,'mdot')
-         call mdotfile%add_column(time%n,'Timestep number')
-         call mdotfile%add_column(time%t,'Time')
-         call mdotfile%add_column(pseudo_time%t,'Pseudo time')
-         call mdotfile%add_column(pseudo_time%dt,'Pseudo time step')
-         call mdotfile%add_column(pseudo_time%cfl,'Maximum pseudo CFL')
-         call mdotfile%add_column(pseudo_time%n,'No. pseudo steps')
-         call mdotfile%add_column(mdot_int,'mdot int')
-         call mdotfile%add_column(mdotL_int,'shifted mdotL int')
-         call mdotfile%add_column(mdotG_int,'shifted mdotG int')
-         call mdotfile%add_column(mdotL_int_err,'mdotL int err')
-         call mdotfile%add_column(mdotG_int_err,'mdotG int err')
-         call mdotfile%add_column(mdotL_err,'max mdotL err')
-         call mdotfile%add_column(mdotG_err,'max mdotG err')
-         call mdotfile%write()
+         !scfile=monitor(sc%cfg%amRoot,'scalar')
+         !call scfile%add_column(time%n,'Timestep number')
+         !call scfile%add_column(time%t,'Time')
+         !do nsc=1,sc%nscalar
+         !   call scfile%add_column(sc%SCmin(nsc),trim(sc%SCname(nsc))//'_min')
+         !   call scfile%add_column(sc%SCmax(nsc),trim(sc%SCname(nsc))//'_max')
+         !   call scfile%add_column(sc%SCint(nsc),trim(sc%SCname(nsc))//'_int')
+         !end do
+         !call scfile%write()
       end block create_monitor
       
       
@@ -410,18 +312,17 @@ contains
       
       ! Perform time integration
       do while (.not.time%done())
-
+         
          ! Increment time
          call fs%get_cfl(time%dt,time%cfl)
          call time%adjust_dt()
          call time%increment()
-
+         
          ! Remember old VOF
          vf%VFold=vf%VF
          
          ! Remember old SC
-         sc%SCold =sc%SC
-         sc%PVFold=sc%PVF
+         !sc%SCold=sc%SC
          
          ! Remember old velocity
          fs%Uold=fs%U
@@ -436,133 +337,23 @@ contains
          
          ! VOF solver step
          call vf%advance(dt=time%dt,U=fs%U,V=fs%V,W=fs%W)
-
-         ! Update the evaporation source term
-         where ((vf%VF.gt.0.0_WP).and.(vf%VF.lt.1.0_WP)); mdot=evp_src; else where; mdot=0.0_WP; end where
          
-         ! ! Now transport our phase-specific scalars
-         ! advance_scalar: block
-         !    use tpscalar_class, only: Lphase,Gphase
-         !    integer :: nsc
-            
-         !    ! Get the phas-specific VOF
-         !    sc%PVF(:,:,:,Lphase)=vf%VF
-         !    sc%PVF(:,:,:,Gphase)=1.0_WP-vf%VF
-            
-         !    ! Explicit calculation of dSC/dt from advective term
-         !    call sc%get_dSCdt(dSCdt=resSC,U=fs%U,V=fs%V,W=fs%W,VFold=vf%VFold,VF=vf%VF,detailed_face_flux=vf%detailed_face_flux,dt=time%dt)
-            
-         !    ! Advance advection
-         !    do nsc=1,sc%nscalar
-         !       where (sc%mask.eq.0.and.sc%PVF(:,:,:,sc%phase(nsc)).gt.0.0_WP) sc%SC(:,:,:,nsc)=((sc%PVFold(:,:,:,sc%phase(nsc)))*sc%SCold(:,:,:,nsc)+time%dt*resSC(:,:,:,nsc))/(sc%PVF(:,:,:,sc%phase(nsc)))
-         !       where (sc%PVF(:,:,:,sc%phase(nsc)).eq.0.0_WP) sc%SC(:,:,:,nsc)=0.0_WP
-         !    end do
-
-         !    ! Apply the mass/energy transfer source term for the species/temperature
-         !    do nsc=1,sc%nscalar
-         !       where (sc%PVF(:,:,:,sc%phase(nsc)).gt.0.0_WP.and.sc%PVF(:,:,:,sc%phase(nsc)).lt.1.0_WP) sc%SC(:,:,:,nsc)=sc%SC(:,:,:,nsc)-mdot/sc%Prho(sc%phase(nsc))*vf%SD*time%dt
-         !    end do
-               
-         !    ! Advance diffusion
-         !    call sc%solve_implicit(time%dt,sc%SC)
-            
-         !    ! Apply boundary conditions
-         !    call sc%apply_bcond(time%t,time%dt)
-               
-         ! end block advance_scalar         
-               
-         ! Shift the mass source term away from the interface
-         shift_mdot: block
-            use mpi_f08,  only: MPI_ALLREDUCE,MPI_MAX
-            use parallel, only: MPI_REAL_WP
-            use irl_fortran_interface, only: calculateNormal,getNumberOfVertices
-            real(WP), dimension(:,:,:), allocatable :: ccVFgradX,ccVFgradY,ccVFgradZ
-            integer  :: ierr,i,j,k
-            real(WP) :: my_mdot_err
-            real(WP), dimension(3) :: n1,n2
-            
-            ! Allocate memory for the cell-centered VOF gradient
-            allocate(ccVFgradX(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
-            allocate(ccVFgradY(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
-            allocate(ccVFgradZ(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
-            
-            ! Get the scaled gradient of VOF
-            do k=vf%cfg%kmino_,vf%cfg%kmaxo_
-               do j=vf%cfg%jmino_,vf%cfg%jmaxo_
-                  do i=vf%cfg%imino_,vf%cfg%imaxo_
-                     n1=calculateNormal(vf%interface_polygon(1,i,j,k))
-                     if (getNumberOfVertices(vf%interface_polygon(2,i,j,k)).gt.0) then
-                        n2=calculateNormal(vf%interface_polygon(2,i,j,k))
-                        n1=0.5_WP*(n1+n2)
-                     end if
-                     ccVFgradX(i,j,k)=-n1(1)
-                     ccVFgradY(i,j,k)=-n1(2)
-                     ccVFgradZ(i,j,k)=-n1(3)
-                  end do
-               end do
-            end do
-            call sc%cellVec_to_face(ccf_x=ccVFgradX,ccf_y=ccVFgradY,ccf_z=ccVFgradZ,fcf_x=VFgradX,fcf_y=VFgradY,fcf_z=VFgradZ)
-            
-            ! Deallocate the unused
-            deallocate(ccVFgradX,ccVFgradY,ccVFgradZ)
-            
-            ! Get the CFL based on the gradient of the VOF
-            call sc%get_cfl(VFgradX,VFgradY,VFgradZ,pseudo_time%dt,pseudo_time%cfl)
-            
-            ! Reset the pseudo time
-            call pseudo_time%reset()
-            
-            ! Adjust the pseudo time step
-            call pseudo_time%adjust_dt()
-            
-            ! Initialize the source terms on the liquid and gas sides
-            mdotL=mdot; mdotG=mdot
-
-            ! Move the evaporation source term away from the interface
-            do while (.not.pseudo_time%done())
-               
-               ! Remember old mdot
-               mdotL_old=mdotL
-               mdotG_old=mdotG
-               
-               ! Increment pseudo time
-               call pseudo_time%increment()
-               
-               ! Assemble explicit residual
-               call sc%get_dmdotdtau( VFgradX, VFgradY, VFgradZ,mdotL_old,resmdotL)
-               call sc%get_dmdotdtau(-VFgradX,-VFgradY,-VFgradZ,mdotG_old,resmdotG)
-               
-               ! Apply these residuals
-               mdotL=mdotL_old+pseudo_time%dt*resmdotL
-               mdotG=mdotG_old+pseudo_time%dt*resmdotG
-
-               ! Output to ensight
-               mdotL_err_field=mdotL-mdotL_old
-               if (mdot_ens_time.eq.time%t.and.ens_mdot_evt%occurs()) then
-                  call ens_mdot_out%write_data(pseudo_time%t)
-               end if
-
-               ! Calculate the error on the liquid side
-               my_mdot_err=maxval(abs(mdotL_err_field))
-               call MPI_ALLREDUCE(my_mdot_err,mdotL_err,1,MPI_REAL_WP,MPI_Max,sc%cfg%comm,ierr)
-               ! Calculate the error on the gas side
-               my_mdot_err=maxval(abs(mdotG-mdotG_old))
-               call MPI_ALLREDUCE(my_mdot_err,mdotG_err,1,MPI_REAL_WP,MPI_Max,sc%cfg%comm,ierr)
-               ! Check convergence
-               mdot_err=max(mdotL_err,mdotG_err)
-               if (mdot_err.lt.mdot_tol) exit
-
-            end do
-
-            ! Integral of mdot
-            call cfg%integrate(mdot,mdot_int)
-            call cfg%integrate(mdotL,mdotL_int)
-            call cfg%integrate(mdotG,mdotG_int)
-            mdotL_int_err=abs(mdotL_int-mdot_int)
-            mdotG_int_err=abs(mdotG_int-mdot_int)
-
-         end block shift_mdot
-
+         ! Now transport our phase-specific scalars
+         !advance_scalar: block
+         !   integer :: nsc
+         !   real(WP) :: p,q
+         !   ! Explicit calculation of dSC/dt from scalar equation
+         !   call sc%get_dSCdt(dSCdt=resSC,U=fs%U,V=fs%V,W=fs%W,VFold=vf%VFold,VF=vf%VF,detailed_face_flux=vf%detailed_face_flux,dt=time%dt)
+         !   ! Advance scalar fields
+         !   do nsc=1,sc%nscalar
+         !      p=real(sc%phase(nsc),WP); q=1.0_WP-2.0_WP*p
+         !      where (sc%mask.eq.0.and.vf%VF.ne.p) sc%SC(:,:,:,nsc)=((p+q*vf%VFold)*sc%SCold(:,:,:,nsc)+time%dt*resSC(:,:,:,nsc))/(p+q*vf%VF)
+         !      where (vf%VF.eq.p) sc%SC(:,:,:,nsc)=0.0_WP
+         !   end do
+         !   ! Apply boundary conditions
+         !   call sc%apply_bcond(time%t,time%dt)
+         !end block advance_scalar
+         
          ! Prepare new staggered viscosity (at n+1)
          call fs%get_viscosity(vf=vf,strat=harmonic_visc)
          
@@ -603,9 +394,8 @@ contains
             call fs%update_laplacian()
             call fs%correct_mfr()
             call fs%get_div()
-            ! call fs%add_surface_tension_jump(dt=time%dt,div=fs%div,vf=vf,contact_model=static_contact)
-            call fs%add_surface_tension_jump(dt=time%dt,div=fs%div,vf=vf)
-            fs%psolv%rhs=-fs%cfg%vol*(fs%div+(mdotG/fs%rho_g-mdotL/fs%rho_l)*vf%SD)/time%dt ! Evaporation mass source term is taken into account here
+            call fs%add_surface_tension_jump(dt=time%dt,div=fs%div,vf=vf,contact_model=static_contact)
+            fs%psolv%rhs=-fs%cfg%vol*fs%div/time%dt
             fs%psolv%sol=0.0_WP
             call fs%psolv%solve()
             call fs%shift_p(fs%psolv%sol)
@@ -635,11 +425,10 @@ contains
          ! Perform and output monitoring
          call fs%get_max()
          call vf%get_max()
-         call sc%get_max(VF=vf%VF)
+         !call sc%get_max(VF=vf%VF)
          call mfile%write()
          call cflfile%write()
-         call scfile%write()
-         call mdotfile%write()
+         !call scfile%write()
          
       end do
       
@@ -657,7 +446,8 @@ contains
       ! timetracker
       
       ! Deallocate work arrays
-      deallocate(resU,resV,resW,Ui,Vi,Wi,resSC,mdot,mdotL,mdotL_old,mdotG,mdotG_old,resmdotL,resmdotG)
+      deallocate(resU,resV,resW,Ui,Vi,Wi)!,resSC)
+      
    end subroutine simulation_final
    
    
