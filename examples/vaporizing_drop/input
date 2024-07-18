@@ -44,6 +44,6 @@ Pressure iteration : 100
 
 # Ensight output
 Ensight output period          : 2.5e-3
-Ensight for mdot evolution     : false
+Ensight for mflux evolution    : false
 Ensight output period for mdot : 2e-7
 When to write mdot ensight     : 2.5e-4

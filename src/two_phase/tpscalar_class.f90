@@ -67,9 +67,6 @@ module tpscalar_class
       ! Implicit scalar solver
       class(linsol), pointer :: implicit                  !< Iterative linear solver object for an implicit prediction of the scalar residual
       integer, dimension(:,:,:), allocatable :: stmap     !< Inverse map from stencil shift to index location
-
-      ! Implicit solver for the evaporation source term
-      class(linsol), pointer :: mdot_solver               !< Iterative linear solver object for distributing the mass source away from the interface
       
       ! Metrics
       real(WP), dimension(:,:,:,:), allocatable :: div_x,div_y,div_z   !< Divergence for SC
@@ -94,7 +91,7 @@ module tpscalar_class
       procedure :: get_dSCdt                              !< Calculate drhoSC/dt from advective fluxes
       procedure :: get_max                                !< Calculate maximum and integral field values
       procedure :: solve_implicit                         !< Solve for the scalar residuals implicitly
-      procedure :: get_dmdotdtau                          !< Calculate dmdot/dtau
+      procedure :: get_dmfluxdtau                          !< Calculate dmflux/dtau
       procedure :: get_cfl                                !< Calculate the pseudo CFL number
       procedure :: cell_to_vertex                         !< Interpolate a cell-centered scalar to a vertex-centered one
       procedure :: cell_to_face                           !< Interpolate a cell-centered scalar to a face-centered one
@@ -310,12 +307,11 @@ contains
    
    
    !> Finish setting up the scalar solver now that bconds have been defined
-   subroutine setup(this,implicit_solver,mdot_solver)
+   subroutine setup(this,implicit_solver)
       use messager, only: die
       implicit none
       class(tpscalar), intent(inout) :: this
       class(linsol), target, intent(in), optional :: implicit_solver
-      class(linsol), target, intent(in), optional :: mdot_solver
       integer :: count
       
       ! Adjust metrics based on mask array
@@ -344,29 +340,6 @@ contains
          
          ! Initialize the implicit scalar solver
          call this%implicit%init()
-         
-      end if
-
-      ! Prepare implicit distribution solver if it had been provided
-      if (present(mdot_solver)) then
-         
-         ! Point to implicit solver linsol object
-         this%mdot_solver=>mdot_solver
-         
-         ! Check implicit solver size
-         if (this%mdot_solver%nst.ne.7) call die('[tpscalar setup] Implicit distribution solver needs nst=7')
-         
-         ! Set dynamic stencil map
-         count=      1; this%mdot_solver%stc(count,:)=[ 0, 0, 0]
-         count=count+1; this%mdot_solver%stc(count,:)=[+1, 0, 0]
-         count=count+1; this%mdot_solver%stc(count,:)=[-1, 0, 0]
-         count=count+1; this%mdot_solver%stc(count,:)=[ 0,+1, 0]
-         count=count+1; this%mdot_solver%stc(count,:)=[ 0,-1, 0]
-         count=count+1; this%mdot_solver%stc(count,:)=[ 0, 0,+1]
-         count=count+1; this%mdot_solver%stc(count,:)=[ 0, 0,-1]
-         
-         ! Initialize the implicit scalar solver
-         call this%mdot_solver%init()
          
       end if
       
@@ -737,45 +710,45 @@ contains
    end subroutine solve_implicit
 
    
-   !> Calculate the explicit mdot time derivative based on VOF
-   subroutine get_dmdotdtau(this,U,V,W,mdot,dmdotdtau)
+   !> Calculate the explicit mflux time derivative based on VOF
+   subroutine get_dmfluxdtau(this,U,V,W,mflux,dmfluxdtau)
       implicit none
       class(tpscalar), intent(inout) :: this
-      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in)  :: U         !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
-      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in)  :: V         !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
-      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in)  :: W         !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
-      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in)  :: mdot      !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
-      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(out) :: dmdotdtau !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in)  :: U          !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in)  :: V          !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in)  :: W          !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in)  :: mflux      !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(out) :: dmfluxdtau !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       integer :: i,j,k
       real(WP), dimension(:,:,:), allocatable :: FX,FY,FZ
       real(WP) :: mysurf
-      ! Zero out mdotd/tau array
-      dmdotdtau=0.0_WP
+      ! Zero out dmfluxd/dtau array
+      dmfluxdtau=0.0_WP
       ! Allocate flux arrays
       allocate(FX(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
       allocate(FY(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
       allocate(FZ(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
-      ! Fluxes of mdot
+      ! Fluxes of mflux
       do k=this%cfg%kmin_,this%cfg%kmax_+1
          do j=this%cfg%jmin_,this%cfg%jmax_+1
             do i=this%cfg%imin_,this%cfg%imax_+1
                ! Fluxes on x-face
-               FX(i,j,k)=-0.5_WP*(U(i,j,k)+abs(U(i,j,k)))*mdot(i-1,j,k) &
-               &         -0.5_WP*(U(i,j,k)-abs(U(i,j,k)))*mdot(i  ,j,k)
+               FX(i,j,k)=-0.5_WP*(U(i,j,k)+abs(U(i,j,k)))*mflux(i-1,j,k) &
+               &         -0.5_WP*(U(i,j,k)-abs(U(i,j,k)))*mflux(i  ,j,k)
                ! Fluxes on y-face
-               FY(i,j,k)=-0.5_WP*(V(i,j,k)+abs(V(i,j,k)))*mdot(i,j-1,k) &
-               &         -0.5_WP*(V(i,j,k)-abs(V(i,j,k)))*mdot(i,j  ,k)
+               FY(i,j,k)=-0.5_WP*(V(i,j,k)+abs(V(i,j,k)))*mflux(i,j-1,k) &
+               &         -0.5_WP*(V(i,j,k)-abs(V(i,j,k)))*mflux(i,j  ,k)
                ! Fluxes on z-face
-               FZ(i,j,k)=-0.5_WP*(W(i,j,k)+abs(W(i,j,k)))*mdot(i,j,k-1) &
-               &         -0.5_WP*(W(i,j,k)-abs(W(i,j,k)))*mdot(i,j,k  )
+               FZ(i,j,k)=-0.5_WP*(W(i,j,k)+abs(W(i,j,k)))*mflux(i,j,k-1) &
+               &         -0.5_WP*(W(i,j,k)-abs(W(i,j,k)))*mflux(i,j,k  )
             end do
          end do
       end do
-      ! Time derivative of mdot
+      ! Time derivative of mflux
       do k=this%cfg%kmin_,this%cfg%kmax_
          do j=this%cfg%jmin_,this%cfg%jmax_
             do i=this%cfg%imin_,this%cfg%imax_
-               dmdotdtau(i,j,k)=sum(this%div_x(:,i,j,k)*FX(i:i+1,j,k))+&
+               dmfluxdtau(i,j,k)=sum(this%div_x(:,i,j,k)*FX(i:i+1,j,k))+&
                &                sum(this%div_y(:,i,j,k)*FY(i,j:j+1,k))+&
                &                sum(this%div_z(:,i,j,k)*FZ(i,j,k:k+1))
             end do
@@ -784,8 +757,8 @@ contains
       ! Deallocate flux arrays
       deallocate(FX,FY,FZ)
       ! Sync residual
-      call this%cfg%sync(dmdotdtau)
-   end subroutine get_dmdotdtau
+      call this%cfg%sync(dmfluxdtau)
+   end subroutine get_dmfluxdtau
 
 
    !> Calculate the CFL based on the input velocity field
