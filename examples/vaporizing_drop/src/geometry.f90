@@ -38,7 +38,7 @@ contains
             x(i)=real(i-1,WP)/real(nx,WP)*Lx-0.5_WP*Lx
          end do
          do j=1,ny+1
-            y(j)=real(j-1,WP)/real(ny,WP)*Ly
+            y(j)=real(j-1,WP)/real(ny,WP)*Ly-0.5_WP*Ly
          end do
          do k=1,nz+1
             z(k)=real(k-1,WP)/real(nz,WP)*Lz-0.5_WP*Lz
@@ -62,20 +62,20 @@ contains
       
       
       ! Create masks for this config
-      create_walls: block
-         use mathtools, only: twoPi
-         integer :: i,j,k
-         cfg%VF=1.0_WP
-         do k=cfg%kmino_,cfg%kmaxo_
-            do j=cfg%jmino_,cfg%jmaxo_
-               do i=cfg%imino_,cfg%imaxo_
-                  if (cfg%ym(j).lt.0.0_WP) then
-                     cfg%VF(i,j,k)=0.0_WP
-                  end if
-               end do
-            end do
-         end do
-      end block create_walls
+      ! create_walls: block
+      !    use mathtools, only: twoPi
+      !    integer :: i,j,k
+      !    cfg%VF=1.0_WP
+      !    do k=cfg%kmino_,cfg%kmaxo_
+      !       do j=cfg%jmino_,cfg%jmaxo_
+      !          do i=cfg%imino_,cfg%imaxo_
+      !             if (cfg%ym(j).lt.0.0_WP) then
+      !                cfg%VF(i,j,k)=0.0_WP
+      !             end if
+      !          end do
+      !       end do
+      !    end do
+      ! end block create_walls
       
       
    end subroutine geometry_init

@@ -51,7 +51,7 @@ module simulation
    real(WP) :: mfluxL_int,mfluxL_err,mfluxL_int_err
    real(WP) :: mfluxG_int,mfluxG_err,mfluxG_int_err
    real(WP) :: mflux_ens_time
-   real(WP) :: evp_src
+   real(WP) :: evp_mass_flux
    
 contains
 
@@ -259,7 +259,8 @@ contains
          end do
       end block create_scalar
       
-      ! Create a framework for shifting the mass source term
+
+      ! Create a framework for shifting the evaporation source term
       initialize_mflux: block
          ! Initialize a pseudo time tracker
          pseudo_time=timetracker(amRoot=cfg%amRoot,name='Pseudo',print_info=.false.)
@@ -267,10 +268,10 @@ contains
          call param_read('Max pseudo cfl number',pseudo_time%cflmax)
          call param_read('Max pseudo time steps',pseudo_time%nmax)
          call param_read('Tolerence',mflux_tol)
-         call param_read('Evaporation surface mass rate',evp_src)
+         call param_read('Evaporation mass flux',evp_mass_flux)
          pseudo_time%dt=pseudo_time%dtmax
-         ! Initialize the evaporation mass source term and errors
-         where ((vf%VF.gt.0.0_WP).and.(vf%VF.lt.1.0_WP)); mflux=evp_src; else where; mflux=0.0_WP; end where
+         ! Initialize the evaporation source term and errors
+         where ((vf%VF.gt.0.0_WP).and.(vf%VF.lt.1.0_WP)); mflux=evp_mass_flux; else where; mflux=0.0_WP; end where
          mfluxL=mflux; mfluxG=mflux
          mflux_err=0.0_WP; mfluxL_err=0.0_WP; mfluxG_err=0.0_WP
          mfluxL_int_err=0.0_WP; mfluxG_int_err=0.0_WP
@@ -291,7 +292,7 @@ contains
       ! Add Ensight output
       create_ensight: block
          integer :: nsc
-         logical  :: ens_for_mflux
+         logical :: ens_for_mflux
 
          ! Create Ensight output from cfg
          ens_out=ensight(cfg=cfg,name='VaporizingDrop')
@@ -406,7 +407,18 @@ contains
    !> Perform an NGA2 simulation - this mimicks NGA's old time integration for multiphase
    subroutine simulation_run
       use tpns_class, only: static_contact,harmonic_visc
+      use irl_fortran_interface, only: calculateNormal,getNumberOfVertices
       implicit none
+      real(WP), dimension(:,:,:), allocatable :: U_pc,V_pc,W_pc
+      real(WP) :: VFm,VFp
+      real(WP), dimension(3) :: normalm,normalp,normal_tmp
+      logical :: is_interfacial_m,is_interfacial_p
+      integer :: i,j,k
+
+      ! Allocate the phase change velocity components
+      allocate(U_pc(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+      allocate(V_pc(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+      allocate(W_pc(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
       
       ! Perform time integration
       do while (.not.time%done())
@@ -434,12 +446,125 @@ contains
          ! Prepare old staggered density (at n)
          call fs%get_olddensity(vf=vf)
          
-         ! VOF solver step
-         call vf%advance(dt=time%dt,U=fs%U,V=fs%V,W=fs%W)
-
          ! Update the evaporation source term
-         where ((vf%VF.gt.0.0_WP).and.(vf%VF.lt.1.0_WP)); mflux=evp_src; else where; mflux=0.0_WP; end where
+         where ((vf%VF.gt.0.0_WP).and.(vf%VF.lt.1.0_WP)); mflux=evp_mass_flux; else where; mflux=0.0_WP; end where
          
+         ! Prepare a phase-change velocity field
+         ! X-direction
+         U_pc=fs%U
+         do k=cfg%kmin_,cfg%kmax_
+            do j=cfg%jmin_,cfg%jmax_
+               do i=cfg%imin_,cfg%imax_+1
+                  VFm=vf%VF(i-1,j,k)
+                  VFp=vf%VF(i  ,j,k)
+                  is_interfacial_m=VFm.gt.0.0_WP.and.VFm.lt.1.0_WP
+                  is_interfacial_p=VFp.gt.0.0_WP.and.VFp.lt.1.0_WP
+                  if (is_interfacial_m) then
+                     normalm=calculateNormal(vf%interface_polygon(1,i-1,j,k))
+                     if (getNumberOfVertices(vf%interface_polygon(2,i-1,j,k)).gt.0) then
+                        normal_tmp=calculateNormal(vf%interface_polygon(2,i-1,j,k))
+                        normalm=0.5_WP*(normalm+normal_tmp)
+                     end if
+                     if (is_interfacial_p) then
+                        normalp=calculateNormal(vf%interface_polygon(1,i,j,k))
+                        if (getNumberOfVertices(vf%interface_polygon(2,i,j,k)).gt.0) then
+                           normal_tmp=calculateNormal(vf%interface_polygon(2,i,j,k))
+                           normalp=0.5_WP*(normalp+normal_tmp)
+                        end if
+                        U_pc(i,j,k)=U_pc(i,j,k)+sum(sc%itp_x(:,i,j,k)*mflux(i-1:i,j,k)*[normalm(1),normalp(1)]/fs%rho_l)
+                     else
+                        U_pc(i,j,k)=U_pc(i,j,k)+mflux(i-1,j,k)*normalm(1)/fs%rho_l
+                     end if
+                  else if (is_interfacial_p) then
+                     normalp=calculateNormal(vf%interface_polygon(1,i,j,k))
+                     if (getNumberOfVertices(vf%interface_polygon(2,i,j,k)).gt.0) then
+                        normal_tmp=calculateNormal(vf%interface_polygon(2,i,j,k))
+                        normalp=0.5_WP*(normalp+normal_tmp)
+                     end if
+                     U_pc(i,j,k)=U_pc(i,j,k)+mflux(i,j,k)*normalp(1)/fs%rho_l
+                  end if
+               end do
+            end do
+         end do
+         call cfg%sync(U_pc)
+         ! Y-direction
+         V_pc=fs%V
+         do k=cfg%kmin_,cfg%kmax_
+            do j=cfg%jmin_,cfg%jmax_+1
+               do i=cfg%imin_,cfg%imax_
+                  VFm=vf%VF(i,j-1,k)
+                  VFp=vf%VF(i,j  ,k)
+                  is_interfacial_m=VFm.gt.0.0_WP.and.VFm.lt.1.0_WP
+                  is_interfacial_p=VFp.gt.0.0_WP.and.VFp.lt.1.0_WP
+                  if (is_interfacial_m) then
+                     normalm=calculateNormal(vf%interface_polygon(1,i,j-1,k))
+                     if (getNumberOfVertices(vf%interface_polygon(2,i,j-1,k)).gt.0) then
+                        normal_tmp=calculateNormal(vf%interface_polygon(2,i,j-1,k))
+                        normalm=0.5_WP*(normalm+normal_tmp)
+                     end if
+                     if (is_interfacial_p) then
+                        normalp=calculateNormal(vf%interface_polygon(1,i,j,k))
+                        if (getNumberOfVertices(vf%interface_polygon(2,i,j,k)).gt.0) then
+                           normal_tmp=calculateNormal(vf%interface_polygon(2,i,j,k))
+                           normalp=0.5_WP*(normalp+normal_tmp)
+                        end if
+                        V_pc(i,j,k)=V_pc(i,j,k)+sum(sc%itp_y(:,i,j,k)*mflux(i,j-1:j,k)*[normalm(2),normalp(2)]/fs%rho_l)
+                     else
+                        V_pc(i,j,k)=V_pc(i,j,k)+mflux(i,j-1,k)*normalm(2)/fs%rho_l
+                     end if
+                  else if (is_interfacial_p) then
+                     normalp=calculateNormal(vf%interface_polygon(1,i,j,k))
+                     if (getNumberOfVertices(vf%interface_polygon(2,i,j,k)).gt.0) then
+                        normal_tmp=calculateNormal(vf%interface_polygon(2,i,j,k))
+                        normalp=0.5_WP*(normalp+normal_tmp)
+                     end if
+                     V_pc(i,j,k)=V_pc(i,j,k)+mflux(i,j,k)*normalp(2)/fs%rho_l
+                  end if
+               end do
+            end do
+         end do
+         call cfg%sync(V_pc)
+         ! Z-direction
+         W_pc=fs%W
+         do k=cfg%kmin_,cfg%kmax_
+            do j=cfg%jmin_,cfg%jmax_+1
+               do i=cfg%imin_,cfg%imax_
+                  VFm=vf%VF(i,j,k-1)
+                  VFp=vf%VF(i,j,k  )
+                  is_interfacial_m=VFm.gt.0.0_WP.and.VFm.lt.1.0_WP
+                  is_interfacial_p=VFp.gt.0.0_WP.and.VFp.lt.1.0_WP
+                  if (is_interfacial_m) then
+                     normalm=calculateNormal(vf%interface_polygon(1,i,j,k-1))
+                     if (getNumberOfVertices(vf%interface_polygon(2,i,j,k-1)).gt.0) then
+                        normal_tmp=calculateNormal(vf%interface_polygon(2,i,j,k-1))
+                        normalm=0.5_WP*(normalm+normal_tmp)
+                     end if
+                     if (is_interfacial_p) then
+                        normalp=calculateNormal(vf%interface_polygon(1,i,j,k))
+                        if (getNumberOfVertices(vf%interface_polygon(2,i,j,k)).gt.0) then
+                           normal_tmp=calculateNormal(vf%interface_polygon(2,i,j,k))
+                           normalp=0.5_WP*(normalp+normal_tmp)
+                        end if
+                        W_pc(i,j,k)=W_pc(i,j,k)+sum(sc%itp_z(:,i,j,k)*mflux(i,j,k-1:k)*[normalm(3),normalp(3)]/fs%rho_l)
+                     else
+                        W_pc(i,j,k)=W_pc(i,j,k)+mflux(i,j,k-1)*normalm(3)/fs%rho_l
+                     end if
+                  else if (is_interfacial_p) then
+                     normalp=calculateNormal(vf%interface_polygon(1,i,j,k))
+                     if (getNumberOfVertices(vf%interface_polygon(2,i,j,k)).gt.0) then
+                        normal_tmp=calculateNormal(vf%interface_polygon(2,i,j,k))
+                        normalp=0.5_WP*(normalp+normal_tmp)
+                     end if
+                     W_pc(i,j,k)=W_pc(i,j,k)+mflux(i,j,k)*normalp(3)/fs%rho_l
+                  end if
+               end do
+            end do
+         end do
+         call cfg%sync(W_pc)
+         
+         ! VOF solver step
+         call vf%advance(dt=time%dt,U=U_pc,V=V_pc,W=W_pc)
+
          ! ! Now transport our phase-specific scalars
          ! advance_scalar: block
          !    use tpscalar_class, only: Lphase,Gphase
@@ -471,7 +596,7 @@ contains
                
          ! end block advance_scalar         
                
-         ! Shift the mass source term away from the interface
+         ! Shift the evaporation source term away from the interface
          shift_mflux: block
             use mpi_f08,  only: MPI_ALLREDUCE,MPI_MAX
             use parallel, only: MPI_REAL_WP
@@ -515,7 +640,7 @@ contains
             ! Adjust the pseudo time step
             call pseudo_time%adjust_dt()
             
-            ! Initialize the source terms on the liquid and gas sides
+            ! Initialize the evaporation source terms on the liquid and gas sides
             mfluxL=mflux; mfluxG=mflux
 
             ! Move the evaporation source term away from the interface
@@ -643,6 +768,8 @@ contains
          
       end do
       
+      deallocate(U_pc,V_pc,W_pc)
+
    end subroutine simulation_run
    
    

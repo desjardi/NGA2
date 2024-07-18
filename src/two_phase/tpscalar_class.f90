@@ -749,8 +749,8 @@ contains
          do j=this%cfg%jmin_,this%cfg%jmax_
             do i=this%cfg%imin_,this%cfg%imax_
                dmfluxdtau(i,j,k)=sum(this%div_x(:,i,j,k)*FX(i:i+1,j,k))+&
-               &                sum(this%div_y(:,i,j,k)*FY(i,j:j+1,k))+&
-               &                sum(this%div_z(:,i,j,k)*FZ(i,j,k:k+1))
+               &                 sum(this%div_y(:,i,j,k)*FY(i,j:j+1,k))+&
+               &                 sum(this%div_z(:,i,j,k)*FZ(i,j,k:k+1))
             end do
          end do
       end do

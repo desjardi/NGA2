@@ -11,7 +11,7 @@ nz : 128 ! 64
 
 # Case parameters
 Droplet diameter : 0.01
-Droplet center   : 0 0.05 0
+Droplet center   : 0 0 0
 
 # Fluid properties
 Gravity                     : 0 0 0
@@ -25,7 +25,7 @@ Liquid thermal diffusivity  : 1.137e-06
 Gas thermal diffusivity     : 1.452e-05
 
 # Evaporation
-Evaporation surface mass rate : 1.8e-2
+Evaporation mass flux : 1.8e-2
 
 # Time integration
 Max timestep size : 2.5e-4 ! 8.5e-4
@@ -43,7 +43,7 @@ Pressure tolerance : 1e-4
 Pressure iteration : 100
 
 # Ensight output
-Ensight output period          : 2.5e-3
+Ensight output period          : 2.5e-4
 Ensight for mflux evolution    : false
 Ensight output period for mdot : 2e-7
 When to write mdot ensight     : 2.5e-4
