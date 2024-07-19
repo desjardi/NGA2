@@ -22,7 +22,7 @@ Gas density                 : 1.8
 Surface tension coefficient : 0.072
 Static contact angle        : 140
 Liquid thermal diffusivity  : 1.137e-06
-Gas thermal diffusivity     : 1.452e-05
+Vapor diffusivity           : 1.452e-05
 
 # Evaporation
 Evaporation mass flux : 1.8e-2

@@ -721,7 +721,6 @@ contains
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(out) :: dmfluxdtau !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       integer :: i,j,k
       real(WP), dimension(:,:,:), allocatable :: FX,FY,FZ
-      real(WP) :: mysurf
       ! Zero out dmfluxd/dtau array
       dmfluxdtau=0.0_WP
       ! Allocate flux arrays
