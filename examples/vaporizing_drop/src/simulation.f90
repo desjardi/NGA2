@@ -96,14 +96,14 @@ contains
       end block allocate_work_arrays
       
       
-      ! Initialize time tracker with 2 subiterations
+      ! Initialize time tracker
       initialize_timetracker: block
          time=timetracker(amRoot=cfg%amRoot,name='Main')
          call param_read('Max timestep size',time%dtmax)
          call param_read('Max cfl number',time%cflmax)
          call param_read('Max time',time%tmax)
+         call param_read('Sub-iterations',time%itmax)
          time%dt=time%dtmax
-         time%itmax=2
       end block initialize_timetracker
       
       
@@ -299,6 +299,7 @@ contains
          call ens_out%add_scalar('mfluxG',mfluxG)
          call ens_out%add_scalar('mfluxL_err',mflxLerr)
          call ens_out%add_vector('VFgrad',VFgradx,VFgrady,VFgradz)
+         call ens_out%add_scalar('divergence',fs%div)
          ! Output to ensight
          if (ens_evt%occurs()) call ens_out%write_data(time%t)
 
@@ -427,138 +428,91 @@ contains
          ! Transport VOF
          advance_VOF: block
             use irl_fortran_interface, only: calculateNormal,getNumberOfVertices
-            real(WP), dimension(:,:,:), allocatable :: U_pc,V_pc,W_pc
-            real(WP) :: VFm,VFp
+            real(WP), dimension(:,:,:,:),   allocatable :: vel_pc
+            real(WP), dimension(:,:,:,:,:), allocatable :: itp
+            integer,  dimension(:,:),       allocatable :: ind_map
             real(WP), dimension(3) :: normalm,normalp,normal_tmp
-            logical :: is_interfacial_m,is_interfacial_p
-            integer :: i,j,k
+            real(WP) :: VFm,VFp
+            logical  :: is_interfacial_m,is_interfacial_p
+            integer  :: i,j,k,dir
+            integer  :: im,jm,km
+            integer  :: ip,jp,kp
 
-            ! Allocate the phase change velocity
-            allocate(U_pc(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
-            allocate(V_pc(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
-            allocate(W_pc(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+            ! Allocate arrays
+            allocate(itp(-1:0,cfg%imin_-1:cfg%imax_+1,cfg%jmin_-1:cfg%jmax_+1,cfg%kmin_-1:cfg%kmax_+1,1:3)); itp=0.0_WP
+            allocate(vel_pc(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_,3))
+            allocate(ind_map(1:3,1:3))
 
-            ! X-direction phase-change velocity
-            U_pc=fs%U
-            do k=cfg%kmin_,cfg%kmax_
-               do j=cfg%jmin_,cfg%jmax_
-                  do i=cfg%imin_,cfg%imax_+1
-                     VFm=vf%VF(i-1,j,k)
-                     VFp=vf%VF(i  ,j,k)
-                     is_interfacial_m=VFm.gt.0.0_WP.and.VFm.lt.1.0_WP
-                     is_interfacial_p=VFp.gt.0.0_WP.and.VFp.lt.1.0_WP
-                     if (is_interfacial_m) then
-                        normalm=calculateNormal(vf%interface_polygon(1,i-1,j,k))
-                        if (getNumberOfVertices(vf%interface_polygon(2,i-1,j,k)).gt.0) then
-                           normal_tmp=calculateNormal(vf%interface_polygon(2,i-1,j,k))
-                           normalm=0.5_WP*(normalm+normal_tmp)
-                        end if
-                        if (is_interfacial_p) then
-                           normalp=calculateNormal(vf%interface_polygon(1,i,j,k))
-                           if (getNumberOfVertices(vf%interface_polygon(2,i,j,k)).gt.0) then
-                              normal_tmp=calculateNormal(vf%interface_polygon(2,i,j,k))
+            ! Interpolation and index map arrays
+            itp(-1:0,cfg%imin_  :cfg%imax_+1,cfg%jmin_-1:cfg%jmax_+1,cfg%kmin_-1:cfg%kmax_+1,1)=sc%itp_x
+            itp(-1:0,cfg%imin_-1:cfg%imax_+1,cfg%jmin_  :cfg%jmax_+1,cfg%kmin_-1:cfg%kmax_+1,2)=sc%itp_y
+            itp(-1:0,cfg%imin_-1:cfg%imax_+1,cfg%jmin_-1:cfg%jmax_+1,cfg%kmin_  :cfg%kmax_+1,3)=sc%itp_z
+            ind_map=reshape((/ 1, 0, 0, 0, 1, 0, 0, 0, 1 /), shape(ind_map))
+
+            ! Initialize phase-change velocity
+            vel_pc(:,:,:,1)=fs%U
+            vel_pc(:,:,:,2)=fs%V
+            vel_pc(:,:,:,3)=fs%W
+
+            ! Loop over directions
+            do dir=1,3
+               ! Loop over cell faces
+               do k=cfg%kmin_,cfg%kmax_+ind_map(3,dir)
+                  do j=cfg%jmin_,cfg%jmax_+ind_map(2,dir)
+                     do i=cfg%imin_,cfg%imax_+ind_map(1,dir)
+                        ! Prepare indices for the adjacent cells
+                        im=i-ind_map(1,dir); ip=i
+                        jm=j-ind_map(2,dir); jp=j
+                        km=k-ind_map(3,dir); kp=k
+                        ! Get the corresponding VOF values
+                        VFm=vf%VF(im,jm,km)
+                        VFp=vf%VF(ip,jp,kp)
+                        ! Check if the adjacent cells are interfacial
+                        is_interfacial_m=VFm.gt.0.0_WP.and.VFm.lt.1.0_WP
+                        is_interfacial_p=VFp.gt.0.0_WP.and.VFp.lt.1.0_WP
+                        if (is_interfacial_m) then
+                           ! Get the interface normal of the minus cell
+                           normalm=calculateNormal(vf%interface_polygon(1,im,jm,km))
+                           if (getNumberOfVertices(vf%interface_polygon(2,im,jm,km)).gt.0) then
+                              normal_tmp=calculateNormal(vf%interface_polygon(2,im,jm,km))
+                              normalm=0.5_WP*(normalm+normal_tmp)
+                           end if
+                           if (is_interfacial_p) then
+                              ! Get the interface normal of the plus cell
+                              normalp=calculateNormal(vf%interface_polygon(1,ip,jp,kp))
+                              if (getNumberOfVertices(vf%interface_polygon(2,ip,jp,kp)).gt.0) then
+                                 normal_tmp=calculateNormal(vf%interface_polygon(2,ip,jp,kp))
+                                 normalp=0.5_WP*(normalp+normal_tmp)
+                              end if
+                              ! Both cells are interfacial, linear interpolation of the phase-change velocity
+                              vel_pc(i,j,k,dir)=vel_pc(i,j,k,dir)-(itp(-1,i,j,k,dir)*mflux(im,jm,km)*normalm(dir) &
+                              &                                   +itp( 0,i,j,k,dir)*mflux(ip,jp,kp)*normalp(dir))/fs%rho_l
+                           else
+                              ! The plus cell is not interfacial, use the minus cell's phase-change velocity
+                              vel_pc(i,j,k,dir)=vel_pc(i,j,k,dir)-mflux(im,jm,km)*normalm(dir)/fs%rho_l
+                           end if
+                        else if (is_interfacial_p) then
+                           ! Get the interface normal of the plus cell
+                           normalp=calculateNormal(vf%interface_polygon(1,ip,jp,kp))
+                           if (getNumberOfVertices(vf%interface_polygon(2,ip,jp,kp)).gt.0) then
+                              normal_tmp=calculateNormal(vf%interface_polygon(2,ip,jp,kp))
                               normalp=0.5_WP*(normalp+normal_tmp)
                            end if
-                           U_pc(i,j,k)=U_pc(i,j,k)-sum(sc%itp_x(:,i,j,k)*mflux(i-1:i,j,k)*[normalm(1),normalp(1)]/fs%rho_l)
-                        else
-                           U_pc(i,j,k)=U_pc(i,j,k)-mflux(i-1,j,k)*normalm(1)/fs%rho_l
+                           ! The minus cell is not interfacial, use the plus cell's phase-change velocity
+                           vel_pc(i,j,k,dir)=vel_pc(i,j,k,dir)-mflux(ip,jp,kp)*normalp(dir)/fs%rho_l
                         end if
-                     else if (is_interfacial_p) then
-                        normalp=calculateNormal(vf%interface_polygon(1,i,j,k))
-                        if (getNumberOfVertices(vf%interface_polygon(2,i,j,k)).gt.0) then
-                           normal_tmp=calculateNormal(vf%interface_polygon(2,i,j,k))
-                           normalp=0.5_WP*(normalp+normal_tmp)
-                        end if
-                        U_pc(i,j,k)=U_pc(i,j,k)-mflux(i,j,k)*normalp(1)/fs%rho_l
-                     end if
+                     end do
                   end do
                end do
+               ! Sync the phase-change velocity component
+               call cfg%sync(vel_pc(:,:,:,dir))
             end do
-            call cfg%sync(U_pc)
 
-            ! Y-direction phase-change velocity
-            V_pc=fs%V
-            do k=cfg%kmin_,cfg%kmax_
-               do j=cfg%jmin_,cfg%jmax_+1
-                  do i=cfg%imin_,cfg%imax_
-                     VFm=vf%VF(i,j-1,k)
-                     VFp=vf%VF(i,j  ,k)
-                     is_interfacial_m=VFm.gt.0.0_WP.and.VFm.lt.1.0_WP
-                     is_interfacial_p=VFp.gt.0.0_WP.and.VFp.lt.1.0_WP
-                     if (is_interfacial_m) then
-                        normalm=calculateNormal(vf%interface_polygon(1,i,j-1,k))
-                        if (getNumberOfVertices(vf%interface_polygon(2,i,j-1,k)).gt.0) then
-                           normal_tmp=calculateNormal(vf%interface_polygon(2,i,j-1,k))
-                           normalm=0.5_WP*(normalm+normal_tmp)
-                        end if
-                        if (is_interfacial_p) then
-                           normalp=calculateNormal(vf%interface_polygon(1,i,j,k))
-                           if (getNumberOfVertices(vf%interface_polygon(2,i,j,k)).gt.0) then
-                              normal_tmp=calculateNormal(vf%interface_polygon(2,i,j,k))
-                              normalp=0.5_WP*(normalp+normal_tmp)
-                           end if
-                           V_pc(i,j,k)=V_pc(i,j,k)-sum(sc%itp_y(:,i,j,k)*mflux(i,j-1:j,k)*[normalm(2),normalp(2)]/fs%rho_l)
-                        else
-                           V_pc(i,j,k)=V_pc(i,j,k)-mflux(i,j-1,k)*normalm(2)/fs%rho_l
-                        end if
-                     else if (is_interfacial_p) then
-                        normalp=calculateNormal(vf%interface_polygon(1,i,j,k))
-                        if (getNumberOfVertices(vf%interface_polygon(2,i,j,k)).gt.0) then
-                           normal_tmp=calculateNormal(vf%interface_polygon(2,i,j,k))
-                           normalp=0.5_WP*(normalp+normal_tmp)
-                        end if
-                        V_pc(i,j,k)=V_pc(i,j,k)-mflux(i,j,k)*normalp(2)/fs%rho_l
-                     end if
-                  end do
-               end do
-            end do
-            call cfg%sync(V_pc)
-
-            ! Z-direction phase-change velocity
-            W_pc=fs%W
-            do k=cfg%kmin_,cfg%kmax_+1
-               do j=cfg%jmin_,cfg%jmax_
-                  do i=cfg%imin_,cfg%imax_
-                     VFm=vf%VF(i,j,k-1)
-                     VFp=vf%VF(i,j,k  )
-                     is_interfacial_m=VFm.gt.0.0_WP.and.VFm.lt.1.0_WP
-                     is_interfacial_p=VFp.gt.0.0_WP.and.VFp.lt.1.0_WP
-                     if (is_interfacial_m) then
-                        normalm=calculateNormal(vf%interface_polygon(1,i,j,k-1))
-                        if (getNumberOfVertices(vf%interface_polygon(2,i,j,k-1)).gt.0) then
-                           normal_tmp=calculateNormal(vf%interface_polygon(2,i,j,k-1))
-                           normalm=0.5_WP*(normalm+normal_tmp)
-                        end if
-                        if (is_interfacial_p) then
-                           normalp=calculateNormal(vf%interface_polygon(1,i,j,k))
-                           if (getNumberOfVertices(vf%interface_polygon(2,i,j,k)).gt.0) then
-                              normal_tmp=calculateNormal(vf%interface_polygon(2,i,j,k))
-                              normalp=0.5_WP*(normalp+normal_tmp)
-                           end if
-                           W_pc(i,j,k)=W_pc(i,j,k)-sum(sc%itp_z(:,i,j,k)*mflux(i,j,k-1:k)*[normalm(3),normalp(3)]/fs%rho_l)
-                        else
-                           W_pc(i,j,k)=W_pc(i,j,k)-mflux(i,j,k-1)*normalm(3)/fs%rho_l
-                        end if
-                     else if (is_interfacial_p) then
-                        normalp=calculateNormal(vf%interface_polygon(1,i,j,k))
-                        if (getNumberOfVertices(vf%interface_polygon(2,i,j,k)).gt.0) then
-                           normal_tmp=calculateNormal(vf%interface_polygon(2,i,j,k))
-                           normalp=0.5_WP*(normalp+normal_tmp)
-                        end if
-                        W_pc(i,j,k)=W_pc(i,j,k)-mflux(i,j,k)*normalp(3)/fs%rho_l
-                     end if
-                  end do
-               end do
-            end do
-            call cfg%sync(W_pc)
-            
             ! VOF solver step
-            call vf%advance(dt=time%dt,U=U_pc,V=V_pc,W=W_pc)
-            ! Debug
-            ! call vf%advance(dt=time%dt,U=fs%U,V=fs%V,W=fs%W)
-         
-            ! Deallocate the phase-change velocity
-            deallocate(U_pc,V_pc,W_pc)
+            call vf%advance(dt=time%dt,U=vel_pc(:,:,:,1),V=vel_pc(:,:,:,2),W=vel_pc(:,:,:,3))
+
+            ! Deallocate arrays
+            deallocate(itp,vel_pc,ind_map)
 
          end block advance_VOF
 
@@ -730,7 +684,7 @@ contains
             ! call fs%add_surface_tension_jump(dt=time%dt,div=fs%div,vf=vf,contact_model=static_contact)
             call fs%add_surface_tension_jump(dt=time%dt,div=fs%div,vf=vf)
             ! Debug
-            fs%psolv%rhs=-fs%cfg%vol*(fs%div-(mfluxG/fs%rho_g-mfluxL/fs%rho_l)*vf%SD)/time%dt ! Evaporation mass mass flux is taken into account here
+            fs%psolv%rhs=-fs%cfg%vol*(fs%div-(mfluxG/fs%rho_g-mfluxL/fs%rho_l)*vf%SD)/time%dt ! Evaporation mass flux is taken into account here
             ! fs%psolv%rhs=-fs%cfg%vol*fs%div/time%dt
             fs%psolv%sol=0.0_WP
             call fs%psolv%solve()
