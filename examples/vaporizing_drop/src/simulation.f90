@@ -42,6 +42,7 @@ module simulation
    real(WP), dimension(:,:,:),   allocatable :: mflux
    real(WP), dimension(:,:,:),   allocatable :: mfluxL,mfluxL_old,resmfluxL,mflxLerr
    real(WP), dimension(:,:,:),   allocatable :: mfluxG,mfluxG_old,resmfluxG
+   real(WP), dimension(:,:,:,:), allocatable :: vel_pc
    
    !> Problem definition
    real(WP), dimension(3) :: center
@@ -93,6 +94,7 @@ contains
          allocate(Ui        (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
          allocate(Vi        (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
          allocate(Wi        (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+         allocate(vel_pc(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_,1:3))
       end block allocate_work_arrays
       
       
@@ -422,130 +424,9 @@ contains
          ! Prepare old staggered density (at n)
          call fs%get_olddensity(vf=vf)
          
-         ! Update the evaporation mass flux
+         ! Interface jump conditions
          where ((vf%VF.gt.0.0_WP).and.(vf%VF.lt.1.0_WP)); mflux=evp_mass_flux; else where; mflux=0.0_WP; end where
          
-         ! Transport VOF
-         advance_VOF: block
-            use irl_fortran_interface, only: calculateNormal,getNumberOfVertices
-            real(WP), dimension(:,:,:,:),   allocatable :: vel_pc
-            real(WP), dimension(:,:,:,:,:), allocatable :: itp
-            integer,  dimension(:,:),       allocatable :: ind_map
-            real(WP), dimension(3) :: normalm,normalp,normal_tmp
-            real(WP) :: VFm,VFp
-            logical  :: is_interfacial_m,is_interfacial_p
-            integer  :: i,j,k,dir
-            integer  :: im,jm,km
-            integer  :: ip,jp,kp
-
-            ! Allocate arrays
-            allocate(itp(-1:0,cfg%imin_-1:cfg%imax_+1,cfg%jmin_-1:cfg%jmax_+1,cfg%kmin_-1:cfg%kmax_+1,1:3)); itp=0.0_WP
-            allocate(vel_pc(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_,3))
-            allocate(ind_map(1:3,1:3))
-
-            ! Interpolation and index map arrays
-            itp(-1:0,cfg%imin_  :cfg%imax_+1,cfg%jmin_-1:cfg%jmax_+1,cfg%kmin_-1:cfg%kmax_+1,1)=sc%itp_x
-            itp(-1:0,cfg%imin_-1:cfg%imax_+1,cfg%jmin_  :cfg%jmax_+1,cfg%kmin_-1:cfg%kmax_+1,2)=sc%itp_y
-            itp(-1:0,cfg%imin_-1:cfg%imax_+1,cfg%jmin_-1:cfg%jmax_+1,cfg%kmin_  :cfg%kmax_+1,3)=sc%itp_z
-            ind_map=reshape((/ 1, 0, 0, 0, 1, 0, 0, 0, 1 /), shape(ind_map))
-
-            ! Initialize phase-change velocity
-            vel_pc(:,:,:,1)=fs%U
-            vel_pc(:,:,:,2)=fs%V
-            vel_pc(:,:,:,3)=fs%W
-
-            ! Loop over directions
-            do dir=1,3
-               ! Loop over cell faces
-               do k=cfg%kmin_,cfg%kmax_+ind_map(3,dir)
-                  do j=cfg%jmin_,cfg%jmax_+ind_map(2,dir)
-                     do i=cfg%imin_,cfg%imax_+ind_map(1,dir)
-                        ! Prepare indices for the adjacent cells
-                        im=i-ind_map(1,dir); ip=i
-                        jm=j-ind_map(2,dir); jp=j
-                        km=k-ind_map(3,dir); kp=k
-                        ! Get the corresponding VOF values
-                        VFm=vf%VF(im,jm,km)
-                        VFp=vf%VF(ip,jp,kp)
-                        ! Check if the adjacent cells are interfacial
-                        is_interfacial_m=VFm.gt.0.0_WP.and.VFm.lt.1.0_WP
-                        is_interfacial_p=VFp.gt.0.0_WP.and.VFp.lt.1.0_WP
-                        if (is_interfacial_m) then
-                           ! Get the interface normal of the minus cell
-                           normalm=calculateNormal(vf%interface_polygon(1,im,jm,km))
-                           if (getNumberOfVertices(vf%interface_polygon(2,im,jm,km)).gt.0) then
-                              normal_tmp=calculateNormal(vf%interface_polygon(2,im,jm,km))
-                              normalm=0.5_WP*(normalm+normal_tmp)
-                           end if
-                           if (is_interfacial_p) then
-                              ! Get the interface normal of the plus cell
-                              normalp=calculateNormal(vf%interface_polygon(1,ip,jp,kp))
-                              if (getNumberOfVertices(vf%interface_polygon(2,ip,jp,kp)).gt.0) then
-                                 normal_tmp=calculateNormal(vf%interface_polygon(2,ip,jp,kp))
-                                 normalp=0.5_WP*(normalp+normal_tmp)
-                              end if
-                              ! Both cells are interfacial, linear interpolation of the phase-change velocity
-                              vel_pc(i,j,k,dir)=vel_pc(i,j,k,dir)-(itp(-1,i,j,k,dir)*mflux(im,jm,km)*normalm(dir) &
-                              &                                   +itp( 0,i,j,k,dir)*mflux(ip,jp,kp)*normalp(dir))/fs%rho_l
-                           else
-                              ! The plus cell is not interfacial, use the minus cell's phase-change velocity
-                              vel_pc(i,j,k,dir)=vel_pc(i,j,k,dir)-mflux(im,jm,km)*normalm(dir)/fs%rho_l
-                           end if
-                        else if (is_interfacial_p) then
-                           ! Get the interface normal of the plus cell
-                           normalp=calculateNormal(vf%interface_polygon(1,ip,jp,kp))
-                           if (getNumberOfVertices(vf%interface_polygon(2,ip,jp,kp)).gt.0) then
-                              normal_tmp=calculateNormal(vf%interface_polygon(2,ip,jp,kp))
-                              normalp=0.5_WP*(normalp+normal_tmp)
-                           end if
-                           ! The minus cell is not interfacial, use the plus cell's phase-change velocity
-                           vel_pc(i,j,k,dir)=vel_pc(i,j,k,dir)-mflux(ip,jp,kp)*normalp(dir)/fs%rho_l
-                        end if
-                     end do
-                  end do
-               end do
-               ! Sync the phase-change velocity component
-               call cfg%sync(vel_pc(:,:,:,dir))
-            end do
-
-            ! VOF solver step
-            call vf%advance(dt=time%dt,U=vel_pc(:,:,:,1),V=vel_pc(:,:,:,2),W=vel_pc(:,:,:,3))
-
-            ! Deallocate arrays
-            deallocate(itp,vel_pc,ind_map)
-
-         end block advance_VOF
-
-         ! Transport scalars
-         advance_scalar: block
-            use tpscalar_class, only: Lphase,Gphase
-            integer :: nsc
-            
-            ! Get the phas-specific VOF
-            sc%PVF(:,:,:,Lphase)=vf%VF
-            sc%PVF(:,:,:,Gphase)=1.0_WP-vf%VF
-            
-            ! Explicit calculation of dSC/dt from advective term
-            call sc%get_dSCdt(dSCdt=resSC,U=fs%U,V=fs%V,W=fs%W,VFold=vf%VFold,VF=vf%VF,detailed_face_flux=vf%detailed_face_flux,dt=time%dt)
-            
-            ! Advance advection
-            do nsc=1,sc%nscalar
-               where (sc%mask.eq.0.and.sc%PVF(:,:,:,sc%phase(nsc)).gt.0.0_WP) sc%SC(:,:,:,nsc)=((sc%PVFold(:,:,:,sc%phase(nsc)))*sc%SCold(:,:,:,nsc)+time%dt*resSC(:,:,:,nsc))/(sc%PVF(:,:,:,sc%phase(nsc)))
-               where (sc%PVF(:,:,:,sc%phase(nsc)).eq.0.0_WP) sc%SC(:,:,:,nsc)=0.0_WP
-            end do
-
-            ! Apply the mass/energy transfer source term for the species/temperature
-            nsc=iYv
-            where (sc%PVF(:,:,:,sc%phase(nsc)).gt.0.0_WP.and.sc%PVF(:,:,:,sc%phase(nsc)).lt.1.0_WP) sc%SC(:,:,:,nsc)=sc%SC(:,:,:,nsc)+mflux/sc%Prho(sc%phase(nsc))*vf%SD*time%dt
-               
-            ! Advance diffusion
-            call sc%solve_implicit(time%dt,sc%SC)
-            
-            ! Apply boundary conditions
-            call sc%apply_bcond(time%t,time%dt)
-               
-         end block advance_scalar         
-               
          ! Shift the evaporation mass flux away from the interface
          shift_mflux: block
             use mpi_f08,  only: MPI_ALLREDUCE,MPI_MAX
@@ -584,7 +465,7 @@ contains
             deallocate(ccVFgradX,ccVFgradY,ccVFgradZ)
             
             ! Get the CFL based on the gradient of the VOF
-            call sc%get_cfl(VFgradX,VFgradY,VFgradZ,pseudo_time%dt,pseudo_time%cfl)
+            call vf%get_cfl(pseudo_time%dt,VFgradX,VFgradY,VFgradZ,pseudo_time%cfl)
             
             ! Reset the pseudo time
             call pseudo_time%reset()
@@ -640,6 +521,53 @@ contains
 
          end block shift_mflux
 
+         ! Transport VOF
+         advance_VOF: block
+            use irl_fortran_interface, only: calculateNormal,getNumberOfVertices
+
+            ! Initialize phase-change velocity
+            vel_pc(:,:,:,1)=fs%U
+            vel_pc(:,:,:,2)=fs%V
+            vel_pc(:,:,:,3)=fs%W
+
+            ! Get the phase-change velocity
+            call vf%get_vel_pc(mflux,sc%itp_x,sc%itp_y,sc%itp_z,fs%rho_l,fs%rho_g,vel_pc)
+
+            ! VOF solver step
+            call vf%advance(dt=time%dt,U=vel_pc(:,:,:,1),V=vel_pc(:,:,:,2),W=vel_pc(:,:,:,3))
+
+         end block advance_VOF
+
+         ! Transport scalars
+         advance_scalar: block
+            use tpscalar_class, only: Lphase,Gphase
+            integer :: nsc
+            
+            ! Get the phas-specific VOF
+            sc%PVF(:,:,:,Lphase)=vf%VF
+            sc%PVF(:,:,:,Gphase)=1.0_WP-vf%VF
+            
+            ! Explicit calculation of dSC/dt from advective term
+            call sc%get_dSCdt(dSCdt=resSC,U=fs%U,V=fs%V,W=fs%W,VFold=vf%VFold,VF=vf%VF,detailed_face_flux=vf%detailed_face_flux,dt=time%dt)
+            
+            ! Advance advection
+            do nsc=1,sc%nscalar
+               where (sc%mask.eq.0.and.sc%PVF(:,:,:,sc%phase(nsc)).gt.0.0_WP) sc%SC(:,:,:,nsc)=((sc%PVFold(:,:,:,sc%phase(nsc)))*sc%SCold(:,:,:,nsc)+time%dt*resSC(:,:,:,nsc))/(sc%PVF(:,:,:,sc%phase(nsc)))
+               where (sc%PVF(:,:,:,sc%phase(nsc)).eq.0.0_WP) sc%SC(:,:,:,nsc)=0.0_WP
+            end do
+
+            ! Apply the mass/energy transfer source term for the species/temperature
+            nsc=iYv
+            where (sc%PVF(:,:,:,sc%phase(nsc)).gt.0.0_WP.and.sc%PVF(:,:,:,sc%phase(nsc)).lt.1.0_WP) sc%SC(:,:,:,nsc)=sc%SC(:,:,:,nsc)+mflux/sc%Prho(sc%phase(nsc))*vf%SD*time%dt
+               
+            ! Advance diffusion
+            call sc%solve_implicit(time%dt,sc%SC)
+            
+            ! Apply boundary conditions
+            call sc%apply_bcond(time%t,time%dt)
+               
+         end block advance_scalar         
+
          ! Prepare new staggered viscosity (at n+1)
          call fs%get_viscosity(vf=vf,strat=harmonic_visc)
          
@@ -680,12 +608,9 @@ contains
             call fs%update_laplacian()
             call fs%correct_mfr()
             call fs%get_div()
-            ! Debug
             ! call fs%add_surface_tension_jump(dt=time%dt,div=fs%div,vf=vf,contact_model=static_contact)
             call fs%add_surface_tension_jump(dt=time%dt,div=fs%div,vf=vf)
-            ! Debug
             fs%psolv%rhs=-fs%cfg%vol*(fs%div-(mfluxG/fs%rho_g-mfluxL/fs%rho_l)*vf%SD)/time%dt ! Evaporation mass flux is taken into account here
-            ! fs%psolv%rhs=-fs%cfg%vol*fs%div/time%dt
             fs%psolv%sol=0.0_WP
             call fs%psolv%solve()
             call fs%shift_p(fs%psolv%sol)

@@ -59,7 +59,7 @@ module tpscalar_class
       real(WP), dimension(:,:,:,:), allocatable :: SC     !< SC array
       real(WP), dimension(:,:,:,:), allocatable :: PVF    !< Phase-specific VOF
       real(WP), dimension(:,:,:,:), allocatable :: PVFold !< Old phase-specific VOF
-      real(WP), dimension(:),       allocatable :: Prho    !< Phase-specific density
+      real(WP), dimension(:),       allocatable :: Prho   !< Phase-specific density
       
       ! Old scalar variable
       real(WP), dimension(:,:,:,:), allocatable :: SCold  !< SCold array
@@ -91,8 +91,7 @@ module tpscalar_class
       procedure :: get_dSCdt                              !< Calculate drhoSC/dt from advective fluxes
       procedure :: get_max                                !< Calculate maximum and integral field values
       procedure :: solve_implicit                         !< Solve for the scalar residuals implicitly
-      procedure :: get_dmfluxdtau                          !< Calculate dmflux/dtau
-      procedure :: get_cfl                                !< Calculate the pseudo CFL number
+      procedure :: get_dmfluxdtau                         !< Calculate dmflux/dtau
       procedure :: cell_to_vertex                         !< Interpolate a cell-centered scalar to a vertex-centered one
       procedure :: cell_to_face                           !< Interpolate a cell-centered scalar to a face-centered one
       procedure :: cellVec_to_face                        !< Interpolate a cell-centered vector to a face-centered one
@@ -710,7 +709,7 @@ contains
    end subroutine solve_implicit
 
    
-   !> Calculate the explicit mflux time derivative based on VOF
+   !> Calculate the explicit mflux time derivative
    subroutine get_dmfluxdtau(this,U,V,W,mflux,dmfluxdtau)
       implicit none
       class(tpscalar), intent(inout) :: this
@@ -758,45 +757,6 @@ contains
       ! Sync residual
       call this%cfg%sync(dmfluxdtau)
    end subroutine get_dmfluxdtau
-
-
-   !> Calculate the CFL based on the input velocity field
-   subroutine get_cfl(this,U,V,W,dt,cfl)
-      use mpi_f08,  only: MPI_ALLREDUCE,MPI_MAX
-      use parallel, only: MPI_REAL_WP
-      implicit none
-      class(tpscalar), intent(in) :: this
-      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in) :: U !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
-      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in) :: V !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
-      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in) :: W !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
-      real(WP), intent(in)  :: dt
-      real(WP), intent(out) :: cfl
-      integer :: i,j,k,ierr
-      real(WP) :: my_CFL_x,my_CFL_y,my_CFL_z
-      real(WP) :: CFL_x,CFL_y,CFL_z
-      
-      ! Set the CFLs to zero
-      my_CFL_x=0.0_WP; my_CFL_y=0.0_WP; my_CFL_z=0.0_WP
-      do k=this%cfg%kmin_,this%cfg%kmax_
-         do j=this%cfg%jmin_,this%cfg%jmax_
-            do i=this%cfg%imin_,this%cfg%imax_
-               my_CFL_x=max(my_CFL_x,abs(U(i,j,k))*this%cfg%dxmi(i))
-               my_CFL_y=max(my_CFL_y,abs(V(i,j,k))*this%cfg%dymi(j))
-               my_CFL_z=max(my_CFL_z,abs(W(i,j,k))*this%cfg%dzmi(k))
-            end do
-         end do
-      end do
-      my_CFL_x=my_CFL_x*dt; my_CFL_y=my_CFL_y*dt; my_CFL_z=my_CFL_z*dt
-      
-      ! Get the parallel max
-      call MPI_ALLREDUCE(my_CFL_x,CFL_x,1,MPI_REAL_WP,MPI_MAX,this%cfg%comm,ierr)
-      call MPI_ALLREDUCE(my_CFL_y,CFL_y,1,MPI_REAL_WP,MPI_MAX,this%cfg%comm,ierr)
-      call MPI_ALLREDUCE(my_CFL_z,CFL_z,1,MPI_REAL_WP,MPI_MAX,this%cfg%comm,ierr)
-      
-      ! Return the maximum convective CFL
-      cfl=max(CFL_x,CFL_y,CFL_z)
-      
-   end subroutine get_cfl
    
 
    ! Interpolate a cell-centered field to a vertex-centered field
