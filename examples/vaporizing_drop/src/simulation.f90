@@ -52,6 +52,7 @@ module simulation
    real(WP) :: mfluxG_int,mfluxG_err,mfluxG_int_err
    real(WP) :: mflux_ens_time
    real(WP) :: evp_mass_flux
+   integer  :: itE,itmaxE
    
 contains
 
@@ -203,9 +204,10 @@ contains
       ! Create a two-phase flow solver for the extended liquid velocity
       create_and_initialize_flow_solverE: block
          use hypre_str_class, only: pcg_pfmg2
-         use mathtools,       only: Pi
+         ! Maximum number of sub-iterations
+         itmaxE=2
          ! Create flow solver
-         fsE=tpns(cfg=cfg,name='Two-phase NS - Extended')
+         fsE=tpns(cfg=cfg,name='Extended NS')
          ! Assign constant viscosity to each phase
          fsE%visc_l=fs%visc_l
          fsE%visc_g=fs%visc_g
@@ -666,11 +668,14 @@ contains
 
          ! Advance flow for the extended velocity field
          advance_flowE: block
+            ! Reset the sub-iteration counter
+            itE=1
+
             ! Prepare new staggered viscosity (at n+1)
             call fsE%get_viscosity(vf=vf,strat=harmonic_visc)
             
             ! Perform sub-iterations
-            do while (time%it.le.time%itmax)
+            do while (itE.le.itmaxE)
                
                ! Build mid-time velocity
                fsE%U=0.5_WP*(fsE%U+fsE%Uold)
@@ -704,7 +709,7 @@ contains
                call fsE%correct_mfr()
                call fsE%get_div()
                call fsE%add_surface_tension_jump(dt=time%dt,div=fsE%div,vf=vf,contact_model=static_contact)
-               fsE%psolv%rhs=-fsE%cfg%vol*fsE%div/time%dt ! Evaporation mass flux is taken into account here
+               fsE%psolv%rhs=-fsE%cfg%vol*fsE%div/time%dt
                fsE%psolv%sol=0.0_WP
                call fsE%psolv%solve()
                call fsE%shift_p(fsE%psolv%sol)
@@ -717,7 +722,7 @@ contains
                fsE%W=fsE%W-time%dt*resW/fsE%rho_W
                
                ! Increment sub-iteration counter
-               time%it=time%it+1
+               itE=itE+1
                
             end do
             
