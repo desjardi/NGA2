@@ -17,7 +17,6 @@ module simulation
    
    !> Get a couple linear solvers, a two-phase flow solver and volume fraction solver and corresponding time tracker
    type(hypre_str),   public :: ps
-   !type(ddadi),       public :: vs
    type(ddadi),       public :: ss
    type(tpns),        public :: fs
    type(vfs),         public :: vf
@@ -47,7 +46,7 @@ module simulation
    !> Problem definition
    real(WP), dimension(3) :: center
    real(WP) :: radius
-   integer  :: iTl,IYv
+   integer  :: iTl,iYv
    real(WP) :: mflux_int,mflux_err,mflux_tol
    real(WP) :: mfluxL_int,mfluxL_err,mfluxL_int_err
    real(WP) :: mfluxG_int,mfluxG_err,mfluxG_int_err
@@ -94,7 +93,7 @@ contains
          allocate(Ui        (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
          allocate(Vi        (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
          allocate(Wi        (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
-         allocate(vel_pc(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_,1:3))
+         allocate(vel_pc(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_,1:3)); vel_pc=0.0_WP
       end block allocate_work_arrays
       
       
@@ -112,7 +111,7 @@ contains
       ! Initialize our VOF solver and field
       create_and_initialize_vof: block
          use mms_geom,  only: cube_refine_vol
-         use vfs_class, only: lvira,VFhi,VFlo,remap,flux_storage,neumann
+         use vfs_class, only: lvira,VFhi,VFlo,flux_storage
          integer :: i,j,k,n,si,sj,sk
          real(WP), dimension(3,8) :: cube_vertex
          real(WP), dimension(3) :: v_cent,a_cent
@@ -120,10 +119,8 @@ contains
          integer, parameter :: amr_ref_lvl=4
          ! Create a VOF solver
          call vf%initialize(cfg=cfg,reconstruction_method=lvira,transport_method=flux_storage,name='VOF')
-         ! call vf%initialize(cfg=cfg,reconstruction_method=lvira,transport_method=remap,name='VOF')
          vf%cons_correct=.false.
-         ! Initialize to a droplet and a pool
-         !center=[0.0_WP,0.05_WP,0.0_WP]
+         ! Initialize to a droplet
          call param_read('Droplet center',center)
          call param_read('Droplet diameter',radius); radius=radius/2.0_WP
          do k=vf%cfg%kmino_,vf%cfg%kmaxo_
@@ -173,7 +170,7 @@ contains
       
       ! Create a two-phase flow solver without bconds
       create_and_initialize_flow_solver: block
-         use hypre_str_class, only: pcg_pfmg2,pfmg
+         use hypre_str_class, only: pcg_pfmg2
          use mathtools,       only: Pi
          ! Create flow solver
          fs=tpns(cfg=cfg,name='Two-phase NS')
@@ -190,15 +187,12 @@ contains
          ! Assign acceleration of gravity
          call param_read('Gravity',fs%gravity)
          ! Configure pressure solver
-         ! Debug
          ps=hypre_str(cfg=cfg,name='Pressure',method=pcg_pfmg2,nst=7)
          ps%maxlevel=10
          call param_read('Pressure iteration',ps%maxit)
          call param_read('Pressure tolerance',ps%rcvg)
-         ! Configure implicit velocity solver
-         !vs=ddadi(cfg=cfg,name='Velocity',nst=7)
          ! Setup the solver
-         call fs%setup(pressure_solver=ps)!,implicit_solver=vs)
+         call fs%setup(pressure_solver=ps)
          ! Zero initial field
          fs%U=0.0_WP; fs%V=0.0_WP; fs%W=0.0_WP
          ! Calculate cell-centered velocities and divergence
@@ -229,7 +223,7 @@ contains
          call param_read('Liquid thermal diffusivity',LTdiff)
          sc%diff(:,:,:,iTl)=LTdiff
          call param_read('Vapor diffusivity',Yvdiff)
-         sc%diff(:,:,:,IYv)=Yvdiff
+         sc%diff(:,:,:,iYv)=Yvdiff
          ! Configure implicit scalar solver
          ss=ddadi(cfg=cfg,name='Scalar',nst=7)
          ! Setup the solver
@@ -241,7 +235,7 @@ contains
                   ! Liquid scalar
                   if (vf%VF(i,j,k).gt.0.0_WP) sc%SC(i,j,k,iTl)=1.0_WP
                   ! Gas scalar
-                  sc%SC(i,j,k,IYv)=0.0_WP
+                  sc%SC(i,j,k,iYv)=0.0_WP
                end do
             end do
          end do
@@ -521,22 +515,16 @@ contains
 
          end block shift_mflux
 
-         ! Transport VOF
-         advance_VOF: block
-            use irl_fortran_interface, only: calculateNormal,getNumberOfVertices
+         ! Initialize phase-change velocity
+         vel_pc(:,:,:,1)=fs%U
+         vel_pc(:,:,:,2)=fs%V
+         vel_pc(:,:,:,3)=fs%W
 
-            ! Initialize phase-change velocity
-            vel_pc(:,:,:,1)=fs%U
-            vel_pc(:,:,:,2)=fs%V
-            vel_pc(:,:,:,3)=fs%W
+         ! Update the phase-change velocity
+         call vf%get_vel_pc(mflux,sc%itp_x,sc%itp_y,sc%itp_z,fs%rho_l,fs%rho_g,vel_pc)
 
-            ! Get the phase-change velocity
-            call vf%get_vel_pc(mflux,sc%itp_x,sc%itp_y,sc%itp_z,fs%rho_l,fs%rho_g,vel_pc)
-
-            ! VOF solver step
-            call vf%advance(dt=time%dt,U=vel_pc(:,:,:,1),V=vel_pc(:,:,:,2),W=vel_pc(:,:,:,3))
-
-         end block advance_VOF
+         ! VOF solver step
+         call vf%advance(dt=time%dt,U=vel_pc(:,:,:,1),V=vel_pc(:,:,:,2),W=vel_pc(:,:,:,3))
 
          ! Transport scalars
          advance_scalar: block
@@ -608,8 +596,7 @@ contains
             call fs%update_laplacian()
             call fs%correct_mfr()
             call fs%get_div()
-            ! call fs%add_surface_tension_jump(dt=time%dt,div=fs%div,vf=vf,contact_model=static_contact)
-            call fs%add_surface_tension_jump(dt=time%dt,div=fs%div,vf=vf)
+            call fs%add_surface_tension_jump(dt=time%dt,div=fs%div,vf=vf,contact_model=static_contact)
             fs%psolv%rhs=-fs%cfg%vol*(fs%div-(mfluxG/fs%rho_g-mfluxL/fs%rho_l)*vf%SD)/time%dt ! Evaporation mass flux is taken into account here
             fs%psolv%sol=0.0_WP
             call fs%psolv%solve()
@@ -662,7 +649,7 @@ contains
       ! timetracker
       
       ! Deallocate work arrays
-      deallocate(resU,resV,resW,Ui,Vi,Wi,resSC,mflux,mfluxL,mfluxL_old,mfluxG,mfluxG_old,resmfluxL,resmfluxG)
+      deallocate(resU,resV,resW,Ui,Vi,Wi,resSC,VFgradX,VFgradY,VFgradZ,mflux,mfluxL,mfluxL_old,mfluxG,mfluxG_old,resmfluxL,resmfluxG,mflxLerr,vel_pc)
    end subroutine simulation_final
    
    
