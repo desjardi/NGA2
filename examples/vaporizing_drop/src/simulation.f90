@@ -16,9 +16,9 @@ module simulation
    private
    
    !> Get a couple linear solvers, a two-phase flow solver and volume fraction solver and corresponding time tracker
-   type(hypre_str),   public :: ps
+   type(hypre_str),   public :: ps,psE
    type(ddadi),       public :: ss
-   type(tpns),        public :: fs
+   type(tpns),        public :: fs,fsE
    type(vfs),         public :: vf
    type(tpscalar),    public :: sc
    type(timetracker), public :: time,pseudo_time
@@ -29,7 +29,7 @@ module simulation
    type(event)    :: ens_evt,ens_mflux_evt
    
    !> Simulation monitor file
-   type(monitor) :: mfile,cflfile,scfile,mfluxfile
+   type(monitor) :: mfile,mfileE,cflfile,scfile,mfluxfile
    
    public :: simulation_init,simulation_run,simulation_final
    
@@ -199,6 +199,36 @@ contains
          call fs%interp_vel(Ui,Vi,Wi)
          call fs%get_div()
       end block create_and_initialize_flow_solver
+
+      ! Create a two-phase flow solver for the extended liquid velocity
+      create_and_initialize_flow_solverE: block
+         use hypre_str_class, only: pcg_pfmg2
+         use mathtools,       only: Pi
+         ! Create flow solver
+         fsE=tpns(cfg=cfg,name='Two-phase NS - Extended')
+         ! Assign constant viscosity to each phase
+         fsE%visc_l=fs%visc_l
+         fsE%visc_g=fs%visc_g
+         ! Assign constant density to each phase
+         fsE%rho_l=fs%rho_l
+         fsE%rho_g=fs%rho_g
+         ! Assign surface tension coefficient
+         fsE%sigma=fs%sigma
+         fsE%contact_angle=fs%contact_angle
+         ! Assign acceleration of gravity
+         fsE%gravity=fs%gravity
+         ! Configure pressure solver
+         psE=hypre_str(cfg=cfg,name='PressureE',method=pcg_pfmg2,nst=7)
+         psE%maxlevel=ps%maxlevel
+         psE%maxit=ps%maxit
+         psE%rcvg=ps%rcvg
+         ! Setup the solver
+         call fsE%setup(pressure_solver=psE)
+         ! Zero initial field
+         fsE%U=0.0_WP; fsE%V=0.0_WP; fsE%W=0.0_WP
+         ! Calculate divergence
+         call fsE%get_div()
+      end block create_and_initialize_flow_solverE
       
       
       ! Create a one-sided scalar solver
@@ -324,6 +354,7 @@ contains
          ! Prepare some info about fields
          call fs%get_cfl(time%dt,time%cfl)
          call fs%get_max()
+         call fsE%get_max()
          call vf%get_max()
          call sc%get_max(VF=vf%VF)
          ! Create simulation monitor
@@ -343,6 +374,20 @@ contains
          call mfile%add_column(fs%psolv%it,'Pressure iteration')
          call mfile%add_column(fs%psolv%rerr,'Pressure error')
          call mfile%write()
+         ! Create simulation monitor
+         mfileE=monitor(fsE%cfg%amRoot,'simulationE')
+         call mfileE%add_column(time%n,'Timestep number')
+         call mfileE%add_column(time%t,'Time')
+         call mfileE%add_column(time%dt,'Timestep size')
+         call mfileE%add_column(time%cfl,'Maximum CFL')
+         call mfileE%add_column(fsE%Umax,'Umax')
+         call mfileE%add_column(fsE%Vmax,'Vmax')
+         call mfileE%add_column(fsE%Wmax,'Wmax')
+         call mfileE%add_column(fsE%Pmax,'Pmax')
+         call mfileE%add_column(fsE%divmax,'Maximum divergence')
+         call mfileE%add_column(fsE%psolv%it,'Pressure iteration')
+         call mfileE%add_column(fsE%psolv%rerr,'Pressure error')
+         call mfileE%write()
          ! Create CFL monitor
          cflfile=monitor(fs%cfg%amRoot,'cfl')
          call cflfile%add_column(time%n,'Timestep number')
@@ -408,15 +453,15 @@ contains
          sc%PVFold=sc%PVF
          
          ! Remember old velocity
-         fs%Uold=fs%U
-         fs%Vold=fs%V
-         fs%Wold=fs%W
+         fs%Uold=fs%U; fsE%Uold=fsE%U
+         fs%Vold=fs%V; fsE%Vold=fsE%V
+         fs%Wold=fs%W; fsE%Wold=fsE%W
          
          ! Apply time-varying Dirichlet conditions
          ! This is where time-dpt Dirichlet would be enforced
          
          ! Prepare old staggered density (at n)
-         call fs%get_olddensity(vf=vf)
+         call fs%get_olddensity(vf=vf); call fsE%get_olddensity(vf=vf)
          
          ! Interface jump conditions
          where ((vf%VF.gt.0.0_WP).and.(vf%VF.lt.1.0_WP)); mflux=evp_mass_flux; else where; mflux=0.0_WP; end where
@@ -516,9 +561,9 @@ contains
          end block shift_mflux
 
          ! Initialize phase-change velocity
-         vel_pc(:,:,:,1)=fs%U
-         vel_pc(:,:,:,2)=fs%V
-         vel_pc(:,:,:,3)=fs%W
+         vel_pc(:,:,:,1)=fsE%U
+         vel_pc(:,:,:,2)=fsE%V
+         vel_pc(:,:,:,3)=fsE%W
 
          ! Update the phase-change velocity
          call vf%get_vel_pc(mflux,sc%itp_x,sc%itp_y,sc%itp_z,fs%rho_l,fs%rho_g,vel_pc)
@@ -556,67 +601,130 @@ contains
                
          end block advance_scalar         
 
-         ! Prepare new staggered viscosity (at n+1)
-         call fs%get_viscosity(vf=vf,strat=harmonic_visc)
-         
-         ! Perform sub-iterations
-         do while (time%it.le.time%itmax)
+         ! Advance flow
+         advance_flow: block
+            ! Prepare new staggered viscosity (at n+1)
+            call fs%get_viscosity(vf=vf,strat=harmonic_visc)
             
-            ! Build mid-time velocity
-            fs%U=0.5_WP*(fs%U+fs%Uold)
-            fs%V=0.5_WP*(fs%V+fs%Vold)
-            fs%W=0.5_WP*(fs%W+fs%Wold)
+            ! Perform sub-iterations
+            do while (time%it.le.time%itmax)
+               
+               ! Build mid-time velocity
+               fs%U=0.5_WP*(fs%U+fs%Uold)
+               fs%V=0.5_WP*(fs%V+fs%Vold)
+               fs%W=0.5_WP*(fs%W+fs%Wold)
+               
+               ! Preliminary mass and momentum transport step at the interface
+               call fs%prepare_advection_upwind(dt=time%dt)
+               
+               ! Explicit calculation of drho*u/dt from NS
+               call fs%get_dmomdt(resU,resV,resW)
+               
+               ! Add momentum mass fluxes
+               call fs%addsrc_gravity(resU,resV,resW)
+               
+               ! Assemble explicit residual
+               resU=-2.0_WP*fs%rho_U*fs%U+(fs%rho_Uold+fs%rho_U)*fs%Uold+time%dt*resU
+               resV=-2.0_WP*fs%rho_V*fs%V+(fs%rho_Vold+fs%rho_V)*fs%Vold+time%dt*resV
+               resW=-2.0_WP*fs%rho_W*fs%W+(fs%rho_Wold+fs%rho_W)*fs%Wold+time%dt*resW
+               
+               ! Apply these residuals
+               fs%U=2.0_WP*fs%U-fs%Uold+resU/fs%rho_U
+               fs%V=2.0_WP*fs%V-fs%Vold+resV/fs%rho_V
+               fs%W=2.0_WP*fs%W-fs%Wold+resW/fs%rho_W
+               
+               ! Apply other boundary conditions
+               call fs%apply_bcond(time%t,time%dt)
+               
+               ! Solve Poisson equation
+               call fs%update_laplacian()
+               call fs%correct_mfr()
+               call fs%get_div()
+               call fs%add_surface_tension_jump(dt=time%dt,div=fs%div,vf=vf,contact_model=static_contact)
+               fs%psolv%rhs=-fs%cfg%vol*(fs%div-(mfluxG/fs%rho_g-mfluxL/fs%rho_l)*vf%SD)/time%dt ! Evaporation mass flux is taken into account here
+               fs%psolv%sol=0.0_WP
+               call fs%psolv%solve()
+               call fs%shift_p(fs%psolv%sol)
+               
+               ! Correct velocity
+               call fs%get_pgrad(fs%psolv%sol,resU,resV,resW)
+               fs%P=fs%P+fs%psolv%sol
+               fs%U=fs%U-time%dt*resU/fs%rho_U
+               fs%V=fs%V-time%dt*resV/fs%rho_V
+               fs%W=fs%W-time%dt*resW/fs%rho_W
+               
+               ! Increment sub-iteration counter
+               time%it=time%it+1
+               
+            end do
             
-            ! Preliminary mass and momentum transport step at the interface
-            call fs%prepare_advection_upwind(dt=time%dt)
-            
-            ! Explicit calculation of drho*u/dt from NS
-            call fs%get_dmomdt(resU,resV,resW)
-            
-            ! Add momentum mass fluxes
-            call fs%addsrc_gravity(resU,resV,resW)
-            
-            ! Assemble explicit residual
-            resU=-2.0_WP*fs%rho_U*fs%U+(fs%rho_Uold+fs%rho_U)*fs%Uold+time%dt*resU
-            resV=-2.0_WP*fs%rho_V*fs%V+(fs%rho_Vold+fs%rho_V)*fs%Vold+time%dt*resV
-            resW=-2.0_WP*fs%rho_W*fs%W+(fs%rho_Wold+fs%rho_W)*fs%Wold+time%dt*resW
-            
-            ! Form implicit residuals
-            !call fs%solve_implicit(time%dt,resU,resV,resW)
-            
-            ! Apply these residuals
-            fs%U=2.0_WP*fs%U-fs%Uold+resU/fs%rho_U
-            fs%V=2.0_WP*fs%V-fs%Vold+resV/fs%rho_V
-            fs%W=2.0_WP*fs%W-fs%Wold+resW/fs%rho_W
-            
-            ! Apply other boundary conditions
-            call fs%apply_bcond(time%t,time%dt)
-            
-            ! Solve Poisson equation
-            call fs%update_laplacian()
-            call fs%correct_mfr()
+            ! Recompute interpolated velocity and divergence
+            call fs%interp_vel(Ui,Vi,Wi)
             call fs%get_div()
-            call fs%add_surface_tension_jump(dt=time%dt,div=fs%div,vf=vf,contact_model=static_contact)
-            fs%psolv%rhs=-fs%cfg%vol*(fs%div-(mfluxG/fs%rho_g-mfluxL/fs%rho_l)*vf%SD)/time%dt ! Evaporation mass flux is taken into account here
-            fs%psolv%sol=0.0_WP
-            call fs%psolv%solve()
-            call fs%shift_p(fs%psolv%sol)
+
+         end block advance_flow
+
+         ! Advance flow for the extended velocity field
+         advance_flowE: block
+            ! Prepare new staggered viscosity (at n+1)
+            call fsE%get_viscosity(vf=vf,strat=harmonic_visc)
             
-            ! Correct velocity
-            call fs%get_pgrad(fs%psolv%sol,resU,resV,resW)
-            fs%P=fs%P+fs%psolv%sol
-            fs%U=fs%U-time%dt*resU/fs%rho_U
-            fs%V=fs%V-time%dt*resV/fs%rho_V
-            fs%W=fs%W-time%dt*resW/fs%rho_W
+            ! Perform sub-iterations
+            do while (time%it.le.time%itmax)
+               
+               ! Build mid-time velocity
+               fsE%U=0.5_WP*(fsE%U+fsE%Uold)
+               fsE%V=0.5_WP*(fsE%V+fsE%Vold)
+               fsE%W=0.5_WP*(fsE%W+fsE%Wold)
+               
+               ! Preliminary mass and momentum transport step at the interface
+               call fsE%prepare_advection_upwind(dt=time%dt)
+               
+               ! Explicit calculation of drho*u/dt from NS
+               call fsE%get_dmomdt(resU,resV,resW)
+               
+               ! Add momentum mass fluxes
+               call fsE%addsrc_gravity(resU,resV,resW)
+               
+               ! Assemble explicit residual
+               resU=-2.0_WP*fsE%rho_U*fsE%U+(fsE%rho_Uold+fsE%rho_U)*fsE%Uold+time%dt*resU
+               resV=-2.0_WP*fsE%rho_V*fsE%V+(fsE%rho_Vold+fsE%rho_V)*fsE%Vold+time%dt*resV
+               resW=-2.0_WP*fsE%rho_W*fsE%W+(fsE%rho_Wold+fsE%rho_W)*fsE%Wold+time%dt*resW
+               
+               ! Apply these residuals
+               fsE%U=2.0_WP*fsE%U-fsE%Uold+resU/fsE%rho_U
+               fsE%V=2.0_WP*fsE%V-fsE%Vold+resV/fsE%rho_V
+               fsE%W=2.0_WP*fsE%W-fsE%Wold+resW/fsE%rho_W
+               
+               ! Apply other boundary conditions
+               call fsE%apply_bcond(time%t,time%dt)
+               
+               ! Solve Poisson equation
+               call fsE%update_laplacian()
+               call fsE%correct_mfr()
+               call fsE%get_div()
+               call fsE%add_surface_tension_jump(dt=time%dt,div=fsE%div,vf=vf,contact_model=static_contact)
+               fsE%psolv%rhs=-fsE%cfg%vol*fsE%div/time%dt ! Evaporation mass flux is taken into account here
+               fsE%psolv%sol=0.0_WP
+               call fsE%psolv%solve()
+               call fsE%shift_p(fsE%psolv%sol)
+               
+               ! Correct velocity
+               call fsE%get_pgrad(fsE%psolv%sol,resU,resV,resW)
+               fsE%P=fsE%P+fsE%psolv%sol
+               fsE%U=fsE%U-time%dt*resU/fsE%rho_U
+               fsE%V=fsE%V-time%dt*resV/fsE%rho_V
+               fsE%W=fsE%W-time%dt*resW/fsE%rho_W
+               
+               ! Increment sub-iteration counter
+               time%it=time%it+1
+               
+            end do
             
-            ! Increment sub-iteration counter
-            time%it=time%it+1
-            
-         end do
-         
-         ! Recompute interpolated velocity and divergence
-         call fs%interp_vel(Ui,Vi,Wi)
-         call fs%get_div()
+            ! Recompute divergence
+            call fsE%get_div()
+
+         end block advance_flowE
          
          ! Output to ensight
          if (ens_evt%occurs()) then
@@ -625,10 +733,10 @@ contains
          end if
          
          ! Perform and output monitoring
-         call fs%get_max()
+         call fs%get_max(); call fsE%get_max()
          call vf%get_max()
          call sc%get_max(VF=vf%VF)
-         call mfile%write()
+         call mfile%write(); call mfileE%write()
          call cflfile%write()
          call scfile%write()
          call mfluxfile%write()
