@@ -16,9 +16,9 @@ module simulation
    private
    
    !> Get a couple linear solvers, a two-phase flow solver and volume fraction solver and corresponding time tracker
-   type(hypre_str),   public :: ps,psE
+   type(hypre_str),   public :: ps,psL
    type(ddadi),       public :: ss
-   type(tpns),        public :: fs,fsE
+   type(tpns),        public :: fs,fsL
    type(vfs),         public :: vf
    type(tpscalar),    public :: sc
    type(timetracker), public :: time,pseudo_time
@@ -29,7 +29,7 @@ module simulation
    type(event)    :: ens_evt,ens_mflux_evt
    
    !> Simulation monitor file
-   type(monitor) :: mfile,mfileE,cflfile,scfile,mfluxfile
+   type(monitor) :: mfile,mfileL,cflfile,scfile,mfluxfile
    
    public :: simulation_init,simulation_run,simulation_final
    
@@ -41,7 +41,7 @@ module simulation
    real(WP), dimension(:,:,:),   allocatable :: mflux
    real(WP), dimension(:,:,:),   allocatable :: mfluxL,mfluxL_old,resmfluxL,mflxLerr
    real(WP), dimension(:,:,:),   allocatable :: mfluxG,mfluxG_old,resmfluxG
-   real(WP), dimension(:,:,:,:), allocatable :: vel_pc
+   real(WP), dimension(:,:,:),   allocatable :: U_itf,V_itf,W_itf
    
    !> Problem definition
    real(WP), dimension(3) :: center
@@ -52,7 +52,6 @@ module simulation
    real(WP) :: mfluxG_int,mfluxG_err,mfluxG_int_err
    real(WP) :: mflux_ens_time
    real(WP) :: evp_mass_flux
-   integer  :: itE,itmaxE
    
 contains
 
@@ -94,7 +93,9 @@ contains
          allocate(Ui        (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
          allocate(Vi        (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
          allocate(Wi        (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
-         allocate(vel_pc(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_,1:3)); vel_pc=0.0_WP
+         allocate(U_itf(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_));      U_itf=0.0_WP
+         allocate(V_itf(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_));      V_itf=0.0_WP
+         allocate(W_itf(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_));      W_itf=0.0_WP
       end block allocate_work_arrays
       
       
@@ -201,36 +202,35 @@ contains
          call fs%get_div()
       end block create_and_initialize_flow_solver
 
-      ! Create a two-phase flow solver for the extended liquid velocity
-      create_and_initialize_flow_solverE: block
+
+      ! Create a two-phase flow solver for the divergence-free liquid velocity
+      create_div_free_flow_solver: block
          use hypre_str_class, only: pcg_pfmg2
-         ! Maximum number of sub-iterations
-         itmaxE=2
          ! Create flow solver
-         fsE=tpns(cfg=cfg,name='Extended NS')
+         fsL=tpns(cfg=cfg,name='Liquid NS')
          ! Assign constant viscosity to each phase
-         fsE%visc_l=fs%visc_l
-         fsE%visc_g=fs%visc_g
+         fsL%visc_l=fs%visc_l
+         fsL%visc_g=fs%visc_g
          ! Assign constant density to each phase
-         fsE%rho_l=fs%rho_l
-         fsE%rho_g=fs%rho_g
+         fsL%rho_l=fs%rho_l
+         fsL%rho_g=fs%rho_g
          ! Assign surface tension coefficient
-         fsE%sigma=fs%sigma
-         fsE%contact_angle=fs%contact_angle
+         fsL%sigma=fs%sigma
+         fsL%contact_angle=fs%contact_angle
          ! Assign acceleration of gravity
-         fsE%gravity=fs%gravity
+         fsL%gravity=fs%gravity
          ! Configure pressure solver
-         psE=hypre_str(cfg=cfg,name='PressureE',method=pcg_pfmg2,nst=7)
-         psE%maxlevel=ps%maxlevel
-         psE%maxit=ps%maxit
-         psE%rcvg=ps%rcvg
+         psL=hypre_str(cfg=cfg,name='Liquid P',method=pcg_pfmg2,nst=7)
+         psL%maxlevel=ps%maxlevel
+         psL%maxit=ps%maxit
+         psL%rcvg=ps%rcvg
          ! Setup the solver
-         call fsE%setup(pressure_solver=psE)
+         call fsL%setup(pressure_solver=psL)
          ! Zero initial field
-         fsE%U=0.0_WP; fsE%V=0.0_WP; fsE%W=0.0_WP
+         fsL%U=0.0_WP; fsL%V=0.0_WP; fsL%W=0.0_WP
          ! Calculate divergence
-         call fsE%get_div()
-      end block create_and_initialize_flow_solverE
+         call fsL%get_div()
+      end block create_div_free_flow_solver
       
       
       ! Create a one-sided scalar solver
@@ -328,6 +328,7 @@ contains
          call ens_out%add_scalar('mfluxL_err',mflxLerr)
          call ens_out%add_vector('VFgrad',VFgradx,VFgrady,VFgradz)
          call ens_out%add_scalar('divergence',fs%div)
+         call ens_out%add_vector('vel_itf',U_itf,V_itf,W_itf)
          ! Output to ensight
          if (ens_evt%occurs()) call ens_out%write_data(time%t)
 
@@ -356,7 +357,7 @@ contains
          ! Prepare some info about fields
          call fs%get_cfl(time%dt,time%cfl)
          call fs%get_max()
-         call fsE%get_max()
+         call fsL%get_max()
          call vf%get_max()
          call sc%get_max(VF=vf%VF)
          ! Create simulation monitor
@@ -377,19 +378,19 @@ contains
          call mfile%add_column(fs%psolv%rerr,'Pressure error')
          call mfile%write()
          ! Create simulation monitor
-         mfileE=monitor(fsE%cfg%amRoot,'simulationE')
-         call mfileE%add_column(time%n,'Timestep number')
-         call mfileE%add_column(time%t,'Time')
-         call mfileE%add_column(time%dt,'Timestep size')
-         call mfileE%add_column(time%cfl,'Maximum CFL')
-         call mfileE%add_column(fsE%Umax,'Umax')
-         call mfileE%add_column(fsE%Vmax,'Vmax')
-         call mfileE%add_column(fsE%Wmax,'Wmax')
-         call mfileE%add_column(fsE%Pmax,'Pmax')
-         call mfileE%add_column(fsE%divmax,'Maximum divergence')
-         call mfileE%add_column(fsE%psolv%it,'Pressure iteration')
-         call mfileE%add_column(fsE%psolv%rerr,'Pressure error')
-         call mfileE%write()
+         mfileL=monitor(fsL%cfg%amRoot,'simulation_liquid')
+         call mfileL%add_column(time%n,'Timestep number')
+         call mfileL%add_column(time%t,'Time')
+         call mfileL%add_column(time%dt,'Timestep size')
+         call mfileL%add_column(time%cfl,'Maximum CFL')
+         call mfileL%add_column(fsL%Umax,'Umax')
+         call mfileL%add_column(fsL%Vmax,'Vmax')
+         call mfileL%add_column(fsL%Wmax,'Wmax')
+         call mfileL%add_column(fsL%Pmax,'Pmax')
+         call mfileL%add_column(fsL%divmax,'Maximum divergence')
+         call mfileL%add_column(fsL%psolv%it,'Pressure iteration')
+         call mfileL%add_column(fsL%psolv%rerr,'Pressure error')
+         call mfileL%write()
          ! Create CFL monitor
          cflfile=monitor(fs%cfg%amRoot,'cfl')
          call cflfile%add_column(time%n,'Timestep number')
@@ -455,15 +456,15 @@ contains
          sc%PVFold=sc%PVF
          
          ! Remember old velocity
-         fs%Uold=fs%U; fsE%Uold=fsE%U
-         fs%Vold=fs%V; fsE%Vold=fsE%V
-         fs%Wold=fs%W; fsE%Wold=fsE%W
+         fs%Uold=fs%U; fsL%Uold=fsL%U
+         fs%Vold=fs%V; fsL%Vold=fsL%V
+         fs%Wold=fs%W; fsL%Wold=fsL%W
          
          ! Apply time-varying Dirichlet conditions
          ! This is where time-dpt Dirichlet would be enforced
          
          ! Prepare old staggered density (at n)
-         call fs%get_olddensity(vf=vf); call fsE%get_olddensity(vf=vf)
+         call fs%get_olddensity(vf=vf); call fsL%get_olddensity(vf=vf)
          
          ! Interface jump conditions
          where ((vf%VF.gt.0.0_WP).and.(vf%VF.lt.1.0_WP)); mflux=evp_mass_flux; else where; mflux=0.0_WP; end where
@@ -562,16 +563,25 @@ contains
 
          end block shift_mflux
 
-         ! Initialize phase-change velocity
-         vel_pc(:,:,:,1)=fsE%U
-         vel_pc(:,:,:,2)=fsE%V
-         vel_pc(:,:,:,3)=fsE%W
+         advace_VOF: block
+            real(WP), dimension(:,:,:,:), allocatable :: vel_pc
 
-         ! Update the phase-change velocity
-         call vf%get_vel_pc(mflux,sc%itp_x,sc%itp_y,sc%itp_z,fs%rho_l,fs%rho_g,vel_pc)
+            ! Allocate phase-change velocity
+            allocate(vel_pc(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_,1:3))
 
-         ! VOF solver step
-         call vf%advance(dt=time%dt,U=vel_pc(:,:,:,1),V=vel_pc(:,:,:,2),W=vel_pc(:,:,:,3))
+            ! Update interface velocity
+            call vf%get_vel_pc(mflux,sc%itp_x,sc%itp_y,sc%itp_z,fs%rho_l,fs%rho_g,vel_pc)
+            U_itf=fsL%U-vel_pc(:,:,:,1)
+            V_itf=fsL%V-vel_pc(:,:,:,2)
+            W_itf=fsL%W-vel_pc(:,:,:,3)
+
+            ! VOF solver step
+            call vf%advance(dt=time%dt,U=U_itf,V=V_itf,W=W_itf)
+
+            ! Deallocate phase-change velocity
+            deallocate(vel_pc)
+         
+         end block advace_VOF
 
          ! Transport scalars
          advance_scalar: block
@@ -591,7 +601,7 @@ contains
                where (sc%PVF(:,:,:,sc%phase(nsc)).eq.0.0_WP) sc%SC(:,:,:,nsc)=0.0_WP
             end do
 
-            ! Apply the mass/energy transfer source term for the species/temperature
+            ! Apply the mass/energy transfer term for the species/temperature
             nsc=iYv
             where (sc%PVF(:,:,:,sc%phase(nsc)).gt.0.0_WP.and.sc%PVF(:,:,:,sc%phase(nsc)).lt.1.0_WP) sc%SC(:,:,:,nsc)=sc%SC(:,:,:,nsc)+mflux/sc%Prho(sc%phase(nsc))*vf%SD*time%dt
                
@@ -666,70 +676,71 @@ contains
 
          end block advance_flow
 
-         ! Advance flow for the extended velocity field
-         advance_flowE: block
-            ! Reset the sub-iteration counter
-            itE=1
+         ! Advance flow for the divergence-free velocity field
+         advance_div_free_liquid: block
+            integer  :: it_L,itmax_L
 
             ! Prepare new staggered viscosity (at n+1)
-            call fsE%get_viscosity(vf=vf,strat=harmonic_visc)
+            call fsL%get_viscosity(vf=vf,strat=harmonic_visc)
             
             ! Perform sub-iterations
-            do while (itE.le.itmaxE)
+            itmax_L=2
+            it_L=1            
+            do while (it_L.le.itmax_L)
                
                ! Build mid-time velocity
-               fsE%U=0.5_WP*(fsE%U+fsE%Uold)
-               fsE%V=0.5_WP*(fsE%V+fsE%Vold)
-               fsE%W=0.5_WP*(fsE%W+fsE%Wold)
+               fsL%U=0.5_WP*(fsL%U+fsL%Uold)
+               fsL%V=0.5_WP*(fsL%V+fsL%Vold)
+               fsL%W=0.5_WP*(fsL%W+fsL%Wold)
                
                ! Preliminary mass and momentum transport step at the interface
-               call fsE%prepare_advection_upwind(dt=time%dt)
+               call fsL%prepare_advection_upwind(dt=time%dt)
                
                ! Explicit calculation of drho*u/dt from NS
-               call fsE%get_dmomdt(resU,resV,resW)
+               call fsL%get_dmomdt(resU,resV,resW)
                
                ! Add momentum mass fluxes
-               call fsE%addsrc_gravity(resU,resV,resW)
+               call fsL%addsrc_gravity(resU,resV,resW)
                
                ! Assemble explicit residual
-               resU=-2.0_WP*fsE%rho_U*fsE%U+(fsE%rho_Uold+fsE%rho_U)*fsE%Uold+time%dt*resU
-               resV=-2.0_WP*fsE%rho_V*fsE%V+(fsE%rho_Vold+fsE%rho_V)*fsE%Vold+time%dt*resV
-               resW=-2.0_WP*fsE%rho_W*fsE%W+(fsE%rho_Wold+fsE%rho_W)*fsE%Wold+time%dt*resW
+               resU=-2.0_WP*fsL%rho_U*fsL%U+(fsL%rho_Uold+fsL%rho_U)*fsL%Uold+time%dt*resU
+               resV=-2.0_WP*fsL%rho_V*fsL%V+(fsL%rho_Vold+fsL%rho_V)*fsL%Vold+time%dt*resV
+               resW=-2.0_WP*fsL%rho_W*fsL%W+(fsL%rho_Wold+fsL%rho_W)*fsL%Wold+time%dt*resW
                
                ! Apply these residuals
-               fsE%U=2.0_WP*fsE%U-fsE%Uold+resU/fsE%rho_U
-               fsE%V=2.0_WP*fsE%V-fsE%Vold+resV/fsE%rho_V
-               fsE%W=2.0_WP*fsE%W-fsE%Wold+resW/fsE%rho_W
+               fsL%U=2.0_WP*fsL%U-fsL%Uold+resU/fsL%rho_U
+               fsL%V=2.0_WP*fsL%V-fsL%Vold+resV/fsL%rho_V
+               fsL%W=2.0_WP*fsL%W-fsL%Wold+resW/fsL%rho_W
                
                ! Apply other boundary conditions
-               call fsE%apply_bcond(time%t,time%dt)
+               call fsL%apply_bcond(time%t,time%dt)
                
                ! Solve Poisson equation
-               call fsE%update_laplacian()
-               call fsE%correct_mfr()
-               call fsE%get_div()
-               call fsE%add_surface_tension_jump(dt=time%dt,div=fsE%div,vf=vf,contact_model=static_contact)
-               fsE%psolv%rhs=-fsE%cfg%vol*fsE%div/time%dt
-               fsE%psolv%sol=0.0_WP
-               call fsE%psolv%solve()
-               call fsE%shift_p(fsE%psolv%sol)
+               call fsL%update_laplacian()
+               call fsL%correct_mfr()
+               call fsL%get_div()
+               call fsL%add_surface_tension_jump(dt=time%dt,div=fsL%div,vf=vf,contact_model=static_contact)
+               fsL%psolv%rhs=-fsL%cfg%vol*fsL%div/time%dt
+               fsL%psolv%sol=0.0_WP
+               call fsL%psolv%solve()
+               call fsL%shift_p(fsL%psolv%sol)
                
                ! Correct velocity
-               call fsE%get_pgrad(fsE%psolv%sol,resU,resV,resW)
-               fsE%P=fsE%P+fsE%psolv%sol
-               fsE%U=fsE%U-time%dt*resU/fsE%rho_U
-               fsE%V=fsE%V-time%dt*resV/fsE%rho_V
-               fsE%W=fsE%W-time%dt*resW/fsE%rho_W
+               call fsL%get_pgrad(fsL%psolv%sol,resU,resV,resW)
+               fsL%P=fsL%P+fsL%psolv%sol
+               fsL%U=fsL%U-time%dt*resU/fsL%rho_U
+               fsL%V=fsL%V-time%dt*resV/fsL%rho_V
+               fsL%W=fsL%W-time%dt*resW/fsL%rho_W
                
                ! Increment sub-iteration counter
-               itE=itE+1
+               it_L=it_L+1
                
             end do
             
             ! Recompute divergence
-            call fsE%get_div()
+            call fsL%get_div()
 
-         end block advance_flowE
+         end block advance_div_free_liquid
          
          ! Output to ensight
          if (ens_evt%occurs()) then
@@ -738,10 +749,10 @@ contains
          end if
          
          ! Perform and output monitoring
-         call fs%get_max(); call fsE%get_max()
+         call fs%get_max(); call fsL%get_max()
          call vf%get_max()
          call sc%get_max(VF=vf%VF)
-         call mfile%write(); call mfileE%write()
+         call mfile%write(); call mfileL%write()
          call cflfile%write()
          call scfile%write()
          call mfluxfile%write()
@@ -762,7 +773,8 @@ contains
       ! timetracker
       
       ! Deallocate work arrays
-      deallocate(resU,resV,resW,Ui,Vi,Wi,resSC,VFgradX,VFgradY,VFgradZ,mflux,mfluxL,mfluxL_old,mfluxG,mfluxG_old,resmfluxL,resmfluxG,mflxLerr,vel_pc)
+      deallocate(resU,resV,resW,Ui,Vi,Wi,resSC,VFgradX,VFgradY,VFgradZ,mflux,mfluxL,mfluxL_old,mfluxG,mfluxG_old,resmfluxL,resmfluxG,mflxLerr,U_itf,V_itf,W_itf)
+
    end subroutine simulation_final
    
    

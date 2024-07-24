@@ -4507,7 +4507,7 @@ contains
       real(WP), dimension(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_), intent(in) :: mflux
       real(WP), intent(in) :: rho_l,rho_g
       real(WP), dimension(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_,3), intent(inout) :: vel_pc
-      integer,  dimension(:,:), allocatable :: ind_map
+      integer,  dimension(:,:), allocatable :: ind_shift
       real(WP), dimension(3) :: normalm,normalp,normal_tmp
       real(WP) :: VFm,VFp
       logical  :: is_interfacial_m,is_interfacial_p
@@ -4521,24 +4521,24 @@ contains
 
       ! Allocate arrays
       allocate(itp(3))
-      allocate(ind_map(1:3,1:3))
+      allocate(ind_shift(1:3,1:3))
 
       ! Interpolation and index map arrays
       itp(1)%arr=>itp_x
       itp(2)%arr=>itp_y
       itp(3)%arr=>itp_z
-      ind_map=reshape((/1,0,0,0,1,0,0,0,1/), shape(ind_map))
+      ind_shift=reshape((/1,0,0,0,1,0,0,0,1/), shape(ind_shift))
 
       ! Loop over directions
       do dir=1,3
          ! Loop over cell faces
-         do k=this%cfg%kmin_,this%cfg%kmax_+ind_map(3,dir)
-            do j=this%cfg%jmin_,this%cfg%jmax_+ind_map(2,dir)
-               do i=this%cfg%imin_,this%cfg%imax_+ind_map(1,dir)
+         do k=this%cfg%kmin_,this%cfg%kmax_+ind_shift(3,dir)
+            do j=this%cfg%jmin_,this%cfg%jmax_+ind_shift(2,dir)
+               do i=this%cfg%imin_,this%cfg%imax_+ind_shift(1,dir)
                   ! Prepare indices for the adjacent cells
-                  im=i-ind_map(1,dir); ip=i
-                  jm=j-ind_map(2,dir); jp=j
-                  km=k-ind_map(3,dir); kp=k
+                  im=i-ind_shift(1,dir); ip=i
+                  jm=j-ind_shift(2,dir); jp=j
+                  km=k-ind_shift(3,dir); kp=k
                   ! Get the corresponding VOF values
                   VFm=this%VF(im,jm,km)
                   VFp=this%VF(ip,jp,kp)
@@ -4560,11 +4560,11 @@ contains
                            normalp=0.5_WP*(normalp+normal_tmp)
                         end if
                         ! Both cells are interfacial, linear interpolation of the phase-change velocity
-                        vel_pc(i,j,k,dir)=vel_pc(i,j,k,dir)-(itp(dir)%arr(-1,i,j,k)*mflux(im,jm,km)*normalm(dir) &
-                        &                                   +itp(dir)%arr( 0,i,j,k)*mflux(ip,jp,kp)*normalp(dir))/rho_l
+                        vel_pc(i,j,k,dir)=(itp(dir)%arr(-1,i,j,k)*mflux(im,jm,km)*normalm(dir) &
+                        &                 +itp(dir)%arr( 0,i,j,k)*mflux(ip,jp,kp)*normalp(dir))/rho_l
                      else
                         ! The plus cell is not interfacial, use the minus cell's phase-change velocity
-                        vel_pc(i,j,k,dir)=vel_pc(i,j,k,dir)-mflux(im,jm,km)*normalm(dir)/rho_l
+                        vel_pc(i,j,k,dir)=mflux(im,jm,km)*normalm(dir)/rho_l
                      end if
                   else if (is_interfacial_p) then
                      ! Get the interface normal of the plus cell
@@ -4574,7 +4574,7 @@ contains
                         normalp=0.5_WP*(normalp+normal_tmp)
                      end if
                      ! The minus cell is not interfacial, use the plus cell's phase-change velocity
-                     vel_pc(i,j,k,dir)=vel_pc(i,j,k,dir)-mflux(ip,jp,kp)*normalp(dir)/rho_l
+                     vel_pc(i,j,k,dir)=mflux(ip,jp,kp)*normalp(dir)/rho_l
                   end if
                end do
             end do
@@ -4584,7 +4584,7 @@ contains
       end do
 
       ! Deallocate arrays
-      deallocate(itp,ind_map)
+      deallocate(ind_shift)
 
    end subroutine get_vel_pc
 
