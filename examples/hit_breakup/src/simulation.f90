@@ -11,6 +11,7 @@ module simulation
    use stracker_class,    only: stracker
    use event_class,       only: event
    use monitor_class,     only: monitor
+   use pardata_class,     only: pardata
    implicit none
    private
    
@@ -25,7 +26,7 @@ module simulation
  
    !> Ensight postprocessing
    type(ensight)  :: ens_out
-   type(event)    :: ens_evt,inj_evt
+   type(event)    :: ens_evt,inj_evt,drop_evt
    type(surfmesh) :: smesh
   
    !> Simulation monitor file
@@ -47,7 +48,13 @@ module simulation
    real(WP) :: tauinf,G,Gdtau,Gdtaui,dx
    real(WP), dimension(3) :: center
    real(WP) :: radius
-
+   logical  :: droplet_injected
+   logical  :: keep_forcing
+   
+   !> Provide a pardata objects for restarts
+   type(pardata) :: df
+   logical :: restarted
+   
    !> For monitoring
    real(WP) :: EPS
    real(WP) :: Re_L,Re_lambda
@@ -57,23 +64,17 @@ module simulation
 
 contains
    
-   !> Function that identifies cells that need a label
-   logical function make_label(i,j,k)
+   !> Function that identifies liquid cells
+   logical function label_liquid(i,j,k)
       implicit none
       integer, intent(in) :: i,j,k
       if (vf%VF(i,j,k).gt.0.0_WP) then
-         make_label=.true.
+         label_liquid=.true.
       else
-         make_label=.false.
+         label_liquid=.false.
       end if
-   end function make_label
+   end function label_liquid
 
-   !> Function that identifies if cell pairs have same label
-   logical function same_label(i1,j1,k1,i2,j2,k2)
-      implicit none
-      integer, intent(in) :: i1,j1,k1,i2,j2,k2
-      same_label=.true.
-   end function same_label
    
    !> Function that defines a level set function for a sphere
    function levelset_sphere(xyz,t) result(G)
@@ -132,6 +133,41 @@ contains
       
    end subroutine compute_stats
    
+   !> Perform droplet analysis
+   subroutine analyse_drops()
+      use mpi_f08,   only: MPI_ALLREDUCE,MPI_SUM,MPI_IN_PLACE
+      use parallel,  only: MPI_REAL_WP
+      use mathtools, only: Pi
+      use string,    only: str_medium
+      use filesys,   only: makedir,isdir
+      character(len=str_medium) :: filename,timestamp
+      real(WP), dimension(:), allocatable :: dvol
+      integer :: iunit,n,m,ierr
+      ! Allocate droplet volume array
+      allocate(dvol(1:strack%nstruct)); dvol=0.0_WP
+      ! Loop over individual structures
+      do n=1,strack%nstruct
+         ! Loop over cells in structure and accumulate volume
+         do m=1,strack%struct(n)%n_
+            dvol(n)=dvol(n)+cfg%vol(strack%struct(n)%map(1,m),strack%struct(n)%map(2,m),strack%struct(n)%map(3,m))*&
+            &                 vf%VF(strack%struct(n)%map(1,m),strack%struct(n)%map(2,m),strack%struct(n)%map(3,m))
+         end do
+      end do
+      ! Reduce volume data
+      call MPI_ALLREDUCE(MPI_IN_PLACE,dvol,strack%nstruct,MPI_REAL_WP,MPI_SUM,vf%cfg%comm,ierr)
+      ! Only root process outputs to a file
+      if (cfg%amRoot) then
+         if (.not.isdir('diameter')) call makedir('diameter')
+         filename='diameter_'; write(timestamp,'(es12.5)') time%t
+         open(newunit=iunit,file='diameter/'//trim(adjustl(filename))//trim(adjustl(timestamp)),form='formatted',status='replace',access='stream',iostat=ierr)
+         do n=1,strack%nstruct
+            ! Output list of diameters
+            write(iunit,'(999999(es12.5,x))') (6.0_WP*dvol(n)/Pi)**(1.0_WP/3.0_WP)
+         end do
+         close(iunit)
+      end if
+   end subroutine analyse_drops
+   
    
    !> Initialization of problem solver
    subroutine simulation_init
@@ -154,7 +190,8 @@ contains
       initialize_timetracker: block
          time=timetracker(amRoot=cfg%amRoot)
          call param_read('Max timestep size',time%dtmax)
-         call param_read('Max cfl number',time%cflmax)
+         call param_read('Max cfl number',time%cflmax,default=time%cflmax)
+         call param_read('Max time',time%tmax)
          time%dt=time%dtmax
          time%itmax=2
       end block initialize_timetracker
@@ -199,43 +236,24 @@ contains
          call param_read('Forcing constant',G,default=max_forcing_estimate)
          Gdtau =G/tauinf
          Gdtaui=1.0_WP/Gdtau
-         ! Read in droplet injection time (in terms of eddy turnover)
-         call param_read('Droplet injection time',inject_time,default=1.0_WP); inject_time=inject_time*tauinf
-         ! Create event for droplet injection
-         inj_evt=event(time=time,name='Droplet injection'); inj_evt%tper=inject_time
       end block initialize_hit
       
       ! Initialize our VOF solver
       create_vof: block
-         use vfs_class,only: r2p,elvira,VFhi,VFlo
-         use mpi_f08,  only: MPI_WTIME
-         use string,   only: str_medium,lowercase
-         integer :: i,j,k,n,si,sj,sk,curvature_method,stencil_size,hf_backup_method
-         character(len=str_medium) :: read_curvature_method
-         real(WP), dimension(3,8) :: cube_vertex
-         real(WP), dimension(3) :: v_cent,a_cent
-         real(WP) :: vol,area
-         integer, parameter :: amr_ref_lvl=5
-         real(WP) :: start, finish
-         ! Create a VOF solver with r2p reconstruction
-         call vf%initialize(cfg=cfg,reconstruction_method=elvira,name='VOF')
+         use vfs_class, only: lvira,elvira,plicnet,remap_storage
+         ! Create a VOF solver with stored full-cell Lagrangian remap
+         call vf%initialize(cfg=cfg,reconstruction_method=plicnet,transport_method=remap_storage,name='VOF')
          ! Initialize droplet parameters
          call param_read('Droplet diameter',radius); radius=0.5_WP*radius
          call param_read('Droplet position',center,default=[0.5_WP*cfg%xL,0.5_WP*cfg%yL,0.5_WP*cfg%zL])
-         ! Update the band
-         call vf%update_band()
-         ! Perform interface reconstruction from VOF field
-         call vf%build_interface()
-         ! Create discontinuous polygon mesh from IRL interface
-         call vf%polygonalize_interface()
-         ! Calculate distance from polygons
-         call vf%distance_from_polygon()
-         ! Calculate subcell phasic volumes
-         call vf%subcell_vol()
-         ! Calculate curvature
-         call vf%get_curvature()
-         ! Reset moments to guarantee compatibility with interface reconstruction
-         call vf%reset_volume_moments()
+         ! Read in droplet injection time (in terms of eddy turnover)
+         call param_read('Droplet injection time',inject_time,default=1.0_WP); inject_time=inject_time*tauinf
+         ! Create event for droplet injection
+         inj_evt=event(time=time,name='Droplet injection'); inj_evt%tper=inject_time
+         ! Read in whether forcing should continue after injection
+         call param_read('Keep forcing',keep_forcing)
+         ! So far, the drop has not been injected
+         droplet_injected=.false.
       end block create_vof
       
       ! Create a single-phase flow solver without bconds
@@ -265,9 +283,10 @@ contains
          use random,    only: random_normal
          use param,     only: param_exists
          use mathtools, only: Pi
-         use string,    only: str_long
+         use string,    only: str_long,str_medium
          use messager,  only: die,log
          character(str_long) :: message
+         character(len=str_medium) :: filename
          integer :: i,j,k
          ! Print out some expected turbulence properties
          if (fs%cfg%amRoot) then
@@ -283,55 +302,72 @@ contains
             write(message,'("[Drop setup] => We                =",es12.5)')     We_tgt; call log(message)
             write(message,'("[Drop setup] => sigma             =",es12.5)')   fs%sigma; call log(message)
          end if
-         ! Gaussian initial field
-         ! call random_init(.true., .true.)
-         do k=fs%cfg%kmin_,fs%cfg%kmax_
-            do j=fs%cfg%jmin_,fs%cfg%jmax_
-               do i=fs%cfg%imin_,fs%cfg%imax_
-                  fs%U(i,j,k)=random_normal(m=0.0_WP,sd=Urms0)
-                  fs%V(i,j,k)=random_normal(m=0.0_WP,sd=Urms0)
-                  fs%W(i,j,k)=random_normal(m=0.0_WP,sd=Urms0)
+         ! Check if a restart file was provided
+         call param_read('Turbulence file',filename,default='')
+         restarted=.false.; if (len_trim(filename).gt.0) restarted=.true.
+         if (restarted) then
+            ! Restart the simulation
+            call df%initialize(pg=cfg,iopartition=[cfg%npx,cfg%npy,cfg%npz],fdata=trim(filename))
+            ! Read in the data
+            call df%pull(name='U',var=fs%U)
+            call df%pull(name='V',var=fs%V)
+            call df%pull(name='W',var=fs%W)
+            call df%pull(name='P',var=fs%P)
+         else
+            ! Gaussian initial field
+            do k=fs%cfg%kmin_,fs%cfg%kmax_
+               do j=fs%cfg%jmin_,fs%cfg%jmax_
+                  do i=fs%cfg%imin_,fs%cfg%imax_
+                     fs%U(i,j,k)=random_normal(m=0.0_WP,sd=Urms0)
+                     fs%V(i,j,k)=random_normal(m=0.0_WP,sd=Urms0)
+                     fs%W(i,j,k)=random_normal(m=0.0_WP,sd=Urms0)
+                  end do
                end do
             end do
-         end do
-         call fs%cfg%sync(fs%U)
-         call fs%cfg%sync(fs%V)
-         call fs%cfg%sync(fs%W)
-         ! Compute mean and remove it from the velocity field to obtain <U>=0
-         call fs%cfg%integrate(A=fs%U,integral=meanU); meanU=meanU/fs%cfg%vol_total
-         call fs%cfg%integrate(A=fs%V,integral=meanV); meanV=meanV/fs%cfg%vol_total
-         call fs%cfg%integrate(A=fs%W,integral=meanW); meanW=meanW/fs%cfg%vol_total
-         fs%U=fs%U-meanU
-         fs%V=fs%V-meanV
-         fs%W=fs%W-meanW
-         ! Project to ensure divergence-free
-         call fs%get_div()
-         fs%psolv%rhs=-fs%cfg%vol*fs%div*rho/time%dt
-         fs%psolv%sol=0.0_WP
-         call fs%psolv%solve()
-         call fs%shift_p(fs%psolv%sol)
-         call fs%get_pgrad(fs%psolv%sol,resU,resV,resW)
-         fs%P=fs%P+fs%psolv%sol
-         fs%U=fs%U-time%dt*resU
-         fs%V=fs%V-time%dt*resV
-         fs%W=fs%W-time%dt*resW
+            call fs%cfg%sync(fs%U)
+            call fs%cfg%sync(fs%V)
+            call fs%cfg%sync(fs%W)
+            ! Compute mean and remove it from the velocity field to obtain <U>=0
+            call fs%cfg%integrate(A=fs%U,integral=meanU); meanU=meanU/fs%cfg%vol_total
+            call fs%cfg%integrate(A=fs%V,integral=meanV); meanV=meanV/fs%cfg%vol_total
+            call fs%cfg%integrate(A=fs%W,integral=meanW); meanW=meanW/fs%cfg%vol_total
+            fs%U=fs%U-meanU
+            fs%V=fs%V-meanV
+            fs%W=fs%W-meanW
+            ! Project to ensure divergence-free
+            call fs%get_div()
+            fs%psolv%rhs=-fs%cfg%vol*fs%div*rho/time%dt
+            fs%psolv%sol=0.0_WP
+            call fs%psolv%solve()
+            call fs%shift_p(fs%psolv%sol)
+            call fs%get_pgrad(fs%psolv%sol,resU,resV,resW)
+            fs%P=fs%P+fs%psolv%sol
+            fs%U=fs%U-time%dt*resU
+            fs%V=fs%V-time%dt*resV
+            fs%W=fs%W-time%dt*resW
+         end if
          ! Calculate cell-centered velocities and divergence
          call fs%interp_vel(Ui,Vi,Wi)
          call fs%get_div()
          ! Compute turbulence stats
          call compute_stats()
       end block initialize_velocity
+
+      ! Check for initial injection
+      check_injection: block
+         if (inj_evt%tper.eq.0.0_WP) call inject_drop()
+      end block check_injection
       
       ! Create structure tracker
       create_strack: block
-         call strack%init(vf=vf,phase=0,name='stracker_test')
+         call strack%initialize(vf=vf,phase=0,make_label=label_liquid,name='stracker_test')
       end block create_strack
       
       ! Create surfmesh object for interface polygon output
       create_smesh: block
          use irl_fortran_interface
          integer :: i,j,k,nplane,np
-         ! Include an extra variable for number of planes
+         ! Include an extra variable for structure id
          smesh=surfmesh(nvar=1,name='plic')
          smesh%varname(1)='id'
          ! Transfer polygons to smesh
@@ -344,7 +380,7 @@ contains
                do i=vf%cfg%imin_,vf%cfg%imax_
                   do nplane=1,getNumberOfPlanes(vf%liquid_gas_interface(i,j,k))
                      if (getNumberOfVertices(vf%interface_polygon(nplane,i,j,k)).gt.0) then
-                        np=np+1; smesh%var(1,np)=real(ccl%id(i,j,k),WP)
+                        np=np+1; smesh%var(1,np)=real(strack%id(i,j,k),WP)
                      end if
                   end do
                end do
@@ -365,7 +401,7 @@ contains
          call ens_out%add_scalar('pressure',fs%P)
          call ens_out%add_scalar('VOF',vf%VF)
          call ens_out%add_scalar('curvature',vf%curv)
-         call ens_out%add_scalar('id',ccl%id)
+         call ens_out%add_scalar('id',strack%id)
          call ens_out%add_surface('vofplic',smesh)
          ! Output to ensight
          if (ens_evt%occurs()) call ens_out%write_data(time%t)
@@ -433,6 +469,13 @@ contains
          call cvgfile%add_column(ell_Lx,'ell/Lx')
          call cvgfile%write()
       end block create_monitor
+
+      ! Initialize an event for drop size analysis
+      drop_analysis: block
+         drop_evt=event(time=time,name='Drop analysis')
+         call param_read('Drop analysis period',drop_evt%tper)
+         if (drop_evt%occurs()) call analyse_drops()
+      end block drop_analysis
       
    end subroutine simulation_init
    
@@ -441,7 +484,6 @@ contains
    subroutine simulation_run
       use tpns_class, only: arithmetic_visc
       implicit none
-      logical :: droplet_inserted=.false.
       
       ! Perform time integration
       do while (.not.time%done())
@@ -451,29 +493,8 @@ contains
          call time%adjust_dt()
          call time%increment()
          
-         ! Insert droplet
-         if (.not.droplet_inserted) then
-            if (inj_evt%occurs()) then
-               ! Insert droplet
-               droplet_injection: block
-                  integer :: i,j,k
-                  call insert_drop(vf=vf)
-                  droplet_inserted=.true.
-                  do k=fs%cfg%kmin_,fs%cfg%kmax_
-                     do j=fs%cfg%jmin_,fs%cfg%jmax_
-                        do i=fs%cfg%imin_,fs%cfg%imax_
-                           if (maxval(vf%VF(i-1:i,j,k)).gt.0.0_WP) fs%U(i,j,k)=0.0_WP
-                           if (maxval(vf%VF(i,j-1:j,k)).gt.0.0_WP) fs%V(i,j,k)=0.0_WP
-                           if (maxval(vf%VF(i,j,k-1:k)).gt.0.0_WP) fs%W(i,j,k)=0.0_WP
-                        end do
-                     end do
-                  end do
-                  call fs%cfg%sync(fs%U)
-                  call fs%cfg%sync(fs%V)
-                  call fs%cfg%sync(fs%W)
-               end block droplet_injection
-            end if
-         end if
+         ! Inject droplet
+         if (.not.droplet_injected.and.inj_evt%occurs()) call inject_drop()
          
          ! Remember old VOF
          vf%VFold=vf%VF
@@ -488,6 +509,9 @@ contains
          
          ! VOF solver step
          call vf%advance(dt=time%dt,U=fs%U,V=fs%V,W=fs%W)
+
+         ! Advance stracker
+         call strack%advance(make_label=label_liquid)
          
          ! Prepare new staggered viscosity (at n+1)
 		   call fs%get_viscosity(vf=vf,strat=arithmetic_visc)
@@ -512,7 +536,7 @@ contains
             resW=-2.0_WP*fs%rho_W*fs%W+(fs%rho_Wold+fs%rho_W)*fs%Wold+time%dt*resW
             
             ! Add linear forcing term based on Bassenne et al. (2016)
-            !if (.not.droplet_inserted) then
+            if (.not.droplet_injected.or.keep_forcing) then
                linear_forcing: block
                   use mpi_f08,  only: MPI_ALLREDUCE,MPI_SUM
                   use parallel, only: MPI_REAL_WP
@@ -543,7 +567,7 @@ contains
                   resV=resV+time%dt*(fs%V-meanV)*A*fs%rho_V
                   resW=resW+time%dt*(fs%W-meanW)*A*fs%rho_W
                end block linear_forcing
-            !end if
+            end if
             
             ! Apply these residuals
             fs%U=2.0_WP*fs%U-fs%Uold+resU!/fs%rho_U
@@ -578,9 +602,6 @@ contains
          call fs%interp_vel(Ui,Vi,Wi)
          call fs%get_div()
          
-         ! Perform CCL
-         call ccl%build(make_label,same_label)
-         
          ! Output to ensight
          if (ens_evt%occurs()) then
             ! Update surfmesh object
@@ -597,7 +618,7 @@ contains
                      do i=vf%cfg%imin_,vf%cfg%imax_
                         do nplane=1,getNumberOfPlanes(vf%liquid_gas_interface(i,j,k))
                            if (getNumberOfVertices(vf%interface_polygon(nplane,i,j,k)).gt.0) then
-                              np=np+1; smesh%var(1,np)=real(ccl%id(i,j,k),WP)
+                              np=np+1; smesh%var(1,np)=real(strack%id(i,j,k),WP)
                            end if
                         end do
                      end do
@@ -607,9 +628,13 @@ contains
             call ens_out%write_data(time%t)
          end if
          
+         ! Analyse droplets
+         if (drop_evt%occurs()) call analyse_drops()
+         
          ! Perform and output monitoring
          call compute_stats()
          call fs%get_max()
+         call vf%get_max()
          call mfile%write()
          call cflfile%write()
          call hitfile%write()
@@ -619,21 +644,36 @@ contains
       
    end subroutine simulation_run
    
-   ! Initialize our VOF field
-   subroutine insert_drop(vf)
+   !> Introduce droplet in domain
+   !! 1- The current flow field is stored
+   !! 2- The droplet is created
+   !! 3- The velocity field in the drop is zeroed out
+   !! 4- The droplet_injected flag is set to true
+   subroutine inject_drop()
       use mms_geom, only: cube_refine_vol
-      use vfs_class,only: r2p,lvira,VFhi,VFlo
-      use mpi_f08,  only: MPI_WTIME
-      use string,   only: str_medium,lowercase
+      use vfs_class,only: VFhi,VFlo
+      use param,    only: param_read
+      use messager, only: log
       implicit none
-      class(vfs), intent(inout) :: vf
-      integer :: i,j,k,n,si,sj,sk,curvature_method,stencil_size,hf_backup_method
-      character(len=str_medium) :: read_curvature_method
+      integer :: i,j,k,n,si,sj,sk
       real(WP), dimension(3,8) :: cube_vertex
       real(WP), dimension(3) :: v_cent,a_cent
       real(WP) :: vol,area
       integer, parameter :: amr_ref_lvl=5
-      real(WP) :: start,finish
+      
+      ! Output current velocity field to the disk
+      if (.not.restarted) then
+         call df%initialize(pg=cfg,iopartition=[cfg%npx,cfg%npy,cfg%npz],filename='turb.file',nval=2,nvar=4)
+         df%valname=['dt','t ']; df%varname=['U','V','W','P']
+         call df%push(name='t' ,val=time%told)
+         call df%push(name='dt',val=time%dtold)
+         call df%push(name='U' ,var=fs%U)
+         call df%push(name='V' ,var=fs%V)
+         call df%push(name='W' ,var=fs%W)
+         call df%push(name='P' ,var=fs%P)
+         call df%write()
+      end if
+      
       ! Initialize droplet
       do k=vf%cfg%kmino_,vf%cfg%kmaxo_
          do j=vf%cfg%jmino_,vf%cfg%jmaxo_
@@ -675,7 +715,26 @@ contains
       call vf%get_curvature()
       ! Reset moments to guarantee compatibility with interface reconstruction
       call vf%reset_volume_moments()
-   end subroutine insert_drop
+      
+      ! Zero out the velocity field in the drop
+      do k=fs%cfg%kmin_,fs%cfg%kmax_
+         do j=fs%cfg%jmin_,fs%cfg%jmax_
+            do i=fs%cfg%imin_,fs%cfg%imax_
+               if (maxval(vf%VF(i-1:i,j,k)).gt.0.0_WP) fs%U(i,j,k)=0.0_WP
+               if (maxval(vf%VF(i,j-1:j,k)).gt.0.0_WP) fs%V(i,j,k)=0.0_WP
+               if (maxval(vf%VF(i,j,k-1:k)).gt.0.0_WP) fs%W(i,j,k)=0.0_WP
+            end do
+         end do
+      end do
+      call fs%cfg%sync(fs%U)
+      call fs%cfg%sync(fs%V)
+      call fs%cfg%sync(fs%W)
+      
+      ! Set the drop to injected status
+      droplet_injected=.true.
+      call log('Droplet injected!')
+      
+   end subroutine inject_drop
    
    !> Finalize the NGA2 simulation
    subroutine simulation_final

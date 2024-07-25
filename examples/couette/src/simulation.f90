@@ -138,8 +138,8 @@ contains
       ! Create a two-phase flow solver without bconds
       create_and_initialize_flow_solver: block
          use hypre_str_class, only: pcg_pfmg2
-         use mathtools,       only: Pi
-         integer :: j
+         use mathtools,       only: Pi,twoPi
+         integer :: i,j,k
          ! Create flow solver
          fs=tpns(cfg=cfg,name='Two-phase NS')
          ! Read in all adimensional parameters
@@ -167,14 +167,18 @@ contains
          ! Zero initial field
          fs%U=0.0_WP; fs%V=0.0_WP; fs%W=0.0_WP
          ! Impose Couette flow
-         do j=fs%cfg%jmino_,fs%cfg%jmaxo_
-            if (fs%cfg%ym(j).gt.fs%cfg%yL) then
-               fs%U(:,j,:)=1.0_WP
-            else if (fs%cfg%ym(j).le.fs%cfg%yL.and.fs%cfg%ym(j).ge.0.0_WP) then
-               fs%U(:,j,:)=fs%cfg%ym(j)
-            else if (fs%cfg%ym(j).lt.0.0_WP) then
-               fs%U(:,j,:)=0.0_WP
-            end if
+         do k=fs%cfg%kmino_,fs%cfg%kmaxo_
+            do j=fs%cfg%jmino_,fs%cfg%jmaxo_
+               do i=fs%cfg%imino_,fs%cfg%imaxo_
+                  if (fs%cfg%ym(j).gt.fs%cfg%yL) then
+                     fs%U(i,j,k)=1.0_WP
+                  else if (fs%cfg%ym(j).le.fs%cfg%yL.and.fs%cfg%ym(j).ge.0.0_WP) then
+                     fs%U(i,j,k)=fs%cfg%ym(j)
+                  else if (fs%cfg%ym(j).lt.0.0_WP) then
+                     fs%U(i,j,k)=0.0_WP
+                  end if
+               end do
+            end do
          end do
          ! Calculate cell-centered velocities and divergence
          call fs%interp_vel(Ui,Vi,Wi)
@@ -263,10 +267,10 @@ contains
       end block create_monitor
       
       ! TEST THE REMOVAL OF WALL TREATMENT IN VOF TRANSPORT
-      !vf%vmask=0
-
+      vf%vmask=0
+      
       ! TEST THE REMOVAL OF CONSERVATIVE CORRECTION IN SL VOF TRANSPORT
-      vf%cons_correct=.false.
+      !vf%cons_correct=.false.
       
    end subroutine simulation_init
    
@@ -283,7 +287,24 @@ contains
          call fs%get_cfl(time%dt,time%cfl)
          call time%adjust_dt()
          call time%increment()
-
+         
+         ! Apply time-varying Dirichlet conditions
+         !update_uslip: block
+         !   integer :: i,j,k
+         !   ! Loop over wall-tangent directions and update Uslip 
+         !   do k=fs%cfg%kmin_,fs%cfg%kmax_
+         !      do j=fs%cfg%jmin_,fs%cfg%jmax_
+         !         do i=fs%cfg%imin_,fs%cfg%imax_
+         !            ! Check that we are right below the wall
+         !            if (fs%cfg%ym(j).lt.fs%cfg%yL.and.fs%cfg%ym(j+1).gt.fs%cfg%yL) then
+         !               fs%U(i,j+1,k)=-fs%sigma*sum(fs%divu_x(:,i,j,k)*vf%VF(i-1:i,j,k))
+         !            end if
+         !         end do
+         !      end do
+         !   end do
+         !   call fs%cfg%sync(fs%U)
+         !end block update_uslip
+         
          ! Remember old VOF
          vf%VFold=vf%VF
          
@@ -291,9 +312,6 @@ contains
          fs%Uold=fs%U
          fs%Vold=fs%V
          fs%Wold=fs%W
-         
-         ! Apply time-varying Dirichlet conditions
-         ! This is where time-dpt Dirichlet would be enforced
          
          ! Prepare old staggered density (at n)
          call fs%get_olddensity(vf=vf)

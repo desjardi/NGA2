@@ -767,7 +767,7 @@ contains
       
       ! Point to pressure solver linsol object
       this%psolv=>pressure_solver
-
+      
       ! Set 7-pt stencil map for the pressure solver
       this%psolv%stc(1,:)=[ 0, 0, 0]
       this%psolv%stc(2,:)=[+1, 0, 0]
@@ -875,7 +875,7 @@ contains
       
       ! Now adjust the metrics accordingly
       select case (new_bc%type)
-      case (dirichlet) !< Dirichlet is set one face (i.e., velocit component) at the time
+      case (dirichlet) !< Dirichlet is set one face (i.e., velocity component) at the time
          select case (new_bc%face)
          case ('x')
             do n=1,new_bc%itr%n_
@@ -1896,7 +1896,7 @@ contains
       type(bcond), pointer :: my_bc
       
       ! Evaluate MFR mismatch and velocity correction
-      call this%cfg%integrate(A=drhodt,integral=dMdt)
+      call this%cfg%integrate_without_vf(A=drhodt,integral=dMdt)
       call this%get_mfr()
       mfr_error=sum(this%mfr)+dMdt
       if (abs(mfr_error).lt.10.0_WP*epsilon(1.0_WP).or.abs(this%correctable_area).lt.10.0_WP*epsilon(1.0_WP)) return

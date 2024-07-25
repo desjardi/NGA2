@@ -14,7 +14,7 @@ Density ratio :   1000
 Viscosity ratio : 50
 Oh : 0.1    #<<< Oh=mu_l/sqrt(rho_l*R*sigma)
 CA : 60
-Initial contact angle : 60 !180
+Initial contact angle : 90 !180
 
 # Time integration
 Max timestep size : 1e-2

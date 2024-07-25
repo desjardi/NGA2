@@ -2,6 +2,7 @@
 module simulation
    use precision,      only: WP
    use film_class,     only: film
+   use sgsfilm_class,  only: sgsfilm
    use config_class,   only: config
    use vfs_class,      only: vfs
    use surfmesh_class, only: surfmesh
@@ -10,6 +11,9 @@ module simulation
    
    implicit none
    private
+   
+   !> Film simulation
+   type(sgsfilm) :: sgs
    
    !> Film simulation
    type(film) :: dns
@@ -30,6 +34,9 @@ contains
    
    !> Initialization of our simulation
    subroutine simulation_init
+      
+      ! Initialize sgs film simulation
+      call sgs%init(); return
       
       ! Initialize film simulation
       call dns%init()
@@ -126,9 +133,12 @@ contains
    subroutine simulation_run
       implicit none
       
+      ! SGS film simulation
+      do while (.not.sgs%time%done()); call sgs%step(); end do; return
+      
       ! Film drives overall time integration
       do while (.not.dns%time%done())
-
+         
          ! Advance film simulation
          call dns%step()
          
@@ -438,6 +448,9 @@ contains
    !> Finalize the NGA2 simulation
    subroutine simulation_final
       implicit none
+      
+      ! Finalize sgs film simulation
+      call sgs%final(); return
       
       ! Finalize film simulation
       call dns%final()

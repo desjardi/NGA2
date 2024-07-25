@@ -53,7 +53,7 @@ module film_class
       procedure :: final                           !< Finalize nozzle simulation
    end type film
    
-   !> Copy of hole definition and pointer to cfg
+   !> Copy of hole definition
    integer :: nh
    real(WP), dimension(:,:), allocatable :: ph
    real(WP) :: xL,zL,dh
@@ -99,7 +99,7 @@ contains
    end function levelset_perf_film
    
    
-   !> Initialization of ligament simulation
+   !> Initialization of film simulation
    subroutine init(this)
       implicit none
       class(film), intent(inout) :: this
@@ -217,7 +217,6 @@ contains
       create_and_initialize_vof: block
          use vfs_class, only: VFlo,VFhi,lvira,remap
          use mms_geom,  only: cube_refine_vol
-         use param,     only: param_read
          integer :: i,j,k,n,si,sj,sk
          real(WP), dimension(3,8) :: cube_vertex
          real(WP), dimension(3) :: v_cent,a_cent

@@ -1,19 +1,19 @@
 !> Various definitions and tools for initializing NGA2 config
 module geometry
-   use config_class, only: config
-   use precision,    only: WP
+   use ibconfig_class, only: ibconfig
+   use precision,      only: WP
    implicit none
    private
    
    !> Single config
-   type(config), public :: cfg
+   type(ibconfig), public :: cfg
    
    !> Pipe diameter
    real(WP), public :: D
    
-   public :: geometry_init,get_VF
+   public :: geometry_init
    
-
+   
 contains
    
    
@@ -78,58 +78,30 @@ contains
          call param_read('Partition',partition,short='p')
          
          ! Create partitioned grid
-         cfg=config(grp=group,decomp=partition,grid=grid)
+         cfg=ibconfig(grp=group,decomp=partition,grid=grid)
          
       end block create_cfg
       
       
       ! Create masks for this config
       create_walls: block
+         use ibconfig_class, only: bigot,sharp
          integer :: i,j,k
-         do k=cfg%kmin_,cfg%kmax_
-            do j=cfg%jmin_,cfg%jmax_
-               do i=cfg%imin_,cfg%imax_
-                  cfg%VF(i,j,k)=max(get_VF(i,j,k,'SC'),epsilon(1.0_WP))
+         do k=cfg%kmino_,cfg%kmaxo_
+            do j=cfg%jmino_,cfg%jmaxo_
+               do i=cfg%imino_,cfg%imaxo_
+                  cfg%Gib(i,j,k)=sqrt(cfg%ym(j)**2+cfg%zm(k)**2)-0.5_WP*D*(1.0_WP-0.2_WP*exp(-(cfg%xm(i)-0.5_WP*cfg%xL)**2/(0.5_WP*D)**2))
                end do
             end do
          end do
-         call cfg%sync(cfg%VF)
-         call cfg%calc_fluid_vol()
+          ! Get normal vector
+         call cfg%calculate_normal()
+         ! Get VF field
+         call cfg%calculate_vf(method=sharp,allow_zero_vf=.false.)
       end block create_walls
       
       
    end subroutine geometry_init
-   
-   
-   !> Get volume fraction for direct forcing
-   function get_VF(i,j,k,dir) result(VF)
-      implicit none
-      integer, intent(in)    :: i,j,k
-      character(len=*)       :: dir
-      real(WP)               :: VF
-      real(WP)               :: r,eta,lam,delta,VFx,VFy,VFz
-      real(WP), dimension(3) :: norm
-      select case(trim(dir))
-      case('U','u')
-         delta=(cfg%dxm(i)*cfg%dy(j)*cfg%dz(k))**(1.0_WP/3.0_WP)
-         r=sqrt(cfg%ym(j)**2+cfg%zm(k)**2)+epsilon(1.0_WP)
-         norm(1)=0.0_WP; norm(2)=cfg%ym(j)/r; norm(3)=cfg%zm(k)/r
-      case('V','v')
-         delta=(cfg%dx(i)*cfg%dym(j)*cfg%dz(k))**(1.0_WP/3.0_WP)
-         r=sqrt(cfg%y(j)**2+cfg%zm(k)**2)+epsilon(1.0_WP)
-         norm(1)=0.0_WP; norm(2)=cfg%y(j)/r; norm(3)=cfg%zm(k)/r
-      case('W','w')
-         delta=(cfg%dx(i)*cfg%dy(j)*cfg%dzm(k))**(1.0_WP/3.0_WP)
-         r=sqrt(cfg%ym(j)**2+cfg%z(k)**2)+epsilon(1.0_WP)
-         norm(1)=0.0_WP; norm(2)=cfg%ym(j)/r; norm(3)=cfg%z(k)/r
-      case default
-         delta=(cfg%dx(i)*cfg%dy(j)*cfg%dz(k))**(1.0_WP/3.0_WP)
-         r=sqrt(cfg%ym(j)**2+cfg%zm(k)**2)
-         norm(1)=0.0_WP; norm(2)=cfg%ym(j)/r; norm(3)=cfg%zm(k)/r
-      end select
-      lam=sum(abs(norm)); eta=0.065_WP*(1.0_WP-lam**2)+0.39_WP
-      VF=0.5_WP*(1.0_WP-tanh((r-0.5_WP*D)/(sqrt(2.0_WP)*lam*eta*delta+epsilon(1.0_WP))))
-   end function get_VF
    
    
 end module geometry
