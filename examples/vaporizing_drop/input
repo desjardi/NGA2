@@ -31,7 +31,7 @@ Evaporation mass flux : 1.8e-2
 Max timestep size : 3.0e-4
 Max cfl number    : 0.9
 Sub-iterations    : 2
-Max time          : 2.5e-2
+Max time          : 3.0e-3
 
 # Pseudo time integration
 Max pseudo timestep size : 4.5e-4
