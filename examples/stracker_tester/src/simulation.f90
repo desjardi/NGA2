@@ -205,6 +205,9 @@ contains
                      ! Set stracker id
                      if (vol.gt.0.0_WP) then
                         strack%id(i,j,k)=nD
+                        if (nD.eq.4) then    ! Test growth (merge2)
+                           strack%id(i,j,k)=0
+                        end if   
                      end if
                   end do
                end do
@@ -214,7 +217,7 @@ contains
          call vf%cfg%sync(strack%id)
 
          ! Initialize id counter to be consistent with id's
-         strack%idcount=nDrop
+         strack%idcount=maxval(strack%id)
          ! Update the band
          call vf%update_band()
          ! Perform interface reconstruction from VOF field
@@ -423,6 +426,28 @@ contains
 
          ! Advance stracker
          call strack%advance(make_label=label_liquid)
+
+         ! Output master stracker lists
+         print_merge_master: block
+         integer :: n
+         if (strack%nmerge_master.gt.0) print*,'Master merge list'
+            do n=1,strack%nmerge_master
+               print*,'noldid=',strack%merge_master(n)%noldid
+               print*,' oldid=',strack%merge_master(n)%oldids(1:strack%merge_master(n)%noldid)
+               print*,' newid=',strack%merge_master(n)%newid
+            end do
+         end block print_merge_master
+
+         print_split_master: block
+         integer :: n
+         if (strack%nsplit_master.gt.0) print*,'Master split list'
+         do n=1,strack%nsplit_master
+            print*,' oldid=',strack%split_master(n)%oldid
+            print*,'nnewid=',strack%split_master(n)%nnewid
+            print*,' newid=',strack%split_master(n)%newids(1:strack%split_master(n)%nnewid)
+            
+         end do
+      end block print_split_master
          
          ! Prepare new staggered viscosity (at n+1)
 		   call fs%get_viscosity(vf=vf,strat=arithmetic_visc)

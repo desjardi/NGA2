@@ -24,7 +24,24 @@ module stracker_class
       integer, dimension(:,:), allocatable :: map         !< List of cells contained in struct, dimension(1:3,1:n_)
       integer, dimension(3) :: per                        !< Periodicity array - per(dim)=1 if structure is periodic in dim direction
    end type struct_type
-   
+
+   !> Merge object
+   type :: merge
+      ! Array of id's of parent structures in merge event
+      integer :: noldid
+      integer, dimension(:), allocatable :: oldids
+      ! ID of child structure after merge event
+      integer :: newid
+   end type merge
+
+   !> Split object
+   type :: split
+      ! Array of id's of child structures in split event
+      integer :: nnewid
+      integer, dimension(:), allocatable :: newids
+      ! ID of parent structure before split event
+      integer :: oldid
+   end type split
    
    !> Structure tracker object definition
    type :: stracker
@@ -34,10 +51,13 @@ module stracker_class
       character(len=str_medium) :: name='UNNAMED_STRACKER'
       ! Phase containing the tracked structures
       integer :: phase                !< 0 is liquid, 1 is gas
-      ! Merging events
+      ! Merging events - pairs of structures that merge
       integer :: nmerge
       integer, dimension(:,:), allocatable :: merge  
       integer, dimension(  :), allocatable :: newid
+      ! Merging events - collapsed merge events into master list
+      integer :: nmerge_master 
+      type(merge), dimension(:), allocatable :: merge_master
       ! Merging2 events
       integer :: nmerge2
       integer, dimension(:,:), allocatable :: merge2 
@@ -45,6 +65,10 @@ module stracker_class
       ! Splitting events
       integer :: nsplit
       integer, dimension(:,:), allocatable :: split
+      logical, dimension(  :), allocatable :: added2master
+      ! Splitting events - collapsed split events into master list
+      integer :: nsplit_master
+      type(split), dimension(:), allocatable :: split_master
       ! Global id counter
       integer :: idcount
       ! ID of the structure that contains each cell
@@ -132,6 +156,7 @@ contains
       implicit none
       class(stracker), intent(inout) :: this
       procedure(make_label_ftype) :: make_label
+      integer :: old_idcount
       
       ! Copy old structure data - may not be needed
       copy_to_old: block
@@ -153,6 +178,9 @@ contains
             this%struct_old(n)%map=this%struct(n)%map
          end do
       end block copy_to_old
+
+      ! Store current number of structures
+      old_idcount=this%idcount
       
       ! Reset merge and split event storage
       reset_merge_split: block
@@ -161,6 +189,9 @@ contains
          if (allocated(this%newid)) deallocate(this%newid)
          allocate(this%merge(1:2,1:min_struct_size)); this%merge=0
          allocate(this%newid(    1:min_struct_size)); this%newid=0
+         this%nmerge_master=0
+         if (allocated(this%merge_master)) deallocate(this%merge_master)
+         allocate(this%merge_master(1:min_struct_size));
          this%nmerge2=0
          if (allocated(this%merge2)) deallocate(this%merge2)
          if (allocated(this%newid2)) deallocate(this%newid2)
@@ -169,6 +200,9 @@ contains
          this%nsplit=0
          if (allocated(this%split)) deallocate(this%split)
          allocate(this%split(1:2,1:min_struct_size)); this%split=0
+         this%nsplit_master=0
+         if (allocated(this%split_master)) deallocate(this%split_master)
+         allocate(this%split_master(1:min_struct_size));
       end block reset_merge_split
       
       ! Remap id using VF geometry data to identify merge events
@@ -256,54 +290,37 @@ contains
          deallocate(nmerge_proc,merge_all)
       end block gather_merge
 
-      ! Determine newid for each merge
+      ! Determine newid for each merge & collapse merges
       determine_newid: block 
-         integer :: n,m,p,q,removeid
+         integer :: n
          ! Traverse merge list 
          do n=1,this%nmerge
-            ! Generate new id
-            if (this%newid(n).eq.0) this%newid(n)=this%generate_new_id()
-            ! Loop over subsequent merges and populate new id if part of same structure
-            do m=n,this%nmerge; do p=1,2
-               ! Check if this merge is part of the same structures
-               if (any(this%merge(:,m).eq.this%merge(p,n))) then 
-                  ! Check if this merge does not have a new id or already has the same id
-                  if (this%newid(m).eq.0.or.this%newid(m).eq.this%newid(n)) then ! use same new id
-                     this%newid(m)=this%newid(n)
-                  else ! Already has a different new id -> combine merges
-                     removeid=this%newid(m)
-                     this%idcount=this%idcount-1
-                     do q=m,this%nmerge
-                        ! Part of same structure use same newid
-                        if (this%newid(q).eq.this%newid(m)) this%newid(q)=this%newid(n)
-                        ! Shift new id to removed extra new id
-                        if (this%newid(q).gt.removeid) this%newid(q)=this%newid(q)-1
-                     end do
-                  end if
-               end if
-            end do; end do
-         end do
+            ! Deal with structure not part of existing merge event
+            if (this%newid(n).eq.0) then 
+               ! Generate new id for merge
+               this%newid(n) = this%generate_new_id()
+               ! Add merge to merge_master list and collapse subsequent merges
+               call add_merge_master(this%merge(1,n),this%merge(2,n),this%newid(n))
+            end if 
+         end do 
       end block determine_newid
-      
-      ! Execute all merges
-      execute_merge: block
-         integer :: i,j,k,n,m
-         integer :: oldid1,oldid2,newid
-         ! Traverse merge list
-         do n=1,this%nmerge
-            oldid1 = this%merge(1,n)
-            oldid2 = this%merge(2,n)
-            newid  = this%newid(  n)
+
+      ! Update id_rmp with newid's
+      update_id_rmp: block
+         integer :: i,j,k,n,m,nn
+         ! Traverse merge master list
+         do n=1,this%nmerge_master
             ! Loop over full domain and update id based on that merge event
-            do k=this%vf%cfg%kmino_,this%vf%cfg%kmaxo_; do j=this%vf%cfg%jmino_,this%vf%cfg%jmaxo_; do i=this%vf%cfg%imino_,this%vf%cfg%imaxo_
-               if (this%id_rmp(i,j,k).eq.oldid1) this%id_rmp(i,j,k)=newid
-               if (this%id_rmp(i,j,k).eq.oldid2) this%id_rmp(i,j,k)=newid
+            do k=this%vf%cfg%kmin_,this%vf%cfg%kmax_; do j=this%vf%cfg%jmin_,this%vf%cfg%jmax_; do i=this%vf%cfg%imin_,this%vf%cfg%imax_
+               ! Loop over oldids 
+               do nn=1,this%merge_master(n)%noldid
+                  if (this%id_rmp(i,j,k).eq.this%merge_master(n)%oldids(nn)) this%id_rmp(i,j,k)=this%merge_master(n)%newid
+               end do 
             end do; end do; end do
          end do
-      end block execute_merge
-
-      ! Communicate id_rmp
-      call this%vf%cfg%sync(this%id_rmp)
+         ! Communicate id_rmp
+         call this%vf%cfg%sync(this%id_rmp)
+      end block update_id_rmp
 
       ! Perform a CCL build - same_label is false if id_rmp are different and non-zero
       call this%build(make_label)
@@ -396,50 +413,68 @@ contains
          deallocate(nmerge2_proc,merge2_all)
       end block gather_merge2
 
-      ! Determine newid for each merge
+      ! Determine newids for each merge & collapse merges
       determine_newid2: block 
-         integer :: n,m,p,q,removeid
+         integer :: n,nn
          ! Traverse merge list 
          do n=1,this%nmerge2
-            ! Generate new id
-            if (this%newid2(n).eq.0) this%newid2(n)=this%generate_new_id()
-            ! Loop over subsequent merges and populate new id if part of same structure
-            do m=n,this%nmerge2; do p=1,2
-               ! Check if this merge is part of the same structures
-               if (any(this%merge2(:,m).eq.this%merge2(p,n))) then 
-                  ! Check if this merge does not have a new id or already has the same id
-                  if (this%newid2(m).eq.0.or.this%newid2(m).eq.this%newid2(n)) then ! use same new id
-                     this%newid2(m)=this%newid2(n)
-                  else ! Already has a different new id -> combine merges
-                     removeid=this%newid2(m)
-                     this%idcount=this%idcount-1
-                     do q=m,this%nmerge
-                        ! Part of same structure use same newid
-                        if (this%newid2(q).eq.this%newid2(m)) this%newid2(q)=this%newid2(n)
-                        ! Shift new id to removed extra new id
-                        if (this%newid2(q).gt.removeid) this%newid2(q)=this%newid2(q)-1
-                     end do
+            ! Deal with structure not part of existing merge event
+            if (this%newid2(n).eq.0) then 
+               ! Check if this event contains 0, 1, or 2 new ids from id_rmp merges
+               if (this%merge2(1,n).le.old_idcount.and.this%merge2(2,n).le.old_idcount) then ! No newids
+                  ! Generate new id for merge
+                  this%newid2(n) = this%generate_new_id()
+                  ! Add merge to merge_master list and collapse subsequent merges
+                  call add_merge_master(this%merge2(1,n),this%merge2(2,n),this%newid2(n))
+               elseif (this%merge2(1,n).le.old_idcount) then ! use merge2(2,n) as newid
+                  this%newid2(n) = this%merge2(2,n)
+                  ! Find associated merge master event and append
+                  do nn=1,this%nmerge_master
+                     if (this%merge_master(nn)%newid.eq.this%newid2(n)) then 
+                        call append_merge_master(nn,this%merge2(1,n))
+                        exit
+                     end if 
+                  end do
+               elseif (this%merge2(2,n).le.old_idcount) then ! use merge2(1,n) as newid
+                  this%newid2(n) = this%merge2(1,n)
+                  ! Find associated merge master event and append
+                  do nn=1,this%nmerge_master
+                     if (this%merge_master(nn)%newid.eq.this%newid2(n)) then 
+                        call append_merge_master(nn,this%merge2(2,n))
+                        exit
+                     end if 
+                  end do
+               else ! both merge2(:,n) are newid's -> keep smaller and remove larger
+                  if (this%merge2(1,n).lt.this%merge2(2,n)) then 
+                     this%newid2(n)=this%merge2(1,n)
+                     call remove_newid(this%merge2(1,n),this%merge2(2,n))
+                  else
+                     this%newid2(n)=this%merge2(2,n)
+                     call remove_newid(this%merge2(2,n),this%merge2(1,n))
                   end if
                end if
-            end do; end do
-         end do
+            end if 
+         end do 
       end block determine_newid2
-
-      ! Execute all merge2
+      
+      ! Execute all merge
       execute_merge2: block
          integer :: i,j,n,nn,m
          integer :: oldid1,oldid2,newid
-         ! Traverse merge2 list
-         do n=1,this%nmerge2
-            oldid1 = this%merge2(1,n)
-            oldid2 = this%merge2(2,n)
-            newid  = this%newid2(  n)
-            ! Loop over structures and update id based on merge2 events
-            do nn=1,this%nstruct
-               if (this%struct(nn)%id.eq.oldid1) this%struct(nn)%id=newid
-               if (this%struct(nn)%id.eq.oldid2) this%struct(nn)%id=newid
+         ! Loop over structures and update id based on merge events
+         str_loop : do nn=1,this%nstruct
+            ! Traverse merge list
+            do n=1,this%nmerge_master
+               ! Traverse oldid's in merge
+               do m=1,this%merge_master(n)%noldid
+                  if (this%struct(nn)%id.eq.this%merge_master(n)%oldids(m)) then 
+                     ! Found matching oldid -> update to newid
+                     this%struct(nn)%id=this%merge_master(n)%newid
+                     cycle str_loop
+                  end if
+               end do
             end do
-         end do
+         end do str_loop
       end block execute_merge2
       
       ! Now deal with splits - case where two structs share the same id
@@ -478,6 +513,21 @@ contains
             end if
          end do
       end block execute_splits
+
+      ! Collapse merges into master list
+      split_master: block 
+         integer :: n
+         if (allocated(this%added2master)) deallocate(this%added2master)
+         allocate(this%added2master(this%nsplit)); this%added2master=.false.
+         ! Traverse split list 
+         do n=1,this%nsplit
+            ! Deal with structure not part of existing split event
+            if (.not.this%added2master(n)) then 
+               ! Add split to split_master list and collapse subsequent splits
+               call add_split_master(this%split(1,n),this%split(2,n),n)
+            end if 
+         end do 
+      end block split_master
       
       ! Finally, one last pass to give unique id to structs with id=0
       handle_new_ids: block
@@ -513,9 +563,9 @@ contains
       subroutine add_merge(id1,id2)
          implicit none
          integer, intent(in) :: id1,id2
-         integer :: newid
          integer :: n,size_now,size_new
          integer, dimension(:,:), allocatable :: tmp
+         integer, dimension(:), allocatable :: tmp1d
          ! Skip self-merge
          if (id1.eq.id2) return
          ! Skip redundant merge
@@ -530,9 +580,13 @@ contains
             tmp(:,1:this%nmerge)=this%merge
             tmp(:,this%nmerge+1:)=0
             call move_alloc(tmp,this%merge)
+            allocate(tmp1d(1:size_new))
+            tmp1d(1:this%nmerge)=this%newid
+            tmp1d(this%nmerge+1:)=0
+            call move_alloc(tmp1d,this%newid)
          end if
          this%nmerge=this%nmerge+1
-         this%merge(:,this%nmerge)=[id1,id2,newid]
+         this%merge(:,this%nmerge)=[id1,id2]
       end subroutine add_merge
 
       !> Subroutine that adds a new merge2 event (id1<id2 required)
@@ -541,6 +595,7 @@ contains
          integer, intent(in) :: id1,id2
          integer :: n,size_now,size_new
          integer, dimension(:,:), allocatable :: tmp
+         integer, dimension(:), allocatable :: tmp1d
          ! Skip self-merge2
          if (id1.eq.id2) return
          ! Skip redundant merge2
@@ -555,10 +610,123 @@ contains
             tmp(:,1:this%nmerge2)=this%merge2
             tmp(:,this%nmerge2+1:)=0
             call move_alloc(tmp,this%merge2)
+            allocate(tmp1d(1:size_new))
+            tmp1d(1:this%nmerge2)=this%newid2
+            tmp1d(this%nmerge2+1:)=0
+            call move_alloc(tmp1d,this%newid2)
          end if
          this%nmerge2=this%nmerge2+1
          this%merge2(:,this%nmerge2)=[id1,id2]
       end subroutine add_merge2
+
+      !> Subroutine that adds merge to master list and identifies all connected merges
+      subroutine add_merge_master(oldid1,oldid2,newid) 
+         implicit none
+         integer, intent(in) :: oldid1,oldid2,newid
+         integer :: size_now,size_new
+         type(merge), dimension(:), allocatable :: tmp
+         ! Deal with memory - number of merge events
+         size_now=size(this%merge_master)
+         if (this%nmerge_master.eq.size_now) then 
+            size_new=int(real(size_now,WP)*coeff_up)
+            allocate(tmp(size_new))
+            tmp(1:this%nmerge_master) = this%merge_master
+            tmp(this%nmerge_master+1:)%noldid = 0
+            tmp(this%nmerge_master+1:)%newid = 0
+            call move_alloc(tmp,this%merge_master)
+         end if 
+         ! Add nth merge event
+         this%nmerge_master = this%nmerge_master+1
+         allocate(this%merge_master(this%nmerge_master)%oldids(2)) ! Memory handled in collapse_merges
+         this%merge_master(this%nmerge_master)%noldid=2
+         this%merge_master(this%nmerge_master)%oldids(1:2)=[oldid1,oldid2]
+         this%merge_master(this%nmerge_master)%newid=newid
+         ! Check other merge events to find any that are connected and add to master list
+         call collapse_merges(oldid1,newid)
+         call collapse_merges(oldid2,newid)
+      end subroutine add_merge_master
+
+      !> Subroutine that finds other merge events that contain oldid 
+      !> and adds them to merge_master list with newid
+      recursive subroutine collapse_merges(oldid,newid)
+         implicit none 
+         integer, intent(in) :: oldid,newid 
+         integer :: n,nn
+         integer, dimension(2) :: otherid = [2,1]
+         ! Loop over merges and look for any that are part of this merge
+         do n=1,this%nmerge
+            ! Already has newid?
+            if (this%newid(n).ne.0) cycle
+            ! Check if this merge contains matching oldid or newid (occurs with merge2)
+            do nn=1,2
+               if (this%merge(nn,n).eq.oldid.or.this%merge(nn,n).eq.newid) then
+                  ! Set newid
+                  this%newid(n)=newid
+                  ! Append other id of this merge to merge master
+                  call append_merge_master(this%nmerge_master,this%merge(otherid(nn),n))
+                  ! Collapse other id of this merge 
+                  call collapse_merges(this%merge(otherid(nn),n),newid)
+               end if
+            end do
+         end do 
+      end subroutine 
+
+      !> Subroutine that appends an oldid to nth entry on merge master list and deals with memory
+      subroutine append_merge_master(n,oldid)
+         implicit none
+         integer, intent(in) :: n,oldid
+         integer :: size_now,size_new
+         integer, dimension(:), allocatable :: tmp
+         ! Deal with memory - number of oldids in merge event
+         size_now=size(this%merge_master(n)%oldids)
+         if (this%merge_master(n)%noldid.eq.size_now) then 
+            size_new=int(real(size_now,WP)*coeff_up)
+            allocate(tmp(size_new))
+            tmp(1:size_now) = this%merge_master(n)%oldids
+            tmp(size_now+1:) = 0
+            call move_alloc(tmp,this%merge_master(n)%oldids)
+         end if 
+         ! Add oldid to merge master list
+         this%merge_master(n)%noldid=this%merge_master(n)%noldid+1
+         this%merge_master(n)%oldids(this%merge_master(n)%noldid)=oldid
+      end subroutine append_merge_master
+
+      !> Subroutine that removes a newid and shifts larger ids
+      subroutine remove_newid(newid,removeid)
+         implicit none
+         integer, intent(in) :: newid,removeid
+         integer :: n,nn,nnn
+         ! Remove id from merge list
+         do n=1,this%nmerge
+            if (this%newid(n).eq.removeid) this%newid(n)=newid
+            if (this%newid(n).gt.removeid) this%newid(n)=this%newid(n)-1
+         end do
+         ! Remove id from merge2 list (can be in merge2 not just newid2)
+         do n=1,this%nmerge2
+            if (this%merge2(1,n).eq.removeid) this%merge2(1,n)=newid
+            if (this%merge2(1,n).gt.removeid) this%merge2(1,n)=this%merge2(1,n)-1
+            if (this%merge2(2,n).eq.removeid) this%merge2(2,n)=newid
+            if (this%merge2(2,n).gt.removeid) this%merge2(2,n)=this%merge2(2,n)-1
+            if (this%newid2(  n).eq.removeid) this%newid2(  n)=newid
+            if (this%newid2(  n).gt.removeid) this%newid2(  n)=this%newid2(  n)-1
+         end do
+         ! Remove id from merge_master list
+         do n=1,this%nmerge_master
+            if (this%merge_master(n)%newid.eq.removeid) then 
+               ! Find merge to append to removed merged onto
+               do nn=1,this%nmerge_master
+                  if (this%merge_master(nn)%newid.eq.newid) then 
+                     ! Append all the oldids of removed merged
+                     do nnn=1,this%merge_master(n)%noldid
+                        call append_merge_master(nn,this%merge_master(n)%oldids(nnn))
+                     end do
+                  end if 
+               end do
+            end if
+         end do
+         ! Shift counter for generating new ids
+         this%idcount=this%idcount-1
+      end subroutine remove_newid
 
       !> Subroutine that adds a new split event (id1<id2 required)
       subroutine add_split(id1,id2)
@@ -578,6 +746,73 @@ contains
          this%nsplit=this%nsplit+1
          this%split(:,this%nsplit)=[id1,id2]
       end subroutine add_split
+
+      !> Subroutine that adds nth split to master list and identifies all connected splits
+      subroutine add_split_master(oldid,newid,n) 
+         implicit none
+         integer, intent(in) :: oldid,newid,n
+         integer :: size_now,size_new
+         type(split), dimension(:), allocatable :: tmp
+         ! Deal with memory - number of split events
+         size_now=size(this%split_master)
+         if (this%nsplit_master.eq.size_now) then 
+            size_new=int(real(size_now,WP)*coeff_up)
+            allocate(tmp(size_new))
+            tmp(1:this%nsplit_master) = this%split_master
+            tmp(this%nsplit_master+1:)%nnewid = 0
+            tmp(this%nsplit_master+1:)%oldid = 0
+            call move_alloc(tmp,this%split_master)
+         end if 
+         ! Add nth split event
+         this%nsplit_master = this%nsplit_master+1
+         allocate(this%split_master(this%nsplit_master)%newids(2)) ! Memory handled in collapse_splits
+         this%split_master(this%nsplit_master)%oldid=oldid
+         this%split_master(this%nsplit_master)%nnewid=1
+         this%split_master(this%nsplit_master)%newids(1)=newid
+         this%added2master(n)=.true.
+         ! Check other split events to find any that are connected and add to master list
+         call collapse_splits(oldid)
+      end subroutine add_split_master
+
+      !> Subroutine that finds other split events with same oldid 
+      !> and adds them to split_master list
+      recursive subroutine collapse_splits(oldid)
+         implicit none 
+         integer, intent(in) :: oldid 
+         integer :: n,nn
+         integer, dimension(2) :: otherid = [2,1]
+         ! Loop over splits and look for any that are part of this split
+         do n=1,this%nsplit
+            ! Already been processed
+            if (this%added2master(n)) cycle
+            ! Check if this split contains matching oldid
+            if (this%split(1,n).eq.oldid) then
+               this%added2master(n)=.true.
+               ! Append newid of this split to split master
+               call append_split_master(this%nsplit_master,this%split(2,n))
+            end if
+         end do 
+      end subroutine 
+
+      !> Subroutine that appends a newid to nth entry on split master list and deals with memory
+      subroutine append_split_master(n,newid)
+         implicit none
+         integer, intent(in) :: n,newid
+         integer :: size_now,size_new
+         integer, dimension(:), allocatable :: tmp
+         ! Deal with memory - number of newids in split event
+         size_now=size(this%split_master(n)%newids)
+         if (this%split_master(n)%nnewid.eq.size_now) then 
+            size_new=int(real(size_now,WP)*coeff_up)
+            allocate(tmp(size_new))
+            tmp(1:size_now) = this%split_master(n)%newids
+            tmp(size_now+1:) = 0
+            call move_alloc(tmp,this%split_master(n)%newids)
+         end if 
+         ! Add newid to split master list
+         this%split_master(n)%nnewid=this%split_master(n)%nnewid+1
+         this%split_master(n)%newids(this%split_master(n)%nnewid)=newid
+      end subroutine append_split_master
       
    end subroutine advance
 
