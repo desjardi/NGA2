@@ -906,6 +906,7 @@ contains
          end do; end do; end do
          do n=1,this%nstruct
             tmp(n)%id=0 !< This is different from CCLABEL, our id is initialized to zero here
+            tmp(n)%per=0
             tmp(n)%n_=counter(n)
             allocate(tmp(n)%map(1:3,1:tmp(n)%n_))
          end do

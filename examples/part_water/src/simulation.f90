@@ -272,7 +272,7 @@ contains
          ! Transfer to lpt for surface tension modeling
          lp%sigma=fs%sigma
          lp%contact_angle=fs%contact_angle
-         lp%VFst=0.2_WP
+         lp%VFst=0.05_WP
          ! Assign acceleration of gravity
          call param_read('Gravity',fs%gravity)
          ! Outlet on the top
