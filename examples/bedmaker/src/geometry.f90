@@ -45,8 +45,7 @@ contains
          end do
          
          ! General serial grid object
-         !grid=sgrid(coord=cartesian,no=3,x=x,y=y,z=z,xper=.true.,yper=.false.,zper=.false.,name='part_water')
-         grid=sgrid(coord=cartesian,no=3,x=x,y=y,z=z,xper=.true.,yper=.false.,zper=.true.,name='part_water')
+         grid=sgrid(coord=cartesian,no=2,x=x,y=y,z=z,xper=.false.,yper=.false.,zper=.false.,name='bed')
          
       end block create_grid
       
@@ -67,17 +66,13 @@ contains
       
       ! Create masks for this config
       create_walls: block
-         integer :: i,j,k
          cfg%VF=1.0_WP
-         do k=cfg%kmino_,cfg%kmaxo_
-            do j=cfg%jmino_,cfg%jmaxo_
-               do i=cfg%imino_,cfg%imaxo_
-                  if (j.lt.cfg%jmin) cfg%VF(i,j,k)=0.0_WP
-                  !if (k.lt.cfg%kmin) cfg%VF(i,j,k)=0.0_WP
-                  !if (k.gt.cfg%kmax) cfg%VF(i,j,k)=0.0_WP
-               end do
-            end do
-         end do
+         if (cfg%iproc.eq.1)       cfg%VF(cfg%imino:cfg%imin-1,:,:)=0.0_WP
+         if (cfg%iproc.eq.cfg%npx) cfg%VF(cfg%imax+1:cfg%imaxo,:,:)=0.0_WP
+         if (cfg%jproc.eq.1)       cfg%VF(:,cfg%jmino:cfg%jmin-1,:)=0.0_WP
+         if (cfg%jproc.eq.cfg%npy) cfg%VF(:,cfg%jmax+1:cfg%jmaxo,:)=0.0_WP
+         if (cfg%kproc.eq.1)       cfg%VF(:,:,cfg%kmino:cfg%kmin-1)=0.0_WP
+         if (cfg%kproc.eq.cfg%npz) cfg%VF(:,:,cfg%kmax+1:cfg%kmaxo)=0.0_WP
       end block create_walls
       
       

@@ -11,7 +11,7 @@ module lpt_class
 
 
   ! Expose type/constructor/methods
-  public :: lpt
+  public :: lpt,part,MPI_PART,MPI_PART_SIZE,prepare_mpi_part
 
 
   !> Memory adaptation parameter
@@ -656,7 +656,7 @@ contains
     real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout), optional :: srcE   !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
     integer :: i,j,k,ierr
     real(WP) :: mydt,dt_done,deng,Ip
-    real(WP), dimension(3) :: acc,torque,dmom
+    real(WP), dimension(3) :: acc,fdbk,torque,dmom
     real(WP), dimension(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_) :: sx,sy,sz
     real(WP), dimension(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_) :: dVFdx,dVFdy,dVFdz
     type(part) :: myp,pold
@@ -720,19 +720,19 @@ contains
           ! Particle moment of inertia per unit mass
           Ip = 0.1_WP*myp%d**2
           ! Advance with Euler prediction
-          call this%get_rhs(U=U,V=V,W=W,rho=rho,visc=visc,stress_x=sx,stress_y=sy,stress_z=sz,gradVF_x=dVFdx,gradVF_y=dVFdy,gradVF_z=dVFdz,p=myp,acc=acc,torque=torque,opt_dt=myp%dt)
+          call this%get_rhs(U=U,V=V,W=W,rho=rho,visc=visc,stress_x=sx,stress_y=sy,stress_z=sz,gradVF_x=dVFdx,gradVF_y=dVFdy,gradVF_z=dVFdz,p=myp,acc=acc,fdbk=fdbk,torque=torque,opt_dt=myp%dt)
           myp%pos=pold%pos+0.5_WP*mydt*myp%vel
           myp%vel=pold%vel+0.5_WP*mydt*(acc+this%gravity+myp%Acol)
           myp%angVel=pold%angVel+0.5_WP*mydt*(torque+myp%Tcol)/Ip
           ! Correct with midpoint rule
-          call this%get_rhs(U=U,V=V,W=W,rho=rho,visc=visc,stress_x=sx,stress_y=sy,stress_z=sz,gradVF_x=dVFdx,gradVF_y=dVFdy,gradVF_z=dVFdz,p=myp,acc=acc,torque=torque,opt_dt=myp%dt)
+          call this%get_rhs(U=U,V=V,W=W,rho=rho,visc=visc,stress_x=sx,stress_y=sy,stress_z=sz,gradVF_x=dVFdx,gradVF_y=dVFdy,gradVF_z=dVFdz,p=myp,acc=acc,fdbk=fdbk,torque=torque,opt_dt=myp%dt)
           myp%pos=pold%pos+mydt*myp%vel
           myp%vel=pold%vel+mydt*(acc+this%gravity+myp%Acol)
           myp%angVel=pold%angVel+mydt*(torque+myp%Tcol)/Ip
           ! Relocalize
           myp%ind=this%cfg%get_ijk_global(myp%pos,myp%ind)
           ! Send source term back to the mesh
-          dmom=mydt*acc*this%rho*Pi/6.0_WP*myp%d**3
+          dmom=mydt*fdbk*this%rho*Pi/6.0_WP*myp%d**3
           deng=sum(dmom*myp%vel)
           if (this%cfg%nx.gt.1.and.present(srcU)) call this%cfg%set_scalar(Sp=-dmom(1),pos=myp%pos,i0=myp%ind(1),j0=myp%ind(2),k0=myp%ind(3),S=srcU,bc='n')
           if (this%cfg%ny.gt.1.and.present(srcV)) call this%cfg%set_scalar(Sp=-dmom(2),pos=myp%pos,i0=myp%ind(1),j0=myp%ind(2),k0=myp%ind(3),S=srcV,bc='n')
@@ -798,7 +798,7 @@ contains
 
 
   !> Calculate RHS of the particle ODEs
-  subroutine get_rhs(this,U,V,W,rho,visc,stress_x,stress_y,stress_z,gradVF_x,gradVF_y,gradVF_z,T,p,acc,torque,opt_dt)
+  subroutine get_rhs(this,U,V,W,rho,visc,stress_x,stress_y,stress_z,gradVF_x,gradVF_y,gradVF_z,T,p,acc,fdbk,torque,opt_dt)
     implicit none
     class(lpt), intent(inout) :: this
     real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: U         !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
@@ -814,7 +814,7 @@ contains
     real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: gradVF_z  !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
     real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout), optional :: T  !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
     type(part), intent(in) :: p
-    real(WP), dimension(3), intent(out) :: acc,torque
+    real(WP), dimension(3), intent(out) :: acc,torque,fdbk
     real(WP), intent(out) :: opt_dt
     real(WP) :: fvisc,frho,pVF,fVF,fT
     real(WP), dimension(3) :: fvel,fstress,fvort,fgradVF
@@ -865,14 +865,16 @@ contains
       ! Particle response time
       tau=this%rho*p%d**2/(18.0_WP*fvisc*corr)
       ! Return acceleration and optimal timestep size
-      acc=(fvel-p%vel)/tau+fstress/this%rho
+      acc =(fvel-p%vel)/tau+fstress/this%rho
+      fdbk=(fvel-p%vel)/tau
       opt_dt=tau/real(this%nstep,WP)
     end block compute_drag
 
     ! Compute acceleration due to surface tension
     compute_ST: block
       if (pVF.gt.this%VFst) then
-         acc=acc+this%sigma*cos(this%contact_angle)/(this%rho*p%d)*fgradVF
+         acc =acc +6.0_WP*this%sigma*cos(this%contact_angle)/(this%rho*p%d)*fgradVF
+         fdbk=fdbk+6.0_WP*this%sigma*cos(this%contact_angle)/(this%rho*p%d)*fgradVF
       end if
     end block compute_ST
 
@@ -1125,7 +1127,7 @@ contains
              ! Create space for new particle
              call this%resize(count)
              ! Generate a diameter
-             this%p(count)%d=get_diameter()
+             this%p(count)%d=this%inj_dmean!get_diameter()
              ! Set various parameters for the particle
              this%p(count)%id    =maxid+int(np_tmp,8)
              this%p(count)%dt    =0.0_WP
@@ -1226,12 +1228,14 @@ contains
          pos(2) = random_uniform(lo=this%inj_pos(2)-0.5_WP*this%inj_d,hi=this%inj_pos(2)+0.5_WP*this%inj_d)
          pos(3) = this%cfg%zm(this%cfg%kmin_)
       else
-         rand=random_uniform(lo=0.0_WP,hi=1.0_WP)
-         r=0.5_WP*this%inj_d*sqrt(rand) !< sqrt(rand) avoids accumulation near the center
-         call random_number(rand)
-         theta=random_uniform(lo=0.0_WP,hi=twoPi)
-         pos(2) = this%inj_pos(2)+r*sin(theta)
-         pos(3) = this%inj_pos(3)+r*cos(theta)
+         !rand=random_uniform(lo=0.0_WP,hi=1.0_WP)
+         !r=0.5_WP*this%inj_d*sqrt(rand) !< sqrt(rand) avoids accumulation near the center
+         !call random_number(rand)
+         !theta=random_uniform(lo=0.0_WP,hi=twoPi)
+         !pos(2) = this%inj_pos(2)+r*sin(theta)
+         !pos(3) = this%inj_pos(3)+r*cos(theta)
+         pos(2) = random_uniform(lo=this%inj_pos(2)-0.5_WP*this%inj_d,hi=this%inj_pos(2)+0.5_WP*this%inj_d)
+         pos(3) = random_uniform(lo=this%cfg%z(this%cfg%kmin),hi=this%cfg%z(this%cfg%kmax+1))
       end if
     end function get_position
 
