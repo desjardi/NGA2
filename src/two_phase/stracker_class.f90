@@ -4,6 +4,7 @@ module stracker_class
    use precision, only: WP
    use string,    only: str_medium
    use vfs_class, only: vfs
+   use avl_trees, only: avl_tree_t,avl_insert,avl_retrieve,int_cast,avl_delete_all
    implicit none
    private
    
@@ -65,6 +66,8 @@ module stracker_class
       ! Splitting events
       integer :: nsplit
       integer, dimension(:,:), allocatable :: split
+      logical, dimension(:), allocatable :: struct_split
+      type(avl_tree_t) :: split_tree
       logical, dimension(  :), allocatable :: added2master
       ! Splitting events - collapsed split events into master list
       integer :: nsplit_master
@@ -121,7 +124,7 @@ contains
       integer, intent(in) :: phase
       procedure(make_label_ftype) :: make_label
       character(len=*), optional :: name
-      integer :: n,nn,i,j,k
+      integer :: n,nn
       ! Set the name for the object
       if (present(name)) this%name=trim(adjustl(name))
       ! Set the phase
@@ -307,7 +310,7 @@ contains
 
       ! Update id_rmp with newid's
       update_id_rmp: block
-         integer :: i,j,k,n,m,nn
+         integer :: n,nn,i,j,k
          ! Traverse merge master list
          do n=1,this%nmerge_master
             ! Loop over full domain and update id based on that merge event
@@ -459,8 +462,7 @@ contains
       
       ! Execute all merge
       execute_merge2: block
-         integer :: i,j,n,nn,m
-         integer :: oldid1,oldid2,newid
+         integer :: n,nn,m
          ! Loop over structures and update id based on merge events
          str_loop : do nn=1,this%nstruct
             ! Traverse merge list
@@ -478,43 +480,40 @@ contains
       end block execute_merge2
       
       ! Now deal with splits - case where two structs share the same id
-      ! Crude n^2 implementation for now, but an tree sort would be perfect
       execute_splits: block
-         integer :: n,m,my_id
-         logical :: is_split
-         ! Loop through each structure
+         integer :: n,n_prev,my_id
+         logical :: found
+         class(*), allocatable :: retval
+         ! Reset structure split logical
+         if (allocated(this%struct_split)) deallocate(this%struct_split)
+         allocate(this%struct_split(this%nstruct)); this%struct_split=.false.
+         ! Add id's into avl binary tree and identify splits
          do n=1,this%nstruct
-            ! Remember the remapped id for that structure
+            ! Remember the remapped id for this structure
             my_id=this%struct(n)%id
             ! Skip zero ids
             if (my_id.eq.0) cycle
-            ! Reset split flag
-            is_split=.false.
-            ! Check each other structure to see if the same id is used
-            do m=1,this%nstruct
-               ! Skip self-check
-               if (n.eq.m) cycle
-               ! Check ids
-               if (my_id.eq.this%struct(m)%id) then
-                  ! Split happened
-                  is_split=.true.
-                  ! Assign new id 
-                  this%struct(m)%id=this%generate_new_id()
-                  ! Store the splitting event
-                  call add_split(my_id,this%struct(m)%id)
-               end if
-            end do
-            ! Finally, deal with first structure
-            if (is_split) then
-               ! Assign new id 
+            ! Check if id already exists in tree
+            call avl_retrieve(lt,my_id,this%split_tree,found,retval)
+            if (found) then ! split occured
+               ! Assign new id to this structure
                this%struct(n)%id=this%generate_new_id()
-               ! Store the splitting event
                call add_split(my_id,this%struct(n)%id)
+               ! Check if previous structure has a new id -> generate if needed
+               n_prev = int_cast(retval)
+               if (.not.this%struct_split(n_prev)) then
+                  this%struct_split(n_prev)=.true.
+                  this%struct(n_prev)%id=this%generate_new_id()
+                  call add_split(my_id,this%struct(n_prev)%id)
+               end if
+            else ! add id to tree: key=id, data=n (struct number)
+               call avl_insert(lt,my_id,n,this%split_tree)
             end if
          end do
+         call avl_delete_all(lt,this%split_tree)
       end block execute_splits
 
-      ! Collapse merges into master list
+      ! Collapse splits into master list
       split_master: block 
          integer :: n
          if (allocated(this%added2master)) deallocate(this%added2master)
@@ -541,7 +540,7 @@ contains
       
       ! Update id field
       update_id_field: block
-         integer :: n,nn,i,j,k
+         integer :: n,nn
          ! Loop over structures
          do n=1,this%nstruct
             ! Loop over local cells in the structure
@@ -732,7 +731,7 @@ contains
       subroutine add_split(id1,id2)
          implicit none
          integer, intent(in) :: id1,id2
-         integer :: n,size_now,size_new
+         integer :: size_now,size_new
          integer, dimension(:,:), allocatable :: tmp
          ! Create new split event
          size_now=size(this%split,dim=2)
@@ -746,6 +745,25 @@ contains
          this%nsplit=this%nsplit+1
          this%split(:,this%nsplit)=[id1,id2]
       end subroutine add_split
+
+      function lt (u, v) result (u_lt_v)
+         class(*), intent(in) :: u, v
+         logical :: u_lt_v
+   
+         select type (u)
+         type is (integer)
+            select type (v)
+            type is (integer)
+               u_lt_v = (u < v)
+            class default
+               ! This case is not handled.
+               error stop
+            end select
+         class default
+            ! This case is not handled.
+            error stop
+         end select
+      end function lt
 
       !> Subroutine that adds nth split to master list and identifies all connected splits
       subroutine add_split_master(oldid,newid,n) 
@@ -779,8 +797,7 @@ contains
       recursive subroutine collapse_splits(oldid)
          implicit none 
          integer, intent(in) :: oldid 
-         integer :: n,nn
-         integer, dimension(2) :: otherid = [2,1]
+         integer :: n
          ! Loop over splits and look for any that are part of this split
          do n=1,this%nsplit
             ! Already been processed

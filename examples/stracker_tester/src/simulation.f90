@@ -439,18 +439,18 @@ contains
          end block print_merge_master
 
          print_split_master: block
-         integer :: n
-         if (strack%nsplit_master.gt.0) print*,'Master split list'
-         do n=1,strack%nsplit_master
-            print*,' oldid=',strack%split_master(n)%oldid
-            print*,'nnewid=',strack%split_master(n)%nnewid
-            print*,' newid=',strack%split_master(n)%newids(1:strack%split_master(n)%nnewid)
-            
-         end do
-      end block print_split_master
+            integer :: n
+            if (strack%nsplit_master.gt.0) print*,'Master split list'
+            do n=1,strack%nsplit_master
+               print*,' oldid=',strack%split_master(n)%oldid
+               print*,'nnewid=',strack%split_master(n)%nnewid
+               print*,' newid=',strack%split_master(n)%newids(1:strack%split_master(n)%nnewid)
+               
+            end do
+         end block print_split_master
          
          ! Prepare new staggered viscosity (at n+1)
-		   call fs%get_viscosity(vf=vf,strat=arithmetic_visc)
+         call fs%get_viscosity(vf=vf,strat=arithmetic_visc)
 
          ! Perform sub-iterations
          do while (time%it.le.time%itmax)
