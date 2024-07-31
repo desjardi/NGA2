@@ -510,7 +510,7 @@ contains
                call avl_insert(lt,my_id,n,this%split_tree)
             end if
          end do
-         call avl_delete_all(lt,this%split_tree)
+         call avl_delete_all(this%split_tree)
       end block execute_splits
 
       ! Collapse splits into master list
