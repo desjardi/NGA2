@@ -86,6 +86,8 @@ module stracker_class
       ! Array of structures
       integer :: nstruct_old
       type(struct_type), dimension(:), allocatable :: struct_old
+      ! Event counter !!!! Need to deal with restarts !!!!
+      integer :: eventcount
    contains
       procedure :: initialize                !< Initialization of stracker based on a provided VFS object
       procedure, private :: build            !< Private cclabel step without persistent id
@@ -151,6 +153,8 @@ contains
          end do
       end do
       call this%vf%cfg%sync(this%id)
+      ! Initialize event counter !!!! Should deal with restarts !!!!
+      this%eventcount = 0
    end subroutine initialize
    
 
@@ -555,6 +559,8 @@ contains
          call this%vf%cfg%sync(this%id)
          call this%vf%cfg%sync(this%id_old)
       end block update_id_field
+
+      print*,'nmerge = ',this%nmerge_master
       
    contains
       

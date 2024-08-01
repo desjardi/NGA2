@@ -53,6 +53,16 @@ module simulation
    !> Provide a pardata objects for restarts
    type(pardata) :: df
    logical :: restarted
+
+   !> Type for structure stats
+   type :: struct_stats
+      real(WP) :: vol
+      real(WP) :: x_cg,y_cg,z_cg
+      real(WP) :: u_avg,v_avg,w_avg
+      real(WP), dimension(3,3) :: Imom
+      real(WP), dimension(3) :: lengths
+      real(WP), dimension(3,3) :: axes
+   end type struct_stats
    
    !> For monitoring
    real(WP) :: EPS
@@ -118,6 +128,249 @@ contains
          close(iunit)
       end if
    end subroutine analyse_drops
+
+
+   !> Perform merge/split analysis
+   subroutine analyze_merge_split
+      use mpi_f08,  only: MPI_ALLREDUCE,MPI_SUM
+      use parallel, only: MPI_REAL_WP
+      implicit none
+      integer :: iunit
+      logical :: file_exists
+      type(struct_stats) :: stats
+
+      INQUIRE(FILE="merge_split.csv", EXIST=file_exists)
+      if (file_exists) then
+         open(newunit=iunit,file="merge_split.csv",form="formatted",status="old",position="append",action="write")
+      else
+         open(newunit=iunit,file="merge_split.csv",form="formatted",status="replace",action="write")
+      end if
+
+       analyze_merges: block
+         integer :: n,nn
+         
+         ! Traverse merge events
+         do n=1,strack%nmerge_master
+
+            print*,'computing stats'
+            call compute_struct_stats(strack%merge_master(n)%newid,stats)
+
+            print*,'writing file'
+            ! Write merge data to file
+            print *,'Writing merge data'
+            strack%eventcount = strack%eventcount+1
+            write(iunit,"(I0)") strack%eventcount
+            write(iunit,"(A)")  ', Merge, oldids='
+            do nn=1,strack%merge_master(n)%noldid
+               write(iunit,"(I0)") strack%merge_master(n)%oldids(nn)
+               write(iunit,"(A)") ';'
+            end do
+            write(iunit,"(A)")  ', newid='
+            write(iunit,"(I0)") strack%merge_master(n)%newid
+            write(iunit,"(A)")  ', newVol='
+            write(iunit,"(ES22.16)") stats%vol
+            print *,'done'
+         end do
+      end block analyze_merges
+
+      analyze_splits: block 
+      integer :: n,nn
+         
+         ! Traverse split events
+         do n=1,strack%nsplit_master
+            print*,'computing stats'
+            ! Write stats for each new structure after split
+            do nn=1,strack%split_master(n)%nnewid
+               call compute_struct_stats(strack%split_master(n)%newids(nn),stats)
+
+               print*,'writing file'
+               ! Write merge data to file
+               print *,'Writing split data'
+               strack%eventcount = strack%eventcount+1
+               write(iunit,"(I0)") strack%eventcount
+               write(iunit,"(A)")  ', Split, oldid='
+               write(iunit,"(I0)") strack%split_master(n)%oldid
+               write(iunit,"(A)")  ', newid='
+               write(iunit,"(I0)") strack%split_master(n)%newids(nn)
+               write(iunit,"(A)")  ', newVol='
+               write(iunit,"(ES22.16)") stats%vol
+               print *,'done'
+            end do
+         end do
+         
+      end block analyze_splits
+
+      close(iunit)
+
+   contains 
+      subroutine compute_struct_stats(id,stats)
+         implicit none 
+         integer, intent(in) :: id
+         type(struct_stats), intent(inout) :: stats
+
+         integer :: n,m
+         integer :: lwork,info,ierr
+         integer :: ii,jj,kk
+         integer  :: per_x,per_y,per_z
+         real(WP) :: vol_struct_,vol_struct
+         real(WP) :: x_vol_,x_vol,y_vol_,y_vol,z_vol_,z_vol
+         real(WP) :: u_vol_,u_vol,v_vol_,v_vol,w_vol_,w_vol
+         real(WP), dimension(3,3) :: Imom_,Imom
+         real(WP) :: xtmp,ytmp,ztmp
+         real(WP), dimension(3) :: lengths
+         real(WP), dimension(3,3) :: axes
+         
+         ! Eigenvalues/eigenvectors
+         real(WP), dimension(3,3) :: A
+         real(WP), dimension(3) :: d
+         integer , parameter :: order = 3
+         real(WP), dimension(:), allocatable :: work
+         real(WP), dimension(1)   :: lwork_query
+
+         ! Query optimal work array size
+         print *,'here 1'
+         call dsyev('V','U',order,A,order,d,lwork_query,-1,info); lwork=int(lwork_query(1)); allocate(work(lwork))
+
+         ! Find new structure with matching newid
+         do n=1,strack%nstruct
+
+            ! Only deal with structure matching newid
+            if (strack%struct(n)%id.eq.id) then
+
+               print *,'here 2'
+
+               ! Periodicity
+               per_x = strack%struct(n)%per(1)
+               per_y = strack%struct(n)%per(2)
+               per_z = strack%struct(n)%per(3)
+      
+               ! Initialize values
+               vol_struct_    = 0.0_WP ! Structure volume
+               x_vol_ = 0.0_WP; y_vol_ = 0.0_WP; z_vol_ = 0.0_WP ! Center of gravity
+               u_vol_ = 0.0_WP; v_vol_ = 0.0_WP; w_vol_ = 0.0_WP ! Average velocity inside struct
+
+               print *,'here 3'
+                  
+               ! Loop over cells in new structure and accumulate statistics
+               do m=1,strack%struct(n)%n_
+
+                  ! Indices of cells in structure
+                  ii=strack%struct(n)%map(1,m) 
+                  jj=strack%struct(n)%map(2,m) 
+                  kk=strack%struct(n)%map(3,m)
+
+                  ! Location of struct node
+                  xtmp = strack%vf%cfg%xm(ii)-per_x*strack%vf%cfg%xL
+                  ytmp = strack%vf%cfg%ym(jj)-per_y*strack%vf%cfg%yL
+                  ztmp = strack%vf%cfg%zm(kk)-per_z*strack%vf%cfg%zL
+
+                  ! Volume
+                  vol_struct_ = vol_struct_ + strack%vf%cfg%vol(ii,jj,kk)*strack%vf%VF(ii,jj,kk)
+                  
+                  ! Center of gravity
+                  x_vol_ = x_vol_ + xtmp*strack%vf%cfg%vol(ii,jj,kk)*strack%vf%VF(ii,jj,kk)
+                  y_vol_ = y_vol_ + ytmp*strack%vf%cfg%vol(ii,jj,kk)*strack%vf%VF(ii,jj,kk)
+                  z_vol_ = z_vol_ + ztmp*strack%vf%cfg%vol(ii,jj,kk)*strack%vf%VF(ii,jj,kk)
+                  
+                  ! Average gas velocity inside struct
+                  u_vol_ = u_vol_ + fs%U(ii,jj,kk)*strack%vf%cfg%vol(ii,jj,kk)*strack%vf%VF(ii,jj,kk)
+                  v_vol_ = v_vol_ + fs%V(ii,jj,kk)*strack%vf%cfg%vol(ii,jj,kk)*strack%vf%VF(ii,jj,kk)
+                  w_vol_ = w_vol_ + fs%W(ii,jj,kk)*strack%vf%cfg%vol(ii,jj,kk)*strack%vf%VF(ii,jj,kk)
+               end do
+            end if
+         end do
+         print *,'here 6'
+
+         ! Sum parallel stats
+         call MPI_ALLREDUCE(vol_struct_,vol_struct,1,MPI_REAL_WP,MPI_SUM,strack%vf%cfg%comm,ierr)
+         call MPI_ALLREDUCE(x_vol_,x_vol,1,MPI_REAL_WP,MPI_SUM,strack%vf%cfg%comm,ierr)
+         call MPI_ALLREDUCE(y_vol_,y_vol,1,MPI_REAL_WP,MPI_SUM,strack%vf%cfg%comm,ierr)
+         call MPI_ALLREDUCE(z_vol_,z_vol,1,MPI_REAL_WP,MPI_SUM,strack%vf%cfg%comm,ierr)
+         call MPI_ALLREDUCE(u_vol_,u_vol,1,MPI_REAL_WP,MPI_SUM,strack%vf%cfg%comm,ierr)
+         call MPI_ALLREDUCE(v_vol_,v_vol,1,MPI_REAL_WP,MPI_SUM,strack%vf%cfg%comm,ierr)
+         call MPI_ALLREDUCE(w_vol_,w_vol,1,MPI_REAL_WP,MPI_SUM,strack%vf%cfg%comm,ierr)
+         print *,'here 7'
+         
+         ! Moments of inertia
+         do n=1,strack%nstruct
+            ! Only deal with structure matching newid
+            if (strack%struct(n)%id.eq.strack%merge_master(n)%newid) then
+
+               ! Periodicity
+               per_x = strack%struct(n)%per(1)
+               per_y = strack%struct(n)%per(2)
+               per_z = strack%struct(n)%per(3)
+
+               ! Initialize values
+               Imom_(:,:) = 0.0_WP
+                  
+               ! Loop over cells in new structure and accumulate statistics
+               do m=1,strack%struct(n)%n_
+
+                  ! Indices of cells in structure
+                  ii=strack%struct(n)%map(1,m) 
+                  jj=strack%struct(n)%map(2,m) 
+                  kk=strack%struct(n)%map(3,m)
+
+                  ! Location of struct node
+                  xtmp = strack%vf%cfg%xm(ii)-per_x*strack%vf%cfg%xL-x_vol/vol_struct
+                  ytmp = strack%vf%cfg%ym(jj)-per_y*strack%vf%cfg%yL-y_vol/vol_struct
+                  ztmp = strack%vf%cfg%zm(kk)-per_z*strack%vf%cfg%zL-z_vol/vol_struct
+
+                  ! Moment of Inertia
+                  Imom_(1,1) = Imom_(1,1) + (ytmp**2 + ztmp**2)*strack%vf%cfg%vol(ii,jj,kk)*strack%vf%VF(ii,jj,kk)
+                  Imom_(2,2) = Imom_(2,2) + (xtmp**2 + ztmp**2)*strack%vf%cfg%vol(ii,jj,kk)*strack%vf%VF(ii,jj,kk)
+                  Imom_(3,3) = Imom_(3,3) + (xtmp**2 + ytmp**2)*strack%vf%cfg%vol(ii,jj,kk)*strack%vf%VF(ii,jj,kk)
+                  
+                  Imom_(1,2) = Imom_(1,2) - xtmp*ytmp*strack%vf%cfg%vol(ii,jj,kk)*strack%vf%VF(ii,jj,kk)
+                  Imom_(1,3) = Imom_(1,3) - xtmp*ztmp*strack%vf%cfg%vol(ii,jj,kk)*strack%vf%VF(ii,jj,kk)
+                  Imom_(2,3) = Imom_(2,3) - ytmp*ztmp*strack%vf%cfg%vol(ii,jj,kk)*strack%vf%VF(ii,jj,kk)
+               end do 
+            end if
+         end do
+         print *,'here 9'
+         ! Sum parallel stats on Imom
+         do n=1,3
+            call MPI_ALLREDUCE(Imom_(:,n),Imom(:,n),3,MPI_REAL_WP,MPI_SUM,strack%vf%cfg%comm,ierr)
+         end do
+         print *,'here 10'
+         print *,'Imom = ',Imom
+         print *, 'defining A'
+
+         ! Characteristic lengths and principle axes
+         ! Eigenvalues/eigenvectors of moments of inertia tensor
+         A = Imom
+         print *,'Imom = ',Imom
+         n = 3
+         call dsyev('V','U',n,Imom,n,d,work,lwork,info)
+         print *,'here 11'
+         ! Get rid of very small negative values (due to machine accuracy)
+         d = max(0.0_WP,d)
+         ! Store characteristic lengths
+         lengths(1) = sqrt(5.0_WP/2.0_WP*abs(d(2)+d(3)-d(1))/vol_struct)
+         lengths(2) = sqrt(5.0_WP/2.0_WP*abs(d(3)+d(1)-d(2))/vol_struct)
+         lengths(3) = sqrt(5.0_WP/2.0_WP*abs(d(1)+d(2)-d(3))/vol_struct)
+         ! Zero out length in 3rd dimension if 2D
+         if (strack%vf%cfg%nx.eq.1.or.strack%vf%cfg%ny.eq.1.or.strack%vf%cfg%nz.eq.1) lengths(3)=0.0_WP
+         ! Store principal axes
+         axes(:,:) = A
+         print *,'here 12'
+
+         ! Finish computing qantities
+         stats%vol     = vol_struct
+         stats%x_cg    = x_vol/vol_struct
+         stats%y_cg    = y_vol/vol_struct
+         stats%z_cg    = z_vol/vol_struct
+         stats%u_avg   = u_vol/vol_struct
+         stats%v_avg   = v_vol/vol_struct
+         stats%w_avg   = w_vol/vol_struct
+         stats%Imom    = Imom 
+         stats%lengths = lengths
+         stats%axes    = axes
+
+      end subroutine compute_struct_stats
+
+   end subroutine analyze_merge_split
    
    
    !> Initialization of problem solver
@@ -426,6 +679,7 @@ contains
 
          ! Advance stracker
          call strack%advance(make_label=label_liquid)
+         call analyze_merge_split
 
          ! Output master stracker lists
          print_merge_master: block
