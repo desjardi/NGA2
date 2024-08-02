@@ -559,8 +559,6 @@ contains
          call this%vf%cfg%sync(this%id)
          call this%vf%cfg%sync(this%id_old)
       end block update_id_field
-
-      print*,'nmerge = ',this%nmerge_master
       
    contains
       

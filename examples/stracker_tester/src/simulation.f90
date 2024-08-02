@@ -26,7 +26,7 @@ module simulation
  
    !> Ensight postprocessing
    type(ensight)  :: ens_out
-   type(event)    :: ens_evt,inj_evt,drop_evt
+   type(event)    :: ens_evt,drop_evt
    type(surfmesh) :: smesh
   
    !> Simulation monitor file
@@ -40,19 +40,13 @@ module simulation
    real(WP), dimension(:,:,:,:,:), allocatable :: gradU
    
    !> Fluid, forcing, and particle parameters
-   real(WP) :: visc,rho,meanU,meanV,meanW
-   real(WP) :: Urms0,L0,TKE0,EPS0,ReT_max,ReL_max,eta_min
-   real(WP) :: ReL_tgt,ReT_tgt,eta_tgt,taueta_tgt,We_tgt,inject_time
-   real(WP) :: TKE,URMS
-   real(WP) :: tauinf,G,Gdtau,Gdtaui,dx
+   real(WP) :: rho,meanU,meanV,meanW
+   real(WP) :: Urms0
    real(WP), dimension(3) :: center
    real(WP) :: radius
-   logical  :: droplet_injected
-   logical  :: keep_forcing
    
    !> Provide a pardata objects for restarts
    type(pardata) :: df
-   logical :: restarted
 
    !> Type for structure stats
    type :: struct_stats
@@ -63,13 +57,6 @@ module simulation
       real(WP), dimension(3) :: lengths
       real(WP), dimension(3,3) :: axes
    end type struct_stats
-   
-   !> For monitoring
-   real(WP) :: EPS
-   real(WP) :: Re_L,Re_lambda
-   real(WP) :: eta,ell
-   real(WP) :: dx_eta,ell_Lx,Re_ratio,eps_ratio,tke_ratio,nondtime
-   
 
 contains
    
@@ -152,12 +139,9 @@ contains
          ! Traverse merge events
          do n=1,strack%nmerge_master
 
-            print*,'computing stats'
             call compute_struct_stats(strack%merge_master(n)%newid,stats)
 
-            print*,'writing file'
             ! Write merge data to file
-            print *,'Writing merge data'
             strack%eventcount = strack%eventcount+1
             write(iunit,"(I0)") strack%eventcount
             write(iunit,"(A)")  ', Merge, oldids='
@@ -169,7 +153,6 @@ contains
             write(iunit,"(I0)") strack%merge_master(n)%newid
             write(iunit,"(A)")  ', newVol='
             write(iunit,"(ES22.16)") stats%vol
-            print *,'done'
          end do
       end block analyze_merges
 
@@ -178,14 +161,11 @@ contains
          
          ! Traverse split events
          do n=1,strack%nsplit_master
-            print*,'computing stats'
             ! Write stats for each new structure after split
             do nn=1,strack%split_master(n)%nnewid
                call compute_struct_stats(strack%split_master(n)%newids(nn),stats)
 
-               print*,'writing file'
                ! Write merge data to file
-               print *,'Writing split data'
                strack%eventcount = strack%eventcount+1
                write(iunit,"(I0)") strack%eventcount
                write(iunit,"(A)")  ', Split, oldid='
@@ -194,7 +174,6 @@ contains
                write(iunit,"(I0)") strack%split_master(n)%newids(nn)
                write(iunit,"(A)")  ', newVol='
                write(iunit,"(ES22.16)") stats%vol
-               print *,'done'
             end do
          end do
          
@@ -227,8 +206,8 @@ contains
          real(WP), dimension(:), allocatable :: work
          real(WP), dimension(1)   :: lwork_query
 
+         
          ! Query optimal work array size
-         print *,'here 1'
          call dsyev('V','U',order,A,order,d,lwork_query,-1,info); lwork=int(lwork_query(1)); allocate(work(lwork))
 
          ! Find new structure with matching newid
@@ -236,8 +215,6 @@ contains
 
             ! Only deal with structure matching newid
             if (strack%struct(n)%id.eq.id) then
-
-               print *,'here 2'
 
                ! Periodicity
                per_x = strack%struct(n)%per(1)
@@ -248,8 +225,6 @@ contains
                vol_struct_    = 0.0_WP ! Structure volume
                x_vol_ = 0.0_WP; y_vol_ = 0.0_WP; z_vol_ = 0.0_WP ! Center of gravity
                u_vol_ = 0.0_WP; v_vol_ = 0.0_WP; w_vol_ = 0.0_WP ! Average velocity inside struct
-
-               print *,'here 3'
                   
                ! Loop over cells in new structure and accumulate statistics
                do m=1,strack%struct(n)%n_
@@ -279,7 +254,6 @@ contains
                end do
             end if
          end do
-         print *,'here 6'
 
          ! Sum parallel stats
          call MPI_ALLREDUCE(vol_struct_,vol_struct,1,MPI_REAL_WP,MPI_SUM,strack%vf%cfg%comm,ierr)
@@ -289,9 +263,9 @@ contains
          call MPI_ALLREDUCE(u_vol_,u_vol,1,MPI_REAL_WP,MPI_SUM,strack%vf%cfg%comm,ierr)
          call MPI_ALLREDUCE(v_vol_,v_vol,1,MPI_REAL_WP,MPI_SUM,strack%vf%cfg%comm,ierr)
          call MPI_ALLREDUCE(w_vol_,w_vol,1,MPI_REAL_WP,MPI_SUM,strack%vf%cfg%comm,ierr)
-         print *,'here 7'
          
          ! Moments of inertia
+         Imom_=0.0_WP; Imom=0.0_WP
          do n=1,strack%nstruct
             ! Only deal with structure matching newid
             if (strack%struct(n)%id.eq.strack%merge_master(n)%newid) then
@@ -300,9 +274,6 @@ contains
                per_x = strack%struct(n)%per(1)
                per_y = strack%struct(n)%per(2)
                per_z = strack%struct(n)%per(3)
-
-               ! Initialize values
-               Imom_(:,:) = 0.0_WP
                   
                ! Loop over cells in new structure and accumulate statistics
                do m=1,strack%struct(n)%n_
@@ -328,22 +299,17 @@ contains
                end do 
             end if
          end do
-         print *,'here 9'
+
          ! Sum parallel stats on Imom
          do n=1,3
             call MPI_ALLREDUCE(Imom_(:,n),Imom(:,n),3,MPI_REAL_WP,MPI_SUM,strack%vf%cfg%comm,ierr)
          end do
-         print *,'here 10'
-         print *,'Imom = ',Imom
-         print *, 'defining A'
 
          ! Characteristic lengths and principle axes
          ! Eigenvalues/eigenvectors of moments of inertia tensor
          A = Imom
-         print *,'Imom = ',Imom
          n = 3
          call dsyev('V','U',n,Imom,n,d,work,lwork,info)
-         print *,'here 11'
          ! Get rid of very small negative values (due to machine accuracy)
          d = max(0.0_WP,d)
          ! Store characteristic lengths
@@ -354,7 +320,6 @@ contains
          if (strack%vf%cfg%nx.eq.1.or.strack%vf%cfg%ny.eq.1.or.strack%vf%cfg%nz.eq.1) lengths(3)=0.0_WP
          ! Store principal axes
          axes(:,:) = A
-         print *,'here 12'
 
          ! Finish computing qantities
          stats%vol     = vol_struct
@@ -411,8 +376,6 @@ contains
          integer, parameter :: amr_ref_lvl=4
          integer :: i,j,k,n,si,sj,sk
          integer :: nD,nDrop
-         real(WP), dimension(3) :: norm
-         real(WP) :: dist
          integer(kind=I4), allocatable, dimension(:) :: seed
          integer(kind=I4) :: nseed
          ! Create a VOF solver with r2p reconstruction
@@ -447,7 +410,7 @@ contains
                      ! Call adaptive refinement code to get volume and barycenters recursively
                      vol=0.0_WP; area=0.0_WP; v_cent=0.0_WP; a_cent=0.0_WP
                      call cube_refine_vol(cube_vertex,vol,area,v_cent,a_cent,levelset_sphere,0.0_WP,amr_ref_lvl)
-                     vf%VF(i,j,k)=min(1.0,vf%VF(i,j,k)+vol/vf%cfg%vol(i,j,k))
+                     vf%VF(i,j,k)=min(1.0_WP,vf%VF(i,j,k)+vol/vf%cfg%vol(i,j,k))
                      if (vf%VF(i,j,k).ge.VFlo.and.vf%VF(i,j,k).le.VFhi) then
                         vf%Lbary(:,i,j,k)=v_cent
                         vf%Gbary(:,i,j,k)=([vf%cfg%xm(i),vf%cfg%ym(j),vf%cfg%zm(k)]-vf%VF(i,j,k)*vf%Lbary(:,i,j,k))/(1.0_WP-vf%VF(i,j,k))
@@ -516,8 +479,6 @@ contains
          use mathtools, only: Pi
          use string,    only: str_long,str_medium
          use messager,  only: die,log
-         character(str_long) :: message
-         character(len=str_medium) :: filename
          integer :: i,j,k
          ! Gaussian initial field
          Urms0=1.0
