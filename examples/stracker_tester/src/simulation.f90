@@ -119,7 +119,7 @@ contains
 
    !> Perform merge/split analysis
    subroutine analyze_merge_split
-      use mpi_f08,  only: MPI_ALLREDUCE,MPI_SUM
+      use mpi_f08,  only: MPI_ALLREDUCE,MPI_SUM,MPI_IN_PLACE
       use parallel, only: MPI_REAL_WP
       implicit none
       integer :: iunit
@@ -143,16 +143,16 @@ contains
 
             ! Write merge data to file
             strack%eventcount = strack%eventcount+1
-            write(iunit,"(I0)") strack%eventcount
-            write(iunit,"(A)")  ', Merge, oldids='
+            write(iunit,"(I0)",      advance="no")  strack%eventcount
+            write(iunit,"(A)",       advance="no")  ', Merge, oldids='
             do nn=1,strack%merge_master(n)%noldid
-               write(iunit,"(I0)") strack%merge_master(n)%oldids(nn)
-               write(iunit,"(A)") ';'
+               write(iunit,"(I0)",   advance="no")  strack%merge_master(n)%oldids(nn)
+               write(iunit,"(A)",    advance="no")  ';'
             end do
-            write(iunit,"(A)")  ', newid='
-            write(iunit,"(I0)") strack%merge_master(n)%newid
-            write(iunit,"(A)")  ', newVol='
-            write(iunit,"(ES22.16)") stats%vol
+            write(iunit,"(A)",       advance="no")   ', newid='
+            write(iunit,"(I0)",      advance="no")  strack%merge_master(n)%newid
+            write(iunit,"(A)",       advance="no")   ', newVol='
+            write(iunit,"(ES22.16)", advance="yes") stats%vol
          end do
       end block analyze_merges
 
@@ -167,13 +167,13 @@ contains
 
                ! Write merge data to file
                strack%eventcount = strack%eventcount+1
-               write(iunit,"(I0)") strack%eventcount
-               write(iunit,"(A)")  ', Split, oldid='
-               write(iunit,"(I0)") strack%split_master(n)%oldid
-               write(iunit,"(A)")  ', newid='
-               write(iunit,"(I0)") strack%split_master(n)%newids(nn)
-               write(iunit,"(A)")  ', newVol='
-               write(iunit,"(ES22.16)") stats%vol
+               write(iunit,"(I0)",      advance="no")  strack%eventcount
+               write(iunit,"(A)",       advance="no")  ', Split, oldid='
+               write(iunit,"(I0)",      advance="no")  strack%split_master(n)%oldid
+               write(iunit,"(A)",       advance="no")  ', newid='
+               write(iunit,"(I0)",      advance="no")  strack%split_master(n)%newids(nn)
+               write(iunit,"(A)",       advance="no")  ', newVol='
+               write(iunit,"(ES22.16)", advance="yes") stats%vol
             end do
          end do
          
@@ -191,10 +191,10 @@ contains
          integer :: lwork,info,ierr
          integer :: ii,jj,kk
          integer  :: per_x,per_y,per_z
-         real(WP) :: vol_struct_,vol_struct
-         real(WP) :: x_vol_,x_vol,y_vol_,y_vol,z_vol_,z_vol
-         real(WP) :: u_vol_,u_vol,v_vol_,v_vol,w_vol_,w_vol
-         real(WP), dimension(3,3) :: Imom_,Imom
+         real(WP) :: vol_struct
+         real(WP) :: x_vol,y_vol,z_vol
+         real(WP) :: u_vol,v_vol,w_vol
+         real(WP), dimension(3,3) :: Imom
          real(WP) :: xtmp,ytmp,ztmp
          real(WP), dimension(3) :: lengths
          real(WP), dimension(3,3) :: axes
@@ -222,9 +222,9 @@ contains
                per_z = strack%struct(n)%per(3)
       
                ! Initialize values
-               vol_struct_    = 0.0_WP ! Structure volume
-               x_vol_ = 0.0_WP; y_vol_ = 0.0_WP; z_vol_ = 0.0_WP ! Center of gravity
-               u_vol_ = 0.0_WP; v_vol_ = 0.0_WP; w_vol_ = 0.0_WP ! Average velocity inside struct
+               vol_struct    = 0.0_WP ! Structure volume
+               x_vol = 0.0_WP; y_vol = 0.0_WP; z_vol = 0.0_WP ! Center of gravity
+               u_vol = 0.0_WP; v_vol = 0.0_WP; w_vol = 0.0_WP ! Average velocity inside struct
                   
                ! Loop over cells in new structure and accumulate statistics
                do m=1,strack%struct(n)%n_
@@ -240,32 +240,32 @@ contains
                   ztmp = strack%vf%cfg%zm(kk)-per_z*strack%vf%cfg%zL
 
                   ! Volume
-                  vol_struct_ = vol_struct_ + strack%vf%cfg%vol(ii,jj,kk)*strack%vf%VF(ii,jj,kk)
+                  vol_struct = vol_struct + strack%vf%cfg%vol(ii,jj,kk)*strack%vf%VF(ii,jj,kk)
                   
                   ! Center of gravity
-                  x_vol_ = x_vol_ + xtmp*strack%vf%cfg%vol(ii,jj,kk)*strack%vf%VF(ii,jj,kk)
-                  y_vol_ = y_vol_ + ytmp*strack%vf%cfg%vol(ii,jj,kk)*strack%vf%VF(ii,jj,kk)
-                  z_vol_ = z_vol_ + ztmp*strack%vf%cfg%vol(ii,jj,kk)*strack%vf%VF(ii,jj,kk)
+                  x_vol = x_vol + xtmp*strack%vf%cfg%vol(ii,jj,kk)*strack%vf%VF(ii,jj,kk)
+                  y_vol = y_vol + ytmp*strack%vf%cfg%vol(ii,jj,kk)*strack%vf%VF(ii,jj,kk)
+                  z_vol = z_vol + ztmp*strack%vf%cfg%vol(ii,jj,kk)*strack%vf%VF(ii,jj,kk)
                   
                   ! Average gas velocity inside struct
-                  u_vol_ = u_vol_ + fs%U(ii,jj,kk)*strack%vf%cfg%vol(ii,jj,kk)*strack%vf%VF(ii,jj,kk)
-                  v_vol_ = v_vol_ + fs%V(ii,jj,kk)*strack%vf%cfg%vol(ii,jj,kk)*strack%vf%VF(ii,jj,kk)
-                  w_vol_ = w_vol_ + fs%W(ii,jj,kk)*strack%vf%cfg%vol(ii,jj,kk)*strack%vf%VF(ii,jj,kk)
+                  u_vol = u_vol + fs%U(ii,jj,kk)*strack%vf%cfg%vol(ii,jj,kk)*strack%vf%VF(ii,jj,kk)
+                  v_vol = v_vol + fs%V(ii,jj,kk)*strack%vf%cfg%vol(ii,jj,kk)*strack%vf%VF(ii,jj,kk)
+                  w_vol = w_vol + fs%W(ii,jj,kk)*strack%vf%cfg%vol(ii,jj,kk)*strack%vf%VF(ii,jj,kk)
                end do
             end if
          end do
 
          ! Sum parallel stats
-         call MPI_ALLREDUCE(vol_struct_,vol_struct,1,MPI_REAL_WP,MPI_SUM,strack%vf%cfg%comm,ierr)
-         call MPI_ALLREDUCE(x_vol_,x_vol,1,MPI_REAL_WP,MPI_SUM,strack%vf%cfg%comm,ierr)
-         call MPI_ALLREDUCE(y_vol_,y_vol,1,MPI_REAL_WP,MPI_SUM,strack%vf%cfg%comm,ierr)
-         call MPI_ALLREDUCE(z_vol_,z_vol,1,MPI_REAL_WP,MPI_SUM,strack%vf%cfg%comm,ierr)
-         call MPI_ALLREDUCE(u_vol_,u_vol,1,MPI_REAL_WP,MPI_SUM,strack%vf%cfg%comm,ierr)
-         call MPI_ALLREDUCE(v_vol_,v_vol,1,MPI_REAL_WP,MPI_SUM,strack%vf%cfg%comm,ierr)
-         call MPI_ALLREDUCE(w_vol_,w_vol,1,MPI_REAL_WP,MPI_SUM,strack%vf%cfg%comm,ierr)
+         call MPI_ALLREDUCE(MPI_IN_PLACE,vol_struct,1,MPI_REAL_WP,MPI_SUM,strack%vf%cfg%comm,ierr)
+         call MPI_ALLREDUCE(MPI_IN_PLACE,x_vol,1,MPI_REAL_WP,MPI_SUM,strack%vf%cfg%comm,ierr)
+         call MPI_ALLREDUCE(MPI_IN_PLACE,y_vol,1,MPI_REAL_WP,MPI_SUM,strack%vf%cfg%comm,ierr)
+         call MPI_ALLREDUCE(MPI_IN_PLACE,z_vol,1,MPI_REAL_WP,MPI_SUM,strack%vf%cfg%comm,ierr)
+         call MPI_ALLREDUCE(MPI_IN_PLACE,u_vol,1,MPI_REAL_WP,MPI_SUM,strack%vf%cfg%comm,ierr)
+         call MPI_ALLREDUCE(MPI_IN_PLACE,v_vol,1,MPI_REAL_WP,MPI_SUM,strack%vf%cfg%comm,ierr)
+         call MPI_ALLREDUCE(MPI_IN_PLACE,w_vol,1,MPI_REAL_WP,MPI_SUM,strack%vf%cfg%comm,ierr)
          
          ! Moments of inertia
-         Imom_=0.0_WP; Imom=0.0_WP
+         Imom=0.0_WP
          do n=1,strack%nstruct
             ! Only deal with structure matching newid
             if (strack%struct(n)%id.eq.strack%merge_master(n)%newid) then
@@ -289,20 +289,20 @@ contains
                   ztmp = strack%vf%cfg%zm(kk)-per_z*strack%vf%cfg%zL-z_vol/vol_struct
 
                   ! Moment of Inertia
-                  Imom_(1,1) = Imom_(1,1) + (ytmp**2 + ztmp**2)*strack%vf%cfg%vol(ii,jj,kk)*strack%vf%VF(ii,jj,kk)
-                  Imom_(2,2) = Imom_(2,2) + (xtmp**2 + ztmp**2)*strack%vf%cfg%vol(ii,jj,kk)*strack%vf%VF(ii,jj,kk)
-                  Imom_(3,3) = Imom_(3,3) + (xtmp**2 + ytmp**2)*strack%vf%cfg%vol(ii,jj,kk)*strack%vf%VF(ii,jj,kk)
+                  Imom(1,1) = Imom(1,1) + (ytmp**2 + ztmp**2)*strack%vf%cfg%vol(ii,jj,kk)*strack%vf%VF(ii,jj,kk)
+                  Imom(2,2) = Imom(2,2) + (xtmp**2 + ztmp**2)*strack%vf%cfg%vol(ii,jj,kk)*strack%vf%VF(ii,jj,kk)
+                  Imom(3,3) = Imom(3,3) + (xtmp**2 + ytmp**2)*strack%vf%cfg%vol(ii,jj,kk)*strack%vf%VF(ii,jj,kk)
                   
-                  Imom_(1,2) = Imom_(1,2) - xtmp*ytmp*strack%vf%cfg%vol(ii,jj,kk)*strack%vf%VF(ii,jj,kk)
-                  Imom_(1,3) = Imom_(1,3) - xtmp*ztmp*strack%vf%cfg%vol(ii,jj,kk)*strack%vf%VF(ii,jj,kk)
-                  Imom_(2,3) = Imom_(2,3) - ytmp*ztmp*strack%vf%cfg%vol(ii,jj,kk)*strack%vf%VF(ii,jj,kk)
+                  Imom(1,2) = Imom(1,2) - xtmp*ytmp*strack%vf%cfg%vol(ii,jj,kk)*strack%vf%VF(ii,jj,kk)
+                  Imom(1,3) = Imom(1,3) - xtmp*ztmp*strack%vf%cfg%vol(ii,jj,kk)*strack%vf%VF(ii,jj,kk)
+                  Imom(2,3) = Imom(2,3) - ytmp*ztmp*strack%vf%cfg%vol(ii,jj,kk)*strack%vf%VF(ii,jj,kk)
                end do 
             end if
          end do
 
          ! Sum parallel stats on Imom
          do n=1,3
-            call MPI_ALLREDUCE(Imom_(:,n),Imom(:,n),3,MPI_REAL_WP,MPI_SUM,strack%vf%cfg%comm,ierr)
+            call MPI_ALLREDUCE(MPI_IN_PLACE,Imom(:,n),3,MPI_REAL_WP,MPI_SUM,strack%vf%cfg%comm,ierr)
          end do
 
          ! Characteristic lengths and principle axes
