@@ -335,33 +335,19 @@ contains
     end if
   end subroutine insertion_search
 
-!   subroutine avl_delete_all(less_than,tree)
-!     procedure(avl_less_than_t) :: less_than
-!     class(avl_tree_t), intent(inout) :: tree
-   !  type(avl_pointer_pair_t), pointer :: ppairs, pp
-   !  ppairs => avl_pointer_pairs (tree)
-   !  pp => ppairs
-   !  do while (associated (pp))
-   !     call avl_delete_without_found(less_than,pp%p_key,tree)
-   !     pp => pp%next
-   !  end do
-   !  if (associated (ppairs)) deallocate (ppairs)
-   ! end subroutine avl_delete_all
-
   subroutine avl_delete_all(tree)
     class(avl_tree_t), intent(inout) :: tree      
-    call delete_node(tree%p)
+    call delete_node_and_leafs(tree%p)
   end subroutine avl_delete_all
 
-  recursive subroutine delete_node(p)
+  recursive subroutine delete_node_and_leafs(p)
     type(avl_node_t), pointer, intent(inout) :: p
     if (associated(p)) then
-      call delete_node(p%left)
-      call delete_node(p%right)
+      call delete_node_and_leafs(p%left)
+      call delete_node_and_leafs(p%right)
       deallocate(p)
     end if
-  end subroutine delete_node
-
+  end subroutine delete_node_and_leafs
 
   subroutine avl_delete_with_found (less_than, key, tree, found)
     procedure(avl_less_than_t) :: less_than
