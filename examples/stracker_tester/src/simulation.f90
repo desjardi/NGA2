@@ -126,39 +126,37 @@ contains
       logical :: file_exists
       type(struct_stats) :: stats
 
-      INQUIRE(FILE="merge_split.csv", EXIST=file_exists)
-      if (file_exists) then
-         open(newunit=iunit,file="merge_split.csv",form="formatted",status="old",position="append",action="write")
-      else
-         open(newunit=iunit,file="merge_split.csv",form="formatted",status="replace",action="write")
-      end if
-
-       analyze_merges: block
+      ! Open the file - Created in simulation_init
+      open(newunit=iunit,file="merge_split.csv",form="formatted",status="old",position="append",action="write")
+   
+      analyze_merges: block
          integer :: n,nn
-         
+
          ! Traverse merge events
          do n=1,strack%nmerge_master
 
             call compute_struct_stats(strack%merge_master(n)%newid,stats)
-
+            
             ! Write merge data to file
             strack%eventcount = strack%eventcount+1
             write(iunit,"(I0)",      advance="no")  strack%eventcount
-            write(iunit,"(A)",       advance="no")  ', Merge, oldids='
+            write(iunit,"(A)",       advance="no")  ', Merge,'
             do nn=1,strack%merge_master(n)%noldid
                write(iunit,"(I0)",   advance="no")  strack%merge_master(n)%oldids(nn)
                write(iunit,"(A)",    advance="no")  ';'
             end do
-            write(iunit,"(A)",       advance="no")   ', newid='
+            write(iunit,"(A)",       advance="no")   ','
             write(iunit,"(I0)",      advance="no")  strack%merge_master(n)%newid
-            write(iunit,"(A)",       advance="no")   ', newVol='
+            write(iunit,"(A)",       advance="no")  ','
+            write(iunit,"(ES12.5 )", advance="no")  time%t
+            write(iunit,"(A)",       advance="no")   ','
             write(iunit,"(ES22.16)", advance="yes") stats%vol
          end do
       end block analyze_merges
 
       analyze_splits: block 
       integer :: n,nn
-         
+
          ! Traverse split events
          do n=1,strack%nsplit_master
             ! Write stats for each new structure after split
@@ -168,19 +166,38 @@ contains
                ! Write merge data to file
                strack%eventcount = strack%eventcount+1
                write(iunit,"(I0)",      advance="no")  strack%eventcount
-               write(iunit,"(A)",       advance="no")  ', Split, oldid='
+               write(iunit,"(A)",       advance="no")  ', Split,'
                write(iunit,"(I0)",      advance="no")  strack%split_master(n)%oldid
-               write(iunit,"(A)",       advance="no")  ', newid='
+               write(iunit,"(A)",       advance="no")  ','
                write(iunit,"(I0)",      advance="no")  strack%split_master(n)%newids(nn)
-               write(iunit,"(A)",       advance="no")  ', newVol='
-               write(iunit,"(ES22.16)", advance="yes") stats%vol
+               write(iunit,"(A)",       advance="no")  ','
+               write(iunit,"(ES12.5 )", advance="no")  time%t
+               write(iunit,"(A)",       advance="no")  ','
+               write(iunit,"(ES22.16)", advance="no")  stats%vol
+               write(iunit,"(A)",       advance="no")  ','
+               write(iunit,"(ES20.12)", advance="no")  stats%x_cg
+               write(iunit,"(A)",       advance="no")  ','
+               write(iunit,"(ES20.12)", advance="no")  stats%y_cg
+               write(iunit,"(A)",       advance="no")  ','
+               write(iunit,"(ES20.12)", advance="no")  stats%z_cg
+               write(iunit,"(A)",       advance="no")  ','
+               write(iunit,"(ES20.12)", advance="no")  stats%u_avg
+               write(iunit,"(A)",       advance="no")  ','
+               write(iunit,"(ES20.12)", advance="no")  stats%v_avg
+               write(iunit,"(A)",       advance="no")  ','
+               write(iunit,"(ES20.12)", advance="no")  stats%lengths(1)
+               write(iunit,"(A)",       advance="no")  ','
+               write(iunit,"(ES20.12)", advance="no")  stats%lengths(2)
+               write(iunit,"(A)",       advance="no")  ','
+               write(iunit,"(ES20.12)", advance="yes")  stats%lengths(3)
+
             end do
          end do
-         
+      
       end block analyze_splits
 
       close(iunit)
-
+   
    contains 
       subroutine compute_struct_stats(id,stats)
          implicit none 
@@ -215,7 +232,7 @@ contains
 
             ! Only deal with structure matching newid
             if (strack%struct(n)%id.eq.id) then
-
+               
                ! Periodicity
                per_x = strack%struct(n)%per(1)
                per_y = strack%struct(n)%per(2)
@@ -247,7 +264,7 @@ contains
                   y_vol = y_vol + ytmp*strack%vf%cfg%vol(ii,jj,kk)*strack%vf%VF(ii,jj,kk)
                   z_vol = z_vol + ztmp*strack%vf%cfg%vol(ii,jj,kk)*strack%vf%VF(ii,jj,kk)
                   
-                  ! Average gas velocity inside struct
+                  ! Average velocity inside struct
                   u_vol = u_vol + fs%U(ii,jj,kk)*strack%vf%cfg%vol(ii,jj,kk)*strack%vf%VF(ii,jj,kk)
                   v_vol = v_vol + fs%V(ii,jj,kk)*strack%vf%cfg%vol(ii,jj,kk)*strack%vf%VF(ii,jj,kk)
                   w_vol = w_vol + fs%W(ii,jj,kk)*strack%vf%cfg%vol(ii,jj,kk)*strack%vf%VF(ii,jj,kk)
@@ -602,6 +619,21 @@ contains
          call cflfile%write()
       end block create_monitor
 
+      create_merge_split: block 
+         integer :: iunit
+         logical :: file_exists
+         if (cfg%amRoot) then
+            ! Check if the file exists
+            INQUIRE(FILE="merge_split.csv", EXIST=file_exists)
+            if (.not.file_exists) then
+               ! Create a new file with headers if it doesn't exist
+               open(newunit=iunit, file="merge_split.csv", form="formatted", status="replace", action="write")
+               write(iunit, "(A)") "Event Count, Event Type, Old IDs, New ID, Time, New Vol, X, Y, Z, U, V, W, L1, L2, L3"
+               close(iunit)
+            end if
+         end if
+      end block create_merge_split
+
       ! Initialize an event for drop size analysis
       drop_analysis: block
          drop_evt=event(time=time,name='Drop analysis')
@@ -631,7 +663,7 @@ contains
          fs%Uold=fs%U
          fs%Vold=fs%V
          fs%Wold=fs%W
-         
+
          ! Prepare old staggered density (at n)
          call fs%get_olddensity(vf=vf)
          
