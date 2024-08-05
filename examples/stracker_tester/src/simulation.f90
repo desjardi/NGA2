@@ -136,21 +136,22 @@ contains
          do n=1,strack%nmerge_master
 
             call compute_struct_stats(strack%merge_master(n)%newid,stats)
-            
-            ! Write merge data to file
-            strack%eventcount = strack%eventcount+1
-            write(iunit,"(I0)",      advance="no")  strack%eventcount
-            write(iunit,"(A)",       advance="no")  ', Merge,'
-            do nn=1,strack%merge_master(n)%noldid
-               write(iunit,"(I0)",   advance="no")  strack%merge_master(n)%oldids(nn)
-               write(iunit,"(A)",    advance="no")  ';'
-            end do
-            write(iunit,"(A)",       advance="no")   ','
-            write(iunit,"(I0)",      advance="no")  strack%merge_master(n)%newid
-            write(iunit,"(A)",       advance="no")  ','
-            write(iunit,"(ES12.5 )", advance="no")  time%t
-            write(iunit,"(A)",       advance="no")   ','
-            write(iunit,"(ES22.16)", advance="yes") stats%vol
+            if (cfg%amRoot) then 
+               ! Write merge data to file
+               strack%eventcount = strack%eventcount+1
+               write(iunit,"(I0)",      advance="no")  strack%eventcount
+               write(iunit,"(A)",       advance="no")  ', Merge,'
+               do nn=1,strack%merge_master(n)%noldid
+                  write(iunit,"(I0)",   advance="no")  strack%merge_master(n)%oldids(nn)
+                  write(iunit,"(A)",    advance="no")  ';'
+               end do
+               write(iunit,"(A)",       advance="no")   ','
+               write(iunit,"(I0)",      advance="no")  strack%merge_master(n)%newid
+               write(iunit,"(A)",       advance="no")  ','
+               write(iunit,"(ES12.5 )", advance="no")  time%t
+               write(iunit,"(A)",       advance="no")   ','
+               write(iunit,"(ES22.16)", advance="yes") stats%vol
+            end if 
          end do
       end block analyze_merges
 
@@ -162,35 +163,35 @@ contains
             ! Write stats for each new structure after split
             do nn=1,strack%split_master(n)%nnewid
                call compute_struct_stats(strack%split_master(n)%newids(nn),stats)
-
-               ! Write merge data to file
-               strack%eventcount = strack%eventcount+1
-               write(iunit,"(I0)",      advance="no")  strack%eventcount
-               write(iunit,"(A)",       advance="no")  ', Split,'
-               write(iunit,"(I0)",      advance="no")  strack%split_master(n)%oldid
-               write(iunit,"(A)",       advance="no")  ','
-               write(iunit,"(I0)",      advance="no")  strack%split_master(n)%newids(nn)
-               write(iunit,"(A)",       advance="no")  ','
-               write(iunit,"(ES12.5 )", advance="no")  time%t
-               write(iunit,"(A)",       advance="no")  ','
-               write(iunit,"(ES22.16)", advance="no")  stats%vol
-               write(iunit,"(A)",       advance="no")  ','
-               write(iunit,"(ES20.12)", advance="no")  stats%x_cg
-               write(iunit,"(A)",       advance="no")  ','
-               write(iunit,"(ES20.12)", advance="no")  stats%y_cg
-               write(iunit,"(A)",       advance="no")  ','
-               write(iunit,"(ES20.12)", advance="no")  stats%z_cg
-               write(iunit,"(A)",       advance="no")  ','
-               write(iunit,"(ES20.12)", advance="no")  stats%u_avg
-               write(iunit,"(A)",       advance="no")  ','
-               write(iunit,"(ES20.12)", advance="no")  stats%v_avg
-               write(iunit,"(A)",       advance="no")  ','
-               write(iunit,"(ES20.12)", advance="no")  stats%lengths(1)
-               write(iunit,"(A)",       advance="no")  ','
-               write(iunit,"(ES20.12)", advance="no")  stats%lengths(2)
-               write(iunit,"(A)",       advance="no")  ','
-               write(iunit,"(ES20.12)", advance="yes")  stats%lengths(3)
-
+               if (cfg%amRoot) then 
+                  ! Write merge data to file
+                  strack%eventcount = strack%eventcount+1
+                  write(iunit,"(I0)",      advance="no")  strack%eventcount
+                  write(iunit,"(A)",       advance="no")  ', Split,'
+                  write(iunit,"(I0)",      advance="no")  strack%split_master(n)%oldid
+                  write(iunit,"(A)",       advance="no")  ','
+                  write(iunit,"(I0)",      advance="no")  strack%split_master(n)%newids(nn)
+                  write(iunit,"(A)",       advance="no")  ','
+                  write(iunit,"(ES12.5 )", advance="no")  time%t
+                  write(iunit,"(A)",       advance="no")  ','
+                  write(iunit,"(ES22.16)", advance="no")  stats%vol
+                  write(iunit,"(A)",       advance="no")  ','
+                  write(iunit,"(ES20.12)", advance="no")  stats%x_cg
+                  write(iunit,"(A)",       advance="no")  ','
+                  write(iunit,"(ES20.12)", advance="no")  stats%y_cg
+                  write(iunit,"(A)",       advance="no")  ','
+                  write(iunit,"(ES20.12)", advance="no")  stats%z_cg
+                  write(iunit,"(A)",       advance="no")  ','
+                  write(iunit,"(ES20.12)", advance="no")  stats%u_avg
+                  write(iunit,"(A)",       advance="no")  ','
+                  write(iunit,"(ES20.12)", advance="no")  stats%v_avg
+                  write(iunit,"(A)",       advance="no")  ','
+                  write(iunit,"(ES20.12)", advance="no")  stats%lengths(1)
+                  write(iunit,"(A)",       advance="no")  ','
+                  write(iunit,"(ES20.12)", advance="no")  stats%lengths(2)
+                  write(iunit,"(A)",       advance="no")  ','
+                  write(iunit,"(ES20.12)", advance="yes")  stats%lengths(3)
+               end if 
             end do
          end do
       
@@ -227,9 +228,13 @@ contains
          ! Query optimal work array size
          call dsyev('V','U',order,A,order,d,lwork_query,-1,info); lwork=int(lwork_query(1)); allocate(work(lwork))
 
+         ! Initialize values
+         vol_struct    = 0.0_WP ! Structure volume
+         x_vol = 0.0_WP; y_vol = 0.0_WP; z_vol = 0.0_WP ! Center of gravity
+         u_vol = 0.0_WP; v_vol = 0.0_WP; w_vol = 0.0_WP ! Average velocity inside struct
+
          ! Find new structure with matching newid
          do n=1,strack%nstruct
-
             ! Only deal with structure matching newid
             if (strack%struct(n)%id.eq.id) then
                
@@ -237,12 +242,7 @@ contains
                per_x = strack%struct(n)%per(1)
                per_y = strack%struct(n)%per(2)
                per_z = strack%struct(n)%per(3)
-      
-               ! Initialize values
-               vol_struct    = 0.0_WP ! Structure volume
-               x_vol = 0.0_WP; y_vol = 0.0_WP; z_vol = 0.0_WP ! Center of gravity
-               u_vol = 0.0_WP; v_vol = 0.0_WP; w_vol = 0.0_WP ! Average velocity inside struct
-                  
+               
                ! Loop over cells in new structure and accumulate statistics
                do m=1,strack%struct(n)%n_
 
@@ -672,12 +672,12 @@ contains
 
          ! Advance stracker
          call strack%advance(make_label=label_liquid)
-         call analyze_merge_split
+         !call analyze_merge_split
 
          ! Output master stracker lists
          print_merge_master: block
          integer :: n
-         if (strack%nmerge_master.gt.0) print*,'Master merge list'
+         if (strack%nmerge_master.gt.0) print*,"rank",cfg%rank, 'Master merge list'
             do n=1,strack%nmerge_master
                print*,'noldid=',strack%merge_master(n)%noldid
                print*,' oldid=',strack%merge_master(n)%oldids(1:strack%merge_master(n)%noldid)
