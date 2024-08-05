@@ -645,27 +645,38 @@ contains
          call strack%advance(make_label=label_liquid)
          call analyze_merge_split
 
-         ! Output master stracker lists
-         print_merge_master: block
-         integer :: n
-         if (strack%nmerge_master.gt.0) print*,'Master merge list'
-            do n=1,strack%nmerge_master
-               print*,'noldid=',strack%merge_master(n)%noldid
-               print*,' oldid=',strack%merge_master(n)%oldids(1:strack%merge_master(n)%noldid)
-               print*,' newid=',strack%merge_master(n)%newid
-            end do
-         end block print_merge_master
+         ! ! Output master stracker lists
+         ! print_merge_master: block
+         ! integer :: n,nn,ierr
+         ! do nn=0,cfg%nproc
+         !    if (cfg%rank.eq.nn) then
+         !       print*,'rank=',nn
+         !       if (strack%nmerge_master.gt.0) print*,'Master merge list'
+         !       do n=1,strack%nmerge_master
+         !          print*,'noldid=',strack%merge_master(n)%noldid
+         !          print*,' oldid=',strack%merge_master(n)%oldids(1:strack%merge_master(n)%noldid)
+         !          print*,' newid=',strack%merge_master(n)%newid
+         !       end do
+         !    end if
+         !    call MPI_BARRIER(cfg%comm,ierr)
+         ! end do   
+         ! end block print_merge_master
 
-         print_split_master: block
-            integer :: n
-            if (strack%nsplit_master.gt.0) print*,'Master split list'
-            do n=1,strack%nsplit_master
-               print*,' oldid=',strack%split_master(n)%oldid
-               print*,'nnewid=',strack%split_master(n)%nnewid
-               print*,' newid=',strack%split_master(n)%newids(1:strack%split_master(n)%nnewid)
-               
-            end do
-         end block print_split_master
+         ! print_split_master: block
+         !    integer :: n,nn,ierr
+         !    do nn=0,cfg%nproc
+         !       if (cfg%rank.eq.nn) then
+         !          print*,'rank=',nn   
+         !          if (strack%nsplit_master.gt.0) print*,'Master split list'
+         !          do n=1,strack%nsplit_master
+         !             print*,' oldid=',strack%split_master(n)%oldid
+         !             print*,'nnewid=',strack%split_master(n)%nnewid
+         !             print*,' newid=',strack%split_master(n)%newids(1:strack%split_master(n)%nnewid)         
+         !          end do
+         !       end if
+         !       call MPI_BARRIER(cfg%comm,ierr)
+         !    end do
+         ! end block print_split_master
          
          ! Prepare new staggered viscosity (at n+1)
          call fs%get_viscosity(vf=vf,strat=arithmetic_visc)
