@@ -268,7 +268,7 @@ contains
          Imom=0.0_WP
          do n=1,strack%nstruct
             ! Only deal with structure matching newid
-            if (strack%struct(n)%id.eq.strack%merge_master(n)%newid) then
+            if (strack%struct(n)%id.eq.id) then
 
                ! Periodicity
                per_x = strack%struct(n)%per(1)
