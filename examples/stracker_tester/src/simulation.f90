@@ -387,6 +387,7 @@ contains
          use random, only: random_uniform
          use mms_geom, only: cube_refine_vol
          use precision, only: I4
+         use MPI, only: MPI_INTEGER,MPI_MAX
          real(WP), dimension(3,8) :: cube_vertex
          real(WP), dimension(3) :: v_cent,a_cent
          real(WP) :: vol,area
@@ -395,6 +396,7 @@ contains
          integer :: nD,nDrop
          integer(kind=I4), allocatable, dimension(:) :: seed
          integer(kind=I4) :: nseed
+         integer :: ierr
          ! Create a VOF solver with r2p reconstruction
          call vf%initialize(cfg=cfg,reconstruction_method=lvira,transport_method=remap_storage,name='VOF')
          ! Create structure tracker
@@ -451,6 +453,7 @@ contains
 
          ! Initialize id counter to be consistent with id's
          strack%idcount=maxval(strack%id)
+         call MPI_ALLREDUCE(maxval(strack%id),strack%idcount,1,MPI_INTEGER,MPI_MAX,cfg%comm,ierr)
          ! Update the band
          call vf%update_band()
          ! Perform interface reconstruction from VOF field
@@ -674,27 +677,38 @@ contains
          call strack%advance(make_label=label_liquid)
          !call analyze_merge_split
 
-         ! Output master stracker lists
-         print_merge_master: block
-         integer :: n
-         if (strack%nmerge_master.gt.0) print*,"rank",cfg%rank, 'Master merge list'
-            do n=1,strack%nmerge_master
-               print*,'noldid=',strack%merge_master(n)%noldid
-               print*,' oldid=',strack%merge_master(n)%oldids(1:strack%merge_master(n)%noldid)
-               print*,' newid=',strack%merge_master(n)%newid
-            end do
-         end block print_merge_master
+         ! ! Output master stracker lists
+         ! print_merge_master: block
+         ! integer :: n,nn,ierr
+         ! do nn=0,cfg%nproc
+         !    if (cfg%rank.eq.nn) then
+         !       print*,'rank=',nn
+         !       if (strack%nmerge_master.gt.0) print*,'Master merge list'
+         !       do n=1,strack%nmerge_master
+         !          print*,'noldid=',strack%merge_master(n)%noldid
+         !          print*,' oldid=',strack%merge_master(n)%oldids(1:strack%merge_master(n)%noldid)
+         !          print*,' newid=',strack%merge_master(n)%newid
+         !       end do
+         !    end if
+         !    call MPI_BARRIER(cfg%comm,ierr)
+         ! end do   
+         ! end block print_merge_master
 
-         print_split_master: block
-            integer :: n
-            if (strack%nsplit_master.gt.0) print*,'Master split list'
-            do n=1,strack%nsplit_master
-               print*,' oldid=',strack%split_master(n)%oldid
-               print*,'nnewid=',strack%split_master(n)%nnewid
-               print*,' newid=',strack%split_master(n)%newids(1:strack%split_master(n)%nnewid)
-               
-            end do
-         end block print_split_master
+         ! print_split_master: block
+         !    integer :: n,nn,ierr
+         !    do nn=0,cfg%nproc
+         !       if (cfg%rank.eq.nn) then
+         !          print*,'rank=',nn   
+         !          if (strack%nsplit_master.gt.0) print*,'Master split list'
+         !          do n=1,strack%nsplit_master
+         !             print*,' oldid=',strack%split_master(n)%oldid
+         !             print*,'nnewid=',strack%split_master(n)%nnewid
+         !             print*,' newid=',strack%split_master(n)%newids(1:strack%split_master(n)%nnewid)         
+         !          end do
+         !       end if
+         !       call MPI_BARRIER(cfg%comm,ierr)
+         !    end do
+         ! end block print_split_master
          
          ! Prepare new staggered viscosity (at n+1)
          call fs%get_viscosity(vf=vf,strat=arithmetic_visc)
