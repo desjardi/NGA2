@@ -370,6 +370,7 @@ contains
          use random, only: random_uniform
          use mms_geom, only: cube_refine_vol
          use precision, only: I4
+         use MPI, only: MPI_INTEGER,MPI_MAX
          real(WP), dimension(3,8) :: cube_vertex
          real(WP), dimension(3) :: v_cent,a_cent
          real(WP) :: vol,area
@@ -378,6 +379,7 @@ contains
          integer :: nD,nDrop
          integer(kind=I4), allocatable, dimension(:) :: seed
          integer(kind=I4) :: nseed
+         integer :: ierr
          ! Create a VOF solver with r2p reconstruction
          call vf%initialize(cfg=cfg,reconstruction_method=lvira,transport_method=remap_storage,name='VOF')
          ! Create structure tracker
@@ -434,6 +436,7 @@ contains
 
          ! Initialize id counter to be consistent with id's
          strack%idcount=maxval(strack%id)
+         call MPI_ALLREDUCE(maxval(strack%id),strack%idcount,1,MPI_INTEGER,MPI_MAX,cfg%comm,ierr)
          ! Update the band
          call vf%update_band()
          ! Perform interface reconstruction from VOF field
