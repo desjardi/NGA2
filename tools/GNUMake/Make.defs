@@ -72,7 +72,7 @@ FORTLINK  	= UNDERSCORE
 # Fortran preprocessor
 FORT_CPP    = cpp -E -traditional-cpp -P
 # Scripts for building dependencies
-MKDEP		    = perl $(NGA_HOME)/tools/scripts/mkdep.pl
+MKDEP		    = perl $(NGA_HOME)/tools/scripts/mkdep
 MODDEP		  = $(NGA_HOME)/tools/scripts/dep.py
 FORTPREP  	= perl $(NGA_HOME)/Tools/scripts/strip72 -c
 F90PREP    	= cat  # a placeholder in case we have to write something later
