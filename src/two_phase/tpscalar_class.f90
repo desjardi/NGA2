@@ -188,9 +188,9 @@ contains
       integer :: i,j,k
       
       ! Allocate finite difference diffusivity interpolation coefficients
-      allocate(this%itp_x(-1:0,this%cfg%imin_  :this%cfg%imax_+1,this%cfg%jmin_-1:this%cfg%jmax_+1,this%cfg%kmin_-1:this%cfg%kmax_+1)) !< X-face-centered
-      allocate(this%itp_y(-1:0,this%cfg%imin_-1:this%cfg%imax_+1,this%cfg%jmin_  :this%cfg%jmax_+1,this%cfg%kmin_-1:this%cfg%kmax_+1)) !< Y-face-centered
-      allocate(this%itp_z(-1:0,this%cfg%imin_-1:this%cfg%imax_+1,this%cfg%jmin_-1:this%cfg%jmax_+1,this%cfg%kmin_  :this%cfg%kmax_+1)) !< Z-face-centered
+      allocate(this%itp_x(-1:0,this%cfg%imin_:this%cfg%imax_+1,this%cfg%jmin_:this%cfg%jmax_+1,this%cfg%kmin_:this%cfg%kmax_+1)) !< X-face-centered
+      allocate(this%itp_y(-1:0,this%cfg%imin_:this%cfg%imax_+1,this%cfg%jmin_:this%cfg%jmax_+1,this%cfg%kmin_:this%cfg%kmax_+1)) !< Y-face-centered
+      allocate(this%itp_z(-1:0,this%cfg%imin_:this%cfg%imax_+1,this%cfg%jmin_:this%cfg%jmax_+1,this%cfg%kmin_:this%cfg%kmax_+1)) !< Z-face-centered
       ! Create diffusivity interpolation coefficients to cell face
       do k=this%cfg%kmin_,this%cfg%kmax_+1
          do j=this%cfg%jmin_,this%cfg%jmax_+1
@@ -201,9 +201,6 @@ contains
             end do
          end do
       end do
-      this%itp_x(:,:,this%cfg%jmin_-1,:)=this%itp_x(:,:,this%cfg%jmin_,:); this%itp_x(:,:,:,this%cfg%kmin_-1)=this%itp_x(:,:,:,this%cfg%kmin_)
-      this%itp_y(:,this%cfg%imin_-1,:,:)=this%itp_y(:,this%cfg%imin_,:,:); this%itp_y(:,:,:,this%cfg%kmin_-1)=this%itp_y(:,:,:,this%cfg%kmin_)
-      this%itp_z(:,this%cfg%imin_-1,:,:)=this%itp_z(:,this%cfg%imin_,:,:); this%itp_z(:,:,this%cfg%jmin_-1,:)=this%itp_z(:,:,this%cfg%jmin_,:)
       
       ! Allocate finite volume divergence operators
       allocate(this%div_x(0:+1,this%cfg%imin_:this%cfg%imax_,this%cfg%jmin_:this%cfg%jmax_,this%cfg%kmin_:this%cfg%kmax_)) !< Cell-centered

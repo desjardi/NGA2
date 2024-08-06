@@ -5017,9 +5017,9 @@ contains
       use irl_fortran_interface, only: calculateNormal,getNumberOfVertices
       implicit none
       class(vfs), intent(in) :: this
-      real(WP), target, dimension(-1:0,this%cfg%imin_  :this%cfg%imax_+1,this%cfg%jmin_-1:this%cfg%jmax_+1,this%cfg%kmin_-1:this%cfg%kmax_+1), intent(in) :: itp_x
-      real(WP), target, dimension(-1:0,this%cfg%imin_-1:this%cfg%imax_+1,this%cfg%jmin_  :this%cfg%jmax_+1,this%cfg%kmin_-1:this%cfg%kmax_+1), intent(in) :: itp_y
-      real(WP), target, dimension(-1:0,this%cfg%imin_-1:this%cfg%imax_+1,this%cfg%jmin_-1:this%cfg%jmax_+1,this%cfg%kmin_  :this%cfg%kmax_+1), intent(in) :: itp_z
+      real(WP), target, dimension(-1:0,this%cfg%imin_:this%cfg%imax_+1,this%cfg%jmin_:this%cfg%jmax_+1,this%cfg%kmin_:this%cfg%kmax_+1), intent(in) :: itp_x
+      real(WP), target, dimension(-1:0,this%cfg%imin_:this%cfg%imax_+1,this%cfg%jmin_:this%cfg%jmax_+1,this%cfg%kmin_:this%cfg%kmax_+1), intent(in) :: itp_y
+      real(WP), target, dimension(-1:0,this%cfg%imin_:this%cfg%imax_+1,this%cfg%jmin_:this%cfg%jmax_+1,this%cfg%kmin_:this%cfg%kmax_+1), intent(in) :: itp_z
       real(WP), dimension(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_), intent(in) :: mflux
       real(WP), intent(in) :: rho_l,rho_g
       real(WP), dimension(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_,3), intent(inout) :: vel_pc
