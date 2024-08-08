@@ -65,6 +65,72 @@ contains
       ! Create the drop
       G=radius-sqrt(sum((xyz-center)**2))
    end function levelset_drop
+
+
+   !> Function that localizes the x- boundary
+   function xm_locator(pg,i,j,k) result(isIn)
+      use pgrid_class, only: pgrid
+      class(pgrid), intent(in) :: pg
+      integer, intent(in) :: i,j,k
+      logical :: isIn
+      isIn=.false.
+      if (i.eq.pg%imin) isIn=.true.
+   end function xm_locator
+
+
+   !> Function that localizes the x+ boundary
+   function xp_locator(pg,i,j,k) result(isIn)
+      use pgrid_class, only: pgrid
+      class(pgrid), intent(in) :: pg
+      integer, intent(in) :: i,j,k
+      logical :: isIn
+      isIn=.false.
+      if (i.eq.pg%imax+1) isIn=.true.
+   end function xp_locator
+   
+
+   !> Function that localizes y- boundary
+   function ym_locator(pg,i,j,k) result(isIn)
+      use pgrid_class, only: pgrid
+      class(pgrid), intent(in) :: pg
+      integer, intent(in) :: i,j,k
+      logical :: isIn
+      isIn=.false.
+      if (j.eq.pg%jmin) isIn=.true.
+   end function ym_locator
+   
+   
+   !> Function that localizes y+ boundary
+   function yp_locator(pg,i,j,k) result(isIn)
+      use pgrid_class, only: pgrid
+      class(pgrid), intent(in) :: pg
+      integer, intent(in) :: i,j,k
+      logical :: isIn
+      isIn=.false.
+      if (j.eq.pg%jmax+1) isIn=.true.
+   end function yp_locator
+
+
+   !> Function that localizes z- boundary
+   function zm_locator(pg,i,j,k) result(isIn)
+      use pgrid_class, only: pgrid
+      class(pgrid), intent(in) :: pg
+      integer, intent(in) :: i,j,k
+      logical :: isIn
+      isIn=.false.
+      if (k.eq.pg%kmin) isIn=.true.
+   end function zm_locator
+   
+   
+   !> Function that localizes z+ boundary
+   function zp_locator(pg,i,j,k) result(isIn)
+      use pgrid_class, only: pgrid
+      class(pgrid), intent(in) :: pg
+      integer, intent(in) :: i,j,k
+      logical :: isIn
+      isIn=.false.
+      if (k.eq.pg%kmax+1) isIn=.true.
+   end function zp_locator
    
    
    !> Initialization of problem solver
@@ -174,6 +240,7 @@ contains
       create_and_initialize_flow_solver: block
          use hypre_str_class, only: pcg_pfmg2
          use mathtools,       only: Pi
+         use tpns_class, only: neumann
          ! Create flow solver
          fs=tpns(cfg=cfg,name='Two-phase NS')
          ! Assign constant viscosity to each phase
@@ -188,6 +255,13 @@ contains
          fs%contact_angle=fs%contact_angle*Pi/180.0_WP
          ! Assign acceleration of gravity
          call param_read('Gravity',fs%gravity)
+         ! BCs
+         call fs%add_bcond(name='xm',type=neumann,face='x',dir=-1,canCorrect=.true.,locator=xm_locator)
+         call fs%add_bcond(name='xp',type=neumann,face='x',dir=+1,canCorrect=.true.,locator=xp_locator)
+         call fs%add_bcond(name='ym',type=neumann,face='y',dir=-1,canCorrect=.true.,locator=ym_locator)
+         call fs%add_bcond(name='yp',type=neumann,face='y',dir=+1,canCorrect=.true.,locator=yp_locator)
+         call fs%add_bcond(name='zm',type=neumann,face='z',dir=-1,canCorrect=.true.,locator=zm_locator)
+         call fs%add_bcond(name='zp',type=neumann,face='z',dir=+1,canCorrect=.true.,locator=zp_locator)
          ! Configure pressure solver
          ps=hypre_str(cfg=cfg,name='Pressure',method=pcg_pfmg2,nst=7)
          ps%maxlevel=10
@@ -285,7 +359,7 @@ contains
          call param_read('Evaporation mass flux',evp_mass_flux)
          pseudo_time%dt=pseudo_time%dtmax
          ! Initialize the evaporation mass flux and errors
-         where ((vf%VF.gt.0.0_WP).and.(vf%VF.lt.1.0_WP)); mflux=evp_mass_flux; else where; mflux=0.0_WP; end where
+         where ((vf%VF.gt.0.0_WP).and.(vf%VF.lt.1.0_WP)); mflux=evp_mass_flux*vf%SD; else where; mflux=0.0_WP; end where
          mfluxL=mflux; mfluxG=mflux
          mflux_err=0.0_WP; mfluxL_err=0.0_WP; mfluxG_err=0.0_WP
          mfluxL_int_err=0.0_WP; mfluxG_int_err=0.0_WP
@@ -467,7 +541,7 @@ contains
          call fs%get_olddensity(vf=vf)!; call fsL%get_olddensity(vf=vf)
          
          ! Interface jump conditions
-         where ((vf%VF.gt.0.0_WP).and.(vf%VF.lt.1.0_WP)); mflux=evp_mass_flux; else where; mflux=0.0_WP; end where
+         where ((vf%VF.gt.0.0_WP).and.(vf%VF.lt.1.0_WP)); mflux=evp_mass_flux*vf%SD; else where; mflux=0.0_WP; end where
          
          ! Shift the evaporation mass flux away from the interface
          shift_mflux: block
@@ -564,7 +638,7 @@ contains
          end block shift_mflux
 
          advace_VOF: block
-            real(WP), dimension(:,:,:,:), allocatable :: vel_pc
+            ! real(WP), dimension(:,:,:,:), allocatable :: vel_pc
 
             ! Allocate phase-change velocity
             ! allocate(vel_pc(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_,1:3))
@@ -604,7 +678,7 @@ contains
 
             ! Apply the mass/energy transfer term for the species/temperature
             nsc=iYv
-            where (sc%PVF(:,:,:,sc%phase(nsc)).gt.0.0_WP.and.sc%PVF(:,:,:,sc%phase(nsc)).lt.1.0_WP) sc%SC(:,:,:,nsc)=sc%SC(:,:,:,nsc)+mflux/sc%Prho(sc%phase(nsc))*vf%SD*time%dt
+            where (sc%PVF(:,:,:,sc%phase(nsc)).gt.0.0_WP.and.sc%PVF(:,:,:,sc%phase(nsc)).lt.1.0_WP) sc%SC(:,:,:,nsc)=sc%SC(:,:,:,nsc)+mflux/sc%Prho(sc%phase(nsc))*time%dt
                
             ! Advance diffusion
             call sc%solve_implicit(time%dt,sc%SC)
@@ -649,11 +723,11 @@ contains
                ! Apply other boundary conditions
                call fs%apply_bcond(time%t,time%dt)
                
-               ! Solve Poisson equation (Evaporation mass flux is taken into account here)
+               ! Solve Poisson equation
                call fs%update_laplacian()
-               resU=(mfluxG/fs%rho_g-mfluxL/fs%rho_l)*vf%SD
-               call fs%correct_mfr(src=resU)
-               call fs%get_div(src=resU)
+               mflux=(mfluxG/fs%rho_g-mfluxL/fs%rho_l)
+               call fs%correct_mfr(src=mflux)
+               call fs%get_div(src=mflux)
                call fs%add_surface_tension_jump(dt=time%dt,div=fs%div,vf=vf,contact_model=static_contact)
                fs%psolv%rhs=-fs%cfg%vol*fs%div/time%dt
                fs%psolv%sol=0.0_WP
@@ -674,7 +748,7 @@ contains
             
             ! Recompute interpolated velocity and divergence
             call fs%interp_vel(Ui,Vi,Wi)
-            call fs%get_div()
+            call fs%get_div(src=mflux)
 
          end block advance_flow
 
