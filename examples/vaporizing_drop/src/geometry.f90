@@ -64,7 +64,6 @@ contains
       
       
       ! Create masks for this config
-      ! Debug
       create_walls: block
          use mathtools, only: twoPi
          integer :: i,j,k

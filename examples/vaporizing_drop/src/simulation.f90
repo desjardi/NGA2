@@ -38,7 +38,7 @@ module simulation
    real(WP), dimension(:,:,:),   allocatable :: resU,resV,resW
    real(WP), dimension(:,:,:),   allocatable :: Ui,Vi,Wi
    real(WP), dimension(:,:,:),   allocatable :: VFgradX,VFgradY,VFgradZ
-   real(WP), dimension(:,:,:),   allocatable :: mflux
+   real(WP), dimension(:,:,:),   allocatable :: mflux,evp_src
    real(WP), dimension(:,:,:),   allocatable :: mfluxL,mfluxL_old,resmfluxL,mflxLerr
    real(WP), dimension(:,:,:),   allocatable :: mfluxG,mfluxG_old,resmfluxG
    ! real(WP), dimension(:,:,:),   allocatable :: U_itf,V_itf,W_itf
@@ -47,7 +47,7 @@ module simulation
    real(WP), dimension(3) :: center
    real(WP) :: radius
    integer  :: iTl,iYv
-   real(WP) :: mflux_int,mflux_err,mflux_tol
+   real(WP) :: mflux_max,mflux_int,mflux_err,mflux_tol
    real(WP) :: mfluxL_int,mfluxL_err,mfluxL_int_err
    real(WP) :: mfluxG_int,mfluxG_err,mfluxG_int_err
    real(WP) :: mflux_ens_time
@@ -78,6 +78,17 @@ contains
    end function xm_locator
 
 
+   !> Function that localizes the x- boundary for scalar fields
+   function xm_locator_sc(pg,i,j,k) result(isIn)
+      use pgrid_class, only: pgrid
+      class(pgrid), intent(in) :: pg
+      integer, intent(in) :: i,j,k
+      logical :: isIn
+      isIn=.false.
+      if (i.eq.pg%imin-1) isIn=.true.
+   end function xm_locator_sc
+
+
    !> Function that localizes the x+ boundary
    function xp_locator(pg,i,j,k) result(isIn)
       use pgrid_class, only: pgrid
@@ -98,6 +109,17 @@ contains
       isIn=.false.
       if (j.eq.pg%jmin) isIn=.true.
    end function ym_locator
+
+
+   !> Function that localizes y- boundary for scalar fields
+   function ym_locator_sc(pg,i,j,k) result(isIn)
+      use pgrid_class, only: pgrid
+      class(pgrid), intent(in) :: pg
+      integer, intent(in) :: i,j,k
+      logical :: isIn
+      isIn=.false.
+      if (j.eq.pg%jmin-1) isIn=.true.
+   end function ym_locator_sc
    
    
    !> Function that localizes y+ boundary
@@ -120,6 +142,17 @@ contains
       isIn=.false.
       if (k.eq.pg%kmin) isIn=.true.
    end function zm_locator
+
+
+   !> Function that localizes z- boundary for scalar fields
+   function zm_locator_sc(pg,i,j,k) result(isIn)
+      use pgrid_class, only: pgrid
+      class(pgrid), intent(in) :: pg
+      integer, intent(in) :: i,j,k
+      logical :: isIn
+      isIn=.false.
+      if (k.eq.pg%kmin-1) isIn=.true.
+   end function zm_locator_sc
    
    
    !> Function that localizes z+ boundary
@@ -146,6 +179,7 @@ contains
          allocate(VFgradY   (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_)); VFgradY=0.0_WP
          allocate(VFgradZ   (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_)); VFgradZ=0.0_WP
          allocate(mflux     (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_)); mflux =0.0_WP
+         allocate(evp_src   (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_)); evp_src =0.0_WP
          allocate(mfluxL    (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_)); mfluxL=0.0_WP
          allocate(mfluxG    (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_)); mfluxG=0.0_WP
          allocate(mfluxL_old(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_)); mfluxL_old=0.0_WP
@@ -179,7 +213,7 @@ contains
       ! Initialize our VOF solver and field
       create_and_initialize_vof: block
          use mms_geom,  only: cube_refine_vol
-         use vfs_class, only: lvira,VFhi,VFlo,flux_storage
+         use vfs_class, only: lvira,VFhi,VFlo,flux_storage,neumann
          integer :: i,j,k,n,si,sj,sk
          real(WP), dimension(3,8) :: cube_vertex
          real(WP), dimension(3) :: v_cent,a_cent
@@ -188,6 +222,13 @@ contains
          ! Create a VOF solver
          call vf%initialize(cfg=cfg,reconstruction_method=lvira,transport_method=flux_storage,name='VOF')
          vf%cons_correct=.false.
+         ! Boundary conditinos
+         call vf%add_bcond(name='xm',type=neumann,locator=xm_locator_sc,dir='-x')
+         call vf%add_bcond(name='xp',type=neumann,locator=xp_locator   ,dir='+x')
+         call vf%add_bcond(name='ym',type=neumann,locator=ym_locator_sc,dir='-y')
+         call vf%add_bcond(name='yp',type=neumann,locator=yp_locator   ,dir='+y')
+         ! call vf%add_bcond(name='zm',type=neumann,locator=zm_locator_sc,dir='-z')
+         ! call vf%add_bcond(name='zp',type=neumann,locator=zp_locator   ,dir='+z')
          ! Initialize to a droplet
          call param_read('Droplet center',center)
          call param_read('Droplet diameter',radius); radius=radius/2.0_WP
@@ -255,13 +296,13 @@ contains
          fs%contact_angle=fs%contact_angle*Pi/180.0_WP
          ! Assign acceleration of gravity
          call param_read('Gravity',fs%gravity)
-         ! BCs
+         ! Boundary conditions
          call fs%add_bcond(name='xm',type=neumann,face='x',dir=-1,canCorrect=.true.,locator=xm_locator)
          call fs%add_bcond(name='xp',type=neumann,face='x',dir=+1,canCorrect=.true.,locator=xp_locator)
          call fs%add_bcond(name='ym',type=neumann,face='y',dir=-1,canCorrect=.true.,locator=ym_locator)
          call fs%add_bcond(name='yp',type=neumann,face='y',dir=+1,canCorrect=.true.,locator=yp_locator)
-         call fs%add_bcond(name='zm',type=neumann,face='z',dir=-1,canCorrect=.true.,locator=zm_locator)
-         call fs%add_bcond(name='zp',type=neumann,face='z',dir=+1,canCorrect=.true.,locator=zp_locator)
+         ! call fs%add_bcond(name='zm',type=neumann,face='z',dir=-1,canCorrect=.true.,locator=zm_locator)
+         ! call fs%add_bcond(name='zp',type=neumann,face='z',dir=+1,canCorrect=.true.,locator=zp_locator)
          ! Configure pressure solver
          ps=hypre_str(cfg=cfg,name='Pressure',method=pcg_pfmg2,nst=7)
          ps%maxlevel=10
@@ -310,12 +351,19 @@ contains
       ! Create a one-sided scalar solver
       create_scalar: block
          use param, only: param_read
-         use tpscalar_class, only: Lphase,Gphase
+         use tpscalar_class, only: Lphase,Gphase,neumann
          use hypre_str_class, only: pcg_pfmg2,pfmg,gmres_pfmg
          integer :: i,j,k
          real(WP) :: LTdiff,Yvdiff
          ! Create scalar solver
          call sc%initialize(cfg=cfg,nscalar=2,name='tpscalar')
+         ! Boundary conditinos
+         call sc%add_bcond(name='xm',type=neumann,locator=xm_locator_sc,dir='-x')
+         call sc%add_bcond(name='xp',type=neumann,locator=xp_locator   ,dir='+x')
+         call sc%add_bcond(name='ym',type=neumann,locator=ym_locator_sc,dir='-y')
+         call sc%add_bcond(name='yp',type=neumann,locator=yp_locator   ,dir='+y')
+         ! call sc%add_bcond(name='zm',type=neumann,locator=zm_locator_sc,dir='-z')
+         ! call sc%add_bcond(name='zp',type=neumann,locator=zp_locator   ,dir='+z')
          ! Initialize the phase specific VOF
          sc%PVF(:,:,:,Lphase)=vf%VF
          sc%PVF(:,:,:,Gphase)=1.0_WP-vf%VF
@@ -396,7 +444,8 @@ contains
          do nsc=1,sc%nscalar
            call ens_out%add_scalar(trim(sc%SCname(nsc)),sc%SC(:,:,:,nsc))
          end do
-         call ens_out%add_scalar('mflux' ,mflux)
+         call ens_out%add_scalar('mflux',mflux)
+         call ens_out%add_scalar('evp_src',evp_src)
          call ens_out%add_scalar('mfluxL',mfluxL)
          call ens_out%add_scalar('mfluxG',mfluxG)
          call ens_out%add_scalar('mfluxL_err',mflxLerr)
@@ -413,8 +462,8 @@ contains
             ens_mflux_out=ensight(cfg=cfg,name='mfluxEvolution')
             ens_mflux_evt=event(time=pseudo_time,name='mflux ensight')
             call param_read('Ensight output period for mflux',ens_mflux_evt%tper)
-            call ens_mflux_out%add_scalar('VOF'  ,vf%VF)
-            call ens_mflux_out%add_scalar('mflux' ,mflux)
+            call ens_mflux_out%add_scalar('VOF',vf%VF)
+            call ens_mflux_out%add_scalar('mflux',mflux)
             call ens_mflux_out%add_scalar('mfluxL',mfluxL)
             call ens_mflux_out%add_scalar('mfluxG',mfluxG)
             call ens_mflux_out%add_scalar('mfluxL_err',mflxLerr)
@@ -540,6 +589,28 @@ contains
          ! Prepare old staggered density (at n)
          call fs%get_olddensity(vf=vf)!; call fsL%get_olddensity(vf=vf)
          
+         advace_VOF: block
+            ! real(WP), dimension(:,:,:,:), allocatable :: vel_pc
+
+            ! Allocate phase-change velocity
+            ! allocate(vel_pc(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_,1:3))
+
+            ! Update interface velocity
+            ! call vf%get_vel_pc(mflux,sc%itp_x,sc%itp_y,sc%itp_z,fs%rho_l,fs%rho_g,vel_pc)
+            ! U_itf=fsL%U-vel_pc(:,:,:,1)
+            ! V_itf=fsL%V-vel_pc(:,:,:,2)
+            ! W_itf=fsL%W-vel_pc(:,:,:,3)
+
+            ! VOF solver step
+            ! call vf%advance(dt=time%dt,U=U_itf,V=V_itf,W=W_itf)
+            call vf%advance(dt=time%dt,U=fs%U,V=fs%V,W=fs%W)
+            call vf%apply_bcond(time%t,time%dt)
+
+            ! Deallocate phase-change velocity
+            ! deallocate(vel_pc)
+         
+         end block advace_VOF
+
          ! Interface jump conditions
          where ((vf%VF.gt.0.0_WP).and.(vf%VF.lt.1.0_WP)); mflux=evp_mass_flux*vf%SD; else where; mflux=0.0_WP; end where
          
@@ -550,7 +621,7 @@ contains
             use irl_fortran_interface, only: calculateNormal,getNumberOfVertices
             real(WP), dimension(:,:,:), allocatable :: ccVFgradX,ccVFgradY,ccVFgradZ
             integer  :: ierr,i,j,k
-            real(WP) :: my_mflux_err
+            real(WP) :: my_mflux_max,my_mflux_err
             real(WP), dimension(3) :: n1,n2
             
             ! Allocate memory for the cell-centered VOF gradient
@@ -610,8 +681,15 @@ contains
                mfluxL=mfluxL_old+pseudo_time%dt*resmfluxL
                mfluxG=mfluxG_old+pseudo_time%dt*resmfluxG
 
+               ! Get the maximum of mflux
+               my_mflux_max=maxval(mflux)
+               call MPI_ALLREDUCE(my_mflux_max,mflux_max,1,MPI_REAL_WP,MPI_Max,sc%cfg%comm,ierr)
+
                ! Output to ensight
-               mflxLerr=mfluxL-mfluxL_old
+               ! mflxLerr=(mfluxL-mfluxL_old)/mfluxL_old
+               ! mflxLerr=(exp(mfluxL)-exp(mfluxL_old))/exp(mfluxL_old)
+               ! mflxLerr=mfluxL-mfluxL_old
+               mflxLerr=(mfluxL-mfluxL_old)/mflux_max
                if (mflux_ens_time.eq.time%t.and.ens_mflux_evt%occurs()) then
                   call ens_mflux_out%write_data(pseudo_time%t)
                end if
@@ -620,7 +698,10 @@ contains
                my_mflux_err=maxval(abs(mflxLerr))
                call MPI_ALLREDUCE(my_mflux_err,mfluxL_err,1,MPI_REAL_WP,MPI_Max,sc%cfg%comm,ierr)
                ! Calculate the error on the gas side
-               my_mflux_err=maxval(abs(mfluxG-mfluxG_old))
+               ! my_mflux_err=maxval(abs((mfluxG-mfluxG_old)/mfluxG_old))
+               ! my_mflux_err=maxval(abs((exp(mfluxG)-exp(mfluxG_old))/exp(mfluxG_old)))
+               ! my_mflux_err=maxval(abs(mfluxG-mfluxG_old))
+               my_mflux_err=maxval(abs((mfluxG-mfluxG_old)/mflux_max))
                call MPI_ALLREDUCE(my_mflux_err,mfluxG_err,1,MPI_REAL_WP,MPI_Max,sc%cfg%comm,ierr)
                ! Check convergence
                mflux_err=max(mfluxL_err,mfluxG_err)
@@ -636,27 +717,6 @@ contains
             mfluxG_int_err=abs(mfluxG_int-mflux_int)
 
          end block shift_mflux
-
-         advace_VOF: block
-            ! real(WP), dimension(:,:,:,:), allocatable :: vel_pc
-
-            ! Allocate phase-change velocity
-            ! allocate(vel_pc(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_,1:3))
-
-            ! Update interface velocity
-            ! call vf%get_vel_pc(mflux,sc%itp_x,sc%itp_y,sc%itp_z,fs%rho_l,fs%rho_g,vel_pc)
-            ! U_itf=fsL%U-vel_pc(:,:,:,1)
-            ! V_itf=fsL%V-vel_pc(:,:,:,2)
-            ! W_itf=fsL%W-vel_pc(:,:,:,3)
-
-            ! VOF solver step
-            ! call vf%advance(dt=time%dt,U=U_itf,V=V_itf,W=W_itf)
-            call vf%advance(dt=time%dt,U=fs%U,V=fs%V,W=fs%W)
-
-            ! Deallocate phase-change velocity
-            ! deallocate(vel_pc)
-         
-         end block advace_VOF
 
          ! Transport scalars
          advance_scalar: block
@@ -725,10 +785,11 @@ contains
                
                ! Solve Poisson equation
                call fs%update_laplacian()
-               mflux=(mfluxG/fs%rho_g-mfluxL/fs%rho_l)
-               call fs%correct_mfr(src=mflux)
-               call fs%get_div(src=mflux)
-               call fs%add_surface_tension_jump(dt=time%dt,div=fs%div,vf=vf,contact_model=static_contact)
+               evp_src=(mfluxG/fs%rho_g-mfluxL/fs%rho_l)
+               call fs%correct_mfr(src=evp_src)
+               call fs%get_div(src=evp_src)
+               ! call fs%add_surface_tension_jump(dt=time%dt,div=fs%div,vf=vf,contact_model=static_contact)
+               call fs%add_surface_tension_jump(dt=time%dt,div=fs%div,vf=vf)
                fs%psolv%rhs=-fs%cfg%vol*fs%div/time%dt
                fs%psolv%sol=0.0_WP
                call fs%psolv%solve()
@@ -748,7 +809,7 @@ contains
             
             ! Recompute interpolated velocity and divergence
             call fs%interp_vel(Ui,Vi,Wi)
-            call fs%get_div(src=mflux)
+            call fs%get_div(src=evp_src)
 
          end block advance_flow
 
@@ -849,7 +910,7 @@ contains
       ! timetracker
       
       ! Deallocate work arrays
-      deallocate(resU,resV,resW,Ui,Vi,Wi,resSC,VFgradX,VFgradY,VFgradZ,mflux,mfluxL,mfluxL_old,mfluxG,mfluxG_old,resmfluxL,resmfluxG,mflxLerr)!,U_itf,V_itf,W_itf)
+      deallocate(resU,resV,resW,Ui,Vi,Wi,resSC,VFgradX,VFgradY,VFgradZ,mflux,evp_src,mfluxL,mfluxL_old,mfluxG,mfluxG_old,resmfluxL,resmfluxG,mflxLerr)!,U_itf,V_itf,W_itf)
 
    end subroutine simulation_final
    
