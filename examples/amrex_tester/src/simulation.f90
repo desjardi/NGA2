@@ -18,10 +18,17 @@ contains
    subroutine simulation_init
       implicit none
       
-      ! Create an amrcore object
-      call amr%initialize()
+      ! Define domain and creare amrcore object
+      build_amr: block
+         amr%nx  =64    ; amr%ny =64    ; amr%nz =64
+         amr%xlo =0.0_WP; amr%ylo=0.0_WP; amr%zlo=0.0_WP
+         amr%xhi =1.0_WP; amr%yhi=1.0_WP; amr%zhi=1.0_WP
+         amr%xper=1     ; amr%yper=1    ; amr%zper=1
+         amr%nlvl=3
+         call amr%initialize()
+      end block build_amr
       
-      
+
    end subroutine simulation_init
    
    

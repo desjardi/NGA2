@@ -15,39 +15,29 @@ module amrcore_class
       type(c_ptr) :: amrcore=c_null_ptr
       
       ! Coordinate system
-      integer :: coordsys
-      ! Domain periodicity
-      logical :: xper,yper,zper
+      integer :: coordsys=0
+      ! Domain periodicity (0=non-periodic,1=periodic)
+      integer :: xper,yper,zper
       ! Domain extent
       real(WP) :: xlo,ylo,zlo
       real(WP) :: xhi,yhi,zhi
       
-      ! Mesh dimensions
+      ! Level 0 mesh dimensions
       integer :: nx,ny,nz
+      ! Number of refinement levels
+      integer :: nlvl
       ! Max grid size
-      integer :: nmax
+      integer :: nmax=32
       ! Blocking factor
-      integer :: nbloc
+      integer :: nbloc=8
       ! Refinement ratio
-      integer, dimension(4) :: rref
+      integer :: rref=2
       
    contains
       procedure :: initialize
       procedure :: finalize
    end type amrcore
    
-   interface
-      subroutine amrex_fi_new_amrcore(my_amrcore) bind(c)
-         import
-         implicit none
-         type(c_ptr) :: my_amrcore
-      end subroutine amrex_fi_new_amrcore
-      subroutine amrex_fi_delete_amrcore(my_amrcore) bind(c)
-         import
-         implicit none
-         type(c_ptr) :: my_amrcore
-      end subroutine amrex_fi_delete_amrcore
-   end interface
    
 contains
    
@@ -59,8 +49,8 @@ contains
       
       ! First of all, confirm that nga2 and amrex reals are compatible
       check_real: block
-         use messager,          only: die
-         use precision,         only: WP
+         use messager,         only: die
+         use precision,        only: WP
          use amrex_amr_module, only: amrex_real
          if (amrex_real.ne.WP) call die('Incompatible real type between nga2 and amrex!')
       end block check_real
@@ -79,23 +69,31 @@ contains
          use amrex_amr_module, only: amrex_parmparse,amrex_parmparse_build,amrex_parmparse,amrex_parmparse_destroy
          type(amrex_parmparse) :: pp
          call amrex_parmparse_build(pp,'amr')
-         call pp%addarr('n_cell',[64,64,64])
-         call pp%add   ('max_level',2)
-         call pp%add   ('blocking_factor',8)
-         call pp%add   ('max_grid_size',32)
-         call pp%add   ('ref_ratio',2)
+         call pp%addarr('n_cell'         ,[this%nx,this%ny,this%nz])
+         call pp%add   ('max_level'      ,this%nlvl)
+         call pp%add   ('blocking_factor',this%nbloc)
+         call pp%add   ('max_grid_size'  ,this%nmax)
+         call pp%add   ('ref_ratio'      ,this%rref)
          call amrex_parmparse_destroy(pp)
-         ! Prefix 'geometry'
          call amrex_parmparse_build(pp,'geometry')
-         call pp%addarr('is_periodic',[1,1,1])
-         call pp%add   ('coord_sys',0) ! 0 is cartesian
-         call pp%addarr('prob_lo',[0.0_WP,0.0_WP,0.0_WP])
-         call pp%addarr('prob_hi',[1.0_WP,1.0_WP,1.0_WP])
+         call pp%add   ('coord_sys'  ,this%coordsys)
+         call pp%addarr('is_periodic',[this%xper,this%yper,this%zper])
+         call pp%addarr('prob_lo'    ,[this%xlo,this%ylo,this%zlo])
+         call pp%addarr('prob_hi'    ,[this%xhi,this%yhi,this%zhi])
          call amrex_parmparse_destroy(pp)
       end block set_params
-
+      
       ! Create an amrcore object
-      call amrex_fi_new_amrcore(this%amrcore)
+      create_amrcore_obj: block
+         interface
+            subroutine amrex_fi_new_amrcore(core) bind(c)
+               import
+               implicit none
+               type(c_ptr) :: core
+            end subroutine amrex_fi_new_amrcore
+         end interface
+         call amrex_fi_new_amrcore(this%amrcore)
+      end block create_amrcore_obj
       
    end subroutine initialize
    
@@ -105,16 +103,24 @@ contains
       implicit none
       class(amrcore), intent(inout) :: this
       ! Destroy our amrcore object
-      call amrex_fi_delete_amrcore(this%amrcore)
+      destroy_amrcore_obj: block
+         interface
+            subroutine amrex_fi_delete_amrcore(core) bind(c)
+               import
+               implicit none
+               type(c_ptr), value :: core
+            end subroutine amrex_fi_delete_amrcore
+         end interface
+         call amrex_fi_delete_amrcore(this%amrcore)
+      end block destroy_amrcore_obj
       this%amrcore=c_null_ptr
    end subroutine finalize
-
-
+   
+   
    !> Finalization of amrex
    subroutine finalize_amrex()
       use amrex_amr_module, only: amrex_finalize
       implicit none
-      ! Destroy our amrcore object
       call amrex_finalize()
    end subroutine finalize_amrex
    
