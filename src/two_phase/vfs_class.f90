@@ -5045,6 +5045,9 @@ contains
       itp(3)%arr=>itp_z
       ind_shift=reshape((/1,0,0,0,1,0,0,0,1/), shape(ind_shift))
 
+      ! Initialize vel_pc with zeros
+      vel_pc=0.0_WP
+      
       ! Loop over directions
       do dir=1,3
          ! Loop over cell faces

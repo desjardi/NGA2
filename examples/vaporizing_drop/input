@@ -4,9 +4,9 @@ Partition :	4 2 1
 # Mesh definition
 Lx : 0.05
 Ly : 0.05
-Lz : 0.0005
-nx : 100
-ny : 100
+Lz : 0.00025
+nx : 200
+ny : 200
 nz : 1
 
 # Case parameters
@@ -25,16 +25,16 @@ Liquid thermal diffusivity  : 1.137e-06
 Vapor diffusivity           : 1.452e-05
 
 # Evaporation
-Evaporation mass flux : 5 ! 1.8e-2 ! 500
+Evaporation mass flux : 5
 
 # Time integration
-Max timestep size : 5e-5 ! 2e-4 ! 5e-7
+Max timestep size : 5e-5
 Max cfl number    : 0.6
 Sub-iterations    : 2
-Max time          : 1
+Max time          : 1e-3
 
 # Pseudo time integration
-Max pseudo timestep size : 3e-4
+Max pseudo timestep size : 2.4e-5
 Max pseudo cfl number    : 0.5
 Max pseudo time steps    : 50
 Tolerence                : 1e-3
@@ -44,7 +44,7 @@ Pressure tolerance : 1e-9
 Pressure iteration : 100
 
 # Ensight output
-Ensight output period           : 1e-2
+Ensight output period           : 5e-5
 Ensight for mflux evolution     : false
 Ensight output period for mflux : 2e-7
 When to write mflux ensight     : 3.0e-3
