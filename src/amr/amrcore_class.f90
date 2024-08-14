@@ -53,13 +53,26 @@ module amrcore_class
       ! Data register
       type(amrdata), pointer :: first_amrdata=>NULL()
 
-      ! Subroutines
+      ! Arrays of pointers to subroutines to call when the grid is remade
+      type(mk_lvl_stype_ptr),  dimension(:), allocatable :: mk_lvl_init_array
+      type(mk_lvl_stype_ptr),  dimension(:), allocatable :: mk_lvl_crse_array
+      type(mk_lvl_stype_ptr),  dimension(:), allocatable :: mk_lvl_remk_array
+      type(clr_lvl_stype_ptr), dimension(:), allocatable :: clr_lvl_array
+      procedure(err_est_stype), pointer, nopass :: err_est=>null()
       
    contains
       procedure :: initialize ! Initialization of amrcore object
-      procedure :: register   ! Register a new dataset
-      procedure :: get        ! Get handle for a dataset
       procedure :: finalize   ! Finalization of amrcore object
+      
+      procedure :: register   ! Register a new real(WP) dataset
+      procedure :: iregister  ! Register a new integer dataset
+      procedure :: get        ! Get handle for a dataset
+      
+      !procedure :: register_mk_lvl_init ! Add a mk_lvl_init procedure
+      !procedure :: register_mk_lvl_crse ! Add a mk_lvl_crse procedure
+      !procedure :: register_mk_lvl_remk ! Add a mk_lvl_remk procedure
+      !procedure :: register_clr_lvl     ! Add a clr_lvl procedure
+      !procedure :: register_err_est     ! Add a err_est procedure
    end type amrcore
    
    !> Interfaces for regriding subroutines
@@ -87,6 +100,14 @@ module amrcore_class
          character(kind=c_char), intent(in), value :: clrval
       end subroutine err_est_stype
    end interface
+
+   !> Derived types for function pointers
+   type mk_lvl_stype_ptr
+      procedure(mk_lvl_stype), pointer, nopass :: f=>null()
+   end type mk_lvl_stype_ptr
+   type clr_lvl_stype_ptr
+      procedure(clr_lvl_stype), pointer, nopass :: f=>null()
+   end type clr_lvl_stype_ptr
    
 contains
    
@@ -162,7 +183,7 @@ contains
    end subroutine initialize
    
    
-   !> Register a new dataset in our amrcore object
+   !> Register a new real(WP) dataset in our amrcore object
    subroutine register(this,name,ncomp,nover,ctr)
       use messager, only: die
       implicit none
@@ -186,6 +207,32 @@ contains
       new_data%next=>this%first_amrdata
       this%first_amrdata=>new_data
    end subroutine register
+
+
+   !> Register a new integer dataset in our amrcore object
+   subroutine iregister(this,name,ncomp,nover,ctr)
+      use messager, only: die
+      implicit none
+      class(amrcore), intent(inout) :: this
+      character(len=*), intent(in) :: name
+      integer, intent(in) :: ncomp
+      integer, intent(in) :: nover
+      logical, dimension(3), intent(in) :: ctr
+      type(amrdata), pointer :: new_data
+      ! Prepare new amrdata
+      allocate(new_data)
+      new_data%name=trim(adjustl(name))
+      if (ncomp.lt.1) call die('[amrcore iregister] ncomp needs to be greater or equal to 1')
+      new_data%ncomp=ncomp
+      if (nover.lt.0) call die('[amrcore iregister] nover needs to be greater or equal to 0')
+      new_data%nover=nover
+      new_data%ctr=ctr
+      ! Allocate the imultifab array but do not create yet
+      allocate(new_data%idata(0:this%nlvl-1))
+      ! Insert it at the front of the list
+      new_data%next=>this%first_amrdata
+      this%first_amrdata=>new_data
+   end subroutine iregister
    
    
    !> Get handle to a dataset in our amrcore object
