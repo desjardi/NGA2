@@ -375,6 +375,7 @@ contains
             allocate(ids_all(nid_all)); ids_all=0; ids_all(sum(nid_proc(1:this%vf%cfg%rank))+1:sum(nid_proc(1:this%vf%cfg%rank+1)))=ids(1:nid)
             call MPI_ALLREDUCE(MPI_IN_PLACE,ids_all,nid_all,MPI_INTEGER,MPI_SUM,this%vf%cfg%comm,ierr)
             ! Compact list of ids
+            deallocate(ids); allocate(ids(nid_all))
             nid=0; ids=0
             compact_loop: do nnn=1,nid_all
                ! Check existing ids for redundancy
