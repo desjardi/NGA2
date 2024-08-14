@@ -1,9 +1,12 @@
-f90EXE_sources += linsol_class.f90 diag_class.f90 ddadi_class.f90 bbmg_class.f90 bbox_class.f90
+f90EXE_sources += linsol_class.f90 diag_class.f90 ddadi_class.f90
 ifeq ($(USE_HYPRE),TRUE)
   f90EXE_sources += hypre_str_class.f90 hypre_uns_class.f90
 endif
 ifeq ($(USE_FFTW),TRUE)
   f90EXE_sources += fftxyz_class.f90 fft3d_class.f90 fft2d_class.f90
+endif
+ifeq ($(USE_LAPACK),TRUE)
+  f90EXE_sources += bbmg_class.f90 bbox_class.f90
 endif
 
 INCLUDE_LOCATIONS += $(NGA_HOME)/src/solver

@@ -1,16 +1,20 @@
 !> Various definitions and tools for running an NGA2 simulation
 module simulation
    use precision, only: WP
-   use amrcore_class, only: amrcore,amrdata
+   use amrconfig_class, only: amrconfig
+   use amrscalar_class, only: amrscalar
    implicit none
    private
    
    !> Public declarations
    public :: simulation_init,simulation_run,simulation_final
    
-   !> Give ourselves an amrcore object
-   type(amrcore) :: amr
+   !> Give ourselves an amrconfig object
+   type(amrconfig) :: amr
 
+   !> Also create an amrscalar
+   type(amrscalar) :: sc
+   
 contains
    
    
@@ -28,9 +32,10 @@ contains
          call amr%initialize(name='mybox')
       end block build_amr
       
-      ! Register scalar fields
-      call amr%register(name='phi'    ,ncomp=1,nover=0,ctr=[.true.,.true.,.true.])
-      call amr%register(name='phi_old',ncomp=1,nover=0,ctr=[.true.,.true.,.true.])
+      ! Create scalar solver
+      create_scalar_solver: block
+         call sc%initialize(amr=amr)
+      end block create_scalar_solver
       
    end subroutine simulation_init
    
@@ -44,8 +49,9 @@ contains
    
    !> Finalize the NGA2 simulation
    subroutine simulation_final
-      use amrcore_class, only: finalize_amrex
+      use amrconfig_class, only: finalize_amrex
       implicit none
+      call sc%finalize()
       call amr%finalize()
       call finalize_amrex()
    end subroutine simulation_final

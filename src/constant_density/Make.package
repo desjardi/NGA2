@@ -1,4 +1,8 @@
 f90EXE_sources += incomp_class.f90 scalar_class.f90 multiscalar_class.f90
 
+ifeq ($(USE_AMREX),TRUE)
+  f90EXE_sources += amrscalar_class.f90
+endif
+
 INCLUDE_LOCATIONS += $(NGA_HOME)/src/constant_density
 VPATH_LOCATIONS   += $(NGA_HOME)/src/constant_density
