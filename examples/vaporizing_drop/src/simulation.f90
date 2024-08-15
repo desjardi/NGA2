@@ -29,7 +29,7 @@ module simulation
    type(event)    :: ens_evt,ens_mflux_evt
    
    !> Simulation monitor file
-   type(monitor) :: mfile,cflfile,scfile,mfluxfile,mfileL
+   type(monitor) :: mfile,cflfile,scfile,pcfile,mfileL
    
    public :: simulation_init,simulation_run,simulation_final
    
@@ -41,6 +41,7 @@ module simulation
    real(WP), dimension(:,:,:),   allocatable :: mflux,evp_src
    real(WP), dimension(:,:,:),   allocatable :: mfluxL,mfluxL_old,resmfluxL,mflxLerr
    real(WP), dimension(:,:,:),   allocatable :: mfluxG,mfluxG_old,resmfluxG
+   real(WP), dimension(:,:,:),   allocatable :: evp_mflux
    real(WP), dimension(:,:,:),   allocatable :: U_itf,V_itf,W_itf
    real(WP), dimension(:,:,:),   allocatable :: Ui_L,Vi_L,Wi_L
    
@@ -54,6 +55,7 @@ module simulation
    real(WP) :: mflux_ens_time
    real(WP) :: evp_mass_flux
    real(WP) :: Lz,rad_drop
+   real(WP) :: Upcmax,Vpcmax,Wpcmax
    
 contains
 
@@ -66,6 +68,7 @@ contains
       real(WP) :: G
       ! Create the drop
       G=radius-sqrt(sum((xyz-center)**2))
+      ! G=sqrt(sum((xyz-center)**2))-radius
    end function levelset_drop
 
 
@@ -189,6 +192,7 @@ contains
          allocate(resmfluxL (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_)); resmfluxL=0.0_WP
          allocate(resmfluxG (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_)); resmfluxG=0.0_WP
          allocate(mflxLerr  (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_)); mflxLerr=0.0_WP
+         allocate(evp_mflux (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_)); evp_mflux=0.0_WP
          allocate(resU      (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
          allocate(resV      (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
          allocate(resW      (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
@@ -418,7 +422,8 @@ contains
          call param_read('Evaporation mass flux',evp_mass_flux)
          pseudo_time%dt=pseudo_time%dtmax
          ! Initialize the evaporation mass flux and errors
-         where ((vf%VF.gt.0.0_WP).and.(vf%VF.lt.1.0_WP)); mflux=evp_mass_flux*vf%SD; else where; mflux=0.0_WP; end where
+         evp_mflux=evp_mass_flux
+         where ((vf%VF.gt.0.0_WP).and.(vf%VF.lt.1.0_WP)); mflux=evp_mflux*vf%SD; else where; mflux=0.0_WP; end where
          mfluxL=mflux; mfluxG=mflux
          mflux_err=0.0_WP; mfluxL_err=0.0_WP; mfluxG_err=0.0_WP
          mfluxL_int_err=0.0_WP; mfluxG_int_err=0.0_WP
@@ -452,9 +457,9 @@ contains
          call ens_out%add_scalar('pressure',fs%P)
          call ens_out%add_scalar('curvature',vf%curv)
          call ens_out%add_surface('plic',smesh)
-         do nsc=1,sc%nscalar
-           call ens_out%add_scalar(trim(sc%SCname(nsc)),sc%SC(:,:,:,nsc))
-         end do
+         ! do nsc=1,sc%nscalar
+         !   call ens_out%add_scalar(trim(sc%SCname(nsc)),sc%SC(:,:,:,nsc))
+         ! end do
          call ens_out%add_scalar('mflux',mflux)
          call ens_out%add_scalar('evp_src',evp_src)
          call ens_out%add_scalar('mfluxL',mfluxL)
@@ -550,21 +555,23 @@ contains
          end do
          call scfile%write()
          ! Create mflux monitor
-         mfluxfile=monitor(sc%cfg%amRoot,'mflux')
-         call mfluxfile%add_column(time%n,'Timestep number')
-         call mfluxfile%add_column(time%t,'Time')
-         call mfluxfile%add_column(pseudo_time%t,'Pseudo time')
-         call mfluxfile%add_column(pseudo_time%dt,'Pseudo time step')
-         call mfluxfile%add_column(pseudo_time%cfl,'Maximum pseudo CFL')
-         call mfluxfile%add_column(pseudo_time%n,'No. pseudo steps')
-         call mfluxfile%add_column(mflux_int,'mflux int')
-         call mfluxfile%add_column(mfluxL_int,'shifted mfluxL int')
-         call mfluxfile%add_column(mfluxG_int,'shifted mfluxG int')
-         call mfluxfile%add_column(mfluxL_int_err,'mfluxL int err')
-         call mfluxfile%add_column(mfluxG_int_err,'mfluxG int err')
-         call mfluxfile%add_column(mfluxL_err,'max mfluxL err')
-         call mfluxfile%add_column(mfluxG_err,'max mfluxG err')
-         call mfluxfile%write()
+         pcfile=monitor(sc%cfg%amRoot,'phase_change')
+         call pcfile%add_column(time%n,'Timestep number')
+         call pcfile%add_column(time%t,'Time')
+         call pcfile%add_column(pseudo_time%dt,'Pseudo time step')
+         call pcfile%add_column(pseudo_time%cfl,'Maximum pseudo CFL')
+         call pcfile%add_column(pseudo_time%n,'No. pseudo steps')
+         call pcfile%add_column(mflux_int,'mflux int')
+         call pcfile%add_column(mfluxL_int,'shifted mfluxL int')
+         call pcfile%add_column(mfluxG_int,'shifted mfluxG int')
+         call pcfile%add_column(mfluxL_int_err,'mfluxL int err')
+         call pcfile%add_column(mfluxG_int_err,'mfluxG int err')
+         call pcfile%add_column(mfluxL_err,'max mfluxL err')
+         call pcfile%add_column(mfluxG_err,'max mfluxG err')
+         call pcfile%add_column(Upcmax,'Upc_max')
+         call pcfile%add_column(Vpcmax,'Vpc_max')
+         call pcfile%add_column(Wpcmax,'Wpc_max')
+         call pcfile%write()
       end block create_monitor
       
       
@@ -589,8 +596,8 @@ contains
          vf%VFold=vf%VF
          
          ! Remember old SC
-         sc%SCold =sc%SC
-         sc%PVFold=sc%PVF
+         ! sc%SCold =sc%SC
+         ! sc%PVFold=sc%PVF
          
          ! Remember old velocity
          fs%Uold=fs%U; fsL%Uold=fsL%U
@@ -610,7 +617,7 @@ contains
             allocate(vel_pc(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_,1:3))
 
             ! Update interface velocity
-            call vf%get_vel_pc(mflux,sc%itp_x,sc%itp_y,sc%itp_z,fs%rho_l,fs%rho_g,vel_pc)
+            call vf%get_vel_pc(evp_mflux,sc%itp_x,sc%itp_y,sc%itp_z,fs%rho_l,fs%rho_g,vel_pc,Upcmax,Vpcmax,Wpcmax)
             U_itf=fsL%U-vel_pc(:,:,:,1)
             V_itf=fsL%V-vel_pc(:,:,:,2)
             W_itf=fsL%W-vel_pc(:,:,:,3)
@@ -626,7 +633,8 @@ contains
          end block advace_VOF
 
          ! Interface jump conditions
-         where ((vf%VF.gt.0.0_WP).and.(vf%VF.lt.1.0_WP)); mflux=evp_mass_flux*vf%SD; else where; mflux=0.0_WP; end where
+         evp_mflux=evp_mass_flux
+         where ((vf%VF.gt.0.0_WP).and.(vf%VF.lt.1.0_WP)); mflux=evp_mflux*vf%SD; else where; mflux=0.0_WP; end where
          
          ! Shift the evaporation mass flux away from the interface
          shift_mflux: block
@@ -733,34 +741,34 @@ contains
          end block shift_mflux
 
          ! Transport scalars
-         advance_scalar: block
-            use tpscalar_class, only: Lphase,Gphase
-            integer :: nsc
+         ! advance_scalar: block
+         !    use tpscalar_class, only: Lphase,Gphase
+         !    integer :: nsc
             
-            ! Get the phas-specific VOF
-            sc%PVF(:,:,:,Lphase)=vf%VF
-            sc%PVF(:,:,:,Gphase)=1.0_WP-vf%VF
+         !    ! Get the phas-specific VOF
+         !    sc%PVF(:,:,:,Lphase)=vf%VF
+         !    sc%PVF(:,:,:,Gphase)=1.0_WP-vf%VF
             
-            ! Explicit calculation of dSC/dt from advective term
-            call sc%get_dSCdt(dSCdt=resSC,U=fs%U,V=fs%V,W=fs%W,VFold=vf%VFold,VF=vf%VF,detailed_face_flux=vf%detailed_face_flux,dt=time%dt)
+         !    ! Explicit calculation of dSC/dt from advective term
+         !    call sc%get_dSCdt(dSCdt=resSC,U=fs%U,V=fs%V,W=fs%W,VFold=vf%VFold,VF=vf%VF,detailed_face_flux=vf%detailed_face_flux,dt=time%dt)
             
-            ! Advance advection
-            do nsc=1,sc%nscalar
-               where (sc%mask.eq.0.and.sc%PVF(:,:,:,sc%phase(nsc)).gt.0.0_WP) sc%SC(:,:,:,nsc)=((sc%PVFold(:,:,:,sc%phase(nsc)))*sc%SCold(:,:,:,nsc)+time%dt*resSC(:,:,:,nsc))/(sc%PVF(:,:,:,sc%phase(nsc)))
-               where (sc%PVF(:,:,:,sc%phase(nsc)).eq.0.0_WP) sc%SC(:,:,:,nsc)=0.0_WP
-            end do
+         !    ! Advance advection
+         !    do nsc=1,sc%nscalar
+         !       where (sc%mask.eq.0.and.sc%PVF(:,:,:,sc%phase(nsc)).gt.0.0_WP) sc%SC(:,:,:,nsc)=((sc%PVFold(:,:,:,sc%phase(nsc)))*sc%SCold(:,:,:,nsc)+time%dt*resSC(:,:,:,nsc))/(sc%PVF(:,:,:,sc%phase(nsc)))
+         !       where (sc%PVF(:,:,:,sc%phase(nsc)).eq.0.0_WP) sc%SC(:,:,:,nsc)=0.0_WP
+         !    end do
 
-            ! Apply the mass/energy transfer term for the species/temperature
-            nsc=iYv
-            where (sc%PVF(:,:,:,sc%phase(nsc)).gt.0.0_WP.and.sc%PVF(:,:,:,sc%phase(nsc)).lt.1.0_WP) sc%SC(:,:,:,nsc)=sc%SC(:,:,:,nsc)+mflux/sc%Prho(sc%phase(nsc))*time%dt
+         !    ! Apply the mass/energy transfer term for the species/temperature
+         !    nsc=iYv
+         !    where (sc%PVF(:,:,:,sc%phase(nsc)).gt.0.0_WP.and.sc%PVF(:,:,:,sc%phase(nsc)).lt.1.0_WP) sc%SC(:,:,:,nsc)=sc%SC(:,:,:,nsc)+mflux/sc%Prho(sc%phase(nsc))*time%dt
                
-            ! Advance diffusion
-            call sc%solve_implicit(time%dt,sc%SC)
+         !    ! Advance diffusion
+         !    call sc%solve_implicit(time%dt,sc%SC)
             
-            ! Apply boundary conditions
-            call sc%apply_bcond(time%t,time%dt)
+         !    ! Apply boundary conditions
+         !    call sc%apply_bcond(time%t,time%dt)
                
-         end block advance_scalar         
+         ! end block advance_scalar         
 
          ! Advance flow
          advance_flow: block
@@ -908,7 +916,7 @@ contains
          call mfile%write(); call mfileL%write()
          call cflfile%write()
          call scfile%write()
-         call mfluxfile%write()
+         call pcfile%write()
          
       end do
 

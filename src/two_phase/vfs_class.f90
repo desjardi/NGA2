@@ -5013,23 +5013,28 @@ contains
    
 
    !> Calculate the face-centered phase-change velocity
-   subroutine get_vel_pc(this,mflux,itp_x,itp_y,itp_z,rho_l,rho_g,vel_pc)
+   subroutine get_vel_pc(this,evp_mflux,itp_x,itp_y,itp_z,rho_l,rho_g,vel_pc,Upcmax,Vpcmax,Wpcmax)
       use irl_fortran_interface, only: calculateNormal,getNumberOfVertices
+      use mpi_f08,  only: MPI_ALLREDUCE,MPI_MAX
+      use parallel, only: MPI_REAL_WP
       implicit none
       class(vfs), intent(in) :: this
       real(WP), target, dimension(-1:0,this%cfg%imin_:this%cfg%imax_+1,this%cfg%jmin_:this%cfg%jmax_+1,this%cfg%kmin_:this%cfg%kmax_+1), intent(in) :: itp_x
       real(WP), target, dimension(-1:0,this%cfg%imin_:this%cfg%imax_+1,this%cfg%jmin_:this%cfg%jmax_+1,this%cfg%kmin_:this%cfg%kmax_+1), intent(in) :: itp_y
       real(WP), target, dimension(-1:0,this%cfg%imin_:this%cfg%imax_+1,this%cfg%jmin_:this%cfg%jmax_+1,this%cfg%kmin_:this%cfg%kmax_+1), intent(in) :: itp_z
-      real(WP), dimension(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_), intent(in) :: mflux
+      real(WP), dimension(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_), intent(in) :: evp_mflux
       real(WP), intent(in) :: rho_l,rho_g
       real(WP), dimension(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_,3), intent(inout) :: vel_pc
+      real(WP), intent(inout) :: Upcmax,Vpcmax,Wpcmax
       integer,  dimension(:,:), allocatable :: ind_shift
       real(WP), dimension(3) :: normalm,normalp,normal_tmp
+      real(WP), dimension(3) :: nCell
       real(WP) :: VFm,VFp
       logical  :: is_interfacial_m,is_interfacial_p
-      integer  :: i,j,k,dir
+      integer  :: i,j,k,dir,ierr
       integer  :: im,jm,km
       integer  :: ip,jp,kp
+      real(WP) :: my_Upcmax,my_Vpcmax,my_Wpcmax
       type :: arr_ptr_4d
          real(WP), pointer :: arr(:,:,:,:)
       end type arr_ptr_4d
@@ -5044,12 +5049,15 @@ contains
       itp(2)%arr=>itp_y
       itp(3)%arr=>itp_z
       ind_shift=reshape((/1,0,0,0,1,0,0,0,1/), shape(ind_shift))
+      nCell(1)=this%cfg%nx; nCell(2)=this%cfg%ny; nCell(3)=this%cfg%nz
 
-      ! Initialize vel_pc with zeros
+      ! Initialize with zeros
       vel_pc=0.0_WP
       
       ! Loop over directions
       do dir=1,3
+         ! Skip if needed
+         if (nCell(dir).eq.1) cycle
          ! Loop over cell faces
          do k=this%cfg%kmin_,this%cfg%kmax_+ind_shift(3,dir)
             do j=this%cfg%jmin_,this%cfg%jmax_+ind_shift(2,dir)
@@ -5079,11 +5087,11 @@ contains
                            normalp=0.5_WP*(normalp+normal_tmp)
                         end if
                         ! Both cells are interfacial, linear interpolation of the phase-change velocity
-                        vel_pc(i,j,k,dir)=(itp(dir)%arr(-1,i,j,k)*mflux(im,jm,km)*normalm(dir) &
-                        &                 +itp(dir)%arr( 0,i,j,k)*mflux(ip,jp,kp)*normalp(dir))/rho_l
+                        vel_pc(i,j,k,dir)=(itp(dir)%arr(-1,i,j,k)*evp_mflux(im,jm,km)*normalm(dir) &
+                        &                 +itp(dir)%arr( 0,i,j,k)*evp_mflux(ip,jp,kp)*normalp(dir))/rho_l
                      else
                         ! The plus cell is not interfacial, use the minus cell's phase-change velocity
-                        vel_pc(i,j,k,dir)=mflux(im,jm,km)*normalm(dir)/rho_l
+                        vel_pc(i,j,k,dir)=evp_mflux(im,jm,km)*normalm(dir)/rho_l
                      end if
                   else if (is_interfacial_p) then
                      ! Get the interface normal of the plus cell
@@ -5093,7 +5101,7 @@ contains
                         normalp=0.5_WP*(normalp+normal_tmp)
                      end if
                      ! The minus cell is not interfacial, use the plus cell's phase-change velocity
-                     vel_pc(i,j,k,dir)=mflux(ip,jp,kp)*normalp(dir)/rho_l
+                     vel_pc(i,j,k,dir)=evp_mflux(ip,jp,kp)*normalp(dir)/rho_l
                   end if
                end do
             end do
@@ -5104,6 +5112,23 @@ contains
 
       ! Deallocate arrays
       deallocate(ind_shift)
+
+      ! Set all to zero
+      my_Upcmax=0.0_WP; my_Vpcmax=0.0_WP; my_Wpcmax=0.0_WP
+      do k=this%cfg%kmin_,this%cfg%kmax_
+         do j=this%cfg%jmin_,this%cfg%jmax_
+            do i=this%cfg%imin_,this%cfg%imax_
+               my_Upcmax=max(my_Upcmax,abs(vel_pc(i,j,k,1)))
+               my_Vpcmax=max(my_Vpcmax,abs(vel_pc(i,j,k,2)))
+               my_Wpcmax=max(my_Wpcmax,abs(vel_pc(i,j,k,3)))
+            end do
+         end do
+      end do
+      
+      ! Get the parallel max
+      call MPI_ALLREDUCE(my_Upcmax,Upcmax,1,MPI_REAL_WP,MPI_MAX,this%cfg%comm,ierr)
+      call MPI_ALLREDUCE(my_Vpcmax,Vpcmax,1,MPI_REAL_WP,MPI_MAX,this%cfg%comm,ierr)
+      call MPI_ALLREDUCE(my_Wpcmax,Wpcmax,1,MPI_REAL_WP,MPI_MAX,this%cfg%comm,ierr)
 
    end subroutine get_vel_pc
 

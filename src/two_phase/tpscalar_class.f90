@@ -830,29 +830,35 @@ contains
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(out) :: fcf_z !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       integer :: i,j,k
       ! Linear interpolation x-face
-      do k=this%cfg%kmin_,this%cfg%kmax_
-         do j=this%cfg%jmin_,this%cfg%jmax_
-            do i=this%cfg%imin_,this%cfg%imax_+1
-               fcf_x(i,j,k)=sum(this%itp_x(:,i,j,k)*ccf_x(i-1:i,j,k))
+      if (this%cfg%nx.ne.1) then
+         do k=this%cfg%kmin_,this%cfg%kmax_
+            do j=this%cfg%jmin_,this%cfg%jmax_
+               do i=this%cfg%imin_,this%cfg%imax_+1
+                  fcf_x(i,j,k)=sum(this%itp_x(:,i,j,k)*ccf_x(i-1:i,j,k))
+               end do
             end do
          end do
-      end do
+      end if
       ! Linear interpolation y-face
-      do k=this%cfg%kmin_,this%cfg%kmax_
-         do j=this%cfg%jmin_,this%cfg%jmax_+1
-            do i=this%cfg%imin_,this%cfg%imax_
-               fcf_y(i,j,k)=sum(this%itp_y(:,i,j,k)*ccf_y(i,j-1:j,k))
+      if (this%cfg%ny.ne.1) then
+         do k=this%cfg%kmin_,this%cfg%kmax_
+            do j=this%cfg%jmin_,this%cfg%jmax_+1
+               do i=this%cfg%imin_,this%cfg%imax_
+                  fcf_y(i,j,k)=sum(this%itp_y(:,i,j,k)*ccf_y(i,j-1:j,k))
+               end do
             end do
          end do
-      end do
+      end if
       ! Linear interpolation z-face
-      do k=this%cfg%kmin_,this%cfg%kmax_+1
-         do j=this%cfg%jmin_,this%cfg%jmax_
-            do i=this%cfg%imin_,this%cfg%imax_
-               fcf_z(i,j,k)=sum(this%itp_z(:,i,j,k)*ccf_z(i,j,k-1:k))
+      if (this%cfg%nz.ne.1) then
+         do k=this%cfg%kmin_,this%cfg%kmax_+1
+            do j=this%cfg%jmin_,this%cfg%jmax_
+               do i=this%cfg%imin_,this%cfg%imax_
+                  fcf_z(i,j,k)=sum(this%itp_z(:,i,j,k)*ccf_z(i,j,k-1:k))
+               end do
             end do
          end do
-      end do
+      end if
    end subroutine cellVec_to_face
 
 
