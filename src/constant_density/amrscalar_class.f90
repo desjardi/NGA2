@@ -31,6 +31,7 @@ module amrscalar_class
    contains
       procedure :: initialize                                   !< Initialize scalar solver
       procedure :: finalize                                     !< Finalize scalar solver
+      procedure :: clr_lvl
    end type amrscalar
    
    
@@ -57,6 +58,17 @@ contains
    end subroutine initialize
 
 
+   !> Clear solver data at level lev - should this be bind(c)?
+   subroutine clr_lvl(this,lev)
+      use amrex_amr_module, only: amrex_multifab_destroy
+      implicit none
+      class(amrscalar), intent(inout) :: this
+      integer, intent(in), value :: lev
+      call amrex_multifab_destroy(this%SC   (lev))
+      call amrex_multifab_destroy(this%SCold(lev))
+   end subroutine clr_lvl
+   
+   
    !> Finalization for amrscalar solver
    subroutine finalize(this)
       use amrex_amr_module, only: amrex_multifab_destroy

@@ -1,9 +1,9 @@
 !> AMR config object is defined based on amrcore AMREX object
 !> Amrconfig differs quite a bit from other configs
 module amrconfig_class
-   use iso_c_binding
-   use precision, only: WP
-   use string,    only: str_medium
+   use iso_c_binding, only: c_ptr,c_null_ptr,c_char,c_funptr,c_funloc
+   use precision,     only: WP
+   use string,        only: str_medium
    implicit none
    private
    
@@ -37,8 +37,8 @@ module amrconfig_class
       ! Refinement ratio
       integer :: rref=2
    contains
-      procedure :: initialize ! Initialization of amrconfig object
-      procedure :: finalize   ! Finalization of amrconfig object
+      procedure :: initialize             ! Initialization of amrconfig object
+      procedure :: finalize               ! Finalization of amrconfig object
       procedure :: init_regrid_functions  ! Initialize virtual functions for regriding
    end type amrconfig
    
@@ -46,7 +46,7 @@ module amrconfig_class
    !> Interfaces for regriding subroutines
    abstract interface
       subroutine mak_lvl_stype(lvl,time,ba,dm) bind(c)
-         import
+         import :: c_ptr,WP
          implicit none
          integer,     intent(in), value :: lvl
          real(WP),    intent(in), value :: time
@@ -54,12 +54,11 @@ module amrconfig_class
          type(c_ptr), intent(in), value :: dm
       end subroutine mak_lvl_stype
       subroutine clr_lvl_stype(lvl) bind(c)
-         import
          implicit none
          integer, intent(in) , value :: lvl
       end subroutine clr_lvl_stype
       subroutine err_est_stype(lvl,tags,time,tagval,clrval) bind(c)
-         import
+         import :: c_ptr,c_char,WP
          implicit none
          integer,                intent(in), value :: lvl
          type(c_ptr),            intent(in), value :: tags
@@ -120,7 +119,7 @@ contains
       create_amrcore_obj: block
          interface
             subroutine amrex_fi_new_amrcore(core) bind(c)
-               import
+               import :: c_ptr
                implicit none
                type(c_ptr) :: core
             end subroutine amrex_fi_new_amrcore
@@ -137,7 +136,7 @@ contains
       class(amrconfig), intent(inout) :: this
       interface
          subroutine amrex_fi_delete_amrcore(core) bind(c)
-            import
+            import :: c_ptr
             implicit none
             type(c_ptr), value :: core
          end subroutine amrex_fi_delete_amrcore
@@ -155,8 +154,8 @@ contains
       procedure(clr_lvl_stype) :: clr_lvl
       procedure(err_est_stype) :: err_est
       interface
-         subroutine amrex_fi_init_virtual_functions (maklvl_init,maklvl_crse,maklvl_remk,clrlvl,errest,core) bind(c)
-            import
+         subroutine amrex_fi_init_virtual_functions(maklvl_init,maklvl_crse,maklvl_remk,clrlvl,errest,core) bind(c)
+            import :: c_ptr,c_funptr
             implicit none
             type(c_funptr), value :: maklvl_init,maklvl_crse,maklvl_remk,clrlvl,errest
             type(c_ptr), value :: core
