@@ -1,50 +1,49 @@
 # Import libraries
+import os
 import numpy as np
 import matplotlib.pyplot as plt
 import math
 
 # Reference values
-r0    = 0.005
+D0    = 0.01
+R0    = 0.5 * D0
 mflux = 5
 rhoL  = 1000
 muL   = 1.05e-3
-D0    = 2.0 * r0
-tref  = rhoL * D0**2 / muL
+# tref  = rhoL * D0**2 / muL
+tR  = R0 * rhoL / mflux
 
-# Load file 50
-data = np.loadtxt('./monitor/simulation50', skiprows=2)
+# Arrays
+nC  = []
+t   = []
+r   = []
+# cfl = []
 
-# Extract time and volume 50
-t50 = data[:, 1 ]
-r50 = data[:, 14]
+# Get the data
+path = './monitor'
+for filename in os.listdir(path):
+    if 'simulation_mesh_' in filename:
+        data = np.loadtxt(path + '/' + filename, skiprows=2)
+        t.append(data[:, 1 ] / tR)
+        r.append(data[:, 14] / R0)
+        # cfl.append(data[:, 3].max())
+        nC.append(float(filename.replace('simulation_mesh_', '')))
 
-# Load file 100
-data = np.loadtxt('./monitor/simulation100', skiprows=2)
-
-# Extract time and volume 100
-t100 = data[:, 1 ]
-r100 = data[:, 14]
-
-# Load file 200
-data = np.loadtxt('./monitor/simulation200', skiprows=2)
-
-# Extract time and volume 200
-t200 = data[:, 1 ]
-r200 = data[:, 14]
-
-# Load file 400
-data = np.loadtxt('./monitor/simulation400', skiprows=2)
-
-# Extract time and volume 400
-t400 = data[:, 1 ]
-r400 = data[:, 14]
+# Sort
+sorted_lists = sorted(zip(nC, t))
+dummy, t = zip(*sorted_lists)
+sorted_lists = sorted(zip(nC, r))
+nC, r = zip(*sorted_lists)
+# sorted_lists = sorted(zip(nC, cfl))
+# nC, cfl = zip(*sorted_lists)
 
 # Analytical solution
-r_ext = r0 - mflux * t50
-# V_ext = math.pi * r_ext**2
+t_ext = np.linspace(start=0, stop=1e-2, num=100)
+r_ext = (R0 - mflux/rhoL * t_ext) / R0
+t_ext = t_ext / tR
 
 # Make colors
-colors = plt.cm.plasma(np.linspace(0, 1, 4))
+colors = plt.cm.plasma(np.linspace(0, 1, len(nC)))
 
 # Use latex font
 plt.rcParams['text.usetex'] = True
@@ -56,22 +55,20 @@ fnt2 = 14
 fnt3 = 10
 
 # Create a figure
-fig, ax = plt.subplots(1, 1, figsize=(4, 4))
+fig, ax = plt.subplots(1, 1, figsize=(3.75, 3.5))
 
 # Plot
-plt.plot(t50/tref , r_ext /D0, ls='-'  , lw=2, color='k')
-plt.plot(t50/tref , r50   /D0, ls='--' , lw=2, color=colors[0])
-plt.plot(t100/tref, r100  /D0, ls='--' , lw=2, color=colors[1])
-plt.plot(t200/tref, r200  /D0, ls='--' , lw=2, color=colors[2])
-plt.plot(t400/tref, r400  /D0, ls='--' , lw=2, color=colors[3])
+plt.plot(t_ext, r_ext, ls='-', lw=2, color='k', label=r'$Analytical$')
+for i, nCell in enumerate(nC):
+    plt.plot(t[i], r[i], ls='--', lw=2, color=colors[i], label=rf'${nCell:g}$' + r'$\times$' + rf'${nCell:g}$')
+
 plt.ticklabel_format(style='sci', axis='x', scilimits=(0,0))
 plt.ticklabel_format(style='sci', axis='y', scilimits=(0,0))
 plt.xlabel(r'$t/t_{ref}$', fontsize=fnt1)
-plt.ylabel(r'$r/D_{0}$', fontsize=fnt1)
+plt.ylabel(r'$r/R_{0}$', fontsize=fnt1)
 plt.xticks(fontsize=fnt2)
 plt.yticks(fontsize=fnt2)
 plt.grid(which='major', axis='both', color='k', linestyle='--', linewidth=0.6, alpha=0.25)
-legends = ax.legend([r'$Analytical$', r'$50 \times 50$', r'$100 \times 100$', r'$200 \times 200$', r'$400 \times 400$'], frameon=False, loc='upper right', fontsize=fnt3)
-ax.add_artist(legends)
+plt.legend(frameon=False, loc='upper right', fontsize=fnt3)
 plt.tight_layout()
 plt.savefig('./mesh_study.pdf')

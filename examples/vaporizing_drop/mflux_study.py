@@ -20,7 +20,7 @@ r0_05 = data[:, 14]
 
 # Analytical solution for 0.05
 mflux[0] = 0.05
-r_ext0_05 = r0 - mflux[0] * t0_05
+r_ext0_05 = r0 - mflux[0]/rhoL * t0_05
 
 # Load file 0.5
 data = np.loadtxt('./monitor/simulationmflux0.5', skiprows=2)
@@ -31,7 +31,7 @@ r0_5 = data[:, 14]
 
 # Analytical solution for 0.5
 mflux[1] = 0.5
-r_ext0_5 = r0 - mflux[1] * t0_5
+r_ext0_5 = r0 - mflux[1]/rhoL * t0_5
 
 # Load file 5
 data = np.loadtxt('./monitor/simulationmflux5', skiprows=2)
@@ -42,7 +42,7 @@ r5 = data[:, 14]
 
 # Analytical solution for 5
 mflux[1] = 0.5
-r_ext5 = r0 - mflux[2] * t5
+r_ext5 = r0 - mflux[2]/rhoL * t5
 
 # Load file 50
 data = np.loadtxt('./monitor/simulationmflux50', skiprows=2)
@@ -52,7 +52,7 @@ t50 = data[:, 1 ]
 r50 = data[:, 14]
 
 # Analytical solution for 50
-r_ext50 = r0 - mflux[3] * t50
+r_ext50 = r0 - mflux[3]/rhoL * t50
 
 # Font sizes
 fnt1 = 16

@@ -28,7 +28,7 @@ Vapor diffusivity           : 1.452e-05
 Evaporation mass flux : 5
 
 # Time integration
-Max timestep size : 1.75e-5
+Max timestep size : 5e-6 ! 1.75e-5
 Max cfl number    : 0.9
 Sub-iterations    : 2
 Max time          : 1
@@ -44,7 +44,7 @@ Pressure tolerance : 1e-9
 Pressure iteration : 100
 
 # Ensight output
-Ensight output period           : 1e-4
+Ensight output period           : 1e-4 ! 1e-3
 Ensight for mflux evolution     : false
 Ensight output period for mflux : 2e-7
 When to write mflux ensight     : 3.0e-3

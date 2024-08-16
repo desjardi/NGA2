@@ -1533,8 +1533,8 @@ contains
          Gvolnew=Gvolold+Gvolinc
          
          ! Compute new liquid volume fraction
-         ! this%VF(i,j,k)=Lvolnew/(Lvolnew+Gvolnew)
-         this%VF(i,j,k)=Lvolnew/this%cfg%vol(i,j,k)
+         this%VF(i,j,k)=Lvolnew/(Lvolnew+Gvolnew)
+         ! this%VF(i,j,k)=Lvolnew/this%cfg%vol(i,j,k)
          
          ! Only work on higher order moments if VF is in [VFlo,VFhi]
          if (this%VF(i,j,k).lt.VFlo) then

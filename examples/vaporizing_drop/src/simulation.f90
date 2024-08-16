@@ -1,4 +1,3 @@
-!> Various definitions and tools for running an NGA2 simulation
 module simulation
    use precision,         only: WP
    use geometry,          only: cfg
@@ -334,6 +333,7 @@ contains
 
       ! Create a two-phase flow solver for the divergence-free liquid velocity
       create_div_free_flow_solver: block
+         use tpns_class, only: neumann
          use hypre_str_class, only: pcg_pfmg2
          ! Create flow solver
          fsL=tpns(cfg=cfg,name='Liquid NS')
@@ -348,6 +348,13 @@ contains
          fsL%contact_angle=fs%contact_angle
          ! Assign acceleration of gravity
          fsL%gravity=fs%gravity
+         ! Boundary conditions
+         call fsL%add_bcond(name='xm',type=neumann,face='x',dir=-1,canCorrect=.true.,locator=xm_locator)
+         call fsL%add_bcond(name='xp',type=neumann,face='x',dir=+1,canCorrect=.true.,locator=xp_locator)
+         call fsL%add_bcond(name='ym',type=neumann,face='y',dir=-1,canCorrect=.true.,locator=ym_locator)
+         call fsL%add_bcond(name='yp',type=neumann,face='y',dir=+1,canCorrect=.true.,locator=yp_locator)
+         ! call fsL%add_bcond(name='zm',type=neumann,face='z',dir=-1,canCorrect=.true.,locator=zm_locator)
+         ! call fsL%add_bcond(name='zp',type=neumann,face='z',dir=+1,canCorrect=.true.,locator=zp_locator)
          ! Configure pressure solver
          psL=hypre_str(cfg=cfg,name='Liquid P',method=pcg_pfmg2,nst=7)
          psL%maxlevel=ps%maxlevel
@@ -518,7 +525,7 @@ contains
          call mfile%add_column(fs%psolv%rerr,'Pressure error')
          call mfile%add_column(rad_drop,'Droplet raduis')
          call mfile%write()
-         ! Create simulation monitor
+         ! Create simulation monitor for liquid
          mfileL=monitor(fsL%cfg%amRoot,'simulation_liquid')
          call mfileL%add_column(time%n,'Timestep number')
          call mfileL%add_column(time%t,'Time')
@@ -878,7 +885,8 @@ contains
                call fsL%update_laplacian()
                call fsL%correct_mfr()
                call fsL%get_div()
-               call fsL%add_surface_tension_jump(dt=time%dt,div=fsL%div,vf=vf,contact_model=static_contact)
+               ! call fsL%add_surface_tension_jump(dt=time%dt,div=fsL%div,vf=vf,contact_model=static_contact)
+               call fsL%add_surface_tension_jump(dt=time%dt,div=fsL%div,vf=vf)
                fsL%psolv%rhs=-fsL%cfg%vol*fsL%div/time%dt
                fsL%psolv%sol=0.0_WP
                call fsL%psolv%solve()
