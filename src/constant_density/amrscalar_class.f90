@@ -19,11 +19,13 @@ module amrscalar_class
       ! This is the name of the solver
       character(len=str_medium) :: name='UNNAMED_AMRSCALAR'     !< Solver name (default=UNNAMED_AMRSCALAR)
       
-      ! Scalar variable
+      ! Scalar and old scalar variables
       type(amrex_multifab), dimension(:), allocatable ::  SC    !< SC multifab array
-      
-      ! Old scalar variable
       type(amrex_multifab), dimension(:), allocatable ::  SCold !< Old SC multifab array
+      
+      ! Number of components and ghost cells
+      integer :: ncomp=1
+      integer :: nover=0
       
       ! Monitoring quantities
       real(WP) :: SCmax,SCmin,SCint                             !< Maximum and minimum, integral scalar

@@ -1,9 +1,10 @@
 !> AMR config object is defined based on amrcore AMREX object
 !> Amrconfig differs quite a bit from other configs
 module amrconfig_class
-   use iso_c_binding, only: c_ptr,c_null_ptr,c_char,c_funptr,c_funloc
-   use precision,     only: WP
-   use string,        only: str_medium
+   use iso_c_binding,    only: c_ptr,c_null_ptr,c_char,c_int,c_funptr,c_funloc
+   use precision,        only: WP
+   use string,           only: str_medium
+   use amrex_amr_module, only: amrex_geometry
    implicit none
    private
    
@@ -36,10 +37,13 @@ module amrconfig_class
       integer :: nbloc=8
       ! Refinement ratio
       integer :: rref=2
+      ! Geometry object at each level
+      type(amrex_geometry), dimension(:), allocatable :: geom
    contains
-      procedure :: initialize             ! Initialization of amrconfig object
-      procedure :: finalize               ! Finalization of amrconfig object
-      procedure :: init_regrid_functions  ! Initialize virtual functions for regriding
+      procedure :: initialize            ! Initialization of amrconfig object
+      procedure :: finalize              ! Finalization of amrconfig object
+      procedure :: register_udf          ! Register user-defined functions for regriding
+      procedure :: initialize_data       ! Initialize data on armconfig according to registered function
    end type amrconfig
    
    
@@ -127,7 +131,43 @@ contains
          call amrex_fi_new_amrcore(this%amrcore)
          if (present(name)) this%name=trim(adjustl(name))
       end block create_amrcore_obj
+      ! Get back geometry objects
+      store_geometries: block
+         use amrex_amr_module, only: amrex_geometry_init_data
+         interface
+            subroutine amrex_fi_get_geometry(geom,lvl,core) bind(c)
+               import :: c_ptr,c_int
+               implicit none
+               type(c_ptr), intent(out) :: geom
+               integer(c_int), value :: lvl
+               type(c_ptr), value :: core
+            end subroutine amrex_fi_get_geometry
+         end interface
+         integer :: n
+         allocate(this%geom(0:this%nlvl-1))
+         do n=0,this%nlvl-1
+            call amrex_fi_get_geometry(this%geom(n)%p,n,this%amrcore)
+            call amrex_geometry_init_data(this%geom(n))
+         end do
+      end block store_geometries
    end subroutine initialize
+   
+   
+   !> Initialize data on an amrconfig object
+   subroutine initialize_data(this,time)
+      implicit none
+      class(amrconfig), intent(inout) :: this
+      real(WP), intent(in) :: time
+      interface
+         subroutine amrex_fi_init_from_scratch (t,core) bind(c)
+            import :: c_ptr,WP
+            implicit none
+            real(WP), value :: t
+            type(c_ptr), value :: core
+         end subroutine amrex_fi_init_from_scratch
+      end interface
+      call amrex_fi_init_from_scratch(time,this%amrcore)
+   end subroutine initialize_data
    
    
    !> Finalization of amrconfig object
@@ -146,8 +186,8 @@ contains
    end subroutine finalize
    
    
-   !> Initialize regriding functions
-   subroutine init_regrid_functions(this,mak_lvl_init,mak_lvl_crse,mak_lvl_remk,clr_lvl,err_est)
+   !> Register user-defined functions for regriding
+   subroutine register_udf(this,mak_lvl_init,mak_lvl_crse,mak_lvl_remk,clr_lvl,err_est)
       implicit none
       class(amrconfig), intent(inout) :: this
       procedure(mak_lvl_stype) :: mak_lvl_init,mak_lvl_crse,mak_lvl_remk
@@ -162,7 +202,7 @@ contains
          end subroutine amrex_fi_init_virtual_functions
       end interface
       call amrex_fi_init_virtual_functions(c_funloc(mak_lvl_init),c_funloc(mak_lvl_crse),c_funloc(mak_lvl_remk),c_funloc(clr_lvl),c_funloc(err_est),this%amrcore)
-   end subroutine init_regrid_functions
+   end subroutine register_udf
    
    
    !> Finalization of amrex

@@ -19,14 +19,51 @@ contains
    
    
    !> User-provided data creation from scratch
-   subroutine mak_lvl_init(lvl,time,ba,dm) bind(c)
-      use iso_c_binding, only: c_ptr
+   subroutine mak_lvl_init(lvl,time,pba,pdm) bind(c)
+      use iso_c_binding,    only: c_ptr
+      use amrex_amr_module, only: amrex_boxarray,amrex_distromap,amrex_mfiter,amrex_box
+      use amrex_amr_module, only: amrex_multifab_build,amrex_mfiter_build,amrex_mfiter_destroy
       implicit none
       integer,     intent(in), value :: lvl
       real(WP),    intent(in), value :: time
-      type(c_ptr), intent(in), value :: ba
-      type(c_ptr), intent(in), value :: dm
+      type(c_ptr), intent(in), value :: pba
+      type(c_ptr), intent(in), value :: pdm
       ! This is where data creation from scratch is done
+      type(amrex_boxarray)  :: ba
+      type(amrex_distromap) :: dm
+      type(amrex_mfiter)    :: mfi
+      type(amrex_box)       :: bx
+      real(WP), dimension(:,:,:,:), contiguous, pointer :: phi
+      real(WP) :: x,y,z,r2
+      integer :: i,j,k
+      ! Rebuild data on new grids
+      ba=pba; dm=pdm
+      call sc%clr_lvl(lvl)
+      call amrex_multifab_build(sc%SC(lvl),ba,dm,sc%ncomp,sc%nover)
+      ! Build iterator
+      call amrex_mfiter_build(mfi,sc%SC(lvl))
+      ! Initialize
+      do while (mfi%next())
+         ! Get box and data
+         bx=mfi%tilebox()
+         phi=>sc%SC(lvl)%dataptr(mfi)
+         ! Loop
+         do k=bx%lo(3),bx%hi(3)
+            do j=bx%lo(2),bx%hi(2) 
+               do i=bx%lo(1),bx%hi(1)
+                  ! Get position
+                  x=sc%amr%xlo+(real(i,WP)+0.5_WP)*sc%amr%geom(lvl)%dx(1)
+                  y=sc%amr%ylo+(real(j,WP)+0.5_WP)*sc%amr%geom(lvl)%dx(2)
+                  z=sc%amr%zlo+(real(k,WP)+0.5_WP)*sc%amr%geom(lvl)%dx(3)
+                  ! Evaluate data
+                  r2=((x-0.5_WP)**2+(y-0.75_WP)**2+(z-0.5_WP)**2)/0.01_WP
+                  phi(i,j,k,1)=1.0_WP+exp(-r2)
+               end do
+            end do
+         end do
+      end do
+      ! Destroy iterator
+      call amrex_mfiter_destroy(mfi)
    end subroutine mak_lvl_init
    
    
@@ -39,6 +76,7 @@ contains
       type(c_ptr), intent(in), value :: ba
       type(c_ptr), intent(in), value :: dm
       ! This is where data creation from coarse data is done
+      print*,'please dont call me yet'
    end subroutine mak_lvl_crse
    
    
@@ -51,6 +89,7 @@ contains
       type(c_ptr), intent(in), value :: ba
       type(c_ptr), intent(in), value :: dm
       ! This is where data creation from current and coarse data is done
+      print*,'please dont call me yet'
    end subroutine mak_lvl_remk
    
    
@@ -73,6 +112,7 @@ contains
       character(kind=c_char), intent(in), value :: tagval
       character(kind=c_char), intent(in), value :: clrval
       ! This is where error estimation for regriding is done
+
    end subroutine err_est
 
    
@@ -95,8 +135,12 @@ contains
          call sc%initialize(amr=amr)
       end block create_scalar_solver
       
-      ! Initialize regriding functions
-      call amr%init_regrid_functions(mak_lvl_init,mak_lvl_crse,mak_lvl_remk,clr_lvl,err_est)
+      ! Initialize user-defined functions
+      call amr%register_udf(mak_lvl_init,mak_lvl_crse,mak_lvl_remk,clr_lvl,err_est)
+      
+      ! Initialize data
+      call amr%initialize_data(0.0_WP)
+      !call averagedown()
       
    end subroutine simulation_init
    
