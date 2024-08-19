@@ -1,8 +1,9 @@
 !> Various definitions and tools for running an NGA2 simulation
 module simulation
    use precision, only: WP
-   use amrconfig_class, only: amrconfig,mak_lvl_stype,clr_lvl_stype,err_est_stype
-   use amrscalar_class, only: amrscalar
+   use amrconfig_class,  only: amrconfig,mak_lvl_stype,clr_lvl_stype,err_est_stype
+   use amrscalar_class,  only: amrscalar
+   use amrensight_class, only: amrensight
    implicit none
    private
    
@@ -14,6 +15,9 @@ module simulation
 
    !> Also create an amrscalar
    type(amrscalar) :: sc
+
+   !> Ensight output
+   type(amrensight) :: ens_out
    
 contains
    
@@ -21,8 +25,8 @@ contains
    !> User-provided data creation from scratch
    subroutine mak_lvl_init(lvl,time,pba,pdm) bind(c)
       use iso_c_binding,    only: c_ptr
-      use amrex_amr_module, only: amrex_boxarray,amrex_distromap,amrex_mfiter,amrex_box
-      use amrex_amr_module, only: amrex_multifab_build,amrex_mfiter_build,amrex_mfiter_destroy
+      use amrex_amr_module, only: amrex_boxarray,amrex_distromap,amrex_mfiter,amrex_box,&
+      &                           amrex_multifab_build,amrex_mfiter_build,amrex_mfiter_destroy
       implicit none
       integer,     intent(in), value :: lvl
       real(WP),    intent(in), value :: time
@@ -40,6 +44,7 @@ contains
       ba=pba; dm=pdm
       call sc%clr_lvl(lvl)
       call amrex_multifab_build(sc%SC(lvl),ba,dm,sc%ncomp,sc%nover)
+      !call amrex_multifab_build(sc%SCold(lvl),ba,dm,sc%ncomp,sc%nover)
       ! Build iterator
       call amrex_mfiter_build(mfi,sc%SC(lvl))
       ! Initialize
@@ -76,6 +81,7 @@ contains
       type(c_ptr), intent(in), value :: ba
       type(c_ptr), intent(in), value :: dm
       ! This is where data creation from coarse data is done
+
       print*,'please dont call me yet'
    end subroutine mak_lvl_crse
    
@@ -127,7 +133,7 @@ contains
          amr%xhi =1.0_WP; amr%yhi =1.0_WP; amr%zhi =1.0_WP
          amr%xper=.true.; amr%yper=.true.; amr%zper=.true.
          amr%nlvl=3
-         call amr%initialize(name='mybox')
+         call amr%initialize(name='amrtest')
       end block build_amr
       
       ! Create scalar solver
@@ -135,12 +141,24 @@ contains
          call sc%initialize(amr=amr)
       end block create_scalar_solver
       
-      ! Initialize user-defined functions
-      call amr%register_udf(mak_lvl_init,mak_lvl_crse,mak_lvl_remk,clr_lvl,err_est)
+      ! Initialize user-defined procedures
+      call amr%register_udp(mak_lvl_init,mak_lvl_crse,mak_lvl_remk,clr_lvl,err_est)
       
       ! Initialize data
       call amr%initialize_data(0.0_WP)
       !call averagedown()
+
+      call amr%regrid(baselvl=0,time=0.0_WP)
+      
+      call amr%print()
+      
+      ! Prepare Ensight output
+      create_ensight: block
+         ! Create Ensight output from armconfig
+         call ens_out%initialize(amr=amr,name='amrtest')
+         ! Output to ensight
+         call ens_out%write_data(0.0_WP)
+      end block create_ensight
       
    end subroutine simulation_init
    
