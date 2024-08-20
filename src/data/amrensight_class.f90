@@ -472,109 +472,84 @@ contains
       use precision,        only: SP
       use messager,         only: die
       use parallel,         only: info_mpiio,MPI_REAL_SP
-      use amrex_amr_module, only: amrex_boxarray,amrex_box
-      use mpi_f08
+      use amrex_amr_module, only: amrex_box,amrex_boxarray,amrex_distromap,&
+      &                           amrex_mfiter,amrex_mfiter_build,amrex_mfiter_destroy
+      use mpi_f08,          only: MPI_BCAST,MPI_INTEGER
       implicit none
       class(amrensight), intent(in) :: this
-      integer :: iunit,ierr,n,m,npart,nb
-      type(amrex_boxarray) :: ba
-      type(amrex_box)      :: bx
+      integer :: iunit,ierr,n
+      type(amrex_boxarray)  :: ba
+      type(amrex_distromap) :: dm
+      type(amrex_box)       :: bx
+      type(amrex_mfiter)    :: mfi
       character(len=str_medium) :: filename
       character(len=80) :: cbuff
       real(SP) :: rbuff
-      integer :: ibuff
-      !type(MPI_File) :: ifile
-      !type(MPI_Status):: status
-      !integer(kind=MPI_OFFSET_KIND) :: disp
-      !real(SP), dimension(:,:,:), allocatable :: spbuff
+      integer :: ibuff,rank,nbox
       
-      ! Only amr root does geometry I/O
+      ! Generate timestamped filename
+      filename='ensight/'//trim(this%name)//'/geometry/geometry.'
+      write(filename(len_trim(filename)+1:len_trim(filename)+6),'(i6.6)') this%ntime
+
+      ! Root begins geometry I/O
       if (this%amr%amRoot) then
-         
-         ! Generate timestamped filename
-         filename='ensight/'//trim(this%name)//'/geometry/geometry.'
-         write(filename(len_trim(filename)+1:len_trim(filename)+6),'(i6.6)') this%ntime
-         
          ! Open new file
          open(newunit=iunit,file=trim(filename),form='unformatted',status='replace',access='stream',iostat=ierr)
-         if (ierr.ne.0) call die('[ensight write geom] Could not open file '//trim(filename))
-         
+         if (ierr.ne.0) call die('[amrensight write geom] Could not open file '//trim(filename))
          ! General geometry header
          cbuff='C Binary'                  ; write(iunit) cbuff
          cbuff='Ensight Gold Geometry File'; write(iunit) cbuff
          cbuff=trim(adjustl(this%amr%name)); write(iunit) cbuff
          cbuff='node id off'               ; write(iunit) cbuff
          cbuff='element id off'            ; write(iunit) cbuff
-         ! Extents
-         !cbuff='extents'            ; write(iunit) cbuff
-         !rbuff=real(this%amr%xlo,SP); write(iunit) rbuff
-         !rbuff=real(this%amr%xhi,SP); write(iunit) rbuff
-         !rbuff=real(this%amr%ylo,SP); write(iunit) rbuff
-         !rbuff=real(this%amr%yhi,SP); write(iunit) rbuff
-         !rbuff=real(this%amr%zlo,SP); write(iunit) rbuff
-         !rbuff=real(this%amr%zhi,SP); write(iunit) rbuff
-         ! Loop over active levels
-         npart=0
-         do n=0,this%amr%clvl()
-            ! Get boxarray at that level
-            ba=this%amr%get_boxarray(lvl=n)
-            ! Loop over boxes in ba
-            nb=int(ba%nboxes())
-            do m=1,nb
-               npart=npart+1
-               ! Part header
-               cbuff='part'                                      ; write(iunit) cbuff
-               ibuff=npart                                       ; write(iunit) ibuff
-               cbuff=''; write(cbuff,'("Level ",i2,"/",i2," - Box ",i3,"/",i3)') n,this%amr%clvl(),m,nb; write(iunit) cbuff
-               cbuff='block uniform'                             ; write(iunit) cbuff  ! Not blanked
-               ! Range of indices
-               bx=ba%get_box(m-1)
-               ibuff=bx%hi(1)+1-bx%lo(1)+1; write(iunit) ibuff
-               ibuff=bx%hi(2)+1-bx%lo(2)+1; write(iunit) ibuff
-               ibuff=bx%hi(3)+1-bx%lo(3)+1; write(iunit) ibuff
-               ! Mesh origin
-               rbuff=real(this%amr%xlo+bx%lo(1)*this%amr%geom(n)%dx(1),SP); write(iunit) rbuff
-               rbuff=real(this%amr%ylo+bx%lo(2)*this%amr%geom(n)%dx(2),SP); write(iunit) rbuff
-               rbuff=real(this%amr%zlo+bx%lo(3)*this%amr%geom(n)%dx(3),SP); write(iunit) rbuff
-               ! Mesh size
-               rbuff=real(this%amr%geom(n)%dx(1),SP); write(iunit) rbuff
-               rbuff=real(this%amr%geom(n)%dx(2),SP); write(iunit) rbuff
-               rbuff=real(this%amr%geom(n)%dx(3),SP); write(iunit) rbuff
-            end do
-         end do
          ! Close the file
          close(iunit)
-         
       end if
       
-      !! Root process starts writing the file header for VF data
-      !if (this%amr%amRoot) then
-      !   ! Open the file
-      !   open(newunit=iunit,file='ensight/'//trim(this%name)//'/'//trim(name)//'.fvf',form='unformatted',status='replace',access='stream',iostat=ierr)
-      !   if (ierr.ne.0) call die('[ensight write data] Could not open file: '//'ensight/'//trim(this%name)//'/'//trim(name)//'.fvf')
-      !   ! Write the header
-      !   cbuff='fvf'            ; write(iunit) cbuff
-      !   cbuff='part'           ; write(iunit) cbuff
-      !   ibuff=1                ; write(iunit) ibuff
-      !   cbuff='block'          ; write(iunit) cbuff
-      !   ! Close the file
-      !   close(iunit)
-      !end if
-      !
-      !! Prepare the SP buffer
-      !allocate(spbuff(cfg%imin_:cfg%imax_,cfg%jmin_:cfg%jmax_,cfg%kmin_:cfg%kmax_))
-      !
-      !! Now parallel-write the VF data
-      !call MPI_FILE_OPEN(cfg%comm,'ensight/'//trim(this%name)//'/'//trim(name)//'.fvf',IOR(MPI_MODE_WRONLY,MPI_MODE_APPEND),info_mpiio,ifile,ierr)
-      !if (ierr.ne.0) call die('[ensight write geom] Problem encountered while parallel writing fvf data file: '//'ensight/'//trim(this%name)//'/'//trim(name)//'.fvf')
-      !call MPI_FILE_GET_POSITION(ifile,disp,ierr)
-      !call MPI_FILE_SET_VIEW(ifile,disp,MPI_REAL_SP,cfg%SPview,'native',info_mpiio,ierr)
-      !spbuff(cfg%imin_:cfg%imax_,cfg%jmin_:cfg%jmax_,cfg%kmin_:cfg%kmax_)=real(cfg%VF(cfg%imin_:cfg%imax_,cfg%jmin_:cfg%jmax_,cfg%kmin_:cfg%kmax_),SP)
-      !call MPI_FILE_WRITE_ALL(ifile,spbuff,cfg%nx_*cfg%ny_*cfg%nz_,MPI_REAL_SP,status,ierr)
-      !call MPI_FILE_CLOSE(ifile,ierr)
-      !
-      !! Deallocate SP buffer
-      !deallocate(spbuff)
+      ! Write all the boxes in parallel to the same file
+      nbox=0
+      do n=0,this%amr%clvl()
+         ! Build an mfiter at that level
+         ba=this%amr%get_boxarray (lvl=n)
+         dm=this%amr%get_distromap(lvl=n)
+         call amrex_mfiter_build(mfi,ba,dm)
+         ! Have all cores write out their boxes
+         do rank=0,this%amr%nproc-1
+            if (rank.eq.this%amr%rank) then
+               ! Open the file
+               open(newunit=iunit,file=trim(filename),form='unformatted',status='old',access='stream',position='append',iostat=ierr)
+               if (ierr.ne.0) call die('[amrensight write geom] Could not reopen file '//trim(filename))
+               ! Loop through all boxes in mfiter
+               do while (mfi%next())
+                  bx=mfi%tilebox()
+                  nbox=nbox+1
+                  ! Write box to the file
+                  cbuff='part'; write(iunit) cbuff
+                  ibuff=nbox  ; write(iunit) ibuff
+                  write(cbuff,'("Level ",i0,"/",i0," - Box ",i0," - Rank ",i0)') n,this%amr%clvl(),nbox,rank; write(iunit) cbuff
+                  cbuff='block uniform'; write(iunit) cbuff
+                  ! Range of indices
+                  ibuff=bx%hi(1)+1-bx%lo(1)+1; write(iunit) ibuff
+                  ibuff=bx%hi(2)+1-bx%lo(2)+1; write(iunit) ibuff
+                  ibuff=bx%hi(3)+1-bx%lo(3)+1; write(iunit) ibuff
+                  ! Mesh origin
+                  rbuff=real(this%amr%xlo+bx%lo(1)*this%amr%geom(n)%dx(1),SP); write(iunit) rbuff
+                  rbuff=real(this%amr%ylo+bx%lo(2)*this%amr%geom(n)%dx(2),SP); write(iunit) rbuff
+                  rbuff=real(this%amr%zlo+bx%lo(3)*this%amr%geom(n)%dx(3),SP); write(iunit) rbuff
+                  ! Mesh size
+                  rbuff=real(this%amr%geom(n)%dx(1),SP); write(iunit) rbuff
+                  rbuff=real(this%amr%geom(n)%dx(2),SP); write(iunit) rbuff
+                  rbuff=real(this%amr%geom(n)%dx(3),SP); write(iunit) rbuff
+               end do
+               ! Close the file
+               close(iunit)
+            end if
+            ! Synchronize by broadcasting nbox
+            call MPI_BCAST(nbox,1,MPI_INTEGER,rank,this%amr%comm,ierr)
+         end do
+         ! Destroy iterator
+         call amrex_mfiter_destroy(mfi)
+      end do
       
    end subroutine write_geom
    

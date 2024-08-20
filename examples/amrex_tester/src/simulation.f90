@@ -133,6 +133,7 @@ contains
          amr%xhi =1.0_WP; amr%yhi =1.0_WP; amr%zhi =1.0_WP
          amr%xper=.true.; amr%yper=.true.; amr%zper=.true.
          amr%nlvl=3
+         amr%nmax=24
          call amr%initialize(name='amrtest')
       end block build_amr
       

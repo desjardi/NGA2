@@ -53,6 +53,7 @@ module amrconfig_class
       procedure :: regrid                ! Perform regriding operation on level baselvl
       procedure :: print                 ! Print out grid info
       procedure :: get_boxarray          ! Obtain box array at a given level
+      procedure :: get_distromap         ! Obtain distromap at a given level
       procedure :: clvl                  ! Return current finest level
    end type amrconfig
    
@@ -240,9 +241,9 @@ contains
       end interface
       call amrex_fi_init_virtual_functions(c_funloc(mak_lvl_init),c_funloc(mak_lvl_crse),c_funloc(mak_lvl_remk),c_funloc(clr_lvl),c_funloc(err_est),this%amrcore)
    end subroutine register_udp
-
-
-   !> Obtain boxarray at a level
+   
+   
+   !> Obtain box array at a level
    function get_boxarray(this,lvl) result(ba)
       use amrex_amr_module, only: amrex_boxarray
       implicit none
@@ -260,8 +261,28 @@ contains
       end interface
       call amrex_fi_get_boxarray(ba%p,lvl,this%amrcore)
    end function get_boxarray
-
-
+   
+   
+   !> Obtain distromap at a level
+   function get_distromap(this,lvl) result(dm)
+      use amrex_amr_module, only: amrex_distromap
+      implicit none
+      class(amrconfig), intent(inout) :: this
+      integer, intent(in)  :: lvl
+      type(amrex_distromap) :: dm
+      interface
+         subroutine amrex_fi_get_distromap(dmap,lev,core) bind(c)
+            import :: c_ptr,c_int
+            implicit none
+            type(c_ptr), intent(out) :: dmap
+            integer(c_int), value :: lev
+            type(c_ptr), value :: core
+         end subroutine amrex_fi_get_distromap
+      end interface
+      call amrex_fi_get_distromap(dm%p,lvl,this%amrcore)
+   end function get_distromap
+   
+   
    !> Return current finest level
    function clvl(this) result(cl)
       use amrex_amr_module, only: amrex_boxarray
