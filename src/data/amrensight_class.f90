@@ -156,7 +156,7 @@ contains
       ! Prepare new scalar
       allocate(new_scl)
       new_scl%name=trim(adjustl(name))
-      new_scl%rptr=>scalar
+      new_scl%rptr(0:)=>scalar
       new_scl%iptr=>NULL()
       ! Insert it up front
       new_scl%next=>this%first_scl
@@ -164,7 +164,7 @@ contains
       this%first_scl=>new_scl
       ! Also create the corresponding directory
       if (this%amr%amRoot) then
-         if (.not.isdir('ensight/'//trim(this%name)//trim(new_scl%name))) call makedir('ensight/'//trim(this%name)//trim(new_scl%name))
+         if (.not.isdir('ensight/'//trim(this%name)//trim(new_scl%name))) call makedir('ensight/'//trim(this%name)//'/'//trim(new_scl%name))
       end if
    end subroutine add_rscalar
    
@@ -181,14 +181,14 @@ contains
       allocate(new_scl)
       new_scl%name=trim(adjustl(name))
       new_scl%rptr=>NULL()
-      new_scl%iptr=>scalar
+      new_scl%iptr(0:)=>scalar
       ! Insert it up front
       new_scl%next=>this%first_scl
       ! Point list to new object
       this%first_scl=>new_scl
       ! Also create the corresponding directory
       if (this%amr%amRoot) then
-         if (.not.isdir('ensight/'//trim(this%name)//trim(new_scl%name))) call makedir('ensight/'//trim(this%name)//trim(new_scl%name))
+         if (.not.isdir('ensight/'//trim(this%name)//trim(new_scl%name))) call makedir('ensight/'//trim(this%name)//'/'//trim(new_scl%name))
       end if
    end subroutine add_iscalar
    
@@ -206,16 +206,16 @@ contains
       ! Prepare new vector
       allocate(new_vct)
       new_vct%name=trim(adjustl(name))
-      new_vct%ptrx=>vectx
-      new_vct%ptry=>vecty
-      new_vct%ptrz=>vectz
+      new_vct%ptrx(0:)=>vectx
+      new_vct%ptry(0:)=>vecty
+      new_vct%ptrz(0:)=>vectz
       ! Insert it up front
       new_vct%next=>this%first_vct
       ! Point list to new object
       this%first_vct=>new_vct
       ! Also create the corresponding directory
       if (this%amr%amRoot) then
-         if (.not.isdir('ensight/'//trim(this%name)//trim(new_vct%name))) call makedir('ensight/'//trim(this%name)//trim(new_vct%name))
+         if (.not.isdir('ensight/'//trim(this%name)//trim(new_vct%name))) call makedir('ensight/'//trim(this%name)//'/'//trim(new_vct%name))
       end if
    end subroutine add_vector
    
@@ -271,21 +271,26 @@ contains
       use precision, only: SP
       use messager,  only: die
       use parallel,  only: info_mpiio,MPI_REAL_SP
-      use mpi_f08
+      use amrex_amr_module, only: amrex_box,amrex_boxarray,amrex_distromap,&
+      &                           amrex_mfiter,amrex_mfiter_build,amrex_mfiter_destroy
+      use mpi_f08,          only: MPI_BCAST,MPI_INTEGER
       implicit none
       class(amrensight), intent(inout) :: this
       real(WP), intent(in) :: time
       character(len=str_medium) :: filename
-      integer :: iunit,ierr,n,i
+      integer :: iunit,ierr,n,i,nbox,rank
       integer :: ibuff
       character(len=80) :: cbuff
-      type(MPI_File) :: ifile
-      integer(kind=MPI_OFFSET_KIND) :: disp
-      type(MPI_Status):: status
       type(scl), pointer :: my_scl
       type(vct), pointer :: my_vct
       type(srf), pointer :: my_srf
       type(prt), pointer :: my_prt
+      type(amrex_boxarray)  :: ba
+      type(amrex_distromap) :: dm
+      type(amrex_box)       :: bx
+      type(amrex_mfiter)    :: mfi
+      real(WP), dimension(:,:,:,:), contiguous, pointer :: rphi
+      integer , dimension(:,:,:,:), contiguous, pointer :: iphi
       real(SP), dimension(:,:,:), allocatable :: spbuff
       real(WP), dimension(:), allocatable :: temp_time
       character(len=str_medium) :: ctime
@@ -316,46 +321,77 @@ contains
       ! Write out the geometry
       call this%write_geom()
 
-      !! Prepare the SP buffer
-      !allocate(spbuff(this%cfg%imin_:this%cfg%imax_,this%cfg%jmin_:this%cfg%jmax_,this%cfg%kmin_:this%cfg%kmax_))
-      !
-      !! Traverse all datasets and print them all out - scalars first
-      !my_scl=>this%first_scl
-      !do while (associated(my_scl))
-      !   
-      !   ! Create filename
-      !   filename='ensight/'//trim(this%name)//'/'//trim(my_scl%name)//'/'//trim(my_scl%name)//'.'
-      !   write(filename(len_trim(filename)+1:len_trim(filename)+6),'(i6.6)') this%ntime
-      !   
-      !   ! Root process starts writing the file header
-      !   if (this%cfg%amRoot) then
-      !      ! Open the file
-      !      open(newunit=iunit,file=trim(filename),form='unformatted',status='replace',access='stream',iostat=ierr)
-      !      if (ierr.ne.0) call die('[ensight write data] Could not open file '//trim(filename))
-      !      ! Write the header
-      !      cbuff=trim(my_scl%name); write(iunit) cbuff
-      !      cbuff='part'           ; write(iunit) cbuff
-      !      ibuff=1                ; write(iunit) ibuff
-      !      cbuff='block'          ; write(iunit) cbuff
-      !      ! Close the file
-      !      close(iunit)
-      !   end if
-      !   
-      !   ! Now parallel-write the actual data (note that we allow both real and integer fields!)
-      !   call MPI_FILE_OPEN(this%cfg%comm,trim(filename),IOR(MPI_MODE_WRONLY,MPI_MODE_APPEND),info_mpiio,ifile,ierr)
-      !   if (ierr.ne.0) call die('[ensight write data] Problem encountered while parallel writing data file '//trim(filename))
-      !   call MPI_FILE_GET_POSITION(ifile,disp,ierr)
-      !   call MPI_FILE_SET_VIEW(ifile,disp,MPI_REAL_SP,this%cfg%SPview,'native',info_mpiio,ierr)
-      !   if (associated(my_scl%rptr)) spbuff(this%cfg%imin_:this%cfg%imax_,this%cfg%jmin_:this%cfg%jmax_,this%cfg%kmin_:this%cfg%kmax_)=real(my_scl%rptr(this%cfg%imin_:this%cfg%imax_,this%cfg%jmin_:this%cfg%jmax_,this%cfg%kmin_:this%cfg%kmax_),SP)
-      !   if (associated(my_scl%iptr)) spbuff(this%cfg%imin_:this%cfg%imax_,this%cfg%jmin_:this%cfg%jmax_,this%cfg%kmin_:this%cfg%kmax_)=real(my_scl%iptr(this%cfg%imin_:this%cfg%imax_,this%cfg%jmin_:this%cfg%jmax_,this%cfg%kmin_:this%cfg%kmax_),SP)
-      !   call MPI_FILE_WRITE_ALL(ifile,spbuff,this%cfg%nx_*this%cfg%ny_*this%cfg%nz_,MPI_REAL_SP,status,ierr)
-      !   call MPI_FILE_CLOSE(ifile,ierr)
-      !   
-      !   ! Continue on to the next scalar object
-      !   my_scl=>my_scl%next
-      !   
-      !end do
-      !
+      ! Traverse all datasets and print them all out - scalars first
+      my_scl=>this%first_scl
+      do while (associated(my_scl))
+         
+         ! Create filename
+         filename='ensight/'//trim(this%name)//'/'//trim(my_scl%name)//'/'//trim(my_scl%name)//'.'
+         write(filename(len_trim(filename)+1:len_trim(filename)+6),'(i6.6)') this%ntime
+         
+         ! Root process starts writing the file header
+         if (this%amr%amRoot) then
+            ! Open the file
+            open(newunit=iunit,file=trim(filename),form='unformatted',status='replace',access='stream',iostat=ierr)
+            if (ierr.ne.0) call die('[ensight write data] Could not open file '//trim(filename))
+            ! Write the header
+            cbuff=trim(my_scl%name); write(iunit) cbuff
+            ! Close the file
+            close(iunit)
+         end if
+         
+         ! Write all the boxes in parallel to the same file
+         nbox=0
+         do n=0,this%amr%clvl()
+            ! Build an mfiter at that level
+            ba=this%amr%get_boxarray (lvl=n)
+            dm=this%amr%get_distromap(lvl=n)
+            call amrex_mfiter_build(mfi,ba,dm)
+            ! Have all cores write out their data
+            do rank=0,this%amr%nproc-1
+               if (rank.eq.this%amr%rank) then
+                  ! Open the file
+                  open(newunit=iunit,file=trim(filename),form='unformatted',status='old',access='stream',position='append',iostat=ierr)
+                  if (ierr.ne.0) call die('[amrensight write data] Could not reopen file '//trim(filename))
+                  ! Loop through all boxes in mfiter
+                  do while (mfi%next())
+                     ! Get box
+                     bx=mfi%tilebox()
+                     nbox=nbox+1
+                     ! Write box to the file
+                     cbuff='part' ; write(iunit) cbuff
+                     ibuff=nbox   ; write(iunit) ibuff
+                     cbuff='block'; write(iunit) cbuff
+                     ! Allocate SPbuff to right size
+                     allocate(spbuff(bx%lo(1):bx%hi(1),bx%lo(2):bx%hi(2),bx%lo(3):bx%hi(3)))
+                     ! Copy data from appropriate multifab
+                     if (associated(my_scl%rptr)) then
+                        rphi=>my_scl%rptr(n)%dataptr(mfi)
+                        spbuff=real(rphi(bx%lo(1):bx%hi(1),bx%lo(2):bx%hi(2),bx%lo(3):bx%hi(3),1),SP)
+                     else if (associated(my_scl%iptr)) then
+                        iphi=>my_scl%iptr(n)%dataptr(mfi)
+                        spbuff=real(iphi(bx%lo(1):bx%hi(1),bx%lo(2):bx%hi(2),bx%lo(3):bx%hi(3),1),SP)
+                     end if
+                     ! Write it out
+                     write(iunit) spbuff
+                     ! Deallocate SPbuff
+                     deallocate(spbuff)
+                  end do
+                  ! Close the file
+                  close(iunit)
+               end if
+               ! Synchronize by broadcasting nbox
+               call MPI_BCAST(nbox,1,MPI_INTEGER,rank,this%amr%comm,ierr)
+            end do
+            ! Destroy iterator
+            call amrex_mfiter_destroy(mfi)
+         end do
+         
+         ! Continue on to the next scalar object
+         my_scl=>my_scl%next
+         
+      end do
+      
       !! Traverse all datasets and print them all out - vectors second
       !my_vct=>this%first_vct
       !do while (associated(my_vct))

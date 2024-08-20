@@ -157,6 +157,8 @@ contains
       create_ensight: block
          ! Create Ensight output from armconfig
          call ens_out%initialize(amr=amr,name='amrtest')
+         ! Add variables to output
+         call ens_out%add_scalar('SC',sc%SC)
          ! Output to ensight
          call ens_out%write_data(0.0_WP)
       end block create_ensight
