@@ -472,27 +472,17 @@ contains
       use precision,        only: SP
       use messager,         only: die
       use parallel,         only: info_mpiio,MPI_REAL_SP
-      use iso_c_binding,    only: c_ptr,c_int
-      use amrex_amr_module, only: amrex_boxarray
+      use amrex_amr_module, only: amrex_boxarray,amrex_box
       use mpi_f08
       implicit none
       class(amrensight), intent(in) :: this
-      integer :: iunit,ierr,n,m,npart
-      integer, dimension(3) :: lo,hi
+      integer :: iunit,ierr,n,m,npart,nb
       type(amrex_boxarray) :: ba
+      type(amrex_box)      :: bx
       character(len=str_medium) :: filename
       character(len=80) :: cbuff
       real(SP) :: rbuff
       integer :: ibuff
-      interface
-         subroutine amrex_fi_boxarray_get_box(barray,i,ilo,ihi) bind(c)
-            import :: c_ptr,c_int
-            implicit none
-            type(c_ptr), value :: barray
-            integer(c_int), value :: i
-            integer, dimension(3), intent(inout) :: ilo,ihi
-         end subroutine amrex_fi_boxarray_get_box
-      end interface
       !type(MPI_File) :: ifile
       !type(MPI_Status):: status
       !integer(kind=MPI_OFFSET_KIND) :: disp
@@ -529,22 +519,23 @@ contains
             ! Get boxarray at that level
             ba=this%amr%get_boxarray(lvl=n)
             ! Loop over boxes in ba
-            do m=0,7
+            nb=int(ba%nboxes())
+            do m=1,nb
                npart=npart+1
                ! Part header
                cbuff='part'                                      ; write(iunit) cbuff
                ibuff=npart                                       ; write(iunit) ibuff
-               cbuff=''; write(cbuff,'("Level ",i2,"/",i2," - Box ",i3,"/",i3)') n,this%amr%clvl(),m,7; write(iunit) cbuff
+               cbuff=''; write(cbuff,'("Level ",i2,"/",i2," - Box ",i3,"/",i3)') n,this%amr%clvl(),m,nb; write(iunit) cbuff
                cbuff='block uniform'                             ; write(iunit) cbuff  ! Not blanked
                ! Range of indices
-               call amrex_fi_boxarray_get_box(ba%p,m,lo,hi); lo=lo; hi=hi+1
-               ibuff=hi(1)-lo(1)+1; write(iunit) ibuff
-               ibuff=hi(2)-lo(2)+1; write(iunit) ibuff
-               ibuff=hi(3)-lo(3)+1; write(iunit) ibuff
+               bx=ba%get_box(m-1)
+               ibuff=bx%hi(1)+1-bx%lo(1)+1; write(iunit) ibuff
+               ibuff=bx%hi(2)+1-bx%lo(2)+1; write(iunit) ibuff
+               ibuff=bx%hi(3)+1-bx%lo(3)+1; write(iunit) ibuff
                ! Mesh origin
-               rbuff=real(this%amr%xlo+lo(1)*this%amr%geom(n)%dx(1),SP); write(iunit) rbuff
-               rbuff=real(this%amr%ylo+lo(2)*this%amr%geom(n)%dx(2),SP); write(iunit) rbuff
-               rbuff=real(this%amr%zlo+lo(3)*this%amr%geom(n)%dx(3),SP); write(iunit) rbuff
+               rbuff=real(this%amr%xlo+bx%lo(1)*this%amr%geom(n)%dx(1),SP); write(iunit) rbuff
+               rbuff=real(this%amr%ylo+bx%lo(2)*this%amr%geom(n)%dx(2),SP); write(iunit) rbuff
+               rbuff=real(this%amr%zlo+bx%lo(3)*this%amr%geom(n)%dx(3),SP); write(iunit) rbuff
                ! Mesh size
                rbuff=real(this%amr%geom(n)%dx(1),SP); write(iunit) rbuff
                rbuff=real(this%amr%geom(n)%dx(2),SP); write(iunit) rbuff

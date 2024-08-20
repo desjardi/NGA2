@@ -282,37 +282,30 @@ contains
    !> Print amrconfig object
    subroutine print(this)
       use, intrinsic :: iso_fortran_env, only: output_unit
-      use amrex_amr_module, only: amrex_boxarray
+      use amrex_amr_module, only: amrex_boxarray,amrex_box
       use parallel, only: amRoot
       implicit none
       class(amrconfig), intent(inout) :: this
       type(amrex_boxarray) :: ba
-      integer :: n,m
+      type(amrex_box)      :: bx
+      integer :: n,m,nb
       integer, dimension(3) :: lo,hi
-      interface
-         subroutine amrex_fi_boxarray_get_box(barray,i,ilo,ihi) bind(c)
-            import :: c_ptr,c_int
-            implicit none
-            type(c_ptr), value :: barray
-            integer(c_int), value :: i
-            integer, dimension(3), intent(inout) :: ilo,ihi
-         end subroutine amrex_fi_boxarray_get_box
-      end interface
       if (amRoot) then
          write(output_unit,'("AMR Cartesian grid [",a,"]")') trim(this%name)
-         write(output_unit,'(" > amr level = ",i2,"/",i2)') this%clvl(),this%nlvl-1
+         write(output_unit,'(" > amr level = ",i2)') this%clvl()
+         write(output_unit,'(" > max level = ",i2)') this%nlvl-1
          write(output_unit,'(" >    extent = [",es12.5,",",es12.5,"]x[",es12.5,",",es12.5,"]x[",es12.5,",",es12.5,"]")') this%xlo,this%xhi,this%ylo,this%yhi,this%zlo,this%zhi
          write(output_unit,'(" >  periodic = ",l1,"x",l1,"x",l1)') this%xper,this%yper,this%zper
          ! Loop over levels
          do n=0,this%clvl()
             ! Get boxarray at that level
             ba=this%get_boxarray(lvl=n)
-            write(output_unit,'(" >>> Level ",i2,"/",i2," with [dx =",es12.5,",dy =",es12.5,",dz =",es12.5,"]")') n,this%nlvl-1,this%geom(n)%dx(1),this%geom(n)%dx(2),this%geom(n)%dx(3)
+            write(output_unit,'(" >>> Level ",i2,"/",i2," with [dx =",es12.5,",dy =",es12.5,",dz =",es12.5,"]")') n,this%clvl(),this%geom(n)%dx(1),this%geom(n)%dx(2),this%geom(n)%dx(3)
             ! Loop over boxes
-            ! Get number of boxes in ba
-            do m=0,7
-               call amrex_fi_boxarray_get_box(ba%p,m,lo,hi)
-               write(output_unit,'(" >>> Box ",i0,"/",i0," from [",i3,",",i3,",",i3,"] to [",i3,",",i3,",",i3,"]")') m,7,lo,hi
+            nb=int(ba%nboxes())
+            do m=1,nb
+               bx=ba%get_box(m-1)
+               write(output_unit,'(" >>> Box ",i0,"/",i0," from [",i3,",",i3,",",i3,"] to [",i3,",",i3,",",i3,"]")') m,nb,bx%lo,bx%hi
             end do
          end do
       end if
