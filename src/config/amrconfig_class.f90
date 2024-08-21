@@ -56,6 +56,7 @@ module amrconfig_class
       procedure :: get_distromap         ! Obtain distromap at a given level
       procedure :: clvl                  ! Return current finest level
       procedure :: average_down          ! Average down a given multifab throughout all levels
+      procedure :: average_downto        ! Average down a given multifab to level lvl
    end type amrconfig
    
    
@@ -326,6 +327,17 @@ contains
          call amrex_average_down(mfab(n+1),mfab(n),this%geom(n+1),this%geom(n),1,mfab(0)%nc,this%rref(n))
       end do
    end subroutine average_down
+
+
+   !> Average entire multifab array down to level lvl
+   subroutine average_downto(this,mfab,lvl)
+      use amrex_amr_module, only: amrex_multifab,amrex_average_down
+      implicit none
+      class(amrconfig), intent(inout) :: this
+      type(amrex_multifab), dimension(0:) :: mfab
+      integer, intent(in) :: lvl
+      call amrex_average_down(mfab(lvl+1),mfab(lvl),this%geom(lvl+1),this%geom(lvl),1,mfab(0)%nc,this%rref(lvl))
+   end subroutine average_downto
    
    
    !> Print amrconfig object
