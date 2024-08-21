@@ -162,6 +162,7 @@ contains
          amr%xper=.true.; amr%yper=.true.; amr%zper=.true.
          amr%nlvl=1
          amr%nmax=24
+         amr%rref=[4]
          call amr%initialize(name='amrtest')
       end block build_amr
       
@@ -175,7 +176,7 @@ contains
       
       ! Initialize data
       call amr%initialize_data(0.0_WP)
-      !call averagedown()
+      call amr%average_down(sc%SC)
       
       !call amr%regrid(baselvl=0,time=0.0_WP)
       

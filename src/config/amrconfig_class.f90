@@ -37,7 +37,7 @@ module amrconfig_class
       ! Blocking factor
       integer :: nbloc=8
       ! Refinement ratio
-      integer :: rref=2
+      integer, dimension(:), allocatable :: rref
       ! Geometry object at each level
       type(amrex_geometry), dimension(:), allocatable :: geom
       ! Parallel info
@@ -55,6 +55,7 @@ module amrconfig_class
       procedure :: get_boxarray          ! Obtain box array at a given level
       procedure :: get_distromap         ! Obtain distromap at a given level
       procedure :: clvl                  ! Return current finest level
+      procedure :: average_down          ! Average down a given multifab throughout all levels
    end type amrconfig
    
    
@@ -117,7 +118,8 @@ contains
          call pp%add   ('max_level'      ,this%nlvl)
          call pp%add   ('blocking_factor',this%nbloc)
          call pp%add   ('max_grid_size'  ,this%nmax)
-         call pp%add   ('ref_ratio'      ,this%rref)
+         if (.not.allocated(this%rref)) this%rref=[2]
+         call pp%addarr('ref_ratio'      ,this%rref)
          call amrex_parmparse_destroy(pp)
          call amrex_parmparse_build(pp,'geometry')
          call pp%add   ('coord_sys'  ,this%coordsys)
@@ -161,6 +163,19 @@ contains
             call amrex_geometry_init_data(this%geom(n))
          end do
       end block store_geometries
+      ! Store effective refinement ratio
+      store_ref_ratio: block
+         interface
+            subroutine amrex_fi_get_ref_ratio(ref_ratio,core) bind(c)
+               import :: c_ptr
+               implicit none
+               integer, dimension(*), intent(inout) :: ref_ratio
+               type(c_ptr), value :: core
+            end subroutine amrex_fi_get_ref_ratio
+         end interface
+         deallocate(this%rref); allocate(this%rref(0:this%nlvl-1))
+         call amrex_fi_get_ref_ratio(this%rref,this%amrcore)
+      end block store_ref_ratio
       ! Store parallel info
       store_parallel_info: block
          use parallel, only: comm,nproc,rank,amRoot
@@ -298,6 +313,19 @@ contains
       end interface
       cl=amrex_fi_get_finest_level(this%amrcore)
    end function clvl
+
+
+   !> Average down entire multifab array
+   subroutine average_down(this,mfab)
+      use amrex_amr_module, only: amrex_multifab,amrex_average_down
+      implicit none
+      class(amrconfig), intent(inout) :: this
+      type(amrex_multifab), dimension(0:) :: mfab
+      integer :: n
+      do n=this%clvl()-1,0,-1
+         call amrex_average_down(mfab(n+1),mfab(n),this%geom(n+1),this%geom(n),1,mfab(0)%nc,this%rref(n))
+      end do
+   end subroutine average_down
    
    
    !> Print amrconfig object
@@ -315,6 +343,7 @@ contains
          write(output_unit,'("AMR Cartesian grid [",a,"]")') trim(this%name)
          write(output_unit,'(" > amr level = ",i2)') this%clvl()
          write(output_unit,'(" > max level = ",i2)') this%nlvl
+         write(output_unit,'(" > ref ratio = ",100(" ",i0))') this%rref
          write(output_unit,'(" >    extent = [",es12.5,",",es12.5,"]x[",es12.5,",",es12.5,"]x[",es12.5,",",es12.5,"]")') this%xlo,this%xhi,this%ylo,this%yhi,this%zlo,this%zhi
          write(output_unit,'(" >  periodic = ",l1,"x",l1,"x",l1)') this%xper,this%yper,this%zper
          ! Loop over levels
