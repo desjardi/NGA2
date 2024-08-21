@@ -155,8 +155,8 @@ contains
             end subroutine amrex_fi_get_geometry
          end interface
          integer :: n
-         allocate(this%geom(0:this%nlvl-1))
-         do n=0,this%nlvl-1
+         allocate(this%geom(0:this%nlvl))
+         do n=0,this%nlvl
             call amrex_fi_get_geometry(this%geom(n)%p,n,this%amrcore)
             call amrex_geometry_init_data(this%geom(n))
          end do
@@ -314,7 +314,7 @@ contains
       if (amRoot) then
          write(output_unit,'("AMR Cartesian grid [",a,"]")') trim(this%name)
          write(output_unit,'(" > amr level = ",i2)') this%clvl()
-         write(output_unit,'(" > max level = ",i2)') this%nlvl-1
+         write(output_unit,'(" > max level = ",i2)') this%nlvl
          write(output_unit,'(" >    extent = [",es12.5,",",es12.5,"]x[",es12.5,",",es12.5,"]x[",es12.5,",",es12.5,"]")') this%xlo,this%xhi,this%ylo,this%yhi,this%zlo,this%zhi
          write(output_unit,'(" >  periodic = ",l1,"x",l1,"x",l1)') this%xper,this%yper,this%zper
          ! Loop over levels

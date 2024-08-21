@@ -33,7 +33,8 @@ module amrscalar_class
    contains
       procedure :: initialize                                   !< Initialize scalar solver
       procedure :: finalize                                     !< Finalize scalar solver
-      procedure :: clr_lvl
+      procedure :: delete_lvl                                   !< Delete data at level lvl
+      procedure :: create_lvl                                   !< Create data at level lvl
    end type amrscalar
    
    
@@ -54,21 +55,34 @@ contains
       this%amr=>amr
       
       ! Allocate variables
-      allocate(this%SC   (0:this%amr%nlvl-1))
-      allocate(this%SCold(0:this%amr%nlvl-1))
+      allocate(this%SC   (0:this%amr%nlvl))
+      allocate(this%SCold(0:this%amr%nlvl))
       
    end subroutine initialize
 
 
-   !> Clear solver data at level lev - should this be bind(c)?
-   subroutine clr_lvl(this,lev)
+   !> Delete solver data at level lvl
+   subroutine delete_lvl(this,lvl)
       use amrex_amr_module, only: amrex_multifab_destroy
       implicit none
       class(amrscalar), intent(inout) :: this
-      integer, intent(in), value :: lev
-      call amrex_multifab_destroy(this%SC   (lev))
-      call amrex_multifab_destroy(this%SCold(lev))
-   end subroutine clr_lvl
+      integer, intent(in), value :: lvl
+      call amrex_multifab_destroy(this%SC   (lvl))
+      call amrex_multifab_destroy(this%SCold(lvl))
+   end subroutine delete_lvl
+
+
+   !> Create solver data at level lvl
+   subroutine create_lvl(this,lvl,ba,dm)
+      use amrex_amr_module, only: amrex_multifab_build,amrex_boxarray,amrex_distromap
+      implicit none
+      class(amrscalar), intent(inout) :: this
+      type(amrex_boxarray),  intent(in) :: ba
+      type(amrex_distromap), intent(in) :: dm
+      integer, intent(in), value :: lvl
+      call amrex_multifab_build(this%SC   (lvl),ba,dm,this%ncomp,this%nover)
+      call amrex_multifab_build(this%SCold(lvl),ba,dm,this%ncomp,this%nover)
+   end subroutine create_lvl
    
    
    !> Finalization for amrscalar solver
@@ -77,7 +91,7 @@ contains
       implicit none
       class(amrscalar), intent(inout) :: this
       integer :: n
-      do n=0,this%amr%nlvl-1
+      do n=0,this%amr%nlvl
          call amrex_multifab_destroy(this%SC   (n))
          call amrex_multifab_destroy(this%SCold(n))
       end do
