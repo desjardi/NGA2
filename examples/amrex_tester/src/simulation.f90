@@ -37,9 +37,6 @@ contains
       ! Convert pointers
       ba=pba; dm=pdm
       
-      ! Delete level
-      call delete_lvl(lvl)
-      
       ! Create level for sc
       call sc%create_lvl(lvl,ba,dm)
       
@@ -88,12 +85,8 @@ contains
       ! Convert pointers
       ba=pba; dm=pdm
       
-      ! Delete level
-      call delete_lvl(lvl)
-      
-      ! Create level for sc and fill it
-      call sc%create_lvl(lvl,ba,dm)
-      call sc%fillcoarse(lvl,time)
+      ! Refine level for sc
+      call sc%refine_lvl(lvl,time,ba,dm)
       
    end subroutine refine_lvl
    
@@ -113,8 +106,9 @@ contains
       ! Convert pointers
       ba=pba; dm=pdm
 
-      ! This is where data creation from current and coarse data is done
-      print*,'please dont call me yet'
+      ! Remake level for sc
+      call sc%remake_lvl(lvl,time,ba,dm)
+
    end subroutine remake_lvl
    
    

@@ -42,7 +42,10 @@ module amrscalar_class
       procedure :: finalize                                          !< Finalize scalar solver
       procedure :: delete_lvl                                        !< Delete data at level lvl
       procedure :: create_lvl                                        !< Create data at level lvl
+      procedure :: refine_lvl                                        !< Refine data at level lvl
+      procedure :: remake_lvl                                        !< Remake data at level lvl
       procedure :: fillcoarse                                        !< Populate patch of data from coarse data (single time)
+      procedure :: fill                                              !< Populate patch of data from existing data (single time)
    end type amrscalar
    
    
@@ -103,8 +106,8 @@ contains
       call amrex_multifab_destroy(this%SC   (lvl))
       call amrex_multifab_destroy(this%SCold(lvl))
    end subroutine delete_lvl
-
-
+   
+   
    !> Create solver data at level lvl
    subroutine create_lvl(this,lvl,ba,dm)
       use amrex_amr_module, only: amrex_multifab_build,amrex_boxarray,amrex_distromap
@@ -113,21 +116,63 @@ contains
       type(amrex_boxarray),  intent(in) :: ba
       type(amrex_distromap), intent(in) :: dm
       integer, intent(in), value :: lvl
+      ! Delete data first
+      call this%delete_lvl(lvl)
+      ! Rebuild it from scratch
       call amrex_multifab_build(this%SC   (lvl),ba,dm,this%nscalar,this%nover)
       call amrex_multifab_build(this%SCold(lvl),ba,dm,this%nscalar,this%nover)
    end subroutine create_lvl
+   
+   
+   !> Refine solver data at level lvl
+   subroutine refine_lvl(this,lvl,time,ba,dm)
+      use amrex_amr_module, only: amrex_boxarray,amrex_distromap
+      implicit none
+      class(amrscalar), intent(inout) :: this
+      real(WP), intent(in) :: time
+      type(amrex_boxarray),  intent(in) :: ba
+      type(amrex_distromap), intent(in) :: dm
+      integer, intent(in), value :: lvl
+      ! Recreate data
+      call this%create_lvl(lvl,ba,dm)
+      ! Populate from from coarse level
+      call this%fillcoarse(lvl,time,this%SC(lvl))
+   end subroutine refine_lvl
 
 
-   !> Fill a patch from coarse SC data and boundary conditions
-   subroutine fillcoarse(this,lvl,time)
-      use amrex_amr_module, only: amrex_fillcoarsepatch,amrex_interp_cell_cons
+   !> Remake solver data at level lvl
+   subroutine remake_lvl(this,lvl,time,ba,dm)
+      use amrex_amr_module, only: amrex_boxarray,amrex_distromap,amrex_multifab_build,amrex_multifab_destroy,amrex_multifab
+      implicit none
+      class(amrscalar), intent(inout) :: this
+      real(WP), intent(in) :: time
+      type(amrex_boxarray),  intent(in) :: ba
+      type(amrex_distromap), intent(in) :: dm
+      integer, intent(in), value :: lvl
+      type(amrex_multifab) :: SCnew
+      ! Create SCnew and populate it from current data
+      call amrex_multifab_build(SCnew,ba,dm,this%nscalar,this%nover)
+      call this%fill(lvl,time,SCnew)
+      ! Recreate level
+      call this%create_lvl(lvl,ba,dm)
+      ! Copy SCnew to SC
+      call this%SC(lvl)%copy(SCnew,1,1,this%nscalar,this%nover)
+      ! Destroy SCnew
+      call amrex_multifab_destroy(SCnew)
+   end subroutine remake_lvl
+
+
+   !> Fill a patch from coarse scalar data and boundary conditions
+   subroutine fillcoarse(this,lvl,time,SC)
+      use amrex_amr_module, only: amrex_multifab,amrex_fillcoarsepatch,amrex_interp_cell_cons
       implicit none
       class(amrscalar), intent(inout) :: this
       integer, intent(in) :: lvl
       real(WP), intent(in) :: time
-      call amrex_fillcoarsepatch(this%SC(lvl),&  !< fine data being filled...
-      &                   time,this%SC(lvl-1),&  !< using coarse data at new time...
-      &                   time,this%SC(lvl-1),&  !<   and coarse data at old time...
+      type(amrex_multifab), intent(inout) :: sc
+      call amrex_fillcoarsepatch(SC,          &  !< fine data being filled...
+      &                   time,this%SC(lvl-1),&  !< using coarse data at old time...
+      &                   time,this%SC(lvl-1),&  !<   and coarse data at new time...
       &           this%amr%geom(lvl-1),fillbc,&  !< coarse geometry with function to apply bconds...
       &           this%amr%geom(lvl  ),fillbc,&  !<   fine geometry with function to apply bconds...
       &              time,1,1,this%SC(lvl)%nc,&  !< time when we want the data, scomp, dcomp, ncomp...
@@ -135,7 +180,6 @@ contains
       &                amrex_interp_cell_cons,&  !< interpolation strategy...
       &                 this%lo_bc,this%hi_bc)   !< domain bconds
    contains
-   
       subroutine fillbc(pmf,scomp,ncomp,t,pgeom) bind(c)
          use amrex_amr_module, only: amrex_filcc,amrex_geometry,amrex_multifab,amrex_mfiter,amrex_mfiter_build,amrex_filcc
          use iso_c_binding,    only: c_ptr,c_int
@@ -162,8 +206,64 @@ contains
             end if
          end do
       end subroutine fillbc
-      
    end subroutine fillcoarse
+
+
+   !> Fill a patch from existing scalar data and boundary conditions
+   subroutine fill(this,lvl,time,SC)
+      use amrex_amr_module, only: amrex_multifab,amrex_fillpatch,amrex_interp_cell_cons
+      implicit none
+      class(amrscalar), intent(inout) :: this
+      integer, intent(in) :: lvl
+      real(WP), intent(in) :: time
+      type(amrex_multifab), intent(inout) :: sc
+      if (lvl.eq.0) then
+         call amrex_fillpatch(SC,          &  !< base data being filled...
+         &               time,this%SC(lvl),&  !< using base data at old time...
+         &               time,this%SC(lvl),&  !<   and base data at new time...
+         &       this%amr%geom(lvl),fillbc,&  !< base geometry with function to apply bconds...
+         &        time,1,1,this%SC(lvl)%nc)   !< time when we want the data, scomp, dcomp, ncomp
+      else
+         call amrex_fillpatch(SC,          &  !< fine data being filled...
+         &             time,this%SC(lvl-1),&  !< using coarse data at old time...
+         &             time,this%SC(lvl-1),&  !<   and coarse data at new time...
+         &     this%amr%geom(lvl-1),fillbc,&  !< coarse geometry with function to apply bconds...
+         &             time,this%SC(lvl  ),&  !<     and fine data at old time...
+         &             time,this%SC(lvl  ),&  !<     and fine data at new time...
+         &     this%amr%geom(lvl  ),fillbc,&  !<   fine geometry with function to apply bconds...
+         &        time,1,1,this%SC(lvl)%nc,&  !< time when we want the data, scomp, dcomp, ncomp...
+         &            this%amr%rref(lvl-1),&  !< refinement ratio between the levels...
+         &          amrex_interp_cell_cons,&  !< interpolation strategy...
+         &           this%lo_bc,this%hi_bc)   !< domain bconds
+      end if
+   contains
+      subroutine fillbc(pmf,scomp,ncomp,t,pgeom) bind(c)
+         use amrex_amr_module, only: amrex_filcc,amrex_geometry,amrex_multifab,amrex_mfiter,amrex_mfiter_build,amrex_filcc
+         use iso_c_binding,    only: c_ptr,c_int
+         type(c_ptr), value :: pmf,pgeom
+         integer(c_int), value :: scomp,ncomp
+         real(WP), value :: t
+         type(amrex_geometry) :: geom
+         type(amrex_multifab) :: mf
+         type(amrex_mfiter) :: mfi
+         real(WP), dimension(:,:,:,:), contiguous, pointer :: p
+         integer, dimension(4) :: plo,phi
+         ! Skip if fully periodic
+         if (all([this%amr%xper,this%amr%yper,this%amr%zper])) return
+         ! Convert pointers
+         geom=pgeom; mf=pmf
+         ! Loop over boxes
+         call amrex_mfiter_build(mfi,mf)
+         do while(mfi%next())
+            p=>mf%dataptr(mfi)
+            ! Check if part of box is outside the domain
+            if (.not.geom%domain%contains(p)) then
+               plo=lbound(p); phi=ubound(p)
+               call amrex_filcc(p,plo,phi,geom%domain%lo,geom%domain%hi,geom%dx,geom%get_physical_location(plo),this%lo_bc,this%hi_bc)
+            end if
+         end do
+      end subroutine fillbc
+   end subroutine fill
    
    
    !> Finalization for amrscalar solver
