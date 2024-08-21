@@ -127,7 +127,7 @@ contains
       type(struct_stats) :: stats
 
       ! Open the file - Created in simulation_init
-      open(newunit=iunit,file="merge_split.csv",form="formatted",status="old",position="append",action="write")
+      if (cfg%amRoot) open(iunit,file="merge_split.csv",form="formatted",status="old",position="append",action="write")
    
       analyze_merges: block
          integer :: n,nn
@@ -164,6 +164,7 @@ contains
             do nn=1,strack%split_master(n)%nnewid
                call compute_struct_stats(strack%split_master(n)%newids(nn),stats)
                if (cfg%amRoot) then 
+
                   ! Write merge data to file
                   strack%eventcount = strack%eventcount+1
                   write(iunit,"(I0)",      advance="no")  strack%eventcount
@@ -186,6 +187,8 @@ contains
                   write(iunit,"(A)",       advance="no")  ','
                   write(iunit,"(ES20.12)", advance="no")  stats%v_avg
                   write(iunit,"(A)",       advance="no")  ','
+                  write(iunit,"(ES20.12)", advance="no")  stats%w_avg
+                  write(iunit,"(A)",       advance="no")  ','
                   write(iunit,"(ES20.12)", advance="no")  stats%lengths(1)
                   write(iunit,"(A)",       advance="no")  ','
                   write(iunit,"(ES20.12)", advance="no")  stats%lengths(2)
@@ -197,7 +200,7 @@ contains
       
       end block analyze_splits
 
-      close(iunit)
+      if (cfg%amRoot) close(iunit)
    
    contains 
       subroutine compute_struct_stats(id,stats)
@@ -675,7 +678,7 @@ contains
 
          ! Advance stracker
          call strack%advance(make_label=label_liquid)
-         !call analyze_merge_split
+         call analyze_merge_split
 
          ! ! Output master stracker lists
          ! print_merge_master: block

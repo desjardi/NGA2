@@ -1,6 +1,8 @@
 !> Various definitions and tools for running an NGA2 simulation
 module simulation
+   use string,            only: str_medium
    use precision,         only: WP
+   use inputfile_class,   only: inputfile
    use geometry,          only: cfg
    use hypre_str_class,   only: hypre_str
    use ddadi_class,       only: ddadi
@@ -47,7 +49,12 @@ module simulation
    real(WP) :: radius, Ujet 
    
    !> Provide a pardata objects for restarts
+   type(event)   :: save_evt
    type(pardata) :: df
+   logical       :: restarted
+
+   !> Input file for the simulation
+   type(inputfile) :: input
 
    !> Type for structure stats
    type :: struct_stats
@@ -334,7 +341,7 @@ contains
          ! Get rid of very small negative values (due to machine accuracy)
          d = max(0.0_WP,d)
          ! Store characteristic lengths
-         lengths(1) = sqrt(5.0_WP/2.0_WP*abs(d(2)+d(3)-d(1))/vol_struct)
+         lengths(1) = sqrt(5.0_WP/2.0_WP*abs(d(2)+d(3)-d(1))/vol_struct) ! Need a check to prevent dividing by 0 
          lengths(2) = sqrt(5.0_WP/2.0_WP*abs(d(3)+d(1)-d(2))/vol_struct)
          lengths(3) = sqrt(5.0_WP/2.0_WP*abs(d(1)+d(2)-d(3))/vol_struct)
          ! Zero out length in 3rd dimension if 2D
@@ -361,9 +368,64 @@ contains
    
    !> Initialization of problem solver
    subroutine simulation_init
-      use param, only: param_read
       implicit none
-      
+
+      ! Setup an input file
+      read_input: block
+         use parallel, only: amRoot
+         input=inputfile(amRoot=amRoot,filename='input')
+      end block read_input
+
+      ! Initialize time tracker with 2 subiterations
+      initialize_timetracker: block
+         time=timetracker(amRoot=cfg%amRoot)
+         call input%read('Max timestep size',time%dtmax)
+         call input%read('Max cfl number',time%cflmax,default=time%cflmax)
+         call input%read('Max time',time%tmax)
+         time%dt=time%dtmax
+         time%itmax=2
+      end block initialize_timetracker
+
+      ! Handle restart/saves here
+      restart_and_save: block
+         use string,  only: str_medium
+         use filesys, only: makedir,isdir
+         character(len=str_medium) :: timestamp
+         integer, dimension(3) :: iopartition
+         ! Create event for saving restart files
+         save_evt=event(time,'Restart output')
+         call input%read('Restart output period',save_evt%tper)
+         ! Check if we are restarting
+         call input%read('Restart from',timestamp,default='')
+         restarted=.false.; if (len_trim(timestamp).gt.0) restarted=.true.
+         ! Read in the I/O partition
+         call input%read('I/O partition',iopartition)
+         ! Perform pardata initialization
+         if (restarted) then
+            ! We are restarting, read the file
+            call df%initialize(pg=cfg,iopartition=iopartition,fdata='restart/data_'//trim(adjustl(timestamp)))
+         else
+            ! We are not restarting, prepare a new directory for storing restart files
+            if (cfg%amRoot) then
+               if (.not.isdir('restart')) call makedir('restart')
+            end if
+            ! Prepare pardata object for saving restart files
+            call df%initialize(pg=cfg,iopartition=iopartition,filename=trim(cfg%name),nval=2,nvar=6)
+            df%valname=['t ','dt']
+            df%varname=['U ','V ','W ','P ','VF','id']
+         end if
+      end block restart_and_save
+
+      ! Revisit timetracker to adjust time and time step values if this is a restart    
+      update_timetracker: block
+         ! Handle restart
+         if (restarted) then
+            call df%pull(name='t' ,val=time%t )
+            call df%pull(name='dt',val=time%dt)
+            time%told=time%t-time%dt
+         end if
+      end block update_timetracker
+
       ! Allocate work arrays
       allocate_work_arrays: block
          allocate(resU         (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
@@ -374,16 +436,6 @@ contains
          allocate(Wi           (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
          allocate(gradU(1:3,1:3,cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
       end block allocate_work_arrays
-      
-      ! Initialize time tracker with 2 subiterations
-      initialize_timetracker: block
-         time=timetracker(amRoot=cfg%amRoot)
-         call param_read('Max timestep size',time%dtmax)
-         call param_read('Max cfl number',time%cflmax,default=time%cflmax)
-         call param_read('Max time',time%tmax)
-         time%dt=time%dtmax
-         time%itmax=2
-      end block initialize_timetracker
 
       ! Initialize our VOF solver and field
       create_and_initialize_vof: block
@@ -401,71 +453,128 @@ contains
          ! Create structure tracker
          call strack%initialize(vf=vf,phase=0,make_label=label_liquid,name='diesel_jet')
          ! Initialize the jet coming into the domain
-         call param_read('Jet radius',radius)
+         call input%read('Jet radius',radius)
 
-         do k=vf%cfg%kmino_,vf%cfg%kmaxo_
-            do j=vf%cfg%jmino_,vf%cfg%jmaxo_
-               do i=vf%cfg%imino_,vf%cfg%imaxo_
-                  d = sqrt(vf%cfg%xm(i)**2+vf%cfg%ym(j)**2+vf%cfg%zm(k)**2)
-                  ! Initialize jet to imin wall
-                  if (d.le.radius) then 
-                     ! Set cube vertices
-                     n=0
-                     do sk=0,1
-                        do sj=0,1
-                           do si=0,1
-                              n=n+1; cube_vertex(:,n)=[vf%cfg%x(i+si),vf%cfg%y(j+sj),vf%cfg%z(k+sk)]
+         if (restarted) then 
+            ! Pull data from restart file
+            call df%pull(name='VF',var=vf%VF)
+            call df%pull(name='id',var=strack%id)
+
+            do k=vf%cfg%kmino_,vf%cfg%kmaxo_
+               do j=vf%cfg%jmino_,vf%cfg%jmaxo_
+                  do i=vf%cfg%imino_,vf%cfg%imaxo_
+                     
+                     ! Define VOF at inlet
+                     d=sqrt(vf%cfg%ym(j)**2+vf%cfg%zm(k)**2)
+                     if (i.lt.vf%cfg%imin.and.d.le.radius) vf%VF(i,j,k)=1.0_WP
+                     ! Call adaptive refinement code to get volume and barycenters recursively                     
+                     if (vf%VF(i,j,k).ge.VFlo.and.vf%VF(i,j,k).le.VFhi) then
+                        ! Set cube vertices
+                        n=0
+                        do sk=0,1
+                           do sj=0,1
+                              do si=0,1
+                                 n=n+1; cube_vertex(:,n)=[vf%cfg%x(i+si),vf%cfg%y(j+sj),vf%cfg%z(k+sk)]
+                              end do
                            end do
                         end do
-                     end do
-                     ! Call adaptive refinement code to get volume and barycenters recursively
-                     vol=0.0_WP; area=0.0_WP; v_cent=0.0_WP; a_cent=0.0_WP
-                     call cube_refine_vol(cube_vertex,vol,area,v_cent,a_cent,levelset_jet,0.0_WP,amr_ref_lvl)
-                     vf%VF(i,j,k)=min(1.0_WP,vf%VF(i,j,k)+vol/vf%cfg%vol(i,j,k))
-                     if (vf%VF(i,j,k).ge.VFlo.and.vf%VF(i,j,k).le.VFhi) then
+                        vol=0.0_WP; area=0.0_WP; v_cent=0.0_WP; a_cent=0.0_WP
+                        call cube_refine_vol(cube_vertex,vol,area,v_cent,a_cent,levelset_jet,0.0_WP,amr_ref_lvl)
                         vf%Lbary(:,i,j,k)=v_cent
                         vf%Gbary(:,i,j,k)=([vf%cfg%xm(i),vf%cfg%ym(j),vf%cfg%zm(k)]-vf%VF(i,j,k)*vf%Lbary(:,i,j,k))/(1.0_WP-vf%VF(i,j,k))
                      else
                         vf%Lbary(:,i,j,k)=[vf%cfg%xm(i),vf%cfg%ym(j),vf%cfg%zm(k)]
                         vf%Gbary(:,i,j,k)=[vf%cfg%xm(i),vf%cfg%ym(j),vf%cfg%zm(k)]
                      end if
-                     ! Set stracker id
-                     if (vol.gt.0.0_WP) then
-                        strack%id(i,j,k)=1
+                  end do 
+               end do 
+            end do 
+
+            ! Initialize id counter to be consistent with id's
+            strack%idcount=maxval(strack%id)
+            call MPI_ALLREDUCE(maxval(strack%id),strack%idcount,1,MPI_INTEGER,MPI_MAX,cfg%comm,ierr)
+
+            ! Update the band
+            call vf%update_band()
+            ! Perform interface reconstruction from VOF field
+            call vf%build_interface()
+            ! Set interface planes at the boundaries
+            call vf%set_full_bcond()
+            ! Create discontinuous polygon mesh from IRL interface
+            call vf%polygonalize_interface()
+            ! Calculate distance from polygons
+            call vf%distance_from_polygon()
+            ! Calculate subcell phasic volumes
+            call vf%subcell_vol()
+            ! Calculate curvature
+            call vf%get_curvature()
+            ! Reset moments to guarantee compatibility with interface reconstruction
+            call vf%reset_volume_moments()
+         else 
+            do k=vf%cfg%kmino_,vf%cfg%kmaxo_
+               do j=vf%cfg%jmino_,vf%cfg%jmaxo_
+                  do i=vf%cfg%imino_,vf%cfg%imaxo_
+                     d = sqrt(vf%cfg%xm(i)**2+vf%cfg%ym(j)**2+vf%cfg%zm(k)**2)
+                     ! Initialize jet to imin wall
+                     if (d.le.radius) then 
+                        ! Set cube vertices
+                        n=0
+                        do sk=0,1
+                           do sj=0,1
+                              do si=0,1
+                                 n=n+1; cube_vertex(:,n)=[vf%cfg%x(i+si),vf%cfg%y(j+sj),vf%cfg%z(k+sk)]
+                              end do
+                           end do
+                        end do
+                        ! Call adaptive refinement code to get volume and barycenters recursively
+                        vol=0.0_WP; area=0.0_WP; v_cent=0.0_WP; a_cent=0.0_WP
+                        call cube_refine_vol(cube_vertex,vol,area,v_cent,a_cent,levelset_jet,0.0_WP,amr_ref_lvl)
+                        vf%VF(i,j,k)=min(1.0_WP,vf%VF(i,j,k)+vol/vf%cfg%vol(i,j,k))
+                        if (vf%VF(i,j,k).ge.VFlo.and.vf%VF(i,j,k).le.VFhi) then
+                           vf%Lbary(:,i,j,k)=v_cent
+                           vf%Gbary(:,i,j,k)=([vf%cfg%xm(i),vf%cfg%ym(j),vf%cfg%zm(k)]-vf%VF(i,j,k)*vf%Lbary(:,i,j,k))/(1.0_WP-vf%VF(i,j,k))
+                        else
+                           vf%Lbary(:,i,j,k)=[vf%cfg%xm(i),vf%cfg%ym(j),vf%cfg%zm(k)]
+                           vf%Gbary(:,i,j,k)=[vf%cfg%xm(i),vf%cfg%ym(j),vf%cfg%zm(k)]
+                        end if
+                        ! Set stracker id
+                        if (vol.gt.0.0_WP) then
+                           strack%id(i,j,k)=1
+                        end if
+                     else 
+                        ! Inside, just set to zero
+                        vf%VF(i,j,k)=0.0_WP
+                        vf%Lbary(:,i,j,k)=[vf%cfg%xm(i),vf%cfg%ym(j),vf%cfg%zm(k)]
+                        vf%Gbary(:,i,j,k)=[vf%cfg%xm(i),vf%cfg%ym(j),vf%cfg%zm(k)]
+                        strack%id(i,j,k)=0
                      end if
-                  else 
-                     ! Inside, just set to zero
-                     vf%VF(i,j,k)=0.0_WP
-                     vf%Lbary(:,i,j,k)=[vf%cfg%xm(i),vf%cfg%ym(j),vf%cfg%zm(k)]
-                     vf%Gbary(:,i,j,k)=[vf%cfg%xm(i),vf%cfg%ym(j),vf%cfg%zm(k)]
-                     strack%id(i,j,k)=0
-                  end if
+                  end do
                end do
             end do
-         end do
       
-         call vf%cfg%sync(vf%VF)
-         call vf%cfg%sync(strack%id)
+            call vf%cfg%sync(vf%VF)
+            call vf%cfg%sync(strack%id)
 
-         ! Initialize id counter to be consistent with id's
-         strack%idcount=maxval(strack%id)
-         call MPI_ALLREDUCE(maxval(strack%id),strack%idcount,1,MPI_INTEGER,MPI_MAX,cfg%comm,ierr)
-         ! Update the band
-         call vf%update_band()
-         ! Perform interface reconstruction from VOF field
-         call vf%build_interface()
-         ! Set interface planes at the boundaries
-         call vf%set_full_bcond()
-         ! Create discontinuous polygon mesh from IRL interface
-         call vf%polygonalize_interface()
-         ! Calculate distance from polygons
-         call vf%distance_from_polygon()
-         ! Calculate subcell phasic volumes
-         call vf%subcell_vol()
-         ! Calculate curvature
-         call vf%get_curvature()
-         ! Reset moments to guarantee compatibility with interface reconstruction
-         call vf%reset_volume_moments()
+            ! Initialize id counter to be consistent with id's
+            strack%idcount=maxval(strack%id)
+            call MPI_ALLREDUCE(maxval(strack%id),strack%idcount,1,MPI_INTEGER,MPI_MAX,cfg%comm,ierr)
+            ! Update the band
+            call vf%update_band()
+            ! Perform interface reconstruction from VOF field
+            call vf%build_interface()
+            ! Set interface planes at the boundaries
+            call vf%set_full_bcond()
+            ! Create discontinuous polygon mesh from IRL interface
+            call vf%polygonalize_interface()
+            ! Calculate distance from polygons
+            call vf%distance_from_polygon()
+            ! Calculate subcell phasic volumes
+            call vf%subcell_vol()
+            ! Calculate curvature
+            call vf%get_curvature()
+            ! Reset moments to guarantee compatibility with interface reconstruction
+            call vf%reset_volume_moments()
+         end if 
       end block create_and_initialize_vof
       
       ! Create an incompressible flow solver with bconds
@@ -478,28 +587,38 @@ contains
          ! Create flow solver
          fs=tpns(cfg=cfg,name='Two-phase NS')
          ! Assign constant viscosity to each phase
-         call param_read('Liquid dynamic viscosity',fs%visc_l)
-         call param_read('Gas dynamic viscosity',fs%visc_g)
+         call input%read('Liquid dynamic viscosity',fs%visc_l)
+         call input%read('Gas dynamic viscosity',fs%visc_g)
          ! Assign constant density to each phase
-         call param_read('Liquid density',fs%rho_l)
-         call param_read('Gas density',fs%rho_g)
+         call input%read('Liquid density',fs%rho_l)
+         call input%read('Gas density',fs%rho_g)
          ! Read in surface tension coefficient
-         call param_read('Surface tension coefficient',fs%sigma)
+         call input%read('Surface tension coefficient',fs%sigma)
          ! Dirichlet inflow at front
          call fs%add_bcond(name='bc_xm',type=dirichlet,face='x',dir=-1,canCorrect=.false.,locator=xm_locator)
          ! Outflow on the back
          call fs%add_bcond(name='bc_xp',type=clipped_neumann,face='x',dir=+1,canCorrect=.true.,locator=xp_locator)
          ! Configure pressure solver
          ps=hypre_str(cfg=cfg,name='Pressure',method=pcg_pfmg,nst=7)
-         call param_read('Pressure iteration',ps%maxit)
-         call param_read('Pressure tolerance',ps%rcvg)
+         call input%read('Pressure iteration',ps%maxit)
+         call input%read('Pressure tolerance',ps%rcvg)
          ! Configure implicit velocity solver
          vs=ddadi(cfg=cfg,name='Velocity',nst=7)
          ! Setup the solver
          call fs%setup(pressure_solver=ps,implicit_solver=vs)
          ! Zero initial field
          fs%U=0.0_WP; fs%V=0.0_WP; fs%W=0.0_WP
-         call param_read('Jet velocity',Ujet)
+         ! Handle Restart
+         if (restarted) then
+            call df%pull(name='U'  ,var=fs%U  )
+            call df%pull(name='V'  ,var=fs%V  )
+            call df%pull(name='W'  ,var=fs%W  )
+            call df%pull(name='P'  ,var=fs%P  )
+            ! Apply boundary conditions
+            call fs%apply_bcond(time%t,time%dt)
+         end if
+         ! Apply Dirichlet at liquid injection
+         call input%read('Jet velocity',Ujet)
          call fs%get_bcond('bc_xm',mybc)
          do n=1,mybc%itr%no_
             i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
@@ -544,7 +663,7 @@ contains
          ens_out=ensight(cfg=cfg,name='ENSIGHT')
          ! Create event for Ensight output
          ens_evt=event(time=time,name='Ensight output')
-         call param_read('Ensight output period',ens_evt%tper)
+         call input%read('Ensight output period',ens_evt%tper)
          ! Add variables to output
          call ens_out%add_vector('velocity',Ui,Vi,Wi)
          call ens_out%add_scalar('divergence',fs%div)
@@ -615,7 +734,7 @@ contains
       ! Initialize an event for drop size analysis
       drop_analysis: block
          drop_evt=event(time=time,name='Drop analysis')
-         call param_read('Drop analysis period',drop_evt%tper)
+         call input%read('Drop analysis period',drop_evt%tper)
          if (drop_evt%occurs()) call analyse_drops()
       end block drop_analysis
       
@@ -781,9 +900,29 @@ contains
          call cflfile%write()
          call hitfile%write()
          call cvgfile%write()
-         
+
+         ! Finally, see if it's time to save restart files ! NEEDS TESTING
+         if (save_evt%occurs()) then
+            save_restart: block
+               character(len=str_medium) :: timestamp
+               ! Prefix for files
+               write(timestamp,'(es12.5)') time%t 
+               df%valname=['dt','t ']; df%varname=['U ','V ','W ','P ','VF','id']
+               ! Populate df and write it
+               call df%push(name=  't',val=time%t   )
+               call df%push(name= 'dt',val=time%dt  )
+               call df%push(name=  'U',var=fs%U     )
+               call df%push(name=  'V',var=fs%V     )
+               call df%push(name=  'W',var=fs%W     )
+               call df%push(name=  'P',var=fs%P     )
+               call df%push(name= 'VF',var=vf%VF    )
+               call df%push(name= 'id',var=strack%id)
+               call df%write(fdata='restart/data_'//trim(adjustl(timestamp)))
+            end block save_restart
+         end if 
+
       end do
-      
+   
    end subroutine simulation_run
    
    !> Finalize the NGA2 simulation
@@ -795,7 +934,7 @@ contains
       ! ensight
       ! bcond
       ! timetracker
-      
+
       ! Deallocate work arrays
       deallocate(resU,resV,resW,Ui,Vi,Wi,gradU)
       
