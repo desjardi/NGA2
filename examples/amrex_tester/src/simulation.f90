@@ -74,26 +74,45 @@ contains
    
    
    !> User-provided routine to refine level
-   subroutine refine_lvl(lvl,time,ba,dm) bind(c)
+   subroutine refine_lvl(lvl,time,pba,pdm) bind(c)
       use iso_c_binding, only: c_ptr
+      use amrex_amr_module, only: amrex_boxarray,amrex_distromap
       implicit none
       integer,     intent(in), value :: lvl
       real(WP),    intent(in), value :: time
-      type(c_ptr), intent(in), value :: ba
-      type(c_ptr), intent(in), value :: dm
-      ! This is where data creation from coarse data is done
-      print*,'please dont call me yet'
+      type(c_ptr), intent(in), value :: pba
+      type(c_ptr), intent(in), value :: pdm
+      type(amrex_boxarray)  :: ba
+      type(amrex_distromap) :: dm
+      
+      ! Convert pointers
+      ba=pba; dm=pdm
+      
+      ! Delete level
+      call delete_lvl(lvl)
+      
+      ! Create level for sc and fill it
+      call sc%create_lvl(lvl,ba,dm)
+      call sc%fillcoarse(lvl,time)
+      
    end subroutine refine_lvl
    
    
    !> User-provided routine to remake level
-   subroutine remake_lvl(lvl,time,ba,dm) bind(c)
+   subroutine remake_lvl(lvl,time,pba,pdm) bind(c)
       use iso_c_binding, only: c_ptr
+      use amrex_amr_module, only: amrex_boxarray,amrex_distromap
       implicit none
       integer,     intent(in), value :: lvl
       real(WP),    intent(in), value :: time
-      type(c_ptr), intent(in), value :: ba
-      type(c_ptr), intent(in), value :: dm
+      type(c_ptr), intent(in), value :: pba
+      type(c_ptr), intent(in), value :: pdm
+      type(amrex_boxarray)  :: ba
+      type(amrex_distromap) :: dm
+      
+      ! Convert pointers
+      ba=pba; dm=pdm
+
       ! This is where data creation from current and coarse data is done
       print*,'please dont call me yet'
    end subroutine remake_lvl
@@ -168,7 +187,8 @@ contains
       
       ! Create scalar solver
       create_scalar_solver: block
-         call sc%initialize(amr=amr)
+         call sc%initialize(amr=amr,nscalar=1,name='scalar')
+
       end block create_scalar_solver
       
       ! Initialize user-defined procedures
