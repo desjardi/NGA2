@@ -294,7 +294,7 @@ contains
       create_and_initialize_flow_solver: block
          use hypre_str_class, only: pcg_pfmg2
          use mathtools,       only: Pi
-         use tpns_class, only: neumann
+         use tpns_class, only: neumann,clipped_neumann
          ! Create flow solver
          fs=tpns(cfg=cfg,name='Two-phase NS')
          ! Assign constant viscosity to each phase
@@ -310,15 +310,15 @@ contains
          ! Assign acceleration of gravity
          call param_read('Gravity',fs%gravity)
          ! Boundary conditions
-         call fs%add_bcond(name='xm',type=neumann,face='x',dir=-1,canCorrect=.true.,locator=xm_locator)
-         call fs%add_bcond(name='xp',type=neumann,face='x',dir=+1,canCorrect=.true.,locator=xp_locator)
-         call fs%add_bcond(name='ym',type=neumann,face='y',dir=-1,canCorrect=.true.,locator=ym_locator)
-         call fs%add_bcond(name='yp',type=neumann,face='y',dir=+1,canCorrect=.true.,locator=yp_locator)
-         ! call fs%add_bcond(name='zm',type=neumann,face='z',dir=-1,canCorrect=.true.,locator=zm_locator)
-         ! call fs%add_bcond(name='zp',type=neumann,face='z',dir=+1,canCorrect=.true.,locator=zp_locator)
+         call fs%add_bcond(name='xm',type=clipped_neumann,face='x',dir=-1,canCorrect=.true.,locator=xm_locator)
+         call fs%add_bcond(name='xp',type=clipped_neumann,face='x',dir=+1,canCorrect=.true.,locator=xp_locator)
+         call fs%add_bcond(name='ym',type=clipped_neumann,face='y',dir=-1,canCorrect=.true.,locator=ym_locator)
+         call fs%add_bcond(name='yp',type=clipped_neumann,face='y',dir=+1,canCorrect=.true.,locator=yp_locator)
+         ! call fs%add_bcond(name='zm',type=clipped_neumann,face='z',dir=-1,canCorrect=.true.,locator=zm_locator)
+         ! call fs%add_bcond(name='zp',type=clipped_neumann,face='z',dir=+1,canCorrect=.true.,locator=zp_locator)
          ! Configure pressure solver
          ps=hypre_str(cfg=cfg,name='Pressure',method=pcg_pfmg2,nst=7)
-         ps%maxlevel=10
+         ps%maxlevel=16
          call param_read('Pressure iteration',ps%maxit)
          call param_read('Pressure tolerance',ps%rcvg)
          ! Setup the solver
@@ -333,7 +333,7 @@ contains
 
       ! Create a two-phase flow solver for the divergence-free liquid velocity
       create_div_free_flow_solver: block
-         use tpns_class, only: neumann
+         use tpns_class, only: neumann,clipped_neumann
          use hypre_str_class, only: pcg_pfmg2
          ! Create flow solver
          fsL=tpns(cfg=cfg,name='Liquid NS')
@@ -349,12 +349,12 @@ contains
          ! Assign acceleration of gravity
          fsL%gravity=fs%gravity
          ! Boundary conditions
-         call fsL%add_bcond(name='xm',type=neumann,face='x',dir=-1,canCorrect=.true.,locator=xm_locator)
-         call fsL%add_bcond(name='xp',type=neumann,face='x',dir=+1,canCorrect=.true.,locator=xp_locator)
-         call fsL%add_bcond(name='ym',type=neumann,face='y',dir=-1,canCorrect=.true.,locator=ym_locator)
-         call fsL%add_bcond(name='yp',type=neumann,face='y',dir=+1,canCorrect=.true.,locator=yp_locator)
-         ! call fsL%add_bcond(name='zm',type=neumann,face='z',dir=-1,canCorrect=.true.,locator=zm_locator)
-         ! call fsL%add_bcond(name='zp',type=neumann,face='z',dir=+1,canCorrect=.true.,locator=zp_locator)
+         call fsL%add_bcond(name='xm',type=clipped_neumann,face='x',dir=-1,canCorrect=.true.,locator=xm_locator)
+         call fsL%add_bcond(name='xp',type=clipped_neumann,face='x',dir=+1,canCorrect=.true.,locator=xp_locator)
+         call fsL%add_bcond(name='ym',type=clipped_neumann,face='y',dir=-1,canCorrect=.true.,locator=ym_locator)
+         call fsL%add_bcond(name='yp',type=clipped_neumann,face='y',dir=+1,canCorrect=.true.,locator=yp_locator)
+         ! call fsL%add_bcond(name='zm',type=clipped_neumann,face='z',dir=-1,canCorrect=.true.,locator=zm_locator)
+         ! call fsL%add_bcond(name='zp',type=clipped_neumann,face='z',dir=+1,canCorrect=.true.,locator=zp_locator)
          ! Configure pressure solver
          psL=hypre_str(cfg=cfg,name='Liquid P',method=pcg_pfmg2,nst=7)
          psL%maxlevel=ps%maxlevel
@@ -617,6 +617,10 @@ contains
          ! Prepare old staggered density (at n)
          call fs%get_olddensity(vf=vf); call fsL%get_olddensity(vf=vf)
          
+         ! Interface jump conditions
+         evp_mflux=evp_mass_flux
+         where ((vf%VF.gt.0.0_WP).and.(vf%VF.lt.1.0_WP)); mflux=evp_mflux*vf%SD; else where; mflux=0.0_WP; end where
+
          advace_VOF: block
             real(WP), dimension(:,:,:,:), allocatable :: vel_pc
 
@@ -639,10 +643,6 @@ contains
          
          end block advace_VOF
 
-         ! Interface jump conditions
-         evp_mflux=evp_mass_flux
-         where ((vf%VF.gt.0.0_WP).and.(vf%VF.lt.1.0_WP)); mflux=evp_mflux*vf%SD; else where; mflux=0.0_WP; end where
-         
          ! Shift the evaporation mass flux away from the interface
          shift_mflux: block
             use mpi_f08,  only: MPI_ALLREDUCE,MPI_MAX
