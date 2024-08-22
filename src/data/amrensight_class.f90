@@ -18,12 +18,14 @@ module amrensight_class
    type :: scl !< Scalar field
       type(scl), pointer :: next
       character(len=str_medium) :: name
+      integer :: comp
       type(amrex_multifab) , dimension(:), pointer :: rptr=>NULL()  !< real(WP) data
       type(amrex_imultifab), dimension(:), pointer :: iptr=>NULL()  !< integer  data
    end type scl
    type :: vct !< Vector field
       type(vct), pointer :: next
       character(len=str_medium) :: name
+      integer :: xcomp,ycomp,zcomp
       type(amrex_multifab) , dimension(:), pointer :: ptrx=>NULL()
       type(amrex_multifab) , dimension(:), pointer :: ptry=>NULL()
       type(amrex_multifab) , dimension(:), pointer :: ptrz=>NULL()
@@ -146,16 +148,22 @@ contains
    
    
    !> Add a real scalar field for output
-   subroutine add_rscalar(this,name,scalar)
-      use filesys, only: makedir,isdir
+   subroutine add_rscalar(this,name,scalar,comp)
+      use filesys,  only: makedir,isdir
+      use messager, only: die
       implicit none
       class(amrensight), intent(inout) :: this
       character(len=*), intent(in) :: name
-      type(amrex_multifab), dimension(:), target, intent(in) :: scalar
+      type(amrex_multifab), dimension(0:), target, intent(in) :: scalar
+      integer, intent(in) :: comp
       type(scl), pointer :: new_scl
+      ! Check that the component is meaningful
+      if (comp.le.0) call die('[amrensight add_rscalar] comp must be at least one')
+      if (comp.gt.scalar(0)%nc) call die('[amrensight add_rscalar] comp is too large for provided scalar mfab')
       ! Prepare new scalar
       allocate(new_scl)
       new_scl%name=trim(adjustl(name))
+      new_scl%comp=comp
       new_scl%rptr(0:)=>scalar
       new_scl%iptr=>NULL()
       ! Insert it up front
@@ -170,16 +178,22 @@ contains
    
    
    !> Add an integer scalar field for output
-   subroutine add_iscalar(this,name,scalar)
-      use filesys, only: makedir,isdir
+   subroutine add_iscalar(this,name,scalar,comp)
+      use filesys,  only: makedir,isdir
+      use messager, only: die
       implicit none
       class(amrensight), intent(inout) :: this
       character(len=*), intent(in) :: name
-      type(amrex_imultifab), dimension(:), target, intent(in) :: scalar
+      type(amrex_imultifab), dimension(0:), target, intent(in) :: scalar
+      integer, intent(in) :: comp
       type(scl), pointer :: new_scl
+      ! Check that the component is meaningful
+      if (comp.le.0) call die('[amrensight add_rscalar] comp must be at least one')
+      if (comp.gt.scalar(0)%nc) call die('[amrensight add_rscalar] comp is too large for provided scalar mfab')
       ! Prepare new scalar
       allocate(new_scl)
       new_scl%name=trim(adjustl(name))
+      new_scl%comp=comp
       new_scl%rptr=>NULL()
       new_scl%iptr(0:)=>scalar
       ! Insert it up front
@@ -367,10 +381,10 @@ contains
                      ! Copy data from appropriate multifab
                      if (associated(my_scl%rptr)) then
                         rphi=>my_scl%rptr(n)%dataptr(mfi)
-                        spbuff=real(rphi(bx%lo(1):bx%hi(1),bx%lo(2):bx%hi(2),bx%lo(3):bx%hi(3),1),SP)
+                        spbuff=real(rphi(bx%lo(1):bx%hi(1),bx%lo(2):bx%hi(2),bx%lo(3):bx%hi(3),my_scl%comp),SP)
                      else if (associated(my_scl%iptr)) then
                         iphi=>my_scl%iptr(n)%dataptr(mfi)
-                        spbuff=real(iphi(bx%lo(1):bx%hi(1),bx%lo(2):bx%hi(2),bx%lo(3):bx%hi(3),1),SP)
+                        spbuff=real(iphi(bx%lo(1):bx%hi(1),bx%lo(2):bx%hi(2),bx%lo(3):bx%hi(3),my_scl%comp),SP)
                      end if
                      ! Write it out
                      write(iunit) spbuff

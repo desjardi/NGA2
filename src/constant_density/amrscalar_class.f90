@@ -109,52 +109,58 @@ contains
    
    
    !> Create solver data at level lvl
-   subroutine create_lvl(this,lvl,ba,dm)
+   subroutine create_lvl(this,lvl,time,pba,pdm)
+      use iso_c_binding,    only: c_ptr
       use amrex_amr_module, only: amrex_multifab_build,amrex_boxarray,amrex_distromap
       implicit none
       class(amrscalar), intent(inout) :: this
-      type(amrex_boxarray),  intent(in) :: ba
-      type(amrex_distromap), intent(in) :: dm
-      integer, intent(in), value :: lvl
+      integer,      intent(in), value :: lvl
+      real(WP),     intent(in), value :: time
+      type(c_ptr),  intent(in), value :: pba,pdm
+      type(amrex_boxarray)  :: ba
+      type(amrex_distromap) :: dm
       ! Delete data first
       call this%delete_lvl(lvl)
-      ! Rebuild it from scratch
+      ! Rebuild data
+      ba=pba; dm=pdm
       call amrex_multifab_build(this%SC   (lvl),ba,dm,this%nscalar,this%nover)
       call amrex_multifab_build(this%SCold(lvl),ba,dm,this%nscalar,this%nover)
    end subroutine create_lvl
    
    
    !> Refine solver data at level lvl
-   subroutine refine_lvl(this,lvl,time,ba,dm)
-      use amrex_amr_module, only: amrex_boxarray,amrex_distromap
+   subroutine refine_lvl(this,lvl,time,pba,pdm)
+      use iso_c_binding, only: c_ptr
       implicit none
       class(amrscalar), intent(inout) :: this
-      real(WP), intent(in) :: time
-      type(amrex_boxarray),  intent(in) :: ba
-      type(amrex_distromap), intent(in) :: dm
-      integer, intent(in), value :: lvl
+      integer,      intent(in), value :: lvl
+      real(WP),     intent(in), value :: time
+      type(c_ptr),  intent(in), value :: pba,pdm
       ! Recreate data
-      call this%create_lvl(lvl,ba,dm)
+      call this%create_lvl(lvl,time,pba,pdm)
       ! Populate from from coarse level
       call this%fillcoarse(lvl,time,this%SC(lvl))
    end subroutine refine_lvl
 
 
    !> Remake solver data at level lvl
-   subroutine remake_lvl(this,lvl,time,ba,dm)
+   subroutine remake_lvl(this,lvl,time,pba,pdm)
+      use iso_c_binding,    only: c_ptr
       use amrex_amr_module, only: amrex_boxarray,amrex_distromap,amrex_multifab_build,amrex_multifab_destroy,amrex_multifab
       implicit none
       class(amrscalar), intent(inout) :: this
-      real(WP), intent(in) :: time
-      type(amrex_boxarray),  intent(in) :: ba
-      type(amrex_distromap), intent(in) :: dm
-      integer, intent(in), value :: lvl
-      type(amrex_multifab) :: SCnew
+      integer,      intent(in), value :: lvl
+      real(WP),     intent(in), value :: time
+      type(c_ptr),  intent(in), value :: pba,pdm
+      type(amrex_boxarray)  :: ba
+      type(amrex_distromap) :: dm
+      type(amrex_multifab)  :: SCnew
       ! Create SCnew and populate it from current data
+      ba=pba; dm=pdm
       call amrex_multifab_build(SCnew,ba,dm,this%nscalar,this%nover)
       call this%fill(lvl,time,SCnew)
       ! Recreate level
-      call this%create_lvl(lvl,ba,dm)
+      call this%create_lvl(lvl,time,pba,pdm)
       ! Copy SCnew to SC
       call this%SC(lvl)%copy(SCnew,1,1,this%nscalar,this%nover)
       ! Destroy SCnew

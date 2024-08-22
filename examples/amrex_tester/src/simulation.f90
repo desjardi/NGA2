@@ -24,35 +24,32 @@ contains
    
    !> User-provided routine to initialize level data
    subroutine initialize_lvl(lvl,time,pba,pdm) bind(c)
-      use iso_c_binding,    only: c_ptr
-      use amrex_amr_module, only: amrex_boxarray,amrex_distromap
+      use iso_c_binding, only: c_ptr
       implicit none
       integer,     intent(in), value :: lvl
       real(WP),    intent(in), value :: time
-      type(c_ptr), intent(in), value :: pba
-      type(c_ptr), intent(in), value :: pdm
-      type(amrex_boxarray)  :: ba
-      type(amrex_distromap) :: dm
-      
-      ! Convert pointers
-      ba=pba; dm=pdm
+      type(c_ptr), intent(in), value :: pba,pdm
       
       ! Create level for sc
-      call sc%create_lvl(lvl,ba,dm)
+      call sc%create_lvl(lvl,time,pba,pdm)
       
       ! Initialize scalar value
       init_sc: block
-         use amrex_amr_module, only: amrex_mfiter,amrex_box,amrex_mfiter_build,amrex_mfiter_destroy
-         type(amrex_mfiter) :: mfi
-         type(amrex_box)    :: bx
-         real(WP), dimension(:,:,:,:), contiguous, pointer :: phi
+         use amrex_amr_module, only: amrex_boxarray,amrex_distromap,amrex_mfiter,amrex_box,amrex_mfiter_build,amrex_mfiter_destroy
+         type(amrex_boxarray)  :: ba
+         type(amrex_distromap) :: dm
+         type(amrex_mfiter)    :: mfi
+         type(amrex_box)       :: bx
+         real(WP), dimension(:,:,:,:), contiguous, pointer :: mySC
          real(WP) :: x,y,z,r2
          integer :: i,j,k
+         ! Convert pointers
+         ba=pba; dm=pdm
          ! Loop over my boxes
          call amrex_mfiter_build(mfi,sc%SC(lvl))
          do while (mfi%next())
             bx=mfi%tilebox()
-            phi=>sc%SC(lvl)%dataptr(mfi)
+            mySC=>sc%SC(lvl)%dataptr(mfi)
             ! Loop inside box
             do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
                ! Get position
@@ -61,7 +58,8 @@ contains
                z=sc%amr%zlo+(real(k,WP)+0.5_WP)*sc%amr%geom(lvl)%dx(3)
                ! Evaluate data
                r2=((x-0.5_WP)**2+(y-0.75_WP)**2+(z-0.5_WP)**2)/0.01_WP
-               phi(i,j,k,1)=1.0_WP+exp(-r2)
+               mySC(i,j,k,1)=1.0_WP+exp(-r2)
+               mySC(i,j,k,2)=1.0_WP-exp(-r2)
             end do; end do; end do
          end do
          call amrex_mfiter_destroy(mfi)
@@ -73,20 +71,13 @@ contains
    !> User-provided routine to refine level
    subroutine refine_lvl(lvl,time,pba,pdm) bind(c)
       use iso_c_binding, only: c_ptr
-      use amrex_amr_module, only: amrex_boxarray,amrex_distromap
       implicit none
       integer,     intent(in), value :: lvl
       real(WP),    intent(in), value :: time
-      type(c_ptr), intent(in), value :: pba
-      type(c_ptr), intent(in), value :: pdm
-      type(amrex_boxarray)  :: ba
-      type(amrex_distromap) :: dm
-      
-      ! Convert pointers
-      ba=pba; dm=pdm
+      type(c_ptr), intent(in), value :: pba,pdm
       
       ! Refine level for sc
-      call sc%refine_lvl(lvl,time,ba,dm)
+      call sc%refine_lvl(lvl,time,pba,pdm)
       
    end subroutine refine_lvl
    
@@ -94,21 +85,14 @@ contains
    !> User-provided routine to remake level
    subroutine remake_lvl(lvl,time,pba,pdm) bind(c)
       use iso_c_binding, only: c_ptr
-      use amrex_amr_module, only: amrex_boxarray,amrex_distromap
       implicit none
       integer,     intent(in), value :: lvl
       real(WP),    intent(in), value :: time
-      type(c_ptr), intent(in), value :: pba
-      type(c_ptr), intent(in), value :: pdm
-      type(amrex_boxarray)  :: ba
-      type(amrex_distromap) :: dm
+      type(c_ptr), intent(in), value :: pba,pdm
       
-      ! Convert pointers
-      ba=pba; dm=pdm
-
       ! Remake level for sc
-      call sc%remake_lvl(lvl,time,ba,dm)
-
+      call sc%remake_lvl(lvl,time,pba,pdm)
+      
    end subroutine remake_lvl
    
    
@@ -125,27 +109,25 @@ contains
    
    !> User-provided routine to tag cells for refinement
    subroutine tag_lvl(lvl,ptag,time,tagval,clrval) bind(c)
-      use iso_c_binding,    only: c_ptr,c_char
-      use amrex_amr_module, only: amrex_tagboxarray
+      use iso_c_binding, only: c_ptr,c_char
       implicit none
       integer,                intent(in), value :: lvl
       type(c_ptr),            intent(in), value :: ptag
       real(WP),               intent(in), value :: time
       character(kind=c_char), intent(in), value :: tagval
       character(kind=c_char), intent(in), value :: clrval
-      type(amrex_tagboxarray) :: tag
-      
-      ! Convert pointers
-      tag=ptag
       
       ! Tag based on current sc value
       tag_sc: block
-         use amrex_amr_module, only: amrex_box,amrex_mfiter,amrex_mfiter_build,amrex_mfiter_destroy
-         type(amrex_mfiter) :: mfi
-         type(amrex_box)    :: bx
+         use amrex_amr_module, only: amrex_tagboxarray,amrex_box,amrex_mfiter,amrex_mfiter_build,amrex_mfiter_destroy
+         type(amrex_tagboxarray) :: tag
+         type(amrex_mfiter)      :: mfi
+         type(amrex_box)         :: bx
          real(WP), dimension(:,:,:,:), contiguous, pointer :: phi
          character(kind=c_char), dimension(:,:,:,:), contiguous, pointer :: mytag
          integer :: i,j,k
+         ! Convert pointer
+         tag=ptag
          ! Loop over my boxes
          call amrex_mfiter_build(mfi,sc%SC(lvl))
          do while(mfi%next())
@@ -181,8 +163,8 @@ contains
       
       ! Create scalar solver
       create_scalar_solver: block
-         call sc%initialize(amr=amr,nscalar=1,name='scalar')
-
+         call sc%initialize(amr=amr,nscalar=2,name='scalar')
+         sc%SCname=['phi ','Zmix']
       end block create_scalar_solver
       
       ! Initialize user-defined procedures
@@ -201,7 +183,8 @@ contains
          ! Create Ensight output from armconfig
          call ens_out%initialize(amr=amr,name='amrtest')
          ! Add variables to output
-         call ens_out%add_scalar('SC',sc%SC)
+         call ens_out%add_scalar(name=sc%SCname(1),scalar=sc%SC,comp=1)
+         call ens_out%add_scalar(name=sc%SCname(2),scalar=sc%SC,comp=2)
          ! Output to ensight
          call ens_out%write_data(0.0_WP)
       end block create_ensight
