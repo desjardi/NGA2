@@ -1,7 +1,7 @@
 f90EXE_sources += config_class.f90 ibconfig_class.f90
 
 ifeq ($(USE_AMREX),TRUE)
-  f90EXE_sources += amrconfig_class.f90
+  f90EXE_sources += amrconfig_class.f90 amrdata_class.f90
 endif
 
 INCLUDE_LOCATIONS += $(NGA_HOME)/src/config

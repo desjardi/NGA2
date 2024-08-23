@@ -91,6 +91,7 @@ contains
    
    !> Initialization of an amrconfig object
    subroutine initialize(this,name)
+      use messager, only: die
       implicit none
       class(amrconfig), intent(inout) :: this
       character(len=*), intent(in), optional :: name
@@ -116,6 +117,7 @@ contains
          integer, dimension(3) :: per
          call amrex_parmparse_build(pp,'amr')
          call pp%addarr('n_cell'         ,[this%nx,this%ny,this%nz])
+         if (this%nlvl.lt.0) call die('[amrconfig initialize] nlvl must be >= 0')
          call pp%add   ('max_level'      ,this%nlvl)
          call pp%add   ('blocking_factor',this%nbloc)
          call pp%add   ('max_grid_size'  ,this%nmax)

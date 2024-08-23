@@ -1,5 +1,19 @@
-# PROBLEM SIZE & GEOMETRY
-geometry.is_periodic =  1  1  1
-geometry.coord_sys   =  0       # 0 => cart
-geometry.prob_lo     =  0.0  0.0  0.0 
-geometry.prob_hi     =  1.0  1.0  1.0
+# Mesh definition
+Lx : 1
+Ly : 1
+Lz : 1
+Base nx : 64
+Base ny : 64
+Base nz : 64
+Number of levels : 2
+Refinement ratio : 4 2
+
+# Time integration
+Max timestep size : 0.01
+Max time : 10
+
+# Regriding
+Steps between regrid : 20
+
+# Output
+Ensight output period : 0.1

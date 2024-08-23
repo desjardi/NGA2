@@ -24,13 +24,16 @@ module amrscalar_class
       character(len=str_medium), dimension(:), allocatable :: SCname !< Names of scalars
       
       ! Scalar and old scalar data
-      type(amrex_multifab), dimension(:), allocatable ::  SC         !< SC multifab array
-      type(amrex_multifab), dimension(:), allocatable ::  SCold      !< Old SC multifab array
+      type(amrex_multifab), dimension(:), allocatable :: SC          !< SC multifab array
+      type(amrex_multifab), dimension(:), allocatable :: SCold       !< Old SC multifab array
       
       ! Boundary conditions at domain boundaries
       integer, dimension(:,:), allocatable :: lo_bc                  !< Boundary condition descriptor in minus direction
       integer, dimension(:,:), allocatable :: hi_bc                  !< Boundary condition descriptor in plus direction
       
+      ! Interpolation method
+      integer :: interp                                              !< Interpolation method
+
       ! Overlap size
       integer :: nover                                               !< Size of the overlap/ghost
 
@@ -38,14 +41,21 @@ module amrscalar_class
       real(WP) :: SCmax,SCmin,SCint                                  !< Maximum and minimum, integral scalar
       
    contains
-      procedure :: initialize                                        !< Initialize scalar solver
-      procedure :: finalize                                          !< Finalize scalar solver
-      procedure :: delete_lvl                                        !< Delete data at level lvl
-      procedure :: create_lvl                                        !< Create data at level lvl
-      procedure :: refine_lvl                                        !< Refine data at level lvl
-      procedure :: remake_lvl                                        !< Remake data at level lvl
-      procedure :: fillcoarse                                        !< Populate patch of data from coarse data (single time)
-      procedure :: fill                                              !< Populate patch of data from existing data (single time)
+      procedure :: initialize       !< Initialize scalar solver
+      procedure :: finalize         !< Finalize scalar solver
+      procedure :: delete_lvl       !< Delete data at level (lvl)
+      procedure :: create_lvl       !< Create data at level (lvl) and leave it uninitialized
+      procedure :: refine_lvl       !< Refine data at level (lvl) using cfill procedure
+      procedure :: remake_lvl       !< Remake data at level (lvl) using  fill procedure
+      procedure ::  cfill_lvl       !< Fill provided mfab at level (lvl) from this%SC at level (lvl-1)
+                                    !< Involves boundary conditions
+                                    !< Done at a single time using this%SC
+                                    !< Can be called in-place
+      procedure ::   fill_lvl       !< Fill provided mfab at level (lvl) from this%SC at level (lvl-1) and (lvl)
+                                    !< Involves boundary conditions
+                                    !< Done at a single time using this%SC
+                                    !< Cannot be called in-place
+
    end type amrscalar
    
    
@@ -55,7 +65,7 @@ contains
    !> Initialization for amrscalar solver
    subroutine initialize(this,amr,nscalar,name)
       use messager,         only: die
-      use amrex_amr_module, only: amrex_bc_int_dir,amrex_bc_reflect_even
+      use amrex_amr_module, only: amrex_bc_int_dir,amrex_bc_reflect_even,amrex_interp_cell_cons
       implicit none
       class(amrscalar), intent(inout) :: this
       class(amrconfig), target, intent(in) :: amr
@@ -74,7 +84,7 @@ contains
       
       ! Set the number of scalars
       this%nscalar=nscalar
-      if (this%nscalar.le.0) call die('[amrscalar constructor] At least 1 scalar is required')
+      if (this%nscalar.le.0) call die('[amrscalar initialize] At least 1 scalar is required')
       
       ! Initialize scalar names
       allocate(this%SCname(1:this%nscalar))
@@ -91,8 +101,11 @@ contains
       if (this%amr%zper) this%lo_bc(3,:)=amrex_bc_int_dir
       this%hi_bc=this%lo_bc
 
-      ! Set overlap size
+      ! Set overlap size for QUICK scheme
       this%nover=2
+      
+      ! Assume conservative interpolation - user can change later
+      this%interp=amrex_interp_cell_cons
       
    end subroutine initialize
 
@@ -139,7 +152,7 @@ contains
       ! Recreate data
       call this%create_lvl(lvl,time,pba,pdm)
       ! Populate from from coarse level
-      call this%fillcoarse(lvl,time,this%SC(lvl))
+      call this%cfill_lvl(lvl,time,this%SC(lvl))
    end subroutine refine_lvl
 
 
@@ -158,7 +171,7 @@ contains
       ! Create SCnew and populate it from current data
       ba=pba; dm=pdm
       call amrex_multifab_build(SCnew,ba,dm,this%nscalar,this%nover)
-      call this%fill(lvl,time,SCnew)
+      call this%fill_lvl(lvl,time,SCnew)
       ! Recreate level
       call this%create_lvl(lvl,time,pba,pdm)
       ! Copy SCnew to SC
@@ -168,22 +181,23 @@ contains
    end subroutine remake_lvl
 
 
-   !> Fill a patch from coarse scalar data and boundary conditions
-   subroutine fillcoarse(this,lvl,time,SC)
+   !> Fill provided mfab at level (lvl) from this%SC at level (lvl-1)
+   !> Can be called in-place!
+   subroutine cfill_lvl(this,lvl,time,SC)
       use amrex_amr_module, only: amrex_multifab,amrex_fillcoarsepatch,amrex_interp_cell_cons
       implicit none
       class(amrscalar), intent(inout) :: this
       integer, intent(in) :: lvl
       real(WP), intent(in) :: time
-      type(amrex_multifab), intent(inout) :: sc
-      call amrex_fillcoarsepatch(SC,          &  !< fine data being filled...
+      type(amrex_multifab), intent(inout) :: SC
+      call amrex_fillcoarsepatch(          SC,&  !< fine data being filled...
       &                   time,this%SC(lvl-1),&  !< using coarse data at old time...
       &                   time,this%SC(lvl-1),&  !<   and coarse data at new time...
       &           this%amr%geom(lvl-1),fillbc,&  !< coarse geometry with function to apply bconds...
       &           this%amr%geom(lvl  ),fillbc,&  !<   fine geometry with function to apply bconds...
       &              time,1,1,this%SC(lvl)%nc,&  !< time when we want the data, scomp, dcomp, ncomp...
       &                  this%amr%rref(lvl-1),&  !< refinement ratio between the levels...
-      &                amrex_interp_cell_cons,&  !< interpolation strategy...
+      &                           this%interp,&  !< interpolation strategy...
       &                 this%lo_bc,this%hi_bc)   !< domain bconds
    contains
       subroutine fillbc(pmf,scomp,ncomp,t,pgeom) bind(c)
@@ -211,26 +225,31 @@ contains
                call amrex_filcc(p,plo,phi,geom%domain%lo,geom%domain%hi,geom%dx,geom%get_physical_location(plo),this%lo_bc,this%hi_bc)
             end if
          end do
+         ! This will need hooks for user-provided BCs
       end subroutine fillbc
-   end subroutine fillcoarse
+   end subroutine cfill_lvl
 
 
-   !> Fill a patch from existing scalar data and boundary conditions
-   subroutine fill(this,lvl,time,SC)
+   !> Fill provided mfab at level (lvl) from this%SC at level (lvl-1) and (lvl)
+   !> Cannot be called in-place!
+   subroutine fill_lvl(this,lvl,time,SC)
       use amrex_amr_module, only: amrex_multifab,amrex_fillpatch,amrex_interp_cell_cons
       implicit none
       class(amrscalar), intent(inout) :: this
       integer, intent(in) :: lvl
       real(WP), intent(in) :: time
-      type(amrex_multifab), intent(inout) :: sc
+      type(amrex_multifab), intent(inout) :: SC
       if (lvl.eq.0) then
-         call amrex_fillpatch(SC,          &  !< base data being filled...
+         ! Fill without interpolation, just direct copy and bconds
+         call amrex_fillpatch(          SC,&  !< base data being filled...
          &               time,this%SC(lvl),&  !< using base data at old time...
          &               time,this%SC(lvl),&  !<   and base data at new time...
          &       this%amr%geom(lvl),fillbc,&  !< base geometry with function to apply bconds...
          &        time,1,1,this%SC(lvl)%nc)   !< time when we want the data, scomp, dcomp, ncomp
+         ! Unclear why lo_bc and hi_bc aren't involved here...
       else
-         call amrex_fillpatch(SC,          &  !< fine data being filled...
+         ! Fill with a mix of interpolation, direct copy and bconds
+         call amrex_fillpatch(          SC,&  !< fine data being filled...
          &             time,this%SC(lvl-1),&  !< using coarse data at old time...
          &             time,this%SC(lvl-1),&  !<   and coarse data at new time...
          &     this%amr%geom(lvl-1),fillbc,&  !< coarse geometry with function to apply bconds...
@@ -239,7 +258,7 @@ contains
          &     this%amr%geom(lvl  ),fillbc,&  !<   fine geometry with function to apply bconds...
          &        time,1,1,this%SC(lvl)%nc,&  !< time when we want the data, scomp, dcomp, ncomp...
          &            this%amr%rref(lvl-1),&  !< refinement ratio between the levels...
-         &          amrex_interp_cell_cons,&  !< interpolation strategy...
+         &                     this%interp,&  !< interpolation strategy...
          &           this%lo_bc,this%hi_bc)   !< domain bconds
       end if
    contains
@@ -268,8 +287,9 @@ contains
                call amrex_filcc(p,plo,phi,geom%domain%lo,geom%domain%hi,geom%dx,geom%get_physical_location(plo),this%lo_bc,this%hi_bc)
             end if
          end do
+         ! This will need hooks for user-provided BCs
       end subroutine fillbc
-   end subroutine fill
+   end subroutine fill_lvl
    
    
    !> Finalization for amrscalar solver
