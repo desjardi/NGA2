@@ -500,17 +500,14 @@ contains
       use precision,        only: SP
       use messager,         only: die
       use parallel,         only: info_mpiio,MPI_REAL_SP
-      use amrex_amr_module, only: amrex_box,amrex_boxarray,amrex_distromap,&
-      &                           amrex_mfiter,amrex_mfiter_build,amrex_mfiter_destroy
       use mpi_f08,          only: MPI_BCAST,MPI_INTEGER
+      use amrex_amr_module, only: amrex_box,amrex_mfiter
       implicit none
       class(amrensight), intent(in) :: this
       integer, intent(in) :: lvl
       integer :: iunit,ierr
-      type(amrex_boxarray)  :: ba
-      type(amrex_distromap) :: dm
-      type(amrex_box)       :: bx
-      type(amrex_mfiter)    :: mfi
+      type(amrex_box)    :: bx
+      type(amrex_mfiter) :: mfi
       character(len=str_medium) :: filename
       character(len=80) :: cbuff
       real(SP) :: rbuff
@@ -537,10 +534,8 @@ contains
       
       ! Write all the boxes on our level in parallel to the same file
       nbox=0
-      ! Build an mfiter on our level
-      ba=this%amr%get_boxarray (lvl=this%lvlout(lvl))
-      dm=this%amr%get_distromap(lvl=this%lvlout(lvl))
-      call amrex_mfiter_build(mfi,ba,dm)
+      ! Build an mfiter at our level
+      call this%amr%mfiter_build(this%lvlout(lvl),mfi)
       ! Have all cores write out their boxes
       do rank=0,this%amr%nproc-1
          if (rank.eq.this%amr%rank) then
@@ -576,19 +571,18 @@ contains
          call MPI_BCAST(nbox,1,MPI_INTEGER,rank,this%amr%comm,ierr)
       end do
       ! Destroy iterator
-      call amrex_mfiter_destroy(mfi)
+      call this%amr%mfiter_destroy(mfi)
       
    end subroutine write_geom
    
    
    !> Procedure that writes out a scalar in Ensight format
    subroutine write_scalar(this,my_scl,lvl)
-      use precision, only: SP
-      use messager,  only: die
-      use parallel,  only: info_mpiio,MPI_REAL_SP
-      use amrex_amr_module, only: amrex_box,amrex_boxarray,amrex_distromap,&
-      &                           amrex_mfiter,amrex_mfiter_build,amrex_mfiter_destroy
+      use precision,        only: SP
+      use messager,         only: die
+      use parallel,         only: info_mpiio,MPI_REAL_SP
       use mpi_f08,          only: MPI_BCAST,MPI_INTEGER
+      use amrex_amr_module, only: amrex_box,amrex_mfiter
       implicit none
       class(amrensight), intent(inout) :: this
       type(scl), pointer, intent(in) :: my_scl
@@ -596,10 +590,8 @@ contains
       character(len=str_medium) :: filename
       integer :: iunit,ierr,nbox,rank,ibuff
       character(len=80) :: cbuff
-      type(amrex_boxarray)  :: ba
-      type(amrex_distromap) :: dm
-      type(amrex_box)       :: bx
-      type(amrex_mfiter)    :: mfi
+      type(amrex_box)    :: bx
+      type(amrex_mfiter) :: mfi
       real(WP), dimension(:,:,:,:), contiguous, pointer :: rphi
       integer , dimension(:,:,:,:), contiguous, pointer :: iphi
       real(SP), dimension(:,:,:), allocatable :: spbuff
@@ -622,9 +614,7 @@ contains
       ! Write all the boxes on our level in parallel to the same file
       nbox=0
       ! Build an mfiter at our level
-      ba=this%amr%get_boxarray (lvl=this%lvlout(lvl))
-      dm=this%amr%get_distromap(lvl=this%lvlout(lvl))
-      call amrex_mfiter_build(mfi,ba,dm)
+      call this%amr%mfiter_build(this%lvlout(lvl),mfi)
       ! Have all cores write out their data
       do rank=0,this%amr%nproc-1
          if (rank.eq.this%amr%rank) then
@@ -662,19 +652,18 @@ contains
          call MPI_BCAST(nbox,1,MPI_INTEGER,rank,this%amr%comm,ierr)
       end do
       ! Destroy iterator
-      call amrex_mfiter_destroy(mfi)
+      call this%amr%mfiter_destroy(mfi)
       
    end subroutine write_scalar
 
 
    !> Procedure that writes out a vector in Ensight format
    subroutine write_vector(this,my_vct,lvl)
-      use precision, only: SP
-      use messager,  only: die
-      use parallel,  only: info_mpiio,MPI_REAL_SP
-      use amrex_amr_module, only: amrex_box,amrex_boxarray,amrex_distromap,&
-      &                           amrex_mfiter,amrex_mfiter_build,amrex_mfiter_destroy
+      use precision,        only: SP
+      use messager,         only: die
+      use parallel,         only: info_mpiio,MPI_REAL_SP
       use mpi_f08,          only: MPI_BCAST,MPI_INTEGER
+      use amrex_amr_module, only: amrex_box,amrex_mfiter
       implicit none
       class(amrensight), intent(inout) :: this
       type(vct), pointer, intent(in) :: my_vct
@@ -682,10 +671,8 @@ contains
       character(len=str_medium) :: filename
       integer :: iunit,ierr,nbox,rank,ibuff
       character(len=80) :: cbuff
-      type(amrex_boxarray)  :: ba
-      type(amrex_distromap) :: dm
-      type(amrex_box)       :: bx
-      type(amrex_mfiter)    :: mfi
+      type(amrex_box)    :: bx
+      type(amrex_mfiter) :: mfi
       real(WP), dimension(:,:,:,:), contiguous, pointer :: rphi
       real(SP), dimension(:,:,:), allocatable :: spbuff
       
@@ -707,9 +694,7 @@ contains
       ! Write all the boxes on our level in parallel to the same file
       nbox=0
       ! Build an mfiter at our level
-      ba=this%amr%get_boxarray (lvl=this%lvlout(lvl))
-      dm=this%amr%get_distromap(lvl=this%lvlout(lvl))
-      call amrex_mfiter_build(mfi,ba,dm)
+      call this%amr%mfiter_build(this%lvlout(lvl),mfi)
       ! Have all cores write out their data
       do rank=0,this%amr%nproc-1
          if (rank.eq.this%amr%rank) then
@@ -747,7 +732,7 @@ contains
          call MPI_BCAST(nbox,1,MPI_INTEGER,rank,this%amr%comm,ierr)
       end do
       ! Destroy iterator
-      call amrex_mfiter_destroy(mfi)
+      call this%amr%mfiter_destroy(mfi)
       
    end subroutine write_vector
    

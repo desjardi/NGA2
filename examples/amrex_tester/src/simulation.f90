@@ -53,8 +53,8 @@ contains
       ! Initialize scalar value
       init_sc: block
          use amrex_amr_module, only: amrex_mfiter,amrex_box,amrex_mfiter_build,amrex_mfiter_destroy
-         type(amrex_mfiter)    :: mfi
-         type(amrex_box)       :: bx
+         type(amrex_mfiter) :: mfi
+         type(amrex_box)    :: bx
          real(WP), dimension(:,:,:,:), contiguous, pointer :: mySC
          real(WP) :: x,y,z,r2
          integer :: i,j,k
@@ -276,6 +276,66 @@ contains
          !call fs%get_cfl(time%dt,time%cfl)
          !call time%adjust_dt()
          call time%increment()
+         
+         ! Calculate velocity
+         update_velocity: block
+            use amrex_amr_module, only: amrex_mfiter,amrex_box
+            type(amrex_mfiter) :: mfi
+            type(amrex_box)    :: bx
+            real(WP), dimension(:,:,:,:), contiguous, pointer :: pU,pV,pW
+            real(WP) :: x,y,z
+            integer :: i,j,k
+            do lvl=0,amr%clvl()
+               ! Build an mfiter at our level
+               call amr%mfiter_build(lvl,mfi)
+               do while (mfi%next())
+                  bx=mfi%tilebox()
+                  pU=>U%data(lvl)%dataptr(mfi)
+                  pV=>V%data(lvl)%dataptr(mfi)
+                  pW=>W%data(lvl)%dataptr(mfi)
+                  ! Loop on the x face
+                  do k=bx%lo(3),bx%hi(3)
+                     do j=bx%lo(2),bx%hi(2)
+                        do i=bx%lo(1),bx%hi(1)+1
+                           ! Get position
+                           x=amr%xlo+(real(i,WP)+0.0_WP)*amr%geom(lvl)%dx(1)
+                           y=amr%ylo+(real(j,WP)+0.5_WP)*amr%geom(lvl)%dx(2)
+                           z=amr%zlo+(real(k,WP)+0.5_WP)*amr%geom(lvl)%dx(3)
+                           ! Evaluate velocity
+                           pU(i,j,k,1)=0.0_WP
+                        end do
+                     end do
+                  end do
+                  ! Loop on the y face
+                  do k=bx%lo(3),bx%hi(3)
+                     do j=bx%lo(2),bx%hi(2)+1
+                        do i=bx%lo(1),bx%hi(1)
+                           ! Get position
+                           x=amr%xlo+(real(i,WP)+0.5_WP)*amr%geom(lvl)%dx(1)
+                           y=amr%ylo+(real(j,WP)+0.0_WP)*amr%geom(lvl)%dx(2)
+                           z=amr%zlo+(real(k,WP)+0.5_WP)*amr%geom(lvl)%dx(3)
+                           ! Evaluate velocity
+                           pV(i,j,k,1)=0.0_WP
+                        end do
+                     end do
+                  end do
+                  ! Loop on the z face
+                  do k=bx%lo(3),bx%hi(3)+1
+                     do j=bx%lo(2),bx%hi(2)
+                        do i=bx%lo(1),bx%hi(1)
+                           ! Get position
+                           x=amr%xlo+(real(i,WP)+0.5_WP)*amr%geom(lvl)%dx(1)
+                           y=amr%ylo+(real(j,WP)+0.5_WP)*amr%geom(lvl)%dx(2)
+                           z=amr%zlo+(real(k,WP)+0.0_WP)*amr%geom(lvl)%dx(3)
+                           ! Evaluate velocity
+                           pW(i,j,k,1)=0.0_WP
+                        end do
+                     end do
+                  end do
+               end do
+               call amr%mfiter_destroy(mfi)
+            end do
+         end block update_velocity
          
          ! Traverse active levels successively
          do lvl=0,amr%clvl()

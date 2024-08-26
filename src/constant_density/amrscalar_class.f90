@@ -113,27 +113,88 @@ contains
 
    !> Calculate dSC/dt at level (lvl)
    subroutine get_dSCdt_lvl(this,lvl,dSCdt,U,V,W)
-      use amrex_amr_module, only: amrex_mfiter,amrex_box,amrex_mfiter_build,amrex_mfiter_destroy
+      use amrex_amr_module, only: amrex_mfiter,amrex_box,amrex_mfiter_build,amrex_mfiter_destroy,amrex_fab,amrex_fab_destroy
       implicit none
       class(amrscalar), intent(inout) :: this
       integer, intent(in) :: lvl
       type(amrex_multifab), intent(inout) :: dSCdt
       type(amrex_multifab), intent(in) :: U,V,W
       type(amrex_mfiter)    :: mfi
-      type(amrex_box)       :: bx
-      real(WP), dimension(:,:,:,:), contiguous, pointer :: mydSCdt
+      type(amrex_box)       :: bx,tbx
+      type(amrex_fab)       :: xflux,yflux,zflux
+      real(WP), dimension(:,:,:,:), contiguous, pointer :: rhs,SC
+      real(WP), dimension(:,:,:,:), contiguous, pointer :: FX,FY,FZ
+      real(WP), dimension(:,:,:,:), contiguous, pointer :: pU,pV,pW
       integer :: i,j,k,nsc
-      ! Loop over boxes
+      
+      ! Loop over boxes - no tiling for now
       call amrex_mfiter_build(mfi,dSCdt)
-      do while (mfi%next())
+      do while(mfi%next())
          bx=mfi%tilebox()
-         mydSCdt=>dSCdt%dataptr(mfi)
-         ! Loop inside box
-         do nsc=1,this%nscalar; do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
-            mydSCdt(i,j,k,nsc)=0.0_WP
-         end do; end do; end do; end do
+         
+         ! Get SC and dSCdt data
+         SC =>this%SC(lvl)%dataptr(mfi)
+         rhs=>       dSCdt%dataptr(mfi)
+         
+         ! Get velocity data
+         pU=>U%dataptr(mfi)
+         pV=>V%dataptr(mfi)
+         pW=>W%dataptr(mfi)
+         
+         ! Prepare face flux storage
+         tbx=bx; call tbx%nodalize(1); call xflux%resize(tbx,1); FX=>xflux%dataptr()
+         tbx=bx; call tbx%nodalize(2); call yflux%resize(tbx,1); FY=>yflux%dataptr()
+         tbx=bx; call tbx%nodalize(3); call zflux%resize(tbx,1); FZ=>zflux%dataptr()
+         
+         ! Calculate fluxes for all components
+         do nsc=1,this%nscalar
+            ! Convective fluxes in x
+            do k=bx%lo(3),bx%hi(3)
+               do j=bx%lo(2),bx%hi(2)
+                  do i=bx%lo(1),bx%hi(1)+1
+                     FX(i,j,k,1)=-0.5_WP*(pU(i,j,k,1)+abs(pU(i,j,k,1)))*(-1.0_WP/6.0_WP*SC(i-2,j,k,nsc)+5.0_WP/6.0_WP*SC(i-1,j,k,nsc)+2.0_WP/6.0_WP*SC(i  ,j,k,nsc)) &
+                     &           -0.5_WP*(pU(i,j,k,1)-abs(pU(i,j,k,1)))*(+2.0_WP/6.0_WP*SC(i-1,j,k,nsc)+5.0_WP/6.0_WP*SC(i  ,j,k,nsc)-1.0_WP/6.0_WP*SC(i+1,j,k,nsc))
+                  end do
+               end do
+            end do
+            ! Convective fluxes in y
+            do k=bx%lo(3),bx%hi(3)
+               do j=bx%lo(2),bx%hi(2)+1
+                  do i=bx%lo(1),bx%hi(1)
+                     FY(i,j,k,1)=-0.5_WP*(pV(i,j,k,1)+abs(pV(i,j,k,1)))*(-1.0_WP/6.0_WP*SC(i,j-2,k,nsc)+5.0_WP/6.0_WP*SC(i,j-1,k,nsc)+2.0_WP/6.0_WP*SC(i,j  ,k,nsc)) &
+                     &           -0.5_WP*(pV(i,j,k,1)-abs(pV(i,j,k,1)))*(+2.0_WP/6.0_WP*SC(i,j-1,k,nsc)+5.0_WP/6.0_WP*SC(i,j  ,k,nsc)-1.0_WP/6.0_WP*SC(i,j+1,k,nsc))
+                  end do
+               end do
+            end do
+            ! Convective fluxes in z
+            do k=bx%lo(3),bx%hi(3)+1
+               do j=bx%lo(2),bx%hi(2)
+                  do i=bx%lo(1),bx%hi(1)
+                     FZ(i,j,k,1)=-0.5_WP*(pW(i,j,k,1)+abs(pW(i,j,k,1)))*(-1.0_WP/6.0_WP*SC(i,j,k-2,nsc)+5.0_WP/6.0_WP*SC(i,j,k-1,nsc)+2.0_WP/6.0_WP*SC(i,j,k  ,nsc)) &
+                     &           -0.5_WP*(pW(i,j,k,1)-abs(pW(i,j,k,1)))*(+2.0_WP/6.0_WP*SC(i,j,k-1,nsc)+5.0_WP/6.0_WP*SC(i,j,k  ,nsc)-1.0_WP/6.0_WP*SC(i,j,k+1,nsc))
+                  end do
+               end do
+            end do
+            ! Calculate rhs for all components
+            do k=bx%lo(3),bx%hi(3)
+               do j=bx%lo(2),bx%hi(2)
+                  do i=bx%lo(1),bx%hi(1)
+                     rhs(i,j,k,nsc)=(FX(i+1,j,k,1)-FX(i,j,k,1))/this%amr%geom(lvl)%dx(1)+&
+                     &              (FY(i,j+1,k,1)-FY(i,j,k,1))/this%amr%geom(lvl)%dx(2)+&
+                     &              (FZ(i,j,k+1,1)-FZ(i,j,k,1))/this%amr%geom(lvl)%dx(3)
+                  end do
+               end do
+            end do
+         end do
+         
       end do
       call amrex_mfiter_destroy(mfi)
+
+      ! Deallocate flux storage
+      call amrex_fab_destroy(xflux)
+      call amrex_fab_destroy(yflux)
+      call amrex_fab_destroy(zflux)
+      
    end subroutine get_dSCdt_lvl
 
 

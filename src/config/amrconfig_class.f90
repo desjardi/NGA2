@@ -54,6 +54,8 @@ module amrconfig_class
       procedure :: print                 ! Print out grid info
       procedure :: get_boxarray          ! Obtain box array at a given level
       procedure :: get_distromap         ! Obtain distromap at a given level
+      procedure :: mfiter_build          ! Build mfiter at a given level
+      procedure :: mfiter_destroy        ! Destroy mfiter
       procedure :: clvl                  ! Return current finest level
       procedure :: average_down          ! Average down a given multifab throughout all levels
       procedure :: average_downto        ! Average down a given multifab to level lvl
@@ -299,6 +301,31 @@ contains
       end interface
       call amrex_fi_get_distromap(dm%p,lvl,this%amrcore)
    end function get_distromap
+
+
+   !> Build mfiter at a level
+   subroutine mfiter_build(this,lvl,mfi)
+      use amrex_amr_module, only: amrex_boxarray,amrex_distromap,amrex_mfiter,amrex_mfiter_build
+      implicit none
+      class(amrconfig), intent(inout) :: this
+      integer, intent(in) :: lvl
+      type(amrex_mfiter), intent(out) :: mfi
+      type(amrex_boxarray) :: ba
+      type(amrex_distromap) :: dm
+      ba=this%get_boxarray (lvl)
+      dm=this%get_distromap(lvl)
+      call amrex_mfiter_build(mfi,ba,dm)
+   end subroutine mfiter_build
+
+
+   !> Destroy mfiter
+   subroutine mfiter_destroy(this,mfi)
+      use amrex_amr_module, only: amrex_mfiter,amrex_mfiter_destroy
+      implicit none
+      class(amrconfig), intent(inout) :: this
+      type(amrex_mfiter), intent(inout) :: mfi
+      call amrex_mfiter_destroy(mfi)
+   end subroutine mfiter_destroy
    
    
    !> Return current finest level
