@@ -24,7 +24,7 @@ module simulation
    type(event) :: rgd_evt
    
    !> Define a velocity field for transport
-   type(amrdata) :: U,V,W
+   type(amrdata) :: U,V,W,resSC
    
    !> Ensight output
    type(event)      :: ens_evt
@@ -41,26 +41,23 @@ contains
       real(WP),    intent(in), value :: t
       type(c_ptr), intent(in), value :: pba,pdm
       
-      ! Recreate velocity at our level
-      call U%create_lvl(lvl,t,pba,pdm)
-      call V%create_lvl(lvl,t,pba,pdm)
-      call W%create_lvl(lvl,t,pba,pdm)
+      ! Recreate velocity and resSC at our level
+      call     U%create_lvl(lvl,t,pba,pdm)
+      call     V%create_lvl(lvl,t,pba,pdm)
+      call     W%create_lvl(lvl,t,pba,pdm)
+      call resSC%create_lvl(lvl,t,pba,pdm)
       
       ! Create level for sc
       call sc%create_lvl(lvl,t,pba,pdm)
       
       ! Initialize scalar value
       init_sc: block
-         use amrex_amr_module, only: amrex_boxarray,amrex_distromap,amrex_mfiter,amrex_box,amrex_mfiter_build,amrex_mfiter_destroy
-         type(amrex_boxarray)  :: ba
-         type(amrex_distromap) :: dm
+         use amrex_amr_module, only: amrex_mfiter,amrex_box,amrex_mfiter_build,amrex_mfiter_destroy
          type(amrex_mfiter)    :: mfi
          type(amrex_box)       :: bx
          real(WP), dimension(:,:,:,:), contiguous, pointer :: mySC
          real(WP) :: x,y,z,r2
          integer :: i,j,k
-         ! Convert pointers
-         ba=pba; dm=pdm
          ! Loop over my boxes
          call amrex_mfiter_build(mfi,sc%SC(lvl))
          do while (mfi%next())
@@ -92,10 +89,11 @@ contains
       real(WP),    intent(in), value :: t
       type(c_ptr), intent(in), value :: pba,pdm
       
-      ! Recreate velocity at our level
-      call U%create_lvl(lvl,t,pba,pdm)
-      call V%create_lvl(lvl,t,pba,pdm)
-      call W%create_lvl(lvl,t,pba,pdm)
+      ! Recreate velocity and resSC at our level
+      call     U%create_lvl(lvl,t,pba,pdm)
+      call     V%create_lvl(lvl,t,pba,pdm)
+      call     W%create_lvl(lvl,t,pba,pdm)
+      call resSC%create_lvl(lvl,t,pba,pdm)
       
       ! Refine level for sc
       call sc%refine_lvl(lvl,t,pba,pdm)
@@ -111,10 +109,11 @@ contains
       real(WP),    intent(in), value :: t
       type(c_ptr), intent(in), value :: pba,pdm
       
-      ! Recreate velocity at our level
-      call U%create_lvl(lvl,t,pba,pdm)
-      call V%create_lvl(lvl,t,pba,pdm)
-      call W%create_lvl(lvl,t,pba,pdm)
+      ! Recreate velocity and resSC at our level
+      call     U%create_lvl(lvl,t,pba,pdm)
+      call     V%create_lvl(lvl,t,pba,pdm)
+      call     W%create_lvl(lvl,t,pba,pdm)
+      call resSC%create_lvl(lvl,t,pba,pdm)
       
       ! Remake level for sc
       call sc%remake_lvl(lvl,t,pba,pdm)
@@ -127,10 +126,11 @@ contains
       implicit none
       integer, intent(in), value :: lvl
       
-      ! Delete velocity
-      call U%delete_lvl(lvl)
-      call V%delete_lvl(lvl)
-      call W%delete_lvl(lvl)
+      ! Delete velocity and resSC at our level
+      call     U%delete_lvl(lvl)
+      call     V%delete_lvl(lvl)
+      call     W%delete_lvl(lvl)
+      call resSC%delete_lvl(lvl)
 
       ! Delete level for sc
       call sc%delete_lvl(lvl)
@@ -212,14 +212,14 @@ contains
          call param_read('Steps between regrid',rgd_evt%nper)
       end block build_amr
       
-      ! Initialize time tracker with 2 subiterations
+      ! Initialize time tracker with a single subiteration
       initialize_timetracker: block
          use param, only: param_read
          time=timetracker(amRoot=amr%amRoot)
          call param_read('Max timestep size',time%dtmax)
          call param_read('Max time',time%tmax)
          time%dt=time%dtmax
-         time%itmax=2
+         time%itmax=1
       end block initialize_timetracker
       
       ! Create scalar solver
@@ -228,12 +228,13 @@ contains
          sc%SCname=['phi ','Zmix']
       end block create_scalar_solver
       
-      ! Create velocity data
-      create_velocity_data: block
-         call U%initialize(amr=amr,ncomp=1,nover=0,atface=[.true.,.false.,.false.])
-         call V%initialize(amr=amr,ncomp=1,nover=0,atface=[.false.,.true.,.false.])
-         call W%initialize(amr=amr,ncomp=1,nover=0,atface=[.false.,.false.,.true.])
-      end block create_velocity_data
+      ! Create my own data
+      create_own_data: block
+         call     U%initialize(amr=amr,ncomp=1         ,nover=0,atface=[.true. ,.false.,.false.])
+         call     V%initialize(amr=amr,ncomp=1         ,nover=0,atface=[.false.,.true. ,.false.])
+         call     W%initialize(amr=amr,ncomp=1         ,nover=0,atface=[.false.,.false.,.true. ])
+         call resSC%initialize(amr=amr,ncomp=sc%nscalar,nover=0,atface=[.false.,.false.,.false.])
+      end block create_own_data
       
       ! Initialize user-defined procedures
       call amr%register_udp(initialize_lvl,refine_lvl,remake_lvl,delete_lvl,tag_lvl)
@@ -266,6 +267,7 @@ contains
    !> Perform an NGA2 simulation
    subroutine simulation_run
       implicit none
+      integer :: lvl
       
       ! Perform time integration
       do while (.not.time%done())
@@ -275,14 +277,36 @@ contains
          !call time%adjust_dt()
          call time%increment()
          
-         ! Time advance scalar solver
-         
-         
-         ! Output to ensight
-         if (ens_evt%occurs()) call ens_out%write_data(time=time%t)
+         ! Traverse active levels successively
+         do lvl=0,amr%clvl()
+            
+            ! Remember old scalar field: SCold=SC
+            call sc%SCold(lvl)%copy(srcmf=sc%SC(lvl),srccomp=1,&
+            &                       dstcomp=1,nc=sc%nscalar,ng=sc%nover)
+            
+            ! Build mid-time scalar: SC=0.5*(SC+SCold)
+            call sc%SC(lvl)%lincomb(a=0.5_WP,srcmf1=sc%SC(lvl)   ,srccomp1=1,&
+            &                       b=0.5_WP,srcmf2=sc%SCold(lvl),srccomp2=1,&
+            &                       dstcomp=1,nc=sc%nscalar,ng=sc%nover)
+            
+            ! Explicit calculation of dSC/dt from scalar transport equation
+            call sc%get_dSCdt_lvl(lvl=lvl,dSCdt=resSC%data(lvl),U=U%data(lvl),V=V%data(lvl),W=W%data(lvl))
+            
+            ! Advance scalar field: SC=SCold+dt*dSCdt
+            call sc%SC(lvl)%lincomb(a=1.0_WP ,srcmf1=sc%SCold(lvl)  ,srccomp1=1,&
+            &                       b=time%dt,srcmf2=resSC%data(lvl),srccomp2=1,&
+            &                       dstcomp=1,nc=sc%nscalar,ng=0)
+            
+            ! Update overlap and boundary conditions
+            !call sc%apply_bcond(time%t,time%dt)
+            
+         end do
          
          ! Regrid if needed
          if (rgd_evt%occurs()) call amr%regrid(baselvl=0,time=time%t)
+         
+         ! Output to ensight
+         if (ens_evt%occurs()) call ens_out%write_data(time=time%t)
          
       end do
       
@@ -293,6 +317,9 @@ contains
    subroutine simulation_final
       use amrconfig_class, only: finalize_amrex
       implicit none
+      call U%finalize()
+      call V%finalize()
+      call W%finalize()
       call sc%finalize()
       call amr%finalize()
       call finalize_amrex()

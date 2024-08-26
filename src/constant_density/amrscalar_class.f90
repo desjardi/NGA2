@@ -38,11 +38,12 @@ module amrscalar_class
       integer :: nover                                               !< Size of the overlap/ghost
 
       ! Monitoring quantities
-      real(WP) :: SCmax,SCmin,SCint                                  !< Maximum and minimum, integral scalar
+      real(WP), dimension(:), allocatable :: SCmax,SCmin,SCint       !< Maximum and minimum, integral scalar
       
    contains
       procedure :: initialize       !< Initialize scalar solver
       procedure :: finalize         !< Finalize scalar solver
+      procedure :: get_dSCdt_lvl    !< Calculate dSC/dt at level (lvl)
       procedure :: delete_lvl       !< Delete data at level (lvl)
       procedure :: create_lvl       !< Create data at level (lvl) and leave it uninitialized
       procedure :: refine_lvl       !< Refine data at level (lvl) using cfill procedure
@@ -110,12 +111,38 @@ contains
    end subroutine initialize
 
 
+   !> Calculate dSC/dt at level (lvl)
+   subroutine get_dSCdt_lvl(this,lvl,dSCdt,U,V,W)
+      use amrex_amr_module, only: amrex_mfiter,amrex_box,amrex_mfiter_build,amrex_mfiter_destroy
+      implicit none
+      class(amrscalar), intent(inout) :: this
+      integer, intent(in) :: lvl
+      type(amrex_multifab), intent(inout) :: dSCdt
+      type(amrex_multifab), intent(in) :: U,V,W
+      type(amrex_mfiter)    :: mfi
+      type(amrex_box)       :: bx
+      real(WP), dimension(:,:,:,:), contiguous, pointer :: mydSCdt
+      integer :: i,j,k,nsc
+      ! Loop over boxes
+      call amrex_mfiter_build(mfi,dSCdt)
+      do while (mfi%next())
+         bx=mfi%tilebox()
+         mydSCdt=>dSCdt%dataptr(mfi)
+         ! Loop inside box
+         do nsc=1,this%nscalar; do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
+            mydSCdt(i,j,k,nsc)=0.0_WP
+         end do; end do; end do; end do
+      end do
+      call amrex_mfiter_destroy(mfi)
+   end subroutine get_dSCdt_lvl
+
+
    !> Delete solver data at level lvl
    subroutine delete_lvl(this,lvl)
       use amrex_amr_module, only: amrex_multifab_destroy
       implicit none
       class(amrscalar), intent(inout) :: this
-      integer, intent(in), value :: lvl
+      integer, intent(in) :: lvl
       call amrex_multifab_destroy(this%SC   (lvl))
       call amrex_multifab_destroy(this%SCold(lvl))
    end subroutine delete_lvl
@@ -127,9 +154,9 @@ contains
       use amrex_amr_module, only: amrex_multifab_build,amrex_boxarray,amrex_distromap
       implicit none
       class(amrscalar), intent(inout) :: this
-      integer,      intent(in), value :: lvl
-      real(WP),     intent(in), value :: time
-      type(c_ptr),  intent(in), value :: pba,pdm
+      integer,     intent(in) :: lvl
+      real(WP),    intent(in) :: time
+      type(c_ptr), intent(in) :: pba,pdm
       type(amrex_boxarray)  :: ba
       type(amrex_distromap) :: dm
       ! Delete data first
@@ -146,9 +173,9 @@ contains
       use iso_c_binding, only: c_ptr
       implicit none
       class(amrscalar), intent(inout) :: this
-      integer,      intent(in), value :: lvl
-      real(WP),     intent(in), value :: time
-      type(c_ptr),  intent(in), value :: pba,pdm
+      integer,     intent(in) :: lvl
+      real(WP),    intent(in) :: time
+      type(c_ptr), intent(in) :: pba,pdm
       ! Recreate data
       call this%create_lvl(lvl,time,pba,pdm)
       ! Populate from from coarse level
@@ -162,9 +189,9 @@ contains
       use amrex_amr_module, only: amrex_boxarray,amrex_distromap,amrex_multifab_build,amrex_multifab_destroy,amrex_multifab
       implicit none
       class(amrscalar), intent(inout) :: this
-      integer,      intent(in), value :: lvl
-      real(WP),     intent(in), value :: time
-      type(c_ptr),  intent(in), value :: pba,pdm
+      integer,     intent(in) :: lvl
+      real(WP),    intent(in) :: time
+      type(c_ptr), intent(in) :: pba,pdm
       type(amrex_boxarray)  :: ba
       type(amrex_distromap) :: dm
       type(amrex_multifab)  :: SCnew

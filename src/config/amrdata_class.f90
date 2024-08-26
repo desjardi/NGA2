@@ -29,6 +29,8 @@ module amrdata_class
       integer :: interp
       ! User-defined initialization procedure
       !procedure()
+      ! Global info
+      real(WP), dimension(:), allocatable :: mindata,maxdata,intdata
    contains
       procedure :: initialize       !< Initialize amrdata object
       procedure :: finalize         !< Finalize   amrdata object
@@ -39,6 +41,7 @@ module amrdata_class
       procedure :: remake_lvl       !< Remake    our data at level (lvl) using  fill procedure
       procedure ::  cfill_lvl       !< Fill provided mfab at level (lvl) from our data at level (lvl-1)           - this involves boundary conditions - this can    be called in-place
       procedure ::   fill_lvl       !< Fill provided mfab at level (lvl) from our data at level (lvl-1) and (lvl) - this involves boundary conditions - this cannot be called in-place
+      !procedure :: get_info         !< Compute min/max/int values for field
    end type amrdata
    
    
@@ -100,7 +103,7 @@ contains
       use amrex_amr_module, only: amrex_multifab_destroy
       implicit none
       class(amrdata), intent(inout) :: this
-      integer,    intent(in), value :: lvl
+      integer, intent(in) :: lvl
       call amrex_multifab_destroy(this%data(lvl))
    end subroutine delete_lvl
    
@@ -111,9 +114,9 @@ contains
       use amrex_amr_module, only: amrex_multifab_build,amrex_boxarray,amrex_distromap
       implicit none
       class(amrdata),   intent(inout) :: this
-      integer,      intent(in), value :: lvl
-      real(WP),     intent(in), value :: time
-      type(c_ptr),  intent(in), value :: pba,pdm
+      integer,     intent(in) :: lvl
+      real(WP),    intent(in) :: time
+      type(c_ptr), intent(in) :: pba,pdm
       type(amrex_boxarray)  :: ba
       type(amrex_distromap) :: dm
       ! Delete data first
@@ -128,9 +131,9 @@ contains
       use iso_c_binding, only: c_ptr
       implicit none
       class(amrdata),   intent(inout) :: this
-      integer,      intent(in), value :: lvl
-      real(WP),     intent(in), value :: time
-      type(c_ptr),  intent(in), value :: pba,pdm
+      integer,      intent(in) :: lvl
+      real(WP),     intent(in) :: time
+      type(c_ptr),  intent(in) :: pba,pdm
       ! Recreate data
       call this%create_lvl(lvl,time,pba,pdm)
       ! Fill from coarse level
@@ -144,9 +147,9 @@ contains
       use amrex_amr_module, only: amrex_boxarray,amrex_distromap,amrex_multifab_build,amrex_multifab_destroy,amrex_multifab
       implicit none
       class(amrdata),   intent(inout) :: this
-      integer,      intent(in), value :: lvl
-      real(WP),     intent(in), value :: time
-      type(c_ptr),  intent(in), value :: pba,pdm
+      integer,      intent(in) :: lvl
+      real(WP),     intent(in) :: time
+      type(c_ptr),  intent(in) :: pba,pdm
       type(amrex_boxarray)  :: ba
       type(amrex_distromap) :: dm
       type(amrex_multifab)  :: newdata
@@ -168,8 +171,8 @@ contains
       use amrex_amr_module, only: amrex_multifab,amrex_fillcoarsepatch,amrex_interp_cell_cons
       implicit none
       class(amrdata), intent(inout) :: this
-      integer,    intent(in), value :: lvl
-      real(WP),   intent(in), value :: time
+      integer,  intent(in) :: lvl
+      real(WP), intent(in) :: time
       type(amrex_multifab), intent(inout) :: mfab
       ! Fill with a mix of interpolation and bconds
       call amrex_fillcoarsepatch(   mfab,&  !< fine mfab being filled...
@@ -218,8 +221,8 @@ contains
       use amrex_amr_module, only: amrex_multifab,amrex_fillpatch,amrex_interp_cell_cons
       implicit none
       class(amrdata),   intent(inout) :: this
-      integer,      intent(in), value :: lvl
-      real(WP),     intent(in), value :: time
+      integer,  intent(in) :: lvl
+      real(WP), intent(in) :: time
       type(amrex_multifab), intent(inout) :: mfab
       if (lvl.eq.0) then
          ! Fill without interpolation, just direct copy and bconds
