@@ -7,6 +7,7 @@ module simulation
    use amrensight_class,  only: amrensight
    use amrdata_class,     only: amrdata
    use event_class,       only: event
+   use monitor_class,     only: monitor
    implicit none
    private
    
@@ -29,6 +30,9 @@ module simulation
    !> Ensight output
    type(event)      :: ens_evt
    type(amrensight) :: ens_out
+
+   !> Monitoring
+   type(monitor) :: mfile,gfile
    
 contains
    
@@ -68,9 +72,9 @@ contains
                do j=bx%lo(2)-sc%nover,bx%hi(2)+sc%nover
                   do i=bx%lo(1)-sc%nover,bx%hi(1)+sc%nover
                      ! Get position
-                     x=sc%amr%xlo+(real(i,WP)+0.5_WP)*sc%amr%geom(lvl)%dx(1)
-                     y=sc%amr%ylo+(real(j,WP)+0.5_WP)*sc%amr%geom(lvl)%dx(2)
-                     z=sc%amr%zlo+(real(k,WP)+0.5_WP)*sc%amr%geom(lvl)%dx(3)
+                     x=sc%amr%xlo+(real(i,WP)+0.5_WP)*sc%amr%dx(lvl)
+                     y=sc%amr%ylo+(real(j,WP)+0.5_WP)*sc%amr%dy(lvl)
+                     z=sc%amr%zlo+(real(k,WP)+0.5_WP)*sc%amr%dz(lvl)
                      ! Evaluate data
                      r2=((x-0.5_WP)**2+(y-0.75_WP)**2+(z-0.5_WP)**2)/0.01_WP
                      mySC(i,j,k,1)=1.0_WP+exp(-r2)
@@ -174,9 +178,9 @@ contains
             ! Loop inside box
             do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
                ! Based on position
-               !x=sc%amr%xlo+(real(i,WP)+0.5_WP)*sc%amr%geom(lvl)%dx(1)
-               !y=sc%amr%ylo+(real(j,WP)+0.5_WP)*sc%amr%geom(lvl)%dx(2)
-               !z=sc%amr%zlo+(real(k,WP)+0.5_WP)*sc%amr%geom(lvl)%dx(3)
+               !x=sc%amr%xlo+(real(i,WP)+0.5_WP)*sc%amr%dx(lvl)
+               !y=sc%amr%ylo+(real(j,WP)+0.5_WP)*sc%amr%dy(lvl)
+               !z=sc%amr%zlo+(real(k,WP)+0.5_WP)*sc%amr%dz(lvl)
                !ctr=[0.5_WP,0.5_WP,0.5_WP]+0.25_WP*[cos(t),sin(t),0.0_WP]
                !r2=(x-ctr(1))**2+(y-ctr(2))**2+(z-ctr(3))**2
                !if (r2.lt.0.01_WP) then
@@ -247,9 +251,6 @@ contains
       call amr%initialize_data(time=time%t)
       call amr%average_down(sc%SC)
       
-      
-      call amr%print()
-      
       ! Prepare Ensight output
       create_ensight: block
          use param, only: param_read
@@ -264,6 +265,33 @@ contains
          ! Output to ensight
          call ens_out%write_data(time=time%t)
       end block create_ensight
+
+      ! Prepare monitoring
+      create_monitor: block
+         integer :: nsc
+         ! Prepare info about solvers
+         call sc%get_info()
+         ! Create simulation monitor
+         mfile=monitor(amr%amRoot,'simulation')
+         call mfile%add_column(time%n ,'Timestep number')
+         call mfile%add_column(time%t ,'Time')
+         call mfile%add_column(time%dt,'Timestep size')
+         do nsc=1,sc%nscalar
+            call mfile%add_column(sc%SCmax(nsc),trim(sc%SCname(nsc))//'_max')
+            call mfile%add_column(sc%SCmin(nsc),trim(sc%SCname(nsc))//'_min')
+            call mfile%add_column(sc%SCint(nsc),trim(sc%SCname(nsc))//'_int')
+         end do
+         call mfile%write()
+         ! Create grid monitor
+         gfile=monitor(amr%amRoot,'grid')
+         call gfile%add_column(time%n ,'Timestep number')
+         call gfile%add_column(time%t ,'Time')
+         call gfile%add_column(amr%nlevels,'Nlevels')
+         call gfile%add_column(amr%nboxes,'Nboxes')
+         call gfile%add_column(amr%ncells,'Ncells')
+         call gfile%add_column(amr%compression,'Compression')
+         call gfile%write()
+      end block create_monitor
       
    end subroutine simulation_init
    
@@ -306,9 +334,9 @@ contains
                      do j=tbx%lo(2),tbx%hi(2)
                         do i=tbx%lo(1),tbx%hi(1)
                            ! Get position
-                           x=amr%xlo+(real(i,WP)+0.5_WP)*amr%geom(lvl)%dx(1)
-                           y=amr%ylo+(real(j,WP)+0.5_WP)*amr%geom(lvl)%dx(2)
-                           z=amr%zlo+(real(k,WP)+0.5_WP)*amr%geom(lvl)%dx(3)
+                           x=amr%xlo+(real(i,WP)+0.5_WP)*amr%dx(lvl)
+                           y=amr%ylo+(real(j,WP)+0.5_WP)*amr%dy(lvl)
+                           z=amr%zlo+(real(k,WP)+0.5_WP)*amr%dz(lvl)
                            ! Evaluate streamfunction
                            psi(i,j,k,1)=sin(Pi*x)**2*sin(Pi*y)**2*cos(Pi*time%t/10.0_WP)*(1.0_WP/Pi)
                         end do
@@ -318,7 +346,7 @@ contains
                   do k=bx%lo(3),bx%hi(3)
                      do j=bx%lo(2),bx%hi(2)
                         do i=bx%lo(1),bx%hi(1)+1
-                           pU(i,j,k,1)=-((psi(i,j+1,k,1)+psi(i-1,j+1,k,1))-(psi(i,j-1,k,1)+psi(i-1,j-1,k,1)))*(0.25_WP/amr%geom(lvl)%dx(2))
+                           pU(i,j,k,1)=-((psi(i,j+1,k,1)+psi(i-1,j+1,k,1))-(psi(i,j-1,k,1)+psi(i-1,j-1,k,1)))*(0.25_WP/amr%dy(lvl))
                         end do
                      end do
                   end do
@@ -326,7 +354,7 @@ contains
                   do k=bx%lo(3),bx%hi(3)
                      do j=bx%lo(2),bx%hi(2)+1
                         do i=bx%lo(1),bx%hi(1)
-                           pV(i,j,k,1)=+((psi(i+1,j,k,1)+psi(i+1,j-1,k,1))-(psi(i-1,j,k,1)+psi(i-1,j-1,k,1)))*(0.25_WP/amr%geom(lvl)%dx(1))
+                           pV(i,j,k,1)=+((psi(i+1,j,k,1)+psi(i+1,j-1,k,1))-(psi(i-1,j,k,1)+psi(i-1,j-1,k,1)))*(0.25_WP/amr%dx(lvl))
                         end do
                      end do
                   end do
@@ -374,10 +402,17 @@ contains
          call amr%average_down(sc%SC)
          
          ! Regrid if needed
-         if (rgd_evt%occurs()) call amr%regrid(baselvl=0,time=time%t)
+         if (rgd_evt%occurs()) then
+            call amr%regrid(baselvl=0,time=time%t)
+            call gfile%write()
+         end if
          
          ! Output to ensight
          if (ens_evt%occurs()) call ens_out%write_data(time=time%t)
+
+         ! Perform and output monitoring
+         call sc%get_info()
+         call mfile%write()
          
       end do
       

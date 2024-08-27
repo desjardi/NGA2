@@ -29,7 +29,7 @@ module amrdata_class
       integer :: interp
       ! User-defined initialization procedure
       !procedure()
-      ! Global info
+      ! Global info on our data
       real(WP), dimension(:), allocatable :: mindata,maxdata,intdata
    contains
       procedure :: initialize       !< Initialize amrdata object
@@ -41,7 +41,7 @@ module amrdata_class
       procedure :: remake_lvl       !< Remake    our data at level (lvl) using  fill procedure
       procedure ::  cfill_lvl       !< Fill provided mfab at level (lvl) from our data at level (lvl-1)           - this involves boundary conditions
       procedure ::   fill_lvl       !< Fill provided mfab at level (lvl) from our data at level (lvl-1) and (lvl) - this involves boundary conditions
-      !procedure :: get_info         !< Compute min/max/int values for field
+      procedure :: get_info         !< Compute min/max/int values for field
    end type amrdata
    
    
@@ -80,9 +80,39 @@ contains
       this%hi_bc=amrex_bc_int_dir
       ! Assume conservative interpolation - user can change later
       this%interp=amrex_interp_cell_cons
+      ! Prepare storage for field info
+      allocate(this%mindata(1:this%ncomp)); this%mindata=+huge(1.0_WP)
+      allocate(this%maxdata(1:this%ncomp)); this%maxdata=-huge(1.0_WP)
+      allocate(this%intdata(1:this%ncomp)); this%intdata= 0.0_WP
    end subroutine initialize
-
-
+   
+   
+   !> Calculate various information on our amrdata object
+   subroutine get_info(this)
+      implicit none
+      class(amrdata), intent(inout) :: this
+      integer :: lvl,n
+      
+      ! Reset info
+      this%mindata=+huge(1.0_WP)
+      this%maxdata=-huge(1.0_WP)
+      this%intdata= 0.0_WP
+      
+      ! Loop over components
+      do n=1,this%ncomp
+         ! Loop over all levels
+         do lvl=0,this%amr%clvl()
+            ! Get min and max at that level
+            this%mindata(n)=min(this%mindata(n),this%data(lvl)%min(comp=n))
+            this%maxdata(n)=max(this%maxdata(n),this%data(lvl)%max(comp=n))
+         end do
+         ! Get int at level 0
+         this%intdata(n)=this%data(0)%sum(comp=n)*(this%amr%dx(0)*this%amr%dy(0)*this%amr%dz(0))/this%amr%vol
+      end do
+      
+   end subroutine get_info
+   
+   
    !> Finalize an amrdata object
    subroutine finalize(this)
       use amrex_amr_module, only: amrex_multifab_destroy

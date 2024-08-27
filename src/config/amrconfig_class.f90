@@ -40,25 +40,35 @@ module amrconfig_class
       integer, dimension(:), allocatable :: rref
       ! Geometry object at each level
       type(amrex_geometry), dimension(:), allocatable :: geom
+      ! Shortcut for domain volume
+      real(WP) :: vol
+      ! SHortcut to cell size per level
+      real(WP), dimension(:), allocatable :: dx,dy,dz
       ! Parallel info
       type(MPI_Comm) :: comm            !< Communicator for our group
       integer        :: nproc           !< Number of processors
       integer        :: rank            !< Processor grid rank
       logical        :: amRoot          !< Am I the root?
+      ! Monitoring info - call get_info() to update
+      integer  :: nlevels=-1            !< Current total number of levels
+      integer  :: nboxes =-1            !< Current total number of boxes
+      real(WP) :: ncells =-1.0_WP       !< Current total number of cells (real!)
+      real(WP) :: compression=-1.0_WP   !< Current compression ratio (ncells/total cells with uniform mesh)
    contains
-      procedure :: initialize            ! Initialization of amrconfig object
-      procedure :: finalize              ! Finalization of amrconfig object
-      procedure :: register_udp          ! Register user-defined procedures for regriding
-      procedure :: initialize_data       ! Initialize data on armconfig according to registered function
-      procedure :: regrid                ! Perform regriding operation on level baselvl
-      procedure :: print                 ! Print out grid info
-      procedure :: get_boxarray          ! Obtain box array at a given level
-      procedure :: get_distromap         ! Obtain distromap at a given level
-      procedure :: mfiter_build          ! Build mfiter at a given level
-      procedure :: mfiter_destroy        ! Destroy mfiter
-      procedure :: clvl                  ! Return current finest level
-      procedure :: average_down          ! Average down a given multifab throughout all levels
-      procedure :: average_downto        ! Average down a given multifab to level lvl
+      procedure :: initialize           !< Initialization of amrconfig object
+      procedure :: finalize             !< Finalization of amrconfig object
+      procedure :: register_udp         !< Register user-defined procedures for regriding
+      procedure :: initialize_data      !< Initialize data on armconfig according to registered function
+      procedure :: regrid               !< Perform regriding operation on level baselvl
+      procedure :: print                !< Print out grid info
+      procedure :: get_info             !< Calculate various information on our amrconfig object
+      procedure :: get_boxarray         !< Obtain box array at a given level
+      procedure :: get_distromap        !< Obtain distromap at a given level
+      procedure :: mfiter_build         !< Build mfiter at a given level
+      procedure :: mfiter_destroy       !< Destroy mfiter
+      procedure :: clvl                 !< Return current finest level
+      procedure :: average_down         !< Average down a given multifab throughout all levels
+      procedure :: average_downto       !< Average down a given multifab to level lvl
    end type amrconfig
    
    
@@ -189,6 +199,19 @@ contains
          this%rank=rank
          this%amRoot=amRoot
       end block store_parallel_info
+      ! Compute shortcuts
+      compute_shortcuts: block
+         integer :: lvl
+         ! Mesh size at each level
+         allocate(this%dx(0:this%nlvl),this%dy(0:this%nlvl),this%dz(0:this%nlvl))
+         do lvl=0,this%nlvl
+            this%dx(lvl)=this%geom(lvl)%dx(1)
+            this%dy(lvl)=this%geom(lvl)%dx(2)
+            this%dz(lvl)=this%geom(lvl)%dx(3)
+         end do
+         ! Total domain volume
+         this%vol=(this%xhi-this%xlo)*(this%yhi-this%ylo)*(this%zhi-this%zlo)
+      end block compute_shortcuts
    end subroutine initialize
    
    
@@ -205,7 +228,10 @@ contains
             type(c_ptr), value :: core
          end subroutine amrex_fi_init_from_scratch
       end interface
+      ! Generate grid and allocate data
       call amrex_fi_init_from_scratch(time,this%amrcore)
+      ! Generate info about grid
+      call this%get_info()
    end subroutine initialize_data
    
 
@@ -224,7 +250,10 @@ contains
             type(c_ptr), value :: core
          end subroutine amrex_fi_regrid
       end interface
+      ! Regenerate grid and resize/transfer data
       call amrex_fi_regrid(baselvl,time,this%amrcore)
+      ! Generate info about grid
+      call this%get_info()
    end subroutine regrid
 
    
@@ -367,6 +396,44 @@ contains
       integer, intent(in) :: lvl
       call amrex_average_down(mfab(lvl+1),mfab(lvl),this%geom(lvl+1),this%geom(lvl),1,mfab(0)%nc,this%rref(lvl))
    end subroutine average_downto
+   
+
+   !> Get info on amrconfig object
+   subroutine get_info(this)
+      use amrex_amr_module, only: amrex_boxarray,amrex_box
+      implicit none
+      class(amrconfig), intent(inout) :: this
+      type(amrex_boxarray) :: ba
+      type(amrex_box)      :: bx
+      integer :: n,m,nb
+      integer, dimension(3) :: lo,hi
+      ! Update number of levels
+      this%nlevels=this%clvl()+1
+      ! Update number of boxes and cells
+      this%nboxes=0
+      this%ncells=0.0_WP
+      do n=0,this%clvl()
+         ! Get boxarray
+         ba=this%get_boxarray(lvl=n)
+         ! Increment boxes
+         nb=int(ba%nboxes())
+         this%nboxes=this%nboxes+nb
+         ! Traverse boxes and count cells
+         do m=1,nb
+            ! Get box
+            bx=ba%get_box(m-1)
+            ! Increment cells
+            this%ncells=this%ncells+real((bx%hi(1)-bx%lo(1)+1),WP)*&
+            &                       real((bx%hi(2)-bx%lo(2)+1),WP)*&
+            &                       real((bx%hi(3)-bx%lo(3)+1),WP)
+         end do
+      end do
+      ! Update compression ratio
+      this%compression=this%geom(this%clvl())%dx(1)*&
+      &                this%geom(this%clvl())%dx(2)*&
+      &                this%geom(this%clvl())%dx(3)*&
+      &                this%ncells/((this%xhi-this%xlo)*(this%yhi-this%ylo)*(this%zhi-this%zlo))
+   end subroutine get_info
    
    
    !> Print amrconfig object

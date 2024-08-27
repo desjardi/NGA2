@@ -44,17 +44,14 @@ module amrscalar_class
       procedure :: initialize       !< Initialize scalar solver
       procedure :: finalize         !< Finalize scalar solver
       procedure :: get_dSCdt_lvl    !< Calculate dSC/dt at level (lvl)
+      procedure :: get_info         !< Calculate various information on our amrscalar object
       procedure :: delete_lvl       !< Delete data at level (lvl)
       procedure :: create_lvl       !< Create data at level (lvl) and leave it uninitialized
       procedure :: refine_lvl       !< Refine data at level (lvl) using cfill procedure
       procedure :: remake_lvl       !< Remake data at level (lvl) using  fill procedure
-      procedure ::  cfill_lvl       !< Fill provided mfab at level (lvl) from this%SC at level (lvl-1)
-                                    !< Involves boundary conditions
-                                    !< Done at a single time using this%SC
-      procedure ::   fill_lvl       !< Fill provided mfab at level (lvl) from this%SC at level (lvl-1) and (lvl)
-                                    !< Involves boundary conditions
-                                    !< Done at a single time using this%SC
-
+      procedure ::  cfill_lvl       !< Fill provided mfab at level (lvl) from this%SC at level (lvl-1)           - involves boundary conditions - done at a single time using this%SC
+      procedure ::   fill_lvl       !< Fill provided mfab at level (lvl) from this%SC at level (lvl-1) and (lvl) - involves boundary conditions - done at a single time using this%SC
+      
    end type amrscalar
    
    
@@ -88,7 +85,12 @@ contains
       ! Initialize scalar names
       allocate(this%SCname(1:this%nscalar))
       this%SCname='' ! User will set names
-
+      
+      ! Initialize info storage
+      allocate(this%SCmin(1:this%nscalar)); this%SCmin=+huge(1.0_WP)
+      allocate(this%SCmax(1:this%nscalar)); this%SCmax=-huge(1.0_WP)
+      allocate(this%SCint(1:this%nscalar)); this%SCint= 0.0_WP
+      
       ! Allocate boundary condition descriptor
       allocate(this%lo_bc(1:3,1:this%nscalar))
       allocate(this%hi_bc(1:3,1:this%nscalar))
@@ -177,9 +179,9 @@ contains
             do k=bx%lo(3),bx%hi(3)
                do j=bx%lo(2),bx%hi(2)
                   do i=bx%lo(1),bx%hi(1)
-                     rhs(i,j,k,nsc)=(FX(i+1,j,k,1)-FX(i,j,k,1))/this%amr%geom(lvl)%dx(1)+&
-                     &              (FY(i,j+1,k,1)-FY(i,j,k,1))/this%amr%geom(lvl)%dx(2)+&
-                     &              (FZ(i,j,k+1,1)-FZ(i,j,k,1))/this%amr%geom(lvl)%dx(3)
+                     rhs(i,j,k,nsc)=(FX(i+1,j,k,1)-FX(i,j,k,1))/this%amr%dx(lvl)+&
+                     &              (FY(i,j+1,k,1)-FY(i,j,k,1))/this%amr%dy(lvl)+&
+                     &              (FZ(i,j,k+1,1)-FZ(i,j,k,1))/this%amr%dz(lvl)
                   end do
                end do
             end do
@@ -194,8 +196,34 @@ contains
       call amrex_fab_destroy(zflux)
       
    end subroutine get_dSCdt_lvl
-
-
+   
+   
+   !> Calculate various information on our amrscalar object
+   subroutine get_info(this)
+      implicit none
+      class(amrscalar), intent(inout) :: this
+      integer :: lvl,nsc
+      
+      ! Reset info
+      this%SCmin=+huge(1.0_WP)
+      this%SCmax=-huge(1.0_WP)
+      this%SCint= 0.0_WP
+      
+      ! Loop over scalars
+      do nsc=1,this%nscalar
+         ! Loop over all levels
+         do lvl=0,this%amr%clvl()
+            ! Get min and max at that level
+            this%SCmin(nsc)=min(this%SCmin(nsc),this%SC(lvl)%min(comp=nsc))
+            this%SCmax(nsc)=max(this%SCmax(nsc),this%SC(lvl)%max(comp=nsc))
+         end do
+         ! Get int at level 0
+         this%SCint(nsc)=this%SC(0)%sum(comp=nsc)*(this%amr%dx(0)*this%amr%dy(0)*this%amr%dz(0))/this%amr%vol
+      end do
+      
+   end subroutine get_info
+   
+   
    !> Delete solver data at level lvl
    subroutine delete_lvl(this,lvl)
       use amrex_amr_module, only: amrex_multifab_destroy
