@@ -6,10 +6,10 @@ Base nx : 64
 Base ny : 64
 Base nz : 64
 Number of levels : 2
-Refinement ratio : 4 2
+Refinement ratio : 2
 
 # Time integration
-Max timestep size : 0.01
+Max timestep size : 0.002
 Max time : 10
 
 # Regriding

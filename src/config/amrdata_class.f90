@@ -39,8 +39,8 @@ module amrdata_class
       !procedure ::   init_lvl       !< Init      our data at level (lvl) from udp
       procedure :: refine_lvl       !< Refine    our data at level (lvl) using cfill procedure
       procedure :: remake_lvl       !< Remake    our data at level (lvl) using  fill procedure
-      procedure ::  cfill_lvl       !< Fill provided mfab at level (lvl) from our data at level (lvl-1)           - this involves boundary conditions - this can    be called in-place
-      procedure ::   fill_lvl       !< Fill provided mfab at level (lvl) from our data at level (lvl-1) and (lvl) - this involves boundary conditions - this cannot be called in-place
+      procedure ::  cfill_lvl       !< Fill provided mfab at level (lvl) from our data at level (lvl-1)           - this involves boundary conditions
+      procedure ::   fill_lvl       !< Fill provided mfab at level (lvl) from our data at level (lvl-1) and (lvl) - this involves boundary conditions
       !procedure :: get_info         !< Compute min/max/int values for field
    end type amrdata
    
@@ -166,7 +166,6 @@ contains
    
    
    !> Fill provided mfab at level (lvl) from our data at level (lvl-1)
-   !> Can be called in-place!
    subroutine cfill_lvl(this,lvl,time,mfab)
       use amrex_amr_module, only: amrex_multifab,amrex_fillcoarsepatch,amrex_interp_cell_cons
       implicit none
@@ -216,7 +215,6 @@ contains
 
 
    !> Fill provided mfab at level (lvl) from our data at level (lvl-1) and (lvl)
-   !> Cannot be called in-place!
    subroutine fill_lvl(this,lvl,time,mfab)
       use amrex_amr_module, only: amrex_multifab,amrex_fillpatch,amrex_interp_cell_cons
       implicit none

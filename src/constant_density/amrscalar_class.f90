@@ -51,11 +51,9 @@ module amrscalar_class
       procedure ::  cfill_lvl       !< Fill provided mfab at level (lvl) from this%SC at level (lvl-1)
                                     !< Involves boundary conditions
                                     !< Done at a single time using this%SC
-                                    !< Can be called in-place
       procedure ::   fill_lvl       !< Fill provided mfab at level (lvl) from this%SC at level (lvl-1) and (lvl)
                                     !< Involves boundary conditions
                                     !< Done at a single time using this%SC
-                                    !< Cannot be called in-place
 
    end type amrscalar
    
@@ -113,7 +111,7 @@ contains
 
    !> Calculate dSC/dt at level (lvl)
    subroutine get_dSCdt_lvl(this,lvl,dSCdt,U,V,W)
-      use amrex_amr_module, only: amrex_mfiter,amrex_box,amrex_mfiter_build,amrex_mfiter_destroy,amrex_fab,amrex_fab_destroy
+      use amrex_amr_module, only: amrex_mfiter,amrex_box,amrex_fab,amrex_fab_destroy
       implicit none
       class(amrscalar), intent(inout) :: this
       integer, intent(in) :: lvl
@@ -128,7 +126,7 @@ contains
       integer :: i,j,k,nsc
       
       ! Loop over boxes - no tiling for now
-      call amrex_mfiter_build(mfi,dSCdt)
+      call this%amr%mfiter_build(lvl,mfi)
       do while(mfi%next())
          bx=mfi%tilebox()
          
@@ -188,8 +186,8 @@ contains
          end do
          
       end do
-      call amrex_mfiter_destroy(mfi)
-
+      call this%amr%mfiter_destroy(mfi)
+      
       ! Deallocate flux storage
       call amrex_fab_destroy(xflux)
       call amrex_fab_destroy(yflux)
@@ -270,7 +268,6 @@ contains
 
 
    !> Fill provided mfab at level (lvl) from this%SC at level (lvl-1)
-   !> Can be called in-place!
    subroutine cfill_lvl(this,lvl,time,SC)
       use amrex_amr_module, only: amrex_multifab,amrex_fillcoarsepatch,amrex_interp_cell_cons
       implicit none
@@ -319,7 +316,6 @@ contains
 
 
    !> Fill provided mfab at level (lvl) from this%SC at level (lvl-1) and (lvl)
-   !> Cannot be called in-place!
    subroutine fill_lvl(this,lvl,time,SC)
       use amrex_amr_module, only: amrex_multifab,amrex_fillpatch,amrex_interp_cell_cons
       implicit none

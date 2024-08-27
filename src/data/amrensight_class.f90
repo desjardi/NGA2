@@ -352,12 +352,6 @@ contains
    
    !> Output all data in the object
    subroutine write_data(this,time)
-      use precision, only: SP
-      use messager,  only: die
-      use parallel,  only: info_mpiio,MPI_REAL_SP
-      use amrex_amr_module, only: amrex_box,amrex_boxarray,amrex_distromap,&
-      &                           amrex_mfiter,amrex_mfiter_build,amrex_mfiter_destroy
-      use mpi_f08,          only: MPI_BCAST,MPI_INTEGER
       implicit none
       class(amrensight), intent(inout) :: this
       real(WP), intent(in) :: time

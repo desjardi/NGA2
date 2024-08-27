@@ -63,17 +63,21 @@ contains
          do while (mfi%next())
             bx=mfi%tilebox()
             mySC=>sc%SC(lvl)%dataptr(mfi)
-            ! Loop inside box
-            do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
-               ! Get position
-               x=sc%amr%xlo+(real(i,WP)+0.5_WP)*sc%amr%geom(lvl)%dx(1)
-               y=sc%amr%ylo+(real(j,WP)+0.5_WP)*sc%amr%geom(lvl)%dx(2)
-               z=sc%amr%zlo+(real(k,WP)+0.5_WP)*sc%amr%geom(lvl)%dx(3)
-               ! Evaluate data
-               r2=((x-0.5_WP)**2+(y-0.75_WP)**2+(z-0.5_WP)**2)/0.01_WP
-               mySC(i,j,k,1)=1.0_WP+exp(-r2)
-               mySC(i,j,k,2)=1.0_WP-exp(-r2)
-            end do; end do; end do
+            ! Loop inside box with overlap
+            do k=bx%lo(3)-sc%nover,bx%hi(3)+sc%nover
+               do j=bx%lo(2)-sc%nover,bx%hi(2)+sc%nover
+                  do i=bx%lo(1)-sc%nover,bx%hi(1)+sc%nover
+                     ! Get position
+                     x=sc%amr%xlo+(real(i,WP)+0.5_WP)*sc%amr%geom(lvl)%dx(1)
+                     y=sc%amr%ylo+(real(j,WP)+0.5_WP)*sc%amr%geom(lvl)%dx(2)
+                     z=sc%amr%zlo+(real(k,WP)+0.5_WP)*sc%amr%geom(lvl)%dx(3)
+                     ! Evaluate data
+                     r2=((x-0.5_WP)**2+(y-0.75_WP)**2+(z-0.5_WP)**2)/0.01_WP
+                     mySC(i,j,k,1)=1.0_WP+exp(-r2)
+                     mySC(i,j,k,2)=1.0_WP-exp(-r2)
+                  end do
+               end do
+            end do
          end do
          call amrex_mfiter_destroy(mfi)
       end block init_sc
@@ -170,18 +174,18 @@ contains
             ! Loop inside box
             do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
                ! Based on position
-               x=sc%amr%xlo+(real(i,WP)+0.5_WP)*sc%amr%geom(lvl)%dx(1)
-               y=sc%amr%ylo+(real(j,WP)+0.5_WP)*sc%amr%geom(lvl)%dx(2)
-               z=sc%amr%zlo+(real(k,WP)+0.5_WP)*sc%amr%geom(lvl)%dx(3)
-               ctr=[0.5_WP,0.5_WP,0.5_WP]+0.25_WP*[cos(t),sin(t),0.0_WP]
-               r2=(x-ctr(1))**2+(y-ctr(2))**2+(z-ctr(3))**2
-               if (r2.lt.0.01_WP) then
-                  mytag(i,j,k,1)=tagval
-               else
-                  mytag(i,j,k,1)=clrval
-               end if
+               !x=sc%amr%xlo+(real(i,WP)+0.5_WP)*sc%amr%geom(lvl)%dx(1)
+               !y=sc%amr%ylo+(real(j,WP)+0.5_WP)*sc%amr%geom(lvl)%dx(2)
+               !z=sc%amr%zlo+(real(k,WP)+0.5_WP)*sc%amr%geom(lvl)%dx(3)
+               !ctr=[0.5_WP,0.5_WP,0.5_WP]+0.25_WP*[cos(t),sin(t),0.0_WP]
+               !r2=(x-ctr(1))**2+(y-ctr(2))**2+(z-ctr(3))**2
+               !if (r2.lt.0.01_WP) then
+               !   mytag(i,j,k,1)=tagval
+               !else
+               !   mytag(i,j,k,1)=clrval
+               !end if
                ! Based on scalar value
-               !if (phi(i,j,k,1).ge.1.15_WP) mytag(i,j,k,1)=tagval
+               if (phi(i,j,k,1).ge.1.15_WP) mytag(i,j,k,1)=tagval
             end do; end do; end do
          end do
          call amrex_mfiter_destroy(mfi)
@@ -279,10 +283,12 @@ contains
          
          ! Calculate velocity
          update_velocity: block
-            use amrex_amr_module, only: amrex_mfiter,amrex_box
+            use amrex_amr_module, only: amrex_mfiter,amrex_box,amrex_fab,amrex_fab_destroy
+            use mathtools,        only: Pi
             type(amrex_mfiter) :: mfi
-            type(amrex_box)    :: bx
-            real(WP), dimension(:,:,:,:), contiguous, pointer :: pU,pV,pW
+            type(amrex_box)    :: bx,tbx
+            type(amrex_fab)    :: stream
+            real(WP), dimension(:,:,:,:), contiguous, pointer :: pU,pV,pW,psi
             real(WP) :: x,y,z
             integer :: i,j,k
             do lvl=0,amr%clvl()
@@ -293,47 +299,49 @@ contains
                   pU=>U%data(lvl)%dataptr(mfi)
                   pV=>V%data(lvl)%dataptr(mfi)
                   pW=>W%data(lvl)%dataptr(mfi)
-                  ! Loop on the x face
+                  ! Create streamfunction for our vortex on a larger box
+                  tbx=bx; call tbx%grow(1)
+                  call stream%resize(tbx,1); psi=>stream%dataptr()
+                  do k=tbx%lo(3),tbx%hi(3)
+                     do j=tbx%lo(2),tbx%hi(2)
+                        do i=tbx%lo(1),tbx%hi(1)
+                           ! Get position
+                           x=amr%xlo+(real(i,WP)+0.5_WP)*amr%geom(lvl)%dx(1)
+                           y=amr%ylo+(real(j,WP)+0.5_WP)*amr%geom(lvl)%dx(2)
+                           z=amr%zlo+(real(k,WP)+0.5_WP)*amr%geom(lvl)%dx(3)
+                           ! Evaluate streamfunction
+                           psi(i,j,k,1)=sin(Pi*x)**2*sin(Pi*y)**2*cos(Pi*time%t/10.0_WP)*(1.0_WP/Pi)
+                        end do
+                     end do
+                  end do
+                  ! Loop on the x face and compute U=-d(psi)/dy
                   do k=bx%lo(3),bx%hi(3)
                      do j=bx%lo(2),bx%hi(2)
                         do i=bx%lo(1),bx%hi(1)+1
-                           ! Get position
-                           x=amr%xlo+(real(i,WP)+0.0_WP)*amr%geom(lvl)%dx(1)
-                           y=amr%ylo+(real(j,WP)+0.5_WP)*amr%geom(lvl)%dx(2)
-                           z=amr%zlo+(real(k,WP)+0.5_WP)*amr%geom(lvl)%dx(3)
-                           ! Evaluate velocity
-                           pU(i,j,k,1)=0.0_WP
+                           pU(i,j,k,1)=-((psi(i,j+1,k,1)+psi(i-1,j+1,k,1))-(psi(i,j-1,k,1)+psi(i-1,j-1,k,1)))*(0.25_WP/amr%geom(lvl)%dx(2))
                         end do
                      end do
                   end do
-                  ! Loop on the y face
+                  ! Loop on the y face and compute V=+d(psi)/dz
                   do k=bx%lo(3),bx%hi(3)
                      do j=bx%lo(2),bx%hi(2)+1
                         do i=bx%lo(1),bx%hi(1)
-                           ! Get position
-                           x=amr%xlo+(real(i,WP)+0.5_WP)*amr%geom(lvl)%dx(1)
-                           y=amr%ylo+(real(j,WP)+0.0_WP)*amr%geom(lvl)%dx(2)
-                           z=amr%zlo+(real(k,WP)+0.5_WP)*amr%geom(lvl)%dx(3)
-                           ! Evaluate velocity
-                           pV(i,j,k,1)=0.0_WP
+                           pV(i,j,k,1)=+((psi(i+1,j,k,1)+psi(i+1,j-1,k,1))-(psi(i-1,j,k,1)+psi(i-1,j-1,k,1)))*(0.25_WP/amr%geom(lvl)%dx(1))
                         end do
                      end do
                   end do
-                  ! Loop on the z face
+                  ! Loop on the z face and set W=1.0_WP
                   do k=bx%lo(3),bx%hi(3)+1
                      do j=bx%lo(2),bx%hi(2)
                         do i=bx%lo(1),bx%hi(1)
-                           ! Get position
-                           x=amr%xlo+(real(i,WP)+0.5_WP)*amr%geom(lvl)%dx(1)
-                           y=amr%ylo+(real(j,WP)+0.5_WP)*amr%geom(lvl)%dx(2)
-                           z=amr%zlo+(real(k,WP)+0.0_WP)*amr%geom(lvl)%dx(3)
-                           ! Evaluate velocity
                            pW(i,j,k,1)=0.0_WP
                         end do
                      end do
                   end do
                end do
                call amr%mfiter_destroy(mfi)
+               ! Destroy streamfunction
+               call amrex_fab_destroy(stream)
             end do
          end block update_velocity
          
@@ -358,9 +366,12 @@ contains
             &                       dstcomp=1,nc=sc%nscalar,ng=0)
             
             ! Update overlap and boundary conditions
-            !call sc%apply_bcond(time%t,time%dt)
+            call sc%fill_lvl(lvl,time%t,sc%SC(lvl))
             
          end do
+         
+         ! Enforce consistency between levels
+         call amr%average_down(sc%SC)
          
          ! Regrid if needed
          if (rgd_evt%occurs()) call amr%regrid(baselvl=0,time=time%t)
@@ -380,6 +391,7 @@ contains
       call U%finalize()
       call V%finalize()
       call W%finalize()
+      call resSC%finalize()
       call sc%finalize()
       call amr%finalize()
       call finalize_amrex()
