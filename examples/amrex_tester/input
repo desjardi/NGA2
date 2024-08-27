@@ -1,0 +1,19 @@
+# Mesh definition
+Lx : 1
+Ly : 1
+Lz : 1
+Base nx : 64
+Base ny : 64
+Base nz : 64
+Number of levels : 2
+Refinement ratio : 2
+
+# Time integration
+Max timestep size : 0.002
+Max time : 10
+
+# Regriding
+Steps between regrid : 20
+
+# Output
+Ensight output period : 0.1
