@@ -169,6 +169,9 @@ module vfs_class
       type(LocSepLink_type), dimension(:,:,:), allocatable :: localized_separator_linkold
       type(ObjServer_PlanarSep_type)  :: planar_separatorold_allocation
       type(ObjServer_LocSepLink_type) :: localized_separator_linkold_allocation
+
+      ! Debug
+      real(WP) :: clipped_Lvol
       
    contains
       procedure :: initialize                             !< Initialize the vfs object
@@ -1344,6 +1347,9 @@ contains
    !> Perform flux-based transport of VF based on U/V/W and dt
    !> Include storage of detailed fluxes
    subroutine transport_flux_storage(this,dt,U,V,W)
+      ! Debug
+      use mpi_f08,  only: MPI_ALLREDUCE,MPI_SUM
+      use parallel, only: MPI_REAL_WP
       implicit none
       class(vfs), intent(inout) :: this
       real(WP), intent(inout) :: dt  !< Timestep size over which to advance
@@ -1362,6 +1368,12 @@ contains
       real(WP), dimension(3,2) :: bounding_pts
       integer, dimension(3,2) :: bb_indices
       type(SepVM_type) :: my_SepVM
+      
+      ! Debug
+      real(WP) :: my_clipped_Lvol
+      integer :: ierr
+      my_clipped_Lvol=0.0_WP
+      this%clipped_Lvol=0.0_WP
       
       ! Allocate
       call new(flux_polyhedron)
@@ -1540,6 +1552,7 @@ contains
          if (this%VF(i,j,k).lt.VFlo) then
             this%VF(i,j,k)=0.0_WP
          else if (this%VF(i,j,k).gt.VFhi) then
+            my_clipped_Lvol=my_clipped_Lvol+(this%VF(i,j,k)-1.0_WP)*this%cfg%vol(i,j,k)
             this%VF(i,j,k)=1.0_WP
          else
             ! Compute old phase barycenters
@@ -1558,6 +1571,9 @@ contains
       ! Synchronize VF and barycenter fields
       call this%cfg%sync(this%VF)
       call this%sync_and_clean_barycenters()
+
+      ! Debug
+      call MPI_ALLREDUCE(my_clipped_Lvol,this%clipped_Lvol,1,MPI_REAL_WP,MPI_SUM,this%cfg%comm,ierr)
       
    end subroutine transport_flux_storage
    

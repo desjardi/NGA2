@@ -55,6 +55,10 @@ module simulation
    real(WP) :: evp_mass_flux
    real(WP) :: Lz,rad_drop
    real(WP) :: Upcmax,Vpcmax,Wpcmax
+
+   ! Debug
+   real(WP) :: Lvol_change
+   real(WP) :: Lvol_change_diff
    
 contains
 
@@ -67,7 +71,6 @@ contains
       real(WP) :: G
       ! Create the drop
       G=radius-sqrt(sum((xyz-center)**2))
-      ! G=sqrt(sum((xyz-center)**2))-radius
    end function levelset_drop
 
 
@@ -228,6 +231,9 @@ contains
          real(WP), dimension(3) :: v_cent,a_cent
          real(WP) :: vol,area
          integer, parameter :: amr_ref_lvl=4
+         ! Debug
+         Lvol_change=0.0_WP
+         Lvol_change_diff=0.0_WP
          ! Create a VOF solver
          call vf%initialize(cfg=cfg,reconstruction_method=lvira,transport_method=flux_storage,name='VOF')
          vf%cons_correct=.false.
@@ -294,7 +300,9 @@ contains
       create_and_initialize_flow_solver: block
          use hypre_str_class, only: pcg_pfmg2
          use mathtools,       only: Pi
-         use tpns_class, only: neumann,clipped_neumann
+         use tpns_class,      only: neumann,clipped_neumann,dirichlet,bcond
+         integer :: n,i,j,k
+         type(bcond), pointer :: mybc
          ! Create flow solver
          fs=tpns(cfg=cfg,name='Two-phase NS')
          ! Assign constant viscosity to each phase
@@ -325,6 +333,8 @@ contains
          call fs%setup(pressure_solver=ps)
          ! Zero initial field
          fs%U=0.0_WP; fs%V=0.0_WP; fs%W=0.0_WP
+         ! Apply boundary conditions
+         call fs%apply_bcond(time%t,time%dt)
          ! Calculate cell-centered velocities and divergence
          call fs%interp_vel(Ui,Vi,Wi)
          call fs%get_div()
@@ -333,8 +343,10 @@ contains
 
       ! Create a two-phase flow solver for the divergence-free liquid velocity
       create_div_free_flow_solver: block
-         use tpns_class, only: neumann,clipped_neumann
+         use tpns_class, only: neumann,clipped_neumann,dirichlet,bcond
          use hypre_str_class, only: pcg_pfmg2
+         integer :: n,i,j,k
+         type(bcond), pointer :: mybc
          ! Create flow solver
          fsL=tpns(cfg=cfg,name='Liquid NS')
          ! Assign constant viscosity to each phase
@@ -364,6 +376,8 @@ contains
          call fsL%setup(pressure_solver=psL)
          ! Zero initial field
          fsL%U=0.0_WP; fsL%V=0.0_WP; fsL%W=0.0_WP
+         ! Apply boundary conditions
+         call fsL%apply_bcond(time%t,time%dt)
          ! Calculate cell-centered velocities and divergence
          call fsL%interp_vel(Ui_L,Vi_L,Wi_L)
          call fsL%get_div()
@@ -524,6 +538,10 @@ contains
          call mfile%add_column(fs%psolv%it,'Pressure iteration')
          call mfile%add_column(fs%psolv%rerr,'Pressure error')
          call mfile%add_column(rad_drop,'Droplet raduis')
+         ! Debug
+         call mfile%add_column(vf%clipped_Lvol,'Clipped Lvol')
+         call mfile%add_column(Lvol_change,'Lvol change')
+         call mfile%add_column(Lvol_change_diff,'Lvol change diff')
          call mfile%write()
          ! Create simulation monitor for liquid
          mfileL=monitor(fsL%cfg%amRoot,'simulation_liquid')
@@ -601,6 +619,10 @@ contains
 
          ! Remember old VOF
          vf%VFold=vf%VF
+
+         ! Debug
+         call vf%get_max()
+         Lvol_change=vf%VFint
          
          ! Remember old SC
          ! sc%SCold =sc%SC
@@ -919,6 +941,9 @@ contains
          ! Perform and output monitoring
          call fs%get_max(); call fsL%get_max()
          call vf%get_max()
+         ! Debug
+         Lvol_change=vf%VFint-Lvol_change
+         Lvol_change_diff=abs(Lvol_change)-vf%clipped_Lvol
          call sc%get_max(VF=vf%VF)
          rad_drop=sqrt(vf%VFint/(Lz*Pi))
          call mfile%write(); call mfileL%write()
