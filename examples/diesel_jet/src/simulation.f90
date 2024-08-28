@@ -292,74 +292,76 @@ contains
          call MPI_ALLREDUCE(MPI_IN_PLACE,v_vol,1,MPI_REAL_WP,MPI_SUM,strack%vf%cfg%comm,ierr)
          call MPI_ALLREDUCE(MPI_IN_PLACE,w_vol,1,MPI_REAL_WP,MPI_SUM,strack%vf%cfg%comm,ierr)
          
-         ! Moments of inertia
-         Imom=0.0_WP
-         do n=1,strack%nstruct
-            ! Only deal with structure matching newid
-            if (strack%struct(n)%id.eq.strack%merge_master(n)%newid) then
+         if (vol_struct.gt.0.0_WP) then 
+            ! Moments of inertia
+            Imom=0.0_WP
+            do n=1,strack%nstruct
+               ! Only deal with structure matching newid
+               if (strack%struct(n)%id.eq.strack%merge_master(n)%newid) then
 
-               ! Periodicity
-               per_x = strack%struct(n)%per(1)
-               per_y = strack%struct(n)%per(2)
-               per_z = strack%struct(n)%per(3)
-                  
-               ! Loop over cells in new structure and accumulate statistics
-               do m=1,strack%struct(n)%n_
+                  ! Periodicity
+                  per_x = strack%struct(n)%per(1)
+                  per_y = strack%struct(n)%per(2)
+                  per_z = strack%struct(n)%per(3)
+                     
+                  ! Loop over cells in new structure and accumulate statistics
+                  do m=1,strack%struct(n)%n_
 
-                  ! Indices of cells in structure
-                  ii=strack%struct(n)%map(1,m) 
-                  jj=strack%struct(n)%map(2,m) 
-                  kk=strack%struct(n)%map(3,m)
+                     ! Indices of cells in structure
+                     ii=strack%struct(n)%map(1,m) 
+                     jj=strack%struct(n)%map(2,m) 
+                     kk=strack%struct(n)%map(3,m)
 
-                  ! Location of struct node
-                  xtmp = strack%vf%cfg%xm(ii)-per_x*strack%vf%cfg%xL-x_vol/vol_struct
-                  ytmp = strack%vf%cfg%ym(jj)-per_y*strack%vf%cfg%yL-y_vol/vol_struct
-                  ztmp = strack%vf%cfg%zm(kk)-per_z*strack%vf%cfg%zL-z_vol/vol_struct
+                     ! Location of struct node
+                     xtmp = strack%vf%cfg%xm(ii)-per_x*strack%vf%cfg%xL-x_vol/vol_struct
+                     ytmp = strack%vf%cfg%ym(jj)-per_y*strack%vf%cfg%yL-y_vol/vol_struct
+                     ztmp = strack%vf%cfg%zm(kk)-per_z*strack%vf%cfg%zL-z_vol/vol_struct
 
-                  ! Moment of Inertia
-                  Imom(1,1) = Imom(1,1) + (ytmp**2 + ztmp**2)*strack%vf%cfg%vol(ii,jj,kk)*strack%vf%VF(ii,jj,kk)
-                  Imom(2,2) = Imom(2,2) + (xtmp**2 + ztmp**2)*strack%vf%cfg%vol(ii,jj,kk)*strack%vf%VF(ii,jj,kk)
-                  Imom(3,3) = Imom(3,3) + (xtmp**2 + ytmp**2)*strack%vf%cfg%vol(ii,jj,kk)*strack%vf%VF(ii,jj,kk)
-                  
-                  Imom(1,2) = Imom(1,2) - xtmp*ytmp*strack%vf%cfg%vol(ii,jj,kk)*strack%vf%VF(ii,jj,kk)
-                  Imom(1,3) = Imom(1,3) - xtmp*ztmp*strack%vf%cfg%vol(ii,jj,kk)*strack%vf%VF(ii,jj,kk)
-                  Imom(2,3) = Imom(2,3) - ytmp*ztmp*strack%vf%cfg%vol(ii,jj,kk)*strack%vf%VF(ii,jj,kk)
-               end do 
-            end if
-         end do
+                     ! Moment of Inertia
+                     Imom(1,1) = Imom(1,1) + (ytmp**2 + ztmp**2)*strack%vf%cfg%vol(ii,jj,kk)*strack%vf%VF(ii,jj,kk)
+                     Imom(2,2) = Imom(2,2) + (xtmp**2 + ztmp**2)*strack%vf%cfg%vol(ii,jj,kk)*strack%vf%VF(ii,jj,kk)
+                     Imom(3,3) = Imom(3,3) + (xtmp**2 + ytmp**2)*strack%vf%cfg%vol(ii,jj,kk)*strack%vf%VF(ii,jj,kk)
+                     
+                     Imom(1,2) = Imom(1,2) - xtmp*ytmp*strack%vf%cfg%vol(ii,jj,kk)*strack%vf%VF(ii,jj,kk)
+                     Imom(1,3) = Imom(1,3) - xtmp*ztmp*strack%vf%cfg%vol(ii,jj,kk)*strack%vf%VF(ii,jj,kk)
+                     Imom(2,3) = Imom(2,3) - ytmp*ztmp*strack%vf%cfg%vol(ii,jj,kk)*strack%vf%VF(ii,jj,kk)
+                  end do 
+               end if
+            end do
 
-         ! Sum parallel stats on Imom
-         do n=1,3
-            call MPI_ALLREDUCE(MPI_IN_PLACE,Imom(:,n),3,MPI_REAL_WP,MPI_SUM,strack%vf%cfg%comm,ierr)
-         end do
+            ! Sum parallel stats on Imom
+            do n=1,3
+               call MPI_ALLREDUCE(MPI_IN_PLACE,Imom(:,n),3,MPI_REAL_WP,MPI_SUM,strack%vf%cfg%comm,ierr)
+            end do
 
-         ! Characteristic lengths and principle axes
-         ! Eigenvalues/eigenvectors of moments of inertia tensor
-         A = Imom
-         n = 3
-         call dsyev('V','U',n,Imom,n,d,work,lwork,info)
-         ! Get rid of very small negative values (due to machine accuracy)
-         d = max(0.0_WP,d)
-         ! Store characteristic lengths
-         lengths(1) = sqrt(5.0_WP/2.0_WP*abs(d(2)+d(3)-d(1))/vol_struct) ! Need a check to prevent dividing by 0 
-         lengths(2) = sqrt(5.0_WP/2.0_WP*abs(d(3)+d(1)-d(2))/vol_struct)
-         lengths(3) = sqrt(5.0_WP/2.0_WP*abs(d(1)+d(2)-d(3))/vol_struct)
-         ! Zero out length in 3rd dimension if 2D
-         if (strack%vf%cfg%nx.eq.1.or.strack%vf%cfg%ny.eq.1.or.strack%vf%cfg%nz.eq.1) lengths(3)=0.0_WP
-         ! Store principal axes
-         axes(:,:) = A
+            ! Characteristic lengths and principle axes
+            ! Eigenvalues/eigenvectors of moments of inertia tensor
+            A = Imom
+            n = 3
+            call dsyev('V','U',n,Imom,n,d,work,lwork,info)
+            ! Get rid of very small negative values (due to machine accuracy)
+            d = max(0.0_WP,d)
+            ! Store characteristic lengths
+            lengths(1) = sqrt(5.0_WP/2.0_WP*abs(d(2)+d(3)-d(1))/vol_struct) ! Need a check to prevent dividing by 0 
+            lengths(2) = sqrt(5.0_WP/2.0_WP*abs(d(3)+d(1)-d(2))/vol_struct)
+            lengths(3) = sqrt(5.0_WP/2.0_WP*abs(d(1)+d(2)-d(3))/vol_struct)
+            ! Zero out length in 3rd dimension if 2D
+            if (strack%vf%cfg%nx.eq.1.or.strack%vf%cfg%ny.eq.1.or.strack%vf%cfg%nz.eq.1) lengths(3)=0.0_WP
+            ! Store principal axes
+            axes(:,:) = A
 
-         ! Finish computing qantities
-         stats%vol     = vol_struct
-         stats%x_cg    = x_vol/vol_struct
-         stats%y_cg    = y_vol/vol_struct
-         stats%z_cg    = z_vol/vol_struct
-         stats%u_avg   = u_vol/vol_struct
-         stats%v_avg   = v_vol/vol_struct
-         stats%w_avg   = w_vol/vol_struct
-         stats%Imom    = Imom 
-         stats%lengths = lengths
-         stats%axes    = axes
+            ! Finish computing qantities
+            stats%vol     = vol_struct
+            stats%x_cg    = x_vol/vol_struct
+            stats%y_cg    = y_vol/vol_struct
+            stats%z_cg    = z_vol/vol_struct
+            stats%u_avg   = u_vol/vol_struct
+            stats%v_avg   = v_vol/vol_struct
+            stats%w_avg   = w_vol/vol_struct
+            stats%Imom    = Imom 
+            stats%lengths = lengths
+            stats%axes    = axes
+         end if 
 
       end subroutine compute_struct_stats
 
@@ -439,7 +441,7 @@ contains
 
       ! Initialize our VOF solver and field
       create_and_initialize_vof: block
-         use vfs_class, only:lvira,plicnet,remap_storage,VFhi,VFlo
+         use vfs_class, only:elvira,plicnet,remap_storage,VFhi,VFlo
          use mms_geom, only: cube_refine_vol
          use MPI, only: MPI_INTEGER,MPI_MAX
          real(WP), dimension(3,8) :: cube_vertex
@@ -449,7 +451,7 @@ contains
          integer :: i,j,k,n,si,sj,sk
          integer :: ierr
          ! Create a VOF solver with r2p reconstruction
-         call vf%initialize(cfg=cfg,reconstruction_method=lvira,transport_method=remap_storage,name='VOF')
+         call vf%initialize(cfg=cfg,reconstruction_method=elvira,transport_method=remap_storage,name='VOF')
          ! Create structure tracker
          call strack%initialize(vf=vf,phase=0,make_label=label_liquid,name='diesel_jet')
          ! Initialize the jet coming into the domain
@@ -460,35 +462,20 @@ contains
             call df%pull(name='VF',var=vf%VF)
             call df%pull(name='id',var=strack%id)
 
-            do k=vf%cfg%kmino_,vf%cfg%kmaxo_
-               do j=vf%cfg%jmino_,vf%cfg%jmaxo_
-                  do i=vf%cfg%imino_,vf%cfg%imaxo_
-                     
-                     ! Define VOF at inlet
-                     d=sqrt(vf%cfg%ym(j)**2+vf%cfg%zm(k)**2)
-                     if (i.lt.vf%cfg%imin.and.d.le.radius) vf%VF(i,j,k)=1.0_WP
-                     ! Call adaptive refinement code to get volume and barycenters recursively                     
-                     if (vf%VF(i,j,k).ge.VFlo.and.vf%VF(i,j,k).le.VFhi) then
-                        ! Set cube vertices
-                        n=0
-                        do sk=0,1
-                           do sj=0,1
-                              do si=0,1
-                                 n=n+1; cube_vertex(:,n)=[vf%cfg%x(i+si),vf%cfg%y(j+sj),vf%cfg%z(k+sk)]
-                              end do
-                           end do
-                        end do
-                        vol=0.0_WP; area=0.0_WP; v_cent=0.0_WP; a_cent=0.0_WP
-                        call cube_refine_vol(cube_vertex,vol,area,v_cent,a_cent,levelset_jet,0.0_WP,amr_ref_lvl)
-                        vf%Lbary(:,i,j,k)=v_cent
-                        vf%Gbary(:,i,j,k)=([vf%cfg%xm(i),vf%cfg%ym(j),vf%cfg%zm(k)]-vf%VF(i,j,k)*vf%Lbary(:,i,j,k))/(1.0_WP-vf%VF(i,j,k))
-                     else
-                        vf%Lbary(:,i,j,k)=[vf%cfg%xm(i),vf%cfg%ym(j),vf%cfg%zm(k)]
-                        vf%Gbary(:,i,j,k)=[vf%cfg%xm(i),vf%cfg%ym(j),vf%cfg%zm(k)]
-                     end if
+            ! Define VOF at inlet
+            if (cfg%iproc.eq.1) then  
+               do k=vf%cfg%kmino_,vf%cfg%kmaxo_
+                  do j=vf%cfg%jmino_,vf%cfg%jmaxo_
+                     do i=vf%cfg%imino_,vf%cfg%imaxo_ 
+                        d=sqrt(vf%cfg%ym(j)**2+vf%cfg%zm(k)**2)
+                        if (i.lt.vf%cfg%imin .and. d.le.radius) then 
+                           vf%VF(i,j,k)=1.0_WP
+                           strack%id(i,j,k) = 1
+                        end if 
+                     end do 
                   end do 
                end do 
-            end do 
+            end if 
 
             ! Initialize id counter to be consistent with id's
             strack%idcount=maxval(strack%id)
