@@ -13,7 +13,7 @@ Max timestep size : 0.002
 Max time : 10
 
 # Regriding
-Steps between regrid : 20
+Steps between regrid : 5
 
 # Output
 Ensight output period : 0.1

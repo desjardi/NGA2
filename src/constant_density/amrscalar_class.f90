@@ -3,7 +3,7 @@ module amrscalar_class
    use precision,        only: WP
    use string,           only: str_medium
    use amrconfig_class,  only: amrconfig
-   use amrex_amr_module, only: amrex_multifab
+   use amrex_amr_module, only: amrex_multifab,amrex_fluxregister
    implicit none
    private
    
@@ -27,6 +27,9 @@ module amrscalar_class
       type(amrex_multifab), dimension(:), allocatable :: SC          !< SC multifab array
       type(amrex_multifab), dimension(:), allocatable :: SCold       !< Old SC multifab array
       
+      ! Flux register for interlevel conservation
+      type(amrex_fluxregister), dimension(:), allocatable :: Freg    !< Flux register
+
       ! Boundary conditions at domain boundaries
       integer, dimension(:,:), allocatable :: lo_bc                  !< Boundary condition descriptor in minus direction
       integer, dimension(:,:), allocatable :: hi_bc                  !< Boundary condition descriptor in plus direction
@@ -77,6 +80,7 @@ contains
       ! Allocate variables
       allocate(this%SC   (0:this%amr%nlvl))
       allocate(this%SCold(0:this%amr%nlvl))
+      allocate(this%Freg (0:this%amr%nlvl))
       
       ! Set the number of scalars
       this%nscalar=nscalar
@@ -113,15 +117,16 @@ contains
 
    !> Finalization for amrscalar solver
    impure elemental subroutine finalize(this)
-      use amrex_amr_module, only: amrex_multifab_destroy
+      use amrex_amr_module, only: amrex_multifab_destroy,amrex_fluxregister_destroy
       implicit none
       class(amrscalar), intent(inout) :: this
-      integer :: n
-      do n=0,this%amr%nlvl
-         call amrex_multifab_destroy(this%SC   (n))
-         call amrex_multifab_destroy(this%SCold(n))
+      integer :: lvl
+      do lvl=0,this%amr%nlvl
+         call amrex_multifab_destroy(this%SC   (lvl))
+         call amrex_multifab_destroy(this%SCold(lvl))
+         call amrex_fluxregister_destroy(this%Freg(lvl))
       end do
-      deallocate(this%SC,this%SCold)
+      deallocate(this%SC,this%SCold,this%Freg)
       deallocate(this%SCmax,this%SCmin,this%SCint,this%lo_bc,this%hi_bc,this%SCname)
       nullify(this%amr)
    end subroutine finalize
@@ -242,18 +247,19 @@ contains
    
    !> Delete solver data at level lvl
    subroutine delete(this,lvl)
-      use amrex_amr_module, only: amrex_multifab_destroy
+      use amrex_amr_module, only: amrex_multifab_destroy,amrex_fluxregister_destroy
       implicit none
       class(amrscalar), intent(inout) :: this
       integer, intent(in) :: lvl
       call amrex_multifab_destroy(this%SC   (lvl))
       call amrex_multifab_destroy(this%SCold(lvl))
+      call amrex_fluxregister_destroy(this%Freg(lvl))
    end subroutine delete
    
    
    !> Create solver data at level lvl
    subroutine create(this,lvl,time,ba,dm)
-      use amrex_amr_module, only: amrex_multifab_build,amrex_boxarray,amrex_distromap
+      use amrex_amr_module, only: amrex_multifab_build,amrex_boxarray,amrex_distromap,amrex_fluxregister_build
       implicit none
       class(amrscalar), intent(inout) :: this
       integer,  intent(in) :: lvl
@@ -265,6 +271,8 @@ contains
       ! Rebuild level
       call amrex_multifab_build(this%SC   (lvl),ba,dm,this%nscalar,0)
       call amrex_multifab_build(this%SCold(lvl),ba,dm,this%nscalar,0)
+      ! Create flux register
+      if (lvl.gt.0) call amrex_fluxregister_build(this%Freg(lvl),ba,dm,this%amr%rref(lvl-1),lvl,this%nscalar)
    end subroutine create
    
    
