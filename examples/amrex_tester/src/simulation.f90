@@ -22,7 +22,7 @@ module simulation
    type(amrscalar)   :: sc
 
    !> Work multifabs
-   type(amrex_multifab) :: U,V,W,resSC
+   type(amrex_multifab) :: U,V,W,resSC,SCmid
    
    !> Event for regriding
    type(event) :: rgd_evt
@@ -68,10 +68,10 @@ contains
          do while (mfi%next())
             bx=mfi%tilebox()
             mySC=>sc%SC(lvl)%dataptr(mfi)
-            ! Loop inside box with overlap
-            do k=bx%lo(3)-sc%nover,bx%hi(3)+sc%nover
-               do j=bx%lo(2)-sc%nover,bx%hi(2)+sc%nover
-                  do i=bx%lo(1)-sc%nover,bx%hi(1)+sc%nover
+            ! Loop inside box
+            do k=bx%lo(3),bx%hi(3)
+               do j=bx%lo(2),bx%hi(2)
+                  do i=bx%lo(1),bx%hi(1)
                      ! Get position
                      x=sc%amr%xlo+(real(i,WP)+0.5_WP)*sc%amr%dx(lvl)
                      y=sc%amr%ylo+(real(j,WP)+0.5_WP)*sc%amr%dy(lvl)
@@ -216,7 +216,7 @@ contains
          call param_read('Max timestep size',time%dtmax)
          call param_read('Max time',time%tmax)
          time%dt=time%dtmax
-         time%itmax=1
+         time%itmax=2
       end block initialize_timetracker
       
       ! Create scalar solver
@@ -287,102 +287,109 @@ contains
          !call time%adjust_dt()
          call time%increment()
          
-         ! Traverse active levels successively
-         do lvl=0,amr%clvl()
+         ! Remember old scalar
+         call sc%copy2old()
+         
+         ! Perform sub-iterations
+         do while (time%it.le.time%itmax)
+            
+            ! Traverse active levels successively
+            do lvl=0,amr%clvl()
+               
+               ! Create velocity field
+               update_velocity: block
+                  use amrex_amr_module, only: amrex_mfiter,amrex_box,amrex_fab,amrex_fab_destroy
+                  use mathtools,        only: Pi
+                  type(amrex_mfiter) :: mfi
+                  type(amrex_box)    :: bx,tbx
+                  type(amrex_fab)    :: stream
+                  real(WP), dimension(:,:,:,:), contiguous, pointer :: pU,pV,pW,psi
+                  real(WP) :: x,y,z
+                  integer :: i,j,k
+                  ! Recreate velocity mfabs
+                  call amr%mfab_destroy(U); call amr%mfab_build(lvl,U,ncomp=1,nover=0,atface=[.true. ,.false.,.false.])
+                  call amr%mfab_destroy(V); call amr%mfab_build(lvl,V,ncomp=1,nover=0,atface=[.false.,.true. ,.false.])
+                  call amr%mfab_destroy(W); call amr%mfab_build(lvl,W,ncomp=1,nover=0,atface=[.false.,.false.,.true. ])
+                  ! Build an mfiter at our level
+                  call amr%mfiter_build(lvl,mfi)
+                  do while (mfi%next())
+                     bx=mfi%tilebox()
+                     pU=>U%dataptr(mfi)
+                     pV=>V%dataptr(mfi)
+                     pW=>W%dataptr(mfi)
+                     ! Create streamfunction for our vortex on a larger box
+                     tbx=bx; call tbx%grow(1)
+                     call stream%resize(tbx,1); psi=>stream%dataptr()
+                     do k=tbx%lo(3),tbx%hi(3)
+                        do j=tbx%lo(2),tbx%hi(2)
+                           do i=tbx%lo(1),tbx%hi(1)
+                              ! Get position
+                              x=amr%xlo+(real(i,WP)+0.5_WP)*amr%dx(lvl)
+                              y=amr%ylo+(real(j,WP)+0.5_WP)*amr%dy(lvl)
+                              z=amr%zlo+(real(k,WP)+0.5_WP)*amr%dz(lvl)
+                              ! Evaluate streamfunction
+                              psi(i,j,k,1)=sin(Pi*x)**2*sin(Pi*y)**2*cos(Pi*time%tmid/10.0_WP)*(1.0_WP/Pi)
+                           end do
+                        end do
+                     end do
+                     ! Loop on the x face and compute U=-d(psi)/dy
+                     do k=bx%lo(3),bx%hi(3)
+                        do j=bx%lo(2),bx%hi(2)
+                           do i=bx%lo(1),bx%hi(1)+1
+                              pU(i,j,k,1)=-((psi(i,j+1,k,1)+psi(i-1,j+1,k,1))-(psi(i,j-1,k,1)+psi(i-1,j-1,k,1)))*(0.25_WP/amr%dy(lvl))
+                           end do
+                        end do
+                     end do
+                     ! Loop on the y face and compute V=+d(psi)/dz
+                     do k=bx%lo(3),bx%hi(3)
+                        do j=bx%lo(2),bx%hi(2)+1
+                           do i=bx%lo(1),bx%hi(1)
+                              pV(i,j,k,1)=+((psi(i+1,j,k,1)+psi(i+1,j-1,k,1))-(psi(i-1,j,k,1)+psi(i-1,j-1,k,1)))*(0.25_WP/amr%dx(lvl))
+                           end do
+                        end do
+                     end do
+                     ! Loop on the z face and set W=1.0_WP
+                     do k=bx%lo(3),bx%hi(3)+1
+                        do j=bx%lo(2),bx%hi(2)
+                           do i=bx%lo(1),bx%hi(1)
+                              pW(i,j,k,1)=0.0_WP
+                           end do
+                        end do
+                     end do
+                  end do
+                  call amr%mfiter_destroy(mfi)
+                  ! Destroy streamfunction
+                  call amrex_fab_destroy(stream)
+               end block update_velocity
+               
+               ! Build resSC and SCmid multifabs
+               call amr%mfab_build(lvl,resSC,ncomp=sc%nscalar,nover=0)
+               call amr%mfab_build(lvl,SCmid,ncomp=sc%nscalar,nover=sc%nover)
+               
+               ! Build mid-time scalar: SCmid=0.5*(SC+SCold)
+               call sc%fill(lvl=lvl,time=time%tmid,SC=SCmid,told=time%told,tnew=time%t)
+               
+               ! Explicit calculation of dSC/dt from scalar transport equation
+               call sc%get_dSCdt(lvl=lvl,dSCdt=resSC,SC=SCmid,U=U,V=V,W=W)
+               
+               ! Advance scalar field: SC=SCold+dt*dSCdt
+               call sc%SC(lvl)%lincomb(a=1.0_WP ,srcmf1=sc%SCold(lvl),srccomp1=1,&
+               &                       b=time%dt,srcmf2=resSC        ,srccomp2=1,&
+               &                       dstcomp=1,nc=sc%nscalar,ng=0)
+               
+               ! Destroy multifabs
+               call amr%mfab_destroy(resSC)
+               call amr%mfab_destroy(SCmid)
 
-            ! Create velocity field
-            update_velocity: block
-               use amrex_amr_module, only: amrex_mfiter,amrex_box,amrex_fab,amrex_fab_destroy
-               use mathtools,        only: Pi
-               type(amrex_mfiter) :: mfi
-               type(amrex_box)    :: bx,tbx
-               type(amrex_fab)    :: stream
-               real(WP), dimension(:,:,:,:), contiguous, pointer :: pU,pV,pW,psi
-               real(WP) :: x,y,z
-               integer :: i,j,k
-               ! Recreate velocity mfabs
-               call amr%mfab_destroy(U); call amr%mfab_build(lvl,U,ncomp=1,nover=0,atface=[.true. ,.false.,.false.])
-               call amr%mfab_destroy(V); call amr%mfab_build(lvl,V,ncomp=1,nover=0,atface=[.false.,.true. ,.false.])
-               call amr%mfab_destroy(W); call amr%mfab_build(lvl,W,ncomp=1,nover=0,atface=[.false.,.false.,.true. ])
-               ! Build an mfiter at our level
-               call amr%mfiter_build(lvl,mfi)
-               do while (mfi%next())
-                  bx=mfi%tilebox()
-                  pU=>U%dataptr(mfi)
-                  pV=>V%dataptr(mfi)
-                  pW=>W%dataptr(mfi)
-                  ! Create streamfunction for our vortex on a larger box
-                  tbx=bx; call tbx%grow(1)
-                  call stream%resize(tbx,1); psi=>stream%dataptr()
-                  do k=tbx%lo(3),tbx%hi(3)
-                     do j=tbx%lo(2),tbx%hi(2)
-                        do i=tbx%lo(1),tbx%hi(1)
-                           ! Get position
-                           x=amr%xlo+(real(i,WP)+0.5_WP)*amr%dx(lvl)
-                           y=amr%ylo+(real(j,WP)+0.5_WP)*amr%dy(lvl)
-                           z=amr%zlo+(real(k,WP)+0.5_WP)*amr%dz(lvl)
-                           ! Evaluate streamfunction
-                           psi(i,j,k,1)=sin(Pi*x)**2*sin(Pi*y)**2*cos(Pi*time%t/10.0_WP)*(1.0_WP/Pi)
-                        end do
-                     end do
-                  end do
-                  ! Loop on the x face and compute U=-d(psi)/dy
-                  do k=bx%lo(3),bx%hi(3)
-                     do j=bx%lo(2),bx%hi(2)
-                        do i=bx%lo(1),bx%hi(1)+1
-                           pU(i,j,k,1)=-((psi(i,j+1,k,1)+psi(i-1,j+1,k,1))-(psi(i,j-1,k,1)+psi(i-1,j-1,k,1)))*(0.25_WP/amr%dy(lvl))
-                        end do
-                     end do
-                  end do
-                  ! Loop on the y face and compute V=+d(psi)/dz
-                  do k=bx%lo(3),bx%hi(3)
-                     do j=bx%lo(2),bx%hi(2)+1
-                        do i=bx%lo(1),bx%hi(1)
-                           pV(i,j,k,1)=+((psi(i+1,j,k,1)+psi(i+1,j-1,k,1))-(psi(i-1,j,k,1)+psi(i-1,j-1,k,1)))*(0.25_WP/amr%dx(lvl))
-                        end do
-                     end do
-                  end do
-                  ! Loop on the z face and set W=1.0_WP
-                  do k=bx%lo(3),bx%hi(3)+1
-                     do j=bx%lo(2),bx%hi(2)
-                        do i=bx%lo(1),bx%hi(1)
-                           pW(i,j,k,1)=0.0_WP
-                        end do
-                     end do
-                  end do
-               end do
-               call amr%mfiter_destroy(mfi)
-               ! Destroy streamfunction
-               call amrex_fab_destroy(stream)
-            end block update_velocity
-
-            ! Recreate resSC multifab
-            call amr%mfab_destroy(resSC); call amr%mfab_build(lvl,resSC,ncomp=sc%nscalar,nover=0)
+               ! Increment sub-iteration counter
+               time%it=time%it+1
+               
+            end do
             
-            ! Remember old scalar field: SCold=SC
-            call sc%SCold(lvl)%copy(srcmf=sc%SC(lvl),srccomp=1,&
-            &                       dstcomp=1,nc=sc%nscalar,ng=sc%nover)
-            
-            ! Build mid-time scalar: SC=0.5*(SC+SCold)
-            call sc%SC(lvl)%lincomb(a=0.5_WP,srcmf1=sc%SC   (lvl),srccomp1=1,&
-            &                       b=0.5_WP,srcmf2=sc%SCold(lvl),srccomp2=1,&
-            &                       dstcomp=1,nc=sc%nscalar,ng=sc%nover)
-            
-            ! Explicit calculation of dSC/dt from scalar transport equation
-            call sc%get_dSCdt(lvl=lvl,dSCdt=resSC,U=U,V=V,W=W)
-            
-            ! Advance scalar field: SC=SCold+dt*dSCdt
-            call sc%SC(lvl)%lincomb(a=1.0_WP ,srcmf1=sc%SCold(lvl),srccomp1=1,&
-            &                       b=time%dt,srcmf2=resSC        ,srccomp2=1,&
-            &                       dstcomp=1,nc=sc%nscalar,ng=0)
-            
-            ! Update overlap and boundary conditions
-            call sc%fill(lvl,time%t,sc%SC(lvl))
+            ! Enforce consistency between levels
+            call amr%average_down(sc%SC)
             
          end do
-         
-         ! Enforce consistency between levels
-         call amr%average_down(sc%SC)
          
          ! Regrid if needed
          if (rgd_evt%occurs()) then

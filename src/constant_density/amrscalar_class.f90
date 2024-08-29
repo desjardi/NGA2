@@ -50,7 +50,8 @@ module amrscalar_class
       procedure :: refine           !< Refine data at level (lvl) using cfill procedure
       procedure :: remake           !< Remake data at level (lvl) using  fill procedure
       procedure ::  cfill           !< Fill provided mfab at level (lvl) from this%SC at level (lvl-1)           - involves boundary conditions - done at a single time using this%SC
-      procedure ::   fill           !< Fill provided mfab at level (lvl) from this%SC at level (lvl-1) and (lvl) - involves boundary conditions - done at a single time using this%SC
+      procedure ::   fill           !< Fill provided mfab at level (lvl) from this%SC at level (lvl-1) and (lvl) - involves boundary conditions - done at two times using this%SC and this%SCold
+      procedure :: copy2old         !< Copy SC in SCold
    end type amrscalar
    
    
@@ -127,17 +128,17 @@ contains
    
    
    !> Calculate dSC/dt at level (lvl)
-   subroutine get_dSCdt(this,lvl,dSCdt,U,V,W)
+   subroutine get_dSCdt(this,lvl,dSCdt,SC,U,V,W)
       use amrex_amr_module, only: amrex_mfiter,amrex_box,amrex_fab,amrex_fab_destroy
       implicit none
       class(amrscalar), intent(inout) :: this
       integer, intent(in) :: lvl
       type(amrex_multifab), intent(inout) :: dSCdt
-      type(amrex_multifab), intent(in) :: U,V,W
+      type(amrex_multifab), intent(in) :: SC,U,V,W
       type(amrex_mfiter)    :: mfi
       type(amrex_box)       :: bx,tbx
       type(amrex_fab)       :: xflux,yflux,zflux
-      real(WP), dimension(:,:,:,:), contiguous, pointer :: rhs,SC
+      real(WP), dimension(:,:,:,:), contiguous, pointer :: rhs,pSC
       real(WP), dimension(:,:,:,:), contiguous, pointer :: FX,FY,FZ
       real(WP), dimension(:,:,:,:), contiguous, pointer :: pU,pV,pW
       integer :: i,j,k,nsc
@@ -148,8 +149,8 @@ contains
          bx=mfi%tilebox()
          
          ! Get SC and dSCdt data
-         SC =>this%SC(lvl)%dataptr(mfi)
-         rhs=>       dSCdt%dataptr(mfi)
+         pSC=>    SC%dataptr(mfi)
+         rhs=> dSCdt%dataptr(mfi)
          
          ! Get velocity data
          pU=>U%dataptr(mfi)
@@ -167,8 +168,8 @@ contains
             do k=bx%lo(3),bx%hi(3)
                do j=bx%lo(2),bx%hi(2)
                   do i=bx%lo(1),bx%hi(1)+1
-                     FX(i,j,k,1)=-0.5_WP*(pU(i,j,k,1)+abs(pU(i,j,k,1)))*(-1.0_WP/6.0_WP*SC(i-2,j,k,nsc)+5.0_WP/6.0_WP*SC(i-1,j,k,nsc)+2.0_WP/6.0_WP*SC(i  ,j,k,nsc)) &
-                     &           -0.5_WP*(pU(i,j,k,1)-abs(pU(i,j,k,1)))*(+2.0_WP/6.0_WP*SC(i-1,j,k,nsc)+5.0_WP/6.0_WP*SC(i  ,j,k,nsc)-1.0_WP/6.0_WP*SC(i+1,j,k,nsc))
+                     FX(i,j,k,1)=-0.5_WP*(pU(i,j,k,1)+abs(pU(i,j,k,1)))*(-1.0_WP/6.0_WP*pSC(i-2,j,k,nsc)+5.0_WP/6.0_WP*pSC(i-1,j,k,nsc)+2.0_WP/6.0_WP*pSC(i  ,j,k,nsc)) &
+                     &           -0.5_WP*(pU(i,j,k,1)-abs(pU(i,j,k,1)))*(+2.0_WP/6.0_WP*pSC(i-1,j,k,nsc)+5.0_WP/6.0_WP*pSC(i  ,j,k,nsc)-1.0_WP/6.0_WP*pSC(i+1,j,k,nsc))
                   end do
                end do
             end do
@@ -176,8 +177,8 @@ contains
             do k=bx%lo(3),bx%hi(3)
                do j=bx%lo(2),bx%hi(2)+1
                   do i=bx%lo(1),bx%hi(1)
-                     FY(i,j,k,1)=-0.5_WP*(pV(i,j,k,1)+abs(pV(i,j,k,1)))*(-1.0_WP/6.0_WP*SC(i,j-2,k,nsc)+5.0_WP/6.0_WP*SC(i,j-1,k,nsc)+2.0_WP/6.0_WP*SC(i,j  ,k,nsc)) &
-                     &           -0.5_WP*(pV(i,j,k,1)-abs(pV(i,j,k,1)))*(+2.0_WP/6.0_WP*SC(i,j-1,k,nsc)+5.0_WP/6.0_WP*SC(i,j  ,k,nsc)-1.0_WP/6.0_WP*SC(i,j+1,k,nsc))
+                     FY(i,j,k,1)=-0.5_WP*(pV(i,j,k,1)+abs(pV(i,j,k,1)))*(-1.0_WP/6.0_WP*pSC(i,j-2,k,nsc)+5.0_WP/6.0_WP*pSC(i,j-1,k,nsc)+2.0_WP/6.0_WP*pSC(i,j  ,k,nsc)) &
+                     &           -0.5_WP*(pV(i,j,k,1)-abs(pV(i,j,k,1)))*(+2.0_WP/6.0_WP*pSC(i,j-1,k,nsc)+5.0_WP/6.0_WP*pSC(i,j  ,k,nsc)-1.0_WP/6.0_WP*pSC(i,j+1,k,nsc))
                   end do
                end do
             end do
@@ -185,8 +186,8 @@ contains
             do k=bx%lo(3),bx%hi(3)+1
                do j=bx%lo(2),bx%hi(2)
                   do i=bx%lo(1),bx%hi(1)
-                     FZ(i,j,k,1)=-0.5_WP*(pW(i,j,k,1)+abs(pW(i,j,k,1)))*(-1.0_WP/6.0_WP*SC(i,j,k-2,nsc)+5.0_WP/6.0_WP*SC(i,j,k-1,nsc)+2.0_WP/6.0_WP*SC(i,j,k  ,nsc)) &
-                     &           -0.5_WP*(pW(i,j,k,1)-abs(pW(i,j,k,1)))*(+2.0_WP/6.0_WP*SC(i,j,k-1,nsc)+5.0_WP/6.0_WP*SC(i,j,k  ,nsc)-1.0_WP/6.0_WP*SC(i,j,k+1,nsc))
+                     FZ(i,j,k,1)=-0.5_WP*(pW(i,j,k,1)+abs(pW(i,j,k,1)))*(-1.0_WP/6.0_WP*pSC(i,j,k-2,nsc)+5.0_WP/6.0_WP*pSC(i,j,k-1,nsc)+2.0_WP/6.0_WP*pSC(i,j,k  ,nsc)) &
+                     &           -0.5_WP*(pW(i,j,k,1)-abs(pW(i,j,k,1)))*(+2.0_WP/6.0_WP*pSC(i,j,k-1,nsc)+5.0_WP/6.0_WP*pSC(i,j,k  ,nsc)-1.0_WP/6.0_WP*pSC(i,j,k+1,nsc))
                   end do
                end do
             end do
@@ -262,8 +263,8 @@ contains
       ! Delete level
       call this%delete(lvl)
       ! Rebuild level
-      call amrex_multifab_build(this%SC   (lvl),ba,dm,this%nscalar,this%nover)
-      call amrex_multifab_build(this%SCold(lvl),ba,dm,this%nscalar,this%nover)
+      call amrex_multifab_build(this%SC   (lvl),ba,dm,this%nscalar,0)
+      call amrex_multifab_build(this%SCold(lvl),ba,dm,this%nscalar,0)
    end subroutine create
    
    
@@ -294,12 +295,12 @@ contains
       type(amrex_distromap), intent(in) :: dm
       type(amrex_multifab) :: SCnew
       ! Create SCnew and populate it from current data
-      call amrex_multifab_build(SCnew,ba,dm,this%nscalar,this%nover)
+      call amrex_multifab_build(SCnew,ba,dm,this%nscalar,0)
       call this%fill(lvl,time,SCnew)
       ! Recreate level
       call this%create(lvl,time,ba,dm)
       ! Copy SCnew to SC
-      call this%SC(lvl)%copy(SCnew,1,1,this%nscalar,this%nover)
+      call this%SC(lvl)%copy(SCnew,1,1,this%nscalar,0)
       ! Destroy SCnew
       call amrex_multifab_destroy(SCnew)
    end subroutine remake
@@ -354,34 +355,51 @@ contains
 
 
    !> Fill provided mfab at level (lvl) from this%SC at level (lvl-1) and (lvl)
-   subroutine fill(this,lvl,time,SC)
+   subroutine fill(this,lvl,time,SC,tnew,told)
+      use messager,         only: die
       use amrex_amr_module, only: amrex_multifab,amrex_fillpatch,amrex_interp_cell_cons
       implicit none
       class(amrscalar), intent(inout) :: this
       integer, intent(in) :: lvl
       real(WP), intent(in) :: time
       type(amrex_multifab), intent(inout) :: SC
+      real(WP), intent(in), optional :: tnew,told
+      real(WP) :: new_time,old_time
+      ! Handle time info
+      if (present(told).and.present(tnew)) then
+         ! Use both SC and SCold to populate mfab
+         new_time=tnew
+         old_time=told
+      else if (.not.present(told).and..not.present(tnew)) then
+         ! Only use SC to populate mfab
+         new_time=time
+         old_time=time-1.0e200_WP
+      else
+         ! One is provided but not the other...
+         call die('[amrscalar fill] tnew and told must be either both provided or both ignored')
+      end if
+      ! Fill mfab
       if (lvl.eq.0) then
          ! Fill without interpolation, just direct copy and bconds
-         call amrex_fillpatch(          SC,&  !< base data being filled...
-         &               time,this%SC(lvl),&  !< using base data at old time...
-         &               time,this%SC(lvl),&  !<   and base data at new time...
-         &       this%amr%geom(lvl),fillbc,&  !< base geometry with function to apply bconds...
-         &        time,1,1,this%SC(lvl)%nc)   !< time when we want the data, scomp, dcomp, ncomp
+         call amrex_fillpatch(             SC,&  !< base data being filled...
+         &           old_time,this%SCold(lvl),&  !< using base data at old time...
+         &           new_time,this%SC   (lvl),&  !<   and base data at new time...
+         &          this%amr%geom(lvl),fillbc,&  !< base geometry with function to apply bconds...
+         &              time,1,1,this%nscalar)   !< time when we want the data, scomp, dcomp, ncomp
          ! Unclear why lo_bc and hi_bc aren't involved here...
       else
          ! Fill with a mix of interpolation, direct copy and bconds
-         call amrex_fillpatch(          SC,&  !< fine data being filled...
-         &             time,this%SC(lvl-1),&  !< using coarse data at old time...
-         &             time,this%SC(lvl-1),&  !<   and coarse data at new time...
-         &     this%amr%geom(lvl-1),fillbc,&  !< coarse geometry with function to apply bconds...
-         &             time,this%SC(lvl  ),&  !<     and fine data at old time...
-         &             time,this%SC(lvl  ),&  !<     and fine data at new time...
-         &     this%amr%geom(lvl  ),fillbc,&  !<   fine geometry with function to apply bconds...
-         &        time,1,1,this%SC(lvl)%nc,&  !< time when we want the data, scomp, dcomp, ncomp...
-         &            this%amr%rref(lvl-1),&  !< refinement ratio between the levels...
-         &                     this%interp,&  !< interpolation strategy...
-         &           this%lo_bc,this%hi_bc)   !< domain bconds
+         call amrex_fillpatch(             SC,&  !< fine data being filled...
+         &         old_time,this%SCold(lvl-1),&  !< using coarse data at old time...
+         &         new_time,this%SC   (lvl-1),&  !<   and coarse data at new time...
+         &        this%amr%geom(lvl-1),fillbc,&  !< coarse geometry with function to apply bconds...
+         &         old_time,this%SCold(lvl  ),&  !<     and fine data at old time...
+         &         new_time,this%SC   (lvl  ),&  !<     and fine data at new time...
+         &        this%amr%geom(lvl  ),fillbc,&  !<   fine geometry with function to apply bconds...
+         &              time,1,1,this%nscalar,&  !< time when we want the data, scomp, dcomp, ncomp...
+         &               this%amr%rref(lvl-1),&  !< refinement ratio between the levels...
+         &                        this%interp,&  !< interpolation strategy...
+         &              this%lo_bc,this%hi_bc)   !< domain bconds
       end if
    contains
       subroutine fillbc(pmf,scomp,ncomp,t,pgeom) bind(c)
@@ -412,6 +430,18 @@ contains
          ! This will need hooks for user-provided BCs
       end subroutine fillbc
    end subroutine fill
+   
+   
+   !> Copy SC in SCold
+   subroutine copy2old(this)
+      implicit none
+      class(amrscalar), intent(inout) :: this
+      integer :: lvl
+      ! Loop over all levels
+      do lvl=0,this%amr%clvl()
+         call this%SCold(lvl)%copy(srcmf=this%SC(lvl),srccomp=1,dstcomp=1,nc=this%nscalar,ng=0)
+      end do
+   end subroutine copy2old
    
    
 end module amrscalar_class
