@@ -55,6 +55,8 @@ module amrscalar_class
       procedure ::  cfill           !< Fill provided mfab at level (lvl) from this%SC at level (lvl-1)           - involves boundary conditions - done at a single time using this%SC
       procedure ::   fill           !< Fill provided mfab at level (lvl) from this%SC at level (lvl-1) and (lvl) - involves boundary conditions - done at two times using this%SC and this%SCold
       procedure :: copy2old         !< Copy SC in SCold
+      procedure :: reflux_avg_lvl   !< Perform refluxing and averaging at a given level
+      procedure :: reflux_avg       !< Perform successive refluxing and averaging at all levels
    end type amrscalar
    
    
@@ -142,11 +144,16 @@ contains
       type(amrex_multifab), intent(in) :: SC,U,V,W
       type(amrex_mfiter)    :: mfi
       type(amrex_box)       :: bx,tbx
-      type(amrex_fab)       :: xflux,yflux,zflux
+      type(amrex_multifab), dimension(3) :: flux
       real(WP), dimension(:,:,:,:), contiguous, pointer :: rhs,pSC
       real(WP), dimension(:,:,:,:), contiguous, pointer :: FX,FY,FZ
       real(WP), dimension(:,:,:,:), contiguous, pointer :: pU,pV,pW
       integer :: i,j,k,nsc
+      
+      ! Prepare flux multifabs
+      call this%amr%mfab_build(lvl=lvl,mfab=flux(1),ncomp=this%nscalar,nover=0,atface=[.true. ,.false.,.false.])
+      call this%amr%mfab_build(lvl=lvl,mfab=flux(2),ncomp=this%nscalar,nover=0,atface=[.false.,.true. ,.false.])
+      call this%amr%mfab_build(lvl=lvl,mfab=flux(3),ncomp=this%nscalar,nover=0,atface=[.false.,.false.,.true. ])
       
       ! Loop over boxes - no tiling for now
       call this%amr%mfiter_build(lvl,mfi)
@@ -162,10 +169,10 @@ contains
          pV=>V%dataptr(mfi)
          pW=>W%dataptr(mfi)
          
-         ! Prepare face flux storage
-         tbx=bx; call tbx%nodalize(1); call xflux%resize(tbx,1); FX=>xflux%dataptr()
-         tbx=bx; call tbx%nodalize(2); call yflux%resize(tbx,1); FY=>yflux%dataptr()
-         tbx=bx; call tbx%nodalize(3); call zflux%resize(tbx,1); FZ=>zflux%dataptr()
+         ! Get face flux
+         FX=>flux(1)%dataptr(mfi)
+         FY=>flux(2)%dataptr(mfi)
+         FZ=>flux(3)%dataptr(mfi)
          
          ! Calculate fluxes for all components
          do nsc=1,this%nscalar
@@ -173,8 +180,8 @@ contains
             do k=bx%lo(3),bx%hi(3)
                do j=bx%lo(2),bx%hi(2)
                   do i=bx%lo(1),bx%hi(1)+1
-                     FX(i,j,k,1)=-0.5_WP*(pU(i,j,k,1)+abs(pU(i,j,k,1)))*(-1.0_WP/6.0_WP*pSC(i-2,j,k,nsc)+5.0_WP/6.0_WP*pSC(i-1,j,k,nsc)+2.0_WP/6.0_WP*pSC(i  ,j,k,nsc)) &
-                     &           -0.5_WP*(pU(i,j,k,1)-abs(pU(i,j,k,1)))*(+2.0_WP/6.0_WP*pSC(i-1,j,k,nsc)+5.0_WP/6.0_WP*pSC(i  ,j,k,nsc)-1.0_WP/6.0_WP*pSC(i+1,j,k,nsc))
+                     FX(i,j,k,nsc)=-0.5_WP*(pU(i,j,k,1)+abs(pU(i,j,k,1)))*(-1.0_WP/6.0_WP*pSC(i-2,j,k,nsc)+5.0_WP/6.0_WP*pSC(i-1,j,k,nsc)+2.0_WP/6.0_WP*pSC(i  ,j,k,nsc)) &
+                     &             -0.5_WP*(pU(i,j,k,1)-abs(pU(i,j,k,1)))*(+2.0_WP/6.0_WP*pSC(i-1,j,k,nsc)+5.0_WP/6.0_WP*pSC(i  ,j,k,nsc)-1.0_WP/6.0_WP*pSC(i+1,j,k,nsc))
                   end do
                end do
             end do
@@ -182,8 +189,8 @@ contains
             do k=bx%lo(3),bx%hi(3)
                do j=bx%lo(2),bx%hi(2)+1
                   do i=bx%lo(1),bx%hi(1)
-                     FY(i,j,k,1)=-0.5_WP*(pV(i,j,k,1)+abs(pV(i,j,k,1)))*(-1.0_WP/6.0_WP*pSC(i,j-2,k,nsc)+5.0_WP/6.0_WP*pSC(i,j-1,k,nsc)+2.0_WP/6.0_WP*pSC(i,j  ,k,nsc)) &
-                     &           -0.5_WP*(pV(i,j,k,1)-abs(pV(i,j,k,1)))*(+2.0_WP/6.0_WP*pSC(i,j-1,k,nsc)+5.0_WP/6.0_WP*pSC(i,j  ,k,nsc)-1.0_WP/6.0_WP*pSC(i,j+1,k,nsc))
+                     FY(i,j,k,nsc)=-0.5_WP*(pV(i,j,k,1)+abs(pV(i,j,k,1)))*(-1.0_WP/6.0_WP*pSC(i,j-2,k,nsc)+5.0_WP/6.0_WP*pSC(i,j-1,k,nsc)+2.0_WP/6.0_WP*pSC(i,j  ,k,nsc)) &
+                     &             -0.5_WP*(pV(i,j,k,1)-abs(pV(i,j,k,1)))*(+2.0_WP/6.0_WP*pSC(i,j-1,k,nsc)+5.0_WP/6.0_WP*pSC(i,j  ,k,nsc)-1.0_WP/6.0_WP*pSC(i,j+1,k,nsc))
                   end do
                end do
             end do
@@ -191,8 +198,8 @@ contains
             do k=bx%lo(3),bx%hi(3)+1
                do j=bx%lo(2),bx%hi(2)
                   do i=bx%lo(1),bx%hi(1)
-                     FZ(i,j,k,1)=-0.5_WP*(pW(i,j,k,1)+abs(pW(i,j,k,1)))*(-1.0_WP/6.0_WP*pSC(i,j,k-2,nsc)+5.0_WP/6.0_WP*pSC(i,j,k-1,nsc)+2.0_WP/6.0_WP*pSC(i,j,k  ,nsc)) &
-                     &           -0.5_WP*(pW(i,j,k,1)-abs(pW(i,j,k,1)))*(+2.0_WP/6.0_WP*pSC(i,j,k-1,nsc)+5.0_WP/6.0_WP*pSC(i,j,k  ,nsc)-1.0_WP/6.0_WP*pSC(i,j,k+1,nsc))
+                     FZ(i,j,k,nsc)=-0.5_WP*(pW(i,j,k,1)+abs(pW(i,j,k,1)))*(-1.0_WP/6.0_WP*pSC(i,j,k-2,nsc)+5.0_WP/6.0_WP*pSC(i,j,k-1,nsc)+2.0_WP/6.0_WP*pSC(i,j,k  ,nsc)) &
+                     &             -0.5_WP*(pW(i,j,k,1)-abs(pW(i,j,k,1)))*(+2.0_WP/6.0_WP*pSC(i,j,k-1,nsc)+5.0_WP/6.0_WP*pSC(i,j,k  ,nsc)-1.0_WP/6.0_WP*pSC(i,j,k+1,nsc))
                   end do
                end do
             end do
@@ -200,21 +207,28 @@ contains
             do k=bx%lo(3),bx%hi(3)
                do j=bx%lo(2),bx%hi(2)
                   do i=bx%lo(1),bx%hi(1)
-                     rhs(i,j,k,nsc)=(FX(i+1,j,k,1)-FX(i,j,k,1))/this%amr%dx(lvl)+&
-                     &              (FY(i,j+1,k,1)-FY(i,j,k,1))/this%amr%dy(lvl)+&
-                     &              (FZ(i,j,k+1,1)-FZ(i,j,k,1))/this%amr%dz(lvl)
+                     rhs(i,j,k,nsc)=(FX(i+1,j,k,nsc)-FX(i,j,k,nsc))/this%amr%dx(lvl)+&
+                     &              (FY(i,j+1,k,nsc)-FY(i,j,k,nsc))/this%amr%dy(lvl)+&
+                     &              (FZ(i,j,k+1,nsc)-FZ(i,j,k,nsc))/this%amr%dz(lvl)
                   end do
                end do
             end do
          end do
-         
+         ! Rescale fluxes by face area for later refluxing
+         FX=FX*this%amr%dy(lvl)*this%amr%dz(lvl)
+         FY=FY*this%amr%dz(lvl)*this%amr%dx(lvl)
+         FZ=FZ*this%amr%dx(lvl)*this%amr%dy(lvl)
       end do
       call this%amr%mfiter_destroy(mfi)
       
+      ! Handle refluxing
+      if (lvl.gt.0)               call this%Freg(lvl  )%fineadd (flux,-1.0_WP)
+      if (lvl.lt.this%amr%clvl()) call this%Freg(lvl+1)%crseinit(flux,+1.0_WP)
+      
       ! Deallocate flux storage
-      call amrex_fab_destroy(xflux)
-      call amrex_fab_destroy(yflux)
-      call amrex_fab_destroy(zflux)
+      call this%amr%mfab_destroy(flux(1))
+      call this%amr%mfab_destroy(flux(2))
+      call this%amr%mfab_destroy(flux(3))
       
    end subroutine get_dSCdt
    
@@ -450,6 +464,39 @@ contains
          call this%SCold(lvl)%copy(srcmf=this%SC(lvl),srccomp=1,dstcomp=1,nc=this%nscalar,ng=0)
       end do
    end subroutine copy2old
+   
+   
+   !> Perform successive refluxing and averaging at a level
+   subroutine reflux_avg_lvl(this,lvl,dt)
+      use iso_c_binding, only: c_ptr
+      implicit none
+      class(amrscalar), intent(inout) :: this
+      real(WP), intent(in) :: dt
+      integer :: lvl
+      interface
+         subroutine amrex_fi_fluxregister_reflux (fr,mf,scale,geom) bind(c)
+            import :: c_ptr,WP
+            implicit none
+            type(c_ptr), value :: fr,mf,geom
+            real(WP), value :: scale
+         end subroutine amrex_fi_fluxregister_reflux
+      end interface
+      call amrex_fi_fluxregister_reflux(this%Freg(lvl+1)%p,this%SC(lvl)%p,dt,this%amr%geom(lvl)%p)
+      call this%amr%average_downto(this%SC,lvl)
+   end subroutine reflux_avg_lvl
+   
+
+   !> Perform successive refluxing and averaging at all levels
+   subroutine reflux_avg(this,dt)
+      implicit none
+      class(amrscalar), intent(inout) :: this
+      real(WP), intent(in) :: dt
+      integer :: lvl
+      ! Loop over all levels except last one
+      do lvl=this%amr%clvl()-1,0,-1
+         call this%reflux_avg_lvl(lvl,dt)
+      end do
+   end subroutine reflux_avg
    
    
 end module amrscalar_class

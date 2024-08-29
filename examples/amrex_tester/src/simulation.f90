@@ -380,14 +380,14 @@ contains
                ! Destroy multifabs
                call amr%mfab_destroy(resSC)
                call amr%mfab_destroy(SCmid)
-
+               
                ! Increment sub-iteration counter
                time%it=time%it+1
                
             end do
             
-            ! Enforce consistency between levels
-            call amr%average_down(sc%SC)
+            ! Traverse all levels and reflux/average
+            call sc%reflux_avg(dt=time%dt)
             
          end do
          

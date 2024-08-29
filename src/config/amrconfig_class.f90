@@ -478,26 +478,26 @@ contains
    
    
    !> Average down entire multifab array
-   subroutine average_down(this,mfab)
+   subroutine average_down(this,mfaba)
       use amrex_amr_module, only: amrex_multifab,amrex_average_down
       implicit none
       class(amrconfig), intent(inout) :: this
-      type(amrex_multifab), dimension(0:) :: mfab
+      type(amrex_multifab), dimension(0:) :: mfaba
       integer :: n
       do n=this%clvl()-1,0,-1
-         call amrex_average_down(mfab(n+1),mfab(n),this%geom(n+1),this%geom(n),1,mfab(0)%nc,this%rref(n))
+         call amrex_average_down(mfaba(n+1),mfaba(n),this%geom(n+1),this%geom(n),1,mfaba(0)%nc,this%rref(n))
       end do
    end subroutine average_down
    
    
    !> Average entire multifab array down to level lvl
-   subroutine average_downto(this,mfab,lvl)
+   subroutine average_downto(this,mfaba,lvl)
       use amrex_amr_module, only: amrex_multifab,amrex_average_down
       implicit none
       class(amrconfig), intent(inout) :: this
-      type(amrex_multifab), dimension(0:) :: mfab
+      type(amrex_multifab), dimension(0:) :: mfaba
       integer, intent(in) :: lvl
-      call amrex_average_down(mfab(lvl+1),mfab(lvl),this%geom(lvl+1),this%geom(lvl),1,mfab(0)%nc,this%rref(lvl))
+      call amrex_average_down(mfaba(lvl+1),mfaba(lvl),this%geom(lvl+1),this%geom(lvl),1,mfaba(0)%nc,this%rref(lvl))
    end subroutine average_downto
    
    
