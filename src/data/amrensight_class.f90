@@ -3,10 +3,11 @@
 module amrensight_class
    use precision,        only: WP
    use string,           only: str_medium
-   use amrconfig_class,  only: amrconfig,amrdata
+   use amrconfig_class,  only: amrconfig
    use mpi_f08,          only: MPI_Datatype
    use surfmesh_class,   only: surfmesh
    !use partmesh_class,   only: partmesh
+   use amrex_amr_module, only: amrex_multifab,amrex_imultifab
    implicit none
    private
    
@@ -18,15 +19,16 @@ module amrensight_class
       type(scl), pointer :: next
       character(len=str_medium) :: name
       integer :: comp
-      type(amrdata), pointer :: ptr=>NULL()
+      type(amrex_multifab) , dimension(:), pointer :: rptr=>NULL()  !< real(WP) data
+      type(amrex_imultifab), dimension(:), pointer :: iptr=>NULL()  !< integer  data
    end type scl
    type :: vct !< Vector field
       type(vct), pointer :: next
       character(len=str_medium) :: name
       integer :: compx,compy,compz
-      type(amrdata), pointer :: ptrx=>NULL()
-      type(amrdata), pointer :: ptry=>NULL()
-      type(amrdata), pointer :: ptrz=>NULL()
+      type(amrex_multifab) , dimension(:), pointer :: ptrx=>NULL()
+      type(amrex_multifab) , dimension(:), pointer :: ptry=>NULL()
+      type(amrex_multifab) , dimension(:), pointer :: ptrz=>NULL()
    end type vct
    type :: srf !< Surface mesh
       type(srf), pointer :: next
@@ -65,8 +67,9 @@ module amrensight_class
       procedure :: write_vector                                       !< Write out vector file
       procedure :: write_surf                                         !< Write out surface mesh file
       !procedure :: write_part                                         !< Write out particle mesh file
-      generic :: add_scalar=>add_rscalar                              !< Add a new scalar field
+      generic :: add_scalar=>add_rscalar,add_iscalar                  !< Add a new scalar field
       procedure, private :: add_rscalar                               !< Add a new real(WP) scalar field
+      procedure, private :: add_iscalar                               !< Add a new integer  scalar field
       procedure :: add_vector                                         !< Add a new vector field
       procedure :: add_surface                                        !< Add a new surface mesh
       !procedure :: add_particle                                       !< Add a new particle mesh
@@ -193,18 +196,19 @@ contains
       implicit none
       class(amrensight), intent(inout) :: this
       character(len=*), intent(in) :: name
-      type(amrdata), target, intent(in) :: scalar
+      type(amrex_multifab), dimension(0:), target, intent(in) :: scalar
       integer, intent(in) :: comp
       type(scl), pointer :: new_scl
       integer :: n
       ! Check that the component is meaningful
       if (comp.le.0) call die('[amrensight add_rscalar] comp must be at least one')
-      if (comp.gt.scalar%data(0)%nc) call die('[amrensight add_rscalar] comp is too large for provided scalar mfab')
+      if (comp.gt.scalar(0)%nc) call die('[amrensight add_rscalar] comp is too large for provided scalar mfab')
       ! Prepare new scalar
       allocate(new_scl)
       new_scl%name=trim(adjustl(name))
       new_scl%comp=comp
-      new_scl%ptr=>scalar
+      new_scl%rptr(0:)=>scalar
+      new_scl%iptr=>NULL()
       ! Insert it up front
       new_scl%next=>this%first_scl
       ! Point list to new object
@@ -219,6 +223,40 @@ contains
    end subroutine add_rscalar
    
    
+   !> Add an integer scalar field for output
+   subroutine add_iscalar(this,name,scalar,comp)
+      use filesys,  only: makedir,isdir
+      use messager, only: die
+      implicit none
+      class(amrensight), intent(inout) :: this
+      character(len=*), intent(in) :: name
+      type(amrex_imultifab), dimension(0:), target, intent(in) :: scalar
+      integer, intent(in) :: comp
+      type(scl), pointer :: new_scl
+      integer :: n
+      ! Check that the component is meaningful
+      if (comp.le.0) call die('[amrensight add_iscalar] comp must be at least one')
+      if (comp.gt.scalar(0)%nc) call die('[amrensight add_iscalar] comp is too large for provided scalar mfab')
+      ! Prepare new scalar
+      allocate(new_scl)
+      new_scl%name=trim(adjustl(name))
+      new_scl%comp=comp
+      new_scl%rptr=>NULL()
+      new_scl%iptr(0:)=>scalar
+      ! Insert it up front
+      new_scl%next=>this%first_scl
+      ! Point list to new object
+      this%first_scl=>new_scl
+      ! Also create the corresponding directories
+      if (this%amr%amRoot) then
+         do n=1,this%nlvlout
+            if (.not.isdir('ensight/'//trim(this%namelvl(n))//'/'//trim(new_scl%name))) &
+            & call makedir('ensight/'//trim(this%namelvl(n))//'/'//trim(new_scl%name))
+         end do
+      end if
+   end subroutine add_iscalar
+   
+   
    !> Add a vector field for output
    subroutine add_vector(this,name,vectx,compx,vecty,compy,vectz,compz)
       use filesys,  only: makedir,isdir
@@ -226,28 +264,28 @@ contains
       implicit none
       class(amrensight), intent(inout) :: this
       character(len=*), intent(in) :: name
-      type(amrdata), target, intent(in) :: vectx
-      type(amrdata), target, intent(in) :: vecty
-      type(amrdata), target, intent(in) :: vectz
+      type(amrex_multifab), dimension(0:), target, intent(in) :: vectx
+      type(amrex_multifab), dimension(0:), target, intent(in) :: vecty
+      type(amrex_multifab), dimension(0:), target, intent(in) :: vectz
       integer, intent(in) :: compx,compy,compz
       type(vct), pointer :: new_vct
       integer :: n
       ! Check that the component is meaningful
       if (compx.le.0) call die('[amrensight add_vector] compx must be at least one')
-      if (compx.gt.vectx%data(0)%nc) call die('[amrensight add_vector] compx is too large for provided vectx mfab')
+      if (compx.gt.vectx(0)%nc) call die('[amrensight add_vector] compx is too large for provided vectx mfab')
       if (compy.le.0) call die('[amrensight add_vector] compy must be at least one')
-      if (compy.gt.vecty%data(0)%nc) call die('[amrensight add_vector] compy is too large for provided vecty mfab')
+      if (compy.gt.vecty(0)%nc) call die('[amrensight add_vector] compy is too large for provided vecty mfab')
       if (compz.le.0) call die('[amrensight add_vector] compz must be at least one')
-      if (compz.gt.vectz%data(0)%nc) call die('[amrensight add_vector] compz is too large for provided vectz mfab')
+      if (compz.gt.vectz(0)%nc) call die('[amrensight add_vector] compz is too large for provided vectz mfab')
       ! Prepare new vector
       allocate(new_vct)
       new_vct%name=trim(adjustl(name))
       new_vct%compx=compx
       new_vct%compy=compy
       new_vct%compz=compz
-      new_vct%ptrx=>vectx
-      new_vct%ptry=>vecty
-      new_vct%ptrz=>vectz
+      new_vct%ptrx(0:)=>vectx
+      new_vct%ptry(0:)=>vecty
+      new_vct%ptrz(0:)=>vectz
       ! Insert it up front
       new_vct%next=>this%first_vct
       ! Point list to new object
@@ -589,8 +627,13 @@ contains
                ! Allocate SPbuff to right size
                allocate(spbuff(bx%lo(1):bx%hi(1),bx%lo(2):bx%hi(2),bx%lo(3):bx%hi(3)))
                ! Copy data from appropriate multifab
-               rphi=>my_scl%ptr%data(this%lvlout(lvl))%dataptr(mfi)
-               spbuff=real(rphi(bx%lo(1):bx%hi(1),bx%lo(2):bx%hi(2),bx%lo(3):bx%hi(3),my_scl%comp),SP)
+               if (associated(my_scl%rptr)) then
+                  rphi=>my_scl%rptr(this%lvlout(lvl))%dataptr(mfi)
+                  spbuff=real(rphi(bx%lo(1):bx%hi(1),bx%lo(2):bx%hi(2),bx%lo(3):bx%hi(3),my_scl%comp),SP)
+               else if (associated(my_scl%iptr)) then
+                  iphi=>my_scl%iptr(this%lvlout(lvl))%dataptr(mfi)
+                  spbuff=real(iphi(bx%lo(1):bx%hi(1),bx%lo(2):bx%hi(2),bx%lo(3):bx%hi(3),my_scl%comp),SP)
+               end if
                ! Write it out
                write(iunit) spbuff
                ! Deallocate SPbuff
@@ -664,13 +707,13 @@ contains
                ! Allocate SPbuff to right size
                allocate(spbuff(bx%lo(1):bx%hi(1),bx%lo(2):bx%hi(2),bx%lo(3):bx%hi(3)))
                ! Copy data from appropriate multifab and write it out
-               rphi=>my_vct%ptrx%data(this%lvlout(lvl))%dataptr(mfi)
+               rphi=>my_vct%ptrx(this%lvlout(lvl))%dataptr(mfi)
                spbuff=real(rphi(bx%lo(1):bx%hi(1),bx%lo(2):bx%hi(2),bx%lo(3):bx%hi(3),my_vct%compx),SP)
                write(iunit) spbuff
-               rphi=>my_vct%ptry%data(this%lvlout(lvl))%dataptr(mfi)
+               rphi=>my_vct%ptry(this%lvlout(lvl))%dataptr(mfi)
                spbuff=real(rphi(bx%lo(1):bx%hi(1),bx%lo(2):bx%hi(2),bx%lo(3):bx%hi(3),my_vct%compy),SP)
                write(iunit) spbuff
-               rphi=>my_vct%ptrz%data(this%lvlout(lvl))%dataptr(mfi)
+               rphi=>my_vct%ptrz(this%lvlout(lvl))%dataptr(mfi)
                spbuff=real(rphi(bx%lo(1):bx%hi(1),bx%lo(2):bx%hi(2),bx%lo(3):bx%hi(3),my_vct%compz),SP)
                write(iunit) spbuff
                ! Deallocate SPbuff

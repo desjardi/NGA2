@@ -4,22 +4,15 @@ module amrconfig_class
    use iso_c_binding,    only: c_ptr,c_null_ptr,c_char,c_int,c_funptr,c_funloc
    use precision,        only: WP
    use string,           only: str_medium
-   use amrex_amr_module, only: amrex_geometry,amrex_multifab,amrex_tagboxarray
+   use amrex_amr_module, only: amrex_geometry
    use mpi_f08,          only: MPI_Comm
    implicit none
    private
    
    
    ! Expose type/constructor/methods
-   public :: amrconfig,amrdata,finalize_amrex
-   public :: mak_lvl_stype,clr_lvl_stype,err_est_stype
+   public :: amrconfig,finalize_amrex
    
-   
-   ! Types of amrdata registration available
-   integer, parameter, public :: ignore=0
-   integer, parameter, public :: resize=1
-   integer, parameter, public :: interp=2
-
    
    !> Amrconfig object definition based on AMReX's amrcore
    type :: amrconfig
@@ -50,8 +43,6 @@ module amrconfig_class
       real(WP) :: vol
       ! Shortcut to cell size per level
       real(WP), dimension(:), allocatable :: dx,dy,dz
-      ! Data register
-      type(reg_list), pointer :: first_reg=>NULL()
       ! Parallel info
       type(MPI_Comm) :: comm            !< Communicator for our group
       integer        :: nproc           !< Number of processors
@@ -63,69 +54,23 @@ module amrconfig_class
       real(WP) :: ncells =-1.0_WP       !< Current total number of cells (real!)
       real(WP) :: compression=-1.0_WP   !< Current compression ratio (ncells/total cells with uniform mesh)
    contains
-      procedure :: initialize=>initialize_amrconfig   !< Initialization of amrconfig object
-      procedure :: finalize=>finalize_amrconfig       !< Finalization of amrconfig object
-      procedure :: register_udp                       !< Register user-defined procedures for regriding
-      procedure :: define_lvl=>amr_define_lvl         !< Create and initialize all registered data on amrconfig at that lvl
-      procedure :: refine_lvl=>amr_refine_lvl         !< Refine all registered data on amrconfig at that lvl
-      procedure :: remake_lvl=>amr_remake_lvl         !< Remake all registered data on amrconfig at that lvl
-      procedure :: delete_lvl=>amr_delete_lvl         !< Delete all registered data on amrconfig at that lvl
-      procedure :: initialize_grid                    !< Initialize data on armconfig according to registered function
-      procedure :: regrid                             !< Perform regriding operation on level baselvl
-      procedure :: get_info=>get_info_amrconfig       !< Calculate various information on our amrconfig object
-      procedure :: print=>print_amrconfig             !< Print out grid info
-      procedure, private :: get_boxarray              !< Obtain box array at a given level
-      procedure, private :: get_distromap             !< Obtain distromap at a given level
-      procedure :: mfiter_build                       !< Build mfiter at a given level
-      procedure :: mfiter_destroy                     !< Destroy mfiter
-      procedure :: clvl                               !< Return current finest level
-      procedure :: average_down                       !< Average down a given multifab throughout all levels
-      procedure :: average_downto                     !< Average down a given multifab to level lvl
+      procedure :: initialize                !< Initialization of amrconfig object
+      procedure :: finalize                  !< Finalization of amrconfig object
+      procedure :: register_udp              !< Register user-defined procedures for regriding
+      procedure :: initialize_grid           !< Initialize data on armconfig according to registered function
+      procedure :: regrid                    !< Perform regriding operation on level baselvl
+      procedure :: get_info                  !< Calculate various information on our amrconfig object
+      procedure :: print                     !< Print out grid info
+      procedure, private :: get_boxarray     !< Obtain box array at a given level
+      procedure, private :: get_distromap    !< Obtain distromap at a given level
+      procedure :: mfiter_build              !< Build mfiter at a given level
+      procedure :: mfiter_destroy            !< Destroy mfiter
+      procedure :: mfab_build                !< Build mfab at a given level
+      procedure :: mfab_destroy              !< Destroy mfab
+      procedure :: clvl                      !< Return current finest level
+      procedure :: average_down              !< Average down a given multifab throughout all levels
+      procedure :: average_downto            !< Average down a given multifab to level lvl
    end type amrconfig
-   
-
-   !> Amrdata object based on array of AMReX's multifab
-   type :: amrdata
-      ! Amrconfig on which data lives
-      class(amrconfig), pointer :: amr
-      ! This is the name of the amrdata
-      character(len=str_medium) :: name='UNNAMED_AMRDATA'
-      ! Amrdata object registration status in amrconfig
-      integer :: reg
-      ! Multifab array
-      type(amrex_multifab), dimension(:), allocatable :: data
-      ! Number of components and overlap cells
-      integer :: ncomp,nover
-      ! Location (true means at face, false means cell center)
-      logical, dimension(3) :: atface
-      ! Boundary conditions at domain boundaries
-      integer, dimension(:,:), pointer :: lo_bc,hi_bc
-      logical :: bc_ptr=.false.
-      ! Interpolation method
-      integer :: interp
-      ! User-defined initialization procedure
-      !procedure()
-      ! Global info on our data
-      real(WP), dimension(:), allocatable :: mindata,maxdata,intdata
-   contains
-      procedure :: initialize=>initialize_amrdata !< Initialize amrdata object
-      procedure :: finalize=>finalize_amrdata     !< Finalize   amrdata object
-      procedure :: get_info=>get_info_amrdata     !< Compute min/max/int values for field
-      procedure :: define_lvl                     !< Define our data at level (lvl) from udp
-      procedure :: refine_lvl                     !< Refine our data at level (lvl) using cfill procedure
-      procedure :: remake_lvl                     !< Remake our data at level (lvl) using  fill procedure
-      procedure :: delete_lvl                     !< Delete our data at level (lvl)
-      procedure :: create_lvl                     !< Create our data at level (lvl) and leave it uninitialized
-      procedure ::  cfill_lvl                     !< Fill provided mfab at level (lvl) from our data at level (lvl-1)           - this involves boundary conditions
-      procedure ::   fill_lvl                     !< Fill provided mfab at level (lvl) from our data at level (lvl-1) and (lvl) - this involves boundary conditions
-   end type amrdata
-   
-   
-   !> List of registered amrdata objects defined on an amrconfig
-   type :: reg_list
-      type(reg_list), pointer :: next         !< Next list entry
-      type(amrdata) , pointer :: data=>NULL() !< Amrdata object
-   end type reg_list
    
    
    !> Interfaces for user-defined subroutines
@@ -151,28 +96,14 @@ module amrconfig_class
          character(kind=c_char), intent(in), value :: tagval
          character(kind=c_char), intent(in), value :: clrval
       end subroutine err_est_stype
-      subroutine reftag_lvl_stype(lvl,tags,time,tagval,clrval)
-         import :: c_char,WP,amrex_tagboxarray
-         implicit none
-         integer,                 intent(in) :: lvl
-         type(amrex_tagboxarray), intent(in) :: tags
-         real(WP),                intent(in) :: time
-         character(kind=c_char),  intent(in) :: tagval
-         character(kind=c_char),  intent(in) :: clrval
-      end subroutine reftag_lvl_stype
    end interface
    
    
 contains
    
    
-   !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-   !! AMRCONFIG specific routines !!
-   !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-   
-   
    !> Initialization of an amrconfig object
-   subroutine initialize_amrconfig(this,name)
+   subroutine initialize(this,name)
       use messager, only: die
       implicit none
       class(amrconfig), intent(inout) :: this
@@ -282,11 +213,11 @@ contains
          ! Total domain volume
          this%vol=(this%xhi-this%xlo)*(this%yhi-this%ylo)*(this%zhi-this%zlo)
       end block compute_shortcuts
-   end subroutine initialize_amrconfig
+   end subroutine initialize
    
    
    !> Finalization of amrconfig object
-   impure elemental subroutine finalize_amrconfig(this)
+   impure elemental subroutine finalize(this)
       implicit none
       class(amrconfig), intent(inout) :: this
       interface
@@ -298,21 +229,7 @@ contains
       end interface
       call amrex_fi_delete_amrcore(this%amrcore)
       this%amrcore=c_null_ptr
-      ! Deallocate reg list
-      empty_reg_list: block
-         type(reg_list), pointer :: current,next
-         if (associated(this%first_reg)) then
-            current=>this%first_reg
-            next=>current%next
-            do
-               deallocate(current)
-               if (.not.associated(next)) exit
-               current=>next
-               next=>current%next
-            end do
-         end if
-      end block empty_reg_list
-   end subroutine finalize_amrconfig
+   end subroutine finalize
    
    
    !> Register user-defined procedures for regriding
@@ -332,105 +249,6 @@ contains
       end interface
       call amrex_fi_init_virtual_functions(c_funloc(mak_lvl_init),c_funloc(mak_lvl_crse),c_funloc(mak_lvl_remk),c_funloc(clr_lvl),c_funloc(err_est),this%amrcore)
    end subroutine register_udp
-   
-
-   !> Default routine to define level data
-   subroutine amr_define_lvl(this,lvl,t,pba,pdm)
-      use iso_c_binding,    only: c_ptr
-      use amrex_amr_module, only: amrex_boxarray,amrex_distromap
-      implicit none
-      class(amrconfig), intent(inout) :: this
-      integer,     intent(in) :: lvl
-      real(WP),    intent(in) :: t
-      type(c_ptr), intent(in) :: pba,pdm
-      type(amrex_boxarray)  :: ba
-      type(amrex_distromap) :: dm
-      type(reg_list), pointer :: my_reg
-      ! Recast pointers
-      ba=pba; dm=pdm
-      ! Traverse all registered data and define each
-      my_reg=>this%first_reg
-      do while (associated(my_reg))
-         select case (my_reg%data%reg)
-         case (resize)
-            call my_reg%data%create_lvl(lvl,t,ba,dm)
-         case (interp)
-            call my_reg%data%define_lvl(lvl,t,ba,dm)
-         end select
-         my_reg=>my_reg%next
-      end do
-   end subroutine amr_define_lvl
-   
-   
-   !> Default routine to refine level data
-   subroutine amr_refine_lvl(this,lvl,t,pba,pdm)
-      use iso_c_binding,    only: c_ptr
-      use amrex_amr_module, only: amrex_boxarray,amrex_distromap
-      implicit none
-      class(amrconfig), intent(inout) :: this
-      integer,     intent(in) :: lvl
-      real(WP),    intent(in) :: t
-      type(c_ptr), intent(in) :: pba,pdm
-      type(amrex_boxarray)  :: ba
-      type(amrex_distromap) :: dm
-      type(reg_list), pointer :: my_reg
-      ! Recast pointers
-      ba=pba; dm=pdm
-      ! Traverse all registered data and refine each
-      my_reg=>this%first_reg
-      do while (associated(my_reg))
-         select case (my_reg%data%reg)
-         case (resize)
-            call my_reg%data%create_lvl(lvl,t,ba,dm)
-         case (interp)
-            call my_reg%data%refine_lvl(lvl,t,ba,dm)
-         end select
-         my_reg=>my_reg%next
-      end do
-   end subroutine amr_refine_lvl
-   
-   
-   !> Default routine to remake level data
-   subroutine amr_remake_lvl(this,lvl,t,pba,pdm)
-      use iso_c_binding,    only: c_ptr
-      use amrex_amr_module, only: amrex_boxarray,amrex_distromap
-      implicit none
-      class(amrconfig), intent(inout) :: this
-      integer,     intent(in) :: lvl
-      real(WP),    intent(in) :: t
-      type(c_ptr), intent(in) :: pba,pdm
-      type(amrex_boxarray)  :: ba
-      type(amrex_distromap) :: dm
-      type(reg_list), pointer :: my_reg
-      ! Recast pointers
-      ba=pba; dm=pdm
-      ! Traverse all registered data and remake each
-      my_reg=>this%first_reg
-      do while (associated(my_reg))
-         select case (my_reg%data%reg)
-         case (resize)
-            call my_reg%data%create_lvl(lvl,t,ba,dm)
-         case (interp)
-            call my_reg%data%remake_lvl(lvl,t,ba,dm)
-         end select
-         my_reg=>my_reg%next
-      end do
-   end subroutine amr_remake_lvl
-   
-   
-   !> Default routine to delete level data
-   subroutine amr_delete_lvl(this,lvl)
-      implicit none
-      class(amrconfig), intent(inout) :: this
-      integer, intent(in) :: lvl
-      type(reg_list), pointer :: my_reg
-      ! Traverse all registered data and delete each
-      my_reg=>this%first_reg
-      do while (associated(my_reg))
-         call my_reg%data%delete_lvl(lvl)
-         my_reg=>my_reg%next
-      end do
-   end subroutine amr_delete_lvl
    
    
    !> Initialize grid on an amrconfig object
@@ -476,7 +294,7 @@ contains
    
    
    !> Get info on amrconfig object
-   subroutine get_info_amrconfig(this)
+   subroutine get_info(this)
       use amrex_amr_module, only: amrex_boxarray,amrex_box
       implicit none
       class(amrconfig), intent(inout) :: this
@@ -510,11 +328,11 @@ contains
       &                this%geom(this%clvl())%dx(2)*&
       &                this%geom(this%clvl())%dx(3)*&
       &                this%ncells/((this%xhi-this%xlo)*(this%yhi-this%ylo)*(this%zhi-this%zlo))
-   end subroutine get_info_amrconfig
+   end subroutine get_info
    
    
    !> Print amrconfig object
-   subroutine print_amrconfig(this)
+   subroutine print(this)
       use, intrinsic :: iso_fortran_env, only: output_unit
       use amrex_amr_module, only: amrex_boxarray,amrex_box
       use parallel, only: amRoot
@@ -544,7 +362,7 @@ contains
             end do
          end do
       end if
-   end subroutine print_amrconfig
+   end subroutine print
    
    
    !> Obtain box array at a level
@@ -610,6 +428,36 @@ contains
       type(amrex_mfiter), intent(inout) :: mfi
       call amrex_mfiter_destroy(mfi)
    end subroutine mfiter_destroy
+
+
+   !> Build mfab at a level
+   subroutine mfab_build(this,lvl,mfab,ncomp,nover,atface)
+      use amrex_amr_module, only: amrex_boxarray,amrex_distromap,amrex_multifab,amrex_multifab_build
+      implicit none
+      class(amrconfig), intent(inout) :: this
+      integer, intent(in) :: lvl
+      type(amrex_multifab), intent(out) :: mfab
+      integer, intent(in) :: ncomp
+      integer, intent(in) :: nover
+      logical, dimension(3), intent(in), optional :: atface
+      logical, dimension(3) :: face
+      type(amrex_boxarray)  :: ba
+      type(amrex_distromap) :: dm
+      ba=this%get_boxarray (lvl)
+      dm=this%get_distromap(lvl)
+      face=.false.; if (present(atface)) face=atface
+      call amrex_multifab_build(mfab,ba,dm,ncomp,nover,face)
+   end subroutine mfab_build
+   
+   
+   !> Destroy mfab
+   subroutine mfab_destroy(this,mfab)
+      use amrex_amr_module, only: amrex_multifab,amrex_multifab_destroy
+      implicit none
+      class(amrconfig),     intent(inout) :: this
+      type(amrex_multifab), intent(inout) :: mfab
+      call amrex_multifab_destroy(mfab)
+   end subroutine mfab_destroy
    
    
    !> Return current finest level
@@ -653,312 +501,6 @@ contains
    end subroutine average_downto
    
    
-   !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-   !! AMRDATA specific routines !!
-   !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-   
-
-   !> Initialize an amrdata object
-   subroutine initialize_amrdata(this,amr,ncomp,nover,reg,atface,name)
-      use messager, only: die
-      use amrex_amr_module, only: amrex_bc_int_dir,amrex_interp_cell_cons
-      implicit none
-      class(amrdata),   target, intent(inout) :: this
-      class(amrconfig), target, intent(in)    :: amr
-      integer, intent(in) :: ncomp
-      integer, intent(in) :: nover
-      integer, intent(in) :: reg
-      logical, dimension(3), intent(in), optional :: atface
-      character(len=*),      intent(in), optional :: name
-      type(reg_list), pointer :: new_reg
-      ! Point to amrconfig object
-      this%amr=>amr
-      ! Set name
-      if (present(name)) this%name=trim(adjustl(name))
-      ! Allocate data
-      allocate(this%data(0:this%amr%nlvl))
-      ! Check ncomp and store
-      if (ncomp.lt.1) call die('[amrdata initialize] ncomp needs to be at least 1')
-      this%ncomp=ncomp
-      ! Check nover and store
-      if (nover.lt.0) call die('[amrdata initialize] nover needs to be at least 0')
-      this%nover=nover
-      ! Handle amrdata registration
-      this%reg=reg
-      select case (this%reg)
-      case (ignore)
-         ! Nothing needs to be done
-      case (resize,interp)
-         ! Add our amrdata to amrconfig's data list
-         allocate(new_reg); new_reg%data=>this
-         new_reg%next=>this%amr%first_reg
-         this%amr%first_reg=>new_reg
-      case default
-         call die('[amrdata initialize] Unknown registration status specified')
-      end select
-      ! Check if atface is present, if not default to cell-centered data
-      if (present(atface)) then
-         this%atface=atface
-      else
-         this%atface=.false.
-      end if
-      ! Assume periodic boundaries - user can change later
-      allocate(this%lo_bc(1:3,1:this%ncomp),this%hi_bc(1:3,1:this%ncomp))
-      this%lo_bc=amrex_bc_int_dir
-      this%hi_bc=amrex_bc_int_dir
-      ! Assume conservative interpolation - user can change later
-      this%interp=amrex_interp_cell_cons
-      ! Prepare storage for field info
-      allocate(this%mindata(1:this%ncomp)); this%mindata=+huge(1.0_WP)
-      allocate(this%maxdata(1:this%ncomp)); this%maxdata=-huge(1.0_WP)
-      allocate(this%intdata(1:this%ncomp)); this%intdata= 0.0_WP
-   end subroutine initialize_amrdata
-   
-   
-   !> Finalize an amrdata object
-   impure elemental subroutine finalize_amrdata(this)
-      use amrex_amr_module, only: amrex_multifab_destroy
-      implicit none
-      class(amrdata), intent(inout) :: this
-      integer :: n
-      do n=0,this%amr%nlvl
-         call amrex_multifab_destroy(this%data(n))
-      end do
-      deallocate(this%data)
-      if (.not.this%bc_ptr) then
-         if (associated(this%lo_bc)) deallocate(this%lo_bc); nullify(this%lo_bc)
-         if (associated(this%hi_bc)) deallocate(this%hi_bc); nullify(this%hi_bc)
-      end if
-      this%amr=>NULL()
-      deallocate(this%mindata,this%maxdata,this%intdata)
-   end subroutine finalize_amrdata
-   
-   
-   !> Calculate various information on our amrdata object
-   subroutine get_info_amrdata(this)
-      implicit none
-      class(amrdata), intent(inout) :: this
-      integer :: lvl,n
-      
-      ! Reset info
-      this%mindata=+huge(1.0_WP)
-      this%maxdata=-huge(1.0_WP)
-      this%intdata= 0.0_WP
-      
-      ! Loop over components
-      do n=1,this%ncomp
-         ! Loop over all levels
-         do lvl=0,this%amr%clvl()
-            ! Get min and max at that level
-            this%mindata(n)=min(this%mindata(n),this%data(lvl)%min(comp=n))
-            this%maxdata(n)=max(this%maxdata(n),this%data(lvl)%max(comp=n))
-         end do
-         ! Get int at level 0
-         this%intdata(n)=this%data(0)%sum(comp=n)*(this%amr%dx(0)*this%amr%dy(0)*this%amr%dz(0))/this%amr%vol
-      end do
-      
-   end subroutine get_info_amrdata
-   
-   
-   !> Create data at level lvl
-   subroutine create_lvl(this,lvl,time,ba,dm)
-      use iso_c_binding,    only: c_ptr
-      use amrex_amr_module, only: amrex_multifab_build,amrex_boxarray,amrex_distromap
-      implicit none
-      class(amrdata),   intent(inout) :: this
-      integer,  intent(in) :: lvl
-      real(WP), intent(in) :: time
-      type(amrex_boxarray) , intent(in) :: ba
-      type(amrex_distromap), intent(in) :: dm
-      ! Delete data first
-      call this%delete_lvl(lvl)
-      ! Rebuild data
-      call amrex_multifab_build(this%data(lvl),ba,dm,this%ncomp,this%nover,this%atface)
-   end subroutine create_lvl
-   
-
-   !> Define data at level lvl
-   subroutine define_lvl(this,lvl,time,ba,dm)
-      use iso_c_binding,    only: c_ptr
-      use amrex_amr_module, only: amrex_multifab_build,amrex_boxarray,amrex_distromap
-      implicit none
-      class(amrdata),   intent(inout) :: this
-      integer,  intent(in) :: lvl
-      real(WP), intent(in) :: time
-      type(amrex_boxarray) , intent(in) :: ba
-      type(amrex_distromap), intent(in) :: dm
-      ! Delete data first
-      call this%delete_lvl(lvl)
-      ! Rebuild data
-      call amrex_multifab_build(this%data(lvl),ba,dm,this%ncomp,this%nover,this%atface)
-   end subroutine define_lvl
-
-
-   !> Refine data at level lvl
-   subroutine refine_lvl(this,lvl,time,ba,dm)
-      use iso_c_binding,    only: c_ptr
-      use amrex_amr_module, only: amrex_boxarray,amrex_distromap
-      implicit none
-      class(amrdata),   intent(inout) :: this
-      integer,  intent(in) :: lvl
-      real(WP), intent(in) :: time
-      type(amrex_boxarray) , intent(in) :: ba
-      type(amrex_distromap), intent(in) :: dm
-      ! Recreate data
-      call this%create_lvl(lvl,time,ba,dm)
-      ! Fill from coarse level
-      call this%cfill_lvl(lvl,time,this%data(lvl))
-   end subroutine refine_lvl
-   
-   
-   !> Remake data at level lvl
-   subroutine remake_lvl(this,lvl,time,ba,dm)
-      use iso_c_binding,    only: c_ptr
-      use amrex_amr_module, only: amrex_boxarray,amrex_distromap,amrex_multifab_build,amrex_multifab_destroy,amrex_multifab
-      implicit none
-      class(amrdata),   intent(inout) :: this
-      integer,  intent(in) :: lvl
-      real(WP), intent(in) :: time
-      type(amrex_boxarray) , intent(in) :: ba
-      type(amrex_distromap), intent(in) :: dm
-      type(amrex_multifab)  :: newdata
-      ! Create newdata and fill it from current data
-      call amrex_multifab_build(newdata,ba,dm,this%ncomp,this%nover,this%atface)
-      call this%fill_lvl(lvl,time,newdata)
-      ! Recreate level
-      call this%create_lvl(lvl,time,ba,dm)
-      ! Copy newdata to data
-      call this%data(lvl)%copy(newdata,1,1,this%ncomp,this%nover)
-      ! Destroy newdata
-      call amrex_multifab_destroy(newdata)
-   end subroutine remake_lvl
-   
-   
-   !> Delete data at level lvl
-   subroutine delete_lvl(this,lvl)
-      use amrex_amr_module, only: amrex_multifab_destroy
-      implicit none
-      class(amrdata), intent(inout) :: this
-      integer, intent(in) :: lvl
-      call amrex_multifab_destroy(this%data(lvl))
-   end subroutine delete_lvl
-   
-   
-   !> Fill provided mfab at level (lvl) from our data at level (lvl-1)
-   subroutine cfill_lvl(this,lvl,time,mfab)
-      use amrex_amr_module, only: amrex_multifab,amrex_fillcoarsepatch,amrex_interp_cell_cons
-      implicit none
-      class(amrdata), intent(inout) :: this
-      integer,  intent(in) :: lvl
-      real(WP), intent(in) :: time
-      type(amrex_multifab), intent(inout) :: mfab
-      ! Fill with a mix of interpolation and bconds
-      call amrex_fillcoarsepatch(   mfab,&  !< fine mfab being filled...
-      &            time,this%data(lvl-1),&  !< using coarse data at old time...
-      &            time,this%data(lvl-1),&  !<   and coarse data at new time...
-      &      this%amr%geom(lvl-1),fillbc,&  !< coarse geometry with function to apply bconds...
-      &      this%amr%geom(lvl  ),fillbc,&  !<   fine geometry with function to apply bconds...
-      &              time,1,1,this%ncomp,&  !< time when we want the data, scomp, dcomp, ncomp...
-      &             this%amr%rref(lvl-1),&  !< refinement ratio between the levels...
-      &                      this%interp,&  !< interpolation strategy...
-      &            this%lo_bc,this%hi_bc)   !< domain bconds
-   contains
-      subroutine fillbc(pmf,scomp,ncomp,t,pgeom) bind(c)
-         use amrex_amr_module, only: amrex_filcc,amrex_geometry,amrex_multifab,amrex_mfiter,amrex_mfiter_build,amrex_filcc
-         use iso_c_binding,    only: c_ptr,c_int
-         type(c_ptr),    value :: pmf,pgeom
-         integer(c_int), value :: scomp,ncomp
-         real(WP),       value :: t
-         type(amrex_geometry) :: geom
-         type(amrex_multifab) :: mf
-         type(amrex_mfiter)   :: mfi
-         real(WP), dimension(:,:,:,:), contiguous, pointer :: p
-         integer, dimension(4) :: plo,phi
-         ! Skip if fully periodic
-         if (all([this%amr%xper,this%amr%yper,this%amr%zper])) return
-         ! Convert pointers
-         geom=pgeom; mf=pmf
-         ! Loop over boxes
-         call amrex_mfiter_build(mfi,mf)
-         do while(mfi%next())
-            p=>mf%dataptr(mfi)
-            ! Check if part of box is outside the domain
-            if (.not.geom%domain%contains(p)) then
-               plo=lbound(p); phi=ubound(p)
-               call amrex_filcc(p,plo,phi,geom%domain%lo,geom%domain%hi,geom%dx,geom%get_physical_location(plo),this%lo_bc,this%hi_bc)
-            end if
-         end do
-         ! This will need hooks for user-provided BCs
-      end subroutine fillbc
-   end subroutine cfill_lvl
-
-
-   !> Fill provided mfab at level (lvl) from our data at level (lvl-1) and (lvl)
-   subroutine fill_lvl(this,lvl,time,mfab)
-      use amrex_amr_module, only: amrex_multifab,amrex_fillpatch,amrex_interp_cell_cons
-      implicit none
-      class(amrdata),   intent(inout) :: this
-      integer,  intent(in) :: lvl
-      real(WP), intent(in) :: time
-      type(amrex_multifab), intent(inout) :: mfab
-      if (lvl.eq.0) then
-         ! Fill without interpolation, just direct copy and bconds
-         call amrex_fillpatch(      mfab,&  !< base mfab being filled...
-         &           time,this%data(lvl),&  !< using base data at old time...
-         &           time,this%data(lvl),&  !<   and base data at new time...
-         &     this%amr%geom(lvl),fillbc,&  !< base geometry with function to apply bconds...
-         &           time,1,1,this%ncomp)   !< time when we want the data, scomp, dcomp, ncomp
-         ! Unclear why lo_bc and hi_bc aren't involved here...
-      else
-         ! Fill with a mix of interpolation, direct copy and bconds
-         call amrex_fillpatch(      mfab,&  !< fine mfab being filled...
-         &         time,this%data(lvl-1),&  !< using coarse data at old time...
-         &         time,this%data(lvl-1),&  !<   and coarse data at new time...
-         &   this%amr%geom(lvl-1),fillbc,&  !< coarse geometry with function to apply bconds...
-         &         time,this%data(lvl  ),&  !<     and fine data at old time...
-         &         time,this%data(lvl  ),&  !<     and fine data at new time...
-         &   this%amr%geom(lvl  ),fillbc,&  !<   fine geometry with function to apply bconds...
-         &           time,1,1,this%ncomp,&  !< time when we want the data, scomp, dcomp, ncomp...
-         &          this%amr%rref(lvl-1),&  !< refinement ratio between the levels...
-         &                   this%interp,&  !< interpolation strategy...
-         &         this%lo_bc,this%hi_bc)   !< domain bconds
-      end if
-   contains
-      subroutine fillbc(pmf,scomp,ncomp,t,pgeom) bind(c)
-         use amrex_amr_module, only: amrex_filcc,amrex_geometry,amrex_multifab,amrex_mfiter,amrex_mfiter_build,amrex_filcc
-         use iso_c_binding,    only: c_ptr,c_int
-         type(c_ptr),    value :: pmf,pgeom
-         integer(c_int), value :: scomp,ncomp
-         real(WP),       value :: t
-         type(amrex_geometry) :: geom
-         type(amrex_multifab) :: mf
-         type(amrex_mfiter)   :: mfi
-         real(WP), dimension(:,:,:,:), contiguous, pointer :: p
-         integer, dimension(4) :: plo,phi
-         ! Skip if fully periodic
-         if (all([this%amr%xper,this%amr%yper,this%amr%zper])) return
-         ! Convert pointers
-         geom=pgeom; mf=pmf
-         ! Loop over boxes
-         call amrex_mfiter_build(mfi,mf)
-         do while(mfi%next())
-            p=>mf%dataptr(mfi)
-            ! Check if part of box is outside the domain
-            if (.not.geom%domain%contains(p)) then
-               plo=lbound(p); phi=ubound(p)
-               call amrex_filcc(p,plo,phi,geom%domain%lo,geom%domain%hi,geom%dx,geom%get_physical_location(plo),this%lo_bc,this%hi_bc)
-            end if
-         end do
-         ! This will need hooks for user-provided BCs
-      end subroutine fillbc
-   end subroutine fill_lvl
-   
-   
-   !!!!!!!!!!!!!!!!!!!!!!!!!!!!
-   !! Generic AMReX routines !!
-   !!!!!!!!!!!!!!!!!!!!!!!!!!!!
-   
-   
    !> Finalization of amrex
    subroutine finalize_amrex()
       use amrex_amr_module, only: amrex_finalize
@@ -968,4 +510,3 @@ contains
    
    
 end module amrconfig_class
-   

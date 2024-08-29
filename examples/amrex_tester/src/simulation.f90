@@ -1,12 +1,13 @@
 !> Various definitions and tools for running an NGA2 simulation
 module simulation
    use precision, only: WP
-   use amrconfig_class,   only: amrconfig,amrdata,mak_lvl_stype,clr_lvl_stype,err_est_stype
+   use amrconfig_class,   only: amrconfig
    use timetracker_class, only: timetracker
    use amrscalar_class,   only: amrscalar
    use amrensight_class,  only: amrensight
    use event_class,       only: event
    use monitor_class,     only: monitor
+   use amrex_amr_module,  only: amrex_multifab
    implicit none
    private
    
@@ -19,12 +20,12 @@ module simulation
    !> Also create a timetracker and an amrscalar
    type(timetracker) :: time
    type(amrscalar)   :: sc
+
+   !> Work multifabs
+   type(amrex_multifab) :: U,V,W,resSC
    
    !> Event for regriding
    type(event) :: rgd_evt
-   
-   !> Define a velocity field for transport
-   type(amrdata) :: U,V,W,resSC
    
    !> Ensight output
    type(event)      :: ens_evt
@@ -39,13 +40,21 @@ contains
    
    !> User-provided routine to define level data
    subroutine define_lvl(lvl,t,pba,pdm) bind(c)
-      use iso_c_binding, only: c_ptr
+      use iso_c_binding,    only: c_ptr
+      use amrex_amr_module, only: amrex_boxarray,amrex_distromap
       implicit none
       integer,     intent(in), value :: lvl
       real(WP),    intent(in), value :: t
       type(c_ptr), intent(in), value :: pba,pdm
-      ! Amrconfig default
-      call amr%define_lvl(lvl,t,pba,pdm)
+      type(amrex_boxarray)  :: ba
+      type(amrex_distromap) :: dm
+      ba=pba; dm=pdm
+      ! ==== User modifies below ==== !
+      ! ==== must use ba/dm here ==== !
+      
+      ! Create scalar solver data
+      call sc%create(lvl,t,ba,dm)
+      
       ! Initialize scalar value
       init_sc: block
          use amrex_amr_module, only: amrex_mfiter,amrex_box,amrex_mfiter_build,amrex_mfiter_destroy
@@ -55,10 +64,10 @@ contains
          real(WP) :: x,y,z,r2
          integer :: i,j,k
          ! Loop over my boxes
-         call amrex_mfiter_build(mfi,sc%SC%data(lvl))
+         call amrex_mfiter_build(mfi,ba,dm)
          do while (mfi%next())
             bx=mfi%tilebox()
-            mySC=>sc%SC%data(lvl)%dataptr(mfi)
+            mySC=>sc%SC(lvl)%dataptr(mfi)
             ! Loop inside box with overlap
             do k=bx%lo(3)-sc%nover,bx%hi(3)+sc%nover
                do j=bx%lo(2)-sc%nover,bx%hi(2)+sc%nover
@@ -76,31 +85,46 @@ contains
             end do
          end do
          call amrex_mfiter_destroy(mfi)
-      end block init_sc   
+      end block init_sc
+      
    end subroutine define_lvl
    
    
    !> User-provided routine to refine level
    subroutine refine_lvl(lvl,t,pba,pdm) bind(c)
-      use iso_c_binding, only: c_ptr
+      use iso_c_binding,    only: c_ptr
+      use amrex_amr_module, only: amrex_boxarray,amrex_distromap
       implicit none
       integer,     intent(in), value :: lvl
       real(WP),    intent(in), value :: t
       type(c_ptr), intent(in), value :: pba,pdm
-      ! Amrconfig default
-      call amr%refine_lvl(lvl,t,pba,pdm)
+      type(amrex_boxarray)  :: ba
+      type(amrex_distromap) :: dm
+      ba=pba; dm=pdm
+      ! ==== User modifies below ==== !
+      
+      ! Refine scalar solver data
+      call sc%refine(lvl,t,ba,dm)
+      
    end subroutine refine_lvl
    
    
    !> User-provided routine to remake level
    subroutine remake_lvl(lvl,t,pba,pdm) bind(c)
-      use iso_c_binding, only: c_ptr
+      use iso_c_binding,    only: c_ptr
+      use amrex_amr_module, only: amrex_boxarray,amrex_distromap
       implicit none
       integer,     intent(in), value :: lvl
       real(WP),    intent(in), value :: t
       type(c_ptr), intent(in), value :: pba,pdm
-      ! Amrconfig default
-      call amr%remake_lvl(lvl,t,pba,pdm)
+      type(amrex_boxarray)  :: ba
+      type(amrex_distromap) :: dm
+      ba=pba; dm=pdm
+      ! ==== User modifies below ==== !
+      
+      ! Remake scalar solver data
+      call sc%remake(lvl,t,ba,dm)
+      
    end subroutine remake_lvl
    
    
@@ -108,24 +132,31 @@ contains
    subroutine delete_lvl(lvl) bind(c)
       implicit none
       integer, intent(in), value :: lvl
-      ! Amrconfig default
-      call amr%delete_lvl(lvl)
+      ! ==== User modifies below ==== !
+      
+      ! Remake scalar solver data
+      call sc%delete(lvl)
+      
    end subroutine delete_lvl
    
    
    !> User-provided routine to tag cells for (de)refinement
    subroutine reftag_lvl(lvl,ptag,t,tagval,clrval) bind(c)
-      use iso_c_binding, only: c_ptr,c_char
+      use iso_c_binding,    only: c_ptr,c_char
+      use amrex_amr_module, only: amrex_tagboxarray
       implicit none
       integer,                intent(in), value :: lvl
       type(c_ptr),            intent(in), value :: ptag
       real(WP),               intent(in), value :: t
       character(kind=c_char), intent(in), value :: tagval
       character(kind=c_char), intent(in), value :: clrval
+      type(amrex_tagboxarray) :: tag
+      tag=ptag
+      ! ==== User modifies below ==== !
+
       ! User-provided tagging for mesh adaptation
       tag_sc: block
-         use amrex_amr_module, only: amrex_tagboxarray,amrex_box,amrex_mfiter,amrex_mfiter_build,amrex_mfiter_destroy
-         type(amrex_tagboxarray) :: tag
+         use amrex_amr_module, only: amrex_box,amrex_mfiter
          type(amrex_mfiter)      :: mfi
          type(amrex_box)         :: bx
          real(WP)              , dimension(:,:,:,:), contiguous, pointer :: myphi
@@ -134,11 +165,11 @@ contains
          ! Convert pointer
          tag=ptag
          ! Loop over my boxes
-         call amrex_mfiter_build(mfi,sc%SC%data(lvl))
+         call amr%mfiter_build(lvl,mfi)
          do while(mfi%next())
             bx=mfi%tilebox()
-            myphi=>sc%SC%data(lvl)%dataptr(mfi)
-            mytag=>            tag%dataptr(mfi)
+            myphi=>sc%SC(lvl)%dataptr(mfi)
+            mytag=>       tag%dataptr(mfi)
             ! Loop inside box
             do k=bx%lo(3),bx%hi(3)
                do j=bx%lo(2),bx%hi(2)
@@ -148,8 +179,9 @@ contains
                end do
             end do
          end do
-         call amrex_mfiter_destroy(mfi)
+         call amr%mfiter_destroy(mfi)
       end block tag_sc
+
    end subroutine reftag_lvl
    
    
@@ -193,18 +225,9 @@ contains
          sc%SCname=['phi ','Zmix']
       end block create_scalar_solver
       
-      ! Create my own data
-      create_own_data: block
-         use amrconfig_class, only: resize
-         call     U%initialize(amr=amr,ncomp=1         ,nover=0,reg=resize,atface=[.true. ,.false.,.false.],name='U')
-         call     V%initialize(amr=amr,ncomp=1         ,nover=0,reg=resize,atface=[.false.,.true. ,.false.],name='V')
-         call     W%initialize(amr=amr,ncomp=1         ,nover=0,reg=resize,atface=[.false.,.false.,.true. ],name='W')
-         call resSC%initialize(amr=amr,ncomp=sc%nscalar,nover=0,reg=resize,atface=[.false.,.false.,.false.],name='resSC')
-      end block create_own_data
-      
       ! Initialize grid
       call amr%initialize_grid(time=time%t)
-      call amr%average_down(sc%SC%data)
+      call amr%average_down(sc%SC)
       
       ! Prepare Ensight output
       create_ensight: block
@@ -232,9 +255,9 @@ contains
          call mfile%add_column(time%t ,'Time')
          call mfile%add_column(time%dt,'Timestep size')
          do nsc=1,sc%nscalar
-            call mfile%add_column(sc%SC%maxdata(nsc),trim(sc%SCname(nsc))//'_max')
-            call mfile%add_column(sc%SC%mindata(nsc),trim(sc%SCname(nsc))//'_min')
-            call mfile%add_column(sc%SC%intdata(nsc),trim(sc%SCname(nsc))//'_int')
+            call mfile%add_column(sc%SCmax(nsc),trim(sc%SCname(nsc))//'_max')
+            call mfile%add_column(sc%SCmin(nsc),trim(sc%SCname(nsc))//'_min')
+            call mfile%add_column(sc%SCint(nsc),trim(sc%SCname(nsc))//'_int')
          end do
          call mfile%write()
          ! Create grid monitor
@@ -264,24 +287,30 @@ contains
          !call time%adjust_dt()
          call time%increment()
          
-         ! Calculate velocity
-         update_velocity: block
-            use amrex_amr_module, only: amrex_mfiter,amrex_box,amrex_fab,amrex_fab_destroy
-            use mathtools,        only: Pi
-            type(amrex_mfiter) :: mfi
-            type(amrex_box)    :: bx,tbx
-            type(amrex_fab)    :: stream
-            real(WP), dimension(:,:,:,:), contiguous, pointer :: pU,pV,pW,psi
-            real(WP) :: x,y,z
-            integer :: i,j,k
-            do lvl=0,amr%clvl()
+         ! Traverse active levels successively
+         do lvl=0,amr%clvl()
+
+            ! Create velocity field
+            update_velocity: block
+               use amrex_amr_module, only: amrex_mfiter,amrex_box,amrex_fab,amrex_fab_destroy
+               use mathtools,        only: Pi
+               type(amrex_mfiter) :: mfi
+               type(amrex_box)    :: bx,tbx
+               type(amrex_fab)    :: stream
+               real(WP), dimension(:,:,:,:), contiguous, pointer :: pU,pV,pW,psi
+               real(WP) :: x,y,z
+               integer :: i,j,k
+               ! Recreate velocity mfabs
+               call amr%mfab_destroy(U); call amr%mfab_build(lvl,U,ncomp=1,nover=0,atface=[.true. ,.false.,.false.])
+               call amr%mfab_destroy(V); call amr%mfab_build(lvl,V,ncomp=1,nover=0,atface=[.false.,.true. ,.false.])
+               call amr%mfab_destroy(W); call amr%mfab_build(lvl,W,ncomp=1,nover=0,atface=[.false.,.false.,.true. ])
                ! Build an mfiter at our level
                call amr%mfiter_build(lvl,mfi)
                do while (mfi%next())
                   bx=mfi%tilebox()
-                  pU=>U%data(lvl)%dataptr(mfi)
-                  pV=>V%data(lvl)%dataptr(mfi)
-                  pW=>W%data(lvl)%dataptr(mfi)
+                  pU=>U%dataptr(mfi)
+                  pV=>V%dataptr(mfi)
+                  pW=>W%dataptr(mfi)
                   ! Create streamfunction for our vortex on a larger box
                   tbx=bx; call tbx%grow(1)
                   call stream%resize(tbx,1); psi=>stream%dataptr()
@@ -325,38 +354,35 @@ contains
                call amr%mfiter_destroy(mfi)
                ! Destroy streamfunction
                call amrex_fab_destroy(stream)
-            end do
-         end block update_velocity
-         
-         ! Traverse active levels successively
-         do lvl=0,amr%clvl()
+            end block update_velocity
+
+            ! Recreate resSC multifab
+            call amr%mfab_destroy(resSC); call amr%mfab_build(lvl,resSC,ncomp=sc%nscalar,nover=0)
             
             ! Remember old scalar field: SCold=SC
-            !call sc%SCold%copy(lvl=lvl,src=sc%SC)
-
-            call sc%SCold%data(lvl)%copy(srcmf=sc%SC%data(lvl),srccomp=1,&
-            &                            dstcomp=1,nc=sc%nscalar,ng=sc%nover)
+            call sc%SCold(lvl)%copy(srcmf=sc%SC(lvl),srccomp=1,&
+            &                       dstcomp=1,nc=sc%nscalar,ng=sc%nover)
             
             ! Build mid-time scalar: SC=0.5*(SC+SCold)
-            call sc%SC%data(lvl)%lincomb(a=0.5_WP,srcmf1=sc%SC   %data(lvl),srccomp1=1,&
-            &                            b=0.5_WP,srcmf2=sc%SCold%data(lvl),srccomp2=1,&
-            &                            dstcomp=1,nc=sc%nscalar,ng=sc%nover)
+            call sc%SC(lvl)%lincomb(a=0.5_WP,srcmf1=sc%SC   (lvl),srccomp1=1,&
+            &                       b=0.5_WP,srcmf2=sc%SCold(lvl),srccomp2=1,&
+            &                       dstcomp=1,nc=sc%nscalar,ng=sc%nover)
             
             ! Explicit calculation of dSC/dt from scalar transport equation
-            call sc%get_dSCdt_lvl(lvl=lvl,dSCdt=resSC,U=U,V=V,W=W)
+            call sc%get_dSCdt(lvl=lvl,dSCdt=resSC,U=U,V=V,W=W)
             
             ! Advance scalar field: SC=SCold+dt*dSCdt
-            call sc%SC%data(lvl)%lincomb(a=1.0_WP ,srcmf1=sc%SCold%data(lvl),srccomp1=1,&
-            &                            b=time%dt,srcmf2=   resSC%data(lvl),srccomp2=1,&
-            &                            dstcomp=1,nc=sc%nscalar,ng=0)
+            call sc%SC(lvl)%lincomb(a=1.0_WP ,srcmf1=sc%SCold(lvl),srccomp1=1,&
+            &                       b=time%dt,srcmf2=resSC        ,srccomp2=1,&
+            &                       dstcomp=1,nc=sc%nscalar,ng=0)
             
             ! Update overlap and boundary conditions
-            call sc%SC%fill_lvl(lvl,time%t,sc%SC%data(lvl))
+            call sc%fill(lvl,time%t,sc%SC(lvl))
             
          end do
          
          ! Enforce consistency between levels
-         call amr%average_down(sc%SC%data)
+         call amr%average_down(sc%SC)
          
          ! Regrid if needed
          if (rgd_evt%occurs()) then
@@ -380,10 +406,6 @@ contains
    subroutine simulation_final
       use amrconfig_class, only: finalize_amrex
       implicit none
-      call U%finalize()
-      call V%finalize()
-      call W%finalize()
-      call resSC%finalize()
       call sc%finalize()
       call amr%finalize()
       call finalize_amrex()
