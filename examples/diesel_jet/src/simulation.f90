@@ -216,7 +216,7 @@ contains
          integer, intent(in) :: id
          type(struct_stats), intent(inout) :: stats
 
-         integer :: n,m
+         integer :: n,m,nn
          integer :: lwork,info,ierr
          integer :: ii,jj,kk
          integer  :: per_x,per_y,per_z
@@ -292,41 +292,46 @@ contains
          call MPI_ALLREDUCE(MPI_IN_PLACE,v_vol,1,MPI_REAL_WP,MPI_SUM,strack%vf%cfg%comm,ierr)
          call MPI_ALLREDUCE(MPI_IN_PLACE,w_vol,1,MPI_REAL_WP,MPI_SUM,strack%vf%cfg%comm,ierr)
          
+         print *, "strack%nstruct ",strack%nstruct
+         print *, "strack%nmerge_master ",strack%nmerge_master
+
          if (vol_struct.gt.0.0_WP) then 
             ! Moments of inertia
             Imom=0.0_WP
             do n=1,strack%nstruct
-               ! Only deal with structure matching newid
-               if (strack%struct(n)%id.eq.strack%merge_master(n)%newid) then
+               do nn=1,strack%nmerge_master
+                  ! Only deal with structure matching newid
+                  if (strack%struct(n)%id.eq.strack%merge_master(nn)%newid) then
 
-                  ! Periodicity
-                  per_x = strack%struct(n)%per(1)
-                  per_y = strack%struct(n)%per(2)
-                  per_z = strack%struct(n)%per(3)
-                     
-                  ! Loop over cells in new structure and accumulate statistics
-                  do m=1,strack%struct(n)%n_
+                     ! Periodicity
+                     per_x = strack%struct(n)%per(1)
+                     per_y = strack%struct(n)%per(2)
+                     per_z = strack%struct(n)%per(3)
+                        
+                     ! Loop over cells in new structure and accumulate statistics
+                     do m=1,strack%struct(n)%n_
 
-                     ! Indices of cells in structure
-                     ii=strack%struct(n)%map(1,m) 
-                     jj=strack%struct(n)%map(2,m) 
-                     kk=strack%struct(n)%map(3,m)
+                        ! Indices of cells in structure
+                        ii=strack%struct(n)%map(1,m) 
+                        jj=strack%struct(n)%map(2,m) 
+                        kk=strack%struct(n)%map(3,m)
 
-                     ! Location of struct node
-                     xtmp = strack%vf%cfg%xm(ii)-per_x*strack%vf%cfg%xL-x_vol/vol_struct
-                     ytmp = strack%vf%cfg%ym(jj)-per_y*strack%vf%cfg%yL-y_vol/vol_struct
-                     ztmp = strack%vf%cfg%zm(kk)-per_z*strack%vf%cfg%zL-z_vol/vol_struct
+                        ! Location of struct node
+                        xtmp = strack%vf%cfg%xm(ii)-per_x*strack%vf%cfg%xL-x_vol/vol_struct
+                        ytmp = strack%vf%cfg%ym(jj)-per_y*strack%vf%cfg%yL-y_vol/vol_struct
+                        ztmp = strack%vf%cfg%zm(kk)-per_z*strack%vf%cfg%zL-z_vol/vol_struct
 
-                     ! Moment of Inertia
-                     Imom(1,1) = Imom(1,1) + (ytmp**2 + ztmp**2)*strack%vf%cfg%vol(ii,jj,kk)*strack%vf%VF(ii,jj,kk)
-                     Imom(2,2) = Imom(2,2) + (xtmp**2 + ztmp**2)*strack%vf%cfg%vol(ii,jj,kk)*strack%vf%VF(ii,jj,kk)
-                     Imom(3,3) = Imom(3,3) + (xtmp**2 + ytmp**2)*strack%vf%cfg%vol(ii,jj,kk)*strack%vf%VF(ii,jj,kk)
-                     
-                     Imom(1,2) = Imom(1,2) - xtmp*ytmp*strack%vf%cfg%vol(ii,jj,kk)*strack%vf%VF(ii,jj,kk)
-                     Imom(1,3) = Imom(1,3) - xtmp*ztmp*strack%vf%cfg%vol(ii,jj,kk)*strack%vf%VF(ii,jj,kk)
-                     Imom(2,3) = Imom(2,3) - ytmp*ztmp*strack%vf%cfg%vol(ii,jj,kk)*strack%vf%VF(ii,jj,kk)
-                  end do 
-               end if
+                        ! Moment of Inertia
+                        Imom(1,1) = Imom(1,1) + (ytmp**2 + ztmp**2)*strack%vf%cfg%vol(ii,jj,kk)*strack%vf%VF(ii,jj,kk)
+                        Imom(2,2) = Imom(2,2) + (xtmp**2 + ztmp**2)*strack%vf%cfg%vol(ii,jj,kk)*strack%vf%VF(ii,jj,kk)
+                        Imom(3,3) = Imom(3,3) + (xtmp**2 + ytmp**2)*strack%vf%cfg%vol(ii,jj,kk)*strack%vf%VF(ii,jj,kk)
+                        
+                        Imom(1,2) = Imom(1,2) - xtmp*ytmp*strack%vf%cfg%vol(ii,jj,kk)*strack%vf%VF(ii,jj,kk)
+                        Imom(1,3) = Imom(1,3) - xtmp*ztmp*strack%vf%cfg%vol(ii,jj,kk)*strack%vf%VF(ii,jj,kk)
+                        Imom(2,3) = Imom(2,3) - ytmp*ztmp*strack%vf%cfg%vol(ii,jj,kk)*strack%vf%VF(ii,jj,kk)
+                     end do 
+                  end if
+               end do 
             end do
 
             ! Sum parallel stats on Imom
