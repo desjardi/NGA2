@@ -1,4 +1,8 @@
 f90EXE_sources += vfs_class.f90 tpns_class.f90 tpscalar_class.f90 stracker_class.f90 plicnet.f90
 
+ifeq ($(USE_AMREX),TRUE)
+  f90EXE_sources += amrvfs_class.f90
+endif
+
 INCLUDE_LOCATIONS += $(NGA_HOME)/src/two_phase
 VPATH_LOCATIONS   += $(NGA_HOME)/src/two_phase

@@ -43,6 +43,7 @@ module amrconfig_class
       real(WP) :: vol
       ! Shortcut to cell size per level
       real(WP), dimension(:), allocatable :: dx,dy,dz
+      real(WP) :: min_meshsize
       ! Parallel info
       type(MPI_Comm) :: comm            !< Communicator for our group
       integer        :: nproc           !< Number of processors
@@ -212,6 +213,8 @@ contains
          end do
          ! Total domain volume
          this%vol=(this%xhi-this%xlo)*(this%yhi-this%ylo)*(this%zhi-this%zlo)
+         ! Smallest mesh size
+         this%min_meshsize=min(this%dx(this%nlvl),this%dy(this%nlvl),this%dz(this%nlvl))
       end block compute_shortcuts
    end subroutine initialize
    
