@@ -89,7 +89,7 @@ module amrvfs_class
       ! Time advancement procedures --------------------------------------------------------------------------
       procedure :: advance           !< Advance volume moments given an interface
       procedure :: remap_moments     !< Perform semi-Lagrangian full-cell remap given an interface
-      !procedure :: build_interf      !< Reconstruct interface given volume moments
+      procedure :: build_plicnet     !< Reconstruct interface given volume moments using plicnet
    end type amrvfs
    
    
@@ -104,7 +104,7 @@ contains
       class(amrvfs), intent(inout) :: this
       class(amrconfig), target, intent(in) :: amr
       integer, intent(in) :: reconstruction_method
-      integer, intent(in), optional :: transport_method
+      integer, intent(in) :: transport_method
       character(len=*), optional :: name
       
       ! Set the name for the solver
@@ -125,11 +125,12 @@ contains
       allocate(this%interf(0:this%amr%nlvl))
       
       ! Set transport scheme
-      if (present(transport_method)) then
+      select case (transport_method)
+      case (remap)
          this%transport_method=transport_method
-      else
-         this%transport_method=remap
-      end if
+      case default
+         call die('[amrvfs initialize] Unknown transport method.')
+      end select
       
       ! Set reconstruction method
       select case (reconstruction_method)
@@ -560,27 +561,28 @@ contains
    !! U needs to be ncomp=1,nover=2,atface=[.true. ,.false.,.false.]
    !! V needs to be ncomp=1,nover=2,atface=[.false.,.true. ,.false.]
    !! W needs to be ncomp=1,nover=2,atface=[.false.,.false.,.true. ]
-   subroutine advance(this,lvl,dt,U,V,W)
+   subroutine advance(this,lvl,time,dt,U,V,W)
       implicit none
       class(amrvfs), intent(inout) :: this
-      integer, intent(in) :: lvl
+      integer,  intent(in) :: lvl
+      real(WP), intent(in) :: time              !< Time at which time-dependent boundary conditions are enforced
       real(WP), intent(in) :: dt                !< Timestep size over which to advance
       type(amrex_multifab), intent(in) :: U,V,W !< Velocity to use for transport
       
       ! First perform transport
       select case (this%transport_method)
       case (remap)
-         call this%remap_moments(lvl,dt,U,V,W)
+         call this%remap_moments(lvl=lvl,time=time,dt=dt,U=U,V=V,W=W)
       end select
-      
-      ! Synchronize and clean-up barycenter fields
-      !call this%sync_and_clean_barycenters()
       
       ! Update the band
       !call this%update_band()
       
       ! Perform interface reconstruction from transported moments
-      !call this%build_interface()
+      select case (this%reconstruction_method)
+      case (plicnet)
+         call this%build_plicnet(lvl=lvl,time=time)
+      end select
       
       ! Create discontinuous polygon mesh from IRL interface
       !call this%polygonalize_interface()
@@ -592,7 +594,7 @@ contains
    
    
    !> Perform cell-based transport of PI based on U/V/W and dt
-   subroutine remap_moments(this,lvl,dt,U,V,W)
+   subroutine remap_moments(this,lvl,time,dt,U,V,W)
       use irl_fortran_interface, only: Poly24_type,CapDod_type,SepVM_type,getPt,&
       &                                adjustCapToMatchVolume,construct,new,&
       &                                PlanarLoc_type,PlanarSep_type,LocSepLink_type,&
@@ -601,10 +603,11 @@ contains
       use amrex_amr_module,      only: amrex_mfiter,amrex_box
       implicit none
       class(amrvfs), intent(inout) :: this
-      integer, intent(in) :: lvl
+      integer,  intent(in) :: lvl
+      real(WP), intent(in) :: time
       real(WP), intent(in) :: dt
       type(amrex_multifab), intent(in) :: U,V,W
-      
+      ! Transport data
       real(WP) :: crude_VF,lvol,gvol
       real(WP), dimension(3, 2) :: bounding_pts
       integer , dimension(3, 2) :: bb_indices
@@ -855,10 +858,9 @@ contains
          
       end do; call this%amr%mfiter_destroy(mfi)
       
-      ! Synchronize VF and barycenter fields
-      !call this%cfg%sync(this%VF)
-      !call this%sync_and_clean_barycenters()
-
+      ! Fill VF and barycenter fields
+      call this%cfill_volmom(lvl=lvl,time=time,volmom=this%volmom(lvl))
+      
    contains
       
       !> Project function that moves a point at (pU,pV,pW) for duration mydt
@@ -946,5 +948,169 @@ contains
       
    end subroutine remap_moments
    
+
+   !> Perform interface reconstruction at lvl and time using plicnet
+   subroutine build_plicnet(this,lvl,time)
+      use irl_fortran_interface, only: PlanarSep_type,RectCub_type,construct_2pt,setPlane,&
+      &                                setNumberOfPlanes,matchVolumeFraction,getPlane,new
+      use amrex_amr_module,      only: amrex_mfiter,amrex_box
+      use mathtools,             only: normalize
+      use plicnet,               only: get_normal,reflect_moments
+      implicit none
+      class(amrvfs), intent(inout) :: this
+      integer,  intent(in) :: lvl
+      real(WP), intent(in) :: time ! Needed for time-dependent boundary conditions
+      ! AMReX data
+      type(amrex_mfiter) :: mfi
+      type(amrex_box)    :: bx
+      real(WP), dimension(:,:,:,:), contiguous, pointer :: volmom,interf
+      integer :: i,j,k,ii,jj,kk
+      ! IRL reconstruction data
+      type(RectCub_type)   :: cell
+      type(PlanarSep_type) :: liquid_gas_interface
+      logical  :: flip
+      integer  :: direction
+      real(WP) :: m000,m100,m010,m001,initial_dist,xc,yc,zc
+      real(WP), dimension(0:188) :: moments
+      real(WP), dimension(0:2)   :: normal,center
+      
+      ! Get an IRL cell and interface
+      call new(cell)
+      call new(liquid_gas_interface)
+      
+      ! Loop over boxes - no tiling for now
+      call this%amr%mfiter_build(lvl,mfi); do while(mfi%next())
+         bx=mfi%tilebox()
+         
+         ! Get volmom and interf data
+         volmom=>this%volmom(lvl)%dataptr(mfi)
+         interf=>this%interf(lvl)%dataptr(mfi)
+         
+         ! Perform interface reconstruction
+         do k=bx%lo(3),bx%hi(3)
+            do j=bx%lo(2),bx%hi(2)
+               do i=bx%lo(1),bx%hi(1)
+                  
+                  ! Handle full cells
+                  if (volmom(i,j,k,1).lt.VFlo.or.volmom(i,j,k,1).gt.VFhi) then
+                     interf(i,j,k,:)=[0.0_WP,0.0_WP,0.0_WP,sign(1.0_WP,volmom(i,j,k,1)-0.5_WP)]
+                     cycle
+                  end if
+                  
+                  ! Liquid-gas symmetry
+                  flip=.false.
+                  if (volmom(i,j,k,1).ge.0.5_WP) flip=.true.
+                  m000=0.0_WP; m100=0.0_WP; m010=0.0_WP; m001=0.0_WP
+
+                  ! Construct neighborhood of volume moments
+                  if (flip) then
+                     do kk=k-1,k+1
+                        do jj=j-1,j+1
+                           do ii=i-1,i+1
+                              xc=this%amr%xlo+(real(ii,WP)+0.5_WP)*this%amr%dx(lvl)
+                              yc=this%amr%ylo+(real(jj,WP)+0.5_WP)*this%amr%dy(lvl)
+                              zc=this%amr%zlo+(real(kk,WP)+0.5_WP)*this%amr%dz(lvl)
+                              moments(7*((ii+1-i)*9+(jj+1-j)*3+(kk+1-k))+0)=1.0_WP-volmom(ii,jj,kk,1)
+                              moments(7*((ii+1-i)*9+(jj+1-j)*3+(kk+1-k))+1)=(volmom(ii,jj,kk,5)-xc)/this%amr%dx(lvl)
+                              moments(7*((ii+1-i)*9+(jj+1-j)*3+(kk+1-k))+2)=(volmom(ii,jj,kk,6)-yc)/this%amr%dy(lvl)
+                              moments(7*((ii+1-i)*9+(jj+1-j)*3+(kk+1-k))+3)=(volmom(ii,jj,kk,7)-zc)/this%amr%dz(lvl)
+                              moments(7*((ii+1-i)*9+(jj+1-j)*3+(kk+1-k))+4)=(volmom(ii,jj,kk,2)-xc)/this%amr%dx(lvl)
+                              moments(7*((ii+1-i)*9+(jj+1-j)*3+(kk+1-k))+5)=(volmom(ii,jj,kk,3)-yc)/this%amr%dy(lvl)
+                              moments(7*((ii+1-i)*9+(jj+1-j)*3+(kk+1-k))+6)=(volmom(ii,jj,kk,4)-zc)/this%amr%dz(lvl)
+                              ! Calculate geometric moments of neighborhood
+                              m000=m000+(moments(7*((ii+1-i)*9+(jj+1-j)*3+(kk+1-k))))
+                              m100=m100+(moments(7*((ii+1-i)*9+(jj+1-j)*3+(kk+1-k))+1)+(ii-i))*(moments(7*((ii+1-i)*9+(jj+1-j)*3+(kk+1-k))))
+                              m010=m010+(moments(7*((ii+1-i)*9+(jj+1-j)*3+(kk+1-k))+2)+(jj-j))*(moments(7*((ii+1-i)*9+(jj+1-j)*3+(kk+1-k))))
+                              m001=m001+(moments(7*((ii+1-i)*9+(jj+1-j)*3+(kk+1-k))+3)+(kk-k))*(moments(7*((ii+1-i)*9+(jj+1-j)*3+(kk+1-k))))
+                           end do
+                        end do
+                     end do
+                  else
+                     do kk=k-1,k+1
+                        do jj=j-1,j+1
+                           do ii=i-1,i+1
+                              xc=this%amr%xlo+(real(ii,WP)+0.5_WP)*this%amr%dx(lvl)
+                              yc=this%amr%ylo+(real(jj,WP)+0.5_WP)*this%amr%dy(lvl)
+                              zc=this%amr%zlo+(real(kk,WP)+0.5_WP)*this%amr%dz(lvl)
+                              moments(7*((ii+1-i)*9+(jj+1-j)*3+(kk+1-k))+0)=volmom(ii,jj,kk,1)
+                              moments(7*((ii+1-i)*9+(jj+1-j)*3+(kk+1-k))+1)=(volmom(ii,jj,kk,2)-xc)/this%amr%dx(lvl)
+                              moments(7*((ii+1-i)*9+(jj+1-j)*3+(kk+1-k))+2)=(volmom(ii,jj,kk,3)-yc)/this%amr%dy(lvl)
+                              moments(7*((ii+1-i)*9+(jj+1-j)*3+(kk+1-k))+3)=(volmom(ii,jj,kk,4)-zc)/this%amr%dz(lvl)
+                              moments(7*((ii+1-i)*9+(jj+1-j)*3+(kk+1-k))+4)=(volmom(ii,jj,kk,5)-xc)/this%amr%dx(lvl)
+                              moments(7*((ii+1-i)*9+(jj+1-j)*3+(kk+1-k))+5)=(volmom(ii,jj,kk,6)-yc)/this%amr%dy(lvl)
+                              moments(7*((ii+1-i)*9+(jj+1-j)*3+(kk+1-k))+6)=(volmom(ii,jj,kk,7)-zc)/this%amr%dz(lvl)
+                              ! Calculate geometric moments of neighborhood
+                              m000=m000+(moments(7*((ii+1-i)*9+(jj+1-j)*3+(kk+1-k))))
+                              m100=m100+(moments(7*((ii+1-i)*9+(jj+1-j)*3+(kk+1-k))+1)+(ii-i))*(moments(7*((ii+1-i)*9+(jj+1-j)*3+(kk+1-k))))
+                              m010=m010+(moments(7*((ii+1-i)*9+(jj+1-j)*3+(kk+1-k))+2)+(jj-j))*(moments(7*((ii+1-i)*9+(jj+1-j)*3+(kk+1-k))))
+                              m001=m001+(moments(7*((ii+1-i)*9+(jj+1-j)*3+(kk+1-k))+3)+(kk-k))*(moments(7*((ii+1-i)*9+(jj+1-j)*3+(kk+1-k))))
+                           end do
+                        end do
+                     end do
+                  end if
+                  
+                  ! Calculate geometric center of neighborhood
+                  center=[m100,m010,m001]/m000
+                  
+                  ! Symmetry about Cartesian planes
+                  call reflect_moments(moments,center,direction)
+                  
+                  ! Get PLIC normal vector from neural network
+                  call get_normal(moments,normal)
+                  normal=normalize(normal)
+                  
+                  ! Rotate normal vector to original octant
+                  if (direction.eq.1) then
+                     normal(0)=-normal(0)
+                  else if (direction.eq.2) then
+                     normal(1)=-normal(1)
+                  else if (direction.eq.3) then
+                     normal(2)=-normal(2)
+                  else if (direction.eq.4) then
+                     normal(0)=-normal(0)
+                     normal(1)=-normal(1)
+                  else if (direction.eq.5) then
+                     normal(0)=-normal(0)
+                     normal(2)=-normal(2)
+                  else if (direction.eq.6) then
+                     normal(1)=-normal(1)
+                     normal(2)=-normal(2)
+                  else if (direction.eq.7) then
+                     normal(0)=-normal(0)
+                     normal(1)=-normal(1)
+                     normal(2)=-normal(2)
+                  end if
+                  if (.not.flip) then
+                     normal(0)=-normal(0)
+                     normal(1)=-normal(1)
+                     normal(2)=-normal(2)
+                  end if
+
+                  ! Locate PLIC plane in cell using IRL
+                  call construct_2pt(cell,[this%amr%xlo+real(i  ,WP)*this%amr%dx(lvl), &
+                  &                        this%amr%ylo+real(j  ,WP)*this%amr%dy(lvl), &
+                  &                        this%amr%zlo+real(k  ,WP)*this%amr%dz(lvl)],&
+                  &                       [this%amr%xlo+real(i+1,WP)*this%amr%dx(lvl), &
+                  &                        this%amr%ylo+real(j+1,WP)*this%amr%dy(lvl), &
+                  &                        this%amr%zlo+real(k+1,WP)*this%amr%dz(lvl)])
+                  initial_dist=dot_product(normal,[this%amr%xlo+(real(i,WP)+0.5_WP)*this%amr%dx(lvl),&
+                  &                                this%amr%ylo+(real(j,WP)+0.5_WP)*this%amr%dy(lvl),&
+                  &                                this%amr%zlo+(real(k,WP)+0.5_WP)*this%amr%dz(lvl)])
+                  call setNumberOfPlanes(liquid_gas_interface,1)
+                  call setPlane(liquid_gas_interface,0,normal,initial_dist)
+                  call matchVolumeFraction(cell,volmom(i,j,k,1),liquid_gas_interface)
+                  interf(i,j,k,:)=getPlane(liquid_gas_interface,0)
+                  
+               end do
+            end do
+         end do
+         
+      end do; call this%amr%mfiter_destroy(mfi)
+      
+      ! Fill VF and barycenter fields
+      call this%cfill_interf(lvl=lvl,time=time,interf=this%interf(lvl))
+      
+   end subroutine build_plicnet
+
    
 end module amrvfs_class

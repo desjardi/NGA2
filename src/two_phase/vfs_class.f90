@@ -3054,7 +3054,7 @@ contains
       implicit none
       class(vfs), intent(inout) :: this
       integer(IRL_SignedIndex_t) :: i,j,k
-      integer :: ind,ii,jj,kk,icenter
+      integer :: ind,ii,jj,kk
       real(IRL_double), dimension(0:2) :: normal
       real(IRL_double), dimension(0:188) :: moments
       integer :: direction
