@@ -246,6 +246,7 @@ contains
                call getSepVMAtIndex(this%vf%detailed_remap(i,j,k),n-1,my_SepVM)
                ! Verify volume fraction for our phase of interest is non-zero
                vols(0)=getVolume(my_SepVM,0); vols(1)=getVolume(my_SepVM,1)
+               if (sum(vols).lt.tiny(1.0_WP)) cycle
                if (vols(this%phase)/sum(vols).lt.VFlo) cycle
                ! Get cell index for nth object
                ind=this%vf%cfg%get_ijk_from_lexico(getTagForIndex(this%vf%detailed_remap(i,j,k),n-1))
@@ -556,6 +557,7 @@ contains
                this%id_old(this%struct(n)%map(1,nn),this%struct(n)%map(2,nn),this%struct(n)%map(3,nn))=n
             end do
          end do
+         ! Do we need to delete ids with no vof?
          ! Communicate id
          call this%vf%cfg%sync(this%id)
          call this%vf%cfg%sync(this%id_old)
