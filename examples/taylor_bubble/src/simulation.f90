@@ -45,19 +45,16 @@ module simulation
 contains
 
 
-   !> Function that defines a level set function for a falling drop problem
+   !> Function that defines a level set function for Taylor bubble problem
    function levelset_bubble(xyz,t) result(G)
       implicit none
       real(WP), dimension(3),intent(in) :: xyz
       real(WP), intent(in) :: t
-      real(WP) :: G,Gcap1,Gcap2,Gcyl
+      real(WP) :: G
       ! Create cylinder
-      Gcyl=max(sqrt(xyz(2)**2+xyz(3)**2)-bradius,abs(xyz(1)-(2.0_WP*bradius+0.5_WP*bheight))-0.5_WP*bheight)
-      ! Create bottom and top half-spheres
-      Gcap1=sqrt(sum((xyz-[2.0_WP*bradius        ,0.0_WP,0.0_WP])**2))-bradius
-      Gcap2=sqrt(sum((xyz-[2.0_WP*bradius+bheight,0.0_WP,0.0_WP])**2))-bradius
-      ! Combine
-      G=min(Gcyl,Gcap1,Gcap2)
+      G=max(sqrt(xyz(2)**2+xyz(3)**2)-bradius,abs(xyz(1)-(bradius+0.5_WP*bheight))-0.5_WP*bheight)
+      ! Create top half-sphere
+      G=min(G,sqrt(sum((xyz-[bradius+bheight,0.0_WP,0.0_WP])**2))-bradius)
    end function levelset_bubble
    
    
@@ -93,6 +90,7 @@ contains
       ! Initialize our VOF solver and field
       create_and_initialize_vof: block
          use mms_geom,  only: cube_refine_vol
+         use mathtools, only: Pi
          use vfs_class, only: plicnet,remap,VFhi,VFlo
          integer :: i,j,k,n,si,sj,sk
          real(WP), dimension(3,8) :: cube_vertex
@@ -117,7 +115,7 @@ contains
          !end do
          ! Initialize a bubble
          call param_read('Bubble diameter',bradius); bradius=0.5_WP*bradius
-         call param_read('Bubble height',bheight)
+         call param_read('Bubble volume'  ,bheight); bheight=bheight/(Pi*bradius**2)-2.0_WP/3.0_WP*bradius
          ! Generate interface
          do k=vf%cfg%kmino_,vf%cfg%kmaxo_
             do j=vf%cfg%jmino_,vf%cfg%jmaxo_
@@ -226,9 +224,9 @@ contains
       
       
       ! Create an LES model
-      create_sgs: block
-         sgs=sgsmodel(cfg=fs%cfg,umask=fs%umask,vmask=fs%vmask,wmask=fs%wmask)
-      end block create_sgs
+      !create_sgs: block
+      !   sgs=sgsmodel(cfg=fs%cfg,umask=fs%umask,vmask=fs%vmask,wmask=fs%wmask)
+      !end block create_sgs
 
       
       ! Create surfmesh object for interface polygon output
@@ -346,19 +344,19 @@ contains
          call fs%get_viscosity(vf=vf,strat=harmonic_visc)!arithmetic_visc)
          
          ! Turbulence modeling
-         sgs_modeling: block
-            use sgsmodel_class, only: vreman
-            integer :: i,j,k
-            resU=vf%VF*fs%rho_l+(1.0_WP-vf%VF)*fs%rho_g
-            call fs%get_gradu(gradU)
-            call sgs%get_visc(type=vreman,dt=time%dtold,rho=resU,gradu=gradU)
-            do k=fs%cfg%kmino_+1,fs%cfg%kmaxo_; do j=fs%cfg%jmino_+1,fs%cfg%jmaxo_; do i=fs%cfg%imino_+1,fs%cfg%imaxo_
-               fs%visc(i,j,k)   =fs%visc(i,j,k)   +sgs%visc(i,j,k)
-               fs%visc_xy(i,j,k)=fs%visc_xy(i,j,k)+sum(fs%itp_xy(:,:,i,j,k)*sgs%visc(i-1:i,j-1:j,k))
-               fs%visc_yz(i,j,k)=fs%visc_yz(i,j,k)+sum(fs%itp_yz(:,:,i,j,k)*sgs%visc(i,j-1:j,k-1:k))
-               fs%visc_zx(i,j,k)=fs%visc_zx(i,j,k)+sum(fs%itp_xz(:,:,i,j,k)*sgs%visc(i-1:i,j,k-1:k))
-            end do; end do; end do
-         end block sgs_modeling
+         !sgs_modeling: block
+         !   use sgsmodel_class, only: vreman
+         !   integer :: i,j,k
+         !   resU=vf%VF*fs%rho_l+(1.0_WP-vf%VF)*fs%rho_g
+         !   call fs%get_gradu(gradU)
+         !   call sgs%get_visc(type=vreman,dt=time%dtold,rho=resU,gradu=gradU)
+         !   do k=fs%cfg%kmino_+1,fs%cfg%kmaxo_; do j=fs%cfg%jmino_+1,fs%cfg%jmaxo_; do i=fs%cfg%imino_+1,fs%cfg%imaxo_
+         !      fs%visc(i,j,k)   =fs%visc(i,j,k)   +sgs%visc(i,j,k)
+         !      fs%visc_xy(i,j,k)=fs%visc_xy(i,j,k)+sum(fs%itp_xy(:,:,i,j,k)*sgs%visc(i-1:i,j-1:j,k))
+         !      fs%visc_yz(i,j,k)=fs%visc_yz(i,j,k)+sum(fs%itp_yz(:,:,i,j,k)*sgs%visc(i,j-1:j,k-1:k))
+         !      fs%visc_zx(i,j,k)=fs%visc_zx(i,j,k)+sum(fs%itp_xz(:,:,i,j,k)*sgs%visc(i-1:i,j,k-1:k))
+         !   end do; end do; end do
+         !end block sgs_modeling
          
          ! Perform sub-iterations
          do while (time%it.le.time%itmax)
