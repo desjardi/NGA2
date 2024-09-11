@@ -40,8 +40,25 @@ module simulation
 
    !> Inlet parameters
    real(WP) :: Uin,Ton,Toff
+   real(WP) :: bradius,bheight
    
 contains
+
+
+   !> Function that defines a level set function for a falling drop problem
+   function levelset_bubble(xyz,t) result(G)
+      implicit none
+      real(WP), dimension(3),intent(in) :: xyz
+      real(WP), intent(in) :: t
+      real(WP) :: G,Gcap1,Gcap2,Gcyl
+      ! Create cylinder
+      Gcyl=max(sqrt(xyz(2)**2+xyz(3)**2)-bradius,abs(xyz(1)-(2.0_WP*bradius+0.5_WP*bheight))-0.5_WP*bheight)
+      ! Create bottom and top half-spheres
+      Gcap1=sqrt(sum((xyz-[2.0_WP*bradius        ,0.0_WP,0.0_WP])**2))-bradius
+      Gcap2=sqrt(sum((xyz-[2.0_WP*bradius+bheight,0.0_WP,0.0_WP])**2))-bradius
+      ! Combine
+      G=min(Gcyl,Gcap1,Gcap2)
+   end function levelset_bubble
    
    
    !> Initialization of problem solver
@@ -75,21 +92,56 @@ contains
 
       ! Initialize our VOF solver and field
       create_and_initialize_vof: block
-         use vfs_class, only: plicnet,remap
-         integer :: i,j,k
+         use mms_geom,  only: cube_refine_vol
+         use vfs_class, only: plicnet,remap,VFhi,VFlo
+         integer :: i,j,k,n,si,sj,sk
+         real(WP), dimension(3,8) :: cube_vertex
+         real(WP), dimension(3) :: v_cent,a_cent
+         real(WP) :: vol,area
+         integer, parameter :: amr_ref_lvl=4
          ! Create a VOF solver
          call vf%initialize(cfg=cfg,reconstruction_method=plicnet,transport_method=remap,name='VOF')
          !vf%cons_correct=.false.
          ! Initialize to flat interface at entrance
+         !do k=vf%cfg%kmino_,vf%cfg%kmaxo_
+         !   do j=vf%cfg%jmino_,vf%cfg%jmaxo_
+         !      do i=vf%cfg%imino_,vf%cfg%imaxo_
+         !         ! Initialize VF to liquid everywhere except at the inlet
+         !         vf%VF(i,j,k)=1.0_WP
+         !         if (vf%cfg%xm(i).lt.0.0_WP.and.sqrt(vf%cfg%ym(j)**2+vf%cfg%zm(k)**2).le.0.5_WP*Dinlet) vf%VF(i,j,k)=0.0_WP
+         !         ! Initialize phasic barycenters
+         !         vf%Lbary(:,i,j,k)=[vf%cfg%xm(i),vf%cfg%ym(j),vf%cfg%zm(k)]
+         !         vf%Gbary(:,i,j,k)=[vf%cfg%xm(i),vf%cfg%ym(j),vf%cfg%zm(k)]
+         !      end do
+         !   end do
+         !end do
+         ! Initialize a bubble
+         call param_read('Bubble diameter',bradius); bradius=0.5_WP*bradius
+         call param_read('Bubble height',bheight)
+         ! Generate interface
          do k=vf%cfg%kmino_,vf%cfg%kmaxo_
             do j=vf%cfg%jmino_,vf%cfg%jmaxo_
                do i=vf%cfg%imino_,vf%cfg%imaxo_
-                  ! Initialize VF to liquid everywhere except at the inlet
-                  vf%VF(i,j,k)=1.0_WP
-                  if (vf%cfg%xm(i).lt.0.0_WP.and.sqrt(vf%cfg%ym(j)**2+vf%cfg%zm(k)**2).le.0.5_WP*Dinlet) vf%VF(i,j,k)=0.0_WP
-                  ! Initialize phasic barycenters
-                  vf%Lbary(:,i,j,k)=[vf%cfg%xm(i),vf%cfg%ym(j),vf%cfg%zm(k)]
-                  vf%Gbary(:,i,j,k)=[vf%cfg%xm(i),vf%cfg%ym(j),vf%cfg%zm(k)]
+                  ! Set cube vertices
+                  n=0
+                  do sk=0,1
+                     do sj=0,1
+                        do si=0,1
+                           n=n+1; cube_vertex(:,n)=[vf%cfg%x(i+si),vf%cfg%y(j+sj),vf%cfg%z(k+sk)]
+                        end do
+                     end do
+                  end do
+                  ! Call adaptive refinement code to get volume and barycenters recursively
+                  vol=0.0_WP; area=0.0_WP; v_cent=0.0_WP; a_cent=0.0_WP
+                  call cube_refine_vol(cube_vertex,vol,area,v_cent,a_cent,levelset_bubble,0.0_WP,amr_ref_lvl)
+                  vf%VF(i,j,k)=vol/vf%cfg%vol(i,j,k)
+                  if (vf%VF(i,j,k).ge.VFlo.and.vf%VF(i,j,k).le.VFhi) then
+                     vf%Lbary(:,i,j,k)=v_cent
+                     vf%Gbary(:,i,j,k)=([vf%cfg%xm(i),vf%cfg%ym(j),vf%cfg%zm(k)]-vf%VF(i,j,k)*vf%Lbary(:,i,j,k))/(1.0_WP-vf%VF(i,j,k))
+                  else
+                     vf%Lbary(:,i,j,k)=[vf%cfg%xm(i),vf%cfg%ym(j),vf%cfg%zm(k)]
+                     vf%Gbary(:,i,j,k)=[vf%cfg%xm(i),vf%cfg%ym(j),vf%cfg%zm(k)]
+                  end if
                end do
             end do
          end do
@@ -246,7 +298,7 @@ contains
    
    !> Perform an NGA2 simulation
    subroutine simulation_run
-      use tpns_class, only: harmonic_visc
+      use tpns_class, only: harmonic_visc,arithmetic_visc
       implicit none
       
       ! Perform time integration
@@ -291,7 +343,7 @@ contains
          call vf%advance(dt=time%dt,U=fs%U,V=fs%V,W=fs%W)
          
          ! Prepare new staggered viscosity (at n+1)
-         call fs%get_viscosity(vf=vf,strat=harmonic_visc)
+         call fs%get_viscosity(vf=vf,strat=harmonic_visc)!arithmetic_visc)
          
          ! Turbulence modeling
          sgs_modeling: block
