@@ -1390,7 +1390,8 @@ contains
          ! True by default
          same_label=.true.
          ! Exception is if pair carries distinct non-zero remapped ids
-         if (this%id_rmp(i1,j1,k1)*this%id_rmp(i2,j2,k2).gt.0.and.this%id_rmp(i1,j1,k1).ne.this%id_rmp(i2,j2,k2)) same_label=.false.
+         !if (this%id_rmp(i1,j1,k1)*this%id_rmp(i2,j2,k2).gt.0.and.this%id_rmp(i1,j1,k1).ne.this%id_rmp(i2,j2,k2)) same_label=.false.
+         if (this%id_rmp(i1,j1,k1).ne.0 .and. this%id_rmp(i2,j2,k2).ne.0 .and. this%id_rmp(i1,j1,k1).ne.this%id_rmp(i2,j2,k2)) same_label=.false.
       end function same_label
 
    end subroutine build
