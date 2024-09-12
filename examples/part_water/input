@@ -2,15 +2,15 @@
 Partition :	1 8 1
 
 # Mesh definition
-Lx : 0.256
-Ly : 0.256
-Lz : 0.012
-nx : 128
-ny : 128
-nz : 6
+Lx : 0.152
+Ly : 0.400
+Lz : 0.051
+nx : 30
+ny : 80
+nz : 10
 
 # Pool
-Pool depth : 0.15
+Pool depth : 0.201
 
 # Fluid properties
 Gravity :                     0 -9.81 0
@@ -18,11 +18,12 @@ Liquid dynamic viscosity :    1.137e-3
 Gas dynamic viscosity :       1.780e-5
 Liquid density :              1000
 Gas density :                 1.226
-Surface tension coefficient : 0!.0728
-Static contact angle :        45
+Surface tension coefficient : 0.0728
+Static contact angle :        90
 
 # Particle parameters
-Particle density :            2500
+Particle density :            2650
+Particle diameter :           0.003
 
 # Particle collisions
 Coefficient of restitution :  0.1
@@ -30,12 +31,12 @@ Wall restitution :            0.1
 Friction coefficient :        0.5
 
 # Bed injection
-Bed file to inject :          alban.bed
-Bed injection velocity :      0.06
+#Bed file to inject :          alban.bed
+#Bed injection velocity :      0.06
 
 # Time integration
-Particle timestep size :      1e-5
-Max timestep size :           1e-4
+Particle timestep size :      1e-4
+Max timestep size :           1e-3
 Max cfl number :	            1
 Max time :                    1
 

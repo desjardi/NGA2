@@ -45,8 +45,7 @@ contains
          end do
          
          ! General serial grid object
-         !grid=sgrid(coord=cartesian,no=3,x=x,y=y,z=z,xper=.true.,yper=.false.,zper=.false.,name='part_water')
-         grid=sgrid(coord=cartesian,no=3,x=x,y=y,z=z,xper=.true.,yper=.false.,zper=.true.,name='part_water')
+         grid=sgrid(coord=cartesian,no=3,x=x,y=y,z=z,xper=.false.,yper=.false.,zper=.false.,name='part_water')
          
       end block create_grid
       
@@ -73,8 +72,8 @@ contains
             do j=cfg%jmino_,cfg%jmaxo_
                do i=cfg%imino_,cfg%imaxo_
                   if (j.lt.cfg%jmin) cfg%VF(i,j,k)=0.0_WP
-                  !if (k.lt.cfg%kmin) cfg%VF(i,j,k)=0.0_WP
-                  !if (k.gt.cfg%kmax) cfg%VF(i,j,k)=0.0_WP
+                  if (k.lt.cfg%kmin) cfg%VF(i,j,k)=0.0_WP
+                  if (k.gt.cfg%kmax) cfg%VF(i,j,k)=0.0_WP
                end do
             end do
          end do

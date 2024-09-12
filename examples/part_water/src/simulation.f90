@@ -74,16 +74,16 @@ contains
       
       ! Allocate work arrays
       allocate_work_arrays: block
-         allocate(srcU (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
-         allocate(srcV (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
-         allocate(srcW (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
-         allocate(srcM (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
-         allocate(resU (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
-         allocate(resV (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
-         allocate(resW (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
-         allocate(Ui   (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
-         allocate(Vi   (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
-         allocate(Wi   (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+         allocate(srcU(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+         allocate(srcV(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+         allocate(srcW(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+         allocate(srcM(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+         allocate(resU(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+         allocate(resV(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+         allocate(resW(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+         allocate(Ui  (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+         allocate(Vi  (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+         allocate(Wi  (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
       end block allocate_work_arrays
       
       
@@ -125,73 +125,102 @@ contains
          call param_read('Friction coefficient',lp%mu_f)
       end block initialize_lpt
       
+
+      ! Initialize particles - single particle entry case
+      prepare_single_particle: block
+         real(WP) :: dp
+         call param_read('Particle diameter',dp)
+         if (lp%cfg%amRoot) then
+            call lp%resize(1)
+            ! Give id
+            lp%p(1)%id=int(1,8)
+            ! Set the diameter
+            lp%p(1)%d=dp
+            ! Assign start position in the domain
+            lp%p(1)%pos=[0.0_WP,0.335_WP,0.0_WP]
+            ! Give zero velocity
+            lp%p(1)%vel=0.0_WP
+            ! Give zero collision force
+            lp%p(1)%Acol=0.0_WP
+            lp%p(1)%Tcol=0.0_WP
+            ! Give zero dt
+            lp%p(1)%dt=0.0_WP
+            ! Locate the particle on the mesh
+            lp%p(1)%ind=lp%cfg%get_ijk_global(lp%p(1)%pos,[lp%cfg%imin,lp%cfg%jmin,lp%cfg%kmin])
+            ! Activate the particle
+            lp%p(1)%flag=0
+         end if
+         call lp%sync()
+         call lp%update_VF()
+      end block prepare_single_particle
+
       
-      ! Initialize bed data
-      prepare_bed: block
-         use mpi_f08
-         use messager,  only: die
-         use quicksort, only: quick_sort
-         use string,    only: str_medium
-         use parallel,  only: comm,info_mpiio
-         type(MPI_File) :: ifile
-         type(MPI_Status):: status
-         integer :: ierr,psize,i
-         integer(kind=MPI_OFFSET_KIND) :: offset
-         character(len=str_medium) :: bedfile
-         real(WP), dimension(:), allocatable :: pos
-         integer , dimension(:), allocatable :: id
-         type(part), dimension(:), allocatable :: tmp
-         real(WP) :: maxpos
-         ! Injection parameters
-         call param_read('Bed file to inject',bedfile)
-         call param_read('Bed injection velocity',vbed)
-         ! Read the header of the particle file
-         call MPI_FILE_OPEN(comm,trim(bedfile),MPI_MODE_RDONLY,info_mpiio,ifile,ierr)
-         if (ierr.ne.0) call die('[part_water] Problem encountered while reading bed file: '//trim(bedfile))
-         call MPI_FILE_READ_ALL(ifile,nbed,1,MPI_INTEGER,status,ierr)
-         call MPI_FILE_READ_ALL(ifile,psize,1,MPI_INTEGER,status,ierr)
-         if (psize.ne.MPI_PART_SIZE) call die('[part_water] Particle type unreadable')
-         ! Root reads in the full file and stores the particles
-         if (lp%cfg%amRoot) then
-            allocate(pbed(nbed))
-            call MPI_FILE_GET_POSITION(ifile,offset,ierr)
-            call MPI_FILE_READ_AT(ifile,offset,pbed,nbed,MPI_PART,status,ierr)
-         end if
-         ! Close the bed file
-         call MPI_FILE_CLOSE(ifile,ierr)
-         ! Manipulate the bed particles a bit
-         if (lp%cfg%amRoot) then
-            ! Sort particles
-            allocate(pos(nbed),id(nbed))
-            do i=1,nbed
-               id(i)=i
-               pos(i)=pbed(i)%pos(2)
-            end do
-            ! Flip the bed
-            maxpos=maxval(pos)
-            pos=maxpos-pos
-            ! Apply quicksort
-            call quick_sort(A=pos,B=id)
-            ! Loop through particles and sort them
-            allocate(tmp(nbed))
-            do i=1,nbed
-               tmp(i)=pbed(id(i))
-               tmp(i)%id=i
-               ! Adjust position
-               tmp(i)%pos(2)=pos(i)+lp%cfg%yL
-               ! Adjust velocity
-               tmp(i)%vel=[0.0_WP,-vbed,0.0_WP]
-               ! Zero out collisions
-               tmp(i)%Acol=0.0_WP
-               tmp(i)%Tcol=0.0_WP
-               ! Zero out angular velocity
-               tmp(i)%angVel=0.0_WP
-            end do
-            ! Store the particles
-            pbed=tmp
-            deallocate(tmp,pos,id)
-         end if
-      end block prepare_bed
+      ! Initialize particles - precalculated bed entry case
+      !prepare_bed: block
+      !   use mpi_f08
+      !   use messager,  only: die
+      !   use quicksort, only: quick_sort
+      !   use string,    only: str_medium
+      !   use parallel,  only: comm,info_mpiio
+      !   type(MPI_File) :: ifile
+      !   type(MPI_Status):: status
+      !   integer :: ierr,psize,i
+      !   integer(kind=MPI_OFFSET_KIND) :: offset
+      !   character(len=str_medium) :: bedfile
+      !   real(WP), dimension(:), allocatable :: pos
+      !   integer , dimension(:), allocatable :: id
+      !   type(part), dimension(:), allocatable :: tmp
+      !   real(WP) :: maxpos
+      !   ! Injection parameters
+      !   call param_read('Bed file to inject',bedfile)
+      !   call param_read('Bed injection velocity',vbed)
+      !   ! Read the header of the particle file
+      !   call MPI_FILE_OPEN(comm,trim(bedfile),MPI_MODE_RDONLY,info_mpiio,ifile,ierr)
+      !   if (ierr.ne.0) call die('[part_water] Problem encountered while reading bed file: '//trim(bedfile))
+      !   call MPI_FILE_READ_ALL(ifile,nbed,1,MPI_INTEGER,status,ierr)
+      !   call MPI_FILE_READ_ALL(ifile,psize,1,MPI_INTEGER,status,ierr)
+      !   if (psize.ne.MPI_PART_SIZE) call die('[part_water] Particle type unreadable')
+      !   ! Root reads in the full file and stores the particles
+      !   if (lp%cfg%amRoot) then
+      !      allocate(pbed(nbed))
+      !      call MPI_FILE_GET_POSITION(ifile,offset,ierr)
+      !      call MPI_FILE_READ_AT(ifile,offset,pbed,nbed,MPI_PART,status,ierr)
+      !   end if
+      !   ! Close the bed file
+      !   call MPI_FILE_CLOSE(ifile,ierr)
+      !   ! Manipulate the bed particles a bit
+      !   if (lp%cfg%amRoot) then
+      !      ! Sort particles
+      !      allocate(pos(nbed),id(nbed))
+      !      do i=1,nbed
+      !         id(i)=i
+      !         pos(i)=pbed(i)%pos(2)
+      !      end do
+      !      ! Flip the bed
+      !      maxpos=maxval(pos)
+      !      pos=maxpos-pos
+      !      ! Apply quicksort
+      !      call quick_sort(A=pos,B=id)
+      !      ! Loop through particles and sort them
+      !      allocate(tmp(nbed))
+      !      do i=1,nbed
+      !         tmp(i)=pbed(id(i))
+      !         tmp(i)%id=i
+      !         ! Adjust position
+      !         tmp(i)%pos(2)=pos(i)+lp%cfg%yL
+      !         ! Adjust velocity
+      !         tmp(i)%vel=[0.0_WP,-vbed,0.0_WP]
+      !         ! Zero out collisions
+      !         tmp(i)%Acol=0.0_WP
+      !         tmp(i)%Tcol=0.0_WP
+      !         ! Zero out angular velocity
+      !         tmp(i)%angVel=0.0_WP
+      !      end do
+      !      ! Store the particles
+      !      pbed=tmp
+      !      deallocate(tmp,pos,id)
+      !   end if
+      !end block prepare_bed
       
       
       ! Initialize our VOF solver and field

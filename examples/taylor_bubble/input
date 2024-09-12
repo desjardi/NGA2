@@ -2,8 +2,8 @@
 Partition :	8 1 1
 
 # Mesh definition
-Pipe length :    0.152 !0.288
-Pipe diameter :  0.019 !0.036
+Pipe length :    0.288 !0.152 !0.288
+Pipe diameter :  0.036 !0.019 !0.036
 Inlet diameter : 0     !0.012
 nx : 384
 ny : 48
@@ -15,16 +15,16 @@ Inlet off duration : 0
 Inlet velocity :     0
 
 # Initial bubble
-Bubble diameter : 0.014     !0.028
-Bubble volume :   7.697e-6  !5e-5
+Bubble diameter : 0.028 !0.014     !0.028
+Bubble volume :   5e-5  !7.697e-6  !5e-5
 
 # Fluid properties
 Gravity :                    -9.81 0 0
-Liquid dynamic viscosity :    0.084    !0.092
+Liquid dynamic viscosity :    0.096 !0.084    !0.092
 Gas dynamic viscosity :       1.780e-5
-Liquid density :              911      !1244
+Liquid density :              1218  !911      !1244
 Gas density :                 1.226
-Surface tension coefficient : 0.0328   !0.067
+Surface tension coefficient : 0.067 !0.0328   !0.067
 
 # Time integration
 Max timestep size : 2.5e-4
