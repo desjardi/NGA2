@@ -29,7 +29,7 @@ module simulation
    type(surfmesh) :: smesh
    
    !> Simulation monitor file
-   type(monitor) :: mfile,cflfile
+   type(monitor) :: mfile,cflfile,bubblefile
    
    public :: simulation_init,simulation_run,simulation_final
    
@@ -40,7 +40,9 @@ module simulation
 
    !> Inlet parameters
    real(WP) :: Uin,Ton,Toff
-   real(WP) :: bradius,bheight
+
+   !> Bubble info
+   real(WP) :: bradius,bheight,bpos,bvel
    
 contains
 
@@ -56,6 +58,33 @@ contains
       ! Create top half-sphere
       G=min(G,sqrt(sum((xyz-[bradius+bheight,0.0_WP,0.0_WP])**2))-bradius)
    end function levelset_bubble
+   
+   
+   !> Routine that computes rise velocity
+   subroutine rise_vel()
+      use mpi_f08,  only: MPI_ALLREDUCE,MPI_SUM
+      use parallel, only: MPI_REAL_WP
+      implicit none
+      integer :: i,j,k,ierr
+      real(WP) :: mybpos,mybvel,myvol,bubble_vol
+      mybpos=0.0_WP
+      mybvel=0.0_WP
+      myvol=0.0_WP
+      do k=vf%cfg%kmin_,vf%cfg%kmax_
+         do j=vf%cfg%jmin_,vf%cfg%jmax_
+            do i=vf%cfg%imin_,vf%cfg%imax_
+               mybpos=mybpos+vf%cfg%xm(j)*(1.0_WP-vf%VF(i,j,k))*cfg%vol(i,j,k)
+               mybvel=mybvel+   Ui(i,j,k)*(1.0_WP-vf%VF(i,j,k))*cfg%vol(i,j,k)
+               myvol =myvol +             (1.0_WP-vf%VF(i,j,k))*cfg%vol(i,j,k)
+            end do
+         end do
+      end do
+      call MPI_ALLREDUCE(mybpos,bpos      ,1,MPI_REAL_WP,MPI_SUM,cfg%comm,ierr)
+      call MPI_ALLREDUCE(mybvel,bvel      ,1,MPI_REAL_WP,MPI_SUM,cfg%comm,ierr)
+      call MPI_ALLREDUCE(myvol ,bubble_vol,1,MPI_REAL_WP,MPI_SUM,cfg%comm,ierr)
+      bpos=bpos/bubble_vol
+      bvel=bvel/bubble_vol
+   end subroutine
    
    
    !> Initialization of problem solver
@@ -260,6 +289,7 @@ contains
          call fs%get_cfl(time%dt,time%cfl)
          call fs%get_max()
          call vf%get_max()
+         call rise_vel()
          ! Create simulation monitor
          mfile=monitor(fs%cfg%amRoot,'simulation')
          call mfile%add_column(time%n,'Timestep number')
@@ -289,6 +319,12 @@ contains
          call cflfile%add_column(fs%CFLv_y,'Viscous yCFL')
          call cflfile%add_column(fs%CFLv_z,'Viscous zCFL')
          call cflfile%write()
+         ! Create bubble monitor
+         bubblefile=monitor(fs%cfg%amRoot,'bubble')
+         call bubblefile%add_column(time%n,'Timestep number')
+         call bubblefile%add_column(time%t,'Time')
+         call bubblefile%add_column(bpos,'Centroid')
+         call bubblefile%add_column(bvel,'Rise velocity')
       end block create_monitor
       
    end subroutine simulation_init
@@ -443,8 +479,10 @@ contains
          ! Perform and output monitoring
          call fs%get_max()
          call vf%get_max()
+         call rise_vel()
          call mfile%write()
          call cflfile%write()
+         call bubblefile%write()
          
       end do
       
