@@ -69,11 +69,11 @@ contains
       real(WP) :: mybpos,mybvel,myvol,bubble_vol
       mybpos=0.0_WP
       mybvel=0.0_WP
-      myvol=0.0_WP
+      myvol =0.0_WP
       do k=vf%cfg%kmin_,vf%cfg%kmax_
          do j=vf%cfg%jmin_,vf%cfg%jmax_
             do i=vf%cfg%imin_,vf%cfg%imax_
-               mybpos=mybpos+vf%cfg%xm(j)*(1.0_WP-vf%VF(i,j,k))*cfg%vol(i,j,k)
+               mybpos=mybpos+vf%cfg%xm(i)*(1.0_WP-vf%VF(i,j,k))*cfg%vol(i,j,k)
                mybvel=mybvel+   Ui(i,j,k)*(1.0_WP-vf%VF(i,j,k))*cfg%vol(i,j,k)
                myvol =myvol +             (1.0_WP-vf%VF(i,j,k))*cfg%vol(i,j,k)
             end do
