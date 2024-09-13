@@ -304,15 +304,17 @@ contains
          integer :: n
          ! Traverse merge list 
          do n=1,this%nmerge
+            ! If merging with core, retain id=1
+            if (this%merge(1,n).eq.1 .or. this%merge(2,n).eq.1) then 
+               this%newid(n) = 1
+               ! Add merge to merge_master list and collapse subsequent merges
+               call add_merge_master(this%merge(1,n),this%merge(2,n),this%newid(n))
+            end if
+
             ! Deal with structure not part of existing merge event
             if (this%newid(n).eq.0) then
-               ! If merging with core, retain id=1
-               if (this%merge(1,n).eq.1 .or. this%merge(1,n).eq.1) then 
-                  this%newid(n) = 1
-               else
-                  ! Generate new id for merge
-                  this%newid(n) = this%generate_new_id()
-               end if 
+               ! Generate new id for merge
+               this%newid(n) = this%generate_new_id() 
                ! Add merge to merge_master list and collapse subsequent merges
                call add_merge_master(this%merge(1,n),this%merge(2,n),this%newid(n))
             end if 
@@ -328,7 +330,12 @@ contains
             do k=this%vf%cfg%kmin_,this%vf%cfg%kmax_; do j=this%vf%cfg%jmin_,this%vf%cfg%jmax_; do i=this%vf%cfg%imin_,this%vf%cfg%imax_
                ! Loop over oldids 
                do nn=1,this%merge_master(n)%noldid
-                  if (this%id_rmp(i,j,k).eq.this%merge_master(n)%oldids(nn)) this%id_rmp(i,j,k)=this%merge_master(n)%newid
+                  if (this%id_rmp(i,j,k).eq.this%merge_master(n)%oldids(nn)) then 
+                     !if (this%merge_master(n)%oldids(nn).eq.1) print *, "old id 1, newid: ",this%merge_master(n)%newid
+                     !print *, "oldid ", this%merge_master(n)%oldids(nn)
+                     !print *, "newid ", this%merge_master(n)%newid
+                     this%id_rmp(i,j,k)=this%merge_master(n)%newid
+                  end if 
                end do 
             end do; end do; end do
          end do
@@ -685,21 +692,34 @@ contains
       recursive subroutine collapse_merges(oldid,newid)
          implicit none 
          integer, intent(in) :: oldid,newid 
-         integer :: n,nn
+         integer :: n,nn,nnn
          integer, dimension(2) :: otherid = [2,1]
          ! Loop over merges and look for any that are part of this merge
          do n=1,this%nmerge
             ! Already has newid?
             if (this%newid(n).ne.0) cycle
+            ! Nothing to do for liquid core
+            if (newid.eq.oldid) cycle 
             ! Check if this merge contains matching oldid or newid (occurs with merge2)
             do nn=1,2
                if (this%merge(nn,n).eq.oldid.or.this%merge(nn,n).eq.newid) then
-                  ! Set newid
-                  this%newid(n)=newid
-                  ! Append other id of this merge to merge master
-                  call append_merge_master(this%nmerge_master,this%merge(otherid(nn),n))
-                  ! Collapse other id of this merge 
-                  call collapse_merges(this%merge(otherid(nn),n),newid)
+                  ! Check if one of any merges are happening with core, if so, retain id=1
+                  if (ANY(this%merge(:,n).eq.1)) then 
+                     do nnn = 1,2
+                        if (this%merge(nnn,n).ne.1) then 
+                           this%newid(n) = 1
+                           call append_merge_master(this%nmerge_master,this%merge(nnn,n))
+                           call collapse_merges(this%merge(nnn,n),1) 
+                        end if 
+                     end do
+                  else 
+                     ! Set newid
+                     this%newid(n)=newid
+                     ! Append other id of this merge to merge master
+                     call append_merge_master(this%nmerge_master,this%merge(otherid(nn),n))
+                     ! Collapse other id of this merge 
+                     call collapse_merges(this%merge(otherid(nn),n),newid) 
+                  end if 
                end if
             end do
          end do 
