@@ -305,9 +305,14 @@ contains
          ! Traverse merge list 
          do n=1,this%nmerge
             ! Deal with structure not part of existing merge event
-            if (this%newid(n).eq.0) then 
-               ! Generate new id for merge
-               this%newid(n) = this%generate_new_id()
+            if (this%newid(n).eq.0) then
+               ! If merging with core, retain id=1
+               if (this%merge(1,n).eq.1 .or. this%merge(1,n).eq.1) then 
+                  this%newid(n) = 1
+               else
+                  ! Generate new id for merge
+                  this%newid(n) = this%generate_new_id()
+               end if 
                ! Add merge to merge_master list and collapse subsequent merges
                call add_merge_master(this%merge(1,n),this%merge(2,n),this%newid(n))
             end if 
