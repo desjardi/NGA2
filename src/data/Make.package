@@ -1,4 +1,8 @@
 f90EXE_sources += datafile_class.f90 pardata_class.f90 ensight_class.f90
 
+ifeq ($(USE_AMREX),TRUE)
+  f90EXE_sources += amrensight_class.f90 amrensight2_class.f90
+endif
+
 INCLUDE_LOCATIONS += $(NGA_HOME)/src/data
 VPATH_LOCATIONS   += $(NGA_HOME)/src/data

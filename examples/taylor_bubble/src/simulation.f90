@@ -29,7 +29,7 @@ module simulation
    type(surfmesh) :: smesh
    
    !> Simulation monitor file
-   type(monitor) :: mfile,cflfile
+   type(monitor) :: mfile,cflfile,bubblefile
    
    public :: simulation_init,simulation_run,simulation_final
    
@@ -40,8 +40,51 @@ module simulation
 
    !> Inlet parameters
    real(WP) :: Uin,Ton,Toff
+
+   !> Bubble info
+   real(WP) :: bradius,bheight,bpos,bvel
    
 contains
+
+
+   !> Function that defines a level set function for Taylor bubble problem
+   function levelset_bubble(xyz,t) result(G)
+      implicit none
+      real(WP), dimension(3),intent(in) :: xyz
+      real(WP), intent(in) :: t
+      real(WP) :: G
+      ! Create cylinder
+      G=max(sqrt(xyz(2)**2+xyz(3)**2)-bradius,abs(xyz(1)-(bradius+0.5_WP*bheight))-0.5_WP*bheight)
+      ! Create top half-sphere
+      G=min(G,sqrt(sum((xyz-[bradius+bheight,0.0_WP,0.0_WP])**2))-bradius)
+   end function levelset_bubble
+   
+   
+   !> Routine that computes rise velocity
+   subroutine rise_vel()
+      use mpi_f08,  only: MPI_ALLREDUCE,MPI_SUM
+      use parallel, only: MPI_REAL_WP
+      implicit none
+      integer :: i,j,k,ierr
+      real(WP) :: mybpos,mybvel,myvol,bubble_vol
+      mybpos=0.0_WP
+      mybvel=0.0_WP
+      myvol =0.0_WP
+      do k=vf%cfg%kmin_,vf%cfg%kmax_
+         do j=vf%cfg%jmin_,vf%cfg%jmax_
+            do i=vf%cfg%imin_,vf%cfg%imax_
+               mybpos=mybpos+vf%cfg%xm(i)*(1.0_WP-vf%VF(i,j,k))*cfg%vol(i,j,k)
+               mybvel=mybvel+   Ui(i,j,k)*(1.0_WP-vf%VF(i,j,k))*cfg%vol(i,j,k)
+               myvol =myvol +             (1.0_WP-vf%VF(i,j,k))*cfg%vol(i,j,k)
+            end do
+         end do
+      end do
+      call MPI_ALLREDUCE(mybpos,bpos      ,1,MPI_REAL_WP,MPI_SUM,cfg%comm,ierr)
+      call MPI_ALLREDUCE(mybvel,bvel      ,1,MPI_REAL_WP,MPI_SUM,cfg%comm,ierr)
+      call MPI_ALLREDUCE(myvol ,bubble_vol,1,MPI_REAL_WP,MPI_SUM,cfg%comm,ierr)
+      bpos=bpos/bubble_vol
+      bvel=bvel/bubble_vol
+   end subroutine
    
    
    !> Initialization of problem solver
@@ -75,21 +118,57 @@ contains
 
       ! Initialize our VOF solver and field
       create_and_initialize_vof: block
-         use vfs_class, only: plicnet,remap
-         integer :: i,j,k
+         use mms_geom,  only: cube_refine_vol
+         use mathtools, only: Pi
+         use vfs_class, only: plicnet,remap,VFhi,VFlo
+         integer :: i,j,k,n,si,sj,sk
+         real(WP), dimension(3,8) :: cube_vertex
+         real(WP), dimension(3) :: v_cent,a_cent
+         real(WP) :: vol,area
+         integer, parameter :: amr_ref_lvl=4
          ! Create a VOF solver
          call vf%initialize(cfg=cfg,reconstruction_method=plicnet,transport_method=remap,name='VOF')
          !vf%cons_correct=.false.
          ! Initialize to flat interface at entrance
+         !do k=vf%cfg%kmino_,vf%cfg%kmaxo_
+         !   do j=vf%cfg%jmino_,vf%cfg%jmaxo_
+         !      do i=vf%cfg%imino_,vf%cfg%imaxo_
+         !         ! Initialize VF to liquid everywhere except at the inlet
+         !         vf%VF(i,j,k)=1.0_WP
+         !         if (vf%cfg%xm(i).lt.0.0_WP.and.sqrt(vf%cfg%ym(j)**2+vf%cfg%zm(k)**2).le.0.5_WP*Dinlet) vf%VF(i,j,k)=0.0_WP
+         !         ! Initialize phasic barycenters
+         !         vf%Lbary(:,i,j,k)=[vf%cfg%xm(i),vf%cfg%ym(j),vf%cfg%zm(k)]
+         !         vf%Gbary(:,i,j,k)=[vf%cfg%xm(i),vf%cfg%ym(j),vf%cfg%zm(k)]
+         !      end do
+         !   end do
+         !end do
+         ! Initialize a bubble
+         call param_read('Bubble diameter',bradius); bradius=0.5_WP*bradius
+         call param_read('Bubble volume'  ,bheight); bheight=bheight/(Pi*bradius**2)-2.0_WP/3.0_WP*bradius
+         ! Generate interface
          do k=vf%cfg%kmino_,vf%cfg%kmaxo_
             do j=vf%cfg%jmino_,vf%cfg%jmaxo_
                do i=vf%cfg%imino_,vf%cfg%imaxo_
-                  ! Initialize VF to liquid everywhere except at the inlet
-                  vf%VF(i,j,k)=1.0_WP
-                  if (vf%cfg%xm(i).lt.0.0_WP.and.sqrt(vf%cfg%ym(j)**2+vf%cfg%zm(k)**2).le.0.5_WP*Dinlet) vf%VF(i,j,k)=0.0_WP
-                  ! Initialize phasic barycenters
-                  vf%Lbary(:,i,j,k)=[vf%cfg%xm(i),vf%cfg%ym(j),vf%cfg%zm(k)]
-                  vf%Gbary(:,i,j,k)=[vf%cfg%xm(i),vf%cfg%ym(j),vf%cfg%zm(k)]
+                  ! Set cube vertices
+                  n=0
+                  do sk=0,1
+                     do sj=0,1
+                        do si=0,1
+                           n=n+1; cube_vertex(:,n)=[vf%cfg%x(i+si),vf%cfg%y(j+sj),vf%cfg%z(k+sk)]
+                        end do
+                     end do
+                  end do
+                  ! Call adaptive refinement code to get volume and barycenters recursively
+                  vol=0.0_WP; area=0.0_WP; v_cent=0.0_WP; a_cent=0.0_WP
+                  call cube_refine_vol(cube_vertex,vol,area,v_cent,a_cent,levelset_bubble,0.0_WP,amr_ref_lvl)
+                  vf%VF(i,j,k)=vol/vf%cfg%vol(i,j,k)
+                  if (vf%VF(i,j,k).ge.VFlo.and.vf%VF(i,j,k).le.VFhi) then
+                     vf%Lbary(:,i,j,k)=v_cent
+                     vf%Gbary(:,i,j,k)=([vf%cfg%xm(i),vf%cfg%ym(j),vf%cfg%zm(k)]-vf%VF(i,j,k)*vf%Lbary(:,i,j,k))/(1.0_WP-vf%VF(i,j,k))
+                  else
+                     vf%Lbary(:,i,j,k)=[vf%cfg%xm(i),vf%cfg%ym(j),vf%cfg%zm(k)]
+                     vf%Gbary(:,i,j,k)=[vf%cfg%xm(i),vf%cfg%ym(j),vf%cfg%zm(k)]
+                  end if
                end do
             end do
          end do
@@ -174,9 +253,9 @@ contains
       
       
       ! Create an LES model
-      create_sgs: block
-         sgs=sgsmodel(cfg=fs%cfg,umask=fs%umask,vmask=fs%vmask,wmask=fs%wmask)
-      end block create_sgs
+      !create_sgs: block
+      !   sgs=sgsmodel(cfg=fs%cfg,umask=fs%umask,vmask=fs%vmask,wmask=fs%wmask)
+      !end block create_sgs
 
       
       ! Create surfmesh object for interface polygon output
@@ -210,6 +289,7 @@ contains
          call fs%get_cfl(time%dt,time%cfl)
          call fs%get_max()
          call vf%get_max()
+         call rise_vel()
          ! Create simulation monitor
          mfile=monitor(fs%cfg%amRoot,'simulation')
          call mfile%add_column(time%n,'Timestep number')
@@ -239,6 +319,12 @@ contains
          call cflfile%add_column(fs%CFLv_y,'Viscous yCFL')
          call cflfile%add_column(fs%CFLv_z,'Viscous zCFL')
          call cflfile%write()
+         ! Create bubble monitor
+         bubblefile=monitor(fs%cfg%amRoot,'bubble')
+         call bubblefile%add_column(time%n,'Timestep number')
+         call bubblefile%add_column(time%t,'Time')
+         call bubblefile%add_column(bpos,'Centroid')
+         call bubblefile%add_column(bvel,'Rise velocity')
       end block create_monitor
       
    end subroutine simulation_init
@@ -246,7 +332,7 @@ contains
    
    !> Perform an NGA2 simulation
    subroutine simulation_run
-      use tpns_class, only: harmonic_visc
+      use tpns_class, only: harmonic_visc,arithmetic_visc
       implicit none
       
       ! Perform time integration
@@ -291,22 +377,22 @@ contains
          call vf%advance(dt=time%dt,U=fs%U,V=fs%V,W=fs%W)
          
          ! Prepare new staggered viscosity (at n+1)
-         call fs%get_viscosity(vf=vf,strat=harmonic_visc)
+         call fs%get_viscosity(vf=vf,strat=harmonic_visc)!arithmetic_visc)
          
          ! Turbulence modeling
-         sgs_modeling: block
-            use sgsmodel_class, only: vreman
-            integer :: i,j,k
-            resU=vf%VF*fs%rho_l+(1.0_WP-vf%VF)*fs%rho_g
-            call fs%get_gradu(gradU)
-            call sgs%get_visc(type=vreman,dt=time%dtold,rho=resU,gradu=gradU)
-            do k=fs%cfg%kmino_+1,fs%cfg%kmaxo_; do j=fs%cfg%jmino_+1,fs%cfg%jmaxo_; do i=fs%cfg%imino_+1,fs%cfg%imaxo_
-               fs%visc(i,j,k)   =fs%visc(i,j,k)   +sgs%visc(i,j,k)
-               fs%visc_xy(i,j,k)=fs%visc_xy(i,j,k)+sum(fs%itp_xy(:,:,i,j,k)*sgs%visc(i-1:i,j-1:j,k))
-               fs%visc_yz(i,j,k)=fs%visc_yz(i,j,k)+sum(fs%itp_yz(:,:,i,j,k)*sgs%visc(i,j-1:j,k-1:k))
-               fs%visc_zx(i,j,k)=fs%visc_zx(i,j,k)+sum(fs%itp_xz(:,:,i,j,k)*sgs%visc(i-1:i,j,k-1:k))
-            end do; end do; end do
-         end block sgs_modeling
+         !sgs_modeling: block
+         !   use sgsmodel_class, only: vreman
+         !   integer :: i,j,k
+         !   resU=vf%VF*fs%rho_l+(1.0_WP-vf%VF)*fs%rho_g
+         !   call fs%get_gradu(gradU)
+         !   call sgs%get_visc(type=vreman,dt=time%dtold,rho=resU,gradu=gradU)
+         !   do k=fs%cfg%kmino_+1,fs%cfg%kmaxo_; do j=fs%cfg%jmino_+1,fs%cfg%jmaxo_; do i=fs%cfg%imino_+1,fs%cfg%imaxo_
+         !      fs%visc(i,j,k)   =fs%visc(i,j,k)   +sgs%visc(i,j,k)
+         !      fs%visc_xy(i,j,k)=fs%visc_xy(i,j,k)+sum(fs%itp_xy(:,:,i,j,k)*sgs%visc(i-1:i,j-1:j,k))
+         !      fs%visc_yz(i,j,k)=fs%visc_yz(i,j,k)+sum(fs%itp_yz(:,:,i,j,k)*sgs%visc(i,j-1:j,k-1:k))
+         !      fs%visc_zx(i,j,k)=fs%visc_zx(i,j,k)+sum(fs%itp_xz(:,:,i,j,k)*sgs%visc(i-1:i,j,k-1:k))
+         !   end do; end do; end do
+         !end block sgs_modeling
          
          ! Perform sub-iterations
          do while (time%it.le.time%itmax)
@@ -393,8 +479,10 @@ contains
          ! Perform and output monitoring
          call fs%get_max()
          call vf%get_max()
+         call rise_vel()
          call mfile%write()
          call cflfile%write()
+         call bubblefile%write()
          
       end do
       

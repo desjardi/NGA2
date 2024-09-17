@@ -1,16 +1,22 @@
 # Parallelization
-Partition :	1 8 1
+Partition :	8 1 1
 
 # Mesh definition
-Lx : 0.256
-Ly : 0.256
-Lz : 0.012
-nx : 128
-ny : 128
-nz : 6
+Lx : 2.00
+Ly : 1.00
+Lz : 0.16
+nx : 200
+ny : 100
+nz : 16
 
 # Pool
-Pool depth : 0.15
+Pool depth : 0.05
+
+# Step
+Step depth : 0.05
+Step length : 0.16
+Gate start : 0.3
+Gate end : 0.8
 
 # Fluid properties
 Gravity :                     0 -9.81 0
@@ -18,24 +24,25 @@ Liquid dynamic viscosity :    1.137e-3
 Gas dynamic viscosity :       1.780e-5
 Liquid density :              1000
 Gas density :                 1.226
-Surface tension coefficient : 0!.0728
-Static contact angle :        45
+Surface tension coefficient : 0.0728
+Static contact angle :        90
 
 # Particle parameters
 Particle density :            2500
+Particle diameter :           0.005
 
 # Particle collisions
 Coefficient of restitution :  0.1
 Wall restitution :            0.1
-Friction coefficient :        0.5
+Friction coefficient :        1.0
 
 # Bed injection
-Bed file to inject :          alban.bed
-Bed injection velocity :      0.06
+Bed file to inject :          eric.file !alban.bed
+#Bed injection velocity :      0.06
 
 # Time integration
-Particle timestep size :      1e-5
-Max timestep size :           1e-4
+Particle timestep size :      5e-5
+Max timestep size :           5e-5
 Max cfl number :	            1
 Max time :                    1
 
@@ -44,4 +51,4 @@ Pressure tolerance :          1e-4
 Pressure iteration :          100
 
 # Ensight output
-Ensight output period :       1e-2
+Ensight output period :       5e-3

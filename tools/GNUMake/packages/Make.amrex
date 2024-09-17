@@ -1,0 +1,13 @@
+# Add appropriate AMReX includes and libraries
+ifdef AMREX_DIR
+  INCLUDE_LOCATIONS += $(AMREX_DIR)/include
+  LIBRARY_LOCATIONS += $(AMREX_DIR)/lib
+  is_gnu = $(shell expr `mpicxx --version | awk '{print substr($$1,1,3); exit}'` = 'gcc')
+  ifeq ($(is_gnu), 1)
+    LIBRARIES += -lamrex -lstdc++
+  else
+    LIBRARIES += -lamrex -lc++
+  endif
+else
+  $(error AMREX_DIR not defined, but it is currently required by NGA2)
+endif

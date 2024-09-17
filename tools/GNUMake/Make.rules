@@ -12,9 +12,11 @@ vpath %.c    $(FINAL_VPATH_LOCATIONS)
 vpath %.cpp  $(FINAL_VPATH_LOCATIONS)
 vpath %.h    $(FINAL_VPATH_LOCATIONS)
 vpath %.H    $(FINAL_VPATH_LOCATIONS)
+vpath %.hpp  $(FINAL_VPATH_LOCATIONS)
 
 FINAL_CPPFLAGS := $(addprefix $(CPP_PREFIX), $(CPPFLAGS))
-
+CXXDEPFLAGS =  -MMD -MP $(filter-out -dc,$(CXXFLAGS)) $(CPPFLAGS) $(includes)
+CDEPFLAGS = -MMD -MP $(filter-out -dc,$(CFLAGS)) -DBL_LANG_C $(CPPFLAGS) $(includes)
 
 # Suppress display of executed commands #
 SILENT =
@@ -26,9 +28,7 @@ endif
 #########################################
 
 
-
 # Rules for building executable #########
-
 $(executable): $(objForExecs)
 	@echo Linking $@ ...
 	$(SILENT) $(F90) $(F90FLAGS) $(FINAL_CPPFLAGS) $(fincludes) $(LDFLAGS) -o $@ $^ $(libraries)
@@ -272,4 +272,4 @@ help:
 	@echo "    libraries  = $(libraries)"
 	@echo "    executable = $(executable)"
 	@echo ""
-	@echo "Read Tools/GNUMake/README.md for details on tweaking the make system."
+	@echo "Read tools/GNUMake/README.md for details on tweaking the make system."
