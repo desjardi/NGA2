@@ -170,7 +170,7 @@ module vfs_class
       type(ObjServer_PlanarSep_type)  :: planar_separatorold_allocation
       type(ObjServer_LocSepLink_type) :: localized_separator_linkold_allocation
 
-      ! Debug
+      ! Liquid volume change
       real(WP) :: clipped_Lvol
       
    contains
@@ -1347,7 +1347,7 @@ contains
    !> Perform flux-based transport of VF based on U/V/W and dt
    !> Include storage of detailed fluxes
    subroutine transport_flux_storage(this,dt,U,V,W)
-      ! Debug
+      ! Liquid volume change
       use mpi_f08,  only: MPI_ALLREDUCE,MPI_SUM
       use parallel, only: MPI_REAL_WP
       implicit none
@@ -1369,7 +1369,7 @@ contains
       integer, dimension(3,2) :: bb_indices
       type(SepVM_type) :: my_SepVM
       
-      ! Debug
+      ! Liquid volume change
       real(WP) :: my_clipped_Lvol
       integer :: ierr
       my_clipped_Lvol=0.0_WP
@@ -1572,7 +1572,7 @@ contains
       call this%cfg%sync(this%VF)
       call this%sync_and_clean_barycenters()
 
-      ! Debug
+      ! Liquid volume change
       call MPI_ALLREDUCE(my_clipped_Lvol,this%clipped_Lvol,1,MPI_REAL_WP,MPI_SUM,this%cfg%comm,ierr)
       
    end subroutine transport_flux_storage

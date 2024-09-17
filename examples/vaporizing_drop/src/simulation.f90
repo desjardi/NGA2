@@ -56,7 +56,7 @@ module simulation
    real(WP) :: Lz,rad_drop
    real(WP) :: Upcmax,Vpcmax,Wpcmax
 
-   ! Debug
+   ! Liquid volume change
    real(WP) :: Lvol_change
    real(WP) :: Lvol_change_diff
    
@@ -231,7 +231,7 @@ contains
          real(WP), dimension(3) :: v_cent,a_cent
          real(WP) :: vol,area
          integer, parameter :: amr_ref_lvl=4
-         ! Debug
+         ! Initialize liquid volume change
          Lvol_change=0.0_WP
          Lvol_change_diff=0.0_WP
          ! Create a VOF solver
@@ -538,7 +538,7 @@ contains
          call mfile%add_column(fs%psolv%it,'Pressure iteration')
          call mfile%add_column(fs%psolv%rerr,'Pressure error')
          call mfile%add_column(rad_drop,'Droplet raduis')
-         ! Debug
+         ! Liquid volume change
          call mfile%add_column(vf%clipped_Lvol,'Clipped Lvol')
          call mfile%add_column(Lvol_change,'Lvol change')
          call mfile%add_column(Lvol_change_diff,'Lvol change diff')
@@ -620,7 +620,7 @@ contains
          ! Remember old VOF
          vf%VFold=vf%VF
 
-         ! Debug
+         ! Liquid volume change
          call vf%get_max()
          Lvol_change=vf%VFint
          
@@ -657,7 +657,6 @@ contains
 
             ! VOF solver step
             call vf%advance(dt=time%dt,U=U_itf,V=V_itf,W=W_itf)
-            ! call vf%advance(dt=time%dt,U=fs%U,V=fs%V,W=fs%W)
             call vf%apply_bcond(time%t,time%dt)
 
             ! Deallocate phase-change velocity
@@ -736,24 +735,19 @@ contains
                my_mflux_max=maxval(mflux)
                call MPI_ALLREDUCE(my_mflux_max,mflux_max,1,MPI_REAL_WP,MPI_Max,sc%cfg%comm,ierr)
 
-               ! Output to ensight
-               ! mflxLerr=(mfluxL-mfluxL_old)/mfluxL_old
-               ! mflxLerr=(exp(mfluxL)-exp(mfluxL_old))/exp(mfluxL_old)
-               ! mflxLerr=mfluxL-mfluxL_old
+               ! Calculate the error on the liquid side
                mflxLerr=(mfluxL-mfluxL_old)/mflux_max
+               my_mflux_err=maxval(abs(mflxLerr))
+               call MPI_ALLREDUCE(my_mflux_err,mfluxL_err,1,MPI_REAL_WP,MPI_Max,sc%cfg%comm,ierr)
+               ! Calculate the error on the gas side
+               my_mflux_err=maxval(abs((mfluxG-mfluxG_old)/mflux_max))
+               call MPI_ALLREDUCE(my_mflux_err,mfluxG_err,1,MPI_REAL_WP,MPI_Max,sc%cfg%comm,ierr)
+
+               ! Output to ensight
                if (mflux_ens_time.eq.time%t.and.ens_mflux_evt%occurs()) then
                   call ens_mflux_out%write_data(pseudo_time%t)
                end if
 
-               ! Calculate the error on the liquid side
-               my_mflux_err=maxval(abs(mflxLerr))
-               call MPI_ALLREDUCE(my_mflux_err,mfluxL_err,1,MPI_REAL_WP,MPI_Max,sc%cfg%comm,ierr)
-               ! Calculate the error on the gas side
-               ! my_mflux_err=maxval(abs((mfluxG-mfluxG_old)/mfluxG_old))
-               ! my_mflux_err=maxval(abs((exp(mfluxG)-exp(mfluxG_old))/exp(mfluxG_old)))
-               ! my_mflux_err=maxval(abs(mfluxG-mfluxG_old))
-               my_mflux_err=maxval(abs((mfluxG-mfluxG_old)/mflux_max))
-               call MPI_ALLREDUCE(my_mflux_err,mfluxG_err,1,MPI_REAL_WP,MPI_Max,sc%cfg%comm,ierr)
                ! Check convergence
                mflux_err=max(mfluxL_err,mfluxG_err)
                if (mflux_err.lt.mflux_tol) exit
@@ -941,7 +935,7 @@ contains
          ! Perform and output monitoring
          call fs%get_max(); call fsL%get_max()
          call vf%get_max()
-         ! Debug
+         ! Liquid volume change
          Lvol_change=vf%VFint-Lvol_change
          Lvol_change_diff=abs(Lvol_change)-vf%clipped_Lvol
          call sc%get_max(VF=vf%VF)
