@@ -27,7 +27,7 @@ Gas density :                 1.226
 Surface tension coefficient : 0.067 !0.0328   !0.067
 
 # Time integration
-Max timestep size : 2.5e-4
+Max timestep size : 1e-4
 Max cfl number :    0.9
 Max time :          10
 

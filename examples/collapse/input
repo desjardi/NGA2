@@ -10,13 +10,13 @@ ny : 100
 nz : 16
 
 # Pool
-Pool depth : 0.05
+Pool depth :  0.05
 
 # Step
-Step depth : 0.05
+Step depth :  0.05
 Step length : 0.16
-Gate start : 0.3
-Gate end : 0.8
+Gate start :  0.3
+Gate end :    0.8
 
 # Fluid properties
 Gravity :                     0 -9.81 0
@@ -36,9 +36,9 @@ Coefficient of restitution :  0.1
 Wall restitution :            0.1
 Friction coefficient :        1.0
 
-# Bed injection
-Bed file to inject :          eric.file !alban.bed
-#Bed injection velocity :      0.06
+# Bed file
+Bed file to read :            collapse.bed
+Bed height :                  0.41
 
 # Time integration
 Particle timestep size :      5e-5
