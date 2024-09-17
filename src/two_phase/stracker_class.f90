@@ -24,6 +24,7 @@ module stracker_class
       integer :: n_                                       !< Number of local cells contained in struct
       integer, dimension(:,:), allocatable :: map         !< List of cells contained in struct, dimension(1:3,1:n_)
       integer, dimension(3) :: per                        !< Periodicity array - per(dim)=1 if structure is periodic in dim direction
+      logical :: is_core                                  !< Logical that determines if struct is the liquid core for id assignment
    end type struct_type
 
    !> Merge object
@@ -246,6 +247,7 @@ contains
                call getSepVMAtIndex(this%vf%detailed_remap(i,j,k),n-1,my_SepVM)
                ! Verify volume fraction for our phase of interest is non-zero
                vols(0)=getVolume(my_SepVM,0); vols(1)=getVolume(my_SepVM,1)
+               if (sum(vols).lt.tiny(1.0_WP)) cycle
                if (vols(this%phase)/sum(vols).lt.VFlo) cycle
                ! Get cell index for nth object
                ind=this%vf%cfg%get_ijk_from_lexico(getTagForIndex(this%vf%detailed_remap(i,j,k),n-1))
@@ -302,10 +304,17 @@ contains
          integer :: n
          ! Traverse merge list 
          do n=1,this%nmerge
+            ! If merging with core, retain id=1
+            if (this%merge(1,n).eq.1 .or. this%merge(2,n).eq.1) then 
+               this%newid(n) = 1
+               ! Add merge to merge_master list and collapse subsequent merges
+               call add_merge_master(this%merge(1,n),this%merge(2,n),this%newid(n))
+            end if
+
             ! Deal with structure not part of existing merge event
-            if (this%newid(n).eq.0) then 
+            if (this%newid(n).eq.0) then
                ! Generate new id for merge
-               this%newid(n) = this%generate_new_id()
+               this%newid(n) = this%generate_new_id() 
                ! Add merge to merge_master list and collapse subsequent merges
                call add_merge_master(this%merge(1,n),this%merge(2,n),this%newid(n))
             end if 
@@ -321,7 +330,12 @@ contains
             do k=this%vf%cfg%kmin_,this%vf%cfg%kmax_; do j=this%vf%cfg%jmin_,this%vf%cfg%jmax_; do i=this%vf%cfg%imin_,this%vf%cfg%imax_
                ! Loop over oldids 
                do nn=1,this%merge_master(n)%noldid
-                  if (this%id_rmp(i,j,k).eq.this%merge_master(n)%oldids(nn)) this%id_rmp(i,j,k)=this%merge_master(n)%newid
+                  if (this%id_rmp(i,j,k).eq.this%merge_master(n)%oldids(nn)) then 
+                     !if (this%merge_master(n)%oldids(nn).eq.1) print *, "old id 1, newid: ",this%merge_master(n)%newid
+                     !print *, "oldid ", this%merge_master(n)%oldids(nn)
+                     !print *, "newid ", this%merge_master(n)%newid
+                     this%id_rmp(i,j,k)=this%merge_master(n)%newid
+                  end if 
                end do 
             end do; end do; end do
          end do
@@ -341,19 +355,19 @@ contains
          integer, dimension(:), allocatable :: nid_proc,ids_all
          integer :: ierr,nid_all,nnnn
          integer :: n,nn,nnn,nid,my_id,nobj
-         integer, dimension(:), allocatable :: ids
+         integer, dimension(:), allocatable :: ids_,ids
          ! Allocate maximum storage for id_rmp values
          nobj=0
          do n=1,this%nstruct
             nobj=max(nobj,this%struct(n)%n_)
          end do
-         allocate(ids(nobj))
+         allocate(ids_(nobj))
          ! Allocate nid_proc storage
          allocate(nid_proc(1:this%vf%cfg%nproc))
          ! Traverse each new structure and gather list of potential id
          do n=1,this%nstruct
             ! Zero out ids and reset counter
-            nid=0; ids=0
+            nid=0; ids_=0
             ! Loop over local cells in the structure
             str_loop: do nn=1,this%struct(n)%n_
                ! Local cell id_rmp value
@@ -362,20 +376,21 @@ contains
                if (my_id.eq.0) cycle
                ! If my_id has already been encountered, cycle
                do nnn=1,nid
-                  if (ids(nnn).eq.my_id) cycle str_loop
+                  if (ids_(nnn).eq.my_id) cycle str_loop
                end do
                ! Increment the ids array
-               nid=nid+1; ids(nid)=my_id
+               nid=nid+1; ids_(nid)=my_id
             end do str_loop
             ! Gather all ids
             nid_proc=0; nid_proc(this%vf%cfg%rank+1)=nid
             call MPI_ALLREDUCE(MPI_IN_PLACE,nid_proc,this%vf%cfg%nproc,MPI_INTEGER,MPI_SUM,this%vf%cfg%comm,ierr)
             nid_all=sum(nid_proc)
             if (allocated(ids_all)) deallocate(ids_all)
-            allocate(ids_all(nid_all)); ids_all=0; ids_all(sum(nid_proc(1:this%vf%cfg%rank))+1:sum(nid_proc(1:this%vf%cfg%rank+1)))=ids(1:nid)
+            allocate(ids_all(nid_all)); ids_all=0; ids_all(sum(nid_proc(1:this%vf%cfg%rank))+1:sum(nid_proc(1:this%vf%cfg%rank+1)))=ids_(1:nid)
             call MPI_ALLREDUCE(MPI_IN_PLACE,ids_all,nid_all,MPI_INTEGER,MPI_SUM,this%vf%cfg%comm,ierr)
             ! Compact list of ids
-            deallocate(ids); allocate(ids(nid_all))
+            if (allocated(ids)) deallocate(ids) 
+            allocate(ids(nid_all))
             nid=0; ids=0
             compact_loop: do nnn=1,nid_all
                ! Check existing ids for redundancy
@@ -486,9 +501,26 @@ contains
       
       ! Now deal with splits - case where two structs share the same id
       execute_splits: block
-         integer :: n,n_prev,my_id
+         use mpi_f08, only: MPI_ALLREDUCE,MPI_SUM,MPI_IN_PLACE,MPI_INTEGER
+         integer :: n,n_prev,my_id,n_core,n_sum,core_index,ierr
          logical :: found
          class(*), allocatable :: retval
+
+         ! Identify liquid core
+         n_sum = 0
+         n_core = 0
+         core_index = 0
+         do n=1,this%nstruct
+            if (this%struct(n)%id.eq.1) then 
+               call MPI_ALLREDUCE(this%struct(n)%n_,n_sum,1,MPI_INTEGER,MPI_SUM,this%vf%cfg%comm,ierr)
+               ! Check if current structure is largest
+               if (n_sum.gt.n_core) then 
+                  n_core = n_sum 
+                  core_index = n
+               end if  
+            end if 
+         end do 
+
          ! Reset structure split logical
          if (allocated(this%struct_split)) deallocate(this%struct_split)
          allocate(this%struct_split(this%nstruct)); this%struct_split=.false.
@@ -501,21 +533,25 @@ contains
             ! Check if id already exists in tree
             call avl_retrieve(lt,my_id,this%split_tree,found,retval)
             if (found) then ! split occured
-               ! Assign new id to this structure
-               this%struct(n)%id=this%generate_new_id()
-               call add_split(my_id,this%struct(n)%id)
-               ! Check if previous structure has a new id -> generate if needed
-               n_prev = int_cast(retval)
-               if (.not.this%struct_split(n_prev)) then
-                  this%struct_split(n_prev)=.true.
-                  this%struct(n_prev)%id=this%generate_new_id()
-                  call add_split(my_id,this%struct(n_prev)%id)
+               ! Do not give new id to core
+               if (n.ne.core_index) then 
+                  ! Assign new id to this structure
+                  this%struct(n)%id=this%generate_new_id()
+                  call add_split(my_id,this%struct(n)%id)
+                  ! Check if previous structure has a new id -> generate if needed
+                  n_prev = int_cast(retval)
+                  if (.not.this%struct_split(n_prev).and.n_prev.ne.core_index) then
+                     this%struct_split(n_prev)=.true.
+                     this%struct(n_prev)%id=this%generate_new_id()
+                     call add_split(my_id,this%struct(n_prev)%id)
+                  end if 
                end if
             else ! add id to tree: key=id, data=n (struct number)
                call avl_insert(lt,my_id,n,this%split_tree)
             end if
          end do
          call avl_delete_all(this%split_tree)
+
       end block execute_splits
 
       ! Collapse splits into master list
@@ -556,6 +592,7 @@ contains
                this%id_old(this%struct(n)%map(1,nn),this%struct(n)%map(2,nn),this%struct(n)%map(3,nn))=n
             end do
          end do
+         ! Do we need to delete ids with no vof?
          ! Communicate id
          call this%vf%cfg%sync(this%id)
          call this%vf%cfg%sync(this%id_old)
@@ -655,21 +692,34 @@ contains
       recursive subroutine collapse_merges(oldid,newid)
          implicit none 
          integer, intent(in) :: oldid,newid 
-         integer :: n,nn
+         integer :: n,nn,nnn
          integer, dimension(2) :: otherid = [2,1]
          ! Loop over merges and look for any that are part of this merge
          do n=1,this%nmerge
             ! Already has newid?
             if (this%newid(n).ne.0) cycle
+            ! Nothing to do for liquid core
+            if (newid.eq.oldid) cycle 
             ! Check if this merge contains matching oldid or newid (occurs with merge2)
             do nn=1,2
                if (this%merge(nn,n).eq.oldid.or.this%merge(nn,n).eq.newid) then
-                  ! Set newid
-                  this%newid(n)=newid
-                  ! Append other id of this merge to merge master
-                  call append_merge_master(this%nmerge_master,this%merge(otherid(nn),n))
-                  ! Collapse other id of this merge 
-                  call collapse_merges(this%merge(otherid(nn),n),newid)
+                  ! Check if one of any merges are happening with core, if so, retain id=1
+                  if (ANY(this%merge(:,n).eq.1)) then 
+                     do nnn = 1,2
+                        if (this%merge(nnn,n).ne.1) then 
+                           this%newid(n) = 1
+                           call append_merge_master(this%nmerge_master,this%merge(nnn,n))
+                           call collapse_merges(this%merge(nnn,n),1) 
+                        end if 
+                     end do
+                  else 
+                     ! Set newid
+                     this%newid(n)=newid
+                     ! Append other id of this merge to merge master
+                     call append_merge_master(this%nmerge_master,this%merge(otherid(nn),n))
+                     ! Collapse other id of this merge 
+                     call collapse_merges(this%merge(otherid(nn),n),newid) 
+                  end if 
                end if
             end do
          end do 
@@ -1388,7 +1438,7 @@ contains
          ! True by default
          same_label=.true.
          ! Exception is if pair carries distinct non-zero remapped ids
-         if (this%id_rmp(i1,j1,k1)*this%id_rmp(i2,j2,k2).gt.0.and.this%id_rmp(i1,j1,k1).ne.this%id_rmp(i2,j2,k2)) same_label=.false.
+         if (this%id_rmp(i1,j1,k1).ne.0 .and. this%id_rmp(i2,j2,k2).ne.0 .and. this%id_rmp(i1,j1,k1).ne.this%id_rmp(i2,j2,k2)) same_label=.false.
       end function same_label
 
    end subroutine build
