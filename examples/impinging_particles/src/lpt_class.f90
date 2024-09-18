@@ -662,8 +662,9 @@ contains
   
 
   !> Advance the particle equations by a specified time step dt
-  !> p%id=0 => no coll, no solve
-  !> p%id=-1=> no coll, no move
+  !> p%id=0 => no collision (but used as collision partner), not solved, no feedback on fluid
+  !> p%id=-1=> no collision (but used as collision partner), solved but not updated (provides feedback on fluid)
+  !> p%id=-2=> no collision (but used as collision partner), solved but velocity not updated (provides feedback on fluid)
   subroutine advance(this,dt,U,V,W,rho,visc,&
   &                  stress_x,stress_y,stress_z,&
   &                  acc_x   ,acc_y   ,acc_z   ,&
@@ -731,8 +732,10 @@ contains
           &                 gradVF_x=gradVF_x,gradVF_y=gradVF_y,gradVF_z=gradVF_z,&
           &                 p=myp,acc=acc,fdbk=fdbk,torque=torque,opt_dt=myp%dt)
           myp%pos=pold%pos+0.5_WP*mydt*myp%vel
-          myp%vel=pold%vel+0.5_WP*mydt*(acc+this%gravity+myp%Acol)
-          myp%angVel=pold%angVel+0.5_WP*mydt*(torque+myp%Tcol)/Ip
+          if (this%p(i)%id.ne.-2) then
+            myp%vel=pold%vel+0.5_WP*mydt*(acc+this%gravity+myp%Acol)
+            myp%angVel=pold%angVel+0.5_WP*mydt*(torque+myp%Tcol)/Ip
+          end if
           ! Correct with midpoint rule
           call this%get_rhs(U=U,V=V,W=W,rho=rho,visc=visc,&
           &                 stress_x=stress_x,stress_y=stress_y,stress_z=stress_z,&
@@ -741,8 +744,10 @@ contains
           &                 gradVF_x=gradVF_x,gradVF_y=gradVF_y,gradVF_z=gradVF_z,&
           &                 p=myp,acc=acc,fdbk=fdbk,torque=torque,opt_dt=myp%dt)
           myp%pos=pold%pos+mydt*myp%vel
-          myp%vel=pold%vel+mydt*(acc+this%gravity+myp%Acol)
-          myp%angVel=pold%angVel+mydt*(torque+myp%Tcol)/Ip
+          if (this%p(i)%id.ne.-2) then
+            myp%vel=pold%vel+mydt*(acc+this%gravity+myp%Acol)
+            myp%angVel=pold%angVel+mydt*(torque+myp%Tcol)/Ip
+          end if
           ! Relocalize
           myp%ind=this%cfg%get_ijk_global(myp%pos,myp%ind)
           ! Send source term back to the mesh
@@ -875,6 +880,24 @@ contains
          else
             corr=0.44_WP/24.0_WP*Re
          end if
+      case('Wen-Yu','WY')
+         if (Re.lt.1000.0_WP) then
+            corr=1.0_WP+0.15_WP*Re**(0.687_WP)
+         else
+            corr=0.44_WP/24.0_WP*Re
+         end if
+         corr=corr*fVF**(2.0_WP-3.65_WP)
+      case('Gidaspow')
+         if (fVF.ge.0.8_WP) then
+            if (Re.lt.1000.0_WP) then
+               corr=1.0_WP+0.15_WP*Re**(0.687_WP)
+            else
+               corr=0.44_WP/24.0_WP*Re
+            end if
+            corr=corr*fVF**(2.0_WP-3.65_WP)
+         else
+            corr=4.0_WP/3.0_WP*(150.0_WP*pVF/Re+1.75_WP)
+         end if
       case('Tenneti')
          ! Tenneti and Subramaniam (2011)
          if (Re.lt.1000.0_WP) then
@@ -924,9 +947,9 @@ contains
         Reg=p%d**2*omegag*frho/fvisc
         Cl=9.69_WP/Pi/p%d**2/this%rho*fvisc*sqrt(Reg)
         accl=Cl*cross_product(fvel-p%vel,fvort/omegag)
-        acc =acc +accl
-        fdbk=fdbk+accl
-        opt_dt=min(opt_dt,1.0_WP/(Cl*real(this%nstep,WP)))
+        !acc =acc +accl
+        !fdbk=fdbk+accl
+        !opt_dt=min(opt_dt,1.0_WP/(Cl*real(this%nstep,WP)))
       end if
     end block compute_lift
 
@@ -943,7 +966,7 @@ contains
     
     ! Compute fluid torque (assumed Stokes drag)
     compute_torque: block
-      torque=6.0_WP*fvisc*(0.5_WP*fvort-p%angVel)/this%rho
+      !torque=6.0_WP*fvisc*(0.5_WP*fvort-p%angVel)/this%rho
     end block compute_torque
     
   end subroutine get_rhs

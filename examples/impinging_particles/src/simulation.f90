@@ -1,7 +1,7 @@
 !> Various definitions and tools for running an NGA2 simulation
 module simulation
    use precision,         only: WP
-   use geometry,          only: cfg
+   use geometry,          only: cfg,injwall_width
    use lpt_class,         only: lpt,part,MPI_PART_SIZE,MPI_PART
    use hypre_str_class,   only: hypre_str
    use ddadi_class,       only: ddadi
@@ -113,7 +113,7 @@ contains
          ! Set filter scale to 3.5*dx
          lp%filter_width=3.5_WP*cfg%min_meshsize
          ! Set drag model
-         lp%drag_model='Tavanashad'
+         lp%drag_model='Gidaspow'
          ! Initialize with zero particles
          call lp%resize(0)
          ! Get initial particle volume fraction
@@ -180,7 +180,7 @@ contains
             allocate(tmp(nbed))
             do i=1,nbed
                tmp(i)=pbed(id(i))
-               tmp(i)%id=i
+               tmp(i)%id=-2!i
                ! Adjust position
                tmp(i)%pos(2)=pos(i)+lp%cfg%yL
                ! Adjust velocity
@@ -201,7 +201,7 @@ contains
       ! Initialize our VOF solver and field
       create_and_initialize_vof: block
          use mms_geom,  only: cube_refine_vol
-         use vfs_class, only: lvira,VFhi,VFlo,remap
+         use vfs_class, only: lvira,plicnet,VFhi,VFlo,remap
          integer :: i,j,k,n,si,sj,sk
          real(WP), dimension(3,8) :: cube_vertex
          real(WP), dimension(3) :: v_cent,a_cent
@@ -209,6 +209,8 @@ contains
          integer, parameter :: amr_ref_lvl=4
          ! Create a VOF solver
          call vf%initialize(cfg=cfg,reconstruction_method=lvira,transport_method=remap,name='VOF')
+         ! TEST THE REMOVAL OF WALL TREATMENT IN VOF TRANSPORT
+         vf%vmask=0
          ! Initialize to a pool
          call param_read('Pool depth',depth)
          do k=vf%cfg%kmino_,vf%cfg%kmaxo_
@@ -259,8 +261,10 @@ contains
       ! Create a two-phase flow solver without bconds
       create_and_initialize_flow_solver: block
          use mathtools,       only: Pi
-         use tpns_class,      only: clipped_neumann
+         use tpns_class,      only: clipped_neumann,dirichlet,bcond
          use hypre_str_class, only: pcg_pfmg2
+         type(bcond), pointer :: mybc
+         integer :: n,i,j,k
          ! Create flow solver
          fs=tpns(cfg=cfg,name='Two-phase NS')
          ! Assign constant viscosity to each phase
@@ -281,6 +285,8 @@ contains
          call param_read('Gravity',fs%gravity)
          ! Outlet on the top
          call fs%add_bcond(name='outlet',type=clipped_neumann,face='y',dir=+1,canCorrect=.true.,locator=yp_locator)
+         ! Inflow at bed injection location
+         call fs%add_bcond(name='inlet',type=dirichlet,face='y',dir=+1,canCorrect=.false.,locator=inlet_locator)
          ! Configure pressure solver
          ps=hypre_str(cfg=cfg,name='Pressure',method=pcg_pfmg2,nst=7)
          ps%maxlevel=12
@@ -292,6 +298,12 @@ contains
          call fs%setup(pressure_solver=ps,implicit_solver=vs)
          ! Zero initial field
          fs%U=0.0_WP; fs%V=0.0_WP; fs%W=0.0_WP
+         ! Set inlet at bed injection location
+         call fs%get_bcond('inlet',mybc)
+         do n=1,mybc%itr%no_
+            i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
+            fs%V(i,j,k)=-vbed
+         end do
          ! Calculate cell-centered velocities and divergence
          call fs%interp_vel(Ui,Vi,Wi)
          call fs%get_div()
@@ -695,8 +707,24 @@ contains
       integer, intent(in) :: i,j,k
       logical :: isIn
       isIn=.false.
-      if (j.eq.pg%jmax+1) isIn=.true.
+      if (j.eq.pg%jmax+1.and.&
+      &   abs(cfg%xm(i)).gt.0.5_WP*injwall_width.and.&
+      &   k.ge.pg%kmin.and.k.le.pg%kmax) isIn=.true.
    end function yp_locator
+
+
+   !> Function that localizes the inlet at the top (y+) of the domain
+   function inlet_locator(pg,i,j,k) result(isIn)
+      use pgrid_class, only: pgrid
+      implicit none
+      class(pgrid), intent(in) :: pg
+      integer, intent(in) :: i,j,k
+      logical :: isIn
+      isIn=.false.
+      if (j.eq.pg%jmax+1.and.&
+      &   abs(cfg%xm(i)).le.0.5_WP*injwall_width.and.&
+      &   k.ge.pg%kmin.and.k.le.pg%kmax) isIn=.true.
+   end function inlet_locator
    
    
 end module simulation

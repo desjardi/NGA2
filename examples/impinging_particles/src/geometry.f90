@@ -10,6 +10,7 @@ module geometry
    
    public :: geometry_init
    
+   real(WP), public :: injwall_width
 
 contains
    
@@ -68,7 +69,8 @@ contains
       ! Create masks for this config
       create_walls: block
          integer :: i,j,k
-         ! Form a box
+         call param_read('Injection wall width',injwall_width)
+         ! Form a box and add a wall on top at location of bed injection
          cfg%VF=1.0_WP
          do k=cfg%kmino_,cfg%kmaxo_
             do j=cfg%jmino_,cfg%jmaxo_
@@ -76,6 +78,7 @@ contains
                   if (i.lt.cfg%imin) cfg%VF(i,j,k)=0.0_WP
                   if (i.gt.cfg%imax) cfg%VF(i,j,k)=0.0_WP
                   if (j.lt.cfg%jmin) cfg%VF(i,j,k)=0.0_WP
+                  if (j.gt.cfg%jmax.and.abs(cfg%xm(i)).lt.0.5_WP*injwall_width) cfg%VF(i,j,k)=0.0_WP
                   if (k.lt.cfg%kmin) cfg%VF(i,j,k)=0.0_WP
                   if (k.gt.cfg%kmax) cfg%VF(i,j,k)=0.0_WP
                end do
