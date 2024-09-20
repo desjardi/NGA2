@@ -898,6 +898,23 @@ contains
          else
             corr=4.0_WP/3.0_WP*(150.0_WP*pVF/Re+1.75_WP)
          end if
+      case('multiphase')
+         ! Start with Schiller-Naumann
+         if (Re.lt.1000.0_WP) then
+            corr=1.0_WP+0.15_WP*Re**(0.687_WP)
+         else
+            corr=0.44_WP/24.0_WP*Re
+         end if
+         ! Switch VF-correlation based on density ratio
+         if (this%rho/frho.gt.10.0_WP) then
+            ! Tenneti and Subramaniam (2011) - high density ratio
+            b1=5.81_WP*pVF/fVF**3+0.48_WP*pVF**(1.0_WP/3.0_WP)/fVF**4
+            b2=pVF**3*Re*(0.95_WP+0.61_WP*pVF**3/fVF**2)
+            corr=fVF*(corr/fVF**3+b1+b2)
+         else
+            ! Tavanashad et al. IJMF (2021) - low density ratio
+            corr=corr*(78.96_WP*pVF**3-18.63_WP*pVF**2+9.845_WP*pVF+1.0_WP)
+         end if
       case('Tenneti')
          ! Tenneti and Subramaniam (2011)
          if (Re.lt.1000.0_WP) then
@@ -947,9 +964,9 @@ contains
         Reg=p%d**2*omegag*frho/fvisc
         Cl=9.69_WP/Pi/p%d**2/this%rho*fvisc*sqrt(Reg)
         accl=Cl*cross_product(fvel-p%vel,fvort/omegag)
-        !acc =acc +accl
-        !fdbk=fdbk+accl
-        !opt_dt=min(opt_dt,1.0_WP/(Cl*real(this%nstep,WP)))
+        acc =acc +accl
+        fdbk=fdbk+accl
+        opt_dt=min(opt_dt,1.0_WP/(Cl*real(this%nstep,WP)))
       end if
     end block compute_lift
 
@@ -960,13 +977,13 @@ contains
       Cadd=0.5_WP*frho/this%rho
       dufdt=facc
       dupdt=acc+this%gravity+p%Acol
-      !acc =acc +Cadd/(1.0_WP+Cadd)*(dufdt-dupdt)
-      !fdbk=fdbk+Cadd/(1.0_WP+Cadd)*(dufdt-dupdt)
+      acc =acc +Cadd/(1.0_WP+Cadd)*(dufdt-dupdt)
+      fdbk=fdbk+Cadd/(1.0_WP+Cadd)*(dufdt-dupdt)
     end block compute_added_mass
     
     ! Compute fluid torque (assumed Stokes drag)
     compute_torque: block
-      !torque=6.0_WP*fvisc*(0.5_WP*fvort-p%angVel)/this%rho
+      torque=6.0_WP*fvisc*(0.5_WP*fvort-p%angVel)/this%rho
     end block compute_torque
     
   end subroutine get_rhs

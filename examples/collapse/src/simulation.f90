@@ -438,8 +438,8 @@ contains
             call fs%interp_vel(Ui,Vi,Wi)
             if (time%dtold.gt.0.0_WP) then
                acc(1,:,:,:)=acc(1,:,:,:)+(Ui-Ui_old)/time%dtold
-               acc(2,:,:,:)=acc(2,:,:,:)+(Ui-Ui_old)/time%dtold
-               acc(3,:,:,:)=acc(3,:,:,:)+(Ui-Ui_old)/time%dtold
+               acc(2,:,:,:)=acc(2,:,:,:)+(Vi-Vi_old)/time%dtold
+               acc(3,:,:,:)=acc(3,:,:,:)+(Wi-Wi_old)/time%dtold
             end if
             ! Zero-out LPT source terms
             srcU=0.0_WP; srcV=0.0_WP; srcW=0.0_WP

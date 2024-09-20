@@ -2,15 +2,15 @@
 Partition :	8 1 1
 
 # Mesh definition
-Lx : 0.256
-Ly : 0.256
+Lx : 0.254
+Ly : 0.768
 Lz : 0.012
-nx : 128
-ny : 128
+nx : 127
+ny : 384
 nz : 6
 
 # Pool
-Pool depth : 0.2!0.15
+Pool depth : 0.25
 
 # Fluid properties
 Gravity :                     0 -9.81 0
@@ -31,13 +31,16 @@ Wall restitution :            0.1
 Friction coefficient :        1.0
 
 # Bed injection
-Bed file to inject :          impinging.bed
-Bed injection velocity :      0.03
-Injection wall width :        0.06
+Bed file to read :            impinging.bed
+Bed bottom :                  0.3
+Bed height :                  0.4
+Bed width :                   0.05
+Bed is free :                 .true.
+Bed velocity :                0
 
 # Time integration
-Particle timestep size :      1e-3 !1e-5
-Max timestep size :           1e-3 !1e-4
+Particle timestep size :      1e-5
+Max timestep size :           1e-5
 Max cfl number :	            1
 Max time :                    10
 
@@ -46,4 +49,4 @@ Pressure tolerance :          1e-4
 Pressure iteration :          100
 
 # Ensight output
-Ensight output period :       1e-2
+Ensight output period :       1e-3

@@ -875,6 +875,41 @@ contains
          else
             corr=0.44_WP/24.0_WP*Re
          end if
+      case('Wen-Yu','WY')
+         if (Re.lt.1000.0_WP) then
+            corr=1.0_WP+0.15_WP*Re**(0.687_WP)
+         else
+            corr=0.44_WP/24.0_WP*Re
+         end if
+         corr=corr*fVF**(2.0_WP-3.65_WP)
+      case('Gidaspow')
+         if (fVF.ge.0.8_WP) then
+            if (Re.lt.1000.0_WP) then
+               corr=1.0_WP+0.15_WP*Re**(0.687_WP)
+            else
+               corr=0.44_WP/24.0_WP*Re
+            end if
+            corr=corr*fVF**(2.0_WP-3.65_WP)
+         else
+            corr=4.0_WP/3.0_WP*(150.0_WP*pVF/Re+1.75_WP)
+         end if
+      case('multiphase')
+         ! Start with Schiller-Naumann
+         if (Re.lt.1000.0_WP) then
+            corr=1.0_WP+0.15_WP*Re**(0.687_WP)
+         else
+            corr=0.44_WP/24.0_WP*Re
+         end if
+         ! Switch VF-correlation based on density ratio
+         if (this%rho/frho.gt.10.0_WP) then
+            ! Tenneti and Subramaniam (2011) - high density ratio
+            b1=5.81_WP*pVF/fVF**3+0.48_WP*pVF**(1.0_WP/3.0_WP)/fVF**4
+            b2=pVF**3*Re*(0.95_WP+0.61_WP*pVF**3/fVF**2)
+            corr=fVF*(corr/fVF**3+b1+b2)
+         else
+            ! Tavanashad et al. IJMF (2021) - low density ratio
+            corr=corr*(78.96_WP*pVF**3-18.63_WP*pVF**2+9.845_WP*pVF+1.0_WP)
+         end if
       case('Tenneti')
          ! Tenneti and Subramaniam (2011)
          if (Re.lt.1000.0_WP) then
@@ -937,8 +972,8 @@ contains
       Cadd=0.5_WP*frho/this%rho
       dufdt=facc
       dupdt=acc+this%gravity+p%Acol
-      !acc =acc +Cadd/(1.0_WP+Cadd)*(dufdt-dupdt)
-      !fdbk=fdbk+Cadd/(1.0_WP+Cadd)*(dufdt-dupdt)
+      acc =acc +Cadd/(1.0_WP+Cadd)*(dufdt-dupdt)
+      fdbk=fdbk+Cadd/(1.0_WP+Cadd)*(dufdt-dupdt)
     end block compute_added_mass
     
     ! Compute fluid torque (assumed Stokes drag)

@@ -10,7 +10,8 @@ module geometry
    
    public :: geometry_init
    
-   real(WP), public :: injwall_width
+   real(WP), public :: bedbottom,bedheight,bedwidth
+   
 
 contains
    
@@ -68,8 +69,8 @@ contains
       
       ! Create masks for this config
       create_walls: block
-         integer :: i,j,k
-         call param_read('Injection wall width',injwall_width)
+         integer :: i,j,k,nx
+         real(WP) :: dx,Lx
          ! Form a box and add a wall on top at location of bed injection
          cfg%VF=1.0_WP
          do k=cfg%kmino_,cfg%kmaxo_
@@ -78,9 +79,23 @@ contains
                   if (i.lt.cfg%imin) cfg%VF(i,j,k)=0.0_WP
                   if (i.gt.cfg%imax) cfg%VF(i,j,k)=0.0_WP
                   if (j.lt.cfg%jmin) cfg%VF(i,j,k)=0.0_WP
-                  if (j.gt.cfg%jmax.and.abs(cfg%xm(i)).lt.0.5_WP*injwall_width) cfg%VF(i,j,k)=0.0_WP
                   if (k.lt.cfg%kmin) cfg%VF(i,j,k)=0.0_WP
                   if (k.gt.cfg%kmax) cfg%VF(i,j,k)=0.0_WP
+               end do
+            end do
+         end do
+         ! Add side-walls to bed
+         call param_read('Bed bottom',bedbottom)
+         call param_read('Bed height',bedheight)
+         call param_read('Bed width' ,bedwidth)
+         call param_read('Lx',Lx); call param_read('nx',nx); dx=Lx/real(nx,WP)
+         do k=cfg%kmino_,cfg%kmaxo_
+            do j=cfg%jmino_,cfg%jmaxo_
+               do i=cfg%imino_,cfg%imaxo_
+                  if (abs(cfg%xm(i)).gt.0.5_WP*bedwidth          .and.&
+                  &   abs(cfg%xm(i)).lt.0.5_WP*bedwidth+2.0_WP*dx.and.&
+                  &   cfg%ym(j).gt.bedbottom                     .and.&
+                  &   cfg%ym(j).lt.bedbottom+bedheight) cfg%VF(i,j,k)=0.0_WP
                end do
             end do
          end do
