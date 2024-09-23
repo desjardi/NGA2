@@ -169,9 +169,6 @@ module vfs_class
       type(LocSepLink_type), dimension(:,:,:), allocatable :: localized_separator_linkold
       type(ObjServer_PlanarSep_type)  :: planar_separatorold_allocation
       type(ObjServer_LocSepLink_type) :: localized_separator_linkold_allocation
-
-      ! Liquid volume change
-      real(WP) :: clipped_Lvol
       
    contains
       procedure :: initialize                             !< Initialize the vfs object
@@ -232,7 +229,6 @@ module vfs_class
       procedure :: copy_interface_to_old                  !< Copy interface variables at beginning of timestep
       procedure :: fluxpoly_project_getmoments            !< Project face to get flux volume and output its moments
       procedure :: fluxpoly_cell_getvolcentr              !< Get the volume and centroid during generalized SL advection
-      procedure :: get_vel_pc                             !< Get the phase-change velocity
 
    end type vfs
    
@@ -1347,9 +1343,6 @@ contains
    !> Perform flux-based transport of VF based on U/V/W and dt
    !> Include storage of detailed fluxes
    subroutine transport_flux_storage(this,dt,U,V,W)
-      ! Liquid volume change
-      use mpi_f08,  only: MPI_ALLREDUCE,MPI_SUM
-      use parallel, only: MPI_REAL_WP
       implicit none
       class(vfs), intent(inout) :: this
       real(WP), intent(inout) :: dt  !< Timestep size over which to advance
@@ -1368,12 +1361,6 @@ contains
       real(WP), dimension(3,2) :: bounding_pts
       integer, dimension(3,2) :: bb_indices
       type(SepVM_type) :: my_SepVM
-      
-      ! Liquid volume change
-      real(WP) :: my_clipped_Lvol
-      integer :: ierr
-      my_clipped_Lvol=0.0_WP
-      this%clipped_Lvol=0.0_WP
       
       ! Allocate
       call new(flux_polyhedron)
@@ -1546,13 +1533,11 @@ contains
          
          ! Compute new liquid volume fraction
          this%VF(i,j,k)=Lvolnew/(Lvolnew+Gvolnew)
-         ! this%VF(i,j,k)=Lvolnew/this%cfg%vol(i,j,k)
          
          ! Only work on higher order moments if VF is in [VFlo,VFhi]
          if (this%VF(i,j,k).lt.VFlo) then
             this%VF(i,j,k)=0.0_WP
          else if (this%VF(i,j,k).gt.VFhi) then
-            my_clipped_Lvol=my_clipped_Lvol+(this%VF(i,j,k)-1.0_WP)*this%cfg%vol(i,j,k)
             this%VF(i,j,k)=1.0_WP
          else
             ! Compute old phase barycenters
@@ -1571,9 +1556,6 @@ contains
       ! Synchronize VF and barycenter fields
       call this%cfg%sync(this%VF)
       call this%sync_and_clean_barycenters()
-
-      ! Liquid volume change
-      call MPI_ALLREDUCE(my_clipped_Lvol,this%clipped_Lvol,1,MPI_REAL_WP,MPI_SUM,this%cfg%comm,ierr)
       
    end subroutine transport_flux_storage
    
@@ -5026,127 +5008,6 @@ contains
       call MPI_ALLREDUCE(my_CFL,cfl,1,MPI_REAL_WP,MPI_MAX,this%cfg%comm,ierr)
       
    end subroutine get_cfl
-   
-
-   !> Calculate the face-centered phase-change velocity
-   subroutine get_vel_pc(this,evp_mflux,itp_x,itp_y,itp_z,rho_l,rho_g,vel_pc,Upcmax,Vpcmax,Wpcmax)
-      use irl_fortran_interface, only: calculateNormal,getNumberOfVertices
-      use mpi_f08,  only: MPI_ALLREDUCE,MPI_MAX
-      use parallel, only: MPI_REAL_WP
-      implicit none
-      class(vfs), intent(in) :: this
-      real(WP), target, dimension(-1:0,this%cfg%imin_:this%cfg%imax_+1,this%cfg%jmin_:this%cfg%jmax_+1,this%cfg%kmin_:this%cfg%kmax_+1), intent(in) :: itp_x
-      real(WP), target, dimension(-1:0,this%cfg%imin_:this%cfg%imax_+1,this%cfg%jmin_:this%cfg%jmax_+1,this%cfg%kmin_:this%cfg%kmax_+1), intent(in) :: itp_y
-      real(WP), target, dimension(-1:0,this%cfg%imin_:this%cfg%imax_+1,this%cfg%jmin_:this%cfg%jmax_+1,this%cfg%kmin_:this%cfg%kmax_+1), intent(in) :: itp_z
-      real(WP), dimension(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_), intent(in) :: evp_mflux
-      real(WP), intent(in) :: rho_l,rho_g
-      real(WP), dimension(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_,3), intent(inout) :: vel_pc
-      real(WP), intent(inout) :: Upcmax,Vpcmax,Wpcmax
-      integer,  dimension(:,:), allocatable :: ind_shift
-      real(WP), dimension(3) :: normalm,normalp,normal_tmp
-      real(WP), dimension(3) :: nCell
-      real(WP) :: VFm,VFp
-      logical  :: is_interfacial_m,is_interfacial_p
-      integer  :: i,j,k,dir,ierr
-      integer  :: im,jm,km
-      integer  :: ip,jp,kp
-      real(WP) :: my_Upcmax,my_Vpcmax,my_Wpcmax
-      type :: arr_ptr_4d
-         real(WP), pointer :: arr(:,:,:,:)
-      end type arr_ptr_4d
-      type(arr_ptr_4d), dimension(:), allocatable :: itp
-
-      ! Allocate arrays
-      allocate(itp(3))
-      allocate(ind_shift(1:3,1:3))
-
-      ! Interpolation and index map arrays
-      itp(1)%arr=>itp_x
-      itp(2)%arr=>itp_y
-      itp(3)%arr=>itp_z
-      ind_shift=reshape((/1,0,0,0,1,0,0,0,1/), shape(ind_shift))
-      nCell(1)=this%cfg%nx; nCell(2)=this%cfg%ny; nCell(3)=this%cfg%nz
-
-      ! Initialize with zeros
-      vel_pc=0.0_WP
-      
-      ! Loop over directions
-      do dir=1,3
-         ! Skip if needed
-         if (nCell(dir).eq.1) cycle
-         ! Loop over cell faces
-         do k=this%cfg%kmin_,this%cfg%kmax_+ind_shift(3,dir)
-            do j=this%cfg%jmin_,this%cfg%jmax_+ind_shift(2,dir)
-               do i=this%cfg%imin_,this%cfg%imax_+ind_shift(1,dir)
-                  ! Prepare indices for the adjacent cells
-                  im=i-ind_shift(1,dir); ip=i
-                  jm=j-ind_shift(2,dir); jp=j
-                  km=k-ind_shift(3,dir); kp=k
-                  ! Get the corresponding VOF values
-                  VFm=this%VF(im,jm,km)
-                  VFp=this%VF(ip,jp,kp)
-                  ! Check if the adjacent cells are interfacial
-                  is_interfacial_m=VFm.gt.0.0_WP.and.VFm.lt.1.0_WP
-                  is_interfacial_p=VFp.gt.0.0_WP.and.VFp.lt.1.0_WP
-                  if (is_interfacial_m) then
-                     ! Get the interface normal of the minus cell
-                     normalm=calculateNormal(this%interface_polygon(1,im,jm,km))
-                     if (getNumberOfVertices(this%interface_polygon(2,im,jm,km)).gt.0) then
-                        normal_tmp=calculateNormal(this%interface_polygon(2,im,jm,km))
-                        normalm=0.5_WP*(normalm+normal_tmp)
-                     end if
-                     if (is_interfacial_p) then
-                        ! Get the interface normal of the plus cell
-                        normalp=calculateNormal(this%interface_polygon(1,ip,jp,kp))
-                        if (getNumberOfVertices(this%interface_polygon(2,ip,jp,kp)).gt.0) then
-                           normal_tmp=calculateNormal(this%interface_polygon(2,ip,jp,kp))
-                           normalp=0.5_WP*(normalp+normal_tmp)
-                        end if
-                        ! Both cells are interfacial, linear interpolation of the phase-change velocity
-                        vel_pc(i,j,k,dir)=(itp(dir)%arr(-1,i,j,k)*evp_mflux(im,jm,km)*normalm(dir) &
-                        &                 +itp(dir)%arr( 0,i,j,k)*evp_mflux(ip,jp,kp)*normalp(dir))/rho_l
-                     else
-                        ! The plus cell is not interfacial, use the minus cell's phase-change velocity
-                        vel_pc(i,j,k,dir)=evp_mflux(im,jm,km)*normalm(dir)/rho_l
-                     end if
-                  else if (is_interfacial_p) then
-                     ! Get the interface normal of the plus cell
-                     normalp=calculateNormal(this%interface_polygon(1,ip,jp,kp))
-                     if (getNumberOfVertices(this%interface_polygon(2,ip,jp,kp)).gt.0) then
-                        normal_tmp=calculateNormal(this%interface_polygon(2,ip,jp,kp))
-                        normalp=0.5_WP*(normalp+normal_tmp)
-                     end if
-                     ! The minus cell is not interfacial, use the plus cell's phase-change velocity
-                     vel_pc(i,j,k,dir)=evp_mflux(ip,jp,kp)*normalp(dir)/rho_l
-                  end if
-               end do
-            end do
-         end do
-         ! Sync the phase-change velocity component
-         call this%cfg%sync(vel_pc(:,:,:,dir))
-      end do
-
-      ! Deallocate arrays
-      deallocate(ind_shift)
-
-      ! Set all to zero
-      my_Upcmax=0.0_WP; my_Vpcmax=0.0_WP; my_Wpcmax=0.0_WP
-      do k=this%cfg%kmin_,this%cfg%kmax_
-         do j=this%cfg%jmin_,this%cfg%jmax_
-            do i=this%cfg%imin_,this%cfg%imax_
-               my_Upcmax=max(my_Upcmax,abs(vel_pc(i,j,k,1)))
-               my_Vpcmax=max(my_Vpcmax,abs(vel_pc(i,j,k,2)))
-               my_Wpcmax=max(my_Wpcmax,abs(vel_pc(i,j,k,3)))
-            end do
-         end do
-      end do
-      
-      ! Get the parallel max
-      call MPI_ALLREDUCE(my_Upcmax,Upcmax,1,MPI_REAL_WP,MPI_MAX,this%cfg%comm,ierr)
-      call MPI_ALLREDUCE(my_Vpcmax,Vpcmax,1,MPI_REAL_WP,MPI_MAX,this%cfg%comm,ierr)
-      call MPI_ALLREDUCE(my_Wpcmax,Wpcmax,1,MPI_REAL_WP,MPI_MAX,this%cfg%comm,ierr)
-
-   end subroutine get_vel_pc
 
    
    !> Print out info for vf solver
