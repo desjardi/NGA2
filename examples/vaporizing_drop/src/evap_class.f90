@@ -1,8 +1,9 @@
 !> Evaporation class:
 module evap_class
-   use precision,      only: WP
-   use string,         only: str_medium
-   use config_class,   only: config
+   use precision,         only: WP
+   use string,            only: str_medium
+   use config_class,      only: config
+   use timetracker_class, only: timetracker
    implicit none
    private
    
@@ -20,10 +21,10 @@ module evap_class
    type :: evap
       
       ! This is our config
-      class(config), pointer :: cfg                                    !< This is the config the solver is build for
+      class(config), pointer :: cfg                                    !< This is the config the object is build for
       
       ! This is the name of the object
-      character(len=str_medium) :: name='UNNAMED_EVAP'                 !< Solver name (default=UNNAMED_EVAP)
+      character(len=str_medium) :: name='UNNAMED_EVAP'                 !< Object name (default=UNNAMED_EVAP)
 
       ! Liquid and gas densities
       real(WP) :: rho_l,rho_g
@@ -35,11 +36,15 @@ module evap_class
       real(WP), dimension(:,:,:), allocatable :: mfluxG,mfluxG_old     !< Gas side shifted evaporation mass flux scaled by the surface density
       real(WP), dimension(:,:,:), allocatable :: evp_div               !< Evaporatin source term (div(U) = evp_div)
 
+      ! Pseudo time over which the mflux is being shifted
+      type(timetracker), public :: pseudo_time
+
       ! Phase-change and interfacial velocity
       real(WP), dimension(:,:,:,:), allocatable :: vel_pc              !< Phase-change velocity
       real(WP), dimension(:,:,:),   allocatable :: U_itf,V_itf,W_itf   !< Interfacial velocity components
+      real(WP), dimension(:,:,:,:), allocatable :: pseudo_vel          !< Pseudo velocity for shifting mflux
 
-      ! Metrics
+      ! Metrics (point to flow solver metrics)
       type(arr_ptr_4d), dimension(:), allocatable :: itp               !< Cell to face interpolation coefficients
       type(arr_ptr_4d), dimension(:), allocatable :: div               !< Divergence operator (cell-centered)
 
@@ -47,18 +52,20 @@ module evap_class
       integer, dimension(3) :: nCell
       
       ! Monitoring quantities
-      real(WP) :: mflux_max,mflux_int,mflux_err,mflux_tol              !< Scaled evap mass flux maximum, integral, and error
+      real(WP) :: mflux_int,mflux_tol                                  !< Integral and tolerence of the scaled evap mass flux
       real(WP) :: mfluxL_int,mfluxL_err,mfluxL_int_err                 !< Liquid side scaled evap mass flux maximum, integral, and error
       real(WP) :: mfluxG_int,mfluxG_err,mfluxG_int_err                 !< Gas side scaled evap mass flux maximum, integral, and error
       real(WP) :: Upcmax,Vpcmax,Wpcmax                                 !< Maximum of phase-change velocity components
       
    contains
 
-      procedure :: get_max_vel_pc                                             !< Calculate maximum field values
       procedure :: get_vel_pc                                          !< Get the phase-change velocity
+      procedure :: get_max_vel_pc                                      !< Calculate maximum field values
       procedure :: get_pseudo_vel                                      !< Get the face-centered normilized gradient of VOF
       procedure :: get_dmfluxdt                                        !< Get the time derivative of the evaporation mass fllux
+      procedure :: shift_mflux                                         !< Shift the evaporation mass flux
       procedure :: get_evp_div                                         !< Get the evaporation source term
+      procedure :: get_cfl                                             !< Get the CFL
 
    end type evap
 
@@ -101,6 +108,7 @@ contains
       allocate(self%mfluxG_old(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_));     self%mfluxG_old=0.0_WP
       allocate(self%evp_div   (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_));     self%evp_div   =0.0_WP
       allocate(self%vel_pc    (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_,1:3)); self%vel_pc    =0.0_WP
+      allocate(self%pseudo_vel(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_,1:3)); self%pseudo_vel=0.0_WP
       allocate(self%U_itf     (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_));     self%U_itf     =0.0_WP
       allocate(self%V_itf     (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_));     self%V_itf     =0.0_WP
       allocate(self%W_itf     (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_));     self%W_itf     =0.0_WP
@@ -119,6 +127,9 @@ contains
       self%nCell(1)=self%cfg%nx
       self%nCell(2)=self%cfg%ny
       self%nCell(3)=self%cfg%nz
+
+      ! Create a pseudo time
+      self%pseudo_time=timetracker(amRoot=self%cfg%amRoot,name='Pseudo',print_info=.false.)
 
    end function constructor
    
@@ -225,13 +236,13 @@ contains
    end subroutine get_max_vel_pc
 
 
-   subroutine get_pseudo_vel(this,vf,pseudo_vel)
+   !> Calculate the pseudo velocity used to shift the evaporation mass flux
+   subroutine get_pseudo_vel(this,vf)
       use vfs_class, only: vfs
       use irl_fortran_interface, only: calculateNormal,getNumberOfVertices
       implicit none
       class(evap), intent(inout) :: this
       class(vfs), intent(in) :: vf
-      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:,1:), intent(out) :: pseudo_vel !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_,1:3)
       real(WP), dimension(:,:,:,:), allocatable :: normal
       real(WP), dimension(3) :: n1,n2
       integer :: i,j,k,dir
@@ -270,8 +281,8 @@ contains
                   jm=j-ind_shift(2,dir); jp=j
                   km=k-ind_shift(3,dir); kp=k
                   ! Linear interpolation
-                  pseudo_vel(i,j,k,dir)=this%itp(dir)%arr(-1,i,j,k)*normal(im,jm,km,dir) &
-                  &                    +this%itp(dir)%arr( 0,i,j,k)*normal(ip,jp,kp,dir)
+                  this%pseudo_vel(i,j,k,dir)=this%itp(dir)%arr(-1,i,j,k)*normal(im,jm,km,dir) &
+                  &                          +this%itp(dir)%arr( 0,i,j,k)*normal(ip,jp,kp,dir)
                end do
             end do
          end do
@@ -321,12 +332,125 @@ contains
    end subroutine get_dmfluxdt
 
 
+   !> Shift mflux away from the interface
+   subroutine shift_mflux(this,vf)
+      use mpi_f08,   only: MPI_ALLREDUCE,MPI_MAX
+      use parallel,  only: MPI_REAL_WP
+      use vfs_class, only: vfs
+      implicit none
+      class(evap), intent(inout) :: this
+      class(vfs), intent(in) :: vf
+      real(WP), dimension(:,:,:), allocatable :: resmfluxL,resmfluxG
+      integer  :: ierr
+      real(WP) :: mflux_max,my_mflux_max,mflux_err,my_mflux_err
+
+      ! Allocate memory for mflux residuals
+      allocate(resmfluxL(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
+      allocate(resmfluxG(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
+
+      ! Get the normalized gradient of VOF
+      call this%get_pseudo_vel(vf=vf)
+
+      ! Get the CFL based on the gradient of the VOF
+      call this%get_cfl(this%pseudo_time%dt,this%pseudo_vel(:,:,:,1),this%pseudo_vel(:,:,:,2),this%pseudo_vel(:,:,:,3),this%pseudo_time%cfl)
+      
+      ! Reset the pseudo time
+      call this%pseudo_time%reset()
+      
+      ! Adjust the pseudo time step
+      call this%pseudo_time%adjust_dt()
+      
+      ! Initialize the evaporation mass fluxes on the liquid and gas sides
+      this%mfluxL=this%mflux; this%mfluxG=this%mflux
+
+      ! Move the evaporation mass flux away from the interface
+      do while (.not.this%pseudo_time%done())
+         
+         ! Remember old mflux
+         this%mfluxL_old=this%mfluxL
+         this%mfluxG_old=this%mfluxG
+         
+         ! Increment pseudo time
+         call this%pseudo_time%increment()
+         
+         ! Assemble explicit residual
+         call this%get_dmfluxdt(vel= this%pseudo_vel,mflux_old=this%mfluxL_old,dmfluxdt=resmfluxL)
+         call this%get_dmfluxdt(vel=-this%pseudo_vel,mflux_old=this%mfluxG_old,dmfluxdt=resmfluxG)
+         
+         ! Apply these residuals
+         this%mfluxL=this%mfluxL_old+this%pseudo_time%dt*resmfluxL
+         this%mfluxG=this%mfluxG_old+this%pseudo_time%dt*resmfluxG
+
+         ! Get the maximum of mflux
+         my_mflux_max=maxval(this%mflux)
+         call MPI_ALLREDUCE(my_mflux_max,mflux_max,1,MPI_REAL_WP,MPI_Max,this%cfg%comm,ierr)
+
+         ! Calculate the error on the liquid side
+         my_mflux_err=maxval(abs((this%mfluxL-this%mfluxL_old)/mflux_max))
+         call MPI_ALLREDUCE(my_mflux_err,this%mfluxL_err,1,MPI_REAL_WP,MPI_Max,this%cfg%comm,ierr)
+         
+         ! Calculate the error on the gas side
+         my_mflux_err=maxval(abs((this%mfluxG-this%mfluxG_old)/mflux_max))
+         call MPI_ALLREDUCE(my_mflux_err,this%mfluxG_err,1,MPI_REAL_WP,MPI_Max,this%cfg%comm,ierr)
+
+         ! Check convergence
+         mflux_err=max(this%mfluxL_err,this%mfluxG_err)
+         if (mflux_err.lt.this%mflux_tol) exit
+
+      end do
+
+      ! Integral of mflux
+      call this%cfg%integrate(this%mflux,this%mflux_int)
+      call this%cfg%integrate(this%mfluxL,this%mfluxL_int)
+      call this%cfg%integrate(this%mfluxG,this%mfluxG_int)
+      this%mfluxL_int_err=abs(this%mfluxL_int-this%mflux_int)
+      this%mfluxG_int_err=abs(this%mfluxG_int-this%mflux_int)
+
+      ! Deallocate unused memory
+      deallocate(resmfluxL,resmfluxG)
+
+   end subroutine shift_mflux
+
+
    !> Calculate the divergence induced by phase change
    subroutine get_evp_div(this)
       implicit none
       class(evap), intent(inout) :: this
       this%evp_div=(this%mfluxG/this%rho_g-this%mfluxL/this%rho_l)
    end subroutine get_evp_div
+
+
+   !> Calculate the CFL
+   subroutine get_cfl(this,dt,U,V,W,cfl)
+      use mpi_f08,  only: MPI_ALLREDUCE,MPI_MAX
+      use parallel, only: MPI_REAL_WP
+      implicit none
+      class(evap), intent(inout) :: this
+      real(WP), intent(in)  :: dt
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in) :: U     !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in) :: V     !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in) :: W     !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      real(WP), intent(out) :: cfl
+      integer :: i,j,k,ierr
+      real(WP) :: my_CFL
+      
+      ! Set the CFL to zero
+      my_CFL=0.0_WP
+      do k=this%cfg%kmin_,this%cfg%kmax_
+         do j=this%cfg%jmin_,this%cfg%jmax_
+            do i=this%cfg%imin_,this%cfg%imax_
+               my_CFL=max(my_CFL,abs(U(i,j,k))*this%cfg%dxmi(i))
+               my_CFL=max(my_CFL,abs(V(i,j,k))*this%cfg%dymi(j))
+               my_CFL=max(my_CFL,abs(W(i,j,k))*this%cfg%dzmi(k))
+            end do
+         end do
+      end do
+      my_CFL=my_CFL*dt
+      
+      ! Get the parallel max
+      call MPI_ALLREDUCE(my_CFL,cfl,1,MPI_REAL_WP,MPI_MAX,this%cfg%comm,ierr)
+      
+   end subroutine get_cfl
 
 
 end module evap_class

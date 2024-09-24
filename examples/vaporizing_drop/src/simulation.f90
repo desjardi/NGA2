@@ -22,15 +22,15 @@ module simulation
    type(vfs),         public :: vf
    type(tpscalar),    public :: sc
    type(evap),        public :: evp
-   type(timetracker), public :: time,pseudo_time
+   type(timetracker), public :: time
    
    !> Ensight postprocessing
    type(surfmesh) :: smesh
-   type(ensight)  :: ens_out,ens_mflux_out
-   type(event)    :: ens_evt,ens_mflux_evt
+   type(ensight)  :: ens_out
+   type(event)    :: ens_evt
    
    !> Simulation monitor file
-   type(monitor) :: mfile,mfileL,cflfile,scfile,pcfile
+   type(monitor) :: mfile,mfileL,cflfile,scfile,evpfile
    
    public :: simulation_init,simulation_run,simulation_final
    
@@ -38,15 +38,12 @@ module simulation
    real(WP), dimension(:,:,:,:), allocatable :: resSC
    real(WP), dimension(:,:,:),   allocatable :: resU,resV,resW
    real(WP), dimension(:,:,:),   allocatable :: Ui,Vi,Wi
-   real(WP), dimension(:,:,:),   allocatable :: resmfluxL,resmfluxG,mflxLerr
    real(WP), dimension(:,:,:),   allocatable :: Ui_L,Vi_L,Wi_L
    
    !> Problem definition
-   real(WP), dimension(:,:,:,:), allocatable :: pseudo_vel
    real(WP), dimension(3) :: center
    real(WP) :: radius
    integer  :: iTl,iYv
-   real(WP) :: mflux_ens_time
    real(WP) :: evp_mass_flux
    real(WP) :: Lz,rad_drop
    
@@ -172,10 +169,6 @@ contains
       ! Allocate work arrays
       allocate_work_arrays: block
          allocate(resSC     (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_,1:2))
-         allocate(resmfluxL (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_));     resmfluxL=0.0_WP
-         allocate(resmfluxG (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_));     resmfluxG=0.0_WP
-         allocate(mflxLerr  (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_));     mflxLerr=0.0_WP
-         allocate(pseudo_vel(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_,1:3)); pseudo_vel=0.0_WP
          allocate(resU      (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
          allocate(resV      (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
          allocate(resW      (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
@@ -197,16 +190,6 @@ contains
          call param_read('Sub-iterations',time%itmax)
          time%dt=time%dtmax
       end block initialize_timetracker
-
-
-      ! Initialize a pseudo time tracker
-      initialize_pseudo_timetracker: block
-         pseudo_time=timetracker(amRoot=cfg%amRoot,name='Pseudo',print_info=.false.)
-         call param_read('Max pseudo timestep size',pseudo_time%dtmax)
-         call param_read('Max pseudo cfl number',pseudo_time%cflmax)
-         call param_read('Max pseudo time steps',pseudo_time%nmax)
-         pseudo_time%dt=pseudo_time%dtmax
-      end block initialize_pseudo_timetracker
       
       
       ! Initialize our VOF solver and field
@@ -418,15 +401,17 @@ contains
       ! Create and initialize an evp object
       create_evp: block
          ! Create the object
-         ! evp=evap(cfg=cfg,itp_x=sc%itp_x,itp_y=sc%itp_y,itp_z=sc%itp_z,div_x=sc%div_x,div_y=sc%div_y,div_z=sc%div_z,name='liquid gas pc')
          evp=evap(cfg=cfg,itp_x=fs%itpr_x,itp_y=fs%itpr_y,itp_z=fs%itpr_z,div_x=fs%divp_x,div_y=fs%divp_y,div_z=fs%divp_z,name='liquid gas pc')
-         call param_read('Mass flux tolerence',evp%mflux_tol)
-         call param_read('Evaporation mass flux',evp_mass_flux)
+         call param_read('Mass flux tolerence',     evp%mflux_tol)
+         call param_read('Evaporation mass flux',   evp_mass_flux)
+         call param_read('Max pseudo timestep size',evp%pseudo_time%dtmax)
+         call param_read('Max pseudo cfl number',   evp%pseudo_time%cflmax)
+         call param_read('Max pseudo time steps',   evp%pseudo_time%nmax)
+         evp%pseudo_time%dt=evp%pseudo_time%dtmax
          ! Get densities from the flow solver
          evp%rho_l=fs%rho_l
          evp%rho_g=fs%rho_g
          ! Initialize the evaporation mass flux
-         ! Interface jump conditions
          where ((vf%VF.gt.0.0_WP).and.(vf%VF.lt.1.0_WP))
             evp%mdotdp=evp_mass_flux
             evp%mflux =evp%mdotdp*vf%SD
@@ -434,10 +419,10 @@ contains
             evp%mdotdp=0.0_WP
             evp%mflux =0.0_WP
          end where
+         ! Initialize the liquid and gas side mfluxes
          evp%mfluxL=evp%mflux
          evp%mfluxG=evp%mflux
-         ! Initialize errors
-         evp%mflux_err     =0.0_WP
+         ! Initialize errors to zero
          evp%mfluxL_err    =0.0_WP
          evp%mfluxG_err    =0.0_WP
          evp%mfluxL_int_err=0.0_WP
@@ -459,8 +444,6 @@ contains
       ! Add Ensight output
       create_ensight: block
          integer :: nsc
-         logical :: ens_for_mflux
-
          ! Create Ensight output from cfg
          ens_out=ensight(cfg=cfg,name='VaporizingDrop')
          ! Create event for Ensight output
@@ -480,29 +463,11 @@ contains
          call ens_out%add_scalar('mdotdp',evp%mdotdp)
          call ens_out%add_scalar('mfluxL',evp%mfluxL)
          call ens_out%add_scalar('mfluxG',evp%mfluxG)
-         call ens_out%add_scalar('mfluxL_err',mflxLerr)
          call ens_out%add_scalar('divergence',fs%div)
          call ens_out%add_vector('vel_itf',evp%U_itf,evp%V_itf,evp%W_itf)
          call ens_out%add_vector('vel_L',Ui_L,Vi_L,Wi_L)
          ! Output to ensight
          if (ens_evt%occurs()) call ens_out%write_data(time%t)
-
-         ! Creat ensight for mflux evolution
-         call param_read('Ensight for mflux evolution',ens_for_mflux)
-         if (ens_for_mflux) then
-            call param_read('When to write mflux ensight',mflux_ens_time)
-            ens_mflux_out=ensight(cfg=cfg,name='mfluxEvolution')
-            ens_mflux_evt=event(time=pseudo_time,name='mflux ensight')
-            call param_read('Ensight output period for mflux',ens_mflux_evt%tper)
-            call ens_mflux_out%add_scalar('VOF',vf%VF)
-            call ens_mflux_out%add_scalar('mflux',evp%mflux)
-            call ens_mflux_out%add_scalar('mfluxL',evp%mfluxL)
-            call ens_mflux_out%add_scalar('mfluxG',evp%mfluxG)
-            call ens_mflux_out%add_scalar('mfluxL_err',mflxLerr)
-            if (ens_mflux_evt%occurs()) call ens_mflux_out%write_data(pseudo_time%t)
-         else
-            mflux_ens_time=-1.0_WP
-         end if
       end block create_ensight
       
       
@@ -569,24 +534,24 @@ contains
            call scfile%add_column(sc%SCint(nsc),trim(sc%SCname(nsc))//'_int')
          end do
          call scfile%write()
-         ! Create mflux monitor
-         pcfile=monitor(sc%cfg%amRoot,'evaporation')
-         call pcfile%add_column(time%n,'Timestep number')
-         call pcfile%add_column(time%t,'Time')
-         call pcfile%add_column(pseudo_time%dt,'Pseudo time step')
-         call pcfile%add_column(pseudo_time%cfl,'Maximum pseudo CFL')
-         call pcfile%add_column(pseudo_time%n,'No. pseudo steps')
-         call pcfile%add_column(evp%mflux_int,'mflux int')
-         call pcfile%add_column(evp%mfluxL_int,'shifted mfluxL int')
-         call pcfile%add_column(evp%mfluxG_int,'shifted mfluxG int')
-         call pcfile%add_column(evp%mfluxL_int_err,'mfluxL int err')
-         call pcfile%add_column(evp%mfluxG_int_err,'mfluxG int err')
-         call pcfile%add_column(evp%mfluxL_err,'max mfluxL err')
-         call pcfile%add_column(evp%mfluxG_err,'max mfluxG err')
-         call pcfile%add_column(evp%Upcmax,'Upc_max')
-         call pcfile%add_column(evp%Vpcmax,'Vpc_max')
-         call pcfile%add_column(evp%Wpcmax,'Wpc_max')
-         call pcfile%write()
+         ! Create evaporation monitor
+         evpfile=monitor(sc%cfg%amRoot,'evaporation')
+         call evpfile%add_column(time%n,'Timestep number')
+         call evpfile%add_column(time%t,'Time')
+         call evpfile%add_column(evp%pseudo_time%dt,'Pseudo time step')
+         call evpfile%add_column(evp%pseudo_time%cfl,'Maximum pseudo CFL')
+         call evpfile%add_column(evp%pseudo_time%n,'No. pseudo steps')
+         call evpfile%add_column(evp%mflux_int,'mflux int')
+         call evpfile%add_column(evp%mfluxL_int,'shifted mfluxL int')
+         call evpfile%add_column(evp%mfluxG_int,'shifted mfluxG int')
+         call evpfile%add_column(evp%mfluxL_int_err,'mfluxL int err')
+         call evpfile%add_column(evp%mfluxG_int_err,'mfluxG int err')
+         call evpfile%add_column(evp%mfluxL_err,'max mfluxL err')
+         call evpfile%add_column(evp%mfluxG_err,'max mfluxG err')
+         call evpfile%add_column(evp%Upcmax,'Upc_max')
+         call evpfile%add_column(evp%Vpcmax,'Vpc_max')
+         call evpfile%add_column(evp%Wpcmax,'Wpc_max')
+         call evpfile%write()
       end block create_monitor
       
       
@@ -643,79 +608,10 @@ contains
          ! VOF solver step
          call vf%advance(dt=time%dt,U=evp%U_itf,V=evp%V_itf,W=evp%W_itf)
          call vf%apply_bcond(time%t,time%dt)
+
+         ! Shift the phase-change mass flux
+         call evp%shift_mflux(vf=vf)
          
-         ! Shift the evaporation mass flux away from the interface
-         shift_mflux: block
-            use mpi_f08,  only: MPI_ALLREDUCE,MPI_MAX
-            use parallel, only: MPI_REAL_WP
-            integer  :: ierr
-            real(WP) :: my_mflux_max,my_mflux_err
-            
-            ! Get the normalized gradient of VOF
-            call evp%get_pseudo_vel(vf=vf,pseudo_vel=pseudo_vel)
-
-            ! Get the CFL based on the gradient of the VOF
-            call vf%get_cfl(pseudo_time%dt,pseudo_vel(:,:,:,1),pseudo_vel(:,:,:,2),pseudo_vel(:,:,:,3),pseudo_time%cfl)
-            
-            ! Reset the pseudo time
-            call pseudo_time%reset()
-            
-            ! Adjust the pseudo time step
-            call pseudo_time%adjust_dt()
-            
-            ! Initialize the evaporation mass fluxes on the liquid and gas sides
-            evp%mfluxL=evp%mflux; evp%mfluxG=evp%mflux
-
-            ! Move the evaporation mass flux away from the interface
-            do while (.not.pseudo_time%done())
-               
-               ! Remember old mflux
-               evp%mfluxL_old=evp%mfluxL
-               evp%mfluxG_old=evp%mfluxG
-               
-               ! Increment pseudo time
-               call pseudo_time%increment()
-               
-               ! Assemble explicit residual
-               call evp%get_dmfluxdt(vel= pseudo_vel,mflux_old=evp%mfluxL_old,dmfluxdt=resmfluxL)
-               call evp%get_dmfluxdt(vel=-pseudo_vel,mflux_old=evp%mfluxG_old,dmfluxdt=resmfluxG)
-               
-               ! Apply these residuals
-               evp%mfluxL=evp%mfluxL_old+pseudo_time%dt*resmfluxL
-               evp%mfluxG=evp%mfluxG_old+pseudo_time%dt*resmfluxG
-
-               ! Get the maximum of mflux
-               my_mflux_max=maxval(evp%mflux)
-               call MPI_ALLREDUCE(my_mflux_max,evp%mflux_max,1,MPI_REAL_WP,MPI_Max,sc%cfg%comm,ierr)
-
-               ! Calculate the error on the liquid side
-               mflxLerr=(evp%mfluxL-evp%mfluxL_old)/evp%mflux_max
-               my_mflux_err=maxval(abs(mflxLerr))
-               call MPI_ALLREDUCE(my_mflux_err,evp%mfluxL_err,1,MPI_REAL_WP,MPI_Max,sc%cfg%comm,ierr)
-               ! Calculate the error on the gas side
-               my_mflux_err=maxval(abs((evp%mfluxG-evp%mfluxG_old)/evp%mflux_max))
-               call MPI_ALLREDUCE(my_mflux_err,evp%mfluxG_err,1,MPI_REAL_WP,MPI_Max,sc%cfg%comm,ierr)
-
-               ! Output to ensight
-               if (mflux_ens_time.eq.time%t.and.ens_mflux_evt%occurs()) then
-                  call ens_mflux_out%write_data(pseudo_time%t)
-               end if
-
-               ! Check convergence
-               evp%mflux_err=max(evp%mfluxL_err,evp%mfluxG_err)
-               if (evp%mflux_err.lt.evp%mflux_tol) exit
-
-            end do
-
-            ! Integral of mflux
-            call cfg%integrate(evp%mflux,evp%mflux_int)
-            call cfg%integrate(evp%mfluxL,evp%mfluxL_int)
-            call cfg%integrate(evp%mfluxG,evp%mfluxG_int)
-            evp%mfluxL_int_err=abs(evp%mfluxL_int-evp%mflux_int)
-            evp%mfluxG_int_err=abs(evp%mfluxG_int-evp%mflux_int)
-
-         end block shift_mflux
-
          ! Get the phase-change induced divergence
          call evp%get_evp_div()
 
@@ -896,7 +792,7 @@ contains
          call mfile%write(); call mfileL%write()
          call cflfile%write()
          call scfile%write()
-         call pcfile%write()
+         call evpfile%write()
          
       end do
 
@@ -914,7 +810,7 @@ contains
       ! timetracker
       
       ! Deallocate work arrays
-      deallocate(resU,resV,resW,Ui,Vi,Wi,resSC,pseudo_vel,resmfluxL,resmfluxG,mflxLerr)
+      deallocate(resU,resV,resW,Ui,Vi,Wi,resSC)
 
    end subroutine simulation_final
    

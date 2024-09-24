@@ -44,7 +44,4 @@ Pressure tolerance : 1e-6
 Pressure iteration : 50
 
 # Ensight output
-Ensight output period           : 1e-3
-Ensight for mflux evolution     : false
-Ensight output period for mflux : 2e-7
-When to write mflux ensight     : 3.0e-3
+Ensight output period : 1e-3
