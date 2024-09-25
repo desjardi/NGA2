@@ -6,7 +6,6 @@ module amrvfs_class
    use string,                only: str_medium
    use amrconfig_class,       only: amrconfig
    use amrex_amr_module,      only: amrex_multifab
-   use irl_fortran_interface, only: ObjServer_PlanarSep_type,ObjServer_PlanarLoc_type,ObjServer_LocSepLink_type,ObjServer_LocLink_type
    !use irl_fortran_interface
    implicit none
    private
@@ -63,12 +62,6 @@ module amrvfs_class
       
       ! Monitoring quantities
       real(WP) :: VFmax,VFmin,VFint                                  !< Maximum, minimum, and integral volume fraction and surface density
-      
-      ! IRL data
-      type(ObjServer_PlanarSep_type)  :: allocation_planar_separator
-      type(ObjServer_PlanarLoc_type)  :: allocation_planar_localizer
-      type(ObjServer_LocSepLink_type) :: allocation_localized_separator_link
-      type(ObjServer_LocLink_type)    :: allocation_localizer_link
       
    contains
       ! Basic procedures -------------------------------------------------------------------------------------
@@ -163,9 +156,8 @@ contains
       
       ! Initialize IRL
       initialize_irl: block
-         use irl_fortran_interface, only: setVFBounds,setVFTolerance_IterativeDistanceFinding,IRL_LargeOffsetIndex_t,&
-         &                                setMinimumVolToTrack,setMinimumSAToTrack,getMoments_setMethod,new
-         integer(IRL_LargeOffsetIndex_t) :: total_cells
+         use irl_fortran_interface, only: setVFBounds,setVFTolerance_IterativeDistanceFinding,&
+         &                                setMinimumVolToTrack,setMinimumSAToTrack,getMoments_setMethod
          ! Transfer small constants to IRL
          call setVFBounds(VFlo)
          call setVFTolerance_IterativeDistanceFinding(iterative_distfind_tol)
@@ -173,15 +165,6 @@ contains
          call setMinimumSAToTrack(surface_epsilon_factor*this%amr%min_meshsize**2)
          ! Set IRL's moment calculation method
          call getMoments_setMethod(half_edge)
-         ! Initialize size for IRL object server
-         total_cells=int(this%amr%nmax+2*this%nover,8)*&
-         &           int(this%amr%nmax+2*this%nover,8)*&
-         &           int(this%amr%nmax+2*this%nover,8)
-         print*,total_cells
-         call new(this%allocation_planar_localizer,total_cells)
-         call new(this%allocation_planar_separator,total_cells)
-         call new(this%allocation_localized_separator_link,total_cells)
-         call new(this%allocation_localizer_link,total_cells)
       end block initialize_irl
       
    end subroutine initialize
@@ -636,228 +619,247 @@ contains
       call this%amr%mfiter_build(lvl,mfi); do while(mfi%next())
          bx=mfi%tilebox()
          
-         ! First setup IRL on the box
-         setup_irl_on_box: block
-            use irl_fortran_interface, only: setFromRectangularCuboid,setId,setEdgeConnectivity
-            integer :: lexico,nxo_,nyo_,nzo_
-            
-            ! Allocate IRL arrays on box
-            allocate(localizer               (bx%lo(1)-this%nover:bx%hi(1)+this%nover,bx%lo(2)-this%nover:bx%hi(2)+this%nover,bx%lo(3)-this%nover:bx%hi(3)+this%nover))
-            allocate(liquid_gas_interface    (bx%lo(1)-this%nover:bx%hi(1)+this%nover,bx%lo(2)-this%nover:bx%hi(2)+this%nover,bx%lo(3)-this%nover:bx%hi(3)+this%nover))
-            allocate(localized_separator_link(bx%lo(1)-this%nover:bx%hi(1)+this%nover,bx%lo(2)-this%nover:bx%hi(2)+this%nover,bx%lo(3)-this%nover:bx%hi(3)+this%nover))
-            allocate(localizer_link          (bx%lo(1)-this%nover:bx%hi(1)+this%nover,bx%lo(2)-this%nover:bx%hi(2)+this%nover,bx%lo(3)-this%nover:bx%hi(3)+this%nover))
-            
-            ! Initialize arrays and setup linking
-            do k=bx%lo(3)-this%nover,bx%hi(3)+this%nover
-               do j=bx%lo(2)-this%nover,bx%hi(2)+this%nover
-                  do i=bx%lo(1)-this%nover,bx%hi(1)+this%nover
-                     ! Transfer cell to IRL
-                     call new(localizer(i,j,k),this%allocation_planar_localizer)
-                     call setFromRectangularCuboid(localizer(i,j,k),&
-                     & [this%amr%xlo+real(i  ,WP)*this%amr%dx(lvl),this%amr%ylo+real(j  ,WP)*this%amr%dy(lvl),this%amr%zlo+real(k  ,WP)*this%amr%dz(lvl)],&
-                     & [this%amr%xlo+real(i+1,WP)*this%amr%dx(lvl),this%amr%ylo+real(j+1,WP)*this%amr%dy(lvl),this%amr%zlo+real(k+1,WP)*this%amr%dz(lvl)])
-                     ! PLIC interface
-                     call new(liquid_gas_interface(i,j,k),this%allocation_planar_separator)
-                     ! PLIC+mesh with connectivity (i.e., link)
-                     call new(localized_separator_link(i,j,k),this%allocation_localized_separator_link,localizer(i,j,k),liquid_gas_interface(i,j,k))
-                     ! Mesh with connectivity
-                     call new(localizer_link(i,j,k),this%allocation_localizer_link,localizer(i,j,k))
-                  end do
-               end do
-            end do
-            
-            ! Give each link a unique lexicographic tag (per processor)
+         ! Outer block for ensuring proper destruction of IRL object servers
+         irl_object_server: block
+            use irl_fortran_interface, only: ObjServer_PlanarSep_type,ObjServer_PlanarLoc_type,&
+            &                                ObjServer_LocSepLink_type,ObjServer_LocLink_type,&
+            &                                IRL_LargeOffsetIndex_t,new
+            type(ObjServer_PlanarSep_type)  :: allocation_planar_separator
+            type(ObjServer_PlanarLoc_type)  :: allocation_planar_localizer
+            type(ObjServer_LocSepLink_type) :: allocation_localized_separator_link
+            type(ObjServer_LocLink_type)    :: allocation_localizer_link
+            integer :: nxo_,nyo_,nzo_
+            integer(IRL_LargeOffsetIndex_t) :: total_cells
+
+            ! Calculate number of cells
             nxo_=bx%hi(1)-bx%lo(1)+2*this%nover+1
             nyo_=bx%hi(2)-bx%lo(2)+2*this%nover+1
             nzo_=bx%hi(3)-bx%lo(3)+2*this%nover+1
-            print*,nxo_,nyo_,nzo_,nxo_*nyo_*nzo_
+            total_cells=int(nxo_,8)*int(nyo_,8)*int(nzo_,8)
+            
+            ! Initialize size for IRL object servers
+            call new(allocation_planar_localizer,total_cells)
+            call new(allocation_planar_separator,total_cells)
+            call new(allocation_localized_separator_link,total_cells)
+            call new(allocation_localizer_link,total_cells)
+            
+            ! First setup IRL on the box
+            setup_irl_on_box: block
+               use irl_fortran_interface, only: setFromRectangularCuboid,setId,setEdgeConnectivity
+               integer :: lexico
+               ! Allocate IRL arrays on box
+               allocate(localizer               (bx%lo(1)-this%nover:bx%hi(1)+this%nover,bx%lo(2)-this%nover:bx%hi(2)+this%nover,bx%lo(3)-this%nover:bx%hi(3)+this%nover))
+               allocate(liquid_gas_interface    (bx%lo(1)-this%nover:bx%hi(1)+this%nover,bx%lo(2)-this%nover:bx%hi(2)+this%nover,bx%lo(3)-this%nover:bx%hi(3)+this%nover))
+               allocate(localized_separator_link(bx%lo(1)-this%nover:bx%hi(1)+this%nover,bx%lo(2)-this%nover:bx%hi(2)+this%nover,bx%lo(3)-this%nover:bx%hi(3)+this%nover))
+               allocate(localizer_link          (bx%lo(1)-this%nover:bx%hi(1)+this%nover,bx%lo(2)-this%nover:bx%hi(2)+this%nover,bx%lo(3)-this%nover:bx%hi(3)+this%nover))
+               ! Initialize arrays and setup linking
+               do k=bx%lo(3)-this%nover,bx%hi(3)+this%nover
+                  do j=bx%lo(2)-this%nover,bx%hi(2)+this%nover
+                     do i=bx%lo(1)-this%nover,bx%hi(1)+this%nover
+                        ! Transfer cell to IRL
+                        !call new(localizer(i,j,k),allocation_planar_localizer)
+                        call new(localizer(i,j,k))!,allocation_planar_localizer)
+                        call setFromRectangularCuboid(localizer(i,j,k),&
+                        & [this%amr%xlo+real(i  ,WP)*this%amr%dx(lvl),this%amr%ylo+real(j  ,WP)*this%amr%dy(lvl),this%amr%zlo+real(k  ,WP)*this%amr%dz(lvl)],&
+                        & [this%amr%xlo+real(i+1,WP)*this%amr%dx(lvl),this%amr%ylo+real(j+1,WP)*this%amr%dy(lvl),this%amr%zlo+real(k+1,WP)*this%amr%dz(lvl)])
+                        ! PLIC interface
+                        !call new(liquid_gas_interface(i,j,k),allocation_planar_separator)
+                        call new(liquid_gas_interface(i,j,k))!,allocation_planar_separator)
+                        ! PLIC+mesh with connectivity (i.e., link)
+                        !call new(localized_separator_link(i,j,k),allocation_localized_separator_link,localizer(i,j,k),liquid_gas_interface(i,j,k))
+                        call new(localized_separator_link(i,j,k),localizer(i,j,k),liquid_gas_interface(i,j,k))
+                        ! Mesh with connectivity
+                        !call new(localizer_link(i,j,k),allocation_localizer_link,localizer(i,j,k))
+                        call new(localizer_link(i,j,k),localizer(i,j,k))
+                     end do
+                  end do
+               end do
+               ! Give each link a unique lexicographic tag (per processor)
+               do k=bx%lo(3)-this%nover,bx%hi(3)+this%nover
+                  do j=bx%lo(2)-this%nover,bx%hi(2)+this%nover
+                     do i=bx%lo(1)-this%nover,bx%hi(1)+this%nover
+                        lexico=(i-bx%lo(1)+this%nover)+(j-bx%lo(2)+this%nover)*nxo_+(k-bx%lo(3)+this%nover)*nxo_*nyo_
+                        call setId(localized_separator_link(i,j,k),lexico)
+                        call setId(localizer_link(i,j,k),lexico)
+                     end do
+                  end do
+               end do
+               ! Set the connectivity
+               do k=bx%lo(3)-this%nover,bx%hi(3)+this%nover
+                  do j=bx%lo(2)-this%nover,bx%hi(2)+this%nover
+                     do i=bx%lo(1)-this%nover,bx%hi(1)+this%nover
+                        ! In the x- direction
+                        if (i.gt.bx%lo(1)-this%nover) then
+                           call setEdgeConnectivity(localized_separator_link(i,j,k),0,localized_separator_link(i-1,j,k))
+                           call setEdgeConnectivity(localizer_link(i,j,k),0,localizer_link(i-1,j,k))
+                        end if
+                        ! In the x+ direction
+                        if (i.lt.bx%hi(1)+this%nover) then
+                           call setEdgeConnectivity(localized_separator_link(i,j,k),1,localized_separator_link(i+1,j,k))
+                           call setEdgeConnectivity(localizer_link(i,j,k),1,localizer_link(i+1,j,k))
+                        end if
+                        ! In the y- direction
+                        if (j.gt.bx%lo(2)-this%nover) then
+                           call setEdgeConnectivity(localized_separator_link(i,j,k),2,localized_separator_link(i,j-1,k))
+                           call setEdgeConnectivity(localizer_link(i,j,k),2,localizer_link(i,j-1,k))
+                        end if
+                        ! In the y+ direction
+                        if (j.lt.bx%hi(2)+this%nover) then
+                           call setEdgeConnectivity(localized_separator_link(i,j,k),3,localized_separator_link(i,j+1,k))
+                           call setEdgeConnectivity(localizer_link(i,j,k),3,localizer_link(i,j+1,k))
+                        end if
+                        ! In the z- direction
+                        if (k.gt.bx%lo(3)-this%nover) then
+                           call setEdgeConnectivity(localized_separator_link(i,j,k),4,localized_separator_link(i,j,k-1))
+                           call setEdgeConnectivity(localizer_link(i,j,k),4,localizer_link(i,j,k-1))
+                        end if
+                        ! In the z+ direction
+                        if (k.lt.bx%hi(3)+this%nover) then
+                           call setEdgeConnectivity(localized_separator_link(i,j,k),5,localized_separator_link(i,j,k+1))
+                           call setEdgeConnectivity(localizer_link(i,j,k),5,localizer_link(i,j,k+1))
+                        end if
+                     end do
+                  end do
+               end do
+            end block setup_irl_on_box
+            
+            ! Get volmom and interf data
+            volmom=>this%volmom(lvl)%dataptr(mfi)
+            interf=>this%interf(lvl)%dataptr(mfi)
+            
+            ! Transfer interface to IRL
             do k=bx%lo(3)-this%nover,bx%hi(3)+this%nover
                do j=bx%lo(2)-this%nover,bx%hi(2)+this%nover
                   do i=bx%lo(1)-this%nover,bx%hi(1)+this%nover
-                     lexico=(i-bx%lo(1)+this%nover)+&
-                     &      (j-bx%lo(2)+this%nover)*nxo_+&
-                     &      (k-bx%lo(3)+this%nover)*nxo_*nyo_
-                     call setId(localized_separator_link(i,j,k),lexico)
-                     call setId(localizer_link(i,j,k),lexico)
+                     call setNumberOfPlanes(liquid_gas_interface(i,j,k),1)
+                     call setPlane(liquid_gas_interface(i,j,k),0,interf(i,j,k,1:3),interf(i,j,k,4))
                   end do
                end do
             end do
             
-            ! Set the connectivity
-            do k=bx%lo(3)-this%nover,bx%hi(3)+this%nover
-               do j=bx%lo(2)-this%nover,bx%hi(2)+this%nover
-                  do i=bx%lo(1)-this%nover,bx%hi(1)+this%nover
-                     ! In the x- direction
-                     if (i.gt.bx%lo(1)-this%nover) then
-                        call setEdgeConnectivity(localized_separator_link(i,j,k),0,localized_separator_link(i-1,j,k))
-                        call setEdgeConnectivity(localizer_link(i,j,k),0,localizer_link(i-1,j,k))
+            ! Get velocity data
+            pU=>U%dataptr(mfi)
+            pV=>V%dataptr(mfi)
+            pW=>W%dataptr(mfi)
+            
+            ! Perform cell remap
+            do k=bx%lo(3),bx%hi(3)
+               do j=bx%lo(2),bx%hi(2)
+                  do i=bx%lo(1),bx%hi(1)
+                     
+                     ! Construct the cell and project it backwards in time
+                     cell(:,1)=[this%amr%xlo+real(i+1,WP)*this%amr%dx(lvl),this%amr%ylo+real(j  ,WP)*this%amr%dy(lvl),this%amr%zlo+real(k+1,WP)*this%amr%dz(lvl)]; cell(:,1)=project(cell(:,1),-dt)
+                     cell(:,2)=[this%amr%xlo+real(i+1,WP)*this%amr%dx(lvl),this%amr%ylo+real(j  ,WP)*this%amr%dy(lvl),this%amr%zlo+real(k  ,WP)*this%amr%dz(lvl)]; cell(:,2)=project(cell(:,2),-dt)
+                     cell(:,3)=[this%amr%xlo+real(i+1,WP)*this%amr%dx(lvl),this%amr%ylo+real(j+1,WP)*this%amr%dy(lvl),this%amr%zlo+real(k  ,WP)*this%amr%dz(lvl)]; cell(:,3)=project(cell(:,3),-dt)
+                     cell(:,4)=[this%amr%xlo+real(i+1,WP)*this%amr%dx(lvl),this%amr%ylo+real(j+1,WP)*this%amr%dy(lvl),this%amr%zlo+real(k+1,WP)*this%amr%dz(lvl)]; cell(:,4)=project(cell(:,4),-dt)
+                     cell(:,5)=[this%amr%xlo+real(i  ,WP)*this%amr%dx(lvl),this%amr%ylo+real(j  ,WP)*this%amr%dy(lvl),this%amr%zlo+real(k+1,WP)*this%amr%dz(lvl)]; cell(:,5)=project(cell(:,5),-dt)
+                     cell(:,6)=[this%amr%xlo+real(i  ,WP)*this%amr%dx(lvl),this%amr%ylo+real(j  ,WP)*this%amr%dy(lvl),this%amr%zlo+real(k  ,WP)*this%amr%dz(lvl)]; cell(:,6)=project(cell(:,6),-dt)
+                     cell(:,7)=[this%amr%xlo+real(i  ,WP)*this%amr%dx(lvl),this%amr%ylo+real(j+1,WP)*this%amr%dy(lvl),this%amr%zlo+real(k  ,WP)*this%amr%dz(lvl)]; cell(:,7)=project(cell(:,7),-dt)
+                     cell(:,8)=[this%amr%xlo+real(i  ,WP)*this%amr%dx(lvl),this%amr%ylo+real(j+1,WP)*this%amr%dy(lvl),this%amr%zlo+real(k+1,WP)*this%amr%dz(lvl)]; cell(:,8)=project(cell(:,8),-dt)
+                     
+                     ! Correct volume of x- face
+                     face(:,1)=[this%amr%xlo+real(i  ,WP)*this%amr%dx(lvl),this%amr%ylo+real(j  ,WP)*this%amr%dy(lvl),this%amr%zlo+real(k+1,WP)*this%amr%dz(lvl)]; face(:,5)=cell(:,5)
+                     face(:,2)=[this%amr%xlo+real(i  ,WP)*this%amr%dx(lvl),this%amr%ylo+real(j  ,WP)*this%amr%dy(lvl),this%amr%zlo+real(k  ,WP)*this%amr%dz(lvl)]; face(:,6)=cell(:,6)
+                     face(:,3)=[this%amr%xlo+real(i  ,WP)*this%amr%dx(lvl),this%amr%ylo+real(j+1,WP)*this%amr%dy(lvl),this%amr%zlo+real(k  ,WP)*this%amr%dz(lvl)]; face(:,7)=cell(:,7)
+                     face(:,4)=[this%amr%xlo+real(i  ,WP)*this%amr%dx(lvl),this%amr%ylo+real(j+1,WP)*this%amr%dy(lvl),this%amr%zlo+real(k+1,WP)*this%amr%dz(lvl)]; face(:,8)=cell(:,8)
+                     face(:,9)=0.25_WP*(face(:,5)+face(:,6)+face(:,7)+face(:,8))
+                     call construct(remap_face,face)
+                     if (this%cons_correct) call adjustCapToMatchVolume(remap_face,dt*pU(i  ,j,k,1)*this%amr%dy(lvl)*this%amr%dz(lvl))
+                     cell(:,14)=getPt(remap_face,8)
+                     
+                     ! Correct volume of x+ face
+                     face(:,1)=[this%amr%xlo+real(i+1,WP)*this%amr%dx(lvl),this%amr%ylo+real(j  ,WP)*this%amr%dy(lvl),this%amr%zlo+real(k+1,WP)*this%amr%dz(lvl)]; face(:,5)=cell(:,1)
+                     face(:,2)=[this%amr%xlo+real(i+1,WP)*this%amr%dx(lvl),this%amr%ylo+real(j  ,WP)*this%amr%dy(lvl),this%amr%zlo+real(k  ,WP)*this%amr%dz(lvl)]; face(:,6)=cell(:,2)
+                     face(:,3)=[this%amr%xlo+real(i+1,WP)*this%amr%dx(lvl),this%amr%ylo+real(j+1,WP)*this%amr%dy(lvl),this%amr%zlo+real(k  ,WP)*this%amr%dz(lvl)]; face(:,7)=cell(:,3)
+                     face(:,4)=[this%amr%xlo+real(i+1,WP)*this%amr%dx(lvl),this%amr%ylo+real(j+1,WP)*this%amr%dy(lvl),this%amr%zlo+real(k+1,WP)*this%amr%dz(lvl)]; face(:,8)=cell(:,4)
+                     face(:,9)=0.25_WP*(face(:,5)+face(:,6)+face(:,7)+face(:,8))
+                     call construct(remap_face,face)
+                     if (this%cons_correct) call adjustCapToMatchVolume(remap_face,dt*pU(i+1,j,k,1)*this%amr%dy(lvl)*this%amr%dz(lvl))
+                     cell(:, 9)=getPt(remap_face,8)
+                     
+                     ! Correct volume of y- face
+                     face(:,1)=[this%amr%xlo+real(i+1,WP)*this%amr%dx(lvl),this%amr%ylo+real(j  ,WP)*this%amr%dy(lvl),this%amr%zlo+real(k  ,WP)*this%amr%dz(lvl)]; face(:,5)=cell(:,2)
+                     face(:,2)=[this%amr%xlo+real(i  ,WP)*this%amr%dx(lvl),this%amr%ylo+real(j  ,WP)*this%amr%dy(lvl),this%amr%zlo+real(k  ,WP)*this%amr%dz(lvl)]; face(:,6)=cell(:,6)
+                     face(:,3)=[this%amr%xlo+real(i  ,WP)*this%amr%dx(lvl),this%amr%ylo+real(j  ,WP)*this%amr%dy(lvl),this%amr%zlo+real(k+1,WP)*this%amr%dz(lvl)]; face(:,7)=cell(:,5)
+                     face(:,4)=[this%amr%xlo+real(i+1,WP)*this%amr%dx(lvl),this%amr%ylo+real(j  ,WP)*this%amr%dy(lvl),this%amr%zlo+real(k+1,WP)*this%amr%dz(lvl)]; face(:,8)=cell(:,1)
+                     face(:,9)=0.25_WP*(face(:,5)+face(:,6)+face(:,7)+face(:,8))
+                     call construct(remap_face,face)
+                     if (this%cons_correct) call adjustCapToMatchVolume(remap_face,dt*pV(i,j  ,k,1)*this%amr%dx(lvl)*this%amr%dz(lvl))
+                     cell(:,10)=getPt(remap_face,8)
+                     
+                     ! Correct volume of y+ face
+                     face(:,1)=[this%amr%xlo+real(i+1,WP)*this%amr%dx(lvl),this%amr%ylo+real(j+1,WP)*this%amr%dy(lvl),this%amr%zlo+real(k  ,WP)*this%amr%dz(lvl)]; face(:,5)=cell(:,3)
+                     face(:,2)=[this%amr%xlo+real(i  ,WP)*this%amr%dx(lvl),this%amr%ylo+real(j+1,WP)*this%amr%dy(lvl),this%amr%zlo+real(k  ,WP)*this%amr%dz(lvl)]; face(:,6)=cell(:,7)
+                     face(:,3)=[this%amr%xlo+real(i  ,WP)*this%amr%dx(lvl),this%amr%ylo+real(j+1,WP)*this%amr%dy(lvl),this%amr%zlo+real(k+1,WP)*this%amr%dz(lvl)]; face(:,7)=cell(:,8)
+                     face(:,4)=[this%amr%xlo+real(i+1,WP)*this%amr%dx(lvl),this%amr%ylo+real(j+1,WP)*this%amr%dy(lvl),this%amr%zlo+real(k+1,WP)*this%amr%dz(lvl)]; face(:,8)=cell(:,4)
+                     face(:,9)=0.25_WP*(face(:,5)+face(:,6)+face(:,7)+face(:,8))
+                     call construct(remap_face,face)
+                     if (this%cons_correct) call adjustCapToMatchVolume(remap_face,dt*pV(i,j+1,k,1)*this%amr%dx(lvl)*this%amr%dz(lvl))
+                     cell(:,12)=getPt(remap_face,8)
+                     
+                     ! Correct volume of z- face
+                     face(:,1)=[this%amr%xlo+real(i  ,WP)*this%amr%dx(lvl),this%amr%ylo+real(j+1,WP)*this%amr%dy(lvl),this%amr%zlo+real(k  ,WP)*this%amr%dz(lvl)]; face(:,5)=cell(:,7)
+                     face(:,2)=[this%amr%xlo+real(i  ,WP)*this%amr%dx(lvl),this%amr%ylo+real(j  ,WP)*this%amr%dy(lvl),this%amr%zlo+real(k  ,WP)*this%amr%dz(lvl)]; face(:,6)=cell(:,6)
+                     face(:,3)=[this%amr%xlo+real(i+1,WP)*this%amr%dx(lvl),this%amr%ylo+real(j  ,WP)*this%amr%dy(lvl),this%amr%zlo+real(k  ,WP)*this%amr%dz(lvl)]; face(:,7)=cell(:,2)
+                     face(:,4)=[this%amr%xlo+real(i+1,WP)*this%amr%dx(lvl),this%amr%ylo+real(j+1,WP)*this%amr%dy(lvl),this%amr%zlo+real(k  ,WP)*this%amr%dz(lvl)]; face(:,8)=cell(:,3)
+                     face(:,9)=0.25_WP*(face(:,5)+face(:,6)+face(:,7)+face(:,8))
+                     call construct(remap_face,face)
+                     if (this%cons_correct) call adjustCapToMatchVolume(remap_face,dt*pW(i,j,k  ,1)*this%amr%dx(lvl)*this%amr%dy(lvl))
+                     cell(:,11)=getPt(remap_face,8)
+                     
+                     ! Correct volume of z+ face
+                     face(:,1)=[this%amr%xlo+real(i  ,WP)*this%amr%dx(lvl),this%amr%ylo+real(j+1,WP)*this%amr%dy(lvl),this%amr%zlo+real(k+1,WP)*this%amr%dz(lvl)]; face(:,5)=cell(:,8)
+                     face(:,2)=[this%amr%xlo+real(i  ,WP)*this%amr%dx(lvl),this%amr%ylo+real(j  ,WP)*this%amr%dy(lvl),this%amr%zlo+real(k+1,WP)*this%amr%dz(lvl)]; face(:,6)=cell(:,5)
+                     face(:,3)=[this%amr%xlo+real(i+1,WP)*this%amr%dx(lvl),this%amr%ylo+real(j  ,WP)*this%amr%dy(lvl),this%amr%zlo+real(k+1,WP)*this%amr%dz(lvl)]; face(:,7)=cell(:,1)
+                     face(:,4)=[this%amr%xlo+real(i+1,WP)*this%amr%dx(lvl),this%amr%ylo+real(j+1,WP)*this%amr%dy(lvl),this%amr%zlo+real(k+1,WP)*this%amr%dz(lvl)]; face(:,8)=cell(:,4)
+                     face(:,9)=0.25_WP*(face(:,5)+face(:,6)+face(:,7)+face(:,8))
+                     call construct(remap_face,face)
+                     if (this%cons_correct) call adjustCapToMatchVolume(remap_face,dt*pW(i,j,k+1,1)*this%amr%dx(lvl)*this%amr%dy(lvl))
+                     cell(:,13)=getPt(remap_face,8)
+                     
+                     ! Form remapped cell in IRL
+                     call construct(remap_cell,cell)
+                     
+                     ! Get bounding box for our remapped cell
+                     !call getBoundingPts(remap_cell,bounding_pts(:,1),bounding_pts(:,2))
+                     !bb_indices(:,1)=this%cfg%get_ijk_local(bounding_pts(:,1),[i,j,k])
+                     !bb_indices(:,2)=this%cfg%get_ijk_local(bounding_pts(:,2),[i,j,k])
+                     
+                     ! Crudely check phase information for remapped cell and skip cells where nothing is changing
+                     !crude_VF=this%crude_phase_test(bb_indices)
+                     !if (crude_VF.ge.0.0_WP) cycle
+                     
+                     ! Need full geometric flux
+                     call getMoments(remap_cell,localized_separator_link(i,j,k),my_SepVM)
+                     
+                     ! Compute new liquid volume fraction
+                     lvol=getVolumePtr(my_SepVM,0)
+                     gvol=getVolumePtr(my_SepVM,1)
+                     volmom(i,j,k,1)=lvol/(lvol+gvol)
+                     
+                     ! Only work on higher order moments if VF is in [VFlo,VFhi]
+                     if (volmom(i,j,k,1).lt.VFlo) then
+                        volmom(i,j,k, 1 )=0.0_WP
+                        volmom(i,j,k,2:4)=[this%amr%xlo+(real(i,WP)+0.5_WP)*this%amr%dx(lvl),this%amr%ylo+(real(j,WP)+0.5_WP)*this%amr%dy(lvl),this%amr%zlo+(real(k,WP)+0.5_WP)*this%amr%dz(lvl)]
+                        volmom(i,j,k,5:7)=[this%amr%xlo+(real(i,WP)+0.5_WP)*this%amr%dx(lvl),this%amr%ylo+(real(j,WP)+0.5_WP)*this%amr%dy(lvl),this%amr%zlo+(real(k,WP)+0.5_WP)*this%amr%dz(lvl)]
+                     else if (volmom(i,j,k,1).gt.VFhi) then
+                        volmom(i,j,k, 1 )=1.0_WP
+                        volmom(i,j,k,2:4)=[this%amr%xlo+(real(i,WP)+0.5_WP)*this%amr%dx(lvl),this%amr%ylo+(real(j,WP)+0.5_WP)*this%amr%dy(lvl),this%amr%zlo+(real(k,WP)+0.5_WP)*this%amr%dz(lvl)]
+                        volmom(i,j,k,5:7)=[this%amr%xlo+(real(i,WP)+0.5_WP)*this%amr%dx(lvl),this%amr%ylo+(real(j,WP)+0.5_WP)*this%amr%dy(lvl),this%amr%zlo+(real(k,WP)+0.5_WP)*this%amr%dz(lvl)]
+                     else
+                        ! Get old phasic barycenters and project them forward in time
+                        volmom(i,j,k,2:4)=getCentroidPtr(my_SepVM,0)/lvol; volmom(i,j,k,2:4)=project(volmom(i,j,k,2:4),dt)
+                        volmom(i,j,k,5:7)=getCentroidPtr(my_SepVM,1)/gvol; volmom(i,j,k,5:7)=project(volmom(i,j,k,5:7),dt)                     
                      end if
-                     ! In the x+ direction
-                     if (i.lt.bx%hi(1)+this%nover) then
-                        call setEdgeConnectivity(localized_separator_link(i,j,k),1,localized_separator_link(i+1,j,k))
-                        call setEdgeConnectivity(localizer_link(i,j,k),1,localizer_link(i+1,j,k))
-                     end if
-                     ! In the y- direction
-                     if (j.gt.bx%lo(2)-this%nover) then
-                        call setEdgeConnectivity(localized_separator_link(i,j,k),2,localized_separator_link(i,j-1,k))
-                        call setEdgeConnectivity(localizer_link(i,j,k),2,localizer_link(i,j-1,k))
-                     end if
-                     ! In the y+ direction
-                     if (j.lt.bx%hi(2)+this%nover) then
-                        call setEdgeConnectivity(localized_separator_link(i,j,k),3,localized_separator_link(i,j+1,k))
-                        call setEdgeConnectivity(localizer_link(i,j,k),3,localizer_link(i,j+1,k))
-                     end if
-                     ! In the z- direction
-                     if (k.gt.bx%lo(3)-this%nover) then
-                        call setEdgeConnectivity(localized_separator_link(i,j,k),4,localized_separator_link(i,j,k-1))
-                        call setEdgeConnectivity(localizer_link(i,j,k),4,localizer_link(i,j,k-1))
-                     end if
-                     ! In the z+ direction
-                     if (k.lt.bx%hi(3)+this%nover) then
-                        call setEdgeConnectivity(localized_separator_link(i,j,k),5,localized_separator_link(i,j,k+1))
-                        call setEdgeConnectivity(localizer_link(i,j,k),5,localizer_link(i,j,k+1))
-                     end if
+                     
                   end do
                end do
             end do
             
-         end block setup_irl_on_box
-         
-         ! Get volmom and interf data
-         volmom=>this%volmom(lvl)%dataptr(mfi)
-         interf=>this%interf(lvl)%dataptr(mfi)
-         
-         ! Transfer interface to IRL
-         do k=bx%lo(3)-this%nover,bx%hi(3)+this%nover
-            do j=bx%lo(2)-this%nover,bx%hi(2)+this%nover
-               do i=bx%lo(1)-this%nover,bx%hi(1)+this%nover
-                  call setNumberOfPlanes(liquid_gas_interface(i,j,k),1)
-                  call setPlane(liquid_gas_interface(i,j,k),0,interf(i,j,k,1:3),interf(i,j,k,4))
-               end do
-            end do
-         end do
-         
-         ! Get velocity data
-         pU=>U%dataptr(mfi)
-         pV=>V%dataptr(mfi)
-         pW=>W%dataptr(mfi)
-         
-         ! Perform cell remap
-         do k=bx%lo(3),bx%hi(3)
-            do j=bx%lo(2),bx%hi(2)
-               do i=bx%lo(1),bx%hi(1)
-                  
-                  ! Construct the cell and project it backwards in time
-                  cell(:,1)=[this%amr%xlo+real(i+1,WP)*this%amr%dx(lvl),this%amr%ylo+real(j  ,WP)*this%amr%dy(lvl),this%amr%zlo+real(k+1,WP)*this%amr%dz(lvl)]; cell(:,1)=project(cell(:,1),-dt)
-                  cell(:,2)=[this%amr%xlo+real(i+1,WP)*this%amr%dx(lvl),this%amr%ylo+real(j  ,WP)*this%amr%dy(lvl),this%amr%zlo+real(k  ,WP)*this%amr%dz(lvl)]; cell(:,2)=project(cell(:,2),-dt)
-                  cell(:,3)=[this%amr%xlo+real(i+1,WP)*this%amr%dx(lvl),this%amr%ylo+real(j+1,WP)*this%amr%dy(lvl),this%amr%zlo+real(k  ,WP)*this%amr%dz(lvl)]; cell(:,3)=project(cell(:,3),-dt)
-                  cell(:,4)=[this%amr%xlo+real(i+1,WP)*this%amr%dx(lvl),this%amr%ylo+real(j+1,WP)*this%amr%dy(lvl),this%amr%zlo+real(k+1,WP)*this%amr%dz(lvl)]; cell(:,4)=project(cell(:,4),-dt)
-                  cell(:,5)=[this%amr%xlo+real(i  ,WP)*this%amr%dx(lvl),this%amr%ylo+real(j  ,WP)*this%amr%dy(lvl),this%amr%zlo+real(k+1,WP)*this%amr%dz(lvl)]; cell(:,5)=project(cell(:,5),-dt)
-                  cell(:,6)=[this%amr%xlo+real(i  ,WP)*this%amr%dx(lvl),this%amr%ylo+real(j  ,WP)*this%amr%dy(lvl),this%amr%zlo+real(k  ,WP)*this%amr%dz(lvl)]; cell(:,6)=project(cell(:,6),-dt)
-                  cell(:,7)=[this%amr%xlo+real(i  ,WP)*this%amr%dx(lvl),this%amr%ylo+real(j+1,WP)*this%amr%dy(lvl),this%amr%zlo+real(k  ,WP)*this%amr%dz(lvl)]; cell(:,7)=project(cell(:,7),-dt)
-                  cell(:,8)=[this%amr%xlo+real(i  ,WP)*this%amr%dx(lvl),this%amr%ylo+real(j+1,WP)*this%amr%dy(lvl),this%amr%zlo+real(k+1,WP)*this%amr%dz(lvl)]; cell(:,8)=project(cell(:,8),-dt)
-                  
-                  ! Correct volume of x- face
-                  face(:,1)=[this%amr%xlo+real(i  ,WP)*this%amr%dx(lvl),this%amr%ylo+real(j  ,WP)*this%amr%dy(lvl),this%amr%zlo+real(k+1,WP)*this%amr%dz(lvl)]; face(:,5)=cell(:,5)
-                  face(:,2)=[this%amr%xlo+real(i  ,WP)*this%amr%dx(lvl),this%amr%ylo+real(j  ,WP)*this%amr%dy(lvl),this%amr%zlo+real(k  ,WP)*this%amr%dz(lvl)]; face(:,6)=cell(:,6)
-                  face(:,3)=[this%amr%xlo+real(i  ,WP)*this%amr%dx(lvl),this%amr%ylo+real(j+1,WP)*this%amr%dy(lvl),this%amr%zlo+real(k  ,WP)*this%amr%dz(lvl)]; face(:,7)=cell(:,7)
-                  face(:,4)=[this%amr%xlo+real(i  ,WP)*this%amr%dx(lvl),this%amr%ylo+real(j+1,WP)*this%amr%dy(lvl),this%amr%zlo+real(k+1,WP)*this%amr%dz(lvl)]; face(:,8)=cell(:,8)
-                  face(:,9)=0.25_WP*(face(:,5)+face(:,6)+face(:,7)+face(:,8))
-                  call construct(remap_face,face)
-                  if (this%cons_correct) call adjustCapToMatchVolume(remap_face,dt*pU(i  ,j,k,1)*this%amr%dy(lvl)*this%amr%dz(lvl))
-                  cell(:,14)=getPt(remap_face,8)
-                  
-                  ! Correct volume of x+ face
-                  face(:,1)=[this%amr%xlo+real(i+1,WP)*this%amr%dx(lvl),this%amr%ylo+real(j  ,WP)*this%amr%dy(lvl),this%amr%zlo+real(k+1,WP)*this%amr%dz(lvl)]; face(:,5)=cell(:,1)
-                  face(:,2)=[this%amr%xlo+real(i+1,WP)*this%amr%dx(lvl),this%amr%ylo+real(j  ,WP)*this%amr%dy(lvl),this%amr%zlo+real(k  ,WP)*this%amr%dz(lvl)]; face(:,6)=cell(:,2)
-                  face(:,3)=[this%amr%xlo+real(i+1,WP)*this%amr%dx(lvl),this%amr%ylo+real(j+1,WP)*this%amr%dy(lvl),this%amr%zlo+real(k  ,WP)*this%amr%dz(lvl)]; face(:,7)=cell(:,3)
-                  face(:,4)=[this%amr%xlo+real(i+1,WP)*this%amr%dx(lvl),this%amr%ylo+real(j+1,WP)*this%amr%dy(lvl),this%amr%zlo+real(k+1,WP)*this%amr%dz(lvl)]; face(:,8)=cell(:,4)
-                  face(:,9)=0.25_WP*(face(:,5)+face(:,6)+face(:,7)+face(:,8))
-                  call construct(remap_face,face)
-                  if (this%cons_correct) call adjustCapToMatchVolume(remap_face,dt*pU(i+1,j,k,1)*this%amr%dy(lvl)*this%amr%dz(lvl))
-                  cell(:, 9)=getPt(remap_face,8)
-                  
-                  ! Correct volume of y- face
-                  face(:,1)=[this%amr%xlo+real(i+1,WP)*this%amr%dx(lvl),this%amr%ylo+real(j  ,WP)*this%amr%dy(lvl),this%amr%zlo+real(k  ,WP)*this%amr%dz(lvl)]; face(:,5)=cell(:,2)
-                  face(:,2)=[this%amr%xlo+real(i  ,WP)*this%amr%dx(lvl),this%amr%ylo+real(j  ,WP)*this%amr%dy(lvl),this%amr%zlo+real(k  ,WP)*this%amr%dz(lvl)]; face(:,6)=cell(:,6)
-                  face(:,3)=[this%amr%xlo+real(i  ,WP)*this%amr%dx(lvl),this%amr%ylo+real(j  ,WP)*this%amr%dy(lvl),this%amr%zlo+real(k+1,WP)*this%amr%dz(lvl)]; face(:,7)=cell(:,5)
-                  face(:,4)=[this%amr%xlo+real(i+1,WP)*this%amr%dx(lvl),this%amr%ylo+real(j  ,WP)*this%amr%dy(lvl),this%amr%zlo+real(k+1,WP)*this%amr%dz(lvl)]; face(:,8)=cell(:,1)
-                  face(:,9)=0.25_WP*(face(:,5)+face(:,6)+face(:,7)+face(:,8))
-                  call construct(remap_face,face)
-                  if (this%cons_correct) call adjustCapToMatchVolume(remap_face,dt*pV(i,j  ,k,1)*this%amr%dx(lvl)*this%amr%dz(lvl))
-                  cell(:,10)=getPt(remap_face,8)
-                  
-                  ! Correct volume of y+ face
-                  face(:,1)=[this%amr%xlo+real(i+1,WP)*this%amr%dx(lvl),this%amr%ylo+real(j+1,WP)*this%amr%dy(lvl),this%amr%zlo+real(k  ,WP)*this%amr%dz(lvl)]; face(:,5)=cell(:,3)
-                  face(:,2)=[this%amr%xlo+real(i  ,WP)*this%amr%dx(lvl),this%amr%ylo+real(j+1,WP)*this%amr%dy(lvl),this%amr%zlo+real(k  ,WP)*this%amr%dz(lvl)]; face(:,6)=cell(:,7)
-                  face(:,3)=[this%amr%xlo+real(i  ,WP)*this%amr%dx(lvl),this%amr%ylo+real(j+1,WP)*this%amr%dy(lvl),this%amr%zlo+real(k+1,WP)*this%amr%dz(lvl)]; face(:,7)=cell(:,8)
-                  face(:,4)=[this%amr%xlo+real(i+1,WP)*this%amr%dx(lvl),this%amr%ylo+real(j+1,WP)*this%amr%dy(lvl),this%amr%zlo+real(k+1,WP)*this%amr%dz(lvl)]; face(:,8)=cell(:,4)
-                  face(:,9)=0.25_WP*(face(:,5)+face(:,6)+face(:,7)+face(:,8))
-                  call construct(remap_face,face)
-                  if (this%cons_correct) call adjustCapToMatchVolume(remap_face,dt*pV(i,j+1,k,1)*this%amr%dx(lvl)*this%amr%dz(lvl))
-                  cell(:,12)=getPt(remap_face,8)
-                  
-                  ! Correct volume of z- face
-                  face(:,1)=[this%amr%xlo+real(i  ,WP)*this%amr%dx(lvl),this%amr%ylo+real(j+1,WP)*this%amr%dy(lvl),this%amr%zlo+real(k  ,WP)*this%amr%dz(lvl)]; face(:,5)=cell(:,7)
-                  face(:,2)=[this%amr%xlo+real(i  ,WP)*this%amr%dx(lvl),this%amr%ylo+real(j  ,WP)*this%amr%dy(lvl),this%amr%zlo+real(k  ,WP)*this%amr%dz(lvl)]; face(:,6)=cell(:,6)
-                  face(:,3)=[this%amr%xlo+real(i+1,WP)*this%amr%dx(lvl),this%amr%ylo+real(j  ,WP)*this%amr%dy(lvl),this%amr%zlo+real(k  ,WP)*this%amr%dz(lvl)]; face(:,7)=cell(:,2)
-                  face(:,4)=[this%amr%xlo+real(i+1,WP)*this%amr%dx(lvl),this%amr%ylo+real(j+1,WP)*this%amr%dy(lvl),this%amr%zlo+real(k  ,WP)*this%amr%dz(lvl)]; face(:,8)=cell(:,3)
-                  face(:,9)=0.25_WP*(face(:,5)+face(:,6)+face(:,7)+face(:,8))
-                  call construct(remap_face,face)
-                  if (this%cons_correct) call adjustCapToMatchVolume(remap_face,dt*pW(i,j,k  ,1)*this%amr%dx(lvl)*this%amr%dy(lvl))
-                  cell(:,11)=getPt(remap_face,8)
-                  
-                  ! Correct volume of z+ face
-                  face(:,1)=[this%amr%xlo+real(i  ,WP)*this%amr%dx(lvl),this%amr%ylo+real(j+1,WP)*this%amr%dy(lvl),this%amr%zlo+real(k+1,WP)*this%amr%dz(lvl)]; face(:,5)=cell(:,8)
-                  face(:,2)=[this%amr%xlo+real(i  ,WP)*this%amr%dx(lvl),this%amr%ylo+real(j  ,WP)*this%amr%dy(lvl),this%amr%zlo+real(k+1,WP)*this%amr%dz(lvl)]; face(:,6)=cell(:,5)
-                  face(:,3)=[this%amr%xlo+real(i+1,WP)*this%amr%dx(lvl),this%amr%ylo+real(j  ,WP)*this%amr%dy(lvl),this%amr%zlo+real(k+1,WP)*this%amr%dz(lvl)]; face(:,7)=cell(:,1)
-                  face(:,4)=[this%amr%xlo+real(i+1,WP)*this%amr%dx(lvl),this%amr%ylo+real(j+1,WP)*this%amr%dy(lvl),this%amr%zlo+real(k+1,WP)*this%amr%dz(lvl)]; face(:,8)=cell(:,4)
-                  face(:,9)=0.25_WP*(face(:,5)+face(:,6)+face(:,7)+face(:,8))
-                  call construct(remap_face,face)
-                  if (this%cons_correct) call adjustCapToMatchVolume(remap_face,dt*pW(i,j,k+1,1)*this%amr%dx(lvl)*this%amr%dy(lvl))
-                  cell(:,13)=getPt(remap_face,8)
-                  
-                  ! Form remapped cell in IRL
-                  call construct(remap_cell,cell)
-                  
-                  ! Get bounding box for our remapped cell
-                  !call getBoundingPts(remap_cell,bounding_pts(:,1),bounding_pts(:,2))
-                  !bb_indices(:,1)=this%cfg%get_ijk_local(bounding_pts(:,1),[i,j,k])
-                  !bb_indices(:,2)=this%cfg%get_ijk_local(bounding_pts(:,2),[i,j,k])
-                  
-                  ! Crudely check phase information for remapped cell and skip cells where nothing is changing
-                  !crude_VF=this%crude_phase_test(bb_indices)
-                  !if (crude_VF.ge.0.0_WP) cycle
-                  
-                  ! Need full geometric flux
-                  call getMoments(remap_cell,localized_separator_link(i,j,k),my_SepVM)
-                  
-                  ! Compute new liquid volume fraction
-                  lvol=getVolumePtr(my_SepVM,0)
-                  gvol=getVolumePtr(my_SepVM,1)
-                  volmom(i,j,k,1)=lvol/(lvol+gvol)
-                  
-                  ! Only work on higher order moments if VF is in [VFlo,VFhi]
-                  if (volmom(i,j,k,1).lt.VFlo) then
-                     volmom(i,j,k, 1 )=0.0_WP
-                     volmom(i,j,k,2:4)=[this%amr%xlo+(real(i,WP)+0.5_WP)*this%amr%dx(lvl),this%amr%ylo+(real(j,WP)+0.5_WP)*this%amr%dy(lvl),this%amr%zlo+(real(k,WP)+0.5_WP)*this%amr%dz(lvl)]
-                     volmom(i,j,k,5:7)=[this%amr%xlo+(real(i,WP)+0.5_WP)*this%amr%dx(lvl),this%amr%ylo+(real(j,WP)+0.5_WP)*this%amr%dy(lvl),this%amr%zlo+(real(k,WP)+0.5_WP)*this%amr%dz(lvl)]
-                  else if (volmom(i,j,k,1).gt.VFhi) then
-                     volmom(i,j,k, 1 )=1.0_WP
-                     volmom(i,j,k,2:4)=[this%amr%xlo+(real(i,WP)+0.5_WP)*this%amr%dx(lvl),this%amr%ylo+(real(j,WP)+0.5_WP)*this%amr%dy(lvl),this%amr%zlo+(real(k,WP)+0.5_WP)*this%amr%dz(lvl)]
-                     volmom(i,j,k,5:7)=[this%amr%xlo+(real(i,WP)+0.5_WP)*this%amr%dx(lvl),this%amr%ylo+(real(j,WP)+0.5_WP)*this%amr%dy(lvl),this%amr%zlo+(real(k,WP)+0.5_WP)*this%amr%dz(lvl)]
-                  else
-                     ! Get old phasic barycenters and project them forward in time
-                     volmom(i,j,k,2:4)=getCentroidPtr(my_SepVM,0)/lvol; volmom(i,j,k,2:4)=project(volmom(i,j,k,2:4),dt)
-                     volmom(i,j,k,5:7)=getCentroidPtr(my_SepVM,1)/gvol; volmom(i,j,k,5:7)=project(volmom(i,j,k,5:7),dt)                     
-                  end if
-                  
-               end do
-            end do
-         end do
-         
-         ! Destroy IRL data (should call proper destructors)
-         deallocate(localizer,liquid_gas_interface,localized_separator_link,localizer_link)
+            ! Destroy IRL data (should call proper destructors)
+            deallocate(localizer,liquid_gas_interface,localized_separator_link,localizer_link)
+
+         end block irl_object_server
          
       end do; call this%amr%mfiter_destroy(mfi)
       
