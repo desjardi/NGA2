@@ -5,7 +5,7 @@ module amrvfs_class
    use precision,             only: WP
    use string,                only: str_medium
    use amrconfig_class,       only: amrconfig
-   use amrex_amr_module,      only: amrex_multifab,amrex_fluxregister
+   use amrex_amr_module,      only: amrex_multifab
    use irl_fortran_interface, only: ObjServer_PlanarSep_type,ObjServer_PlanarLoc_type,ObjServer_LocSepLink_type,ObjServer_LocLink_type
    !use irl_fortran_interface
    implicit none
@@ -163,9 +163,8 @@ contains
       
       ! Initialize IRL
       initialize_irl: block
-         use irl_fortran_interface, only: setVFBounds,setVFTolerance_IterativeDistanceFinding, &
-         &                                setMinimumVolToTrack,setMinimumSAToTrack,getMoments_setMethod, &
-         &                                IRL_LargeOffsetIndex_t,new
+         use irl_fortran_interface, only: setVFBounds,setVFTolerance_IterativeDistanceFinding,IRL_LargeOffsetIndex_t,&
+         &                                setMinimumVolToTrack,setMinimumSAToTrack,getMoments_setMethod,new
          integer(IRL_LargeOffsetIndex_t) :: total_cells
          ! Transfer small constants to IRL
          call setVFBounds(VFlo)
@@ -178,6 +177,7 @@ contains
          total_cells=int(this%amr%nmax+2*this%nover,8)*&
          &           int(this%amr%nmax+2*this%nover,8)*&
          &           int(this%amr%nmax+2*this%nover,8)
+         print*,total_cells
          call new(this%allocation_planar_localizer,total_cells)
          call new(this%allocation_planar_separator,total_cells)
          call new(this%allocation_localized_separator_link,total_cells)
@@ -295,7 +295,7 @@ contains
       ! Destroy interf_new
       call amrex_multifab_destroy(interf_new)
       ! Go back and fix interf array
-
+      
    end subroutine remake
    
    
@@ -646,7 +646,7 @@ contains
             allocate(liquid_gas_interface    (bx%lo(1)-this%nover:bx%hi(1)+this%nover,bx%lo(2)-this%nover:bx%hi(2)+this%nover,bx%lo(3)-this%nover:bx%hi(3)+this%nover))
             allocate(localized_separator_link(bx%lo(1)-this%nover:bx%hi(1)+this%nover,bx%lo(2)-this%nover:bx%hi(2)+this%nover,bx%lo(3)-this%nover:bx%hi(3)+this%nover))
             allocate(localizer_link          (bx%lo(1)-this%nover:bx%hi(1)+this%nover,bx%lo(2)-this%nover:bx%hi(2)+this%nover,bx%lo(3)-this%nover:bx%hi(3)+this%nover))
-
+            
             ! Initialize arrays and setup linking
             do k=bx%lo(3)-this%nover,bx%hi(3)+this%nover
                do j=bx%lo(2)-this%nover,bx%hi(2)+this%nover
@@ -670,10 +670,13 @@ contains
             nxo_=bx%hi(1)-bx%lo(1)+2*this%nover+1
             nyo_=bx%hi(2)-bx%lo(2)+2*this%nover+1
             nzo_=bx%hi(3)-bx%lo(3)+2*this%nover+1
-            do k=0,nzo_-1
-               do j=0,nyo_-1
-                  do i=0,nxo_-1
-                     lexico=i+j*nxo_+k*nxo_*nyo_
+            print*,nxo_,nyo_,nzo_,nxo_*nyo_*nzo_
+            do k=bx%lo(3)-this%nover,bx%hi(3)+this%nover
+               do j=bx%lo(2)-this%nover,bx%hi(2)+this%nover
+                  do i=bx%lo(1)-this%nover,bx%hi(1)+this%nover
+                     lexico=(i-bx%lo(1)+this%nover)+&
+                     &      (j-bx%lo(2)+this%nover)*nxo_+&
+                     &      (k-bx%lo(3)+this%nover)*nxo_*nyo_
                      call setId(localized_separator_link(i,j,k),lexico)
                      call setId(localizer_link(i,j,k),lexico)
                   end do
@@ -852,14 +855,14 @@ contains
                end do
             end do
          end do
-
+         
          ! Destroy IRL data (should call proper destructors)
          deallocate(localizer,liquid_gas_interface,localized_separator_link,localizer_link)
          
       end do; call this%amr%mfiter_destroy(mfi)
       
       ! Fill VF and barycenter fields
-      call this%cfill_volmom(lvl=lvl,time=time,volmom=this%volmom(lvl))
+      call this%fill_volmom(lvl=lvl,time=time,volmom=this%volmom(lvl))
       
    contains
       
@@ -1085,7 +1088,7 @@ contains
                      normal(1)=-normal(1)
                      normal(2)=-normal(2)
                   end if
-
+                  
                   ! Locate PLIC plane in cell using IRL
                   call construct_2pt(cell,[this%amr%xlo+real(i  ,WP)*this%amr%dx(lvl), &
                   &                        this%amr%ylo+real(j  ,WP)*this%amr%dy(lvl), &
@@ -1108,7 +1111,7 @@ contains
       end do; call this%amr%mfiter_destroy(mfi)
       
       ! Fill VF and barycenter fields
-      call this%cfill_interf(lvl=lvl,time=time,interf=this%interf(lvl))
+      call this%fill_interf(lvl=lvl,time=time,interf=this%interf(lvl))
       
    end subroutine build_plicnet
 

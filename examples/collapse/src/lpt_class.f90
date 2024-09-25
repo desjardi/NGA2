@@ -962,7 +962,7 @@ contains
       dufdt=facc
       dupdt=acc+this%gravity+p%Acol
       acc =acc +Cadd/(1.0_WP+Cadd)*(dufdt-dupdt)
-      fdbk=fdbk+Cadd/(1.0_WP+Cadd)*(dufdt-dupdt)
+      !fdbk=fdbk+Cadd*(dufdt-(acc+this%gravity+p%Acol))
     end block compute_added_mass
     
     ! Compute fluid torque (assumed Stokes drag)

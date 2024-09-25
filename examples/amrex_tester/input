@@ -2,9 +2,9 @@
 Lx : 1
 Ly : 1
 Lz : 1
-Base nx : 64
-Base ny : 64
-Base nz : 64
+Base nx : 32
+Base ny : 32
+Base nz : 32
 Number of levels : 2
 Refinement ratio : 2
 
@@ -16,4 +16,4 @@ Max time : 10
 Steps between regrid : 5
 
 # Output
-Ensight output period : 0.1
+Ensight output period : 0.01
