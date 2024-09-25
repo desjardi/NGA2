@@ -1548,22 +1548,22 @@ contains
          implicit none
          
          ! Allocate local and global perodicity arrays
-         allocate(this%per_(1:3,this%sync_offset+1:this%sync_offset+this%n_struct_max)); this%per_ = 0
-         allocate(this%per (1:3,this%cfg%nproc*this%n_struct_max)); this%per = 0
+         allocate(this%per_(this%sync_offset+1:this%sync_offset+this%n_struct_max,1:3)); this%per_ = 0
+         allocate(this%per (this%cfg%nproc*this%n_struct_max,1:3)); this%per = 0
          
          ! Fill per_ array
          do i=this%sync_offset+1,this%sync_offset+this%n_struct
-            this%per_(:,i) = this%struct_list(this%struct_map_(i))%per
+            this%per_(i,:) = this%struct_list(this%struct_map_(i))%per
          end do
          
          ! Communitcate per
-         call MPI_ALLGATHER(this%per_(1,:),this%n_struct_max,MPI_INTEGER,this%per(1,:),this%n_struct_max,MPI_INTEGER,this%cfg%comm,ierr)
-         call MPI_ALLGATHER(this%per_(2,:),this%n_struct_max,MPI_INTEGER,this%per(2,:),this%n_struct_max,MPI_INTEGER,this%cfg%comm,ierr)
-         call MPI_ALLGATHER(this%per_(3,:),this%n_struct_max,MPI_INTEGER,this%per(3,:),this%n_struct_max,MPI_INTEGER,this%cfg%comm,ierr)
+         call MPI_ALLGATHER(this%per_(:,1),this%n_struct_max,MPI_INTEGER,this%per(:,1),this%n_struct_max,MPI_INTEGER,this%cfg%comm,ierr)
+         call MPI_ALLGATHER(this%per_(:,2),this%n_struct_max,MPI_INTEGER,this%per(:,2),this%n_struct_max,MPI_INTEGER,this%cfg%comm,ierr)
+         call MPI_ALLGATHER(this%per_(:,3),this%n_struct_max,MPI_INTEGER,this%per(:,3),this%n_struct_max,MPI_INTEGER,this%cfg%comm,ierr)
         
          ! Update parent per
          do i=1,this%cfg%nproc*this%n_struct_max
-            this%per(:,this%parent(i)) = max(this%per(:,this%parent(i)),this%per(:,i))
+            this%per(:,this%parent(i)) = max(this%per(:,this%parent(i)),this%per(i,:))
          end do
          
          do i=this%sync_offset+1,this%sync_offset+this%n_struct
@@ -1571,7 +1571,7 @@ contains
                ii = this%struct_list(this%struct_map_(i))%node(1,n)
                jj = this%struct_list(this%struct_map_(i))%node(2,n)
                kk = this%struct_list(this%struct_map_(i))%node(3,n)
-               this%idp(:,ii,jj,kk) = this%per(:,this%id(ii,jj,kk))
+               this%idp(:,ii,jj,kk) = this%per(this%id(ii,jj,kk),:)
             end do
          end do
          

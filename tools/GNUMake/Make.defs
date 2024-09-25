@@ -232,6 +232,13 @@ else
 endif
 ###############################################################
 
+# Load Make.local if present ##################################
+ifneq ("$(wildcard $(NGA_HOME)/tools/GNUMake/Make.local)","")
+  $(info Loading $(NGA_HOME)/tools/GNUMake/Make.local...)
+  include        $(NGA_HOME)/tools/GNUMake/Make.local
+endif
+###############################################################
+
 
 # Include libraries ###########################################
 ifeq ($(USE_CVODE),TRUE)
@@ -277,9 +284,4 @@ endif
 ###############################################################
 
 
-# Load Make.local if present ##################################
-ifneq ("$(wildcard $(NGA_HOME)/tools/GNUMake/Make.local)","")
-  $(info Loading $(NGA_HOME)/tools/GNUMake/Make.local...)
-  include        $(NGA_HOME)/tools/GNUMake/Make.local
-endif
-###############################################################
+
