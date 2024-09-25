@@ -571,7 +571,7 @@ contains
       
       ! Create an incompressible flow solver with bconds
       create_and_initialize_flow_solver: block
-         use hypre_str_class, only: pcg_pfmg
+         use hypre_str_class, only: pcg_pfmg2
          use tpns_class,      only: bcond,dirichlet,clipped_neumann
          type(bcond), pointer :: mybc
          real(WP) :: myr
@@ -591,7 +591,8 @@ contains
          ! Outflow on the back
          call fs%add_bcond(name='bc_xp',type=clipped_neumann,face='x',dir=+1,canCorrect=.true.,locator=xp_locator)
          ! Configure pressure solver
-         ps=hypre_str(cfg=cfg,name='Pressure',method=pcg_pfmg,nst=7)
+         ps=hypre_str(cfg=cfg,name='Pressure',method=pcg_pfmg2,nst=7)
+         ps%maxlevel=10
          call input%read('Pressure iteration',ps%maxit)
          call input%read('Pressure tolerance',ps%rcvg)
          ! Configure implicit velocity solver
@@ -831,7 +832,7 @@ contains
             call fs%apply_bcond(time%t,time%dt)
             
             ! Solve Poisson equation
-            !call fs%update_laplacian(pinpoint=[fs%cfg%imin,fs%cfg%jmin,fs%cfg%kmin])
+            call fs%update_laplacian()
             call fs%correct_mfr()
             call fs%get_div()
             call fs%add_surface_tension_jump(dt=time%dt,div=fs%div,vf=vf)
@@ -954,51 +955,5 @@ contains
       if (i.eq.pg%imax+1) isIn=.true.
    end function xp_locator
    
-   
-   !> Function that localizes the y- boundary
-   function ym_locator(pg,i,j,k) result(isIn)
-      use pgrid_class, only: pgrid
-      implicit none
-      class(pgrid), intent(in) :: pg
-      integer, intent(in) :: i,j,k
-      logical :: isIn
-      isIn=.false.
-      if (j.eq.pg%jmin) isIn=.true.
-   end function ym_locator
-   
-   
-   !> Function that localizes the y+ boundary
-   function yp_locator(pg,i,j,k) result(isIn)
-      use pgrid_class, only: pgrid
-      implicit none
-      class(pgrid), intent(in) :: pg
-      integer, intent(in) :: i,j,k
-      logical :: isIn
-      isIn=.false.
-      if (j.eq.pg%jmax+1) isIn=.true.
-   end function yp_locator
-
-   !> Function that localizes the z+ boundary
-   function zp_locator(pg,i,j,k) result(isIn)
-      use pgrid_class, only: pgrid
-      implicit none
-      class(pgrid), intent(in) :: pg
-      integer, intent(in) :: i,j,k
-      logical :: isIn
-      isIn=.false.
-      if (k.eq.pg%kmax+1) isIn=.true.
-   end function zp_locator
-   
-   
-   !> Function that localizes the z- side of the domain
-   function zm_locator(pg,i,j,k) result(isIn)
-      use pgrid_class, only: pgrid
-      implicit none
-      class(pgrid), intent(in) :: pg
-      integer, intent(in) :: i,j,k
-      logical :: isIn
-      isIn=.false.
-      if (k.eq.pg%kmin) isIn=.true.
-   end function zm_locator
 
 end module simulation

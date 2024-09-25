@@ -1,17 +1,17 @@
 # Parallelization
-Partition :     4 1 1
+Partition :     8 1 1
 I/O partition : 1 1 1
 
 # Restart
-Restart from : 3.83840E-04
-Restart output period : 1e-7
+Restart from : !3.83840E-04
+Restart output period : 1e-3
 
 # Mesh definition
-Lx : 0.02
+Lx : 0.032
 Ly : 0.008
 Lz : 0.008
 
-nx : 80
+nx : 128
 ny : 32
 nz : 32
 
@@ -28,15 +28,15 @@ Surface tension coefficient : .005
 
 # Time integration
 Max timestep size : 1e-5
-Max cfl number :    0.6
+Max cfl number :    0.9
 Max time :          2.0
 
 # Pressure solver
-Pressure tolerance : 1e-10
-Pressure iteration : 50
+Pressure tolerance : 1e-4
+Pressure iteration : 10
 
 # Ensight output
-Ensight output period : 1e-6
+Ensight output period : 1e-4
 
 # Drop analysis
 Drop analysis period :  5e-6

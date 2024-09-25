@@ -369,8 +369,9 @@ contains
          call die('[pardata pushvar] Var does not exist in the data file: '//name)
       end if
    end subroutine pushvar
+   
 
-   !> Push data to a var
+   !> Push integer data to a var
    subroutine pushvarint(this,name,var)
       use messager, only: die
       implicit none
@@ -403,8 +404,9 @@ contains
          call die('[pardata pullvar] Var does not exist in the data file: '//name)
       end if
    end subroutine pullvar
+   
 
-   !> Pull data from a var and synchronize it
+   !> Pull integer data from a var and synchronize it
    subroutine pullvarint(this,name,var)
       use messager, only: die
       implicit none

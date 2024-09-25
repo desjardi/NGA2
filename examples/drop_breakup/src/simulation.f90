@@ -252,7 +252,7 @@ contains
       ! Create a two-phase flow solver with bconds
       create_solver: block
          use tpns_class, only: dirichlet,clipped_neumann,neumann
-         use hypre_str_class,  only: pcg_pfmg
+         use hypre_str_class,  only: pcg_pfmg2
          ! Create a two-phase flow solver
          fs=tpns(cfg=cfg,name='Two-phase NS')
          ! Assign constant viscosity to each phase
@@ -267,7 +267,7 @@ contains
          call fs%add_bcond(name='inflow' ,type=dirichlet      ,face='x',dir=-1,canCorrect=.false.,locator=xm_locator)
          call fs%add_bcond(name='outflow',type=clipped_neumann,face='x',dir=+1,canCorrect=.true. ,locator=xp_locator)
          ! Configure pressure solver
-         ps=hypre_str(cfg=cfg,name='Pressure',method=pcg_pfmg,nst=7)
+         ps=hypre_str(cfg=cfg,name='Pressure',method=pcg_pfmg2,nst=7)
          call param_read('Pressure iteration',ps%maxit)
          call param_read('Pressure tolerance',ps%rcvg)
          ! Configure implicit velocity solver

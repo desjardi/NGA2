@@ -9,7 +9,7 @@ USE_IRL   = TRUE
 USE_FFTW  = TRUE
 USE_LAPACK= TRUE
 PROFILE   = FALSE
-DEBUG     = TRUE
+DEBUG     = FALSE
 COMP      = gnu
 EXEBASE   = nga
 
