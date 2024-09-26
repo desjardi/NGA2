@@ -233,7 +233,7 @@ contains
          use amrvfs_class,     only: VFlo,VFhi
          type(amrex_mfiter)      :: mfi
          type(amrex_box)         :: bx
-         real(WP)              , dimension(:,:,:,:), contiguous, pointer :: myphi
+         !real(WP)              , dimension(:,:,:,:), contiguous, pointer :: myphi
          real(WP)              , dimension(:,:,:,:), contiguous, pointer :: volmom
          character(kind=c_char), dimension(:,:,:,:), contiguous, pointer :: mytag
          integer  :: i,j,k,ii,jj,kk
@@ -244,7 +244,7 @@ contains
             bx=mfi%tilebox()
             
             ! Get relevant data
-            myphi =>    sc%SC(lvl)%dataptr(mfi)
+            !myphi =>    sc%SC(lvl)%dataptr(mfi)
             volmom=>vf%volmom(lvl)%dataptr(mfi)
             mytag =>           tag%dataptr(mfi)
             
@@ -254,10 +254,14 @@ contains
                   do i=bx%lo(1),bx%hi(1)
                      
                      ! Refinement based on scalar
-                     if (myphi(i,j,k,1).ge.1.15_WP) mytag(i,j,k,1)=tagval
+                     !if (myphi(i,j,k,1).ge.1.15_WP) mytag(i,j,k,1)=tagval
                      
                      ! Refinement based on VOF
-                     !if (volmom(i,j,k,1).ge.VFlo.and.volmom(i,j,k,1).le.VFhi) mytag(i,j,k,1)=tagval
+                     if (volmom(i,j,k,1).ge.VFlo.and.volmom(i,j,k,1).le.VFhi) then
+                        mytag(i,j,k,1)=tagval
+                     else
+                        mytag(i,j,k,1)=clrval
+                     end if
                      !outer: do kk=k-1,k+1
                      !   do jj=j-1,j+1
                      !      do ii=i-1,i+1
@@ -414,11 +418,13 @@ contains
             type(amrex_fab)    :: stream
             real(WP), dimension(:,:,:,:), contiguous, pointer :: pU,pV,pW,psi
             real(WP) :: x,y,z
-            integer :: i,j,k
+            integer :: i,j,k,no
+            ! Set overlap size
+            no=3
             ! Recreate velocity mfabs
-            call amr%mfab_destroy(U); call amr%mfab_build(amr%clvl(),U,ncomp=1,nover=0,atface=[.true. ,.false.,.false.])
-            call amr%mfab_destroy(V); call amr%mfab_build(amr%clvl(),V,ncomp=1,nover=0,atface=[.false.,.true. ,.false.])
-            call amr%mfab_destroy(W); call amr%mfab_build(amr%clvl(),W,ncomp=1,nover=0,atface=[.false.,.false.,.true. ])
+            call amr%mfab_destroy(U); call amr%mfab_build(amr%clvl(),U,ncomp=1,nover=no,atface=[.true. ,.false.,.false.])
+            call amr%mfab_destroy(V); call amr%mfab_build(amr%clvl(),V,ncomp=1,nover=no,atface=[.false.,.true. ,.false.])
+            call amr%mfab_destroy(W); call amr%mfab_build(amr%clvl(),W,ncomp=1,nover=no,atface=[.false.,.false.,.true. ])
             ! Build an mfiter at our level
             call amr%mfiter_build(amr%clvl(),mfi); do while (mfi%next())
                bx=mfi%tilebox()
@@ -426,7 +432,7 @@ contains
                pV=>V%dataptr(mfi)
                pW=>W%dataptr(mfi)
                ! Create streamfunction for our vortex on a larger box
-               tbx=bx; call tbx%grow(1)
+               tbx=bx; call tbx%grow(no+1)
                call stream%resize(tbx,1); psi=>stream%dataptr()
                do k=tbx%lo(3),tbx%hi(3)
                   do j=tbx%lo(2),tbx%hi(2)
@@ -436,30 +442,30 @@ contains
                         y=amr%ylo+(real(j,WP)+0.5_WP)*amr%dy(amr%clvl())
                         z=amr%zlo+(real(k,WP)+0.5_WP)*amr%dz(amr%clvl())
                         ! Evaluate streamfunction
-                        psi(i,j,k,1)=sin(Pi*x)**2*sin(Pi*y)**2*cos(Pi*time%tmid/10.0_WP)*(1.0_WP/Pi)
+                        psi(i,j,k,1)=sin(Pi*x)**2*sin(Pi*y)**2*cos(Pi*time%tmid/time%tmax)*(1.0_WP/Pi)
                      end do
                   end do
                end do
                ! Loop on the x face and compute U=-d(psi)/dy
-               do k=bx%lo(3),bx%hi(3)
-                  do j=bx%lo(2),bx%hi(2)
-                     do i=bx%lo(1),bx%hi(1)+1
+               do k=lbound(pU,3),ubound(pU,3)
+                  do j=lbound(pU,2),ubound(pU,2)
+                     do i=lbound(pU,1),ubound(pU,1)
                         pU(i,j,k,1)=-((psi(i,j+1,k,1)+psi(i-1,j+1,k,1))-(psi(i,j-1,k,1)+psi(i-1,j-1,k,1)))*(0.25_WP/amr%dy(amr%clvl()))
                      end do
                   end do
                end do
                ! Loop on the y face and compute V=+d(psi)/dz
-               do k=bx%lo(3),bx%hi(3)
-                  do j=bx%lo(2),bx%hi(2)+1
-                     do i=bx%lo(1),bx%hi(1)
+               do k=lbound(pV,3),ubound(pV,3)
+                  do j=lbound(pV,2),ubound(pV,2)
+                     do i=lbound(pV,1),ubound(pV,1)
                         pV(i,j,k,1)=+((psi(i+1,j,k,1)+psi(i+1,j-1,k,1))-(psi(i-1,j,k,1)+psi(i-1,j-1,k,1)))*(0.25_WP/amr%dx(amr%clvl()))
                      end do
                   end do
                end do
                ! Loop on the z face and set W=1.0_WP
-               do k=bx%lo(3),bx%hi(3)+1
-                  do j=bx%lo(2),bx%hi(2)
-                     do i=bx%lo(1),bx%hi(1)
+               do k=lbound(pW,3),ubound(pW,3)
+                  do j=lbound(pW,2),ubound(pW,2)
+                     do i=lbound(pW,1),ubound(pW,1)
                         pW(i,j,k,1)=0.0_WP
                      end do
                   end do
@@ -471,7 +477,10 @@ contains
          ! Advance VOF
          call vf%advance(lvl=amr%clvl(),time=time%t,dt=time%dt,U=U,V=V,W=W)
          call amr%average_down(vf%volmom)
-         call amr%average_down(vf%interf)
+         do lvl=0,amr%clvl()
+            call vf%build_plicnet(lvl=lvl,time=time%t)
+         end do
+         
 
          
          ! Remember old scalar
@@ -494,7 +503,7 @@ contains
                   real(WP) :: x,y,z
                   integer :: i,j,k,no
                   ! Set overlap size
-                  no=2
+                  no=0
                   ! Recreate velocity mfabs
                   call amr%mfab_destroy(U); call amr%mfab_build(lvl,U,ncomp=1,nover=no,atface=[.true. ,.false.,.false.])
                   call amr%mfab_destroy(V); call amr%mfab_build(lvl,V,ncomp=1,nover=no,atface=[.false.,.true. ,.false.])
@@ -517,7 +526,7 @@ contains
                               y=amr%ylo+(real(j,WP)+0.5_WP)*amr%dy(lvl)
                               z=amr%zlo+(real(k,WP)+0.5_WP)*amr%dz(lvl)
                               ! Evaluate streamfunction
-                              psi(i,j,k,1)=sin(Pi*x)**2*sin(Pi*y)**2*cos(Pi*time%tmid/10.0_WP)*(1.0_WP/Pi)
+                              psi(i,j,k,1)=sin(Pi*x)**2*sin(Pi*y)**2*cos(Pi*time%tmid/time%tmax)*(1.0_WP/Pi)
                            end do
                         end do
                      end do
@@ -585,7 +594,9 @@ contains
             call amr%regrid(baselvl=0,time=time%t)
             call gfile%write()
             ! Also rebuild interface
-            call vf%build_plicnet(lvl=amr%clvl(),time=time%t)
+            do lvl=0,amr%clvl()
+               call vf%build_plicnet(lvl=lvl,time=time%t)
+            end do
          end if
          
          ! Output to ensight

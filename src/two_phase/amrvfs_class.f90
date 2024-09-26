@@ -107,7 +107,7 @@ contains
       this%amr=>amr
       
       ! Number of overlap cells - CFL<1 should require only 1
-      this%nover=1
+      this%nover=3
       
       ! Number of components in volmom and interf multifab
       this%ncomp_volmom=7 ! VF,liquid barycenter, gas barycenter
@@ -562,10 +562,10 @@ contains
       !call this%update_band()
       
       ! Perform interface reconstruction from transported moments
-      select case (this%reconstruction_method)
-      case (plicnet)
-         call this%build_plicnet(lvl=lvl,time=time)
-      end select
+      !select case (this%reconstruction_method)
+      !case (plicnet)
+      !   call this%build_plicnet(lvl=lvl,time=time)
+      !end select
       
       ! Create discontinuous polygon mesh from IRL interface
       !call this%polygonalize_interface()
