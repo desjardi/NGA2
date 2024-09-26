@@ -1,2 +1,0 @@
-# List here the extra files here
-f90EXE_sources += geometry.f90 simulation.f90
