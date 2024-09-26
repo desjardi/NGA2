@@ -406,7 +406,7 @@ contains
       this%mfluxL_int_err=abs(this%mfluxL_int-this%mflux_int)
       this%mfluxG_int_err=abs(this%mfluxG_int-this%mflux_int)
 
-      ! Deallocate unused memory
+      ! Deallocate mflux residuals
       deallocate(resmfluxL,resmfluxG)
 
    end subroutine shift_mflux

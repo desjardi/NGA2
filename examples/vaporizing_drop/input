@@ -21,19 +21,16 @@ Liquid density              : 1000
 Gas density                 : 1.8
 Surface tension coefficient : 0.072
 Static contact angle        : 140
-Liquid thermal diffusivity  : 1.137e-06
-Vapor diffusivity           : 1.452e-05
 
-# Evaporation
-Evaporation mass flux : 5
 
 # Time integration
 Max timestep size : 3e-5
-Max cfl number    : 0.9
+Max cfl number    : 0.8
 Sub-iterations    : 2
-Max time          : 0.05
+Max time          : 1.03
 
-# Pseudo time integration
+# Evaporation
+Evaporation mass flux    : 5
 Max pseudo timestep size : 1.75e-4
 Max pseudo cfl number    : 0.9
 Max pseudo time steps    : 50
@@ -44,4 +41,4 @@ Pressure tolerance : 1e-6
 Pressure iteration : 50
 
 # Ensight output
-Ensight output period : 1e-3
+Ensight output period : 1e-2

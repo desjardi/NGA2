@@ -1,11 +1,9 @@
 module simulation
    use precision,         only: WP
-   use geometry,          only: cfg
+   use geometry,          only: cfg,Lz
    use hypre_str_class,   only: hypre_str
-   use ddadi_class,       only: ddadi
    use tpns_class,        only: tpns
    use vfs_class,         only: vfs
-   use tpscalar_class,    only: tpscalar
    use evap_class,        only: evap
    use timetracker_class, only: timetracker
    use ensight_class,     only: ensight
@@ -17,10 +15,8 @@ module simulation
    
    !> Get a couple linear solvers, a two-phase flow solver and volume fraction solver and corresponding time tracker
    type(hypre_str),   public :: ps,psL
-   type(ddadi),       public :: ss
    type(tpns),        public :: fs,fsL
    type(vfs),         public :: vf
-   type(tpscalar),    public :: sc
    type(evap),        public :: evp
    type(timetracker), public :: time
    
@@ -30,22 +26,20 @@ module simulation
    type(event)    :: ens_evt
    
    !> Simulation monitor file
-   type(monitor) :: mfile,mfileL,cflfile,scfile,evpfile
+   type(monitor) :: mfile,mfileL,cflfile,evpfile
    
    public :: simulation_init,simulation_run,simulation_final
    
    !> Private work arrays
-   real(WP), dimension(:,:,:,:), allocatable :: resSC
-   real(WP), dimension(:,:,:),   allocatable :: resU,resV,resW
-   real(WP), dimension(:,:,:),   allocatable :: Ui,Vi,Wi
-   real(WP), dimension(:,:,:),   allocatable :: Ui_L,Vi_L,Wi_L
+   real(WP), dimension(:,:,:), allocatable :: resU,resV,resW
+   real(WP), dimension(:,:,:), allocatable :: Ui,Vi,Wi
+   real(WP), dimension(:,:,:), allocatable :: Ui_L,Vi_L,Wi_L
    
    !> Problem definition
    real(WP), dimension(3) :: center
    real(WP) :: radius
-   integer  :: iTl,iYv
-   real(WP) :: evp_mass_flux
-   real(WP) :: Lz,rad_drop
+   real(WP) :: mdotdp
+   real(WP) :: rad_drop
    
 contains
 
@@ -168,16 +162,15 @@ contains
       
       ! Allocate work arrays
       allocate_work_arrays: block
-         allocate(resSC     (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_,1:2))
-         allocate(resU      (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
-         allocate(resV      (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
-         allocate(resW      (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
-         allocate(Ui        (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
-         allocate(Vi        (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
-         allocate(Wi        (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
-         allocate(Ui_L      (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
-         allocate(Vi_L      (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
-         allocate(Wi_L      (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+         allocate(resU (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+         allocate(resV (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+         allocate(resW (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+         allocate(Ui   (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+         allocate(Vi   (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+         allocate(Wi   (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+         allocate(Ui_L (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+         allocate(Vi_L (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+         allocate(Wi_L (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
       end block allocate_work_arrays
       
       
@@ -195,7 +188,7 @@ contains
       ! Initialize our VOF solver and field
       create_and_initialize_vof: block
          use mms_geom,  only: cube_refine_vol
-         use vfs_class, only: lvira,VFhi,VFlo,flux_storage,neumann
+         use vfs_class, only: lvira,VFhi,VFlo,remap,neumann
          use mathtools, only: Pi
          integer :: i,j,k,n,si,sj,sk
          real(WP), dimension(3,8) :: cube_vertex
@@ -203,7 +196,7 @@ contains
          real(WP) :: vol,area
          integer, parameter :: amr_ref_lvl=4
          ! Create a VOF solver
-         call vf%initialize(cfg=cfg,reconstruction_method=lvira,transport_method=flux_storage,name='VOF')
+         call vf%initialize(cfg=cfg,reconstruction_method=lvira,transport_method=remap,name='VOF')
          vf%cons_correct=.false.
          ! Boundary conditinos
          call vf%add_bcond(name='xm',type=neumann,locator=xm_locator_sc,dir='-x')
@@ -258,7 +251,6 @@ contains
          ! Reset moments to guarantee compatibility with interface reconstruction
          call vf%reset_volume_moments()
          ! Droplet size
-         call param_read('Lz',Lz)
          call vf%get_max()
          rad_drop=sqrt(vf%VFint/(Lz*Pi))
       end block create_and_initialize_vof
@@ -349,61 +341,13 @@ contains
          call fsL%get_div()
       end block create_div_free_flow_solver
       
-      
-      ! Create a one-sided scalar solver
-      create_scalar: block
-         use param, only: param_read
-         use tpscalar_class, only: Lphase,Gphase,neumann
-         use hypre_str_class, only: pcg_pfmg2,pfmg,gmres_pfmg
-         integer :: i,j,k
-         real(WP) :: LTdiff,Yvdiff
-         ! Create scalar solver
-         call sc%initialize(cfg=cfg,nscalar=2,name='tpscalar')
-         ! Boundary conditinos
-         call sc%add_bcond(name='xm',type=neumann,locator=xm_locator_sc,dir='-x')
-         call sc%add_bcond(name='xp',type=neumann,locator=xp_locator   ,dir='+x')
-         call sc%add_bcond(name='ym',type=neumann,locator=ym_locator_sc,dir='-y')
-         call sc%add_bcond(name='yp',type=neumann,locator=yp_locator   ,dir='+y')
-         ! call sc%add_bcond(name='zm',type=neumann,locator=zm_locator_sc,dir='-z')
-         ! call sc%add_bcond(name='zp',type=neumann,locator=zp_locator   ,dir='+z')
-         ! Initialize the phase specific VOF
-         sc%PVF(:,:,:,Lphase)=vf%VF
-         sc%PVF(:,:,:,Gphase)=1.0_WP-vf%VF
-         ! Initialize the phase specific density
-         sc%Prho(Lphase)=fs%rho_l
-         sc%Prho(Gphase)=fs%rho_g
-         ! Temperature on the liquid and water vapor on the gas side
-         sc%SCname=[  'Tl',  'Yv']; iTl=1; iYv=2
-         sc%phase =[Lphase,Gphase]
-         ! Read diffusivity
-         call param_read('Liquid thermal diffusivity',LTdiff)
-         sc%diff(:,:,:,iTl)=LTdiff
-         call param_read('Vapor diffusivity',Yvdiff)
-         sc%diff(:,:,:,iYv)=Yvdiff
-         ! Configure implicit scalar solver
-         ss=ddadi(cfg=cfg,name='Scalar',nst=7)
-         ! Setup the solver
-         call sc%setup(implicit_solver=ss)
-         ! Initialize scalar fields
-         do k=cfg%kmino_,cfg%kmaxo_
-            do j=cfg%jmino_,cfg%jmaxo_
-               do i=cfg%imino_,cfg%imaxo_
-                  ! Liquid scalar
-                  if (vf%VF(i,j,k).gt.0.0_WP) sc%SC(i,j,k,iTl)=1.0_WP
-                  ! Gas scalar
-                  sc%SC(i,j,k,iYv)=0.0_WP
-               end do
-            end do
-         end do
-      end block create_scalar
-      
 
       ! Create and initialize an evp object
       create_evp: block
          ! Create the object
          evp=evap(cfg=cfg,itp_x=fs%itpr_x,itp_y=fs%itpr_y,itp_z=fs%itpr_z,div_x=fs%divp_x,div_y=fs%divp_y,div_z=fs%divp_z,name='liquid gas pc')
          call param_read('Mass flux tolerence',     evp%mflux_tol)
-         call param_read('Evaporation mass flux',   evp_mass_flux)
+         call param_read('Evaporation mass flux',   mdotdp)
          call param_read('Max pseudo timestep size',evp%pseudo_time%dtmax)
          call param_read('Max pseudo cfl number',   evp%pseudo_time%cflmax)
          call param_read('Max pseudo time steps',   evp%pseudo_time%nmax)
@@ -413,7 +357,7 @@ contains
          evp%rho_g=fs%rho_g
          ! Initialize the evaporation mass flux
          where ((vf%VF.gt.0.0_WP).and.(vf%VF.lt.1.0_WP))
-            evp%mdotdp=evp_mass_flux
+            evp%mdotdp=mdotdp
             evp%mflux =evp%mdotdp*vf%SD
          else where
             evp%mdotdp=0.0_WP
@@ -443,7 +387,6 @@ contains
 
       ! Add Ensight output
       create_ensight: block
-         integer :: nsc
          ! Create Ensight output from cfg
          ens_out=ensight(cfg=cfg,name='VaporizingDrop')
          ! Create event for Ensight output
@@ -455,9 +398,6 @@ contains
          call ens_out%add_scalar('pressure',fs%P)
          call ens_out%add_scalar('curvature',vf%curv)
          call ens_out%add_surface('plic',smesh)
-         ! do nsc=1,sc%nscalar
-         !   call ens_out%add_scalar(trim(sc%SCname(nsc)),sc%SC(:,:,:,nsc))
-         ! end do
          call ens_out%add_scalar('mflux',evp%mflux)
          call ens_out%add_scalar('evp_div',evp%evp_div)
          call ens_out%add_scalar('mdotdp',evp%mdotdp)
@@ -473,13 +413,11 @@ contains
       
       ! Create a monitor file
       create_monitor: block
-         integer :: nsc
          ! Prepare some info about fields
          call fs%get_cfl(time%dt,time%cfl)
          call fs%get_max()
          call fsL%get_max()
          call vf%get_max()
-         call sc%get_max(VF=vf%VF)
          ! Create simulation monitor
          mfile=monitor(fs%cfg%amRoot,'simulation')
          call mfile%add_column(time%n,'Timestep number')
@@ -524,18 +462,8 @@ contains
          call cflfile%add_column(fs%CFLv_y,'Viscous yCFL')
          call cflfile%add_column(fs%CFLv_z,'Viscous zCFL')
          call cflfile%write()
-         ! Create scalar monitor
-         scfile=monitor(sc%cfg%amRoot,'scalar')
-         call scfile%add_column(time%n,'Timestep number')
-         call scfile%add_column(time%t,'Time')
-         do nsc=1,sc%nscalar
-           call scfile%add_column(sc%SCmin(nsc),trim(sc%SCname(nsc))//'_min')
-           call scfile%add_column(sc%SCmax(nsc),trim(sc%SCname(nsc))//'_max')
-           call scfile%add_column(sc%SCint(nsc),trim(sc%SCname(nsc))//'_int')
-         end do
-         call scfile%write()
          ! Create evaporation monitor
-         evpfile=monitor(sc%cfg%amRoot,'evaporation')
+         evpfile=monitor(evp%cfg%amRoot,'evaporation')
          call evpfile%add_column(time%n,'Timestep number')
          call evpfile%add_column(time%t,'Time')
          call evpfile%add_column(evp%pseudo_time%dt,'Pseudo time step')
@@ -575,10 +503,6 @@ contains
          ! Remember old VOF
          vf%VFold=vf%VF
          
-         ! Remember old SC
-         ! sc%SCold =sc%SC
-         ! sc%PVFold=sc%PVF
-         
          ! Remember old velocity
          fs%Uold=fs%U; fsL%Uold=fsL%U
          fs%Vold=fs%V; fsL%Vold=fsL%V
@@ -592,7 +516,7 @@ contains
          
          ! Interface jump conditions
          where ((vf%VF.gt.0.0_WP).and.(vf%VF.lt.1.0_WP))
-            evp%mdotdp=evp_mass_flux
+            evp%mdotdp=mdotdp
             evp%mflux =evp%mdotdp*vf%SD
          else where
             evp%mdotdp=0.0_WP
@@ -609,41 +533,11 @@ contains
          call vf%advance(dt=time%dt,U=evp%U_itf,V=evp%V_itf,W=evp%W_itf)
          call vf%apply_bcond(time%t,time%dt)
 
-         ! Shift the phase-change mass flux
+         ! Shift the evaporation mass flux
          call evp%shift_mflux(vf=vf)
          
          ! Get the phase-change induced divergence
          call evp%get_evp_div()
-
-         ! Transport scalars
-         ! advance_scalar: block
-         !    use tpscalar_class, only: Lphase,Gphase
-         !    integer :: nsc
-            
-         !    ! Get the phas-specific VOF
-         !    sc%PVF(:,:,:,Lphase)=vf%VF
-         !    sc%PVF(:,:,:,Gphase)=1.0_WP-vf%VF
-            
-         !    ! Explicit calculation of dSC/dt from advective term
-         !    call sc%get_dSCdt(dSCdt=resSC,U=fs%U,V=fs%V,W=fs%W,VFold=vf%VFold,VF=vf%VF,detailed_face_flux=vf%detailed_face_flux,dt=time%dt)
-            
-         !    ! Advance advection
-         !    do nsc=1,sc%nscalar
-         !       where (sc%mask.eq.0.and.sc%PVF(:,:,:,sc%phase(nsc)).gt.0.0_WP) sc%SC(:,:,:,nsc)=((sc%PVFold(:,:,:,sc%phase(nsc)))*sc%SCold(:,:,:,nsc)+time%dt*resSC(:,:,:,nsc))/(sc%PVF(:,:,:,sc%phase(nsc)))
-         !       where (sc%PVF(:,:,:,sc%phase(nsc)).eq.0.0_WP) sc%SC(:,:,:,nsc)=0.0_WP
-         !    end do
-
-         !    ! Apply the mass/energy transfer term for the species/temperature
-         !    nsc=iYv
-         !    where (sc%PVF(:,:,:,sc%phase(nsc)).gt.0.0_WP.and.sc%PVF(:,:,:,sc%phase(nsc)).lt.1.0_WP) sc%SC(:,:,:,nsc)=sc%SC(:,:,:,nsc)+mflux/sc%Prho(sc%phase(nsc))*time%dt
-               
-         !    ! Advance diffusion
-         !    call sc%solve_implicit(time%dt,sc%SC)
-            
-         !    ! Apply boundary conditions
-         !    call sc%apply_bcond(time%t,time%dt)
-               
-         ! end block advance_scalar         
 
          ! Advance flow
          advance_flow: block
@@ -787,11 +681,9 @@ contains
          call fs%get_max(); call fsL%get_max()
          call vf%get_max()
          call evp%get_max_vel_pc()
-         call sc%get_max(VF=vf%VF)
          rad_drop=sqrt(vf%VFint/(Lz*Pi))
          call mfile%write(); call mfileL%write()
          call cflfile%write()
-         call scfile%write()
          call evpfile%write()
          
       end do
@@ -810,7 +702,7 @@ contains
       ! timetracker
       
       ! Deallocate work arrays
-      deallocate(resU,resV,resW,Ui,Vi,Wi,resSC)
+      deallocate(resU,resV,resW,Ui,Vi,Wi,Ui_L,Vi_L,Wi_L)
 
    end subroutine simulation_final
    
