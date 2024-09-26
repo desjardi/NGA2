@@ -5008,7 +5008,7 @@ contains
       call MPI_ALLREDUCE(my_CFL,cfl,1,MPI_REAL_WP,MPI_MAX,this%cfg%comm,ierr)
       
    end subroutine get_cfl
-   
+
    
    !> Print out info for vf solver
    subroutine vfs_print(this)
