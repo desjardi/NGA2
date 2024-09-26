@@ -88,9 +88,10 @@ module lpt_class
      real(WP) :: e_w=1.0_WP                              !< Wall restitution coefficient
      real(WP) :: mu_f                                    !< Friction coefficient
      real(WP) :: clip_col=0.2_WP                         !< Maximum allowable overlap
-     real(WP), dimension(:,:,:),   allocatable :: Wdist  !< Signed wall distance - naive for now (could be redone with FMM)
-     real(WP), dimension(:,:,:,:), allocatable :: Wnorm  !< Wall normal function - naive for now (could be redone with FMM)
-
+     real(WP), dimension(:,:,:), allocatable :: xwall    !< Location in x of closest wall in x
+     real(WP), dimension(:,:,:), allocatable :: ywall    !< Location in y of closest wall in y
+     real(WP), dimension(:,:,:), allocatable :: zwall    !< Location in z of closest wall in z
+      
      ! Injection parameters
      real(WP) :: mfr                                     !< Mass flow rate for particle injection
      real(WP), dimension(3) :: inj_pos                   !< Center location to inject particles
@@ -258,78 +259,52 @@ contains
        self%grd_z=0.0_WP
     end if
 
-    ! Generate a wall distance/norm function
-    allocate(self%Wdist(  self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_))
-    allocate(self%Wnorm(3,self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_))
-    ! First pass to set correct sign
+    ! Generate a wall data for collisions
+    allocate(self%xwall(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%xwall=huge(1.0_WP)
+    allocate(self%ywall(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%ywall=huge(1.0_WP)
+    allocate(self%zwall(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%zwall=huge(1.0_WP)
+    ! Get closest wall location in x
     do k=self%cfg%kmino_,self%cfg%kmaxo_
        do j=self%cfg%jmino_,self%cfg%jmaxo_
+          do i=self%cfg%imin_,self%cfg%imax_
+             do l=-1,+2
+                if ((self%cfg%VF(i+l-1,j,k).eq.0.0_WP.and.self%cfg%VF(i+l,j,k).eq.1.0_WP).or.&
+                &   (self%cfg%VF(i+l-1,j,k).eq.1.0_WP.and.self%cfg%VF(i+l,j,k).eq.0.0_WP)) then
+                   self%xwall(i,j,k)=min(self%xwall(i,j,k),self%cfg%x(i+l))
+                end if
+             end do
+          end do
+       end do
+    end do
+    call self%cfg%sync(self%xwall)
+    ! Get closest wall location in y
+    do k=self%cfg%kmino_,self%cfg%kmaxo_
+       do j=self%cfg%jmin_,self%cfg%jmax_
           do i=self%cfg%imino_,self%cfg%imaxo_
-             if (self%cfg%VF(i,j,k).eq.0.0_WP) then
-                self%Wdist(i,j,k)=-sqrt(self%cfg%xL**2+self%cfg%yL**2+self%cfg%zL**2)
-             else
-                self%Wdist(i,j,k)=+sqrt(self%cfg%xL**2+self%cfg%yL**2+self%cfg%zL**2)
-             end if
-             self%Wnorm(:,i,j,k)=0.0_WP
-          end do
-       end do
-    end do
-    ! Second pass to compute local distance (get 2 closest cells)
-    do l=1,2
-       do k=self%cfg%kmino_,self%cfg%kmaxo_
-          do j=self%cfg%jmino_,self%cfg%jmaxo_
-             do i=self%cfg%imino_+l,self%cfg%imaxo_
-                if (self%Wdist(i,j,k)*self%Wdist(i-l,j,k).lt.0.0_WP) then
-                   ! There is a wall at x(i)
-                   if (abs(self%cfg%xm(i  )-self%cfg%x(i-l+1)).lt.abs(self%Wdist(i  ,j,k))) then
-                      self%Wdist(i  ,j,k)=sign(self%cfg%xm(i  )-self%cfg%x(i-l+1),self%Wdist(i  ,j,k))
-                      self%Wnorm(:,i  ,j,k)=[self%cfg%VF(i,j,k)-self%cfg%VF(i-l,j,k),0.0_WP,0.0_WP]
-                   end if
-                   if (abs(self%cfg%xm(i-l)-self%cfg%x(i)).lt.abs(self%Wdist(i-l,j,k))) then
-                      self%Wdist(i-l,j,k)=sign(self%cfg%xm(i-l)-self%cfg%x(i),self%Wdist(i-l,j,k))
-                      self%Wnorm(:,i-l,j,k)=[self%cfg%VF(i,j,k)-self%cfg%VF(i-l,j,k),0.0_WP,0.0_WP]
-                   end if
-                end if
-             end do
-          end do
-       end do
-       do k=self%cfg%kmino_,self%cfg%kmaxo_
-          do j=self%cfg%jmino_+l,self%cfg%jmaxo_
-             do i=self%cfg%imino_,self%cfg%imaxo_
-                if (self%Wdist(i,j,k)*self%Wdist(i,j-l,k).lt.0.0_WP) then
-                   ! There is a wall at y(j)
-                   if (abs(self%cfg%ym(j  )-self%cfg%y(j-l+1)).lt.abs(self%Wdist(i,j  ,k))) then
-                      self%Wdist(i,j  ,k)=sign(self%cfg%ym(j  )-self%cfg%y(j-l+1),self%Wdist(i,j  ,k))
-                      self%Wnorm(:,i,j  ,k)=[0.0_WP,self%cfg%VF(i,j,k)-self%cfg%VF(i,j-l,k),0.0_WP]
-                   end if
-                   if (abs(self%cfg%ym(j-l)-self%cfg%y(j)).lt.abs(self%Wdist(i,j-l,k))) then
-                      self%Wdist(i,j-l,k)=sign(self%cfg%ym(j-l)-self%cfg%y(j),self%Wdist(i,j-l,k))
-                      self%Wnorm(:,i,j-l,k)=[0.0_WP,self%cfg%VF(i,j,k)-self%cfg%VF(i,j-l,k),0.0_WP]
-                   end if
-                end if
-             end do
-          end do
-       end do
-       do k=self%cfg%kmino_+l,self%cfg%kmaxo_
-          do j=self%cfg%jmino_,self%cfg%jmaxo_
-             do i=self%cfg%imino_,self%cfg%imaxo_
-                if (self%Wdist(i,j,k)*self%Wdist(i,j,k-l).lt.0.0_WP) then
-                   ! There is a wall at z(k)
-                   if (abs(self%cfg%zm(k  )-self%cfg%z(k-l+1)).lt.abs(self%Wdist(i,j,k  ))) then
-                      self%Wdist(i,j,k  )=sign(self%cfg%zm(k  )-self%cfg%z(k-l+1),self%Wdist(i,j,k  ))
-                      self%Wnorm(:,i,j,k  )=[0.0_WP,0.0_WP,self%cfg%VF(i,j,k)-self%cfg%VF(i,j,k-l)]
-                   end if
-                   if (abs(self%cfg%zm(k-l)-self%cfg%z(k)).lt.abs(self%Wdist(i,j,k-l))) then
-                      self%Wdist(i,j,k-l)=sign(self%cfg%zm(k-l)-self%cfg%z(k),self%Wdist(i,j,k-l))
-                      self%Wnorm(:,i,j,k-l)=[0.0_WP,0.0_WP,self%cfg%VF(i,j,k)-self%cfg%VF(i,j,k-l)]
-                   end if
+             do l=-1,+2
+                if ((self%cfg%VF(i,j+l-1,k).eq.0.0_WP.and.self%cfg%VF(i,j+l,k).eq.1.0_WP).or.&
+                &   (self%cfg%VF(i,j+l-1,k).eq.1.0_WP.and.self%cfg%VF(i,j+l,k).eq.0.0_WP)) then
+                   self%ywall(i,j,k)=min(self%ywall(i,j,k),self%cfg%y(j+l))
                 end if
              end do
           end do
        end do
     end do
-    call self%cfg%sync(self%Wdist)
-    call self%cfg%sync(self%Wnorm)
+    call self%cfg%sync(self%ywall)
+    ! Get closest wall location in z
+    do k=self%cfg%kmin_,self%cfg%kmax_
+       do j=self%cfg%jmino_,self%cfg%jmaxo_
+          do i=self%cfg%imino_,self%cfg%imaxo_
+             do l=-1,+2
+                if ((self%cfg%VF(i,j,k+l-1).eq.0.0_WP.and.self%cfg%VF(i,j,k+l).eq.1.0_WP).or.&
+                &   (self%cfg%VF(i,j,k+l-1).eq.1.0_WP.and.self%cfg%VF(i,j,k+l).eq.0.0_WP)) then
+                   self%zwall(i,j,k)=min(self%zwall(i,j,k),self%cfg%z(k+l))
+                end if
+             end do
+          end do
+       end do
+    end do
+    call self%cfg%sync(self%zwall)
 
     ! Log/screen output
     logging: block
@@ -454,14 +429,74 @@ contains
         d1=this%p(i1)%d
         m1=this%rho*Pi/6.0_WP*d1**3
 
-        ! First collide with walls
-        d12=this%cfg%get_scalar(pos=this%p(i1)%pos,i0=this%p(i1)%ind(1),j0=this%p(i1)%ind(2),k0=this%p(i1)%ind(3),S=this%Wdist,bc='d')
-        n12=this%Wnorm(:,this%p(i1)%ind(1),this%p(i1)%ind(2),this%p(i1)%ind(3))
-        n12=-normalize(n12+[epsilon(1.0_WP),epsilon(1.0_WP),epsilon(1.0_WP)])
+        ! Collide with walls in x
+        d12=abs(this%xwall(this%p(i1)%ind(1),this%p(i1)%ind(2),this%p(i1)%ind(3))-this%p(i1)%pos(1))
+        n12=[sign(1.0_WP,this%xwall(this%p(i1)%ind(1),this%p(i1)%ind(2),this%p(i1)%ind(3))-this%p(i1)%pos(1)),0.0_WP,0.0_WP]
         rnv=dot_product(v1,n12)
         r_influ=min(2.0_WP*abs(rnv)*dt,0.2_WP*d1)
         delta_n=min(0.5_WP*d1+r_influ-d12,this%clip_col*0.5_WP*d1)
+        ! Assess if there is collision
+        if (delta_n.gt.0.0_WP) then
+           ! Normal collision
+           k_n=m1*k_coeff_w
+           eta_n=m1*eta_coeff_w
+           f_n=-k_n*delta_n*n12-eta_n*rnv*n12
+           ! Tangential collision
+           f_t=0.0_WP
+           if (this%mu_f.gt.0.0_WP) then
+              t12 = v1-rnv*n12+cross_product(0.5_WP*d1*w1,n12)
+              rtv = sqrt(sum(t12*t12))
+              if (rnv*dt/d1.gt.aclipnorm) then
+                 if (rtv/rnv.lt.rcliptan) rtv=0.0_WP
+              else
+                 if (rtv*dt/d1.lt.acliptan) rtv=0.0_WP
+              end if
+              if (rtv.gt.0.0_WP) f_t=-this%mu_f*sqrt(sum(f_n*f_n))*t12/rtv
+           end if
+           ! Calculate collision force
+           f_n=f_n/m1; f_t=f_t/m1
+           this%p(i1)%Acol=this%p(i1)%Acol+f_n+f_t
+           ! Calculate collision torque
+           this%p(i1)%Tcol=this%p(i1)%Tcol+cross_product(0.5_WP*d1*n12,f_t)
+        end if
 
+        ! Collide with walls in y
+        d12=abs(this%ywall(this%p(i1)%ind(1),this%p(i1)%ind(2),this%p(i1)%ind(3))-this%p(i1)%pos(2))
+        n12=[0.0_WP,sign(1.0_WP,this%ywall(this%p(i1)%ind(1),this%p(i1)%ind(2),this%p(i1)%ind(3))-this%p(i1)%pos(2)),0.0_WP]
+        rnv=dot_product(v1,n12)
+        r_influ=min(2.0_WP*abs(rnv)*dt,0.2_WP*d1)
+        delta_n=min(0.5_WP*d1+r_influ-d12,this%clip_col*0.5_WP*d1)
+        ! Assess if there is collision
+        if (delta_n.gt.0.0_WP) then
+           ! Normal collision
+           k_n=m1*k_coeff_w
+           eta_n=m1*eta_coeff_w
+           f_n=-k_n*delta_n*n12-eta_n*rnv*n12
+           ! Tangential collision
+           f_t=0.0_WP
+           if (this%mu_f.gt.0.0_WP) then
+              t12 = v1-rnv*n12+cross_product(0.5_WP*d1*w1,n12)
+              rtv = sqrt(sum(t12*t12))
+              if (rnv*dt/d1.gt.aclipnorm) then
+                 if (rtv/rnv.lt.rcliptan) rtv=0.0_WP
+              else
+                 if (rtv*dt/d1.lt.acliptan) rtv=0.0_WP
+              end if
+              if (rtv.gt.0.0_WP) f_t=-this%mu_f*sqrt(sum(f_n*f_n))*t12/rtv
+           end if
+           ! Calculate collision force
+           f_n=f_n/m1; f_t=f_t/m1
+           this%p(i1)%Acol=this%p(i1)%Acol+f_n+f_t
+           ! Calculate collision torque
+           this%p(i1)%Tcol=this%p(i1)%Tcol+cross_product(0.5_WP*d1*n12,f_t)
+        end if
+
+        ! Collide with walls in z
+        d12=abs(this%zwall(this%p(i1)%ind(1),this%p(i1)%ind(2),this%p(i1)%ind(3))-this%p(i1)%pos(3))
+        n12=[0.0_WP,0.0_WP,sign(1.0_WP,this%zwall(this%p(i1)%ind(1),this%p(i1)%ind(2),this%p(i1)%ind(3))-this%p(i1)%pos(3))]
+        rnv=dot_product(v1,n12)
+        r_influ=min(2.0_WP*abs(rnv)*dt,0.2_WP*d1)
+        delta_n=min(0.5_WP*d1+r_influ-d12,this%clip_col*0.5_WP*d1)
         ! Assess if there is collision
         if (delta_n.gt.0.0_WP) then
            ! Normal collision
@@ -629,7 +664,12 @@ contains
   !> Advance the particle equations by a specified time step dt
   !> p%id=0 => no coll, no solve
   !> p%id=-1=> no coll, no move
-  subroutine advance(this,dt,U,V,W,rho,visc,stress_x,stress_y,stress_z,gradVF_x,gradVF_y,gradVF_z,vortx,vorty,vortz,T,srcU,srcV,srcW,srcE)
+  subroutine advance(this,dt,U,V,W,rho,visc,&
+  &                  stress_x,stress_y,stress_z,&
+  &                  acc_x   ,acc_y   ,acc_z   ,&
+  &                  gradVF_x,gradVF_y,gradVF_z,&
+  &                  vort_x  ,vort_y  ,vort_z  ,&
+  &                  srcU    ,srcV    ,srcW    )
     use mpi_f08, only : MPI_SUM,MPI_INTEGER
     use mathtools, only: Pi
     implicit none
@@ -640,70 +680,34 @@ contains
     real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: W         !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
     real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: rho       !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
     real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: visc      !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
-    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout), optional :: stress_x  !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
-    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout), optional :: stress_y  !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
-    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout), optional :: stress_z  !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
-    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout), optional :: gradVF_x  !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
-    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout), optional :: gradVF_y  !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
-    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout), optional :: gradVF_z  !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
-    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout), optional :: vortx  !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
-    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout), optional :: vorty  !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
-    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout), optional :: vortz  !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
-    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout), optional :: T      !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
-    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout), optional :: srcU   !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
-    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout), optional :: srcV   !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
-    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout), optional :: srcW   !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
-    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout), optional :: srcE   !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: stress_x  !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: stress_y  !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: stress_z  !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: acc_x     !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: acc_y     !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: acc_z     !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: gradVF_x  !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: gradVF_y  !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: gradVF_z  !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: vort_x    !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: vort_y    !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: vort_z    !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: srcU      !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: srcV      !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: srcW      !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
     integer :: i,j,k,ierr
-    real(WP) :: mydt,dt_done,deng,Ip
+    real(WP) :: mydt,dt_done,Ip
     real(WP), dimension(3) :: acc,fdbk,torque,dmom
-    real(WP), dimension(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_) :: sx,sy,sz
-    real(WP), dimension(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_) :: dVFdx,dVFdy,dVFdz
     type(part) :: myp,pold
 
     ! Zero out source term arrays
-    if (present(srcU)) srcU=0.0_WP
-    if (present(srcV)) srcV=0.0_WP
-    if (present(srcW)) srcW=0.0_WP
-    if (present(srcE)) srcE=0.0_WP
+    srcU=0.0_WP
+    srcV=0.0_WP
+    srcW=0.0_WP
     
-    ! Get fluid stress
-    if (present(stress_x)) then
-      sx=stress_x
-    else
-      sx=0.0_WP
-    end if
-    if (present(stress_y)) then
-      sy=stress_y
-    else
-      sy=0.0_WP
-    end if
-    if (present(stress_z)) then
-      sz=stress_z
-    else
-      sz=0.0_WP
-    end if
-
-    ! Get surface tension
-    if (present(gradVF_x)) then
-      dVFdx=gradVF_x
-    else
-      dVFdx=0.0_WP
-    end if
-    if (present(gradVF_y)) then
-      dVFdy=gradVF_y
-    else
-      dVFdy=0.0_WP
-    end if
-    if (present(gradVF_z)) then
-      dVFdz=gradVF_z
-    else
-      dVFdz=0.0_WP
-    end if
-
     ! Zero out number of particles removed
     this%np_out=0
-
+    
     ! Advance the equations
     do i=1,this%np_
        ! Avoid particles with id=0
@@ -720,12 +724,22 @@ contains
           ! Particle moment of inertia per unit mass
           Ip = 0.1_WP*myp%d**2
           ! Advance with Euler prediction
-          call this%get_rhs(U=U,V=V,W=W,rho=rho,visc=visc,stress_x=sx,stress_y=sy,stress_z=sz,gradVF_x=dVFdx,gradVF_y=dVFdy,gradVF_z=dVFdz,p=myp,acc=acc,fdbk=fdbk,torque=torque,opt_dt=myp%dt)
+          call this%get_rhs(U=U,V=V,W=W,rho=rho,visc=visc,&
+          &                 stress_x=stress_x,stress_y=stress_y,stress_z=stress_z,&
+          &                 acc_x   =acc_x   ,acc_y   =acc_y   ,acc_z   =acc_z   ,&
+          &                 vort_x  =vort_x  ,vort_y  =vort_y  ,vort_z  =vort_z  ,&
+          &                 gradVF_x=gradVF_x,gradVF_y=gradVF_y,gradVF_z=gradVF_z,&
+          &                 p=myp,acc=acc,fdbk=fdbk,torque=torque,opt_dt=myp%dt)
           myp%pos=pold%pos+0.5_WP*mydt*myp%vel
           myp%vel=pold%vel+0.5_WP*mydt*(acc+this%gravity+myp%Acol)
           myp%angVel=pold%angVel+0.5_WP*mydt*(torque+myp%Tcol)/Ip
           ! Correct with midpoint rule
-          call this%get_rhs(U=U,V=V,W=W,rho=rho,visc=visc,stress_x=sx,stress_y=sy,stress_z=sz,gradVF_x=dVFdx,gradVF_y=dVFdy,gradVF_z=dVFdz,p=myp,acc=acc,fdbk=fdbk,torque=torque,opt_dt=myp%dt)
+          call this%get_rhs(U=U,V=V,W=W,rho=rho,visc=visc,&
+          &                 stress_x=stress_x,stress_y=stress_y,stress_z=stress_z,&
+          &                 acc_x   =acc_x   ,acc_y   =acc_y   ,acc_z   =acc_z   ,&
+          &                 vort_x  =vort_x  ,vort_y  =vort_y  ,vort_z  =vort_z  ,&
+          &                 gradVF_x=gradVF_x,gradVF_y=gradVF_y,gradVF_z=gradVF_z,&
+          &                 p=myp,acc=acc,fdbk=fdbk,torque=torque,opt_dt=myp%dt)
           myp%pos=pold%pos+mydt*myp%vel
           myp%vel=pold%vel+mydt*(acc+this%gravity+myp%Acol)
           myp%angVel=pold%angVel+mydt*(torque+myp%Tcol)/Ip
@@ -733,11 +747,9 @@ contains
           myp%ind=this%cfg%get_ijk_global(myp%pos,myp%ind)
           ! Send source term back to the mesh
           dmom=mydt*fdbk*this%rho*Pi/6.0_WP*myp%d**3
-          deng=sum(dmom*myp%vel)
-          if (this%cfg%nx.gt.1.and.present(srcU)) call this%cfg%set_scalar(Sp=-dmom(1),pos=myp%pos,i0=myp%ind(1),j0=myp%ind(2),k0=myp%ind(3),S=srcU,bc='n')
-          if (this%cfg%ny.gt.1.and.present(srcV)) call this%cfg%set_scalar(Sp=-dmom(2),pos=myp%pos,i0=myp%ind(1),j0=myp%ind(2),k0=myp%ind(3),S=srcV,bc='n')
-          if (this%cfg%nz.gt.1.and.present(srcW)) call this%cfg%set_scalar(Sp=-dmom(3),pos=myp%pos,i0=myp%ind(1),j0=myp%ind(2),k0=myp%ind(3),S=srcW,bc='n')
-          if (present(srcE))                      call this%cfg%set_scalar(Sp=-deng   ,pos=myp%pos,i0=myp%ind(1),j0=myp%ind(2),k0=myp%ind(3),S=srcE,bc='n')
+          if (this%cfg%nx.gt.1) call this%cfg%set_scalar(Sp=-dmom(1),pos=myp%pos,i0=myp%ind(1),j0=myp%ind(2),k0=myp%ind(3),S=srcU,bc='n')
+          if (this%cfg%ny.gt.1) call this%cfg%set_scalar(Sp=-dmom(2),pos=myp%pos,i0=myp%ind(1),j0=myp%ind(2),k0=myp%ind(3),S=srcV,bc='n')
+          if (this%cfg%nz.gt.1) call this%cfg%set_scalar(Sp=-dmom(3),pos=myp%pos,i0=myp%ind(1),j0=myp%ind(2),k0=myp%ind(3),S=srcW,bc='n')
           ! Increment
           dt_done=dt_done+mydt
        end do
@@ -764,19 +776,10 @@ contains
     call MPI_ALLREDUCE(this%np_out,i,1,MPI_INTEGER,MPI_SUM,this%cfg%comm,ierr); this%np_out=i
 
     ! Divide source arrays by volume, sum at boundaries, and volume filter if present
-    if (present(srcU)) then
-       srcU=srcU/this%cfg%vol; call this%cfg%syncsum(srcU); call this%filter(srcU)
-    end if
-    if (present(srcV)) then
-       srcV=srcV/this%cfg%vol; call this%cfg%syncsum(srcV); call this%filter(srcV)
-    end if
-    if (present(srcW)) then
-       srcW=srcW/this%cfg%vol; call this%cfg%syncsum(srcW); call this%filter(srcW)
-    end if
-    if (present(srcE)) then
-       srcE=srcE/this%cfg%vol; call this%cfg%syncsum(srcE); call this%filter(srcE)
-    end if
-
+    srcU=srcU/this%cfg%vol; call this%cfg%syncsum(srcU); call this%filter(srcU)
+    srcV=srcV/this%cfg%vol; call this%cfg%syncsum(srcV); call this%filter(srcV)
+    srcW=srcW/this%cfg%vol; call this%cfg%syncsum(srcW); call this%filter(srcW)
+    
     ! Recompute volume fraction
     call this%update_VF()
 
@@ -798,7 +801,12 @@ contains
 
 
   !> Calculate RHS of the particle ODEs
-  subroutine get_rhs(this,U,V,W,rho,visc,stress_x,stress_y,stress_z,gradVF_x,gradVF_y,gradVF_z,T,p,acc,fdbk,torque,opt_dt)
+  subroutine get_rhs(this,U,V,W,rho,visc,&
+   &                 stress_x,stress_y,stress_z,&
+   &                 acc_x   ,acc_y   ,acc_z   ,&
+   &                 vort_x  ,vort_y  ,vort_z  ,&
+   &                 gradVF_x,gradVF_y,gradVF_z,&
+   &                 p,acc,fdbk,torque,opt_dt)
     implicit none
     class(lpt), intent(inout) :: this
     real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: U         !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
@@ -809,22 +817,35 @@ contains
     real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: stress_x  !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
     real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: stress_y  !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
     real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: stress_z  !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: acc_x     !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: acc_y     !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: acc_z     !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: vort_x    !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: vort_y    !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: vort_z    !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
     real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: gradVF_x  !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
     real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: gradVF_y  !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
     real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: gradVF_z  !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
-    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout), optional :: T  !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
     type(part), intent(in) :: p
     real(WP), dimension(3), intent(out) :: acc,torque,fdbk
     real(WP), intent(out) :: opt_dt
-    real(WP) :: fvisc,frho,pVF,fVF,fT
-    real(WP), dimension(3) :: fvel,fstress,fvort,fgradVF
+    real(WP) :: fvisc,frho,pVF,fVF
+    real(WP), dimension(3) :: fvel,fstress,fvort,fgradVF,facc
 
     ! Interpolate fluid quantities to particle location
     interpolate: block
-      ! Interpolate the fluid phase velocity to the particle location
+      ! Interpolate the staggered fluid phase velocity to the particle location
       fvel=this%cfg%get_velocity(pos=p%pos,i0=p%ind(1),j0=p%ind(2),k0=p%ind(3),U=U,V=V,W=W)
-      ! Interpolate the fluid phase stress to the particle location
+      ! Interpolate the staggered fluid phase stress to the particle location
       fstress=this%cfg%get_velocity(pos=p%pos,i0=p%ind(1),j0=p%ind(2),k0=p%ind(3),U=stress_x,V=stress_y,W=stress_z)
+      ! Interpolate the collocated fluid phase acceleration to the particle location
+      facc(1)=this%cfg%get_scalar(pos=p%pos,i0=p%ind(1),j0=p%ind(2),k0=p%ind(3),S=acc_x,bc='n')
+      facc(2)=this%cfg%get_scalar(pos=p%pos,i0=p%ind(1),j0=p%ind(2),k0=p%ind(3),S=acc_y,bc='n')
+      facc(3)=this%cfg%get_scalar(pos=p%pos,i0=p%ind(1),j0=p%ind(2),k0=p%ind(3),S=acc_z,bc='n')
+      ! Interpolate the collocated fluid phase vorticity to the particle location
+      fvort(1)=this%cfg%get_scalar(pos=p%pos,i0=p%ind(1),j0=p%ind(2),k0=p%ind(3),S=vort_x,bc='n')
+      fvort(2)=this%cfg%get_scalar(pos=p%pos,i0=p%ind(1),j0=p%ind(2),k0=p%ind(3),S=vort_y,bc='n')
+      fvort(3)=this%cfg%get_scalar(pos=p%pos,i0=p%ind(1),j0=p%ind(2),k0=p%ind(3),S=vort_z,bc='n')
       ! Interpolate gradient of VF to the particle location
       fgradVF=this%cfg%get_velocity(pos=p%pos,i0=p%ind(1),j0=p%ind(2),k0=p%ind(3),U=gradVF_x,V=gradVF_y,W=gradVF_z)
       ! Interpolate the fluid phase viscosity to the particle location
@@ -835,15 +856,13 @@ contains
       ! Interpolate the particle volume fraction to the particle location
       pVF=this%cfg%get_scalar(pos=p%pos,i0=p%ind(1),j0=p%ind(2),k0=p%ind(3),S=this%VF,bc='n')
       fVF=1.0_WP-pVF
-      ! Interpolate the fluid temperature to the particle location if present
-      if (present(T)) fT=this%cfg%get_scalar(pos=p%pos,i0=p%ind(1),j0=p%ind(2),k0=p%ind(3),S=T,bc='n')
     end block interpolate
 
     ! Compute acceleration due to drag
     compute_drag: block
       real(WP) :: Re,tau,corr,b1,b2
       ! Particle Reynolds number
-      Re=frho*norm2(p%vel-fvel)*p%d/fvisc+epsilon(1.0_WP)
+      Re=frho*fVF*norm2(p%vel-fvel)*p%d/fvisc+epsilon(1.0_WP)
       ! Drag correction
       select case(trim(this%drag_model))
       case('None','none')
@@ -851,12 +870,29 @@ contains
       case('Stokes')
          corr=1.0_WP
       case('Schiller-Naumann','Schiller Naumann','SN')
-         corr=1.0_WP+0.15_WP*Re**(0.687_WP)
+         if (Re.lt.1000.0_WP) then
+            corr=1.0_WP+0.15_WP*Re**(0.687_WP)
+         else
+            corr=0.44_WP/24.0_WP*Re
+         end if
       case('Tenneti')
          ! Tenneti and Subramaniam (2011)
+         if (Re.lt.1000.0_WP) then
+            corr=1.0_WP+0.15_WP*Re**(0.687_WP)
+         else
+            corr=0.44_WP/24.0_WP*Re
+         end if
          b1=5.81_WP*pVF/fVF**3+0.48_WP*pVF**(1.0_WP/3.0_WP)/fVF**4
          b2=pVF**3*Re*(0.95_WP+0.61_WP*pVF**3/fVF**2)
-         corr=fVF*(1.0_WP+0.15_WP*Re**(0.687_WP)/fVF**3+b1+b2)           
+         corr=fVF*(corr/fVF**3+b1+b2)
+      case('Tavanashad')
+         ! Tavanashad et al. IJMF (2021)
+         if (Re.lt.1000.0_WP) then
+            corr=1.0_WP+0.15_WP*Re**(0.687_WP)
+         else
+            corr=0.44_WP/24.0_WP*Re
+         end if
+         corr=corr*(78.96_WP*pVF**3-18.63_WP*pVF**2+9.845_WP*pVF+1.0_WP)
       case('Khalloufi Capecelatro','KC')
          !> Todo
       case default
@@ -877,33 +913,39 @@ contains
          fdbk=fdbk+6.0_WP*this%sigma*cos(this%contact_angle)/(this%rho*p%d)*fgradVF
       end if
     end block compute_ST
+    
+    ! Compute acceleration due to Saffman lift
+    compute_lift: block
+      use mathtools, only: Pi,cross_product
+      real(WP) :: omegag,Cl,Reg
+      real(WP), dimension(3) :: accl
+      omegag=sqrt(sum(fvort**2))
+      if (omegag.gt.0.0_WP) then
+        Reg=p%d**2*omegag*frho/fvisc
+        Cl=9.69_WP/Pi/p%d**2/this%rho*fvisc*sqrt(Reg)
+        accl=Cl*cross_product(fvel-p%vel,fvort/omegag)
+        acc =acc +accl
+        fdbk=fdbk+accl
+        opt_dt=min(opt_dt,1.0_WP/(Cl*real(this%nstep,WP)))
+      end if
+    end block compute_lift
 
-
-   ! Compute acceleration due to Saffman lift
-   !compute_lift: block
-   !   use mathtools, only: Pi,cross_product
-   !   real(WP) :: omegag,Cl,Reg
-   !   if (this%use_lift) then
-   !      omegag=sqrt(sum(fvort**2))
-   !      if (omegag.gt.0.0_WP) then
-   !         Reg = p%d**2*omegag*frho/fvisc
-   !         Cl = 9.69_WP/Pi/p%d**2/this%rho*fvisc*sqrt(Reg)
-   !         acc=acc+Cl*cross_product(fvel-p%vel,fvort/omegag)
-   !         opt_dt=min(opt_dt,1.0_WP/(Cl*real(this%nstep,WP)))
-   !      end if
-   !   end if
-   !end block compute_lift
-
+    ! Compute added mass (this should be done last)
+    compute_added_mass: block
+      real(WP) :: Cadd
+      real(WP), dimension(3) :: dupdt,dufdt
+      Cadd=0.5_WP*frho/this%rho
+      dufdt=facc
+      dupdt=acc+this%gravity+p%Acol
+      !acc =acc +Cadd/(1.0_WP+Cadd)*(dufdt-dupdt)
+      !fdbk=fdbk+Cadd/(1.0_WP+Cadd)*(dufdt-dupdt)
+    end block compute_added_mass
+    
     ! Compute fluid torque (assumed Stokes drag)
     compute_torque: block
-      torque=0.0_WP!6.0_WP*fvisc*(0.5_WP*fvort-p%angVel)/this%rho
+      torque=6.0_WP*fvisc*(0.5_WP*fvort-p%angVel)/this%rho
     end block compute_torque
-
-    ! Compute heat transfer
-    compute_heat_transfer: block
-      !> Todo
-    end block compute_heat_transfer
-
+    
   end subroutine get_rhs
 
 

@@ -5,6 +5,8 @@ module simulation
    use geometry,          only: cfg
    use tpns_class,        only: tpns
    use vfs_class,         only: vfs
+   use hypre_str_class,   only: hypre_str
+   use ddadi_class,       only: ddadi
    use ccl_class,         only: ccl
    use lpt_class,         only: lpt
    use sgsmodel_class,    only: sgsmodel
@@ -19,6 +21,8 @@ module simulation
    private
    
    !> Two-phase incompressible flow solver, VF solver with CCL, and corresponding time tracker and sgs model
+   type(hypre_str),   public :: ps
+   type(ddadi),       public :: vs
    type(tpns),        public :: fs
    type(vfs),         public :: vf
    type(timetracker), public :: time
@@ -47,7 +51,7 @@ module simulation
    !> Private work arrays
    real(WP), dimension(:,:,:), allocatable :: resU,resV,resW
    real(WP), dimension(:,:,:), allocatable :: Ui,Vi,Wi
-   real(WP), dimension(:,:,:,:), allocatable :: SR
+   real(WP), dimension(:,:,:,:,:), allocatable :: gradU
    
    !> Problem definition
    real(WP), dimension(3) :: center,radii
@@ -150,10 +154,7 @@ contains
          allocate(Ui    (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
          allocate(Vi    (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
          allocate(Wi    (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
-         allocate(SR  (6,cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
-         allocate(sgsSTx(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_)); sgsSTx=0.0_WP
-         allocate(sgsSTy(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_)); sgsSTy=0.0_WP
-         allocate(sgsSTz(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_)); sgsSTz=0.0_WP
+         allocate(gradU(1:3,1:3,cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))   
       end block allocate_work_arrays
       
       
@@ -184,7 +185,7 @@ contains
          real(WP) :: vol,area
          integer, parameter :: amr_ref_lvl=4
          ! Create a VOF solver with LVIRA
-         vf=vfs(cfg=cfg,reconstruction_method=lvira,name='VOF')
+         call vf%initialize(cfg=cfg,reconstruction_method=lvira,name='VOF')
          ! Create a VOF solver with R2P
          !vf=vfs(cfg=cfg,reconstruction_method=r2p,name='VOF')
          !vf%VFflot =1.0e-4_WP !< Enables flotsam removal
@@ -251,7 +252,7 @@ contains
       ! Create a two-phase flow solver with bconds
       create_solver: block
          use tpns_class, only: dirichlet,clipped_neumann,neumann
-         use ils_class,  only: pcg_amg,gmres,gmres_amg
+         use hypre_str_class,  only: pcg_pfmg2
          ! Create a two-phase flow solver
          fs=tpns(cfg=cfg,name='Two-phase NS')
          ! Assign constant viscosity to each phase
@@ -266,13 +267,13 @@ contains
          call fs%add_bcond(name='inflow' ,type=dirichlet      ,face='x',dir=-1,canCorrect=.false.,locator=xm_locator)
          call fs%add_bcond(name='outflow',type=clipped_neumann,face='x',dir=+1,canCorrect=.true. ,locator=xp_locator)
          ! Configure pressure solver
-         call param_read('Pressure iteration',fs%psolv%maxit)
-         call param_read('Pressure tolerance',fs%psolv%rcvg)
+         ps=hypre_str(cfg=cfg,name='Pressure',method=pcg_pfmg2,nst=7)
+         call param_read('Pressure iteration',ps%maxit)
+         call param_read('Pressure tolerance',ps%rcvg)
          ! Configure implicit velocity solver
-         call param_read('Implicit iteration',fs%implicit%maxit)
-         call param_read('Implicit tolerance',fs%implicit%rcvg)
+         vs=ddadi(cfg=cfg,name='Velocity',nst=7)
          ! Setup the solver
-         call fs%setup(pressure_ils=gmres_amg,implicit_ils=gmres_amg)
+         call fs%setup(pressure_solver=ps,implicit_solver=vs)
       end block create_solver
       
       
@@ -405,7 +406,6 @@ contains
          call ens_out%add_vector('velocity',Ui,Vi,Wi)
          call ens_out%add_scalar('VOF',vf%VF)
          call ens_out%add_scalar('curv',vf%curv)
-         call ens_out%add_vector('sgsST',sgsSTx,sgsSTy,sgsSTz)
          call ens_out%add_scalar('filmThickness',cc%film_thickness)
          call ens_out%add_surface('vofplic',smesh)
          call ens_out%add_particle('spray',pmesh)
@@ -510,10 +510,10 @@ contains
          
          ! Turbulence modeling - only work with gas properties here
          sgsmodel: block
+            use sgsmodel_class, only: vreman
             integer :: i,j,k
-            call fs%get_strainrate(Ui=Ui,Vi=Vi,Wi=Wi,SR=SR)
-            resU=fs%rho_g
-            call sgs%get_visc(dt=time%dtold,rho=resU,Ui=Ui,Vi=Vi,Wi=Wi,SR=SR)
+            call fs%get_gradu(gradU)
+            call sgs%get_visc(type=vreman,dt=time%dtold,rho=resU,Ui=Ui,Vi=Vi,Wi=Wi,gradU=gradU)
             where (sgs%visc.lt.-fs%visc_g)
                sgs%visc=-fs%visc_g
             end where
@@ -890,7 +890,8 @@ contains
                   ! Add the drop
                   lp%p(np)%id  =int(0,8)                                   !< Give id (maybe based on break-up model?)
                   lp%p(np)%dt  =0.0_WP                                     !< Let the drop find it own integration time
-                  lp%p(np)%col =0.0_WP                                     !< Give zero collision force
+                  lp%p(np)%Acol=0.0_WP                                     !< Collision acceleration                                              !< Give zero collision force (axial)
+                  lp%p(np)%Tcol=0.0_WP                                     !< Collision torque                                              !< Give zero collision force (tangential)
                   lp%p(np)%d   =(6.0_WP*Vd/pi)**(1.0_WP/3.0_WP)            !< Assign diameter from model above
                   lp%p(np)%pos =vf%Lbary(:,i,j,k)                          !< Place the drop at the liquid barycenter
                   lp%p(np)%vel =fs%cfg%get_velocity(pos=lp%p(np)%pos,i0=i,j0=j,k0=k,U=fs%U,V=fs%V,W=fs%W) !< Interpolate local cell velocity as drop velocity
@@ -913,7 +914,8 @@ contains
                ! Add the drop
                lp%p(np)%id  =int(0,8)                                   !< Give id (maybe based on break-up model?)
                lp%p(np)%dt  =0.0_WP                                     !< Let the drop find it own integration time
-               lp%p(np)%col =0.0_WP                                     !< Give zero collision force
+               lp%p(np)%Acol=0.0_WP                                     !< Collision acceleration
+               lp%p(np)%Tcol=0.0_WP                                     !< Collision torque
                lp%p(np)%d   =(6.0_WP*Vl/pi)**(1.0_WP/3.0_WP)            !< Assign diameter based on remaining liquid volume
                lp%p(np)%pos =vf%Lbary(:,i,j,k)                          !< Place the drop at the liquid barycenter
                lp%p(np)%vel =fs%cfg%get_velocity(pos=lp%p(np)%pos,i0=i,j0=j,k0=k,U=fs%U,V=fs%V,W=fs%W) !< Interpolate local cell velocity as drop velocity
@@ -954,7 +956,7 @@ contains
       ! timetracker
       
       ! Deallocate work arrays
-      deallocate(resU,resV,resW,Ui,Vi,Wi,SR,sgsSTx,sgsSTy,sgsSTz)
+      deallocate(resU,resV,resW,Ui,Vi,Wi,gradU)
       
    end subroutine simulation_final
    

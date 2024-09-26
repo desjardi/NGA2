@@ -12,8 +12,7 @@ module amrconfig_class
    
    ! Expose type/constructor/methods
    public :: amrconfig,finalize_amrex
-   public :: mak_lvl_stype,clr_lvl_stype,err_est_stype
-
+   
    
    !> Amrconfig object definition based on AMReX's amrcore
    type :: amrconfig
@@ -40,25 +39,38 @@ module amrconfig_class
       integer, dimension(:), allocatable :: rref
       ! Geometry object at each level
       type(amrex_geometry), dimension(:), allocatable :: geom
+      ! Shortcut for domain volume
+      real(WP) :: vol
+      ! Shortcut to cell size per level
+      real(WP), dimension(:), allocatable :: dx,dy,dz
+      real(WP) :: min_meshsize
       ! Parallel info
       type(MPI_Comm) :: comm            !< Communicator for our group
       integer        :: nproc           !< Number of processors
       integer        :: rank            !< Processor grid rank
       logical        :: amRoot          !< Am I the root?
+      ! Monitoring info - call get_info() to update
+      integer  :: nlevels=-1            !< Current total number of levels
+      integer  :: nboxes =-1            !< Current total number of boxes
+      real(WP) :: ncells =-1.0_WP       !< Current total number of cells (real!)
+      real(WP) :: compression=-1.0_WP   !< Current compression ratio (ncells/total cells with uniform mesh)
    contains
-      procedure :: initialize            ! Initialization of amrconfig object
-      procedure :: finalize              ! Finalization of amrconfig object
-      procedure :: register_udp          ! Register user-defined procedures for regriding
-      procedure :: initialize_data       ! Initialize data on armconfig according to registered function
-      procedure :: regrid                ! Perform regriding operation on level baselvl
-      procedure :: print                 ! Print out grid info
-      procedure :: get_boxarray          ! Obtain box array at a given level
-      procedure :: get_distromap         ! Obtain distromap at a given level
-      procedure :: mfiter_build          ! Build mfiter at a given level
-      procedure :: mfiter_destroy        ! Destroy mfiter
-      procedure :: clvl                  ! Return current finest level
-      procedure :: average_down          ! Average down a given multifab throughout all levels
-      procedure :: average_downto        ! Average down a given multifab to level lvl
+      procedure :: initialize                !< Initialization of amrconfig object
+      procedure :: finalize                  !< Finalization of amrconfig object
+      procedure :: register_udp              !< Register user-defined procedures for regriding
+      procedure :: initialize_grid           !< Initialize data on armconfig according to registered function
+      procedure :: regrid                    !< Perform regriding operation on level baselvl
+      procedure :: get_info                  !< Calculate various information on our amrconfig object
+      procedure :: print                     !< Print out grid info
+      procedure, private :: get_boxarray     !< Obtain box array at a given level
+      procedure, private :: get_distromap    !< Obtain distromap at a given level
+      procedure :: mfiter_build              !< Build mfiter at a given level
+      procedure :: mfiter_destroy            !< Destroy mfiter
+      procedure :: mfab_build                !< Build mfab at a given level
+      procedure :: mfab_destroy              !< Destroy mfab
+      procedure :: clvl                      !< Return current finest level
+      procedure :: average_down              !< Average down a given multifab throughout all levels
+      procedure :: average_downto            !< Average down a given multifab to level lvl
    end type amrconfig
    
    
@@ -189,47 +201,26 @@ contains
          this%rank=rank
          this%amRoot=amRoot
       end block store_parallel_info
+      ! Compute shortcuts
+      compute_shortcuts: block
+         integer :: lvl
+         ! Mesh size at each level
+         allocate(this%dx(0:this%nlvl),this%dy(0:this%nlvl),this%dz(0:this%nlvl))
+         do lvl=0,this%nlvl
+            this%dx(lvl)=this%geom(lvl)%dx(1)
+            this%dy(lvl)=this%geom(lvl)%dx(2)
+            this%dz(lvl)=this%geom(lvl)%dx(3)
+         end do
+         ! Total domain volume
+         this%vol=(this%xhi-this%xlo)*(this%yhi-this%ylo)*(this%zhi-this%zlo)
+         ! Smallest mesh size
+         this%min_meshsize=min(this%dx(this%nlvl),this%dy(this%nlvl),this%dz(this%nlvl))
+      end block compute_shortcuts
    end subroutine initialize
    
    
-   !> Initialize data on an amrconfig object
-   subroutine initialize_data(this,time)
-      implicit none
-      class(amrconfig), intent(inout) :: this
-      real(WP), intent(in) :: time
-      interface
-         subroutine amrex_fi_init_from_scratch(t,core) bind(c)
-            import :: c_ptr,WP
-            implicit none
-            real(WP), value :: t
-            type(c_ptr), value :: core
-         end subroutine amrex_fi_init_from_scratch
-      end interface
-      call amrex_fi_init_from_scratch(time,this%amrcore)
-   end subroutine initialize_data
-   
-
-   !> Perform regriding operation on baselvl
-   subroutine regrid(this,baselvl,time)
-      implicit none
-      class(amrconfig), intent(inout) :: this
-      integer,  intent(in) :: baselvl
-      real(WP), intent(in) :: time
-      interface
-         subroutine amrex_fi_regrid(blvl,t,core) bind(c)
-            import :: c_ptr,c_int,WP
-            implicit none
-            integer(c_int), value :: blvl
-            real(WP), value :: t
-            type(c_ptr), value :: core
-         end subroutine amrex_fi_regrid
-      end interface
-      call amrex_fi_regrid(baselvl,time,this%amrcore)
-   end subroutine regrid
-
-   
    !> Finalization of amrconfig object
-   subroutine finalize(this)
+   impure elemental subroutine finalize(this)
       implicit none
       class(amrconfig), intent(inout) :: this
       interface
@@ -261,6 +252,120 @@ contains
       end interface
       call amrex_fi_init_virtual_functions(c_funloc(mak_lvl_init),c_funloc(mak_lvl_crse),c_funloc(mak_lvl_remk),c_funloc(clr_lvl),c_funloc(err_est),this%amrcore)
    end subroutine register_udp
+   
+   
+   !> Initialize grid on an amrconfig object
+   subroutine initialize_grid(this,time)
+      implicit none
+      class(amrconfig), intent(inout) :: this
+      real(WP), intent(in) :: time
+      interface
+         subroutine amrex_fi_init_from_scratch(t,core) bind(c)
+            import :: c_ptr,WP
+            implicit none
+            real(WP), value :: t
+            type(c_ptr), value :: core
+         end subroutine amrex_fi_init_from_scratch
+      end interface
+      ! Generate grid and allocate data
+      call amrex_fi_init_from_scratch(time,this%amrcore)
+      ! Generate info about grid
+      call this%get_info()
+   end subroutine initialize_grid
+   
+   
+   !> Perform regriding operation on baselvl
+   subroutine regrid(this,baselvl,time)
+      implicit none
+      class(amrconfig), intent(inout) :: this
+      integer,  intent(in) :: baselvl
+      real(WP), intent(in) :: time
+      interface
+         subroutine amrex_fi_regrid(blvl,t,core) bind(c)
+            import :: c_ptr,c_int,WP
+            implicit none
+            integer(c_int), value :: blvl
+            real(WP), value :: t
+            type(c_ptr), value :: core
+         end subroutine amrex_fi_regrid
+      end interface
+      ! Regenerate grid and resize/transfer data
+      call amrex_fi_regrid(baselvl,time,this%amrcore)
+      ! Generate info about grid
+      call this%get_info()
+   end subroutine regrid
+   
+   
+   !> Get info on amrconfig object
+   subroutine get_info(this)
+      use amrex_amr_module, only: amrex_boxarray,amrex_box
+      implicit none
+      class(amrconfig), intent(inout) :: this
+      type(amrex_boxarray) :: ba
+      type(amrex_box)      :: bx
+      integer :: n,m,nb
+      integer, dimension(3) :: lo,hi
+      ! Update number of levels
+      this%nlevels=this%clvl()+1
+      ! Update number of boxes and cells
+      this%nboxes=0
+      this%ncells=0.0_WP
+      do n=0,this%clvl()
+         ! Get boxarray
+         ba=this%get_boxarray(lvl=n)
+         ! Increment boxes
+         nb=int(ba%nboxes())
+         this%nboxes=this%nboxes+nb
+         ! Traverse boxes and count cells
+         do m=1,nb
+            ! Get box
+            bx=ba%get_box(m-1)
+            ! Increment cells
+            this%ncells=this%ncells+real((bx%hi(1)-bx%lo(1)+1),WP)*&
+            &                       real((bx%hi(2)-bx%lo(2)+1),WP)*&
+            &                       real((bx%hi(3)-bx%lo(3)+1),WP)
+         end do
+      end do
+      ! Update compression ratio
+      this%compression=this%geom(this%clvl())%dx(1)*&
+      &                this%geom(this%clvl())%dx(2)*&
+      &                this%geom(this%clvl())%dx(3)*&
+      &                this%ncells/((this%xhi-this%xlo)*(this%yhi-this%ylo)*(this%zhi-this%zlo))
+   end subroutine get_info
+   
+   
+   !> Print amrconfig object
+   subroutine print(this)
+      use, intrinsic :: iso_fortran_env, only: output_unit
+      use amrex_amr_module, only: amrex_boxarray,amrex_box
+      use parallel, only: amRoot
+      implicit none
+      class(amrconfig), intent(inout) :: this
+      type(amrex_boxarray) :: ba
+      type(amrex_box)      :: bx
+      integer :: n,m,nb
+      integer, dimension(3) :: lo,hi
+      if (amRoot) then
+         write(output_unit,'("AMR Cartesian grid [",a,"]")') trim(this%name)
+         write(output_unit,'(" > amr level = ",i2)') this%clvl()
+         write(output_unit,'(" > max level = ",i2)') this%nlvl
+         write(output_unit,'(" > ref ratio = ",100(" ",i0))') this%rref
+         write(output_unit,'(" >    extent = [",es12.5,",",es12.5,"]x[",es12.5,",",es12.5,"]x[",es12.5,",",es12.5,"]")') this%xlo,this%xhi,this%ylo,this%yhi,this%zlo,this%zhi
+         write(output_unit,'(" >  periodic = ",l1,"x",l1,"x",l1)') this%xper,this%yper,this%zper
+         ! Loop over levels
+         do n=0,this%clvl()
+            ! Get boxarray at that level
+            ba=this%get_boxarray(lvl=n)
+            write(output_unit,'(" >>> Level ",i2,"/",i2," with [dx =",es12.5,",dy =",es12.5,",dz =",es12.5,"]")') n,this%clvl(),this%geom(n)%dx(1),this%geom(n)%dx(2),this%geom(n)%dx(3)
+            ! Loop over boxes
+            nb=int(ba%nboxes())
+            do m=1,nb
+               bx=ba%get_box(m-1)
+               write(output_unit,'(" >>> Box ",i0,"/",i0," from [",i3,",",i3,",",i3,"] to [",i3,",",i3,",",i3,"]")') m,nb,bx%lo,bx%hi
+            end do
+         end do
+      end if
+   end subroutine print
    
    
    !> Obtain box array at a level
@@ -301,8 +406,8 @@ contains
       end interface
       call amrex_fi_get_distromap(dm%p,lvl,this%amrcore)
    end function get_distromap
-
-
+   
+   
    !> Build mfiter at a level
    subroutine mfiter_build(this,lvl,mfi)
       use amrex_amr_module, only: amrex_boxarray,amrex_distromap,amrex_mfiter,amrex_mfiter_build
@@ -316,8 +421,8 @@ contains
       dm=this%get_distromap(lvl)
       call amrex_mfiter_build(mfi,ba,dm)
    end subroutine mfiter_build
-
-
+   
+   
    !> Destroy mfiter
    subroutine mfiter_destroy(this,mfi)
       use amrex_amr_module, only: amrex_mfiter,amrex_mfiter_destroy
@@ -326,6 +431,36 @@ contains
       type(amrex_mfiter), intent(inout) :: mfi
       call amrex_mfiter_destroy(mfi)
    end subroutine mfiter_destroy
+
+
+   !> Build mfab at a level
+   subroutine mfab_build(this,lvl,mfab,ncomp,nover,atface)
+      use amrex_amr_module, only: amrex_boxarray,amrex_distromap,amrex_multifab,amrex_multifab_build
+      implicit none
+      class(amrconfig), intent(inout) :: this
+      integer, intent(in) :: lvl
+      type(amrex_multifab), intent(out) :: mfab
+      integer, intent(in) :: ncomp
+      integer, intent(in) :: nover
+      logical, dimension(3), intent(in), optional :: atface
+      logical, dimension(3) :: face
+      type(amrex_boxarray)  :: ba
+      type(amrex_distromap) :: dm
+      ba=this%get_boxarray (lvl)
+      dm=this%get_distromap(lvl)
+      face=.false.; if (present(atface)) face=atface
+      call amrex_multifab_build(mfab,ba,dm,ncomp,nover,face)
+   end subroutine mfab_build
+   
+   
+   !> Destroy mfab
+   subroutine mfab_destroy(this,mfab)
+      use amrex_amr_module, only: amrex_multifab,amrex_multifab_destroy
+      implicit none
+      class(amrconfig),     intent(inout) :: this
+      type(amrex_multifab), intent(inout) :: mfab
+      call amrex_multifab_destroy(mfab)
+   end subroutine mfab_destroy
    
    
    !> Return current finest level
@@ -343,64 +478,30 @@ contains
       end interface
       cl=amrex_fi_get_finest_level(this%amrcore)
    end function clvl
-
-
+   
+   
    !> Average down entire multifab array
-   subroutine average_down(this,mfab)
+   subroutine average_down(this,mfaba)
       use amrex_amr_module, only: amrex_multifab,amrex_average_down
       implicit none
       class(amrconfig), intent(inout) :: this
-      type(amrex_multifab), dimension(0:) :: mfab
+      type(amrex_multifab), dimension(0:) :: mfaba
       integer :: n
       do n=this%clvl()-1,0,-1
-         call amrex_average_down(mfab(n+1),mfab(n),this%geom(n+1),this%geom(n),1,mfab(0)%nc,this%rref(n))
+         call amrex_average_down(mfaba(n+1),mfaba(n),this%geom(n+1),this%geom(n),1,mfaba(0)%nc,this%rref(n))
       end do
    end subroutine average_down
-
-
+   
+   
    !> Average entire multifab array down to level lvl
-   subroutine average_downto(this,mfab,lvl)
+   subroutine average_downto(this,mfaba,lvl)
       use amrex_amr_module, only: amrex_multifab,amrex_average_down
       implicit none
       class(amrconfig), intent(inout) :: this
-      type(amrex_multifab), dimension(0:) :: mfab
+      type(amrex_multifab), dimension(0:) :: mfaba
       integer, intent(in) :: lvl
-      call amrex_average_down(mfab(lvl+1),mfab(lvl),this%geom(lvl+1),this%geom(lvl),1,mfab(0)%nc,this%rref(lvl))
+      call amrex_average_down(mfaba(lvl+1),mfaba(lvl),this%geom(lvl+1),this%geom(lvl),1,mfaba(0)%nc,this%rref(lvl))
    end subroutine average_downto
-   
-   
-   !> Print amrconfig object
-   subroutine print(this)
-      use, intrinsic :: iso_fortran_env, only: output_unit
-      use amrex_amr_module, only: amrex_boxarray,amrex_box
-      use parallel, only: amRoot
-      implicit none
-      class(amrconfig), intent(inout) :: this
-      type(amrex_boxarray) :: ba
-      type(amrex_box)      :: bx
-      integer :: n,m,nb
-      integer, dimension(3) :: lo,hi
-      if (amRoot) then
-         write(output_unit,'("AMR Cartesian grid [",a,"]")') trim(this%name)
-         write(output_unit,'(" > amr level = ",i2)') this%clvl()
-         write(output_unit,'(" > max level = ",i2)') this%nlvl
-         write(output_unit,'(" > ref ratio = ",100(" ",i0))') this%rref
-         write(output_unit,'(" >    extent = [",es12.5,",",es12.5,"]x[",es12.5,",",es12.5,"]x[",es12.5,",",es12.5,"]")') this%xlo,this%xhi,this%ylo,this%yhi,this%zlo,this%zhi
-         write(output_unit,'(" >  periodic = ",l1,"x",l1,"x",l1)') this%xper,this%yper,this%zper
-         ! Loop over levels
-         do n=0,this%clvl()
-            ! Get boxarray at that level
-            ba=this%get_boxarray(lvl=n)
-            write(output_unit,'(" >>> Level ",i2,"/",i2," with [dx =",es12.5,",dy =",es12.5,",dz =",es12.5,"]")') n,this%clvl(),this%geom(n)%dx(1),this%geom(n)%dx(2),this%geom(n)%dx(3)
-            ! Loop over boxes
-            nb=int(ba%nboxes())
-            do m=1,nb
-               bx=ba%get_box(m-1)
-               write(output_unit,'(" >>> Box ",i0,"/",i0," from [",i3,",",i3,",",i3,"] to [",i3,",",i3,",",i3,"]")') m,nb,bx%lo,bx%hi
-            end do
-         end do
-      end if
-   end subroutine print
    
    
    !> Finalization of amrex
@@ -412,4 +513,3 @@ contains
    
    
 end module amrconfig_class
-   

@@ -32,7 +32,7 @@ module vfs_class
    integer, parameter, public :: plicnet=9           !< PLICnet
    integer, parameter, public :: r2pnet=10           !< R2Pnet
    
-   ! List of available interface trasnport schemes for VF
+   ! List of available interface transport schemes for VF
    integer, parameter, public :: flux=1             !< Flux-based geometric transport
    integer, parameter, public :: flux_storage=2     !< Flux-based geometric transport with storage of detailed face fluxes
    integer, parameter, public :: remap=3            !< Cell-based geometric transport (faster but fluxes are not available)
@@ -3054,7 +3054,7 @@ contains
       implicit none
       class(vfs), intent(inout) :: this
       integer(IRL_SignedIndex_t) :: i,j,k
-      integer :: ind,ii,jj,kk,icenter
+      integer :: ind,ii,jj,kk
       real(IRL_double), dimension(0:2) :: normal
       real(IRL_double), dimension(0:188) :: moments
       integer :: direction
@@ -4821,7 +4821,7 @@ contains
          recv_range(1:2,3)=[this%cfg%kmino_              ,this%cfg%kmin_ -1]
          call this%sync_side(send_range,recv_range,2,+1)
       end if
-      ! Fix plane posistion if we are periodic in x
+      ! Fix plane position if we are periodic in x
       if (this%cfg%xper.and.this%cfg%iproc.eq.1) then
          do k=this%cfg%kmino_,this%cfg%kmaxo_
             do j=this%cfg%jmino_,this%cfg%jmaxo_
@@ -4875,7 +4875,7 @@ contains
             end do
          end do
       end if
-      ! Fix plane posistion if we are periodic in z
+      ! Fix plane position if we are periodic in z
       if (this%cfg%zper.and.this%cfg%kproc.eq.1) then
          do k=this%cfg%kmino,this%cfg%kmin-1
             do j=this%cfg%jmino_,this%cfg%jmaxo_

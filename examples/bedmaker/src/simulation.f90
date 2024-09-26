@@ -111,7 +111,7 @@ contains
          ! Loop through particles
          do i=1,lp%np_
             ! Remove top of bed
-            if (lp%p(i)%pos(2).gt.0.4_WP) lp%p(i)%flag=1
+            !if (lp%p(i)%pos(2).gt.0.4_WP) lp%p(i)%flag=1
             ! Zero out velocity
             lp%p(i)%vel=0.0_WP
          end do

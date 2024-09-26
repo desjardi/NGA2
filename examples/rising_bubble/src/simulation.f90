@@ -87,6 +87,7 @@ contains
       implicit none
       integer :: i,j,k,ierr
       real(WP) :: myYcent,myVrise,myvol,bubble_vol
+      myYcent=0.0_WP
       myVrise=0.0_WP
       myvol=0.0_WP
       do k=vf%cfg%kmin_,vf%cfg%kmax_
@@ -141,7 +142,7 @@ contains
       ! Initialize our VOF solver and field
       create_and_initialize_vof: block
          use mms_geom,  only: cube_refine_vol
-         use vfs_class, only: lvira,r2p,VFhi,VFlo,remap
+         use vfs_class, only: plicnet,r2p,VFhi,VFlo,remap
          use mathtools, only: Pi
          integer :: i,j,k,n,si,sj,sk
          real(WP), dimension(3,8) :: cube_vertex
@@ -149,10 +150,10 @@ contains
          real(WP) :: vol,area
          integer, parameter :: amr_ref_lvl=4
          ! Create a VOF solver
-         call vf%initialize(cfg=cfg,reconstruction_method=r2p,transport_method=remap,name='VOF')
+         call vf%initialize(cfg=cfg,reconstruction_method=plicnet,transport_method=remap,name='VOF')
          !vf%cons_correct=.false.
          !vf%thin_thld_max=1.5_WP
-         vf%twoplane_thld2=0.8_WP
+         !vf%twoplane_thld2=0.8_WP
          ! Initialize a bubble
          call param_read('Bubble position',center,default=[0.0_WP,0.0_WP,0.0_WP])
          call param_read('Bubble volume',radius); radius=(radius*3.0_WP/(4.0_WP*Pi))**(1.0_WP/3.0_WP)
@@ -422,8 +423,8 @@ contains
             call fs%update_laplacian()
             call fs%correct_mfr()
             call fs%get_div()
-            !call fs%add_surface_tension_jump(dt=time%dt,div=fs%div,vf=vf)
-            call fs%add_surface_tension_jump_thin(dt=time%dt,div=fs%div,vf=vf)
+            call fs%add_surface_tension_jump(dt=time%dt,div=fs%div,vf=vf)
+            !call fs%add_surface_tension_jump_thin(dt=time%dt,div=fs%div,vf=vf)
             fs%psolv%rhs=-fs%cfg%vol*fs%div/time%dt
             fs%psolv%sol=0.0_WP
             call fs%psolv%solve()

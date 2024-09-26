@@ -1,0 +1,28 @@
+# Parallelization
+Partition :	1 1 1 
+
+# Mesh definition
+Lx : 5
+nx : 32
+
+# Droplet properties
+Number of droplet :           10
+Droplet diameter :            1.3 # for growth test
+Droplet diameter :            1.5 
+Liquid dynamic viscosity :    1.0
+Gas dynamic viscosity :       1.0
+Liquid density :              1.0
+Gas density :                 1.0
+Surface tension coefficient : 1.0
+
+# Time integration
+Max timestep size : 2.5e-3
+Max cfl number :    #0.9
+Max time :          30.0e-3
+
+# Ensight output
+Ensight output period : 2.5e-3
+Restart output period : 10e-3
+
+# Drop analysis
+Drop analysis period :  5e-2

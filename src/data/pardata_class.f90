@@ -43,12 +43,14 @@ module pardata_class
       procedure, private :: prep_iomap                                !< IO group/pgrid/map
       procedure, private :: findval                                   !< Function that returns val index if name is found, zero otherwise
       procedure, private :: findvar                                   !< Function that returns var index if name is found, zero otherwise
-      generic :: push=>pushval,pushvar                                !< Generic data push
+      generic :: push=>pushval,pushvar,pushvarint                     !< Generic data push
       procedure, private :: pushval                                   !< Push data to pardata
       procedure, private :: pushvar                                   !< Push data to pardata
-      generic :: pull=>pullval,pullvar                                !< Generic data pull
+      procedure, private :: pushvarint                                !< Push integer data to pardata
+      generic :: pull=>pullval,pullvar,pullvarint                     !< Generic data pull
       procedure, private :: pullval                                   !< Pull data from pardata
       procedure, private :: pullvar                                   !< Pull data from pardata
+      procedure, private :: pullvarint                                !< Pull integer data from pardata
       procedure :: write=>pardata_write                               !< Parallel write a pardata object to disk
       procedure :: print=>pardata_print                               !< Print out debugging info to screen
       procedure :: log  =>pardata_log                                 !< Print out debugging info to log
@@ -368,6 +370,23 @@ contains
       end if
    end subroutine pushvar
    
+
+   !> Push integer data to a var
+   subroutine pushvarint(this,name,var)
+      use messager, only: die
+      implicit none
+      class(pardata), intent(inout) :: this
+      character(len=*), intent(in) :: name
+      integer, dimension(this%pg%imino_:,this%pg%jmino_:,this%pg%kmino_:), intent(in) :: var !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      integer :: n
+      n=this%findvar(name)
+      if (n.gt.0) then
+         this%var(:,:,:,n)=real(var,WP)
+      else
+         call die('[pardata pushvar] Var does not exist in the data file: '//name)
+      end if
+   end subroutine pushvarint
+   
    
    !> Pull data from a var and synchronize it
    subroutine pullvar(this,name,var)
@@ -385,6 +404,24 @@ contains
          call die('[pardata pullvar] Var does not exist in the data file: '//name)
       end if
    end subroutine pullvar
+   
+
+   !> Pull integer data from a var and synchronize it
+   subroutine pullvarint(this,name,var)
+      use messager, only: die
+      implicit none
+      class(pardata), intent(in) :: this
+      character(len=*), intent(in) :: name
+      integer, dimension(this%pg%imino_:,this%pg%jmino_:,this%pg%kmino_:), intent(out) :: var !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      integer :: n
+      n=this%findvar(name)
+      if (n.gt.0) then
+         var=int(this%var(:,:,:,n))
+         call this%pg%sync(var)
+      else
+         call die('[pardata pullvar] Var does not exist in the data file: '//name)
+      end if
+   end subroutine pullvarint
    
    
 end module pardata_class

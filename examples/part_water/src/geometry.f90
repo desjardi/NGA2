@@ -9,6 +9,9 @@ module geometry
    type(config), public :: cfg
    
    public :: geometry_init
+
+   !> Step definition
+   real(WP), public :: slength,sdepth,gstart,gend
    
 contains
    
@@ -16,7 +19,7 @@ contains
    !> Initialization of problem geometry
    subroutine geometry_init
       use sgrid_class, only: sgrid
-      use param,       only: param_read
+      use param,       only: param_read,param_exists
       implicit none
       type(sgrid) :: grid
       
@@ -35,7 +38,7 @@ contains
          
          ! Create simple rectilinear grid
          do i=1,nx+1
-            x(i)=real(i-1,WP)/real(nx,WP)*Lx-0.5_WP*Lx
+            x(i)=real(i-1,WP)/real(nx,WP)*Lx
          end do
          do j=1,ny+1
             y(j)=real(j-1,WP)/real(ny,WP)*Ly
@@ -45,8 +48,7 @@ contains
          end do
          
          ! General serial grid object
-         !grid=sgrid(coord=cartesian,no=3,x=x,y=y,z=z,xper=.true.,yper=.false.,zper=.false.,name='part_water')
-         grid=sgrid(coord=cartesian,no=3,x=x,y=y,z=z,xper=.true.,yper=.false.,zper=.true.,name='part_water')
+         grid=sgrid(coord=cartesian,no=3,x=x,y=y,z=z,xper=.false.,yper=.false.,zper=.false.,name='part_water')
          
       end block create_grid
       
@@ -67,14 +69,33 @@ contains
       
       ! Create masks for this config
       create_walls: block
-         integer :: i,j,k
+         integer :: i,j,k,nx
+         real(WP) :: dx,Lx
          cfg%VF=1.0_WP
          do k=cfg%kmino_,cfg%kmaxo_
             do j=cfg%jmino_,cfg%jmaxo_
                do i=cfg%imino_,cfg%imaxo_
+                  if (i.lt.cfg%imin) cfg%VF(i,j,k)=0.0_WP
+                  if (i.gt.cfg%imax) cfg%VF(i,j,k)=0.0_WP
                   if (j.lt.cfg%jmin) cfg%VF(i,j,k)=0.0_WP
-                  !if (k.lt.cfg%kmin) cfg%VF(i,j,k)=0.0_WP
-                  !if (k.gt.cfg%kmax) cfg%VF(i,j,k)=0.0_WP
+                  if (k.lt.cfg%kmin) cfg%VF(i,j,k)=0.0_WP
+                  if (k.gt.cfg%kmax) cfg%VF(i,j,k)=0.0_WP
+               end do
+            end do
+         end do
+         ! Add a step and a gate
+         call param_read('Step length',slength)
+         call param_read('Step depth',sdepth)
+         call param_read('Gate start',gstart)
+         call param_read('Gate end',gend)
+         call param_read('Lx',Lx); call param_read('nx',nx); dx=Lx/real(nx,WP)
+         do k=cfg%kmino_,cfg%kmaxo_
+            do j=cfg%jmino_,cfg%jmaxo_
+               do i=cfg%imino_,cfg%imaxo_
+                  ! Add step
+                  if (cfg%xm(i).lt.slength.and.cfg%ym(j).lt.sdepth) cfg%VF(i,j,k)=0.0_WP
+                  ! Add gate
+                  if (cfg%xm(i).gt.slength.and.cfg%xm(i).lt.slength+2.0_WP*dx.and.cfg%ym(j).gt.gstart.and.cfg%ym(j).lt.gend) cfg%VF(i,j,k)=0.0_WP
                end do
             end do
          end do
