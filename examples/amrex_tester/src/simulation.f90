@@ -413,14 +413,18 @@ contains
          update_velocity_vf: block
             use amrex_amr_module, only: amrex_mfiter,amrex_box,amrex_fab,amrex_fab_destroy
             use mathtools,        only: Pi
+            use mpi_f08,          only: MPI_ALLREDUCE,MPI_IN_PLACE,MPI_MAX
+            use parallel,         only: MPI_REAL_WP
             type(amrex_mfiter) :: mfi
             type(amrex_box)    :: bx,tbx
             type(amrex_fab)    :: stream
             real(WP), dimension(:,:,:,:), contiguous, pointer :: pU,pV,pW,psi
-            real(WP) :: x,y,z
-            integer :: i,j,k,no
+            real(WP) :: x,y,z,maxdiv,div
+            integer :: i,j,k,no,ierr
+            ! Compute divergence
+            maxdiv=0.0_WP
             ! Set overlap size
-            no=3
+            no=vf%nover+1
             ! Recreate velocity mfabs
             call amr%mfab_destroy(U); call amr%mfab_build(amr%clvl(),U,ncomp=1,nover=no,atface=[.true. ,.false.,.false.])
             call amr%mfab_destroy(V); call amr%mfab_build(amr%clvl(),V,ncomp=1,nover=no,atface=[.false.,.true. ,.false.])
@@ -431,16 +435,26 @@ contains
                pU=>U%dataptr(mfi)
                pV=>V%dataptr(mfi)
                pW=>W%dataptr(mfi)
+               ! Set the velocity field - 3D deformation field test case
+               !do k=kmino_,kmaxo_
+               !   do j=jmino_,jmaxo_
+               !      do i=imino_,imaxo_
+               !         U(i,j,k) = +2.0_WP*sin(   Pi*x (i))**2*sin(twoPi*ym(j))   *sin(twoPi*zm(k))   *cos(Pi*(time-0.5_WP*dt)/3.0_WP)
+               !         V(i,j,k) = -       sin(twoPi*xm(i))   *sin(   Pi*y (j))**2*sin(twoPi*zm(k))   *cos(Pi*(time-0.5_WP*dt)/3.0_WP)
+               !         W(i,j,k) = -       sin(twoPi*xm(i))   *sin(twoPi*ym(j))   *sin(   Pi*z (k))**2*cos(Pi*(time-0.5_WP*dt)/3.0_WP)
+               !      end do
+               !   end do
+               !end do
                ! Create streamfunction for our vortex on a larger box
-               tbx=bx; call tbx%grow(no+1)
+               tbx=bx; call tbx%grow(no); call tbx%convert([.true.,.true.,.true.])
                call stream%resize(tbx,1); psi=>stream%dataptr()
                do k=tbx%lo(3),tbx%hi(3)
                   do j=tbx%lo(2),tbx%hi(2)
                      do i=tbx%lo(1),tbx%hi(1)
-                        ! Get position
-                        x=amr%xlo+(real(i,WP)+0.5_WP)*amr%dx(amr%clvl())
-                        y=amr%ylo+(real(j,WP)+0.5_WP)*amr%dy(amr%clvl())
-                        z=amr%zlo+(real(k,WP)+0.5_WP)*amr%dz(amr%clvl())
+                        ! Get vertex position
+                        x=amr%xlo+real(i,WP)*amr%dx(amr%clvl())
+                        y=amr%ylo+real(j,WP)*amr%dy(amr%clvl())
+                        z=amr%zlo+real(k,WP)*amr%dz(amr%clvl())
                         ! Evaluate streamfunction
                         psi(i,j,k,1)=sin(Pi*x)**2*sin(Pi*y)**2*cos(Pi*time%tmid/time%tmax)*(1.0_WP/Pi)
                      end do
@@ -450,7 +464,7 @@ contains
                do k=lbound(pU,3),ubound(pU,3)
                   do j=lbound(pU,2),ubound(pU,2)
                      do i=lbound(pU,1),ubound(pU,1)
-                        pU(i,j,k,1)=-((psi(i,j+1,k,1)+psi(i-1,j+1,k,1))-(psi(i,j-1,k,1)+psi(i-1,j-1,k,1)))*(0.25_WP/amr%dy(amr%clvl()))
+                        pU(i,j,k,1)=-((psi(i,j+1,k+1,1)+psi(i,j+1,k,1))-(psi(i,j,k+1,1)+psi(i,j,k,1)))*(0.5_WP/amr%dy(amr%clvl()))
                      end do
                   end do
                end do
@@ -458,7 +472,7 @@ contains
                do k=lbound(pV,3),ubound(pV,3)
                   do j=lbound(pV,2),ubound(pV,2)
                      do i=lbound(pV,1),ubound(pV,1)
-                        pV(i,j,k,1)=+((psi(i+1,j,k,1)+psi(i+1,j-1,k,1))-(psi(i-1,j,k,1)+psi(i-1,j-1,k,1)))*(0.25_WP/amr%dx(amr%clvl()))
+                        pV(i,j,k,1)=+((psi(i+1,j,k+1,1)+psi(i+1,j,k,1))-(psi(i,j,k+1,1)+psi(i,j,k,1)))*(0.5_WP/amr%dx(amr%clvl()))
                      end do
                   end do
                end do
@@ -470,7 +484,21 @@ contains
                      end do
                   end do
                end do
+               ! Finally, check divergence
+               do k=bx%lo(3),bx%hi(3)
+                  do j=bx%lo(2),bx%hi(2)
+                     do i=bx%lo(1),bx%hi(1)
+                        div=(pU(i+1,j,k,1)-pU(i,j,k,1))/amr%dx(amr%clvl())+&
+                        &   (pV(i,j+1,k,1)-pV(i,j,k,1))/amr%dy(amr%clvl())+&
+                        &   (pW(i,j,k+1,1)-pW(i,j,k,1))/amr%dz(amr%clvl())
+                        maxdiv=max(maxdiv,abs(div))
+                     end do
+                  end do
+               end do
             end do; call amr%mfiter_destroy(mfi)
+            ! Find global max of divergence and output
+            call MPI_ALLREDUCE(MPI_IN_PLACE,maxdiv,1,MPI_REAL_WP,MPI_MAX,amr%comm,ierr)
+            if (amr%amroot) print*,'Divergence =',maxdiv
             ! Destroy streamfunction
             call amrex_fab_destroy(stream)
          end block update_velocity_vf
