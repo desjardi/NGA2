@@ -10,7 +10,7 @@ Refinement ratio : 4
 
 # Time integration
 Max timestep size : 0.002
-Max time : 4
+Max time : 3
 
 # Regriding
 Steps between regrid : 5

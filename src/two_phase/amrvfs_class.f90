@@ -200,30 +200,7 @@ contains
       this%VFmax=max(this%VFmax,this%volmom(this%amr%clvl())%max(comp=1))
 
       ! Get int at level 0
-      int_volmom: block
-         use amrex_amr_module, only: amrex_mfiter,amrex_box
-         use mpi_f08,          only: MPI_ALLREDUCE,MPI_IN_PLACE,MPI_SUM
-         use parallel,         only: MPI_REAL_WP
-         type(amrex_mfiter) :: mfi
-         type(amrex_box)    :: bx
-         real(WP), dimension(:,:,:,:), contiguous, pointer :: volmom
-         integer :: i,j,k,ierr
-         this%VFint=0.0_WP
-         call this%amr%mfiter_build(0,mfi); do while(mfi%next())
-            bx=mfi%tilebox()
-            volmom=>this%volmom(0)%dataptr(mfi)
-            do k=bx%lo(3),bx%hi(3)
-               do j=bx%lo(2),bx%hi(2)
-                  do i=bx%lo(1),bx%hi(1)
-                     this%VFint=this%VFint+volmom(i,j,k,1)
-                  end do
-               end do
-            end do
-         end do; call this%amr%mfiter_destroy(mfi)
-         call MPI_ALLREDUCE(MPI_IN_PLACE,this%VFint,1,MPI_REAL_WP,MPI_SUM,this%amr%comm,ierr)
-         this%VFint=this%VFint*(this%amr%dx(0)*this%amr%dy(0)*this%amr%dz(0))/this%amr%vol
-      end block int_volmom
-      !this%VFint=this%volmom(0)%sum(comp=1)*(this%amr%dx(0)*this%amr%dy(0)*this%amr%dz(0))/this%amr%vol
+      this%VFint=this%volmom(0)%sum(comp=1)*(this%amr%dx(0)*this%amr%dy(0)*this%amr%dz(0))/this%amr%vol
       
    end subroutine get_info
 
@@ -605,7 +582,7 @@ contains
       &                                adjustCapToMatchVolume,construct,new,&
       &                                PlanarLoc_type,PlanarSep_type,LocSepLink_type,&
       &                                LocLink_type,getMoments,getVolumePtr,getCentroidPtr,&
-      &                                setNumberOfPlanes,setPlane
+      &                                setNumberOfPlanes,setPlane,getBoundingPts
       use amrex_amr_module,      only: amrex_mfiter,amrex_box
       implicit none
       class(amrvfs), intent(inout) :: this
@@ -614,9 +591,7 @@ contains
       real(WP), intent(in) :: dt
       type(amrex_multifab), intent(in) :: U,V,W
       ! Transport data
-      real(WP) :: crude_VF,lvol,gvol
-      real(WP), dimension(3, 2) :: bounding_pts
-      integer , dimension(3, 2) :: bb_indices
+      real(WP) :: lvol,gvol
       real(WP), dimension(3,14) :: cell
       real(WP), dimension(3, 9) :: face
       type(Poly24_type)  :: remap_cell
@@ -689,20 +664,16 @@ contains
                   do j=lbound(interf,2),ubound(interf,2)
                      do i=lbound(interf,1),ubound(interf,1)
                         ! Transfer cell to IRL
-                        !call new(localizer(i,j,k),allocation_planar_localizer)
-                        call new(localizer(i,j,k))!,allocation_planar_localizer)
+                        call new(localizer(i,j,k),allocation_planar_localizer)
                         call setFromRectangularCuboid(localizer(i,j,k),&
                         & [this%amr%xlo+real(i  ,WP)*this%amr%dx(lvl),this%amr%ylo+real(j  ,WP)*this%amr%dy(lvl),this%amr%zlo+real(k  ,WP)*this%amr%dz(lvl)],&
                         & [this%amr%xlo+real(i+1,WP)*this%amr%dx(lvl),this%amr%ylo+real(j+1,WP)*this%amr%dy(lvl),this%amr%zlo+real(k+1,WP)*this%amr%dz(lvl)])
                         ! PLIC interface
-                        !call new(liquid_gas_interface(i,j,k),allocation_planar_separator)
-                        call new(liquid_gas_interface(i,j,k))!,allocation_planar_separator)
+                        call new(liquid_gas_interface(i,j,k),allocation_planar_separator)
                         ! PLIC+mesh with connectivity (i.e., link)
-                        !call new(localized_separator_link(i,j,k),allocation_localized_separator_link,localizer(i,j,k),liquid_gas_interface(i,j,k))
-                        call new(localized_separator_link(i,j,k),localizer(i,j,k),liquid_gas_interface(i,j,k))
+                        call new(localized_separator_link(i,j,k),allocation_localized_separator_link,localizer(i,j,k),liquid_gas_interface(i,j,k))
                         ! Mesh with connectivity
-                        !call new(localizer_link(i,j,k),allocation_localizer_link,localizer(i,j,k))
-                        call new(localizer_link(i,j,k),localizer(i,j,k))
+                        call new(localizer_link(i,j,k),allocation_localizer_link,localizer(i,j,k))
                      end do
                   end do
                end do
@@ -769,6 +740,9 @@ contains
             do k=bx%lo(3),bx%hi(3)
                do j=bx%lo(2),bx%hi(2)
                   do i=bx%lo(1),bx%hi(1)
+
+                     ! Skip cells in a fully liquid or gas neighborhood
+                     if (minval(volmom(i-1:i+1,j-1:j+1,k-1:k+1,1)).eq.maxval(volmom(i-1:i+1,j-1:j+1,k-1:k+1,1))) cycle
                      
                      ! Construct the cell and project it backwards in time
                      cell(:,1)=[this%amr%xlo+real(i+1,WP)*this%amr%dx(lvl),this%amr%ylo+real(j  ,WP)*this%amr%dy(lvl),this%amr%zlo+real(k+1,WP)*this%amr%dz(lvl)]; cell(:,1)=project(cell(:,1),-dt)
@@ -842,15 +816,6 @@ contains
                      
                      ! Form remapped cell in IRL
                      call construct(remap_cell,cell)
-                     
-                     ! Get bounding box for our remapped cell
-                     !call getBoundingPts(remap_cell,bounding_pts(:,1),bounding_pts(:,2))
-                     !bb_indices(:,1)=this%cfg%get_ijk_local(bounding_pts(:,1),[i,j,k])
-                     !bb_indices(:,2)=this%cfg%get_ijk_local(bounding_pts(:,2),[i,j,k])
-                     
-                     ! Crudely check phase information for remapped cell and skip cells where nothing is changing
-                     !crude_VF=this%crude_phase_test(bb_indices)
-                     !if (crude_VF.ge.0.0_WP) cycle
                      
                      ! Need full geometric flux
                      call getMoments(remap_cell,localized_separator_link(i,j,k),my_SepVM)
@@ -1013,17 +978,23 @@ contains
          ! Get volmom and interf data
          volmom=>this%volmom(lvl)%dataptr(mfi)
          interf=>this%interf(lvl)%dataptr(mfi)
+
+         ! Generate nominal interf
+         do k=lbound(interf,3),ubound(interf,3)
+            do j=lbound(interf,2),ubound(interf,2)
+               do i=lbound(interf,1),ubound(interf,1)
+                  interf(i,j,k,:)=[0.0_WP,0.0_WP,0.0_WP,sign(1.0_WP,volmom(i,j,k,1)-0.5_WP)]
+               end do
+            end do
+         end do
          
          ! Perform interface reconstruction
          do k=bx%lo(3),bx%hi(3)
             do j=bx%lo(2),bx%hi(2)
                do i=bx%lo(1),bx%hi(1)
                   
-                  ! Handle full cells
-                  if (volmom(i,j,k,1).lt.VFlo.or.volmom(i,j,k,1).gt.VFhi) then
-                     interf(i,j,k,:)=[0.0_WP,0.0_WP,0.0_WP,sign(1.0_WP,volmom(i,j,k,1)-0.5_WP)]
-                     cycle
-                  end if
+                  ! Skip full cells
+                  if (volmom(i,j,k,1).lt.VFlo.or.volmom(i,j,k,1).gt.VFhi) cycle
                   
                   ! Liquid-gas symmetry
                   flip=.false.

@@ -46,7 +46,7 @@ contains
       real(WP), dimension(3),intent(in) :: xyz
       real(WP), intent(in) :: t
       real(WP) :: G
-      G=0.1_WP-sqrt(sum((xyz-[0.5_WP,0.75_WP,0.5_WP])**2))
+      G=0.15_WP-sqrt(sum((xyz-[0.35_WP,0.35_WP,0.35_WP])**2))
    end function levelset_function
    
    
@@ -236,7 +236,7 @@ contains
          !real(WP)              , dimension(:,:,:,:), contiguous, pointer :: myphi
          real(WP)              , dimension(:,:,:,:), contiguous, pointer :: volmom
          character(kind=c_char), dimension(:,:,:,:), contiguous, pointer :: mytag
-         integer  :: i,j,k,ii,jj,kk
+         integer  :: i,j,k
          ! Convert pointer
          tag=ptag
          ! Loop over my boxes
@@ -257,21 +257,11 @@ contains
                      !if (myphi(i,j,k,1).ge.1.15_WP) mytag(i,j,k,1)=tagval
                      
                      ! Refinement based on VOF
-                     if (volmom(i,j,k,1).ge.VFlo.and.volmom(i,j,k,1).le.VFhi) then
+                     if (maxval(volmom(i-1:i+1,j-1:j+1,k-1:k+1,1)).ne.minval(volmom(i-1:i+1,j-1:j+1,k-1:k+1,1))) then
                         mytag(i,j,k,1)=tagval
                      else
                         mytag(i,j,k,1)=clrval
                      end if
-                     !outer: do kk=k-1,k+1
-                     !   do jj=j-1,j+1
-                     !      do ii=i-1,i+1
-                     !         if (volmom(ii,jj,kk,1).ne.volmom(i,j,k,1)) then
-                     !            mytag(i,j,k,1)=tagval
-                     !            exit outer
-                     !         end if
-                     !      end do
-                     !   end do
-                     !end do outer
                      
                   end do
                end do
@@ -333,12 +323,12 @@ contains
 
       ! Finish data initialization
       finish_data: block
-         integer :: lvl
          call amr%average_down(sc%SC)
          call amr%average_down(vf%volmom)
-         do lvl=0,amr%clvl()
-            call vf%build_plicnet(lvl=lvl,time=time%t)
-         end do
+         call vf%fill_volmom(lvl=0,time=time%t,volmom=vf%volmom(0))
+         call vf%build_plicnet(lvl=amr%clvl(),time=time%t)
+         call amr%average_down(vf%interf)
+         call vf%fill_interf(lvl=0,time=time%t,interf=vf%interf(0))
       end block finish_data
       
       ! Prepare Ensight output
@@ -412,7 +402,7 @@ contains
          ! Create velocity field
          update_velocity_vf: block
             use amrex_amr_module, only: amrex_mfiter,amrex_box,amrex_fab,amrex_fab_destroy
-            use mathtools,        only: Pi
+            use mathtools,        only: Pi,twoPi
             use mpi_f08,          only: MPI_ALLREDUCE,MPI_IN_PLACE,MPI_MAX
             use parallel,         only: MPI_REAL_WP
             type(amrex_mfiter) :: mfi
@@ -435,19 +425,9 @@ contains
                pU=>U%dataptr(mfi)
                pV=>V%dataptr(mfi)
                pW=>W%dataptr(mfi)
-               ! Set the velocity field - 3D deformation field test case
-               !do k=kmino_,kmaxo_
-               !   do j=jmino_,jmaxo_
-               !      do i=imino_,imaxo_
-               !         U(i,j,k) = +2.0_WP*sin(   Pi*x (i))**2*sin(twoPi*ym(j))   *sin(twoPi*zm(k))   *cos(Pi*(time-0.5_WP*dt)/3.0_WP)
-               !         V(i,j,k) = -       sin(twoPi*xm(i))   *sin(   Pi*y (j))**2*sin(twoPi*zm(k))   *cos(Pi*(time-0.5_WP*dt)/3.0_WP)
-               !         W(i,j,k) = -       sin(twoPi*xm(i))   *sin(twoPi*ym(j))   *sin(   Pi*z (k))**2*cos(Pi*(time-0.5_WP*dt)/3.0_WP)
-               !      end do
-               !   end do
-               !end do
                ! Create streamfunction for our vortex on a larger box
                tbx=bx; call tbx%grow(no); call tbx%convert([.true.,.true.,.true.])
-               call stream%resize(tbx,1); psi=>stream%dataptr()
+               call stream%resize(tbx,2); psi=>stream%dataptr()
                do k=tbx%lo(3),tbx%hi(3)
                   do j=tbx%lo(2),tbx%hi(2)
                      do i=tbx%lo(1),tbx%hi(1)
@@ -456,19 +436,21 @@ contains
                         y=amr%ylo+real(j,WP)*amr%dy(amr%clvl())
                         z=amr%zlo+real(k,WP)*amr%dz(amr%clvl())
                         ! Evaluate streamfunction
-                        psi(i,j,k,1)=sin(Pi*x)**2*sin(Pi*y)**2*cos(Pi*time%tmid/time%tmax)*(1.0_WP/Pi)
+                        psi(i,j,k,1)=-sin(Pi*x)**2*sin(Pi*y)**2*sin(twoPi*z)*cos(Pi*time%tmid/time%tmax)*(1.0_WP/Pi)
+                        psi(i,j,k,2)=-sin(Pi*x)**2*sin(twoPi*y)*sin(Pi*z)**2*cos(Pi*time%tmid/time%tmax)*(1.0_WP/Pi)
                      end do
                   end do
                end do
-               ! Loop on the x face and compute U=-d(psi)/dy
+               ! Loop on the x face and compute U=-d(psi1)/dy-d(psi2)/dz
                do k=lbound(pU,3),ubound(pU,3)
                   do j=lbound(pU,2),ubound(pU,2)
                      do i=lbound(pU,1),ubound(pU,1)
-                        pU(i,j,k,1)=-((psi(i,j+1,k+1,1)+psi(i,j+1,k,1))-(psi(i,j,k+1,1)+psi(i,j,k,1)))*(0.5_WP/amr%dy(amr%clvl()))
+                        pU(i,j,k,1)=-((psi(i,j+1,k+1,1)+psi(i,j+1,k,1))-(psi(i,j,k+1,1)+psi(i,j,k,1)))*(0.5_WP/amr%dy(amr%clvl()))&
+                        &           -((psi(i,j+1,k+1,2)+psi(i,j,k+1,2))-(psi(i,j+1,k,2)+psi(i,j,k,2)))*(0.5_WP/amr%dz(amr%clvl()))
                      end do
                   end do
                end do
-               ! Loop on the y face and compute V=+d(psi)/dz
+               ! Loop on the y face and compute V=+d(psi1)/dx
                do k=lbound(pV,3),ubound(pV,3)
                   do j=lbound(pV,2),ubound(pV,2)
                      do i=lbound(pV,1),ubound(pV,1)
@@ -476,11 +458,11 @@ contains
                      end do
                   end do
                end do
-               ! Loop on the z face and set W=1.0_WP
+               ! Loop on the z face and compute W=+d(psi2)/dx
                do k=lbound(pW,3),ubound(pW,3)
                   do j=lbound(pW,2),ubound(pW,2)
                      do i=lbound(pW,1),ubound(pW,1)
-                        pW(i,j,k,1)=0.0_WP
+                        pW(i,j,k,1)=+((psi(i+1,j+1,k,2)+psi(i+1,j,k,2))-(psi(i,j+1,k,2)+psi(i,j,k,2)))*(0.5_WP/amr%dx(amr%clvl()))
                      end do
                   end do
                end do
@@ -502,14 +484,32 @@ contains
             ! Destroy streamfunction
             call amrex_fab_destroy(stream)
          end block update_velocity_vf
+         ! Check volume here
+         int_volmom1: block
+            real(WP) :: VFint
+            VFint=vf%volmom(0)%sum(comp=1)*(vf%amr%dx(0)*vf%amr%dy(0)*vf%amr%dz(0))/vf%amr%vol
+            if (vf%amr%amroot) print*,'VFint before transport coarse =',VFint
+         end block int_volmom1
          ! Advance VOF
          call vf%advance(lvl=amr%clvl(),time=time%t,dt=time%dt,U=U,V=V,W=W)
          call amr%average_down(vf%volmom)
-         do lvl=0,amr%clvl()
-            call vf%build_plicnet(lvl=lvl,time=time%t)
-         end do
+         call vf%fill_volmom(lvl=0,time=time%t,volmom=vf%volmom(0)) !< Because average down does not fill ghost cells!
+         call vf%build_plicnet(lvl=amr%clvl(),time=time%t)
+         call amr%average_down(vf%interf)
+         call vf%fill_interf(lvl=0,time=time%t,interf=vf%interf(0))
+         ! Check volume here
+         int_volmom2: block
+            real(WP) :: VFint
+            VFint=vf%volmom(0)%sum(comp=1)*(vf%amr%dx(0)*vf%amr%dy(0)*vf%amr%dz(0))/vf%amr%vol
+            if (vf%amr%amroot) print*,'VFint after  transport coarse =',VFint
+         end block int_volmom2
+         ! Check CFL
+         check_cfl: block
+            real(WP) :: cfl
+            cfl=max(U%max(1),V%max(1),W%max(1))!*time%dt/min(vf%amr%dx(amr%clvl()),vf%amr%dy(amr%clvl()),vf%amr%dz(amr%clvl()))
+            if (vf%amr%amroot) print*,'CFL on finest mesh =',cfl,cfl*time%dt/min(vf%amr%dx(amr%clvl()),vf%amr%dy(amr%clvl()),vf%amr%dz(amr%clvl()))
+         end block check_cfl
          
-
          
          ! Remember old scalar
          call sc%copy2old()
