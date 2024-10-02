@@ -1,0 +1,37 @@
+# Parallelization
+Partition :     8 1 1
+I/O partition : 1 1 1
+
+# Mesh definition
+Lx : 16
+Ly : 4
+Lz : 4
+
+nx : 256
+ny : 64
+nz : 64
+
+Stretched cells in yz : 16
+Stretch ratio in yz :   1.07
+
+# Fluid properties
+Reynolds number :      5000
+Weber number :         1000
+Viscosity ratio :      50
+Density ratio :        50
+
+# Time integration
+Max timestep size : 2.5e-2
+Max cfl number :    0.9
+Max time :          2.0
+
+# Other options
+Use implicit solver : .false.
+Use SGS model :       .false.
+
+# Pressure solver
+Pressure tolerance : 1e-4
+Pressure iteration : 10
+
+# Ensight output
+Ensight output period : 1
