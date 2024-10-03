@@ -27,3 +27,7 @@ Density :           1
 
 # Ensight output
 Ensight output period : 1
+
+# Restart handling
+Restart output period : 100
+Restart from : restart/data_1.00000E+02
