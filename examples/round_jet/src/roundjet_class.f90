@@ -25,19 +25,27 @@ module roundjet_class
       type(config) :: cfg
       
       !> Flow solver
-      type(vfs)         :: vf    !< Volume fraction solver
-      type(tpns)        :: fs    !< Two-phase flow solver
-      type(hypre_str)   :: ps    !< Structured Hypre linear solver for pressure
-      type(timetracker) :: time  !< Time info
+      type(vfs)         :: vf     !< Volume fraction solver
+      type(tpns)        :: fs     !< Two-phase flow solver
+      type(hypre_str)   :: ps     !< Structured Hypre linear solver for pressure
+      type(timetracker) :: time   !< Time info
+      
+      !> Implicit solver
+      logical     :: use_implicit !< Is an implicit solver used?
+      type(ddadi) :: vs           !< DDADI solver for velocity
+      
+      !> SGS modeling
+      logical        :: use_sgs   !< Is an LES model used?
+      type(sgsmodel) :: sgs       !< SGS model for eddy viscosity
       
       !> Ensight postprocessing
-      type(surfmesh) :: smesh    !< Surface mesh for interface
-      type(ensight)  :: ens_out  !< Ensight output for flow variables
-      type(event)    :: ens_evt  !< Event trigger for Ensight output
+      type(surfmesh) :: smesh     !< Surface mesh for interface
+      type(ensight)  :: ens_out   !< Ensight output for flow variables
+      type(event)    :: ens_evt   !< Event trigger for Ensight output
       
-      !> Simulation monitor file
-      type(monitor) :: mfile     !< General simulation monitoring
-      type(monitor) :: cflfile   !< CFL monitoring
+      !> Simulation monitoring files
+      type(monitor) :: mfile      !< General simulation monitoring
+      type(monitor) :: cflfile    !< CFL monitoring
       
       !> Work arrays
       real(WP), dimension(:,:,:,:,:), allocatable :: gradU           !< Velocity gradient
@@ -48,20 +56,12 @@ module roundjet_class
       type(iterator) :: vof_removal_layer  !< Edge of domain where we actively remove VOF
       real(WP) :: vof_removed              !< Integral of VOF removed
       
-      !> SGS modeling
-      logical        :: use_sgs  !< Is an LES model used?
-      type(sgsmodel) :: sgs      !< SGS model for eddy viscosity
-
-      !> Implicit solver
-      logical     :: use_implicit !< Is an implicit solver used?
-      type(ddadi) :: vs           !< DDADI solver for velocity
-
    contains
-      procedure, private :: geometry_init          !< Initialize geometry for nozzle
-      procedure, private :: simulation_init        !< Initialize simulation for nozzle
-      procedure :: init                            !< Initialize nozzle simulation
-      procedure :: step                            !< Advance nozzle simulation by one time step
-      procedure :: final                           !< Finalize nozzle simulation
+      procedure, private :: geometry_init          !< Initialize geometry for round jet
+      procedure, private :: simulation_init        !< Initialize simulation for round jet
+      procedure :: init                            !< Initialize round jet simulation
+      procedure :: step                            !< Advance round jet simulation by one time step
+      procedure :: final                           !< Finalize round jet simulation
    end type roundjet
    
    !> Hardcode size of buffer layer for VOF removal
@@ -295,8 +295,8 @@ contains
          this%fs=tpns(cfg=this%cfg,name='Two-phase NS')
          ! Set fluid properties
          this%fs%rho_g=1.0_WP; call param_read('Density ratio',this%fs%rho_l)
-         call param_read('Reynolds number',this%fs%visc_g); this%fs%visc_g=1.0_WP/this%fs%visc_g
-         call param_read('Viscosity ratio',this%fs%visc_l); this%fs%visc_l=this%fs%visc_g*this%fs%visc_l
+         call param_read('Reynolds number',this%fs%visc_l); this%fs%visc_l=1.0_WP/this%fs%visc_l
+         call param_read('Viscosity ratio',this%fs%visc_g); this%fs%visc_g=this%fs%visc_l/this%fs%visc_g
          call param_read('Weber number',this%fs%sigma); this%fs%sigma=1.0_WP/this%fs%sigma
          ! Inflow on the left
          call this%fs%add_bcond(name='inflow' ,type=dirichlet      ,face='x',dir=-1,canCorrect=.false.,locator=xm_locator)
