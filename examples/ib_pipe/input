@@ -19,7 +19,7 @@ Max time :          1000
 
 # Other options
 Use implicit solver : .false.
-Use sgs model :       .false.
+Use SGS model :       .false.
 
 # Fluid properties
 Dynamic viscosity : 2e-4
