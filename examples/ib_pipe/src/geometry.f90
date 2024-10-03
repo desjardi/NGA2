@@ -40,7 +40,7 @@ contains
          call param_read('nz',nz); allocate(z(nz+1))
          
          dx=Lx/real(nx,WP)
-         no=6
+         no=4
          if (ny.gt.1) then
             Ly=D+real(2*no,WP)*D/real(ny-2*no,WP)
          else
@@ -64,10 +64,10 @@ contains
          end do
          
          ! General serial grid object
-         grid=sgrid(coord=cartesian,no=2,x=x,y=y,z=z,xper=.true.,yper=.true.,zper=.true.,name='pipe')
+         grid=sgrid(coord=cartesian,no=1,x=x,y=y,z=z,xper=.true.,yper=.true.,zper=.true.,name='pipe')
          
       end block create_grid
-         
+      
       
       ! Create a config from that grid on our entire group
       create_cfg: block
@@ -90,7 +90,7 @@ contains
          do k=cfg%kmino_,cfg%kmaxo_
             do j=cfg%jmino_,cfg%jmaxo_
                do i=cfg%imino_,cfg%imaxo_
-                  cfg%Gib(i,j,k)=sqrt(cfg%ym(j)**2+cfg%zm(k)**2)-0.5_WP*D*(1.0_WP-0.2_WP*exp(-(cfg%xm(i)-0.5_WP*cfg%xL)**2/(0.5_WP*D)**2))
+                  cfg%Gib(i,j,k)=sqrt(cfg%ym(j)**2+cfg%zm(k)**2)-0.5_WP*D
                end do
             end do
          end do
