@@ -555,6 +555,7 @@ contains
             this%vf%VF(i,j,k)=0.0_WP
          end do
          call MPI_ALLREDUCE(MPI_IN_PLACE,this%vof_removed,1,MPI_REAL_WP,MPI_SUM,this%cfg%comm,ierr)
+         call this%vf%clean_irl_and_band()
       end block remove_vof
       
       ! Output to ensight
