@@ -44,7 +44,7 @@
 # Time integration
 [Jet] Max timestep size : 2.5e-2
 [Jet] Max cfl number :    0.8
-[Jet] Max time :          2.0
+[Jet] Max time :          100
 
 # Pressure solver
 [Jet] Pressure tolerance : 1e-4
