@@ -110,9 +110,9 @@ contains
       integer, dimension(3) :: partition
       
       ! Read in grid definition
-      call param_read('Lx',Lx); call param_read('nx',nx); allocate(x_uni(nx+1))
-      call param_read('Ly',Ly); call param_read('ny',ny); allocate(y_uni(ny+1))
-      call param_read('Lz',Lz); call param_read('nz',nz); allocate(z_uni(nz+1))
+      call param_read('[Jet] Lx',Lx); call param_read('[Jet] nx',nx); allocate(x_uni(nx+1))
+      call param_read('[Jet] Ly',Ly); call param_read('[Jet] ny',ny); allocate(y_uni(ny+1))
+      call param_read('[Jet] Lz',Lz); call param_read('[Jet] nz',nz); allocate(z_uni(nz+1))
       
       ! Create simple rectilinear grid
       do i=1,nx+1
@@ -126,10 +126,10 @@ contains
       end do
       
       ! Add stretching
-      call param_read('Stretched cells in yz',ns_yz,default=0)
-      if (ns_yz.gt.0) call param_read('Stretch ratio in yz',sratio_yz)
-      call param_read('Stretched cells in x' ,ns_x ,default=0)
-      if (ns_x .gt.0) call param_read('Stretch ratio in x' ,sratio_x )
+      call param_read('[Jet] Stretched cells in yz',ns_yz,default=0)
+      if (ns_yz.gt.0) call param_read('[Jet] Stretch ratio in yz',sratio_yz)
+      call param_read('[Jet] Stretched cells in x' ,ns_x ,default=0)
+      if (ns_x .gt.0) call param_read('[Jet] Stretch ratio in x' ,sratio_x )
       allocate(x(nx+1+1*ns_x )); x(      1:      1+nx)=x_uni
       allocate(y(ny+1+2*ns_yz)); y(ns_yz+1:ns_yz+1+ny)=y_uni
       allocate(z(nz+1+2*ns_yz)); z(ns_yz+1:ns_yz+1+nz)=z_uni
@@ -150,10 +150,10 @@ contains
       end do
       
       ! General serial grid object
-      grid=sgrid(coord=cartesian,no=3,x=x,y=y,z=z,xper=.false.,yper=.false.,zper=.false.,name='roundjet')
+      grid=sgrid(coord=cartesian,no=3,x=x,y=y,z=z,xper=.false.,yper=.false.,zper=.false.,name='jet')
       
       ! Read in partition
-      call param_read('Partition',partition)
+      call param_read('[Jet] Partition',partition)
       
       ! Create partitioned grid
       this%cfg=config(grp=group,decomp=partition,grid=grid)
@@ -174,8 +174,9 @@ contains
       initialize_timetracker: block
          use param, only: param_read
          this%time=timetracker(amRoot=this%cfg%amRoot)
-         call param_read('Max timestep size',this%time%dtmax)
-         call param_read('Max cfl number',this%time%cflmax)
+         call param_read('[Jet] Max timestep size',this%time%dtmax)
+         call param_read('[Jet] Max cfl number',this%time%cflmax)
+         call param_read('[Jet] Max time',this%time%tmax)
          this%time%dt=this%time%dtmax
          this%time%itmax=2
       end block initialize_timetracker
@@ -310,10 +311,10 @@ contains
          ! Configure pressure solver
          this%ps=hypre_str(cfg=this%cfg,name='Pressure',method=pcg_pfmg2,nst=7)
          this%ps%maxlevel=16
-         call param_read('Pressure iteration',this%ps%maxit)
-         call param_read('Pressure tolerance',this%ps%rcvg)
+         call param_read('[Jet] Pressure iteration',this%ps%maxit)
+         call param_read('[Jet] Pressure tolerance',this%ps%rcvg)
          ! Check if we want to use an implicit solver
-         call param_read('Use implicit solver',this%use_implicit)
+         call param_read('[Jet] Use implicit solver',this%use_implicit)
          if (this%use_implicit) then
             ! Configure implicit velocity solver
             this%vs=ddadi(cfg=this%cfg,name='Velocity',nst=7)
@@ -355,7 +356,7 @@ contains
       ! Create an LES model
       create_sgs: block
          use param, only: param_read
-         call param_read('Use SGS model',this%use_sgs)
+         call param_read('[Jet] Use SGS model',this%use_sgs)
          if (this%use_sgs) this%sgs=sgsmodel(cfg=this%fs%cfg,umask=this%fs%umask,vmask=this%fs%vmask,wmask=this%fs%wmask)
       end block create_sgs
       
@@ -371,10 +372,10 @@ contains
       create_ensight: block
          use param, only: param_read
          ! Create Ensight output from cfg
-         this%ens_out=ensight(cfg=this%cfg,name='roundjet')
+         this%ens_out=ensight(cfg=this%cfg,name='jet')
          ! Create event for Ensight output
          this%ens_evt=event(time=this%time,name='Ensight output')
-         call param_read('Ensight output period',this%ens_evt%tper)
+         call param_read('[Jet] Ensight output period',this%ens_evt%tper)
          ! Add variables to output
          call this%ens_out%add_vector('velocity',this%Ui,this%Vi,this%Wi)
          call this%ens_out%add_scalar('pressure',this%fs%P)
@@ -392,7 +393,7 @@ contains
          call this%fs%get_max()
          call this%vf%get_max()
          ! Create simulation monitor
-         this%mfile=monitor(this%fs%cfg%amRoot,'simulation')
+         this%mfile=monitor(this%fs%cfg%amRoot,'jet')
          call this%mfile%add_column(this%time%n,'Timestep number')
          call this%mfile%add_column(this%time%t,'Time')
          call this%mfile%add_column(this%time%dt,'Timestep size')

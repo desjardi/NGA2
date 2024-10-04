@@ -1,37 +1,67 @@
+#########################
+# Pipe input parameters #
+#########################
 # Parallelization
-Partition :     8 1 1
-I/O partition : 1 1 1
+[Pipe] Partition :     8 1 1
+[Pipe] I/O partition : 1 1 1
 
 # Mesh definition
-Lx : 16
-Ly : 4
-Lz : 4
-
-nx : 256
-ny : 64
-nz : 64
-
-Stretched cells in yz : 16
-Stretch ratio in yz :   1.07
-
-# Fluid properties
-Reynolds number :      5000
-Weber number :         1000
-Viscosity ratio :      50
-Density ratio :        50
+[Pipe] Length : 4
+[Pipe] nx : 256
+[Pipe] ny : 64
+[Pipe] nz : 64
 
 # Time integration
-Max timestep size : 2.5e-2
-Max cfl number :    0.9
-Max time :          2.0
+[Pipe] Max timestep size : 0.005
+[Pipe] Max cfl number :    0.8
 
 # Other options
-Use implicit solver : .false.
-Use SGS model :       .false.
+[Pipe] Use implicit solver : .false.
+[Pipe] Use SGS model :       .false.
+
+# Restart handling
+[Pipe] Restart output period : 100
+[Pipe] Restart from : restart/pipe_1.00000E+02
+
+
+########################
+# Jet input parameters #
+########################
+# Parallelization
+[Jet] Partition :     8 1 1
+
+# Mesh definition
+[Jet] Lx : 16
+[Jet] Ly : 4
+[Jet] Lz : 4
+[Jet] nx : 256
+[Jet] ny : 64
+[Jet] nz : 64
+
+[Jet] Stretched cells in yz : 16
+[Jet] Stretch ratio in yz :   1.07
+
+# Time integration
+[Jet] Max timestep size : 2.5e-2
+[Jet] Max cfl number :    0.8
+[Jet] Max time :          2.0
 
 # Pressure solver
-Pressure tolerance : 1e-4
-Pressure iteration : 10
+[Jet] Pressure tolerance : 1e-4
+[Jet] Pressure iteration : 10
+
+# Other options
+[Jet] Use implicit solver : .false.
+[Jet] Use SGS model :       .false.
 
 # Ensight output
-Ensight output period : 1
+[Jet] Ensight output period : 1
+
+
+###################
+# Flow parameters #
+###################
+Reynolds number : 5000
+Weber number :    1000
+Viscosity ratio : 50
+Density ratio :   50
