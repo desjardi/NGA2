@@ -186,7 +186,7 @@ contains
          call param_read('Gas Mach number',Mag); Pref = 1.0_WP/(gamm_g*Mag**2)
          call param_read('Liquid Mach number',Mal); Pref_l = r_rho/(gamm_l*Mal**2) - Pref
          call param_read('Gas constant', R)
-         call param_read('Gas Prandtl number', g_Pr); hdff_g = (R*gamma_g/(gamma_g-1.0_WP))*visc_g/g_Pr
+         call param_read('Gas Prandtl number', g_Pr); hdff_g = (R*gamm_g/(gamm_g-1.0_WP))*visc_g/g_Pr
          call param_read('Thermal conductivity ratio',r_hdff); hdff_l=hdff_g*r_hdff;
          
          ! Register equations of state
