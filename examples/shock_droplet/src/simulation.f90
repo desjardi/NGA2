@@ -171,9 +171,9 @@ contains
          integer :: i,j,k,n
          real(WP), dimension(3) :: xyz
          real(WP) :: r_rho,Reg,r_visc,Mag,Mal,Weg
-         real(WP) :: gamm_l,Pref_l,gamm_g,visc_l,visc_g,Pref
+         real(WP) :: gamm_l,Pref_l,gamm_g,visc_l,visc_g,Pref, R, g_Pr, r_hdff
          real(WP) :: xshock,vshock,relshockvel
-         real(WP) :: Grho0, GP0, Grho1, GP1, ST, Ma1, Ma, Lrho0, LP0, Mas
+         real(WP) :: Grho0, GP0, Grho1, GP1, ST, Ma1, Ma, Lrho0, LP0, Mas, hdff_g, hdff_l
          type(bcond), pointer :: mybc
          ! Create material model class
          matmod=matm(cfg=cfg,name='Liquid-gas models')
@@ -185,6 +185,10 @@ contains
          call param_read('Dynamic viscosity ratio',r_visc); visc_l=visc_g*r_visc;
          call param_read('Gas Mach number',Mag); Pref = 1.0_WP/(gamm_g*Mag**2)
          call param_read('Liquid Mach number',Mal); Pref_l = r_rho/(gamm_l*Mal**2) - Pref
+         call param_read('Gas constant', R)
+         call param_read('Gas Prandtl number', g_Pr); hdff_g = (R*gamma_g/(gamma_g-1.0_WP))*visc_g/g_Pr
+         call param_read('Thermal conductivity ratio',r_hdff); hdff_l=hdff_g*r_hdff;
+         
          ! Register equations of state
          call matmod%register_stiffenedgas('liquid',gamm_l,Pref_l)
          call matmod%register_idealgas('gas',gamm_g)
@@ -193,7 +197,8 @@ contains
          ! Register flow solver variables with material models
          call matmod%register_thermoflow_variables('liquid',fs%Lrho,fs%Ui,fs%Vi,fs%Wi,fs%LrhoE,fs%LP)
          call matmod%register_thermoflow_variables('gas'   ,fs%Grho,fs%Ui,fs%Vi,fs%Wi,fs%GrhoE,fs%GP)
-         call matmod%register_diffusion_thermo_models(viscconst_gas=visc_g, viscconst_liquid=visc_l)
+         call matmod%register_diffusion_thermo_models(viscconst_gas=visc_g, viscconst_liquid=visc_l, &
+                                                      hdffconst_gas=hdff_g, hdffconst_liquid=hdff_l)
          ! Read in surface tension coefficient
          call param_read('Gas Weber number',Weg); fs%sigma=1.0_WP/(Weg+epsilon(Weg))
          ! Configure pressure solver

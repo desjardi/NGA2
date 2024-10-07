@@ -30,6 +30,9 @@ Liquid Mach number : 0.01
 Shock Mach number : 1.47
 Liquid gamma :	      	      4.4
 Gas gamma : 		      1.4
+Gas constant:                 287
+Gas Prandtl number:	      0.71
+Thermal conductivity ratio:   23.4
 
 # Time integration
 Max timestep size : 5e-2
