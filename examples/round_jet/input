@@ -12,7 +12,7 @@
 [Pipe] nz : 64
 
 # Time integration
-[Pipe] Max timestep size : 0.005
+[Pipe] Max timestep size : 0.0075
 [Pipe] Max cfl number :    0.8
 
 # Other options
@@ -20,48 +20,53 @@
 [Pipe] Use SGS model :       .false.
 
 # Restart handling
-[Pipe] Restart output period : 100
-[Pipe] Restart from : restart/pipe_1.00000E+02
+[Pipe] Restart output period : 10
+[Pipe] Restart from : restart/pipe_Re3000
 
 
 ########################
 # Jet input parameters #
 ########################
 # Parallelization
-[Jet] Partition :     8 1 1
+[Jet] Partition : 8 1 1
+[Jet] I/O partition : 1 1 1
 
 # Mesh definition
-[Jet] Lx : 16
-[Jet] Ly : 4
-[Jet] Lz : 4
-[Jet] nx : 256
-[Jet] ny : 64
-[Jet] nz : 64
+[Jet] Lx : 20
+[Jet] Ly : 5
+[Jet] Lz : 5
+[Jet] nx : 384
+[Jet] ny : 96
+[Jet] nz : 96
 
 [Jet] Stretched cells in yz : 16
 [Jet] Stretch ratio in yz :   1.07
 
 # Time integration
-[Jet] Max timestep size : 2.5e-2
+[Jet] Max timestep size : 1.5e-2
 [Jet] Max cfl number :    0.8
 [Jet] Max time :          100
 
 # Pressure solver
 [Jet] Pressure tolerance : 1e-4
-[Jet] Pressure iteration : 10
+[Jet] Pressure iteration : 20
 
 # Other options
 [Jet] Use implicit solver : .false.
-[Jet] Use SGS model :       .false.
+[Jet] Use SGS model :       .true.
 
 # Ensight output
 [Jet] Ensight output period : 1
+
+# Restart handling
+[Jet] Restart output period : 10
+[Jet] Restart from : restart/jet_1.00050E+01
 
 
 ###################
 # Flow parameters #
 ###################
-Reynolds number : 5000
-Weber number :    1000
+Reynolds number : 3000
+Weber number :    500
 Viscosity ratio : 50
 Density ratio :   50

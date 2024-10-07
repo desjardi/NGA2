@@ -67,13 +67,14 @@ contains
    
    
    !> Initialization of periodicpipe simulation
-   subroutine init(this)
-      use parallel, only: amRoot
+   subroutine init(this,group)
+      use mpi_f08, only: MPI_Group
       implicit none
       class(periodicpipe), intent(inout) :: this
+      type(MPI_Group), intent(in) :: group
       
       ! Initialize the geometry
-      call this%geometry_init()
+      call this%geometry_init(group)
       
       ! Initialize the simulation
       call this%simulation_init()
@@ -82,13 +83,14 @@ contains
    
    
    !> Initialize geometry
-   subroutine geometry_init(this)
+   subroutine geometry_init(this,group)
+      use mpi_f08,        only: MPI_Group
       use sgrid_class,    only: sgrid,cartesian
       use param,          only: param_read
-      use parallel,       only: group
       use ibconfig_class, only: sharp
       implicit none
       class(periodicpipe) :: this
+      type(MPI_Group), intent(in) :: group
       integer :: i,j,k,nx,ny,nz,no
       real(WP) :: Lx,Ly,Lz,dx,D
       real(WP), dimension(:), allocatable :: x,y,z
@@ -269,7 +271,7 @@ contains
          ! Check if a restart file was provided
          call param_read('[Pipe] Restart from',filename,default='')
          this%restarted=.false.; if (len_trim(filename).gt.0) this%restarted=.true.
-         ! Restart the simulation
+         ! Perform pardata initialization
          if (this%restarted) then
             ! Read in the file
             call this%df%initialize(pg=this%cfg,iopartition=iopartition,fdata=trim(filename))
@@ -286,6 +288,7 @@ contains
             call this%df%pull(name='t' ,val=this%time%t )
             call this%df%pull(name='dt',val=this%time%dt)
             this%time%told=this%time%t-this%time%dt
+            !this%time%dt=this%time%dtmax !< Force max timestep size anyway
          else
             ! Prepare a new directory for storing files for restart
             if (this%cfg%amRoot) then
