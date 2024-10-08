@@ -56,8 +56,6 @@ module periodicpipe_class
       type(event)   :: save_evt
       
    contains
-      procedure, private :: geometry_init          !< Initialize geometry for pipe
-      procedure, private :: simulation_init        !< Initialize simulation for pipe
       procedure :: init                            !< Initialize pipe simulation
       procedure :: step                            !< Advance pipe simulation by one time step
       procedure :: final                           !< Finalize pipe simulation
@@ -69,101 +67,82 @@ contains
    !> Initialization of periodicpipe simulation
    subroutine init(this,group)
       use mpi_f08, only: MPI_Group
+      use param,   only: param_read
       implicit none
       class(periodicpipe), intent(inout) :: this
       type(MPI_Group), intent(in) :: group
-      
-      ! Initialize the geometry
-      call this%geometry_init(group)
-      
-      ! Initialize the simulation
-      call this%simulation_init()
-      
-   end subroutine init
-   
-   
-   !> Initialize geometry
-   subroutine geometry_init(this,group)
-      use mpi_f08,        only: MPI_Group
-      use sgrid_class,    only: sgrid,cartesian
-      use param,          only: param_read
-      use ibconfig_class, only: sharp
-      implicit none
-      class(periodicpipe) :: this
-      type(MPI_Group), intent(in) :: group
-      integer :: i,j,k,nx,ny,nz,no
-      real(WP) :: Lx,Ly,Lz,dx,D
-      real(WP), dimension(:), allocatable :: x,y,z
-      type(sgrid) :: grid
-      integer, dimension(3) :: partition
-      
-      ! Nominal parameters
-      D=1.0_WP !< Unity diameter
-      no=2     !< Allow for two dead cells for IB to take effect
-      
-      ! Read in grid definition
-      call param_read('[Pipe] Length',Lx)
-      call param_read('[Pipe] nx',nx); allocate(x(nx+1))
-      call param_read('[Pipe] ny',ny); allocate(y(ny+1))
-      call param_read('[Pipe] nz',nz); allocate(z(nz+1))
-      dx=Lx/real(nx,WP)
-      
-      ! Adjust domain size to account for extra cells
-      if (ny.gt.1) then
-         Ly=D+real(2*no,WP)*D/real(ny-2*no,WP)
-      else
-         Ly=dx
-      end if
-      if (nz.gt.1) then
-         Lz=D+real(2*no,WP)*D/real(ny-2*no,WP)
-      else
-         Lz=dx
-      end if
-      
-      ! Create simple rectilinear grid
-      do i=1,nx+1
-         x(i)=real(i-1,WP)/real(nx,WP)*Lx
-      end do
-      do j=1,ny+1
-         y(j)=real(j-1,WP)/real(ny,WP)*Ly-0.5_WP*Ly
-      end do
-      do k=1,nz+1
-         z(k)=real(k-1,WP)/real(nz,WP)*Lz-0.5_WP*Lz
-      end do
-      
-      ! General serial grid object
-      grid=sgrid(coord=cartesian,no=1,x=x,y=y,z=z,xper=.true.,yper=.true.,zper=.true.,name='pipe')
-      
-      ! Read in partition
-      call param_read('[Pipe] Partition',partition,short='p')
-      
-      ! Create partitioned grid
-      this%cfg=ibconfig(grp=group,decomp=partition,grid=grid)
-      
-      ! Create masks for this config
-      do k=this%cfg%kmino_,this%cfg%kmaxo_
-         do j=this%cfg%jmino_,this%cfg%jmaxo_
-            do i=this%cfg%imino_,this%cfg%imaxo_
-               this%cfg%Gib(i,j,k)=sqrt(this%cfg%ym(j)**2+this%cfg%zm(k)**2)-0.5_WP*D
-            end do
-         end do
-      end do
-       ! Get normal vector
-      call this%cfg%calculate_normal()
-      ! Get VF field
-      call this%cfg%calculate_vf(method=sharp,allow_zero_vf=.false.)
-      
-   end subroutine geometry_init
-   
-   
-   !> Initialize simulation
-   subroutine simulation_init(this)
-      use param, only: param_read
-      implicit none
-      class(periodicpipe), intent(inout) :: this
       
 
-      ! Initialize time tracker with 1 subiterations
+      ! Initialize the config
+      initialize_config: block
+         use sgrid_class,    only: sgrid,cartesian
+         use ibconfig_class, only: sharp
+         integer :: i,j,k,nx,ny,nz,no
+         real(WP) :: Lx,Ly,Lz,dx,D
+         real(WP), dimension(:), allocatable :: x,y,z
+         type(sgrid) :: grid
+         integer, dimension(3) :: partition
+         
+         ! Nominal parameters
+         D=1.0_WP !< Unity diameter
+         no=2     !< Allow for two dead cells for IB to take effect
+         
+         ! Read in grid definition
+         call param_read('[Pipe] Length',Lx)
+         call param_read('[Pipe] nx',nx); allocate(x(nx+1))
+         call param_read('[Pipe] ny',ny); allocate(y(ny+1))
+         call param_read('[Pipe] nz',nz); allocate(z(nz+1))
+         dx=Lx/real(nx,WP)
+         
+         ! Adjust domain size to account for extra cells
+         if (ny.gt.1) then
+            Ly=D+real(2*no,WP)*D/real(ny-2*no,WP)
+         else
+            Ly=dx
+         end if
+         if (nz.gt.1) then
+            Lz=D+real(2*no,WP)*D/real(ny-2*no,WP)
+         else
+            Lz=dx
+         end if
+         
+         ! Create simple rectilinear grid
+         do i=1,nx+1
+            x(i)=real(i-1,WP)/real(nx,WP)*Lx
+         end do
+         do j=1,ny+1
+            y(j)=real(j-1,WP)/real(ny,WP)*Ly-0.5_WP*Ly
+         end do
+         do k=1,nz+1
+            z(k)=real(k-1,WP)/real(nz,WP)*Lz-0.5_WP*Lz
+         end do
+         
+         ! General serial grid object
+         grid=sgrid(coord=cartesian,no=1,x=x,y=y,z=z,xper=.true.,yper=.true.,zper=.true.,name='pipe')
+         
+         ! Read in partition
+         call param_read('[Pipe] Partition',partition,short='p')
+         
+         ! Create partitioned grid
+         this%cfg=ibconfig(grp=group,decomp=partition,grid=grid)
+         
+         ! Create masks for this config
+         do k=this%cfg%kmino_,this%cfg%kmaxo_
+            do j=this%cfg%jmino_,this%cfg%jmaxo_
+               do i=this%cfg%imino_,this%cfg%imaxo_
+                  this%cfg%Gib(i,j,k)=sqrt(this%cfg%ym(j)**2+this%cfg%zm(k)**2)-0.5_WP*D
+               end do
+            end do
+         end do
+         ! Get normal vector
+         call this%cfg%calculate_normal()
+         ! Get VF field
+         call this%cfg%calculate_vf(method=sharp,allow_zero_vf=.false.)
+         
+      end block initialize_config
+      
+
+      ! Initialize time tracker with 2 subiterations
       initialize_timetracker: block
          this%time=timetracker(amRoot=this%cfg%amRoot)
          call param_read('[Pipe] Max timestep size',this%time%dtmax)
@@ -352,7 +331,8 @@ contains
          !call this%cflfile%write()
       end block create_monitor
       
-   end subroutine simulation_init
+
+   end subroutine init
    
    
    !> Take one time step

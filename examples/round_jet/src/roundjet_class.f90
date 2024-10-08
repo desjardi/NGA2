@@ -63,8 +63,6 @@ module roundjet_class
       type(event)   :: save_evt
       
    contains
-      procedure, private :: geometry_init          !< Initialize geometry for round jet
-      procedure, private :: simulation_init        !< Initialize simulation for round jet
       procedure :: init                            !< Initialize round jet simulation
       procedure :: step                            !< Advance round jet simulation by one time step
       procedure :: final                           !< Finalize round jet simulation
@@ -74,8 +72,8 @@ module roundjet_class
    integer, parameter :: nlayer=4
    
 contains
-
-
+   
+   
    !> Function that defines a level set function for a cylinder
    function levelset_cylinder(xyz,t) result(G)
       implicit none
@@ -88,97 +86,79 @@ contains
    
    !> Initialization of roundjet simulation
    subroutine init(this)
-      use parallel, only: amRoot
+      use param, only: param_read
       implicit none
       class(roundjet), intent(inout) :: this
       
-      ! Initialize the geometry
-      call this%geometry_init()
       
-      ! Initialize the simulation
-      call this%simulation_init()
-      
-   end subroutine init
-   
-   
-   !> Initialize geometry
-   subroutine geometry_init(this)
-      use sgrid_class, only: sgrid,cartesian
-      use param,       only: param_read
-      use parallel,    only: group
-      implicit none
-      class(roundjet) :: this
-      integer :: i,j,k,nx,ny,nz,ns_yz,ns_x
-      real(WP) :: Lx,Ly,Lz,xshift,sratio_yz,sratio_x
-      real(WP), dimension(:), allocatable :: x_uni,y_uni,z_uni
-      real(WP), dimension(:), allocatable :: x,y,z
-      type(sgrid) :: grid
-      integer, dimension(3) :: partition
-      
-      ! Read in grid definition
-      call param_read('[Jet] Lx',Lx); call param_read('[Jet] nx',nx); allocate(x_uni(nx+1))
-      call param_read('[Jet] Ly',Ly); call param_read('[Jet] ny',ny); allocate(y_uni(ny+1))
-      call param_read('[Jet] Lz',Lz); call param_read('[Jet] nz',nz); allocate(z_uni(nz+1))
-      
-      ! Create simple rectilinear grid
-      do i=1,nx+1
-         x_uni(i)=real(i-1,WP)/real(nx,WP)*Lx
-      end do
-      do j=1,ny+1
-         y_uni(j)=real(j-1,WP)/real(ny,WP)*Ly-0.5_WP*Ly
-      end do
-      do k=1,nz+1
-         z_uni(k)=real(k-1,WP)/real(nz,WP)*Lz-0.5_WP*Lz
-      end do
-      
-      ! Add stretching
-      call param_read('[Jet] Stretched cells in yz',ns_yz,default=0)
-      if (ns_yz.gt.0) call param_read('[Jet] Stretch ratio in yz',sratio_yz)
-      call param_read('[Jet] Stretched cells in x' ,ns_x ,default=0)
-      if (ns_x .gt.0) call param_read('[Jet] Stretch ratio in x' ,sratio_x )
-      allocate(x(nx+1+1*ns_x )); x(      1:      1+nx)=x_uni
-      allocate(y(ny+1+2*ns_yz)); y(ns_yz+1:ns_yz+1+ny)=y_uni
-      allocate(z(nz+1+2*ns_yz)); z(ns_yz+1:ns_yz+1+nz)=z_uni
-      do i=nx+2,nx+1+ns_x
-         x(i)=x(i-1)+sratio_x*(x(i-1)-x(i-2))
-      end do
-      do j=ns_yz,1,-1
-         y(j)=y(j+1)+sratio_yz*(y(j+1)-y(j+2))
-      end do
-      do j=ns_yz+2+ny,ny+1+2*ns_yz
-         y(j)=y(j-1)+sratio_yz*(y(j-1)-y(j-2))
-      end do
-      do k=ns_yz,1,-1
-         z(k)=z(k+1)+sratio_yz*(z(k+1)-z(k+2))
-      end do
-      do k=ns_yz+2+nz,nz+1+2*ns_yz
-         z(k)=z(k-1)+sratio_yz*(z(k-1)-z(k-2))
-      end do
-      
-      ! General serial grid object
-      grid=sgrid(coord=cartesian,no=3,x=x,y=y,z=z,xper=.false.,yper=.false.,zper=.false.,name='jet')
-      
-      ! Read in partition
-      call param_read('[Jet] Partition',partition)
-      
-      ! Create partitioned grid
-      this%cfg=config(grp=group,decomp=partition,grid=grid)
-      
-      ! No walls in the atomization domain
-      this%cfg%VF=1.0_WP
-      
-   end subroutine geometry_init
-   
-   
-   !> Initialize simulation
-   subroutine simulation_init(this)
-      implicit none
-      class(roundjet), intent(inout) :: this
+      ! Initialize the config
+      initialize_config: block
+         use sgrid_class, only: sgrid,cartesian
+         use parallel,    only: group
+         integer :: i,j,k,nx,ny,nz,ns_yz,ns_x
+         real(WP) :: Lx,Ly,Lz,xshift,sratio_yz,sratio_x
+         real(WP), dimension(:), allocatable :: x_uni,y_uni,z_uni
+         real(WP), dimension(:), allocatable :: x,y,z
+         type(sgrid) :: grid
+         integer, dimension(3) :: partition
+         
+         ! Read in grid definition
+         call param_read('[Jet] Lx',Lx); call param_read('[Jet] nx',nx); allocate(x_uni(nx+1))
+         call param_read('[Jet] Ly',Ly); call param_read('[Jet] ny',ny); allocate(y_uni(ny+1))
+         call param_read('[Jet] Lz',Lz); call param_read('[Jet] nz',nz); allocate(z_uni(nz+1))
+         
+         ! Create simple rectilinear grid
+         do i=1,nx+1
+            x_uni(i)=real(i-1,WP)/real(nx,WP)*Lx
+         end do
+         do j=1,ny+1
+            y_uni(j)=real(j-1,WP)/real(ny,WP)*Ly-0.5_WP*Ly
+         end do
+         do k=1,nz+1
+            z_uni(k)=real(k-1,WP)/real(nz,WP)*Lz-0.5_WP*Lz
+         end do
+         
+         ! Add stretching
+         call param_read('[Jet] Stretched cells in yz',ns_yz,default=0)
+         if (ns_yz.gt.0) call param_read('[Jet] Stretch ratio in yz',sratio_yz)
+         call param_read('[Jet] Stretched cells in x' ,ns_x ,default=0)
+         if (ns_x .gt.0) call param_read('[Jet] Stretch ratio in x' ,sratio_x )
+         allocate(x(nx+1+1*ns_x )); x(      1:      1+nx)=x_uni
+         allocate(y(ny+1+2*ns_yz)); y(ns_yz+1:ns_yz+1+ny)=y_uni
+         allocate(z(nz+1+2*ns_yz)); z(ns_yz+1:ns_yz+1+nz)=z_uni
+         do i=nx+2,nx+1+ns_x
+            x(i)=x(i-1)+sratio_x*(x(i-1)-x(i-2))
+         end do
+         do j=ns_yz,1,-1
+            y(j)=y(j+1)+sratio_yz*(y(j+1)-y(j+2))
+         end do
+         do j=ns_yz+2+ny,ny+1+2*ns_yz
+            y(j)=y(j-1)+sratio_yz*(y(j-1)-y(j-2))
+         end do
+         do k=ns_yz,1,-1
+            z(k)=z(k+1)+sratio_yz*(z(k+1)-z(k+2))
+         end do
+         do k=ns_yz+2+nz,nz+1+2*ns_yz
+            z(k)=z(k-1)+sratio_yz*(z(k-1)-z(k-2))
+         end do
+         
+         ! General serial grid object
+         grid=sgrid(coord=cartesian,no=3,x=x,y=y,z=z,xper=.false.,yper=.false.,zper=.false.,name='jet')
+         
+         ! Read in partition
+         call param_read('[Jet] Partition',partition)
+         
+         ! Create partitioned grid
+         this%cfg=config(grp=group,decomp=partition,grid=grid)
+         
+         ! No walls in the atomization domain
+         this%cfg%VF=1.0_WP
+
+      end block initialize_config
       
       
       ! Initialize time tracker with 2 subiterations
       initialize_timetracker: block
-         use param, only: param_read
          this%time=timetracker(amRoot=this%cfg%amRoot)
          call param_read('[Jet] Max timestep size',this%time%dtmax)
          call param_read('[Jet] Max cfl number',this%time%cflmax)
@@ -202,7 +182,6 @@ contains
       
       ! Initialize our VOF solver and field
       create_and_initialize_vof: block
-         use param,     only: param_read
          use vfs_class, only: VFlo,VFhi,plicnet,remap
          use mms_geom,  only: cube_refine_vol
          integer :: i,j,k,n,si,sj,sk
@@ -297,7 +276,6 @@ contains
       
       ! Create an incompressible flow solver with bconds
       create_flow_solver: block
-         use param,           only: param_read
          use hypre_str_class, only: pcg_pfmg2
          use tpns_class,      only: dirichlet,clipped_neumann,slip
          ! Create flow solver
@@ -334,7 +312,7 @@ contains
          end if
       end block create_flow_solver
       
-
+      
       ! Initialize our velocity field
       initialize_velocity: block
          use tpns_class, only: bcond
@@ -363,7 +341,6 @@ contains
       
       ! Create an LES model
       create_sgs: block
-         use param, only: param_read
          call param_read('[Jet] Use SGS model',this%use_sgs)
          if (this%use_sgs) this%sgs=sgsmodel(cfg=this%fs%cfg,umask=this%fs%umask,vmask=this%fs%vmask,wmask=this%fs%wmask)
       end block create_sgs
@@ -371,10 +348,9 @@ contains
       
       ! Handle restart/saves here
       handle_restart: block
-         use param,     only: param_read
-         use string,    only: str_medium
-         use filesys,   only: makedir,isdir
-         use irl_fortran_interface
+         use string,                only: str_medium
+         use filesys,               only: makedir,isdir
+         use irl_fortran_interface, only: setNumberOfPlanes,setPlane
          character(len=str_medium) :: filename
          integer, dimension(3) :: iopartition
          real(WP), dimension(:,:,:), allocatable :: P11,P12,P13,P14
@@ -475,7 +451,6 @@ contains
       
       ! Add Ensight output
       create_ensight: block
-         use param, only: param_read
          ! Create Ensight output from cfg
          this%ens_out=ensight(cfg=this%cfg,name='jet')
          ! Create event for Ensight output
@@ -531,7 +506,7 @@ contains
       end block create_monitor
       
       
-   end subroutine simulation_init
+   end subroutine init
    
    
    !> Take one time step
@@ -615,7 +590,7 @@ contains
             this%fs%V=2.0_WP*this%fs%V-this%fs%Vold+this%resV/this%fs%rho_V
             this%fs%W=2.0_WP*this%fs%W-this%fs%Wold+this%resW/this%fs%rho_W
          end if
-
+         
          ! Apply other boundary conditions on the resulting fields
          call this%fs%apply_bcond(this%time%t,this%time%dt)
          
@@ -674,7 +649,7 @@ contains
       call this%vf%get_max()
       call this%mfile%write()
       call this%cflfile%write()
-
+      
       ! Finally, see if it's time to save restart files
       if (this%save_evt%occurs()) then
          save_restart: block
