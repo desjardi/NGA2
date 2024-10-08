@@ -11,7 +11,7 @@ module sgsmodel_class
    public :: sgsmodel
    
    ! List of SGS LES models available
-   integer, parameter, public :: dynamic_smag =1    !< Dynamic Smagorinsky -- BROKEN
+   integer, parameter, public :: dynamic_smag =1    !< Dynamic Smagorinsky
    integer, parameter, public :: constant_smag=2    !< Constant Smagorinsky 
    integer, parameter, public :: vreman       =3    !< Vreman 2004 
    
@@ -49,9 +49,7 @@ module sgsmodel_class
       procedure :: get_visc                                     !< Calls appropriate eddy viscosity subroutine
       procedure :: visc_dynamic                                 !< Calculate the SGS viscosity (Dynamic Smag)
       procedure :: visc_cst                                     !< Calculate the SGS viscosity (Constant Smag)
-      procedure :: visc_vreman                                  !< Calculate the SGS viscosity (Vreman 2004)
-
-      procedure, private :: interpolate                         !< Helper function that interpolates a field to a point
+      procedure :: visc_vreman                                  !< Calculate the SGS viscosity (Vreman 2004)      
       
    end type sgsmodel
    
@@ -314,7 +312,7 @@ contains
       real(WP), dimension(1:,1:,this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in) :: gradu !< Velocity gradient tensor
       integer :: i,j,k
       real(WP) :: Frho,FU,FV,FW,FS_
-      real(WP) :: Cs,tau,alpha
+      real(WP) :: Cs,tau,alpha,interp
       real(WP), dimension(3) :: pos
       real(WP), dimension(6) :: FSR,FrhoS_SR,FrhoUU,Mij,Lij
       real(WP), dimension(:,:,:), allocatable :: S_,LMold,MMold
@@ -332,7 +330,7 @@ contains
          do j=this%cfg%jmin_,this%cfg%jmax_
             do i=this%cfg%imin_,this%cfg%imax_
                ! Skip wall cells
-               if (this%cfg%VF(i,j,k).eq.0.0_WP) then
+               if (this%cfg%VF(i,j,k).lt.epsilon(1.0_WP)) then
                   this%LM(i,j,k)=0.0_WP
                   this%MM(i,j,k)=0.0_WP
                   cycle
@@ -380,9 +378,6 @@ contains
             end do
          end do
       end do
-      ! Synchronize LM and MM
-      call this%cfg%sync(this%LM)
-      call this%cfg%sync(this%MM)
       
       ! Apply Meneveau's Lagrangian averaging strategy
       do k=this%cfg%kmin_,this%cfg%kmax_
@@ -395,8 +390,10 @@ contains
                ! Advance LM and MM
                tau=dt*(LMold(i,j,k)*MMold(i,j,k))**0.125_WP/(1.5_WP*this%delta(i,j,k))
                alpha=tau/(1.0_WP+tau)
-               this%LM(i,j,k)=alpha*this%LM(i,j,k)+(1.0_WP-alpha)*this%interpolate(pos,i,j,k,LMold)
-               this%MM(i,j,k)=alpha*this%MM(i,j,k)+(1.0_WP-alpha)*this%interpolate(pos,i,j,k,MMold)
+               interp=this%cfg%get_scalar(pos=pos,i0=i,j0=j,k0=k,S=LMold,bc='n')
+               this%LM(i,j,k)=alpha*this%LM(i,j,k)+(1.0_WP-alpha)*interp
+               interp=this%cfg%get_scalar(pos=pos,i0=i,j0=j,k0=k,S=MMold,bc='n')
+               this%MM(i,j,k)=alpha*this%MM(i,j,k)+(1.0_WP-alpha)*interp
                ! Safe limits
                this%LM(i,j,k)=max(this%LM(i,j,k),100.0_WP*epsilon(1.0_WP))
                this%MM(i,j,k)=max(this%MM(i,j,k),100.0_WP*epsilon(1.0_WP)/this%Cs_ref**2)
@@ -404,11 +401,15 @@ contains
          end do
       end do
       
+      ! Synchronize LM and MM
+      call this%cfg%sync(this%LM)
+      call this%cfg%sync(this%MM)
+      
       ! Compute the eddy viscosity
       do k=this%cfg%kmin_,this%cfg%kmax_
          do j=this%cfg%jmin_,this%cfg%jmax_
             do i=this%cfg%imin_,this%cfg%imax_
-               if (this%MM(i,j,k).ne.0.0_WP) then
+               if (abs(this%MM(i,j,k)).gt.100.0_WP*epsilon(1.0_WP)/this%Cs_ref**2) then
                   Cs=max(this%LM(i,j,k)/this%MM(i,j,k),0.0_WP)
                else
                   Cs=0.0_WP
@@ -426,7 +427,7 @@ contains
    end subroutine visc_dynamic
    
    
-   !> Get subgrid scale dynamic viscosity - Constant
+   !> Get subgrid scale viscosity - Constant coefficient
    subroutine visc_cst(this,rho,SR)
       implicit none
       class(sgsmodel), intent(inout) :: this
@@ -505,46 +506,6 @@ contains
       call this%cfg%sync(this%visc)
       
    end subroutine visc_vreman
-   
-
-   !> Private function that performs an trilinear interpolation of a cell-centered
-   !> field A to the provided position pos in the vicinity of cell i0,j0,k0
-   function interpolate(this,pos,i0,j0,k0,A) result(Ap)
-      implicit none
-      class(sgsmodel), intent(inout) :: this
-      real(WP) :: Ap
-      real(WP), dimension(3), intent(in) :: pos
-      integer, intent(in) :: i0,j0,k0
-      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in) :: A     !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
-      integer :: i,j,k
-      real(WP) :: wx1,wy1,wz1
-      real(WP) :: wx2,wy2,wz2
-      ! Find right i index
-      i=max(min(this%imax_in-1,i0),this%imin_in)
-      do while (pos(1)-this%cfg%xm(i  ).lt.0.0_WP.and.i  .gt.this%imin_in); i=i-1; end do
-      do while (pos(1)-this%cfg%xm(i+1).ge.0.0_WP.and.i+1.lt.this%imax_in); i=i+1; end do
-      ! Find right j index
-      j=max(min(this%jmax_in-1,j0),this%jmin_in)
-      do while (pos(2)-this%cfg%ym(j  ).lt.0.0_WP.and.j  .gt.this%jmin_in); j=j-1; end do
-      do while (pos(2)-this%cfg%ym(j+1).ge.0.0_WP.and.j+1.lt.this%jmax_in); j=j+1; end do
-      ! Find right k index
-      k=max(min(this%kmax_in-1,k0),this%kmin_in)
-      do while (pos(3)-this%cfg%zm(k  ).lt.0.0_WP.and.k  .gt.this%kmin_in); k=k-1; end do
-      do while (pos(3)-this%cfg%zm(k+1).ge.0.0_WP.and.k+1.lt.this%kmax_in); k=k+1; end do
-      ! Prepare tri-linear interpolation coefficients
-      wx1=(pos(1)-this%cfg%xm(i))/(this%cfg%xm(i+1)-this%cfg%xm(i)); wx2=1.0_WP-wx1
-      wy1=(pos(2)-this%cfg%ym(j))/(this%cfg%ym(j+1)-this%cfg%ym(j)); wy2=1.0_WP-wy1
-      wz1=(pos(3)-this%cfg%zm(k))/(this%cfg%zm(k+1)-this%cfg%zm(k)); wz2=1.0_WP-wz1
-      ! Tri-linear interpolation of A
-      Ap=wz1*(wy1*(wx1*A(i+1,j+1,k+1)  + &
-      &            wx2*A(i  ,j+1,k+1)) + &
-      &       wy2*(wx1*A(i+1,j  ,k+1)  + &
-      &            wx2*A(i  ,j  ,k+1)))+ &
-      &  wz2*(wy1*(wx1*A(i+1,j+1,k  )  + &
-      &            wx2*A(i  ,j+1,k  )) + &
-      &       wy2*(wx1*A(i+1,j  ,k  )  + &
-      &            wx2*A(i  ,j  ,k  )))
-   end function interpolate
    
    
    !> Log info for model

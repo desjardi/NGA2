@@ -10,19 +10,26 @@ module simulation
    use ensight_class,     only: ensight
    use event_class,       only: event
    use monitor_class,     only: monitor
+   use pardata_class,     only: pardata
    implicit none
    private
    
    !> Get an an incompressible solver, pressure solver, and corresponding time tracker
-   type(incomp),      public :: fs
-   type(fft3d),       public :: ps
-   type(ddadi),       public :: vs
-   type(sgsmodel),    public :: sgs
-   type(timetracker), public :: time
+   type(incomp) :: fs
+   type(fft3d)  :: ps
+   type(timetracker) :: time
+   
+   !> Implicit solver
+   logical :: use_implicit
+   type(ddadi) :: vs
+   
+   !> SGS model
+   logical :: use_sgs
+   type(sgsmodel) :: sgs
    
    !> Ensight postprocessing
-   type(ensight)  :: ens_out
-   type(event)    :: ens_evt
+   type(event) :: ens_evt
+   type(ensight) :: ens_out
    
    !> Simulation monitor file
    type(monitor) :: mfile,cflfile
@@ -35,6 +42,11 @@ module simulation
    real(WP), dimension(:,:,:), allocatable :: Ui,Vi,Wi
    real(WP) :: visc,Ubulk,meanU,bforce
    
+   !> Provide a pardata objects for restarts
+   logical :: restarted
+   type(event) :: save_evt
+   type(pardata) :: df
+
    
 contains
    
@@ -54,7 +66,7 @@ contains
          time%dt=time%dtmax
          time%itmax=2
       end block initialize_timetracker
-
+      
       
       ! Create an incompressible flow solver without bconds
       create_flow_solver: block
@@ -65,10 +77,17 @@ contains
          call param_read('Dynamic viscosity',visc); fs%visc=visc
          ! Configure pressure solver
          ps=fft3d(cfg=cfg,name='Pressure',nst=7)
-         ! Configure implicit velocity solver
-         vs=ddadi(cfg=cfg,name='Velocity',nst=7)
-         ! Setup the solver
-         call fs%setup(pressure_solver=ps,implicit_solver=vs)
+         ! Check if implicit velocity solver is used
+         call param_read('Use implicit solver',use_implicit)
+         if (use_implicit) then
+            ! Configure implicit solver
+            vs=ddadi(cfg=cfg,name='Velocity',nst=7)
+            ! Finish flow solver setup
+            call fs%setup(pressure_solver=ps,implicit_solver=vs)
+         else
+            ! Finish flow solver setup
+            call fs%setup(pressure_solver=ps)
+         end if
       end block create_flow_solver
       
       
@@ -78,9 +97,9 @@ contains
          allocate(resU(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
          allocate(resV(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
          allocate(resW(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
-         allocate(Ui  (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
-         allocate(Vi  (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
-         allocate(Wi  (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+         allocate(Ui(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+         allocate(Vi(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+         allocate(Wi(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
       end block allocate_work_arrays
       
       
@@ -126,10 +145,51 @@ contains
       
       ! Create an LES model
       create_sgs: block
-         sgs=sgsmodel(cfg=fs%cfg,umask=fs%umask,vmask=fs%vmask,wmask=fs%wmask)
+         call param_read('Use SGS model',use_sgs)
+         if (use_sgs) sgs=sgsmodel(cfg=fs%cfg,umask=fs%umask,vmask=fs%vmask,wmask=fs%wmask)
       end block create_sgs
 
 
+      ! Handle restart here
+      perform_restart: block
+         use string,  only: str_medium
+         use filesys, only: makedir,isdir
+         character(len=str_medium) :: filename
+         ! Create event for saving restart files
+         save_evt=event(time,'Restart output')
+         call param_read('Restart output period',save_evt%tper)
+         ! Check if a restart file was provided
+         call param_read('Restart from',filename,default='')
+         restarted=.false.; if (len_trim(filename).gt.0) restarted=.true.
+         ! Restart the simulation
+         if (restarted) then
+            ! Read in the file
+            call df%initialize(pg=cfg,iopartition=[cfg%npx,cfg%npy,cfg%npz],fdata=trim(filename))
+            ! Put the data at the right place
+            call df%pull(name='U',var=fs%U)
+            call df%pull(name='V',var=fs%V)
+            call df%pull(name='W',var=fs%W)
+            call df%pull(name='P',var=fs%P)
+            ! Update cell-centered velocity
+            call fs%interp_vel(Ui,Vi,Wi)
+            ! Update divergence
+            call fs%get_div()
+            ! Also update time
+            call df%pull(name='t' ,val=time%t )
+            call df%pull(name='dt',val=time%dt)
+            time%told=time%t-time%dt
+         else
+            ! Prepare a new directory for storing files for restart
+            if (cfg%amRoot) then
+               if (.not.isdir('restart')) call makedir('restart')
+            end if
+            ! If we are not restarting, we will still need a datafile for saving restart files
+            call df%initialize(pg=cfg,iopartition=[cfg%npx,cfg%npy,cfg%npz],filename=trim(cfg%name),nval=2,nvar=4)
+            df%valname=['dt','t ']; df%varname=['U','V','W','P']
+         end if
+      end block perform_restart
+      
+      
       ! Add Ensight output
       create_ensight: block
          ! Create Ensight output from cfg
@@ -141,12 +201,12 @@ contains
          call ens_out%add_vector('velocity',Ui,Vi,Wi)
          call ens_out%add_scalar('Gib',cfg%Gib)
          call ens_out%add_scalar('pressure',fs%P)
-         call ens_out%add_scalar('visc_sgs',sgs%visc)
+         if (use_sgs) call ens_out%add_scalar('visc_sgs',sgs%visc)
          ! Output to ensight
          if (ens_evt%occurs()) call ens_out%write_data(time%t)
       end block create_ensight
       
-
+      
       ! Create a monitor file
       create_monitor: block
          ! Prepare some info about fields
@@ -202,14 +262,16 @@ contains
          fs%Wold=fs%W
          
          ! Turbulence modeling
-         sgs_modeling: block
+         if (use_sgs) then
+            sgs_modeling: block
                use sgsmodel_class, only: vreman
                resU=fs%rho
                call fs%get_gradu(gradU)
                call sgs%get_visc(type=vreman,dt=time%dtold,rho=resU,gradu=gradU)
-               where (cfg%Gib.lt.0.0_WP) sgs%visc=0.0_WP
+               where (cfg%Gib.gt.0.0_WP) sgs%visc=0.0_WP
                fs%visc=visc+sgs%visc
-         end block sgs_modeling
+            end block sgs_modeling
+         end if
          
          ! Perform sub-iterations
          do while (time%it.le.time%itmax)
@@ -229,34 +291,41 @@ contains
             
             ! Add body forcing
             forcing: block
-               use mpi_f08,  only: MPI_SUM,MPI_ALLREDUCE
+               use mpi_f08,  only: MPI_SUM,MPI_ALLREDUCE,MPI_IN_PLACE
                use parallel, only: MPI_REAL_WP
                integer :: i,j,k,ierr
-               real(WP) :: myU,myUvol,Uvol,VFx
-               myU=0.0_WP; myUvol=0.0_WP
+               real(WP) :: Uvol,VFx
+               Uvol=0.0_WP; meanU=0.0_WP
                do k=fs%cfg%kmin_,fs%cfg%kmax_
                   do j=fs%cfg%jmin_,fs%cfg%jmax_
                      do i=fs%cfg%imin_,fs%cfg%imax_
                         VFx=sum(fs%itpr_x(:,i,j,k)*cfg%VF(i-1:i,j,k))
                         if (VFx.le.0.5_WP) cycle
-                        myU   =myU   +fs%cfg%dxm(i)*fs%cfg%dy(j)*fs%cfg%dz(k)*VFx*(2.0_WP*fs%U(i,j,k)-fs%Uold(i,j,k))
-                        myUvol=myUvol+fs%cfg%dxm(i)*fs%cfg%dy(j)*fs%cfg%dz(k)*VFx
+                        meanU=meanU+fs%cfg%dxm(i)*fs%cfg%dy(j)*fs%cfg%dz(k)*VFx*(2.0_WP*fs%U(i,j,k)-fs%Uold(i,j,k))
+                        Uvol =Uvol +fs%cfg%dxm(i)*fs%cfg%dy(j)*fs%cfg%dz(k)*VFx
                      end do
                   end do
                end do
-               call MPI_ALLREDUCE(myUvol,Uvol ,1,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr)
-               call MPI_ALLREDUCE(myU   ,meanU,1,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr); meanU=meanU/Uvol
+               call MPI_ALLREDUCE(MPI_IN_PLACE,Uvol ,1,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr)
+               call MPI_ALLREDUCE(MPI_IN_PLACE,meanU,1,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr); meanU=meanU/Uvol
                resU=resU+fs%rho*(Ubulk-meanU)
                bforce=fs%rho*(Ubulk-meanU)/time%dt
             end block forcing
             
-            ! Form implicit residuals
-            call fs%solve_implicit(time%dt,resU,resV,resW)
-            
-            ! Apply these residuals
-            fs%U=2.0_WP*fs%U-fs%Uold+resU
-            fs%V=2.0_WP*fs%V-fs%Vold+resV
-            fs%W=2.0_WP*fs%W-fs%Wold+resW
+            ! Finish update
+            if (use_implicit) then
+               ! Form implicit residuals
+               call fs%solve_implicit(time%dt,resU,resV,resW)
+               ! Apply these residuals
+               fs%U=2.0_WP*fs%U-fs%Uold+resU
+               fs%V=2.0_WP*fs%V-fs%Vold+resV
+               fs%W=2.0_WP*fs%W-fs%Wold+resW
+            else
+               ! Apply these residuals
+               fs%U=2.0_WP*fs%U-fs%Uold+resU/fs%rho
+               fs%V=2.0_WP*fs%V-fs%Vold+resV/fs%rho
+               fs%W=2.0_WP*fs%W-fs%Wold+resW/fs%rho
+            end if
             
             ! Apply IB forcing to enforce BC at the pipe walls
             ibforcing: block
@@ -274,7 +343,7 @@ contains
                call fs%cfg%sync(fs%V)
                call fs%cfg%sync(fs%W)
             end block ibforcing
-
+            
             ! Apply other boundary conditions on the resulting fields
             call fs%apply_bcond(time%t,time%dt)
             
@@ -309,6 +378,24 @@ contains
          call fs%get_max()
          call mfile%write()
          call cflfile%write()
+
+         ! Finally, see if it's time to save restart files
+         if (save_evt%occurs()) then
+            save_restart: block
+               use string, only: str_medium
+               character(len=str_medium) :: timestamp
+               ! Prefix for files
+               write(timestamp,'(es12.5)') time%t
+               ! Populate df and write it
+               call df%push(name='t' ,val=time%t )
+               call df%push(name='dt',val=time%dt)
+               call df%push(name='U' ,var=fs%U   )
+               call df%push(name='V' ,var=fs%V   )
+               call df%push(name='W' ,var=fs%W   )
+               call df%push(name='P' ,var=fs%P   )
+               call df%write(fdata='restart/data_'//trim(adjustl(timestamp)))
+            end block save_restart
+         end if
          
       end do
       

@@ -220,7 +220,7 @@ contains
          use tpns_class,      only: dirichlet,clipped_neumann,bcond
          use hypre_str_class, only: pcg_pfmg2
          type(bcond), pointer :: mybc
-         integer :: n,i,j,k      
+         integer :: n,i,j,k
          ! Create flow solver
          this%fs=tpns(cfg=this%cfg,name='Two-phase NS')
          ! Set fluid properties

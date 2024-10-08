@@ -562,10 +562,10 @@ contains
       !call this%update_band()
       
       ! Perform interface reconstruction from transported moments
-      select case (this%reconstruction_method)
-      case (plicnet)
-         call this%build_plicnet(lvl=lvl,time=time)
-      end select
+      !select case (this%reconstruction_method)
+      !case (plicnet)
+      !   call this%build_plicnet(lvl=lvl,time=time)
+      !end select
       
       ! Create discontinuous polygon mesh from IRL interface
       !call this%polygonalize_interface()
@@ -582,7 +582,7 @@ contains
       &                                adjustCapToMatchVolume,construct,new,&
       &                                PlanarLoc_type,PlanarSep_type,LocSepLink_type,&
       &                                LocLink_type,getMoments,getVolumePtr,getCentroidPtr,&
-      &                                setNumberOfPlanes,setPlane
+      &                                setNumberOfPlanes,setPlane,getBoundingPts
       use amrex_amr_module,      only: amrex_mfiter,amrex_box
       implicit none
       class(amrvfs), intent(inout) :: this
@@ -591,9 +591,7 @@ contains
       real(WP), intent(in) :: dt
       type(amrex_multifab), intent(in) :: U,V,W
       ! Transport data
-      real(WP) :: crude_VF,lvol,gvol
-      real(WP), dimension(3, 2) :: bounding_pts
-      integer , dimension(3, 2) :: bb_indices
+      real(WP) :: lvol,gvol
       real(WP), dimension(3,14) :: cell
       real(WP), dimension(3, 9) :: face
       type(Poly24_type)  :: remap_cell
@@ -619,6 +617,15 @@ contains
       call this%amr%mfiter_build(lvl,mfi); do while(mfi%next())
          bx=mfi%tilebox()
          
+         ! Get volmom and interf data
+         volmom=>this%volmom(lvl)%dataptr(mfi)
+         interf=>this%interf(lvl)%dataptr(mfi)
+         
+         ! Get velocity data
+         pU=>U%dataptr(mfi)
+         pV=>V%dataptr(mfi)
+         pW=>W%dataptr(mfi)
+         
          ! Outer block for ensuring proper destruction of IRL object servers
          irl_object_server: block
             use irl_fortran_interface, only: ObjServer_PlanarSep_type,ObjServer_PlanarLoc_type,&
@@ -632,9 +639,9 @@ contains
             integer(IRL_LargeOffsetIndex_t) :: total_cells
 
             ! Calculate number of cells
-            nxo_=bx%hi(1)-bx%lo(1)+2*this%nover+1
-            nyo_=bx%hi(2)-bx%lo(2)+2*this%nover+1
-            nzo_=bx%hi(3)-bx%lo(3)+2*this%nover+1
+            nxo_=ubound(interf,1)-lbound(interf,1)+1
+            nyo_=ubound(interf,2)-lbound(interf,2)+1
+            nzo_=ubound(interf,3)-lbound(interf,3)+1
             total_cells=int(nxo_,8)*int(nyo_,8)*int(nzo_,8)
             
             ! Initialize size for IRL object servers
@@ -648,36 +655,32 @@ contains
                use irl_fortran_interface, only: setFromRectangularCuboid,setId,setEdgeConnectivity
                integer :: lexico
                ! Allocate IRL arrays on box
-               allocate(localizer               (bx%lo(1)-this%nover:bx%hi(1)+this%nover,bx%lo(2)-this%nover:bx%hi(2)+this%nover,bx%lo(3)-this%nover:bx%hi(3)+this%nover))
-               allocate(liquid_gas_interface    (bx%lo(1)-this%nover:bx%hi(1)+this%nover,bx%lo(2)-this%nover:bx%hi(2)+this%nover,bx%lo(3)-this%nover:bx%hi(3)+this%nover))
-               allocate(localized_separator_link(bx%lo(1)-this%nover:bx%hi(1)+this%nover,bx%lo(2)-this%nover:bx%hi(2)+this%nover,bx%lo(3)-this%nover:bx%hi(3)+this%nover))
-               allocate(localizer_link          (bx%lo(1)-this%nover:bx%hi(1)+this%nover,bx%lo(2)-this%nover:bx%hi(2)+this%nover,bx%lo(3)-this%nover:bx%hi(3)+this%nover))
+               allocate(localizer               (lbound(interf,1):ubound(interf,1),lbound(interf,2):ubound(interf,2),lbound(interf,3):ubound(interf,3)))
+               allocate(liquid_gas_interface    (lbound(interf,1):ubound(interf,1),lbound(interf,2):ubound(interf,2),lbound(interf,3):ubound(interf,3)))
+               allocate(localized_separator_link(lbound(interf,1):ubound(interf,1),lbound(interf,2):ubound(interf,2),lbound(interf,3):ubound(interf,3)))
+               allocate(localizer_link          (lbound(interf,1):ubound(interf,1),lbound(interf,2):ubound(interf,2),lbound(interf,3):ubound(interf,3)))
                ! Initialize arrays and setup linking
-               do k=bx%lo(3)-this%nover,bx%hi(3)+this%nover
-                  do j=bx%lo(2)-this%nover,bx%hi(2)+this%nover
-                     do i=bx%lo(1)-this%nover,bx%hi(1)+this%nover
+               do k=lbound(interf,3),ubound(interf,3)
+                  do j=lbound(interf,2),ubound(interf,2)
+                     do i=lbound(interf,1),ubound(interf,1)
                         ! Transfer cell to IRL
-                        !call new(localizer(i,j,k),allocation_planar_localizer)
-                        call new(localizer(i,j,k))!,allocation_planar_localizer)
+                        call new(localizer(i,j,k),allocation_planar_localizer)
                         call setFromRectangularCuboid(localizer(i,j,k),&
                         & [this%amr%xlo+real(i  ,WP)*this%amr%dx(lvl),this%amr%ylo+real(j  ,WP)*this%amr%dy(lvl),this%amr%zlo+real(k  ,WP)*this%amr%dz(lvl)],&
                         & [this%amr%xlo+real(i+1,WP)*this%amr%dx(lvl),this%amr%ylo+real(j+1,WP)*this%amr%dy(lvl),this%amr%zlo+real(k+1,WP)*this%amr%dz(lvl)])
                         ! PLIC interface
-                        !call new(liquid_gas_interface(i,j,k),allocation_planar_separator)
-                        call new(liquid_gas_interface(i,j,k))!,allocation_planar_separator)
+                        call new(liquid_gas_interface(i,j,k),allocation_planar_separator)
                         ! PLIC+mesh with connectivity (i.e., link)
-                        !call new(localized_separator_link(i,j,k),allocation_localized_separator_link,localizer(i,j,k),liquid_gas_interface(i,j,k))
-                        call new(localized_separator_link(i,j,k),localizer(i,j,k),liquid_gas_interface(i,j,k))
+                        call new(localized_separator_link(i,j,k),allocation_localized_separator_link,localizer(i,j,k),liquid_gas_interface(i,j,k))
                         ! Mesh with connectivity
-                        !call new(localizer_link(i,j,k),allocation_localizer_link,localizer(i,j,k))
-                        call new(localizer_link(i,j,k),localizer(i,j,k))
+                        call new(localizer_link(i,j,k),allocation_localizer_link,localizer(i,j,k))
                      end do
                   end do
                end do
                ! Give each link a unique lexicographic tag (per processor)
-               do k=bx%lo(3)-this%nover,bx%hi(3)+this%nover
-                  do j=bx%lo(2)-this%nover,bx%hi(2)+this%nover
-                     do i=bx%lo(1)-this%nover,bx%hi(1)+this%nover
+               do k=lbound(interf,3),ubound(interf,3)
+                  do j=lbound(interf,2),ubound(interf,2)
+                     do i=lbound(interf,1),ubound(interf,1)
                         lexico=(i-bx%lo(1)+this%nover)+(j-bx%lo(2)+this%nover)*nxo_+(k-bx%lo(3)+this%nover)*nxo_*nyo_
                         call setId(localized_separator_link(i,j,k),lexico)
                         call setId(localizer_link(i,j,k),lexico)
@@ -685,36 +688,36 @@ contains
                   end do
                end do
                ! Set the connectivity
-               do k=bx%lo(3)-this%nover,bx%hi(3)+this%nover
-                  do j=bx%lo(2)-this%nover,bx%hi(2)+this%nover
-                     do i=bx%lo(1)-this%nover,bx%hi(1)+this%nover
+               do k=lbound(interf,3),ubound(interf,3)
+                  do j=lbound(interf,2),ubound(interf,2)
+                     do i=lbound(interf,1),ubound(interf,1)
                         ! In the x- direction
-                        if (i.gt.bx%lo(1)-this%nover) then
+                        if (i.gt.lbound(interf,1)) then
                            call setEdgeConnectivity(localized_separator_link(i,j,k),0,localized_separator_link(i-1,j,k))
                            call setEdgeConnectivity(localizer_link(i,j,k),0,localizer_link(i-1,j,k))
                         end if
                         ! In the x+ direction
-                        if (i.lt.bx%hi(1)+this%nover) then
+                        if (i.lt.ubound(interf,1)) then
                            call setEdgeConnectivity(localized_separator_link(i,j,k),1,localized_separator_link(i+1,j,k))
                            call setEdgeConnectivity(localizer_link(i,j,k),1,localizer_link(i+1,j,k))
                         end if
                         ! In the y- direction
-                        if (j.gt.bx%lo(2)-this%nover) then
+                        if (j.gt.lbound(interf,2)) then
                            call setEdgeConnectivity(localized_separator_link(i,j,k),2,localized_separator_link(i,j-1,k))
                            call setEdgeConnectivity(localizer_link(i,j,k),2,localizer_link(i,j-1,k))
                         end if
                         ! In the y+ direction
-                        if (j.lt.bx%hi(2)+this%nover) then
+                        if (j.lt.ubound(interf,2)) then
                            call setEdgeConnectivity(localized_separator_link(i,j,k),3,localized_separator_link(i,j+1,k))
                            call setEdgeConnectivity(localizer_link(i,j,k),3,localizer_link(i,j+1,k))
                         end if
                         ! In the z- direction
-                        if (k.gt.bx%lo(3)-this%nover) then
+                        if (k.gt.lbound(interf,3)) then
                            call setEdgeConnectivity(localized_separator_link(i,j,k),4,localized_separator_link(i,j,k-1))
                            call setEdgeConnectivity(localizer_link(i,j,k),4,localizer_link(i,j,k-1))
                         end if
                         ! In the z+ direction
-                        if (k.lt.bx%hi(3)+this%nover) then
+                        if (k.lt.ubound(interf,3)) then
                            call setEdgeConnectivity(localized_separator_link(i,j,k),5,localized_separator_link(i,j,k+1))
                            call setEdgeConnectivity(localizer_link(i,j,k),5,localizer_link(i,j,k+1))
                         end if
@@ -723,29 +726,23 @@ contains
                end do
             end block setup_irl_on_box
             
-            ! Get volmom and interf data
-            volmom=>this%volmom(lvl)%dataptr(mfi)
-            interf=>this%interf(lvl)%dataptr(mfi)
-            
             ! Transfer interface to IRL
-            do k=bx%lo(3)-this%nover,bx%hi(3)+this%nover
-               do j=bx%lo(2)-this%nover,bx%hi(2)+this%nover
-                  do i=bx%lo(1)-this%nover,bx%hi(1)+this%nover
+            do k=lbound(interf,3),ubound(interf,3)
+               do j=lbound(interf,2),ubound(interf,2)
+                  do i=lbound(interf,1),ubound(interf,1)
                      call setNumberOfPlanes(liquid_gas_interface(i,j,k),1)
                      call setPlane(liquid_gas_interface(i,j,k),0,interf(i,j,k,1:3),interf(i,j,k,4))
                   end do
                end do
             end do
             
-            ! Get velocity data
-            pU=>U%dataptr(mfi)
-            pV=>V%dataptr(mfi)
-            pW=>W%dataptr(mfi)
-            
             ! Perform cell remap
             do k=bx%lo(3),bx%hi(3)
                do j=bx%lo(2),bx%hi(2)
                   do i=bx%lo(1),bx%hi(1)
+
+                     ! Skip cells in a fully liquid or gas neighborhood
+                     if (minval(volmom(i-1:i+1,j-1:j+1,k-1:k+1,1)).eq.maxval(volmom(i-1:i+1,j-1:j+1,k-1:k+1,1))) cycle
                      
                      ! Construct the cell and project it backwards in time
                      cell(:,1)=[this%amr%xlo+real(i+1,WP)*this%amr%dx(lvl),this%amr%ylo+real(j  ,WP)*this%amr%dy(lvl),this%amr%zlo+real(k+1,WP)*this%amr%dz(lvl)]; cell(:,1)=project(cell(:,1),-dt)
@@ -784,7 +781,7 @@ contains
                      face(:,4)=[this%amr%xlo+real(i+1,WP)*this%amr%dx(lvl),this%amr%ylo+real(j  ,WP)*this%amr%dy(lvl),this%amr%zlo+real(k+1,WP)*this%amr%dz(lvl)]; face(:,8)=cell(:,1)
                      face(:,9)=0.25_WP*(face(:,5)+face(:,6)+face(:,7)+face(:,8))
                      call construct(remap_face,face)
-                     if (this%cons_correct) call adjustCapToMatchVolume(remap_face,dt*pV(i,j  ,k,1)*this%amr%dx(lvl)*this%amr%dz(lvl))
+                     if (this%cons_correct) call adjustCapToMatchVolume(remap_face,dt*pV(i,j  ,k,1)*this%amr%dz(lvl)*this%amr%dx(lvl))
                      cell(:,10)=getPt(remap_face,8)
                      
                      ! Correct volume of y+ face
@@ -794,7 +791,7 @@ contains
                      face(:,4)=[this%amr%xlo+real(i+1,WP)*this%amr%dx(lvl),this%amr%ylo+real(j+1,WP)*this%amr%dy(lvl),this%amr%zlo+real(k+1,WP)*this%amr%dz(lvl)]; face(:,8)=cell(:,4)
                      face(:,9)=0.25_WP*(face(:,5)+face(:,6)+face(:,7)+face(:,8))
                      call construct(remap_face,face)
-                     if (this%cons_correct) call adjustCapToMatchVolume(remap_face,dt*pV(i,j+1,k,1)*this%amr%dx(lvl)*this%amr%dz(lvl))
+                     if (this%cons_correct) call adjustCapToMatchVolume(remap_face,dt*pV(i,j+1,k,1)*this%amr%dz(lvl)*this%amr%dx(lvl))
                      cell(:,12)=getPt(remap_face,8)
                      
                      ! Correct volume of z- face
@@ -819,15 +816,6 @@ contains
                      
                      ! Form remapped cell in IRL
                      call construct(remap_cell,cell)
-                     
-                     ! Get bounding box for our remapped cell
-                     !call getBoundingPts(remap_cell,bounding_pts(:,1),bounding_pts(:,2))
-                     !bb_indices(:,1)=this%cfg%get_ijk_local(bounding_pts(:,1),[i,j,k])
-                     !bb_indices(:,2)=this%cfg%get_ijk_local(bounding_pts(:,2),[i,j,k])
-                     
-                     ! Crudely check phase information for remapped cell and skip cells where nothing is changing
-                     !crude_VF=this%crude_phase_test(bb_indices)
-                     !if (crude_VF.ge.0.0_WP) cycle
                      
                      ! Need full geometric flux
                      call getMoments(remap_cell,localized_separator_link(i,j,k),my_SepVM)
@@ -990,17 +978,23 @@ contains
          ! Get volmom and interf data
          volmom=>this%volmom(lvl)%dataptr(mfi)
          interf=>this%interf(lvl)%dataptr(mfi)
+
+         ! Generate nominal interf
+         do k=lbound(interf,3),ubound(interf,3)
+            do j=lbound(interf,2),ubound(interf,2)
+               do i=lbound(interf,1),ubound(interf,1)
+                  interf(i,j,k,:)=[0.0_WP,0.0_WP,0.0_WP,sign(1.0_WP,volmom(i,j,k,1)-0.5_WP)]
+               end do
+            end do
+         end do
          
          ! Perform interface reconstruction
          do k=bx%lo(3),bx%hi(3)
             do j=bx%lo(2),bx%hi(2)
                do i=bx%lo(1),bx%hi(1)
                   
-                  ! Handle full cells
-                  if (volmom(i,j,k,1).lt.VFlo.or.volmom(i,j,k,1).gt.VFhi) then
-                     interf(i,j,k,:)=[0.0_WP,0.0_WP,0.0_WP,sign(1.0_WP,volmom(i,j,k,1)-0.5_WP)]
-                     cycle
-                  end if
+                  ! Skip full cells
+                  if (volmom(i,j,k,1).lt.VFlo.or.volmom(i,j,k,1).gt.VFhi) cycle
                   
                   ! Liquid-gas symmetry
                   flip=.false.
