@@ -49,7 +49,7 @@
 
 # Pressure solver
 [Jet] Pressure tolerance : 1e-4
-[Jet] Pressure iteration : 20
+[Jet] Pressure iteration : 30
 
 # Other options
 [Jet] Use implicit solver : .false.
