@@ -90,7 +90,7 @@ module tpscalar_class
       procedure :: apply_bcond                            !< Apply all boundary conditions
       procedure :: get_dSCdt                              !< Calculate drhoSC/dt from advective fluxes
       procedure :: get_max                                !< Calculate maximum and integral field values
-      procedure :: solve_implicit                         !< Solve for the scalar residuals implicitly
+      procedure :: solve_implicit_diff                    !< Solve for the diffusive scalar residuals implicitly
    end type tpscalar
    
    
@@ -650,8 +650,8 @@ contains
    end subroutine get_max
    
    
-   !> Solve for implicit scalar residual
-   subroutine solve_implicit(this,dt,resSC)
+   !> Solve for implicit scalar residual (only diffusion)
+   subroutine solve_implicit_diff(this,dt,resSC)
       implicit none
       class(tpscalar), intent(inout) :: this
       real(WP), intent(in) :: dt
@@ -696,7 +696,7 @@ contains
          
       end do
       
-   end subroutine solve_implicit
+   end subroutine solve_implicit_diff
 
    
    !> Print out info for tpscalar solver

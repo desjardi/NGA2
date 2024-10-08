@@ -140,7 +140,7 @@ contains
       this%told =0.0_WP
       this%dtold=0.0_WP
       this%tmid =0.0_WP
-      this%it=1; this%itmax=1
+      this%it=1
    end subroutine reset
 
 
