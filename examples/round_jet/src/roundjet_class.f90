@@ -158,7 +158,7 @@ contains
          inquire(file='merge_split.csv',exist=file_exists)
          if (.not.file_exists) then
             open(newunit=iunit,file='merge_split.csv',form='formatted',status='replace',action='write')
-            write(iunit,'(a)') 'Event Count, Event Type, Old IDs, New ID, Time, New Vol, X, Y, Z, U, V, W, L1, L2, L3'
+            write(iunit,'(a)') 'EventCount, EventType, OldIDs, NewID, Time, NewVol, X, Y, Z, U, V, W, L1, L2, L3'
             close(iunit)
          end if
          ! Open the csv file
