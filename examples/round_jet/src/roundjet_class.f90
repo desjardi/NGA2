@@ -152,17 +152,17 @@ contains
       logical :: file_exists
       type(struct_stats) :: mystat
       
-      ! Prepare the csv file
+      ! Open csv file
       if (this%cfg%amRoot) then
-         ! Check if the file exists
+         ! Check if csv file exists, if not create a new file with headers
          inquire(file='merge_split.csv',exist=file_exists)
-         ! Create a new file with headers if it doesn't exist
          if (.not.file_exists) then
             open(newunit=iunit,file='merge_split.csv',form='formatted',status='replace',action='write')
             write(iunit,'(a)') 'Event Count, Event Type, Old IDs, New ID, Time, New Vol, X, Y, Z, U, V, W, L1, L2, L3'
-         else
-            open(iunit,file='merge_split.csv',form='formatted',status='old',position='append',action='write')
+            close(iunit)
          end if
+         ! Open the csv file
+         open(newunit=iunit,file='merge_split.csv',form='formatted',status='old',position='append',action='write')
       end if
       
       ! Analyze merge events
@@ -183,7 +183,7 @@ contains
                write(iunit,"(A)",       advance="no")   ','
                write(iunit,"(I0)",      advance="no")  this%strack%merge_master(n)%newid
                write(iunit,"(A)",       advance="no")  ','
-               write(iunit,"(ES12.5 )", advance="no")  this%time%t
+               write(iunit,"(ES12.5)",  advance="no")  this%time%t
                write(iunit,"(A)",       advance="no")   ','
                write(iunit,"(ES22.16)", advance="yes") mystat%vol
             end if 
