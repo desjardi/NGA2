@@ -319,9 +319,6 @@ contains
          call MPI_ALLREDUCE(MPI_IN_PLACE,v_vol,1,MPI_REAL_WP,MPI_SUM,this%strack%vf%cfg%comm,ierr)
          call MPI_ALLREDUCE(MPI_IN_PLACE,w_vol,1,MPI_REAL_WP,MPI_SUM,this%strack%vf%cfg%comm,ierr)
          
-         print *, "strack%nstruct ",this%strack%nstruct
-         print *, "strack%nmerge_master ",this%strack%nmerge_master
-
          if (vol_struct.gt.0.0_WP) then 
             ! Moments of inertia
             Imom=0.0_WP
