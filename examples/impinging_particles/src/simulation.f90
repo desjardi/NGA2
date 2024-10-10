@@ -225,11 +225,13 @@ contains
             lp%p(i)%vel=0.0_WP
             ! Handle fixed bed case
             if (.not.freebed) then
-               lp%p(i)%ind=-2
+               lp%p(i)%id=-2
                lp%p(i)%vel=[0.0_WP,-vbed,0.0_WP]
             end if
             ! Clip the top
             if (lp%p(i)%pos(2).gt.bedbottom+bedheight) lp%p(i)%flag=1
+            ! Relocate particles
+            lp%p(i)%ind=lp%cfg%get_ijk_global(lp%p(i)%pos,lp%p(i)%ind)
          end do
          call lp%sync()
          ! Recalculate VF
