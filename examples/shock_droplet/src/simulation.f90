@@ -10,6 +10,7 @@ module simulation
    use event_class,       only: event
    use monitor_class,     only: monitor
    use hypre_str_class,   only: hypre_str
+   use surfmesh_class,    only: surfmesh
    implicit none
    private
 
@@ -25,6 +26,7 @@ module simulation
    !> Ensight postprocessing
    type(ensight) :: ens_out
    type(event)   :: ens_evt
+   type(surfmesh):: smesh
 
    !> Simulation monitor file
    type(monitor) :: mfile,cflfile,cvgfile
@@ -301,6 +303,28 @@ contains
 
       end block create_and_initialize_flow_solver
 
+      ! Create surfmesh object for interface polygon output
+      create_smesh: block
+      use irl_fortran_interface
+        integer :: i,j,k,nplane,np
+         smesh=surfmesh(nvar=1,name='plic')
+         smesh%varname(1)='curv'
+         call vf%update_surfmesh(smesh)
+         smesh%var(1,:)=0.0_WP
+         np=0;
+         do k=vf%cfg%kmin_,vf%cfg%kmax_
+            do j=vf%cfg%jmin_,vf%cfg%jmax_
+               do i=vf%cfg%imin_,vf%cfg%imax_
+                  do nplane=1,getNumberOfPlanes(vf%liquid_gas_interface(i,j,k))
+                     if (getNumberOfVertices(vf%interface_polygon(nplane,i,j,k)).gt.0) then
+                        np=np+1; 
+                        smesh%var(1,np)=vf%curv(i,j,k)  
+                     end if       
+                  end do
+               end do
+            end do
+         end do
+      end block create_smesh
 
       ! Add Ensight output
       create_ensight: block
@@ -320,6 +344,7 @@ contains
          call ens_out%add_scalar('VOF',vf%VF)
          call ens_out%add_scalar('curvature',vf%curv)
          call ens_out%add_scalar('Mach',fs%Mach)
+         call ens_out%add_surface('plic',smesh)
          ! Output to ensight
          if (ens_evt%occurs()) call ens_out%write_data(time%t)
       end block create_ensight
@@ -443,7 +468,31 @@ contains
          call fs%pressure_relax(vf,matmod,relax_model)
 
          ! Output to ensight
-         if (ens_evt%occurs()) call ens_out%write_data(time%t)
+         if (ens_evt%occurs()) then
+            !update surfmesh object
+            update_smesh: block
+               use irl_fortran_interface
+               integer :: i,j,k,nplane,np
+               ! Transfer polygons to smesh
+               call vf%update_surfmesh(smesh)
+               ! Also populate nplane variable
+               smesh%var(1,:)=0.0_WP
+               np=0
+               do k=vf%cfg%kmin_,vf%cfg%kmax_
+                  do j=vf%cfg%jmin_,vf%cfg%jmax_
+                     do i=vf%cfg%imin_,vf%cfg%imax_
+                        do nplane=1,getNumberOfPlanes(vf%liquid_gas_interface(i,j,k))
+                           if (getNumberOfVertices(vf%interface_polygon(nplane,i,j,k)).gt.0) then
+                              np=np+1;
+                              smesh%var(1,np)=vf%curv(i,j,k)        
+                           end if
+                     end do
+                     end do
+                  end do
+               end do
+               end block update_smesh
+            call ens_out%write_data(time%t)
+         end if
 
          ! Perform and output monitoring
          call fs%get_max()
