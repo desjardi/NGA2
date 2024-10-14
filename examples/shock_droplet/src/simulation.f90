@@ -101,7 +101,7 @@ contains
       ! Initialize our VOF solver and field
       create_and_initialize_vof: block
          use mms_geom, only: cube_refine_vol
-         use vfs_class, only: r2p,lvira,elvira,VFhi,VFlo
+         use vfs_class, only: r2p,lvira,elvira,plicnet,VFhi,VFlo,flux
          integer :: i,j,k,n,si,sj,sk
          real(WP), dimension(3,8) :: cube_vertex
          real(WP), dimension(3) :: v_cent,a_cent
@@ -109,7 +109,7 @@ contains
          integer, parameter :: amr_ref_lvl=4
          ! Create a VOF solver with lvira reconstruction
          ! vf=vfs(cfg=cfg,reconstruction_method=elvira,name='VOF')
-         call vf%initialize(cfg=cfg,reconstruction_method=lvira,name='VOF')
+         call vf%initialize(cfg=cfg,reconstruction_method=plicnet,transport_method=flux,name='VOF')
          ! Initialize liquid at left
          call param_read('Droplet diameter',ddrop)
          call param_read('Droplet location',dctr)
@@ -136,7 +136,7 @@ contains
                   if (vf%VF(i,j,k).ge.VFlo.and.vf%VF(i,j,k).le.VFhi) then
                      vf%Lbary(:,i,j,k)=v_cent
                      vf%Gbary(:,i,j,k)=([vf%cfg%xm(i),vf%cfg%ym(j),vf%cfg%zm(k)]-vf%VF(i,j,k)*vf%Lbary(:,i,j,k))/(1.0_WP-vf%VF(i,j,k))
-                     vf%Gbary(3,i,j,k)=v_cent(3);
+                     if (vf%cfg%nz.eq.1) vf%Gbary(3,i,j,k)=v_cent(3);
                   else
                      vf%Lbary(:,i,j,k)=[vf%cfg%xm(i),vf%cfg%ym(j),vf%cfg%zm(k)]
                      vf%Gbary(:,i,j,k)=[vf%cfg%xm(i),vf%cfg%ym(j),vf%cfg%zm(k)]
