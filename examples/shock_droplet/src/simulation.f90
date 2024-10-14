@@ -170,16 +170,17 @@ contains
          use hypre_str_class, only: pcg_pfmg
          use mathtools,  only: Pi
          use parallel,   only: amRoot
+         use param, only: param_read,param_exists
          integer :: i,j,k,n
          real(WP), dimension(3) :: xyz
          real(WP) :: r_rho,Reg,r_visc,Mag,Mal,Weg
          real(WP) :: gamm_l,Pref_l,gamm_g,visc_l,visc_g,Pref
          real(WP) :: xshock,vshock,relshockvel
-         real(WP) :: Grho0, GP0, Grho1, GP1, ST, Ma1, Ma, Lrho0, LP0, Mas
+         real(WP) :: Grho0,GP0,Grho1,GP1,ST,Ma1,Ma,Lrho0,LP0,Mas,kappa_l,kappa_g,cv_g0,cv_l0
          type(bcond), pointer :: mybc
          ! Create material model class
          matmod=matm(cfg=cfg,name='Liquid-gas models')
-         ! Get EOS parameters from input
+         ! Get parameters from input
          call param_read('Liquid gamma',gamm_l)
          call param_read('Gas gamma',gamm_g)
          call param_read('Density ratio',r_rho); Lrho0=r_rho
@@ -187,6 +188,13 @@ contains
          call param_read('Dynamic viscosity ratio',r_visc); visc_l=visc_g*r_visc;
          call param_read('Gas Mach number',Mag); Pref = 1.0_WP/(gamm_g*Mag**2)
          call param_read('Liquid Mach number',Mal); Pref_l = r_rho/(gamm_l*Mal**2) - Pref
+         ! Get thermodynamic parameters from input (From EoS p = rho*(gamma-1)*c_v*T - p_inf, set T = 1)
+         cv_g0 = Pref/(1.0_WP*1.0_WP*(gamm_g-1.0_WP)); cv_l0 = (Pref+Pref_l)/(Lrho0*1.0_WP*(gamm_l-1.0_WP))
+         kappa_g = 0.0_WP; kappa_l = 0.0_WP
+         if (param_exists('Gas Prandtl number')) then
+            call param_read('Gas Prandtl number',Pr_g); kappa_g = gamm_g*cv_g0*visc_g/Pr_g
+            call param_read('Liquid Prandtl number',Pr_l); kappa_l = gamm_l*cv_l0*visc_l/Pr_l
+         end if
          ! Register equations of state
          call matmod%register_stiffenedgas('liquid',gamm_l,Pref_l)
          call matmod%register_idealgas('gas',gamm_g)
@@ -195,7 +203,7 @@ contains
          ! Register flow solver variables with material models
          call matmod%register_thermoflow_variables('liquid',fs%Lrho,fs%Ui,fs%Vi,fs%Wi,fs%LrhoE,fs%LP)
          call matmod%register_thermoflow_variables('gas'   ,fs%Grho,fs%Ui,fs%Vi,fs%Wi,fs%GrhoE,fs%GP)
-         call matmod%register_diffusion_thermo_models(viscconst_gas=visc_g, viscconst_liquid=visc_l)
+         call matmod%register_diffusion_thermo_models(viscconst_gas=visc_g, viscconst_liquid=visc_l,hdffconst_gas=kappa_g,hdffconst_liquid=kappa_l,sphtconst_gas=cv_g0,sphtconst_liquid=cv_l0)
          ! Read in surface tension coefficient
          call param_read('Gas Weber number',Weg); fs%sigma=1.0_WP/(Weg+epsilon(Weg))
          ! Configure pressure solver
@@ -210,8 +218,8 @@ contains
          ! Setup the solver
          call fs%setup(pressure_solver=ps,implicit_solver=vs)
 
-         ! Liquid and gas density
-         fs%Lrho = Lrho0; Grho0=1.0_WP
+         ! Start with post shock velocity and density
+         Grho1 = 1.0_WP; vshock = 1.0_WP;
          ! Initially 0 velocity in y and z
          fs%Vi = 0.0_WP; fs%Wi = 0.0_WP
          ! Zero face velocities as well for the sake of dirichlet boundaries
@@ -220,8 +228,6 @@ contains
          ! Initialize conditions
          call param_read('Shock location',xshock)
          call param_read('Shock Mach number',Mas)
-         ! Use shock relations to get pre-shock numbers
-         Grho1 = 1.0_WP; vshock = 1.0_WP; Ma = Mag;
          ! Calculate Pressure post-shock
          GP1 = vshock**2.0_WP * Grho1/(gamm_g*Ma**2.0_WP)
          ! Calculate density pre-shock
@@ -260,16 +266,15 @@ contains
          ! Calculate liquid pressure
          if (fs%cfg%nz.eq.1) then
             ! Cylinder configuration, curv = 1/r
-            ! LP0 = Pref + 2.0/ddrop*fs%sigma
             LP0 = GP0 + 2.0/ddrop*fs%sigma
          else
             ! Sphere configuration, curv = 1/r + 1/r
-            ! LP0 = Pref + 4.0/ddrop*fs%sigma
             LP0 = GP0 + 4.0/ddrop*fs%sigma
          end if
-         fs%LP = LP0
 
-         ! Initialize liquid energy, with surface tension
+         ! Initialize liquid quantities
+         fs%Lrho = Lrho0
+         fs%LP = LP0
          fs%LrhoE = matmod%EOS_energy(LP0,Lrho0,0.0_WP,0.0_WP,0.0_WP,'liquid')
 
          ! Define boundary conditions - initialized values are intended dirichlet values too, for the cell centers
@@ -336,11 +341,12 @@ contains
          ! Add variables to output
          call ens_out%add_vector('velocity',fs%Ui,fs%Vi,fs%Wi)
          call ens_out%add_scalar('P',fs%P)
-         call ens_out%add_scalar('PA',fs%PA)
+         call ens_out%add_scalar('GP',fs%GP)
+         call ens_out%add_scalar('LP',fs%LP)
+         call ens_out%add_scalar('Density',fs%RHO)
          call ens_out%add_scalar('Grho',fs%Grho)
          call ens_out%add_scalar('Lrho',fs%Lrho)
-         call ens_out%add_scalar('Density',fs%RHO)
-         call ens_out%add_scalar('Bulkmod',fs%RHOSS2)
+         call ens_out%add_scalar('Tmptr',fs%Tmptr)
          call ens_out%add_scalar('VOF',vf%VF)
          call ens_out%add_scalar('curvature',vf%curv)
          call ens_out%add_scalar('Mach',fs%Mach)
@@ -381,6 +387,9 @@ contains
          call cflfile%add_column(fs%CFLv_x,'Viscous xCFL')
          call cflfile%add_column(fs%CFLv_y,'Viscous yCFL')
          call cflfile%add_column(fs%CFLv_z,'Viscous zCFL')
+         call cflfile%add_column(fs%CFLa_x,'Acoustic xCFL')
+         call cflfile%add_column(fs%CFLa_y,'Acoustic yCFL')
+         call cflfile%add_column(fs%CFLa_z,'Acoustic zCFL')
          call cflfile%write()
          ! Create convergence monitor
          cvgfile=monitor(fs%cfg%amRoot,'cvg')
