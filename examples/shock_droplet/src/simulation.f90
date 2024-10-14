@@ -176,7 +176,7 @@ contains
          real(WP) :: r_rho,Reg,r_visc,Mag,Mal,Weg
          real(WP) :: gamm_l,Pref_l,gamm_g,visc_l,visc_g,Pref
          real(WP) :: xshock,vshock,relshockvel
-         real(WP) :: Grho0,GP0,Grho1,GP1,ST,Ma1,Ma,Lrho0,LP0,Mas,kappa_l,kappa_g,cv_g0,cv_l0
+         real(WP) :: Grho0,GP0,Grho1,GP1,ST,Ma1,Ma,Lrho0,LP0,Mas,Pr_g,Pr_l,kappa_l,kappa_g,cv_g0,cv_l0
          type(bcond), pointer :: mybc
          ! Create material model class
          matmod=matm(cfg=cfg,name='Liquid-gas models')
