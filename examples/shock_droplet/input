@@ -28,7 +28,7 @@ Gas Weber number :        15
 Gas Mach number :         0.577
 Liquid Mach number :      0.3
 Shock Mach number :       1.47
-Liquid gamma :	      	  4.4
+Liquid gamma :	      	  1.1
 Gas gamma : 		      1.4
 # Gas Prandtl number   :    1.0
 # Liquid Prandtl number  :  7.0
