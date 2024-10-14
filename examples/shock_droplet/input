@@ -22,9 +22,9 @@ Shock location :     5.4
 
 # Fluid properties
 Density ratio :           1000
-Dynamic viscosity ratio : 10
+Dynamic viscosity ratio : 100
 Gas Reynolds number :     1000
-Gas Weber number :        15
+Gas Weber number :        50
 Gas Mach number :         0.577
 Liquid Mach number :      0.3
 Shock Mach number :       1.47
