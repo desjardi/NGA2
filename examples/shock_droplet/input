@@ -1,16 +1,16 @@
 # Parallelization
-Partition :	8 1 1
+Partition :	1 8 1
 
 # Mesh definition
 Lx :	12
-nx :	192
+nx :	250
 Ly :	12
-ny :	192
-<!-- Lz :    12 -->
-<!-- nz :    96  -->
-<!-- Cells per diameter :	  16 -->
-Cells per left region:	  16
-Refined region left bdy:  4.17
+ny :	250
+Lz :    12
+nz :    250 
+Cells per diameter :	  50
+Cells per left region:	  35
+Refined region left bdy:  5
 Refined region right bdy: 6
 Refined region top bdy:	  1
 
@@ -18,24 +18,25 @@ Refined region top bdy:	  1
 # Flow setup
 Droplet diameter :   1
 Droplet location :   6 0 0
-Shock location :      4
+Shock location :     5.4
 
 # Fluid properties
-Density ratio : 1000
-Dynamic viscosity ratio : 10
-Gas Reynolds number : 1000
-Gas Weber number : 15
-Gas Mach number : 0.577
-Liquid Mach number : 0.01
-Shock Mach number : 1.47
-Liquid gamma :	      	      4.4
+Density ratio :           1000
+Dynamic viscosity ratio : 100
+Gas Reynolds number :     1000
+Gas Weber number :        50
+Gas Mach number :         0.577
+Liquid Mach number :      0.3
+Shock Mach number :       1.47
+Liquid gamma :	      	  1.1
 Gas gamma : 		      1.4
+# Gas Prandtl number   :    1.0
+# Liquid Prandtl number  :  7.0
 
 # Time integration
-Max timestep size : 5e-2
-Max cfl number :    0.8
-Max time :     	    175
-# To look at breakup, use tmax = 2.9e-3
+Max timestep size : 5e-3
+Max cfl number :    0.9
+Max time :     	    50
 Max steps :	    100000
 
 # Pressure solver
@@ -47,4 +48,4 @@ Implicit tolerance : 1e-6
 Implicit iteration : 100
 
 # Ensight output
-Ensight output period : 1
+Ensight output period : 0.5
