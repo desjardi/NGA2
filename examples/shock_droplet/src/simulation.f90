@@ -13,7 +13,7 @@ module simulation
    use surfmesh_class,    only: surfmesh
    implicit none
    private
-
+   
    !> Single two-phase flow solver, volume fraction solver, and material model set
    !> With corresponding time tracker
    type(mast),        public :: fs
@@ -22,46 +22,46 @@ module simulation
    type(timetracker), public :: time
    type(hypre_str),   public :: ps
    type(hypre_str),   public :: vs
-
+   
    !> Ensight postprocessing
    type(ensight) :: ens_out
    type(event)   :: ens_evt
    type(surfmesh):: smesh
-
+   
    !> Simulation monitor file
    type(monitor) :: mfile,cflfile,cvgfile
-
+   
    public :: simulation_init,simulation_run,simulation_final
-
+   
    !> Problem definition
    real(WP) :: ddrop
    real(WP), dimension(3) :: dctr
    integer :: relax_model
-
+   
 contains
-
+   
    !> Function that localizes the left (x-) of the domain
    function left_of_domain(pg,i,j,k) result(isIn)
-     use pgrid_class, only: pgrid
-     implicit none
-     class(pgrid), intent(in) :: pg
-     integer, intent(in) :: i,j,k
-     logical :: isIn
-     isIn=.false.
-     if (i.eq.pg%imin) isIn=.true.
+      use pgrid_class, only: pgrid
+      implicit none
+      class(pgrid), intent(in) :: pg
+      integer, intent(in) :: i,j,k
+      logical :: isIn
+      isIn=.false.
+      if (i.eq.pg%imin) isIn=.true.
    end function left_of_domain
-
+   
    !> Function that localizes the right (x+) of the domain
    function right_of_domain(pg,i,j,k) result(isIn)
-     use pgrid_class, only: pgrid
-     implicit none
-     class(pgrid), intent(in) :: pg
-     integer, intent(in) :: i,j,k
-     logical :: isIn
-     isIn=.false.
-     if (i.eq.pg%imax+1) isIn=.true.
+      use pgrid_class, only: pgrid
+      implicit none
+      class(pgrid), intent(in) :: pg
+      integer, intent(in) :: i,j,k
+      logical :: isIn
+      isIn=.false.
+      if (i.eq.pg%imax+1) isIn=.true.
    end function right_of_domain
-
+   
    !> Function that defines a level set function for a cylindrical droplet (2D)
    function levelset_cyl(xyz,t) result(G)
       implicit none
@@ -70,7 +70,7 @@ contains
       real(WP) :: G
       G=1.0_WP-sqrt((xyz(1)-dctr(1))**2+(xyz(2)-dctr(2))**2)/(ddrop/2.0)
    end function levelset_cyl
-
+   
    !> Function that defines a level set function for a spherical droplet (3D)
    function levelset_sphere(xyz,t) result(G)
       implicit none
@@ -79,13 +79,13 @@ contains
       real(WP) :: G
       G=1.0_WP-sqrt((xyz(1)-dctr(1))**2+(xyz(2)-dctr(2))**2+(xyz(3)-dctr(3))**2)/(ddrop/2.0)
    end function levelset_sphere
-
+   
    !> Initialization of problem solver
    subroutine simulation_init
       use param, only: param_read
       implicit none
-
-
+      
+      
       ! Initialize time tracker with 2 subiterations
       initialize_timetracker: block
          time=timetracker(amRoot=cfg%amRoot)
@@ -96,8 +96,8 @@ contains
          time%dt=time%dtmax
          time%itmax=2
       end block initialize_timetracker
-
-
+      
+      
       ! Initialize our VOF solver and field
       create_and_initialize_vof: block
          use mms_geom, only: cube_refine_vol
@@ -162,8 +162,8 @@ contains
          ! Reset moments to guarantee compatibility with interface reconstruction
          call vf%reset_volume_moments()
       end block create_and_initialize_vof
-
-
+      
+      
       ! Create a compressible two-phase flow solver
       create_and_initialize_flow_solver: block
          use mast_class, only: clipped_neumann,dirichlet,bc_scope,bcond,mech_egy_mech_hhz
@@ -217,14 +217,14 @@ contains
          call param_read('Implicit tolerance',vs%rcvg)
          ! Setup the solver
          call fs%setup(pressure_solver=ps,implicit_solver=vs)
-
+         
          ! Start with post shock velocity and density
          Grho1 = 1.0_WP; vshock = 1.0_WP;
          ! Initially 0 velocity in y and z
          fs%Vi = 0.0_WP; fs%Wi = 0.0_WP
          ! Zero face velocities as well for the sake of dirichlet boundaries
          fs%V = 0.0_WP; fs%W = 0.0_WP         
-
+         
          ! Initialize conditions
          call param_read('Shock location',xshock)
          call param_read('Shock Mach number',Mas)
@@ -238,7 +238,7 @@ contains
          Ma1 = sqrt(((gamm_g-1.0_WP)*(Ma**2)+2.0_WP)/(2.0_WP*gamm_g*(Ma**2.0_WP)-(gamm_g-1.0_WP)))
          ! Velocity at which shock moves
          relshockvel = -Grho1*vshock/(Grho0-Grho1)
-
+         
          if (amRoot) then
            print*,"===== Problem Setup Description ====="
            print*,'Gas Mach number', Mag, 'Shock Mach number', Mas
@@ -246,23 +246,23 @@ contains
            print*,'Post-shock: Density',Grho1,'Pressure',GP1
            print*,'Shock velocity', relshockvel, 'Gas velocity',vshock
          end if
-
+         
          ! Initialize gas phase quantities
          do i=fs%cfg%imino_,fs%cfg%imaxo_
-           ! pressure, velocity, use matmod for energy
-           if (fs%cfg%x(i).lt.xshock) then
-             fs%Grho(i,:,:) = Grho1
-             fs%Ui(i,:,:) = vshock
-             fs%GP(i,:,:) = GP1
-             fs%GrhoE(i,:,:) = matmod%EOS_energy(GP1,Grho1,vshock,0.0_WP,0.0_WP,'gas')
-           else
-             fs%Grho(i,:,:) = Grho0
-             fs%Ui(i,:,:) = 0.0_WP
-             fs%GP(i,:,:) = GP0 ! was Pref before
-             fs%GrhoE(i,:,:) = matmod%EOS_energy(GP0,Grho0,0.0_WP,0.0_WP,0.0_WP,'gas')
-           end if
+            ! pressure, velocity, use matmod for energy
+            if (fs%cfg%x(i).lt.xshock) then
+               fs%Grho(i,:,:) = Grho1
+               fs%Ui(i,:,:) = vshock
+               fs%GP(i,:,:) = GP1
+               fs%GrhoE(i,:,:) = matmod%EOS_energy(GP1,Grho1,vshock,0.0_WP,0.0_WP,'gas')
+            else
+               fs%Grho(i,:,:) = Grho0
+               fs%Ui(i,:,:) = 0.0_WP
+               fs%GP(i,:,:) = GP0 ! was Pref before
+               fs%GrhoE(i,:,:) = matmod%EOS_energy(GP0,Grho0,0.0_WP,0.0_WP,0.0_WP,'gas')
+            end if
          end do
-
+         
          ! Calculate liquid pressure
          if (fs%cfg%nz.eq.1) then
             ! Cylinder configuration, curv = 1/r
@@ -271,16 +271,16 @@ contains
             ! Sphere configuration, curv = 1/r + 1/r
             LP0 = GP0 + 4.0/ddrop*fs%sigma
          end if
-
+         
          ! Initialize liquid quantities
          fs%Lrho = Lrho0
          fs%LP = LP0
          fs%LrhoE = matmod%EOS_energy(LP0,Lrho0,0.0_WP,0.0_WP,0.0_WP,'liquid')
-
+         
          ! Define boundary conditions - initialized values are intended dirichlet values too, for the cell centers
          call fs%add_bcond(name= 'inflow',type=dirichlet      ,locator=left_of_domain ,face='x',dir=-1)
          call fs%add_bcond(name='outflow',type=clipped_neumann,locator=right_of_domain,face='x',dir=+1)
-
+         
          ! Calculate face velocities
          call fs%interp_vel_basic(vf,fs%Ui,fs%Vi,fs%Wi,fs%U,fs%V,fs%W)
          ! Apply face BC - inflow
@@ -292,7 +292,7 @@ contains
          ! Apply face BC - outflow
          bc_scope = 'velocity'
          call fs%apply_bcond(time%dt,bc_scope)
-
+         
          ! Calculate mixture density and momenta
          fs%RHO   = (1.0_WP-vf%VF)*fs%Grho  + vf%VF*fs%Lrho
          fs%rhoUi = fs%RHO*fs%Ui; fs%rhoVi = fs%RHO*fs%Vi; fs%rhoWi = fs%RHO*fs%Wi
@@ -305,13 +305,13 @@ contains
          call fs%harmonize_advpressure_bulkmod(vf,matmod)
          ! Set initial pressure to harmonized field based on internal energy
          fs%P = fs%PA
-
+         
       end block create_and_initialize_flow_solver
-
+      
       ! Create surfmesh object for interface polygon output
       create_smesh: block
-      use irl_fortran_interface
-        integer :: i,j,k,nplane,np
+         use irl_fortran_interface
+         integer :: i,j,k,nplane,np
          smesh=surfmesh(nvar=1,name='plic')
          smesh%varname(1)='curv'
          call vf%update_surfmesh(smesh)
@@ -330,7 +330,7 @@ contains
             end do
          end do
       end block create_smesh
-
+      
       ! Add Ensight output
       create_ensight: block
          ! Create Ensight output from cfg
@@ -354,8 +354,8 @@ contains
          ! Output to ensight
          if (ens_evt%occurs()) call ens_out%write_data(time%t)
       end block create_ensight
-
-
+      
+      
       ! Create a monitor file
       create_monitor: block
          ! Prepare some info about fields
@@ -405,24 +405,24 @@ contains
          call cvgfile%add_column(fs%psolv%it,'Pressure iteration')
          call cvgfile%add_column(fs%psolv%rerr,'Pressure error')
       end block create_monitor
-
-
+      
+      
    end subroutine simulation_init
-
-
+   
+   
    !> Perform an NGA2 simulation - this mimicks NGA's old time integration for multiphase
    subroutine simulation_run
       use messager, only: die
       implicit none
-
+      
       ! Perform time integration
       do while (.not.time%done())
-
+         
          ! Increment time
          call fs%get_cfl(time%dt,time%cfl)
          call time%adjust_dt()
          call time%increment()
-
+         
          ! Reinitialize phase pressure by syncing it with conserved phase energy
          call fs%reinit_phase_pressure(vf,matmod)
          fs%Uiold=fs%Ui; fs%Viold=fs%Vi; fs%Wiold=fs%Wi
@@ -431,30 +431,30 @@ contains
          fs%Grhoold = fs%Grho; fs%Lrhoold = fs%Lrho
          fs%GrhoEold=fs%GrhoE; fs%LrhoEold=fs%LrhoE
          fs%GPold   =   fs%GP; fs%LPold   =   fs%LP
-
+         
          ! Remember old interface, including VF and barycenters
          call vf%copy_interface_to_old()
-
+         
          ! Create in-cell reconstruction
          call fs%flow_reconstruct(vf)
-
+         
          ! Zero variables that will change during subiterations
          fs%P = 0.0_WP
          fs%Pjx = 0.0_WP; fs%Pjy = 0.0_WP; fs%Pjz = 0.0_WP
          fs%Hpjump = 0.0_WP
-
+         
          ! Determine semi-Lagrangian advection flag
          call fs%flag_sl(time%dt,vf)
-
+         
          ! Perform sub-iterations
          do while (time%it.le.time%itmax)
-
+            
             ! Predictor step, involving advection and pressure terms
             call fs%advection_step(time%dt,vf,matmod)
             
             ! Viscous step
             call fs%diffusion_src_explicit_step(time%dt,vf,matmod)
-
+            
             ! Prepare pressure projection
             call fs%pressureproj_prepare(time%dt,vf,matmod)
             ! Initialize and solve Helmholtz equation
@@ -465,17 +465,17 @@ contains
             ! Perform corrector step using solution
             fs%P=fs%P+fs%psolv%sol
             call fs%pressureproj_correct(time%dt,vf,fs%psolv%sol)
-
+            
             ! Record convergence monitor
             call cvgfile%write()
             ! Increment sub-iteration counter
             time%it=time%it+1
-
+            
          end do
-
+         
          ! Pressure relaxation
          call fs%pressure_relax(vf,matmod,relax_model)
-
+         
          ! Output to ensight
          if (ens_evt%occurs()) then
             !update surfmesh object
@@ -495,30 +495,30 @@ contains
                               np=np+1;
                               smesh%var(1,np)=vf%curv(i,j,k)        
                            end if
-                     end do
+                        end do
                      end do
                   end do
                end do
-               end block update_smesh
+            end block update_smesh
             call ens_out%write_data(time%t)
          end if
-
+         
          ! Perform and output monitoring
          call fs%get_max()
          call vf%get_max()
          call fs%get_viz()
          call mfile%write()
          call cflfile%write()
-
+         
       end do
-
+      
    end subroutine simulation_run
-
-
+   
+   
    !> Finalize the NGA2 simulation
    subroutine simulation_final
       implicit none
-
+      
    end subroutine simulation_final
-
+   
 end module simulation

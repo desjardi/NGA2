@@ -1,24 +1,23 @@
 # Parallelization
-Partition :	1 8 1
+Partition : 1 8 1
 
 # Mesh definition
-Lx :	12
-nx :	250
-Ly :	12
-ny :	250
-Lz :    12
-nz :    250 
-Cells per diameter :	  50
-Cells per left region:	  35
+Lx : 12
+nx : 250
+Ly : 12
+ny : 250
+Lz : 12
+nz : 250 
+Cells per diameter :      50
+Cells per left region :   35
 Refined region left bdy:  5
 Refined region right bdy: 6
-Refined region top bdy:	  1
-
+Refined region top bdy:   1
 
 # Flow setup
-Droplet diameter :   1
-Droplet location :   6 0 0
-Shock location :     5.4
+Droplet diameter : 1
+Droplet location : 6 0 0
+Shock location :   5.4
 
 # Fluid properties
 Density ratio :           1000
@@ -28,16 +27,16 @@ Gas Weber number :        50
 Gas Mach number :         0.577
 Liquid Mach number :      0.3
 Shock Mach number :       1.47
-Liquid gamma :	      	  1.1
-Gas gamma : 		      1.4
-# Gas Prandtl number   :    1.0
-# Liquid Prandtl number  :  7.0
+Liquid gamma :            1.1
+Gas gamma :               1.4
+# Gas Prandtl number :      1.0
+# Liquid Prandtl number :   7.0
 
 # Time integration
 Max timestep size : 5e-3
 Max cfl number :    0.9
-Max time :     	    50
-Max steps :	    100000
+Max time :          50
+Max steps :         100000
 
 # Pressure solver
 Pressure tolerance : 1e-6
