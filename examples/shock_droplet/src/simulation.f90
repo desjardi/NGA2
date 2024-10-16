@@ -111,8 +111,7 @@ contains
          ! vf=vfs(cfg=cfg,reconstruction_method=elvira,name='VOF')
          call vf%initialize(cfg=cfg,reconstruction_method=plicnet,transport_method=flux,name='VOF')
          ! Initialize liquid at left
-         call param_read('Droplet diameter',ddrop)
-         call param_read('Droplet location',dctr)
+         ddrop=1.0_WP; call param_read('Droplet location',dctr)
          do k=vf%cfg%kmino_,vf%cfg%kmaxo_
             do j=vf%cfg%jmino_,vf%cfg%jmaxo_
                do i=vf%cfg%imino_,vf%cfg%imaxo_
@@ -266,10 +265,10 @@ contains
          ! Calculate liquid pressure
          if (fs%cfg%nz.eq.1) then
             ! Cylinder configuration, curv = 1/r
-            LP0 = GP0 + 2.0/ddrop*fs%sigma
+            LP0 = GP0 + 2.0_WP/ddrop*fs%sigma
          else
             ! Sphere configuration, curv = 1/r + 1/r
-            LP0 = GP0 + 4.0/ddrop*fs%sigma
+            LP0 = GP0 + 4.0_WP/ddrop*fs%sigma
          end if
          
          ! Initialize liquid quantities

@@ -3,10 +3,10 @@ Partition : 1 8 1
 
 # Mesh definition
 Lx : 12
-nx : 250
 Ly : 12
-ny : 250
 Lz : 12
+nx : 250
+ny : 250
 nz : 250 
 Cells per diameter :      50
 Cells per left region :   35
@@ -15,7 +15,6 @@ Refined region right bdy: 6
 Refined region top bdy:   1
 
 # Flow setup
-Droplet diameter : 1
 Droplet location : 6 0 0
 Shock location :   5.4
 

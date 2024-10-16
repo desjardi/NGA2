@@ -32,10 +32,10 @@
 [Jet] I/O partition : 1 1 1
 
 # Mesh definition
-[Jet] Lx : 24
+[Jet] Lx : 48
 [Jet] Ly : 6
 [Jet] Lz : 6
-[Jet] nx : 256 !512
+[Jet] nx : 512 !1024
 [Jet] ny : 64  !128
 [Jet] nz : 64  !128
 
@@ -43,7 +43,7 @@
 [Jet] Stretch ratio in yz :   1.07
 
 # Time integration
-[Jet] Max timestep size : 4e-2 !2e-2
+[Jet] Max timestep size : 2e-2 !1e-2
 [Jet] Max cfl number :    0.8
 [Jet] Max time :          100
 

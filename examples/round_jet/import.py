@@ -28,11 +28,11 @@ def execute_query(session, query):
 def load_csv_and_create_nodes(session):
     query = """
     CALL {
-      LOAD CSV WITH HEADERS FROM "file:///merge_split.csv" AS csvline
-      CREATE (n:droplet {
+LOAD CSV WITH HEADERS FROM "file:///merge_split_clean.csv" AS csvline
+    CREATE (n:droplet { 
         id: toInteger(csvline.NewID),
         Event: csvline.EventType,
-        OldID: toInteger(csvline.OldIDs),
+        OldIDs: [x IN split(csvline.OldIDs, ";") WHERE x <> '' | toInteger(x)],
         NewID: toInteger(csvline.NewID),
         Volume: toFloat(csvline.NewVol),
         Event_Time: toFloat(csvline.Time),
@@ -45,7 +45,7 @@ def load_csv_and_create_nodes(session):
         L1: toFloat(csvline.L1),
         L2: toFloat(csvline.L2),
         L3: toFloat(csvline.L3)
-      })
+    })
     } IN TRANSACTIONS OF 10000 ROWS;
     """
     execute_query(session, query)
@@ -53,33 +53,40 @@ def load_csv_and_create_nodes(session):
 # Step 2: Create Merge Relations
 def create_merge_relations(session):
     query1 = """
-    MATCH (n:droplet{Event:"Split"}),(d:droplet{Event:"Split"}),(m:droplet{Event:"Merge"})
-    WHERE n.NewID = m.NewID AND d.NewID = m.OldIDs
-    CREATE (d)-[:Merge]->(n)
+    MATCH (m:droplet {Event: "Merge"})
+    WITH m, [id IN m.OldIDs WHERE id IS NOT NULL] AS oldIDs
+    WHERE NONE(id IN oldIDs WHERE id = 1)
+    UNWIND oldIDs AS oldID
+    MATCH (d:droplet {NewID: oldID})
+    CREATE (d)-[:Merge]->(m)
     """
     execute_query(session, query1)
 
     query2 = """
-    MATCH (n:droplet{Event:"None"}),(d:droplet{Event:"Split"}),(m:droplet{Event:"Merge"})
-    WHERE n.NewID = m.NewID AND d.NewID = m.OldIDs
-    CREATE (d)-[:Merge]->(n)
+    MATCH (m:droplet {Event: "Merge"})
+    WITH m, [id IN m.OldIDs WHERE id IS NOT NULL] AS oldIDs
+    WHERE ANY(id IN oldIDs WHERE id = 1)
+    UNWIND oldIDs AS oldID
+    MATCH (d:droplet {NewID: oldID}),(c:droplet {Event:"None"})
+    Where d.NewID <> 1
+    CREATE (d)-[:Merge]->(c)
     """
     execute_query(session, query2)
 
 # Step 3: Delete Merge Nodes
 def delete_merge_nodes(session):
     query = """
-    MATCH (d:droplet)
-    WHERE d.Event = 'Merge'
-    DELETE d
+    MATCH (m:droplet {Event: "Merge"})
+    WHERE m.NewID = 1
+    delete m
     """
     execute_query(session, query)
 
 # Step 4: Create Split Relations
 def create_split_relations(session):
     query = """
-    MATCH (n:droplet),(d:droplet)
-    WHERE n.Event = "Split" AND n.OldIDs = d.NewID
+    MATCH (n:droplet {Event: "Split"}), (d:droplet)
+    WHERE ANY(id IN n.OldIDs WHERE id = d.NewID)
     CREATE (d)-[:Split]->(n)
     """
     execute_query(session, query)
@@ -109,7 +116,7 @@ def rename_labels(session, label_match, label_new, condition):
 def rename_remaining_nodes(session, current_label, next_label):
     query = f"""
     MATCH (n:droplet),(d:`{current_label}`)
-    WHERE n.OldIDs = d.NewID
+    WHERE ANY(id IN n.OldIDs WHERE id = d.NewID)
     WITH collect(n) as p
     CALL apoc.refactor.rename.label("droplet","{next_label}",p)
     YIELD committedOperations
@@ -127,7 +134,7 @@ with driver.session() as session:
     
     # Renaming labels
     rename_labels(session, "droplet", "core", 'n.Event = "None"')
-    rename_labels(session, "droplet", "1", "n.OldIDs = 1")
+    rename_labels(session, "droplet", "1", "ANY(id IN n.OldIDs WHERE id = 1)")
 
     # Rename remaining "droplet" nodes
     current_label = 1

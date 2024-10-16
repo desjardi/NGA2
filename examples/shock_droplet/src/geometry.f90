@@ -45,7 +45,7 @@ contains
             call param_read('Lz',Lz)
          end if
          ! Read in droplet information
-         call param_read('Droplet diameter',ddrop)
+         ddrop=1.0_WP
          call param_read('Droplet location',dctr)
          
          if (param_exists('Cells per diameter')) then
@@ -59,7 +59,7 @@ contains
             call param_read('Refined region top z bdy',box_z1,default=0.0_WP)
             
             ! Refined cell size
-            rdx = ddrop/cpd
+            rdx=ddrop/cpd
             
             !! Left x region: 0 to x1    !!
             ! check if stretching is possible, given inputs
