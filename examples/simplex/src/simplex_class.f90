@@ -41,7 +41,7 @@ module simplex_class
       type(vfs)         :: vf    !< Volume fraction solver
       type(tpns)        :: fs    !< Two-phase flow solver
       type(hypre_str)   :: ps    !< HYPRE linear solver for pressure
-      !type(ddadi)       :: vs    !< DDADI linear solver for velocity
+      type(ddadi)       :: vs    !< DDADI linear solver for velocity
       type(sgsmodel)    :: sgs   !< SGS model for eddy viscosity
       type(timetracker) :: time  !< Time info
       type(cclabel)     :: ccl   !< CCLabel to transfer droplets
@@ -82,30 +82,9 @@ module simplex_class
    !> Hardcode size of buffer layer for VOF removal
    integer, parameter :: nlayer=4
    
-   !> Weird work array
-   real(WP), dimension(:,:,:), allocatable :: vof
 
 contains
    
-   
-   !> Function that identifies cells that need a label
-   logical function make_label(i,j,k)
-      implicit none
-      integer, intent(in) :: i,j,k
-      if (vof(i,j,k).gt.0.0_WP) then
-         make_label=.true.
-      else
-         make_label=.false.
-      end if
-   end function make_label
-   
-   
-   !> Function that identifies if cell pairs have same label
-   logical function same_label(i1,j1,k1,i2,j2,k2)
-      implicit none
-      integer, intent(in) :: i1,j1,k1,i2,j2,k2
-      same_label=.true.
-   end function same_label
    
    !> Perform droplet removal
    subroutine remove_drops(this)
@@ -283,20 +262,20 @@ contains
       restart_and_save: block
          use string,  only: str_medium
          use filesys, only: makedir,isdir
-         character(len=str_medium) :: timestamp
+         character(len=str_medium) :: filename
          integer, dimension(3) :: iopartition
          ! Create event for saving restart files
          this%save_evt=event(this%time,'Restart output')
          call this%input%read('Restart output period',this%save_evt%tper)
          ! Check if we are restarting
-         call this%input%read('Restart from',timestamp,default='')
-         this%restarted=.false.; if (len_trim(timestamp).gt.0) this%restarted=.true.
+         call this%input%read('Restart from',filename,default='')
+         this%restarted=.false.; if (len_trim(filename).gt.0) this%restarted=.true.
          ! Read in the I/O partition
          call this%input%read('I/O partition',iopartition)
          ! Perform pardata initialization
          if (this%restarted) then
             ! We are restarting, read the file
-            call this%df%initialize(pg=this%cfg,iopartition=iopartition,fdata='restart/data_'//trim(adjustl(timestamp)))
+            call this%df%initialize(pg=this%cfg,iopartition=iopartition,fdata=trim(filename))
          else
             ! We are not restarting, prepare a new directory for storing restart files
             if (this%cfg%amRoot) then
@@ -329,7 +308,6 @@ contains
          allocate(this%Ui  (this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
          allocate(this%Vi  (this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
          allocate(this%Wi  (this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
-         allocate(vof      (this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
       end block allocate_work_arrays
       
       
@@ -342,9 +320,9 @@ contains
          real(WP), dimension(:,:,:), allocatable :: P11,P12,P13,P14
          real(WP), dimension(:,:,:), allocatable :: P21,P22,P23,P24
          ! Create a VOF solver with plicnet
-         call this%vf%initialize(cfg=this%cfg,reconstruction_method=r2pnet,transport_method=remap,name='VOF')
-         this%vf%twoplane_thld2=0.3_WP
-         this%vf%thin_thld_min=1.0e-3_WP
+         call this%vf%initialize(cfg=this%cfg,reconstruction_method=plicnet,transport_method=remap,name='VOF')
+         !this%vf%twoplane_thld2=0.3_WP
+         !this%vf%thin_thld_min=1.0e-3_WP
          ! Initialize the interface inclduing restarts
          if (this%restarted) then
             ! Read in the planes directly and set the IRL interface
@@ -498,9 +476,9 @@ contains
          call this%input%read('Pressure iteration',this%ps%maxit)
          call this%input%read('Pressure tolerance',this%ps%rcvg)
          ! Configure velocity solver
-         !this%vs=ddadi(cfg=this%cfg,name='Velocity',nst=7)
+         this%vs=ddadi(cfg=this%cfg,name='Velocity',nst=7)
          ! Setup the solver
-         call this%fs%setup(pressure_solver=this%ps)!,implicit_solver=this%vs)
+         call this%fs%setup(pressure_solver=this%ps,implicit_solver=this%vs)
       end block create_flow_solver
       
       
@@ -541,14 +519,14 @@ contains
       
       
       ! Create CCL
-      create_ccl: block
-         ! Initialize CCL
-         call this%ccl%initialize(pg=this%cfg%pgrid,name='ccl')
-         ! Perform CCL
-         call this%ccl%build(make_label,same_label)
-         ! Remove all but core
-         vof=this%vf%VF; call this%remove_drops()
-      end block create_ccl
+      !create_ccl: block
+      !   ! Initialize CCL
+      !   call this%ccl%initialize(pg=this%cfg%pgrid,name='ccl')
+      !   ! Perform CCL
+      !   call this%ccl%build(make_label,same_label)
+      !   ! Remove all but core
+      !   call this%remove_drops()
+      !end block create_ccl
       
       
       ! Create an LES model
@@ -617,6 +595,25 @@ contains
          call this%cflfile%write()
       end block create_monitor
       
+   contains
+      
+      !> Function that identifies cells that need a label
+      logical function make_label(i,j,k)
+         implicit none
+         integer, intent(in) :: i,j,k
+         if (this%vf%VF(i,j,k).gt.0.0_WP) then
+            make_label=.true.
+         else
+            make_label=.false.
+         end if
+      end function make_label
+      
+      !> Function that identifies if cell pairs have same label
+      logical function same_label(i1,j1,k1,i2,j2,k2)
+         implicit none
+         integer, intent(in) :: i1,j1,k1,i2,j2,k2
+         same_label=.true.
+      end function same_label
       
    end subroutine init
    
@@ -687,12 +684,12 @@ contains
          this%resW=-2.0_WP*this%fs%rho_W*this%fs%W+(this%fs%rho_Wold+this%fs%rho_W)*this%fs%Wold+this%time%dt*this%resW   
          
          ! Form implicit residuals
-         !call this%fs%solve_implicit(this%time%dt,this%resU,this%resV,this%resW)
+         call this%fs%solve_implicit(this%time%dt,this%resU,this%resV,this%resW)
          
          ! Apply these residuals
-         this%fs%U=2.0_WP*this%fs%U-this%fs%Uold+this%resU/this%fs%rho_U
-         this%fs%V=2.0_WP*this%fs%V-this%fs%Vold+this%resV/this%fs%rho_V
-         this%fs%W=2.0_WP*this%fs%W-this%fs%Wold+this%resW/this%fs%rho_W
+         this%fs%U=2.0_WP*this%fs%U-this%fs%Uold+this%resU
+         this%fs%V=2.0_WP*this%fs%V-this%fs%Vold+this%resV
+         this%fs%W=2.0_WP*this%fs%W-this%fs%Wold+this%resW
          
          ! Apply IB forcing to enforce BC at the pipe walls
          ibforcing: block
@@ -718,9 +715,9 @@ contains
          call this%fs%update_laplacian()
          call this%fs%correct_mfr()
          call this%fs%get_div()
-         !call this%fs%add_surface_tension_jump(dt=this%time%dt,div=this%fs%div,vf=this%vf)
+         call this%fs%add_surface_tension_jump(dt=this%time%dt,div=this%fs%div,vf=this%vf)
          !call this%fs%add_surface_tension_jump_thin(dt=this%time%dt,div=this%fs%div,vf=this%vf)
-         call this%fs%add_surface_tension_jump_twoVF(dt=this%time%dt,div=this%fs%div,vf=this%vf)
+         !call this%fs%add_surface_tension_jump_twoVF(dt=this%time%dt,div=this%fs%div,vf=this%vf)
          this%fs%psolv%rhs=-this%fs%cfg%vol*this%fs%div/this%time%dt
          this%fs%psolv%sol=0.0_WP
          call this%fs%psolv%solve()
@@ -744,24 +741,23 @@ contains
       
       ! Remove VOF at edge of domain
       remove_vof: block
-         use mpi_f08,  only: MPI_ALLREDUCE,MPI_SUM
+         use mpi_f08,  only: MPI_ALLREDUCE,MPI_SUM,MPI_IN_PLACE
          use parallel, only: MPI_REAL_WP
          integer :: n,i,j,k,ierr
          real(WP) :: my_vof_removed
-         my_vof_removed=0.0_WP
+         this%vof_removed=0.0_WP
          do n=1,this%vof_removal_layer%no_
             i=this%vof_removal_layer%map(1,n)
             j=this%vof_removal_layer%map(2,n)
             k=this%vof_removal_layer%map(3,n)
-            my_vof_removed=my_vof_removed+this%cfg%vol(i,j,k)*this%vf%VF(i,j,k)
+            this%vof_removed=this%vof_removed+this%cfg%vol(i,j,k)*this%vf%VF(i,j,k)
             this%vf%VF(i,j,k)=0.0_WP
          end do
-         call MPI_ALLREDUCE(my_vof_removed,this%vof_removed,1,MPI_REAL_WP,MPI_SUM,this%cfg%comm,ierr)
-         call this%vf%sync_interface()
+         call MPI_ALLREDUCE(MPI_IN_PLACE,this%vof_removed,1,MPI_REAL_WP,MPI_SUM,this%cfg%comm,ierr)
          call this%vf%clean_irl_and_band()
          ! Remove all but core
-         call this%ccl%build(make_label,same_label)
-         vof=this%vf%VF; call this%remove_drops()
+         !call this%ccl%build(make_label,same_label)
+         !call this%remove_drops()
       end block remove_vof
       
       ! Output to ensight
@@ -834,6 +830,26 @@ contains
          end block save_restart
       end if
       
+   contains
+      
+      !> Function that identifies cells that need a label
+      logical function make_label(i,j,k)
+         implicit none
+         integer, intent(in) :: i,j,k
+         if (this%vf%VF(i,j,k).gt.0.0_WP) then
+            make_label=.true.
+         else
+            make_label=.false.
+         end if
+      end function make_label
+      
+      !> Function that identifies if cell pairs have same label
+      logical function same_label(i1,j1,k1,i2,j2,k2)
+         implicit none
+         integer, intent(in) :: i1,j1,k1,i2,j2,k2
+         same_label=.true.
+      end function same_label
+      
    end subroutine step
    
 
@@ -842,7 +858,7 @@ contains
       implicit none
       class(simplex), intent(inout) :: this
       ! Deallocate work arrays
-      deallocate(this%resU,this%resV,this%resW,this%Ui,this%Vi,this%Wi,this%gradU,vof)
+      deallocate(this%resU,this%resV,this%resW,this%Ui,this%Vi,this%Wi,this%gradU)
    end subroutine final
    
    
