@@ -73,11 +73,12 @@ module simplex_class
    
    !> Inlet pipes geometry
    real(WP), parameter :: Rpipe=0.000185_WP
+   real(WP), parameter :: Rcoflow=0.003_WP
    real(WP), dimension(3), parameter :: p1=[-0.00442_WP,0.0_WP,+0.001245_WP]
    real(WP), dimension(3), parameter :: p2=[-0.00442_WP,0.0_WP,-0.001245_WP]
    real(WP), dimension(3), parameter :: n1=[+0.6_WP,-0.8_WP,0.0_WP]
    real(WP), dimension(3), parameter :: n2=[+0.6_WP,+0.8_WP,0.0_WP]
-   real(WP) :: mfr,Apipe
+   real(WP) :: Ucoflow,mfr,Apipe
    
    !> Hardcode size of buffer layer for VOF removal
    integer, parameter :: nlayer=4
@@ -140,23 +141,46 @@ contains
          use parallel,    only: group
          use sgrid_class, only: cartesian,sgrid
          type(sgrid) :: grid
-         integer :: i,j,k,nx,ny,nz
-         real(WP) :: Lx,Ly,Lz,xshift
-         real(WP), dimension(:), allocatable :: x,y,z
+         integer :: i,j,k,nx,ny,nz,ns_yz,ns_x
+         real(WP) :: Lx,Ly,Lz,xshift,sratio_yz,sratio_x
+         real(WP), dimension(:), allocatable :: x_uni,y_uni,z_uni,x,y,z
          integer, dimension(3) :: partition
          ! Read in grid definition
-         call this%input%read('Lx',Lx); call this%input%read('nx',nx); allocate(x(nx+1)); call this%input%read('X shift',xshift)
-         call this%input%read('Ly',Ly); call this%input%read('ny',ny); allocate(y(ny+1))
-         call this%input%read('Lz',Lz); call this%input%read('nz',nz); allocate(z(nz+1))
+         call this%input%read('Lx',Lx); call this%input%read('nx',nx); allocate(x_uni(nx+1)); call this%input%read('X shift',xshift)
+         call this%input%read('Ly',Ly); call this%input%read('ny',ny); allocate(y_uni(ny+1))
+         call this%input%read('Lz',Lz); call this%input%read('nz',nz); allocate(z_uni(nz+1))
          ! Create simple rectilinear grid
          do i=1,nx+1
-            x(i)=real(i-1,WP)/real(nx,WP)*Lx-xshift
+            x_uni(i)=real(i-1,WP)/real(nx,WP)*Lx-xshift
          end do
          do j=1,ny+1
-            y(j)=real(j-1,WP)/real(ny,WP)*Ly-0.5_WP*Ly
+            y_uni(j)=real(j-1,WP)/real(ny,WP)*Ly-0.5_WP*Ly
          end do
          do k=1,nz+1
-            z(k)=real(k-1,WP)/real(nz,WP)*Lz-0.5_WP*Lz
+            z_uni(k)=real(k-1,WP)/real(nz,WP)*Lz-0.5_WP*Lz
+         end do
+         ! Add stretching
+         call this%input%read('Stretched cells in yz',ns_yz,default=0)
+         if (ns_yz.gt.0) call this%input%read('Stretch ratio in yz',sratio_yz)
+         call this%input%read('Stretched cells in x' ,ns_x ,default=0)
+         if (ns_x .gt.0) call this%input%read('Stretch ratio in x' ,sratio_x )
+         allocate(x(nx+1+1*ns_x )); x(      1:      1+nx)=x_uni
+         allocate(y(ny+1+2*ns_yz)); y(ns_yz+1:ns_yz+1+ny)=y_uni
+         allocate(z(nz+1+2*ns_yz)); z(ns_yz+1:ns_yz+1+nz)=z_uni
+         do i=nx+2,nx+1+ns_x
+            x(i)=x(i-1)+sratio_x *(x(i-1)-x(i-2))
+         end do
+         do j=ns_yz,1,-1
+            y(j)=y(j+1)+sratio_yz*(y(j+1)-y(j+2))
+         end do
+         do j=ns_yz+2+ny,ny+1+2*ns_yz
+            y(j)=y(j-1)+sratio_yz*(y(j-1)-y(j-2))
+         end do
+         do k=ns_yz,1,-1
+            z(k)=z(k+1)+sratio_yz*(z(k+1)-z(k+2))
+         end do
+         do k=ns_yz+2+nz,nz+1+2*ns_yz
+            z(k)=z(k-1)+sratio_yz*(z(k-1)-z(k-2))
          end do
          ! General serial grid object
          grid=sgrid(coord=cartesian,no=3,x=x,y=y,z=z,xper=.false.,yper=.false.,zper=.false.,name='simplex')
@@ -233,6 +257,8 @@ contains
          integer :: j,k,ierr
          ! Read mass flow rate
          call this%input%read('Mass flow rate',mfr)
+         ! Read coflow velocity
+         call this%input%read('Coflow velocity',Ucoflow)
          ! Integrate inlet pipe surface area
          Apipe=0.0_WP
          if (this%cfg%iproc.eq.1) then
@@ -463,18 +489,14 @@ contains
          call this%input%read('Gravity',this%fs%gravity)
          ! Inlets on the left
          call this%fs%add_bcond(name='inlets',type=dirichlet,face='x',dir=-1,canCorrect=.false.,locator=pipe_inlets)
+         call this%fs%add_bcond(name='coflow',type=dirichlet,face='x',dir=-1,canCorrect=.false.,locator=coflow_inlet)
          ! Outflow on the right
-         !call this%fs%add_bcond(name='outflow',type=clipped_neumann,face='x',dir=+1,canCorrect=.false.,locator=right_boundary)
-         call this%fs%add_bcond(name='outflow',type=clipped_neumann,face='x',dir=+1,canCorrect=.true.,locator=right_boundary)
+         call this%fs%add_bcond(name='outflow',type=clipped_neumann,face='x',dir=+1,canCorrect=.false.,locator=right_boundary)
          ! Slip on the sides
-         !call this%fs%add_bcond(name='bc_yp',type=slip,face='y',dir=+1,canCorrect=.true.,locator=yp_locator)
-         !call this%fs%add_bcond(name='bc_ym',type=slip,face='y',dir=-1,canCorrect=.true.,locator=ym_locator)
-         !call this%fs%add_bcond(name='bc_zp',type=slip,face='z',dir=+1,canCorrect=.true.,locator=zp_locator)
-         !call this%fs%add_bcond(name='bc_zm',type=slip,face='z',dir=-1,canCorrect=.true.,locator=zm_locator)
-         call this%fs%add_bcond(name='bc_yp',type=slip,face='y',dir=+1,canCorrect=.false.,locator=yp_locator)
-         call this%fs%add_bcond(name='bc_ym',type=slip,face='y',dir=-1,canCorrect=.false.,locator=ym_locator)
-         call this%fs%add_bcond(name='bc_zp',type=slip,face='z',dir=+1,canCorrect=.false.,locator=zp_locator)
-         call this%fs%add_bcond(name='bc_zm',type=slip,face='z',dir=-1,canCorrect=.false.,locator=zm_locator)
+         call this%fs%add_bcond(name='bc_yp',type=slip,face='y',dir=+1,canCorrect=.true.,locator=yp_locator)
+         call this%fs%add_bcond(name='bc_ym',type=slip,face='y',dir=-1,canCorrect=.true.,locator=ym_locator)
+         call this%fs%add_bcond(name='bc_zp',type=slip,face='z',dir=+1,canCorrect=.true.,locator=zp_locator)
+         call this%fs%add_bcond(name='bc_zm',type=slip,face='z',dir=-1,canCorrect=.true.,locator=zm_locator)
          ! Configure pressure solver
          this%ps=hypre_str(cfg=this%cfg,name='Pressure',method=pcg_pfmg2,nst=7)
          this%ps%maxlevel=16
@@ -511,6 +533,12 @@ contains
          do n=1,mybc%itr%no_
             i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
             this%fs%U(i,j,k)=sum(this%fs%itpr_x(:,i,j,k)*this%cfg%VF(i-1:i,j,k))*mfr/(this%fs%rho_l*Apipe)
+         end do
+         ! Apply Dirichlet condition at coflow inlet
+         call this%fs%get_bcond('coflow',mybc)
+         do n=1,mybc%itr%no_
+            i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
+            this%fs%U(i,j,k)=Ucoflow
          end do
          ! Apply all other boundary conditions
          call this%fs%apply_bcond(this%time%t,this%time%dt)
@@ -887,6 +915,17 @@ contains
       isIn=.false.
       if (i.eq.pg%imin.and.sqrt(pg%ym(j)**2+pg%zm(k)**2).lt.0.002_WP) isIn=.true.
    end function pipe_inlets
+
+
+   !> Function that localizes the coflow inlet
+   function coflow_inlet(pg,i,j,k) result(isIn)
+      use pgrid_class, only: pgrid
+      class(pgrid), intent(in) :: pg
+      integer, intent(in) :: i,j,k
+      logical :: isIn
+      isIn=.false.
+      if (i.eq.pg%imin.and.sqrt(pg%ym(j)**2+pg%zm(k)**2).gt.Rcoflow) isIn=.true.
+   end function coflow_inlet
    
    
    !> Function that localizes region of VOF removal

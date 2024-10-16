@@ -409,7 +409,7 @@ contains
          use sgrid_class, only: sgrid,cartesian
          use parallel,    only: group
          integer :: i,j,k,nx,ny,nz,ns_yz,ns_x
-         real(WP) :: Lx,Ly,Lz,xshift,sratio_yz,sratio_x
+         real(WP) :: Lx,Ly,Lz,sratio_yz,sratio_x
          real(WP), dimension(:), allocatable :: x_uni,y_uni,z_uni
          real(WP), dimension(:), allocatable :: x,y,z
          type(sgrid) :: grid
