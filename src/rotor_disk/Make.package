@@ -1,0 +1,4 @@
+f90EXE_sources += blade_class.f90 rotorDisk_class.f90
+
+INCLUDE_LOCATIONS += $(NGA_HOME)/src/rotor_disk
+VPATH_LOCATIONS   += $(NGA_HOME)/src/rotor_disk
