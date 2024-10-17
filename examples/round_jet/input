@@ -21,7 +21,7 @@
 
 # Restart handling
 [Pipe] Restart output period : 10
-[Pipe] Restart from : restart/pipe_Re3000
+[Pipe] Restart from : restart/pipe_Re5000
 
 
 ########################
@@ -32,41 +32,45 @@
 [Jet] I/O partition : 1 1 1
 
 # Mesh definition
-[Jet] Lx : 20
-[Jet] Ly : 5
-[Jet] Lz : 5
-[Jet] nx : 384
-[Jet] ny : 96
-[Jet] nz : 96
+[Jet] Lx : 48
+[Jet] Ly : 6
+[Jet] Lz : 6
+[Jet] nx : 512 !1024
+[Jet] ny : 64  !128
+[Jet] nz : 64  !128
 
 [Jet] Stretched cells in yz : 16
 [Jet] Stretch ratio in yz :   1.07
 
 # Time integration
-[Jet] Max timestep size : 1.5e-2
+[Jet] Max timestep size : 2e-2 !1e-2
 [Jet] Max cfl number :    0.8
 [Jet] Max time :          100
 
 # Pressure solver
 [Jet] Pressure tolerance : 1e-4
-[Jet] Pressure iteration : 20
+[Jet] Pressure iteration : 30
 
 # Other options
 [Jet] Use implicit solver : .false.
 [Jet] Use SGS model :       .true.
+[Jet] Use stracker :        .true.
+
+# Droplet diameter output
+[Jet] Drop analysis period : 1
 
 # Ensight output
 [Jet] Ensight output period : 1
 
 # Restart handling
 [Jet] Restart output period : 10
-[Jet] Restart from : restart/jet_1.00050E+01
+[Jet] Restart from : !restart/jet_1.00050E+01
 
 
 ###################
 # Flow parameters #
 ###################
-Reynolds number : 3000
-Weber number :    500
-Viscosity ratio : 50
-Density ratio :   50
+Reynolds number : 5000
+Weber number :    2000
+Viscosity ratio : 20
+Density ratio :   20

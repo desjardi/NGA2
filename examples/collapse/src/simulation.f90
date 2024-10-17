@@ -153,6 +153,8 @@ contains
             if (lp%p(i)%pos(2).gt.bedheight) lp%p(i)%flag=1
             ! Zero out velocity
             lp%p(i)%vel=0.0_WP
+            ! Relocate particles
+            lp%p(i)%ind=lp%cfg%get_ijk_global(lp%p(i)%pos,lp%p(i)%ind)
          end do
          call lp%sync()
          ! Recalculate VF

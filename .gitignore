@@ -63,3 +63,4 @@ examples/*/input*~
 !examples/collapse/collapse.bed
 !examples/collapse/collapse.png
 !examples/collapse/collapse_render.pvsm
+!examples/shock_droplet/shock_drop_nondim.m

@@ -17,6 +17,7 @@ module simulation
    !> Single two-phase flow solver and volume fraction solver and corresponding time tracker
    type(hypre_str),   public :: ps
    type(ddadi),       public :: vs
+   !type(hypre_str),   public :: vs
    type(tpns),        public :: fs
    type(vfs),         public :: vf
    type(timetracker), public :: time
@@ -36,9 +37,9 @@ module simulation
    real(WP), dimension(:,:,:), allocatable :: Ui,Vi,Wi
    
    !> Problem definition and post-processing
-   real(WP), dimension(3) :: Cdrop
-   real(WP) :: Rdrop
-   real(WP) :: height,R_wet,CArad,CAdeg,CLvel,C,alpha
+   real(WP), dimension(3) :: Cdrop_init
+   real(WP) :: Rdrop,Rdrop_init,Rdrop_eq,Rwet_eq
+   real(WP) :: height,R_wet,CArad,CAdeg,CLvel,C,alpha,beta_cst
    reaL(WP), dimension(:), allocatable :: all_time,all_rwet
    type(monitor) :: ppfile
    
@@ -52,7 +53,7 @@ contains
       real(WP), intent(in) :: t
       real(WP) :: G
       ! Create the droplet
-      G=Rdrop-sqrt(sum((xyz-Cdrop)**2))
+      G=Rdrop_init-norm2(xyz-Cdrop_init)
    end function levelset_contact_drop
    
    
@@ -61,40 +62,40 @@ contains
       use irl_fortran_interface
       use mathtools, only: Pi
       use string,    only: str_medium
-      use mpi_f08,   only: MPI_ALLREDUCE,MPI_SUM
+      use mpi_f08,   only: MPI_ALLREDUCE,MPI_SUM,MPI_IN_PLACE
       use parallel,  only: MPI_REAL_WP
       implicit none
       integer :: ierr,i,j,k,my_size
-      real(WP) :: my_height,myR1,R1,myR2,R2,R_wet_old
+      real(WP) :: R1,R2,R_wet_old,Rtmp
       real(WP), dimension(:), allocatable :: temp
       ! Post-process height of drop
-      my_height=0.0_WP
+      height=0.0_WP
       do k=vf%cfg%kmin_,vf%cfg%kmax_
          do i=vf%cfg%imin_,vf%cfg%imax_
             ! Find closest vertical column to center
             if (vf%cfg%x(i).le.0.0_WP.and.vf%cfg%x(i+1).gt.0.0_WP.and.vf%cfg%z(k).le.0.0_WP.and.vf%cfg%z(k+1).gt.0.0_WP) then
                ! Integrate height
                do j=vf%cfg%jmin_,vf%cfg%jmax_
-                  my_height=my_height+vf%VF(i,j,k)*vf%cfg%dy(j)
+                  height=height+vf%VF(i,j,k)*vf%cfg%dy(j)
                end do
             end if
          end do
       end do
-      call MPI_ALLREDUCE(my_height,height,1,MPI_REAL_WP,MPI_SUM,vf%cfg%comm,ierr)
+      call MPI_ALLREDUCE(MPI_IN_PLACE,height,1,MPI_REAL_WP,MPI_SUM,vf%cfg%comm,ierr)
       ! Post-process wetted radius, contact line velocity, and effective contact angle from bottom cell PLIC
-      myR1=0.0_WP; myR2=0.0_WP
+      R1=0.0_WP; R2=0.0_WP
       if (vf%cfg%jproc.eq.1) then
          do k=vf%cfg%kmin_,vf%cfg%kmax_
             do i=vf%cfg%imin_,vf%cfg%imax_
                ! Compute the wetted area from VOF
-               myR1=myR1+vf%VF(i,vf%cfg%jmin,k)*vf%cfg%dx(i)*vf%cfg%dz(k)
+               R1=R1+vf%VF(i,vf%cfg%jmin,k)*vf%cfg%dx(i)*vf%cfg%dz(k)
                ! Compute the wetted area from top of PLIC
-               call getMoments(vf%polyface(2,i,vf%cfg%jmin+1,k),vf%liquid_gas_interface(i,vf%cfg%jmin,k),R2); myR2=myR2+abs(R2)
+               call getMoments(vf%polyface(2,i,vf%cfg%jmin+1,k),vf%liquid_gas_interface(i,vf%cfg%jmin,k),Rtmp); R2=R2+abs(Rtmp)
             end do
          end do
       end if
-      call MPI_ALLREDUCE(myR1,R1,1,MPI_REAL_WP,MPI_SUM,vf%cfg%comm,ierr); R1=sqrt(R1/Pi)
-      call MPI_ALLREDUCE(myR2,R2,1,MPI_REAL_WP,MPI_SUM,vf%cfg%comm,ierr); R2=sqrt(R2/Pi)
+      call MPI_ALLREDUCE(MPI_IN_PLACE,R1,1,MPI_REAL_WP,MPI_SUM,vf%cfg%comm,ierr); R1=sqrt(R1/Pi)
+      call MPI_ALLREDUCE(MPI_IN_PLACE,R2,1,MPI_REAL_WP,MPI_SUM,vf%cfg%comm,ierr); R2=sqrt(R2/Pi)
       R_wet_old=R_wet
       R_wet=2.0_WP*R1-R2
       if (time%t.eq.0.0_WP) then
@@ -199,7 +200,6 @@ contains
          use mms_geom,  only: cube_refine_vol
          use vfs_class, only: lvira,VFhi,VFlo,remap
          use mathtools, only: Pi
-         use, intrinsic :: iso_fortran_env, only: output_unit
          use string,    only: str_long
          use messager,  only: log
          integer :: i,j,k,n,si,sj,sk
@@ -210,17 +210,29 @@ contains
          character(len=str_long) :: message
          ! Create a VOF solver
          call vf%initialize(cfg=cfg,reconstruction_method=lvira,transport_method=remap,name='VOF')
-         ! Prepare the analytical calculation of a sphere on a wall
+         ! Analytical calculation of a spherical cap on a wall for equilibrium conditions
          call param_read('Initial drop radius',Rdrop,default=1.0_WP)
+         call param_read('CA',contact,default=180.0_WP); contact=contact*Pi/180.0_WP
+         if (vf%cfg%nz.eq.1) then ! 2D analytical drop shape
+            Rdrop_eq=Rdrop*sqrt(Pi/(2.0_WP*(contact-sin(contact)*cos(contact))))
+            Rwet_eq=sin(contact)*Rdrop_eq
+         else ! 3D analytical drop shape
+            Rdrop_eq=Rdrop*(4.0_WP/(2.0_WP-3.0_WP*cos(contact)+(cos(contact))**3))**(1.0_WP/3.0_WP)
+            Rwet_eq=sin(contact)*Rdrop_eq
+         end if
+         if (vf%cfg%amRoot) then
+            write(message,'("Droplet equilibrium wet radius is ",es12.5)') Rwet_eq; call log(message)
+         end if
+         ! Analytical calculation of a spherical cap on a wall for initial conditions
          call param_read('Initial contact angle',contact,default=180.0_WP); contact=contact*Pi/180.0_WP
          if (vf%cfg%nz.eq.1) then ! 2D analytical drop shape
-            Rdrop=Rdrop*sqrt(Pi/(2.0_WP*(contact-sin(contact)*cos(contact))))
+            Rdrop_init=Rdrop*sqrt(Pi/(2.0_WP*(contact-sin(contact)*cos(contact))))
          else ! 3D analytical drop shape
-            Rdrop=Rdrop*(4.0_WP/(2.0_WP-3.0_WP*cos(contact)+(cos(contact))**3))**(1.0_WP/3.0_WP)
+            Rdrop_init=Rdrop*(4.0_WP/(2.0_WP-3.0_WP*cos(contact)+(cos(contact))**3))**(1.0_WP/3.0_WP)
          end if
-         Cdrop=[0.0_WP,-Rdrop*cos(contact),0.0_WP]
+         Cdrop_init=[0.0_WP,-Rdrop_init*cos(contact),0.0_WP]
          if (vf%cfg%amRoot) then
-            write(message,'("Droplet initial radius is ",es12.5)') Rdrop; call log(message)
+            write(message,'("Droplet initial radius is ",es12.5)') Rdrop_init; call log(message)
          end if
          ! Initialize the VOF field
          do k=vf%cfg%kmino_,vf%cfg%kmaxo_
@@ -289,6 +301,8 @@ contains
          fs%sigma=1.0_WP; call param_read('CA',fs%contact_angle); fs%contact_angle=fs%contact_angle*Pi/180.0_WP
          ! Assign constant viscosity to each phase
          call param_read('Oh',fs%visc_l); call param_read('Viscosity ratio',fs%visc_g); fs%visc_g=fs%visc_l/fs%visc_g
+         ! Read in slip velocity constant
+         call param_read('Slip velocity constant',beta_cst)
          ! Setup boundary conditions
          call fs%add_bcond(name='bc_xp',type=clipped_neumann,face='x',dir=+1,canCorrect=.true.,locator=xp_locator)
          call fs%add_bcond(name='bc_xm',type=clipped_neumann,face='x',dir=-1,canCorrect=.true.,locator=xm_locator)
@@ -301,6 +315,8 @@ contains
          call param_read('Pressure tolerance',ps%rcvg)
          ! Configure implicit velocity solver
          vs=ddadi(cfg=cfg,name='Velocity',nst=7)
+         !vs=hypre_str(cfg=cfg,name='Velocity',method=pcg_pfmg2,nst=7)
+         !vs%maxlevel=ps%maxlevel; vs%maxit=ps%maxit; vs%rcvg=ps%rcvg
          ! Setup the solver
          call fs%setup(pressure_solver=ps,implicit_solver=vs)
          ! Zero initial field
@@ -628,7 +644,7 @@ contains
       implicit none
       integer :: i,j,k
       real(WP), dimension(3) :: nw
-      real(WP) :: mysurf,mycos,cos_contact_angle
+      real(WP) :: mysurf,mycos,cos_contact_angle,beta
       
       ! Precalculate cos(contact angle)
       cos_contact_angle=cos(fs%contact_angle)
@@ -649,7 +665,8 @@ contains
                      mycos=(abs(calculateVolume(vf%interface_polygon(1,i-1,j,k)))*dot_product(calculateNormal(vf%interface_polygon(1,i-1,j,k)),nw)+&
                      &      abs(calculateVolume(vf%interface_polygon(1,i  ,j,k)))*dot_product(calculateNormal(vf%interface_polygon(1,i  ,j,k)),nw))/mysurf
                      ! Apply slip velocity
-                     fs%U(i,j-1,k)=fs%sigma*(mycos-cos_contact_angle)*sum(fs%divu_x(:,i,j,k)*vf%VF(i-1:i,j,k))
+                     beta=beta_cst*fs%cfg%dx(i)
+                     fs%U(i,j-1,k)=beta*fs%sigma*(mycos-cos_contact_angle)*sum(fs%divu_x(:,i,j,k)*vf%VF(i-1:i,j,k))
                   end if
                   ! Handle W-slip
                   mysurf=abs(calculateVolume(vf%interface_polygon(1,i,j,k-1)))+abs(calculateVolume(vf%interface_polygon(1,i,j,k)))
@@ -658,7 +675,8 @@ contains
                      mycos=(abs(calculateVolume(vf%interface_polygon(1,i,j,k-1)))*dot_product(calculateNormal(vf%interface_polygon(1,i,j,k-1)),nw)+&
                      &      abs(calculateVolume(vf%interface_polygon(1,i,j,k  )))*dot_product(calculateNormal(vf%interface_polygon(1,i,j,k  )),nw))/mysurf
                      ! Apply slip velocity
-                     fs%W(i,j-1,k)=fs%sigma*(mycos-cos_contact_angle)*sum(fs%divw_z(:,i,j,k)*vf%VF(i,j,k-1:k))
+                     beta=beta_cst*fs%cfg%dz(k)
+                     fs%W(i,j-1,k)=beta*fs%sigma*(mycos-cos_contact_angle)*sum(fs%divw_z(:,i,j,k)*vf%VF(i,j,k-1:k))
                   end if
                end if
                

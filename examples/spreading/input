@@ -1,25 +1,26 @@
 # Parallelization
-Partition : 1 1 8
+Partition : 4 1 2
 
 # Mesh definition
 Lx : 5
 Ly : 5
 Lz : 5
-nx : 50
-ny : 50
-nz : 50
+nx : 64
+ny : 64
+nz : 64
 
 # Non-dimensional fluid properties
 Density ratio :   1000
 Viscosity ratio : 50
 Oh : 0.1    #<<< Oh=mu_l/sqrt(rho_l*R*sigma)
 CA : 60
-Initial contact angle : 90 !180
+Initial contact angle :  160
+Slip velocity constant : 1
 
 # Time integration
-Max timestep size : 1e-2
+Max timestep size : 5e-3
 Max cfl number :    2.0
-Max time :          5
+Max time :          10
 
 # Pressure solver
 Pressure tolerance : 1e-6

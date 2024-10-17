@@ -7,12 +7,17 @@ X shift : 0.005
 Lx :  0.01
 Ly :  0.01
 Lz :  0.01
-nx :  224
-ny :  224
-nz :  224
+nx :  128
+ny :  128
+nz :  128
+Stretched cells in x :  32
+Stretched cells in yz : 32
+Stretch ratio in x :    1.07
+Stretch ratio in yz :   1.07
 
 # Flow conditions
 Mass flow rate : 2.95e-3
+Coflow velocity : 1
 
 # Fluid properties
 Gravity :                     9.81 0 0
@@ -23,16 +28,16 @@ Gas density :                 1.226
 Surface tension coefficient : 0.0728
 
 # Time integration
-Max timestep size : 1e-6
+Max timestep size : 2e-6
 Max cfl number :    0.9
 
 # Pressure solver
-Pressure tolerance : 1e-6
-Pressure iteration : 100
+Pressure tolerance : 1e-5
+Pressure iteration : 30
 
 # Data output
 Ensight output period : 1e-4
 Restart output period : 1e-3
 
 # Data restart
-Restart from : 1.10005E-02
+Restart from : !data_6.00156E-03
