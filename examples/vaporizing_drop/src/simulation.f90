@@ -1,3 +1,4 @@
+
 module simulation
    use precision,         only: WP
    use geometry,          only: cfg,Lz
@@ -188,7 +189,7 @@ contains
       ! Initialize our VOF solver and field
       create_and_initialize_vof: block
          use mms_geom,  only: cube_refine_vol
-         use vfs_class, only: lvira,VFhi,VFlo,remap,neumann
+         use vfs_class, only: lvira,VFhi,VFlo,flux,neumann
          use mathtools, only: Pi
          integer :: i,j,k,n,si,sj,sk
          real(WP), dimension(3,8) :: cube_vertex
@@ -196,7 +197,7 @@ contains
          real(WP) :: vol,area
          integer, parameter :: amr_ref_lvl=4
          ! Create a VOF solver
-         call vf%initialize(cfg=cfg,reconstruction_method=lvira,transport_method=remap,name='VOF')
+         call vf%initialize(cfg=cfg,reconstruction_method=lvira,transport_method=flux,name='VOF')
          vf%cons_correct=.false.
          ! Boundary conditinos
          call vf%add_bcond(name='xm',type=neumann,locator=xm_locator_sc,dir='-x')
@@ -355,26 +356,16 @@ contains
          ! Get densities from the flow solver
          evp%rho_l=fs%rho_l
          evp%rho_g=fs%rho_g
-         ! Initialize the evaporation mass flux
+         ! Interface jump condition
          where ((vf%VF.gt.0.0_WP).and.(vf%VF.lt.1.0_WP))
             evp%mdotdp=mdotdp
-            evp%mflux =evp%mdotdp*vf%SD
          else where
             evp%mdotdp=0.0_WP
-            evp%mflux =0.0_WP
          end where
-         ! Initialize the liquid and gas side mfluxes
-         evp%mfluxL=evp%mflux
-         evp%mfluxG=evp%mflux
-         ! Initialize errors to zero
-         evp%mfluxL_err    =0.0_WP
-         evp%mfluxG_err    =0.0_WP
-         evp%mfluxL_int_err=0.0_WP
-         evp%mfluxG_int_err=0.0_WP
-         ! Get the integrals
-         call cfg%integrate(evp%mflux, evp%mflux_int)
-         call cfg%integrate(evp%mfluxL,evp%mfluxL_int)
-         call cfg%integrate(evp%mfluxG,evp%mfluxG_int)
+         ! Get the volumetric evaporation mass flux
+         call evp%get_mflux()
+         ! Initialize the liquid and gas side mass fluxes
+         call evp%init_mflux()
       end block create_evp
       
 
@@ -399,7 +390,7 @@ contains
          call ens_out%add_scalar('curvature',vf%curv)
          call ens_out%add_surface('plic',smesh)
          call ens_out%add_scalar('mflux',evp%mflux)
-         call ens_out%add_scalar('evp_div',evp%evp_div)
+         call ens_out%add_scalar('evp_div',evp%div_src)
          call ens_out%add_scalar('mdotdp',evp%mdotdp)
          call ens_out%add_scalar('mfluxL',evp%mfluxL)
          call ens_out%add_scalar('mfluxG',evp%mfluxG)
@@ -481,8 +472,6 @@ contains
          call evpfile%add_column(evp%Wpcmax,'Wpc_max')
          call evpfile%write()
       end block create_monitor
-      
-      
    end subroutine simulation_init
    
    
@@ -517,16 +506,14 @@ contains
          ! Interface jump conditions
          where ((vf%VF.gt.0.0_WP).and.(vf%VF.lt.1.0_WP))
             evp%mdotdp=mdotdp
-            evp%mflux =evp%mdotdp*vf%SD
          else where
             evp%mdotdp=0.0_WP
-            evp%mflux =0.0_WP
          end where
 
-         ! Get the interface normal
-         call evp%get_normal()
+         ! Get the volumetric evaporation mass flux
+         call evp%get_mflux()
 
-         ! Update interface velocity
+         ! Get the interface velocity
          call evp%get_vel_pc()
          evp%U_itf=fsL%U-evp%vel_pc(:,:,:,1)
          evp%V_itf=fsL%V-evp%vel_pc(:,:,:,2)
@@ -538,7 +525,7 @@ contains
 
          ! Shift the evaporation mass flux
          call evp%shift_mflux()
-         
+
          ! Get the phase-change induced divergence
          call evp%get_div()
 
@@ -579,8 +566,8 @@ contains
                
                ! Solve Poisson equation
                call fs%update_laplacian()
-               call fs%correct_mfr(src=evp%evp_div)
-               call fs%get_div(src=evp%evp_div)
+               call fs%correct_mfr(src=evp%div_src)
+               call fs%get_div(src=evp%div_src)
                ! call fs%add_surface_tension_jump(dt=time%dt,div=fs%div,vf=vf,contact_model=static_contact)
                call fs%add_surface_tension_jump(dt=time%dt,div=fs%div,vf=vf)
                fs%psolv%rhs=-fs%cfg%vol*fs%div/time%dt
@@ -602,7 +589,7 @@ contains
             
             ! Recompute interpolated velocity and divergence
             call fs%interp_vel(Ui,Vi,Wi)
-            call fs%get_div(src=evp%evp_div)
+            call fs%get_div(src=evp%div_src)
 
          end block advance_flow
 
