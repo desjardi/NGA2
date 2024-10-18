@@ -10,14 +10,14 @@ Lz :  0.01
 nx :  128
 ny :  128
 nz :  128
-Stretched cells in x :  32
-Stretched cells in yz : 32
+Stretched cells in x :  0!32
+Stretched cells in yz : 0!32
 Stretch ratio in x :    1.07
 Stretch ratio in yz :   1.07
 
 # Flow conditions
 Mass flow rate : 2.95e-3
-Coflow velocity : 1
+Coflow velocity : 0
 
 # Fluid properties
 Gravity :                     9.81 0 0
@@ -40,4 +40,4 @@ Ensight output period : 1e-4
 Restart output period : 1e-3
 
 # Data restart
-Restart from : !data_6.00156E-03
+Restart from : !data_6.00018E-03

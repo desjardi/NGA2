@@ -2686,6 +2686,8 @@ contains
                      do ii=i-1,i+1
                         ! Skip true wall cells - bconds can be used here
                         if (this%mask(ii,jj,kk).eq.1) cycle
+                        ! Also skip mostly IB cells
+                        if (this%cfg%VF(ii,jj,kk).lt.0.1_WP.and.(ii.ne.i.or.jj.ne.j.or.kk.ne.k)) cycle
                         ! Add cell to neighborhood
                         call addMember(neighborhood,neighborhood_cells(ind),liquid_volume_fraction(ind))
                         ! Build the cell

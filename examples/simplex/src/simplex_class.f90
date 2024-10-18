@@ -245,6 +245,8 @@ contains
                this%cfg%VF(i,:,:)=this%cfg%VF(this%cfg%imin,:,:)
             end do
          end if
+         ! Here we're gonna try stair-stepping
+         this%cfg%VF=nint(this%cfg%VF)
          ! Recompute domain volume
          call this%cfg%calc_fluid_vol()
       end block create_simplex
@@ -339,14 +341,14 @@ contains
       
       ! Initialize our VOF solver and field
       create_and_initialize_vof: block
-         use vfs_class, only: remap,plicnet,r2p,r2pnet
+         use vfs_class, only: remap,plicnet,r2p,r2pnet,lvira
          use irl_fortran_interface
          integer :: i,j,k
          real(WP) :: rad
          real(WP), dimension(:,:,:), allocatable :: P11,P12,P13,P14
          real(WP), dimension(:,:,:), allocatable :: P21,P22,P23,P24
          ! Create a VOF solver with plicnet
-         call this%vf%initialize(cfg=this%cfg,reconstruction_method=plicnet,transport_method=remap,name='VOF')
+         call this%vf%initialize(cfg=this%cfg,reconstruction_method=lvira,transport_method=remap,name='VOF')
          !this%vf%twoplane_thld2=0.3_WP
          !this%vf%thin_thld_min=1.0e-3_WP
          ! Initialize the interface inclduing restarts

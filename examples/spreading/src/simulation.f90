@@ -16,8 +16,8 @@ module simulation
    
    !> Single two-phase flow solver and volume fraction solver and corresponding time tracker
    type(hypre_str),   public :: ps
-   type(ddadi),       public :: vs
-   !type(hypre_str),   public :: vs
+   !type(ddadi),       public :: vs
+   type(hypre_str),   public :: vs
    type(tpns),        public :: fs
    type(vfs),         public :: vf
    type(timetracker), public :: time
@@ -314,9 +314,9 @@ contains
          call param_read('Pressure iteration',ps%maxit)
          call param_read('Pressure tolerance',ps%rcvg)
          ! Configure implicit velocity solver
-         vs=ddadi(cfg=cfg,name='Velocity',nst=7)
-         !vs=hypre_str(cfg=cfg,name='Velocity',method=pcg_pfmg2,nst=7)
-         !vs%maxlevel=ps%maxlevel; vs%maxit=ps%maxit; vs%rcvg=ps%rcvg
+         !vs=ddadi(cfg=cfg,name='Velocity',nst=7)
+         vs=hypre_str(cfg=cfg,name='Velocity',method=pcg_pfmg2,nst=7)
+         vs%maxlevel=ps%maxlevel; vs%maxit=ps%maxit; vs%rcvg=ps%rcvg
          ! Setup the solver
          call fs%setup(pressure_solver=ps,implicit_solver=vs)
          ! Zero initial field
