@@ -16,12 +16,12 @@ Stretch ratio in x :    1.05
 Stretch ratio in yz :   1.05
 
 # Flow conditions
-Mass flow rate : 2e-3
+Mass flow rate : 1.79e-3   # nominal flow rate in kg/s at 50 psig
 Coflow velocity : 0
 
 # Fluid properties
 Gravity :                     9.81 0 0
-Liquid dynamic viscosity :    0.01 !1.137e-3
+Liquid dynamic viscosity :    1.137e-3
 Gas dynamic viscosity :       1.780e-5
 Liquid density :              1000
 Gas density :                 1.226
@@ -40,4 +40,4 @@ Ensight output period : 1e-4
 Restart output period : 1e-3
 
 # Data restart
-Restart from : data_5.00000E-03
+Restart from : !data_5.00000E-03
