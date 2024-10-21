@@ -13,6 +13,10 @@ module ibconfig_class
    integer, parameter, public :: bigot=1
    integer, parameter, public :: sharp=2
    
+   ! Min and max VF values considered
+   real(WP), parameter, public :: VFlo=1.0e-12_WP
+   real(WP), parameter, public :: VFhi=1.0_WP-VFlo
+   
    !> Config object definition as an extension of config
    type, extends(config) :: ibconfig
       
@@ -184,6 +188,10 @@ contains
       case default
          call die('[ibconfig calculate_vf] Unknown method to calculate VF')
       end select
+      
+      ! Ensure VF is either 0 or 1, or VFlo<VF<VFhi
+      where (this%VF.lt.VFlo) this%VF=0.0_WP
+      where (this%VF.gt.VFhi) this%VF=1.0_WP
       
       ! Check if VF=0 is allowed
       if (present(allow_zero_vf)) then

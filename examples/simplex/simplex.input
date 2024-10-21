@@ -1,5 +1,5 @@
 # Parallelization
-Partition :	1 1 8
+Partition :	1 2 4
 I/O partition : 1 1 1
 
 # Mesh definition
@@ -10,10 +10,10 @@ Lz :  0.01
 nx :  128
 ny :  128
 nz :  128
-Stretched cells in x :  0!32
-Stretched cells in yz : 0!32
-Stretch ratio in x :    1.07
-Stretch ratio in yz :   1.07
+Stretched cells in x :  !32
+Stretched cells in yz : !32
+Stretch ratio in x :    1.05
+Stretch ratio in yz :   1.05
 
 # Flow conditions
 Mass flow rate : 2.95e-3
@@ -32,12 +32,12 @@ Max timestep size : 2e-6
 Max cfl number :    0.9
 
 # Pressure solver
-Pressure tolerance : 1e-5
-Pressure iteration : 30
+Pressure tolerance : 1e-6
+Pressure iteration : 50
 
 # Data output
 Ensight output period : 1e-4
 Restart output period : 1e-3
 
 # Data restart
-Restart from : !data_6.00018E-03
+Restart from : data_5.00000E-03

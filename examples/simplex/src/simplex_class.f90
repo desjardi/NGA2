@@ -7,6 +7,7 @@ module simplex_class
    use surfmesh_class,    only: surfmesh
    use ensight_class,     only: ensight
    use hypre_str_class,   only: hypre_str
+   !use hypre_uns_class,   only: hypre_uns
    use ddadi_class,       only: ddadi
    use tpns_class,        only: tpns
    use vfs_class,         only: vfs
@@ -41,6 +42,7 @@ module simplex_class
       type(vfs)         :: vf    !< Volume fraction solver
       type(tpns)        :: fs    !< Two-phase flow solver
       type(hypre_str)   :: ps    !< HYPRE linear solver for pressure
+      !type(hypre_uns)   :: ps    !< HYPRE linear solver for pressure
       type(ddadi)       :: vs    !< DDADI linear solver for velocity
       type(sgsmodel)    :: sgs   !< SGS model for eddy viscosity
       type(timetracker) :: time  !< Time info
@@ -57,6 +59,7 @@ module simplex_class
       
       !> Work arrays
       real(WP), dimension(:,:,:,:,:), allocatable :: gradU           !< Velocity gradient
+      !real(WP), dimension(:,:,:,:), allocatable :: SR                !< Strain rate
       real(WP), dimension(:,:,:), allocatable :: resU,resV,resW      !< Residuals
       real(WP), dimension(:,:,:), allocatable :: Ui,Vi,Wi            !< Cell-centered velocities
       
@@ -195,8 +198,6 @@ contains
       create_simplex: block
          use ibconfig_class, only: sharp
          integer :: i,j,k
-         real(WP), dimension(3) :: v,p
-         real(WP) :: r
          ! Create polygon
          call this%poly%initialize(nvert=10,name='simplex')
          this%poly%vert(:, 1)=[-0.01000_WP,0.00000_WP]
@@ -222,31 +223,48 @@ contains
          call this%cfg%calculate_normal()
          ! Get VF field
          call this%cfg%calculate_vf(method=sharp,allow_zero_vf=.false.)
-         ! Carve out stair-stepped inlet pipes
-         do k=this%cfg%kmino_,this%cfg%kmaxo_
-            do j=this%cfg%jmino_,this%cfg%jmaxo_
-               do i=this%cfg%imino_,this%cfg%imaxo_
-                  ! Inlet pipe 1
-                  v=[this%cfg%xm(i),this%cfg%ym(j),this%cfg%zm(k)]-p1
-                  p=v-n1*dot_product(v,n1)
-                  r=sqrt(dot_product(p,p))/Rpipe
-                  if (v(1).le.this%cfg%min_meshsize.and.r.le.1.0_WP) this%cfg%VF(i,j,k)=1.0_WP
-                  ! Inlet pipe 2
-                  v=[this%cfg%xm(i),this%cfg%ym(j),this%cfg%zm(k)]-p2
-                  p=v-n2*dot_product(v,n2)
-                  r=sqrt(dot_product(p,p))/Rpipe
-                  if (v(1).le.this%cfg%min_meshsize.and.r.le.1.0_WP) this%cfg%VF(i,j,k)=1.0_WP
+         ! Carve out inlet pipes
+         create_inlet_pipes: block
+            use mms_geom, only: cube_refine_vol
+            integer :: si,sj,sk,n
+            real(WP), dimension(3,8) :: cube_vertex
+            real(WP), dimension(3) :: v_cent,a_cent
+            real(WP) :: vol,area,contact
+            integer, parameter :: amr_ref_lvl=4
+            do k=this%cfg%kmino_,this%cfg%kmaxo_
+               do j=this%cfg%jmino_,this%cfg%jmaxo_
+                  do i=this%cfg%imino_,this%cfg%imaxo_
+                     ! Only work to the left of the plenum
+                     if (this%cfg%xm(i)-p1(1).gt.this%cfg%min_meshsize) cycle
+                     ! Set cube vertices
+                     n=0
+                     do sk=0,1
+                        do sj=0,1
+                           do si=0,1
+                              n=n+1; cube_vertex(:,n)=[this%cfg%x(i+si),this%cfg%y(j+sj),this%cfg%z(k+sk)]
+                           end do
+                        end do
+                     end do
+                     ! Call adaptive refinement code to get volume fraction recursively - inlet pipe 1
+                     vol=0.0_WP; area=0.0_WP; v_cent=0.0_WP; a_cent=0.0_WP
+                     call cube_refine_vol(cube_vertex,vol,area,v_cent,a_cent,levelset_inlet_pipe_1,0.0_WP,amr_ref_lvl)
+                     this%cfg%VF(i,j,k)=max(this%cfg%VF(i,j,k),vol/(this%cfg%dx(i)*this%cfg%dy(j)*this%cfg%dz(k)))
+                     ! Call adaptive refinement code to get volume fraction recursively - inlet pipe 2
+                     vol=0.0_WP; area=0.0_WP; v_cent=0.0_WP; a_cent=0.0_WP
+                     call cube_refine_vol(cube_vertex,vol,area,v_cent,a_cent,levelset_inlet_pipe_2,0.0_WP,amr_ref_lvl)
+                     this%cfg%VF(i,j,k)=max(this%cfg%VF(i,j,k),vol/(this%cfg%dx(i)*this%cfg%dy(j)*this%cfg%dz(k)))
+                  end do
                end do
             end do
-         end do
+         end block create_inlet_pipes
          ! Apply Neumann on VF at entrance
          if (this%cfg%iproc.eq.1) then
             do i=this%cfg%imino,this%cfg%imin-1
                this%cfg%VF(i,:,:)=this%cfg%VF(this%cfg%imin,:,:)
             end do
          end if
-         ! Here we're gonna try stair-stepping
-         this%cfg%VF=nint(this%cfg%VF)
+         ! This forces the use of stair-stepping
+         !this%cfg%VF=nint(this%cfg%VF)
          ! Recompute domain volume
          call this%cfg%calc_fluid_vol()
       end block create_simplex
@@ -329,7 +347,8 @@ contains
       
       ! Allocate work arrays
       allocate_work_arrays: block
-         allocate(this%gradU(1:3,1:3,this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))   
+         allocate(this%gradU(1:3,1:3,this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
+         !allocate(this%SR(1:6,this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
          allocate(this%resU(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
          allocate(this%resV(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
          allocate(this%resW(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
@@ -348,7 +367,7 @@ contains
          real(WP), dimension(:,:,:), allocatable :: P11,P12,P13,P14
          real(WP), dimension(:,:,:), allocatable :: P21,P22,P23,P24
          ! Create a VOF solver with plicnet
-         call this%vf%initialize(cfg=this%cfg,reconstruction_method=lvira,transport_method=remap,name='VOF')
+         call this%vf%initialize(cfg=this%cfg,reconstruction_method=plicnet,transport_method=remap,name='VOF')
          !this%vf%twoplane_thld2=0.3_WP
          !this%vf%thin_thld_min=1.0e-3_WP
          ! Initialize the interface inclduing restarts
@@ -374,25 +393,6 @@ contains
                         call setNumberOfPlanes(this%vf%liquid_gas_interface(i,j,k),1)
                         call setPlane(this%vf%liquid_gas_interface(i,j,k),0,[P11(i,j,k),P12(i,j,k),P13(i,j,k)],P14(i,j,k))
                      end if
-                     ! For this restart, I want to attempt to remove all gas inclusions next to the walls
-                     !rad=sqrt(this%vf%cfg%ym(j)**2+this%vf%cfg%zm(k)**2)
-                     !if (this%vf%cfg%xm(i).lt.-0.0015_WP.and.rad.le.0.002_WP.and.abs(this%cfg%Gib(i,j,k)).lt.2.0_WP*this%cfg%min_meshsize) then
-                     !   call setNumberOfPlanes(this%vf%liquid_gas_interface(i,j,k),1)
-                     !   call setPlane(this%vf%liquid_gas_interface(i,j,k),0,[0.0_WP,0.0_WP,0.0_WP],1.0_WP)
-                     !else if (this%vf%cfg%xm(i).lt.0.0_WP.and.rad.le.0.00143_WP.and.abs(this%cfg%Gib(i,j,k)).lt.2.0_WP*this%cfg%min_meshsize) then
-                     !   call setNumberOfPlanes(this%vf%liquid_gas_interface(i,j,k),1)
-                     !   call setPlane(this%vf%liquid_gas_interface(i,j,k),0,[0.0_WP,0.0_WP,0.0_WP],1.0_WP)
-                     !end if
-                     ! For this restart, I want to remove all liquid outside the nozzle
-                     !if (this%vf%cfg%xm(i).gt.0.0_WP) then
-                     !   call setNumberOfPlanes(this%vf%liquid_gas_interface(i,j,k),1)
-                     !   call setPlane(this%vf%liquid_gas_interface(i,j,k),0,[0.0_WP,0.0_WP,0.0_WP],-1.0_WP)
-                     !end if
-                     !rad=sqrt(this%vf%cfg%ym(j)**2+this%vf%cfg%zm(k)**2)
-                     !if (this%vf%cfg%xm(i).gt.-0.0015_WP.and.rad.gt.0.00143_WP) then
-                     !   call setNumberOfPlanes(this%vf%liquid_gas_interface(i,j,k),1)
-                     !   call setPlane(this%vf%liquid_gas_interface(i,j,k),0,[0.0_WP,0.0_WP,0.0_WP],-1.0_WP)
-                     !end if
                   end do
                end do
             end do
@@ -441,7 +441,6 @@ contains
                      else
                         this%vf%VF(i,j,k)=0.0_WP
                      end if
-                     !if (this%vf%cfg%xm(i).ge.-0.0015_WP.and.this%vf%cfg%VF(i,j,k).gt.2.0_WP*epsilon(1.0_WP)) this%vf%VF(i,j,k)=0.0_WP
                      ! Initialize phasic barycenters
                      this%vf%Lbary(:,i,j,k)=[this%vf%cfg%xm(i),this%vf%cfg%ym(j),this%vf%cfg%zm(k)]
                      this%vf%Gbary(:,i,j,k)=[this%vf%cfg%xm(i),this%vf%cfg%ym(j),this%vf%cfg%zm(k)]
@@ -479,6 +478,7 @@ contains
       create_flow_solver: block
          use tpns_class,      only: clipped_neumann,dirichlet,slip
          use hypre_str_class, only: pcg_pfmg2
+         !use hypre_uns_class, only: pcg_amg
          ! Create flow solver
          this%fs=tpns(cfg=this%cfg,name='Two-Phase NS')
          ! Set the flow properties
@@ -502,6 +502,7 @@ contains
          ! Configure pressure solver
          this%ps=hypre_str(cfg=this%cfg,name='Pressure',method=pcg_pfmg2,nst=7)
          this%ps%maxlevel=16
+         !this%ps=hypre_uns(cfg=this%cfg,name='Pressure',method=pcg_amg,nst=7)
          call this%input%read('Pressure iteration',this%ps%maxit)
          call this%input%read('Pressure tolerance',this%ps%rcvg)
          ! Configure velocity solver
@@ -683,11 +684,13 @@ contains
       
       ! Turbulence modeling
       sgs_modeling: block
-         use sgsmodel_class, only: vreman
+         use sgsmodel_class, only: vreman,dynamic_smag
          integer :: i,j,k
          this%resU=this%vf%VF*this%fs%rho_l+(1.0_WP-this%vf%VF)*this%fs%rho_g
          call this%fs%get_gradu(this%gradU)
          call this%sgs%get_visc(type=vreman,dt=this%time%dtold,rho=this%resU,gradu=this%gradU)
+         !call this%fs%get_strainrate(this%SR)
+         !call this%sgs%get_visc(type=dynamic_smag,dt=this%time%dtold,rho=this%resU,Ui=this%Ui,Vi=this%Vi,Wi=this%Wi,SR=this%SR)
          do k=this%fs%cfg%kmino_+1,this%fs%cfg%kmaxo_; do j=this%fs%cfg%jmino_+1,this%fs%cfg%jmaxo_; do i=this%fs%cfg%imino_+1,this%fs%cfg%imaxo_
             this%fs%visc(i,j,k)   =this%fs%visc(i,j,k)   +this%sgs%visc(i,j,k)
             this%fs%visc_xy(i,j,k)=this%fs%visc_xy(i,j,k)+sum(this%fs%itp_xy(:,:,i,j,k)*this%sgs%visc(i-1:i,j-1:j,k))
@@ -795,6 +798,35 @@ contains
          !call this%remove_drops()
       end block remove_vof
       
+      ! Reset VOF in IBs
+      reset_VOF_IB: block
+         use ibconfig_class, only: VFhi
+         integer :: i,j,k
+         real(WP) :: rad
+         do k=this%vf%cfg%kmino_,this%vf%cfg%kmaxo_
+            do j=this%vf%cfg%jmino_,this%vf%cfg%jmaxo_
+               do i=this%vf%cfg%imino_,this%vf%cfg%imaxo_
+                  ! Only work in wall/IB cells
+                  if (this%vf%cfg%VF(i,j,k).gt.VFhi) cycle
+                  ! Compute our local radius
+                  rad=sqrt(this%vf%cfg%ym(j)**2+this%vf%cfg%zm(k)**2)
+                  ! Ensure the nozzle is filled with liquid up to the throat with wet walls
+                  if (this%vf%cfg%xm(i).lt.-0.0015_WP.and.rad.le.0.002_WP) then
+                     this%vf%VF(i,j,k)=1.0_WP
+                  else if (this%vf%cfg%xm(i).ge.-0.0015_WP.and.this%vf%cfg%xm(i).lt.0.0_WP.and.rad.le.0.00143_WP) then
+                     this%vf%VF(i,j,k)=1.0_WP
+                  else
+                     this%vf%VF(i,j,k)=0.0_WP
+                  end if
+                  ! Initialize phasic barycenters
+                  this%vf%Lbary(:,i,j,k)=[this%vf%cfg%xm(i),this%vf%cfg%ym(j),this%vf%cfg%zm(k)]
+                  this%vf%Gbary(:,i,j,k)=[this%vf%cfg%xm(i),this%vf%cfg%ym(j),this%vf%cfg%zm(k)]
+               end do
+            end do
+         end do
+         call this%vf%clean_irl_and_band()
+      end block reset_VOF_IB
+      
       ! Output to ensight
       if (this%ens_evt%occurs()) then
          call this%vf%update_surfmesh_nowall(this%smesh)
@@ -893,7 +925,7 @@ contains
       implicit none
       class(simplex), intent(inout) :: this
       ! Deallocate work arrays
-      deallocate(this%resU,this%resV,this%resW,this%Ui,this%Vi,this%Wi,this%gradU)
+      deallocate(this%resU,this%resV,this%resW,this%Ui,this%Vi,this%Wi,this%gradU)!,this%SR)
    end subroutine final
    
    
@@ -992,5 +1024,31 @@ contains
       if (k.eq.pg%kmin) isIn=.true.
    end function zm_locator
    
-
+   
+   !> Function that defines a level set function for inlet pipe 1
+   function levelset_inlet_pipe_1(xyz,t) result(G)
+      implicit none
+      real(WP), dimension(3),intent(in) :: xyz
+      real(WP), intent(in) :: t
+      real(WP), dimension(3) :: v,p
+      real(WP) :: G
+      v=xyz-p1
+      p=v-n1*dot_product(v,n1)
+      G=Rpipe-sqrt(dot_product(p,p))
+   end function levelset_inlet_pipe_1
+   
+   
+   !> Function that defines a level set function for inlet pipe 2
+   function levelset_inlet_pipe_2(xyz,t) result(G)
+      implicit none
+      real(WP), dimension(3),intent(in) :: xyz
+      real(WP), intent(in) :: t
+      real(WP), dimension(3) :: v,p
+      real(WP) :: G
+      v=xyz-p2
+      p=v-n2*dot_product(v,n2)
+      G=Rpipe-sqrt(dot_product(p,p))
+   end function levelset_inlet_pipe_2
+   
+   
 end module simplex_class

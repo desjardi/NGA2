@@ -3944,13 +3944,9 @@ contains
       do k=this%cfg%kmino_,this%cfg%kmaxo_
          do j=this%cfg%jmino_,this%cfg%jmaxo_
             do i=this%cfg%imino_,this%cfg%imaxo_
-               ! Handle pure wall cells
-               if (this%mask(i,j,k).eq.1) then
-                  this%VF(i,j,k)     =0.0_WP
-                  this%Lbary(:,i,j,k)=[this%cfg%xm(i),this%cfg%ym(j),this%cfg%zm(k)]
-                  this%Gbary(:,i,j,k)=[this%cfg%xm(i),this%cfg%ym(j),this%cfg%zm(k)]
-                  cycle
-               end if
+               ! Handle pure wall cells - leave whatever was there
+               ! (makes sense since we may want to pin the interface by manually setting VF in wall cells)
+               if (this%mask(i,j,k).eq.1) cycle
                ! Form the grid cell
                call construct_2pt(cell,[this%cfg%x(i),this%cfg%y(j),this%cfg%z(k)],[this%cfg%x(i+1),this%cfg%y(j+1),this%cfg%z(k+1)])
                ! Cut it by the current interface(s)
