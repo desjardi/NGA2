@@ -1,0 +1,43 @@
+# Parallelization
+Partition :	2 4 1
+
+# Mesh definition
+Lx : 0.05
+Ly : 0.05
+Lz : 0.0001953125
+nx : 256
+ny : 256
+nz : 1
+
+# Case parameters
+Droplet diameter : 0.01
+Droplet center   : 0 0 0
+
+# Fluid properties
+Gravity                     : 0 0 0
+Liquid dynamic viscosity    : 1.05e-3
+Gas dynamic viscosity       : 1.46e-5
+Liquid density              : 1000
+Gas density                 : 1.8
+Surface tension coefficient : 0.072
+Static contact angle        : 140
+
+# Time integration
+Max timestep size : 3e-5
+Max cfl number    : 0.9
+Sub-iterations    : 2
+Max time          : 1.03
+
+# Evaporation
+Evaporation mass flux    : 5
+Max pseudo timestep size : 1.75e-4
+Max pseudo cfl number    : 0.9
+Max pseudo time steps    : 50
+Mass flux tolerence      : 1e-4
+
+# Pressure solver
+Pressure tolerance : 1e-6
+Pressure iteration : 50
+
+# Ensight output
+Ensight output period : 1e-2

@@ -27,12 +27,14 @@ module timetracker_class
       real(WP) :: cfl,cflmax                           !< Current and max CFL
       real(WP) ::  wt, wtmax                           !< Current and max wallclock time
       real(WP) :: told,dtold,tmid,dtmid                !< Old/mid time and timestep size
+      logical  :: print_info=.true.                    !< Should I print time information?
    contains
       procedure :: increment                           !< Default method for incrementing time
       procedure :: adjust_dt                           !< Default method for adjusting timestep size
       procedure :: done                                !< Default termination check for time integration
       procedure :: print=>timetracker_print            !< Output timetracker info to screen
       procedure :: log  =>timetracker_log              !< Output timetracker info to log
+      procedure :: reset                               !< Reset timetracker to zero
    end type timetracker
    
    
@@ -46,23 +48,25 @@ contains
    
    
    !> Constructor for timetracker object
-   function constructor(amRoot,name) result(self)
+   function constructor(amRoot,name,print_info) result(self)
       implicit none
       type(timetracker) :: self
       logical, intent(in) :: amRoot
       character(len=*), optional :: name
+      logical, optional :: print_info
       self%amRoot=amRoot
-      if (present(name)) self%name=trim(adjustl(name))
-      self%n  =0;        self%nmax=huge(  self%nmax)
-      self%t  =0.0_WP;   self%tmax=huge(  self%tmax)
-      self%dt =0.0_WP;  self%dtmax=huge( self%dtmax)
-      self%cfl=0.0_WP; self%cflmax=huge(self%cflmax)
-      self%wt =0.0_WP;  self%wtmax=huge( self%wtmax)
-      self%told=0.0_WP
+      if (present(name))       self%name=trim(adjustl(name))
+      if (present(print_info)) self%print_info=print_info
+      self%n    =0;            self%nmax  =huge(self%nmax)
+      self%t    =0.0_WP;       self%tmax  =huge(self%tmax)
+      self%dt   =0.0_WP;       self%dtmax =huge(self%dtmax)
+      self%cfl  =0.0_WP;       self%cflmax=huge(self%cflmax)
+      self%wt   =0.0_WP;       self%wtmax =huge(self%wtmax)
+      self%told =0.0_WP
       self%dtold=0.0_WP
-      self%tmid=0.0_WP
+      self%tmid =0.0_WP
       self%dtmid=0.0_WP
-      self%it=1; self%itmax=1
+      self%it   =1;            self%itmax=1
    end function constructor
    
    
@@ -81,8 +85,10 @@ contains
       this%n=this%n+1
       this%wt=parallel_time()-wtinit
       ! If verbose run, log and or print info
-      if (verbose.gt.0) call this%log
-      if (verbose.gt.1) call this%print
+      if (this%print_info) then
+         if (verbose.gt.0) call this%log
+         if (verbose.gt.1) call this%print
+      end if
    end subroutine increment
    
    
@@ -124,6 +130,20 @@ contains
    end function done
    
    
+   !> Reset time to zero
+   subroutine reset(this)
+      implicit none
+      class(timetracker), intent(inout) :: this
+      this%n    =0
+      this%t    =0.0_WP
+      this%wt   =0.0_WP
+      this%told =0.0_WP
+      this%dtold=0.0_WP
+      this%tmid =0.0_WP
+      this%it=1
+   end subroutine reset
+
+
    !> Log timetracker info
    subroutine timetracker_log(this)
       use string,   only: str_long

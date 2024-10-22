@@ -4,7 +4,7 @@ ifdef IRL_DIR
   LIBRARY_LOCATIONS += $(IRL_DIR)/lib
   is_gnu = $(shell expr `mpicc --version | awk '{print substr($$1,1,3); exit}'` = 'gcc')
   ifeq ($(is_gnu), 1)
-    LIBRARIES += -lirl_fortran -lirl_c -lirl -labsl_all -lstdc++
+    LIBRARIES += -lirl_fortran -lirl_c -lirl -labsl_all -lc++
   else
     LIBRARIES += -lirl_fortran -lirl_c -lirl -labsl_all -lc++
   endif
