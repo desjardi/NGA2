@@ -21,11 +21,20 @@ Coflow velocity : 0
 
 # Fluid properties
 Gravity :                     9.81 0 0
-Liquid dynamic viscosity :    1.137e-3
-Gas dynamic viscosity :       1.780e-5
-Liquid density :              1000
 Gas density :                 1.226
-Surface tension coefficient : 0.0728
+Gas dynamic viscosity :       1.780e-5
+# Water
+# Liquid density :              1000
+# Liquid dynamic viscosity :    1.137e-3 
+# Surface tension coefficient : 0.0728
+# Methanol
+# Liquid density :              790
+# Liquid dynamic viscosity :    0.594e-3 
+# Surface tension coefficient : 0.0225
+# MIL-PRF-7024
+Liquid density :              770
+Liquid dynamic viscosity :    0.924e-3 
+Surface tension coefficient : 0.024
 
 # Time integration
 Max timestep size : 2e-6
@@ -40,4 +49,4 @@ Ensight output period : 1e-4
 Restart output period : 1e-3
 
 # Data restart
-Restart from : !data_5.00000E-03
+Restart from : data_2.00003E-02
