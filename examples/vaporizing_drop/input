@@ -32,8 +32,8 @@ Max time          : 1.03
 Evaporation mass flux    : 5
 Max pseudo timestep size : 1.75e-4
 Max pseudo cfl number    : 0.9
-Max pseudo time steps    : 50
-Mass flux tolerence      : 1e-4
+Max pseudo time steps    : 5
+Mass flux tolerance      : 1e-4
 
 # Pressure solver
 Pressure tolerance : 1e-6

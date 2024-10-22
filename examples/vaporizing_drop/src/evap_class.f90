@@ -57,7 +57,7 @@ module evap_class
       integer, dimension(3) :: nCell
       
       ! Monitoring quantities
-      real(WP) :: mflux_int,mflux_tol                                  !< Integral and tolerence of the scaled evap mass flux
+      real(WP) :: mflux_int,mflux_tol                                  !< Integral and tolerance of the scaled evap mass flux
       real(WP) :: mfluxL_int,mfluxL_err,mfluxL_int_err                 !< Liquid side scaled evap mass flux maximum, integral, and error
       real(WP) :: mfluxG_int,mfluxG_err,mfluxG_int_err                 !< Gas side scaled evap mass flux maximum, integral, and error
       real(WP) :: Upcmax,Vpcmax,Wpcmax                                 !< Maximum of phase-change velocity components

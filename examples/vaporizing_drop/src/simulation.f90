@@ -347,7 +347,7 @@ contains
       create_evp: block
          ! Create the object
          call evp%initialize(cfg=cfg,vf=vf,itp_x=fs%itpr_x,itp_y=fs%itpr_y,itp_z=fs%itpr_z,div_x=fs%divp_x,div_y=fs%divp_y,div_z=fs%divp_z,name='liquid gas pc')
-         call param_read('Mass flux tolerence',     evp%mflux_tol)
+         call param_read('Mass flux tolerance',     evp%mflux_tol)
          call param_read('Evaporation mass flux',   mdotdp)
          call param_read('Max pseudo timestep size',evp%pseudo_time%dtmax)
          call param_read('Max pseudo cfl number',   evp%pseudo_time%cflmax)
