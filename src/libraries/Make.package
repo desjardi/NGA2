@@ -1,5 +1,5 @@
 f90EXE_sources += random.f90 precision_$(PREC).f90 string.f90 param.f90 messager.f90 monitor_class.f90 timetracker_class.f90 event_class.f90 mms_geom.f90
-f90EXE_sources += parallel.f90 mathtools.f90 inputfile_class.f90 filesys.f90 polygon_class.f90 quicksort.f90 avl_trees.f90
+f90EXE_sources += parallel.f90 mathtools.f90 inputfile_class.f90 filesys.f90 polygon_class.f90 quicksort.f90 avl_trees.f90 timer_class.f90
 
 cEXE_sources += c_filesys.c
 
