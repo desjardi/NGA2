@@ -597,6 +597,7 @@ contains
          ! Add variables to output
          call this%ens_out%add_vector('velocity',this%Ui,this%Vi,this%Wi)
          call this%ens_out%add_scalar('VOF',this%vf%VF)
+         call this%ens_out%add_scalar('pressure',this%fs%pressure)
          call this%ens_out%add_surface('plic',this%smesh)
          ! Output to ensight
          if (this%ens_evt%occurs()) call this%ens_out%write_data(this%time%t)
