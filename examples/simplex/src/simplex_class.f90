@@ -6,8 +6,8 @@ module simplex_class
    use polygon_class,     only: polygon
    use surfmesh_class,    only: surfmesh
    use ensight_class,     only: ensight
+   use fft2d_class,       only: fft2d
    use hypre_str_class,   only: hypre_str
-   !use hypre_uns_class,   only: hypre_uns
    use ddadi_class,       only: ddadi
    use tpns_class,        only: tpns
    use vfs_class,         only: vfs
@@ -43,7 +43,6 @@ module simplex_class
       type(vfs)         :: vf    !< Volume fraction solver
       type(tpns)        :: fs    !< Two-phase flow solver
       type(hypre_str)   :: ps    !< HYPRE linear solver for pressure
-      !type(hypre_uns)   :: ps    !< HYPRE linear solver for pressure
       type(ddadi)       :: vs    !< DDADI linear solver for velocity
       type(sgsmodel)    :: sgs   !< SGS model for eddy viscosity
       type(timetracker) :: time  !< Time info
@@ -76,6 +75,9 @@ module simplex_class
       type(timer)   :: tpres    !< Timer for pressure
       type(timer)   :: tvof     !< Timer for VOF
       
+      !> Test fft-based iterative pressure solver
+      type(fft2d) :: fastp
+
    contains
       procedure :: init                            !< Initialize simplex simulation
       procedure :: step                            !< Advance simplex simulation by one time step
@@ -195,7 +197,8 @@ contains
             z(k)=z(k-1)+sratio_yz*(z(k-1)-z(k-2))
          end do
          ! General serial grid object
-         grid=sgrid(coord=cartesian,no=3,x=x,y=y,z=z,xper=.false.,yper=.false.,zper=.false.,name='simplex')
+         !grid=sgrid(coord=cartesian,no=3,x=x,y=y,z=z,xper=.false.,yper=.false.,zper=.false.,name='simplex')
+         grid=sgrid(coord=cartesian,no=3,x=x,y=y,z=z,xper=.false.,yper=.true.,zper=.true.,name='simplex')
          ! Read in partition
          call this%input%read('Partition',partition)
          ! Create ibconfig
@@ -487,7 +490,6 @@ contains
       create_flow_solver: block
          use tpns_class,      only: clipped_neumann,dirichlet,slip
          use hypre_str_class, only: pcg_pfmg2
-         !use hypre_uns_class, only: pcg_amg
          ! Create flow solver
          this%fs=tpns(cfg=this%cfg,name='Two-Phase NS')
          ! Set the flow properties
@@ -502,16 +504,16 @@ contains
          call this%fs%add_bcond(name='inlets',type=dirichlet,face='x',dir=-1,canCorrect=.false.,locator=pipe_inlets)
          call this%fs%add_bcond(name='coflow',type=dirichlet,face='x',dir=-1,canCorrect=.false.,locator=coflow_inlet)
          ! Outflow on the right
-         call this%fs%add_bcond(name='outflow',type=clipped_neumann,face='x',dir=+1,canCorrect=.false.,locator=right_boundary)
+         !call this%fs%add_bcond(name='outflow',type=clipped_neumann,face='x',dir=+1,canCorrect=.false.,locator=right_boundary)
+         call this%fs%add_bcond(name='outflow',type=clipped_neumann,face='x',dir=+1,canCorrect=.true.,locator=right_boundary)
          ! Slip on the sides
-         call this%fs%add_bcond(name='bc_yp',type=slip,face='y',dir=+1,canCorrect=.true.,locator=yp_locator)
-         call this%fs%add_bcond(name='bc_ym',type=slip,face='y',dir=-1,canCorrect=.true.,locator=ym_locator)
-         call this%fs%add_bcond(name='bc_zp',type=slip,face='z',dir=+1,canCorrect=.true.,locator=zp_locator)
-         call this%fs%add_bcond(name='bc_zm',type=slip,face='z',dir=-1,canCorrect=.true.,locator=zm_locator)
+         !call this%fs%add_bcond(name='bc_yp',type=slip,face='y',dir=+1,canCorrect=.true.,locator=yp_locator)
+         !call this%fs%add_bcond(name='bc_ym',type=slip,face='y',dir=-1,canCorrect=.true.,locator=ym_locator)
+         !call this%fs%add_bcond(name='bc_zp',type=slip,face='z',dir=+1,canCorrect=.true.,locator=zp_locator)
+         !call this%fs%add_bcond(name='bc_zm',type=slip,face='z',dir=-1,canCorrect=.true.,locator=zm_locator)
          ! Configure pressure solver
          this%ps=hypre_str(cfg=this%cfg,name='Pressure',method=pcg_pfmg2,nst=7)
          this%ps%maxlevel=16
-         !this%ps=hypre_uns(cfg=this%cfg,name='Pressure',method=pcg_amg,nst=7)
          call this%input%read('Pressure iteration',this%ps%maxit)
          call this%input%read('Pressure tolerance',this%ps%rcvg)
          ! Configure velocity solver
@@ -519,6 +521,19 @@ contains
          ! Setup the solver
          call this%fs%setup(pressure_solver=this%ps,implicit_solver=this%vs)
       end block create_flow_solver
+      
+      
+      ! Try an iterative fourier-based pressure solver
+      test_fft_idea: block
+         ! Create FFT-based linear solver
+         this%fastp=fft2d(cfg=this%cfg,name='Pressure',nst=7)
+         ! Since psolv doesn't contain the 1/rho yet, it's a cst coeff poisson - use that
+         this%fastp%stc=this%fs%psolv%stc
+         this%fastp%opr=this%fs%psolv%opr
+         ! Initialize fastp solver
+         call this%fastp%init()
+         call this%fastp%setup()
+      end block test_fft_idea
       
       
       ! Initialize our velocity field
@@ -598,6 +613,7 @@ contains
          call this%ens_out%add_vector('velocity',this%Ui,this%Vi,this%Wi)
          call this%ens_out%add_scalar('VOF',this%vf%VF)
          call this%ens_out%add_scalar('pressure',this%fs%P)
+         call this%ens_out%add_scalar('divergence',this%fs%div)
          call this%ens_out%add_surface('plic',this%smesh)
          ! Output to ensight
          if (this%ens_evt%occurs()) call this%ens_out%write_data(this%time%t)
@@ -808,7 +824,43 @@ contains
          !call this%fs%add_surface_tension_jump_twoVF(dt=this%time%dt,div=this%fs%div,vf=this%vf)
          this%fs%psolv%rhs=-this%fs%cfg%vol*this%fs%div/this%time%dt
          this%fs%psolv%sol=0.0_WP
-         call this%fs%psolv%solve()
+         !call this%fs%psolv%solve()
+         ! Here we test a fastp-style fft-accelerated pressure solver
+         test_fastp: block
+            use mpi_f08,  only: MPI_ALLREDUCE,MPI_MAX,MPI_IN_PLACE
+            use parallel, only: MPI_REAL_WP
+            integer :: i,j,k,st,ierr
+            real(WP) :: err,maxerr,rhs,maxrhs
+            ! Set IG to what was in psolv
+            this%fastp%sol=this%fs%psolv%sol
+            ! Calculate fastP RHS
+            do k=this%fs%cfg%kmin_,this%fs%cfg%kmax_; do j=this%fs%cfg%jmin_,this%fs%cfg%jmax_; do i=this%fs%cfg%imin_,this%fs%cfg%imax_
+               this%fastp%rhs(i,j,k)=this%fs%rho_g*this%fs%psolv%rhs(i,j,k)
+               do st=1,this%fastp%nst
+                  this%fastp%rhs(i,j,k)=this%fastp%rhs(i,j,k)+(this%fastp%opr(st,i,j,k)-this%fs%rho_g*this%fs%psolv%opr(st,i,j,k))*this%fastp%sol(i+this%fastp%stc(st,1),j+this%fastp%stc(st,2),k+this%fastp%stc(st,3))
+               end do
+            end do; end do; end do
+            ! Solve
+            call this%fastp%solve()
+            ! Shift
+            call this%fs%shift_p(this%fastp%sol)
+            ! Check convergence of original problem
+            maxerr=0.0_WP
+            maxrhs=0.0_WP
+            do k=this%fs%cfg%kmin_,this%fs%cfg%kmax_; do j=this%fs%cfg%jmin_,this%fs%cfg%jmax_; do i=this%fs%cfg%imin_,this%fs%cfg%imax_
+               rhs=this%fs%psolv%rhs(i,j,k)
+               do st=1,this%fastp%nst
+                  err=rhs-this%fs%psolv%opr(st,i,j,k)*this%fastp%sol(i+this%fastp%stc(st,1),j+this%fastp%stc(st,2),k+this%fastp%stc(st,3))
+               end do
+               maxerr=max(maxerr,abs(err))
+               maxrhs=max(maxrhs,abs(rhs))
+            end do; end do; end do
+            call MPI_ALLREDUCE(MPI_IN_PLACE,maxerr,this%cfg%nproc,MPI_REAL_WP,MPI_MAX,this%cfg%comm,ierr)
+            call MPI_ALLREDUCE(MPI_IN_PLACE,maxrhs,this%cfg%nproc,MPI_REAL_WP,MPI_MAX,this%cfg%comm,ierr)
+            if (this%cfg%amroot) print*,'FastP - Max error =',maxerr,' - Max RHS =',maxrhs
+            ! Place solution back in fs%psolv
+            this%fs%psolv%sol=this%fastp%sol
+         end block test_fastp
          call this%fs%shift_p(this%fs%psolv%sol)
          
          ! Correct velocity

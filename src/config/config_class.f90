@@ -509,7 +509,7 @@ contains
       use, intrinsic :: iso_fortran_env, only: output_unit
       implicit none
       class(config), intent(in) :: this
-      call this%print
+      call this%pgrid%print
    end subroutine config_print
    
    
