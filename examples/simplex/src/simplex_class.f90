@@ -65,7 +65,8 @@ module simplex_class
       !> Iterator for VOF removal
       type(iterator) :: vof_removal_layer  !< Edge of domain where we actively remove VOF
       real(WP) :: vof_removed              !< Integral of VOF removed
-
+      integer :: nlayer=4                  !< Size of buffer layer for VOF removal
+      
       !> Timing info
       type(monitor) :: timefile !< Timing monitoring
       type(timer)   :: tstep    !< Timer for step
@@ -73,64 +74,170 @@ module simplex_class
       type(timer)   :: tvel     !< Timer for velocity
       type(timer)   :: tpres    !< Timer for pressure
       type(timer)   :: tvof     !< Timer for VOF
+      type(timer)   :: ttrans   !< Timer for VOF transfer
+
+      !> Event for flow rate analysis
+      type(event) :: flowrate_evt  !< Event trigger for flow rate analysis
+      
+      !> Inlet pipes geometry and flow rates
+      real(WP) :: Rinlet=0.002_WP
+      real(WP) :: Rexit=0.00143_WP
+      real(WP) :: Rpipe=0.000185_WP
+      real(WP) :: Rcoflow=0.003_WP
+      real(WP), dimension(3) :: p1=[-0.00442_WP,0.0_WP,+0.001245_WP]
+      real(WP), dimension(3) :: p2=[-0.00442_WP,0.0_WP,-0.001245_WP]
+      real(WP), dimension(3) :: n1=[+0.6_WP,-0.8_WP,0.0_WP]
+      real(WP), dimension(3) :: n2=[+0.6_WP,+0.8_WP,0.0_WP]
+      real(WP) :: Ucoflow,mfr,Apipe
       
    contains
       procedure :: init                            !< Initialize simplex simulation
       procedure :: step                            !< Advance simplex simulation by one time step
       procedure :: final                           !< Finalize simplex simulation
-      procedure :: remove_drops                    !< Remove all drops
+      procedure :: transfer_drops                  !< Transfer drops to a Lagrangian representation
+      procedure :: analyze_flowrate                !< Compute and output flow rate through the nozzle
    end type simplex
    
-   !> Inlet pipes geometry
-   real(WP), parameter :: Rpipe=0.000185_WP
-   real(WP), parameter :: Rcoflow=0.003_WP
-   real(WP), dimension(3), parameter :: p1=[-0.00442_WP,0.0_WP,+0.001245_WP]
-   real(WP), dimension(3), parameter :: p2=[-0.00442_WP,0.0_WP,-0.001245_WP]
-   real(WP), dimension(3), parameter :: n1=[+0.6_WP,-0.8_WP,0.0_WP]
-   real(WP), dimension(3), parameter :: n2=[+0.6_WP,+0.8_WP,0.0_WP]
-   real(WP) :: Ucoflow,mfr,Apipe
    
-   !> Hardcode size of buffer layer for VOF removal
-   integer, parameter :: nlayer=4
-   
-
 contains
    
    
-   !> Perform droplet removal
-   subroutine remove_drops(this)
+   !> Compute and output flow rate through the nozzle
+   subroutine analyze_flowrate(this)
+      use mpi_f08,  only: MPI_ALLREDUCE,MPI_SUM,MPI_IN_PLACE
+      use parallel, only: MPI_REAL_WP
+      use filesys,  only: makedir,isdir
+      use string,   only: str_medium
+      implicit none
+      class(simplex), intent(inout) :: this
+      real(WP), dimension(:), allocatable :: CSA_s,CSA_f,CSA_l,CSA_g !< Solid, fluid, liquid, and gas cross-sectional areas
+      real(WP), dimension(:), allocatable :: VFR_s,VFR_f,VFR_l,VFR_g !< Solid, fluid, liquid, and gas volume flow rates
+      character(len=str_medium) :: filename,timestamp
+      integer :: i,j,k,ierr,iunit
+      real(WP) :: area,rad
+      ! Allocate and initialize 1D storage for areas and flow rates
+      allocate(CSA_s(this%cfg%imin:this%cfg%imax)); CSA_s=0.0_WP
+      allocate(CSA_f(this%cfg%imin:this%cfg%imax)); CSA_f=0.0_WP
+      allocate(CSA_l(this%cfg%imin:this%cfg%imax)); CSA_l=0.0_WP
+      allocate(CSA_g(this%cfg%imin:this%cfg%imax)); CSA_g=0.0_WP
+      allocate(VFR_s(this%cfg%imin:this%cfg%imax)); VFR_s=0.0_WP
+      allocate(VFR_f(this%cfg%imin:this%cfg%imax)); VFR_f=0.0_WP
+      allocate(VFR_l(this%cfg%imin:this%cfg%imax)); VFR_l=0.0_WP
+      allocate(VFR_g(this%cfg%imin:this%cfg%imax)); VFR_g=0.0_WP
+      ! Integrate various areas and flow rates
+      do k=this%cfg%kmin_,this%cfg%kmax_
+         do j=this%cfg%jmin_,this%cfg%jmax_
+            do i=this%cfg%imin_,this%cfg%imax_
+               ! Cell cross-sectional area and radial location
+               area=this%cfg%dy(j)*this%cfg%dz(k)
+               rad=sqrt(this%cfg%ym(j)**2+this%cfg%zm(k)**2)
+               ! Increment solid area and flow rate
+               CSA_s(i)=CSA_s(i)+area*(1.0_WP-this%cfg%VF(i,j,k))
+               VFR_s(i)=VFR_s(i)+area*(1.0_WP-this%cfg%VF(i,j,k))*this%Ui(i,j,k)
+               ! Increment fluid areas and flow rates only inside the nozzle
+               if ((this%cfg%xm(i).lt.-0.0015_WP.and.rad.le.this%Rinlet).or.(this%cfg%xm(i).ge.-0.0015_WP.and.this%cfg%xm(i).lt.0.0_WP.and.rad.le.this%Rexit).or.this%cfg%xm(i).gt.0.0_WP) then
+                  CSA_f(i)=CSA_f(i)+area*this%cfg%VF(i,j,k)
+                  CSA_l(i)=CSA_l(i)+area*this%cfg%VF(i,j,k)*        this%vf%VF(i,j,k)
+                  CSA_g(i)=CSA_g(i)+area*this%cfg%VF(i,j,k)*(1.0_WP-this%vf%VF(i,j,k))
+                  VFR_f(i)=VFR_f(i)+area*this%cfg%VF(i,j,k)                           *this%Ui(i,j,k)
+                  VFR_l(i)=VFR_l(i)+area*this%cfg%VF(i,j,k)*        this%vf%VF(i,j,k) *this%Ui(i,j,k)
+                  VFR_g(i)=VFR_g(i)+area*this%cfg%VF(i,j,k)*(1.0_WP-this%vf%VF(i,j,k))*this%Ui(i,j,k)
+               end if
+            end do
+         end do
+      end do
+      call MPI_ALLREDUCE(MPI_IN_PLACE,CSA_s,this%cfg%nx,MPI_REAL_WP,MPI_SUM,this%cfg%comm,ierr)
+      call MPI_ALLREDUCE(MPI_IN_PLACE,CSA_f,this%cfg%nx,MPI_REAL_WP,MPI_SUM,this%cfg%comm,ierr)
+      call MPI_ALLREDUCE(MPI_IN_PLACE,CSA_l,this%cfg%nx,MPI_REAL_WP,MPI_SUM,this%cfg%comm,ierr)
+      call MPI_ALLREDUCE(MPI_IN_PLACE,CSA_g,this%cfg%nx,MPI_REAL_WP,MPI_SUM,this%cfg%comm,ierr)
+      call MPI_ALLREDUCE(MPI_IN_PLACE,VFR_s,this%cfg%nx,MPI_REAL_WP,MPI_SUM,this%cfg%comm,ierr)
+      call MPI_ALLREDUCE(MPI_IN_PLACE,VFR_f,this%cfg%nx,MPI_REAL_WP,MPI_SUM,this%cfg%comm,ierr)
+      call MPI_ALLREDUCE(MPI_IN_PLACE,VFR_l,this%cfg%nx,MPI_REAL_WP,MPI_SUM,this%cfg%comm,ierr)
+      call MPI_ALLREDUCE(MPI_IN_PLACE,VFR_g,this%cfg%nx,MPI_REAL_WP,MPI_SUM,this%cfg%comm,ierr)
+      ! Only root process outputs to a file
+      if (this%cfg%amRoot) then
+         if (.not.isdir('flowrate')) call makedir('flowrate')
+         filename='flowrate_'; write(timestamp,'(es12.5)') this%time%t
+         open(newunit=iunit,file='flowrate/'//trim(adjustl(filename))//trim(adjustl(timestamp)),form='formatted',status='replace',access='stream',iostat=ierr)
+         write(iunit,'(999999(a12,x))') 'xm','CSA_s','CSA_f','CSA_l','CSA_g','VFR_s','VFR_f','VFR_l','VFR_g'
+         do i=this%cfg%imin,this%cfg%imax
+            write(iunit,'(999999(es12.5,x))') this%cfg%xm(i),CSA_s(i),CSA_f(i),CSA_l(i),CSA_g(i),VFR_s(i),VFR_f(i),VFR_l(i),VFR_g(i)
+         end do
+         close(iunit)
+      end if
+   end subroutine analyze_flowrate
+   
+   
+   !> Transfer droplet to Lagrangian representation
+   subroutine transfer_drops(this)
       use mpi_f08,  only: MPI_ALLREDUCE,MPI_SUM,MPI_IN_PLACE
       use parallel, only: MPI_REAL_WP
       class(simplex), intent(inout) :: this
       real(WP), dimension(:), allocatable :: dvol
       integer :: n,m,ierr,nmax
-      ! Allocate droplet volume array
-      allocate(dvol(1:this%ccl%nstruct)); dvol=0.0_WP
-      ! Loop over individual structures
-      do n=1,this%ccl%nstruct
-         ! Loop over cells in structure and accumulate volume
-         do m=1,this%ccl%struct(n)%n_
-            dvol(n)=dvol(n)+this%cfg%vol(this%ccl%struct(n)%map(1,m),this%ccl%struct(n)%map(2,m),this%ccl%struct(n)%map(3,m))*&
-            &                 this%vf%VF(this%ccl%struct(n)%map(1,m),this%ccl%struct(n)%map(2,m),this%ccl%struct(n)%map(3,m))
-         end do
-      end do
-      ! Reduce volume data
-      call MPI_ALLREDUCE(MPI_IN_PLACE,dvol,this%ccl%nstruct,MPI_REAL_WP,MPI_SUM,this%vf%cfg%comm,ierr)
-      nmax=maxloc(dvol,dim=1)
-      ! Remove all drops
-      do n=1,this%ccl%nstruct
-         ! Skip liquid core
-         if (n.eq.nmax) cycle
-         ! Remove all other structures
-         do m=1,this%ccl%struct(n)%n_
-            this%vf%VF(this%ccl%struct(n)%map(1,m),this%ccl%struct(n)%map(2,m),this%ccl%struct(n)%map(3,m))=0.0_WP
-         end do
-      end do
-      call this%vf%sync_interface()
-      call this%vf%clean_irl_and_band()
+      
+      ! Start by performing a CCL
+      call this%ccl%build(make_label,same_label)
+      
+      ! Allocate droplet stats arrays
+      !allocate(dvol(1:this%ccl%nstruct)); dvol=0.0_WP
+      
+      ! First pass: loop over individual structures and accumulate stats
+      !do n=1,this%ccl%nstruct
+      !   ! Loop over cells in structure
+      !   do m=1,this%ccl%struct(n)%n_
+      !      ! Accumulate volume
+      !      dvol(n)=dvol(n)+this%cfg%vol(this%ccl%struct(n)%map(1,m),this%ccl%struct(n)%map(2,m),this%ccl%struct(n)%map(3,m))*&
+      !      &                 this%vf%VF(this%ccl%struct(n)%map(1,m),this%ccl%struct(n)%map(2,m),this%ccl%struct(n)%map(3,m))
+      !      ! Accumulate ...
+      !   end do
+      !end do
+      
+      ! Reduce stats
+      !call MPI_ALLREDUCE(MPI_IN_PLACE,dvol,this%ccl%nstruct,MPI_REAL_WP,MPI_SUM,this%vf%cfg%comm,ierr)
+      
+      
+      ! Find the liquid core
+      !nmax=maxloc(dvol,dim=1)
+      
+      ! Second pass to transfer drops
+      !do n=1,this%ccl%nstruct
+      !   ! Skip structures that do not meet our criteria
+      !   if (n.eq.nmax) cycle
+      !   ! Remove all other structures
+      !   do m=1,this%ccl%struct(n)%n_
+      !      this%vf%VF(this%ccl%struct(n)%map(1,m),this%ccl%struct(n)%map(2,m),this%ccl%struct(n)%map(3,m))=0.0_WP
+      !   end do
+      !   ! Create a droplet instead
+      !
+      !end do
+      !call this%vf%sync_interface()
+      !call this%vf%clean_irl_and_band()
+      
       ! Deallocate
-      deallocate(dvol)
-   end subroutine remove_drops
+      !deallocate(dvol)
+      
+   contains
+      
+      !> Function that identifies cells that need a label
+      logical function make_label(i,j,k)
+         implicit none
+         integer, intent(in) :: i,j,k
+         if (this%vf%VF(i,j,k).gt.0.0_WP) then
+            make_label=.true.
+         else
+            make_label=.false.
+         end if
+      end function make_label
+      
+      !> Function that identifies if cell pairs have same label
+      logical function same_label(i1,j1,k1,i2,j2,k2)
+         implicit none
+         integer, intent(in) :: i1,j1,k1,i2,j2,k2
+         same_label=.true.
+      end function same_label
+      
+   end subroutine transfer_drops
    
    
    !> Initialization of simplex simulation
@@ -242,7 +349,7 @@ contains
                do j=this%cfg%jmino_,this%cfg%jmaxo_
                   do i=this%cfg%imino_,this%cfg%imaxo_
                      ! Only work to the left of the plenum
-                     if (this%cfg%xm(i)-p1(1).gt.this%cfg%min_meshsize) cycle
+                     if (this%cfg%xm(i)-this%p1(1).gt.this%cfg%min_meshsize) cycle
                      ! Set cube vertices
                      n=0
                      do sk=0,1
@@ -264,41 +371,49 @@ contains
                end do
             end do
          end block create_inlet_pipes
-         ! Apply Neumann on VF at entrance
+         ! Apply Neumann on VF and apply stair-stepping at entrance
          if (this%cfg%iproc.eq.1) then
+            ! Stair-step entrance
+            this%cfg%VF(this%cfg%imin,:,:)=max(real(nint(this%cfg%VF(this%cfg%imin,:,:)),WP),epsilon(1.0_WP))
+            ! Copy into overlap layer
             do i=this%cfg%imino,this%cfg%imin-1
                this%cfg%VF(i,:,:)=this%cfg%VF(this%cfg%imin,:,:)
             end do
          end if
-         ! This forces the use of stair-stepping
-         !this%cfg%VF=nint(this%cfg%VF)
          ! Recompute domain volume
          call this%cfg%calc_fluid_vol()
       end block create_simplex
       
       
       ! Initialize flow rate
-      set_flow_rate: block
+      set_flowrate: block
          use mpi_f08,  only: MPI_ALLREDUCE,MPI_SUM,MPI_IN_PLACE
          use parallel, only: MPI_REAL_WP
+         use string,   only: str_long
+         use messager, only: log
          integer :: j,k,ierr
+         character(len=str_long) :: message
          ! Read mass flow rate
-         call this%input%read('Mass flow rate',mfr)
+         call this%input%read('Mass flow rate',this%mfr)
          ! Read coflow velocity
-         call this%input%read('Coflow velocity',Ucoflow)
+         call this%input%read('Coflow velocity',this%Ucoflow)
          ! Integrate inlet pipe surface area
-         Apipe=0.0_WP
+         this%Apipe=0.0_WP
          if (this%cfg%iproc.eq.1) then
             do k=this%cfg%kmin_,this%cfg%kmax_
                do j=this%cfg%jmin_,this%cfg%jmax_
-                  if (sqrt(this%cfg%ym(j)**2+this%cfg%zm(k)**2).lt.0.002_WP) then
-                     Apipe=Apipe+this%cfg%VF(this%cfg%imin-1,j,k)*this%cfg%dy(j)*this%cfg%dz(k)
+                  if (sqrt(this%cfg%ym(j)**2+this%cfg%zm(k)**2).lt.this%Rinlet) then
+                     this%Apipe=this%Apipe+this%cfg%VF(this%cfg%imin,j,k)*this%cfg%dy(j)*this%cfg%dz(k)
                   end if
                end do
             end do
          end if
-         call MPI_ALLREDUCE(MPI_IN_PLACE,Apipe,this%cfg%nproc,MPI_REAL_WP,MPI_SUM,this%cfg%comm,ierr)
-      end block set_flow_rate
+         call MPI_ALLREDUCE(MPI_IN_PLACE,this%Apipe,1,MPI_REAL_WP,MPI_SUM,this%cfg%comm,ierr)
+         ! Log this info
+         if (this%cfg%amRoot) then
+            write(message,'("Inlet pipe area is ",es12.5)') this%Apipe; call log(message)
+         end if
+      end block set_flowrate
       
       
       ! Initialize time tracker with 2 subiterations
@@ -418,7 +533,7 @@ contains
                do j=this%vf%cfg%jmino_,this%vf%cfg%jmaxo_
                   do i=this%vf%cfg%imino_,this%vf%cfg%imaxo_
                      rad=sqrt(this%vf%cfg%ym(j)**2+this%vf%cfg%zm(k)**2)
-                     if (i.lt.this%vf%cfg%imin.and.rad.le.0.002_WP) this%vf%VF(i,j,k)=1.0_WP
+                     if (i.lt.this%vf%cfg%imin.and.rad.le.this%Rinlet) this%vf%VF(i,j,k)=1.0_WP
                   end do
                end do
             end do
@@ -441,9 +556,9 @@ contains
                   do i=this%vf%cfg%imino_,this%vf%cfg%imaxo_
                      rad=sqrt(this%vf%cfg%ym(j)**2+this%vf%cfg%zm(k)**2)
                      ! Ensure the nozzle is filled with liquid up to the throat with wet walls
-                     if (this%vf%cfg%xm(i).lt.-0.0015_WP.and.rad.le.0.002_WP) then
+                     if (this%vf%cfg%xm(i).lt.-0.0015_WP.and.rad.le.this%Rinlet) then
                         this%vf%VF(i,j,k)=1.0_WP
-                     else if (this%vf%cfg%xm(i).ge.-0.0015_WP.and.this%vf%cfg%xm(i).lt.0.0_WP.and.rad.le.0.00143_WP) then
+                     else if (this%vf%cfg%xm(i).ge.-0.0015_WP.and.this%vf%cfg%xm(i).lt.0.0_WP.and.rad.le.this%Rexit) then
                         this%vf%VF(i,j,k)=1.0_WP
                      else
                         this%vf%VF(i,j,k)=0.0_WP
@@ -540,13 +655,13 @@ contains
          call this%fs%get_bcond('inlets',mybc)
          do n=1,mybc%itr%no_
             i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
-            this%fs%U(i,j,k)=sum(this%fs%itpr_x(:,i,j,k)*this%cfg%VF(i-1:i,j,k))*mfr/(this%fs%rho_l*Apipe)
+            this%fs%U(i,j,k)=this%cfg%VF(i,j,k)*this%mfr/(this%fs%rho_l*this%Apipe)
          end do
          ! Apply Dirichlet condition at coflow inlet
          call this%fs%get_bcond('coflow',mybc)
          do n=1,mybc%itr%no_
             i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
-            this%fs%U(i,j,k)=Ucoflow
+            this%fs%U(i,j,k)=this%Ucoflow
          end do
          ! Apply all other boundary conditions
          call this%fs%apply_bcond(this%time%t,this%time%dt)
@@ -560,14 +675,9 @@ contains
       
       
       ! Create CCL
-      !create_ccl: block
-      !   ! Initialize CCL
-      !   call this%ccl%initialize(pg=this%cfg%pgrid,name='ccl')
-      !   ! Perform CCL
-      !   call this%ccl%build(make_label,same_label)
-      !   ! Remove all but core
-      !   call this%remove_drops()
-      !end block create_ccl
+      create_ccl: block
+         call this%ccl%initialize(pg=this%cfg%pgrid,name='ccl')
+      end block create_ccl
       
       
       ! Create an LES model
@@ -642,42 +752,155 @@ contains
       ! Create a timing monitor
       create_timing: block
          ! Create timers
-         this%tstep=timer(comm=this%cfg%comm,name='Timestep')
-         this%tvof =timer(comm=this%cfg%comm,name='VOFsolve')
-         this%tvel =timer(comm=this%cfg%comm,name='Velocity')
-         this%tpres=timer(comm=this%cfg%comm,name='Pressure')
-         this%tsgs =timer(comm=this%cfg%comm,name='SGSmodel')
+         this%tstep =timer(comm=this%cfg%comm,name='Timestep')
+         this%tvof  =timer(comm=this%cfg%comm,name='VOFsolve')
+         this%tvel  =timer(comm=this%cfg%comm,name='Velocity')
+         this%tpres =timer(comm=this%cfg%comm,name='Pressure')
+         this%tsgs  =timer(comm=this%cfg%comm,name='SGSmodel')
+         this%ttrans=timer(comm=this%cfg%comm,name='Transfer')
          ! Create corresponding monitor file
          this%timefile=monitor(this%fs%cfg%amRoot,'timing')
          call this%timefile%add_column(this%time%n,'Timestep number')
          call this%timefile%add_column(this%time%t,'Time')
-         call this%timefile%add_column(this%tstep%time,trim(this%tstep%name))
-         call this%timefile%add_column(this%tvof%time ,trim(this%tvof%name))
-         call this%timefile%add_column(this%tvel%time ,trim(this%tvel%name))
-         call this%timefile%add_column(this%tpres%time,trim(this%tpres%name))
-         call this%timefile%add_column(this%tsgs%time ,trim(this%tsgs%name))
+         call this%timefile%add_column(this%tstep%time ,trim(this%tstep%name))
+         call this%timefile%add_column(this%tvof%time  ,trim(this%tvof%name))
+         call this%timefile%add_column(this%tvel%time  ,trim(this%tvel%name))
+         call this%timefile%add_column(this%tpres%time ,trim(this%tpres%name))
+         call this%timefile%add_column(this%tsgs%time  ,trim(this%tsgs%name))
+         call this%timefile%add_column(this%ttrans%time,trim(this%ttrans%name))
       end block create_timing
+      
+      
+      ! Create an event for flow rate analysis
+      flowrate_analysis_prep: block
+         this%flowrate_evt=event(time=this%time,name='Flow rate output')
+         call this%input%read('Flow rate output period',this%flowrate_evt%tper,default=huge(1.0_WP))
+      end block flowrate_analysis_prep
       
       
    contains
       
-      !> Function that identifies cells that need a label
-      logical function make_label(i,j,k)
-         implicit none
+      !> Function that localizes the right domain boundary
+      function right_boundary(pg,i,j,k) result(isIn)
+         use pgrid_class, only: pgrid
+         class(pgrid), intent(in) :: pg
          integer, intent(in) :: i,j,k
-         if (this%vf%VF(i,j,k).gt.0.0_WP) then
-            make_label=.true.
-         else
-            make_label=.false.
-         end if
-      end function make_label
+         logical :: isIn
+         isIn=.false.
+         if (i.eq.pg%imax+1) isIn=.true.
+      end function right_boundary
       
-      !> Function that identifies if cell pairs have same label
-      logical function same_label(i1,j1,k1,i2,j2,k2)
+      
+      !> Function that localizes the pipe inlets
+      function pipe_inlets(pg,i,j,k) result(isIn)
+         use pgrid_class, only: pgrid
+         class(pgrid), intent(in) :: pg
+         integer, intent(in) :: i,j,k
+         logical :: isIn
+         isIn=.false.
+         if (i.eq.pg%imin.and.sqrt(pg%ym(j)**2+pg%zm(k)**2).lt.this%Rinlet) isIn=.true.
+      end function pipe_inlets
+      
+      
+      !> Function that localizes the coflow inlet
+      function coflow_inlet(pg,i,j,k) result(isIn)
+         use pgrid_class, only: pgrid
+         class(pgrid), intent(in) :: pg
+         integer, intent(in) :: i,j,k
+         logical :: isIn
+         isIn=.false.
+         if (i.eq.pg%imin.and.sqrt(pg%ym(j)**2+pg%zm(k)**2).gt.this%Rcoflow) isIn=.true.
+      end function coflow_inlet
+      
+      
+      !> Function that localizes region of VOF removal
+      function vof_removal_layer_locator(pg,i,j,k) result(isIn)
+         use pgrid_class, only: pgrid
+         class(pgrid), intent(in) :: pg
+         integer, intent(in) :: i,j,k
+         logical :: isIn
+         isIn=.false.
+         if (i.ge.pg%imax-this%nlayer.or.&
+         &   j.le.pg%jmin+this%nlayer.or.&
+         &   j.ge.pg%jmax-this%nlayer.or.&
+         &   k.le.pg%kmin+this%nlayer.or.&
+         &   k.ge.pg%kmax-this%nlayer) isIn=.true.
+      end function vof_removal_layer_locator
+      
+      
+      !> Function that localizes the top (y+) of the domain
+      function yp_locator(pg,i,j,k) result(isIn)
+         use pgrid_class, only: pgrid
          implicit none
-         integer, intent(in) :: i1,j1,k1,i2,j2,k2
-         same_label=.true.
-      end function same_label
+         class(pgrid), intent(in) :: pg
+         integer, intent(in) :: i,j,k
+         logical :: isIn
+         isIn=.false.
+         if (j.eq.pg%jmax+1) isIn=.true.
+      end function yp_locator
+      
+      
+      !> Function that localizes the bottom (y-) of the domain
+      function ym_locator(pg,i,j,k) result(isIn)
+         use pgrid_class, only: pgrid
+         implicit none
+         class(pgrid), intent(in) :: pg
+         integer, intent(in) :: i,j,k
+         logical :: isIn
+         isIn=.false.
+         if (j.eq.pg%jmin) isIn=.true.
+      end function ym_locator
+      
+      
+      !> Function that localizes the top (z+) of the domain
+      function zp_locator(pg,i,j,k) result(isIn)
+         use pgrid_class, only: pgrid
+         implicit none
+         class(pgrid), intent(in) :: pg
+         integer, intent(in) :: i,j,k
+         logical :: isIn
+         isIn=.false.
+         if (k.eq.pg%kmax+1) isIn=.true.
+      end function zp_locator
+      
+      
+      !> Function that localizes the bottom (z-) of the domain
+      function zm_locator(pg,i,j,k) result(isIn)
+         use pgrid_class, only: pgrid
+         implicit none
+         class(pgrid), intent(in) :: pg
+         integer, intent(in) :: i,j,k
+         logical :: isIn
+         isIn=.false.
+         if (k.eq.pg%kmin) isIn=.true.
+      end function zm_locator
+      
+      
+      !> Function that defines a level set function for inlet pipe 1
+      function levelset_inlet_pipe_1(xyz,t) result(G)
+         implicit none
+         real(WP), dimension(3),intent(in) :: xyz
+         real(WP), intent(in) :: t
+         real(WP), dimension(3) :: v,p
+         real(WP) :: G
+         v=xyz-this%p1
+         p=v-this%n1*dot_product(v,this%n1)
+         G=this%Rpipe-sqrt(dot_product(p,p))
+      end function levelset_inlet_pipe_1
+      
+      
+      !> Function that defines a level set function for inlet pipe 2
+      function levelset_inlet_pipe_2(xyz,t) result(G)
+         implicit none
+         real(WP), dimension(3),intent(in) :: xyz
+         real(WP), intent(in) :: t
+         real(WP), dimension(3) :: v,p
+         real(WP) :: G
+         v=xyz-this%p2
+         p=v-this%n2*dot_product(v,this%n2)
+         G=this%Rpipe-sqrt(dot_product(p,p))
+      end function levelset_inlet_pipe_2
+      
       
    end subroutine init
    
@@ -694,6 +917,7 @@ contains
       call this%tsgs%reset()
       call this%tvel%reset()
       call this%tpres%reset()
+      call this%ttrans%reset()
       call this%tstep%start()
       
       ! Increment time
@@ -827,12 +1051,16 @@ contains
       call this%fs%interp_vel(this%Ui,this%Vi,this%Wi)
       call this%fs%get_div()
       
+      ! Transfer VOF into droplets
+      call this%ttrans%start() !< Start transfer timer
+      call this%transfer_drops()
+      call this%ttrans%stop() !< Stop transfer timer
+      
       ! Remove VOF at edge of domain
       remove_vof: block
          use mpi_f08,  only: MPI_ALLREDUCE,MPI_SUM,MPI_IN_PLACE
          use parallel, only: MPI_REAL_WP
          integer :: n,i,j,k,ierr
-         real(WP) :: my_vof_removed
          this%vof_removed=0.0_WP
          do n=1,this%vof_removal_layer%no_
             i=this%vof_removal_layer%map(1,n)
@@ -843,9 +1071,6 @@ contains
          end do
          call MPI_ALLREDUCE(MPI_IN_PLACE,this%vof_removed,1,MPI_REAL_WP,MPI_SUM,this%cfg%comm,ierr)
          call this%vf%clean_irl_and_band()
-         ! Remove all but core
-         !call this%ccl%build(make_label,same_label)
-         !call this%remove_drops()
       end block remove_vof
       
       ! Reset VOF in IBs
@@ -861,9 +1086,9 @@ contains
                   ! Compute our local radius
                   rad=sqrt(this%vf%cfg%ym(j)**2+this%vf%cfg%zm(k)**2)
                   ! Ensure the nozzle is filled with liquid up to the throat with wet walls
-                  if (this%vf%cfg%xm(i).lt.-0.0015_WP.and.rad.le.0.002_WP) then
+                  if (this%vf%cfg%xm(i).lt.-0.0015_WP.and.rad.le.this%Rinlet) then
                      this%vf%VF(i,j,k)=1.0_WP
-                  else if (this%vf%cfg%xm(i).ge.-0.0015_WP.and.this%vf%cfg%xm(i).lt.0.0_WP.and.rad.le.0.00143_WP) then
+                  else if (this%vf%cfg%xm(i).ge.-0.0015_WP.and.this%vf%cfg%xm(i).lt.0.0_WP.and.rad.le.this%Rexit) then
                      this%vf%VF(i,j,k)=1.0_WP
                   else
                      this%vf%VF(i,j,k)=0.0_WP
@@ -882,6 +1107,9 @@ contains
          call this%vf%update_surfmesh_nowall(this%smesh)
          call this%ens_out%write_data(this%time%t)
       end if
+      
+      ! Output flow rate
+      if (this%flowrate_evt%occurs()) call this%analyze_flowrate()
       
       !> Stop timestep timer
       call this%tstep%stop()
@@ -951,29 +1179,9 @@ contains
          end block save_restart
       end if
       
-   contains
-      
-      !> Function that identifies cells that need a label
-      logical function make_label(i,j,k)
-         implicit none
-         integer, intent(in) :: i,j,k
-         if (this%vf%VF(i,j,k).gt.0.0_WP) then
-            make_label=.true.
-         else
-            make_label=.false.
-         end if
-      end function make_label
-      
-      !> Function that identifies if cell pairs have same label
-      logical function same_label(i1,j1,k1,i2,j2,k2)
-         implicit none
-         integer, intent(in) :: i1,j1,k1,i2,j2,k2
-         same_label=.true.
-      end function same_label
-      
    end subroutine step
    
-
+   
    !> Finalize simplex simulation
    subroutine final(this)
       implicit none
@@ -981,128 +1189,6 @@ contains
       ! Deallocate work arrays
       deallocate(this%resU,this%resV,this%resW,this%Ui,this%Vi,this%Wi,this%gradU)!,this%SR)
    end subroutine final
-   
-   
-   !> Function that localizes the right domain boundary
-   function right_boundary(pg,i,j,k) result(isIn)
-      use pgrid_class, only: pgrid
-      class(pgrid), intent(in) :: pg
-      integer, intent(in) :: i,j,k
-      logical :: isIn
-      isIn=.false.
-      if (i.eq.pg%imax+1) isIn=.true.
-   end function right_boundary
-   
-   
-   !> Function that localizes the pipe inlets
-   function pipe_inlets(pg,i,j,k) result(isIn)
-      use pgrid_class, only: pgrid
-      class(pgrid), intent(in) :: pg
-      integer, intent(in) :: i,j,k
-      logical :: isIn
-      isIn=.false.
-      if (i.eq.pg%imin.and.sqrt(pg%ym(j)**2+pg%zm(k)**2).lt.0.002_WP) isIn=.true.
-   end function pipe_inlets
-
-
-   !> Function that localizes the coflow inlet
-   function coflow_inlet(pg,i,j,k) result(isIn)
-      use pgrid_class, only: pgrid
-      class(pgrid), intent(in) :: pg
-      integer, intent(in) :: i,j,k
-      logical :: isIn
-      isIn=.false.
-      if (i.eq.pg%imin.and.sqrt(pg%ym(j)**2+pg%zm(k)**2).gt.Rcoflow) isIn=.true.
-   end function coflow_inlet
-   
-   
-   !> Function that localizes region of VOF removal
-   function vof_removal_layer_locator(pg,i,j,k) result(isIn)
-      use pgrid_class, only: pgrid
-      class(pgrid), intent(in) :: pg
-      integer, intent(in) :: i,j,k
-      logical :: isIn
-      isIn=.false.
-      if (i.ge.pg%imax-nlayer.or.&
-      &   j.le.pg%jmin+nlayer.or.&
-      &   j.ge.pg%jmax-nlayer.or.&
-      &   k.le.pg%kmin+nlayer.or.&
-      &   k.ge.pg%kmax-nlayer) isIn=.true.
-   end function vof_removal_layer_locator
-   
-
-   !> Function that localizes the top (y+) of the domain
-   function yp_locator(pg,i,j,k) result(isIn)
-      use pgrid_class, only: pgrid
-      implicit none
-      class(pgrid), intent(in) :: pg
-      integer, intent(in) :: i,j,k
-      logical :: isIn
-      isIn=.false.
-      if (j.eq.pg%jmax+1) isIn=.true.
-   end function yp_locator
-   
-   
-   !> Function that localizes the bottom (y-) of the domain
-   function ym_locator(pg,i,j,k) result(isIn)
-      use pgrid_class, only: pgrid
-      implicit none
-      class(pgrid), intent(in) :: pg
-      integer, intent(in) :: i,j,k
-      logical :: isIn
-      isIn=.false.
-      if (j.eq.pg%jmin) isIn=.true.
-   end function ym_locator
-   
-   
-   !> Function that localizes the top (z+) of the domain
-   function zp_locator(pg,i,j,k) result(isIn)
-      use pgrid_class, only: pgrid
-      implicit none
-      class(pgrid), intent(in) :: pg
-      integer, intent(in) :: i,j,k
-      logical :: isIn
-      isIn=.false.
-      if (k.eq.pg%kmax+1) isIn=.true.
-   end function zp_locator
-   
-   
-   !> Function that localizes the bottom (z-) of the domain
-   function zm_locator(pg,i,j,k) result(isIn)
-      use pgrid_class, only: pgrid
-      implicit none
-      class(pgrid), intent(in) :: pg
-      integer, intent(in) :: i,j,k
-      logical :: isIn
-      isIn=.false.
-      if (k.eq.pg%kmin) isIn=.true.
-   end function zm_locator
-   
-   
-   !> Function that defines a level set function for inlet pipe 1
-   function levelset_inlet_pipe_1(xyz,t) result(G)
-      implicit none
-      real(WP), dimension(3),intent(in) :: xyz
-      real(WP), intent(in) :: t
-      real(WP), dimension(3) :: v,p
-      real(WP) :: G
-      v=xyz-p1
-      p=v-n1*dot_product(v,n1)
-      G=Rpipe-sqrt(dot_product(p,p))
-   end function levelset_inlet_pipe_1
-   
-   
-   !> Function that defines a level set function for inlet pipe 2
-   function levelset_inlet_pipe_2(xyz,t) result(G)
-      implicit none
-      real(WP), dimension(3),intent(in) :: xyz
-      real(WP), intent(in) :: t
-      real(WP), dimension(3) :: v,p
-      real(WP) :: G
-      v=xyz-p2
-      p=v-n2*dot_product(v,n2)
-      G=Rpipe-sqrt(dot_product(p,p))
-   end function levelset_inlet_pipe_2
    
    
 end module simplex_class
