@@ -35,7 +35,12 @@ module ligament_class
       !type(ddadi)       :: vs    !< DDADI solver for velocity
       type(timetracker) :: time  !< Time info
       type(cclabel)     :: ccl   !< CCLabel for local Weber number calculation
+
+      !> FMM Method
       type(fmm)         :: fmm   !< Fast marching method for distance field
+      real(WP), dimension(:,:,:), allocatable :: G  !< FMM distance
+      real(WP) :: fmm_ndx=4 !< Number of grid cells to extend distance field
+
       
       !> Ensight postprocessing
       type(surfmesh) :: smesh    !< Surface mesh for interface
@@ -81,7 +86,6 @@ contains
       implicit none
       class(ligament), intent(inout) :: this
       
-      
       ! Create the ligament mesh
       create_config: block
          use sgrid_class, only: cartesian,sgrid
@@ -112,6 +116,7 @@ contains
          call param_read('Partition',partition,short='p')
          ! Create partitioned grid without walls
          this%cfg=config(grp=group,decomp=partition,grid=grid)
+
       end block create_config
       
       
@@ -135,9 +140,9 @@ contains
          allocate(this%Ui  (this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
          allocate(this%Vi  (this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
          allocate(this%Wi  (this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
+         allocate(this%G   (this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
       end block allocate_work_arrays
-      
-      
+            
       ! Initialize our VOF solver and field
       create_and_initialize_vof: block
          use vfs_class, only: remap,VFlo,VFhi,plicnet,r2pnet
@@ -260,7 +265,7 @@ contains
       ! Create FMM 
       create_fmm: block 
          ! Initialize FMM
-         call this%fmm%initialize(pg=this%cfg%pgrid,name='fmm')
+         call this%fmm%initialize(cfg=this%cfg,name='fmm')
       end block create_fmm
       
       ! Handle restart/saves here
@@ -404,7 +409,7 @@ contains
          call this%ens_out%add_scalar('curvature',this%vf%curv)
          call this%ens_out%add_scalar('pressure',this%fs%P)
          call this%ens_out%add_surface('plic',this%smesh)
-         call this%ens_out%add_scalar('dist', this%fmm%dist)
+         call this%ens_out%add_scalar('fmm_G',this%G)
          ! Output to ensight
          if (this%ens_evt%occurs()) call this%ens_out%write_data(this%time%t)
       end block create_ensight
@@ -466,7 +471,6 @@ contains
          call this%timefile%add_column(this%tvel%time  ,trim(this%tvel%name))
          call this%timefile%add_column(this%tpres%time ,trim(this%tpres%name))
       end block create_timing
-      
       
    contains
       
@@ -553,15 +557,15 @@ contains
       this%fs%Vold=this%fs%V
       this%fs%Wold=this%fs%W
       
-      ! Prepare old staggered density (at n)
+      ! Prepare old sflaggered density (at n)
       call this%fs%get_olddensity(vf=this%vf)
-      
+
       ! VOF solver step
       call this%tvof%start() ! Start VOF timer
       call this%vf%advance(dt=this%time%dt,U=this%fs%U,V=this%fs%V,W=this%fs%W)
       call this%tvof%stop() ! Stop VOF timer
       
-      ! Prepare new staggered viscosity (at n+1)
+      ! Prepare new sflaggered viscosity (at n+1)
       call this%fs%get_viscosity(vf=this%vf,strat=arithmetic_visc)
       
       ! Perform sub-iterations
@@ -574,10 +578,10 @@ contains
          this%fs%U=0.5_WP*(this%fs%U+this%fs%Uold)
          this%fs%V=0.5_WP*(this%fs%V+this%fs%Vold)
          this%fs%W=0.5_WP*(this%fs%W+this%fs%Wold)
-         
+
          ! Preliminary mass and momentum transport step at the interface
          call this%fs%prepare_advection_upwind(dt=this%time%dt)
-         
+
          ! Explicit calculation of drho*u/dt from NS
          call this%fs%get_dmomdt(this%resU,this%resV,this%resW)
          
@@ -588,7 +592,7 @@ contains
          
          ! Form implicit residuals
          call this%fs%solve_implicit(this%time%dt,this%resU,this%resV,this%resW)
-         
+
          ! Apply these residuals
          this%fs%U=2.0_WP*this%fs%U-this%fs%Uold+this%resU
          this%fs%V=2.0_WP*this%fs%V-this%fs%Vold+this%resV
@@ -615,9 +619,9 @@ contains
          ! Correct velocity
          call this%fs%get_pgrad(this%fs%psolv%sol,this%resU,this%resV,this%resW)
          this%fs%P=this%fs%P+this%fs%psolv%sol
-         this%fs%U=this%fs%U-this%time%dt*this%resU/this%fs%rho_U
-         this%fs%V=this%fs%V-this%time%dt*this%resV/this%fs%rho_V
-         this%fs%W=this%fs%W-this%time%dt*this%resW/this%fs%rho_W
+         this%fs%U=this%fs%U-this%time%dt*this%resU/max(epsilon(0.0_WP),this%fs%rho_U)
+         this%fs%V=this%fs%V-this%time%dt*this%resV/max(epsilon(0.0_WP),this%fs%rho_V)
+         this%fs%W=this%fs%W-this%time%dt*this%resW/max(epsilon(0.0_WP),this%fs%rho_W)
          
          ! Apply boundary conditions
          call this%fs%apply_bcond(this%time%t,this%time%dt)
@@ -756,7 +760,43 @@ contains
          end do
          
          ! Compute signed distance function to gas-liquid interface 
-         call this%fmm%build(distance_init)
+         fmm_build: block 
+            integer :: i,j,k
+            real(WP) :: Gmax
+            integer :: ni
+            real(WP), dimension(3) :: pos,nearest_pt
+            ! Compute maximum distance to extend G 
+            call this%cfg%maximum(this%cfg%meshsize,Gmax); Gmax = Gmax * this%fmm_ndx
+            do k=this%cfg%kmino_,this%cfg%kmaxo_
+               do j=this%cfg%jmino_,this%cfg%jmaxo_
+                  do i=this%cfg%imino_,this%cfg%imaxo_
+                     if (this%vf%VF(i,j,k).le.this%vf%VFmin) then
+                        ! Gas
+                        this%G(i,j,k) = -Gmax
+                     elseif (this%vf%VF(i,j,k).ge.this%vf%VFmax) then
+                        ! Liquid
+                        this%G(i,j,k) = +Gmax
+                     else
+                        ! PLIC
+                        pos=[this%cfg%xm(i),this%cfg%ym(j),this%cfg%zm(k)]
+                        this%G(i,j,k)=huge(1.0_WP)
+                        ! Compute distance
+                        do ni=1,getNumberOfPlanes(this%vf%liquid_gas_interface(i,j,k))
+                           if (getNumberOfVertices(this%vf%interface_polygon(ni,i,j,k)).ne.0) then
+                              nearest_pt=calculateNearestPtOnSurface(this%vf%interface_polygon(ni,i,j,k),pos)
+                              nearest_pt=pos-nearest_pt
+                             this%G(i,j,k)=min(this%G(i,j,k),dot_product(nearest_pt,nearest_pt))
+                           end if
+                        end do
+                        this%G(i,j,k)=sqrt(this%G(i,j,k))
+                        ! Check if inside or outside
+                        if (.not.isPtInt(pos,this%vf%liquid_gas_interface(i,j,k))) this%G(i,j,k) = -this%G(i,j,k)
+                     end if
+                  end do
+               end do
+            end do
+            call this%fmm%build(this%G,Gmax)
+         end block fmm_build
 
          ! Compute dominant gas velocity direction 
          do n=1,this%ccl%nstruct
@@ -886,33 +926,6 @@ contains
          integer, intent(in) :: i1,j1,k1,i2,j2,k2
          same_label=.true.
       end function same_label
-
-      !> Function that initializes distance function
-      subroutine distance_init(i,j,k,G,tag)
-         implicit none
-         integer, intent(in) :: i,j,k
-         real(WP), intent(out) :: G
-         logical, intent(out) :: tag
-         integer :: ii,jj,kk,ni
-         real(WP), dimension(3) :: pos,nearest_pt
-         if (this%vf%VF(i,j,k).gt.this%vf%VFmin .and. & 
-             this%vf%VF(i,j,k).lt.this%vf%VFmax ) then
-            pos=[this%cfg%xm(i),this%cfg%ym(j),this%cfg%zm(k)]
-            G=huge(1.0_WP)
-            ! Compute distance
-            do ni=1,getNumberOfPlanes(this%vf%liquid_gas_interface(ii,jj,kk))
-               if (getNumberOfVertices(this%vf%interface_polygon(ni,ii,jj,kk)).ne.0) then
-                  nearest_pt=calculateNearestPtOnSurface(this%vf%interface_polygon(ni,ii,jj,kk),pos)
-                  nearest_pt=pos-nearest_pt
-                  G=dot_product(nearest_pt,nearest_pt)
-               end if
-            end do
-            tag=.true.
-         else
-            G=0.0_WP 
-            tag=.false.
-         end if
-      end subroutine distance_init
       
    end subroutine step
    
