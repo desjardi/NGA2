@@ -50,7 +50,6 @@ contains
    !> Initialize the fmm class 
    subroutine initialize(this,cfg,name)
       use mpi_f08
-      use parallel, only: comm
       implicit none
       class(fmm), intent(inout) :: this
       class(config), target, intent(in) :: cfg
@@ -134,16 +133,14 @@ contains
       integer, dimension(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_) :: phi_flag
       real(WP), dimension(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_) :: phi_fmm
       integer, dimension(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_,3) :: stc_plus,stc_minus
-      integer, dimension(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_) :: order_fmm
+      !integer, dimension(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_) :: order_fmm
       integer :: n_plus,n_minus
       integer :: iter
-      integer :: accepted_count,close_count,close_minus_count,close_plus_count
+      integer :: close_count,close_minus_count,close_plus_count
       integer :: fmm_accepted,fmm_close,fmm_far
       integer, dimension(this%cfg%nx_*this%cfg%ny_*this%cfg%nz_,3), target :: close_minus_ijk,close_plus_ijk
       integer, dimension(:,:), pointer :: close_ijk
-      integer, dimension(3) :: ijk, ijk_neigh
       ! Counter and mapping for accepted nodes
-      integer :: n_accepted
       integer, dimension(:,:), allocatable :: accepted_ijk
       ! Combined counter and mapping for all accepted nodes
       integer :: n_all_accepted
@@ -161,9 +158,8 @@ contains
       integer,         dimension(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_) :: heap_map
       integer :: nheap
       ! Communication
-      integer, dimension(3) :: ibuf
+      integer, dimension(3) :: my_ibuf,ibuf
   
-
       ! Initialize the counters
       n_plus = 0
       n_minus = 0
@@ -273,7 +269,6 @@ contains
          do k=this%cfg%kmino_,this%cfg%kmaxo_
             do j=this%cfg%jmino_,this%cfg%jmaxo_
                do i=this%cfg%imino_,this%cfg%imaxo_
-                  !phi_fmm(i,j,k) = +1.0e6_WP*Gmax*this%cfg%meshsize(i,j,k)
                   phi_fmm(i,j,k) = Gmax
                end do
             end do
@@ -288,7 +283,7 @@ contains
          ! 2: count of sent messages
          ! 3: our current nheap
          
-         ibuf(1:2) = 0   ! clear the message counters
+         my_ibuf(1:2) = 0   ! clear the message counters
          
          ! Switch between sides
          if (iter.eq.1) then
@@ -344,8 +339,7 @@ contains
                      ii=i;jj=j;kk=k+1
                      local_index = +3
                   end select
-                  ! Don't add nodes that are outside the bands or BC
-                  !if (band(ii,jj,kk).eq.0) cycle
+                  ! Don't add nodes that are outside the BC
                   if (this%cfg%VF(ii,jj,kk).eq.0.0_WP) cycle
                   ! Form local metrics
                   if (G(i,j,k)*G(ii,jj,kk).le.0.0_WP) then
@@ -402,7 +396,7 @@ contains
                      integer :: iheap
                      ! Check for new message from other processors
                      do while (multiphase_fmm_recv(i,j,k,this_phi))
-                        
+
                         if (this_phi.lt.phi_fmm(i,j,k)) then
                            
                            ! Check if this value is less than the currently
@@ -464,7 +458,7 @@ contains
                            
                         end if
                         ! Add one to recv message counter...
-                        ibuf(1) = ibuf(1) + 1
+                        my_ibuf(1) = my_ibuf(1) + 1
                      end do
                   end block message_processing
       
@@ -527,8 +521,7 @@ contains
                                  if (k.eq.kk) cycle
                                  local_index = +3
                               end select
-                              ! Don't add nodes that are outside the bands or BC
-                              !if (band(ii,jj,kk).eq.0) cycle
+                              ! Don't add nodes that are outside the BC
                               if (this%cfg%VF(ii,jj,kk).eq.0.0_WP) cycle
                               ! Count the nodes to be used in extending the distance function
                               if (phi_flag(ii,jj,kk).eq.fmm_close) then
@@ -548,7 +541,7 @@ contains
                         if ( i.ge.this%cfg%imin_ .and. i.le.this%cfg%imax_ .and. &
                              j.ge.this%cfg%jmin_ .and. j.le.this%cfg%jmax_ .and. &
                              k.ge.this%cfg%kmin_ .and. k.le.this%cfg%kmax_ ) then
-                           call multiphase_fmm_send(i,j,k,phi_fmm(i,j,k),ibuf(2))
+                           call multiphase_fmm_send(i,j,k,phi_fmm(i,j,k),my_ibuf(2))
                         end if
                   
                         ! Process already close nodes
@@ -556,7 +549,7 @@ contains
                            integer :: ii,jj,kk
                            integer :: nnn,iii,jjj,kkk
                            integer :: m,nn,n_nbrs
-                           integer :: local_index, radius
+                           integer :: local_index
                            real(WP) :: local_phi
                            real(WP), dimension(6) :: phi_nbrs
                            real(WP), dimension(3,6) :: dx_nbrs
@@ -614,8 +607,7 @@ contains
                                     iii=ii;jjj=jj;kkk=kk+1
                                     local_index = +3
                                  end select
-                                 ! Don't add nodes that are outside the bands or BC
-                                 !if (band(iii,jjj,kkk).eq.0) cycle
+                                 ! Don't add nodes that are outside the BC
                                  if (this%cfg%VF(iii,jjj,kkk).eq.0.0_WP) cycle
                                  ! Check for nbrs and look for...
                                  if ((G(ii,jj,kk)*G(iii,jjj,kkk)).le.0.0_WP) then
@@ -659,7 +651,7 @@ contains
                            integer :: ii,jj,kk
                            integer :: iii,jjj,kkk
                            integer :: m,nn,nnn,n_nbrs
-                           integer :: local_index, radius
+                           integer :: local_index
                            real(WP) :: local_phi
                            real(WP), dimension(3,6) :: dx_nbrs
                            real(WP), dimension(6) :: phi_nbrs
@@ -717,8 +709,7 @@ contains
                                     iii=ii;jjj=jj;kkk=kk+1
                                     local_index = +3
                                  end select
-                                 ! Don't add nodes that are outside the bands or BC
-                                 !if (band(iii,jjj,kkk).eq.0) cycle
+                                 ! Don't add nodes that are outside the BC
                                  if (this%cfg%VF(iii,jjj,kkk).eq.0.0_WP) cycle
                                  ! Check for nbrs and look for...
                                  if ((G(ii,jj,kk)*G(iii,jjj,kkk)).le.0.0_WP) then
@@ -766,12 +757,12 @@ contains
                   local_done = ((nheap.eq.0).or.(local_counter.eq.local_counter_max))
                   
                end do local_loop
-               
+
                communcate_messages:block
-                  use mpi_f08, only: MPI_ALLREDUCE, MPI_SUM, MPI_IN_PLACE, MPI_INTEGER
+                  use mpi_f08, only: MPI_ALLREDUCE, MPI_SUM, MPI_INTEGER
                   integer :: ierr
-                  ibuf(3) = nheap
-                  call MPI_ALLREDUCE(MPI_IN_PLACE,ibuf,3,MPI_INTEGER,MPI_SUM,this%cfg%comm,ierr)
+                  my_ibuf(3) = nheap
+                  call MPI_ALLREDUCE(my_ibuf,ibuf,3,MPI_INTEGER,MPI_SUM,this%cfg%comm,ierr)
                   global_done = ((ibuf(1).eq.ibuf(2)).and.(ibuf(3).eq.0))
                end block communcate_messages
                
@@ -1296,12 +1287,10 @@ contains
          real(WP), dimension(  n_nbrs), intent(in) :: G_nbrs 
          integer,  dimension(  n_nbrs), intent(in) :: index_nbrs 
          real(WP), dimension(3,n_nbrs), intent(in) :: dx_nbrs
-         integer :: ii,jj,kk
-         integer :: n,dim,dir
-         integer, dimension(3) :: ijk, ijk_neigh
+         integer :: n
          real(WP) :: G_loc, G_tmp
-         integer :: local_1,local_2,local_3,local_4,local_5,local_6
-         integer :: loctmp1,loctmp2,loctmp3,loctmp4,loctmp5,loctmp6
+         integer :: local_1,local_2,local_3
+         integer :: loctmp1,loctmp2,loctmp3,loctmp4,loctmp5
          integer, dimension(3)    :: stc
 
          ! Compute distance using the number of accepted neighbors
@@ -1736,7 +1725,7 @@ contains
          
          integer,  intent(in) :: i,j,k
          real(WP), intent(in) :: value
-         integer :: counter
+         integer, intent(inout) :: counter
          integer :: i0,j0,k0
          
          ! Communicate if necessary
