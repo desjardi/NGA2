@@ -225,14 +225,14 @@ contains
          ! Set pressure from Mach number
          fs%P=1.0_WP/(Gamma*Mach**2)
          ! Read in density profile
-         call param_read('Density thickness',delta,default=1.0_WP)
-         call param_read('Density top',rho1,default=1.0_WP)
-         call param_read('Density bottom',rho2,default=1.0_WP)
+         call param_read('Density thickness',delta)
+         call param_read('Density top',rho1)
+         call param_read('Density bottom',rho2)
          ! Initialize density field using tanh and corresponding energy from EOS
          do k=cfg%kmino_,cfg%kmaxo_
             do j=cfg%jmino_,cfg%jmaxo_
                do i=cfg%imino_,cfg%imaxo_
-                  fs%RHO(i,j,k)=0.5_WP*(rho1+rho2)+0.5_WP*(rho2-rho1)*tanh(y/delta)
+                  fs%RHO(i,j,k)=0.5_WP*(rho1+rho2)+0.5_WP*(rho2-rho1)*tanh(cfg%ym(j)/delta)
                   sc%E(i,j,k)=fs%P(i,j,k)/(fs%RHO(i,j,k)*(Gamma-1.0_WP))
                end do
             end do
