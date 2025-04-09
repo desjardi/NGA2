@@ -1008,13 +1008,12 @@ contains
          use mpi_f08,  only: MPI_ALLREDUCE,MPI_SUM,MPI_IN_PLACE
          use parallel, only: MPI_REAL_WP
          integer :: n,i,j,k,ierr
-         real(WP) :: my_vof_removed
          this%vof_removed=0.0_WP
          do n=1,this%vof_removal_layer%no_
             i=this%vof_removal_layer%map(1,n)
             j=this%vof_removal_layer%map(2,n)
             k=this%vof_removal_layer%map(3,n)
-            this%vof_removed=this%vof_removed+this%cfg%vol(i,j,k)*this%vf%VF(i,j,k)
+            if (n.le.this%vof_removal_layer%n_) this%vof_removed=this%vof_removed+this%cfg%vol(i,j,k)*this%vf%VF(i,j,k)
             this%vf%VF(i,j,k)=0.0_WP
          end do
          call MPI_ALLREDUCE(MPI_IN_PLACE,this%vof_removed,1,MPI_REAL_WP,MPI_SUM,this%cfg%comm,ierr)

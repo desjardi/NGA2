@@ -5,23 +5,23 @@ Partition :	8 1 1
 Lx :	10
 Ly :	10
 Lz :	10
-nx :	64
-ny :	64
-nz :	64
+nx :	128
+ny :	128
+nz :	128
 
 # Case parameters
 Droplet center : 0 5 0
 Pool depth : 4
 
-# Fluid properties
-Froude number :    146  ! 90
-Weber number :     87   ! 43
-Reynolds number :  3180 ! 2110
+# Fluid properties      | (1) Jet  | (2) No jet
+Froude number :    146  !     146  !         90
+Weber number :     87   !      87  !         43
+Reynolds number :  3180 !    3180  !       2110
 Density ratio :    816
 Viscosity ratio :  64
 
 # SGS modeling
-Use SGS model : .false.
+Use SGS model : .true.
 
 # Time integration
 Max timestep size : 1e-2

@@ -20,7 +20,7 @@ module timetracker_class
    type :: timetracker
       logical :: amRoot                                !< Timetracker needs to know who's the boss
       character(len=str_medium) :: name='UNNAMED_TIME' !< Name for timetracker
-      integer  ::  it, itmax                           !< Current and max sub-iteration
+      integer  ::  it, itmax, itmin                    !< Current and max sub-iteration and min sub-iteration
       integer  ::   n,  nmax                           !< Current and max timestep
       real(WP) ::   t,  tmax                           !< Current and max time
       real(WP) ::  dt, dtmax                           !< Current and max timestep size
@@ -66,7 +66,7 @@ contains
       self%dtold=0.0_WP
       self%tmid =0.0_WP
       self%dtmid=0.0_WP
-      self%it   =1;            self%itmax=1
+      self%it   =1;            self%itmax=1; self%itmin=0
    end function constructor
    
    

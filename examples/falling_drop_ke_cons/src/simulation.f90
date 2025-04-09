@@ -187,17 +187,20 @@ contains
          use vfs_class, only: VFlo
          integer :: i,j,k
          ! Initialize density
-         resU=fs%rho_l*vf%VF+fs%rho_g*(1.0_WP-vf%VF); call fs%update_density(rho=resU)
+         resU=fs%rho_l*vf%VF+fs%rho_g*(1.0_WP-vf%VF); call fs%update_sRHO(rho=resU)
          ! Initialize velocity
          do k=cfg%kmin_,cfg%kmax_
             do j=cfg%jmin_,cfg%jmax_
                do i=cfg%imin_,cfg%imax_
-                  if (cfg%ym(j).gt.depth.and.maxval(vf%VF(i,j-1:j,k)).gt.VFlo) fs%Vmid(i,j,k)=-1.0_WP
+                  if (cfg%ym(j).gt.depth.and.maxval(vf%VF(i,j-1:j,k)).gt.VFlo) fs%V(i,j,k)=-1.0_WP
                end do
             end do
          end do
-         call cfg%sync(fs%Vmid)
-         ! Make it solenoidal
+         ! Apply all other boundary conditions
+         call fs%apply_bcond(time%t,time%dt)
+         ! Copy to Umid and make it solenoidal
+         call fs%get_Umid()
+         call fs%correct_mfr()
          call fs%update_laplacian()
          call fs%get_div()
          fs%psolv%rhs=-fs%cfg%vol*fs%div
@@ -208,6 +211,7 @@ contains
          fs%Umid=fs%Umid-resU/(fs%sRHOX**2); fs%U=fs%Umid
          fs%Vmid=fs%Vmid-resV/(fs%sRHOY**2); fs%V=fs%Vmid
          fs%Wmid=fs%Wmid-resW/(fs%sRHOZ**2); fs%W=fs%Wmid
+         call fs%get_U()
          ! Calculate cell-centered velocities and divergence
          call fs%interp_velmid(Ui,Vi,Wi)
          call fs%interp_vel(vel(1,:,:,:),vel(2,:,:,:),vel(3,:,:,:))
@@ -234,7 +238,6 @@ contains
       
       ! Add Ensight output
       create_ensight: block
-         integer :: nsc
          ! Create Ensight output from cfg
          ens_out=ensight(cfg=cfg,name='FallingDrop')
          ! Create event for Ensight output
@@ -353,7 +356,7 @@ contains
             end if
             
             ! Update sqrt(face density) and momentum vector
-            resU=fs%rho_l*vf%VF+fs%rho_g*(1.0_WP-vf%VF); call fs%update_density(rho=resU)
+            resU=fs%rho_l*vf%VF+fs%rho_g*(1.0_WP-vf%VF); call fs%update_sRHO(rho=resU)
             fs%rhoU=fs%rho_l*vf%UFl(1,:,:,:)+fs%rho_g*vf%UFg(1,:,:,:)
             fs%rhoV=fs%rho_l*vf%UFl(2,:,:,:)+fs%rho_g*vf%UFg(2,:,:,:)
             fs%rhoW=fs%rho_l*vf%UFl(3,:,:,:)+fs%rho_g*vf%UFg(3,:,:,:)
@@ -403,19 +406,15 @@ contains
             fs%W=fs%W+resW
             
             ! Sync and apply boundary conditions
-            call fs%apply_bcond(time%t,time%dt) !<< needs to do both U and Umid?
-
-            ! Enforce global conservation wrt Umid
-            call fs%correct_mfr()
-
+            call fs%apply_bcond(time%t,time%dt)
+            
             ! Poisson equation ================================================
-            ! Compute predictor Umid
-            fs%Umid=(fs%sRHOX*fs%U*fs%theta+fs%sRHOXold*fs%Uold*(1.0_WP-fs%theta))/(fs%sRHOX*fs%theta+fs%sRHOXold*(1.0_WP-fs%theta))
-            fs%Vmid=(fs%sRHOY*fs%V*fs%theta+fs%sRHOYold*fs%Vold*(1.0_WP-fs%theta))/(fs%sRHOY*fs%theta+fs%sRHOYold*(1.0_WP-fs%theta))
-            fs%Wmid=(fs%sRHOZ*fs%W*fs%theta+fs%sRHOZold*fs%Wold*(1.0_WP-fs%theta))/(fs%sRHOZ*fs%theta+fs%sRHOZold*(1.0_WP-fs%theta))
+            ! Compute Umid from U and Uold
+            call fs%get_Umid()
             
             ! Solve Poisson equation
             call fs%update_laplacian()
+            call fs%correct_mfr()
             call fs%get_div()
             call fs%add_surface_tension_jump(dt=time%dt,div=fs%div,vf=vf)
             fs%psolv%rhs=-fs%cfg%vol*fs%div/time%dt
@@ -423,15 +422,15 @@ contains
             call fs%psolv%solve()
             call fs%shift_p(fs%psolv%sol)
             
-            ! Correct pressure, U, and Umid
+            ! Correct pressure and Umid
             call fs%get_pgrad(fs%psolv%sol,resU,resV,resW)
             fs%P=fs%P+fs%psolv%sol
-            fs%U=fs%U-time%dt*resU/(fs%sRHOX**2)
-            fs%V=fs%V-time%dt*resV/(fs%sRHOY**2)
-            fs%W=fs%W-time%dt*resW/(fs%sRHOZ**2)
             fs%Umid=fs%Umid-time%dt*resU/((fs%sRHOX+fs%sRHOXold*(1.0_WP-fs%theta)/fs%theta)*fs%sRHOX)
             fs%Vmid=fs%Vmid-time%dt*resV/((fs%sRHOY+fs%sRHOYold*(1.0_WP-fs%theta)/fs%theta)*fs%sRHOY)
             fs%Wmid=fs%Wmid-time%dt*resW/((fs%sRHOZ+fs%sRHOZold*(1.0_WP-fs%theta)/fs%theta)*fs%sRHOZ)
+            
+            ! Regenerate U from Umid and Uold
+            call fs%get_U()
             
             ! Increment sub-iteration counter =================================
             time%it=time%it+1
@@ -460,7 +459,7 @@ contains
             call MPI_ALLREDUCE(MPI_IN_PLACE,vof_removed,1,MPI_REAL_WP,MPI_SUM,cfg%comm,ierr)
             call vf%clean_irl_and_band()
             ! Also adjust density
-            resU=fs%rho_l*vf%VF+fs%rho_g*(1.0_WP-vf%VF); call fs%update_density(rho=resU)
+            resU=fs%rho_l*vf%VF+fs%rho_g*(1.0_WP-vf%VF); call fs%update_sRHO(rho=resU)
          end block remove_vof
          
          ! Output to ensight

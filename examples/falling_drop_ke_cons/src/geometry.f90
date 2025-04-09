@@ -33,6 +33,9 @@ contains
          call param_read('Ly',Ly); call param_read('ny',ny); allocate(y(ny+1))
          call param_read('Lz',Lz); call param_read('nz',nz); allocate(z(nz+1))
          
+         ! Adjust for 2D
+         if (nz.eq.1) Lz=Lx/real(nx,WP)
+         
          ! Create simple rectilinear grid
          do i=1,nx+1
             x(i)=real(i-1,WP)/real(nx,WP)*Lx-0.5_WP*Lx

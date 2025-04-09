@@ -1,0 +1,31 @@
+# Parallelization
+Partition : 8 1 1
+
+# Mesh definition
+Lx : 1
+Ly : 1
+Lz : 1
+nx : 128
+ny : 128
+nz : 128
+
+# Fluid properties
+Gravity :             0 -10 0
+Dynamic viscosity :   0.001
+Dynamic diffusivity : 0.001
+Min temperature :     300
+Max temperature :     500
+Total mass :          1
+
+# Time integration
+Max timestep size :   1e-2
+Max cfl number :      0.8
+Max time :            10
+Subiterations :       3
+
+# Pressure convergence
+Pressure iteration :  20
+Pressure tolerance :  1e-5
+
+# Ensight output
+Ensight output period : 1e-1

@@ -6,7 +6,7 @@ ifeq ($(USE_FFTW),TRUE)
   f90EXE_sources += fftxyz_class.f90 fft3d_class.f90 fft2d_class.f90
 endif
 ifeq ($(USE_LAPACK),TRUE)
-  f90EXE_sources += bbmg_class.f90 bbox_class.f90
+  f90EXE_sources += bbmg_class.f90 bbox_class.f90 accelerator_class.f90
 endif
 
 INCLUDE_LOCATIONS += $(NGA_HOME)/src/solver

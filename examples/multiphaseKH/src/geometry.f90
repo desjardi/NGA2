@@ -29,9 +29,12 @@ contains
          real(WP), dimension(:), allocatable :: x,y,z
          
          ! Read in grid definition
-         call param_read('Lx',Lx); call param_read('nx',nx); allocate(x(nx+1))
-         call param_read('Liquid Ly',Lyl); call param_read('Gas Ly',Lyg); call param_read('ny',ny); allocate(y(ny+1))
-         call param_read('Lz',Lz); call param_read('nz',nz); allocate(z(nz+1))
+         call param_read('Lx' ,Lx ); call param_read('nx' ,nx ); allocate(x(nx+1))
+         call param_read('Lyl',Lyl); call param_read('Lyg',Lyg); call param_read('ny',ny); allocate(y(ny+1))
+         call param_read('Lz' ,Lz ); call param_read('nz' ,nz ); allocate(z(nz+1))
+         
+         ! Adjust Lz if 2D
+         if (nz.eq.1) Lz=Lx/real(nx,WP)
          
          ! Create simple rectilinear grid
          do i=1,nx+1

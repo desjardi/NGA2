@@ -12,7 +12,7 @@ nz : 64
 # Non-dimensional fluid properties
 Density ratio :   1000
 Viscosity ratio : 50
-Oh : 0.1    #<<< Oh=mu_l/sqrt(rho_l*R*sigma)
+Oh : 1    #<<< Oh=mu_l/sqrt(rho_l*R*sigma)
 CA : 60
 Initial contact angle :  160
 Slip length : 1e-5

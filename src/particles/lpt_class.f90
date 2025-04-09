@@ -871,7 +871,7 @@ contains
             ! Tenneti and Subramaniam (2011)
             b1=5.81_WP*pVF/fVF**3+0.48_WP*pVF**(1.0_WP/3.0_WP)/fVF**4
             b2=pVF**3*Re*(0.95_WP+0.61_WP*pVF**3/fVF**2)
-            corr=fVF*((1.0_WP+0.15_WP*Re**(0.687_WP))/fVF**3+b1+b2)           
+            corr=fVF*((1.0_WP+0.15_WP*Re**(0.687_WP))/fVF**3+b1+b2)
          case('Khalloufi Capecelatro','KC')
             !> Todo
          case default

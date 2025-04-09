@@ -2,25 +2,41 @@
 Partition :	8 1 1
 
 # Mesh definition
-Lx :	      32
-Liquid Ly :	4
-Gas Ly :	   12
-Lz :	      16!1e-1
-nx :	      160!320
-ny :	      80!160
-nz :	      80!160
+Lx :  32
+Lyl : 4
+Lyg : 12
+Lz :  16
+nx :  320
+ny :  160
+nz :  1
 
-# Fluid properties and inital profile
-Gas Reynolds number :  1000
-Gas Weber number :     10
-Viscosity ratio :      10      !< This is mu_l/mu_g
-Density ratio :        40      !< This is rho_l/rho_g
-Velocity ratio :       0.1     !< This is U_l/U_g
+# Fluid properties
+Gas Reynolds number :  500
+Gas Weber number :     20
+Viscosity ratio :      60        !< This is mu_l/mu_g
+Density ratio :        800       !< This is rho_l/rho_g
+
+# Inital velocity profile
+Gas velocity  : 1
+Gas thickness : 1
+Liquid velocity  : 0
+Liquid thickness : 1
+Deficit parameter : 1  # 1=no deficit
+Noise amplitude : 0.1
+
+# Initial interface disturbance
+Wave amplitude : 0
+NwaveX :   6
+wnumbX :   5.89049E-01  7.85398E-01  9.81748E-01  1.17810E+00  1.37445E+00  1.57080E+00
+wshiftX : -9.84977E+00 -1.28118E+01 -8.58870E+00  2.70658E+00 -8.31796E+00 -1.40908E+01
+NwaveZ :   6
+wnumbZ :   9.42478E+01  1.25664E+02  1.57080E+02  1.88496E+02  2.19911E+02  2.51327E+02
+wshiftZ :  1.83462E-02 -3.02136E-02 -3.01696E-02 -6.45372E-02  4.20000E-02 -6.79138E-02
 
 # Time integration
-Max timestep size : 1e-1
+Max timestep size : 5e-2
 Max cfl number :    0.9
-Max time :          400
+Max time :          1e3
 
 # Pressure solver
 Pressure tolerance : 1e-6

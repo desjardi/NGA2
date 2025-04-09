@@ -12,6 +12,7 @@ module mathtools
    public :: qrotate
    public :: arctan
    public :: eigensolve3
+   public :: quadrature_rule
    
    ! Trigonometric parameters
    real(WP), parameter :: Pi   =3.1415926535897932385_WP
@@ -302,5 +303,46 @@ contains
    
    end subroutine eigensolve3
    
-
+   
+   !> Compute a nth order Clenshaw-Curtis quadrature rule on [0,1]
+   !> int(f(x)) in [0,1] is approximated by sum(w_i*f(x_i)) for i=1..N
+   subroutine quadrature_rule(n,x,w)
+      use messager, only: die
+      implicit none
+      integer, intent(in) :: n
+      real(WP), dimension(n) :: x,w
+      real(WP) :: b,theta
+      integer :: i,j
+      ! Ensure input is usable
+      if (n.lt.1) call die('[quadrature_rule] n must be at least 1')
+      ! Handle n=1 case
+      if (n.eq.1) then
+         x(1)=0.5_WP
+         w(1)=1.0_WP
+         return
+      end if
+      ! Calculate quadrature point in general case
+      do i=1,n
+         x(i)=cos(real(n-i,WP)*Pi/real(n-1,WP))
+      end do
+      x(1)=-1.0_WP; x(n)=+1.0_WP; if (mod(n,2).eq.1) x((n+1)/2)=0.0_WP
+      ! Calculate quadrature weight in general case
+      do i=1,n
+         theta=real(i-1,WP)*Pi/real(n-1,WP)
+         w(i)=1.0_WP
+         do j=1,(n-1)/2
+            if (2*j.eq.n-1) then
+               b=1.0_WP
+            else
+               b=2.0_WP
+            end if            
+            w(i)=w(i)-b*cos(2.0_WP*real(j,WP)*theta)/real(4*j*j-1,WP)
+         end do
+      end do
+      w=w/real(n-1,WP); w(2:n-1)=2.0_WP*w(2:n-1)
+      ! Rescale to be in [0,1]
+      x=0.5_WP*(1.0_WP+x); w=0.5_WP*w
+   end subroutine quadrature_rule
+   
+   
 end module mathtools

@@ -145,7 +145,7 @@ contains
          this%isfirst=.false.
       end if
       
-      ! Write out all columns to an temporary line
+      ! Write out all columns to a temporary line
       my_col=>this%first_col
       icol=0
       do while (associated(my_col))

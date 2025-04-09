@@ -35,126 +35,18 @@ module simulation
    
    !> Equation of state
    real(WP) :: Zst,rho0,rho1,rhost
-   real(WP) :: Z_jet,Z_cof
-   real(WP) :: D_jet,D_cof
-   real(WP) :: U_jet,U_cof
+   
+   !> Inlet parameters
+   real(WP) :: Zjet,Zcof
+   real(WP) :: Djet,Dcof
+   real(WP) :: Ujet,Ucof
+   real(WP) :: thick
    
    !> Integral of pressure residual
    real(WP) :: int_RP=0.0_WP
    
 contains
    
-   
-   !> Function that localizes y- boundary
-   function ym_locator(pg,i,j,k) result(isIn)
-      use pgrid_class, only: pgrid
-      class(pgrid), intent(in) :: pg
-      integer, intent(in) :: i,j,k
-      logical :: isIn
-      isIn=.false.
-      if (j.eq.pg%jmin) isIn=.true.
-   end function ym_locator
-   
-   
-   !> Function that localizes y+ boundary
-   function yp_locator(pg,i,j,k) result(isIn)
-      use pgrid_class, only: pgrid
-      class(pgrid), intent(in) :: pg
-      integer, intent(in) :: i,j,k
-      logical :: isIn
-      isIn=.false.
-      if (j.eq.pg%jmax+1) isIn=.true.
-   end function yp_locator
-
-
-   !> Function that localizes z- boundary
-   function zm_locator(pg,i,j,k) result(isIn)
-      use pgrid_class, only: pgrid
-      class(pgrid), intent(in) :: pg
-      integer, intent(in) :: i,j,k
-      logical :: isIn
-      isIn=.false.
-      if (k.eq.pg%kmin) isIn=.true.
-   end function zm_locator
-   
-   
-   !> Function that localizes z+ boundary
-   function zp_locator(pg,i,j,k) result(isIn)
-      use pgrid_class, only: pgrid
-      class(pgrid), intent(in) :: pg
-      integer, intent(in) :: i,j,k
-      logical :: isIn
-      isIn=.false.
-      if (k.eq.pg%kmax+1) isIn=.true.
-   end function zp_locator
-
-
-   !> Function that localizes the x+ boundary
-   function xp_locator(pg,i,j,k) result(isIn)
-      use pgrid_class, only: pgrid
-      class(pgrid), intent(in) :: pg
-      integer, intent(in) :: i,j,k
-      logical :: isIn
-      isIn=.false.
-      if (i.eq.pg%imax+1) isIn=.true.
-   end function xp_locator
-   
-
-   !> Function that localizes jet at -x
-   function jet(pg,i,j,k) result(isIn)
-      use pgrid_class, only: pgrid
-      class(pgrid), intent(in) :: pg
-      integer, intent(in) :: i,j,k
-      real(WP) :: radius
-      logical :: isIn
-      isIn=.false.
-      ! Jet in yz plane
-      radius=norm2([pg%ym(j),pg%zm(k)]-[0.0_WP,0.0_WP])
-      if (radius.le.0.5_WP*D_jet.and.i.eq.pg%imin) isIn=.true.
-   end function jet
-
-
-   !> Function that localizes coflow at -x
-   function coflow(pg,i,j,k) result(isIn)
-      use pgrid_class, only: pgrid
-      class(pgrid), intent(in) :: pg
-      integer, intent(in) :: i,j,k
-      real(WP) :: radius
-      logical :: isIn
-      isIn=.false.
-      ! Coflow in yz plane
-      radius=norm2([pg%ym(j),pg%zm(k)]-[0.0_WP,0.0_WP])
-      if (radius.gt.0.5_WP*D_jet.and.radius.le.0.5_WP*D_cof.and.i.eq.pg%imin) isIn=.true.
-   end function coflow
-   
-   
-   !> Function that localizes jet at -x
-   function jetsc(pg,i,j,k) result(isIn)
-      use pgrid_class, only: pgrid
-      class(pgrid), intent(in) :: pg
-      integer, intent(in) :: i,j,k
-      real(WP) :: radius
-      logical :: isIn
-      isIn=.false.
-      ! Jet in yz plane
-      radius=norm2([pg%ym(j),pg%zm(k)]-[0.0_WP,0.0_WP])
-      if (radius.le.0.5_WP*D_jet.and.i.eq.pg%imin-1) isIn=.true.
-   end function jetsc
-
-
-   !> Function that localizes coflow at -x
-   function coflowsc(pg,i,j,k) result(isIn)
-      use pgrid_class, only: pgrid
-      class(pgrid), intent(in) :: pg
-      integer, intent(in) :: i,j,k
-      real(WP) :: radius
-      logical :: isIn
-      isIn=.false.
-      ! Coflow in yz plane
-      radius=norm2([pg%ym(j),pg%zm(k)]-[0.0_WP,0.0_WP])
-      if (radius.gt.0.5_WP*D_jet.and.radius.le.0.5_WP*D_cof.and.i.eq.pg%imin-1) isIn=.true.
-   end function coflowsc
-
    
    !> Obtain density from equation of state based on Burke-Schumann
    subroutine get_rho()
@@ -168,8 +60,8 @@ contains
          end do
       end do
    end subroutine get_rho
-
-
+   
+   
    !> Burke-Schumann EOS
    function burke_schumann(Z) result(rho)
       real(WP), intent(in) :: Z
@@ -189,8 +81,7 @@ contains
       use param, only: param_read
       implicit none
       
-      
-      ! Read in the EOS info
+      ! Read in EOS parameters
       call param_read('rho0',rho0)
       call param_read('rho1',rho1)
       call param_read('rhost',rhost)
@@ -198,15 +89,14 @@ contains
       if (Zst.le.0.0_WP) Zst=0.0_WP+epsilon(Zst)
       if (Zst.ge.1.0_WP) Zst=1.0_WP-epsilon(Zst)
       
-
-      ! Read in inlet information
-      call param_read('Z jet',Z_jet)
-      call param_read('D jet',D_jet)
-      call param_read('U jet',U_jet)
-      call param_read('Z coflow',Z_cof)
-      call param_read('D coflow',D_cof)
-      call param_read('U coflow',U_cof)
-      
+      ! Read in inlet parameters
+      call param_read('Z jet',Zjet)
+      call param_read('D jet',Djet)
+      call param_read('U jet',Ujet)
+      call param_read('Z coflow',Zcof)
+      call param_read('D coflow',Dcof)
+      call param_read('U coflow',Ucof)
+      call param_read('Thickness',thick,default=cfg%xL/real(cfg%nx,WP))
       
       ! Create a low-Mach flow solver with bconds
       create_velocity_solver: block
@@ -217,17 +107,14 @@ contains
          fs=lowmach(cfg=cfg,name='Variable density low Mach NS')
          ! Assign constant viscosity
          call param_read('Dynamic viscosity',visc); fs%visc=visc
-         ! Define jet and coflow boundary conditions
-         call fs%add_bcond(name='jet'   ,type=dirichlet,face='x',dir=-1,canCorrect=.false.,locator=jet   )
-         call fs%add_bcond(name='coflow',type=dirichlet,face='x',dir=-1,canCorrect=.false.,locator=coflow)
-         ! Use slip on the sides with correction
+         ! Define boundary conditions
+         call fs%add_bcond(name='inflow' ,type=dirichlet      ,face='x',dir=-1,canCorrect=.false.,locator=xm_locator)
+         call fs%add_bcond(name='outflow',type=clipped_neumann,face='x',dir=+1,canCorrect=.true. ,locator=xp_locator)
+         !call fs%add_bcond(name='outflow',type=clipped_neumann,face='x',dir=+1,canCorrect=.false.,locator=xp_locator)
          !call fs%add_bcond(name='yp',type=slip,face='y',dir=+1,canCorrect=.true.,locator=yp_locator)
          !call fs%add_bcond(name='ym',type=slip,face='y',dir=-1,canCorrect=.true.,locator=ym_locator)
          !call fs%add_bcond(name='zp',type=slip,face='z',dir=+1,canCorrect=.true.,locator=zp_locator)
          !call fs%add_bcond(name='zm',type=slip,face='z',dir=-1,canCorrect=.true.,locator=zm_locator)
-         ! Outflow on the right
-         !call fs%add_bcond(name='outflow',type=clipped_neumann,face='x',dir=+1,canCorrect=.false.,locator=xp_locator)
-         call fs%add_bcond(name='outflow',type=clipped_neumann,face='x',dir=+1,canCorrect=.true.,locator=xp_locator)
          ! Configure pressure solver
          ps=hypre_str(cfg=cfg,name='Pressure',method=pcg_pfmg2,nst=7)
          ps%maxlevel=18
@@ -239,18 +126,15 @@ contains
          call fs%setup(pressure_solver=ps,implicit_solver=vs)
       end block create_velocity_solver
       
-      
       ! Create a scalar solver
       create_scalar: block
          use vdscalar_class, only: dirichlet,neumann,quick
          real(WP) :: diffusivity
          ! Create scalar solver
          sc=vdscalar(cfg=cfg,scheme=quick,name='MixFrac')
-         ! Define jet and coflow boundary conditions
-         call sc%add_bcond(name='jet'   ,type=dirichlet,locator=jetsc   )
-         call sc%add_bcond(name='coflow',type=dirichlet,locator=coflowsc)
-         ! Outflow on the right
-         call sc%add_bcond(name='outflow',type=neumann,locator=xp_locator,dir='+x')
+         ! Define boundary conditions
+         call sc%add_bcond(name='inflow' ,type=dirichlet,locator=xm_locator_sc)
+         call sc%add_bcond(name='outflow',type=neumann  ,locator=xp_locator   ,dir='+x')
          ! Assign constant diffusivity
          call param_read('Dynamic diffusivity',diffusivity)
          sc%diff=diffusivity
@@ -259,7 +143,6 @@ contains
          ! Setup the solver
          call sc%setup(implicit_solver=ss)
       end block create_scalar
-      
       
       ! Allocate work arrays
       allocate_work_arrays: block
@@ -274,45 +157,40 @@ contains
          allocate(resSC(sc%cfg%imino_:sc%cfg%imaxo_,sc%cfg%jmino_:sc%cfg%jmaxo_,sc%cfg%kmino_:sc%cfg%kmaxo_))
       end block allocate_work_arrays
       
-      
       ! Initialize time tracker with 2 subiterations
       initialize_timetracker: block
          time=timetracker(amRoot=fs%cfg%amRoot)
          call param_read('Max timestep size',time%dtmax)
          call param_read('Max cfl number',time%cflmax)
          time%dt=time%dtmax
-         time%itmax=2
+         call param_read('Subiterations',time%itmax,default=2)
       end block initialize_timetracker
-      
       
       ! Initialize our mixture fraction field
       initialize_scalar: block
          use vdscalar_class, only: bcond
          integer :: n,i,j,k
          type(bcond), pointer :: mybc
+         real(WP) :: radius
          ! Zero initial field
          sc%SC=0.0_WP
          ! Apply BCs
-         call sc%get_bcond('jet',mybc)
+         call sc%get_bcond('inflow',mybc)
          do n=1,mybc%itr%no_
             i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
-            sc%SC(i,j,k)=Z_jet
-         end do
-         call sc%get_bcond('coflow',mybc)
-         do n=1,mybc%itr%no_
-            i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
-            sc%SC(i,j,k)=Z_cof
+            radius=norm2([sc%cfg%ym(j),sc%cfg%zm(k)]-[0.0_WP,0.0_WP])
+            sc%SC(i,j,k)=(Zcof+(Zjet-Zcof)*0.5_WP*(1.0_WP+tanh((0.5_WP*Djet-radius)/thick)))*0.5_WP*(1.0_WP+tanh((0.5_WP*Dcof-radius)/thick))
          end do
          ! Compute density
          call get_rho()
       end block initialize_scalar
-      
       
       ! Initialize our velocity field
       initialize_velocity: block
          use lowmach_class, only: bcond
          integer :: n,i,j,k
          type(bcond), pointer :: mybc
+         real(WP) :: radius,myZ
          ! Zero initial field
          fs%U=0.0_WP; fs%V=0.0_WP; fs%W=0.0_WP
          ! Set density from scalar
@@ -321,17 +199,13 @@ contains
          call fs%rho_multiply
          ! Apply BCs
          call fs%apply_bcond(time%t,time%dt)
-         call fs%get_bcond('jet',mybc)
+         call fs%get_bcond('inflow',mybc)
          do n=1,mybc%itr%no_
             i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
-            fs%U(i,j,k)   =U_jet
-            fs%rhoU(i,j,k)=U_jet*burke_schumann(Z_jet)
-         end do
-         call fs%get_bcond('coflow',mybc)
-         do n=1,mybc%itr%no_
-            i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
-            fs%U(i,j,k)   =U_cof
-            fs%rhoU(i,j,k)=U_cof*burke_schumann(Z_cof)
+            radius=norm2([fs%cfg%ym(j),fs%cfg%zm(k)]-[0.0_WP,0.0_WP])
+            myZ           =(Zcof+(Zjet-Zcof)*0.5_WP*(1.0_WP+tanh((0.5_WP*Djet-radius)/thick)))*0.5_WP*(1.0_WP+tanh((0.5_WP*Dcof-radius)/thick))
+            fs%U(i,j,k)   =(Ucof+(Ujet-Ucof)*0.5_WP*(1.0_WP+tanh((0.5_WP*Djet-radius)/thick)))*0.5_WP*(1.0_WP+tanh((0.5_WP*Dcof-radius)/thick))
+            fs%rhoU(i,j,k)=fs%U(i,j,k)*burke_schumann(myZ)
          end do
          ! Get cell-centered velocities and continuity residual
          call fs%interp_vel(Ui,Vi,Wi)
@@ -339,7 +213,6 @@ contains
          ! Compute MFR through all boundary conditions
          call fs%get_mfr()
       end block initialize_velocity
-      
       
       ! Add Ensight output
       create_ensight: block
@@ -351,13 +224,11 @@ contains
          ! Add variables to output
          call ens_out%add_scalar('pressure',fs%P)
          call ens_out%add_vector('velocity',Ui,Vi,Wi)
-         call ens_out%add_scalar('divergence',fs%div)
          call ens_out%add_scalar('density',sc%rho)
          call ens_out%add_scalar('mixfrac',sc%SC)
          ! Output to ensight
          if (ens_evt%occurs()) call ens_out%write_data(time%t)
       end block create_ensight
-      
       
       ! Create a monitor file
       create_monitor: block
@@ -406,6 +277,77 @@ contains
          call consfile%write()
       end block create_monitor
       
+   contains
+      
+      !> Function that localizes y- boundary
+      function ym_locator(pg,i,j,k) result(isIn)
+         use pgrid_class, only: pgrid
+         class(pgrid), intent(in) :: pg
+         integer, intent(in) :: i,j,k
+         logical :: isIn
+         isIn=.false.
+         if (j.eq.pg%jmin) isIn=.true.
+      end function ym_locator
+      
+      !> Function that localizes y+ boundary
+      function yp_locator(pg,i,j,k) result(isIn)
+         use pgrid_class, only: pgrid
+         class(pgrid), intent(in) :: pg
+         integer, intent(in) :: i,j,k
+         logical :: isIn
+         isIn=.false.
+         if (j.eq.pg%jmax+1) isIn=.true.
+      end function yp_locator
+      
+      !> Function that localizes z- boundary
+      function zm_locator(pg,i,j,k) result(isIn)
+         use pgrid_class, only: pgrid
+         class(pgrid), intent(in) :: pg
+         integer, intent(in) :: i,j,k
+         logical :: isIn
+         isIn=.false.
+         if (k.eq.pg%kmin) isIn=.true.
+      end function zm_locator
+      
+      !> Function that localizes z+ boundary
+      function zp_locator(pg,i,j,k) result(isIn)
+         use pgrid_class, only: pgrid
+         class(pgrid), intent(in) :: pg
+         integer, intent(in) :: i,j,k
+         logical :: isIn
+         isIn=.false.
+         if (k.eq.pg%kmax+1) isIn=.true.
+      end function zp_locator
+      
+      !> Function that localizes the x+ boundary
+      function xp_locator(pg,i,j,k) result(isIn)
+         use pgrid_class, only: pgrid
+         class(pgrid), intent(in) :: pg
+         integer, intent(in) :: i,j,k
+         logical :: isIn
+         isIn=.false.
+         if (i.eq.pg%imax+1) isIn=.true.
+      end function xp_locator
+      
+      !> Function that localizes the x- boundary
+      function xm_locator(pg,i,j,k) result(isIn)
+         use pgrid_class, only: pgrid
+         class(pgrid), intent(in) :: pg
+         integer, intent(in) :: i,j,k
+         logical :: isIn
+         isIn=.false.
+         if (i.eq.pg%imin) isIn=.true.
+      end function xm_locator
+      
+      !> Function that localizes the x- boundary for SC
+      function xm_locator_sc(pg,i,j,k) result(isIn)
+         use pgrid_class, only: pgrid
+         class(pgrid), intent(in) :: pg
+         integer, intent(in) :: i,j,k
+         logical :: isIn
+         isIn=.false.
+         if (i.eq.pg%imin-1) isIn=.true.
+      end function xm_locator_sc
       
    end subroutine simulation_init
    
@@ -458,17 +400,14 @@ contains
             call sc%apply_bcond(time%t,time%dt)
             dirichlet_scalar: block
                use vdscalar_class, only: bcond
-               type(bcond), pointer :: mybc
                integer :: n,i,j,k
-               call sc%get_bcond('jet',mybc)
+               type(bcond), pointer :: mybc
+               real(WP) :: radius
+               call sc%get_bcond('inflow',mybc)
                do n=1,mybc%itr%no_
                   i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
-                  sc%SC(i,j,k)=Z_jet
-               end do
-               call sc%get_bcond('coflow',mybc)
-               do n=1,mybc%itr%no_
-                  i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
-                  sc%SC(i,j,k)=Z_cof
+                  radius=norm2([sc%cfg%ym(j),sc%cfg%zm(k)]-[0.0_WP,0.0_WP])
+                  sc%SC(i,j,k)=(Zcof+(Zjet-Zcof)*0.5_WP*(1.0_WP+tanh((0.5_WP*Djet-radius)/thick)))*0.5_WP*(1.0_WP+tanh((0.5_WP*Dcof-radius)/thick))
                end do
             end block dirichlet_scalar
             ! ===================================================
@@ -519,17 +458,14 @@ contains
                use lowmach_class, only: bcond
                type(bcond), pointer :: mybc
                integer :: n,i,j,k
-               call fs%get_bcond('jet',mybc)
+               real(WP) :: radius,myZ
+               call fs%get_bcond('inflow',mybc)
                do n=1,mybc%itr%no_
                   i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
-                  fs%U(i,j,k)   =U_jet
-                  fs%rhoU(i,j,k)=U_jet*burke_schumann(Z_jet)
-               end do
-               call fs%get_bcond('coflow',mybc)
-               do n=1,mybc%itr%no_
-                  i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
-                  fs%U(i,j,k)   =U_cof
-                  fs%rhoU(i,j,k)=U_cof*burke_schumann(Z_cof)
+                  radius=norm2([fs%cfg%ym(j),fs%cfg%zm(k)]-[0.0_WP,0.0_WP])
+                  myZ           =(Zcof+(Zjet-Zcof)*0.5_WP*(1.0_WP+tanh((0.5_WP*Djet-radius)/thick)))*0.5_WP*(1.0_WP+tanh((0.5_WP*Dcof-radius)/thick))
+                  fs%U(i,j,k)   =(Ucof+(Ujet-Ucof)*0.5_WP*(1.0_WP+tanh((0.5_WP*Djet-radius)/thick)))*0.5_WP*(1.0_WP+tanh((0.5_WP*Dcof-radius)/thick))
+                  fs%rhoU(i,j,k)=fs%U(i,j,k)*burke_schumann(myZ)
                end do
             end block dirichlet_velocity
             
@@ -581,20 +517,9 @@ contains
    !> Finalize the NGA2 simulation
    subroutine simulation_final
       implicit none
-      
-      ! Get rid of all objects - need destructors
-      ! monitor
-      ! ensight
-      ! bcond
-      ! timetracker
-      
       ! Deallocate work arrays
       deallocate(resSC,resU,resV,resW,Ui,Vi,Wi)
-      
    end subroutine simulation_final
    
-   
-   
-   
-   
+
 end module simulation

@@ -1,0 +1,46 @@
+# Parallelization
+Partition : 8 1 1
+
+# Mesh definition
+Lx : 50
+Ly : 50
+Lz : 50
+nx : 256
+ny : 256
+nz : 1
+
+# EOS parameters: rho(Z)=rho0*rho1/((1-Z)*rho1+Z*rho0)
+rho0 : 1
+rho1 : 1
+rhost: 0.1  # 10 instead of 0.1 gives a really sharp density profile
+Zst  : 0.2
+
+# Initial profiles
+Velocity thickness : 0.2
+Scalar thickness :   0.2
+
+# Disturbance amplitude
+Wave amplitude : 0.01
+
+NwaveX  :  6
+wnumbX  :  3.76991E-01  5.02655E-01  6.28319E-01  7.53982E-01  8.79646E-01  1.00531E+00
+wshiftX : -1.37728E+01  4.31780E+00 -2.45245E+01  8.71902E+00 -5.11072E-01  1.17381E+00
+NwaveZ  :  6
+wnumbZ  :  0.00000E+00  0.00000E+00  0.00000E+00  0.00000E+00  0.00000E+00  0.00000E+00
+wshiftZ : -8.34759E-02 -2.91318E-02  7.96336E-02  2.36764E-02 -6.54504E-02 -4.67286E-02
+
+# Fluid properties
+Dynamic viscosity :   1e-2
+Dynamic diffusivity : 1e-2
+
+# Time integration
+Max timestep size : 1e-1
+Max cfl number :    0.8
+Subiterations :     20
+
+# Pressure solver
+Pressure tolerance : 1e-6
+Pressure iteration : 100
+
+# Ensight output
+Ensight output period : 1

@@ -33,28 +33,7 @@ module simulation
    real(WP), dimension(:,:,:), allocatable :: resU,resV,resW
    real(WP), dimension(:,:,:), allocatable :: Ui,Vi,Wi
    
-   !> Problem definition
-   real(WP) :: Reg,Weg,r_visc,r_rho,r_vel,delta_l
-   integer :: nwaveX,nwaveZ
-   real(WP), dimension(:), allocatable :: wnumbX,wshiftX,wampX,wnumbZ,wshiftZ,wampZ
-   
 contains
-   
-   
-   !> Function that defines a level set function for a initial wavy interface
-   function levelset_wavy(xyz,t) result(G)
-      implicit none
-      real(WP), dimension(3),intent(in) :: xyz
-      real(WP), intent(in) :: t
-      real(WP) :: G
-      integer :: nX,nZ
-      G=-xyz(2)
-      do nX=1,nwaveX
-         do nZ=1,nwaveZ
-            G=G+wampX(nX)*cos(wnumbX(nX)*(xyz(1)-wshiftX(nX)))*wampZ(nZ)*cos(wnumbZ(nZ)*(xyz(3)-wshiftZ(nZ)))
-         end do
-      end do
-   end function levelset_wavy
    
    
    !> Specialized subroutine that outputs wave amplitude information
@@ -103,9 +82,11 @@ contains
    
    !> Initialization of problem solver
    subroutine simulation_init
-      use param, only: param_read
+      use param, only: param_read,param_exists
       implicit none
-      
+      integer :: nwaveX,nwaveZ
+      real(WP) :: wamp
+      real(WP), dimension(:), allocatable :: wnumbX,wshiftX,wnumbZ,wshiftZ
       
       ! Allocate work arrays
       allocate_work_arrays: block
@@ -132,40 +113,65 @@ contains
       ! Initialize our VOF solver and field
       create_and_initialize_vof: block
          use mms_geom,  only: cube_refine_vol
-         use vfs_class, only: lvira,VFhi,VFlo,remap
+         use vfs_class, only: plicnet,VFhi,VFlo,remap
          use mathtools, only: twoPi
          use random,    only: random_uniform
          use parallel,  only: MPI_REAL_WP
+         use string,    only: str_long
+         use messager,  only: log
          use mpi_f08
+         character(str_long) :: message
          integer :: i,j,k,n,si,sj,sk,ierr
          real(WP), dimension(3,8) :: cube_vertex
          real(WP), dimension(3) :: v_cent,a_cent
          real(WP) :: vol,area
          integer, parameter :: amr_ref_lvl=4
          ! Create a VOF solver
-         call vf%initialize(cfg=cfg,reconstruction_method=lvira,transport_method=remap,name='VOF')
-         !vf%cons_correct=.false.
-         ! Prepare initialize interface parameters
-         nwaveX=6
-         allocate(wnumbX(nwaveX),wshiftX(nwaveX),wampX(nwaveX))
-         wampX=0.3_WP/real(nwaveX,WP)
-         wnumbX=[3.0_WP,4.0_WP,5.0_WP,6.0_WP,7.0_WP,8.0_WP]*twoPi/cfg%xL
-         if (cfg%amRoot) then
-            do n=1,nwaveX
-               wshiftX(n)=random_uniform(lo=-0.5_WP*cfg%xL,hi=+0.5_WP*cfg%xL)
-            end do
+         call vf%initialize(cfg=cfg,reconstruction_method=plicnet,transport_method=remap,name='VOF')
+         ! Prepare interface disturbance in X
+         call param_read('Wave amplitude',wamp)
+         call param_read('NwaveX',NwaveX,default=-1)
+         if (NwaveX.gt.0) then
+            allocate(wnumbX(nwaveX),wshiftX(nwaveX))
+            call param_read('wnumbX',wnumbX)
+            call param_read('wshiftX',wshiftX)
+         else
+            nwaveX=6
+            allocate(wnumbX(nwaveX),wshiftX(nwaveX))
+            wnumbX=[3.0_WP,4.0_WP,5.0_WP,6.0_WP,7.0_WP,8.0_WP]*twoPi/cfg%xL
+            if (cfg%amRoot) then
+               do n=1,nwaveX
+                  wshiftX(n)=random_uniform(lo=-0.5_WP*cfg%xL,hi=+0.5_WP*cfg%xL)
+               end do
+            end if
+            call MPI_BCAST(wshiftX,nwaveX,MPI_REAL_WP,0,cfg%comm,ierr)
          end if
-         call MPI_BCAST(wshiftX,nwaveX,MPI_REAL_WP,0,cfg%comm,ierr)
-         nwaveZ=6
-         allocate(wnumbZ(nwaveZ),wshiftZ(nwaveZ),wampZ(nwaveZ))
-         wampZ=0.3_WP/real(nwaveZ,WP)
-         wnumbZ=[3.0_WP,4.0_WP,5.0_WP,6.0_WP,7.0_WP,8.0_WP]*twoPi/cfg%zL
-         if (cfg%amRoot) then
-            do n=1,nwaveZ
-               wshiftZ(n)=random_uniform(lo=-0.5_WP*cfg%zL,hi=+0.5_WP*cfg%zL)
-            end do
+         ! Prepare interface disturbance in Z
+         call param_read('NwaveZ',NwaveZ,default=-1)
+         if (NwaveZ.gt.0) then
+            allocate(wnumbZ(nwaveZ),wshiftZ(nwaveZ))
+            call param_read('wnumbZ',wnumbZ)
+            call param_read('wshiftZ',wshiftZ)
+         else
+            nwaveZ=6
+            allocate(wnumbZ(nwaveZ),wshiftZ(nwaveZ))
+            wnumbZ=[3.0_WP,4.0_WP,5.0_WP,6.0_WP,7.0_WP,8.0_WP]*twoPi/cfg%zL
+            if (cfg%amRoot) then
+               do n=1,nwaveZ
+                  wshiftZ(n)=random_uniform(lo=-0.5_WP*cfg%zL,hi=+0.5_WP*cfg%zL)
+               end do
+            end if
+            call MPI_BCAST(wshiftZ,nwaveZ,MPI_REAL_WP,0,cfg%comm,ierr)
          end if
-         call MPI_BCAST(wshiftZ,nwaveZ,MPI_REAL_WP,0,cfg%comm,ierr)
+         ! Print out initial disturbance
+         if (vf%cfg%amRoot) then
+            write(message,'("[Initial conditions] =>  NwaveX =",i6)')              nwaveX; call log(message)
+            write(message,'("[Initial conditions] =>  wnumbX =",1000(es12.5,x))')  wnumbX; call log(message)
+            write(message,'("[Initial conditions] => wshiftX =",1000(es12.5,x))') wshiftX; call log(message)
+            write(message,'("[Initial conditions] =>  NwaveZ =",i6)')              nwaveZ; call log(message)
+            write(message,'("[Initial conditions] =>  wnumbZ =",1000(es12.5,x))')  wnumbZ; call log(message)
+            write(message,'("[Initial conditions] => wshiftZ =",1000(es12.5,x))') wshiftZ; call log(message)
+         end if
          ! Create the wavy interface
          do k=vf%cfg%kmino_,vf%cfg%kmaxo_
             do j=vf%cfg%jmino_,vf%cfg%jmaxo_
@@ -197,6 +203,8 @@ contains
          call vf%update_band()
          ! Perform interface reconstruction from VOF field
          call vf%build_interface()
+         ! Set interface planes at the boundaries
+         call vf%set_full_bcond()
          ! Create discontinuous polygon mesh from IRL interface
          call vf%polygonalize_interface()
          ! Calculate distance from polygons
@@ -210,18 +218,20 @@ contains
       end block create_and_initialize_vof
       
       
-      ! Create a two-phase flow solver without bconds
-      create_and_initialize_flow_solver: block
+      ! Create a two-phase flow solver with bconds
+      create_flow_solver: block
          use hypre_str_class, only: pcg_pfmg2
-         integer :: i,j,k
+         use tpns_class,      only: slip
          ! Create flow solver
          fs=tpns(cfg=cfg,name='Two-phase NS')
          ! Read in flow conditions
-         call param_read('Gas Reynolds number',Reg); fs%visc_g=1.0_WP/(Reg+epsilon(Reg))
-         call param_read('Viscosity ratio',r_visc); fs%visc_l=r_visc*fs%visc_g
-         call param_read('Density ratio',r_rho); fs%rho_g=1.0_WP; fs%rho_l=r_rho*fs%rho_g
-         call param_read('Gas Weber number',Weg); fs%sigma=1.0_WP/(Weg+epsilon(Weg))
-         call param_read('Velocity ratio',r_vel); delta_l=r_visc*r_vel
+         call param_read('Gas Reynolds number',fs%visc_g); fs%visc_g=1.0_WP/fs%visc_g
+         call param_read('Viscosity ratio'    ,fs%visc_l); fs%visc_l=fs%visc_l*fs%visc_g
+         call param_read('Density ratio'      ,fs%rho_l); fs%rho_g=1.0_WP; fs%rho_l=fs%rho_l*fs%rho_g
+         call param_read('Gas Weber number'   ,fs%sigma); fs%sigma=1.0_WP/fs%sigma
+         ! Add slip conditions top and bottom
+         call fs%add_bcond(name='bc_yp',type=slip,face='y',dir=+1,canCorrect=.false.,locator=yp_locator)
+         call fs%add_bcond(name='bc_ym',type=slip,face='y',dir=-1,canCorrect=.false.,locator=ym_locator)
          ! Configure pressure solver
 			ps=hypre_str(cfg=cfg,name='Pressure',method=pcg_pfmg2,nst=7)
          call param_read('Pressure iteration',ps%maxit)
@@ -230,25 +240,73 @@ contains
          vs=ddadi(cfg=cfg,name='Velocity',nst=7)
          ! Setup the solver
          call fs%setup(pressure_solver=ps,implicit_solver=vs)
-         ! Set initial velocity field
-         fs%U=0.0_WP; fs%V=0.0_WP; fs%W=0.0_WP
+      end block create_flow_solver
+      
+      
+      ! Initialize velocity field
+      initialize_velocity: block
+         use string,   only: str_long
+         use messager, only: log
+         use random,   only: random_uniform
+         character(str_long) :: message
+         real(WP) :: dg,dl,di,Ug,Ul,Uint,namp
+         integer :: i,j,k
+         ! Read in initial velocity parameters
+         call param_read('Gas thickness',dg)
+         call param_read('Liquid thickness',dl)
+         call param_read('Gas velocity',Ug)
+         call param_read('Liquid velocity',Ul)
+         call param_read('Deficit parameter',di)
+         call param_read('Noise amplitude',namp)
+         ! Calculate interface velocity
+         Uint=di*dg*(Ul*fs%visc_l/dl+Ug*fs%visc_g/dg)/(fs%visc_l+fs%visc_g)
+         ! Impose the profile
          do k=fs%cfg%kmino_,fs%cfg%kmaxo_
             do j=fs%cfg%jmino_,fs%cfg%jmaxo_
                do i=fs%cfg%imino_,fs%cfg%imaxo_
                   if (fs%cfg%ym(j).le.0.0_WP) then
                      ! Use the liquid profile
-                     fs%U(i,j,k)=r_vel*erf(fs%cfg%ym(j)/delta_l)
+                     fs%U(i,j,k)=Ul*erf(abs(fs%cfg%ym(j))/dl)
                   else
                      ! Use the gas profile
-                     fs%U(i,j,k)=erf(fs%cfg%ym(j))
+                     fs%U(i,j,k)=Ug*erf(abs(fs%cfg%ym(j))/dg)
                   end if
+                  ! Add the deficit
+                  fs%U(i,j,k)=fs%U(i,j,k)+Uint*(1.0_WP-erf(abs(fs%cfg%ym(j))/(dg*di)))
+                  ! Add fluctuations
+                  fs%U(i,j,k)=fs%U(i,j,k)+random_uniform(lo=-0.5_WP*namp,hi=+0.5_WP*namp)
                end do
             end do
          end do
+         call fs%cfg%sync(fs%U)
+         ! Make it solenoidal
+         call fs%get_olddensity(vf)
+         fs%rho_U=fs%rho_Uold
+         fs%rho_V=fs%rho_Vold
+         fs%rho_W=fs%rho_Wold
+         call fs%update_laplacian()
+         call fs%get_div()
+         fs%psolv%rhs=-fs%cfg%vol*fs%div
+         fs%psolv%sol=0.0_WP
+         call fs%psolv%solve()
+         call fs%shift_p(fs%psolv%sol)
+         call fs%get_pgrad(fs%psolv%sol,resU,resV,resW)
+         fs%U=fs%U-resU/fs%rho_U
+         fs%V=fs%V-resV/fs%rho_V
+         fs%W=fs%W-resW/fs%rho_W
          ! Calculate cell-centered velocities and divergence
          call fs%interp_vel(Ui,Vi,Wi)
          call fs%get_div()
-      end block create_and_initialize_flow_solver
+         ! Print out mixing layer definition
+         if (fs%cfg%amRoot) then
+            write(message,'("[Initial conditions] => Gas thickness =",es12.5)')   dg; call log(message)
+            write(message,'("[Initial conditions] => Gas  velocity =",es12.5)')   Ug; call log(message)
+            write(message,'("[Initial conditions] => Liq thickness =",es12.5)')   dl; call log(message)
+            write(message,'("[Initial conditions] => Liq  velocity =",es12.5)')   Ul; call log(message)
+            write(message,'("[Initial conditions] => Deficit param =",es12.5)')   di; call log(message)
+            write(message,'("[Initial conditions] => Interface vel =",es12.5)') Uint; call log(message)
+         end if
+      end block initialize_velocity
       
       
       ! Add Ensight output
@@ -305,6 +363,49 @@ contains
       end block create_monitor
       
       
+   contains
+      
+      
+      !> Function that defines a level set function for a initial wavy interface
+      function levelset_wavy(xyz,t) result(G)
+         implicit none
+         real(WP), dimension(3),intent(in) :: xyz
+         real(WP), intent(in) :: t
+         real(WP) :: G
+         integer :: nX,nZ
+         G=-xyz(2)
+         do nX=1,nwaveX
+            do nZ=1,nwaveZ
+               G=G+wamp*cos(wnumbX(nX)*(xyz(1)-wshiftX(nX)))*cos(wnumbZ(nZ)*(xyz(3)-wshiftZ(nZ)))
+            end do
+         end do
+      end function levelset_wavy
+      
+
+      !> Function that localizes the top (y+) of the domain
+      function yp_locator(pg,i,j,k) result(isIn)
+         use pgrid_class, only: pgrid
+         implicit none
+         class(pgrid), intent(in) :: pg
+         integer, intent(in) :: i,j,k
+         logical :: isIn
+         isIn=.false.
+         if (j.eq.pg%jmax+1) isIn=.true.
+      end function yp_locator
+      
+      
+      !> Function that localizes the bottom (y-) of the domain
+      function ym_locator(pg,i,j,k) result(isIn)
+         use pgrid_class, only: pgrid
+         implicit none
+         class(pgrid), intent(in) :: pg
+         integer, intent(in) :: i,j,k
+         logical :: isIn
+         isIn=.false.
+         if (j.eq.pg%jmin) isIn=.true.
+      end function ym_locator
+      
+
    end subroutine simulation_init
    
    
