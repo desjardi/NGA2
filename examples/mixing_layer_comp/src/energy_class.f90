@@ -1,7 +1,7 @@
-!> Variable density scalar solver class:
+!> Internal energy solver class:
 !> Provides support for various BC, RHS calculation, implicit solver
 !> Assumes variable diffusivity and density.
-module vdscalar_class
+module energy_class
    use precision,      only: WP
    use string,         only: str_medium
    use config_class,   only: config
@@ -11,7 +11,7 @@ module vdscalar_class
    private
    
    ! Expose type/constructor/methods
-   public :: vdscalar,bcond
+   public :: energy,bcond
    
    ! List of known available bcond for this solver
    integer, parameter, public :: dirichlet=2                !< Dirichlet condition
@@ -29,68 +29,66 @@ module vdscalar_class
    !> Bcond shift value
    integer, dimension(3,6), parameter :: shift=reshape([+1,0,0,-1,0,0,0,+1,0,0,-1,0,0,0,+1,0,0,-1],shape(shift))
    
-   !> Variable density scalar solver object definition
-   type :: vdscalar
+   !> Internal energy solver object definition
+   type :: energy
       
       ! This is our config
       class(config), pointer :: cfg                         !< This is the config the solver is build for
       
       ! This is the name of the solver
-      character(len=str_medium) :: name='UNNAMED_VDSCALAR'  !< Solver name (default=UNNAMED_VDSCALAR)
-      
-      ! Theta parameter for stabilization
-      real(WP) :: theta=0.5_WP                              !< Choosing theta=0.5 leads to Crank-Nicolson, theta>0.5 increases stability
+      character(len=str_medium) :: name='UNNAMED_ENERGY'    !< Solver name (default=UNNAMED_ENERGY)
       
       ! Variable property fluid
-      real(WP), dimension(:,:,:), allocatable :: diff       !< These is our variable scalar dynamic diffusivity
+      real(WP), dimension(:,:,:), allocatable :: diff       !< These is our dynamic diffusivity
+      real(WP) :: Cv
       
       ! Boundary condition list
       integer :: nbc                                        !< Number of bcond for our solver
       type(bcond), pointer :: first_bc                      !< List of bcond for our solver
       
-      ! Scalar variables
-      real(WP), dimension(:,:,:), allocatable :: SC         !< Current SC array
-      real(WP), dimension(:,:,:), allocatable :: SCold      !< Old SC array
+      ! Energy variables
+      real(WP), dimension(:,:,:), allocatable :: E          !< Current E array
+      real(WP), dimension(:,:,:), allocatable :: Eold       !< Old E array
       
-      ! Implicit scalar solver
-      class(linsol), pointer :: implicit                    !< Iterative linear solver object for an implicit prediction of the scalar residual
+      ! Implicit energy solver
+      class(linsol), pointer :: implicit                    !< Iterative linear solver object for an implicit prediction of the energy residual
       
       ! Metrics
-      real(WP), dimension(:,:,:,:), allocatable :: itp_x,itp_y,itp_z        !< Interpolation of scalar or diffusivity to the face
-      real(WP), dimension(:,:,:,:), allocatable :: itp_xp,itp_yp,itp_zp     !< QUICK plus  interpolation for SC
-      real(WP), dimension(:,:,:,:), allocatable :: itp_xm,itp_ym,itp_zm     !< QUICK minus interpolation for SC
-      real(WP), dimension(:,:,:,:), allocatable :: div_x,div_y,div_z        !< Divergence of scalar flux
-      real(WP), dimension(:,:,:,:), allocatable :: grd_x,grd_y,grd_z        !< Gradient of scalar
+      real(WP), dimension(:,:,:,:), allocatable :: itp_x,itp_y,itp_z        !< Interpolation of diffusivity to the face
+      real(WP), dimension(:,:,:,:), allocatable :: itp_xp,itp_yp,itp_zp     !< QUICK plus  interpolation for E
+      real(WP), dimension(:,:,:,:), allocatable :: itp_xm,itp_ym,itp_zm     !< QUICK minus interpolation for E
+      real(WP), dimension(:,:,:,:), allocatable :: div_x,div_y,div_z        !< Divergence of energy flux
+      real(WP), dimension(:,:,:,:), allocatable :: grd_x,grd_y,grd_z        !< Gradient of temperature
       
       ! Masking info for metric modification
-      integer, dimension(:,:,:), allocatable :: mask        !< Integer array used for modifying SC metrics
+      integer, dimension(:,:,:), allocatable :: mask        !< Integer array used for modifying E metrics
       
       ! Monitoring quantities
-      real(WP) :: SCmax,SCmin,rhoSCint                      !< Maximum and minimum, integral scalar
+      real(WP) :: Emax,Emin,rhoEint                         !< Maximum and minimum, integral energy
       
    contains
-      procedure :: print=>scalar_print                      !< Output solver to the screen
-      procedure :: initialize                               !< Initialize the scalar solver
-      procedure :: setup                                    !< Finish configuring the scalar solver
+      procedure :: print=>energy_print                      !< Output solver to the screen
+      procedure :: initialize                               !< Initialize the energy solver
+      procedure :: setup                                    !< Finish configuring the energy solver
       procedure :: add_bcond                                !< Add a boundary condition
       procedure :: get_bcond                                !< Get a boundary condition
       procedure :: apply_bcond                              !< Apply all boundary conditions
       procedure :: init_metrics                             !< Initialize metrics
       procedure :: adjust_metrics                           !< Adjust metrics
-      procedure :: get_drhoSCdt                             !< Calculate drhoSC/dt
-      procedure :: get_max                                  !< Calculate stats of our scalar
-      procedure :: solve_implicit                           !< Solve for the scalar residuals implicitly
-   end type vdscalar
+      procedure :: get_drhoEdt                              !< Calculate drhoE/dt
+      procedure :: get_max                                  !< Calculate stats of our energy
+      procedure :: solve_implicit                           !< Solve for the energy residuals implicitly
+   end type energy
    
    
 contains
    
    
-   !> Initialization for variable density scalar solver
+   !> Initialization for energy solver
    subroutine initialize(this,cfg,name)
       use messager, only: die
       implicit none
-      class(vdscalar), intent(inout) :: this
+      class(energy), intent(inout) :: this
       class(config), target, intent(in) :: cfg
       character(len=*), optional :: name
       integer :: i,j,k
@@ -106,17 +104,17 @@ contains
       this%first_bc=>NULL()
       
       ! Allocate variables
-      allocate(this%SC   (this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_)); this%SC   =0.0_WP
-      allocate(this%SCold(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_)); this%SCold=0.0_WP
-      allocate(this%diff (this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_)); this%diff =0.0_WP
+      allocate(this%E   (this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_)); this%E   =0.0_WP
+      allocate(this%Eold(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_)); this%Eold=0.0_WP
+      allocate(this%diff(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_)); this%diff=0.0_WP
       
       ! Check current overlap
-      if (this%cfg%no.lt.2) call die('[scalar constructor] vdscalar transport scheme requires larger overlap')
+      if (this%cfg%no.lt.2) call die('[energy constructor] energy transport scheme requires larger overlap')
       
       ! Prepare default metrics
       call this%init_metrics()
       
-      ! Prepare mask for SC
+      ! Prepare mask for E
       allocate(this%mask(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_)); this%mask=0
       if (.not.this%cfg%xper) then
          if (this%cfg%iproc.eq.           1) this%mask(:this%cfg%imin-1,:,:)=2
@@ -146,14 +144,14 @@ contains
    subroutine init_metrics(this)
       use mathtools, only: fv_itp_build
       implicit none
-      class(vdscalar), intent(inout) :: this
+      class(energy), intent(inout) :: this
       integer :: i,j,k
       
-      ! Allocate finite difference scalar and diffusivity interpolation coefficients to cell faces
+      ! Allocate finite difference diffusivity interpolation coefficients to cell faces
       allocate(this%itp_x(-1:0,this%cfg%imino_+1:this%cfg%imaxo_,this%cfg%jmino_  :this%cfg%jmaxo_,this%cfg%kmino_  :this%cfg%kmaxo_)) !< X-face-centered
       allocate(this%itp_y(-1:0,this%cfg%imino_  :this%cfg%imaxo_,this%cfg%jmino_+1:this%cfg%jmaxo_,this%cfg%kmino_  :this%cfg%kmaxo_)) !< Y-face-centered
       allocate(this%itp_z(-1:0,this%cfg%imino_  :this%cfg%imaxo_,this%cfg%jmino_  :this%cfg%jmaxo_,this%cfg%kmino_+1:this%cfg%kmaxo_)) !< Z-face-centered
-      ! Create scalar interpolation coefficients to cell face in x
+      ! Create interpolation coefficients to cell face in x
       do k=this%cfg%kmino_  ,this%cfg%kmaxo_
          do j=this%cfg%jmino_  ,this%cfg%jmaxo_
             do i=this%cfg%imino_+1,this%cfg%imaxo_
@@ -161,7 +159,7 @@ contains
             end do
          end do
       end do
-      ! Create scalar interpolation coefficients to cell face in y
+      ! Create interpolation coefficients to cell face in y
       do k=this%cfg%kmino_  ,this%cfg%kmaxo_
          do j=this%cfg%jmino_+1,this%cfg%jmaxo_
             do i=this%cfg%imino_  ,this%cfg%imaxo_
@@ -169,7 +167,7 @@ contains
             end do
          end do
       end do
-      ! Create scalar interpolation coefficients to cell face in z
+      ! Create interpolation coefficients to cell face in z
       do k=this%cfg%kmino_+1,this%cfg%kmaxo_
          do j=this%cfg%jmino_  ,this%cfg%jmaxo_
             do i=this%cfg%imino_  ,this%cfg%imaxo_
@@ -178,14 +176,14 @@ contains
          end do
       end do
       
-      ! Allocate finite difference scalar interpolation coefficients
+      ! Allocate finite difference energy interpolation coefficients
       allocate(this%itp_xp(-2:0,this%cfg%imin_:this%cfg%imax_+1,this%cfg%jmin_:this%cfg%jmax_+1,this%cfg%kmin_:this%cfg%kmax_+1)) !< X-face-centered
       allocate(this%itp_xm(-1:1,this%cfg%imin_:this%cfg%imax_+1,this%cfg%jmin_:this%cfg%jmax_+1,this%cfg%kmin_:this%cfg%kmax_+1)) !< X-face-centered
       allocate(this%itp_yp(-2:0,this%cfg%imin_:this%cfg%imax_+1,this%cfg%jmin_:this%cfg%jmax_+1,this%cfg%kmin_:this%cfg%kmax_+1)) !< Y-face-centered
       allocate(this%itp_ym(-1:1,this%cfg%imin_:this%cfg%imax_+1,this%cfg%jmin_:this%cfg%jmax_+1,this%cfg%kmin_:this%cfg%kmax_+1)) !< Y-face-centered
       allocate(this%itp_zp(-2:0,this%cfg%imin_:this%cfg%imax_+1,this%cfg%jmin_:this%cfg%jmax_+1,this%cfg%kmin_:this%cfg%kmax_+1)) !< Z-face-centered
       allocate(this%itp_zm(-1:1,this%cfg%imin_:this%cfg%imax_+1,this%cfg%jmin_:this%cfg%jmax_+1,this%cfg%kmin_:this%cfg%kmax_+1)) !< Z-face-centered
-      ! Create scalar interpolation coefficients to cell faces
+      ! Create energy interpolation coefficients to cell faces
       do k=this%cfg%kmin_,this%cfg%kmax_+1
          do j=this%cfg%jmin_,this%cfg%jmax_+1
             do i=this%cfg%imin_,this%cfg%imax_+1
@@ -221,7 +219,7 @@ contains
          end do
       end do
       
-      ! Allocate finite difference scalar gradient operators
+      ! Allocate finite difference energy gradient operators
       allocate(this%grd_x(-1:0,this%cfg%imin_:this%cfg%imax_+1,this%cfg%jmin_:this%cfg%jmax_+1,this%cfg%kmin_:this%cfg%kmax_+1)) !< X-face-centered
       allocate(this%grd_y(-1:0,this%cfg%imin_:this%cfg%imax_+1,this%cfg%jmin_:this%cfg%jmax_+1,this%cfg%kmin_:this%cfg%kmax_+1)) !< Y-face-centered
       allocate(this%grd_z(-1:0,this%cfg%imin_:this%cfg%imax_+1,this%cfg%jmin_:this%cfg%jmax_+1,this%cfg%kmin_:this%cfg%kmax_+1)) !< Z-face-centered
@@ -229,9 +227,9 @@ contains
       do k=this%cfg%kmin_,this%cfg%kmax_+1
          do j=this%cfg%jmin_,this%cfg%jmax_+1
             do i=this%cfg%imin_,this%cfg%imax_+1
-               this%grd_x(:,i,j,k)=this%cfg%dxmi(i)*[-1.0_WP,+1.0_WP] !< FD gradient of SC in x from [xm,ym,zm] to [x,ym,zm]
-               this%grd_y(:,i,j,k)=this%cfg%dymi(j)*[-1.0_WP,+1.0_WP] !< FD gradient of SC in y from [xm,ym,zm] to [xm,y,zm]
-               this%grd_z(:,i,j,k)=this%cfg%dzmi(k)*[-1.0_WP,+1.0_WP] !< FD gradient of SC in z from [xm,ym,zm] to [xm,ym,z]
+               this%grd_x(:,i,j,k)=this%cfg%dxmi(i)*[-1.0_WP,+1.0_WP] !< FD gradient of E in x from [xm,ym,zm] to [x,ym,zm]
+               this%grd_y(:,i,j,k)=this%cfg%dymi(j)*[-1.0_WP,+1.0_WP] !< FD gradient of E in y from [xm,ym,zm] to [xm,y,zm]
+               this%grd_z(:,i,j,k)=this%cfg%dzmi(k)*[-1.0_WP,+1.0_WP] !< FD gradient of E in z from [xm,ym,zm] to [xm,ym,z]
             end do
          end do
       end do
@@ -242,7 +240,7 @@ contains
    !> Metric adjustment accounting for bconds and walls - zero out div at bcond and walls
    subroutine adjust_metrics(this)
       implicit none
-      class(vdscalar), intent(inout) :: this
+      class(energy), intent(inout) :: this
       integer :: i,j,k
       
       ! Sync up masks
@@ -266,7 +264,7 @@ contains
          end do
       end do
       
-      ! Adjust scalar interpolation to reflect Dirichlet boundaries
+      ! Adjust energy interpolation to reflect Dirichlet boundaries
       do k=this%cfg%kmin_,this%cfg%kmax_+1
          do j=this%cfg%jmin_,this%cfg%jmax_+1
             do i=this%cfg%imin_,this%cfg%imax_+1
@@ -301,7 +299,7 @@ contains
          end do
       end do
       
-      ! Loop over the domain and apply masked conditions to SC divergence
+      ! Loop over the domain and apply masked conditions to divergence of energy flux
       do k=this%cfg%kmin_,this%cfg%kmax_
          do j=this%cfg%jmin_,this%cfg%jmax_
             do i=this%cfg%imin_,this%cfg%imax_
@@ -314,13 +312,13 @@ contains
          end do
       end do
       
-      ! Adjust gradient coefficients to cell faces for walls (assume Neumann at wall)
+      ! Adjust gradient coefficients to cell faces for walls (assume Neumann at wall) - NEEDS TO BE CHANGED AS WE MAY WANT ISOTHERMAL WALLS
       do k=this%cfg%kmin_,this%cfg%kmax_+1
          do j=this%cfg%jmin_,this%cfg%jmax_+1
             do i=this%cfg%imin_,this%cfg%imax_+1
-               if (this%mask(i,j,k).eq.1.or.this%mask(i-1,j,k).eq.1) this%grd_x(:,i,j,k)=0.0_WP     !< FD gradient in x of SC
-               if (this%mask(i,j,k).eq.1.or.this%mask(i,j-1,k).eq.1) this%grd_y(:,i,j,k)=0.0_WP     !< FD gradient in y of SC
-               if (this%mask(i,j,k).eq.1.or.this%mask(i,j,k-1).eq.1) this%grd_z(:,i,j,k)=0.0_WP     !< FD gradient in z of SC
+               if (this%mask(i,j,k).eq.1.or.this%mask(i-1,j,k).eq.1) this%grd_x(:,i,j,k)=0.0_WP     !< FD gradient in x of T
+               if (this%mask(i,j,k).eq.1.or.this%mask(i,j-1,k).eq.1) this%grd_y(:,i,j,k)=0.0_WP     !< FD gradient in y of T
+               if (this%mask(i,j,k).eq.1.or.this%mask(i,j,k-1).eq.1) this%grd_z(:,i,j,k)=0.0_WP     !< FD gradient in z of T
             end do
          end do
       end do
@@ -342,10 +340,10 @@ contains
    end subroutine adjust_metrics
    
    
-   !> Finish setting up the variable density scalar solver now that bconds have been defined
+   !> Finish setting up the energy solver now that bconds have been defined
    subroutine setup(this,implicit_solver)
       implicit none
-      class(vdscalar), intent(inout) :: this
+      class(energy), intent(inout) :: this
       class(linsol), target, intent(in), optional :: implicit_solver
       
       ! Adjust metrics based on mask array
@@ -357,7 +355,7 @@ contains
          ! Point to implicit solver linsol object
          this%implicit=>implicit_solver
 
-         ! Set 13-pt stencil map for the scalar solver
+         ! Set 13-pt stencil map for the energy solver
          this%implicit%stc( 1,:)=[ 0, 0, 0]
          this%implicit%stc( 2,:)=[+1, 0, 0]
          this%implicit%stc( 3,:)=[-1, 0, 0]
@@ -394,7 +392,7 @@ contains
       use messager,       only: die
       use iterator_class, only: locator_ftype
       implicit none
-      class(vdscalar), intent(inout) :: this
+      class(energy), intent(inout) :: this
       character(len=*), intent(in) :: name
       integer, intent(in) :: type
       procedure(locator_ftype) :: locator
@@ -414,10 +412,10 @@ contains
          case ('-y','y-','ym','my'); new_bc%dir=4
          case ('+z','z+','zp','pz'); new_bc%dir=5
          case ('-z','z-','zm','mz'); new_bc%dir=6
-         case default; call die('[vdscalar add_bcond] Unknown bcond direction')
+         case default; call die('[energy add_bcond] Unknown bcond direction')
          end select
       else
-         if (new_bc%type.eq.neumann) call die('[vdscalar apply_bcond] Neumann requires a direction')
+         if (new_bc%type.eq.neumann) call die('[energy apply_bcond] Neumann requires a direction')
          new_bc%dir=0
       end if
       new_bc%itr=iterator(this%cfg,new_bc%name,locator,'c')
@@ -439,7 +437,7 @@ contains
       case (neumann)
          ! No modification - this assumes Neumann is only applied at walls or domain boundaries
       case default
-         call die('[vdscalar apply_bcond] Unknown bcond type')
+         call die('[energy apply_bcond] Unknown bcond type')
       end select
       
    end subroutine add_bcond
@@ -449,7 +447,7 @@ contains
    subroutine get_bcond(this,name,my_bc)
       use messager, only: die
       implicit none
-      class(vdscalar), intent(inout) :: this
+      class(energy), intent(inout) :: this
       character(len=*), intent(in) :: name
       type(bcond), pointer, intent(out) :: my_bc
       my_bc=>this%first_bc
@@ -457,7 +455,7 @@ contains
          if (trim(my_bc%name).eq.trim(name)) exit search
          my_bc=>my_bc%next
       end do search
-      if (.not.associated(my_bc)) call die('[vdscalar get_bcond] Boundary condition was not found')
+      if (.not.associated(my_bc)) call die('[energy get_bcond] Boundary condition was not found')
    end subroutine get_bcond
    
    
@@ -467,7 +465,7 @@ contains
       use mpi_f08,  only: MPI_MAX
       use parallel, only: MPI_REAL_WP
       implicit none
-      class(vdscalar), intent(inout) :: this
+      class(energy), intent(inout) :: this
       real(WP), intent(in) :: t,dt
       integer :: i,j,k,n
       type(bcond), pointer :: my_bc
@@ -492,11 +490,11 @@ contains
                ! Implement based on bcond direction
                do n=1,my_bc%itr%n_
                   i=my_bc%itr%map(1,n); j=my_bc%itr%map(2,n); k=my_bc%itr%map(3,n)
-                  this%SC(i,j,k)=this%SC(i-shift(1,my_bc%dir),j-shift(2,my_bc%dir),k-shift(3,my_bc%dir))
+                  this%E(i,j,k)=this%E(i-shift(1,my_bc%dir),j-shift(2,my_bc%dir),k-shift(3,my_bc%dir))
                end do
                
             case default
-               call die('[vdscalar apply_bcond] Unknown bcond type')
+               call die('[energy apply_bcond] Unknown bcond type')
             end select
             
          end if
@@ -507,115 +505,108 @@ contains
       end do
       
       ! Sync full field after all bcond
-      call this%cfg%sync(this%SC)
+      call this%cfg%sync(this%E)
       
    end subroutine apply_bcond
    
    
-   !> Calculate the explicit rhoSC time derivative given Zmid and passed rhoU/rhoV/rhoW
-   subroutine get_drhoSCdt(this,drhoSCdt,RHO,RHOold,rhoU,rhoV,rhoW)
+   !> Calculate the explicit rhoE time derivative given passed RHO/RHOold/rhoU/rhoV/rhoW
+   subroutine get_drhoEdt(this,drhoEdt,RHO,RHOold,rhoU,rhoV,rhoW)
       implicit none
-      class(vdscalar), intent(inout) :: this
-      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(out) :: drhoSCdt !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      class(energy), intent(inout) :: this
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(out) :: drhoEdt!< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in)  :: RHO    !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in)  :: RHOold !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in)  :: rhoU   !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in)  :: rhoV   !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in)  :: rhoW   !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       integer :: i,j,k
-      real(WP), dimension(:,:,:), allocatable :: FX,FY,FZ,SC_,SCmid
-      ! Zero out drhoSC/dt array
-      drhoSCdt=0.0_WP
+      real(WP), dimension(:,:,:), allocatable :: FX,FY,FZ,E_
+      ! Zero out drhoE/dt array
+      drhoEdt=0.0_WP
       ! Allocate flux arrays
       allocate(FX(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
       allocate(FY(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
       allocate(FZ(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
-      ! Allocate and compute mid scalars
-      allocate(SC_  (this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_)); SC_  =0.5_WP*(this%SC+this%SCold)
-      allocate(SCmid(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_)); SCmid=(this%theta*sqrt(RHO)*this%SC+(1.0_WP-this%theta)*sqrt(RHOold)*this%SCold)/(this%theta*sqrt(RHO)+(1.0_WP-this%theta)*sqrt(RHOold))
-      ! Flux of rhoSC
+      ! Allocate and compute mid energy
+      allocate(E_  (this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_)); E_=0.5_WP*(this%E+this%Eold)
+      ! Flux of rhoE
       do k=this%cfg%kmin_,this%cfg%kmax_+1
          do j=this%cfg%jmin_,this%cfg%jmax_+1
             do i=this%cfg%imin_,this%cfg%imax_+1
-               FX(i,j,k)=-0.5_WP*(rhoU(i,j,k)+abs(rhoU(i,j,k)))*sum(this%itp_xp(:,i,j,k)*SC_(i-2:i  ,j,k)) &
-               &         -0.5_WP*(rhoU(i,j,k)-abs(rhoU(i,j,k)))*sum(this%itp_xm(:,i,j,k)*SC_(i-1:i+1,j,k)) &
-               &         +sum(this%itp_x(:,i,j,k)*this%diff(i-1:i,j,k))*sum(this%grd_x(:,i,j,k)*SC_(i-1:i,j,k))
-               FY(i,j,k)=-0.5_WP*(rhoV(i,j,k)+abs(rhoV(i,j,k)))*sum(this%itp_yp(:,i,j,k)*SC_(i,j-2:j  ,k)) &
-               &         -0.5_WP*(rhoV(i,j,k)-abs(rhoV(i,j,k)))*sum(this%itp_ym(:,i,j,k)*SC_(i,j-1:j+1,k)) &
-               &         +sum(this%itp_y(:,i,j,k)*this%diff(i,j-1:j,k))*sum(this%grd_y(:,i,j,k)*SC_(i,j-1:j,k))
-               FZ(i,j,k)=-0.5_WP*(rhoW(i,j,k)+abs(rhoW(i,j,k)))*sum(this%itp_zp(:,i,j,k)*SC_(i,j,k-2:k  )) &
-               &         -0.5_WP*(rhoW(i,j,k)-abs(rhoW(i,j,k)))*sum(this%itp_zm(:,i,j,k)*SC_(i,j,k-1:k+1)) &
-               &         +sum(this%itp_z(:,i,j,k)*this%diff(i,j,k-1:k))*sum(this%grd_z(:,i,j,k)*SC_(i,j,k-1:k))
+               FX(i,j,k)=-0.5_WP*(rhoU(i,j,k)+abs(rhoU(i,j,k)))*sum(this%itp_xp(:,i,j,k)*E_(i-2:i  ,j,k)) &
+               &         -0.5_WP*(rhoU(i,j,k)-abs(rhoU(i,j,k)))*sum(this%itp_xm(:,i,j,k)*E_(i-1:i+1,j,k)) &
+               &         +sum(this%itp_x(:,i,j,k)*this%diff(i-1:i,j,k))*sum(this%grd_x(:,i,j,k)*E_(i-1:i,j,k))/this%Cv
+               FY(i,j,k)=-0.5_WP*(rhoV(i,j,k)+abs(rhoV(i,j,k)))*sum(this%itp_yp(:,i,j,k)*E_(i,j-2:j  ,k)) &
+               &         -0.5_WP*(rhoV(i,j,k)-abs(rhoV(i,j,k)))*sum(this%itp_ym(:,i,j,k)*E_(i,j-1:j+1,k)) &
+               &         +sum(this%itp_y(:,i,j,k)*this%diff(i,j-1:j,k))*sum(this%grd_y(:,i,j,k)*E_(i,j-1:j,k))/this%Cv
+               FZ(i,j,k)=-0.5_WP*(rhoW(i,j,k)+abs(rhoW(i,j,k)))*sum(this%itp_zp(:,i,j,k)*E_(i,j,k-2:k  )) &
+               &         -0.5_WP*(rhoW(i,j,k)-abs(rhoW(i,j,k)))*sum(this%itp_zm(:,i,j,k)*E_(i,j,k-1:k+1)) &
+               &         +sum(this%itp_z(:,i,j,k)*this%diff(i,j,k-1:k))*sum(this%grd_z(:,i,j,k)*E_(i,j,k-1:k))/this%Cv
             end do
          end do
       end do
-      ! Time derivative of rhoSC
+      ! Time derivative of rhoE
       do k=this%cfg%kmin_,this%cfg%kmax_
          do j=this%cfg%jmin_,this%cfg%jmax_
             do i=this%cfg%imin_,this%cfg%imax_
-               drhoSCdt(i,j,k)=sum(this%div_x(:,i,j,k)*FX(i:i+1,j,k))+&
-               &               sum(this%div_y(:,i,j,k)*FY(i,j:j+1,k))+&
-               &               sum(this%div_z(:,i,j,k)*FZ(i,j,k:k+1))
+               drhoEdt(i,j,k)=sum(this%div_x(:,i,j,k)*FX(i:i+1,j,k))+&
+               &              sum(this%div_y(:,i,j,k)*FY(i,j:j+1,k))+&
+               &              sum(this%div_z(:,i,j,k)*FZ(i,j,k:k+1))
             end do
          end do
       end do
       ! Deallocate flux arrays
-      deallocate(FX,FY,FZ,SC_,SCmid)
+      deallocate(FX,FY,FZ,E_)
       ! Sync residual
-      call this%cfg%sync(drhoSCdt)
-   end subroutine get_drhoSCdt
+      call this%cfg%sync(drhoEdt)
+   end subroutine get_drhoEdt
    
 
-   !> Calculate the int, min, and max of our SC field
+   !> Calculate the int, min, and max of our E field
    subroutine get_max(this,rho)
-      use mpi_f08,  only: MPI_ALLREDUCE,MPI_MAX,MPI_MIN
+      use mpi_f08,  only: MPI_ALLREDUCE,MPI_MAX,MPI_MIN,MPI_IN_PLACE
       use parallel, only: MPI_REAL_WP
       implicit none
-      class(vdscalar), intent(inout) :: this
+      class(energy), intent(inout) :: this
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in) :: rho
       integer :: ierr,i,j,k
-      real(WP) :: my_SCmax,my_SCmin
-      call this%cfg%integrate(rho*this%SC,integral=this%rhoSCint)
-      my_SCmax=-huge(1.0_WP)
-      my_SCmin=+huge(1.0_WP)
+      call this%cfg%integrate(rho*this%E,integral=this%rhoEint)
+      this%Emax=-huge(1.0_WP)
+      this%Emin=+huge(1.0_WP)
       do k=this%cfg%kmin_,this%cfg%kmax_
          do j=this%cfg%jmin_,this%cfg%jmax_
             do i=this%cfg%imin_,this%cfg%imax_
                ! Skip only walls
                if (this%mask(i,j,k).ne.1) then
-                  my_SCmax=max(this%SC(i,j,k),my_SCmax)
-                  my_SCmin=min(this%SC(i,j,k),my_SCmin)
+                  this%Emax=max(this%E(i,j,k),this%Emax)
+                  this%Emin=min(this%E(i,j,k),this%Emin)
                end if
             end do
          end do
       end do
-      call MPI_ALLREDUCE(my_SCmax,this%SCmax,1,MPI_REAL_WP,MPI_MAX,this%cfg%comm,ierr)
-      call MPI_ALLREDUCE(my_SCmin,this%SCmin,1,MPI_REAL_WP,MPI_MIN,this%cfg%comm,ierr)
+      call MPI_ALLREDUCE(MPI_IN_PLACE,this%Emax,1,MPI_REAL_WP,MPI_MAX,this%cfg%comm,ierr)
+      call MPI_ALLREDUCE(MPI_IN_PLACE,this%Emin,1,MPI_REAL_WP,MPI_MIN,this%cfg%comm,ierr)
    end subroutine get_max
    
    
-   !> Solve for implicit vdscalar residual
-   subroutine solve_implicit(this,dt,resSC,RHO,RHOold,rhoU,rhoV,rhoW)
+   !> Solve for implicit energy residual
+   subroutine solve_implicit(this,dt,resE,RHO,RHOold,rhoU,rhoV,rhoW)
       implicit none
-      class(vdscalar), intent(inout) :: this
+      class(energy), intent(inout) :: this
       real(WP), intent(in) :: dt
-      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: resSC  !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: resE   !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in)    :: RHO    !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in)    :: RHOold !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in)    :: rhoU   !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in)    :: rhoV   !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in)    :: rhoW   !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
-      real(WP), dimension(:,:,:), allocatable :: sRHO,sRHOold
       integer :: i,j,k,std,sti
-      
-      ! Allocate and prepare sqrt(RHO) arrays
-      allocate(sRHO   (this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_)); sRHO   =sqrt(RHO)
-      allocate(sRHOold(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_)); sRHOold=sqrt(RHOold)
       
       ! If no implicit solver available, just divide by density and return
       if (.not.associated(this%implicit)) then
-         resSC=resSC/RHO
-         call this%cfg%sync(resSC)
+         resE=resE/RHO
+         call this%cfg%sync(resE)
          return
       end if
       
@@ -628,15 +619,15 @@ contains
                do std=0,1
                   ! Loop over plus interpolation stencil
                   do sti=-2,0
-                     this%implicit%opr(this%implicit%stmap(sti+std,0,0),i,j,k)=this%implicit%opr(this%implicit%stmap(sti+std,0,0),i,j,k)+0.5_WP*dt*this%div_x(std,i,j,k)*0.5_WP*(rhoU(i+std,j,k)+abs(rhoU(i+std,j,k)))*this%itp_xp(sti,i+std,j,k)!*sRHO(i+sti+std,j,k)/(sRHO(i+sti+std,j,k)+sRHOold(i+sti+std,j,k)*(1.0_WP-this%theta)/this%theta)
-                     this%implicit%opr(this%implicit%stmap(0,sti+std,0),i,j,k)=this%implicit%opr(this%implicit%stmap(0,sti+std,0),i,j,k)+0.5_WP*dt*this%div_y(std,i,j,k)*0.5_WP*(rhoV(i,j+std,k)+abs(rhoV(i,j+std,k)))*this%itp_yp(sti,i,j+std,k)!*sRHO(i,j+sti+std,k)/(sRHO(i,j+sti+std,k)+sRHOold(i,j+sti+std,k)*(1.0_WP-this%theta)/this%theta)
-                     this%implicit%opr(this%implicit%stmap(0,0,sti+std),i,j,k)=this%implicit%opr(this%implicit%stmap(0,0,sti+std),i,j,k)+0.5_WP*dt*this%div_z(std,i,j,k)*0.5_WP*(rhoW(i,j,k+std)+abs(rhoW(i,j,k+std)))*this%itp_zp(sti,i,j,k+std)!*sRHO(i,j,k+sti+std)/(sRHO(i,j,k+sti+std)+sRHOold(i,j,k+sti+std)*(1.0_WP-this%theta)/this%theta)
+                     this%implicit%opr(this%implicit%stmap(sti+std,0,0),i,j,k)=this%implicit%opr(this%implicit%stmap(sti+std,0,0),i,j,k)+0.5_WP*dt*this%div_x(std,i,j,k)*0.5_WP*(rhoU(i+std,j,k)+abs(rhoU(i+std,j,k)))*this%itp_xp(sti,i+std,j,k)
+                     this%implicit%opr(this%implicit%stmap(0,sti+std,0),i,j,k)=this%implicit%opr(this%implicit%stmap(0,sti+std,0),i,j,k)+0.5_WP*dt*this%div_y(std,i,j,k)*0.5_WP*(rhoV(i,j+std,k)+abs(rhoV(i,j+std,k)))*this%itp_yp(sti,i,j+std,k)
+                     this%implicit%opr(this%implicit%stmap(0,0,sti+std),i,j,k)=this%implicit%opr(this%implicit%stmap(0,0,sti+std),i,j,k)+0.5_WP*dt*this%div_z(std,i,j,k)*0.5_WP*(rhoW(i,j,k+std)+abs(rhoW(i,j,k+std)))*this%itp_zp(sti,i,j,k+std)
                   end do
                   ! Loop over minus interpolation stencil
                   do sti=-1,+1
-                     this%implicit%opr(this%implicit%stmap(sti+std,0,0),i,j,k)=this%implicit%opr(this%implicit%stmap(sti+std,0,0),i,j,k)+0.5_WP*dt*this%div_x(std,i,j,k)*0.5_WP*(rhoU(i+std,j,k)-abs(rhoU(i+std,j,k)))*this%itp_xm(sti,i+std,j,k)!*sRHO(i+sti+std,j,k)/(sRHO(i+sti+std,j,k)+sRHOold(i+sti+std,j,k)*(1.0_WP-this%theta)/this%theta)
-                     this%implicit%opr(this%implicit%stmap(0,sti+std,0),i,j,k)=this%implicit%opr(this%implicit%stmap(0,sti+std,0),i,j,k)+0.5_WP*dt*this%div_y(std,i,j,k)*0.5_WP*(rhoV(i,j+std,k)-abs(rhoV(i,j+std,k)))*this%itp_ym(sti,i,j+std,k)!*sRHO(i,j+sti+std,k)/(sRHO(i,j+sti+std,k)+sRHOold(i,j+sti+std,k)*(1.0_WP-this%theta)/this%theta)
-                     this%implicit%opr(this%implicit%stmap(0,0,sti+std),i,j,k)=this%implicit%opr(this%implicit%stmap(0,0,sti+std),i,j,k)+0.5_WP*dt*this%div_z(std,i,j,k)*0.5_WP*(rhoW(i,j,k+std)-abs(rhoW(i,j,k+std)))*this%itp_zm(sti,i,j,k+std)!*sRHO(i,j,k+sti+std)/(sRHO(i,j,k+sti+std)+sRHOold(i,j,k+sti+std)*(1.0_WP-this%theta)/this%theta)
+                     this%implicit%opr(this%implicit%stmap(sti+std,0,0),i,j,k)=this%implicit%opr(this%implicit%stmap(sti+std,0,0),i,j,k)+0.5_WP*dt*this%div_x(std,i,j,k)*0.5_WP*(rhoU(i+std,j,k)-abs(rhoU(i+std,j,k)))*this%itp_xm(sti,i+std,j,k)
+                     this%implicit%opr(this%implicit%stmap(0,sti+std,0),i,j,k)=this%implicit%opr(this%implicit%stmap(0,sti+std,0),i,j,k)+0.5_WP*dt*this%div_y(std,i,j,k)*0.5_WP*(rhoV(i,j+std,k)-abs(rhoV(i,j+std,k)))*this%itp_ym(sti,i,j+std,k)
+                     this%implicit%opr(this%implicit%stmap(0,0,sti+std),i,j,k)=this%implicit%opr(this%implicit%stmap(0,0,sti+std),i,j,k)+0.5_WP*dt*this%div_z(std,i,j,k)*0.5_WP*(rhoW(i,j,k+std)-abs(rhoW(i,j,k+std)))*this%itp_zm(sti,i,j,k+std)
                   end do
                end do
             end do
@@ -650,40 +641,37 @@ contains
                &                                                                this%div_y(+1,i,j,k)*sum(this%itp_y(:,i,j+1,k)*this%diff(i,j  :j+1,k))*this%grd_y(-1,i,j+1,k)+&
                &                                                                this%div_y( 0,i,j,k)*sum(this%itp_y(:,i,j  ,k)*this%diff(i,j-1:j  ,k))*this%grd_y( 0,i,j  ,k)+&
                &                                                                this%div_z(+1,i,j,k)*sum(this%itp_z(:,i,j,k+1)*this%diff(i,j,k  :k+1))*this%grd_z(-1,i,j,k+1)+&
-               &                                                                this%div_z( 0,i,j,k)*sum(this%itp_z(:,i,j,k  )*this%diff(i,j,k-1:k  ))*this%grd_z( 0,i,j,k  ))
-               this%implicit%opr(2,i,j,k)=this%implicit%opr(2,i,j,k)-0.5_WP*dt*(this%div_x(+1,i,j,k)*sum(this%itp_x(:,i+1,j,k)*this%diff(i  :i+1,j,k))*this%grd_x( 0,i+1,j,k))
-               this%implicit%opr(3,i,j,k)=this%implicit%opr(3,i,j,k)-0.5_WP*dt*(this%div_x( 0,i,j,k)*sum(this%itp_x(:,i  ,j,k)*this%diff(i-1:i  ,j,k))*this%grd_x(-1,i  ,j,k))
-               this%implicit%opr(4,i,j,k)=this%implicit%opr(4,i,j,k)-0.5_WP*dt*(this%div_y(+1,i,j,k)*sum(this%itp_y(:,i,j+1,k)*this%diff(i,j  :j+1,k))*this%grd_y( 0,i,j+1,k))
-               this%implicit%opr(5,i,j,k)=this%implicit%opr(5,i,j,k)-0.5_WP*dt*(this%div_y( 0,i,j,k)*sum(this%itp_y(:,i,j  ,k)*this%diff(i,j-1:j  ,k))*this%grd_y(-1,i,j  ,k))
-               this%implicit%opr(6,i,j,k)=this%implicit%opr(6,i,j,k)-0.5_WP*dt*(this%div_z(+1,i,j,k)*sum(this%itp_z(:,i,j,k+1)*this%diff(i,j,k  :k+1))*this%grd_z( 0,i,j,k+1))
-               this%implicit%opr(7,i,j,k)=this%implicit%opr(7,i,j,k)-0.5_WP*dt*(this%div_z( 0,i,j,k)*sum(this%itp_z(:,i,j,k  )*this%diff(i,j,k-1:k  ))*this%grd_z(-1,i,j,k  ))
+               &                                                                this%div_z( 0,i,j,k)*sum(this%itp_z(:,i,j,k  )*this%diff(i,j,k-1:k  ))*this%grd_z( 0,i,j,k  ))/this%Cv
+               this%implicit%opr(2,i,j,k)=this%implicit%opr(2,i,j,k)-0.5_WP*dt*(this%div_x(+1,i,j,k)*sum(this%itp_x(:,i+1,j,k)*this%diff(i  :i+1,j,k))*this%grd_x( 0,i+1,j,k))/this%Cv
+               this%implicit%opr(3,i,j,k)=this%implicit%opr(3,i,j,k)-0.5_WP*dt*(this%div_x( 0,i,j,k)*sum(this%itp_x(:,i  ,j,k)*this%diff(i-1:i  ,j,k))*this%grd_x(-1,i  ,j,k))/this%Cv
+               this%implicit%opr(4,i,j,k)=this%implicit%opr(4,i,j,k)-0.5_WP*dt*(this%div_y(+1,i,j,k)*sum(this%itp_y(:,i,j+1,k)*this%diff(i,j  :j+1,k))*this%grd_y( 0,i,j+1,k))/this%Cv
+               this%implicit%opr(5,i,j,k)=this%implicit%opr(5,i,j,k)-0.5_WP*dt*(this%div_y( 0,i,j,k)*sum(this%itp_y(:,i,j  ,k)*this%diff(i,j-1:j  ,k))*this%grd_y(-1,i,j  ,k))/this%Cv
+               this%implicit%opr(6,i,j,k)=this%implicit%opr(6,i,j,k)-0.5_WP*dt*(this%div_z(+1,i,j,k)*sum(this%itp_z(:,i,j,k+1)*this%diff(i,j,k  :k+1))*this%grd_z( 0,i,j,k+1))/this%Cv
+               this%implicit%opr(7,i,j,k)=this%implicit%opr(7,i,j,k)-0.5_WP*dt*(this%div_z( 0,i,j,k)*sum(this%itp_z(:,i,j,k  )*this%diff(i,j,k-1:k  ))*this%grd_z(-1,i,j,k  ))/this%Cv
             end do
          end do
       end do
       call this%implicit%setup()
-      this%implicit%rhs=resSC
+      this%implicit%rhs=resE
       this%implicit%sol=0.0_WP
       call this%implicit%solve()
-      resSC=this%implicit%sol
-      
-      ! Deallocate temp arrays
-      deallocate(sRHO,sRHOold)
+      resE=this%implicit%sol
       
    end subroutine solve_implicit
    
    
-   !> Print out info for vdscalar solver
-   subroutine scalar_print(this)
+   !> Print out info for energy solver
+   subroutine energy_print(this)
       use, intrinsic :: iso_fortran_env, only: output_unit
       implicit none
-      class(vdscalar), intent(in) :: this
+      class(energy), intent(in) :: this
       
       ! Output
       if (this%cfg%amRoot) then
-         write(output_unit,'("Variable density scalar solver [",a,"] for config [",a,"]")') trim(this%name),trim(this%cfg%name)
+         write(output_unit,'("Energy solver [",a,"] for config [",a,"]")') trim(this%name),trim(this%cfg%name)
       end if
       
-   end subroutine scalar_print
+   end subroutine energy_print
    
    
-end module vdscalar_class
+end module energy_class

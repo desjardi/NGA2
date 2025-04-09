@@ -99,6 +99,14 @@ contains
       ! Evaluate fcur
       this%fcur=gcur-this%x
       
+      ! Check norm(fcur) and return if zero
+      tmp=0.0_WP
+      do k=this%cfg%kmin_,this%cfg%kmax_; do j=this%cfg%jmin_,this%cfg%jmax_; do i=this%cfg%imin_,this%cfg%imax_
+         tmp=tmp+this%fcur(i,j,k)**2
+      end do; end do; end do
+      call MPI_ALLREDUCE(MPI_IN_PLACE,tmp,1,MPI_REAL_WP,MPI_SUM,this%cfg%comm,ierr); tmp=sqrt(tmp)
+      if (tmp.eq.0) return
+      
       ! Increment solution storage if k>k_start
       if (this%k>this%k_start) then
          ! Allocate and compute df

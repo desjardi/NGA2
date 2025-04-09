@@ -9,15 +9,16 @@ nx : 256
 ny : 256
 nz : 1
 
-# EOS parameters: rho(Z)=rho0*rho1/((1-Z)*rho1+Z*rho0)
-rho0 : 1
-rho1 : 1
-rhost: 0.1  # 10 instead of 0.1 gives a really sharp density profile
-Zst  : 0.2
+# Fluid properties
+Gamma :           1.4
+Mach number :     0.2
+Reynolds number : 100
+Prandtl number :  0.7
 
-# Initial profiles
-Velocity thickness : 0.2
-Scalar thickness :   0.2
+# Layer densities
+Density top :       1
+Density bottom :    1
+Density thickness : 1
 
 # Disturbance amplitude
 Wave amplitude : 0.01
@@ -28,10 +29,6 @@ wshiftX : -1.37728E+01  4.31780E+00 -2.45245E+01  8.71902E+00 -5.11072E-01  1.17
 NwaveZ  :  6
 wnumbZ  :  0.00000E+00  0.00000E+00  0.00000E+00  0.00000E+00  0.00000E+00  0.00000E+00
 wshiftZ : -8.34759E-02 -2.91318E-02  7.96336E-02  2.36764E-02 -6.54504E-02 -4.67286E-02
-
-# Fluid properties
-Dynamic viscosity :   1e-2
-Dynamic diffusivity : 1e-2
 
 # Time integration
 Max timestep size : 1e-1

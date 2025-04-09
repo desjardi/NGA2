@@ -1,8 +1,7 @@
-!> Low-Mach flow solver class:
+!> Compressible flow solver class:
 !> Provides support for various BC, RHS calculation,
-!> implicit solver, and pressure solution
-!> Assumes variable viscosity and density.
-module lowmach_class
+!> implicit solver, and pressure solution.
+module compress_class
    use precision,      only: WP
    use string,         only: str_medium
    use config_class,   only: config
@@ -12,7 +11,7 @@ module lowmach_class
    private
    
    ! Expose type/constructor/methods
-   public :: lowmach,bcond
+   public :: compress,bcond
    
    ! List of known available bcond for this solver
    integer, parameter, public :: wall=1              !< Dirichlet at zero condition
@@ -21,8 +20,8 @@ module lowmach_class
    integer, parameter, public :: convective=4        !< Convective outflow condition
    integer, parameter, public :: clipped_neumann=5   !< Clipped Neumann condition (outflow only)
    integer, parameter, public :: slip=6              !< Free-slip condition
-
-   !> Boundary conditions for the low-Mach solver
+   
+   !> Boundary conditions for the compressible solver
    type :: bcond
       type(bcond), pointer :: next                        !< Linked list of bconds
       character(len=str_medium) :: name='UNNAMED_BCOND'   !< Bcond name (default=UNNAMED_BCOND)
@@ -34,14 +33,14 @@ module lowmach_class
       logical :: canCorrect                               !< Can this bcond be corrected for global conservation?
    end type bcond
    
-   !> Low Mach solver object definition
-   type :: lowmach
+   !> Compressible solver object definition
+   type :: compress
       
       ! This is our config
       class(config), pointer :: cfg                       !< This is the config the solver is build for
       
       ! This is the name of the solver
-      character(len=str_medium) :: name='UNNAMED_LOWMACH' !< Solver name (default=UNNAMED_LOWMACH)
+      character(len=str_medium) :: name='UNNAMED_COMPRESS'!< Solver name (default=UNNAMED_COMPRESS)
       
       ! Theta parameter for stabilization
       real(WP) :: theta=0.5_WP                            !< Choosing theta=0.5 leads to Crank-Nicolson, theta>0.5 increases stability
@@ -122,11 +121,12 @@ module lowmach_class
       real(WP) :: CFLv_x,CFLv_y,CFLv_z                                    !< Viscous CFL numbers
       
       ! Monitoring quantities
-      real(WP) :: Umax,Vmax,Wmax,Pmax,divmax                              !< Maximum velocity, pressure, divergence
+      real(WP) :: Umax,Vmax,Wmax,divmax                                   !< Maximum velocity and continuity residual
       real(WP) :: RHOmin,RHOmax,RHOint                                    !< Density stats
+      real(WP) :: Pmin,Pmax                                               !< Pressure stats
       
    contains
-      procedure :: print=>lowmach_print                   !< Output solver to the screen
+      procedure :: print=>compress_print                  !< Output solver to the screen
       procedure :: initialize                             !< Initialize the flow solver
       procedure :: setup                                  !< Finish configuring the flow solver
       procedure :: add_bcond                              !< Add a boundary condition
@@ -138,6 +138,7 @@ module lowmach_class
       procedure :: update_laplacian                       !< Update the pressure Laplacian div( f(rho) grad(.))
       procedure :: get_div                                !< Calculate velocity divergence
       procedure :: get_pgrad                              !< Calculate pressure gradient
+      procedure :: get_pdil                               !< Calculate the pressure dilatation term
       procedure :: get_cfl                                !< Calculate maximum CFL
       procedure :: get_max                                !< Calculate maximum field values
       procedure :: interp_vel                             !< Calculate interpolated velocity
@@ -156,17 +157,16 @@ module lowmach_class
       procedure :: rho_divide                             !< Calculate Umid from rhoU, sRHOX, and sRHOXold
       procedure :: get_U                                  !< Calculate U from Umid and Uold
       procedure :: addsrc_gravity                         !< Gravitational body force
-      
-   end type lowmach
+   end type compress
    
    
 contains
    
    
-   !> Initialization for low-Mach flow solver
+   !> Initialization for compressible flow solver
    subroutine initialize(this,cfg,name)
       implicit none
-      class(lowmach) :: this
+      class(compress) :: this
       class(config), target, intent(in) :: cfg
       character(len=*), optional :: name
       integer :: i,j,k
@@ -294,7 +294,7 @@ contains
    !> Metric initialization with no awareness of walls nor bcond
    subroutine init_metrics(this)
       implicit none
-      class(lowmach), intent(inout) :: this
+      class(compress), intent(inout) :: this
       integer :: i,j,k,st1,st2
       real(WP), dimension(-1:0) :: itpx,itpy,itpz
       
@@ -510,7 +510,7 @@ contains
    !> Metric adjustment accounting for bconds and walls
    subroutine adjust_metrics(this)
       implicit none
-      class(lowmach), intent(inout) :: this
+      class(compress), intent(inout) :: this
       integer :: i,j,k,st1,st2
       real(WP) :: delta,mysum
       
@@ -793,7 +793,7 @@ contains
    !> Finish setting up the flow solver now that bconds have been defined
    subroutine setup(this,pressure_solver,implicit_solver)
       implicit none
-      class(lowmach), intent(inout) :: this
+      class(compress), intent(inout) :: this
       class(linsol), target, intent(in) :: pressure_solver                      !< A pressure solver is required
       class(linsol), target, intent(in), optional :: implicit_solver            !< An implicit solver can be provided
       integer :: i,j,k
@@ -878,7 +878,7 @@ contains
       use messager,       only: die
       use iterator_class, only: locator_ftype
       implicit none
-      class(lowmach), intent(inout) :: this
+      class(compress), intent(inout) :: this
       character(len=*), intent(in) :: name
       integer, intent(in) :: type
       procedure(locator_ftype) :: locator
@@ -896,14 +896,14 @@ contains
       case ('x'); new_bc%face='x'
       case ('y'); new_bc%face='y'
       case ('z'); new_bc%face='z'
-      case default; call die('[lowmach add_bcond] Unknown bcond face - expecting x, y, or z')
+      case default; call die('[compress add_bcond] Unknown bcond face - expecting x, y, or z')
       end select
       new_bc%itr=iterator(pg=this%cfg,name=new_bc%name,locator=locator,face=new_bc%face)
       select case (dir) ! Outward-oriented
       case (+1); new_bc%dir=+1
       case (-1); new_bc%dir=-1
       case ( 0); new_bc%dir= 0
-      case default; call die('[lowmach add_bcond] Unknown bcond dir - expecting -1, +1, or 0')
+      case default; call die('[compress add_bcond] Unknown bcond dir - expecting -1, +1, or 0')
       end select
       new_bc%rdir=real(new_bc%dir,WP)
       new_bc%canCorrect=canCorrect
@@ -941,9 +941,9 @@ contains
       case (convective)
       case (slip)
       case default
-         call die('[lowmach apply_bcond] Unknown bcond type')
+         call die('[compress apply_bcond] Unknown bcond type')
       end select
-   
+      
    end subroutine add_bcond
    
    
@@ -951,7 +951,7 @@ contains
    subroutine get_bcond(this,name,my_bc)
       use messager, only: die
       implicit none
-      class(lowmach), intent(inout) :: this
+      class(compress), intent(inout) :: this
       character(len=*), intent(in) :: name
       type(bcond), pointer, intent(out) :: my_bc
       my_bc=>this%first_bc
@@ -959,7 +959,7 @@ contains
          if (trim(my_bc%name).eq.trim(name)) exit search
          my_bc=>my_bc%next
       end do search
-      if (.not.associated(my_bc)) call die('[lowmach get_bcond] Boundary condition was not found')
+      if (.not.associated(my_bc)) call die('[compress get_bcond] Boundary condition was not found')
    end subroutine get_bcond
    
    
@@ -967,25 +967,10 @@ contains
    subroutine apply_bcond(this,t,dt)
       use messager, only: die
       implicit none
-      class(lowmach), intent(inout) :: this
+      class(compress), intent(inout) :: this
       real(WP), intent(in) :: t,dt
       integer :: i,j,k,n,stag
       type(bcond), pointer :: my_bc
-      
-      ! ! First enfore zero velocity at walls
-      ! do k=this%cfg%kmin_,this%cfg%kmax_
-      !    do j=this%cfg%jmin_,this%cfg%jmax_
-      !       do i=this%cfg%imin_,this%cfg%imax_
-      !          if (minval(this%cfg%VF(i-1:i,j,k)).lt.10.0_WP*epsilon(1.0_WP)) this%U(i,j,k)=0.0_WP
-      !          if (minval(this%cfg%VF(i,j-1:j,k)).lt.10.0_WP*epsilon(1.0_WP)) this%V(i,j,k)=0.0_WP
-      !          if (minval(this%cfg%VF(i,j,k-1:k)).lt.10.0_WP*epsilon(1.0_WP)) this%W(i,j,k)=0.0_WP
-      !       end do
-      !    end do
-      ! end do
-      ! ! Sync fields
-      ! call this%cfg%sync(this%U)
-      ! call this%cfg%sync(this%V)
-      ! call this%cfg%sync(this%W)
       
       ! Traverse bcond list
       my_bc=>this%first_bc
@@ -1076,7 +1061,7 @@ contains
             case (convective)   ! Not implemented yet!
                
             case default
-               call die('[lowmach apply_bcond] Unknown bcond type')
+               call die('[compress apply_bcond] Unknown bcond type')
             end select
             
          end if
@@ -1097,7 +1082,7 @@ contains
    !> Calculate the explicit time derivative of momentum given Umid, rhoU, U, and P
    subroutine get_dmomdt(this,drhoUdt,drhoVdt,drhoWdt)
       implicit none
-      class(lowmach), intent(inout) :: this
+      class(compress), intent(inout) :: this
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(out) :: drhoUdt !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(out) :: drhoVdt !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(out) :: drhoWdt !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
@@ -1225,10 +1210,12 @@ contains
    end subroutine get_dmomdt
    
    
-   !> Update pressure Poisson operator
-   subroutine update_laplacian(this)
+   !> Update pressure Laplacian operator
+   subroutine update_laplacian(this,dt,c2)
       implicit none
-      class(lowmach), intent(inout) :: this
+      class(compress), intent(inout) :: this
+      real(WP), intent(in) :: dt
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in) :: c2    !< Speed of sound squared
       integer :: i,j,k,s1,s2
       ! Setup the scaled Laplacian operator from  metrics: lap(*)=-vol.div( f(rho) grad(*))
       do k=this%cfg%kmin_,this%cfg%kmax_
@@ -1244,6 +1231,8 @@ contains
                      this%psolv%opr(this%psolv%stmap(0,0,s1+s2),i,j,k)=this%psolv%opr(this%psolv%stmap(0,0,s1+s2),i,j,k)+this%divp_z(s1,i,j,k)*this%divw_z(s2,i,j,k+s1)*((1.0_WP-this%theta)*this%sRHOZold(i,j,k+s1)**2+this%theta*this%sRHOZ(i,j,k+s1)**2)/((this%sRHOZ(i,j,k+s1)+this%sRHOZold(i,j,k+s1)*(1.0_WP-this%theta)/this%theta)*this%sRHOZ(i,j,k+s1))
                   end do
                end do
+               ! Add temporal term
+               this%psolv%opr(this%psolv%stmap(0,0,0),i,j,k)=this%psolv%opr(this%psolv%stmap(0,0,0),i,j,k)-1.0_WP/(dt**2*c2(i,j,k))
                ! Scale Laplacian by cell volume
                this%psolv%opr(:,i,j,k)=-this%psolv%opr(:,i,j,k)*this%cfg%vol(i,j,k)
             end do
@@ -1258,7 +1247,7 @@ contains
    !> Uses RHO, RHOold, passed dt, and rhoU/V/W
    subroutine get_div(this,dt,src)
       implicit none
-      class(lowmach), intent(inout) :: this
+      class(compress), intent(inout) :: this
       real(WP), intent(in) :: dt
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), optional :: src    !< Mass source term
       integer :: i,j,k
@@ -1291,7 +1280,7 @@ contains
    !> Calculate the pressure gradient based on P
    subroutine get_pgrad(this,P,Pgradx,Pgrady,Pgradz)
       implicit none
-      class(lowmach), intent(inout) :: this
+      class(compress), intent(inout) :: this
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in)  :: P      !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(out) :: Pgradx !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(out) :: Pgrady !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
@@ -1313,11 +1302,32 @@ contains
       call this%cfg%sync(Pgradz)
    end subroutine get_pgrad
    
-
+   
+   !> Calculate the pressure dilatation term
+   subroutine get_pdil(this,pdil)
+      implicit none
+      class(compress), intent(inout) :: this
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: pdil   !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      integer :: i,j,k
+      pdil=0.0_WP
+      do k=this%cfg%kmin_,this%cfg%kmax_
+         do j=this%cfg%jmin_,this%cfg%jmax_
+            do i=this%cfg%imin_,this%cfg%imax_
+               pdil(i,j,k)=-this%P(i,j,k)*(sum(this%divp_x(:,i,j,k)*this%Umid(i:i+1,j,k))+&
+               &                           sum(this%divp_y(:,i,j,k)*this%Vmid(i,j:j+1,k))+&
+               &                           sum(this%divp_z(:,i,j,k)*this%Wmid(i,j,k:k+1)))
+            end do
+         end do
+      end do
+      ! Sync it
+      call this%cfg%sync(pdil)
+   end subroutine get_pdil
+   
+   
    !> Calculate the interpolated velocity, including overlap and ghosts
    subroutine interp_vel(this,Ui,Vi,Wi)
       implicit none
-      class(lowmach), intent(inout) :: this
+      class(compress), intent(inout) :: this
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(out) :: Ui !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(out) :: Vi !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(out) :: Wi !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
@@ -1358,7 +1368,7 @@ contains
    !> Calculate the interpolated mid velocity, including overlap and ghosts
    subroutine interp_velmid(this,Ui,Vi,Wi)
       implicit none
-      class(lowmach), intent(inout) :: this
+      class(compress), intent(inout) :: this
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(out) :: Ui !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(out) :: Vi !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(out) :: Wi !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
@@ -1406,14 +1416,14 @@ contains
    subroutine get_strainrate(this,SR)
       use messager, only: die
       implicit none
-      class(lowmach), intent(inout) :: this
+      class(compress), intent(inout) :: this
       real(WP), dimension(1:,this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(out) :: SR  !< Needs to be (1:6,imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       real(WP), dimension(:,:,:), allocatable :: dudy,dudz,dvdx,dvdz,dwdx,dwdy
       real(WP) :: div
       integer :: i,j,k
       
       ! Check SR's first dimension
-      if (size(SR,dim=1).ne.6) call die('[lowmach get_strainrate] SR should be of size (1:6,imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)')
+      if (size(SR,dim=1).ne.6) call die('[compress get_strainrate] SR should be of size (1:6,imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)')
       
       ! Compute dudx, dvdy, and dwdz first
 	   do k=this%cfg%kmin_,this%cfg%kmax_
@@ -1499,7 +1509,7 @@ contains
    subroutine get_ugradu(this,ugradu)
       use messager, only: die
       implicit none
-      class(lowmach), intent(inout) :: this
+      class(compress), intent(inout) :: this
       real(WP), dimension(1:,this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(out) :: ugradu  !< Needs to be (1:3,imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       integer :: i,j,k
       real(WP), dimension(:,:,:), allocatable :: dudy,dudz,dvdx,dvdz,dwdx,dwdy
@@ -1508,7 +1518,7 @@ contains
       real(WP) :: Wi,gradWx,gradWy,gradWz
       
       ! Check ugradu's first dimension
-	   if (size(ugradu,dim=1).ne.3) call die('[lowmach get_ugradu] gradu should be of size (1:3,imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)')
+	   if (size(ugradu,dim=1).ne.3) call die('[compress get_ugradu] gradu should be of size (1:3,imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)')
       
       ! Allocate off-diagonal components of the velocity gradient
 	   allocate(dudy(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
@@ -1595,13 +1605,13 @@ contains
    subroutine get_gradU(this,gradU)
       use messager, only: die
       implicit none
-      class(lowmach), intent(inout) :: this
+      class(compress), intent(inout) :: this
       real(WP), dimension(1:,1:,this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(out) :: gradU  !< Needs to be (1:3,1:3,imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       integer :: i,j,k
       real(WP), dimension(:,:,:), allocatable :: dudy,dudz,dvdx,dvdz,dwdx,dwdy
       
       ! Check gradU's first two dimensions
-	   if (size(gradU,dim=1).ne.3.or.size(gradU,dim=2).ne.3) call die('[lowmach get_gradU] gradU should be of size (1:3,1:3,imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)')
+	   if (size(gradU,dim=1).ne.3.or.size(gradU,dim=2).ne.3) call die('[compress get_gradU] gradU should be of size (1:3,1:3,imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)')
       
       ! Compute dudx, dvdy, and dwdz first
 	   do k=this%cfg%kmin_,this%cfg%kmax_
@@ -1687,13 +1697,13 @@ contains
    subroutine get_gradUmid(this,gradU)
       use messager, only: die
       implicit none
-      class(lowmach), intent(inout) :: this
+      class(compress), intent(inout) :: this
       real(WP), dimension(1:,1:,this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(out) :: gradU  !< Needs to be (1:3,1:3,imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       integer :: i,j,k
       real(WP), dimension(:,:,:), allocatable :: dudy,dudz,dvdx,dvdz,dwdx,dwdy
       
       ! Check gradU's first two dimensions
-	   if (size(gradU,dim=1).ne.3.or.size(gradU,dim=2).ne.3) call die('[lowmach get_gradUmid] gradU should be of size (1:3,1:3,imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)')
+	   if (size(gradU,dim=1).ne.3.or.size(gradU,dim=2).ne.3) call die('[compress get_gradUmid] gradU should be of size (1:3,1:3,imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)')
       
       ! Compute dudx, dvdy, and dwdz first
 	   do k=this%cfg%kmin_,this%cfg%kmax_
@@ -1778,13 +1788,13 @@ contains
    subroutine get_vorticity(this,vort)
       use messager, only: die
       implicit none
-      class(lowmach), intent(inout) :: this
+      class(compress), intent(inout) :: this
       real(WP), dimension(1:,this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(out) :: vort  !< Needs to be (1:3,imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       integer :: i,j,k
       real(WP), dimension(:,:,:), allocatable :: dudy,dudz,dvdx,dvdz,dwdx,dwdy
       
       ! Check vort's first two dimensions
-      if (size(vort,dim=1).ne.3) call die('[lowmach get_vorticity] vort should be of size (1:3,imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)')
+      if (size(vort,dim=1).ne.3) call die('[compress get_vorticity] vort should be of size (1:3,imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)')
       
       ! Allocate velocity gradient components
       allocate(dudy(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
@@ -1856,7 +1866,7 @@ contains
       use mpi_f08,  only: MPI_ALLREDUCE,MPI_MAX
       use parallel, only: MPI_REAL_WP
       implicit none
-      class(lowmach), intent(inout) :: this
+      class(compress), intent(inout) :: this
       real(WP), intent(in)  :: dt
       real(WP), intent(out) :: cflc
       real(WP), optional :: cfl
@@ -1900,42 +1910,45 @@ contains
    
    !> Calculate the max of our fields
    subroutine get_max(this)
-      use mpi_f08,  only: MPI_ALLREDUCE,MPI_MIN,MPI_MAX
+      use mpi_f08,  only: MPI_ALLREDUCE,MPI_MIN,MPI_MAX,MPI_IN_PLACE
       use parallel, only: MPI_REAL_WP
       implicit none
-      class(lowmach), intent(inout) :: this
+      class(compress), intent(inout) :: this
       integer :: i,j,k,ierr
-      real(WP) :: my_RHOmin,my_RHOmax,my_Umax,my_Vmax,my_Wmax,my_Pmax,my_divmax
       
       ! Compute total mass
       call this%cfg%integrate(this%RHO,integral=this%RHOint)
       
       ! Calculate extrema
-      my_RHOmin=+huge(1.0_WP)
-      my_RHOmax=-huge(1.0_WP)
-      my_Umax=0.0_WP; my_Vmax=0.0_WP; my_Wmax=0.0_WP; my_Pmax=0.0_WP; my_divmax=0.0_WP
+      this%RHOmin=+huge(1.0_WP)
+      this%RHOmax=-huge(1.0_WP)
+      this%Pmin=+huge(1.0_WP)
+      this%Pmax=-huge(1.0_WP)
+      this%Umax=0.0_WP; this%Vmax=0.0_WP; this%Wmax=0.0_WP; this%divmax=0.0_WP
       do k=this%cfg%kmin_,this%cfg%kmax_
          do j=this%cfg%jmin_,this%cfg%jmax_
             do i=this%cfg%imin_,this%cfg%imax_
-               my_RHOmin=min(my_RHOmin,this%RHO(i,j,k))
-               my_RHOmax=max(my_RHOmax,this%RHO(i,j,k))
-               my_Umax=max(my_Umax,abs(this%U(i,j,k)),abs(this%Umid(i,j,k)))
-               my_Vmax=max(my_Vmax,abs(this%V(i,j,k)),abs(this%Vmid(i,j,k)))
-               my_Wmax=max(my_Wmax,abs(this%W(i,j,k)),abs(this%Wmid(i,j,k)))
-               if (this%cfg%VF(i,j,k).gt.0.0_WP) my_Pmax  =max(my_Pmax  ,abs(this%P(i,j,k)  ))
-               if (this%cfg%VF(i,j,k).gt.0.0_WP) my_divmax=max(my_divmax,abs(this%div(i,j,k)))
+               this%RHOmin=min(this%RHOmin,this%RHO(i,j,k))
+               this%RHOmax=max(this%RHOmax,this%RHO(i,j,k))
+               if (this%cfg%VF(i,j,k).gt.0.0_WP) this%Pmin=min(this%Pmin,this%P(i,j,k))
+               if (this%cfg%VF(i,j,k).gt.0.0_WP) this%Pmax=max(this%Pmax,this%P(i,j,k))
+               this%Umax=max(this%Umax,abs(this%U(i,j,k)),abs(this%Umid(i,j,k)))
+               this%Vmax=max(this%Vmax,abs(this%V(i,j,k)),abs(this%Vmid(i,j,k)))
+               this%Wmax=max(this%Wmax,abs(this%W(i,j,k)),abs(this%Wmid(i,j,k)))
+               if (this%cfg%VF(i,j,k).gt.0.0_WP) this%divmax=max(this%divmax,abs(this%div(i,j,k)))
             end do
          end do
       end do
       
       ! Get the parallel max
-      call MPI_ALLREDUCE(my_RHOmin,this%RHOmin,1,MPI_REAL_WP,MPI_MIN,this%cfg%comm,ierr)
-      call MPI_ALLREDUCE(my_RHOmax,this%RHOmax,1,MPI_REAL_WP,MPI_MAX,this%cfg%comm,ierr)
-      call MPI_ALLREDUCE(my_Umax  ,this%Umax  ,1,MPI_REAL_WP,MPI_MAX,this%cfg%comm,ierr)
-      call MPI_ALLREDUCE(my_Vmax  ,this%Vmax  ,1,MPI_REAL_WP,MPI_MAX,this%cfg%comm,ierr)
-      call MPI_ALLREDUCE(my_Wmax  ,this%Wmax  ,1,MPI_REAL_WP,MPI_MAX,this%cfg%comm,ierr)
-      call MPI_ALLREDUCE(my_Pmax  ,this%Pmax  ,1,MPI_REAL_WP,MPI_MAX,this%cfg%comm,ierr)
-      call MPI_ALLREDUCE(my_divmax,this%divmax,1,MPI_REAL_WP,MPI_MAX,this%cfg%comm,ierr)
+      call MPI_ALLREDUCE(MPI_IN_PLACE,this%RHOmin,1,MPI_REAL_WP,MPI_MIN,this%cfg%comm,ierr)
+      call MPI_ALLREDUCE(MPI_IN_PLACE,this%RHOmax,1,MPI_REAL_WP,MPI_MAX,this%cfg%comm,ierr)
+      call MPI_ALLREDUCE(MPI_IN_PLACE,this%Umax  ,1,MPI_REAL_WP,MPI_MAX,this%cfg%comm,ierr)
+      call MPI_ALLREDUCE(MPI_IN_PLACE,this%Vmax  ,1,MPI_REAL_WP,MPI_MAX,this%cfg%comm,ierr)
+      call MPI_ALLREDUCE(MPI_IN_PLACE,this%Wmax  ,1,MPI_REAL_WP,MPI_MAX,this%cfg%comm,ierr)
+      call MPI_ALLREDUCE(MPI_IN_PLACE,this%Pmin  ,1,MPI_REAL_WP,MPI_MIN,this%cfg%comm,ierr)
+      call MPI_ALLREDUCE(MPI_IN_PLACE,this%Pmax  ,1,MPI_REAL_WP,MPI_MAX,this%cfg%comm,ierr)
+      call MPI_ALLREDUCE(MPI_IN_PLACE,this%divmax,1,MPI_REAL_WP,MPI_MAX,this%cfg%comm,ierr)
       
    end subroutine get_max
    
@@ -1945,7 +1958,7 @@ contains
       use mpi_f08,  only: MPI_SUM,MPI_ALLREDUCE
       use parallel, only: MPI_REAL_WP
       implicit none
-      class(lowmach), intent(inout) :: this
+      class(compress), intent(inout) :: this
       integer :: i,j,k,n,ibc,ierr
       type(bcond), pointer :: my_bc
       real(WP), dimension(:), allocatable :: my_mfr,my_area
@@ -2036,7 +2049,7 @@ contains
    subroutine correct_mfr(this,dt,src)
       use mpi_f08, only: MPI_SUM
       implicit none
-      class(lowmach), intent(inout) :: this
+      class(compress), intent(inout) :: this
       real(WP), intent(in) :: dt
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), optional :: src !< Mass source term
       real(WP) :: mfr_error,mom_correction,dM
@@ -2101,7 +2114,7 @@ contains
       use mpi_f08,  only: MPI_SUM,MPI_ALLREDUCE
       use parallel, only: MPI_REAL_WP
       implicit none
-      class(lowmach), intent(in) :: this
+      class(compress), intent(in) :: this
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: pressure !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       real(WP) :: pressure_tot
       integer :: i,j,k
@@ -2122,7 +2135,7 @@ contains
    !> Solve for implicit velocity residual - uses sRHOX/Y/Z
    subroutine solve_implicit(this,dt,resU,resV,resW)
       implicit none
-      class(lowmach), intent(inout) :: this
+      class(compress), intent(inout) :: this
       real(WP), intent(in) :: dt
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: resU !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: resV !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
@@ -2297,7 +2310,7 @@ contains
    !> Compute sRHOX/Y/Z from this%RHO field
    subroutine update_sRHO(this)
       implicit none
-      class(lowmach), intent(inout) :: this
+      class(compress), intent(inout) :: this
       integer :: i,j,k
       ! Calculate square root of face densities
       do k=this%cfg%kmino_  ,this%cfg%kmaxo_
@@ -2335,7 +2348,7 @@ contains
    !> Get Umid from U and Uold
    subroutine get_Umid(this)
       implicit none
-      class(lowmach), intent(inout) :: this
+      class(compress), intent(inout) :: this
       this%Umid=(this%sRHOX*this%U*this%theta+this%sRHOXold*this%Uold*(1.0_WP-this%theta))/(this%sRHOX*this%theta+this%sRHOXold*(1.0_WP-this%theta))
       this%Vmid=(this%sRHOY*this%V*this%theta+this%sRHOYold*this%Vold*(1.0_WP-this%theta))/(this%sRHOY*this%theta+this%sRHOYold*(1.0_WP-this%theta))
       this%Wmid=(this%sRHOZ*this%W*this%theta+this%sRHOZold*this%Wold*(1.0_WP-this%theta))/(this%sRHOZ*this%theta+this%sRHOZold*(1.0_WP-this%theta))
@@ -2345,7 +2358,7 @@ contains
    !> Get rhoU/V/W from sRHOX/Y/Z, sRHOX/Y/Zold, and U/V/Wmid
    subroutine rho_multiply(this)
       implicit none
-      class(lowmach), intent(inout) :: this
+      class(compress), intent(inout) :: this
       this%rhoU=(this%theta*this%sRHOX**2+(1.0_WP-this%theta)*this%sRHOXold**2)*this%Umid
       this%rhoV=(this%theta*this%sRHOY**2+(1.0_WP-this%theta)*this%sRHOYold**2)*this%Vmid
       this%rhoW=(this%theta*this%sRHOZ**2+(1.0_WP-this%theta)*this%sRHOZold**2)*this%Wmid
@@ -2355,7 +2368,7 @@ contains
    !> Get U/V/Wmid from sRHOX/Y/Z, sRHOX/Y/Zold, and rhoU/V/W
    subroutine rho_divide(this)
       implicit none
-      class(lowmach), intent(inout) :: this
+      class(compress), intent(inout) :: this
       this%Umid=this%rhoU/(this%theta*this%sRHOX**2+(1.0_WP-this%theta)*this%sRHOXold**2)
       this%Vmid=this%rhoV/(this%theta*this%sRHOY**2+(1.0_WP-this%theta)*this%sRHOYold**2)
       this%Wmid=this%rhoW/(this%theta*this%sRHOZ**2+(1.0_WP-this%theta)*this%sRHOZold**2)
@@ -2365,7 +2378,7 @@ contains
    !> Get U from Umid and Uold
    subroutine get_U(this)
       implicit none
-      class(lowmach), intent(inout) :: this
+      class(compress), intent(inout) :: this
       this%U=(this%Umid*(this%sRHOX*this%theta+this%sRHOXold*(1.0_WP-this%theta))-this%sRHOXold*this%Uold*(1.0_WP-this%theta))/(this%sRHOX*this%theta)
       this%V=(this%Vmid*(this%sRHOY*this%theta+this%sRHOYold*(1.0_WP-this%theta))-this%sRHOYold*this%Vold*(1.0_WP-this%theta))/(this%sRHOY*this%theta)
       this%W=(this%Wmid*(this%sRHOZ*this%theta+this%sRHOZold*(1.0_WP-this%theta))-this%sRHOZold*this%Wold*(1.0_WP-this%theta))/(this%sRHOZ*this%theta)
@@ -2375,7 +2388,7 @@ contains
    !> Add gravity source term
    subroutine addsrc_gravity(this,resU,resV,resW)
       implicit none
-      class(lowmach), intent(inout) :: this
+      class(compress), intent(inout) :: this
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: resU !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: resV !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: resW !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
@@ -2392,18 +2405,18 @@ contains
    end subroutine addsrc_gravity
    
    
-   !> Print out info for low-Mach flow solver
-   subroutine lowmach_print(this)
+   !> Print out info for compress flow solver
+   subroutine compress_print(this)
       use, intrinsic :: iso_fortran_env, only: output_unit
       implicit none
-      class(lowmach), intent(in) :: this
+      class(compress), intent(in) :: this
       
       ! Output
       if (this%cfg%amRoot) then
-         write(output_unit,'("Low-Mach solver [",a,"] for config [",a,"]")') trim(this%name),trim(this%cfg%name)
+         write(output_unit,'("compress solver [",a,"] for config [",a,"]")') trim(this%name),trim(this%cfg%name)
       end if
       
-   end subroutine lowmach_print
+   end subroutine compress_print
    
    
-end module lowmach_class
+end module compress_class
