@@ -1,0 +1,40 @@
+# Parallelization
+Partition :	1 1 1
+I/O partition : 1 1 1
+
+# Mesh definition
+X ljcf : 2
+Lx : 20  !40
+Ly : 10  !20
+Lz : 10  !20
+nx : 128 !512
+ny : 64 !256
+nz : 64 !256
+
+# Flow conditions
+Jet diameter :       2
+Jet velocity :       1
+Jet location :       0
+Reynolds number :      100
+Weber number :         20
+Viscosity ratio :      50
+Density ratio :        1000
+Target Re_lambda :     45
+Turbulence intensity : 0.05
+
+# Time integration
+Max timestep size : 5e-2
+Max cfl number :    1.0
+Max time :          200
+
+# Pressure solver
+Pressure tolerance : 1e-4
+Pressure iteration : 100
+
+# Data output
+Ensight output period : 1e-3
+Restart output period : 10
+
+# Data restart
+#Restart from : 3.00000E+01
+#HIT restart :  hit_128
