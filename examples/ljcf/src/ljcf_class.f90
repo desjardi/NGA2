@@ -69,7 +69,7 @@ module ljcf_class
       real(WP) :: djet, Vjet
       real(WP), dimension(:), allocatable :: xjet
       integer :: relax_model, nwall
-      real(WP) :: gravity
+      real(WP) :: gravity, liqVol
       
    contains
       procedure :: init     !< Initialize nozzle simulation
@@ -151,6 +151,7 @@ contains
          allocate(this%xjet(njet))
          call param_read('Jet location',this%xjet)
          call param_read('Gravity',this%gravity)
+         call param_read('Liquid Volume',this%liqVol)
          ! Number of wall cells
          call param_read('Wall cells in domain', this%nwall, default=0)
          do k=this%cfg%kmino_,this%cfg%kmaxo_
@@ -609,13 +610,22 @@ contains
 
       ! Apply jet velocity
       apply_bc: block
-      use tpns_class, only: bcond
+         use tpns_class, only: bcond
+         use mathtools, only: Pi
          type(bcond), pointer :: mybc
          integer :: n,i,j,k
+         real(WP) :: tStop,AreaJet
+         ! Compute the time to stop the jet 
+         AreaJet=Pi*this%djet**2/4.0_WP
+         tStop = sqrt(2*this%liqVol/(this%gravity*AreaJet))
          call this%fs%get_bcond('jet',mybc)
          do n=1,mybc%itr%no_
             i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
-            this%fs%V(i,j,k)=this%gravity*this%time%t 
+            if (this%time%t < tStop) then
+               this%fs%V(i,j,k)=this%gravity*this%time%t  ! Velocity increases linearly with time
+            else
+               this%fs%V(i,j,k)=0.0_WP                    ! Velocity stops once volume is reached
+            end if
          end do
       end block apply_bc
       

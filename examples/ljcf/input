@@ -12,9 +12,10 @@ ny : 64 !256
 nz : 64 !256
 
 # Flow conditions
-Gravity :            9.81
-Jet diameter :       2
-Jet location :       0
+Gravity :              9.81
+Jet diameter :         0.054
+Liquid Volume :        3.2e-3
+Jet location :         0
 Reynolds number :      100
 Weber number :         20
 Viscosity ratio :      50
