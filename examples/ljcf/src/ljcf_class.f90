@@ -69,6 +69,7 @@ module ljcf_class
       real(WP) :: djet, Vjet
       real(WP), dimension(:), allocatable :: xjet
       integer :: relax_model, nwall
+      real(WP) :: gravity
       
    contains
       procedure :: init     !< Initialize nozzle simulation
@@ -140,8 +141,6 @@ contains
          allocate(this%Wi  (this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
       end block allocate_work_arrays
 
-      print*,'init walls'
-
       ! Set up walls before solvers are initialized
       create_walls: block
          use param, only: param_read,param_getsize
@@ -151,9 +150,9 @@ contains
          njet = param_getsize('Jet location')
          allocate(this%xjet(njet))
          call param_read('Jet location',this%xjet)
-         call param_read('Jet velocity',this%Vjet)
+         call param_read('Gravity',this%gravity)
          ! Number of wall cells
-         call param_read('Wall cells in domain', this%nwall, default=1)
+         call param_read('Wall cells in domain', this%nwall, default=0)
          do k=this%cfg%kmino_,this%cfg%kmaxo_
             do j=this%cfg%jmino_,this%cfg%jmaxo_
                do i=this%cfg%imino_,this%cfg%imaxo_
@@ -164,8 +163,6 @@ contains
             end do
          end do
       end block create_walls
-
-      print*,'init vof'
             
       ! Initialize our VOF solver and field
       create_and_initialize_vof: block
@@ -277,8 +274,7 @@ contains
          call this%fs%get_bcond('jet',mybc)
          do n=1,mybc%itr%no_
             i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
-            this%fs%V(i,j,k)=this%Vjet 
-            !this%vf%VF(i,j,k)=1.0_WP   !!!!!!!!!!!!!!!!!!!!!!!!!!!  Should be based on 
+            this%fs%V(i,j,k)=0 ! Start with zero velocity this%Vjet 
          end do
          ! Apply all other boundary conditions
          call this%fs%apply_bcond(this%time%t,this%time%dt)
@@ -301,7 +297,7 @@ contains
          use param,                 only: param_read
          use string,                only: str_medium
          use filesys,               only: makedir,isdir
-         use irl_fortran_interface, only: setNumberOfPlanes,setPlane
+         use irl_fortran_interface, only: setNumberOfPlanes,setPlane 
          character(len=str_medium) :: timestamp
          integer, dimension(3) :: iopartition
          real(WP), dimension(:,:,:), allocatable :: P11,P12,P13,P14
@@ -498,8 +494,6 @@ contains
          call this%timefile%add_column(this%tvel%time  ,trim(this%tvel%name))
          call this%timefile%add_column(this%tpres%time ,trim(this%tpres%name))
       end block create_timing
-
-      print*,'done with init'
       
    contains
       
@@ -579,7 +573,7 @@ contains
          real(WP), dimension(3) :: xyz
          logical :: isIn
          isIn=.false.
-         xyz(1)=pg%xm(i); xyz(2)=pg%ym(j); xyz(3)=pg%zm(k)
+         xyz(1)=pg%xm(i); xyz(2)=pg%y(j); xyz(3)=pg%zm(k)
          if (j.eq.pg%jmin.and.jet(pg,i,j,k)) isIn=.true.
       end function jet_bdy
       
@@ -612,6 +606,18 @@ contains
       this%fs%Uold=this%fs%U
       this%fs%Vold=this%fs%V
       this%fs%Wold=this%fs%W
+
+      ! Apply jet velocity
+      apply_bc: block
+      use tpns_class, only: bcond
+         type(bcond), pointer :: mybc
+         integer :: n,i,j,k
+         call this%fs%get_bcond('jet',mybc)
+         do n=1,mybc%itr%no_
+            i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
+            this%fs%V(i,j,k)=this%gravity*this%time%t 
+         end do
+      end block apply_bc
       
       ! Prepare old sflaggered density (at n)
       call this%fs%get_olddensity(vf=this%vf)
