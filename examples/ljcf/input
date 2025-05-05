@@ -3,13 +3,13 @@ Partition :	1 1 1
 I/O partition : 1 1 1
 
 # Mesh definition
-X ljcf : 2
-Lx : 20  !40
-Ly : 10  !20
-Lz : 10  !20
-nx : 128 !512
-ny : 64 !256
-nz : 64 !256
+X ljcf : 0.1
+Lx : 0.432  !40
+Ly : 0.81 !20
+Lz : 0.216  !20
+nx : 64 !512
+ny : 128 !256
+nz : 32 !256
 
 # Flow conditions
 Gravity :              9.81

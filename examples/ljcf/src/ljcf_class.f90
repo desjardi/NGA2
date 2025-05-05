@@ -213,6 +213,30 @@ contains
          call this%vf%build_interface()
          ! Set interface planes at the boundaries
          call this%vf%set_full_bcond()
+         ! Now apply Neumann condition on interface at inlet to have proper round injection
+         neumann_irl: block
+            use irl_fortran_interface, only: getPlane,new,construct_2pt,RectCub_type,&
+            &                                setNumberOfPlanes,setPlane,matchVolumeFraction
+            real(WP), dimension(1:4) :: plane
+            type(RectCub_type) :: cell
+            call new(cell)
+            if (this%vf%cfg%iproc.eq.1) then
+               do k=this%vf%cfg%kmino_,this%vf%cfg%kmaxo_
+                  do j=this%vf%cfg%jmino_,this%vf%cfg%jmaxo_
+                     do i=this%vf%cfg%imino,this%vf%cfg%imin-1
+                        ! Extract plane data and copy in overlap
+                        plane=getPlane(this%vf%liquid_gas_interface(this%vf%cfg%imin,j,k),0)
+                        call construct_2pt(cell,[this%vf%cfg%x(i  ),this%vf%cfg%y(j  ),this%vf%cfg%z(k  )],&
+                        &                       [this%vf%cfg%x(i+1),this%vf%cfg%y(j+1),this%vf%cfg%z(k+1)])
+                        plane(4)=dot_product(plane(1:3),[this%vf%cfg%xm(i),this%vf%cfg%ym(j),this%vf%cfg%zm(k)])
+                        call setNumberOfPlanes(this%vf%liquid_gas_interface(i,j,k),1)
+                        call setPlane(this%vf%liquid_gas_interface(i,j,k),0,plane(1:3),plane(4))
+                        call matchVolumeFraction(cell,this%vf%VF(i,j,k),this%vf%liquid_gas_interface(i,j,k))
+                     end do
+                  end do
+               end do
+            end if
+         end block neumann_irl
          ! Create discontinuous polygon mesh from IRL interface
          call this%vf%polygonalize_interface()
          ! Calculate distance from polygons
@@ -253,6 +277,8 @@ contains
          call this%fs%add_bcond(name='outflow',type=clipped_neumann,face='x',dir=+1,canCorrect=.true.,locator=xp_locator)
          ! Define jet boundary condition on the bottom
          call this%fs%add_bcond(name='jet'    ,type=dirichlet,face='y',dir=-1,canCorrect=.false.,locator=jet_bdy)
+         ! Define gravity as vector for flow solver
+         this%fs%gravity(2) = this%gravity
 
          ! Configure pressure solver
          this%ps=hypre_str(cfg=this%cfg,name='Pressure',method=pcg_pfmg2,nst=7)
