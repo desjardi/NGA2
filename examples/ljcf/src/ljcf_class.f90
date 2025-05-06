@@ -69,7 +69,7 @@ module ljcf_class
       real(WP) :: djet, Vjet
       real(WP), dimension(:), allocatable :: xjet
       integer :: relax_model, nwall
-      real(WP) :: gravity, liqVol
+      real(WP) :: gravity, liqVol, liqVolInjected
       
    contains
       procedure :: init     !< Initialize nozzle simulation
@@ -150,8 +150,9 @@ contains
          njet = param_getsize('Jet location')
          allocate(this%xjet(njet))
          call param_read('Jet location',this%xjet)
-         call param_read('Gravity',this%gravity)
+         call param_read('Froude number',this%gravity); this%gravity = 1.0_WP/this%gravity**2
          call param_read('Liquid Volume',this%liqVol)
+         this%liqVolInjected = 0.0_WP
          ! Number of wall cells
          call param_read('Wall cells in domain', this%nwall, default=0)
          do k=this%cfg%kmino_,this%cfg%kmaxo_
@@ -195,7 +196,11 @@ contains
                   end do
                   ! Call adaptive refinement code to get volume and barycenters recursively
                   vol=0.0_WP; area=0.0_WP; v_cent=0.0_WP; a_cent=0.0_WP
-                  call cube_refine_vol(cube_vertex,vol,area,v_cent,a_cent,levelset_halfdrop,0.0_WP,amr_ref_lvl)
+                  if (j.lt.this%vf%cfg%jmin) then
+                     call cube_refine_vol(cube_vertex,vol,area,v_cent,a_cent,levelset_halfdrop,0.0_WP,amr_ref_lvl)
+                  else
+                     ! do nothing
+                  end if
                   this%vf%VF(i,j,k)=vol/this%vf%cfg%vol(i,j,k)
                   if (this%vf%VF(i,j,k).ge.VFlo.and.this%vf%VF(i,j,k).le.VFhi) then
                      this%vf%Lbary(:,i,j,k)=v_cent
@@ -481,6 +486,7 @@ contains
          call this%mfile%add_column(this%fs%Vmax,'Vmax')
          call this%mfile%add_column(this%fs%Wmax,'Wmax')
          call this%mfile%add_column(this%fs%Pmax,'Pmax')
+         call this%mfile%add_column(this%liqVolInjected,'Liq Vol Injected')
          call this%mfile%add_column(this%vf%VFint,'VOF integral')
          call this%mfile%add_column(this%vf%SDint,'SD integral')
          call this%mfile%add_column(this%vof_removed,'VOF removed')
@@ -625,35 +631,31 @@ contains
       call this%fs%get_cfl(this%time%dt,this%time%cfl)
       call this%time%adjust_dt()
       call this%time%increment()
-      
-      ! Remember old VOF
-      this%vf%VFold=this%vf%VF
-      
-      ! Remember old velocity
-      this%fs%Uold=this%fs%U
-      this%fs%Vold=this%fs%V
-      this%fs%Wold=this%fs%W
 
       ! Apply jet velocity
       apply_bc: block
          use tpns_class, only: bcond
-         use mathtools, only: Pi
          type(bcond), pointer :: mybc
          integer :: n,i,j,k
-         real(WP) :: tStop,AreaJet
-         ! Compute the time to stop the jet 
-         AreaJet=Pi*this%djet**2/4.0_WP
-         tStop = sqrt(2*this%liqVol/(this%gravity*AreaJet))
          call this%fs%get_bcond('jet',mybc)
          do n=1,mybc%itr%no_
             i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
-            if (this%time%t < tStop) then
+            if (this%liqVolInjected .lt. this%liqVol) then
                this%fs%V(i,j,k)=this%gravity*this%time%t  ! Velocity increases linearly with time
             else
                this%fs%V(i,j,k)=0.0_WP                    ! Velocity stops once volume is reached
             end if
+            this%liqVolInjected = this%liqVolInjected + this%fs%V(i,j,k)*this%vf%VF(i,j-1,k)*this%cfg%dx(i)*this%cfg%dz(k)*this%time%dt
          end do
       end block apply_bc
+
+      ! Remember old VOF
+      this%vf%VFold=this%vf%VF
+
+      ! Remember old velocity
+      this%fs%Uold=this%fs%U
+      this%fs%Vold=this%fs%V
+      this%fs%Wold=this%fs%W
       
       ! Prepare old sflaggered density (at n)
       call this%fs%get_olddensity(vf=this%vf)

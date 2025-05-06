@@ -3,28 +3,28 @@ Partition :	1 1 1
 I/O partition : 1 1 1
 
 # Mesh definition
-X ljcf : 0.1
-Lx : 0.432  !40
-Ly : 0.81 !20
-Lz : 0.216  !20
+X ljcf : 2
+Lx : 8
+Ly : 8 #16
+Lz : 4
 nx : 64 !512
-ny : 128 !256
+ny : 64 #128 !256
 nz : 32 !256
 
 # Flow conditions
-Gravity :              9.81
-Jet diameter :         0.054
-Liquid Volume :        3.2e-3
+Jet diameter :         1
+Liquid Volume :        20.322  # Vol/D^3 = 3.2e-3 m^3 / (0.054 m)^3
 Jet location :         0
-Reynolds number :      100
-Weber number :         20
-Viscosity ratio :      50
-Density ratio :        1000
+Reynolds number :      4000 #######39600 # rho_g*u*D/mu_g = 1.2 kg/m^3 * 11 m/s * 0.054 m / 1.8e-5 Pa-s
+Weber number :         108.9 # rho_g*u^2*D/sigma = 1.2 kg/m^3 * (11 m/s)^2 * 0.054 m / 0.072 N/m 
+Froude number :        15.12 # u/sqrt(g*D) = 11 m/s / sqrt(9.8 m/s^2 0.054 m)
+Viscosity ratio :      55.55
+Density ratio :        833.33
 Target Re_lambda :     45
 Turbulence intensity : 0.05
 
 # Time integration
-Max timestep size : 5e-2
+Max timestep size : 2.5e-2
 Max cfl number :    1.0
 Max time :          200
 
@@ -33,9 +33,9 @@ Pressure tolerance : 1e-4
 Pressure iteration : 100
 
 # Data output
-Ensight output period : 1e-3
-Restart output period : 10
+Ensight output period : 1
+Restart output period : 1
 
 # Data restart
-#Restart from : 3.00000E+01
-#HIT restart :  hit_128
+#Restart from : 1.00000E+01
+#HIT restart :  hit_1.00000E+01
