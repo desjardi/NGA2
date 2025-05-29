@@ -265,7 +265,7 @@ contains
       ! Create FMM 
       create_fmm: block 
          ! Initialize FMM
-         call this%fmm%initialize(cfg=this%cfg,name='fmm')
+         call this%fmm%initialize(pg=this%cfg,name='fmm')
       end block create_fmm
       
       ! Handle restart/saves here
@@ -795,7 +795,7 @@ contains
                   end do
                end do
             end do
-            call this%fmm%build(this%G,Gmax)
+            call this%fmm%build(this%G,Gmax,this%cfg%VF)
          end block fmm_build
 
          ! Compute dominant gas velocity direction 

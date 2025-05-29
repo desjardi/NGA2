@@ -3,7 +3,7 @@
 module fmm_class
    use precision,   only: WP
    use string,      only: str_medium
-   use config_class, only: config
+   use pgrid_class, only: pgrid
    implicit none
    private
 
@@ -20,8 +20,8 @@ module fmm_class
 
    !> fmm object definition 
    type :: fmm 
-      ! This is our config
-      class(config), pointer :: cfg
+      ! This is our pgrid
+      class(pgrid), pointer :: pg
       ! This is the name of the fmm
       character(len=str_medium) :: name='UNNAMED_FFM'
       ! i,j,k's for close nodes
@@ -48,72 +48,72 @@ module fmm_class
 contains
 
    !> Initialize the fmm class 
-   subroutine initialize(this,cfg,name)
+   subroutine initialize(this,pg,name)
       use mpi_f08
       implicit none
       class(fmm), intent(inout) :: this
-      class(config), target, intent(in) :: cfg
+      class(pgrid), target, intent(in) :: pg
       character(len=*), optional :: name
       integer :: isource,idest,ierr
       
       ! Set the name for the object
       if (present(name)) this%name=trim(adjustl(name))
 
-      ! Point to cfg object
-      this%cfg=>cfg
+      ! Point to pgrid object
+      this%pg=>pg
 
       ! Determine the ranks of the procs that this proc should send to  
-      call MPI_CART_SHIFT(this%cfg%comm,0,-1,isource,idest,ierr); this%rank_x_lo=idest
-      call MPI_CART_SHIFT(this%cfg%comm,0,+1,isource,idest,ierr); this%rank_x_hi=idest
-      call MPI_CART_SHIFT(this%cfg%comm,1,-1,isource,idest,ierr); this%rank_y_lo=idest
-      call MPI_CART_SHIFT(this%cfg%comm,1,+1,isource,idest,ierr); this%rank_y_hi=idest
-      call MPI_CART_SHIFT(this%cfg%comm,2,-1,isource,idest,ierr); this%rank_z_lo=idest
-      call MPI_CART_SHIFT(this%cfg%comm,2,+1,isource,idest,ierr); this%rank_z_hi=idest
+      call MPI_CART_SHIFT(this%pg%comm,0,-1,isource,idest,ierr); this%rank_x_lo=idest
+      call MPI_CART_SHIFT(this%pg%comm,0,+1,isource,idest,ierr); this%rank_x_hi=idest
+      call MPI_CART_SHIFT(this%pg%comm,1,-1,isource,idest,ierr); this%rank_y_lo=idest
+      call MPI_CART_SHIFT(this%pg%comm,1,+1,isource,idest,ierr); this%rank_y_hi=idest
+      call MPI_CART_SHIFT(this%pg%comm,2,-1,isource,idest,ierr); this%rank_z_lo=idest
+      call MPI_CART_SHIFT(this%pg%comm,2,+1,isource,idest,ierr); this%rank_z_hi=idest
       
       ! Set bounds on what nodes to send to other procs
-      if (this%cfg%nx.gt.1) then
-         this%i_passlo=this%cfg%imin_+1
-         this%i_passhi=this%cfg%imax_-1
+      if (this%pg%nx.gt.1) then
+         this%i_passlo=this%pg%imin_+1
+         this%i_passhi=this%pg%imax_-1
       else
-         this%i_passlo=this%cfg%imin_
-         this%i_passhi=this%cfg%imax_
+         this%i_passlo=this%pg%imin_
+         this%i_passhi=this%pg%imax_
       end if
-      if (this%cfg%ny.gt.1) then
-         this%j_passlo=this%cfg%jmin_+1
-         this%j_passhi=this%cfg%jmax_-1
+      if (this%pg%ny.gt.1) then
+         this%j_passlo=this%pg%jmin_+1
+         this%j_passhi=this%pg%jmax_-1
       else
-         this%j_passlo=this%cfg%jmin_
-         this%j_passhi=this%cfg%jmax_
+         this%j_passlo=this%pg%jmin_
+         this%j_passhi=this%pg%jmax_
       end if
-      if (this%cfg%nz.gt.1) then
-         this%k_passlo=this%cfg%kmin_+1
-         this%k_passhi=this%cfg%kmax_-1
+      if (this%pg%nz.gt.1) then
+         this%k_passlo=this%pg%kmin_+1
+         this%k_passhi=this%pg%kmax_-1
       else
-         this%k_passlo=this%cfg%kmin_
-         this%k_passhi=this%cfg%kmax_
+         this%k_passlo=this%pg%kmin_
+         this%k_passhi=this%pg%kmax_
       end if
 
       ! Set bounds for the ghost nodes to consider given problem dimensions
-      if (this%cfg%nx.gt.1) then
-         this%imin_close=this%cfg%imin_-1
-         this%imax_close=this%cfg%imax_+1
+      if (this%pg%nx.gt.1) then
+         this%imin_close=this%pg%imin_-1
+         this%imax_close=this%pg%imax_+1
       else
-         this%imin_close=this%cfg%imin_
-         this%imax_close=this%cfg%imax_
+         this%imin_close=this%pg%imin_
+         this%imax_close=this%pg%imax_
       end if
-      if (this%cfg%ny.gt.1) then
-         this%jmin_close=this%cfg%jmin_-1
-         this%jmax_close=this%cfg%jmax_+1
+      if (this%pg%ny.gt.1) then
+         this%jmin_close=this%pg%jmin_-1
+         this%jmax_close=this%pg%jmax_+1
       else
-         this%jmin_close=this%cfg%jmin_
-         this%jmax_close=this%cfg%jmax_
+         this%jmin_close=this%pg%jmin_
+         this%jmax_close=this%pg%jmax_
       end if
-      if (this%cfg%nz.gt.1) then
-         this%kmin_close=this%cfg%kmin_-1
-         this%kmax_close=this%cfg%kmax_+1
+      if (this%pg%nz.gt.1) then
+         this%kmin_close=this%pg%kmin_-1
+         this%kmax_close=this%pg%kmax_+1
       else
-         this%kmin_close=this%cfg%kmin_
-         this%kmax_close=this%cfg%kmax_
+         this%kmin_close=this%pg%kmin_
+         this%kmax_close=this%pg%kmax_
       end if
 
       ! Attach an mpi buffer for parallelization
@@ -124,21 +124,23 @@ contains
    end subroutine initialize
 
    !> Update the distance field using estimate provided in G function out to Gmax
-   subroutine build(this,G,Gmax)
+   !> cells with mask.eq.0.0_WP are not considered
+   subroutine build(this,G,Gmax,mask)
       use messager, only: die
       implicit none
       class(fmm), intent(inout) :: this
-      real(WP), dimension(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_), intent(inout) :: G
+      real(WP), dimension(this%pg%imino_:this%pg%imaxo_,this%pg%jmino_:this%pg%jmaxo_,this%pg%kmino_:this%pg%kmaxo_), intent(inout) :: G
       real(WP), intent(in) :: Gmax
-      integer, dimension(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_) :: phi_flag
-      real(WP), dimension(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_) :: phi_fmm
-      integer, dimension(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_,3) :: stc_plus,stc_minus
-      !integer, dimension(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_) :: order_fmm
+      real(WP), dimension(this%pg%imino_:this%pg%imaxo_,this%pg%jmino_:this%pg%jmaxo_,this%pg%kmino_:this%pg%kmaxo_), intent(in) :: mask
+      integer, dimension(this%pg%imino_:this%pg%imaxo_,this%pg%jmino_:this%pg%jmaxo_,this%pg%kmino_:this%pg%kmaxo_) :: phi_flag
+      real(WP), dimension(this%pg%imino_:this%pg%imaxo_,this%pg%jmino_:this%pg%jmaxo_,this%pg%kmino_:this%pg%kmaxo_) :: phi_fmm
+      integer, dimension(this%pg%imino_:this%pg%imaxo_,this%pg%jmino_:this%pg%jmaxo_,this%pg%kmino_:this%pg%kmaxo_,3) :: stc_plus,stc_minus
+      !integer, dimension(this%pg%imino_:this%pg%imaxo_,this%pg%jmino_:this%pg%jmaxo_,this%pg%kmino_:this%pg%kmaxo_) :: order_fmm
       integer :: n_plus,n_minus
       integer :: iter
       integer :: close_count,close_minus_count,close_plus_count
       integer :: fmm_accepted,fmm_close,fmm_far
-      integer, dimension(this%cfg%nx_*this%cfg%ny_*this%cfg%nz_,3), target :: close_minus_ijk,close_plus_ijk
+      integer, dimension(this%pg%nx_*this%pg%ny_*this%pg%nz_,3), target :: close_minus_ijk,close_plus_ijk
       integer, dimension(:,:), pointer :: close_ijk
       ! Counter and mapping for accepted nodes
       integer, dimension(:,:), allocatable :: accepted_ijk
@@ -155,7 +157,7 @@ contains
       integer, parameter :: fmm_tmp            = 7
       ! Heap data
       type(heap_type), dimension(:),     allocatable :: heap  
-      integer,         dimension(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_) :: heap_map
+      integer,         dimension(this%pg%imino_:this%pg%imaxo_,this%pg%jmino_:this%pg%jmaxo_,this%pg%kmino_:this%pg%kmaxo_) :: heap_map
       integer :: nheap
       ! Communication
       integer, dimension(3) :: my_ibuf,ibuf
@@ -168,12 +170,12 @@ contains
       ! First tag all nodes and make plus and minus counts
       tag_nodes: block 
          integer :: i,j,k
-         do k=this%cfg%kmino_,this%cfg%kmaxo_
-            do j=this%cfg%jmino_,this%cfg%jmaxo_
-               do i=this%cfg%imino_,this%cfg%imaxo_
+         do k=this%pg%kmino_,this%pg%kmaxo_
+            do j=this%pg%jmino_,this%pg%jmaxo_
+               do i=this%pg%imino_,this%pg%imaxo_
                   ! Cycle if too far or BC
                   !if (band(i,j,k).eq.0) cycle  !!!! without band then the n_plus & n_minus is large!!!
-                  if (this%cfg%VF(i,j,k).eq.0.0_WP) cycle
+                  if (mask(i,j,k).eq.0.0_WP) cycle
                   ! Check with side
                   if (G(i,j,k).ge.0.0_WP) then
                      n_plus = n_plus + 1
@@ -200,7 +202,7 @@ contains
                do i=this%imin_close,this%imax_close
                   ! Cycle if too far or BC
                   !if (band(i,j,k).eq.0) cycle
-                  if (this%cfg%VF(i,j,k).eq.0.0_WP) cycle
+                  if (mask(i,j,k).eq.0.0_WP) cycle
                   ! Check 6 direct neighbors
                   do n=1,6
                      select case(n)
@@ -219,7 +221,7 @@ contains
                      end select
                      ! Don't add nodes that are outside the bands or BC
                      !if (band(ii,jj,kk).eq.0) cycle
-                     if (this%cfg%VF(ii,jj,kk).eq.0.0_WP) cycle
+                     if (mask(ii,jj,kk).eq.0.0_WP) cycle
                      ! Find interface crossing
                      if ((G(i,j,k)*G(ii,jj,kk)).le.0.0_WP) then
                         if (G(i,j,k).lt.0.0_WP) then
@@ -266,9 +268,9 @@ contains
       ! Set up the temp level set field variable
       setuptemp: block
          integer :: i,j,k
-         do k=this%cfg%kmino_,this%cfg%kmaxo_
-            do j=this%cfg%jmino_,this%cfg%jmaxo_
-               do i=this%cfg%imino_,this%cfg%imaxo_
+         do k=this%pg%kmino_,this%pg%kmaxo_
+            do j=this%pg%jmino_,this%pg%jmaxo_
+               do i=this%pg%imino_,this%pg%imaxo_
                   phi_fmm(i,j,k) = Gmax
                end do
             end do
@@ -340,16 +342,16 @@ contains
                      local_index = +3
                   end select
                   ! Don't add nodes that are outside the BC
-                  if (this%cfg%VF(ii,jj,kk).eq.0.0_WP) cycle
+                  if (mask(ii,jj,kk).eq.0.0_WP) cycle
                   ! Form local metrics
                   if (G(i,j,k)*G(ii,jj,kk).le.0.0_WP) then
                      if (G(i,j,k).eq.G(ii,jj,kk)) cycle
                      n_nbrs = n_nbrs + 1
                      G_nbrs(   n_nbrs) = 0.0_WP
                      index_nbrs(n_nbrs) = local_index 
-                     dx_nbrs(1,n_nbrs) = abs(-G(i,j,k)*(this%cfg%xm(ii)-this%cfg%xm(i))/(G(ii,jj,kk)-G(i,j,k)))
-                     dx_nbrs(2,n_nbrs) = abs(-G(i,j,k)*(this%cfg%ym(jj)-this%cfg%ym(j))/(G(ii,jj,kk)-G(i,j,k)))
-                     dx_nbrs(3,n_nbrs) = abs(-G(i,j,k)*(this%cfg%zm(kk)-this%cfg%zm(k))/(G(ii,jj,kk)-G(i,j,k)))
+                     dx_nbrs(1,n_nbrs) = abs(-G(i,j,k)*(this%pg%xm(ii)-this%pg%xm(i))/(G(ii,jj,kk)-G(i,j,k)))
+                     dx_nbrs(2,n_nbrs) = abs(-G(i,j,k)*(this%pg%ym(jj)-this%pg%ym(j))/(G(ii,jj,kk)-G(i,j,k)))
+                     dx_nbrs(3,n_nbrs) = abs(-G(i,j,k)*(this%pg%zm(kk)-this%pg%zm(k))/(G(ii,jj,kk)-G(i,j,k)))
                   end if
                end do
 
@@ -408,9 +410,9 @@ contains
                               
                               ! Check if we have rolled back enough...
                               if (this_phi.gt.phi_fmm(ii,jj,kk)) then
-                                 if (ii.ge.this%cfg%imin_.and.ii.le.this%cfg%imax_) then
-                                    if (jj.ge.this%cfg%jmin_.and.jj.le.this%cfg%jmax_) then
-                                       if (kk.ge.this%cfg%kmin_.and.kk.le.this%cfg%kmax_) then
+                                 if (ii.ge.this%pg%imin_.and.ii.le.this%pg%imax_) then
+                                    if (jj.ge.this%pg%jmin_.and.jj.le.this%pg%jmax_) then
+                                       if (kk.ge.this%pg%kmin_.and.kk.le.this%pg%kmax_) then
                                           exit
                                        end if
                                     end if
@@ -522,7 +524,7 @@ contains
                                  local_index = +3
                               end select
                               ! Don't add nodes that are outside the BC
-                              if (this%cfg%VF(ii,jj,kk).eq.0.0_WP) cycle
+                              if (mask(ii,jj,kk).eq.0.0_WP) cycle
                               ! Count the nodes to be used in extending the distance function
                               if (phi_flag(ii,jj,kk).eq.fmm_close) then
                                  n_already_close = n_already_close + 1
@@ -538,9 +540,9 @@ contains
                      
                         ! Work on the physical domain only and let other processors 
                         ! know a boundary node has been accepted
-                        if ( i.ge.this%cfg%imin_ .and. i.le.this%cfg%imax_ .and. &
-                             j.ge.this%cfg%jmin_ .and. j.le.this%cfg%jmax_ .and. &
-                             k.ge.this%cfg%kmin_ .and. k.le.this%cfg%kmax_ ) then
+                        if ( i.ge.this%pg%imin_ .and. i.le.this%pg%imax_ .and. &
+                             j.ge.this%pg%jmin_ .and. j.le.this%pg%jmax_ .and. &
+                             k.ge.this%pg%kmin_ .and. k.le.this%pg%kmax_ ) then
                            call multiphase_fmm_send(i,j,k,phi_fmm(i,j,k),my_ibuf(2))
                         end if
                   
@@ -608,7 +610,7 @@ contains
                                     local_index = +3
                                  end select
                                  ! Don't add nodes that are outside the BC
-                                 if (this%cfg%VF(iii,jjj,kkk).eq.0.0_WP) cycle
+                                 if (mask(iii,jjj,kkk).eq.0.0_WP) cycle
                                  ! Check for nbrs and look for...
                                  if ((G(ii,jj,kk)*G(iii,jjj,kkk)).le.0.0_WP) then
                                     if (G(ii,jj,kk).eq.G(iii,jjj,kkk)) cycle
@@ -616,17 +618,17 @@ contains
                                     n_nbrs = n_nbrs + 1
                                     phi_nbrs(n_nbrs) = 0.0_WP
                                     index_nbrs(n_nbrs) = local_index
-                                    dx_nbrs(1,n_nbrs) = abs(-G(ii,jj,kk)*(this%cfg%xm(iii)-this%cfg%xm(ii))/(G(iii,jjj,kkk)-G(ii,jj,kk)))
-                                    dx_nbrs(2,n_nbrs) = abs(-G(ii,jj,kk)*(this%cfg%ym(jjj)-this%cfg%ym(jj))/(G(iii,jjj,kkk)-G(ii,jj,kk)))
-                                    dx_nbrs(3,n_nbrs) = abs(-G(ii,jj,kk)*(this%cfg%zm(kkk)-this%cfg%zm(kk))/(G(iii,jjj,kkk)-G(ii,jj,kk)))
+                                    dx_nbrs(1,n_nbrs) = abs(-G(ii,jj,kk)*(this%pg%xm(iii)-this%pg%xm(ii))/(G(iii,jjj,kkk)-G(ii,jj,kk)))
+                                    dx_nbrs(2,n_nbrs) = abs(-G(ii,jj,kk)*(this%pg%ym(jjj)-this%pg%ym(jj))/(G(iii,jjj,kkk)-G(ii,jj,kk)))
+                                    dx_nbrs(3,n_nbrs) = abs(-G(ii,jj,kk)*(this%pg%zm(kkk)-this%pg%zm(kk))/(G(iii,jjj,kkk)-G(ii,jj,kk)))
                                  else if (phi_flag(iii,jjj,kkk).eq.fmm_accepted) then
                                     ! ... an accepted nbr
                                     n_nbrs = n_nbrs + 1
                                     phi_nbrs(n_nbrs) = phi_fmm(iii,jjj,kkk)
                                     index_nbrs(n_nbrs) = local_index
-                                    dx_nbrs(1,n_nbrs) = abs(this%cfg%xm(iii)-this%cfg%xm(ii))
-                                    dx_nbrs(2,n_nbrs) = abs(this%cfg%ym(jjj)-this%cfg%ym(jj))
-                                    dx_nbrs(3,n_nbrs) = abs(this%cfg%zm(kkk)-this%cfg%zm(kk))
+                                    dx_nbrs(1,n_nbrs) = abs(this%pg%xm(iii)-this%pg%xm(ii))
+                                    dx_nbrs(2,n_nbrs) = abs(this%pg%ym(jjj)-this%pg%ym(jj))
+                                    dx_nbrs(3,n_nbrs) = abs(this%pg%zm(kkk)-this%pg%zm(kk))
                                  end if
                               end do
                               ! Recompute nodal values
@@ -710,7 +712,7 @@ contains
                                     local_index = +3
                                  end select
                                  ! Don't add nodes that are outside the BC
-                                 if (this%cfg%VF(iii,jjj,kkk).eq.0.0_WP) cycle
+                                 if (mask(iii,jjj,kkk).eq.0.0_WP) cycle
                                  ! Check for nbrs and look for...
                                  if ((G(ii,jj,kk)*G(iii,jjj,kkk)).le.0.0_WP) then
                                     if (G(ii,jj,kk).eq.G(iii,jjj,kkk)) cycle
@@ -718,17 +720,17 @@ contains
                                     n_nbrs = n_nbrs + 1
                                     index_nbrs(n_nbrs) = local_index
                                     phi_nbrs(n_nbrs) = 0.0_WP
-                                    dx_nbrs(1,n_nbrs) = abs(-G(ii,jj,kk)*(this%cfg%xm(iii)-this%cfg%xm(ii))/(G(iii,jjj,kkk)-G(ii,jj,kk)))
-                                    dx_nbrs(2,n_nbrs) = abs(-G(ii,jj,kk)*(this%cfg%ym(jjj)-this%cfg%ym(jj))/(G(iii,jjj,kkk)-G(ii,jj,kk)))
-                                    dx_nbrs(3,n_nbrs) = abs(-G(ii,jj,kk)*(this%cfg%zm(kkk)-this%cfg%zm(kk))/(G(iii,jjj,kkk)-G(ii,jj,kk)))
+                                    dx_nbrs(1,n_nbrs) = abs(-G(ii,jj,kk)*(this%pg%xm(iii)-this%pg%xm(ii))/(G(iii,jjj,kkk)-G(ii,jj,kk)))
+                                    dx_nbrs(2,n_nbrs) = abs(-G(ii,jj,kk)*(this%pg%ym(jjj)-this%pg%ym(jj))/(G(iii,jjj,kkk)-G(ii,jj,kk)))
+                                    dx_nbrs(3,n_nbrs) = abs(-G(ii,jj,kk)*(this%pg%zm(kkk)-this%pg%zm(kk))/(G(iii,jjj,kkk)-G(ii,jj,kk)))
                                  else if (phi_flag(iii,jjj,kkk).eq.fmm_accepted) then
                                     ! ... an accepted nbr
                                     n_nbrs = n_nbrs + 1
                                     index_nbrs(n_nbrs) = local_index
                                     phi_nbrs(n_nbrs) = phi_fmm(iii,jjj,kkk)
-                                    dx_nbrs(1,n_nbrs) = abs(this%cfg%xm(iii)-this%cfg%xm(ii))
-                                    dx_nbrs(2,n_nbrs) = abs(this%cfg%ym(jjj)-this%cfg%ym(jj))
-                                    dx_nbrs(3,n_nbrs) = abs(this%cfg%zm(kkk)-this%cfg%zm(kk))
+                                    dx_nbrs(1,n_nbrs) = abs(this%pg%xm(iii)-this%pg%xm(ii))
+                                    dx_nbrs(2,n_nbrs) = abs(this%pg%ym(jjj)-this%pg%ym(jj))
+                                    dx_nbrs(3,n_nbrs) = abs(this%pg%zm(kkk)-this%pg%zm(kk))
                                  end if
                               end do
                               ! Recompute nodal value
@@ -762,7 +764,7 @@ contains
                   use mpi_f08, only: MPI_ALLREDUCE, MPI_SUM, MPI_INTEGER
                   integer :: ierr
                   my_ibuf(3) = nheap
-                  call MPI_ALLREDUCE(my_ibuf,ibuf,3,MPI_INTEGER,MPI_SUM,this%cfg%comm,ierr)
+                  call MPI_ALLREDUCE(my_ibuf,ibuf,3,MPI_INTEGER,MPI_SUM,this%pg%comm,ierr)
                   global_done = ((ibuf(1).eq.ibuf(2)).and.(ibuf(3).eq.0))
                end block communcate_messages
                
@@ -786,9 +788,9 @@ contains
       ! Now update level set
       update_levelset: block
          integer:: i,j,k
-         do k=this%cfg%kmino_,this%cfg%kmaxo_
-            do j=this%cfg%jmino_,this%cfg%jmaxo_
-               do i=this%cfg%imino_,this%cfg%imaxo_
+         do k=this%pg%kmino_,this%pg%kmaxo_
+            do j=this%pg%jmino_,this%pg%jmaxo_
+               do i=this%pg%imino_,this%pg%imaxo_
                   if (phi_flag(i,j,k).eq.fmm_accepted_plus) then
                      G(i,j,k) = +phi_fmm(i,j,k)
                   else if (phi_flag(i,j,k).eq.fmm_accepted_minus) then
@@ -798,7 +800,7 @@ contains
             end do
          end do
          ! Communicate level set
-         call this%cfg%sync(G)
+         call this%pg%sync(G)
       end block update_levelset
 
          ! ! Store ordered list
@@ -1677,12 +1679,12 @@ contains
          logical :: imessage
          
          ! Probe for message
-         call MPI_Iprobe(MPI_ANY_SOURCE,MPI_ANY_TAG,this%cfg%comm,imessage,status,ierr)
+         call MPI_Iprobe(MPI_ANY_SOURCE,MPI_ANY_TAG,this%pg%comm,imessage,status,ierr)
          
          ! If message is present, receive it
          if (imessage) then
             isource=status%MPI_SOURCE
-            call MPI_Recv(val_recv,4,MPI_REAL_WP,isource,0,this%cfg%comm,status,ierr)
+            call MPI_Recv(val_recv,4,MPI_REAL_WP,isource,0,this%pg%comm,status,ierr)
             i=nint(val_recv(1))
             j=nint(val_recv(2))
             k=nint(val_recv(3))
@@ -1707,7 +1709,7 @@ contains
          integer :: ierr
          
          ! Blocking receive for extension
-         call MPI_Recv(recv_buf,4,MPI_REAL_WP,MPI_ANY_SOURCE,MPI_ANY_TAG,this%cfg%comm,status,ierr)
+         call MPI_Recv(recv_buf,4,MPI_REAL_WP,MPI_ANY_SOURCE,MPI_ANY_TAG,this%pg%comm,status,ierr)
          i=nint(recv_buf(1))
          j=nint(recv_buf(2))
          k=nint(recv_buf(3))
@@ -1731,37 +1733,37 @@ contains
          ! Communicate if necessary
          if (this%rank_x_lo.ge.0 .and. i.lt.this%i_passlo) then
             i0=i;j0=j;k0=k
-            if (this%cfg%xper .and.this%cfg%iproc.eq.1  ) i0=i+this%cfg%nx
+            if (this%pg%xper .and.this%pg%iproc.eq.1  ) i0=i+this%pg%nx
             call multiphase_fmm_parallel_send(this%rank_x_lo,i0,j0,k0,value)
             counter=counter+1
          end if
          if (this%rank_x_hi.ge.0 .and. i.gt.this%i_passhi) then
             i0=i;j0=j;k0=k
-            if (this%cfg%xper .and. this%cfg%iproc.eq.this%cfg%npx) i0=i-this%cfg%nx
+            if (this%pg%xper .and. this%pg%iproc.eq.this%pg%npx) i0=i-this%pg%nx
             call multiphase_fmm_parallel_send(this%rank_x_hi,i0,j0,k0,value)
             counter=counter+1
          end if
          if (this%rank_y_lo.ge.0 .and. j.lt.this%j_passlo) then
             i0=i;j0=j;k0=k
-            if (this%cfg%yper .and. this%cfg%jproc.eq.1  ) j0=j+this%cfg%ny
+            if (this%pg%yper .and. this%pg%jproc.eq.1  ) j0=j+this%pg%ny
             call multiphase_fmm_parallel_send(this%rank_y_lo,i0,j0,k0,value)
             counter=counter+1
          end if
          if (this%rank_y_hi.ge.0 .and. j.gt.this%j_passhi) then
             i0=i;j0=j;k0=k
-            if (this%cfg%yper .and. this%cfg%jproc.eq.this%cfg%npy) j0=j-this%cfg%ny
+            if (this%pg%yper .and. this%pg%jproc.eq.this%pg%npy) j0=j-this%pg%ny
             call multiphase_fmm_parallel_send(this%rank_y_hi,i0,j0,k0,value)
             counter=counter+1
          end if
          if (this%rank_z_lo.ge.0 .and. k.lt.this%k_passlo) then
             i0=i;j0=j;k0=k
-            if (this%cfg%zper .and. this%cfg%kproc.eq.1  ) k0=k+this%cfg%nz
+            if (this%pg%zper .and. this%pg%kproc.eq.1  ) k0=k+this%pg%nz
             call multiphase_fmm_parallel_send(this%rank_z_lo,i0,j0,k0,value)
             counter=counter+1
          end if
          if (this%rank_z_hi.ge.0 .and. k.gt.this%k_passhi) then
             i0=i;j0=j;k0=k
-            if (this%cfg%zper .and. this%cfg%kproc.eq.this%cfg%npz) k0=k-this%cfg%nz
+            if (this%pg%zper .and. this%pg%kproc.eq.this%pg%npz) k0=k-this%pg%nz
             call multiphase_fmm_parallel_send(this%rank_z_hi,i0,j0,k0,value)
             counter=counter+1
          end if
@@ -1785,7 +1787,7 @@ contains
          buffer(4) = phi_value
          
          ! Use a buffered send
-         call MPI_Bsend(buffer,4,MPI_REAL_WP,idest,0,this%cfg%comm,ierr)
+         call MPI_Bsend(buffer,4,MPI_REAL_WP,idest,0,this%pg%comm,ierr)
          
          return
       end subroutine multiphase_fmm_parallel_send
