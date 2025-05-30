@@ -63,6 +63,7 @@ module ligament_class
       !> Weber number calculation parameters
       real(WP) :: dth = 0.1_WP !< Distance threshold for Weber number calculation
       real(WP), dimension(:), allocatable :: weber !< Weber number for each structure
+      type(monitor) :: weberfile !< Weber number monitor file
       
       !> Timing info
       type(monitor) :: timefile !< Timing monitoring
@@ -669,7 +670,7 @@ contains
          real(WP), dimension(:,:)  , allocatable :: dvel
          real(WP), dimension(:,:,:), allocatable :: dmoi
          real(WP), dimension(:)    , allocatable :: drem
-         real(WP), dimension(:)    , allocatable :: dugas,dvgas,dwgas
+         real(WP), dimension(:,:)  , allocatable :: dgvel
          real(WP), dimension(:)    , allocatable :: weights
          integer :: n,m,ierr,i,j,k,nmax
          real(WP) :: x,y,z,x0,y0,z0,diam,ecc,lmax,lmid,lmin
@@ -697,9 +698,7 @@ contains
          allocate(dvel(1:this%ccl%nstruct,1:3    )); dvel=0.0_WP
          allocate(dmoi(1:this%ccl%nstruct,1:3,1:3)); dmoi=0.0_WP
          allocate(drem(1:this%ccl%nstruct        )); drem=0.0_WP
-         allocate(dugas(1:this%ccl%nstruct       )); dugas=0.0_WP
-         allocate(dvgas(1:this%ccl%nstruct       )); dvgas=0.0_WP   
-         allocate(dwgas(1:this%ccl%nstruct       )); dwgas=0.0_WP
+         allocate(dgvel(1:this%ccl%nstruct,1:3   )); dgvel=0.0_WP
          allocate(weights(1:this%ccl%nstruct     )); weights=0.0_WP
 
          if (allocated(this%weber)) deallocate(this%weber)
@@ -813,7 +812,7 @@ contains
 
          ! Compute average gas velocity around each structure
          avg_gas_velocity: block
-            integer :: n,m,i,j,k,ii,jj,kk
+            integer :: n,m,i,j,k,ii,jj,kk,d
             logical, dimension(:,:,:), allocatable :: cell_tag
             allocate(cell_tag(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
             do n=1,this%ccl%nstruct
@@ -832,10 +831,10 @@ contains
                            if (cell_tag(ii,jj,kk)) cycle
                            ! Sum velocity*Gas_vol and Gas_vol
                            if ((this%vf%VF(ii,jj,kk)).le.0.5_WP) then
-                              dugas(n)   = dugas(n)    + sum(this%fs%itpu_x(:,i,j,k)*this%fs%U(i:i+1,j,k))*this%cfg%vol(ii,jj,kk)*(1.0_WP-this%vf%VF(ii,jj,kk))
-                              dvgas(n)   = dvgas(n)    + sum(this%fs%itpv_y(:,i,j,k)*this%fs%V(i,j:j+1,k))*this%cfg%vol(ii,jj,kk)*(1.0_WP-this%vf%VF(ii,jj,kk))
-                              dwgas(n)   = dwgas(n)    + sum(this%fs%itpw_z(:,i,j,k)*this%fs%W(i,j,k:k+1))*this%cfg%vol(ii,jj,kk)*(1.0_WP-this%vf%VF(ii,jj,kk))
-                              weights(n) = weights(n)  +                                                   this%cfg%vol(ii,jj,kk)*(1.0_WP-this%vf%VF(ii,jj,kk))
+                              dgvel(n,1) = dgvel(n,1) + sum(this%fs%itpu_x(:,i,j,k)*this%fs%U(i:i+1,j,k))*this%cfg%vol(ii,jj,kk)*(1.0_WP-this%vf%VF(ii,jj,kk))
+                              dgvel(n,2) = dgvel(n,2) + sum(this%fs%itpv_y(:,i,j,k)*this%fs%V(i,j:j+1,k))*this%cfg%vol(ii,jj,kk)*(1.0_WP-this%vf%VF(ii,jj,kk))
+                              dgvel(n,3) = dgvel(n,3) + sum(this%fs%itpw_z(:,i,j,k)*this%fs%W(i,j,k:k+1))*this%cfg%vol(ii,jj,kk)*(1.0_WP-this%vf%VF(ii,jj,kk))
+                              weights(n) = weights(n) +                                                   this%cfg%vol(ii,jj,kk)*(1.0_WP-this%vf%VF(ii,jj,kk))
                            end if
                            cell_tag(ii,jj,kk) = .true.
                         end do
@@ -843,43 +842,35 @@ contains
                   end do
                end do
             end do
-            call MPI_ALLREDUCE(MPI_IN_PLACE,dugas,  this%ccl%nstruct,MPI_REAL_WP,MPI_SUM,this%vf%cfg%comm,ierr)
-            call MPI_ALLREDUCE(MPI_IN_PLACE,dvgas,  this%ccl%nstruct,MPI_REAL_WP,MPI_SUM,this%vf%cfg%comm,ierr)
-            call MPI_ALLREDUCE(MPI_IN_PLACE,dwgas,  this%ccl%nstruct,MPI_REAL_WP,MPI_SUM,this%vf%cfg%comm,ierr)
+            call MPI_ALLREDUCE(MPI_IN_PLACE,dgvel,3*this%ccl%nstruct,MPI_REAL_WP,MPI_SUM,this%vf%cfg%comm,ierr)
             call MPI_ALLREDUCE(MPI_IN_PLACE,weights,this%ccl%nstruct,MPI_REAL_WP,MPI_SUM,this%vf%cfg%comm,ierr)
             ! Normalize by volume
-            dugas(:) = dugas(:) / weights(:)
-            dvgas(:) = dvgas(:) / weights(:)
-            dwgas(:) = dwgas(:) / weights(:)
+            do d=1,3
+               dgvel(:,d) = dgvel(:,d) / weights(:)
+            end do
          end block avg_gas_velocity
 
          ! Compute velocity from upstream sampling location
          upstream_velocity: block
+            integer :: d
             real(WP) :: Vmag,Deq,dist
-            real(WP) :: xdir,ydir,zdir
-            real(WP) :: xp,yp,zp
+            real(WP), dimension(3) :: dir,sloc
             real(WP) :: W_location,W_structure
             do n=1,this%ccl%nstruct
                ! Compute velocity magnitude
-               Vmag = sqrt((dugas(n))**2.0_WP + (dvgas(n))**2.0_WP + (dwgas(n))**2.0_WP)
+               Vmag = sqrt((dgvel(n,1))**2.0_WP + (dgvel(n,2))**2.0_WP + (dgvel(n,3))**2.0_WP)
             
                ! Direction is unit vector in negative average velocity direction
-               xdir = dugas(n) / Vmag
-               ydir = dvgas(n) / Vmag
-               zdir = dwgas(n) / Vmag
-
+               dir(:) = dgvel(n,:) / Vmag
+               
                ! Calculating equivalent diameter of structure
                Deq = ((dvol(n) * 6.0_WP)/Pi)**(1.0_WP/3.0_WP)
 
                ! Calculating sampling location based on centroid of structure and direction
-               xp = dpos(n,1) - (Deq * xdir) 
-               yp = dpos(n,2) - (Deq * ydir) 
-               zp = dpos(n,3) - (Deq * zdir) 
+               sloc(:) = dpos(n,:) - Deq * dir(:)
 
                ! Reset averages and weight for this structure
-               dugas(n)   = 0.0_WP
-               dvgas(n)   = 0.0_WP
-               dwgas(n)   = 0.0_WP
+               dgvel(n,:)   = 0.0_WP
                weights(n) = 0.0_WP
 
                ! Compute gas velocity at sampling location with 
@@ -891,38 +882,69 @@ contains
                         if (this%vf%VF(i,j,k).gt.0.5_WP) cycle 
                         
                         !Calculate weights for this cell
-                        dist = sqrt((xp-this%cfg%xm(i))**2 + (yp-this%cfg%ym(j))**2 + (zp-this%cfg%zm(k))**2)
+                        dist = sqrt((sloc(1)-this%cfg%xm(i))**2 + (sloc(2)-this%cfg%ym(j))**2 + (sloc(3)-this%cfg%zm(k))**2)
                         W_location  = exp(-(dist**2/(0.5_WP*Deq**2))) ! Gaussian weight from sampling location
                         W_structure = min(1.0_WP,abs(this%G(i,j,k))/this%dth) ! Weight based on distance to structures
                         ! Compute average velocity
-                        dugas(n)   = dugas(n)   + sum(this%fs%itpu_x(:,i,j,k)*this%fs%U(i:i+1,j,k)) * W_location * W_structure
-                        dvgas(n)   = dvgas(n)   + sum(this%fs%itpv_y(:,i,j,k)*this%fs%V(i,j:j+1,k)) * W_location * W_structure
-                        dwgas(n)   = dwgas(n)   + sum(this%fs%itpw_z(:,i,j,k)*this%fs%W(i,j,k:k+1)) * W_location * W_structure
+                        dgvel(n,1) = dgvel(n,1) + sum(this%fs%itpu_x(:,i,j,k)*this%fs%U(i:i+1,j,k)) * W_location * W_structure
+                        dgvel(n,2) = dgvel(n,2) + sum(this%fs%itpv_y(:,i,j,k)*this%fs%V(i,j:j+1,k)) * W_location * W_structure
+                        dgvel(n,3) = dgvel(n,3) + sum(this%fs%itpw_z(:,i,j,k)*this%fs%W(i,j,k:k+1)) * W_location * W_structure
                         weights(n) = weights(n) +                                                     W_location * W_structure
                      end do 
                   end do
                end do
             end do
-            call MPI_ALLREDUCE(MPI_IN_PLACE,dugas,  this%ccl%nstruct,MPI_REAL_WP,MPI_SUM,this%vf%cfg%comm,ierr)
-            call MPI_ALLREDUCE(MPI_IN_PLACE,dvgas,  this%ccl%nstruct,MPI_REAL_WP,MPI_SUM,this%vf%cfg%comm,ierr)
-            call MPI_ALLREDUCE(MPI_IN_PLACE,dwgas,  this%ccl%nstruct,MPI_REAL_WP,MPI_SUM,this%vf%cfg%comm,ierr)
+            call MPI_ALLREDUCE(MPI_IN_PLACE,dgvel,3*this%ccl%nstruct,MPI_REAL_WP,MPI_SUM,this%vf%cfg%comm,ierr)
             call MPI_ALLREDUCE(MPI_IN_PLACE,weights,this%ccl%nstruct,MPI_REAL_WP,MPI_SUM,this%vf%cfg%comm,ierr)
             ! Calculate weighted velocities
-            dugas(:) = dugas(:)/weights(:) 
-            dvgas(:) = dvgas(:)/weights(:)
-            dwgas(:) = dwgas(:)/weights(:)
+            do d=1,3
+               dgvel(:,d) = dgvel(:,d) / weights(:)
+            end do
          end block upstream_velocity
 
          compute_weber: block 
             real(WP) :: slip_vel, Deq
             do n=1,this%ccl%nstruct
-               slip_vel = sqrt((dugas(n)-dvel(n,1))**2.0_WP + (dvgas(n)-dvel(n,2))**2.0_WP + (dwgas(n)-dvel(n,3))**2.0_WP)
+               slip_vel = sqrt((dgvel(n,1)-dvel(n,1))**2.0_WP + (dgvel(n,2)-dvel(n,2))**2.0_WP + (dgvel(n,3)-dvel(n,3))**2.0_WP)
                Deq = ((dvol(n) * 6.0_WP)/Pi)**(1.0_WP/3.0_WP)
                this%weber(n) = this%fs%rho_g * slip_vel**2 * Deq / this%fs%sigma
-
-               print *, 'Weber number for structure ',n,' = ',this%weber(n)
             end do
          end block compute_weber
+
+         write_stats: block
+            use monitor_class, only: iformat,rformat
+            use string,    only: str_medium
+            character(len=str_medium) :: filename,struct_name
+            ! Create a file to write Weber numbers
+            write(filename, rformat) this%time%t
+            filename = 'structStats_'//trim(adjustl(filename))
+            this%weberfile=monitor(this%fs%cfg%amRoot,filename)
+            ! Add columns to the file
+            do n=1,this%ccl%nstruct
+               call this%weberfile%add_column(n,'Structure ID')
+               call this%weberfile%add_column(this%weber(n),'Weber Number')
+               call this%weberfile%add_column(dvol(n),'Drop Volume')  
+               call this%weberfile%add_column(dpos(n,1),'X Drop Pos')
+               call this%weberfile%add_column(dpos(n,2),'Y Drop Pos')
+               call this%weberfile%add_column(dpos(n,3),'Z Drop Pos')
+               call this%weberfile%add_column(dvel(n,1),'X Drop Vel')
+               call this%weberfile%add_column(dvel(n,2),'Y Drop Vel') 
+               call this%weberfile%add_column(dvel(n,3),'Z Drop Vel')
+               call this%weberfile%add_column(dgvel(n,1),'X Gas Vel')
+               call this%weberfile%add_column(dgvel(n,2),'Y Gas Vel')
+               call this%weberfile%add_column(dgvel(n,3),'Z Gas Vel')
+               call this%weberfile%add_column(dmoi(n,1,1),'Ixx')
+               call this%weberfile%add_column(dmoi(n,2,2),'Iyy')
+               call this%weberfile%add_column(dmoi(n,3,3),'Izz')
+               call this%weberfile%add_column(dmoi(n,1,2),'Ixy')
+               call this%weberfile%add_column(dmoi(n,1,3),'Ixz')
+               call this%weberfile%add_column(dmoi(n,2,3),'Iyz')
+               ! Write the data for this structure
+               call this%weberfile%write()
+            end do
+            ! Close file
+            call this%weberfile%close()
+         end block write_stats
          
       end block weber_number
       

@@ -13,9 +13,9 @@ module monitor_class
    
    !> Preset some length and formats for the columns
    integer,          parameter :: col_len=14
-   character(len=*), parameter :: aformat='(a12)'
-   character(len=*), parameter :: iformat='(i12)'
-   character(len=*), parameter :: rformat='(es12.5)'
+   character(len=*), public, parameter :: aformat='(a12)'
+   character(len=*), public, parameter :: iformat='(i12)'
+   character(len=*), public, parameter :: rformat='(es12.5)'
    
    
    !> Type for column list
@@ -43,6 +43,7 @@ module monitor_class
       generic :: add_column=>add_column_real,add_column_integer          !< Add a column to the monitor file
       procedure, private :: add_column_real,add_column_integer
       procedure :: write                                                 !< Writes the content of the monitor object to a file
+      procedure :: close                                                 !< Closes the monitor file
       !procedure :: write_header                                          !< Writes the header of the monitor object to a file
    end type monitor
    
@@ -74,7 +75,20 @@ contains
       ! We haven't yet dumped the file
       self%isfirst=.true.
    end function constructor
-   
+
+   !> Close monitor file
+   subroutine close(this)
+      implicit none
+      class(monitor), intent(inout) :: this
+      ! Only root works here
+      if (.not.this%amRoot) return
+      ! Close the file
+      close(this%iunit)
+      ! Reset the first column pointer
+      this%first_col=>NULL()
+      ! Reset the number of columns
+      this%ncol=0
+   end subroutine close
    
    !> Write out monitor file
    subroutine write(this)
