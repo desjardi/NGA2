@@ -12,7 +12,6 @@ module geometry
    
 contains
    
-   
    !> Initialization of problem geometry
    subroutine geometry_init
       use sgrid_class, only: sgrid
@@ -20,38 +19,32 @@ contains
       implicit none
       type(sgrid) :: grid
       
-      
       ! Create a grid from input params
       create_grid: block
          use sgrid_class, only: cartesian
+         use mathtools,   only: twoPi
          integer :: i,j,k,nx,ny,nz
          real(WP) :: Lx,Ly,Lz
          real(WP), dimension(:), allocatable :: x,y,z
-         
          ! Read in grid definition
-         call param_read('Lx',Lx); call param_read('nx',nx); allocate(x(nx+1))
-         call param_read('Ly',Ly); call param_read('ny',ny); allocate(y(ny+1))
-         call param_read('Lz',Lz); call param_read('nz',nz); allocate(z(nz+1))
-         
-         ! Adjust for 2D
+         call param_read('Lx',Lx,default=twoPi); call param_read('nx',nx); allocate(x(nx+1))
+         call param_read('Ly',Ly,default=twoPi); call param_read('ny',ny); allocate(y(ny+1))
+         call param_read('Lz',Lz,default=twoPi); call param_read('nz',nz); allocate(z(nz+1))
+         ! Handle 2D case
          if (nz.eq.1) Lz=Lx/real(nx,WP)
-         
          ! Create simple rectilinear grid
          do i=1,nx+1
             x(i)=real(i-1,WP)/real(nx,WP)*Lx-0.5_WP*Lx
          end do
          do j=1,ny+1
-            y(j)=real(j-1,WP)/real(ny,WP)*Ly
+            y(j)=real(j-1,WP)/real(ny,WP)*Ly-0.5_WP*Ly
          end do
          do k=1,nz+1
             z(k)=real(k-1,WP)/real(nz,WP)*Lz-0.5_WP*Lz
          end do
-         
          ! General serial grid object
-         grid=sgrid(coord=cartesian,no=3,x=x,y=y,z=z,xper=.true.,yper=.false.,zper=.true.,name='FallingDrop')
-         
+         grid=sgrid(coord=cartesian,no=2,x=x,y=y,z=z,xper=.true.,yper=.true.,zper=.true.,name='TaylorGreen')
       end block create_grid
-      
       
       ! Create a config from that grid on our entire group
       create_cfg: block
@@ -63,25 +56,6 @@ contains
          cfg=config(grp=group,decomp=partition,grid=grid)
       end block create_cfg
       
-      
-      ! Create masks for this config
-      create_walls: block
-         use mathtools, only: twoPi
-         integer :: i,j,k
-         cfg%VF=1.0_WP
-         do k=cfg%kmino_,cfg%kmaxo_
-            do j=cfg%jmino_,cfg%jmaxo_
-               do i=cfg%imino_,cfg%imaxo_
-                  if (cfg%ym(j).lt.0.0_WP) then
-                     cfg%VF(i,j,k)=0.0_WP
-                  end if
-               end do
-            end do
-         end do
-      end block create_walls
-      
-      
    end subroutine geometry_init
-   
    
 end module geometry

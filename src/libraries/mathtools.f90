@@ -50,7 +50,7 @@ contains
       real(WP), dimension(:,:), allocatable :: A,B
       integer :: i,j
       ! Allocate the work arrays
-      allocate(A(n,n),B(n,n))
+      allocate(A(n,n))
       ! Form the matrix
       do j=1,n
          do i=1,n
@@ -58,7 +58,7 @@ contains
          end do
       end do
       ! Invert it
-      call inverse_matrix(A,B,n)
+      B=inverse_matrix(A)
       ! Compute metrics
       coeff=0.0_WP
       do j=1,n
@@ -81,7 +81,7 @@ contains
       real(WP), dimension(:,:), allocatable :: A,B
       integer :: i,j
       ! Allocate the work arrays
-      allocate(A(n,n),B(n,n))
+      allocate(A(n,n))
       ! Form the matrix
       do j=1,n
          do i=1,n
@@ -89,7 +89,7 @@ contains
          end do
       end do
       ! Invert it
-      call inverse_matrix(A,B,n)
+      B=inverse_matrix(A)
       ! Compute metrics
       coeff=B(1,:)
       ! Deallocate the work arrays
@@ -97,32 +97,28 @@ contains
    end subroutine fd_itp_build
    
    
-   !> Inverse matrix using Gauss elimination
-   subroutine inverse_matrix(A,B,n)
+   function inverse_matrix(A) result(Ainv)
+      use messager, only: die
       implicit none
-      integer,  intent(in) :: n                    !< Matrix size
-      real(WP), intent(inout), dimension(n,n) :: A   !< Matrix to inverse - it is destroyed
-      real(WP), intent(out),   dimension(n,n) :: B   !< Matrix inverse
-      integer :: i,l
-      ! Zero out inverse
-      B=0.0_WP
-      ! Forward elimination
-      do i=1,n
-         B(i,i)=1.0_WP
-         B(i,:)=B(i,:)/A(i,i)
-         A(i,:)=A(i,:)/A(i,i)
-         do l=i+1,n
-            B(l,:)=B(l,:)-A(l,i)*B(i,:)
-            A(l,:)=A(l,:)-A(l,i)*A(i,:)
-         end do
-      end do
-      ! Backward substitution
-      do i=n,1,-1
-         do l=i+1,n
-            B(i,:)=B(i,:)-A(i,l)*B(l,:)
-         end do
-      end do
-   end subroutine inverse_matrix
+      real(WP), dimension(:,:), intent(in) :: A
+      real(WP), dimension(size(A,1),size(A,2)) :: Ainv
+      real(WP), dimension(size(A,1)) :: work
+      integer , dimension(size(A,1)) :: ipiv
+      integer :: n,info
+      external DGETRF
+      external DGETRI
+      ! Copy A over to Ainv to prevent it from being overwritten by LAPACK
+      Ainv=A
+      ! Store size
+      n=size(A,1)
+      ! Compute LU factorization of matrix A using partial pivoting with row interchanges
+      call DGETRF(n,n,Ainv,n,ipiv,info)
+      ! Error handling
+      if (info.ne.0) call die('[inverse_matrix] Matrix is numerically singular')
+      ! Compute inverse of matrix using LU factorization computed above
+      call DGETRI(n,Ainv,n,ipiv,work,n,info)
+      if (info.ne.0) call die('[inverse_matrix] Matrix inversion failed')
+    end function inverse_matrix
    
    
    ! Returns normalized vector: w=v/|v|

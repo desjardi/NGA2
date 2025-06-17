@@ -1044,4 +1044,47 @@ contains
       return
    end subroutine rec_refine_afunc_fd
    
+   !> Initialize volume fraction and barycenters from level set
+   subroutine initialize_volume_moments(lo,hi,levelset,level,time,VFlo,VF,BL,BG)
+      implicit none
+      real(WP), dimension(3), intent(in) :: lo,hi
+      interface
+         function levelset(x,t)
+            use precision, only: WP
+            implicit none
+            real(WP), dimension(3),intent(in) :: x
+            real(WP), intent(in) :: t
+            real(WP) :: levelset
+         end function levelset
+      end interface
+      integer , intent(in)  :: level
+      real(WP), intent(in)  :: time,VFlo
+      real(WP), intent(out) :: VF
+      real(WP), dimension(3), intent(out) :: BL,BG
+      real(WP), dimension(3,8) :: cube_vertex
+      real(WP), dimension(3)   :: v_cent,a_cent
+      real(WP) :: vol,area
+      cube_vertex(:,1)=[lo(1),lo(2),lo(3)]
+      cube_vertex(:,2)=[hi(1),lo(2),lo(3)]
+      cube_vertex(:,3)=[lo(1),hi(2),lo(3)]
+      cube_vertex(:,4)=[hi(1),hi(2),lo(3)]
+      cube_vertex(:,5)=[lo(1),lo(2),hi(3)]
+      cube_vertex(:,6)=[hi(1),lo(2),hi(3)]
+      cube_vertex(:,7)=[lo(1),hi(2),hi(3)]
+      cube_vertex(:,8)=[hi(1),hi(2),hi(3)]
+      vol=0.0_WP
+      area=0.0_WP
+      v_cent=0.0_WP
+      a_cent=0.0_WP
+      call cube_refine_vol(cube_vertex,vol,area,v_cent,a_cent,levelset,time,level)
+      VF=vol/((hi(1)-lo(1))*(hi(2)-lo(2))*(hi(3)-lo(3)))
+      if (VF.le.       VFlo) VF=0.0_WP
+      if (VF.ge.1.0_WP-VFlo) VF=1.0_WP
+      BL=0.5_WP*(lo+hi); BG=0.5_WP*(lo+hi)
+      if (VF.gt.VFlo.and.VF.lt.1.0_WP-VFlo) then
+         BL=v_cent
+         BG=(0.5_WP*(lo+hi)-VF*v_cent)/(1.0_WP-VF)
+      end if
+   end subroutine initialize_volume_moments
+   
 end module mms_geom

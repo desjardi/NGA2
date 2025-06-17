@@ -11,7 +11,6 @@ module simulation
    use ensight_class,     only: ensight
    use event_class,       only: event
    use monitor_class,     only: monitor
-   use iterator_class,    only: iterator
    implicit none
    private; public :: simulation_init,simulation_run,simulation_final
    
@@ -34,7 +33,7 @@ module simulation
    
    !> Simulation monitor file
    type(monitor) :: mfile,cflfile
-   real(WP) :: RHOcvg=0.0_WP,RHOtol=1.0e-4_WP
+   real(WP) :: RHOcvg=0.0_WP,RHOtol=1.0e-6_WP
    
    !> Private work arrays
    real(WP), dimension(:,:,:), allocatable :: resU,resV,resW,resE
@@ -42,23 +41,24 @@ module simulation
    
    !> Equation of state and shock properties
    real(WP) :: Gamma
-   real(WP) :: Ms,Xs0,theta,delta,sintheta,costheta
-   real(WP) :: M2,p2,rho2,a2,u2,u2x,u2y,p1,rho1,a1,us
-   logical  :: static_shock
+   real(WP) :: M2,p2,rho2,a2,u2
+   real(WP) :: M1,p1,rho1,a1,u1
+
+   !> Fluid properties
+   real(WP) :: Reynolds=1.0_WP,Prandtl,bulk2shear
    
-   !> Sponge zone
-   real(WP) :: yspg
-   type(iterator) :: spg
+   !> Postprocessing of dissipation
+   type(monitor) :: dissfile
+   real(WP), dimension(:,:,:), allocatable :: sdiss,ddiss
+   real(WP) :: sdiss_int,ddiss_int
    
 contains
    
    
    !> Function that returns a smooth Heaviside representation of exact shock
-   function Hshock(x,y,t) result(H)
-      real(WP), intent(in)  :: x,y,t
-      real(WP) :: H,val
-      val=(sintheta*y-costheta*(x-Xs0-u2x*t))/delta
-      H=1.0_WP/(1.0_WP+exp(-val))
+   real(WP) function Hshock(x,delta)
+      real(WP), intent(in) :: x,delta
+      Hshock=1.0_WP/(1.0_WP+exp(-x/delta))
    end function Hshock
    
    
@@ -90,6 +90,32 @@ contains
    end subroutine get_c2
    
    
+   !> Sutherland's law for viscosity as a function of temperature
+   subroutine get_visc()
+      implicit none
+      integer :: i,j,k
+      do k=fs%cfg%kmino_,fs%cfg%kmaxo_
+         do j=fs%cfg%jmino_,fs%cfg%jmaxo_
+            do i=fs%cfg%imino_,fs%cfg%imaxo_
+               fs%viscs(i,j,k)=Reynolds**(-1.0_WP)*(1.4042_WP*(sc%E(i,j,k)/sc%Cv)**1.5_WP)/(sc%E(i,j,k)/sc%Cv+0.4042_WP)
+            end do
+         end do
+      end do
+      ! Constant kinematic viscosity
+      fs%viscs=fs%RHO
+      ! Constant dynamic viscosity
+      !fs%visc=1.0_WP
+   end subroutine get_visc
+   
+   
+   !> Calculate dissipations
+   subroutine get_dissipation()
+      implicit none
+      ! Get full dilatational and solenoidal dissipations
+      call fs%get_dilatational_dissipation(diss=ddiss); call cfg%integrate(ddiss,integral=ddiss_int); ddiss_int=ddiss_int/(cfg%yL*cfg%zL)
+      call fs%get_solenoidal_dissipation  (diss=sdiss); call cfg%integrate(sdiss,integral=sdiss_int); sdiss_int=sdiss_int/(cfg%yL*cfg%zL)
+   end subroutine get_dissipation
+   
    !> Initialization of problem solver
    subroutine simulation_init
       use param, only: param_read
@@ -104,38 +130,30 @@ contains
          ! Read in gamma
          call param_read('Gamma',gamma)
          ! Read in minimal shock information
-         call param_read('Shock Mach',Ms)
-         call param_read('Shock angle',theta); theta=theta*Pi/180.0_WP; costheta=cos(theta); sintheta=sin(theta)
-         call param_read('Shock position',Xs0)
-         call param_read('Shock thickness',delta,default=0.7_WP*cfg%min_meshsize)
-         call param_read('Static shock',static_shock)
+         call param_read('Mach',M1)
          ! Generate preshock conditions
-         rho1=1.0_WP                                                   ! This is our reference density
-         p1=0.25_WP*rho1/gamma*((gamma+1.0_WP)*Ms/(Ms**2-1.0_WP))**2   ! We choose p1 to ensure that u2=1
+         rho1=1.0_WP
+         p1=0.25_WP*rho1/gamma*((gamma+1.0_WP)*M1/(M1**2-1.0_WP))**2 ! Ensures that |u2-u1|=1
          a1=sqrt(gamma*p1/rho1)
-         ! Generate shock velocity
-         us=Ms*a1
+         ! Generate pre-shock velocity
+         u1=M1*a1
          ! Also generate post-shock conditions
-         p2=p1*(2.0_WP*gamma*Ms**2-(gamma-1.0_WP))/(gamma+1.0_WP)
-         rho2=rho1*(gamma+1.0_WP)*Ms**2/((gamma-1.0_WP)*Ms**2+2.0_WP)
-         u2=us*(1.0_WP-rho1/rho2)   ! Should come out to 1
+         p2=p1*(2.0_WP*gamma/(gamma+1.0_WP)*(M1**2-1.0_WP)+1.0_WP)
+         rho2=rho1*(gamma+1.0_WP)*M1**2/((gamma-1.0_WP)*M1**2+2.0_WP)
+         u2=u1*rho1/rho2
          a2=sqrt(gamma*p2/rho2)
          M2=u2/a2
-         u2x=+u2*costheta
-         u2y=-u2*sintheta
          ! Output shock info
          if (cfg%amRoot) then
-            write(message,'("[     Shock  thickness] => delta=",es12.5)') delta; call log(message)
-            write(message,'("[     Shock conditions] =>    Ms=",es12.5)')    Ms; call log(message)
-            write(message,'("[     Shock conditions] =>    Vs=",es12.5)')    us; call log(message)
-            write(message,'("[     Shock conditions] => theta=",es12.5)') theta; call log(message)
             write(message,'("[Pre -shock conditions] =>  rho1=",es12.5)')  rho1; call log(message)
             write(message,'("[Pre -shock conditions] =>    p1=",es12.5)')    p1; call log(message)
+            write(message,'("[Pre -shock conditions] =>    u1=",es12.5)')    u1; call log(message)
             write(message,'("[Pre -shock conditions] =>    a1=",es12.5)')    a1; call log(message)
+            write(message,'("[Pre -shock conditions] =>    M1=",es12.5)')    M1; call log(message)
             write(message,'("[Post-shock conditions] =>  rho2=",es12.5)')  rho2; call log(message)
             write(message,'("[Post-shock conditions] =>    p2=",es12.5)')    p2; call log(message)
-            write(message,'("[Post-shock conditions] =>    a2=",es12.5)')    a2; call log(message)
             write(message,'("[Post-shock conditions] =>    u2=",es12.5)')    u2; call log(message)
+            write(message,'("[Post-shock conditions] =>    a2=",es12.5)')    a2; call log(message)
             write(message,'("[Post-shock conditions] =>    M2=",es12.5)')    M2; call log(message)
          end if
       end block initialize_shock
@@ -151,6 +169,8 @@ contains
          allocate(resE(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
          allocate(C2  (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
          allocate(Ma  (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+         allocate(sdiss(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+         allocate(ddiss(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
       end block allocate_work_arrays
       
       ! Initialize time tracker with 2 subiterations
@@ -173,7 +193,8 @@ contains
          call fs%initialize(cfg=cfg,name='Compressible NS')
          ! Add slight backward bias to CN scheme
          fs%theta=fs%theta+1.0e-2_WP
-         !fs%viscb=0.02_WP
+         ! Assign viscosity for Re_1=1
+         call param_read('Bulk to shear ratio',bulk2shear)
          ! Define boundary conditions
          !call fs%add_bcond(name='xm',type=dirichlet      ,face='x',dir=-1,canCorrect=.false.,locator=xm_locator)
          !call fs%add_bcond(name='xp',type=dirichlet      ,face='x',dir=+1,canCorrect=.false.,locator=xp_locator)
@@ -195,6 +216,9 @@ contains
          real(WP) :: Pr
          ! Create energy solver
          call sc%initialize(cfg=cfg,name='Energy')
+         ! Set Cv such that T1=1
+         sc%Cv=p1/(rho1*(Gamma-1.0_WP))
+         call param_read('Prandtl',Prandtl)
          ! Define boundary conditions
          !call sc%add_bcond(name='xm',type=dirichlet,locator=xm_locator_sc,dir='-x')
          !call sc%add_bcond(name='xp',type=dirichlet,locator=xp_locator   ,dir='+x')
@@ -207,23 +231,20 @@ contains
       
       ! Initialize our initial conditions
       initial_conditions: block
-         integer  :: i,j,k
+         integer :: i,j,k
          ! Initialize all fields
          do k=cfg%kmino_,cfg%kmaxo_
             do j=cfg%jmino_,cfg%jmaxo_
                do i=cfg%imino_,cfg%imaxo_
                   ! Setup normal shock at t=0
-                  fs%RHO(i,j,k)=rho1+(rho2-rho1)*Hshock(cfg%xm(i)-0.3_WP*delta,cfg%ym(j),0.0_WP)  ! Shift rho a bit
-                  fs%U  (i,j,k)=        u2x     *Hshock(cfg%x (i)-2.0_WP*delta,cfg%ym(j),0.0_WP)  ! Shift u a bit
-                  fs%V  (i,j,k)=        u2y     *Hshock(cfg%xm(i),cfg%y (j),0.0_WP)
-                  fs%P  (i,j,k)=p1  +(p2  -p1  )*Hshock(cfg%xm(i),cfg%ym(j),0.0_WP)
+                  fs%RHO(i,j,k)=rho1+(rho2-rho1)*Hshock(cfg%xm(i)+0.40_WP,delta=1.13_WP)  ! Shift rho a bit
+                  fs%U  (i,j,k)=u1  +(u2  -u1  )*Hshock(cfg%x (i)+2.35_WP,delta=1.10_WP)  ! Shift u a bit
+                  fs%P  (i,j,k)=p1  +(p2  -p1  )*Hshock(cfg%xm(i)+0.02_WP,delta=1.00_WP)
                   ! Corresponding internal energy
                   sc%E(i,j,k)=fs%P(i,j,k)/(fs%RHO(i,j,k)*(Gamma-1.0_WP))
                end do
             end do
          end do
-         ! If static shock, shift velocity
-         if (static_shock) fs%U=fs%U-us
          ! Apply all other boundary conditions
          call fs%apply_bcond(time%t,time%dt)
          ! Get face RHO
@@ -249,12 +270,6 @@ contains
          call get_c2(); Ma=sqrt((Ui**2+Vi**2+Wi**2)/C2)
       end block initial_conditions
       
-      ! Create sponge zone
-      create_sponge: block
-         call param_read('Y sponge',yspg)
-         spg=iterator(cfg,'Sponge zone',sponge_locator)
-      end block create_sponge
-      
       ! Create an LES model
       create_sgs: block
          call param_read('Use SGS model',use_sgs)
@@ -267,7 +282,7 @@ contains
       ! Add Ensight output
       create_ensight: block
          ! Create Ensight output from cfg
-         ens_out=ensight(cfg=cfg,name='shockreflection')
+         ens_out=ensight(cfg=cfg,name='staticshock')
          ! Create event for Ensight output
          ens_evt=event(time=time,name='Ensight output')
          call param_read('Ensight output period',ens_evt%tper)
@@ -276,7 +291,9 @@ contains
          call ens_out%add_vector('velocity',Ui,Vi,Wi)
          call ens_out%add_scalar('density',fs%rho)
          call ens_out%add_scalar('energy',sc%E)
-         call ens_out%add_scalar('viscb',sgs%visc)
+         call ens_out%add_scalar('sdiss',sdiss)
+         call ens_out%add_scalar('ddiss',ddiss)
+         if (use_sgs) call ens_out%add_scalar('viscb',sgs%visc)
          call ens_out%add_scalar('Mach',Ma)
          ! Output to ensight
          if (ens_evt%occurs()) call ens_out%write_data(time%t)
@@ -288,6 +305,7 @@ contains
          call fs%get_cfl(time%dt,time%cfl)
          call fs%get_max()
          call sc%get_max(fs%RHO)
+         call get_dissipation()
          ! Create simulation monitor
          mfile=monitor(fs%cfg%amRoot,'simulation')
          call mfile%add_column(time%n,'Timestep number')
@@ -311,6 +329,14 @@ contains
          call mfile%add_column(fs%psolv%it,'Pressure iteration')
          call mfile%add_column(fs%psolv%rerr,'Pressure error')
          call mfile%write()
+         ! Create dissipation monitor
+         dissfile=monitor(fs%cfg%amRoot,'dissipation')
+         call dissfile%add_column(time%n,'Timestep number')
+         call dissfile%add_column(time%t,'Time')
+         call dissfile%add_column(time%dt,'Timestep size')
+         call dissfile%add_column(sdiss_int,'Solenoidal dissipation')
+         call dissfile%add_column(ddiss_int,'Dilatational dissipation')
+         call dissfile%write()
          ! Create CFL monitor
          cflfile=monitor(fs%cfg%amRoot,'cfl')
          call cflfile%add_column(time%n,'Timestep number')
@@ -325,16 +351,6 @@ contains
       end block create_monitor
    
    contains
-      
-      !> Function that localizes the y+ sponge layer
-      function sponge_locator(pg,i,j,k) result(isIn)
-         use pgrid_class, only: pgrid
-         class(pgrid), intent(in) :: pg
-         integer, intent(in) :: i,j,k
-         logical :: isIn
-         isIn=.false.
-         if (pg%ym(j).ge.yspg) isIn=.true.
-      end function sponge_locator
       
       !> Function that localizes x- boundary
       function xm_locator(pg,i,j,k) result(isIn)
@@ -393,39 +409,11 @@ contains
          fs%Pold=fs%P
          
          ! Apply time-varying Dirichlet conditions
-         !top_update: block
-         !   integer :: i,j,k
-         !   if (cfg%jproc.eq.cfg%npy) then
-         !      do k=cfg%kmino_,cfg%kmaxo_
-         !         do j=cfg%jmax+1,cfg%jmaxo
-         !            do i=cfg%imino_,cfg%imaxo_
-         !               ! Setup normal shock at current time
-         !               fs%RHO(i,j,k)=rho1+(rho2-rho1)*Hshock(cfg%xm(i),cfg%ym(j),time%t)
-         !               fs%P  (i,j,k)=p1  +(p2  -p1  )*Hshock(cfg%xm(i),cfg%ym(j),time%t)
-         !               fs%U  (i,j,k)=        u2x     *Hshock(cfg%x (i),cfg%ym(j),time%t)
-         !               fs%V  (i,j,k)=        u2y     *Hshock(cfg%xm(i),cfg%y (j),time%t)
-         !               ! Corresponding internal energy
-         !               sc%E(i,j,k)=fs%P(i,j,k)/(fs%RHO(i,j,k)*(Gamma-1.0_WP))
-         !            end do
-         !         end do
-         !      end do
-         !   end if
-         !   if (cfg%jproc.eq.1) then
-         !      do k=cfg%kmino_,cfg%kmaxo_
-         !         do j=cfg%jmino,cfg%jmin-1
-         !            do i=cfg%imino_,cfg%imaxo_
-         !               ! Setup normal shock at current time
-         !               fs%RHO(i,j,k)=rho1+(rho2-rho1)*Hshock(cfg%xm(i),cfg%ym(j),time%t)
-         !               fs%P  (i,j,k)=p1  +(p2  -p1  )*Hshock(cfg%xm(i),cfg%ym(j),time%t)
-         !               fs%U  (i,j,k)=        u2x     *Hshock(cfg%x (i),cfg%ym(j),time%t)
-         !               fs%V  (i,j,k)=        u2y     *Hshock(cfg%xm(i),cfg%y (j),time%t)
-         !               ! Corresponding internal energy
-         !               sc%E(i,j,k)=fs%P(i,j,k)/(fs%RHO(i,j,k)*(Gamma-1.0_WP))
-         !            end do
-         !         end do
-         !      end do
-         !   end if
-         !end block top_update
+         
+         ! ============= RECOMPUTE VISCOSITY =================
+         call get_visc(); fs%viscb=bulk2shear*fs%viscs
+         sc%diff=sc%Cv*Gamma*fs%viscs/Prandtl
+         ! ===================================================
          
          ! ============= SUBGRID SCALE MODELING ==============
          if (use_sgs) then
@@ -438,13 +426,17 @@ contains
          end if
          ! ===================================================
          
+         ! ============= RECOMPUTE DIFFUSIVITY ===============
+         sc%diff=sc%Cv*Gamma*fs%viscs/Prandtl
+         ! ===================================================
+         
          ! ============= PREPARE WENO SCHEMES ================
          call fs%prepare_weno(rho=fs%RHO)
          call sc%prepare_weno(e=sc%E)
          ! ===================================================
          
          ! ============= INITIAL GUESS FOR RHO ===============
-         call fs%predict_rho(dt=time%dt)
+         !call fs%predict_rho(dt=time%dt)
          ! ===================================================
          
          ! Perform sub-iterations until RHO is sufficiently converged
@@ -512,25 +504,6 @@ contains
             call fs%apply_bcond(time%t,time%dt)
             ! ===================================================
             
-            ! Apply time-varying sponge conditions
-            !sponge_update: block
-            !   integer :: i,j,k,n
-            !   do n=1,spg%no_
-            !      i=spg%map(1,n)
-            !      j=spg%map(2,n)
-            !      k=spg%map(3,n)
-            !      ! Apply exact shock solution
-            !      fs%RHO(i,j,k)=rho1+(rho2-rho1)*Hshock(cfg%xm(i),cfg%ym(j),time%t)
-            !      fs%P  (i,j,k)=p1  +(p2  -p1  )*Hshock(cfg%xm(i),cfg%ym(j),time%t)
-            !      fs%U  (i,j,k)=        u2x     *Hshock(cfg%x (i),cfg%ym(j),time%t)
-            !      fs%V  (i,j,k)=        u2y     *Hshock(cfg%xm(i),cfg%y (j),time%t)
-            !      ! Corresponding internal energy
-            !      sc%E(i,j,k)=fs%P(i,j,k)/(fs%RHO(i,j,k)*(Gamma-1.0_WP))
-            !   end do
-            !   call fs%update_faceRHO()
-            !   call get_c2()
-            !end block sponge_update
-            
             ! ============ PRESSURE SOLVER ======================
             ! Compute Umid
             call fs%get_Umid()
@@ -586,7 +559,9 @@ contains
          ! Perform and output monitoring
          call fs%get_max()
          call sc%get_max(fs%RHO)
+         call get_dissipation()
          call mfile%write()
+         call dissfile%write()
          call cflfile%write()
          
       end do
@@ -598,7 +573,8 @@ contains
    subroutine simulation_final
       implicit none
       ! Deallocate work arrays
-      deallocate(resE,resU,resV,resW,Ui,Vi,Wi,Ma,gradU)
+      deallocate(resE,resU,resV,resW,Ui,Vi,Wi,Ma,ddiss,sdiss)
+      if (use_sgs) deallocate(gradU)
    end subroutine simulation_final
    
    

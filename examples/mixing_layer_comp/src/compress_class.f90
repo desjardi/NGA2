@@ -1223,7 +1223,7 @@ contains
       real(WP), intent(in) :: dt
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in) :: c2    !< Speed of sound squared
       integer :: i,j,k,s1,s2
-      ! Setup the scaled Laplacian operator from  metrics: lap(*)=-vol.div( f(rho) grad(*))
+      ! Setup the scaled Laplacian operator from  metrics: lap(*)=-vol.div( grad(*))
       do k=this%cfg%kmin_,this%cfg%kmax_
          do j=this%cfg%jmin_,this%cfg%jmax_
             do i=this%cfg%imin_,this%cfg%imax_

@@ -2,34 +2,35 @@
 Partition :	8 1 1
 
 # Mesh definition
-Lx :	0.06
-Ly :	0.06
-Lz :	0.06
-nx :	64
-ny :	64
-nz :	64
+Lx :	10
+Ly :	10
+Lz :	10
+nx :	128
+ny :	128
+nz :	1!28
 
 # Case parameters
-Droplet diameter : 0.01
-Droplet center : 0 0.05 0
+Droplet center : 0 5 0
+Pool depth : 4
 
-# Fluid properties
-Gravity :                     0 -9.81 0
-Liquid dynamic viscosity :    1.137e-3
-Gas dynamic viscosity :       1.780e-5
-Liquid density :              1000
-Gas density :                 1.226
-Surface tension coefficient : 0.0728
-Static contact angle :        140
+# Fluid properties      | (1) Jet  | (2) No jet
+Froude number :    146  !     146  !         90
+Weber number :     87   !      87  !         43
+Reynolds number :  3180 !    3180  !       2110
+Density ratio :    816
+Viscosity ratio :  64
+
+# SGS modeling
+Use SGS model : .false.!.true.
 
 # Time integration
-Max timestep size : 5e-4
+Max timestep size : 2e-2
 Max cfl number :    0.9
-Max time :          1
+Max time :          20
 
 # Pressure solver
-Pressure tolerance : 1e-4
+Pressure tolerance : 1e-5
 Pressure iteration : 100
 
 # Ensight output
-Ensight output period : 5e-3
+Ensight output period : 1e-1

@@ -27,6 +27,7 @@ module timetracker_class
       real(WP) :: cfl,cflmax                           !< Current and max CFL
       real(WP) ::  wt, wtmax                           !< Current and max wallclock time
       real(WP) :: told,dtold,tmid,dtmid                !< Old/mid time and timestep size
+      real(WP) :: relax                                !< Relaxation coefficient (nominally between 0 and 1, default is 1) to improve convergence of subiterations
       logical  :: print_info=.true.                    !< Should I print time information?
    contains
       procedure :: increment                           !< Default method for incrementing time
@@ -67,6 +68,7 @@ contains
       self%tmid =0.0_WP
       self%dtmid=0.0_WP
       self%it   =1;            self%itmax=1; self%itmin=0
+      self%relax=1.0_WP
    end function constructor
    
    

@@ -1,35 +1,41 @@
 # Parallelization
-Partition : 8 1 1
+Partition : 1 1 1!8 1 1
 
 # Mesh definition
 Lx : 4
-Ly : 1
+Ly : 0.015625!1
 Lz : 1
-nx : 512
-ny : 128
+nx : 256
+ny : 1!64
 nz : 1
 Y sponge : 0.75
+
+# Wall definition
+Wall start :  1
+Wall height : 0.5
 
 # Shock definition
 Shock Mach :       10
 Shock angle :      0
-Shock thickness :  1e-3
-Shock position :   0.1667
+Shock position :   2!0.1667  !2
+Static shock :     .true.
 
 # Fluid properties
 Gamma : 1.4
 
 # Do we use SGS modeling
-Use SGS model : .false.
+Use SGS model : .true.
 
 # Time integration
-Max timestep size : 5e-3
+Max timestep size : 0.75e-2
 Max cfl number :    0.9
+Max time :          2
 Subiterations :     50
+Relaxation coeff:   0.6
 
 # Pressure solver
 Pressure tolerance : 1e-6
 Pressure iteration : 100
 
 # Ensight output
-Ensight output period : 1e-1
+Ensight output period : 1e-2
