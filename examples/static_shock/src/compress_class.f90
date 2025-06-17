@@ -150,6 +150,8 @@ module compress_class
       procedure :: get_pgrad                              !< Calculate pressure gradient
       procedure :: get_pdil                               !< Calculate the pressure dilatation term
       procedure :: get_visc_heating                       !< Calculate the viscous heating term
+      procedure :: get_dilatational_dissipation           !< Calculate dilatational dilatation term
+      procedure :: get_solenoidal_dissipation             !< Calculate solenoidal dilatation term
       procedure :: get_cfl                                !< Calculate maximum CFL
       procedure :: get_max                                !< Calculate maximum field values
       procedure :: interp_vel                             !< Calculate interpolated velocity
@@ -573,58 +575,25 @@ contains
       if (.not.this%cfg%yper.and.this%cfg%jproc.eq.1) this%vmask(:,this%cfg%jmino,:)=this%vmask(:,this%cfg%jmino+1,:)
       if (.not.this%cfg%zper.and.this%cfg%kproc.eq.1) this%wmask(:,:,this%cfg%kmino)=this%wmask(:,:,this%cfg%kmino+1)
       
-      ! I am assuming here that we do not really need to zero out wall cells
-      ! as they could be used for Dirichlet (then the density needs to be available! could be problematic if we do not have an explicit BC for scalars, e.g. for a Couette flow)
-      ! or outflow condition (then the density needs to be available but it should be directly calculated)
-      ! or used for a real no-slip wall (then density is always multiplied by zero)
-      ! Adjust density interpolation coefficients to cell faces in the presence of walls (only walls!)
-      !do k=this%cfg%kmin_,this%cfg%kmax_+1
-      !   do j=this%cfg%jmin_,this%cfg%jmax_+1
-      !      do i=this%cfg%imin_,this%cfg%imax_+1
-      !         ! Linear interpolation in x
-      !         if (this%cfg%VF(i,j,k).eq.0.0_WP.and.this%cfg%VF(i-1,j,k).gt.0.0_WP) this%itpr_x(:,i,j,k)=[1.0_WP,0.0_WP]
-      !         if (this%cfg%VF(i,j,k).gt.0.0_WP.and.this%cfg%VF(i-1,j,k).eq.0.0_WP) this%itpr_x(:,i,j,k)=[0.0_WP,1.0_WP]
-      !         ! Linear interpolation in y
-      !         if (this%cfg%VF(i,j,k).eq.0.0_WP.and.this%cfg%VF(i,j-1,k).gt.0.0_WP) this%itpr_y(:,i,j,k)=[1.0_WP,0.0_WP]
-      !         if (this%cfg%VF(i,j,k).gt.0.0_WP.and.this%cfg%VF(i,j-1,k).eq.0.0_WP) this%itpr_y(:,i,j,k)=[0.0_WP,1.0_WP]
-      !         ! Linear interpolation in z
-      !         if (this%cfg%VF(i,j,k).eq.0.0_WP.and.this%cfg%VF(i,j,k-1).gt.0.0_WP) this%itpr_z(:,i,j,k)=[1.0_WP,0.0_WP]
-      !         if (this%cfg%VF(i,j,k).gt.0.0_WP.and.this%cfg%VF(i,j,k-1).eq.0.0_WP) this%itpr_z(:,i,j,k)=[0.0_WP,1.0_WP]
-      !      end do
-      !   end do
-      !end do
-      
-      ! Adjust density interpolation to reflect Dirichlet boundaries
+      ! Adjust desnity interpolation to cell faces for Dirichlet conditions (mask=2)
       do k=this%cfg%kmin_,this%cfg%kmax_+1
          do j=this%cfg%jmin_,this%cfg%jmax_+1
             do i=this%cfg%imin_,this%cfg%imax_+1
                ! X face
-               if (this%mask(i-1,j,k).eq.2) then
-                  this%up2_xm(:,i,j,k)=0.0_WP; this%up2_xm(-1,i,j,k)=1.0_WP
-                  this%up2_xp(:,i,j,k)=0.0_WP; this%up2_xp(-1,i,j,k)=1.0_WP
-               end if
-               if (this%mask(i  ,j,k).eq.2) then
-                  this%up2_xm(:,i,j,k)=0.0_WP; this%up2_xm( 0,i,j,k)=1.0_WP
-                  this%up2_xp(:,i,j,k)=0.0_WP; this%up2_xp( 0,i,j,k)=1.0_WP
-               end if
+               if (this%mask(i,j,k).eq.0.and.this%mask(i-1,j,k).eq.2) this%up2_xp(:,i,j,k)=[0.0_WP,1.0_WP]
+               if (this%mask(i,j,k).eq.0.and.this%mask(i-1,j,k).eq.2) this%itpr_x(:,i,j,k)=[1.0_WP,0.0_WP]
+               if (this%mask(i,j,k).eq.2.and.this%mask(i-1,j,k).eq.0) this%up2_xm(:,i,j,k)=[1.0_WP,0.0_WP]
+               if (this%mask(i,j,k).eq.2.and.this%mask(i-1,j,k).eq.0) this%itpr_x(:,i,j,k)=[0.0_WP,1.0_WP]
                ! Y face
-               if (this%mask(i,j-1,k).eq.2) then
-                  this%up2_ym(:,i,j,k)=0.0_WP; this%up2_ym(-1,i,j,k)=1.0_WP
-                  this%up2_yp(:,i,j,k)=0.0_WP; this%up2_yp(-1,i,j,k)=1.0_WP
-               end if
-               if (this%mask(i,j  ,k).eq.2) then
-                  this%up2_ym(:,i,j,k)=0.0_WP; this%up2_ym( 0,i,j,k)=1.0_WP
-                  this%up2_yp(:,i,j,k)=0.0_WP; this%up2_yp( 0,i,j,k)=1.0_WP
-               end if
+               if (this%mask(i,j,k).eq.0.and.this%mask(i,j-1,k).eq.2) this%up2_yp(:,i,j,k)=[0.0_WP,1.0_WP]
+               if (this%mask(i,j,k).eq.0.and.this%mask(i,j-1,k).eq.2) this%itpr_y(:,i,j,k)=[1.0_WP,0.0_WP]
+               if (this%mask(i,j,k).eq.2.and.this%mask(i,j-1,k).eq.0) this%up2_ym(:,i,j,k)=[1.0_WP,0.0_WP]
+               if (this%mask(i,j,k).eq.2.and.this%mask(i,j-1,k).eq.0) this%itpr_y(:,i,j,k)=[0.0_WP,1.0_WP]
                ! Z face
-               if (this%mask(i,j,k-1).eq.2) then
-                  this%up2_zm(:,i,j,k)=0.0_WP; this%up2_zm(-1,i,j,k)=1.0_WP
-                  this%up2_zp(:,i,j,k)=0.0_WP; this%up2_zp(-1,i,j,k)=1.0_WP
-               end if
-               if (this%mask(i,j,k  ).eq.2) then
-                  this%up2_zm(:,i,j,k)=0.0_WP; this%up2_zm( 0,i,j,k)=1.0_WP
-                  this%up2_zp(:,i,j,k)=0.0_WP; this%up2_zp( 0,i,j,k)=1.0_WP
-               end if
+               if (this%mask(i,j,k).eq.0.and.this%mask(i,j,k-1).eq.2) this%up2_zp(:,i,j,k)=[0.0_WP,1.0_WP]
+               if (this%mask(i,j,k).eq.0.and.this%mask(i,j,k-1).eq.2) this%itpr_z(:,i,j,k)=[1.0_WP,0.0_WP]
+               if (this%mask(i,j,k).eq.2.and.this%mask(i,j,k-1).eq.0) this%up2_zm(:,i,j,k)=[1.0_WP,0.0_WP]
+               if (this%mask(i,j,k).eq.2.and.this%mask(i,j,k-1).eq.0) this%itpr_z(:,i,j,k)=[0.0_WP,1.0_WP]
             end do
          end do
       end do
@@ -1453,7 +1422,7 @@ contains
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(out) :: visc_heating   !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       real(WP), dimension(:,:,:), allocatable :: U_,V_,W_,XY,YZ,ZX
       integer :: i,j,k
-      ! Zero out viscous heating arrays
+      ! Zero out viscous heating array
       visc_heating=0.0_WP
       ! Allocate and compute mid velocities
       allocate(U_(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_)); U_=0.5_WP*(this%U+this%Uold)
@@ -1493,7 +1462,7 @@ contains
                XY(i,j,k)=sum(this%itp_xy(:,:,i,j,k)*this%viscs(i-1:i,j-1:j,k))*(sum(this%grdu_y(:,i,j,k)*U_(i,j-1:j,k))+sum(this%grdv_x(:,i,j,k)*V_(i-1:i,j,k)))*(sum(this%grdu_y(:,i,j,k)*this%Umid(i,j-1:j,k))+sum(this%grdv_x(:,i,j,k)*this%Vmid(i-1:i,j,k)))
                ! Tyz*(dvdz+dwdy) at yz edge
                YZ(i,j,k)=sum(this%itp_yz(:,:,i,j,k)*this%viscs(i,j-1:j,k-1:k))*(sum(this%grdv_z(:,i,j,k)*V_(i,j,k-1:k))+sum(this%grdw_y(:,i,j,k)*W_(i,j-1:j,k)))*(sum(this%grdv_z(:,i,j,k)*this%Vmid(i,j,k-1:k))+sum(this%grdw_y(:,i,j,k)*this%Wmid(i,j-1:j,k)))
-               ! Tzx*(dwdx+dudx) at zx edge
+               ! Tzx*(dwdx+dudz) at zx edge
                ZX(i,j,k)=sum(this%itp_xz(:,:,i,j,k)*this%viscs(i-1:i,j,k-1:k))*(sum(this%grdw_x(:,i,j,k)*W_(i-1:i,j,k))+sum(this%grdu_z(:,i,j,k)*U_(i,j,k-1:k)))*(sum(this%grdw_x(:,i,j,k)*this%Wmid(i-1:i,j,k))+sum(this%grdu_z(:,i,j,k)*this%Umid(i,j,k-1:k)))
             end do
          end do
@@ -1513,6 +1482,74 @@ contains
       ! Deallocate
       deallocate(U_,V_,W_,XY,YZ,ZX)
    end subroutine get_visc_heating
+   
+   
+   !> Calculate discretely consistent dilatational dissipation
+   subroutine get_dilatational_dissipation(this,diss)
+      implicit none
+      class(compress), intent(inout) :: this
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(out) :: diss   !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      integer :: i,j,k
+      real(WP) :: dmid,dnow,dold
+      diss=0.0_WP
+      do k=this%cfg%kmin_,this%cfg%kmax_
+         do j=this%cfg%jmin_,this%cfg%jmax_
+            do i=this%cfg%imin_,this%cfg%imax_
+               dmid=sum(this%divp_x(:,i,j,k)*this%Umid(i:i+1,j,k))+sum(this%divp_y(:,i,j,k)*this%Vmid(i,j:j+1,k))+sum(this%divp_z(:,i,j,k)*this%Wmid(i,j,k:k+1))
+               dnow=sum(this%divp_x(:,i,j,k)*this%U   (i:i+1,j,k))+sum(this%divp_y(:,i,j,k)*this%V   (i,j:j+1,k))+sum(this%divp_z(:,i,j,k)*this%W   (i,j,k:k+1))
+               dold=sum(this%divp_x(:,i,j,k)*this%Uold(i:i+1,j,k))+sum(this%divp_y(:,i,j,k)*this%Vold(i,j:j+1,k))+sum(this%divp_z(:,i,j,k)*this%Wold(i,j,k:k+1))
+               diss(i,j,k)=(this%viscb(i,j,k)+4.0_WP/3.0_WP*this%viscs(i,j,k))*0.5_WP*(dnow+dold)*dmid
+            end do
+         end do
+      end do
+      call this%cfg%sync(diss)
+   end subroutine get_dilatational_dissipation
+   
+   
+   !> Calculate discretely consistent solenoidal dissipation
+   subroutine get_solenoidal_dissipation(this,diss)
+      implicit none
+      class(compress), intent(inout) :: this
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(out) :: diss   !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      real(WP), dimension(:,:,:), allocatable :: XY,YZ,ZX
+      integer :: i,j,k
+      ! Allocate storage for edge-centered terms
+      allocate(XY(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
+      allocate(YZ(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
+      allocate(ZX(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
+      ! Calculate all edge-centered terms
+      do k=this%cfg%kmin_,this%cfg%kmax_+1
+         do j=this%cfg%jmin_,this%cfg%jmax_+1
+            do i=this%cfg%imin_,this%cfg%imax_+1
+               ! (dvdx-dudy)^2 at xy edge
+               XY(i,j,k)=sum(this%itp_xy(:,:,i,j,k)*this%viscs(i-1:i,j-1:j,k))*(sum(this%grdv_x(:,i,j,k)*this%Vmid(i-1:i,j,k))-sum(this%grdu_y(:,i,j,k)*this%Umid(i,j-1:j,k)))&
+               &                                                              *(sum(this%grdv_x(:,i,j,k)*this%V   (i-1:i,j,k))-sum(this%grdu_y(:,i,j,k)*this%U   (i,j-1:j,k))&
+               &                                                               +sum(this%grdv_x(:,i,j,k)*this%Vold(i-1:i,j,k))-sum(this%grdu_y(:,i,j,k)*this%Uold(i,j-1:j,k)))*0.5_WP
+               ! (dwdy-dvdz)^2 at yz edge
+               YZ(i,j,k)=sum(this%itp_yz(:,:,i,j,k)*this%viscs(i,j-1:j,k-1:k))*(sum(this%grdw_y(:,i,j,k)*this%Wmid(i,j-1:j,k))-sum(this%grdv_z(:,i,j,k)*this%Vmid(i,j,k-1:k)))&
+               &                                                              *(sum(this%grdw_y(:,i,j,k)*this%W   (i,j-1:j,k))-sum(this%grdv_z(:,i,j,k)*this%V   (i,j,k-1:k))&
+               &                                                               +sum(this%grdw_y(:,i,j,k)*this%Wold(i,j-1:j,k))-sum(this%grdv_z(:,i,j,k)*this%Vold(i,j,k-1:k)))*0.5_WP
+               ! (dudz-dwdx)^2 at zx edge
+               ZX(i,j,k)=sum(this%itp_xz(:,:,i,j,k)*this%viscs(i-1:i,j,k-1:k))*(sum(this%grdu_z(:,i,j,k)*this%Umid(i,j,k-1:k))-sum(this%grdw_x(:,i,j,k)*this%Wmid(i-1:i,j,k)))&
+               &                                                              *(sum(this%grdu_z(:,i,j,k)*this%U   (i,j,k-1:k))-sum(this%grdw_x(:,i,j,k)*this%W   (i-1:i,j,k))&
+               &                                                               +sum(this%grdu_z(:,i,j,k)*this%Uold(i,j,k-1:k))-sum(this%grdw_x(:,i,j,k)*this%Wold(i-1:i,j,k)))*0.5_WP
+            end do
+         end do
+      end do
+      ! Interpolate edge-centered terms to the cell center
+      diss=0.0_WP
+      do k=this%cfg%kmin_,this%cfg%kmax_
+         do j=this%cfg%jmin_,this%cfg%jmax_
+            do i=this%cfg%imin_,this%cfg%imax_
+               diss(i,j,k)=0.25_WP*sum(XY(i:i+1,j:j+1,k))+0.25_WP*sum(YZ(i,j:j+1,k:k+1))+0.25_WP*sum(ZX(i:i+1,j,k:k+1))
+            end do
+         end do
+      end do
+      ! Sync result
+      call this%cfg%sync(diss)
+      ! Deallocate
+      deallocate(XY,YZ,ZX)
+   end subroutine get_solenoidal_dissipation
    
    
    !> Calculate the interpolated velocity, including overlap and ghosts

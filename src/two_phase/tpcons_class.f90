@@ -1,9 +1,9 @@
-!> Two-phase incompressible flow solver class:
+!> Two-phase incompressible conservative flow solver class:
 !> Provides support for various BC, RHS calculation,
 !> implicit solver, and pressure solution
 !> Assumes constant viscosity and density in each phase.
 !> Interface is represented using VOF
-module tpns_class
+module tpcons_class
    use precision,      only: WP
    use string,         only: str_medium
    use config_class,   only: config
@@ -13,7 +13,7 @@ module tpns_class
    private
    
    ! Expose type/constructor/methods
-   public :: tpns,bcond
+   public :: tpcons,bcond
    
    ! List of known available bcond for this solver
    integer, parameter, public :: wall=1              !< Dirichlet at zero condition
@@ -30,9 +30,6 @@ module tpns_class
    integer, parameter, public :: harmonic_visc=1     !< Harmonically-averaged viscosity
    integer, parameter, public :: arithmetic_visc=2   !< Arithmetically-averaged viscosity
    
-   ! Parameter for switching schemes around the interface
-   real(WP), parameter :: rhoeps_coeff=1.0e-3_WP     !< Parameter for deciding when to switch to upwinded transport
-   
    !> Boundary conditions for the two-phase solver
    type :: bcond
       type(bcond), pointer :: next                        !< Linked list of bconds
@@ -46,13 +43,13 @@ module tpns_class
    end type bcond
    
    !> Two-phase incompressible solver object definition
-   type :: tpns
+   type :: tpcons
       
       ! This is our config
       class(config), pointer :: cfg                       !< This is the config the solver is build for
       
       ! This is the name of the solver
-      character(len=str_medium) :: name='UNNAMED_TPNS'    !< Solver name (default=UNNAMED_TPNS)
+      character(len=str_medium) :: name='UNNAMED_TPCONS'  !< Solver name (default=UNNAMED_TPCONS)
       
       ! Constant property fluids
       real(WP) :: contact_angle                           !< This is our static contact angle
@@ -70,11 +67,13 @@ module tpns_class
       real(WP) :: correctable_area                        !< Area of bcond that can be corrected
       type(bcond), pointer :: first_bc                    !< List of bcond for our solver
       
-      ! Density and face density fields
-      real(WP), dimension(:,:,:), allocatable :: rho      !< New density field
-      real(WP), dimension(:,:,:), allocatable :: rho_U    !< New density field at U face
-      real(WP), dimension(:,:,:), allocatable :: rho_V    !< New density field at V face
-      real(WP), dimension(:,:,:), allocatable :: rho_W    !< New density field at W face
+      ! Face densities
+      real(WP), dimension(:,:,:), allocatable :: RHOX     !< Density at x-face
+      real(WP), dimension(:,:,:), allocatable :: RHOY     !< Density at y-face
+      real(WP), dimension(:,:,:), allocatable :: RHOZ     !< Density at z-face
+      real(WP), dimension(:,:,:), allocatable :: RHOXold  !< Old density at x-face
+      real(WP), dimension(:,:,:), allocatable :: RHOYold  !< Old density at y-face
+      real(WP), dimension(:,:,:), allocatable :: RHOZold  !< Old density at z-face
       
       ! Viscosity fields
       real(WP), dimension(:,:,:), allocatable :: visc     !< Viscosity field on P-cell
@@ -98,10 +97,6 @@ module tpns_class
       real(WP), dimension(:,:,:), allocatable :: dPjz     !< dPressure jump to add to -ddP/dz
       
       ! Old flow variables
-      real(WP), dimension(:,:,:), allocatable :: rhoold   !< Old density field
-      real(WP), dimension(:,:,:), allocatable :: rhoUold  !< rhoUold momentum array
-      real(WP), dimension(:,:,:), allocatable :: rhoVold  !< rhoVold momentum array
-      real(WP), dimension(:,:,:), allocatable :: rhoWold  !< rhoWold momentum array
       real(WP), dimension(:,:,:), allocatable :: Uold     !< Uold velocity array
       real(WP), dimension(:,:,:), allocatable :: Vold     !< Vold velocity array
       real(WP), dimension(:,:,:), allocatable :: Wold     !< Wold velocity array
@@ -121,9 +116,6 @@ module tpns_class
       real(WP), dimension(:,:,:,:), allocatable :: itpu_x,itpu_y,itpu_z   !< Second order interpolation for U
       real(WP), dimension(:,:,:,:), allocatable :: itpv_x,itpv_y,itpv_z   !< Second order interpolation for V
       real(WP), dimension(:,:,:,:), allocatable :: itpw_x,itpw_y,itpw_z   !< Second order interpolation for W
-      real(WP), dimension(:,:,:,:), allocatable :: hybu_x,hybu_y,hybu_z   !< Hybrid interpolation for U
-      real(WP), dimension(:,:,:,:), allocatable :: hybv_x,hybv_y,hybv_z   !< Hybrid interpolation for V
-      real(WP), dimension(:,:,:,:), allocatable :: hybw_x,hybw_y,hybw_z   !< Hybrid interpolation for W
       real(WP), dimension(:,:,:,:), allocatable :: divp_x,divp_y,divp_z   !< Divergence for P-cell
       real(WP), dimension(:,:,:,:), allocatable :: divu_x,divu_y,divu_z   !< Divergence for U-cell
       real(WP), dimension(:,:,:,:), allocatable :: divv_x,divv_y,divv_z   !< Divergence for V-cell
@@ -147,7 +139,7 @@ module tpns_class
       real(WP) :: Umax,Vmax,Wmax,Pmax,divmax                              !< Maximum velocity, pressure, divergence
       
    contains
-      procedure :: print=>tpns_print                      !< Output solver to the screen
+      procedure :: print=>tpcons_print                    !< Output solver to the screen
       procedure :: initialize                             !< Initialize the flow solver
       procedure :: setup                                  !< Finish configuring the flow solver
       procedure :: add_bcond                              !< Add a boundary condition
@@ -163,30 +155,30 @@ module tpns_class
       procedure :: get_max                                !< Calculate maximum field values
       procedure :: interp_vel                             !< Calculate interpolated velocity
       procedure :: get_strainrate                         !< Calculate deviatoric part of strain rate tensor
-      procedure :: get_gradu                              !< Calculate velocity gradient tensor
-      procedure :: get_vorticity                          !< Calculate vorticity tensor
+      procedure :: get_gradU                              !< Calculate velocity gradient tensor
+      procedure :: get_ugradu                             !< Calculate (u.grad)u vector
+      procedure :: get_vorticity                          !< Calculate vorticity vector
       procedure :: get_mfr                                !< Calculate outgoing MFR through each bcond
       procedure :: correct_mfr                            !< Correct for mfr mismatch to ensure global conservation
       procedure :: shift_p                                !< Shift pressure to have zero average
-      procedure :: update_density                         !< Calculate new density and momentum from vfs object
-      procedure :: get_face_density                       !< Calculate face densities by interpolation
+      procedure :: update_faceRHO                         !< Calculate face densities from provided density
       procedure :: get_viscosity                          !< Calculate viscosity fields from subcell phasic volume data in a vfs object
       procedure :: solve_implicit                         !< Solve for the velocity residuals implicitly
-      
       procedure :: addsrc_gravity                         !< Add gravitational body force
       procedure :: add_surface_tension_jump               !< Add surface tension jump
+      procedure :: add_surface_tension_jump_thin          !< Add surface tension jump - thin region version
+      procedure :: add_surface_tension_jump_twoVF         !< Add surface tension jump - two decomposed VF fields
       procedure :: add_static_contact                     !< Add static contact line model to surface tension jump
-      
-   end type tpns
+   end type tpcons
    
-
+   
 contains
    
    
    !> Initialization for two-phase incompressible flow solver
    subroutine initialize(this,cfg,name)
       implicit none
-      class(tpns), intent(inout) :: this
+      class(tpcons), intent(inout) :: this
       class(config), target, intent(in) :: cfg
       character(len=*), optional :: name
       integer :: i,j,k
@@ -202,13 +194,13 @@ contains
       this%first_bc=>NULL()
       
       ! Allocate flow variables
-      allocate(this%U(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_)); this%U=0.0_WP
-      allocate(this%V(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_)); this%V=0.0_WP
-      allocate(this%W(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_)); this%W=0.0_WP
-      allocate(this%P(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_)); this%P=0.0_WP
-      allocate(this%Pjx(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_)); this%Pjx=0.0_WP
-      allocate(this%Pjy(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_)); this%Pjy=0.0_WP
-      allocate(this%Pjz(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_)); this%Pjz=0.0_WP
+      allocate(this%U   (this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_)); this%U=0.0_WP
+      allocate(this%V   (this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_)); this%V=0.0_WP
+      allocate(this%W   (this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_)); this%W=0.0_WP
+      allocate(this%P   (this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_)); this%P=0.0_WP
+      allocate(this%Pjx (this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_)); this%Pjx=0.0_WP
+      allocate(this%Pjy (this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_)); this%Pjy=0.0_WP
+      allocate(this%Pjz (this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_)); this%Pjz=0.0_WP
       allocate(this%dPjx(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_)); this%dPjx=0.0_WP
       allocate(this%dPjy(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_)); this%dPjy=0.0_WP
       allocate(this%dPjz(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_)); this%dPjz=0.0_WP
@@ -217,18 +209,13 @@ contains
       allocate(this%visc_yz(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_)); this%visc_yz=0.0_WP
       allocate(this%visc_zx(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_)); this%visc_zx=0.0_WP
       
-      ! Mass conservation data around which to build momentum conservation
-      allocate(this%rho    (this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_)); this%rho    =0.0_WP
-      allocate(this%rho_U  (this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_)); this%rho_U  =0.0_WP
-      allocate(this%rho_V  (this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_)); this%rho_V  =0.0_WP
-      allocate(this%rho_W  (this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_)); this%rho_W  =0.0_WP
-      allocate(this%rhoold (this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_)); this%rhoold =0.0_WP
-      allocate(this%rhoU   (this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_)); this%rhoU   =0.0_WP
-      allocate(this%rhoV   (this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_)); this%rhoV   =0.0_WP
-      allocate(this%rhoW   (this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_)); this%rhoW   =0.0_WP
-      allocate(this%rhoUold(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_)); this%rhoUold=0.0_WP
-      allocate(this%rhoVold(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_)); this%rhoVold=0.0_WP
-      allocate(this%rhoWold(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_)); this%rhoWold=0.0_WP
+      ! Mass conservation data around which to build momentum/energy conservation
+      allocate(this%RHOX(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_)); this%RHOX=0.0_WP
+      allocate(this%RHOY(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_)); this%RHOY=0.0_WP
+      allocate(this%RHOZ(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_)); this%RHOZ=0.0_WP
+      allocate(this%rhoU(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_)); this%rhoU=0.0_WP
+      allocate(this%rhoV(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_)); this%rhoV=0.0_WP
+      allocate(this%rhoW(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_)); this%rhoW=0.0_WP
       
       ! Allocate flow divergence
       allocate(this%div(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_)); this%div=0.0_WP
@@ -237,6 +224,9 @@ contains
       allocate(this%Uold(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_)); this%Uold=0.0_WP
       allocate(this%Vold(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_)); this%Vold=0.0_WP
       allocate(this%Wold(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_)); this%Wold=0.0_WP
+      allocate(this%RHOXold(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_)); this%RHOXold=0.0_WP
+      allocate(this%RHOYold(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_)); this%RHOYold=0.0_WP
+      allocate(this%RHOZold(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_)); this%RHOZold=0.0_WP
       
       ! Prepare default metrics
       call this%init_metrics()
@@ -318,20 +308,9 @@ contains
    !> Metric initialization with no awareness of walls nor bcond
    subroutine init_metrics(this)
       implicit none
-      class(tpns), intent(inout) :: this
+      class(tpcons), intent(inout) :: this
       integer :: i,j,k,st1,st2
       real(WP), dimension(-1:0) :: itpx,itpy,itpz
-      
-      ! Allocate hybrid interpolation coefficients - these are populated later
-      allocate(this%hybu_x( 0:+1,this%cfg%imino_  :this%cfg%imaxo_,this%cfg%jmino_  :this%cfg%jmaxo_,this%cfg%kmino_  :this%cfg%kmaxo_)); this%hybu_x=0.0_WP
-      allocate(this%hybv_y( 0:+1,this%cfg%imino_  :this%cfg%imaxo_,this%cfg%jmino_  :this%cfg%jmaxo_,this%cfg%kmino_  :this%cfg%kmaxo_)); this%hybv_y=0.0_WP
-      allocate(this%hybw_z( 0:+1,this%cfg%imino_  :this%cfg%imaxo_,this%cfg%jmino_  :this%cfg%jmaxo_,this%cfg%kmino_  :this%cfg%kmaxo_)); this%hybw_z=0.0_WP
-      allocate(this%hybv_x(-1: 0,this%cfg%imino_+1:this%cfg%imaxo_,this%cfg%jmino_  :this%cfg%jmaxo_,this%cfg%kmino_  :this%cfg%kmaxo_)); this%hybv_x=0.0_WP
-      allocate(this%hybw_x(-1: 0,this%cfg%imino_+1:this%cfg%imaxo_,this%cfg%jmino_  :this%cfg%jmaxo_,this%cfg%kmino_  :this%cfg%kmaxo_)); this%hybw_x=0.0_WP
-      allocate(this%hybu_y(-1: 0,this%cfg%imino_  :this%cfg%imaxo_,this%cfg%jmino_+1:this%cfg%jmaxo_,this%cfg%kmino_  :this%cfg%kmaxo_)); this%hybu_y=0.0_WP
-      allocate(this%hybw_y(-1: 0,this%cfg%imino_  :this%cfg%imaxo_,this%cfg%jmino_+1:this%cfg%jmaxo_,this%cfg%kmino_  :this%cfg%kmaxo_)); this%hybw_y=0.0_WP
-      allocate(this%hybu_z(-1: 0,this%cfg%imino_  :this%cfg%imaxo_,this%cfg%jmino_  :this%cfg%jmaxo_,this%cfg%kmino_+1:this%cfg%kmaxo_)); this%hybu_z=0.0_WP
-      allocate(this%hybv_z(-1: 0,this%cfg%imino_  :this%cfg%imaxo_,this%cfg%jmino_  :this%cfg%jmaxo_,this%cfg%kmino_+1:this%cfg%kmaxo_)); this%hybv_z=0.0_WP
       
       ! Allocate finite difference density interpolation coefficients to cell faces
       allocate(this%itpr_x(-1:0,this%cfg%imino_+1:this%cfg%imaxo_,this%cfg%jmino_  :this%cfg%jmaxo_,this%cfg%kmino_  :this%cfg%kmaxo_)) !< X-face-centered
@@ -545,7 +524,7 @@ contains
    !> Metric adjustment accounting for bconds and walls
    subroutine adjust_metrics(this)
       implicit none
-      class(tpns), intent(inout) :: this
+      class(tpcons), intent(inout) :: this
       integer :: i,j,k,st1,st2
       real(WP) :: delta,mysum
       
@@ -828,7 +807,7 @@ contains
    !> Finish setting up the flow solver now that bconds have been defined
    subroutine setup(this,pressure_solver,implicit_solver)
       implicit none
-      class(tpns), intent(inout) :: this
+      class(tpcons), intent(inout) :: this
       class(linsol), target, intent(in) :: pressure_solver                      !< A pressure solver is required
       class(linsol), target, intent(in), optional :: implicit_solver            !< An implicit solver can be provided
       integer :: i,j,k
@@ -897,6 +876,11 @@ contains
          ! Initialize the implicit velocity solver
          call this%implicit%init()
          
+      else
+         
+         ! Point to implicit solver linsol object
+         this%implicit=>NULL()
+         
       end if
       
    end subroutine setup
@@ -904,11 +888,11 @@ contains
    
    !> Add a boundary condition
    subroutine add_bcond(this,name,type,locator,face,dir,canCorrect)
-      use string,   only: lowercase
-      use messager, only: die
+      use string,         only: lowercase
+      use messager,       only: die
       use iterator_class, only: locator_ftype
       implicit none
-      class(tpns), intent(inout) :: this
+      class(tpcons), intent(inout) :: this
       character(len=*), intent(in) :: name
       integer, intent(in) :: type
       procedure(locator_ftype) :: locator
@@ -926,14 +910,14 @@ contains
       case ('x'); new_bc%face='x'
       case ('y'); new_bc%face='y'
       case ('z'); new_bc%face='z'
-      case default; call die('[tpns add_bcond] Unknown bcond face - expecting x, y, or z')
+      case default; call die('[tpcons add_bcond] Unknown bcond face - expecting x, y, or z')
       end select
       new_bc%itr=iterator(pg=this%cfg,name=new_bc%name,locator=locator,face=new_bc%face)
       select case (dir) ! Outward-oriented
       case (+1); new_bc%dir=+1
       case (-1); new_bc%dir=-1
       case ( 0); new_bc%dir= 0
-      case default; call die('[tpns add_bcond] Unknown bcond dir - expecting -1, +1, or 0')
+      case default; call die('[tpcons add_bcond] Unknown bcond dir - expecting -1, +1, or 0')
       end select
       new_bc%rdir=real(new_bc%dir,WP)
       new_bc%canCorrect=canCorrect
@@ -947,7 +931,7 @@ contains
       
       ! Now adjust the metrics accordingly
       select case (new_bc%type)
-      case (dirichlet) !< Dirichlet is set one face (i.e., velocit component) at the time
+      case (dirichlet) !< Dirichlet is set one face (i.e., velocity component) at the time
          select case (new_bc%face)
          case ('x')
             do n=1,new_bc%itr%n_
@@ -971,7 +955,7 @@ contains
       case (convective)
       case (slip)
       case default
-         call die('[tpns apply_bcond] Unknown bcond type')
+         call die('[tpcons apply_bcond] Unknown bcond type')
       end select
    
    end subroutine add_bcond
@@ -981,7 +965,7 @@ contains
    subroutine get_bcond(this,name,my_bc)
       use messager, only: die
       implicit none
-      class(tpns), intent(inout) :: this
+      class(tpcons), intent(inout) :: this
       character(len=*), intent(in) :: name
       type(bcond), pointer, intent(out) :: my_bc
       my_bc=>this%first_bc
@@ -989,7 +973,7 @@ contains
          if (trim(my_bc%name).eq.trim(name)) exit search
          my_bc=>my_bc%next
       end do search
-      if (.not.associated(my_bc)) call die('[tpns get_bcond] Boundary condition was not found')
+      if (.not.associated(my_bc)) call die('[tpcons get_bcond] Boundary condition was not found')
    end subroutine get_bcond
    
    
@@ -997,7 +981,7 @@ contains
    subroutine apply_bcond(this,t,dt)
       use messager, only: die
       implicit none
-      class(tpns), intent(inout) :: this
+      class(tpcons), intent(inout) :: this
       real(WP), intent(in) :: t,dt
       integer :: i,j,k,n,stag
       type(bcond), pointer :: my_bc
@@ -1044,9 +1028,6 @@ contains
                      this%U(i     ,j    ,k    )=this%U(i-my_bc%dir     ,j    ,k    )
                      this%V(i+stag,j:j+1,k    )=this%V(i-my_bc%dir+stag,j:j+1,k    )
                      this%W(i+stag,j    ,k:k+1)=this%W(i-my_bc%dir+stag,j    ,k:k+1)
-                     this%rhoU(i     ,j    ,k    )=this%rhoU(i-my_bc%dir     ,j    ,k    )
-                     this%rhoV(i+stag,j:j+1,k    )=this%rhoV(i-my_bc%dir+stag,j:j+1,k    )
-                     this%rhoW(i+stag,j    ,k:k+1)=this%rhoW(i-my_bc%dir+stag,j    ,k:k+1)
                   end do
                case ('y')
                   stag=min(my_bc%dir,0)
@@ -1055,9 +1036,6 @@ contains
                      this%U(i:i+1,j+stag,k    )=this%U(i:i+1,j-my_bc%dir+stag,k    )
                      this%V(i    ,j     ,k    )=this%V(i    ,j-my_bc%dir     ,k    )
                      this%W(i    ,j+stag,k:k+1)=this%W(i    ,j-my_bc%dir+stag,k:k+1)
-                     this%rhoU(i:i+1,j+stag,k    )=this%rhoU(i:i+1,j-my_bc%dir+stag,k    )
-                     this%rhoV(i    ,j     ,k    )=this%rhoV(i    ,j-my_bc%dir     ,k    )
-                     this%rhoW(i    ,j+stag,k:k+1)=this%rhoW(i    ,j-my_bc%dir+stag,k:k+1)
                   end do
                case ('z')
                   stag=min(my_bc%dir,0)
@@ -1066,9 +1044,6 @@ contains
                      this%U(i:i+1,j    ,k+stag)=this%U(i:i+1,j    ,k-my_bc%dir+stag)
                      this%V(i    ,j:j+1,k+stag)=this%V(i    ,j:j+1,k-my_bc%dir+stag)
                      this%W(i    ,j    ,k     )=this%W(i    ,j    ,k-my_bc%dir     )
-                     this%rhoU(i:i+1,j    ,k+stag)=this%rhoU(i:i+1,j    ,k-my_bc%dir+stag)
-                     this%rhoV(i    ,j:j+1,k+stag)=this%rhoV(i    ,j:j+1,k-my_bc%dir+stag)
-                     this%rhoW(i    ,j    ,k     )=this%rhoW(i    ,j    ,k-my_bc%dir     )
                   end do
                end select
                ! If needed, clip
@@ -1077,26 +1052,17 @@ contains
                   case ('x')
                      do n=1,my_bc%itr%n_
                         i=my_bc%itr%map(1,n); j=my_bc%itr%map(2,n); k=my_bc%itr%map(3,n)
-                        if (this%U(i,j,k)*my_bc%rdir.lt.0.0_WP) then
-                           this%U(i,j,k)=0.0_WP
-                           this%rhoU(i,j,k)=0.0_WP
-                        end if
+                        if (this%U(i,j,k)*my_bc%rdir.lt.0.0_WP) this%U(i,j,k)=0.0_WP
                      end do
                   case ('y')
                      do n=1,my_bc%itr%n_
                         i=my_bc%itr%map(1,n); j=my_bc%itr%map(2,n); k=my_bc%itr%map(3,n)
-                        if (this%V(i,j,k)*my_bc%rdir.lt.0.0_WP) then
-                           this%V(i,j,k)=0.0_WP
-                           this%rhoV(i,j,k)=0.0_WP
-                        end if
+                        if (this%V(i,j,k)*my_bc%rdir.lt.0.0_WP) this%V(i,j,k)=0.0_WP
                      end do
                   case ('z')
                      do n=1,my_bc%itr%n_
                         i=my_bc%itr%map(1,n); j=my_bc%itr%map(2,n); k=my_bc%itr%map(3,n)
-                        if (this%W(i,j,k)*my_bc%rdir.lt.0.0_WP) then
-                           this%W(i,j,k)=0.0_WP
-                           this%rhoW(i,j,k)=0.0_WP
-                        end if
+                        if (this%W(i,j,k)*my_bc%rdir.lt.0.0_WP) this%W(i,j,k)=0.0_WP
                      end do
                   end select
                end if
@@ -1107,19 +1073,16 @@ contains
                      do n=1,my_bc%itr%n_
                         i=my_bc%itr%map(1,n); j=my_bc%itr%map(2,n); k=my_bc%itr%map(3,n)
                         this%U(i,j,k)=0.0_WP
-                        this%rhoU(i,j,k)=0.0_WP
                      end do
                   case ('y')
                      do n=1,my_bc%itr%n_
                         i=my_bc%itr%map(1,n); j=my_bc%itr%map(2,n); k=my_bc%itr%map(3,n)
                         this%V(i,j,k)=0.0_WP
-                        this%rhoV(i,j,k)=0.0_WP
                      end do
                   case ('z')
                      do n=1,my_bc%itr%n_
                         i=my_bc%itr%map(1,n); j=my_bc%itr%map(2,n); k=my_bc%itr%map(3,n)
                         this%W(i,j,k)=0.0_WP
-                        this%rhoW(i,j,k)=0.0_WP
                      end do
                   end select
                end if
@@ -1127,7 +1090,7 @@ contains
             case (convective)   ! Not implemented yet!
                
             case default
-               call die('[tpns apply_bcond] Unknown bcond type')
+               call die('[tpcons apply_bcond] Unknown bcond type')
             end select
             
          end if
@@ -1137,22 +1100,18 @@ contains
          
       end do
       
-      ! Sync full fields after each bcond - this should be optimized
+      ! Sync full fields after all bcond
       call this%cfg%sync(this%U)
       call this%cfg%sync(this%V)
       call this%cfg%sync(this%W)
-      call this%cfg%sync(this%rhoU)
-      call this%cfg%sync(this%rhoV)
-      call this%cfg%sync(this%rhoW)
       
    end subroutine apply_bcond
    
    
-   !> Calculate the explicit momentum time derivative
-   !> This assumes that rho, rhoold, rhoU/V/W have been updated already
+   !> Calculate the explicit time derivative of momentum given rhoU, U, and P
    subroutine get_dmomdt(this,drhoUdt,drhoVdt,drhoWdt)
       implicit none
-      class(tpns), intent(inout) :: this
+      class(tpcons), intent(inout) :: this
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(out) :: drhoUdt !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(out) :: drhoVdt !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(out) :: drhoWdt !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
@@ -1161,112 +1120,6 @@ contains
       
       ! Zero out drhoUVW/dt arrays
       drhoUdt=0.0_WP; drhoVdt=0.0_WP; drhoWdt=0.0_WP
-      
-      ! Initialize the hybrid interpolator to centered scheme
-      this%hybu_x=this%itpu_x; this%hybv_x=this%itpv_x; this%hybw_x=this%itpw_x
-      this%hybu_y=this%itpu_y; this%hybv_y=this%itpv_y; this%hybw_y=this%itpw_y
-      this%hybu_z=this%itpu_z; this%hybv_z=this%itpv_z; this%hybw_z=this%itpw_z
-      
-      ! Prepare hybrid interpolation scheme for mass and momentum
-      ! do kk=this%cfg%kmin_,this%cfg%kmax_+1
-      !    do jj=this%cfg%jmin_,this%cfg%jmax_+1
-      !       do ii=this%cfg%imin_,this%cfg%imax_+1
-      !          ! U-cell **********
-      !          ! Fluxes on x-face
-      !          i=ii-1; j=jj-1; k=kk-1
-      !          if (abs(this%rho_Uold(i+1,j,k)-this%rho_Uold(i,j,k)).gt.rhoeps) then
-      !             vel=sum(this%itpu_x(:,i,j,k)*this%U(i:i+1,j,k))
-      !             if (vel.ge.0.0_WP) then
-      !                this%hybu_x(:,i,j,k)=[1.0_WP,0.0_WP]
-      !             else
-      !                this%hybu_x(:,i,j,k)=[0.0_WP,1.0_WP]
-      !             end if
-      !          end if
-      !          ! Fluxes on y-face
-      !          i=ii; j=jj; k=kk
-      !          if (abs(this%rho_Uold(i,j,k)-this%rho_Uold(i,j-1,k)).gt.rhoeps) then
-      !             vel=sum(this%itpv_x(:,i,j,k)*this%V(i-1:i,j,k))
-      !             if (vel.ge.0.0_WP) then
-      !                this%hybu_y(:,i,j,k)=[1.0_WP,0.0_WP]
-      !             else
-      !                this%hybu_y(:,i,j,k)=[0.0_WP,1.0_WP]
-      !             end if
-      !          end if
-      !          ! Fluxes on z-face
-      !          i=ii; j=jj; k=kk
-      !          if (abs(this%rho_Uold(i,j,k)-this%rho_Uold(i,j,k-1)).gt.rhoeps) then
-      !             vel=sum(this%itpw_x(:,i,j,k)*this%W(i-1:i,j,k))
-      !             if (vel.ge.0.0_WP) then
-      !                this%hybu_z(:,i,j,k)=[1.0_WP,0.0_WP]
-      !             else
-      !                this%hybu_z(:,i,j,k)=[0.0_WP,1.0_WP]
-      !             end if
-      !          end if
-      !          ! V-cell **********
-      !          ! Fluxes on x-face
-      !          i=ii; j=jj; k=kk
-      !          if (abs(this%rho_Vold(i,j,k)-this%rho_Vold(i-1,j,k)).gt.rhoeps) then
-      !             vel=sum(this%itpu_y(:,i,j,k)*this%U(i,j-1:j,k))
-      !             if (vel.ge.0.0_WP) then
-      !                this%hybv_x(:,i,j,k)=[1.0_WP,0.0_WP]
-      !             else
-      !                this%hybv_x(:,i,j,k)=[0.0_WP,1.0_WP]
-      !             end if
-      !          end if
-      !          ! Fluxes on y-face
-      !          i=ii-1; j=jj-1; k=kk-1
-      !          if (abs(this%rho_Vold(i,j+1,k)-this%rho_Vold(i,j,k)).gt.rhoeps) then
-      !             vel=sum(this%itpv_y(:,i,j,k)*this%V(i,j:j+1,k))
-      !             if (vel.ge.0.0_WP) then
-      !                this%hybv_y(:,i,j,k)=[1.0_WP,0.0_WP]
-      !             else
-      !                this%hybv_y(:,i,j,k)=[0.0_WP,1.0_WP]
-      !             end if
-      !          end if
-      !          ! Fluxes on z-face
-      !          i=ii; j=jj; k=kk
-      !          if (abs(this%rho_Vold(i,j,k)-this%rho_Vold(i,j,k-1)).gt.rhoeps) then
-      !             vel=sum(this%itpw_y(:,i,j,k)*this%W(i,j-1:j,k))
-      !             if (vel.ge.0.0_WP) then
-      !                this%hybv_z(:,i,j,k)=[1.0_WP,0.0_WP]
-      !             else
-      !                this%hybv_z(:,i,j,k)=[0.0_WP,1.0_WP]
-      !             end if
-      !          end if
-      !          ! W-cell **********
-      !          ! Fluxes on x-face
-      !          i=ii; j=jj; k=kk
-      !          if (abs(this%rho_Wold(i,j,k)-this%rho_Wold(i-1,j,k)).gt.rhoeps) then
-      !             vel=sum(this%itpu_z(:,i,j,k)*this%U(i,j,k-1:k))
-      !             if (vel.ge.0.0_WP) then
-      !                this%hybw_x(:,i,j,k)=[1.0_WP,0.0_WP]
-      !             else
-      !                this%hybw_x(:,i,j,k)=[0.0_WP,1.0_WP]
-      !             end if
-      !          end if
-      !          ! Fluxes on y-face
-      !          i=ii; j=jj; k=kk
-      !          if (abs(this%rho_Wold(i,j,k)-this%rho_Wold(i,j-1,k)).gt.rhoeps) then
-      !             vel=sum(this%itpv_z(:,i,j,k)*this%V(i,j,k-1:k))
-      !             if (vel.ge.0.0_WP) then
-      !                this%hybw_y(:,i,j,k)=[1.0_WP,0.0_WP]
-      !             else
-      !                this%hybw_y(:,i,j,k)=[0.0_WP,1.0_WP]
-      !             end if
-      !          end if
-      !          ! Fluxes on z-face
-      !          i=ii-1; j=jj-1; k=kk-1
-      !          if (abs(this%rho_Wold(i,j,k+1)-this%rho_Wold(i,j,k)).gt.rhoeps) then
-      !             vel=sum(this%itpw_z(:,i,j,k)*this%W(i,j,k:k+1))
-      !             if (vel.ge.0.0_WP) then
-      !                this%hybw_z(:,i,j,k)=[1.0_WP,0.0_WP]
-      !             else
-      !                this%hybw_z(:,i,j,k)=[0.0_WP,1.0_WP]
-      !             end if
-      !          end if
-      !       end do
-      !    end do
-      ! end do
       
       ! Allocate flux arrays
       allocate(FX(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
@@ -1279,16 +1132,16 @@ contains
             do ii=this%cfg%imin_,this%cfg%imax_+1
                ! Fluxes on x-face
                i=ii-1; j=jj-1; k=kk-1
-               FX(i,j,k)=-sum(this%itpu_x(:,i,j,k)*this%rhoU(i:i+1,j,k))*sum(this%hybu_x(:,i,j,k)*this%U(i:i+1,j,k)) &
+               FX(i,j,k)=-sum(this%itpu_x(:,i,j,k)*this%rhoU(i:i+1,j,k))*sum(this%itpu_x(:,i,j,k)*this%U(i:i+1,j,k)) &
                &         +this%visc   (i,j,k)*(sum(this%grdu_x(:,i,j,k)*this%U(i:i+1,j,k))+sum(this%grdu_x(:,i,j,k)*this%U(i:i+1,j,k))) &
                &         -this%P(i,j,k)
                ! Fluxes on y-face
                i=ii; j=jj; k=kk
-               FY(i,j,k)=-sum(this%itpv_x(:,i,j,k)*this%rhoV(i-1:i,j,k))*sum(this%hybu_y(:,i,j,k)*this%U(i,j-1:j,k)) &
+               FY(i,j,k)=-sum(this%itpv_x(:,i,j,k)*this%rhoV(i-1:i,j,k))*sum(this%itpu_y(:,i,j,k)*this%U(i,j-1:j,k)) &
                &         +this%visc_xy(i,j,k)*(sum(this%grdu_y(:,i,j,k)*this%U(i,j-1:j,k))+sum(this%grdv_x(:,i,j,k)*this%V(i-1:i,j,k)))
                ! Fluxes on z-face
                i=ii; j=jj; k=kk
-               FZ(i,j,k)=-sum(this%itpw_x(:,i,j,k)*this%rhoW(i-1:i,j,k))*sum(this%hybu_z(:,i,j,k)*this%U(i,j,k-1:k)) &
+               FZ(i,j,k)=-sum(this%itpw_x(:,i,j,k)*this%rhoW(i-1:i,j,k))*sum(this%itpu_z(:,i,j,k)*this%U(i,j,k-1:k)) &
                &         +this%visc_zx(i,j,k)*(sum(this%grdu_z(:,i,j,k)*this%U(i,j,k-1:k))+sum(this%grdw_x(:,i,j,k)*this%W(i-1:i,j,k)))
             end do
          end do
@@ -1312,16 +1165,16 @@ contains
             do ii=this%cfg%imin_,this%cfg%imax_+1
                ! Fluxes on x-face
                i=ii; j=jj; k=kk
-               FX(i,j,k)=-sum(this%itpu_y(:,i,j,k)*this%rhoU(i,j-1:j,k))*sum(this%hybv_x(:,i,j,k)*this%V(i-1:i,j,k)) &
+               FX(i,j,k)=-sum(this%itpu_y(:,i,j,k)*this%rhoU(i,j-1:j,k))*sum(this%itpv_x(:,i,j,k)*this%V(i-1:i,j,k)) &
                &         +this%visc_xy(i,j,k)*(sum(this%grdv_x(:,i,j,k)*this%V(i-1:i,j,k))+sum(this%grdu_y(:,i,j,k)*this%U(i,j-1:j,k)))
                ! Fluxes on y-face
                i=ii-1; j=jj-1; k=kk-1
-               FY(i,j,k)=-sum(this%itpv_y(:,i,j,k)*this%rhoV(i,j:j+1,k))*sum(this%hybv_y(:,i,j,k)*this%V(i,j:j+1,k)) &
+               FY(i,j,k)=-sum(this%itpv_y(:,i,j,k)*this%rhoV(i,j:j+1,k))*sum(this%itpv_y(:,i,j,k)*this%V(i,j:j+1,k)) &
                &         +this%visc   (i,j,k)*(sum(this%grdv_y(:,i,j,k)*this%V(i,j:j+1,k))+sum(this%grdv_y(:,i,j,k)*this%V(i,j:j+1,k))) &
                &         -this%P(i,j,k)
                ! Fluxes on z-face
                i=ii; j=jj; k=kk
-               FZ(i,j,k)=-sum(this%itpw_y(:,i,j,k)*this%rhoW(i,j-1:j,k))*sum(this%hybv_z(:,i,j,k)*this%V(i,j,k-1:k)) &
+               FZ(i,j,k)=-sum(this%itpw_y(:,i,j,k)*this%rhoW(i,j-1:j,k))*sum(this%itpv_z(:,i,j,k)*this%V(i,j,k-1:k)) &
                &         +this%visc_yz(i,j,k)*(sum(this%grdv_z(:,i,j,k)*this%V(i,j,k-1:k))+sum(this%grdw_y(:,i,j,k)*this%W(i,j-1:j,k)))
             end do
          end do
@@ -1345,15 +1198,15 @@ contains
             do ii=this%cfg%imin_,this%cfg%imax_+1
                ! Fluxes on x-face
                i=ii; j=jj; k=kk
-               FX(i,j,k)=-sum(this%itpu_z(:,i,j,k)*this%rhoW(i,j,k-1:k))*sum(this%hybw_x(:,i,j,k)*this%W(i-1:i,j,k)) &
+               FX(i,j,k)=-sum(this%itpu_z(:,i,j,k)*this%rhoU(i,j,k-1:k))*sum(this%itpw_x(:,i,j,k)*this%W(i-1:i,j,k)) &
                &         +this%visc_zx(i,j,k)*(sum(this%grdw_x(:,i,j,k)*this%W(i-1:i,j,k))+sum(this%grdu_z(:,i,j,k)*this%U(i,j,k-1:k)))
                ! Fluxes on y-face
                i=ii; j=jj; k=kk
-               FY(i,j,k)=-sum(this%itpv_z(:,i,j,k)*this%rhoW(i,j,k-1:k))*sum(this%hybw_y(:,i,j,k)*this%W(i,j-1:j,k)) &
+               FY(i,j,k)=-sum(this%itpv_z(:,i,j,k)*this%rhoV(i,j,k-1:k))*sum(this%itpw_y(:,i,j,k)*this%W(i,j-1:j,k)) &
                &         +this%visc_yz(i,j,k)*(sum(this%grdw_y(:,i,j,k)*this%W(i,j-1:j,k))+sum(this%grdv_z(:,i,j,k)*this%V(i,j,k-1:k)))
                ! Fluxes on z-face
                i=ii-1; j=jj-1; k=kk-1
-               FZ(i,j,k)=-sum(this%itpw_z(:,i,j,k)*this%rhoW(i,j,k:k+1))*sum(this%hybw_z(:,i,j,k)*this%W(i,j,k:k+1)) &
+               FZ(i,j,k)=-sum(this%itpw_z(:,i,j,k)*this%rhoW(i,j,k:k+1))*sum(this%itpw_z(:,i,j,k)*this%W(i,j,k:k+1)) &
                &         +this%visc   (i,j,k)*(sum(this%grdw_z(:,i,j,k)*this%W(i,j,k:k+1))+sum(this%grdw_z(:,i,j,k)*this%W(i,j,k:k+1))) &
                &         -this%P(i,j,k)
             end do
@@ -1377,11 +1230,11 @@ contains
       
    end subroutine get_dmomdt
    
-   
+
    !> Update pressure Poisson operator
    subroutine update_laplacian(this)
       implicit none
-      class(tpns), intent(inout) :: this
+      class(tpcons), intent(inout) :: this
       integer :: i,j,k,s1,s2
       ! Setup the scaled Laplacian operator from  metrics: lap(*)=-vol.div(grad(*)/rho)
       do k=this%cfg%kmin_,this%cfg%kmax_
@@ -1392,9 +1245,9 @@ contains
                ! Tranverse the stencil and recompute Laplacian
                do s1=0,1
                   do s2=-1,0
-                     this%psolv%opr(this%psolv%stmap(s1+s2,0,0),i,j,k)=this%psolv%opr(this%psolv%stmap(s1+s2,0,0),i,j,k)+this%divp_x(s1,i,j,k)*this%divu_x(s2,i+s1,j,k)/this%rho_U(i+s1,j,k)
-                     this%psolv%opr(this%psolv%stmap(0,s1+s2,0),i,j,k)=this%psolv%opr(this%psolv%stmap(0,s1+s2,0),i,j,k)+this%divp_y(s1,i,j,k)*this%divv_y(s2,i,j+s1,k)/this%rho_V(i,j+s1,k)
-                     this%psolv%opr(this%psolv%stmap(0,0,s1+s2),i,j,k)=this%psolv%opr(this%psolv%stmap(0,0,s1+s2),i,j,k)+this%divp_z(s1,i,j,k)*this%divw_z(s2,i,j,k+s1)/this%rho_W(i,j,k+s1)
+                     this%psolv%opr(this%psolv%stmap(s1+s2,0,0),i,j,k)=this%psolv%opr(this%psolv%stmap(s1+s2,0,0),i,j,k)+this%divp_x(s1,i,j,k)*this%divu_x(s2,i+s1,j,k)/this%RHOX(i+s1,j,k)
+                     this%psolv%opr(this%psolv%stmap(0,s1+s2,0),i,j,k)=this%psolv%opr(this%psolv%stmap(0,s1+s2,0),i,j,k)+this%divp_y(s1,i,j,k)*this%divv_y(s2,i,j+s1,k)/this%RHOY(i,j+s1,k)
+                     this%psolv%opr(this%psolv%stmap(0,0,s1+s2),i,j,k)=this%psolv%opr(this%psolv%stmap(0,0,s1+s2),i,j,k)+this%divp_z(s1,i,j,k)*this%divw_z(s2,i,j,k+s1)/this%RHOZ(i,j,k+s1)
                   end do
                end do
                ! Scale Laplacian by cell volume
@@ -1406,12 +1259,14 @@ contains
       call this%psolv%setup()
    end subroutine update_laplacian
    
-   
+
    !> Calculate the velocity divergence based on U/V/W
-   subroutine get_div(this)
+   subroutine get_div(this,src)
       implicit none
-      class(tpns), intent(inout) :: this
+      class(tpcons), intent(inout) :: this
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), optional :: src !< Mass source term
       integer :: i,j,k
+      ! Calculate divergence of velocity
       do k=this%cfg%kmin_,this%cfg%kmax_
          do j=this%cfg%jmin_,this%cfg%jmax_
             do i=this%cfg%imin_,this%cfg%imax_
@@ -1421,6 +1276,16 @@ contains
             end do
          end do
       end do
+      ! If present, account for mass source
+      if (present(src)) then
+         do k=this%cfg%kmin_,this%cfg%kmax_
+            do j=this%cfg%jmin_,this%cfg%jmax_
+               do i=this%cfg%imin_,this%cfg%imax_
+                  this%div(i,j,k)=this%div(i,j,k)-src(i,j,k)
+               end do
+            end do
+         end do
+      end if
       ! Sync it
       call this%cfg%sync(this%div)
    end subroutine get_div
@@ -1431,7 +1296,7 @@ contains
       use messager,  only: die
       use vfs_class, only: vfs
       implicit none
-      class(tpns), intent(inout) :: this
+      class(tpcons), intent(inout) :: this
       real(WP), intent(inout) :: dt     !< Timestep size over which to advance
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: div  !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       class(vfs), intent(inout) :: vf
@@ -1440,9 +1305,9 @@ contains
       real(WP) :: mycurv,mysurf
       
       ! Store old jump
-      this%DPjx=this%Pjx
-      this%DPjy=this%Pjy
-      this%DPjz=this%Pjz
+      this%dPjx=this%Pjx
+      this%dPjy=this%Pjy
+      this%dPjz=this%Pjz
       
       ! Calculate pressure jump
       do k=this%cfg%kmin_,this%cfg%kmax_+1
@@ -1482,23 +1347,23 @@ contains
          case (static_contact)
             call this%add_static_contact(vf=vf)
          case default
-            call die('[tpns: add_surface_tension_jump] Unknown contact model!')
+            call die('[tpcons: add_surface_tension_jump] Unknown contact model!')
          end select
       end if
       
-      ! Compute jump of DP
-      this%DPjx=this%Pjx-this%DPjx
-      this%DPjy=this%Pjy-this%DPjy
-      this%DPjz=this%Pjz-this%DPjz
+      ! Compute jump of dP
+      this%dPjx=this%Pjx-this%dPjx
+      this%dPjy=this%Pjy-this%dPjy
+      this%dPjz=this%Pjz-this%dPjz
       
       ! Add div(Pjump) to RP
       do k=this%cfg%kmin_,this%cfg%kmax_
          do j=this%cfg%jmin_,this%cfg%jmax_
             do i=this%cfg%imin_,this%cfg%imax_
                do s1=0,1
-                  div(i,j,k)=div(i,j,k)+dt*this%divp_x(s1,i,j,k)*this%DPjx(i+s1,j,k)/sum(this%itpr_x(:,i+s1,j,k)*this%rho(i+s1-1:i+s1,j,k))
-                  div(i,j,k)=div(i,j,k)+dt*this%divp_y(s1,i,j,k)*this%DPjy(i,j+s1,k)/sum(this%itpr_y(:,i,j+s1,k)*this%rho(i,j+s1-1:j+s1,k))
-                  div(i,j,k)=div(i,j,k)+dt*this%divp_z(s1,i,j,k)*this%DPjz(i,j,k+s1)/sum(this%itpr_z(:,i,j,k+s1)*this%rho(i,j,k+s1-1:k+s1))
+                  div(i,j,k)=div(i,j,k)+dt*this%divp_x(s1,i,j,k)*this%dPjx(i+s1,j,k)/this%RHOX(i+s1,j,k)
+                  div(i,j,k)=div(i,j,k)+dt*this%divp_y(s1,i,j,k)*this%dPjy(i,j+s1,k)/this%RHOY(i,j+s1,k)
+                  div(i,j,k)=div(i,j,k)+dt*this%divp_z(s1,i,j,k)*this%dPjz(i,j,k+s1)/this%RHOZ(i,j,k+s1)
                end do
             end do
          end do
@@ -1507,15 +1372,432 @@ contains
    end subroutine add_surface_tension_jump
    
    
+   !> Add surface tension jump term using CSF
+   !> Account for thin regions
+   subroutine add_surface_tension_jump_thin(this,dt,div,vf)
+      use messager,  only: die
+      use vfs_class, only: vfs
+      use irl_fortran_interface
+      implicit none
+      class(tpcons), intent(inout) :: this
+      real(WP), intent(inout) :: dt     !< Timestep size over which to advance
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: div  !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      class(vfs), intent(inout) :: vf
+      integer :: i,j,k,n,np1,np2,ind,s1
+      real(WP) :: mycurv,mysurf
+      real(WP), dimension(3) :: n1,n2,nf
+      real(WP), dimension(:,:,:), allocatable :: alpha  !< Modified volume fraction field
+      
+      ! Store old jump
+      this%dPjx=this%Pjx
+      this%dPjy=this%Pjy
+      this%dPjz=this%Pjz
+      
+      ! Prepare modified volume fraction field that accounts for thin regions
+      allocate(alpha(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
+      do k=this%cfg%kmino_,this%cfg%kmaxo_
+         do j=this%cfg%jmino_,this%cfg%jmaxo_
+            do i=this%cfg%imino_,this%cfg%imaxo_
+               if (vf%thin_sensor(i,j,k).eq.1.0_WP) then
+                  alpha(i,j,k)=1.0_WP !< Thin liquid region
+               else if (vf%thin_sensor(i,j,k).eq.2.0_WP) then
+                  alpha(i,j,k)=0.0_WP !< Thin gas region
+               else
+                  alpha(i,j,k)=vf%VF(i,j,k) !< Resolved region
+               end if
+            end do
+         end do
+      end do
+      
+      ! Calculate pressure jump
+      do k=this%cfg%kmin_,this%cfg%kmax_+1
+         do j=this%cfg%jmin_,this%cfg%jmax_+1
+            do i=this%cfg%imin_,this%cfg%imax_+1
+               ! Count my planes
+               np1=0
+               do n=1,getNumberOfPlanes(vf%liquid_gas_interface(i,j,k))
+                  if (getNumberOfVertices(vf%interface_polygon(n,i,j,k)).gt.0) np1=np1+1
+               end do
+               ! X face ===========================================
+               mysurf=sum(vf%SD(i-1:i,j,k)*this%cfg%vol(i-1:i,j,k))
+               if (mysurf.gt.0.0_WP) then
+                  mycurv=sum(vf%SD(i-1:i,j,k)*vf%curv(i-1:i,j,k)*this%cfg%vol(i-1:i,j,k))/mysurf
+               else
+                  mycurv=0.0_WP
+               end if
+               ! Count neighbor's planes
+               np2=0
+               do n=1,getNumberOfPlanes(vf%liquid_gas_interface(i-1,j,k))
+                  if (getNumberOfVertices(vf%interface_polygon(n,i-1,j,k)).gt.0) np2=np2+1
+               end do
+               ! Assign correct curvature
+               if (np1.eq.2.and.np2.eq.0) then
+                  n1=calculateNormal(vf%interface_polygon(1,i,j,k))
+                  n2=calculateNormal(vf%interface_polygon(2,i,j,k))
+                  nf=sign(1.0_WP,alpha(i-1,j,k)-0.5_WP)*[+1.0_WP,0.0_WP,0.0_WP]
+                  ind=maxloc([dot_product(n1,nf),dot_product(n2,nf)],dim=1)
+                  mycurv=vf%curv2p(ind,i,j,k)
+               end if
+               if (np1.eq.0.and.np2.eq.2) then
+                  n1=calculateNormal(vf%interface_polygon(1,i-1,j,k))
+                  n2=calculateNormal(vf%interface_polygon(2,i-1,j,k))
+                  nf=sign(1.0_WP,alpha(i,j,k)-0.5_WP)*[-1.0_WP,0.0_WP,0.0_WP]
+                  ind=maxloc([dot_product(n1,nf),dot_product(n2,nf)],dim=1)
+                  mycurv=vf%curv2p(ind,i-1,j,k)
+               end if
+               ! Assemble pressure jump
+               this%Pjx(i,j,k)=this%sigma*mycurv*sum(this%divu_x(:,i,j,k)*alpha(i-1:i,j,k))
+               ! Y face ===========================================
+               mysurf=sum(vf%SD(i,j-1:j,k)*this%cfg%vol(i,j-1:j,k))
+               if (mysurf.gt.0.0_WP) then
+                  mycurv=sum(vf%SD(i,j-1:j,k)*vf%curv(i,j-1:j,k)*this%cfg%vol(i,j-1:j,k))/mysurf
+               else
+                  mycurv=0.0_WP
+               end if
+               ! Count neighbor's planes
+               np2=0
+               do n=1,getNumberOfPlanes(vf%liquid_gas_interface(i,j-1,k))
+                  if (getNumberOfVertices(vf%interface_polygon(n,i,j-1,k)).gt.0) np2=np2+1
+               end do
+               ! Assign correct curvature
+               if (np1.eq.2.and.np2.eq.0) then
+                  n1=calculateNormal(vf%interface_polygon(1,i,j,k))
+                  n2=calculateNormal(vf%interface_polygon(2,i,j,k))
+                  nf=sign(1.0_WP,alpha(i,j-1,k)-0.5_WP)*[0.0_WP,+1.0_WP,0.0_WP]
+                  ind=maxloc([dot_product(n1,nf),dot_product(n2,nf)],dim=1)
+                  mycurv=vf%curv2p(ind,i,j,k)
+               end if
+               if (np1.eq.0.and.np2.eq.2) then
+                  n1=calculateNormal(vf%interface_polygon(1,i,j-1,k))
+                  n2=calculateNormal(vf%interface_polygon(2,i,j-1,k))
+                  nf=sign(1.0_WP,alpha(i,j,k)-0.5_WP)*[0.0_WP,-1.0_WP,0.0_WP]
+                  ind=maxloc([dot_product(n1,nf),dot_product(n2,nf)],dim=1)
+                  mycurv=vf%curv2p(ind,i,j-1,k)
+               end if
+               ! Assemble pressure jump
+               this%Pjy(i,j,k)=this%sigma*mycurv*sum(this%divv_y(:,i,j,k)*alpha(i,j-1:j,k))
+               ! Z face ===========================================
+               mysurf=sum(vf%SD(i,j,k-1:k)*this%cfg%vol(i,j,k-1:k))
+               if (mysurf.gt.0.0_WP) then
+                  mycurv=sum(vf%SD(i,j,k-1:k)*vf%curv(i,j,k-1:k)*this%cfg%vol(i,j,k-1:k))/mysurf
+               else
+                  mycurv=0.0_WP
+               end if
+               ! Count neighbor's planes
+               np2=0
+               do n=1,getNumberOfPlanes(vf%liquid_gas_interface(i,j,k-1))
+                  if (getNumberOfVertices(vf%interface_polygon(n,i,j,k-1)).gt.0) np2=np2+1
+               end do
+               ! Assign correct curvature
+               if (np1.eq.2.and.np2.eq.0) then
+                  n1=calculateNormal(vf%interface_polygon(1,i,j,k))
+                  n2=calculateNormal(vf%interface_polygon(2,i,j,k))
+                  nf=sign(1.0_WP,alpha(i,j,k-1)-0.5_WP)*[0.0_WP,0.0_WP,+1.0_WP]
+                  ind=maxloc([dot_product(n1,nf),dot_product(n2,nf)],dim=1)
+                  mycurv=vf%curv2p(ind,i,j,k)
+               end if
+               if (np1.eq.0.and.np2.eq.2) then
+                  n1=calculateNormal(vf%interface_polygon(1,i,j,k-1))
+                  n2=calculateNormal(vf%interface_polygon(2,i,j,k-1))
+                  nf=sign(1.0_WP,alpha(i,j,k)-0.5_WP)*[0.0_WP,0.0_WP,-1.0_WP]
+                  ind=maxloc([dot_product(n1,nf),dot_product(n2,nf)],dim=1)
+                  mycurv=vf%curv2p(ind,i,j,k-1)
+               end if
+               ! Assemble pressure jump
+               this%Pjz(i,j,k)=this%sigma*mycurv*sum(this%divw_z(:,i,j,k)*alpha(i,j,k-1:k))
+            end do
+         end do
+      end do
+      
+      ! Deallocate alpha
+      deallocate(alpha)
+      
+      ! Compute jump of DP
+      this%dPjx=this%Pjx-this%dPjx
+      this%dPjy=this%Pjy-this%dPjy
+      this%dPjz=this%Pjz-this%dPjz
+      
+      ! Add div(Pjump) to RP
+      do k=this%cfg%kmin_,this%cfg%kmax_
+         do j=this%cfg%jmin_,this%cfg%jmax_
+            do i=this%cfg%imin_,this%cfg%imax_
+               do s1=0,1
+                  div(i,j,k)=div(i,j,k)+dt*this%divp_x(s1,i,j,k)*this%dPjx(i+s1,j,k)/this%RHOX(i+s1,j,k)
+                  div(i,j,k)=div(i,j,k)+dt*this%divp_y(s1,i,j,k)*this%dPjy(i,j+s1,k)/this%RHOY(i,j+s1,k)
+                  div(i,j,k)=div(i,j,k)+dt*this%divp_z(s1,i,j,k)*this%dPjz(i,j,k+s1)/this%RHOZ(i,j,k+s1)
+               end do
+            end do
+         end do
+      end do
+      
+   end subroutine add_surface_tension_jump_thin
+   
+   
+   !> Add surface tension jump term using CSF
+   !> Account for thin regions by using building two VF fields
+   subroutine add_surface_tension_jump_twoVF(this,dt,div,vf)
+      use messager,  only: die
+      use vfs_class, only: vfs
+      use irl_fortran_interface
+      implicit none
+      class(tpcons), intent(inout) :: this
+      real(WP), intent(inout) :: dt     !< Timestep size over which to advance
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: div  !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      class(vfs), intent(inout) :: vf
+      integer :: i,j,k,ii,jj,kk,n,np1,np2,cn,s1
+      integer, dimension(2,2) :: plane_ind
+      real(WP), dimension(2,2) :: VF2p,curv2p,surf2p
+      real(WP), dimension(3,2) :: pos
+      real(WP), dimension(4,2,2) :: normals
+      real(WP), dimension(4) :: plane
+      type(RectCub_type) :: cell
+      type(PlanarSep_type) :: lginterface
+      
+      ! Store old jump
+      this%dPjx=this%Pjx
+      this%dPjy=this%Pjy
+      this%dPjz=this%Pjz
+      
+      ! Allocate IRL storage
+      call new(cell)
+      call new(lginterface)
+      call setNumberOfPlanes(lginterface,1)
+      
+      ! Calculate pressure jump
+      do k=this%cfg%kmin_,this%cfg%kmax_+1
+         do j=this%cfg%jmin_,this%cfg%jmax_+1
+            do i=this%cfg%imin_,this%cfg%imax_+1
+               ! X face ===========================================
+               np1=0; np2=0; VF2p=0.0_WP; curv2p=0.0_WP; surf2p=0.0_WP; normals=0.0_WP; plane_ind=0
+               ! Get info from cells on each side of the face
+               ii=i-1; jj=j; kk=k; cn=1; np1=prepare_info()
+               ii=i  ; jj=j; kk=k; cn=2; np2=prepare_info()
+               ! Assemble pressure jump
+               if ((np1.eq.0).and.(np2.eq.0)) then
+                  this%Pjx(i,j,k)=0.0_WP
+               else
+                  this%Pjx(i,j,k)=this%sigma*sum(this%divu_x(:,i,j,k)*get_kalpha())
+               end if
+               ! Y face ===========================================
+               np1=0; np2=0; VF2p=0.0_WP; curv2p=0.0_WP; surf2p=0.0_WP; normals=0.0_WP; plane_ind=0
+               ! Get info from cells on each side of the face
+               ii=i; jj=j-1; kk=k; cn=1; np1=prepare_info()
+               ii=i; jj=j  ; kk=k; cn=2; np2=prepare_info()
+               ! Assemble pressure jump
+               if ((np1.eq.0).and.(np2.eq.0)) then
+                  this%Pjy(i,j,k)=0.0_WP
+               else
+                  this%Pjy(i,j,k)=this%sigma*sum(this%divv_y(:,i,j,k)*get_kalpha())
+               end if
+               ! Z face ===========================================
+               np1=0; np2=0; VF2p=0.0_WP; curv2p=0.0_WP; surf2p=0.0_WP; normals=0.0_WP; plane_ind=0
+               ! Get info from cells on each side of the face
+               ii=i; jj=j; kk=k-1; cn=1; np1=prepare_info()
+               ii=i; jj=j; kk=k  ; cn=2; np2=prepare_info()
+               ! Assemble pressure jump
+               if ((np1.eq.0).and.(np2.eq.0)) then
+                  this%Pjz(i,j,k)=0.0_WP
+               else
+                  this%Pjz(i,j,k)=this%sigma*sum(this%divw_z(:,i,j,k)*get_kalpha())
+               end if
+            end do
+         end do
+      end do
+      
+      ! Compute jump of DP
+      this%dPjx=this%Pjx-this%dPjx
+      this%dPjy=this%Pjy-this%dPjy
+      this%dPjz=this%Pjz-this%dPjz
+      
+      ! Add div(Pjump) to RP
+      do k=this%cfg%kmin_,this%cfg%kmax_
+         do j=this%cfg%jmin_,this%cfg%jmax_
+            do i=this%cfg%imin_,this%cfg%imax_
+               do s1=0,1
+                  div(i,j,k)=div(i,j,k)+dt*this%divp_x(s1,i,j,k)*this%dPjx(i+s1,j,k)/this%RHOX(i+s1,j,k)
+                  div(i,j,k)=div(i,j,k)+dt*this%divp_y(s1,i,j,k)*this%dPjy(i,j+s1,k)/this%RHOY(i,j+s1,k)
+                  div(i,j,k)=div(i,j,k)+dt*this%divp_z(s1,i,j,k)*this%dPjz(i,j,k+s1)/this%RHOZ(i,j,k+s1)
+               end do
+            end do
+         end do
+      end do
+      
+   contains
+      
+      function prepare_info() result(np)
+         implicit none
+         integer :: np
+         real(WP) :: myvol
+         np=0; myvol=0.0_WP
+         do n=1,getNumberOfPlanes(vf%liquid_gas_interface(ii,jj,kk))
+            if (getNumberOfVertices(vf%interface_polygon(n,ii,jj,kk)).eq.0) cycle
+            np=np+1; plane_ind(n,cn)=1
+            call construct_2pt(cell,[vf%cfg%x(ii),vf%cfg%y(jj),vf%cfg%z(kk)],[vf%cfg%x(ii+1),vf%cfg%y(jj+1),vf%cfg%z(kk+1)])
+            plane=getPlane(vf%liquid_gas_interface(ii,jj,kk),n-1)
+            call setPlane(lginterface,0,plane(1:3),plane(4))
+            call getNormMoments(cell,lginterface,myvol)
+            VF2p(n,cn)=myvol/vf%cfg%vol(ii,jj,kk)
+            normals(:,n,cn)=plane
+            surf2p(n,cn)=abs(calculateVolume(vf%interface_polygon(n,ii,jj,kk)))
+            curv2p(n,cn)=vf%curv2p(n,ii,jj,kk)
+         end do
+         pos(:,cn)=[vf%cfg%xm(ii),vf%cfg%ym(jj),vf%cfg%zm(kk)]
+      end function  prepare_info
+      
+      function get_kalpha() result(kalpha)   
+         use mathtools, only: normalize
+         implicit none
+         real(WP), dimension(3) :: pos_temp
+         real(WP), dimension(2) :: kalpha
+         integer, dimension(2,2) :: plane_check
+         real(WP) :: surfsum,dist
+         integer :: flag
+         ! Merge left cell
+         if (np1.eq.2) then
+            if (dot_product(normals(1:3,1,1),normals(1:3,2,1)).gt.0.0_WP) then
+               surfsum=sum(surf2p(:,1))
+               normals(:,1,1)=(surf2p(1,1)*normals(:,1,1)+surf2p(2,1)*normals(:,2,1))/surfsum
+               normals(:,1,1)=normals(:,1,1)/(norm2(normals(1:3,1,1))+tiny(1.0_WP))
+               normals(:,2,1)=0.0_WP
+               VF2p(:,1)=[sum(surf2p(:,1)*VF2p(:,1))/surfsum,0.0_WP]
+               curv2p(:,1)=[sum(surf2p(:,1)*curv2p(:,1))/surfsum,0.0_WP]
+               surf2p(:,1)=[surfsum,0.0_WP]
+               plane_ind(:,1)=[1,0]
+            end if
+         end if
+         ! Merge right cell
+         if (np2.eq.2) then
+            if (dot_product(normals(1:3,1,2),normals(1:3,2,2)).gt.0.0_WP) then
+               surfsum = sum(surf2p(:,2))
+               normals(:,1,2)=(surf2p(1,2)*normals(:,1,2)+surf2p(2,2)*normals(:,2,2))/surfsum
+               normals(:,1,2)=normals(:,1,2)/(norm2(normals(1:3,1,2))+tiny(1.0_WP))
+               normals(:,2,2)=0.0_WP
+               VF2p(:,2)=[sum(surf2p(:,2)*VF2p(:,2))/surfsum,0.0_WP]
+               curv2p(:,2)=[sum(surf2p(:,2)*curv2p(:,2))/surfsum,0.0_WP]
+               surf2p(:,2)=[surfsum,0.0_WP]
+               plane_ind(:,2)=[1,0]
+            end if
+         end if
+         plane_check=0
+         do ii=1,2
+            if (plane_ind(ii,1).eq.0) cycle    ! If a plane doesn't exist, move on
+            flag=0
+            do jj=1,2
+               if (plane_ind(jj,2).eq.0) cycle ! If a plane doesn't exist, move on
+               if (dot_product(normals(1:3,ii,1),normals(1:3,jj,2)).gt.0.0_WP) then
+                  ! IF two plane aligns, both planes get the surface area weighted curvature
+                  flag=1
+                  curv2p(ii,1)=(curv2p(ii,1)*surf2p(ii,1)+curv2p(jj,2)*surf2p(jj,2))/(surf2p(ii,1)+surf2p(jj,2))
+                  curv2p(jj,2)=curv2p(ii,1)
+                  plane_check(ii,1)=1; plane_check(jj,2)=1
+               end if
+            end do
+            if (flag.eq.0) then ! NO PLANE with the same orientation is found
+               dist=-dot_product(normals(1:3,ii,1),pos(:,2))+normals(4,ii,1)
+               pos_temp=normalize(-dist*normals(1:3,ii,1))
+               ! Set first volume of cell2 based on centroid projection
+               if (plane_ind(1,2).ne.1.and.plane_ind(2,2).eq.1) then
+                  if (dot_product(pos_temp,normals(1:3,ii,1)).le.0.0_WP) then
+                     VF2p(1,2)=1.0_WP
+                  else
+                     VF2p(1,2)=0.0_WP
+                  end if
+                  curv2p(1,2)=curv2p(ii,1)
+                  plane_check(ii,1)=1; plane_check(1,2)=1
+               ! Set second volume of cell2 based on centroid projection
+               else if (plane_ind(2,2).ne.1.and.plane_ind(1,2).eq.1) then
+                  if (dot_product(pos_temp,normals(1:3,ii,1)).le.0.0_WP) then
+                     VF2p(2,2)=1.0_WP
+                  else
+                     VF2p(2,2)=0.0_WP
+                  end if
+                  curv2p(2,2)=curv2p(ii,1)
+                  plane_check(ii,1)=1; plane_check(2,2)=1
+               ! If both cells are empty, pick the cell that hasn't been checked
+               else if (plane_ind(2,2).ne.1.and.plane_ind(1,2).ne.1) then
+                  if (plane_check(1,2).eq.0) then
+                     if (dot_product(pos_temp,normals(1:3,ii,1)).le.0.0_WP) then
+                        VF2p(1,2)=1.0_WP
+                     else
+                        VF2p(1,2)=0.0_WP
+                     end if
+                     curv2p(1,2)=curv2p(ii,1)
+                     plane_check(ii,1)=1; plane_check(1,2)=1
+                  else if (plane_check(2,2).eq.0) then
+                     if (dot_product(pos_temp,normals(1:3,ii,1)).le.0.0_WP) then
+                        VF2p(2,2)=1.0_WP
+                     else
+                        VF2p(2,2)=0.0_WP
+                     end if
+                     curv2p(2,2)=curv2p(ii,1)
+                     plane_check(ii,1)=1; plane_check(2,2)=1
+                  end if
+               else ! don't know what to do, do nothing
+               end if
+            end if
+         end do
+         ! Next loop over all the planes from cell2 
+         do ii=1,2
+            ! If a plane doesn't exist or has been already accounted for, skip
+            if ((plane_ind(ii,2).eq.0).or.(plane_check(ii,2).eq.1)) cycle
+            dist=-dot_product(normals(1:3,ii,2),pos(:,1))+normals(4,ii,2)
+            pos_temp=normalize(-dist*normals(1:3,ii,2))
+            ! Set first volume of cell1 based on centroid projection
+            if (plane_ind(1,1).ne.1.and.plane_ind(2,1).eq.1) then
+               if (dot_product(pos_temp,normals(1:3,ii,2)).le.0.0_WP) then
+                  VF2p(1,1)=1.0_WP
+               else
+                  VF2p(1,1)=0.0_WP
+               end if
+               curv2p(1,1)=curv2p(ii,2)
+               plane_check(ii,2)=1; plane_check(1,1)=1
+            ! Set second volume of cell1 based on centroid projection
+            else if (plane_ind(2,1).ne.1.and.plane_ind(1,1).eq.1) then
+               if (dot_product(pos_temp,normals(1:3,ii,2)).le.0.0_WP) then
+                  VF2p(2,1)=1.0_WP
+               else
+                  VF2p(2,1)=0.0_WP
+               end if
+               curv2p(2,1)=curv2p(ii,2)
+               plane_check(ii,2)=1; plane_check(2,1)=1
+            ! If both cells are empty, pick the cell that hasn't been checked
+            else if (plane_ind(1,1).ne.1.and.plane_ind(2,1).ne.1) then
+               if (plane_check(1,1).eq.0) then
+                  if (dot_product(pos_temp,normals(1:3,ii,2)).le.0.0_WP) then
+                     VF2p(1,1)=1.0_WP
+                  else
+                     VF2p(1,1)=0.0_WP
+                  end if
+                  curv2p(1,1)=curv2p(ii,2)
+                  plane_check(ii,2)=1; plane_check(1,1)=1
+               else if (plane_check(2,1).eq.0) then
+                  if (dot_product(pos_temp,normals(1:3,ii,2)).le.0.0_WP) then
+                     VF2p(2,1)=1.0_WP
+                  else
+                     VF2p(2,1)=0.0_WP
+                  end if
+                  curv2p(2,1)=curv2p(ii,2)
+                  plane_check(ii,2)=1; plane_check(2,1)=1
+               end if
+            else ! don't know what to do, do nothing
+            end if
+         end do
+         kalpha=[sum(VF2p(:,1)*curv2p(:,1)),sum(VF2p(:,2)*curv2p(:,2))]
+      end function get_kalpha
+      
+   end subroutine add_surface_tension_jump_twoVF
+   
+   
    !> Calculate the pressure gradient based on P
    subroutine get_pgrad(this,P,Pgradx,Pgrady,Pgradz)
       implicit none
-      class(tpns), intent(inout) :: this
+      class(tpcons), intent(inout) :: this
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in)  :: P      !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(out) :: Pgradx !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(out) :: Pgrady !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(out) :: Pgradz !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       integer :: i,j,k
+      Pgradx=0.0_WP; Pgrady=0.0_WP; Pgradz=0.0_WP
       do k=this%cfg%kmin_,this%cfg%kmax_
          do j=this%cfg%jmin_,this%cfg%jmax_
             do i=this%cfg%imin_,this%cfg%imax_
@@ -1535,7 +1817,7 @@ contains
    !> Calculate the interpolated velocity, including overlap and ghosts
    subroutine interp_vel(this,Ui,Vi,Wi)
       implicit none
-      class(tpns), intent(inout) :: this
+      class(tpcons), intent(inout) :: this
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(out) :: Ui !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(out) :: Vi !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(out) :: Wi !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
@@ -1583,14 +1865,14 @@ contains
    subroutine get_strainrate(this,SR)
       use messager, only: die
       implicit none
-      class(tpns), intent(inout) :: this
+      class(tpcons), intent(inout) :: this
       real(WP), dimension(1:,this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(out) :: SR  !< Needs to be (1:6,imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       real(WP), dimension(:,:,:), allocatable :: dudy,dudz,dvdx,dvdz,dwdx,dwdy
       real(WP) :: div
       integer :: i,j,k
       
       ! Check SR's first dimension
-	   if (size(SR,dim=1).ne.6) call die('[tpns get_strainrate] SR should be of size (1:6,imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)')
+	   if (size(SR,dim=1).ne.6) call die('[tpcons get_strainrate] SR should be of size (1:6,imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)')
       
       ! Compute dudx, dvdy, and dwdz first
 	   do k=this%cfg%kmin_,this%cfg%kmax_
@@ -1672,26 +1954,121 @@ contains
    end subroutine get_strainrate
 
    
-   !> Calculate the velocity gradient tensor from U/V/W
-   !> Note that gradu(i,j)=duj/dxi
-   subroutine get_gradu(this,gradu)
+   !> Calculate the (u.grad)u vector from U/V/W
+   subroutine get_ugradu(this,ugradu)
       use messager, only: die
       implicit none
-      class(tpns), intent(inout) :: this
-      real(WP), dimension(1:,1:,this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(out) :: gradu  !< Needs to be (1:3,1:3,imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      class(tpcons), intent(inout) :: this
+      real(WP), dimension(1:,this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(out) :: ugradu  !< Needs to be (1:3,imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      integer :: i,j,k
+      real(WP), dimension(:,:,:), allocatable :: dudy,dudz,dvdx,dvdz,dwdx,dwdy
+      real(WP) :: Ui,gradUx,gradUy,gradUz
+      real(WP) :: Vi,gradVx,gradVy,gradVz
+      real(WP) :: Wi,gradWx,gradWy,gradWz
+      
+      ! Check ugradu's first dimension
+	   if (size(ugradu,dim=1).ne.3) call die('[tpcons get_ugradu] gradu should be of size (1:3,imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)')
+      
+      ! Allocate off-diagonal components of the velocity gradient
+	   allocate(dudy(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
+      allocate(dudz(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
+      allocate(dvdx(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
+      allocate(dvdz(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
+      allocate(dwdx(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
+      allocate(dwdy(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
+      
+      ! Calculate off-diagonal components of the velocity gradient at their natural locations with an extra cell for interpolation
+	   do k=this%cfg%kmin_,this%cfg%kmax_+1
+         do j=this%cfg%jmin_,this%cfg%jmax_+1
+            do i=this%cfg%imin_,this%cfg%imax_+1
+               dudy(i,j,k)=sum(this%grdu_y(:,i,j,k)*this%U(i,j-1:j,k))
+               dudz(i,j,k)=sum(this%grdu_z(:,i,j,k)*this%U(i,j,k-1:k))
+               dvdx(i,j,k)=sum(this%grdv_x(:,i,j,k)*this%V(i-1:i,j,k))
+               dvdz(i,j,k)=sum(this%grdv_z(:,i,j,k)*this%V(i,j,k-1:k))
+               dwdx(i,j,k)=sum(this%grdw_x(:,i,j,k)*this%W(i-1:i,j,k))
+               dwdy(i,j,k)=sum(this%grdw_y(:,i,j,k)*this%W(i,j-1:j,k))
+            end do
+         end do
+      end do
+      
+      ! Assemble (u.grad)u at cell center
+	   do k=this%cfg%kmin_,this%cfg%kmax_
+         do j=this%cfg%jmin_,this%cfg%jmax_
+            do i=this%cfg%imin_,this%cfg%imax_
+               ! Calculate velocity gradient directly or by interpolation
+               gradUx=sum(this%grdu_x(:,i,j,k)*this%U(i:i+1,j,k))
+               gradUy=0.25_WP*sum(dudy(i:i+1,j:j+1,k))
+               gradUz=0.25_WP*sum(dudz(i:i+1,j,k:k+1))
+               gradVx=0.25_WP*sum(dvdx(i:i+1,j:j+1,k))
+               gradVy=sum(this%grdv_y(:,i,j,k)*this%V(i,j:j+1,k))
+               gradVz=0.25_WP*sum(dvdz(i,j:j+1,k:k+1))
+               gradWx=0.25_WP*sum(dwdx(i:i+1,j,k:k+1))
+               gradWy=0.25_WP*sum(dwdy(i,j:j+1,k:k+1))
+               gradWz=sum(this%grdw_z(:,i,j,k)*this%W(i,j,k:k+1))
+               ! Interpolate velocity to cell center
+               Ui=0.5_WP*sum(this%U(i:i+1,j,k))
+               Vi=0.5_WP*sum(this%V(i,j:j+1,k))
+               Wi=0.5_WP*sum(this%W(i,j,k:k+1))
+               ! Assemble (u.grad)u
+               ugradu(1,i,j,k)=Ui*gradUx+Vi*gradUy+Wi*gradUz
+               ugradu(2,i,j,k)=Ui*gradVx+Vi*gradVy+Wi*gradVz
+               ugradu(3,i,j,k)=Ui*gradWx+Vi*gradWy+Wi*gradWz
+            end do
+         end do
+      end do
+      
+      ! Apply a Neumann condition in non-periodic directions
+	   if (.not.this%cfg%xper) then
+         if (this%cfg%iproc.eq.1)            ugradu(:,this%cfg%imin-1,:,:)=ugradu(:,this%cfg%imin,:,:)
+         if (this%cfg%iproc.eq.this%cfg%npx) ugradu(:,this%cfg%imax+1,:,:)=ugradu(:,this%cfg%imax,:,:)
+      end if
+      if (.not.this%cfg%yper) then
+         if (this%cfg%jproc.eq.1)            ugradu(:,:,this%cfg%jmin-1,:)=ugradu(:,:,this%cfg%jmin,:)
+         if (this%cfg%jproc.eq.this%cfg%npy) ugradu(:,:,this%cfg%jmax+1,:)=ugradu(:,:,this%cfg%jmax,:)
+      end if
+      if (.not.this%cfg%zper) then
+         if (this%cfg%kproc.eq.1)            ugradu(:,:,:,this%cfg%kmin-1)=ugradu(:,:,:,this%cfg%kmin)
+         if (this%cfg%kproc.eq.this%cfg%npz) ugradu(:,:,:,this%cfg%kmax+1)=ugradu(:,:,:,this%cfg%kmax)
+      end if
+      
+      ! Ensure zero in walls
+	   do k=this%cfg%kmino_,this%cfg%kmaxo_
+         do j=this%cfg%jmino_,this%cfg%jmaxo_
+            do i=this%cfg%imino_,this%cfg%imaxo_
+               if (this%mask(i,j,k).eq.1) ugradu(:,i,j,k)=0.0_WP
+            end do
+         end do
+      end do
+      
+      ! Sync it
+	   call this%cfg%sync(ugradu)
+      
+      ! Deallocate velocity gradient storage
+	   deallocate(dudy,dudz,dvdx,dvdz,dwdx,dwdy)
+      
+   end subroutine get_ugradu
+
+
+   !> Calculate the velocity gradient tensor from U/V/W
+   !> Note that gradU(i,j)=duj/dxi
+   subroutine get_gradU(this,gradU)
+      use messager, only: die
+      implicit none
+      class(tpcons), intent(inout) :: this
+      real(WP), dimension(1:,1:,this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(out) :: gradU  !< Needs to be (1:3,1:3,imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       integer :: i,j,k
       real(WP), dimension(:,:,:), allocatable :: dudy,dudz,dvdx,dvdz,dwdx,dwdy
       
-      ! Check gradu's first two dimensions
-	   if (size(gradu,dim=1).ne.3.or.size(gradu,dim=2).ne.3) call die('[tpns get_strainrate] gradu should be of size (1:3,1:3,imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)')
+      ! Check gradU's first two dimensions
+	   if (size(gradU,dim=1).ne.3.or.size(gradU,dim=2).ne.3) call die('[tpcons get_gradU] gradU should be of size (1:3,1:3,imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)')
       
       ! Compute dudx, dvdy, and dwdz first
 	   do k=this%cfg%kmin_,this%cfg%kmax_
          do j=this%cfg%jmin_,this%cfg%jmax_
             do i=this%cfg%imin_,this%cfg%imax_
-               gradu(1,1,i,j,k)=sum(this%grdu_x(:,i,j,k)*this%U(i:i+1,j,k))
-               gradu(2,2,i,j,k)=sum(this%grdv_y(:,i,j,k)*this%V(i,j:j+1,k))
-               gradu(3,3,i,j,k)=sum(this%grdw_z(:,i,j,k)*this%W(i,j,k:k+1))
+               gradU(1,1,i,j,k)=sum(this%grdu_x(:,i,j,k)*this%U(i:i+1,j,k))
+               gradU(2,2,i,j,k)=sum(this%grdv_y(:,i,j,k)*this%V(i,j:j+1,k))
+               gradU(3,3,i,j,k)=sum(this%grdw_z(:,i,j,k)*this%W(i,j,k:k+1))
             end do
          end do
       end do
@@ -1722,60 +2099,60 @@ contains
 	   do k=this%cfg%kmin_,this%cfg%kmax_
          do j=this%cfg%jmin_,this%cfg%jmax_
             do i=this%cfg%imin_,this%cfg%imax_
-               gradu(2,1,i,j,k)=0.25_WP*sum(dudy(i:i+1,j:j+1,k))
-               gradu(3,1,i,j,k)=0.25_WP*sum(dudz(i:i+1,j,k:k+1))
-               gradu(1,2,i,j,k)=0.25_WP*sum(dvdx(i:i+1,j:j+1,k))
-               gradu(3,2,i,j,k)=0.25_WP*sum(dvdz(i,j:j+1,k:k+1))
-               gradu(1,3,i,j,k)=0.25_WP*sum(dwdx(i:i+1,j,k:k+1))
-               gradu(2,3,i,j,k)=0.25_WP*sum(dwdy(i,j:j+1,k:k+1))
+               gradU(2,1,i,j,k)=0.25_WP*sum(dudy(i:i+1,j:j+1,k))
+               gradU(3,1,i,j,k)=0.25_WP*sum(dudz(i:i+1,j,k:k+1))
+               gradU(1,2,i,j,k)=0.25_WP*sum(dvdx(i:i+1,j:j+1,k))
+               gradU(3,2,i,j,k)=0.25_WP*sum(dvdz(i,j:j+1,k:k+1))
+               gradU(1,3,i,j,k)=0.25_WP*sum(dwdx(i:i+1,j,k:k+1))
+               gradU(2,3,i,j,k)=0.25_WP*sum(dwdy(i,j:j+1,k:k+1))
             end do
          end do
       end do
       
       ! Apply a Neumann condition in non-periodic directions
 	   if (.not.this%cfg%xper) then
-         if (this%cfg%iproc.eq.1)            gradu(:,:,this%cfg%imin-1,:,:)=gradu(:,:,this%cfg%imin,:,:)
-         if (this%cfg%iproc.eq.this%cfg%npx) gradu(:,:,this%cfg%imax+1,:,:)=gradu(:,:,this%cfg%imax,:,:)
+         if (this%cfg%iproc.eq.1)            gradU(:,:,this%cfg%imin-1,:,:)=gradU(:,:,this%cfg%imin,:,:)
+         if (this%cfg%iproc.eq.this%cfg%npx) gradU(:,:,this%cfg%imax+1,:,:)=gradU(:,:,this%cfg%imax,:,:)
       end if
       if (.not.this%cfg%yper) then
-         if (this%cfg%jproc.eq.1)            gradu(:,:,:,this%cfg%jmin-1,:)=gradu(:,:,:,this%cfg%jmin,:)
-         if (this%cfg%jproc.eq.this%cfg%npy) gradu(:,:,:,this%cfg%jmax+1,:)=gradu(:,:,:,this%cfg%jmax,:)
+         if (this%cfg%jproc.eq.1)            gradU(:,:,:,this%cfg%jmin-1,:)=gradU(:,:,:,this%cfg%jmin,:)
+         if (this%cfg%jproc.eq.this%cfg%npy) gradU(:,:,:,this%cfg%jmax+1,:)=gradU(:,:,:,this%cfg%jmax,:)
       end if
       if (.not.this%cfg%zper) then
-         if (this%cfg%kproc.eq.1)            gradu(:,:,:,:,this%cfg%kmin-1)=gradu(:,:,:,:,this%cfg%kmin)
-         if (this%cfg%kproc.eq.this%cfg%npz) gradu(:,:,:,:,this%cfg%kmax+1)=gradu(:,:,:,:,this%cfg%kmax)
+         if (this%cfg%kproc.eq.1)            gradU(:,:,:,:,this%cfg%kmin-1)=gradU(:,:,:,:,this%cfg%kmin)
+         if (this%cfg%kproc.eq.this%cfg%npz) gradU(:,:,:,:,this%cfg%kmax+1)=gradU(:,:,:,:,this%cfg%kmax)
       end if
       
       ! Ensure zero in walls
 	   do k=this%cfg%kmino_,this%cfg%kmaxo_
          do j=this%cfg%jmino_,this%cfg%jmaxo_
             do i=this%cfg%imino_,this%cfg%imaxo_
-               if (this%mask(i,j,k).eq.1) gradu(:,:,i,j,k)=0.0_WP
+               if (this%mask(i,j,k).eq.1) gradU(:,:,i,j,k)=0.0_WP
             end do
          end do
       end do
       
       ! Sync it
-	   call this%cfg%sync(gradu)
+	   call this%cfg%sync(gradU)
       
       ! Deallocate velocity gradient storage
 	   deallocate(dudy,dudz,dvdx,dvdz,dwdx,dwdy)
       
-   end subroutine get_gradu
+   end subroutine get_gradU
    
    
    !> Calculate vorticity vector
    subroutine get_vorticity(this,vort)
       use messager, only: die
       implicit none
-      class(tpns), intent(inout) :: this
+      class(tpcons), intent(inout) :: this
       real(WP), dimension(1:,this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(out) :: vort  !< Needs to be (1:3,imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       integer :: i,j,k
       real(WP), dimension(:,:,:), allocatable :: dudy,dudz,dvdx,dvdz,dwdx,dwdy
       
       ! Check vort's first two dimensions
-      if (size(vort,dim=1).ne.3) call die('[tpns get_vorticity] vort should be of size (1:3,imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)')
-
+      if (size(vort,dim=1).ne.3) call die('[tpcons get_vorticity] vort should be of size (1:3,imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)')
+      
       ! Allocate velocity gradient components
       allocate(dudy(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
       allocate(dudz(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
@@ -1783,7 +2160,7 @@ contains
       allocate(dvdz(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
       allocate(dwdx(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
       allocate(dwdy(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
-
+      
       ! Calculate components of the velocity gradient at their natural locations with an extra cell for interpolation
       do k=this%cfg%kmin_,this%cfg%kmax_+1
          do j=this%cfg%jmin_,this%cfg%jmax_+1
@@ -1797,8 +2174,8 @@ contains
             end do
          end do
       end do
-
-      ! Interpolate off-diagonal components of the velocity gradient to the cell center
+      
+      ! Interpolate components to the cell center and assemble vorticity
       do k=this%cfg%kmin_,this%cfg%kmax_
          do j=this%cfg%jmin_,this%cfg%jmax_
             do i=this%cfg%imin_,this%cfg%imax_
@@ -1831,15 +2208,15 @@ contains
             end do
          end do
       end do
-
+      
       ! Sync it
       call this%cfg%sync(vort)
-
+      
       ! Deallocate velocity gradient storage
       deallocate(dudy,dudz,dvdx,dvdz,dwdx,dwdy)
-
+      
    end subroutine get_vorticity
-
+   
    
    !> Calculate the CFL
    subroutine get_cfl(this,dt,cflc,cfl)
@@ -1847,7 +2224,7 @@ contains
       use parallel,  only: MPI_REAL_WP
       use mathtools, only: Pi
       implicit none
-      class(tpns), intent(inout) :: this
+      class(tpcons), intent(inout) :: this
       real(WP), intent(in)  :: dt
       real(WP), intent(out) :: cflc
       real(WP), optional :: cfl
@@ -1902,7 +2279,7 @@ contains
       cflc=max(this%CFLc_x,this%CFLc_y,this%CFLc_z,this%CFLst)
       
       ! If asked for, also return the maximum overall CFL
-      if (present(CFL)) cfl =max(this%CFLc_x,this%CFLc_y,this%CFLc_z,this%CFLv_x,this%CFLv_y,this%CFLv_z,this%CFLst)
+      if (present(CFL)) cfl=max(this%CFLc_x,this%CFLc_y,this%CFLc_z,this%CFLv_x,this%CFLv_y,this%CFLv_z,this%CFLst)
       
    end subroutine get_cfl
    
@@ -1912,7 +2289,7 @@ contains
       use mpi_f08,  only: MPI_ALLREDUCE,MPI_MAX
       use parallel, only: MPI_REAL_WP
       implicit none
-      class(tpns), intent(inout) :: this
+      class(tpcons), intent(inout) :: this
       integer :: i,j,k,ierr
       real(WP) :: my_Umax,my_Vmax,my_Wmax,my_Pmax,my_divmax
       
@@ -1945,7 +2322,7 @@ contains
       use mpi_f08,  only: MPI_SUM,MPI_ALLREDUCE
       use parallel, only: MPI_REAL_WP
       implicit none
-      class(tpns), intent(inout) :: this
+      class(tpcons), intent(inout) :: this
       integer :: i,j,k,n,ibc,ierr
       type(bcond), pointer :: my_bc
       real(WP), dimension(:), allocatable :: my_mfr,my_area
@@ -2033,17 +2410,23 @@ contains
    
    
    !> Correct MFR through correctable bconds
-   subroutine correct_mfr(this)
+   subroutine correct_mfr(this,src)
       use mpi_f08, only: MPI_SUM
       implicit none
-      class(tpns), intent(inout) :: this
-      real(WP) :: mfr_error,vel_correction
+      class(tpcons), intent(inout) :: this
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), optional :: src !< Mass source term
+      real(WP) :: mfr_error,vel_correction,int
       integer :: i,j,k,n
       type(bcond), pointer :: my_bc
       
       ! Evaluate MFR mismatch and velocity correction
       call this%get_mfr()
       mfr_error=sum(this%mfr)
+      if (present(src)) then
+         ! Also account for provided source term
+         call this%cfg%integrate_without_VF(src,int)
+         mfr_error=mfr_error-int
+      end if
       if (abs(mfr_error).lt.10.0_WP*epsilon(1.0_WP).or.abs(this%correctable_area).lt.10.0_WP*epsilon(1.0_WP)) return
       vel_correction=-mfr_error/(this%correctable_area)
       
@@ -2057,17 +2440,17 @@ contains
             ! Implement based on bcond direction, loop over all cell
             select case (my_bc%face)
             case ('x')
-               do n=1,my_bc%itr%no_
+               do n=1,my_bc%itr%n_
                   i=my_bc%itr%map(1,n); j=my_bc%itr%map(2,n); k=my_bc%itr%map(3,n)
                   this%U(i,j,k)=this%U(i,j,k)+my_bc%rdir*vel_correction
                end do
             case ('y')
-               do n=1,my_bc%itr%no_
+               do n=1,my_bc%itr%n_
                   i=my_bc%itr%map(1,n); j=my_bc%itr%map(2,n); k=my_bc%itr%map(3,n)
                   this%V(i,j,k)=this%V(i,j,k)+my_bc%rdir*vel_correction
                end do
             case ('z')
-               do n=1,my_bc%itr%no_
+               do n=1,my_bc%itr%n_
                   i=my_bc%itr%map(1,n); j=my_bc%itr%map(2,n); k=my_bc%itr%map(3,n)
                   this%W(i,j,k)=this%W(i,j,k)+my_bc%rdir*vel_correction
                end do
@@ -2080,34 +2463,23 @@ contains
          
       end do
       
+      ! Sync full fields
+      call this%cfg%sync(this%U)
+      call this%cfg%sync(this%V)
+      call this%cfg%sync(this%W)
+      
    end subroutine correct_mfr
    
    
    !> Shift pressure to ensure zero average
    subroutine shift_p(this,pressure)
-      use mpi_f08,  only: MPI_SUM,MPI_ALLREDUCE
-      use parallel, only: MPI_REAL_WP
       implicit none
-      class(tpns), intent(in) :: this
+      class(tpcons), intent(in) :: this
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: pressure !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
-      real(WP) :: vol_tot,pressure_tot,my_vol_tot,my_pressure_tot
-      integer :: i,j,k,ierr
-      
-      ! Loop over domain and integrate volume and pressure
-      my_vol_tot=0.0_WP
-      my_pressure_tot=0.0_WP
-      do k=this%cfg%kmin_,this%cfg%kmax_
-         do j=this%cfg%jmin_,this%cfg%jmax_
-            do i=this%cfg%imin_,this%cfg%imax_
-               my_vol_tot     =my_vol_tot     +this%cfg%vol(i,j,k)*this%cfg%VF(i,j,k)
-               my_pressure_tot=my_pressure_tot+this%cfg%vol(i,j,k)*this%cfg%VF(i,j,k)*pressure(i,j,k)
-            end do
-         end do
-      end do
-      call MPI_ALLREDUCE(my_vol_tot     ,vol_tot     ,1,MPI_REAL_WP,MPI_SUM,this%cfg%comm,ierr)
-      call MPI_ALLREDUCE(my_pressure_tot,pressure_tot,1,MPI_REAL_WP,MPI_SUM,this%cfg%comm,ierr)
-      pressure_tot=pressure_tot/vol_tot
-      
+      real(WP) :: pressure_tot
+      integer :: i,j,k
+      ! Compute volume-averaged pressure
+      call this%cfg%integrate(A=pressure,integral=pressure_tot); pressure_tot=pressure_tot/this%cfg%fluid_vol
       ! Shift the pressure
       do k=this%cfg%kmin_,this%cfg%kmax_
          do j=this%cfg%jmin_,this%cfg%jmax_
@@ -2117,14 +2489,13 @@ contains
          end do
       end do
       call this%cfg%sync(pressure)
-      
    end subroutine shift_p
    
    
    !> Solve for implicit velocity residual
    subroutine solve_implicit(this,dt,resU,resV,resW)
       implicit none
-      class(tpns), intent(inout) :: this
+      class(tpcons), intent(inout) :: this
       real(WP), intent(in) :: dt
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: resU !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: resV !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
@@ -2132,8 +2503,19 @@ contains
       integer :: i,j,k
       real(WP) :: rhoUp,rhoUm,rhoVp,rhoVm,rhoWp,rhoWm
       
+      ! If no implicit solver available, just divide by density and return
+      if (.not.associated(this%implicit)) then
+         resU=resU/this%RHOX
+         resV=resV/this%RHOY
+         resW=resW/this%RHOZ
+         call this%cfg%sync(resU)
+         call this%cfg%sync(resV)
+         call this%cfg%sync(resW)
+         return
+      end if
+      
       ! Solve implicit U problem
-      this%implicit%opr(1,:,:,:)=sum(this%itpr_x(:,i,j,k)*this%rho(i-1:i,j,k)); this%implicit%opr(2:,:,:,:)=0.0_WP
+      this%implicit%opr(1,:,:,:)=this%RHOX; this%implicit%opr(2:,:,:,:)=0.0_WP
       do k=this%cfg%kmin_,this%cfg%kmax_
          do j=this%cfg%jmin_,this%cfg%jmax_
             do i=this%cfg%imin_,this%cfg%imax_
@@ -2143,36 +2525,36 @@ contains
                rhoVm=sum(this%itpv_x(:,i,j  ,k)*this%rhoV(i-1:i,j  ,k))
                rhoWp=sum(this%itpw_x(:,i,j,k+1)*this%rhoW(i-1:i,j,k+1))
                rhoWm=sum(this%itpw_x(:,i,j,k  )*this%rhoW(i-1:i,j,k  ))
-               this%implicit%opr(1,i,j,k)=this%implicit%opr(1,i,j,k)+0.5_WP*dt*(this%divu_x( 0,i,j,k)*this%itpu_x( 0,i  ,j,k)*rhoUp+&
-               &                                                                this%divu_x(-1,i,j,k)*this%itpu_x(+1,i-1,j,k)*rhoUm+&
-               &                                                                this%divu_y(+1,i,j,k)*this%itpu_y(-1,i,j+1,k)*rhoVp+&
-               &                                                                this%divu_y( 0,i,j,k)*this%itpu_y( 0,i,j  ,k)*rhoVm+&
-               &                                                                this%divu_z(+1,i,j,k)*this%itpu_z(-1,i,j,k+1)*rhoWp+&
-               &                                                                this%divu_z( 0,i,j,k)*this%itpu_z( 0,i,j,k  )*rhoWm)
-               this%implicit%opr(2,i,j,k)=this%implicit%opr(2,i,j,k)+0.5_WP*dt*(this%divu_x( 0,i,j,k)*this%itpu_x(+1,i  ,j,k)*rhoUp)
-               this%implicit%opr(3,i,j,k)=this%implicit%opr(3,i,j,k)+0.5_WP*dt*(this%divu_x(-1,i,j,k)*this%itpu_x( 0,i-1,j,k)*rhoUm)
-               this%implicit%opr(4,i,j,k)=this%implicit%opr(4,i,j,k)+0.5_WP*dt*(this%divu_y(+1,i,j,k)*this%itpu_y( 0,i,j+1,k)*rhoVp)
-               this%implicit%opr(5,i,j,k)=this%implicit%opr(5,i,j,k)+0.5_WP*dt*(this%divu_y( 0,i,j,k)*this%itpu_y(-1,i,j  ,k)*rhoVm)
-               this%implicit%opr(6,i,j,k)=this%implicit%opr(6,i,j,k)+0.5_WP*dt*(this%divu_z(+1,i,j,k)*this%itpu_z( 0,i,j,k+1)*rhoWp)
-               this%implicit%opr(7,i,j,k)=this%implicit%opr(7,i,j,k)+0.5_WP*dt*(this%divu_z( 0,i,j,k)*this%itpu_z(-1,i,j,k  )*rhoWm)
+               this%implicit%opr(1,i,j,k)=this%implicit%opr(1,i,j,k)+dt*(this%divu_x( 0,i,j,k)*this%itpu_x( 0,i  ,j,k)*rhoUp+&
+               &                                                         this%divu_x(-1,i,j,k)*this%itpu_x(+1,i-1,j,k)*rhoUm+&
+               &                                                         this%divu_y(+1,i,j,k)*this%itpu_y(-1,i,j+1,k)*rhoVp+&
+               &                                                         this%divu_y( 0,i,j,k)*this%itpu_y( 0,i,j  ,k)*rhoVm+&
+               &                                                         this%divu_z(+1,i,j,k)*this%itpu_z(-1,i,j,k+1)*rhoWp+&
+               &                                                         this%divu_z( 0,i,j,k)*this%itpu_z( 0,i,j,k  )*rhoWm)*0.5_WP
+               this%implicit%opr(2,i,j,k)=this%implicit%opr(2,i,j,k)+dt*(this%divu_x( 0,i,j,k)*this%itpu_x(+1,i  ,j,k)*rhoUp)*0.5_WP
+               this%implicit%opr(3,i,j,k)=this%implicit%opr(3,i,j,k)+dt*(this%divu_x(-1,i,j,k)*this%itpu_x( 0,i-1,j,k)*rhoUm)*0.5_WP
+               this%implicit%opr(4,i,j,k)=this%implicit%opr(4,i,j,k)+dt*(this%divu_y(+1,i,j,k)*this%itpu_y( 0,i,j+1,k)*rhoVp)*0.5_WP
+               this%implicit%opr(5,i,j,k)=this%implicit%opr(5,i,j,k)+dt*(this%divu_y( 0,i,j,k)*this%itpu_y(-1,i,j  ,k)*rhoVm)*0.5_WP
+               this%implicit%opr(6,i,j,k)=this%implicit%opr(6,i,j,k)+dt*(this%divu_z(+1,i,j,k)*this%itpu_z( 0,i,j,k+1)*rhoWp)*0.5_WP
+               this%implicit%opr(7,i,j,k)=this%implicit%opr(7,i,j,k)+dt*(this%divu_z( 0,i,j,k)*this%itpu_z(-1,i,j,k  )*rhoWm)*0.5_WP
             end do
          end do
       end do
       do k=this%cfg%kmin_,this%cfg%kmax_
          do j=this%cfg%jmin_,this%cfg%jmax_
             do i=this%cfg%imin_,this%cfg%imax_
-               this%implicit%opr(1,i,j,k)=this%implicit%opr(1,i,j,k)-0.5_WP*dt*(this%divu_x( 0,i,j,k)*2.0_WP*this%visc   (i  ,j,k)*this%grdu_x( 0,i  ,j,k)+&
-               &                                                                this%divu_x(-1,i,j,k)*2.0_WP*this%visc   (i-1,j,k)*this%grdu_x(+1,i-1,j,k)+&
-               &                                                                this%divu_y(+1,i,j,k)*       this%visc_xy(i,j+1,k)*this%grdu_y(-1,i,j+1,k)+&
-               &                                                                this%divu_y( 0,i,j,k)*       this%visc_xy(i,j  ,k)*this%grdu_y( 0,i,j  ,k)+&
-               &                                                                this%divu_z(+1,i,j,k)*       this%visc_zx(i,j,k+1)*this%grdu_z(-1,i,j,k+1)+&
-               &                                                                this%divu_z( 0,i,j,k)*       this%visc_zx(i,j,k  )*this%grdu_z( 0,i,j,k  ))
-               this%implicit%opr(2,i,j,k)=this%implicit%opr(2,i,j,k)-0.5_WP*dt*(this%divu_x( 0,i,j,k)*2.0_WP*this%visc   (i  ,j,k)*this%grdu_x(+1,i  ,j,k))
-               this%implicit%opr(3,i,j,k)=this%implicit%opr(3,i,j,k)-0.5_WP*dt*(this%divu_x(-1,i,j,k)*2.0_WP*this%visc   (i-1,j,k)*this%grdu_x( 0,i-1,j,k))
-               this%implicit%opr(4,i,j,k)=this%implicit%opr(4,i,j,k)-0.5_WP*dt*(this%divu_y(+1,i,j,k)*       this%visc_xy(i,j+1,k)*this%grdu_y( 0,i,j+1,k))
-               this%implicit%opr(5,i,j,k)=this%implicit%opr(5,i,j,k)-0.5_WP*dt*(this%divu_y( 0,i,j,k)*       this%visc_xy(i,j  ,k)*this%grdu_y(-1,i,j  ,k))
-               this%implicit%opr(6,i,j,k)=this%implicit%opr(6,i,j,k)-0.5_WP*dt*(this%divu_z(+1,i,j,k)*       this%visc_zx(i,j,k+1)*this%grdu_z( 0,i,j,k+1))
-               this%implicit%opr(7,i,j,k)=this%implicit%opr(7,i,j,k)-0.5_WP*dt*(this%divu_z( 0,i,j,k)*       this%visc_zx(i,j,k  )*this%grdu_z(-1,i,j,k  ))
+               this%implicit%opr(1,i,j,k)=this%implicit%opr(1,i,j,k)-dt*(this%divu_x( 0,i,j,k)*2.0_WP*this%visc   (i  ,j,k)*this%grdu_x( 0,i  ,j,k)+&
+               &                                                         this%divu_x(-1,i,j,k)*2.0_WP*this%visc   (i-1,j,k)*this%grdu_x(+1,i-1,j,k)+&
+               &                                                         this%divu_y(+1,i,j,k)*       this%visc_xy(i,j+1,k)*this%grdu_y(-1,i,j+1,k)+&
+               &                                                         this%divu_y( 0,i,j,k)*       this%visc_xy(i,j  ,k)*this%grdu_y( 0,i,j  ,k)+&
+               &                                                         this%divu_z(+1,i,j,k)*       this%visc_zx(i,j,k+1)*this%grdu_z(-1,i,j,k+1)+&
+               &                                                         this%divu_z( 0,i,j,k)*       this%visc_zx(i,j,k  )*this%grdu_z( 0,i,j,k  ))*0.5_WP
+               this%implicit%opr(2,i,j,k)=this%implicit%opr(2,i,j,k)-dt*(this%divu_x( 0,i,j,k)*2.0_WP*this%visc   (i  ,j,k)*this%grdu_x(+1,i  ,j,k))*0.5_WP
+               this%implicit%opr(3,i,j,k)=this%implicit%opr(3,i,j,k)-dt*(this%divu_x(-1,i,j,k)*2.0_WP*this%visc   (i-1,j,k)*this%grdu_x( 0,i-1,j,k))*0.5_WP
+               this%implicit%opr(4,i,j,k)=this%implicit%opr(4,i,j,k)-dt*(this%divu_y(+1,i,j,k)*       this%visc_xy(i,j+1,k)*this%grdu_y( 0,i,j+1,k))*0.5_WP
+               this%implicit%opr(5,i,j,k)=this%implicit%opr(5,i,j,k)-dt*(this%divu_y( 0,i,j,k)*       this%visc_xy(i,j  ,k)*this%grdu_y(-1,i,j  ,k))*0.5_WP
+               this%implicit%opr(6,i,j,k)=this%implicit%opr(6,i,j,k)-dt*(this%divu_z(+1,i,j,k)*       this%visc_zx(i,j,k+1)*this%grdu_z( 0,i,j,k+1))*0.5_WP
+               this%implicit%opr(7,i,j,k)=this%implicit%opr(7,i,j,k)-dt*(this%divu_z( 0,i,j,k)*       this%visc_zx(i,j,k  )*this%grdu_z(-1,i,j,k  ))*0.5_WP
             end do
          end do
       end do
@@ -2183,7 +2565,7 @@ contains
       resU=this%implicit%sol
       
       ! Solve implicit V problem
-      this%implicit%opr(1,:,:,:)=sum(this%itpr_y(:,i,j,k)*this%rho(i,j-1:j,k)); this%implicit%opr(2:,:,:,:)=0.0_WP
+      this%implicit%opr(1,:,:,:)=this%RHOY; this%implicit%opr(2:,:,:,:)=0.0_WP
       do k=this%cfg%kmin_,this%cfg%kmax_
          do j=this%cfg%jmin_,this%cfg%jmax_
             do i=this%cfg%imin_,this%cfg%imax_
@@ -2193,36 +2575,36 @@ contains
                rhoVm=sum(this%itpv_y(:,i,j-1,k)*this%rhoV(i,j-1:j  ,k))
                rhoWp=sum(this%itpw_y(:,i,j,k+1)*this%rhoW(i,j-1:j,k+1))
                rhoWm=sum(this%itpw_y(:,i,j,k  )*this%rhoW(i,j-1:j,k  ))
-               this%implicit%opr(1,i,j,k)=this%implicit%opr(1,i,j,k)+0.5_WP*dt*(this%divv_x(+1,i,j,k)*this%itpv_x(-1,i+1,j,k)*rhoUp+&
-               &                                                                this%divv_x( 0,i,j,k)*this%itpv_x( 0,i  ,j,k)*rhoUm+&
-               &                                                                this%divv_y( 0,i,j,k)*this%itpv_y( 0,i,j  ,k)*rhoVp+&
-               &                                                                this%divv_y(-1,i,j,k)*this%itpv_y(+1,i,j-1,k)*rhoVm+&
-               &                                                                this%divv_z(+1,i,j,k)*this%itpv_z(-1,i,j,k+1)*rhoWp+&
-               &                                                                this%divv_z( 0,i,j,k)*this%itpv_z( 0,i,j,k  )*rhoWm)
-               this%implicit%opr(2,i,j,k)=this%implicit%opr(2,i,j,k)+0.5_WP*dt*(this%divv_x(+1,i,j,k)*this%itpv_x( 0,i+1,j,k)*rhoUp)
-               this%implicit%opr(3,i,j,k)=this%implicit%opr(3,i,j,k)+0.5_WP*dt*(this%divv_x( 0,i,j,k)*this%itpv_x(-1,i  ,j,k)*rhoUm)
-               this%implicit%opr(4,i,j,k)=this%implicit%opr(4,i,j,k)+0.5_WP*dt*(this%divv_y( 0,i,j,k)*this%itpv_y(+1,i,j  ,k)*rhoVp)
-               this%implicit%opr(5,i,j,k)=this%implicit%opr(5,i,j,k)+0.5_WP*dt*(this%divv_y(-1,i,j,k)*this%itpv_y( 0,i,j-1,k)*rhoVm)
-               this%implicit%opr(6,i,j,k)=this%implicit%opr(6,i,j,k)+0.5_WP*dt*(this%divv_z(+1,i,j,k)*this%itpv_z( 0,i,j,k+1)*rhoWp)
-               this%implicit%opr(7,i,j,k)=this%implicit%opr(7,i,j,k)+0.5_WP*dt*(this%divv_z( 0,i,j,k)*this%itpv_z(-1,i,j,k  )*rhoWm)
+               this%implicit%opr(1,i,j,k)=this%implicit%opr(1,i,j,k)+dt*(this%divv_x(+1,i,j,k)*this%itpv_x(-1,i+1,j,k)*rhoUp+&
+               &                                                         this%divv_x( 0,i,j,k)*this%itpv_x( 0,i  ,j,k)*rhoUm+&
+               &                                                         this%divv_y( 0,i,j,k)*this%itpv_y( 0,i,j  ,k)*rhoVp+&
+               &                                                         this%divv_y(-1,i,j,k)*this%itpv_y(+1,i,j-1,k)*rhoVm+&
+               &                                                         this%divv_z(+1,i,j,k)*this%itpv_z(-1,i,j,k+1)*rhoWp+&
+               &                                                         this%divv_z( 0,i,j,k)*this%itpv_z( 0,i,j,k  )*rhoWm)*0.5_WP
+               this%implicit%opr(2,i,j,k)=this%implicit%opr(2,i,j,k)+dt*(this%divv_x(+1,i,j,k)*this%itpv_x( 0,i+1,j,k)*rhoUp)*0.5_WP
+               this%implicit%opr(3,i,j,k)=this%implicit%opr(3,i,j,k)+dt*(this%divv_x( 0,i,j,k)*this%itpv_x(-1,i  ,j,k)*rhoUm)*0.5_WP
+               this%implicit%opr(4,i,j,k)=this%implicit%opr(4,i,j,k)+dt*(this%divv_y( 0,i,j,k)*this%itpv_y(+1,i,j  ,k)*rhoVp)*0.5_WP
+               this%implicit%opr(5,i,j,k)=this%implicit%opr(5,i,j,k)+dt*(this%divv_y(-1,i,j,k)*this%itpv_y( 0,i,j-1,k)*rhoVm)*0.5_WP
+               this%implicit%opr(6,i,j,k)=this%implicit%opr(6,i,j,k)+dt*(this%divv_z(+1,i,j,k)*this%itpv_z( 0,i,j,k+1)*rhoWp)*0.5_WP
+               this%implicit%opr(7,i,j,k)=this%implicit%opr(7,i,j,k)+dt*(this%divv_z( 0,i,j,k)*this%itpv_z(-1,i,j,k  )*rhoWm)*0.5_WP
             end do
          end do
       end do
       do k=this%cfg%kmin_,this%cfg%kmax_
          do j=this%cfg%jmin_,this%cfg%jmax_
             do i=this%cfg%imin_,this%cfg%imax_
-               this%implicit%opr(1,i,j,k)=this%implicit%opr(1,i,j,k)-0.5_WP*dt*(this%divv_x(+1,i,j,k)*       this%visc_xy(i+1,j,k)*this%grdv_x(-1,i+1,j,k)+&
-               &                                                                this%divv_x( 0,i,j,k)*       this%visc_xy(i  ,j,k)*this%grdv_x( 0,i  ,j,k)+&
-               &                                                                this%divv_y( 0,i,j,k)*2.0_WP*this%visc   (i,j  ,k)*this%grdv_y( 0,i,j  ,k)+&
-               &                                                                this%divv_y(-1,i,j,k)*2.0_WP*this%visc   (i,j-1,k)*this%grdv_y(+1,i,j-1,k)+&
-               &                                                                this%divv_z(+1,i,j,k)*       this%visc_yz(i,j,k+1)*this%grdv_z(-1,i,j,k+1)+&
-               &                                                                this%divv_z( 0,i,j,k)*       this%visc_yz(i,j,k  )*this%grdv_z( 0,i,j,k  ))
-               this%implicit%opr(2,i,j,k)=this%implicit%opr(2,i,j,k)-0.5_WP*dt*(this%divv_x(+1,i,j,k)*       this%visc_xy(i+1,j,k)*this%grdv_x( 0,i+1,j,k))
-               this%implicit%opr(3,i,j,k)=this%implicit%opr(3,i,j,k)-0.5_WP*dt*(this%divv_x( 0,i,j,k)*       this%visc_xy(i  ,j,k)*this%grdv_x(-1,i  ,j,k))
-               this%implicit%opr(4,i,j,k)=this%implicit%opr(4,i,j,k)-0.5_WP*dt*(this%divv_y( 0,i,j,k)*2.0_WP*this%visc   (i,j  ,k)*this%grdv_y(+1,i,j  ,k))
-               this%implicit%opr(5,i,j,k)=this%implicit%opr(5,i,j,k)-0.5_WP*dt*(this%divv_y(-1,i,j,k)*2.0_WP*this%visc   (i,j-1,k)*this%grdv_y( 0,i,j-1,k))
-               this%implicit%opr(6,i,j,k)=this%implicit%opr(6,i,j,k)-0.5_WP*dt*(this%divv_z(+1,i,j,k)*       this%visc_yz(i,j,k+1)*this%grdv_z( 0,i,j,k+1))
-               this%implicit%opr(7,i,j,k)=this%implicit%opr(7,i,j,k)-0.5_WP*dt*(this%divv_z( 0,i,j,k)*       this%visc_yz(i,j,k  )*this%grdv_z(-1,i,j,k  ))
+               this%implicit%opr(1,i,j,k)=this%implicit%opr(1,i,j,k)-dt*(this%divv_x(+1,i,j,k)*       this%visc_xy(i+1,j,k)*this%grdv_x(-1,i+1,j,k)+&
+               &                                                         this%divv_x( 0,i,j,k)*       this%visc_xy(i  ,j,k)*this%grdv_x( 0,i  ,j,k)+&
+               &                                                         this%divv_y( 0,i,j,k)*2.0_WP*this%visc   (i,j  ,k)*this%grdv_y( 0,i,j  ,k)+&
+               &                                                         this%divv_y(-1,i,j,k)*2.0_WP*this%visc   (i,j-1,k)*this%grdv_y(+1,i,j-1,k)+&
+               &                                                         this%divv_z(+1,i,j,k)*       this%visc_yz(i,j,k+1)*this%grdv_z(-1,i,j,k+1)+&
+               &                                                         this%divv_z( 0,i,j,k)*       this%visc_yz(i,j,k  )*this%grdv_z( 0,i,j,k  ))*0.5_WP
+               this%implicit%opr(2,i,j,k)=this%implicit%opr(2,i,j,k)-dt*(this%divv_x(+1,i,j,k)*       this%visc_xy(i+1,j,k)*this%grdv_x( 0,i+1,j,k))*0.5_WP
+               this%implicit%opr(3,i,j,k)=this%implicit%opr(3,i,j,k)-dt*(this%divv_x( 0,i,j,k)*       this%visc_xy(i  ,j,k)*this%grdv_x(-1,i  ,j,k))*0.5_WP
+               this%implicit%opr(4,i,j,k)=this%implicit%opr(4,i,j,k)-dt*(this%divv_y( 0,i,j,k)*2.0_WP*this%visc   (i,j  ,k)*this%grdv_y(+1,i,j  ,k))*0.5_WP
+               this%implicit%opr(5,i,j,k)=this%implicit%opr(5,i,j,k)-dt*(this%divv_y(-1,i,j,k)*2.0_WP*this%visc   (i,j-1,k)*this%grdv_y( 0,i,j-1,k))*0.5_WP
+               this%implicit%opr(6,i,j,k)=this%implicit%opr(6,i,j,k)-dt*(this%divv_z(+1,i,j,k)*       this%visc_yz(i,j,k+1)*this%grdv_z( 0,i,j,k+1))*0.5_WP
+               this%implicit%opr(7,i,j,k)=this%implicit%opr(7,i,j,k)-dt*(this%divv_z( 0,i,j,k)*       this%visc_yz(i,j,k  )*this%grdv_z(-1,i,j,k  ))*0.5_WP
             end do
          end do
       end do
@@ -2233,7 +2615,7 @@ contains
       resV=this%implicit%sol
       
       ! Solve implicit W problem
-      this%implicit%opr(1,:,:,:)=sum(this%itpr_z(:,i,j,k)*this%rho(i,j,k-1:k)); this%implicit%opr(2:,:,:,:)=0.0_WP
+      this%implicit%opr(1,:,:,:)=this%RHOZ; this%implicit%opr(2:,:,:,:)=0.0_WP
       do k=this%cfg%kmin_,this%cfg%kmax_
          do j=this%cfg%jmin_,this%cfg%jmax_
             do i=this%cfg%imin_,this%cfg%imax_
@@ -2243,36 +2625,36 @@ contains
                rhoVm=sum(this%itpv_z(:,i,j  ,k)*this%rhoV(i,j  ,k-1:k))
                rhoWp=sum(this%itpw_z(:,i,j,k  )*this%rhoW(i,j,k  :k+1))
                rhoWm=sum(this%itpw_z(:,i,j,k-1)*this%rhoW(i,j,k-1:k  ))
-               this%implicit%opr(1,i,j,k)=this%implicit%opr(1,i,j,k)+0.5_WP*dt*(this%divw_x(+1,i,j,k)*this%itpw_x(-1,i+1,j,k)*rhoUp+&
-               &                                                                this%divw_x( 0,i,j,k)*this%itpw_x( 0,i  ,j,k)*rhoUm+&
-               &                                                                this%divw_y(+1,i,j,k)*this%itpw_y(-1,i,j+1,k)*rhoVp+&
-               &                                                                this%divw_y( 0,i,j,k)*this%itpw_y( 0,i,j  ,k)*rhoVm+&
-               &                                                                this%divw_z( 0,i,j,k)*this%itpw_z( 0,i,j,k  )*rhoWp+&
-               &                                                                this%divw_z(-1,i,j,k)*this%itpw_z(+1,i,j,k-1)*rhoWm)
-               this%implicit%opr(2,i,j,k)=this%implicit%opr(2,i,j,k)+0.5_WP*dt*(this%divw_x(+1,i,j,k)*this%itpw_x( 0,i+1,j,k)*rhoUp)
-               this%implicit%opr(3,i,j,k)=this%implicit%opr(3,i,j,k)+0.5_WP*dt*(this%divw_x( 0,i,j,k)*this%itpw_x(-1,i  ,j,k)*rhoUm)
-               this%implicit%opr(4,i,j,k)=this%implicit%opr(4,i,j,k)+0.5_WP*dt*(this%divw_y(+1,i,j,k)*this%itpw_y( 0,i,j+1,k)*rhoVp)
-               this%implicit%opr(5,i,j,k)=this%implicit%opr(5,i,j,k)+0.5_WP*dt*(this%divw_y( 0,i,j,k)*this%itpw_y(-1,i,j  ,k)*rhoVm)
-               this%implicit%opr(6,i,j,k)=this%implicit%opr(6,i,j,k)+0.5_WP*dt*(this%divw_z( 0,i,j,k)*this%itpw_z(+1,i,j,k  )*rhoWp)
-               this%implicit%opr(7,i,j,k)=this%implicit%opr(7,i,j,k)+0.5_WP*dt*(this%divw_z(-1,i,j,k)*this%itpw_z( 0,i,j,k-1)*rhoWm)
+               this%implicit%opr(1,i,j,k)=this%implicit%opr(1,i,j,k)+dt*(this%divw_x(+1,i,j,k)*this%itpw_x(-1,i+1,j,k)*rhoUp+&
+               &                                                         this%divw_x( 0,i,j,k)*this%itpw_x( 0,i  ,j,k)*rhoUm+&
+               &                                                         this%divw_y(+1,i,j,k)*this%itpw_y(-1,i,j+1,k)*rhoVp+&
+               &                                                         this%divw_y( 0,i,j,k)*this%itpw_y( 0,i,j  ,k)*rhoVm+&
+               &                                                         this%divw_z( 0,i,j,k)*this%itpw_z( 0,i,j,k  )*rhoWp+&
+               &                                                         this%divw_z(-1,i,j,k)*this%itpw_z(+1,i,j,k-1)*rhoWm)*0.5_WP
+               this%implicit%opr(2,i,j,k)=this%implicit%opr(2,i,j,k)+dt*(this%divw_x(+1,i,j,k)*this%itpw_x( 0,i+1,j,k)*rhoUp)*0.5_WP
+               this%implicit%opr(3,i,j,k)=this%implicit%opr(3,i,j,k)+dt*(this%divw_x( 0,i,j,k)*this%itpw_x(-1,i  ,j,k)*rhoUm)*0.5_WP
+               this%implicit%opr(4,i,j,k)=this%implicit%opr(4,i,j,k)+dt*(this%divw_y(+1,i,j,k)*this%itpw_y( 0,i,j+1,k)*rhoVp)*0.5_WP
+               this%implicit%opr(5,i,j,k)=this%implicit%opr(5,i,j,k)+dt*(this%divw_y( 0,i,j,k)*this%itpw_y(-1,i,j  ,k)*rhoVm)*0.5_WP
+               this%implicit%opr(6,i,j,k)=this%implicit%opr(6,i,j,k)+dt*(this%divw_z( 0,i,j,k)*this%itpw_z(+1,i,j,k  )*rhoWp)*0.5_WP
+               this%implicit%opr(7,i,j,k)=this%implicit%opr(7,i,j,k)+dt*(this%divw_z(-1,i,j,k)*this%itpw_z( 0,i,j,k-1)*rhoWm)*0.5_WP
             end do
          end do
       end do
       do k=this%cfg%kmin_,this%cfg%kmax_
          do j=this%cfg%jmin_,this%cfg%jmax_
             do i=this%cfg%imin_,this%cfg%imax_
-               this%implicit%opr(1,i,j,k)=this%implicit%opr(1,i,j,k)-0.5_WP*dt*(this%divw_x(+1,i,j,k)*       this%visc_zx(i+1,j,k)*this%grdw_x(-1,i+1,j,k)+&
-               &                                                                this%divw_x( 0,i,j,k)*       this%visc_zx(i  ,j,k)*this%grdw_x( 0,i  ,j,k)+&
-               &                                                                this%divw_y(+1,i,j,k)*       this%visc_yz(i,j+1,k)*this%grdw_y(-1,i,j+1,k)+&
-               &                                                                this%divw_y( 0,i,j,k)*       this%visc_yz(i,j  ,k)*this%grdw_y( 0,i,j  ,k)+&
-               &                                                                this%divw_z( 0,i,j,k)*2.0_WP*this%visc   (i,j,k  )*this%grdw_z( 0,i,j,k  )+&
-               &                                                                this%divw_z(-1,i,j,k)*2.0_WP*this%visc   (i,j,k-1)*this%grdw_z(+1,i,j,k-1))
-               this%implicit%opr(2,i,j,k)=this%implicit%opr(2,i,j,k)-0.5_WP*dt*(this%divw_x(+1,i,j,k)*       this%visc_zx(i+1,j,k)*this%grdw_x( 0,i+1,j,k))
-               this%implicit%opr(3,i,j,k)=this%implicit%opr(3,i,j,k)-0.5_WP*dt*(this%divw_x( 0,i,j,k)*       this%visc_zx(i  ,j,k)*this%grdw_x(-1,i  ,j,k))
-               this%implicit%opr(4,i,j,k)=this%implicit%opr(4,i,j,k)-0.5_WP*dt*(this%divw_y(+1,i,j,k)*       this%visc_yz(i,j+1,k)*this%grdw_y( 0,i,j+1,k))
-               this%implicit%opr(5,i,j,k)=this%implicit%opr(5,i,j,k)-0.5_WP*dt*(this%divw_y( 0,i,j,k)*       this%visc_yz(i,j  ,k)*this%grdw_y(-1,i,j  ,k))
-               this%implicit%opr(6,i,j,k)=this%implicit%opr(6,i,j,k)-0.5_WP*dt*(this%divw_z( 0,i,j,k)*2.0_WP*this%visc   (i,j,k  )*this%grdw_z(+1,i,j,k  ))
-               this%implicit%opr(7,i,j,k)=this%implicit%opr(7,i,j,k)-0.5_WP*dt*(this%divw_z(-1,i,j,k)*2.0_WP*this%visc   (i,j,k-1)*this%grdw_z( 0,i,j,k-1))
+               this%implicit%opr(1,i,j,k)=this%implicit%opr(1,i,j,k)-dt*(this%divw_x(+1,i,j,k)*       this%visc_zx(i+1,j,k)*this%grdw_x(-1,i+1,j,k)+&
+               &                                                         this%divw_x( 0,i,j,k)*       this%visc_zx(i  ,j,k)*this%grdw_x( 0,i  ,j,k)+&
+               &                                                         this%divw_y(+1,i,j,k)*       this%visc_yz(i,j+1,k)*this%grdw_y(-1,i,j+1,k)+&
+               &                                                         this%divw_y( 0,i,j,k)*       this%visc_yz(i,j  ,k)*this%grdw_y( 0,i,j  ,k)+&
+               &                                                         this%divw_z( 0,i,j,k)*2.0_WP*this%visc   (i,j,k  )*this%grdw_z( 0,i,j,k  )+&
+               &                                                         this%divw_z(-1,i,j,k)*2.0_WP*this%visc   (i,j,k-1)*this%grdw_z(+1,i,j,k-1))*0.5_WP
+               this%implicit%opr(2,i,j,k)=this%implicit%opr(2,i,j,k)-dt*(this%divw_x(+1,i,j,k)*       this%visc_zx(i+1,j,k)*this%grdw_x( 0,i+1,j,k))*0.5_WP
+               this%implicit%opr(3,i,j,k)=this%implicit%opr(3,i,j,k)-dt*(this%divw_x( 0,i,j,k)*       this%visc_zx(i  ,j,k)*this%grdw_x(-1,i  ,j,k))*0.5_WP
+               this%implicit%opr(4,i,j,k)=this%implicit%opr(4,i,j,k)-dt*(this%divw_y(+1,i,j,k)*       this%visc_yz(i,j+1,k)*this%grdw_y( 0,i,j+1,k))*0.5_WP
+               this%implicit%opr(5,i,j,k)=this%implicit%opr(5,i,j,k)-dt*(this%divw_y( 0,i,j,k)*       this%visc_yz(i,j  ,k)*this%grdw_y(-1,i,j  ,k))*0.5_WP
+               this%implicit%opr(6,i,j,k)=this%implicit%opr(6,i,j,k)-dt*(this%divw_z( 0,i,j,k)*2.0_WP*this%visc   (i,j,k  )*this%grdw_z(+1,i,j,k  ))*0.5_WP
+               this%implicit%opr(7,i,j,k)=this%implicit%opr(7,i,j,k)-dt*(this%divw_z(-1,i,j,k)*2.0_WP*this%visc   (i,j,k-1)*this%grdw_z( 0,i,j,k-1))*0.5_WP
             end do
          end do
       end do
@@ -2282,78 +2664,34 @@ contains
       call this%implicit%solve()
       resW=this%implicit%sol
       
-      ! Sync up all residuals
-      call this%cfg%sync(resU)
-      call this%cfg%sync(resV)
-      call this%cfg%sync(resW)
-      
    end subroutine solve_implicit
    
-
-   !> Update density from VFS object
-   subroutine update_density(this,dt,vf)
-      use vfs_class, only: vfs
-      use irl_fortran_interface, only: getVolumePtr
-      implicit none
-      class(tpns), intent(inout) :: this
-      real(WP), intent(in) :: dt
-      class(vfs), intent(inout) :: vf
-      integer :: i,j,k
-      ! Update density and momentum from VFS object
-      do k=vf%cfg%kmino_,vf%cfg%kmaxo_
-         do j=vf%cfg%jmino_,vf%cfg%jmaxo_
-            do i=vf%cfg%imino_,vf%cfg%imaxo_
-               this%rho(i,j,k)=this%rho_l*vf%VF(i,j,k)+this%rho_g*(1.0_WP-vf%VF(i,j,k))
-               this%rhoU(i,j,k)=this%rho_l*getVolumePtr(vf%face_flux(1,i,j,k),0)/(vf%cfg%dy(j)*vf%cfg%dz(k)*dt)+this%rho_g*getVolumePtr(vf%face_flux(1,i,j,k),1)/(vf%cfg%dy(j)*vf%cfg%dz(k)*dt)
-               this%rhoV(i,j,k)=this%rho_l*getVolumePtr(vf%face_flux(2,i,j,k),0)/(vf%cfg%dz(k)*vf%cfg%dx(i)*dt)+this%rho_g*getVolumePtr(vf%face_flux(2,i,j,k),1)/(vf%cfg%dz(k)*vf%cfg%dx(i)*dt)
-               this%rhoW(i,j,k)=this%rho_l*getVolumePtr(vf%face_flux(3,i,j,k),0)/(vf%cfg%dx(i)*vf%cfg%dy(j)*dt)+this%rho_g*getVolumePtr(vf%face_flux(3,i,j,k),1)/(vf%cfg%dx(i)*vf%cfg%dy(j)*dt)
-            end do
-         end do
-      end do
-      ! Synchronize boundaries
-      call this%cfg%sync(this%rho)
-      call this%cfg%sync(this%rhoU)
-      call this%cfg%sync(this%rhoV)
-      call this%cfg%sync(this%rhoW)
-   end subroutine update_density
-
    
-   !> Compute face densities by interpolation
-   subroutine get_face_density(this)
+   !> Compute RHOX/Y/Z from passed rho field
+   subroutine update_faceRHO(this,rho)
       implicit none
-      class(tpns), intent(inout) :: this
+      class(tpcons), intent(inout) :: this
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in) :: rho !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       integer :: i,j,k
-      ! Calculate rho_U/V/W using interpolation
-      do k=this%cfg%kmino_  ,this%cfg%kmaxo_
-         do j=this%cfg%jmino_  ,this%cfg%jmaxo_
-            do i=this%cfg%imino_+1,this%cfg%imaxo_
-               this%rho_U(i,j,k)=sum(this%itpr_x(:,i,j,k)*this%rho(i-1:i,j,k))
-            end do
-         end do
-      end do
-      do k=this%cfg%kmino_  ,this%cfg%kmaxo_
-         do j=this%cfg%jmino_+1,this%cfg%jmaxo_
-            do i=this%cfg%imino_  ,this%cfg%imaxo_
-               this%rho_V(i,j,k)=sum(this%itpr_y(:,i,j,k)*this%rho(i,j-1:j,k))
-            end do
-         end do
-      end do
-      do k=this%cfg%kmino_+1,this%cfg%kmaxo_
-         do j=this%cfg%jmino_  ,this%cfg%jmaxo_
-            do i=this%cfg%imino_  ,this%cfg%imaxo_
-               this%rho_W(i,j,k)=sum(this%itpr_z(:,i,j,k)*this%rho(i,j,k-1:k))
-            end do
-         end do
-      end do
+      ! Calculate square root of face densities
+      do k=this%cfg%kmino_  ,this%cfg%kmaxo_; do j=this%cfg%jmino_  ,this%cfg%jmaxo_; do i=this%cfg%imino_+1,this%cfg%imaxo_
+         this%RHOX(i,j,k)=sum(this%itpr_x(:,i,j,k)*rho(i-1:i,j,k))
+      end do; end do; end do
+      do k=this%cfg%kmino_  ,this%cfg%kmaxo_; do j=this%cfg%jmino_+1,this%cfg%jmaxo_; do i=this%cfg%imino_  ,this%cfg%imaxo_
+         this%RHOY(i,j,k)=sum(this%itpr_y(:,i,j,k)*rho(i,j-1:j,k))
+      end do; end do; end do
+      do k=this%cfg%kmino_+1,this%cfg%kmaxo_; do j=this%cfg%jmino_  ,this%cfg%jmaxo_; do i=this%cfg%imino_  ,this%cfg%imaxo_
+         this%RHOZ(i,j,k)=sum(this%itpr_z(:,i,j,k)*rho(i,j,k-1:k))
+      end do; end do; end do
       ! Handle non-periodic borders
-      if (.not.this%cfg%xper.and.this%cfg%iproc.eq.1) this%rho_U(this%cfg%imino,:,:)=this%rho(this%cfg%imino,:,:)
-      if (.not.this%cfg%yper.and.this%cfg%jproc.eq.1) this%rho_V(:,this%cfg%jmino,:)=this%rho(:,this%cfg%jmino,:)
-      if (.not.this%cfg%zper.and.this%cfg%kproc.eq.1) this%rho_W(:,:,this%cfg%kmino)=this%rho(:,:,this%cfg%kmino)
+      if (.not.this%cfg%xper.and.this%cfg%iproc.eq.1) this%RHOX(this%cfg%imino,:,:)=rho(this%cfg%imino,:,:)
+      if (.not.this%cfg%yper.and.this%cfg%jproc.eq.1) this%RHOY(:,this%cfg%jmino,:)=rho(:,this%cfg%jmino,:)
+      if (.not.this%cfg%zper.and.this%cfg%kproc.eq.1) this%RHOZ(:,:,this%cfg%kmino)=rho(:,:,this%cfg%kmino)
       ! Synchronize boundaries
-      call this%cfg%sync(this%rho_U)
-      call this%cfg%sync(this%rho_V)
-      call this%cfg%sync(this%rho_W)
-   end subroutine get_face_density
+      call this%cfg%sync(this%RHOX)
+      call this%cfg%sync(this%RHOY)
+      call this%cfg%sync(this%RHOZ)
+   end subroutine update_faceRHO
    
    
    !> Prepare viscosity arrays from vfs object
@@ -2361,7 +2699,7 @@ contains
       use vfs_class, only: vfs
       use messager,  only: die
       implicit none
-      class(tpns), intent(inout) :: this
+      class(tpcons), intent(inout) :: this
       class(vfs), intent(in) :: vf
       integer :: i,j,k,mystrat
       real(WP) :: liq_vol,gas_vol,tot_vol
@@ -2439,7 +2777,7 @@ contains
             end do
          end do
       case default
-         call die('[tpns get_viscosity] Unknown viscosity averaging strategy')
+         call die('[tpcons get_viscosity] Unknown viscosity averaging strategy')
       end select
       ! Synchronize boundaries - not really needed...
       call this%cfg%sync(this%visc)
@@ -2449,10 +2787,10 @@ contains
    end subroutine get_viscosity
    
    
-   !> Add gravity source term - assumes that rho has been updated before
+   !> Add gravity source term
    subroutine addsrc_gravity(this,resU,resV,resW)
       implicit none
-      class(tpns), intent(inout) :: this
+      class(tpcons), intent(inout) :: this
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: resU !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: resV !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: resW !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
@@ -2460,9 +2798,9 @@ contains
       do k=this%cfg%kmin_,this%cfg%kmax_
          do j=this%cfg%jmin_,this%cfg%jmax_
             do i=this%cfg%imin_,this%cfg%imax_
-               if (this%umask(i,j,k).eq.0) resU(i,j,k)=resU(i,j,k)+this%rho_U(i,j,k)*this%gravity(1)
-               if (this%vmask(i,j,k).eq.0) resV(i,j,k)=resV(i,j,k)+this%rho_V(i,j,k)*this%gravity(2)
-               if (this%wmask(i,j,k).eq.0) resW(i,j,k)=resW(i,j,k)+this%rho_W(i,j,k)*this%gravity(3)
+               if (this%umask(i,j,k).eq.0) resU(i,j,k)=resU(i,j,k)+this%gravity(1)*this%RHOX(i,j,k)
+               if (this%vmask(i,j,k).eq.0) resV(i,j,k)=resV(i,j,k)+this%gravity(2)*this%RHOY(i,j,k)
+               if (this%wmask(i,j,k).eq.0) resW(i,j,k)=resW(i,j,k)+this%gravity(3)*this%RHOZ(i,j,k)
             end do
          end do
       end do
@@ -2475,7 +2813,7 @@ contains
       use vfs_class, only: vfs
       use irl_fortran_interface
       implicit none
-      class(tpns), intent(inout) :: this
+      class(tpcons), intent(inout) :: this
       class(vfs),  intent(in) :: vf
       integer :: i,j,k
       real(WP), dimension(3) :: nw
@@ -2691,10 +3029,10 @@ contains
    
    
    !> Print out info for two-phase incompressible flow solver
-   subroutine tpns_print(this)
+   subroutine tpcons_print(this)
       use, intrinsic :: iso_fortran_env, only: output_unit
       implicit none
-      class(tpns), intent(in) :: this
+      class(tpcons), intent(in) :: this
       
       ! Output
       if (this%cfg%amRoot) then
@@ -2705,7 +3043,7 @@ contains
          write(output_unit,'(" >    gas viscosity = ",es12.5)') this%visc_g
       end if
       
-   end subroutine tpns_print
+   end subroutine tpcons_print
    
    
-end module tpns_class
+end module tpcons_class

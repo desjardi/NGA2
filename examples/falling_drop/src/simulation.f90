@@ -2,11 +2,12 @@
 module simulation
    use precision,         only: WP
    use geometry,          only: cfg
+   use iterator_class,    only: iterator
    use hypre_str_class,   only: hypre_str
-   !use ddadi_class,       only: ddadi
-   use tpns_class,        only: tpns
+   use ddadi_class,       only: ddadi
+   use tpcons_class,      only: tpcons
    use vfs_class,         only: vfs
-   !use tpscalar_class,    only: tpscalar
+   use sgsmodel_class,    only: sgsmodel
    use timetracker_class, only: timetracker
    use ensight_class,     only: ensight
    use surfmesh_class,    only: surfmesh
@@ -14,65 +15,57 @@ module simulation
    use monitor_class,     only: monitor
    implicit none
    private
-   
-   !> Get a couple linear solvers, a two-phase flow solver and volume fraction solver and corresponding time tracker
-   type(hypre_str),   public :: ps
-   !type(ddadi),       public :: vs
-   type(tpns),        public :: fs
-   type(vfs),         public :: vf
-   !type(tpscalar),    public :: sc
-   type(timetracker), public :: time
-   
-   !> Ensight postprocessing
-   type(surfmesh) :: smesh
-   type(ensight)  :: ens_out
-   type(event)    :: ens_evt
-   
-   !> Simulation monitor file
-   type(monitor) :: mfile,cflfile,scfile
-   
    public :: simulation_init,simulation_run,simulation_final
    
-   !> Private work arrays
-   !real(WP), dimension(:,:,:,:), allocatable :: resSC
-   real(WP), dimension(:,:,:), allocatable :: resU,resV,resW
-   real(WP), dimension(:,:,:), allocatable :: Ui,Vi,Wi
+   !> Flow solver objects
+   type(hypre_str),   public :: ps     !< Structured Hypre linear solver for pressure
+   type(ddadi),       public :: vs     !< DDADI solver for velocity
+   type(tpcons),      public :: fs     !< Two-phase conservative flow solver
+   type(vfs),         public :: vf     !< Volume fraction solver
+   type(timetracker), public :: time   !< Time info
    
-   !> Problem definition
-   real(WP), dimension(3) :: center
-   real(WP) :: radius,depth
+   !> SGS modeling
+   logical        :: use_sgs   !< Is an LES model used?
+   type(sgsmodel) :: sgs       !< SGS model for eddy viscosity
+   
+   !> Ensight postprocessing
+   type(surfmesh) :: smesh     !< Surface mesh for interface
+   type(ensight)  :: ens_out   !< Ensight output for flow variables
+   type(event)    :: ens_evt   !< Event trigger for Ensight output
+   
+   !> Monitoring files
+   type(monitor) :: mfile      !< General simulation monitoring
+   type(monitor) :: cflfile    !< CFL monitoring
+   
+   !> Iterator for VOF removal
+   type(iterator) :: vof_removal_layer  !< Edge of domain where we actively remove VOF
+   integer        :: nlayer=4           !< Size of buffer layer for VOF removal
+   real(WP)       :: vof_removed        !< Integral of VOF removed
+   
+   !> Private work arrays
+   real(WP), dimension(:,:,:,:,:), allocatable :: gradU           !< Velocity gradient
+   real(WP), dimension(:,:,:), allocatable :: resU,resV,resW      !< Residuals
+   real(WP), dimension(:,:,:), allocatable :: Ui,Vi,Wi            !< Cell-centered velocities
    
 contains
-
-
-   !> Function that defines a level set function for a falling drop problem
-   function levelset_falling_drop(xyz,t) result(G)
-      implicit none
-      real(WP), dimension(3),intent(in) :: xyz
-      real(WP), intent(in) :: t
-      real(WP) :: G
-      ! Create the droplet
-      G=radius-sqrt(sum((xyz-center)**2))
-      ! Add the pool
-      !G=max(G,depth-xyz(2))
-   end function levelset_falling_drop
    
    
    !> Initialization of problem solver
    subroutine simulation_init
       use param, only: param_read
       implicit none
+      real(WP), dimension(3) :: center
+      real(WP) :: radius,depth
       
       
       ! Allocate work arrays
       allocate_work_arrays: block
-         !allocate(resSC(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_,1:2))
-         allocate(resU (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
-         allocate(resV (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
-         allocate(resW (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
-         allocate(Ui   (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
-         allocate(Vi   (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
-         allocate(Wi   (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+         allocate(resU(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+         allocate(resV(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+         allocate(resW(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+         allocate(Ui  (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+         allocate(Vi  (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+         allocate(Wi  (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
       end block allocate_work_arrays
       
       
@@ -83,28 +76,25 @@ contains
          call param_read('Max cfl number',time%cflmax)
          call param_read('Max time',time%tmax)
          time%dt=time%dtmax
-         time%itmax=2
+         call param_read('Subiterations',time%itmax,default=2)
       end block initialize_timetracker
       
       
       ! Initialize our VOF solver and field
       create_and_initialize_vof: block
          use mms_geom,  only: cube_refine_vol
-         use vfs_class, only: lvira,VFhi,VFlo,remap!,flux_storage
+         use vfs_class, only: plicnet,VFhi,VFlo,flux
          integer :: i,j,k,n,si,sj,sk
          real(WP), dimension(3,8) :: cube_vertex
          real(WP), dimension(3) :: v_cent,a_cent
          real(WP) :: vol,area
          integer, parameter :: amr_ref_lvl=4
          ! Create a VOF solver
-         !call vf%initialize(cfg=cfg,reconstruction_method=lvira,transport_method=flux_storage,name='VOF')
-         call vf%initialize(cfg=cfg,reconstruction_method=lvira,transport_method=remap,name='VOF')
-         vf%cons_correct=.false.
+         call vf%initialize(cfg=cfg,reconstruction_method=plicnet,transport_method=flux,name='VOF')
          ! Initialize to a droplet and a pool
-         !center=[0.0_WP,0.05_WP,0.0_WP]
+         radius=0.5_WP
          call param_read('Droplet center',center)
-         call param_read('Droplet diameter',radius); radius=radius/2.0_WP
-         depth =0.02_WP
+         call param_read('Pool depth',depth)
          do k=vf%cfg%kmino_,vf%cfg%kmaxo_
             do j=vf%cfg%jmino_,vf%cfg%jmaxo_
                do i=vf%cfg%imino_,vf%cfg%imaxo_
@@ -150,77 +140,86 @@ contains
       end block create_and_initialize_vof
       
       
+      ! Create an iterator for removing VOF at edges
+      create_iterator: block
+         vof_removal_layer=iterator(cfg,'VOF removal',vof_removal_layer_locator)
+         vof_removed=0.0_WP
+      end block create_iterator
+      
+      
       ! Create a two-phase flow solver without bconds
-      create_and_initialize_flow_solver: block
+      create_flow_solver: block
          use hypre_str_class, only: pcg_pfmg2
-         use mathtools,       only: Pi
+         real(WP) :: Re,Fr,We,r,m
          ! Create flow solver
-         fs=tpns(cfg=cfg,name='Two-phase NS')
-         ! Assign constant viscosity to each phase
-         call param_read('Liquid dynamic viscosity',fs%visc_l)
-         call param_read('Gas dynamic viscosity',fs%visc_g)
-         ! Assign constant density to each phase
-         call param_read('Liquid density',fs%rho_l)
-         call param_read('Gas density',fs%rho_g)
-         ! Read in surface tension coefficient
-         call param_read('Surface tension coefficient',fs%sigma)
-         call param_read('Static contact angle',fs%contact_angle)
-         fs%contact_angle=fs%contact_angle*Pi/180.0_WP
-         ! Assign acceleration of gravity
-         call param_read('Gravity',fs%gravity)
+         call fs%initialize(cfg=cfg,name='Two-phase NS')
+         ! Read in adimensional parameters
+         call param_read('Froude number',Fr)     ! Fr=U^2/(g*D)=1/g
+         call param_read('Weber number',We)      ! We=rho_l*U^2*D/sigma=1/sigma
+         call param_read('Reynolds number',Re)   ! Re=rho_l*U*D/mu_l=1/mu_l
+         call param_read('Density ratio',r)      ! r=rho_l/rho_g=1/rho_g
+         call param_read('Viscosity ratio',m)    ! m=mu_l/mu_g
+         ! Assign fluid properties to each phase
+         fs%gravity=[0.0_WP,-Fr**(-1.0_WP),0.0_WP]
+         fs%sigma=We**(-1.0_WP)
+         fs%rho_l=1.0_WP
+         fs%rho_g=fs%rho_l/r
+         fs%visc_l=Re**(-1.0_WP)
+         fs%visc_g=fs%visc_l/m
          ! Configure pressure solver
          ps=hypre_str(cfg=cfg,name='Pressure',method=pcg_pfmg2,nst=7)
-         ps%maxlevel=10
+         ps%maxlevel=24
          call param_read('Pressure iteration',ps%maxit)
          call param_read('Pressure tolerance',ps%rcvg)
          ! Configure implicit velocity solver
-         !vs=ddadi(cfg=cfg,name='Velocity',nst=7)
+         vs=ddadi(cfg=cfg,name='Velocity',nst=7)
          ! Setup the solver
-         call fs%setup(pressure_solver=ps)!,implicit_solver=vs)
-         ! Zero initial field
-         fs%U=0.0_WP; fs%V=0.0_WP; fs%W=0.0_WP
+         call fs%setup(pressure_solver=ps,implicit_solver=vs)
+      end block create_flow_solver
+      
+      
+      ! Generate initial conditions for velocity
+      initialize_velocity: block
+         use vfs_class, only: VFlo
+         integer :: i,j,k
+         ! Initialize density
+         resU=fs%rho_l*vf%VF+fs%rho_g*(1.0_WP-vf%VF); call fs%update_faceRHO(rho=resU)
+         ! Initialize velocity
+         do k=cfg%kmin_,cfg%kmax_
+            do j=cfg%jmin_,cfg%jmax_
+               do i=cfg%imin_,cfg%imax_
+                  if (cfg%ym(j).gt.depth.and.maxval(vf%VF(i,j-1:j,k)).gt.VFlo) fs%V(i,j,k)=-1.0_WP
+               end do
+            end do
+         end do
+         ! Apply all other boundary conditions
+         call fs%apply_bcond(time%t,time%dt)
+         ! Make it solenoidal
+         call fs%correct_mfr()
+         call fs%update_laplacian()
+         call fs%get_div()
+         fs%psolv%rhs=-fs%cfg%vol*fs%div
+         fs%psolv%sol=0.0_WP
+         call fs%psolv%solve()
+         call fs%shift_p(fs%psolv%sol)
+         call fs%get_pgrad(fs%psolv%sol,resU,resV,resW)
+         fs%U=fs%U-resU/fs%RHOX
+         fs%V=fs%V-resV/fs%RHOY
+         fs%W=fs%W-resW/fs%RHOZ
          ! Calculate cell-centered velocities and divergence
          call fs%interp_vel(Ui,Vi,Wi)
          call fs%get_div()
-      end block create_and_initialize_flow_solver
+      end block initialize_velocity
       
       
-      ! Create a liquid scalar solver
-      !create_scalar: block
-      !   integer :: i,j,k
-      !   ! Create scalar solver
-      !   call sc%initialize(cfg=cfg,nscalar=2,name='tpscalar_test')
-      !   ! Make it liquid and give it a name
-      !   sc%SCname=['Zl','Zg']
-      !   sc%phase =[  0 ,  1 ]
-      !   ! Assign zero diffusivity
-      !   sc%diff=0.0_WP
-      !   ! Setup without an implicit solver
-      !   call sc%setup()
-      !   ! Initialize scalar fields
-      !   do k=cfg%kmino_,cfg%kmaxo_
-      !      do j=cfg%jmino_,cfg%jmaxo_
-      !         do i=cfg%imino_,cfg%imaxo_
-      !            ! Liquid scalar
-      !            if (vf%VF(i,j,k).gt.0.0_WP) then
-      !               ! We are in the liquid
-      !               if (cfg%ym(j).gt.depth+cfg%dy(j)) then
-      !                  ! We are above the pool
-      !                  sc%SC(i,j,k,1)=1.0_WP
-      !               else
-      !                  ! We are in the pool
-      !                  sc%SC(i,j,k,1)=2.0_WP
-      !               end if
-      !            end if
-      !            ! Gas scalar
-      !            if (vf%VF(i,j,k).lt.1.0_WP) then
-      !               ! We are in the gas
-      !               sc%SC(i,j,k,2)=(cfg%ym(j)-depth)/(cfg%yL-depth)
-      !            end if
-      !         end do
-      !      end do
-      !   end do
-      !end block create_scalar
+      ! Create an LES model
+      create_sgs: block
+         call param_read('Use SGS model',use_sgs)
+         if (use_sgs) then
+            allocate(gradU(1:3,1:3,cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+            sgs=sgsmodel(cfg=fs%cfg,umask=fs%umask,vmask=fs%vmask,wmask=fs%wmask)
+         end if
+      end block create_sgs
       
       
       ! Create surfmesh object for interface polygon output
@@ -228,11 +227,10 @@ contains
          smesh=surfmesh(nvar=0,name='plic')
          call vf%update_surfmesh(smesh)
       end block create_smesh
-
-
+      
+      
       ! Add Ensight output
       create_ensight: block
-         integer :: nsc
          ! Create Ensight output from cfg
          ens_out=ensight(cfg=cfg,name='FallingDrop')
          ! Create event for Ensight output
@@ -244,9 +242,6 @@ contains
          call ens_out%add_scalar('pressure',fs%P)
          call ens_out%add_scalar('curvature',vf%curv)
          call ens_out%add_surface('plic',smesh)
-         !do nsc=1,sc%nscalar
-         !   call ens_out%add_scalar(trim(sc%SCname(nsc)),sc%SC(:,:,:,nsc))
-         !end do
          ! Output to ensight
          if (ens_evt%occurs()) call ens_out%write_data(time%t)
       end block create_ensight
@@ -254,12 +249,10 @@ contains
       
       ! Create a monitor file
       create_monitor: block
-         integer :: nsc
          ! Prepare some info about fields
          call fs%get_cfl(time%dt,time%cfl)
          call fs%get_max()
          call vf%get_max()
-         !call sc%get_max(VF=vf%VF)
          ! Create simulation monitor
          mfile=monitor(fs%cfg%amRoot,'simulation')
          call mfile%add_column(time%n,'Timestep number')
@@ -273,6 +266,7 @@ contains
          call mfile%add_column(vf%VFmax,'VOF maximum')
          call mfile%add_column(vf%VFmin,'VOF minimum')
          call mfile%add_column(vf%VFint,'VOF integral')
+         call mfile%add_column(vof_removed,'VOF removed')
          call mfile%add_column(fs%divmax,'Maximum divergence')
          call mfile%add_column(fs%psolv%it,'Pressure iteration')
          call mfile%add_column(fs%psolv%rerr,'Pressure error')
@@ -289,25 +283,40 @@ contains
          call cflfile%add_column(fs%CFLv_y,'Viscous yCFL')
          call cflfile%add_column(fs%CFLv_z,'Viscous zCFL')
          call cflfile%write()
-         ! Create scalar monitor
-         !scfile=monitor(sc%cfg%amRoot,'scalar')
-         !call scfile%add_column(time%n,'Timestep number')
-         !call scfile%add_column(time%t,'Time')
-         !do nsc=1,sc%nscalar
-         !   call scfile%add_column(sc%SCmin(nsc),trim(sc%SCname(nsc))//'_min')
-         !   call scfile%add_column(sc%SCmax(nsc),trim(sc%SCname(nsc))//'_max')
-         !   call scfile%add_column(sc%SCint(nsc),trim(sc%SCname(nsc))//'_int')
-         !end do
-         !call scfile%write()
       end block create_monitor
+      
+   contains
+      
+      !> Function that defines a level set function for a falling drop problem
+      function levelset_falling_drop(xyz,t) result(G)
+         implicit none
+         real(WP), dimension(3),intent(in) :: xyz
+         real(WP), intent(in) :: t
+         real(WP) :: G
+         ! Create the droplet
+         G=radius-sqrt(sum((xyz-center)**2))
+         ! Add the pool
+         G=max(G,depth-xyz(2))
+      end function levelset_falling_drop
+      
+      
+      !> Function that localizes region of VOF removal
+      function vof_removal_layer_locator(pg,i,j,k) result(isIn)
+         use pgrid_class, only: pgrid
+         class(pgrid), intent(in) :: pg
+         integer, intent(in) :: i,j,k
+         logical :: isIn
+         isIn=.false.
+         if (j.ge.pg%jmax-nlayer) isIn=.true.
+      end function vof_removal_layer_locator
       
       
    end subroutine simulation_init
    
    
-   !> Perform an NGA2 simulation - this mimicks NGA's old time integration for multiphase
+   !> Perform an NGA2 simulation
    subroutine simulation_run
-      use tpns_class, only: static_contact,harmonic_visc
+      use tpns_class, only: arithmetic_visc
       implicit none
       
       ! Perform time integration
@@ -321,52 +330,69 @@ contains
          ! Remember old VOF
          vf%VFold=vf%VF
          
-         ! Remember old SC
-         !sc%SCold=sc%SC
-         
-         ! Remember old velocity
-         fs%Uold=fs%U
-         fs%Vold=fs%V
-         fs%Wold=fs%W
-         
-         ! Apply time-varying Dirichlet conditions
-         ! This is where time-dpt Dirichlet would be enforced
-         
-         ! Prepare old staggered density (at n)
-         call fs%get_olddensity(vf=vf)
+         ! Remember old velocity and face densities
+         fs%Uold=fs%U; fs%RHOXold=fs%RHOX
+         fs%Vold=fs%V; fs%RHOYold=fs%RHOY
+         fs%Wold=fs%W; fs%RHOZold=fs%RHOZ
          
          ! VOF solver step
          call vf%advance(dt=time%dt,U=fs%U,V=fs%V,W=fs%W)
          
-         ! Now transport our phase-specific scalars
-         !advance_scalar: block
-         !   integer :: nsc
-         !   real(WP) :: p,q
-         !   ! Explicit calculation of dSC/dt from scalar equation
-         !   call sc%get_dSCdt(dSCdt=resSC,U=fs%U,V=fs%V,W=fs%W,VFold=vf%VFold,VF=vf%VF,detailed_face_flux=vf%detailed_face_flux,dt=time%dt)
-         !   ! Advance scalar fields
-         !   do nsc=1,sc%nscalar
-         !      p=real(sc%phase(nsc),WP); q=1.0_WP-2.0_WP*p
-         !      where (sc%mask.eq.0.and.vf%VF.ne.p) sc%SC(:,:,:,nsc)=((p+q*vf%VFold)*sc%SCold(:,:,:,nsc)+time%dt*resSC(:,:,:,nsc))/(p+q*vf%VF)
-         !      where (vf%VF.eq.p) sc%SC(:,:,:,nsc)=0.0_WP
-         !   end do
-         !   ! Apply boundary conditions
-         !   call sc%apply_bcond(time%t,time%dt)
-         !end block advance_scalar
+         ! Remove VOF at edge of domain
+         remove_vof: block
+            use mpi_f08,  only: MPI_ALLREDUCE,MPI_SUM,MPI_IN_PLACE
+            use parallel, only: MPI_REAL_WP
+            integer :: n,i,j,k,ierr
+            ! Adjust VOF field
+            vof_removed=0.0_WP
+            do n=1,vof_removal_layer%no_
+               i=vof_removal_layer%map(1,n)
+               j=vof_removal_layer%map(2,n)
+               k=vof_removal_layer%map(3,n)
+               if (n.le.vof_removal_layer%n_) vof_removed=vof_removed+cfg%vol(i,j,k)*vf%VF(i,j,k)
+               vf%VF(i,j,k)=0.0_WP
+            end do
+            call MPI_ALLREDUCE(MPI_IN_PLACE,vof_removed,1,MPI_REAL_WP,MPI_SUM,cfg%comm,ierr)
+            call vf%clean_irl_and_band()
+         end block remove_vof
+         
+         ! Update face density and momentum vector
+         resU=fs%rho_l*vf%VF+fs%rho_g*(1.0_WP-vf%VF); call fs%update_faceRHO(rho=resU)
+         fs%rhoU=fs%rho_l*vf%UFl(1,:,:,:)+fs%rho_g*vf%UFg(1,:,:,:)
+         fs%rhoV=fs%rho_l*vf%UFl(2,:,:,:)+fs%rho_g*vf%UFg(2,:,:,:)
+         fs%rhoW=fs%rho_l*vf%UFl(3,:,:,:)+fs%rho_g*vf%UFg(3,:,:,:)
          
          ! Prepare new staggered viscosity (at n+1)
-         call fs%get_viscosity(vf=vf,strat=harmonic_visc)
+         call fs%get_viscosity(vf=vf,strat=arithmetic_visc)
          
+         ! Turbulence modeling
+         if (use_sgs) then
+            sgs_modeling: block
+               use sgsmodel_class, only: vreman
+               integer :: i,j,k
+               resU=fs%rho_l*vf%VF+fs%rho_g*(1.0_WP-vf%VF)
+               call fs%get_gradU(gradU)
+               call sgs%get_visc(type=vreman,dt=time%dt,rho=resU,gradu=gradU)
+               do k=fs%cfg%kmino_+1,fs%cfg%kmaxo_
+                  do j=fs%cfg%jmino_+1,fs%cfg%jmaxo_
+                     do i=fs%cfg%imino_+1,fs%cfg%imaxo_
+                        fs%visc(i,j,k)   =fs%visc(i,j,k)   +sgs%visc(i,j,k)
+                        fs%visc_xy(i,j,k)=fs%visc_xy(i,j,k)+sum(fs%itp_xy(:,:,i,j,k)*sgs%visc(i-1:i,j-1:j,k))
+                        fs%visc_yz(i,j,k)=fs%visc_yz(i,j,k)+sum(fs%itp_yz(:,:,i,j,k)*sgs%visc(i,j-1:j,k-1:k))
+                        fs%visc_zx(i,j,k)=fs%visc_zx(i,j,k)+sum(fs%itp_xz(:,:,i,j,k)*sgs%visc(i-1:i,j,k-1:k))
+                     end do
+                  end do
+               end do
+            end block sgs_modeling
+         end if
+
          ! Perform sub-iterations
          do while (time%it.le.time%itmax)
             
-            ! Build mid-time velocity
+            ! Build mid-time velocity =========================================
             fs%U=0.5_WP*(fs%U+fs%Uold)
             fs%V=0.5_WP*(fs%V+fs%Vold)
             fs%W=0.5_WP*(fs%W+fs%Wold)
-            
-            ! Preliminary mass and momentum transport step at the interface
-            call fs%prepare_advection_upwind(dt=time%dt)
             
             ! Explicit calculation of drho*u/dt from NS
             call fs%get_dmomdt(resU,resV,resW)
@@ -375,39 +401,39 @@ contains
             call fs%addsrc_gravity(resU,resV,resW)
             
             ! Assemble explicit residual
-            resU=-2.0_WP*fs%rho_U*fs%U+(fs%rho_Uold+fs%rho_U)*fs%Uold+time%dt*resU
-            resV=-2.0_WP*fs%rho_V*fs%V+(fs%rho_Vold+fs%rho_V)*fs%Vold+time%dt*resV
-            resW=-2.0_WP*fs%rho_W*fs%W+(fs%rho_Wold+fs%rho_W)*fs%Wold+time%dt*resW
+            resU=-2.0_WP*fs%RHOX*fs%U+(fs%RHOX+fs%RHOXold)*fs%Uold+time%dt*resU
+            resV=-2.0_WP*fs%RHOY*fs%V+(fs%RHOY+fs%RHOYold)*fs%Vold+time%dt*resV
+            resW=-2.0_WP*fs%RHOZ*fs%W+(fs%RHOZ+fs%RHOZold)*fs%Wold+time%dt*resW
             
             ! Form implicit residuals
-            !call fs%solve_implicit(time%dt,resU,resV,resW)
+            call fs%solve_implicit(time%dt,resU,resV,resW)
             
-            ! Apply these residuals
-            fs%U=2.0_WP*fs%U-fs%Uold+resU/fs%rho_U
-            fs%V=2.0_WP*fs%V-fs%Vold+resV/fs%rho_V
-            fs%W=2.0_WP*fs%W-fs%Wold+resW/fs%rho_W
+            ! Compute predictor U
+            fs%U=2.0_WP*fs%U-fs%Uold+resU
+            fs%V=2.0_WP*fs%V-fs%Vold+resV
+            fs%W=2.0_WP*fs%W-fs%Wold+resW
             
-            ! Apply other boundary conditions
+            ! Sync and apply boundary conditions
             call fs%apply_bcond(time%t,time%dt)
             
             ! Solve Poisson equation
             call fs%update_laplacian()
             call fs%correct_mfr()
             call fs%get_div()
-            call fs%add_surface_tension_jump(dt=time%dt,div=fs%div,vf=vf,contact_model=static_contact)
+            call fs%add_surface_tension_jump(dt=time%dt,div=fs%div,vf=vf)
             fs%psolv%rhs=-fs%cfg%vol*fs%div/time%dt
             fs%psolv%sol=0.0_WP
             call fs%psolv%solve()
             call fs%shift_p(fs%psolv%sol)
             
-            ! Correct velocity
+            ! Corrector step
             call fs%get_pgrad(fs%psolv%sol,resU,resV,resW)
             fs%P=fs%P+fs%psolv%sol
-            fs%U=fs%U-time%dt*resU/fs%rho_U
-            fs%V=fs%V-time%dt*resV/fs%rho_V
-            fs%W=fs%W-time%dt*resW/fs%rho_W
+            fs%U=fs%U-time%dt*resU/fs%RHOX
+            fs%V=fs%V-time%dt*resV/fs%RHOY
+            fs%W=fs%W-time%dt*resW/fs%RHOZ
             
-            ! Increment sub-iteration counter
+            ! Increment sub-iteration counter =================================
             time%it=time%it+1
             
          end do
@@ -425,10 +451,8 @@ contains
          ! Perform and output monitoring
          call fs%get_max()
          call vf%get_max()
-         !call sc%get_max(VF=vf%VF)
          call mfile%write()
          call cflfile%write()
-         !call scfile%write()
          
       end do
       
@@ -446,7 +470,8 @@ contains
       ! timetracker
       
       ! Deallocate work arrays
-      deallocate(resU,resV,resW,Ui,Vi,Wi)!,resSC)
+      deallocate(resU,resV,resW,Ui,Vi,Wi)
+      if (use_sgs) deallocate(gradU)
       
    end subroutine simulation_final
    

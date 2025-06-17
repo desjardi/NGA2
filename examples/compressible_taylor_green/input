@@ -1,0 +1,32 @@
+# Parallelization
+Partition : 8 1 1
+
+# Mesh definition
+nx : 64 !256 !128 !64 !32
+ny : 64 !256 !128 !64 !32
+nz : 64 !256 !128 !64 !32
+
+# Flow definition
+Gamma :    1.4
+Mach :     1.25
+Reynolds : 1600
+Prandtl :  0.71
+Bulk to shear ratio : 0.0
+
+# Do we use SGS modeling
+Use bSGS model : .false.
+Use sSGS model : .false.
+
+# Time integration
+Max timestep size : 5e-2 !1e-2 !2.5e-2 !5e-2 !1e-1
+Max cfl number :    1.0
+Max time :          20
+Subiterations :     50
+Relaxation coeff:   0.9
+
+# Pressure solver
+Pressure tolerance : 1e-6
+Pressure iteration : 100
+
+# Ensight output
+Ensight output period : 1e-1

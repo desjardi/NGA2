@@ -283,55 +283,25 @@ contains
       ! Sync up masks
       call this%cfg%sync(this%mask)
       
-      ! Adjust interpolation coefficients to cell faces - Neumann is used at walls only,
-      ! leaving intact interpolation coefficients at Dirichlet boundaries (mask=2)
-      do k=this%cfg%kmin_,this%cfg%kmax_+1
-         do j=this%cfg%jmin_,this%cfg%jmax_+1
-            do i=this%cfg%imin_,this%cfg%imax_+1
-               ! Linear interpolation in x
-               if (this%mask(i,j,k).eq.0.and.this%mask(i-1,j,k).eq.1) this%itp_x(:,i,j,k)=[0.0_WP,1.0_WP]
-               if (this%mask(i,j,k).eq.1.and.this%mask(i-1,j,k).eq.0) this%itp_x(:,i,j,k)=[1.0_WP,0.0_WP]
-               ! Linear interpolation in y
-               if (this%mask(i,j,k).eq.0.and.this%mask(i,j-1,k).eq.1) this%itp_y(:,i,j,k)=[0.0_WP,1.0_WP]
-               if (this%mask(i,j,k).eq.1.and.this%mask(i,j-1,k).eq.0) this%itp_y(:,i,j,k)=[1.0_WP,0.0_WP]
-               ! Linear interpolation in z
-               if (this%mask(i,j,k).eq.0.and.this%mask(i,j,k-1).eq.1) this%itp_z(:,i,j,k)=[0.0_WP,1.0_WP]
-               if (this%mask(i,j,k).eq.1.and.this%mask(i,j,k-1).eq.0) this%itp_z(:,i,j,k)=[1.0_WP,0.0_WP]
-            end do
-         end do
-      end do
-      
-      ! Adjust energy interpolation to reflect Dirichlet boundaries
+      ! Adjust energy interpolation to cell faces for Dirichlet conditions (mask=2)
       do k=this%cfg%kmin_,this%cfg%kmax_+1
          do j=this%cfg%jmin_,this%cfg%jmax_+1
             do i=this%cfg%imin_,this%cfg%imax_+1
                ! X face
-               if (this%mask(i-1,j,k).eq.2) then
-                  this%up2_xm(:,i,j,k)=0.0_WP; this%up2_xm(-1,i,j,k)=1.0_WP
-                  this%up2_xp(:,i,j,k)=0.0_WP; this%up2_xp(-1,i,j,k)=1.0_WP
-               end if
-               if (this%mask(i  ,j,k).eq.2) then
-                  this%up2_xm(:,i,j,k)=0.0_WP; this%up2_xm( 0,i,j,k)=1.0_WP
-                  this%up2_xp(:,i,j,k)=0.0_WP; this%up2_xp( 0,i,j,k)=1.0_WP
-               end if
+               if (this%mask(i,j,k).eq.0.and.this%mask(i-1,j,k).eq.2) this%up2_xp(:,i,j,k)=[0.0_WP,1.0_WP]
+               if (this%mask(i,j,k).eq.0.and.this%mask(i-1,j,k).eq.2) this%itp_x (:,i,j,k)=[1.0_WP,0.0_WP]
+               if (this%mask(i,j,k).eq.2.and.this%mask(i-1,j,k).eq.0) this%up2_xm(:,i,j,k)=[1.0_WP,0.0_WP]
+               if (this%mask(i,j,k).eq.2.and.this%mask(i-1,j,k).eq.0) this%itp_x (:,i,j,k)=[0.0_WP,1.0_WP]
                ! Y face
-               if (this%mask(i,j-1,k).eq.2) then
-                  this%up2_ym(:,i,j,k)=0.0_WP; this%up2_ym(-1,i,j,k)=1.0_WP
-                  this%up2_yp(:,i,j,k)=0.0_WP; this%up2_yp(-1,i,j,k)=1.0_WP
-               end if
-               if (this%mask(i,j  ,k).eq.2) then
-                  this%up2_ym(:,i,j,k)=0.0_WP; this%up2_ym( 0,i,j,k)=1.0_WP
-                  this%up2_yp(:,i,j,k)=0.0_WP; this%up2_yp( 0,i,j,k)=1.0_WP
-               end if
+               if (this%mask(i,j,k).eq.0.and.this%mask(i,j-1,k).eq.2) this%up2_yp(:,i,j,k)=[0.0_WP,1.0_WP]
+               if (this%mask(i,j,k).eq.0.and.this%mask(i,j-1,k).eq.2) this%itp_y (:,i,j,k)=[1.0_WP,0.0_WP]
+               if (this%mask(i,j,k).eq.2.and.this%mask(i,j-1,k).eq.0) this%up2_ym(:,i,j,k)=[1.0_WP,0.0_WP]
+               if (this%mask(i,j,k).eq.2.and.this%mask(i,j-1,k).eq.0) this%itp_y (:,i,j,k)=[0.0_WP,1.0_WP]
                ! Z face
-               if (this%mask(i,j,k-1).eq.2) then
-                  this%up2_zm(:,i,j,k)=0.0_WP; this%up2_zm(-1,i,j,k)=1.0_WP
-                  this%up2_zp(:,i,j,k)=0.0_WP; this%up2_zp(-1,i,j,k)=1.0_WP
-               end if
-               if (this%mask(i,j,k  ).eq.2) then
-                  this%up2_zm(:,i,j,k)=0.0_WP; this%up2_zm( 0,i,j,k)=1.0_WP
-                  this%up2_zp(:,i,j,k)=0.0_WP; this%up2_zp( 0,i,j,k)=1.0_WP
-               end if
+               if (this%mask(i,j,k).eq.0.and.this%mask(i,j,k-1).eq.2) this%up2_zp(:,i,j,k)=[0.0_WP,1.0_WP]
+               if (this%mask(i,j,k).eq.0.and.this%mask(i,j,k-1).eq.2) this%itp_z (:,i,j,k)=[1.0_WP,0.0_WP]
+               if (this%mask(i,j,k).eq.2.and.this%mask(i,j,k-1).eq.0) this%up2_zm(:,i,j,k)=[1.0_WP,0.0_WP]
+               if (this%mask(i,j,k).eq.2.and.this%mask(i,j,k-1).eq.0) this%itp_z (:,i,j,k)=[0.0_WP,1.0_WP]
             end do
          end do
       end do
