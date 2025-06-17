@@ -18,6 +18,7 @@
 # Mac stuff
 .DS_Store
 *.dSYM/
+.history/
 
 # Python temporaries
 _*
