@@ -650,19 +650,28 @@ contains
       ! Apply jet velocity
       apply_bc: block
          use tpns_class, only: bcond
+         use mpi_f08,  only: MPI_ALLREDUCE,MPI_SUM,MPI_IN_PLACE
+         use parallel, only: MPI_REAL_WP
          type(bcond), pointer :: mybc
+         real(WP) :: liqVolInjected_dt
          integer :: n,i,j,k
+         ! Compute injection velocity
+         if (this%liqVolInjected .lt. this%liqVol) then
+            this%InjectionVelocity=this%gravity*this%time%t  ! Velocity increases linearly with time
+         else
+            this%InjectionVelocity=0.0_WP                    ! Velocity stops once volume is reached
+         end if
+         ! Apply injection velocity to the jet boundary condition 
          call this%fs%get_bcond('jet',mybc)
+         liqVolInjected_dt = 0.0_WP
          do n=1,mybc%itr%no_
             i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
-            if (this%liqVolInjected .lt. this%liqVol) then
-               this%InjectionVelocity=this%gravity*this%time%t  ! Velocity increases linearly with time
-            else
-               this%InjectionVelocity=0.0_WP                    ! Velocity stops once volume is reached
-            end if
+            
             this%fs%V(i,j,k) = this%InjectionVelocity
-            this%liqVolInjected = this%liqVolInjected + this%fs%V(i,j,k)*this%vf%VF(i,j-1,k)*this%cfg%dx(i)*this%cfg%dz(k)*this%time%dt
+            liqVolInjected_dt = liqVolInjected_dt + this%fs%V(i,j,k)*this%vf%VF(i,j-1,k)*this%cfg%dx(i)*this%cfg%dz(k)*this%time%dt
          end do
+         call MPI_ALLREDUCE(MPI_IN_PLACE,liqVolInjected_dt,1,MPI_REAL_WP,MPI_SUM,this%cfg%comm,ierr)
+         this%liqVolInjected = this%liqVolInjected + liqVolInjected_dt
       end block apply_bc
 
       call MPI_BARRIER(this%cfg%comm,ierr);if (this%cfg%amRoot) print *,'old'
