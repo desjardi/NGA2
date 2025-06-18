@@ -20,6 +20,8 @@ module ljcf_class
    private
    
    public :: ljcf
+
+   integer :: ierr
    
    !> ljcf object
    type :: ljcf
@@ -43,6 +45,7 @@ module ljcf_class
       !> Simulation monitor file
       type(monitor) :: mfile    !< General simulation monitoring
       type(monitor) :: cflfile  !< CFL monitoring
+      type(monitor) :: ljcf_file     !< LJCF simulation monitoring
       
       !> Work arrays
       real(WP), dimension(:,:,:), allocatable :: resU,resV,resW      !< Residuals
@@ -69,7 +72,7 @@ module ljcf_class
       real(WP) :: djet, Vjet
       real(WP), dimension(:), allocatable :: xjet
       integer :: relax_model, nwall
-      real(WP) :: gravity, liqVol, liqVolInjected
+      real(WP) :: gravity, liqVol, liqVolInjected, InjectionVelocity
       
    contains
       procedure :: init     !< Initialize nozzle simulation
@@ -378,7 +381,9 @@ contains
             ! Update the band
             call this%vf%update_band()
             ! Create discontinuous polygon mesh from IRL interface
+            call MPI_BARRIER(this%cfg%comm,ierr);if (this%cfg%amRoot) print *,'polygonalizing interface...'
             call this%vf%polygonalize_interface()
+            call MPI_BARRIER(this%cfg%comm,ierr);if (this%cfg%amRoot) print *,'done polygonalizing interface'
             ! Calculate distance from polygons
             call this%vf%distance_from_polygon()
             ! Calculate subcell phasic volumes
@@ -486,7 +491,6 @@ contains
          call this%mfile%add_column(this%fs%Vmax,'Vmax')
          call this%mfile%add_column(this%fs%Wmax,'Wmax')
          call this%mfile%add_column(this%fs%Pmax,'Pmax')
-         call this%mfile%add_column(this%liqVolInjected,'Liq Vol Injected')
          call this%mfile%add_column(this%vf%VFint,'VOF integral')
          call this%mfile%add_column(this%vf%SDint,'SD integral')
          call this%mfile%add_column(this%vof_removed,'VOF removed')
@@ -508,6 +512,13 @@ contains
          call this%cflfile%add_column(this%fs%CFLv_y,'Viscous yCFL')
          call this%cflfile%add_column(this%fs%CFLv_z,'Viscous zCFL')
          call this%cflfile%write()
+         ! Create LJCF monitor
+         this%ljcf_file=monitor(this%fs%cfg%amRoot,'ljcf')
+         call this%ljcf_file%add_column(this%time%n,'Timestep number')
+         call this%ljcf_file%add_column(this%time%t,'Time')
+         call this%ljcf_file%add_column(this%liqVolInjected,'Liq Vol Injected')
+         call this%ljcf_file%add_column(this%InjectionVelocity,'Injection Velocity')
+         call this%ljcf_file%write()
       end block create_monitor
       
       
@@ -619,6 +630,8 @@ contains
       use tpns_class, only: arithmetic_visc
       implicit none
       class(ljcf), intent(inout) :: this
+
+      call MPI_BARRIER(this%cfg%comm,ierr);if (this%cfg%amRoot) print *,'Starting timestep number ',this%time%n
       
       ! Reset all timers and start timestep timer
       call this%tstep%reset()
@@ -632,6 +645,8 @@ contains
       call this%time%adjust_dt()
       call this%time%increment()
 
+      call MPI_BARRIER(this%cfg%comm,ierr);if (this%cfg%amRoot) print *,' Setting jet velocity'
+
       ! Apply jet velocity
       apply_bc: block
          use tpns_class, only: bcond
@@ -641,13 +656,16 @@ contains
          do n=1,mybc%itr%no_
             i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
             if (this%liqVolInjected .lt. this%liqVol) then
-               this%fs%V(i,j,k)=this%gravity*this%time%t  ! Velocity increases linearly with time
+               this%InjectionVelocity=this%gravity*this%time%t  ! Velocity increases linearly with time
             else
-               this%fs%V(i,j,k)=0.0_WP                    ! Velocity stops once volume is reached
+               this%InjectionVelocity=0.0_WP                    ! Velocity stops once volume is reached
             end if
+            this%fs%V(i,j,k) = this%InjectionVelocity
             this%liqVolInjected = this%liqVolInjected + this%fs%V(i,j,k)*this%vf%VF(i,j-1,k)*this%cfg%dx(i)*this%cfg%dz(k)*this%time%dt
          end do
       end block apply_bc
+
+      call MPI_BARRIER(this%cfg%comm,ierr);if (this%cfg%amRoot) print *,'old'
 
       ! Remember old VOF
       this%vf%VFold=this%vf%VF
@@ -660,13 +678,20 @@ contains
       ! Prepare old sflaggered density (at n)
       call this%fs%get_olddensity(vf=this%vf)
 
+      call MPI_BARRIER(this%cfg%comm,ierr);if (this%cfg%amRoot) print *,'advance'
+
       ! VOF solver step
       call this%tvof%start() ! Start VOF timer
       call this%vf%advance(dt=this%time%dt,U=this%fs%U,V=this%fs%V,W=this%fs%W)
       call this%tvof%stop() ! Stop VOF timer
+
+            call MPI_BARRIER(this%cfg%comm,ierr);if (this%cfg%amRoot) print *,'viscosity'
+
       
       ! Prepare new sflaggered viscosity (at n+1)
       call this%fs%get_viscosity(vf=this%vf,strat=arithmetic_visc)
+
+      call MPI_BARRIER(this%cfg%comm,ierr);if (this%cfg%amRoot) print *,'subiters'
       
       ! Perform sub-iterations
       do while (this%time%it.le.this%time%itmax)
@@ -733,10 +758,14 @@ contains
          this%time%it=this%time%it+1
          
       end do
+
+      call MPI_BARRIER(this%cfg%comm,ierr);if (this%cfg%amRoot) print *,'interpolating velocity'
       
       ! Recompute interpolated velocity and divergence
       call this%fs%interp_vel(this%Ui,this%Vi,this%Wi)
       call this%fs%get_div()
+
+      call MPI_BARRIER(this%cfg%comm,ierr);if (this%cfg%amRoot) print *,'removing VOF at edge of domain'
       
       ! Remove VOF at edge of domain
       remove_vof: block
@@ -754,6 +783,8 @@ contains
          call MPI_ALLREDUCE(MPI_IN_PLACE,this%vof_removed,1,MPI_REAL_WP,MPI_SUM,this%cfg%comm,ierr)
          call this%vf%clean_irl_and_band()
       end block remove_vof
+
+      call MPI_BARRIER(this%cfg%comm,ierr);if (this%cfg%amRoot) print *,'output to Ensight'
       
       ! Output to ensight
       if (this%ens_evt%occurs()) then
@@ -792,6 +823,9 @@ contains
       call this%mfile%write()
       call this%cflfile%write()
       call this%timefile%write()
+      call this%ljcf_file%write()
+
+      call MPI_BARRIER(this%cfg%comm,ierr);if (this%cfg%amRoot) print *,'saving restart files'
       
       ! Finally, see if it's time to save restart files
       if (this%save_evt%occurs()) then

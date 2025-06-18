@@ -127,9 +127,9 @@ contains
                call atom%fs%get_bcond('inflow',mybc)
                do n=1,mybc%itr%no_
                   i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
-                  atom%fs%U(i  ,j,k)=atom%resU(i  ,j,k)+1.0_WP
-                  atom%fs%V(i-1,j,k)=atom%resV(i-1,j,k)
-                  atom%fs%W(i-1,j,k)=atom%resW(i-1,j,k)
+                  atom%fs%U(i  ,j,k)=1.0_WP !atom%resU(i  ,j,k)+1.0_WP
+                  atom%fs%V(i-1,j,k)=0.0_WP !atom%resV(i-1,j,k)
+                  atom%fs%W(i-1,j,k)=0.0_WP !atom%resW(i-1,j,k)
                end do
             end block apply_boundary_condition
          end block coupling
