@@ -143,18 +143,18 @@ module vfs_class
       ! IRL objects
       type(ByteBuffer_type) :: send_byte_buffer
       type(ByteBuffer_type) :: recv_byte_buffer
-      type(ObjServer_PlanarSep_type)  :: planar_separator_allocation
+      type(ObjServer_SeparatorVariant_type)  :: planar_separator_allocation
       type(ObjServer_PlanarLoc_type)  :: planar_localizer_allocation
-      type(ObjServer_LocSepLink_type) :: localized_separator_link_allocation
+      type(ObjServer_LocVariantLink_type) :: localized_separator_link_allocation
       type(ObjServer_LocLink_type)    :: localizer_link_allocation
-      type(PlanarLoc_type),   dimension(:,:,:),   allocatable :: localizer
-      type(PlanarSep_type),   dimension(:,:,:),   allocatable :: liquid_gas_interface
-      type(LocSepLink_type),  dimension(:,:,:),   allocatable :: localized_separator_link
-      type(ListVM_VMAN_type), dimension(:,:,:),   allocatable :: triangle_moments_storage
-      type(LocLink_type),     dimension(:,:,:),   allocatable :: localizer_link
-      type(Poly_type),        dimension(:,:,:,:), allocatable :: interface_polygon
-      type(Poly_type),        dimension(:,:,:,:), allocatable :: polyface
-      type(SepVM_type),       dimension(:,:,:,:), allocatable :: face_flux    !< Only stored if flux-based transport is used
+      type(PlanarLoc_type),        dimension(:,:,:),   allocatable :: localizer
+      type(SeparatorVariant_type), dimension(:,:,:),   allocatable :: liquid_gas_interface
+      type(LocVariantLink_type),   dimension(:,:,:),   allocatable :: localized_separator_link
+      type(ListVM_VMAN_type),      dimension(:,:,:),   allocatable :: triangle_moments_storage
+      type(LocLink_type),          dimension(:,:,:),   allocatable :: localizer_link
+      type(Poly_type),             dimension(:,:,:,:), allocatable :: interface_polygon
+      type(Poly_type),             dimension(:,:,:,:), allocatable :: polyface
+      type(SepVM_type),            dimension(:,:,:,:), allocatable :: face_flux    !< Only stored if flux-based transport is used
       
       ! Masking info for metric modification
       integer, dimension(:,:,:), allocatable :: mask      !< Integer array used for enforcing bconds
@@ -172,10 +172,10 @@ module vfs_class
       ! Old arrays that are needed for the compressible MAST solver
       real(WP), dimension(:,:,:,:), allocatable :: Lbaryold  !< Liquid barycenter
       real(WP), dimension(:,:,:,:), allocatable :: Gbaryold  !< Gas barycenter
-      type(PlanarSep_type),  dimension(:,:,:), allocatable :: liquid_gas_interfaceold
-      type(LocSepLink_type), dimension(:,:,:), allocatable :: localized_separator_linkold
-      type(ObjServer_PlanarSep_type)  :: planar_separatorold_allocation
-      type(ObjServer_LocSepLink_type) :: localized_separator_linkold_allocation
+      type(SeparatorVariant_type),  dimension(:,:,:), allocatable :: liquid_gas_interfaceold
+      type(LocVariantLink_type), dimension(:,:,:), allocatable :: localized_separator_linkold
+      type(ObjServer_SeparatorVariant_type)  :: planar_separatorold_allocation
+      type(ObjServer_LocVariantLink_type) :: localized_separator_linkold_allocation
       
    contains
       procedure :: initialize                             !< Initialize the vfs object
