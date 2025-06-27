@@ -30,6 +30,7 @@ module vfs_class
    integer, parameter, public :: lvlset=7            !< Levelset-based scheme
    integer, parameter, public :: plicnet=8           !< PLICnet
    integer, parameter, public :: r2pnet=9            !< R2Pnet
+   integer, parameter, public :: jibben=10           !< PPIC-Jibben
    
    ! List of available interface transport schemes for VF
    integer, parameter, public :: flux=1             !< Flux-based geometric transport
@@ -120,6 +121,7 @@ module vfs_class
 
       ! Parameters for SGS modeling of thin structures
       logical  :: two_planes                              !< Whether we're using a 2-plane reconstruction approach
+      logical  :: ppic                                    !< Whether we're using PPIC interfaces
       real(WP) :: twoplane_thld1=0.99_WP                  !< Average normal magnitude threshold for r2p to switch from one-plane to two-planes (purely local)
       real(WP) :: twoplane_thld2=0.5_WP                   !< Average normal magnitude threshold above which r2p switches to LVIRA (based on 3x3x3 stencil)
       real(WP) :: thin_thld_dotprod=-0.5_WP               !< Maximum dot product of two interface normals for their respective cells to be considered thin region cells
@@ -147,6 +149,7 @@ module vfs_class
       type(ObjServer_PlanarLoc_type)  :: planar_localizer_allocation
       type(ObjServer_LocVariantLink_type) :: localized_separator_link_allocation
       type(ObjServer_LocLink_type)    :: localizer_link_allocation
+      type(ObjServer_MixedPolygonBezierSurface_type)    :: interface_mixed_surface_allocation
       type(PlanarLoc_type),        dimension(:,:,:),   allocatable :: localizer
       type(SeparatorVariant_type), dimension(:,:,:),   allocatable :: liquid_gas_interface
       type(LocVariantLink_type),   dimension(:,:,:),   allocatable :: localized_separator_link
@@ -155,7 +158,8 @@ module vfs_class
       type(Poly_type),             dimension(:,:,:,:), allocatable :: interface_polygon
       type(Poly_type),             dimension(:,:,:,:), allocatable :: polyface
       type(SepVM_type),            dimension(:,:,:,:), allocatable :: face_flux    !< Only stored if flux-based transport is used
-      
+      type(MixedPolygonBezierSurface_type),  dimension(:,:,:), allocatable :: interface_mixed_surface !< Only used for writing surface (for now!)
+
       ! Masking info for metric modification
       integer, dimension(:,:,:), allocatable :: mask      !< Integer array used for enforcing bconds
       integer, dimension(:,:,:), allocatable :: vmask     !< Integer array used for enforcing bconds - for vertices
@@ -205,6 +209,7 @@ module vfs_class
       procedure :: transport_remap_storage                !< Transport VF using geometric cell remap with storage
       procedure :: advect_interface                       !< Advance IRL surface to next step
       procedure :: build_interface                        !< Reconstruct IRL interface from VF field
+      procedure :: build_quadratic_interface                        !< Reconstruct IRL PPIC interface from PLIC and VF field
       procedure :: build_elvira                           !< ELVIRA reconstruction of the interface from VF field
       procedure :: build_lvira                            !< LVIRA reconstruction of the interface from VF field
       procedure :: build_mof                              !< MOF reconstruction of the interface from VF field
@@ -212,6 +217,7 @@ module vfs_class
       procedure :: build_r2p                              !< R2P reconstruction of the interface from VF field
       procedure :: build_plicnet                          !< PLICnet reconstruction of the interface from VF and bary fields
       procedure :: build_r2pnet                           !< R2Pnet reconstruction of the interface
+      procedure :: build_jibben                           !< PPIC-Jibben reconstruction of the interface
       procedure :: sense_interface                        !< Calculate various surface sensors
       procedure :: get_thickness                          !< Calculate multiphasic structure thickness
       procedure :: detect_thin_regions                    !< Detect thin regions
@@ -304,10 +310,12 @@ contains
       case (lvira,elvira,youngs,mof,wmof,plicnet)
          this%reconstruction_method=reconstruction_method
          this%two_planes=.false.
+         this%ppic=.false.
       case (r2p,r2pnet)
          this%reconstruction_method=reconstruction_method
          ! Allocate extra curvature storage
          this%two_planes=.true.
+         this%ppic=.false.
          allocate(this%curv2p(1:2,this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_)); this%curv2p=0.0_WP
          ! Allocate extra sensors
          allocate(this%thickness(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_)); this%thickness=0.0_WP
@@ -320,6 +328,10 @@ contains
          this%flotsam_thld=1.0e-3_WP  !< This considers any separated structure around dx/10 and below as bogus
          ! Also allow for larger curvatures to be calculated
          this%maxcurv_times_mesh=2.0_WP
+      case (jibben)
+         this%reconstruction_method=reconstruction_method
+         this%two_planes=.false.
+         this%ppic=.true.
       case default
          call die('[vfs initialize] Unknown interface reconstruction scheme.')
       end select
@@ -404,6 +416,7 @@ contains
       allocate(this%triangle_moments_storage(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
       allocate(this%localizer_link          (this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
       allocate(this%interface_polygon(1:max_interface_planes,this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
+      allocate(this%interface_mixed_surface (this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
       allocate(this%polyface            (1:3,this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
       
       ! Work arrays for flux-based transport
@@ -459,7 +472,8 @@ contains
       call new(this%planar_separator_allocation,total_cells)
       call new(this%localized_separator_link_allocation,total_cells)
       call new(this%localizer_link_allocation,total_cells)
-      
+      call new(this%interface_mixed_surface_allocation,total_cells)
+
       ! Initialize arrays and setup linking
       do k=this%cfg%kmino_,this%cfg%kmaxo_
          do j=this%cfg%jmino_,this%cfg%jmaxo_
@@ -475,6 +489,8 @@ contains
                call new(this%triangle_moments_storage(i,j,k))
                ! Mesh with connectivity
                call new(this%localizer_link(i,j,k),this%localizer_link_allocation,this%localizer(i,j,k))
+               ! PLIC+PPIC triangulated surface
+               call new(this%interface_mixed_surface(i,j,k),this%interface_mixed_surface_allocation)
             end do
          end do
       end do
@@ -845,7 +861,7 @@ contains
       
       ! Perform interface sensing
       if (this%two_planes) call this%sense_interface()
-      
+
       ! Calculate distance from polygons
       call this%distance_from_polygon()
       
@@ -854,6 +870,9 @@ contains
       
       ! Calculate curvature
       call this%get_curvature()
+
+      ! Perform PPIC reconstruction
+      if (this%ppic) call this%build_quadratic_interface()
       
       ! Reset moments to guarantee compatibility with interface reconstruction
       call this%reset_volume_moments()
@@ -2464,12 +2483,27 @@ contains
       case (youngs) ; call this%build_youngs()
       case (plicnet); call this%build_plicnet()
       case (r2pnet) ; call this%build_r2pnet()
+      case (jibben) ; call this%build_lvira()
       case default; call die('[vfs build interface] Unknown interface reconstruction scheme')
       end select
       ! Follow with interface smoothing
       call this%smooth_interface()
    end subroutine build_interface
    
+   !> Reconstruct an IRL interface from the VF field distribution
+   subroutine build_quadratic_interface(this)
+      use messager, only: die
+      implicit none
+      class(vfs), intent(inout) :: this
+      ! Reconstruct interface - will need to support various methods
+      select case (this%reconstruction_method)
+      case (jibben) ; call this%build_jibben()
+      case default; call die('[vfs build interface] Unknown interface reconstruction scheme')
+      end select
+      ! Follow with interface smoothing
+      call this%smooth_interface()
+   end subroutine build_quadratic_interface
+
 
    !> Compute interface sensors
    subroutine sense_interface(this)
@@ -3716,7 +3750,84 @@ contains
       
    end subroutine build_r2pnet
 
+      
+   !> Jibben reconstruction of a parabolic interface in mixed cells
+   subroutine build_jibben(this)
+      use mathtools, only: normalize
+      implicit none
+      class(vfs), intent(inout) :: this
+      integer(IRL_SignedIndex_t) :: i,j,k
+      integer :: ind,ii,jj,kk,icenter
+      type(JibbenNeigh_type) :: neighborhood
+      type(RectCub_type) :: cell
+      
+      ! Storage for a cell
+      call new(cell)
+
+      ! Give ourselves an Jibben neighborhood and reserve 27 cells
+      call new(neighborhood)
+      call reserve(neighborhood, 27)
+      
+      ! Traverse domain and reconstruct interface
+      do k=this%cfg%kmin_,this%cfg%kmax_
+         do j=this%cfg%jmin_,this%cfg%jmax_
+            do i=this%cfg%imin_,this%cfg%imax_
+               
+               ! Skip wall/bcond cells - bconds need to be provided elsewhere directly!
+               if (this%mask(i,j,k).ne.0) cycle
+               
+               ! Handle full cells differently
+               if (this%VF(i,j,k).lt.VFlo.or.this%VF(i,j,k).gt.VFhi) then
+                  call setNumberOfPlanes(this%liquid_gas_interface(i,j,k),1)
+                  call setPlane(this%liquid_gas_interface(i,j,k),0,[0.0_WP,0.0_WP,0.0_WP],sign(1.0_WP,this%VF(i,j,k)-0.5_WP))
+                  cycle
+               end if
+               
+               ! Add polygons to neighborhood
+               call setSize(neighborhood, 0)
+               ind=0
+               do kk=k-1,k+1
+                  do jj=j-1,j+1
+                     do ii=i-1,i+1
+                        ! Add cell to neighborhood
+                        if (getNumberOfVertices(this%interface_polygon(1,ii,jj,kk)).gt.0) then
+                           call addMember(neighborhood,this%interface_polygon(1,ii,jj,kk),1.0_WP)
+                           ! Trap and set stencil center
+                           if (ii.eq.i.and.jj.eq.j.and.kk.eq.k) then
+                              icenter=ind
+                              call setCenterOfStencil(neighborhood,icenter)
+                           end if
+                           ! Increment counter
+                           ind=ind+1
+                        end if
+                     end do
+                  end do
+               end do
+                              
+               if (ind.gt.0) then
+                  ! Localize jibben neighborhood
+                  call setDelta(neighborhood, 2.5_WP*this%cfg%meshsize(i,j,k))
+                  call localize(neighborhood)
    
+                  ! Perform the reconstruction
+                  call reconstructJibben3D(neighborhood,this%liquid_gas_interface(i,j,k))
+                  
+                  ! Match Jibben parbolic reconstruction to volume fraction
+                  call construct_2pt(cell,[this%cfg%x(i),this%cfg%y(j),this%cfg%z(k)],[this%cfg%x(i+1),this%cfg%y(j+1),this%cfg%z(k+1)])
+                  call matchVolumeFraction(cell,this%VF(i,j,k),this%liquid_gas_interface(i,j,k))
+
+                  ! Clean up neighborhood
+                  call emptyNeighborhood(neighborhood)
+               end if
+            end do
+         end do
+      end do
+      
+      ! Synchronize across boundaries
+      call this%sync_interface()
+      
+   end subroutine build_jibben
+
    !> Set all domain boundaries to full liquid/gas based on VOF value
    subroutine set_full_bcond(this)
       implicit none
@@ -3915,14 +4026,38 @@ contains
       implicit none
       class(vfs), intent(inout) :: this
       class(surfmesh), intent(inout) :: smesh
-      integer :: i,j,k,n,shape,nv,np,nplane
-      real(WP), dimension(3) :: tmp_vert
-      
+      integer :: i,j,k,n,shape,nv,nqv,np,nbt,nplane,m
+      real(WP), dimension(4)  :: tmp_vert_tri
+      real(WP), dimension(3)  :: tmp_vert_poly
+      integer,  dimension(6)  :: tmp_conn
+      type(RectCub_type) :: cell
+   
       ! Reset surface mesh storage
       call smesh%reset()
       
+      ! Create a cell object
+      call new(cell)
+
       ! First pass to count how many vertices and polygons are inside our processor
-      nv=0; np=0
+      nv=0; np=0; nbt=0
+      ! Start with quadratic surfaces
+      do k=this%cfg%kmin_,this%cfg%kmax_
+         do j=this%cfg%jmin_,this%cfg%jmax_
+            do i=this%cfg%imin_,this%cfg%imax_
+               ! Reset mized surface
+               call zeroMixedSurface(this%interface_mixed_surface(i,j,k))
+               ! Skip if vfrac 0 or 1
+               if (this%VF(i,j,k).lt.VFlo.or.this%VF(i,j,k).gt.VFhi) cycle
+               ! Construct local cell and construct quadratic surface approximation
+               call construct_2pt(cell,[this%cfg%x(i),this%cfg%y(j),this%cfg%z(k)],[this%cfg%x(i+1),this%cfg%y(j+1),this%cfg%z(k+1)])
+               call getSurface(cell,this%liquid_gas_interface(i,j,k),this%interface_mixed_surface(i,j,k))
+               nv=nv+getNumberOfPoints(this%interface_mixed_surface(i,j,k))
+               nbt=nbt+getNumberOfTriangles(this%interface_mixed_surface(i,j,k))
+            end do
+         end do
+      end do
+      nqv=nv
+      ! Then do with polygons
       do k=this%cfg%kmin_,this%cfg%kmax_
          do j=this%cfg%jmin_,this%cfg%jmax_
             do i=this%cfg%imin_,this%cfg%imax_
@@ -3938,13 +4073,39 @@ contains
       end do
       
       ! Reallocate storage and fill out arrays
-      if (np.gt.0) then
-         call smesh%set_size(nvert=nv,npoly=np)
-         allocate(smesh%polyConn(smesh%nVert)) ! Also allocate naive connectivity
-         nv=0; np=0
+      if ((np+nbt).gt.0) then
+         call smesh%set_size(nvert=nv,npoly=np,nbeziertri=nbt)
+         allocate(smesh%polyConn(nv-nqv))
+         allocate(smesh%bezierTriConn(6*nbt))
+         nv=0; np=0; nbt=0
          do k=this%cfg%kmin_,this%cfg%kmax_
             do j=this%cfg%jmin_,this%cfg%jmax_
                do i=this%cfg%imin_,this%cfg%imax_
+                  ! Store bezier triangle connectivity
+                  do n=0,getNumberOfTriangles(this%interface_mixed_surface(i,j,k))-1
+                     tmp_conn=getTri(this%interface_mixed_surface(i,j,k),n)
+                     do m=1,6
+                        nbt=nbt+1
+                        smesh%bezierTriConn(nbt)=nv+tmp_conn(m)
+                     end do
+                  end do
+                  ! Store points of quadratic approximation
+                  do n=0,getNumberOfPoints(this%interface_mixed_surface(i,j,k))-1
+                     tmp_vert_tri=getPt(this%interface_mixed_surface(i,j,k),n)
+                     nv=nv+1
+                     smesh%xVert(nv)=tmp_vert_tri(1)
+                     smesh%yVert(nv)=tmp_vert_tri(2)
+                     smesh%zVert(nv)=tmp_vert_tri(3)
+                     smesh%wVert(nv)=tmp_vert_tri(4)
+                  end do
+               end do
+            end do
+         end do
+         nqv=nv
+         do k=this%cfg%kmin_,this%cfg%kmax_
+            do j=this%cfg%jmin_,this%cfg%jmax_
+               do i=this%cfg%imin_,this%cfg%imax_
+                  ! Store polygon vertices and connectivity
                   do nplane=1,getNumberOfPlanes(this%liquid_gas_interface(i,j,k))
                      shape=getNumberOfVertices(this%interface_polygon(nplane,i,j,k))
                      if (shape.gt.0) then
@@ -3953,13 +4114,14 @@ contains
                         smesh%polySize(np)=shape
                         ! Loop over its vertices and add them
                         do n=1,shape
-                           tmp_vert=getPt(this%interface_polygon(nplane,i,j,k),n-1)
+                           tmp_vert_poly=getPt(this%interface_polygon(nplane,i,j,k),n-1)
                            ! Increment node counter
                            nv=nv+1
-                           smesh%xVert(nv)=tmp_vert(1)
-                           smesh%yVert(nv)=tmp_vert(2)
-                           smesh%zVert(nv)=tmp_vert(3)
-                           smesh%polyConn(nv)=nv
+                           smesh%polyConn(nv-nqv)=nv-1
+                           smesh%xVert(nv)=tmp_vert_poly(1)
+                           smesh%yVert(nv)=tmp_vert_poly(2)
+                           smesh%zVert(nv)=tmp_vert_poly(3)
+                           smesh%wVert(nv)=1.0_WP
                         end do
                      end if
                   end do
@@ -3968,14 +4130,16 @@ contains
          end do
       else
          ! Add a zero-area triangle if this proc doesn't have one
-         np=1; nv=3
-         call smesh%set_size(nvert=nv,npoly=np)
+         np=1; nv=3; nbt=0
+         call smesh%set_size(nvert=nv,npoly=np,nbeziertri=nbt)
+         allocate(smesh%bezierTriConn(6*nbt))
          allocate(smesh%polyConn(smesh%nVert)) ! Also allocate naive connectivity
          smesh%xVert(1:3)=this%cfg%x(this%cfg%imin)
          smesh%yVert(1:3)=this%cfg%y(this%cfg%jmin)
          smesh%zVert(1:3)=this%cfg%z(this%cfg%kmin)
+         smesh%wVert(1:3)=1.0_WP
          smesh%polySize(1)=3
-         smesh%polyConn(1:3)=[1,2,3]
+         smesh%polyConn(1:3)=[0,1,2]
       end if
       
    end subroutine update_surfmesh
@@ -3989,7 +4153,7 @@ contains
       class(surfmesh), intent(inout) :: smesh
       real(WP), optional :: threshold
       real(WP) :: VFclip
-      integer :: i,j,k,n,shape,nv,np,nplane
+      integer :: i,j,k,n,shape,nv,np,nplane,nbt
       real(WP), dimension(3) :: tmp_vert
       
       ! Handle VF threshold
@@ -4003,7 +4167,7 @@ contains
       call smesh%reset()
       
       ! First pass to count how many vertices and polygons are inside our processor
-      nv=0; np=0
+      nv=0; np=0; nbt=0
       do k=this%cfg%kmin_,this%cfg%kmax_
          do j=this%cfg%jmin_,this%cfg%jmax_
             do i=this%cfg%imin_,this%cfg%imax_
@@ -4021,7 +4185,7 @@ contains
       
       ! Reallocate storage and fill out arrays
       if (np.gt.0) then
-         call smesh%set_size(nvert=nv,npoly=np)
+         call smesh%set_size(nvert=nv,npoly=np,nbeziertri=nbt)
          allocate(smesh%polyConn(smesh%nVert)) ! Also allocate naive connectivity
          nv=0; np=0
          do k=this%cfg%kmin_,this%cfg%kmax_
@@ -4052,7 +4216,7 @@ contains
       else
          ! Add a zero-area triangle if this proc doesn't have one
          np=1; nv=3
-         call smesh%set_size(nvert=nv,npoly=np)
+         call smesh%set_size(nvert=nv,npoly=np,nbeziertri=nbt)
          allocate(smesh%polyConn(smesh%nVert)) ! Also allocate naive connectivity
          smesh%xVert(1:3)=this%cfg%x(this%cfg%imin)
          smesh%yVert(1:3)=this%cfg%y(this%cfg%jmin)
@@ -5067,11 +5231,7 @@ contains
          do k=this%cfg%kmino_,this%cfg%kmaxo_
             do j=this%cfg%jmino_,this%cfg%jmaxo_
                do i=this%cfg%imino,this%cfg%imin-1
-                  do ni=0,getNumberOfPlanes(this%liquid_gas_interface(i,j,k))-1
-                     plane=getPlane(this%liquid_gas_interface(i,j,k),ni)
-                     plane(4)=plane(4)-plane(1)*this%cfg%xL
-                     call setPlane(this%liquid_gas_interface(i,j,k),ni,plane(1:3),plane(4))
-                  end do
+                  call shiftOrigin(this%liquid_gas_interface(i,j,k),[-this%cfg%xL,0.0_WP,0.0_WP])
                end do
             end do
          end do
@@ -5080,11 +5240,7 @@ contains
          do k=this%cfg%kmino_,this%cfg%kmaxo_
             do j=this%cfg%jmino_,this%cfg%jmaxo_
                do i=this%cfg%imax+1,this%cfg%imaxo
-                  do ni=0,getNumberOfPlanes(this%liquid_gas_interface(i,j,k))-1
-                     plane=getPlane(this%liquid_gas_interface(i,j,k),ni)
-                     plane(4)=plane(4)+plane(1)*this%cfg%xL
-                     call setPlane(this%liquid_gas_interface(i,j,k),ni,plane(1:3),plane(4))
-                  end do
+                  call shiftOrigin(this%liquid_gas_interface(i,j,k),[this%cfg%xL,0.0_WP,0.0_WP])
                end do
             end do
          end do
@@ -5094,11 +5250,7 @@ contains
          do k=this%cfg%kmino_,this%cfg%kmaxo_
             do j=this%cfg%jmino,this%cfg%jmin-1
                do i=this%cfg%imino_,this%cfg%imaxo_
-                  do ni=0,getNumberOfPlanes(this%liquid_gas_interface(i,j,k))-1
-                     plane=getPlane(this%liquid_gas_interface(i,j,k),ni)
-                     plane(4)=plane(4)-plane(2)*this%cfg%yL
-                     call setPlane(this%liquid_gas_interface(i,j,k),ni,plane(1:3),plane(4))
-                  end do
+                   call shiftOrigin(this%liquid_gas_interface(i,j,k),[0.0_WP,-this%cfg%yL,0.0_WP])
                end do
             end do
          end do
@@ -5107,11 +5259,7 @@ contains
          do k=this%cfg%kmino_,this%cfg%kmaxo_
             do j=this%cfg%jmax+1,this%cfg%jmaxo
                do i=this%cfg%imino_,this%cfg%imaxo_
-                  do ni=0,getNumberOfPlanes(this%liquid_gas_interface(i,j,k))-1
-                     plane=getPlane(this%liquid_gas_interface(i,j,k),ni)
-                     plane(4)=plane(4)+plane(2)*this%cfg%yL
-                     call setPlane(this%liquid_gas_interface(i,j,k),ni,plane(1:3),plane(4))
-                  end do
+                   call shiftOrigin(this%liquid_gas_interface(i,j,k),[0.0_WP,this%cfg%yL,0.0_WP])
                end do
             end do
          end do
@@ -5121,11 +5269,7 @@ contains
          do k=this%cfg%kmino,this%cfg%kmin-1
             do j=this%cfg%jmino_,this%cfg%jmaxo_
                do i=this%cfg%imino_,this%cfg%imaxo_
-                  do ni=0,getNumberOfPlanes(this%liquid_gas_interface(i,j,k))-1
-                     plane=getPlane(this%liquid_gas_interface(i,j,k),ni)
-                     plane(4)=plane(4)-plane(3)*this%cfg%zL
-                     call setPlane(this%liquid_gas_interface(i,j,k),ni,plane(1:3),plane(4))
-                  end do
+                   call shiftOrigin(this%liquid_gas_interface(i,j,k),[0.0_WP,0.0_WP,-this%cfg%zL])
                end do
             end do
          end do
@@ -5134,11 +5278,7 @@ contains
          do k=this%cfg%kmax+1,this%cfg%kmaxo
             do j=this%cfg%jmino_,this%cfg%jmaxo_
                do i=this%cfg%imino_,this%cfg%imaxo_
-                  do ni=0,getNumberOfPlanes(this%liquid_gas_interface(i,j,k))-1
-                     plane=getPlane(this%liquid_gas_interface(i,j,k),ni)
-                     plane(4)=plane(4)+plane(3)*this%cfg%zL
-                     call setPlane(this%liquid_gas_interface(i,j,k),ni,plane(1:3),plane(4))
-                  end do
+                   call shiftOrigin(this%liquid_gas_interface(i,j,k),[0.0_WP,0.0_WP,this%cfg%zL])
                end do
             end do
          end do

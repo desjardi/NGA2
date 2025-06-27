@@ -14,9 +14,12 @@ module surfmesh_class
       real(WP), dimension(:), allocatable :: xVert         !< X position of the vertices - size=nVert
       real(WP), dimension(:), allocatable :: yVert         !< Y position of the vertices - size=nVert
       real(WP), dimension(:), allocatable :: zVert         !< Z position of the vertices - size=nVert
+      real(WP), dimension(:), allocatable :: wVert         !< rational weight of the vertices - size=nVert
       integer :: nPoly                                     !< Number of polygons
       integer,  dimension(:), allocatable :: polySize      !< Size of polygons - size=nPoly
       integer,  dimension(:), allocatable :: polyConn      !< Connectivity - size=sum(polySize)
+      integer :: nBezierTri                                !< Number of quadratic rational Bezier triangles
+      integer,  dimension(:), allocatable :: bezierTriConn !< Connectivity - size=6*nBezierTri
       integer :: nvar                                                   !< Number of surface variables stored
       real(WP), dimension(:,:), allocatable :: var                      !< Surface variable storage
       character(len=str_medium), dimension(:), allocatable :: varname   !< Name of surface variable fields
@@ -58,6 +61,7 @@ contains
       ! Default to 0 size
       self%nVert=0
       self%nPoly=0
+      self%nBezierTri=0
       
       ! Initialize additional variables
       self%nvar=nvar
@@ -101,7 +105,7 @@ contains
       end block read_header
       
       ! Resize my surfmesh
-      call self%set_size(nvert=self%nVert,npoly=self%nPoly)
+      call self%set_size(nvert=self%nVert,npoly=self%nPoly,nbeziertri=self%nBezierTri)
       
       ! Read the ply vertices
       read_vertices: block
@@ -189,6 +193,7 @@ contains
       ! Default to 0 size
       self%nVert=0
       self%nPoly=0
+      self%nBezierTri=0
 
       ! Initialize additional variables
       self%nvar=nvar
@@ -232,7 +237,7 @@ contains
       end block read_header
       
       ! Resize my surfmesh
-      call self%set_size(nvert=self%nVert,npoly=self%nPoly)
+      call self%set_size(nvert=self%nVert,npoly=self%nPoly,nbeziertri=self%nBezierTri)
       
       ! Read the ply vertices
       read_vertices: block
@@ -315,6 +320,7 @@ contains
       ! Default to 0 size
       self%nVert=0
       self%nPoly=0
+      self%nBezierTri=0
       ! Initialize additional variables
       self%nvar=nvar
       allocate(self%varname(self%nvar))
@@ -326,27 +332,30 @@ contains
    subroutine reset(this)
       implicit none
       class(surfmesh), intent(inout) :: this
-      this%nPoly=0; this%nVert=0
-      if (allocated(this%xVert))    deallocate(this%xvert)
-      if (allocated(this%yVert))    deallocate(this%yvert)
-      if (allocated(this%zVert))    deallocate(this%zvert)
-      if (allocated(this%polySize)) deallocate(this%polySize)
-      if (allocated(this%polyConn)) deallocate(this%polyConn)
-      if (allocated(this%var))      deallocate(this%var)
+      this%nPoly=0; this%nVert=0; this%nBezierTri=0
+      if (allocated(this%xVert))         deallocate(this%xvert)
+      if (allocated(this%yVert))         deallocate(this%yvert)
+      if (allocated(this%zVert))         deallocate(this%zvert)
+      if (allocated(this%wVert))         deallocate(this%wvert)
+      if (allocated(this%polySize))      deallocate(this%polySize)
+      if (allocated(this%polyConn))      deallocate(this%polyConn)
+      if (allocated(this%bezierTriConn)) deallocate(this%bezierTriConn)
+      if (allocated(this%var))           deallocate(this%var)
    end subroutine reset
    
    
    ! Set mesh storage size - leave connectivity alone
-   subroutine set_size(this,nvert,npoly)
+   subroutine set_size(this,nvert,npoly,nbeziertri)
       implicit none
       class(surfmesh), intent(inout) :: this
-      integer, intent(in) :: nvert,npoly
-      this%nPoly=npoly; this%nVert=nvert
+      integer, intent(in) :: nvert,npoly,nbeziertri
+      this%nPoly=npoly; this%nVert=nvert; this%nBezierTri=nbeziertri
       allocate(this%xVert   (this%nVert))
       allocate(this%yVert   (this%nVert))
       allocate(this%zVert   (this%nVert))
+      allocate(this%wVert   (this%nVert))
       allocate(this%polySize(this%nPoly))
-      allocate(this%var     (this%nvar,this%nPoly))
+      allocate(this%var     (this%nvar,this%nPoly+this%nBezierTri))
    end subroutine set_size
    
    

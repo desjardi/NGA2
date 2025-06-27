@@ -85,7 +85,7 @@ contains
       ! Initialize our VOF solver and field
       create_and_initialize_vof: block
          use mms_geom, only: cube_refine_vol
-         use vfs_class,only: r2p,lvira,VFhi,VFlo
+         use vfs_class,only: r2p,lvira,VFhi,VFlo,jibben
          use mpi_f08,  only: MPI_WTIME
          use string,   only: str_medium,lowercase
          integer :: i,j,k,n,si,sj,sk,curvature_method,stencil_size,hf_backup_method
@@ -96,7 +96,7 @@ contains
          integer, parameter :: amr_ref_lvl=5
          real(WP) :: start, finish
          ! Create a VOF solver with r2p reconstruction
-         call vf%initialize(cfg=cfg,reconstruction_method=lvira,name='VOF')
+         call vf%initialize(cfg=cfg,reconstruction_method=jibben,name='VOF')
          ! Initialize two droplets
          call param_read('Droplet diameter',radius); radius=0.5_WP*radius
          ! call param_read('Droplet 1 position',center)      
@@ -138,6 +138,8 @@ contains
          call vf%subcell_vol()
          ! Calculate curvature
          call vf%get_curvature()
+         ! Perform PPIC reconstruction
+         if (vf%ppic) call vf%build_quadratic_interface()
          ! Reset moments to guarantee compatibility with interface reconstruction
          call vf%reset_volume_moments()
       end block create_and_initialize_vof
