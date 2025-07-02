@@ -260,9 +260,7 @@ contains
       class(vtk), intent(inout) :: this
       real(WP), intent(in) :: time
       character(len=str_medium) :: filename
-      integer :: iunit,ierr,n,i
-      integer :: ibuff
-      character(len=80) :: cbuff
+      integer :: iunit,ierr,n,i,offset
       type(MPI_File) :: ifile
       integer(kind=MPI_OFFSET_KIND) :: disp
       type(MPI_Status):: status
@@ -270,12 +268,11 @@ contains
       type(vct), pointer :: my_vct
       type(srf), pointer :: my_srf
       type(prt), pointer :: my_prt
-      real(SP), dimension(:,:,:), allocatable   :: spbuff
+      real(SP), dimension(:,:,:),   allocatable :: spbuff
       real(SP), dimension(:,:,:,:), allocatable :: sp3buff
       real(WP), dimension(:), allocatable :: temp_time
       character(len=str_medium) :: ctime
       real(WP) :: rtime
-      integer :: offset
       character(len=1), parameter :: eol = char(10)
       character(len=2), parameter :: idt = '  '
       integer(I4) :: data_size
@@ -553,13 +550,12 @@ contains
       implicit none
       class(vtk), intent(in) :: this
       type(srf), pointer, intent(in) :: surf
-      integer     :: iunit,ierr,rank,n,count
+      integer     :: iunit,ierr,rank,n
       integer     :: nvert,ntri,npoly,nconn_tri,nconn_poly,offset
+      integer(I8) :: buffer_I8
       integer(I4) :: data_size
-      integer(I4) :: buffer_I4
       integer(I4) :: VTK_POLYGON = 7
       integer(I4) :: VTK_BEZIER_TRIANGLE = 76
-      integer(I8) :: buffer_I8
       character(len=1), parameter :: eol = char(10)
       character(len=2), parameter :: idt = '  '
       character(len=str_medium) :: filename
@@ -648,19 +644,11 @@ contains
             end do
             data_size=nvert*SP
             write(iunit) data_size
-            do n=1,nvert
-               write(iunit) real(surf%ptr%wVert(n),SP)
-            end do
+            write(iunit) real(surf%ptr%wVert,SP)
             data_size=nconn_tri*I8+nconn_poly*I8
             write(iunit) data_size
-            do n=1,nconn_tri
-               buffer_I8=surf%ptr%bezierTriConn(n)
-               write(iunit) buffer_I8
-            end do
-            do n=1,nconn_poly
-               buffer_I8=surf%ptr%polyConn(n)
-               write(iunit) buffer_I8
-            end do
+            write(iunit) int(surf%ptr%bezierTriConn,I8)
+            write(iunit) int(surf%ptr%polyConn,I8)
             data_size=ntri*I8+npoly*I8
             write(iunit) data_size
             do n=1,ntri
@@ -702,16 +690,14 @@ contains
    
    !> Procedure that writes out a particle mesh in Ensight format
    subroutine write_part(this,part)
-      use precision, only: SP,DP,I4,I8
+      use precision, only: SP,I4
       use messager,  only: die
-      use mpi_f08,   only: MPI_BARRIER,MPI_ALLREDUCE,MPI_SUM,MPI_INTEGER,MPI_INTEGER4
+      use mpi_f08,   only: MPI_BARRIER,MPI_INTEGER4
       implicit none
       class(vtk), intent(in) :: this
       type(prt), pointer, intent(in) :: part
       character(len=str_medium) :: filename
-      integer :: iunit,ierr,rank,n
-      character(len=80) :: cbuff
-      integer :: ibuff,npart,offset
+      integer :: iunit,ierr,rank,n,offset
       integer(I4) :: data_size
       character(len=1), parameter :: eol = char(10)
       character(len=2), parameter :: idt = '  '
@@ -730,9 +716,6 @@ contains
          ! Close the file
          close(iunit)
       end if
-
-      ! Count the number of particles
-      call MPI_ALLREDUCE(part%ptr%n,npart,1,MPI_INTEGER,MPI_SUM,this%cfg%comm,ierr)
 
       ! Write ASCII header for local piece
       offset=0
