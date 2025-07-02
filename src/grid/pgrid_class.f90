@@ -20,6 +20,7 @@ module pgrid_class
       type(MPI_Datatype) :: view            !< Local to global array mapping info - real(WP)
       type(MPI_Datatype) :: Iview           !< Local to global array mapping info - integer
       type(MPI_Datatype) :: SPview          !< Local to global array mapping info - real(SP)
+      type(MPI_Datatype) :: SP3view         !< Local to global vector mapping info - real(SP)
       integer :: nproc                      !< Number of processors
       integer :: rank                       !< Processor grid rank
       logical :: amRoot                     !< Am I grid root?
@@ -236,6 +237,7 @@ contains
       self%view  =MPI_DATATYPE_NULL
       self%Iview =MPI_DATATYPE_NULL
       self%SPview=MPI_DATATYPE_NULL
+      self%SP3view=MPI_DATATYPE_NULL
       ! Get group size
       call MPI_GROUP_SIZE(self%group,self%nproc,ierr)
       if (self%nproc.eq.0) call die('[pgrid constructor] A non-empty group is required')
@@ -344,7 +346,9 @@ contains
       call MPI_TYPE_COMMIT(self%SPview,ierr)
       call MPI_TYPE_CREATE_SUBARRAY(3,gsizes,lsizes,lstart,MPI_ORDER_FORTRAN,MPI_INTEGER,self%Iview,ierr)
       call MPI_TYPE_COMMIT(self%Iview,ierr)
-      
+      call MPI_TYPE_CREATE_SUBARRAY(4,[3,gsizes],[3,lsizes],[0,lstart],MPI_ORDER_FORTRAN,MPI_REAL_SP,self%SP3view,ierr)
+      call MPI_TYPE_COMMIT(self%SP3view,ierr)
+
       ! Finally, create x/y/zcoord array for rapid finding of processor cartesian coordinates
       allocate(self%xcoord(self%imino:self%imaxo)); self%xcoord=0
       allocate(self%ycoord(self%jmino:self%jmaxo)); self%ycoord=0

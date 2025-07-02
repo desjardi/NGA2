@@ -4153,9 +4153,12 @@ contains
       class(surfmesh), intent(inout) :: smesh
       real(WP), optional :: threshold
       real(WP) :: VFclip
-      integer :: i,j,k,n,shape,nv,np,nplane,nbt
-      real(WP), dimension(3) :: tmp_vert
-      
+      integer :: i,j,k,n,shape,nv,nqv,np,nbt,nplane,m
+      real(WP), dimension(4)  :: tmp_vert_tri
+      real(WP), dimension(3)  :: tmp_vert_poly
+      integer,  dimension(6)  :: tmp_conn
+      type(RectCub_type) :: cell
+
       ! Handle VF threshold
       if (present(threshold)) then
          VFclip=threshold
@@ -4163,11 +4166,28 @@ contains
          VFclip=2.0_WP*epsilon(1.0_WP)
       end if
 
-      ! Reset surface mesh storage
-      call smesh%reset()
-      
+      ! Create a cell object
+      call new(cell)
+
       ! First pass to count how many vertices and polygons are inside our processor
       nv=0; np=0; nbt=0
+      ! Start with quadratic surfaces
+      do k=this%cfg%kmin_,this%cfg%kmax_
+         do j=this%cfg%jmin_,this%cfg%jmax_
+            do i=this%cfg%imin_,this%cfg%imax_
+               ! Reset mized surface
+               call zeroMixedSurface(this%interface_mixed_surface(i,j,k))
+               if (this%cfg%VF(i,j,k).lt.VFclip) cycle ! Skip cells below VF threshold
+               ! Construct local cell and construct quadratic surface approximation
+               call construct_2pt(cell,[this%cfg%x(i),this%cfg%y(j),this%cfg%z(k)],[this%cfg%x(i+1),this%cfg%y(j+1),this%cfg%z(k+1)])
+               call getSurface(cell,this%liquid_gas_interface(i,j,k),this%interface_mixed_surface(i,j,k))
+               nv=nv+getNumberOfPoints(this%interface_mixed_surface(i,j,k))
+               nbt=nbt+getNumberOfTriangles(this%interface_mixed_surface(i,j,k))
+            end do
+         end do
+      end do
+      nqv=nv
+      ! Then do with polygons
       do k=this%cfg%kmin_,this%cfg%kmax_
          do j=this%cfg%jmin_,this%cfg%jmax_
             do i=this%cfg%imin_,this%cfg%imax_
@@ -4182,16 +4202,43 @@ contains
             end do
          end do
       end do
-      
+
       ! Reallocate storage and fill out arrays
-      if (np.gt.0) then
+      if ((np+nbt).gt.0) then
          call smesh%set_size(nvert=nv,npoly=np,nbeziertri=nbt)
-         allocate(smesh%polyConn(smesh%nVert)) ! Also allocate naive connectivity
-         nv=0; np=0
+         allocate(smesh%polyConn(nv-nqv))
+         allocate(smesh%bezierTriConn(6*nbt))
+         nv=0; np=0; nbt=0
          do k=this%cfg%kmin_,this%cfg%kmax_
             do j=this%cfg%jmin_,this%cfg%jmax_
                do i=this%cfg%imin_,this%cfg%imax_
                   if (this%cfg%VF(i,j,k).lt.VFclip) cycle ! Skip cells below VF threshold
+                  ! Store bezier triangle connectivity
+                  do n=0,getNumberOfTriangles(this%interface_mixed_surface(i,j,k))-1
+                     tmp_conn=getTri(this%interface_mixed_surface(i,j,k),n)
+                     do m=1,6
+                        nbt=nbt+1
+                        smesh%bezierTriConn(nbt)=nv+tmp_conn(m)
+                     end do
+                  end do
+                  ! Store points of quadratic approximation
+                  do n=0,getNumberOfPoints(this%interface_mixed_surface(i,j,k))-1
+                     tmp_vert_tri=getPt(this%interface_mixed_surface(i,j,k),n)
+                     nv=nv+1
+                     smesh%xVert(nv)=tmp_vert_tri(1)
+                     smesh%yVert(nv)=tmp_vert_tri(2)
+                     smesh%zVert(nv)=tmp_vert_tri(3)
+                     smesh%wVert(nv)=tmp_vert_tri(4)
+                  end do
+               end do
+            end do
+         end do
+         nqv=nv
+         do k=this%cfg%kmin_,this%cfg%kmax_
+            do j=this%cfg%jmin_,this%cfg%jmax_
+               do i=this%cfg%imin_,this%cfg%imax_
+                  if (this%cfg%VF(i,j,k).lt.VFclip) cycle ! Skip cells below VF threshold
+                  ! Store polygon vertices and connectivity
                   do nplane=1,getNumberOfPlanes(this%liquid_gas_interface(i,j,k))
                      shape=getNumberOfVertices(this%interface_polygon(nplane,i,j,k))
                      if (shape.gt.0) then
@@ -4200,13 +4247,14 @@ contains
                         smesh%polySize(np)=shape
                         ! Loop over its vertices and add them
                         do n=1,shape
-                           tmp_vert=getPt(this%interface_polygon(nplane,i,j,k),n-1)
+                           tmp_vert_poly=getPt(this%interface_polygon(nplane,i,j,k),n-1)
                            ! Increment node counter
                            nv=nv+1
-                           smesh%xVert(nv)=tmp_vert(1)
-                           smesh%yVert(nv)=tmp_vert(2)
-                           smesh%zVert(nv)=tmp_vert(3)
-                           smesh%polyConn(nv)=nv
+                           smesh%polyConn(nv-nqv)=nv-1
+                           smesh%xVert(nv)=tmp_vert_poly(1)
+                           smesh%yVert(nv)=tmp_vert_poly(2)
+                           smesh%zVert(nv)=tmp_vert_poly(3)
+                           smesh%wVert(nv)=1.0_WP
                         end do
                      end if
                   end do
