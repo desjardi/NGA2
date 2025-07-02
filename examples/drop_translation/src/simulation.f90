@@ -8,10 +8,12 @@ module simulation
    use tpns_class,        only: tpns
    use vfs_class,         only: vfs
    use timetracker_class, only: timetracker
-   use ensight_class,     only: ensight
+   use vtk_class,         only: vtk
+   use partmesh_class,    only: partmesh
    use surfmesh_class,    only: surfmesh
    use event_class,       only: event
    use monitor_class,     only: monitor
+   use tracer_class,      only: tracer
    use irl_fortran_interface
    implicit none
    private
@@ -22,11 +24,13 @@ module simulation
    type(tpns),        public :: fs
    type(vfs),         public :: vf
    type(timetracker), public :: time
-   
+   type(tracer),      public :: pt
+
    !> Ensight postprocessing
    type(surfmesh) :: smesh
-   type(ensight)  :: ens_out
-   type(event)    :: ens_evt
+   type(partmesh) :: pmesh
+   type(vtk)      :: vtk_out
+   type(event)    :: vtk_evt
    
    !> Simulation monitor file
    type(monitor) :: mfile,cflfile,curvfile
@@ -40,6 +44,7 @@ module simulation
    !> Problem definition
    real(WP), dimension(3) :: center,vel
    real(WP) :: radius
+   integer :: npart
 
 contains
    
@@ -182,33 +187,108 @@ contains
          call fs%get_div()
       end block create_and_initialize_flow_solver
       
-
       ! Create surfmesh object for interface polygon output
       create_smesh: block
          use irl_fortran_interface
          integer :: i,j,k,nplane,np
          ! Include an extra variable for number of planes
-         smesh=surfmesh(nvar=0,name='plic')
+         smesh=surfmesh(nvar=1,name='plic')
+         smesh%varname(1)='curv'
          ! Transfer polygons to smesh
          call vf%update_surfmesh(smesh)
+         ! Also populate nplane variable
+         call add_surfgrid_variable(smesh,1,vf%curv)      
       end block create_smesh
       
-      
+      ! Initialize our tracer particle tracker
+      initialize_pt: block
+         ! Get number of particles
+         call param_read('Number of tracers',npart,default=500)
+         ! Create solver
+         pt=tracer(cfg=cfg,name='PT')
+         ! Initialize with zero particles
+         call pt%resize(0)
+      end block initialize_pt
+
+      ! Create partmesh object for Lagrangian particle output
+      create_pmesh: block
+         integer :: i
+         pmesh=partmesh(nvar=0,nvec=2,name='tracers')
+         pmesh%vecname(1)='velocity'
+         pmesh%vecname(2)='acceleration'
+         call pt%update_partmesh(pmesh)
+         do i=1,pt%np_
+            pmesh%vec(:,1,i)=pt%p(i)%vel
+            pmesh%vec(:,2,i)=pt%p(i)%acc
+         end do
+      end block create_pmesh
+
+      ! Seed interface with tracers
+      insert_tracers: block
+         use mpi_f08, only: MPI_INTEGER8,MPI_MAX
+         integer :: i,np0_,ierr
+         integer(kind=8) :: maxid_,maxid  !< Keep track of maximum particle id
+         real :: hk,thetak,phik,realn
+         ! Initial number of particles
+         np0_=pt%np_
+         ! Determine id to assign to particle
+         maxid_=0
+         do i=1,pt%np_
+            maxid_=max(maxid_,pt%p(i)%id)
+         end do
+         call MPI_ALLREDUCE(maxid_,maxid,1,MPI_INTEGER8,MPI_MAX,cfg%comm,ierr)
+
+         ! Add new particles
+         if (cfg%amRoot) then
+            ! Create space for new particle
+            call pt%resize(np0_+npart)
+            ! Initialize parameters
+            phik=0.0_WP;realn=REAL(npart,WP)
+            do i=1,npart
+               ! Helicoidal seeding based on Saff and Kuijlaars (1997)
+               hk=-1.0_WP+2.0_WP*(REAL(i,WP)-1.0_WP)/(realn-1.0_WP); thetak=acos(hk)
+               if (i.eq.1.or.i.eq.npart) then
+                  phik=0.0_WP
+               else
+                  phik=phik+3.6_WP/sqrt(realn)/sqrt(1.0_WP-hk**2.0_WP)
+               end if
+               ! Set particle ID
+               pt%p(np0_+i)%id=maxid+int(i,8)
+               ! Seed particle on sphere
+               pt%p(np0_+i)%pos(1)=center(1)+radius*sin(thetak)*cos(phik)
+               pt%p(np0_+i)%pos(2)=center(2)+radius*sin(thetak)*sin(phik)
+               pt%p(np0_+i)%pos(3)=center(3)+radius*cos(thetak)
+               ! Localize the particle
+               pt%p(np0_+i)%ind=cfg%get_ijk_global(pt%p(np0_+i)%pos,[cfg%imin,cfg%jmin,cfg%kmin])
+               ! Make it an "official" particle
+               pt%p(np0_+i)%flag=0
+            end do
+         end if
+         ! Communicate particles
+         call pt%sync()
+         call pt%update_partmesh(pmesh)
+         do i=1,pt%np_
+            pmesh%vec(:,1,i)=pt%p(i)%vel
+            pmesh%vec(:,2,i)=pt%p(i)%acc
+         end do
+      end block insert_tracers
+
       ! Add Ensight output
-      create_ensight: block
+      create_vtk: block
          ! Create Ensight output from cfg
-         ens_out=ensight(cfg=cfg,name='DropTranslation')
+         vtk_out=vtk(cfg=cfg,name='DropTranslation')
          ! Create event for Ensight output
-         ens_evt=event(time=time,name='Ensight output')
-         call param_read('Ensight output period',ens_evt%tper)
+         vtk_evt=event(time=time,name='Ensight output')
+         call param_read('Ensight output period',vtk_evt%tper)
          ! Add variables to output
-         call ens_out%add_vector('velocity',Ui,Vi,Wi)
-         call ens_out%add_scalar('VOF',vf%VF)
-         call ens_out%add_scalar('curvature',vf%curv)
-         call ens_out%add_surface('vofplic',smesh) 
-         ! Output to ensight
-         if (ens_evt%occurs()) call ens_out%write_data(time%t)
-      end block create_ensight
+         call vtk_out%add_vector('velocity',Ui,Vi,Wi)
+         call vtk_out%add_scalar('VOF',vf%VF)
+         call vtk_out%add_scalar('curvature',vf%curv)
+         call vtk_out%add_surface('plic',smesh) 
+         call vtk_out%add_particle('tracers',pmesh)
+         ! Output to vtk
+         if (vtk_evt%occurs()) call vtk_out%write_data(time%t)
+      end block create_vtk
             
    end subroutine simulation_init
    
@@ -241,6 +321,10 @@ contains
          
          ! VOF solver step
          call vf%advance(dt=time%dt,U=fs%U,V=fs%V,W=fs%W)
+
+         ! Advance and project tracer particles
+         call pt%advance(dt=time%dtmid,U=fs%U,V=fs%V,W=fs%W)
+         call project_tracers(vf=vf,pt=pt)
 
          ! Prepare new staggered viscosity (at n+1)
          call fs%get_viscosity(vf=vf)
@@ -301,16 +385,26 @@ contains
          call fs%interp_vel(Ui,Vi,Wi)
          call fs%get_div()
          
-         ! Output to ensight
-         if (ens_evt%occurs()) then
+         ! Output to vtk
+         if (vtk_evt%occurs()) then
             ! Update surfmesh object
             update_smesh: block
                use irl_fortran_interface, only: getNumberOfPlanes,getNumberOfVertices
                integer :: i,j,k,nplane,np
                ! Transfer polygons to smesh
                call vf%update_surfmesh(smesh)
-            end block update_smesh           
-            call ens_out%write_data(time%t)
+               call add_surfgrid_variable(smesh,1,vf%curv)      
+            end block update_smesh  
+            ! Update partmesh object
+            update_pmesh: block
+              integer :: i
+              call pt%update_partmesh(pmesh)
+              do i=1,pt%np_
+                  pmesh%vec(:,1,i)=pt%p(i)%vel
+                  pmesh%vec(:,2,i)=pt%p(i)%acc
+              end do
+            end block update_pmesh
+            call vtk_out%write_data(time%t)
          end if
                   
       end do
@@ -325,7 +419,7 @@ contains
       ! call print_curvature_error()
       ! Get rid of all objects - need destructors
       ! monitor
-      ! ensight
+      ! vtk
       ! bcond
       ! timetracker
       
@@ -333,5 +427,102 @@ contains
       deallocate(resU,resV,resW,Ui,Vi,Wi)
       
    end subroutine simulation_final
+
+
+   !> Make a surface scalar variable
+   subroutine add_surfgrid_variable(smesh,var_index,A)
+      use irl_fortran_interface, only: getNumberOfPlanes,getNumberOfVertices
+      use vfs_class,only: VFhi,VFlo
+      implicit none
+      class(surfmesh), intent(inout) :: smesh
+      integer, intent(in) :: var_index
+      real(WP), dimension(vf%cfg%imino_:vf%cfg%imaxo_,vf%cfg%jmino_:vf%cfg%jmaxo_,vf%cfg%kmino_:vf%cfg%kmaxo_), intent(in) :: A 
+      integer :: i,j,k,n,shape,np,nplane,nbt
+      
+      ! Fill out arrays
+      if ((smesh%nPoly+smesh%nBezierTri).gt.0) then
+         np=0; nbt = 0
+         ! Start with quadratic surfaces
+         do k=vf%cfg%kmin_,vf%cfg%kmax_
+            do j=vf%cfg%jmin_,vf%cfg%jmax_
+               do i=vf%cfg%imin_,vf%cfg%imax_
+                  shape=getNumberOfTriangles(vf%interface_mixed_surface(i,j,k))
+                  if (shape.gt.0) then
+                     do n=1,shape
+                        nbt=nbt+1
+                        smesh%var(var_index,nbt)=A(i,j,k)
+                     end do
+                  end if
+               end do
+            end do
+         end do
+         ! Then do planes
+         do k=vf%cfg%kmin_,vf%cfg%kmax_
+            do j=vf%cfg%jmin_,vf%cfg%jmax_
+               do i=vf%cfg%imin_,vf%cfg%imax_
+                  do nplane=1,getNumberOfPlanes(vf%liquid_gas_interface(i,j,k))
+                     shape=getNumberOfVertices(vf%interface_polygon(nplane,i,j,k))
+                     if (shape.gt.0) then
+                        ! Increment polygon counter
+                        np=np+1
+                        ! Set nplane variable
+                        smesh%var(var_index,nbt+np)=A(i,j,k)
+                     end if
+                  end do
+               end do
+            end do
+         end do
+      else
+         smesh%var(var_index,1)=1
+      end if      
+      
+   end subroutine add_surfgrid_variable
+
+   ! Project tracers on the interface
+   subroutine project_tracers(vf,pt)
+      use mathtools, only: normalize
+      implicit none
+      class(vfs), intent(inout) :: vf
+      class(tracer), intent(inout) :: pt
+      integer :: i, j, maxit
+      real(WP) :: distx, disty, distz, dist, maxdist
+      real(WP), dimension(3) :: oldvel, oldpos, normal
+      ! Maximum projection iterations
+      maxit=10
+      ! Maximum distance from the interface wanted
+      maxdist=1.0E-9_WP*vf%cfg%meshsize(0,0,0)
+      ! Get gradient of distance function to the interface
+      call fs%get_pgrad(vf%G,resU,resV,resW)
+      ! Loop over local tracers
+      do j=1,maxit
+         do i=1,pt%np_
+            ! Avoid particles with id=0
+            if (pt%p(i)%id.eq.0) cycle
+            oldpos=pt%p(i)%pos
+            ! Interpolate distance function
+            dist=cfg%get_scalar(pos=pt%p(i)%pos,i0=pt%p(i)%ind(1),j0=pt%p(i)%ind(2),k0=pt%p(i)%ind(3),S=vf%G,bc='n')
+            if (abs(dist).gt.maxdist) then
+               ! Interpolate interface normal
+               normal=normalize([cfg%get_scalar(pos=pt%p(i)%pos,i0=pt%p(i)%ind(1),j0=pt%p(i)%ind(2),k0=pt%p(i)%ind(3),S=resU,bc='n'),&
+               &                 cfg%get_scalar(pos=pt%p(i)%pos,i0=pt%p(i)%ind(1),j0=pt%p(i)%ind(2),k0=pt%p(i)%ind(3),S=resV,bc='n'),&
+               &                 cfg%get_scalar(pos=pt%p(i)%pos,i0=pt%p(i)%ind(1),j0=pt%p(i)%ind(2),k0=pt%p(i)%ind(3),S=resW,bc='n')])
+               ! Move tracer along distance function gradient
+               pt%p(i)%pos=pt%p(i)%pos-dist*normal
+               ! Correct the position to take into account periodicity
+               pt%p(i)%pos(1)=cfg%x(cfg%imin)+modulo(pt%p(i)%pos(1)-cfg%x(cfg%imin),cfg%xL)
+               pt%p(i)%pos(2)=cfg%y(cfg%jmin)+modulo(pt%p(i)%pos(2)-cfg%y(cfg%jmin),cfg%yL)
+               pt%p(i)%pos(3)=cfg%z(cfg%kmin)+modulo(pt%p(i)%pos(3)-cfg%z(cfg%kmin),cfg%zL)
+               ! Relocalize the tracer
+               pt%p(i)%ind=cfg%get_ijk_global(pt%p(i)%pos,pt%p(i)%ind)
+            end if
+         end do
+         ! Communicate tracers across procs
+         call pt%sync()
+      end do
+      do i=1,pt%np_
+         ! Interpolate fluid quantities to particle location
+         pt%p(i)%vel=cfg%get_velocity(pos=pt%p(i)%pos,i0=pt%p(i)%ind(1),j0=pt%p(i)%ind(2),k0=pt%p(i)%ind(3),U=fs%U,V=fs%V,W=fs%W)
+      end do
+   end subroutine project_tracers
 
 end module simulation
