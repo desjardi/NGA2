@@ -806,6 +806,7 @@ contains
    !> Calculate the new VF based on U/V/W and dt
    subroutine advance(this,dt,U,V,W)
       implicit none
+      integer :: ierr
       class(vfs), intent(inout) :: this
       real(WP), intent(inout) :: dt  !< Timestep size over which to advance
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: U     !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
@@ -813,6 +814,7 @@ contains
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: W     !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       
       ! First perform transport
+      call MPI_BARRIER(this%cfg%comm,ierr);if (this%cfg%amRoot) print *,'transport'
       select case (this%transport_method)
       case (flux)
          call this%transport_flux(dt,U,V,W)
@@ -823,39 +825,49 @@ contains
       case (remap_storage)
          call this%transport_remap_storage(dt,U,V,W)
       end select
-      
+      call MPI_BARRIER(this%cfg%comm,ierr);if (this%cfg%amRoot) print *,'advect polygons'
       ! Advect interface polygons
       call this%advect_interface(dt,U,V,W)
       
       ! Remove flotsams and thin structures if needed
+      call MPI_BARRIER(this%cfg%comm,ierr);if (this%cfg%amRoot) print *,'remove flotsams and thin structures'
       call this%remove_flotsams()
       call this%remove_thinstruct()
       
       ! Synchronize and clean-up barycenter fields
+      call MPI_BARRIER(this%cfg%comm,ierr);if (this%cfg%amRoot) print *,'sync and clean barycenters'
       call this%sync_and_clean_barycenters()
       
       ! Update the band
+      call MPI_BARRIER(this%cfg%comm,ierr);if (this%cfg%amRoot) print *,'band'
       call this%update_band()
       
       ! Perform interface reconstruction from transported moments
+      call MPI_BARRIER(this%cfg%comm,ierr);if (this%cfg%amRoot) print *,'build interface'
       call this%build_interface()
       
       ! Create discontinuous polygon mesh from IRL interface
+      call MPI_BARRIER(this%cfg%comm,ierr);if (this%cfg%amRoot) print *,'polygonalize interface'
       call this%polygonalize_interface()
       
       ! Perform interface sensing
+      call MPI_BARRIER(this%cfg%comm,ierr);if (this%cfg%amRoot) print *,'sense interface'
       if (this%two_planes) call this%sense_interface()
       
       ! Calculate distance from polygons
+      call MPI_BARRIER(this%cfg%comm,ierr);if (this%cfg%amRoot) print *,'distance from polygons'
       call this%distance_from_polygon()
       
       ! Calculate subcell phasic volumes
+      call MPI_BARRIER(this%cfg%comm,ierr);if (this%cfg%amRoot) print *,'subcell volumes'
       call this%subcell_vol()
       
       ! Calculate curvature
+      call MPI_BARRIER(this%cfg%comm,ierr);if (this%cfg%amRoot) print *,'curvature'
       call this%get_curvature()
       
       ! Reset moments to guarantee compatibility with interface reconstruction
+      call MPI_BARRIER(this%cfg%comm,ierr);if (this%cfg%amRoot) print *,'reset volume moments'
       call this%reset_volume_moments()
       
    end subroutine advance
