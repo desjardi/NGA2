@@ -1,2 +1,2 @@
 # List here the extra files here
-f90EXE_sources += geometry.f90 simulation.f90 compress_class.f90 energy_class.f90
+f90EXE_sources += geometry.f90 simulation.f90 mpcomp_class.f90 plicnet.f90

@@ -2,48 +2,29 @@
 Partition : 1 8 1
 
 # Mesh definition
-Lx : 12
-Ly : 12
-Lz : 12
-nx : 256
-ny : 256
-nz : 1
-Cells per diameter :      50
-Cells per left region :   35
-Refined region left bdy:  5
-Refined region right bdy: 7
-Refined region top y bdy: 1
+Lx :  8
+Ly :  8
+Lz :  8
+nx :  128
+ny :  128
+nz :  1
+X0 : -3
 
-# Flow setup
-Droplet location : 6 0 0
-Shock location :   5.4
-
-# Fluid properties
-Density ratio :           1000
-Dynamic viscosity ratio : 100
-Gas Reynolds number :     1000
-Gas Weber number :        100
-Gas Mach number :         0.577
-Liquid Mach number :      0.3
-Shock Mach number :       1.47
-Liquid gamma :            1.1
-Gas gamma :               1.4
-# Gas Prandtl number :      1.0
-# Liquid Prandtl number :   7.0
+# Adimensional flow parameters
+!---------- eos ----------
+Gas gamma :    1.3
+Liquid gamma : 6.12
+!--- fluid definitions ---
+Density ratio :     815
+Sound speed ratio : 4.3
+!------- inviscid --------
+Shock Mach number :  5.12
+Shock location :    -2
 
 # Time integration
-Max timestep size : 5e-3
-Max cfl number :    0.9
-Max time :          50
-Max steps :         100000
-
-# Pressure solver
-Pressure tolerance : 1e-6
-Pressure iteration : 100
-
-# Implicit velocity solver
-Implicit tolerance : 1e-6
-Implicit iteration : 100
+Max timestep size : 1e-2
+Max cfl number :    0.5
+Max time :          20
 
 # Ensight output
-Ensight output period : 0.5
+Ensight output period : 1e-1

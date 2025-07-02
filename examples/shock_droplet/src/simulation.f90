@@ -2,515 +2,503 @@
 module simulation
    use precision,         only: WP
    use geometry,          only: cfg
-   use mast_class,        only: mast
-   use vfs_class,         only: vfs
-   use matm_class,        only: matm
+   use mpcomp_class,      only: mpcomp
    use timetracker_class, only: timetracker
    use ensight_class,     only: ensight
+   use surfmesh_class,    only: surfmesh
    use event_class,       only: event
    use monitor_class,     only: monitor
-   use hypre_str_class,   only: hypre_str
-   use ddadi_class,       only: ddadi
-   use surfmesh_class,    only: surfmesh
    implicit none
-   private
+   private; public :: simulation_init,simulation_run,simulation_final
    
-   !> Single two-phase flow solver, volume fraction solver, and material model set
-   !> With corresponding time tracker
-   type(mast),        public :: fs
-   type(vfs),         public :: vf
-   type(matm),        public :: matmod
+   !> Multiphase compressible flow solver and corresponding time tracker
+   type(mpcomp),      public :: fs
    type(timetracker), public :: time
-   type(hypre_str),   public :: ps
-   !type(hypre_str),   public :: vs
-   type(ddadi),   public :: vs
    
    !> Ensight postprocessing
-   type(ensight) :: ens_out
-   type(event)   :: ens_evt
-   type(surfmesh):: smesh
+   type(surfmesh) :: smesh
+   type(ensight)  :: ens_out
+   type(event)    :: ens_evt
    
    !> Simulation monitor file
-   type(monitor) :: mfile,cflfile,cvgfile
+   type(monitor) :: mfile,cflfile,consfile
    
-   public :: simulation_init,simulation_run,simulation_final
+   !> Private work arrays
+   real(WP), dimension(:,:,:,:,:), allocatable :: dQdt
+   real(WP), dimension(:,:,:)    , allocatable :: Ma
    
-   !> Problem definition
-   real(WP) :: ddrop
-   real(WP), dimension(3) :: dctr
-   integer :: relax_model
+   !> Equations of state
+   real(WP) :: PinfL,GammaL,CvL
+   real(WP) :: PinfG,GammaG,CvG
+   
+   !> Flow parameters
+   real(WP) :: Ms,Xs
+   real(WP) :: rho1,p1,u1,M1
+   real(WP) :: rho2,p2,u2,M2
+   real(WP) :: rho_ratio,c_ratio
+   real(WP) :: rhol,Ml
    
 contains
    
-   !> Function that localizes the left (x-) of the domain
-   function left_of_domain(pg,i,j,k) result(isIn)
-      use pgrid_class, only: pgrid
-      implicit none
-      class(pgrid), intent(in) :: pg
-      integer, intent(in) :: i,j,k
-      logical :: isIn
-      isIn=.false.
-      if (i.eq.pg%imin) isIn=.true.
-   end function left_of_domain
    
-   !> Function that localizes the right (x+) of the domain
-   function right_of_domain(pg,i,j,k) result(isIn)
-      use pgrid_class, only: pgrid
-      implicit none
-      class(pgrid), intent(in) :: pg
-      integer, intent(in) :: i,j,k
-      logical :: isIn
-      isIn=.false.
-      if (i.eq.pg%imax+1) isIn=.true.
-   end function right_of_domain
+   !> Sutherland's law for viscosity as a function of temperature
+   !subroutine get_visc()
+   !   implicit none
+   !   integer :: i,j,k
+   !   do k=fs%cfg%kmino_,fs%cfg%kmaxo_; do j=fs%cfg%jmino_,fs%cfg%jmaxo_; do i=fs%cfg%imino_,fs%cfg%imaxo_
+   !      fs%visc(i,j,k)=Reynolds**(-1.0_WP)*(1.4042_WP*fs%T(i,j,k)**1.5_WP)/(fs%T(i,j,k)+0.4042_WP)
+   !   end do; end do; end do
+   !end subroutine get_visc
    
-   !> Function that defines a level set function for a cylindrical droplet (2D)
-   function levelset_cyl(xyz,t) result(G)
-      implicit none
-      real(WP), dimension(3),intent(in) :: xyz
-      real(WP), intent(in) :: t
-      real(WP) :: G
-      G=1.0_WP-sqrt((xyz(1)-dctr(1))**2+(xyz(2)-dctr(2))**2)/(ddrop/2.0)
-   end function levelset_cyl
    
-   !> Function that defines a level set function for a spherical droplet (3D)
-   function levelset_sphere(xyz,t) result(G)
+   !> Function that returns a smooth Heaviside of thickness delta
+   real(WP) function Hshock(x,delta)
+      real(WP), intent(in) :: x,delta
+      ! Goes from 0 to 1 as x goes from begative to positive
+      Hshock=1.0_WP/(1.0_WP+exp(-x/delta))
+   end function Hshock
+   
+   
+   !> P=EOS(RHO,I) for liquid
+   pure real(WP) function get_PL(RHO,I)
       implicit none
-      real(WP), dimension(3),intent(in) :: xyz
-      real(WP), intent(in) :: t
-      real(WP) :: G
-      G=1.0_WP-sqrt((xyz(1)-dctr(1))**2+(xyz(2)-dctr(2))**2+(xyz(3)-dctr(3))**2)/(ddrop/2.0)
-   end function levelset_sphere
+      real(WP), intent(in) :: RHO,I
+      get_PL=RHO*I*(GammaL-1.0_WP)-GammaL*PinfL
+   end function get_PL
+   !> T=f(RHO,P) for liquid
+   pure real(WP) function get_TL(RHO,P)
+      implicit none
+      real(WP), intent(in) :: RHO,P
+      get_TL=(P+PinfL)/(CvL*RHO*(GammaL-1.0_WP))
+   end function get_TL
+   !> C=f(RHO,P) for liquid
+   pure real(WP) function get_CL(RHO,P)
+      implicit none
+      real(WP), intent(in) :: RHO,P
+      get_CL=sqrt(GammaL*(P+PinfL)/RHO)
+   end function get_CL
+   !> S=f(RHO,P) for liquid
+   pure real(WP) function get_SL(RHO,P)
+      implicit none
+      real(WP), intent(in) :: RHO,P
+      get_SL=CvL*log((P+PinfL)/RHO**GammaL)
+   end function get_SL
+   
+   
+   !> P=EOS(RHO,I) for gas
+   pure real(WP) function get_PG(RHO,I)
+      implicit none
+      real(WP), intent(in) :: RHO,I
+      get_PG=RHO*I*(GammaG-1.0_WP)-GammaG*PinfG
+   end function get_PG
+   !> T=f(RHO,P) for gas
+   pure real(WP) function get_TG(RHO,P)
+      implicit none
+      real(WP), intent(in) :: RHO,P
+      get_TG=(P+PinfG)/(CvG*RHO*(GammaG-1.0_WP))
+   end function get_TG
+   !> C=f(RHO,P) for gas
+   pure real(WP) function get_CG(RHO,P)
+      implicit none
+      real(WP), intent(in) :: RHO,P
+      get_CG=sqrt(GammaG*(P+PinfG)/RHO)
+   end function get_CG
+   !> S=f(RHO,P) for gas
+   pure real(WP) function get_SG(RHO,P)
+      implicit none
+      real(WP), intent(in) :: RHO,P
+      get_SG=CvG*log((P+PinfG)/RHO**GammaG)
+   end function get_SG
+   
+   
+   !> Mechanical relaxation model
+   subroutine P_relax(VF,Q)
+      implicit none
+      real(WP),                intent(inout) :: VF
+      real(WP), dimension(1:), intent(inout) :: Q
+      real(WP) :: PG,PL,ZG,ZL,Pint
+      real(WP) :: a,b,d,coeffL,coeffG,Peq,VFeq
+      ! Get phasic pressures
+      PL=get_PL(RHO=Q(1)/(       VF),I=Q(3)/Q(1)-0.5_WP*((Q(5)/(Q(1)+Q(2)))**2+(Q(6)/(Q(1)+Q(2)))**2+(Q(7)/(Q(1)+Q(2)))**2))
+      PG=get_PG(RHO=Q(2)/(1.0_WP-VF),I=Q(4)/Q(2)-0.5_WP*((Q(5)/(Q(1)+Q(2)))**2+(Q(6)/(Q(1)+Q(2)))**2+(Q(7)/(Q(1)+Q(2)))**2))
+      ! Handle limit cases
+      if (PL.le.-PinfL) then; VF=0.0_WP; Q(4)=Q(3)+Q(4); Q(3)=0.0_WP; return; end if
+      if (PG.le.-PinfG) then; VF=1.0_WP; Q(3)=Q(3)+Q(4); Q(4)=0.0_WP; return; end if
+      ! Get phasic impedances
+      ZL=Q(1)/(       VF)*get_CL(RHO=Q(1)/(       VF),P=PL)**2
+      ZG=Q(2)/(1.0_WP-VF)*get_CG(RHO=Q(2)/(1.0_WP-VF),P=PG)**2
+      ! Calculate model interface pressure
+      Pint=(ZG*PL+ZL*PG)/(ZG+ZL)
+      ! Setup quadratic problem
+      coeffL=(GammaL-1.0_WP)*Pint+2.0_WP*GammaL*PinfL
+      coeffG=(GammaG-1.0_WP)*Pint+2.0_WP*GammaG*PinfG
+      a=1.0_WP+GammaG*VF+GammaL*(1.0_WP-VF)
+      b=coeffL*(1.0_WP-VF)+coeffG*VF-(1.0_WP+GammaG)*VF*PL-(1.0_WP+GammaL)*(1.0_WP-VF)*PG
+      d=-(coeffG*VF*PL+coeffL*(1.0_WP-VF)*PG)
+      ! Get equilibrium pressure
+      Peq=(-b+sqrt(b**2-4.0_WP*a*d))/(2.0_WP*a)
+      ! Get equilibrium volume fraction
+      VFeq=VF*((gammaL-1.0_WP)*Peq+2.0_WP*PL+coeffL)/((1.0_WP+gammaL)*Peq+coeffL)
+      ! Adjust conserved quantities
+      Q(3)=Q(3)-0.5_WP*(Pint+Peq)*(VFeq-VF)
+      Q(4)=Q(4)+0.5_WP*(Pint+Peq)*(VFeq-VF)
+      VF=VFeq
+   end subroutine P_relax
+   
    
    !> Initialization of problem solver
    subroutine simulation_init
       use param, only: param_read
       implicit none
       
+      ! Initialize eos and flow conditions
+      initialize_conditions: block
+         use string,   only: str_long
+         use messager, only: log
+         character(str_long) :: message
+         ! Set PinfG to zero
+         PinfG=0.0_WP
+         ! Read in Gammas
+         call param_read('Liquid gamma',GammaL)
+         call param_read('Gas gamma'   ,GammaG)
+         ! Read in shock Mach number and location
+         call param_read('Shock Mach number',Ms)
+         call param_read('Shock location',Xs)
+         ! First generate static shock with normalized pre-shock conditions
+         M1=Ms
+         rho1=1.0_WP
+         rho2=rho1*(GammaG+1.0_WP)*M1**2/((GammaG-1.0_WP)*M1**2+2.0_WP)
+         p1=0.25_WP*rho1/GammaG*((GammaG+1.0_WP)*M1/(M1**2-1.0_WP))**2 ! Ensures that |u2-u1|=1
+         p2=p1*(2.0_WP*GammaG/(GammaG+1.0_WP)*(M1**2-1.0_WP)+1.0_WP)
+         u1=M1*sqrt(GammaG*p1/rho1)
+         u2=u1*rho1/rho2
+         ! Now shift frame of reference to obtain moving shock
+         u2=abs(u2-u1); M2=u2/sqrt(GammaG*p2/rho2); u1=0.0_WP; M1=u1/sqrt(GammaG*p1/rho1)
+         ! Read in density ratio and use it to set liquid density
+         call param_read('Density ratio',rho_ratio); rhol=rho_ratio*rho1
+         ! Read in liquid Mach number and use it to set PinfL
+         !call param_read('Liquid Mach number',Ml)
+         !PinfL=(u2/Ml)**2*rhol/GammaL-p1
+         !c_ratio=sqrt(GammaL*(p1+PinfL)/rhol)/sqrt(GammaG*p1/rho1)
+         ! Read in sound speed ratio and use it to set PinfL
+         call param_read('Sound speed ratio',c_ratio)
+         PinfL=p1*(rho_ratio*c_ratio**2*GammaG/GammaL-1.0_WP)
+         Ml=u2/sqrt(GammaL*(p1+PinfL)/rhol)
+         ! Output case info
+         if (cfg%amRoot) then
+            write(message,'("[Liquid EOS -- Gamma  ] => GammaL=",es12.5)') GammaL; call log(message)
+            write(message,'("[Liquid EOS -- Pinf   ] =>  PinfL=",es12.5)')  PinfL; call log(message)
+            write(message,'("[   Gas EOS -- Gamma  ] => GammaG=",es12.5)') GammaG; call log(message)
+            write(message,'("[Shock Mach number    ] =>     Ms=",es12.5)')     Ms; call log(message)
+            write(message,'("[Pre -shock conditions] =>   rho1=",es12.5)')   rho1; call log(message)
+            write(message,'("[Pre -shock conditions] =>     p1=",es12.5)')     p1; call log(message)
+            write(message,'("[Pre -shock conditions] =>     u1=",es12.5)')     u1; call log(message)
+            write(message,'("[Pre -shock conditions] =>     M1=",es12.5)')     M1; call log(message)
+            write(message,'("[Post-shock conditions] =>   rho2=",es12.5)')   rho2; call log(message)
+            write(message,'("[Post-shock conditions] =>     p2=",es12.5)')     p2; call log(message)
+            write(message,'("[Post-shock conditions] =>     u2=",es12.5)')     u2; call log(message)
+            write(message,'("[Post-shock conditions] =>     M2=",es12.5)')     M2; call log(message)
+            write(message,'("[Liquid Mach number] =>        Ml=",es12.5)')     Ml; call log(message)
+            write(message,'("[Density ratio     ] => rhol/rho1=",es12.5)') rho_ratio; call log(message)
+            write(message,'("[Sound speed ratio ] =>     cl/c1=",es12.5)')   c_ratio; call log(message)
+         end if
+      end block initialize_conditions
       
-      ! Initialize time tracker with 2 subiterations
+      ! Initialize time tracker
       initialize_timetracker: block
          time=timetracker(amRoot=cfg%amRoot)
+         call param_read('Max time',time%tmax)
          call param_read('Max timestep size',time%dtmax)
          call param_read('Max cfl number',time%cflmax)
-         call param_read('Max time',time%tmax)
-         call param_read('Max steps',time%nmax)
          time%dt=time%dtmax
-         time%itmax=2
       end block initialize_timetracker
       
+      ! Create multipgase compressible flow solver
+      create_velocity_solver: block
+         ! Initialize solver with required thermodynamic functions
+         call fs%initialize(cfg=cfg,getPL=get_PL,getCL=get_CL,getPG=get_PG,getCG=get_CG,name='Compressible NS')
+         ! Provide pressure relaxation model
+         fs%Prelax=>P_relax
+         ! Provide entropy calculation functions
+         fs%getSL=>get_SL; fs%getSG=>get_SG
+         ! Provide temperature calculation functions
+         !fs%getTL=>get_TL; fs%getTG=>get_TG
+      end block create_velocity_solver
       
-      ! Initialize our VOF solver and field
-      create_and_initialize_vof: block
-         use mms_geom, only: cube_refine_vol
-         use vfs_class, only: r2p,lvira,elvira,plicnet,VFhi,VFlo,flux
-         integer :: i,j,k,n,si,sj,sk
-         real(WP), dimension(3,8) :: cube_vertex
-         real(WP), dimension(3) :: v_cent,a_cent
-         real(WP) :: vol,area
-         integer, parameter :: amr_ref_lvl=4
-         ! Create a VOF solver with lvira reconstruction
-         call vf%initialize(cfg=cfg,reconstruction_method=plicnet,transport_method=flux,name='VOF')
-         ! Initialize liquid at left
-         ddrop=1.0_WP; call param_read('Droplet location',dctr)
-         do k=vf%cfg%kmino_,vf%cfg%kmaxo_
-            do j=vf%cfg%jmino_,vf%cfg%jmaxo_
-               do i=vf%cfg%imino_,vf%cfg%imaxo_
-                  ! Set cube vertices
-                  n=0
-                  do sk=0,1
-                     do sj=0,1
-                        do si=0,1
-                           n=n+1; cube_vertex(:,n)=[vf%cfg%x(i+si),vf%cfg%y(j+sj),vf%cfg%z(k+sk)]
-                        end do
-                     end do
-                  end do
-                  ! Call adaptive refinement code to get volume and barycenters recursively
-                  vol=0.0_WP; area=0.0_WP; v_cent=0.0_WP; a_cent=0.0_WP
-                  if (vf%cfg%nz.eq.1) then
-                     call cube_refine_vol(cube_vertex,vol,area,v_cent,a_cent,levelset_cyl,0.0_WP,amr_ref_lvl)
-                  else
-                     call cube_refine_vol(cube_vertex,vol,area,v_cent,a_cent,levelset_sphere,0.0_WP,amr_ref_lvl)
+      ! Allocate work arrays
+      allocate_work_arrays: block
+         allocate(dQdt(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_,1:fs%nQ,1:4))
+         allocate(Ma  (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+      end block allocate_work_arrays
+      
+      ! Prepare initial conditions
+      initial_conditions: block
+         use irl_fortran_interface, only: setNumberOfPlanes,setPlane
+         use mms_geom,              only: initialize_volume_moments
+         use mpcomp_class,          only: VFlo
+         integer :: i,j,k
+         ! Initialize primary variables
+         do k=cfg%kmino_,cfg%kmaxo_
+            do j=cfg%jmino_,cfg%jmaxo_
+               do i=cfg%imino_,cfg%imaxo_
+                  ! Initialize liquid volume to zero and set corresponding PLIC
+                  fs%VF(i,j,k)=0.0_WP; fs%BL(:,i,j,k)=[fs%cfg%xm(i),fs%cfg%ym(j),fs%cfg%zm(k)]; fs%BG(:,i,j,k)=[fs%cfg%xm(i),fs%cfg%ym(j),fs%cfg%zm(k)]
+                  call setNumberOfPlanes(fs%PLIC(i,j,k),1); call setPlane(fs%PLIC(i,j,k),0,[0.0_WP,0.0_WP,0.0_WP],sign(1.0_WP,fs%VF(i,j,k)-0.5_WP))
+                  ! Not set volume moments for a droplet or a slab
+                  call initialize_volume_moments(lo=[cfg%x(i),cfg%y(j),cfg%z(k)],hi=[cfg%x(i+1),cfg%y(j+1),cfg%z(k+1)],&
+                  levelset=levelset_drop,time=0.0_WP,level=4,VFlo=VFlo,VF=fs%VF(i,j,k),BL=fs%BL(:,i,j,k),BG=fs%BG(:,i,j,k))
+                  ! Initialize mixture velocity to normal shock
+                  fs%U(i,j,k)=u2*Hshock(Xs-cfg%xm(i),delta=0.5_WP*fs%dx)
+                  fs%V(i,j,k)=0.0_WP
+                  fs%W(i,j,k)=0.0_WP
+                  ! Gas variables
+                  if (fs%VF(i,j,k).lt.1.0_WP) then
+                     fs%RHOG(i,j,k)=rho1+(rho2-rho1)*Hshock(Xs-cfg%xm(i),delta=0.5_WP*fs%dx)
+                     fs%PG  (i,j,k)=p1  +(p2  -p1  )*Hshock(Xs-cfg%xm(i),delta=0.5_WP*fs%dx)
+                     fs%IG  (i,j,k)=fs%PG(i,j,k)/(fs%RHOG(i,j,k)*(GammaG-1.0_WP))
                   end if
-                  vf%VF(i,j,k)=vol/vf%cfg%vol(i,j,k)
-                  if (vf%VF(i,j,k).ge.VFlo.and.vf%VF(i,j,k).le.VFhi) then
-                     vf%Lbary(:,i,j,k)=v_cent
-                     vf%Gbary(:,i,j,k)=([vf%cfg%xm(i),vf%cfg%ym(j),vf%cfg%zm(k)]-vf%VF(i,j,k)*vf%Lbary(:,i,j,k))/(1.0_WP-vf%VF(i,j,k))
-                     if (vf%cfg%nz.eq.1) vf%Gbary(3,i,j,k)=v_cent(3);
-                  else
-                     vf%Lbary(:,i,j,k)=[vf%cfg%xm(i),vf%cfg%ym(j),vf%cfg%zm(k)]
-                     vf%Gbary(:,i,j,k)=[vf%cfg%xm(i),vf%cfg%ym(j),vf%cfg%zm(k)]
+                  ! Liquid variables
+                  if (fs%VF(i,j,k).gt.0.0_WP) then
+                     fs%RHOL(i,j,k)=rhol
+                     fs%PL  (i,j,k)=p1
+                     fs%IL  (i,j,k)=(fs%PL(i,j,k)+GammaL*PinfL)/(fs%RHOL(i,j,k)*(GammaL-1.0_WP))
                   end if
                end do
             end do
          end do
-         ! Boundary conditions on VF are built into the mast solver
-         ! Update the band
-         call vf%update_band()
-         ! Perform interface reconstruction from VOF field
-         call vf%build_interface()
-         ! Set initial interface at the boundaries
-         call vf%set_full_bcond()
-         ! Create discontinuous polygon mesh from IRL interface
-         call vf%polygonalize_interface()
-         ! Calculate distance from polygons
-         call vf%distance_from_polygon()
-         ! Calculate subcell phasic volumes
-         call vf%subcell_vol()
-         ! Calculate curvature
-         call vf%get_curvature()
-         ! Reset moments to guarantee compatibility with interface reconstruction
-         call vf%reset_volume_moments()
-      end block create_and_initialize_vof
-      
-      
-      ! Create a compressible two-phase flow solver
-      create_and_initialize_flow_solver: block
-         use mast_class, only: clipped_neumann,dirichlet,bc_scope,bcond,mech_egy_mech_hhz
-         use hypre_str_class, only: pcg_pfmg2
-         use ddadi_class, only: ddadi
-         use mathtools,  only: Pi
-         use parallel,   only: amRoot
-         use param, only: param_read,param_exists
-         integer :: i,j,k,n
-         real(WP), dimension(3) :: xyz
-         real(WP) :: r_rho,Reg,r_visc,Mag,Mal,Weg
-         real(WP) :: gamm_l,Pref_l,gamm_g,visc_l,visc_g,Pref
-         real(WP) :: xshock,vshock,relshockvel
-         real(WP) :: Grho0,GP0,Grho1,GP1,ST,Ma1,Lrho0,LP0,Mas,Pr_g,Pr_l,kappa_l,kappa_g,cv_g0,cv_l0
-         type(bcond), pointer :: mybc
-         ! Create material model class
-         matmod=matm(cfg=cfg,name='Liquid-gas models')
-         ! Get parameters from input
-         call param_read('Liquid gamma',gamm_l)
-         call param_read('Gas gamma',gamm_g)
-         call param_read('Density ratio',r_rho); Lrho0=r_rho
-         call param_read('Gas Reynolds number',Reg); visc_g=1.0_WP/(Reg+epsilon(Reg))
-         call param_read('Dynamic viscosity ratio',r_visc); visc_l=visc_g*r_visc;
-         call param_read('Gas Mach number',Mag); Pref = 1.0_WP/(gamm_g*Mag**2)
-         call param_read('Liquid Mach number',Mal); Pref_l = r_rho/(gamm_l*Mal**2) - Pref
-         ! Get thermodynamic parameters from input (From EoS p = rho*(gamma-1)*c_v*T - p_inf, set T = 1)
-         cv_g0 = Pref/(1.0_WP*1.0_WP*(gamm_g-1.0_WP)); cv_l0 = (Pref+Pref_l)/(Lrho0*1.0_WP*(gamm_l-1.0_WP))
-         kappa_g = 0.0_WP; kappa_l = 0.0_WP
-         if (param_exists('Gas Prandtl number')) then
-            call param_read('Gas Prandtl number',Pr_g); kappa_g = gamm_g*cv_g0*visc_g/Pr_g
-            call param_read('Liquid Prandtl number',Pr_l); kappa_l = gamm_l*cv_l0*visc_l/Pr_l
-         end if
-         ! Register equations of state
-         call matmod%register_stiffenedgas('liquid',gamm_l,Pref_l)
-         call matmod%register_idealgas('gas',gamm_g)
-         ! Create flow solver
-         fs=mast(cfg=cfg,name='Two-phase All-Mach',vf=vf)
-         ! Register flow solver variables with material models
-         call matmod%register_thermoflow_variables('liquid',fs%Lrho,fs%Ui,fs%Vi,fs%Wi,fs%LrhoE,fs%LP)
-         call matmod%register_thermoflow_variables('gas'   ,fs%Grho,fs%Ui,fs%Vi,fs%Wi,fs%GrhoE,fs%GP)
-         call matmod%register_diffusion_thermo_models(viscconst_gas=visc_g, viscconst_liquid=visc_l,hdffconst_gas=kappa_g,hdffconst_liquid=kappa_l,sphtconst_gas=cv_g0,sphtconst_liquid=cv_l0)
-         ! Read in surface tension coefficient
-         call param_read('Gas Weber number',Weg); fs%sigma=1.0_WP/(Weg+epsilon(Weg))
-         ! Configure pressure solver
-         ps=hypre_str(cfg=cfg,name='Pressure',method=pcg_pfmg2,nst=7)
-         ps%maxlevel=10
-         call param_read('Pressure iteration',ps%maxit)
-         call param_read('Pressure tolerance',ps%rcvg)
-         ! Configure implicit velocity solver
-         !vs=hypre_str(cfg=cfg,name='Velocity',method=pcg_pfmg2,nst=7)
-         !call param_read('Implicit iteration',vs%maxit)
-         !call param_read('Implicit tolerance',vs%rcvg)
-         vs=ddadi(cfg=cfg,name='Velocity',nst=7)
-         ! Setup the solver
-         call fs%setup(pressure_solver=ps,implicit_solver=vs)
-         
-         ! Start with post shock velocity and density
-         Grho1 = 1.0_WP; vshock = 1.0_WP;
-         ! Initially 0 velocity in y and z
-         fs%Vi = 0.0_WP; fs%Wi = 0.0_WP
-         ! Zero face velocities as well for the sake of dirichlet boundaries
-         fs%V = 0.0_WP; fs%W = 0.0_WP         
-         
-         ! Initialize conditions
-         call param_read('Shock location',xshock)
-         call param_read('Shock Mach number',Mas)
-         ! Calculate Pressure post-shock
-         GP1 = vshock**2.0_WP * Grho1/(gamm_g*Mag**2.0_WP)
-         ! Calculate density pre-shock
-         Grho0 = Grho1*((gamm_g-1.0_WP)*(Mas**2) + 2.0_WP) / ((Mas**2.0_WP) * (gamm_g+1.0_WP))
-         ! Calculate pressure pre-shock
-         GP0 = GP1*(gamm_g+1.0_WP) / (2.0_WP*gamm_g*Mas**2.0_WP-(gamm_g-1.0_WP))
-         ! Calculate post-shock Mach number
-         Ma1 = sqrt(((gamm_g-1.0_WP)*(Mag**2)+2.0_WP)/(2.0_WP*gamm_g*(Mag**2.0_WP)-(gamm_g-1.0_WP)))
-         ! Velocity at which shock moves
-         relshockvel = -Grho1*vshock/(Grho0-Grho1)
-         
-         if (amRoot) then
-           print*,"===== Problem Setup Description ====="
-           print*,'Gas Mach number', Mag, 'Shock Mach number', Mas
-           print*,'Pre-shock:  Density',Grho0,'Pressure',GP0
-           print*,'Post-shock: Density',Grho1,'Pressure',GP1
-           print*,'Shock velocity', relshockvel, 'Gas velocity',vshock
-         end if
-         
-         ! Initialize gas phase quantities
-         do i=fs%cfg%imino_,fs%cfg%imaxo_
-            ! pressure, velocity, use matmod for energy
-            if (fs%cfg%x(i).lt.xshock) then
-               fs%Grho(i,:,:) = Grho1
-               fs%Ui(i,:,:) = vshock
-               fs%GP(i,:,:) = GP1
-               fs%GrhoE(i,:,:) = matmod%EOS_energy(GP1,Grho1,vshock,0.0_WP,0.0_WP,'gas')
-            else
-               fs%Grho(i,:,:) = Grho0
-               fs%Ui(i,:,:) = 0.0_WP
-               fs%GP(i,:,:) = GP0 ! was Pref before
-               fs%GrhoE(i,:,:) = matmod%EOS_energy(GP0,Grho0,0.0_WP,0.0_WP,0.0_WP,'gas')
-            end if
-         end do
-         
-         ! Calculate liquid pressure
-         if (fs%cfg%nz.eq.1) then
-            ! Cylinder configuration, curv = 1/r
-            LP0 = GP0 + 2.0_WP/ddrop*fs%sigma
-         else
-            ! Sphere configuration, curv = 1/r + 1/r
-            LP0 = GP0 + 4.0_WP/ddrop*fs%sigma
-         end if
-         
-         ! Initialize liquid quantities
-         fs%Lrho = Lrho0
-         fs%LP = LP0
-         fs%LrhoE = matmod%EOS_energy(LP0,Lrho0,0.0_WP,0.0_WP,0.0_WP,'liquid')
-         
-         ! Define boundary conditions - initialized values are intended dirichlet values too, for the cell centers
-         call fs%add_bcond(name= 'inflow',type=dirichlet      ,locator=left_of_domain ,face='x',dir=-1)
-         call fs%add_bcond(name='outflow',type=clipped_neumann,locator=right_of_domain,face='x',dir=+1)
-         
-         ! Calculate face velocities
-         call fs%interp_vel_basic(vf,fs%Ui,fs%Vi,fs%Wi,fs%U,fs%V,fs%W)
-         ! Apply face BC - inflow
-         call fs%get_bcond('inflow',mybc)
-         do n=1,mybc%itr%n_
-            i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
-            fs%U(i,j,k)=vshock
-         end do
-         ! Apply face BC - outflow
-         bc_scope = 'velocity'
-         call fs%apply_bcond(time%dt,bc_scope)
-         
-         ! Calculate mixture density and momenta
-         fs%RHO   = (1.0_WP-vf%VF)*fs%Grho  + vf%VF*fs%Lrho
-         fs%rhoUi = fs%RHO*fs%Ui; fs%rhoVi = fs%RHO*fs%Vi; fs%rhoWi = fs%RHO*fs%Wi
-         ! Perform initial pressure relax
-         relax_model = mech_egy_mech_hhz
-         call fs%pressure_relax(vf,matmod,relax_model)
-         ! Calculate initial phase and bulk moduli
-         call fs%init_phase_bulkmod(vf,matmod)
-         call fs%reinit_phase_pressure(vf,matmod)
-         call fs%harmonize_advpressure_bulkmod(vf,matmod)
-         ! Set initial pressure to harmonized field based on internal energy
-         fs%P = fs%PA
-         
-      end block create_and_initialize_flow_solver
-      
-      ! Create surfmesh object for interface polygon output
-      create_smesh: block
-         use irl_fortran_interface
-         integer :: i,j,k,nplane,np
-         smesh=surfmesh(nvar=1,name='plic')
-         smesh%varname(1)='curv'
-         call vf%update_surfmesh(smesh)
-         smesh%var(1,:)=0.0_WP
-         np=0;
-         do k=vf%cfg%kmin_,vf%cfg%kmax_
-            do j=vf%cfg%jmin_,vf%cfg%jmax_
-               do i=vf%cfg%imin_,vf%cfg%imax_
-                  do nplane=1,getNumberOfPlanes(vf%liquid_gas_interface(i,j,k))
-                     if (getNumberOfVertices(vf%interface_polygon(nplane,i,j,k)).gt.0) then
-                        np=np+1; 
-                        smesh%var(1,np)=vf%curv(i,j,k)  
-                     end if       
-                  end do
-               end do
-            end do
-         end do
-      end block create_smesh
+         ! Build PLIC interface
+         call fs%build_interface()
+         ! Build phasic total energies
+         where (fs%VF.gt.0.0_WP) fs%EL=fs%IL+0.5_WP*(fs%U**2+fs%V**2+fs%W**2)
+         where (fs%VF.lt.1.0_WP) fs%EG=fs%IG+0.5_WP*(fs%U**2+fs%V**2+fs%W**2)
+         ! Initialize conserved variables
+         fs%Q(:,:,:,1)=        fs%VF *fs%RHOL
+         fs%Q(:,:,:,2)=(1.0_WP-fs%VF)*fs%RHOG
+         fs%Q(:,:,:,3)= fs%Q(:,:,:,1)*fs%EL
+         fs%Q(:,:,:,4)= fs%Q(:,:,:,2)*fs%EG
+         fs%RHO=fs%Q(:,:,:,1)+fs%Q(:,:,:,2)
+         fs%Q(:,:,:,5)=fs%RHO*fs%U
+         fs%Q(:,:,:,6)=fs%RHO*fs%V
+         fs%Q(:,:,:,7)=fs%RHO*fs%W
+         ! Communicate conserved variables (not needed in general, but allows 2D runs without changing loop above...)
+         do i=1,fs%nQ; call fs%cfg%sync(fs%Q(:,:,:,i)); end do
+         ! Rebuild primitive variables
+         call fs%get_primitive()
+         ! Compute local Mach number
+         Ma=sqrt(fs%U**2+fs%V**2+fs%W**2)/fs%C
+      end block initial_conditions
       
       ! Add Ensight output
       create_ensight: block
          ! Create Ensight output from cfg
-         ens_out=ensight(cfg=cfg,name='ShockDroplet')
+         ens_out=ensight(cfg=cfg,name='ShockDrop')
          ! Create event for Ensight output
          ens_evt=event(time=time,name='Ensight output')
          call param_read('Ensight output period',ens_evt%tper)
          ! Add variables to output
-         call ens_out%add_vector('velocity',fs%Ui,fs%Vi,fs%Wi)
+         call ens_out%add_vector('velocity',fs%U,fs%V,fs%W)
+         call ens_out%add_scalar('VOF',fs%VF)
+         call ens_out%add_scalar('RHO',fs%RHO)
+         call ens_out%add_scalar('E',fs%E)
          call ens_out%add_scalar('P',fs%P)
-         call ens_out%add_scalar('GP',fs%GP)
-         call ens_out%add_scalar('LP',fs%LP)
-         call ens_out%add_scalar('Density',fs%RHO)
-         call ens_out%add_scalar('Grho',fs%Grho)
-         call ens_out%add_scalar('Lrho',fs%Lrho)
-         call ens_out%add_scalar('Tmptr',fs%Tmptr)
-         call ens_out%add_scalar('VOF',vf%VF)
-         call ens_out%add_scalar('curvature',vf%curv)
-         call ens_out%add_scalar('Mach',fs%Mach)
+         call ens_out%add_scalar('Mach',Ma)
+         ! Create surface mesh for PLIC
+         smesh=surfmesh(nvar=0,name='plic')
+         call fs%update_surfmesh(smesh)
          call ens_out%add_surface('plic',smesh)
          ! Output to ensight
          if (ens_evt%occurs()) call ens_out%write_data(time%t)
       end block create_ensight
       
-      
       ! Create a monitor file
       create_monitor: block
          ! Prepare some info about fields
-         call fs%get_cfl(time%dt,time%cfl)
-         call fs%get_max()
-         call vf%get_max()
+         call fs%get_cfl(dt=time%dt,cfl=time%cfl)
+         call fs%get_info()
          ! Create simulation monitor
          mfile=monitor(fs%cfg%amRoot,'simulation')
          call mfile%add_column(time%n,'Timestep number')
          call mfile%add_column(time%t,'Time')
          call mfile%add_column(time%dt,'Timestep size')
          call mfile%add_column(time%cfl,'Maximum CFL')
-         call mfile%add_column(fs%RHOmin,'RHOmin')
-         call mfile%add_column(fs%RHOmax,'RHOmax')
          call mfile%add_column(fs%Umax,'Umax')
          call mfile%add_column(fs%Vmax,'Vmax')
          call mfile%add_column(fs%Wmax,'Wmax')
-         call mfile%add_column(fs%Pmax,'Pmax')
-         call mfile%add_column(fs%Tmax,'Tmax')
+         call mfile%add_column(fs%RHOLmax,'max(RHOL)')
+         call mfile%add_column(fs%RHOLmin,'min(RHOL)')
+         call mfile%add_column(fs%ELmax  ,'max(EL)'  )
+         call mfile%add_column(fs%ELmin  ,'min(EL)'  )
+         call mfile%add_column(fs%PLmax  ,'max(PL)'  )
+         call mfile%add_column(fs%PLmin  ,'min(PL)'  )
+         call mfile%add_column(fs%TLmax  ,'max(TL)'  )
+         call mfile%add_column(fs%TLmin  ,'min(TL)'  )
+         call mfile%add_column(fs%RHOGmax,'max(RHOG)')
+         call mfile%add_column(fs%RHOGmin,'min(RHOG)')
+         call mfile%add_column(fs%EGmax  ,'max(EG)'  )
+         call mfile%add_column(fs%EGmin  ,'min(EG)'  )
+         call mfile%add_column(fs%PGmax  ,'max(PG)'  )
+         call mfile%add_column(fs%PGmin  ,'min(PG)'  )
+         call mfile%add_column(fs%TGmax  ,'max(TG)'  )
+         call mfile%add_column(fs%TGmin  ,'min(TG)'  )
+         call mfile%add_column(fs%VFmax  ,'VFmax'    )
+         call mfile%add_column(fs%VFmin  ,'VFmin'    )
          call mfile%write()
          ! Create CFL monitor
          cflfile=monitor(fs%cfg%amRoot,'cfl')
          call cflfile%add_column(time%n,'Timestep number')
          call cflfile%add_column(time%t,'Time')
-         call cflfile%add_column(fs%CFLst,'STension CFL')
          call cflfile%add_column(fs%CFLc_x,'Convective xCFL')
          call cflfile%add_column(fs%CFLc_y,'Convective yCFL')
          call cflfile%add_column(fs%CFLc_z,'Convective zCFL')
-         call cflfile%add_column(fs%CFLv_x,'Viscous xCFL')
-         call cflfile%add_column(fs%CFLv_y,'Viscous yCFL')
-         call cflfile%add_column(fs%CFLv_z,'Viscous zCFL')
          call cflfile%add_column(fs%CFLa_x,'Acoustic xCFL')
          call cflfile%add_column(fs%CFLa_y,'Acoustic yCFL')
          call cflfile%add_column(fs%CFLa_z,'Acoustic zCFL')
+         call cflfile%add_column(fs%CFLv_x,'Viscous xCFL')
+         call cflfile%add_column(fs%CFLv_y,'Viscous yCFL')
+         call cflfile%add_column(fs%CFLv_z,'Viscous zCFL')
          call cflfile%write()
-         ! Create convergence monitor
-         cvgfile=monitor(fs%cfg%amRoot,'cvg')
-         call cvgfile%add_column(time%n,'Timestep number')
-         call cvgfile%add_column(time%it,'Iteration')
-         call cvgfile%add_column(time%t,'Time')
-         call cvgfile%add_column(fs%impl_it_x,'Impl_x iteration')
-         call cvgfile%add_column(fs%impl_rerr_x,'Impl_x error')
-         call cvgfile%add_column(fs%impl_it_y,'Impl_y iteration')
-         call cvgfile%add_column(fs%impl_rerr_y,'Impl_y error')
-         call cvgfile%add_column(fs%implicit%it,'Impl_z iteration')
-         call cvgfile%add_column(fs%implicit%rerr,'Impl_z error')
-         call cvgfile%add_column(fs%psolv%it,'Pressure iteration')
-         call cvgfile%add_column(fs%psolv%rerr,'Pressure error')
+         ! Create conservation monitor
+         consfile=monitor(fs%cfg%amRoot,'conservation')
+         call consfile%add_column(time%n,'Timestep number')
+         call consfile%add_column(time%t,'Time')
+         call consfile%add_column(fs%VFint  ,'Volume')
+         call consfile%add_column(fs%Qint(1),'Liquid mass')
+         call consfile%add_column(fs%Qint(2),'Gas mass')
+         call consfile%add_column(fs%Qint(3),'Liquid energy')
+         call consfile%add_column(fs%Qint(4),'Gas energy')
+         call consfile%add_column(fs%Qint(5),'U Momentum')
+         call consfile%add_column(fs%Qint(6),'V Momentum')
+         call consfile%add_column(fs%Qint(7),'W Momentum')
+         call consfile%add_column(fs%RHOKLint,'Liquid KE')
+         call consfile%add_column(fs%RHOKGint,'Gas KE')
+         call consfile%add_column(fs%RHOSLint,'Liquid entropy')
+         call consfile%add_column(fs%RHOSGint,'Gas entropy')
+         call consfile%write()
       end block create_monitor
       
-      
+   contains
+      !> Level set function for a sphere of unity diameter centered at (0,0,0)
+      function levelset_drop(xyz,t) result(G)
+         implicit none
+         real(WP), dimension(3),intent(in) :: xyz
+         real(WP), intent(in) :: t
+         real(WP) :: G
+         G=0.5_WP-sqrt(sum(xyz**2))
+      end function levelset_drop
+      !> Level set function for a slab of unity width centered at x=0
+      function levelset_slab(xyz,t) result(G)
+         implicit none
+         real(WP), dimension(3),intent(in) :: xyz
+         real(WP), intent(in) :: t
+         real(WP) :: G
+         G=1.0_WP-abs(xyz(1))
+      end function levelset_slab
    end subroutine simulation_init
    
    
-   !> Perform an NGA2 simulation - this mimicks NGA's old time integration for multiphase
+   !> Perform an NGA2 simulation
    subroutine simulation_run
-      use messager, only: die
       implicit none
       
       ! Perform time integration
       do while (.not.time%done())
          
          ! Increment time
-         call fs%get_cfl(time%dt,time%cfl)
+         call fs%get_cfl(dt=time%dt,cfl=time%cfl)
          call time%adjust_dt()
          call time%increment()
          
-         ! Reinitialize phase pressure by syncing it with conserved phase energy
-         call fs%reinit_phase_pressure(vf,matmod)
-         fs%Uiold=fs%Ui; fs%Viold=fs%Vi; fs%Wiold=fs%Wi
-         fs%RHOold = fs%RHO
-         ! Remember old flow variables (phase)
-         fs%Grhoold = fs%Grho; fs%Lrhoold = fs%Lrho
-         fs%GrhoEold=fs%GrhoE; fs%LrhoEold=fs%LrhoE
-         fs%GPold   =   fs%GP; fs%LPold   =   fs%LP
+         ! Remember conserved variables
+         fs%Qold=fs%Q
          
-         ! Remember old interface, including VF and barycenters
-         call vf%copy_interface_to_old()
+         ! Remember phasic quantities
+         fs%RHOLold=fs%RHOL; fs%ILold=fs%IL
+         fs%RHOGold=fs%RHOG; fs%IGold=fs%IG
          
-         ! Create in-cell reconstruction
-         call fs%flow_reconstruct(vf)
+         ! Remember volume moments and interface
+         fs%VFold=fs%VF
+         fs%BLold=fs%BL
+         fs%BGold=fs%BG
+         copy_plic_to_old: block
+            use irl_fortran_interface, only: copy
+            integer :: i,j,k
+            do k=fs%cfg%kmino_,fs%cfg%kmaxo_; do j=fs%cfg%jmino_,fs%cfg%jmaxo_; do i=fs%cfg%imino_,fs%cfg%imaxo_
+               call copy(fs%PLICold(i,j,k),fs%PLIC(i,j,k))
+            end do; end do; end do
+         end block copy_plic_to_old
          
-         ! Zero variables that will change during subiterations
-         fs%P = 0.0_WP
-         fs%Pjx = 0.0_WP; fs%Pjy = 0.0_WP; fs%Pjz = 0.0_WP
-         fs%Hpjump = 0.0_WP
+         ! Tag cells for semi-Lagrangian transport
+         call fs%SLtag()
          
-         ! Determine semi-Lagrangian advection flag
-         call fs%flag_sl(time%dt,vf)
+         ! Perform first semi-Lagrangian transport step =====================================================
+         call fs%SLstep(dt=0.5_WP*time%dt,U=fs%U,V=fs%V,W=fs%W)
+         !call fs%build_interface()
          
-         ! Perform sub-iterations
-         do while (time%it.le.time%itmax)
-            
-            ! Predictor step, involving advection and pressure terms
-            call fs%advection_step(time%dt,vf,matmod)
-            
-            ! Viscous step
-            call fs%diffusion_src_explicit_step(time%dt,vf,matmod)
-            
-            ! Prepare pressure projection
-            call fs%pressureproj_prepare(time%dt,vf,matmod)
-            ! Initialize and solve Helmholtz equation
-            call fs%psolv%setup()
-            fs%psolv%sol=fs%PA-fs%P
-            call fs%psolv%solve()
-            call fs%cfg%sync(fs%psolv%sol)
-            ! Perform corrector step using solution
-            fs%P=fs%P+fs%psolv%sol
-            call fs%pressureproj_correct(time%dt,vf,fs%psolv%sol)
-            
-            ! Record convergence monitor
-            call cvgfile%write()
-            ! Increment sub-iteration counter
-            time%it=time%it+1
-            
-         end do
+         ! First RK step ====================================================================================
+         ! Get non-SL RHS and increment
+         call fs%rhs(dQdt(:,:,:,:,1))
+         fs%Q=fs%Qold+0.5_WP*time%dt*dQdt(:,:,:,:,1)
+         ! Increment Q with SL terms
+         call fs%SLincrement()
+         ! Recompute primitive variables
+         call fs%get_primitive()
          
-         ! Pressure relaxation
-         call fs%pressure_relax(vf,matmod,relax_model)
+         ! Second RK step ===================================================================================
+         ! Get non-SL RHS and increment
+         call fs%rhs(dQdt(:,:,:,:,2))
+         fs%Q=fs%Qold+0.5_WP*time%dt*dQdt(:,:,:,:,2)
+         ! Increment Q with SL terms
+         call fs%SLincrement()
+         ! Recompute primitive variables
+         call fs%get_primitive()
+         
+         ! Perform second semi-Lagrangian transport step ====================================================
+         call fs%SLstep(dt=1.0_WP*time%dt,U=fs%U,V=fs%V,W=fs%W)
+         call fs%build_interface()
+         
+         ! Third RK step ====================================================================================
+         ! Get non-SL RHS and increment
+         call fs%rhs(dQdt(:,:,:,:,3))
+         fs%Q=fs%Qold+1.0_WP*time%dt*dQdt(:,:,:,:,3)
+         ! Increment Q with SL terms
+         call fs%SLincrement()
+         ! Recompute primitive variables
+         call fs%get_primitive()
+         
+         ! Fourth RK step ===================================================================================
+         ! Get non-SL RHS and increment
+         call fs%rhs(dQdt(:,:,:,:,4))
+         fs%Q=fs%Qold+time%dt/6.0_WP*(dQdt(:,:,:,:,1)+2.0_WP*dQdt(:,:,:,:,2)+2.0_WP*dQdt(:,:,:,:,3)+dQdt(:,:,:,:,4))
+         ! Increment Q with SL terms
+         call fs%SLincrement()
+         ! Enforce mechanical equilibrium
+         call fs%relax_pressure()
+         ! Apply Neumann condition at the outflow
+         neumann_outflow: block
+            integer :: i
+            if (fs%cfg%iproc.eq.fs%cfg%npx) then
+               do i=fs%cfg%imax+1,fs%cfg%imaxo
+                  fs%Q(i,:,:,:)=fs%Q(fs%cfg%imax,:,:,:)
+               end do
+            end if
+         end block neumann_outflow
+         ! Recompute primitive variables
+         call fs%get_primitive()
+         
+         ! Compute local Mach number
+         Ma=sqrt(fs%U**2+fs%V**2+fs%W**2)/fs%C
          
          ! Output to ensight
          if (ens_evt%occurs()) then
-            !update surfmesh object
-            update_smesh: block
-               use irl_fortran_interface
-               integer :: i,j,k,nplane,np
-               ! Transfer polygons to smesh
-               call vf%update_surfmesh(smesh)
-               ! Also populate nplane variable
-               smesh%var(1,:)=0.0_WP
-               np=0
-               do k=vf%cfg%kmin_,vf%cfg%kmax_
-                  do j=vf%cfg%jmin_,vf%cfg%jmax_
-                     do i=vf%cfg%imin_,vf%cfg%imax_
-                        do nplane=1,getNumberOfPlanes(vf%liquid_gas_interface(i,j,k))
-                           if (getNumberOfVertices(vf%interface_polygon(nplane,i,j,k)).gt.0) then
-                              np=np+1;
-                              smesh%var(1,np)=vf%curv(i,j,k)        
-                           end if
-                        end do
-                     end do
-                  end do
-               end do
-            end block update_smesh
+            call fs%update_surfmesh(smesh)
             call ens_out%write_data(time%t)
          end if
          
          ! Perform and output monitoring
-         call fs%get_max()
-         call vf%get_max()
-         call fs%get_viz()
+         call fs%get_info()
          call mfile%write()
          call cflfile%write()
+         call consfile%write()
          
       end do
       
@@ -520,7 +508,9 @@ contains
    !> Finalize the NGA2 simulation
    subroutine simulation_final
       implicit none
-      
+      ! Deallocate work arrays
+      deallocate(dQdt,Ma)
    end subroutine simulation_final
+   
    
 end module simulation

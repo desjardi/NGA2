@@ -412,7 +412,7 @@ contains
       integer :: i,j,k,dir,n
       integer, dimension(3) :: ind
       ! Reset tag
-      this%iSL=0
+      this%iSL=1; return!0
       ! First sweep to identify cells with interface
       do k=this%cfg%kmino_+1,this%cfg%kmaxo_-1
          do j=this%cfg%jmino_+1,this%cfg%jmaxo_-1
@@ -879,26 +879,26 @@ contains
                if (maxval(this%iSL(i,j,k-1:k)).eq.0) then
                   vel=0.5_WP*sum(this%W(i,j,k-1:k))
                   if (this%VF(i,j,k).gt.0.5_WP) then
-                     ! WENO phasic mass flux
+                     ! WENO mass flux
                      w=weno_weight((abs(this%RHOL(i,j,k-1)-this%RHOL(i,j,k-2))+eps)/(abs(this%RHOL(i,j,k)-this%RHOL(i,j,k-1))+eps)); wenop=0.5_WP*[      -w,1.0_WP+2.0_WP*w,1.0_WP-w]
                      w=weno_weight((abs(this%RHOL(i,j,k+1)-this%RHOL(i,j,k  ))+eps)/(abs(this%RHOL(i,j,k)-this%RHOL(i,j,k-1))+eps)); wenom=0.5_WP*[1.0_WP-w,1.0_WP+2.0_WP*w,      -w]
                      Fz(i,j,k,1)=-0.5_WP*(vel+abs(vel))*sum(wenop*this%RHOL(i,j,k-2:k  ))-0.5_WP*(vel-abs(vel))*sum(wenom*this%RHOL(i,j,k-1:k+1))
-                     ! Centered phasic mass flux
+                     ! Centered mass flux
                      !Fz(i,j,k,1)=-vel*0.5_WP*sum(this%RHOL(i,j,k-1:k))
-                     ! Centered phasic internal energy flux
+                     ! Centered internal energy flux
                      Fz(i,j,k,3)=Fz(i,j,k,1)*0.5_WP*sum(this%IL(i,j,k-1:k))
                      ! Centered phasic kinetic energy flux
                      Fz(i,j,k,3)=Fz(i,j,k,3)+Fz(i,j,k,1)*0.5_WP*(product(this%U(i,j,k-1:k))+product(this%V(i,j,k-1:k))+product(this%W(i,j,k-1:k)))
                      ! Phasic pressure-diffusion flux
                      Fz(i,j,k,3)=Fz(i,j,k,3)-0.5_WP*(this%W(i,j,k)*(       this%VF(i,j,k-1))*this%PL(i,j,k-1)+this%W(i,j,k-1)*(       this%VF(i,j,k))*this%PL(i,j,k))
                   else
-                     ! WENO phasic mass flux
+                     ! WENO mass flux
                      w=weno_weight((abs(this%RHOG(i,j,k-1)-this%RHOG(i,j,k-2))+eps)/(abs(this%RHOG(i,j,k)-this%RHOG(i,j,k-1))+eps)); wenop=0.5_WP*[      -w,1.0_WP+2.0_WP*w,1.0_WP-w]
                      w=weno_weight((abs(this%RHOG(i,j,k+1)-this%RHOG(i,j,k  ))+eps)/(abs(this%RHOG(i,j,k)-this%RHOG(i,j,k-1))+eps)); wenom=0.5_WP*[1.0_WP-w,1.0_WP+2.0_WP*w,      -w]
                      Fz(i,j,k,2)=-0.5_WP*(vel+abs(vel))*sum(wenop*this%RHOG(i,j,k-2:k  ))-0.5_WP*(vel-abs(vel))*sum(wenom*this%RHOG(i,j,k-1:k+1))
-                     ! Centered phasic mass flux
+                     ! Centered mass flux
                      !Fz(i,j,k,2)=-vel*0.5_WP*sum(this%RHOG(i,j,k-1:k))
-                     ! Centered phasic internal energy flux
+                     ! Centered internal energy flux
                      Fz(i,j,k,4)=Fz(i,j,k,2)*0.5_WP*sum(this%IG(i,j,k-1:k))
                      ! Centered phasic kinetic energy flux
                      Fz(i,j,k,4)=Fz(i,j,k,4)+Fz(i,j,k,2)*0.5_WP*(product(this%U(i,j,k-1:k))+product(this%V(i,j,k-1:k))+product(this%W(i,j,k-1:k)))
