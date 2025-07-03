@@ -966,6 +966,47 @@ contains
          end do
       end do
       
+      ! ================================================================ !
+      ! ======================== VISCOUS FLUXES ======================== !
+      ! ================================================================ !
+      
+      ! Calculate viscous-like fluxes
+      do k=this%cfg%kmin_,this%cfg%kmax_+1
+         do j=this%cfg%jmin_,this%cfg%jmax_+1
+            do i=this%cfg%imin_,this%cfg%imax_+1
+               ! Mixture momentum flux
+               !visc=0.5_WP*sum(this%visc(i-1:i,j,k))
+               !dudx=this%dxi*(this%U(i,j,k)-this%U(i-1,j,k))
+               !dvdx=this%dxi*(this%V(i,j,k)-this%V(i-1,j,k))
+               !dwdx=this%dxi*(this%W(i,j,k)-this%W(i-1,j,k))
+               !dudy=0.25_WP*this%dyi*sum(this%U(i-1:i,j+1,k)-this%U(i-1:i,j-1,k))
+               !dvdy=0.25_WP*this%dyi*sum(this%V(i-1:i,j+1,k)-this%V(i-1:i,j-1,k))
+               !dwdy=0.25_WP*this%dyi*sum(this%W(i-1:i,j+1,k)-this%W(i-1:i,j-1,k))
+               !dudz=0.25_WP*this%dzi*sum(this%U(i-1:i,j,k+1)-this%U(i-1:i,j,k-1))
+               !dvdz=0.25_WP*this%dzi*sum(this%V(i-1:i,j,k+1)-this%V(i-1:i,j,k-1))
+               !dwdz=0.25_WP*this%dzi*sum(this%W(i-1:i,j,k+1)-this%W(i-1:i,j,k-1))
+               !FUX(i,j,k)=visc*
+               !FVX(i,j,k)=visc*
+               !FWX(i,j,k)=visc*
+            end do
+         end do
+      end do
+      
+      ! Increment time derivative for conserved variables with viscous terms
+      do k=this%cfg%kmin_,this%cfg%kmax_
+         do j=this%cfg%jmin_,this%cfg%jmax_
+            do i=this%cfg%imin_,this%cfg%imax_
+               ! Phasic viscous heating and heat diffusion
+               !dQdt(i,j,k,3)=dQdt(i,j,k,3)+this%dxi*(Fx (i+1,j,k,3)-Fx (i,j,k,3))+this%dyi*(Fy (i,j+1,k,3)-Fy (i,j,k,3))+this%dzi*(Fz (i,j,k+1,3)-Fz (i,j,k,3))
+               !dQdt(i,j,k,4)=dQdt(i,j,k,4)+this%dxi*(Fx (i+1,j,k,4)-Fx (i,j,k,4))+this%dyi*(Fy (i,j+1,k,4)-Fy (i,j,k,4))+this%dzi*(Fz (i,j,k+1,4)-Fz (i,j,k,4))
+               ! Viscous term for mixture momentum
+               !dQdt(i,j,k,5)=dQdt(i,j,k,5)+this%dxi*(FUX(i+1,j,k  )-FUX(i,j,k  ))+this%dyi*(FUY(i,j+1,k  )-FUY(i,j,k  ))+this%dzi*(FUZ(i,j,k+1  )-FUZ(i,j,k  ))
+               !dQdt(i,j,k,6)=dQdt(i,j,k,6)+this%dxi*(FVX(i+1,j,k  )-FVX(i,j,k  ))+this%dyi*(FVY(i,j+1,k  )-FVY(i,j,k  ))+this%dzi*(FVZ(i,j,k+1  )-FVZ(i,j,k  ))
+               !dQdt(i,j,k,7)=dQdt(i,j,k,7)+this%dxi*(FWX(i+1,j,k  )-FWX(i,j,k  ))+this%dyi*(FWY(i,j+1,k  )-FWY(i,j,k  ))+this%dzi*(FWZ(i,j,k+1  )-FWZ(i,j,k  ))
+            end do
+         end do
+      end do
+      
       ! Deallocate all flux arrays
       deallocate(Fx,Fy,Fz,FUX,FUY,FUZ,FVX,FVY,FVZ,FWX,FWY,FWZ)
       
