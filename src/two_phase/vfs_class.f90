@@ -3814,8 +3814,12 @@ contains
       real(WP), dimension(1:3,1:4) :: vert
       real(WP), dimension(1:3) :: norm
       
+      call MPI_BARRIER(this%cfg%comm,ierr);if (this%cfg%amRoot) print *,'in polygonalize_interface'
+
       ! Create a cell object
       call new(cell)
+
+      call MPI_BARRIER(this%cfg%comm,ierr);if (this%cfg%amRoot) print *,'loop over full domain and form polygon'
       
       ! Loop over full domain and form polygon
       do k=this%cfg%kmino_,this%cfg%kmaxo_
@@ -3837,6 +3841,8 @@ contains
             end do
          end do
       end do
+
+      call MPI_BARRIER(this%cfg%comm,ierr);if (this%cfg%amRoot) print *,'x-face polygonalization'
       
       ! Find inferface between filled and empty cells on x-face
       do k=this%cfg%kmino_,this%cfg%kmaxo_
@@ -3858,7 +3864,8 @@ contains
             end do
          end do
       end do
-      
+
+      call MPI_BARRIER(this%cfg%comm,ierr);if (this%cfg%amRoot) print *,'y-face polygonalization'
       ! Find inferface between filled and empty cells on y-face
       do k=this%cfg%kmino_,this%cfg%kmaxo_
          do j=this%cfg%jmino_+1,this%cfg%jmaxo_
@@ -3880,6 +3887,7 @@ contains
          end do
       end do
       
+      call MPI_BARRIER(this%cfg%comm,ierr);if (this%cfg%amRoot) print *,'z-face polygonalization'
       ! Find inferface between filled and empty cells on z-face
       do k=this%cfg%kmino_+1,this%cfg%kmaxo_
          do j=this%cfg%jmino_,this%cfg%jmaxo_
@@ -3902,6 +3910,7 @@ contains
       end do
       
       ! Now compute surface area divided by cell volume
+      call MPI_BARRIER(this%cfg%comm,ierr);if (this%cfg%amRoot) print *,'calculate surface density'
       this%SD=0.0_WP
       do k=this%cfg%kmino_,this%cfg%kmaxo_
          do j=this%cfg%jmino_,this%cfg%jmaxo_
@@ -3917,6 +3926,8 @@ contains
             end do
          end do
       end do
+      call MPI_BARRIER(this%cfg%comm,ierr);if (this%cfg%amRoot) print *,'done polygonalization of interface'
+
       
    end subroutine polygonalize_interface
    
