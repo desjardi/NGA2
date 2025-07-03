@@ -3807,6 +3807,7 @@ contains
    !> Here, only mask=1 is skipped (i.e., real walls), so bconds should be handled
    subroutine polygonalize_interface(this)
       implicit none
+      integer :: ierr
       class(vfs), intent(inout) :: this
       integer :: i,j,k,n
       real(WP) :: tsd
