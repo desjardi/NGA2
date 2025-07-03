@@ -1,12 +1,12 @@
 # Parallelization
-Partition : 1 8 1
+Partition : 2 4 1
 
 # Mesh definition
 Lx :  8
 Ly :  8
 Lz :  8
-nx :  128
-ny :  128
+nx :  256
+ny :  256
 nz :  1
 X0 : -3
 
@@ -22,7 +22,7 @@ Shock Mach number :  5.12
 Shock location :    -2
 
 # Time integration
-Max timestep size : 1e-2
+Max timestep size : 0.5e-2
 Max cfl number :    0.5
 Max time :          20
 

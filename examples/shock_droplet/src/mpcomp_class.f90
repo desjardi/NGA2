@@ -412,7 +412,7 @@ contains
       integer :: i,j,k,dir,n
       integer, dimension(3) :: ind
       ! Reset tag
-      this%iSL=1; return!0
+      this%iSL=0
       ! First sweep to identify cells with interface
       do k=this%cfg%kmino_+1,this%cfg%kmaxo_-1
          do j=this%cfg%jmino_+1,this%cfg%jmaxo_-1
@@ -694,39 +694,43 @@ contains
       call this%trhs%start()
       
       ! Allocate mixture momentum and phasic kinetic energy/pressure diffusion fluxes
-      allocate(FUX(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
-      allocate(FUY(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
-      allocate(FUZ(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
-      allocate(FVX(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
-      allocate(FVY(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
-      allocate(FVZ(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
-      allocate(FWX(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
-      allocate(FWY(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
-      allocate(FWZ(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
+      allocate(FUX(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))    ; FUX=0.0_WP
+      allocate(FUY(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))    ; FUY=0.0_WP
+      allocate(FUZ(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))    ; FUZ=0.0_WP
+      allocate(FVX(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))    ; FVX=0.0_WP
+      allocate(FVY(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))    ; FVY=0.0_WP
+      allocate(FVZ(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))    ; FVZ=0.0_WP
+      allocate(FWX(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))    ; FWX=0.0_WP
+      allocate(FWY(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))    ; FWY=0.0_WP
+      allocate(FWZ(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))    ; FWZ=0.0_WP
       allocate(FEX(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_,1:2)); FEX=0.0_WP
       allocate(FEY(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_,1:2)); FEY=0.0_WP
       allocate(FEZ(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_,1:2)); FEZ=0.0_WP
       
-      ! Calculate mixture momentum fluxes and phasic kinetic energy/pressure diffusion fluxes
+      ! Calculate mixture momentum fluxes and phasic kinetic energy/pressure diffusion fluxes in SL-tagged cells only
       do k=this%cfg%kmin_,this%cfg%kmax_+1
          do j=this%cfg%jmin_,this%cfg%jmax_+1
             do i=this%cfg%imin_,this%cfg%imax_+1
-               ! Momentum fluxes everywhere
-               FUX(i,j,k)=sum(this%SLFx(i,j,k,1:2))*0.5_WP*sum(this%U(i-1:i,j,k)); FUY(i,j,k)=sum(this%SLFy(i,j,k,1:2))*0.5_WP*sum(this%U(i,j-1:j,k)); FUZ(i,j,k)=sum(this%SLFz(i,j,k,1:2))*0.5_WP*sum(this%U(i,j,k-1:k))
-               FVX(i,j,k)=sum(this%SLFx(i,j,k,1:2))*0.5_WP*sum(this%V(i-1:i,j,k)); FVY(i,j,k)=sum(this%SLFy(i,j,k,1:2))*0.5_WP*sum(this%V(i,j-1:j,k)); FVZ(i,j,k)=sum(this%SLFz(i,j,k,1:2))*0.5_WP*sum(this%V(i,j,k-1:k))
-               FWX(i,j,k)=sum(this%SLFx(i,j,k,1:2))*0.5_WP*sum(this%W(i-1:i,j,k)); FWY(i,j,k)=sum(this%SLFy(i,j,k,1:2))*0.5_WP*sum(this%W(i,j-1:j,k)); FWZ(i,j,k)=sum(this%SLFz(i,j,k,1:2))*0.5_WP*sum(this%W(i,j,k-1:k))
-               ! Phasic kinetic energy and pressure diffusion fluxes in SL-tagged cells only
                if (maxval(this%iSL(i-1:i,j,k)).gt.0) then
+                  FUX(i,j,k)=sum(this%SLFx(i,j,k,1:2))*0.5_WP*sum(this%U(i-1:i,j,k))
+                  FVX(i,j,k)=sum(this%SLFx(i,j,k,1:2))*0.5_WP*sum(this%V(i-1:i,j,k))
+                  FWX(i,j,k)=sum(this%SLFx(i,j,k,1:2))*0.5_WP*sum(this%W(i-1:i,j,k))
                   KE=0.5_WP*(product(this%U(i-1:i,j,k))+product(this%V(i-1:i,j,k))+product(this%W(i-1:i,j,k)))
                   FEX(i,j,k,1)=this%SLFx(i,j,k,1)*KE-0.5_WP*(this%U(i,j,k)*(       this%VF(i-1,j,k))*this%PL(i-1,j,k)+this%U(i-1,j,k)*(       this%VF(i,j,k))*this%PL(i,j,k))
                   FEX(i,j,k,2)=this%SLFx(i,j,k,2)*KE-0.5_WP*(this%U(i,j,k)*(1.0_WP-this%VF(i-1,j,k))*this%PG(i-1,j,k)+this%U(i-1,j,k)*(1.0_WP-this%VF(i,j,k))*this%PG(i,j,k))
                end if
                if (maxval(this%iSL(i,j-1:j,k)).gt.0) then
+                  FUY(i,j,k)=sum(this%SLFy(i,j,k,1:2))*0.5_WP*sum(this%U(i,j-1:j,k))
+                  FVY(i,j,k)=sum(this%SLFy(i,j,k,1:2))*0.5_WP*sum(this%V(i,j-1:j,k))
+                  FWY(i,j,k)=sum(this%SLFy(i,j,k,1:2))*0.5_WP*sum(this%W(i,j-1:j,k))
                   KE=0.5_WP*(product(this%U(i,j-1:j,k))+product(this%V(i,j-1:j,k))+product(this%W(i,j-1:j,k)))
                   FEY(i,j,k,1)=this%SLFy(i,j,k,1)*KE-0.5_WP*(this%V(i,j,k)*(       this%VF(i,j-1,k))*this%PL(i,j-1,k)+this%V(i,j-1,k)*(       this%VF(i,j,k))*this%PL(i,j,k))
                   FEY(i,j,k,2)=this%SLFy(i,j,k,2)*KE-0.5_WP*(this%V(i,j,k)*(1.0_WP-this%VF(i,j-1,k))*this%PG(i,j-1,k)+this%V(i,j-1,k)*(1.0_WP-this%VF(i,j,k))*this%PG(i,j,k))
                end if
                if (maxval(this%iSL(i,j,k-1:k)).gt.0) then
+                  FUZ(i,j,k)=sum(this%SLFz(i,j,k,1:2))*0.5_WP*sum(this%U(i,j,k-1:k))
+                  FVZ(i,j,k)=sum(this%SLFz(i,j,k,1:2))*0.5_WP*sum(this%V(i,j,k-1:k))
+                  FWZ(i,j,k)=sum(this%SLFz(i,j,k,1:2))*0.5_WP*sum(this%W(i,j,k-1:k))
                   KE=0.5_WP*(product(this%U(i,j,k-1:k))+product(this%V(i,j,k-1:k))+product(this%W(i,j,k-1:k)))
                   FEZ(i,j,k,1)=this%SLFz(i,j,k,1)*KE-0.5_WP*(this%W(i,j,k)*(       this%VF(i,j,k-1))*this%PL(i,j,k-1)+this%W(i,j,k-1)*(       this%VF(i,j,k))*this%PL(i,j,k))
                   FEZ(i,j,k,2)=this%SLFz(i,j,k,2)*KE-0.5_WP*(this%W(i,j,k)*(1.0_WP-this%VF(i,j,k-1))*this%PG(i,j,k-1)+this%W(i,j,k-1)*(1.0_WP-this%VF(i,j,k))*this%PG(i,j,k))
@@ -800,18 +804,18 @@ contains
       ! ================================================================ !
       
       ! Allocate phasic mass, phasic energy, and mixture momentum fluxes
-      allocate(Fx(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_,1:4)); Fx=0.0_WP
-      allocate(Fy(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_,1:4)); Fy=0.0_WP
-      allocate(Fz(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_,1:4)); Fz=0.0_WP
-      allocate(FUX(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
-      allocate(FUY(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
-      allocate(FUZ(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
-      allocate(FVX(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
-      allocate(FVY(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
-      allocate(FVZ(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
-      allocate(FWX(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
-      allocate(FWY(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
-      allocate(FWZ(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
+      allocate(FUX(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))    ; FUX=0.0_WP
+      allocate(FUY(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))    ; FUY=0.0_WP
+      allocate(FUZ(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))    ; FUZ=0.0_WP
+      allocate(FVX(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))    ; FVX=0.0_WP
+      allocate(FVY(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))    ; FVY=0.0_WP
+      allocate(FVZ(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))    ; FVZ=0.0_WP
+      allocate(FWX(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))    ; FWX=0.0_WP
+      allocate(FWY(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))    ; FWY=0.0_WP
+      allocate(FWZ(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))    ; FWZ=0.0_WP
+      allocate(Fx (this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_,1:4)); Fx =0.0_WP
+      allocate(Fy (this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_,1:4)); Fy =0.0_WP
+      allocate(Fz (this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_,1:4)); Fz =0.0_WP
       
       ! Calculate standard (i.e., non-SL) fluxes in the appropriate phase
       do k=this%cfg%kmin_,this%cfg%kmax_+1
