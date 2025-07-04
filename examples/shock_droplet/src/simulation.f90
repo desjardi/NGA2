@@ -151,15 +151,8 @@ contains
       implicit none
       real(WP),                intent(inout) :: VF
       real(WP), dimension(1:), intent(inout) :: Q
-      real(WP), parameter :: Ylo=1.0e-12_WP
-      real(WP) :: YL,YG,PG,PL,ZG,ZL,Pint
+      real(WP) :: PG,PL,ZG,ZL,Pint
       real(WP) :: a,b,d,coeffL,coeffG,Peq,VFeq
-      ! ================== Clean-up extreme minority phases ==================
-      ! Get mass fractions
-      YL=Q(1)/sum(Q(1:2)); YG=Q(2)/sum(Q(1:2))
-      ! Handle limit cases
-      if (YL.le.Ylo) then; VF=0.0_WP; Q(2)=sum(Q(1:2)); Q(1)=0.0_WP; Q(4)=sum(Q(3:4)); Q(3)=0.0_WP; return; end if
-      if (YG.le.Ylo) then; VF=1.0_WP; Q(1)=sum(Q(1:2)); Q(2)=0.0_WP; Q(3)=sum(Q(3:4)); Q(4)=0.0_WP; return; end if
       ! ================ First pass for mechanical relaxation ================
       ! Get phasic pressures
       PL=get_PL(RHO=Q(1)/(       VF),I=Q(3)/Q(1))
