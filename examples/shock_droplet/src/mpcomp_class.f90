@@ -1175,6 +1175,11 @@ contains
                normal(1)=-normal(1)
                normal(2)=-normal(2)
             end if
+            ! Handle lower dimensions exactly
+            if (this%cfg%nx.eq.1) normal(0)=0.0_WP
+            if (this%cfg%ny.eq.1) normal(1)=0.0_WP
+            if (this%cfg%nz.eq.1) normal(2)=0.0_WP
+            normal=normalize(normal)
             ! Locate PLIC plane in cell
             call construct_2pt(cell,[this%cfg%x(i),this%cfg%y(j),this%cfg%z(k)],[this%cfg%x(i+1),this%cfg%y(j+1),this%cfg%z(k+1)])
             initial_dist=dot_product(normal,[this%cfg%xm(i),this%cfg%ym(j),this%cfg%zm(k)])

@@ -153,13 +153,19 @@ contains
       real(WP), dimension(1:), intent(inout) :: Q
       real(WP) :: PG,PL,ZG,ZL,Pint
       real(WP) :: a,b,d,coeffL,coeffG,Peq,VFeq
-      ! ================ First pass for mechanical relaxation ================
+      ! ================ First step for mechanical relaxation ================
       ! Get phasic pressures
       PL=get_PL(RHO=Q(1)/(       VF),I=Q(3)/Q(1))
       PG=get_PG(RHO=Q(2)/(1.0_WP-VF),I=Q(4)/Q(2))
-      ! Handle limit cases - should mass/energy be tranasfered or lost?
-      if (PL.le.-PinfL) then; VF=0.0_WP; Q(2)=sum(Q(1:2)); Q(1)=0.0_WP; Q(4)=sum(Q(3:4)); Q(3)=0.0_WP; return; end if
-      if (PG.le.-PinfG) then; VF=1.0_WP; Q(1)=sum(Q(1:2)); Q(2)=0.0_WP; Q(3)=sum(Q(3:4)); Q(4)=0.0_WP; return; end if
+      ! Handle limit cases - should mass/energy be tranasfered or lost? - this should probably never happen...
+      if (PL.le.-PinfL) then
+         print*,"****************** LIQUID CLIPPED!"
+         VF=0.0_WP; Q(2)=sum(Q(1:2)); Q(1)=0.0_WP; Q(4)=sum(Q(3:4)); Q(3)=0.0_WP; return
+      end if
+      if (PG.le.-PinfG) then
+         print*,"****************** GAS CLIPPED!",time%t
+         VF=1.0_WP; Q(1)=sum(Q(1:2)); Q(2)=0.0_WP; Q(3)=sum(Q(3:4)); Q(4)=0.0_WP; return
+      end if
       ! Get phasic impedances
       ZL=Q(1)/(       VF)*get_CL(RHO=Q(1)/(       VF),P=PL)**2
       ZG=Q(2)/(1.0_WP-VF)*get_CG(RHO=Q(2)/(1.0_WP-VF),P=PG)**2
@@ -179,7 +185,7 @@ contains
       Q(3)=Q(3)-0.5_WP*(Pint+Peq)*(VFeq-VF)
       Q(4)=Q(4)+0.5_WP*(Pint+Peq)*(VFeq-VF)
       VF=VFeq
-      ! ================= Second pass for thermal relaxation =================
+      ! ================= Second step for thermal relaxation =================
       ! Setup quadratic problem
       a=Q(1)*CvL+Q(2)*CvG
       b=Q(1)*CvL*(GammaL*PinfL+PinfG)+Q(2)*CvG*(GammaG*PinfG+PinfL)-sum(Q(3:4))*(Q(1)*CvL*(GammaL-1.0_WP)+Q(2)*CvG*(GammaG-1.0_WP))
@@ -188,10 +194,15 @@ contains
       Peq=(-b+sqrt(b**2-4.0_WP*a*d))/(2.0_WP*a)
       ! Get equilibrium volume fraction
       VFeq=Q(1)*CvL*(GammaL-1.0_WP)*(Peq+PinfG)/(Q(1)*CvL*(GammaL-1.0_WP)*(Peq+PinfG)+Q(2)*CvG*(GammaG-1.0_WP)*(Peq+PinfL))
+      ! Clean up solution
+      if (VFeq.lt.0.0_WP) then; VFeq=0.0_WP; Peq=max(Peq,-PinfL); end if
+      if (VFeq.gt.1.0_WP) then; VFeq=1.0_WP; Peq=max(Peq,-PinfG); end if
       ! Adjust conserved quantities
       Q(3)=(       VFeq)*(Peq+GammaL*PinfL)/(GammaL-1.0_WP)
       Q(4)=(1.0_WP-VFeq)*(Peq+GammaG*PinfG)/(GammaG-1.0_WP)
       VF=VFeq
+      ! Last debugging check... Probably should never happen...
+      if (Peq.lt.-PinfG) print*,"****************** NEGATIVE PRESSURE! - time",time%t,"VFeq",VFeq,"Peq",Peq
    end subroutine PT_relax
    
    
@@ -200,8 +211,8 @@ contains
       use param, only: param_read
       implicit none
       
-      ! Initialize eos and flow conditions
-      initialize_conditions: block
+      ! Initialize eos and flow parameters
+      initialize_parameters: block
          use string,   only: str_long
          use messager, only: log
          character(str_long) :: message
@@ -256,7 +267,7 @@ contains
             write(message,'("[Density ratio]      => rhoL/rho1=",es12.5)') rho_ratio; call log(message)
             write(message,'("[Sound speed ratio]  =>     cl/c1=",es12.5)')   c_ratio; call log(message)
          end if
-      end block initialize_conditions
+      end block initialize_parameters
       
       ! Initialize time tracker
       initialize_timetracker: block
