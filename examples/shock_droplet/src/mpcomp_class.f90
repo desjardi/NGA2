@@ -1758,11 +1758,11 @@ contains
          dwdy=0.25_WP*this%dyi*sum(this%W(i,j:j+1,k:k+1)-this%W(i,j-1:j,k:k+1))
          vort=(dwdy-dvdz)**2+(dudz-dwdx)**2+(dvdx-dudy)**2
          ! Compute |grad(div)|
-         grad_div=max(abs(this%dxi*(div(i+1,j,k)-div(i,j,k))),abs(this%dxi*(div(i,j,k)-div(i-1,j,k))))*this%dx**3&
-         &       +max(abs(this%dyi*(div(i,j+1,k)-div(i,j,k))),abs(this%dyi*(div(i,j,k)-div(i,j-1,k))))*this%dy**3&
-         &       +max(abs(this%dzi*(div(i,j,k+1)-div(i,j,k))),abs(this%dzi*(div(i,j,k)-div(i,j,k-1))))*this%dz**3
+         grad_div=max(abs(div(i+1,j,k)-div(i,j,k)),abs(div(i,j,k)-div(i-1,j,k)))*this%dx**2&
+         &       +max(abs(div(i,j+1,k)-div(i,j,k)),abs(div(i,j,k)-div(i,j-1,k)))*this%dy**2&
+         &       +max(abs(div(i,j,k+1)-div(i,j,k)),abs(div(i,j,k)-div(i,j,k-1)))*this%dz**2
          ! Estimate artificial kinematic viscosity using grad(div)
-         beta(i,j,k)=Cartif*grad_div*div(i,j,k)**2/(div(i,j,k)**2+Cartif_vort*vort)
+         beta(i,j,k)=Cartif*grad_div*div(i,j,k)**2/(div(i,j,k)**2+Cartif_vort*vort+1.0e-15_WP)
          ! Clip it so CFL<max_CFL
          beta(i,j,k)=min(beta(i,j,k),max_beta)
       end do; end do; end do

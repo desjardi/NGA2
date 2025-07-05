@@ -282,11 +282,11 @@ contains
       ! Allocate work arrays
       allocate_work_arrays: block
          allocate(dQdt(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_,1:fs%nQ,1:4))
+         allocate(visc(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
          allocate(Ui(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
          allocate(Vi(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
          allocate(Wi(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
          allocate(Ma(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
-         allocate(visc(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
       end block allocate_work_arrays
       
       ! Prepare initial conditions
@@ -488,16 +488,13 @@ contains
          ! Tag cells for semi-Lagrangian transport
          call fs%SLtag()
          
-         ! Prepare artificial viscosity
-         call fs%get_viscartif(dt=time%dtmax,beta=visc)
-         
          ! Perform first semi-Lagrangian transport step =====================================================
          call fs%SLstep(dt=0.5_WP*time%dt,U=fs%U,V=fs%V,W=fs%W)
          !call fs%build_interface()
          
          ! First RK step ====================================================================================
          ! Apply artificial viscosity
-         fs%BETAL=fs%Q(:,:,:,1)*visc; fs%BETAG=fs%Q(:,:,:,2)*visc
+         call fs%get_viscartif(dt=time%dtmax,beta=visc); fs%BETAL=fs%Q(:,:,:,1)*visc; fs%BETAG=fs%Q(:,:,:,2)*visc
          ! Get non-SL RHS and increment
          call fs%rhs(dQdt(:,:,:,:,1))
          fs%Q=fs%Qold+0.5_WP*time%dt*dQdt(:,:,:,:,1)
@@ -508,7 +505,7 @@ contains
          
          ! Second RK step ===================================================================================
          ! Apply artificial viscosity
-         fs%BETAL=fs%Q(:,:,:,1)*visc; fs%BETAG=fs%Q(:,:,:,2)*visc
+         call fs%get_viscartif(dt=time%dtmax,beta=visc); fs%BETAL=fs%Q(:,:,:,1)*visc; fs%BETAG=fs%Q(:,:,:,2)*visc
          ! Get non-SL RHS and increment
          call fs%rhs(dQdt(:,:,:,:,2))
          fs%Q=fs%Qold+0.5_WP*time%dt*dQdt(:,:,:,:,2)
@@ -523,7 +520,7 @@ contains
          
          ! Third RK step ====================================================================================
          ! Apply artificial viscosity
-         fs%BETAL=fs%Q(:,:,:,1)*visc; fs%BETAG=fs%Q(:,:,:,2)*visc
+         call fs%get_viscartif(dt=time%dtmax,beta=visc); fs%BETAL=fs%Q(:,:,:,1)*visc; fs%BETAG=fs%Q(:,:,:,2)*visc
          ! Get non-SL RHS and increment
          call fs%rhs(dQdt(:,:,:,:,3))
          fs%Q=fs%Qold+1.0_WP*time%dt*dQdt(:,:,:,:,3)
@@ -534,7 +531,7 @@ contains
          
          ! Fourth RK step ===================================================================================
          ! Apply artificial viscosity
-         fs%BETAL=fs%Q(:,:,:,1)*visc; fs%BETAG=fs%Q(:,:,:,2)*visc
+         call fs%get_viscartif(dt=time%dtmax,beta=visc); fs%BETAL=fs%Q(:,:,:,1)*visc; fs%BETAG=fs%Q(:,:,:,2)*visc
          ! Get non-SL RHS and increment
          call fs%rhs(dQdt(:,:,:,:,4))
          fs%Q=fs%Qold+time%dt/6.0_WP*(dQdt(:,:,:,:,1)+2.0_WP*dQdt(:,:,:,:,2)+2.0_WP*dQdt(:,:,:,:,3)+dQdt(:,:,:,:,4))
