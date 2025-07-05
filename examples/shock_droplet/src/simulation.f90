@@ -25,7 +25,7 @@ module simulation
    
    !> Private work arrays
    real(WP), dimension(:,:,:,:,:), allocatable :: dQdt
-   real(WP), dimension(:,:,:)    , allocatable :: Ui,Vi,Wi,Ma
+   real(WP), dimension(:,:,:)    , allocatable :: Ui,Vi,Wi,Ma,visc
    
    !> Equations of state
    real(WP) :: PinfL,GammaL,CvL
@@ -286,6 +286,7 @@ contains
          allocate(Vi(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
          allocate(Wi(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
          allocate(Ma(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+         allocate(visc(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
       end block allocate_work_arrays
       
       ! Prepare initial conditions
@@ -358,6 +359,7 @@ contains
          call ens_out%add_scalar('PL',fs%PL)
          call ens_out%add_scalar('PG',fs%PG)
          call ens_out%add_scalar('Mach',Ma)
+         call ens_out%add_scalar('visc',visc)
          ! Create surface mesh for PLIC
          smesh=surfmesh(nvar=0,name='plic')
          call fs%update_surfmesh(smesh)
@@ -486,11 +488,16 @@ contains
          ! Tag cells for semi-Lagrangian transport
          call fs%SLtag()
          
+         ! Prepare artificial viscosity
+         call fs%get_viscartif(dt=time%dtmax,beta=visc)
+         
          ! Perform first semi-Lagrangian transport step =====================================================
          call fs%SLstep(dt=0.5_WP*time%dt,U=fs%U,V=fs%V,W=fs%W)
          !call fs%build_interface()
          
          ! First RK step ====================================================================================
+         ! Apply artificial viscosity
+         fs%BETAL=fs%Q(:,:,:,1)*visc; fs%BETAG=fs%Q(:,:,:,2)*visc
          ! Get non-SL RHS and increment
          call fs%rhs(dQdt(:,:,:,:,1))
          fs%Q=fs%Qold+0.5_WP*time%dt*dQdt(:,:,:,:,1)
@@ -500,6 +507,8 @@ contains
          call fs%get_primitive()
          
          ! Second RK step ===================================================================================
+         ! Apply artificial viscosity
+         fs%BETAL=fs%Q(:,:,:,1)*visc; fs%BETAG=fs%Q(:,:,:,2)*visc
          ! Get non-SL RHS and increment
          call fs%rhs(dQdt(:,:,:,:,2))
          fs%Q=fs%Qold+0.5_WP*time%dt*dQdt(:,:,:,:,2)
@@ -513,6 +522,8 @@ contains
          call fs%build_interface()
          
          ! Third RK step ====================================================================================
+         ! Apply artificial viscosity
+         fs%BETAL=fs%Q(:,:,:,1)*visc; fs%BETAG=fs%Q(:,:,:,2)*visc
          ! Get non-SL RHS and increment
          call fs%rhs(dQdt(:,:,:,:,3))
          fs%Q=fs%Qold+1.0_WP*time%dt*dQdt(:,:,:,:,3)
@@ -522,6 +533,8 @@ contains
          call fs%get_primitive()
          
          ! Fourth RK step ===================================================================================
+         ! Apply artificial viscosity
+         fs%BETAL=fs%Q(:,:,:,1)*visc; fs%BETAG=fs%Q(:,:,:,2)*visc
          ! Get non-SL RHS and increment
          call fs%rhs(dQdt(:,:,:,:,4))
          fs%Q=fs%Qold+time%dt/6.0_WP*(dQdt(:,:,:,:,1)+2.0_WP*dQdt(:,:,:,:,2)+2.0_WP*dQdt(:,:,:,:,3)+dQdt(:,:,:,:,4))
@@ -568,7 +581,7 @@ contains
    subroutine simulation_final
       implicit none
       ! Deallocate work arrays
-      deallocate(dQdt,Ui,Vi,Wi,Ma)
+      deallocate(dQdt,Ui,Vi,Wi,Ma,visc)
    end subroutine simulation_final
    
    
