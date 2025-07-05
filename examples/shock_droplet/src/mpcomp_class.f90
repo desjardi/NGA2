@@ -1726,12 +1726,13 @@ contains
       class(mpcomp), intent(inout) :: this
       real(WP), intent(in) :: dt
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(out) :: beta
-      integer :: i,j,k
+      integer :: i,j,k,si,sj,sk
       real(WP) :: max_beta,dudy,dudz,dvdx,dvdz,dwdx,dwdy,vort,grad_div
       real(WP), parameter :: max_cfl=1.0_WP
       real(WP), parameter :: Cartif=2.0_WP
       real(WP), parameter :: Cartif_vort=100.0_WP
       real(WP), dimension(:,:,:), allocatable :: div
+      real(WP), dimension(-1:+1), parameter :: filter=[1.0_WP/6.0_WP,2.0_WP/3.0_WP,1.0_WP/6.0_WP]
       ! Zero out array
       beta=0.0_WP
       ! Calculate max beta permissible
@@ -1765,6 +1766,27 @@ contains
          beta(i,j,k)=Cartif*grad_div*div(i,j,k)**2/(div(i,j,k)**2+Cartif_vort*vort+1.0e-15_WP)
          ! Clip it so CFL<max_CFL
          beta(i,j,k)=min(beta(i,j,k),max_beta)
+      end do; end do; end do
+      call this%cfg%sync(beta)
+      if (.not.this%cfg%xper) then
+         if (this%cfg%iproc.eq.1)            beta(this%cfg%imin-1,:,:)=beta(this%cfg%imin,:,:)
+         if (this%cfg%iproc.eq.this%cfg%npx) beta(this%cfg%imax+1,:,:)=beta(this%cfg%imax,:,:)
+      end if
+      if (.not.this%cfg%yper) then
+         if (this%cfg%jproc.eq.1)            beta(:,this%cfg%jmin-1,:)=beta(:,this%cfg%jmin,:)
+         if (this%cfg%jproc.eq.this%cfg%npy) beta(:,this%cfg%jmax+1,:)=beta(:,this%cfg%jmax,:)
+      end if
+      if (.not.this%cfg%zper) then
+         if (this%cfg%kproc.eq.1)            beta(:,:,this%cfg%kmin-1)=beta(:,:,this%cfg%kmin)
+         if (this%cfg%kproc.eq.this%cfg%npz) beta(:,:,this%cfg%kmax+1)=beta(:,:,this%cfg%kmax)
+      end if
+      ! Filter beta
+      div=beta
+      do k=this%cfg%kmin_,this%cfg%kmax_; do j=this%cfg%jmin_,this%cfg%jmax_; do i=this%cfg%imin_,this%cfg%imax_
+         beta(i,j,k)=0.0_WP
+         do sk=-1,+1; do sj=-1,+1; do si=-1,+1
+            beta(i,j,k)=beta(i,j,k)+filter(si)*filter(sj)*filter(sk)*div(i+si,j+sj,k+sk)
+         end do; end do; end do
       end do; end do; end do
       call this%cfg%sync(beta)
       if (.not.this%cfg%xper) then

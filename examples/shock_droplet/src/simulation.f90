@@ -122,8 +122,8 @@ contains
       PL=get_PL(RHO=Q(1)/(       VF),I=Q(3)/Q(1))
       PG=get_PG(RHO=Q(2)/(1.0_WP-VF),I=Q(4)/Q(2))
       ! Handle limit cases
-      if (PL.le.-PinfL) then; VF=0.0_WP; Q(4)=Q(3)+Q(4); Q(3)=0.0_WP; return; end if
-      if (PG.le.-PinfG) then; VF=1.0_WP; Q(3)=Q(3)+Q(4); Q(4)=0.0_WP; return; end if
+      if (PL.le.-PinfL) then; VF=0.0_WP; Q(2)=sum(Q(1:2)); Q(1)=0.0_WP; Q(4)=sum(Q(3:4)); Q(3)=0.0_WP; return; end if
+      if (PG.le.-PinfG) then; VF=1.0_WP; Q(1)=sum(Q(1:2)); Q(2)=0.0_WP; Q(3)=sum(Q(3:4)); Q(4)=0.0_WP; return; end if
       ! Get phasic impedances
       ZL=Q(1)/(       VF)*get_CL(RHO=Q(1)/(       VF),P=PL)**2
       ZG=Q(2)/(1.0_WP-VF)*get_CG(RHO=Q(2)/(1.0_WP-VF),P=PG)**2
@@ -157,7 +157,7 @@ contains
       ! Get phasic pressures
       PL=get_PL(RHO=Q(1)/(       VF),I=Q(3)/Q(1))
       PG=get_PG(RHO=Q(2)/(1.0_WP-VF),I=Q(4)/Q(2))
-      ! Handle limit cases
+      ! Handle limit cases - should mass/energy be tranasfered or lost?
       if (PL.le.-PinfL) then; VF=0.0_WP; Q(2)=sum(Q(1:2)); Q(1)=0.0_WP; Q(4)=sum(Q(3:4)); Q(3)=0.0_WP; return; end if
       if (PG.le.-PinfG) then; VF=1.0_WP; Q(1)=sum(Q(1:2)); Q(2)=0.0_WP; Q(3)=sum(Q(3:4)); Q(4)=0.0_WP; return; end if
       ! Get phasic impedances
@@ -488,13 +488,14 @@ contains
          ! Tag cells for semi-Lagrangian transport
          call fs%SLtag()
          
+         ! Apply artificial viscosity
+         call fs%get_viscartif(dt=time%dtmax,beta=visc); fs%BETAL=fs%Q(:,:,:,1)*visc; fs%BETAG=fs%Q(:,:,:,2)*visc
+
          ! Perform first semi-Lagrangian transport step =====================================================
          call fs%SLstep(dt=0.5_WP*time%dt,U=fs%U,V=fs%V,W=fs%W)
          !call fs%build_interface()
          
          ! First RK step ====================================================================================
-         ! Apply artificial viscosity
-         call fs%get_viscartif(dt=time%dtmax,beta=visc); fs%BETAL=fs%Q(:,:,:,1)*visc; fs%BETAG=fs%Q(:,:,:,2)*visc
          ! Get non-SL RHS and increment
          call fs%rhs(dQdt(:,:,:,:,1))
          fs%Q=fs%Qold+0.5_WP*time%dt*dQdt(:,:,:,:,1)
@@ -504,8 +505,6 @@ contains
          call fs%get_primitive()
          
          ! Second RK step ===================================================================================
-         ! Apply artificial viscosity
-         call fs%get_viscartif(dt=time%dtmax,beta=visc); fs%BETAL=fs%Q(:,:,:,1)*visc; fs%BETAG=fs%Q(:,:,:,2)*visc
          ! Get non-SL RHS and increment
          call fs%rhs(dQdt(:,:,:,:,2))
          fs%Q=fs%Qold+0.5_WP*time%dt*dQdt(:,:,:,:,2)
@@ -519,8 +518,6 @@ contains
          call fs%build_interface()
          
          ! Third RK step ====================================================================================
-         ! Apply artificial viscosity
-         call fs%get_viscartif(dt=time%dtmax,beta=visc); fs%BETAL=fs%Q(:,:,:,1)*visc; fs%BETAG=fs%Q(:,:,:,2)*visc
          ! Get non-SL RHS and increment
          call fs%rhs(dQdt(:,:,:,:,3))
          fs%Q=fs%Qold+1.0_WP*time%dt*dQdt(:,:,:,:,3)
@@ -530,8 +527,6 @@ contains
          call fs%get_primitive()
          
          ! Fourth RK step ===================================================================================
-         ! Apply artificial viscosity
-         call fs%get_viscartif(dt=time%dtmax,beta=visc); fs%BETAL=fs%Q(:,:,:,1)*visc; fs%BETAG=fs%Q(:,:,:,2)*visc
          ! Get non-SL RHS and increment
          call fs%rhs(dQdt(:,:,:,:,4))
          fs%Q=fs%Qold+time%dt/6.0_WP*(dQdt(:,:,:,:,1)+2.0_WP*dQdt(:,:,:,:,2)+2.0_WP*dQdt(:,:,:,:,3)+dQdt(:,:,:,:,4))
