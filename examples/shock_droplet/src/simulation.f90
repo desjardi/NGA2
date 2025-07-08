@@ -245,8 +245,8 @@ contains
          PinfL=p1*(rho_ratio*c_ratio**2*GammaG/GammaL-1.0_WP)
          ML=u2/sqrt(GammaL*(p1+PinfL)/rhoL)
          ! Set heat capacities corresponding to a normalized pre-shock and liquid temperature
-         CvL=(p2+PinfL)/(rhoL*(GammaL-1.0_WP))
-         CvG=(p2+PinfG)/(rho2*(GammaG-1.0_WP))
+         CvL=(p1+PinfL)/(rhoL*(GammaL-1.0_WP))
+         CvG=(p1+PinfG)/(rho1*(GammaG-1.0_WP))
          ! Output case info
          if (cfg%amRoot) then
             write(message,'("[Liquid EOS] => Gamma=",es12.5)') GammaL; call log(message)
@@ -287,7 +287,7 @@ contains
          ! Provide entropy calculation functions
          fs%getSL=>get_SL; fs%getSG=>get_SG
          ! Provide temperature calculation functions
-         !fs%getTL=>get_TL; fs%getTG=>get_TG
+         fs%getTL=>get_TL; fs%getTG=>get_TG
       end block create_velocity_solver
       
       ! Allocate work arrays
@@ -318,19 +318,19 @@ contains
                   call initialize_volume_moments(lo=[cfg%x(i),cfg%y(j),cfg%z(k)],hi=[cfg%x(i+1),cfg%y(j+1),cfg%z(k+1)],&
                   levelset=levelset_drop,time=0.0_WP,level=4,VFlo=VFlo,VF=fs%VF(i,j,k),BL=fs%BL(:,i,j,k),BG=fs%BG(:,i,j,k))
                   ! Initialize mixture velocity to normal shock
-                  fs%U(i,j,k)=u2!*Hshock(Xs-cfg%x(i),delta=0.5_WP*fs%dx)
+                  fs%U(i,j,k)=u2*Hshock(Xs-cfg%x(i),delta=0.5_WP*fs%dx)
                   fs%V(i,j,k)=0.0_WP
                   fs%W(i,j,k)=0.0_WP
                   ! Gas variables
                   if (fs%VF(i,j,k).lt.1.0_WP) then
-                     fs%RHOG(i,j,k)=rho2!rho1+(rho2-rho1)*Hshock(Xs-cfg%xm(i),delta=0.5_WP*fs%dx)
-                     fs%PG  (i,j,k)=p2!p1  +(p2  -p1  )*Hshock(Xs-cfg%xm(i),delta=0.5_WP*fs%dx)
+                     fs%RHOG(i,j,k)=rho1+(rho2-rho1)*Hshock(Xs-cfg%xm(i),delta=0.5_WP*fs%dx)
+                     fs%PG  (i,j,k)=p1  +(p2  -p1  )*Hshock(Xs-cfg%xm(i),delta=0.5_WP*fs%dx)
                      fs%IG  (i,j,k)=(fs%PG(i,j,k)+GammaG*PinfG)/(fs%RHOG(i,j,k)*(GammaG-1.0_WP))
                   end if
                   ! Liquid variables
                   if (fs%VF(i,j,k).gt.0.0_WP) then
                      fs%RHOL(i,j,k)=rhoL
-                     fs%PL  (i,j,k)=p2!p1
+                     fs%PL  (i,j,k)=p1
                      fs%IL  (i,j,k)=(fs%PL(i,j,k)+GammaL*PinfL)/(fs%RHOL(i,j,k)*(GammaL-1.0_WP))
                   end if
                end do
@@ -483,8 +483,8 @@ contains
          fs%Qold=fs%Q
          
          ! Remember phasic quantities
-         fs%RHOLold=fs%RHOL; fs%ILold=fs%IL
-         fs%RHOGold=fs%RHOG; fs%IGold=fs%IG
+         fs%RHOLold=fs%RHOL; fs%ILold=fs%IL; fs%PLold=fs%PL
+         fs%RHOGold=fs%RHOG; fs%IGold=fs%IG; fs%PGold=fs%PG
          
          ! Remember volume moments and interface
          fs%VFold=fs%VF
@@ -507,7 +507,7 @@ contains
          !call fs%get_vreman   (dt=time%dt,visc=visc); fs%VISCG=fs%Q(:,:,:,2)*visc!; fs%VISCL=fs%Q(:,:,:,1)*visc
          
          !fs%VISC=(fs%Q(:,:,:,1)+fs%Q(:,:,:,2))*0.001_WP
-         fs%VISC=(fs%Q(:,:,:,2))*0.001_WP
+         !fs%VISC=(fs%Q(:,:,:,2))*0.001_WP
          
          ! Perform first semi-Lagrangian transport step =====================================================
          call fs%SLstep(dt=0.5_WP*time%dt,U=fs%U,V=fs%V,W=fs%W)
