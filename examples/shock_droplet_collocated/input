@@ -22,7 +22,7 @@ Shock Mach number :  5.12
 Shock location :    -2
 
 # Time integration
-Max timestep size : 5e-3
+Max timestep size : 2.5e-3
 Max cfl number :    0.9
 Max time :          20
 
