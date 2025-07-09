@@ -73,8 +73,8 @@ module mpcomp_class
       ! Mixture speed of sound
       real(WP), dimension(:,:,:), allocatable :: C
       
-      ! Viscosities and heat diffusivities
-      real(WP), dimension(:,:,:), allocatable :: VISC,BETA
+      ! Mixture viscosities and heat diffusivities
+      real(WP), dimension(:,:,:), allocatable :: VISC,BETA,DIFF
       
       ! Gravitational acceleration
       real(WP), dimension(3) :: gravity=0.0_WP
@@ -278,9 +278,10 @@ contains
       ! Mixture speed of sound
       allocate(this%C(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_)); this%C=0.0_WP
       
-      ! Fluid viscosities and heat diffusivity
+      ! Mixture viscosities and heat diffusivity
       allocate(this%VISC(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_)); this%VISC=0.0_WP
       allocate(this%BETA(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_)); this%BETA=0.0_WP
+      allocate(this%DIFF(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_)); this%DIFF=0.0_WP
       
    end subroutine initialize
    
@@ -632,7 +633,7 @@ contains
       
       ! Synchronize pressures
       call this%cfg%sync(this%PL); call this%cfg%sync(this%PG)
-
+      
       ! Fix barycenter synchronization across periodic boundaries
       if (this%cfg%xper.and.this%cfg%iproc.eq.1           ) then; do k=this%cfg%kmino_,this%cfg%kmaxo_; do j=this%cfg%jmino_,this%cfg%jmaxo_; do i=this%cfg%imino,this%cfg%imin-1
          this%BL(1,i,j,k)=this%BL(1,i,j,k)-this%cfg%xL; this%BG(1,i,j,k)=this%BG(1,i,j,k)-this%cfg%xL
@@ -703,11 +704,15 @@ contains
       implicit none
       class(mpcomp), intent(inout) :: this
       integer  :: i,j,k,n
-      real(WP), dimension(:,:,:), allocatable :: FUX,FUY,FUZ,FVX,FVY,FVZ,FWX,FWY,FWZ
+      real(WP), dimension(:,:,:), allocatable :: FUX,FUY,FUZ,FVX,FVY,FVZ,FWX,FWY,FWZ,FIX,FIY,FIZ
       real(WP) :: div
       
       ! Start rhs timer
       call this%trhs%start()
+      
+      ! ================================================================ !
+      ! ======================== INVISID FLUXES ======================== !
+      ! ================================================================ !
       
       ! Allocate mixture momentum fluxes
       allocate(FUX(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
@@ -771,8 +776,71 @@ contains
          end do
       end do
       
+      ! ================================================================ !
+      ! ======================== VISCOUS  FLUXES ======================= !
+      ! ================================================================ !
+      
+      ! Allocate viscous energy fluxes
+      allocate(FIX(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
+      allocate(FIY(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
+      allocate(FIZ(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
+      
+      ! Zero out all fluxes
+      FIX=0.0_WP; FUX=0.0_WP; FVX=0.0_WP; FWX=0.0_WP
+      FIY=0.0_WP; FUY=0.0_WP; FVY=0.0_WP; FWY=0.0_WP
+      FIZ=0.0_WP; FUZ=0.0_WP; FVZ=0.0_WP; FWZ=0.0_WP
+      
+      ! Compute cell-centered momentum viscous fluxes
+      do k=this%cfg%kmin_-1,this%cfg%kmax_
+         do j=this%cfg%jmin_-1,this%cfg%jmax_
+            do i=this%cfg%imin_-1,this%cfg%imax_
+               if (this%iSL(i,j,k).gt.0) then
+                  div=this%dxi*(this%U(i+1,j,k)-this%U(i,j,k))+this%dyi*(this%V(i,j+1,k)-this%V(i,j,k))+this%dzi*(this%W(i,j,k+1)-this%W(i,j,k))
+                  FUX(i,j,k)=(2.0_WP*this%VISC(i,j,k)*this%dxi*(this%U(i+1,j,k)-this%U(i,j,k))+(this%BETA(i,j,k)-2.0_WP*this%VISC(i,j,k)/3.0_WP)*div)
+                  FVY(i,j,k)=(2.0_WP*this%VISC(i,j,k)*this%dyi*(this%V(i,j+1,k)-this%V(i,j,k))+(this%BETA(i,j,k)-2.0_WP*this%VISC(i,j,k)/3.0_WP)*div)
+                  FWZ(i,j,k)=(2.0_WP*this%VISC(i,j,k)*this%dzi*(this%W(i,j,k+1)-this%W(i,j,k))+(this%BETA(i,j,k)-2.0_WP*this%VISC(i,j,k)/3.0_WP)*div)
+               end if
+            end do
+         end do
+      end do
+      
+      ! Compute edge-centered momentum viscous fluxes and corresponding viscous heating
+      do k=this%cfg%kmin_,this%cfg%kmax_+1
+         do j=this%cfg%jmin_,this%cfg%jmax_+1
+            do i=this%cfg%imin_,this%cfg%imax_+1
+               if (maxval(this%iSL(i-1:i,j-1:j,k)).gt.0) then
+                  FUY(i,j,k)=0.25_WP*sum(this%VISC(i-1:i,j-1:j,k))*(this%dyi*(this%U(i,j,k)-this%U(i,j-1,k))+this%dxi*(this%V(i,j,k)-this%V(i-1,j,k))); FVX(i,j,k)=FUY(i,j,k)
+                  FIZ(i,j,k)=FUY(i,j,k)*(this%dyi*(this%U(i,j,k)-this%U(i,j-1,k))+this%dxi*(this%V(i,j,k)-this%V(i-1,j,k)))
+               end if
+               if (maxval(this%iSL(i,j-1:j,k-1:k)).gt.0) then
+                  FVZ(i,j,k)=0.25_WP*sum(this%VISC(i,j-1:j,k-1:k))*(this%dzi*(this%V(i,j,k)-this%V(i,j,k-1))+this%dyi*(this%W(i,j,k)-this%W(i,j-1,k))); FWY(i,j,k)=FVZ(i,j,k)
+                  FIX(i,j,k)=FVZ(i,j,k)*(this%dzi*(this%V(i,j,k)-this%V(i,j,k-1))+this%dyi*(this%W(i,j,k)-this%W(i,j-1,k)))
+               end if
+               if (maxval(this%iSL(i-1:i,j,k-1:k)).gt.0) then
+                  FUZ(i,j,k)=0.25_WP*sum(this%VISC(i-1:i,j,k-1:k))*(this%dxi*(this%W(i,j,k)-this%W(i-1,j,k))+this%dzi*(this%U(i,j,k)-this%U(i,j,k-1))); FWX(i,j,k)=FUZ(i,j,k)
+                  FIY(i,j,k)=FUZ(i,j,k)*(this%dxi*(this%W(i,j,k)-this%W(i-1,j,k))+this%dzi*(this%U(i,j,k)-this%U(i,j,k-1)))
+               end if
+            end do
+         end do
+      end do
+      
+      ! Increment conserved variables
+      do k=this%cfg%kmin_,this%cfg%kmax_
+         do j=this%cfg%jmin_,this%cfg%jmax_
+            do i=this%cfg%imin_,this%cfg%imax_
+               ! Viscous momentum transport
+               this%Q(i,j,k,5)=this%Q(i,j,k,5)+this%SLdt*(this%dxi*(FUX(i  ,j,k)-FUX(i-1,j,k))+this%dyi*(FUY(i,j+1,k)-FUY(i,j  ,k))+this%dzi*(FUZ(i,j,k+1)-FUZ(i,j,k  )))
+               this%Q(i,j,k,6)=this%Q(i,j,k,6)+this%SLdt*(this%dxi*(FVX(i+1,j,k)-FVX(i  ,j,k))+this%dyi*(FVY(i,j  ,k)-FVY(i,j-1,k))+this%dzi*(FVZ(i,j,k+1)-FVZ(i,j,k  )))
+               this%Q(i,j,k,7)=this%Q(i,j,k,7)+this%SLdt*(this%dxi*(FWX(i+1,j,k)-FWX(i  ,j,k))+this%dyi*(FWY(i,j+1,k)-FWY(i,j  ,k))+this%dzi*(FWZ(i,j,k  )-FWZ(i,j,k-1)))
+               ! Distribute viscous heating term based on VF
+               this%Q(i,j,k,3)=this%Q(i,j,k,3)+this%SLdt*(       this%VF(i,j,k))*((FUX(i,j,k)*this%dxi*(this%U(i+1,j,k)-this%U(i,j,k))+FVY(i,j,k)*this%dyi*(this%V(i,j+1,k)-this%V(i,j,k))+FWZ(i,j,k)*this%dzi*(this%W(i,j,k+1)-this%W(i,j,k))+0.25_WP*sum(FIZ(i:i+1,j:j+1,k))+0.25_WP*sum(FIX(i,j:j+1,k:k+1))+0.25_WP*sum(FIY(i:i+1,j,k:k+1))))
+               this%Q(i,j,k,3)=this%Q(i,j,k,3)+this%SLdt*(1.0_WP-this%VF(i,j,k))*((FUX(i,j,k)*this%dxi*(this%U(i+1,j,k)-this%U(i,j,k))+FVY(i,j,k)*this%dyi*(this%V(i,j+1,k)-this%V(i,j,k))+FWZ(i,j,k)*this%dzi*(this%W(i,j,k+1)-this%W(i,j,k))+0.25_WP*sum(FIZ(i:i+1,j:j+1,k))+0.25_WP*sum(FIX(i,j:j+1,k:k+1))+0.25_WP*sum(FIY(i:i+1,j,k:k+1))))
+            end do
+         end do
+      end do
+      
       ! Deallocate all flux arrays
-      deallocate(FUX,FUY,FUZ,FVX,FVY,FVZ,FWX,FWY,FWZ)
+      deallocate(FUX,FUY,FUZ,FVX,FVY,FVZ,FWX,FWY,FWZ,FIX,FIY,FIZ)
       
       ! Synchronize all Q fields
       do n=1,this%nQ; call this%cfg%sync(this%Q(:,:,:,n)); end do
@@ -789,7 +857,7 @@ contains
       class(mpcomp), intent(inout) :: this
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:,1:), intent(out) :: dQdt  !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_,1:nVAR)
       real(WP), dimension(:,:,:,:), allocatable :: Fx,Fy,Fz
-      real(WP), dimension(:,:,:)  , allocatable :: FUX,FUY,FUZ,FVX,FVY,FVZ,FWX,FWY,FWZ
+      real(WP), dimension(:,:,:)  , allocatable :: FUX,FUY,FUZ,FVX,FVY,FVZ,FWX,FWY,FWZ,FIX,FIY,FIZ
       integer :: i,j,k,n
       real(WP) :: w,div
       real(WP), parameter :: eps=1.0e-15_WP
@@ -928,7 +996,7 @@ contains
                FVY(i,j,k)=0.25_WP*sum(Fy(i,j:j+1,k,1:2))*sum(this%V(i,j:j+1,k))
                FWZ(i,j,k)=0.25_WP*sum(Fz(i,j,k:k+1,1:2))*sum(this%W(i,j,k:k+1))
                ! Add pressure fluxes in non-SL cells
-               if (this%iSL(i,j,k).eq.0.and.this%VF(i,j,k).gt.0.5_WP) then
+               if (this%iSL(i,j,k).eq.0.and.this%VF(i,j,k).ge.0.5_WP) then
                   FUX(i,j,k)=FUX(i,j,k)-this%PL(i,j,k)
                   FVY(i,j,k)=FVY(i,j,k)-this%PL(i,j,k)
                   FWZ(i,j,k)=FWZ(i,j,k)-this%PL(i,j,k)
@@ -963,7 +1031,7 @@ contains
                ! Phasic mass and phasic internal energy advection
                dQdt(i,j,k,1:4)=this%dxi*(Fx(i+1,j,k,1:4)-Fx(i,j,k,1:4))+this%dyi*(Fy(i,j+1,k,1:4)-Fy(i,j,k,1:4))+this%dzi*(Fz(i,j,k+1,1:4)-Fz(i,j,k,1:4))
                ! Pressure dilatation term
-               if (this%iSL(i,j,k).eq.0.and.this%VF(i,j,k).gt.0.5_WP) dQdt(i,j,k,3)=dQdt(i,j,k,3)-this%PL(i,j,k)*(this%dxi*(this%U(i+1,j,k)-this%U(i,j,k))+this%dyi*(this%V(i,j+1,k)-this%V(i,j,k))+this%dzi*(this%W(i,j,k+1)-this%W(i,j,k)))
+               if (this%iSL(i,j,k).eq.0.and.this%VF(i,j,k).ge.0.5_WP) dQdt(i,j,k,3)=dQdt(i,j,k,3)-this%PL(i,j,k)*(this%dxi*(this%U(i+1,j,k)-this%U(i,j,k))+this%dyi*(this%V(i,j+1,k)-this%V(i,j,k))+this%dzi*(this%W(i,j,k+1)-this%W(i,j,k)))
                if (this%iSL(i,j,k).eq.0.and.this%VF(i,j,k).lt.0.5_WP) dQdt(i,j,k,4)=dQdt(i,j,k,4)-this%PG(i,j,k)*(this%dxi*(this%U(i+1,j,k)-this%U(i,j,k))+this%dyi*(this%V(i,j+1,k)-this%V(i,j,k))+this%dzi*(this%W(i,j,k+1)-this%W(i,j,k)))
                ! Mixture momentum advection and pressure stress
                dQdt(i,j,k,5)=this%dxi*(FUX(i  ,j,k)-FUX(i-1,j,k))+this%dyi*(FUY(i,j+1,k)-FUY(i,j  ,k))+this%dzi*(FUZ(i,j,k+1)-FUZ(i,j,k  ))
@@ -977,40 +1045,51 @@ contains
       ! ======================== VISCOUS  FLUXES ======================= !
       ! ================================================================ !
       
-      ! Compute cell-centered fluxes
+      ! Allocate viscous energy fluxes
+      allocate(FIX(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
+      allocate(FIY(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
+      allocate(FIZ(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
+      
+      ! Zero out all fluxes
+      FIX=0.0_WP; FUX=0.0_WP; FVX=0.0_WP; FWX=0.0_WP
+      FIY=0.0_WP; FUY=0.0_WP; FVY=0.0_WP; FWY=0.0_WP
+      FIZ=0.0_WP; FUZ=0.0_WP; FVZ=0.0_WP; FWZ=0.0_WP
+      
+      ! Compute cell-centered momentum viscous fluxes
       do k=this%cfg%kmin_-1,this%cfg%kmax_
          do j=this%cfg%jmin_-1,this%cfg%jmax_
             do i=this%cfg%imin_-1,this%cfg%imax_
-               ! Divergence of velocity
-               div=this%dxi*(this%U(i+1,j,k)-this%U(i,j,k))+this%dyi*(this%V(i,j+1,k)-this%V(i,j,k))+this%dzi*(this%W(i,j,k+1)-this%W(i,j,k))
-               ! Viscous momentum flux
-               FUX(i,j,k)=2.0_WP*this%VISC(i,j,k)*this%dxi*(this%U(i+1,j,k)-this%U(i,j,k))+(this%BETA(i,j,k)-2.0_WP*this%VISC(i,j,k)/3.0_WP)*div
-               FVY(i,j,k)=2.0_WP*this%VISC(i,j,k)*this%dyi*(this%V(i,j+1,k)-this%V(i,j,k))+(this%BETA(i,j,k)-2.0_WP*this%VISC(i,j,k)/3.0_WP)*div
-               FWZ(i,j,k)=2.0_WP*this%VISC(i,j,k)*this%dzi*(this%W(i,j,k+1)-this%W(i,j,k))+(this%BETA(i,j,k)-2.0_WP*this%VISC(i,j,k)/3.0_WP)*div
+               if (this%iSL(i,j,k).eq.0) then
+                  div=this%dxi*(this%U(i+1,j,k)-this%U(i,j,k))+this%dyi*(this%V(i,j+1,k)-this%V(i,j,k))+this%dzi*(this%W(i,j,k+1)-this%W(i,j,k))
+                  FUX(i,j,k)=2.0_WP*this%VISC(i,j,k)*this%dxi*(this%U(i+1,j,k)-this%U(i,j,k))+(this%BETA(i,j,k)-2.0_WP*this%VISC(i,j,k)/3.0_WP)*div
+                  FVY(i,j,k)=2.0_WP*this%VISC(i,j,k)*this%dyi*(this%V(i,j+1,k)-this%V(i,j,k))+(this%BETA(i,j,k)-2.0_WP*this%VISC(i,j,k)/3.0_WP)*div
+                  FWZ(i,j,k)=2.0_WP*this%VISC(i,j,k)*this%dzi*(this%W(i,j,k+1)-this%W(i,j,k))+(this%BETA(i,j,k)-2.0_WP*this%VISC(i,j,k)/3.0_WP)*div
+               end if
             end do
          end do
       end do
       
-      ! Calculate edge-centered momentum fluxes and face-centered phasic internal energy fluxes
+      ! Compute edge-centered momentum viscous fluxes and corresponding viscous heating
       do k=this%cfg%kmin_,this%cfg%kmax_+1
          do j=this%cfg%jmin_,this%cfg%jmax_+1
             do i=this%cfg%imin_,this%cfg%imax_+1
-               ! Momentum fluxes (symmetric)
-               FUY(i,j,k)=0.25_WP*sum(this%VISC(i-1:i,j-1:j,k))*(this%dyi*(this%U(i,j,k)-this%U(i,j-1,k))+this%dxi*(this%V(i,j,k)-this%V(i-1,j,k)))
-               FVZ(i,j,k)=0.25_WP*sum(this%VISC(i,j-1:j,k-1:k))*(this%dzi*(this%V(i,j,k)-this%V(i,j,k-1))+this%dyi*(this%W(i,j,k)-this%W(i,j-1,k)))
-               FUZ(i,j,k)=0.25_WP*sum(this%VISC(i-1:i,j,k-1:k))*(this%dxi*(this%W(i,j,k)-this%W(i-1,j,k))+this%dzi*(this%U(i,j,k)-this%U(i,j,k-1)))
-               FVX(i,j,k)=FUY(i,j,k)
-               FWY(i,j,k)=FVZ(i,j,k)
-               FWX(i,j,k)=FUZ(i,j,k)
-               ! Viscous heating term
-               Fz(i,j,k,3)=FUY(i,j,k)*(this%dyi*(this%U(i,j,k)-this%U(i,j-1,k))+this%dxi*(this%V(i,j,k)-this%V(i-1,j,k)))
-               Fx(i,j,k,3)=FVZ(i,j,k)*(this%dzi*(this%V(i,j,k)-this%V(i,j,k-1))+this%dyi*(this%W(i,j,k)-this%W(i,j-1,k)))
-               Fy(i,j,k,3)=FUZ(i,j,k)*(this%dxi*(this%W(i,j,k)-this%W(i-1,j,k))+this%dzi*(this%U(i,j,k)-this%U(i,j,k-1)))
+               if (maxval(this%iSL(i-1:i,j-1:j,k)).eq.0) then
+                  FUY(i,j,k)=0.25_WP*sum(this%VISC(i-1:i,j-1:j,k))*(this%dyi*(this%U(i,j,k)-this%U(i,j-1,k))+this%dxi*(this%V(i,j,k)-this%V(i-1,j,k))); FVX(i,j,k)=FUY(i,j,k)
+                  FIZ(i,j,k)=FUY(i,j,k)*(this%dyi*(this%U(i,j,k)-this%U(i,j-1,k))+this%dxi*(this%V(i,j,k)-this%V(i-1,j,k)))
+               end if
+               if (maxval(this%iSL(i,j-1:j,k-1:k)).eq.0) then
+                  FVZ(i,j,k)=0.25_WP*sum(this%VISC(i,j-1:j,k-1:k))*(this%dzi*(this%V(i,j,k)-this%V(i,j,k-1))+this%dyi*(this%W(i,j,k)-this%W(i,j-1,k))); FWY(i,j,k)=FVZ(i,j,k)
+                  FIX(i,j,k)=FVZ(i,j,k)*(this%dzi*(this%V(i,j,k)-this%V(i,j,k-1))+this%dyi*(this%W(i,j,k)-this%W(i,j-1,k)))
+               end if
+               if (maxval(this%iSL(i-1:i,j,k-1:k)).eq.0) then
+                  FUZ(i,j,k)=0.25_WP*sum(this%VISC(i-1:i,j,k-1:k))*(this%dxi*(this%W(i,j,k)-this%W(i-1,j,k))+this%dzi*(this%U(i,j,k)-this%U(i,j,k-1))); FWX(i,j,k)=FUZ(i,j,k)
+                  FIY(i,j,k)=FUZ(i,j,k)*(this%dxi*(this%W(i,j,k)-this%W(i-1,j,k))+this%dzi*(this%U(i,j,k)-this%U(i,j,k-1)))
+               end if
             end do
          end do
       end do
       
-      ! Increment time derivative for conserved variables
+      ! Assemble time derivative for conserved variables
       do k=this%cfg%kmin_,this%cfg%kmax_
          do j=this%cfg%jmin_,this%cfg%jmax_
             do i=this%cfg%imin_,this%cfg%imax_
@@ -1019,9 +1098,8 @@ contains
                dQdt(i,j,k,6)=dQdt(i,j,k,6)+this%dxi*(FVX(i+1,j,k)-FVX(i  ,j,k))+this%dyi*(FVY(i,j  ,k)-FVY(i,j-1,k))+this%dzi*(FVZ(i,j,k+1)-FVZ(i,j,k  ))
                dQdt(i,j,k,7)=dQdt(i,j,k,7)+this%dxi*(FWX(i+1,j,k)-FWX(i  ,j,k))+this%dyi*(FWY(i,j+1,k)-FWY(i,j  ,k))+this%dzi*(FWZ(i,j,k  )-FWZ(i,j,k-1))
                ! Viscous heating term
-               !dQdt(i,j,k,3)=dQdt(i,j,k,3)+(       this%VF(i,j,k))*(FUX(i,j,k)*this%dxi*(this%U(i+1,j,k)-this%U(i,j,k))+FVY(i,j,k)*this%dyi*(this%V(i,j+1,k)-this%V(i,j,k))+FWZ(i,j,k)*this%dzi*(this%W(i,j,k+1)-this%W(i,j,k))+0.25_WP*sum(Fz(i:i+1,j:j+1,k,3))+0.25_WP*sum(Fx(i,j:j+1,k:k+1,3))+0.25_WP*sum(Fy(i:i+1,j,k:k+1,3)))
-               !dQdt(i,j,k,4)=dQdt(i,j,k,4)+(1.0_WP-this%VF(i,j,k))*(FUX(i,j,k)*this%dxi*(this%U(i+1,j,k)-this%U(i,j,k))+FVY(i,j,k)*this%dyi*(this%V(i,j+1,k)-this%V(i,j,k))+FWZ(i,j,k)*this%dzi*(this%W(i,j,k+1)-this%W(i,j,k))+0.25_WP*sum(Fz(i:i+1,j:j+1,k,3))+0.25_WP*sum(Fx(i,j:j+1,k:k+1,3))+0.25_WP*sum(Fy(i:i+1,j,k:k+1,3)))
-               dQdt(i,j,k,4)=dQdt(i,j,k,4)+(FUX(i,j,k)*this%dxi*(this%U(i+1,j,k)-this%U(i,j,k))+FVY(i,j,k)*this%dyi*(this%V(i,j+1,k)-this%V(i,j,k))+FWZ(i,j,k)*this%dzi*(this%W(i,j,k+1)-this%W(i,j,k))+0.25_WP*sum(Fz(i:i+1,j:j+1,k,3))+0.25_WP*sum(Fx(i,j:j+1,k:k+1,3))+0.25_WP*sum(Fy(i:i+1,j,k:k+1,3)))
+               if (this%iSL(i,j,k).eq.0.and.this%VF(i,j,k).ge.0.5_WP) dQdt(i,j,k,3)=dQdt(i,j,k,3)+FUX(i,j,k)*this%dxi*(this%U(i+1,j,k)-this%U(i,j,k))+FVY(i,j,k)*this%dyi*(this%V(i,j+1,k)-this%V(i,j,k))+FWZ(i,j,k)*this%dzi*(this%W(i,j,k+1)-this%W(i,j,k))+0.25_WP*sum(FIZ(i:i+1,j:j+1,k))+0.25_WP*sum(FIX(i,j:j+1,k:k+1))+0.25_WP*sum(FIY(i:i+1,j,k:k+1))
+               if (this%iSL(i,j,k).eq.0.and.this%VF(i,j,k).lt.0.5_WP) dQdt(i,j,k,4)=dQdt(i,j,k,4)+FUX(i,j,k)*this%dxi*(this%U(i+1,j,k)-this%U(i,j,k))+FVY(i,j,k)*this%dyi*(this%V(i,j+1,k)-this%V(i,j,k))+FWZ(i,j,k)*this%dzi*(this%W(i,j,k+1)-this%W(i,j,k))+0.25_WP*sum(FIZ(i:i+1,j:j+1,k))+0.25_WP*sum(FIX(i,j:j+1,k:k+1))+0.25_WP*sum(FIY(i:i+1,j,k:k+1))
             end do
          end do
       end do
@@ -1707,7 +1785,7 @@ contains
       integer :: i,j,k,si,sj,sk,n
       integer, parameter :: nfilter=2
       real(WP) :: max_beta,dudy,dudz,dvdx,dvdz,dwdx,dwdy,vort,grad_div
-      real(WP), parameter :: max_cfl=1.0_WP
+      real(WP), parameter :: max_cfl=0.5_WP
       real(WP), parameter :: Cartif=2.0_WP
       real(WP), parameter :: Cartif_vort=100.0_WP
       real(WP), dimension(:,:,:), allocatable :: div
@@ -1883,7 +1961,7 @@ contains
       class(mpcomp), intent(inout) :: this
       real(WP), intent(in)  :: dt
       real(WP), intent(out) :: cfl
-      integer :: i,j,k,ierr
+      integer  :: ierr
       real(WP) :: maxvisc,maxC
       ! Compute convective+acoustic CFLs
       this%CFLc_x=maxval(abs(this%U)+abs(this%C))*dt*this%dxi; call MPI_ALLREDUCE(MPI_IN_PLACE,this%CFLc_x,1,MPI_REAL_WP,MPI_MAX,this%cfg%comm,ierr)
@@ -1894,7 +1972,7 @@ contains
       this%CFLa_x=maxC*dt*this%dxi
       this%CFLa_y=maxC*dt*this%dyi
       this%CFLa_z=maxC*dt*this%dzi
-      ! Compute viscous CFLs (ignoring bulk viscosities)
+      ! Compute viscous CFLs
       maxvisc=maxval((this%VISC+this%BETA)/(this%Q(:,:,:,1)+this%Q(:,:,:,2))); call MPI_ALLREDUCE(MPI_IN_PLACE,maxvisc,1,MPI_REAL_WP,MPI_MAX,this%cfg%comm,ierr)
       this%CFLv_x=4.0_WP*maxvisc*dt*this%dxi**2
       this%CFLv_y=4.0_WP*maxvisc*dt*this%dyi**2

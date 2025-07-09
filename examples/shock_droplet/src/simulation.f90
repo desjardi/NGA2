@@ -502,12 +502,25 @@ contains
          call fs%SLtag()
          
          ! Prepare SGS viscosity models
-         call fs%get_viscartif(dt=time%dt,beta=beta); fs%BETA=fs%Q(:,:,:,2)*beta
-         !call fs%get_viscartif(dt=time%dt,beta=beta); fs%BETAG=fs%Q(:,:,:,2)*beta!; fs%BETAL=fs%Q(:,:,:,1)*beta
-         !call fs%get_vreman   (dt=time%dt,visc=visc); fs%VISCG=fs%Q(:,:,:,2)*visc!; fs%VISCL=fs%Q(:,:,:,1)*visc
-         
-         !fs%VISC=(fs%Q(:,:,:,1)+fs%Q(:,:,:,2))*0.001_WP
-         fs%VISC=(fs%Q(:,:,:,2))*0.001_WP
+         call fs%get_viscartif(dt=time%dt,beta=beta)
+         visc=2.0e-3_WP!call fs%get_vreman   (dt=time%dt,visc=visc)
+         mixture_viscosity: block
+            integer  :: i,j,k
+            real(WP) :: Lvof,Lrho,Gvof,Grho
+            real(WP) :: Lvisc,Gvisc,Lbeta,Gbeta
+            real(WP), parameter :: eps=1.0e-15_WP
+            do k=fs%cfg%kmino_+1,fs%cfg%kmaxo_-1; do j=fs%cfg%jmino_+1,fs%cfg%jmaxo_-1; do i=fs%cfg%imino_+1,fs%cfg%imaxo_-1
+               ! Create smooth mass info distribution
+               Lvof=sum(       fs%VF(i-1:i+1,j-1:j+1,k-1:k+1)  )
+               Gvof=sum(1.0_WP-fs%VF(i-1:i+1,j-1:j+1,k-1:k+1)  )
+               Lrho=sum(       fs%Q (i-1:i+1,j-1:j+1,k-1:k+1,1))/(Lvof+eps)
+               Grho=sum(       fs%Q (i-1:i+1,j-1:j+1,k-1:k+1,2))/(Gvof+eps)
+               ! Harmonic average of VISC
+               Lvisc=Lrho*visc(i,j,k); Gvisc=Grho*visc(i,j,k); fs%VISC(i,j,k)=(Lvof+Gvof)/(Lvof/max(Lvisc,eps)+Gvof/max(Gvisc,eps))
+               ! Harmonic average of BETA
+               Lbeta=Lrho*beta(i,j,k); Gbeta=Grho*beta(i,j,k); fs%BETA(i,j,k)=(Lvof+Gvof)/(Lvof/max(Lbeta,eps)+Gvof/max(Gbeta,eps))
+            end do; end do; end do
+         end block mixture_viscosity
          
          ! Perform first semi-Lagrangian transport step =====================================================
          call fs%SLstep(dt=0.5_WP*time%dt,U=fs%U,V=fs%V,W=fs%W)

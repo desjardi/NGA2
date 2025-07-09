@@ -12,17 +12,17 @@ X0 : -3
 
 # Adimensional flow parameters
 !---------- eos ----------
-Gas gamma :    1.3
-Liquid gamma : 6.12
+Gas gamma :         1.3
+Liquid gamma :      6.12
 !--- fluid definitions ---
 Density ratio :     815
 Sound speed ratio : 4.3
 !------- inviscid --------
-Shock Mach number :  5.12
-Shock location :    -2
+Shock Mach number : 5.12
+Shock location :   -2
 
 # Time integration
-Max timestep size : 2.5e-3
+Max timestep size : 5e-3
 Max cfl number :    0.9
 Max time :          20
 
