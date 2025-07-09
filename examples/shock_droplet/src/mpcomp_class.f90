@@ -1019,8 +1019,9 @@ contains
                dQdt(i,j,k,6)=dQdt(i,j,k,6)+this%dxi*(FVX(i+1,j,k)-FVX(i  ,j,k))+this%dyi*(FVY(i,j  ,k)-FVY(i,j-1,k))+this%dzi*(FVZ(i,j,k+1)-FVZ(i,j,k  ))
                dQdt(i,j,k,7)=dQdt(i,j,k,7)+this%dxi*(FWX(i+1,j,k)-FWX(i  ,j,k))+this%dyi*(FWY(i,j+1,k)-FWY(i,j  ,k))+this%dzi*(FWZ(i,j,k  )-FWZ(i,j,k-1))
                ! Viscous heating term
-               dQdt(i,j,k,3)=dQdt(i,j,k,3)+(       this%VF(i,j,k))*(FUX(i,j,k)*this%dxi*(this%U(i+1,j,k)-this%U(i,j,k))+FVY(i,j,k)*this%dyi*(this%V(i,j+1,k)-this%V(i,j,k))+FWZ(i,j,k)*this%dzi*(this%W(i,j,k+1)-this%W(i,j,k))+0.25_WP*sum(Fz(i:i+1,j:j+1,k,3))+0.25_WP*sum(Fx(i,j:j+1,k:k+1,3))+0.25_WP*sum(Fy(i:i+1,j,k:k+1,3)))
-               dQdt(i,j,k,4)=dQdt(i,j,k,4)+(1.0_WP-this%VF(i,j,k))*(FUX(i,j,k)*this%dxi*(this%U(i+1,j,k)-this%U(i,j,k))+FVY(i,j,k)*this%dyi*(this%V(i,j+1,k)-this%V(i,j,k))+FWZ(i,j,k)*this%dzi*(this%W(i,j,k+1)-this%W(i,j,k))+0.25_WP*sum(Fz(i:i+1,j:j+1,k,3))+0.25_WP*sum(Fx(i,j:j+1,k:k+1,3))+0.25_WP*sum(Fy(i:i+1,j,k:k+1,3)))
+               !dQdt(i,j,k,3)=dQdt(i,j,k,3)+(       this%VF(i,j,k))*(FUX(i,j,k)*this%dxi*(this%U(i+1,j,k)-this%U(i,j,k))+FVY(i,j,k)*this%dyi*(this%V(i,j+1,k)-this%V(i,j,k))+FWZ(i,j,k)*this%dzi*(this%W(i,j,k+1)-this%W(i,j,k))+0.25_WP*sum(Fz(i:i+1,j:j+1,k,3))+0.25_WP*sum(Fx(i,j:j+1,k:k+1,3))+0.25_WP*sum(Fy(i:i+1,j,k:k+1,3)))
+               !dQdt(i,j,k,4)=dQdt(i,j,k,4)+(1.0_WP-this%VF(i,j,k))*(FUX(i,j,k)*this%dxi*(this%U(i+1,j,k)-this%U(i,j,k))+FVY(i,j,k)*this%dyi*(this%V(i,j+1,k)-this%V(i,j,k))+FWZ(i,j,k)*this%dzi*(this%W(i,j,k+1)-this%W(i,j,k))+0.25_WP*sum(Fz(i:i+1,j:j+1,k,3))+0.25_WP*sum(Fx(i,j:j+1,k:k+1,3))+0.25_WP*sum(Fy(i:i+1,j,k:k+1,3)))
+               dQdt(i,j,k,4)=dQdt(i,j,k,4)+(FUX(i,j,k)*this%dxi*(this%U(i+1,j,k)-this%U(i,j,k))+FVY(i,j,k)*this%dyi*(this%V(i,j+1,k)-this%V(i,j,k))+FWZ(i,j,k)*this%dzi*(this%W(i,j,k+1)-this%W(i,j,k))+0.25_WP*sum(Fz(i:i+1,j:j+1,k,3))+0.25_WP*sum(Fx(i,j:j+1,k:k+1,3))+0.25_WP*sum(Fy(i:i+1,j,k:k+1,3)))
             end do
          end do
       end do

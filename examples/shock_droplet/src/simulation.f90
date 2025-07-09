@@ -502,12 +502,12 @@ contains
          call fs%SLtag()
          
          ! Prepare SGS viscosity models
-         !call fs%get_viscartif(dt=time%dt,beta=beta); fs%BETA=(fs%Q(:,:,:,1)+fs%Q(:,:,:,2))*beta
+         call fs%get_viscartif(dt=time%dt,beta=beta); fs%BETA=fs%Q(:,:,:,2)*beta
          !call fs%get_viscartif(dt=time%dt,beta=beta); fs%BETAG=fs%Q(:,:,:,2)*beta!; fs%BETAL=fs%Q(:,:,:,1)*beta
          !call fs%get_vreman   (dt=time%dt,visc=visc); fs%VISCG=fs%Q(:,:,:,2)*visc!; fs%VISCL=fs%Q(:,:,:,1)*visc
          
          !fs%VISC=(fs%Q(:,:,:,1)+fs%Q(:,:,:,2))*0.001_WP
-         !fs%VISC=(fs%Q(:,:,:,2))*0.001_WP
+         fs%VISC=(fs%Q(:,:,:,2))*0.001_WP
          
          ! Perform first semi-Lagrangian transport step =====================================================
          call fs%SLstep(dt=0.5_WP*time%dt,U=fs%U,V=fs%V,W=fs%W)
