@@ -834,7 +834,7 @@ contains
                this%Q(i,j,k,7)=this%Q(i,j,k,7)+this%SLdt*(this%dxi*(FWX(i+1,j,k)-FWX(i  ,j,k))+this%dyi*(FWY(i,j+1,k)-FWY(i,j  ,k))+this%dzi*(FWZ(i,j,k  )-FWZ(i,j,k-1)))
                ! Distribute viscous heating term based on VF
                this%Q(i,j,k,3)=this%Q(i,j,k,3)+this%SLdt*(       this%VF(i,j,k))*((FUX(i,j,k)*this%dxi*(this%U(i+1,j,k)-this%U(i,j,k))+FVY(i,j,k)*this%dyi*(this%V(i,j+1,k)-this%V(i,j,k))+FWZ(i,j,k)*this%dzi*(this%W(i,j,k+1)-this%W(i,j,k))+0.25_WP*sum(FIZ(i:i+1,j:j+1,k))+0.25_WP*sum(FIX(i,j:j+1,k:k+1))+0.25_WP*sum(FIY(i:i+1,j,k:k+1))))
-               this%Q(i,j,k,3)=this%Q(i,j,k,3)+this%SLdt*(1.0_WP-this%VF(i,j,k))*((FUX(i,j,k)*this%dxi*(this%U(i+1,j,k)-this%U(i,j,k))+FVY(i,j,k)*this%dyi*(this%V(i,j+1,k)-this%V(i,j,k))+FWZ(i,j,k)*this%dzi*(this%W(i,j,k+1)-this%W(i,j,k))+0.25_WP*sum(FIZ(i:i+1,j:j+1,k))+0.25_WP*sum(FIX(i,j:j+1,k:k+1))+0.25_WP*sum(FIY(i:i+1,j,k:k+1))))
+               this%Q(i,j,k,4)=this%Q(i,j,k,4)+this%SLdt*(1.0_WP-this%VF(i,j,k))*((FUX(i,j,k)*this%dxi*(this%U(i+1,j,k)-this%U(i,j,k))+FVY(i,j,k)*this%dyi*(this%V(i,j+1,k)-this%V(i,j,k))+FWZ(i,j,k)*this%dzi*(this%W(i,j,k+1)-this%W(i,j,k))+0.25_WP*sum(FIZ(i:i+1,j:j+1,k))+0.25_WP*sum(FIX(i,j:j+1,k:k+1))+0.25_WP*sum(FIY(i:i+1,j,k:k+1))))
             end do
          end do
       end do
