@@ -30,4 +30,4 @@ Max cfl number :    0.9
 Max time :          100
 
 # Ensight output
-Ensight output period : 1e-1
+Ensight output period : 1e-3

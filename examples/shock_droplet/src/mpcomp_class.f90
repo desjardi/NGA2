@@ -619,8 +619,8 @@ contains
                   this%BG(:,i,j,k)=project(this%BG(:,i,j,k),dt)
                end if
                ! Compute new liquid and gas pressures in newly created cells
-               if (this%VFold(i,j,k).eq.0.0_WP.and.this%VF(i,j,k).gt.0.0_WP) this%PL(i,j,k)=this%PLold(i,j,k)+this%SLdt*(this%dxi*(PFx(i+1,j,k,1)-PFx(i,j,k,1))+this%dyi*(PFy(i,j+1,k,1)-PFy(i,j,k,1))+this%dzi*(PFz(i,j,k+1,1)-PFz(i,j,k,1)))/(       this%VF(i,j,k))
-               if (this%VFold(i,j,k).eq.1.0_WP.and.this%VF(i,j,k).lt.1.0_WP) this%PG(i,j,k)=this%PGold(i,j,k)+this%SLdt*(this%dxi*(PFx(i+1,j,k,2)-PFx(i,j,k,2))+this%dyi*(PFy(i,j+1,k,2)-PFy(i,j,k,2))+this%dzi*(PFz(i,j,k+1,2)-PFz(i,j,k,2)))/(1.0_WP-this%VF(i,j,k))
+               if (this%VFold(i,j,k).eq.0.0_WP.and.this%VF(i,j,k).gt.0.0_WP) this%PL(i,j,k)=this%SLdt*(this%dxi*(PFx(i+1,j,k,1)-PFx(i,j,k,1))+this%dyi*(PFy(i,j+1,k,1)-PFy(i,j,k,1))+this%dzi*(PFz(i,j,k+1,1)-PFz(i,j,k,1)))/(       this%VF(i,j,k))
+               if (this%VFold(i,j,k).eq.1.0_WP.and.this%VF(i,j,k).lt.1.0_WP) this%PG(i,j,k)=this%SLdt*(this%dxi*(PFx(i+1,j,k,2)-PFx(i,j,k,2))+this%dyi*(PFy(i,j+1,k,2)-PFy(i,j,k,2))+this%dzi*(PFz(i,j,k+1,2)-PFz(i,j,k,2)))/(1.0_WP-this%VF(i,j,k))
             end do
          end do
       end do

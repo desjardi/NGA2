@@ -119,12 +119,19 @@ contains
       real(WP), dimension(1:), intent(inout) :: Q
       real(WP) :: PG,PL,ZG,ZL,Pint
       real(WP) :: a,b,d,coeffL,coeffG,Peq,VFeq
+      ! ================ First step for mechanical relaxation ================
       ! Get phasic pressures
       PL=get_PL(RHO=Q(1)/(       VF),I=Q(3)/Q(1))
       PG=get_PG(RHO=Q(2)/(1.0_WP-VF),I=Q(4)/Q(2))
-      ! Handle limit cases
-      if (PL.le.-PinfL) then; VF=0.0_WP; Q(2)=sum(Q(1:2)); Q(1)=0.0_WP; Q(4)=sum(Q(3:4)); Q(3)=0.0_WP; return; end if
-      if (PG.le.-PinfG) then; VF=1.0_WP; Q(1)=sum(Q(1:2)); Q(2)=0.0_WP; Q(3)=sum(Q(3:4)); Q(4)=0.0_WP; return; end if
+      ! Handle limit cases - should mass/energy be tranasfered or lost? - this should probably never happen...
+      if (PL.le.-PinfL) then
+         print*,"****************** LIQUID CLIPPED!",PL,VF,Q
+         VF=0.0_WP; Q(2)=sum(Q(1:2)); Q(1)=0.0_WP; Q(4)=sum(Q(3:4)); Q(3)=0.0_WP; return
+      end if
+      if (PG.le.-PinfG) then
+         print*,"****************** GAS CLIPPED!",PG,VF,Q
+         VF=1.0_WP; Q(1)=sum(Q(1:2)); Q(2)=0.0_WP; Q(3)=sum(Q(3:4)); Q(4)=0.0_WP; return
+      end if
       ! Get phasic impedances
       ZL=Q(1)/(       VF)*get_CL(RHO=Q(1)/(       VF),P=PL)**2
       ZG=Q(2)/(1.0_WP-VF)*get_CG(RHO=Q(2)/(1.0_WP-VF),P=PG)**2
@@ -144,6 +151,8 @@ contains
       Q(3)=Q(3)-0.5_WP*(Pint+Peq)*(VFeq-VF)
       Q(4)=Q(4)+0.5_WP*(Pint+Peq)*(VFeq-VF)
       VF=VFeq
+      ! Last debugging check... Probably should never happen...
+      if (Peq.lt.-PinfG) print*,"****************** NEGATIVE PRESSURE! - time",time%t,"VFeq",VFeq,"Peq",Peq
    end subroutine P_relax
    
    
@@ -291,7 +300,7 @@ contains
          ! Initialize solver with required thermodynamic functions
          call fs%initialize(cfg=cfg,getPL=get_PL,getCL=get_CL,getPG=get_PG,getCG=get_CG,name='Compressible NS')
          ! Provide relaxation model
-         fs%relax=>PT_relax
+         fs%relax=>P_relax
          ! Provide entropy calculation functions
          fs%getSL=>get_SL; fs%getSG=>get_SG
          ! Provide temperature calculation functions
