@@ -37,6 +37,7 @@ module simulation
    real(WP) :: rho2,p2,u2,M2
    real(WP) :: rho_ratio,c_ratio
    real(WP) :: rhoL,ML
+   real(WP) :: ReG,viscG,viscL,visc_ratio
    
 contains
    
@@ -247,6 +248,9 @@ contains
          ! Set heat capacities corresponding to a normalized pre-shock and liquid temperature
          CvL=(p1+PinfL)/(rhoL*(GammaL-1.0_WP))
          CvG=(p1+PinfG)/(rho1*(GammaG-1.0_WP))
+         ! Viscous parameters
+         call param_read('Gas Reynolds number',ReG); viscG=rho1*1.0_WP*u2/ReG 
+         call param_read('Viscosity ratio',visc_ratio); viscL=visc_ratio*viscG
          ! Output case info
          if (cfg%amRoot) then
             write(message,'("[Liquid EOS] => Gamma=",es12.5)') GammaL; call log(message)
@@ -266,6 +270,10 @@ contains
             write(message,'("[Liquid Mach number] =>        ML=",es12.5)')     Ml; call log(message)
             write(message,'("[Density ratio]      => rhoL/rho1=",es12.5)') rho_ratio; call log(message)
             write(message,'("[Sound speed ratio]  =>     cl/c1=",es12.5)')   c_ratio; call log(message)
+            write(message,'("[Gas Reynolds]     =>     ReG=",es12.5)')        ReG; call log(message)
+            write(message,'("[Viscosity ratio]  => muL/muG=",es12.5)') visc_ratio; call log(message)
+            write(message,'("[Gas    viscosity] =>     muG=",es12.5)')      viscG; call log(message)
+            write(message,'("[Liquid viscosity] =>     muL=",es12.5)')      viscL; call log(message)
          end if
       end block initialize_parameters
       
@@ -503,7 +511,7 @@ contains
          
          ! Prepare SGS viscosity models
          call fs%get_viscartif(dt=time%dt,beta=beta)
-         visc=2.0e-3_WP!call fs%get_vreman   (dt=time%dt,visc=visc)
+         visc=0.0_WP !call fs%get_vreman(dt=time%dt,visc=visc)
          mixture_viscosity: block
             integer  :: i,j,k
             real(WP) :: Lvof,Lrho,Gvof,Grho
@@ -516,7 +524,7 @@ contains
                Lrho=sum(       fs%Q (i-1:i+1,j-1:j+1,k-1:k+1,1))/(Lvof+eps)
                Grho=sum(       fs%Q (i-1:i+1,j-1:j+1,k-1:k+1,2))/(Gvof+eps)
                ! Harmonic average of VISC
-               Lvisc=Lrho*visc(i,j,k); Gvisc=Grho*visc(i,j,k); fs%VISC(i,j,k)=(Lvof+Gvof)/(Lvof/max(Lvisc,eps)+Gvof/max(Gvisc,eps))
+               Lvisc=Lrho*viscL; Gvisc=Grho*viscG; fs%VISC(i,j,k)=(Lvof+Gvof)/(Lvof/max(Lvisc,eps)+Gvof/max(Gvisc,eps))
                ! Harmonic average of BETA
                Lbeta=Lrho*beta(i,j,k); Gbeta=Grho*beta(i,j,k); fs%BETA(i,j,k)=(Lvof+Gvof)/(Lvof/max(Lbeta,eps)+Gvof/max(Gbeta,eps))
             end do; end do; end do
@@ -565,17 +573,39 @@ contains
          call fs%SLincrement()
          ! Apply user-provided relaxation model
          call fs%apply_relax()
-         ! Apply Neumann condition at the outflow (need something better if liquid is leaving)
-         neumann_outflow: block
-            integer :: i
-            if (fs%cfg%iproc.eq.fs%cfg%npx) then
-               do i=fs%cfg%imax+1,fs%cfg%imaxo
-                  fs%Q(i,:,:,:)=fs%Q(fs%cfg%imax,:,:,:)
-               end do
-            end if
-         end block neumann_outflow
          ! Recompute primitive variables
          call fs%get_primitive()
+         ! Apply Neumann condition at the outflow
+         neumann_outflow: block
+            use irl_fortran_interface, only: setPlane
+            integer :: i,j,k
+            ! Apply clipped Neumann on primitive variables
+            if (fs%cfg%iproc.eq.fs%cfg%npx) then
+               do k=fs%cfg%kmino_,fs%cfg%kmaxo_; do j=fs%cfg%jmino_,fs%cfg%jmaxo_; do i=fs%cfg%imax+1,fs%cfg%imaxo
+                  ! Copy primitive variables
+                  fs%RHOL(i,j,k)=fs%RHOL(fs%cfg%imax,j,k)
+                  fs%PL  (i,j,k)=fs%PL  (fs%cfg%imax,j,k)
+                  fs%IL  (i,j,k)=fs%IL  (fs%cfg%imax,j,k)
+                  fs%RHOG(i,j,k)=fs%RHOG(fs%cfg%imax,j,k)
+                  fs%PG  (i,j,k)=fs%PG  (fs%cfg%imax,j,k)
+                  fs%IG  (i,j,k)=fs%IG  (fs%cfg%imax,j,k)
+                  fs%U  (i,j,k)=max(fs%U(fs%cfg%imax,j,k),0.0_WP)
+                  fs%V   (i,j,k)=fs%V   (fs%cfg%imax,j,k)
+                  fs%W   (i,j,k)=fs%W   (fs%cfg%imax,j,k)
+                  fs%VF  (i,j,k)=fs%VF  (fs%cfg%imax,j,k)
+                  ! Also adjust interface data
+                  call setPlane(fs%PLIC(i,j,k),0,[1.0_WP,0.0_WP,0.0_WP],fs%cfg%x(i)+fs%cfg%dx(i)*fs%VF(i,j,k))
+                  fs%BL(:,i,j,k)=[fs%cfg%xm(i),fs%cfg%ym(j),fs%cfg%zm(k)]
+                  fs%BG(:,i,j,k)=[fs%cfg%xm(i),fs%cfg%ym(j),fs%cfg%zm(k)]
+               end do; end do; end do
+            end if
+            ! Rebuild conserved quantities
+            fs%Q(:,:,:,1)=        fs%VF *fs%RHOL
+            fs%Q(:,:,:,2)=(1.0_WP-fs%VF)*fs%RHOG
+            fs%Q(:,:,:,3)= fs%Q(:,:,:,1)*fs%IL
+            fs%Q(:,:,:,4)= fs%Q(:,:,:,2)*fs%IG
+            call fs%get_momentum()
+         end block neumann_outflow
          
          ! Interpolate velocity
          call fs%interp_vel(Ui,Vi,Wi)
