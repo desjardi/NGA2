@@ -479,7 +479,7 @@ contains
          real(WP), dimension(3),intent(in) :: xyz
          real(WP), intent(in) :: t
          real(WP) :: G
-         G=1.0_WP-abs(xyz(1))
+         G=0.5_WP-abs(xyz(1))
       end function levelset_slab
    end subroutine simulation_init
    
@@ -548,7 +548,7 @@ contains
          call fs%rhs(dQdt(:,:,:,:,1))
          fs%Q=fs%Qold+0.5_WP*time%dt*dQdt(:,:,:,:,1)
          ! Increment Q with SL terms
-         call fs%SLincrement()
+         fs%Q=fs%Q+fs%SLdQ
          ! Recompute primitive variables
          call fs%get_primitive()
          
@@ -557,7 +557,7 @@ contains
          call fs%rhs(dQdt(:,:,:,:,2))
          fs%Q=fs%Qold+0.5_WP*time%dt*dQdt(:,:,:,:,2)
          ! Increment Q with SL terms
-         call fs%SLincrement()
+         fs%Q=fs%Q+fs%SLdQ
          ! Recompute primitive variables
          call fs%get_primitive()
          
@@ -570,7 +570,7 @@ contains
          call fs%rhs(dQdt(:,:,:,:,3))
          fs%Q=fs%Qold+1.0_WP*time%dt*dQdt(:,:,:,:,3)
          ! Increment Q with SL terms
-         call fs%SLincrement()
+         fs%Q=fs%Q+fs%SLdQ
          ! Recompute primitive variables
          call fs%get_primitive()
          
@@ -579,7 +579,7 @@ contains
          call fs%rhs(dQdt(:,:,:,:,4))
          fs%Q=fs%Qold+time%dt/6.0_WP*(dQdt(:,:,:,:,1)+2.0_WP*dQdt(:,:,:,:,2)+2.0_WP*dQdt(:,:,:,:,3)+dQdt(:,:,:,:,4))
          ! Increment Q with SL terms
-         call fs%SLincrement()
+         fs%Q=fs%Q+fs%SLdQ
          ! Apply user-provided relaxation model
          call fs%apply_relax()
          ! Recompute primitive variables
