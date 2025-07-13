@@ -25,7 +25,7 @@ module simulation
    
    !> Private work arrays
    real(WP), dimension(:,:,:,:,:), allocatable :: dQdt
-   real(WP), dimension(:,:,:)    , allocatable :: Ma
+   real(WP), dimension(:,:,:)    , allocatable :: Ma,beta,visc
    
    !> Equations of state
    real(WP) :: PinfL,GammaL,CvL
@@ -37,6 +37,7 @@ module simulation
    real(WP) :: rho2,p2,u2,M2
    real(WP) :: rho_ratio,c_ratio
    real(WP) :: rhoL,ML
+   real(WP) :: ReG,viscG,viscL,visc_ratio
    
 contains
    
@@ -118,12 +119,19 @@ contains
       real(WP), dimension(1:), intent(inout) :: Q
       real(WP) :: PG,PL,ZG,ZL,Pint
       real(WP) :: a,b,d,coeffL,coeffG,Peq,VFeq
+      ! ================ First step for mechanical relaxation ================
       ! Get phasic pressures
-      PL=get_PL(RHO=Q(1)/(       VF),I=Q(3)/Q(1)-0.5_WP*((Q(5)/(Q(1)+Q(2)))**2+(Q(6)/(Q(1)+Q(2)))**2+(Q(7)/(Q(1)+Q(2)))**2))
-      PG=get_PG(RHO=Q(2)/(1.0_WP-VF),I=Q(4)/Q(2)-0.5_WP*((Q(5)/(Q(1)+Q(2)))**2+(Q(6)/(Q(1)+Q(2)))**2+(Q(7)/(Q(1)+Q(2)))**2))
-      ! Handle limit cases
-      if (PL.le.-PinfL) then; VF=0.0_WP; Q(2)=Q(1)+Q(2); Q(1)=0.0_WP; Q(4)=Q(3)+Q(4); Q(3)=0.0_WP; return; end if
-      if (PG.le.-PinfG) then; VF=1.0_WP; Q(1)=Q(1)+Q(2); Q(2)=0.0_WP; Q(3)=Q(3)+Q(4); Q(4)=0.0_WP; return; end if
+      PL=get_PL(RHO=Q(1)/(       VF),I=Q(3)/Q(1))
+      PG=get_PG(RHO=Q(2)/(1.0_WP-VF),I=Q(4)/Q(2))
+      ! Handle limit cases - should mass/energy be tranasfered or lost? - this should probably never happen...
+      if (PL.le.-PinfL) then
+         print*,"****************** LIQUID CLIPPED!",PL,VF,Q
+         VF=0.0_WP; Q(2)=sum(Q(1:2)); Q(1)=0.0_WP; Q(4)=sum(Q(3:4)); Q(3)=0.0_WP; return
+      end if
+      if (PG.le.-PinfG) then
+         print*,"****************** GAS CLIPPED!",PG,VF,Q
+         VF=1.0_WP; Q(1)=sum(Q(1:2)); Q(2)=0.0_WP; Q(3)=sum(Q(3:4)); Q(4)=0.0_WP; return
+      end if
       ! Get phasic impedances
       ZL=Q(1)/(       VF)*get_CL(RHO=Q(1)/(       VF),P=PL)**2
       ZG=Q(2)/(1.0_WP-VF)*get_CG(RHO=Q(2)/(1.0_WP-VF),P=PG)**2
@@ -143,6 +151,8 @@ contains
       Q(3)=Q(3)-0.5_WP*(Pint+Peq)*(VFeq-VF)
       Q(4)=Q(4)+0.5_WP*(Pint+Peq)*(VFeq-VF)
       VF=VFeq
+      ! Last debugging check... Probably should never happen...
+      if (Peq.lt.-PinfG) print*,"****************** NEGATIVE PRESSURE! - time",time%t,"VFeq",VFeq,"Peq",Peq
    end subroutine P_relax
    
    
@@ -151,22 +161,20 @@ contains
       implicit none
       real(WP),                intent(inout) :: VF
       real(WP), dimension(1:), intent(inout) :: Q
-      real(WP) :: KE,PG,PL,ZG,ZL,Pint,Imix
+      real(WP) :: PG,PL,ZG,ZL,Pint
       real(WP) :: a,b,d,coeffL,coeffG,Peq,VFeq
       ! ================ First step for mechanical relaxation ================
-      ! Get KE
-      KE=0.5_WP*sum(Q(5:7)**2)/sum(Q(1:2))**2
       ! Get phasic pressures
-      PL=get_PL(RHO=Q(1)/(       VF),I=Q(3)/Q(1)-KE)
-      PG=get_PG(RHO=Q(2)/(1.0_WP-VF),I=Q(4)/Q(2)-KE)
+      PL=get_PL(RHO=Q(1)/(       VF),I=Q(3)/Q(1))
+      PG=get_PG(RHO=Q(2)/(1.0_WP-VF),I=Q(4)/Q(2))
       ! Handle limit cases - should mass/energy be tranasfered or lost? - this should probably never happen...
       if (PL.le.-PinfL) then
          print*,"****************** LIQUID CLIPPED!",PL,VF,Q
-         VF=0.0_WP; Q(2)=Q(1)+Q(2); Q(1)=0.0_WP; Q(4)=Q(3)+Q(4); Q(3)=0.0_WP; return
+         VF=0.0_WP; Q(2)=sum(Q(1:2)); Q(1)=0.0_WP; Q(4)=sum(Q(3:4)); Q(3)=0.0_WP; return
       end if
       if (PG.le.-PinfG) then
          print*,"****************** GAS CLIPPED!",PG,VF,Q
-         VF=1.0_WP; Q(1)=Q(1)+Q(2); Q(2)=0.0_WP; Q(3)=Q(3)+Q(4); Q(4)=0.0_WP; return
+         VF=1.0_WP; Q(1)=sum(Q(1:2)); Q(2)=0.0_WP; Q(3)=sum(Q(3:4)); Q(4)=0.0_WP; return
       end if
       ! Get phasic impedances
       ZL=Q(1)/(       VF)*get_CL(RHO=Q(1)/(       VF),P=PL)**2
@@ -189,10 +197,9 @@ contains
       VF=VFeq
       ! ================= Second step for thermal relaxation =================
       ! Setup quadratic problem
-      Imix=sum(Q(3:4))-sum(Q(1:2))*KE
       a=Q(1)*CvL+Q(2)*CvG
-      b=Q(1)*CvL*(GammaL*PinfL+PinfG)+Q(2)*CvG*(GammaG*PinfG+PinfL)-Imix*(Q(1)*CvL*(GammaL-1.0_WP)+Q(2)*CvG*(GammaG-1.0_WP))
-      d=(Q(1)*CvL*GammaL+Q(2)*CvG*GammaG)*PinfL*PinfG-Imix*(Q(1)*CvL*(GammaL-1.0_WP)*PinfG+Q(2)*CvG*(GammaG-1.0_WP)*PinfL)
+      b=Q(1)*CvL*(GammaL*PinfL+PinfG)+Q(2)*CvG*(GammaG*PinfG+PinfL)-sum(Q(3:4))*(Q(1)*CvL*(GammaL-1.0_WP)+Q(2)*CvG*(GammaG-1.0_WP))
+      d=(Q(1)*CvL*GammaL+Q(2)*CvG*GammaG)*PinfL*PinfG-sum(Q(3:4))*(Q(1)*CvL*(GammaL-1.0_WP)*PinfG+Q(2)*CvG*(GammaG-1.0_WP)*PinfL)
       ! Get equilibrium pressure
       Peq=(-b+sqrt(b**2-4.0_WP*a*d))/(2.0_WP*a)
       ! Get equilibrium volume fraction
@@ -201,8 +208,8 @@ contains
       if (VFeq.lt.0.0_WP) then; VFeq=0.0_WP; Peq=max(Peq,-PinfL); end if
       if (VFeq.gt.1.0_WP) then; VFeq=1.0_WP; Peq=max(Peq,-PinfG); end if
       ! Adjust conserved quantities
-      Q(3)=(       VFeq)*(Peq+GammaL*PinfL)/(GammaL-1.0_WP)+Q(1)*KE
-      Q(4)=(1.0_WP-VFeq)*(Peq+GammaG*PinfG)/(GammaG-1.0_WP)+Q(2)*KE
+      Q(3)=(       VFeq)*(Peq+GammaL*PinfL)/(GammaL-1.0_WP)
+      Q(4)=(1.0_WP-VFeq)*(Peq+GammaG*PinfG)/(GammaG-1.0_WP)
       VF=VFeq
       ! Last debugging check... Probably should never happen...
       if (Peq.lt.-PinfG) print*,"****************** NEGATIVE PRESSURE! - time",time%t,"VFeq",VFeq,"Peq",Peq
@@ -248,8 +255,11 @@ contains
          PinfL=p1*(rho_ratio*c_ratio**2*GammaG/GammaL-1.0_WP)
          ML=u2/sqrt(GammaL*(p1+PinfL)/rhoL)
          ! Set heat capacities corresponding to a normalized pre-shock and liquid temperature
-         CvL=(p2+PinfL)/(rhoL*(GammaL-1.0_WP))
-         CvG=(p2+PinfG)/(rho2*(GammaG-1.0_WP))
+         CvL=(p1+PinfL)/(rhoL*(GammaL-1.0_WP))
+         CvG=(p1+PinfG)/(rho1*(GammaG-1.0_WP))
+         ! Viscous parameters
+         call param_read('Gas Reynolds number',ReG); viscG=rho1*1.0_WP*u2/ReG 
+         call param_read('Viscosity ratio',visc_ratio); viscL=visc_ratio*viscG
          ! Output case info
          if (cfg%amRoot) then
             write(message,'("[Liquid EOS] => Gamma=",es12.5)') GammaL; call log(message)
@@ -269,6 +279,10 @@ contains
             write(message,'("[Liquid Mach number] =>        ML=",es12.5)')     Ml; call log(message)
             write(message,'("[Density ratio]      => rhoL/rho1=",es12.5)') rho_ratio; call log(message)
             write(message,'("[Sound speed ratio]  =>     cl/c1=",es12.5)')   c_ratio; call log(message)
+            write(message,'("[Gas Reynolds]     =>     ReG=",es12.5)')        ReG; call log(message)
+            write(message,'("[Viscosity ratio]  => muL/muG=",es12.5)') visc_ratio; call log(message)
+            write(message,'("[Gas    viscosity] =>     muG=",es12.5)')      viscG; call log(message)
+            write(message,'("[Liquid viscosity] =>     muL=",es12.5)')      viscL; call log(message)
          end if
       end block initialize_parameters
       
@@ -286,17 +300,19 @@ contains
          ! Initialize solver with required thermodynamic functions
          call fs%initialize(cfg=cfg,getPL=get_PL,getCL=get_CL,getPG=get_PG,getCG=get_CG,name='Compressible NS')
          ! Provide relaxation model
-         fs%relax=>PT_relax
+         fs%relax=>P_relax
          ! Provide entropy calculation functions
          fs%getSL=>get_SL; fs%getSG=>get_SG
          ! Provide temperature calculation functions
-         !fs%getTL=>get_TL; fs%getTG=>get_TG
+         fs%getTL=>get_TL; fs%getTG=>get_TG
       end block create_velocity_solver
       
       ! Allocate work arrays
       allocate_work_arrays: block
          allocate(dQdt(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_,1:fs%nQ,1:4))
          allocate(Ma  (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+         allocate(beta(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+         allocate(visc(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
       end block allocate_work_arrays
       
       ! Prepare initial conditions
@@ -316,19 +332,21 @@ contains
                   call initialize_volume_moments(lo=[cfg%x(i),cfg%y(j),cfg%z(k)],hi=[cfg%x(i+1),cfg%y(j+1),cfg%z(k+1)],&
                   levelset=levelset_drop,time=0.0_WP,level=4,VFlo=VFlo,VF=fs%VF(i,j,k),BL=fs%BL(:,i,j,k),BG=fs%BG(:,i,j,k))
                   ! Initialize mixture velocity to normal shock
-                  fs%U(i,j,k)=u2!*Hshock(Xs-cfg%xm(i),delta=0.5_WP*fs%dx)
+                  fs%U(i,j,k)=1!u2*Hshock(Xs-cfg%xm(i),delta=0.5_WP*fs%dx)
                   fs%V(i,j,k)=0.0_WP
                   fs%W(i,j,k)=0.0_WP
                   ! Gas variables
                   if (fs%VF(i,j,k).lt.1.0_WP) then
-                     fs%RHOG(i,j,k)=rho2!rho1+(rho2-rho1)*Hshock(Xs-cfg%xm(i),delta=0.5_WP*fs%dx)
-                     fs%PG  (i,j,k)=p2!p1  +(p2  -p1  )*Hshock(Xs-cfg%xm(i),delta=0.5_WP*fs%dx)
+                     fs%RHOG(i,j,k)=rho1!+(rho2-rho1)*Hshock(Xs-cfg%xm(i),delta=0.5_WP*fs%dx)
+                     fs%PG  (i,j,k)=p1  !+(p2  -p1  )*Hshock(Xs-cfg%xm(i),delta=0.5_WP*fs%dx)
                      fs%IG  (i,j,k)=(fs%PG(i,j,k)+GammaG*PinfG)/(fs%RHOG(i,j,k)*(GammaG-1.0_WP))
                   end if
                   ! Liquid variables
                   if (fs%VF(i,j,k).gt.0.0_WP) then
+                     fs%U(i,j,k)=0.0
+                     fs%V(i,j,k)=0.5
                      fs%RHOL(i,j,k)=rhoL
-                     fs%PL  (i,j,k)=p2!p1
+                     fs%PL  (i,j,k)=p1
                      fs%IL  (i,j,k)=(fs%PL(i,j,k)+GammaL*PinfL)/(fs%RHOL(i,j,k)*(GammaL-1.0_WP))
                   end if
                end do
@@ -339,8 +357,8 @@ contains
          ! Initialize conserved variables
          fs%Q(:,:,:,1)=        fs%VF *fs%RHOL
          fs%Q(:,:,:,2)=(1.0_WP-fs%VF)*fs%RHOG
-         fs%Q(:,:,:,3)= fs%Q(:,:,:,1)*(fs%IL+0.5_WP*(fs%U**2+fs%V**2+fs%W**2))
-         fs%Q(:,:,:,4)= fs%Q(:,:,:,2)*(fs%IG+0.5_WP*(fs%U**2+fs%V**2+fs%W**2))
+         fs%Q(:,:,:,3)= fs%Q(:,:,:,1)*fs%IL
+         fs%Q(:,:,:,4)= fs%Q(:,:,:,2)*fs%IG
          fs%Q(:,:,:,5)=(fs%Q(:,:,:,1)+fs%Q(:,:,:,2))*fs%U
          fs%Q(:,:,:,6)=(fs%Q(:,:,:,1)+fs%Q(:,:,:,2))*fs%V
          fs%Q(:,:,:,7)=(fs%Q(:,:,:,1)+fs%Q(:,:,:,2))*fs%W
@@ -369,6 +387,8 @@ contains
          call ens_out%add_scalar('PL',fs%PL)
          call ens_out%add_scalar('PG',fs%PG)
          call ens_out%add_scalar('Mach',Ma)
+         call ens_out%add_scalar('beta',beta)
+         call ens_out%add_scalar('visc',visc)
          ! Create surface mesh for PLIC
          smesh=surfmesh(nvar=0,name='plic')
          call fs%update_surfmesh(smesh)
@@ -450,7 +470,8 @@ contains
          real(WP), dimension(3),intent(in) :: xyz
          real(WP), intent(in) :: t
          real(WP) :: G
-         G=0.5_WP-sqrt(sum(xyz**2))
+         !G=0.5_WP-sqrt(sum(xyz**2))
+         G=0.027_WP-sqrt(sum(xyz**2))
       end function levelset_drop
       !> Level set function for a slab of unity width centered at x=0
       function levelset_slab(xyz,t) result(G)
@@ -458,7 +479,7 @@ contains
          real(WP), dimension(3),intent(in) :: xyz
          real(WP), intent(in) :: t
          real(WP) :: G
-         G=1.0_WP-abs(xyz(1))
+         G=0.5_WP-abs(xyz(1))
       end function levelset_slab
    end subroutine simulation_init
    
@@ -478,9 +499,10 @@ contains
          ! Remember conserved variables
          fs%Qold=fs%Q
          
-         ! Remember phasic quantities
-         fs%RHOLold=fs%RHOL; fs%ILold=fs%IL
-         fs%RHOGold=fs%RHOG; fs%IGold=fs%IG
+         ! Remember phasic quantities and mixture velocity
+         fs%RHOLold=fs%RHOL; fs%ILold=fs%IL; fs%PLold=fs%PL
+         fs%RHOGold=fs%RHOG; fs%IGold=fs%IG; fs%PGold=fs%PG
+         fs%Uold=fs%U; fs%Vold=fs%V; fs%Wold=fs%W
          
          ! Remember volume moments and interface
          fs%VFold=fs%VF
@@ -497,6 +519,27 @@ contains
          ! Tag cells for semi-Lagrangian transport
          call fs%SLtag()
          
+         ! Prepare SGS viscosity models
+         call fs%get_viscartif(dt=time%dt,beta=beta)
+         visc=0.0_WP !call fs%get_vreman(dt=time%dt,visc=visc)
+         mixture_viscosity: block
+            integer  :: i,j,k
+            real(WP) :: Lvof,Lrho,Gvof,Grho
+            real(WP) :: Lvisc,Gvisc,Lbeta,Gbeta
+            real(WP), parameter :: eps=1.0e-15_WP
+            do k=fs%cfg%kmino_+1,fs%cfg%kmaxo_-1; do j=fs%cfg%jmino_+1,fs%cfg%jmaxo_-1; do i=fs%cfg%imino_+1,fs%cfg%imaxo_-1
+               ! Create smooth mass info distribution
+               Lvof=sum(       fs%VF(i-1:i+1,j-1:j+1,k-1:k+1)  )
+               Gvof=sum(1.0_WP-fs%VF(i-1:i+1,j-1:j+1,k-1:k+1)  )
+               Lrho=sum(       fs%Q (i-1:i+1,j-1:j+1,k-1:k+1,1))/(Lvof+eps)
+               Grho=sum(       fs%Q (i-1:i+1,j-1:j+1,k-1:k+1,2))/(Gvof+eps)
+               ! Harmonic average of VISC
+               Lvisc=Lrho*viscL; Gvisc=Grho*viscG; fs%VISC(i,j,k)=(Lvof+Gvof)/(Lvof/max(Lvisc,eps)+Gvof/max(Gvisc,eps))
+               ! Harmonic average of BETA
+               Lbeta=Lrho*beta(i,j,k); Gbeta=Grho*beta(i,j,k); fs%BETA(i,j,k)=(Lvof+Gvof)/(Lvof/max(Lbeta,eps)+Gvof/max(Gbeta,eps))
+            end do; end do; end do
+         end block mixture_viscosity
+         
          ! Perform first semi-Lagrangian transport step =====================================================
          call fs%SLstep(dt=0.5_WP*time%dt,U=fs%U,V=fs%V,W=fs%W)
          !call fs%build_interface()
@@ -506,9 +549,7 @@ contains
          call fs%rhs(dQdt(:,:,:,:,1))
          fs%Q=fs%Qold+0.5_WP*time%dt*dQdt(:,:,:,:,1)
          ! Increment Q with SL terms
-         call fs%SLincrement()
-         ! Apply user-provided relaxation model
-         call fs%apply_relax()
+         fs%Q=fs%Q+fs%SLdQ
          ! Recompute primitive variables
          call fs%get_primitive()
          
@@ -517,9 +558,7 @@ contains
          call fs%rhs(dQdt(:,:,:,:,2))
          fs%Q=fs%Qold+0.5_WP*time%dt*dQdt(:,:,:,:,2)
          ! Increment Q with SL terms
-         call fs%SLincrement()
-         ! Apply user-provided relaxation model
-         call fs%apply_relax()
+         fs%Q=fs%Q+fs%SLdQ
          ! Recompute primitive variables
          call fs%get_primitive()
          
@@ -532,9 +571,7 @@ contains
          call fs%rhs(dQdt(:,:,:,:,3))
          fs%Q=fs%Qold+1.0_WP*time%dt*dQdt(:,:,:,:,3)
          ! Increment Q with SL terms
-         call fs%SLincrement()
-         ! Apply user-provided relaxation model
-         call fs%apply_relax()
+         fs%Q=fs%Q+fs%SLdQ
          ! Recompute primitive variables
          call fs%get_primitive()
          
@@ -543,20 +580,45 @@ contains
          call fs%rhs(dQdt(:,:,:,:,4))
          fs%Q=fs%Qold+time%dt/6.0_WP*(dQdt(:,:,:,:,1)+2.0_WP*dQdt(:,:,:,:,2)+2.0_WP*dQdt(:,:,:,:,3)+dQdt(:,:,:,:,4))
          ! Increment Q with SL terms
-         call fs%SLincrement()
+         fs%Q=fs%Q+fs%SLdQ
          ! Apply user-provided relaxation model
          call fs%apply_relax()
-         ! Apply Neumann condition at the outflow (need something better if liquid is leaving)
-         neumann_outflow: block
-            integer :: i
-            if (fs%cfg%iproc.eq.fs%cfg%npx) then
-               do i=fs%cfg%imax+1,fs%cfg%imaxo
-                  fs%Q(i,:,:,:)=fs%Q(fs%cfg%imax,:,:,:)
-               end do
-            end if
-         end block neumann_outflow
          ! Recompute primitive variables
          call fs%get_primitive()
+         
+         ! Apply Neumann condition at the outflow ===========================================================
+         neumann_outflow: block
+            use irl_fortran_interface, only: setPlane
+            integer :: i,j,k
+            ! Apply clipped Neumann on primitive variables
+            if (fs%cfg%iproc.eq.fs%cfg%npx) then
+               do k=fs%cfg%kmino_,fs%cfg%kmaxo_; do j=fs%cfg%jmino_,fs%cfg%jmaxo_; do i=fs%cfg%imax+1,fs%cfg%imaxo
+                  ! Copy primitive variables
+                  fs%RHOL(i,j,k)= fs%RHOL(fs%cfg%imax,j,k)
+                  fs%PL  (i,j,k)=   fs%PL(fs%cfg%imax,j,k)
+                  fs%IL  (i,j,k)=   fs%IL(fs%cfg%imax,j,k)
+                  fs%RHOG(i,j,k)= fs%RHOG(fs%cfg%imax,j,k)
+                  fs%PG  (i,j,k)=   fs%PG(fs%cfg%imax,j,k)
+                  fs%IG  (i,j,k)=   fs%IG(fs%cfg%imax,j,k)
+                  fs%U   (i,j,k)=max(fs%U(fs%cfg%imax,j,k),0.0_WP)
+                  fs%V   (i,j,k)=    fs%V(fs%cfg%imax,j,k)
+                  fs%W   (i,j,k)=    fs%W(fs%cfg%imax,j,k)
+                  fs%VF  (i,j,k)=   fs%VF(fs%cfg%imax,j,k)
+                  ! Also adjust interface data
+                  call setPlane(fs%PLIC(i,j,k),0,[1.0_WP,0.0_WP,0.0_WP],fs%cfg%x(i)+fs%cfg%dx(i)*fs%VF(i,j,k))
+                  fs%BL(:,i,j,k)=[fs%cfg%xm(i),fs%cfg%ym(j),fs%cfg%zm(k)]
+                  fs%BG(:,i,j,k)=[fs%cfg%xm(i),fs%cfg%ym(j),fs%cfg%zm(k)]
+                  ! Rebuild conserved variables
+                  fs%Q(i,j,k,1)=(       fs%VF(i,j,k))*fs%RHOL(i,j,k)
+                  fs%Q(i,j,k,2)=(1.0_WP-fs%VF(i,j,k))*fs%RHOG(i,j,k)
+                  fs%Q(i,j,k,3)=fs%Q(i,j,k,1)*fs%IL(i,j,k)
+                  fs%Q(i,j,k,4)=fs%Q(i,j,k,2)*fs%IG(i,j,k)
+                  fs%Q(i,j,k,5)=(fs%Q(i,j,k,1)+fs%Q(i,j,k,2))*fs%U(i,j,k)
+                  fs%Q(i,j,k,6)=(fs%Q(i,j,k,1)+fs%Q(i,j,k,2))*fs%V(i,j,k)
+                  fs%Q(i,j,k,7)=(fs%Q(i,j,k,1)+fs%Q(i,j,k,2))*fs%W(i,j,k)
+               end do; end do; end do
+            end if
+         end block neumann_outflow
          
          ! Compute local Mach number
          Ma=sqrt(fs%U**2+fs%V**2+fs%W**2)/fs%C
@@ -582,7 +644,7 @@ contains
    subroutine simulation_final
       implicit none
       ! Deallocate work arrays
-      deallocate(dQdt,Ma)
+      deallocate(dQdt,Ma,beta,visc)
    end subroutine simulation_final
    
    

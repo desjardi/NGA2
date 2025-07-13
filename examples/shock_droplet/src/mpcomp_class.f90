@@ -51,7 +51,7 @@ module mpcomp_class
       ! Tag for semi-Lagrangian fluxing
       integer, dimension(:,:,:), allocatable :: iSL
       
-      ! Conserved variables: 1=VF*RHOL, 2=(1-VF))*RHOG, 3=VF*RHOL*IL, 4=(1-VF)*RHOG*IL, 5=RHO*U, 6=RHO*V, 7=RHO*W
+      ! Conserved variables: 1=VF*RHOL, 2=(1-VF)*RHOG, 3=VF*RHOL*IL, 4=(1-VF)*RHOG*IL, 5=RHO*U, 6=RHO*V, 7=RHO*W
       integer :: nQ
       real(WP), dimension(:,:,:,:), allocatable :: Q,Qold
       
@@ -459,7 +459,7 @@ contains
       ! Allocate flux polyhedron and detailed face flux
       call new(flux_polyhedron)
       call new(detailed_face_flux)
-
+      
       ! Allocate semi-Lagrangian pressure fluxes
       allocate(PFx(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_,1:2)); PFx=0.0_WP
       allocate(PFy(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_,1:2)); PFy=0.0_WP
