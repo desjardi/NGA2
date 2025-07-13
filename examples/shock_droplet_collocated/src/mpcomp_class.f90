@@ -112,9 +112,8 @@ module mpcomp_class
       type(timer) :: tsl                                  !< Timer for semi-Lagrangian transport
       type(timer) :: tplic                                !< Timer for PLIC reconstruction
       
-      ! Semi-Lagrangian volume fluxes and conservative variable increments
-      type(SepVM_type), dimension(:,:,:),   allocatable :: FVx,FVy,FVz
-      real(WP),         dimension(:,:,:,:), allocatable :: SLdQ
+      ! Semi-Lagrangian onservative variable increments
+      real(WP), dimension(:,:,:,:), allocatable :: SLdQ
       
       ! IRL-native data
       type(ByteBuffer_type) :: send_byte_buffer,recv_byte_buffer
@@ -664,8 +663,8 @@ contains
             this%BG(:,i,j,k)=project((this%BGold(:,i,j,k)*(1.0_WP-this%VFold(i,j,k))*this%vol+SLVx(6:8,i+1,j,k)-SLVx(6:8,i,j,k)+SLVy(6:8,i,j+1,k)-SLVy(6:8,i,j,k)+SLVz(6:8,i,j,k+1)-SLVz(6:8,i,j,k))/Gvol,dt)
          end if
          ! Compute new liquid and gas pressures in newly created cells
-         if (VFold.lt.VFlo.and.this%VF(i,j,k).ge.VFlo) this%PL(i,j,k)=this%PG(i,j,k)!(SLPx(1,i+1,j,k)-SLPx(1,i,j,k)+SLPy(1,i,j+1,k)-SLPy(1,i,j,k)+SLPz(1,i,j,k+1)-SLPz(1,i,j,k))/Lvol
-         if (VFold.gt.VFhi.and.this%VF(i,j,k).le.VFhi) this%PG(i,j,k)=this%PL(i,j,k)!(SLPx(2,i+1,j,k)-SLPx(2,i,j,k)+SLPy(2,i,j+1,k)-SLPy(2,i,j,k)+SLPz(2,i,j,k+1)-SLPz(2,i,j,k))/Gvol
+         if (VFold.lt.VFlo.and.this%VF(i,j,k).ge.VFlo) this%PL(i,j,k)=(SLPx(1,i+1,j,k)-SLPx(1,i,j,k)+SLPy(1,i,j+1,k)-SLPy(1,i,j,k)+SLPz(1,i,j,k+1)-SLPz(1,i,j,k))/Lvol
+         if (VFold.gt.VFhi.and.this%VF(i,j,k).le.VFhi) this%PG(i,j,k)=(SLPx(2,i+1,j,k)-SLPx(2,i,j,k)+SLPy(2,i,j+1,k)-SLPy(2,i,j,k)+SLPz(2,i,j,k+1)-SLPz(2,i,j,k))/Gvol
       end do; end do; end do
       
       ! Deallocate volume and pressure flux arrays

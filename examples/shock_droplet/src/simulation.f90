@@ -335,13 +335,13 @@ contains
                   call initialize_volume_moments(lo=[cfg%x(i),cfg%y(j),cfg%z(k)],hi=[cfg%x(i+1),cfg%y(j+1),cfg%z(k+1)],&
                   levelset=levelset_drop,time=0.0_WP,level=4,VFlo=VFlo,VF=fs%VF(i,j,k),BL=fs%BL(:,i,j,k),BG=fs%BG(:,i,j,k))
                   ! Initialize mixture velocity to normal shock
-                  fs%U(i,j,k)=u2*Hshock(Xs-cfg%x(i),delta=0.5_WP*fs%dx)
-                  fs%V(i,j,k)=0.0_WP
+                  fs%U(i,j,k)=0!u2*Hshock(Xs-cfg%x(i),delta=0.5_WP*fs%dx)
+                  fs%V(i,j,k)=1!0.0_WP
                   fs%W(i,j,k)=0.0_WP
                   ! Gas variables
                   if (fs%VF(i,j,k).lt.1.0_WP) then
-                     fs%RHOG(i,j,k)=rho1+(rho2-rho1)*Hshock(Xs-cfg%xm(i),delta=0.5_WP*fs%dx)
-                     fs%PG  (i,j,k)=p1  +(p2  -p1  )*Hshock(Xs-cfg%xm(i),delta=0.5_WP*fs%dx)
+                     fs%RHOG(i,j,k)=rho1!+(rho2-rho1)*Hshock(Xs-cfg%xm(i),delta=0.5_WP*fs%dx)
+                     fs%PG  (i,j,k)=p1  !+(p2  -p1  )*Hshock(Xs-cfg%xm(i),delta=0.5_WP*fs%dx)
                      fs%IG  (i,j,k)=(fs%PG(i,j,k)+GammaG*PinfG)/(fs%RHOG(i,j,k)*(GammaG-1.0_WP))
                   end if
                   ! Liquid variables
@@ -472,6 +472,7 @@ contains
          real(WP), intent(in) :: t
          real(WP) :: G
          G=0.5_WP-sqrt(sum(xyz**2))
+         !G=0.028_WP-sqrt(sum(xyz**2))
       end function levelset_drop
       !> Level set function for a slab of unity width centered at x=0
       function levelset_slab(xyz,t) result(G)
@@ -519,7 +520,7 @@ contains
          call fs%SLtag()
          
          ! Prepare SGS viscosity models
-         call fs%get_viscartif(dt=time%dt,beta=beta)
+         beta=0.0_WP !call fs%get_viscartif(dt=time%dt,beta=beta)
          visc=0.0_WP !call fs%get_vreman(dt=time%dt,visc=visc)
          mixture_viscosity: block
             integer  :: i,j,k
