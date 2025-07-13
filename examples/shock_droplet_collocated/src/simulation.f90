@@ -332,19 +332,17 @@ contains
                   call initialize_volume_moments(lo=[cfg%x(i),cfg%y(j),cfg%z(k)],hi=[cfg%x(i+1),cfg%y(j+1),cfg%z(k+1)],&
                   levelset=levelset_drop,time=0.0_WP,level=4,VFlo=VFlo,VF=fs%VF(i,j,k),BL=fs%BL(:,i,j,k),BG=fs%BG(:,i,j,k))
                   ! Initialize mixture velocity to normal shock
-                  fs%U(i,j,k)=1!u2*Hshock(Xs-cfg%xm(i),delta=0.5_WP*fs%dx)
+                  fs%U(i,j,k)=u2*Hshock(Xs-cfg%xm(i),delta=0.5_WP*fs%dx)
                   fs%V(i,j,k)=0.0_WP
                   fs%W(i,j,k)=0.0_WP
                   ! Gas variables
                   if (fs%VF(i,j,k).lt.1.0_WP) then
-                     fs%RHOG(i,j,k)=rho1!+(rho2-rho1)*Hshock(Xs-cfg%xm(i),delta=0.5_WP*fs%dx)
-                     fs%PG  (i,j,k)=p1  !+(p2  -p1  )*Hshock(Xs-cfg%xm(i),delta=0.5_WP*fs%dx)
+                     fs%RHOG(i,j,k)=rho1+(rho2-rho1)*Hshock(Xs-cfg%xm(i),delta=0.5_WP*fs%dx)
+                     fs%PG  (i,j,k)=p1  +(p2  -p1  )*Hshock(Xs-cfg%xm(i),delta=0.5_WP*fs%dx)
                      fs%IG  (i,j,k)=(fs%PG(i,j,k)+GammaG*PinfG)/(fs%RHOG(i,j,k)*(GammaG-1.0_WP))
                   end if
                   ! Liquid variables
                   if (fs%VF(i,j,k).gt.0.0_WP) then
-                     fs%U(i,j,k)=0.0
-                     fs%V(i,j,k)=0.5
                      fs%RHOL(i,j,k)=rhoL
                      fs%PL  (i,j,k)=p1
                      fs%IL  (i,j,k)=(fs%PL(i,j,k)+GammaL*PinfL)/(fs%RHOL(i,j,k)*(GammaL-1.0_WP))
@@ -471,8 +469,7 @@ contains
          real(WP), dimension(3),intent(in) :: xyz
          real(WP), intent(in) :: t
          real(WP) :: G
-         !G=0.5_WP-sqrt(sum(xyz**2))
-         G=0.027_WP-sqrt(sum(xyz**2))
+         G=0.5_WP-sqrt(sum(xyz**2))
       end function levelset_drop
       !> Level set function for a slab of unity width centered at x=0
       function levelset_slab(xyz,t) result(G)
@@ -518,10 +515,12 @@ contains
          end block copy_plic_to_old
          
          ! Tag cells for semi-Lagrangian transport
-         call fs%SLtag()
+         !call fs%SLtag_interface()
+         call fs%SLtag_interface_shocks()
+         !fs%iSL=1
          
          ! Prepare SGS viscosity models
-         call fs%get_viscartif(dt=time%dt,beta=beta)
+         beta=0.0_WP !call fs%get_viscartif(dt=time%dt,beta=beta)
          visc=0.0_WP !call fs%get_vreman(dt=time%dt,visc=visc)
          mixture_viscosity: block
             integer  :: i,j,k
@@ -540,6 +539,7 @@ contains
                Lbeta=Lrho*beta(i,j,k); Gbeta=Grho*beta(i,j,k); fs%BETA(i,j,k)=(Lvof+Gvof)/(Lvof/max(Lbeta,eps)+Gvof/max(Gbeta,eps))
             end do; end do; end do
          end block mixture_viscosity
+         fs%VISC=0.0_WP
          
          ! Perform first semi-Lagrangian transport step =====================================================
          call fs%SLstep(dt=0.5_WP*time%dt,U=fs%U,V=fs%V,W=fs%W)

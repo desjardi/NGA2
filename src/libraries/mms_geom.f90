@@ -1078,10 +1078,10 @@ contains
       a_cent=0.0_WP
       call cube_refine_vol(cube_vertex,vol,area,v_cent,a_cent,levelset,time,level)
       VF=vol/((hi(1)-lo(1))*(hi(2)-lo(2))*(hi(3)-lo(3)))
-      if (VF.le.       VFlo) VF=0.0_WP
-      if (VF.ge.1.0_WP-VFlo) VF=1.0_WP
+      if (VF.lt.       VFlo) VF=0.0_WP
+      if (VF.gt.1.0_WP-VFlo) VF=1.0_WP
       BL=0.5_WP*(lo+hi); BG=0.5_WP*(lo+hi)
-      if (VF.gt.VFlo.and.VF.lt.1.0_WP-VFlo) then
+      if (VF.ge.VFlo.and.VF.le.1.0_WP-VFlo) then
          BL=v_cent
          BG=(0.5_WP*(lo+hi)-VF*v_cent)/(1.0_WP-VF)
       end if

@@ -131,7 +131,8 @@ module mpcomp_class
       procedure :: print=>mpcomp_print                    !< Output solver to the screen
       procedure :: initialize                             !< Initialize the flow solver
       procedure :: initialize_irl                         !< Initialize interface with interface reconstruction library
-      procedure :: SLtag                                  !< Tag cell for semi-Lagrangian fluxing
+      procedure :: SLtag_interface                        !< Tag cell for semi-Lagrangian fluxing based on 0<VOF<1
+      procedure :: SLtag_interface_shocks                 !< Tag cell for semi-Lagrangian fluxing based on 0<VOF<1 and Shock sensor
       procedure :: SLstep                                 !< Perform an unsplit semi-Lagrangian transport step in tagged cells, store SL advection fluxes
       procedure :: rhs                                    !< Compute rhs of our equations using standard fluxes
       procedure :: build_interface                        !< Build interface from volume moments
@@ -389,8 +390,7 @@ contains
    
    
    !> Tag cell for semi-Lagrangian fluxing based on proximity to 0<VOF<1
-   !> Could become user-specified, use VOFold, or depend on current CFL...
-   subroutine SLtag(this)
+   subroutine SLtag_interface(this)
       implicit none
       class(mpcomp), intent(inout) :: this
       integer :: i,j,k,dir,n
@@ -420,7 +420,66 @@ contains
          if (this%iSL(i,j,k).eq.0.and.any(this%iSL(i-1:i+1,j-1:j+1,k-1:k+1).eq.1)) this%iSL(i,j,k)=2
       end do; end do; end do
       call this%cfg%sync(this%iSL)
-   end subroutine SLtag
+   end subroutine SLtag_interface
+
+
+   !> Tag cell for semi-Lagrangian fluxing based on proximity to 0<VOF<1 and shocks (based on Ducros-style sensor)
+   subroutine SLtag_interface_shocks(this)
+      implicit none
+      class(mpcomp), intent(inout) :: this
+      integer :: i,j,k,dir,n
+      integer, dimension(3) :: ind
+      real(WP), dimension(:,:,:), allocatable :: div
+      real(WP) :: dudy,dudz,dvdx,dvdz,dwdx,dwdy,vort,grad_div,sensor
+      real(WP), parameter :: Cthres=2.0e-3_WP
+      real(WP), parameter :: Cartif_vort=100.0_WP
+      ! Reset tag
+      this%iSL=0
+      ! Compute velocity divergence as far as needed to avoid communication
+      allocate(div(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
+      do k=this%cfg%kmin_-1,this%cfg%kmax_+1; do j=this%cfg%jmin_-1,this%cfg%jmax_+1; do i=this%cfg%imin_-1,this%cfg%imax_+1
+         div(i,j,k)=0.5_WP*(this%dxi*(this%U(i+1,j,k)-this%U(i-1,j,k))+this%dyi*(this%V(i,j+1,k)-this%V(i,j-1,k))+this%dzi*(this%W(i,j,k+1)-this%W(i,j,k-1)))
+      end do; end do; end do
+      ! First sweep to identify cells with interface or shocks
+      do k=this%cfg%kmino_+1,this%cfg%kmaxo_-1
+         do j=this%cfg%jmino_+1,this%cfg%jmaxo_-1
+            cell: do i=this%cfg%imino_+1,this%cfg%imaxo_-1
+               ! Flag all obvious mixture cells
+               if (this%VF(i,j,k).ge.VFlo.and.this%VF(i,j,k).le.VFhi) then; this%iSL(i,j,k)=1; cycle cell; end if
+               ! We may have missed implicit interfaces, check those
+               do dir=1,3; do n=-1,+1,2
+                  ind=[i,j,k]; ind(dir)=ind(dir)+n; if (this%VF(i,j,k).lt.VFlo.and.this%VF(ind(1),ind(2),ind(3)).gt.VFhi.or.this%VF(i,j,k).gt.VFhi.and.this%VF(ind(1),ind(2),ind(3)).lt.VFlo) then; this%iSL(i,j,k)=1; cycle cell; end if
+               end do; end do
+               ! Finally check Ducros-style sensor for shock
+               if (div(i,j,k).ge.0.0_WP) cycle cell
+               ! Compute local vorticity
+               dudy=0.5_WP*this%dyi*(this%U(i,j+1,k)-this%U(i,j-1,k))
+               dudz=0.5_WP*this%dzi*(this%U(i,j,k+1)-this%U(i,j,k-1))
+               dvdx=0.5_WP*this%dxi*(this%V(i+1,j,k)-this%V(i-1,j,k))
+               dvdz=0.5_WP*this%dzi*(this%V(i,j,k+1)-this%V(i,j,k-1))
+               dwdx=0.5_WP*this%dxi*(this%W(i+1,j,k)-this%W(i-1,j,k))
+               dwdy=0.5_WP*this%dyi*(this%W(i,j+1,k)-this%W(i,j-1,k))
+               vort=(dwdy-dvdz)**2+(dudz-dwdx)**2+(dvdx-dudy)**2
+               ! Compute |grad(div)|
+               grad_div=max(abs(div(i+1,j,k)-div(i,j,k)),abs(div(i,j,k)-div(i-1,j,k)))*this%dx**2&
+               &       +max(abs(div(i,j+1,k)-div(i,j,k)),abs(div(i,j,k)-div(i,j-1,k)))*this%dy**2&
+               &       +max(abs(div(i,j,k+1)-div(i,j,k)),abs(div(i,j,k)-div(i,j,k-1)))*this%dz**2
+               ! Compute sensor
+               sensor=grad_div*div(i,j,k)**2/(div(i,j,k)**2+Cartif_vort*vort+1.0e-15_WP)
+               ! Check if sensor is large enough
+               if (sensor.gt.Cthres) then; this%iSL(i,j,k)=1; cycle cell; end if
+            end do cell
+         end do
+      end do
+      call this%cfg%sync(this%iSL)
+      ! Free up memory
+      deallocate(div)
+      ! Second sweep to extend by one cell
+      do k=this%cfg%kmino_+1,this%cfg%kmaxo_-1; do j=this%cfg%jmino_+1,this%cfg%jmaxo_-1; do i=this%cfg%imino_+1,this%cfg%imaxo_-1
+         if (this%iSL(i,j,k).eq.0.and.any(this%iSL(i-1:i+1,j-1:j+1,k-1:k+1).eq.1)) this%iSL(i,j,k)=2
+      end do; end do; end do
+      call this%cfg%sync(this%iSL)
+   end subroutine SLtag_interface_shocks
    
    
    !> Perform an unsplit semi-Lagrangian transport step by dt in all cells tagged by this%SLtag>0
@@ -605,8 +664,8 @@ contains
             this%BG(:,i,j,k)=project((this%BGold(:,i,j,k)*(1.0_WP-this%VFold(i,j,k))*this%vol+SLVx(6:8,i+1,j,k)-SLVx(6:8,i,j,k)+SLVy(6:8,i,j+1,k)-SLVy(6:8,i,j,k)+SLVz(6:8,i,j,k+1)-SLVz(6:8,i,j,k))/Gvol,dt)
          end if
          ! Compute new liquid and gas pressures in newly created cells
-         if (VFold.lt.VFlo.and.this%VF(i,j,k).ge.VFlo) this%PL(i,j,k)=(SLPx(1,i+1,j,k)-SLPx(1,i,j,k)+SLPy(1,i,j+1,k)-SLPy(1,i,j,k)+SLPz(1,i,j,k+1)-SLPz(1,i,j,k))/Lvol
-         if (VFold.gt.VFhi.and.this%VF(i,j,k).le.VFhi) this%PG(i,j,k)=(SLPx(2,i+1,j,k)-SLPx(2,i,j,k)+SLPy(2,i,j+1,k)-SLPy(2,i,j,k)+SLPz(2,i,j,k+1)-SLPz(2,i,j,k))/Gvol
+         if (VFold.lt.VFlo.and.this%VF(i,j,k).ge.VFlo) this%PL(i,j,k)=this%PG(i,j,k)!(SLPx(1,i+1,j,k)-SLPx(1,i,j,k)+SLPy(1,i,j+1,k)-SLPy(1,i,j,k)+SLPz(1,i,j,k+1)-SLPz(1,i,j,k))/Lvol
+         if (VFold.gt.VFhi.and.this%VF(i,j,k).le.VFhi) this%PG(i,j,k)=this%PL(i,j,k)!(SLPx(2,i+1,j,k)-SLPx(2,i,j,k)+SLPy(2,i,j+1,k)-SLPy(2,i,j,k)+SLPz(2,i,j,k+1)-SLPz(2,i,j,k))/Gvol
       end do; end do; end do
       
       ! Deallocate volume and pressure flux arrays
@@ -641,9 +700,9 @@ contains
       
       ! Add pressure stresses
       do k=this%cfg%kmin_,this%cfg%kmax_+1; do j=this%cfg%jmin_,this%cfg%jmax_+1; do i=this%cfg%imin_,this%cfg%imax_+1
-         !if (maxval(this%iSL(i-1:i,j,k)).gt.0) SLQx(5,i,j,k)=SLQx(5,i,j,k)-0.5_WP*sum(this%P(i-1:i,j,k))!0.5_WP*sum(this%VF(i-1:i,j,k)*this%PL(i-1:i,j,k)+(1.0_WP-this%VF(i-1:i,j,k))*this%PG(i-1:i,j,k))
-         !if (maxval(this%iSL(i,j-1:j,k)).gt.0) SLQy(6,i,j,k)=SLQy(6,i,j,k)-0.5_WP*sum(this%P(i,j-1:j,k))!0.5_WP*sum(this%VF(i,j-1:j,k)*this%PL(i,j-1:j,k)+(1.0_WP-this%VF(i,j-1:j,k))*this%PG(i,j-1:j,k))
-         !if (maxval(this%iSL(i,j,k-1:k)).gt.0) SLQz(7,i,j,k)=SLQz(7,i,j,k)-0.5_WP*sum(this%P(i,j,k-1:k))!0.5_WP*sum(this%VF(i,j,k-1:k)*this%PL(i,j,k-1:k)+(1.0_WP-this%VF(i,j,k-1:k))*this%PG(i,j,k-1:k))
+         if (maxval(this%iSL(i-1:i,j,k)).gt.0) SLQx(5,i,j,k)=SLQx(5,i,j,k)-0.5_WP*sum(this%VF(i-1:i,j,k)*this%PL(i-1:i,j,k)+(1.0_WP-this%VF(i-1:i,j,k))*this%PG(i-1:i,j,k))!-0.5_WP*sum(this%P(i-1:i,j,k))
+         if (maxval(this%iSL(i,j-1:j,k)).gt.0) SLQy(6,i,j,k)=SLQy(6,i,j,k)-0.5_WP*sum(this%VF(i,j-1:j,k)*this%PL(i,j-1:j,k)+(1.0_WP-this%VF(i,j-1:j,k))*this%PG(i,j-1:j,k))!-0.5_WP*sum(this%P(i,j-1:j,k))
+         if (maxval(this%iSL(i,j,k-1:k)).gt.0) SLQz(7,i,j,k)=SLQz(7,i,j,k)-0.5_WP*sum(this%VF(i,j,k-1:k)*this%PL(i,j,k-1:k)+(1.0_WP-this%VF(i,j,k-1:k))*this%PG(i,j,k-1:k))!-0.5_WP*sum(this%P(i,j,k-1:k))
       end do; end do; end do
       
       ! Calculate the SL increment for all conserved variables
@@ -652,8 +711,8 @@ contains
          ! Add pressure dilatation
          !if (this%iSL(i,j,k).gt.0) then
          !   div=0.5_WP*(this%dxi*(this%U(i+1,j,k)-this%U(i-1,j,k))+this%dyi*(this%V(i,j+1,k)-this%V(i,j-1,k))+this%dzi*(this%W(i,j,k+1)-this%W(i,j,k-1)))
-         !   this%SLdQ(i,j,k,3)=this%SLdQ(i,j,k,3)-dt*(       this%VF(i,j,k))*this%PL(i,j,k)*div
-         !   this%SLdQ(i,j,k,4)=this%SLdQ(i,j,k,4)-dt*(1.0_WP-this%VF(i,j,k))*this%PG(i,j,k)*div
+         !   this%SLdQ(i,j,k,3)=this%SLdQ(i,j,k,3)-dt*(       this%VF(i,j,k))*this%PL(i,j,k)*div!-dt*(       this%VF(i,j,k))*this%PL(i,j,k)*div
+         !   this%SLdQ(i,j,k,4)=this%SLdQ(i,j,k,4)-dt*(1.0_WP-this%VF(i,j,k))*this%PG(i,j,k)*div!-dt*(1.0_WP-this%VF(i,j,k))*this%PG(i,j,k)*div
          !end if
       end do; end do; end do
       
@@ -707,7 +766,7 @@ contains
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:,1:), intent(out) :: dQdt  !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_,1:nVAR)
       real(WP), dimension(:,:,:,:), allocatable :: FQx,FQy,FQz
       integer :: i,j,k,n
-      real(WP) :: w,vel,div,visc,beta
+      real(WP) :: w,vel,div
       real(WP), parameter :: eps=1.0e-15_WP
       real(WP), dimension(-2: 0) :: wenop
       real(WP), dimension(-1:+1) :: wenom
@@ -745,7 +804,7 @@ contains
                FQx(3,i,j,k)=0.5_WP*(FQx(1,i,j,k)-abs(-FQx(1,i,j,k)))*sum(wenop*this%IL(i-2:i  ,j,k))&
                &           +0.5_WP*(FQx(1,i,j,k)+abs(-FQx(1,i,j,k)))*sum(wenom*this%IL(i-1:i+1,j,k))
                ! Mixture momentum advection and pressure stress
-               FQx(5,i,j,k)=FQx(1,i,j,k)*0.5_WP*sum(this%U(i-1:i,j,k))!-0.5_WP*sum(this%P(i-1:i,j,k))
+               FQx(5,i,j,k)=FQx(1,i,j,k)*0.5_WP*sum(this%U(i-1:i,j,k))-0.5_WP*sum(this%PL(i-1:i,j,k))
                FQx(6,i,j,k)=FQx(1,i,j,k)*0.5_WP*sum(this%V(i-1:i,j,k))
                FQx(7,i,j,k)=FQx(1,i,j,k)*0.5_WP*sum(this%W(i-1:i,j,k))
             else
@@ -760,7 +819,7 @@ contains
                FQx(4,i,j,k)=0.5_WP*(FQx(2,i,j,k)-abs(-FQx(2,i,j,k)))*sum(wenop*this%IG(i-2:i  ,j,k))&
                &           +0.5_WP*(FQx(2,i,j,k)+abs(-FQx(2,i,j,k)))*sum(wenom*this%IG(i-1:i+1,j,k))
                ! Mixture momentum advection and pressure stress
-               FQx(5,i,j,k)=FQx(2,i,j,k)*0.5_WP*sum(this%U(i-1:i,j,k))!-0.5_WP*sum(this%P(i-1:i,j,k))
+               FQx(5,i,j,k)=FQx(2,i,j,k)*0.5_WP*sum(this%U(i-1:i,j,k))-0.5_WP*sum(this%PG(i-1:i,j,k))
                FQx(6,i,j,k)=FQx(2,i,j,k)*0.5_WP*sum(this%V(i-1:i,j,k))
                FQx(7,i,j,k)=FQx(2,i,j,k)*0.5_WP*sum(this%W(i-1:i,j,k))
             end if
@@ -781,7 +840,7 @@ contains
                &           +0.5_WP*(FQy(1,i,j,k)+abs(-FQy(1,i,j,k)))*sum(wenom*this%IL(i,j-1:j+1,k))
                ! Mixture momentum advection and pressure stress
                FQy(5,i,j,k)=FQy(1,i,j,k)*0.5_WP*sum(this%U(i,j-1:j,k))
-               FQy(6,i,j,k)=FQy(1,i,j,k)*0.5_WP*sum(this%V(i,j-1:j,k))!-0.5_WP*sum(this%P(i,j-1:j,k))
+               FQy(6,i,j,k)=FQy(1,i,j,k)*0.5_WP*sum(this%V(i,j-1:j,k))-0.5_WP*sum(this%PL(i,j-1:j,k))
                FQy(7,i,j,k)=FQy(1,i,j,k)*0.5_WP*sum(this%W(i,j-1:j,k))
             else
                ! WENO phasic mass flux
@@ -796,7 +855,7 @@ contains
                &           +0.5_WP*(FQy(2,i,j,k)+abs(-FQy(2,i,j,k)))*sum(wenom*this%IG(i,j-1:j+1,k))
                ! Mixture momentum advection and pressure stress
                FQy(5,i,j,k)=FQy(2,i,j,k)*0.5_WP*sum(this%U(i,j-1:j,k))
-               FQy(6,i,j,k)=FQy(2,i,j,k)*0.5_WP*sum(this%V(i,j-1:j,k))!-0.5_WP*sum(this%P(i,j-1:j,k))
+               FQy(6,i,j,k)=FQy(2,i,j,k)*0.5_WP*sum(this%V(i,j-1:j,k))-0.5_WP*sum(this%PG(i,j-1:j,k))
                FQy(7,i,j,k)=FQy(2,i,j,k)*0.5_WP*sum(this%W(i,j-1:j,k))
             end if
          end if
@@ -817,7 +876,7 @@ contains
                ! Mixture momentum advection and pressure stress
                FQz(5,i,j,k)=FQz(1,i,j,k)*0.5_WP*sum(this%U(i,j,k-1:k))
                FQz(6,i,j,k)=FQz(1,i,j,k)*0.5_WP*sum(this%V(i,j,k-1:k))
-               FQz(7,i,j,k)=FQz(1,i,j,k)*0.5_WP*sum(this%W(i,j,k-1:k))!-0.5_WP*sum(this%P(i,j,k-1:k))
+               FQz(7,i,j,k)=FQz(1,i,j,k)*0.5_WP*sum(this%W(i,j,k-1:k))-0.5_WP*sum(this%PL(i,j,k-1:k))
             else
                ! WENO mass flux
                w=weno_weight((abs(this%RHOG(i,j,k-1)-this%RHOG(i,j,k-2))+eps)/(abs(this%RHOG(i,j,k)-this%RHOG(i,j,k-1))+eps)); wenop=0.5_WP*[      -w,1.0_WP+2.0_WP*w,1.0_WP-w]
@@ -832,29 +891,29 @@ contains
                ! Mixture momentum advection and pressure stress
                FQz(5,i,j,k)=FQz(2,i,j,k)*0.5_WP*sum(this%U(i,j,k-1:k))
                FQz(6,i,j,k)=FQz(2,i,j,k)*0.5_WP*sum(this%V(i,j,k-1:k))
-               FQz(7,i,j,k)=FQz(2,i,j,k)*0.5_WP*sum(this%W(i,j,k-1:k))!-0.5_WP*sum(this%P(i,j,k-1:k))
+               FQz(7,i,j,k)=FQz(2,i,j,k)*0.5_WP*sum(this%W(i,j,k-1:k))-0.5_WP*sum(this%PG(i,j,k-1:k))
             end if
          end if
-         FQz(5,i,j,k)=FQz(5,i,j,k)-0.5_WP*sum(this%P(i-1:i,j,k))
-         FQz(6,i,j,k)=FQz(6,i,j,k)-0.5_WP*sum(this%P(i,j-1:j,k))
-         FQz(7,i,j,k)=FQz(7,i,j,k)-0.5_WP*sum(this%P(i,j,k-1:k))
+         !FQz(5,i,j,k)=FQz(5,i,j,k)-0.5_WP*sum(this%P(i-1:i,j,k))
+         !FQz(6,i,j,k)=FQz(6,i,j,k)-0.5_WP*sum(this%P(i,j-1:j,k))
+         !FQz(7,i,j,k)=FQz(7,i,j,k)-0.5_WP*sum(this%P(i,j,k-1:k))
       end do; end do; end do
       
       ! Assemble time derivative for conserved variables using terms built from standard mass fluxes
       do k=this%cfg%kmin_,this%cfg%kmax_; do j=this%cfg%jmin_,this%cfg%jmax_; do i=this%cfg%imin_,this%cfg%imax_
          dQdt(i,j,k,:)=this%dxi*(FQx(:,i+1,j,k)-FQx(:,i,j,k))+this%dyi*(FQy(:,i,j+1,k)-FQy(:,i,j,k))+this%dzi*(FQz(:,i,j,k+1)-FQz(:,i,j,k))
          ! Add pressure dilation
-         div=0.5_WP*(this%dxi*(this%U(i+1,j,k)-this%U(i-1,j,k))+this%dyi*(this%V(i,j+1,k)-this%V(i,j-1,k))+this%dzi*(this%W(i,j,k+1)-this%W(i,j,k-1)))
-         dQdt(i,j,k,3)=dQdt(i,j,k,3)-(       this%VF(i,j,k))*this%P(i,j,k)*div
-         dQdt(i,j,k,4)=dQdt(i,j,k,4)-(1.0_WP-this%VF(i,j,k))*this%P(i,j,k)*div
-         !if (this%iSL(i,j,k).eq.0) then
-         !   div=0.5_WP*(this%dxi*(this%U(i+1,j,k)-this%U(i-1,j,k))+this%dyi*(this%V(i,j+1,k)-this%V(i,j-1,k))+this%dzi*(this%W(i,j,k+1)-this%W(i,j,k-1)))
-         !   if (this%VF(i,j,k).gt.0.5_WP) then
-         !      dQdt(i,j,k,3)=dQdt(i,j,k,3)-this%PL(i,j,k)*div
-         !   else
-         !      dQdt(i,j,k,4)=dQdt(i,j,k,4)-this%PG(i,j,k)*div
-         !  end if
-         !end if
+         !div=0.5_WP*(this%dxi*(this%U(i+1,j,k)-this%U(i-1,j,k))+this%dyi*(this%V(i,j+1,k)-this%V(i,j-1,k))+this%dzi*(this%W(i,j,k+1)-this%W(i,j,k-1)))
+         !dQdt(i,j,k,3)=dQdt(i,j,k,3)-(       this%VF(i,j,k))*this%P(i,j,k)*div
+         !dQdt(i,j,k,4)=dQdt(i,j,k,4)-(1.0_WP-this%VF(i,j,k))*this%P(i,j,k)*div
+         if (this%iSL(i,j,k).eq.0) then
+            div=0.5_WP*(this%dxi*(this%U(i+1,j,k)-this%U(i-1,j,k))+this%dyi*(this%V(i,j+1,k)-this%V(i,j-1,k))+this%dzi*(this%W(i,j,k+1)-this%W(i,j,k-1)))
+            if (this%VF(i,j,k).gt.0.5_WP) then
+               dQdt(i,j,k,3)=dQdt(i,j,k,3)-this%PL(i,j,k)*div!-this%PL(i,j,k)*div
+            else
+               dQdt(i,j,k,4)=dQdt(i,j,k,4)-this%PG(i,j,k)*div!-this%PG(i,j,k)*div
+           end if
+         end if
       end do; end do; end do
       
       ! ================================================================ !
@@ -865,57 +924,38 @@ contains
       FQx=0.0_WP; FQy=0.0_WP; FQz=0.0_WP
       
       !  Calculate viscous fluxes for the mixture
-      do k=this%cfg%kmin_,this%cfg%kmax_+1; do j=this%cfg%jmin_,this%cfg%jmax_+1; do i=this%cfg%imin_,this%cfg%imax_+1
-         ! X face
-         gradU(1,1)=        this%dxi*   (this%U(i      ,j,k)-this%U(i-1    ,j,k))
-         gradU(2,1)=0.25_WP*this%dyi*sum(this%U(i-1:i,j+1,k)-this%U(i-1:i,j-1,k))
-         gradU(3,1)=0.25_WP*this%dzi*sum(this%U(i-1:i,j,k+1)-this%U(i-1:i,j,k-1))
-         gradU(1,2)=        this%dxi*   (this%V(i      ,j,k)-this%V(i-1    ,j,k))
-         gradU(2,2)=0.25_WP*this%dyi*sum(this%V(i-1:i,j+1,k)-this%V(i-1:i,j-1,k))
-         gradU(3,2)=0.25_WP*this%dzi*sum(this%V(i-1:i,j,k+1)-this%V(i-1:i,j,k-1))
-         gradU(1,3)=        this%dxi*   (this%W(i      ,j,k)-this%W(i-1    ,j,k))
-         gradU(2,3)=0.25_WP*this%dyi*sum(this%W(i-1:i,j+1,k)-this%W(i-1:i,j-1,k))
-         gradU(3,3)=0.25_WP*this%dzi*sum(this%W(i-1:i,j,k+1)-this%W(i-1:i,j,k-1))
-         visc=0.5_WP*sum(this%VISC(i-1:i,j,k))
-         beta=0.5_WP*sum(this%BETA(i-1:i,j,k))
-         FQx(5,i,j,k)=2.0_WP*visc*gradU(1,1)+(beta-2.0_WP*visc/3.0_WP)*(gradU(1,1)+gradU(2,2)+gradU(3,3))
-         FQx(6,i,j,k)=visc*(gradU(2,1)+gradU(1,2))
-         FQx(7,i,j,k)=visc*(gradU(3,1)+gradU(1,3))
-         ! Y face
-         gradU(1,1)=0.25_WP*this%dxi*sum(this%U(i+1,j-1:j,k)-this%U(i-1,j-1:j,k))
-         gradU(2,1)=        this%dyi*   (this%U(i,j      ,k)-this%U(i,j-1    ,k))
-         gradU(3,1)=0.25_WP*this%dzi*sum(this%U(i,j-1:j,k+1)-this%U(i,j-1:j,k-1))
-         gradU(1,2)=0.25_WP*this%dxi*sum(this%V(i+1,j-1:j,k)-this%V(i-1,j-1:j,k))
-         gradU(2,2)=        this%dyi*   (this%V(i,j      ,k)-this%V(i,j-1    ,k))
-         gradU(3,2)=0.25_WP*this%dzi*sum(this%V(i,j-1:j,k+1)-this%V(i,j-1:j,k-1))
-         gradU(1,3)=0.25_WP*this%dxi*sum(this%W(i+1,j-1:j,k)-this%W(i-1,j-1:j,k))
-         gradU(2,3)=        this%dyi*   (this%W(i,j      ,k)-this%W(i,j-1    ,k))
-         gradU(3,3)=0.25_WP*this%dzi*sum(this%W(i,j-1:j,k+1)-this%W(i,j-1:j,k-1))
-         visc=0.5_WP*sum(this%VISC(i,j-1:j,k))
-         beta=0.5_WP*sum(this%BETA(i,j-1:j,k))
-         FQy(5,i,j,k)=visc*(gradU(2,1)+gradU(1,2))
-         FQy(6,i,j,k)=2.0_WP*visc*gradU(2,2)+(beta-2.0_WP*visc/3.0_WP)*(gradU(1,1)+gradU(2,2)+gradU(3,3))
-         FQy(7,i,j,k)=visc*(gradU(3,2)+gradU(2,3))
-         ! Z face
-         gradU(1,1)=0.25_WP*this%dxi*sum(this%U(i+1,j,k-1:k)-this%U(i-1,j,k-1:k))
-         gradU(2,1)=0.25_WP*this%dyi*sum(this%U(i,j+1,k-1:k)-this%U(i,j-1,k-1:k))
-         gradU(3,1)=        this%dzi*   (this%U(i,j,k      )-this%U(i,j,k-1    ))
-         gradU(1,2)=0.25_WP*this%dxi*sum(this%V(i+1,j,k-1:k)-this%V(i-1,j,k-1:k))
-         gradU(2,2)=0.25_WP*this%dyi*sum(this%V(i,j+1,k-1:k)-this%V(i,j-1,k-1:k))
-         gradU(3,2)=        this%dzi*   (this%V(i,j,k      )-this%V(i,j,k-1    ))
-         gradU(1,3)=0.25_WP*this%dxi*sum(this%W(i+1,j,k-1:k)-this%W(i-1,j,k-1:k))
-         gradU(2,3)=0.25_WP*this%dyi*sum(this%W(i,j+1,k-1:k)-this%W(i,j-1,k-1:k))
-         gradU(3,3)=        this%dzi*   (this%W(i,j,k      )-this%W(i,j,k-1    ))
-         visc=0.5_WP*sum(this%VISC(i,j,k-1:k))
-         beta=0.5_WP*sum(this%BETA(i,j,k-1:k))
-         FQz(5,i,j,k)=visc*(gradU(3,1)+gradU(1,3))
-         FQz(6,i,j,k)=visc*(gradU(3,2)+gradU(2,3))
-         FQz(7,i,j,k)=2.0_WP*visc*gradU(3,3)+(beta-2.0_WP*visc/3.0_WP)*(gradU(1,1)+gradU(2,2)+gradU(3,3))
+      do k=this%cfg%kmin_-1,this%cfg%kmax_+1; do j=this%cfg%jmin_-1,this%cfg%jmax_+1; do i=this%cfg%imin_-1,this%cfg%imax_+1
+         ! Compute velocity gradient tensor
+         gradU(1,1)=0.5_WP*this%dxi*(this%U(i+1,j,k)-this%U(i-1,j,k))
+         gradU(2,1)=0.5_WP*this%dyi*(this%U(i,j+1,k)-this%U(i,j-1,k))
+         gradU(3,1)=0.5_WP*this%dzi*(this%U(i,j,k+1)-this%U(i,j,k-1))
+         gradU(1,2)=0.5_WP*this%dxi*(this%V(i+1,j,k)-this%V(i-1,j,k))
+         gradU(2,2)=0.5_WP*this%dyi*(this%V(i,j+1,k)-this%V(i,j-1,k))
+         gradU(3,2)=0.5_WP*this%dzi*(this%V(i,j,k+1)-this%V(i,j,k-1))
+         gradU(1,3)=0.5_WP*this%dxi*(this%W(i+1,j,k)-this%W(i-1,j,k))
+         gradU(2,3)=0.5_WP*this%dyi*(this%W(i,j+1,k)-this%W(i,j-1,k))
+         gradU(3,3)=0.5_WP*this%dzi*(this%W(i,j,k+1)-this%W(i,j,k-1))
+         ! Assemble Newtonian stress tensor
+         FQx(5,i,j,k)=2.0_WP*this%VISC(i,j,k)*gradU(1,1)+(this%BETA(i,j,k)-2.0_WP*this%VISC(i,j,k)/3.0_WP)*(gradU(1,1)+gradU(2,2)+gradU(3,3))
+         FQx(6,i,j,k)=this%VISC(i,j,k)*(gradU(2,1)+gradU(1,2))
+         FQx(7,i,j,k)=this%VISC(i,j,k)*(gradU(3,1)+gradU(1,3))
+         FQy(5,i,j,k)=this%VISC(i,j,k)*(gradU(2,1)+gradU(1,2))
+         FQy(6,i,j,k)=2.0_WP*this%VISC(i,j,k)*gradU(2,2)+(this%BETA(i,j,k)-2.0_WP*this%VISC(i,j,k)/3.0_WP)*(gradU(1,1)+gradU(2,2)+gradU(3,3))
+         FQy(7,i,j,k)=this%VISC(i,j,k)*(gradU(3,2)+gradU(2,3))
+         FQz(5,i,j,k)=this%VISC(i,j,k)*(gradU(3,1)+gradU(1,3))
+         FQz(6,i,j,k)=this%VISC(i,j,k)*(gradU(3,2)+gradU(2,3))
+         FQz(7,i,j,k)=2.0_WP*this%VISC(i,j,k)*gradU(3,3)+(this%BETA(i,j,k)-2.0_WP*this%VISC(i,j,k)/3.0_WP)*(gradU(1,1)+gradU(2,2)+gradU(3,3))
+         ! Assemble viscous heating source term
+         FQx(3,i,j,k)=FQx(5,i,j,k)*gradU(1,1)+FQx(6,i,j,k)*gradU(1,2)+FQx(7,i,j,k)*gradU(1,3)&
+         &           +FQy(5,i,j,k)*gradU(2,1)+FQy(6,i,j,k)*gradU(2,2)+FQy(7,i,j,k)*gradU(2,3)&
+         &           +FQz(5,i,j,k)*gradU(3,1)+FQz(6,i,j,k)*gradU(3,2)+FQz(7,i,j,k)*gradU(3,3)
       end do; end do; end do
       
       ! Increment time derivative for conserved variables using viscous terms
       do k=this%cfg%kmin_,this%cfg%kmax_; do j=this%cfg%jmin_,this%cfg%jmax_; do i=this%cfg%imin_,this%cfg%imax_
-         dQdt(i,j,k,:)=dQdt(i,j,k,:)+this%dxi*(FQx(:,i+1,j,k)-FQx(:,i,j,k))+this%dyi*(FQy(:,i,j+1,k)-FQy(:,i,j,k))+this%dzi*(FQz(:,i,j,k+1)-FQz(:,i,j,k))
+         dQdt(i,j,k,5:7)=dQdt(i,j,k,5:7)+0.5_WP*(this%dxi*(FQx(5:7,i+1,j,k)-FQx(5:7,i-1,j,k))+this%dyi*(FQy(5:7,i,j+1,k)-FQy(5:7,i,j-1,k))+this%dzi*(FQz(5:7,i,j,k+1)-FQz(5:7,i,j,k-1)))
+         dQdt(i,j,k,3)  =dQdt(i,j,k,3)  +(       this%VF(i,j,k))*FQx(3,i,j,k)
+         dQdt(i,j,k,4)  =dQdt(i,j,k,4)  +(1.0_WP-this%VF(i,j,k))*FQx(3,i,j,k)
       end do; end do; end do
       
       ! Deallocate flux arrays
@@ -1354,9 +1394,9 @@ contains
          ! Get liquid primitive variables
          if (this%VF(i,j,k).ge.VFlo) then
             this%RHOL(i,j,k)=this%Q(i,j,k,1)/this%VF(i,j,k)
-            this%IL(i,j,k)=this%Q(i,j,k,3)/this%Q(i,j,k,1)
-            this%PL(i,j,k)=this%getPL(this%RHOL(i,j,k),this%IL(i,j,k))
-            CL            =this%getCL(this%RHOL(i,j,k),this%PL(i,j,k))
+            this%IL  (i,j,k)=this%Q(i,j,k,3)/this%Q(i,j,k,1)
+            this%PL  (i,j,k)=this%getPL(this%RHOL(i,j,k),this%IL(i,j,k))
+            CL              =this%getCL(this%RHOL(i,j,k),this%PL(i,j,k))
          else
             this%VF  (i,j,k)=0.0_WP
             this%BL(:,i,j,k)=[this%cfg%xm(i),this%cfg%ym(j),this%cfg%zm(k)]
@@ -1369,9 +1409,9 @@ contains
          ! Get gas primitive variables
          if (this%VF(i,j,k).le.VFhi) then
             this%RHOG(i,j,k)=this%Q(i,j,k,2)/(1.0_WP-this%VF(i,j,k))
-            this%IG(i,j,k)=this%Q(i,j,k,4)/this%Q(i,j,k,2)
-            this%PG(i,j,k)=this%getPG(this%RHOG(i,j,k),this%IG(i,j,k))
-            CG            =this%getCG(this%RHOG(i,j,k),this%PG(i,j,k))
+            this%IG  (i,j,k)=this%Q(i,j,k,4)/this%Q(i,j,k,2)
+            this%PG  (i,j,k)=this%getPG(this%RHOG(i,j,k),this%IG(i,j,k))
+            CG              =this%getCG(this%RHOG(i,j,k),this%PG(i,j,k))
          else
             this%VF  (i,j,k)=1.0_WP
             this%BL(:,i,j,k)=[this%cfg%xm(i),this%cfg%ym(j),this%cfg%zm(k)]
@@ -1465,8 +1505,8 @@ contains
       integer :: i,j,k,si,sj,sk,n
       integer, parameter :: nfilter=2
       real(WP) :: max_beta,dudy,dudz,dvdx,dvdz,dwdx,dwdy,vort,grad_div
-      real(WP), parameter :: max_cfl=0.5_WP
-      real(WP), parameter :: Cartif=2.0_WP
+      real(WP), parameter :: max_cfl=2.0_WP
+      real(WP), parameter :: Cartif=5.0_WP
       real(WP), parameter :: Cartif_vort=100.0_WP
       real(WP), dimension(:,:,:), allocatable :: div
       real(WP), dimension(-1:+1), parameter :: filter=[1.0_WP/6.0_WP,2.0_WP/3.0_WP,1.0_WP/6.0_WP]
@@ -1649,7 +1689,8 @@ contains
       this%CFLa_y=maxC*dt*this%dyi
       this%CFLa_z=maxC*dt*this%dzi
       ! Compute viscous CFLs
-      maxvisc=maxval((this%VISC+this%BETA)/(this%Q(:,:,:,1)+this%Q(:,:,:,2))); call MPI_ALLREDUCE(MPI_IN_PLACE,maxvisc,1,MPI_REAL_WP,MPI_MAX,this%cfg%comm,ierr)
+      !maxvisc=maxval((this%VISC+this%BETA)/(this%Q(:,:,:,1)+this%Q(:,:,:,2))); call MPI_ALLREDUCE(MPI_IN_PLACE,maxvisc,1,MPI_REAL_WP,MPI_MAX,this%cfg%comm,ierr)
+      maxvisc=maxval(this%VISC/(this%Q(:,:,:,1)+this%Q(:,:,:,2))); call MPI_ALLREDUCE(MPI_IN_PLACE,maxvisc,1,MPI_REAL_WP,MPI_MAX,this%cfg%comm,ierr)
       this%CFLv_x=4.0_WP*maxvisc*dt*this%dxi**2
       this%CFLv_y=4.0_WP*maxvisc*dt*this%dyi**2
       this%CFLv_z=4.0_WP*maxvisc*dt*this%dzi**2
