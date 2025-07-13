@@ -707,10 +707,11 @@ contains
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:,1:), intent(out) :: dQdt  !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_,1:nVAR)
       real(WP), dimension(:,:,:,:), allocatable :: FQx,FQy,FQz
       integer :: i,j,k,n
-      real(WP) :: w,vel,div
+      real(WP) :: w,vel,div,visc,beta
       real(WP), parameter :: eps=1.0e-15_WP
       real(WP), dimension(-2: 0) :: wenop
       real(WP), dimension(-1:+1) :: wenom
+      real(WP), dimension(1:3,1:3) :: gradU
       
       ! Start rhs timer
       call this%trhs%start()
@@ -854,6 +855,67 @@ contains
          !      dQdt(i,j,k,4)=dQdt(i,j,k,4)-this%PG(i,j,k)*div
          !  end if
          !end if
+      end do; end do; end do
+      
+      ! ================================================================ !
+      ! ======================== VISCOUS FLUXES ======================== !
+      ! ================================================================ !
+      
+      ! Zero out fluxes
+      FQx=0.0_WP; FQy=0.0_WP; FQz=0.0_WP
+      
+      !  Calculate viscous fluxes for the mixture
+      do k=this%cfg%kmin_,this%cfg%kmax_+1; do j=this%cfg%jmin_,this%cfg%jmax_+1; do i=this%cfg%imin_,this%cfg%imax_+1
+         ! X face
+         gradU(1,1)=        this%dxi*   (this%U(i      ,j,k)-this%U(i-1    ,j,k))
+         gradU(2,1)=0.25_WP*this%dyi*sum(this%U(i-1:i,j+1,k)-this%U(i-1:i,j-1,k))
+         gradU(3,1)=0.25_WP*this%dzi*sum(this%U(i-1:i,j,k+1)-this%U(i-1:i,j,k-1))
+         gradU(1,2)=        this%dxi*   (this%V(i      ,j,k)-this%V(i-1    ,j,k))
+         gradU(2,2)=0.25_WP*this%dyi*sum(this%V(i-1:i,j+1,k)-this%V(i-1:i,j-1,k))
+         gradU(3,2)=0.25_WP*this%dzi*sum(this%V(i-1:i,j,k+1)-this%V(i-1:i,j,k-1))
+         gradU(1,3)=        this%dxi*   (this%W(i      ,j,k)-this%W(i-1    ,j,k))
+         gradU(2,3)=0.25_WP*this%dyi*sum(this%W(i-1:i,j+1,k)-this%W(i-1:i,j-1,k))
+         gradU(3,3)=0.25_WP*this%dzi*sum(this%W(i-1:i,j,k+1)-this%W(i-1:i,j,k-1))
+         visc=0.5_WP*sum(this%VISC(i-1:i,j,k))
+         beta=0.5_WP*sum(this%BETA(i-1:i,j,k))
+         FQx(5,i,j,k)=2.0_WP*visc*gradU(1,1)+(beta-2.0_WP*visc/3.0_WP)*(gradU(1,1)+gradU(2,2)+gradU(3,3))
+         FQx(6,i,j,k)=visc*(gradU(2,1)+gradU(1,2))
+         FQx(7,i,j,k)=visc*(gradU(3,1)+gradU(1,3))
+         ! Y face
+         gradU(1,1)=0.25_WP*this%dxi*sum(this%U(i+1,j-1:j,k)-this%U(i-1,j-1:j,k))
+         gradU(2,1)=        this%dyi*   (this%U(i,j      ,k)-this%U(i,j-1    ,k))
+         gradU(3,1)=0.25_WP*this%dzi*sum(this%U(i,j-1:j,k+1)-this%U(i,j-1:j,k-1))
+         gradU(1,2)=0.25_WP*this%dxi*sum(this%V(i+1,j-1:j,k)-this%V(i-1,j-1:j,k))
+         gradU(2,2)=        this%dyi*   (this%V(i,j      ,k)-this%V(i,j-1    ,k))
+         gradU(3,2)=0.25_WP*this%dzi*sum(this%V(i,j-1:j,k+1)-this%V(i,j-1:j,k-1))
+         gradU(1,3)=0.25_WP*this%dxi*sum(this%W(i+1,j-1:j,k)-this%W(i-1,j-1:j,k))
+         gradU(2,3)=        this%dyi*   (this%W(i,j      ,k)-this%W(i,j-1    ,k))
+         gradU(3,3)=0.25_WP*this%dzi*sum(this%W(i,j-1:j,k+1)-this%W(i,j-1:j,k-1))
+         visc=0.5_WP*sum(this%VISC(i,j-1:j,k))
+         beta=0.5_WP*sum(this%BETA(i,j-1:j,k))
+         FQy(5,i,j,k)=visc*(gradU(2,1)+gradU(1,2))
+         FQy(6,i,j,k)=2.0_WP*visc*gradU(2,2)+(beta-2.0_WP*visc/3.0_WP)*(gradU(1,1)+gradU(2,2)+gradU(3,3))
+         FQy(7,i,j,k)=visc*(gradU(3,2)+gradU(2,3))
+         ! Z face
+         gradU(1,1)=0.25_WP*this%dxi*sum(this%U(i+1,j,k-1:k)-this%U(i-1,j,k-1:k))
+         gradU(2,1)=0.25_WP*this%dyi*sum(this%U(i,j+1,k-1:k)-this%U(i,j-1,k-1:k))
+         gradU(3,1)=        this%dzi*   (this%U(i,j,k      )-this%U(i,j,k-1    ))
+         gradU(1,2)=0.25_WP*this%dxi*sum(this%V(i+1,j,k-1:k)-this%V(i-1,j,k-1:k))
+         gradU(2,2)=0.25_WP*this%dyi*sum(this%V(i,j+1,k-1:k)-this%V(i,j-1,k-1:k))
+         gradU(3,2)=        this%dzi*   (this%V(i,j,k      )-this%V(i,j,k-1    ))
+         gradU(1,3)=0.25_WP*this%dxi*sum(this%W(i+1,j,k-1:k)-this%W(i-1,j,k-1:k))
+         gradU(2,3)=0.25_WP*this%dyi*sum(this%W(i,j+1,k-1:k)-this%W(i,j-1,k-1:k))
+         gradU(3,3)=        this%dzi*   (this%W(i,j,k      )-this%W(i,j,k-1    ))
+         visc=0.5_WP*sum(this%VISC(i,j,k-1:k))
+         beta=0.5_WP*sum(this%BETA(i,j,k-1:k))
+         FQz(5,i,j,k)=visc*(gradU(3,1)+gradU(1,3))
+         FQz(6,i,j,k)=visc*(gradU(3,2)+gradU(2,3))
+         FQz(7,i,j,k)=2.0_WP*visc*gradU(3,3)+(beta-2.0_WP*visc/3.0_WP)*(gradU(1,1)+gradU(2,2)+gradU(3,3))
+      end do; end do; end do
+      
+      ! Increment time derivative for conserved variables using viscous terms
+      do k=this%cfg%kmin_,this%cfg%kmax_; do j=this%cfg%jmin_,this%cfg%jmax_; do i=this%cfg%imin_,this%cfg%imax_
+         dQdt(i,j,k,:)=dQdt(i,j,k,:)+this%dxi*(FQx(:,i+1,j,k)-FQx(:,i,j,k))+this%dyi*(FQy(:,i,j+1,k)-FQy(:,i,j,k))+this%dzi*(FQz(:,i,j,k+1)-FQz(:,i,j,k))
       end do; end do; end do
       
       ! Deallocate flux arrays

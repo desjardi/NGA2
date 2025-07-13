@@ -389,6 +389,7 @@ contains
          call ens_out%add_scalar('Mach',Ma)
          call ens_out%add_scalar('beta',beta)
          call ens_out%add_scalar('visc',visc)
+         call ens_out%add_scalar('iSL',fs%iSL)
          ! Create surface mesh for PLIC
          smesh=surfmesh(nvar=0,name='plic')
          call fs%update_surfmesh(smesh)
