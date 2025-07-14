@@ -283,9 +283,7 @@ contains
       type(prt), pointer :: my_prt
       real(SP), dimension(:,:,:), allocatable :: spbuff
       real(WP), dimension(:), allocatable :: temp_time
-      character(len=str_medium) :: ctime
-      real(WP) :: rtime
-
+      
       ! Check provided time stamp and decide what to do
       if (this%ntime.eq.0) then
          ! First time stamp
@@ -295,14 +293,10 @@ contains
          this%time(1)=time
       else
          ! There are time stamps already, check where to insert
-         n=1
-         rewind: do i=this%ntime,1,-1
-            ! Convert time to appropriate accuracy before comparing
-            ctime=''; write(ctime,'(es12.5)') time; read(ctime,'(es12.5)') rtime
-            if (this%time(i).lt.rtime) then
-               n=i+1; exit rewind
-            end if
-         end do rewind
+         n=this%ntime+1
+         do i=this%ntime,1,-1
+            if (time.le.this%time(i)) n=n-1
+         end do
          this%ntime=n; allocate(temp_time(1:this%ntime))
          temp_time=[this%time(1:this%ntime-1),time]
          call move_alloc(temp_time,this%time)
@@ -557,174 +551,133 @@ contains
    
    !> Procedure that writes out a surface mesh in Ensight format
    subroutine write_surf(this,surf)
+      use precision, only: SP
       use messager,  only: die
-      use mpi_f08,   only: MPI_BARRIER,MPI_BCAST,MPI_INTEGER4
-      use precision, only: SP,DP,I4,I8
-
+      use mpi_f08,   only: mpi_barrier
       implicit none
       class(ensight), intent(in) :: this
       type(srf), pointer, intent(in) :: surf
-      integer     :: iunit,ierr,rank,n,count
-      integer     :: nvert,ntri,npoly,nconn_tri,nconn_poly,offset
-      integer(I4) :: data_size
-      integer(I4) :: buffer_I4
-      integer(I4) :: VTK_POLYGON = 7
-      integer(I4) :: VTK_BEZIER_TRIANGLE = 76
-      integer(I8) :: buffer_I8
-      character(len=1), parameter :: eol = char(10)
-      character(len=2), parameter :: idt = '  '
       character(len=str_medium) :: filename
-      character(len=50) :: time
-      nvert      = surf%ptr%nVert
-      ntri       = surf%ptr%nBezierTri
-      npoly      = surf%ptr%nPoly
-      nconn_tri  = size(surf%ptr%bezierTriConn)
-      nconn_poly = size(surf%ptr%polyConn)
-      offset     = 0
-      
+      integer :: iunit,ierr,rank,n
+      character(len=80) :: cbuff
+      real(SP) :: rbuff
+      integer :: ibuff
+
+      ! Write the case file from scratch in ASCII format
       if (this%cfg%amRoot) then
-         ! Open time collection file
-         open(newunit=iunit,file='ensight/'//trim(this%name)//'/'//trim(surf%name)//'.pvd',form='formatted',status='replace',access='stream',iostat=ierr)
-         if (ierr.ne.0) call die('[ensight write surf] Could not open file: '//'ensight/'//trim(this%name)//'/'//trim(surf%name)//'.pvd')
-         write(iunit,'(a)')   '<VTKFile type="Collection" version="0.1" byte_order="LittleEndian">'
-         write(iunit,'(a)')   idt//'<Collection>'
-         do n=1,this%ntime
-            filename=trim(surf%name)//'/'//trim(surf%name)//'.'
-            write(filename(len_trim(filename)+1:len_trim(filename)+6),'(i6.6)') n
-            filename=trim(filename)//'.vtu'       
-            write(iunit,'(a,es12.5,a)') idt//idt//'<DataSet timestep="',this%time(n),'" file="'//trim(filename)//'"/>'
+         ! Open the case file
+         open(newunit=iunit,file='ensight/'//trim(this%name)//'/'//trim(surf%name)//'.case',form='formatted',status='replace',access='stream',iostat=ierr)
+         ! Write all the geometry information
+         write(iunit,'(a,/,a,/,/,a,/,a,/)') 'FORMAT','type: ensight gold','GEOMETRY','model: 1 '//trim(surf%name)//'/'//trim(surf%name)//'.******'
+         ! Write the variables
+         write(iunit,'(a)') 'VARIABLE'
+         do n=1,surf%ptr%nvar
+            write(iunit,'(a)') 'scalar per element: 1 '//trim(surf%ptr%varname(n))//' '//trim(surf%name)//'/'//trim(surf%ptr%varname(n))//'.******'
          end do
-         write(iunit,'(a)')   idt//'</Collection>'
-         write(iunit,'(a)')   '</VTKFile>'
+         ! Write the time information
+         write(iunit,'(/,a,/,a,/,a,i0,/,a,/,a,/,a)') 'TIME','time set: 1','number of steps: ',this%ntime,'filename start number: 1','filename increment: 1','time values:'
+         write(iunit,'(999999(es12.5,/))') this%time
+         ! Close the case file
          close(iunit)
       end if
-
+      
+      ! Generate the surface geometry filename
       filename='ensight/'//trim(this%name)//'/'//trim(surf%name)//'/'//trim(surf%name)//'.'
       write(filename(len_trim(filename)+1:len_trim(filename)+6),'(i6.6)') this%ntime
-      filename=trim(filename)//'.vtu'
-
+      
+      ! Write the file header for Ensight Gold unstructured geometry
       if (this%cfg%amRoot) then
-         ! Write general ASCII header for timestep VTU file
-         open(newunit=iunit,file=filename,status='replace',form='formatted',access='stream',iostat=ierr)
+         ! Open the file
+         open(newunit=iunit,file=trim(filename),form='unformatted',status='replace',access='stream',iostat=ierr)
          if (ierr.ne.0) call die('[ensight write surf] Could not open file: '//trim(filename))
-         write(iunit,'(a)')             '<?xml version="1.0"?>'
-         write(iunit,'(a)')             '<VTKFile type="UnstructuredGrid" version="0.1" byte_order="LittleEndian">'
-         write(iunit,'(a)')             idt//'<UnstructuredGrid>'
+         ! General geometry header
+         cbuff='C Binary'                          ; write(iunit) cbuff
+         cbuff='Ensight Gold Geometry File'        ; write(iunit) cbuff
+         cbuff=trim(adjustl(surf%ptr%name))        ; write(iunit) cbuff
+         cbuff='node id off'                       ; write(iunit) cbuff
+         cbuff='element id off'                    ; write(iunit) cbuff
+         ! Extents
+         cbuff='extents'                           ; write(iunit) cbuff
+         rbuff=real(this%cfg%x(this%cfg%imin  ),SP); write(iunit) rbuff
+         rbuff=real(this%cfg%x(this%cfg%imax+1),SP); write(iunit) rbuff
+         rbuff=real(this%cfg%y(this%cfg%jmin  ),SP); write(iunit) rbuff
+         rbuff=real(this%cfg%y(this%cfg%jmax+1),SP); write(iunit) rbuff
+         rbuff=real(this%cfg%z(this%cfg%kmin  ),SP); write(iunit) rbuff
+         rbuff=real(this%cfg%z(this%cfg%kmax+1),SP); write(iunit) rbuff
          ! Close the file
          close(iunit)
       end if
       
-      ! Write ASCII header for local piece
+      ! Write polygonal mesh in Ensight Gold 'nsided' format
       do rank=0,this%cfg%nproc-1
          if (rank.eq.this%cfg%rank) then
-            open(newunit=iunit,file=filename,status='old',form='formatted',access='stream',position='append',iostat=ierr)
+            ! Open the file
+            open(newunit=iunit,file=trim(filename),form='unformatted',status='old',access='stream',position='append',iostat=ierr)
             if (ierr.ne.0) call die('[ensight write surf] Could not open file: '//trim(filename))
-            write(iunit,'(a,i0,a,i0,a)')   idt//idt//'<Piece NumberOfPoints="',nvert,'" NumberOfCells ="',ntri+npoly,'">'
-            write(iunit,'(a)')             idt//idt//idt//'<Points>'
-            write(iunit,'(a,i0,a,i0,a)')   idt//idt//idt//idt//'<DataArray type="Float',SP*8,'" NumberOfComponents="3" format="appended" offset="',offset,'">'
-            write(iunit,'(a)')             idt//idt//idt//idt//'</DataArray>'
-            offset=offset+I4+nvert*3*SP
-            write(iunit,'(a)')             idt//idt//idt//'</Points>'
-            write(iunit,'(a)')             idt//idt//idt//'<PointData RationalWeights="RationalWeights">'
-            write(iunit,'(a,i0,a,i0,a)')   idt//idt//idt//idt//'<DataArray type="Float',SP*8,'" Name="RationalWeights" format="appended" offset="',offset,'">'
-            write(iunit,'(a)')             idt//idt//idt//idt//'</DataArray>'
-            offset=offset+I4+nvert*SP
-            write(iunit,'(a)')             idt//idt//idt//'</PointData>'
-            write(iunit,'(a)')             idt//idt//idt//'<Cells>'
-            write(iunit,'(a,i0,a,i0,a)')   idt//idt//idt//idt//'<DataArray type="Int',I8*8,'" Name="connectivity" format="appended" offset="',offset,'">'
-            write(iunit,'(a)')             idt//idt//idt//idt//'</DataArray>'
-            offset=offset+I4+nconn_tri*I8+nconn_poly*I8
-            write(iunit,'(a,i0,a,i0,a)')   idt//idt//idt//idt//'<DataArray type="Int',I8*8,'" Name="offsets" format="appended" offset="',offset,'">'
-            write(iunit,'(a)')             idt//idt//idt//idt//'</DataArray>'
-            offset=offset+I4+ntri*I8+npoly*I8
-            write(iunit,'(a,i0,a,i0,a)')   idt//idt//idt//idt//'<DataArray type="Int',I4*8,'" Name="types" format="appended" offset="',offset,'">'
-            write(iunit,'(a)')             idt//idt//idt//idt//'</DataArray>'
-            offset=offset+I4+ntri*I4+npoly*I4
-            write(iunit,'(a)')             idt//idt//idt//'</Cells>'
-            if (surf%ptr%nvar.gt.0) then
-               write(iunit,'(a)')          idt//idt//idt//'<CellData>'
-               do n=1,surf%ptr%nvar
-                  write(iunit,'(a,i0,a,i0,a)')   idt//idt//idt//idt//'<DataArray type="Float',SP*8,'" Name="'//trim(surf%ptr%varname(n))//'" format="appended" offset="',offset,'">'
-                  write(iunit,'(a)')             idt//idt//idt//idt//'</DataArray>'
-                  offset=offset+I4+ntri*SP+npoly*SP
-               end do
-               write(iunit,'(a)')          idt//idt//idt//'</CellData>'
+            if (surf%ptr%nBezierTri.gt.0) call die('[ensight write surf] Does not support VTK Bezier triangle output.')
+            ! Part header
+            cbuff='part'                              ; write(iunit) cbuff
+            ibuff=rank+1                              ; write(iunit) ibuff
+            cbuff='Surface geometry per processor #'
+            write(cbuff(len_trim(cbuff)+1:len_trim(cbuff)+6),'(i6.6)') this%cfg%rank
+            write(iunit) cbuff
+            ! Write part info if it exists on the processor
+            if (surf%ptr%nPoly.gt.0) then
+               ! Write out vertices
+               cbuff='coordinates'                       ; write(iunit) cbuff
+               ibuff=surf%ptr%nVert                      ; write(iunit) ibuff
+               write(iunit) real(surf%ptr%xVert,SP)
+               write(iunit) real(surf%ptr%yVert,SP)
+               write(iunit) real(surf%ptr%zVert,SP)
+               ! Write out polygons
+               cbuff='nsided'                            ; write(iunit) cbuff
+               ibuff=surf%ptr%nPoly                      ; write(iunit) ibuff
+               write(iunit) surf%ptr%polySize
+               write(iunit) surf%ptr%polyConn+1
             end if
-            write(iunit,'(a)')             idt//idt//'</Piece>'
-            if (rank.eq.this%cfg%nproc-1) then
-               write(iunit,'(a)')          idt//'</UnstructuredGrid>'
-            end if
+            ! Close the file
             close(iunit)
          end if
          ! Force synchronization
-         call MPI_BCAST(offset,1,MPI_INTEGER4,rank,this%cfg%comm,ierr)
-      end do
-
-      ! Write binary data
-      do rank=0,this%cfg%nproc-1
-         if (rank.eq.this%cfg%rank) then
-            open(newunit=iunit,file=filename,status='old',form='unformatted',access='stream',position='append',iostat=ierr)
-            if (ierr.ne.0) call die('[ensight write surf] Could not open file: '//trim(filename))
-            if (rank.eq.0) then
-               write(iunit) '<AppendedData encoding="raw">'//eol
-               write(iunit) '_'
-            end if
-            data_size=nvert*3*SP
-            write(iunit) data_size
-            do n=1,nvert
-               write(iunit) real(surf%ptr%xVert(n),SP),real(surf%ptr%yVert(n),SP),real(surf%ptr%zVert(n),SP)
-            end do
-            data_size=nvert*SP
-            write(iunit) data_size
-            do n=1,nvert
-               write(iunit) real(surf%ptr%wVert(n),SP)
-            end do
-            data_size=nconn_tri*I8+nconn_poly*I8
-            write(iunit) data_size
-            do n=1,nconn_tri
-               buffer_I8=surf%ptr%bezierTriConn(n)
-               write(iunit) buffer_I8
-            end do
-            do n=1,nconn_poly
-               buffer_I8=surf%ptr%polyConn(n)
-               write(iunit) buffer_I8
-            end do
-            data_size=ntri*I8+npoly*I8
-            write(iunit) data_size
-            do n=1,ntri
-               buffer_I8=n*6
-               write(iunit) buffer_I8
-            end do
-            buffer_I8=6*ntri
-            do n=1,npoly
-               buffer_I8=buffer_I8+surf%ptr%polySize(n)
-               write(iunit) buffer_I8
-            end do
-            data_size=ntri*I4+npoly*I4
-            write(iunit) data_size
-            do n=1,ntri
-               write(iunit) VTK_BEZIER_TRIANGLE
-            end do
-            do n=1,npoly
-               write(iunit) VTK_POLYGON
-            end do
-            if (surf%ptr%nvar.gt.0) then
-                do n=1,surf%ptr%nvar
-                  data_size=ntri*SP+npoly*SP
-                  write(iunit) data_size
-                  write(iunit) real(surf%ptr%var(n,:),SP)
-               end do
-            end if
-            if (rank.eq.this%cfg%nproc-1) then
-               write(iunit) eol//'</AppendedData>'//eol
-               write(iunit) '</VTKFile>'//eol
-            end if
-            close(iunit)
-            end if
-         ! Force synchronization
          call MPI_BARRIER(this%cfg%comm,ierr)
       end do
-
+      
+      ! Generate the additional variable files
+      do n=1,surf%ptr%nvar
+         filename='ensight/'//trim(this%name)//'/'//trim(surf%name)//'/'//trim(surf%ptr%varname(n))//'.'
+         write(filename(len_trim(filename)+1:len_trim(filename)+6),'(i6.6)') this%ntime
+         ! Root write the header
+         if (this%cfg%amRoot) then
+            ! Open the file
+            open(newunit=iunit,file=trim(filename),form='unformatted',status='replace',access='stream',iostat=ierr)
+            if (ierr.ne.0) call die('[ensight write surf] Could not open file: '//trim(filename))
+            ! Write the header
+            cbuff=trim(surf%name); write(iunit) cbuff
+            ! Close the file
+            close(iunit)
+         end if
+         ! Write the surface variables
+         do rank=0,this%cfg%nproc-1
+            if (rank.eq.this%cfg%rank) then
+               ! Open the file
+               open(newunit=iunit,file=trim(filename),form='unformatted',status='old',access='stream',position='append',iostat=ierr)
+               if (ierr.ne.0) call die('[ensight write surf] Could not open file: '//trim(filename))
+               ! Part header
+               cbuff='part'         ; write(iunit) cbuff
+               ibuff=rank+1         ; write(iunit) ibuff
+               ! Write surf info if it exists on the processor
+               if (surf%ptr%nPoly.gt.0) then
+                  cbuff='nsided'       ; write(iunit) cbuff
+                  write(iunit) real(surf%ptr%var(n,:),SP)
+               end if
+               ! Close the file
+               close(iunit)
+            end if
+            ! Force synchronization
+            call MPI_BARRIER(this%cfg%comm,ierr)
+         end do
+      end do
+      
    end subroutine write_surf
    
    
@@ -837,7 +790,7 @@ contains
             open(newunit=iunit,file=trim(filename),form='unformatted',status='replace',access='stream',iostat=ierr)
             if (ierr.ne.0) call die('[ensight write part] Could not open file: '//trim(filename))
             ! General header
-            cbuff='particle '//trim(adjustl(part%ptr%vecname(n))); write(iunit) cbuff
+            cbuff='particle'//trim(adjustl(part%ptr%vecname(n)))     ; write(iunit) cbuff
             ! Close the file
             close(iunit)
          end if
