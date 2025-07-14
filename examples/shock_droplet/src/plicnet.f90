@@ -321,7 +321,7 @@ contains
       tmparr=max(0.0_WP,matmul(tmparr,lay2_weight)+lay2_bias)
       tmparr=max(0.0_WP,matmul(tmparr,lay3_weight)+lay3_bias)
       normal=matmul(tmparr,lay4_weight)+lay4_bias
-   end subroutine
+   end subroutine get_normal
    subroutine reflect_moments(moments,center,direction)
       implicit none
       real(WP), dimension(0:), intent(inout) :: moments !< Needs to be of size (0:188)
@@ -399,7 +399,7 @@ contains
                         moments(7*(i*9+j*3+k)+n)=-moments(7*(i*9+2*3+k)+n)
                         moments(7*(i*9+2*3+k)+n)=-temp
                      else
-                        temp = moments(7*(i*9+j*3+k)+n)
+                        temp=moments(7*(i*9+j*3+k)+n)
                         moments(7*(i*9+j*3+k)+n)=+moments(7*(i*9+2*3+k)+n)
                         moments(7*(i*9+2*3+k)+n)=+temp
                      end if

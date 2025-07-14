@@ -435,7 +435,7 @@ contains
       real(WP), dimension(:,:,:,:), allocatable :: SLVx,SLVy,SLVz
       real(WP), dimension(:,:,:,:), allocatable :: SLQx,SLQy,SLQz
       real(WP), dimension(:,:,:,:), allocatable :: SLPx,SLPy,SLPz
-      real(WP), dimension(:,:,:)  , allocatable :: Ui,Vi,Wi
+      !real(WP), dimension(:,:,:)  , allocatable :: Ui,Vi,Wi
       
       ! Start semi-Lagrangian timer
       call this%tsl%start()
@@ -448,16 +448,16 @@ contains
       call new(detailed_face_flux)
       
       ! Calculate cell-centered velocity using passed velocity and synchronize/extend
-      allocate(Ui(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
-      allocate(Vi(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
-      allocate(Wi(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
-      do k=this%cfg%kmino_,this%cfg%kmaxo_-1; do j=this%cfg%jmino_,this%cfg%jmaxo_-1; do i=this%cfg%imino_,this%cfg%imaxo_-1
-         Ui(i,j,k)=0.5_WP*sum(U(i:i+1,j,k)); Vi(i,j,k)=0.5_WP*sum(V(i,j:j+1,k)); Wi(i,j,k)=0.5_WP*sum(W(i,j,k:k+1))
-      end do; end do; end do
-      call this%cfg%sync(Ui); call this%cfg%sync(Vi); call this%cfg%sync(Wi)
-      if (.not.this%cfg%xper.and.this%cfg%iproc.eq.this%cfg%npx) then; Ui(this%cfg%imaxo,:,:)=U(this%cfg%imaxo,:,:); Vi(this%cfg%imaxo,:,:)=V(this%cfg%imaxo,:,:); Wi(this%cfg%imaxo,:,:)=W(this%cfg%imaxo,:,:); end if
-      if (.not.this%cfg%yper.and.this%cfg%jproc.eq.this%cfg%npy) then; Ui(:,this%cfg%jmaxo,:)=U(:,this%cfg%jmaxo,:); Vi(:,this%cfg%jmaxo,:)=V(:,this%cfg%jmaxo,:); Wi(:,this%cfg%jmaxo,:)=W(:,this%cfg%jmaxo,:); end if
-      if (.not.this%cfg%zper.and.this%cfg%kproc.eq.this%cfg%npz) then; Ui(:,:,this%cfg%kmaxo)=U(:,:,this%cfg%kmaxo); Vi(:,:,this%cfg%kmaxo)=V(:,:,this%cfg%kmaxo); Wi(:,:,this%cfg%kmaxo)=W(:,:,this%cfg%kmaxo); end if
+      ! allocate(Ui(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
+      ! allocate(Vi(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
+      ! allocate(Wi(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
+      ! do k=this%cfg%kmino_,this%cfg%kmaxo_-1; do j=this%cfg%jmino_,this%cfg%jmaxo_-1; do i=this%cfg%imino_,this%cfg%imaxo_-1
+      !    Ui(i,j,k)=0.5_WP*sum(U(i:i+1,j,k)); Vi(i,j,k)=0.5_WP*sum(V(i,j:j+1,k)); Wi(i,j,k)=0.5_WP*sum(W(i,j,k:k+1))
+      ! end do; end do; end do
+      ! call this%cfg%sync(Ui); call this%cfg%sync(Vi); call this%cfg%sync(Wi)
+      ! if (.not.this%cfg%xper.and.this%cfg%iproc.eq.this%cfg%npx) then; Ui(this%cfg%imaxo,:,:)=U(this%cfg%imaxo,:,:); Vi(this%cfg%imaxo,:,:)=V(this%cfg%imaxo,:,:); Wi(this%cfg%imaxo,:,:)=W(this%cfg%imaxo,:,:); end if
+      ! if (.not.this%cfg%yper.and.this%cfg%jproc.eq.this%cfg%npy) then; Ui(:,this%cfg%jmaxo,:)=U(:,this%cfg%jmaxo,:); Vi(:,this%cfg%jmaxo,:)=V(:,this%cfg%jmaxo,:); Wi(:,this%cfg%jmaxo,:)=W(:,this%cfg%jmaxo,:); end if
+      ! if (.not.this%cfg%zper.and.this%cfg%kproc.eq.this%cfg%npz) then; Ui(:,:,this%cfg%kmaxo)=U(:,:,this%cfg%kmaxo); Vi(:,:,this%cfg%kmaxo)=V(:,:,this%cfg%kmaxo); Wi(:,:,this%cfg%kmaxo)=W(:,:,this%cfg%kmaxo); end if
       
       ! Allocate semi-Lagrangian volume fluxes
       allocate(SLVx(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_,1:8)); SLVx=0.0_WP
@@ -618,7 +618,7 @@ contains
       end do; end do; end do
       
       ! Deallocate volume, pressure flux arrays, and interpolated velocity
-      deallocate(SLVx,SLVy,SLVz,SLPx,SLPy,SLPz,Ui,Vi,Wi)
+      deallocate(SLVx,SLVy,SLVz,SLPx,SLPy,SLPz)!,Ui,Vi,Wi)
       
       ! Synchronize pressures
       call this%cfg%sync(this%PL); call this%cfg%sync(this%PG)
@@ -774,8 +774,14 @@ contains
          real(WP), dimension(3), intent(in) :: p1
          real(WP), dimension(3)             :: p2
          real(WP),               intent(in) :: mydt
-         p2=p1+mydt*interp_velocity(        p1    )
-         p2=p1+mydt*interp_velocity(0.5_WP*(p1+p2))
+         !p2=p1+mydt*interp_velocity(        p1    )
+         !p2=p1+mydt*interp_velocity(0.5_WP*(p1+p2))
+         real(WP), dimension(3) :: v1,v2,v3,v4
+         v1=interp_velocity(p1               )
+         v2=interp_velocity(p1+0.5_WP*mydt*v1)
+         v3=interp_velocity(p1+0.5_WP*mydt*v2)
+         v4=interp_velocity(p1+       mydt*v3)
+         p2=p1+mydt/6.0_WP*(v1+2.0_WP*v2+2.0_WP*v3+v4)
       end function project
       !> Function that performs trilinear interpolation of staggered velocity to pos
       !> This version assumes a uniform mesh for maximum speed
