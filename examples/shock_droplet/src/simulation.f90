@@ -151,8 +151,26 @@ contains
       Q(3)=Q(3)-0.5_WP*(Pint+Peq)*(VFeq-VF)
       Q(4)=Q(4)+0.5_WP*(Pint+Peq)*(VFeq-VF)
       VF=VFeq
+      ! If the resulting pressure is negative, also perform thermal equilibration
+      if (Peq.le.-PinfG) then
+         ! Setup quadratic problem
+         a=Q(1)*CvL+Q(2)*CvG
+         b=Q(1)*CvL*(GammaL*PinfL+PinfG)+Q(2)*CvG*(GammaG*PinfG+PinfL)-sum(Q(3:4))*(Q(1)*CvL*(GammaL-1.0_WP)+Q(2)*CvG*(GammaG-1.0_WP))
+         d=(Q(1)*CvL*GammaL+Q(2)*CvG*GammaG)*PinfL*PinfG-sum(Q(3:4))*(Q(1)*CvL*(GammaL-1.0_WP)*PinfG+Q(2)*CvG*(GammaG-1.0_WP)*PinfL)
+         ! Get equilibrium pressure
+         Peq=(-b+sqrt(b**2-4.0_WP*a*d))/(2.0_WP*a)
+         ! Get equilibrium volume fraction
+         VFeq=Q(1)*CvL*(GammaL-1.0_WP)*(Peq+PinfG)/(Q(1)*CvL*(GammaL-1.0_WP)*(Peq+PinfG)+Q(2)*CvG*(GammaG-1.0_WP)*(Peq+PinfL))
+         ! Clean up solution
+         if (VFeq.lt.0.0_WP) then; VFeq=0.0_WP; Peq=max(Peq,-PinfL); end if
+         if (VFeq.gt.1.0_WP) then; VFeq=1.0_WP; Peq=max(Peq,-PinfG); end if
+         ! Adjust conserved quantities
+         Q(3)=(       VFeq)*(Peq+GammaL*PinfL)/(GammaL-1.0_WP)
+         Q(4)=(1.0_WP-VFeq)*(Peq+GammaG*PinfG)/(GammaG-1.0_WP)
+         VF=VFeq
+      end if
       ! Last debugging check... Probably should never happen...
-      if (Peq.lt.-PinfG) print*,"****************** NEGATIVE PRESSURE! - time",time%t,"VFeq",VFeq,"Peq",Peq
+      if (Peq.le.-PinfG) print*,"****************** NEGATIVE PRESSURE! - time",time%t,"VFeq",VFeq,"Peq",Peq
    end subroutine P_relax
    
    
@@ -335,13 +353,13 @@ contains
                   call initialize_volume_moments(lo=[cfg%x(i),cfg%y(j),cfg%z(k)],hi=[cfg%x(i+1),cfg%y(j+1),cfg%z(k+1)],&
                   levelset=levelset_drop,time=0.0_WP,level=4,VFlo=VFlo,VF=fs%VF(i,j,k),BL=fs%BL(:,i,j,k),BG=fs%BG(:,i,j,k))
                   ! Initialize mixture velocity to normal shock
-                  fs%U(i,j,k)=0!u2*Hshock(Xs-cfg%x(i),delta=0.5_WP*fs%dx)
-                  fs%V(i,j,k)=1!0.0_WP
+                  fs%U(i,j,k)=u2*Hshock(Xs-cfg%x(i),delta=0.5_WP*fs%dx)
+                  fs%V(i,j,k)=0.0_WP
                   fs%W(i,j,k)=0.0_WP
                   ! Gas variables
                   if (fs%VF(i,j,k).lt.1.0_WP) then
-                     fs%RHOG(i,j,k)=rho1!+(rho2-rho1)*Hshock(Xs-cfg%xm(i),delta=0.5_WP*fs%dx)
-                     fs%PG  (i,j,k)=p1  !+(p2  -p1  )*Hshock(Xs-cfg%xm(i),delta=0.5_WP*fs%dx)
+                     fs%RHOG(i,j,k)=rho1+(rho2-rho1)*Hshock(Xs-cfg%xm(i),delta=0.5_WP*fs%dx)
+                     fs%PG  (i,j,k)=p1  +(p2  -p1  )*Hshock(Xs-cfg%xm(i),delta=0.5_WP*fs%dx)
                      fs%IG  (i,j,k)=(fs%PG(i,j,k)+GammaG*PinfG)/(fs%RHOG(i,j,k)*(GammaG-1.0_WP))
                   end if
                   ! Liquid variables
@@ -472,7 +490,6 @@ contains
          real(WP), intent(in) :: t
          real(WP) :: G
          G=0.5_WP-sqrt(sum(xyz**2))
-         !G=0.028_WP-sqrt(sum(xyz**2))
       end function levelset_drop
       !> Level set function for a slab of unity width centered at x=0
       function levelset_slab(xyz,t) result(G)
@@ -517,10 +534,10 @@ contains
          end block copy_plic_to_old
          
          ! Tag cells for semi-Lagrangian transport
-         call fs%SLtag()
+         call fs%SLtag(); fs%iSL=1
          
          ! Prepare SGS viscosity models
-         beta=0.0_WP !call fs%get_viscartif(dt=time%dt,beta=beta)
+         call fs%get_viscartif(dt=time%dt,beta=beta)
          visc=0.0_WP !call fs%get_vreman(dt=time%dt,visc=visc)
          mixture_viscosity: block
             integer  :: i,j,k

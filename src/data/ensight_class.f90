@@ -285,7 +285,7 @@ contains
       real(WP), dimension(:), allocatable :: temp_time
       character(len=str_medium) :: ctime
       real(WP) :: rtime
-
+      
       ! Check provided time stamp and decide what to do
       if (this%ntime.eq.0) then
          ! First time stamp

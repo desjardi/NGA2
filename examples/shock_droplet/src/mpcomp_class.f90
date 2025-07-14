@@ -435,6 +435,7 @@ contains
       real(WP), dimension(:,:,:,:), allocatable :: SLVx,SLVy,SLVz
       real(WP), dimension(:,:,:,:), allocatable :: SLQx,SLQy,SLQz
       real(WP), dimension(:,:,:,:), allocatable :: SLPx,SLPy,SLPz
+      real(WP), dimension(:,:,:)  , allocatable :: Ui,Vi,Wi
       
       ! Start semi-Lagrangian timer
       call this%tsl%start()
@@ -445,6 +446,18 @@ contains
       ! Allocate flux polyhedron and detailed face flux
       call new(flux_polyhedron)
       call new(detailed_face_flux)
+      
+      ! Calculate cell-centered velocity using passed velocity and synchronize/extend
+      allocate(Ui(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
+      allocate(Vi(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
+      allocate(Wi(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
+      do k=this%cfg%kmino_,this%cfg%kmaxo_-1; do j=this%cfg%jmino_,this%cfg%jmaxo_-1; do i=this%cfg%imino_,this%cfg%imaxo_-1
+         Ui(i,j,k)=0.5_WP*sum(U(i:i+1,j,k)); Vi(i,j,k)=0.5_WP*sum(V(i,j:j+1,k)); Wi(i,j,k)=0.5_WP*sum(W(i,j,k:k+1))
+      end do; end do; end do
+      call this%cfg%sync(Ui); call this%cfg%sync(Vi); call this%cfg%sync(Wi)
+      if (.not.this%cfg%xper.and.this%cfg%iproc.eq.this%cfg%npx) then; Ui(this%cfg%imaxo,:,:)=U(this%cfg%imaxo,:,:); Vi(this%cfg%imaxo,:,:)=V(this%cfg%imaxo,:,:); Wi(this%cfg%imaxo,:,:)=W(this%cfg%imaxo,:,:); end if
+      if (.not.this%cfg%yper.and.this%cfg%jproc.eq.this%cfg%npy) then; Ui(:,this%cfg%jmaxo,:)=U(:,this%cfg%jmaxo,:); Vi(:,this%cfg%jmaxo,:)=V(:,this%cfg%jmaxo,:); Wi(:,this%cfg%jmaxo,:)=W(:,this%cfg%jmaxo,:); end if
+      if (.not.this%cfg%zper.and.this%cfg%kproc.eq.this%cfg%npz) then; Ui(:,:,this%cfg%kmaxo)=U(:,:,this%cfg%kmaxo); Vi(:,:,this%cfg%kmaxo)=V(:,:,this%cfg%kmaxo); Wi(:,:,this%cfg%kmaxo)=W(:,:,this%cfg%kmaxo); end if
       
       ! Allocate semi-Lagrangian volume fluxes
       allocate(SLVx(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_,1:8)); SLVx=0.0_WP
@@ -604,8 +617,8 @@ contains
          if (VFold.gt.VFhi.and.this%VF(i,j,k).le.VFhi) this%PG(i,j,k)=(SLPx(i+1,j,k,2)-SLPx(i,j,k,2)+SLPy(i,j+1,k,2)-SLPy(i,j,k,2)+SLPz(i,j,k+1,2)-SLPz(i,j,k,2))/Gvol
       end do; end do; end do
       
-      ! Deallocate volume and pressure flux arrays
-      deallocate(SLVx,SLVy,SLVz,SLPx,SLPy,SLPz)
+      ! Deallocate volume, pressure flux arrays, and interpolated velocity
+      deallocate(SLVx,SLVy,SLVz,SLPx,SLPy,SLPz,Ui,Vi,Wi)
       
       ! Synchronize pressures
       call this%cfg%sync(this%PL); call this%cfg%sync(this%PG)
@@ -767,27 +780,48 @@ contains
       !> Function that performs trilinear interpolation of staggered velocity to pos
       !> This version assumes a uniform mesh for maximum speed
       function interp_velocity(pos) result(vel)
-         implicit none
-         real(WP), dimension(3), intent(in) :: pos
-         real(WP), dimension(3) :: vel
-         integer  :: ip,jp,kp
-         real(WP) :: wx1,wy1,wz1,wx2,wy2,wz2
-         ! Perform tri-linear interpolation of U component
-         ip=min(max(floor((pos(1)-this%cfg%x (this%cfg%imino))/this%dx)+this%cfg%imino,this%cfg%imino_),this%cfg%imaxo_-1); wx1=min(max((pos(1)-this%cfg%x (ip))*this%dxi,0.0_WP),1.0_WP); wx2=1.0_WP-wx1
-         jp=min(max(floor((pos(2)-this%cfg%ym(this%cfg%jmino))/this%dy)+this%cfg%jmino,this%cfg%jmino_),this%cfg%jmaxo_-1); wy1=min(max((pos(2)-this%cfg%ym(jp))*this%dyi,0.0_WP),1.0_WP); wy2=1.0_WP-wy1
-         kp=min(max(floor((pos(3)-this%cfg%zm(this%cfg%kmino))/this%dz)+this%cfg%kmino,this%cfg%kmino_),this%cfg%kmaxo_-1); wz1=min(max((pos(3)-this%cfg%zm(kp))*this%dzi,0.0_WP),1.0_WP); wz2=1.0_WP-wz1
-         vel(1)=wz1*(wy1*(wx1*U(ip+1,jp+1,kp+1)+wx2*U(ip,jp+1,kp+1))+wy2*(wx1*U(ip+1,jp,kp+1)+wx2*U(ip,jp,kp+1)))+wz2*(wy1*(wx1*U(ip+1,jp+1,kp)+wx2*U(ip,jp+1,kp))+wy2*(wx1*U(ip+1,jp,kp)+wx2*U(ip,jp,kp)))
-         ! Perform tri-linear interpolation of V component
-         ip=min(max(floor((pos(1)-this%cfg%xm(this%cfg%imino))/this%dx)+this%cfg%imino,this%cfg%imino_),this%cfg%imaxo_-1); wx1=min(max((pos(1)-this%cfg%xm(ip))*this%dxi,0.0_WP),1.0_WP); wx2=1.0_WP-wx1
-         jp=min(max(floor((pos(2)-this%cfg%y (this%cfg%jmino))/this%dy)+this%cfg%jmino,this%cfg%jmino_),this%cfg%jmaxo_-1); wy1=min(max((pos(2)-this%cfg%y (jp))*this%dyi,0.0_WP),1.0_WP); wy2=1.0_WP-wy1
-         kp=min(max(floor((pos(3)-this%cfg%zm(this%cfg%kmino))/this%dz)+this%cfg%kmino,this%cfg%kmino_),this%cfg%kmaxo_-1); wz1=min(max((pos(3)-this%cfg%zm(kp))*this%dzi,0.0_WP),1.0_WP); wz2=1.0_WP-wz1
-         vel(2)=wz1*(wy1*(wx1*V(ip+1,jp+1,kp+1)+wx2*V(ip,jp+1,kp+1))+wy2*(wx1*V(ip+1,jp,kp+1)+wx2*V(ip,jp,kp+1)))+wz2*(wy1*(wx1*V(ip+1,jp+1,kp)+wx2*V(ip,jp+1,kp))+wy2*(wx1*V(ip+1,jp,kp)+wx2*V(ip,jp,kp)))
-         ! Perform tri-linear interpolation of W component
-         ip=min(max(floor((pos(1)-this%cfg%xm(this%cfg%imino))/this%dx)+this%cfg%imino,this%cfg%imino_),this%cfg%imaxo_-1); wx1=min(max((pos(1)-this%cfg%xm(ip))*this%dxi,0.0_WP),1.0_WP); wx2=1.0_WP-wx1
-         jp=min(max(floor((pos(2)-this%cfg%ym(this%cfg%jmino))/this%dy)+this%cfg%jmino,this%cfg%jmino_),this%cfg%jmaxo_-1); wy1=min(max((pos(2)-this%cfg%ym(jp))*this%dyi,0.0_WP),1.0_WP); wy2=1.0_WP-wy1
-         kp=min(max(floor((pos(3)-this%cfg%z (this%cfg%kmino))/this%dz)+this%cfg%kmino,this%cfg%kmino_),this%cfg%kmaxo_-1); wz1=min(max((pos(3)-this%cfg%z (kp))*this%dzi,0.0_WP),1.0_WP); wz2=1.0_WP-wz1
-         vel(3)=wz1*(wy1*(wx1*W(ip+1,jp+1,kp+1)+wx2*W(ip,jp+1,kp+1))+wy2*(wx1*W(ip+1,jp,kp+1)+wx2*W(ip,jp,kp+1)))+wz2*(wy1*(wx1*W(ip+1,jp+1,kp)+wx2*W(ip,jp+1,kp))+wy2*(wx1*W(ip+1,jp,kp)+wx2*W(ip,jp,kp)))
+        implicit none
+        real(WP), dimension(3), intent(in) :: pos
+        real(WP), dimension(3) :: vel
+        integer  :: ip,jp,kp
+        real(WP) :: wx1,wy1,wz1,wx2,wy2,wz2
+        ! Perform tri-linear interpolation of U component
+        ip=min(max(floor((pos(1)-this%cfg%x (this%cfg%imino))/this%dx)+this%cfg%imino,this%cfg%imino_),this%cfg%imaxo_-1); wx1=min(max((pos(1)-this%cfg%x (ip))*this%dxi,0.0_WP),1.0_WP); wx2=1.0_WP-wx1
+        jp=min(max(floor((pos(2)-this%cfg%ym(this%cfg%jmino))/this%dy)+this%cfg%jmino,this%cfg%jmino_),this%cfg%jmaxo_-1); wy1=min(max((pos(2)-this%cfg%ym(jp))*this%dyi,0.0_WP),1.0_WP); wy2=1.0_WP-wy1
+        kp=min(max(floor((pos(3)-this%cfg%zm(this%cfg%kmino))/this%dz)+this%cfg%kmino,this%cfg%kmino_),this%cfg%kmaxo_-1); wz1=min(max((pos(3)-this%cfg%zm(kp))*this%dzi,0.0_WP),1.0_WP); wz2=1.0_WP-wz1
+        vel(1)=wz1*(wy1*(wx1*U(ip+1,jp+1,kp+1)+wx2*U(ip,jp+1,kp+1))+wy2*(wx1*U(ip+1,jp,kp+1)+wx2*U(ip,jp,kp+1)))+wz2*(wy1*(wx1*U(ip+1,jp+1,kp)+wx2*U(ip,jp+1,kp))+wy2*(wx1*U(ip+1,jp,kp)+wx2*U(ip,jp,kp)))
+        ! Perform tri-linear interpolation of V component
+        ip=min(max(floor((pos(1)-this%cfg%xm(this%cfg%imino))/this%dx)+this%cfg%imino,this%cfg%imino_),this%cfg%imaxo_-1); wx1=min(max((pos(1)-this%cfg%xm(ip))*this%dxi,0.0_WP),1.0_WP); wx2=1.0_WP-wx1
+        jp=min(max(floor((pos(2)-this%cfg%y (this%cfg%jmino))/this%dy)+this%cfg%jmino,this%cfg%jmino_),this%cfg%jmaxo_-1); wy1=min(max((pos(2)-this%cfg%y (jp))*this%dyi,0.0_WP),1.0_WP); wy2=1.0_WP-wy1
+        kp=min(max(floor((pos(3)-this%cfg%zm(this%cfg%kmino))/this%dz)+this%cfg%kmino,this%cfg%kmino_),this%cfg%kmaxo_-1); wz1=min(max((pos(3)-this%cfg%zm(kp))*this%dzi,0.0_WP),1.0_WP); wz2=1.0_WP-wz1
+        vel(2)=wz1*(wy1*(wx1*V(ip+1,jp+1,kp+1)+wx2*V(ip,jp+1,kp+1))+wy2*(wx1*V(ip+1,jp,kp+1)+wx2*V(ip,jp,kp+1)))+wz2*(wy1*(wx1*V(ip+1,jp+1,kp)+wx2*V(ip,jp+1,kp))+wy2*(wx1*V(ip+1,jp,kp)+wx2*V(ip,jp,kp)))
+        ! Perform tri-linear interpolation of W component
+        ip=min(max(floor((pos(1)-this%cfg%xm(this%cfg%imino))/this%dx)+this%cfg%imino,this%cfg%imino_),this%cfg%imaxo_-1); wx1=min(max((pos(1)-this%cfg%xm(ip))*this%dxi,0.0_WP),1.0_WP); wx2=1.0_WP-wx1
+        jp=min(max(floor((pos(2)-this%cfg%ym(this%cfg%jmino))/this%dy)+this%cfg%jmino,this%cfg%jmino_),this%cfg%jmaxo_-1); wy1=min(max((pos(2)-this%cfg%ym(jp))*this%dyi,0.0_WP),1.0_WP); wy2=1.0_WP-wy1
+        kp=min(max(floor((pos(3)-this%cfg%z (this%cfg%kmino))/this%dz)+this%cfg%kmino,this%cfg%kmino_),this%cfg%kmaxo_-1); wz1=min(max((pos(3)-this%cfg%z (kp))*this%dzi,0.0_WP),1.0_WP); wz2=1.0_WP-wz1
+        vel(3)=wz1*(wy1*(wx1*W(ip+1,jp+1,kp+1)+wx2*W(ip,jp+1,kp+1))+wy2*(wx1*W(ip+1,jp,kp+1)+wx2*W(ip,jp,kp+1)))+wz2*(wy1*(wx1*W(ip+1,jp+1,kp)+wx2*W(ip,jp+1,kp))+wy2*(wx1*W(ip+1,jp,kp)+wx2*W(ip,jp,kp)))
       end function interp_velocity
+      !> Function that performs trilinear interpolation of collocated velocity to pos
+      !> This version assumes a uniform mesh for maximum speed
+      ! function interp_velocity(pos) result(vel)
+      !    implicit none
+      !    real(WP), dimension(3), intent(in) :: pos
+      !    real(WP), dimension(3) :: vel
+      !    integer  :: ip,jp,kp
+      !    real(WP) :: wx1,wy1,wz1,wx2,wy2,wz2
+      !    ! Calculate clipped mesh indices
+      !    ip=min(max(floor((pos(1)-this%cfg%xm(this%cfg%imino))/this%dx)+this%cfg%imino,this%cfg%imino_),this%cfg%imaxo_-1)
+      !    jp=min(max(floor((pos(2)-this%cfg%ym(this%cfg%jmino))/this%dy)+this%cfg%jmino,this%cfg%jmino_),this%cfg%jmaxo_-1)
+      !    kp=min(max(floor((pos(3)-this%cfg%zm(this%cfg%kmino))/this%dz)+this%cfg%kmino,this%cfg%kmino_),this%cfg%kmaxo_-1)
+      !    ! Calculate clipped tri-linear interpolation coefficients
+      !    wx1=min(max((pos(1)-this%cfg%xm(ip))*this%dxi,0.0_WP),1.0_WP); wx2=1.0_WP-wx1
+      !    wy1=min(max((pos(2)-this%cfg%ym(jp))*this%dyi,0.0_WP),1.0_WP); wy2=1.0_WP-wy1
+      !    wz1=min(max((pos(3)-this%cfg%zm(kp))*this%dzi,0.0_WP),1.0_WP); wz2=1.0_WP-wz1
+      !    ! Perform tri-linear interpolation of collocated velocity vector
+      !    vel(1)=wz1*(wy1*(wx1*Ui(ip+1,jp+1,kp+1)+wx2*Ui(ip,jp+1,kp+1))+wy2*(wx1*Ui(ip+1,jp,kp+1)+wx2*Ui(ip,jp,kp+1)))+wz2*(wy1*(wx1*Ui(ip+1,jp+1,kp)+wx2*Ui(ip,jp+1,kp))+wy2*(wx1*Ui(ip+1,jp,kp)+wx2*Ui(ip,jp,kp)))
+      !    vel(2)=wz1*(wy1*(wx1*Vi(ip+1,jp+1,kp+1)+wx2*Vi(ip,jp+1,kp+1))+wy2*(wx1*Vi(ip+1,jp,kp+1)+wx2*Vi(ip,jp,kp+1)))+wz2*(wy1*(wx1*Vi(ip+1,jp+1,kp)+wx2*Vi(ip,jp+1,kp))+wy2*(wx1*Vi(ip+1,jp,kp)+wx2*Vi(ip,jp,kp)))
+      !    vel(3)=wz1*(wy1*(wx1*Wi(ip+1,jp+1,kp+1)+wx2*Wi(ip,jp+1,kp+1))+wy2*(wx1*Wi(ip+1,jp,kp+1)+wx2*Wi(ip,jp,kp+1)))+wz2*(wy1*(wx1*Wi(ip+1,jp+1,kp)+wx2*Wi(ip,jp+1,kp))+wy2*(wx1*Wi(ip+1,jp,kp)+wx2*Wi(ip,jp,kp)))
+      ! end function interp_velocity
    end subroutine SLstep
    
    
@@ -1093,9 +1127,8 @@ contains
                cycle
             end if
             ! Liquid-gas symmetry
-            flip=.false.
-            if (this%VF(i,j,k).ge.0.5_WP) flip=.true.
-            m000=0; m100=0; m010=0; m001=0
+            flip=.false.; if (this%VF(i,j,k).ge.0.5_WP) flip=.true.
+            m000=0.0_WP; m100=0.0_WP; m010=0.0_WP; m001=0.0_WP
             ! Construct neighborhood of volume moments
             if (flip) then
                do kk=k-1,k+1; do jj=j-1,j+1; do ii=i-1,i+1
@@ -1210,7 +1243,7 @@ contains
       !          ind=ind+1
       !       end do; end do; end do
       !       ! Set stencil center
-      !       call setCenterOfStencil(neighborhood,13)
+      !       icenter=13; call setCenterOfStencil(neighborhood,icenter)
       !       ! Formulate initial guess
       !       call setNumberOfPlanes(this%PLIC(i,j,k),1)
       !       normal=normalize(this%BG(:,i,j,k)-this%BL(:,i,j,k))
@@ -1219,18 +1252,16 @@ contains
       !       call matchVolumeFraction(neighborhood_cells(icenter),this%VF(i,j,k),this%PLIC(i,j,k))
       !       ! Perform the reconstruction
       !       call reconstructLVIRA3D(neighborhood,this%PLIC(i,j,k))
-      !       ! Extract normal
-      !       !plane=getPlane(this%PLIC(i,j,k),0); normal=plane(1:3)
-      !       ! Handle lower dimensions exactly
-      !       !if (this%cfg%nx.eq.1) normal(1)=0.0_WP
-      !       !if (this%cfg%ny.eq.1) normal(2)=0.0_WP
-      !       !if (this%cfg%nz.eq.1) normal(3)=0.0_WP
-      !       !normal=normalize(normal)
-      !       ! Locate PLIC plane in cell
-      !       !call setPlane(this%PLIC(i,j,k),0,normal,plane(4))
-      !       !call matchVolumeFraction(neighborhood_cells(icenter),this%VF(i,j,k),this%PLIC(i,j,k))
       !       ! Clean up neighborhood
       !       call emptyNeighborhood(neighborhood)
+      !       ! Handle lower dimensions exactly
+      !       plane=getPlane(this%PLIC(i,j,k),0)
+      !       if (this%cfg%nx.eq.1) normal(1)=0.0_WP
+      !       if (this%cfg%ny.eq.1) normal(2)=0.0_WP
+      !       if (this%cfg%nz.eq.1) normal(3)=0.0_WP
+      !       normal=normalize(normal)
+      !       call setPlane(this%PLIC(i,j,k),0,normal,plane(4))
+      !       call matchVolumeFraction(neighborhood_cells(icenter),this%VF(i,j,k),this%PLIC(i,j,k))
       !    end do; end do; end do
       ! end block lvira_reconstruct
       
@@ -1359,7 +1390,7 @@ contains
       reset_moments: block
          integer :: i,j,k
          type(RectCub_type) :: cell
-         type(SepVM_type) :: separated_volume_moments
+         type(SepVM_type)   :: separated_volume_moments
          call new(cell)
          call new(separated_volume_moments)
          do k=this%cfg%kmino_,this%cfg%kmaxo_; do j=this%cfg%jmino_,this%cfg%jmaxo_; do i=this%cfg%imino_,this%cfg%imaxo_
@@ -1707,9 +1738,9 @@ contains
       do k=this%cfg%kmino_,this%cfg%kmaxo_-1
          do j=this%cfg%jmino_,this%cfg%jmaxo_-1
             do i=this%cfg%imino_,this%cfg%imaxo_-1
-               Ui(i,j,k)=0.5_WP*(this%U(i,j,k)+this%U(i+1,j,k))
-               Vi(i,j,k)=0.5_WP*(this%V(i,j,k)+this%V(i,j+1,k))
-               Wi(i,j,k)=0.5_WP*(this%W(i,j,k)+this%W(i,j,k+1))
+               Ui(i,j,k)=0.5_WP*sum(this%U(i:i+1,j,k))
+               Vi(i,j,k)=0.5_WP*sum(this%V(i,j:j+1,k))
+               Wi(i,j,k)=0.5_WP*sum(this%W(i,j,k:k+1))
             end do
          end do
       end do

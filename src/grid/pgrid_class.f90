@@ -724,104 +724,104 @@ contains
       end if
       
    end subroutine pgrid_rsync_array
-
-
+   
+   
    !> Synchronization of overlap cells
    !> This version is capable of handling a tensor of the shape (:,:,i,j,k)
    subroutine pgrid_rsync_tensor(this,A)
-	  use parallel, only: MPI_REAL_WP
-	  implicit none
-	  class(pgrid), intent(in) :: this
-	  real(WP), dimension(1:,1:,this%imino_:,this%jmino_:,this%kmino_:), intent(inout) :: A !< Needs to be (:,:,imin_-no:imax_+no,jmin_-no:jmax_+no,kmin_-no:kmax_+no)
-	  type(MPI_Status) :: status
-	  integer :: isrc,idst,ierr,isize,i,j,k,dim1,dim2
-	  real(WP), dimension(:,:,:,:,:), allocatable :: buf1,buf2
-	  
-	  ! Get first two dimensions
-	  dim1=size(A,DIM=1)
-	  dim2=size(A,DIM=2)
-	  
-	  ! Work in x - is it 2D or 3D?
-	  if (this%nx.eq.1) then
-	     ! Direct copy if 2D
-	     do i=this%imax_+1,this%imaxo_
-		    A(:,:,i,:,:)=A(:,:,this%imin_,:,:)
-	     end do
-	     do i=this%imino_,this%imin_-1
-		    A(:,:,i,:,:)=A(:,:,this%imin_,:,:)
-	     end do
-	  else
-	     isize=dim1*dim2*(this%no)*(this%nyo_)*(this%nzo_)
-	     allocate(buf1(dim1,dim2,this%no,this%nyo_,this%nzo_))
-	     allocate(buf2(dim1,dim2,this%no,this%nyo_,this%nzo_))
-	     ! Send left buffer to left neighbour
-	     call MPI_CART_SHIFT(this%comm,0,-1,isrc,idst,ierr)
-	     buf1=A(:,:,this%imin_:this%imin_+this%no-1,:,:)
-	     call MPI_SENDRECV(buf1,isize,MPI_REAL_WP,idst,0,buf2,isize,MPI_REAL_WP,isrc,0,this%comm,status,ierr)
-	     if (isrc.ne.MPI_PROC_NULL) A(:,:,this%imax_+1:this%imaxo_,:,:)=buf2
-	     ! Send right buffer to right neighbour
-	     call MPI_CART_SHIFT(this%comm,0,+1,isrc,idst,ierr)
-	     buf1=A(:,:,this%imax_-this%no+1:this%imax_,:,:)
-	     call MPI_SENDRECV(buf1,isize,MPI_REAL_WP,idst,0,buf2,isize,MPI_REAL_WP,isrc,0,this%comm,status,ierr)
-	     if (isrc.ne.MPI_PROC_NULL) A(:,:,this%imino_:this%imin_-1,:,:)=buf2
-	     ! Deallocate
-	     deallocate(buf1,buf2)
-	  end if
-	  
-	  ! Work in y - is it 2D or 3D?
-	  if (this%ny.eq.1) then
-	     ! Direct copy if 2D
-	     do j=this%jmax_+1,this%jmaxo_
-		    A(:,:,:,j,:)=A(:,:,:,this%jmin_,:)
-	     end do
-	     do j=this%jmino_,this%jmin_-1
-		    A(:,:,:,j,:)=A(:,:,:,this%jmin_,:)
-	     end do
-	  else
-	     isize=dim1*dim2*(this%nxo_)*(this%no)*(this%nzo_)
-	     allocate(buf1(dim1,dim2,this%nxo_,this%no,this%nzo_))
-	     allocate(buf2(dim1,dim2,this%nxo_,this%no,this%nzo_))
-	     ! Send left buffer to left neighbour
-	     call MPI_CART_SHIFT(this%comm,1,-1,isrc,idst,ierr)
-	     buf1=A(:,:,:,this%jmin_:this%jmin_+this%no-1,:)
-	     call MPI_SENDRECV(buf1,isize,MPI_REAL_WP,idst,0,buf2,isize,MPI_REAL_WP,isrc,0,this%comm,status,ierr)
-	     if (isrc.ne.MPI_PROC_NULL) A(:,:,:,this%jmax_+1:this%jmaxo_,:)=buf2
-	     ! Send right buffer to right neighbour
-	     call MPI_CART_SHIFT(this%comm,1,+1,isrc,idst,ierr)
-	     buf1=A(:,:,:,this%jmax_-this%no+1:this%jmax_,:)
-	     call MPI_SENDRECV(buf1,isize,MPI_REAL_WP,idst,0,buf2,isize,MPI_REAL_WP,isrc,0,this%comm,status,ierr)
-	     if (isrc.ne.MPI_PROC_NULL) A(:,:,:,this%jmino_:this%jmin_-1,:)=buf2
-	     ! Deallocate
-	     deallocate(buf1,buf2)
-	  end if
-	  
-	  ! Work in z - is it 2D or 3D?
-	  if (this%nz.eq.1) then
-	     ! Direct copy if 2D
-	     do k=this%kmax_+1,this%kmaxo_
-		    A(:,:,:,:,k)=A(:,:,:,:,this%kmin_)
-	     end do
-	     do k=this%kmino_,this%kmin_-1
-		    A(:,:,:,:,k)=A(:,:,:,:,this%kmin_)
-	     end do
-	  else
-	     isize=dim1*dim2*(this%nxo_)*(this%nyo_)*(this%no)
-	     allocate(buf1(dim1,dim2,this%nxo_,this%nyo_,this%no))
-	     allocate(buf2(dim1,dim2,this%nxo_,this%nyo_,this%no))
-	     ! Send left buffer to left neighbour
-	     call MPI_CART_SHIFT(this%comm,2,-1,isrc,idst,ierr)
-	     buf1=A(:,:,:,:,this%kmin_:this%kmin_+this%no-1)
-	     call MPI_SENDRECV(buf1,isize,MPI_REAL_WP,idst,0,buf2,isize,MPI_REAL_WP,isrc,0,this%comm,status,ierr)
-	     if (isrc.ne.MPI_PROC_NULL) A(:,:,:,:,this%kmax_+1:this%kmaxo_)=buf2
-	     ! Send right buffer to right neighbour
-	     call MPI_CART_SHIFT(this%comm,2,+1,isrc,idst,ierr)
-	     buf1=A(:,:,:,:,this%kmax_-this%no+1:this%kmax_)
-	     call MPI_SENDRECV(buf1,isize,MPI_REAL_WP,idst,0,buf2,isize,MPI_REAL_WP,isrc,0,this%comm,status,ierr)
-	     if (isrc.ne.MPI_PROC_NULL) A(:,:,:,:,this%kmino_:this%kmin_-1)=buf2
-	     ! Deallocate
-	     deallocate(buf1,buf2)
-	  end if
-	  
+     use parallel, only: MPI_REAL_WP
+     implicit none
+     class(pgrid), intent(in) :: this
+     real(WP), dimension(1:,1:,this%imino_:,this%jmino_:,this%kmino_:), intent(inout) :: A !< Needs to be (:,:,imin_-no:imax_+no,jmin_-no:jmax_+no,kmin_-no:kmax_+no)
+     type(MPI_Status) :: status
+     integer :: isrc,idst,ierr,isize,i,j,k,dim1,dim2
+     real(WP), dimension(:,:,:,:,:), allocatable :: buf1,buf2
+     
+     ! Get first two dimensions
+     dim1=size(A,DIM=1)
+     dim2=size(A,DIM=2)
+     
+     ! Work in x - is it 2D or 3D?
+     if (this%nx.eq.1) then
+        ! Direct copy if 2D
+        do i=this%imax_+1,this%imaxo_
+          A(:,:,i,:,:)=A(:,:,this%imin_,:,:)
+        end do
+        do i=this%imino_,this%imin_-1
+          A(:,:,i,:,:)=A(:,:,this%imin_,:,:)
+        end do
+     else
+        isize=dim1*dim2*(this%no)*(this%nyo_)*(this%nzo_)
+        allocate(buf1(dim1,dim2,this%no,this%nyo_,this%nzo_))
+        allocate(buf2(dim1,dim2,this%no,this%nyo_,this%nzo_))
+        ! Send left buffer to left neighbour
+        call MPI_CART_SHIFT(this%comm,0,-1,isrc,idst,ierr)
+        buf1=A(:,:,this%imin_:this%imin_+this%no-1,:,:)
+        call MPI_SENDRECV(buf1,isize,MPI_REAL_WP,idst,0,buf2,isize,MPI_REAL_WP,isrc,0,this%comm,status,ierr)
+        if (isrc.ne.MPI_PROC_NULL) A(:,:,this%imax_+1:this%imaxo_,:,:)=buf2
+        ! Send right buffer to right neighbour
+        call MPI_CART_SHIFT(this%comm,0,+1,isrc,idst,ierr)
+        buf1=A(:,:,this%imax_-this%no+1:this%imax_,:,:)
+        call MPI_SENDRECV(buf1,isize,MPI_REAL_WP,idst,0,buf2,isize,MPI_REAL_WP,isrc,0,this%comm,status,ierr)
+        if (isrc.ne.MPI_PROC_NULL) A(:,:,this%imino_:this%imin_-1,:,:)=buf2
+        ! Deallocate
+        deallocate(buf1,buf2)
+     end if
+     
+     ! Work in y - is it 2D or 3D?
+     if (this%ny.eq.1) then
+        ! Direct copy if 2D
+        do j=this%jmax_+1,this%jmaxo_
+          A(:,:,:,j,:)=A(:,:,:,this%jmin_,:)
+        end do
+        do j=this%jmino_,this%jmin_-1
+          A(:,:,:,j,:)=A(:,:,:,this%jmin_,:)
+        end do
+     else
+        isize=dim1*dim2*(this%nxo_)*(this%no)*(this%nzo_)
+        allocate(buf1(dim1,dim2,this%nxo_,this%no,this%nzo_))
+        allocate(buf2(dim1,dim2,this%nxo_,this%no,this%nzo_))
+        ! Send left buffer to left neighbour
+        call MPI_CART_SHIFT(this%comm,1,-1,isrc,idst,ierr)
+        buf1=A(:,:,:,this%jmin_:this%jmin_+this%no-1,:)
+        call MPI_SENDRECV(buf1,isize,MPI_REAL_WP,idst,0,buf2,isize,MPI_REAL_WP,isrc,0,this%comm,status,ierr)
+        if (isrc.ne.MPI_PROC_NULL) A(:,:,:,this%jmax_+1:this%jmaxo_,:)=buf2
+        ! Send right buffer to right neighbour
+        call MPI_CART_SHIFT(this%comm,1,+1,isrc,idst,ierr)
+        buf1=A(:,:,:,this%jmax_-this%no+1:this%jmax_,:)
+        call MPI_SENDRECV(buf1,isize,MPI_REAL_WP,idst,0,buf2,isize,MPI_REAL_WP,isrc,0,this%comm,status,ierr)
+        if (isrc.ne.MPI_PROC_NULL) A(:,:,:,this%jmino_:this%jmin_-1,:)=buf2
+        ! Deallocate
+        deallocate(buf1,buf2)
+     end if
+     
+     ! Work in z - is it 2D or 3D?
+     if (this%nz.eq.1) then
+        ! Direct copy if 2D
+        do k=this%kmax_+1,this%kmaxo_
+          A(:,:,:,:,k)=A(:,:,:,:,this%kmin_)
+        end do
+        do k=this%kmino_,this%kmin_-1
+          A(:,:,:,:,k)=A(:,:,:,:,this%kmin_)
+        end do
+     else
+        isize=dim1*dim2*(this%nxo_)*(this%nyo_)*(this%no)
+        allocate(buf1(dim1,dim2,this%nxo_,this%nyo_,this%no))
+        allocate(buf2(dim1,dim2,this%nxo_,this%nyo_,this%no))
+        ! Send left buffer to left neighbour
+        call MPI_CART_SHIFT(this%comm,2,-1,isrc,idst,ierr)
+        buf1=A(:,:,:,:,this%kmin_:this%kmin_+this%no-1)
+        call MPI_SENDRECV(buf1,isize,MPI_REAL_WP,idst,0,buf2,isize,MPI_REAL_WP,isrc,0,this%comm,status,ierr)
+        if (isrc.ne.MPI_PROC_NULL) A(:,:,:,:,this%kmax_+1:this%kmaxo_)=buf2
+        ! Send right buffer to right neighbour
+        call MPI_CART_SHIFT(this%comm,2,+1,isrc,idst,ierr)
+        buf1=A(:,:,:,:,this%kmax_-this%no+1:this%kmax_)
+        call MPI_SENDRECV(buf1,isize,MPI_REAL_WP,idst,0,buf2,isize,MPI_REAL_WP,isrc,0,this%comm,status,ierr)
+        if (isrc.ne.MPI_PROC_NULL) A(:,:,:,:,this%kmino_:this%kmin_-1)=buf2
+        ! Deallocate
+        deallocate(buf1,buf2)
+     end if
+     
    end subroutine pgrid_rsync_tensor
    
    
@@ -1181,7 +1181,7 @@ contains
       
       ! Follow by a sync step
       call this%pgrid_rsync(A)
-
+      
    end subroutine pgrid_rsyncsum
    
    

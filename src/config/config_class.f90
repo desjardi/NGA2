@@ -166,7 +166,7 @@ contains
                this%VF(:,:,k)=this%VF(:,:,this%kmin)
             end do
          else if (this%kproc.eq.this%npz) then
-            do j=this%kmax+1,this%kmaxo
+            do k=this%kmax+1,this%kmaxo
                this%VF(:,:,k)=this%VF(:,:,this%kmax)
             end do
          end if

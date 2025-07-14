@@ -47,7 +47,7 @@ contains
       class(polygon), intent(in) :: this
       real(WP), dimension(2), intent(in) :: x
       real(WP) :: d,s
-      integer :: i,i2,wn
+      integer :: i,i2
       logical, dimension(3) :: cond
       real(WP), dimension(2) :: p,e,v
       ! Initialize distance and sign
