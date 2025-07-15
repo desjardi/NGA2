@@ -243,7 +243,7 @@ contains
       ! Conserved variables monitoring
       allocate(this%Qmin(1:this%nQ),this%Qmax(1:this%nQ),this%Qint(1:this%nQ))
       
-      ! Flow variables
+      ! Flow velocity
       allocate(this%U(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_)); this%U=0.0_WP
       allocate(this%V(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_)); this%V=0.0_WP
       allocate(this%W(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_)); this%W=0.0_WP
@@ -431,7 +431,7 @@ contains
       integer :: i,j,k,n
       integer , dimension(3) :: ind
       real(WP), dimension(3) :: Lbar,Gbar
-      real(WP) :: Lvol,Gvol,Lmass,Gmass,mass,VFold,div
+      real(WP) :: Lvol,Gvol,Lmass,Gmass,VFold,div,vel
       real(WP), dimension(:,:,:,:), allocatable :: SLVx,SLVy,SLVz
       real(WP), dimension(:,:,:,:), allocatable :: SLQx,SLQy,SLQz
       real(WP), dimension(:,:,:,:), allocatable :: SLPx,SLPy,SLPz
@@ -499,7 +499,6 @@ contains
                ! Extract volume and mass data
                Lvol=getVolume(my_SepVM,0); Lbar=getCentroid(my_SepVM,0); Lmass=Lvol*this%RHOLold(ind(1),ind(2),ind(3))
                Gvol=getVolume(my_SepVM,1); Gbar=getCentroid(my_SepVM,1); Gmass=Gvol*this%RHOGold(ind(1),ind(2),ind(3))
-               mass=Lmass+Gmass
                ! Increment volume flux
                SLVx(i,j,k,:)=SLVx(i,j,k,:)-[Lvol,Gvol,Lbar,Gbar]
                ! Increment conserved variable flux
@@ -534,7 +533,6 @@ contains
                ! Extract volume and mass data
                Lvol=getVolume(my_SepVM,0); Lbar=getCentroid(my_SepVM,0); Lmass=Lvol*this%RHOLold(ind(1),ind(2),ind(3))
                Gvol=getVolume(my_SepVM,1); Gbar=getCentroid(my_SepVM,1); Gmass=Gvol*this%RHOGold(ind(1),ind(2),ind(3))
-               mass=Lmass+Gmass
                ! Increment volume flux
                SLVy(i,j,k,:)=SLVy(i,j,k,:)-[Lvol,Gvol,Lbar,Gbar]
                ! Increment conserved variable flux
@@ -569,7 +567,6 @@ contains
                ! Extract volume and mass data
                Lvol=getVolume(my_SepVM,0); Lbar=getCentroid(my_SepVM,0); Lmass=Lvol*this%RHOLold(ind(1),ind(2),ind(3))
                Gvol=getVolume(my_SepVM,1); Gbar=getCentroid(my_SepVM,1); Gmass=Gvol*this%RHOGold(ind(1),ind(2),ind(3))
-               mass=Lmass+Gmass
                ! Increment volume flux
                SLVz(i,j,k,:)=SLVz(i,j,k,:)-[Lvol,Gvol,Lbar,Gbar]
                ! Increment conserved variable flux
@@ -655,10 +652,15 @@ contains
       do k=this%cfg%kmin_-1,this%cfg%kmax_
          do j=this%cfg%jmin_-1,this%cfg%jmax_
             do i=this%cfg%imin_-1,this%cfg%imax_
+               ! Centered fluxes
                SLQx(i,j,k,5)=0.25_WP*sum(SLQx(i:i+1,j,k,1:2))*sum(this%U(i:i+1,j,k))
                SLQy(i,j,k,6)=0.25_WP*sum(SLQy(i,j:j+1,k,1:2))*sum(this%V(i,j:j+1,k))
                SLQz(i,j,k,7)=0.25_WP*sum(SLQz(i,j,k:k+1,1:2))*sum(this%W(i,j,k:k+1))
-               ! Add pressure fluxes in SL cells
+               ! Upwinded fluxes
+               !vel=0.5_WP*sum(SLQx(i:i+1,j,k,1:2)); SLQx(i,j,k,5)=0.5_WP*(vel-abs(-vel))*this%U(i,j,k)+0.5_WP*(vel+abs(-vel))*this%U(i+1,j,k)
+               !vel=0.5_WP*sum(SLQy(i,j:j+1,k,1:2)); SLQy(i,j,k,6)=0.5_WP*(vel-abs(-vel))*this%V(i,j,k)+0.5_WP*(vel+abs(-vel))*this%V(i,j+1,k)
+               !vel=0.5_WP*sum(SLQy(i,j:j+1,k,1:2)); SLQz(i,j,k,7)=0.5_WP*(vel-abs(-vel))*this%W(i,j,k)+0.5_WP*(vel+abs(-vel))*this%W(i,j,k+1)
+               !Add pressure fluxes in SL cells
                if (this%iSL(i,j,k).gt.0) then
                   SLQx(i,j,k,5)=SLQx(i,j,k,5)-this%VF(i,j,k)*this%PL(i,j,k)-(1.0_WP-this%VF(i,j,k))*this%PG(i,j,k)
                   SLQy(i,j,k,6)=SLQy(i,j,k,6)-this%VF(i,j,k)*this%PL(i,j,k)-(1.0_WP-this%VF(i,j,k))*this%PG(i,j,k)
@@ -672,12 +674,20 @@ contains
       do k=this%cfg%kmin_,this%cfg%kmax_+1
          do j=this%cfg%jmin_,this%cfg%jmax_+1
             do i=this%cfg%imin_,this%cfg%imax_+1
+               ! Centered fluxes
                SLQy(i,j,k,5)=0.25_WP*sum(SLQy(i-1:i,j,k,1:2))*sum(this%U(i,j-1:j,k))
                SLQz(i,j,k,5)=0.25_WP*sum(SLQz(i-1:i,j,k,1:2))*sum(this%U(i,j,k-1:k))
                SLQx(i,j,k,6)=0.25_WP*sum(SLQx(i,j-1:j,k,1:2))*sum(this%V(i-1:i,j,k))
                SLQz(i,j,k,6)=0.25_WP*sum(SLQz(i,j-1:j,k,1:2))*sum(this%V(i,j,k-1:k))
                SLQx(i,j,k,7)=0.25_WP*sum(SLQx(i,j,k-1:k,1:2))*sum(this%W(i-1:i,j,k))
                SLQy(i,j,k,7)=0.25_WP*sum(SLQy(i,j,k-1:k,1:2))*sum(this%W(i,j-1:j,k))
+               ! Upwinded fluxes
+               !vel=0.5_WP*sum(SLQy(i-1:i,j,k,1:2)); SLQy(i,j,k,5)=0.5_WP*(vel-abs(-vel))*this%U(i,j-1,k)+0.5_WP*(vel+abs(-vel))*this%U(i,j,k)
+               !vel=0.5_WP*sum(SLQz(i-1:i,j,k,1:2)); SLQz(i,j,k,5)=0.5_WP*(vel-abs(-vel))*this%U(i,j,k-1)+0.5_WP*(vel+abs(-vel))*this%U(i,j,k)
+               !vel=0.5_WP*sum(SLQx(i,j-1:j,k,1:2)); SLQx(i,j,k,6)=0.5_WP*(vel-abs(-vel))*this%V(i-1,j,k)+0.5_WP*(vel+abs(-vel))*this%V(i,j,k)
+               !vel=0.5_WP*sum(SLQz(i,j-1:j,k,1:2)); SLQz(i,j,k,6)=0.5_WP*(vel-abs(-vel))*this%V(i,j,k-1)+0.5_WP*(vel+abs(-vel))*this%V(i,j,k)
+               !vel=0.5_WP*sum(SLQx(i,j,k-1:k,1:2)); SLQx(i,j,k,7)=0.5_WP*(vel-abs(-vel))*this%W(i-1,j,k)+0.5_WP*(vel+abs(-vel))*this%W(i,j,k)
+               !vel=0.5_WP*sum(SLQy(i,j,k-1:k,1:2)); SLQy(i,j,k,7)=0.5_WP*(vel-abs(-vel))*this%W(i,j-1,k)+0.5_WP*(vel+abs(-vel))*this%W(i,j,k)
             end do
          end do
       end do
@@ -774,14 +784,8 @@ contains
          real(WP), dimension(3), intent(in) :: p1
          real(WP), dimension(3)             :: p2
          real(WP),               intent(in) :: mydt
-         !p2=p1+mydt*interp_velocity(        p1    )
-         !p2=p1+mydt*interp_velocity(0.5_WP*(p1+p2))
-         real(WP), dimension(3) :: v1,v2,v3,v4
-         v1=interp_velocity(p1               )
-         v2=interp_velocity(p1+0.5_WP*mydt*v1)
-         v3=interp_velocity(p1+0.5_WP*mydt*v2)
-         v4=interp_velocity(p1+       mydt*v3)
-         p2=p1+mydt/6.0_WP*(v1+2.0_WP*v2+2.0_WP*v3+v4)
+         p2=p1+mydt*interp_velocity(        p1    )
+         p2=p1+mydt*interp_velocity(0.5_WP*(p1+p2))
       end function project
       !> Function that performs trilinear interpolation of staggered velocity to pos
       !> This version assumes a uniform mesh for maximum speed
@@ -1809,6 +1813,8 @@ contains
             this%BL(:,i,j,k)=[this%cfg%xm(i),this%cfg%ym(j),this%cfg%zm(k)]
             this%BG(:,i,j,k)=[this%cfg%xm(i),this%cfg%ym(j),this%cfg%zm(k)]
          end if
+         ! Update polygon for visualization
+         call zeroPolygon(this%interface_polygon(i,j,k)); if (this%VF(i,j,k).ge.VFlo.and.this%VF(i,j,k).le.VFhi) call getPoly(cell,this%PLIC(i,j,k),0,this%interface_polygon(i,j,k))
       end do; end do; end do
    end subroutine apply_relax
    
