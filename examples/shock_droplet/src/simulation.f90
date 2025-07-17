@@ -540,7 +540,7 @@ contains
          call fs%SLtag()
          
          ! Prepare SGS viscosity models
-         call fs%get_viscartif(dt=time%dt,beta=beta)
+         beta=0.0_WP !call fs%get_viscartif(dt=time%dt,beta=beta)
          visc=0.0_WP !call fs%get_vreman(dt=time%dt,visc=visc)
          mixture_viscosity: block
             integer  :: i,j,k
@@ -600,6 +600,8 @@ contains
          fs%Q=fs%Qold+0.5_WP*time%dt*dQdt(:,:,:,:,2)
          ! Increment Q with SL terms
          fs%Q=fs%Q+fs%SLdQ
+         ! Apply user-provided relaxation model
+         !call fs%apply_relax()
          ! Recompute primitive variables
          call fs%get_primitive()
          

@@ -424,6 +424,7 @@ contains
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in) :: U
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in) :: V
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in) :: W
+      real(WP), parameter :: ampCFL=5.0_WP
       real(IRL_double), dimension(3,9) :: face
       type(SepVM_type) :: my_SepVM
       type(CapDod_type) :: flux_polyhedron
@@ -431,11 +432,11 @@ contains
       integer :: i,j,k,n
       integer , dimension(3) :: ind
       real(WP), dimension(3) :: Lbar,Gbar
-      real(WP) :: Lvol,Gvol,Lmass,Gmass,VFold,div,vel
+      real(WP) :: Lvol,Gvol,Lmass,Gmass,VFold,div,flux
       real(WP), dimension(:,:,:,:), allocatable :: SLVx,SLVy,SLVz
       real(WP), dimension(:,:,:,:), allocatable :: SLQx,SLQy,SLQz
       real(WP), dimension(:,:,:,:), allocatable :: SLPx,SLPy,SLPz
-      !real(WP), dimension(:,:,:)  , allocatable :: Ui,Vi,Wi
+      real(WP), dimension(:,:,:)  , allocatable :: RHOX,RHOY,RHOZ
       
       ! Start semi-Lagrangian timer
       call this%tsl%start()
@@ -446,18 +447,6 @@ contains
       ! Allocate flux polyhedron and detailed face flux
       call new(flux_polyhedron)
       call new(detailed_face_flux)
-      
-      ! Calculate cell-centered velocity using passed velocity and synchronize/extend
-      ! allocate(Ui(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
-      ! allocate(Vi(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
-      ! allocate(Wi(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
-      ! do k=this%cfg%kmino_,this%cfg%kmaxo_-1; do j=this%cfg%jmino_,this%cfg%jmaxo_-1; do i=this%cfg%imino_,this%cfg%imaxo_-1
-      !    Ui(i,j,k)=0.5_WP*sum(U(i:i+1,j,k)); Vi(i,j,k)=0.5_WP*sum(V(i,j:j+1,k)); Wi(i,j,k)=0.5_WP*sum(W(i,j,k:k+1))
-      ! end do; end do; end do
-      ! call this%cfg%sync(Ui); call this%cfg%sync(Vi); call this%cfg%sync(Wi)
-      ! if (.not.this%cfg%xper.and.this%cfg%iproc.eq.this%cfg%npx) then; Ui(this%cfg%imaxo,:,:)=U(this%cfg%imaxo,:,:); Vi(this%cfg%imaxo,:,:)=V(this%cfg%imaxo,:,:); Wi(this%cfg%imaxo,:,:)=W(this%cfg%imaxo,:,:); end if
-      ! if (.not.this%cfg%yper.and.this%cfg%jproc.eq.this%cfg%npy) then; Ui(:,this%cfg%jmaxo,:)=U(:,this%cfg%jmaxo,:); Vi(:,this%cfg%jmaxo,:)=V(:,this%cfg%jmaxo,:); Wi(:,this%cfg%jmaxo,:)=W(:,this%cfg%jmaxo,:); end if
-      ! if (.not.this%cfg%zper.and.this%cfg%kproc.eq.this%cfg%npz) then; Ui(:,:,this%cfg%kmaxo)=U(:,:,this%cfg%kmaxo); Vi(:,:,this%cfg%kmaxo)=V(:,:,this%cfg%kmaxo); Wi(:,:,this%cfg%kmaxo)=W(:,:,this%cfg%kmaxo); end if
       
       ! Allocate semi-Lagrangian volume fluxes
       allocate(SLVx(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_,1:8)); SLVx=0.0_WP
@@ -614,8 +603,8 @@ contains
          if (VFold.gt.VFhi.and.this%VF(i,j,k).le.VFhi) this%PG(i,j,k)=(SLPx(i+1,j,k,2)-SLPx(i,j,k,2)+SLPy(i,j+1,k,2)-SLPy(i,j,k,2)+SLPz(i,j,k+1,2)-SLPz(i,j,k,2))/Gvol
       end do; end do; end do
       
-      ! Deallocate volume, pressure flux arrays, and interpolated velocity
-      deallocate(SLVx,SLVy,SLVz,SLPx,SLPy,SLPz)!,Ui,Vi,Wi)
+      ! Deallocate volume, pressure flux arrays
+      deallocate(SLVx,SLVy,SLVz,SLPx,SLPy,SLPz)
       
       ! Synchronize pressures
       call this%cfg%sync(this%PL); call this%cfg%sync(this%PG)
@@ -648,6 +637,39 @@ contains
       ! ======================== INVISID FLUXES ======================== !
       ! ================================================================ !
       
+      ! Form the SL increment for phasic mass and energy
+      do k=this%cfg%kmin_,this%cfg%kmax_
+         do j=this%cfg%jmin_,this%cfg%jmax_
+            do i=this%cfg%imin_,this%cfg%imax_
+               ! Phasic mass and internal energy advection
+               this%SLdQ(i,j,k,1:4)=dt*(this%dxi*(SLQx(i+1,j,k,1:4)-SLQx(i,j,k,1:4))+this%dyi*(SLQy(i,j+1,k,1:4)-SLQy(i,j,k,1:4))+this%dzi*(SLQz(i,j,k+1,1:4)-SLQz(i,j,k,1:4)))
+               ! Pressure dilatation term
+               if (this%iSL(i,j,k).gt.0) then
+                  div=this%dxi*(this%U(i+1,j,k)-this%U(i,j,k))+this%dyi*(this%V(i,j+1,k)-this%V(i,j,k))+this%dzi*(this%W(i,j,k+1)-this%W(i,j,k))
+                  this%SLdQ(i,j,k,3)=this%SLdQ(i,j,k,3)-dt*(       this%VF(i,j,k))*this%PL(i,j,k)*div
+                  this%SLdQ(i,j,k,4)=this%SLdQ(i,j,k,4)-dt*(1.0_WP-this%VF(i,j,k))*this%PG(i,j,k)*div
+               end if
+            end do
+         end do
+      end do
+      
+      ! Synchronize phasic dQ fields
+      do n=1,4; call this%cfg%sync(this%SLdQ(:,:,:,n)); end do
+      
+      ! Calculate new staggered mixture density
+      allocate(RHOX(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_)); RHOX=0.0_WP
+      allocate(RHOY(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_)); RHOY=0.0_WP
+      allocate(RHOZ(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_)); RHOZ=0.0_WP
+      do k=this%cfg%kmino_+1,this%cfg%kmaxo_; do j=this%cfg%jmino_+1,this%cfg%jmaxo_; do i=this%cfg%imino_+1,this%cfg%imaxo_;
+         RHOX(i,j,k)=0.5_WP*sum(this%Qold(i-1:i,j,k,1:2)+this%SLdQ(i-1:i,j,k,1:2))
+         RHOY(i,j,k)=0.5_WP*sum(this%Qold(i,j-1:j,k,1:2)+this%SLdQ(i,j-1:j,k,1:2))
+         RHOZ(i,j,k)=0.5_WP*sum(this%Qold(i,j,k-1:k,1:2)+this%SLdQ(i,j,k-1:k,1:2))
+      end do; end do; end do
+      call this%cfg%sync(RHOX); call this%cfg%sync(RHOY); call this%cfg%sync(RHOZ)
+      if (.not.this%cfg%xper.and.this%cfg%iproc.eq.1) then; RHOX(this%cfg%imino,:,:)=RHOX(this%cfg%imino+1,:,:); RHOY(this%cfg%imino,:,:)=RHOY(this%cfg%imino+1,:,:); RHOZ(this%cfg%imino,:,:)=RHOZ(this%cfg%imino+1,:,:); end if
+      if (.not.this%cfg%yper.and.this%cfg%jproc.eq.1) then; RHOX(:,this%cfg%jmino,:)=RHOX(:,this%cfg%jmino+1,:); RHOY(:,this%cfg%jmino,:)=RHOY(:,this%cfg%jmino+1,:); RHOZ(:,this%cfg%jmino,:)=RHOZ(:,this%cfg%jmino+1,:); end if
+      if (.not.this%cfg%zper.and.this%cfg%kproc.eq.1) then; RHOX(:,:,this%cfg%kmino)=RHOX(:,:,this%cfg%kmino+1); RHOY(:,:,this%cfg%kmino)=RHOY(:,:,this%cfg%kmino+1); RHOZ(:,:,this%cfg%kmino)=RHOZ(:,:,this%cfg%kmino+1); end if
+      
       ! Calculate cell-centered mixture momentum fluxes from SL mass fluxes with extra cell on the left due to staggering
       do k=this%cfg%kmin_-1,this%cfg%kmax_
          do j=this%cfg%jmin_-1,this%cfg%jmax_
@@ -656,10 +678,10 @@ contains
                SLQx(i,j,k,5)=0.25_WP*sum(SLQx(i:i+1,j,k,1:2))*sum(this%U(i:i+1,j,k))
                SLQy(i,j,k,6)=0.25_WP*sum(SLQy(i,j:j+1,k,1:2))*sum(this%V(i,j:j+1,k))
                SLQz(i,j,k,7)=0.25_WP*sum(SLQz(i,j,k:k+1,1:2))*sum(this%W(i,j,k:k+1))
-               ! Upwinded fluxes
-               !vel=0.5_WP*sum(SLQx(i:i+1,j,k,1:2)); SLQx(i,j,k,5)=0.5_WP*(vel-abs(-vel))*this%U(i,j,k)+0.5_WP*(vel+abs(-vel))*this%U(i+1,j,k)
-               !vel=0.5_WP*sum(SLQy(i,j:j+1,k,1:2)); SLQy(i,j,k,6)=0.5_WP*(vel-abs(-vel))*this%V(i,j,k)+0.5_WP*(vel+abs(-vel))*this%V(i,j+1,k)
-               !vel=0.5_WP*sum(SLQy(i,j:j+1,k,1:2)); SLQz(i,j,k,7)=0.5_WP*(vel-abs(-vel))*this%W(i,j,k)+0.5_WP*(vel+abs(-vel))*this%W(i,j,k+1)
+               ! If warranted, switch locally to upwinded fluxes
+               flux=0.5_WP*sum(SLQx(i:i+1,j,k,1:2)); if (this%dxi*dt*abs(flux)/minval(RHOX(i:i+1,j,k)).gt.ampCFL) then; SLQx(i,j,k,5)=0.5_WP*(flux-abs(-flux))*this%U(i,j,k)+0.5_WP*(flux+abs(-flux))*this%U(i+1,j,k); end if
+               flux=0.5_WP*sum(SLQy(i,j:j+1,k,1:2)); if (this%dyi*dt*abs(flux)/minval(RHOY(i,j:j+1,k)).gt.ampCFL) then; SLQy(i,j,k,6)=0.5_WP*(flux-abs(-flux))*this%V(i,j,k)+0.5_WP*(flux+abs(-flux))*this%V(i,j+1,k); end if
+               flux=0.5_WP*sum(SLQz(i,j,k:k+1,1:2)); if (this%dzi*dt*abs(flux)/minval(RHOZ(i,j,k:k+1)).gt.ampCFL) then; SLQz(i,j,k,7)=0.5_WP*(flux-abs(-flux))*this%W(i,j,k)+0.5_WP*(flux+abs(-flux))*this%W(i,j,k+1); end if
                !Add pressure fluxes in SL cells
                if (this%iSL(i,j,k).gt.0) then
                   SLQx(i,j,k,5)=SLQx(i,j,k,5)-this%VF(i,j,k)*this%PL(i,j,k)-(1.0_WP-this%VF(i,j,k))*this%PG(i,j,k)
@@ -681,36 +703,30 @@ contains
                SLQz(i,j,k,6)=0.25_WP*sum(SLQz(i,j-1:j,k,1:2))*sum(this%V(i,j,k-1:k))
                SLQx(i,j,k,7)=0.25_WP*sum(SLQx(i,j,k-1:k,1:2))*sum(this%W(i-1:i,j,k))
                SLQy(i,j,k,7)=0.25_WP*sum(SLQy(i,j,k-1:k,1:2))*sum(this%W(i,j-1:j,k))
-               ! Upwinded fluxes
-               !vel=0.5_WP*sum(SLQy(i-1:i,j,k,1:2)); SLQy(i,j,k,5)=0.5_WP*(vel-abs(-vel))*this%U(i,j-1,k)+0.5_WP*(vel+abs(-vel))*this%U(i,j,k)
-               !vel=0.5_WP*sum(SLQz(i-1:i,j,k,1:2)); SLQz(i,j,k,5)=0.5_WP*(vel-abs(-vel))*this%U(i,j,k-1)+0.5_WP*(vel+abs(-vel))*this%U(i,j,k)
-               !vel=0.5_WP*sum(SLQx(i,j-1:j,k,1:2)); SLQx(i,j,k,6)=0.5_WP*(vel-abs(-vel))*this%V(i-1,j,k)+0.5_WP*(vel+abs(-vel))*this%V(i,j,k)
-               !vel=0.5_WP*sum(SLQz(i,j-1:j,k,1:2)); SLQz(i,j,k,6)=0.5_WP*(vel-abs(-vel))*this%V(i,j,k-1)+0.5_WP*(vel+abs(-vel))*this%V(i,j,k)
-               !vel=0.5_WP*sum(SLQx(i,j,k-1:k,1:2)); SLQx(i,j,k,7)=0.5_WP*(vel-abs(-vel))*this%W(i-1,j,k)+0.5_WP*(vel+abs(-vel))*this%W(i,j,k)
-               !vel=0.5_WP*sum(SLQy(i,j,k-1:k,1:2)); SLQy(i,j,k,7)=0.5_WP*(vel-abs(-vel))*this%W(i,j-1,k)+0.5_WP*(vel+abs(-vel))*this%W(i,j,k)
+               ! If warranted, switch locally to upwinded fluxes
+               flux=0.5_WP*sum(SLQy(i-1:i,j,k,1:2)); if (this%dyi*dt*abs(flux)/minval(RHOX(i,j-1:j,k)).gt.ampCFL) then; SLQy(i,j,k,5)=0.5_WP*(flux-abs(-flux))*this%U(i,j-1,k)+0.5_WP*(flux+abs(-flux))*this%U(i,j,k); end if
+               flux=0.5_WP*sum(SLQz(i-1:i,j,k,1:2)); if (this%dzi*dt*abs(flux)/minval(RHOX(i,j,k-1:k)).gt.ampCFL) then; SLQz(i,j,k,5)=0.5_WP*(flux-abs(-flux))*this%U(i,j,k-1)+0.5_WP*(flux+abs(-flux))*this%U(i,j,k); end if
+               flux=0.5_WP*sum(SLQx(i,j-1:j,k,1:2)); if (this%dxi*dt*abs(flux)/minval(RHOY(i-1:i,j,k)).gt.ampCFL) then; SLQx(i,j,k,6)=0.5_WP*(flux-abs(-flux))*this%V(i-1,j,k)+0.5_WP*(flux+abs(-flux))*this%V(i,j,k); end if
+               flux=0.5_WP*sum(SLQz(i,j-1:j,k,1:2)); if (this%dzi*dt*abs(flux)/minval(RHOY(i,j,k-1:k)).gt.ampCFL) then; SLQz(i,j,k,6)=0.5_WP*(flux-abs(-flux))*this%V(i,j,k-1)+0.5_WP*(flux+abs(-flux))*this%V(i,j,k); end if
+               flux=0.5_WP*sum(SLQx(i,j,k-1:k,1:2)); if (this%dxi*dt*abs(flux)/minval(RHOZ(i-1:i,j,k)).gt.ampCFL) then; SLQx(i,j,k,7)=0.5_WP*(flux-abs(-flux))*this%W(i-1,j,k)+0.5_WP*(flux+abs(-flux))*this%W(i,j,k); end if
+               flux=0.5_WP*sum(SLQy(i,j,k-1:k,1:2)); if (this%dyi*dt*abs(flux)/minval(RHOZ(i,j-1:j,k)).gt.ampCFL) then; SLQy(i,j,k,7)=0.5_WP*(flux-abs(-flux))*this%W(i,j-1,k)+0.5_WP*(flux+abs(-flux))*this%W(i,j,k); end if
             end do
          end do
       end do
       
-      ! Form the SL increment for all conserved variables
+      ! Form the SL increment for mixture momentum
       do k=this%cfg%kmin_,this%cfg%kmax_
          do j=this%cfg%jmin_,this%cfg%jmax_
             do i=this%cfg%imin_,this%cfg%imax_
-               ! Phasic mass and internal energy advection
-               this%SLdQ(i,j,k,1:4)=dt*(this%dxi*(SLQx(i+1,j,k,1:4)-SLQx(i,j,k,1:4))+this%dyi*(SLQy(i,j+1,k,1:4)-SLQy(i,j,k,1:4))+this%dzi*(SLQz(i,j,k+1,1:4)-SLQz(i,j,k,1:4)))
-               ! Mixture momentum advection
                this%SLdQ(i,j,k,5)=dt*(this%dxi*(SLQx(i  ,j,k,5)-SLQx(i-1,j,k,5))+this%dyi*(SLQy(i,j+1,k,5)-SLQy(i,j  ,k,5))+this%dzi*(SLQz(i,j,k+1,5)-SLQz(i,j,k  ,5)))
                this%SLdQ(i,j,k,6)=dt*(this%dxi*(SLQx(i+1,j,k,6)-SLQx(i  ,j,k,6))+this%dyi*(SLQy(i,j  ,k,6)-SLQy(i,j-1,k,6))+this%dzi*(SLQz(i,j,k+1,6)-SLQz(i,j,k  ,6)))
                this%SLdQ(i,j,k,7)=dt*(this%dxi*(SLQx(i+1,j,k,7)-SLQx(i  ,j,k,7))+this%dyi*(SLQy(i,j+1,k,7)-SLQy(i,j  ,k,7))+this%dzi*(SLQz(i,j,k  ,7)-SLQz(i,j,k-1,7)))
-               ! Pressure dilatation term
-               if (this%iSL(i,j,k).gt.0) then
-                  div=this%dxi*(this%U(i+1,j,k)-this%U(i,j,k))+this%dyi*(this%V(i,j+1,k)-this%V(i,j,k))+this%dzi*(this%W(i,j,k+1)-this%W(i,j,k))
-                  this%SLdQ(i,j,k,3)=this%SLdQ(i,j,k,3)-dt*(       this%VF(i,j,k))*this%PL(i,j,k)*div
-                  this%SLdQ(i,j,k,4)=this%SLdQ(i,j,k,4)-dt*(1.0_WP-this%VF(i,j,k))*this%PG(i,j,k)*div
-               end if
             end do
          end do
       end do
+      
+      ! Deallocate face density
+      deallocate(RHOX,RHOY,RHOZ)
       
       ! ================================================================ !
       ! ======================== VISCOUS  FLUXES ======================= !
@@ -811,27 +827,6 @@ contains
         kp=min(max(floor((pos(3)-this%cfg%z (this%cfg%kmino))/this%dz)+this%cfg%kmino,this%cfg%kmino_),this%cfg%kmaxo_-1); wz1=min(max((pos(3)-this%cfg%z (kp))*this%dzi,0.0_WP),1.0_WP); wz2=1.0_WP-wz1
         vel(3)=wz1*(wy1*(wx1*W(ip+1,jp+1,kp+1)+wx2*W(ip,jp+1,kp+1))+wy2*(wx1*W(ip+1,jp,kp+1)+wx2*W(ip,jp,kp+1)))+wz2*(wy1*(wx1*W(ip+1,jp+1,kp)+wx2*W(ip,jp+1,kp))+wy2*(wx1*W(ip+1,jp,kp)+wx2*W(ip,jp,kp)))
       end function interp_velocity
-      !> Function that performs trilinear interpolation of collocated velocity to pos
-      !> This version assumes a uniform mesh for maximum speed
-      ! function interp_velocity(pos) result(vel)
-      !    implicit none
-      !    real(WP), dimension(3), intent(in) :: pos
-      !    real(WP), dimension(3) :: vel
-      !    integer  :: ip,jp,kp
-      !    real(WP) :: wx1,wy1,wz1,wx2,wy2,wz2
-      !    ! Calculate clipped mesh indices
-      !    ip=min(max(floor((pos(1)-this%cfg%xm(this%cfg%imino))/this%dx)+this%cfg%imino,this%cfg%imino_),this%cfg%imaxo_-1)
-      !    jp=min(max(floor((pos(2)-this%cfg%ym(this%cfg%jmino))/this%dy)+this%cfg%jmino,this%cfg%jmino_),this%cfg%jmaxo_-1)
-      !    kp=min(max(floor((pos(3)-this%cfg%zm(this%cfg%kmino))/this%dz)+this%cfg%kmino,this%cfg%kmino_),this%cfg%kmaxo_-1)
-      !    ! Calculate clipped tri-linear interpolation coefficients
-      !    wx1=min(max((pos(1)-this%cfg%xm(ip))*this%dxi,0.0_WP),1.0_WP); wx2=1.0_WP-wx1
-      !    wy1=min(max((pos(2)-this%cfg%ym(jp))*this%dyi,0.0_WP),1.0_WP); wy2=1.0_WP-wy1
-      !    wz1=min(max((pos(3)-this%cfg%zm(kp))*this%dzi,0.0_WP),1.0_WP); wz2=1.0_WP-wz1
-      !    ! Perform tri-linear interpolation of collocated velocity vector
-      !    vel(1)=wz1*(wy1*(wx1*Ui(ip+1,jp+1,kp+1)+wx2*Ui(ip,jp+1,kp+1))+wy2*(wx1*Ui(ip+1,jp,kp+1)+wx2*Ui(ip,jp,kp+1)))+wz2*(wy1*(wx1*Ui(ip+1,jp+1,kp)+wx2*Ui(ip,jp+1,kp))+wy2*(wx1*Ui(ip+1,jp,kp)+wx2*Ui(ip,jp,kp)))
-      !    vel(2)=wz1*(wy1*(wx1*Vi(ip+1,jp+1,kp+1)+wx2*Vi(ip,jp+1,kp+1))+wy2*(wx1*Vi(ip+1,jp,kp+1)+wx2*Vi(ip,jp,kp+1)))+wz2*(wy1*(wx1*Vi(ip+1,jp+1,kp)+wx2*Vi(ip,jp+1,kp))+wy2*(wx1*Vi(ip+1,jp,kp)+wx2*Vi(ip,jp,kp)))
-      !    vel(3)=wz1*(wy1*(wx1*Wi(ip+1,jp+1,kp+1)+wx2*Wi(ip,jp+1,kp+1))+wy2*(wx1*Wi(ip+1,jp,kp+1)+wx2*Wi(ip,jp,kp+1)))+wz2*(wy1*(wx1*Wi(ip+1,jp+1,kp)+wx2*Wi(ip,jp+1,kp))+wy2*(wx1*Wi(ip+1,jp,kp)+wx2*Wi(ip,jp,kp)))
-      ! end function interp_velocity
    end subroutine SLstep
    
    

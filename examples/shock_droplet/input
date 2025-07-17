@@ -21,7 +21,7 @@ Sound speed ratio : 4.3
 Shock Mach number : 5.12
 Shock location :   -2
 !------- viscous ---------
-Gas Reynolds number : 1e5
+Gas Reynolds number : 1e10!5
 Viscosity ratio :     58.3
 
 # Time integration
