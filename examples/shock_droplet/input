@@ -2,13 +2,13 @@
 Partition : 2 4 1
 
 # Mesh definition
-Lx : 1!8
-Ly : 1!8
+Lx : 8
+Ly : 8
 Lz : 8
-nx : 33!512
-ny : 33!512
+nx : 512
+ny : 512
 nz : 1
-X0 :-0.5!-3
+X0 :-3
 
 # Adimensional flow parameters
 !---------- eos ----------
@@ -21,13 +21,13 @@ Sound speed ratio : 4.3
 Shock Mach number : 5.12
 Shock location :   -2
 !------- viscous ---------
-Gas Reynolds number : 1e10!5
+Gas Reynolds number : 1e5
 Viscosity ratio :     58.3
 
 # Time integration
-Max timestep size : 5e-3
+Max timestep size : 2.5e-3
 Max cfl number :    1.0
 Max time :          50
 
 # Ensight output
-Ensight output period : 1e-3
+Ensight output period : 1e-1

@@ -353,21 +353,19 @@ contains
                   call initialize_volume_moments(lo=[cfg%x(i),cfg%y(j),cfg%z(k)],hi=[cfg%x(i+1),cfg%y(j+1),cfg%z(k+1)],&
                   levelset=levelset_drop,time=0.0_WP,level=4,VFlo=VFlo,VF=fs%VF(i,j,k),BL=fs%BL(:,i,j,k),BG=fs%BG(:,i,j,k))
                   ! Initialize mixture velocity to normal shock
-                  fs%U(i,j,k)=0.5_WP!u2*Hshock(Xs-cfg%x(i),delta=0.5_WP*fs%dx)
-                  fs%V(i,j,k)=0.5_WP
+                  fs%U(i,j,k)=u2*Hshock(Xs-cfg%x(i),delta=0.5_WP*fs%dx)
+                  fs%V(i,j,k)=0.0_WP
                   fs%W(i,j,k)=0.0_WP
                   ! Gas variables
                   if (fs%VF(i,j,k).lt.1.0_WP) then
-                     fs%RHOG(i,j,k)=0.5_WP!rho1+(rho2-rho1)*Hshock(Xs-cfg%xm(i),delta=0.5_WP*fs%dx)
-                     fs%PG  (i,j,k)=0.1_WP!p1  +(p2  -p1  )*Hshock(Xs-cfg%xm(i),delta=0.5_WP*fs%dx)
+                     fs%RHOG(i,j,k)=rho1+(rho2-rho1)*Hshock(Xs-cfg%xm(i),delta=0.5_WP*fs%dx)
+                     fs%PG  (i,j,k)=p1  +(p2  -p1  )*Hshock(Xs-cfg%xm(i),delta=0.5_WP*fs%dx)
                      fs%IG  (i,j,k)=(fs%PG(i,j,k)+GammaG*PinfG)/(fs%RHOG(i,j,k)*(GammaG-1.0_WP))
                   end if
                   ! Liquid variables
                   if (fs%VF(i,j,k).gt.0.0_WP) then
-                     fs%U(i,j,k)=0.4_WP
-                     fs%V(i,j,k)=0.2_WP
-                     fs%RHOL(i,j,k)=800.0_WP!rhoL
-                     fs%PL  (i,j,k)=0.1_WP!p1
+                     fs%RHOL(i,j,k)=rhoL
+                     fs%PL  (i,j,k)=p1
                      fs%IL  (i,j,k)=(fs%PL(i,j,k)+GammaL*PinfL)/(fs%RHOL(i,j,k)*(GammaL-1.0_WP))
                   end if
                end do
@@ -491,8 +489,7 @@ contains
          real(WP), dimension(3),intent(in) :: xyz
          real(WP), intent(in) :: t
          real(WP) :: G
-         !G=0.5_WP-sqrt(sum(xyz**2))
-         G=0.027_WP-sqrt(sum(xyz**2))
+         G=0.5_WP-sqrt(sum(xyz**2))
       end function levelset_drop
       !> Level set function for a slab of unity width centered at x=0
       function levelset_slab(xyz,t) result(G)
@@ -540,7 +537,7 @@ contains
          call fs%SLtag()
          
          ! Prepare SGS viscosity models
-         beta=0.0_WP !call fs%get_viscartif(dt=time%dt,beta=beta)
+         call fs%get_viscartif(dt=time%dt,beta=beta)
          visc=0.0_WP !call fs%get_vreman(dt=time%dt,visc=visc)
          mixture_viscosity: block
             integer  :: i,j,k
@@ -559,25 +556,11 @@ contains
                Lbeta=Lrho*beta(i,j,k); Gbeta=Grho*beta(i,j,k); fs%BETA(i,j,k)=(Lvof+Gvof)/(Lvof/max(Lbeta,eps)+Gvof/max(Gbeta,eps))
             end do; end do; end do
          end block mixture_viscosity
-
-         ! Output to ensight
-         if (ens_evt%occurs()) then
-            call fs%interp_vel(Ui,Vi,Wi)
-            call fs%update_surfmesh(smesh)
-            call ens_out%write_data(time%t)
-         end if
          
          ! Perform first semi-Lagrangian transport step =====================================================
          call fs%SLstep(dt=0.5_WP*time%dt,U=fs%U,V=fs%V,W=fs%W)
          call fs%build_interface()
-
-         ! Output to ensight
-         if (ens_evt%occurs()) then
-            call fs%interp_vel(Ui,Vi,Wi)
-            call fs%update_surfmesh(smesh)
-            call ens_out%write_data(time%t+1.0e-4_WP)
-         end if
-
+         
          ! First RK step ====================================================================================
          ! Get non-SL RHS and increment
          call fs%rhs(dQdt(:,:,:,:,1))
@@ -586,13 +569,6 @@ contains
          fs%Q=fs%Q+fs%SLdQ
          ! Recompute primitive variables
          call fs%get_primitive()
-
-         ! Output to ensight
-         if (ens_evt%occurs()) then
-            call fs%interp_vel(Ui,Vi,Wi)
-            call fs%update_surfmesh(smesh)
-            call ens_out%write_data(time%t+2.0e-4_WP)
-         end if
          
          ! Second RK step ===================================================================================
          ! Get non-SL RHS and increment
@@ -605,24 +581,10 @@ contains
          ! Recompute primitive variables
          call fs%get_primitive()
          
-         ! Output to ensight
-         if (ens_evt%occurs()) then
-            call fs%interp_vel(Ui,Vi,Wi)
-            call fs%update_surfmesh(smesh)
-            call ens_out%write_data(time%t+3.0e-4_WP)
-         end if
-
          ! Perform second semi-Lagrangian transport step ====================================================
          call fs%SLstep(dt=1.0_WP*time%dt,U=fs%U,V=fs%V,W=fs%W)
          call fs%build_interface()
          
-         ! Output to ensight
-         if (ens_evt%occurs()) then
-            call fs%interp_vel(Ui,Vi,Wi)
-            call fs%update_surfmesh(smesh)
-            call ens_out%write_data(time%t+4.0e-4_WP)
-         end if
-
          ! Third RK step ====================================================================================
          ! Get non-SL RHS and increment
          call fs%rhs(dQdt(:,:,:,:,3))
@@ -631,13 +593,6 @@ contains
          fs%Q=fs%Q+fs%SLdQ
          ! Recompute primitive variables
          call fs%get_primitive()
-
-         ! Output to ensight
-         if (ens_evt%occurs()) then
-            call fs%interp_vel(Ui,Vi,Wi)
-            call fs%update_surfmesh(smesh)
-            call ens_out%write_data(time%t+5.0e-4_WP)
-         end if
          
          ! Fourth RK step ===================================================================================
          ! Get non-SL RHS and increment
@@ -645,12 +600,6 @@ contains
          fs%Q=fs%Qold+time%dt/6.0_WP*(dQdt(:,:,:,:,1)+2.0_WP*dQdt(:,:,:,:,2)+2.0_WP*dQdt(:,:,:,:,3)+dQdt(:,:,:,:,4))
          ! Increment Q with SL terms
          fs%Q=fs%Q+fs%SLdQ
-         ! Output to ensight
-         if (ens_evt%occurs()) then
-            call fs%interp_vel(Ui,Vi,Wi)
-            call fs%update_surfmesh(smesh)
-            call ens_out%write_data(time%t+6.0e-4_WP)
-         end if
          ! Apply user-provided relaxation model
          call fs%apply_relax()
          ! Recompute primitive variables
@@ -696,7 +645,7 @@ contains
          ! Output to ensight
          if (ens_evt%occurs()) then
             call fs%update_surfmesh(smesh)
-            call ens_out%write_data(time%t+7.0e-4_WP)
+            call ens_out%write_data(time%t)
          end if
          
          ! Perform and output monitoring
