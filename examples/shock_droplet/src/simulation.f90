@@ -148,32 +148,14 @@ contains
       d=-(coeffG*VF*PL+coeffL*(1.0_WP-VF)*PG)
       ! Get equilibrium pressure
       Peq=(-b+sqrt(b**2-4.0_WP*a*d))/(2.0_WP*a)
+      ! Check if pressure is sound
+      if (Peq.le.max(-PinfG,-PinfL)) return
       ! Get equilibrium volume fraction
       VFeq=VF*((gammaL-1.0_WP)*Peq+2.0_WP*PL+coeffL)/((1.0_WP+gammaL)*Peq+coeffL)
       ! Adjust conserved quantities
       Q(3)=Q(3)-0.5_WP*(Pint+Peq)*(VFeq-VF)
       Q(4)=Q(4)+0.5_WP*(Pint+Peq)*(VFeq-VF)
       VF=VFeq
-      ! If the resulting pressure is negative, also perform thermal equilibration
-      !if (Peq.le.-PinfG) then
-         ! Setup quadratic problem
-      !   a=Q(1)*CvL+Q(2)*CvG
-      !   b=Q(1)*CvL*(GammaL*PinfL+PinfG)+Q(2)*CvG*(GammaG*PinfG+PinfL)-sum(Q(3:4))*(Q(1)*CvL*(GammaL-1.0_WP)+Q(2)*CvG*(GammaG-1.0_WP))
-      !   d=(Q(1)*CvL*GammaL+Q(2)*CvG*GammaG)*PinfL*PinfG-sum(Q(3:4))*(Q(1)*CvL*(GammaL-1.0_WP)*PinfG+Q(2)*CvG*(GammaG-1.0_WP)*PinfL)
-         ! Get equilibrium pressure
-      !   Peq=(-b+sqrt(b**2-4.0_WP*a*d))/(2.0_WP*a)
-         ! Get equilibrium volume fraction
-      !   VFeq=Q(1)*CvL*(GammaL-1.0_WP)*(Peq+PinfG)/(Q(1)*CvL*(GammaL-1.0_WP)*(Peq+PinfG)+Q(2)*CvG*(GammaG-1.0_WP)*(Peq+PinfL))
-         ! Clean up solution
-      !   if (VFeq.lt.0.0_WP) then; VFeq=0.0_WP; Peq=max(Peq,-PinfL); end if
-      !   if (VFeq.gt.1.0_WP) then; VFeq=1.0_WP; Peq=max(Peq,-PinfG); end if
-         ! Adjust conserved quantities
-      !   Q(3)=(       VFeq)*(Peq+GammaL*PinfL)/(GammaL-1.0_WP)
-      !   Q(4)=(1.0_WP-VFeq)*(Peq+GammaG*PinfG)/(GammaG-1.0_WP)
-      !   VF=VFeq
-      !end if
-      ! Last debugging check... Probably should never happen...
-      if (Peq.le.-PinfG) print*,"****************** NEGATIVE PRESSURE! - time",time%t,"VFeq",VFeq,"Peq",Peq
    end subroutine P_relax
    
    

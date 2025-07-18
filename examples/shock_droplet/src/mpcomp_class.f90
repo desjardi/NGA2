@@ -436,7 +436,7 @@ contains
       real(WP), dimension(:,:,:,:), allocatable :: SLQx,SLQy,SLQz
       real(WP), dimension(:,:,:,:), allocatable :: SLPx,SLPy,SLPz
       real(WP), dimension(:,:,:)  , allocatable :: dMX,dMY,dMZ
-      real(WP), parameter :: Chybrid=-1.0_WP
+      real(WP), parameter :: Chybrid=-2.0_WP
       real(WP), parameter :: eps=1.0e-12_WP
       
       ! Start semi-Lagrangian timer
