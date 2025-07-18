@@ -424,19 +424,18 @@ contains
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in) :: U
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in) :: V
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in) :: W
-      real(WP), parameter :: ampCFL=5.0_WP
       real(IRL_double), dimension(3,9) :: face
       type(SepVM_type) :: my_SepVM
       type(CapDod_type) :: flux_polyhedron
       type(TagAccVM_SepVM_type) :: detailed_face_flux
-      integer :: i,j,k,n
+      integer :: i,j,k,n,ii,jj,kk
       integer , dimension(3) :: ind
       real(WP), dimension(3) :: Lbar,Gbar
       real(WP) :: Lvol,Gvol,Lmass,Gmass,VFold,div,flux
       real(WP), dimension(:,:,:,:), allocatable :: SLVx,SLVy,SLVz
       real(WP), dimension(:,:,:,:), allocatable :: SLQx,SLQy,SLQz
       real(WP), dimension(:,:,:,:), allocatable :: SLPx,SLPy,SLPz
-      real(WP), dimension(:,:,:)  , allocatable :: RHOX,RHOY,RHOZ
+      real(WP), parameter :: Chybrid=0.8_WP
       
       ! Start semi-Lagrangian timer
       call this%tsl%start()
@@ -637,52 +636,19 @@ contains
       ! ======================== INVISID FLUXES ======================== !
       ! ================================================================ !
       
-      ! Form the SL increment for phasic mass and energy
-      do k=this%cfg%kmin_,this%cfg%kmax_
-         do j=this%cfg%jmin_,this%cfg%jmax_
-            do i=this%cfg%imin_,this%cfg%imax_
-               ! Phasic mass and internal energy advection
-               this%SLdQ(i,j,k,1:4)=dt*(this%dxi*(SLQx(i+1,j,k,1:4)-SLQx(i,j,k,1:4))+this%dyi*(SLQy(i,j+1,k,1:4)-SLQy(i,j,k,1:4))+this%dzi*(SLQz(i,j,k+1,1:4)-SLQz(i,j,k,1:4)))
-               ! Pressure dilatation term
-               if (this%iSL(i,j,k).gt.0) then
-                  div=this%dxi*(this%U(i+1,j,k)-this%U(i,j,k))+this%dyi*(this%V(i,j+1,k)-this%V(i,j,k))+this%dzi*(this%W(i,j,k+1)-this%W(i,j,k))
-                  this%SLdQ(i,j,k,3)=this%SLdQ(i,j,k,3)-dt*(       this%VF(i,j,k))*this%PL(i,j,k)*div
-                  this%SLdQ(i,j,k,4)=this%SLdQ(i,j,k,4)-dt*(1.0_WP-this%VF(i,j,k))*this%PG(i,j,k)*div
-               end if
-            end do
-         end do
-      end do
-      
-      ! Synchronize phasic dQ fields
-      do n=1,4; call this%cfg%sync(this%SLdQ(:,:,:,n)); end do
-      
-      ! Calculate new staggered mixture density
-      allocate(RHOX(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_)); RHOX=0.0_WP
-      allocate(RHOY(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_)); RHOY=0.0_WP
-      allocate(RHOZ(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_)); RHOZ=0.0_WP
-      do k=this%cfg%kmino_+1,this%cfg%kmaxo_; do j=this%cfg%jmino_+1,this%cfg%jmaxo_; do i=this%cfg%imino_+1,this%cfg%imaxo_;
-         RHOX(i,j,k)=0.5_WP*sum(this%Qold(i-1:i,j,k,1:2)+this%SLdQ(i-1:i,j,k,1:2))
-         RHOY(i,j,k)=0.5_WP*sum(this%Qold(i,j-1:j,k,1:2)+this%SLdQ(i,j-1:j,k,1:2))
-         RHOZ(i,j,k)=0.5_WP*sum(this%Qold(i,j,k-1:k,1:2)+this%SLdQ(i,j,k-1:k,1:2))
-      end do; end do; end do
-      call this%cfg%sync(RHOX); call this%cfg%sync(RHOY); call this%cfg%sync(RHOZ)
-      if (.not.this%cfg%xper.and.this%cfg%iproc.eq.1) then; RHOX(this%cfg%imino,:,:)=RHOX(this%cfg%imino+1,:,:); RHOY(this%cfg%imino,:,:)=RHOY(this%cfg%imino+1,:,:); RHOZ(this%cfg%imino,:,:)=RHOZ(this%cfg%imino+1,:,:); end if
-      if (.not.this%cfg%yper.and.this%cfg%jproc.eq.1) then; RHOX(:,this%cfg%jmino,:)=RHOX(:,this%cfg%jmino+1,:); RHOY(:,this%cfg%jmino,:)=RHOY(:,this%cfg%jmino+1,:); RHOZ(:,this%cfg%jmino,:)=RHOZ(:,this%cfg%jmino+1,:); end if
-      if (.not.this%cfg%zper.and.this%cfg%kproc.eq.1) then; RHOX(:,:,this%cfg%kmino)=RHOX(:,:,this%cfg%kmino+1); RHOY(:,:,this%cfg%kmino)=RHOY(:,:,this%cfg%kmino+1); RHOZ(:,:,this%cfg%kmino)=RHOZ(:,:,this%cfg%kmino+1); end if
-      
-      ! Calculate cell-centered mixture momentum fluxes from SL mass fluxes with extra cell on the left due to staggering
+      ! Calculate mixture momentum fluxes from SL mass fluxes with extra cell on the left due to staggering
       do k=this%cfg%kmin_-1,this%cfg%kmax_
          do j=this%cfg%jmin_-1,this%cfg%jmax_
             do i=this%cfg%imin_-1,this%cfg%imax_
                ! Centered fluxes
-               SLQx(i,j,k,5)=0.25_WP*sum(SLQx(i:i+1,j,k,1:2))*sum(this%U(i:i+1,j,k))
-               SLQy(i,j,k,6)=0.25_WP*sum(SLQy(i,j:j+1,k,1:2))*sum(this%V(i,j:j+1,k))
-               SLQz(i,j,k,7)=0.25_WP*sum(SLQz(i,j,k:k+1,1:2))*sum(this%W(i,j,k:k+1))
-               ! If warranted, switch locally to upwinded fluxes
-               flux=0.5_WP*sum(SLQx(i:i+1,j,k,1:2)); if (this%dxi*dt*abs(flux)/minval(RHOX(i:i+1,j,k)).gt.ampCFL) then; SLQx(i,j,k,5)=0.5_WP*(flux-abs(-flux))*this%U(i,j,k)+0.5_WP*(flux+abs(-flux))*this%U(i+1,j,k); end if
-               flux=0.5_WP*sum(SLQy(i,j:j+1,k,1:2)); if (this%dyi*dt*abs(flux)/minval(RHOY(i,j:j+1,k)).gt.ampCFL) then; SLQy(i,j,k,6)=0.5_WP*(flux-abs(-flux))*this%V(i,j,k)+0.5_WP*(flux+abs(-flux))*this%V(i,j+1,k); end if
-               flux=0.5_WP*sum(SLQz(i,j,k:k+1,1:2)); if (this%dzi*dt*abs(flux)/minval(RHOZ(i,j,k:k+1)).gt.ampCFL) then; SLQz(i,j,k,7)=0.5_WP*(flux-abs(-flux))*this%W(i,j,k)+0.5_WP*(flux+abs(-flux))*this%W(i,j,k+1); end if
-               !Add pressure fluxes in SL cells
+               !SLQx(i,j,k,5)=0.25_WP*sum(SLQx(i:i+1,j,k,1:2))*sum(this%U(i:i+1,j,k))
+               !SLQy(i,j,k,6)=0.25_WP*sum(SLQy(i,j:j+1,k,1:2))*sum(this%V(i,j:j+1,k))
+               !SLQz(i,j,k,7)=0.25_WP*sum(SLQz(i,j,k:k+1,1:2))*sum(this%W(i,j,k:k+1))
+               ! Hybrid fluxes
+               flux=0.5_WP*sum(SLQx(i:i+1,j,k,1:2)); SLQx(i,j,k,5)=flux*0.5_WP*sum(this%U(i:i+1,j,k)); ii=i; jj=j; kk=k; if (flux.ge.0.0_WP) ii=i+1; if (dt*this%dxi*abs(SLQx(i,j,k,5))/abs(this%Qold(ii,jj,kk,5)).gt.Chybrid) SLQx(i,j,k,5)=flux*this%U(ii,jj,kk)
+               flux=0.5_WP*sum(SLQy(i,j:j+1,k,1:2)); SLQy(i,j,k,6)=flux*0.5_WP*sum(this%V(i,j:j+1,k)); ii=i; jj=j; kk=k; if (flux.ge.0.0_WP) jj=j+1; if (dt*this%dyi*abs(SLQy(i,j,k,6))/abs(this%Qold(ii,jj,kk,6)).gt.Chybrid) SLQy(i,j,k,6)=flux*this%V(ii,jj,kk)
+               flux=0.5_WP*sum(SLQz(i,j,k:k+1,1:2)); SLQz(i,j,k,7)=flux*0.5_WP*sum(this%W(i,j,k:k+1)); ii=i; jj=j; kk=k; if (flux.ge.0.0_WP) kk=k+1; if (dt*this%dzi*abs(SLQz(i,j,k,7))/abs(this%Qold(ii,jj,kk,7)).gt.Chybrid) SLQz(i,j,k,7)=flux*this%W(ii,jj,kk)
+               ! Add pressure fluxes in SL cells
                if (this%iSL(i,j,k).gt.0) then
                   SLQx(i,j,k,5)=SLQx(i,j,k,5)-this%VF(i,j,k)*this%PL(i,j,k)-(1.0_WP-this%VF(i,j,k))*this%PG(i,j,k)
                   SLQy(i,j,k,6)=SLQy(i,j,k,6)-this%VF(i,j,k)*this%PL(i,j,k)-(1.0_WP-this%VF(i,j,k))*this%PG(i,j,k)
@@ -697,36 +663,42 @@ contains
          do j=this%cfg%jmin_,this%cfg%jmax_+1
             do i=this%cfg%imin_,this%cfg%imax_+1
                ! Centered fluxes
-               SLQy(i,j,k,5)=0.25_WP*sum(SLQy(i-1:i,j,k,1:2))*sum(this%U(i,j-1:j,k))
-               SLQz(i,j,k,5)=0.25_WP*sum(SLQz(i-1:i,j,k,1:2))*sum(this%U(i,j,k-1:k))
-               SLQx(i,j,k,6)=0.25_WP*sum(SLQx(i,j-1:j,k,1:2))*sum(this%V(i-1:i,j,k))
-               SLQz(i,j,k,6)=0.25_WP*sum(SLQz(i,j-1:j,k,1:2))*sum(this%V(i,j,k-1:k))
-               SLQx(i,j,k,7)=0.25_WP*sum(SLQx(i,j,k-1:k,1:2))*sum(this%W(i-1:i,j,k))
-               SLQy(i,j,k,7)=0.25_WP*sum(SLQy(i,j,k-1:k,1:2))*sum(this%W(i,j-1:j,k))
-               ! If warranted, switch locally to upwinded fluxes
-               flux=0.5_WP*sum(SLQy(i-1:i,j,k,1:2)); if (this%dyi*dt*abs(flux)/minval(RHOX(i,j-1:j,k)).gt.ampCFL) then; SLQy(i,j,k,5)=0.5_WP*(flux-abs(-flux))*this%U(i,j-1,k)+0.5_WP*(flux+abs(-flux))*this%U(i,j,k); end if
-               flux=0.5_WP*sum(SLQz(i-1:i,j,k,1:2)); if (this%dzi*dt*abs(flux)/minval(RHOX(i,j,k-1:k)).gt.ampCFL) then; SLQz(i,j,k,5)=0.5_WP*(flux-abs(-flux))*this%U(i,j,k-1)+0.5_WP*(flux+abs(-flux))*this%U(i,j,k); end if
-               flux=0.5_WP*sum(SLQx(i,j-1:j,k,1:2)); if (this%dxi*dt*abs(flux)/minval(RHOY(i-1:i,j,k)).gt.ampCFL) then; SLQx(i,j,k,6)=0.5_WP*(flux-abs(-flux))*this%V(i-1,j,k)+0.5_WP*(flux+abs(-flux))*this%V(i,j,k); end if
-               flux=0.5_WP*sum(SLQz(i,j-1:j,k,1:2)); if (this%dzi*dt*abs(flux)/minval(RHOY(i,j,k-1:k)).gt.ampCFL) then; SLQz(i,j,k,6)=0.5_WP*(flux-abs(-flux))*this%V(i,j,k-1)+0.5_WP*(flux+abs(-flux))*this%V(i,j,k); end if
-               flux=0.5_WP*sum(SLQx(i,j,k-1:k,1:2)); if (this%dxi*dt*abs(flux)/minval(RHOZ(i-1:i,j,k)).gt.ampCFL) then; SLQx(i,j,k,7)=0.5_WP*(flux-abs(-flux))*this%W(i-1,j,k)+0.5_WP*(flux+abs(-flux))*this%W(i,j,k); end if
-               flux=0.5_WP*sum(SLQy(i,j,k-1:k,1:2)); if (this%dyi*dt*abs(flux)/minval(RHOZ(i,j-1:j,k)).gt.ampCFL) then; SLQy(i,j,k,7)=0.5_WP*(flux-abs(-flux))*this%W(i,j-1,k)+0.5_WP*(flux+abs(-flux))*this%W(i,j,k); end if
+               !SLQy(i,j,k,5)=0.25_WP*sum(SLQy(i-1:i,j,k,1:2))*sum(this%U(i,j-1:j,k))
+               !SLQz(i,j,k,5)=0.25_WP*sum(SLQz(i-1:i,j,k,1:2))*sum(this%U(i,j,k-1:k))
+               !SLQx(i,j,k,6)=0.25_WP*sum(SLQx(i,j-1:j,k,1:2))*sum(this%V(i-1:i,j,k))
+               !SLQz(i,j,k,6)=0.25_WP*sum(SLQz(i,j-1:j,k,1:2))*sum(this%V(i,j,k-1:k))
+               !SLQx(i,j,k,7)=0.25_WP*sum(SLQx(i,j,k-1:k,1:2))*sum(this%W(i-1:i,j,k))
+               !SLQy(i,j,k,7)=0.25_WP*sum(SLQy(i,j,k-1:k,1:2))*sum(this%W(i,j-1:j,k))
+               ! Hybrid fluxes
+               flux=0.5_WP*sum(SLQy(i-1:i,j,k,1:2)); SLQy(i,j,k,5)=flux*0.5_WP*sum(this%U(i,j-1:j,k)); ii=i; jj=j; kk=k; if (flux.lt.0.0_WP) jj=j-1; if (dt*this%dyi*abs(SLQy(i,j,k,5))/abs(this%Qold(ii,jj,kk,5)).gt.Chybrid) SLQy(i,j,k,5)=flux*this%U(ii,jj,kk)
+               flux=0.5_WP*sum(SLQz(i-1:i,j,k,1:2)); SLQz(i,j,k,5)=flux*0.5_WP*sum(this%U(i,j,k-1:k)); ii=i; jj=j; kk=k; if (flux.lt.0.0_WP) kk=k-1; if (dt*this%dzi*abs(SLQz(i,j,k,5))/abs(this%Qold(ii,jj,kk,5)).gt.Chybrid) SLQz(i,j,k,5)=flux*this%U(ii,jj,kk)
+               flux=0.5_WP*sum(SLQx(i,j-1:j,k,1:2)); SLQx(i,j,k,6)=flux*0.5_WP*sum(this%V(i-1:i,j,k)); ii=i; jj=j; kk=k; if (flux.lt.0.0_WP) ii=i-1; if (dt*this%dxi*abs(SLQx(i,j,k,6))/abs(this%Qold(ii,jj,kk,6)).gt.Chybrid) SLQx(i,j,k,6)=flux*this%V(ii,jj,kk)
+               flux=0.5_WP*sum(SLQz(i,j-1:j,k,1:2)); SLQz(i,j,k,6)=flux*0.5_WP*sum(this%V(i,j,k-1:k)); ii=i; jj=j; kk=k; if (flux.lt.0.0_WP) kk=k-1; if (dt*this%dzi*abs(SLQz(i,j,k,6))/abs(this%Qold(ii,jj,kk,6)).gt.Chybrid) SLQz(i,j,k,6)=flux*this%V(ii,jj,kk)
+               flux=0.5_WP*sum(SLQx(i,j,k-1:k,1:2)); SLQx(i,j,k,7)=flux*0.5_WP*sum(this%W(i-1:i,j,k)); ii=i; jj=j; kk=k; if (flux.lt.0.0_WP) ii=i-1; if (dt*this%dxi*abs(SLQx(i,j,k,7))/abs(this%Qold(ii,jj,kk,7)).gt.Chybrid) SLQx(i,j,k,7)=flux*this%W(ii,jj,kk)
+               flux=0.5_WP*sum(SLQy(i,j,k-1:k,1:2)); SLQy(i,j,k,7)=flux*0.5_WP*sum(this%W(i,j-1:j,k)); ii=i; jj=j; kk=k; if (flux.lt.0.0_WP) jj=j-1; if (dt*this%dyi*abs(SLQy(i,j,k,7))/abs(this%Qold(ii,jj,kk,7)).gt.Chybrid) SLQy(i,j,k,7)=flux*this%W(ii,jj,kk)
             end do
          end do
       end do
       
-      ! Form the SL increment for mixture momentum
+      ! Form SL increment for all conserved variables
       do k=this%cfg%kmin_,this%cfg%kmax_
          do j=this%cfg%jmin_,this%cfg%jmax_
             do i=this%cfg%imin_,this%cfg%imax_
+               ! Phasic mass and internal energy advection
+               this%SLdQ(i,j,k,1:4)=dt*(this%dxi*(SLQx(i+1,j,k,1:4)-SLQx(i,j,k,1:4))+this%dyi*(SLQy(i,j+1,k,1:4)-SLQy(i,j,k,1:4))+this%dzi*(SLQz(i,j,k+1,1:4)-SLQz(i,j,k,1:4)))
+               ! Pressure dilatation term
+               if (this%iSL(i,j,k).gt.0) then
+                  div=this%dxi*(this%U(i+1,j,k)-this%U(i,j,k))+this%dyi*(this%V(i,j+1,k)-this%V(i,j,k))+this%dzi*(this%W(i,j,k+1)-this%W(i,j,k))
+                  this%SLdQ(i,j,k,3)=this%SLdQ(i,j,k,3)-dt*(       this%VF(i,j,k))*this%PL(i,j,k)*div
+                  this%SLdQ(i,j,k,4)=this%SLdQ(i,j,k,4)-dt*(1.0_WP-this%VF(i,j,k))*this%PG(i,j,k)*div
+               end if
+               ! Mixture momentum advection and pressure stress
                this%SLdQ(i,j,k,5)=dt*(this%dxi*(SLQx(i  ,j,k,5)-SLQx(i-1,j,k,5))+this%dyi*(SLQy(i,j+1,k,5)-SLQy(i,j  ,k,5))+this%dzi*(SLQz(i,j,k+1,5)-SLQz(i,j,k  ,5)))
                this%SLdQ(i,j,k,6)=dt*(this%dxi*(SLQx(i+1,j,k,6)-SLQx(i  ,j,k,6))+this%dyi*(SLQy(i,j  ,k,6)-SLQy(i,j-1,k,6))+this%dzi*(SLQz(i,j,k+1,6)-SLQz(i,j,k  ,6)))
                this%SLdQ(i,j,k,7)=dt*(this%dxi*(SLQx(i+1,j,k,7)-SLQx(i  ,j,k,7))+this%dyi*(SLQy(i,j+1,k,7)-SLQy(i,j  ,k,7))+this%dzi*(SLQz(i,j,k  ,7)-SLQz(i,j,k-1,7)))
             end do
          end do
       end do
-      
-      ! Deallocate face density
-      deallocate(RHOX,RHOY,RHOZ)
       
       ! ================================================================ !
       ! ======================== VISCOUS  FLUXES ======================= !
