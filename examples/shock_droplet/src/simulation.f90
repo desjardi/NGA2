@@ -119,6 +119,9 @@ contains
       real(WP), dimension(1:), intent(inout) :: Q
       real(WP) :: PG,PL,ZG,ZL,Pint
       real(WP) :: a,b,d,coeffL,coeffG,Peq,VFeq
+      real(WP), parameter :: RHOGmin=1.0e-3_WP
+      ! ================ Handle gas flotsams ================
+      if (Q(2)/(1.0_WP-VF).lt.RHOGmin) return
       ! ================ First step for mechanical relaxation ================
       ! Get phasic pressures
       PL=get_PL(RHO=Q(1)/(       VF),I=Q(3)/Q(1))
@@ -538,7 +541,7 @@ contains
          
          ! Prepare SGS viscosity models
          call fs%get_viscartif(dt=time%dt,beta=beta)
-         visc=0.0_WP !call fs%get_vreman(dt=time%dt,visc=visc)
+         call fs%get_vreman   (dt=time%dt,visc=visc)
          mixture_viscosity: block
             integer  :: i,j,k
             real(WP) :: Lvof,Lrho,Gvof,Grho
@@ -551,7 +554,7 @@ contains
                Lrho=sum(       fs%Q (i-1:i+1,j-1:j+1,k-1:k+1,1))/(Lvof+eps)
                Grho=sum(       fs%Q (i-1:i+1,j-1:j+1,k-1:k+1,2))/(Gvof+eps)
                ! Harmonic average of VISC
-               Lvisc=Lrho*viscL; Gvisc=Grho*viscG; fs%VISC(i,j,k)=(Lvof+Gvof)/(Lvof/max(Lvisc,eps)+Gvof/max(Gvisc,eps))
+               Lvisc=Lrho*(viscL+visc(i,j,k)); Gvisc=Grho*(viscG+visc(i,j,k)); fs%VISC(i,j,k)=(Lvof+Gvof)/(Lvof/max(Lvisc,eps)+Gvof/max(Gvisc,eps))
                ! Harmonic average of BETA
                Lbeta=Lrho*beta(i,j,k); Gbeta=Grho*beta(i,j,k); fs%BETA(i,j,k)=(Lvof+Gvof)/(Lvof/max(Lbeta,eps)+Gvof/max(Gbeta,eps))
             end do; end do; end do

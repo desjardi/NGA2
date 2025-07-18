@@ -1809,7 +1809,7 @@ contains
       real(WP), intent(in) :: dt
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(out) :: beta
       integer :: i,j,k,si,sj,sk,n
-      integer, parameter :: nfilter=2
+      integer, parameter :: nfilter=1
       real(WP) :: max_beta,dudy,dudz,dvdx,dvdz,dwdx,dwdy,vort,grad_div
       real(WP), parameter :: max_cfl=0.5_WP
       real(WP), parameter :: Cartif=2.0_WP
@@ -1904,7 +1904,7 @@ contains
       real(WP), dimension(:,:,:), allocatable :: tmp
       real(WP), dimension(-1:+1), parameter :: filter=[1.0_WP/6.0_WP,2.0_WP/3.0_WP,1.0_WP/6.0_WP]
       integer :: i,j,k,si,sj,sk,n
-      integer, parameter :: nfilter=2
+      integer, parameter :: nfilter=1
       ! Model constant is c=2.5*Cs_ref**2 - Vreman uses c=0.07 which corresponds to Cs_ref=0.17
       C=2.5_WP*Cs_ref**2
       ! Calculate max visc permissible
