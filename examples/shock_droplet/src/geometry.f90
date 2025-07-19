@@ -22,17 +22,22 @@ contains
       ! Create a grid from input params
       create_grid: block
          use sgrid_class, only: cartesian
-         integer :: i,j,k,nx,ny,nz
+         integer  :: i,j,k,nx,ny,nz
          real(WP) :: Lx,Ly,Lz,X0
+         logical  :: xper,yper,zper
          real(WP), dimension(:), allocatable :: x,y,z
+         
+         ! By default, the case is fully non-periodic
+         xper=.false.; yper=.false.; zper=.false.
          
          ! Read in grid definition
          call param_read('Lx',Lx); call param_read('nx',nx); allocate(x(nx+1)); call param_read('X0',X0,default=-0.5_WP*Lx)
          call param_read('Ly',Ly); call param_read('ny',ny); allocate(y(ny+1))
          call param_read('Lz',Lz); call param_read('nz',nz); allocate(z(nz+1))
          
-         ! Handle 2D case
-         if (nz.eq.1) Lz=Lx/real(nx,WP)
+         ! Handle 2D cases
+         if (ny.eq.1) then; Ly=Lx/real(nx,WP); yper=.true.; end if
+         if (nz.eq.1) then; Lz=Lx/real(nx,WP); zper=.true.; end if
          
          ! Create simple rectilinear grid
          do i=1,nx+1; x(i)=real(i-1,WP)/real(nx,WP)*Lx+X0       ; end do
@@ -40,7 +45,7 @@ contains
          do k=1,nz+1; z(k)=real(k-1,WP)/real(nz,WP)*Lz-0.5_WP*Lz; end do
          
          ! General serial grid object
-         grid=sgrid(coord=cartesian,no=3,x=x,y=y,z=z,xper=.false.,yper=.false.,zper=.true.,name='ShockDrop')
+         grid=sgrid(coord=cartesian,no=3,x=x,y=y,z=z,xper=xper,yper=yper,zper=zper,name='ShockDrop')
          
       end block create_grid
       

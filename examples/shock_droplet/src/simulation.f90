@@ -668,49 +668,57 @@ contains
             use irl_fortran_interface, only: setPlane
             integer :: i,j,k
             ! Apply clipped Neumann on primitive variables in x+
-            if (fs%cfg%iproc.eq.fs%cfg%npx) then
-               do k=fs%cfg%kmino_,fs%cfg%kmaxo_; do j=fs%cfg%jmino_,fs%cfg%jmaxo_; do i=fs%cfg%imax+1,fs%cfg%imaxo
-                  ! Copy primitive variables
-                  fs%RHOL(i,j,k)=fs%RHOL(fs%cfg%imax,j,k)
-                  fs%PL  (i,j,k)=fs%PL  (fs%cfg%imax,j,k)
-                  fs%IL  (i,j,k)=fs%IL  (fs%cfg%imax,j,k)
-                  fs%RHOG(i,j,k)=fs%RHOG(fs%cfg%imax,j,k)
-                  fs%PG  (i,j,k)=fs%PG  (fs%cfg%imax,j,k)
-                  fs%IG  (i,j,k)=fs%IG  (fs%cfg%imax,j,k)
-                  fs%U  (i,j,k)=max(fs%U(fs%cfg%imax,j,k),0.0_WP)
-                  fs%V   (i,j,k)=fs%V   (fs%cfg%imax,j,k)
-                  fs%W   (i,j,k)=fs%W   (fs%cfg%imax,j,k)
-                  fs%VF  (i,j,k)=fs%VF  (fs%cfg%imax,j,k)
-                  ! Also adjust interface data
-                  call setPlane(fs%PLIC(i,j,k),0,[1.0_WP,0.0_WP,0.0_WP],fs%cfg%x(i)+fs%dx*fs%VF(i,j,k))
-                  fs%BL(:,i,j,k)=[fs%cfg%xm(i),fs%cfg%ym(j),fs%cfg%zm(k)]
-                  fs%BG(:,i,j,k)=[fs%cfg%xm(i),fs%cfg%ym(j),fs%cfg%zm(k)]
-               end do; end do; end do
+            if (.not.fs%cfg%xper.and.fs%cfg%iproc.eq.fs%cfg%npx) then
+               do k=fs%cfg%kmino_,fs%cfg%kmaxo_; do j=fs%cfg%jmino_,fs%cfg%jmaxo_
+                  ! Copy over from imax to imax+1 and above
+                  do i=fs%cfg%imax+1,fs%cfg%imaxo
+                     ! Copy primitive variables
+                     fs%RHOL(i,j,k)=fs%RHOL(fs%cfg%imax,j,k)
+                     fs%PL  (i,j,k)=fs%PL  (fs%cfg%imax,j,k)
+                     fs%IL  (i,j,k)=fs%IL  (fs%cfg%imax,j,k)
+                     fs%RHOG(i,j,k)=fs%RHOG(fs%cfg%imax,j,k)
+                     fs%PG  (i,j,k)=fs%PG  (fs%cfg%imax,j,k)
+                     fs%IG  (i,j,k)=fs%IG  (fs%cfg%imax,j,k)
+                     fs%U  (i,j,k)=max(fs%U(fs%cfg%imax,j,k),0.0_WP)
+                     fs%V   (i,j,k)=fs%V   (fs%cfg%imax,j,k)
+                     fs%W   (i,j,k)=fs%W   (fs%cfg%imax,j,k)
+                     fs%VF  (i,j,k)=fs%VF  (fs%cfg%imax,j,k)
+                     ! Also adjust interface data
+                     call setPlane(fs%PLIC(i,j,k),0,[1.0_WP,0.0_WP,0.0_WP],fs%cfg%x(i)+fs%dx*fs%VF(i,j,k))
+                     fs%BL(:,i,j,k)=[fs%cfg%xm(i),fs%cfg%ym(j),fs%cfg%zm(k)]
+                     fs%BG(:,i,j,k)=[fs%cfg%xm(i),fs%cfg%ym(j),fs%cfg%zm(k)]
+                  end do
+               end do; end do
             end if
             ! Apply clipped Neumann on primitive variables in y+
-            if (fs%cfg%jproc.eq.fs%cfg%npy) then
-               do k=fs%cfg%kmino_,fs%cfg%kmaxo_; do j=fs%cfg%jmax+1,fs%cfg%jmaxo; do i=fs%cfg%imino_,fs%cfg%imaxo_
-                  ! Copy primitive variables
-                  fs%RHOL(i,j,k)=fs%RHOL(i,fs%cfg%jmax,k)
-                  fs%PL  (i,j,k)=fs%PL  (i,fs%cfg%jmax,k)
-                  fs%IL  (i,j,k)=fs%IL  (i,fs%cfg%jmax,k)
-                  fs%RHOG(i,j,k)=fs%RHOG(i,fs%cfg%jmax,k)
-                  fs%PG  (i,j,k)=fs%PG  (i,fs%cfg%jmax,k)
-                  fs%IG  (i,j,k)=fs%IG  (i,fs%cfg%jmax,k)
-                  fs%U   (i,j,k)=fs%U   (i,fs%cfg%jmax,k)
-                  fs%V  (i,j,k)=max(fs%V(i,fs%cfg%jmax,k),0.0_WP)
-                  fs%W   (i,j,k)=fs%W   (i,fs%cfg%jmax,k)
-                  fs%VF  (i,j,k)=fs%VF  (i,fs%cfg%jmax,k)
-                  ! Also adjust interface data
-                  call setPlane(fs%PLIC(i,j,k),0,[0.0_WP,1.0_WP,0.0_WP],fs%cfg%y(j)+fs%dy*fs%VF(i,j,k))
-                  fs%BL(:,i,j,k)=[fs%cfg%xm(i),fs%cfg%ym(j),fs%cfg%zm(k)]
-                  fs%BG(:,i,j,k)=[fs%cfg%xm(i),fs%cfg%ym(j),fs%cfg%zm(k)]
-               end do; end do; end do
+            if (.not.fs%cfg%yper.and.fs%cfg%jproc.eq.fs%cfg%npy) then
+               do k=fs%cfg%kmino_,fs%cfg%kmaxo_; do i=fs%cfg%imino_,fs%cfg%imaxo_
+                  ! Copy over from jmax to jmax+1 and above
+                  do j=fs%cfg%jmax+1,fs%cfg%jmaxo
+                     ! Copy primitive variables
+                     fs%RHOL(i,j,k)=fs%RHOL(i,fs%cfg%jmax,k)
+                     fs%PL  (i,j,k)=fs%PL  (i,fs%cfg%jmax,k)
+                     fs%IL  (i,j,k)=fs%IL  (i,fs%cfg%jmax,k)
+                     fs%RHOG(i,j,k)=fs%RHOG(i,fs%cfg%jmax,k)
+                     fs%PG  (i,j,k)=fs%PG  (i,fs%cfg%jmax,k)
+                     fs%IG  (i,j,k)=fs%IG  (i,fs%cfg%jmax,k)
+                     fs%U   (i,j,k)=fs%U   (i,fs%cfg%jmax,k)
+                     fs%V  (i,j,k)=max(fs%V(i,fs%cfg%jmax,k),0.0_WP)
+                     fs%W   (i,j,k)=fs%W   (i,fs%cfg%jmax,k)
+                     fs%VF  (i,j,k)=fs%VF  (i,fs%cfg%jmax,k)
+                     ! Also adjust interface data
+                     call setPlane(fs%PLIC(i,j,k),0,[0.0_WP,1.0_WP,0.0_WP],fs%cfg%y(j)+fs%dy*fs%VF(i,j,k))
+                     fs%BL(:,i,j,k)=[fs%cfg%xm(i),fs%cfg%ym(j),fs%cfg%zm(k)]
+                     fs%BG(:,i,j,k)=[fs%cfg%xm(i),fs%cfg%ym(j),fs%cfg%zm(k)]
+                  end do
+               end do; end do
             end if
             ! Apply clipped Neumann on primitive variables in y-
-            if (fs%cfg%jproc.eq.1) then
+            if (.not.fs%cfg%yper.and.fs%cfg%jproc.eq.1) then
                do k=fs%cfg%kmino_,fs%cfg%kmaxo_; do i=fs%cfg%imino_,fs%cfg%imaxo_
-                  ! Copy over from jmin+1 to jmin-1 and below
+                  ! First copy over V from jmin+1 to jmin
+                  fs%V(i,fs%cfg%jmin,k)=min(fs%V(i,fs%cfg%jmin+1,k),0.0_WP)
+                  ! Then copy over from jmin to jmin-1 and below
                   do j=fs%cfg%jmino,fs%cfg%jmin-1
                      ! Copy primitive variables
                      fs%RHOL(i,j,k)=fs%RHOL(i,fs%cfg%jmin,k)
@@ -720,7 +728,7 @@ contains
                      fs%PG  (i,j,k)=fs%PG  (i,fs%cfg%jmin,k)
                      fs%IG  (i,j,k)=fs%IG  (i,fs%cfg%jmin,k)
                      fs%U   (i,j,k)=fs%U   (i,fs%cfg%jmin,k)
-                     fs%V  (i,j,k)=min(fs%V(i,fs%cfg%jmin+1,k),0.0_WP)
+                     fs%V  (i,j,k)=min(fs%V(i,fs%cfg%jmin,k),0.0_WP)
                      fs%W   (i,j,k)=fs%W   (i,fs%cfg%jmin,k)
                      fs%VF  (i,j,k)=fs%VF  (i,fs%cfg%jmin,k)
                      ! Also adjust interface data
@@ -728,8 +736,54 @@ contains
                      fs%BL(:,i,j,k)=[fs%cfg%xm(i),fs%cfg%ym(j),fs%cfg%zm(k)]
                      fs%BG(:,i,j,k)=[fs%cfg%xm(i),fs%cfg%ym(j),fs%cfg%zm(k)]
                   end do
-                  ! Also do apply Neumann on V at jmin
-                  fs%V(i,fs%cfg%jmin,k)=min(fs%V(i,fs%cfg%jmin+1,k),0.0_WP)
+               end do; end do
+            end if
+            ! Apply clipped Neumann on primitive variables in z+
+            if (.not.fs%cfg%zper.and.fs%cfg%kproc.eq.fs%cfg%npz) then
+               do j=fs%cfg%jmino_,fs%cfg%jmaxo_; do i=fs%cfg%imino_,fs%cfg%imaxo_
+                  ! Copy over from kmax to kmax+1 and above
+                  do k=fs%cfg%kmax+1,fs%cfg%kmaxo
+                     ! Copy primitive variables
+                     fs%RHOL(i,j,k)=fs%RHOL(i,j,fs%cfg%kmax)
+                     fs%PL  (i,j,k)=fs%PL  (i,j,fs%cfg%kmax)
+                     fs%IL  (i,j,k)=fs%IL  (i,j,fs%cfg%kmax)
+                     fs%RHOG(i,j,k)=fs%RHOG(i,j,fs%cfg%kmax)
+                     fs%PG  (i,j,k)=fs%PG  (i,j,fs%cfg%kmax)
+                     fs%IG  (i,j,k)=fs%IG  (i,j,fs%cfg%kmax)
+                     fs%U   (i,j,k)=fs%U   (i,j,fs%cfg%kmax)
+                     fs%V   (i,j,k)=fs%V   (i,j,fs%cfg%kmax)
+                     fs%W  (i,j,k)=max(fs%W(i,j,fs%cfg%kmax),0.0_WP)
+                     fs%VF  (i,j,k)=fs%VF  (i,j,fs%cfg%kmax)
+                     ! Also adjust interface data
+                     call setPlane(fs%PLIC(i,j,k),0,[0.0_WP,1.0_WP,0.0_WP],fs%cfg%z(k)+fs%dz*fs%VF(i,j,k))
+                     fs%BL(:,i,j,k)=[fs%cfg%xm(i),fs%cfg%ym(j),fs%cfg%zm(k)]
+                     fs%BG(:,i,j,k)=[fs%cfg%xm(i),fs%cfg%ym(j),fs%cfg%zm(k)]
+                  end do
+               end do; end do
+            end if
+            ! Apply clipped Neumann on primitive variables in z-
+            if (.not.fs%cfg%zper.and.fs%cfg%kproc.eq.1) then
+               do j=fs%cfg%jmino_,fs%cfg%jmaxo_; do i=fs%cfg%imino_,fs%cfg%imaxo_
+                  ! First copy over W from kmin+1 to kmin
+                  fs%W(i,j,fs%cfg%kmin)=min(fs%W(i,j,fs%cfg%kmin+1),0.0_WP)
+                  ! Then copy over from kmin to kmin-1 and below
+                  do k=fs%cfg%kmino,fs%cfg%kmin-1
+                     ! Copy primitive variables
+                     fs%RHOL(i,j,k)=fs%RHOL(i,j,fs%cfg%kmin)
+                     fs%PL  (i,j,k)=fs%PL  (i,j,fs%cfg%kmin)
+                     fs%IL  (i,j,k)=fs%IL  (i,j,fs%cfg%kmin)
+                     fs%RHOG(i,j,k)=fs%RHOG(i,j,fs%cfg%kmin)
+                     fs%PG  (i,j,k)=fs%PG  (i,j,fs%cfg%kmin)
+                     fs%IG  (i,j,k)=fs%IG  (i,j,fs%cfg%kmin)
+                     fs%U   (i,j,k)=fs%U   (i,j,fs%cfg%kmin)
+                     fs%V   (i,j,k)=fs%V   (i,j,fs%cfg%kmin)
+                     fs%W  (i,j,k)=min(fs%W(i,j,fs%cfg%kmin),0.0_WP)
+                     fs%VF  (i,j,k)=fs%VF  (i,j,fs%cfg%kmin)
+                     ! Also adjust interface data
+                     call setPlane(fs%PLIC(i,j,k),0,[0.0_WP,1.0_WP,0.0_WP],fs%cfg%z(k)+fs%dz*fs%VF(i,j,k))
+                     fs%BL(:,i,j,k)=[fs%cfg%xm(i),fs%cfg%ym(j),fs%cfg%zm(k)]
+                     fs%BG(:,i,j,k)=[fs%cfg%xm(i),fs%cfg%ym(j),fs%cfg%zm(k)]
+                  end do
                end do; end do
             end if
             ! Rebuild conserved quantities
