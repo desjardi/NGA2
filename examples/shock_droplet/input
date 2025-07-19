@@ -25,7 +25,7 @@ Gas Reynolds number : 1e5
 Viscosity ratio :     58.3
 
 # Time integration
-Max timestep size : 2.5e-3
+Max timestep size : 5e-3
 Max cfl number :    1.0
 Max time :          50
 

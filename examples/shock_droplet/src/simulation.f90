@@ -6,6 +6,7 @@ module simulation
    use timetracker_class, only: timetracker
    use ensight_class,     only: ensight
    use surfmesh_class,    only: surfmesh
+   use cclabel_class,     only: cclabel
    use event_class,       only: event
    use monitor_class,     only: monitor
    implicit none
@@ -15,13 +16,16 @@ module simulation
    type(mpcomp),      public :: fs
    type(timetracker), public :: time
    
+   !> CCL for postprocessing
+   type(cclabel) :: ccl
+   
    !> Ensight postprocessing
    type(surfmesh) :: smesh
    type(ensight)  :: ens_out
    type(event)    :: ens_evt
    
    !> Simulation monitor file
-   type(monitor) :: mfile,cflfile,consfile
+   type(monitor) :: mfile,cflfile,consfile,dropfile
    
    !> Private work arrays
    real(WP), dimension(:,:,:,:,:), allocatable :: dQdt
@@ -38,6 +42,9 @@ module simulation
    real(WP) :: rho_ratio,c_ratio
    real(WP) :: rhoL,ML
    real(WP) :: ReG,viscG,viscL,visc_ratio
+   
+   !> Drop info
+   real(WP) :: Vcore,Mcore,Xcore,Ycore,Zcore
    
 contains
    
@@ -110,6 +117,50 @@ contains
       real(WP), intent(in) :: RHO,P
       get_SG=CvG*log((P+PinfG)/RHO**GammaG)
    end function get_SG
+   
+   
+   !> Various postprocessing
+   subroutine postproc()
+      use mpi_f08,  only: MPI_ALLREDUCE,MPI_SUM,MPI_IN_PLACE
+      use parallel, only: MPI_REAL_WP
+      implicit none
+      integer :: i,j,k,n,ierr
+      ! Core is id=1, skip if not present
+      if (ccl%nstruct.lt.1) return
+      ! Extract core volume, mass, and barycenter
+      Vcore=0.0_WP; Mcore=0.0_WP; Xcore=0.0_WP; Ycore=0.0_WP; Zcore=0.0_WP
+      do n=1,ccl%struct(1)%n_
+         ! Get cell index
+         i=ccl%struct(1)%map(1,n); j=ccl%struct(1)%map(2,n); k=ccl%struct(1)%map(3,n)
+         ! Increement volume
+         Vcore=Vcore+fs%VF(i,j,k)*fs%cfg%vol(i,j,k)
+         ! Increment mass
+         Mcore=Mcore+fs%Q(i,j,k,1)*fs%cfg%vol(i,j,k)
+         ! Increment barycenter
+         Xcore=Xcore+fs%Q(i,j,k,1)*fs%BL(1,i,j,k)*fs%cfg%vol(i,j,k)
+         Ycore=Ycore+fs%Q(i,j,k,1)*fs%BL(2,i,j,k)*fs%cfg%vol(i,j,k)
+         Zcore=Zcore+fs%Q(i,j,k,1)*fs%BL(3,i,j,k)*fs%cfg%vol(i,j,k)
+      end do
+      call MPI_ALLREDUCE(MPI_IN_PLACE,Vcore,1,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr)
+      call MPI_ALLREDUCE(MPI_IN_PLACE,Mcore,1,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr)
+      call MPI_ALLREDUCE(MPI_IN_PLACE,Xcore,1,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr); Xcore=Xcore/Mcore ! Shouldn't ever
+      call MPI_ALLREDUCE(MPI_IN_PLACE,Ycore,1,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr); Ycore=Ycore/Mcore ! be dividing by
+      call MPI_ALLREDUCE(MPI_IN_PLACE,Zcore,1,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr); Zcore=Zcore/Mcore ! zero here...
+   end subroutine postproc
+   
+   
+   !> Function that identifies cells that need a label
+   logical function make_label(i,j,k)
+      implicit none
+      integer, intent(in) :: i,j,k
+      if (fs%VF(i,j,k).gt.0.0_WP) then; make_label=.true.; else; make_label=.false.; end if
+   end function make_label
+   !> Function that identifies if cell pairs have same label
+   logical function same_label(i1,j1,k1,i2,j2,k2)
+      implicit none
+      integer, intent(in) :: i1,j1,k1,i2,j2,k2
+      same_label=.true.
+   end function same_label
    
    
    !> Mechanical relaxation model
@@ -374,6 +425,14 @@ contains
          Ma=sqrt(Ui**2+Vi**2+Wi**2)/fs%C
       end block initial_conditions
       
+      ! Create CCL
+      create_ccl: block
+         ! Initialize CCL
+         call ccl%initialize(pg=cfg%pgrid,name='ccl')
+         ! Perform CCL
+         call ccl%build(make_label,same_label)
+      end block create_ccl
+      
       ! Add Ensight output
       create_ensight: block
          ! Create Ensight output from cfg
@@ -393,6 +452,7 @@ contains
          call ens_out%add_scalar('Mach',Ma)
          call ens_out%add_scalar('beta',beta)
          call ens_out%add_scalar('visc',visc)
+         call ens_out%add_scalar('label',ccl%id)
          ! Create surface mesh for PLIC
          smesh=surfmesh(nvar=0,name='plic')
          call fs%update_surfmesh(smesh)
@@ -401,11 +461,12 @@ contains
          if (ens_evt%occurs()) call ens_out%write_data(time%t)
       end block create_ensight
       
-      ! Create a monitor file
+      ! Create monitor files
       create_monitor: block
          ! Prepare some info about fields
          call fs%get_cfl(dt=time%dt,cfl=time%cfl)
          call fs%get_info()
+         call postproc()
          ! Create simulation monitor
          mfile=monitor(fs%cfg%amRoot,'simulation')
          call mfile%add_column(time%n,'Timestep number')
@@ -465,6 +526,19 @@ contains
          call consfile%add_column(fs%RHOSLint,'Liquid entropy')
          call consfile%add_column(fs%RHOSGint,'Gas entropy')
          call consfile%write()
+         ! Create drop output
+         dropfile=monitor(fs%cfg%amRoot,'drop')
+         call dropfile%add_column(time%n,'Timestep number')
+         call dropfile%add_column(time%t,'Time')
+         call dropfile%add_column(fs%VFint  ,'Total volume')
+         call dropfile%add_column(fs%Qint(1),'Total mass')
+         call dropfile%add_column(ccl%nstruct,'N drops')
+         call dropfile%add_column(Vcore,'Core volume')
+         call dropfile%add_column(Mcore,'Core mass')
+         call dropfile%add_column(Xcore,'Core X')
+         call dropfile%add_column(Ycore,'Core Y')
+         call dropfile%add_column(Zcore,'Core Z')
+         call dropfile%write()
       end block create_monitor
       
    contains
@@ -593,7 +667,7 @@ contains
          neumann_outflow: block
             use irl_fortran_interface, only: setPlane
             integer :: i,j,k
-            ! Apply clipped Neumann on primitive variables
+            ! Apply clipped Neumann on primitive variables in x+
             if (fs%cfg%iproc.eq.fs%cfg%npx) then
                do k=fs%cfg%kmino_,fs%cfg%kmaxo_; do j=fs%cfg%jmino_,fs%cfg%jmaxo_; do i=fs%cfg%imax+1,fs%cfg%imaxo
                   ! Copy primitive variables
@@ -608,10 +682,55 @@ contains
                   fs%W   (i,j,k)=fs%W   (fs%cfg%imax,j,k)
                   fs%VF  (i,j,k)=fs%VF  (fs%cfg%imax,j,k)
                   ! Also adjust interface data
-                  call setPlane(fs%PLIC(i,j,k),0,[1.0_WP,0.0_WP,0.0_WP],fs%cfg%x(i)+fs%cfg%dx(i)*fs%VF(i,j,k))
+                  call setPlane(fs%PLIC(i,j,k),0,[1.0_WP,0.0_WP,0.0_WP],fs%cfg%x(i)+fs%dx*fs%VF(i,j,k))
                   fs%BL(:,i,j,k)=[fs%cfg%xm(i),fs%cfg%ym(j),fs%cfg%zm(k)]
                   fs%BG(:,i,j,k)=[fs%cfg%xm(i),fs%cfg%ym(j),fs%cfg%zm(k)]
                end do; end do; end do
+            end if
+            ! Apply clipped Neumann on primitive variables in y+
+            if (fs%cfg%jproc.eq.fs%cfg%npy) then
+               do k=fs%cfg%kmino_,fs%cfg%kmaxo_; do j=fs%cfg%jmax+1,fs%cfg%jmaxo; do i=fs%cfg%imino_,fs%cfg%imaxo_
+                  ! Copy primitive variables
+                  fs%RHOL(i,j,k)=fs%RHOL(i,fs%cfg%jmax,k)
+                  fs%PL  (i,j,k)=fs%PL  (i,fs%cfg%jmax,k)
+                  fs%IL  (i,j,k)=fs%IL  (i,fs%cfg%jmax,k)
+                  fs%RHOG(i,j,k)=fs%RHOG(i,fs%cfg%jmax,k)
+                  fs%PG  (i,j,k)=fs%PG  (i,fs%cfg%jmax,k)
+                  fs%IG  (i,j,k)=fs%IG  (i,fs%cfg%jmax,k)
+                  fs%U   (i,j,k)=fs%U   (i,fs%cfg%jmax,k)
+                  fs%V  (i,j,k)=max(fs%V(i,fs%cfg%jmax,k),0.0_WP)
+                  fs%W   (i,j,k)=fs%W   (i,fs%cfg%jmax,k)
+                  fs%VF  (i,j,k)=fs%VF  (i,fs%cfg%jmax,k)
+                  ! Also adjust interface data
+                  call setPlane(fs%PLIC(i,j,k),0,[0.0_WP,1.0_WP,0.0_WP],fs%cfg%y(j)+fs%dy*fs%VF(i,j,k))
+                  fs%BL(:,i,j,k)=[fs%cfg%xm(i),fs%cfg%ym(j),fs%cfg%zm(k)]
+                  fs%BG(:,i,j,k)=[fs%cfg%xm(i),fs%cfg%ym(j),fs%cfg%zm(k)]
+               end do; end do; end do
+            end if
+            ! Apply clipped Neumann on primitive variables in y-
+            if (fs%cfg%jproc.eq.1) then
+               do k=fs%cfg%kmino_,fs%cfg%kmaxo_; do i=fs%cfg%imino_,fs%cfg%imaxo_
+                  ! Copy over from jmin+1 to jmin-1 and below
+                  do j=fs%cfg%jmino,fs%cfg%jmin-1
+                     ! Copy primitive variables
+                     fs%RHOL(i,j,k)=fs%RHOL(i,fs%cfg%jmin,k)
+                     fs%PL  (i,j,k)=fs%PL  (i,fs%cfg%jmin,k)
+                     fs%IL  (i,j,k)=fs%IL  (i,fs%cfg%jmin,k)
+                     fs%RHOG(i,j,k)=fs%RHOG(i,fs%cfg%jmin,k)
+                     fs%PG  (i,j,k)=fs%PG  (i,fs%cfg%jmin,k)
+                     fs%IG  (i,j,k)=fs%IG  (i,fs%cfg%jmin,k)
+                     fs%U   (i,j,k)=fs%U   (i,fs%cfg%jmin,k)
+                     fs%V  (i,j,k)=min(fs%V(i,fs%cfg%jmin+1,k),0.0_WP)
+                     fs%W   (i,j,k)=fs%W   (i,fs%cfg%jmin,k)
+                     fs%VF  (i,j,k)=fs%VF  (i,fs%cfg%jmin,k)
+                     ! Also adjust interface data
+                     call setPlane(fs%PLIC(i,j,k),0,[0.0_WP,1.0_WP,0.0_WP],fs%cfg%y(j)+fs%dy*fs%VF(i,j,k))
+                     fs%BL(:,i,j,k)=[fs%cfg%xm(i),fs%cfg%ym(j),fs%cfg%zm(k)]
+                     fs%BG(:,i,j,k)=[fs%cfg%xm(i),fs%cfg%ym(j),fs%cfg%zm(k)]
+                  end do
+                  ! Also do apply Neumann on V at jmin
+                  fs%V(i,fs%cfg%jmin,k)=min(fs%V(i,fs%cfg%jmin+1,k),0.0_WP)
+               end do; end do
             end if
             ! Rebuild conserved quantities
             fs%Q(:,:,:,1)=        fs%VF *fs%RHOL
@@ -627,6 +746,9 @@ contains
          ! Compute local Mach number
          Ma=sqrt(Ui**2+Vi**2+Wi**2)/fs%C
          
+         ! Update CCL
+         call ccl%build(make_label,same_label)
+         
          ! Output to ensight
          if (ens_evt%occurs()) then
             call fs%update_surfmesh(smesh)
@@ -634,10 +756,12 @@ contains
          end if
          
          ! Perform and output monitoring
+         call postproc()
          call fs%get_info()
          call mfile%write()
          call cflfile%write()
          call consfile%write()
+         call dropfile%write()
          
       end do
       

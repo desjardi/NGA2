@@ -40,7 +40,7 @@ contains
          do k=1,nz+1; z(k)=real(k-1,WP)/real(nz,WP)*Lz-0.5_WP*Lz; end do
          
          ! General serial grid object
-         grid=sgrid(coord=cartesian,no=3,x=x,y=y,z=z,xper=.false.,yper=.true.,zper=.true.,name='ShockDrop')
+         grid=sgrid(coord=cartesian,no=3,x=x,y=y,z=z,xper=.false.,yper=.false.,zper=.true.,name='ShockDrop')
          
       end block create_grid
       
