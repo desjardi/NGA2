@@ -495,7 +495,7 @@ contains
       ! Extra QOL step to ensure that id=1 is always the largest structure in terms of number of cells
       rename_largest_structure: block
          use mpi_f08, only: MPI_ALLREDUCE,MPI_SUM,MPI_INTEGER,MPI_IN_PLACE
-         integer :: n,ierr,bigid,i,j,k
+         integer :: ierr,bigid,i,j,k
          integer, dimension(:), allocatable :: ncells
          type(struct_type) :: tmp
          ! Loop over all structures and count total number of cells to find ID of largest structure

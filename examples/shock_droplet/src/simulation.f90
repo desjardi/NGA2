@@ -387,7 +387,7 @@ contains
                   call setNumberOfPlanes(fs%PLIC(i,j,k),1); call setPlane(fs%PLIC(i,j,k),0,[0.0_WP,0.0_WP,0.0_WP],sign(1.0_WP,fs%VF(i,j,k)-0.5_WP))
                   ! Not set volume moments for a droplet or a slab
                   call initialize_volume_moments(lo=[cfg%x(i),cfg%y(j),cfg%z(k)],hi=[cfg%x(i+1),cfg%y(j+1),cfg%z(k+1)],&
-                  levelset=levelset_drop,time=0.0_WP,level=4,VFlo=VFlo,VF=fs%VF(i,j,k),BL=fs%BL(:,i,j,k),BG=fs%BG(:,i,j,k))
+                  levelset=levelset_drop,time=0.0_WP,level=5,VFlo=VFlo,VF=fs%VF(i,j,k),BL=fs%BL(:,i,j,k),BG=fs%BG(:,i,j,k))
                   ! Initialize mixture velocity to normal shock
                   fs%U(i,j,k)=u2*Hshock(Xs-cfg%x(i),delta=0.5_WP*fs%dx)
                   fs%V(i,j,k)=0.0_WP

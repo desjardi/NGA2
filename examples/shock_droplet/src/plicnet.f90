@@ -322,38 +322,125 @@ contains
       tmparr=max(0.0_WP,matmul(tmparr,lay3_weight)+lay3_bias)
       normal=matmul(tmparr,lay4_weight)+lay4_bias
    end subroutine get_normal
-   subroutine reflect_moments(moments,center,direction)
+   subroutine reflect_moments(moments,center,direction,direction2)
       implicit none
       real(WP), dimension(0:), intent(inout) :: moments !< Needs to be of size (0:188)
-      real(WP), dimension(0:), intent(in) :: center     !< Needs to be of size (0:2)
-      integer, intent(out) :: direction
+      real(WP), dimension(0:), intent(in)    :: center  !< Needs to be of size (0:2)
+      integer, intent(out) :: direction,direction2
+      real(WP), dimension(0:2) :: new_center
+      real(WP) :: temp
+      real(WP), parameter :: eps=1.0e-12_WP
       direction=0
-      if (center(0).lt.0.and.center(1).ge.0.and.center(2).ge.0) then
+      direction2=0
+      new_center=center
+      if (abs(new_center(0)).le.eps) new_center(0)=0.0_WP
+      if (abs(new_center(1)).le.eps) new_center(1)=0.0_WP
+      if (abs(new_center(2)).le.eps) new_center(2)=0.0_WP
+      if      (new_center(0).lt.0.0_WP.and.new_center(1).ge.0.0_WP.and.new_center(2).ge.0.0_WP) then
          direction=1
          call reflect_moments_x(moments)
-      else if (center(0).ge.0.and.center(1).lt.0.and.center(2).ge.0) then
+         new_center(0)=-new_center(0)
+      else if (new_center(0).ge.0.0_WP.and.new_center(1).lt.0.0_WP.and.new_center(2).ge.0.0_WP) then
          direction=2
          call reflect_moments_y(moments)
-      else if (center(0).ge.0.and.center(1).ge.0.and.center(2).lt.0) then
+         new_center(1)=-new_center(1)
+      else if (new_center(0).ge.0.0_WP.and.new_center(1).ge.0.0_WP.and.new_center(2).lt.0.0_WP) then
          direction=3
          call reflect_moments_z(moments)
-      else if (center(0).lt.0.and.center(1).lt.0.and.center(2).ge.0) then
+         new_center(2)=-new_center(2)
+      else if (new_center(0).lt.0.0_WP.and.new_center(1).lt.0.0_WP.and.new_center(2).ge.0.0_WP) then
          direction=4
          call reflect_moments_x(moments)
          call reflect_moments_y(moments)
-      else if (center(0).lt.0.and.center(1).ge.0.and.center(2).lt.0) then
+         new_center(0)=-new_center(0)
+         new_center(1)=-new_center(1)
+      else if (new_center(0).lt.0.0_WP.and.new_center(1).ge.0.0_WP.and.new_center(2).lt.0.0_WP) then
          direction=5
          call reflect_moments_x(moments)
          call reflect_moments_z(moments)
-      else if (center(0).ge.0.and.center(1).lt.0.and.center(2).lt.0) then
+         new_center(0)=-new_center(0)
+         new_center(2)=-new_center(2)
+      else if (new_center(0).ge.0.0_WP.and.new_center(1).lt.0.0_WP.and.new_center(2).lt.0.0_WP) then
          direction=6
          call reflect_moments_y(moments)
          call reflect_moments_z(moments)
-      else if (center(0).lt.0.and.center(1).lt.0.and.center(2).lt.0) then
+         new_center(1)=-new_center(1)
+         new_center(2)=-new_center(2)
+      else if (new_center(0).lt.0.0_WP.and.new_center(1).lt.0.0_WP.and.new_center(2).lt.0.0_WP) then
          direction=7
          call reflect_moments_x(moments)
          call reflect_moments_y(moments)
          call reflect_moments_z(moments)
+         new_center(0)=-new_center(0)
+         new_center(1)=-new_center(1)
+         new_center(2)=-new_center(2)
+      end if
+      if      (abs(new_center(0)-new_center(1)).le.eps.and.(new_center(0)-new_center(2)).gt.eps) then
+         direction2=0
+      else if (abs(new_center(1)-new_center(2)).le.eps.and.(new_center(0)-new_center(1)).gt.eps) then
+         direction2=0
+      else if (abs(new_center(0)-new_center(1)).le.eps.and.(new_center(2)-new_center(0)).gt.eps) then
+         direction2=3
+         call reflect_moments_xz(moments)
+         temp=new_center(0)
+         new_center(0)=new_center(2)
+         new_center(2)=temp
+      else if (abs(new_center(0)-new_center(2)).le.eps.and.(new_center(1)-new_center(0)).gt.eps) then
+         direction2=1
+         call reflect_moments_xy(moments)
+         temp=new_center(0)
+         new_center(0)=new_center(1)
+         new_center(1)=temp
+      else if (abs(new_center(0)-new_center(2)).le.eps.and.(new_center(0)-new_center(1)).gt.eps) then
+         direction2=2
+         call reflect_moments_yz(moments)
+         temp=new_center(1)
+         new_center(1)=new_center(2)
+         new_center(2)=temp
+      else if (abs(new_center(1)-new_center(2)).le.eps.and.(new_center(1)-new_center(0)).gt.eps) then
+         direction2=3
+         call reflect_moments_xz(moments)
+         temp=new_center(0)
+         new_center(0)=new_center(2)
+         new_center(2)=temp
+      else if (new_center(1).gt.new_center(0).and.new_center(0).ge.new_center(2)) then
+         direction2=1
+         call reflect_moments_xy(moments)
+         temp=new_center(0)
+         new_center(0)=new_center(1)
+         new_center(1)=temp
+      else if (new_center(2).gt.new_center(1).and.new_center(0).ge.new_center(2)) then
+         direction2=2
+         call reflect_moments_yz(moments)
+         temp=new_center(1)
+         new_center(1)=new_center(2)
+         new_center(2)=temp
+      else if (new_center(2).gt.new_center(1).and.new_center(1).ge.new_center(0)) then
+         direction2=3
+         call reflect_moments_xz(moments)
+         temp=new_center(0)
+         new_center(0)=new_center(2)
+         new_center(2)=temp
+      else if (new_center(1).gt.new_center(0)) then
+         direction2=4
+         call reflect_moments_xy(moments)
+         call reflect_moments_yz(moments)
+         temp=new_center(0)
+         new_center(0)=new_center(1)
+         new_center(1)=temp
+         temp=new_center(1)
+         new_center(1)=new_center(2)
+         new_center(2)=temp
+      else if (new_center(2).gt.new_center(1)) then
+         direction2=5
+         call reflect_moments_xy(moments)
+         call reflect_moments_xz(moments)
+         temp=new_center(0)
+         new_center(0)=new_center(1)
+         new_center(1)=temp
+         temp=new_center(0)
+         new_center(0)=new_center(2)
+         new_center(2)=temp
       end if
    end subroutine reflect_moments
    subroutine reflect_moments_x(moments)
@@ -440,4 +527,112 @@ contains
          end do
       end do
    end subroutine reflect_moments_z
+   subroutine reflect_moments_xy(moments)
+      implicit none
+      real(WP), dimension(0:), intent(inout) :: moments !< Needs to be of size (0:188)
+      integer :: i,j,k,n
+      real(WP) :: temp
+      do k=0,2
+         do j=0,2
+            do i=0,2
+               if (i.eq.j) then
+                  do n=0,6
+                     if (n.eq.1.or.n.eq.4) then
+                        temp=moments(7*(i*9+j*3+k)+n)
+                        moments(7*(i*9+j*3+k)+n)=moments(7*(i*9+j*3+k)+n+1)
+                        moments(7*(i*9+j*3+k)+n+1)=temp
+                     end if
+                  end do
+               else if (i.gt.j) then
+                  do n=0,6
+                     if (n.eq.1.or.n.eq.4) then
+                        temp=moments(7*(i*9+j*3+k)+n)
+                        moments(7*(i*9+j*3+k)+n)=moments(7*(j*9+i*3+k)+n+1)
+                        moments(7*(j*9+i*3+k)+n+1)=temp
+                        temp = moments(7*(j*9+i*3+k)+n)
+                        moments(7*(j*9+i*3+k)+n)=moments(7*(i*9+j*3+k)+n+1)
+                        moments(7*(i*9+j*3+k)+n+1)=temp
+                     else if (n.eq.0.or.n.eq.3.or.n.eq.6) then
+                        temp=moments(7*(i*9+j*3+k)+n)
+                        moments(7*(i*9+j*3+k)+n)=moments(7*(j*9+i*3+k)+n)
+                        moments(7*(j*9+i*3+k)+n)=temp
+                     end if
+                  end do
+               end if
+            end do
+         end do
+      end do
+   end subroutine reflect_moments_xy
+   subroutine reflect_moments_yz(moments)
+      implicit none
+      real(WP), dimension(0:), intent(inout) :: moments !< Needs to be of size (0:188)
+      integer :: i,j,k,n
+      real(WP) :: temp
+      do k=0,2
+         do j=0,2
+            do i=0,2
+               if (j.eq.k) then
+                  do n=0,6
+                     if (n.eq.2.or.n.eq.5) then
+                        temp=moments(7*(i*9+j*3+k)+n)
+                        moments(7*(i*9+j*3+k)+n)=moments(7*(i*9+j*3+k)+n+1)
+                        moments(7*(i*9+j*3+k)+n+1)=temp
+                     end if
+                  end do
+               else if (j.gt.k) then
+                  do n=0,6
+                     if (n.eq.2.or.n.eq.5) then
+                        temp=moments(7*(i*9+j*3+k)+n)
+                        moments(7*(i*9+j*3+k)+n)=moments(7*(i*9+k*3+j)+n+1)
+                        moments(7*(i*9+k*3+j)+n+1)=temp
+                        temp = moments(7*(i*9+k*3+j)+n)
+                        moments(7*(i*9+k*3+j)+n)=moments(7*(i*9+j*3+k)+n+1)
+                        moments(7*(i*9+j*3+k)+n+1)=temp
+                     else if (n.eq.0.or.n.eq.1.or.n.eq.4) then
+                        temp=moments(7*(i*9+j*3+k)+n)
+                        moments(7*(i*9+j*3+k)+n)=moments(7*(i*9+k*3+j)+n)
+                        moments(7*(i*9+k*3+j)+n)=temp
+                     end if
+                  end do
+               end if
+            end do
+         end do
+      end do
+   end subroutine reflect_moments_yz
+   subroutine reflect_moments_xz(moments)
+      implicit none
+      real(WP), dimension(0:), intent(inout) :: moments !< Needs to be of size (0:188)
+      integer :: i,j,k,n
+      real(WP) :: temp
+      do k=0,2
+         do j=0,2
+            do i=0,2
+               if (i.eq.k) then
+                  do n=0,6
+                     if (n.eq.1.or.n.eq.4) then
+                        temp=moments(7*(i*9+j*3+k)+n)
+                        moments(7*(i*9+j*3+k)+n)=moments(7*(i*9+j*3+k)+n+2)
+                        moments(7*(i*9+j*3+k)+n+2)=temp
+                     end if
+                  end do
+               else if (i.gt.k) then
+                  do n=0,6
+                     if (n.eq.1.or.n.eq.4) then
+                        temp=moments(7*(i*9+j*3+k)+n)
+                        moments(7*(i*9+j*3+k)+n)=moments(7*(k*9+j*3+i)+n+2)
+                        moments(7*(k*9+j*3+i)+n+2)=temp
+                        temp = moments(7*(k*9+j*3+i)+n)
+                        moments(7*(k*9+j*3+i)+n)=moments(7*(i*9+j*3+k)+n+2)
+                        moments(7*(i*9+j*3+k)+n+2)=temp
+                     else if (n.eq.0.or.n.eq.2.or.n.eq.5) then
+                        temp=moments(7*(i*9+j*3+k)+n)
+                        moments(7*(i*9+j*3+k)+n)=moments(7*(k*9+j*3+i)+n)
+                        moments(7*(k*9+j*3+i)+n)=temp
+                     end if
+                  end do
+               end if
+            end do
+         end do
+      end do
+   end subroutine reflect_moments_xz
 end module plicnet
