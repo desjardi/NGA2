@@ -20,6 +20,16 @@ module mpcomp_class
    real(WP), parameter :: surface_epsilon_factor=1.0e-15_WP          !< Minimum surface to consider for computational geometry (normalized by min_meshsize**2)
    real(WP), parameter :: iterative_distfind_tol=1.0e-12_WP          !< Tolerance for iterative plane distance finding
    
+   ! Cutting tables
+   integer, dimension(4,8)    :: tet_map =reshape([ 7, 4, 3, 6, 6, 3, 2, 4, 6, 2, 1, 4, 7, 8, 4, 6, 6, 5, 8, 4, 6, 5, 4, 1, 5, 6, 8, 9, 6, 7, 8, 9],shape(tet_map))
+   integer, dimension(6,16)   :: cut_side=reshape([ 1,-1,-1,-1,-1,-1, 2, 1, 1, 1,-1,-1, 2, 1, 1, 1,-1,-1, 2, 2, 2, 1, 1, 1, 2, 1, 1, 1,-1,-1, 2, 2, 2, 1, 1, 1, 2, 2, 2, 1, 1, 1, 2, 2, 2, 1,-1,-1, 2, 1, 1, 1,-1,-1, 2, 2, 2, 1, 1, 1, 2, 2, 2, 1, 1, 1, 2, 2, 2, 1,-1,-1, 2, 2, 2, 1, 1, 1, 2, 2, 2, 1,-1,-1, 2, 2, 2, 1,-1,-1, 2,-1,-1,-1,-1,-1],shape(cut_side))
+   integer, dimension(4,16)   :: cut_v1  =reshape([-1,-1,-1,-1, 1, 1, 1,-1, 2, 2, 2,-1, 1, 2, 1, 2, 3, 3, 3,-1, 1, 3, 1, 3, 2, 3, 2, 3, 4, 4, 4,-1, 4, 4, 4,-1, 1, 4, 1, 4, 2, 4, 2, 4, 3, 3, 3,-1, 3, 4, 3, 4, 2, 2, 2,-1, 1, 1, 1,-1,-1,-1,-1,-1],shape(cut_v1))
+   integer, dimension(4,16)   :: cut_v2  =reshape([-1,-1,-1,-1, 2, 3, 4,-1, 3, 4, 1,-1, 4, 4, 3, 3, 4, 1, 2,-1, 4, 4, 2, 2, 4, 4, 1, 1, 1, 2, 3,-1, 1, 2, 3,-1, 3, 3, 2, 2, 3, 3, 1, 1, 4, 1, 2,-1, 2, 2, 1, 1, 3, 4, 1,-1, 2, 3, 4,-1,-1,-1,-1,-1],shape(cut_v2))
+   integer, dimension(4,6,16) :: cut_vtet=reshape([ 1, 2, 3, 4,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1, 5, 7, 6, 1, 6, 2, 3, 4, 4, 2, 5, 6, 5, 6, 7, 4,-1,-1,-1,-1,-1,-1,-1,-1, 7, 5, 6, 2, 1, 3, 4, 6, 1, 5, 3, 6, 5, 7, 6, 1,-1,-1,-1,-1,-1,-1,-1,-1, 5, 8, 6, 2, 5, 7, 8, 1, 5, 1, 8, 2, 5, 6, 8, 4, 5, 8, 7, 3, 5, 8, 3, 4, 6, 5, 7, 3, 2, 1, 4, 6, 6, 5, 4, 2, 6, 7, 5, 2,-1,-1,-1,-1,-1,-1,-1,-1, 5, 6, 8, 3, 5, 8, 7, 1, 5, 8, 1, 3, 5, 8, 6, 4, 5, 7, 8, 2, 5, 8, 4, 2, 8, 6, 5, 3, 5, 7, 8, 2, 8, 5, 2, 3, 8, 5, 6, 4, 5, 8, 7, 1, 5, 8, 1, 4, 1, 2, 3, 7, 1, 2, 7, 6, 5, 7, 6, 1, 5, 6, 7, 4,-1,-1,-1,-1,-1,-1,-1,-1, 5, 6, 7, 4, 1, 2, 3, 6, 5, 1, 3, 6, 5, 7, 6, 3,-1,-1,-1,-1,-1,-1,-1,-1, 5, 8, 6, 4, 5, 7, 8, 1, 5, 8, 4, 1, 5, 6, 8, 3, 5, 8, 7, 2, 5, 8, 2, 3, 8, 5, 6, 4, 5, 8, 7, 2, 8, 2, 5, 4, 8, 6, 5, 3, 5, 7, 8, 1, 5, 8, 3, 1, 1, 4, 2, 7, 4, 1, 6, 7, 6, 7, 5, 4, 6, 5, 7, 3,-1,-1,-1,-1,-1,-1,-1,-1, 8, 6, 5, 4, 5, 7, 8, 3, 8, 4, 5, 3, 8, 5, 6, 2, 5, 8, 7, 1, 5, 8, 1, 2, 3, 4, 1, 7, 7, 6, 3, 4, 7, 6, 5, 3, 7, 5, 6, 2,-1,-1,-1,-1,-1,-1,-1,-1, 7, 4, 2, 3, 2, 3, 6, 7, 5, 6, 7, 2, 5, 7, 6, 1,-1,-1,-1,-1,-1,-1,-1,-1, 1, 2, 3, 4,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1],shape(cut_vtet))
+   integer, dimension(16) :: cut_ntets=[1,4,4,6,4,6,6,4,4,6,6,4,6,4,4,1]
+   integer, dimension(16) :: cut_nvert=[0,3,3,4,3,4,4,3,3,4,4,3,4,3,3,0]
+   integer, dimension(16) :: cut_nntet=[1,2,2,4,2,4,4,4,2,4,4,4,4,4,4,2]
+   
    !> Multiphase compressible solver object definition
    type :: mpcomp
       
@@ -47,6 +57,7 @@ module mpcomp_class
       real(WP), dimension(:,:,:,:), allocatable :: BL,BLold
       real(WP), dimension(:,:,:,:), allocatable :: BG,BGold
       type(PlanarSep_type), dimension(:,:,:), allocatable :: PLIC,PLICold
+      real(WP), dimension(:,:,:,:), allocatable :: PLANE,PLANEold
       
       ! Tag for semi-Lagrangian fluxing
       integer, dimension(:,:,:), allocatable :: iSL
@@ -81,6 +92,7 @@ module mpcomp_class
       
       ! Store mesh info
       real(WP) :: dx,dy,dz,dxi,dyi,dzi,vol
+      real(WP) :: vol_epsilon
       
       ! CFL numbers
       real(WP) :: CFLc_x,CFLc_y,CFLc_z                    !< Convective CFL numbers
@@ -217,6 +229,7 @@ contains
       this%dy=this%cfg%dy(this%cfg%jmin_); this%dyi=1.0_WP/this%dy; if (this%cfg%ny.eq.1) this%dyi=0.0_WP
       this%dz=this%cfg%dz(this%cfg%kmin_); this%dzi=1.0_WP/this%dz; if (this%cfg%nz.eq.1) this%dzi=0.0_WP
       this%vol=this%dx*this%dy*this%dz
+      this%vol_epsilon=volume_epsilon_factor*this%vol
       
       ! Allocate and zero out conserved variables
       this%nQ=7
@@ -230,6 +243,10 @@ contains
       allocate(this%VFold    (this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_)); this%VFold=0.0_WP
       allocate(this%BLold(1:3,this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_)); this%BLold=0.0_WP
       allocate(this%BGold(1:3,this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_)); this%BGold=0.0_WP
+      
+      ! Allocate PLIC interface
+      allocate(this%PLANE   (1:4,this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_)); this%PLANE   =0.0_WP
+      allocate(this%PLANEold(1:4,this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_)); this%PLANEold=0.0_WP
       
       ! Allocate semi-Lagrangian increments
       allocate(this%SLdQ(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_,1:this%nQ)); this%SLdQ=0.0_WP
@@ -425,10 +442,13 @@ contains
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in) :: V
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in) :: W
       real(WP), dimension(3,9) :: face
+      real(WP), dimension(3,4) :: tetra
+      integer,  dimension(3,4) :: myijk
+      real(WP), dimension(14)  :: SLflux,fluxy1,fluxy2
       type(SepVM_type) :: my_SepVM
       type(CapDod_type) :: flux_polyhedron
       type(TagAccVM_SepVM_type) :: detailed_face_flux
-      integer :: i,j,k,n
+      integer :: i,j,k,n,nn,iflux,jflux,kflux
       integer , dimension(3) :: ind
       real(WP), dimension(3) :: Lbar,Gbar
       real(WP) :: Lvol,Gvol,Lmass,Gmass,VFold,div,flux,Lflux,Gflux
@@ -464,8 +484,95 @@ contains
       allocate(SLPy(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_,1:2)); SLPy=0.0_WP
       allocate(SLPz(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_,1:2)); SLPz=0.0_WP
       
+      !!!!!!!! FOR TESTING, TRANSFER PLICOLD TO PLANEOLD BEFORE WE GO
+      do k=this%cfg%kmino_,this%cfg%kmaxo_; do j=this%cfg%jmino_,this%cfg%jmaxo_; do i=this%cfg%imino_,this%cfg%imaxo_
+         this%PLANEold(:,i,j,k)=getPlane(this%PLICold(i,j,k),0)
+      end do; end do; end do
+      
       ! Loop through all cell faces and get volume moment, mass, and internal energy fluxes
       do k=this%cfg%kmin_,this%cfg%kmax_+1; do j=this%cfg%jmin_,this%cfg%jmax_+1; do i=this%cfg%imin_,this%cfg%imax_+1
+         ! X flux
+         if (maxval(this%iSL(i-1:i,j,k)).gt.0) then
+            ! Construct and project face
+            face(:,1)=[this%cfg%x(i),this%cfg%y(j+1),this%cfg%z(k  )]; face(:,5)=project(face(:,1),-dt)
+            face(:,2)=[this%cfg%x(i),this%cfg%y(j+1),this%cfg%z(k+1)]; face(:,6)=project(face(:,2),-dt)
+            face(:,3)=[this%cfg%x(i),this%cfg%y(j  ),this%cfg%z(k+1)]; face(:,7)=project(face(:,3),-dt)
+            face(:,4)=[this%cfg%x(i),this%cfg%y(j  ),this%cfg%z(k  )]; face(:,8)=project(face(:,4),-dt)
+            call volume_correct_x(-U(i,j,k)*dt*this%dy*this%dz)
+            ! Cut each tet recursively and calculate flux
+            iflux=merge(i-1,i,U(i,j,k).ge.0.0_WP)
+            do n=1,8
+               ! Build tet and corresponding indices
+               do nn=1,4
+                  tetra(:,nn)=face(:,tet_map(nn,n))
+                  myijk(1,nn)=iflux
+                  myijk(2,nn)=min(max(floor((tetra(2,nn)-this%cfg%y(this%cfg%jmino))/this%dy)+this%cfg%jmino,this%cfg%jmino_),this%cfg%jmaxo_)
+                  myijk(3,nn)=min(max(floor((tetra(3,nn)-this%cfg%z(this%cfg%kmino))/this%dz)+this%cfg%kmino,this%cfg%kmino_),this%cfg%kmaxo_)
+               end do
+               ! Calculate signed flux
+               SLflux=+tet_sign(tetra)*tet2flux(tetra,myijk)
+               ! Increment fluxes
+               SLVx(i,j,k, : )=SLVx(i,j,k, :) +SLflux( 1: 8)
+               SLQx(i,j,k,1:4)=SLQx(i,j,k,1:4)+SLflux( 9:12)
+               SLPx(i,j,k, : )=SLPx(i,j,k, :) +SLflux(13:14)
+            end do
+            SLQx(i,j,k,:)=SLQx(i,j,k,:)/(dt*this%dy*this%dz)
+         end if
+         ! Y flux
+         if (maxval(this%iSL(i,j-1:j,k)).gt.0) then
+            ! Construct and project face
+            face(:,1)=[this%cfg%x(i+1),this%cfg%y(j),this%cfg%z(k+1)]; face(:,5)=project(face(:,1),-dt)
+            face(:,2)=[this%cfg%x(i  ),this%cfg%y(j),this%cfg%z(k+1)]; face(:,6)=project(face(:,2),-dt)
+            face(:,3)=[this%cfg%x(i  ),this%cfg%y(j),this%cfg%z(k  )]; face(:,7)=project(face(:,3),-dt)
+            face(:,4)=[this%cfg%x(i+1),this%cfg%y(j),this%cfg%z(k  )]; face(:,8)=project(face(:,4),-dt)
+            call volume_correct_y(-V(i,j,k)*dt*this%dz*this%dx)
+            ! Cut each tet recursively and calculate flux
+            jflux=merge(j-1,j,V(i,j,k).ge.0.0_WP)
+            do n=1,8
+               ! Build tet and corresponding indices
+               do nn=1,4
+                  tetra(:,nn)=face(:,tet_map(nn,n))
+                  myijk(1,nn)=min(max(floor((tetra(1,nn)-this%cfg%x(this%cfg%imino))/this%dx)+this%cfg%imino,this%cfg%imino_),this%cfg%imaxo_)
+                  myijk(2,nn)=jflux
+                  myijk(3,nn)=min(max(floor((tetra(3,nn)-this%cfg%z(this%cfg%kmino))/this%dz)+this%cfg%kmino,this%cfg%kmino_),this%cfg%kmaxo_)
+               end do
+               ! Calculate signed flux
+               SLflux=-tet_sign(tetra)*tet2flux(tetra,myijk)
+               ! Increment fluxes
+               SLVy(i,j,k, : )=SLVy(i,j,k, :) +SLflux( 1: 8)
+               SLQy(i,j,k,1:4)=SLQy(i,j,k,1:4)+SLflux( 9:12)
+               SLPy(i,j,k, : )=SLPy(i,j,k, :) +SLflux(13:14)
+            end do
+            SLQy(i,j,k,:)=SLQy(i,j,k,:)/(dt*this%dz*this%dx)
+         end if
+         ! Z flux
+         if (maxval(this%iSL(i,j,k-1:k)).gt.0) then
+            ! Construct and project face
+            face(:,1)=[this%cfg%x(i+1),this%cfg%y(j  ),this%cfg%z(k)]; face(:,5)=project(face(:,1),-dt)
+            face(:,2)=[this%cfg%x(i  ),this%cfg%y(j  ),this%cfg%z(k)]; face(:,6)=project(face(:,2),-dt)
+            face(:,3)=[this%cfg%x(i  ),this%cfg%y(j+1),this%cfg%z(k)]; face(:,7)=project(face(:,3),-dt)
+            face(:,4)=[this%cfg%x(i+1),this%cfg%y(j+1),this%cfg%z(k)]; face(:,8)=project(face(:,4),-dt)
+            call volume_correct_z(-W(i,j,k)*dt*this%dx*this%dy)
+            ! Cut each tet recursively and calculate flux
+            kflux=merge(k-1,k,W(i,j,k).ge.0.0_WP)
+            do n=1,6
+               ! Build tet and corresponding indices
+               do nn=1,4
+                  tetra(:,nn)=face(:,tet_map(nn,n))
+                  myijk(1,nn)=min(max(floor((tetra(1,nn)-this%cfg%x(this%cfg%imino))/this%dx)+this%cfg%imino,this%cfg%imino_),this%cfg%imaxo_)
+                  myijk(2,nn)=min(max(floor((tetra(2,nn)-this%cfg%y(this%cfg%jmino))/this%dy)+this%cfg%jmino,this%cfg%jmino_),this%cfg%jmaxo_)
+                  myijk(3,nn)=kflux
+               end do
+               ! Calculate signed flux
+               SLflux=+tet_sign(tetra)*tet2flux(tetra,myijk)
+               ! Increment fluxes
+               SLVz(i,j,k, : )=SLVz(i,j,k, :) +SLflux( 1: 8)
+               SLQz(i,j,k,1:4)=SLQz(i,j,k,1:4)+SLflux( 9:12)
+               SLPz(i,j,k, : )=SLPz(i,j,k, :) +SLflux(13:14)
+            end do
+            SLQz(i,j,k,:)=SLQz(i,j,k,:)/(dt*this%dx*this%dy)
+         end if
+         cycle
          ! X flux
          if (maxval(this%iSL(i-1:i,j,k)).gt.0) then
             ! Construct and project face
@@ -481,6 +588,7 @@ contains
             ! Build detailed geometric flux
             call getMoments(flux_polyhedron,this%localized_separator_link(i,j,k),detailed_face_flux)
             ! Traverse current detailed face flux and increment fluxes
+            !fluxy1=[SLVx(i,j,k,:),SLQx(i,j,k,1:4),SLPx(i,j,k,:)]; SLVx(i,j,k,:)=0.0_WP; SLQx(i,j,k,:)=0.0_WP; SLPx(i,j,k,:)=0.0_WP
             do n=0,getSize(detailed_face_flux)-1
                ! Get cell index
                ind=this%cfg%get_ijk_from_lexico(getTagForIndex(detailed_face_flux,n))
@@ -497,6 +605,13 @@ contains
                SLPx(i,j,k,:)=SLPx(i,j,k,:)-[Lvol*this%PLold(ind(1),ind(2),ind(3)),Gvol*this%PGold(ind(1),ind(2),ind(3))]
             end do
             SLQx(i,j,k,:)=SLQx(i,j,k,:)/(dt*this%dy*this%dz)
+            !fluxy2=[SLVx(i,j,k,:),SLQx(i,j,k,1:4),SLPx(i,j,k,:)]
+            !if (maxval(abs(fluxy1-fluxy2)).gt.1.0e-9_WP) then
+            !   print*,'crapx - ijk',i,j,k
+            !   print*,'crapx - dif',abs(fluxy1-fluxy2)
+            !   print*,'crapx - nga',fluxy1
+            !   print*,'crapx - irl',fluxy2
+            !end if
             ! Clear detailed flux
             call clear(detailed_face_flux)
          end if
@@ -515,6 +630,7 @@ contains
             ! Build detailed geometric flux
             call getMoments(flux_polyhedron,this%localized_separator_link(i,j,k),detailed_face_flux)
             ! Traverse current detailed face flux and increment fluxes
+            !fluxy1=[SLVy(i,j,k,:),SLQy(i,j,k,1:4),SLPy(i,j,k,:)]; SLVy(i,j,k,:)=0.0_WP; SLQy(i,j,k,:)=0.0_WP; SLPy(i,j,k,:)=0.0_WP
             do n=0,getSize(detailed_face_flux)-1
                ! Get cell index
                ind=this%cfg%get_ijk_from_lexico(getTagForIndex(detailed_face_flux,n))
@@ -531,6 +647,13 @@ contains
                SLPy(i,j,k,:)=SLPy(i,j,k,:)-[Lvol*this%PLold(ind(1),ind(2),ind(3)),Gvol*this%PGold(ind(1),ind(2),ind(3))]
             end do
             SLQy(i,j,k,:)=SLQy(i,j,k,:)/(dt*this%dz*this%dx)
+            !fluxy2=[SLVy(i,j,k,:),SLQy(i,j,k,1:4),SLPy(i,j,k,:)]
+            !if (maxval(abs(fluxy1-fluxy2)).gt.1.0e-9_WP) then
+            !   print*,'crapy - ijk',i,j,k
+            !   print*,'crapy - dif',abs(fluxy1-fluxy2)
+            !   print*,'crapy - nga',fluxy1
+            !   print*,'crapy - irl',fluxy2
+            !end if
             ! Clear detailed flux
             call clear(detailed_face_flux)
          end if
@@ -549,6 +672,7 @@ contains
             ! Build detailed geometric flux
             call getMoments(flux_polyhedron,this%localized_separator_link(i,j,k),detailed_face_flux)
             ! Traverse current detailed face flux and increment fluxes
+            !fluxy1=[SLVz(i,j,k,:),SLQz(i,j,k,1:4),SLPz(i,j,k,:)]; SLVz(i,j,k,:)=0.0_WP; SLQz(i,j,k,:)=0.0_WP; SLPz(i,j,k,:)=0.0_WP
             do n=0,getSize(detailed_face_flux)-1
                ! Get cell index
                ind=this%cfg%get_ijk_from_lexico(getTagForIndex(detailed_face_flux,n))
@@ -565,6 +689,13 @@ contains
                SLPz(i,j,k,:)=SLPz(i,j,k,:)-[Lvol*this%PLold(ind(1),ind(2),ind(3)),Gvol*this%PGold(ind(1),ind(2),ind(3))]
             end do
             SLQz(i,j,k,:)=SLQz(i,j,k,:)/(dt*this%dx*this%dy)
+            !fluxy2=[SLVz(i,j,k,:),SLQz(i,j,k,1:4),SLPz(i,j,k,:)]
+            !if (maxval(abs(fluxy1-fluxy2)).gt.1.0e-9_WP) then
+            !   print*,'crapz - ijk',i,j,k
+            !   print*,'crapz - dif',abs(fluxy1-fluxy2)
+            !   print*,'crapz - nga',fluxy1
+            !   print*,'crapz - irl',fluxy2
+            !end if
             ! Clear detailed flux
             call clear(detailed_face_flux)
          end if
@@ -813,6 +944,184 @@ contains
          vel(2)=wzc1*(wyv1*(wxc1*V(ipc+1,jpv+1,kpc+1)+wxc2*V(ipc,jpv+1,kpc+1))+wyv2*(wxc1*V(ipc+1,jpv,kpc+1)+wxc2*V(ipc,jpv,kpc+1)))+wzc2*(wyv1*(wxc1*V(ipc+1,jpv+1,kpc  )+wxc2*V(ipc,jpv+1,kpc  ))+wyv2*(wxc1*V(ipc+1,jpv,kpc  )+wxc2*V(ipc,jpv,kpc  )))
          vel(3)=wzw1*(wyc1*(wxc1*W(ipc+1,jpc+1,kpw+1)+wxc2*W(ipc,jpc+1,kpw+1))+wyc2*(wxc1*W(ipc+1,jpc,kpw+1)+wxc2*W(ipc,jpc,kpw+1)))+wzw2*(wyc1*(wxc1*W(ipc+1,jpc+1,kpw  )+wxc2*W(ipc,jpc+1,kpw  ))+wyc2*(wxc1*W(ipc+1,jpc,kpw  )+wxc2*W(ipc,jpc,kpw  )))
       end function interp_velocity
+      !> Subroutine that calculates the 9th point of face to enforce exact volume conservation for an x-flux
+      subroutine volume_correct_x(volume)
+         implicit none
+         real(WP) :: volume
+         real(WP), dimension(3) :: a,b,c
+         integer :: ntet
+         ! Compute volume mismatch
+         do ntet=1,6
+            a=face(:,tet_map(1,ntet))-face(:,tet_map(4,ntet)); b=face(:,tet_map(2,ntet))-face(:,tet_map(4,ntet)); c=face(:,tet_map(3,ntet))-face(:,tet_map(4,ntet))
+            volume=volume+(a(1)*(b(2)*c(3)-c(2)*b(3))-a(2)*(b(1)*c(3)-c(1)*b(3))+a(3)*(b(1)*c(2)-c(1)*b(2)))/6.0_WP
+         end do
+         ! Use analytical correction
+         face(1,9)=(-6.0_WP*volume+face(1,5)*((face(2,8)-face(2,9))*(face(3,6)-face(3,9))-(face(2,6)-face(2,9))*(face(3,8)-face(3,9)))+face(2,5)*((face(3,8)-face(3,9))*face(1,6)-(face(3,6)-face(3,9))*face(1,8))+face(2,9)*((face(3,6)-face(3,9))*face(1,8)-(face(3,8)-face(3,9))*face(1,6))+face(3,5)*((face(2,6)-face(2,9))*face(1,8)-(face(2,8)-face(2,9))*face(1,6))+face(3,9)*((face(2,8)-face(2,9))*face(1,6)-(face(2,6)-face(2,9))*face(1,8))+face(1,6)*((face(2,8)-face(2,9))*(face(3,7)-face(3,9))-(face(2,7)-face(2,9))*(face(3,8)-face(3,9)))+face(2,6)*((face(3,8)-face(3,9))*face(1,7)-(face(3,7)-face(3,9))*face(1,8))+face(2,9)*((face(3,7)-face(3,9))*face(1,8)-(face(3,8)-face(3,9))*face(1,7))+face(3,6)*((face(2,7)-face(2,9))*face(1,8)-(face(2,8)-face(2,9))*face(1,7))+face(3,9)*((face(2,8)-face(2,9))*face(1,7)-(face(2,7)-face(2,9))*face(1,8)))/(-(face(2,6)-face(2,9))*(face(3,8)-face(3,9))+(face(2,8)-face(2,9))*(face(3,6)-face(3,9))-face(2,5)*(face(3,6)-face(3,9))+face(2,5)*(face(3,8)-face(3,9))+face(2,9)*(face(3,6)-face(3,9))-face(2,9)*(face(3,8)-face(3,9))-face(3,5)*(face(2,8)-face(2,9))+face(3,5)*(face(2,6)-face(2,9))+face(3,9)*(face(2,8)-face(2,9))-face(3,9)*(face(2,6)-face(2,9))-(face(2,7)-face(2,9))*(face(3,8)-face(3,9))+(face(2,8)-face(2,9))*(face(3,7)-face(3,9))-face(2,6)*(face(3,7)-face(3,9))+face(2,6)*(face(3,8)-face(3,9))+face(2,9)*(face(3,7)-face(3,9))-face(2,9)*(face(3,8)-face(3,9))-face(3,6)*(face(2,8)-face(2,9))+face(3,6)*(face(2,7)-face(2,9))+face(3,9)*(face(2,8)-face(2,9))-face(3,9)*(face(2,7)-face(2,9)))
+         face(2,9)=0.25_WP*sum(face(2,5:8))
+         face(3,9)=0.25_WP*sum(face(3,5:8))
+      end subroutine volume_correct_x
+      !> Subroutine that calculates the 9th point of face to enforce exact volume conservation for a y-flux
+      subroutine volume_correct_y(volume)
+         implicit none
+         real(WP) :: volume
+         real(WP), dimension(3) :: a,b,c
+         integer :: ntet
+         ! Compute volume mismatch
+         do ntet=1,6
+            a=face(:,tet_map(1,ntet))-face(:,tet_map(4,ntet)); b=face(:,tet_map(2,ntet))-face(:,tet_map(4,ntet)); c=face(:,tet_map(3,ntet))-face(:,tet_map(4,ntet))
+            volume=volume-(a(1)*(b(2)*c(3)-c(2)*b(3))-a(2)*(b(1)*c(3)-c(1)*b(3))+a(3)*(b(1)*c(2)-c(1)*b(2)))/6.0_WP
+         end do
+         ! Use analytical correction
+         face(1,9)=0.25_WP*sum(face(1,5:8))
+         face(2,9)=(6.0_WP*volume+face(1,5)*((face(3,6)-face(3,9))*face(2,8)-(face(3,8)-face(3,9))*face(2,6))+face(1,9)*((face(3,8)-face(3,9))*face(2,6)-(face(3,6)-face(3,9))*face(2,8))+face(2,5)*((face(3,8)-face(3,9))*(face(1,6)-face(1,9))-(face(3,6)-face(3,9))*(face(1,8)-face(1,9)))+face(3,5)*((face(1,8)-face(1,9))*face(2,6)-(face(1,6)-face(1,9))*face(2,8))+face(3,9)*((face(1,6)-face(1,9))*face(2,8)-(face(1,8)-face(1,9))*face(2,6))+face(1,6)*((face(3,7)-face(3,9))*face(2,8)-(face(3,8)-face(3,9))*face(2,7))+face(1,9)*((face(3,8)-face(3,9))*face(2,7)-(face(3,7)-face(3,9))*face(2,8))+face(2,6)*((face(3,8)-face(3,9))*(face(1,7)-face(1,9))-(face(3,7)-face(3,9))*(face(1,8)-face(1,9)))+face(3,6)*((face(1,8)-face(1,9))*face(2,7)-(face(1,7)-face(1,9))*face(2,8))+face(3,9)*((face(1,7)-face(1,9))*face(2,8)-(face(1,8)-face(1,9))*face(2,7)))/(face(1,5)*((face(3,6)-face(3,9))-(face(3,8)-face(3,9)))+face(1,9)*((face(3,8)-face(3,9))-(face(3,6)-face(3,9)))+((face(3,8)-face(3,9))*(face(1,6)-face(1,9))-(face(3,6)-face(3,9))*(face(1,8)-face(1,9)))+face(3,5)*((face(1,8)-face(1,9))-(face(1,6)-face(1,9)))+face(3,9)*((face(1,6)-face(1,9))-(face(1,8)-face(1,9)))+face(1,9)*((face(3,8)-face(3,9))-(face(3,7)-face(3,9)))+((face(3,8)-face(3,9))*(face(1,7)-face(1,9))-(face(3,7)-face(3,9))*(face(1,8)-face(1,9)))+face(3,6)*((face(1,8)-face(1,9))-(face(1,7)-face(1,9)))+face(3,9)*((face(1,7)-face(1,9))-(face(1,8)-face(1,9))))
+         face(3,9)=0.25_WP*sum(face(3,5:8))
+      end subroutine volume_correct_y
+      !> Subroutine that calculates the 9th point of face to enforce exact volume conservation for a z-flux
+      subroutine volume_correct_z(volume)
+         implicit none
+         real(WP) :: volume
+         real(WP), dimension(3) :: a,b,c
+         integer :: ntet
+         ! Compute volume mismatch
+         do ntet=1,6
+            a=face(:,tet_map(1,ntet))-face(:,tet_map(4,ntet)); b=face(:,tet_map(2,ntet))-face(:,tet_map(4,ntet)); c=face(:,tet_map(3,ntet))-face(:,tet_map(4,ntet))
+            volume=volume+(a(1)*(b(2)*c(3)-c(2)*b(3))-a(2)*(b(1)*c(3)-c(1)*b(3))+a(3)*(b(1)*c(2)-c(1)*b(2)))/6.0_WP
+         end do
+         ! Use analytical correction
+         face(1,9)=0.25_WP*sum(face(1,5:8))
+         face(2,9)=0.25_WP*sum(face(2,5:8))
+         face(3,9)=(6.0_WP*volume+face(1,5)*face(2,6)*face(3,8)-face(1,5)*face(3,6)*face(2,8)-face(2,5)*face(1,6)*face(3,8)+face(2,5)*face(3,6)*face(1,8)+face(3,5)*face(1,6)*face(2,8)-face(3,5)*face(2,6)*face(1,8)+face(1,5)*face(3,6)*face(2,5)-face(2,5)*face(3,6)*face(1,5)-face(3,5)*face(1,6)*face(2,5)+face(3,5)*face(2,6)*face(1,5)+face(1,6)*face(2,7)*face(3,8)-face(1,6)*face(3,7)*face(2,8)-face(2,6)*face(1,7)*face(3,8)+face(2,6)*face(3,7)*face(1,8)+face(3,6)*face(1,7)*face(2,8)-face(3,6)*face(2,7)*face(1,8)-face(1,5)*face(3,8)*face(2,5)+face(2,5)*face(3,8)*face(1,5)+face(3,5)*face(1,8)*face(2,5)-face(3,5)*face(2,8)*face(1,5)+face(1,6)*face(3,7)*face(2,5)-face(2,6)*face(3,7)*face(1,5)-face(3,6)*face(1,7)*face(2,5)+face(3,6)*face(2,7)*face(1,5)+face(1,7)*face(3,8)*face(2,5)-face(2,7)*face(3,8)*face(1,5)-face(3,7)*face(1,8)*face(2,5)+face(3,7)*face(2,8)*face(1,5))/(face(1,5)*face(2,6)-face(2,5)*face(1,6)-face(1,5)*face(2,8)+face(2,5)*face(1,8)+face(1,6)*face(2,7)-face(2,6)*face(1,7)+face(1,7)*face(2,8)-face(2,7)*face(1,8))
+      end subroutine volume_correct_z
+      !> Function that calculates the sign of a tet
+      function tet_sign(vert) result(s)
+         implicit none
+         real(WP) :: s
+         real(WP), dimension(3,4), intent(in) :: vert
+         real(WP), dimension(3) :: a,b,c
+         a=vert(:,1)-vert(:,4); b=vert(:,2)-vert(:,4); c=vert(:,3)-vert(:,4)
+         s=sign(1.0_WP,-(a(1)*(b(2)*c(3)-c(2)*b(3))-a(2)*(b(1)*c(3)-c(1)*b(3))+a(3)*(b(1)*c(2)-c(1)*b(2)))/6.0_WP)
+      end function tet_sign
+      !> Recursive function that cuts a tet by computational mesh to compute fluxes
+      recursive function tet2flux(mytet,myind) result(myflux)
+         implicit none
+         real(WP), dimension(3,4), intent(in) :: mytet
+         integer,  dimension(3,4), intent(in) :: myind
+         real(WP), dimension(14) :: myflux
+         integer :: dir,cut_ind
+         integer :: n1,n2,case
+         integer :: v1,v2
+         real(WP), dimension(3) :: a,b,c
+         real(WP), dimension(4) :: d
+         real(WP), dimension(3,8) :: vert
+         integer,  dimension(3,8,2) :: vert_ind
+         real(WP) :: denom,mu,my_vol
+         real(WP), dimension(3,4) :: newtet
+         integer,  dimension(3,4) :: newind
+         if      (maxval(myind(1,:))-minval(myind(1,:)).gt.0) then ! Cut by x planes
+            dir=1; cut_ind=maxval(myind(1,:)); d(:)=mytet(1,:)-this%cfg%x(cut_ind)
+         else if (maxval(myind(2,:))-minval(myind(2,:)).gt.0) then ! Cut by y planes
+            dir=2; cut_ind=maxval(myind(2,:)); d(:)=mytet(2,:)-this%cfg%y(cut_ind)
+         else if (maxval(myind(3,:))-minval(myind(3,:)).gt.0) then ! Cut by z planes
+            dir=3; cut_ind=maxval(myind(3,:)); d(:)=mytet(3,:)-this%cfg%z(cut_ind)
+         else ! Cut by interface and compute fluxes
+            myflux=tet2flux_plic(mytet,myind(1,1),myind(2,1),myind(3,1)); return
+         end if
+         ! Find case of cut
+         case=1+int(0.5_WP+sign(0.5_WP,d(1)))+2*int(0.5_WP+sign(0.5_WP,d(2)))+4*int(0.5_WP+sign(0.5_WP,d(3)))+8*int(0.5_WP+sign(0.5_WP,d(4)))
+         ! Get vertices and indices of tet
+         do n1=1,4
+            vert    ( : ,n1  )=mytet(:,n1)
+            vert_ind( : ,n1,1)=myind(:,n1)
+            vert_ind( : ,n1,2)=myind(:,n1)
+            vert_ind(dir,n1,1)=min(vert_ind(dir,n1,1),cut_ind-1) ! Enforce boundedness
+            vert_ind(dir,n1,2)=max(vert_ind(dir,n1,1),cut_ind  )
+         end do
+         ! Create interpolated vertices on cut plane
+         do n1=1,cut_nvert(case)
+            v1=cut_v1(n1,case); v2=cut_v2(n1,case)
+            denom=d(v2)-d(v1); mu=max(0.0_WP,min(1.0_WP,merge(-d(v1)/denom,0.0_WP,abs(denom).ge.tiny(1.0_WP))))
+            vert(:,4+n1)=(1.0_WP-mu)*vert(:,v1)+mu*vert(:,v2)
+            ! Get index for interpolated vertex
+            vert_ind(1,4+n1,1)=min(max(floor((vert(1,4+n1)-this%cfg%x(this%cfg%imino))/this%dx)+this%cfg%imino,this%cfg%imino_),this%cfg%imaxo_)
+            vert_ind(2,4+n1,1)=min(max(floor((vert(2,4+n1)-this%cfg%y(this%cfg%jmino))/this%dy)+this%cfg%jmino,this%cfg%jmino_),this%cfg%jmaxo_)
+            vert_ind(3,4+n1,1)=min(max(floor((vert(3,4+n1)-this%cfg%z(this%cfg%kmino))/this%dz)+this%cfg%kmino,this%cfg%kmino_),this%cfg%kmaxo_)
+            ! Enforce boundedness
+            vert_ind(:,4+n1,1)=max(vert_ind(:,4+n1,1),min(vert_ind(:,v1,1),vert_ind(:,v2,1)))
+            vert_ind(:,4+n1,1)=min(vert_ind(:,4+n1,1),max(vert_ind(:,v1,1),vert_ind(:,v2,1)))
+            ! Set +/- indices in cut direction
+            vert_ind(:,4+n1,2)=vert_ind(:,4+n1,1)
+            vert_ind(dir,4+n1,1)=cut_ind-1
+            vert_ind(dir,4+n1,2)=cut_ind
+         end do
+         ! Create new tets
+         myflux=0.0_WP
+         do n1=1,cut_ntets(case)
+            do n2=1,4
+               newtet(:,n2)=vert    (:,cut_vtet(n2,n1,case))
+               newind(:,n2)=vert_ind(:,cut_vtet(n2,n1,case),cut_side(n1,case))
+            end do
+            ! Check for zero-volume tet
+            a=newtet(:,1)-newtet(:,4); b=newtet(:,2)-newtet(:,4); c=newtet(:,3)-newtet(:,4)
+            my_vol=abs(a(1)*(b(2)*c(3)-c(2)*b(3))-a(2)*(b(1)*c(3)-c(1)*b(3))+a(3)*(b(1)*c(2)-c(1)*b(2)))/6.0_WP
+            if (my_vol.lt.this%vol_epsilon) cycle
+            ! Cut by next plane
+            myflux=myflux+tet2flux(newtet,newind)
+         end do
+      end function tet2flux
+      !> Function that cuts a tet by the local PLIC interface
+      function tet2flux_plic(mytet,i0,j0,k0) result(myflux)
+         implicit none
+         real(WP), dimension(3,4), intent(in) :: mytet
+         integer , intent(in)    :: i0,j0,k0
+         real(WP), dimension(14) :: myflux
+         integer :: n1,case,v1,v2
+         real(WP) :: denom,mu,my_vol
+         real(WP), dimension(4) :: d
+         real(WP), dimension(3,8) :: vert
+         real(WP), dimension(3) :: a,b,c,bary
+         ! Cut by old PLIC
+         d=this%PLANEold(1,i0,j0,k0)*mytet(1,:)+this%PLANEold(2,i0,j0,k0)*mytet(2,:)+this%PLANEold(3,i0,j0,k0)*mytet(3,:)-this%PLANEold(4,i0,j0,k0)
+         ! Find cut case
+         case=1+int(0.5_WP+sign(0.5_WP,d(1)))+2*int(0.5_WP+sign(0.5_WP,d(2)))+4*int(0.5_WP+sign(0.5_WP,d(3)))+8*int(0.5_WP+sign(0.5_WP,d(4)))
+         ! Copy vertices
+         vert(:,1:4)=mytet(:,1:4)
+         ! Create interpolated vertices on cut plane
+         do n1=1,cut_nvert(case)
+            v1=cut_v1(n1,case); v2=cut_v2(n1,case)
+            denom=d(v2)-d(v1); mu=max(0.0_WP,min(1.0_WP,merge(-d(v1)/denom,0.0_WP,abs(denom).ge.tiny(1.0_WP))))
+            vert(:,4+n1)=(1.0_WP-mu)*vert(:,v1)+mu*vert(:,v2)
+         end do
+         ! Zero out flux
+         myflux=0.0_WP
+         ! Analyze gas tets
+         do n1=1,cut_nntet(case)-1
+            ! Compute volume
+            a=vert(:,cut_vtet(1,n1,case))-vert(:,cut_vtet(4,n1,case)); b=vert(:,cut_vtet(2,n1,case))-vert(:,cut_vtet(4,n1,case)); c=vert(:,cut_vtet(3,n1,case))-vert(:,cut_vtet(4,n1,case))
+            my_vol=abs(a(1)*(b(2)*c(3)-c(2)*b(3))-a(2)*(b(1)*c(3)-c(1)*b(3))+a(3)*(b(1)*c(2)-c(1)*b(2)))/6.0_WP
+            ! Compute barycenter
+            bary=0.25_WP*(vert(:,cut_vtet(1,n1,case))+vert(:,cut_vtet(2,n1,case))+vert(:,cut_vtet(3,n1,case))+vert(:,cut_vtet(4,n1,case)))
+            ! Quantities in gas phase
+            myflux(2)  =myflux(2)  +my_vol                                              ! Gas volume
+            myflux(6:8)=myflux(6:8)+my_vol*bary                                         ! Gas volume*barycenter
+            myflux(10) =myflux(10) +my_vol*this%RHOGold(i0,j0,k0)                       ! Gas mass
+            myflux(12) =myflux(12) +my_vol*this%RHOGold(i0,j0,k0)*this%IGold(i0,j0,k0)  ! Gas internal energy
+            myflux(14) =myflux(14) +my_vol*this%PGold(i0,j0,k0)                         ! Gas volume*pressure
+         end do
+         ! Analyze liquid tets
+         do n1=cut_ntets(case),cut_nntet(case),-1
+            ! Compute volume
+            a=vert(:,cut_vtet(1,n1,case))-vert(:,cut_vtet(4,n1,case)); b=vert(:,cut_vtet(2,n1,case))-vert(:,cut_vtet(4,n1,case)); c=vert(:,cut_vtet(3,n1,case))-vert(:,cut_vtet(4,n1,case))
+            my_vol=abs(a(1)*(b(2)*c(3)-c(2)*b(3))-a(2)*(b(1)*c(3)-c(1)*b(3))+a(3)*(b(1)*c(2)-c(1)*b(2)))/6.0_WP
+            ! Compute barycenter
+            bary=0.25_WP*(vert(:,cut_vtet(1,n1,case))+vert(:,cut_vtet(2,n1,case))+vert(:,cut_vtet(3,n1,case))+vert(:,cut_vtet(4,n1,case)))!-Lbary(:,i,j,k)
+            ! Quantities in liquid phase
+            myflux(1)  =myflux(1)  +my_vol                                              ! Liquid volume
+            myflux(3:5)=myflux(3:5)+my_vol*bary                                         ! Liquid volume*barycenter
+            myflux(9)  =myflux(9)  +my_vol*this%RHOLold(i0,j0,k0)                       ! Liquid mass
+            myflux(11) =myflux(11) +my_vol*this%RHOLold(i0,j0,k0)*this%ILold(i0,j0,k0)  ! Liquid internal energy
+            myflux(13) =myflux(13) +my_vol*this%PLold(i0,j0,k0)                         ! Liquid volume*pressure
+         end do
+      end function tet2flux_plic
    end subroutine SLstep
    
    
@@ -1225,6 +1534,63 @@ contains
             call matchVolumeFraction(cell,this%VF(i,j,k),this%PLIC(i,j,k))
          end do; end do; end do
       end block plicnet_reconstruct
+      
+      ! Perfrom LVIRA reconstruction of the interface
+      ! lvira_reconstruct: block
+      !    use mathtools, only: normalize
+      !    integer(IRL_SignedIndex_t) :: i,j,k
+      !    integer :: ind,ii,jj,kk,icenter
+      !    type(LVIRANeigh_RectCub_type) :: neighborhood
+      !    type(RectCub_type), dimension(0:26) :: neighborhood_cells
+      !    real(IRL_double)  , dimension(0:26) :: liquid_volume_fraction
+      !    real(IRL_double), dimension(3) :: normal
+      !    real(IRL_double), dimension(4) :: plane
+      !    real(IRL_double) :: dist
+      !    ! Give ourselves an LVIRA neighborhood of 27 cells
+      !    call new(neighborhood)
+      !    do i=0,26; call new(neighborhood_cells(i)); end do
+      !    ! Traverse domain and reconstruct interface
+      !    do k=this%cfg%kmin_,this%cfg%kmax_; do j=this%cfg%jmin_,this%cfg%jmax_; do i=this%cfg%imin_,this%cfg%imax_
+      !       ! Handle full cells differently
+      !       if (this%VF(i,j,k).lt.VFlo.or.this%VF(i,j,k).gt.VFhi) then
+      !          call setNumberOfPlanes(this%PLIC(i,j,k),1)
+      !          call setPlane(this%PLIC(i,j,k),0,[0.0_WP,0.0_WP,0.0_WP],sign(1.0_WP,this%VF(i,j,k)-0.5_WP))
+      !          cycle
+      !       end if
+      !       ! Set neighborhood_cells and liquid_volume_fraction to current correct values
+      !       ind=0
+      !       do kk=k-1,k+1; do jj=j-1,j+1; do ii=i-1,i+1
+      !          ! Add cell to neighborhood
+      !          call addMember(neighborhood,neighborhood_cells(ind),liquid_volume_fraction(ind))
+      !          ! Build the cell
+      !          call construct_2pt(neighborhood_cells(ind),[this%cfg%x(ii),this%cfg%y(jj),this%cfg%z(kk)],[this%cfg%x(ii+1),this%cfg%y(jj+1),this%cfg%z(kk+1)])
+      !          ! Assign volume fraction
+      !          liquid_volume_fraction(ind)=this%VF(ii,jj,kk)
+      !          ! Increment counter
+      !          ind=ind+1
+      !       end do; end do; end do
+      !       ! Set stencil center
+      !       icenter=13; call setCenterOfStencil(neighborhood,icenter)
+      !       ! Formulate initial guess
+      !       call setNumberOfPlanes(this%PLIC(i,j,k),1)
+      !       normal=normalize(this%BG(:,i,j,k)-this%BL(:,i,j,k))
+      !       dist=dot_product(normal,[this%cfg%xm(i),this%cfg%ym(j),this%cfg%zm(k)])
+      !       call setPlane(this%PLIC(i,j,k),0,normal,dist)
+      !       call matchVolumeFraction(neighborhood_cells(icenter),this%VF(i,j,k),this%PLIC(i,j,k))
+      !       ! Perform the reconstruction
+      !       call reconstructLVIRA3D(neighborhood,this%PLIC(i,j,k))
+      !       ! Clean up neighborhood
+      !       call emptyNeighborhood(neighborhood)
+      !       ! Handle lower dimensions exactly
+      !       plane=getPlane(this%PLIC(i,j,k),0)
+      !       if (this%cfg%nx.eq.1) normal(1)=0.0_WP
+      !       if (this%cfg%ny.eq.1) normal(2)=0.0_WP
+      !       if (this%cfg%nz.eq.1) normal(3)=0.0_WP
+      !       normal=normalize(normal)
+      !       call setPlane(this%PLIC(i,j,k),0,normal,plane(4))
+      !       call matchVolumeFraction(neighborhood_cells(icenter),this%VF(i,j,k),this%PLIC(i,j,k))
+      !    end do; end do; end do
+      ! end block lvira_reconstruct
       
       ! Synchronize PLIC interface across boundaries
       synchronize_interface: block
