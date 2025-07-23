@@ -732,7 +732,7 @@ contains
                      fs%W   (i,j,k)=fs%W   (i,fs%cfg%jmin,k)
                      fs%VF  (i,j,k)=fs%VF  (i,fs%cfg%jmin,k)
                      ! Also adjust interface data
-                     call setPlane(fs%PLIC(i,j,k),0,[0.0_WP,-1.0_WP,0.0_WP],fs%cfg%y(j)+fs%dy*fs%VF(i,j,k))
+                     call setPlane(fs%PLIC(i,j,k),0,[0.0_WP,-1.0_WP,0.0_WP],-fs%cfg%y(j+1)+fs%dy*fs%VF(i,j,k))
                      fs%BL(:,i,j,k)=[fs%cfg%xm(i),fs%cfg%ym(j),fs%cfg%zm(k)]
                      fs%BG(:,i,j,k)=[fs%cfg%xm(i),fs%cfg%ym(j),fs%cfg%zm(k)]
                   end do
@@ -780,7 +780,7 @@ contains
                      fs%W  (i,j,k)=min(fs%W(i,j,fs%cfg%kmin),0.0_WP)
                      fs%VF  (i,j,k)=fs%VF  (i,j,fs%cfg%kmin)
                      ! Also adjust interface data
-                     call setPlane(fs%PLIC(i,j,k),0,[0.0_WP,0.0_WP,-1.0_WP],fs%cfg%z(k)+fs%dz*fs%VF(i,j,k))
+                     call setPlane(fs%PLIC(i,j,k),0,[0.0_WP,0.0_WP,-1.0_WP],-fs%cfg%z(k+1)+fs%dz*fs%VF(i,j,k))
                      fs%BL(:,i,j,k)=[fs%cfg%xm(i),fs%cfg%ym(j),fs%cfg%zm(k)]
                      fs%BG(:,i,j,k)=[fs%cfg%xm(i),fs%cfg%ym(j),fs%cfg%zm(k)]
                   end do
