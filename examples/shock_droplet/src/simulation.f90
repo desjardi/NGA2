@@ -1,35 +1,16 @@
 !> Various definitions and tools for running an NGA2 simulation
 module simulation
-   use precision,         only: WP
-   use geometry,          only: cfg
-   use mpcomp_class,      only: mpcomp
-   use timetracker_class, only: timetracker
-   use ensight_class,     only: ensight
-   use surfmesh_class,    only: surfmesh
-   use cclabel_class,     only: cclabel
-   use event_class,       only: event
-   use monitor_class,     only: monitor
+   use precision,       only: WP
+   use shockdrop_class, only: shockdrop
+   use event_class,     only: event
    implicit none
    private; public :: simulation_init,simulation_run,simulation_final
    
-   !> Multiphase compressible flow solver and corresponding time tracker
-   type(mpcomp),      public :: fs
-   type(timetracker), public :: time
+   !> Shock-drop simulation
+   type(shockdrop) :: sd
    
-   !> CCL for postprocessing
-   type(cclabel) :: ccl
-   
-   !> Ensight postprocessing
-   type(surfmesh) :: smesh
-   type(ensight)  :: ens_out
-   type(event)    :: ens_evt
-   
-   !> Simulation monitor file
-   type(monitor) :: mfile,cflfile,consfile,dropfile
-   
-   !> Private work arrays
-   real(WP), dimension(:,:,:,:,:), allocatable :: dQdt
-   real(WP), dimension(:,:,:)    , allocatable :: Ui,Vi,Wi,Ma,beta,visc
+   !> Ensight output event
+   type(event) :: ens_evt
    
    !> Equations of state
    real(WP) :: PinfL,GammaL,CvL
@@ -43,20 +24,7 @@ module simulation
    real(WP) :: rhoL,ML
    real(WP) :: ReG,viscG,viscL,visc_ratio
    
-   !> Drop info
-   real(WP) :: Vcore,Mcore,Xcore,Ycore,Zcore
-   
 contains
-   
-   
-   !> Sutherland's law for viscosity as a function of temperature
-   !subroutine get_visc()
-   !   implicit none
-   !   integer :: i,j,k
-   !   do k=fs%cfg%kmino_,fs%cfg%kmaxo_; do j=fs%cfg%jmino_,fs%cfg%jmaxo_; do i=fs%cfg%imino_,fs%cfg%imaxo_
-   !      fs%visc(i,j,k)=Reynolds**(-1.0_WP)*(1.4042_WP*fs%T(i,j,k)**1.5_WP)/(fs%T(i,j,k)+0.4042_WP)
-   !   end do; end do; end do
-   !end subroutine get_visc
    
    
    !> Function that returns a smooth Heaviside of thickness delta
@@ -117,50 +85,6 @@ contains
       real(WP), intent(in) :: RHO,P
       get_SG=CvG*log((P+PinfG)/RHO**GammaG)
    end function get_SG
-   
-   
-   !> Various postprocessing
-   subroutine postproc()
-      use mpi_f08,  only: MPI_ALLREDUCE,MPI_SUM,MPI_IN_PLACE
-      use parallel, only: MPI_REAL_WP
-      implicit none
-      integer :: i,j,k,n,ierr
-      ! Core is id=1, skip if not present
-      if (ccl%nstruct.lt.1) return
-      ! Extract core volume, mass, and barycenter
-      Vcore=0.0_WP; Mcore=0.0_WP; Xcore=0.0_WP; Ycore=0.0_WP; Zcore=0.0_WP
-      do n=1,ccl%struct(1)%n_
-         ! Get cell index
-         i=ccl%struct(1)%map(1,n); j=ccl%struct(1)%map(2,n); k=ccl%struct(1)%map(3,n)
-         ! Increement volume
-         Vcore=Vcore+fs%VF(i,j,k)*fs%cfg%vol(i,j,k)
-         ! Increment mass
-         Mcore=Mcore+fs%Q(i,j,k,1)*fs%cfg%vol(i,j,k)
-         ! Increment barycenter
-         Xcore=Xcore+fs%Q(i,j,k,1)*fs%BL(1,i,j,k)*fs%cfg%vol(i,j,k)
-         Ycore=Ycore+fs%Q(i,j,k,1)*fs%BL(2,i,j,k)*fs%cfg%vol(i,j,k)
-         Zcore=Zcore+fs%Q(i,j,k,1)*fs%BL(3,i,j,k)*fs%cfg%vol(i,j,k)
-      end do
-      call MPI_ALLREDUCE(MPI_IN_PLACE,Vcore,1,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr)
-      call MPI_ALLREDUCE(MPI_IN_PLACE,Mcore,1,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr)
-      call MPI_ALLREDUCE(MPI_IN_PLACE,Xcore,1,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr); Xcore=Xcore/Mcore ! Shouldn't ever
-      call MPI_ALLREDUCE(MPI_IN_PLACE,Ycore,1,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr); Ycore=Ycore/Mcore ! be dividing by
-      call MPI_ALLREDUCE(MPI_IN_PLACE,Zcore,1,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr); Zcore=Zcore/Mcore ! zero here...
-   end subroutine postproc
-   
-   
-   !> Function that identifies cells that need a label
-   logical function make_label(i,j,k)
-      implicit none
-      integer, intent(in) :: i,j,k
-      if (fs%VF(i,j,k).gt.0.0_WP) then; make_label=.true.; else; make_label=.false.; end if
-   end function make_label
-   !> Function that identifies if cell pairs have same label
-   logical function same_label(i1,j1,k1,i2,j2,k2)
-      implicit none
-      integer, intent(in) :: i1,j1,k1,i2,j2,k2
-      same_label=.true.
-   end function same_label
    
    
    !> Mechanical relaxation model
@@ -256,6 +180,8 @@ contains
       d=(Q(1)*CvL*GammaL+Q(2)*CvG*GammaG)*PinfL*PinfG-sum(Q(3:4))*(Q(1)*CvL*(GammaL-1.0_WP)*PinfG+Q(2)*CvG*(GammaG-1.0_WP)*PinfL)
       ! Get equilibrium pressure
       Peq=(-b+sqrt(b**2-4.0_WP*a*d))/(2.0_WP*a)
+      ! Check if pressure is sound
+      if (Peq.le.max(-PinfG,-PinfL)) return
       ! Get equilibrium volume fraction
       VFeq=Q(1)*CvL*(GammaL-1.0_WP)*(Peq+PinfG)/(Q(1)*CvL*(GammaL-1.0_WP)*(Peq+PinfG)+Q(2)*CvG*(GammaG-1.0_WP)*(Peq+PinfL))
       ! Clean up solution
@@ -265,20 +191,19 @@ contains
       Q(3)=(       VFeq)*(Peq+GammaL*PinfL)/(GammaL-1.0_WP)
       Q(4)=(1.0_WP-VFeq)*(Peq+GammaG*PinfG)/(GammaG-1.0_WP)
       VF=VFeq
-      ! Last debugging check... Probably should never happen...
-      if (Peq.lt.-PinfG) print*,"****************** NEGATIVE PRESSURE! - time",time%t,"VFeq",VFeq,"Peq",Peq
    end subroutine PT_relax
    
    
-   !> Initialization of problem solver
+   !> Solver initialization
    subroutine simulation_init
-      use param, only: param_read
       implicit none
       
-      ! Initialize eos and flow parameters
+      ! Initialize eos and flow parameters - all cores
       initialize_parameters: block
          use string,   only: str_long
          use messager, only: log
+         use parallel, only: amRoot
+         use param,    only: param_read
          character(str_long) :: message
          ! Set PinfG to zero
          PinfG=0.0_WP
@@ -315,7 +240,7 @@ contains
          call param_read('Gas Reynolds number',ReG); viscG=rho1*1.0_WP*u2/ReG 
          call param_read('Viscosity ratio',visc_ratio); viscL=visc_ratio*viscG
          ! Output case info
-         if (cfg%amRoot) then
+         if (amRoot) then
             write(message,'("[Liquid EOS] => Gamma=",es12.5)') GammaL; call log(message)
             write(message,'("[Liquid EOS] =>  Pinf=",es12.5)')  PinfL; call log(message)
             write(message,'("[Liquid EOS] =>    Cv=",es12.5)')    CvL; call log(message)
@@ -340,206 +265,92 @@ contains
          end if
       end block initialize_parameters
       
-      ! Initialize time tracker
-      initialize_timetracker: block
-         time=timetracker(amRoot=cfg%amRoot)
-         call param_read('Max time',time%tmax)
-         call param_read('Max timestep size',time%dtmax)
-         call param_read('Max cfl number',time%cflmax)
-         time%dt=time%dtmax
-      end block initialize_timetracker
+      ! Setup shock-drop simulation - all cores
+      setup_sd: block
+         use param,    only: param_read
+         use parallel, only: group
+         integer , dimension(3) :: meshsize,partition
+         real(WP), dimension(3) :: X0
+         real(WP) :: dx
+         ! Read in mesh size and desired partition
+         call param_read('Shock-drop dx',dx)
+         call param_read('Shock-drop nx',meshsize)
+         call param_read('Shock-drop partition',partition)
+         X0=-0.5_WP*real(meshsize,WP)*dx !< This assumes that the domain is centered on (0,0,0)
+         ! Initialize the shock-drop solver
+         call sd%init(dx=dx,meshsize=meshsize,startloc=X0,group=group,partition=partition)
+         ! Provide relaxation and thermodynamic models
+         sd%fs%relax=>P_relax
+         sd%fs%getPL=>get_PL; sd%fs%getCL=>get_CL; sd%fs%getSL=>get_SL; sd%fs%getTL=>get_TL
+         sd%fs%getPG=>get_PG; sd%fs%getCG=>get_CG; sd%fs%getSG=>get_SG; sd%fs%getTG=>get_TG
+         ! Set time integration parameters
+         call param_read('Shock-drop dt',sd%time%dtmax); sd%time%dt=sd%time%dtmax
+         call param_read('Shock-drop CFL',sd%time%cflmax)
+         call param_read('Max time',sd%time%tmax)
+         ! We finally need to transfer our viscosities explicitly...
+         sd%viscL=viscL; sd%viscG=viscG
+      end block setup_sd
       
-      ! Create multipgase compressible flow solver
-      create_velocity_solver: block
-         ! Initialize solver with required thermodynamic functions
-         call fs%initialize(cfg=cfg,getPL=get_PL,getCL=get_CL,getPG=get_PG,getCG=get_CG,name='Compressible NS')
-         ! Provide relaxation model
-         fs%relax=>P_relax
-         ! Provide entropy calculation functions
-         fs%getSL=>get_SL; fs%getSG=>get_SG
-         ! Provide temperature calculation functions
-         fs%getTL=>get_TL; fs%getTG=>get_TG
-      end block create_velocity_solver
-      
-      ! Allocate work arrays
-      allocate_work_arrays: block
-         allocate(dQdt(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_,1:fs%nQ,1:4))
-         allocate(beta(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
-         allocate(visc(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
-         allocate(Ui(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
-         allocate(Vi(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
-         allocate(Wi(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
-         allocate(Ma(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
-      end block allocate_work_arrays
-      
-      ! Prepare initial conditions
-      initial_conditions: block
+      ! Generate initial conditions for shock-drop problem
+      initialize_sd: block
          use irl_fortran_interface, only: setNumberOfPlanes,setPlane
          use mms_geom,              only: initialize_volume_moments
          use mpcomp_class,          only: VFlo
          integer :: i,j,k
          ! Initialize primary variables
-         do k=cfg%kmino_,cfg%kmaxo_
-            do j=cfg%jmino_,cfg%jmaxo_
-               do i=cfg%imino_,cfg%imaxo_
-                  ! Initialize liquid volume to zero and set corresponding PLIC
-                  fs%VF(i,j,k)=0.0_WP; fs%BL(:,i,j,k)=[fs%cfg%xm(i),fs%cfg%ym(j),fs%cfg%zm(k)]; fs%BG(:,i,j,k)=[fs%cfg%xm(i),fs%cfg%ym(j),fs%cfg%zm(k)]
-                  call setNumberOfPlanes(fs%PLIC(i,j,k),1); call setPlane(fs%PLIC(i,j,k),0,[0.0_WP,0.0_WP,0.0_WP],sign(1.0_WP,fs%VF(i,j,k)-0.5_WP))
-                  ! Not set volume moments for a droplet or a slab
-                  call initialize_volume_moments(lo=[cfg%x(i),cfg%y(j),cfg%z(k)],hi=[cfg%x(i+1),cfg%y(j+1),cfg%z(k+1)],&
-                  levelset=levelset_drop,time=0.0_WP,level=5,VFlo=VFlo,VF=fs%VF(i,j,k),BL=fs%BL(:,i,j,k),BG=fs%BG(:,i,j,k))
-                  ! Initialize mixture velocity to normal shock
-                  fs%U(i,j,k)=u2*Hshock(Xs-cfg%x(i),delta=0.5_WP*fs%dx)
-                  fs%V(i,j,k)=0.0_WP
-                  fs%W(i,j,k)=0.0_WP
-                  ! Gas variables
-                  if (fs%VF(i,j,k).lt.1.0_WP) then
-                     fs%RHOG(i,j,k)=rho1+(rho2-rho1)*Hshock(Xs-cfg%xm(i),delta=0.5_WP*fs%dx)
-                     fs%PG  (i,j,k)=p1  +(p2  -p1  )*Hshock(Xs-cfg%xm(i),delta=0.5_WP*fs%dx)
-                     fs%IG  (i,j,k)=(fs%PG(i,j,k)+GammaG*PinfG)/(fs%RHOG(i,j,k)*(GammaG-1.0_WP))
-                  end if
-                  ! Liquid variables
-                  if (fs%VF(i,j,k).gt.0.0_WP) then
-                     fs%RHOL(i,j,k)=rhoL
-                     fs%PL  (i,j,k)=p1
-                     fs%IL  (i,j,k)=(fs%PL(i,j,k)+GammaL*PinfL)/(fs%RHOL(i,j,k)*(GammaL-1.0_WP))
-                  end if
-               end do
-            end do
-         end do
+         do k=sd%cfg%kmino_,sd%cfg%kmaxo_; do j=sd%cfg%jmino_,sd%cfg%jmaxo_; do i=sd%cfg%imino_,sd%cfg%imaxo_
+            ! Initialize liquid volume to zero and set corresponding PIC
+            sd%fs%VF(i,j,k)=0.0_WP; sd%fs%BL(:,i,j,k)=[sd%fs%cfg%xm(i),sd%fs%cfg%ym(j),sd%fs%cfg%zm(k)]; sd%fs%BG(:,i,j,k)=[sd%fs%cfg%xm(i),sd%fs%cfg%ym(j),sd%fs%cfg%zm(k)]
+            call setNumberOfPlanes(sd%fs%PLIC(i,j,k),1); call setPlane(sd%fs%PLIC(i,j,k),0,[0.0_WP,0.0_WP,0.0_WP],sign(1.0_WP,sd%fs%VF(i,j,k)-0.5_WP))
+            ! Not set volume moments for a droplet or a slab
+            call initialize_volume_moments(lo=[sd%fs%cfg%x(i),sd%fs%cfg%y(j),sd%fs%cfg%z(k)],hi=[sd%fs%cfg%x(i+1),sd%fs%cfg%y(j+1),sd%fs%cfg%z(k+1)],&
+            levelset=levelset_drop,time=0.0_WP,level=5,VFlo=VFlo,VF=sd%fs%VF(i,j,k),BL=sd%fs%BL(:,i,j,k),BG=sd%fs%BG(:,i,j,k))
+            ! Initialize mixture velocity to normal shock
+            sd%fs%U(i,j,k)=u2*Hshock(Xs-sd%fs%cfg%x(i),delta=0.5_WP*sd%fs%dx)
+            sd%fs%V(i,j,k)=0.0_WP
+            sd%fs%W(i,j,k)=0.0_WP
+            ! Gas variables
+            if (sd%fs%VF(i,j,k).lt.1.0_WP) then
+               sd%fs%RHOG(i,j,k)=rho1+(rho2-rho1)*Hshock(Xs-sd%fs%cfg%xm(i),delta=0.5_WP*sd%fs%dx)
+               sd%fs%PG  (i,j,k)=p1  +(p2  -p1  )*Hshock(Xs-sd%fs%cfg%xm(i),delta=0.5_WP*sd%fs%dx)
+               sd%fs%IG  (i,j,k)=(sd%fs%PG(i,j,k)+GammaG*PinfG)/(sd%fs%RHOG(i,j,k)*(GammaG-1.0_WP))
+            end if
+            ! Liquid variables
+            if (sd%fs%VF(i,j,k).gt.0.0_WP) then
+               sd%fs%RHOL(i,j,k)=rhoL
+               sd%fs%PL  (i,j,k)=p1
+               sd%fs%IL  (i,j,k)=(sd%fs%PL(i,j,k)+GammaL*PinfL)/(sd%fs%RHOL(i,j,k)*(GammaL-1.0_WP))
+            end if
+         end do; end do; end do
          ! Build PLIC interface
-         call fs%build_interface()
+         call sd%fs%build_interface()
          ! Initialize conserved variables
-         fs%Q(:,:,:,1)=        fs%VF *fs%RHOL
-         fs%Q(:,:,:,2)=(1.0_WP-fs%VF)*fs%RHOG
-         fs%Q(:,:,:,3)= fs%Q(:,:,:,1)*fs%IL
-         fs%Q(:,:,:,4)= fs%Q(:,:,:,2)*fs%IG
-         call fs%get_momentum()
+         sd%fs%Q(:,:,:,1)=        sd%fs%VF *sd%fs%RHOL
+         sd%fs%Q(:,:,:,2)=(1.0_WP-sd%fs%VF)*sd%fs%RHOG
+         sd%fs%Q(:,:,:,3)= sd%fs%Q(:,:,:,1)*sd%fs%IL
+         sd%fs%Q(:,:,:,4)= sd%fs%Q(:,:,:,2)*sd%fs%IG
+         call sd%fs%get_momentum()
          ! Communicate conserved variables (not needed in general, but allows 2D runs without changing loop above...)
-         do i=1,fs%nQ; call fs%cfg%sync(fs%Q(:,:,:,i)); end do
+         do i=1,sd%fs%nQ; call sd%fs%cfg%sync(sd%fs%Q(:,:,:,i)); end do
          ! Rebuild primitive variables
-         call fs%get_primitive()
+         call sd%fs%get_primitive()
          ! Interpolate velocity
-         call fs%interp_vel(Ui,Vi,Wi)
+         call sd%fs%interp_vel(sd%Ui,sd%Vi,sd%Wi)
          ! Compute local Mach number
-         Ma=sqrt(Ui**2+Vi**2+Wi**2)/fs%C
-      end block initial_conditions
+         sd%Ma=sqrt(sd%Ui**2+sd%Vi**2+sd%Wi**2)/sd%fs%C
+         ! Perform monitoring
+         call sd%output_monitor()
+      end block initialize_sd
       
-      ! Create CCL
-      create_ccl: block
-         ! Initialize CCL
-         call ccl%initialize(pg=cfg%pgrid,name='ccl')
-         ! Perform CCL
-         call ccl%build(make_label,same_label)
-      end block create_ccl
-      
-      ! Add Ensight output
-      create_ensight: block
-         ! Create Ensight output from cfg
-         ens_out=ensight(cfg=cfg,name='ShockDrop')
-         ! Create event for Ensight output
-         ens_evt=event(time=time,name='Ensight output')
+      ! Initialize Ensight output event and perform initial Ensight output
+      initialize_ensight: block
+         use param, only: param_read
+         ens_evt=event(time=sd%time,name='Ensight output')
          call param_read('Ensight output period',ens_evt%tper)
-         ! Add variables to output
-         call ens_out%add_vector('velocity',Ui,Vi,Wi)
-         call ens_out%add_scalar('VOF',fs%VF)
-         call ens_out%add_scalar('RHOL',fs%RHOL)
-         call ens_out%add_scalar('RHOG',fs%RHOG)
-         call ens_out%add_scalar('IL',fs%IL)
-         call ens_out%add_scalar('IG',fs%IG)
-         call ens_out%add_scalar('PL',fs%PL)
-         call ens_out%add_scalar('PG',fs%PG)
-         call ens_out%add_scalar('Mach',Ma)
-         call ens_out%add_scalar('beta',beta)
-         call ens_out%add_scalar('visc',visc)
-         call ens_out%add_scalar('label',ccl%id)
-         ! Create surface mesh for PLIC
-         smesh=surfmesh(nvar=0,name='plic')
-         call fs%update_surfmesh(smesh)
-         call ens_out%add_surface('plic',smesh)
-         ! Output to ensight
-         if (ens_evt%occurs()) call ens_out%write_data(time%t)
-      end block create_ensight
-      
-      ! Create monitor files
-      create_monitor: block
-         ! Prepare some info about fields
-         call fs%get_cfl(dt=time%dt,cfl=time%cfl)
-         call fs%get_info()
-         call postproc()
-         ! Create simulation monitor
-         mfile=monitor(fs%cfg%amRoot,'simulation')
-         call mfile%add_column(time%n,'Timestep number')
-         call mfile%add_column(time%t,'Time')
-         call mfile%add_column(time%dt,'Timestep size')
-         call mfile%add_column(time%cfl,'Maximum CFL')
-         call mfile%add_column(fs%Umax,'Umax')
-         call mfile%add_column(fs%Vmax,'Vmax')
-         call mfile%add_column(fs%Wmax,'Wmax')
-         call mfile%add_column(fs%RHOLmax,'max(RHOL)')
-         call mfile%add_column(fs%RHOLmin,'min(RHOL)')
-         call mfile%add_column(fs%ILmax  ,'max(IL)'  )
-         call mfile%add_column(fs%ILmin  ,'min(IL)'  )
-         call mfile%add_column(fs%PLmax  ,'max(PL)'  )
-         call mfile%add_column(fs%PLmin  ,'min(PL)'  )
-         call mfile%add_column(fs%TLmax  ,'max(TL)'  )
-         call mfile%add_column(fs%TLmin  ,'min(TL)'  )
-         call mfile%add_column(fs%RHOGmax,'max(RHOG)')
-         call mfile%add_column(fs%RHOGmin,'min(RHOG)')
-         call mfile%add_column(fs%IGmax  ,'max(IG)'  )
-         call mfile%add_column(fs%IGmin  ,'min(IG)'  )
-         call mfile%add_column(fs%PGmax  ,'max(PG)'  )
-         call mfile%add_column(fs%PGmin  ,'min(PG)'  )
-         call mfile%add_column(fs%TGmax  ,'max(TG)'  )
-         call mfile%add_column(fs%TGmin  ,'min(TG)'  )
-         call mfile%add_column(fs%VFmax  ,'VFmax'    )
-         call mfile%add_column(fs%VFmin  ,'VFmin'    )
-         call mfile%write()
-         ! Create CFL monitor
-         cflfile=monitor(fs%cfg%amRoot,'cfl')
-         call cflfile%add_column(time%n,'Timestep number')
-         call cflfile%add_column(time%t,'Time')
-         call cflfile%add_column(fs%CFLc_x,'Convective xCFL')
-         call cflfile%add_column(fs%CFLc_y,'Convective yCFL')
-         call cflfile%add_column(fs%CFLc_z,'Convective zCFL')
-         call cflfile%add_column(fs%CFLa_x,'Acoustic xCFL')
-         call cflfile%add_column(fs%CFLa_y,'Acoustic yCFL')
-         call cflfile%add_column(fs%CFLa_z,'Acoustic zCFL')
-         call cflfile%add_column(fs%CFLv_x,'Viscous xCFL')
-         call cflfile%add_column(fs%CFLv_y,'Viscous yCFL')
-         call cflfile%add_column(fs%CFLv_z,'Viscous zCFL')
-         call cflfile%write()
-         ! Create conservation monitor
-         consfile=monitor(fs%cfg%amRoot,'conservation')
-         call consfile%add_column(time%n,'Timestep number')
-         call consfile%add_column(time%t,'Time')
-         call consfile%add_column(fs%VFint  ,'Volume')
-         call consfile%add_column(fs%Qint(1),'Liquid mass')
-         call consfile%add_column(fs%Qint(2),'Gas mass')
-         call consfile%add_column(fs%Qint(3),'Liquid energy')
-         call consfile%add_column(fs%Qint(4),'Gas energy')
-         call consfile%add_column(fs%Qint(5),'U Momentum')
-         call consfile%add_column(fs%Qint(6),'V Momentum')
-         call consfile%add_column(fs%Qint(7),'W Momentum')
-         call consfile%add_column(fs%RHOKLint,'Liquid KE')
-         call consfile%add_column(fs%RHOKGint,'Gas KE')
-         call consfile%add_column(fs%RHOSLint,'Liquid entropy')
-         call consfile%add_column(fs%RHOSGint,'Gas entropy')
-         call consfile%write()
-         ! Create drop output
-         dropfile=monitor(fs%cfg%amRoot,'drop')
-         call dropfile%add_column(time%n,'Timestep number')
-         call dropfile%add_column(time%t,'Time')
-         call dropfile%add_column(fs%VFint  ,'Total volume')
-         call dropfile%add_column(fs%Qint(1),'Total mass')
-         call dropfile%add_column(ccl%nstruct,'N drops')
-         call dropfile%add_column(Vcore,'Core volume')
-         call dropfile%add_column(Mcore,'Core mass')
-         call dropfile%add_column(Xcore,'Core X')
-         call dropfile%add_column(Ycore,'Core Y')
-         call dropfile%add_column(Zcore,'Core Z')
-         call dropfile%write()
-      end block create_monitor
+         if (ens_evt%occurs()) then
+            call sd%output_ensight(t=sd%time%t)
+         end if
+      end block initialize_ensight
       
    contains
       !> Level set function for a sphere of unity diameter centered at (0,0,0)
@@ -550,14 +361,6 @@ contains
          real(WP) :: G
          G=0.5_WP-sqrt(sum(xyz**2))
       end function levelset_drop
-      !> Level set function for a slab of unity width centered at x=0
-      function levelset_slab(xyz,t) result(G)
-         implicit none
-         real(WP), dimension(3),intent(in) :: xyz
-         real(WP), intent(in) :: t
-         real(WP) :: G
-         G=0.5_WP-abs(xyz(1))
-      end function levelset_slab
    end subroutine simulation_init
    
    
@@ -565,258 +368,16 @@ contains
    subroutine simulation_run
       implicit none
       
-      ! Perform time integration
-      do while (.not.time%done())
-         
-         ! Increment time
-         call fs%get_cfl(dt=time%dt,cfl=time%cfl)
-         call time%adjust_dt()
-         call time%increment()
-         
-         ! Remember conserved variables
-         fs%Qold=fs%Q
-         
-         ! Remember phasic quantities
-         fs%RHOLold=fs%RHOL; fs%ILold=fs%IL; fs%PLold=fs%PL
-         fs%RHOGold=fs%RHOG; fs%IGold=fs%IG; fs%PGold=fs%PG
-         
-         ! Remember volume moments and interface
-         fs%VFold=fs%VF
-         fs%BLold=fs%BL
-         fs%BGold=fs%BG
-         copy_plic_to_old: block
-            use irl_fortran_interface, only: copy
-            integer :: i,j,k
-            do k=fs%cfg%kmino_,fs%cfg%kmaxo_; do j=fs%cfg%jmino_,fs%cfg%jmaxo_; do i=fs%cfg%imino_,fs%cfg%imaxo_
-               call copy(fs%PLICold(i,j,k),fs%PLIC(i,j,k))
-            end do; end do; end do
-         end block copy_plic_to_old
-         
-         ! Tag cells for semi-Lagrangian transport
-         call fs%SLtag()
-         
-         ! Prepare SGS viscosity models
-         call fs%get_viscartif(dt=time%dt,beta=beta)
-         call fs%get_vreman   (dt=time%dt,visc=visc)
-         mixture_viscosity: block
-            integer  :: i,j,k
-            real(WP) :: Lvof,Lrho,Gvof,Grho
-            real(WP) :: Lvisc,Gvisc,Lbeta,Gbeta
-            real(WP), parameter :: eps=1.0e-15_WP
-            do k=fs%cfg%kmino_+1,fs%cfg%kmaxo_-1; do j=fs%cfg%jmino_+1,fs%cfg%jmaxo_-1; do i=fs%cfg%imino_+1,fs%cfg%imaxo_-1
-               ! Create smooth mass info distribution
-               Lvof=sum(       fs%VF(i-1:i+1,j-1:j+1,k-1:k+1)  )
-               Gvof=sum(1.0_WP-fs%VF(i-1:i+1,j-1:j+1,k-1:k+1)  )
-               Lrho=sum(       fs%Q (i-1:i+1,j-1:j+1,k-1:k+1,1))/(Lvof+eps)
-               Grho=sum(       fs%Q (i-1:i+1,j-1:j+1,k-1:k+1,2))/(Gvof+eps)
-               ! Harmonic average of VISC
-               Lvisc=Lrho*(viscL+visc(i,j,k)); Gvisc=Grho*(viscG+visc(i,j,k)); fs%VISC(i,j,k)=(Lvof+Gvof)/(Lvof/max(Lvisc,eps)+Gvof/max(Gvisc,eps))
-               ! Harmonic average of BETA
-               Lbeta=Lrho*beta(i,j,k); Gbeta=Grho*beta(i,j,k); fs%BETA(i,j,k)=(Lvof+Gvof)/(Lvof/max(Lbeta,eps)+Gvof/max(Gbeta,eps))
-            end do; end do; end do
-         end block mixture_viscosity
-         
-         ! Perform first semi-Lagrangian transport step =====================================================
-         call fs%SLstep(dt=0.5_WP*time%dt,U=fs%U,V=fs%V,W=fs%W)
-         call fs%build_interface()
-         
-         ! First RK step ====================================================================================
-         ! Get non-SL RHS and increment
-         call fs%rhs(dQdt(:,:,:,:,1))
-         fs%Q=fs%Qold+0.5_WP*time%dt*dQdt(:,:,:,:,1)
-         ! Increment Q with SL terms
-         fs%Q=fs%Q+fs%SLdQ
-         ! Recompute primitive variables
-         call fs%get_primitive()
-         
-         ! Second RK step ===================================================================================
-         ! Get non-SL RHS and increment
-         call fs%rhs(dQdt(:,:,:,:,2))
-         fs%Q=fs%Qold+0.5_WP*time%dt*dQdt(:,:,:,:,2)
-         ! Increment Q with SL terms
-         fs%Q=fs%Q+fs%SLdQ
-         ! Apply user-provided relaxation model
-         !call fs%apply_relax()
-         ! Recompute primitive variables
-         call fs%get_primitive()
-         
-         ! Perform second semi-Lagrangian transport step ====================================================
-         call fs%SLstep(dt=1.0_WP*time%dt,U=fs%U,V=fs%V,W=fs%W)
-         call fs%build_interface()
-         
-         ! Third RK step ====================================================================================
-         ! Get non-SL RHS and increment
-         call fs%rhs(dQdt(:,:,:,:,3))
-         fs%Q=fs%Qold+1.0_WP*time%dt*dQdt(:,:,:,:,3)
-         ! Increment Q with SL terms
-         fs%Q=fs%Q+fs%SLdQ
-         ! Recompute primitive variables
-         call fs%get_primitive()
-         
-         ! Fourth RK step ===================================================================================
-         ! Get non-SL RHS and increment
-         call fs%rhs(dQdt(:,:,:,:,4))
-         fs%Q=fs%Qold+time%dt/6.0_WP*(dQdt(:,:,:,:,1)+2.0_WP*dQdt(:,:,:,:,2)+2.0_WP*dQdt(:,:,:,:,3)+dQdt(:,:,:,:,4))
-         ! Increment Q with SL terms
-         fs%Q=fs%Q+fs%SLdQ
-         ! Apply user-provided relaxation model
-         call fs%apply_relax()
-         ! Recompute primitive variables
-         call fs%get_primitive()
-         ! Apply Neumann condition at the outflow
-         neumann_outflow: block
-            use irl_fortran_interface, only: setPlane
-            integer :: i,j,k
-            ! Apply clipped Neumann on primitive variables in x+
-            if (.not.fs%cfg%xper.and.fs%cfg%iproc.eq.fs%cfg%npx) then
-               do k=fs%cfg%kmino_,fs%cfg%kmaxo_; do j=fs%cfg%jmino_,fs%cfg%jmaxo_
-                  ! Copy over from imax to imax+1 and above
-                  do i=fs%cfg%imax+1,fs%cfg%imaxo
-                     ! Copy primitive variables
-                     fs%RHOL(i,j,k)=fs%RHOL(fs%cfg%imax,j,k)
-                     fs%PL  (i,j,k)=fs%PL  (fs%cfg%imax,j,k)
-                     fs%IL  (i,j,k)=fs%IL  (fs%cfg%imax,j,k)
-                     fs%RHOG(i,j,k)=fs%RHOG(fs%cfg%imax,j,k)
-                     fs%PG  (i,j,k)=fs%PG  (fs%cfg%imax,j,k)
-                     fs%IG  (i,j,k)=fs%IG  (fs%cfg%imax,j,k)
-                     fs%U  (i,j,k)=max(fs%U(fs%cfg%imax,j,k),0.0_WP)
-                     fs%V   (i,j,k)=fs%V   (fs%cfg%imax,j,k)
-                     fs%W   (i,j,k)=fs%W   (fs%cfg%imax,j,k)
-                     fs%VF  (i,j,k)=fs%VF  (fs%cfg%imax,j,k)
-                     ! Also adjust interface data
-                     call setPlane(fs%PLIC(i,j,k),0,[+1.0_WP,0.0_WP,0.0_WP],fs%cfg%x(i)+fs%dx*fs%VF(i,j,k))
-                     fs%BL(:,i,j,k)=[fs%cfg%xm(i),fs%cfg%ym(j),fs%cfg%zm(k)]
-                     fs%BG(:,i,j,k)=[fs%cfg%xm(i),fs%cfg%ym(j),fs%cfg%zm(k)]
-                  end do
-               end do; end do
-            end if
-            ! Apply clipped Neumann on primitive variables in y+
-            if (.not.fs%cfg%yper.and.fs%cfg%jproc.eq.fs%cfg%npy) then
-               do k=fs%cfg%kmino_,fs%cfg%kmaxo_; do i=fs%cfg%imino_,fs%cfg%imaxo_
-                  ! Copy over from jmax to jmax+1 and above
-                  do j=fs%cfg%jmax+1,fs%cfg%jmaxo
-                     ! Copy primitive variables
-                     fs%RHOL(i,j,k)=fs%RHOL(i,fs%cfg%jmax,k)
-                     fs%PL  (i,j,k)=fs%PL  (i,fs%cfg%jmax,k)
-                     fs%IL  (i,j,k)=fs%IL  (i,fs%cfg%jmax,k)
-                     fs%RHOG(i,j,k)=fs%RHOG(i,fs%cfg%jmax,k)
-                     fs%PG  (i,j,k)=fs%PG  (i,fs%cfg%jmax,k)
-                     fs%IG  (i,j,k)=fs%IG  (i,fs%cfg%jmax,k)
-                     fs%U   (i,j,k)=fs%U   (i,fs%cfg%jmax,k)
-                     fs%V  (i,j,k)=max(fs%V(i,fs%cfg%jmax,k),0.0_WP)
-                     fs%W   (i,j,k)=fs%W   (i,fs%cfg%jmax,k)
-                     fs%VF  (i,j,k)=fs%VF  (i,fs%cfg%jmax,k)
-                     ! Also adjust interface data
-                     call setPlane(fs%PLIC(i,j,k),0,[0.0_WP,+1.0_WP,0.0_WP],fs%cfg%y(j)+fs%dy*fs%VF(i,j,k))
-                     fs%BL(:,i,j,k)=[fs%cfg%xm(i),fs%cfg%ym(j),fs%cfg%zm(k)]
-                     fs%BG(:,i,j,k)=[fs%cfg%xm(i),fs%cfg%ym(j),fs%cfg%zm(k)]
-                  end do
-               end do; end do
-            end if
-            ! Apply clipped Neumann on primitive variables in y-
-            if (.not.fs%cfg%yper.and.fs%cfg%jproc.eq.1) then
-               do k=fs%cfg%kmino_,fs%cfg%kmaxo_; do i=fs%cfg%imino_,fs%cfg%imaxo_
-                  ! First copy over V from jmin+1 to jmin
-                  fs%V(i,fs%cfg%jmin,k)=min(fs%V(i,fs%cfg%jmin+1,k),0.0_WP)
-                  ! Then copy over from jmin to jmin-1 and below
-                  do j=fs%cfg%jmino,fs%cfg%jmin-1
-                     ! Copy primitive variables
-                     fs%RHOL(i,j,k)=fs%RHOL(i,fs%cfg%jmin,k)
-                     fs%PL  (i,j,k)=fs%PL  (i,fs%cfg%jmin,k)
-                     fs%IL  (i,j,k)=fs%IL  (i,fs%cfg%jmin,k)
-                     fs%RHOG(i,j,k)=fs%RHOG(i,fs%cfg%jmin,k)
-                     fs%PG  (i,j,k)=fs%PG  (i,fs%cfg%jmin,k)
-                     fs%IG  (i,j,k)=fs%IG  (i,fs%cfg%jmin,k)
-                     fs%U   (i,j,k)=fs%U   (i,fs%cfg%jmin,k)
-                     fs%V  (i,j,k)=min(fs%V(i,fs%cfg%jmin,k),0.0_WP)
-                     fs%W   (i,j,k)=fs%W   (i,fs%cfg%jmin,k)
-                     fs%VF  (i,j,k)=fs%VF  (i,fs%cfg%jmin,k)
-                     ! Also adjust interface data
-                     call setPlane(fs%PLIC(i,j,k),0,[0.0_WP,-1.0_WP,0.0_WP],-fs%cfg%y(j+1)+fs%dy*fs%VF(i,j,k))
-                     fs%BL(:,i,j,k)=[fs%cfg%xm(i),fs%cfg%ym(j),fs%cfg%zm(k)]
-                     fs%BG(:,i,j,k)=[fs%cfg%xm(i),fs%cfg%ym(j),fs%cfg%zm(k)]
-                  end do
-               end do; end do
-            end if
-            ! Apply clipped Neumann on primitive variables in z+
-            if (.not.fs%cfg%zper.and.fs%cfg%kproc.eq.fs%cfg%npz) then
-               do j=fs%cfg%jmino_,fs%cfg%jmaxo_; do i=fs%cfg%imino_,fs%cfg%imaxo_
-                  ! Copy over from kmax to kmax+1 and above
-                  do k=fs%cfg%kmax+1,fs%cfg%kmaxo
-                     ! Copy primitive variables
-                     fs%RHOL(i,j,k)=fs%RHOL(i,j,fs%cfg%kmax)
-                     fs%PL  (i,j,k)=fs%PL  (i,j,fs%cfg%kmax)
-                     fs%IL  (i,j,k)=fs%IL  (i,j,fs%cfg%kmax)
-                     fs%RHOG(i,j,k)=fs%RHOG(i,j,fs%cfg%kmax)
-                     fs%PG  (i,j,k)=fs%PG  (i,j,fs%cfg%kmax)
-                     fs%IG  (i,j,k)=fs%IG  (i,j,fs%cfg%kmax)
-                     fs%U   (i,j,k)=fs%U   (i,j,fs%cfg%kmax)
-                     fs%V   (i,j,k)=fs%V   (i,j,fs%cfg%kmax)
-                     fs%W  (i,j,k)=max(fs%W(i,j,fs%cfg%kmax),0.0_WP)
-                     fs%VF  (i,j,k)=fs%VF  (i,j,fs%cfg%kmax)
-                     ! Also adjust interface data
-                     call setPlane(fs%PLIC(i,j,k),0,[0.0_WP,0.0_WP,+1.0_WP],fs%cfg%z(k)+fs%dz*fs%VF(i,j,k))
-                     fs%BL(:,i,j,k)=[fs%cfg%xm(i),fs%cfg%ym(j),fs%cfg%zm(k)]
-                     fs%BG(:,i,j,k)=[fs%cfg%xm(i),fs%cfg%ym(j),fs%cfg%zm(k)]
-                  end do
-               end do; end do
-            end if
-            ! Apply clipped Neumann on primitive variables in z-
-            if (.not.fs%cfg%zper.and.fs%cfg%kproc.eq.1) then
-               do j=fs%cfg%jmino_,fs%cfg%jmaxo_; do i=fs%cfg%imino_,fs%cfg%imaxo_
-                  ! First copy over W from kmin+1 to kmin
-                  fs%W(i,j,fs%cfg%kmin)=min(fs%W(i,j,fs%cfg%kmin+1),0.0_WP)
-                  ! Then copy over from kmin to kmin-1 and below
-                  do k=fs%cfg%kmino,fs%cfg%kmin-1
-                     ! Copy primitive variables
-                     fs%RHOL(i,j,k)=fs%RHOL(i,j,fs%cfg%kmin)
-                     fs%PL  (i,j,k)=fs%PL  (i,j,fs%cfg%kmin)
-                     fs%IL  (i,j,k)=fs%IL  (i,j,fs%cfg%kmin)
-                     fs%RHOG(i,j,k)=fs%RHOG(i,j,fs%cfg%kmin)
-                     fs%PG  (i,j,k)=fs%PG  (i,j,fs%cfg%kmin)
-                     fs%IG  (i,j,k)=fs%IG  (i,j,fs%cfg%kmin)
-                     fs%U   (i,j,k)=fs%U   (i,j,fs%cfg%kmin)
-                     fs%V   (i,j,k)=fs%V   (i,j,fs%cfg%kmin)
-                     fs%W  (i,j,k)=min(fs%W(i,j,fs%cfg%kmin),0.0_WP)
-                     fs%VF  (i,j,k)=fs%VF  (i,j,fs%cfg%kmin)
-                     ! Also adjust interface data
-                     call setPlane(fs%PLIC(i,j,k),0,[0.0_WP,0.0_WP,-1.0_WP],-fs%cfg%z(k+1)+fs%dz*fs%VF(i,j,k))
-                     fs%BL(:,i,j,k)=[fs%cfg%xm(i),fs%cfg%ym(j),fs%cfg%zm(k)]
-                     fs%BG(:,i,j,k)=[fs%cfg%xm(i),fs%cfg%ym(j),fs%cfg%zm(k)]
-                  end do
-               end do; end do
-            end if
-            ! Rebuild conserved quantities
-            fs%Q(:,:,:,1)=        fs%VF *fs%RHOL
-            fs%Q(:,:,:,2)=(1.0_WP-fs%VF)*fs%RHOG
-            fs%Q(:,:,:,3)= fs%Q(:,:,:,1)*fs%IL
-            fs%Q(:,:,:,4)= fs%Q(:,:,:,2)*fs%IG
-            call fs%get_momentum()
-         end block neumann_outflow
-         
-         ! Interpolate velocity
-         call fs%interp_vel(Ui,Vi,Wi)
-         
-         ! Compute local Mach number
-         Ma=sqrt(Ui**2+Vi**2+Wi**2)/fs%C
-         
-         ! Update CCL
-         call ccl%build(make_label,same_label)
-         
-         ! Output to ensight
+      ! Shock-drop drives overall time integration
+      do while (.not.sd%time%done())
+         ! Advance shock-drop simulation
+         call sd%step()
+         ! Perform monitoring
+         call sd%output_monitor()
+         ! Perform Ensight output
          if (ens_evt%occurs()) then
-            call fs%update_surfmesh(smesh)
-            call ens_out%write_data(time%t)
+            call sd%output_ensight(t=sd%time%t)
          end if
-         
-         ! Perform and output monitoring
-         call postproc()
-         call fs%get_info()
-         call mfile%write()
-         call cflfile%write()
-         call consfile%write()
-         call dropfile%write()
-         
       end do
       
    end subroutine simulation_run
@@ -825,8 +386,10 @@ contains
    !> Finalize the NGA2 simulation
    subroutine simulation_final
       implicit none
-      ! Deallocate work arrays
-      deallocate(dQdt,Ui,Vi,Wi,Ma,beta,visc)
+      
+      ! Finalize shock-drop simulation
+      call sd%final()
+      
    end subroutine simulation_final
    
    

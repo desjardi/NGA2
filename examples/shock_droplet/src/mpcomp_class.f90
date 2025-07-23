@@ -187,13 +187,11 @@ contains
    
    
    !> Initialization for compressible flow solver
-   subroutine initialize(this,cfg,getPL,getCL,getPG,getCG,name)
+   subroutine initialize(this,cfg,name)
       use messager, only: die
       implicit none
       class(mpcomp) :: this
       class(config), target, intent(in) :: cfg
-      procedure(Pfunc_type)  :: getPL,getPG
-      procedure(Cfunc_type)  :: getCL,getCG
       character(len=*), optional :: name
       
       ! Set the name for the solver
@@ -201,12 +199,6 @@ contains
       
       ! Point to config object
       this%cfg=>cfg
-      
-      ! Point to thermodynamic functions
-      this%getPL=>getPL
-      this%getCL=>getCL
-      this%getPG=>getPG
-      this%getCG=>getCG
       
       ! Check that config is uniform with at least 3 cells of overlap
       if (this%cfg%no.lt.3) call die('[mpcomp initialize] mpcomp solver requires at least 3 cells of overlap')
