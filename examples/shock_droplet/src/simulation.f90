@@ -2,12 +2,16 @@
 module simulation
    use precision,       only: WP
    use shockdrop_class, only: shockdrop
+   use ffshock_class,   only: ffshock
    use event_class,     only: event
    implicit none
    private; public :: simulation_init,simulation_run,simulation_final
    
    !> Shock-drop simulation
    type(shockdrop) :: sd
+   
+   !> Far-field shock simulation
+   type(ffshock) :: ff
    
    !> Ensight output event
    type(event) :: ens_evt
@@ -288,7 +292,7 @@ contains
          call param_read('Shock-drop CFL',sd%time%cflmax)
          call param_read('Max time',sd%time%tmax)
          ! We finally need to transfer our viscosities explicitly...
-         sd%viscL=viscL; sd%viscG=viscG
+         sd%cst_viscL=viscL; sd%cst_viscG=viscG
       end block setup_sd
       
       ! Generate initial conditions for shock-drop problem
@@ -342,6 +346,52 @@ contains
          call sd%output_monitor()
       end block initialize_sd
       
+      ! Setup far-field shock simulation - all cores
+      setup_ff: block
+         use param,    only: param_read
+         use parallel, only: group
+         integer , dimension(3) :: meshsize,partition
+         real(WP), dimension(3) :: X0
+         real(WP) :: dx
+         ! Read in mesh size and desired partition
+         call param_read('Farfield dx',dx)
+         call param_read('Farfield nx',meshsize)
+         call param_read('Farfield partition',partition)
+         X0=-0.5_WP*real(meshsize,WP)*dx      !< This assumes that the domain is centered on (0,0,0)
+         call param_read('Farfield X0',X0(1)) !< This shifts the domain in x based on user input
+         ! Initialize the farfield solver
+         call ff%init(dx=dx,meshsize=meshsize,startloc=X0,group=group,partition=partition)
+         ! Provide thermodynamic model
+         ff%fs%getP=>get_PG; ff%fs%getC=>get_CG; ff%fs%getS=>get_SG; ff%fs%getT=>get_TG
+         ! We finally need to transfer our viscosity explicitly...
+         ff%cst_visc=viscG
+      end block setup_ff
+      
+      ! Generate initial conditions for far-field shock problem
+      initialize_ff: block
+         integer :: i,j,k
+         ! Initialize primary variables to normal shock
+         do k=ff%cfg%kmino_,ff%cfg%kmaxo_; do j=ff%cfg%jmino_,ff%cfg%jmaxo_; do i=ff%cfg%imino_,ff%cfg%imaxo_
+            ff%fs%U(i,j,k)  =u2*Hshock(Xs-ff%fs%cfg%x(i),delta=0.5_WP*ff%fs%dx)
+            ff%fs%V(i,j,k)  =0.0_WP
+            ff%fs%W(i,j,k)  =0.0_WP
+            ff%fs%Q(i,j,k,1)=rho1+(rho2-rho1)*Hshock(Xs-ff%fs%cfg%xm(i),delta=0.5_WP*ff%fs%dx)
+            ff%fs%P(i,j,k)  =p1  +(p2  -p1  )*Hshock(Xs-ff%fs%cfg%xm(i),delta=0.5_WP*ff%fs%dx)
+            ff%fs%I(i,j,k)  =(ff%fs%P(i,j,k)+GammaG*PinfG)/(ff%fs%Q(i,j,k,1)*(GammaG-1.0_WP))
+         end do; end do; end do
+         ! Initialize conserved variables
+         ff%fs%Q(:,:,:,2)=ff%fs%Q(:,:,:,1)*ff%fs%I
+         call ff%fs%get_momentum()
+         ! Rebuild primitive variables
+         call ff%fs%get_primitive()
+         ! Interpolate velocity
+         call ff%fs%interp_vel(ff%Ui,ff%Vi,ff%Wi)
+         ! Compute local Mach number
+         ff%Ma=sqrt(ff%Ui**2+ff%Vi**2+ff%Wi**2)/ff%fs%C
+         ! Perform monitoring
+         call ff%output_monitor()
+      end block initialize_ff
+      
       ! Initialize Ensight output event and perform initial Ensight output
       initialize_ensight: block
          use param, only: param_read
@@ -349,6 +399,7 @@ contains
          call param_read('Ensight output period',ens_evt%tper)
          if (ens_evt%occurs()) then
             call sd%output_ensight(t=sd%time%t)
+            call ff%output_ensight(t=sd%time%t)
          end if
       end block initialize_ensight
       
@@ -370,13 +421,21 @@ contains
       
       ! Shock-drop drives overall time integration
       do while (.not.sd%time%done())
+         
          ! Advance shock-drop simulation
          call sd%step()
+         
+         ! Advance farfield simulation
+         call ff%step(dt=sd%time%dt)
+         
          ! Perform monitoring
          call sd%output_monitor()
+         call ff%output_monitor()
+         
          ! Perform Ensight output
          if (ens_evt%occurs()) then
             call sd%output_ensight(t=sd%time%t)
+            call ff%output_ensight(t=sd%time%t)
          end if
       end do
       
@@ -386,10 +445,8 @@ contains
    !> Finalize the NGA2 simulation
    subroutine simulation_final
       implicit none
-      
-      ! Finalize shock-drop simulation
       call sd%final()
-      
+      call ff%final()
    end subroutine simulation_final
    
    

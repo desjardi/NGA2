@@ -27,3 +27,11 @@ Shock-drop nx : 300 300 1
 !- Time ---------------
 Shock-drop dt :  2.5e-3
 Shock-drop CFL : 1
+
+# Far-field simulation
+!- Parallelization ----
+Farfield partition : 2 4 1
+!- Mesh ---------------
+Farfield dx : 0.02
+Farfield nx : 300 300 1
+Farfield X0 : -2

@@ -41,8 +41,8 @@ module shockdrop_class
       real(WP), dimension(:,:,:)    , allocatable :: Ui,Vi,Wi,Ma,beta,visc
       
       !> Constant phasic kinematic viscosities
-      real(WP) :: viscL,viscG
-
+      real(WP) :: cst_viscL,cst_viscG
+      
       !> Drop info
       real(WP) :: Vcore,Mcore,Xcore,Ycore,Zcore
       
@@ -349,7 +349,7 @@ contains
       call this%fs%apply_relax()
       ! Recompute primitive variables
       call this%fs%get_primitive()
-
+      
       ! Apply boundary conditions
       call this%apply_bconds()
       
@@ -418,7 +418,7 @@ contains
          Lrho=sum(       this%fs%Q (i-1:i+1,j-1:j+1,k-1:k+1,1))/(Lvof+eps)
          Grho=sum(       this%fs%Q (i-1:i+1,j-1:j+1,k-1:k+1,2))/(Gvof+eps)
          ! Harmonic average of VISC
-         Lvisc=Lrho*(this%viscL+this%visc(i,j,k)); Gvisc=Grho*(this%viscG+this%visc(i,j,k)); this%fs%VISC(i,j,k)=(Lvof+Gvof)/(Lvof/max(Lvisc,eps)+Gvof/max(Gvisc,eps))
+         Lvisc=Lrho*(this%cst_viscL+this%visc(i,j,k)); Gvisc=Grho*(this%cst_viscG+this%visc(i,j,k)); this%fs%VISC(i,j,k)=(Lvof+Gvof)/(Lvof/max(Lvisc,eps)+Gvof/max(Gvisc,eps))
          ! Harmonic average of BETA
          Lbeta=Lrho*this%beta(i,j,k); Gbeta=Grho*this%beta(i,j,k); this%fs%BETA(i,j,k)=(Lvof+Gvof)/(Lvof/max(Lbeta,eps)+Gvof/max(Gbeta,eps))
       end do; end do; end do
