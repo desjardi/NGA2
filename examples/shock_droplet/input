@@ -23,7 +23,7 @@ Ensight output period : 0.1
 Shock-drop partition : 2 4 1
 !- Mesh ---------------
 Shock-drop dx : 0.01
-Shock-drop nx : 300 300 1
+Shock-drop nx : 300 400 1
 !- Time ---------------
 Shock-drop dt :  2.5e-3
 Shock-drop CFL : 1
@@ -32,6 +32,6 @@ Shock-drop CFL : 1
 !- Parallelization ----
 Farfield partition : 2 4 1
 !- Mesh ---------------
-Farfield dx : 0.02
+Farfield dx : 0.04
 Farfield nx : 300 300 1
 Farfield X0 : -2

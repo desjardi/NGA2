@@ -3,6 +3,7 @@ module simulation
    use precision,       only: WP
    use shockdrop_class, only: shockdrop
    use ffshock_class,   only: ffshock
+   use coupler_class,   only: coupler
    use event_class,     only: event
    implicit none
    private; public :: simulation_init,simulation_run,simulation_final
@@ -12,6 +13,10 @@ module simulation
    
    !> Far-field shock simulation
    type(ffshock) :: ff
+   
+   !> Couplers between domains
+   type(coupler) :: sd2ff
+   type(coupler) :: ff2sd
    
    !> Ensight output event
    type(event) :: ens_evt
@@ -392,6 +397,13 @@ contains
          call ff%output_monitor()
       end block initialize_ff
       
+      ! Create couplers
+      create_couplers: block
+         use parallel, only: group
+         sd2ff=coupler(src_grp=group,dst_grp=group,name='sd2ff'); call sd2ff%set_src(sd%cfg); call sd2ff%set_dst(ff%cfg); call sd2ff%initialize()
+         ff2sd=coupler(src_grp=group,dst_grp=group,name='ff2sd'); call ff2sd%set_src(ff%cfg); call ff2sd%set_dst(sd%cfg); call ff2sd%initialize()
+      end block create_couplers
+      
       ! Initialize Ensight output event and perform initial Ensight output
       initialize_ensight: block
          use param, only: param_read
@@ -422,6 +434,10 @@ contains
       ! Shock-drop drives overall time integration
       do while (.not.sd%time%done())
          
+         ! Handle coupling
+         call couple_sd2ff()
+         call couple_ff2sd()
+         
          ! Advance shock-drop simulation
          call sd%step()
          
@@ -437,9 +453,242 @@ contains
             call sd%output_ensight(t=sd%time%t)
             call ff%output_ensight(t=sd%time%t)
          end if
+         
       end do
       
    end subroutine simulation_run
+   
+   
+   !> Coupling from sd to ff
+   subroutine couple_sd2ff()
+      implicit none
+      integer  :: i,j,k,n
+      real(WP) :: coeff,lambda,strength
+      real(WP), dimension(:,:,:,:), allocatable :: Q
+      
+      ! Sponge parameters
+      lambda=5.0_WP*ff%fs%dx
+      strength=1.0_WP
+      
+      ! Allocate storage for transfered variables
+      allocate(Q(ff%fs%cfg%imino_:ff%fs%cfg%imaxo_,ff%fs%cfg%jmino_:ff%fs%cfg%jmaxo_,ff%fs%cfg%kmino_:ff%fs%cfg%kmaxo_,1:sd%fs%nQ)); Q=0.0_WP
+      
+      ! Exchange data using coupler
+      do n=1,4
+         call sd2ff%push(sd%fs%Q(:,:,:,n)); call sd2ff%transfer(); call sd2ff%pull(Q(:,:,:,n))
+      end do
+      call sd2ff%push(sd%Ui); call sd2ff%transfer(); call sd2ff%pull(Q(:,:,:,5))
+      call sd2ff%push(sd%Vi); call sd2ff%transfer(); call sd2ff%pull(Q(:,:,:,6))
+      call sd2ff%push(sd%Wi); call sd2ff%transfer(); call sd2ff%pull(Q(:,:,:,7))
+      
+      ! Compute nudging increment
+      do k=ff%cfg%kmino_,ff%cfg%kmaxo_; do j=ff%cfg%jmino_,ff%cfg%jmaxo_; do i=ff%cfg%imino_,ff%cfg%imaxo_
+         ! Cell-centered nudging coefficient
+         coeff=strength*sponge_forcing(inner=sd%cfg%pgrid,pos=[ff%cfg%xm(i),ff%cfg%ym(j),ff%cfg%zm(k)],delta=lambda)
+         ! Compute cell-centered momentum increment
+         Q(i,j,k,5)=coeff*(Q(i,j,k,2)*Q(i,j,k,5)-ff%fs%Q(i,j,k,1)*ff%Ui(i,j,k))
+         Q(i,j,k,6)=coeff*(Q(i,j,k,2)*Q(i,j,k,6)-ff%fs%Q(i,j,k,1)*ff%Vi(i,j,k))
+         Q(i,j,k,7)=coeff*(Q(i,j,k,2)*Q(i,j,k,7)-ff%fs%Q(i,j,k,1)*ff%Wi(i,j,k))
+         ! Compute RHO increment
+         Q(i,j,k,1)=0.0_WP
+         Q(i,j,k,2)=coeff*(Q(i,j,k,2)-ff%fs%Q(i,j,k,1))
+         ! Compute RHO*I increment
+         Q(i,j,k,3)=0.0_WP
+         Q(i,j,k,4)=coeff*(Q(i,j,k,4)-ff%fs%Q(i,j,k,2))
+      end do; end do; end do
+      
+      ! Second pass to apply forcing
+      do k=ff%cfg%kmino_+1,ff%cfg%kmaxo_; do j=ff%cfg%jmino_+1,ff%cfg%jmaxo_; do i=ff%cfg%imino_+1,ff%cfg%imaxo_
+         ff%fs%Q(i,j,k,1)=ff%fs%Q(i,j,k,1)+Q(i,j,k,2)
+         ff%fs%Q(i,j,k,2)=ff%fs%Q(i,j,k,2)+Q(i,j,k,4)
+         ff%fs%Q(i,j,k,3)=ff%fs%Q(i,j,k,3)+0.5_WP*sum(Q(i-1:i,j,k,5))
+         ff%fs%Q(i,j,k,4)=ff%fs%Q(i,j,k,4)+0.5_WP*sum(Q(i,j-1:j,k,6))
+         ff%fs%Q(i,j,k,5)=ff%fs%Q(i,j,k,5)+0.5_WP*sum(Q(i,j,k-1:k,7))
+      end do; end do; end do
+      
+      ! Communicate conserved variables
+      do n=1,ff%fs%nQ; call ff%cfg%sync(ff%fs%Q(:,:,:,n)); end do
+      
+      ! Recompute primitive variables
+      call ff%fs%get_primitive()
+      
+      ! Free memory
+      deallocate(Q)
+      
+   contains
+      !> Function that calculates the signed distance between to domains
+      real(WP) function sponge_forcing(inner,pos,delta)
+         use pgrid_class, only: pgrid
+         use mathtools,   only: Pi
+         implicit none
+         type(pgrid), intent(in) :: inner
+         real(WP), dimension(3), intent(in) :: pos
+         real(WP), intent(in) :: delta
+         real(WP) :: dx,dy,dz,dx_in,dy_in,dz_in
+         logical :: is_out_x,is_out_y,is_out_z
+         ! X direction
+         if (inner%nx.gt.1) then
+            dx=max(inner%x(inner%imin)-pos(1),0.0_WP,pos(1)-inner%x(inner%imax+1))
+            dx_in=min(inner%x(inner%imax+1)-pos(1),pos(1)-inner%x(inner%imin))
+            is_out_x=(pos(1).lt.inner%x(inner%imin).or.pos(1).gt.inner%x(inner%imax+1))
+         else
+            dx=0.0_WP
+            dx_in=huge(1.0_WP)
+            is_out_x=.false.
+         end if
+         ! Y direction
+         if (inner%ny.gt.1) then
+            dy=max(inner%y(inner%jmin)-pos(2),0.0_WP,pos(2)-inner%y(inner%jmax+1))
+            dy_in=min(inner%y(inner%jmax+1)-pos(2),pos(2)-inner%y(inner%jmin))
+            is_out_y=(pos(2).lt.inner%y(inner%jmin).or.pos(2).gt.inner%y(inner%jmax+1))
+         else
+            dy=0.0_WP
+            dy_in=huge(1.0_WP)
+            is_out_y=.false.
+         end if
+         ! Z direction
+         if (inner%nz.gt.1) then
+            dz=max(inner%z(inner%kmin)-pos(3),0.0_WP,pos(3)-inner%z(inner%kmax+1))
+            dz_in=min(inner%z(inner%kmax+1)-pos(3),pos(3)-inner%z(inner%kmin))
+            is_out_z=(pos(3).lt.inner%z(inner%kmin).or.pos(3).gt.inner%z(inner%kmax+1))
+         else
+            dz=0.0_WP
+            dz_in=huge(1.0_WP)
+            is_out_z=.false.
+         end if
+         ! Signed distance
+         if (is_out_x.or.is_out_y.or.is_out_z) then
+            sponge_forcing=-sqrt(dx**2+dy**2+dz**2)
+         else
+            sponge_forcing=min(dx_in,dy_in,dz_in)
+         end if
+         ! Return a smooth forcing coefficient in [0,1]
+         sponge_forcing=sponge_forcing/delta
+         if (sponge_forcing.le.0.0_WP) then
+            sponge_forcing=0.0_WP
+         else if (sponge_forcing.ge.1.0_WP) then
+            sponge_forcing=0.0_WP
+         else
+            sponge_forcing=sin(Pi*sponge_forcing)**2!4.0_WP*sponge_forcing*(1.0_WP-sponge_forcing)
+         end if
+      end function sponge_forcing
+   end subroutine couple_sd2ff
+   
+   
+   !> Coupling from ff to sd
+   subroutine couple_ff2sd()
+      implicit none
+      integer  :: i,j,k,n
+      real(WP) :: coeff,lambda,strength
+      real(WP), dimension(:,:,:,:), allocatable :: Q
+      
+      ! Sponge parameters
+      lambda=5.0_WP*sd%fs%dx
+      strength=0.25_WP
+      
+      ! Allocate storage for transfered variables
+      allocate(Q(sd%fs%cfg%imino_:sd%fs%cfg%imaxo_,sd%fs%cfg%jmino_:sd%fs%cfg%jmaxo_,sd%fs%cfg%kmino_:sd%fs%cfg%kmaxo_,1:ff%fs%nQ)); Q=0.0_WP
+      
+      ! Exchange data using coupler
+      do n=1,2
+         call ff2sd%push(ff%fs%Q(:,:,:,n)); call ff2sd%transfer(); call ff2sd%pull(Q(:,:,:,n))
+      end do
+      call ff2sd%push(ff%Ui); call ff2sd%transfer(); call ff2sd%pull(Q(:,:,:,3))
+      call ff2sd%push(ff%Vi); call ff2sd%transfer(); call ff2sd%pull(Q(:,:,:,4))
+      call ff2sd%push(ff%Wi); call ff2sd%transfer(); call ff2sd%pull(Q(:,:,:,5))
+      
+      ! Compute nudging increment
+      do k=sd%cfg%kmino_,sd%cfg%kmaxo_; do j=sd%cfg%jmino_,sd%cfg%jmaxo_; do i=sd%cfg%imino_,sd%cfg%imaxo_
+         ! Cell-centered nudging coefficient
+         coeff=strength*sponge_forcing(inner=sd%cfg%pgrid,pos=[sd%cfg%xm(i),sd%cfg%ym(j),sd%cfg%zm(k)],delta=lambda)
+         ! Compute cell-centered momentum increment
+         Q(i,j,k,3)=coeff*((Q(i,j,k,1)+sd%fs%Q(i,j,k,1))*Q(i,j,k,3)-sum(sd%fs%Q(i,j,k,1:2))*sd%Ui(i,j,k))
+         Q(i,j,k,4)=coeff*((Q(i,j,k,1)+sd%fs%Q(i,j,k,1))*Q(i,j,k,4)-sum(sd%fs%Q(i,j,k,1:2))*sd%Vi(i,j,k))
+         Q(i,j,k,5)=coeff*((Q(i,j,k,1)+sd%fs%Q(i,j,k,1))*Q(i,j,k,5)-sum(sd%fs%Q(i,j,k,1:2))*sd%Wi(i,j,k))
+         ! Compute RHO increment
+         Q(i,j,k,1)=coeff*(Q(i,j,k,1)-sd%fs%Q(i,j,k,2))
+         ! Compute RHO*I increment
+         Q(i,j,k,2)=coeff*(Q(i,j,k,2)-sd%fs%Q(i,j,k,4))
+      end do; end do; end do
+      
+      ! Second pass to apply forcing
+      do k=sd%cfg%kmino_+1,sd%cfg%kmaxo_; do j=sd%cfg%jmino_+1,sd%cfg%jmaxo_; do i=sd%cfg%imino_+1,sd%cfg%imaxo_
+         sd%fs%Q(i,j,k,1)=sd%fs%Q(i,j,k,1)
+         sd%fs%Q(i,j,k,2)=sd%fs%Q(i,j,k,2)+Q(i,j,k,1)
+         sd%fs%Q(i,j,k,3)=sd%fs%Q(i,j,k,3)
+         sd%fs%Q(i,j,k,4)=sd%fs%Q(i,j,k,4)+Q(i,j,k,2)
+         sd%fs%Q(i,j,k,5)=sd%fs%Q(i,j,k,5)+0.5_WP*sum(Q(i-1:i,j,k,3))
+         sd%fs%Q(i,j,k,6)=sd%fs%Q(i,j,k,6)+0.5_WP*sum(Q(i,j-1:j,k,4))
+         sd%fs%Q(i,j,k,7)=sd%fs%Q(i,j,k,7)+0.5_WP*sum(Q(i,j,k-1:k,5))
+      end do; end do; end do
+      
+      ! Communicate conserved variables
+      do n=1,sd%fs%nQ; call sd%cfg%sync(sd%fs%Q(:,:,:,n)); end do
+      
+      ! Recompute primitive variables
+      call sd%fs%get_primitive()
+      
+      ! Free memory
+      deallocate(Q)
+      
+   contains
+      !> Function that calculates the signed distance between to domains
+      real(WP) function sponge_forcing(inner,pos,delta)
+         use pgrid_class, only: pgrid
+         use mathtools,   only: Pi
+         implicit none
+         type(pgrid), intent(in) :: inner
+         real(WP), dimension(3), intent(in) :: pos
+         real(WP), intent(in) :: delta
+         real(WP) :: dx,dy,dz,dx_in,dy_in,dz_in
+         logical :: is_out_x,is_out_y,is_out_z
+         ! X direction
+         if (inner%nx.gt.1) then ! Only force in -x
+            dx=max(inner%x(inner%imin)-pos(1),0.0_WP)!,pos(1)-inner%x(inner%imax+1))
+            dx_in=pos(1)-inner%x(inner%imin)!min(pos(1)-inner%x(inner%imin),inner%x(inner%imax+1)-pos(1))
+            is_out_x=(pos(1).lt.inner%x(inner%imin))!.or.pos(1).gt.inner%x(inner%imax+1))
+         else
+            dx=0.0_WP
+            dx_in=huge(1.0_WP)
+            is_out_x=.false.
+         end if
+         ! Y direction
+         if (inner%ny.gt.1) then
+            dy=max(inner%y(inner%jmin)-pos(2),0.0_WP,pos(2)-inner%y(inner%jmax+1))
+            dy_in=min(inner%y(inner%jmax+1)-pos(2),pos(2)-inner%y(inner%jmin))
+            is_out_y=(pos(2).lt.inner%y(inner%jmin).or.pos(2).gt.inner%y(inner%jmax+1))
+         else
+            dy=0.0_WP
+            dy_in=huge(1.0_WP)
+            is_out_y=.false.
+         end if
+         ! Z direction
+         if (inner%nz.gt.1) then
+            dz=max(inner%z(inner%kmin)-pos(3),0.0_WP,pos(3)-inner%z(inner%kmax+1))
+            dz_in=min(inner%z(inner%kmax+1)-pos(3),pos(3)-inner%z(inner%kmin))
+            is_out_z=(pos(3).lt.inner%z(inner%kmin).or.pos(3).gt.inner%z(inner%kmax+1))
+         else
+            dz=0.0_WP
+            dz_in=huge(1.0_WP)
+            is_out_z=.false.
+         end if
+         ! Signed distance
+         if (is_out_x.or.is_out_y.or.is_out_z) then
+            sponge_forcing=-sqrt(dx**2+dy**2+dz**2)
+         else
+            sponge_forcing=min(dx_in,dy_in,dz_in)
+         end if
+         ! Return a smooth forcing coefficient in [0,1]
+         sponge_forcing=sponge_forcing/delta
+         if (sponge_forcing.ge.1.0_WP) then
+            sponge_forcing=0.0_WP
+         else if (sponge_forcing.ge.0.0_WP) then
+            sponge_forcing=(0.5_WP*(1.0_WP+cos(Pi*sponge_forcing)))**4
+         else
+            sponge_forcing=1.0_WP
+         end if
+      end function sponge_forcing
+   end subroutine couple_ff2sd
    
    
    !> Finalize the NGA2 simulation
