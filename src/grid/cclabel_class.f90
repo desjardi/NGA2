@@ -498,6 +498,8 @@ contains
          integer :: ierr,bigid,i,j,k
          integer, dimension(:), allocatable :: ncells
          type(struct_type) :: tmp
+         ! Skip if no structure was found
+         if (this%nstruct.eq.0) exit rename_largest_structure
          ! Loop over all structures and count total number of cells to find ID of largest structure
          allocate(ncells(1:this%nstruct)); ncells=this%struct(:)%n_
          call MPI_ALLREDUCE(MPI_IN_PLACE,ncells,this%nstruct,MPI_INTEGER,MPI_SUM,this%pg%comm,ierr)
