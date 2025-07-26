@@ -97,6 +97,7 @@ module pgrid_class
       procedure :: get_ijk_local                                                !< Function that returns closest mesh indices to a provided position - local to processor subdomain
       procedure :: get_ijk_global                                               !< Function that returns closest mesh indices to a provided position - global over full pgrid
       procedure :: get_ijk_from_lexico,get_lexico_from_ijk                      !< Functions that convert a lexicographic index to (i,j,k) and vice-versa
+      procedure :: finalize=>pgrid_finalize                                     !< Finalize pgrid object
    end type pgrid
    
    
@@ -1260,6 +1261,78 @@ contains
       integer :: lexico
       lexico=(ijk(1)-this%imino_)+(ijk(2)-this%jmino_)*this%nxo_+(ijk(3)-this%kmino_)*this%nxo_*this%nyo_
    end function get_lexico_from_ijk
+   
+   
+   !> Finalize pgrid object
+   subroutine pgrid_finalize(this)
+      implicit none
+      class(pgrid), intent(inout) :: this
+      integer :: ierr
+      ! Do not free group as it was passed to us
+      this%group=MPI_GROUP_NULL
+      ! Free MPI_Comm if valid and not predefined
+      if (this%comm.ne.MPI_COMM_NULL.and.this%comm.ne.MPI_COMM_WORLD.and.this%comm.ne.MPI_COMM_SELF) then
+         call MPI_COMM_FREE(this%comm,ierr)
+         this%comm=MPI_COMM_NULL
+      end if
+      ! Free 1D communicators
+      if (this%xcomm.ne.MPI_COMM_NULL.and.this%xcomm.ne.MPI_COMM_WORLD.and.this%xcomm.ne.MPI_COMM_SELF) then
+         call MPI_COMM_FREE(this%xcomm,ierr)
+         this%xcomm=MPI_COMM_NULL
+      end if
+      if (this%ycomm.ne.MPI_COMM_NULL.and.this%ycomm.ne.MPI_COMM_WORLD.and.this%ycomm.ne.MPI_COMM_SELF) then
+         call MPI_COMM_FREE(this%ycomm,ierr)
+         this%ycomm=MPI_COMM_NULL
+      end if
+      if (this%zcomm.ne.MPI_COMM_NULL.and.this%zcomm.ne.MPI_COMM_WORLD.and.this%zcomm.ne.MPI_COMM_SELF) then
+         call MPI_COMM_FREE(this%zcomm,ierr)
+         this%zcomm=MPI_COMM_NULL
+      end if
+      ! Free 2D communicators
+      if (this%xycomm.ne.MPI_COMM_NULL.and.this%xycomm.ne.MPI_COMM_WORLD.and.this%xycomm.ne.MPI_COMM_SELF) then
+         call MPI_COMM_FREE(this%xycomm,ierr)
+         this%xycomm=MPI_COMM_NULL
+      end if
+      if (this%yzcomm.ne.MPI_COMM_NULL.and.this%yzcomm.ne.MPI_COMM_WORLD.and.this%yzcomm.ne.MPI_COMM_SELF) then
+         call MPI_COMM_FREE(this%yzcomm,ierr)
+         this%yzcomm=MPI_COMM_NULL
+      end if
+      if (this%zxcomm.ne.MPI_COMM_NULL.and.this%zxcomm.ne.MPI_COMM_WORLD.and.this%zxcomm.ne.MPI_COMM_SELF) then
+         call MPI_COMM_FREE(this%zxcomm,ierr)
+         this%zxcomm=MPI_COMM_NULL
+      end if
+      ! Free MPI_Datatypes if valid
+      if (this%view.ne.MPI_DATATYPE_NULL) then
+         call MPI_TYPE_FREE(this%view,ierr)
+         this%view=MPI_DATATYPE_NULL
+      end if
+      if (this%Iview.ne.MPI_DATATYPE_NULL) then
+         call MPI_TYPE_FREE(this%Iview,ierr)
+         this%Iview=MPI_DATATYPE_NULL
+      end if
+      if (this%SPview.ne.MPI_DATATYPE_NULL) then
+         call MPI_TYPE_FREE(this%SPview,ierr)
+         this%SPview=MPI_DATATYPE_NULL
+      end if
+      ! Deallocate all arrays
+      if (allocated(this%xcoord))      deallocate(this%xcoord)
+      if (allocated(this%ycoord))      deallocate(this%ycoord)
+      if (allocated(this%zcoord))      deallocate(this%zcoord)
+      if (allocated(this%syncbuf_x1))  deallocate(this%syncbuf_x1)
+      if (allocated(this%syncbuf_x2))  deallocate(this%syncbuf_x2)
+      if (allocated(this%syncbuf_y1))  deallocate(this%syncbuf_y1)
+      if (allocated(this%syncbuf_y2))  deallocate(this%syncbuf_y2)
+      if (allocated(this%syncbuf_z1))  deallocate(this%syncbuf_z1)
+      if (allocated(this%syncbuf_z2))  deallocate(this%syncbuf_z2)
+      if (allocated(this%isyncbuf_x1)) deallocate(this%isyncbuf_x1)
+      if (allocated(this%isyncbuf_x2)) deallocate(this%isyncbuf_x2)
+      if (allocated(this%isyncbuf_y1)) deallocate(this%isyncbuf_y1)
+      if (allocated(this%isyncbuf_y2)) deallocate(this%isyncbuf_y2)
+      if (allocated(this%isyncbuf_z1)) deallocate(this%isyncbuf_z1)
+      if (allocated(this%isyncbuf_z2)) deallocate(this%isyncbuf_z2)
+      ! Destroy sgrid
+      call this%sgrid%finalize()
+   end subroutine pgrid_finalize
    
    
 end module pgrid_class

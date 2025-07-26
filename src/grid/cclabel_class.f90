@@ -41,6 +41,7 @@ module cclabel_class
       procedure :: initialize
       procedure :: build
       procedure :: empty
+      procedure :: finalize
    end type cclabel
    
    !> Type of the make_label function used to generate a structure
@@ -647,6 +648,17 @@ contains
       ! Reset id to zero
       this%id=0
    end subroutine empty
+   
+   
+   !> Finalize CCL object
+   subroutine finalize(this)
+      implicit none
+      class(cclabel), intent(inout) :: this
+      call this%empty()
+      if (allocated(this%id)) deallocate(this%id)
+      nullify(this%pg)
+      this%name='UNNAMED_CCL'
+   end subroutine finalize
    
    
 end module cclabel_class

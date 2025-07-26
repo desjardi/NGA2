@@ -142,6 +142,7 @@ module mpcomp_class
       procedure :: get_cfl                                !< Calculate maximum CFL
       procedure :: get_info                               !< Calculate maximum field values
       procedure :: update_surfmesh                        !< Update a surfmesh object using current polygons
+      procedure :: finalize                               !< Finalize mpcomp solver object
    end type mpcomp
    
    !> Interfaces for user-defined function
@@ -2143,6 +2144,72 @@ contains
       end if
       
    end subroutine mpcomp_print
+   
+   
+   !> Finalize mpcomp solver object
+   subroutine finalize(this)
+      implicit none
+      class(mpcomp), intent(inout) :: this
+      ! Nullify all function pointers
+      nullify(this%getPL)
+      nullify(this%getTL)
+      nullify(this%getCL)
+      nullify(this%getSL)
+      nullify(this%getPG)
+      nullify(this%getTG)
+      nullify(this%getCG)
+      nullify(this%getSG)
+      nullify(this%relax)
+      ! Deallocate allocatable arrays
+      this%nQ=0
+      if (allocated(this%VF))        deallocate(this%VF)
+      if (allocated(this%VFold))     deallocate(this%VFold)
+      if (allocated(this%BL))        deallocate(this%BL)
+      if (allocated(this%BLold))     deallocate(this%BLold)
+      if (allocated(this%BG))        deallocate(this%BG)
+      if (allocated(this%BGold))     deallocate(this%BGold)
+      if (allocated(this%Q))         deallocate(this%Q)
+      if (allocated(this%Qold))      deallocate(this%Qold)
+      if (allocated(this%U))         deallocate(this%U)
+      if (allocated(this%V))         deallocate(this%V)
+      if (allocated(this%W))         deallocate(this%W)
+      if (allocated(this%RHOL))      deallocate(this%RHOL)
+      if (allocated(this%RHOG))      deallocate(this%RHOG)
+      if (allocated(this%RHOLold))   deallocate(this%RHOLold)
+      if (allocated(this%RHOGold))   deallocate(this%RHOGold)
+      if (allocated(this%IL))        deallocate(this%IL)
+      if (allocated(this%IG))        deallocate(this%IG)
+      if (allocated(this%ILold))     deallocate(this%ILold)
+      if (allocated(this%IGold))     deallocate(this%IGold)
+      if (allocated(this%PL))        deallocate(this%PL)
+      if (allocated(this%PG))        deallocate(this%PG)
+      if (allocated(this%PLold))     deallocate(this%PLold)
+      if (allocated(this%PGold))     deallocate(this%PGold)
+      if (allocated(this%TL))        deallocate(this%TL)
+      if (allocated(this%TG))        deallocate(this%TG)
+      if (allocated(this%C))         deallocate(this%C)
+      if (allocated(this%VISC))      deallocate(this%VISC)
+      if (allocated(this%BETA))      deallocate(this%BETA)
+      if (allocated(this%DIFF))      deallocate(this%DIFF)
+      if (allocated(this%Qmin))      deallocate(this%Qmin)
+      if (allocated(this%Qmax))      deallocate(this%Qmax)
+      if (allocated(this%Qint))      deallocate(this%Qint)
+      if (allocated(this%SLdQ))      deallocate(this%SLdQ)
+      if (allocated(this%iSL))       deallocate(this%iSL)
+      ! Deallocate IRL data - should be automatically deleted by C++
+      if (allocated(this%PLIC))      deallocate(this%PLIC)
+      if (allocated(this%PLICold))   deallocate(this%PLICold)
+      if (allocated(this%localizer)) deallocate(this%localizer)
+      if (allocated(this%localized_separator_link)) deallocate(this%localized_separator_link)
+      if (allocated(this%localizer_link)) deallocate(this%localizer_link)
+      if (allocated(this%interface_polygon)) deallocate(this%interface_polygon)
+      ! Nullify config pointer
+      nullify(this%cfg)
+      ! Finalize timers
+      call this%trhs%finalize()
+      call this%tsl%finalize()
+      call this%tplic%finalize()
+   end subroutine finalize
    
    
 end module mpcomp_class

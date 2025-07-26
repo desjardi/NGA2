@@ -33,6 +33,7 @@ module config_class
       procedure :: get_velocity                                !< Function that interpolates a provided velocity field staggered on the pgrid to a point
       procedure :: get_scalar                                  !< Function that interpolates a provided scalar field centered on the pgrid to a point
       procedure :: maximum                                     !< Find global max of variable on config for VF>0
+      procedure :: finalize=>config_finalize                   !< Finalize config
    end type config
    
    
@@ -531,6 +532,17 @@ contains
          call geomfile%write(trim(adjustl(file))//'.geom')
       end block write_VF
    end subroutine config_write
+   
+   
+   !> Finalize config object
+   subroutine config_finalize(this)
+      implicit none
+      class(config), intent(inout) :: this
+      ! Deallocate arrays
+      deallocate(this%vol,this%meshsize,this%VF)
+      ! Destroy pgrid
+      call this%pgrid%finalize()
+   end subroutine config_finalize
    
    
 end module config_class

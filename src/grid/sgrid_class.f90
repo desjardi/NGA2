@@ -57,6 +57,7 @@ module sgrid_class
       procedure :: print=>sgrid_print                  !< Output grid to screen
       procedure :: log  =>sgrid_log                    !< Output grid to log file
       procedure :: write=>sgrid_write                  !< Output grid to grid file
+      procedure :: finalize=>sgrid_finalize            !< Finalize sgrid object
    end type sgrid
    
    !> Declare basic grid constructor
@@ -339,5 +340,30 @@ contains
       if (verbose.gt.0) call log('Grid file written: '//trim(adjustl(file)))
       
    end subroutine sgrid_write
+   
+   
+   !> Finalize sgrid object
+   subroutine sgrid_finalize(this)
+      implicit none
+      class(sgrid), intent(inout) :: this
+      if (allocated(this%x))    deallocate(this%x)
+      if (allocated(this%y))    deallocate(this%y)
+      if (allocated(this%z))    deallocate(this%z)
+      if (allocated(this%xm))   deallocate(this%xm)
+      if (allocated(this%ym))   deallocate(this%ym)
+      if (allocated(this%zm))   deallocate(this%zm)
+      if (allocated(this%dx))   deallocate(this%dx)
+      if (allocated(this%dxm))  deallocate(this%dxm)
+      if (allocated(this%dy))   deallocate(this%dy)
+      if (allocated(this%dym))  deallocate(this%dym)
+      if (allocated(this%dz))   deallocate(this%dz)
+      if (allocated(this%dzm))  deallocate(this%dzm)
+      if (allocated(this%dxi))  deallocate(this%dxi)
+      if (allocated(this%dxmi)) deallocate(this%dxmi)
+      if (allocated(this%dyi))  deallocate(this%dyi)
+      if (allocated(this%dymi)) deallocate(this%dymi)
+      if (allocated(this%dzi))  deallocate(this%dzi)
+      if (allocated(this%dzmi)) deallocate(this%dzmi)
+   end subroutine sgrid_finalize
    
 end module sgrid_class

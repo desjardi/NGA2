@@ -38,11 +38,11 @@ module ffshock_class
       real(WP) :: cst_visc
       
    contains
-      procedure :: init                            !< Initialize shock-drop simulation
-      procedure :: step                            !< Advance shock-drop simulation by one time step
-      procedure :: final                           !< Finalize shock-drop simulation
-      procedure :: output_monitor                  !< Monitoring for shock-drop case
-      procedure :: output_ensight                  !< Ensight output for shock-drop case
+      procedure :: initialize                      !< Initialize farfield shock simulation
+      procedure :: finalize                        !< Finalize farfield shock simulation
+      procedure :: step                            !< Advance farfield shock simulation by one time step
+      procedure :: output_monitor                  !< Monitoring for farfield shock case
+      procedure :: output_ensight                  !< Ensight output for farfield shock case
       procedure, private :: prepare_viscosities    !< Prepare viscosities
       procedure, private :: apply_bconds           !< Apply boundary conditions
    end type ffshock
@@ -51,7 +51,7 @@ contains
    
    
    !> Initialization of a far-field shock problem
-   subroutine init(this,dx,meshsize,startloc,group,partition)
+   subroutine initialize(this,dx,meshsize,startloc,group,partition)
       use mpi_f08, only: MPI_Group
       implicit none
       class(ffshock), intent(inout) :: this
@@ -167,7 +167,7 @@ contains
          call this%consfile%add_column(this%fs%RHOSint,'Entropy')
       end block create_monitor
       
-   end subroutine init
+   end subroutine initialize
    
    
    !> Take one time step
@@ -225,15 +225,6 @@ contains
       this%Ma=sqrt(this%Ui**2+this%Vi**2+this%Wi**2)/this%fs%C
       
    end subroutine step
-   
-   
-   !> Finalize the shockdrop problem
-   subroutine final(this)
-      implicit none
-      class(ffshock), intent(inout) :: this
-      ! Deallocate work arrays
-      deallocate(this%dQdt,this%Ui,this%Vi,this%Wi,this%Ma,this%beta,this%visc)
-   end subroutine final
    
    
    !> Perform and output monitoring for the far-field shock problem
@@ -366,6 +357,23 @@ contains
       call this%fs%get_momentum()
       
    end subroutine apply_bconds
+   
+   
+   !> Finalize the shockdrop problem
+   subroutine finalize(this)
+      implicit none
+      class(ffshock), intent(inout) :: this
+      ! Deallocate work arrays
+      deallocate(this%dQdt,this%Ui,this%Vi,this%Wi,this%Ma,this%beta,this%visc)
+      ! Finalize all objects here
+      call this%cfg%finalize()
+      call this%fs%finalize()
+      call this%time%finalize()
+      call this%ens_out%finalize()
+      call this%mfile%finalize()
+      call this%cflfile%finalize()
+      call this%consfile%finalize()
+   end subroutine finalize
    
    
 end module ffshock_class

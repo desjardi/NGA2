@@ -70,6 +70,7 @@ module coupler_class
       procedure :: push                                   !< Src routine that pushes a field into our send data storage
       procedure :: pull                                   !< Dst routine that pulls a field from our received data storage
       procedure :: transfer                               !< Routine that performs the src->dst data transfer
+      procedure :: finalize                               !< Finalize coupler object
    end type coupler
    
    
@@ -690,5 +691,33 @@ contains
       end do
    end subroutine qs_partition
    
-
+   
+   !> Finalize coupler object
+   subroutine finalize(this)
+      implicit none
+      class(coupler), intent(inout) :: this
+      integer :: ierr
+      ! Deallocate allocatable arrays
+      if (allocated(this%rankmap))     deallocate(this%rankmap)
+      if (allocated(this%srcind))      deallocate(this%srcind)
+      if (allocated(this%dstind))      deallocate(this%dstind)
+      if (allocated(this%w))           deallocate(this%w)
+      if (allocated(this%nsend_proc))  deallocate(this%nsend_proc)
+      if (allocated(this%nsend_disp))  deallocate(this%nsend_disp)
+      if (allocated(this%nrecv_proc))  deallocate(this%nrecv_proc)
+      if (allocated(this%nrecv_disp))  deallocate(this%nrecv_disp)
+      if (allocated(this%data_send))   deallocate(this%data_send)
+      if (allocated(this%data_recv))   deallocate(this%data_recv)
+      ! Nullify grid pointers
+      nullify(this%src)
+      nullify(this%dst)
+      ! Free only the internally created communicator and group
+      if (this%comm.ne.MPI_COMM_NULL ) call MPI_Comm_free(this%comm,ierr)
+      if (this%grp .ne.MPI_GROUP_NULL) call MPI_Group_free(this%grp,ierr)
+      ! Invalidate external groups
+      this%sgrp=MPI_GROUP_NULL
+      this%dgrp=MPI_GROUP_NULL
+   end subroutine finalize
+   
+   
 end module coupler_class

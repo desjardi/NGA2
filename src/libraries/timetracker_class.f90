@@ -36,6 +36,7 @@ module timetracker_class
       procedure :: print=>timetracker_print            !< Output timetracker info to screen
       procedure :: log  =>timetracker_log              !< Output timetracker info to log
       procedure :: reset                               !< Reset timetracker to zero
+      procedure :: finalize=>timetracker_finalize      !< Finalize timetracker
    end type timetracker
    
    
@@ -182,4 +183,12 @@ contains
    end subroutine timetracker_print
    
    
+   !> Finalize timetracker
+   subroutine timetracker_finalize(this)
+      implicit none
+      class(timetracker), intent(inout) :: this
+      ! Nothing to deallocate here
+   end subroutine timetracker_finalize
+   
+
 end module timetracker_class

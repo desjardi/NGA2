@@ -64,6 +64,7 @@ module ensight_class
       procedure :: add_vector                                         !< Add a new vector field
       procedure :: add_surface                                        !< Add a new surface mesh
       procedure :: add_particle                                       !< Add a new particle mesh
+      procedure :: finalize                                           !< Finalize ensight object
    end type ensight
    
    
@@ -817,6 +818,57 @@ contains
       end do
       
    end subroutine write_part
+   
+   
+   !> Finalize ensight object
+   subroutine finalize(this)
+      implicit none
+      class(ensight), intent(inout) :: this      
+      type(scl), pointer :: scl_curr,scl_next
+      type(vct), pointer :: vct_curr,vct_next
+      type(srf), pointer :: srf_curr,srf_next
+      type(prt), pointer :: prt_curr,prt_next
+      ! Deallocate time array if allocated
+      if (allocated(this%time)) deallocate(this%time)
+      ! Deallocate scalar list
+      scl_curr=>this%first_scl
+      do while (associated(scl_curr))
+         scl_next=>scl_curr%next
+         deallocate(scl_curr)
+         nullify(scl_curr)
+         scl_curr=>scl_next
+      end do
+      nullify(this%first_scl)
+      ! Deallocate vector list
+      vct_curr=>this%first_vct
+      do while (associated(vct_curr))
+         vct_next=>vct_curr%next
+         deallocate(vct_curr)
+         nullify(vct_curr)
+         vct_curr=>vct_next
+      end do
+      nullify(this%first_vct)
+      ! Deallocate surface list
+      srf_curr=>this%first_srf
+      do while (associated(srf_curr))
+         srf_next=>srf_curr%next
+         deallocate(srf_curr)
+         nullify(srf_curr)
+         srf_curr=>srf_next
+      end do
+      nullify(this%first_srf)
+      ! Deallocate particle list
+      prt_curr=>this%first_prt
+      do while (associated(prt_curr))
+         prt_next=>prt_curr%next
+         deallocate(prt_curr)
+         nullify(prt_curr)
+         prt_curr=>prt_next
+      end do
+      nullify(this%first_prt)
+      ! Nullify config pointer
+      nullify(this%cfg)
+   end subroutine finalize
    
    
 end module ensight_class

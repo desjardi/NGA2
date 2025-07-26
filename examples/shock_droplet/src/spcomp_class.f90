@@ -77,6 +77,7 @@ module spcomp_class
    contains
       procedure :: print=>spcomp_print                    !< Output solver to the screen
       procedure :: initialize                             !< Initialize the flow solver
+      procedure :: finalize                               !< Finalize the flow solver
       procedure :: rhs                                    !< Compute rhs of our equations using standard fluxes
       procedure :: get_primitive                          !< Calculate primitive variables from conserved variables
       procedure :: get_viscartif                          !< Calculate artifical bulk kinematic viscosity
@@ -817,6 +818,36 @@ contains
       class(spcomp), intent(in) :: this 
       if (this%cfg%amRoot) write(output_unit,'("spcomp solver [",a,"] for config [",a,"]")') trim(this%name),trim(this%cfg%name)
    end subroutine spcomp_print
+
+
+   !> Finalize spcomp flow solver
+   subroutine finalize(this)
+      implicit none
+      class(spcomp), intent(inout) :: this 
+      nullify(this%cfg)
+      this%name='UNNAMED_SPCOMP'
+      nullify(this%getP)
+      nullify(this%getT)
+      nullify(this%getC)
+      nullify(this%getS)
+      this%nQ=0
+      if (allocated(this%Q))    deallocate(this%Q)
+      if (allocated(this%Qold)) deallocate(this%Qold)
+      if (allocated(this%U))    deallocate(this%U)
+      if (allocated(this%V))    deallocate(this%V)
+      if (allocated(this%W))    deallocate(this%W)
+      if (allocated(this%I))    deallocate(this%I)
+      if (allocated(this%P))    deallocate(this%P)
+      if (allocated(this%T))    deallocate(this%T)
+      if (allocated(this%C))    deallocate(this%C)
+      if (allocated(this%VISC)) deallocate(this%VISC)
+      if (allocated(this%BETA)) deallocate(this%BETA)
+      if (allocated(this%DIFF)) deallocate(this%DIFF)
+      if (allocated(this%Qmin)) deallocate(this%Qmin)
+      if (allocated(this%Qmax)) deallocate(this%Qmax)
+      if (allocated(this%Qint)) deallocate(this%Qint)
+      call this%trhs%finalize()
+   end subroutine finalize
    
    
 end module spcomp_class

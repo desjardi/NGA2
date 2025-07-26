@@ -19,6 +19,7 @@ module timer_class
       procedure :: reset                                  !< Reset timer to zero
       procedure :: start                                  !< Start timer
       procedure :: stop                                   !< Stop timer
+      procedure :: finalize                               !< Finalize timer
    end type timer
    
    !> Declare timer constructor
@@ -82,5 +83,16 @@ contains
       ! Set to stopped
       this%is_started=.false.
    end subroutine stop
+   
+   !> Finalize timer
+   subroutine finalize(this)
+      use mpi_f08, only: MPI_COMM_NULL
+      implicit none
+      class(timer), intent(inout) :: this
+      integer :: ierr
+      call this%reset()
+      this%name='UNNAMED_TIMER'
+      this%comm=MPI_COMM_NULL
+   end subroutine finalize
    
 end module timer_class

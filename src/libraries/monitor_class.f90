@@ -44,6 +44,7 @@ module monitor_class
       procedure, private :: add_column_real,add_column_integer
       procedure :: write                                                 !< Writes the content of the monitor object to a file
       !procedure :: write_header                                          !< Writes the header of the monitor object to a file
+      procedure :: finalize                                              !< Finalize monitor object
    end type monitor
    
    
@@ -57,22 +58,35 @@ contains
    
    
    !> Default constructor for monitor object
-   function constructor(amRoot,name) result(self)
+   function constructor(amRoot,name,restart) result(self)
       implicit none
       type(monitor) :: self
       logical, intent(in) :: amRoot
       character(len=*), intent(in) :: name
+      logical, optional, intent(in) :: restart
+      logical :: do_restart
       integer :: ierr
+      ! Handle restart
+      do_restart=.false.; if (present(restart)) do_restart=restart
       ! Set root process
       self%amRoot=amRoot
-      ! Set the name of the monitor file and open it
+      ! Set the name of the monitor file
       self%name=trim(adjustl(name))
-      if (self%amRoot) open(newunit=self%iunit,file='monitor/'//trim(self%name),form='formatted',iostat=ierr,status='replace')
+      ! Root opens the file
+      if (self%amRoot) then
+         if (do_restart) then
+            ! We're restarting, append to existing file
+            open(newunit=self%iunit,file='monitor/'//trim(self%name),form='formatted',iostat=ierr,status='old',position='append')
+            self%isfirst=.false.
+         else
+            ! We're not restarting, replace file
+            open(newunit=self%iunit,file='monitor/'//trim(self%name),form='formatted',iostat=ierr,status='replace')
+            self%isfirst=.true.
+         end if
+      end if
       ! Set number of columns to zero for now
       self%ncol=0
       self%first_col=>NULL()
-      ! We haven't yet dumped the file
-      self%isfirst=.true.
    end function constructor
    
    
@@ -223,6 +237,28 @@ contains
       ! Increment list size
       this%ncol=this%ncol+1
    end subroutine add_column_integer
+   
+   
+   !> Finalize monitor object
+   subroutine finalize(this)
+      implicit none
+      class(monitor), intent(inout) :: this
+      type(column), pointer :: current,next
+      ! Only root needs to close the file
+      if (this%amRoot.and.this%iunit.gt.0) close(this%iunit)
+      ! Deallocate the linked list of columns
+      current=>this%first_col
+      do while (associated(current))
+         next=>current%next
+         deallocate(current)
+         nullify(current)
+         current=>next
+      end do
+      ! Nullify pointers
+      nullify(this%first_col)
+      this%ncol=0
+      this%isfirst=.true.
+   end subroutine finalize
    
    
 end module monitor_class

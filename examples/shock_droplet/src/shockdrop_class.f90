@@ -47,14 +47,14 @@ module shockdrop_class
       real(WP) :: Vcore,Mcore,Xcore,Ycore,Zcore
       
    contains
-      procedure :: init                            !< Initialize shock-drop simulation
+      procedure :: initialize                      !< Initialize shock-drop simulation
       procedure :: step                            !< Advance shock-drop simulation by one time step
-      procedure :: final                           !< Finalize shock-drop simulation
       procedure, private :: postproc               !< Postprocess shock-drop case
       procedure :: output_monitor                  !< Monitoring for shock-drop case
       procedure :: output_ensight                  !< Ensight output for shock-drop case
       procedure, private :: prepare_viscosities    !< Prepare viscosities
       procedure, private :: apply_bconds           !< Apply boundary conditions
+      procedure :: finalize                        !< Finalize shock-drop simulation
    end type shockdrop
    
 contains
@@ -107,7 +107,7 @@ contains
    
    
    !> Initialization of a shock-drop problem
-   subroutine init(this,dx,meshsize,startloc,group,partition)
+   subroutine initialize(this,dx,meshsize,startloc,group,partition)
       use mpi_f08, only: MPI_Group
       implicit none
       class(shockdrop), intent(inout) :: this
@@ -264,7 +264,7 @@ contains
          call this%dropfile%add_column(this%Zcore,'Core Z')
       end block create_monitor
       
-   end subroutine init
+   end subroutine initialize
    
    
    !> Take one time step
@@ -360,15 +360,6 @@ contains
       this%Ma=sqrt(this%Ui**2+this%Vi**2+this%Wi**2)/this%fs%C
       
    end subroutine step
-   
-   
-   !> Finalize the shockdrop problem
-   subroutine final(this)
-      implicit none
-      class(shockdrop), intent(inout) :: this
-      ! Deallocate work arrays
-      deallocate(this%dQdt,this%Ui,this%Vi,this%Wi,this%Ma,this%beta,this%visc)
-   end subroutine final
    
    
    !> Perform and output monitoring for the shockdrop problem
@@ -564,6 +555,26 @@ contains
       call this%fs%get_momentum()
       
    end subroutine apply_bconds
+   
+   
+   !> Finalize shockdrop problem
+   subroutine finalize(this)
+      implicit none
+      class(shockdrop), intent(inout) :: this
+      ! Deallocate work arrays
+      deallocate(this%dQdt,this%Ui,this%Vi,this%Wi,this%Ma,this%beta,this%visc)
+      ! Finalize all objects
+      call this%cfg%finalize()
+      call this%fs%finalize()
+      call this%time%finalize()
+      call this%ccl%finalize()
+      call this%smesh%finalize()
+      call this%ens_out%finalize()
+      call this%mfile%finalize()
+      call this%cflfile%finalize()
+      call this%consfile%finalize()
+      call this%dropfile%finalize()
+   end subroutine finalize
    
    
 end module shockdrop_class
