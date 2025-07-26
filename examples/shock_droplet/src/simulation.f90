@@ -1,12 +1,16 @@
 !> Various definitions and tools for running an NGA2 simulation
 module simulation
-   use precision,       only: WP
-   use shockdrop_class, only: shockdrop
-   use ffshock_class,   only: ffshock
-   use coupler_class,   only: coupler
-   use event_class,     only: event
+   use precision,         only: WP
+   use timetracker_class, only: timetracker
+   use shockdrop_class,   only: shockdrop
+   use ffshock_class,     only: ffshock
+   use coupler_class,     only: coupler
+   use event_class,       only: event
    implicit none
    private; public :: simulation_init,simulation_run,simulation_final
+   
+   !> Track time from here
+   type(timetracker) :: time
    
    !> Shock-drop simulation - pointer since we will dynamically remesh
    type(shockdrop), pointer :: sd=>null()
@@ -277,6 +281,18 @@ contains
          end if
       end block initialize_parameters
       
+      ! Initialize time tracker
+      initialize_timetracker: block
+         use parallel, only: amRoot
+         use param,    only: param_read
+         ! Create time tracker object
+         time=timetracker(amRoot=amRoot)
+         ! Set time integration parameters
+         call param_read('Shock-drop dt',time%dtmax); time%dt=time%dtmax
+         call param_read('Shock-drop CFL',time%cflmax)
+         call param_read('Max time',time%tmax)
+      end block initialize_timetracker
+      
       ! Setup shock-drop simulation - all cores
       setup_sd: block
          use param,    only: param_read
@@ -295,11 +311,7 @@ contains
          sd%fs%relax=>P_relax
          sd%fs%getPL=>get_PL; sd%fs%getCL=>get_CL; sd%fs%getSL=>get_SL; sd%fs%getTL=>get_TL
          sd%fs%getPG=>get_PG; sd%fs%getCG=>get_CG; sd%fs%getSG=>get_SG; sd%fs%getTG=>get_TG
-         ! Set time integration parameters
-         call param_read('Shock-drop dt',sd%time%dtmax); sd%time%dt=sd%time%dtmax
-         call param_read('Shock-drop CFL',sd%time%cflmax)
-         call param_read('Max time',sd%time%tmax)
-         ! We finally need to transfer our viscosities explicitly...
+         ! We need to transfer our viscosities explicitly...
          sd%cst_viscL=viscL; sd%cst_viscG=viscG
       end block setup_sd
       
@@ -371,7 +383,7 @@ contains
          call ff%initialize(dx=dx,meshsize=meshsize,startloc=X0,group=group,partition=partition)
          ! Provide thermodynamic model
          ff%fs%getP=>get_PG; ff%fs%getC=>get_CG; ff%fs%getS=>get_SG; ff%fs%getT=>get_TG
-         ! We finally need to transfer our viscosity explicitly...
+         ! We need to transfer our viscosity explicitly...
          ff%cst_visc=viscG
       end block setup_ff
       
@@ -410,18 +422,18 @@ contains
       ! Initialize Ensight output event and perform initial Ensight output
       initialize_ensight: block
          use param, only: param_read
-         ens_evt=event(time=sd%time,name='Ensight output')
+         ens_evt=event(time=time,name='Ensight output')
          call param_read('Ensight output period',ens_evt%tper)
          if (ens_evt%occurs()) then
-            call sd%output_ensight(t=sd%time%t)
-            call ff%output_ensight(t=sd%time%t)
+            call sd%output_ensight(t=time%t)
+            call ff%output_ensight(t=time%t)
          end if
       end block initialize_ensight
       
       ! Initialize remeshing event
       initialize_remeshing: block
          use param, only: param_read
-         remesh_evt=event(time=sd%time,name='Remeshing')
+         remesh_evt=event(time=time,name='Remeshing')
          call param_read('Remeshing period',remesh_evt%tper)
       end block initialize_remeshing
       
@@ -441,30 +453,35 @@ contains
    subroutine simulation_run
       implicit none
       
-      ! Shock-drop drives overall time integration
-      do while (.not.sd%time%done())
+      ! Overall time integration
+      do while (.not.time%done())
+         
+         ! Adjust time step size using sd CFL info
+         call sd%fs%get_cfl(dt=time%dt,cfl=time%cfl)
+         call time%adjust_dt()
+         call time%increment()
          
          ! Handle coupling
          call couple_sd2ff()
          call couple_ff2sd()
          
          ! Advance shock-drop simulation
-         call sd%step()
+         call sd%step(dt=time%dt)
          
          ! Advance farfield simulation
-         call ff%step(dt=sd%time%dt)
+         call ff%step(dt=time%dt)
          
          ! Perform monitoring
          call sd%output_monitor()
          call ff%output_monitor()
-
+         
          ! Remesh sd
          if (remesh_evt%occurs()) call remesh()
          
          ! Perform Ensight output
          if (ens_evt%occurs()) then
-            call sd%output_ensight(t=sd%time%t)
-            call ff%output_ensight(t=sd%time%t)
+            call sd%output_ensight(t=time%t)
+            call ff%output_ensight(t=time%t)
          end if
          
       end do
@@ -474,10 +491,16 @@ contains
    
    !> Remesh sd to follow the drop
    subroutine remesh()
+      use, intrinsic :: iso_fortran_env, only: output_unit
+      use messager, only: log
+      use parallel, only: amRoot
       implicit none
       type(shockdrop), pointer :: sdnew
       type(coupler)  , pointer :: sdnew2ff
       type(coupler)  , pointer :: ff2sdnew
+      
+      ! Some messaging
+      if (amRoot) then; call log('Begin remeshing...'); write(output_unit,'("Begin remeshing...")'); end if
       
       ! Setup new shock-drop simulation - all cores
       setup_sdnew: block
@@ -491,14 +514,10 @@ contains
          sdnew%fs%relax=>sd%fs%relax
          sdnew%fs%getPL=>sd%fs%getPL; sdnew%fs%getCL=>sd%fs%getCL; sdnew%fs%getSL=>sd%fs%getSL; sdnew%fs%getTL=>sd%fs%getTL
          sdnew%fs%getPG=>sd%fs%getPG; sdnew%fs%getCG=>sd%fs%getCG; sdnew%fs%getSG=>sd%fs%getSG; sdnew%fs%getTG=>sd%fs%getTG
-         ! Set time integration parameters
-         sdnew%time%t     =sd%time%t
-         sdnew%time%dt    =sd%time%dt
-         sdnew%time%dtmax =sd%time%dtmax
-         sdnew%time%cflmax=sd%time%cflmax
-         sdnew%time%tmax  =sd%time%tmax
-         ! We finally need to transfer our viscosities explicitly...
+         ! We need to transfer our viscosities explicitly...
          sdnew%cst_viscL=sd%cst_viscL; sdnew%cst_viscG=sd%cst_viscG
+         ! Inform sdnew's timetracker of our current time, but leave n unchanged to make remeshing obvious
+         sdnew%time%t=time%t
       end block setup_sdnew
       
       ! Create new couplers
@@ -507,6 +526,17 @@ contains
          allocate(sdnew2ff); sdnew2ff=coupler(src_grp=group,dst_grp=group,name='sd2ff'); call sdnew2ff%set_src(sdnew%cfg); call sdnew2ff%set_dst(ff%cfg); call sdnew2ff%initialize()
          allocate(ff2sdnew); ff2sdnew=coupler(src_grp=group,dst_grp=group,name='ff2sd'); call ff2sdnew%set_src(ff%cfg); call ff2sdnew%set_dst(sdnew%cfg); call ff2sdnew%initialize()
       end block setup_new_couplers
+      
+      ! Initialize all sdnew to gas including in ghost cells
+      initialize_to_gas: block
+         use irl_fortran_interface, only: setNumberOfPlanes,setPlane
+         integer :: i,j,k
+         ! Let us set PLIC explicitly to gas everywhere and provide corresponding volume moments
+         do k=sdnew%cfg%kmino_,sdnew%cfg%kmaxo_; do j=sdnew%cfg%jmino_,sdnew%cfg%jmaxo_; do i=sdnew%cfg%imino_,sdnew%cfg%imaxo_
+            sdnew%fs%VF(i,j,k)=0.0_WP; sdnew%fs%BL(:,i,j,k)=[sdnew%fs%cfg%xm(i),sdnew%fs%cfg%ym(j),sdnew%fs%cfg%zm(k)]; sdnew%fs%BG(:,i,j,k)=[sdnew%fs%cfg%xm(i),sdnew%fs%cfg%ym(j),sdnew%fs%cfg%zm(k)]
+            call setNumberOfPlanes(sdnew%fs%PLIC(i,j,k),1); call setPlane(sdnew%fs%PLIC(i,j,k),0,[0.0_WP,0.0_WP,0.0_WP],sign(1.0_WP,sdnew%fs%VF(i,j,k)-0.5_WP))
+         end do; end do; end do
+      end block initialize_to_gas
       
       ! Initialize sdnew using ff
       initialize_sdnew_from_ff: block
@@ -568,35 +598,33 @@ contains
                &   sdnew%fs%cfg%zm(k).gt.sd%fs%cfg%z(sd%fs%cfg%kmin).and.sdnew%fs%cfg%zm(k).lt.sd%fs%cfg%z(sd%fs%cfg%kmax+1)) sdnew%fs%BL(n,i,j,k)=tmp(i,j,k)
             end do; end do; end do
          end do
+         ! Communicate conserved variables
+         do n=1,sdnew%fs%nQ; call sdnew%fs%cfg%sync(sdnew%fs%Q(:,:,:,n)); end do
+         ! Also sync volume moments
+         call sdnew%fs%sync_volume_moments()
          ! Build PLIC interface
          call sdnew%fs%build_interface()
-         ! Communicate conserved variables just to be safe
-         do n=1,sdnew%fs%nQ; call sdnew%fs%cfg%sync(sdnew%fs%Q(:,:,:,n)); end do
          ! Rebuild primitive variables
          call sdnew%fs%get_primitive()
          ! Interpolate velocity
          call sdnew%fs%interp_vel(sdnew%Ui,sdnew%Vi,sdnew%Wi)
          ! Compute local Mach number
          sdnew%Ma=sqrt(sdnew%Ui**2+sdnew%Vi**2+sdnew%Wi**2)/sdnew%fs%C
-         ! Monitor
-         call sdnew%output_monitor()
          ! Free memory
-         deallocate(tmp,tmp2)
-         call sd2sdnew%finalize()
+         deallocate(tmp,tmp2); call sd2sdnew%finalize()
       end block initialize_sdnew_from_sd
       
       ! Finally, transfer allocation
       transfer_allocation: block
-         ! Finalize and free up couplers
-         call sd2ff%finalize(); deallocate(sd2ff)
-         call ff2sd%finalize(); deallocate(ff2sd)
-         ! Point to new ones
-         sd2ff=>sdnew2ff
-         ff2sd=>ff2sdnew
-         ! Finalize and free up sd
-         call sd%finalize(); deallocate(sd)
-         sd=>sdnew
+         ! Finalize and free up couplers, point to new ones
+         call sd2ff%finalize(); deallocate(sd2ff); sd2ff=>sdnew2ff
+         call ff2sd%finalize(); deallocate(ff2sd); ff2sd=>ff2sdnew
+         ! Finalize and free up sd, point to new one
+         call sd%finalize(); deallocate(sd); sd=>sdnew
       end block transfer_allocation
+      
+      ! Some messaging
+      if (amRoot) then; call log('Done remeshing!'); write(output_unit,'("Done remeshing!")'); end if
       
    end subroutine remesh
    

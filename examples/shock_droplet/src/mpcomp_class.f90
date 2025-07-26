@@ -129,6 +129,7 @@ module mpcomp_class
       procedure :: initialize_irl                         !< Initialize interface with interface reconstruction library
       procedure :: SLtag                                  !< Tag cell for semi-Lagrangian fluxing
       procedure :: SLstep                                 !< Perform an unsplit semi-Lagrangian transport step in tagged cells, store SL advection fluxes
+      procedure :: sync_volume_moments                    !< Helper subroutine that performs the sync for VF, BL, and BG
       procedure :: rhs                                    !< Compute rhs of our equations using standard fluxes
       procedure :: build_interface                        !< Build interface from volume moments
       procedure :: get_primitive                          !< Calculate phasic and mixture primitive variables from conserved variables
@@ -609,28 +610,7 @@ contains
       call this%cfg%sync(this%PL); call this%cfg%sync(this%PG)
       
       ! Synchronize VF and barycenters, fix barycenter synchronization across periodic boundaries, and handle 2D barycenters
-      call this%cfg%sync(this%VF); call this%cfg%sync(this%BL); call this%cfg%sync(this%BG)
-      if (this%cfg%xper.and.this%cfg%iproc.eq.1           ) then; do k=this%cfg%kmino_,this%cfg%kmaxo_; do j=this%cfg%jmino_,this%cfg%jmaxo_; do i=this%cfg%imino,this%cfg%imin-1
-         this%BL(1,i,j,k)=this%BL(1,i,j,k)-this%cfg%xL; this%BG(1,i,j,k)=this%BG(1,i,j,k)-this%cfg%xL
-      end do; end do; end do; end if
-      if (this%cfg%xper.and.this%cfg%iproc.eq.this%cfg%npx) then; do k=this%cfg%kmino_,this%cfg%kmaxo_; do j=this%cfg%jmino_,this%cfg%jmaxo_; do i=this%cfg%imax+1,this%cfg%imaxo
-         this%BL(1,i,j,k)=this%BL(1,i,j,k)+this%cfg%xL; this%BG(1,i,j,k)=this%BG(1,i,j,k)+this%cfg%xL
-      end do; end do; end do; end if
-      if (this%cfg%yper.and.this%cfg%jproc.eq.1           ) then; do k=this%cfg%kmino_,this%cfg%kmaxo_; do j=this%cfg%jmino,this%cfg%jmin-1; do i=this%cfg%imino_,this%cfg%imaxo_
-         this%BL(2,i,j,k)=this%BL(2,i,j,k)-this%cfg%yL; this%BG(2,i,j,k)=this%BG(2,i,j,k)-this%cfg%yL
-      end do; end do; end do; end if
-      if (this%cfg%yper.and.this%cfg%jproc.eq.this%cfg%npy) then; do k=this%cfg%kmino_,this%cfg%kmaxo_; do j=this%cfg%jmax+1,this%cfg%jmaxo; do i=this%cfg%imino_,this%cfg%imaxo_
-         this%BL(2,i,j,k)=this%BL(2,i,j,k)+this%cfg%yL; this%BG(2,i,j,k)=this%BG(2,i,j,k)+this%cfg%yL
-      end do; end do; end do; end if
-      if (this%cfg%zper.and.this%cfg%kproc.eq.           1) then; do k=this%cfg%kmino,this%cfg%kmin-1; do j=this%cfg%jmino_,this%cfg%jmaxo_; do i=this%cfg%imino_,this%cfg%imaxo_
-         this%BL(3,i,j,k)=this%BL(3,i,j,k)-this%cfg%zL; this%BG(3,i,j,k)=this%BG(3,i,j,k)-this%cfg%zL
-      end do; end do; end do; end if
-      if (this%cfg%zper.and.this%cfg%kproc.eq.this%cfg%npz) then; do k=this%cfg%kmax+1,this%cfg%kmaxo; do j=this%cfg%jmino_,this%cfg%jmaxo_; do i=this%cfg%imino_,this%cfg%imaxo_
-         this%BL(3,i,j,k)=this%BL(3,i,j,k)+this%cfg%zL; this%BG(3,i,j,k)=this%BG(3,i,j,k)+this%cfg%zL
-      end do; end do; end do; end if
-      if (this%cfg%nx.eq.1) then; do i=this%cfg%imino_,this%cfg%imaxo_; this%BL(1,i,:,:)=this%cfg%xm(i); this%BG(1,i,:,:)=this%cfg%xm(i); end do; end if
-      if (this%cfg%ny.eq.1) then; do j=this%cfg%jmino_,this%cfg%jmaxo_; this%BL(2,:,j,:)=this%cfg%ym(j); this%BG(2,:,j,:)=this%cfg%ym(j); end do; end if
-      if (this%cfg%nz.eq.1) then; do k=this%cfg%kmino_,this%cfg%kmaxo_; this%BL(3,:,:,k)=this%cfg%zm(k); this%BG(3,:,:,k)=this%cfg%zm(k); end do; end if
+      call this%sync_volume_moments()
       
       ! ================================================================ !
       ! ======================== INVISID FLUXES ======================== !
@@ -812,6 +792,39 @@ contains
          vel(3)=wzw1*(wyc1*(wxc1*W(ipc+1,jpc+1,kpw+1)+wxc2*W(ipc,jpc+1,kpw+1))+wyc2*(wxc1*W(ipc+1,jpc,kpw+1)+wxc2*W(ipc,jpc,kpw+1)))+wzw2*(wyc1*(wxc1*W(ipc+1,jpc+1,kpw  )+wxc2*W(ipc,jpc+1,kpw  ))+wyc2*(wxc1*W(ipc+1,jpc,kpw  )+wxc2*W(ipc,jpc,kpw  )))
       end function interp_velocity
    end subroutine SLstep
+   
+   
+   !> Sync volume moments (VF, BL, and BG)
+   subroutine sync_volume_moments(this)
+      implicit none
+      class(mpcomp), intent(inout) :: this
+      integer :: i,j,k
+      ! Synchronize VF and barycenters
+      call this%cfg%sync(this%VF); call this%cfg%sync(this%BL); call this%cfg%sync(this%BG)
+      ! Fix barycenter synchronization across periodic boundaries
+      if (this%cfg%xper.and.this%cfg%iproc.eq.1           ) then; do k=this%cfg%kmino_,this%cfg%kmaxo_; do j=this%cfg%jmino_,this%cfg%jmaxo_; do i=this%cfg%imino,this%cfg%imin-1
+         this%BL(1,i,j,k)=this%BL(1,i,j,k)-this%cfg%xL; this%BG(1,i,j,k)=this%BG(1,i,j,k)-this%cfg%xL
+      end do; end do; end do; end if
+      if (this%cfg%xper.and.this%cfg%iproc.eq.this%cfg%npx) then; do k=this%cfg%kmino_,this%cfg%kmaxo_; do j=this%cfg%jmino_,this%cfg%jmaxo_; do i=this%cfg%imax+1,this%cfg%imaxo
+         this%BL(1,i,j,k)=this%BL(1,i,j,k)+this%cfg%xL; this%BG(1,i,j,k)=this%BG(1,i,j,k)+this%cfg%xL
+      end do; end do; end do; end if
+      if (this%cfg%yper.and.this%cfg%jproc.eq.1           ) then; do k=this%cfg%kmino_,this%cfg%kmaxo_; do j=this%cfg%jmino,this%cfg%jmin-1; do i=this%cfg%imino_,this%cfg%imaxo_
+         this%BL(2,i,j,k)=this%BL(2,i,j,k)-this%cfg%yL; this%BG(2,i,j,k)=this%BG(2,i,j,k)-this%cfg%yL
+      end do; end do; end do; end if
+      if (this%cfg%yper.and.this%cfg%jproc.eq.this%cfg%npy) then; do k=this%cfg%kmino_,this%cfg%kmaxo_; do j=this%cfg%jmax+1,this%cfg%jmaxo; do i=this%cfg%imino_,this%cfg%imaxo_
+         this%BL(2,i,j,k)=this%BL(2,i,j,k)+this%cfg%yL; this%BG(2,i,j,k)=this%BG(2,i,j,k)+this%cfg%yL
+      end do; end do; end do; end if
+      if (this%cfg%zper.and.this%cfg%kproc.eq.           1) then; do k=this%cfg%kmino,this%cfg%kmin-1; do j=this%cfg%jmino_,this%cfg%jmaxo_; do i=this%cfg%imino_,this%cfg%imaxo_
+         this%BL(3,i,j,k)=this%BL(3,i,j,k)-this%cfg%zL; this%BG(3,i,j,k)=this%BG(3,i,j,k)-this%cfg%zL
+      end do; end do; end do; end if
+      if (this%cfg%zper.and.this%cfg%kproc.eq.this%cfg%npz) then; do k=this%cfg%kmax+1,this%cfg%kmaxo; do j=this%cfg%jmino_,this%cfg%jmaxo_; do i=this%cfg%imino_,this%cfg%imaxo_
+         this%BL(3,i,j,k)=this%BL(3,i,j,k)+this%cfg%zL; this%BG(3,i,j,k)=this%BG(3,i,j,k)+this%cfg%zL
+      end do; end do; end do; end if
+      ! Handle 2D barycenters
+      if (this%cfg%nx.eq.1) then; do i=this%cfg%imino_,this%cfg%imaxo_; this%BL(1,i,:,:)=this%cfg%xm(i); this%BG(1,i,:,:)=this%cfg%xm(i); end do; end if
+      if (this%cfg%ny.eq.1) then; do j=this%cfg%jmino_,this%cfg%jmaxo_; this%BL(2,:,j,:)=this%cfg%ym(j); this%BG(2,:,j,:)=this%cfg%ym(j); end do; end if
+      if (this%cfg%nz.eq.1) then; do k=this%cfg%kmino_,this%cfg%kmaxo_; this%BL(3,:,:,k)=this%cfg%zm(k); this%BG(3,:,:,k)=this%cfg%zm(k); end do; end if
+   end subroutine sync_volume_moments
    
    
    !> Obtain non-SL RHS for all equations except volume

@@ -179,7 +179,9 @@ contains
       ! Add Ensight output
       create_ensight: block
          ! Create Ensight output from cfg
-         this%ens_out=ensight(cfg=this%cfg,name='ShockDrop')
+         this%ens_out=ensight(cfg=this%cfg,name='ShockDrop',time_dependent_geometry=.true.)
+         ! No need to output FVF file
+         this%ens_out%write_fvf=.false.
          ! Add variables to output
          call this%ens_out%add_vector('velocity',this%Ui,this%Vi,this%Wi)
          call this%ens_out%add_scalar('VOF',this%fs%VF)
@@ -273,15 +275,16 @@ contains
       
    end subroutine initialize
    
-   
+
    !> Take one time step
-   subroutine step(this)
+   subroutine step(this,dt)
       implicit none
       class(shockdrop), intent(inout) :: this
+      real(WP) :: dt
       
       ! Increment time
+      this%time%dt=dt
       call this%fs%get_cfl(dt=this%time%dt,cfl=this%time%cfl)
-      call this%time%adjust_dt()
       call this%time%increment()
       
       ! Remember conserved variables

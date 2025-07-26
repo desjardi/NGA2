@@ -112,6 +112,8 @@ contains
       create_ensight: block
          ! Create Ensight output from cfg
          this%ens_out=ensight(cfg=this%cfg,name='FarField')
+         ! No need to output FVF file
+         this%ens_out%write_fvf=.false.
          ! Add variables to output
          call this%ens_out%add_vector('velocity',this%Ui,this%Vi,this%Wi)
          call this%ens_out%add_scalar('RHO',this%fs%Q(:,:,:,1))

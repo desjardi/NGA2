@@ -277,8 +277,8 @@ contains
       this%first_srf=>new_srf
       ! Also create the corresponding directory
       if (this%amr%amRoot) then
-         if (.not.isdir('mkdir -p ensight/'//trim(this%name)//'/'//trim(new_srf%name))) &
-         & call makedir('mkdir -p ensight/'//trim(this%name)//'/'//trim(new_srf%name))
+         if (.not.isdir('ensight/'//trim(this%name)//'/'//trim(new_srf%name))) &
+         & call makedir('ensight/'//trim(this%name)//'/'//trim(new_srf%name))
       end if
    end subroutine add_surface
    
@@ -301,8 +301,8 @@ contains
       this%first_prt=>new_prt
       ! Also create the corresponding directory
       if (this%amr%amRoot) then
-         if (.not.isdir('mkdir -p ensight/'//trim(this%name)//'/'//trim(new_prt%name))) &
-         & call makedir('mkdir -p ensight/'//trim(this%name)//'/'//trim(new_prt%name))
+         if (.not.isdir('ensight/'//trim(this%name)//'/'//trim(new_prt%name))) &
+         & call makedir('ensight/'//trim(this%name)//'/'//trim(new_prt%name))
       end if
    end subroutine add_particle
    
