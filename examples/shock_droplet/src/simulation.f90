@@ -506,8 +506,11 @@ contains
       setup_sdnew: block
          use parallel, only: group
          real(WP), dimension(3) :: X0
-         ! Shift domain based on core barycenter
-         X0=[sd%cfg%x(sd%cfg%imin),sd%cfg%y(sd%cfg%jmin),sd%cfg%z(sd%cfg%kmin)]+sd%fs%dx*real([int(sd%Xcore/sd%fs%dx),int(sd%Ycore/sd%fs%dy),int(sd%Zcore/sd%fs%dz)],WP)
+         ! Shift domain so that core barycenter remains in the middle of sd's domain
+         X0=[sd%cfg%x(sd%cfg%imin),sd%cfg%y(sd%cfg%jmin),sd%cfg%z(sd%cfg%kmin)] &                       !  Corner point
+         & +sd%fs%dx*real([int(sd%Xcore/sd%fs%dx),int(sd%Ycore/sd%fs%dy),int(sd%Zcore/sd%fs%dz)],WP) &  ! +Core centroid
+         & -0.5_WP*([sd%cfg%x(sd%cfg%imax+1),sd%cfg%y(sd%cfg%jmax+1),sd%cfg%z(sd%cfg%kmax+1)] &         ! -Middle of 
+         &         +[sd%cfg%x(sd%cfg%imin  ),sd%cfg%y(sd%cfg%jmin  ),sd%cfg%z(sd%cfg%kmin  )])          !  domain
          ! Initialize the shock-drop solver
          allocate(sdnew); call sdnew%initialize(dx=sd%fs%dx,meshsize=[sd%cfg%nx,sd%cfg%ny,sd%cfg%nz],startloc=X0,group=group,partition=[sd%cfg%npx,sd%cfg%npy,sd%cfg%npz],continue_monitor=.true.)
          ! Provide relaxation and thermodynamic models
