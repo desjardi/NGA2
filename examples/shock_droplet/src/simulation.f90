@@ -8,15 +8,15 @@ module simulation
    implicit none
    private; public :: simulation_init,simulation_run,simulation_final
    
-   !> Shock-drop simulation
-   type(shockdrop) :: sd
+   !> Shock-drop simulation - pointer since we will dynamically remesh
+   type(shockdrop), pointer :: sd=>null()
    
-   !> Far-field shock simulation
+   !> Far-field shock simulation - this is static
    type(ffshock) :: ff
    
-   !> Couplers between domains
-   type(coupler) :: sd2ff
-   type(coupler) :: ff2sd
+   !> Couplers between domains - pointers since we will dynamically remesh
+   type(coupler), pointer :: sd2ff=>null()
+   type(coupler), pointer :: ff2sd=>null()
    
    !> Ensight output event
    type(event) :: ens_evt
@@ -289,8 +289,8 @@ contains
          call param_read('Shock-drop nx',meshsize)
          call param_read('Shock-drop partition',partition)
          X0=-0.5_WP*real(meshsize,WP)*dx !< This assumes that the domain is centered on (0,0,0)
-         ! Initialize the shock-drop solver
-         call sd%initialize(dx=dx,meshsize=meshsize,startloc=X0,group=group,partition=partition)
+         ! Allocate and initialize the shock-drop solver
+         allocate(sd); call sd%initialize(dx=dx,meshsize=meshsize,startloc=X0,group=group,partition=partition)
          ! Provide relaxation and thermodynamic models
          sd%fs%relax=>P_relax
          sd%fs%getPL=>get_PL; sd%fs%getCL=>get_CL; sd%fs%getSL=>get_SL; sd%fs%getTL=>get_TL
@@ -403,8 +403,8 @@ contains
       ! Create couplers
       create_couplers: block
          use parallel, only: group
-         sd2ff=coupler(src_grp=group,dst_grp=group,name='sd2ff'); call sd2ff%set_src(sd%cfg); call sd2ff%set_dst(ff%cfg); call sd2ff%initialize()
-         ff2sd=coupler(src_grp=group,dst_grp=group,name='ff2sd'); call ff2sd%set_src(ff%cfg); call ff2sd%set_dst(sd%cfg); call ff2sd%initialize()
+         allocate(sd2ff); sd2ff=coupler(src_grp=group,dst_grp=group,name='sd2ff'); call sd2ff%set_src(sd%cfg); call sd2ff%set_dst(ff%cfg); call sd2ff%initialize()
+         allocate(ff2sd); ff2sd=coupler(src_grp=group,dst_grp=group,name='ff2sd'); call ff2sd%set_src(ff%cfg); call ff2sd%set_dst(sd%cfg); call ff2sd%initialize()
       end block create_couplers
       
       ! Initialize Ensight output event and perform initial Ensight output
@@ -471,136 +471,133 @@ contains
       
    end subroutine simulation_run
    
-
+   
    !> Remesh sd to follow the drop
    subroutine remesh()
       implicit none
-      type(shockdrop) :: sdcopy
-      type(coupler) :: sdnew2ff
-      type(coupler) :: ff2sdnew
+      type(shockdrop), pointer :: sdnew
+      type(coupler)  , pointer :: sdnew2ff
+      type(coupler)  , pointer :: ff2sdnew
       
-      ! First copy sd
-      copy_and_cleanup: block
-         ! Fortran can do a good job at copying everything over, except for IRL objects
-         sdcopy=sd
-         ! Clean up the IRL objects in sd
-         call sd%finalize()
-      end block copy_and_cleanup
+      ! Setup new shock-drop simulation - all cores
+      setup_sdnew: block
+         use parallel, only: group
+         real(WP), dimension(3) :: X0
+         ! Shift domain based on core barycenter
+         X0=[sd%cfg%x(sd%cfg%imin),sd%cfg%y(sd%cfg%jmin),sd%cfg%z(sd%cfg%kmin)]+sd%fs%dx*real([int(sd%Xcore/sd%fs%dx),int(sd%Ycore/sd%fs%dy),int(sd%Zcore/sd%fs%dz)],WP)
+         ! Initialize the shock-drop solver
+         allocate(sdnew); call sdnew%initialize(dx=sd%fs%dx,meshsize=[sd%cfg%nx,sd%cfg%ny,sd%cfg%nz],startloc=X0,group=group,partition=[sd%cfg%npx,sd%cfg%npy,sd%cfg%npz])
+         ! Provide relaxation and thermodynamic models
+         sdnew%fs%relax=>sd%fs%relax
+         sdnew%fs%getPL=>sd%fs%getPL; sdnew%fs%getCL=>sd%fs%getCL; sdnew%fs%getSL=>sd%fs%getSL; sdnew%fs%getTL=>sd%fs%getTL
+         sdnew%fs%getPG=>sd%fs%getPG; sdnew%fs%getCG=>sd%fs%getCG; sdnew%fs%getSG=>sd%fs%getSG; sdnew%fs%getTG=>sd%fs%getTG
+         ! Set time integration parameters
+         sdnew%time%dtmax =sd%time%dtmax
+         sdnew%time%dt    =sd%time%dt
+         sdnew%time%cflmax=sd%time%cflmax
+         sdnew%time%tmax  =sd%time%tmax
+         ! We finally need to transfer our viscosities explicitly...
+         sdnew%cst_viscL=sd%cst_viscL; sdnew%cst_viscG=sd%cst_viscG
+      end block setup_sdnew
       
-      ! ! Setup new shock-drop simulation - all cores
-      ! setup_sdnew: block
-      !    use param,    only: param_read
-      !    use parallel, only: group
-      !    real(WP), dimension(3) :: X0
-      !    ! Shift domain based on core barycenter
-      !    X0=[sd%cfg%x(sd%cfg%imin),sd%cfg%y(sd%cfg%jmin),sd%cfg%z(sd%cfg%kmin)]+sd%fs%dx*real([int(sd%Xcore/sd%fs%dx),int(sd%Ycore/sd%fs%dy),int(sd%Zcore/sd%fs%dz)],WP)
-      !    ! Initialize the shock-drop solver
-      !    call sdnew%initialize(dx=sd%fs%dx,meshsize=[sd%cfg%nx,sd%cfg%ny,sd%cfg%nz],startloc=X0,group=group,partition=[sd%cfg%npx,sd%cfg%npy,sd%cfg%npz])
-      !    ! Provide relaxation and thermodynamic models
-      !    sdnew%fs%relax=>sd%fs%relax
-      !    sdnew%fs%getPL=>sd%fs%getPL; sdnew%fs%getCL=>sd%fs%getCL; sdnew%fs%getSL=>sd%fs%getSL; sdnew%fs%getTL=>sd%fs%getTL
-      !    sdnew%fs%getPG=>sd%fs%getPG; sdnew%fs%getCG=>sd%fs%getCG; sdnew%fs%getSG=>sd%fs%getSG; sdnew%fs%getTG=>sd%fs%getTG
-      !    ! Set time integration parameters
-      !    sdnew%time%dtmax =sd%time%dtmax
-      !    sdnew%time%dt    =sd%time%dt
-      !    sdnew%time%cflmax=sd%time%cflmax
-      !    sdnew%time%tmax  =sd%time%tmax
-      !    ! We finally need to transfer our viscosities explicitly...
-      !    sdnew%cst_viscL=sd%cst_viscL; sdnew%cst_viscG=sd%cst_viscG
-      ! end block setup_sdnew
+      ! Create new couplers
+      setup_new_couplers: block
+         use parallel, only: group
+         allocate(sdnew2ff); sdnew2ff=coupler(src_grp=group,dst_grp=group,name='sd2ff'); call sdnew2ff%set_src(sdnew%cfg); call sdnew2ff%set_dst(ff%cfg); call sdnew2ff%initialize()
+         allocate(ff2sdnew); ff2sdnew=coupler(src_grp=group,dst_grp=group,name='ff2sd'); call ff2sdnew%set_src(ff%cfg); call ff2sdnew%set_dst(sdnew%cfg); call ff2sdnew%initialize()
+      end block setup_new_couplers
       
-      ! ! Create new couplers
-      ! setup_new_couplers: block
-      !    use parallel, only: group
-      !    sdnew2ff=coupler(src_grp=group,dst_grp=group,name='sd2ff'); call sdnew2ff%set_src(sdnew%cfg); call sdnew2ff%set_dst(ff%cfg); call sdnew2ff%initialize()
-      !    ff2sdnew=coupler(src_grp=group,dst_grp=group,name='ff2sd'); call ff2sdnew%set_src(ff%cfg); call ff2sdnew%set_dst(sdnew%cfg); call ff2sdnew%initialize()
-      ! end block setup_new_couplers
+      ! Initialize sdnew using ff
+      initialize_sdnew_from_ff: block
+         integer :: i,j,k,n
+         call ff2sdnew%push(ff%fs%Q(:,:,:,1)); call ff2sdnew%transfer(); call ff2sdnew%pull(sdnew%fs%Q(:,:,:,2))
+         call ff2sdnew%push(ff%fs%Q(:,:,:,2)); call ff2sdnew%transfer(); call ff2sdnew%pull(sdnew%fs%Q(:,:,:,4))
+         call ff2sdnew%push(ff%Ui);            call ff2sdnew%transfer(); call ff2sdnew%pull(sdnew%Ui)
+         call ff2sdnew%push(ff%Vi);            call ff2sdnew%transfer(); call ff2sdnew%pull(sdnew%Vi)
+         call ff2sdnew%push(ff%Wi);            call ff2sdnew%transfer(); call ff2sdnew%pull(sdnew%Wi)
+         do k=sdnew%cfg%kmino_+1,sdnew%cfg%kmaxo_; do j=sdnew%cfg%jmino_+1,sdnew%cfg%jmaxo_; do i=sdnew%cfg%imino_+1,sdnew%cfg%imaxo_
+            sdnew%fs%Q(i,j,k,5)=0.5_WP*sum(sdnew%fs%Q(i-1:i,j,k,2)*sdnew%Ui(i-1:i,j,k))
+            sdnew%fs%Q(i,j,k,6)=0.5_WP*sum(sdnew%fs%Q(i,j-1:j,k,2)*sdnew%Vi(i,j-1:j,k))
+            sdnew%fs%Q(i,j,k,7)=0.5_WP*sum(sdnew%fs%Q(i,j,k-1:k,2)*sdnew%Wi(i,j,k-1:k))
+         end do; end do; end do
+         do n=1,sdnew%fs%nQ; call sdnew%cfg%sync(sdnew%fs%Q(:,:,:,n)); end do
+      end block initialize_sdnew_from_ff
       
-      ! ! Initialize sdnew using ff
-      ! initialize_sdnew_from_ff: block
-      !    integer :: i,j,k,n
-      !    call ff2sdnew%push(ff%fs%Q(:,:,:,1)); call ff2sdnew%transfer(); call ff2sdnew%pull(sdnew%fs%Q(:,:,:,2))
-      !    call ff2sdnew%push(ff%fs%Q(:,:,:,2)); call ff2sdnew%transfer(); call ff2sdnew%pull(sdnew%fs%Q(:,:,:,4))
-      !    call ff2sdnew%push(ff%Ui);            call ff2sdnew%transfer(); call ff2sdnew%pull(sdnew%Ui)
-      !    call ff2sdnew%push(ff%Vi);            call ff2sdnew%transfer(); call ff2sdnew%pull(sdnew%Vi)
-      !    call ff2sdnew%push(ff%Wi);            call ff2sdnew%transfer(); call ff2sdnew%pull(sdnew%Wi)
-      !    do k=sdnew%cfg%kmino_+1,sdnew%cfg%kmaxo_; do j=sdnew%cfg%jmino_+1,sdnew%cfg%jmaxo_; do i=sdnew%cfg%imino_+1,sdnew%cfg%imaxo_
-      !       sdnew%fs%Q(i,j,k,5)=0.5_WP*sum(sdnew%fs%Q(i-1:i,j,k,2)*sdnew%Ui(i-1:i,j,k))
-      !       sdnew%fs%Q(i,j,k,6)=0.5_WP*sum(sdnew%fs%Q(i,j-1:j,k,2)*sdnew%Vi(i,j-1:j,k))
-      !       sdnew%fs%Q(i,j,k,7)=0.5_WP*sum(sdnew%fs%Q(i,j,k-1:k,2)*sdnew%Wi(i,j,k-1:k))
-      !    end do; end do; end do
-      !    do n=1,sdnew%fs%nQ; call sdnew%cfg%sync(sdnew%fs%Q(:,:,:,n)); end do
-      ! end block initialize_sdnew_from_ff
+      ! Initialize sdnew using sd
+      initialize_sdnew_from_sd: block
+         use parallel, only: group
+         integer :: i,j,k,n
+         type(coupler) :: sd2sdnew
+         real(WP), dimension(:,:,:), allocatable :: tmp
+         ! Create new coupler
+         sd2sdnew=coupler(src_grp=group,dst_grp=group,name='sd2sd'); call sd2sdnew%set_src(sd%cfg); call sd2sdnew%set_dst(sdnew%cfg); call sd2sdnew%initialize()
+         ! Allocate tmp array for transfer
+         allocate(tmp(sdnew%fs%cfg%imino_:sdnew%fs%cfg%imaxo_,sdnew%fs%cfg%jmino_:sdnew%fs%cfg%jmaxo_,sdnew%fs%cfg%kmino_:sdnew%fs%cfg%kmaxo_))
+         ! Transfer Q(1-7) - since the mesh is the same, we can safely ignore staggering here
+         do n=1,7
+            tmp=0.0_WP; call sd2sdnew%push(sd%fs%Q(:,:,:,n)); call sd2sdnew%transfer(); call sd2sdnew%pull(tmp)
+            do k=sdnew%cfg%kmino_,sdnew%cfg%kmaxo_; do j=sdnew%cfg%jmino_,sdnew%cfg%jmaxo_; do i=sdnew%cfg%imino_,sdnew%cfg%imaxo_
+               if (sdnew%fs%cfg%xm(i).gt.sd%fs%cfg%x(sd%fs%cfg%imin).and.sdnew%fs%cfg%xm(i).lt.sd%fs%cfg%x(sd%fs%cfg%imax+1).and.&
+               &   sdnew%fs%cfg%ym(j).gt.sd%fs%cfg%y(sd%fs%cfg%jmin).and.sdnew%fs%cfg%ym(j).lt.sd%fs%cfg%y(sd%fs%cfg%jmax+1).and.&
+               &   sdnew%fs%cfg%zm(k).gt.sd%fs%cfg%z(sd%fs%cfg%kmin).and.sdnew%fs%cfg%zm(k).lt.sd%fs%cfg%z(sd%fs%cfg%kmax+1)) sdnew%fs%Q(i,j,k,n)=tmp(i,j,k)
+            end do; end do; end do
+         end do
+         ! Transfer VOF
+         tmp=0.0_WP; call sd2sdnew%push(sd%fs%VF); call sd2sdnew%transfer(); call sd2sdnew%pull(tmp)
+         do k=sdnew%cfg%kmino_,sdnew%cfg%kmaxo_; do j=sdnew%cfg%jmino_,sdnew%cfg%jmaxo_; do i=sdnew%cfg%imino_,sdnew%cfg%imaxo_
+            if (sdnew%fs%cfg%xm(i).gt.sd%fs%cfg%x(sd%fs%cfg%imin).and.sdnew%fs%cfg%xm(i).lt.sd%fs%cfg%x(sd%fs%cfg%imax+1).and.&
+            &   sdnew%fs%cfg%ym(j).gt.sd%fs%cfg%y(sd%fs%cfg%jmin).and.sdnew%fs%cfg%ym(j).lt.sd%fs%cfg%y(sd%fs%cfg%jmax+1).and.&
+            &   sdnew%fs%cfg%zm(k).gt.sd%fs%cfg%z(sd%fs%cfg%kmin).and.sdnew%fs%cfg%zm(k).lt.sd%fs%cfg%z(sd%fs%cfg%kmax+1)) sdnew%fs%VF(i,j,k)=tmp(i,j,k)
+         end do; end do; end do
+         ! Transfer barycenters
+         do n=1,3
+            tmp=0.0_WP; call sd2sdnew%push(sd%fs%BG(n,:,:,:)); call sd2sdnew%transfer(); call sd2sdnew%pull(tmp)
+            do k=sdnew%cfg%kmino_,sdnew%cfg%kmaxo_; do j=sdnew%cfg%jmino_,sdnew%cfg%jmaxo_; do i=sdnew%cfg%imino_,sdnew%cfg%imaxo_
+               if (sdnew%fs%cfg%xm(i).gt.sd%fs%cfg%x(sd%fs%cfg%imin).and.sdnew%fs%cfg%xm(i).lt.sd%fs%cfg%x(sd%fs%cfg%imax+1).and.&
+               &   sdnew%fs%cfg%ym(j).gt.sd%fs%cfg%y(sd%fs%cfg%jmin).and.sdnew%fs%cfg%ym(j).lt.sd%fs%cfg%y(sd%fs%cfg%jmax+1).and.&
+               &   sdnew%fs%cfg%zm(k).gt.sd%fs%cfg%z(sd%fs%cfg%kmin).and.sdnew%fs%cfg%zm(k).lt.sd%fs%cfg%z(sd%fs%cfg%kmax+1)) sdnew%fs%BG(n,i,j,k)=tmp(i,j,k)
+            end do; end do; end do
+         end do
+         do n=1,3
+            tmp=0.0_WP; call sd2sdnew%push(sd%fs%BL(n,:,:,:)); call sd2sdnew%transfer(); call sd2sdnew%pull(tmp)
+            do k=sdnew%cfg%kmino_,sdnew%cfg%kmaxo_; do j=sdnew%cfg%jmino_,sdnew%cfg%jmaxo_; do i=sdnew%cfg%imino_,sdnew%cfg%imaxo_
+               if (sdnew%fs%cfg%xm(i).gt.sd%fs%cfg%x(sd%fs%cfg%imin).and.sdnew%fs%cfg%xm(i).lt.sd%fs%cfg%x(sd%fs%cfg%imax+1).and.&
+               &   sdnew%fs%cfg%ym(j).gt.sd%fs%cfg%y(sd%fs%cfg%jmin).and.sdnew%fs%cfg%ym(j).lt.sd%fs%cfg%y(sd%fs%cfg%jmax+1).and.&
+               &   sdnew%fs%cfg%zm(k).gt.sd%fs%cfg%z(sd%fs%cfg%kmin).and.sdnew%fs%cfg%zm(k).lt.sd%fs%cfg%z(sd%fs%cfg%kmax+1)) sdnew%fs%BL(n,i,j,k)=tmp(i,j,k)
+            end do; end do; end do
+         end do
+         ! Build PLIC interface
+         call sdnew%fs%build_interface()
+         ! Communicate conserved variables just to be safe
+         do n=1,sdnew%fs%nQ; call sdnew%fs%cfg%sync(sdnew%fs%Q(:,:,:,i)); end do
+         ! Rebuild primitive variables
+         call sdnew%fs%get_primitive()
+         ! Interpolate velocity
+         call sdnew%fs%interp_vel(sdnew%Ui,sdnew%Vi,sdnew%Wi)
+         ! Compute local Mach number
+         sdnew%Ma=sqrt(sdnew%Ui**2+sdnew%Vi**2+sdnew%Wi**2)/sdnew%fs%C
+         ! Monitor
+         call sdnew%output_monitor()
+         ! Free memory
+         deallocate(tmp)
+         call sd2sdnew%finalize()
+      end block initialize_sdnew_from_sd
       
-      ! ! Initialize sdnew using sd
-      ! initialize_sdnew_from_sd: block
-      !    use parallel, only: group
-      !    integer :: i,j,k,n
-      !    type(coupler) :: sd2sdnew
-      !    real(WP), dimension(:,:,:), allocatable :: tmp
-      !    ! Create new coupler
-      !    sd2sdnew=coupler(src_grp=group,dst_grp=group,name='sd2sd'); call sd2sdnew%set_src(sd%cfg); call sd2sdnew%set_dst(sdnew%cfg); call sd2sdnew%initialize()
-      !    ! Allocate tmp array for transfer
-      !    allocate(tmp(sdnew%fs%cfg%imino_:sdnew%fs%cfg%imaxo_,sdnew%fs%cfg%jmino_:sdnew%fs%cfg%jmaxo_,sdnew%fs%cfg%kmino_:sdnew%fs%cfg%kmaxo_))
-      !    ! Transfer Q(1-7) - since the mesh is the same, we can safely ignore staggering here
-      !    do n=1,7
-      !       tmp=0.0_WP; call sd2sdnew%push(sd%fs%Q(:,:,:,n)); call sd2sdnew%transfer(); call sd2sdnew%pull(tmp)
-      !       do k=sdnew%cfg%kmino_,sdnew%cfg%kmaxo_; do j=sdnew%cfg%jmino_,sdnew%cfg%jmaxo_; do i=sdnew%cfg%imino_,sdnew%cfg%imaxo_
-      !          if (sdnew%fs%cfg%xm(i).gt.sd%fs%cfg%x(sd%fs%cfg%imin).and.sdnew%fs%cfg%xm(i).lt.sd%fs%cfg%x(sd%fs%cfg%imax+1).and.&
-      !          &   sdnew%fs%cfg%ym(j).gt.sd%fs%cfg%y(sd%fs%cfg%jmin).and.sdnew%fs%cfg%ym(j).lt.sd%fs%cfg%y(sd%fs%cfg%jmax+1).and.&
-      !          &   sdnew%fs%cfg%zm(k).gt.sd%fs%cfg%z(sd%fs%cfg%kmin).and.sdnew%fs%cfg%zm(k).lt.sd%fs%cfg%z(sd%fs%cfg%kmax+1)) sdnew%fs%Q(i,j,k,n)=tmp(i,j,k)
-      !       end do; end do; end do
-      !    end do
-      !    ! Transfer VOF
-      !    tmp=0.0_WP; call sd2sdnew%push(sd%fs%VF); call sd2sdnew%transfer(); call sd2sdnew%pull(tmp)
-      !    do k=sdnew%cfg%kmino_,sdnew%cfg%kmaxo_; do j=sdnew%cfg%jmino_,sdnew%cfg%jmaxo_; do i=sdnew%cfg%imino_,sdnew%cfg%imaxo_
-      !       if (sdnew%fs%cfg%xm(i).gt.sd%fs%cfg%x(sd%fs%cfg%imin).and.sdnew%fs%cfg%xm(i).lt.sd%fs%cfg%x(sd%fs%cfg%imax+1).and.&
-      !       &   sdnew%fs%cfg%ym(j).gt.sd%fs%cfg%y(sd%fs%cfg%jmin).and.sdnew%fs%cfg%ym(j).lt.sd%fs%cfg%y(sd%fs%cfg%jmax+1).and.&
-      !       &   sdnew%fs%cfg%zm(k).gt.sd%fs%cfg%z(sd%fs%cfg%kmin).and.sdnew%fs%cfg%zm(k).lt.sd%fs%cfg%z(sd%fs%cfg%kmax+1)) sdnew%fs%VF(i,j,k)=tmp(i,j,k)
-      !    end do; end do; end do
-      !    ! Transfer barycenters
-      !    do n=1,3
-      !       tmp=0.0_WP; call sd2sdnew%push(sd%fs%BG(n,:,:,:)); call sd2sdnew%transfer(); call sd2sdnew%pull(tmp)
-      !       do k=sdnew%cfg%kmino_,sdnew%cfg%kmaxo_; do j=sdnew%cfg%jmino_,sdnew%cfg%jmaxo_; do i=sdnew%cfg%imino_,sdnew%cfg%imaxo_
-      !          if (sdnew%fs%cfg%xm(i).gt.sd%fs%cfg%x(sd%fs%cfg%imin).and.sdnew%fs%cfg%xm(i).lt.sd%fs%cfg%x(sd%fs%cfg%imax+1).and.&
-      !          &   sdnew%fs%cfg%ym(j).gt.sd%fs%cfg%y(sd%fs%cfg%jmin).and.sdnew%fs%cfg%ym(j).lt.sd%fs%cfg%y(sd%fs%cfg%jmax+1).and.&
-      !          &   sdnew%fs%cfg%zm(k).gt.sd%fs%cfg%z(sd%fs%cfg%kmin).and.sdnew%fs%cfg%zm(k).lt.sd%fs%cfg%z(sd%fs%cfg%kmax+1)) sdnew%fs%BG(n,i,j,k)=tmp(i,j,k)
-      !       end do; end do; end do
-      !    end do
-      !    do n=1,3
-      !       tmp=0.0_WP; call sd2sdnew%push(sd%fs%BL(n,:,:,:)); call sd2sdnew%transfer(); call sd2sdnew%pull(tmp)
-      !       do k=sdnew%cfg%kmino_,sdnew%cfg%kmaxo_; do j=sdnew%cfg%jmino_,sdnew%cfg%jmaxo_; do i=sdnew%cfg%imino_,sdnew%cfg%imaxo_
-      !          if (sdnew%fs%cfg%xm(i).gt.sd%fs%cfg%x(sd%fs%cfg%imin).and.sdnew%fs%cfg%xm(i).lt.sd%fs%cfg%x(sd%fs%cfg%imax+1).and.&
-      !          &   sdnew%fs%cfg%ym(j).gt.sd%fs%cfg%y(sd%fs%cfg%jmin).and.sdnew%fs%cfg%ym(j).lt.sd%fs%cfg%y(sd%fs%cfg%jmax+1).and.&
-      !          &   sdnew%fs%cfg%zm(k).gt.sd%fs%cfg%z(sd%fs%cfg%kmin).and.sdnew%fs%cfg%zm(k).lt.sd%fs%cfg%z(sd%fs%cfg%kmax+1)) sdnew%fs%BL(n,i,j,k)=tmp(i,j,k)
-      !       end do; end do; end do
-      !    end do
-      !    ! Build PLIC interface
-      !    call sdnew%fs%build_interface()
-      !    ! Communicate conserved variables just to be safe
-      !    do n=1,sdnew%fs%nQ; call sdnew%fs%cfg%sync(sdnew%fs%Q(:,:,:,i)); end do
-      !    ! Rebuild primitive variables
-      !    call sdnew%fs%get_primitive()
-      !    ! Interpolate velocity
-      !    call sdnew%fs%interp_vel(sdnew%Ui,sdnew%Vi,sdnew%Wi)
-      !    ! Compute local Mach number
-      !    sdnew%Ma=sqrt(sdnew%Ui**2+sdnew%Vi**2+sdnew%Wi**2)/sdnew%fs%C
-      !    ! Monitor
-      !    call sdnew%output_monitor()
-      !    ! Free memory
-      !    deallocate(tmp)
-      ! end block initialize_sdnew_from_sd
-      
-      ! ! Finally, transfer allocations
-      ! transfer_allocation: block
-      !    ! Copy couplers
-      !    sdnew2ff=sd2ff
-      !    ff2sdnew=ff2sd
-      !    ! Copy sd
-      !    sd=sdnew
-      ! end block transfer_allocation
+      ! Finally, transfer allocation
+      transfer_allocation: block
+         ! Finalize and free up couplers
+         call sd2ff%finalize(); deallocate(sd2ff)
+         call ff2sd%finalize(); deallocate(ff2sd)
+         ! Point to new ones
+         sd2ff=>sdnew2ff
+         ff2sd=>ff2sdnew
+         ! Finalize and free up sd
+         call sd%finalize(); deallocate(sd)
+         sd=>sdnew
+      end block transfer_allocation
       
    end subroutine remesh
+   
    
    !> Coupling from sd to ff
    subroutine couple_sd2ff()
@@ -839,8 +836,21 @@ contains
    !> Finalize the NGA2 simulation
    subroutine simulation_final
       implicit none
-      call sd%finalize()
+      if (associated(sd)) then
+         call sd%finalize()
+         deallocate(sd)
+      end if
+      if (associated(sd2ff)) then
+         call sd2ff%finalize()
+         deallocate(sd2ff)
+      end if
+      if (associated(ff2sd)) then
+         call ff2sd%finalize()
+         deallocate(ff2sd)
+      end if
       call ff%finalize()
+      call ens_evt%finalize()
+      call remesh_evt%finalize()
    end subroutine simulation_final
    
    
