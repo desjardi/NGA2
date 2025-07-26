@@ -290,7 +290,7 @@ contains
          call param_read('Shock-drop partition',partition)
          X0=-0.5_WP*real(meshsize,WP)*dx !< This assumes that the domain is centered on (0,0,0)
          ! Allocate and initialize the shock-drop solver
-         allocate(sd); call sd%initialize(dx=dx,meshsize=meshsize,startloc=X0,group=group,partition=partition)
+         allocate(sd); call sd%initialize(dx=dx,meshsize=meshsize,startloc=X0,group=group,partition=partition,continue_monitor=.false.)
          ! Provide relaxation and thermodynamic models
          sd%fs%relax=>P_relax
          sd%fs%getPL=>get_PL; sd%fs%getCL=>get_CL; sd%fs%getSL=>get_SL; sd%fs%getTL=>get_TL
@@ -486,14 +486,15 @@ contains
          ! Shift domain based on core barycenter
          X0=[sd%cfg%x(sd%cfg%imin),sd%cfg%y(sd%cfg%jmin),sd%cfg%z(sd%cfg%kmin)]+sd%fs%dx*real([int(sd%Xcore/sd%fs%dx),int(sd%Ycore/sd%fs%dy),int(sd%Zcore/sd%fs%dz)],WP)
          ! Initialize the shock-drop solver
-         allocate(sdnew); call sdnew%initialize(dx=sd%fs%dx,meshsize=[sd%cfg%nx,sd%cfg%ny,sd%cfg%nz],startloc=X0,group=group,partition=[sd%cfg%npx,sd%cfg%npy,sd%cfg%npz])
+         allocate(sdnew); call sdnew%initialize(dx=sd%fs%dx,meshsize=[sd%cfg%nx,sd%cfg%ny,sd%cfg%nz],startloc=X0,group=group,partition=[sd%cfg%npx,sd%cfg%npy,sd%cfg%npz],continue_monitor=.true.)
          ! Provide relaxation and thermodynamic models
          sdnew%fs%relax=>sd%fs%relax
          sdnew%fs%getPL=>sd%fs%getPL; sdnew%fs%getCL=>sd%fs%getCL; sdnew%fs%getSL=>sd%fs%getSL; sdnew%fs%getTL=>sd%fs%getTL
          sdnew%fs%getPG=>sd%fs%getPG; sdnew%fs%getCG=>sd%fs%getCG; sdnew%fs%getSG=>sd%fs%getSG; sdnew%fs%getTG=>sd%fs%getTG
          ! Set time integration parameters
-         sdnew%time%dtmax =sd%time%dtmax
+         sdnew%time%t     =sd%time%t
          sdnew%time%dt    =sd%time%dt
+         sdnew%time%dtmax =sd%time%dtmax
          sdnew%time%cflmax=sd%time%cflmax
          sdnew%time%tmax  =sd%time%tmax
          ! We finally need to transfer our viscosities explicitly...
@@ -528,11 +529,12 @@ contains
          use parallel, only: group
          integer :: i,j,k,n
          type(coupler) :: sd2sdnew
-         real(WP), dimension(:,:,:), allocatable :: tmp
+         real(WP), dimension(:,:,:), allocatable :: tmp,tmp2
          ! Create new coupler
          sd2sdnew=coupler(src_grp=group,dst_grp=group,name='sd2sd'); call sd2sdnew%set_src(sd%cfg); call sd2sdnew%set_dst(sdnew%cfg); call sd2sdnew%initialize()
-         ! Allocate tmp array for transfer
+         ! Allocate tmp/tmp2 array for transfer
          allocate(tmp(sdnew%fs%cfg%imino_:sdnew%fs%cfg%imaxo_,sdnew%fs%cfg%jmino_:sdnew%fs%cfg%jmaxo_,sdnew%fs%cfg%kmino_:sdnew%fs%cfg%kmaxo_))
+         allocate(tmp2(sd%fs%cfg%imino_:sd%fs%cfg%imaxo_,sd%fs%cfg%jmino_:sd%fs%cfg%jmaxo_,sd%fs%cfg%kmino_:sd%fs%cfg%kmaxo_))
          ! Transfer Q(1-7) - since the mesh is the same, we can safely ignore staggering here
          do n=1,7
             tmp=0.0_WP; call sd2sdnew%push(sd%fs%Q(:,:,:,n)); call sd2sdnew%transfer(); call sd2sdnew%pull(tmp)
@@ -551,7 +553,7 @@ contains
          end do; end do; end do
          ! Transfer barycenters
          do n=1,3
-            tmp=0.0_WP; call sd2sdnew%push(sd%fs%BG(n,:,:,:)); call sd2sdnew%transfer(); call sd2sdnew%pull(tmp)
+            tmp=0.0_WP; tmp2=sd%fs%BG(n,:,:,:); call sd2sdnew%push(tmp2); call sd2sdnew%transfer(); call sd2sdnew%pull(tmp)
             do k=sdnew%cfg%kmino_,sdnew%cfg%kmaxo_; do j=sdnew%cfg%jmino_,sdnew%cfg%jmaxo_; do i=sdnew%cfg%imino_,sdnew%cfg%imaxo_
                if (sdnew%fs%cfg%xm(i).gt.sd%fs%cfg%x(sd%fs%cfg%imin).and.sdnew%fs%cfg%xm(i).lt.sd%fs%cfg%x(sd%fs%cfg%imax+1).and.&
                &   sdnew%fs%cfg%ym(j).gt.sd%fs%cfg%y(sd%fs%cfg%jmin).and.sdnew%fs%cfg%ym(j).lt.sd%fs%cfg%y(sd%fs%cfg%jmax+1).and.&
@@ -569,7 +571,7 @@ contains
          ! Build PLIC interface
          call sdnew%fs%build_interface()
          ! Communicate conserved variables just to be safe
-         do n=1,sdnew%fs%nQ; call sdnew%fs%cfg%sync(sdnew%fs%Q(:,:,:,i)); end do
+         do n=1,sdnew%fs%nQ; call sdnew%fs%cfg%sync(sdnew%fs%Q(:,:,:,n)); end do
          ! Rebuild primitive variables
          call sdnew%fs%get_primitive()
          ! Interpolate velocity
@@ -579,7 +581,7 @@ contains
          ! Monitor
          call sdnew%output_monitor()
          ! Free memory
-         deallocate(tmp)
+         deallocate(tmp,tmp2)
          call sd2sdnew%finalize()
       end block initialize_sdnew_from_sd
       

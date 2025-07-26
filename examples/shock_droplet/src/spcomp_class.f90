@@ -179,6 +179,9 @@ contains
       allocate(this%BETA(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_)); this%BETA=0.0_WP
       allocate(this%DIFF(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_)); this%DIFF=0.0_WP
       
+      ! Create timers
+      this%trhs=timer(comm=this%cfg%comm,name='RHS')
+      
    end subroutine initialize
    
    

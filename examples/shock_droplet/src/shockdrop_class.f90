@@ -107,7 +107,7 @@ contains
    
    
    !> Initialization of a shock-drop problem
-   subroutine initialize(this,dx,meshsize,startloc,group,partition)
+   subroutine initialize(this,dx,meshsize,startloc,group,partition,continue_monitor)
       use mpi_f08, only: MPI_Group
       implicit none
       class(shockdrop), intent(inout) :: this
@@ -116,6 +116,13 @@ contains
       real(WP), dimension(3), intent(in) :: startloc
       type(MPI_Group)       , intent(in) :: group
       integer , dimension(3), intent(in) :: partition
+      logical , optional    , intent(in) :: continue_monitor
+      logical :: monitor_continue
+      
+      ! Check if this shockdrop is a continuation, coming from remeshing
+      is_monitor_continued: block
+         monitor_continue=.false.; if (present(continue_monitor)) monitor_continue=continue_monitor
+      end block is_monitor_continued
       
       ! Initialize config object
       create_config: block
@@ -195,7 +202,7 @@ contains
       ! Create monitor files
       create_monitor: block
          ! Create simulation monitor
-         this%mfile=monitor(this%fs%cfg%amRoot,'shockdrop_sim')
+         this%mfile=monitor(this%fs%cfg%amRoot,'shockdrop_sim',restart=monitor_continue)
          call this%mfile%add_column(this%time%n,'Timestep number')
          call this%mfile%add_column(this%time%t,'Time')
          call this%mfile%add_column(this%time%dt,'Timestep size')
@@ -222,7 +229,7 @@ contains
          call this%mfile%add_column(this%fs%VFmax  ,'VFmax'    )
          call this%mfile%add_column(this%fs%VFmin  ,'VFmin'    )
          ! Create CFL monitor
-         this%cflfile=monitor(this%fs%cfg%amRoot,'shockdrop_cfl')
+         this%cflfile=monitor(this%fs%cfg%amRoot,'shockdrop_cfl',restart=monitor_continue)
          call this%cflfile%add_column(this%time%n,'Timestep number')
          call this%cflfile%add_column(this%time%t,'Time')
          call this%cflfile%add_column(this%fs%CFLc_x,'Convective xCFL')
@@ -235,7 +242,7 @@ contains
          call this%cflfile%add_column(this%fs%CFLv_y,'Viscous yCFL')
          call this%cflfile%add_column(this%fs%CFLv_z,'Viscous zCFL')
          ! Create conservation monitor
-         this%consfile=monitor(this%fs%cfg%amRoot,'shockdrop_cons')
+         this%consfile=monitor(this%fs%cfg%amRoot,'shockdrop_cons',restart=monitor_continue)
          call this%consfile%add_column(this%time%n,'Timestep number')
          call this%consfile%add_column(this%time%t,'Time')
          call this%consfile%add_column(this%fs%VFint  ,'Volume')
@@ -251,7 +258,7 @@ contains
          call this%consfile%add_column(this%fs%RHOSLint,'Liquid entropy')
          call this%consfile%add_column(this%fs%RHOSGint,'Gas entropy')
          ! Create drop output
-         this%dropfile=monitor(this%fs%cfg%amRoot,'shockdrop_drop')
+         this%dropfile=monitor(this%fs%cfg%amRoot,'shockdrop_drop',restart=monitor_continue)
          call this%dropfile%add_column(this%time%n,'Timestep number')
          call this%dropfile%add_column(this%time%t,'Time')
          call this%dropfile%add_column(this%fs%VFint  ,'Total volume')
