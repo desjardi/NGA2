@@ -544,6 +544,7 @@ contains
       ! Initialize sdnew using ff
       initialize_sdnew_from_ff: block
          integer :: i,j,k,n
+         ! Transfer data
          call ff2sdnew%push(ff%fs%Q(:,:,:,1)); call ff2sdnew%transfer(); call ff2sdnew%pull(sdnew%fs%Q(:,:,:,2))
          call ff2sdnew%push(ff%fs%Q(:,:,:,2)); call ff2sdnew%transfer(); call ff2sdnew%pull(sdnew%fs%Q(:,:,:,4))
          call ff2sdnew%push(ff%Ui);            call ff2sdnew%transfer(); call ff2sdnew%pull(sdnew%Ui)
@@ -554,7 +555,12 @@ contains
             sdnew%fs%Q(i,j,k,6)=0.5_WP*sum(sdnew%fs%Q(i,j-1:j,k,2)*sdnew%Vi(i,j-1:j,k))
             sdnew%fs%Q(i,j,k,7)=0.5_WP*sum(sdnew%fs%Q(i,j,k-1:k,2)*sdnew%Wi(i,j,k-1:k))
          end do; end do; end do
+         ! Communicate conserved variables
          do n=1,sdnew%fs%nQ; call sdnew%cfg%sync(sdnew%fs%Q(:,:,:,n)); end do
+         ! Rebuild primitive variables
+         call sdnew%fs%get_primitive()
+         ! Interpolate velocity
+         call sdnew%fs%interp_vel(sdnew%Ui,sdnew%Vi,sdnew%Wi)
       end block initialize_sdnew_from_ff
       
       ! Initialize sdnew using sd
@@ -786,8 +792,8 @@ contains
          Q(i,j,k,2)=coeff*(Q(i,j,k,2)-sd%fs%Q(i,j,k,4))
       end do; end do; end do
       
-      ! Second pass to apply forcing
-      do k=sd%cfg%kmino_+1,sd%cfg%kmaxo_; do j=sd%cfg%jmino_+1,sd%cfg%jmaxo_; do i=sd%cfg%imino_+1,sd%cfg%imaxo_
+      ! Second pass to apply forcing (+2 in x because remesh is missing imino...)
+      do k=sd%cfg%kmino_+1,sd%cfg%kmaxo_; do j=sd%cfg%jmino_+1,sd%cfg%jmaxo_; do i=sd%cfg%imino_+2,sd%cfg%imaxo_
          sd%fs%Q(i,j,k,1)=sd%fs%Q(i,j,k,1)
          sd%fs%Q(i,j,k,2)=sd%fs%Q(i,j,k,2)+Q(i,j,k,1)
          sd%fs%Q(i,j,k,3)=sd%fs%Q(i,j,k,3)

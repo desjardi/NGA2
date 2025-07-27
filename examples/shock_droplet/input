@@ -28,7 +28,7 @@ Shock-drop nx : 300 400 1
 Shock-drop dt :  2.5e-3
 Shock-drop CFL : 1
 !- Remeshing ----------
-Remeshing period : 2
+Remeshing period : 0.5
 
 # Far-field simulation
 !- Parallelization ----
