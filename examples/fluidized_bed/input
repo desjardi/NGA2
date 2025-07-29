@@ -1,5 +1,5 @@
 # Parallelization
-Partition :	8 1 1
+Partition :	4 1 1
 
 # Mesh definition
 Lx :	.0256
@@ -23,19 +23,12 @@ Inlet velocity : 0.1
 # Particle parameters
 Bed height : .0128
 Particle volume fraction : 0.5
-Coefficient of restitution : 0.8
 Friction coefficient : 0.1
 Particle density :  2600
 Particle diameter : 200e-6
+Filter width : 600e-6
 Collision timescale : 15e-5
-
-# Pressure solver
-Pressure tolerance : 	1e-5
-Pressure iteration : 	100
-
-# Implicit velocity solver
-Implicit tolerance : 	1e-6
-Implicit iteration : 	100
+Coefficient of restitution : 0.8
 
 # Ensight output
 Ensight output period : 80e-5
