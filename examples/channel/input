@@ -21,14 +21,6 @@ Perturbation : 0
 Max timestep size : 2e-2
 Max cfl number :    0.9
 
-# Pressure solver
-Pressure tolerance : 1e-6
-Pressure iteration : 100
-
-# Implicit velocity solver
-Implicit tolerance : 1e-6
-Implicit iteration : 100
-
 # Ensight output
 Ensight output period :  1e-1
 Postproc output period : 10

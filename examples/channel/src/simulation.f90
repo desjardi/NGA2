@@ -2,7 +2,8 @@
 module simulation
    use precision,         only: WP
    use geometry,          only: cfg
-   use hypre_str_class,   only: hypre_str
+   use fft2d_class,       only: fft2d
+   use ddadi_class,       only: ddadi
    use incomp_class,      only: incomp
    use timetracker_class, only: timetracker
    use ensight_class,     only: ensight
@@ -10,27 +11,27 @@ module simulation
    use monitor_class,     only: monitor
    implicit none
    private
-   
+
    !> Single-phase incompressible flow solver and corresponding time tracker
    type(incomp),      public :: fs
    type(timetracker), public :: time
-   type(hypre_str),   public :: ps
-   type(hypre_str),   public :: vs
-   
+   type(fft2d),       public :: ps
+   type(ddadi),       public :: vs
+
    !> Ensight postprocessing
    type(ensight) :: ens_out
    type(event)   :: ens_evt
-   
+
    !> Simulation monitor file
    type(monitor) :: mfile,cflfile,forcefile
-   
+
    public :: simulation_init,simulation_run,simulation_final
-   
+
    !> Private work arrays
    real(WP), dimension(:,:,:), allocatable :: resU,resV,resW
    real(WP), dimension(:,:,:), allocatable :: Ui,Vi,Wi
    real(WP), dimension(:,:,:,:), allocatable :: SR
-   
+
    !> Fluid viscosity
    real(WP) :: visc
 
@@ -40,10 +41,10 @@ module simulation
 
    !> Event for post-processing
    type(event) :: ppevt
-   
+
 contains
-   
-   
+
+
    !> Specialized subroutine that outputs the velocity distribution
    subroutine postproc_vel()
       use string,    only: str_medium
@@ -90,15 +91,15 @@ contains
       end if
       ! Deallocate work arrays
       deallocate(Uavg,Uavg_,vol,vol_)
-   end subroutine postproc_vel
-   
-   
+    end subroutine postproc_vel
+
+
    !> Initialization of problem solver
    subroutine simulation_init
       use param, only: param_read
       implicit none
-      
-      
+
+
       ! Allocate work arrays
       allocate_work_arrays: block
          allocate(resU(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
@@ -109,8 +110,8 @@ contains
          allocate(Wi  (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
          allocate(SR(6,cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
       end block allocate_work_arrays
-      
-      
+
+
       ! Initialize time tracker with 2 subiterations
       initialize_timetracker: block
          time=timetracker(amRoot=cfg%amRoot)
@@ -119,12 +120,12 @@ contains
          time%dt=time%dtmax
          time%itmax=2
       end block initialize_timetracker
-      
-      
+
+
       ! Create a single-phase flow solver without bconds
       create_and_initialize_flow_solver: block
-         use hypre_str_class, only: pcg_pfmg,gmres_pfmg
          use mathtools, only: twoPi
+         use random,    only: random_uniform
          integer :: i,j,k
          real(WP) :: amp,vel
          ! Create flow solver
@@ -134,19 +135,15 @@ contains
          ! Assign constant density
          call param_read('Density',fs%rho)
          ! Configure pressure solver
-         ps=hypre_str(cfg=cfg,name='Pressure',method=pcg_pfmg,nst=7)
-         ps%maxlevel=10
-         call param_read('Pressure iteration',ps%maxit)
-         call param_read('Pressure tolerance',ps%rcvg)
+         ps=fft2d(cfg=cfg,name='Pressure',nst=7)
          ! Configure implicit velocity solver
-         vs=hypre_str(cfg=cfg,name='Velocity',method=gmres_pfmg,nst=7)
-         call param_read('Implicit iteration',vs%maxit)
-         call param_read('Implicit tolerance',vs%rcvg)
+         vs=ddadi(cfg=cfg,name='Velocity',nst=7)
          ! Setup the solver
          call fs%setup(pressure_solver=ps,implicit_solver=vs)
          ! Initialize velocity based on specified bulk
          call param_read('Ubulk',Ubulk)
          call param_read('Wbulk',Wbulk)
+         fs%U=0.0_WP; fs%V=0.0_WP; fs%W=0.0_WP
          where (fs%umask.eq.0) fs%U=Ubulk
          where (fs%wmask.eq.0) fs%W=Wbulk
          meanU=Ubulk
@@ -162,12 +159,15 @@ contains
                end do
             end do
          end do
+         if (fs%cfg%nx.eq.1) fs%U=0.0_WP
+         if (fs%cfg%ny.eq.1) fs%V=0.0_WP
+         if (fs%cfg%nz.eq.1) fs%W=0.0_WP
          ! Calculate cell-centered velocities and divergence
          call fs%interp_vel(Ui,Vi,Wi)
          call fs%get_div()
       end block create_and_initialize_flow_solver
-      
-      
+
+
       ! Add Ensight output
       create_ensight: block
          ! Create Ensight output from cfg
@@ -181,8 +181,8 @@ contains
          ! Output to ensight
          if (ens_evt%occurs()) call ens_out%write_data(time%t)
       end block create_ensight
-      
-      
+
+
       ! Create a monitor file
       create_monitor: block
          ! Prepare some info about fields
@@ -221,8 +221,8 @@ contains
          call forcefile%add_column(meanW,'Bulk W')
          call forcefile%write()
       end block create_monitor
-      
-      
+
+
       ! Create a specialized post-processing file
       create_postproc: block
          ! Create event for data postprocessing
@@ -231,18 +231,18 @@ contains
          ! Perform the output
          if (ppevt%occurs()) call postproc_vel()
       end block create_postproc
-      
-      
+
+
    end subroutine simulation_init
-   
-   
+
+
    !> Time integrate our problem
    subroutine simulation_run
       implicit none
-      
+
       ! Perform time integration
       do while (.not.time%done())
-         
+
          ! Increment time
          call fs%get_cfl(time%dt,time%cfl)
          call time%adjust_dt()
@@ -252,26 +252,26 @@ contains
          fs%Uold=fs%U
          fs%Vold=fs%V
          fs%Wold=fs%W
-         
+
          ! Apply time-varying Dirichlet conditions
          ! This is where time-dpt Dirichlet would be enforced
-         
+
          ! Perform sub-iterations
          do while (time%it.le.time%itmax)
-            
+
             ! Build mid-time velocity
             fs%U=0.5_WP*(fs%U+fs%Uold)
             fs%V=0.5_WP*(fs%V+fs%Vold)
             fs%W=0.5_WP*(fs%W+fs%Wold)
-            
+
             ! Explicit calculation of drho*u/dt from NS
             call fs%get_dmomdt(resU,resV,resW)
-            
+
             ! Assemble explicit residual
             resU=-2.0_WP*(fs%rho*fs%U-fs%rho*fs%Uold)+time%dt*resU
             resV=-2.0_WP*(fs%rho*fs%V-fs%rho*fs%Vold)+time%dt*resV
             resW=-2.0_WP*(fs%rho*fs%W-fs%rho*fs%Wold)+time%dt*resW
-            
+
             ! Add body forcing
             forcing: block
                use mpi_f08,  only: MPI_SUM,MPI_ALLREDUCE
@@ -295,23 +295,23 @@ contains
                end do
                call MPI_ALLREDUCE(myUvol,Uvol ,1,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr)
                call MPI_ALLREDUCE(myU   ,meanU,1,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr); meanU=meanU/Uvol
-               where (fs%umask.eq.0) resU=resU+Ubulk-meanU
+               where (fs%umask.eq.0) resU=resU+fs%rho*(Ubulk-meanU)
                call MPI_ALLREDUCE(myWvol,Wvol ,1,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr)
                call MPI_ALLREDUCE(myW   ,meanW,1,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr); meanW=meanW/Wvol
-               where (fs%wmask.eq.0) resW=resW+Wbulk-meanW
-            end block forcing   
-            
+               where (fs%wmask.eq.0) resW=resW+fs%rho*(Wbulk-meanW)
+            end block forcing
+
             ! Form implicit residuals
             call fs%solve_implicit(time%dt,resU,resV,resW)
-            
+
             ! Apply these residuals
             fs%U=2.0_WP*fs%U-fs%Uold+resU
             fs%V=2.0_WP*fs%V-fs%Vold+resV
             fs%W=2.0_WP*fs%W-fs%Wold+resW
-            
+
             ! Apply other boundary conditions on the resulting fields
             call fs%apply_bcond(time%t,time%dt)
-            
+
             ! Solve Poisson equation
             call fs%correct_mfr()
             call fs%get_div()
@@ -319,26 +319,26 @@ contains
             fs%psolv%sol=0.0_WP
             call fs%psolv%solve()
             call fs%shift_p(fs%psolv%sol)
-            
+
             ! Correct velocity
             call fs%get_pgrad(fs%psolv%sol,resU,resV,resW)
             fs%P=fs%P+fs%psolv%sol
             fs%U=fs%U-time%dt*resU/fs%rho
             fs%V=fs%V-time%dt*resV/fs%rho
             fs%W=fs%W-time%dt*resW/fs%rho
-            
+
             ! Increment sub-iteration counter
             time%it=time%it+1
-            
+
          end do
-         
+
          ! Recompute interpolated velocity and divergence
          call fs%interp_vel(Ui,Vi,Wi)
          call fs%get_div()
-         
+
          ! Output to ensight
          if (ens_evt%occurs()) call ens_out%write_data(time%t)
-         
+
          ! Perform and output monitoring
          call fs%get_max()
          call mfile%write()
@@ -349,27 +349,27 @@ contains
          if (ppevt%occurs()) call postproc_vel()
 
       end do
-      
+
    end subroutine simulation_run
-   
-   
+
+
    !> Finalize the NGA2 simulation
    subroutine simulation_final
       implicit none
-      
+
       ! Get rid of all objects - need destructors
       ! monitor
       ! ensight
       ! bcond
       ! timetracker
-      
+
       ! Deallocate work arrays
       deallocate(resU,resV,resW,Ui,Vi,Wi,SR)
-      
+
    end subroutine simulation_final
-   
-   
-   
-   
-   
+
+
+
+
+
 end module simulation
