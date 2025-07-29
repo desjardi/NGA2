@@ -1,0 +1,1 @@
+Helmholtz-Hodge decomposition of a velocity field in a 3D domain with 2 periodic directions. Poisson equations are solved using 2D FFT.
