@@ -81,7 +81,7 @@ contains
     if (allocated(self%gpy)) deallocate(self%gpy)
     if (allocated(self%gpz)) deallocate(self%gpz)
 
-    ! Allocate label array (0=fluid cell, 1=ghost point, 2=image point)
+    ! Allocate label array (0=fluid cell, +1=ghost point, -1=image point)
     allocate(self%label(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%label=0
 
   end function constructor
@@ -284,9 +284,9 @@ contains
     this%label=0
     do n=1,this%ngp
        i=this%gp(n)%ind(1); j=this%gp(n)%ind(2); k=this%gp(n)%ind(3)
-       this%label(i,j,k)=1 !< Ghost point
+       this%label(i,j,k)=+1 !< Ghost point
        i=this%gp(n)%im%ind(1); j=this%gp(n)%im%ind(2); k=this%gp(n)%im%ind(3)
-       this%label(i,j,k)=2 !< Image points
+       this%label(i,j,k)=-1 !< Image points
     end do
 
     ! X-face
@@ -717,8 +717,8 @@ contains
     case (dirichlet)
        do n=1,ngp
           i=gp(n)%ind(1); j=gp(n)%ind(2); k=gp(n)%ind(3)
-          IP=sum(gp(n)%im%itp*A(gp(n)%im%st(1,1:2),gp(n)%im%st(2,1:2),gp(n)%im%st(3,1:2)))
-          A(i,j,k)=2.0_WP*BP-IP
+          !IP=sum(gp(n)%im%itp*A(gp(n)%im%st(1,1:2),gp(n)%im%st(2,1:2),gp(n)%im%st(3,1:2)))
+          A(i,j,k)=BP!2.0_WP*BP-IP
        end do
     case (neumann)
        do n=1,ngp
