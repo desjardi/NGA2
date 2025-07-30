@@ -97,29 +97,88 @@ contains
    end subroutine fd_itp_build
    
    
-   function inverse_matrix(A) result(Ainv)
+!!$   function inverse_matrix(A) result(Ainv)
+!!$      use messager, only: die
+!!$      implicit none
+!!$      real(WP), dimension(:,:), intent(in) :: A
+!!$      real(WP), dimension(size(A,1),size(A,2)) :: Ainv
+!!$      real(WP), dimension(size(A,1)) :: work
+!!$      integer , dimension(size(A,1)) :: ipiv
+!!$      integer :: n,info
+!!$      external DGETRF
+!!$      external DGETRI
+!!$      ! Copy A over to Ainv to prevent it from being overwritten by LAPACK
+!!$      Ainv=A
+!!$      ! Store size
+!!$      n=size(A,1)
+!!$      ! Compute LU factorization of matrix A using partial pivoting with row interchanges
+!!$      call DGETRF(n,n,Ainv,n,ipiv,info)
+!!$      ! Error handling
+!!$      if (info.ne.0) call die('[inverse_matrix] Matrix is numerically singular')
+!!$      ! Compute inverse of matrix using LU factorization computed above
+!!$      call DGETRI(n,Ainv,n,ipiv,work,n,info)
+!!$      if (info.ne.0) call die('[inverse_matrix] Matrix inversion failed')
+!!$    end function inverse_matrix
+
+
+    function inverse_matrix(A) result(Ainv)
       use messager, only: die
       implicit none
       real(WP), dimension(:,:), intent(in) :: A
       real(WP), dimension(size(A,1),size(A,2)) :: Ainv
-      real(WP), dimension(size(A,1)) :: work
-      integer , dimension(size(A,1)) :: ipiv
-      integer :: n,info
-      external DGETRF
-      external DGETRI
-      ! Copy A over to Ainv to prevent it from being overwritten by LAPACK
-      Ainv=A
+      real(WP), dimension(size(A,1),size(A,2)) :: A_
+      real(WP), dimension(size(A,2)) :: row_temp
+      integer :: i,j,n,pivot
+      real(WP) :: maxA
+      ! Check if A is square
+      if (size(A,1).ne.size(A,2)) call die('[inverse_matrix] Matrix is not square')
       ! Store size
       n=size(A,1)
-      ! Compute LU factorization of matrix A using partial pivoting with row interchanges
-      call DGETRF(n,n,Ainv,n,ipiv,info)
-      ! Error handling
-      if (info.ne.0) call die('[inverse_matrix] Matrix is numerically singular')
-      ! Compute inverse of matrix using LU factorization computed above
-      call DGETRI(n,Ainv,n,ipiv,work,n,info)
-      if (info.ne.0) call die('[inverse_matrix] Matrix inversion failed')
+      A_=A
+      ! Initialize Ainv to identity matrix
+      Ainv=0.0_WP
+      do i=1,n
+         Ainv(i,i)=1.0_WP
+      end do
+      ! Forward elimination with partial pivoting
+      do i=1,n
+         ! Find pivot row
+         pivot=i
+         maxA=abs(A_(i,i))
+         do j=i+1,n
+            if (abs(A_(j,i)).gt.maxA) then
+               maxA=abs(A_(j,i))
+               pivot=j
+            end if
+         end do
+         ! Swap rows in A_ and Ainv if needed
+         if (pivot.ne.i) then
+            row_temp=A_(i,:)
+            A_(i,:)=A_(pivot,:)
+            A_(pivot,:)=row_temp
+            row_temp=Ainv(i,:)
+            Ainv(i,:)=Ainv(pivot,:)
+            Ainv(pivot,:)=row_temp
+         end if
+         ! Check for zero pivot
+         if (abs(A_(i,i)).lt.epsilon(A_(i,i))) call die('[inverse_matrix] Matrix is numerically singular')
+         ! Normalize pivot row
+         A_(i,:)=A_(i,:)/A_(i,i)
+         Ainv(i,:)=Ainv(i, :)/A_(i,i)
+         ! Eliminate below
+         do j=i+1,n
+            A_(j, :)= A_(j,:)-A_(j,i)*A_(i,:)
+            Ainv(j,:)=Ainv(j,:)-A_(j,i)*Ainv(i,:)
+         end do
+      end do
+      ! Backward substitution
+      do i=n,1,-1
+         do j=i+1,n
+            Ainv(i,:)=Ainv(i,:)-A_(i,j)*Ainv(j,:)
+         end do
+      end do
     end function inverse_matrix
-   
+
    
    ! Returns normalized vector: w=v/|v|
    pure function normalize(v) result(w)
