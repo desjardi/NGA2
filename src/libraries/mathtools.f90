@@ -174,6 +174,7 @@ contains
             end if
          end do
       end do
+      Ainv=transpose(Ainv)
     end function inverse_matrix
 
 
