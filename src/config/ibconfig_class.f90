@@ -12,6 +12,7 @@ module ibconfig_class
    ! List of known available methods for calculating VF from G
    integer, parameter, public :: bigot=1
    integer, parameter, public :: sharp=2
+   integer, parameter, public :: stair=3
    
    ! Min and max VF values considered
    real(WP), parameter, public :: VFlo=1.0e-12_WP
@@ -184,9 +185,15 @@ contains
             end do
             call this%sync(this%VF) !< Sync needed because of the Gib interpolation above
             call this%sync(this%SD) !< Sync needed because of the Gib interpolation above
-         end block sharp
-      case default
-         call die('[ibconfig calculate_vf] Unknown method to calculate VF')
+          end block sharp
+       case (stair)
+          ! Get stair-step fluid volume fraction from G
+          stairstep: block
+            this%VF=1.0_WP
+            where (this%Gib.gt.0.0_WP) this%VF=0.0_WP
+          end block stairstep
+       case default
+          call die('[ibconfig calculate_vf] Unknown method to calculate VF')
       end select
       
       ! Ensure VF is either 0 or 1, or VFlo<VF<VFhi
