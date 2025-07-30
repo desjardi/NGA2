@@ -28,13 +28,15 @@ module tracer_class
       real(WP), dimension(3) :: pos        !< Particle center coordinates
       real(WP), dimension(3) :: vel        !< Velocity of particle
       real(WP), dimension(3) :: acc        !< Acceleration of particle
+      real(WP) :: rho                      !< Density at particle location
+      real(WP) :: P                        !< Pressure at particle locatiom
       !> MPI_INTEGER data
       integer , dimension(3) :: ind        !< Index of cell containing particle center
       integer  :: flag                     !< Control parameter (0=normal, 1=done->will be removed)
    end type part
    !> Number of blocks, block length, and block types in a particle
    integer, parameter                         :: part_nblock=3
-   integer           , dimension(part_nblock) :: part_lblock=[1,9,4]
+   integer           , dimension(part_nblock) :: part_lblock=[1,11,4]
    type(MPI_Datatype), dimension(part_nblock) :: part_tblock=[MPI_INTEGER8,MPI_DOUBLE_PRECISION,MPI_INTEGER]
    !> MPI_PART derived datatype and size
    type(MPI_Datatype) :: MPI_PART
@@ -131,7 +133,7 @@ contains
    
    
    !> Advance the particle equations by a specified time step dt
-   subroutine advance(this,dt,U,V,W)
+   subroutine advance(this,dt,U,V,W,rho,P)
       use mpi_f08, only : MPI_SUM,MPI_INTEGER
       use mathtools, only: Pi
       implicit none
@@ -140,6 +142,8 @@ contains
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: U         !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: V         !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: W         !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: rho       !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: P         !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       type(part) :: pold
       integer :: i,ierr
       
@@ -159,8 +163,6 @@ contains
          ! Correct with midpoint rule
          this%p(i)%vel=this%cfg%get_velocity(pos=this%p(i)%pos,i0=this%p(i)%ind(1),j0=this%p(i)%ind(2),k0=this%p(i)%ind(3),U=U,V=V,W=W)
          this%p(i)%pos=pold%pos+dt*this%p(i)%vel
-         ! Update acceleration
-         this%p(i)%acc=(this%p(i)%vel-pold%vel)/dt
          ! Relocalize the particle
          this%p(i)%ind=this%cfg%get_ijk_global(this%p(i)%pos,this%p(i)%ind)
          ! Handle particles in walls
@@ -181,6 +183,9 @@ contains
          else
             ! Interpolate fluid quantities to particle location
             this%p(i)%vel=this%cfg%get_velocity(pos=this%p(i)%pos,i0=this%p(i)%ind(1),j0=this%p(i)%ind(2),k0=this%p(i)%ind(3),U=U,V=V,W=W)
+            this%p(i)%rho=this%cfg%get_scalar(pos=this%p(i)%pos,i0=this%p(i)%ind(1),j0=this%p(i)%ind(2),k0=this%p(i)%ind(3),S=rho,bc='n')
+            this%p(i)%P=this%cfg%get_scalar(pos=this%p(i)%pos,i0=this%p(i)%ind(1),j0=this%p(i)%ind(2),k0=this%p(i)%ind(3),S=P,bc='n')
+            this%p(i)%acc=(this%p(i)%vel-pold%vel)/dt
          end if
       end do
       
@@ -209,7 +214,7 @@ contains
    
    !> Inject particles from a prescribed location with given injection rate
    !> Requires injection parameters to be set beforehand
-   subroutine inject(this,dt,U,V,W)
+   subroutine inject(this,dt,U,V,W,rho,P)
       use mpi_f08
       implicit none
       class(tracer), intent(inout) :: this
@@ -217,6 +222,8 @@ contains
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: U         !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: V         !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: W         !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: rho       !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: P         !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       real(WP) :: Ngoal,Nadded                       !< Injection rate parameters
       real(WP), save :: previous_error=0.0_WP        !< Store number of particles left over from previous timestep
       integer(kind=8) :: maxid_,maxid                !< Keep track of maximum particle id
@@ -258,6 +265,8 @@ contains
                this%p(count)%ind=this%cfg%get_ijk_global(this%p(count)%pos,this%p(count)%ind)
                ! Interpolate fluid quantities to particle location
                this%p(count)%vel=this%cfg%get_velocity(pos=this%p(count)%pos,i0=this%p(count)%ind(1),j0=this%p(count)%ind(2),k0=this%p(count)%ind(3),U=U,V=V,W=W)
+               this%p(count)%rho=this%cfg%get_scalar(pos=this%p(count)%pos,i0=this%p(count)%ind(1),j0=this%p(count)%ind(2),k0=this%p(count)%ind(3),S=rho,bc='n')
+               this%p(count)%P=this%cfg%get_scalar(pos=this%p(count)%pos,i0=this%p(count)%ind(1),j0=this%p(count)%ind(2),k0=this%p(count)%ind(3),S=P,bc='n')
                ! Make it an "official" particle
                this%p(count)%flag=0
             end do
