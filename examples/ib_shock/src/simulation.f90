@@ -27,7 +27,7 @@ module simulation
    
    !> Private work arrays
    real(WP), dimension(:,:,:,:,:), allocatable :: dQdt
-   real(WP), dimension(:,:,:)    , allocatable :: Ui,Vi,Wi,Ma,beta,visc
+   real(WP), dimension(:,:,:)    , allocatable :: Ui,Vi,Wi,Ma,beta,visc,div
 
    !> Constant kinematic viscosity
    real(WP) :: cst_visc
@@ -100,6 +100,20 @@ module simulation
    end subroutine prepare_viscosities
 
 
+   !> Calculate velocity divergence
+   subroutine get_div()
+     implicit none
+     integer :: i,j,k
+     do k=fs%cfg%kmino_,fs%cfg%kmaxo_-1; do j=fs%cfg%jmino_,fs%cfg%jmaxo_-1; do i=fs%cfg%imino_,fs%cfg%imaxo_-1
+        div(i,j,k)=fs%dxi*(fs%U(i+1,j,k)-fs%U(i,j,k))+fs%dyi*(fs%V(i,j+1,k)-fs%V(i,j,k))+fs%dzi*(fs%W(i,j,k+1)-fs%W(i,j,k))
+     end do; end do; end do
+     call fs%cfg%sync(div)
+     if (.not.fs%cfg%xper.and.fs%cfg%iproc.eq.fs%cfg%npx) div(fs%cfg%imaxo,:,:)=div(fs%cfg%imaxo-1,:,:)
+     if (.not.fs%cfg%yper.and.fs%cfg%jproc.eq.fs%cfg%npy) div(:,fs%cfg%jmaxo,:)=div(:,fs%cfg%jmaxo-1,:)
+     if (.not.fs%cfg%zper.and.fs%cfg%kproc.eq.fs%cfg%npz) div(:,:,fs%cfg%kmaxo)=div(:,:,fs%cfg%kmaxo-1)
+   end subroutine get_div
+
+
    !> Apply IBM to conserved variables
    subroutine apply_ibm()
      use gp_class, only: dirichlet,neumann
@@ -129,7 +143,7 @@ module simulation
      call gp%apply_bcond(type=dirichlet,BP=0.0_WP,A=fs%W,dir='W')
      call gp%apply_bcond(type=neumann,  BP=0.0_WP,A=fs%P,dir='SC')
      call gp%apply_bcond(type=neumann,  BP=0.0_WP,A=fs%T,dir='SC')
-     ! Rebuild conserved quantities within the ghost points
+     ! Rebuild conserved quantities in the ghost cells
      do n=1,gp%ngp
         i=gp%gp(n)%ind(1); j=gp%gp(n)%ind(2); k=gp%gp(n)%ind(3)
         fs%Q(i,j,k,1)=get_RHO(fs%T(i,j,k),fs%P(i,j,k))
@@ -257,6 +271,7 @@ module simulation
         allocate(Ma  (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
         allocate(beta(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
         allocate(visc(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+        allocate(div(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
       end block allocate_work_arrays
 
 
@@ -344,6 +359,8 @@ module simulation
         call fs%interp_vel(Ui,Vi,Wi)
         ! Compute local Mach number
         Ma=sqrt(Ui**2+Vi**2+Wi**2)/fs%C
+        ! Compute dilatation
+        call get_div()
         !> Perform and output monitoring
         call fs%get_info()
         call mfile%write()
@@ -368,14 +385,14 @@ module simulation
          call param_read('Ensight output period',ens_evt%tper)
          ! Add variables to output
          call ens_out%add_vector('velocity',Ui,Vi,Wi)
-         call ens_out%add_scalar('I',fs%I)
          call ens_out%add_scalar('P',fs%P)
          call ens_out%add_scalar('T',fs%T)
          call ens_out%add_scalar('Mach',Ma)
          call ens_out%add_scalar('beta',beta)
          call ens_out%add_scalar('visc',visc)
+         call ens_out%add_scalar('div',div) 
          call ens_out%add_scalar('Gib',cfg%Gib)
-         call ens_out%add_scalar('IBM',gp%label)         
+         call ens_out%add_scalar('IBM',gp%label)
          ! Output to ensight
          if (ens_evt%occurs()) call ens_out%write_data(time%t)
       end block create_ensight
@@ -484,6 +501,9 @@ module simulation
          ! Compute local Mach number
          Ma=sqrt(Ui**2+Vi**2+Wi**2)/fs%C
 
+         ! Compute dilatation
+         call get_div()
+
          !> Perform and output monitoring
          call fs%get_info()
          call mfile%write()
@@ -492,8 +512,8 @@ module simulation
 
          ! Output to ensight
          if (ens_evt%occurs()) call ens_out%write_data(time%t)
-         
-   end do
+
+      end do
 
  end subroutine simulation_run
    
@@ -509,7 +529,7 @@ module simulation
       ! timetracker
       
       ! Deallocate work arrays
-      deallocate(dQdt,Ui,Vi,Wi,Ma,beta,visc)
+      deallocate(dQdt,Ui,Vi,Wi,Ma,beta,visc,div)
       
    end subroutine simulation_final
    

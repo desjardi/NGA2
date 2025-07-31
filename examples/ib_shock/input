@@ -2,16 +2,16 @@
 Partition :	2 2 1
 
 # Mesh definition
-Lx :	20
-Ly :	10
-Lz :	0.05
+Lx :	10
+Ly :	5
+Lz :	0.025
 nx :	400
 ny :	200
 nz :	1
 
 # Case definition
 Cylinder radius : 0.5
-Cylinder position : 5
+Cylinder position : 2.5
 Inlet velocity :  1
 
 # Adimensional flow parameters
