@@ -106,6 +106,7 @@ module lpt_class
       real(WP) :: Umin,Umax,Umean,Uvar                    !< U velocity info
       real(WP) :: Vmin,Vmax,Vmean,Vvar                    !< V velocity info
       real(WP) :: Wmin,Wmax,Wmean,Wvar                    !< W velocity info
+      real(WP) :: Remax,Mamax,Knmax                       !< Dimensionless info
       integer  :: np_new,np_out                           !< Number of new and removed particles
       real(WP) :: vp_new,vp_out                           !< Volume of new and removed particles
       real(WP) :: vp_tot                                  !< Total particle volume
@@ -177,6 +178,11 @@ contains
 
       ! Zero friction by default
       self%mu_f=0.0_WP
+
+      ! Zero monitor info
+      self%Remax=0.0_WP
+      self%Mamax=0.0_WP
+      self%Knmax=0.0_WP
       
       ! Allocate finite volume divergence operators
       allocate(self%div_x(0:+1,self%cfg%imin_:self%cfg%imax_,self%cfg%jmin_:self%cfg%jmax_,self%cfg%kmin_:self%cfg%kmax_)) !< Cell-centered
@@ -669,7 +675,7 @@ contains
    !> p%id=0 => no coll, no solve
    !> p%id=-1=> no coll, no move
    subroutine advance(this,dt,U,V,W,rho,visc,T,C,stress_x,stress_y,stress_z,srcU,srcV,srcW,srcI)
-      use mpi_f08,   only: MPI_ALLREDUCE,MPI_SUM,MPI_INTEGER,MPI_IN_PLACE
+      use mpi_f08,   only: MPI_ALLREDUCE,MPI_SUM,MPI_MAX,MPI_INTEGER,MPI_IN_PLACE
       use parallel,  only: MPI_REAL_WP
       use mathtools, only: Pi
       implicit none
@@ -703,6 +709,9 @@ contains
       ! Zero out number of particles removed
       this%np_out=0
       this%vp_out=0.0_WP
+
+      ! Reset monitor info
+      this%Remax=0.0_WP; this%Mamax=0.0_WP; this%Knmax=0.0_WP
       
       ! Advance the equations
       do i=1,this%np_
@@ -769,6 +778,11 @@ contains
       ! Sum up particles removed
       call MPI_ALLREDUCE(MPI_IN_PLACE,this%np_out,1,MPI_INTEGER,MPI_SUM,this%cfg%comm,ierr)
       call MPI_ALLREDUCE(MPI_IN_PLACE,this%vp_out,1,MPI_REAL_WP,MPI_SUM,this%cfg%comm,ierr)
+
+      ! Get max dimensionless numbers
+      call MPI_ALLREDUCE(MPI_IN_PLACE,this%Remax,1,MPI_REAL_WP,MPI_MAX,this%cfg%comm,ierr)
+      call MPI_ALLREDUCE(MPI_IN_PLACE,this%Mamax,1,MPI_REAL_WP,MPI_MAX,this%cfg%comm,ierr)
+      call MPI_ALLREDUCE(MPI_IN_PLACE,this%Knmax,1,MPI_REAL_WP,MPI_MAX,this%cfg%comm,ierr)
       
       ! Divide source arrays by volume, sum at boundaries, and volume filter if present
       if (present(srcU)) then
@@ -851,11 +865,15 @@ contains
          real(WP), parameter :: Gamma=1.4_WP
          ! Particle Reynolds number
          Rep=frho*norm2(p%vel-fvel)*p%d/fvisc+epsilon(1.0_WP)
+         this%Remax=max(this%Remax,Rep)
          ! Particle Mach number
          Ma=norm2(p%vel-fvel)/fC+epsilon(1.0_WP)
+         this%Mamax=max(this%Mamax,Ma)
+         ! Particle Knudsen nubmer
+         Knp=sqrt(0.5_WP*Pi*Gamma)*Ma/Rep
+         this%Knmax=max(this%Knmax,Knp)
          if (Rep.le.45.0_WP) then
             ! Rarefraction-dominated regime
-            Knp = sqrt(0.5_WP * pi * Gamma) * Ma / Rep
             fKn = 1.0_WP / (1.0_WP + Knp*(2.514_WP + 0.8_WP*exp(-0.55_WP/Knp)))
             CD1 = (1.0_WP + 0.15_WP*Rep**(0.687_WP)) * fKn
             sDrag = Ma * sqrt(0.5_WP * Gamma)
@@ -917,7 +935,7 @@ contains
          real(WP), parameter :: Pr=0.71_WP
          tau=this%rho*p%d**2/(18.0_WP*fvisc)
          Rep=frho*norm2(p%vel-fvel)*p%d/fvisc+epsilon(1.0_WP)
-         Nu = (7.0_WP-10.0_WP*fVF+5.0_WP*fVF**2)*(1.0_WP+0.7_WP*Rep**(0.2_WP) *&
+         Nu=(7.0_WP-10.0_WP*fVF+5.0_WP*fVF**2)*(1.0_WP+0.7_WP*Rep**(0.2_WP) *&
               Pr**(1.0_WP/3.0_WP))+(1.33_WP-2.4_WP*fVF+1.2_WP*fVF**2)*&
               Rep**(0.7_WP)*Pr**(1.0_WP/3.0_WP)
          dTdt=Nu/(3.0_WP*tau*Pr*this%Cp)*(fT-p%T)

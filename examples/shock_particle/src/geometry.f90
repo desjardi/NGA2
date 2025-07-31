@@ -45,7 +45,7 @@ contains
          end do
          
          ! General serial grid object (no=2x number of ghost layers)
-         grid=sgrid(coord=cartesian,no=6,x=x,y=y,z=z,xper=.false.,yper=.true.,zper=.true.,name='box')
+         grid=sgrid(coord=cartesian,no=2,x=x,y=y,z=z,xper=.false.,yper=.true.,zper=.true.,name='box')
          
       end block create_grid
       

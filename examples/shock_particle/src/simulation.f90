@@ -381,11 +381,11 @@ module simulation
         end do
         ! Initialize conserved variables
         fs%Q(:,:,:,2)=fs%Q(:,:,:,1)*fs%I
-        call fs%get_momentum()
         ! Multiply by volume fraction
         do i=1,fs%nQ
            fs%Q(:,:,:,i)=fs%Q(:,:,:,i)*(1.0_WP-lp%VF)
         end do
+        call fs%get_momentum()
         ! Rebuild primitive variables
         call fs%get_primitive(1.0_WP-lp%VF)
         ! Interpolate velocity
@@ -479,15 +479,18 @@ module simulation
         lptfile=monitor(amroot=lp%cfg%amRoot,name='lpt')
         call lptfile%add_column(time%n,'Timestep number')
         call lptfile%add_column(time%t,'Time')
-        call lptfile%add_column(lp%VFmean,'VFp mean')
-        call lptfile%add_column(lp%VFmax,'VFp max')
         call lptfile%add_column(lp%np,'Particle number')
-        call lptfile%add_column(lp%Umin,'Particle Umin')
-        call lptfile%add_column(lp%Umax,'Particle Umax')
-        call lptfile%add_column(lp%Vmin,'Particle Vmin')
-        call lptfile%add_column(lp%Vmax,'Particle Vmax')
-        call lptfile%add_column(lp%Wmin,'Particle Wmin')
-        call lptfile%add_column(lp%Wmax,'Particle Wmax')
+        call lptfile%add_column(lp%VFmean,'mean(VFp)')
+        call lptfile%add_column(lp%VFmax,'max(VFp)')
+        call lptfile%add_column(lp%Umin,'min(U)')
+        call lptfile%add_column(lp%Umax,'max(U)')
+        call lptfile%add_column(lp%Vmin,'min(V)')
+        call lptfile%add_column(lp%Vmax,'max(V)')
+        call lptfile%add_column(lp%Wmin,'min(W)')
+        call lptfile%add_column(lp%Wmax,'max(W)')
+        call lptfile%add_column(lp%Remax,'max(Re)')
+        call lptfile%add_column(lp%Mamax,'max(Ma)')
+        call lptfile%add_column(lp%Knmax,'max(Kn)')
         call lptfile%write()
       end block create_monitor
 
