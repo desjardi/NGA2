@@ -123,80 +123,13 @@ module simulation
            ! Copy over from imax to imax+1 and above
            do i=fs%cfg%imax+1,fs%cfg%imaxo
               ! Copy primitive variables
+              lp%VF(i,j,k)=lp%VF(fs%cfg%imax,j,k)
               fs%Q(i,j,k,1)=fs%Q(fs%cfg%imax,j,k,1)
               fs%P(i,j,k)=fs%P(fs%cfg%imax,j,k)
               fs%I(i,j,k)=fs%I(fs%cfg%imax,j,k)
               fs%U(i,j,k)=max(fs%U(fs%cfg%imax,j,k),0.0_WP)
               fs%V(i,j,k)=fs%V(fs%cfg%imax,j,k)
               fs%W(i,j,k)=fs%W(fs%cfg%imax,j,k)
-           end do
-        end do; end do
-     end if
-
-     ! Apply clipped Neumann on primitive variables in y+
-     if (.not.fs%cfg%yper.and.fs%cfg%jproc.eq.fs%cfg%npy) then
-        do k=fs%cfg%kmino_,fs%cfg%kmaxo_; do i=fs%cfg%imino_,fs%cfg%imaxo_
-           ! Copy over from jmax to jmax+1 and above
-           do j=fs%cfg%jmax+1,fs%cfg%jmaxo
-              ! Copy primitive variables
-              fs%Q(i,j,k,1)=fs%Q(i,fs%cfg%jmax,k,1)
-              fs%P(i,j,k)=fs%P(i,fs%cfg%jmax,k)
-              fs%I(i,j,k)=fs%I(i,fs%cfg%jmax,k)
-              fs%U(i,j,k)=fs%U(i,fs%cfg%jmax,k)
-              fs%V(i,j,k)=max(fs%V(i,fs%cfg%jmax,k),0.0_WP)
-              fs%W(i,j,k)=fs%W(i,fs%cfg%jmax,k)
-           end do
-        end do; end do
-     end if
-
-     ! Apply clipped Neumann on primitive variables in y-
-     if (.not.fs%cfg%yper.and.fs%cfg%jproc.eq.1) then
-        do k=fs%cfg%kmino_,fs%cfg%kmaxo_; do i=fs%cfg%imino_,fs%cfg%imaxo_
-           ! First copy over V from jmin+1 to jmin
-           fs%V(i,fs%cfg%jmin,k)=min(fs%V(i,fs%cfg%jmin+1,k),0.0_WP)
-           ! Then copy over from jmin to jmin-1 and below
-           do j=fs%cfg%jmino,fs%cfg%jmin-1
-              ! Copy primitive variables
-              fs%Q(i,j,k,1)=fs%Q(i,fs%cfg%jmin,k,1)
-              fs%P(i,j,k)=fs%P(i,fs%cfg%jmin,k)
-              fs%I(i,j,k)=fs%I(i,fs%cfg%jmin,k)
-              fs%U(i,j,k)=fs%U(i,fs%cfg%jmin,k)
-              fs%V(i,j,k)=min(fs%V(i,fs%cfg%jmin,k),0.0_WP)
-              fs%W(i,j,k)=fs%W(i,fs%cfg%jmin,k)
-           end do
-        end do; end do
-     end if
-
-     ! Apply clipped Neumann on primitive variables in z+
-     if (.not.fs%cfg%zper.and.fs%cfg%kproc.eq.fs%cfg%npz) then
-        do j=fs%cfg%jmino_,fs%cfg%jmaxo_; do i=fs%cfg%imino_,fs%cfg%imaxo_
-           ! Copy over from kmax to kmax+1 and above
-           do k=fs%cfg%kmax+1,fs%cfg%kmaxo
-              ! Copy primitive variables
-              fs%Q(i,j,k,1)=fs%Q(i,j,fs%cfg%kmax,1)
-              fs%P(i,j,k)=fs%P(i,j,fs%cfg%kmax)
-              fs%I(i,j,k)=fs%I(i,j,fs%cfg%kmax)
-              fs%U(i,j,k)=fs%U(i,j,fs%cfg%kmax)
-              fs%V(i,j,k)=fs%V(i,j,fs%cfg%kmax)
-              fs%W(i,j,k)=max(fs%W(i,j,fs%cfg%kmax),0.0_WP)
-           end do
-        end do; end do
-     end if
-
-     ! Apply clipped Neumann on primitive variables in z-
-     if (.not.fs%cfg%zper.and.fs%cfg%kproc.eq.1) then
-        do j=fs%cfg%jmino_,fs%cfg%jmaxo_; do i=fs%cfg%imino_,fs%cfg%imaxo_
-           ! First copy over W from kmin+1 to kmin
-           fs%W(i,j,fs%cfg%kmin)=min(fs%W(i,j,fs%cfg%kmin+1),0.0_WP)
-           ! Then copy over from kmin to kmin-1 and below
-           do k=fs%cfg%kmino,fs%cfg%kmin-1
-              ! Copy primitive variables
-              fs%Q(i,j,k,1)=fs%Q(i,j,fs%cfg%kmin,1)
-              fs%P(i,j,k)=fs%P(i,j,fs%cfg%kmin)
-              fs%I(i,j,k)=fs%I(i,j,fs%cfg%kmin)
-              fs%U(i,j,k)=fs%U(i,j,fs%cfg%kmin)
-              fs%V(i,j,k)=fs%V(i,j,fs%cfg%kmin)
-              fs%W(i,j,k)=min(fs%W(i,j,fs%cfg%kmin),0.0_WP)
            end do
         end do; end do
      end if
@@ -358,6 +291,7 @@ module simulation
               lp%p(i)%pos=[random_uniform(Xc,Xc+Wc-dp),&
                    &       random_uniform(lp%cfg%y(lp%cfg%jmin_),lp%cfg%y(lp%cfg%jmax_+1)-dp),&
                    &       random_uniform(lp%cfg%z(lp%cfg%kmin_),lp%cfg%z(lp%cfg%kmax_+1)-dp)]
+              if (lp%cfg%nz.eq.1) lp%p(i)%pos(3)=0.0_WP
               lp%p(i)%ind=lp%cfg%get_ijk_global(lp%p(i)%pos,[lp%cfg%imin,lp%cfg%jmin,lp%cfg%kmin])
               overlap=.false.
               do kk=lp%p(i)%ind(3)-1,lp%p(i)%ind(3)+1
@@ -416,7 +350,7 @@ module simulation
         integer :: i
         pmesh=partmesh(nvar=2,nvec=1,name='lpt')
         pmesh%varname(1)='diameter'
-        pmesh%varname(1)='temperature'
+        pmesh%varname(2)='temperature'
         pmesh%vecname(1)='velocity'
         call lp%update_partmesh(pmesh)
         do i=1,lp%np_

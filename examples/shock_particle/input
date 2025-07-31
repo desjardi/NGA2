@@ -1,5 +1,5 @@
 # Parallelization
-Partition :	2 2 1
+Partition :	4 1 1
 
 # Mesh definition
 Lx :	10
@@ -15,10 +15,6 @@ Shock Mach number : 2
 Shock location :   1.5
 Reynolds number : 1e5
 
-# Fluid properties
-Dynamic viscosity : 0.001
-Density :           1
-
 # Particle parameters
 Curtain width : 2
 Curtain position : 3
@@ -28,11 +24,11 @@ Particle density :  2400
 Particle diameter : 0.02
 Particle temperature : 1
 Particle heat capacity : 0.8375
-Collision timescale : 15e-3
+Collision timescale : 60e-3
 Coefficient of restitution : 0.8
 
 # Time integration
-Max timestep size : 1e-3
+Max timestep size : 4e-3
 Max cfl number :    0.9
 Max time :          100
 
