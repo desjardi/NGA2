@@ -168,69 +168,103 @@ contains
 
     ! Initialize our LPT solver
     initialize_lpt: block
-      use random, only: random_uniform
-      use mathtools, only: Pi
-      real(WP) :: dp,Wbed,VFavg,Volp
-      integer :: i,j,np,ierr
+      use random, only: random_lognormal,random_uniform
+      use mathtools, only: Pi,twoPi
+      use mpi_f08,  only: MPI_SUM,MPI_ALLREDUCE,MPI_INTEGER
+      use parallel, only: MPI_REAL_WP
+      real(WP) :: VFavg,Vol_,sumVolp,dp,Wbed
+      integer :: i,j,k,ii,jj,kk,nn,ip,jp,kp,np,offset,ierr
+      integer, dimension(:,:,:), allocatable :: npic      !< Number of particle in cell
+      integer, dimension(:,:,:,:), allocatable :: ipic    !< Index of particle in cell
       logical :: overlap
       ! Create solver
       lp=lpt(cfg=cfg,name='LPT')
       ! Get particle density from the input
       call param_read('Particle density',lp%rho)
+      ! Get average particle volume fraction from the input
+      call param_read('Particle volume fraction',VFavg)
       ! Get particle diameter from the input
       call param_read('Particle diameter',dp)
+      ! Get the particle bed width from the input
+      call param_read('Bed width',Wbed)
       ! Set filter scale to 3.5*dx
       lp%filter_width=3.5_WP*cfg%min_meshsize
       ! Maximum timestep size used for particles
       call param_read('Particle timestep size',lp_dt_max,default=huge(1.0_WP))
       lp_dt=lp_dt_max
-
-      ! Root process initializes particles uniformly
-      call param_read('Bed width',Wbed)
-      call param_read('Particle volume fraction',VFavg)
-      if (lp%cfg%amRoot) then
-         ! Particle volume
-         Volp = Pi/6.0_WP*dp**3
-         ! Get number of particles
-         np = Wbed*lp%cfg%yL*lp%cfg%zL*VFavg/Volp
-         call lp%resize(np)
-         ! Distribute particles
-         do i=1,np
-            ! Set the diameter
-            lp%p(i)%d=dp
-            ! Give position (avoid overlap)
-            overlap=.true.
-            do while(overlap)
-               lp%p(i)%pos=[random_uniform(0.5_WP*dp,Wbed),&
-               &            random_uniform(lp%cfg%y(lp%cfg%jmin)+0.5_WP*dp,lp%cfg%y(lp%cfg%jmax+1)-0.5_WP*dp),&
-               &            random_uniform(lp%cfg%z(lp%cfg%kmin),lp%cfg%z(lp%cfg%kmax+1))]
-               if (lp%cfg%nz.eq.1) lp%p(i)%pos(3)=lp%cfg%zm(lp%cfg%kmin_)
-               overlap=.false.
-               check: do j=1,i-1
-                  if (sqrt(sum((lp%p(i)%pos-lp%p(j)%pos)**2)).lt.0.5_WP*(lp%p(i)%d+lp%p(j)%d)) then
-                     overlap=.true.
-                     exit check
-                  end if
-               end do check
+      ! Initialize particles
+      ! Get volume of domain belonging to this proc
+      Vol_=0.0_WP
+      do k=lp%cfg%kmin_,lp%cfg%kmax_
+         do j=lp%cfg%jmin_,lp%cfg%jmax_
+            do i=lp%cfg%imin_,fs%cfg%imax_
+               if (lp%cfg%x(i).lt.Wbed) Vol_=Vol_+lp%cfg%dx(i)*lp%cfg%dy(j)*lp%cfg%dz(k)
             end do
-            !print *, real(i,WP)/real(np,WP)*100.0_WP,'%'
-            ! Give id
-            lp%p(i)%id=int(i,8)
-            ! Give zero velocity
-            lp%p(i)%vel=0.0_WP
-            ! Give zero collision force
-            lp%p(i)%Acol=0.0_WP
-            lp%p(i)%Tcol=0.0_WP
-            ! Give zero dt
-            lp%p(i)%dt=0.0_WP
-            ! Locate the particle on the mesh
-            lp%p(i)%ind=lp%cfg%get_ijk_global(lp%p(i)%pos,[lp%cfg%imin,lp%cfg%jmin,lp%cfg%kmin])
-            ! Activate the particle
-            lp%p(i)%flag=0
          end do
-      end if
+      end do
+      ! Get particle diameters
+      np=ceiling(VFavg*Vol_/(pi*dp**3/6.0_WP))
+      call lp%resize(np)
+      ! Allocate particle in cell arrays
+      allocate(npic(     lp%cfg%imino_:lp%cfg%imaxo_,lp%cfg%jmino_:lp%cfg%jmaxo_,lp%cfg%kmino_:lp%cfg%kmaxo_)); npic=0
+      allocate(ipic(1:40,lp%cfg%imino_:lp%cfg%imaxo_,lp%cfg%jmino_:lp%cfg%jmaxo_,lp%cfg%kmino_:lp%cfg%kmaxo_)); ipic=0
+      ! Distribute particles
+      sumVolp=0.0_WP
+      do i=1,np
+         ! Set the diameter
+         lp%p(i)%d=dp
+         ! Give position (avoid overlap)
+         overlap=.true.
+         do while (overlap)
+            lp%p(i)%pos=[random_uniform(lp%cfg%x(lp%cfg%imin_),Wbed-dp),&
+                 &       random_uniform(lp%cfg%y(lp%cfg%jmin_),lp%cfg%y(lp%cfg%jmax_+1)-dp),&
+                 &       random_uniform(lp%cfg%z(lp%cfg%kmin_),lp%cfg%z(lp%cfg%kmax_+1)-dp)]
+            if (lp%cfg%nz.eq.1) lp%p(i)%pos(3)=0.0_WP
+            lp%p(i)%ind=lp%cfg%get_ijk_global(lp%p(i)%pos,[lp%cfg%imin,lp%cfg%jmin,lp%cfg%kmin])
+            overlap=.false.
+            do kk=lp%p(i)%ind(3)-1,lp%p(i)%ind(3)+1
+               do jj=lp%p(i)%ind(2)-1,lp%p(i)%ind(2)+1
+                  do ii=lp%p(i)%ind(1)-1,lp%p(i)%ind(1)+1
+                     do nn=1,npic(ii,jj,kk)
+                        j=ipic(nn,ii,jj,kk)
+                        if (sqrt(sum((lp%p(i)%pos-lp%p(j)%pos)**2)).lt.0.5_WP*(lp%p(i)%d+lp%p(j)%d)) overlap=.true.
+                     end do
+                  end do
+               end do
+            end do
+         end do
+         ! Activate the particle
+         lp%p(i)%flag=0
+         ip=lp%p(i)%ind(1); jp=lp%p(i)%ind(2); kp=lp%p(i)%ind(3)
+         npic(ip,jp,kp)=npic(ip,jp,kp)+1
+         ipic(npic(ip,jp,kp),ip,jp,kp)=i
+         ! Give zero velocity
+         lp%p(i)%vel=0.0_WP
+         ! Give zero collision force
+         lp%p(i)%Acol=0.0_WP
+         lp%p(i)%Tcol=0.0_WP
+         ! Give zero dt
+         lp%p(i)%dt=0.0_WP
+         ! Sum up volume
+         sumVolp=sumVolp+Pi/6.0_WP*lp%p(i)%d**3
+      end do
+      deallocate(npic,ipic)
       call lp%sync()
-
+      ! Set ID
+      offset=0
+      do i=1,lp%cfg%rank
+         offset=offset+lp%np_proc(i)
+      end do
+      do i=1,lp%np_
+         lp%p(i)%id=int(i+offset,8)
+      end do
+      ! Get mean diameter and volume fraction
+      call MPI_ALLREDUCE(sumVolp,VFavg,1,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr); VFavg=VFavg/(Wbed*lp%cfg%yL*lp%cfg%zL)
+      if (lp%cfg%amRoot) then
+         print*,"===== Particle Setup Description ====="
+         print*,'Number of particles', lp%np
+         print*,'Mean volume fraction',VFavg
+      end if
       ! Get initial particle volume fraction
       call lp%update_VF()
       ! Set collision timescale
