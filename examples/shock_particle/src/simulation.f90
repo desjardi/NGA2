@@ -288,7 +288,7 @@ module simulation
            ! Give position (avoid overlap)
            overlap=.true.
            do while (overlap)
-              lp%p(i)%pos=[random_uniform(Xc,Xc+Wc-dp),&
+              lp%p(i)%pos=[random_uniform(max(Xc,lp%cfg%x(lp%cfg%imin_)),min(Xc+Wc,lp%cfg%x(lp%cfg%imax_))-dp),&
                    &       random_uniform(lp%cfg%y(lp%cfg%jmin_),lp%cfg%y(lp%cfg%jmax_+1)-dp),&
                    &       random_uniform(lp%cfg%z(lp%cfg%kmin_),lp%cfg%z(lp%cfg%kmax_+1)-dp)]
               if (lp%cfg%nz.eq.1) lp%p(i)%pos(3)=0.0_WP

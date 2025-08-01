@@ -216,7 +216,7 @@ contains
          ! Give position (avoid overlap)
          overlap=.true.
          do while (overlap)
-            lp%p(i)%pos=[random_uniform(lp%cfg%x(lp%cfg%imin_),Wbed-dp),&
+            lp%p(i)%pos=[random_uniform(lp%cfg%x(lp%cfg%imin_),min(lp%cfg%x(lp%cfg%imax_+1),Wbed))-dp,&
                  &       random_uniform(lp%cfg%y(lp%cfg%jmin_),lp%cfg%y(lp%cfg%jmax_+1)-dp),&
                  &       random_uniform(lp%cfg%z(lp%cfg%kmin_),lp%cfg%z(lp%cfg%kmax_+1)-dp)]
             if (lp%cfg%nz.eq.1) lp%p(i)%pos(3)=0.0_WP
