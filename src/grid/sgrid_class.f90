@@ -117,7 +117,7 @@ contains
       real(WP), dimension(:), intent(in) :: z
       logical, intent(in) :: xper,yper,zper
       character(len=*), optional :: name
-      
+      real(WP), parameter :: uni_tol=1.0e-12_WP
       integer :: nx,ny,nz
       integer :: i,j,k
       
@@ -263,10 +263,10 @@ contains
       self%zL=self%z(self%kmax+1)-self%z(self%kmin)
       self%vol_total=self%xL*self%yL*self%zL
       
-      ! Check mesh uniformity - using xL*epsilon to test equality here
-      self%uniform_x=.false.; if (abs(maxval(self%dx)-minval(self%dx)).lt.self%xL*10.0_WP*epsilon(1.0_WP)) self%uniform_x=.true.
-      self%uniform_y=.false.; if (abs(maxval(self%dy)-minval(self%dy)).lt.self%yL*10.0_WP*epsilon(1.0_WP)) self%uniform_y=.true.
-      self%uniform_z=.false.; if (abs(maxval(self%dz)-minval(self%dz)).lt.self%zL*10.0_WP*epsilon(1.0_WP)) self%uniform_z=.true.
+      ! Check strict mesh uniformity
+      self%uniform_x=all(abs(self%dx(self%imino:self%imaxo)-self%dx(self%imin)).lt.uni_tol*self%dx(self%imin))
+      self%uniform_y=all(abs(self%dy(self%jmino:self%jmaxo)-self%dy(self%jmin)).lt.uni_tol*self%dy(self%jmin))
+      self%uniform_z=all(abs(self%dz(self%kmino:self%kmaxo)-self%dz(self%kmin)).lt.uni_tol*self%dz(self%kmin))
       
       ! If verbose run, log and or print grid
       if (verbose.gt.2) call self%log

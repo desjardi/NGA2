@@ -543,24 +543,17 @@ contains
       
       ! Initialize sdnew using ff
       initialize_sdnew_from_ff: block
-         integer :: i,j,k,n
+         integer :: n
          ! Transfer data
-         call ff2sdnew%push(ff%fs%Q(:,:,:,1)); call ff2sdnew%transfer(); call ff2sdnew%pull(sdnew%fs%Q(:,:,:,2))
-         call ff2sdnew%push(ff%fs%Q(:,:,:,2)); call ff2sdnew%transfer(); call ff2sdnew%pull(sdnew%fs%Q(:,:,:,4))
-         call ff2sdnew%push(ff%Ui);            call ff2sdnew%transfer(); call ff2sdnew%pull(sdnew%Ui)
-         call ff2sdnew%push(ff%Vi);            call ff2sdnew%transfer(); call ff2sdnew%pull(sdnew%Vi)
-         call ff2sdnew%push(ff%Wi);            call ff2sdnew%transfer(); call ff2sdnew%pull(sdnew%Wi)
-         do k=sdnew%cfg%kmino_+1,sdnew%cfg%kmaxo_; do j=sdnew%cfg%jmino_+1,sdnew%cfg%jmaxo_; do i=sdnew%cfg%imino_+1,sdnew%cfg%imaxo_
-            sdnew%fs%Q(i,j,k,5)=0.5_WP*sum(sdnew%fs%Q(i-1:i,j,k,2)*sdnew%Ui(i-1:i,j,k))
-            sdnew%fs%Q(i,j,k,6)=0.5_WP*sum(sdnew%fs%Q(i,j-1:j,k,2)*sdnew%Vi(i,j-1:j,k))
-            sdnew%fs%Q(i,j,k,7)=0.5_WP*sum(sdnew%fs%Q(i,j,k-1:k,2)*sdnew%Wi(i,j,k-1:k))
-         end do; end do; end do
+         call ff2sdnew%push(ff%fs%Q(:,:,:,1),loc='c'); call ff2sdnew%transfer(); call ff2sdnew%pull(sdnew%fs%Q(:,:,:,2),loc='c')
+         call ff2sdnew%push(ff%fs%Q(:,:,:,2),loc='c'); call ff2sdnew%transfer(); call ff2sdnew%pull(sdnew%fs%Q(:,:,:,4),loc='c')
+         call ff2sdnew%push(ff%fs%Q(:,:,:,3),loc='x'); call ff2sdnew%transfer(); call ff2sdnew%pull(sdnew%fs%Q(:,:,:,5),loc='x')
+         call ff2sdnew%push(ff%fs%Q(:,:,:,4),loc='y'); call ff2sdnew%transfer(); call ff2sdnew%pull(sdnew%fs%Q(:,:,:,6),loc='y')
+         call ff2sdnew%push(ff%fs%Q(:,:,:,5),loc='z'); call ff2sdnew%transfer(); call ff2sdnew%pull(sdnew%fs%Q(:,:,:,7),loc='z')
          ! Communicate conserved variables
          do n=1,sdnew%fs%nQ; call sdnew%cfg%sync(sdnew%fs%Q(:,:,:,n)); end do
          ! Rebuild primitive variables
          call sdnew%fs%get_primitive()
-         ! Interpolate velocity
-         call sdnew%fs%interp_vel(sdnew%Ui,sdnew%Vi,sdnew%Wi)
       end block initialize_sdnew_from_ff
       
       ! Initialize sdnew using sd
@@ -576,7 +569,7 @@ contains
          allocate(tmp2(sd%fs%cfg%imino_:sd%fs%cfg%imaxo_,sd%fs%cfg%jmino_:sd%fs%cfg%jmaxo_,sd%fs%cfg%kmino_:sd%fs%cfg%kmaxo_))
          ! Transfer Q(1-7) - since the mesh is the same, we can safely ignore staggering here
          do n=1,7
-            tmp=0.0_WP; call sd2sdnew%push(sd%fs%Q(:,:,:,n)); call sd2sdnew%transfer(); call sd2sdnew%pull(tmp)
+            tmp=0.0_WP; call sd2sdnew%push(sd%fs%Q(:,:,:,n),loc='c'); call sd2sdnew%transfer(); call sd2sdnew%pull(tmp,loc='c')
             do k=sdnew%cfg%kmino_,sdnew%cfg%kmaxo_; do j=sdnew%cfg%jmino_,sdnew%cfg%jmaxo_; do i=sdnew%cfg%imino_,sdnew%cfg%imaxo_
                if (sdnew%fs%cfg%xm(i).gt.sd%fs%cfg%x(sd%fs%cfg%imin).and.sdnew%fs%cfg%xm(i).lt.sd%fs%cfg%x(sd%fs%cfg%imax+1).and.&
                &   sdnew%fs%cfg%ym(j).gt.sd%fs%cfg%y(sd%fs%cfg%jmin).and.sdnew%fs%cfg%ym(j).lt.sd%fs%cfg%y(sd%fs%cfg%jmax+1).and.&
@@ -584,7 +577,7 @@ contains
             end do; end do; end do
          end do
          ! Transfer VOF
-         tmp=0.0_WP; call sd2sdnew%push(sd%fs%VF); call sd2sdnew%transfer(); call sd2sdnew%pull(tmp)
+         tmp=0.0_WP; call sd2sdnew%push(sd%fs%VF,loc='c'); call sd2sdnew%transfer(); call sd2sdnew%pull(tmp,loc='c')
          do k=sdnew%cfg%kmino_,sdnew%cfg%kmaxo_; do j=sdnew%cfg%jmino_,sdnew%cfg%jmaxo_; do i=sdnew%cfg%imino_,sdnew%cfg%imaxo_
             if (sdnew%fs%cfg%xm(i).gt.sd%fs%cfg%x(sd%fs%cfg%imin).and.sdnew%fs%cfg%xm(i).lt.sd%fs%cfg%x(sd%fs%cfg%imax+1).and.&
             &   sdnew%fs%cfg%ym(j).gt.sd%fs%cfg%y(sd%fs%cfg%jmin).and.sdnew%fs%cfg%ym(j).lt.sd%fs%cfg%y(sd%fs%cfg%jmax+1).and.&
@@ -592,7 +585,7 @@ contains
          end do; end do; end do
          ! Transfer barycenters
          do n=1,3
-            tmp=0.0_WP; tmp2=sd%fs%BG(n,:,:,:); call sd2sdnew%push(tmp2); call sd2sdnew%transfer(); call sd2sdnew%pull(tmp)
+            tmp=0.0_WP; tmp2=sd%fs%BG(n,:,:,:); call sd2sdnew%push(tmp2,loc='c'); call sd2sdnew%transfer(); call sd2sdnew%pull(tmp,loc='c')
             do k=sdnew%cfg%kmino_,sdnew%cfg%kmaxo_; do j=sdnew%cfg%jmino_,sdnew%cfg%jmaxo_; do i=sdnew%cfg%imino_,sdnew%cfg%imaxo_
                if (sdnew%fs%cfg%xm(i).gt.sd%fs%cfg%x(sd%fs%cfg%imin).and.sdnew%fs%cfg%xm(i).lt.sd%fs%cfg%x(sd%fs%cfg%imax+1).and.&
                &   sdnew%fs%cfg%ym(j).gt.sd%fs%cfg%y(sd%fs%cfg%jmin).and.sdnew%fs%cfg%ym(j).lt.sd%fs%cfg%y(sd%fs%cfg%jmax+1).and.&
@@ -600,7 +593,7 @@ contains
             end do; end do; end do
          end do
          do n=1,3
-            tmp=0.0_WP; call sd2sdnew%push(sd%fs%BL(n,:,:,:)); call sd2sdnew%transfer(); call sd2sdnew%pull(tmp)
+            tmp=0.0_WP; call sd2sdnew%push(sd%fs%BL(n,:,:,:),loc='c'); call sd2sdnew%transfer(); call sd2sdnew%pull(tmp,loc='c')
             do k=sdnew%cfg%kmino_,sdnew%cfg%kmaxo_; do j=sdnew%cfg%jmino_,sdnew%cfg%jmaxo_; do i=sdnew%cfg%imino_,sdnew%cfg%imaxo_
                if (sdnew%fs%cfg%xm(i).gt.sd%fs%cfg%x(sd%fs%cfg%imin).and.sdnew%fs%cfg%xm(i).lt.sd%fs%cfg%x(sd%fs%cfg%imax+1).and.&
                &   sdnew%fs%cfg%ym(j).gt.sd%fs%cfg%y(sd%fs%cfg%jmin).and.sdnew%fs%cfg%ym(j).lt.sd%fs%cfg%y(sd%fs%cfg%jmax+1).and.&
@@ -653,13 +646,13 @@ contains
       allocate(Q(ff%fs%cfg%imino_:ff%fs%cfg%imaxo_,ff%fs%cfg%jmino_:ff%fs%cfg%jmaxo_,ff%fs%cfg%kmino_:ff%fs%cfg%kmaxo_,0:sd%fs%nQ)); Q=0.0_WP
       
       ! Exchange data using coupler
-      call sd2ff%push(sd%fs%VF); call sd2ff%transfer(); call sd2ff%pull(Q(:,:,:,0))
+      call sd2ff%push(sd%fs%VF,loc='c'); call sd2ff%transfer(); call sd2ff%pull(Q(:,:,:,0),loc='c')
       do n=1,4
-         call sd2ff%push(sd%fs%Q(:,:,:,n)); call sd2ff%transfer(); call sd2ff%pull(Q(:,:,:,n))
+         call sd2ff%push(sd%fs%Q(:,:,:,n),loc='c'); call sd2ff%transfer(); call sd2ff%pull(Q(:,:,:,n),loc='c')
       end do
-      call sd2ff%push(sd%Ui); call sd2ff%transfer(); call sd2ff%pull(Q(:,:,:,5))
-      call sd2ff%push(sd%Vi); call sd2ff%transfer(); call sd2ff%pull(Q(:,:,:,6))
-      call sd2ff%push(sd%Wi); call sd2ff%transfer(); call sd2ff%pull(Q(:,:,:,7))
+      call sd2ff%push(sd%Ui,loc='c'); call sd2ff%transfer(); call sd2ff%pull(Q(:,:,:,5),loc='c')
+      call sd2ff%push(sd%Vi,loc='c'); call sd2ff%transfer(); call sd2ff%pull(Q(:,:,:,6),loc='c')
+      call sd2ff%push(sd%Wi,loc='c'); call sd2ff%transfer(); call sd2ff%pull(Q(:,:,:,7),loc='c')
       
       ! Compute nudging increment
       do k=ff%cfg%kmino_,ff%cfg%kmaxo_; do j=ff%cfg%jmino_,ff%cfg%jmaxo_; do i=ff%cfg%imino_,ff%cfg%imaxo_
@@ -772,11 +765,11 @@ contains
       
       ! Exchange data using coupler
       do n=1,2
-         call ff2sd%push(ff%fs%Q(:,:,:,n)); call ff2sd%transfer(); call ff2sd%pull(Q(:,:,:,n))
+         call ff2sd%push(ff%fs%Q(:,:,:,n),loc='c'); call ff2sd%transfer(); call ff2sd%pull(Q(:,:,:,n),loc='c')
       end do
-      call ff2sd%push(ff%Ui); call ff2sd%transfer(); call ff2sd%pull(Q(:,:,:,3))
-      call ff2sd%push(ff%Vi); call ff2sd%transfer(); call ff2sd%pull(Q(:,:,:,4))
-      call ff2sd%push(ff%Wi); call ff2sd%transfer(); call ff2sd%pull(Q(:,:,:,5))
+      call ff2sd%push(ff%Ui,loc='c'); call ff2sd%transfer(); call ff2sd%pull(Q(:,:,:,3),loc='c')
+      call ff2sd%push(ff%Vi,loc='c'); call ff2sd%transfer(); call ff2sd%pull(Q(:,:,:,4),loc='c')
+      call ff2sd%push(ff%Wi,loc='c'); call ff2sd%transfer(); call ff2sd%pull(Q(:,:,:,5),loc='c')
       
       ! Compute nudging increment
       do k=sd%cfg%kmino_,sd%cfg%kmaxo_; do j=sd%cfg%jmino_,sd%cfg%jmaxo_; do i=sd%cfg%imino_,sd%cfg%imaxo_
@@ -793,7 +786,7 @@ contains
       end do; end do; end do
       
       ! Second pass to apply forcing (+2 in x because remesh is missing imino...)
-      do k=sd%cfg%kmino_+1,sd%cfg%kmaxo_; do j=sd%cfg%jmino_+1,sd%cfg%jmaxo_; do i=sd%cfg%imino_+2,sd%cfg%imaxo_
+      do k=sd%cfg%kmino_+1,sd%cfg%kmaxo_; do j=sd%cfg%jmino_+1,sd%cfg%jmaxo_; do i=sd%cfg%imino_+1,sd%cfg%imaxo_
          sd%fs%Q(i,j,k,1)=sd%fs%Q(i,j,k,1)
          sd%fs%Q(i,j,k,2)=sd%fs%Q(i,j,k,2)+Q(i,j,k,1)
          sd%fs%Q(i,j,k,3)=sd%fs%Q(i,j,k,3)
