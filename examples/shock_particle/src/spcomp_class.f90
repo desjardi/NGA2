@@ -432,6 +432,12 @@ contains
          end do
       end do
 
+      do i=1,3
+         call this%cfg%sync(FQx(:,:,:,i))
+         call this%cfg%sync(FQy(:,:,:,i))
+         call this%cfg%sync(FQz(:,:,:,i))
+      end do
+
       ! Assemble time derivative for conserved variables
       do k=this%cfg%kmin_,this%cfg%kmax_
          do j=this%cfg%jmin_,this%cfg%jmax_
