@@ -21,7 +21,7 @@ module simulation
    type(event)   :: ens_evt
    
    !> Simulation monitor file
-   type(monitor) :: mfile,cflfile,consfile
+   type(monitor) :: mfile,cflfile,consfile,ibmfile
    
    public :: simulation_init,simulation_run,simulation_final
    
@@ -40,6 +40,9 @@ module simulation
    real(WP) :: rho1,p1,u1,M1
    real(WP) :: rho2,p2,u2,M2
    real(WP) :: Re
+
+   !> IBM parameters
+   real(WP), dimension(3) :: ibm_force
    
  contains
 
@@ -114,7 +117,70 @@ module simulation
    end subroutine get_div
 
 
-   !> Apply IBM to conserved variables
+   !> Compute force on cylinder
+   subroutine get_force()
+     use mathtools, only: Pi
+     use mpi_f08,  only: MPI_SUM,MPI_ALLREDUCE,MPI_IN_PLACE
+     use parallel, only: MPI_REAL_WP
+     implicit none
+     integer :: i,j,k,n,ierr
+     real(WP) :: div
+     real(WP), dimension(:,:,:,:), allocatable :: FQx,FQy,FQz
+
+     allocate(FQx(fs%cfg%imino_:fs%cfg%imaxo_,fs%cfg%jmino_:fs%cfg%jmaxo_,fs%cfg%kmino_:fs%cfg%kmaxo_,1:3)); FQx=0.0_WP
+     allocate(FQy(fs%cfg%imino_:fs%cfg%imaxo_,fs%cfg%jmino_:fs%cfg%jmaxo_,fs%cfg%kmino_:fs%cfg%kmaxo_,1:3)); FQy=0.0_WP
+     allocate(FQz(fs%cfg%imino_:fs%cfg%imaxo_,fs%cfg%jmino_:fs%cfg%jmaxo_,fs%cfg%kmino_:fs%cfg%kmaxo_,1:3)); FQz=0.0_WP
+
+     ! Compute cell-centered momentum fluxes
+     do k=fs%cfg%kmin_-1,fs%cfg%kmax_
+        do j=fs%cfg%jmin_-1,fs%cfg%jmax_
+           do i=fs%cfg%imin_-1,fs%cfg%imax_
+              div=fs%dxi*(fs%U(i+1,j,k)-fs%U(i,j,k))+fs%dyi*(fs%V(i,j+1,k)-fs%V(i,j,k))+fs%dzi*(fs%W(i,j,k+1)-fs%W(i,j,k))
+              FQx(i,j,k,1)=2.0_WP*fs%VISC(i,j,k)*fs%dxi*(fs%U(i+1,j,k)-fs%U(i,j,k))+(fs%BETA(i,j,k)-2.0_WP*fs%VISC(i,j,k)/3.0_WP)*div-fs%P(i,j,k)
+              FQy(i,j,k,2)=2.0_WP*fs%VISC(i,j,k)*fs%dyi*(fs%V(i,j+1,k)-fs%V(i,j,k))+(fs%BETA(i,j,k)-2.0_WP*fs%VISC(i,j,k)/3.0_WP)*div-fs%P(i,j,k)
+              FQz(i,j,k,3)=2.0_WP*fs%VISC(i,j,k)*fs%dzi*(fs%W(i,j,k+1)-fs%W(i,j,k))+(fs%BETA(i,j,k)-2.0_WP*fs%VISC(i,j,k)/3.0_WP)*div-fs%P(i,j,k)
+           end do
+        end do
+     end do
+
+     ! Compute edge-centered momentum viscous fluxes and corresponding viscous heating
+     do k=fs%cfg%kmin_,fs%cfg%kmax_+1
+        do j=fs%cfg%jmin_,fs%cfg%jmax_+1
+           do i=fs%cfg%imin_,fs%cfg%imax_+1
+              FQy(i,j,k,1)=0.25_WP*sum(fs%VISC(i-1:i,j-1:j,k))*(fs%dyi*(fs%U(i,j,k)-fs%U(i,j-1,k))+fs%dxi*(fs%V(i,j,k)-fs%V(i-1,j,k))); FQx(i,j,k,2)=FQy(i,j,k,1)
+              FQz(i,j,k,2)=0.25_WP*sum(fs%VISC(i,j-1:j,k-1:k))*(fs%dzi*(fs%V(i,j,k)-fs%V(i,j,k-1))+fs%dyi*(fs%W(i,j,k)-fs%W(i,j-1,k))); FQy(i,j,k,3)=FQz(i,j,k,2)
+              FQx(i,j,k,3)=0.25_WP*sum(fs%VISC(i-1:i,j,k-1:k))*(fs%dxi*(fs%W(i,j,k)-fs%W(i-1,j,k))+fs%dzi*(fs%U(i,j,k)-fs%U(i,j,k-1))); FQz(i,j,k,1)=FQx(i,j,k,3)
+           end do
+        end do
+     end do
+
+     do i=1,3
+        call fs%cfg%sync(FQx(:,:,:,i))
+        call fs%cfg%sync(FQy(:,:,:,i))
+        call fs%cfg%sync(FQz(:,:,:,i))
+     end do
+
+     ! Sum up force
+     ibm_force=0.0_WP
+     do k=cfg%kmin_,cfg%kmax_
+        do j=cfg%jmin_,cfg%jmax_
+           do i=cfg%imin_,cfg%imax_
+              if (cfg%Gib(i,j,k).lt.0.0_WP) then
+                 ibm_force(1)=ibm_force(1)+fs%dxi*(FQx(i  ,j,k,1)-FQx(i-1,j,k,1))+fs%dyi*(FQy(i,j+1,k,1)-FQy(i,j  ,k,1))+fs%dzi*(FQz(i,j,k+1,1)-FQz(i,j,k  ,1))*fs%vol
+                 ibm_force(2)=ibm_force(2)+fs%dxi*(FQx(i+1,j,k,2)-FQx(i  ,j,k,2))+fs%dyi*(FQy(i,j  ,k,2)-FQy(i,j-1,k,2))+fs%dzi*(FQz(i,j,k+1,2)-FQz(i,j,k  ,2))*fs%vol
+                 ibm_force(3)=ibm_force(3)+fs%dxi*(FQx(i+1,j,k,3)-FQx(i  ,j,k,3))+fs%dyi*(FQy(i,j+1,k,3)-FQy(i,j  ,k,3))+fs%dzi*(FQz(i,j,k  ,3)-FQz(i,j,k-1,3))*fs%vol
+              end if
+           end do
+        end do
+     end do
+     call MPI_ALLREDUCE(MPI_IN_PLACE,ibm_force,3,MPI_REAL_WP,MPI_SUM,cfg%comm,ierr)
+
+     ! Deallocate flux arrays
+     deallocate(FQx,FQy,FQz)
+   end subroutine get_force
+
+
+   !> Overwrite ghostpoints to enforce BC at the cylinder
    subroutine apply_ibm()
      use gp_class, only: dirichlet,neumann
      implicit none
@@ -361,11 +427,6 @@ module simulation
         Ma=sqrt(Ui**2+Vi**2+Wi**2)/fs%C
         ! Compute dilatation
         call get_div()
-        !> Perform and output monitoring
-        call fs%get_info()
-        call mfile%write()
-        call cflfile%write()
-        call consfile%write()
       end block initialize_variables
 
 
@@ -400,6 +461,9 @@ module simulation
       
       ! Create monitor files
       create_monitor: block
+        !> Perform and output monitoring
+        call fs%get_info()
+        call get_force()
         ! Create simulation monitor
         mfile=monitor(fs%cfg%amRoot,'simulation')
         call mfile%add_column(time%n,'Timestep number')
@@ -417,6 +481,7 @@ module simulation
         call mfile%add_column(fs%Pmin  ,'min(P)'  )
         call mfile%add_column(fs%Tmax  ,'max(T)'  )
         call mfile%add_column(fs%Tmin  ,'min(T)'  )
+        call mfile%write()
         ! Create CFL monitor
         cflfile=monitor(fs%cfg%amRoot,'cfl')
         call cflfile%add_column(time%n,'Timestep number')
@@ -430,6 +495,7 @@ module simulation
         call cflfile%add_column(fs%CFLv_x,'Viscous xCFL')
         call cflfile%add_column(fs%CFLv_y,'Viscous yCFL')
         call cflfile%add_column(fs%CFLv_z,'Viscous zCFL')
+        call cflfile%write()
         ! Create conservation monitor
         consfile=monitor(fs%cfg%amRoot,'conservation')
         call consfile%add_column(time%n,'Timestep number')
@@ -441,6 +507,15 @@ module simulation
         call consfile%add_column(fs%Qint(5),'W Momentum')
         call consfile%add_column(fs%RHOKint,'Kinetic Energy')
         call consfile%add_column(fs%RHOSint,'Entropy')
+        call consfile%write()
+        ! Create IBM monitor
+        consfile=monitor(fs%cfg%amRoot,'ibm')
+        call consfile%add_column(time%n,'Timestep number')
+        call consfile%add_column(time%t,'Time')
+        call consfile%add_column(ibm_force(1),'X Force')
+        call consfile%add_column(ibm_force(2),'Y Force')
+        call consfile%add_column(ibm_force(3),'Z Force')
+        call ibmfile%write()
       end block create_monitor
 
     end subroutine simulation_init
@@ -506,9 +581,11 @@ module simulation
 
          !> Perform and output monitoring
          call fs%get_info()
+         call get_force()
          call mfile%write()
          call cflfile%write()
          call consfile%write()
+         call ibmfile%write()
 
          ! Output to ensight
          if (ens_evt%occurs()) call ens_out%write_data(time%t)

@@ -424,10 +424,9 @@ contains
       do k=this%cfg%kmin_,this%cfg%kmax_+1
          do j=this%cfg%jmin_,this%cfg%jmax_+1
             do i=this%cfg%imin_,this%cfg%imax_+1
-               FQy(i,j,k,1)=0.25_WP*sum(this%VISC(i-1:i,j-1:j,k))*(this%dyi*(this%U(i,j,k)-this%U(i,j-1,k))+this%dxi*(this%V(i,j,k)-this%V(i-1,j,k))); FQx(i,j,k,1)=FQy(i,j,k,1)
-               FQz(i,j,k,2)=0.25_WP*sum(this%VISC(i,j-1:j,k-1:k))*(this%dzi*(this%V(i,j,k)-this%V(i,j,k-1))+this%dyi*(this%W(i,j,k)-this%W(i,j-1,k))); FQy(i,j,k,2)=FQz(i,j,k,2)
-               FQx(i,j,k,3)=0.25_WP*sum(this%VISC(i-1:i,j,k-1:k))*(this%dxi*(this%W(i,j,k)-this%W(i-1,j,k))+this%dzi*(this%U(i,j,k)-this%U(i,j,k-1))); FQz(i,j,k,3)=FQx(i,j,k,3)
-              
+               FQy(i,j,k,1)=0.25_WP*sum(this%VISC(i-1:i,j-1:j,k))*(this%dyi*(this%U(i,j,k)-this%U(i,j-1,k))+this%dxi*(this%V(i,j,k)-this%V(i-1,j,k))); FQx(i,j,k,2)=FQy(i,j,k,1)
+               FQz(i,j,k,2)=0.25_WP*sum(this%VISC(i,j-1:j,k-1:k))*(this%dzi*(this%V(i,j,k)-this%V(i,j,k-1))+this%dyi*(this%W(i,j,k)-this%W(i,j-1,k))); FQy(i,j,k,3)=FQz(i,j,k,2)
+               FQx(i,j,k,3)=0.25_WP*sum(this%VISC(i-1:i,j,k-1:k))*(this%dxi*(this%W(i,j,k)-this%W(i-1,j,k))+this%dzi*(this%U(i,j,k)-this%U(i,j,k-1))); FQz(i,j,k,1)=FQx(i,j,k,3)
             end do
          end do
       end do
