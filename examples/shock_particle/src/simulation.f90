@@ -31,7 +31,7 @@ module simulation
    real(WP), dimension(:,:,:,:,:), allocatable :: dQdt
    real(WP), dimension(:,:,:)    , allocatable :: Ui,Vi,Wi,Ma,beta,visc,div
    real(WP), dimension(:,:,:)    , allocatable :: srcUlp,srcVlp,srcWlp,srcIlp
-   real(WP), dimension(:,:,:)    , allocatable :: stressx,stressy,stressz
+   real(WP), dimension(:,:,:)    , allocatable :: stressx,stressy,stressz,dVFdt
 
    !> Constant kinematic viscosity
    real(WP) :: cst_visc
@@ -242,6 +242,7 @@ module simulation
         allocate(srcVlp (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
         allocate(srcWlp (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
         allocate(srcIlp (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+        allocate(dVFdt(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
       end block allocate_work_arrays
 
 
@@ -572,6 +573,7 @@ module simulation
     !> Perform an NGA2 simulation
     subroutine simulation_run
       implicit none
+      integer :: i
 
       ! Perform time integration
       do while (.not.time%done())
@@ -583,6 +585,7 @@ module simulation
 
          ! Remember conserved variables
          fs%Qold=fs%Q
+         dVFdt=lp%VF
 
          ! Prepare SGS viscosity models
          call prepare_viscosities()
@@ -590,14 +593,27 @@ module simulation
          ! Get divergence of stress
          call fs%get_div_stress(stressx,stressy,stressz)
 
+         ! Remove volume fraction
+         do i=1,fs%nQ
+            fs%Q(:,:,:,i)=fs%Q(:,:,:,i)/(1.0_WP-lp%VF)
+         end do
+
          ! Collide and advance particles
          call lp%collide(dt=time%dt)
          call lp%advance(dt=time%dt,U=fs%U,V=fs%V,W=fs%W,rho=fs%rho,visc=fs%visc,T=fs%T,C=fs%C,&
               stress_x=stressx,stress_y=stressy,stress_z=stressz,srcU=srcUlp,srcV=srcVlp,srcW=srcWlp,srcI=srcIlp)
 
+         ! Multiply volume fraction back
+         do i=1,fs%nQ
+            fs%Q(:,:,:,i)=fs%Q(:,:,:,i)*(1.0_WP-lp%VF)
+         end do
+
+         ! Get rate-of-change of volume fraction
+         dVFdt=(lp%VF-dVFdt)/time%dt
+
          ! First RK step ====================================================================================
          ! Get non-SL RHS and increment
-         call fs%rhs(dQdt(:,:,:,:,1))
+         call fs%rhs(VF=lp%VF,dVFdt=dVFdt,dQdt=dQdt(:,:,:,:,1))
          ! LPT source
          dQdt(:,:,:,2,1)=dQdt(:,:,:,2,1)+srcIlp
          dQdt(:,:,:,3,1)=dQdt(:,:,:,3,1)+srcUlp
@@ -610,7 +626,7 @@ module simulation
 
          ! Second RK step ===================================================================================
          ! Get non-SL RHS and increment
-         call fs%rhs(dQdt(:,:,:,:,2))
+         call fs%rhs(VF=lp%VF,dVFdt=dVFdt,dQdt=dQdt(:,:,:,:,2))
          ! LPT source
          dQdt(:,:,:,2,1)=dQdt(:,:,:,2,2)+srcIlp
          dQdt(:,:,:,3,1)=dQdt(:,:,:,3,2)+srcUlp
@@ -623,7 +639,7 @@ module simulation
 
          ! Third RK step ====================================================================================
          ! Get non-SL RHS and increment
-         call fs%rhs(dQdt(:,:,:,:,3))
+         call fs%rhs(VF=lp%VF,dVFdt=dVFdt,dQdt=dQdt(:,:,:,:,3))
          ! LPT source
          dQdt(:,:,:,2,1)=dQdt(:,:,:,2,3)+srcIlp
          dQdt(:,:,:,3,1)=dQdt(:,:,:,3,3)+srcUlp
@@ -636,7 +652,7 @@ module simulation
 
          ! Fourth RK step ===================================================================================
          ! Get non-SL RHS and increment
-         call fs%rhs(dQdt(:,:,:,:,4))
+         call fs%rhs(VF=lp%VF,dVFdt=dVFdt,dQdt=dQdt(:,:,:,:,4))
          ! LPT source
          dQdt(:,:,:,2,1)=dQdt(:,:,:,2,4)+srcIlp
          dQdt(:,:,:,3,1)=dQdt(:,:,:,3,4)+srcUlp
@@ -697,7 +713,7 @@ module simulation
       ! timetracker
       
       ! Deallocate work arrays
-      deallocate(dQdt,Ui,Vi,Wi,Ma,beta,visc,div,srcUlp,srcVlp,srcWlp,srcIlp,stressx,stressy,stressz)
+      deallocate(dQdt,Ui,Vi,Wi,Ma,beta,visc,div,srcUlp,srcVlp,srcWlp,srcIlp,stressx,stressy,stressz,dVFdt)
       
    end subroutine simulation_final
    
