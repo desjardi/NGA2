@@ -137,7 +137,7 @@ module simulation
      use parallel, only: MPI_REAL_WP
      implicit none
      integer :: i,j,k,n,ierr
-     real(WP) :: div
+     real(WP) :: div,Fl,Fr
      real(WP), dimension(:,:,:,:), allocatable :: FQx,FQy,FQz
 
      allocate(FQx(fs%cfg%imino_:fs%cfg%imaxo_,fs%cfg%jmino_:fs%cfg%jmaxo_,fs%cfg%kmino_:fs%cfg%kmaxo_,1:3)); FQx=0.0_WP
@@ -179,9 +179,18 @@ module simulation
         do j=cfg%jmin_,cfg%jmax_
            do i=cfg%imin_,cfg%imax_
               if (cfg%Gib(i,j,k).lt.0.0_WP) then
-                 ibm_force(1)=ibm_force(1)+fs%dxi*(FQx(i  ,j,k,1)-FQx(i-1,j,k,1))+fs%dyi*(FQy(i,j+1,k,1)-FQy(i,j  ,k,1))+fs%dzi*(FQz(i,j,k+1,1)-FQz(i,j,k  ,1))*fs%vol
-                 ibm_force(2)=ibm_force(2)+fs%dxi*(FQx(i+1,j,k,2)-FQx(i  ,j,k,2))+fs%dyi*(FQy(i,j  ,k,2)-FQy(i,j-1,k,2))+fs%dzi*(FQz(i,j,k+1,2)-FQz(i,j,k  ,2))*fs%vol
-                 ibm_force(3)=ibm_force(3)+fs%dxi*(FQx(i+1,j,k,3)-FQx(i  ,j,k,3))+fs%dyi*(FQy(i,j+1,k,3)-FQy(i,j  ,k,3))+fs%dzi*(FQz(i,j,k  ,3)-FQz(i,j,k-1,3))*fs%vol
+                 ! Force in x
+                 Fl=fs%dxi*(FQx(i  ,j,k,1)-FQx(i-1,j,k,1))+fs%dyi*(FQy(i  ,j+1,k,1)-FQy(i  ,j,k,1))+fs%dzi*(FQz(i  ,j,k+1,1)-FQz(i  ,j,k,1))*fs%vol
+                 Fr=fs%dxi*(FQx(i+1,j,k,1)-FQx(i  ,j,k,1))+fs%dyi*(FQy(i+1,j+1,k,1)-FQy(i+1,j,k,1))+fs%dzi*(FQz(i+1,j,k+1,1)-FQz(i+1,j,k,1))*fs%vol
+                 ibm_force(1)=ibm_force(1)+0.5_WP*(Fl+Fr)
+                 ! Force in y
+                 Fl=fs%dxi*(FQx(i+1,j  ,k,2)-FQx(i,j  ,k,2))+fs%dyi*(FQy(i,j  ,k,2)-FQy(i,j-1,k,2))+fs%dzi*(FQz(i,j  ,k+1,2)-FQz(i,j  ,k,2))*fs%vol
+                 Fr=fs%dxi*(FQx(i+1,j+1,k,2)-FQx(i,j+1,k,2))+fs%dyi*(FQy(i,j+1,k,2)-FQy(i,j  ,k,2))+fs%dzi*(FQz(i,j+1,k+1,2)-FQz(i,j+1,k,2))*fs%vol
+                 ibm_force(2)=ibm_force(2)+0.5_WP*(Fl+Fr)
+                 ! Force in z
+                 Fl=fs%dxi*(FQx(i+1,j,k  ,3)-FQx(i,j,k  ,3))+fs%dyi*(FQy(i,j+1,k  ,3)-FQy(i,j,k  ,3))+fs%dzi*(FQz(i,j,k  ,3)-FQz(i,j,k-1,3))*fs%vol
+                 FR=fs%dxi*(FQx(i+1,j,k+1,3)-FQx(i,j,k+1,3))+fs%dyi*(FQy(i,j+1,k+1,3)-FQy(i,j,k+1,3))+fs%dzi*(FQz(i,j,k+1,3)-FQz(i,j,k  ,3))*fs%vol
+                 ibm_force(3)=ibm_force(3)+0.5_WP*(Fl+Fr)
               end if
            end do
         end do

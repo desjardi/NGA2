@@ -16,9 +16,9 @@ Cylinder position : 2.5
 # Adimensional flow parameters
 Gamma : 1.4
 Prandtl number : 0.71
-Shock Mach number : 2
+Shock Mach number : 1.2
 Shock location :   -1
-Reynolds number : 1e5
+Reynolds number : 5000
 
 # Time integration
 Max timestep size : 2e-3
