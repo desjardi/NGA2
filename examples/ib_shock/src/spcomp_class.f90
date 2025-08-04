@@ -231,6 +231,8 @@ contains
                &           +0.5_WP*(FQx(i,j,k,1)+abs(-FQx(i,j,k,1)))*sum(wenom*this%I(i-1:i+1,j,k))
                ! Centered internal energy flux
                !FQx(i,j,k,2)=FQx(i,j,k,1)*0.5_WP*sum(this%I(i-1:i,j,k))
+               ! Heat flux
+               FQx(i,j,k,2)=FQx(i,j,k,2)+0.5_WP*(this%DIFF(i-1,j,k)+this%DIFF(i,j,k))*this%dxi*(this%T(i,j,k)-this%T(i-1,j,k))
                ! Y fluxes
                ! WENO  mass flux
                w=weno_weight((abs(this%Q(i,j-1,k,1)-this%Q(i,j-2,k,1))+eps)/(abs(this%Q(i,j,k,1)-this%Q(i,j-1,k,1))+eps)); wenop=0.5_WP*[      -w,1.0_WP+2.0_WP*w,1.0_WP-w]
@@ -245,7 +247,9 @@ contains
                FQy(i,j,k,2)=0.5_WP*(FQy(i,j,k,1)-abs(-FQy(i,j,k,1)))*sum(wenop*this%I(i,j-2:j  ,k))&
                &           +0.5_WP*(FQy(i,j,k,1)+abs(-FQy(i,j,k,1)))*sum(wenom*this%I(i,j-1:j+1,k))
                ! Centered internal energy flux
-               !FQy(i,j,k,2)=FQy(i,j,k,1)*0.5_WP*sum(this%I(i,j-1:j,k)) 
+               !FQy(i,j,k,2)=FQy(i,j,k,1)*0.5_WP*sum(this%I(i,j-1:j,k))
+               ! Heat flux
+               FQy(i,j,k,2)=FQy(i,j,k,2)+0.5_WP*(this%DIFF(i,j-1,k)+this%DIFF(i,j,k))*this%dyi*(this%T(i,j,k)-this%T(i,j-1,k))
                ! Z fluxes
                ! WENO mass flux
                w=weno_weight((abs(this%Q(i,j,k-1,1)-this%Q(i,j,k-2,1))+eps)/(abs(this%Q(i,j,k,1)-this%Q(i,j,k-1,1))+eps)); wenop=0.5_WP*[      -w,1.0_WP+2.0_WP*w,1.0_WP-w]
@@ -261,6 +265,8 @@ contains
                &           +0.5_WP*(FQz(i,j,k,1)+abs(-FQz(i,j,k,1)))*sum(wenom*this%I(i,j,k-1:k+1))
                ! Centered internal energy flux
                !FQz(i,j,k,2)=FQz(i,j,k,1)*0.5_WP*sum(this%I(i,j,k-1:k))
+               ! Heat flux
+               FQz(i,j,k,2)=FQz(i,j,k,2)+0.5_WP*(this%DIFF(i,j,k-1)+this%DIFF(i,j,k))*this%dzi*(this%T(i,j,k)-this%T(i,j,k-1))
             end do
          end do
       end do
