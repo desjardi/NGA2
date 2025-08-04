@@ -593,20 +593,10 @@ module simulation
          ! Get divergence of stress
          call fs%get_div_stress(stressx,stressy,stressz)
 
-         ! Remove volume fraction
-         do i=1,fs%nQ
-            fs%Q(:,:,:,i)=fs%Q(:,:,:,i)/(1.0_WP-lp%VF)
-         end do
-
          ! Collide and advance particles
          call lp%collide(dt=time%dt)
          call lp%advance(dt=time%dt,U=fs%U,V=fs%V,W=fs%W,rho=fs%rho,visc=fs%visc,T=fs%T,C=fs%C,&
               stress_x=stressx,stress_y=stressy,stress_z=stressz,srcU=srcUlp,srcV=srcVlp,srcW=srcWlp,srcI=srcIlp)
-
-         ! Multiply volume fraction back
-         do i=1,fs%nQ
-            fs%Q(:,:,:,i)=fs%Q(:,:,:,i)*(1.0_WP-lp%VF)
-         end do
 
          ! Get rate-of-change of volume fraction
          dVFdt=(lp%VF-dVFdt)/time%dt
