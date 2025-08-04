@@ -27,13 +27,13 @@ module simulation
    
    !> Private work arrays
    real(WP), dimension(:,:,:,:,:), allocatable :: dQdt
-   real(WP), dimension(:,:,:)    , allocatable :: Ui,Vi,Wi,Ma,beta,visc,div
+   real(WP), dimension(:,:,:)    , allocatable :: Ui,Vi,Wi,Ma,beta,visc,visc_t,div
 
    !> Constant kinematic viscosity
-   real(WP) :: cst_visc
+   real(WP) :: visc0,T0
 
    !> Equations of state
-   real(WP) :: Pinf,Gamma,Cv
+   real(WP) :: Pinf,Gamma,Cv,Prandtl
 
    !> Flow parameters
    real(WP) :: Ms,Xs
@@ -96,10 +96,23 @@ module simulation
    !> Calculate viscosities
    subroutine prepare_viscosities()
      implicit none
+     integer :: i,j,k
+     real(WP) :: S
+     ! Get viscosity from Sutherland's law
+     S=110.4_WP/273.15_WP*T0
+     do k=fs%cfg%kmino_,fs%cfg%kmaxo_
+        do j=fs%cfg%jmino_,fs%cfg%jmaxo_
+           do i=fs%cfg%imino_,fs%cfg%imaxo_
+              visc(i,j,k)=visc0*(T0+S)/(fs%T(i,j,k)+S)*(fs%T(i,j,k)/T0)**1.5_WP
+           end do
+        end do
+     end do
      ! Get LAD
-     call fs%get_viscartif(dt=time%dt,beta=beta); fs%BETA=fs%Q(:,:,:,1)*(beta         )
+     call fs%get_viscartif(dt=time%dt,beta=beta); fs%BETA=fs%Q(:,:,:,1)*beta
      ! Get eddy viscosity
-     call fs%get_vreman   (dt=time%dt,visc=visc); fs%VISC=fs%Q(:,:,:,1)*(visc+cst_visc)
+     call fs%get_vreman   (dt=time%dt,visc=visc_t); fs%VISC=fs%Q(:,:,:,1)*visc_t+visc
+     ! Recompute diffusivity
+     fs%diff=Gamma*fs%Cp*fs%visc/Prandtl
    end subroutine prepare_viscosities
 
 
@@ -337,6 +350,7 @@ module simulation
         allocate(Ma  (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
         allocate(beta(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
         allocate(visc(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+        allocate(visc_t(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
         allocate(div(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
       end block allocate_work_arrays
 
@@ -351,6 +365,8 @@ module simulation
         Pinf=0.0_WP
         ! Read in Gamma
         call param_read('Gamma',Gamma)
+        ! Read in Prandtl number
+        call param_read('Prandtl number',Prandtl)
         ! Read in shock Mach number and location
         call param_read('Shock Mach number',Ms)
         call param_read('Shock location',Xs)
@@ -366,8 +382,10 @@ module simulation
         u2=abs(u2-u1); M2=u2/sqrt(Gamma*p2/rho2); u1=0.0_WP; M1=u1/sqrt(Gamma*p1/rho1)
         ! Set heat capacities corresponding to a normalized pre-shock
         Cv=(p1+Pinf)/(rho1*(Gamma-1.0_WP))
+        ! Get reference temperature
+        T0=get_T(rho1,p1)
         ! Viscous parameters
-        call param_read('Reynolds number',Re); cst_visc=rho1*2.0_WP*Rcyl*u2/Re
+        call param_read('Reynolds number',Re); visc0=rho2*2.0_WP*Rcyl*u2/Re
         ! Output case info
         if (cfg%amRoot) then
            write(message,'("[Gas EOS]               =>  Gamma=",es12.5)')    Gamma; call log(message)
@@ -382,7 +400,7 @@ module simulation
            write(message,'("[Post-shock conditions] =>     u2=",es12.5)')       u2; call log(message)
            write(message,'("[Post-shock conditions] =>     M2=",es12.5)')       M2; call log(message)
            write(message,'("[Gas Reynolds]          =>     Re=",es12.5)')       Re; call log(message)
-           write(message,'("[Gas viscosity]         =>     mu=",es12.5)') cst_visc; call log(message)
+           write(message,'("[Gas viscosity]         =>     mu=",es12.5)')    visc0; call log(message)
         end if
       end block initialize_parameters
 
@@ -451,6 +469,7 @@ module simulation
          call ens_out%add_scalar('Mach',Ma)
          call ens_out%add_scalar('beta',beta)
          call ens_out%add_scalar('visc',visc)
+         call ens_out%add_scalar('visc_t',visc_t)
          call ens_out%add_scalar('div',div) 
          call ens_out%add_scalar('Gib',cfg%Gib)
          call ens_out%add_scalar('IBM',gp%label)
@@ -606,7 +625,7 @@ module simulation
       ! timetracker
       
       ! Deallocate work arrays
-      deallocate(dQdt,Ui,Vi,Wi,Ma,beta,visc,div)
+      deallocate(dQdt,Ui,Vi,Wi,Ma,beta,visc,visc_t,div)
       
    end subroutine simulation_final
    
