@@ -594,9 +594,8 @@ contains
 
          ! Sensor originally proposed by Ducros et al. (1999) and later improved by
          ! Hendrickson, T. R., Kartha, A., & Candler, G. V. (2018)
-         H=sign(0.5_WP,-div(i,j,k))+0.5_WP
          vort=max(vort,(0.05_WP*this%C(i,j,k)/min(this%dx,this%dy))**2)
-         beta(i,j,k)=Cartif*grad_div*H*min(4.0_WP/3.0_WP*div(i,j,k)**2/(div(i,j,k)**2+vort+epsilon(1.0_WP)),1.0_WP)
+         beta(i,j,k)=Cartif*grad_div*min(4.0_WP/3.0_WP*div(i,j,k)**2/(div(i,j,k)**2+vort+epsilon(1.0_WP)),1.0_WP)
          ! Clip it so CFL<max_CFL
          beta(i,j,k)=min(beta(i,j,k),max_beta)
       end do; end do; end do
