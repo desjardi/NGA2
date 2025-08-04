@@ -111,8 +111,8 @@ module simulation
      call fs%get_viscartif(dt=time%dt,beta=beta); fs%BETA=fs%Q(:,:,:,1)*beta
      ! Get eddy viscosity
      call fs%get_vreman   (dt=time%dt,visc=visc_t); fs%VISC=fs%Q(:,:,:,1)*visc_t+visc
-     ! Recompute diffusivity
-     fs%diff=Gamma*fs%Cp*fs%visc/Prandtl
+     ! Recompute thermal conductivity
+     fs%diff=Gamma*Cv*fs%visc/Prandtl
    end subroutine prepare_viscosities
 
 
