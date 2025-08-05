@@ -43,14 +43,6 @@ module simulation
 
   !> Max timestep size for LPT
   real(WP) :: lp_dt,lp_dt_max
-  
-  !> Wallclock time for monitoring
-  type :: timer
-    real(WP) :: time_in
-    real(WP) :: time
-    real(WP) :: percent
-  end type timer
-  type(timer) :: wt_total,wt_vel,wt_pres,wt_lpt,wt_sgs,wt_rest
 
 contains
 
@@ -103,17 +95,6 @@ contains
       time%dt=time%dtmax
       time%itmax=2
     end block initialize_timetracker
-
-
-    ! Initialize timers
-    initialize_timers: block
-      wt_total%time=0.0_WP; wt_total%percent=0.0_WP
-      wt_vel%time=0.0_WP;   wt_vel%percent=0.0_WP
-      wt_pres%time=0.0_WP;  wt_pres%percent=0.0_WP
-      wt_lpt%time=0.0_WP;   wt_lpt%percent=0.0_WP
-      wt_sgs%time=0.0_WP;   wt_sgs%percent=0.0_WP
-      wt_rest%time=0.0_WP;  wt_rest%percent=0.0_WP
-    end block initialize_timers
 
 
     ! Create a low Mach flow solver with bconds
@@ -342,7 +323,7 @@ contains
     end block create_ensight
 
     
-    ! Create monitor filea
+    ! Create monitor files
     create_monitor: block
       ! Prepare some info about fields
       real(WP) :: cfl
@@ -393,22 +374,6 @@ contains
       call lptfile%add_column(lp%Wmin,'Particle Wmin')
       call lptfile%add_column(lp%Wmax,'Particle Wmax')
       call lptfile%write()
-      ! Create timing monitor
-      tfile=monitor(amroot=fs%cfg%amRoot,name='timing')
-      call tfile%add_column(time%n,'Timestep number')
-      call tfile%add_column(time%t,'Time')
-      call tfile%add_column(wt_total%time,'Total [s]')
-      call tfile%add_column(wt_vel%time,'Velocity [s]')
-      call tfile%add_column(wt_vel%percent,'Velocity [%]')
-      call tfile%add_column(wt_pres%time,'Pressure [s]')
-      call tfile%add_column(wt_pres%percent,'Pressure [%]')
-      call tfile%add_column(wt_lpt%time,'LPT [s]')
-      call tfile%add_column(wt_lpt%percent,'LPT [%]')
-      call tfile%add_column(wt_sgs%time,'SGS [s]')
-      call tfile%add_column(wt_sgs%percent,'SGS [%]')
-      call tfile%add_column(wt_rest%time,'Rest [s]')
-      call tfile%add_column(wt_rest%percent,'Rest [%]')
-      call tfile%write()
     end block create_monitor
     
   end subroutine simulation_init
@@ -423,9 +388,6 @@ contains
 
     ! Perform time integration
     do while (.not.time%done())
-
-       ! Initial wallclock time
-       wt_total%time_in=parallel_time()
 
        ! Increment time
        call lp%get_cfl(time%dt,cflc=time%cfl)
@@ -447,7 +409,6 @@ contains
        fs%Vold=fs%V; fs%rhoVold=fs%rhoV
        fs%Wold=fs%W; fs%rhoWold=fs%rhoW
 
-       wt_lpt%time_in=parallel_time()
        ! Particle update
        lpt: block
          real(WP) :: dt_done,mydt
@@ -492,22 +453,17 @@ contains
          fs%rho=rho*(1.0_WP-lp%VF)
          dRHOdt=(fs%RHO-fs%RHOold)/time%dtmid
        end block lpt
-       wt_lpt%time=wt_lpt%time+parallel_time()-wt_lpt%time_in
 
        ! Turbulence modeling
-       wt_sgs%time_in=parallel_time()
        sgs_modeling: block
          use sgsmodel_class, only: dynamic_smag
          call fs%get_strainrate(SR)
          call sgs%get_visc(type=dynamic_smag,dt=time%dtold,rho=rho0,Ui=Ui,Vi=Vi,Wi=Wi,SR=SR)
          fs%visc=visc+sgs%visc
        end block sgs_modeling
-       wt_sgs%time=wt_sgs%time+parallel_time()-wt_sgs%time_in
 
        ! Perform sub-iterations
        do while (time%it.le.time%itmax)
-
-          wt_vel%time_in=parallel_time()
 
           ! Build mid-time velocity and momentum
           fs%U=0.5_WP*(fs%U+fs%Uold); fs%rhoU=0.5_WP*(fs%rhoU+fs%rhoUold)
@@ -552,10 +508,7 @@ contains
           call fs%rho_multiply()
           call fs%apply_bcond(time%tmid,time%dtmid)
 
-          wt_vel%time=wt_vel%time+parallel_time()-wt_vel%time_in
-
           ! Solve Poisson equation
-          wt_pres%time_in=parallel_time()
           call fs%correct_mfr(drhodt=dRHOdt)
           call fs%get_div(drhodt=dRHOdt)
           fs%psolv%rhs=-fs%cfg%vol*fs%div/time%dtmid
@@ -570,7 +523,6 @@ contains
           fs%rhoV=fs%rhoV-time%dtmid*resV
           fs%rhoW=fs%rhoW-time%dtmid*resW
           call fs%rho_divide
-          wt_pres%time=wt_pres%time+parallel_time()-wt_pres%time_in
 
           ! Increment sub-iteration counter
           time%it=time%it+1
@@ -578,10 +530,8 @@ contains
        end do
 
        ! Recompute interpolated velocity and divergence
-       wt_vel%time_in=parallel_time()
        call fs%interp_vel(Ui,Vi,Wi)
        call fs%get_div(drhodt=dRHOdt)
-       wt_vel%time=wt_vel%time+parallel_time()-wt_vel%time_in
 
        ! Output to ensight
        if (ens_evt%occurs()) then
@@ -603,22 +553,6 @@ contains
        call mfile%write()
        call cflfile%write()
        call lptfile%write()
-
-       ! Monitor timing
-       wt_total%time=parallel_time()-wt_total%time_in
-       wt_vel%percent=wt_vel%time/wt_total%time*100.0_WP
-       wt_pres%percent=wt_pres%time/wt_total%time*100.0_WP
-       wt_lpt%percent=wt_lpt%time/wt_total%time*100.0_WP
-       wt_sgs%percent=wt_sgs%time/wt_total%time*100.0_WP
-       wt_rest%time=wt_total%time-wt_vel%time-wt_pres%time-wt_lpt%time-wt_sgs%time
-       wt_rest%percent=wt_rest%time/wt_total%time*100.0_WP
-       call tfile%write()
-       wt_total%time=0.0_WP; wt_total%percent=0.0_WP
-       wt_vel%time=0.0_WP;   wt_vel%percent=0.0_WP
-       wt_pres%time=0.0_WP;  wt_pres%percent=0.0_WP
-       wt_lpt%time=0.0_WP;   wt_lpt%percent=0.0_WP
-       wt_sgs%time=0.0_WP;   wt_sgs%percent=0.0_WP
-       wt_rest%time=0.0_WP;  wt_rest%percent=0.0_WP
 
     end do
 
