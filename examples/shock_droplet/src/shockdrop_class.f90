@@ -69,6 +69,7 @@ contains
       implicit none
       class(shockdrop), intent(inout) :: this
       integer :: i,j,k,n,ierr
+      real(WP), parameter :: VFlo_extent=0.1_WP
       ! Update CCL
       call this%ccl%build(make_label,same_label)
       ! Core is id=1, skip if not present
@@ -96,7 +97,7 @@ contains
       this%Lmin=+[huge(1.0_WP),huge(1.0_WP),huge(1.0_WP)]
       this%Lmax=-[huge(1.0_WP),huge(1.0_WP),huge(1.0_WP)]
       do k=this%fs%cfg%kmin_,this%fs%cfg%kmax_; do j=this%fs%cfg%jmin_,this%fs%cfg%jmax_; do i=this%fs%cfg%imin_,this%fs%cfg%imax_
-         if (this%fs%VF(i,j,k).gt.0.0_WP) then
+         if (this%fs%VF(i,j,k).gt.VFlo_extent) then
             this%Lmin=min(this%Lmin,[this%cfg%xm(i),this%cfg%ym(j),this%cfg%zm(k)])
             this%Lmax=max(this%Lmax,[this%cfg%xm(i),this%cfg%ym(j),this%cfg%zm(k)])
          end if

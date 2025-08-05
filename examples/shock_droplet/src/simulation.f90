@@ -107,48 +107,77 @@ contains
    
    
    !> Mechanical relaxation model
+   ! subroutine P_relax(VF,Q)
+   !    implicit none
+   !    real(WP),                intent(inout) :: VF
+   !    real(WP), dimension(1:), intent(inout) :: Q
+   !    real(WP) :: PG,PL,ZG,ZL,Pint
+   !    real(WP) :: a,b,d,coeffL,coeffG,Peq,VFeq
+   !    real(WP), parameter :: RHOGmin=1.0e-3_WP
+   !    ! ================ Handle gas flotsams ================
+   !    if (Q(2)/(1.0_WP-VF).lt.RHOGmin) return
+   !    ! ================ First step for mechanical relaxation ================
+   !    ! Get phasic pressures
+   !    PL=get_PL(RHO=Q(1)/(       VF),I=Q(3)/Q(1))
+   !    PG=get_PG(RHO=Q(2)/(1.0_WP-VF),I=Q(4)/Q(2))
+   !    ! Handle limit cases - should mass/energy be tranasfered or lost? - this should probably never happen...
+   !    if (PL.le.-PinfL) then
+   !       print*,"****************** LIQUID CLIPPED!",PL,VF,Q
+   !       VF=0.0_WP; Q(2)=sum(Q(1:2)); Q(1)=0.0_WP; Q(4)=sum(Q(3:4)); Q(3)=0.0_WP; return
+   !    end if
+   !    if (PG.le.-PinfG) then
+   !       print*,"****************** GAS CLIPPED!",PG,VF,Q
+   !       VF=1.0_WP; Q(1)=sum(Q(1:2)); Q(2)=0.0_WP; Q(3)=sum(Q(3:4)); Q(4)=0.0_WP; return
+   !    end if
+   !    ! Get phasic impedances
+   !    ZL=Q(1)/(       VF)*get_CL(RHO=Q(1)/(       VF),P=PL)**2
+   !    ZG=Q(2)/(1.0_WP-VF)*get_CG(RHO=Q(2)/(1.0_WP-VF),P=PG)**2
+   !    ! Calculate model interface pressure
+   !    Pint=(ZG*PL+ZL*PG)/(ZG+ZL)
+   !    ! Setup quadratic problem
+   !    coeffL=(GammaL-1.0_WP)*Pint+2.0_WP*GammaL*PinfL
+   !    coeffG=(GammaG-1.0_WP)*Pint+2.0_WP*GammaG*PinfG
+   !    a=1.0_WP+GammaG*VF+GammaL*(1.0_WP-VF)
+   !    b=coeffL*(1.0_WP-VF)+coeffG*VF-(1.0_WP+GammaG)*VF*PL-(1.0_WP+GammaL)*(1.0_WP-VF)*PG
+   !    d=-(coeffG*VF*PL+coeffL*(1.0_WP-VF)*PG)
+   !    ! Get equilibrium pressure
+   !    Peq=(-b+sqrt(b**2-4.0_WP*a*d))/(2.0_WP*a)
+   !    ! Check if pressure is sound
+   !    if (Peq.le.max(-PinfG,-PinfL)) return
+   !    ! Get equilibrium volume fraction
+   !    VFeq=VF*((gammaL-1.0_WP)*Peq+2.0_WP*PL+coeffL)/((1.0_WP+gammaL)*Peq+coeffL)
+   !    ! Adjust conserved quantities
+   !    Q(3)=Q(3)-0.5_WP*(Pint+Peq)*(VFeq-VF)
+   !    Q(4)=Q(4)+0.5_WP*(Pint+Peq)*(VFeq-VF)
+   !    VF=VFeq
+   ! end subroutine P_relax
+   
+
+   !> Mechanical relaxation model (implicit)
    subroutine P_relax(VF,Q)
       implicit none
       real(WP),                intent(inout) :: VF
       real(WP), dimension(1:), intent(inout) :: Q
-      real(WP) :: PG,PL,ZG,ZL,Pint
-      real(WP) :: a,b,d,coeffL,coeffG,Peq,VFeq
+      real(WP) :: a,b,d,d1,d0,Peq,VFeq,invG1G,invG1L,facG,facL
       real(WP), parameter :: RHOGmin=1.0e-3_WP
-      ! ================ Handle gas flotsams ================
+      ! Handle gas flotsams
       if (Q(2)/(1.0_WP-VF).lt.RHOGmin) return
-      ! ================ First step for mechanical relaxation ================
-      ! Get phasic pressures
-      PL=get_PL(RHO=Q(1)/(       VF),I=Q(3)/Q(1))
-      PG=get_PG(RHO=Q(2)/(1.0_WP-VF),I=Q(4)/Q(2))
-      ! Handle limit cases - should mass/energy be tranasfered or lost? - this should probably never happen...
-      if (PL.le.-PinfL) then
-         print*,"****************** LIQUID CLIPPED!",PL,VF,Q
-         VF=0.0_WP; Q(2)=sum(Q(1:2)); Q(1)=0.0_WP; Q(4)=sum(Q(3:4)); Q(3)=0.0_WP; return
-      end if
-      if (PG.le.-PinfG) then
-         print*,"****************** GAS CLIPPED!",PG,VF,Q
-         VF=1.0_WP; Q(1)=sum(Q(1:2)); Q(2)=0.0_WP; Q(3)=sum(Q(3:4)); Q(4)=0.0_WP; return
-      end if
-      ! Get phasic impedances
-      ZL=Q(1)/(       VF)*get_CL(RHO=Q(1)/(       VF),P=PL)**2
-      ZG=Q(2)/(1.0_WP-VF)*get_CG(RHO=Q(2)/(1.0_WP-VF),P=PG)**2
-      ! Calculate model interface pressure
-      Pint=(ZG*PL+ZL*PG)/(ZG+ZL)
       ! Setup quadratic problem
-      coeffL=(GammaL-1.0_WP)*Pint+2.0_WP*GammaL*PinfL
-      coeffG=(GammaG-1.0_WP)*Pint+2.0_WP*GammaG*PinfG
-      a=1.0_WP+GammaG*VF+GammaL*(1.0_WP-VF)
-      b=coeffL*(1.0_WP-VF)+coeffG*VF-(1.0_WP+GammaG)*VF*PL-(1.0_WP+GammaL)*(1.0_WP-VF)*PG
-      d=-(coeffG*VF*PL+coeffL*(1.0_WP-VF)*PG)
+      invG1G=1.0_WP/(GammaG-1.0_WP); invG1L=1.0_WP/(GammaL-1.0_WP)
+      d0=PinfL*GammaL*invG1L; d1=1.0_WP+invG1L
+      facG=GammaG*PinfG*invG1G; facL=invG1G+VF
+      a=d1*facL-VF*(invG1G+1.0_WP)
+      b=d1*(facG-Q(4))-VF*facG+d0*facL-Q(3)*(invG1G+1.0_WP)
+      d=d0*(facG-Q(4))-Q(3)*facG
       ! Get equilibrium pressure
       Peq=(-b+sqrt(b**2-4.0_WP*a*d))/(2.0_WP*a)
       ! Check if pressure is sound
       if (Peq.le.max(-PinfG,-PinfL)) return
       ! Get equilibrium volume fraction
-      VFeq=VF*((gammaL-1.0_WP)*Peq+2.0_WP*PL+coeffL)/((1.0_WP+gammaL)*Peq+coeffL)
+      VFeq=(VF*Peq+Q(3))/(d1*Peq+d0)
       ! Adjust conserved quantities
-      Q(3)=Q(3)-0.5_WP*(Pint+Peq)*(VFeq-VF)
-      Q(4)=Q(4)+0.5_WP*(Pint+Peq)*(VFeq-VF)
+      Q(3)=Q(3)-Peq*(VFeq-VF)
+      Q(4)=Q(4)+Peq*(VFeq-VF)
       VF=VFeq
    end subroutine P_relax
    
