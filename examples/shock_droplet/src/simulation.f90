@@ -28,6 +28,9 @@ module simulation
    !> Remeshing event
    type(event) :: remesh_evt
    
+   !> Maximum mesh size
+   integer, dimension(3) :: max_meshsize
+   
    !> Equations of state
    real(WP) :: PinfL,GammaL,CvL
    real(WP) :: PinfG,GammaG,CvG
@@ -297,14 +300,16 @@ contains
       setup_sd: block
          use param,    only: param_read
          use parallel, only: group
-         integer , dimension(3) :: meshsize,partition
          real(WP), dimension(3) :: X0
+         integer , dimension(3) :: meshsize,partition
          real(WP) :: dx
          ! Read in mesh size and desired partition
          call param_read('Shock-drop dx',dx)
-         call param_read('Shock-drop nx',meshsize)
+         call param_read('Shock-drop max nx',max_meshsize)
          call param_read('Shock-drop partition',partition)
-         X0=-0.5_WP*real(meshsize,WP)*dx !< This assumes that the domain is centered on (0,0,0)
+         ! Set initial domain of size (2D)^3 centered on (0,0,0)
+         meshsize=min(nint([2.0_WP/dx,2.0_WP/dx,2.0_WP/dx]),max_meshsize)
+         X0=-0.5_WP*real(meshsize,WP)*dx
          ! Allocate and initialize the shock-drop solver
          allocate(sd); call sd%initialize(dx=dx,meshsize=meshsize,startloc=X0,group=group,partition=partition,continue_monitor=.false.)
          ! Provide relaxation and thermodynamic models
@@ -506,13 +511,23 @@ contains
       setup_sdnew: block
          use parallel, only: group
          real(WP), dimension(3) :: X0
-         ! Shift domain so that core barycenter remains in the middle of sd's domain
-         X0=[sd%cfg%x(sd%cfg%imin),sd%cfg%y(sd%cfg%jmin),sd%cfg%z(sd%cfg%kmin)] &                       !  Corner point
-         & +sd%fs%dx*real([int(sd%Xcore/sd%fs%dx),int(sd%Ycore/sd%fs%dy),int(sd%Zcore/sd%fs%dz)],WP) &  ! +Core centroid
-         & -0.5_WP*([sd%cfg%x(sd%cfg%imax+1),sd%cfg%y(sd%cfg%jmax+1),sd%cfg%z(sd%cfg%kmax+1)] &         ! -Middle of 
-         &         +[sd%cfg%x(sd%cfg%imin  ),sd%cfg%y(sd%cfg%jmin  ),sd%cfg%z(sd%cfg%kmin  )])          !  domain
+         integer , dimension(3) :: meshsize,partition
+         real(WP) :: dx
+         ! Use same dx and partition as sd
+         dx=sd%fs%dx
+         partition=[sd%cfg%npx,sd%cfg%npy,sd%cfg%npz]
+         ! Keep mesh size the same, simply shift domain so that core barycenter remains in the middle of sd's domain
+         !meshsize=[sd%cfg%nx,sd%cfg%ny,sd%cfg%nz]
+         !X0=[sd%cfg%x(sd%cfg%imin),sd%cfg%y(sd%cfg%jmin),sd%cfg%z(sd%cfg%kmin)] &                       !  Corner point
+         !& +sd%fs%dx*real([int(sd%Xcore/sd%fs%dx),int(sd%Ycore/sd%fs%dy),int(sd%Zcore/sd%fs%dz)],WP) &  ! +Core centroid
+         !& -0.5_WP*([sd%cfg%x(sd%cfg%imax+1),sd%cfg%y(sd%cfg%jmax+1),sd%cfg%z(sd%cfg%kmax+1)] &         ! -Middle of 
+         !&         +[sd%cfg%x(sd%cfg%imin  ),sd%cfg%y(sd%cfg%jmin  ),sd%cfg%z(sd%cfg%kmin  )])          !  domain
+         ! Get meshsize that encompasses current liquid extent, adding D/2 on each side
+         meshsize=min(nint((sd%Lmax-sd%Lmin+1.0_WP)/dx)+1,max_meshsize)
+         X0=-0.5_WP*real(meshsize,WP)*dx ! Centered on (0,0,0)
+         X0(1)=sd%fs%dx*ceiling((sd%Lmin(1)-0.5_WP)/dx) ! Shift in x only, snapping on the mesh
          ! Initialize the shock-drop solver
-         allocate(sdnew); call sdnew%initialize(dx=sd%fs%dx,meshsize=[sd%cfg%nx,sd%cfg%ny,sd%cfg%nz],startloc=X0,group=group,partition=[sd%cfg%npx,sd%cfg%npy,sd%cfg%npz],continue_monitor=.true.)
+         allocate(sdnew); call sdnew%initialize(dx=dx,meshsize=meshsize,startloc=X0,group=group,partition=partition,continue_monitor=.true.)
          ! Provide relaxation and thermodynamic models
          sdnew%fs%relax=>sd%fs%relax
          sdnew%fs%getPL=>sd%fs%getPL; sdnew%fs%getCL=>sd%fs%getCL; sdnew%fs%getSL=>sd%fs%getSL; sdnew%fs%getTL=>sd%fs%getTL
@@ -559,47 +574,33 @@ contains
       ! Initialize sdnew using sd
       initialize_sdnew_from_sd: block
          use parallel, only: group
-         integer :: i,j,k,n
+         integer :: n
          type(coupler) :: sd2sdnew
-         real(WP), dimension(:,:,:), allocatable :: tmp,tmp2
+         real(WP), dimension(:,:,:), allocatable :: tmp1,tmp2
          ! Create new coupler
          sd2sdnew=coupler(src_grp=group,dst_grp=group,name='sd2sd'); call sd2sdnew%set_src(sd%cfg); call sd2sdnew%set_dst(sdnew%cfg); call sd2sdnew%initialize()
-         ! Allocate tmp/tmp2 array for transfer
-         allocate(tmp(sdnew%fs%cfg%imino_:sdnew%fs%cfg%imaxo_,sdnew%fs%cfg%jmino_:sdnew%fs%cfg%jmaxo_,sdnew%fs%cfg%kmino_:sdnew%fs%cfg%kmaxo_))
-         allocate(tmp2(sd%fs%cfg%imino_:sd%fs%cfg%imaxo_,sd%fs%cfg%jmino_:sd%fs%cfg%jmaxo_,sd%fs%cfg%kmino_:sd%fs%cfg%kmaxo_))
-         ! Transfer Q(1-7) - since the mesh is the same, we can safely ignore staggering here
-         do n=1,7
-            tmp=0.0_WP; call sd2sdnew%push(sd%fs%Q(:,:,:,n),loc='c'); call sd2sdnew%transfer(); call sd2sdnew%pull(tmp,loc='c')
-            do k=sdnew%cfg%kmino_,sdnew%cfg%kmaxo_; do j=sdnew%cfg%jmino_,sdnew%cfg%jmaxo_; do i=sdnew%cfg%imino_,sdnew%cfg%imaxo_
-               if (sdnew%fs%cfg%xm(i).gt.sd%fs%cfg%x(sd%fs%cfg%imin).and.sdnew%fs%cfg%xm(i).lt.sd%fs%cfg%x(sd%fs%cfg%imax+1).and.&
-               &   sdnew%fs%cfg%ym(j).gt.sd%fs%cfg%y(sd%fs%cfg%jmin).and.sdnew%fs%cfg%ym(j).lt.sd%fs%cfg%y(sd%fs%cfg%jmax+1).and.&
-               &   sdnew%fs%cfg%zm(k).gt.sd%fs%cfg%z(sd%fs%cfg%kmin).and.sdnew%fs%cfg%zm(k).lt.sd%fs%cfg%z(sd%fs%cfg%kmax+1)) sdnew%fs%Q(i,j,k,n)=tmp(i,j,k)
-            end do; end do; end do
-         end do
-         ! Transfer VOF
-         tmp=0.0_WP; call sd2sdnew%push(sd%fs%VF,loc='c'); call sd2sdnew%transfer(); call sd2sdnew%pull(tmp,loc='c')
-         do k=sdnew%cfg%kmino_,sdnew%cfg%kmaxo_; do j=sdnew%cfg%jmino_,sdnew%cfg%jmaxo_; do i=sdnew%cfg%imino_,sdnew%cfg%imaxo_
-            if (sdnew%fs%cfg%xm(i).gt.sd%fs%cfg%x(sd%fs%cfg%imin).and.sdnew%fs%cfg%xm(i).lt.sd%fs%cfg%x(sd%fs%cfg%imax+1).and.&
-            &   sdnew%fs%cfg%ym(j).gt.sd%fs%cfg%y(sd%fs%cfg%jmin).and.sdnew%fs%cfg%ym(j).lt.sd%fs%cfg%y(sd%fs%cfg%jmax+1).and.&
-            &   sdnew%fs%cfg%zm(k).gt.sd%fs%cfg%z(sd%fs%cfg%kmin).and.sdnew%fs%cfg%zm(k).lt.sd%fs%cfg%z(sd%fs%cfg%kmax+1)) sdnew%fs%VF(i,j,k)=tmp(i,j,k)
-         end do; end do; end do
+         ! Transfer Q(1-7)
+         call sd2sdnew%push(sd%fs%Q(:,:,:,1),loc='c'); call sd2sdnew%transfer(); call sd2sdnew%pull(sdnew%fs%Q(:,:,:,1),loc='c')
+         call sd2sdnew%push(sd%fs%Q(:,:,:,2),loc='c'); call sd2sdnew%transfer(); call sd2sdnew%pull(sdnew%fs%Q(:,:,:,2),loc='c')
+         call sd2sdnew%push(sd%fs%Q(:,:,:,3),loc='c'); call sd2sdnew%transfer(); call sd2sdnew%pull(sdnew%fs%Q(:,:,:,3),loc='c')
+         call sd2sdnew%push(sd%fs%Q(:,:,:,4),loc='c'); call sd2sdnew%transfer(); call sd2sdnew%pull(sdnew%fs%Q(:,:,:,4),loc='c')
+         call sd2sdnew%push(sd%fs%Q(:,:,:,5),loc='x'); call sd2sdnew%transfer(); call sd2sdnew%pull(sdnew%fs%Q(:,:,:,5),loc='x')
+         call sd2sdnew%push(sd%fs%Q(:,:,:,6),loc='y'); call sd2sdnew%transfer(); call sd2sdnew%pull(sdnew%fs%Q(:,:,:,6),loc='y')
+         call sd2sdnew%push(sd%fs%Q(:,:,:,7),loc='z'); call sd2sdnew%transfer(); call sd2sdnew%pull(sdnew%fs%Q(:,:,:,7),loc='z')
+         ! Transfer VF
+         call sd2sdnew%push(sd%fs%VF,loc='c'); call sd2sdnew%transfer(); call sd2sdnew%pull(sdnew%fs%VF,loc='c')
          ! Transfer barycenters
-         do n=1,3
-            tmp=0.0_WP; tmp2=sd%fs%BG(n,:,:,:); call sd2sdnew%push(tmp2,loc='c'); call sd2sdnew%transfer(); call sd2sdnew%pull(tmp,loc='c')
-            do k=sdnew%cfg%kmino_,sdnew%cfg%kmaxo_; do j=sdnew%cfg%jmino_,sdnew%cfg%jmaxo_; do i=sdnew%cfg%imino_,sdnew%cfg%imaxo_
-               if (sdnew%fs%cfg%xm(i).gt.sd%fs%cfg%x(sd%fs%cfg%imin).and.sdnew%fs%cfg%xm(i).lt.sd%fs%cfg%x(sd%fs%cfg%imax+1).and.&
-               &   sdnew%fs%cfg%ym(j).gt.sd%fs%cfg%y(sd%fs%cfg%jmin).and.sdnew%fs%cfg%ym(j).lt.sd%fs%cfg%y(sd%fs%cfg%jmax+1).and.&
-               &   sdnew%fs%cfg%zm(k).gt.sd%fs%cfg%z(sd%fs%cfg%kmin).and.sdnew%fs%cfg%zm(k).lt.sd%fs%cfg%z(sd%fs%cfg%kmax+1)) sdnew%fs%BG(n,i,j,k)=tmp(i,j,k)
-            end do; end do; end do
-         end do
-         do n=1,3
-            tmp=0.0_WP; call sd2sdnew%push(sd%fs%BL(n,:,:,:),loc='c'); call sd2sdnew%transfer(); call sd2sdnew%pull(tmp,loc='c')
-            do k=sdnew%cfg%kmino_,sdnew%cfg%kmaxo_; do j=sdnew%cfg%jmino_,sdnew%cfg%jmaxo_; do i=sdnew%cfg%imino_,sdnew%cfg%imaxo_
-               if (sdnew%fs%cfg%xm(i).gt.sd%fs%cfg%x(sd%fs%cfg%imin).and.sdnew%fs%cfg%xm(i).lt.sd%fs%cfg%x(sd%fs%cfg%imax+1).and.&
-               &   sdnew%fs%cfg%ym(j).gt.sd%fs%cfg%y(sd%fs%cfg%jmin).and.sdnew%fs%cfg%ym(j).lt.sd%fs%cfg%y(sd%fs%cfg%jmax+1).and.&
-               &   sdnew%fs%cfg%zm(k).gt.sd%fs%cfg%z(sd%fs%cfg%kmin).and.sdnew%fs%cfg%zm(k).lt.sd%fs%cfg%z(sd%fs%cfg%kmax+1)) sdnew%fs%BL(n,i,j,k)=tmp(i,j,k)
-            end do; end do; end do
-         end do
+         allocate(tmp1(sdnew%fs%cfg%imino_:sdnew%fs%cfg%imaxo_,sdnew%fs%cfg%jmino_:sdnew%fs%cfg%jmaxo_,sdnew%fs%cfg%kmino_:sdnew%fs%cfg%kmaxo_))
+         allocate(tmp2(   sd%fs%cfg%imino_:   sd%fs%cfg%imaxo_,   sd%fs%cfg%jmino_:   sd%fs%cfg%jmaxo_,   sd%fs%cfg%kmino_:   sd%fs%cfg%kmaxo_))
+         tmp1=sd%fs%BG(1,:,:,:); call sd2sdnew%push(tmp1,loc='c'); call sd2sdnew%transfer(); call sd2sdnew%pull(tmp2,loc='c'); sdnew%fs%BG(1,:,:,:)=tmp2
+         tmp1=sd%fs%BG(2,:,:,:); call sd2sdnew%push(tmp1,loc='c'); call sd2sdnew%transfer(); call sd2sdnew%pull(tmp2,loc='c'); sdnew%fs%BG(2,:,:,:)=tmp2
+         tmp1=sd%fs%BG(3,:,:,:); call sd2sdnew%push(tmp1,loc='c'); call sd2sdnew%transfer(); call sd2sdnew%pull(tmp2,loc='c'); sdnew%fs%BG(3,:,:,:)=tmp2
+         tmp1=sd%fs%BL(1,:,:,:); call sd2sdnew%push(tmp1,loc='c'); call sd2sdnew%transfer(); call sd2sdnew%pull(tmp2,loc='c'); sdnew%fs%BL(1,:,:,:)=tmp2
+         tmp1=sd%fs%BL(2,:,:,:); call sd2sdnew%push(tmp1,loc='c'); call sd2sdnew%transfer(); call sd2sdnew%pull(tmp2,loc='c'); sdnew%fs%BL(2,:,:,:)=tmp2
+         tmp1=sd%fs%BL(3,:,:,:); call sd2sdnew%push(tmp1,loc='c'); call sd2sdnew%transfer(); call sd2sdnew%pull(tmp2,loc='c'); sdnew%fs%BL(3,:,:,:)=tmp2
+         deallocate(tmp1,tmp2)
+         ! Destroy coupler
+         call sd2sdnew%finalize()
          ! Communicate conserved variables
          do n=1,sdnew%fs%nQ; call sdnew%fs%cfg%sync(sdnew%fs%Q(:,:,:,n)); end do
          ! Also sync volume moments
@@ -608,12 +609,12 @@ contains
          call sdnew%fs%build_interface()
          ! Rebuild primitive variables
          call sdnew%fs%get_primitive()
+         ! Re-apply boundary conditions
+         call sdnew%apply_bconds()
          ! Interpolate velocity
          call sdnew%fs%interp_vel(sdnew%Ui,sdnew%Vi,sdnew%Wi)
          ! Compute local Mach number
          sdnew%Ma=sqrt(sdnew%Ui**2+sdnew%Vi**2+sdnew%Wi**2)/sdnew%fs%C
-         ! Free memory
-         deallocate(tmp,tmp2); call sd2sdnew%finalize()
       end block initialize_sdnew_from_sd
       
       ! Finally, transfer allocation
@@ -785,7 +786,7 @@ contains
          Q(i,j,k,2)=coeff*(Q(i,j,k,2)-sd%fs%Q(i,j,k,4))
       end do; end do; end do
       
-      ! Second pass to apply forcing (+2 in x because remesh is missing imino...)
+      ! Second pass to apply forcing
       do k=sd%cfg%kmino_+1,sd%cfg%kmaxo_; do j=sd%cfg%jmino_+1,sd%cfg%jmaxo_; do i=sd%cfg%imino_+1,sd%cfg%imaxo_
          sd%fs%Q(i,j,k,1)=sd%fs%Q(i,j,k,1)
          sd%fs%Q(i,j,k,2)=sd%fs%Q(i,j,k,2)+Q(i,j,k,1)

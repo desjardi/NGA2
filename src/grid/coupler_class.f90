@@ -16,7 +16,7 @@ module coupler_class
    type :: interp_map
       integer , dimension(:,:), allocatable :: srcind                !< Src indices of dst points that this processor can interpolate
       integer , dimension(:,:), allocatable :: dstind                !< Dst indices of dst points that this processor will receive
-      real(WP), dimension(:,:), allocatable :: w                     !< Interpolation weights for dst points that this processor can interpolate 
+      real(WP), dimension(:,:), allocatable :: w                     !< Interpolation weights for dst points that this processor can interpolate
       integer , dimension(:)  , allocatable :: nsend_proc,nsend_disp !< Number of points to send to each processor and corresponding displacement
       integer , dimension(:)  , allocatable :: nrecv_proc,nrecv_disp !< Number of points to receive from each processor and corresponding displacement
       !> Data to send
@@ -293,10 +293,10 @@ contains
                         case ('y'); pt=[this%dst%xm(i),this%dst%y (j),this%dst%zm(k)]
                         case ('z'); pt=[this%dst%xm(i),this%dst%ym(j),this%dst%z (k)]
                         end select
-                        ! Skip grid points that lie outside our local domain - allow for slight double-counting here with the .gt. ...
-                        if (pt(1).lt.this%src%x(this%src%imin_).or.pt(1).ge.this%src%x(this%src%imax_+1).or. &
-                        &   pt(2).lt.this%src%y(this%src%jmin_).or.pt(2).ge.this%src%y(this%src%jmax_+1).or. &
-                        &   pt(3).lt.this%src%z(this%src%kmin_).or.pt(3).ge.this%src%z(this%src%kmax_+1)) cycle
+                        ! Skip grid points that lie outside our local domain (slight over-counting here due to .gt.)
+                        if (pt(1).lt.this%src%x(this%src%imin_).or.pt(1).gt.this%src%x(this%src%imax_+1).or. &
+                        &   pt(2).lt.this%src%y(this%src%jmin_).or.pt(2).gt.this%src%y(this%src%jmax_+1).or. &
+                        &   pt(3).lt.this%src%z(this%src%kmin_).or.pt(3).gt.this%src%z(this%src%kmax_+1)) cycle
                         ! Increment our counter
                         map%nsend=map%nsend+1
                      end do
@@ -329,10 +329,10 @@ contains
                            case ('y'); pt=[this%dst%xm(i),this%dst%y (j),this%dst%zm(k)]
                            case ('z'); pt=[this%dst%xm(i),this%dst%ym(j),this%dst%z (k)]
                            end select
-                           ! Skip grid points that lie outside our local domain - allow for slight double-counting here with the .gt. ...
-                           if (pt(1).lt.this%src%x(this%src%imin_).or.pt(1).ge.this%src%x(this%src%imax_+1).or. &
-                           &   pt(2).lt.this%src%y(this%src%jmin_).or.pt(2).ge.this%src%y(this%src%jmax_+1).or. &
-                           &   pt(3).lt.this%src%z(this%src%kmin_).or.pt(3).ge.this%src%z(this%src%kmax_+1)) cycle
+                           ! Skip grid points that lie outside our local domain (slight over-counting here due to .gt.)
+                           if (pt(1).lt.this%src%x(this%src%imin_).or.pt(1).gt.this%src%x(this%src%imax_+1).or. &
+                           &   pt(2).lt.this%src%y(this%src%jmin_).or.pt(2).gt.this%src%y(this%src%jmax_+1).or. &
+                           &   pt(3).lt.this%src%z(this%src%kmin_).or.pt(3).gt.this%src%z(this%src%kmax_+1)) cycle
                            ! The point is in our subdomain, so increment our counter
                            count=count+1
                            ! Locate point and store src index and interpolation weights with proper mesh location
