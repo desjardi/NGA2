@@ -1792,7 +1792,6 @@ contains
       real(WP) :: max_beta,dudy,dudz,dvdx,dvdz,dwdx,dwdy,vort,grad_div
       real(WP), parameter :: max_cfl=0.5_WP
       real(WP), parameter :: Cartif=2.0_WP
-      real(WP), parameter :: Cartif_vort=100.0_WP
       real(WP), dimension(:,:,:), allocatable :: div
       real(WP), dimension(-1:+1), parameter :: filter=[1.0_WP/6.0_WP,2.0_WP/3.0_WP,1.0_WP/6.0_WP]
       ! Calculate max beta permissible
@@ -1825,7 +1824,8 @@ contains
          &       +max(abs(div(i,j+1,k)-div(i,j,k)),abs(div(i,j,k)-div(i,j-1,k)))*this%dy**2&
          &       +max(abs(div(i,j,k+1)-div(i,j,k)),abs(div(i,j,k)-div(i,j,k-1)))*this%dz**2
          ! Estimate artificial kinematic viscosity using grad(div)
-         beta(i,j,k)=Cartif*grad_div*div(i,j,k)**2/(div(i,j,k)**2+Cartif_vort*vort+1.0e-15_WP)
+         vort=max(vort,(0.05_WP*this%C(i,j,k)/min(this%dx,this%dy,this%dz))**2)
+         beta(i,j,k)=Cartif*grad_div*min(4.0_WP/3.0_WP*div(i,j,k)**2/(div(i,j,k)**2+vort+1.0e-15_WP),1.0_WP)
          ! Clip it so CFL<max_CFL
          beta(i,j,k)=min(beta(i,j,k),max_beta)
       end do; end do; end do
