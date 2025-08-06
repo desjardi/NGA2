@@ -23,7 +23,7 @@ Ensight output period : 0.1
 Shock-drop partition : 2 4 1
 !- Mesh ---------------
 Shock-drop dx :     0.01
-Shock-drop max nx : 500 500 1
+Shock-drop max nx : 400 600 1
 !- Time ---------------
 Shock-drop dt :  2.5e-3
 Shock-drop CFL : 1

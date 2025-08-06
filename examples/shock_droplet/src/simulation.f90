@@ -538,10 +538,12 @@ contains
       
       ! Setup new shock-drop simulation - all cores
       setup_sdnew: block
-         use parallel, only: group
+         use parallel, only: group,MPI_REAL_WP
+         use mpi_f08,  only: MPI_BCAST,MPI_INTEGER
          real(WP), dimension(3) :: X0
          integer , dimension(3) :: meshsize,partition
          real(WP) :: dx
+         integer  :: ierr
          ! Use same dx and partition as sd
          dx=sd%fs%dx
          partition=[sd%cfg%npx,sd%cfg%npy,sd%cfg%npz]
@@ -555,6 +557,9 @@ contains
          meshsize=min(nint((sd%Lmax-sd%Lmin+1.0_WP)/dx)+1,max_meshsize)
          X0=-0.5_WP*real(meshsize,WP)*dx ! Centered on (0,0,0)
          X0(1)=sd%fs%dx*ceiling((sd%Lmin(1)-0.5_WP)/dx) ! Shift in x only, snapping on the mesh
+         ! Ensure consistency across ranks
+         call MPI_BCAST(meshsize,3,MPI_INTEGER,0,sd%cfg%comm,ierr)
+         call MPI_BCAST(X0      ,3,MPI_REAL_WP,0,sd%cfg%comm,ierr)
          ! Initialize the shock-drop solver
          allocate(sdnew); call sdnew%initialize(dx=dx,meshsize=meshsize,startloc=X0,group=group,partition=partition,continue_monitor=.true.)
          ! Provide relaxation and thermodynamic models
