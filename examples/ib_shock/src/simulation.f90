@@ -5,6 +5,7 @@ module simulation
    use spcomp_class,      only: spcomp
    use gp_class,          only: gpibm
    use timetracker_class, only: timetracker
+   use timer_class,       only: timer
    use ensight_class,     only: ensight
    use event_class,       only: event
    use monitor_class,     only: monitor
@@ -22,6 +23,12 @@ module simulation
    
    !> Simulation monitor file
    type(monitor) :: mfile,cflfile,consfile,ibmfile
+
+   !> Timing info
+   type(monitor) :: timefile !< Timing monitoring
+   type(timer)   :: tstep    !< Timer for step
+   type(timer)   :: tibm     !< Timer for IBM
+   type(timer)   :: tcom     !< Timer for solver
    
    public :: simulation_init,simulation_run,simulation_final
    
@@ -546,6 +553,22 @@ module simulation
         call ibmfile%write()
       end block create_monitor
 
+
+      ! Create a timing monitor
+      create_timing: block
+        ! Create timers
+        tstep=timer(comm=cfg%comm,name='Total')
+        tibm =timer(comm=cfg%comm,name='IBM')
+        tcom =timer(comm=cfg%comm,name='Comp')
+        ! Create corresponding monitor file
+        timefile=monitor(cfg%amRoot,'timing')
+        call timefile%add_column(time%n,'Timestep number')
+        call timefile%add_column(time%t,'Time')
+        call timefile%add_column(tstep%time,trim(tstep%name))
+        call timefile%add_column(tibm%time,trim(tibm%name))
+        call timefile%add_column(tcom%time,trim(tcom%name))
+      end block create_timing
+
     end subroutine simulation_init
 
 
@@ -555,6 +578,12 @@ module simulation
 
       ! Perform time integration
       do while (.not.time%done())
+
+         ! Reset all timers and start timestep timer
+         call tstep%reset()
+         call tibm%reset()
+         call tcom%reset()
+         call tstep%start()
 
          ! Increment time
          call fs%get_cfl(time%dt,time%cfl)
@@ -567,33 +596,50 @@ module simulation
          ! Prepare SGS viscosity models
          call prepare_viscosities()
 
+
          ! First RK step ====================================================================================
          ! Get non-SL RHS and increment
+         call tcom%start() ! Start compressible timer
          call fs%rhs(dQdt(:,:,:,:,1))
          fs%Q=fs%Qold+0.5_WP*time%dt*dQdt(:,:,:,:,1)
+         call tcom%stop() ! Stop compressible timer
          ! Apply IBM
+         call tibm%start() ! Start IBM timer
          call apply_ibm()
+         call tibm%stop() ! Stop IBM timer
 
          ! Second RK step ===================================================================================
          ! Get non-SL RHS and increment
+         call tcom%start() ! Start compressible timer
          call fs%rhs(dQdt(:,:,:,:,2))
          fs%Q=fs%Qold+0.5_WP*time%dt*dQdt(:,:,:,:,2)
+         call tcom%stop() ! Stop compressible timer
          ! Apply IBM
+         call tibm%start() ! Start IBM timer
          call apply_ibm()
+         call tibm%stop() ! Stop IBM timer
 
          ! Third RK step ====================================================================================
          ! Get non-SL RHS and increment
+         call tcom%start() ! Start compressible timer
          call fs%rhs(dQdt(:,:,:,:,3))
          fs%Q=fs%Qold+1.0_WP*time%dt*dQdt(:,:,:,:,3)
+         call tcom%stop() ! Stop compressible timer
          ! Apply IBM
+         call tibm%start() ! Start IBM timer
          call apply_ibm()
+         call tibm%stop() ! Stop IBM timer
 
          ! Fourth RK step ===================================================================================
          ! Get non-SL RHS and increment
+         call tcom%start() ! Start compressible timer
          call fs%rhs(dQdt(:,:,:,:,4))
          fs%Q=fs%Qold+time%dt/6.0_WP*(dQdt(:,:,:,:,1)+2.0_WP*dQdt(:,:,:,:,2)+2.0_WP*dQdt(:,:,:,:,3)+dQdt(:,:,:,:,4))
+         call tcom%stop() ! Stop compressible timer
          ! Apply IBM
+         call tibm%start() ! Start IBM timer
          call apply_ibm()
+         call tibm%stop() ! Stop IBM timer
 
          ! Apply boundary conditions
          call apply_bconds()
@@ -607,10 +653,14 @@ module simulation
          ! Compute dilatation
          call get_div()
 
+         ! Stop timestep timer
+         call tstep%stop()
+
          !> Perform and output monitoring
          call fs%get_info()
          call get_force()
          call mfile%write()
+         call timefile%write()
          call cflfile%write()
          call consfile%write()
          call ibmfile%write()
@@ -635,6 +685,9 @@ module simulation
       
       ! Deallocate work arrays
       deallocate(dQdt,Ui,Vi,Wi,Ma,beta,visc,visc_t,div)
+      call tstep%finalize()
+      call tibm%finalize()
+      call tcom%finalize()
       
    end subroutine simulation_final
    
