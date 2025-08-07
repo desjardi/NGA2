@@ -143,7 +143,6 @@ contains
          use sgrid_class, only: cartesian,sgrid
          type(sgrid) :: grid
          integer  :: i,j,k
-         real(WP) :: Lx,Ly,Lz
          logical  :: xper,yper,zper
          real(WP), dimension(:), allocatable :: x,y,z
          ! By default, the case is fully non-periodic

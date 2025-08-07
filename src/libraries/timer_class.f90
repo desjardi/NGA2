@@ -89,7 +89,6 @@ contains
       use mpi_f08, only: MPI_COMM_NULL
       implicit none
       class(timer), intent(inout) :: this
-      integer :: ierr
       call this%reset()
       this%name='UNNAMED_TIMER'
       this%comm=MPI_COMM_NULL

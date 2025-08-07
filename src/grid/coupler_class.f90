@@ -269,6 +269,7 @@ contains
          character(len=1) , intent(in)    :: loc
          integer, dimension(:)  , allocatable :: rk
          integer, dimension(:,:), allocatable :: dstind
+         real(WP), parameter :: tol=1.0e-12_WP
          
          ! First, src processors identify all dst points that belong to them
          find_dst_points: block
@@ -294,9 +295,9 @@ contains
                         case ('z'); pt=[this%dst%xm(i),this%dst%ym(j),this%dst%z (k)]
                         end select
                         ! Skip grid points that lie outside our local domain (slight over-counting here due to .gt.)
-                        if (pt(1).lt.this%src%x(this%src%imin_).or.pt(1).gt.this%src%x(this%src%imax_+1).or. &
-                        &   pt(2).lt.this%src%y(this%src%jmin_).or.pt(2).gt.this%src%y(this%src%jmax_+1).or. &
-                        &   pt(3).lt.this%src%z(this%src%kmin_).or.pt(3).gt.this%src%z(this%src%kmax_+1)) cycle
+                        if (pt(1).lt.this%src%x(this%src%imin_)-tol.or.pt(1).gt.this%src%x(this%src%imax_+1)+tol.or. &
+                        &   pt(2).lt.this%src%y(this%src%jmin_)-tol.or.pt(2).gt.this%src%y(this%src%jmax_+1)+tol.or. &
+                        &   pt(3).lt.this%src%z(this%src%kmin_)-tol.or.pt(3).gt.this%src%z(this%src%kmax_+1)+tol) cycle
                         ! Increment our counter
                         map%nsend=map%nsend+1
                      end do
@@ -330,9 +331,9 @@ contains
                            case ('z'); pt=[this%dst%xm(i),this%dst%ym(j),this%dst%z (k)]
                            end select
                            ! Skip grid points that lie outside our local domain (slight over-counting here due to .gt.)
-                           if (pt(1).lt.this%src%x(this%src%imin_).or.pt(1).gt.this%src%x(this%src%imax_+1).or. &
-                           &   pt(2).lt.this%src%y(this%src%jmin_).or.pt(2).gt.this%src%y(this%src%jmax_+1).or. &
-                           &   pt(3).lt.this%src%z(this%src%kmin_).or.pt(3).gt.this%src%z(this%src%kmax_+1)) cycle
+                           if (pt(1).lt.this%src%x(this%src%imin_)-tol.or.pt(1).gt.this%src%x(this%src%imax_+1)+tol.or. &
+                           &   pt(2).lt.this%src%y(this%src%jmin_)-tol.or.pt(2).gt.this%src%y(this%src%jmax_+1)+tol.or. &
+                           &   pt(3).lt.this%src%z(this%src%kmin_)-tol.or.pt(3).gt.this%src%z(this%src%kmax_+1)+tol) cycle
                            ! The point is in our subdomain, so increment our counter
                            count=count+1
                            ! Locate point and store src index and interpolation weights with proper mesh location

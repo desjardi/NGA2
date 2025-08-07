@@ -29,7 +29,7 @@ module simulation
    type(event) :: remesh_evt
    
    !> Maximum mesh size
-   integer, dimension(3) :: max_meshsize
+   integer :: max_nx,max_ny,max_nz
    
    !> Equations of state
    real(WP) :: PinfL,GammaL,CvL
@@ -107,54 +107,54 @@ contains
    
    
    !> Mechanical relaxation model
-   ! subroutine P_relax(VF,Q)
-   !    implicit none
-   !    real(WP),                intent(inout) :: VF
-   !    real(WP), dimension(1:), intent(inout) :: Q
-   !    real(WP) :: PG,PL,ZG,ZL,Pint
-   !    real(WP) :: a,b,d,coeffL,coeffG,Peq,VFeq
-   !    real(WP), parameter :: RHOGmin=1.0e-3_WP
-   !    ! ================ Handle gas flotsams ================
-   !    if (Q(2)/(1.0_WP-VF).lt.RHOGmin) return
-   !    ! ================ First step for mechanical relaxation ================
-   !    ! Get phasic pressures
-   !    PL=get_PL(RHO=Q(1)/(       VF),I=Q(3)/Q(1))
-   !    PG=get_PG(RHO=Q(2)/(1.0_WP-VF),I=Q(4)/Q(2))
-   !    ! Handle limit cases - should mass/energy be tranasfered or lost? - this should probably never happen...
-   !    if (PL.le.-PinfL) then
-   !       print*,"****************** LIQUID CLIPPED!",PL,VF,Q
-   !       VF=0.0_WP; Q(2)=sum(Q(1:2)); Q(1)=0.0_WP; Q(4)=sum(Q(3:4)); Q(3)=0.0_WP; return
-   !    end if
-   !    if (PG.le.-PinfG) then
-   !       print*,"****************** GAS CLIPPED!",PG,VF,Q
-   !       VF=1.0_WP; Q(1)=sum(Q(1:2)); Q(2)=0.0_WP; Q(3)=sum(Q(3:4)); Q(4)=0.0_WP; return
-   !    end if
-   !    ! Get phasic impedances
-   !    ZL=Q(1)/(       VF)*get_CL(RHO=Q(1)/(       VF),P=PL)**2
-   !    ZG=Q(2)/(1.0_WP-VF)*get_CG(RHO=Q(2)/(1.0_WP-VF),P=PG)**2
-   !    ! Calculate model interface pressure
-   !    Pint=(ZG*PL+ZL*PG)/(ZG+ZL)
-   !    ! Setup quadratic problem
-   !    coeffL=(GammaL-1.0_WP)*Pint+2.0_WP*GammaL*PinfL
-   !    coeffG=(GammaG-1.0_WP)*Pint+2.0_WP*GammaG*PinfG
-   !    a=1.0_WP+GammaG*VF+GammaL*(1.0_WP-VF)
-   !    b=coeffL*(1.0_WP-VF)+coeffG*VF-(1.0_WP+GammaG)*VF*PL-(1.0_WP+GammaL)*(1.0_WP-VF)*PG
-   !    d=-(coeffG*VF*PL+coeffL*(1.0_WP-VF)*PG)
-   !    ! Get equilibrium pressure
-   !    Peq=(-b+sqrt(b**2-4.0_WP*a*d))/(2.0_WP*a)
-   !    ! Check if pressure is sound
-   !    if (Peq.le.max(-PinfG,-PinfL)) return
-   !    ! Get equilibrium volume fraction
-   !    VFeq=VF*((gammaL-1.0_WP)*Peq+2.0_WP*PL+coeffL)/((1.0_WP+gammaL)*Peq+coeffL)
-   !    ! Adjust conserved quantities
-   !    Q(3)=Q(3)-0.5_WP*(Pint+Peq)*(VFeq-VF)
-   !    Q(4)=Q(4)+0.5_WP*(Pint+Peq)*(VFeq-VF)
-   !    VF=VFeq
-   ! end subroutine P_relax
+   subroutine P_relax(VF,Q)
+      implicit none
+      real(WP),                intent(inout) :: VF
+      real(WP), dimension(1:), intent(inout) :: Q
+      real(WP) :: PG,PL,ZG,ZL,Pint
+      real(WP) :: a,b,d,coeffL,coeffG,Peq,VFeq
+      real(WP), parameter :: RHOGmin=1.0e-3_WP
+      ! ================ Handle gas flotsams ================
+      if (Q(2)/(1.0_WP-VF).lt.RHOGmin) return
+      ! ================ First step for mechanical relaxation ================
+      ! Get phasic pressures
+      PL=get_PL(RHO=Q(1)/(       VF),I=Q(3)/Q(1))
+      PG=get_PG(RHO=Q(2)/(1.0_WP-VF),I=Q(4)/Q(2))
+      ! Handle limit cases - should mass/energy be tranasfered or lost? - this should probably never happen...
+      if (PL.le.-PinfL) then
+         print*,"****************** LIQUID CLIPPED!",PL,VF,Q
+         VF=0.0_WP; Q(2)=sum(Q(1:2)); Q(1)=0.0_WP; Q(4)=sum(Q(3:4)); Q(3)=0.0_WP; return
+      end if
+      if (PG.le.-PinfG) then
+         print*,"****************** GAS CLIPPED!",PG,VF,Q
+         VF=1.0_WP; Q(1)=sum(Q(1:2)); Q(2)=0.0_WP; Q(3)=sum(Q(3:4)); Q(4)=0.0_WP; return
+      end if
+      ! Get phasic impedances
+      ZL=Q(1)/(       VF)*get_CL(RHO=Q(1)/(       VF),P=PL)**2
+      ZG=Q(2)/(1.0_WP-VF)*get_CG(RHO=Q(2)/(1.0_WP-VF),P=PG)**2
+      ! Calculate model interface pressure
+      Pint=(ZG*PL+ZL*PG)/(ZG+ZL)
+      ! Setup quadratic problem
+      coeffL=(GammaL-1.0_WP)*Pint+2.0_WP*GammaL*PinfL
+      coeffG=(GammaG-1.0_WP)*Pint+2.0_WP*GammaG*PinfG
+      a=1.0_WP+GammaG*VF+GammaL*(1.0_WP-VF)
+      b=coeffL*(1.0_WP-VF)+coeffG*VF-(1.0_WP+GammaG)*VF*PL-(1.0_WP+GammaL)*(1.0_WP-VF)*PG
+      d=-(coeffG*VF*PL+coeffL*(1.0_WP-VF)*PG)
+      ! Get equilibrium pressure
+      Peq=(-b+sqrt(b**2-4.0_WP*a*d))/(2.0_WP*a)
+      ! Check if pressure is sound
+      if (Peq.le.max(-PinfG,-PinfL)) return
+      ! Get equilibrium volume fraction
+      VFeq=VF*((gammaL-1.0_WP)*Peq+2.0_WP*PL+coeffL)/((1.0_WP+gammaL)*Peq+coeffL)
+      ! Adjust conserved quantities
+      Q(3)=Q(3)-0.5_WP*(Pint+Peq)*(VFeq-VF)
+      Q(4)=Q(4)+0.5_WP*(Pint+Peq)*(VFeq-VF)
+      VF=VFeq
+   end subroutine P_relax
    
    
    !> Mechanical relaxation model (implicit)
-   subroutine P_relax(VF,Q)
+   subroutine P_relax_implicit(VF,Q)
       implicit none
       real(WP),                intent(inout) :: VF
       real(WP), dimension(1:), intent(inout) :: Q
@@ -179,7 +179,7 @@ contains
       Q(3)=Q(3)-Peq*(VFeq-VF)
       Q(4)=Q(4)+Peq*(VFeq-VF)
       VF=VFeq
-   end subroutine P_relax
+   end subroutine P_relax_implicit
    
    
    !> Thermo-mechanical relaxation model
@@ -193,7 +193,7 @@ contains
       ! Get phasic pressures
       PL=get_PL(RHO=Q(1)/(       VF),I=Q(3)/Q(1))
       PG=get_PG(RHO=Q(2)/(1.0_WP-VF),I=Q(4)/Q(2))
-      ! Handle limit cases - should mass/energy be tranasfered or lost? - this should probably never happen...
+      ! Handle limit cases - should mass/energy be transfered or lost? - this should probably never happen...
       if (PL.le.-PinfL) then
          print*,"****************** LIQUID CLIPPED!",PL,VF,Q
          VF=0.0_WP; Q(2)=sum(Q(1:2)); Q(1)=0.0_WP; Q(4)=sum(Q(3:4)); Q(3)=0.0_WP; return
@@ -334,15 +334,20 @@ contains
          real(WP) :: dx
          ! Read in mesh size and desired partition
          call param_read('Shock-drop dx',dx)
-         call param_read('Shock-drop max nx',max_meshsize)
+         call param_read('Shock-drop max nx',max_nx,default=0)
+         call param_read('Shock-drop max ny',max_ny,default=0)
+         call param_read('Shock-drop max nz',max_nz,default=0)
          call param_read('Shock-drop partition',partition)
          ! Set initial domain of size (2D)^3 centered on (0,0,0)
-         meshsize=min(nint([2.0_WP/dx,2.0_WP/dx,2.0_WP/dx]),max_meshsize)
+         meshsize=nint([2.0_WP/dx,2.0_WP/dx,2.0_WP/dx])
+         if (max_nx.gt.0) meshsize(1)=min(meshsize(1),max_nx)
+         if (max_ny.gt.0) meshsize(2)=min(meshsize(2),max_ny)
+         if (max_nz.gt.0) meshsize(3)=min(meshsize(3),max_nz)
          X0=-0.5_WP*real(meshsize,WP)*dx
          ! Allocate and initialize the shock-drop solver
          allocate(sd); call sd%initialize(dx=dx,meshsize=meshsize,startloc=X0,group=group,partition=partition,continue_monitor=.false.)
          ! Provide relaxation and thermodynamic models
-         sd%fs%relax=>P_relax
+         sd%fs%relax=>P_relax_implicit
          sd%fs%getPL=>get_PL; sd%fs%getCL=>get_CL; sd%fs%getSL=>get_SL; sd%fs%getTL=>get_TL
          sd%fs%getPG=>get_PG; sd%fs%getCG=>get_CG; sd%fs%getSG=>get_SG; sd%fs%getTG=>get_TG
          ! We need to transfer our viscosities explicitly...
@@ -554,8 +559,13 @@ contains
          !& -0.5_WP*([sd%cfg%x(sd%cfg%imax+1),sd%cfg%y(sd%cfg%jmax+1),sd%cfg%z(sd%cfg%kmax+1)] &         ! -Middle of 
          !&         +[sd%cfg%x(sd%cfg%imin  ),sd%cfg%y(sd%cfg%jmin  ),sd%cfg%z(sd%cfg%kmin  )])          !  domain
          ! Get meshsize that encompasses current liquid extent, adding D/2 on each side
-         meshsize=min(nint((sd%Lmax-sd%Lmin+1.0_WP)/dx)+1,max_meshsize)
-         X0=-0.5_WP*real(meshsize,WP)*dx ! Centered on (0,0,0)
+         meshsize(1)=nint((sd%Lmax(1)-sd%Lmin(1)+1.0_WP)/dx)+1
+         if (max_nx.gt.0) meshsize(1)=min(meshsize(1),max_nx)
+         meshsize(2)=nint((2.0_WP*max(abs(sd%Lmax(2)),abs(sd%Lmin(2)))+1.0_WP)/dx)+1
+         if (max_ny.gt.0) meshsize(2)=min(meshsize(2),max_ny)
+         meshsize(3)=nint((2.0_WP*max(abs(sd%Lmax(3)),abs(sd%Lmin(3)))+1.0_WP)/dx)+1
+         if (max_nz.gt.0) meshsize(3)=min(meshsize(3),max_nz)
+         X0=-0.5_WP*real(meshsize,WP)*dx                ! Centered domain on (0,0,0)
          X0(1)=sd%fs%dx*ceiling((sd%Lmin(1)-0.5_WP)/dx) ! Shift in x only, snapping on the mesh
          ! Ensure consistency across ranks
          call MPI_BCAST(meshsize,3,MPI_INTEGER,0,sd%cfg%comm,ierr)
@@ -624,8 +634,8 @@ contains
          ! Transfer VF
          call sd2sdnew%push(sd%fs%VF,loc='c'); call sd2sdnew%transfer(); call sd2sdnew%pull(sdnew%fs%VF,loc='c')
          ! Transfer barycenters
-         allocate(tmp1(sdnew%fs%cfg%imino_:sdnew%fs%cfg%imaxo_,sdnew%fs%cfg%jmino_:sdnew%fs%cfg%jmaxo_,sdnew%fs%cfg%kmino_:sdnew%fs%cfg%kmaxo_))
-         allocate(tmp2(   sd%fs%cfg%imino_:   sd%fs%cfg%imaxo_,   sd%fs%cfg%jmino_:   sd%fs%cfg%jmaxo_,   sd%fs%cfg%kmino_:   sd%fs%cfg%kmaxo_))
+         allocate(tmp1(   sd%fs%cfg%imino_:   sd%fs%cfg%imaxo_,   sd%fs%cfg%jmino_:   sd%fs%cfg%jmaxo_,   sd%fs%cfg%kmino_:   sd%fs%cfg%kmaxo_))
+         allocate(tmp2(sdnew%fs%cfg%imino_:sdnew%fs%cfg%imaxo_,sdnew%fs%cfg%jmino_:sdnew%fs%cfg%jmaxo_,sdnew%fs%cfg%kmino_:sdnew%fs%cfg%kmaxo_))
          tmp1=sd%fs%BG(1,:,:,:); call sd2sdnew%push(tmp1,loc='c'); call sd2sdnew%transfer(); call sd2sdnew%pull(tmp2,loc='c'); sdnew%fs%BG(1,:,:,:)=tmp2
          tmp1=sd%fs%BG(2,:,:,:); call sd2sdnew%push(tmp1,loc='c'); call sd2sdnew%transfer(); call sd2sdnew%pull(tmp2,loc='c'); sdnew%fs%BG(2,:,:,:)=tmp2
          tmp1=sd%fs%BG(3,:,:,:); call sd2sdnew%push(tmp1,loc='c'); call sd2sdnew%transfer(); call sd2sdnew%pull(tmp2,loc='c'); sdnew%fs%BG(3,:,:,:)=tmp2
