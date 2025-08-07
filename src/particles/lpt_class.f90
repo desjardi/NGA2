@@ -92,7 +92,7 @@ module lpt_class
       ! Injection parameters
       real(WP) :: mfr                                     !< Mass flow rate for particle injection
       real(WP), dimension(3) :: inj_pos                   !< Center location to inject particles
-      real(WP), dimension(3) :: inj_vel                   !< Celocity assigned during injection
+      real(WP), dimension(3) :: inj_vel                   !< Velocity assigned during injection
       real(WP) :: inj_dmean                               !< Mean diameter assigned during injection
       real(WP) :: inj_dsd                                 !< STD diameter assigned during injection
       real(WP) :: inj_dmin                                !< Min diameter assigned during injection
