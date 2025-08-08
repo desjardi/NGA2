@@ -62,6 +62,8 @@ module lpt_class
       integer :: np_                                      !< Local number of particles
       integer, dimension(:), allocatable :: np_proc       !< Number of particles on each processor
       type(part), dimension(:), allocatable :: p          !< Array of particles of type part
+      type(part), dimension(:), allocatable :: pold       !< Array of temporary particles for RK4
+      type(part), dimension(:), allocatable :: pbuf       !< Array of temporary particles for RK4
       
       ! Overlap particle (i.e., ghost) data
       integer :: ng_                                      !< Local number of ghosts
@@ -114,6 +116,11 @@ module lpt_class
       
       ! Particle volume fraction
       real(WP), dimension(:,:,:), allocatable :: VF       !< Particle volume fraction, cell-centered
+
+      ! Particle velocity (weighted by volume fraction)
+      real(WP), dimension(:,:,:), allocatable :: VFU      !< Particle U velocity, cell-centered
+      real(WP), dimension(:,:,:), allocatable :: VFV      !< Particle V velocity, cell-centered
+      real(WP), dimension(:,:,:), allocatable :: VFW      !< Particle W velocity, cell-centered
       
       ! Filtering operation
       logical :: implicit_filter                          !< Solve implicitly
@@ -124,7 +131,7 @@ module lpt_class
    contains
       procedure :: update_partmesh                        !< Update a partmesh object using current particles
       procedure :: collide                                !< Evaluate interparticle collision force
-      procedure :: advance                                !< Step forward the particle ODEs
+      procedure :: substep_rk4                            !< RK4 integration of particle ODEs
       procedure :: get_rhs                                !< Compute rhs of particle odes
       procedure :: resize                                 !< Resize particle array to given size
       procedure :: resize_ghost                           !< Resize ghost array to given size
@@ -173,8 +180,11 @@ contains
       ! Initialize MPI derived datatype for a particle
       call prepare_mpi_part()
 
-      ! Allocate VF on cfg mesh
+      ! Allocate VF and velocities on cfg mesh
       allocate(self%VF  (self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%VF=0.0_WP
+      allocate(self%VFU (self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%VFU=0.0_WP
+      allocate(self%VFV (self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%VFV=0.0_WP
+      allocate(self%VFW (self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%VFW=0.0_WP
 
       ! Zero friction by default
       self%mu_f=0.0_WP
@@ -671,15 +681,14 @@ contains
    end subroutine collide
    
    
-   !> Advance the particle equations by a specified time step dt
-   !> p%id=0 => no coll, no solve
-   !> p%id=-1=> no coll, no move
-   subroutine advance(this,dt,U,V,W,rho,visc,T,C,stress_x,stress_y,stress_z,heat_flux,srcU,srcV,srcW,srcI)
+   !> Advance the particle equations in a stage of RK4
+   subroutine substep_rk4(this,stage,dt,U,V,W,rho,visc,T,C,stress_x,stress_y,stress_z,heat_flux,srcU,srcV,srcW,srcI)
       use mpi_f08,   only: MPI_ALLREDUCE,MPI_SUM,MPI_MAX,MPI_INTEGER,MPI_IN_PLACE
       use parallel,  only: MPI_REAL_WP
       use mathtools, only: Pi
       implicit none
       class(lpt), intent(inout) :: this
+      integer, intent(in) :: stage   !< RK stage
       real(WP), intent(inout) :: dt  !< Timestep size over which to advance
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: U         !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: V         !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
@@ -697,93 +706,198 @@ contains
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout), optional :: srcW   !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout), optional :: srcI   !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       integer :: i,ierr
-      real(WP) :: mydt,dt_done,mp,Ip,dTdt,deng
-      real(WP), dimension(3) :: acc,dmom
-      type(part) :: myp,pold
+      real(WP) :: mp,dTdt,deng
+      real(WP), dimension(3) :: dxdt,dudt,dwdt,dmom
+      real(WP), parameter :: oneHalf=1.0_WP/2.0_WP
+      real(WP), parameter :: oneThird=1.0_WP/3.0_WP
+      real(WP), parameter :: oneSixth=1.0_WP/6.0_WP
       
       ! Zero out source term arrays
       if (present(srcU)) srcU=0.0_WP
       if (present(srcV)) srcV=0.0_WP
       if (present(srcW)) srcW=0.0_WP
       if (present(srcI)) srcI=0.0_WP
-      
-      ! Zero out number of particles removed
-      this%np_out=0
-      this%vp_out=0.0_WP
 
-      ! Reset monitor info
-      this%Remax=0.0_WP; this%Mamax=0.0_WP; this%Knmax=0.0_WP
-      
-      ! Advance the equations
-      do i=1,this%np_
-         ! Avoid particles with id=0
-         if (this%p(i)%id.eq.0) cycle
-         ! Create local copy of particle
-         myp=this%p(i)
-         ! Time-integrate until dt_done=dt
-         dt_done=0.0_WP
-         do while (dt_done.lt.dt)
-            ! Decide the timestep size
-            mydt=min(myp%dt,dt-dt_done)
-            ! Remember the particle
-            pold=myp
-            ! Particle moment of inertia per unit mass
-            Ip = 0.1_WP*myp%d**2
-            ! Advance with Euler prediction
-            call this%get_rhs(U=U,V=V,W=W,rho=rho,visc=visc,T=T,C=C,stress_x=stress_x,stress_y=stress_y,stress_z=stress_z,heat_flux=heat_flux,p=myp,acc=acc,dTdt=dTdt,opt_dt=myp%dt)
-            myp%pos=pold%pos+0.5_WP*mydt*myp%vel
-            myp%vel=pold%vel+0.5_WP*mydt*(acc+myp%Acol)
-            myp%angVel=pold%angVel+0.5_WP*mydt*myp%Tcol/Ip
-            myp%T=pold%T+0.5_WP*mydt*dTdt
-            ! Correct with midpoint rule
-            call this%get_rhs(U=U,V=V,W=W,rho=rho,visc=visc,T=T,C=C,stress_x=stress_x,stress_y=stress_y,stress_z=stress_z,heat_flux=heat_flux,p=myp,acc=acc,dTdt=dTdt,opt_dt=myp%dt)
-            myp%pos=pold%pos+mydt*myp%vel
-            myp%vel=pold%vel+mydt*(acc+myp%Acol)
-            myp%angVel=pold%angVel+mydt*myp%Tcol/Ip
-            myp%T=pold%T+mydt*dTdt
-            ! Relocalize
-            myp%ind=this%cfg%get_ijk_global(myp%pos,myp%ind)
+      select case (stage)
+      case (1)
+         ! First RK step ====================================================================================
+         ! Zero out number of particles removed
+         this%np_out=0
+         this%vp_out=0.0_WP
+         ! Reset monitor info
+         this%Remax=0.0_WP; this%Mamax=0.0_WP; this%Knmax=0.0_WP
+
+         ! Collide
+         call this%collide(dt=dt)
+
+         ! Prepare temporary particle varrays
+         if (allocated(this%pold)) deallocate(this%pold)
+         if (allocated(this%pbuf)) deallocate(this%pbuf)
+         allocate(this%pold(this%np_))
+         allocate(this%pbuf(this%np_))
+         this%pold=this%p
+
+         ! Take a substep
+         do i=1,this%np_
+            if (this%p(i)%id.eq.0) cycle
+            call this%get_rhs(U=U,V=V,W=W,rho=rho,visc=visc,T=T,C=C,stress_x=stress_x,stress_y=stress_y,stress_z=stress_z,heat_flux=heat_flux,p=this%p(i),dxdt=dxdt,dudt=dudt,dwdt=dwdt,dTdt=dTdt)
+            ! Update particle position
+            this%pbuf(i)%pos = this%pold(i)%pos + dt*dxdt*oneSixth
+            this%p(i)%pos    = this%pold(i)%pos + dt*dxdt*oneHalf
+            ! Update particle velocity
+            this%pbuf(i)%vel = this%pold(i)%vel + dt*dudt*oneSixth
+            this%p(i)%vel    = this%pold(i)%vel + dt*dudt*oneHalf
+            ! Update particle temperature
+            this%pbuf(i)%T = this%pold(i)%T + dt*dTdt*oneSixth
+            this%p(i)%T    = this%pold(i)%T + dt*dTdt*oneHalf
+            ! Update the particle angular velocity
+            this%pbuf(i)%angVel = this%pold(i)%angVel + dt*dwdt*oneSixth
+            this%p(i)%angVel    = this%pold(i)%angVel + dt*dwdt*oneHalf
+            ! Correct the position to take into account periodicity
+            if (this%cfg%xper) this%p(i)%pos(1)=this%cfg%x(this%cfg%imin)+modulo(this%p(i)%pos(1)-this%cfg%x(this%cfg%imin),this%cfg%xL)
+            if (this%cfg%yper) this%p(i)%pos(2)=this%cfg%y(this%cfg%jmin)+modulo(this%p(i)%pos(2)-this%cfg%y(this%cfg%jmin),this%cfg%yL)
+            if (this%cfg%zper) this%p(i)%pos(3)=this%cfg%z(this%cfg%kmin)+modulo(this%p(i)%pos(3)-this%cfg%z(this%cfg%kmin),this%cfg%zL)
+            ! Handle particles that have left the domain
+            if (this%p(i)%pos(1).lt.this%cfg%x(this%cfg%imin).or.this%p(i)%pos(1).gt.this%cfg%x(this%cfg%imax+1)) this%p(i)%flag=1
+            if (this%p(i)%pos(2).lt.this%cfg%y(this%cfg%jmin).or.this%p(i)%pos(2).gt.this%cfg%y(this%cfg%jmax+1)) this%p(i)%flag=1
+            if (this%p(i)%pos(3).lt.this%cfg%z(this%cfg%kmin).or.this%p(i)%pos(3).gt.this%cfg%z(this%cfg%kmax+1)) this%p(i)%flag=1
+            ! Relocalize the particle
+            this%p(i)%ind=this%cfg%get_ijk_global(this%p(i)%pos,this%p(i)%ind)
             ! Send source term back to the mesh
-            mp=this%rho*Pi/6.0_WP*myp%d**3
-            dmom=mp*acc
+            mp=this%rho*Pi/6.0_WP*this%p(i)%d**3
+            dmom=mp*(dudt-this%p(i)%Acol)
             deng=mp*this%Cp*dTdt
-            if (this%cfg%nx.gt.1.and.present(srcU)) call this%cfg%set_scalar(Sp=-dmom(1),pos=myp%pos,i0=myp%ind(1),j0=myp%ind(2),k0=myp%ind(3),S=srcU,bc='n')
-            if (this%cfg%ny.gt.1.and.present(srcV)) call this%cfg%set_scalar(Sp=-dmom(2),pos=myp%pos,i0=myp%ind(1),j0=myp%ind(2),k0=myp%ind(3),S=srcV,bc='n')
-            if (this%cfg%nz.gt.1.and.present(srcW)) call this%cfg%set_scalar(Sp=-dmom(3),pos=myp%pos,i0=myp%ind(1),j0=myp%ind(2),k0=myp%ind(3),S=srcW,bc='n')
-            if (present(srcI))                      call this%cfg%set_scalar(Sp=-deng   ,pos=myp%pos,i0=myp%ind(1),j0=myp%ind(2),k0=myp%ind(3),S=srcI,bc='n')
-            ! Increment
-            dt_done=dt_done+mydt
+            if (this%cfg%nx.gt.1.and.present(srcU)) call this%cfg%set_scalar(Sp=-dmom(1),pos=this%p(i)%pos,i0=this%p(i)%ind(1),j0=this%p(i)%ind(2),k0=this%p(i)%ind(3),S=srcU,bc='n')
+            if (this%cfg%ny.gt.1.and.present(srcV)) call this%cfg%set_scalar(Sp=-dmom(2),pos=this%p(i)%pos,i0=this%p(i)%ind(1),j0=this%p(i)%ind(2),k0=this%p(i)%ind(3),S=srcV,bc='n')
+            if (this%cfg%nz.gt.1.and.present(srcW)) call this%cfg%set_scalar(Sp=-dmom(3),pos=this%p(i)%pos,i0=this%p(i)%ind(1),j0=this%p(i)%ind(2),k0=this%p(i)%ind(3),S=srcW,bc='n')
+            if (present(srcI))                      call this%cfg%set_scalar(Sp=-deng   ,pos=this%p(i)%pos,i0=this%p(i)%ind(1),j0=this%p(i)%ind(2),k0=this%p(i)%ind(3),S=srcI,bc='n')
          end do
-         ! Correct the position to take into account periodicity
-         if (this%cfg%xper) myp%pos(1)=this%cfg%x(this%cfg%imin)+modulo(myp%pos(1)-this%cfg%x(this%cfg%imin),this%cfg%xL)
-         if (this%cfg%yper) myp%pos(2)=this%cfg%y(this%cfg%jmin)+modulo(myp%pos(2)-this%cfg%y(this%cfg%jmin),this%cfg%yL)
-         if (this%cfg%zper) myp%pos(3)=this%cfg%z(this%cfg%kmin)+modulo(myp%pos(3)-this%cfg%z(this%cfg%kmin),this%cfg%zL)
-         ! Handle particles that have left the domain
-         if (myp%pos(1).lt.this%cfg%x(this%cfg%imin).or.myp%pos(1).gt.this%cfg%x(this%cfg%imax+1)) myp%flag=1
-         if (myp%pos(2).lt.this%cfg%y(this%cfg%jmin).or.myp%pos(2).gt.this%cfg%y(this%cfg%jmax+1)) myp%flag=1
-         if (myp%pos(3).lt.this%cfg%z(this%cfg%kmin).or.myp%pos(3).gt.this%cfg%z(this%cfg%kmax+1)) myp%flag=1
-         ! Relocalize the particle
-         myp%ind=this%cfg%get_ijk_global(myp%pos,myp%ind)
-         ! Count number of particles removed
-         if (myp%flag.eq.1) then
-            this%np_out=this%np_out+1
-            this%vp_out=this%vp_out+Pi/6.0_WP*myp%d**3
-         end if
-         ! Copy back to particle
-         if (myp%id.ne.-1) this%p(i)=myp
-      end do
-      
-      ! Communicate particles
-      call this%sync()
-      
-      ! Sum up particles removed
-      call MPI_ALLREDUCE(MPI_IN_PLACE,this%np_out,1,MPI_INTEGER,MPI_SUM,this%cfg%comm,ierr)
-      call MPI_ALLREDUCE(MPI_IN_PLACE,this%vp_out,1,MPI_REAL_WP,MPI_SUM,this%cfg%comm,ierr)
 
-      ! Get max dimensionless numbers
-      call MPI_ALLREDUCE(MPI_IN_PLACE,this%Remax,1,MPI_REAL_WP,MPI_MAX,this%cfg%comm,ierr)
-      call MPI_ALLREDUCE(MPI_IN_PLACE,this%Mamax,1,MPI_REAL_WP,MPI_MAX,this%cfg%comm,ierr)
-      call MPI_ALLREDUCE(MPI_IN_PLACE,this%Knmax,1,MPI_REAL_WP,MPI_MAX,this%cfg%comm,ierr)
+      case (2)
+         ! Second RK step ====================================================================================
+         do i=1,this%np_
+            if (this%p(i)%id.eq.0) cycle
+            call this%get_rhs(U=U,V=V,W=W,rho=rho,visc=visc,T=T,C=C,stress_x=stress_x,stress_y=stress_y,stress_z=stress_z,heat_flux=heat_flux,p=this%p(i),dxdt=dxdt,dudt=dudt,dwdt=dwdt,dTdt=dTdt)
+            ! Update particle position
+            this%pbuf(i)%pos = this%pbuf(i)%pos + dt*dxdt*oneThird
+            this%p(i)%pos    = this%pold(i)%pos + dt*dxdt*oneHalf
+            ! Update particle velocity
+            this%pbuf(i)%vel = this%pbuf(i)%vel + dt*dudt*oneThird
+            this%p(i)%vel    = this%pold(i)%vel + dt*dudt*oneHalf
+            ! Update particle temperature
+            this%pbuf(i)%T = this%pbuf(i)%T + dt*dTdt*oneThird
+            this%p(i)%T    = this%pold(i)%T + dt*dTdt*oneHalf
+            ! Update the particle angular velocity
+            this%pbuf(i)%angVel = this%pbuf(i)%angVel + dt*dwdt*oneThird
+            this%p(i)%angVel    = this%pold(i)%angVel + dt*dwdt*oneHalf
+            ! Correct the position to take into account periodicity
+            if (this%cfg%xper) this%p(i)%pos(1)=this%cfg%x(this%cfg%imin)+modulo(this%p(i)%pos(1)-this%cfg%x(this%cfg%imin),this%cfg%xL)
+            if (this%cfg%yper) this%p(i)%pos(2)=this%cfg%y(this%cfg%jmin)+modulo(this%p(i)%pos(2)-this%cfg%y(this%cfg%jmin),this%cfg%yL)
+            if (this%cfg%zper) this%p(i)%pos(3)=this%cfg%z(this%cfg%kmin)+modulo(this%p(i)%pos(3)-this%cfg%z(this%cfg%kmin),this%cfg%zL)
+            ! Handle particles that have left the domain
+            if (this%p(i)%pos(1).lt.this%cfg%x(this%cfg%imin).or.this%p(i)%pos(1).gt.this%cfg%x(this%cfg%imax+1)) this%p(i)%flag=1
+            if (this%p(i)%pos(2).lt.this%cfg%y(this%cfg%jmin).or.this%p(i)%pos(2).gt.this%cfg%y(this%cfg%jmax+1)) this%p(i)%flag=1
+            if (this%p(i)%pos(3).lt.this%cfg%z(this%cfg%kmin).or.this%p(i)%pos(3).gt.this%cfg%z(this%cfg%kmax+1)) this%p(i)%flag=1
+            ! Relocalize the particle
+            this%p(i)%ind=this%cfg%get_ijk_global(this%p(i)%pos,this%p(i)%ind)
+            ! Send source term back to the mesh
+            mp=this%rho*Pi/6.0_WP*this%p(i)%d**3
+            dmom=mp*(dudt-this%p(i)%Acol)
+            deng=mp*this%Cp*dTdt
+            if (this%cfg%nx.gt.1.and.present(srcU)) call this%cfg%set_scalar(Sp=-dmom(1),pos=this%p(i)%pos,i0=this%p(i)%ind(1),j0=this%p(i)%ind(2),k0=this%p(i)%ind(3),S=srcU,bc='n')
+            if (this%cfg%ny.gt.1.and.present(srcV)) call this%cfg%set_scalar(Sp=-dmom(2),pos=this%p(i)%pos,i0=this%p(i)%ind(1),j0=this%p(i)%ind(2),k0=this%p(i)%ind(3),S=srcV,bc='n')
+            if (this%cfg%nz.gt.1.and.present(srcW)) call this%cfg%set_scalar(Sp=-dmom(3),pos=this%p(i)%pos,i0=this%p(i)%ind(1),j0=this%p(i)%ind(2),k0=this%p(i)%ind(3),S=srcW,bc='n')
+            if (present(srcI))                      call this%cfg%set_scalar(Sp=-deng   ,pos=this%p(i)%pos,i0=this%p(i)%ind(1),j0=this%p(i)%ind(2),k0=this%p(i)%ind(3),S=srcI,bc='n')
+         end do
+
+      case (3)
+          ! Third RK step ====================================================================================
+         do i=1,this%np_
+            if (this%p(i)%id.eq.0) cycle
+            call this%get_rhs(U=U,V=V,W=W,rho=rho,visc=visc,T=T,C=C,stress_x=stress_x,stress_y=stress_y,stress_z=stress_z,heat_flux=heat_flux,p=this%p(i),dxdt=dxdt,dudt=dudt,dwdt=dwdt,dTdt=dTdt)
+            ! Update particle position
+            this%pbuf(i)%pos = this%pbuf(i)%pos + dt*dxdt*oneThird
+            this%p(i)%pos    = this%pold(i)%pos + dt*dxdt
+            ! Update particle velocity
+            this%pbuf(i)%vel = this%pbuf(i)%vel + dt*dudt*oneThird
+            this%p(i)%vel    = this%pold(i)%vel + dt*dudt
+            ! Update particle temperature
+            this%pbuf(i)%T = this%pbuf(i)%T + dt*dTdt*oneThird
+            this%p(i)%T    = this%pold(i)%T + dt*dTdt
+            ! Update the particle angular velocity
+            this%pbuf(i)%angVel = this%pbuf(i)%angVel + dt*dwdt*oneThird
+            this%p(i)%angVel    = this%pold(i)%angVel + dt*dwdt
+            ! Correct the position to take into account periodicity
+            if (this%cfg%xper) this%p(i)%pos(1)=this%cfg%x(this%cfg%imin)+modulo(this%p(i)%pos(1)-this%cfg%x(this%cfg%imin),this%cfg%xL)
+            if (this%cfg%yper) this%p(i)%pos(2)=this%cfg%y(this%cfg%jmin)+modulo(this%p(i)%pos(2)-this%cfg%y(this%cfg%jmin),this%cfg%yL)
+            if (this%cfg%zper) this%p(i)%pos(3)=this%cfg%z(this%cfg%kmin)+modulo(this%p(i)%pos(3)-this%cfg%z(this%cfg%kmin),this%cfg%zL)
+            ! Handle particles that have left the domain
+            if (this%p(i)%pos(1).lt.this%cfg%x(this%cfg%imin).or.this%p(i)%pos(1).gt.this%cfg%x(this%cfg%imax+1)) this%p(i)%flag=1
+            if (this%p(i)%pos(2).lt.this%cfg%y(this%cfg%jmin).or.this%p(i)%pos(2).gt.this%cfg%y(this%cfg%jmax+1)) this%p(i)%flag=1
+            if (this%p(i)%pos(3).lt.this%cfg%z(this%cfg%kmin).or.this%p(i)%pos(3).gt.this%cfg%z(this%cfg%kmax+1)) this%p(i)%flag=1
+            ! Relocalize the particle
+            this%p(i)%ind=this%cfg%get_ijk_global(this%p(i)%pos,this%p(i)%ind)
+            ! Send source term back to the mesh
+            mp=this%rho*Pi/6.0_WP*this%p(i)%d**3
+            dmom=mp*(dudt-this%p(i)%Acol)
+            deng=mp*this%Cp*dTdt
+            if (this%cfg%nx.gt.1.and.present(srcU)) call this%cfg%set_scalar(Sp=-dmom(1),pos=this%p(i)%pos,i0=this%p(i)%ind(1),j0=this%p(i)%ind(2),k0=this%p(i)%ind(3),S=srcU,bc='n')
+            if (this%cfg%ny.gt.1.and.present(srcV)) call this%cfg%set_scalar(Sp=-dmom(2),pos=this%p(i)%pos,i0=this%p(i)%ind(1),j0=this%p(i)%ind(2),k0=this%p(i)%ind(3),S=srcV,bc='n')
+            if (this%cfg%nz.gt.1.and.present(srcW)) call this%cfg%set_scalar(Sp=-dmom(3),pos=this%p(i)%pos,i0=this%p(i)%ind(1),j0=this%p(i)%ind(2),k0=this%p(i)%ind(3),S=srcW,bc='n')
+            if (present(srcI))                      call this%cfg%set_scalar(Sp=-deng   ,pos=this%p(i)%pos,i0=this%p(i)%ind(1),j0=this%p(i)%ind(2),k0=this%p(i)%ind(3),S=srcI,bc='n')
+         end do
+
+      case (4)
+         ! Fourth RK step ====================================================================================
+         do i=1,this%np_
+            if (this%p(i)%id.eq.0) cycle
+            call this%get_rhs(U=U,V=V,W=W,rho=rho,visc=visc,T=T,C=C,stress_x=stress_x,stress_y=stress_y,stress_z=stress_z,heat_flux=heat_flux,p=this%p(i),dxdt=dxdt,dudt=dudt,dwdt=dwdt,dTdt=dTdt)
+            ! Update particle position
+            this%p(i)%pos    = this%pbuf(i)%pos + dt*dxdt*oneSixth
+            ! Update particle velocity
+            this%p(i)%vel    = this%pbuf(i)%vel + dt*dudt*oneSixth
+            ! Update particle temperature
+            this%p(i)%T      = this%pbuf(i)%T + dt*dTdt*oneSixth
+            ! Update the particle angular velocity
+            this%p(i)%angVel = this%pbuf(i)%angVel + dt*dwdt*oneSixth
+            ! Correct the position to take into account periodicity
+            if (this%cfg%xper) this%p(i)%pos(1)=this%cfg%x(this%cfg%imin)+modulo(this%p(i)%pos(1)-this%cfg%x(this%cfg%imin),this%cfg%xL)
+            if (this%cfg%yper) this%p(i)%pos(2)=this%cfg%y(this%cfg%jmin)+modulo(this%p(i)%pos(2)-this%cfg%y(this%cfg%jmin),this%cfg%yL)
+            if (this%cfg%zper) this%p(i)%pos(3)=this%cfg%z(this%cfg%kmin)+modulo(this%p(i)%pos(3)-this%cfg%z(this%cfg%kmin),this%cfg%zL)
+            ! Handle particles that have left the domain
+            if (this%p(i)%pos(1).lt.this%cfg%x(this%cfg%imin).or.this%p(i)%pos(1).gt.this%cfg%x(this%cfg%imax+1)) this%p(i)%flag=1
+            if (this%p(i)%pos(2).lt.this%cfg%y(this%cfg%jmin).or.this%p(i)%pos(2).gt.this%cfg%y(this%cfg%jmax+1)) this%p(i)%flag=1
+            if (this%p(i)%pos(3).lt.this%cfg%z(this%cfg%kmin).or.this%p(i)%pos(3).gt.this%cfg%z(this%cfg%kmax+1)) this%p(i)%flag=1
+            ! Relocalize the particle
+            this%p(i)%ind=this%cfg%get_ijk_global(this%p(i)%pos,this%p(i)%ind)
+            ! Send source term back to the mesh
+            mp=this%rho*Pi/6.0_WP*this%p(i)%d**3
+            dmom=mp*(dudt-this%p(i)%Acol)
+            deng=mp*this%Cp*dTdt
+            if (this%cfg%nx.gt.1.and.present(srcU)) call this%cfg%set_scalar(Sp=-dmom(1),pos=this%p(i)%pos,i0=this%p(i)%ind(1),j0=this%p(i)%ind(2),k0=this%p(i)%ind(3),S=srcU,bc='n')
+            if (this%cfg%ny.gt.1.and.present(srcV)) call this%cfg%set_scalar(Sp=-dmom(2),pos=this%p(i)%pos,i0=this%p(i)%ind(1),j0=this%p(i)%ind(2),k0=this%p(i)%ind(3),S=srcV,bc='n')
+            if (this%cfg%nz.gt.1.and.present(srcW)) call this%cfg%set_scalar(Sp=-dmom(3),pos=this%p(i)%pos,i0=this%p(i)%ind(1),j0=this%p(i)%ind(2),k0=this%p(i)%ind(3),S=srcW,bc='n')
+            if (present(srcI))                      call this%cfg%set_scalar(Sp=-deng   ,pos=this%p(i)%pos,i0=this%p(i)%ind(1),j0=this%p(i)%ind(2),k0=this%p(i)%ind(3),S=srcI,bc='n')
+            ! Count number of particles removed
+            if (this%p(i)%flag.eq.1) then
+               this%np_out=this%np_out+1
+               this%vp_out=this%vp_out+Pi/6.0_WP*this%p(i)%d**3
+            end if
+         end do
+
+         ! Communicate particles
+         call this%sync()
+
+         ! Sum up particles removed
+         call MPI_ALLREDUCE(MPI_IN_PLACE,this%np_out,1,MPI_INTEGER,MPI_SUM,this%cfg%comm,ierr)
+         call MPI_ALLREDUCE(MPI_IN_PLACE,this%vp_out,1,MPI_REAL_WP,MPI_SUM,this%cfg%comm,ierr)
+
+         ! Get max dimensionless numbers
+         call MPI_ALLREDUCE(MPI_IN_PLACE,this%Remax,1,MPI_REAL_WP,MPI_MAX,this%cfg%comm,ierr)
+         call MPI_ALLREDUCE(MPI_IN_PLACE,this%Mamax,1,MPI_REAL_WP,MPI_MAX,this%cfg%comm,ierr)
+         call MPI_ALLREDUCE(MPI_IN_PLACE,this%Knmax,1,MPI_REAL_WP,MPI_MAX,this%cfg%comm,ierr)
+
+      end select
       
       ! Divide source arrays by volume, sum at boundaries, and volume filter if present
       if (present(srcU)) then
@@ -816,11 +930,11 @@ contains
          end if
       end block logging
       
-   end subroutine advance
-   
-   
-   !> Calculate RHS of the particle ODEs
-   subroutine get_rhs(this,U,V,W,rho,visc,T,C,stress_x,stress_y,stress_z,heat_flux,p,acc,dTdt,opt_dt)
+    end subroutine substep_rk4
+
+
+     !> Calculate RHS of the particle ODEs
+   subroutine get_rhs(this,U,V,W,rho,visc,T,C,stress_x,stress_y,stress_z,heat_flux,p,dxdt,dudt,dwdt,dTdt)
       implicit none
       class(lpt), intent(inout) :: this
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: U         !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
@@ -833,10 +947,10 @@ contains
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: stress_x  !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: stress_y  !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: stress_z  !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
-      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: heat_flux !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: heat_flux !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_
       type(part), intent(in) :: p
-      real(WP), dimension(3), intent(out) :: acc
-      real(WP), intent(out) :: dTdt,opt_dt
+      real(WP), dimension(3), intent(out) :: dxdt,dudt,dwdt
+      real(WP), intent(out) :: dTdt
       real(WP) :: fvisc,frho,pVF,fVF,fT,fC,fQ
       real(WP), dimension(3) :: fvel,fstress
       
@@ -846,7 +960,7 @@ contains
          fvel=this%cfg%get_velocity(pos=p%pos,i0=p%ind(1),j0=p%ind(2),k0=p%ind(3),U=U,V=V,W=W)
          ! Interpolate the fluid phase stress to the particle location
          fstress=this%cfg%get_velocity(pos=p%pos,i0=p%ind(1),j0=p%ind(2),k0=p%ind(3),U=stress_x,V=stress_y,W=stress_z)
-         ! Interpolate the resolved heat flux
+          ! Interpolate the resolved heat flux
          fQ=this%cfg%get_scalar(pos=p%pos,i0=p%ind(1),j0=p%ind(2),k0=p%ind(3),S=heat_flux,bc='n')
          ! Interpolate the fluid phase viscosity to the particle location
          fvisc=this%cfg%get_scalar(pos=p%pos,i0=p%ind(1),j0=p%ind(2),k0=p%ind(3),S=visc,bc='n')
@@ -861,11 +975,16 @@ contains
          pVF=this%cfg%get_scalar(pos=p%pos,i0=p%ind(1),j0=p%ind(2),k0=p%ind(3),S=this%VF,bc='n')
          fVF=1.0_WP-pVF
        end block interpolate
+
+       ! Compute change in position
+       compute_dxdt: block
+         dxdt=p%vel
+       end block compute_dxdt
        
        ! Compute acceleration due to drag using Osnes et al. (2023) IJMF
-       compute_drag: block
+       compute_dudt: block
          use mathtools, only: Pi
-         real(WP) :: Rep,Rem,Ma,Knp,fKn,CD1,CD2,CD3,sDrag,GM,HM,JM,CM,M,tau,corr,b1,b2,b3,vp
+         real(WP) :: Rep,Rem,Ma,Knp,fKn,CD1,CD2,CD3,sDrag,GM,HM,JM,CM,tau,corr,b1,b2,b3,vp
          real(WP), parameter :: Gamma=1.4_WP
          ! Particle Reynolds number
          Rep=frho*norm2(p%vel-fvel)*p%d/fvisc+epsilon(1.0_WP)
@@ -927,13 +1046,20 @@ contains
          corr = CD3*Rep/24.0_WP + b1 + b2 + b3*Rep/24.0_WP
          ! Particle response time
          tau=this%rho*p%d**2/(18.0_WP*fvisc*corr)
-         ! Return acceleration and optimal timestep size
-         acc=(fvel-p%vel)/tau+fstress/this%rho
-         opt_dt=tau/real(this%nstep,WP)
-       end block compute_drag
+         ! Return acceleration
+         dudt=(fvel-p%vel)/tau+fstress/this%rho+p%Acol
+       end block compute_dudt
+
+       ! Compute angular acceleration
+       compute_dwdt: block
+         use mathtools, only: Pi
+         real(WP) :: Ip
+         Ip = 0.1_WP*p%d**2
+         dwdt = p%Tcol/Ip
+       end block compute_dwdt
 
        ! Compute heat transfer (Gunn, 1978)
-       compute_heat: block
+       compute_dTdt: block
          use mathtools, only: Pi
          real(WP) :: Nu,Rep,tau
          real(WP), parameter :: Pr=0.71_WP
@@ -943,38 +1069,70 @@ contains
               Pr**(1.0_WP/3.0_WP))+(1.33_WP-2.4_WP*fVF+1.2_WP*fVF**2)*&
               Rep**(0.7_WP)*Pr**(1.0_WP/3.0_WP)
          dTdt=Nu/(3.0_WP*tau*Pr*this%Cp)*(fT-p%T)+fQ/(this%rho*this%Cp)
-       end block compute_heat
+       end block compute_dTdt
+
+       ! Deal with dimensionality
+       if (this%cfg%nx.eq.1) then
+          dxdt(1)=0.0_WP
+          dudt(1)=0.0_WP
+          dwdt(2)=0.0_WP
+          dwdt(3)=0.0_WP
+       end if
+       if (this%cfg%ny.eq.1) then
+          dxdt(2)=0.0_WP
+          dudt(2)=0.0_WP
+          dwdt(1)=0.0_WP
+          dwdt(3)=0.0_WP
+       end if
+       if (this%cfg%nz.eq.1) then
+          dxdt(3)=0.0_WP
+          dudt(3)=0.0_WP
+          dwdt(1)=0.0_WP
+          dwdt(2)=0.0_WP
+       end if
 
      end subroutine get_rhs
    
-   
-   !> Update particle volume fraction using our current particles
-   subroutine update_VF(this)
-      use mathtools, only: Pi
-      implicit none
-      class(lpt), intent(inout) :: this
-      integer :: i
-      real(WP) :: Vp
-      ! Reset volume fraction
-      this%VF=0.0_WP
-      ! Transfer particle volume
-      do i=1,this%np_
-         ! Skip inactive particle
-         if (this%p(i)%flag.eq.1.or.this%p(i)%id.eq.0) cycle
-         ! Transfer particle volume
-         Vp=Pi/6.0_WP*this%p(i)%d**3
-         call this%cfg%set_scalar(Sp=Vp,pos=this%p(i)%pos,i0=this%p(i)%ind(1),j0=this%p(i)%ind(2),k0=this%p(i)%ind(3),S=this%VF,bc='n')
-      end do
-      this%VF=this%VF/this%cfg%vol
-      ! Sum at boundaries
-      call this%cfg%syncsum(this%VF)
-      ! Apply volume filter
-      call this%filter(this%VF)
-    end subroutine update_VF
-   
-   
-    !> Laplacian filtering operation
-    subroutine filter(this,A)
+
+     !> Update particle volume fraction using our current particles
+     subroutine update_VF(this)
+       use mathtools, only: Pi
+       implicit none
+       class(lpt), intent(inout) :: this
+       integer :: i
+       real(WP) :: Vp
+       ! Reset volume fraction
+       this%VF=0.0_WP; this%VFU=0.0_WP; this%VFV=0.0_WP; this%VFW=0.0_WP
+       ! Transfer particle volume
+       do i=1,this%np_
+          ! Skip inactive particle
+          if (this%p(i)%flag.eq.1.or.this%p(i)%id.eq.0) cycle
+          ! Transfer particle volume
+          Vp=Pi/6.0_WP*this%p(i)%d**3
+          call this%cfg%set_scalar(Sp=Vp,pos=this%p(i)%pos,i0=this%p(i)%ind(1),j0=this%p(i)%ind(2),k0=this%p(i)%ind(3),S=this%VF,bc='n')
+          call this%cfg%set_scalar(Sp=Vp*this%p(i)%vel(1),pos=this%p(i)%pos,i0=this%p(i)%ind(1),j0=this%p(i)%ind(2),k0=this%p(i)%ind(3),S=this%VFU,bc='n')
+          call this%cfg%set_scalar(Sp=Vp*this%p(i)%vel(2),pos=this%p(i)%pos,i0=this%p(i)%ind(1),j0=this%p(i)%ind(2),k0=this%p(i)%ind(3),S=this%VFV,bc='n')
+          call this%cfg%set_scalar(Sp=Vp*this%p(i)%vel(3),pos=this%p(i)%pos,i0=this%p(i)%ind(1),j0=this%p(i)%ind(2),k0=this%p(i)%ind(3),S=this%VFW,bc='n')
+       end do
+       this%VF =this%VF /this%cfg%vol
+       this%VFU=this%VFU/this%cfg%vol
+       this%VFV=this%VFV/this%cfg%vol
+       this%VFW=this%VFW/this%cfg%vol
+       ! Sum at boundaries
+       call this%cfg%syncsum(this%VF )
+       call this%cfg%syncsum(this%VFU)
+       call this%cfg%syncsum(this%VFV)
+       call this%cfg%syncsum(this%VFW)
+       ! Apply volume filter
+       call this%filter(this%VF )
+       call this%filter(this%VFU)
+       call this%filter(this%VFV)
+       call this%filter(this%VFW)
+     end subroutine update_VF
+
+
+     !> Laplacian filtering operation
+     subroutine filter(this,A)
       implicit none
       class(lpt), intent(inout) :: this
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: A     !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
