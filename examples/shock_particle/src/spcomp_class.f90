@@ -240,6 +240,8 @@ contains
                &           +0.5_WP*(FQx(i,j,k,1)+abs(-FQx(i,j,k,1)))*sum(wenom*this%I(i-1:i+1,j,k))
                ! Centered internal energy flux
                !FQx(i,j,k,2)=FQx(i,j,k,1)*0.5_WP*sum(this%I(i-1:i,j,k))
+               ! Heat flux
+               FQx(i,j,k,2)=FQx(i,j,k,2)+0.5_WP*(this%DIFF(i-1,j,k)+this%DIFF(i,j,k))*this%dxi*(this%T(i,j,k)-this%T(i-1,j,k))
                ! Y fluxes
                ! WENO  mass flux
                w=weno_weight((abs(this%Q(i,j-1,k,1)-this%Q(i,j-2,k,1))+eps)/(abs(this%Q(i,j,k,1)-this%Q(i,j-1,k,1))+eps)); wenop=0.5_WP*[      -w,1.0_WP+2.0_WP*w,1.0_WP-w]
@@ -248,6 +250,8 @@ contains
                &            -0.5_WP*(this%V(i,j,k)-abs(this%V(i,j,k)))*sum(wenom*this%Q(i,j-1:j+1,k,1))
                ! Centered mass flux
                !FQy(i,j,k,1)=-this%V(i,j,k)*0.5_WP*sum(this%Q(i,j-1:j,k,1))
+               ! Heat flux
+               FQy(i,j,k,2)=FQy(i,j,k,2)+0.5_WP*(this%DIFF(i,j-1,k)+this%DIFF(i,j,k))*this%dyi*(this%T(i,j,k)-this%T(i,j-1,k))
                ! WENO internal energy flux
                w=weno_weight((abs(this%I(i,j-1,k)-this%I(i,j-2,k))+eps)/(abs(this%I(i,j,k)-this%I(i,j-1,k))+eps)); wenop=0.5_WP*[      -w,1.0_WP+2.0_WP*w,1.0_WP-w]
                w=weno_weight((abs(this%I(i,j+1,k)-this%I(i,j  ,k))+eps)/(abs(this%I(i,j,k)-this%I(i,j-1,k))+eps)); wenom=0.5_WP*[1.0_WP-w,1.0_WP+2.0_WP*w,      -w]
@@ -270,6 +274,8 @@ contains
                &           +0.5_WP*(FQz(i,j,k,1)+abs(-FQz(i,j,k,1)))*sum(wenom*this%I(i,j,k-1:k+1))
                ! Centered internal energy flux
                !FQz(i,j,k,2)=FQz(i,j,k,1)*0.5_WP*sum(this%I(i,j,k-1:k))
+               ! Heat flux
+               FQz(i,j,k,2)=FQz(i,j,k,2)+0.5_WP*(this%DIFF(i,j,k-1)+this%DIFF(i,j,k))*this%dzi*(this%T(i,j,k)-this%T(i,j,k-1))
             end do
          end do
       end do
@@ -391,12 +397,13 @@ contains
 
 
     !> Calculate divergence of stress for LPT solver
-   subroutine get_div_stress(this,divx,divy,divz)
+   subroutine get_div_stress(this,divx,divy,divz,divq)
       implicit none
       class(spcomp), intent(inout) :: this
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(out) :: divx !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(out) :: divy !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(out) :: divz !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(out) :: divq !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       real(WP), dimension(:,:,:,:), allocatable :: FQx,FQy,FQz
       integer :: i,j,k
       real(WP) :: div
@@ -405,11 +412,12 @@ contains
       divx=0.0_WP
       divy=0.0_WP
       divz=0.0_WP
+      divq=0.0_WP
        
       ! Allocate fluxes of conserved variables
-      allocate(FQx(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_,1:3)); FQx=0.0_WP
-      allocate(FQy(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_,1:3)); FQy=0.0_WP
-      allocate(FQz(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_,1:3)); FQz=0.0_WP
+      allocate(FQx(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_,1:4)); FQx=0.0_WP
+      allocate(FQy(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_,1:4)); FQy=0.0_WP
+      allocate(FQz(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_,1:4)); FQz=0.0_WP
 
       ! Compute cell-centered momentum fluxes
       do k=this%cfg%kmin_-1,this%cfg%kmax_
@@ -427,14 +435,19 @@ contains
       do k=this%cfg%kmin_,this%cfg%kmax_+1
          do j=this%cfg%jmin_,this%cfg%jmax_+1
             do i=this%cfg%imin_,this%cfg%imax_+1
+               ! Momentum fluxes
                FQy(i,j,k,1)=0.25_WP*sum(this%VISC(i-1:i,j-1:j,k))*(this%dyi*(this%U(i,j,k)-this%U(i,j-1,k))+this%dxi*(this%V(i,j,k)-this%V(i-1,j,k))); FQx(i,j,k,2)=FQy(i,j,k,1)
                FQz(i,j,k,2)=0.25_WP*sum(this%VISC(i,j-1:j,k-1:k))*(this%dzi*(this%V(i,j,k)-this%V(i,j,k-1))+this%dyi*(this%W(i,j,k)-this%W(i,j-1,k))); FQy(i,j,k,3)=FQz(i,j,k,2)
                FQx(i,j,k,3)=0.25_WP*sum(this%VISC(i-1:i,j,k-1:k))*(this%dxi*(this%W(i,j,k)-this%W(i-1,j,k))+this%dzi*(this%U(i,j,k)-this%U(i,j,k-1))); FQz(i,j,k,1)=FQx(i,j,k,3)
+               ! Heat fluxes
+               FQx(i,j,k,4)=0.5_WP*(this%DIFF(i-1,j,k)+this%DIFF(i,j,k))*this%dxi*(this%T(i,j,k)-this%T(i-1,j,k))
+               FQy(i,j,k,4)=0.5_WP*(this%DIFF(i,j-1,k)+this%DIFF(i,j,k))*this%dyi*(this%T(i,j,k)-this%T(i,j-1,k))
+               FQz(i,j,k,4)=0.5_WP*(this%DIFF(i,j,k-1)+this%DIFF(i,j,k))*this%dzi*(this%T(i,j,k)-this%T(i,j,k-1))
             end do
          end do
       end do
 
-      do i=1,3
+      do i=1,4
          call this%cfg%sync(FQx(:,:,:,i))
          call this%cfg%sync(FQy(:,:,:,i))
          call this%cfg%sync(FQz(:,:,:,i))
@@ -448,6 +461,7 @@ contains
                divx(i,j,k)=this%dxi*(FQx(i  ,j,k,1)-FQx(i-1,j,k,1))+this%dyi*(FQy(i,j+1,k,1)-FQy(i,j  ,k,1))+this%dzi*(FQz(i,j,k+1,1)-FQz(i,j,k  ,1))
                divy(i,j,k)=this%dxi*(FQx(i+1,j,k,2)-FQx(i  ,j,k,2))+this%dyi*(FQy(i,j  ,k,2)-FQy(i,j-1,k,2))+this%dzi*(FQz(i,j,k+1,2)-FQz(i,j,k  ,2))
                divz(i,j,k)=this%dxi*(FQx(i+1,j,k,3)-FQx(i  ,j,k,3))+this%dyi*(FQy(i,j+1,k,3)-FQy(i,j  ,k,3))+this%dzi*(FQz(i,j,k  ,3)-FQz(i,j,k-1,3))
+               divq(i,j,k)=this%dxi*(FQx(i+1,j,k,4)-FQx(i  ,j,k,4))+this%dyi*(FQy(i,j+1,k,4)-FQy(i,j  ,k,4))+this%dzi*(FQz(i,j,k+1,4)-FQz(i,j,k  ,4))
             end do
          end do
       end do
@@ -459,6 +473,7 @@ contains
       call this%cfg%sync(divx)
       call this%cfg%sync(divy)
       call this%cfg%sync(divz)
+      call this%cfg%sync(divq)
     end subroutine get_div_stress
    
    

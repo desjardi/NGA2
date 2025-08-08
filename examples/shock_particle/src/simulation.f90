@@ -29,15 +29,15 @@ module simulation
    
    !> Private work arrays
    real(WP), dimension(:,:,:,:,:), allocatable :: dQdt
-   real(WP), dimension(:,:,:)    , allocatable :: Ui,Vi,Wi,Ma,beta,visc,div
+   real(WP), dimension(:,:,:)    , allocatable :: Ui,Vi,Wi,Ma,beta,visc,visc_t,div
    real(WP), dimension(:,:,:)    , allocatable :: srcUlp,srcVlp,srcWlp,srcIlp
-   real(WP), dimension(:,:,:)    , allocatable :: stressx,stressy,stressz,dVFdt
+   real(WP), dimension(:,:,:)    , allocatable :: stressx,stressy,stressz,stressI,dVFdt
 
-   !> Constant kinematic viscosity
-   real(WP) :: cst_visc
+   !> Post-shock viscosity and temperature
+   real(WP) :: visc0,T0
 
    !> Equations of state
-   real(WP) :: Pinf,Gamma,Cv
+   real(WP) :: Pinf,Gamma,Cv,Prandtl
 
    !> Flow parameters
    real(WP) :: Ms,Xs
@@ -91,10 +91,23 @@ module simulation
    !> Calculate viscosities
    subroutine prepare_viscosities()
      implicit none
+     integer :: i,j,k
+     real(WP) :: S
+     ! Get viscosity from Sutherland's law
+     S=110.4_WP/273.15_WP*T0
+     do k=fs%cfg%kmino_,fs%cfg%kmaxo_
+        do j=fs%cfg%jmino_,fs%cfg%jmaxo_
+           do i=fs%cfg%imino_,fs%cfg%imaxo_
+              visc(i,j,k)=visc0*(T0+S)/(fs%T(i,j,k)+S)*(fs%T(i,j,k)/T0)**1.5_WP
+           end do
+        end do
+     end do
      ! Get LAD
-     call fs%get_viscartif(dt=time%dt,beta=beta); fs%BETA=fs%RHO*(beta         )
+     call fs%get_viscartif(dt=time%dt,beta=beta); fs%BETA=fs%Q(:,:,:,1)*beta
      ! Get eddy viscosity
-     call fs%get_vreman   (dt=time%dt,visc=visc); fs%VISC=fs%RHO*(visc+cst_visc)
+     call fs%get_vreman   (dt=time%dt,visc=visc_t); fs%VISC=fs%Q(:,:,:,1)*visc_t+visc
+     ! Recompute thermal conductivity
+     fs%diff=Gamma*Cv*fs%visc/Prandtl
    end subroutine prepare_viscosities
 
 
@@ -234,10 +247,12 @@ module simulation
         allocate(Ma     (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
         allocate(beta   (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
         allocate(visc   (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+        allocate(visc_t(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
         allocate(div    (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
         allocate(stressx(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
         allocate(stressy(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
         allocate(stressz(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+        allocate(stressI(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
         allocate(srcUlp (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
         allocate(srcVlp (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
         allocate(srcWlp (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
@@ -256,6 +271,8 @@ module simulation
         Pinf=0.0_WP
         ! Read in Gamma
         call param_read('Gamma',Gamma)
+        ! Read in Prandtl number
+        call param_read('Prandtl number',Prandtl)
         ! Read in shock Mach number and location
         call param_read('Shock Mach number',Ms)
         call param_read('Shock location',Xs)
@@ -271,8 +288,10 @@ module simulation
         u2=abs(u2-u1); M2=u2/sqrt(Gamma*p2/rho2); u1=0.0_WP; M1=u1/sqrt(Gamma*p1/rho1)
         ! Set heat capacities corresponding to a normalized pre-shock
         Cv=(p1+Pinf)/(rho1*(Gamma-1.0_WP))
+        ! Get reference temperature
+        T0=get_T(rho1,p1)
         ! Viscous parameters
-        call param_read('Reynolds number',Re); cst_visc=rho1*1.0_WP*u2/Re
+        call param_read('Reynolds number',Re); visc0=rho2*1.0_WP*u2/Re
         ! Output case info
         if (cfg%amRoot) then
            write(message,'("[Gas EOS]               =>  Gamma=",es12.5)')    Gamma; call log(message)
@@ -287,7 +306,7 @@ module simulation
            write(message,'("[Post-shock conditions] =>     u2=",es12.5)')       u2; call log(message)
            write(message,'("[Post-shock conditions] =>     M2=",es12.5)')       M2; call log(message)
            write(message,'("[Gas Reynolds]          =>     Re=",es12.5)')       Re; call log(message)
-           write(message,'("[Gas viscosity]         =>     mu=",es12.5)') cst_visc; call log(message)
+           write(message,'("[Gas viscosity]         =>     mu=",es12.5)')    visc0; call log(message)
         end if
       end block initialize_parameters
 
@@ -490,6 +509,7 @@ module simulation
          call ens_out%add_scalar('Mach',Ma)
          call ens_out%add_scalar('beta',beta)
          call ens_out%add_scalar('visc',visc)
+         call ens_out%add_scalar('visc_t',visc_t)
          call ens_out%add_scalar('div',div) 
          call ens_out%add_scalar('epsp',lp%VF)
          ! Output to ensight
@@ -515,8 +535,6 @@ module simulation
         call mfile%add_column(fs%Wmax,'Wmax')
         call mfile%add_column(fs%RHOmax,'max(RHO)')
         call mfile%add_column(fs%RHOmin,'min(RHO)')
-        call mfile%add_column(fs%Imax  ,'max(I)'  )
-        call mfile%add_column(fs%Imin  ,'min(I)'  )
         call mfile%add_column(fs%Pmax  ,'max(P)'  )
         call mfile%add_column(fs%Pmin  ,'min(P)'  )
         call mfile%add_column(fs%Tmax  ,'max(T)'  )
@@ -573,13 +591,14 @@ module simulation
     !> Perform an NGA2 simulation
     subroutine simulation_run
       implicit none
-      integer :: i
+      real(WP) :: cfl
 
       ! Perform time integration
       do while (.not.time%done())
 
          ! Increment time
-         call fs%get_cfl(time%dt,time%cfl)
+         call lp%get_cfl(time%dt,cflc=time%cfl,cfl=time%cfl)
+         call fs%get_cfl(time%dt,cfl); time%cfl=max(time%cfl,cfl)
          call time%adjust_dt()
          call time%increment()
 
@@ -591,12 +610,12 @@ module simulation
          call prepare_viscosities()
 
          ! Get divergence of stress
-         call fs%get_div_stress(stressx,stressy,stressz)
+         call fs%get_div_stress(stressx,stressy,stressz,stressI)
 
          ! Collide and advance particles
          call lp%collide(dt=time%dt)
          call lp%advance(dt=time%dt,U=fs%U,V=fs%V,W=fs%W,rho=fs%rho,visc=fs%visc,T=fs%T,C=fs%C,&
-              stress_x=stressx,stress_y=stressy,stress_z=stressz,srcU=srcUlp,srcV=srcVlp,srcW=srcWlp,srcI=srcIlp)
+              stress_x=stressx,stress_y=stressy,stress_z=stressz,heat_flux=stressI,srcU=srcUlp,srcV=srcVlp,srcW=srcWlp,srcI=srcIlp)
 
          ! Get rate-of-change of volume fraction
          dVFdt=(lp%VF-dVFdt)/time%dt
@@ -703,7 +722,7 @@ module simulation
       ! timetracker
       
       ! Deallocate work arrays
-      deallocate(dQdt,Ui,Vi,Wi,Ma,beta,visc,div,srcUlp,srcVlp,srcWlp,srcIlp,stressx,stressy,stressz,dVFdt)
+      deallocate(dQdt,Ui,Vi,Wi,Ma,beta,visc,visc_t,div,srcUlp,srcVlp,srcWlp,srcIlp,stressx,stressy,stressz,stressI,dVFdt)
       
    end subroutine simulation_final
    

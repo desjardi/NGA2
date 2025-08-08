@@ -11,8 +11,9 @@ nz :	1
 
 # Adimensional flow parameters
 Gamma : 1.4
+Prandtl number : 0.71
 Shock Mach number : 2
-Shock location :   1.5
+Shock location :   2.5
 Reynolds number : 1e5
 
 # Particle parameters
