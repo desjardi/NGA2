@@ -507,6 +507,9 @@ contains
          ! Advance shock-drop simulation
          call sd%step(dt=time%dt)
          
+         ! Transfer drops
+         !call sd%transfer()
+         
          ! Advance farfield simulation
          call ff%step(dt=time%dt)
          

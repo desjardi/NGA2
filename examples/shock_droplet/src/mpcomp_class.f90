@@ -132,6 +132,9 @@ module mpcomp_class
       procedure :: sync_volume_moments                    !< Helper subroutine that performs the sync for VF, BL, and BG
       procedure :: rhs                                    !< Compute rhs of our equations using standard fluxes
       procedure :: build_interface                        !< Build interface from volume moments
+      procedure :: sync_interface                         !< Synchronize interface across interprocessor boundaries
+      procedure :: reset_moments                          !< Reset volume moments from PLIC interface
+      procedure :: polygonize_interface                   !< Create polygonal representation of the interface
       procedure :: get_primitive                          !< Calculate phasic and mixture primitive variables from conserved variables
       procedure :: apply_relax                            !< Apply user-provided relaxation model in interfacial cells
       procedure :: get_viscartif                          !< Calculate artifical bulk kinematic viscosity
@@ -1104,7 +1107,7 @@ contains
       ! Start timer
       call this%tplic%start()
       
-      ! Perfrom PLICnet reconstruction of the interface
+      ! Perform PLICnet reconstruction of the interface
       plicnet_reconstruct: block
          use mathtools, only: normalize
          use plicnet,   only: get_normal,reflect_moments
@@ -1238,223 +1241,144 @@ contains
       end block plicnet_reconstruct
       
       ! Synchronize PLIC interface across boundaries
-      synchronize_interface: block
-         integer :: i,j,k
-         real(WP), dimension(1:4) :: plane
-         integer , dimension(2,3) :: send_range,recv_range
-         ! Synchronize in x
-         if (this%cfg%nx.eq.1) then
-            do k=this%cfg%kmino_,this%cfg%kmaxo_; do j=this%cfg%jmino_,this%cfg%jmaxo_; do i=this%cfg%imino_,this%cfg%imaxo_
-               call copy(this%PLIC(i,j,k),this%PLIC(this%cfg%imin,j,k))
-            end do; end do; end do
-         else
-            ! Send minus
-            send_range(1:2,1)=[this%cfg%imin_   ,this%cfg%imin_ +this%cfg%no-1]
-            send_range(1:2,2)=[this%cfg%jmino_  ,this%cfg%jmaxo_              ]
-            send_range(1:2,3)=[this%cfg%kmino_  ,this%cfg%kmaxo_              ]
-            recv_range(1:2,1)=[this%cfg%imax_ +1,this%cfg%imaxo_              ]
-            recv_range(1:2,2)=[this%cfg%jmino_  ,this%cfg%jmaxo_              ]
-            recv_range(1:2,3)=[this%cfg%kmino_  ,this%cfg%kmaxo_              ]
-            call sync_side(send_range,recv_range,0,-1)
-            ! Send plus
-            send_range(1:2,1)=[this%cfg%imax_ -this%cfg%no+1,this%cfg%imax_   ]
-            send_range(1:2,2)=[this%cfg%jmino_              ,this%cfg%jmaxo_  ]
-            send_range(1:2,3)=[this%cfg%kmino_              ,this%cfg%kmaxo_  ]
-            recv_range(1:2,1)=[this%cfg%imino_              ,this%cfg%imin_ -1]
-            recv_range(1:2,2)=[this%cfg%jmino_              ,this%cfg%jmaxo_  ]
-            recv_range(1:2,3)=[this%cfg%kmino_              ,this%cfg%kmaxo_  ]
-            call sync_side(send_range,recv_range,0,+1)
-         end if
-         ! Synchronize in y
-         if (this%cfg%ny.eq.1) then
-            do k=this%cfg%kmino_,this%cfg%kmaxo_; do j=this%cfg%jmino_,this%cfg%jmaxo_; do i=this%cfg%imino_,this%cfg%imaxo_
-               call copy(this%PLIC(i,j,k),this%PLIC(i,this%cfg%jmin,k))
-            end do; end do; end do
-         else
-            ! Send minus side
-            send_range(1:2,1)=[this%cfg%imino_  ,this%cfg%imaxo_              ]
-            send_range(1:2,2)=[this%cfg%jmin_   ,this%cfg%jmin_ +this%cfg%no-1]
-            send_range(1:2,3)=[this%cfg%kmino_  ,this%cfg%kmaxo_              ]
-            recv_range(1:2,1)=[this%cfg%imino_  ,this%cfg%imaxo_              ]
-            recv_range(1:2,2)=[this%cfg%jmax_ +1,this%cfg%jmaxo_              ]
-            recv_range(1:2,3)=[this%cfg%kmino_  ,this%cfg%kmaxo_              ]
-            call sync_side(send_range,recv_range,1,-1)
-            ! Send plus side
-            send_range(1:2,1)=[this%cfg%imino_              ,this%cfg%imaxo_  ]
-            send_range(1:2,2)=[this%cfg%jmax_ -this%cfg%no+1,this%cfg%jmax_   ]
-            send_range(1:2,3)=[this%cfg%kmino_              ,this%cfg%kmaxo_  ]
-            recv_range(1:2,1)=[this%cfg%imino_              ,this%cfg%imaxo_  ]
-            recv_range(1:2,2)=[this%cfg%jmino_              ,this%cfg%jmin_ -1]
-            recv_range(1:2,3)=[this%cfg%kmino_              ,this%cfg%kmaxo_  ]
-            call sync_side(send_range,recv_range,1,+1)
-         end if
-         ! Synchronize in z
-         if (this%cfg%nz.eq.1) then
-            do k=this%cfg%kmino_,this%cfg%kmaxo_; do j=this%cfg%jmino_,this%cfg%jmaxo_; do i=this%cfg%imino_,this%cfg%imaxo_
-               call copy(this%PLIC(i,j,k),this%PLIC(i,j,this%cfg%kmin))
-            end do; end do; end do
-         else
-            ! Send minus side
-            send_range(1:2,1)=[this%cfg%imino_  ,this%cfg%imaxo_              ]
-            send_range(1:2,2)=[this%cfg%jmino_  ,this%cfg%jmaxo_              ]
-            send_range(1:2,3)=[this%cfg%kmin_   ,this%cfg%kmin_ +this%cfg%no-1]
-            recv_range(1:2,1)=[this%cfg%imino_  ,this%cfg%imaxo_              ]
-            recv_range(1:2,2)=[this%cfg%jmino_  ,this%cfg%jmaxo_              ]
-            recv_range(1:2,3)=[this%cfg%kmax_ +1,this%cfg%kmaxo_              ]
-            call sync_side(send_range,recv_range,2,-1)
-            ! Send plus side
-            send_range(1:2,1)=[this%cfg%imino_              ,this%cfg%imaxo_  ]
-            send_range(1:2,2)=[this%cfg%jmino_              ,this%cfg%jmaxo_  ]
-            send_range(1:2,3)=[this%cfg%kmax_ -this%cfg%no+1,this%cfg%kmax_   ]
-            recv_range(1:2,1)=[this%cfg%imino_              ,this%cfg%imaxo_  ]
-            recv_range(1:2,2)=[this%cfg%jmino_              ,this%cfg%jmaxo_  ]
-            recv_range(1:2,3)=[this%cfg%kmino_              ,this%cfg%kmin_ -1]
-            call sync_side(send_range,recv_range,2,+1)
-         end if
-         ! Fix plane position if we are periodic in x
-         if (this%cfg%xper.and.this%cfg%iproc.eq.1) then
-            do k=this%cfg%kmino_,this%cfg%kmaxo_; do j=this%cfg%jmino_,this%cfg%jmaxo_; do i=this%cfg%imino,this%cfg%imin-1
-               plane=getPlane(this%PLIC(i,j,k),0)
-               plane(4)=plane(4)-plane(1)*this%cfg%xL
-               call setPlane(this%PLIC(i,j,k),0,plane(1:3),plane(4))
-            end do; end do; end do
-         end if
-         if (this%cfg%xper.and.this%cfg%iproc.eq.this%cfg%npx) then
-            do k=this%cfg%kmino_,this%cfg%kmaxo_; do j=this%cfg%jmino_,this%cfg%jmaxo_; do i=this%cfg%imax+1,this%cfg%imaxo
-               plane=getPlane(this%PLIC(i,j,k),0)
-               plane(4)=plane(4)+plane(1)*this%cfg%xL
-               call setPlane(this%PLIC(i,j,k),0,plane(1:3),plane(4))
-            end do; end do; end do
-         end if
-         ! Fix plane position if we are periodic in y
-         if (this%cfg%yper.and.this%cfg%jproc.eq.1) then
-            do k=this%cfg%kmino_,this%cfg%kmaxo_; do j=this%cfg%jmino,this%cfg%jmin-1; do i=this%cfg%imino_,this%cfg%imaxo_
-               plane=getPlane(this%PLIC(i,j,k),0)
-               plane(4)=plane(4)-plane(2)*this%cfg%yL
-               call setPlane(this%PLIC(i,j,k),0,plane(1:3),plane(4))
-            end do; end do; end do
-         end if
-         if (this%cfg%yper.and.this%cfg%jproc.eq.this%cfg%npy) then
-            do k=this%cfg%kmino_,this%cfg%kmaxo_; do j=this%cfg%jmax+1,this%cfg%jmaxo; do i=this%cfg%imino_,this%cfg%imaxo_
-               plane=getPlane(this%PLIC(i,j,k),0)
-               plane(4)=plane(4)+plane(2)*this%cfg%yL
-               call setPlane(this%PLIC(i,j,k),0,plane(1:3),plane(4))
-            end do; end do; end do
-         end if
-         ! Fix plane position if we are periodic in z
-         if (this%cfg%zper.and.this%cfg%kproc.eq.1) then
-            do k=this%cfg%kmino,this%cfg%kmin-1; do j=this%cfg%jmino_,this%cfg%jmaxo_; do i=this%cfg%imino_,this%cfg%imaxo_
-               plane=getPlane(this%PLIC(i,j,k),0)
-               plane(4)=plane(4)-plane(3)*this%cfg%zL
-               call setPlane(this%PLIC(i,j,k),0,plane(1:3),plane(4))
-            end do; end do; end do
-         end if
-         if (this%cfg%zper.and.this%cfg%kproc.eq.this%cfg%npz) then
-            do k=this%cfg%kmax+1,this%cfg%kmaxo; do j=this%cfg%jmino_,this%cfg%jmaxo_; do i=this%cfg%imino_,this%cfg%imaxo_
-               plane=getPlane(this%PLIC(i,j,k),0)
-               plane(4)=plane(4)+plane(3)*this%cfg%zL
-               call setPlane(this%PLIC(i,j,k),0,plane(1:3),plane(4))
-            end do; end do; end do
-         end if
-      end block synchronize_interface
+      call this%sync_interface()
       
       ! Reset volume moments to match with reconstructed interface
-      reset_moments: block
-         integer :: i,j,k
-         type(RectCub_type) :: cell
-         type(SepVM_type)   :: separated_volume_moments
-         call new(cell)
-         call new(separated_volume_moments)
-         do k=this%cfg%kmino_,this%cfg%kmaxo_; do j=this%cfg%jmino_,this%cfg%jmaxo_; do i=this%cfg%imino_,this%cfg%imaxo_
-            ! Form the grid cell
-            call construct_2pt(cell,[this%cfg%x(i),this%cfg%y(j),this%cfg%z(k)],[this%cfg%x(i+1),this%cfg%y(j+1),this%cfg%z(k+1)])
-            ! Cut it by the current interface
-            call getNormMoments(cell,this%PLIC(i,j,k),separated_volume_moments)
-            ! Recover relevant moments
-            this%VF  (i,j,k)=getVolumePtr(separated_volume_moments,0)/this%cfg%vol(i,j,k)
-            this%BL(:,i,j,k)= getCentroid(separated_volume_moments,0)
-            this%BG(:,i,j,k)= getCentroid(separated_volume_moments,1)
-            ! Clean up
-            if (this%VF(i,j,k).lt.VFlo) then
-               this%VF  (i,j,k)=0.0_WP
-               this%BL(:,i,j,k)=[this%cfg%xm(i),this%cfg%ym(j),this%cfg%zm(k)]
-               this%BG(:,i,j,k)=[this%cfg%xm(i),this%cfg%ym(j),this%cfg%zm(k)]
-            end if
-            if (this%VF(i,j,k).gt.VFhi) then
-               this%VF  (i,j,k)=1.0_WP
-               this%BL(:,i,j,k)=[this%cfg%xm(i),this%cfg%ym(j),this%cfg%zm(k)]
-               this%BG(:,i,j,k)=[this%cfg%xm(i),this%cfg%ym(j),this%cfg%zm(k)]
-            end if
-         end do; end do; end do
-      end block reset_moments
+      call this%reset_moments()
       
       ! Polygonize interface
-      polygonize_interface: block
-         integer :: i,j,k
-         type(RectCub_type) :: cell
-         real(WP), dimension(1:3,1:4) :: vert
-         real(WP), dimension(1:3) :: norm
-         ! Create a cell object
-         call new(cell)
-         ! Loop over full domain and form polygon
-         do k=this%cfg%kmino_,this%cfg%kmaxo_; do j=this%cfg%jmino_,this%cfg%jmaxo_; do i=this%cfg%imino_,this%cfg%imaxo_
-            ! Zero out the polygon
-            call zeroPolygon(this%interface_polygon(i,j,k))
-            ! Create polygons for cells with interfaces, zero for those without
-            if (this%VF(i,j,k).ge.VFlo.and.this%VF(i,j,k).le.VFhi) then
-               call construct_2pt(cell,[this%cfg%x(i),this%cfg%y(j),this%cfg%z(k)],[this%cfg%x(i+1),this%cfg%y(j+1),this%cfg%z(k+1)])
-               call getPoly(cell,this%PLIC(i,j,k),0,this%interface_polygon(i,j,k))
-            end if
-         end do; end do; end do
-         ! Find inferface between filled and empty cells on x-face
-         do k=this%cfg%kmino_,this%cfg%kmaxo_; do j=this%cfg%jmino_,this%cfg%jmaxo_; do i=this%cfg%imino_+1,this%cfg%imaxo_
-            if (this%VF(i,j,k).lt.VFlo.and.this%VF(i-1,j,k).gt.VFhi.or.this%VF(i,j,k).gt.VFhi.and.this%VF(i-1,j,k).lt.VFlo) then
-               norm=[sign(1.0_WP,0.5_WP-this%VF(i,j,k)),0.0_WP,0.0_WP]
-               call setNumberOfPlanes(this%PLIC(i,j,k),1)
-               call setPlane(this%PLIC(i,j,k),0,norm,sign(1.0_WP,0.5_WP-this%VF(i,j,k))*this%cfg%x(i))
-               vert(:,1)=[this%cfg%x(i),this%cfg%y(j  ),this%cfg%z(k  )]
-               vert(:,2)=[this%cfg%x(i),this%cfg%y(j+1),this%cfg%z(k  )]
-               vert(:,3)=[this%cfg%x(i),this%cfg%y(j+1),this%cfg%z(k+1)]
-               vert(:,4)=[this%cfg%x(i),this%cfg%y(j  ),this%cfg%z(k+1)]
-               call construct(this%interface_polygon(i,j,k),4,vert)
-               call setPlaneOfExistence(this%interface_polygon(i,j,k),getPlane(this%PLIC(i,j,k),0))
-               if (this%VF(i,j,k).gt.VFhi) call reversePtOrdering(this%interface_polygon(i,j,k))
-            end if
-         end do; end do; end do
-         ! Find inferface between filled and empty cells on y-face
-         do k=this%cfg%kmino_,this%cfg%kmaxo_; do j=this%cfg%jmino_+1,this%cfg%jmaxo_; do i=this%cfg%imino_,this%cfg%imaxo_
-            if (this%VF(i,j,k).lt.VFlo.and.this%VF(i,j-1,k).gt.VFhi.or.this%VF(i,j,k).gt.VFhi.and.this%VF(i,j-1,k).lt.VFlo) then
-               norm=[0.0_WP,sign(1.0_WP,0.5_WP-this%VF(i,j,k)),0.0_WP]
-               call setNumberOfPlanes(this%PLIC(i,j,k),1)
-               call setPlane(this%PLIC(i,j,k),0,norm,sign(1.0_WP,0.5_WP-this%VF(i,j,k))*this%cfg%y(j))
-               vert(:,1)=[this%cfg%x(i  ),this%cfg%y(j),this%cfg%z(k  )]
-               vert(:,2)=[this%cfg%x(i  ),this%cfg%y(j),this%cfg%z(k+1)]
-               vert(:,3)=[this%cfg%x(i+1),this%cfg%y(j),this%cfg%z(k+1)]
-               vert(:,4)=[this%cfg%x(i+1),this%cfg%y(j),this%cfg%z(k  )]
-               call construct(this%interface_polygon(i,j,k),4,vert)
-               call setPlaneOfExistence(this%interface_polygon(i,j,k),getPlane(this%PLIC(i,j,k),0))
-               if (this%VF(i,j,k).gt.VFhi) call reversePtOrdering(this%interface_polygon(i,j,k))
-            end if
-         end do; end do; end do
-         ! Find inferface between filled and empty cells on z-face
-         do k=this%cfg%kmino_+1,this%cfg%kmaxo_; do j=this%cfg%jmino_,this%cfg%jmaxo_; do i=this%cfg%imino_,this%cfg%imaxo_
-            if (this%VF(i,j,k).lt.VFlo.and.this%VF(i,j,k-1).gt.VFhi.or.this%VF(i,j,k).gt.VFhi.and.this%VF(i,j,k-1).lt.VFlo) then
-               norm=[0.0_WP,0.0_WP,sign(1.0_WP,0.5_WP-this%VF(i,j,k))]
-               call setNumberOfPlanes(this%PLIC(i,j,k),1)
-               call setPlane(this%PLIC(i,j,k),0,norm,sign(1.0_WP,0.5_WP-this%VF(i,j,k))*this%cfg%z(k))
-               vert(:,1)=[this%cfg%x(i  ),this%cfg%y(j  ),this%cfg%z(k)]
-               vert(:,2)=[this%cfg%x(i+1),this%cfg%y(j  ),this%cfg%z(k)]
-               vert(:,3)=[this%cfg%x(i+1),this%cfg%y(j+1),this%cfg%z(k)]
-               vert(:,4)=[this%cfg%x(i  ),this%cfg%y(j+1),this%cfg%z(k)]
-               call construct(this%interface_polygon(i,j,k),4,vert)
-               call setPlaneOfExistence(this%interface_polygon(i,j,k),getPlane(this%PLIC(i,j,k),0))
-               if (this%VF(i,j,k).gt.VFhi) call reversePtOrdering(this%interface_polygon(i,j,k))
-            end if
-         end do; end do; end do
-      end block polygonize_interface
+      call this%polygonize_interface()
       
       ! Stop timer
       call this%tplic%stop()
+      
+   end subroutine build_interface
+   
+   
+   !> Synchronize interface across boundaries
+   subroutine sync_interface(this)
+      implicit none
+      class(mpcomp), intent(inout) :: this
+      integer :: i,j,k
+      real(WP), dimension(1:4) :: plane
+      integer , dimension(2,3) :: send_range,recv_range
+      
+      ! Synchronize in x
+      if (this%cfg%nx.eq.1) then
+         do k=this%cfg%kmino_,this%cfg%kmaxo_; do j=this%cfg%jmino_,this%cfg%jmaxo_; do i=this%cfg%imino_,this%cfg%imaxo_
+            call copy(this%PLIC(i,j,k),this%PLIC(this%cfg%imin,j,k))
+         end do; end do; end do
+      else
+         ! Send minus
+         send_range(1:2,1)=[this%cfg%imin_   ,this%cfg%imin_ +this%cfg%no-1]
+         send_range(1:2,2)=[this%cfg%jmino_  ,this%cfg%jmaxo_              ]
+         send_range(1:2,3)=[this%cfg%kmino_  ,this%cfg%kmaxo_              ]
+         recv_range(1:2,1)=[this%cfg%imax_ +1,this%cfg%imaxo_              ]
+         recv_range(1:2,2)=[this%cfg%jmino_  ,this%cfg%jmaxo_              ]
+         recv_range(1:2,3)=[this%cfg%kmino_  ,this%cfg%kmaxo_              ]
+         call sync_side(send_range,recv_range,0,-1)
+         ! Send plus
+         send_range(1:2,1)=[this%cfg%imax_ -this%cfg%no+1,this%cfg%imax_   ]
+         send_range(1:2,2)=[this%cfg%jmino_              ,this%cfg%jmaxo_  ]
+         send_range(1:2,3)=[this%cfg%kmino_              ,this%cfg%kmaxo_  ]
+         recv_range(1:2,1)=[this%cfg%imino_              ,this%cfg%imin_ -1]
+         recv_range(1:2,2)=[this%cfg%jmino_              ,this%cfg%jmaxo_  ]
+         recv_range(1:2,3)=[this%cfg%kmino_              ,this%cfg%kmaxo_  ]
+         call sync_side(send_range,recv_range,0,+1)
+      end if
+      
+      ! Synchronize in y
+      if (this%cfg%ny.eq.1) then
+         do k=this%cfg%kmino_,this%cfg%kmaxo_; do j=this%cfg%jmino_,this%cfg%jmaxo_; do i=this%cfg%imino_,this%cfg%imaxo_
+            call copy(this%PLIC(i,j,k),this%PLIC(i,this%cfg%jmin,k))
+         end do; end do; end do
+      else
+         ! Send minus side
+         send_range(1:2,1)=[this%cfg%imino_  ,this%cfg%imaxo_              ]
+         send_range(1:2,2)=[this%cfg%jmin_   ,this%cfg%jmin_ +this%cfg%no-1]
+         send_range(1:2,3)=[this%cfg%kmino_  ,this%cfg%kmaxo_              ]
+         recv_range(1:2,1)=[this%cfg%imino_  ,this%cfg%imaxo_              ]
+         recv_range(1:2,2)=[this%cfg%jmax_ +1,this%cfg%jmaxo_              ]
+         recv_range(1:2,3)=[this%cfg%kmino_  ,this%cfg%kmaxo_              ]
+         call sync_side(send_range,recv_range,1,-1)
+         ! Send plus side
+         send_range(1:2,1)=[this%cfg%imino_              ,this%cfg%imaxo_  ]
+         send_range(1:2,2)=[this%cfg%jmax_ -this%cfg%no+1,this%cfg%jmax_   ]
+         send_range(1:2,3)=[this%cfg%kmino_              ,this%cfg%kmaxo_  ]
+         recv_range(1:2,1)=[this%cfg%imino_              ,this%cfg%imaxo_  ]
+         recv_range(1:2,2)=[this%cfg%jmino_              ,this%cfg%jmin_ -1]
+         recv_range(1:2,3)=[this%cfg%kmino_              ,this%cfg%kmaxo_  ]
+         call sync_side(send_range,recv_range,1,+1)
+      end if
+      
+      ! Synchronize in z
+      if (this%cfg%nz.eq.1) then
+         do k=this%cfg%kmino_,this%cfg%kmaxo_; do j=this%cfg%jmino_,this%cfg%jmaxo_; do i=this%cfg%imino_,this%cfg%imaxo_
+            call copy(this%PLIC(i,j,k),this%PLIC(i,j,this%cfg%kmin))
+         end do; end do; end do
+      else
+         ! Send minus side
+         send_range(1:2,1)=[this%cfg%imino_  ,this%cfg%imaxo_              ]
+         send_range(1:2,2)=[this%cfg%jmino_  ,this%cfg%jmaxo_              ]
+         send_range(1:2,3)=[this%cfg%kmin_   ,this%cfg%kmin_ +this%cfg%no-1]
+         recv_range(1:2,1)=[this%cfg%imino_  ,this%cfg%imaxo_              ]
+         recv_range(1:2,2)=[this%cfg%jmino_  ,this%cfg%jmaxo_              ]
+         recv_range(1:2,3)=[this%cfg%kmax_ +1,this%cfg%kmaxo_              ]
+         call sync_side(send_range,recv_range,2,-1)
+         ! Send plus side
+         send_range(1:2,1)=[this%cfg%imino_              ,this%cfg%imaxo_  ]
+         send_range(1:2,2)=[this%cfg%jmino_              ,this%cfg%jmaxo_  ]
+         send_range(1:2,3)=[this%cfg%kmax_ -this%cfg%no+1,this%cfg%kmax_   ]
+         recv_range(1:2,1)=[this%cfg%imino_              ,this%cfg%imaxo_  ]
+         recv_range(1:2,2)=[this%cfg%jmino_              ,this%cfg%jmaxo_  ]
+         recv_range(1:2,3)=[this%cfg%kmino_              ,this%cfg%kmin_ -1]
+         call sync_side(send_range,recv_range,2,+1)
+      end if
+      ! Fix plane position if we are periodic in x
+      if (this%cfg%xper.and.this%cfg%iproc.eq.1) then
+         do k=this%cfg%kmino_,this%cfg%kmaxo_; do j=this%cfg%jmino_,this%cfg%jmaxo_; do i=this%cfg%imino,this%cfg%imin-1
+            plane=getPlane(this%PLIC(i,j,k),0)
+            plane(4)=plane(4)-plane(1)*this%cfg%xL
+            call setPlane(this%PLIC(i,j,k),0,plane(1:3),plane(4))
+         end do; end do; end do
+      end if
+      if (this%cfg%xper.and.this%cfg%iproc.eq.this%cfg%npx) then
+         do k=this%cfg%kmino_,this%cfg%kmaxo_; do j=this%cfg%jmino_,this%cfg%jmaxo_; do i=this%cfg%imax+1,this%cfg%imaxo
+            plane=getPlane(this%PLIC(i,j,k),0)
+            plane(4)=plane(4)+plane(1)*this%cfg%xL
+            call setPlane(this%PLIC(i,j,k),0,plane(1:3),plane(4))
+         end do; end do; end do
+      end if
+      ! Fix plane position if we are periodic in y
+      if (this%cfg%yper.and.this%cfg%jproc.eq.1) then
+         do k=this%cfg%kmino_,this%cfg%kmaxo_; do j=this%cfg%jmino,this%cfg%jmin-1; do i=this%cfg%imino_,this%cfg%imaxo_
+            plane=getPlane(this%PLIC(i,j,k),0)
+            plane(4)=plane(4)-plane(2)*this%cfg%yL
+            call setPlane(this%PLIC(i,j,k),0,plane(1:3),plane(4))
+         end do; end do; end do
+      end if
+      if (this%cfg%yper.and.this%cfg%jproc.eq.this%cfg%npy) then
+         do k=this%cfg%kmino_,this%cfg%kmaxo_; do j=this%cfg%jmax+1,this%cfg%jmaxo; do i=this%cfg%imino_,this%cfg%imaxo_
+            plane=getPlane(this%PLIC(i,j,k),0)
+            plane(4)=plane(4)+plane(2)*this%cfg%yL
+            call setPlane(this%PLIC(i,j,k),0,plane(1:3),plane(4))
+         end do; end do; end do
+      end if
+      ! Fix plane position if we are periodic in z
+      if (this%cfg%zper.and.this%cfg%kproc.eq.1) then
+         do k=this%cfg%kmino,this%cfg%kmin-1; do j=this%cfg%jmino_,this%cfg%jmaxo_; do i=this%cfg%imino_,this%cfg%imaxo_
+            plane=getPlane(this%PLIC(i,j,k),0)
+            plane(4)=plane(4)-plane(3)*this%cfg%zL
+            call setPlane(this%PLIC(i,j,k),0,plane(1:3),plane(4))
+         end do; end do; end do
+      end if
+      if (this%cfg%zper.and.this%cfg%kproc.eq.this%cfg%npz) then
+         do k=this%cfg%kmax+1,this%cfg%kmaxo; do j=this%cfg%jmino_,this%cfg%jmaxo_; do i=this%cfg%imino_,this%cfg%imaxo_
+            plane=getPlane(this%PLIC(i,j,k),0)
+            plane(4)=plane(4)+plane(3)*this%cfg%zL
+            call setPlane(this%PLIC(i,j,k),0,plane(1:3),plane(4))
+         end do; end do; end do
+      end if
       
    contains
       
@@ -1518,7 +1442,116 @@ contains
          call MPI_SENDRECV(dataPtr(a_send_buffer),my_size_small,MPI_BYTE,idst,0,dataPtr(a_receive_buffer),incoming_size_small,MPI_BYTE,isrc,0,this%cfg%comm,status,ierr)
       end subroutine sync_ByteBuffer
       
-   end subroutine build_interface
+   end subroutine sync_interface
+   
+   
+   !> Reset volume moments to match with reconstructed interface
+   subroutine reset_moments(this)
+      implicit none
+      class(mpcomp), intent(inout) :: this
+      integer :: i,j,k
+      type(RectCub_type) :: cell
+      type(SepVM_type)   :: separated_volume_moments
+      ! Allocate IRL objects
+      call new(cell)
+      call new(separated_volume_moments)
+      ! Loop over domain with overlap
+      do k=this%cfg%kmino_,this%cfg%kmaxo_; do j=this%cfg%jmino_,this%cfg%jmaxo_; do i=this%cfg%imino_,this%cfg%imaxo_
+         ! Form the grid cell
+         call construct_2pt(cell,[this%cfg%x(i),this%cfg%y(j),this%cfg%z(k)],[this%cfg%x(i+1),this%cfg%y(j+1),this%cfg%z(k+1)])
+         ! Cut it by the current interface
+         call getNormMoments(cell,this%PLIC(i,j,k),separated_volume_moments)
+         ! Recover relevant moments
+         this%VF  (i,j,k)=getVolumePtr(separated_volume_moments,0)/this%cfg%vol(i,j,k)
+         this%BL(:,i,j,k)= getCentroid(separated_volume_moments,0)
+         this%BG(:,i,j,k)= getCentroid(separated_volume_moments,1)
+         ! Clean up
+         if (this%VF(i,j,k).lt.VFlo) then
+            this%VF  (i,j,k)=0.0_WP
+            this%BL(:,i,j,k)=[this%cfg%xm(i),this%cfg%ym(j),this%cfg%zm(k)]
+            this%BG(:,i,j,k)=[this%cfg%xm(i),this%cfg%ym(j),this%cfg%zm(k)]
+         end if
+         if (this%VF(i,j,k).gt.VFhi) then
+            this%VF  (i,j,k)=1.0_WP
+            this%BL(:,i,j,k)=[this%cfg%xm(i),this%cfg%ym(j),this%cfg%zm(k)]
+            this%BG(:,i,j,k)=[this%cfg%xm(i),this%cfg%ym(j),this%cfg%zm(k)]
+         end if
+      end do; end do; end do
+   end subroutine reset_moments
+   
+   
+   !> Polygonize interface
+   subroutine polygonize_interface(this)
+      implicit none
+      class(mpcomp), intent(inout) :: this
+      integer :: i,j,k
+      type(RectCub_type) :: cell
+      real(WP), dimension(1:3,1:4) :: vert
+      real(WP), dimension(1:3) :: norm
+      
+      ! Create a cell object
+      call new(cell)
+      
+      ! Loop over full domain and form polygon
+      do k=this%cfg%kmino_,this%cfg%kmaxo_; do j=this%cfg%jmino_,this%cfg%jmaxo_; do i=this%cfg%imino_,this%cfg%imaxo_
+         ! Zero out the polygon
+         call zeroPolygon(this%interface_polygon(i,j,k))
+         ! Create polygons for cells with interfaces, zero for those without
+         if (this%VF(i,j,k).ge.VFlo.and.this%VF(i,j,k).le.VFhi) then
+            call construct_2pt(cell,[this%cfg%x(i),this%cfg%y(j),this%cfg%z(k)],[this%cfg%x(i+1),this%cfg%y(j+1),this%cfg%z(k+1)])
+            call getPoly(cell,this%PLIC(i,j,k),0,this%interface_polygon(i,j,k))
+         end if
+      end do; end do; end do
+      
+      ! Find inferface between filled and empty cells on x-face
+      do k=this%cfg%kmino_,this%cfg%kmaxo_; do j=this%cfg%jmino_,this%cfg%jmaxo_; do i=this%cfg%imino_+1,this%cfg%imaxo_
+         if (this%VF(i,j,k).lt.VFlo.and.this%VF(i-1,j,k).gt.VFhi.or.this%VF(i,j,k).gt.VFhi.and.this%VF(i-1,j,k).lt.VFlo) then
+            norm=[sign(1.0_WP,0.5_WP-this%VF(i,j,k)),0.0_WP,0.0_WP]
+            call setNumberOfPlanes(this%PLIC(i,j,k),1)
+            call setPlane(this%PLIC(i,j,k),0,norm,sign(1.0_WP,0.5_WP-this%VF(i,j,k))*this%cfg%x(i))
+            vert(:,1)=[this%cfg%x(i),this%cfg%y(j  ),this%cfg%z(k  )]
+            vert(:,2)=[this%cfg%x(i),this%cfg%y(j+1),this%cfg%z(k  )]
+            vert(:,3)=[this%cfg%x(i),this%cfg%y(j+1),this%cfg%z(k+1)]
+            vert(:,4)=[this%cfg%x(i),this%cfg%y(j  ),this%cfg%z(k+1)]
+            call construct(this%interface_polygon(i,j,k),4,vert)
+            call setPlaneOfExistence(this%interface_polygon(i,j,k),getPlane(this%PLIC(i,j,k),0))
+            if (this%VF(i,j,k).gt.VFhi) call reversePtOrdering(this%interface_polygon(i,j,k))
+         end if
+      end do; end do; end do
+      
+      ! Find inferface between filled and empty cells on y-face
+      do k=this%cfg%kmino_,this%cfg%kmaxo_; do j=this%cfg%jmino_+1,this%cfg%jmaxo_; do i=this%cfg%imino_,this%cfg%imaxo_
+         if (this%VF(i,j,k).lt.VFlo.and.this%VF(i,j-1,k).gt.VFhi.or.this%VF(i,j,k).gt.VFhi.and.this%VF(i,j-1,k).lt.VFlo) then
+            norm=[0.0_WP,sign(1.0_WP,0.5_WP-this%VF(i,j,k)),0.0_WP]
+            call setNumberOfPlanes(this%PLIC(i,j,k),1)
+            call setPlane(this%PLIC(i,j,k),0,norm,sign(1.0_WP,0.5_WP-this%VF(i,j,k))*this%cfg%y(j))
+            vert(:,1)=[this%cfg%x(i  ),this%cfg%y(j),this%cfg%z(k  )]
+            vert(:,2)=[this%cfg%x(i  ),this%cfg%y(j),this%cfg%z(k+1)]
+            vert(:,3)=[this%cfg%x(i+1),this%cfg%y(j),this%cfg%z(k+1)]
+            vert(:,4)=[this%cfg%x(i+1),this%cfg%y(j),this%cfg%z(k  )]
+            call construct(this%interface_polygon(i,j,k),4,vert)
+            call setPlaneOfExistence(this%interface_polygon(i,j,k),getPlane(this%PLIC(i,j,k),0))
+            if (this%VF(i,j,k).gt.VFhi) call reversePtOrdering(this%interface_polygon(i,j,k))
+         end if
+      end do; end do; end do
+      
+      ! Find inferface between filled and empty cells on z-face
+      do k=this%cfg%kmino_+1,this%cfg%kmaxo_; do j=this%cfg%jmino_,this%cfg%jmaxo_; do i=this%cfg%imino_,this%cfg%imaxo_
+         if (this%VF(i,j,k).lt.VFlo.and.this%VF(i,j,k-1).gt.VFhi.or.this%VF(i,j,k).gt.VFhi.and.this%VF(i,j,k-1).lt.VFlo) then
+            norm=[0.0_WP,0.0_WP,sign(1.0_WP,0.5_WP-this%VF(i,j,k))]
+            call setNumberOfPlanes(this%PLIC(i,j,k),1)
+            call setPlane(this%PLIC(i,j,k),0,norm,sign(1.0_WP,0.5_WP-this%VF(i,j,k))*this%cfg%z(k))
+            vert(:,1)=[this%cfg%x(i  ),this%cfg%y(j  ),this%cfg%z(k)]
+            vert(:,2)=[this%cfg%x(i+1),this%cfg%y(j  ),this%cfg%z(k)]
+            vert(:,3)=[this%cfg%x(i+1),this%cfg%y(j+1),this%cfg%z(k)]
+            vert(:,4)=[this%cfg%x(i  ),this%cfg%y(j+1),this%cfg%z(k)]
+            call construct(this%interface_polygon(i,j,k),4,vert)
+            call setPlaneOfExistence(this%interface_polygon(i,j,k),getPlane(this%PLIC(i,j,k),0))
+            if (this%VF(i,j,k).gt.VFhi) call reversePtOrdering(this%interface_polygon(i,j,k))
+         end if
+      end do; end do; end do
+      
+   end subroutine polygonize_interface
    
    
    !> Calculate all primitive and mixture variables from updated conserved variables

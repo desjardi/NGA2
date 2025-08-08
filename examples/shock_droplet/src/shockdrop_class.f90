@@ -52,6 +52,7 @@ module shockdrop_class
       procedure :: initialize                      !< Initialize shock-drop simulation
       procedure :: step                            !< Advance shock-drop simulation by one time step
       procedure, private :: postproc               !< Postprocess shock-drop case
+      procedure :: transfer                        !< Transfer droplets
       procedure :: output_monitor                  !< Monitoring for shock-drop case
       procedure :: output_ensight                  !< Ensight output for shock-drop case
       procedure, private :: prepare_viscosities    !< Prepare viscosities
@@ -79,7 +80,7 @@ contains
       do n=1,this%ccl%struct(1)%n_
          ! Get cell index
          i=this%ccl%struct(1)%map(1,n); j=this%ccl%struct(1)%map(2,n); k=this%ccl%struct(1)%map(3,n)
-         ! Increement volume
+         ! Increment volume
          this%Vcore=this%Vcore+this%fs%VF(i,j,k)*this%fs%cfg%vol(i,j,k)
          ! Increment mass
          this%Mcore=this%Mcore+this%fs%Q(i,j,k,1)*this%fs%cfg%vol(i,j,k)
@@ -118,6 +119,97 @@ contains
          same_label=.true.
       end function same_label
    end subroutine postproc
+   
+   
+   !> Transfer drops
+   subroutine transfer(this)
+      use mpi_f08,  only: MPI_ALLREDUCE,MPI_SUM,MPI_IN_PLACE
+      use parallel, only: MPI_REAL_WP
+      use irl_fortran_interface, only: setPlane,zeroPolygon
+      implicit none
+      class(shockdrop), intent(inout) :: this
+      integer :: i,j,k,n,m,ierr,nremoved
+      real(WP), dimension(:), allocatable :: dvol
+      real(WP), parameter :: vol_coeff=2.0_WP
+      ! Update CCL
+      call this%ccl%build(make_label,same_label)
+      ! Allocate volume array
+      allocate(dvol(1:this%ccl%nstruct)); dvol=0.0_WP
+      ! Loop over individual structures
+      do n=1,this%ccl%nstruct
+         ! Loop over cells in structure and accumulate volume
+         do m=1,this%ccl%struct(n)%n_
+            ! Get cell index
+            i=this%ccl%struct(n)%map(1,m); j=this%ccl%struct(n)%map(2,m); k=this%ccl%struct(n)%map(3,m)
+            ! Increment volume
+            dvol(n)=dvol(n)+this%fs%VF(i,j,k)*this%fs%cfg%vol(i,j,k)
+         end do
+      end do
+      call MPI_ALLREDUCE(MPI_IN_PLACE,dvol,this%ccl%nstruct,MPI_REAL_WP,MPI_SUM,this%fs%cfg%comm,ierr)
+      ! Now traverse all structures again
+      nremoved=0
+      do n=1,this%ccl%nstruct
+         ! Check if volume is small enough for transfer
+         if (dvol(n).lt.vol_coeff*this%fs%vol) then
+            ! Increment counter
+            nremoved=nremoved+1
+            ! Perform transfer
+            !
+            ! Remove drop from VOF representation
+            do m=1,this%ccl%struct(n)%n_
+               ! Get cell index
+               i=this%ccl%struct(n)%map(1,m); j=this%ccl%struct(n)%map(2,m); k=this%ccl%struct(n)%map(3,m)
+               ! Zero out Q(1) and Q(3)
+               this%fs%Q(i,j,k,1)=0.0_WP
+               this%fs%Q(i,j,k,3)=0.0_WP
+               ! Rescale Q(2) and Q(4)
+               if (this%fs%VF(i,j,k).lt.0.99_WP) then
+                  this%fs%Q(i,j,k,2)=this%fs%Q(i,j,k,2)/(1.0_WP-this%fs%VF(i,j,k))
+                  this%fs%Q(i,j,k,4)=this%fs%Q(i,j,k,4)/(1.0_WP-this%fs%VF(i,j,k))
+               else
+                  ! Too little gas to trust local properties, rebuild from neighbors instead
+                  this%fs%Q(i,j,k,2)=sum((1.0_WP-this%fs%VF(i-1:i+1,j-1:j+1,k-1:k+1))*this%fs%RHOG(i-1:i+1,j-1:j+1,k-1:k+1))/sum((1.0_WP-this%fs%VF(i-1:i+1,j-1:j+1,k-1:k+1)))
+                  this%fs%Q(i,j,k,4)=sum((1.0_WP-this%fs%VF(i-1:i+1,j-1:j+1,k-1:k+1))*this%fs%RHOG(i-1:i+1,j-1:j+1,k-1:k+1)*this%fs%IG(i-1:i+1,j-1:j+1,k-1:k+1))/sum((1.0_WP-this%fs%VF(i-1:i+1,j-1:j+1,k-1:k+1)))
+               end if
+               ! Remove liquid from volume moments
+               this%fs%VF  (i,j,k)=0.0_WP
+               this%fs%BL(:,i,j,k)=[this%fs%cfg%xm(i),this%fs%cfg%ym(j),this%fs%cfg%zm(k)]
+               this%fs%BG(:,i,j,k)=[this%fs%cfg%xm(i),this%fs%cfg%ym(j),this%fs%cfg%zm(k)]
+               ! Adjust PLIC interface
+               call setPlane(this%fs%PLIC(i,j,k),0,[0.0_WP,0.0_WP,0.0_WP],sign(1.0_WP,this%fs%VF(i,j,k)-0.5_WP))
+               ! Remove polygon
+               call zeroPolygon(this%fs%interface_polygon(i,j,k))
+            end do
+         end if
+      end do
+      ! Communicate conserved variables and volume moments
+      call this%fs%cfg%sync(this%fs%Q(:,:,:,1))
+      call this%fs%cfg%sync(this%fs%Q(:,:,:,2))
+      call this%fs%cfg%sync(this%fs%Q(:,:,:,3))
+      call this%fs%cfg%sync(this%fs%Q(:,:,:,4))
+      call this%fs%sync_volume_moments()
+      ! Synchronize interface
+      call this%fs%sync_interface()
+      ! Rebuild momentum
+      call this%fs%get_momentum()
+      ! Rebuild primitive variables
+      call this%fs%get_primitive()
+      ! Output
+      if (nremoved.gt.0.and.this%cfg%amRoot) print*,'=============================> Removed ',nremoved,'droplets!'
+   contains
+      !> Function that identifies cells that need a label
+      logical function make_label(i1,j1,k1)
+         implicit none
+         integer, intent(in) :: i1,j1,k1
+         if (this%fs%VF(i1,j1,k1).gt.0.0_WP) then; make_label=.true.; else; make_label=.false.; end if
+      end function make_label
+      !> Function that identifies if cell pairs have same label
+      logical function same_label(i1,j1,k1,i2,j2,k2)
+         implicit none
+         integer, intent(in) :: i1,j1,k1,i2,j2,k2
+         same_label=.true.
+      end function same_label
+   end subroutine transfer
    
    
    !> Initialization of a shock-drop problem
