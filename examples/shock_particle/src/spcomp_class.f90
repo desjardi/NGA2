@@ -196,14 +196,14 @@ contains
    subroutine rhs(this,VF,VFU,VFV,VFW,dQdt)
       implicit none
       class(spcomp), intent(inout) :: this
-      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:),    intent(in) :: VF    !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
-      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:),    intent(in) :: VFU   !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
-      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:),    intent(in) :: VFV   !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
-      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:),    intent(in) :: VFW   !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:),    intent(in), optional :: VF    !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:),    intent(in), optional :: VFU   !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:),    intent(in), optional :: VFV   !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:),    intent(in), optional :: VFW   !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:,1:), intent(out) :: dQdt !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_,1:nVAR)
       real(WP), dimension(:,:,:,:), allocatable :: FQx,FQy,FQz
       integer :: i,j,k,n
-      real(WP) :: w,div,divp
+      real(WP) :: w,div,divp,VF_
       real(WP), parameter :: eps=1.0e-15_WP
       real(WP), dimension(-2: 0) :: wenop
       real(WP), dimension(-1:+1) :: wenom
@@ -324,9 +324,18 @@ contains
                dQdt(i,j,k,4)=this%dxi*(FQx(i+1,j,k,4)-FQx(i  ,j,k,4))+this%dyi*(FQy(i,j  ,k,4)-FQy(i,j-1,k,4))+this%dzi*(FQz(i,j,k+1,4)-FQz(i,j,k  ,4))
                dQdt(i,j,k,5)=this%dxi*(FQx(i+1,j,k,5)-FQx(i  ,j,k,5))+this%dyi*(FQy(i,j+1,k,5)-FQy(i,j  ,k,5))+this%dzi*(FQz(i,j,k  ,5)-FQz(i,j,k-1,5))
                ! Pressure dilatation and pDV work terms
+               if (present(VF)) then
+                  VF_=VF(i,j,k)
+               else
+                  VF_=0.0_WP
+               end if
+               if (present(VFU).and.present(VFV).and.present(VFW)) then
+                  divp=0.5_WP*(this%dxi*(VFU(i+1,j,k)-VFU(i-1,j,k))+this%dyi*(VFV(i,j+1,k)-VFV(i,j-1,k))+this%dzi*(VFW(i,j,k+1)-VFW(i,j,k-1)))
+               else
+                  divp=0.0_WP
+               end if
                div= this%dxi*(this%U(i+1,j,k)-this%U(i,j,k))+this%dyi*(this%V(i,j+1,k)-this%V(i,j,k))+this%dzi*(this%W(i,j,k+1)-this%W(i,j,k))
-               divp=0.5_WP*(this%dxi*(VFU(i+1,j,k)-VFU(i-1,j,k))+this%dyi*( VFV(i,j+1,k)-VFV(i,j-1,k))+this%dzi*(VFW(i,j,k+1)-VFW(i,j,k-1)))
-               dQdt(i,j,k,2)=dQdt(i,j,k,2)-this%P(i,j,k)*((1.0_WP-VF(i,j,k))*div+divp)
+               dQdt(i,j,k,2)=dQdt(i,j,k,2)-this%P(i,j,k)*((1.0_WP-VF_)*div+divp)
             end do
          end do
       end do
