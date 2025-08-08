@@ -409,8 +409,6 @@ module simulation
            ! Give zero collision force
            lp%p(i)%Acol=0.0_WP
            lp%p(i)%Tcol=0.0_WP
-           ! Give zero dt
-           lp%p(i)%dt=0.0_WP
            ! Sum up volume
            sumVolp=sumVolp+Pi/6.0_WP*lp%p(i)%d**3
         end do
