@@ -45,14 +45,13 @@ module shockdrop_class
       
       !> Various post-processing info
       real(WP) :: Vcore,Mcore,Xcore,Ycore,Zcore !< Drop core data
-      real(WP), dimension(3) :: Lmin,Lmax       !< Liquid extent
+      real(WP), dimension(3) :: Cmin,Cmax       !< Core extent
       
       
    contains
       procedure :: initialize                      !< Initialize shock-drop simulation
       procedure :: step                            !< Advance shock-drop simulation by one time step
       procedure, private :: postproc               !< Postprocess shock-drop case
-      procedure :: transfer                        !< Transfer droplets
       procedure :: output_monitor                  !< Monitoring for shock-drop case
       procedure :: output_ensight                  !< Ensight output for shock-drop case
       procedure, private :: prepare_viscosities    !< Prepare viscosities
@@ -73,38 +72,34 @@ contains
       real(WP), parameter :: VFlo_extent=0.1_WP
       ! Update CCL
       call this%ccl%build(make_label,same_label)
-      ! Core is id=1, skip if not present
-      if (this%ccl%nstruct.lt.1) return
-      ! Extract core volume, mass, and barycenter
-      this%Vcore=0.0_WP; this%Mcore=0.0_WP; this%Xcore=0.0_WP; this%Ycore=0.0_WP; this%Zcore=0.0_WP
-      do n=1,this%ccl%struct(1)%n_
-         ! Get cell index
-         i=this%ccl%struct(1)%map(1,n); j=this%ccl%struct(1)%map(2,n); k=this%ccl%struct(1)%map(3,n)
-         ! Increment volume
-         this%Vcore=this%Vcore+this%fs%VF(i,j,k)*this%fs%cfg%vol(i,j,k)
-         ! Increment mass
-         this%Mcore=this%Mcore+this%fs%Q(i,j,k,1)*this%fs%cfg%vol(i,j,k)
-         ! Increment barycenter
-         this%Xcore=this%Xcore+this%fs%Q(i,j,k,1)*this%fs%BL(1,i,j,k)*this%fs%cfg%vol(i,j,k)
-         this%Ycore=this%Ycore+this%fs%Q(i,j,k,1)*this%fs%BL(2,i,j,k)*this%fs%cfg%vol(i,j,k)
-         this%Zcore=this%Zcore+this%fs%Q(i,j,k,1)*this%fs%BL(3,i,j,k)*this%fs%cfg%vol(i,j,k)
-      end do
-      call MPI_ALLREDUCE(MPI_IN_PLACE,this%Vcore,1,MPI_REAL_WP,MPI_SUM,this%fs%cfg%comm,ierr)
-      call MPI_ALLREDUCE(MPI_IN_PLACE,this%Mcore,1,MPI_REAL_WP,MPI_SUM,this%fs%cfg%comm,ierr)
-      call MPI_ALLREDUCE(MPI_IN_PLACE,this%Xcore,1,MPI_REAL_WP,MPI_SUM,this%fs%cfg%comm,ierr); this%Xcore=this%Xcore/this%Mcore ! Shouldn't ever
-      call MPI_ALLREDUCE(MPI_IN_PLACE,this%Ycore,1,MPI_REAL_WP,MPI_SUM,this%fs%cfg%comm,ierr); this%Ycore=this%Ycore/this%Mcore ! be dividing by
-      call MPI_ALLREDUCE(MPI_IN_PLACE,this%Zcore,1,MPI_REAL_WP,MPI_SUM,this%fs%cfg%comm,ierr); this%Zcore=this%Zcore/this%Mcore ! zero here...
-      ! Compute extent of liquid
-      this%Lmin=+[huge(1.0_WP),huge(1.0_WP),huge(1.0_WP)]
-      this%Lmax=-[huge(1.0_WP),huge(1.0_WP),huge(1.0_WP)]
-      do k=this%fs%cfg%kmin_,this%fs%cfg%kmax_; do j=this%fs%cfg%jmin_,this%fs%cfg%jmax_; do i=this%fs%cfg%imin_,this%fs%cfg%imax_
-         if (this%fs%VF(i,j,k).gt.VFlo_extent) then
-            this%Lmin=min(this%Lmin,[this%cfg%xm(i),this%cfg%ym(j),this%cfg%zm(k)])
-            this%Lmax=max(this%Lmax,[this%cfg%xm(i),this%cfg%ym(j),this%cfg%zm(k)])
-         end if
-      end do; end do; end do
-      call MPI_ALLREDUCE(MPI_IN_PLACE,this%Lmin,3,MPI_REAL_WP,MPI_MIN,this%fs%cfg%comm,ierr)
-      call MPI_ALLREDUCE(MPI_IN_PLACE,this%Lmax,3,MPI_REAL_WP,MPI_MAX,this%fs%cfg%comm,ierr)
+      ! Core is id=1, skip core analysis if no core is present
+      if (this%ccl%nstruct.ge.1) then
+         ! Extract core volume, mass, barycenter, and extent
+         this%Vcore=0.0_WP; this%Mcore=0.0_WP; this%Xcore=0.0_WP; this%Ycore=0.0_WP; this%Zcore=0.0_WP
+         this%Cmin=+[huge(1.0_WP),huge(1.0_WP),huge(1.0_WP)]; this%Cmax=-[huge(1.0_WP),huge(1.0_WP),huge(1.0_WP)]
+         do n=1,this%ccl%struct(1)%n_
+            ! Get cell index
+            i=this%ccl%struct(1)%map(1,n); j=this%ccl%struct(1)%map(2,n); k=this%ccl%struct(1)%map(3,n)
+            ! Increment volume
+            this%Vcore=this%Vcore+this%fs%VF(i,j,k)*this%fs%cfg%vol(i,j,k)
+            ! Increment mass
+            this%Mcore=this%Mcore+this%fs%Q(i,j,k,1)*this%fs%cfg%vol(i,j,k)
+            ! Increment barycenter
+            this%Xcore=this%Xcore+this%fs%Q(i,j,k,1)*this%fs%BL(1,i,j,k)*this%fs%cfg%vol(i,j,k)
+            this%Ycore=this%Ycore+this%fs%Q(i,j,k,1)*this%fs%BL(2,i,j,k)*this%fs%cfg%vol(i,j,k)
+            this%Zcore=this%Zcore+this%fs%Q(i,j,k,1)*this%fs%BL(3,i,j,k)*this%fs%cfg%vol(i,j,k)
+            ! Increment extent
+            this%Cmin=min(this%Cmin,[this%cfg%x(i  ),this%cfg%y(j  ),this%cfg%z(k  )])
+            this%Cmax=max(this%Cmax,[this%cfg%x(i+1),this%cfg%y(j+1),this%cfg%z(k+1)])
+         end do
+         call MPI_ALLREDUCE(MPI_IN_PLACE,this%Vcore,1,MPI_REAL_WP,MPI_SUM,this%fs%cfg%comm,ierr)
+         call MPI_ALLREDUCE(MPI_IN_PLACE,this%Mcore,1,MPI_REAL_WP,MPI_SUM,this%fs%cfg%comm,ierr)
+         call MPI_ALLREDUCE(MPI_IN_PLACE,this%Xcore,1,MPI_REAL_WP,MPI_SUM,this%fs%cfg%comm,ierr); this%Xcore=this%Xcore/this%Mcore ! Shouldn't ever
+         call MPI_ALLREDUCE(MPI_IN_PLACE,this%Ycore,1,MPI_REAL_WP,MPI_SUM,this%fs%cfg%comm,ierr); this%Ycore=this%Ycore/this%Mcore ! be dividing by
+         call MPI_ALLREDUCE(MPI_IN_PLACE,this%Zcore,1,MPI_REAL_WP,MPI_SUM,this%fs%cfg%comm,ierr); this%Zcore=this%Zcore/this%Mcore ! zero here...
+         call MPI_ALLREDUCE(MPI_IN_PLACE,this%Cmin ,3,MPI_REAL_WP,MPI_MIN,this%fs%cfg%comm,ierr)
+         call MPI_ALLREDUCE(MPI_IN_PLACE,this%Cmax ,3,MPI_REAL_WP,MPI_MAX,this%fs%cfg%comm,ierr)
+      end if
    contains
       !> Function that identifies cells that need a label
       logical function make_label(i1,j1,k1)
@@ -119,97 +114,6 @@ contains
          same_label=.true.
       end function same_label
    end subroutine postproc
-   
-   
-   !> Transfer drops
-   subroutine transfer(this)
-      use mpi_f08,  only: MPI_ALLREDUCE,MPI_SUM,MPI_IN_PLACE
-      use parallel, only: MPI_REAL_WP
-      use irl_fortran_interface, only: setPlane,zeroPolygon
-      implicit none
-      class(shockdrop), intent(inout) :: this
-      integer :: i,j,k,n,m,ierr,nremoved
-      real(WP), dimension(:), allocatable :: dvol
-      real(WP), parameter :: vol_coeff=2.0_WP
-      ! Update CCL
-      call this%ccl%build(make_label,same_label)
-      ! Allocate volume array
-      allocate(dvol(1:this%ccl%nstruct)); dvol=0.0_WP
-      ! Loop over individual structures
-      do n=1,this%ccl%nstruct
-         ! Loop over cells in structure and accumulate volume
-         do m=1,this%ccl%struct(n)%n_
-            ! Get cell index
-            i=this%ccl%struct(n)%map(1,m); j=this%ccl%struct(n)%map(2,m); k=this%ccl%struct(n)%map(3,m)
-            ! Increment volume
-            dvol(n)=dvol(n)+this%fs%VF(i,j,k)*this%fs%cfg%vol(i,j,k)
-         end do
-      end do
-      call MPI_ALLREDUCE(MPI_IN_PLACE,dvol,this%ccl%nstruct,MPI_REAL_WP,MPI_SUM,this%fs%cfg%comm,ierr)
-      ! Now traverse all structures again
-      nremoved=0
-      do n=1,this%ccl%nstruct
-         ! Check if volume is small enough for transfer
-         if (dvol(n).lt.vol_coeff*this%fs%vol) then
-            ! Increment counter
-            nremoved=nremoved+1
-            ! Perform transfer
-            !
-            ! Remove drop from VOF representation
-            do m=1,this%ccl%struct(n)%n_
-               ! Get cell index
-               i=this%ccl%struct(n)%map(1,m); j=this%ccl%struct(n)%map(2,m); k=this%ccl%struct(n)%map(3,m)
-               ! Zero out Q(1) and Q(3)
-               this%fs%Q(i,j,k,1)=0.0_WP
-               this%fs%Q(i,j,k,3)=0.0_WP
-               ! Rescale Q(2) and Q(4)
-               if (this%fs%VF(i,j,k).lt.0.99_WP) then
-                  this%fs%Q(i,j,k,2)=this%fs%Q(i,j,k,2)/(1.0_WP-this%fs%VF(i,j,k))
-                  this%fs%Q(i,j,k,4)=this%fs%Q(i,j,k,4)/(1.0_WP-this%fs%VF(i,j,k))
-               else
-                  ! Too little gas to trust local properties, rebuild from neighbors instead
-                  this%fs%Q(i,j,k,2)=sum((1.0_WP-this%fs%VF(i-1:i+1,j-1:j+1,k-1:k+1))*this%fs%RHOG(i-1:i+1,j-1:j+1,k-1:k+1))/sum((1.0_WP-this%fs%VF(i-1:i+1,j-1:j+1,k-1:k+1)))
-                  this%fs%Q(i,j,k,4)=sum((1.0_WP-this%fs%VF(i-1:i+1,j-1:j+1,k-1:k+1))*this%fs%RHOG(i-1:i+1,j-1:j+1,k-1:k+1)*this%fs%IG(i-1:i+1,j-1:j+1,k-1:k+1))/sum((1.0_WP-this%fs%VF(i-1:i+1,j-1:j+1,k-1:k+1)))
-               end if
-               ! Remove liquid from volume moments
-               this%fs%VF  (i,j,k)=0.0_WP
-               this%fs%BL(:,i,j,k)=[this%fs%cfg%xm(i),this%fs%cfg%ym(j),this%fs%cfg%zm(k)]
-               this%fs%BG(:,i,j,k)=[this%fs%cfg%xm(i),this%fs%cfg%ym(j),this%fs%cfg%zm(k)]
-               ! Adjust PLIC interface
-               call setPlane(this%fs%PLIC(i,j,k),0,[0.0_WP,0.0_WP,0.0_WP],sign(1.0_WP,this%fs%VF(i,j,k)-0.5_WP))
-               ! Remove polygon
-               call zeroPolygon(this%fs%interface_polygon(i,j,k))
-            end do
-         end if
-      end do
-      ! Communicate conserved variables and volume moments
-      call this%fs%cfg%sync(this%fs%Q(:,:,:,1))
-      call this%fs%cfg%sync(this%fs%Q(:,:,:,2))
-      call this%fs%cfg%sync(this%fs%Q(:,:,:,3))
-      call this%fs%cfg%sync(this%fs%Q(:,:,:,4))
-      call this%fs%sync_volume_moments()
-      ! Synchronize interface
-      call this%fs%sync_interface()
-      ! Rebuild momentum
-      call this%fs%get_momentum()
-      ! Rebuild primitive variables
-      call this%fs%get_primitive()
-      ! Output
-      if (nremoved.gt.0.and.this%cfg%amRoot) print*,'=============================> Removed ',nremoved,'droplets!'
-   contains
-      !> Function that identifies cells that need a label
-      logical function make_label(i1,j1,k1)
-         implicit none
-         integer, intent(in) :: i1,j1,k1
-         if (this%fs%VF(i1,j1,k1).gt.0.0_WP) then; make_label=.true.; else; make_label=.false.; end if
-      end function make_label
-      !> Function that identifies if cell pairs have same label
-      logical function same_label(i1,j1,k1,i2,j2,k2)
-         implicit none
-         integer, intent(in) :: i1,j1,k1,i2,j2,k2
-         same_label=.true.
-      end function same_label
-   end subroutine transfer
    
    
    !> Initialization of a shock-drop problem
@@ -376,11 +280,17 @@ contains
          call this%dropfile%add_column(this%Xcore,'Core X')
          call this%dropfile%add_column(this%Ycore,'Core Y')
          call this%dropfile%add_column(this%Zcore,'Core Z')
+         call this%dropfile%add_column(this%Cmin(1),'Core Xmin')
+         call this%dropfile%add_column(this%Cmin(2),'Core Ymin')
+         call this%dropfile%add_column(this%Cmin(3),'Core Zmin')
+         call this%dropfile%add_column(this%Cmax(1),'Core Xmax')
+         call this%dropfile%add_column(this%Cmax(2),'Core Ymax')
+         call this%dropfile%add_column(this%Cmax(3),'Core Zmax')
       end block create_monitor
       
    end subroutine initialize
    
-
+   
    !> Take one time step
    subroutine step(this,dt)
       implicit none

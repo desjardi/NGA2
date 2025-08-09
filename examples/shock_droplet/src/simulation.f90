@@ -27,6 +27,7 @@ module simulation
    
    !> Remeshing event
    type(event) :: remesh_evt
+   real(WP), dimension(3) :: Lmin,Lmax
    
    !> Maximum mesh size
    integer :: max_nx,max_ny,max_nz
@@ -339,10 +340,7 @@ contains
          call param_read('Shock-drop max nz',max_nz,default=0)
          call param_read('Shock-drop partition',partition)
          ! Set initial domain of size (2D)^3 centered on (0,0,0)
-         meshsize=nint([2.0_WP/dx,2.0_WP/dx,2.0_WP/dx])
-         if (max_nx.gt.0) meshsize(1)=min(meshsize(1),max_nx)
-         if (max_ny.gt.0) meshsize(2)=min(meshsize(2),max_ny)
-         if (max_nz.gt.0) meshsize(3)=min(meshsize(3),max_nz)
+         meshsize=min(nint([2.0_WP/dx,2.0_WP/dx,2.0_WP/dx]),merge([max_nx,max_ny,max_nz],huge(1),[max_nx,max_ny,max_nz].gt.0))
          X0=-0.5_WP*real(meshsize,WP)*dx
          ! Allocate and initialize the shock-drop solver
          allocate(sd); call sd%initialize(dx=dx,meshsize=meshsize,startloc=X0,group=group,partition=partition,continue_monitor=.false.)
@@ -507,11 +505,11 @@ contains
          ! Advance shock-drop simulation
          call sd%step(dt=time%dt)
          
-         ! Transfer drops
-         !call sd%transfer()
-         
          ! Advance farfield simulation
          call ff%step(dt=time%dt)
+         
+         ! Transfer drops
+         call transfer()
          
          ! Perform monitoring
          call sd%output_monitor()
@@ -548,28 +546,21 @@ contains
       setup_sdnew: block
          use parallel, only: group,MPI_REAL_WP
          use mpi_f08,  only: MPI_BCAST,MPI_INTEGER
-         real(WP), dimension(3) :: X0
+         real(WP), dimension(3) :: X0,X1
          integer , dimension(3) :: meshsize,partition
          real(WP) :: dx
          integer  :: ierr
          ! Use same dx and partition as sd
          dx=sd%fs%dx
          partition=[sd%cfg%npx,sd%cfg%npy,sd%cfg%npz]
-         ! Keep mesh size the same, simply shift domain so that core barycenter remains in the middle of sd's domain
-         !meshsize=[sd%cfg%nx,sd%cfg%ny,sd%cfg%nz]
-         !X0=[sd%cfg%x(sd%cfg%imin),sd%cfg%y(sd%cfg%jmin),sd%cfg%z(sd%cfg%kmin)] &                       !  Corner point
-         !& +sd%fs%dx*real([int(sd%Xcore/sd%fs%dx),int(sd%Ycore/sd%fs%dy),int(sd%Zcore/sd%fs%dz)],WP) &  ! +Core centroid
-         !& -0.5_WP*([sd%cfg%x(sd%cfg%imax+1),sd%cfg%y(sd%cfg%jmax+1),sd%cfg%z(sd%cfg%kmax+1)] &         ! -Middle of 
-         !&         +[sd%cfg%x(sd%cfg%imin  ),sd%cfg%y(sd%cfg%jmin  ),sd%cfg%z(sd%cfg%kmin  )])          !  domain
-         ! Get meshsize that encompasses current liquid extent, adding D/2 on each side
-         meshsize(1)=nint((sd%Lmax(1)-sd%Lmin(1)+1.0_WP)/dx)+1
-         if (max_nx.gt.0) meshsize(1)=min(meshsize(1),max_nx)
-         meshsize(2)=nint((2.0_WP*max(abs(sd%Lmax(2)),abs(sd%Lmin(2)))+1.0_WP)/dx)+1
-         if (max_ny.gt.0) meshsize(2)=min(meshsize(2),max_ny)
-         meshsize(3)=nint((2.0_WP*max(abs(sd%Lmax(3)),abs(sd%Lmin(3)))+1.0_WP)/dx)+1
-         if (max_nz.gt.0) meshsize(3)=min(meshsize(3),max_nz)
-         X0=-0.5_WP*real(meshsize,WP)*dx                ! Centered domain on (0,0,0)
-         X0(1)=sd%fs%dx*ceiling((sd%Lmin(1)-0.5_WP)/dx) ! Shift in x only, snapping on the mesh
+         ! Get meshsize that encompasses current liquid extent
+         X0(1)=dx*floor  ((Lmin(1)-0.5_WP)/dx); if (sd%cfg%nx.eq.1) X0(1)=Lmin(1)
+         X0(2)=dx*floor  ((Lmin(2)-0.5_WP)/dx); if (sd%cfg%ny.eq.1) X0(2)=Lmin(2)
+         X0(3)=dx*floor  ((Lmin(3)-0.5_WP)/dx); if (sd%cfg%nz.eq.1) X0(3)=Lmin(3)
+         X1(1)=dx*ceiling((Lmax(1)+0.5_WP)/dx); if (sd%cfg%nx.eq.1) X1(1)=Lmax(1)
+         X1(2)=dx*ceiling((Lmax(2)+0.5_WP)/dx); if (sd%cfg%ny.eq.1) X1(2)=Lmax(2)
+         X1(3)=dx*ceiling((Lmax(3)+0.5_WP)/dx); if (sd%cfg%nz.eq.1) X1(3)=Lmax(3)
+         meshsize=nint((X1-X0)/dx)
          ! Ensure consistency across ranks
          call MPI_BCAST(meshsize,3,MPI_INTEGER,0,sd%cfg%comm,ierr)
          call MPI_BCAST(X0      ,3,MPI_REAL_WP,0,sd%cfg%comm,ierr)
@@ -911,6 +902,168 @@ contains
          end if
       end function sponge_forcing
    end subroutine couple_ff2sd
+   
+   
+   !> Transfer drops
+   subroutine transfer()
+      use mpi_f08,  only: MPI_ALLREDUCE,MPI_SUM,MPI_IN_PLACE,MPI_MIN,MPI_MAX
+      use parallel, only: MPI_REAL_WP
+      use irl_fortran_interface, only: setPlane,zeroPolygon
+      implicit none
+      integer :: i,j,k,n,m,ierr,nremoved
+      real(WP), dimension(:)  , allocatable :: Vd
+      real(WP), dimension(:)  , allocatable :: Md
+      real(WP), dimension(:,:), allocatable :: Bd
+      real(WP), parameter :: vol_coeff=10.0_WP
+      real(WP), dimension(3) :: edgelo,edgehi
+      
+      ! Update sd's CCL
+      call sd%ccl%build(make_label,same_label)
+      
+      ! Allocate volume, mass, and barycenter arrays
+      allocate(Vd(    1:sd%ccl%nstruct)); Vd=0.0_WP
+      allocate(Md(    1:sd%ccl%nstruct)); Md=0.0_WP
+      allocate(Bd(1:3,1:sd%ccl%nstruct)); Bd=0.0_WP
+      
+      ! Loop over individual structures
+      do n=1,sd%ccl%nstruct
+         ! Loop over cells in structure and accumulate data
+         do m=1,sd%ccl%struct(n)%n_
+            ! Get cell index
+            i=sd%ccl%struct(n)%map(1,m); j=sd%ccl%struct(n)%map(2,m); k=sd%ccl%struct(n)%map(3,m)
+            ! Increment volume, mass, and barycenter
+            Vd  (n)=Vd  (n)+sd%fs%cfg%vol(i,j,k)*sd%fs%VF(i,j,k)
+            Md  (n)=Md  (n)+sd%fs%cfg%vol(i,j,k)*sd%fs%Q (i,j,k,1)
+            Bd(:,n)=Bd(:,n)+sd%fs%cfg%vol(i,j,k)*sd%fs%Q (i,j,k,1)*sd%fs%BL(:,i,j,k)
+         end do
+      end do
+      call MPI_ALLREDUCE(MPI_IN_PLACE,Vd,  sd%ccl%nstruct,MPI_REAL_WP,MPI_SUM,sd%fs%cfg%comm,ierr)
+      call MPI_ALLREDUCE(MPI_IN_PLACE,Md,  sd%ccl%nstruct,MPI_REAL_WP,MPI_SUM,sd%fs%cfg%comm,ierr)
+      call MPI_ALLREDUCE(MPI_IN_PLACE,Bd,3*sd%ccl%nstruct,MPI_REAL_WP,MPI_SUM,sd%fs%cfg%comm,ierr)
+      do n=1,sd%ccl%nstruct; Bd(:,n)=Bd(:,n)/Md(n); end do
+      
+      ! Loop again to calculate extent of large enough drops - will be used for remeshing
+      Lmin=[+huge(1.0_WP),+huge(1.0_WP),+huge(1.0_WP)]; Lmax=[-huge(1.0_WP),-huge(1.0_WP),-huge(1.0_WP)]
+      do n=1,sd%ccl%nstruct
+         ! Ensure structure is large enough
+         if (Vd(n).le.vol_coeff*sd%fs%vol) cycle
+         ! Loop over cells in structure and increment extent
+         do m=1,sd%ccl%struct(n)%n_
+            ! Get cell index
+            i=sd%ccl%struct(n)%map(1,m); j=sd%ccl%struct(n)%map(2,m); k=sd%ccl%struct(n)%map(3,m)
+            ! Update liquid extent
+            Lmin=min(Lmin,[sd%cfg%x(i  ),sd%cfg%y(j  ),sd%cfg%z(k  )])
+            Lmax=max(Lmax,[sd%cfg%x(i+1),sd%cfg%y(j+1),sd%cfg%z(k+1)])
+         end do
+      end do
+      call MPI_ALLREDUCE(MPI_IN_PLACE,Lmin,3,MPI_REAL_WP,MPI_MIN,sd%fs%cfg%comm,ierr)
+      call MPI_ALLREDUCE(MPI_IN_PLACE,Lmax,3,MPI_REAL_WP,MPI_MAX,sd%fs%cfg%comm,ierr)
+      
+      ! Transfer is based on closeness to edge of sd domain
+      edgelo=[sd%fs%cfg%x(sd%fs%cfg%imin  ),sd%fs%cfg%y(sd%fs%cfg%jmin  ),sd%fs%cfg%z(sd%fs%cfg%kmin  )]
+      edgehi=[sd%fs%cfg%x(sd%fs%cfg%imax+1),sd%fs%cfg%y(sd%fs%cfg%jmax+1),sd%fs%cfg%z(sd%fs%cfg%kmax+1)]
+      ! If we're about to remesh sd, use extent of new sd domain
+      if (remesh_evt%occurs()) then
+         edgelo(1)=sd%fs%dx*floor  ((Lmin(1)-0.5_WP)/sd%fs%dx); if (sd%cfg%nx.eq.1) edgelo(1)=Lmin(1)
+         edgelo(2)=sd%fs%dx*floor  ((Lmin(2)-0.5_WP)/sd%fs%dx); if (sd%cfg%ny.eq.1) edgelo(2)=Lmin(2)
+         edgelo(3)=sd%fs%dx*floor  ((Lmin(3)-0.5_WP)/sd%fs%dx); if (sd%cfg%nz.eq.1) edgelo(3)=Lmin(3)
+         edgehi(1)=sd%fs%dx*ceiling((Lmax(1)+0.5_WP)/sd%fs%dx); if (sd%cfg%nx.eq.1) edgehi(1)=Lmax(1)
+         edgehi(2)=sd%fs%dx*ceiling((Lmax(2)+0.5_WP)/sd%fs%dx); if (sd%cfg%ny.eq.1) edgehi(2)=Lmax(2)
+         edgehi(3)=sd%fs%dx*ceiling((Lmax(3)+0.5_WP)/sd%fs%dx); if (sd%cfg%nz.eq.1) edgehi(3)=Lmax(3)
+      end if
+      ! Add a buffer of 10 cells
+      edgelo=edgelo+10.0_WP*sd%fs%dx
+      edgehi=edgehi-10.0_WP*sd%fs%dx
+      
+      ! Now traverse all structures again to perform transfer
+      nremoved=0
+      do n=1,sd%ccl%nstruct
+         ! Check if volume is small enough for transfer
+         if (Vd(n).gt.vol_coeff*sd%fs%vol) cycle
+         ! Check if drop is close to the edge of the sd domain
+         if (close_to_edge(Bd(:,n))) then
+            ! Increment counter
+            nremoved=nremoved+1
+            ! Perform transfer
+            !
+            ! Remove drop from VOF representation
+            do m=1,sd%ccl%struct(n)%n_
+               ! Get cell index
+               i=sd%ccl%struct(n)%map(1,m); j=sd%ccl%struct(n)%map(2,m); k=sd%ccl%struct(n)%map(3,m)
+               ! Zero out Q(1) and Q(3)
+               sd%fs%Q(i,j,k,1)=0.0_WP
+               sd%fs%Q(i,j,k,3)=0.0_WP
+               ! Rescale Q(2) and Q(4)
+               if (sd%fs%VF(i,j,k).lt.0.99_WP) then
+                  sd%fs%Q(i,j,k,2)=sd%fs%Q(i,j,k,2)/(1.0_WP-sd%fs%VF(i,j,k))
+                  sd%fs%Q(i,j,k,4)=sd%fs%Q(i,j,k,4)/(1.0_WP-sd%fs%VF(i,j,k))
+               else
+                  ! Too little gas to trust local properties, rebuild from neighbors instead
+                  sd%fs%Q(i,j,k,2)=sum((1.0_WP-sd%fs%VF(i-1:i+1,j-1:j+1,k-1:k+1))*sd%fs%RHOG(i-1:i+1,j-1:j+1,k-1:k+1))/sum((1.0_WP-sd%fs%VF(i-1:i+1,j-1:j+1,k-1:k+1)))
+                  sd%fs%Q(i,j,k,4)=sum((1.0_WP-sd%fs%VF(i-1:i+1,j-1:j+1,k-1:k+1))*sd%fs%RHOG(i-1:i+1,j-1:j+1,k-1:k+1)*sd%fs%IG(i-1:i+1,j-1:j+1,k-1:k+1))/sum((1.0_WP-sd%fs%VF(i-1:i+1,j-1:j+1,k-1:k+1)))
+               end if
+               ! Remove liquid from volume moments
+               sd%fs%VF  (i,j,k)=0.0_WP
+               sd%fs%BL(:,i,j,k)=[sd%fs%cfg%xm(i),sd%fs%cfg%ym(j),sd%fs%cfg%zm(k)]
+               sd%fs%BG(:,i,j,k)=[sd%fs%cfg%xm(i),sd%fs%cfg%ym(j),sd%fs%cfg%zm(k)]
+               ! Adjust PLIC interface
+               call setPlane(sd%fs%PLIC(i,j,k),0,[0.0_WP,0.0_WP,0.0_WP],sign(1.0_WP,sd%fs%VF(i,j,k)-0.5_WP))
+               ! Remove polygon
+               call zeroPolygon(sd%fs%interface_polygon(i,j,k))
+            end do
+         end if
+      end do
+      ! Communicate conserved variables and volume moments
+      call sd%fs%cfg%sync(sd%fs%Q(:,:,:,1))
+      call sd%fs%cfg%sync(sd%fs%Q(:,:,:,2))
+      call sd%fs%cfg%sync(sd%fs%Q(:,:,:,3))
+      call sd%fs%cfg%sync(sd%fs%Q(:,:,:,4))
+      call sd%fs%sync_volume_moments()
+      ! Synchronize interface
+      call sd%fs%sync_interface()
+      ! Rebuild momentum
+      call sd%fs%get_momentum()
+      ! Rebuild primitive variables
+      call sd%fs%get_primitive()
+      ! Output
+      if (nremoved.gt.0.and.sd%cfg%amRoot) print*,'=============================> Removed ',nremoved,'droplets!'
+      ! Deallocate memory
+      deallocate(Vd,Md,Bd)
+   contains
+      !> Function that identifies cells that need a label
+      logical function make_label(i1,j1,k1)
+         implicit none
+         integer, intent(in) :: i1,j1,k1
+         if (sd%fs%VF(i1,j1,k1).gt.0.0_WP) then; make_label=.true.; else; make_label=.false.; end if
+      end function make_label
+      !> Function that identifies if cell pairs have same label
+      logical function same_label(i1,j1,k1,i2,j2,k2)
+         implicit none
+         integer, intent(in) :: i1,j1,k1,i2,j2,k2
+         same_label=.true.
+      end function same_label
+      !> Function that test closeness of a point X0 to edge of sd domain
+      logical function close_to_edge(X0)
+         implicit none
+         real(WP), dimension(3), intent(in) :: X0
+         close_to_edge=.false.
+         ! X direction
+         if (sd%fs%cfg%nx.gt.1) then
+            if (X0(1).lt.edgelo(1)) close_to_edge=.true.
+            if (X0(1).gt.edgehi(1)) close_to_edge=.true.
+         end if
+         ! Y direction
+         if (sd%fs%cfg%ny.gt.1) then
+            if (X0(2).lt.edgelo(2)) close_to_edge=.true.
+            if (X0(2).gt.edgehi(2)) close_to_edge=.true.
+         end if
+         ! Z direction
+         if (sd%fs%cfg%nz.gt.1) then
+            if (X0(3).lt.edgelo(3)) close_to_edge=.true.
+            if (X0(3).gt.edgehi(3)) close_to_edge=.true.
+         end if
+      end function close_to_edge
+   end subroutine transfer
    
    
    !> Finalize the NGA2 simulation
