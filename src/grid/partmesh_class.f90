@@ -21,6 +21,7 @@ module partmesh_class
    contains
       procedure :: reset                                   !< Reset particle mesh to zero size
       procedure :: set_size                                !< Set particle mesh to provided size
+      procedure :: finalize                                !< Finalize particle mesh
    end type partmesh
    
    
@@ -74,6 +75,17 @@ contains
       allocate(this%vec(        3,this%nvec,this%n)); this%vec=0.0_WP
       allocate(this%var(          this%nvar,this%n)); this%var=0.0_WP
    end subroutine set_size
+   
+   
+   !> Finalize partmesh
+   subroutine finalize(this)
+      implicit none
+      class(partmesh), intent(inout) :: this
+      call this%reset()
+      if (allocated(this%varname)) deallocate(this%varname); this%nvar=0
+      if (allocated(this%vecname)) deallocate(this%vecname); this%nvec=0
+      this%name='PARTMESH'
+   end subroutine finalize
    
    
 end module partmesh_class

@@ -69,6 +69,8 @@ module hypre_uns_class
       
       procedure, private :: prep_umap                    !< Create unstructured mapping
       
+      procedure :: finalize=>hypre_uns_finalize          !< Solver finalization
+      
    end type hypre_uns
    
    
@@ -649,6 +651,24 @@ contains
       class(hypre_uns), intent(in) :: this
       if (this%cfg%amRoot) write(output_unit,'("Unstructured Hypre Linear Solver [",a16,"] for config [",a16,"] -> it/maxit = ",i3,"/",i3," and rerr/rcvg = ",es12.5,"/",es12.5)') trim(this%name),trim(this%cfg%name),this%it,this%maxit,this%rerr,this%rcvg
    end subroutine hypre_uns_print_short
+   
+
+   !> Finalize HYPRE unstructured solver
+   subroutine hypre_uns_finalize(this)
+      implicit none
+      class(hypre_uns), intent(inout) :: this
+      ! Destroy HYPRE solver objects if needed
+      if (this%setup_done) call this%destroy()
+      ! Deallocate arrays
+      if (allocated(this%ind   )) deallocate(this%ind)
+      if (allocated(this%stc   )) deallocate(this%stc)
+      if (allocated(this%opr   )) deallocate(this%opr)
+      if (allocated(this%rhs   )) deallocate(this%rhs)
+      if (allocated(this%sol   )) deallocate(this%sol)
+      if (allocated(this%stmap )) deallocate(this%stmap)
+      ! Nullify pointer to config if present
+      if (associated(this%cfg)) nullify(this%cfg)
+   end subroutine hypre_uns_finalize
    
    
 end module hypre_uns_class

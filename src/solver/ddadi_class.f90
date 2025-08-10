@@ -30,6 +30,7 @@ module ddadi_class
       procedure :: setup=>ddadi_setup             !< Solver setup (every time the operator changes)
       procedure :: solve=>ddadi_solve             !< Execute solver (assumes new RHS and initial guess at every call)
       procedure :: destroy=>ddadi_destroy         !< Solver destruction (every time the operator changes)
+      procedure :: finalize=>ddadi_finalize       !< Solver finalization
       
    end type ddadi
    
@@ -229,5 +230,21 @@ contains
       class(ddadi), intent(inout) :: this
       deallocate(this%stc,this%opr,this%rhs,this%sol,this%stmap)
    end subroutine ddadi_destroy
+
+   !> Finalize ddadi solver
+   subroutine ddadi_finalize(this)
+      implicit none
+      class(ddadi), intent(inout) :: this
+      ! Finalize the diagonal solver if needed
+      if (allocated(this%dsol)) deallocate(this%dsol)
+      ! Nullify pointer to config if present
+      if (associated(this%cfg)) nullify(this%cfg)
+      ! Deallocate the rest
+      if (allocated(this%stc)) deallocate(this%stc)
+      if (allocated(this%opr)) deallocate(this%opr)
+      if (allocated(this%rhs)) deallocate(this%rhs)
+      if (allocated(this%sol)) deallocate(this%sol)
+      if (allocated(this%stmap)) deallocate(this%stmap)
+   end subroutine ddadi_finalize
    
 end module ddadi_class

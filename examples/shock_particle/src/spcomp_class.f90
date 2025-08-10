@@ -35,7 +35,7 @@ module spcomp_class
       
       ! Internal energy
       real(WP), dimension(:,:,:), allocatable :: I
-
+      
       ! Density
       real(WP), dimension(:,:,:), allocatable :: RHO
       
@@ -168,7 +168,7 @@ contains
       
       ! Internal energy
       allocate(this%I(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_)); this%I=0.0_WP
-
+      
       ! Density
       allocate(this%RHO(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_)); this%RHO=0.0_WP
       
@@ -405,10 +405,10 @@ contains
          real(WP), parameter :: delta=0.01_WP  ! Switching thickness
          weno_weight=(1.0_WP-tanh((ratio-lambda)/delta))/3.0_WP+(1.0_WP-tanh((ratio-1.0_WP/lambda)/delta))/6.0_WP
       end function weno_weight
-    end subroutine rhs
-
-
-    !> Calculate divergence of stress for LPT solver
+   end subroutine rhs
+   
+   
+   !> Calculate divergence of stress for LPT solver
    subroutine get_div_stress(this,divx,divy,divz,divq)
       implicit none
       class(spcomp), intent(inout) :: this
@@ -425,12 +425,12 @@ contains
       divy=0.0_WP
       divz=0.0_WP
       divq=0.0_WP
-       
+      
       ! Allocate fluxes of conserved variables
       allocate(FQx(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_,1:4)); FQx=0.0_WP
       allocate(FQy(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_,1:4)); FQy=0.0_WP
       allocate(FQz(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_,1:4)); FQz=0.0_WP
-
+      
       ! Compute cell-centered momentum fluxes
       do k=this%cfg%kmin_-1,this%cfg%kmax_
          do j=this%cfg%jmin_-1,this%cfg%jmax_
@@ -442,7 +442,7 @@ contains
             end do
          end do
       end do
-
+      
       ! Compute edge-centered momentum viscous fluxes and corresponding viscous heating
       do k=this%cfg%kmin_,this%cfg%kmax_+1
          do j=this%cfg%jmin_,this%cfg%jmax_+1
@@ -458,13 +458,13 @@ contains
             end do
          end do
       end do
-
+      
       do i=1,4
          call this%cfg%sync(FQx(:,:,:,i))
          call this%cfg%sync(FQy(:,:,:,i))
          call this%cfg%sync(FQz(:,:,:,i))
       end do
-
+      
       ! Assemble time derivative for conserved variables
       do k=this%cfg%kmin_,this%cfg%kmax_
          do j=this%cfg%jmin_,this%cfg%jmax_
@@ -477,7 +477,7 @@ contains
             end do
          end do
       end do
-
+      
       ! Deallocate flux arrays
       deallocate(FQx,FQy,FQz)
       
@@ -486,7 +486,8 @@ contains
       call this%cfg%sync(divy)
       call this%cfg%sync(divz)
       call this%cfg%sync(divq)
-    end subroutine get_div_stress
+
+   end subroutine get_div_stress
    
    
    !> Calculate all primitive variables from updated conserved variables
@@ -660,10 +661,9 @@ contains
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(out) :: beta
       integer :: i,j,k,si,sj,sk,n
       integer, parameter :: nfilter=1
-      real(WP) :: max_beta,dudy,dudz,dvdx,dvdz,dwdx,dwdy,vort,grad_div,H
+      real(WP) :: max_beta,dudy,dudz,dvdx,dvdz,dwdx,dwdy,vort,grad_div
       real(WP), parameter :: max_cfl=0.5_WP
       real(WP), parameter :: Cartif=2.0_WP
-      real(WP), parameter :: Cartif_vort=100.0_WP
       real(WP), dimension(:,:,:), allocatable :: div
       real(WP), dimension(-1:+1), parameter :: filter=[1.0_WP/6.0_WP,2.0_WP/3.0_WP,1.0_WP/6.0_WP]
       ! Calculate max beta permissible
@@ -696,12 +696,8 @@ contains
          &       +max(abs(div(i,j+1,k)-div(i,j,k)),abs(div(i,j,k)-div(i,j-1,k)))*this%dy**2&
          &       +max(abs(div(i,j,k+1)-div(i,j,k)),abs(div(i,j,k)-div(i,j,k-1)))*this%dz**2
          ! Estimate artificial kinematic viscosity using grad(div)
-         !beta(i,j,k)=Cartif*grad_div*div(i,j,k)**2/(div(i,j,k)**2+Cartif_vort*vort+1.0e-15_WP)
-
-         ! Sensor originally proposed by Ducros et al. (1999) and later improved by
-         ! Hendrickson, T. R., Kartha, A., & Candler, G. V. (2018)
-         vort=max(vort,(0.05_WP*this%C(i,j,k)/min(this%dx,this%dy))**2)
-         beta(i,j,k)=Cartif*grad_div*min(4.0_WP/3.0_WP*div(i,j,k)**2/(div(i,j,k)**2+vort+epsilon(1.0_WP)),1.0_WP)
+         vort=max(vort,(0.05_WP*this%C(i,j,k)/min(this%dx,this%dy,this%dz))**2)
+         beta(i,j,k)=Cartif*grad_div*min(4.0_WP/3.0_WP*div(i,j,k)**2/(div(i,j,k)**2+vort+1.0e-15_WP),1.0_WP)
          ! Clip it so CFL<max_CFL
          beta(i,j,k)=min(beta(i,j,k),max_beta)
       end do; end do; end do
@@ -854,7 +850,7 @@ contains
       this%CFLa_y=maxC*dt*this%dyi
       this%CFLa_z=maxC*dt*this%dzi
       ! Compute viscous CFLs
-      maxvisc=maxval((this%VISC+this%BETA)/this%Q(:,:,:,1)); call MPI_ALLREDUCE(MPI_IN_PLACE,maxvisc,1,MPI_REAL_WP,MPI_MAX,this%cfg%comm,ierr)
+      maxvisc=maxval((this%VISC+this%BETA)/this%RHO); call MPI_ALLREDUCE(MPI_IN_PLACE,maxvisc,1,MPI_REAL_WP,MPI_MAX,this%cfg%comm,ierr)
       this%CFLv_x=4.0_WP*maxvisc*dt*this%dxi**2
       this%CFLv_y=4.0_WP*maxvisc*dt*this%dyi**2
       this%CFLv_z=4.0_WP*maxvisc*dt*this%dzi**2
@@ -957,7 +953,7 @@ contains
       if (allocated(this%V))    deallocate(this%V)
       if (allocated(this%W))    deallocate(this%W)
       if (allocated(this%I))    deallocate(this%I)
-      if (allocated(this%RHO))    deallocate(this%RHO)
+      if (allocated(this%RHO))  deallocate(this%RHO)
       if (allocated(this%P))    deallocate(this%P)
       if (allocated(this%T))    deallocate(this%T)
       if (allocated(this%C))    deallocate(this%C)

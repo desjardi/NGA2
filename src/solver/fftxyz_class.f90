@@ -35,6 +35,7 @@ module fftxyz_class
       procedure :: solve=>fftxyz_solve             !< Execute solver (assumes new RHS and initial guess at every call)
       procedure :: destroy=>fftxyz_destroy         !< Solver destruction (every time the operator changes)
       
+      procedure :: finalize=>fftxyz_finalize       !< Solver finalization
    end type fftxyz
    
    
@@ -254,5 +255,25 @@ contains
      this%setup_done=.false.
    end subroutine fftxyz_destroy
    
-
+   
+   !> Finalize the fftxyz solver
+   subroutine fftxyz_finalize(this)
+      implicit none
+      class(fftxyz), intent(inout) :: this
+      ! Deallocate Fourier object if allocated
+      if (allocated(this%dft)) deallocate(this%dft)
+      ! Deallocate unstrided arrays
+      if (allocated(this%factored_operator)) deallocate(this%factored_operator)
+      if (allocated(this%transformed_rhs))   deallocate(this%transformed_rhs)
+      ! Deallocate base solver arrays
+      if (allocated(this%stc))   deallocate(this%stc)
+      if (allocated(this%stmap)) deallocate(this%stmap)
+      if (allocated(this%opr))   deallocate(this%opr)
+      if (allocated(this%rhs))   deallocate(this%rhs)
+      if (allocated(this%sol))   deallocate(this%sol)
+      ! Nullify pointer to config if present
+      if (associated(this%cfg)) nullify(this%cfg)
+   end subroutine fftxyz_finalize
+   
+   
 end module fftxyz_class

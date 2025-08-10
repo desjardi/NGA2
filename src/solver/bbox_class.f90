@@ -33,7 +33,8 @@ module bbox_class
       procedure :: setup=>bbox_setup                !< Solver setup (every time the operator changes)
       procedure :: solve=>bbox_solve                !< Execute solver (assumes new RHS and initial guess at every call)
       procedure :: destroy=>bbox_destroy            !< Solver destruction (every time the operator changes)
-      
+      procedure :: finalize=>bbox_finalize          !< Solver finalization
+
    end type bbox
    
    
@@ -262,6 +263,23 @@ contains
       class(bbox), intent(in) :: this
       if (this%cfg%amRoot) write(output_unit,'("bbox solver [",a16,"] for config [",a16,"] -> it/maxit = ",i3,"/",i3," and rerr/rcvg = ",es12.5,"/",es12.5)') trim(this%name),trim(this%cfg%name),this%it,this%maxit,this%rerr,this%rcvg
    end subroutine bbox_print_short
+   
+   
+   !> Finalize bbox solver
+   subroutine bbox_finalize(this)
+      implicit none
+      class(bbox), intent(inout) :: this
+      ! Finalize the in-house solver if needed
+      if (allocated(this%solver)) deallocate(this%solver)
+      ! Nullify pointer to config if present
+      if (associated(this%cfg)) nullify(this%cfg)
+      ! Deallocate the rest
+      if (allocated(this%stc)) deallocate(this%stc)
+      if (allocated(this%opr)) deallocate(this%opr)
+      if (allocated(this%rhs)) deallocate(this%rhs)
+      if (allocated(this%sol)) deallocate(this%sol)
+      if (allocated(this%stmap)) deallocate(this%stmap)
+   end subroutine bbox_finalize
    
    
 end module bbox_class

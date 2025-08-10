@@ -5,8 +5,10 @@ module ffshock_class
    use inputfile_class,   only: inputfile
    use config_class,      only: config
    use spcomp_class,      only: spcomp
+   use lpt_class,         only: lpt
    use timetracker_class, only: timetracker
    use ensight_class,     only: ensight
+   use partmesh_class,    only: partmesh
    use event_class,       only: event
    use monitor_class,     only: monitor
    implicit none
@@ -24,15 +26,21 @@ module ffshock_class
       type(spcomp) :: fs        !< Single-phase compressible solver
       type(timetracker) :: time !< Time info
       
+      !> Add an LPT solver
+      type(lpt), public :: lp
+      
       !> Ensight postprocessing
       type(ensight)  :: ens_out
+      type(partmesh) :: pmesh
       
       !> Simulation monitor file
-      type(monitor) :: mfile,cflfile,consfile
+      type(monitor) :: mfile,cflfile,consfile,lptfile
       
       !> Work arrays
       real(WP), dimension(:,:,:,:,:), allocatable :: dQdt
       real(WP), dimension(:,:,:)    , allocatable :: Ui,Vi,Wi,Ma,beta,visc
+      real(WP), dimension(:,:,:)    , allocatable :: stressx,stressy,stressz,stressI
+      real(WP), dimension(:,:,:,:)  , allocatable :: srcQ
       
       !> Constant phasic kinematic viscosity
       real(WP) :: cst_visc
@@ -96,6 +104,19 @@ contains
          call this%fs%initialize(cfg=this%cfg,name='Compressible NS')
       end block create_velocity_solver
       
+      ! Create LPT solver and particle mesh
+      create_lpt_solver: block
+         ! Create solver
+         this%lp=lpt(cfg=this%cfg,name='LPT')
+         ! Set filter scale to 3.5*dx
+         this%lp%filter_width=3.5_WP*this%cfg%min_meshsize
+         ! Create particle mesh
+         this%pmesh=partmesh(nvar=2,nvec=1,name='lpt')
+         this%pmesh%varname(1)='diameter'
+         this%pmesh%varname(2)='temperature'
+         this%pmesh%vecname(1)='velocity'
+      end block create_lpt_solver
+      
       ! Allocate work arrays
       allocate_work_arrays: block
          allocate(this%dQdt(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_,1:this%fs%nQ,1:4))
@@ -105,6 +126,13 @@ contains
          allocate(this%Vi(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
          allocate(this%Wi(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
          allocate(this%Ma(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
+         ! LPT coupling arrays
+         allocate(this%stressx(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
+         allocate(this%stressy(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
+         allocate(this%stressz(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
+         allocate(this%stressI(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
+         allocate(this%srcQ   (this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_,1:this%fs%nQ))
+         this%srcQ(:,:,:,1)=0.0_WP
       end block allocate_work_arrays
       
       ! Add Ensight output
@@ -121,6 +149,8 @@ contains
          call this%ens_out%add_scalar('Mach',this%Ma)
          call this%ens_out%add_scalar('beta',this%beta)
          call this%ens_out%add_scalar('visc',this%visc)
+         ! Add lpt output
+         call this%ens_out%add_particle('spray',this%pmesh)
       end block create_ensight
       
       ! Create monitor files
@@ -166,6 +196,23 @@ contains
          call this%consfile%add_column(this%fs%Qint(5),'W Momentum')
          call this%consfile%add_column(this%fs%RHOKint,'Kinetic Energy')
          call this%consfile%add_column(this%fs%RHOSint,'Entropy')
+         ! Create LPT monitor
+         this%lptfile=monitor(amroot=this%lp%cfg%amRoot,name='lpt')
+         call this%lptfile%add_column(this%time%n,'Timestep number')
+         call this%lptfile%add_column(this%time%t,'Time')
+         call this%lptfile%add_column(this%lp%np,'Particle number')
+         call this%lptfile%add_column(this%lp%VFmean,'mean(VFp)')
+         call this%lptfile%add_column(this%lp%VFmax,'max(VFp)')
+         call this%lptfile%add_column(this%lp%Umin,'min(U)')
+         call this%lptfile%add_column(this%lp%Umax,'max(U)')
+         call this%lptfile%add_column(this%lp%Vmin,'min(V)')
+         call this%lptfile%add_column(this%lp%Vmax,'max(V)')
+         call this%lptfile%add_column(this%lp%Wmin,'min(W)')
+         call this%lptfile%add_column(this%lp%Wmax,'max(W)')
+         call this%lptfile%add_column(this%lp%Remax,'max(Re)')
+         call this%lptfile%add_column(this%lp%Mamax,'max(Ma)')
+         call this%lptfile%add_column(this%lp%Knmax,'max(Kn)')
+         call this%lptfile%write()
       end block create_monitor
       
    end subroutine initialize
@@ -188,30 +235,63 @@ contains
       ! Prepare SGS viscosity models
       call this%prepare_viscosities()
       
+      ! Handle particle transport ========================================================================
+      ! Get divergence of stress
+      call this%fs%get_div_stress(this%stressx,this%stressy,this%stressz,this%stressI)
+      ! Advance particles
+      call this%lp%advance(dt  =this%time%dt,&
+      &                    U   =this%fs%U,&
+      &                    V   =this%fs%V,&
+      &                    W   =this%fs%W,&
+      &                    rho =this%fs%Q(:,:,:,1),&
+      &                    visc=this%fs%visc,&
+      &                    T   =this%fs%T,&
+      &                    C   =this%fs%C,&
+      &                    stress_x =this%stressx,&
+      &                    stress_y =this%stressy,&
+      &                    stress_z =this%stressz,&
+      &                    heat_flux=this%stressI,&
+      &                    srcU=this%srcQ(:,:,:,3),&
+      &                    srcV=this%srcQ(:,:,:,4),&
+      &                    srcW=this%srcQ(:,:,:,5),&
+      &                    srcI=this%srcQ(:,:,:,2))
+      
       ! First RK step ====================================================================================
-      ! Get non-SL RHS and increment
+      ! Get RHS
       call this%fs%rhs(this%dQdt(:,:,:,:,1))
+      ! Add LPT source
+      this%dQdt(:,:,:,:,1)=this%dQdt(:,:,:,:,1)+this%srcQ
+      ! Increment
       this%fs%Q=this%fs%Qold+0.5_WP*this%time%dt*this%dQdt(:,:,:,:,1)
       ! Recompute primitive variables
       call this%fs%get_primitive()
       
       ! Second RK step ===================================================================================
-      ! Get non-SL RHS and increment
+      ! Get RHS
       call this%fs%rhs(this%dQdt(:,:,:,:,2))
+      ! Add LPT source
+      this%dQdt(:,:,:,:,2)=this%dQdt(:,:,:,:,2)+this%srcQ
+      ! Increment
       this%fs%Q=this%fs%Qold+0.5_WP*this%time%dt*this%dQdt(:,:,:,:,2)
       ! Recompute primitive variables
       call this%fs%get_primitive()
       
       ! Third RK step ====================================================================================
-      ! Get non-SL RHS and increment
+      ! Get RHS
       call this%fs%rhs(this%dQdt(:,:,:,:,3))
+      ! Add LPT source
+      this%dQdt(:,:,:,:,3)=this%dQdt(:,:,:,:,3)+this%srcQ
+      ! Increment
       this%fs%Q=this%fs%Qold+1.0_WP*this%time%dt*this%dQdt(:,:,:,:,3)
       ! Recompute primitive variables
       call this%fs%get_primitive()
       
       ! Fourth RK step ===================================================================================
-      ! Get non-SL RHS and increment
+      ! Get RHS
       call this%fs%rhs(this%dQdt(:,:,:,:,4))
+      ! Add LPT source
+      this%dQdt(:,:,:,:,4)=this%dQdt(:,:,:,:,4)+this%srcQ
+      ! Increment
       this%fs%Q=this%fs%Qold+this%time%dt/6.0_WP*(this%dQdt(:,:,:,:,1)+2.0_WP*this%dQdt(:,:,:,:,2)+2.0_WP*this%dQdt(:,:,:,:,3)+this%dQdt(:,:,:,:,4))
       ! Recompute primitive variables
       call this%fs%get_primitive()
@@ -236,6 +316,8 @@ contains
       call this%mfile%write()
       call this%cflfile%write()
       call this%consfile%write()
+      call this%lp%get_max()
+      call this%lptfile%write()
    end subroutine output_monitor
    
    
@@ -244,6 +326,15 @@ contains
       implicit none
       class(ffshock), intent(inout) :: this
       real(WP), intent(in), optional :: t
+      integer :: n
+      ! Update pmesh
+      call this%lp%update_partmesh(this%pmesh)
+      do n=1,this%lp%np_
+         this%pmesh%var  (1,n)=this%lp%p(n)%d
+         this%pmesh%var  (2,n)=this%lp%p(n)%T
+         this%pmesh%vec(:,1,n)=this%lp%p(n)%vel
+      end do
+      ! Perform Ensight output
       if (present(t)) then
          call this%ens_out%write_data(t)
       else
@@ -374,6 +465,10 @@ contains
       call this%mfile%finalize()
       call this%cflfile%finalize()
       call this%consfile%finalize()
+      ! Deallocate particle stuff
+      call this%lp%finalize()
+      call this%pmesh%finalize()
+      deallocate(this%srcQ,this%stressx,this%stressy,this%stressz,this%stressI)
    end subroutine finalize
    
    

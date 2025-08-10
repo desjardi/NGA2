@@ -5,7 +5,7 @@ NGA_HOME ?= ../..
 PRECISION = DOUBLE
 USE_MPI   = TRUE
 USE_HYPRE = FALSE
-USE_LAPACK= TRUE
+USE_LAPACK= FALSE
 USE_IRL   = TRUE
 PROFILE   = FALSE
 DEBUG     = FALSE
@@ -28,7 +28,7 @@ VPATH_LOCATIONS   += $(Ulocs)
 include $(NGA_HOME)/tools/GNUMake/Make.defs
 
 # Include NGA base code
-Bdirs   := core data config grid libraries
+Bdirs   := core data solver config grid libraries
 Bpack   += $(foreach dir, $(Bdirs), $(NGA_HOME)/src/$(dir)/Make.package)
 include $(Bpack)
 

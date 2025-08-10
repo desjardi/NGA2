@@ -79,6 +79,7 @@ module spcomp_class
       procedure :: initialize                             !< Initialize the flow solver
       procedure :: finalize                               !< Finalize the flow solver
       procedure :: rhs                                    !< Compute rhs of our equations using standard fluxes
+      procedure :: get_div_stress                         !< Compute divergence of stress for LPT solver
       procedure :: get_primitive                          !< Calculate primitive variables from conserved variables
       procedure :: get_viscartif                          !< Calculate artifical bulk kinematic viscosity
       procedure :: get_vreman                             !< Get kinematic eddy viscosity using Vreman's model
@@ -261,6 +262,10 @@ contains
                &           +0.5_WP*(FQz(i,j,k,1)+abs(-FQz(i,j,k,1)))*sum(wenom*this%I(i,j,k-1:k+1))
                ! Centered internal energy flux
                !FQz(i,j,k,2)=FQz(i,j,k,1)*0.5_WP*sum(this%I(i,j,k-1:k))
+               ! Heat fluxes
+               FQx(i,j,k,2)=FQx(i,j,k,2)+0.5_WP*(this%DIFF(i-1,j,k)+this%DIFF(i,j,k))*this%dxi*(this%T(i,j,k)-this%T(i-1,j,k))
+               FQy(i,j,k,2)=FQy(i,j,k,2)+0.5_WP*(this%DIFF(i,j-1,k)+this%DIFF(i,j,k))*this%dyi*(this%T(i,j,k)-this%T(i,j-1,k))
+               FQz(i,j,k,2)=FQz(i,j,k,2)+0.5_WP*(this%DIFF(i,j,k-1)+this%DIFF(i,j,k))*this%dzi*(this%T(i,j,k)-this%T(i,j,k-1))
             end do
          end do
       end do
@@ -378,6 +383,89 @@ contains
          weno_weight=(1.0_WP-tanh((ratio-lambda)/delta))/3.0_WP+(1.0_WP-tanh((ratio-1.0_WP/lambda)/delta))/6.0_WP
       end function weno_weight
    end subroutine rhs
+   
+   
+   !> Calculate divergence of stress for LPT solver
+   subroutine get_div_stress(this,divx,divy,divz,divq)
+      implicit none
+      class(spcomp), intent(inout) :: this
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(out) :: divx !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(out) :: divy !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(out) :: divz !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(out) :: divq !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      real(WP), dimension(:,:,:,:), allocatable :: FQx,FQy,FQz
+      integer :: i,j,k
+      real(WP) :: div
+      
+      ! Zero out divergence of stresses
+      divx=0.0_WP
+      divy=0.0_WP
+      divz=0.0_WP
+      divq=0.0_WP
+      
+      ! Allocate fluxes of conserved variables
+      allocate(FQx(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_,1:4)); FQx=0.0_WP
+      allocate(FQy(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_,1:4)); FQy=0.0_WP
+      allocate(FQz(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_,1:4)); FQz=0.0_WP
+      
+      ! Compute cell-centered momentum fluxes
+      do k=this%cfg%kmin_-1,this%cfg%kmax_
+         do j=this%cfg%jmin_-1,this%cfg%jmax_
+            do i=this%cfg%imin_-1,this%cfg%imax_
+               div=this%dxi*(this%U(i+1,j,k)-this%U(i,j,k))+this%dyi*(this%V(i,j+1,k)-this%V(i,j,k))+this%dzi*(this%W(i,j,k+1)-this%W(i,j,k))
+               FQx(i,j,k,1)=2.0_WP*this%VISC(i,j,k)*this%dxi*(this%U(i+1,j,k)-this%U(i,j,k))+(this%BETA(i,j,k)-2.0_WP*this%VISC(i,j,k)/3.0_WP)*div-this%P(i,j,k)
+               FQy(i,j,k,2)=2.0_WP*this%VISC(i,j,k)*this%dyi*(this%V(i,j+1,k)-this%V(i,j,k))+(this%BETA(i,j,k)-2.0_WP*this%VISC(i,j,k)/3.0_WP)*div-this%P(i,j,k)
+               FQz(i,j,k,3)=2.0_WP*this%VISC(i,j,k)*this%dzi*(this%W(i,j,k+1)-this%W(i,j,k))+(this%BETA(i,j,k)-2.0_WP*this%VISC(i,j,k)/3.0_WP)*div-this%P(i,j,k)
+            end do
+         end do
+      end do
+      
+      ! Compute edge-centered momentum viscous fluxes and corresponding viscous heating
+      do k=this%cfg%kmin_,this%cfg%kmax_+1
+         do j=this%cfg%jmin_,this%cfg%jmax_+1
+            do i=this%cfg%imin_,this%cfg%imax_+1
+               ! Momentum fluxes
+               FQy(i,j,k,1)=0.25_WP*sum(this%VISC(i-1:i,j-1:j,k))*(this%dyi*(this%U(i,j,k)-this%U(i,j-1,k))+this%dxi*(this%V(i,j,k)-this%V(i-1,j,k))); FQx(i,j,k,2)=FQy(i,j,k,1)
+               FQz(i,j,k,2)=0.25_WP*sum(this%VISC(i,j-1:j,k-1:k))*(this%dzi*(this%V(i,j,k)-this%V(i,j,k-1))+this%dyi*(this%W(i,j,k)-this%W(i,j-1,k))); FQy(i,j,k,3)=FQz(i,j,k,2)
+               FQx(i,j,k,3)=0.25_WP*sum(this%VISC(i-1:i,j,k-1:k))*(this%dxi*(this%W(i,j,k)-this%W(i-1,j,k))+this%dzi*(this%U(i,j,k)-this%U(i,j,k-1))); FQz(i,j,k,1)=FQx(i,j,k,3)
+               ! Heat fluxes
+               FQx(i,j,k,4)=0.5_WP*(this%DIFF(i-1,j,k)+this%DIFF(i,j,k))*this%dxi*(this%T(i,j,k)-this%T(i-1,j,k))
+               FQy(i,j,k,4)=0.5_WP*(this%DIFF(i,j-1,k)+this%DIFF(i,j,k))*this%dyi*(this%T(i,j,k)-this%T(i,j-1,k))
+               FQz(i,j,k,4)=0.5_WP*(this%DIFF(i,j,k-1)+this%DIFF(i,j,k))*this%dzi*(this%T(i,j,k)-this%T(i,j,k-1))
+            end do
+         end do
+      end do
+      
+      ! Synchronize
+      do i=1,4
+         call this%cfg%sync(FQx(:,:,:,i))
+         call this%cfg%sync(FQy(:,:,:,i))
+         call this%cfg%sync(FQz(:,:,:,i))
+      end do
+      
+      ! Assemble divergence of stresses
+      do k=this%cfg%kmin_,this%cfg%kmax_
+         do j=this%cfg%jmin_,this%cfg%jmax_
+            do i=this%cfg%imin_,this%cfg%imax_
+               ! Viscous momentum transport
+               divx(i,j,k)=this%dxi*(FQx(i  ,j,k,1)-FQx(i-1,j,k,1))+this%dyi*(FQy(i,j+1,k,1)-FQy(i,j  ,k,1))+this%dzi*(FQz(i,j,k+1,1)-FQz(i,j,k  ,1))
+               divy(i,j,k)=this%dxi*(FQx(i+1,j,k,2)-FQx(i  ,j,k,2))+this%dyi*(FQy(i,j  ,k,2)-FQy(i,j-1,k,2))+this%dzi*(FQz(i,j,k+1,2)-FQz(i,j,k  ,2))
+               divz(i,j,k)=this%dxi*(FQx(i+1,j,k,3)-FQx(i  ,j,k,3))+this%dyi*(FQy(i,j+1,k,3)-FQy(i,j  ,k,3))+this%dzi*(FQz(i,j,k  ,3)-FQz(i,j,k-1,3))
+               divq(i,j,k)=this%dxi*(FQx(i+1,j,k,4)-FQx(i  ,j,k,4))+this%dyi*(FQy(i,j+1,k,4)-FQy(i,j  ,k,4))+this%dzi*(FQz(i,j,k+1,4)-FQz(i,j,k  ,4))
+            end do
+         end do
+      end do
+      
+      ! Deallocate flux arrays
+      deallocate(FQx,FQy,FQz)
+      
+      ! Synchronize
+      call this%cfg%sync(divx)
+      call this%cfg%sync(divy)
+      call this%cfg%sync(divz)
+      call this%cfg%sync(divq)
+
+   end subroutine get_div_stress
    
    
    !> Calculate all primitive variables from updated conserved variables

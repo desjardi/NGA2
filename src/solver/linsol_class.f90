@@ -55,6 +55,7 @@ module linsol_class
       procedure(inout_noarg_interface), deferred :: setup                   !< Solver setup (every time the operator changes)
       procedure(inout_noarg_interface), deferred :: solve                   !< Execute solver (assumes new RHS and initial guess at every call)
       procedure(inout_noarg_interface), deferred :: destroy                 !< Solver destruction (every time the operator changes)
+      procedure(inout_noarg_interface), deferred :: finalize                !< Solver finalization
    end type linsol
    
    
