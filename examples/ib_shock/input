@@ -1,0 +1,29 @@
+# Parallelization
+Partition :	2 2 1
+
+# Mesh definition
+Lx :	10
+Ly :	5
+Lz :	0.025
+nx :	400
+ny :	200
+nz :	1
+
+# Case definition
+Cylinder radius : 0.5
+Cylinder position : 2.5
+
+# Adimensional flow parameters
+Gamma : 1.4
+Prandtl number : 0.71
+Shock Mach number : 1.2
+Shock location :   -1
+Reynolds number : 5000
+
+# Time integration
+Max timestep size : 2e-3
+Max cfl number :    0.9
+Max time :          100
+
+# Ensight output
+Ensight output period : 0.1

@@ -1,5 +1,5 @@
 # Parallelization
-Partition : 8 1 1
+Partition : 4 1 1
 
 # Mesh definition
 Pipe diameter : 1
@@ -30,4 +30,4 @@ Ensight output period : 1
 
 # Restart handling
 Restart output period : 100
-Restart from : restart/data_1.00000E+02
+!Restart from : restart/data_1.00000E+02

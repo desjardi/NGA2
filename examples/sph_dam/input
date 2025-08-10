@@ -1,0 +1,33 @@
+# Parallelization
+Partition :	2 1 1
+
+# Mesh definition
+Lx :	1.5
+Ly :	0.75
+nx :	24
+ny :	12
+
+# Particle properties
+Lpx :   0.5
+Lpy :   0.5
+Npx :   75
+Npy :   75
+
+# Kernel parameters
+Smoothing length :  .03
+Cutoff radius    :  .06
+
+# Time integration
+Max timestep size :	5e-5
+Max cfl number :	.1
+Max time : 	        1000
+
+# Fluid properties
+Viscosity       : 0.002
+Density         : 998
+Gamma           : 7
+Gravity         : 0 -9.81 0
+Min sound speed : 10
+
+# Ensight output
+Ensight output period : 1e-2

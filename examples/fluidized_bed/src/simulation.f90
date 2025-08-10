@@ -3,8 +3,8 @@ module simulation
   use precision,         only: WP
   use geometry,          only: cfg
   use lpt_class,         only: lpt
-  use hypre_uns_class,   only: hypre_uns
-  use hypre_str_class,   only: hypre_str
+  use fft2d_class,       only: fft2d
+  use ddadi_class,       only: ddadi
   use lowmach_class,     only: lowmach
   use timetracker_class, only: timetracker
   use ensight_class,     only: ensight
@@ -15,8 +15,8 @@ module simulation
   private
   
   !> Get an LPT solver, a lowmach solver, and corresponding time tracker, plus a couple of linear solvers
-  type(hypre_uns),   public :: ps
-  type(hypre_str),   public :: vs
+  type(fft2d),       public :: ps
+  type(ddadi),       public :: vs
   type(lowmach),     public :: fs
   type(lpt),         public :: lp
   type(timetracker), public :: time
@@ -36,14 +36,6 @@ module simulation
   real(WP), dimension(:,:,:), allocatable :: Ui,Vi,Wi,rho0,dRHOdt
   real(WP), dimension(:,:,:), allocatable :: srcUlp,srcVlp,srcWlp
   real(WP) :: visc,rho,inlet_velocity
-  
-  !> Wallclock time for monitoring
-  type :: timer
-    real(WP) :: time_in
-    real(WP) :: time
-    real(WP) :: percent
-  end type timer
-  type(timer) :: wt_total,wt_vel,wt_pres,wt_lpt,wt_rest
 
 contains
 
@@ -88,20 +80,8 @@ contains
     end block initialize_timetracker
 
 
-    ! Initialize timers
-    initialize_timers: block
-      wt_total%time=0.0_WP; wt_total%percent=0.0_WP
-      wt_vel%time=0.0_WP;   wt_vel%percent=0.0_WP
-      wt_pres%time=0.0_WP;  wt_pres%percent=0.0_WP
-      wt_lpt%time=0.0_WP;   wt_lpt%percent=0.0_WP
-      wt_rest%time=0.0_WP;  wt_rest%percent=0.0_WP
-    end block initialize_timers
-
-
     ! Create a low Mach flow solver with bconds
     create_flow_solver: block
-      use hypre_uns_class, only: gmres_amg  
-      use hypre_str_class, only: pcg_pfmg
       use lowmach_class,   only: dirichlet,clipped_neumann
       ! Create flow solver
       fs=lowmach(cfg=cfg,name='Variable density low Mach NS')
@@ -115,13 +95,9 @@ contains
       ! Assign acceleration of gravity
       call param_read('Gravity',fs%gravity)
       ! Configure pressure solver
-      ps=hypre_uns(cfg=cfg,name='Pressure',method=gmres_amg,nst=7)
-      call param_read('Pressure iteration',ps%maxit)
-      call param_read('Pressure tolerance',ps%rcvg)
+      ps=fft2d(cfg=cfg,name='Pressure',nst=7)
       ! Configure implicit velocity solver
-      vs=hypre_str(cfg=cfg,name='Velocity',method=pcg_pfmg,nst=7)
-      call param_read('Implicit iteration',vs%maxit)
-      call param_read('Implicit tolerance',vs%rcvg)
+      vs=ddadi(cfg=cfg,name='Velocity',nst=7)
       ! Setup the solver
       call fs%setup(pressure_solver=ps,implicit_solver=vs)
     end block create_flow_solver
@@ -147,23 +123,19 @@ contains
     initialize_lpt: block
       use random, only: random_uniform
       use mathtools, only: Pi
-      real(WP) :: dp,Hbed,VFavg,Tp,Lpart,Lparty,Lpartz,Volp
+      real(WP) :: dp,Hbed,VFavg,Lpart,Lparty,Lpartz,Volp
       integer :: i,ix,iy,iz,np,npx,npy,npz
       ! Create solver
       lp=lpt(cfg=cfg,name='LPT')
-      ! Get drag model from the inpit
-      call param_read('Drag model',lp%drag_model,default='Tenneti')
       ! Get particle density from the input
       call param_read('Particle density',lp%rho)
       ! Get particle diameter from the input
       call param_read('Particle diameter',dp)
       ! Set filter scale to 3.5*dx
-      lp%filter_width=3.5_WP*cfg%min_meshsize
-
+      call param_read('Filter width',lp%filter_width,default=4.0_WP*dp)
       ! Root process initializes particles uniformly
       call param_read('Bed height',Hbed)
       call param_read('Particle volume fraction',VFavg)
-      call param_read('Particle temperature',Tp,default=298.15_WP)
       if (lp%cfg%amRoot) then
          ! Particle volume
          Volp = Pi/6.0_WP*dp**3
@@ -287,7 +259,7 @@ contains
     end block create_ensight
 
     
-    ! Create monitor filea
+    ! Create monitor files
     create_monitor: block
       ! Prepare some info about fields
       real(WP) :: cfl
@@ -337,20 +309,6 @@ contains
       call lptfile%add_column(lp%dmin,'Particle dmin')
       call lptfile%add_column(lp%dmax,'Particle dmax')
       call lptfile%write()
-      ! Create timing monitor
-      tfile=monitor(amroot=fs%cfg%amRoot,name='timing')
-      call tfile%add_column(time%n,'Timestep number')
-      call tfile%add_column(time%t,'Time')
-      call tfile%add_column(wt_total%time,'Total [s]')
-      call tfile%add_column(wt_vel%time,'Velocity [s]')
-      call tfile%add_column(wt_vel%percent,'Velocity [%]')
-      call tfile%add_column(wt_pres%time,'Pressure [s]')
-      call tfile%add_column(wt_pres%percent,'Pressure [%]')
-      call tfile%add_column(wt_lpt%time,'LPT [s]')
-      call tfile%add_column(wt_lpt%percent,'LPT [%]')
-      call tfile%add_column(wt_rest%time,'Rest [s]')
-      call tfile%add_column(wt_rest%percent,'Rest [%]')
-      call tfile%write()
     end block create_monitor
 
   end subroutine simulation_init
@@ -366,9 +324,6 @@ contains
     ! Perform time integration
     do while (.not.time%done())
 
-       ! Initial wallclock time
-       wt_total%time_in=parallel_time()
-
        ! Increment time
        call lp%get_cfl(time%dt,cflc=time%cfl,cfl=time%cfl)
        call fs%get_cfl(time%dt,cfl); time%cfl=max(time%cfl,cfl)
@@ -382,7 +337,6 @@ contains
        fs%Wold=fs%W; fs%rhoWold=fs%rhoW
 
        ! Get fluid stress
-       wt_lpt%time_in=parallel_time()
        call fs%get_div_stress(resU,resV,resW)
 
        ! Collide and advance particles
@@ -393,12 +347,9 @@ contains
        ! Update density based on particle volume fraction
        fs%rho=rho*(1.0_WP-lp%VF)
        dRHOdt=(fs%RHO-fs%RHOold)/time%dtmid
-       wt_lpt%time=wt_lpt%time+parallel_time()-wt_lpt%time_in
 
        ! Perform sub-iterations
        do while (time%it.le.time%itmax)
-
-          wt_vel%time_in=parallel_time()
 
           ! Build mid-time velocity and momentum
           fs%U=0.5_WP*(fs%U+fs%Uold); fs%rhoU=0.5_WP*(fs%rhoU+fs%rhoUold)
@@ -422,9 +373,9 @@ contains
             do k=fs%cfg%kmin_,fs%cfg%kmax_
                do j=fs%cfg%jmin_,fs%cfg%jmax_
                   do i=fs%cfg%imin_,fs%cfg%imax_
-                     resU(i,j,k)=resU(i,j,k)+sum(fs%itpr_x(:,i,j,k)*srcUlp(i-1:i,j,k))
-                     resV(i,j,k)=resV(i,j,k)+sum(fs%itpr_y(:,i,j,k)*srcVlp(i,j-1:j,k))
-                     resW(i,j,k)=resW(i,j,k)+sum(fs%itpr_z(:,i,j,k)*srcWlp(i,j,k-1:k))
+                     if (fs%umask(i,j,k).eq.0) resU(i,j,k)=resU(i,j,k)+sum(fs%itpr_x(:,i,j,k)*srcUlp(i-1:i,j,k))
+                     if (fs%vmask(i,j,k).eq.0) resV(i,j,k)=resV(i,j,k)+sum(fs%itpr_y(:,i,j,k)*srcVlp(i,j-1:j,k))
+                     if (fs%wmask(i,j,k).eq.0) resW(i,j,k)=resW(i,j,k)+sum(fs%itpr_z(:,i,j,k)*srcWlp(i,j,k-1:k))
                   end do
                end do
             end do
@@ -456,10 +407,7 @@ contains
             end do
           end block dirichlet_velocity
 
-          wt_vel%time=wt_vel%time+parallel_time()-wt_vel%time_in
-
           ! Solve Poisson equation
-          wt_pres%time_in=parallel_time()
           call fs%correct_mfr(drhodt=dRHOdt)
           call fs%get_div(drhodt=dRHOdt)
           fs%psolv%rhs=-fs%cfg%vol*fs%div/time%dtmid
@@ -474,7 +422,6 @@ contains
           fs%rhoV=fs%rhoV-time%dtmid*resV
           fs%rhoW=fs%rhoW-time%dtmid*resW
           call fs%rho_divide
-          wt_pres%time=wt_pres%time+parallel_time()-wt_pres%time_in
 
           ! Increment sub-iteration counter
           time%it=time%it+1
@@ -482,10 +429,8 @@ contains
        end do
 
        ! Recompute interpolated velocity and divergence
-       wt_vel%time_in=parallel_time()
        call fs%interp_vel(Ui,Vi,Wi)
        call fs%get_div(drhodt=dRHOdt)
-       wt_vel%time=wt_vel%time+parallel_time()-wt_vel%time_in
 
        ! Output to ensight
        if (ens_evt%occurs()) then
@@ -508,20 +453,6 @@ contains
        call mfile%write()
        call cflfile%write()
        call lptfile%write()
-
-       ! Monitor timing
-       wt_total%time=parallel_time()-wt_total%time_in
-       wt_vel%percent=wt_vel%time/wt_total%time*100.0_WP
-       wt_pres%percent=wt_pres%time/wt_total%time*100.0_WP
-       wt_lpt%percent=wt_lpt%time/wt_total%time*100.0_WP
-       wt_rest%time=wt_total%time-wt_vel%time-wt_pres%time-wt_lpt%time
-       wt_rest%percent=wt_rest%time/wt_total%time*100.0_WP
-       call tfile%write()
-       wt_total%time=0.0_WP; wt_total%percent=0.0_WP
-       wt_vel%time=0.0_WP;   wt_vel%percent=0.0_WP
-       wt_pres%time=0.0_WP;  wt_pres%percent=0.0_WP
-       wt_lpt%time=0.0_WP;   wt_lpt%percent=0.0_WP
-       wt_rest%time=0.0_WP;  wt_rest%percent=0.0_WP
 
     end do
 
