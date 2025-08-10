@@ -134,7 +134,7 @@ contains
   function W(d,h,kernel,rmax)
     implicit none
     real(WP), intent(in) :: d,h
-    integer, intent(in) :: kernel
+    integer , intent(in) :: kernel
     real(WP), intent(in), optional :: rmax
     real(WP) :: W
     real(WP) :: q
@@ -156,7 +156,7 @@ contains
           W = (3.0_WP-q)**5
        end if
     case (gaussian)
-       W = max((exp(-q**2) - rmax), 0.0_WP)
+          W = max((exp(-q**2) - exp(-rmax)), 0.0_WP)
     end select
   end function W
 

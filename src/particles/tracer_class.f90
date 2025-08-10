@@ -29,7 +29,7 @@ module tracer_class
       real(WP), dimension(3) :: vel        !< Velocity of particle
       real(WP), dimension(3) :: acc        !< Acceleration of particle
       real(WP) :: rho                      !< Density at particle location
-      real(WP) :: P                        !< Pressure at particle locatiom
+      real(WP) :: P                        !< Pressure at particle location
       !> MPI_INTEGER data
       integer , dimension(3) :: ind        !< Index of cell containing particle center
       integer  :: flag                     !< Control parameter (0=normal, 1=done->will be removed)

@@ -1434,8 +1434,8 @@ contains
 	   deallocate(dudy,dudz,dvdx,dvdz,dwdx,dwdy)
       
    end subroutine get_strainrate
-
-
+   
+   
    !> Calculate the (u.grad)u vector from U/V/W
    subroutine get_ugradu(this,ugradu)
       use messager, only: die
@@ -1526,9 +1526,10 @@ contains
       call this%cfg%sync(ugradu)
       
       ! Deallocate velocity gradient storage
-	   deallocate(dudy,dudz,dvdx,dvdz,dwdx,dwdy)
-   end subroutine get_ugradu
+      deallocate(dudy,dudz,dvdx,dvdz,dwdx,dwdy)
 
+   end subroutine get_ugradu
+   
    
    !> Calculate the velocity gradient tensor from U/V/W
    !> Note that gradu(i,j)=duj/dxi
