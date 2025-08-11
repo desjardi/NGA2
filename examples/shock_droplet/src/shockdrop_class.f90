@@ -205,8 +205,8 @@ contains
          call this%ens_out%add_scalar('visc',this%visc)
          call this%ens_out%add_scalar('label',this%ccl%id)
          ! Create surface mesh for PLIC
-         this%smesh=surfmesh(nvar=0,name='plic')
-         call this%fs%update_surfmesh(this%smesh)
+         this%smesh=surfmesh(nvar=1,name='plic')
+         this%smesh%varname(1)='label'
          call this%ens_out%add_surface('plic',this%smesh)
       end block create_ensight
       
@@ -402,10 +402,25 @@ contains
    
    !> Output ensight files for the shockdrop problem
    subroutine output_ensight(this,t)
+      use irl_fortran_interface, only: getNumberOfVertices
       implicit none
       class(shockdrop), intent(inout) :: this
       real(WP), intent(in), optional :: t
+      integer :: i,j,k,np
+      ! Update surface mesh
       call this%fs%update_surfmesh(this%smesh)
+      ! Update label field
+      np=0
+      do k=this%fs%cfg%kmin_,this%fs%cfg%kmax_
+         do j=this%fs%cfg%jmin_,this%fs%cfg%jmax_
+            do i=this%fs%cfg%imin_,this%fs%cfg%imax_
+               if (getNumberOfVertices(this%fs%interface_polygon(i,j,k)).gt.0) then
+                  np=np+1; this%smesh%var(1,np)=real(this%ccl%id(i,j,k),WP)
+               end if
+            end do
+         end do
+      end do
+      ! Output to ensight
       if (present(t)) then
          call this%ens_out%write_data(t)
       else

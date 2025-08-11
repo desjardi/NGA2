@@ -112,7 +112,7 @@ contains
          this%lp%filter_width=3.5_WP*this%cfg%min_meshsize
          ! Create particle mesh
          this%pmesh=partmesh(nvar=2,nvec=1,name='lpt')
-         this%pmesh%varname(1)='diameter'
+         this%pmesh%varname(1)='radius'
          this%pmesh%varname(2)='temperature'
          this%pmesh%vecname(1)='velocity'
       end block create_lpt_solver
@@ -330,7 +330,7 @@ contains
       ! Update pmesh
       call this%lp%update_partmesh(this%pmesh)
       do n=1,this%lp%np_
-         this%pmesh%var  (1,n)=this%lp%p(n)%d
+         this%pmesh%var  (1,n)=this%lp%p(n)%d*0.5_WP
          this%pmesh%var  (2,n)=this%lp%p(n)%T
          this%pmesh%vec(:,1,n)=this%lp%p(n)%vel
       end do

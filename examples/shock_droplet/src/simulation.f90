@@ -445,6 +445,9 @@ contains
          call ff%fs%interp_vel(ff%Ui,ff%Vi,ff%Wi)
          ! Compute local Mach number
          ff%Ma=sqrt(ff%Ui**2+ff%Vi**2+ff%Wi**2)/ff%fs%C
+         ! Initialize lpt thermodynamic variables
+         ff%lp%Cp=GammaL*CvL !< Incorrect for stiffened gas...
+         ff%lp%rho=rhoL      !< Should be variable...
          ! Perform monitoring
          call ff%output_monitor()
       end block initialize_ff
@@ -515,14 +518,14 @@ contains
          call sd%output_monitor()
          call ff%output_monitor()
          
-         ! Remesh sd
-         if (remesh_evt%occurs()) call remesh()
-         
          ! Perform Ensight output
          if (ens_evt%occurs()) then
             call sd%output_ensight(t=time%t)
             call ff%output_ensight(t=time%t)
          end if
+         
+         ! Remesh sd
+         if (remesh_evt%occurs()) call remesh()
          
       end do
       
@@ -906,14 +909,14 @@ contains
    
    !> Transfer drops
    subroutine transfer()
-      use mpi_f08,  only: MPI_ALLREDUCE,MPI_SUM,MPI_IN_PLACE,MPI_MIN,MPI_MAX
-      use parallel, only: MPI_REAL_WP
+      use mpi_f08,   only: MPI_ALLREDUCE,MPI_SUM,MPI_IN_PLACE,MPI_MIN,MPI_MAX
+      use parallel,  only: MPI_REAL_WP
+      use mathtools, only: Pi
       use irl_fortran_interface, only: setPlane,zeroPolygon
       implicit none
-      integer :: i,j,k,n,m,ierr,nremoved
-      real(WP), dimension(:)  , allocatable :: Vd
-      real(WP), dimension(:)  , allocatable :: Md
-      real(WP), dimension(:,:), allocatable :: Bd
+      integer :: i,j,k,n,m,ierr,nremoved,np
+      real(WP), dimension(:)  , allocatable :: Vd,Md,Pd
+      real(WP), dimension(:,:), allocatable :: Bd,Ud
       real(WP), parameter :: vol_coeff=10.0_WP
       real(WP), dimension(3) :: edgelo,edgehi
       
@@ -923,7 +926,9 @@ contains
       ! Allocate volume, mass, and barycenter arrays
       allocate(Vd(    1:sd%ccl%nstruct)); Vd=0.0_WP
       allocate(Md(    1:sd%ccl%nstruct)); Md=0.0_WP
+      allocate(Pd(    1:sd%ccl%nstruct)); Pd=0.0_WP
       allocate(Bd(1:3,1:sd%ccl%nstruct)); Bd=0.0_WP
+      allocate(Ud(1:3,1:sd%ccl%nstruct)); Ud=0.0_WP
       
       ! Loop over individual structures
       do n=1,sd%ccl%nstruct
@@ -931,16 +936,21 @@ contains
          do m=1,sd%ccl%struct(n)%n_
             ! Get cell index
             i=sd%ccl%struct(n)%map(1,m); j=sd%ccl%struct(n)%map(2,m); k=sd%ccl%struct(n)%map(3,m)
-            ! Increment volume, mass, and barycenter
+            ! Increment volume, mass, pressure, barycenter, and momentum
             Vd  (n)=Vd  (n)+sd%fs%cfg%vol(i,j,k)*sd%fs%VF(i,j,k)
             Md  (n)=Md  (n)+sd%fs%cfg%vol(i,j,k)*sd%fs%Q (i,j,k,1)
+            Pd  (n)=Pd  (n)+sd%fs%cfg%vol(i,j,k)*sd%fs%VF(i,j,k)*sd%fs%PL(i,j,k)
             Bd(:,n)=Bd(:,n)+sd%fs%cfg%vol(i,j,k)*sd%fs%Q (i,j,k,1)*sd%fs%BL(:,i,j,k)
+            Ud(1,n)=Ud(1,n)+sd%fs%cfg%vol(i,j,k)*sd%fs%VF(i,j,k)*sd%Ui(i,j,k)
+            Ud(2,n)=Ud(2,n)+sd%fs%cfg%vol(i,j,k)*sd%fs%VF(i,j,k)*sd%Vi(i,j,k)
+            Ud(3,n)=Ud(3,n)+sd%fs%cfg%vol(i,j,k)*sd%fs%VF(i,j,k)*sd%Wi(i,j,k)
          end do
       end do
       call MPI_ALLREDUCE(MPI_IN_PLACE,Vd,  sd%ccl%nstruct,MPI_REAL_WP,MPI_SUM,sd%fs%cfg%comm,ierr)
       call MPI_ALLREDUCE(MPI_IN_PLACE,Md,  sd%ccl%nstruct,MPI_REAL_WP,MPI_SUM,sd%fs%cfg%comm,ierr)
-      call MPI_ALLREDUCE(MPI_IN_PLACE,Bd,3*sd%ccl%nstruct,MPI_REAL_WP,MPI_SUM,sd%fs%cfg%comm,ierr)
-      do n=1,sd%ccl%nstruct; Bd(:,n)=Bd(:,n)/Md(n); end do
+      call MPI_ALLREDUCE(MPI_IN_PLACE,Pd,  sd%ccl%nstruct,MPI_REAL_WP,MPI_SUM,sd%fs%cfg%comm,ierr); Pd=Pd/Vd
+      call MPI_ALLREDUCE(MPI_IN_PLACE,Bd,3*sd%ccl%nstruct,MPI_REAL_WP,MPI_SUM,sd%fs%cfg%comm,ierr); do n=1,sd%ccl%nstruct; Bd(:,n)=Bd(:,n)/Md(n); end do
+      call MPI_ALLREDUCE(MPI_IN_PLACE,Ud,3*sd%ccl%nstruct,MPI_REAL_WP,MPI_SUM,sd%fs%cfg%comm,ierr); do n=1,sd%ccl%nstruct; Ud(:,n)=Ud(:,n)/Vd(n); end do
       
       ! Loop again to calculate extent of large enough drops - will be used for remeshing
       Lmin=[+huge(1.0_WP),+huge(1.0_WP),+huge(1.0_WP)]; Lmax=[-huge(1.0_WP),-huge(1.0_WP),-huge(1.0_WP)]
@@ -985,7 +995,35 @@ contains
             ! Increment counter
             nremoved=nremoved+1
             ! Perform transfer
-            !
+            if (ff%cfg%amRoot) then
+               ! Make room for new drop
+               np=ff%lp%np_+1; call ff%lp%resize(np)
+               ! Give the drop an id
+               ff%lp%p(np)%id  =int(1,8)
+               ! Assign equivalent diameter from the volume
+               ff%lp%p(np)%d   =(6.0_WP*Vd(n)/Pi)**(1.0_WP/3.0_WP)
+               ! Assign droplet temperature from mass and EOS
+               ff%lp%p(np)%T   =get_TL(RHO=Md(n)/Vd(n),P=Pd(n))
+               ! Place the drop at the liquid barycenter
+               ff%lp%p(np)%pos =Bd(:,n)
+               ! Assign mean structure velocity as drop velocity
+               ff%lp%p(np)%vel =Ud(:,n)
+               ! Give zero angular velocity
+               ff%lp%p(np)%angVel=0.0_WP
+               ! Give zero collision force
+               ff%lp%p(np)%Acol=0.0_WP
+               ff%lp%p(np)%Tcol=0.0_WP
+               ! Let the drop find it own integration time
+               ff%lp%p(np)%dt  =0.0_WP
+               ! Localize the drop on the ff mesh
+               ff%lp%p(np)%ind =ff%lp%cfg%get_ijk_global(ff%lp%p(np)%pos,[ff%lp%cfg%imin,ff%lp%cfg%jmin,ff%lp%cfg%kmin])                !< Place the drop in the proper cell for the ff%lp%cfg
+               ! Activate it
+               ff%lp%p(np)%flag=0                                                                                        !< Activate it
+               ! Increment particle counter
+               ff%lp%np_=np
+               ! Added droplet
+               !print*,'=============================> Added droplet at position ',ff%lp%p(np)%pos,' with diameter ',ff%lp%p(np)%d,' and velocity ',ff%lp%p(np)%vel
+            end if
             ! Remove drop from VOF representation
             do m=1,sd%ccl%struct(n)%n_
                ! Get cell index
@@ -1013,6 +1051,8 @@ contains
             end do
          end if
       end do
+      ! Resync the spray
+      call ff%lp%sync()
       ! Communicate conserved variables and volume moments
       call sd%fs%cfg%sync(sd%fs%Q(:,:,:,1))
       call sd%fs%cfg%sync(sd%fs%Q(:,:,:,2))
@@ -1028,7 +1068,7 @@ contains
       ! Output
       if (nremoved.gt.0.and.sd%cfg%amRoot) print*,'=============================> Removed ',nremoved,'droplets!'
       ! Deallocate memory
-      deallocate(Vd,Md,Bd)
+      deallocate(Vd,Md,Pd,Bd,Ud)
    contains
       !> Function that identifies cells that need a label
       logical function make_label(i1,j1,k1)
