@@ -319,7 +319,7 @@ contains
          use parallel, only: amRoot
          use param,    only: param_read
          ! Create time tracker object
-         time=timetracker(amRoot=amRoot)
+         time=timetracker(amRoot=amRoot,name='Global')
          ! Set time integration parameters
          call param_read('Shock-drop dt',time%dtmax); time%dt=time%dtmax
          call param_read('Shock-drop CFL',time%cflmax)
@@ -475,6 +475,7 @@ contains
          use param, only: param_read
          remesh_evt=event(time=time,name='Remeshing')
          call param_read('Remeshing period',remesh_evt%tper)
+         call sd%meshfile%write()
       end block initialize_remeshing
       
    contains
@@ -537,13 +538,12 @@ contains
       use, intrinsic :: iso_fortran_env, only: output_unit
       use messager, only: log
       use parallel, only: amRoot
+      use string,   only: str_long
       implicit none
+      character(len=str_long) :: message
       type(shockdrop), pointer :: sdnew
       type(coupler)  , pointer :: sdnew2ff
       type(coupler)  , pointer :: ff2sdnew
-      
-      ! Some messaging
-      if (amRoot) then; call log('Begin remeshing...'); write(output_unit,'("Begin remeshing...")'); end if
       
       ! Setup new shock-drop simulation - all cores
       setup_sdnew: block
@@ -667,8 +667,15 @@ contains
          call sd%finalize(); deallocate(sd); sd=>sdnew
       end block transfer_allocation
       
+      ! Monitor mesh size
+      call sd%meshfile%write()
+      
       ! Some messaging
-      if (amRoot) then; call log('Done remeshing!'); write(output_unit,'("Done remeshing!")'); end if
+      if (amRoot) then
+         write(message,'(">> Remeshed shockdrop domain: ",i0,"x",i0,"x",i0," from X0=[",es12.5,"x",es12.5,"x",es12.5,"]")') sd%cfg%nx,sd%cfg%ny,sd%cfg%nz,sd%cfg%x(sd%cfg%imin),sd%cfg%y(sd%cfg%jmin),sd%cfg%z(sd%cfg%kmin)
+         call log(trim(message))
+         write(output_unit,*) trim(message)
+      end if
       
    end subroutine remesh
    
@@ -910,27 +917,32 @@ contains
    !> Transfer drops
    subroutine transfer()
       use mpi_f08,   only: MPI_ALLREDUCE,MPI_SUM,MPI_IN_PLACE,MPI_MIN,MPI_MAX
-      use parallel,  only: MPI_REAL_WP
+      use parallel,  only: MPI_REAL_WP,amRoot
       use mathtools, only: Pi
+      use messager,  only: log
+      use string,    only: str_long
       use irl_fortran_interface, only: setPlane,zeroPolygon
+      use, intrinsic :: iso_fortran_env, only: output_unit
       implicit none
-      integer :: i,j,k,n,m,ierr,nremoved,np
+      integer :: i,j,k,n,m,ierr,nremoved,ncreated,np
       real(WP), dimension(:)  , allocatable :: Vd,Md,Pd
       real(WP), dimension(:,:), allocatable :: Bd,Ud
       real(WP), parameter :: vol_coeff=10.0_WP
+      real(WP), parameter :: diameter_threshold=1.0e-2_WP
       real(WP), dimension(3) :: edgelo,edgehi
+      character(len=str_long) :: message
       
       ! Update sd's CCL
       call sd%ccl%build(make_label,same_label)
       
-      ! Allocate volume, mass, and barycenter arrays
+      ! Allocate volume, mass, pressure, barycenter, and velocity arrays
       allocate(Vd(    1:sd%ccl%nstruct)); Vd=0.0_WP
       allocate(Md(    1:sd%ccl%nstruct)); Md=0.0_WP
       allocate(Pd(    1:sd%ccl%nstruct)); Pd=0.0_WP
       allocate(Bd(1:3,1:sd%ccl%nstruct)); Bd=0.0_WP
       allocate(Ud(1:3,1:sd%ccl%nstruct)); Ud=0.0_WP
       
-      ! Loop over individual structures
+      ! Loop over individual structures and compute structure properties
       do n=1,sd%ccl%nstruct
          ! Loop over cells in structure and accumulate data
          do m=1,sd%ccl%struct(n)%n_
@@ -986,7 +998,7 @@ contains
       edgehi=edgehi-10.0_WP*sd%fs%dx
       
       ! Now traverse all structures again to perform transfer
-      nremoved=0
+      nremoved=0; ncreated=0
       do n=1,sd%ccl%nstruct
          ! Check if volume is small enough for transfer
          if (Vd(n).gt.vol_coeff*sd%fs%vol) cycle
@@ -1016,9 +1028,13 @@ contains
                ! Let the drop find it own integration time
                ff%lp%p(np)%dt  =0.0_WP
                ! Localize the drop on the ff mesh
-               ff%lp%p(np)%ind =ff%lp%cfg%get_ijk_global(ff%lp%p(np)%pos,[ff%lp%cfg%imin,ff%lp%cfg%jmin,ff%lp%cfg%kmin])                !< Place the drop in the proper cell for the ff%lp%cfg
-               ! Activate it
-               ff%lp%p(np)%flag=0                                                                                        !< Activate it
+               ff%lp%p(np)%ind =ff%lp%cfg%get_ijk_global(ff%lp%p(np)%pos,[ff%lp%cfg%imin,ff%lp%cfg%jmin,ff%lp%cfg%kmin])
+               ! Activate it if it is large enough
+               ff%lp%p(np)%flag=1
+               if (ff%lp%p(np)%d.gt.diameter_threshold*ff%fs%dx) then
+                  ff%lp%p(np)%flag=0
+                  ncreated=ncreated+1
+               end if
                ! Increment particle counter
                ff%lp%np_=np
                ! Added droplet
@@ -1065,10 +1081,17 @@ contains
       call sd%fs%get_momentum()
       ! Rebuild primitive variables
       call sd%fs%get_primitive()
-      ! Output
-      if (nremoved.gt.0.and.sd%cfg%amRoot) print*,'=============================> Removed ',nremoved,'droplets!'
+      
       ! Deallocate memory
       deallocate(Vd,Md,Pd,Bd,Ud)
+      
+      ! Some messaging
+      if (amRoot.and.nremoved.gt.0) then
+         write(message,'(">> Transfered ",i0," structures from shockdrop, created ",i0," particles in farfield")') nremoved,ncreated 
+         call log(trim(message))
+         write(output_unit,*) trim(message)
+      end if
+      
    contains
       !> Function that identifies cells that need a label
       logical function make_label(i1,j1,k1)

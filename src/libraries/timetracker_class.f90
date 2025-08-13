@@ -89,8 +89,8 @@ contains
       this%wt=parallel_time()-wtinit
       ! If verbose run, log and or print info
       if (this%print_info) then
-         if (verbose.gt.0) call this%log
-         if (verbose.gt.1) call this%print
+         if (verbose.ge.0) call this%log
+         if (verbose.ge.1) call this%print
       end if
    end subroutine increment
    
@@ -171,15 +171,7 @@ contains
       use, intrinsic :: iso_fortran_env, only: output_unit
       implicit none
       class(timetracker), intent(in) :: this
-      if (this%amRoot) then
-         write(output_unit,'("Timetracker [",a,"] status")') trim(this%name)
-         write(output_unit,'(" >  it/ itmax = ",i0,"/",i0)')         this%it,this%itmax
-         write(output_unit,'(" >   n/  nmax = ",i0,"/",i0)')         this%n,this%nmax
-         write(output_unit,'(" >   t/  tmax = ",es12.5,"/",es12.5)') this%t,this%tmax
-         write(output_unit,'(" >  dt/ dtmax = ",es12.5,"/",es12.5)') this%dt,this%dtmax
-         write(output_unit,'(" > cfl/cflmax = ",es12.5,"/",es12.5)') this%cfl,this%cflmax
-         write(output_unit,'(" >  wt/ wtmax = ",es12.5,"/",es12.5)') this%wt,this%wtmax
-      end if
+      if (this%amRoot) write(output_unit,'("Timetracker [",a,"]:"," n=",i8," t=",es12.5)') trim(this%name),this%n,this%t
    end subroutine timetracker_print
    
    

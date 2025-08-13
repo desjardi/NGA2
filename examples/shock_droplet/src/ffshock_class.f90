@@ -96,7 +96,7 @@ contains
       
       ! Initialize time tracker
       initialize_timetracker: block
-         this%time=timetracker(amRoot=this%cfg%amRoot)
+         this%time=timetracker(amRoot=this%cfg%amRoot,name='FarField',print_info=.false.)
       end block initialize_timetracker
       
       ! Create multiphase compressible flow solver
@@ -203,6 +203,8 @@ contains
          call this%lptfile%add_column(this%lp%np,'Particle number')
          call this%lptfile%add_column(this%lp%VFmean,'mean(VFp)')
          call this%lptfile%add_column(this%lp%VFmax,'max(VFp)')
+         call this%lptfile%add_column(this%lp%dmin,'min(d)')
+         call this%lptfile%add_column(this%lp%dmax,'max(d)')
          call this%lptfile%add_column(this%lp%Umin,'min(U)')
          call this%lptfile%add_column(this%lp%Umax,'max(U)')
          call this%lptfile%add_column(this%lp%Vmin,'min(V)')

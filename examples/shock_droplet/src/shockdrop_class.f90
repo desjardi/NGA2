@@ -34,7 +34,7 @@ module shockdrop_class
       type(ensight)  :: ens_out
       
       !> Simulation monitor file
-      type(monitor) :: mfile,cflfile,consfile,dropfile
+      type(monitor) :: mfile,cflfile,consfile,dropfile,meshfile
       
       !> Work arrays
       real(WP), dimension(:,:,:,:,:), allocatable :: dQdt
@@ -161,7 +161,7 @@ contains
       
       ! Initialize time tracker
       initialize_timetracker: block
-         this%time=timetracker(amRoot=this%cfg%amRoot)
+         this%time=timetracker(amRoot=this%cfg%amRoot,name='ShockDrop',print_info=.false.)
       end block initialize_timetracker
       
       ! Create multiphase compressible flow solver
@@ -286,6 +286,18 @@ contains
          call this%dropfile%add_column(this%Cmax(1),'Core Xmax')
          call this%dropfile%add_column(this%Cmax(2),'Core Ymax')
          call this%dropfile%add_column(this%Cmax(3),'Core Zmax')
+         ! Create mesh output
+         this%meshfile=monitor(this%cfg%amRoot,'shockdrop_mesh',restart=monitor_continue)
+         call this%meshfile%add_column(this%time%t,'Time')
+         call this%meshfile%add_column(this%cfg%nx,'nx')
+         call this%meshfile%add_column(this%cfg%ny,'ny')
+         call this%meshfile%add_column(this%cfg%nz,'nz')
+         call this%meshfile%add_column(this%cfg%x(this%cfg%imin  ),'Xmin')
+         call this%meshfile%add_column(this%cfg%y(this%cfg%jmin  ),'Ymin')
+         call this%meshfile%add_column(this%cfg%z(this%cfg%kmin  ),'Zmin')
+         call this%meshfile%add_column(this%cfg%x(this%cfg%imax+1),'Xmax')
+         call this%meshfile%add_column(this%cfg%y(this%cfg%jmax+1),'Ymax')
+         call this%meshfile%add_column(this%cfg%z(this%cfg%kmax+1),'Zmax')
       end block create_monitor
       
    end subroutine initialize
