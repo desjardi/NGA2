@@ -211,6 +211,8 @@ contains
          call this%lptfile%add_column(this%lp%Vmax,'max(V)')
          call this%lptfile%add_column(this%lp%Wmin,'min(W)')
          call this%lptfile%add_column(this%lp%Wmax,'max(W)')
+         call this%lptfile%add_column(this%lp%Tmin,'min(T)')
+         call this%lptfile%add_column(this%lp%Tmax,'max(T)')
          call this%lptfile%add_column(this%lp%Remax,'max(Re)')
          call this%lptfile%add_column(this%lp%Mamax,'max(Ma)')
          call this%lptfile%add_column(this%lp%Knmax,'max(Kn)')

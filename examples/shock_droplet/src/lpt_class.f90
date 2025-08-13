@@ -102,6 +102,7 @@ module lpt_class
       
       ! Monitoring info
       real(WP) :: VFmin,VFmax,VFmean,VFvar                !< Volume fraction info
+      real(WP) :: Tmin,Tmax,Tmean,Tvar                    !< Temperature info
       real(WP) :: dmin,dmax,dmean,dvar                    !< Diameter info
       real(WP) :: Umin,Umax,Umean,Uvar                    !< U velocity info
       real(WP) :: Vmin,Vmax,Vmean,Vvar                    !< V velocity info
@@ -1348,12 +1349,14 @@ contains
       
       ! Diameter and velocity min/max/mean
       this%dmin=huge(1.0_WP); this%dmax=-huge(1.0_WP); this%dmean=0.0_WP
+      this%Tmin=huge(1.0_WP); this%Tmax=-huge(1.0_WP); this%Tmean=0.0_WP
       this%Umin=huge(1.0_WP); this%Umax=-huge(1.0_WP); this%Umean=0.0_WP
       this%Vmin=huge(1.0_WP); this%Vmax=-huge(1.0_WP); this%Vmean=0.0_WP
       this%Wmin=huge(1.0_WP); this%Wmax=-huge(1.0_WP); this%Wmean=0.0_WP
       this%vp_tot=0.0_WP
       do i=1,this%np_
          this%dmin=min(this%dmin,this%p(i)%d     ); this%dmax=max(this%dmax,this%p(i)%d     ); this%dmean=this%dmean+this%p(i)%d
+         this%Tmin=min(this%Tmin,this%p(i)%T     ); this%Tmax=max(this%Tmax,this%p(i)%T     ); this%Tmean=this%Tmean+this%p(i)%T
          this%Umin=min(this%Umin,this%p(i)%vel(1)); this%Umax=max(this%Umax,this%p(i)%vel(1)); this%Umean=this%Umean+this%p(i)%vel(1)
          this%Vmin=min(this%Vmin,this%p(i)%vel(2)); this%Vmax=max(this%Vmax,this%p(i)%vel(2)); this%Vmean=this%Vmean+this%p(i)%vel(2)
          this%Wmin=min(this%Wmin,this%p(i)%vel(3)); this%Wmax=max(this%Wmax,this%p(i)%vel(3)); this%Wmean=this%Wmean+this%p(i)%vel(3)
@@ -1362,6 +1365,9 @@ contains
       call MPI_ALLREDUCE(this%dmin ,buf,1,MPI_REAL_WP,MPI_MIN,this%cfg%comm,ierr); this%dmin =buf
       call MPI_ALLREDUCE(this%dmax ,buf,1,MPI_REAL_WP,MPI_MAX,this%cfg%comm,ierr); this%dmax =buf
       call MPI_ALLREDUCE(this%dmean,buf,1,MPI_REAL_WP,MPI_SUM,this%cfg%comm,ierr); this%dmean=buf/safe_np
+      call MPI_ALLREDUCE(this%Tmin ,buf,1,MPI_REAL_WP,MPI_MIN,this%cfg%comm,ierr); this%Tmin =buf
+      call MPI_ALLREDUCE(this%Tmax ,buf,1,MPI_REAL_WP,MPI_MAX,this%cfg%comm,ierr); this%Tmax =buf
+      call MPI_ALLREDUCE(this%Tmean,buf,1,MPI_REAL_WP,MPI_SUM,this%cfg%comm,ierr); this%Tmean=buf/safe_np
       call MPI_ALLREDUCE(this%Umin ,buf,1,MPI_REAL_WP,MPI_MIN,this%cfg%comm,ierr); this%Umin =buf
       call MPI_ALLREDUCE(this%Umax ,buf,1,MPI_REAL_WP,MPI_MAX,this%cfg%comm,ierr); this%Umax =buf
       call MPI_ALLREDUCE(this%Umean,buf,1,MPI_REAL_WP,MPI_SUM,this%cfg%comm,ierr); this%Umean=buf/safe_np
@@ -1375,16 +1381,19 @@ contains
       
       ! Diameter and velocity variance
       this%dvar=0.0_WP
+      this%Tvar=0.0_WP
       this%Uvar=0.0_WP
       this%Vvar=0.0_WP
       this%Wvar=0.0_WP
       do i=1,this%np_
          this%dvar=this%dvar+(this%p(i)%d     -this%dmean)**2.0_WP
+         this%Tvar=this%Tvar+(this%p(i)%T     -this%Tmean)**2.0_WP
          this%Uvar=this%Uvar+(this%p(i)%vel(1)-this%Umean)**2.0_WP
          this%Vvar=this%Vvar+(this%p(i)%vel(2)-this%Vmean)**2.0_WP
          this%Wvar=this%Wvar+(this%p(i)%vel(3)-this%Wmean)**2.0_WP
       end do
       call MPI_ALLREDUCE(this%dvar,buf,1,MPI_REAL_WP,MPI_SUM,this%cfg%comm,ierr); this%dvar=buf/safe_np
+      call MPI_ALLREDUCE(this%Tvar,buf,1,MPI_REAL_WP,MPI_SUM,this%cfg%comm,ierr); this%Tvar=buf/safe_np
       call MPI_ALLREDUCE(this%Uvar,buf,1,MPI_REAL_WP,MPI_SUM,this%cfg%comm,ierr); this%Uvar=buf/safe_np
       call MPI_ALLREDUCE(this%Vvar,buf,1,MPI_REAL_WP,MPI_SUM,this%cfg%comm,ierr); this%Vvar=buf/safe_np
       call MPI_ALLREDUCE(this%Wvar,buf,1,MPI_REAL_WP,MPI_SUM,this%cfg%comm,ierr); this%Wvar=buf/safe_np
