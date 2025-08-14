@@ -28,6 +28,7 @@ module simulation
    !> Remeshing event
    type(event) :: remesh_evt
    real(WP), dimension(3) :: Lmin,Lmax
+   real(WP) :: Lmargin
    
    !> Maximum mesh size
    integer :: max_nx,max_ny,max_nz
@@ -35,6 +36,11 @@ module simulation
    !> Equations of state
    real(WP) :: PinfL,GammaL,CvL
    real(WP) :: PinfG,GammaG,CvG
+   
+   !> Spherical harmonics perturbation parameters
+   integer :: nsh_modes=0
+   integer , dimension(:), allocatable :: l_modes,m_modes
+   real(WP), dimension(:), allocatable :: amp_modes,phase_modes
    
    !> Flow parameters
    real(WP) :: Ms,Xs
@@ -314,6 +320,54 @@ contains
          end if
       end block initialize_parameters
       
+      ! Initialize spherical harmonics modes - all cores
+      initialize_sph_modes: block
+         use param,     only: param_read,param_exists
+         use parallel,  only: amRoot,MPI_REAL_WP,comm
+         use string,    only: str_long
+         use messager,  only: log
+         use mpi_f08,   only: MPI_BCAST,MPI_INTEGER
+         use random,    only: random_initialize,random_uniform
+         use mathtools, only: twoPi
+         character(str_long) :: message
+         integer  :: i,ierr
+         real(WP) :: r
+         ! Read number of modes (or set default)
+         call param_read('SphHarm Nmode',nsh_modes,default=0)
+         if (nsh_modes.gt.0) then
+            allocate(l_modes(nsh_modes),m_modes(nsh_modes),amp_modes(nsh_modes),phase_modes(nsh_modes))
+            if (param_exists('SphHarm l'))     call param_read('SphHarm l',    l_modes)
+            if (param_exists('SphHarm m'))     call param_read('SphHarm m',    m_modes)
+            if (param_exists('SphHarm amp'))   call param_read('SphHarm amp',  amp_modes)
+            if (param_exists('SphHarm phase')) call param_read('SphHarm phase',phase_modes)
+         else
+            ! Generate random modes if not provided
+            nsh_modes=8
+            allocate(l_modes(nsh_modes),m_modes(nsh_modes),amp_modes(nsh_modes),phase_modes(nsh_modes))
+            if (amRoot) then
+               call random_initialize()
+               do i=1,nsh_modes
+                  l_modes    (i)=1+i
+                  m_modes    (i)=i-nsh_modes/2
+                  amp_modes  (i)=1.0e-3_WP
+                  phase_modes(i)=random_uniform(lo=0.0_WP,hi=twoPi)
+               end do
+            end if
+            call MPI_BCAST(l_modes    ,nsh_modes,MPI_INTEGER,0,comm,ierr)
+            call MPI_BCAST(m_modes    ,nsh_modes,MPI_INTEGER,0,comm,ierr)
+            call MPI_BCAST(amp_modes  ,nsh_modes,MPI_REAL_WP,0,comm,ierr)
+            call MPI_BCAST(phase_modes,nsh_modes,MPI_REAL_WP,0,comm,ierr)
+         end if
+         ! Log the selected modes
+         if (amRoot) then
+            write(message,'("[SphHarm] Nmode  =",i6)')         nsh_modes; call log(message)
+            write(message,'("[SphHarm] l      =",1000(i4,x))') l_modes  ; call log(message)
+            write(message,'("[SphHarm] m      =",1000(i4,x))') m_modes  ; call log(message)
+            write(message,'("[SphHarm] amp    =",1000(es12.5,x))') amp_modes  ; call log(message)
+            write(message,'("[SphHarm] phase  =",1000(es12.5,x))') phase_modes; call log(message)
+         end if
+      end block initialize_sph_modes
+      
       ! Initialize time tracker
       initialize_timetracker: block
          use parallel, only: amRoot
@@ -335,12 +389,13 @@ contains
          real(WP) :: dx
          ! Read in mesh size and desired partition
          call param_read('Shock-drop dx',dx)
+         call param_read('Shock-drop margin',Lmargin)
          call param_read('Shock-drop max nx',max_nx,default=0)
          call param_read('Shock-drop max ny',max_ny,default=0)
          call param_read('Shock-drop max nz',max_nz,default=0)
          call param_read('Shock-drop partition',partition)
          ! Set initial domain of size (2D)^3 centered on (0,0,0)
-         meshsize=min(nint([2.0_WP/dx,2.0_WP/dx,2.0_WP/dx]),merge([max_nx,max_ny,max_nz],huge(1),[max_nx,max_ny,max_nz].gt.0))
+         meshsize=min(nint([(1.0_WP+2.0_WP*Lmargin)/dx,(1.0_WP+2.0_WP*Lmargin)/dx,(1.0_WP+2.0_WP*Lmargin)/dx]),merge([max_nx,max_ny,max_nz],huge(1),[max_nx,max_ny,max_nz].gt.0))
          X0=-0.5_WP*real(meshsize,WP)*dx
          ! Allocate and initialize the shock-drop solver
          allocate(sd); call sd%initialize(dx=dx,meshsize=meshsize,startloc=X0,group=group,partition=partition,continue_monitor=.false.)
@@ -479,13 +534,30 @@ contains
       end block initialize_remeshing
       
    contains
-      !> Level set function for a sphere of unity diameter centered at (0,0,0)
+      !> Level set function for a perturbed sphere of unity diameter centered at (0,0,0)
       function levelset_drop(xyz,t) result(G)
+         use mathtools, only: spherical_harmonic
          implicit none
          real(WP), dimension(3),intent(in) :: xyz
          real(WP), intent(in) :: t
-         real(WP) :: G
-         G=0.5_WP-sqrt(sum(xyz**2))
+         real(WP) :: G,r,theta,phi,perturb
+         integer :: i
+         ! Spherical coordinates
+         r=sqrt(sum(xyz**2))
+         if (r.gt.1.0e-12_WP) then
+            theta= acos(xyz(3)/r)
+            phi  =atan2(xyz(2),xyz(1))
+         else
+            theta=0.0_WP
+            phi  =0.0_WP
+         end if
+         ! Compute perturbation
+         perturb=0.0_WP
+         do i=1,nsh_modes
+            perturb=perturb+amp_modes(i)*spherical_harmonic(l_modes(i),m_modes(i),theta,phi+phase_modes(i))
+         end do
+         ! Level set function for a sphere with radius 0.5 and perturbation
+         G=0.5_WP+perturb-r
       end function levelset_drop
    end subroutine simulation_init
    
@@ -557,12 +629,12 @@ contains
          dx=sd%fs%dx
          partition=[sd%cfg%npx,sd%cfg%npy,sd%cfg%npz]
          ! Get meshsize that encompasses current liquid extent
-         X0(1)=dx*floor  ((Lmin(1)-0.5_WP)/dx); if (sd%cfg%nx.eq.1) X0(1)=Lmin(1)
-         X0(2)=dx*floor  ((Lmin(2)-0.5_WP)/dx); if (sd%cfg%ny.eq.1) X0(2)=Lmin(2)
-         X0(3)=dx*floor  ((Lmin(3)-0.5_WP)/dx); if (sd%cfg%nz.eq.1) X0(3)=Lmin(3)
-         X1(1)=dx*ceiling((Lmax(1)+0.5_WP)/dx); if (sd%cfg%nx.eq.1) X1(1)=Lmax(1)
-         X1(2)=dx*ceiling((Lmax(2)+0.5_WP)/dx); if (sd%cfg%ny.eq.1) X1(2)=Lmax(2)
-         X1(3)=dx*ceiling((Lmax(3)+0.5_WP)/dx); if (sd%cfg%nz.eq.1) X1(3)=Lmax(3)
+         X0(1)=dx*floor  ((Lmin(1)-Lmargin)/dx); if (sd%cfg%nx.eq.1) X0(1)=Lmin(1)
+         X0(2)=dx*floor  ((Lmin(2)-Lmargin)/dx); if (sd%cfg%ny.eq.1) X0(2)=Lmin(2)
+         X0(3)=dx*floor  ((Lmin(3)-Lmargin)/dx); if (sd%cfg%nz.eq.1) X0(3)=Lmin(3)
+         X1(1)=dx*ceiling((Lmax(1)+Lmargin)/dx); if (sd%cfg%nx.eq.1) X1(1)=Lmax(1)
+         X1(2)=dx*ceiling((Lmax(2)+Lmargin)/dx); if (sd%cfg%ny.eq.1) X1(2)=Lmax(2)
+         X1(3)=dx*ceiling((Lmax(3)+Lmargin)/dx); if (sd%cfg%nz.eq.1) X1(3)=Lmax(3)
          meshsize=nint((X1-X0)/dx)
          ! Ensure consistency across ranks
          call MPI_BCAST(meshsize,3,MPI_INTEGER,0,sd%cfg%comm,ierr)
@@ -986,12 +1058,12 @@ contains
       edgehi=[sd%fs%cfg%x(sd%fs%cfg%imax+1),sd%fs%cfg%y(sd%fs%cfg%jmax+1),sd%fs%cfg%z(sd%fs%cfg%kmax+1)]
       ! If we're about to remesh sd, use extent of new sd domain
       if (remesh_evt%occurs()) then
-         edgelo(1)=sd%fs%dx*floor  ((Lmin(1)-0.5_WP)/sd%fs%dx); if (sd%cfg%nx.eq.1) edgelo(1)=Lmin(1)
-         edgelo(2)=sd%fs%dx*floor  ((Lmin(2)-0.5_WP)/sd%fs%dx); if (sd%cfg%ny.eq.1) edgelo(2)=Lmin(2)
-         edgelo(3)=sd%fs%dx*floor  ((Lmin(3)-0.5_WP)/sd%fs%dx); if (sd%cfg%nz.eq.1) edgelo(3)=Lmin(3)
-         edgehi(1)=sd%fs%dx*ceiling((Lmax(1)+0.5_WP)/sd%fs%dx); if (sd%cfg%nx.eq.1) edgehi(1)=Lmax(1)
-         edgehi(2)=sd%fs%dx*ceiling((Lmax(2)+0.5_WP)/sd%fs%dx); if (sd%cfg%ny.eq.1) edgehi(2)=Lmax(2)
-         edgehi(3)=sd%fs%dx*ceiling((Lmax(3)+0.5_WP)/sd%fs%dx); if (sd%cfg%nz.eq.1) edgehi(3)=Lmax(3)
+         edgelo(1)=sd%fs%dx*floor  ((Lmin(1)-Lmargin)/sd%fs%dx); if (sd%cfg%nx.eq.1) edgelo(1)=Lmin(1)
+         edgelo(2)=sd%fs%dx*floor  ((Lmin(2)-Lmargin)/sd%fs%dx); if (sd%cfg%ny.eq.1) edgelo(2)=Lmin(2)
+         edgelo(3)=sd%fs%dx*floor  ((Lmin(3)-Lmargin)/sd%fs%dx); if (sd%cfg%nz.eq.1) edgelo(3)=Lmin(3)
+         edgehi(1)=sd%fs%dx*ceiling((Lmax(1)+Lmargin)/sd%fs%dx); if (sd%cfg%nx.eq.1) edgehi(1)=Lmax(1)
+         edgehi(2)=sd%fs%dx*ceiling((Lmax(2)+Lmargin)/sd%fs%dx); if (sd%cfg%ny.eq.1) edgehi(2)=Lmax(2)
+         edgehi(3)=sd%fs%dx*ceiling((Lmax(3)+Lmargin)/sd%fs%dx); if (sd%cfg%nz.eq.1) edgehi(3)=Lmax(3)
       end if
       ! Add a buffer of 10 cells
       edgelo=edgelo+10.0_WP*sd%fs%dx
@@ -1037,8 +1109,6 @@ contains
                end if
                ! Increment particle counter
                ff%lp%np_=np
-               ! Added droplet
-               !print*,'=============================> Added droplet at position ',ff%lp%p(np)%pos,' with diameter ',ff%lp%p(np)%d,' and velocity ',ff%lp%p(np)%vel
             end if
             ! Remove drop from VOF representation
             do m=1,sd%ccl%struct(n)%n_

@@ -13,6 +13,7 @@ module mathtools
    public :: arctan
    public :: eigensolve3
    public :: quadrature_rule
+   public :: spherical_harmonic
    
    ! Trigonometric parameters
    real(WP), parameter :: Pi   =3.1415926535897932385_WP
@@ -119,8 +120,8 @@ contains
 !!$      call DGETRI(n,Ainv,n,ipiv,work,n,info)
 !!$      if (info.ne.0) call die('[inverse_matrix] Matrix inversion failed')
 !!$    end function inverse_matrix
-
-
+   
+   !> Computes the inverse of a square matrix A
    function inverse_matrix(A) result(Ainv)
      use messager,only:die
      implicit none
@@ -168,9 +169,9 @@ contains
      end do
      Ainv=transpose(Ainv)
    end function inverse_matrix
-
-
-    ! Returns normalized vector: w=v/|v|
+   
+   
+   ! Returns normalized vector: w=v/|v|
    pure function normalize(v) result(w)
       implicit none
       real(WP), dimension(3), intent(in) :: v
@@ -388,6 +389,78 @@ contains
       ! Rescale to be in [0,1]
       x=0.5_WP*(1.0_WP+x); w=0.5_WP*w
    end subroutine quadrature_rule
+   
+   
+   !> Computes spherical harmonics Y_l^m(theta,phi) for a given l and m at angles theta and phi
+   function spherical_harmonic(l,m,theta,phi) result(Ylm)
+      implicit none
+      integer , intent(in) :: l,m
+      real(WP), intent(in) :: theta,phi
+      real(WP) :: Ylm
+      real(WP) :: norm,plm
+      integer  :: mm,abs_m
+      ! Associated Legendre polynomial
+      abs_m=abs(m); plm=legendre_p(l,abs_m,cos(theta))
+      ! Normalization factor
+      norm=sqrt((2.0_WP*l+1.0_WP)/(4.0_WP*Pi)*real(factorial(l-abs_m),WP)/real(factorial(l+abs_m),WP))
+      ! Real-valued spherical harmonics
+      if (m.gt.0) then
+         Ylm=sqrt(2.0_WP)*norm*plm*cos(m*phi)
+      else if (m.lt.0) then
+         Ylm=sqrt(2.0_WP)*norm*plm*sin(abs(m)*phi)
+      else
+         Ylm=norm*plm
+      end if
+   contains
+      !> Computes factorial of n
+      function factorial(n) result(fact)
+         integer, intent(in) :: n
+         integer :: fact,j
+         fact=1
+         if (n.gt.0) then
+            do j=2,n
+               fact=fact*j
+            end do
+         end if
+      end function factorial
+      !> Computes the associated Legendre polynomial P_l0^m0(x)
+      function legendre_p(l0,m0,x) result(p)
+         implicit none
+         integer , intent(in) :: l0,m0
+         real(WP), intent(in) :: x
+         real(WP) :: p
+         integer  :: i
+         real(WP) :: pmm,pmmp1,pll,somx2
+         if (m0.lt.0.or.m0.gt.l0.or.abs(x).gt.1.0_WP) then
+            p=0.0_WP
+            return
+         end if
+         pmm=1.0_WP
+         if (m0.gt.0) then
+            somx2=sqrt((1.0_WP-x)*(1.0_WP+x))
+            do i=1,m0
+               pmm=-pmm*(2*i-1)*somx2
+            end do
+         end if
+         if (l0.eq.m0) then
+            p=pmm
+            return
+         else
+            pmmp1=x*(2*m0+1)*pmm
+            if (l0.eq.m0+1) then
+               p=pmmp1
+               return
+            else
+               do i=m0+2,l0
+                  pll=((2*i-1)*x*pmmp1-(i+m0-1)*pmm)/(i-m0)
+                  pmm=pmmp1
+                  pmmp1=pll
+               end do
+               p=pmmp1
+            end if
+         end if
+      end function legendre_p
+   end function spherical_harmonic
    
    
 end module mathtools
