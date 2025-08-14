@@ -756,62 +756,57 @@ contains
    subroutine couple_sd2ff()
       implicit none
       integer  :: i,j,k,n
-      real(WP) :: coeff,lambda,strength
-      real(WP), dimension(:,:,:,:), allocatable :: Q
+      real(WP) :: coeffc,coeffx,coeffy,coeffz,lambda,strength
+      real(WP), dimension(:,:,:), allocatable :: VOFtmp,RHOtmp,Itmp,Utmp,Vtmp,Wtmp
       
       ! Sponge parameters
       lambda=2.5_WP*ff%fs%dx
       strength=0.25_WP
       
       ! Allocate storage for transfered variables
-      allocate(Q(ff%fs%cfg%imino_:ff%fs%cfg%imaxo_,ff%fs%cfg%jmino_:ff%fs%cfg%jmaxo_,ff%fs%cfg%kmino_:ff%fs%cfg%kmaxo_,0:sd%fs%nQ)); Q=0.0_WP
+      allocate(VOFtmp(ff%fs%cfg%imino_:ff%fs%cfg%imaxo_,ff%fs%cfg%jmino_:ff%fs%cfg%jmaxo_,ff%fs%cfg%kmino_:ff%fs%cfg%kmaxo_)); VOFtmp=0.0_WP
+      allocate(RHOtmp(ff%fs%cfg%imino_:ff%fs%cfg%imaxo_,ff%fs%cfg%jmino_:ff%fs%cfg%jmaxo_,ff%fs%cfg%kmino_:ff%fs%cfg%kmaxo_)); RHOtmp=0.0_WP
+      allocate(Itmp  (ff%fs%cfg%imino_:ff%fs%cfg%imaxo_,ff%fs%cfg%jmino_:ff%fs%cfg%jmaxo_,ff%fs%cfg%kmino_:ff%fs%cfg%kmaxo_)); Itmp  =0.0_WP
+      allocate(Utmp  (ff%fs%cfg%imino_:ff%fs%cfg%imaxo_,ff%fs%cfg%jmino_:ff%fs%cfg%jmaxo_,ff%fs%cfg%kmino_:ff%fs%cfg%kmaxo_)); Utmp  =0.0_WP
+      allocate(Vtmp  (ff%fs%cfg%imino_:ff%fs%cfg%imaxo_,ff%fs%cfg%jmino_:ff%fs%cfg%jmaxo_,ff%fs%cfg%kmino_:ff%fs%cfg%kmaxo_)); Vtmp  =0.0_WP
+      allocate(Wtmp  (ff%fs%cfg%imino_:ff%fs%cfg%imaxo_,ff%fs%cfg%jmino_:ff%fs%cfg%jmaxo_,ff%fs%cfg%kmino_:ff%fs%cfg%kmaxo_)); Wtmp  =0.0_WP
       
-      ! Exchange data using coupler
-      call sd2ff%push(sd%fs%VF,loc='c'); call sd2ff%transfer(); call sd2ff%pull(Q(:,:,:,0),loc='c')
-      do n=1,4
-         call sd2ff%push(sd%fs%Q(:,:,:,n),loc='c'); call sd2ff%transfer(); call sd2ff%pull(Q(:,:,:,n),loc='c')
-      end do
-      call sd2ff%push(sd%Ui,loc='c'); call sd2ff%transfer(); call sd2ff%pull(Q(:,:,:,5),loc='c')
-      call sd2ff%push(sd%Vi,loc='c'); call sd2ff%transfer(); call sd2ff%pull(Q(:,:,:,6),loc='c')
-      call sd2ff%push(sd%Wi,loc='c'); call sd2ff%transfer(); call sd2ff%pull(Q(:,:,:,7),loc='c')
-      
-      ! Compute nudging increment
+      ! Nudge ff using sd data
+      call sd2ff%push(sd%fs%VF  ,loc='c'); call sd2ff%transfer(); call sd2ff%pull(VOFtmp,loc='c')
+      call sd2ff%push(sd%fs%RHOG,loc='c'); call sd2ff%transfer(); call sd2ff%pull(RHOtmp,loc='c')
+      call sd2ff%push(sd%fs%IG  ,loc='c'); call sd2ff%transfer(); call sd2ff%pull(Itmp  ,loc='c')
+      call sd2ff%push(sd%fs%U   ,loc='x'); call sd2ff%transfer(); call sd2ff%pull(Utmp  ,loc='x')
+      call sd2ff%push(sd%fs%V   ,loc='y'); call sd2ff%transfer(); call sd2ff%pull(Vtmp  ,loc='y')
+      call sd2ff%push(sd%fs%W   ,loc='z'); call sd2ff%transfer(); call sd2ff%pull(Wtmp  ,loc='z')
       do k=ff%cfg%kmino_,ff%cfg%kmaxo_; do j=ff%cfg%jmino_,ff%cfg%jmaxo_; do i=ff%cfg%imino_,ff%cfg%imaxo_
-         ! Cell-centered nudging coefficient
-         coeff=strength*sponge_forcing(inner=sd%cfg%pgrid,pos=[ff%cfg%xm(i),ff%cfg%ym(j),ff%cfg%zm(k)],delta=lambda)
-         if (Q(i,j,k,0).gt.0.0_WP) coeff=0.0_WP
-         ! Compute cell-centered momentum increment
-         Q(i,j,k,5)=coeff*(Q(i,j,k,2)*Q(i,j,k,5)-ff%fs%Q(i,j,k,1)*ff%Ui(i,j,k))
-         Q(i,j,k,6)=coeff*(Q(i,j,k,2)*Q(i,j,k,6)-ff%fs%Q(i,j,k,1)*ff%Vi(i,j,k))
-         Q(i,j,k,7)=coeff*(Q(i,j,k,2)*Q(i,j,k,7)-ff%fs%Q(i,j,k,1)*ff%Wi(i,j,k))
-         ! Compute RHO increment
-         Q(i,j,k,1)=0.0_WP
-         Q(i,j,k,2)=coeff*(Q(i,j,k,2)-ff%fs%Q(i,j,k,1))
-         ! Compute RHO*I increment
-         Q(i,j,k,3)=0.0_WP
-         Q(i,j,k,4)=coeff*(Q(i,j,k,4)-ff%fs%Q(i,j,k,2))
+         ! Compute cell-centered nudging coefficient
+         coeffc=strength*sponge_forcing(inner=sd%cfg%pgrid,pos=[ff%cfg%xm(i),ff%cfg%ym(j),ff%cfg%zm(k)],delta=lambda)
+         ! Only nudge in pure gas regions
+         if (VOFtmp(i,j,k).gt.0.0_WP) coeffc=0.0_WP
+         ! Apply nudging on density and internal energy
+         ff%fs%Q(i,j,k,1)=ff%fs%Q(i,j,k,1)+coeffc*(RHOtmp(i,j,k)            -ff%fs%Q(i,j,k,1))
+         ff%fs%Q(i,j,k,2)=ff%fs%Q(i,j,k,2)+coeffc*(RHOtmp(i,j,k)*Itmp(i,j,k)-ff%fs%Q(i,j,k,2))
+         ! Compute face-centered nudging coefficients
+         coeffx=strength*sponge_forcing(inner=sd%cfg%pgrid,pos=[ff%cfg%x (i),ff%cfg%ym(j),ff%cfg%zm(k)],delta=lambda)
+         coeffy=strength*sponge_forcing(inner=sd%cfg%pgrid,pos=[ff%cfg%xm(i),ff%cfg%y (j),ff%cfg%zm(k)],delta=lambda)
+         coeffz=strength*sponge_forcing(inner=sd%cfg%pgrid,pos=[ff%cfg%xm(i),ff%cfg%ym(j),ff%cfg%z (k)],delta=lambda)
+         ! Apply nudging on velocity
+         ff%fs%U(i,j,k)=ff%fs%U(i,j,k)+coeffx*(Utmp(i,j,k)-ff%fs%U(i,j,k))
+         ff%fs%V(i,j,k)=ff%fs%V(i,j,k)+coeffy*(Vtmp(i,j,k)-ff%fs%V(i,j,k))
+         ff%fs%W(i,j,k)=ff%fs%W(i,j,k)+coeffz*(Wtmp(i,j,k)-ff%fs%W(i,j,k))
       end do; end do; end do
       
-      ! Second pass to apply forcing
-      do k=ff%cfg%kmino_+1,ff%cfg%kmaxo_; do j=ff%cfg%jmino_+1,ff%cfg%jmaxo_; do i=ff%cfg%imino_+1,ff%cfg%imaxo_
-         ff%fs%Q(i,j,k,1)=ff%fs%Q(i,j,k,1)+Q(i,j,k,2)
-         ff%fs%Q(i,j,k,2)=ff%fs%Q(i,j,k,2)+Q(i,j,k,4)
-         ff%fs%Q(i,j,k,3)=ff%fs%Q(i,j,k,3)+0.5_WP*sum(Q(i-1:i,j,k,5))
-         ff%fs%Q(i,j,k,4)=ff%fs%Q(i,j,k,4)+0.5_WP*sum(Q(i,j-1:j,k,6))
-         ff%fs%Q(i,j,k,5)=ff%fs%Q(i,j,k,5)+0.5_WP*sum(Q(i,j,k-1:k,7))
-      end do; end do; end do
-      
-      ! Communicate conserved variables
-      do n=1,ff%fs%nQ; call ff%cfg%sync(ff%fs%Q(:,:,:,n)); end do
+      ! Recompute momentum
+      call ff%fs%get_momentum()
       
       ! Recompute primitive variables
       call ff%fs%get_primitive()
       
-      ! Free memory
-      deallocate(Q)
+      ! Free up memory
+      deallocate(VOFtmp,RHOtmp,Itmp,Utmp,Vtmp,Wtmp)
       
    contains
-      !> Function that calculates the signed distance between to domains
+      !> Function that calculates the signed distance between two domains
       real(WP) function sponge_forcing(inner,pos,delta)
          use pgrid_class, only: pgrid
          use mathtools,   only: Pi
@@ -874,60 +869,53 @@ contains
    subroutine couple_ff2sd()
       implicit none
       integer  :: i,j,k,n
-      real(WP) :: coeff,lambda,strength
-      real(WP), dimension(:,:,:,:), allocatable :: Q
+      real(WP) :: coeffc,coeffx,coeffy,coeffz,lambda,strength
+      real(WP), dimension(:,:,:), allocatable :: RHOtmp,RHOItmp,Utmp,Vtmp,Wtmp
       
       ! Sponge parameters
       lambda=5.0_WP*sd%fs%dx
-      strength=0.1_WP
+      strength=0.125_WP
       
       ! Allocate storage for transfered variables
-      allocate(Q(sd%fs%cfg%imino_:sd%fs%cfg%imaxo_,sd%fs%cfg%jmino_:sd%fs%cfg%jmaxo_,sd%fs%cfg%kmino_:sd%fs%cfg%kmaxo_,1:ff%fs%nQ)); Q=0.0_WP
+      allocate(RHOtmp (sd%fs%cfg%imino_:sd%fs%cfg%imaxo_,sd%fs%cfg%jmino_:sd%fs%cfg%jmaxo_,sd%fs%cfg%kmino_:sd%fs%cfg%kmaxo_)); RHOtmp =0.0_WP
+      allocate(RHOItmp(sd%fs%cfg%imino_:sd%fs%cfg%imaxo_,sd%fs%cfg%jmino_:sd%fs%cfg%jmaxo_,sd%fs%cfg%kmino_:sd%fs%cfg%kmaxo_)); RHOItmp=0.0_WP
+      allocate(Utmp   (sd%fs%cfg%imino_:sd%fs%cfg%imaxo_,sd%fs%cfg%jmino_:sd%fs%cfg%jmaxo_,sd%fs%cfg%kmino_:sd%fs%cfg%kmaxo_)); Utmp   =0.0_WP
+      allocate(Vtmp   (sd%fs%cfg%imino_:sd%fs%cfg%imaxo_,sd%fs%cfg%jmino_:sd%fs%cfg%jmaxo_,sd%fs%cfg%kmino_:sd%fs%cfg%kmaxo_)); Vtmp   =0.0_WP
+      allocate(Wtmp   (sd%fs%cfg%imino_:sd%fs%cfg%imaxo_,sd%fs%cfg%jmino_:sd%fs%cfg%jmaxo_,sd%fs%cfg%kmino_:sd%fs%cfg%kmaxo_)); Wtmp   =0.0_WP
       
-      ! Exchange data using coupler
-      do n=1,2
-         call ff2sd%push(ff%fs%Q(:,:,:,n),loc='c'); call ff2sd%transfer(); call ff2sd%pull(Q(:,:,:,n),loc='c')
-      end do
-      call ff2sd%push(ff%Ui,loc='c'); call ff2sd%transfer(); call ff2sd%pull(Q(:,:,:,3),loc='c')
-      call ff2sd%push(ff%Vi,loc='c'); call ff2sd%transfer(); call ff2sd%pull(Q(:,:,:,4),loc='c')
-      call ff2sd%push(ff%Wi,loc='c'); call ff2sd%transfer(); call ff2sd%pull(Q(:,:,:,5),loc='c')
-      
-      ! Compute nudging increment
+      ! Nudge sd using ff data
+      call ff2sd%push(ff%fs%Q(:,:,:,1),loc='c'); call ff2sd%transfer(); call ff2sd%pull(RHOtmp ,loc='c')
+      call ff2sd%push(ff%fs%Q(:,:,:,2),loc='c'); call ff2sd%transfer(); call ff2sd%pull(RHOItmp,loc='c')
+      call ff2sd%push(ff%fs%U         ,loc='x'); call ff2sd%transfer(); call ff2sd%pull(Utmp   ,loc='x')
+      call ff2sd%push(ff%fs%V         ,loc='y'); call ff2sd%transfer(); call ff2sd%pull(Vtmp   ,loc='y')
+      call ff2sd%push(ff%fs%W         ,loc='z'); call ff2sd%transfer(); call ff2sd%pull(Wtmp   ,loc='z')
       do k=sd%cfg%kmino_,sd%cfg%kmaxo_; do j=sd%cfg%jmino_,sd%cfg%jmaxo_; do i=sd%cfg%imino_,sd%cfg%imaxo_
-         ! Cell-centered nudging coefficient
-         coeff=strength*sponge_forcing(inner=sd%cfg%pgrid,pos=[sd%cfg%xm(i),sd%cfg%ym(j),sd%cfg%zm(k)],delta=lambda)
-         ! Compute cell-centered momentum increment
-         Q(i,j,k,3)=coeff*((Q(i,j,k,1)+sd%fs%Q(i,j,k,1))*Q(i,j,k,3)-sum(sd%fs%Q(i,j,k,1:2))*sd%Ui(i,j,k))
-         Q(i,j,k,4)=coeff*((Q(i,j,k,1)+sd%fs%Q(i,j,k,1))*Q(i,j,k,4)-sum(sd%fs%Q(i,j,k,1:2))*sd%Vi(i,j,k))
-         Q(i,j,k,5)=coeff*((Q(i,j,k,1)+sd%fs%Q(i,j,k,1))*Q(i,j,k,5)-sum(sd%fs%Q(i,j,k,1:2))*sd%Wi(i,j,k))
-         ! Compute RHO increment
-         Q(i,j,k,1)=coeff*(Q(i,j,k,1)-sd%fs%Q(i,j,k,2))
-         ! Compute RHO*I increment
-         Q(i,j,k,2)=coeff*(Q(i,j,k,2)-sd%fs%Q(i,j,k,4))
+         ! Compute cell-centered nudging coefficient
+         coeffc=strength*sponge_forcing(inner=sd%cfg%pgrid,pos=[sd%cfg%xm(i),sd%cfg%ym(j),sd%cfg%zm(k)],delta=lambda)
+         ! Apply nudging on gas density and gas internal energy
+         sd%fs%Q(i,j,k,2)=sd%fs%Q(i,j,k,2)+coeffc*((1.0_WP-sd%fs%VF(i,j,k))*RHOtmp (i,j,k)-sd%fs%Q(i,j,k,2))
+         sd%fs%Q(i,j,k,4)=sd%fs%Q(i,j,k,4)+coeffc*((1.0_WP-sd%fs%VF(i,j,k))*RHOItmp(i,j,k)-sd%fs%Q(i,j,k,4))
+         ! Compute face-centered nudging coefficients
+         coeffx=strength*sponge_forcing(inner=sd%cfg%pgrid,pos=[sd%cfg%x (i),sd%cfg%ym(j),sd%cfg%zm(k)],delta=lambda)
+         coeffy=strength*sponge_forcing(inner=sd%cfg%pgrid,pos=[sd%cfg%xm(i),sd%cfg%y (j),sd%cfg%zm(k)],delta=lambda)
+         coeffz=strength*sponge_forcing(inner=sd%cfg%pgrid,pos=[sd%cfg%xm(i),sd%cfg%ym(j),sd%cfg%z (k)],delta=lambda)
+         ! Apply nudging on velocity
+         sd%fs%U(i,j,k)=sd%fs%U(i,j,k)+coeffx*(Utmp(i,j,k)-sd%fs%U(i,j,k))
+         sd%fs%V(i,j,k)=sd%fs%V(i,j,k)+coeffy*(Vtmp(i,j,k)-sd%fs%V(i,j,k))
+         sd%fs%W(i,j,k)=sd%fs%W(i,j,k)+coeffz*(Wtmp(i,j,k)-sd%fs%W(i,j,k))
       end do; end do; end do
       
-      ! Second pass to apply forcing
-      do k=sd%cfg%kmino_+1,sd%cfg%kmaxo_; do j=sd%cfg%jmino_+1,sd%cfg%jmaxo_; do i=sd%cfg%imino_+1,sd%cfg%imaxo_
-         sd%fs%Q(i,j,k,1)=sd%fs%Q(i,j,k,1)
-         sd%fs%Q(i,j,k,2)=sd%fs%Q(i,j,k,2)+Q(i,j,k,1)
-         sd%fs%Q(i,j,k,3)=sd%fs%Q(i,j,k,3)
-         sd%fs%Q(i,j,k,4)=sd%fs%Q(i,j,k,4)+Q(i,j,k,2)
-         sd%fs%Q(i,j,k,5)=sd%fs%Q(i,j,k,5)+0.5_WP*sum(Q(i-1:i,j,k,3))
-         sd%fs%Q(i,j,k,6)=sd%fs%Q(i,j,k,6)+0.5_WP*sum(Q(i,j-1:j,k,4))
-         sd%fs%Q(i,j,k,7)=sd%fs%Q(i,j,k,7)+0.5_WP*sum(Q(i,j,k-1:k,5))
-      end do; end do; end do
-      
-      ! Communicate conserved variables
-      do n=1,sd%fs%nQ; call sd%cfg%sync(sd%fs%Q(:,:,:,n)); end do
+      ! Recompute momentum
+      call sd%fs%get_momentum()
       
       ! Recompute primitive variables
       call sd%fs%get_primitive()
       
-      ! Free memory
-      deallocate(Q)
+      ! Free up memory
+      deallocate(RHOtmp,RHOItmp,Utmp,Vtmp,Wtmp)
       
    contains
-      !> Function that calculates the signed distance between to domains
+      !> Function that calculates the signed distance between two domains
       real(WP) function sponge_forcing(inner,pos,delta)
          use pgrid_class, only: pgrid
          use mathtools,   only: Pi
@@ -938,10 +926,14 @@ contains
          real(WP) :: dx,dy,dz,dx_in,dy_in,dz_in
          logical :: is_out_x,is_out_y,is_out_z
          ! X direction
-         if (inner%nx.gt.1) then ! Only force in -x
-            dx=max(inner%x(inner%imin)-pos(1),0.0_WP)!,pos(1)-inner%x(inner%imax+1))
-            dx_in=pos(1)-inner%x(inner%imin)!min(pos(1)-inner%x(inner%imin),inner%x(inner%imax+1)-pos(1))
-            is_out_x=(pos(1).lt.inner%x(inner%imin))!.or.pos(1).gt.inner%x(inner%imax+1))
+         if (inner%nx.gt.1) then
+            dx=max(inner%x(inner%imin)-pos(1),0.0_WP,pos(1)-inner%x(inner%imax+1))
+            dx_in=min(pos(1)-inner%x(inner%imin),inner%x(inner%imax+1)-pos(1))
+            is_out_x=(pos(1).lt.inner%x(inner%imin).or.pos(1).gt.inner%x(inner%imax+1))
+            ! Only force in -x
+            !dx=max(inner%x(inner%imin)-pos(1),0.0_WP)!,pos(1)-inner%x(inner%imax+1))
+            !dx_in=pos(1)-inner%x(inner%imin)!min(pos(1)-inner%x(inner%imin),inner%x(inner%imax+1)-pos(1))
+            !is_out_x=(pos(1).lt.inner%x(inner%imin))!.or.pos(1).gt.inner%x(inner%imax+1))
          else
             dx=0.0_WP
             dx_in=huge(1.0_WP)
