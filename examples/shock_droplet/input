@@ -35,6 +35,6 @@ Remeshing period : 0.2
 !- Parallelization ----
 Farfield partition : 8 1 1
 !- Mesh ---------------
-Farfield dx : 0.04
-Farfield nx : 200 200 1!200
+Farfield dx : 0.02
+Farfield nx : 400 400 1!200
 Farfield X0 : -2

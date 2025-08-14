@@ -6,6 +6,8 @@ module simulation
    use ffshock_class,     only: ffshock
    use coupler_class,     only: coupler
    use event_class,       only: event
+   use monitor_class,     only: monitor
+   use timer_class,       only: timer
    implicit none
    private; public :: simulation_init,simulation_run,simulation_final
    
@@ -32,6 +34,15 @@ module simulation
    
    !> Maximum mesh size
    integer :: max_nx,max_ny,max_nz
+   
+   !> Timing
+   type(monitor) :: timefile !< Timing monitoring
+   type(timer)   :: tstep    !< Timer for step
+   type(timer)   :: tsd      !< Timer for ShockDrop
+   type(timer)   :: tff      !< Timer for FarField
+   type(timer)   :: tcpl     !< Timer for coupling
+   type(timer)   :: tmesh    !< Timer for remeshing
+   type(timer)   :: ttrans   !< Timer for drop transfer
    
    !> Equations of state
    real(WP) :: PinfL,GammaL,CvL
@@ -533,6 +544,28 @@ contains
          call sd%meshfile%write()
       end block initialize_remeshing
       
+      ! Initialize timers
+      initialize_timers: block
+         use parallel, only: comm,amRoot
+         ! Create timers
+         tstep =timer(comm=comm,name='Timestep')
+         tsd   =timer(comm=comm,name='ShockDrop')
+         tff   =timer(comm=comm,name='FarField')
+         tcpl  =timer(comm=comm,name='Coupling')
+         tmesh =timer(comm=comm,name='Remeshing')
+         ttrans=timer(comm=comm,name='Transfer')
+         ! Create corresponding monitor file
+         timefile=monitor(amRoot,'timing')
+         call timefile%add_column(time%n,'Timestep number')
+         call timefile%add_column(time%t,'Time')
+         call timefile%add_column(tstep%time ,trim(tstep%name))
+         call timefile%add_column(tsd%time   ,trim(tsd%name))
+         call timefile%add_column(tff%time   ,trim(tff%name))
+         call timefile%add_column(tcpl%time  ,trim(tcpl%name))
+         call timefile%add_column(tmesh%time ,trim(tmesh%name))
+         call timefile%add_column(ttrans%time,trim(ttrans%name))
+      end block initialize_timers
+      
    contains
       !> Level set function for a perturbed sphere of unity diameter centered at (0,0,0)
       function levelset_drop(xyz,t) result(G)
@@ -569,23 +602,35 @@ contains
       ! Overall time integration
       do while (.not.time%done())
          
+         ! Reset all timers and start timestep timer
+         call tstep%reset(); call tsd%reset(); call tff%reset(); call tcpl%reset(); call tmesh%reset(); call ttrans%reset()
+         call tstep%start()
+         
          ! Adjust time step size using sd CFL info
          call sd%fs%get_cfl(dt=time%dt,cfl=time%cfl)
          call time%adjust_dt()
          call time%increment()
          
          ! Handle coupling
+         call tcpl%start()
          call couple_sd2ff()
          call couple_ff2sd()
+         call tcpl%stop()
          
          ! Advance shock-drop simulation
+         call tsd%start()
          call sd%step(dt=time%dt)
+         call tsd%stop()
          
          ! Advance farfield simulation
+         call tff%start()
          call ff%step(dt=time%dt)
+         call tff%stop()
          
          ! Transfer drops
+         call ttrans%start()
          call transfer()
+         call ttrans%stop()
          
          ! Perform monitoring
          call sd%output_monitor()
@@ -598,7 +643,15 @@ contains
          end if
          
          ! Remesh sd
+         call tmesh%start()
          if (remesh_evt%occurs()) call remesh()
+         call tmesh%stop()
+         
+         ! Stop timestep timer
+         call tstep%stop()
+         
+         ! Output timing info
+         call timefile%write()
          
       end do
       
@@ -1209,6 +1262,13 @@ contains
       call ff%finalize()
       call ens_evt%finalize()
       call remesh_evt%finalize()
+      call timefile%finalize()
+      call tstep%finalize()
+      call tsd%finalize()
+      call tff%finalize()
+      call tcpl%finalize()
+      call tmesh%finalize()
+      call ttrans%finalize()
    end subroutine simulation_final
    
    
