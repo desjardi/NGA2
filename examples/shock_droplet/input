@@ -7,7 +7,7 @@ Density ratio :     815
 Sound speed ratio : 4.3
 !------- inviscid --------
 Shock Mach number : 5.12
-Shock location :   -0.7
+Shock location :   -0.6
 !------- viscous ---------
 Gas Reynolds number : 1e5
 Viscosity ratio :     58.3
@@ -35,6 +35,6 @@ Remeshing period : 0.2
 !- Parallelization ----
 Farfield partition : 8 1 1
 !- Mesh ---------------
-Farfield dx : 0.02
-Farfield nx : 400 400 1!200
+Farfield dx : 0.04
+Farfield nx : 200 200 1!200
 Farfield X0 : -2
