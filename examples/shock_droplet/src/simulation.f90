@@ -1044,7 +1044,7 @@ contains
       integer :: i,j,k,n,m,ierr,nremoved,ncreated,np
       real(WP), dimension(:)  , allocatable :: Vd,Md,Pd
       real(WP), dimension(:,:), allocatable :: Bd,Ud
-      real(WP), parameter :: vol_coeff=10.0_WP
+      real(WP), parameter :: vol_coeff=32.0_WP
       real(WP), parameter :: diameter_threshold=1.0e-2_WP
       real(WP), dimension(3) :: edgelo,edgehi
       character(len=str_long) :: message
