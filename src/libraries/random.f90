@@ -18,10 +18,19 @@ contains
    !> This comes from the GFortran website.
    subroutine random_initialize
       use precision, only: I4,I8
+      use, intrinsic :: iso_c_binding, only: c_int
       implicit none
       integer(kind=I4), allocatable, dimension(:) :: seed
-      integer(kind=I4) :: i,n,un,istat,dt(8),pid
+      integer(kind=I4) :: i,n,un,istat,dt(8)
       integer(kind=I8) :: t
+      integer(c_int) :: pid
+      ! Interface for getpid
+      interface
+         function c_getpid() bind(C,name="getpid")
+            import :: c_int
+            integer(c_int) :: c_getpid
+         end function c_getpid
+      end interface
       ! Get seed size
       call random_seed(size=n)
       allocate(seed(n))
@@ -40,7 +49,7 @@ contains
             & +dt(2)*31_I8*24*60*60*1000+dt(3)*24_I8*60*60*1000 &
             & +dt(5)*60*60*1000+dt(6)*60*1000+dt(7)*1000+dt(8)
          end if
-         pid=getpid() ! Note that this is not part of 2018 standard
+         pid=c_getpid()
          t=ieor(t,int(pid,kind(t)))
          do i=1,n
             seed(i)=lcg(t)
