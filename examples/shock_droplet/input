@@ -15,8 +15,9 @@ Viscosity ratio :     58.3
 # Maximum simulation time
 Max time : 30
 
-# Ensight output
+# Postprocessing output
 Ensight output period : 0.1
+Drop analysis period :  0.1
 
 # Shock-drop simulation
 !- Parallelization ----

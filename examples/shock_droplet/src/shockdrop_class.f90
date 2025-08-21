@@ -52,6 +52,7 @@ module shockdrop_class
       procedure :: initialize                      !< Initialize shock-drop simulation
       procedure :: step                            !< Advance shock-drop simulation by one time step
       procedure, private :: postproc               !< Postprocess shock-drop case
+      procedure :: analyze_drops                   !< Output droplet analysis
       procedure :: output_monitor                  !< Monitoring for shock-drop case
       procedure :: output_ensight                  !< Ensight output for shock-drop case
       procedure, private :: prepare_viscosities    !< Prepare viscosities
@@ -109,11 +110,94 @@ contains
       end function make_label
       !> Function that identifies if cell pairs have same label
       logical function same_label(i1,j1,k1,i2,j2,k2)
+         use irl_fortran_interface, only: calculateNormal,calculateCentroid
          implicit none
-         integer, intent(in) :: i1,j1,k1,i2,j2,k2
+         integer , intent(in) :: i1,j1,k1,i2,j2,k2
+         real(WP), dimension(3) :: N1,N2,O1,O2
+         ! Big default, assume same label
          same_label=.true.
+         ! Look more closely at the local polygon alignment to decide whether to use same labels
+         if (this%fs%VF(i1,j1,k1).gt.0.0_WP.and.this%fs%VF(i1,j1,k1).lt.1.0_WP.and.this%fs%VF(i2,j2,k2).gt.0.0_WP.and.this%fs%VF(i2,j2,k2).lt.1.0_WP) then
+            ! Get polygon normals
+            N1=calculateNormal(this%fs%interface_polygon(i1,j1,k1))
+            N2=calculateNormal(this%fs%interface_polygon(i2,j2,k2))
+            ! If not at least ~75 degrees, return
+            if (dot_product(N1,N2).ge.0.3_WP) return
+            ! Get polygon barycenters
+            O1=calculateCentroid(this%fs%interface_polygon(i1,j1,k1))
+            O2=calculateCentroid(this%fs%interface_polygon(i2,j2,k2))
+            ! If pointing towards one another, use different labels
+            if (dot_product(O1-O2,N1).lt.0.0_WP.and.dot_product(O2-O1,N2).lt.0.0_WP) same_label=.false.
+         end if
       end function same_label
    end subroutine postproc
+   
+   
+   !> Analysis of droplets
+   subroutine analyze_drops(this)
+      use mpi_f08,   only: MPI_ALLREDUCE,MPI_SUM,MPI_IN_PLACE
+      use parallel,  only: MPI_REAL_WP,amRoot
+      use mathtools, only: Pi
+      use string,    only: str_medium
+      use filesys,   only: makedir,isdir
+      implicit none
+      class(shockdrop), intent(inout) :: this
+      integer :: i,j,k,n,m,ierr,iunit
+      real(WP), dimension(:)  , allocatable :: Vd,Md,Pd
+      real(WP), dimension(:,:), allocatable :: Bd,Ud
+      character(len=str_medium) :: filename,timestamp
+      
+      ! Allocate volume, mass, pressure, barycenter, and velocity arrays
+      allocate(Vd(    1:this%ccl%nstruct)); Vd=0.0_WP
+      allocate(Md(    1:this%ccl%nstruct)); Md=0.0_WP
+      allocate(Pd(    1:this%ccl%nstruct)); Pd=0.0_WP
+      allocate(Bd(1:3,1:this%ccl%nstruct)); Bd=0.0_WP
+      allocate(Ud(1:3,1:this%ccl%nstruct)); Ud=0.0_WP
+      
+      ! Loop over individual structures and compute structure properties
+      do n=1,this%ccl%nstruct
+         ! Loop over cells in structure and accumulate data
+         do m=1,this%ccl%struct(n)%n_
+            ! Get cell index
+            i=this%ccl%struct(n)%map(1,m); j=this%ccl%struct(n)%map(2,m); k=this%ccl%struct(n)%map(3,m)
+            ! Increment volume, mass, pressure, barycenter, and momentum
+            Vd  (n)=Vd  (n)+this%fs%cfg%vol(i,j,k)*this%fs%VF(i,j,k)
+            Md  (n)=Md  (n)+this%fs%cfg%vol(i,j,k)*this%fs%Q (i,j,k,1)
+            Pd  (n)=Pd  (n)+this%fs%cfg%vol(i,j,k)*this%fs%VF(i,j,k)  *this%fs%PL(i,j,k)
+            Bd(:,n)=Bd(:,n)+this%fs%cfg%vol(i,j,k)*this%fs%Q (i,j,k,1)*this%fs%BL(:,i,j,k)
+            Ud(1,n)=Ud(1,n)+this%fs%cfg%vol(i,j,k)*this%fs%Q (i,j,k,1)*this%Ui(i,j,k)
+            Ud(2,n)=Ud(2,n)+this%fs%cfg%vol(i,j,k)*this%fs%Q (i,j,k,1)*this%Vi(i,j,k)
+            Ud(3,n)=Ud(3,n)+this%fs%cfg%vol(i,j,k)*this%fs%Q (i,j,k,1)*this%Wi(i,j,k)
+         end do
+      end do
+      call MPI_ALLREDUCE(MPI_IN_PLACE,Vd,  this%ccl%nstruct,MPI_REAL_WP,MPI_SUM,this%fs%cfg%comm,ierr)
+      call MPI_ALLREDUCE(MPI_IN_PLACE,Md,  this%ccl%nstruct,MPI_REAL_WP,MPI_SUM,this%fs%cfg%comm,ierr)
+      call MPI_ALLREDUCE(MPI_IN_PLACE,Pd,  this%ccl%nstruct,MPI_REAL_WP,MPI_SUM,this%fs%cfg%comm,ierr); Pd=Pd/Vd
+      call MPI_ALLREDUCE(MPI_IN_PLACE,Bd,3*this%ccl%nstruct,MPI_REAL_WP,MPI_SUM,this%fs%cfg%comm,ierr); do n=1,this%ccl%nstruct; Bd(:,n)=Bd(:,n)/Md(n); end do
+      call MPI_ALLREDUCE(MPI_IN_PLACE,Ud,3*this%ccl%nstruct,MPI_REAL_WP,MPI_SUM,this%fs%cfg%comm,ierr); do n=1,this%ccl%nstruct; Ud(:,n)=Ud(:,n)/Md(n); end do
+      
+      ! Only root process outputs to a file
+      if (this%cfg%amRoot) then
+         ! Ensure we have a directory
+         if (.not.isdir('droplets')) call makedir('droplets')
+         ! Create filename
+         filename='droplets_'; write(timestamp,'(es12.5)') this%time%t
+         ! Open droplet file
+         open(newunit=iunit,file='droplets/'//trim(adjustl(filename))//trim(adjustl(timestamp)),form='formatted',status='replace',access='stream',iostat=ierr)
+         ! Write the header
+         write(iunit,'(a12,10(3x,a12))') 'Label','Diameter','Volume','Mass','Pressure','X','Y','Z','U','V','W'
+         ! Output the droplet data
+         do n=1,this%ccl%nstruct
+            write(iunit,'(i12,10(3x,es12.5))') n,(6.0_WP*Vd(n)/Pi)**(1.0_WP/3.0_WP),Vd(n),Md(n),Pd(n),Bd(1,n),Bd(2,n),Bd(3,n),Ud(1,n),Ud(2,n),Ud(3,n)
+         end do
+         ! Close the file
+         close(iunit)
+      end if
+      
+      ! Deallocate memory
+      deallocate(Vd,Md,Pd,Bd,Ud)
+      
+   end subroutine analyze_drops
    
    
    !> Initialization of a shock-drop problem
