@@ -198,7 +198,7 @@ contains
       ! Get min and max on the finest level
       this%VFmin=min(this%VFmin,this%volmom(this%amr%clvl())%min(comp=1))
       this%VFmax=max(this%VFmax,this%volmom(this%amr%clvl())%max(comp=1))
-
+      
       ! Get int at level 0
       this%VFint=this%volmom(0)%sum(comp=1)*(this%amr%dx(0)*this%amr%dy(0)*this%amr%dz(0))/this%amr%vol
       

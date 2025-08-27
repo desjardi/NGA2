@@ -139,7 +139,7 @@ contains
          call pp%addarr('ref_ratio'      ,this%rref)
          call amrex_parmparse_destroy(pp)
          call amrex_parmparse_build(pp,'geometry')
-         call pp%add   ('coord_sys'  ,this%coordsys)
+         call pp%add   ('coord_sys'      ,this%coordsys)
          per=0
          if (this%xper) per(1)=1
          if (this%yper) per(2)=1
@@ -190,7 +190,7 @@ contains
                type(c_ptr), value :: core
             end subroutine amrex_fi_get_ref_ratio
          end interface
-         deallocate(this%rref); allocate(this%rref(0:this%nlvl-1))
+         if (allocated(this%rref)) deallocate(this%rref); allocate(this%rref(0:this%nlvl-1))
          call amrex_fi_get_ref_ratio(this%rref,this%amrcore)
       end block store_ref_ratio
       ! Store parallel info
@@ -221,6 +221,8 @@ contains
    
    !> Finalization of amrconfig object
    impure elemental subroutine finalize(this)
+      use mpi_f08,       only: MPI_COMM_NULL
+      use iso_c_binding, only: c_associated
       implicit none
       class(amrconfig), intent(inout) :: this
       interface
@@ -230,8 +232,19 @@ contains
             type(c_ptr), value :: core
          end subroutine amrex_fi_delete_amrcore
       end interface
-      call amrex_fi_delete_amrcore(this%amrcore)
-      this%amrcore=c_null_ptr
+      ! Delete amrcore object if it exists
+      if (c_associated(this%amrcore)) then
+         call amrex_fi_delete_amrcore(this%amrcore)
+         this%amrcore=c_null_ptr
+      end if
+      ! Deallocate allocatable arrays
+      if (allocated(this%rref)) deallocate(this%rref)
+      if (allocated(this%geom)) deallocate(this%geom)
+      if (allocated(this%dx))   deallocate(this%dx)
+      if (allocated(this%dy))   deallocate(this%dy)
+      if (allocated(this%dz))   deallocate(this%dz)
+      ! Do not free comm as it was passed to us
+      this%comm=MPI_COMM_NULL
    end subroutine finalize
    
    
@@ -345,7 +358,7 @@ contains
       type(amrex_box)      :: bx
       integer :: n,m,nb
       integer, dimension(3) :: lo,hi
-      if (amRoot) then
+      if (this%amRoot) then
          write(output_unit,'("AMR Cartesian grid [",a,"]")') trim(this%name)
          write(output_unit,'(" > amr level = ",i2)') this%clvl()
          write(output_unit,'(" > max level = ",i2)') this%nlvl

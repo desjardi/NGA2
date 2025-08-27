@@ -1055,8 +1055,8 @@ contains
       integer :: i,j,k,n,m,ierr,nremoved,ncreated,np
       real(WP), dimension(:)  , allocatable :: Vd,Md,Pd
       real(WP), dimension(:,:), allocatable :: Bd,Ud
-      real(WP), parameter :: vol_coeff=64.0_WP
-      real(WP), parameter :: diameter_threshold=1.0e-2_WP
+      real(WP), parameter :: vol_coeff=64.0_WP            !< excessively large drops are not transfered
+      real(WP), parameter :: diameter_threshold=1.0e-1_WP !< disallow excessively small drops
       real(WP), dimension(3) :: edgelo,edgehi
       character(len=str_long) :: message
       

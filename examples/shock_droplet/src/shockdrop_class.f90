@@ -472,7 +472,7 @@ contains
       call this%fs%get_primitive()
       
       ! Apply boundary conditions
-      call this%apply_bconds()
+      !call this%apply_bconds() !< not needed with the multi-domain approach
       
       ! Interpolate velocity
       call this%fs%interp_vel(this%Ui,this%Vi,this%Wi)
@@ -548,6 +548,8 @@ contains
          Lvisc=Lrho*(this%cst_viscL+this%visc(i,j,k)); Gvisc=Grho*(this%cst_viscG+this%visc(i,j,k)); this%fs%VISC(i,j,k)=(Lvof+Gvof)/(Lvof/max(Lvisc,eps)+Gvof/max(Gvisc,eps))
          ! Harmonic average of BETA
          Lbeta=Lrho*this%beta(i,j,k); Gbeta=Grho*this%beta(i,j,k); this%fs%BETA(i,j,k)=(Lvof+Gvof)/(Lvof/max(Lbeta,eps)+Gvof/max(Gbeta,eps))
+         ! Try adding BETA to visc
+         !this%fs%VISC(i,j,k)=this%fs%VISC(i,j,k)+this%fs%BETA(i,j,k)
       end do; end do; end do
    end subroutine prepare_viscosities
    
@@ -559,7 +561,7 @@ contains
       class(shockdrop), intent(inout) :: this
       integer :: i,j,k
       
-      ! Apply clipped Neumann on primitive variables in x+
+      ! Apply UNclipped Neumann on primitive variables in x+
       if (.not.this%fs%cfg%xper.and.this%fs%cfg%iproc.eq.this%fs%cfg%npx) then
          do k=this%fs%cfg%kmino_,this%fs%cfg%kmaxo_; do j=this%fs%cfg%jmino_,this%fs%cfg%jmaxo_
             ! Copy over from imax to imax+1 and above
@@ -571,7 +573,8 @@ contains
                this%fs%RHOG(i,j,k)=this%fs%RHOG(this%fs%cfg%imax,j,k)
                this%fs%PG  (i,j,k)=this%fs%PG  (this%fs%cfg%imax,j,k)
                this%fs%IG  (i,j,k)=this%fs%IG  (this%fs%cfg%imax,j,k)
-               this%fs%U  (i,j,k)=max(this%fs%U(this%fs%cfg%imax,j,k),0.0_WP)
+               !this%fs%U  (i,j,k)=max(this%fs%U(this%fs%cfg%imax,j,k),0.0_WP)
+               this%fs%U   (i,j,k)=this%fs%U   (this%fs%cfg%imax,j,k)
                this%fs%V   (i,j,k)=this%fs%V   (this%fs%cfg%imax,j,k)
                this%fs%W   (i,j,k)=this%fs%W   (this%fs%cfg%imax,j,k)
                this%fs%VF  (i,j,k)=this%fs%VF  (this%fs%cfg%imax,j,k)
@@ -583,7 +586,7 @@ contains
          end do; end do
       end if
       
-      ! Apply clipped Neumann on primitive variables in y+
+      ! Apply UNclipped Neumann on primitive variables in y+
       if (.not.this%fs%cfg%yper.and.this%fs%cfg%jproc.eq.this%fs%cfg%npy) then
          do k=this%fs%cfg%kmino_,this%fs%cfg%kmaxo_; do i=this%fs%cfg%imino_,this%fs%cfg%imaxo_
             ! Copy over from jmax to jmax+1 and above
@@ -596,7 +599,8 @@ contains
                this%fs%PG  (i,j,k)=this%fs%PG  (i,this%fs%cfg%jmax,k)
                this%fs%IG  (i,j,k)=this%fs%IG  (i,this%fs%cfg%jmax,k)
                this%fs%U   (i,j,k)=this%fs%U   (i,this%fs%cfg%jmax,k)
-               this%fs%V  (i,j,k)=max(this%fs%V(i,this%fs%cfg%jmax,k),0.0_WP)
+               !this%fs%V  (i,j,k)=max(this%fs%V(i,this%fs%cfg%jmax,k),0.0_WP)
+               this%fs%V   (i,j,k)=this%fs%V   (i,this%fs%cfg%jmax,k)
                this%fs%W   (i,j,k)=this%fs%W   (i,this%fs%cfg%jmax,k)
                this%fs%VF  (i,j,k)=this%fs%VF  (i,this%fs%cfg%jmax,k)
                ! Also adjust interface data
@@ -607,7 +611,7 @@ contains
          end do; end do
       end if
       
-      ! Apply clipped Neumann on primitive variables in y-
+      ! Apply UNclipped Neumann on primitive variables in y-
       if (.not.this%fs%cfg%yper.and.this%fs%cfg%jproc.eq.1) then
          do k=this%fs%cfg%kmino_,this%fs%cfg%kmaxo_; do i=this%fs%cfg%imino_,this%fs%cfg%imaxo_
             ! First copy over V from jmin+1 to jmin
@@ -622,7 +626,8 @@ contains
                this%fs%PG  (i,j,k)=this%fs%PG  (i,this%fs%cfg%jmin,k)
                this%fs%IG  (i,j,k)=this%fs%IG  (i,this%fs%cfg%jmin,k)
                this%fs%U   (i,j,k)=this%fs%U   (i,this%fs%cfg%jmin,k)
-               this%fs%V  (i,j,k)=min(this%fs%V(i,this%fs%cfg%jmin,k),0.0_WP)
+               !this%fs%V  (i,j,k)=min(this%fs%V(i,this%fs%cfg%jmin,k),0.0_WP)
+               this%fs%V   (i,j,k)=this%fs%V   (i,this%fs%cfg%jmin,k)
                this%fs%W   (i,j,k)=this%fs%W   (i,this%fs%cfg%jmin,k)
                this%fs%VF  (i,j,k)=this%fs%VF  (i,this%fs%cfg%jmin,k)
                ! Also adjust interface data
@@ -633,7 +638,7 @@ contains
          end do; end do
       end if
       
-      ! Apply clipped Neumann on primitive variables in z+
+      ! Apply UNclipped Neumann on primitive variables in z+
       if (.not.this%fs%cfg%zper.and.this%fs%cfg%kproc.eq.this%fs%cfg%npz) then
          do j=this%fs%cfg%jmino_,this%fs%cfg%jmaxo_; do i=this%fs%cfg%imino_,this%fs%cfg%imaxo_
             ! Copy over from kmax to kmax+1 and above
@@ -647,7 +652,8 @@ contains
                this%fs%IG  (i,j,k)=this%fs%IG  (i,j,this%fs%cfg%kmax)
                this%fs%U   (i,j,k)=this%fs%U   (i,j,this%fs%cfg%kmax)
                this%fs%V   (i,j,k)=this%fs%V   (i,j,this%fs%cfg%kmax)
-               this%fs%W  (i,j,k)=max(this%fs%W(i,j,this%fs%cfg%kmax),0.0_WP)
+               !this%fs%W  (i,j,k)=max(this%fs%W(i,j,this%fs%cfg%kmax),0.0_WP)
+               this%fs%W   (i,j,k)=this%fs%W   (i,j,this%fs%cfg%kmax)
                this%fs%VF  (i,j,k)=this%fs%VF  (i,j,this%fs%cfg%kmax)
                ! Also adjust interface data
                call setPlane(this%fs%PLIC(i,j,k),0,[0.0_WP,0.0_WP,+1.0_WP],this%fs%cfg%z(k)+this%fs%dz*this%fs%VF(i,j,k))
@@ -657,7 +663,7 @@ contains
          end do; end do
       end if
       
-      ! Apply clipped Neumann on primitive variables in z-
+      ! Apply UNclipped Neumann on primitive variables in z-
       if (.not.this%fs%cfg%zper.and.this%fs%cfg%kproc.eq.1) then
          do j=this%fs%cfg%jmino_,this%fs%cfg%jmaxo_; do i=this%fs%cfg%imino_,this%fs%cfg%imaxo_
             ! First copy over W from kmin+1 to kmin
@@ -673,7 +679,8 @@ contains
                this%fs%IG  (i,j,k)=this%fs%IG  (i,j,this%fs%cfg%kmin)
                this%fs%U   (i,j,k)=this%fs%U   (i,j,this%fs%cfg%kmin)
                this%fs%V   (i,j,k)=this%fs%V   (i,j,this%fs%cfg%kmin)
-               this%fs%W  (i,j,k)=min(this%fs%W(i,j,this%fs%cfg%kmin),0.0_WP)
+               !this%fs%W  (i,j,k)=min(this%fs%W(i,j,this%fs%cfg%kmin),0.0_WP)
+               this%fs%W   (i,j,k)=this%fs%W   (i,j,this%fs%cfg%kmin)
                this%fs%VF  (i,j,k)=this%fs%VF  (i,j,this%fs%cfg%kmin)
                ! Also adjust interface data
                call setPlane(this%fs%PLIC(i,j,k),0,[0.0_WP,0.0_WP,-1.0_WP],-this%fs%cfg%z(k+1)+this%fs%dz*this%fs%VF(i,j,k))
