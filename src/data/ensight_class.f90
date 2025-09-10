@@ -682,6 +682,7 @@ contains
             ! Open the file
             open(newunit=iunit,file=trim(filename),form='unformatted',status='old',access='stream',position='append',iostat=ierr)
             if (ierr.ne.0) call die('[ensight write surf] Could not open file: '//trim(filename))
+            if (surf%ptr%nBezierTri.gt.0) call die('[ensight write surf] Does not support VTK Bezier triangle output.')
             ! Part header
             cbuff='part'                              ; write(iunit) cbuff
             ibuff=rank+1                              ; write(iunit) ibuff
@@ -700,7 +701,7 @@ contains
                cbuff='nsided'                            ; write(iunit) cbuff
                ibuff=surf%ptr%nPoly                      ; write(iunit) ibuff
                write(iunit) surf%ptr%polySize
-               write(iunit) surf%ptr%polyConn
+               write(iunit) surf%ptr%polyConn+1
             end if
             ! Close the file
             close(iunit)

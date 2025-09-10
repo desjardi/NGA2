@@ -1,0 +1,37 @@
+# Parallelization
+Partition : 8 1 1
+
+# Mesh definition
+Lx :	1.0
+Ly :	1.0
+Lz :  1.0
+nx :	20
+ny :	20
+nz :	20
+
+# Droplet definiton
+Droplet diameter :           5.0e-1
+Droplet velocity :           1 2 3
+
+# Fluid properties
+Liquid dynamic viscosity :    1.0e-3
+Gas dynamic viscosity :       1.0e-3
+Liquid density :              1
+Gas density :                 1
+Surface tension coefficient : 0.1
+
+# Time integration
+Max timestep size : 1e-2
+Max cfl number :    1.0
+Max time :          1.0
+
+# Pressure solver
+Pressure tolerance : 1e-6
+Pressure iteration : 100
+
+# Implicit velocity solver
+Implicit tolerance : 1e-6
+Implicit iteration : 100
+
+# Ensight output
+Ensight output period : 1e-8
