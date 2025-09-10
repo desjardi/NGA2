@@ -79,6 +79,7 @@ contains
       use messager, only: die
       use mpi_f08,  only: MPI_BCAST,MPI_INTEGER
       use parallel, only: MPI_REAL_WP
+      use filesys,  only: makedir,isdir
       implicit none
       type(vtk) :: self
       class(config), target, intent(in) :: cfg
@@ -99,9 +100,12 @@ contains
       
       ! Create directory
       if (self%cfg%amRoot) then
-         call execute_command_line('mkdir -p vtk')
-         call execute_command_line('mkdir -p vtk/'//trim(self%name))
-         call execute_command_line('mkdir -p vtk/'//trim(self%name)//'/data')
+         if (.not.isdir('vtk')) &
+         & call makedir('vtk')
+         if (.not.isdir('vtk/'//trim(self%name))) &
+         & call makedir('vtk/'//trim(self%name))
+         if (.not.isdir('vtk/'//trim(self%name)//'/data')) &
+         & call makedir('vtk/'//trim(self%name)//'/data')
       end if
       
       ! Empty pointer to lists for now
@@ -213,6 +217,7 @@ contains
    
    !> Add a surface mesh for output
    subroutine add_surface(this,name,surface)
+      use filesys,  only: makedir,isdir
       implicit none
       class(vtk), intent(inout) :: this
       character(len=*), intent(in) :: name
@@ -227,12 +232,16 @@ contains
       ! Point list to new object
       this%first_srf=>new_srf
       ! Also create the corresponding directory
-      if (this%cfg%amRoot) call execute_command_line('mkdir -p vtk/'//trim(this%name)//'/'//trim(new_srf%name))
+      if (this%cfg%amRoot) then
+         if (.not.isdir('vtk/'//trim(this%name)//'/'//trim(new_srf%name))) &
+         & call makedir('vtk/'//trim(this%name)//'/'//trim(new_srf%name))
+      end if
    end subroutine add_surface
    
    
    !> Add a particle mesh for output
    subroutine add_particle(this,name,particle)
+      use filesys,  only: makedir,isdir
       implicit none
       class(vtk), intent(inout) :: this
       character(len=*), intent(in) :: name
@@ -247,7 +256,10 @@ contains
       ! Point list to new object
       this%first_prt=>new_prt
       ! Also create the corresponding directory
-      if (this%cfg%amRoot) call execute_command_line('mkdir -p vtk/'//trim(this%name)//'/'//trim(new_prt%name))
+      if (this%cfg%amRoot) then
+         if (.not.isdir('vtk/'//trim(this%name)//'/'//trim(new_prt%name))) &
+         & call makedir('vtk/'//trim(this%name)//'/'//trim(new_prt%name))
+      end if
    end subroutine add_particle
    
    !> Output all data in the object
