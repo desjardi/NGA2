@@ -931,5 +931,5 @@ contains
       nullify(this%cfg)
    end subroutine finalize
    
-   
-end module ensight_class
+
+end module ensight_class 
