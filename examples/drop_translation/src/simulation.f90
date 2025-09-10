@@ -323,7 +323,7 @@ contains
          call vf%advance(dt=time%dt,U=fs%U,V=fs%V,W=fs%W)
 
          ! Advance and project tracer particles
-         call pt%advance(dt=time%dtmid,U=fs%U,V=fs%V,W=fs%W)
+         call pt%advance(dt=time%dtmid,U=fs%U,V=fs%V,W=fs%W,rho=fs%rho_U,P=fs%P)
          call project_tracers(vf=vf,pt=pt)
 
          ! Prepare new staggered viscosity (at n+1)
