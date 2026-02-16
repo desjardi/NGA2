@@ -381,9 +381,7 @@ contains
             ! Update the band
             call this%vf%update_band()
             ! Create discontinuous polygon mesh from IRL interface
-            call MPI_BARRIER(this%cfg%comm,ierr);if (this%cfg%amRoot) print *,'polygonalizing interface...'
             call this%vf%polygonalize_interface()
-            call MPI_BARRIER(this%cfg%comm,ierr);if (this%cfg%amRoot) print *,'done polygonalizing interface'
             ! Calculate distance from polygons
             call this%vf%distance_from_polygon()
             ! Calculate subcell phasic volumes
@@ -630,8 +628,6 @@ contains
       use tpns_class, only: arithmetic_visc
       implicit none
       class(ljcf), intent(inout) :: this
-
-      call MPI_BARRIER(this%cfg%comm,ierr);if (this%cfg%amRoot) print *,'Starting timestep number ',this%time%n
       
       ! Reset all timers and start timestep timer
       call this%tstep%reset()
@@ -644,8 +640,6 @@ contains
       call this%fs%get_cfl(this%time%dt,this%time%cfl)
       call this%time%adjust_dt()
       call this%time%increment()
-
-      call MPI_BARRIER(this%cfg%comm,ierr);if (this%cfg%amRoot) print *,' Setting jet velocity'
 
       ! Apply jet velocity
       apply_bc: block
@@ -674,8 +668,6 @@ contains
          this%liqVolInjected = this%liqVolInjected + liqVolInjected_dt
       end block apply_bc
 
-      call MPI_BARRIER(this%cfg%comm,ierr);if (this%cfg%amRoot) print *,'old'
-
       ! Remember old VOF
       this%vf%VFold=this%vf%VF
 
@@ -687,20 +679,13 @@ contains
       ! Prepare old sflaggered density (at n)
       call this%fs%get_olddensity(vf=this%vf)
 
-      call MPI_BARRIER(this%cfg%comm,ierr);if (this%cfg%amRoot) print *,'advance'
-
       ! VOF solver step
       call this%tvof%start() ! Start VOF timer
       call this%vf%advance(dt=this%time%dt,U=this%fs%U,V=this%fs%V,W=this%fs%W)
       call this%tvof%stop() ! Stop VOF timer
-
-            call MPI_BARRIER(this%cfg%comm,ierr);if (this%cfg%amRoot) print *,'viscosity'
-
       
       ! Prepare new sflaggered viscosity (at n+1)
       call this%fs%get_viscosity(vf=this%vf,strat=arithmetic_visc)
-
-      call MPI_BARRIER(this%cfg%comm,ierr);if (this%cfg%amRoot) print *,'subiters'
       
       ! Perform sub-iterations
       do while (this%time%it.le.this%time%itmax)
@@ -767,14 +752,10 @@ contains
          this%time%it=this%time%it+1
          
       end do
-
-      call MPI_BARRIER(this%cfg%comm,ierr);if (this%cfg%amRoot) print *,'interpolating velocity'
       
       ! Recompute interpolated velocity and divergence
       call this%fs%interp_vel(this%Ui,this%Vi,this%Wi)
       call this%fs%get_div()
-
-      call MPI_BARRIER(this%cfg%comm,ierr);if (this%cfg%amRoot) print *,'removing VOF at edge of domain'
       
       ! Remove VOF at edge of domain
       remove_vof: block
@@ -792,8 +773,6 @@ contains
          call MPI_ALLREDUCE(MPI_IN_PLACE,this%vof_removed,1,MPI_REAL_WP,MPI_SUM,this%cfg%comm,ierr)
          call this%vf%clean_irl_and_band()
       end block remove_vof
-
-      call MPI_BARRIER(this%cfg%comm,ierr);if (this%cfg%amRoot) print *,'output to Ensight'
       
       ! Output to ensight
       if (this%ens_evt%occurs()) then
@@ -833,8 +812,6 @@ contains
       call this%cflfile%write()
       call this%timefile%write()
       call this%ljcf_file%write()
-
-      call MPI_BARRIER(this%cfg%comm,ierr);if (this%cfg%amRoot) print *,'saving restart files'
       
       ! Finally, see if it's time to save restart files
       if (this%save_evt%occurs()) then

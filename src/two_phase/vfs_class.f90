@@ -814,7 +814,6 @@ contains
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: W     !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       
       ! First perform transport
-      call MPI_BARRIER(this%cfg%comm,ierr);if (this%cfg%amRoot) print *,'transport'
       select case (this%transport_method)
       case (flux)
          call this%transport_flux(dt,U,V,W)
@@ -825,49 +824,38 @@ contains
       case (remap_storage)
          call this%transport_remap_storage(dt,U,V,W)
       end select
-      call MPI_BARRIER(this%cfg%comm,ierr);if (this%cfg%amRoot) print *,'advect polygons'
       ! Advect interface polygons
       call this%advect_interface(dt,U,V,W)
       
       ! Remove flotsams and thin structures if needed
-      call MPI_BARRIER(this%cfg%comm,ierr);if (this%cfg%amRoot) print *,'remove flotsams and thin structures'
       call this%remove_flotsams()
       call this%remove_thinstruct()
       
       ! Synchronize and clean-up barycenter fields
-      call MPI_BARRIER(this%cfg%comm,ierr);if (this%cfg%amRoot) print *,'sync and clean barycenters'
       call this%sync_and_clean_barycenters()
       
       ! Update the band
-      call MPI_BARRIER(this%cfg%comm,ierr);if (this%cfg%amRoot) print *,'band'
       call this%update_band()
       
       ! Perform interface reconstruction from transported moments
-      call MPI_BARRIER(this%cfg%comm,ierr);if (this%cfg%amRoot) print *,'build interface'
       call this%build_interface()
       
       ! Create discontinuous polygon mesh from IRL interface
-      call MPI_BARRIER(this%cfg%comm,ierr);if (this%cfg%amRoot) print *,'polygonalize interface'
       call this%polygonalize_interface()
       
       ! Perform interface sensing
-      call MPI_BARRIER(this%cfg%comm,ierr);if (this%cfg%amRoot) print *,'sense interface'
       if (this%two_planes) call this%sense_interface()
       
       ! Calculate distance from polygons
-      call MPI_BARRIER(this%cfg%comm,ierr);if (this%cfg%amRoot) print *,'distance from polygons'
       call this%distance_from_polygon()
       
       ! Calculate subcell phasic volumes
-      call MPI_BARRIER(this%cfg%comm,ierr);if (this%cfg%amRoot) print *,'subcell volumes'
       call this%subcell_vol()
       
       ! Calculate curvature
-      call MPI_BARRIER(this%cfg%comm,ierr);if (this%cfg%amRoot) print *,'curvature'
       call this%get_curvature()
       
       ! Reset moments to guarantee compatibility with interface reconstruction
-      call MPI_BARRIER(this%cfg%comm,ierr);if (this%cfg%amRoot) print *,'reset volume moments'
       call this%reset_volume_moments()
       
    end subroutine advance
@@ -2887,7 +2875,6 @@ contains
          
          ! Collect maximum residual and increment iteration counter
          call MPI_ALLREDUCE(MPI_IN_PLACE,res,1,MPI_REAL_WP,MPI_MAX,this%cfg%comm,ierr); ite=ite+1
-         if (this%cfg%amRoot) print*,'ite=',ite,'residual=',res
          
          ! Synchronize across boundaries
          call this%sync_interface()
@@ -3815,12 +3802,8 @@ contains
       real(WP), dimension(1:3,1:4) :: vert
       real(WP), dimension(1:3) :: norm
       
-      call MPI_BARRIER(this%cfg%comm,ierr);if (this%cfg%amRoot) print *,'in polygonalize_interface'
-
       ! Create a cell object
       call new(cell)
-
-      call MPI_BARRIER(this%cfg%comm,ierr);if (this%cfg%amRoot) print *,'loop over full domain and form polygon'
       
       ! Loop over full domain and form polygon
       do k=this%cfg%kmino_,this%cfg%kmaxo_
@@ -3842,8 +3825,6 @@ contains
             end do
          end do
       end do
-
-      call MPI_BARRIER(this%cfg%comm,ierr);if (this%cfg%amRoot) print *,'x-face polygonalization'
       
       ! Find inferface between filled and empty cells on x-face
       do k=this%cfg%kmino_,this%cfg%kmaxo_
@@ -3866,7 +3847,6 @@ contains
          end do
       end do
 
-      call MPI_BARRIER(this%cfg%comm,ierr);if (this%cfg%amRoot) print *,'y-face polygonalization'
       ! Find inferface between filled and empty cells on y-face
       do k=this%cfg%kmino_,this%cfg%kmaxo_
          do j=this%cfg%jmino_+1,this%cfg%jmaxo_
@@ -3888,7 +3868,6 @@ contains
          end do
       end do
       
-      call MPI_BARRIER(this%cfg%comm,ierr);if (this%cfg%amRoot) print *,'z-face polygonalization'
       ! Find inferface between filled and empty cells on z-face
       do k=this%cfg%kmino_+1,this%cfg%kmaxo_
          do j=this%cfg%jmino_,this%cfg%jmaxo_
@@ -3911,7 +3890,6 @@ contains
       end do
       
       ! Now compute surface area divided by cell volume
-      call MPI_BARRIER(this%cfg%comm,ierr);if (this%cfg%amRoot) print *,'calculate surface density'
       this%SD=0.0_WP
       do k=this%cfg%kmino_,this%cfg%kmaxo_
          do j=this%cfg%jmino_,this%cfg%jmaxo_
@@ -3927,8 +3905,6 @@ contains
             end do
          end do
       end do
-      call MPI_BARRIER(this%cfg%comm,ierr);if (this%cfg%amRoot) print *,'done polygonalization of interface'
-
       
    end subroutine polygonalize_interface
    
