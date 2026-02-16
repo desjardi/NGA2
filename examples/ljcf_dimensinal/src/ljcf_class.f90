@@ -777,22 +777,22 @@ contains
             integer :: i,j,k,np,nplane
             ! Transfer polygons to smesh
             call this%vf%update_surfmesh(this%smesh)
-            ! Also populate nplane variable
-            this%smesh%var(1,:)=1.0_WP
-            np=0
-            do k=this%vf%cfg%kmin_,this%vf%cfg%kmax_
-               do j=this%vf%cfg%jmin_,this%vf%cfg%jmax_
-                  do i=this%vf%cfg%imin_,this%vf%cfg%imax_
-                     if (this%cfg%VF(i,j,k).lt.2.0_WP*epsilon(1.0_WP)) cycle ! Skip cells below VF threshold
-                     do nplane=1,getNumberOfPlanes(this%vf%liquid_gas_interface(i,j,k))
-                        if (getNumberOfVertices(this%vf%interface_polygon(nplane,i,j,k)).gt.0) then
-                           np=np+1; this%smesh%var(1,np)=real(getNumberOfPlanes(this%vf%liquid_gas_interface(i,j,k)),WP)
-                           this%smesh%var(2,np)=this%vf%thickness(i,j,k)
-                        end if
-                     end do
-                  end do
-               end do
-            end do
+            ! ! Also populate nplane variable
+            ! this%smesh%var(1,:)=1.0_WP
+            ! np=0
+            ! do k=this%vf%cfg%kmin_,this%vf%cfg%kmax_
+            !    do j=this%vf%cfg%jmin_,this%vf%cfg%jmax_
+            !       do i=this%vf%cfg%imin_,this%vf%cfg%imax_
+            !          if (this%cfg%VF(i,j,k).lt.2.0_WP*epsilon(1.0_WP)) cycle ! Skip cells below VF threshold
+            !          do nplane=1,getNumberOfPlanes(this%vf%liquid_gas_interface(i,j,k))
+            !             if (getNumberOfVertices(this%vf%interface_polygon(nplane,i,j,k)).gt.0) then
+            !                np=np+1; this%smesh%var(1,np)=real(getNumberOfPlanes(this%vf%liquid_gas_interface(i,j,k)),WP)
+            !                this%smesh%var(2,np)=this%vf%thickness(i,j,k)
+            !             end if
+            !          end do
+            !       end do
+            !    end do
+            ! end do
          end block update_smesh
          call this%ens_out%write_data(this%time%t)
       end if
