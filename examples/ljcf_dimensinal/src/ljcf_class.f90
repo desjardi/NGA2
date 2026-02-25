@@ -198,7 +198,7 @@ contains
                   end do
                   ! Call adaptive refinement code to get volume and barycenters recursively
                   vol=0.0_WP; area=0.0_WP; v_cent=0.0_WP; a_cent=0.0_WP
-                  if (j.lt.this%vf%cfg%jmin) then
+                  if (j.le.this%vf%cfg%jmin) then
                      call cube_refine_vol(cube_vertex,vol,area,v_cent,a_cent,levelset_halfdrop,0.0_WP,amr_ref_lvl)
                   else
                      ! do nothing
@@ -214,28 +214,39 @@ contains
                end do
             end do
          end do
+
+         print *, "VOF(14,1,13) = ", this%vf%VF(14,1-1,13), " after initialization"
+
          ! Update the band
          call this%vf%update_band()
          ! Perform interface reconstruction from VOF field
          call this%vf%build_interface()
          ! Set interface planes at the boundaries
          call this%vf%set_full_bcond()
+
+               print *, "VOF(14,1,13) = ", this%vf%VF(14,1-1:1,13), " after full_bcond"
          ! Now apply Neumann condition on interface at inlet to have proper round injection
          neumann_irl: block
             use irl_fortran_interface, only: getPlane,new,construct_2pt,RectCub_type,&
             &                                setNumberOfPlanes,setPlane,matchVolumeFraction
             real(WP), dimension(1:4) :: plane
+            real(WP) :: eps_plane
+            integer :: nplanes_src
             type(RectCub_type) :: cell
             call new(cell)
-            if (this%vf%cfg%iproc.eq.1) then
+            if (this%vf%cfg%jproc.eq.1) then
                do k=this%vf%cfg%kmino_,this%vf%cfg%kmaxo_
-                  do j=this%vf%cfg%jmino_,this%vf%cfg%jmaxo_
-                     do i=this%vf%cfg%imino,this%vf%cfg%imin-1
+                  do j=this%vf%cfg%jmino_,this%vf%cfg%jmin-1
+                     do i=this%vf%cfg%imino_,this%vf%cfg%imaxo_
                         ! Extract plane data and copy in overlap
-                        plane=getPlane(this%vf%liquid_gas_interface(this%vf%cfg%imin,j,k),0)
+                        plane=getPlane(this%vf%liquid_gas_interface(i,this%vf%cfg%jmin,k),0)
+                        eps_plane = 1.0e-30_WP
+                        nplanes_src = getNumberOfPlanes(this%vf%liquid_gas_interface(i,this%vf%cfg%jmin,k))
+                        if (nplanes_src.eq.0) cycle
                         call construct_2pt(cell,[this%vf%cfg%x(i  ),this%vf%cfg%y(j  ),this%vf%cfg%z(k  )],&
                         &                       [this%vf%cfg%x(i+1),this%vf%cfg%y(j+1),this%vf%cfg%z(k+1)])
                         plane(4)=dot_product(plane(1:3),[this%vf%cfg%xm(i),this%vf%cfg%ym(j),this%vf%cfg%zm(k)])
+                        if (sum(plane(1:3)**2) .le. eps_plane) cycle
                         call setNumberOfPlanes(this%vf%liquid_gas_interface(i,j,k),1)
                         call setPlane(this%vf%liquid_gas_interface(i,j,k),0,plane(1:3),plane(4))
                         call matchVolumeFraction(cell,this%vf%VF(i,j,k),this%vf%liquid_gas_interface(i,j,k))
@@ -244,6 +255,7 @@ contains
                end do
             end if
          end block neumann_irl
+
          ! Create discontinuous polygon mesh from IRL interface
          call this%vf%polygonalize_interface()
          ! Calculate distance from polygons
@@ -255,8 +267,7 @@ contains
          ! Reset moments to guarantee compatibility with interface reconstruction
          call this%vf%reset_volume_moments()
       end block create_and_initialize_vof
-      
-      
+
       ! Create an iterator for removing VOF at edges
       create_iterator: block
          this%vof_removal_layer=iterator(this%cfg,'VOF removal',vof_removal_layer_locator)
@@ -288,6 +299,17 @@ contains
          call this%fs%add_bcond(name='jet'    ,type=dirichlet,face='y',dir=-1,canCorrect=.false.,locator=jet_bdy)
          ! Define gravity as vector for flow solver
          this%fs%gravity(2) = this%gravity
+
+         ! testing: block
+         !    use tpns_class, only: bcond
+         !    type(bcond), pointer :: mybc
+         !    print *, 'Testing VOF after initialization'
+         !    call this%fs%get_bcond('jet',mybc)
+         !    do n=1,mybc%itr%no_
+         !       i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
+         !       print *, 'Testing VOF at i,j,k=', i, j, k, 'VOF below = ', this%vf%VF(i,j-1,k)
+         !    end do
+         ! end block testing
 
          ! Configure pressure solver
          this%ps=hypre_str(cfg=this%cfg,name='Pressure',method=pcg_pfmg2,nst=7)
@@ -588,11 +610,23 @@ contains
          implicit none
          class(pgrid), intent(in) :: pg
          integer, intent(in) :: i,j,k
+         integer :: ii,kk
          real(WP), dimension(3) :: xyz
          logical :: isIn
+         ! isIn=.false.
+         ! xyz(1)=pg%xm(i); xyz(2)=pg%ym(j); xyz(3)=pg%zm(k)
+         ! if (levelset_halfdrop(xyz,0.0_WP).gt.0.0_WP) isIn=.true.
          isIn=.false.
-         xyz(1)=pg%xm(i); xyz(2)=pg%ym(j); xyz(3)=pg%zm(k)
-         if (levelset_halfdrop(xyz,0.0_WP).gt.0.0_WP) isIn=.true.
+         ! Check if any of cell corners are in jet
+         do ii = i,i+1
+            do kk = k,k+1
+               xyz(1)=pg%x(ii); xyz(2)=pg%y(pg%jmin); xyz(3)=pg%z(kk)
+               if (levelset_halfdrop(xyz,0.0_WP).gt.0.0_WP) then
+                  isIn=.true.
+                  return
+               end if
+            end do
+         end do
       end function jet
       
       !> Function that localizes the walls surrounding the jets
@@ -660,6 +694,7 @@ contains
          do n=1,mybc%itr%no_
             i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
             this%fs%V(i,j,k) = this%InjectionVelocity
+            ! print *, 'Applied jet velocity of ', this%InjectionVelocity, ' at i,j,k=', i, j, k, 'VOF below = ', this%vf%VF(i,j-1,k)
          end do
       end block apply_bc
 
