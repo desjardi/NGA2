@@ -704,10 +704,10 @@ contains
          ! Open the case file
          open(newunit=iunit,file='ensight/'//trim(this%name)//'/'//trim(part%name)//'.case',form='formatted',status='replace',access='stream',iostat=ierr)
          ! Write all the geometry information
-         write(iunit,'(a,/,a,/,/,a,/,a,/)') 'FORMAT','type: ensight gold','GEOMETRY','model: 1 '//trim(part%name)//'/particle.******'
+         write(iunit,'(a,/,a,/,/,a,/,a,/,a,/)') 'FORMAT','type: ensight gold','GEOMETRY','model: geometry','measured: 1 '//trim(part%name)//'/particle.******'
          ! Write the variables
          write(iunit,'(a)') 'VARIABLE'
-         ! write(iunit,'(a)') 'scalar per element: fvf geometry.fvf'
+         write(iunit,'(a)') 'scalar per element: fvf geometry.fvf'
          do n=1,part%ptr%nvar
             write(iunit,'(a)') 'scalar per measured node: 1 '//trim(part%ptr%varname(n))//' '//trim(part%name)//'/'//trim(part%ptr%varname(n))//'.******'
          end do
@@ -734,14 +734,9 @@ contains
          ! General geometry header
          cbuff='C Binary'                          ; write(iunit) cbuff
          cbuff=trim(adjustl(part%ptr%name))        ; write(iunit) cbuff
-         cbuff='Written by NGA2'                   ; write(iunit) cbuff
-         cbuff='node id off'                       ; write(iunit) cbuff
-         cbuff='element id off'                    ; write(iunit) cbuff
-         cbuff='part'                              ; write(iunit) cbuff
-         ibuff=1                                   ; write(iunit) ibuff
-         cbuff=trim(adjustl(part%ptr%name))        ; write(iunit) cbuff
-         cbuff='coordinates'                       ; write(iunit) cbuff
+         cbuff='particle coordinates'              ; write(iunit) cbuff
          ibuff=npart                               ; write(iunit) ibuff
+         write(iunit) (ibuff,ibuff=1,npart)
          ! Close the file
          close(iunit)
       end if
@@ -752,29 +747,13 @@ contains
             open(newunit=iunit,file=trim(filename),form='unformatted',status='old',access='stream',position='append',iostat=ierr)
             if (ierr.ne.0) call die('[ensight write part] Could not open file: '//trim(filename))
             ! Write part info if it exists on the processor
-            if (part%ptr%n.gt.0) then 
-               write(iunit) real(part%ptr%pos(1,:),SP)
-               write(iunit) real(part%ptr%pos(2,:),SP)
-               write(iunit) real(part%ptr%pos(3,:),SP)
-            end if
+            if (part%ptr%n.gt.0) write(iunit) real(part%ptr%pos,SP)
             ! Close the file
             close(iunit)
          end if
          ! Force synchronization
          call MPI_BARRIER(this%cfg%comm,ierr)
       end do
-      ! Write element type and connectivity
-      if (this%cfg%amRoot) then
-         ! Open the file
-         open(newunit=iunit,file=trim(filename),form='unformatted',status='old',access='stream',position='append',iostat=ierr)
-         if (ierr.ne.0) call die('[ensight write part] Could not open file: '//trim(filename))
-         cbuff='point'                          ; write(iunit) cbuff
-         ibuff=npart                            ; write(iunit) ibuff
-         do n=1,npart
-            ibuff=n                             ; write(iunit) ibuff
-         end do
-         close(iunit)
-      end if
       
       ! Generate the particle scalar files
       do n=1,part%ptr%nvar
