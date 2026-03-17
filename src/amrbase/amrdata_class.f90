@@ -5,14 +5,14 @@ module amrdata_class
    use string,           only: str_medium
    use amrgrid_class,    only: amrgrid
    use amrex_amr_module, only: amrex_multifab,amrex_boxarray,amrex_distromap,&
-   &                           amrex_geometry,amrex_interp_pc,&
+   &                           amrex_geometry,amrex_interp_pc,amrex_bc_foextrap,&
    &                           amrex_interp_cell_cons,amrex_interp_face_linear,amrex_interp_node_bilinear
    implicit none
    private
 
    public :: amrdata
    public :: amrdata_on_init,amrdata_on_coarse,amrdata_on_remake,amrdata_on_clear,amrdata_fillbc
-   public :: amrex_interp_pc,amrex_interp_cell_cons,amrex_interp_face_linear,amrex_interp_node_bilinear
+   public :: amrex_interp_pc,amrex_bc_foextrap,amrex_interp_cell_cons,amrex_interp_face_linear,amrex_interp_node_bilinear
    public :: default_fillbc
 
    ! Special interpolation modes for amrdata

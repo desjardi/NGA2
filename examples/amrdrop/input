@@ -22,4 +22,4 @@ Max CFL:  0.9
 # Output
 Output period:     0.5
 Checkpoint period: 10.0
-Restart from:      restart/drop_1.00000E+01
+Restart from:      !restart/drop_1.00000E+01

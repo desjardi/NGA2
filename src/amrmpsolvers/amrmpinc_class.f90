@@ -594,6 +594,11 @@ contains
       t_old=time-1.0e200_WP
       t_new=time
 
+      ! Store current work level
+      this%U%fill_lvl_cache=lvl
+      this%V%fill_lvl_cache=lvl
+      this%W%fill_lvl_cache=lvl
+
       if (lvl.eq.0) then
          ! Level 0: single-level fill (just physical BCs)
          call amrmfab_fillpatch_single(this%U%mf(0),time,this%U%mf(0),time,this%U%mf(0),this%amr%geom(0),ctx_u,bc_dispatch,time,1,1,1)
@@ -720,6 +725,11 @@ contains
       bc_dispatch=c_funloc(amrdata_fillbc)
       t_old=time-1.0e200_WP
       t_new=time
+
+      ! Store current work level
+      this%U%fill_lvl_cache=lvl
+      this%V%fill_lvl_cache=lvl
+      this%W%fill_lvl_cache=lvl
 
       if (lvl .eq. 0) then
          ! Level 0: single-level fill (just physical BCs)

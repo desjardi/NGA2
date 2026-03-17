@@ -1,0 +1,34 @@
+# Mesh parameters
+X shift:   0.005
+Lx:        0.04
+Ly:        0.04
+Lz:        0.04
+Base nx:   16
+Base ny:   16
+Base nz:   16
+Max level: 6
+
+# Regridding parameters
+Regrid nsteps:    10
+Tagging Reynolds: 10
+
+# Flow conditions
+Mass flow rate : 1.79e-3   # nominal flow rate in kg/s at 50 psig
+
+# Fluid properties
+Gas density :                 1.226
+Gas dynamic viscosity :       1.780e-5
+# Liquid                      MIL-PRF-7024  # Methanol    # Water
+Liquid density :              770           # 790         # 1000
+Liquid dynamic viscosity :    0.924e-3      # 0.594e-3    # 1.137e-3
+Surface tension coefficient : 0.024         # 0.0225      # 0.0728
+
+# Time integration
+Max time: 100
+Max dt:   1e-6
+Max CFL:  0.9
+
+# Output
+Output period:     1e-4
+Checkpoint period: 1e-3
+Restart from:      !restart/RSA_1.00000E+01
