@@ -14,7 +14,7 @@ ifdef AMREX_DIR
     LIBRARIES += -lamrex -lc++
   endif
   # Re-add external deps AMReX was built against so they follow -lamrex
-  XTRALIBS += -lHYPRE
+  override XTRALIBS += -lHYPRE -lmpi_cxx
 else
   $(error AMREX_DIR not defined, but it is currently required by NGA2)
 endif
