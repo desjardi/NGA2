@@ -1,9 +1,9 @@
 # Mesh parameters
 X shift:   0.005
-Lx:        0.04
+Lx:        0.02
 Ly:        0.04
 Lz:        0.04
-Base nx:   16
+Base nx:   8
 Base ny:   16
 Base nz:   16
 Max level: 6
