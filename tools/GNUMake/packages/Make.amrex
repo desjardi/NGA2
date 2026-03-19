@@ -4,17 +4,13 @@ ifdef AMREX_DIR
   LIBRARY_LOCATIONS += $(AMREX_DIR)/lib
   # AMReX requires C++17
   CXXFLAGS += -std=c++17
-  # Skip deprecated MPI C++ bindings — avoids link failures on systems
-  # where OpenMPI was built with --disable-mpi-cxx (e.g. Ubuntu 22.04+)
-  CXXFLAGS += -DOMPI_SKIP_MPICXX=1
+  # Add stdc++
   is_gnu = $(shell expr `mpic++ --version | awk '{print substr($$1,1,3); exit}'` = 'g++')
   ifeq ($(is_gnu), 1)
     LIBRARIES += -lamrex -lstdc++
   else
     LIBRARIES += -lamrex -lc++
   endif
-  # Re-add external deps AMReX was built against so they follow -lamrex
-  override XTRALIBS += -lHYPRE -lmpi_cxx
 else
   $(error AMREX_DIR not defined, but it is currently required by NGA2)
 endif

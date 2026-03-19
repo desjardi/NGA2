@@ -1,5 +1,5 @@
 # Mesh parameters
-X shift:   0.005
+X shift:   0.007
 Lx:        0.02
 Ly:        0.04
 Lz:        0.04
@@ -29,6 +29,6 @@ Max dt:   1e-6
 Max CFL:  0.9
 
 # Output
-Output period:     1e-4
+Output period:     1e-5
 Checkpoint period: 1e-3
 Restart from:      !restart/RSA_1.00000E+01

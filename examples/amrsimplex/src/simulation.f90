@@ -30,7 +30,7 @@ module simulation
 
    ! IB fluid volume fraction (1=fluid, 0=solid)
    type(polygon) :: poly
-   type(amrdata) :: VFib
+   type(amrdata), target :: VFib
 
    ! Visualization
    type(amrviz) :: viz
@@ -41,7 +41,7 @@ module simulation
    real(WP) :: Re_tag=huge(1.0_WP)
 
    ! Monitoring
-   type(monitor) :: mfile,cflfile,gridfile
+   type(monitor) :: mfile,cflfile,gridfile,postproc
 
    ! Restart data
    type(amrio) :: io
@@ -54,15 +54,17 @@ module simulation
    real(WP) :: viscL_mol,viscG_mol
 
    !> Inlet pipes geometry and flow rates
-   real(WP) :: Rinlet=0.002_WP
+   real(WP) :: Rinlet=0.0023_WP
    real(WP) :: Rexit=0.00143_WP
    real(WP) :: Rpipe=0.000185_WP
-   real(WP) :: Rcoflow=0.003_WP
    real(WP), dimension(3) :: p1=[-0.00442_WP,0.0_WP,+0.001245_WP]
    real(WP), dimension(3) :: p2=[-0.00442_WP,0.0_WP,-0.001245_WP]
    real(WP), dimension(3) :: n1=[+0.6_WP,-0.8_WP,0.0_WP]
    real(WP), dimension(3) :: n2=[+0.6_WP,+0.8_WP,0.0_WP]
    real(WP) :: mfr
+
+   !> Post-processing info
+   real(WP) :: liq_vol
 
 contains
 
@@ -83,7 +85,7 @@ contains
       ! Simplex polygon
       G=poly%get_distance([xyz(1),sqrt(xyz(2)**2+xyz(3)**2)])
       ! Add inlet pipes
-      if (xyz(1).lt.p1(1)) then
+      if (xyz(1).lt.p1(1).and.sqrt(xyz(2)**2+xyz(3)**2).lt.0.00203_WP) then
          v=xyz-p1; p=v-n1*dot_product(v,n1); G=max(G,Rpipe-sqrt(dot_product(p,p)))
          v=xyz-p2; p=v-n2*dot_product(v,n2); G=max(G,Rpipe-sqrt(dot_product(p,p)))
       end if
@@ -184,28 +186,27 @@ contains
       character(len=1), intent(in) :: comp
       real(WP), dimension(:,:,:,:), pointer, intent(inout) :: p
       integer :: i,j,k,ic
-      real(WP) :: Uin,d1,d2
-      real(WP), dimension(3) :: xyz,v,pp
-      ! Calculate inflow velocity magnitude
-      Uin=mfr/(2.0_WP*solver%rhoL*Pi*Rpipe**2)
+      real(WP), parameter :: Rin=0.00159_WP,Rout=0.00212_WP
+      real(WP) :: Uin,rad
       ! Find component to modify
       if (size(p,4).eq.1) then; ic=1 ! Staggered velocity has one component
       else; ic=merge(1,merge(2,3,comp.eq.'V'),comp.eq.'U')  ! cell-centered: U→1, V→2, W→3
       end if
+      ! Pick the x- face
       select case (face)
-       case (1)  ! Inflow in X-
+      case (1)  ! x-lo
          select case (comp)
           ! U=Uin
           case ('U')
+            ! Get inflow velocity
+            Uin=mfr/(solver%rhoL*Pi*(Rout**2-Rin**2))
+            ! Apply
             do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
-               xyz=[solver%amr%xlo+(real(i,WP)+0.0_WP)*solver%amr%dx(lvl),&
-               &    solver%amr%ylo+(real(j,WP)+0.5_WP)*solver%amr%dy(lvl),&
-               &    solver%amr%zlo+(real(k,WP)+0.5_WP)*solver%amr%dz(lvl)]
-               v=xyz-p1; pp=v-n1*dot_product(v,n1); d1=sqrt(dot_product(pp,pp))
-               v=xyz-p2; pp=v-n2*dot_product(v,n2); d2=sqrt(dot_product(pp,pp))
-               p(i,j,k,ic)=0.0_WP; if (d1.lt.Rpipe.or.d2.lt.Rpipe) p(i,j,k,ic)=Uin
+               rad=sqrt((solver%amr%ylo+(real(j,WP)+0.5_WP)*solver%amr%dy(lvl))**2 &
+               &       +(solver%amr%zlo+(real(k,WP)+0.5_WP)*solver%amr%dz(lvl))**2)
+               p(i,j,k,ic)=0.0_WP; if (rad.ge.Rin.and.rad.le.Rout) p(i,j,k,ic)=Uin
             end do; end do; end do
-          ! V=0, W=0
+          ! V=W=0
           case ('V','W')
             do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
                p(i,j,k,ic)=0.0_WP
@@ -318,11 +319,21 @@ contains
             call initialize_volume_moments(lo=[data%amr%xlo+real(i  ,WP)*dx,data%amr%ylo+real(j  ,WP)*dy,data%amr%zlo+real(k  ,WP)*dz], &
             &                              hi=[data%amr%xlo+real(i+1,WP)*dx,data%amr%ylo+real(j+1,WP)*dy,data%amr%zlo+real(k+1,WP)*dz], &
             &                              levelset=simplex_levelset,time=time,level=nref,VFlo=VFlo,VF=pVF(i,j,k,1),BL=BL,BG=BG)
-            pVF(i,j,k,1)=max(pVF(i,j,k,1),VFlo)
          end do; end do; end do
       end do
       call amrex_mfiter_destroy(mfi)
    end subroutine init_VFib
+
+   !> Post-regrid dispatcher for automatic VFib filling
+   subroutine vfib_postregrid(ctx,lbase,time)
+      use iso_c_binding, only: c_ptr, c_f_pointer
+      type(c_ptr), intent(in) :: ctx
+      integer, intent(in) :: lbase
+      real(WP), intent(in) :: time
+      type(amrdata), pointer :: this
+      call c_f_pointer(ctx,this)
+      call this%fill(time=time,lbase=lbase)
+   end subroutine vfib_postregrid
 
    !> Initialization hook
    subroutine simulation_init()
@@ -423,9 +434,10 @@ contains
       ! Create IB fluid VF
       create_VFib: block
          use amrdata_class, only: amrex_interp_pc,amrex_bc_foextrap
+         use iso_c_binding, only: c_loc
          ! Create polygon object
-         call poly%initialize(nvert=10,name='simplex')
-         poly%vert(:, 1)=[-0.01000_WP,0.00000_WP]
+         call poly%initialize(nvert=15,name='simplex')
+         poly%vert(:, 1)=[-0.10000_WP,0.00000_WP]
          poly%vert(:, 2)=[-0.00442_WP,0.00000_WP]
          poly%vert(:, 3)=[-0.00442_WP,0.00160_WP]
          poly%vert(:, 4)=[-0.00385_WP,0.00160_WP]
@@ -434,9 +446,15 @@ contains
          poly%vert(:, 7)=[ 0.00000_WP,0.00143_WP]
          poly%vert(:, 8)=[ 0.00000_WP,0.00177_WP]
          poly%vert(:, 9)=[-0.00122_WP,0.00279_WP]
-         poly%vert(:,10)=[-0.01000_WP,0.00279_WP]
+         poly%vert(:,10)=[-0.10000_WP,0.00279_WP]
+         poly%vert(:,11)=[-0.10000_WP,0.00212_WP]
+         poly%vert(:,12)=[-0.00543_WP,0.00212_WP]
+         poly%vert(:,13)=[-0.00524_WP,0.00203_WP]
+         poly%vert(:,14)=[-0.00634_WP,0.00159_WP]
+         poly%vert(:,15)=[-0.10000_WP,0.00159_WP]
          ! Create VFib field with constant interpolation
          call VFib%initialize(amr,name='VFib',ncomp=1,ng=fs%nover,interp=amrex_interp_pc); call VFib%register()
+         call amr%add_postregrid(vfib_postregrid,c_loc(VFib))
          VFib%user_init=>init_VFib
          VFib%lo_bc(1,1)=amrex_bc_foextrap
          VFib%hi_bc(1,1)=amrex_bc_foextrap
@@ -510,6 +528,8 @@ contains
          ! Get solver info and cfl
          call fs%get_info()
          call fs%get_cfl(time%dt,time%cfl)
+         ! Call post-processing routine
+         call post_process()
          ! Create simulation monitor
          mfile=monitor(amRoot=amr%amRoot,name='simulation')
          call mfile%add_column(time%n,'Timestep')
@@ -552,6 +572,12 @@ contains
          call gridfile%add_column(amr%minRSS,'Minimum RSS')
          call gridfile%add_column(amr%avgRSS,'Average RSS')
          call gridfile%write()
+         ! Create postproc monitor
+         postproc=monitor(amRoot=amr%amRoot,name='postproc')
+         call postproc%add_column(time%n,'Timestep')
+         call postproc%add_column(time%t,'Time')
+         call postproc%add_column(liq_vol,'Liquid volume')
+         call postproc%write()
       end block create_monitor
 
    end subroutine simulation_init
@@ -643,8 +669,10 @@ contains
 
          ! Monitor output
          call fs%get_info()
+         call post_process()
          call mfile%write()
          call cflfile%write()
+         call postproc%write()
 
          ! Visualization output
          if (viz_evt%occurs()) call viz%write(time=time%t)
@@ -683,18 +711,18 @@ contains
                   pUVW(i,j,k,:)=pVF(i,j,k,1)*pUVW(i,j,k,:)
                end do; end do; end do
                ! Force face velocities
-               !bx=mfi%nodaltilebox(1)
-               !do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
-               !   pU(i,j,k,1)=0.5_WP*sum(pVF(i-1:i,j,k,1))*pU(i,j,k,1)
-               !end do; end do; end do
-               !bx=mfi%nodaltilebox(2)
-               !do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
-               !   pV(i,j,k,1)=0.5_WP*sum(pVF(i,j-1:j,k,1))*pV(i,j,k,1)
-               !end do; end do; end do
-               !bx=mfi%nodaltilebox(3)
-               !do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
-               !   pW(i,j,k,1)=0.5_WP*sum(pVF(i,j,k-1:k,1))*pW(i,j,k,1)
-               !end do; end do; end do
+               bx=mfi%nodaltilebox(1)
+               do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
+                  pU(i,j,k,1)=0.5_WP*sum(pVF(i-1:i,j,k,1))*pU(i,j,k,1)
+               end do; end do; end do
+               bx=mfi%nodaltilebox(2)
+               do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
+                  pV(i,j,k,1)=0.5_WP*sum(pVF(i,j-1:j,k,1))*pV(i,j,k,1)
+               end do; end do; end do
+               bx=mfi%nodaltilebox(3)
+               do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
+                  pW(i,j,k,1)=0.5_WP*sum(pVF(i,j,k-1:k,1))*pW(i,j,k,1)
+               end do; end do; end do
             end do
             call amr%mfiter_destroy(mfi)
          end do
@@ -725,6 +753,50 @@ contains
       call mfile%finalize()
       call cflfile%finalize()
       call gridfile%finalize()
+      call postproc%finalize()
    end subroutine simulation_final
+
+   !> Post-processing routine
+   subroutine post_process()
+      implicit none
+
+      ! Get properly masked liquid volume
+      get_liq_vol: block
+         use amrex_amr_module, only: amrex_mfiter,amrex_box,amrex_imultifab,amrex_imultifab_build,amrex_imultifab_destroy
+         use amrex_interface,  only: amrmask_make_fine
+         use parallel,         only: MPI_REAL_WP
+         use mpi_f08,          only: MPI_ALLREDUCE,MPI_IN_PLACE,MPI_SUM
+         integer :: lvl,i,j,k
+         type(amrex_mfiter) :: mfi
+         type(amrex_box) :: bx
+         type(amrex_imultifab) :: mask
+         real(WP), dimension(:,:,:,:), contiguous, pointer :: pVF,pVFib
+         integer,  dimension(:,:,:,:), contiguous, pointer :: pMask
+         liq_vol=0.0_WP
+         do lvl=0,amr%clvl()
+            if (lvl.lt.amr%clvl()) then
+               call amrex_imultifab_build(mask,amr%ba(lvl),amr%dm(lvl),1,0)
+               call amrmask_make_fine(mask,amr%ba(lvl+1),[amr%rrefx(lvl),amr%rrefy(lvl),amr%rrefz(lvl)],0,1)
+            end if
+            call amr%mfiter_build(lvl,mfi)
+            do while (mfi%next())
+               pVF  =>fs%VF%mf(lvl)%dataptr(mfi)
+               pVFib=>VFib%mf(lvl)%dataptr(mfi)
+               if (lvl.lt.amr%clvl()) pMask=>mask%dataptr(mfi)
+               bx=mfi%tilebox()
+               do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
+                  if (lvl.lt.amr%clvl()) then
+                     if (pMask(i,j,k,1).eq.0) cycle
+                  end if
+                  liq_vol=liq_vol+pVF(i,j,k,1)*pVFib(i,j,k,1)*amr%cell_vol(lvl)
+               end do; end do; end do
+            end do
+            call amr%mfiter_destroy(mfi)
+            if (lvl.lt.amr%clvl()) call amrex_imultifab_destroy(mask)
+         end do
+         call MPI_ALLREDUCE(MPI_IN_PLACE,liq_vol,1,MPI_REAL_WP,MPI_SUM,amr%comm)
+      end block get_liq_vol
+
+   end subroutine post_process
 
 end module simulation

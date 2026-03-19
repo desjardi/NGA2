@@ -241,9 +241,9 @@ endif
 
 
 # Include libraries ###########################################
-ifeq ($(USE_CVODE),TRUE)
-  $(info Loading $(NGA_HOME)/tools/GNUMake/packages/Make.cvode...)
-  include        $(NGA_HOME)/tools/GNUMake/packages/Make.cvode
+ifeq ($(USE_AMREX),TRUE)
+  $(info Loading $(NGA_HOME)/tools/GNUMake/packages/Make.amrex...)
+  include        $(NGA_HOME)/tools/GNUMake/packages/Make.amrex
 endif
 ifeq ($(USE_HYPRE),TRUE)
   $(info Loading $(NGA_HOME)/tools/GNUMake/packages/Make.hypre...)
@@ -252,10 +252,6 @@ endif
 ifeq ($(USE_LAPACK),TRUE)
   $(info Loading $(NGA_HOME)/tools/GNUMake/packages/Make.lapack...)
   include        $(NGA_HOME)/tools/GNUMake/packages/Make.lapack
-endif
-ifeq ($(USE_COOLPROP),TRUE)
-  $(info Loading $(NGA_HOME)/tools/GNUMake/packages/Make.coolprop...)
-  include        $(NGA_HOME)/tools/GNUMake/packages/Make.coolprop
 endif
 ifeq ($(USE_IRL),TRUE)
   $(info Loading $(NGA_HOME)/tools/GNUMake/packages/Make.irl...)
@@ -277,9 +273,13 @@ ifeq ($(USE_FFTW),TRUE)
   $(info Loading $(NGA_HOME)/tools/GNUMake/packages/Make.fftw...)
   include        $(NGA_HOME)/tools/GNUMake/packages/Make.fftw
 endif
-ifeq ($(USE_AMREX),TRUE)
-  $(info Loading $(NGA_HOME)/tools/GNUMake/packages/Make.amrex...)
-  include        $(NGA_HOME)/tools/GNUMake/packages/Make.amrex
+ifeq ($(USE_CVODE),TRUE)
+  $(info Loading $(NGA_HOME)/tools/GNUMake/packages/Make.cvode...)
+  include        $(NGA_HOME)/tools/GNUMake/packages/Make.cvode
+endif
+ifeq ($(USE_COOLPROP),TRUE)
+  $(info Loading $(NGA_HOME)/tools/GNUMake/packages/Make.coolprop...)
+  include        $(NGA_HOME)/tools/GNUMake/packages/Make.coolprop
 endif
 ###############################################################
 
