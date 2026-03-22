@@ -198,6 +198,7 @@ module amrgrid_class
       procedure :: mfab_destroy              !< Destroy multifab
       procedure :: mfab_foextrap             !< Apply fo_extrap BCs to multifab
       procedure :: mfab_validextrap          !< Extrapolate ghost cells from nearest valid cell
+      procedure :: mfab_filter               !< Apply filter to multifab
    end type amrgrid
 
    ! Instance counter for automated AMReX lifecycle management
@@ -1081,5 +1082,54 @@ contains
       call mf%setval(0.0_WP)
    end subroutine mfab_rebuild
 
+   !> Apply npass of a Simpson filter to multifab
+   subroutine mfab_filter(this,lvl,mfab,npass)
+      use amrex_amr_module, only: amrex_multifab,amrex_multifab_destroy,amrex_mfiter,amrex_box
+      implicit none
+      class(amrgrid), intent(inout) :: this
+      integer, intent(in) :: lvl
+      type(amrex_multifab), intent(inout) :: mfab
+      integer, intent(in) :: npass
+      type(amrex_multifab) :: scratch
+      type(amrex_mfiter) :: mfi
+      type(amrex_box) :: bx
+      real(WP), dimension(:,:,:,:), contiguous, pointer :: pSrc,pDst
+      integer :: ipass,n,i,j,k,si,sj,sk,nc
+      real(WP), dimension(-1:+1), parameter :: w=[1.0_WP/6.0_WP,2.0_WP/3.0_WP,1.0_WP/6.0_WP]
+      ! Create scratch mfab
+      nc=mfab%ncomp()
+      call this%mfab_build(lvl=lvl,mfab=scratch,ncomp=nc,nover=1)
+      do ipass=1,npass
+         call scratch%setval(0.0_WP)
+         call scratch%copy(srcmf=mfab,srccomp=1,dstcomp=1,nc=nc,ng=0)
+         call this%mfab_validextrap(lvl=lvl,mfab=scratch)
+         call scratch%fill_boundary(this%geom(lvl))
+         call this%mfab_foextrap(lvl=lvl,mfab=scratch)
+         call this%mfiter_build(lvl,mfi)
+         do while (mfi%next())
+            ! Get pointers to data
+            pSrc=>scratch%dataptr(mfi)
+            pDst=>mfab%dataptr(mfi)
+            ! Loop internally
+            bx=mfi%tilebox()
+            do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
+               do n=1,nc
+                  ! Apply filter
+                  pDst(i,j,k,n)=0.0_WP
+                  do sk=-1,+1; do sj=-1,+1; do si=-1,+1
+                     pDst(i,j,k,n)=pDst(i,j,k,n)+w(si)*w(sj)*w(sk)*pSrc(i+si,j+sj,k+sk,n)
+                  end do; end do; end do
+               end do
+            end do; end do; end do
+         end do
+         call this%mfiter_destroy(mfi)
+      end do
+      ! Destroy scratch mfab
+      call amrex_multifab_destroy(scratch)
+      ! Fill ghost cells of filtered output
+      call this%mfab_validextrap(lvl=lvl,mfab=mfab)
+      call mfab%fill_boundary(this%geom(lvl))
+      call this%mfab_foextrap(lvl=lvl,mfab=mfab)
+   end subroutine mfab_filter
 
 end module amrgrid_class

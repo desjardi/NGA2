@@ -63,10 +63,9 @@ module simulation
    real(WP) :: R_spg=3.0_WP
    real(WP) :: L_spg=1.0_WP
 
-   !> Tagging parameters
-   real(WP) :: Rec_tag=huge(1.0_WP)
-   real(WP) :: Res_tag=huge(1.0_WP)
-   
+   !> Tagging parameter
+   real(WP) :: Re_tag=huge(1.0_WP)
+
 contains
 
    !> Smooth Heaviside function
@@ -358,10 +357,10 @@ contains
       end select
    end subroutine shock_dirichlet
 
-   !> Tagger based on normalized velocity gradient
+   !> Tagger based on Re_sgs
    subroutine my_tagger(solver,lvl,time,tags_ptr)
       use iso_c_binding,    only: c_ptr,c_char
-      use amrex_amr_module, only: amrex_mfiter,amrex_box,amrex_tagboxarray
+      use amrex_amr_module, only: amrex_mfiter,amrex_box,amrex_multifab,amrex_tagboxarray
       use amrgrid_class,    only: SETtag
       class(amrmpcomp), intent(inout) :: solver
       integer, intent(in) :: lvl
@@ -370,53 +369,77 @@ contains
       type(amrex_tagboxarray) :: tags
       type(amrex_mfiter) :: mfi
       type(amrex_box) :: bx
+      type(amrex_multifab) :: Re_t
       character(kind=c_char), dimension(:,:,:,:), contiguous, pointer :: tagarr
-      real(WP), dimension(:,:,:,:), contiguous, pointer :: pQ,pVisc
-      real(WP) :: dx,dy,dz,dxi,dyi,dzi,dudx,dudy,dudz,dvdx,dvdy,dvdz,dwdx,dwdy,dwdz
-      real(WP) :: vort_mag,div_neg,rho,mu,Rec,Res
+      real(WP), dimension(:,:,:,:), contiguous, pointer :: pQ,pVisc,pRe_t
+      real(WP) :: dx,dy,dz,dxi,dyi,dzi
+      real(WP) :: rho,mu,lap_u,lap_v,lap_w,u_sgs
+      real(WP) :: iRho_cc,iRho_xp,iRho_xm,iRho_yp,iRho_ym,iRho_zp,iRho_zm
       integer :: i,j,k
+      ! Build temporary multifab for filtered Re_t
+      call solver%amr%mfab_build(lvl=lvl,mfab=Re_t,ncomp=1,nover=0); call Re_t%setval(0.0_WP)
+      ! Get mesh size
       dx=solver%amr%dx(lvl); dxi=1.0_WP/dx
       dy=solver%amr%dy(lvl); dyi=1.0_WP/dy
       dz=solver%amr%dz(lvl); dzi=1.0_WP/dz
+      ! Recast tags
       tags=tags_ptr
+      ! First loop to get raw Re_t
       call solver%amr%mfiter_build(lvl,mfi)
       do while (mfi%next())
          ! Get pointers to data
-         tagarr=>tags%dataPtr(mfi)
+         pRe_t=>Re_t%dataptr(mfi)
          pQ=>solver%Q%mf(lvl)%dataptr(mfi)
          pVisc=>solver%visc%mf(lvl)%dataptr(mfi)
          ! Loop over tile
          bx=mfi%tilebox()
          do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
-            ! Get rho and mu
-            rho=sum(pQ(i,j,k,1:2))
-            mu=pVisc(i,j,k,1)
-            if (mu.le.0.0_WP) mu=1.0_WP/Reynolds
-            ! Get velocity gradient (Q(5:7) are momentum components)
-            dudx=0.5_WP*dxi*((pQ(i+1,j,k,5)/max(sum(pQ(i+1,j,k,1:2)),solver%rho_floor))-(pQ(i-1,j,k,5)/max(sum(pQ(i-1,j,k,1:2)),solver%rho_floor)))
-            dvdx=0.5_WP*dxi*((pQ(i+1,j,k,6)/max(sum(pQ(i+1,j,k,1:2)),solver%rho_floor))-(pQ(i-1,j,k,6)/max(sum(pQ(i-1,j,k,1:2)),solver%rho_floor)))
-            dwdx=0.5_WP*dxi*((pQ(i+1,j,k,7)/max(sum(pQ(i+1,j,k,1:2)),solver%rho_floor))-(pQ(i-1,j,k,7)/max(sum(pQ(i-1,j,k,1:2)),solver%rho_floor)))
-            dudy=0.5_WP*dyi*((pQ(i,j+1,k,5)/max(sum(pQ(i,j+1,k,1:2)),solver%rho_floor))-(pQ(i,j-1,k,5)/max(sum(pQ(i,j-1,k,1:2)),solver%rho_floor)))
-            dvdy=0.5_WP*dyi*((pQ(i,j+1,k,6)/max(sum(pQ(i,j+1,k,1:2)),solver%rho_floor))-(pQ(i,j-1,k,6)/max(sum(pQ(i,j-1,k,1:2)),solver%rho_floor)))
-            dwdy=0.5_WP*dyi*((pQ(i,j+1,k,7)/max(sum(pQ(i,j+1,k,1:2)),solver%rho_floor))-(pQ(i,j-1,k,7)/max(sum(pQ(i,j-1,k,1:2)),solver%rho_floor)))
-            dudz=0.5_WP*dzi*((pQ(i,j,k+1,5)/max(sum(pQ(i,j,k+1,1:2)),solver%rho_floor))-(pQ(i,j,k-1,5)/max(sum(pQ(i,j,k-1,1:2)),solver%rho_floor)))
-            dvdz=0.5_WP*dzi*((pQ(i,j,k+1,6)/max(sum(pQ(i,j,k+1,1:2)),solver%rho_floor))-(pQ(i,j,k-1,6)/max(sum(pQ(i,j,k-1,1:2)),solver%rho_floor)))
-            dwdz=0.5_WP*dzi*((pQ(i,j,k+1,7)/max(sum(pQ(i,j,k+1,1:2)),solver%rho_floor))-(pQ(i,j,k-1,7)/max(sum(pQ(i,j,k-1,1:2)),solver%rho_floor)))
-            ! Get vorticity magnitude
-            vort_mag=sqrt((dwdy-dvdz)**2+(dudz-dwdx)**2+(dvdx-dudy)**2)
-            ! Get dilatation
-            div_neg=min(dudx+dvdy+dwdz,0.0_WP)
-            ! Tag based on cell Reynolds numbers
-            Rec=rho*vort_mag*solver%amr%min_meshsize(lvl)**2/mu
-            if (Rec.gt.Rec_tag) tagarr(i,j,k,1)=SETtag
-            ! Also tag based on cell shock Reynolds number
-            Res=rho*abs(div_neg)*solver%amr%min_meshsize(lvl)**2/mu
-            if (Res.gt.Res_tag) tagarr(i,j,k,1)=SETtag
+            ! Get inverse of local densities
+            rho=sum(pQ(i,j,k,1:2)); iRho_cc=1.0_WP/max(rho,solver%rho_floor)
+            iRho_xp=1.0_WP/max(sum(pQ(i+1,j,  k,  1:2)),solver%rho_floor)
+            iRho_xm=1.0_WP/max(sum(pQ(i-1,j,  k,  1:2)),solver%rho_floor)
+            iRho_yp=1.0_WP/max(sum(pQ(i,  j+1,k,  1:2)),solver%rho_floor)
+            iRho_ym=1.0_WP/max(sum(pQ(i,  j-1,k,  1:2)),solver%rho_floor)
+            iRho_zp=1.0_WP/max(sum(pQ(i,  j,  k+1,1:2)),solver%rho_floor)
+            iRho_zm=1.0_WP/max(sum(pQ(i,  j,  k-1,1:2)),solver%rho_floor)
+            ! Get mu+mu_sgs
+            mu=pVisc(i,j,k,1); if (mu.le.0.0_WP) mu=1.0_WP/Reynolds
+            ! Get velocity laplacian
+            lap_u=(pQ(i+1,j,k,5)*iRho_xp-2.0_WP*pQ(i,j,k,5)*iRho_cc+pQ(i-1,j,k,5)*iRho_xm)*dxi**2 &
+            &    +(pQ(i,j+1,k,5)*iRho_yp-2.0_WP*pQ(i,j,k,5)*iRho_cc+pQ(i,j-1,k,5)*iRho_ym)*dyi**2 &
+            &    +(pQ(i,j,k+1,5)*iRho_zp-2.0_WP*pQ(i,j,k,5)*iRho_cc+pQ(i,j,k-1,5)*iRho_zm)*dzi**2
+            lap_v=(pQ(i+1,j,k,6)*iRho_xp-2.0_WP*pQ(i,j,k,6)*iRho_cc+pQ(i-1,j,k,6)*iRho_xm)*dxi**2 &
+            &    +(pQ(i,j+1,k,6)*iRho_yp-2.0_WP*pQ(i,j,k,6)*iRho_cc+pQ(i,j-1,k,6)*iRho_ym)*dyi**2 &
+            &    +(pQ(i,j,k+1,6)*iRho_zp-2.0_WP*pQ(i,j,k,6)*iRho_cc+pQ(i,j,k-1,6)*iRho_zm)*dzi**2
+            lap_w=(pQ(i+1,j,k,7)*iRho_xp-2.0_WP*pQ(i,j,k,7)*iRho_cc+pQ(i-1,j,k,7)*iRho_xm)*dxi**2 &
+            &    +(pQ(i,j+1,k,7)*iRho_yp-2.0_WP*pQ(i,j,k,7)*iRho_cc+pQ(i,j-1,k,7)*iRho_ym)*dyi**2 &
+            &    +(pQ(i,j,k+1,7)*iRho_zp-2.0_WP*pQ(i,j,k,7)*iRho_cc+pQ(i,j,k-1,7)*iRho_zm)*dzi**2
+            ! Compute u_sgs (1/2*C*lap*dx**2 with C=2/5)
+            u_sgs=0.2_WP*solver%amr%min_meshsize(lvl)**2*sqrt(lap_u**2+lap_v**2+lap_w**2)
+            ! Get Re_sgs
+            pRe_t(i,j,k,1)=rho*u_sgs*solver%amr%min_meshsize(lvl)/mu
          end do; end do; end do
       end do
       call solver%amr%mfiter_destroy(mfi)
+      ! Now filter Re_t
+      call solver%amr%mfab_filter(lvl=lvl,mfab=Re_t,npass=2)
+      ! Finally tag cells
+      call solver%amr%mfiter_build(lvl,mfi)
+      do while (mfi%next())
+         ! Get pointers to data
+         tagarr=>tags%dataPtr(mfi)
+         pRe_t=>Re_t%dataptr(mfi)
+         ! Loop over tile
+         bx=mfi%tilebox()
+         do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
+            if (pRe_t(i,j,k,1).gt.Re_tag) tagarr(i,j,k,1)=SETtag
+         end do; end do; end do
+      end do
+      call solver%amr%mfiter_destroy(mfi)
+      ! Destroy temporary multifab
+      call solver%amr%mfab_destroy(Re_t)
    end subroutine my_tagger
-   
+
    !> Initialization of problem solver
    subroutine simulation_init
       use param, only: param_read
@@ -564,8 +587,7 @@ contains
          call param_read('Regrid nsteps',regrid_evt%nper)
          ! Set case-specific tagging
          fs%user_mpcomp_tagging=>my_tagger
-         call param_read('Tagging Rec',Rec_tag)
-         call param_read('Tagging Res',Res_tag)
+         call param_read('Tagging Re',Re_tag)
          ! Build the grid
          if (restarted) then
             ! Restore grid hierarchy from checkpoint
@@ -613,8 +635,6 @@ contains
          call viz%add_scalar(fs%W,1,'W')
          call viz%add_scalar(Umag,1,'Umag')
          call viz%add_scalar(Mach,1,'Mach')
-         call viz%add_scalar(fs%visc,1,'visc')
-         call viz%add_scalar(fs%beta,1,'beta')
          call viz%add_surfmesh(fs%smesh,'plic')
          ! Create visualization output event
          viz_evt=event(time=time,name='Visualization output')

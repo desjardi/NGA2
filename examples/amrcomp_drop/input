@@ -6,8 +6,7 @@ Max level: 5
 
 # Regridding parameters
 Regrid nsteps: 10
-Tagging Rec:   50
-Tagging Res:   10
+Tagging Re:   10
 
 # Gammas
 GammaG: 1.3

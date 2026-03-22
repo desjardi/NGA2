@@ -1,0 +1,5 @@
+f90EXE_sources += amrlpt_class.f90 amrlptviz_class.f90
+CEXE_sources   += amrlpt_wrapper.cpp
+
+INCLUDE_LOCATIONS += $(NGA_HOME)/src/amrlpt
+VPATH_LOCATIONS   += $(NGA_HOME)/src/amrlpt
