@@ -214,10 +214,11 @@ contains
       type(amrex_mfiter) :: mfi
       type(amrex_box) :: bx
       real(WP), dimension(:,:,:,:), contiguous, pointer :: pTG,pVF,pQ,pVisc,pBeta,pDiff,pRHOL,pRHOG
-      real(WP) :: r_cyl,blend,nu_spg,mu_g,mu_l,k_g,k_l
+      real(WP) :: r_cyl,blend,nu_spg,mu_spg,mu_g,mu_l,k_g,k_l
       real(WP), parameter :: Tmax_visc=10.0_WP
       real(WP), parameter :: myeps=1.0e-15_WP
       real(WP), parameter :: max_cfl=0.5_WP
+      real(WP), parameter :: Cdiff=0.1_WP
       ! Get maximum allowable kinematic viscosity in the sponge at finest level
       nu_spg=max_cfl*amr%min_meshsize(amr%clvl())**2/(4.0_WP*time%dt)
       ! Loop over levels
@@ -260,10 +261,9 @@ contains
                if (amr%nz.eq.1) r_cyl=sqrt((amr%ylo+(real(j,WP)+0.5_WP)*amr%dy(lvl))**2) ! Enable quasi-2D runs
                if (r_cyl.gt.R_spg) then
                   blend=min((r_cyl-R_spg)/L_spg,1.0_WP)**2
-                  mu_sp=nu_spg/(pVF(i,j,k,1)/max(pRHOL(i,j,k,1),myeps)+(1.0_WP-pVF(i,j,k,1))/max(pRHOG(i,j,k,1),myeps))
-                  pVisc(i,j,k,1)=max(pVisc(i,j,k,1),blend*mu_sp)
-                  pBeta(i,j,k,1)=blend*mu_sp
-                  !pDiff(i,j,k,1)=max(pDiff(i,j,k,1),blend*nu_spg/(pVF(i,j,k,1)/max(pRHOL(i,j,k,1),myeps)+(1.0_WP-pVF(i,j,k,1))/max(pRHOG(i,j,k,1),myeps)))
+                  mu_spg=nu_spg/(pVF(i,j,k,1)/max(pRHOL(i,j,k,1),myeps)+(1.0_WP-pVF(i,j,k,1))/max(pRHOG(i,j,k,1),myeps))
+                  pVisc(i,j,k,1)=max(pVisc(i,j,k,1),blend*mu_spg)
+                  pDiff(i,j,k,1)=max(pDiff(i,j,k,1),Cdiff*blend*mu_spg)
                end if
             end do; end do; end do
          end do
@@ -377,7 +377,7 @@ contains
       real(WP) :: dx,dy,dz,dxi,dyi,dzi
       real(WP) ::  rho_cc, rho_xp, rho_xm, rho_yp, rho_ym, rho_zp, rho_zm
       real(WP) :: irho_cc,irho_xp,irho_xm,irho_yp,irho_ym,irho_zp,irho_zm
-      real(WP) :: vort_x,vort_y,vort_z,vort_mag,rho_ratio
+      real(WP) :: vort_x,vort_y,vort_z,vort_mag,rho_ratio,r_cyl
       integer :: i,j,k
       ! Get mesh size
       dx=solver%amr%dx(lvl); dxi=1.0_WP/dx
@@ -412,7 +412,8 @@ contains
             rho_ratio=max(rho_cc*irho_xp,rho_xp*irho_cc,rho_cc*irho_xm,rho_xm*irho_cc,&
             &             rho_cc*irho_yp,rho_yp*irho_cc,rho_cc*irho_ym,rho_ym*irho_cc,&
             &             rho_cc*irho_zp,rho_zp*irho_cc,rho_cc*irho_zm,rho_zm*irho_cc)
-            if (rho_ratio.gt.rho_ratio_tag) tagarr(i,j,k,1)=SETtag
+            r_cyl=sqrt((solver%amr%ylo+(real(j,WP)+0.5_WP)*dy)**2+(solver%amr%zlo+(real(k,WP)+0.5_WP)*dz)**2)
+            if (rho_ratio.gt.rho_ratio_tag.and.(r_cyl.lt.R_spg+L_spg.or.lvl.lt.solver%amr%maxlvl-1)) tagarr(i,j,k,1)=SETtag
          end do; end do; end do
       end do
       call solver%amr%mfiter_destroy(mfi)
