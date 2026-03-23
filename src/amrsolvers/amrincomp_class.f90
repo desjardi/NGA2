@@ -1178,8 +1178,6 @@ contains
          ! Destroy temp multifab
          call amrex_multifab_destroy(visc_t)
       end do
-      ! Average down and fill
-      call this%visc%average_down(); call this%visc%fill(time=0.0_WP)
    end subroutine add_vreman
 
    !> Compute CFL numbers (convective and viscous)

@@ -2017,9 +2017,6 @@ contains
          
       end do
 
-      ! Average down and fill
-      call this%beta%average_down(); call this%beta%fill(time=0.0_WP)
-
       ! End timer
       this%wt_visc=this%wt_visc+(MPI_Wtime()-t0)
 
@@ -2126,9 +2123,6 @@ contains
          call amrex_multifab_destroy(visc_t)
          
       end do
-      
-      ! Average down and fill
-      call this%visc%average_down(); call this%visc%fill(time=0.0_WP)
 
       ! End timer
       this%wt_visc=this%wt_visc+(MPI_Wtime()-t0)
