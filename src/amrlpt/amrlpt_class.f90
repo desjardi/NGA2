@@ -2,7 +2,7 @@
 !> Mirrors lpt_class capabilities on an AMReX AMR hierarchy.
 !> Particle communication and sorting handled by AmrParticleContainer<14,1>.
 module amrlpt_class
-   use precision, only: WP
+   use precision, only: WP,I8
    use string, only: str_medium
    use amrgrid_class, only: amrgrid
    use iso_c_binding
@@ -11,18 +11,23 @@ module amrlpt_class
 
    ! Public exports
    public :: amrlpt,part
+   public :: PART_MOVES,PART_COLLIDES,PART_EXCHANGES,PART_IS_DEAD
 
    ! Particle struct layout constants (must match #define in amrlpt_wrapper.cpp)
    integer, parameter, public :: AMRLPT_NREAL=14  !< extra reals per particle
    integer, parameter, public :: AMRLPT_NINT =1   !< extra ints  per particle
 
-   ! -----------------------------------------------------------------------
+   ! Particle flags
+   integer(c_int), parameter, public :: PART_MOVES     = 1  ! bit 0
+   integer(c_int), parameter, public :: PART_COLLIDES  = 2  ! bit 1
+   integer(c_int), parameter, public :: PART_EXCHANGES = 4  ! bit 2
+   integer(c_int), parameter, public :: PART_IS_DEAD   = 0  ! no bits = remove
+
    ! Particle struct -- must match C++ Particle<14,1> memory layout exactly:
-   !   pos[3]    (pos, managed by AMReX)
-   !   rdata[14] (d, vel[3], angVel[3], Acol[3], Tcol[3], dt)
-   !   idcpu     (packed id+cpu, private)
-   !   idata[1]  (flag)
-   ! -----------------------------------------------------------------------
+   ! - pos[3]    (pos, managed by AMReX)
+   ! - rdata[14] (d, vel[3], angVel[3], Acol[3], Tcol[3], dt)
+   ! - idcpu     (packed id+cpu, private)
+   ! - idata[1]  (flag)
    type, bind(C), public :: part
       !> AMReX position (physical coordinates)
       real(c_double) :: pos(3)
@@ -175,11 +180,12 @@ module amrlpt_class
       procedure :: finalize
       ! Physics procedures
       procedure :: advance       !< Advance particle ODEs one timestep
-      procedure :: get_rhs       !< Compute drag RHS + optimal sub-dt
       procedure :: update_VF     !< Compute particle volume fraction field
       procedure :: get_cfl       !< Compute particle CFL numbers
       ! Utilities
       procedure :: redistribute  !< Call AMReX redistribute
+      procedure :: get_np        !< Update global particle count
+      procedure, private :: get_particles !< Get particle array for MFIter tile
       ! Print solver info
       procedure :: get_info
       procedure :: print
@@ -241,20 +247,17 @@ contains
       type(amrdata), intent(inout), optional :: srcU,srcV,srcW
       integer, intent(in), optional :: Ucomp,Vcomp,Wcomp,srcUcomp,srcVcomp,srcWcomp
 
-      type(amrex_mfiter) :: mfi
-      type(c_ptr) :: dp
-      type(part), dimension(:), pointer :: p
-      integer(c_int64_t) :: np_tile
-      integer :: lvl,i,uc,vc,wc,suc,svc,swc
-      real(WP) :: mydt,dt_done,Ip
-      real(WP), dimension(3) :: acc,dmom,fvel
-      type(part) :: myp,pold
-      logical :: is_stag
-
       real(WP), dimension(:,:,:,:), contiguous, pointer :: pU,pV,pW
       real(WP), dimension(:,:,:,:), contiguous, pointer :: pRho,pVisc
       real(WP), dimension(:,:,:,:), contiguous, pointer :: sU,sV,sW
-      real(WP), dimension(3) :: plo,dx,dom_lo,dom_hi
+      type(amrex_mfiter) :: mfi
+      type(part), dimension(:), pointer :: p
+      integer(I8) :: np_
+      integer :: lvl,i,uc,vc,wc,suc,svc,swc
+      real(WP) :: mydt,dt_done,Ip
+      real(WP), dimension(3) :: acc,dmom,plo,dx
+      type(part) :: myp,pold
+      logical :: is_stag
 
       ! Resolve optional component indices
       uc=1;  if (present(Ucomp))     uc=   Ucomp
@@ -289,198 +292,160 @@ contains
 
       ! Track number of particles leaving domain
       this%np_out=0
-      this%vp_out=0.0_WP
-
-      ! Domain bounds from level-0 geometry (full physical domain)
-      dom_lo=this%amr%geom(0)%get_physical_location( &
-             [this%amr%geom(0)%domain%lo(0), &
-              this%amr%geom(0)%domain%lo(1), &
-              this%amr%geom(0)%domain%lo(2)])
-      dom_hi(1)=dom_lo(1)+this%amr%geom(0)%dx(1)* &
-                real(this%amr%geom(0)%domain%hi(0)-this%amr%geom(0)%domain%lo(0)+1,WP)
-      dom_hi(2)=dom_lo(2)+this%amr%geom(0)%dx(2)* &
-                real(this%amr%geom(0)%domain%hi(1)-this%amr%geom(0)%domain%lo(1)+1,WP)
-      dom_hi(3)=dom_lo(3)+this%amr%geom(0)%dx(3)* &
-                real(this%amr%geom(0)%domain%hi(2)-this%amr%geom(0)%domain%lo(2)+1,WP)
+      this%Vp_out=0.0_WP
 
       ! Loop over all AMR levels
       do lvl=0,this%amr%clvl()
 
-         plo=this%amr%geom(lvl)%get_physical_location( &
-              [this%amr%geom(lvl)%domain%lo(0), &
-               this%amr%geom(lvl)%domain%lo(1), &
-               this%amr%geom(lvl)%domain%lo(2)])
-         dx=this%amr%geom(lvl)%dx
+         plo=[this%amr%xlo,this%amr%ylo,this%amr%zlo]
+         dx =[this%amr%dx(lvl),this%amr%dy(lvl),this%amr%dz(lvl)]
 
-         ! MFIter over the level (no tiling — particles sorted by grid, not tile)
-         call amrex_mfiter_build(mfi,U%mf(lvl),tiling=.false.)
-      do while (mfi%valid())
+         ! MFIter over the level
+         call this%amr%mfiter_build(lvl,mfi,tiling=.false.)
+         do while (mfi%next())
 
-         ! Bind data arrays for this FAB (includes ghost cells)
-            pU   => U%mf(lvl)%dataptr(mfi)
-            pV   => V%mf(lvl)%dataptr(mfi)
-            pW   => W%mf(lvl)%dataptr(mfi)
-            pRho => rho%mf(lvl)%dataptr(mfi)
-            pVisc=> visc%mf(lvl)%dataptr(mfi)
-            if (present(srcU)) sU => srcU%mf(lvl)%dataptr(mfi)
-            if (present(srcV)) sV => srcV%mf(lvl)%dataptr(mfi)
-            if (present(srcW)) sW => srcW%mf(lvl)%dataptr(mfi)
+            ! Get pointers to data
+            pU   =>U%mf(lvl)%dataptr(mfi)
+            pV   =>V%mf(lvl)%dataptr(mfi)
+            pW   =>W%mf(lvl)%dataptr(mfi)
+            pRho =>rho%mf(lvl)%dataptr(mfi)
+            pVisc=>visc%mf(lvl)%dataptr(mfi)
+            if (present(srcU)) sU=>srcU%mf(lvl)%dataptr(mfi)
+            if (present(srcV)) sV=>srcV%mf(lvl)%dataptr(mfi)
+            if (present(srcW)) sW=>srcW%mf(lvl)%dataptr(mfi)
 
             ! Get particles on this tile
-            call amrlpt_get_particles_mfi(this%pc,lvl,mfi%p,dp,np_tile)
-            if (np_tile.gt.0) then
-               call c_f_pointer(dp,p,[np_tile])
-
-               do i=1,int(np_tile)
-                  if (p(i)%flag.eq.1) cycle
-
-                  myp=p(i)
-                  dt_done=0.0_WP
-                  Ip=0.1_WP*myp%d**2  ! moment of inertia / mass for sphere
-
-                  ! Substep loop (Euler-midpoint)
-                  do while (dt_done.lt.dt)
-                     mydt=min(myp%dt,dt-dt_done)
-                     if (mydt.le.0.0_WP) mydt=dt-dt_done  ! first step: dt not yet set
-                     pold=myp
-
-                     ! --- Euler predictor: interpolate at current position ---
-                     if (is_mac) then
-                        call interp_mac(myp%pos,plo,dx,pU,pV,pW,fvel,uc,vc,wc)
-                     else
-                        fvel(1)=interp_cc(myp%pos,plo,dx,pU,uc)
-                        fvel(2)=interp_cc(myp%pos,plo,dx,pV,vc)
-                        fvel(3)=interp_cc(myp%pos,plo,dx,pW,wc)
-                     end if
-                     call this%get_rhs(plo,dx,pRho,pVisc,myp,fvel,acc,myp%dt)
-                     mydt=min(myp%dt,dt-dt_done)
-                     myp%pos   =pold%pos   +0.5_WP*mydt*myp%vel
-                     myp%vel   =pold%vel   +0.5_WP*mydt*(acc+this%gravity+myp%Acol)
+            call this%get_particles(lvl=lvl,mfi=mfi,p=p,np=np_)
+            
+            ! Loop over local particles
+            do i=1,np_
+               ! Skip particles that are not moving or exchanging
+               if (IAND(p(i)%flag,PART_MOVES+PART_EXCHANGES).eq.0) cycle
+               ! Create copy of particle
+               myp=p(i)
+               ! Time-integrate until dt_done=dt
+               dt_done=0.0_WP
+               do while (dt_done.lt.dt)
+                  mydt=min(myp%dt,dt-dt_done)
+                  if (mydt.le.0.0_WP) mydt=dt-dt_done
+                  ! Remember the particle
+                  pold=myp
+                  ! Precompute moment of inertia for a sphere
+                  Ip=0.1_WP*myp%d**2
+                  ! Advance with Euler prediction
+                  call get_rhs(myp,acc,myp%dt)
+                  if (IAND(myp%flag,PART_MOVES).ne.0) then
+                     myp%pos=pold%pos+0.5_WP*mydt*myp%vel
+                     myp%vel=pold%vel+0.5_WP*mydt*(acc+this%gravity+myp%Acol)
                      myp%angVel=pold%angVel+0.5_WP*mydt*myp%Tcol/Ip
-
-                     ! --- Midpoint corrector: re-interpolate at midpoint position ---
-                     if (is_mac) then
-                        call interp_mac(myp%pos,plo,dx,pU,pV,pW,fvel,uc,vc,wc)
-                     else
-                        fvel(1)=interp_cc(myp%pos,plo,dx,pU,uc)
-                        fvel(2)=interp_cc(myp%pos,plo,dx,pV,vc)
-                        fvel(3)=interp_cc(myp%pos,plo,dx,pW,wc)
-                     end if
-                     call this%get_rhs(plo,dx,pRho,pVisc,myp,fvel,acc,myp%dt)
-                     myp%pos   =pold%pos   +mydt*myp%vel
-                     myp%vel   =pold%vel   +mydt*(acc+this%gravity+myp%Acol)
+                  end if
+                  call get_rhs(myp,acc,myp%dt)
+                  if (IAND(myp%flag,PART_MOVES).ne.0) then
+                     myp%pos=pold%pos+mydt*myp%vel
+                     myp%vel=pold%vel+mydt*(acc+this%gravity+myp%Acol)
                      myp%angVel=pold%angVel+mydt*myp%Tcol/Ip
-
-                     ! Two-way coupling: deposit momentum change to mesh
+                  end if
+                  if (IAND(myp%flag,PART_EXCHANGES).ne.0) then
                      dmom=mydt*acc*this%rho*Pi/6.0_WP*myp%d**3
                      if (present(srcU)) then
-                        if (is_mac) then
+                        if (is_stag) then
                            call deposit_face_x(-dmom(1),myp%pos,plo,dx,sU,suc)
                         else
                            call deposit_scalar(-dmom(1),myp%pos,plo,dx,sU,suc)
                         end if
                      end if
                      if (present(srcV)) then
-                        if (is_mac) then
+                        if (is_stag) then
                            call deposit_face_y(-dmom(2),myp%pos,plo,dx,sV,svc)
                         else
                            call deposit_scalar(-dmom(2),myp%pos,plo,dx,sV,svc)
                         end if
                      end if
                      if (present(srcW)) then
-                        if (is_mac) then
+                        if (is_stag) then
                            call deposit_face_z(-dmom(3),myp%pos,plo,dx,sW,swc)
                         else
                            call deposit_scalar(-dmom(3),myp%pos,plo,dx,sW,swc)
                         end if
                      end if
-
-                     dt_done=dt_done+mydt
-                  end do
-
-                   ! Track escape from non-periodic boundaries before write-back;
-                   ! AMReX will wrap periodic exits and remove non-periodic ones in Redistribute.
-                   if ((.not.this%amr%xper.and.(myp%pos(1).lt.dom_lo(1).or.myp%pos(1).gt.dom_hi(1))).or. &
-                       (.not.this%amr%yper.and.(myp%pos(2).lt.dom_lo(2).or.myp%pos(2).gt.dom_hi(2))).or. &
-                       (.not.this%amr%zper.and.(myp%pos(3).lt.dom_lo(3).or.myp%pos(3).gt.dom_hi(3)))) then
-                      this%np_out =this%np_out +1
-                      this%vp_out =this%vp_out +Pi/6.0_WP*myp%d**3
-                   end if
-
-                   ! Write back (Redistribute handles periodic wrapping and
-                   ! invalidation of out-of-domain particles)
-                   p(i)=myp
+                  end if
+                  ! Increment
+                  dt_done=dt_done+mydt
                end do
-            end if
-
-            call mfi%next()
+               ! Track escape from non-periodic boundaries
+               if ((.not.this%amr%xper.and.(myp%pos(1).lt.this%amr%xlo.or.myp%pos(1).gt.this%amr%xhi)).or.&
+               &   (.not.this%amr%yper.and.(myp%pos(2).lt.this%amr%ylo.or.myp%pos(2).gt.this%amr%yhi)).or.&
+               &   (.not.this%amr%zper.and.(myp%pos(3).lt.this%amr%zlo.or.myp%pos(3).gt.this%amr%zhi))) then
+                  this%np_out=this%np_out+1
+                  this%vp_out=this%vp_out+Pi/6.0_WP*myp%d**3
+               end if
+               ! Write back
+               p(i)=myp
+            end do
          end do
-         call amrex_mfiter_destroy(mfi)
+         call this%amr%mfiter_destroy(mfi)
 
       end do
 
-      ! Redistribute particles to correct ranks/levels/tiles
-      call amrlpt_redistribute(this%pc,0,-1,0)
+      ! Redistribute particles
+      call this%redistribute()
 
-      ! Update global particle count
-      call amrlpt_total_np(this%pc,this%np)
+      ! Reduce info on particles leaving domain
+      reduce_leaving_particles: block
+         use mpi_f08,  only: MPI_INTEGER,MPI_IN_PLACE,MPI_SUM,MPI_ALLREDUCE
+         use parallel, only: MPI_REAL_WP
+         integer :: ierr
+         call MPI_ALLREDUCE(MPI_IN_PLACE,this%np_out,1,MPI_INTEGER,MPI_SUM,this%amr%comm,ierr)
+         call MPI_ALLREDUCE(MPI_IN_PLACE,this%Vp_out,1,MPI_REAL_WP,MPI_SUM,this%amr%comm,ierr)
+      end block reduce_leaving_particles
+
+   contains
+
+      !> Calculate rhs of particle equations of motion
+      subroutine get_rhs(p,acc,opt_dt)
+         type(part), intent(in) :: p
+         real(WP), intent(out)  :: acc(3),opt_dt
+         real(WP) :: fvel(3),frho,fvisc,Re,tau,corr,b1,b2
+         real(WP), parameter :: pVF=0.0_WP
+         real(WP), parameter :: fVF=1.0_WP
+         if (is_stag) then
+            call interp_mac(p%pos,plo,dx,pU,pV,pW,fvel,uc,vc,wc)
+         else
+            fvel(1)=interp_cc(p%pos,plo,dx,pU,uc)
+            fvel(2)=interp_cc(p%pos,plo,dx,pV,vc)
+            fvel(3)=interp_cc(p%pos,plo,dx,pW,wc)
+         end if
+         frho =interp_cc(p%pos,plo,dx,pRho )
+         fvisc=interp_cc(p%pos,plo,dx,pVisc)+epsilon(1.0_WP)
+         select case(trim(this%drag_model))
+         case('None','none')
+            corr=epsilon(1.0_WP)
+         case('Stokes')
+            corr=1.0_WP
+         case('Schiller-Naumann','SN')
+            Re  =frho*norm2(p%vel-fvel)*p%d/fvisc+epsilon(1.0_WP)
+            corr=1.0_WP+0.15_WP*Re**(0.687_WP)
+         case('Tenneti')
+            Re  =fVF*frho*norm2(p%vel-fvel)*p%d/fvisc+epsilon(1.0_WP)
+            b1  =5.81_WP*pVF/fVF**3+0.48_WP*pVF**(1.0_WP/3.0_WP)/fVF**4
+            b2  =pVF**3*Re*(0.95_WP+0.61_WP*pVF**3/fVF**2)
+            corr=fVF*((1.0_WP+0.15_WP*Re**(0.687_WP))/fVF**3+b1+b2)
+         case('Beetstra')
+            Re  =fVF*frho*norm2(p%vel-fvel)*p%d/fvisc+epsilon(1.0_WP)
+            b1  =10.0_WP*pVF/fVF**2+fVF**2*(1.0_WP+1.5_WP*sqrt(pVF))
+            b2  =0.413_WP/24.0_WP*Re/fVF**2* &
+                 (1.0_WP/fVF+3.0_WP*fVF*pVF+8.4_WP*Re**(-0.343_WP))/ &
+                 (1.0_WP+10.0_WP**(3.0_WP*pVF)*Re**(2.0_WP*fVF-2.5_WP))
+            corr=b1+b2
+         case default
+            corr=1.0_WP
+         end select
+         tau   =this%rho*p%d**2/(18.0_WP*fvisc*corr)
+         acc   =(fvel-p%vel)/tau
+         opt_dt=tau/real(this%nstep,WP)
+      end subroutine get_rhs
 
    end subroutine advance
-
-   ! -----------------------------------------------------------------------
-   !> Compute RHS of particle ODE: drag acceleration + optimal sub-dt.
-   !> fvel_in: pre-interpolated fluid velocity at p%pos (from advance).
-   !> rho, visc: cell-centered fluid properties (interpolated here).
-   ! -----------------------------------------------------------------------
-   subroutine get_rhs(this,plo,dx,rhoarr,viscarr,p,fvel_in,acc,opt_dt)
-      implicit none
-      class(amrlpt), intent(inout) :: this
-      real(WP), intent(in)  :: plo(3),dx(3)
-      real(WP), dimension(:,:,:,:), contiguous, pointer, intent(in) :: rhoarr,viscarr
-      type(part), intent(in)  :: p
-      real(WP), intent(in)  :: fvel_in(3)
-      real(WP), intent(out) :: acc(3)
-      real(WP), intent(out) :: opt_dt
-
-      real(WP) :: frho,fvisc
-      real(WP) :: Re,tau,corr,b1,b2
-      real(WP), parameter :: pVF=0.0_WP  !< dilute limit (VF coupling TODO)
-      real(WP), parameter :: fVF=1.0_WP
-
-      ! Interpolate density and viscosity (always cell-centered, component 1)
-      frho  =interp_cc(p%pos,plo,dx,rhoarr)
-      fvisc =interp_cc(p%pos,plo,dx,viscarr)+epsilon(1.0_WP)
-
-      ! Drag correction
-      select case(trim(this%drag_model))
-      case('None','none')
-         corr=epsilon(1.0_WP)
-      case('Stokes')
-         corr=1.0_WP
-      case('Schiller-Naumann','SN')
-         Re  =frho*norm2(p%vel-fvel_in)*p%d/fvisc+epsilon(1.0_WP)
-         corr=1.0_WP+0.15_WP*Re**(0.687_WP)
-      case('Tenneti')
-         Re  =fVF*frho*norm2(p%vel-fvel_in)*p%d/fvisc+epsilon(1.0_WP)
-         b1  =5.81_WP*pVF/fVF**3+0.48_WP*pVF**(1.0_WP/3.0_WP)/fVF**4
-         b2  =pVF**3*Re*(0.95_WP+0.61_WP*pVF**3/fVF**2)
-         corr=fVF*((1.0_WP+0.15_WP*Re**(0.687_WP))/fVF**3+b1+b2)
-      case('Beetstra')
-         Re  =fVF*frho*norm2(p%vel-fvel_in)*p%d/fvisc+epsilon(1.0_WP)
-         b1  =10.0_WP*pVF/fVF**2+fVF**2*(1.0_WP+1.5_WP*sqrt(pVF))
-         b2  =0.413_WP/24.0_WP*Re/fVF**2* &
-              (1.0_WP/fVF+3.0_WP*fVF*pVF+8.4_WP*Re**(-0.343_WP))/ &
-              (1.0_WP+10.0_WP**(3.0_WP*pVF)*Re**(2.0_WP*fVF-2.5_WP))
-         corr=b1+b2
-      case default
-         corr=1.0_WP
-      end select
-
-      tau   =this%rho*p%d**2/(18.0_WP*fvisc*corr)
-      acc   =(fvel_in-p%vel)/tau
-      opt_dt=tau/real(this%nstep,WP)
-
-   end subroutine get_rhs
 
    ! -----------------------------------------------------------------------
    !> Compute particle volume fraction field by depositing Pi/6*d^3.
@@ -567,6 +532,33 @@ contains
       call amrlpt_redistribute(this%pc,lmin,lmax,no)
       call amrlpt_total_np(this%pc,this%np)
    end subroutine redistribute
+
+   !> Update global particle count
+   subroutine get_np(this)
+      implicit none
+      class(amrlpt), intent(inout) :: this
+      call amrlpt_total_np(this%pc,this%np)
+   end subroutine get_np
+
+   !> Get pointer to particle array for a given tile
+   subroutine get_particles(this,lvl,mfi,p,np)
+      use amrex_amr_module, only: amrex_mfiter
+      implicit none
+      class(amrlpt), intent(inout) :: this
+      integer, intent(in) :: lvl
+      type(amrex_mfiter), intent(in) :: mfi
+      type(part), dimension(:), pointer, intent(out) :: p
+      integer(I8), intent(out) :: np
+      type(c_ptr) :: dp
+      integer(c_int64_t) :: np_c
+      call amrlpt_get_particles_mfi(this%pc,lvl,mfi%p,dp,np_c)
+      np=np_c
+      if (np.gt.0) then
+         call c_f_pointer(dp,p,[np])
+      else
+         nullify(p)
+      end if
+   end subroutine get_particles
 
    ! ============================================================================
    ! SOLVER INFO

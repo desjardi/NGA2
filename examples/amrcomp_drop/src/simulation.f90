@@ -375,10 +375,10 @@ contains
       character(kind=c_char), dimension(:,:,:,:), contiguous, pointer :: tagarr
       real(WP), dimension(:,:,:,:), contiguous, pointer :: pQ
       real(WP) :: dx,dy,dz,dxi,dyi,dzi
-      real(WP) ::  rho_cc, rho_xp, rho_xm, rho_yp, rho_ym, rho_zp, rho_zm
       real(WP) :: irho_cc,irho_xp,irho_xm,irho_yp,irho_ym,irho_zp,irho_zm
-      real(WP) :: vort_x,vort_y,vort_z,vort_mag,rho_ratio,r_cyl
-      integer :: i,j,k
+      real(WP) :: vort_x,vort_y,vort_z,vort_mag
+      real(WP) :: rho_max,rho_min,rho_nb,rho_ratio,r_cyl
+      integer :: i,j,k,ii,jj,kk
       ! Get mesh size
       dx=solver%amr%dx(lvl); dxi=1.0_WP/dx
       dy=solver%amr%dy(lvl); dyi=1.0_WP/dy
@@ -394,24 +394,28 @@ contains
          ! Loop over tile
          bx=mfi%tilebox()
          do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
-            ! Get local densities and their inverse
-            rho_cc=max(sum(pQ(i  ,j,  k,  1:2)),solver%rho_floor); irho_cc=1.0_WP/rho_cc
-            rho_xp=max(sum(pQ(i+1,j,  k,  1:2)),solver%rho_floor); irho_xp=1.0_WP/rho_xp
-            rho_xm=max(sum(pQ(i-1,j,  k,  1:2)),solver%rho_floor); irho_xm=1.0_WP/rho_xm
-            rho_yp=max(sum(pQ(i,  j+1,k,  1:2)),solver%rho_floor); irho_yp=1.0_WP/rho_yp
-            rho_ym=max(sum(pQ(i,  j-1,k,  1:2)),solver%rho_floor); irho_ym=1.0_WP/rho_ym
-            rho_zp=max(sum(pQ(i,  j,  k+1,1:2)),solver%rho_floor); irho_zp=1.0_WP/rho_zp
-            rho_zm=max(sum(pQ(i,  j,  k-1,1:2)),solver%rho_floor); irho_zm=1.0_WP/rho_zm
+            ! Get local inverse densities
+            irho_cc=1.0_WP/max(sum(pQ(i  ,j,  k,  1:2)),solver%rho_floor)
+            irho_xp=1.0_WP/max(sum(pQ(i+1,j,  k,  1:2)),solver%rho_floor)
+            irho_xm=1.0_WP/max(sum(pQ(i-1,j,  k,  1:2)),solver%rho_floor)
+            irho_yp=1.0_WP/max(sum(pQ(i,  j+1,k,  1:2)),solver%rho_floor)
+            irho_ym=1.0_WP/max(sum(pQ(i,  j-1,k,  1:2)),solver%rho_floor)
+            irho_zp=1.0_WP/max(sum(pQ(i,  j,  k+1,1:2)),solver%rho_floor)
+            irho_zm=1.0_WP/max(sum(pQ(i,  j,  k-1,1:2)),solver%rho_floor)
             ! Compute vorticity and tag based on it
             vort_x=(pQ(i,j+1,k,7)*irho_yp-pQ(i,j-1,k,7)*irho_ym)*0.5_WP*dyi-(pQ(i,j,k+1,6)*irho_zp-pQ(i,j,k-1,6)*irho_zm)*0.5_WP*dzi
             vort_y=(pQ(i,j,k+1,5)*irho_zp-pQ(i,j,k-1,5)*irho_zm)*0.5_WP*dzi-(pQ(i+1,j,k,7)*irho_xp-pQ(i-1,j,k,7)*irho_xm)*0.5_WP*dxi
             vort_z=(pQ(i+1,j,k,6)*irho_xp-pQ(i-1,j,k,6)*irho_xm)*0.5_WP*dxi-(pQ(i,j+1,k,5)*irho_yp-pQ(i,j-1,k,5)*irho_ym)*0.5_WP*dyi
             vort_mag=sqrt(vort_x**2+vort_y**2+vort_z**2)
             if (vort_mag.gt.vorticity_tag) tagarr(i,j,k,1)=SETtag
-            ! Compute density ratio and tag based on it
-            rho_ratio=max(rho_cc*irho_xp,rho_xp*irho_cc,rho_cc*irho_xm,rho_xm*irho_cc,&
-            &             rho_cc*irho_yp,rho_yp*irho_cc,rho_cc*irho_ym,rho_ym*irho_cc,&
-            &             rho_cc*irho_zp,rho_zp*irho_cc,rho_cc*irho_zm,rho_zm*irho_cc)
+            ! Compute density ratio in 3x3x3 stencil and tag based on it
+            rho_max=solver%rho_floor; rho_min=huge(1.0_WP)
+            do kk=-1,1; do jj=-1,1; do ii=-1,1
+               rho_nb=sum(pQ(i+ii,j+jj,k+kk,1:2))
+               rho_max=max(rho_max,rho_nb)
+               rho_min=min(rho_min,max(rho_nb,solver%rho_floor))
+            end do; end do; end do
+            rho_ratio=rho_max/rho_min
             r_cyl=sqrt((solver%amr%ylo+(real(j,WP)+0.5_WP)*dy)**2+(solver%amr%zlo+(real(k,WP)+0.5_WP)*dz)**2)
             if (rho_ratio.gt.rho_ratio_tag.and.(r_cyl.lt.R_spg+L_spg.or.lvl.lt.solver%amr%maxlvl-1)) tagarr(i,j,k,1)=SETtag
          end do; end do; end do
