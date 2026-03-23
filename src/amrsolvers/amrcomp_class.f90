@@ -869,19 +869,20 @@ contains
       end function weno_weight
    end subroutine get_dQdt
 
-   !> Add artificial bulk viscosity to this%beta
-   subroutine add_viscartif(this,dt,Cartif)
+   !> Add artificial bulk viscosity to this%beta and this%visc
+   subroutine add_viscartif(this,dt,Cartif,Cvisc)
       use amrex_amr_module, only: amrex_mfiter,amrex_box,amrex_multifab,amrex_multifab_destroy
       implicit none
       class(amrcomp), intent(inout) :: this
       real(WP), intent(in) :: dt
       real(WP), intent(in), optional :: Cartif
+      real(WP), intent(in), optional :: Cvisc
       ! Local variables
       type(amrex_mfiter) :: mfi
       type(amrex_box) :: bx
       type(amrex_multifab) :: beta_t,scratch
-      real(WP), dimension(:,:,:,:), contiguous, pointer :: pBeta_t,pScratch,pU,pV,pW,pC,pBeta,pQ
-      real(WP) :: dxi,dyi,dzi,dx,dy,dz,max_beta,myCartif
+      real(WP), dimension(:,:,:,:), contiguous, pointer :: pBeta_t,pScratch,pU,pV,pW,pC,pBeta,pVisc,pQ
+      real(WP) :: dxi,dyi,dzi,dx,dy,dz,max_beta,myCartif,myCvisc
       real(WP) :: dudy,dudz,dvdx,dvdz,dwdx,dwdy,vort,grad_div
       integer :: lvl,i,j,k
       ! Parameters
@@ -890,6 +891,9 @@ contains
 
       ! Set model constant
       if (present(Cartif)) then; myCartif=Cartif; else; myCartif=5.0_WP; end if
+
+      ! Set shear viscosity constant
+      if (present(Cvisc)) then; myCvisc=Cvisc; else; myCvisc=0.0_WP; end if
 
       ! Loop over levels
       do lvl=0,this%amr%clvl()
@@ -966,10 +970,12 @@ contains
          do while(mfi%next())
             pBeta_t=>beta_t%dataptr(mfi)
             pBeta=>this%beta%mf(lvl)%dataptr(mfi)
+            pVisc=>this%visc%mf(lvl)%dataptr(mfi)
             pQ=>this%Q%mf(lvl)%dataptr(mfi)
             bx=mfi%growntilebox(this%nover)
             do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
                pBeta(i,j,k,1)=pBeta(i,j,k,1)+pBeta_t(i,j,k,1)*pQ(i,j,k,1)
+               pVisc(i,j,k,1)=pVisc(i,j,k,1)+pBeta_t(i,j,k,1)*pQ(i,j,k,1)*myCvisc
             end do; end do; end do
          end do
          call this%amr%mfiter_destroy(mfi)

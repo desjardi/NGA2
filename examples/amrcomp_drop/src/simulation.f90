@@ -581,7 +581,7 @@ contains
          ! Compute viscosities
          call get_viscosities()
          ! Add SGS models
-         call fs%add_viscartif(dt=time%dt)
+         call fs%add_viscartif(dt=time%dt,Cvisc=1.0e-2_WP)
          call fs%add_vreman(dt=time%dt)
          ! Compute Umag and Mach number
          call Umag%get_magnitude(fs%U,fs%V,fs%W)
@@ -766,7 +766,7 @@ contains
          call get_viscosities()
 
          ! Add SGS models
-         call fs%add_viscartif(dt=time%dt)
+         call fs%add_viscartif(dt=time%dt,Cvisc=1.0e-2_WP)
          call fs%add_vreman(dt=time%dt)
 
          ! Compute Umag and Mach number
