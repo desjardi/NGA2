@@ -260,8 +260,9 @@ contains
                if (amr%nz.eq.1) r_cyl=sqrt((amr%ylo+(real(j,WP)+0.5_WP)*amr%dy(lvl))**2) ! Enable quasi-2D runs
                if (r_cyl.gt.R_spg) then
                   blend=min((r_cyl-R_spg)/L_spg,1.0_WP)**2
-                  pVisc(i,j,k,1)=max(pVisc(i,j,k,1),blend*nu_spg/(pVF(i,j,k,1)/max(pRHOL(i,j,k,1),myeps)+(1.0_WP-pVF(i,j,k,1))/max(pRHOG(i,j,k,1),myeps)))
-                  pBeta(i,j,k,1)=pVisc(i,j,k,1)
+                  mu_sp=nu_spg/(pVF(i,j,k,1)/max(pRHOL(i,j,k,1),myeps)+(1.0_WP-pVF(i,j,k,1))/max(pRHOG(i,j,k,1),myeps))
+                  pVisc(i,j,k,1)=max(pVisc(i,j,k,1),blend*mu_sp)
+                  pBeta(i,j,k,1)=blend*mu_sp
                   !pDiff(i,j,k,1)=max(pDiff(i,j,k,1),blend*nu_spg/(pVF(i,j,k,1)/max(pRHOL(i,j,k,1),myeps)+(1.0_WP-pVF(i,j,k,1))/max(pRHOG(i,j,k,1),myeps)))
                end if
             end do; end do; end do

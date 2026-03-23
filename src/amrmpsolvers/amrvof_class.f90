@@ -1410,9 +1410,9 @@ contains
          nodal_U=U%nodal_type()
          nodal_V=V%nodal_type()
          nodal_W=W%nodal_type()
-         if (all(nodal_U .eqv. [.true. ,.false.,.false.]) .and. & 
-         &   all(nodal_V .eqv. [.false.,.true. ,.false.]) .and. & 
-         &   all(nodal_W .eqv. [.false.,.false.,.true. ])) then
+         if (all(nodal_U.eqv.[.true. ,.false.,.false.]).and.& 
+         &   all(nodal_V.eqv.[.false.,.true. ,.false.]).and.& 
+         &   all(nodal_W.eqv.[.false.,.false.,.true. ])) then
             is_staggered=.true.
          else if (.not.any(nodal_U).and..not.any(nodal_V).and..not.any(nodal_W)) then
             is_staggered=.false.
