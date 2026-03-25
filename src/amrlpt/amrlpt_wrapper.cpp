@@ -1,10 +1,14 @@
 // amrlpt_wrapper.cpp
-// C++ bridge between Fortran amrlpt_class and AMReX AmrParticleContainer
+// C++ bridge between Fortran amrlpt_class and AMReX NeighborParticleContainer
 // Particle struct: 14 extra reals (d, vel[3], angVel[3], Acol[3], Tcol[3], dt)
 //                  1 extra int   (flag)
 // All functions callable from Fortran via bind(C)
+//
+// Uses NeighborParticleContainer (backward-compatible superset of AmrParticleContainer):
+//   - fillNeighbors / clearNeighbors: ghost particles for collision detection
+//   - buildNeighborList: explicit pair lists for DEM / peridynamics
 
-#include <AMReX_AmrParticles.H>
+#include <AMReX_NeighborParticleContainer.H>
 #include <AMReX_AmrCore.H>
 #include <AMReX_MultiFab.H>
 #include <AMReX_Geometry.H>
@@ -24,7 +28,9 @@ using namespace amrex;
 #define AMRLPT_NINT   1
 
 namespace {
-    using FPC = AmrParticleContainer<AMRLPT_NREAL, AMRLPT_NINT>;
+    // NeighborParticleContainer is a backward-compatible superset of AmrParticleContainer.
+    // Neighbor particles have the same layout as primary particles (NNeighborReal=NREAL, NNeighborInt=NINT).
+    using FPC = NeighborParticleContainer<AMRLPT_NREAL, AMRLPT_NINT>;
     using FPT = FPC::ParticleType;
 }
 
@@ -53,6 +59,71 @@ void amrlpt_delete_pc(FPC* pc)
 void amrlpt_redistribute(FPC* pc, int lev_min, int lev_max, int ng)
 {
     pc->Redistribute(lev_min, lev_max, ng);
+}
+
+// -----------------------------------------------------------------------
+// Neighbor/ghost particles for collision detection and short-range interactions
+// fillNeighbors: communicate particles within ngrow cells into neighbor buffer
+// clearNeighbors: release neighbor buffer
+// -----------------------------------------------------------------------
+
+void amrlpt_fill_neighbors(FPC* pc, int ngrow)
+{
+    pc->fillNeighbors(ngrow);
+}
+
+void amrlpt_clear_neighbors(FPC* pc)
+{
+    pc->clearNeighbors();
+}
+
+// -----------------------------------------------------------------------
+// Neighbor particle access per tile (read-only ghost copies).
+// Returns pointer to neighbor particle array + count.
+// Call after amrlpt_fill_neighbors; neighbor particles may overlap
+// valid particles from adjacent tiles.
+// -----------------------------------------------------------------------
+
+void amrlpt_get_neighbor_particles_mfi(FPC* pc, int lev, MFIter* mfi,
+                                        FPT*& dp, long long& np)
+{
+    const int grid = mfi->index();
+    const int tile = mfi->LocalTileIndex();
+    auto& neighbors = pc->GetNeighbors(lev, grid, tile);
+    np = static_cast<long long>(neighbors.numParticles());
+    dp = (np > 0) ? neighbors.GetArrayOfStructs().data() : nullptr;
+}
+
+// -----------------------------------------------------------------------
+// Neighbor list (explicit pair list) for DEM / peridynamics.
+// buildNeighborList: build pairs with |r_i - r_j| < rcrit using
+//   cell-linked-list search over neighbor particles.
+// Pairs are stored as flat int arrays (2*npairs): [i0,j0, i1,j1, ...]
+// where i is index into valid particles and j into neighbor particles.
+// -----------------------------------------------------------------------
+
+void amrlpt_build_neighbor_list(FPC* pc, double rcrit)
+{
+    const double rcrit2 = rcrit * rcrit;
+    auto check_pair = [rcrit2](const FPT& p1, const FPT& p2) -> bool {
+        double d2 = 0.0;
+        for (int dim = 0; dim < AMREX_SPACEDIM; ++dim)
+            d2 += (p1.pos(dim) - p2.pos(dim)) * (p1.pos(dim) - p2.pos(dim));
+        return d2 < rcrit2;
+    };
+    // BuildNeighborList populates GetNeighborList per tile
+    bool sort = false;
+    pc->buildNeighborList(check_pair, sort);
+}
+
+void amrlpt_get_neighbor_list_mfi(FPC* pc, int lev, MFIter* mfi,
+                                   const int*& pairs, long long& npairs)
+{
+    const int grid = mfi->index();
+    const int tile = mfi->LocalTileIndex();
+    auto& nl = pc->getNeighborList(lev, grid, tile);
+    npairs = static_cast<long long>(nl.size() / 2);  // each pair is (i,j)
+    pairs  = (npairs > 0) ? nl.dataPtr() : nullptr;
 }
 
 // -----------------------------------------------------------------------

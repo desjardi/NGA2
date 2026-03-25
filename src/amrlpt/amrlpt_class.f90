@@ -1,6 +1,6 @@
 !> AMR-aware Lagrangian particle tracking solver
 !> Mirrors lpt_class capabilities on an AMReX AMR hierarchy.
-!> Particle communication and sorting handled by AmrParticleContainer<14,1>.
+!> Particle communication and sorting handled by NeighborParticleContainer<14,1>.
 module amrlpt_class
    use precision, only: WP,I8
    use string, only: str_medium
@@ -63,6 +63,39 @@ module amrlpt_class
          import :: c_ptr,c_int
          type(c_ptr), value :: pc
          integer(c_int), value :: lev_min,lev_max,ng
+      end subroutine
+
+      subroutine amrlpt_fill_neighbors(pc,ngrow) bind(c)
+         import :: c_ptr,c_int
+         type(c_ptr), value :: pc
+         integer(c_int), value :: ngrow
+      end subroutine
+
+      subroutine amrlpt_clear_neighbors(pc) bind(c)
+         import :: c_ptr
+         type(c_ptr), value :: pc
+      end subroutine
+
+      subroutine amrlpt_get_neighbor_particles_mfi(pc,lev,mfi,dp,np) bind(c)
+         import :: c_ptr,c_int,c_int64_t
+         type(c_ptr), value :: pc,mfi
+         integer(c_int), value :: lev
+         type(c_ptr) :: dp
+         integer(c_int64_t) :: np
+      end subroutine
+
+      subroutine amrlpt_build_neighbor_list(pc,rcrit) bind(c)
+         import :: c_ptr,c_double
+         type(c_ptr), value :: pc
+         real(c_double), value :: rcrit
+      end subroutine
+
+      subroutine amrlpt_get_neighbor_list_mfi(pc,lev,mfi,pairs,npairs) bind(c)
+         import :: c_ptr,c_int,c_int64_t
+         type(c_ptr), value :: pc,mfi
+         integer(c_int), value :: lev
+         type(c_ptr) :: pairs
+         integer(c_int64_t) :: npairs
       end subroutine
 
       subroutine amrlpt_get_particles_mfi(pc,lev,mfi,dp,np) bind(c)
@@ -139,7 +172,7 @@ module amrlpt_class
       !> Associated AMR grid
       class(amrgrid), pointer :: amr=>null()
 
-      !> AMReX AmrParticleContainer<14,1> opaque handle
+      !> AMReX NeighborParticleContainer<14,1> opaque handle
       type(c_ptr) :: pc=c_null_ptr
 
       !> Solver name
@@ -197,6 +230,9 @@ module amrlpt_class
       procedure :: get_cfl                !< Compute particle CFL numbers
       ! Utilities
       procedure :: redistribute           !< Call AMReX redistribute
+      procedure :: fill_ghosts            !< Fill ghost particle buffer
+      procedure :: clear_ghosts           !< Release ghost particle buffer
+      procedure :: build_neighbor_list    !< Build explicit pair list within rcrit
       procedure :: get_np                 !< Update global particle count
       procedure, private :: get_particles !< Get particle array for MFIter tile
       procedure :: interp                 !< Trilinear cell-centered interpolation
@@ -568,6 +604,32 @@ contains
       call amrlpt_redistribute(this%pc,lmin,lmax,no)
       call amrlpt_total_np(this%pc,this%np)
    end subroutine redistribute
+
+   !> Fill ghost particle buffer within no cells
+   subroutine fill_ghosts(this,no)
+      implicit none
+      class(amrlpt), intent(inout) :: this
+      integer, intent(in), optional :: no
+      integer :: ng
+      ng=this%nover; if (present(no)) ng=no
+      call amrlpt_fill_neighbors(this%pc,ng)
+   end subroutine fill_ghosts
+
+   !> Release ghost particle buffer
+   subroutine clear_ghosts(this)
+      implicit none
+      class(amrlpt), intent(inout) :: this
+      call amrlpt_clear_neighbors(this%pc)
+   end subroutine clear_ghosts
+
+   !> Build explicit pair list within interaction radius rcrit
+   subroutine build_neighbor_list(this,rcrit)
+      use iso_c_binding, only: c_double
+      implicit none
+      class(amrlpt), intent(inout) :: this
+      real(WP), intent(in) :: rcrit
+      call amrlpt_build_neighbor_list(this%pc,real(rcrit,c_double))
+   end subroutine build_neighbor_list
 
    !> Update global particle count
    subroutine get_np(this)
