@@ -195,7 +195,7 @@ module amrlpt_class
       character(len=str_medium) :: name='UNNAMED_AMRLPT'
 
       !> Global particle count
-      integer(c_int64_t) :: np=0
+      integer(I8) :: np=0
 
       !> Physics parameters
       real(WP) :: rho                                   !< Particle material density
@@ -330,6 +330,7 @@ contains
       real(WP), intent(in) :: dt
       type(amrdata), intent(in), optional :: Gib
       type(amrex_mfiter) :: mfi
+       type(amrex_box)    :: bx
       type(part), dimension(:), pointer :: p
       real(WP), dimension(:,:,:,:), contiguous, pointer :: pG
       integer(c_int32_t), dimension(:), pointer :: nbr_off,nbr_lst
@@ -435,7 +436,7 @@ contains
 
             end do ! Valid particles
          end do    ! Tiles
-         call this%amr%mfiter_destroy(mfi)
+      call this%amr%mfiter_destroy(mfi)
       end do       ! Levels
 
       ! Clear ghosts
@@ -746,9 +747,9 @@ contains
          dzi=1.0_WP/this%amr%dz(lvl)
          ! Loop over tiles
          call this%amr%mfiter_build(lvl,mfi,tiling=.false.)
-         do while (mfi%next())
+      do while (mfi%next())
             ! Get pointer to data
-            pVF=>this%VF%mf(lvl)%dataptr(mfi)
+      pVF=>this%VF%mf(lvl)%dataptr(mfi)
             ! Loop over particles
             call this%get_particles(lvl=lvl,mfi=mfi,p=p,np=np_)
             do i=1,np_
@@ -775,20 +776,46 @@ contains
 
    !> CFL based on particle velocities relative to their local cell size
    subroutine get_cfl(this,dt,cflc,cfl)
-      use mpi_f08,  only: MPI_ALLREDUCE,MPI_MAX
+      use amrex_amr_module, only: amrex_mfiter
+      use mpi_f08,  only: MPI_ALLREDUCE,MPI_MAX,MPI_IN_PLACE
       use parallel, only: MPI_REAL_WP
       implicit none
       class(amrlpt), intent(inout) :: this
       real(WP), intent(in)  :: dt
       real(WP), intent(out) :: cflc
       real(WP), optional    :: cfl
-      ! NOTE: without per-particle dx we can only report |vel|*dt.
-      ! A proper implementation queries this%amr%dx(lev) at the particle cell.
-      this%CFLp_x = 0.0_WP; this%CFLp_y = 0.0_WP; this%CFLp_z = 0.0_WP
-      this%CFL_col = 0.0_WP
-      cflc = 0.0_WP
-      if (present(cfl)) cfl = 0.0_WP
-      ! TODO: loop over tiles, query geom%dx at particle position
+      type(amrex_mfiter) :: mfi
+      type(part), dimension(:), pointer :: p
+      integer(I8) :: np_
+      integer :: lvl,n,ierr
+      ! Initialize
+      this%CFLp_x=0.0_WP; this%CFLp_y=0.0_WP; this%CFLp_z=0.0_WP; this%CFL_col=0.0_WP
+      ! Loop over levels and tiles
+      do lvl=0,this%amr%clvl()
+         call this%amr%mfiter_build(lvl,mfi)
+         do while (mfi%next())
+            ! Loop over particles
+            call this%get_particles(lvl,mfi,p,np_)
+            do n=1,np_
+               ! Skip dead particles
+               if (p(n)%flag.eq.PART_IS_DEAD) cycle
+               ! Get CFL numbers
+               this%CFLp_x =max(this%CFLp_x ,abs(p(n)%vel(1))/this%amr%dx(lvl))
+               this%CFLp_y =max(this%CFLp_y ,abs(p(n)%vel(2))/this%amr%dy(lvl))
+               this%CFLp_z =max(this%CFLp_z ,abs(p(n)%vel(3))/this%amr%dz(lvl))
+               this%CFL_col=max(this%CFL_col,norm2(p(n)%vel)/p(n)%d)
+            end do
+         end do
+         call this%amr%mfiter_destroy(mfi)
+      end do
+      ! Global MPI max, scale by dt (10 dt for collision CFL to ensure max CFL of 0.1)
+      call MPI_ALLREDUCE(MPI_IN_PLACE,this%CFLp_x, 1,MPI_REAL_WP,MPI_MAX,this%amr%comm,ierr); this%CFLp_x=this%CFLp_x*dt
+      call MPI_ALLREDUCE(MPI_IN_PLACE,this%CFLp_y, 1,MPI_REAL_WP,MPI_MAX,this%amr%comm,ierr); this%CFLp_y=this%CFLp_y*dt
+      call MPI_ALLREDUCE(MPI_IN_PLACE,this%CFLp_z, 1,MPI_REAL_WP,MPI_MAX,this%amr%comm,ierr); this%CFLp_z=this%CFLp_z*dt
+      call MPI_ALLREDUCE(MPI_IN_PLACE,this%CFL_col,1,MPI_REAL_WP,MPI_MAX,this%amr%comm,ierr); this%CFL_col=10.0_WP*this%CFL_col*dt
+      ! Return convective CFL and optionally overall CFL
+      cflc=max(this%CFLp_x,this%CFLp_y,this%CFLp_z)
+      if (present(cfl)) cfl=max(cflc,this%CFL_col)
    end subroutine get_cfl
 
    ! ============================================================================
@@ -836,7 +863,9 @@ contains
    subroutine get_np(this)
       implicit none
       class(amrlpt), intent(inout) :: this
-      call amrlpt_total_np(this%pc,this%np)
+      integer(c_int64_t) :: np_c
+      call amrlpt_total_np(this%pc,np_c)
+      this%np=np_c
    end subroutine get_np
 
    !> Get pointer to particle array for a given tile
@@ -1018,23 +1047,23 @@ contains
             dyi=1.0_WP/this%amr%dy(lvl)
             dzi=1.0_WP/this%amr%dz(lvl)
             call this%amr%mfiter_build(lvl,mfi)
-            do while (mfi%next())
+      do while (mfi%next())
                pA =>A%mf(lvl)%dataptr(mfi)
                pFx=>Fx(lvl)%dataptr(mfi); pFy=>Fy(lvl)%dataptr(mfi); pFz=>Fz(lvl)%dataptr(mfi)
                bx=mfi%nodaltilebox(1)
-               do nc=1,A%ncomp; do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
+      do nc=1,A%ncomp; do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
                   pFx(i,j,k,nc)=alpha_step*(pA(i,j,k,nc)-pA(i-1,j,k,nc))*dxi
-               end do; end do; end do; end do
+      end do; end do; end do; end do
                bx=mfi%nodaltilebox(2)
-               do nc=1,A%ncomp; do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
+      do nc=1,A%ncomp; do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
                   pFy(i,j,k,nc)=alpha_step*(pA(i,j,k,nc)-pA(i,j-1,k,nc))*dyi
-               end do; end do; end do; end do
+      end do; end do; end do; end do
                bx=mfi%nodaltilebox(3)
-               do nc=1,A%ncomp; do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
+      do nc=1,A%ncomp; do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
                   pFz(i,j,k,nc)=alpha_step*(pA(i,j,k,nc)-pA(i,j,k-1,nc))*dzi
-               end do; end do; end do; end do
+      end do; end do; end do; end do
             end do
-            call this%amr%mfiter_destroy(mfi)
+      call this%amr%mfiter_destroy(mfi)
          end do
          ! Average down face fluxes for C/F conservation (finest→coarsest)
          do lvl=this%amr%clvl(),1,-1
@@ -1048,15 +1077,15 @@ contains
             dyi=1.0_WP/this%amr%dy(lvl)
             dzi=1.0_WP/this%amr%dz(lvl)
             call this%amr%mfiter_build(lvl,mfi)
-            do while (mfi%next())
+      do while (mfi%next())
                pA =>A%mf(lvl)%dataptr(mfi)
                pFx=>Fx(lvl)%dataptr(mfi); pFy=>Fy(lvl)%dataptr(mfi); pFz=>Fz(lvl)%dataptr(mfi)
-               bx=mfi%tilebox()
-               do nc=1,A%ncomp; do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
+      bx=mfi%tilebox()
+      do nc=1,A%ncomp; do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
                   pA(i,j,k,nc)=pA(i,j,k,nc)+dxi*(pFx(i+1,j,k,nc)-pFx(i,j,k,nc))+dyi*(pFy(i,j+1,k,nc)-pFy(i,j,k,nc))+dzi*(pFz(i,j,k+1,nc)-pFz(i,j,k,nc))
-               end do; end do; end do; end do
+      end do; end do; end do; end do
             end do
-            call this%amr%mfiter_destroy(mfi)
+      call this%amr%mfiter_destroy(mfi)
          end do
          ! Restore coarse valid cells covered by fine
          call A%average_down()
@@ -1078,65 +1107,64 @@ contains
    ! SOLVER INFO
    ! ============================================================================
 
-   !> Compute particle statistics: np, d/vel min/max/mean/var.
+   !> Compute particle statistics: np, d/vel min/max/mean/var, Vp_tot, and VF field stats
    subroutine get_info(this)
-      use amrex_amr_module, only: amrex_multifab,amrex_mfiter,amrex_mfiter_build,amrex_mfiter_destroy
-      use mpi_f08, only: MPI_ALLREDUCE,MPI_SUM,MPI_MIN,MPI_MAX,MPI_IN_PLACE,MPI_INTEGER8
+      use amrex_amr_module, only: amrex_multifab,amrex_mfiter,amrex_mfiter_build,amrex_mfiter_destroy,amrex_box
+      use mpi_f08,  only: MPI_ALLREDUCE,MPI_SUM,MPI_MIN,MPI_MAX,MPI_IN_PLACE,MPI_INTEGER8
       use parallel, only: MPI_REAL_WP
+      use mathtools, only: Pi
       implicit none
       class(amrlpt), intent(inout) :: this
       type(amrex_mfiter) :: mfi
-      type(c_ptr) :: dp
-      type(part), pointer :: p(:)
-      integer(c_int64_t) :: np_tile
-      integer :: lev,n,ierr
-      real(WP) :: d_sum,d_sq,vx_sum,vx_sq,vy_sum,vy_sq,vz_sum,vz_sq
-      real(WP) :: inv_np
+      type(amrex_box)    :: bx
+      type(part), dimension(:), pointer :: p
+      real(WP), dimension(:,:,:,:), pointer :: pVF
+      integer(I8) :: np_
+      integer :: lvl,n,i,j,k,ierr
+      real(WP) :: d_sum,d_sq,vx_sum,vx_sq,vy_sum,vy_sq,vz_sum,vz_sq,inv_np
       ! Init per-rank accumulators
-      this%np=0
+      this%np=0; this%Vp_tot=0.0_WP
       this%dmin=huge(1.0_WP); this%dmax=-huge(1.0_WP);  d_sum=0.0_WP;  d_sq=0.0_WP
       this%Umin=huge(1.0_WP); this%Umax=-huge(1.0_WP); vx_sum=0.0_WP; vx_sq=0.0_WP
       this%Vmin=huge(1.0_WP); this%Vmax=-huge(1.0_WP); vy_sum=0.0_WP; vy_sq=0.0_WP
       this%Wmin=huge(1.0_WP); this%Wmax=-huge(1.0_WP); vz_sum=0.0_WP; vz_sq=0.0_WP
       ! Loop over all AMR levels and tiles
-      do lev=0,this%amr%clvl()
-         call this%amr%mfiter_build(lev,mfi)
-         do while (mfi%valid())
-            call amrlpt_get_particles_mfi(this%pc,lev,mfi%p,dp,np_tile)
-            if (np_tile.gt.0) then
-               call c_f_pointer(dp,p,[np_tile])
-               do n=1,int(np_tile)
-                  if (p(n)%flag.eq.1) cycle
-                  this%np=this%np+1
-                  this%dmin=min(this%dmin,p(n)%d);      this%dmax=max(this%dmax,p(n)%d);       d_sum= d_sum+p(n)%d;       d_sq= d_sq+p(n)%d**2
-                  this%Umin=min(this%Umin,p(n)%vel(1)); this%Umax=max(this%Umax,p(n)%vel(1)); vx_sum=vx_sum+p(n)%vel(1); vx_sq=vx_sq+p(n)%vel(1)**2
-                  this%Vmin=min(this%Vmin,p(n)%vel(2)); this%Vmax=max(this%Vmax,p(n)%vel(2)); vy_sum=vy_sum+p(n)%vel(2); vy_sq=vy_sq+p(n)%vel(2)**2
-                  this%Wmin=min(this%Wmin,p(n)%vel(3)); this%Wmax=max(this%Wmax,p(n)%vel(3)); vz_sum=vz_sum+p(n)%vel(3); vz_sq=vz_sq+p(n)%vel(3)**2
-               end do
-            end if
-            call mfi%next()
+      do lvl=0,this%amr%clvl()
+         call this%amr%mfiter_build(lvl,mfi)
+         do while (mfi%next())
+            call this%get_particles(lvl,mfi,p,np_)
+            do n=1,np_
+               if (p(n)%flag.eq.PART_IS_DEAD) cycle
+               this%np=this%np+1
+               this%Vp_tot=this%Vp_tot+Pi/6.0_WP*p(n)%d**3
+               this%dmin=min(this%dmin,p(n)%d);      this%dmax=max(this%dmax,p(n)%d);       d_sum= d_sum+p(n)%d;       d_sq= d_sq+p(n)%d**2
+               this%Umin=min(this%Umin,p(n)%vel(1)); this%Umax=max(this%Umax,p(n)%vel(1)); vx_sum=vx_sum+p(n)%vel(1); vx_sq=vx_sq+p(n)%vel(1)**2
+               this%Vmin=min(this%Vmin,p(n)%vel(2)); this%Vmax=max(this%Vmax,p(n)%vel(2)); vy_sum=vy_sum+p(n)%vel(2); vy_sq=vy_sq+p(n)%vel(2)**2
+               this%Wmin=min(this%Wmin,p(n)%vel(3)); this%Wmax=max(this%Wmax,p(n)%vel(3)); vz_sum=vz_sum+p(n)%vel(3); vz_sq=vz_sq+p(n)%vel(3)**2
+            end do
          end do
          call this%amr%mfiter_destroy(mfi)
       end do
       ! Global MPI reduce
-      call MPI_ALLREDUCE(MPI_IN_PLACE,this%np,  1,MPI_INTEGER8,MPI_SUM,this%amr%comm,ierr)
-      call MPI_ALLREDUCE(MPI_IN_PLACE,this%dmin,1,MPI_REAL_WP ,MPI_MIN,this%amr%comm,ierr)
-      call MPI_ALLREDUCE(MPI_IN_PLACE,this%dmax,1,MPI_REAL_WP ,MPI_MAX,this%amr%comm,ierr)
-      call MPI_ALLREDUCE(MPI_IN_PLACE,d_sum,    1,MPI_REAL_WP ,MPI_SUM,this%amr%comm,ierr)
-      call MPI_ALLREDUCE(MPI_IN_PLACE,d_sq,     1,MPI_REAL_WP ,MPI_SUM,this%amr%comm,ierr)
-      call MPI_ALLREDUCE(MPI_IN_PLACE,this%Umin,1,MPI_REAL_WP ,MPI_MIN,this%amr%comm,ierr)
-      call MPI_ALLREDUCE(MPI_IN_PLACE,this%Umax,1,MPI_REAL_WP ,MPI_MAX,this%amr%comm,ierr)
-      call MPI_ALLREDUCE(MPI_IN_PLACE,vx_sum,   1,MPI_REAL_WP ,MPI_SUM,this%amr%comm,ierr)
-      call MPI_ALLREDUCE(MPI_IN_PLACE,vx_sq,    1,MPI_REAL_WP ,MPI_SUM,this%amr%comm,ierr)
-      call MPI_ALLREDUCE(MPI_IN_PLACE,this%Vmin,1,MPI_REAL_WP ,MPI_MIN,this%amr%comm,ierr)
-      call MPI_ALLREDUCE(MPI_IN_PLACE,this%Vmax,1,MPI_REAL_WP ,MPI_MAX,this%amr%comm,ierr)
-      call MPI_ALLREDUCE(MPI_IN_PLACE,vy_sum,   1,MPI_REAL_WP ,MPI_SUM,this%amr%comm,ierr)
-      call MPI_ALLREDUCE(MPI_IN_PLACE,vy_sq,    1,MPI_REAL_WP ,MPI_SUM,this%amr%comm,ierr)
-      call MPI_ALLREDUCE(MPI_IN_PLACE,this%Wmin,1,MPI_REAL_WP ,MPI_MIN,this%amr%comm,ierr)
-      call MPI_ALLREDUCE(MPI_IN_PLACE,this%Wmax,1,MPI_REAL_WP ,MPI_MAX,this%amr%comm,ierr)
-      call MPI_ALLREDUCE(MPI_IN_PLACE,vz_sum,   1,MPI_REAL_WP ,MPI_SUM,this%amr%comm,ierr)
-      call MPI_ALLREDUCE(MPI_IN_PLACE,vz_sq,    1,MPI_REAL_WP ,MPI_SUM,this%amr%comm,ierr)
-      ! Derive mean and variance
+      call MPI_ALLREDUCE(MPI_IN_PLACE,this%np,    1,MPI_INTEGER8,MPI_SUM,this%amr%comm,ierr)
+      call MPI_ALLREDUCE(MPI_IN_PLACE,this%Vp_tot,1,MPI_REAL_WP ,MPI_SUM,this%amr%comm,ierr)
+      call MPI_ALLREDUCE(MPI_IN_PLACE,this%dmin,  1,MPI_REAL_WP ,MPI_MIN,this%amr%comm,ierr)
+      call MPI_ALLREDUCE(MPI_IN_PLACE,this%dmax,  1,MPI_REAL_WP ,MPI_MAX,this%amr%comm,ierr)
+      call MPI_ALLREDUCE(MPI_IN_PLACE,d_sum,      1,MPI_REAL_WP ,MPI_SUM,this%amr%comm,ierr)
+      call MPI_ALLREDUCE(MPI_IN_PLACE,d_sq,       1,MPI_REAL_WP ,MPI_SUM,this%amr%comm,ierr)
+      call MPI_ALLREDUCE(MPI_IN_PLACE,this%Umin,  1,MPI_REAL_WP ,MPI_MIN,this%amr%comm,ierr)
+      call MPI_ALLREDUCE(MPI_IN_PLACE,this%Umax,  1,MPI_REAL_WP ,MPI_MAX,this%amr%comm,ierr)
+      call MPI_ALLREDUCE(MPI_IN_PLACE,vx_sum,     1,MPI_REAL_WP ,MPI_SUM,this%amr%comm,ierr)
+      call MPI_ALLREDUCE(MPI_IN_PLACE,vx_sq,      1,MPI_REAL_WP ,MPI_SUM,this%amr%comm,ierr)
+      call MPI_ALLREDUCE(MPI_IN_PLACE,this%Vmin,  1,MPI_REAL_WP ,MPI_MIN,this%amr%comm,ierr)
+      call MPI_ALLREDUCE(MPI_IN_PLACE,this%Vmax,  1,MPI_REAL_WP ,MPI_MAX,this%amr%comm,ierr)
+      call MPI_ALLREDUCE(MPI_IN_PLACE,vy_sum,     1,MPI_REAL_WP ,MPI_SUM,this%amr%comm,ierr)
+      call MPI_ALLREDUCE(MPI_IN_PLACE,vy_sq,      1,MPI_REAL_WP ,MPI_SUM,this%amr%comm,ierr)
+      call MPI_ALLREDUCE(MPI_IN_PLACE,this%Wmin,  1,MPI_REAL_WP ,MPI_MIN,this%amr%comm,ierr)
+      call MPI_ALLREDUCE(MPI_IN_PLACE,this%Wmax,  1,MPI_REAL_WP ,MPI_MAX,this%amr%comm,ierr)
+      call MPI_ALLREDUCE(MPI_IN_PLACE,vz_sum,     1,MPI_REAL_WP ,MPI_SUM,this%amr%comm,ierr)
+      call MPI_ALLREDUCE(MPI_IN_PLACE,vz_sq,      1,MPI_REAL_WP ,MPI_SUM,this%amr%comm,ierr)
+      ! Derive mean and variance from single-pass accumulation
       if (this%np.gt.0) then
          inv_np=1.0_WP/real(this%np,WP)
          this%dmean= d_sum*inv_np; this%dvar=max(0.0_WP, d_sq*inv_np-this%dmean**2)
@@ -1144,6 +1172,51 @@ contains
          this%Vmean=vy_sum*inv_np; this%Vvar=max(0.0_WP,vy_sq*inv_np-this%Vmean**2)
          this%Wmean=vz_sum*inv_np; this%Wvar=max(0.0_WP,vz_sq*inv_np-this%Wmean**2)
       end if
+      ! Volume fraction statistics
+      vf_stats_block: block
+         use amrex_amr_module, only: amrex_imultifab,amrex_imultifab_build,amrex_imultifab_destroy
+         use amrex_interface,  only: amrmask_make_fine
+         type(amrex_imultifab) :: mask
+         integer,  dimension(:,:,:,:), contiguous, pointer :: pMask
+         real(WP) :: var_sum
+         ! Initialize stats
+         this%VFmean=this%VF%get_sum(lvl=0)/real(this%amr%nx*this%amr%ny*this%amr%nz,WP)
+         var_sum=0.0_WP; this%VFmin=huge(1.0_WP); this%VFmax=-huge(1.0_WP)
+         ! Loop over levels
+         do lvl=0,this%amr%clvl()
+            ! Build fine mask
+            if (lvl.lt.this%amr%clvl()) then
+               call amrex_imultifab_build(mask,this%amr%ba(lvl),this%amr%dm(lvl),1,0)
+               call amrmask_make_fine(mask,this%amr%ba(lvl+1),[this%amr%rrefx(lvl),this%amr%rrefy(lvl),this%amr%rrefz(lvl)],0,1)
+            end if
+            ! Loop over tiles
+            call this%amr%mfiter_build(lvl,mfi)
+            do while (mfi%next())
+               ! Get pointer to data
+               pVF=>this%VF%mf(lvl)%dataptr(mfi)
+               if (lvl.lt.this%amr%clvl()) pMask=>mask%dataptr(mfi)
+               ! Loop over tile
+               bx=mfi%tilebox()
+               do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
+                  ! Skip cells covered by finer level
+                  if (lvl.lt.this%amr%clvl()) then
+                     if (pMask(i,j,k,1).eq.0) cycle
+                  end if
+                  ! Accumulate statistics
+                  this%VFmin=min(this%VFmin,pVF(i,j,k,1)); this%VFmax=max(this%VFmax,pVF(i,j,k,1))
+                  var_sum=var_sum+(pVF(i,j,k,1)-this%VFmean)**2*this%amr%cell_vol(lvl)
+               end do; end do; end do
+            end do
+            call this%amr%mfiter_destroy(mfi)
+            if (lvl.lt.this%amr%clvl()) call amrex_imultifab_destroy(mask)
+         end do
+         call MPI_ALLREDUCE(MPI_IN_PLACE,this%VFmin,1,MPI_REAL_WP,MPI_MIN,this%amr%comm,ierr)
+         call MPI_ALLREDUCE(MPI_IN_PLACE,this%VFmax,1,MPI_REAL_WP,MPI_MAX,this%amr%comm,ierr)
+         call MPI_ALLREDUCE(MPI_IN_PLACE,var_sum,   1,MPI_REAL_WP,MPI_SUM,this%amr%comm,ierr)
+         this%VFvar=max(0.0_WP,var_sum/((this%amr%xhi-this%amr%xlo)*(this%amr%yhi-this%amr%ylo)*(this%amr%zhi-this%amr%zlo)))
+      end block vf_stats_block
+      
+
    end subroutine get_info
 
    !> Print solver info
