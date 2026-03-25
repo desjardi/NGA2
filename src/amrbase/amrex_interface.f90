@@ -86,6 +86,7 @@ module amrex_interface
    public :: amrmfab_average_down_face  ! Face-centered (nodal in 1 dir)
    public :: amrmfab_average_down_edge  ! Edge-centered (nodal in 2 dirs)
    public :: amrmfab_average_down_node  ! Node-centered (nodal in 3 dirs)
+   public :: amrmfab_sum_downto ! Restrict-SUM fine deposits into coarse level (lvl+1 → lvl)
    public :: amrmfab_compute_divergence ! Compute div(u) from face velocities
    public :: amrmfab_sum_unique         ! Sum for face/nodal data (no double-counting)
    public :: amrmask_make_fine          ! Create mask for cells covered by finer level
@@ -552,6 +553,14 @@ module amrex_interface
          integer(c_int), value :: ngcrse
       end subroutine amrmfab_average_down_node_c
 
+      !> Restrict-SUM all fine deposits into the coarse level (lvl+1 → lvl)
+      subroutine amrmfab_sum_downto_c(fine_mf, crse_mf, crse_geom, ref_ratio) &
+         bind(c, name='amrmfab_sum_downto')
+         import :: c_ptr, c_int
+         type(c_ptr), value :: fine_mf, crse_mf, crse_geom
+         integer(c_int), intent(in) :: ref_ratio(3)
+      end subroutine amrmfab_sum_downto_c
+
       !> Compute divergence of face-centered velocity into cell-centered MultiFab
       subroutine amrmfab_compute_divergence_c(divu, umac_x, umac_y, umac_z, geom) &
          bind(c, name='amrmfab_compute_divergence')
@@ -659,6 +668,18 @@ contains
          call amrmfab_average_down_node_c(fmf%p, cmf%p, c_null_ptr, rr, ng)
       end if
    end subroutine amrmfab_average_down_node
+
+   !> Restrict-SUM all fine deposits (valid+ghost) into the coarse level.
+   !> Mirrors AMReX's sumFineToCrseNodal pattern for cell-centered data.
+   !> lvl+1 is the fine source level; lvl is the coarse destination.
+   subroutine amrmfab_sum_downto(fmf,cmf,rr,cgeom)
+      use amrex_amr_module, only: amrex_multifab, amrex_geometry
+      type(amrex_multifab), intent(in)    :: fmf
+      type(amrex_multifab), intent(inout) :: cmf
+      integer,              intent(in)    :: rr(3)
+      type(amrex_geometry), intent(in)    :: cgeom
+      call amrmfab_sum_downto_c(fmf%p, cmf%p, cgeom%p, rr)
+   end subroutine amrmfab_sum_downto
 
    !> Compute divergence of face-centered velocity into cell-centered MultiFab
    subroutine amrmfab_compute_divergence(divu, umac_x, umac_y, umac_z, geom)

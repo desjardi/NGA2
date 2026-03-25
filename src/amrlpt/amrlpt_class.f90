@@ -5,6 +5,7 @@ module amrlpt_class
    use precision, only: WP,I8
    use string, only: str_medium
    use amrgrid_class, only: amrgrid
+   use amrdata_class, only: amrdata
    use iso_c_binding
    implicit none
    private
@@ -171,21 +172,36 @@ module amrlpt_class
       real(WP) :: Wmin,Wmax,Wmean,Wvar
       real(WP) :: VFmin,VFmax,VFmean,VFvar
       integer  :: np_new=0,np_out=0
-      real(WP) :: vp_new=0.0_WP,vp_out=0.0_WP,vp_tot=0.0_WP
+      real(WP) :: Vp_new=0.0_WP,Vp_out=0.0_WP,Vp_tot=0.0_WP
       integer  :: ncol=0
+
+      !> Overlap size
+      integer :: nover=2
+
+      !> Filter width
+      real(WP) :: filter_width=0.0_WP
+
+      !> Particle volume fraction
+      type(amrdata) :: VF
+
+      !> Two-way coupling source terms
+      type(amrdata) :: src
 
    contains
       ! Type-bound constructor/destructor
       procedure :: initialize
       procedure :: finalize
       ! Physics procedures
-      procedure :: advance       !< Advance particle ODEs one timestep
-      procedure :: update_VF     !< Compute particle volume fraction field
-      procedure :: get_cfl       !< Compute particle CFL numbers
+      procedure :: advance                !< Advance particle ODEs one timestep
+      procedure :: update_VF              !< Compute particle volume fraction field
+      procedure :: get_cfl                !< Compute particle CFL numbers
       ! Utilities
-      procedure :: redistribute  !< Call AMReX redistribute
-      procedure :: get_np        !< Update global particle count
+      procedure :: redistribute           !< Call AMReX redistribute
+      procedure :: get_np                 !< Update global particle count
       procedure, private :: get_particles !< Get particle array for MFIter tile
+      procedure :: interp                 !< Trilinear cell-centered interpolation
+      procedure :: interp_face_velocities !< Trilinear face-centered interpolation
+      procedure, private :: filter        !< Explicit diffusion filter
       ! Print solver info
       procedure :: get_info
       procedure :: print
@@ -202,6 +218,7 @@ contains
 
    !> Initialize amrlpt solver
    subroutine initialize(this,amr,name)
+      use amrdata_class, only: amrex_bc_foextrap
       implicit none
       class(amrlpt), intent(inout) :: this
       class(amrgrid), target, intent(in) :: amr
@@ -212,6 +229,18 @@ contains
       this%amr=>amr
       ! Create particle container
       call amrlpt_new_pc(this%pc,this%amr%amrcore)
+      ! Initialize VF field
+      call this%VF%initialize(amr=amr,name='VF',ncomp=1,ng=this%nover); call this%VF%register()
+      where (.not.[this%amr%xper,this%amr%yper,this%amr%zper])
+         this%VF%lo_bc(1:3,1)=amrex_bc_foextrap
+         this%VF%hi_bc(1:3,1)=amrex_bc_foextrap
+      end where
+      ! Initialize source terms
+      call this%src%initialize(amr=amr,name='src',ncomp=3,ng=this%nover); call this%src%register()
+      where (.not.[this%amr%xper,this%amr%yper,this%amr%zper])
+         this%src%lo_bc(1:3,:)=amrex_bc_foextrap
+         this%src%hi_bc(1:3,:)=amrex_bc_foextrap
+      end where
       ! Print out info
       call this%print()
    end subroutine initialize
@@ -220,6 +249,8 @@ contains
    subroutine finalize(this)
       implicit none
       class(amrlpt), intent(inout) :: this
+      call this%VF%finalize()
+      call this%src%finalize()
       call amrlpt_delete_pc(this%pc)
       this%pc=c_null_ptr
       nullify(this%amr)
@@ -229,43 +260,35 @@ contains
    ! PHYSICS METHODS
    ! ============================================================================
 
-   !> Advance all particles by dt using Euler-midpoint substepping.
-   !> U, V, W: velocity amrdata (staggered MAC or collocated, with ghosts filled)
-   !> rho, visc: cell-centered amrdata (with ghosts filled)
+   !> Advance all particles by dt using Euler-midpoint substepping
+   !> U,V,W: velocity amrdata (staggered MAC or collocated, with ghosts filled)
+   !> rho,visc: cell-centered amrdata (with ghosts filled)
    !> Ucomp/Vcomp/Wcomp: component to use from each velocity field (optional, default 1)
-   !> srcU/srcV/srcW: optional two-way coupling momentum source (same location as U/V/W)
-   !> srcUcomp/srcVcomp/srcWcomp: component to write in each source field (optional, default 1)
-   subroutine advance(this,dt,U,Ucomp,V,Vcomp,W,Wcomp,rho,visc,srcU,srcUcomp,srcV,srcVcomp,srcW,srcWcomp)
+   subroutine advance(this,dt,U,Ucomp,V,Vcomp,W,Wcomp,rho,visc)
       use amrex_amr_module, only: amrex_mfiter,amrex_mfiter_build,amrex_mfiter_destroy
-      use amrdata_class,    only: amrdata
-      use mathtools,        only: Pi
-      use messager,         only: die
+      use mathtools, only: Pi
+      use messager,  only: die
       implicit none
       class(amrlpt), intent(inout) :: this
       real(WP), intent(in) :: dt
       type(amrdata), intent(in) :: U,V,W,rho,visc
-      type(amrdata), intent(inout), optional :: srcU,srcV,srcW
-      integer, intent(in), optional :: Ucomp,Vcomp,Wcomp,srcUcomp,srcVcomp,srcWcomp
+      integer, intent(in), optional :: Ucomp,Vcomp,Wcomp
 
       real(WP), dimension(:,:,:,:), contiguous, pointer :: pU,pV,pW
-      real(WP), dimension(:,:,:,:), contiguous, pointer :: pRho,pVisc
-      real(WP), dimension(:,:,:,:), contiguous, pointer :: sU,sV,sW
+      real(WP), dimension(:,:,:,:), contiguous, pointer :: pRho,pVisc,pVolFrac,pSrc
       type(amrex_mfiter) :: mfi
       type(part), dimension(:), pointer :: p
       integer(I8) :: np_
-      integer :: lvl,i,uc,vc,wc,suc,svc,swc
-      real(WP) :: mydt,dt_done,Ip
-      real(WP), dimension(3) :: acc,dmom,plo,dx
+      integer :: lvl,i,uc,vc,wc
+      real(WP) :: dx,dy,dz,dxi,dyi,dzi,mydt,dt_done,Ip
+      real(WP), dimension(3) :: acc,dmom
       type(part) :: myp,pold
       logical :: is_stag
 
       ! Resolve optional component indices
-      uc=1;  if (present(Ucomp))     uc=   Ucomp
-      vc=1;  if (present(Vcomp))     vc=   Vcomp
-      wc=1;  if (present(Wcomp))     wc=   Wcomp
-      suc=1; if (present(srcUcomp)) suc=srcUcomp
-      svc=1; if (present(srcVcomp)) svc=srcVcomp
-      swc=1; if (present(srcWcomp)) swc=srcWcomp
+      uc=1; if (present(Ucomp)) uc=Ucomp
+      vc=1; if (present(Vcomp)) vc=Vcomp
+      wc=1; if (present(Wcomp)) wc=Wcomp
 
       ! Check velocity nodal locations are consistent
       check_velocity: block
@@ -280,15 +303,10 @@ contains
          else
             call die('[amrlpt advance] U/V/W must be staggered (face-centered) or collocated (cell-centered)')
          end if
-         if (present(srcU)) if (any(srcU%nodal.neqv.nU)) call die('[amrlpt advance] srcU nodal mismatch with U')
-         if (present(srcV)) if (any(srcV%nodal.neqv.nV)) call die('[amrlpt advance] srcV nodal mismatch with V')
-         if (present(srcW)) if (any(srcW%nodal.neqv.nW)) call die('[amrlpt advance] srcW nodal mismatch with W')
       end block check_velocity
 
-      ! Zero source terms
-      if (present(srcU)) call srcU%setval(0.0_WP)
-      if (present(srcV)) call srcV%setval(0.0_WP)
-      if (present(srcW)) call srcW%setval(0.0_WP)
+      ! Zero source mfabs
+      call this%src%setval(0.0_WP)
 
       ! Track number of particles leaving domain
       this%np_out=0
@@ -297,22 +315,23 @@ contains
       ! Loop over all AMR levels
       do lvl=0,this%amr%clvl()
 
-         plo=[this%amr%xlo,this%amr%ylo,this%amr%zlo]
-         dx =[this%amr%dx(lvl),this%amr%dy(lvl),this%amr%dz(lvl)]
+         ! Get mesh size
+         dx=this%amr%dx(lvl); dxi=1.0_WP/dx
+         dy=this%amr%dy(lvl); dyi=1.0_WP/dy
+         dz=this%amr%dz(lvl); dzi=1.0_WP/dz
 
          ! MFIter over the level
          call this%amr%mfiter_build(lvl,mfi,tiling=.false.)
          do while (mfi%next())
 
             ! Get pointers to data
-            pU   =>U%mf(lvl)%dataptr(mfi)
-            pV   =>V%mf(lvl)%dataptr(mfi)
-            pW   =>W%mf(lvl)%dataptr(mfi)
-            pRho =>rho%mf(lvl)%dataptr(mfi)
-            pVisc=>visc%mf(lvl)%dataptr(mfi)
-            if (present(srcU)) sU=>srcU%mf(lvl)%dataptr(mfi)
-            if (present(srcV)) sV=>srcV%mf(lvl)%dataptr(mfi)
-            if (present(srcW)) sW=>srcW%mf(lvl)%dataptr(mfi)
+            pU      =>U%mf(lvl)%dataptr(mfi)
+            pV      =>V%mf(lvl)%dataptr(mfi)
+            pW      =>W%mf(lvl)%dataptr(mfi)
+            pRho    =>rho%mf(lvl)%dataptr(mfi)
+            pVisc   =>visc%mf(lvl)%dataptr(mfi)
+            pVolFrac=>this%VF%mf(lvl)%dataptr(mfi)
+            pSrc    =>this%src%mf(lvl)%dataptr(mfi)
 
             ! Get particles on this tile
             call this%get_particles(lvl=lvl,mfi=mfi,p=p,np=np_)
@@ -333,41 +352,22 @@ contains
                   ! Precompute moment of inertia for a sphere
                   Ip=0.1_WP*myp%d**2
                   ! Advance with Euler prediction
-                  call get_rhs(myp,acc,myp%dt)
+                  acc=get_rhs()
                   if (IAND(myp%flag,PART_MOVES).ne.0) then
                      myp%pos=pold%pos+0.5_WP*mydt*myp%vel
                      myp%vel=pold%vel+0.5_WP*mydt*(acc+this%gravity+myp%Acol)
                      myp%angVel=pold%angVel+0.5_WP*mydt*myp%Tcol/Ip
                   end if
-                  call get_rhs(myp,acc,myp%dt)
+                  acc=get_rhs()
                   if (IAND(myp%flag,PART_MOVES).ne.0) then
                      myp%pos=pold%pos+mydt*myp%vel
                      myp%vel=pold%vel+mydt*(acc+this%gravity+myp%Acol)
                      myp%angVel=pold%angVel+mydt*myp%Tcol/Ip
                   end if
+                  ! Transfer back to the mesh
                   if (IAND(myp%flag,PART_EXCHANGES).ne.0) then
                      dmom=mydt*acc*this%rho*Pi/6.0_WP*myp%d**3
-                     if (present(srcU)) then
-                        if (is_stag) then
-                           call deposit_face_x(-dmom(1),myp%pos,plo,dx,sU,suc)
-                        else
-                           call deposit_scalar(-dmom(1),myp%pos,plo,dx,sU,suc)
-                        end if
-                     end if
-                     if (present(srcV)) then
-                        if (is_stag) then
-                           call deposit_face_y(-dmom(2),myp%pos,plo,dx,sV,svc)
-                        else
-                           call deposit_scalar(-dmom(2),myp%pos,plo,dx,sV,svc)
-                        end if
-                     end if
-                     if (present(srcW)) then
-                        if (is_stag) then
-                           call deposit_face_z(-dmom(3),myp%pos,plo,dx,sW,swc)
-                        else
-                           call deposit_scalar(-dmom(3),myp%pos,plo,dx,sW,swc)
-                        end if
-                     end if
+                     call deposit(val=-dmom)
                   end if
                   ! Increment
                   dt_done=dt_done+mydt
@@ -399,109 +399,145 @@ contains
          call MPI_ALLREDUCE(MPI_IN_PLACE,this%Vp_out,1,MPI_REAL_WP,MPI_SUM,this%amr%comm,ierr)
       end block reduce_leaving_particles
 
+      ! Accumulate ghost→valid, restrict-SUM fine into coarse, filter
+      call this%src%syncsum(); call this%src%sum_down(); call this%src%average_down(); call this%src%fill(time=0.0_WP)
+      call this%filter(this%src)
+
+      ! Recompute particle volume fraction
+      call this%update_VF()
+
    contains
 
       !> Calculate rhs of particle equations of motion
-      subroutine get_rhs(p,acc,opt_dt)
-         type(part), intent(in) :: p
-         real(WP), intent(out)  :: acc(3),opt_dt
-         real(WP) :: fvel(3),frho,fvisc,Re,tau,corr,b1,b2
-         real(WP), parameter :: pVF=0.0_WP
-         real(WP), parameter :: fVF=1.0_WP
+      function get_rhs() result(acc)
+         real(WP), dimension(3) :: acc,fvel
+         real(WP) :: pVF,fVF,frho,fvisc,Re,tau,corr,b1,b2
+         real(WP) :: wx,wy,wz,fx,fy,fz
+         integer  :: ic,jc,kc,ix,iy,iz
+         ! Cell-centered stencil indices and weights
+         ic=floor((myp%pos(1)-this%amr%xlo)*dxi-0.5_WP); wx=(myp%pos(1)-this%amr%xlo)*dxi-0.5_WP-real(ic,WP)
+         jc=floor((myp%pos(2)-this%amr%ylo)*dyi-0.5_WP); wy=(myp%pos(2)-this%amr%ylo)*dyi-0.5_WP-real(jc,WP)
+         kc=floor((myp%pos(3)-this%amr%zlo)*dzi-0.5_WP); wz=(myp%pos(3)-this%amr%zlo)*dzi-0.5_WP-real(kc,WP)
+         ! Velocity interpolation
          if (is_stag) then
-            call interp_mac(p%pos,plo,dx,pU,pV,pW,fvel,uc,vc,wc)
+            ! Face-centered indices and weights
+            ix=floor((myp%pos(1)-this%amr%xlo)*dxi); fx=(myp%pos(1)-this%amr%xlo)*dxi-real(ix,WP)
+            iy=floor((myp%pos(2)-this%amr%ylo)*dyi); fy=(myp%pos(2)-this%amr%ylo)*dyi-real(iy,WP)
+            iz=floor((myp%pos(3)-this%amr%zlo)*dzi); fz=(myp%pos(3)-this%amr%zlo)*dzi-real(iz,WP)
+            fvel(1)=(1.0_WP-fx)*(1.0_WP-wy)*(1.0_WP-wz)*pU(ix,jc,kc,uc)+fx*(1.0_WP-wy)*(1.0_WP-wz)*pU(ix+1,jc,kc,uc)+(1.0_WP-fx)*wy*(1.0_WP-wz)*pU(ix,jc+1,kc,uc)+fx*wy*(1.0_WP-wz)*pU(ix+1,jc+1,kc,uc)+(1.0_WP-fx)*(1.0_WP-wy)*wz*pU(ix,jc,kc+1,uc)+fx*(1.0_WP-wy)*wz*pU(ix+1,jc,kc+1,uc)+(1.0_WP-fx)*wy*wz*pU(ix,jc+1,kc+1,uc)+fx*wy*wz*pU(ix+1,jc+1,kc+1,uc)
+            fvel(2)=(1.0_WP-wx)*(1.0_WP-fy)*(1.0_WP-wz)*pV(ic,iy,kc,vc)+wx*(1.0_WP-fy)*(1.0_WP-wz)*pV(ic+1,iy,kc,vc)+(1.0_WP-wx)*fy*(1.0_WP-wz)*pV(ic,iy+1,kc,vc)+wx*fy*(1.0_WP-wz)*pV(ic+1,iy+1,kc,vc)+(1.0_WP-wx)*(1.0_WP-fy)*wz*pV(ic,iy,kc+1,vc)+wx*(1.0_WP-fy)*wz*pV(ic+1,iy,kc+1,vc)+(1.0_WP-wx)*fy*wz*pV(ic,iy+1,kc+1,vc)+wx*fy*wz*pV(ic+1,iy+1,kc+1,vc)
+            fvel(3)=(1.0_WP-wx)*(1.0_WP-wy)*(1.0_WP-fz)*pW(ic,jc,iz,wc)+wx*(1.0_WP-wy)*(1.0_WP-fz)*pW(ic+1,jc,iz,wc)+(1.0_WP-wx)*wy*(1.0_WP-fz)*pW(ic,jc+1,iz,wc)+wx*wy*(1.0_WP-fz)*pW(ic+1,jc+1,iz,wc)+(1.0_WP-wx)*(1.0_WP-wy)*fz*pW(ic,jc,iz+1,wc)+wx*(1.0_WP-wy)*fz*pW(ic+1,jc,iz+1,wc)+(1.0_WP-wx)*wy*fz*pW(ic,jc+1,iz+1,wc)+wx*wy*fz*pW(ic+1,jc+1,iz+1,wc)
          else
-            fvel(1)=interp_cc(p%pos,plo,dx,pU,uc)
-            fvel(2)=interp_cc(p%pos,plo,dx,pV,vc)
-            fvel(3)=interp_cc(p%pos,plo,dx,pW,wc)
+            fvel(1)=(1.0_WP-wx)*(1.0_WP-wy)*(1.0_WP-wz)*pU(ic,jc,kc,uc)+wx*(1.0_WP-wy)*(1.0_WP-wz)*pU(ic+1,jc,kc,uc)+(1.0_WP-wx)*wy*(1.0_WP-wz)*pU(ic,jc+1,kc,uc)+wx*wy*(1.0_WP-wz)*pU(ic+1,jc+1,kc,uc)+(1.0_WP-wx)*(1.0_WP-wy)*wz*pU(ic,jc,kc+1,uc)+wx*(1.0_WP-wy)*wz*pU(ic+1,jc,kc+1,uc)+(1.0_WP-wx)*wy*wz*pU(ic,jc+1,kc+1,uc)+wx*wy*wz*pU(ic+1,jc+1,kc+1,uc)
+            fvel(2)=(1.0_WP-wx)*(1.0_WP-wy)*(1.0_WP-wz)*pV(ic,jc,kc,vc)+wx*(1.0_WP-wy)*(1.0_WP-wz)*pV(ic+1,jc,kc,vc)+(1.0_WP-wx)*wy*(1.0_WP-wz)*pV(ic,jc+1,kc,vc)+wx*wy*(1.0_WP-wz)*pV(ic+1,jc+1,kc,vc)+(1.0_WP-wx)*(1.0_WP-wy)*wz*pV(ic,jc,kc+1,vc)+wx*(1.0_WP-wy)*wz*pV(ic+1,jc,kc+1,vc)+(1.0_WP-wx)*wy*wz*pV(ic,jc+1,kc+1,vc)+wx*wy*wz*pV(ic+1,jc+1,kc+1,vc)
+            fvel(3)=(1.0_WP-wx)*(1.0_WP-wy)*(1.0_WP-wz)*pW(ic,jc,kc,wc)+wx*(1.0_WP-wy)*(1.0_WP-wz)*pW(ic+1,jc,kc,wc)+(1.0_WP-wx)*wy*(1.0_WP-wz)*pW(ic,jc+1,kc,wc)+wx*wy*(1.0_WP-wz)*pW(ic+1,jc+1,kc,wc)+(1.0_WP-wx)*(1.0_WP-wy)*wz*pW(ic,jc,kc+1,wc)+wx*(1.0_WP-wy)*wz*pW(ic+1,jc,kc+1,wc)+(1.0_WP-wx)*wy*wz*pW(ic,jc+1,kc+1,wc)+wx*wy*wz*pW(ic+1,jc+1,kc+1,wc)
          end if
-         frho =interp_cc(p%pos,plo,dx,pRho )
-         fvisc=interp_cc(p%pos,plo,dx,pVisc)+epsilon(1.0_WP)
+         ! Density and viscosity
+         frho =(1.0_WP-wx)*(1.0_WP-wy)*(1.0_WP-wz)*pRho (ic,jc,kc,1)+wx*(1.0_WP-wy)*(1.0_WP-wz)*pRho (ic+1,jc,kc,1)+(1.0_WP-wx)*wy*(1.0_WP-wz)*pRho (ic,jc+1,kc,1)+wx*wy*(1.0_WP-wz)*pRho (ic+1,jc+1,kc,1)+(1.0_WP-wx)*(1.0_WP-wy)*wz*pRho (ic,jc,kc+1,1)+wx*(1.0_WP-wy)*wz*pRho (ic+1,jc,kc+1,1)+(1.0_WP-wx)*wy*wz*pRho (ic,jc+1,kc+1,1)+wx*wy*wz*pRho (ic+1,jc+1,kc+1,1)
+         fvisc=(1.0_WP-wx)*(1.0_WP-wy)*(1.0_WP-wz)*pVisc(ic,jc,kc,1)+wx*(1.0_WP-wy)*(1.0_WP-wz)*pVisc(ic+1,jc,kc,1)+(1.0_WP-wx)*wy*(1.0_WP-wz)*pVisc(ic,jc+1,kc,1)+wx*wy*(1.0_WP-wz)*pVisc(ic+1,jc+1,kc,1)+(1.0_WP-wx)*(1.0_WP-wy)*wz*pVisc(ic,jc,kc+1,1)+wx*(1.0_WP-wy)*wz*pVisc(ic+1,jc,kc+1,1)+(1.0_WP-wx)*wy*wz*pVisc(ic,jc+1,kc+1,1)+wx*wy*wz*pVisc(ic+1,jc+1,kc+1,1)
+         fvisc=fvisc+epsilon(1.0_WP)
+         ! Volume fraction
+         pVF=(1.0_WP-wx)*(1.0_WP-wy)*(1.0_WP-wz)*pVolFrac(ic,jc,kc,1)+wx*(1.0_WP-wy)*(1.0_WP-wz)*pVolFrac(ic+1,jc,kc,1)+(1.0_WP-wx)*wy*(1.0_WP-wz)*pVolFrac(ic,jc+1,kc,1)+wx*wy*(1.0_WP-wz)*pVolFrac(ic+1,jc+1,kc,1)+(1.0_WP-wx)*(1.0_WP-wy)*wz*pVolFrac(ic,jc,kc+1,1)+wx*(1.0_WP-wy)*wz*pVolFrac(ic+1,jc,kc+1,1)+(1.0_WP-wx)*wy*wz*pVolFrac(ic,jc+1,kc+1,1)+wx*wy*wz*pVolFrac(ic+1,jc+1,kc+1,1)
+         fVF=1.0_WP-pVF
+         ! Drag correction factor
          select case(trim(this%drag_model))
          case('None','none')
             corr=epsilon(1.0_WP)
          case('Stokes')
             corr=1.0_WP
-         case('Schiller-Naumann','SN')
-            Re  =frho*norm2(p%vel-fvel)*p%d/fvisc+epsilon(1.0_WP)
+         case('Schiller-Naumann','Schiller Naumann','SN')
+            Re=frho*norm2(myp%vel-fvel)*myp%d/fvisc+epsilon(1.0_WP)
             corr=1.0_WP+0.15_WP*Re**(0.687_WP)
-         case('Tenneti')
-            Re  =fVF*frho*norm2(p%vel-fvel)*p%d/fvisc+epsilon(1.0_WP)
-            b1  =5.81_WP*pVF/fVF**3+0.48_WP*pVF**(1.0_WP/3.0_WP)/fVF**4
-            b2  =pVF**3*Re*(0.95_WP+0.61_WP*pVF**3/fVF**2)
+         case('Tenneti') ! Tenneti and Subramaniam (2011)
+            Re=fVF*frho*norm2(myp%vel-fvel)*myp%d/fvisc+epsilon(1.0_WP)
+            b1=5.81_WP*pVF/fVF**3+0.48_WP*pVF**(1.0_WP/3.0_WP)/fVF**4
+            b2=pVF**3*Re*(0.95_WP+0.61_WP*pVF**3/fVF**2)
             corr=fVF*((1.0_WP+0.15_WP*Re**(0.687_WP))/fVF**3+b1+b2)
-         case('Beetstra')
-            Re  =fVF*frho*norm2(p%vel-fvel)*p%d/fvisc+epsilon(1.0_WP)
-            b1  =10.0_WP*pVF/fVF**2+fVF**2*(1.0_WP+1.5_WP*sqrt(pVF))
-            b2  =0.413_WP/24.0_WP*Re/fVF**2* &
-                 (1.0_WP/fVF+3.0_WP*fVF*pVF+8.4_WP*Re**(-0.343_WP))/ &
-                 (1.0_WP+10.0_WP**(3.0_WP*pVF)*Re**(2.0_WP*fVF-2.5_WP))
+         case('Beetstra') ! Beetstra et al. (2007)
+            Re=fVF*frho*norm2(myp%vel-fvel)*myp%d/fvisc+epsilon(1.0_WP)
+            b1=10.0_WP*pVF/fVF**2+fVF**2*(1.0_WP+1.5_WP*sqrt(pVF))
+            b2=0.413_WP/24.0_WP*Re/fVF**2*(1.0_WP/fVF+3.0_WP*fVF*pVF+8.4_WP*Re**(-0.343_WP))/(1.0_WP+10.0_WP**(3.0_WP*pVF)*Re**(2.0_WP*fVF-2.5_WP))
             corr=b1+b2
          case default
             corr=1.0_WP
          end select
-         tau   =this%rho*p%d**2/(18.0_WP*fvisc*corr)
-         acc   =(fvel-p%vel)/tau
-         opt_dt=tau/real(this%nstep,WP)
-      end subroutine get_rhs
+         ! Particle response time
+         tau=this%rho*myp%d**2/(18.0_WP*fvisc*corr)
+         ! Return acceleration and update particle timestep size
+         acc=(fvel-myp%vel)/tau
+         myp%dt=tau/real(this%nstep,WP)
+      end function get_rhs
+
+      !> Deposit a particle source term back to the mesh
+      subroutine deposit(val)
+         real(WP), dimension(3), intent(in) :: val
+         real(WP) :: wx,wy,wz
+         integer  :: ic,jc,kc
+         ! Cell-centered stencil indices and weights
+         ic=floor((myp%pos(1)-this%amr%xlo)*dxi-0.5_WP); wx=(myp%pos(1)-this%amr%xlo)*dxi-0.5_WP-real(ic,WP)
+         jc=floor((myp%pos(2)-this%amr%ylo)*dyi-0.5_WP); wy=(myp%pos(2)-this%amr%ylo)*dyi-0.5_WP-real(jc,WP)
+         kc=floor((myp%pos(3)-this%amr%zlo)*dzi-0.5_WP); wz=(myp%pos(3)-this%amr%zlo)*dzi-0.5_WP-real(kc,WP)
+         pSrc(ic:ic+1,jc:jc+1,kc:kc+1,1)=pSrc(ic:ic+1,jc:jc+1,kc:kc+1,1)+reshape([(1.0_WP-wx)*(1.0_WP-wy)*(1.0_WP-wz),wx*(1.0_WP-wy)*(1.0_WP-wz),(1.0_WP-wx)*wy*(1.0_WP-wz),wx*wy*(1.0_WP-wz),(1.0_WP-wx)*(1.0_WP-wy)*wz,wx*(1.0_WP-wy)*wz,(1.0_WP-wx)*wy*wz,wx*wy*wz],[2,2,2])*val(1)
+         pSrc(ic:ic+1,jc:jc+1,kc:kc+1,2)=pSrc(ic:ic+1,jc:jc+1,kc:kc+1,2)+reshape([(1.0_WP-wx)*(1.0_WP-wy)*(1.0_WP-wz),wx*(1.0_WP-wy)*(1.0_WP-wz),(1.0_WP-wx)*wy*(1.0_WP-wz),wx*wy*(1.0_WP-wz),(1.0_WP-wx)*(1.0_WP-wy)*wz,wx*(1.0_WP-wy)*wz,(1.0_WP-wx)*wy*wz,wx*wy*wz],[2,2,2])*val(2)
+         pSrc(ic:ic+1,jc:jc+1,kc:kc+1,3)=pSrc(ic:ic+1,jc:jc+1,kc:kc+1,3)+reshape([(1.0_WP-wx)*(1.0_WP-wy)*(1.0_WP-wz),wx*(1.0_WP-wy)*(1.0_WP-wz),(1.0_WP-wx)*wy*(1.0_WP-wz),wx*wy*(1.0_WP-wz),(1.0_WP-wx)*(1.0_WP-wy)*wz,wx*(1.0_WP-wy)*wz,(1.0_WP-wx)*wy*wz,wx*wy*wz],[2,2,2])*val(3)
+      end subroutine deposit
 
    end subroutine advance
 
-   ! -----------------------------------------------------------------------
-   !> Compute particle volume fraction field by depositing Pi/6*d^3.
-   !> Divides by cell volume to convert to volume fraction.
-   !> The user is responsible for calling FillBoundary/syncsum on VF_mf
-   !> after this call.
-   ! -----------------------------------------------------------------------
-   subroutine update_VF(this, VF_mf, lev, geom)
-      use amrex_amr_module, only: amrex_multifab, amrex_geometry, amrex_mfiter, &
-                                   amrex_mfiter_build, amrex_mfiter_destroy
+
+   !> Update particle volume fraction field based on our current particles
+   subroutine update_VF(this)
+      use amrex_amr_module, only: amrex_mfiter,amrex_mfiter_build,amrex_mfiter_destroy
       use mathtools, only: Pi
       implicit none
       class(amrlpt), intent(inout) :: this
-      type(amrex_multifab), intent(inout) :: VF_mf
-      integer, intent(in) :: lev
-      type(amrex_geometry), intent(in) :: geom
-
       type(amrex_mfiter) :: mfi
-      type(c_ptr) :: dp
-      type(part), pointer :: p(:)
-      integer(c_int64_t) :: np_tile
-      integer :: i
-      real(WP) :: plo(3), dx(3)
-      real(WP), dimension(:,:,:,:), contiguous, pointer :: VFarr
-
-      plo = geom%get_physical_location([geom%domain%lo(0),geom%domain%lo(1),geom%domain%lo(2)])
-      dx  = geom%dx
-
-      call VF_mf%setval(0.0_WP)
-
-      call amrex_mfiter_build(mfi, VF_mf, tiling=.false.)
-      do while (mfi%valid())
-         VFarr => VF_mf%dataptr(mfi)
-         call amrlpt_get_particles_mfi(this%pc, lev, mfi%p, dp, np_tile)
-         if (np_tile > 0) then
-            call c_f_pointer(dp, p, [np_tile])
-            do i = 1, int(np_tile)
-               if (p(i)%flag == 1) cycle
-               call deposit_scalar(Pi/6.0_WP*p(i)%d**3, p(i)%pos, plo, dx, VFarr)
+      type(part), dimension(:), pointer :: p
+      real(WP), dimension(:,:,:,:), contiguous, pointer :: pVF
+      integer(I8) :: np_
+      integer :: lvl,i,ii,jj,kk
+      real(WP) :: dxi,dyi,dzi,Vp,wx,wy,wz
+      ! Zero VF on all levels
+      call this%VF%setval(0.0_WP)
+      ! Loop over levels
+      do lvl=0,this%amr%clvl()
+         ! Get inverse of mesh size
+         dxi=1.0_WP/this%amr%dx(lvl)
+         dyi=1.0_WP/this%amr%dy(lvl)
+         dzi=1.0_WP/this%amr%dz(lvl)
+         ! Loop over tiles
+         call this%amr%mfiter_build(lvl,mfi,tiling=.false.)
+         do while (mfi%next())
+            ! Get pointer to data
+            pVF=>this%VF%mf(lvl)%dataptr(mfi)
+            ! Loop over particles
+            call this%get_particles(lvl=lvl,mfi=mfi,p=p,np=np_)
+            do i=1,np_
+               ! Skip particles that don't exchange with the fluid
+               if (IAND(p(i)%flag,PART_EXCHANGES).eq.0) cycle
+               ! Get particle volume
+               Vp=Pi/6.0_WP*p(i)%d**3
+               ! Extrapolate
+               ii=floor((p(i)%pos(1)-this%amr%xlo)*dxi-0.5_WP); wx=(p(i)%pos(1)-this%amr%xlo)*dxi-0.5_WP-real(ii,WP)
+               jj=floor((p(i)%pos(2)-this%amr%ylo)*dyi-0.5_WP); wy=(p(i)%pos(2)-this%amr%ylo)*dyi-0.5_WP-real(jj,WP)
+               kk=floor((p(i)%pos(3)-this%amr%zlo)*dzi-0.5_WP); wz=(p(i)%pos(3)-this%amr%zlo)*dzi-0.5_WP-real(kk,WP)
+               pVF(ii:ii+1,jj:jj+1,kk:kk+1,1)=pVF(ii:ii+1,jj:jj+1,kk:kk+1,1)+Vp*reshape([(1.0_WP-wx)*(1.0_WP-wy)*(1.0_WP-wz),wx*(1.0_WP-wy)*(1.0_WP-wz),(1.0_WP-wx)*wy*(1.0_WP-wz),wx*wy*(1.0_WP-wz),(1.0_WP-wx)*(1.0_WP-wy)*wz,wx*(1.0_WP-wy)*wz,(1.0_WP-wx)*wy*wz,wx*wy*wz],[2,2,2])
             end do
-         end if
-         call mfi%next()
+         end do
+         call amrex_mfiter_destroy(mfi)
+         ! Divide by cell volume
+         call this%VF%mf(lvl)%mult(1.0_WP/this%amr%cell_vol(lvl),0,1,this%nover)
       end do
-      call amrex_mfiter_destroy(mfi)
-
-      ! Divide by cell volume to get volume fraction
-      call VF_mf%mult(1.0_WP/(dx(1)*dx(2)*dx(3)), 0, 1, 0)
-
+      ! Sum overlap data across boxes and levels, sync
+      call this%VF%syncsum(); call this%VF%sum_down(); call this%VF%average_down(); call this%VF%fill(time=0.0_WP)
+      ! Filter
+      call this%filter(this%VF)
    end subroutine update_VF
 
-   ! -----------------------------------------------------------------------
    !> CFL based on particle velocities relative to their local cell size
-   ! -----------------------------------------------------------------------
-   subroutine get_cfl(this, dt, cflc, cfl)
-      use mpi_f08,   only: MPI_ALLREDUCE, MPI_MAX
-      use parallel,  only: MPI_REAL_WP
+   subroutine get_cfl(this,dt,cflc,cfl)
+      use mpi_f08,  only: MPI_ALLREDUCE,MPI_MAX
+      use parallel, only: MPI_REAL_WP
       implicit none
       class(amrlpt), intent(inout) :: this
       real(WP), intent(in)  :: dt
@@ -559,6 +595,162 @@ contains
          nullify(p)
       end if
    end subroutine get_particles
+
+   !> Interpolate from cell-centered data to a point
+   function interp(this,lvl,pos,arr,comp) result(val)
+      implicit none
+      class(amrlpt), intent(in) :: this
+      integer,  intent(in) :: lvl
+      real(WP), dimension(3), intent(in) :: pos
+      real(WP), dimension(:,:,:,:), contiguous, pointer, intent(in) :: arr
+      integer,  intent(in) :: comp
+      real(WP) :: val,wx,wy,wz
+      integer  :: ii,jj,kk
+      ! Get indices and weights
+      ii=floor((pos(1)-this%amr%xlo)/this%amr%dx(lvl)-0.5_WP); wx=(pos(1)-this%amr%xlo)/this%amr%dx(lvl)-0.5_WP-real(ii,WP)
+      jj=floor((pos(2)-this%amr%ylo)/this%amr%dy(lvl)-0.5_WP); wy=(pos(2)-this%amr%ylo)/this%amr%dy(lvl)-0.5_WP-real(jj,WP)
+      kk=floor((pos(3)-this%amr%zlo)/this%amr%dz(lvl)-0.5_WP); wz=(pos(3)-this%amr%zlo)/this%amr%dz(lvl)-0.5_WP-real(kk,WP)
+      ! Trilinear interpolation
+      val=(1.0_WP-wx)*(1.0_WP-wy)*(1.0_WP-wz)*arr(ii  ,jj  ,kk  ,comp) &
+      &  +        wx *(1.0_WP-wy)*(1.0_WP-wz)*arr(ii+1,jj  ,kk  ,comp) &
+      &  +(1.0_WP-wx)*        wy *(1.0_WP-wz)*arr(ii  ,jj+1,kk  ,comp) &
+      &  +        wx *        wy *(1.0_WP-wz)*arr(ii+1,jj+1,kk  ,comp) &
+      &  +(1.0_WP-wx)*(1.0_WP-wy)*        wz *arr(ii  ,jj  ,kk+1,comp) &
+      &  +        wx *(1.0_WP-wy)*        wz *arr(ii+1,jj  ,kk+1,comp) &
+      &  +(1.0_WP-wx)*        wy *        wz *arr(ii  ,jj+1,kk+1,comp) &
+      &  +        wx *        wy *        wz *arr(ii+1,jj+1,kk+1,comp)
+   end function interp
+
+   !> Interpolate face velocities to a point
+   function interp_face_velocities(this,lvl,pos,pU,uc,pV,vc,pW,wc) result(fvel)
+      implicit none
+      class(amrlpt), intent(in) :: this
+      integer,  intent(in) :: lvl
+      real(WP), dimension(3), intent(in) :: pos
+      real(WP), dimension(:,:,:,:), contiguous, pointer, intent(in) :: pU,pV,pW
+      integer,  intent(in) :: uc,vc,wc
+      real(WP), dimension(3) :: fvel
+      real(WP) :: dxi,dyi,dzi,wx,wy,wz,fx,fy,fz
+      integer  :: ic,jc,kc,ix,iy,iz
+      ! Get cell-centered indices and weights
+      dxi=1.0_WP/this%amr%dx(lvl); ic=floor((pos(1)-this%amr%xlo)*dxi-0.5_WP); wx=(pos(1)-this%amr%xlo)*dxi-0.5_WP-real(ic,WP)
+      dyi=1.0_WP/this%amr%dy(lvl); jc=floor((pos(2)-this%amr%ylo)*dyi-0.5_WP); wy=(pos(2)-this%amr%ylo)*dyi-0.5_WP-real(jc,WP)
+      dzi=1.0_WP/this%amr%dz(lvl); kc=floor((pos(3)-this%amr%zlo)*dzi-0.5_WP); wz=(pos(3)-this%amr%zlo)*dzi-0.5_WP-real(kc,WP)
+      ! Get face-centered indices and weights
+      ix=floor((pos(1)-this%amr%xlo)*dxi); fx=(pos(1)-this%amr%xlo)*dxi-real(ix,WP)
+      iy=floor((pos(2)-this%amr%ylo)*dyi); fy=(pos(2)-this%amr%ylo)*dyi-real(iy,WP)
+      iz=floor((pos(3)-this%amr%zlo)*dzi); fz=(pos(3)-this%amr%zlo)*dzi-real(iz,WP)
+      ! U: staggered in x — cell indices jc/wy, kc/wz; face index ix/fx
+      fvel(1)=(1.0_WP-fx)*(1.0_WP-wy)*(1.0_WP-wz)*pU(ix  ,jc  ,kc  ,uc)+fx*(1.0_WP-wy)*(1.0_WP-wz)*pU(ix+1,jc  ,kc  ,uc) &
+      &      +(1.0_WP-fx)*        wy *(1.0_WP-wz)*pU(ix  ,jc+1,kc  ,uc)+fx*        wy *(1.0_WP-wz)*pU(ix+1,jc+1,kc  ,uc) &
+      &      +(1.0_WP-fx)*(1.0_WP-wy)*        wz *pU(ix  ,jc  ,kc+1,uc)+fx*(1.0_WP-wy)*        wz *pU(ix+1,jc  ,kc+1,uc) &
+      &      +(1.0_WP-fx)*        wy *        wz *pU(ix  ,jc+1,kc+1,uc)+fx*        wy *        wz *pU(ix+1,jc+1,kc+1,uc)
+      ! V: staggered in y — cell indices ic/wx, kc/wz; face index iy/fy
+      fvel(2)=(1.0_WP-wx)*(1.0_WP-fy)*(1.0_WP-wz)*pV(ic  ,iy  ,kc  ,vc)+wx*(1.0_WP-fy)*(1.0_WP-wz)*pV(ic+1,iy  ,kc  ,vc) &
+      &      +(1.0_WP-wx)*        fy *(1.0_WP-wz)*pV(ic  ,iy+1,kc  ,vc)+wx*        fy *(1.0_WP-wz)*pV(ic+1,iy+1,kc  ,vc) &
+      &      +(1.0_WP-wx)*(1.0_WP-fy)*        wz *pV(ic  ,iy  ,kc+1,vc)+wx*(1.0_WP-fy)*        wz *pV(ic+1,iy  ,kc+1,vc) &
+      &      +(1.0_WP-wx)*        fy *        wz *pV(ic  ,iy+1,kc+1,vc)+wx*        fy *        wz *pV(ic+1,iy+1,kc+1,vc)
+      ! W: staggered in z — cell indices ic/wx, jc/wy; face index iz/fz
+      fvel(3)=(1.0_WP-wx)*(1.0_WP-wy)*(1.0_WP-fz)*pW(ic  ,jc  ,iz  ,wc)+wx*(1.0_WP-wy)*(1.0_WP-fz)*pW(ic+1,jc  ,iz  ,wc) &
+      &      +(1.0_WP-wx)*        wy *(1.0_WP-fz)*pW(ic  ,jc+1,iz  ,wc)+wx*        wy *(1.0_WP-fz)*pW(ic+1,jc+1,iz  ,wc) &
+      &      +(1.0_WP-wx)*(1.0_WP-wy)*        fz *pW(ic  ,jc  ,iz+1,wc)+wx*(1.0_WP-wy)*        fz *pW(ic+1,jc  ,iz+1,wc) &
+      &      +(1.0_WP-wx)*        wy *        fz *pW(ic  ,jc+1,iz+1,wc)+wx*        wy *        fz *pW(ic+1,jc+1,iz+1,wc)
+   end function interp_face_velocities
+
+   !> Explicit diffusion filter for a cell-centered amrdata field
+   subroutine filter(this,A)
+      use amrex_amr_module, only: amrex_box,amrex_mfiter,amrex_multifab,amrex_multifab_destroy
+      use amrex_interface,  only: amrmfab_average_down_face
+      implicit none
+      class(amrlpt), intent(inout) :: this
+      type(amrdata), intent(inout) :: A
+      real(WP) :: alpha,alpha_step
+      integer  :: nstep,n,nc,lvl,i,j,k
+      type(amrex_mfiter) :: mfi
+      type(amrex_box) :: bx
+      type(amrex_multifab), dimension(:), allocatable :: Fx,Fy,Fz
+      real(WP), dimension(:,:,:,:), contiguous, pointer :: pA,pFx,pFy,pFz
+      real(WP) :: dxi,dyi,dzi
+
+      ! Determine filter coefficient from finest level mesh size
+      alpha=max(this%filter_width**2-this%amr%min_meshsize(this%amr%clvl())**2,0.0_WP)/(16.0_WP*log(2.0_WP))
+      if (alpha.le.0.0_WP) return
+
+      ! Number of explicit sub-steps for stability (dt < dx^2/6 in 3D)
+      nstep=ceiling(6.0_WP*alpha/this%amr%min_meshsize(this%amr%clvl())**2)
+      alpha_step=alpha/real(nstep,WP)
+
+      ! Allocate face flux mfabs (no ghost needed for fluxes)
+      allocate(Fx(0:this%amr%maxlvl),Fy(0:this%amr%maxlvl),Fz(0:this%amr%maxlvl))
+      do lvl=0,this%amr%clvl()
+         call this%amr%mfab_build(lvl,Fx(lvl),ncomp=A%ncomp,nover=0,atface=[.true., .false.,.false.]); call Fx(lvl)%setval(0.0_WP)
+         call this%amr%mfab_build(lvl,Fy(lvl),ncomp=A%ncomp,nover=0,atface=[.false.,.true., .false.]); call Fy(lvl)%setval(0.0_WP)
+         call this%amr%mfab_build(lvl,Fz(lvl),ncomp=A%ncomp,nover=0,atface=[.false.,.false.,.true. ]); call Fz(lvl)%setval(0.0_WP)
+      end do
+
+      ! Explicit sub-steps
+      do n=1,nstep
+         ! Compute diffusive fluxes at each level
+         do lvl=0,this%amr%clvl()
+            dxi=1.0_WP/this%amr%dx(lvl)
+            dyi=1.0_WP/this%amr%dy(lvl)
+            dzi=1.0_WP/this%amr%dz(lvl)
+            call this%amr%mfiter_build(lvl,mfi)
+            do while (mfi%next())
+               pA =>A%mf(lvl)%dataptr(mfi)
+               pFx=>Fx(lvl)%dataptr(mfi); pFy=>Fy(lvl)%dataptr(mfi); pFz=>Fz(lvl)%dataptr(mfi)
+               bx=mfi%nodaltilebox(1)
+               do nc=1,A%ncomp; do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
+                  pFx(i,j,k,nc)=alpha_step*(pA(i,j,k,nc)-pA(i-1,j,k,nc))*dxi
+               end do; end do; end do; end do
+               bx=mfi%nodaltilebox(2)
+               do nc=1,A%ncomp; do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
+                  pFy(i,j,k,nc)=alpha_step*(pA(i,j,k,nc)-pA(i,j-1,k,nc))*dyi
+               end do; end do; end do; end do
+               bx=mfi%nodaltilebox(3)
+               do nc=1,A%ncomp; do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
+                  pFz(i,j,k,nc)=alpha_step*(pA(i,j,k,nc)-pA(i,j,k-1,nc))*dzi
+               end do; end do; end do; end do
+            end do
+            call this%amr%mfiter_destroy(mfi)
+         end do
+         ! Average down face fluxes for C/F conservation (finest→coarsest)
+         do lvl=this%amr%clvl(),1,-1
+            call amrmfab_average_down_face(fmf=Fx(lvl),cmf=Fx(lvl-1),rr=[this%amr%rrefx(lvl-1),this%amr%rrefy(lvl-1),this%amr%rrefz(lvl-1)],cgeom=this%amr%geom(lvl-1))
+            call amrmfab_average_down_face(fmf=Fy(lvl),cmf=Fy(lvl-1),rr=[this%amr%rrefx(lvl-1),this%amr%rrefy(lvl-1),this%amr%rrefz(lvl-1)],cgeom=this%amr%geom(lvl-1))
+            call amrmfab_average_down_face(fmf=Fz(lvl),cmf=Fz(lvl-1),rr=[this%amr%rrefx(lvl-1),this%amr%rrefy(lvl-1),this%amr%rrefz(lvl-1)],cgeom=this%amr%geom(lvl-1))
+         end do
+         ! Apply divergence to update A
+         do lvl=0,this%amr%clvl()
+            dxi=1.0_WP/this%amr%dx(lvl)
+            dyi=1.0_WP/this%amr%dy(lvl)
+            dzi=1.0_WP/this%amr%dz(lvl)
+            call this%amr%mfiter_build(lvl,mfi)
+            do while (mfi%next())
+               pA =>A%mf(lvl)%dataptr(mfi)
+               pFx=>Fx(lvl)%dataptr(mfi); pFy=>Fy(lvl)%dataptr(mfi); pFz=>Fz(lvl)%dataptr(mfi)
+               bx=mfi%tilebox()
+               do nc=1,A%ncomp; do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
+                  pA(i,j,k,nc)=pA(i,j,k,nc)+dxi*(pFx(i+1,j,k,nc)-pFx(i,j,k,nc))+dyi*(pFy(i,j+1,k,nc)-pFy(i,j,k,nc))+dzi*(pFz(i,j,k+1,nc)-pFz(i,j,k,nc))
+               end do; end do; end do; end do
+            end do
+            call this%amr%mfiter_destroy(mfi)
+         end do
+         ! Restore coarse valid cells covered by fine
+         call A%average_down()
+         ! Fill ghosts at all levels
+         call A%fill(time=0.0_WP)
+      end do
+
+      ! Destroy flux mfabs
+      do lvl=0,this%amr%clvl()
+         call amrex_multifab_destroy(Fx(lvl))
+         call amrex_multifab_destroy(Fy(lvl))
+         call amrex_multifab_destroy(Fz(lvl))
+      end do
+      deallocate(Fx,Fy,Fz)
+
+   end subroutine filter
 
    ! ============================================================================
    ! SOLVER INFO
@@ -669,156 +861,7 @@ contains
       call amrlpt_read(this%pc,trim(dirname)//c_null_char)
       call amrlpt_redistribute(this%pc,0,-1,0)
       call amrlpt_total_np(this%pc,this%np)
+      call this%update_VF()
    end subroutine read
-
-   ! ========================================================================
-   ! Interpolation / deposition helpers
-   ! Verified against AMReX linear_interpolate_to_particle
-   ! (AMReX_TracerParticle_mod_K.H). Formula:
-   !   l  = (pos-plo)/dx - 0.5*(1 - is_nodal)
-   !   i0 = floor(l),  w = {1-frac, frac},  frac = l - i0
-   ! ========================================================================
-
-   !> CIC interpolation from cell-centered scalar.
-   !> comp: component index in arr (default 1)
-   pure function interp_cc(pos,plo,dx,arr,comp) result(val)
-      real(WP), intent(in) :: pos(3),plo(3),dx(3)
-      real(WP), dimension(:,:,:,:), contiguous, pointer, intent(in) :: arr
-      integer, intent(in), optional :: comp
-      real(WP) :: val
-      integer  :: i0,j0,k0,c
-      real(WP) :: lx,ly,lz,wx,wy,wz
-      c=1; if (present(comp)) c=comp
-      lx=(pos(1)-plo(1))/dx(1)-0.5_WP
-      ly=(pos(2)-plo(2))/dx(2)-0.5_WP
-      lz=(pos(3)-plo(3))/dx(3)-0.5_WP
-      i0=int(floor(lx)); wx=max(0.0_WP,min(1.0_WP,lx-i0))
-      j0=int(floor(ly)); wy=max(0.0_WP,min(1.0_WP,ly-j0))
-      k0=int(floor(lz)); wz=max(0.0_WP,min(1.0_WP,lz-k0))
-      val=(1-wx)*(1-wy)*(1-wz)*arr(i0,  j0,  k0,  c) &
-         +   wx *(1-wy)*(1-wz)*arr(i0+1,j0,  k0,  c) &
-         +(1-wx)*  wy *(1-wz)*arr(i0,  j0+1,k0,  c) &
-         +   wx *   wy *(1-wz)*arr(i0+1,j0+1,k0,  c) &
-         +(1-wx)*(1-wy)*  wz *arr(i0,  j0,  k0+1,c) &
-         +   wx *(1-wy)*  wz *arr(i0+1,j0,  k0+1,c) &
-         +(1-wx)*  wy *  wz *arr(i0,  j0+1,k0+1,c) &
-         +   wx *   wy *  wz *arr(i0+1,j0+1,k0+1,c)
-   end function interp_cc
-
-   !> Trilinear interpolation of a staggered MAC velocity.
-   !> Each component is nodal in its own direction, cell-centered in the others.
-   !> Ucomp/Vcomp/Wcomp: component indices in respective arrays (default 1)
-   pure subroutine interp_mac(pos,plo,dx,Uarr,Varr,Warr,fvel,Ucomp,Vcomp,Wcomp)
-      real(WP), intent(in) :: pos(3),plo(3),dx(3)
-      real(WP), dimension(:,:,:,:), contiguous, pointer, intent(in) :: Uarr,Varr,Warr
-      real(WP), intent(out) :: fvel(3)
-      integer, intent(in), optional :: Ucomp,Vcomp,Wcomp
-      integer  :: iu,ju,ku,iv,jv,kv,iw,jw,kw,uc,vc,wc
-      real(WP) :: lx,ly,lz,wx,wy,wz
-      uc=1; if (present(Ucomp)) uc=Ucomp
-      vc=1; if (present(Vcomp)) vc=Vcomp
-      wc=1; if (present(Wcomp)) wc=Wcomp
-
-      ! U (x-nodal): no -0.5 in x; -0.5 in y,z
-      lx=(pos(1)-plo(1))/dx(1)
-      ly=(pos(2)-plo(2))/dx(2)-0.5_WP
-      lz=(pos(3)-plo(3))/dx(3)-0.5_WP
-      iu=int(floor(lx)); wx=max(0.0_WP,min(1.0_WP,lx-iu))
-      ju=int(floor(ly)); wy=max(0.0_WP,min(1.0_WP,ly-ju))
-      ku=int(floor(lz)); wz=max(0.0_WP,min(1.0_WP,lz-ku))
-      fvel(1)=(1-wx)*(1-wy)*(1-wz)*Uarr(iu,  ju,  ku,  uc) &
-             +   wx *(1-wy)*(1-wz)*Uarr(iu+1,ju,  ku,  uc) &
-             +(1-wx)*  wy *(1-wz)*Uarr(iu,  ju+1,ku,  uc) &
-             +   wx *   wy *(1-wz)*Uarr(iu+1,ju+1,ku,  uc) &
-             +(1-wx)*(1-wy)*  wz *Uarr(iu,  ju,  ku+1,uc) &
-             +   wx *(1-wy)*  wz *Uarr(iu+1,ju,  ku+1,uc) &
-             +(1-wx)*  wy *  wz *Uarr(iu,  ju+1,ku+1,uc) &
-             +   wx *   wy *  wz *Uarr(iu+1,ju+1,ku+1,uc)
-
-      ! V (y-nodal): -0.5 in x,z; no -0.5 in y
-      lx=(pos(1)-plo(1))/dx(1)-0.5_WP
-      ly=(pos(2)-plo(2))/dx(2)
-      lz=(pos(3)-plo(3))/dx(3)-0.5_WP
-      iv=int(floor(lx)); wx=max(0.0_WP,min(1.0_WP,lx-iv))
-      jv=int(floor(ly)); wy=max(0.0_WP,min(1.0_WP,ly-jv))
-      kv=int(floor(lz)); wz=max(0.0_WP,min(1.0_WP,lz-kv))
-      fvel(2)=(1-wx)*(1-wy)*(1-wz)*Varr(iv,  jv,  kv,  vc) &
-             +   wx *(1-wy)*(1-wz)*Varr(iv+1,jv,  kv,  vc) &
-             +(1-wx)*  wy *(1-wz)*Varr(iv,  jv+1,kv,  vc) &
-             +   wx *   wy *(1-wz)*Varr(iv+1,jv+1,kv,  vc) &
-             +(1-wx)*(1-wy)*  wz *Varr(iv,  jv,  kv+1,vc) &
-             +   wx *(1-wy)*  wz *Varr(iv+1,jv,  kv+1,vc) &
-             +(1-wx)*  wy *  wz *Varr(iv,  jv+1,kv+1,vc) &
-             +   wx *   wy *  wz *Varr(iv+1,jv+1,kv+1,vc)
-
-      ! W (z-nodal): -0.5 in x,y; no -0.5 in z
-      lx=(pos(1)-plo(1))/dx(1)-0.5_WP
-      ly=(pos(2)-plo(2))/dx(2)-0.5_WP
-      lz=(pos(3)-plo(3))/dx(3)
-      iw=int(floor(lx)); wx=max(0.0_WP,min(1.0_WP,lx-iw))
-      jw=int(floor(ly)); wy=max(0.0_WP,min(1.0_WP,ly-jw))
-      kw=int(floor(lz)); wz=max(0.0_WP,min(1.0_WP,lz-kw))
-      fvel(3)=(1-wx)*(1-wy)*(1-wz)*Warr(iw,  jw,  kw,  wc) &
-             +   wx *(1-wy)*(1-wz)*Warr(iw+1,jw,  kw,  wc) &
-             +(1-wx)*  wy *(1-wz)*Warr(iw,  jw+1,kw,  wc) &
-             +   wx *   wy *(1-wz)*Warr(iw+1,jw+1,kw,  wc) &
-             +(1-wx)*(1-wy)*  wz *Warr(iw,  jw,  kw+1,wc) &
-             +   wx *(1-wy)*  wz *Warr(iw+1,jw,  kw+1,wc) &
-             +(1-wx)*  wy *  wz *Warr(iw,  jw+1,kw+1,wc) &
-             +   wx *   wy *  wz *Warr(iw+1,jw+1,kw+1,wc)
-   end subroutine interp_mac
-
-   !> NGP deposit of scalar Sp to nearest cell center.
-   !> comp: component index in arr (default 1)
-   subroutine deposit_scalar(Sp,pos,plo,dx,arr,comp)
-      real(WP), intent(in) :: Sp,pos(3),plo(3),dx(3)
-      real(WP), dimension(:,:,:,:), contiguous, pointer, intent(inout) :: arr
-      integer, intent(in), optional :: comp
-      integer :: i,j,k,c
-      c=1; if (present(comp)) c=comp
-      i=int(floor((pos(1)-plo(1))/dx(1)))
-      j=int(floor((pos(2)-plo(2))/dx(2)))
-      k=int(floor((pos(3)-plo(3))/dx(3)))
-      arr(i,j,k,c)=arr(i,j,k,c)+Sp
-   end subroutine deposit_scalar
-
-   !> NGP deposit of scalar Sp to nearest x-face (nodal in x, cell-centered in y,z).
-   subroutine deposit_face_x(Sp,pos,plo,dx,arr,comp)
-      real(WP), intent(in) :: Sp,pos(3),plo(3),dx(3)
-      real(WP), dimension(:,:,:,:), contiguous, pointer, intent(inout) :: arr
-      integer, intent(in), optional :: comp
-      integer :: i,j,k,c
-      c=1; if (present(comp)) c=comp
-      i=nint((pos(1)-plo(1))/dx(1))         ! nearest x-face
-      j=int(floor((pos(2)-plo(2))/dx(2)))   ! cell-centered in y
-      k=int(floor((pos(3)-plo(3))/dx(3)))   ! cell-centered in z
-      arr(i,j,k,c)=arr(i,j,k,c)+Sp
-   end subroutine deposit_face_x
-
-   !> NGP deposit of scalar Sp to nearest y-face (nodal in y, cell-centered in x,z).
-   subroutine deposit_face_y(Sp,pos,plo,dx,arr,comp)
-      real(WP), intent(in) :: Sp,pos(3),plo(3),dx(3)
-      real(WP), dimension(:,:,:,:), contiguous, pointer, intent(inout) :: arr
-      integer, intent(in), optional :: comp
-      integer :: i,j,k,c
-      c=1; if (present(comp)) c=comp
-      i=int(floor((pos(1)-plo(1))/dx(1)))   ! cell-centered in x
-      j=nint((pos(2)-plo(2))/dx(2))         ! nearest y-face
-      k=int(floor((pos(3)-plo(3))/dx(3)))   ! cell-centered in z
-      arr(i,j,k,c)=arr(i,j,k,c)+Sp
-   end subroutine deposit_face_y
-
-   !> NGP deposit of scalar Sp to nearest z-face (nodal in z, cell-centered in x,y).
-   subroutine deposit_face_z(Sp,pos,plo,dx,arr,comp)
-      real(WP), intent(in) :: Sp,pos(3),plo(3),dx(3)
-      real(WP), dimension(:,:,:,:), contiguous, pointer, intent(inout) :: arr
-      integer, intent(in), optional :: comp
-      integer :: i,j,k,c
-      c=1; if (present(comp)) c=comp
-      i=int(floor((pos(1)-plo(1))/dx(1)))   ! cell-centered in x
-      j=int(floor((pos(2)-plo(2))/dx(2)))   ! cell-centered in y
-      k=nint((pos(3)-plo(3))/dx(3))         ! nearest z-face
-      arr(i,j,k,c)=arr(i,j,k,c)+Sp
-   end subroutine deposit_face_z
 
 end module amrlpt_class

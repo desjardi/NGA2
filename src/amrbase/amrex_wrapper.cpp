@@ -813,6 +813,46 @@ void amrmfab_average_down_cell(void *fine_mf, void *crse_mf, void *crse_geom,
   }
 }
 
+// Restrict-SUM all fine deposits (valid+ghost) into the coarse level with ADD semantics.
+// Mirrors AMReX's sumFineToCrseNodal pattern for cell-centered data.
+// Call after SumBoundary at the fine level (e.g. for particle two-way coupling).
+extern "C" void amrmfab_sum_downto(void *fine_mf_ptr, void *crse_mf_ptr,
+                                   void *crse_geom_ptr,
+                                   const int *ref_ratio) {
+    auto *fmf  = static_cast<amrex::MultiFab *>(fine_mf_ptr);
+    auto *cmf  = static_cast<amrex::MultiFab *>(crse_mf_ptr);
+    auto *cgeom = static_cast<amrex::Geometry *>(crse_geom_ptr);
+    const amrex::IntVect ratio(AMREX_D_DECL(ref_ratio[0], ref_ratio[1], ref_ratio[2]));
+    const int ncomp = fmf->nComp();
+
+    // ctmp covers coarsen(fine_BA) — same footprint as fine, just coarser
+    amrex::BoxArray cba = fmf->boxArray();
+    cba.coarsen(ratio);
+    amrex::MultiFab ctmp(cba, fmf->DistributionMap(), ncomp, 0);
+    ctmp.setVal(0.0);
+
+    // Restrict-SUM all fine data (valid cells + ghost cells accessible via fine[mfi])
+    // into ctmp. At box boundaries the kernel naturally indexes into fine ghost cells,
+    // capturing any particle deposits that spilled there before SumBoundary.
+    for (amrex::MFIter mfi(ctmp); mfi.isValid(); ++mfi) {
+        const amrex::Box &cbx = mfi.validbox();
+        auto ca = ctmp.array(mfi);
+        auto fa = fmf->const_array(mfi);
+        amrex::ParallelFor(cbx, ncomp,
+            [=] AMREX_GPU_HOST_DEVICE (int i, int j, int k, int n) noexcept {
+                amrex::Real s = 0.;
+                AMREX_D_TERM(for (int ii = 0; ii < ratio[0]; ++ii),
+                             for (int jj = 0; jj < ratio[1]; ++jj),
+                             for (int kk = 0; kk < ratio[2]; ++kk))
+                    s += fa(i*ratio[0]+ii, j*ratio[1]+jj, k*ratio[2]+kk, n);
+                ca(i,j,k,n) = s;
+            });
+    }
+
+    // ADD fine-level aggregated deposits into the coarse MF
+    cmf->ParallelCopy(ctmp, 0, 0, ncomp, 0, 0, cgeom->periodicity(), amrex::FabArrayBase::ADD);
+}
+
 // Average down face-centered MultiFab (nodal in 1 dir, cell in 2)
 // If crse_geom is provided, uses ParallelCopy with periodicity to propagate
 // averaged valid cells to periodic partners, then FillBoundary for ghost cells.

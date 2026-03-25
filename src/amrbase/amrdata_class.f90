@@ -59,8 +59,12 @@ module amrdata_class
       procedure :: fill_mfab        !< Fill into a target MultiFab (single level)
       procedure :: sync_lvl         !< Lightweight same-level ghost sync (single level)
       procedure :: sync             !< Lightweight ghost sync on all levels
+      procedure :: syncsum_lvl      !< Same-level ghost-to-valid accumulation (single level)
+      procedure :: syncsum          !< Ghost-to-valid accumulation on all levels
       procedure :: average_down     !< Average from finest to coarsest level
       procedure :: average_downto   !< Average level lvl+1 down to level lvl
+      procedure :: sum_down         !< Restrict-SUM from finest to coarsest level
+      procedure :: sum_downto       !< Restrict-SUM level lvl+1 into level lvl
       ! Scalar operations (Y = op(Y, scalar))
       procedure :: setval           !< Y = val
       procedure :: plus             !< Y = Y + val
@@ -588,6 +592,26 @@ contains
       end do
    end subroutine sync
 
+   !> Same-level ghost-to-valid accumulation at a single level (SumBoundary, no C/F)
+   subroutine syncsum_lvl(this,lvl)
+      implicit none
+      class(amrdata), intent(inout) :: this
+      integer, intent(in) :: lvl
+      call this%mf(lvl)%sum_boundary(this%amr%geom(lvl))
+   end subroutine syncsum_lvl
+
+   !> Same-level ghost-to-valid accumulation on all levels
+   subroutine syncsum(this,lbase)
+      implicit none
+      class(amrdata), intent(inout) :: this
+      integer, intent(in), optional :: lbase
+      integer :: lvl,lb
+      lb=0; if (present(lbase)) lb=lbase
+      do lvl=lb,this%amr%clvl()
+         call this%syncsum_lvl(lvl)
+      end do
+   end subroutine syncsum
+
    !> Average down from finest level to lbase (ensures level consistency)
    !> Simply calls average_downto in a loop from finest to coarsest
    subroutine average_down(this,lbase)
@@ -628,6 +652,30 @@ contains
          call amrmfab_average_down_node(fmf=this%mf(lvl+1),cmf=this%mf(lvl),rr=[this%amr%rrefx(lvl),this%amr%rrefy(lvl),this%amr%rrefz(lvl)],cgeom=this%amr%geom(lvl))
       end select
    end subroutine average_downto
+
+   !> Restrict-SUM all fine deposits (valid+ghost) into the coarse level.
+   !> Mirrors AMReX's sumFineToCrseNodal. lvl is the coarse destination; lvl+1 is the source.
+   subroutine sum_downto(this,lvl)
+      use amrex_interface, only: amrmfab_sum_downto
+      use messager, only: die
+      implicit none
+      class(amrdata), intent(inout) :: this
+      integer, intent(in) :: lvl
+      if (lvl.lt.0.or.lvl.ge.this%amr%clvl()) call die('[amrdata sum_downto] invalid level')
+      call amrmfab_sum_downto(this%mf(lvl+1),this%mf(lvl),[this%amr%rrefx(lvl),this%amr%rrefy(lvl),this%amr%rrefz(lvl)],cgeom=this%amr%geom(lvl))
+   end subroutine sum_downto
+
+   !> Restrict-SUM from finest to coarsest, looping lvl=clvl()-1 down to 0
+   subroutine sum_down(this,lbase)
+      implicit none
+      class(amrdata), intent(inout) :: this
+      integer, intent(in), optional :: lbase
+      integer :: lvl,lb
+      lb=0; if (present(lbase)) lb=lbase
+      do lvl=this%amr%clvl()-1,lb,-1
+         call this%sum_downto(lvl)
+      end do
+   end subroutine sum_down
 
    ! ============================================================================
    ! SCALAR OPERATIONS
