@@ -320,7 +320,7 @@ contains
    ! PHYSICS METHODS
    ! ============================================================================
 
-   !> Soft-sphere collision model: computes Acol, Tcol on every valid particle with flag PART_COLLIDES set.
+   !> Soft-sphere collision model: computes Acol, Tcol on every valid particle with flag PART_COLLIDES set
    subroutine collide(this,dt,Gib)
       use amrex_amr_module, only: amrex_mfiter
       use amrdata_class, only: amrdata
@@ -336,11 +336,10 @@ contains
       integer(I8) :: np_v,np_all
       integer :: lvl,no,i1,k
       integer(c_int32_t) :: j_c
-      real(WP) :: d1,m1,d2,m2,d12,m12,rnv,r_influ,delta_n,rtv,buf
-      real(WP), dimension(3) :: r1,v1,w1,r2,v2,w2,n12,v12,f_n,f_t,t12
+      real(WP) :: d1,m1,d2,m2
+      real(WP), dimension(3) :: r1,v1,w1,r2,v2,w2
       real(WP) :: k_coeff,eta_coeff,k_coeff_w,eta_coeff_w
       real(WP) :: dx,dy,dz
-      real(WP), parameter :: aclipnorm=1.0e-6_WP,acliptan=1.0e-9_WP,rcliptan=0.05_WP
 
       ! Precompute spring/damping coefficients
       k_coeff=(Pi**2+log(this%e_n)**2)/this%tau_col**2
@@ -385,231 +384,47 @@ contains
                ! Zero collision acceleration and torque
                p(i1)%Acol=0.0_WP; p(i1)%Tcol=0.0_WP
 
+               ! Set first particle properties
                r1=p(i1)%pos; v1=p(i1)%vel; w1=p(i1)%angVel
                d1=p(i1)%d;   m1=this%rho*Pi/6.0_WP*d1**3
 
-               ! Collide with X- wall
-               if (this%lo_bc(1).eq.AMRLPT_WALL) then
-                  d12=r1(1)-this%amr%xlo; n12=[1.0_WP,0.0_WP,0.0_WP]
-                  rnv=dot_product(v1,n12)
-                  r_influ=min(2.0_WP*abs(rnv)*dt,0.2_WP*d1)
-                  delta_n=min(0.5_WP*d1+r_influ-d12,this%clip_col*0.5_WP*d1)
-                  ! Check if colliding
-                  if (delta_n.gt.0.0_WP) then
-                     ! Normal collision
-                     f_n=(-m1*k_coeff_w*delta_n-m1*eta_coeff_w*rnv)*n12
-                     ! Tangential collision
-                     f_t=0.0_WP
-                     if (this%mu_f.gt.0.0_WP) then
-                        t12=v1-rnv*n12+cross_product(0.5_WP*d1*w1,n12)
-                        rtv=sqrt(sum(t12*t12))
-                        if (rnv*dt/d1.gt.aclipnorm) then; if (   rtv/rnv.lt.rcliptan) rtv=0.0_WP
-                        else;                             if (dt*rtv/d1 .lt.acliptan) rtv=0.0_WP; end if
-                        if (rtv.gt.0.0_WP) f_t=-this%mu_f*norm2(f_n)*t12/rtv
-                     end if
-                     ! Calculate collision accelerations
-                     p(i1)%Acol=p(i1)%Acol+(f_n+f_t)/m1
-                     p(i1)%Tcol=p(i1)%Tcol+cross_product(0.5_WP*d1*n12,f_t/m1)
-                  end if
-               end if
-
-               ! Collide with X+ wall
-               if (this%hi_bc(1).eq.AMRLPT_WALL) then
-                  d12=this%amr%xhi-r1(1); n12=[-1.0_WP,0.0_WP,0.0_WP]
-                  rnv=dot_product(v1,n12)
-                  r_influ=min(2.0_WP*abs(rnv)*dt,0.2_WP*d1)
-                  delta_n=min(0.5_WP*d1+r_influ-d12,this%clip_col*0.5_WP*d1)
-                  ! Check if colliding
-                  if (delta_n.gt.0.0_WP) then
-                     ! Normal collision
-                     f_n=(-m1*k_coeff_w*delta_n-m1*eta_coeff_w*rnv)*n12
-                     ! Tangential collision
-                     f_t=0.0_WP
-                     if (this%mu_f.gt.0.0_WP) then
-                        t12=v1-rnv*n12+cross_product(0.5_WP*d1*w1,n12)
-                        rtv=sqrt(sum(t12*t12))
-                        if (rnv*dt/d1.gt.aclipnorm) then; if (   rtv/rnv.lt.rcliptan) rtv=0.0_WP
-                        else;                             if (dt*rtv/d1 .lt.acliptan) rtv=0.0_WP; end if
-                        if (rtv.gt.0.0_WP) f_t=-this%mu_f*norm2(f_n)*t12/rtv
-                     end if
-                     ! Calculate collision accelerations
-                     p(i1)%Acol=p(i1)%Acol+(f_n+f_t)/m1
-                     p(i1)%Tcol=p(i1)%Tcol+cross_product(0.5_WP*d1*n12,f_t/m1)
-                  end if
-               end if
-
-               ! Collide with Y- wall
-               if (this%lo_bc(2).eq.AMRLPT_WALL) then
-                  d12=r1(2)-this%amr%ylo; n12=[0.0_WP,1.0_WP,0.0_WP]
-                  rnv=dot_product(v1,n12)
-                  r_influ=min(2.0_WP*abs(rnv)*dt,0.2_WP*d1)
-                  delta_n=min(0.5_WP*d1+r_influ-d12,this%clip_col*0.5_WP*d1)
-                  ! Check if colliding
-                  if (delta_n.gt.0.0_WP) then
-                     ! Normal collision
-                     f_n=(-m1*k_coeff_w*delta_n-m1*eta_coeff_w*rnv)*n12
-                     ! Tangential collision
-                     f_t=0.0_WP
-                     if (this%mu_f.gt.0.0_WP) then
-                        t12=v1-rnv*n12+cross_product(0.5_WP*d1*w1,n12)
-                        rtv=sqrt(sum(t12*t12))
-                        if (rnv*dt/d1.gt.aclipnorm) then; if (   rtv/rnv.lt.rcliptan) rtv=0.0_WP
-                        else;                             if (dt*rtv/d1 .lt.acliptan) rtv=0.0_WP; end if
-                        if (rtv.gt.0.0_WP) f_t=-this%mu_f*norm2(f_n)*t12/rtv
-                     end if
-                     ! Calculate collision accelerations
-                     p(i1)%Acol=p(i1)%Acol+(f_n+f_t)/m1
-                     p(i1)%Tcol=p(i1)%Tcol+cross_product(0.5_WP*d1*n12,f_t/m1)
-                  end if
-               end if
-
-               ! Collide with Y+ wall
-               if (this%hi_bc(2).eq.AMRLPT_WALL) then
-                  d12=this%amr%yhi-r1(2); n12=[0.0_WP,-1.0_WP,0.0_WP]
-                  rnv=dot_product(v1,n12)
-                  r_influ=min(2.0_WP*abs(rnv)*dt,0.2_WP*d1)
-                  delta_n=min(0.5_WP*d1+r_influ-d12,this%clip_col*0.5_WP*d1)
-                  ! Check if colliding
-                  if (delta_n.gt.0.0_WP) then
-                     ! Normal collision
-                     f_n=(-m1*k_coeff_w*delta_n-m1*eta_coeff_w*rnv)*n12
-                     ! Tangential collision
-                     f_t=0.0_WP
-                     if (this%mu_f.gt.0.0_WP) then
-                        t12=v1-rnv*n12+cross_product(0.5_WP*d1*w1,n12)
-                        rtv=sqrt(sum(t12*t12))
-                        if (rnv*dt/d1.gt.aclipnorm) then; if (   rtv/rnv.lt.rcliptan) rtv=0.0_WP
-                        else;                             if (dt*rtv/d1 .lt.acliptan) rtv=0.0_WP; end if
-                        if (rtv.gt.0.0_WP) f_t=-this%mu_f*norm2(f_n)*t12/rtv
-                     end if
-                     ! Calculate collision accelerations
-                     p(i1)%Acol=p(i1)%Acol+(f_n+f_t)/m1
-                     p(i1)%Tcol=p(i1)%Tcol+cross_product(0.5_WP*d1*n12,f_t/m1)
-                  end if
-               end if
-
-               ! Collide with Z- wall
-               if (this%lo_bc(3).eq.AMRLPT_WALL) then
-                  d12=r1(3)-this%amr%zlo; n12=[0.0_WP,0.0_WP,1.0_WP]
-                  rnv=dot_product(v1,n12)
-                  r_influ=min(2.0_WP*abs(rnv)*dt,0.2_WP*d1)
-                  delta_n=min(0.5_WP*d1+r_influ-d12,this%clip_col*0.5_WP*d1)
-                  ! Check if colliding
-                  if (delta_n.gt.0.0_WP) then
-                     ! Normal collision
-                     f_n=(-m1*k_coeff_w*delta_n-m1*eta_coeff_w*rnv)*n12
-                     ! Tangential collision
-                     f_t=0.0_WP
-                     if (this%mu_f.gt.0.0_WP) then
-                        t12=v1-rnv*n12+cross_product(0.5_WP*d1*w1,n12)
-                        rtv=sqrt(sum(t12*t12))
-                        if (rnv*dt/d1.gt.aclipnorm) then; if (   rtv/rnv.lt.rcliptan) rtv=0.0_WP
-                        else;                             if (dt*rtv/d1 .lt.acliptan) rtv=0.0_WP; end if
-                        if (rtv.gt.0.0_WP) f_t=-this%mu_f*norm2(f_n)*t12/rtv
-                     end if
-                     ! Calculate collision accelerations
-                     p(i1)%Acol=p(i1)%Acol+(f_n+f_t)/m1
-                     p(i1)%Tcol=p(i1)%Tcol+cross_product(0.5_WP*d1*n12,f_t/m1)
-                  end if
-               end if
-
-               ! Collide with Z-hi wall
-               if (this%hi_bc(3).eq.AMRLPT_WALL) then
-                  d12=this%amr%zhi-r1(3); n12=[0.0_WP,0.0_WP,-1.0_WP]
-                  rnv=dot_product(v1,n12)
-                  r_influ=min(2.0_WP*abs(rnv)*dt,0.2_WP*d1)
-                  delta_n=min(0.5_WP*d1+r_influ-d12,this%clip_col*0.5_WP*d1)
-                  ! Check if colliding
-                  if (delta_n.gt.0.0_WP) then
-                     ! Normal collision
-                     f_n=(-m1*k_coeff_w*delta_n-m1*eta_coeff_w*rnv)*n12
-                     ! Tangential collision
-                     f_t=0.0_WP
-                     if (this%mu_f.gt.0.0_WP) then
-                        t12=v1-rnv*n12+cross_product(0.5_WP*d1*w1,n12)
-                        rtv=sqrt(sum(t12*t12))
-                        if (rnv*dt/d1.gt.aclipnorm) then; if (   rtv/rnv.lt.rcliptan) rtv=0.0_WP
-                        else;                             if (dt*rtv/d1 .lt.acliptan) rtv=0.0_WP; end if
-                        if (rtv.gt.0.0_WP) f_t=-this%mu_f*norm2(f_n)*t12/rtv
-                     end if
-                     ! Calculate collision accelerations
-                     p(i1)%Acol=p(i1)%Acol+(f_n+f_t)/m1
-                     p(i1)%Tcol=p(i1)%Tcol+cross_product(0.5_WP*d1*n12,f_t/m1)
-                  end if
-               end if
-
-               ! IB collision
+               ! Wall and IB collisions: r2=contact point, d2=0, v2=w2=0, and m2=huge so that m_eff=m1
+               v2=0.0_WP; w2=0.0_WP; d2=0.0_WP; m2=huge(m1)
+               if (this%lo_bc(1).eq.AMRLPT_WALL) then; r2=[this%amr%xlo,r1(2),r1(3)]; call col_force(k_coeff_w,eta_coeff_w); end if
+               if (this%hi_bc(1).eq.AMRLPT_WALL) then; r2=[this%amr%xhi,r1(2),r1(3)]; call col_force(k_coeff_w,eta_coeff_w); end if
+               if (this%lo_bc(2).eq.AMRLPT_WALL) then; r2=[r1(1),this%amr%ylo,r1(3)]; call col_force(k_coeff_w,eta_coeff_w); end if
+               if (this%hi_bc(2).eq.AMRLPT_WALL) then; r2=[r1(1),this%amr%yhi,r1(3)]; call col_force(k_coeff_w,eta_coeff_w); end if
+               if (this%lo_bc(3).eq.AMRLPT_WALL) then; r2=[r1(1),r1(2),this%amr%zlo]; call col_force(k_coeff_w,eta_coeff_w); end if
+               if (this%hi_bc(3).eq.AMRLPT_WALL) then; r2=[r1(1),r1(2),this%amr%zhi]; call col_force(k_coeff_w,eta_coeff_w); end if
                if (present(Gib)) then
                   ib_col: block
-                     real(WP), dimension(3) :: pos_p,pos_m
-                     ! Signed distance at particle position
-                     d12=this%interp(lvl,r1,pG,1)
-                     ! Outward normal=-nabla G/|nabla G|; collision normal points inward
-                     pos_p=[r1(1)+0.5_WP*dx,r1(2),r1(3)]; pos_m=[r1(1)-0.5_WP*dx,r1(2),r1(3)]; n12(1)=(this%interp(lvl,pos_p,pG,1)-this%interp(lvl,pos_m,pG,1))/dx
-                     pos_p=[r1(1),r1(2)+0.5_WP*dy,r1(3)]; pos_m=[r1(1),r1(2)-0.5_WP*dy,r1(3)]; n12(2)=(this%interp(lvl,pos_p,pG,1)-this%interp(lvl,pos_m,pG,1))/dy
-                     pos_p=[r1(1),r1(2),r1(3)+0.5_WP*dz]; pos_m=[r1(1),r1(2),r1(3)-0.5_WP*dz]; n12(3)=(this%interp(lvl,pos_p,pG,1)-this%interp(lvl,pos_m,pG,1))/dz
-                     buf=norm2(n12)+epsilon(1.0_WP); n12=-n12/buf
-                     rnv=dot_product(v1,n12)
-                     r_influ=min(2.0_WP*abs(rnv)*dt,0.2_WP*d1)
-                     delta_n=min(0.5_WP*d1+r_influ-d12,this%clip_col*0.5_WP*d1)
-                     ! Check if colliding
-                     if (delta_n.gt.0.0_WP) then
-                        ! Normal collision
-                        f_n=(-m1*k_coeff_w*delta_n-m1*eta_coeff_w*rnv)*n12
-                        ! Tangential collision
-                        f_t=0.0_WP
-                        if (this%mu_f.gt.0.0_WP) then
-                           t12=v1-rnv*n12+cross_product(0.5_WP*d1*w1,n12)
-                           rtv=sqrt(sum(t12*t12))
-                           if (rnv*dt/d1.gt.aclipnorm) then; if (   rtv/rnv.lt.rcliptan) rtv=0.0_WP
-                           else;                             if (dt*rtv/d1 .lt.acliptan) rtv=0.0_WP; end if
-                           if (rtv.gt.0.0_WP) f_t=-this%mu_f*norm2(f_n)*t12/rtv
-                        end if
-                        ! Calculate collision accelerations
-                        p(i1)%Acol=p(i1)%Acol+(f_n+f_t)/m1
-                        p(i1)%Tcol=p(i1)%Tcol+cross_product(0.5_WP*d1*n12,f_t/m1)
-                     end if
+                     real(WP) :: d_ib,buf
+                     real(WP), dimension(3) :: pos_p,pos_m,n12_out
+                     ! Signed distance and outward IB normal nabla G/|nabla G| (from IB into fluid)
+                     d_ib=this%interp(lvl,r1,pG,1)
+                     pos_p=[r1(1)+0.5_WP*dx,r1(2),r1(3)]; pos_m=[r1(1)-0.5_WP*dx,r1(2),r1(3)]; n12_out(1)=(this%interp(lvl,pos_p,pG,1)-this%interp(lvl,pos_m,pG,1))/dx
+                     pos_p=[r1(1),r1(2)+0.5_WP*dy,r1(3)]; pos_m=[r1(1),r1(2)-0.5_WP*dy,r1(3)]; n12_out(2)=(this%interp(lvl,pos_p,pG,1)-this%interp(lvl,pos_m,pG,1))/dy
+                     pos_p=[r1(1),r1(2),r1(3)+0.5_WP*dz]; pos_m=[r1(1),r1(2),r1(3)-0.5_WP*dz]; n12_out(3)=(this%interp(lvl,pos_p,pG,1)-this%interp(lvl,pos_m,pG,1))/dz
+                     buf=norm2(n12_out)+epsilon(1.0_WP); n12_out=n12_out/buf; r2=r1-d_ib*n12_out
+                     call col_force(k_coeff_w,eta_coeff_w)
                   end block ib_col
                end if
 
                ! Particle-particle collisions
                if (associated(nbr_off)) then
-                  ! Loop over neighbors
                   do k=nbr_off(i1)+1,nbr_off(i1+1)
-                     ! Get index (0-indexed into p(1:np_total))
-                     j_c=nbr_lst(k)
-                     ! Skip self
-                     if (j_c+1.eq.i1) cycle
-                     ! Get particle data
-                     r2=p(j_c+1)%pos; v2=p(j_c+1)%vel; w2=p(j_c+1)%angVel; d2=p(j_c+1)%d
-                     m2=this%rho*Pi/6.0_WP*d2**3
-                     ! Calculate distance and normal
-                     d12=norm2(r1-r2)
-                     if (d12.lt.10.0_WP*epsilon(d12)) cycle !< this should skip auto-collision
-                     n12=(r2-r1)/d12; v12=v1-v2
-                     rnv=dot_product(v12,n12)
-                     r_influ=min(abs(rnv)*dt,0.1_WP*(d1+d2))
-                     delta_n=min(0.5_WP*(d1+d2)+r_influ-d12,this%clip_col*0.5_WP*(d1+d2))
-                     ! Check if colliding
-                     if (delta_n.gt.0.0_WP) then
-                        ! Normal collision
-                        m12=m1*m2/(m1+m2)
-                        f_n=(-m12*k_coeff*delta_n-m12*eta_coeff*rnv)*n12
-                        ! Tangential collision
-                        f_t=0.0_WP
-                        if (this%mu_f.gt.0.0_WP) then
-                           t12=v12-rnv*n12+cross_product(0.5_WP*(d1*w1+d2*w2),n12)
-                           rtv=sqrt(sum(t12*t12))
-                           if (rnv*dt*2.0_WP/(d1+d2).gt.aclipnorm) then; if (   rtv/rnv           .lt.rcliptan) rtv=0.0_WP
-                           else;                                         if (dt*rtv*2.0_WP/(d1+d2).lt.acliptan) rtv=0.0_WP; end if
-                           if (rtv.gt.0.0_WP) f_t=-this%mu_f*norm2(f_n)*t12/rtv
-                        end if
-                        ! Calculate collision accelerations
-                        p(i1)%Acol=p(i1)%Acol+(f_n+f_t)/m1
-                        p(i1)%Tcol=p(i1)%Tcol+cross_product(0.5_WP*d1*n12,f_t/m1)
-                        ! Increment collision counter
-                        this%ncol=this%ncol+1
-                     end if
+                     ! Get neighbor index (note the 1-shift)
+                     j_c=nbr_lst(k)+1
+                     ! Skip self-collision
+                     if (j_c.eq.i1) cycle
+                     ! Skip if neighbor doesn't collide
+                     if (IAND(p(j_c)%flag,PART_COLLIDES).eq.0) cycle
+                     ! Set neighbor properties
+                     r2=p(j_c)%pos; v2=p(j_c)%vel; w2=p(j_c)%angVel
+                     d2=p(j_c)%d;   m2=this%rho*Pi/6.0_WP*d2**3
+                     ! Compute collision force
+                     call col_force(k_coeff,eta_coeff,hit)
+                     if (hit) this%ncol=this%ncol+1
                   end do
                end if
 
@@ -633,6 +448,54 @@ contains
          call MPI_ALLREDUCE(MPI_IN_PLACE,this%ncol,1,MPI_INTEGER,MPI_SUM,this%amr%comm,ierr)
          this%ncol=this%ncol/2
       end block reduce_collision_count
+
+   contains
+
+      !> Soft-sphere collision force between (r1,v1,w1,d1,m1) and virtual partner (r2,v2,w2,d2,m2).
+      !> n12=(r2-r1)/|r2-r1| computed internally => points from particle toward partner.
+      !> Wall/IB: set r2=contact point, d2=0, v2=w2=0, m2=huge => m_eff->m1, d_eff=0.5*d1.
+      subroutine col_force(kk,ee,collided)
+         real(WP), intent(in)  :: kk,ee
+         logical,  intent(out), optional :: collided
+         real(WP) :: d12,d_eff,rnv,r_influ,delta_n,rtv,m_eff
+         real(WP), dimension(3) :: n12,v12,t12,f_n,f_t
+         real(WP), parameter :: aclipnorm=1.0e-6_WP,acliptan=1.0e-9_WP,rcliptan=0.05_WP
+         ! No collision yet
+         if (present(collided)) collided=.false.
+         ! Get distance
+         d12=norm2(r2-r1)
+         ! Skip if particles are too close - likely self-collision
+         if (d12.lt.10.0_WP*epsilon(d12)) return
+         ! Get normal
+         n12=(r2-r1)/d12
+         ! Get effective diameter, relative velocity, and relative normal velocity
+         d_eff=0.5_WP*(d1+d2); v12=v1-v2; rnv=dot_product(v12,n12)
+         ! Get influence radius
+         r_influ=min(abs(rnv)*dt,0.2_WP*d_eff)
+         ! Get overlap
+         delta_n=min(d_eff+r_influ-d12,this%clip_col*d_eff)
+         ! Done if no overlap
+         if (delta_n.le.0.0_WP) return
+         ! Collision detected
+         if (present(collided)) collided=.true.
+         ! Get effective mass
+         m_eff=m1*m2/(m1+m2)
+         ! Get tangential velocity
+         t12=v12-rnv*n12+cross_product(0.5_WP*(d1*w1+d2*w2),n12)
+         ! Get normal force
+         f_n=(-m_eff*kk*delta_n-m_eff*ee*rnv)*n12
+         ! Get tangential force
+         f_t=0.0_WP
+         if (this%mu_f.gt.0.0_WP) then
+            rtv=sqrt(sum(t12*t12))
+            if (rnv*dt/d_eff.gt.aclipnorm) then; if (   rtv/rnv  .lt.rcliptan) rtv=0.0_WP
+            else;                                if (dt*rtv/d_eff.lt.acliptan) rtv=0.0_WP; end if
+            if (rtv.gt.0.0_WP) f_t=-this%mu_f*norm2(f_n)*t12/rtv
+         end if
+         ! Increment accelerations on p(i1)
+         p(i1)%Acol=p(i1)%Acol+(f_n+f_t)/m1
+         p(i1)%Tcol=p(i1)%Tcol+cross_product(0.5_WP*d1*n12,f_t/m1)
+      end subroutine col_force
 
    end subroutine collide
 
