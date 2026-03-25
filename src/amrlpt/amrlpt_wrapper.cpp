@@ -7,8 +7,18 @@
 // Uses NeighborParticleContainer (backward-compatible superset of AmrParticleContainer):
 //   - fillNeighbors / clearNeighbors: ghost particles for collision detection
 //   - buildNeighborList: explicit pair lists for DEM / peridynamics
+//
+// Ghost particle layout (after fillNeighbors):
+//   ptile.GetArrayOfStructs()[0 .. numRealParticles()-1]         : valid particles
+//   ptile.GetArrayOfStructs()[numRealParticles() .. total-1]     : ghost particles
+//
+// Neighbor list (after buildNeighborList):
+//   CSR format: m_nbor_offsets[np+1], m_nbor_list[ntotal], both unsigned int
+//   For valid particle i, neighbors are m_nbor_list[offsets[i] .. offsets[i+1]-1]
+//   Index j < numRealParticles() => valid particle; j >= numRealParticles() => ghost
 
-#include <AMReX_NeighborParticleContainer.H>
+#include <AMReX_NeighborParticles.H>
+#include <AMReX_NeighborList.H>
 #include <AMReX_AmrCore.H>
 #include <AMReX_MultiFab.H>
 #include <AMReX_Geometry.H>
@@ -28,11 +38,37 @@ using namespace amrex;
 #define AMRLPT_NINT   1
 
 namespace {
-    // NeighborParticleContainer is a backward-compatible superset of AmrParticleContainer.
-    // Neighbor particles have the same layout as primary particles (NNeighborReal=NREAL, NNeighborInt=NINT).
-    using FPC = NeighborParticleContainer<AMRLPT_NREAL, AMRLPT_NINT>;
-    using FPT = FPC::ParticleType;
-}
+
+// -----------------------------------------------------------------------
+// Thin subclass of NeighborParticleContainer to:
+//   1. Accept AmrCore* in constructor (via GetParGDB())
+//   2. Expose m_num_neighbor_cells setter (for ngrow at fill time)
+//   3. Expose m_neighbor_list per tile (for CSR neighbor list access)
+// -----------------------------------------------------------------------
+class AMRLPTPC : public NeighborParticleContainer<AMRLPT_NREAL, AMRLPT_NINT>
+{
+public:
+    using Base = NeighborParticleContainer<AMRLPT_NREAL, AMRLPT_NINT>;
+    using ParticleType = Base::ParticleType;
+
+    explicit AMRLPTPC(AmrCore* amrcore)
+        : Base(amrcore->GetParGDB(), 1)   // ncells=1 default; overridden via setNeighborCells
+    {}
+
+    // Allow changing the ghost radius before each fillNeighbors() call
+    void setNeighborCells(int n) { m_num_neighbor_cells = n; }
+
+    // CSR access to the neighbor list for a tile (built by buildNeighborList)
+    NeighborList<ParticleType>& getNeighborList(int lev, int grid, int tile)
+    {
+        return m_neighbor_list[lev][std::make_pair(grid, tile)];
+    }
+};
+
+using FPC = AMRLPTPC;
+using FPT = FPC::ParticleType;
+
+} // namespace
 
 extern "C" {
 
@@ -42,8 +78,6 @@ extern "C" {
 
 void amrlpt_new_pc(FPC*& pc, void* amrcore_raw)
 {
-    // amrcore_raw is a NGA2AmrCore* (is-a AmrCore*) stored as void* via Fortran c_ptr.
-    // Single public inheritance => same address; safe to cast directly.
     pc = new FPC(static_cast<AmrCore*>(amrcore_raw));
 }
 
@@ -62,14 +96,17 @@ void amrlpt_redistribute(FPC* pc, int lev_min, int lev_max, int ng)
 }
 
 // -----------------------------------------------------------------------
-// Neighbor/ghost particles for collision detection and short-range interactions
-// fillNeighbors: communicate particles within ngrow cells into neighbor buffer
-// clearNeighbors: release neighbor buffer
+// Ghost (neighbor) particles for collision detection and short-range interactions
+//
+// fillNeighbors communicates particles within ngrow cells of each tile boundary
+// into the tile's particle array (appended after numRealParticles).
+// clearNeighbors removes them.
 // -----------------------------------------------------------------------
 
 void amrlpt_fill_neighbors(FPC* pc, int ngrow)
 {
-    pc->fillNeighbors(ngrow);
+    pc->setNeighborCells(ngrow);
+    pc->fillNeighbors();
 }
 
 void amrlpt_clear_neighbors(FPC* pc)
@@ -78,10 +115,9 @@ void amrlpt_clear_neighbors(FPC* pc)
 }
 
 // -----------------------------------------------------------------------
-// Neighbor particle access per tile (read-only ghost copies).
-// Returns pointer to neighbor particle array + count.
-// Call after amrlpt_fill_neighbors; neighbor particles may overlap
-// valid particles from adjacent tiles.
+// Ghost particle access per tile.
+// Call after amrlpt_fill_neighbors.
+// Ghost particles are appended at ptile[numRealParticles() .. numTotal-1].
 // -----------------------------------------------------------------------
 
 void amrlpt_get_neighbor_particles_mfi(FPC* pc, int lev, MFIter* mfi,
@@ -89,17 +125,27 @@ void amrlpt_get_neighbor_particles_mfi(FPC* pc, int lev, MFIter* mfi,
 {
     const int grid = mfi->index();
     const int tile = mfi->LocalTileIndex();
-    auto& neighbors = pc->GetNeighbors(lev, grid, tile);
-    np = static_cast<long long>(neighbors.numParticles());
-    dp = (np > 0) ? neighbors.GetArrayOfStructs().data() : nullptr;
+    auto& plev = pc->GetParticles(lev);
+    auto it = plev.find(std::make_pair(grid, tile));
+    if (it != plev.end()) {
+        auto& ptile = it->second;
+        np = static_cast<long long>(ptile.numNeighborParticles());
+        dp = (np > 0) ? ptile.GetArrayOfStructs().data() + ptile.numRealParticles() : nullptr;
+    } else {
+        np = 0;
+        dp = nullptr;
+    }
 }
 
 // -----------------------------------------------------------------------
 // Neighbor list (explicit pair list) for DEM / peridynamics.
-// buildNeighborList: build pairs with |r_i - r_j| < rcrit using
-//   cell-linked-list search over neighbor particles.
-// Pairs are stored as flat int arrays (2*npairs): [i0,j0, i1,j1, ...]
-// where i is index into valid particles and j into neighbor particles.
+// buildNeighborList: must be called AFTER fillNeighbors.
+//   check_pair criterion: |r_i - r_j| < rcrit
+// Neighbor list is per-tile in CSR format:
+//   offsets[0..np]: prefix sums (unsigned int)
+//   list[0..ntot-1]: neighbor indices into full particle array (valid+ghost)
+//   np: number of valid particles
+//   ntot: total neighbor entries
 // -----------------------------------------------------------------------
 
 void amrlpt_build_neighbor_list(FPC* pc, double rcrit)
@@ -111,24 +157,33 @@ void amrlpt_build_neighbor_list(FPC* pc, double rcrit)
             d2 += (p1.pos(dim) - p2.pos(dim)) * (p1.pos(dim) - p2.pos(dim));
         return d2 < rcrit2;
     };
-    // BuildNeighborList populates GetNeighborList per tile
-    bool sort = false;
-    pc->buildNeighborList(check_pair, sort);
+    pc->buildNeighborList(check_pair, false);
 }
 
+// Returns CSR offsets and list for the neighbor list per tile.
+// offsets: pointer to np+1 unsigned ints (0-indexed relative offsets into list)
+// list:    pointer to ntot unsigned ints (indices into valid+ghost particle array)
+// np:      number of valid particles (list driven from particle i in [0,np-1])
+// ntot:    total number of neighbor entries across all particles
 void amrlpt_get_neighbor_list_mfi(FPC* pc, int lev, MFIter* mfi,
-                                   const int*& pairs, long long& npairs)
+                                   const unsigned int*& offsets,
+                                   const unsigned int*& list,
+                                   long long& np, long long& ntot)
 {
     const int grid = mfi->index();
     const int tile = mfi->LocalTileIndex();
     auto& nl = pc->getNeighborList(lev, grid, tile);
-    npairs = static_cast<long long>(nl.size() / 2);  // each pair is (i,j)
-    pairs  = (npairs > 0) ? nl.dataPtr() : nullptr;
+    np   = static_cast<long long>(nl.numParticles());
+    ntot = static_cast<long long>(nl.GetList().size());
+    offsets = (np   > 0) ? nl.GetOffsets().dataPtr() : nullptr;
+    list    = (ntot > 0) ? nl.GetList().dataPtr()    : nullptr;
 }
 
 // -----------------------------------------------------------------------
 // Particle access via MFIter (grid+tile indices come from the MFIter)
-// Returns pointer to contiguous particle array + count for this tile
+// Returns pointer to VALID particle array + count for this tile.
+// Ghost particles (if present after fillNeighbors) are excluded here;
+// use amrlpt_get_neighbor_particles_mfi for them.
 // -----------------------------------------------------------------------
 
 void amrlpt_get_particles_mfi(FPC* pc, int lev, MFIter* mfi,
@@ -140,10 +195,33 @@ void amrlpt_get_particles_mfi(FPC* pc, int lev, MFIter* mfi,
     auto it = plev.find(std::make_pair(grid, tile));
     if (it != plev.end()) {
         auto& ptile = it->second;
-        np = ptile.numParticles();
+        np = static_cast<long long>(ptile.numRealParticles());  // excludes ghosts
         dp = (np > 0) ? ptile.GetArrayOfStructs().data() : nullptr;
     } else {
         np = 0;
+        dp = nullptr;
+    }
+}
+
+// Returns the full combined (valid+ghost) particle array for a tile,
+// along with np_total (valid+ghost count) and np_valid (valid count only).
+// np_valid is the count to use for the outer initiating loop;
+// np_total covers the full index space referenced by the neighbor list.
+void amrlpt_get_all_particles_mfi(FPC* pc, int lev, MFIter* mfi,
+                                   FPT*& dp, long long& np_total, long long& np_valid)
+{
+    const int grid = mfi->index();
+    const int tile = mfi->LocalTileIndex();
+    auto& plev = pc->GetParticles(lev);
+    auto it = plev.find(std::make_pair(grid, tile));
+    if (it != plev.end()) {
+        auto& ptile = it->second;
+        np_valid = static_cast<long long>(ptile.numRealParticles());
+        np_total = static_cast<long long>(ptile.numParticles());  // real + neighbor
+        dp = (np_total > 0) ? ptile.GetArrayOfStructs().data() : nullptr;
+    } else {
+        np_total = 0;
+        np_valid = 0;
         dp = nullptr;
     }
 }
@@ -154,7 +232,7 @@ void amrlpt_num_particles_mfi(FPC* pc, int lev, MFIter* mfi, long long& np)
     const int tile = mfi->LocalTileIndex();
     auto& plev = pc->GetParticles(lev);
     auto it = plev.find(std::make_pair(grid, tile));
-    np = (it != plev.end()) ? it->second.numParticles() : 0;
+    np = (it != plev.end()) ? static_cast<long long>(it->second.numRealParticles()) : 0;
 }
 
 // -----------------------------------------------------------------------
