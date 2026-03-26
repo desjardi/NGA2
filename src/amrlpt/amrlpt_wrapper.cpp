@@ -24,6 +24,8 @@
 #include <AMReX_MultiFab.H>
 #include <AMReX_Geometry.H>
 #include <AMReX_ParallelDescriptor.H>
+#include <fstream>
+#include <iomanip>
 #include <AMReX_PlotFileUtil.H>
 
 using namespace amrex;
@@ -332,7 +334,7 @@ void amrlpt_write(PC* pc, const char* fullpath, int is_chk)
 // -----------------------------------------------------------------------
 
 void amrlpt_write_plotfile(PC* pc, const char* basedir, const char* pname,
-                            const int* write_real, const int* write_int)
+                            const int* write_real, const int* write_int, double time)
 {
     static const Vector<std::string> rnames = {
         "d", "vx", "vy", "vz", "wx", "wy", "wz",
@@ -345,6 +347,25 @@ void amrlpt_write_plotfile(PC* pc, const char* basedir, const char* pname,
 
     pc->WritePlotFile(std::string(basedir), std::string(pname),
                       wr, wi, rnames, inames);
+
+    // Store simulation time inside the plotfile directory (IOProcessor only)
+    if (ParallelDescriptor::IOProcessor()) {
+        std::ofstream tf(std::string(basedir) + "/time");
+        tf << std::setprecision(17) << time << '\n';
+    }
+}
+
+// -----------------------------------------------------------------------
+// Read back the simulation time stored by amrlpt_write_plotfile.
+// Returns -1.0 if the file does not exist or cannot be read.
+// -----------------------------------------------------------------------
+
+double amrlpt_read_plotfile_time(const char* basedir)
+{
+    std::ifstream tf(std::string(basedir) + "/time");
+    double t = -1.0;
+    if (tf.good()) tf >> t;
+    return t;
 }
 
 // -----------------------------------------------------------------------

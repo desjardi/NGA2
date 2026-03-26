@@ -1,6 +1,4 @@
 !> AMR particle visualization handler
-!> Mirrors amrviz_class structure: registration-based, time-series aware,
-!> restart-capable. Outputs AMReX native particle plotfiles (VisIt/ParaView).
 !>
 !> Usage:
 !>   type(amrlptviz) :: pviz
@@ -19,22 +17,24 @@ module amrlptviz_class
 
    public :: amrlptviz
 
-   ! -----------------------------------------------------------------------
    ! C interface -- WritePlotFile wrapper in amrlpt_wrapper.cpp
-   ! -----------------------------------------------------------------------
    interface
-      subroutine amrlpt_write_plotfile(pc, basedir, pname, write_real, write_int) bind(c)
+      subroutine amrlpt_write_plotfile(pc, basedir, pname, write_real, write_int, time) bind(c)
          import
          type(c_ptr), value :: pc
          character(kind=c_char) :: basedir(*), pname(*)
          integer(c_int), intent(in) :: write_real(*), write_int(*)
+         real(c_double), value :: time
       end subroutine
+      function amrlpt_read_plotfile_time(basedir) result(t) bind(c)
+         import
+         character(kind=c_char) :: basedir(*)
+         real(c_double) :: t
+      end function
    end interface
 
-   ! -----------------------------------------------------------------------
-   ! Component index map: name → which rdata or idata indices to toggle.
+   ! Component index map: name -> which rdata or idata indices to toggle.
    ! Order matches the part struct rdata layout (0-based C indices).
-   ! -----------------------------------------------------------------------
    ! rdata[0]    = d
    ! rdata[1..3] = vel (vx,vy,vz)
    ! rdata[4..6] = angVel (wx,wy,wz)
@@ -68,11 +68,11 @@ module amrlptviz_class
 
 contains
 
-   ! -----------------------------------------------------------------------
-   !> Initialize: create output directory, scan for existing files on restart
-   ! -----------------------------------------------------------------------
+   !> Initialize: create output directory, restore time series on restart.
+   !> Reads all existing plotfile times from disk (sequentially numbered).
+   !> Rewind/truncation based on the restart time happens in write().
    subroutine initialize(this, lpt, name)
-      use filesys,  only: makedir, isdir, isfile
+      use filesys,  only: makedir, isdir
       use parallel, only: MPI_REAL_WP
       use mpi_f08,  only: MPI_BCAST, MPI_INTEGER
       implicit none
@@ -80,10 +80,9 @@ contains
       class(amrlpt), target, intent(in) :: lpt
       character(len=*), intent(in) :: name
 
-      character(len=str_long) :: timefile
-      integer :: iunit, ierr, n
-      real(WP) :: t
-      real(WP), allocatable :: tmp(:)
+      character(len=str_long) :: pltdir
+      integer :: ierr, n
+      real(c_double) :: file_time
 
       this%lpt  => lpt
       this%name = trim(adjustl(name))
@@ -98,46 +97,38 @@ contains
             call makedir('amrviz/'//trim(this%name))
       end if
 
-      ! Look for existing time index file (written by us on previous runs)
-      timefile = 'amrviz/'//trim(this%name)//'/particle_times.txt'
-
-      if (lpt%amr%amRoot .and. isfile(trim(timefile))) then
-         open(newunit=iunit, file=trim(timefile), status='old', action='read', iostat=ierr)
-         if (ierr .eq. 0) then
-            ! Count lines
-            n = 0
-            do
-               read(iunit, *, iostat=ierr)
-               if (ierr .ne. 0) exit
-               n = n + 1
+      ! Root probes for existing plotfiles via C++ function (mirrors amrviz pattern).
+      ! amrlpt_read_plotfile_time returns -1.0 when directory/time file is absent.
+      if (lpt%amr%amRoot) then
+         n = 0
+         find_files: do
+            n = n + 1
+            write(pltdir,'("amrviz/",a,"/plt",i8.8)') trim(this%name), n
+            file_time = amrlpt_read_plotfile_time(trim(pltdir)//c_null_char)
+            if (file_time.lt.0.0_c_double) exit find_files
+         end do find_files
+         this%ntime = n - 1
+         if (this%ntime.gt.0) then
+            allocate(this%time(this%ntime))
+            do n = 1, this%ntime
+               write(pltdir,'("amrviz/",a,"/plt",i8.8)') trim(this%name), n
+               this%time(n) = real(amrlpt_read_plotfile_time(trim(pltdir)//c_null_char), WP)
             end do
-            rewind(iunit)
-            if (n .gt. 0) then
-               allocate(tmp(n))
-               do n = 1, size(tmp)
-                  read(iunit,*) tmp(n)
-               end do
-               this%ntime = size(tmp)
-               call move_alloc(tmp, this%time)
-            end if
-            close(iunit)
          end if
       end if
 
-      ! Broadcast ntime and time array
+      ! Broadcast ntime and time array to all ranks
       call MPI_BCAST(this%ntime, 1, MPI_INTEGER, 0, lpt%amr%comm, ierr)
-      if (this%ntime .gt. 0) then
+      if (this%ntime.gt.0) then
          if (.not.lpt%amr%amRoot) allocate(this%time(this%ntime))
          call MPI_BCAST(this%time, this%ntime, MPI_REAL_WP, 0, lpt%amr%comm, ierr)
       end if
 
    end subroutine initialize
 
-   ! -----------------------------------------------------------------------
    !> Toggle a named field group on or off.
    !> Names: 'd', 'vel', 'angVel', 'Acol', 'Tcol', 'dt', 'flag'
    !> You can also pass individual component names: 'vx','vy','vz' etc.
-   ! -----------------------------------------------------------------------
    subroutine select_comp(this, name, on)
       implicit none
       class(amrlptviz), intent(inout) :: this
@@ -199,68 +190,47 @@ contains
 
    end subroutine select_comp
 
-   ! -----------------------------------------------------------------------
    !> Write one particle plotfile snapshot.
-   !> Directory: amrviz/<name>/plt<ntime> (6-digit zero-padded)
-   !> Sub-directory inside: 'particles' (AMReX particle name)
-   ! -----------------------------------------------------------------------
+   !> Directory: amrviz/<name>/plt<ntime> (8-digit zero-padded)
    subroutine write(this, time)
-      use iso_c_binding, only: c_null_char
-      use parallel,      only: MPI_REAL_WP
-      use mpi_f08,       only: MPI_BCAST
+      use iso_c_binding, only: c_null_char, c_double
       implicit none
       class(amrlptviz), intent(inout) :: this
       real(WP), intent(in) :: time
 
-      character(len=str_long) :: pltdir, timefile
+      character(len=str_long) :: pltdir
       real(WP), allocatable :: tmp(:)
-      integer :: iunit, ierr, i, n
-      logical :: rewind_flag
+      integer :: i, n
 
-      ! --------------- Update time array (same rewind logic as amrviz) -----
-      if (this%ntime == 0) then
+      ! Update time array (same rewind logic as amrviz)
+      if (this%ntime.eq.0) then
          this%ntime = 1
          if (allocated(this%time)) deallocate(this%time)
          allocate(this%time(1))
          this%time(1) = time
       else
          n = 1
-         do i = this%ntime, 1, -1
-            if (this%time(i) .lt. time - 1.0e-6_WP) then
-               n = i + 1; exit
+         rewind: do i = this%ntime, 1, -1
+            if (this%time(i).lt.time - 1.0e-6_WP) then
+               n = i + 1; exit rewind
             end if
-         end do
+         end do rewind
          this%ntime = n
          allocate(tmp(this%ntime))
          tmp = [this%time(1:this%ntime-1), time]
          call move_alloc(tmp, this%time)
       end if
 
-      ! --------------- Construct output directory ---------------------------
-      write(pltdir,'(a,"/amrviz/",a,"/plt",i6.6)') '', trim(this%name), this%ntime
-      pltdir = adjustl(pltdir)
-      ! Strip leading blank from write format
-      pltdir = 'amrviz/'//trim(this%name)//'/plt'
-      write(pltdir(len_trim(pltdir)+1:len_trim(pltdir)+6),'(i6.6)') this%ntime
+      ! Construct output directory
+      write(pltdir,'("amrviz/",a,"/plt",i8.8)') trim(this%name), this%ntime
 
-      ! --------------- Write via C++ wrapper --------------------------------
-      call amrlpt_write_plotfile(this%lpt%pc, trim(pltdir)//c_null_char, 'particles'//c_null_char, this%write_real, this%write_int)
+      ! Write via C++ wrapper
+      call amrlpt_write_plotfile(this%lpt%pc, trim(pltdir)//c_null_char, 'particles'//c_null_char, this%write_real, this%write_int, real(time, c_double))
 
-      ! --------------- Update time index file (root only) ------------------
-      if (this%lpt%amr%amRoot) then
-         timefile = 'amrviz/'//trim(this%name)//'/particle_times.txt'
-         open(newunit=iunit, file=trim(timefile), status='replace', action='write')
-         do i = 1, this%ntime
-            write(iunit,'(ES23.16)') this%time(i)
-         end do
-         close(iunit)
-      end if
 
    end subroutine write
 
-   ! -----------------------------------------------------------------------
    !> Finalize: clean up allocations
-   ! -----------------------------------------------------------------------
    subroutine finalize(this)
       implicit none
       class(amrlptviz), intent(inout) :: this
