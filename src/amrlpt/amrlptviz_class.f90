@@ -73,7 +73,7 @@ contains
    ! -----------------------------------------------------------------------
    subroutine initialize(this, lpt, name)
       use filesys,  only: makedir, isdir, isfile
-      use parallel, only: MPI_REAL_WP, amRoot
+      use parallel, only: MPI_REAL_WP
       use mpi_f08,  only: MPI_BCAST, MPI_INTEGER
       implicit none
       class(amrlptviz), intent(inout) :: this
@@ -92,7 +92,7 @@ contains
       this%write_int  = 1
 
       ! Create output directory
-      if (lpt%amRoot) then
+      if (lpt%amr%amRoot) then
          if (.not.isdir('amrviz')) call makedir('amrviz')
          if (.not.isdir('amrviz/'//trim(this%name))) &
             call makedir('amrviz/'//trim(this%name))
@@ -101,18 +101,18 @@ contains
       ! Look for existing time index file (written by us on previous runs)
       timefile = 'amrviz/'//trim(this%name)//'/particle_times.txt'
 
-      if (lpt%amRoot .and. isfile(trim(timefile))) then
+      if (lpt%amr%amRoot .and. isfile(trim(timefile))) then
          open(newunit=iunit, file=trim(timefile), status='old', action='read', iostat=ierr)
-         if (ierr == 0) then
+         if (ierr .eq. 0) then
             ! Count lines
             n = 0
             do
                read(iunit, *, iostat=ierr)
-               if (ierr /= 0) exit
+               if (ierr .ne. 0) exit
                n = n + 1
             end do
             rewind(iunit)
-            if (n > 0) then
+            if (n .gt. 0) then
                allocate(tmp(n))
                do n = 1, size(tmp)
                   read(iunit,*) tmp(n)
@@ -125,10 +125,10 @@ contains
       end if
 
       ! Broadcast ntime and time array
-      call MPI_BCAST(this%ntime, 1, MPI_INTEGER, 0, MPI_COMM_WORLD, ierr)
-      if (this%ntime > 0) then
-         if (.not.lpt%amRoot) allocate(this%time(this%ntime))
-         call MPI_BCAST(this%time, this%ntime, MPI_REAL_WP, 0, MPI_COMM_WORLD, ierr)
+      call MPI_BCAST(this%ntime, 1, MPI_INTEGER, 0, lpt%amr%comm, ierr)
+      if (this%ntime .gt. 0) then
+         if (.not.lpt%amr%amRoot) allocate(this%time(this%ntime))
+         call MPI_BCAST(this%time, this%ntime, MPI_REAL_WP, 0, lpt%amr%comm, ierr)
       end if
 
    end subroutine initialize
@@ -226,7 +226,7 @@ contains
       else
          n = 1
          do i = this%ntime, 1, -1
-            if (this%time(i) < time - 1.0e-6_WP) then
+            if (this%time(i) .lt. time - 1.0e-6_WP) then
                n = i + 1; exit
             end if
          end do
@@ -237,20 +237,17 @@ contains
       end if
 
       ! --------------- Construct output directory ---------------------------
-      write(pltdir,'(a,"/amrviz/",a,"/plt",i6.6)') &
-           '', trim(this%name), this%ntime
+      write(pltdir,'(a,"/amrviz/",a,"/plt",i6.6)') '', trim(this%name), this%ntime
       pltdir = adjustl(pltdir)
       ! Strip leading blank from write format
       pltdir = 'amrviz/'//trim(this%name)//'/plt'
       write(pltdir(len_trim(pltdir)+1:len_trim(pltdir)+6),'(i6.6)') this%ntime
 
       ! --------------- Write via C++ wrapper --------------------------------
-      call amrlpt_write_plotfile(this%lpt%pc, &
-           trim(pltdir)//c_null_char, 'particles'//c_null_char, &
-           this%write_real, this%write_int)
+      call amrlpt_write_plotfile(this%lpt%pc, trim(pltdir)//c_null_char, 'particles'//c_null_char, this%write_real, this%write_int)
 
       ! --------------- Update time index file (root only) ------------------
-      if (this%lpt%amRoot) then
+      if (this%lpt%amr%amRoot) then
          timefile = 'amrviz/'//trim(this%name)//'/particle_times.txt'
          open(newunit=iunit, file=trim(timefile), status='replace', action='write')
          do i = 1, this%ntime

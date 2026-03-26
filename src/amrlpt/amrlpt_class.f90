@@ -12,12 +12,10 @@ module amrlpt_class
 
    ! Public exports
    public :: amrlpt,part
-   public :: PART_MOVES,PART_COLLIDES,PART_EXCHANGES,PART_IS_DEAD
-   public :: AMRLPT_OPEN,AMRLPT_WALL
 
    ! Boundary condition flags for collision detection
-   integer, parameter :: AMRLPT_OPEN=0  !< No wall collision (open or periodic boundary)
-   integer, parameter :: AMRLPT_WALL=1  !< Hard wall collision at domain boundary
+   integer, parameter, public :: AMRLPT_OPEN=0  !< No wall collision (open or periodic boundary)
+   integer, parameter, public :: AMRLPT_WALL=1  !< Hard wall collision at domain boundary
 
    ! Particle struct layout constants (must match #define in amrlpt_wrapper.cpp)
    integer, parameter, public :: AMRLPT_NREAL=14  !< extra reals per particle
@@ -291,16 +289,14 @@ contains
       call amrlpt_new_pc(this%pc,this%amr%amrcore)
       ! Initialize VF field
       call this%VF%initialize(amr=amr,name='VF',ncomp=1,ng=this%nover); call this%VF%register()
-      where (.not.[this%amr%xper,this%amr%yper,this%amr%zper])
-         this%VF%lo_bc(1:3,1)=amrex_bc_foextrap
-         this%VF%hi_bc(1:3,1)=amrex_bc_foextrap
-      end where
+      if (.not.this%amr%xper) then; this%VF%lo_bc(1,1)=amrex_bc_foextrap; this%VF%hi_bc(1,1)=amrex_bc_foextrap; end if
+      if (.not.this%amr%yper) then; this%VF%lo_bc(2,1)=amrex_bc_foextrap; this%VF%hi_bc(2,1)=amrex_bc_foextrap; end if
+      if (.not.this%amr%zper) then; this%VF%lo_bc(3,1)=amrex_bc_foextrap; this%VF%hi_bc(3,1)=amrex_bc_foextrap; end if
       ! Initialize source terms
       call this%src%initialize(amr=amr,name='src',ncomp=3,ng=this%nover); call this%src%register()
-      where (.not.[this%amr%xper,this%amr%yper,this%amr%zper])
-         this%src%lo_bc(1:3,:)=amrex_bc_foextrap
-         this%src%hi_bc(1:3,:)=amrex_bc_foextrap
-      end where
+      if (.not.this%amr%xper) then; this%src%lo_bc(1,:)=amrex_bc_foextrap; this%src%hi_bc(1,:)=amrex_bc_foextrap; end if
+      if (.not.this%amr%yper) then; this%src%lo_bc(2,:)=amrex_bc_foextrap; this%src%hi_bc(2,:)=amrex_bc_foextrap; end if
+      if (.not.this%amr%zper) then; this%src%lo_bc(3,:)=amrex_bc_foextrap; this%src%hi_bc(3,:)=amrex_bc_foextrap; end if
       ! Print out info
       call this%print()
    end subroutine initialize
@@ -330,7 +326,6 @@ contains
       real(WP), intent(in) :: dt
       type(amrdata), intent(in), optional :: Gib
       type(amrex_mfiter) :: mfi
-       type(amrex_box)    :: bx
       type(part), dimension(:), pointer :: p
       real(WP), dimension(:,:,:,:), contiguous, pointer :: pG
       integer(c_int32_t), dimension(:), pointer :: nbr_off,nbr_lst
@@ -341,6 +336,7 @@ contains
       real(WP), dimension(3) :: r1,v1,w1,r2,v2,w2
       real(WP) :: k_coeff,eta_coeff,k_coeff_w,eta_coeff_w
       real(WP) :: dx,dy,dz
+      logical  :: hit
 
       ! Precompute spring/damping coefficients
       k_coeff=(Pi**2+log(this%e_n)**2)/this%tau_col**2

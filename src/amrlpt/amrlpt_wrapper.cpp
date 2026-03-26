@@ -20,9 +20,11 @@
 #include <AMReX_NeighborParticles.H>
 #include <AMReX_NeighborList.H>
 #include <AMReX_AmrCore.H>
+#include <AMReX_AmrParGDB.H>
 #include <AMReX_MultiFab.H>
 #include <AMReX_Geometry.H>
 #include <AMReX_ParallelDescriptor.H>
+#include <AMReX_PlotFileUtil.H>
 
 using namespace amrex;
 
@@ -65,8 +67,8 @@ public:
     }
 };
 
-using FPC = AMRLPTPC;
-using FPT = FPC::ParticleType;
+using PC = AMRLPTPC;
+using PT = PC::ParticleType;
 
 } // namespace
 
@@ -76,12 +78,12 @@ extern "C" {
 // Lifecycle
 // -----------------------------------------------------------------------
 
-void amrlpt_new_pc(FPC*& pc, void* amrcore_raw)
+void amrlpt_new_pc(PC*& pc, void* amrcore_raw)
 {
-    pc = new FPC(static_cast<AmrCore*>(amrcore_raw));
+    pc = new PC(static_cast<AmrCore*>(amrcore_raw));
 }
 
-void amrlpt_delete_pc(FPC* pc)
+void amrlpt_delete_pc(PC* pc)
 {
     delete pc;
 }
@@ -90,7 +92,7 @@ void amrlpt_delete_pc(FPC* pc)
 // Redistribution (AMR-aware particle sorting to finest covering level)
 // -----------------------------------------------------------------------
 
-void amrlpt_redistribute(FPC* pc, int lev_min, int lev_max, int ng)
+void amrlpt_redistribute(PC* pc, int lev_min, int lev_max, int ng)
 {
     pc->Redistribute(lev_min, lev_max, ng);
 }
@@ -103,13 +105,13 @@ void amrlpt_redistribute(FPC* pc, int lev_min, int lev_max, int ng)
 // clearNeighbors removes them.
 // -----------------------------------------------------------------------
 
-void amrlpt_fill_neighbors(FPC* pc, int ngrow)
+void amrlpt_fill_neighbors(PC* pc, int ngrow)
 {
     pc->setNeighborCells(ngrow);
     pc->fillNeighbors();
 }
 
-void amrlpt_clear_neighbors(FPC* pc)
+void amrlpt_clear_neighbors(PC* pc)
 {
     pc->clearNeighbors();
 }
@@ -120,8 +122,8 @@ void amrlpt_clear_neighbors(FPC* pc)
 // Ghost particles are appended at ptile[numRealParticles() .. numTotal-1].
 // -----------------------------------------------------------------------
 
-void amrlpt_get_neighbor_particles_mfi(FPC* pc, int lev, MFIter* mfi,
-                                        FPT*& dp, long long& np)
+void amrlpt_get_neighbor_particles_mfi(PC* pc, int lev, MFIter* mfi,
+                                        PT*& dp, long long& np)
 {
     const int grid = mfi->index();
     const int tile = mfi->LocalTileIndex();
@@ -148,10 +150,10 @@ void amrlpt_get_neighbor_particles_mfi(FPC* pc, int lev, MFIter* mfi,
 //   ntot: total neighbor entries
 // -----------------------------------------------------------------------
 
-void amrlpt_build_neighbor_list(FPC* pc, double rcrit)
+void amrlpt_build_neighbor_list(PC* pc, double rcrit)
 {
     const double rcrit2 = rcrit * rcrit;
-    auto check_pair = [rcrit2](const FPT& p1, const FPT& p2) -> bool {
+    auto check_pair = [rcrit2](const PT& p1, const PT& p2) -> bool {
         double d2 = 0.0;
         for (int dim = 0; dim < AMREX_SPACEDIM; ++dim)
             d2 += (p1.pos(dim) - p2.pos(dim)) * (p1.pos(dim) - p2.pos(dim));
@@ -165,7 +167,7 @@ void amrlpt_build_neighbor_list(FPC* pc, double rcrit)
 // list:    pointer to ntot unsigned ints (indices into valid+ghost particle array)
 // np:      number of valid particles (list driven from particle i in [0,np-1])
 // ntot:    total number of neighbor entries across all particles
-void amrlpt_get_neighbor_list_mfi(FPC* pc, int lev, MFIter* mfi,
+void amrlpt_get_neighbor_list_mfi(PC* pc, int lev, MFIter* mfi,
                                    const unsigned int*& offsets,
                                    const unsigned int*& list,
                                    long long& np, long long& ntot)
@@ -186,8 +188,8 @@ void amrlpt_get_neighbor_list_mfi(FPC* pc, int lev, MFIter* mfi,
 // use amrlpt_get_neighbor_particles_mfi for them.
 // -----------------------------------------------------------------------
 
-void amrlpt_get_particles_mfi(FPC* pc, int lev, MFIter* mfi,
-                               FPT*& dp, long long& np)
+void amrlpt_get_particles_mfi(PC* pc, int lev, MFIter* mfi,
+                               PT*& dp, long long& np)
 {
     const int grid = mfi->index();
     const int tile = mfi->LocalTileIndex();
@@ -207,8 +209,8 @@ void amrlpt_get_particles_mfi(FPC* pc, int lev, MFIter* mfi,
 // along with np_total (valid+ghost count) and np_valid (valid count only).
 // np_valid is the count to use for the outer initiating loop;
 // np_total covers the full index space referenced by the neighbor list.
-void amrlpt_get_all_particles_mfi(FPC* pc, int lev, MFIter* mfi,
-                                   FPT*& dp, long long& np_total, long long& np_valid)
+void amrlpt_get_all_particles_mfi(PC* pc, int lev, MFIter* mfi,
+                                   PT*& dp, long long& np_total, long long& np_valid)
 {
     const int grid = mfi->index();
     const int tile = mfi->LocalTileIndex();
@@ -226,7 +228,7 @@ void amrlpt_get_all_particles_mfi(FPC* pc, int lev, MFIter* mfi,
     }
 }
 
-void amrlpt_num_particles_mfi(FPC* pc, int lev, MFIter* mfi, long long& np)
+void amrlpt_num_particles_mfi(PC* pc, int lev, MFIter* mfi, long long& np)
 {
     const int grid = mfi->index();
     const int tile = mfi->LocalTileIndex();
@@ -239,7 +241,7 @@ void amrlpt_num_particles_mfi(FPC* pc, int lev, MFIter* mfi, long long& np)
 // Add a single particle to a tile (by explicit grid+tile index)
 // -----------------------------------------------------------------------
 
-void amrlpt_add_particle_i(FPC* pc, int lev, int grid, int tile, FPT* p)
+void amrlpt_add_particle_i(PC* pc, int lev, int grid, int tile, PT* p)
 {
     auto& plev = pc->GetParticles(lev);
     plev[std::make_pair(grid, tile)].push_back(*p);
@@ -251,12 +253,12 @@ void amrlpt_add_particle_i(FPC* pc, int lev, int grid, int tile, FPT* p)
 
 void amrlpt_get_next_id(long long& id)
 {
-    id = FPT::NextID();
+    id = PT::NextID();
 }
 
 void amrlpt_set_next_id(long long id)
 {
-    FPT::NextID(id);
+    PT::NextID(id);
 }
 
 void amrlpt_get_cpu(int& cpu)
@@ -268,27 +270,27 @@ void amrlpt_get_cpu(int& cpu)
 // ID/CPU accessors for the packed idcpu field (private in Fortran struct)
 // -----------------------------------------------------------------------
 
-void amrlpt_get_particle_id(long long& id, const FPT* p)
+void amrlpt_get_particle_id(long long& id, const PT* p)
 {
     id = p->id();
 }
 
-void amrlpt_set_particle_id(long long id, FPT* p)
+void amrlpt_set_particle_id(long long id, PT* p)
 {
     p->id() = id;
 }
 
-void amrlpt_get_particle_cpu(int& cpu, const FPT* p)
+void amrlpt_get_particle_cpu(int& cpu, const PT* p)
 {
     cpu = p->cpu();
 }
 
-void amrlpt_set_particle_cpu(int cpu, FPT* p)
+void amrlpt_set_particle_cpu(int cpu, PT* p)
 {
     p->cpu() = cpu;
 }
 
-void amrlpt_particle_is_valid(int& valid, const FPT* p)
+void amrlpt_particle_is_valid(int& valid, const PT* p)
 {
     valid = p->id().is_valid() ? 1 : 0;
 }
@@ -297,7 +299,7 @@ void amrlpt_particle_is_valid(int& valid, const FPT* p)
 // Total particle count (global, across all ranks and levels)
 // -----------------------------------------------------------------------
 
-void amrlpt_total_np(FPC* pc, long long& np)
+void amrlpt_total_np(PC* pc, long long& np)
 {
     np = pc->TotalNumberOfParticles();
 }
@@ -308,7 +310,7 @@ void amrlpt_total_np(FPC* pc, long long& np)
 // Creates parent directory hierarchy via PreBuildDirectorHierarchy.
 // -----------------------------------------------------------------------
 
-void amrlpt_write(FPC* pc, const char* fullpath, int is_chk)
+void amrlpt_write(PC* pc, const char* fullpath, int is_chk)
 {
     std::string path(fullpath);
     while (!path.empty() && path.back() == '/') path.pop_back();
@@ -329,14 +331,14 @@ void amrlpt_write(FPC* pc, const char* fullpath, int is_chk)
 // Position (pos[3]) is always written by AMReX (baked into particle format).
 // -----------------------------------------------------------------------
 
-void amrlpt_write_plotfile(FPC* pc, const char* basedir, const char* pname,
+void amrlpt_write_plotfile(PC* pc, const char* basedir, const char* pname,
                             const int* write_real, const int* write_int)
 {
-    static const std::vector<std::string> rnames = {
+    static const Vector<std::string> rnames = {
         "d", "vx", "vy", "vz", "wx", "wy", "wz",
         "ax", "ay", "az", "tx", "ty", "tz", "dt"
     };
-    static const std::vector<std::string> inames = { "flag" };
+    static const Vector<std::string> inames = { "flag" };
 
     Vector<int> wr(write_real, write_real + AMRLPT_NREAL);
     Vector<int> wi(write_int,  write_int  + AMRLPT_NINT);
@@ -349,7 +351,7 @@ void amrlpt_write_plotfile(FPC* pc, const char* basedir, const char* pname,
 // Restart: read back a particle checkpoint written by amrlpt_write.
 // -----------------------------------------------------------------------
 
-void amrlpt_read(FPC* pc, const char* dir, const char* name)
+void amrlpt_read(PC* pc, const char* dir, const char* name)
 {
     pc->Restart(std::string(dir), std::string(name));
 }
