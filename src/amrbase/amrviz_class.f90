@@ -101,7 +101,7 @@ contains
             ! Find first centering type that has files
             found_centering = ''
             find_centering: do ic = 1, 8
-               write(filename,'(a,"/nga2.",a,".",i6.6,".h5")') trim(dirname), trim(centerings(ic)), 1
+               write(filename,'(a,"/plt.nga2.",a,".",i6.6,".h5")') trim(dirname), trim(centerings(ic)), 1
                if (isfile(trim(filename))) then
                   found_centering = centerings(ic)
                   exit find_centering
@@ -113,7 +113,7 @@ contains
                n = 0
                do
                   n = n + 1
-                  write(filename,'(a,"/nga2.",a,".",i6.6,".h5")') trim(dirname), trim(found_centering), n
+                  write(filename,'(a,"/plt.nga2.",a,".",i6.6,".h5")') trim(dirname), trim(found_centering), n
                   if (.not.isfile(trim(filename))) exit
                   file_time = amrplotfile_read_time(trim(filename)//c_null_char)
                   if (file_time .lt. 0.0_WP) exit  ! File exists but unreadable
@@ -124,7 +124,7 @@ contains
                if (this%ntime .gt. 0) then
                   allocate(this%time(this%ntime))
                   do n = 1, this%ntime
-                     write(filename,'(a,"/nga2.",a,".",i6.6,".h5")') trim(dirname), trim(found_centering), n
+                     write(filename,'(a,"/plt.nga2.",a,".",i6.6,".h5")') trim(dirname), trim(found_centering), n
                      this%time(n) = amrplotfile_read_time(trim(filename)//c_null_char)
                   end do
                end if
@@ -198,7 +198,7 @@ contains
 
    !> Write all registered fields to HDF5 plotfiles
    !> Fields are grouped by centering type - one file per centering
-   !> File pattern: amrviz/<name>/nga2.<centering>.<ntime>.h5
+   !> File pattern: amrviz/<name>/plt.nga2.<centering>.<ntime>.h5
    !> Centerings: cell, xface, yface, zface, xyedge, xzedge, yzedge, node
    subroutine write(this, time)
       implicit none
@@ -373,7 +373,7 @@ contains
          end do
 
          ! Generate filename with centering type
-         filename = 'amrviz/'//trim(this%name)//'/nga2.'//trim(suffix)//'.'
+         filename = 'amrviz/'//trim(this%name)//'/plt.nga2.'//trim(suffix)//'.'
          write(filename(len_trim(filename)+1:len_trim(filename)+6),'(i6.6)') this%ntime
 
          ! Prepare pointers for HDF5 writer
@@ -559,7 +559,7 @@ contains
       
       ! Construct filename with timestep
       dirname = 'amrviz/'//trim(this%name)
-      write(basename,'(A,"_",I8.8,".vtp")') trim(srf_name), this%ntime
+      write(basename,'(A,"_",I6.6,".vtp")') trim(srf_name), this%ntime
       filename = trim(dirname)//'/'//trim(basename)
       
       ! Rank 0 creates header
@@ -713,7 +713,7 @@ contains
       write(iunit,'(a)') '  <Collection>'
       
       do n = 1, this%ntime
-         write(basename,'(A,"_",I8.8,".vtp")') trim(srf_name), n
+         write(basename,'(A,"_",I6.6,".vtp")') trim(srf_name), n
          write(iunit,'(a,es18.10,a,a,a)') '    <DataSet timestep="', this%time(n), &
             '" file="', trim(basename), '"/>'
       end do

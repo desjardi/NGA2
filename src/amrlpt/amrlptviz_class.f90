@@ -87,8 +87,10 @@ contains
       this%lpt  => lpt
       this%name = trim(adjustl(name))
       this%ntime = 0
-      this%write_real = 1
-      this%write_int  = 1
+      this%write_real = 0          ! default: position (free) + diameter + velocity
+      this%write_real(1) = 1       ! d
+      this%write_real(2:4) = 1     ! vx, vy, vz
+      this%write_int  = 0
 
       ! Create output directory
       if (lpt%amr%amRoot) then
@@ -103,7 +105,7 @@ contains
          n = 0
          find_files: do
             n = n + 1
-            write(pltdir,'("amrviz/",a,"/plt",i8.8)') trim(this%name), n
+            write(pltdir,'("amrviz/",a,"/plt.part.",i6.6)') trim(this%name), n
             file_time = amrlpt_read_plotfile_time(trim(pltdir)//c_null_char)
             if (file_time.lt.0.0_c_double) exit find_files
          end do find_files
@@ -111,7 +113,7 @@ contains
          if (this%ntime.gt.0) then
             allocate(this%time(this%ntime))
             do n = 1, this%ntime
-               write(pltdir,'("amrviz/",a,"/plt",i8.8)') trim(this%name), n
+                write(pltdir,'("amrviz/",a,"/plt.part.",i6.6)') trim(this%name), n
                this%time(n) = real(amrlpt_read_plotfile_time(trim(pltdir)//c_null_char), WP)
             end do
          end if
@@ -222,11 +224,28 @@ contains
       end if
 
       ! Construct output directory
-      write(pltdir,'("amrviz/",a,"/plt",i8.8)') trim(this%name), this%ntime
+      write(pltdir,'("amrviz/",a,"/plt.part.",i6.6)') trim(this%name), this%ntime
 
       ! Write via C++ wrapper
       call amrlpt_write_plotfile(this%lpt%pc, trim(pltdir)//c_null_char, 'particles'//c_null_char, this%write_real, this%write_int, real(time, c_double))
 
+      ! Write/rewrite JSON .series file for ParaView time association
+      if (this%lpt%amr%amRoot) then
+         open(newunit=n, file='amrviz/'//trim(this%name)//'/plt.part.series', status='replace', action='write')
+         write(n,'(a)') '{ "file-series-version": "1.0",'
+         write(n,'(a)') '  "files": ['
+         do i = 1, this%ntime
+            write(pltdir,'("plt.part.",i6.6)') i
+            if (i.lt.this%ntime) then
+               write(n,'(4x,a,a,a,es17.10,a)') '{ "name": "', trim(pltdir), '", "time": ', this%time(i), ' },'
+            else
+               write(n,'(4x,a,a,a,es17.10,a)') '{ "name": "', trim(pltdir), '", "time": ', this%time(i), ' }'
+            end if
+         end do
+         write(n,'(a)') '  ]'
+         write(n,'(a)') '}'
+         close(n)
+      end if
 
    end subroutine write
 

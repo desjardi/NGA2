@@ -127,6 +127,9 @@ void amrlpt_clear_neighbors(PC* pc)
 void amrlpt_get_neighbor_particles_mfi(PC* pc, int lev, MFIter* mfi,
                                         PT*& dp, long long& np)
 {
+    if (lev >= static_cast<int>(pc->GetParticles().size())) {
+        np = 0; dp = nullptr; return;
+    }
     const int grid = mfi->index();
     const int tile = mfi->LocalTileIndex();
     auto& plev = pc->GetParticles(lev);
@@ -193,6 +196,10 @@ void amrlpt_get_neighbor_list_mfi(PC* pc, int lev, MFIter* mfi,
 void amrlpt_get_particles_mfi(PC* pc, int lev, MFIter* mfi,
                                PT*& dp, long long& np)
 {
+    // Guard: m_particles is empty if Redistribute has never been called
+    if (lev >= static_cast<int>(pc->GetParticles().size())) {
+        np = 0; dp = nullptr; return;
+    }
     const int grid = mfi->index();
     const int tile = mfi->LocalTileIndex();
     auto& plev = pc->GetParticles(lev);
@@ -214,6 +221,10 @@ void amrlpt_get_particles_mfi(PC* pc, int lev, MFIter* mfi,
 void amrlpt_get_all_particles_mfi(PC* pc, int lev, MFIter* mfi,
                                    PT*& dp, long long& np_total, long long& np_valid)
 {
+    // Guard: m_particles is empty if Redistribute has never been called
+    if (lev >= static_cast<int>(pc->GetParticles().size())) {
+        np_total = 0; np_valid = 0; dp = nullptr; return;
+    }
     const int grid = mfi->index();
     const int tile = mfi->LocalTileIndex();
     auto& plev = pc->GetParticles(lev);
@@ -232,6 +243,7 @@ void amrlpt_get_all_particles_mfi(PC* pc, int lev, MFIter* mfi,
 
 void amrlpt_num_particles_mfi(PC* pc, int lev, MFIter* mfi, long long& np)
 {
+    if (lev >= static_cast<int>(pc->GetParticles().size())) { np = 0; return; }
     const int grid = mfi->index();
     const int tile = mfi->LocalTileIndex();
     auto& plev = pc->GetParticles(lev);
@@ -245,6 +257,7 @@ void amrlpt_num_particles_mfi(PC* pc, int lev, MFIter* mfi, long long& np)
 
 void amrlpt_add_particle_i(PC* pc, int lev, int grid, int tile, PT* p)
 {
+    if (lev >= static_cast<int>(pc->GetParticles().size())) return;
     auto& plev = pc->GetParticles(lev);
     plev[std::make_pair(grid, tile)].push_back(*p);
 }
@@ -375,6 +388,31 @@ double amrlpt_read_plotfile_time(const char* basedir)
 void amrlpt_read(PC* pc, const char* dir, const char* name)
 {
     pc->Restart(std::string(dir), std::string(name));
+}
+
+// -----------------------------------------------------------------------
+// Append an array of new particles to the container at level 0.
+// Called collectively by ALL ranks.  Any rank may pass n>0 with valid data
+// Ranks with nothing to add pass n=0 and raw=nullptr.
+// -----------------------------------------------------------------------
+
+void amrlpt_append_particles(PC* pc, const void* raw, long long n)
+{
+    PC::ParticleTileType ptile;
+
+    if (n > 0 && raw != nullptr) {
+        const PT* src = reinterpret_cast<const PT*>(raw);
+        ptile.resize(static_cast<int>(n));
+        auto& aos = ptile.GetArrayOfStructs();
+        for (long long i = 0; i < n; ++i) {
+            PT p = src[i];                        // copy pos + rdata + idata
+            p.id()  = PT::NextID();               // assign valid AMReX identity
+            p.cpu() = ParallelDescriptor::MyProc();
+            aos[static_cast<int>(i)] = p;
+        }
+    }
+
+    pc->AddParticlesAtLevel(ptile, 0);            // collective: level 0 redistribute inside
 }
 
 } // extern "C"

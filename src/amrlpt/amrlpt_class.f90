@@ -97,10 +97,10 @@ module amrlpt_class
          import :: c_ptr,c_int,c_int64_t
          type(c_ptr), value :: pc,mfi
          integer(c_int), value :: lev
-         type(c_ptr) :: offsets  !< CSR offsets: unsigned int[np+1]
-         type(c_ptr) :: list     !< CSR neighbors: unsigned int[ntot]
-         integer(c_int64_t) :: np    !< number of valid particles
-         integer(c_int64_t) :: ntot  !< total neighbor entries
+         type(c_ptr) :: offsets
+         type(c_ptr) :: list
+         integer(c_int64_t) :: np
+         integer(c_int64_t) :: ntot
       end subroutine
 
       subroutine amrlpt_get_particles_mfi(pc,lev,mfi,dp,np) bind(c)
@@ -116,8 +116,8 @@ module amrlpt_class
          type(c_ptr), value :: pc,mfi
          integer(c_int), value :: lev
          type(c_ptr) :: dp
-         integer(c_int64_t) :: np_total  !< valid+ghost count
-         integer(c_int64_t) :: np_valid  !< valid-only count (for outer loop)
+         integer(c_int64_t) :: np_total
+         integer(c_int64_t) :: np_valid
       end subroutine
 
       subroutine amrlpt_add_particle_i(pc,lev,grid,tile,p) bind(c)
@@ -176,6 +176,13 @@ module amrlpt_class
          import :: c_ptr,c_char
          type(c_ptr), value :: pc
          character(kind=c_char), dimension(*) :: path
+      end subroutine
+
+      subroutine amrlpt_append_particles(pc,raw,n) bind(c)
+         import :: c_ptr,c_int64_t
+         type(c_ptr), value :: pc
+         type(c_ptr), value :: raw
+         integer(c_int64_t), value :: n
       end subroutine
 
    end interface
@@ -238,6 +245,18 @@ module amrlpt_class
       integer, dimension(3) :: lo_bc=AMRLPT_OPEN
       integer, dimension(3) :: hi_bc=AMRLPT_OPEN
 
+      !> Injection parameters
+      real(WP) :: mfr=0.0_WP                    !< Particle mass flow rate
+      real(WP), dimension(3) :: inj_vel=0.0_WP  !< Injection velocity
+      real(WP), dimension(3) :: inj_pos=0.0_WP  !< Injection center
+      real(WP) :: inj_d=0.0_WP                  !< Nozzle diameter (0=full y-z domain)
+      real(WP) :: inj_dmean=0.0_WP              !< Mean particle diameter
+      real(WP) :: inj_dsd=0.0_WP                !< Lognormal std dev (0=monodisperse)
+      real(WP) :: inj_dmin=tiny(0.0_WP)         !< Minimum diameter
+      real(WP) :: inj_dmax=huge(0.0_WP)         !< Maximum diameter
+      real(WP) :: inj_dshift=0.0_WP             !< Lognormal shift
+      real(WP) :: inj_residual=0.0_WP           !< Uninjected mass from previous step
+
    contains
       ! Type-bound constructor/destructor
       procedure :: initialize
@@ -247,6 +266,8 @@ module amrlpt_class
       procedure :: advance                !< Advance particle ODEs one timestep
       procedure :: update_VF              !< Compute particle volume fraction field
       procedure :: get_cfl                !< Compute particle CFL numbers
+      ! Particle injection
+      procedure :: inject                 !< Inject particles from mass flow rate target
       ! Utilities
       procedure :: redistribute           !< Call AMReX redistribute
       procedure :: fill_ghosts            !< Fill ghost particle buffer
@@ -260,15 +281,30 @@ module amrlpt_class
       procedure :: interp                 !< Trilinear cell-centered interpolation
       procedure :: interp_face_velocities !< Trilinear face-centered interpolation
       procedure, private :: filter        !< Explicit diffusion filter
+      procedure :: append                 !< Append a Fortran part array
       ! Print solver info
       procedure :: get_info
       procedure :: print
       ! Checkpoint I/O
       procedure :: read
       procedure :: write
+      ! Post-regrid callback
+      procedure :: post_regrid
    end type amrlpt
 
 contains
+
+   !> Dispatch post_regrid: calls type-bound method
+   subroutine amrlpt_postregrid(ctx,lbase,time)
+      use iso_c_binding, only: c_ptr,c_f_pointer
+      implicit none
+      type(c_ptr), intent(in) :: ctx
+      integer, intent(in) :: lbase
+      real(WP), intent(in) :: time
+      type(amrlpt), pointer :: this
+      call c_f_pointer(ctx,this)
+      call this%post_regrid(lbase,time)
+   end subroutine amrlpt_postregrid
 
    ! ============================================================================
    ! INITIALIZATION / FINALIZATION
@@ -297,6 +333,11 @@ contains
       if (.not.this%amr%xper) then; this%src%lo_bc(1,:)=amrex_bc_foextrap; this%src%hi_bc(1,:)=amrex_bc_foextrap; end if
       if (.not.this%amr%yper) then; this%src%lo_bc(2,:)=amrex_bc_foextrap; this%src%hi_bc(2,:)=amrex_bc_foextrap; end if
       if (.not.this%amr%zper) then; this%src%lo_bc(3,:)=amrex_bc_foextrap; this%src%hi_bc(3,:)=amrex_bc_foextrap; end if
+      ! Register post-regrid callback
+      select type (this)
+       type is (amrlpt)
+         call this%amr%add_postregrid(amrlpt_postregrid,c_loc(this))
+      end select
       ! Print out info
       call this%print()
    end subroutine initialize
@@ -312,12 +353,21 @@ contains
       nullify(this%amr)
    end subroutine finalize
 
+   !> Post-regrid callback: redistribute particles
+   subroutine post_regrid(this,lbase,time)
+      implicit none
+      class(amrlpt), intent(inout) :: this
+      integer, intent(in) :: lbase
+      real(WP), intent(in) :: time
+      call this%redistribute()
+   end subroutine post_regrid
+
    ! ============================================================================
    ! PHYSICS METHODS
    ! ============================================================================
 
    !> Soft-sphere collision model: computes Acol, Tcol on every valid particle with flag PART_COLLIDES set
-   subroutine collide(this,dt,Gib)
+   subroutine collide(this,dt,Gib,Gibcomp)
       use amrex_amr_module, only: amrex_mfiter
       use amrdata_class, only: amrdata
       use mathtools, only: Pi,cross_product
@@ -325,6 +375,7 @@ contains
       class(amrlpt), intent(inout) :: this
       real(WP), intent(in) :: dt
       type(amrdata), intent(in), optional :: Gib
+      integer, intent(in), optional :: Gibcomp
       type(amrex_mfiter) :: mfi
       type(part), dimension(:), pointer :: p
       real(WP), dimension(:,:,:,:), contiguous, pointer :: pG
@@ -336,13 +387,17 @@ contains
       real(WP), dimension(3) :: r1,v1,w1,r2,v2,w2
       real(WP) :: k_coeff,eta_coeff,k_coeff_w,eta_coeff_w
       real(WP) :: dx,dy,dz
-      logical  :: hit
+      logical :: hit
+      integer :: gc
 
       ! Precompute spring/damping coefficients
       k_coeff=(Pi**2+log(this%e_n)**2)/this%tau_col**2
       eta_coeff=-2.0_WP*log(this%e_n)/this%tau_col
       k_coeff_w=(Pi**2+log(this%e_w)**2)/this%tau_col**2
       eta_coeff_w=-2.0_WP*log(this%e_w)/this%tau_col
+
+      ! Resolve Gib component
+      gc=1; if (present(Gibcomp)) gc=Gibcomp
 
       ! Reset collision counter
       this%ncol=0
@@ -398,10 +453,10 @@ contains
                      real(WP) :: d_ib,buf
                      real(WP), dimension(3) :: pos_p,pos_m,n12_out
                      ! Signed distance and outward IB normal nabla G/|nabla G| (from IB into fluid)
-                     d_ib=this%interp(lvl,r1,pG,1)
-                     pos_p=[r1(1)+0.5_WP*dx,r1(2),r1(3)]; pos_m=[r1(1)-0.5_WP*dx,r1(2),r1(3)]; n12_out(1)=(this%interp(lvl,pos_p,pG,1)-this%interp(lvl,pos_m,pG,1))/dx
-                     pos_p=[r1(1),r1(2)+0.5_WP*dy,r1(3)]; pos_m=[r1(1),r1(2)-0.5_WP*dy,r1(3)]; n12_out(2)=(this%interp(lvl,pos_p,pG,1)-this%interp(lvl,pos_m,pG,1))/dy
-                     pos_p=[r1(1),r1(2),r1(3)+0.5_WP*dz]; pos_m=[r1(1),r1(2),r1(3)-0.5_WP*dz]; n12_out(3)=(this%interp(lvl,pos_p,pG,1)-this%interp(lvl,pos_m,pG,1))/dz
+                     d_ib=this%interp(lvl,r1,pG,gc)
+                     pos_p=[r1(1)+0.5_WP*dx,r1(2),r1(3)]; pos_m=[r1(1)-0.5_WP*dx,r1(2),r1(3)]; n12_out(1)=(this%interp(lvl,pos_p,pG,gc)-this%interp(lvl,pos_m,pG,gc))/dx
+                     pos_p=[r1(1),r1(2)+0.5_WP*dy,r1(3)]; pos_m=[r1(1),r1(2)-0.5_WP*dy,r1(3)]; n12_out(2)=(this%interp(lvl,pos_p,pG,gc)-this%interp(lvl,pos_m,pG,gc))/dy
+                     pos_p=[r1(1),r1(2),r1(3)+0.5_WP*dz]; pos_m=[r1(1),r1(2),r1(3)-0.5_WP*dz]; n12_out(3)=(this%interp(lvl,pos_p,pG,gc)-this%interp(lvl,pos_m,pG,gc))/dz
                      buf=norm2(n12_out)+epsilon(1.0_WP); n12_out=n12_out/buf; r2=r1-d_ib*n12_out
                      call col_force(k_coeff_w,eta_coeff_w)
                   end block ib_col
@@ -500,31 +555,41 @@ contains
    !> U,V,W: velocity amrdata (staggered MAC or collocated, with ghosts filled)
    !> rho,visc: cell-centered amrdata (with ghosts filled)
    !> Ucomp/Vcomp/Wcomp: component to use from each velocity field (optional, default 1)
-   subroutine advance(this,dt,U,Ucomp,V,Vcomp,W,Wcomp,rho,visc)
+   !> rhocomp/visccomp: component to use from rho/visc fields (optional, default 1)
+   !> cst_rho/cst_visc: constant scalar alternatives to rho/visc amrdata
+   subroutine advance(this,dt,U,Ucomp,V,Vcomp,W,Wcomp,rho,rhocomp,visc,visccomp,cst_rho,cst_visc)
       use amrex_amr_module, only: amrex_mfiter,amrex_mfiter_build,amrex_mfiter_destroy
       use mathtools, only: Pi
       use messager,  only: die
       implicit none
       class(amrlpt), intent(inout) :: this
       real(WP), intent(in) :: dt
-      type(amrdata), intent(in) :: U,V,W,rho,visc
-      integer, intent(in), optional :: Ucomp,Vcomp,Wcomp
+      type(amrdata), intent(in) :: U,V,W
+      type(amrdata), intent(in), optional :: rho,visc
+      real(WP),      intent(in), optional :: cst_rho,cst_visc
+      integer,       intent(in), optional :: Ucomp,Vcomp,Wcomp,rhocomp,visccomp
 
       real(WP), dimension(:,:,:,:), contiguous, pointer :: pU,pV,pW
       real(WP), dimension(:,:,:,:), contiguous, pointer :: pRho,pVisc,pVolFrac,pSrc
       type(amrex_mfiter) :: mfi
       type(part), dimension(:), pointer :: p
       integer(I8) :: np_
-      integer :: lvl,i,uc,vc,wc
+      integer :: lvl,i,uc,vc,wc,rhoc,viscc
       real(WP) :: dx,dy,dz,dxi,dyi,dzi,mydt,dt_done,Ip
       real(WP), dimension(3) :: acc,dmom
       type(part) :: myp,pold
       logical :: is_stag
 
       ! Resolve optional component indices
-      uc=1; if (present(Ucomp)) uc=Ucomp
-      vc=1; if (present(Vcomp)) vc=Vcomp
-      wc=1; if (present(Wcomp)) wc=Wcomp
+      uc=1; if (present(Ucomp))    uc=Ucomp
+      vc=1; if (present(Vcomp))    vc=Vcomp
+      wc=1; if (present(Wcomp))    wc=Wcomp
+      rhoc=1; if (present(rhocomp))  rhoc=rhocomp
+      viscc=1;if (present(visccomp)) viscc=visccomp
+
+      ! Validate: each of rho and visc must be provided in exactly one form
+      if (.not.present(rho) .and..not.present(cst_rho))  call die('[amrlpt advance] rho or cst_rho required')
+      if (.not.present(visc).and..not.present(cst_visc)) call die('[amrlpt advance] visc or cst_visc required')
 
       ! Check velocity nodal locations are consistent
       check_velocity: block
@@ -564,8 +629,8 @@ contains
             pU      =>U%mf(lvl)%dataptr(mfi)
             pV      =>V%mf(lvl)%dataptr(mfi)
             pW      =>W%mf(lvl)%dataptr(mfi)
-            pRho    =>rho%mf(lvl)%dataptr(mfi)
-            pVisc   =>visc%mf(lvl)%dataptr(mfi)
+            if (present(rho))  pRho =>rho%mf(lvl)%dataptr(mfi)
+            if (present(visc)) pVisc=>visc%mf(lvl)%dataptr(mfi)
             pVolFrac=>this%VF%mf(lvl)%dataptr(mfi)
             pSrc    =>this%src%mf(lvl)%dataptr(mfi)
 
@@ -635,8 +700,15 @@ contains
          call MPI_ALLREDUCE(MPI_IN_PLACE,this%Vp_out,1,MPI_REAL_WP,MPI_SUM,this%amr%comm,ierr)
       end block reduce_leaving_particles
 
-      ! Accumulate ghost→valid, restrict-SUM fine into coarse, filter
-      call this%src%syncsum(); call this%src%sum_down(); call this%src%average_down(); call this%src%fill(time=0.0_WP)
+      ! Accumulate ghost→valid, restrict-SUM fine into coarse
+      call this%src%syncsum(); call this%src%sum_down(); call this%src%average_down()
+      ! Divide by cell volume
+      do lvl=0,this%amr%clvl()
+         call this%src%mf(lvl)%mult(1.0_WP/this%amr%cell_vol(lvl),1,3,0)
+      end do
+      ! Fill ghost cells
+      call this%src%fill(time=0.0_WP)
+      ! Filter
       call this%filter(this%src)
 
       ! Recompute particle volume fraction
@@ -669,8 +741,16 @@ contains
             fvel(3)=(1.0_WP-wx)*(1.0_WP-wy)*(1.0_WP-wz)*pW(ic,jc,kc,wc)+wx*(1.0_WP-wy)*(1.0_WP-wz)*pW(ic+1,jc,kc,wc)+(1.0_WP-wx)*wy*(1.0_WP-wz)*pW(ic,jc+1,kc,wc)+wx*wy*(1.0_WP-wz)*pW(ic+1,jc+1,kc,wc)+(1.0_WP-wx)*(1.0_WP-wy)*wz*pW(ic,jc,kc+1,wc)+wx*(1.0_WP-wy)*wz*pW(ic+1,jc,kc+1,wc)+(1.0_WP-wx)*wy*wz*pW(ic,jc+1,kc+1,wc)+wx*wy*wz*pW(ic+1,jc+1,kc+1,wc)
          end if
          ! Density and viscosity
-         frho =(1.0_WP-wx)*(1.0_WP-wy)*(1.0_WP-wz)*pRho (ic,jc,kc,1)+wx*(1.0_WP-wy)*(1.0_WP-wz)*pRho (ic+1,jc,kc,1)+(1.0_WP-wx)*wy*(1.0_WP-wz)*pRho (ic,jc+1,kc,1)+wx*wy*(1.0_WP-wz)*pRho (ic+1,jc+1,kc,1)+(1.0_WP-wx)*(1.0_WP-wy)*wz*pRho (ic,jc,kc+1,1)+wx*(1.0_WP-wy)*wz*pRho (ic+1,jc,kc+1,1)+(1.0_WP-wx)*wy*wz*pRho (ic,jc+1,kc+1,1)+wx*wy*wz*pRho (ic+1,jc+1,kc+1,1)
-         fvisc=(1.0_WP-wx)*(1.0_WP-wy)*(1.0_WP-wz)*pVisc(ic,jc,kc,1)+wx*(1.0_WP-wy)*(1.0_WP-wz)*pVisc(ic+1,jc,kc,1)+(1.0_WP-wx)*wy*(1.0_WP-wz)*pVisc(ic,jc+1,kc,1)+wx*wy*(1.0_WP-wz)*pVisc(ic+1,jc+1,kc,1)+(1.0_WP-wx)*(1.0_WP-wy)*wz*pVisc(ic,jc,kc+1,1)+wx*(1.0_WP-wy)*wz*pVisc(ic+1,jc,kc+1,1)+(1.0_WP-wx)*wy*wz*pVisc(ic,jc+1,kc+1,1)+wx*wy*wz*pVisc(ic+1,jc+1,kc+1,1)
+         if (present(cst_rho)) then
+            frho=cst_rho
+         else
+            frho=(1.0_WP-wx)*(1.0_WP-wy)*(1.0_WP-wz)*pRho(ic,jc,kc,rhoc)+wx*(1.0_WP-wy)*(1.0_WP-wz)*pRho(ic+1,jc,kc,rhoc)+(1.0_WP-wx)*wy*(1.0_WP-wz)*pRho(ic,jc+1,kc,rhoc)+wx*wy*(1.0_WP-wz)*pRho(ic+1,jc+1,kc,rhoc)+(1.0_WP-wx)*(1.0_WP-wy)*wz*pRho(ic,jc,kc+1,rhoc)+wx*(1.0_WP-wy)*wz*pRho(ic+1,jc,kc+1,rhoc)+(1.0_WP-wx)*wy*wz*pRho(ic,jc+1,kc+1,rhoc)+wx*wy*wz*pRho(ic+1,jc+1,kc+1,rhoc)
+         end if
+         if (present(cst_visc)) then
+            fvisc=cst_visc
+         else
+            fvisc=(1.0_WP-wx)*(1.0_WP-wy)*(1.0_WP-wz)*pVisc(ic,jc,kc,viscc)+wx*(1.0_WP-wy)*(1.0_WP-wz)*pVisc(ic+1,jc,kc,viscc)+(1.0_WP-wx)*wy*(1.0_WP-wz)*pVisc(ic,jc+1,kc,viscc)+wx*wy*(1.0_WP-wz)*pVisc(ic+1,jc+1,kc,viscc)+(1.0_WP-wx)*(1.0_WP-wy)*wz*pVisc(ic,jc,kc+1,viscc)+wx*(1.0_WP-wy)*wz*pVisc(ic+1,jc,kc+1,viscc)+(1.0_WP-wx)*wy*wz*pVisc(ic,jc+1,kc+1,viscc)+wx*wy*wz*pVisc(ic+1,jc+1,kc+1,viscc)
+         end if
          fvisc=fvisc+epsilon(1.0_WP)
          ! Volume fraction
          pVF=(1.0_WP-wx)*(1.0_WP-wy)*(1.0_WP-wz)*pVolFrac(ic,jc,kc,1)+wx*(1.0_WP-wy)*(1.0_WP-wz)*pVolFrac(ic+1,jc,kc,1)+(1.0_WP-wx)*wy*(1.0_WP-wz)*pVolFrac(ic,jc+1,kc,1)+wx*wy*(1.0_WP-wz)*pVolFrac(ic+1,jc+1,kc,1)+(1.0_WP-wx)*(1.0_WP-wy)*wz*pVolFrac(ic,jc,kc+1,1)+wx*(1.0_WP-wy)*wz*pVolFrac(ic+1,jc,kc+1,1)+(1.0_WP-wx)*wy*wz*pVolFrac(ic,jc+1,kc+1,1)+wx*wy*wz*pVolFrac(ic+1,jc+1,kc+1,1)
@@ -743,9 +823,9 @@ contains
          dzi=1.0_WP/this%amr%dz(lvl)
          ! Loop over tiles
          call this%amr%mfiter_build(lvl,mfi,tiling=.false.)
-      do while (mfi%next())
+         do while (mfi%next())
             ! Get pointer to data
-      pVF=>this%VF%mf(lvl)%dataptr(mfi)
+            pVF=>this%VF%mf(lvl)%dataptr(mfi)
             ! Loop over particles
             call this%get_particles(lvl=lvl,mfi=mfi,p=p,np=np_)
             do i=1,np_
@@ -761,11 +841,15 @@ contains
             end do
          end do
          call amrex_mfiter_destroy(mfi)
-         ! Divide by cell volume
-         call this%VF%mf(lvl)%mult(1.0_WP/this%amr%cell_vol(lvl),0,1,this%nover)
       end do
-      ! Sum overlap data across boxes and levels, sync
-      call this%VF%syncsum(); call this%VF%sum_down(); call this%VF%average_down(); call this%VF%fill(time=0.0_WP)
+      ! Sum overlap data across boxes and levels
+      call this%VF%syncsum(); call this%VF%sum_down(); call this%VF%average_down()
+      ! Divide by cell volume
+      do lvl=0,this%amr%clvl()
+         call this%VF%mf(lvl)%mult(1.0_WP/this%amr%cell_vol(lvl),1,1,0)
+      end do
+      ! Fill ghost cells
+      call this%VF%fill(time=0.0_WP)
       ! Filter
       call this%filter(this%VF)
    end subroutine update_VF
@@ -813,6 +897,136 @@ contains
       cflc=max(this%CFLp_x,this%CFLp_y,this%CFLp_z)
       if (present(cfl)) cfl=max(cflc,this%CFL_col)
    end subroutine get_cfl
+
+   !> Continuously inject particles to match a prescribed mass flow rate
+   subroutine inject(this,dt,avoid_overlap)
+      use mpi_f08,   only: MPI_ALLREDUCE,MPI_SUM,MPI_IN_PLACE,MPI_INTEGER
+      use parallel,  only: MPI_REAL_WP
+      use mathtools, only: Pi
+      implicit none
+      class(amrlpt), intent(inout) :: this
+      real(WP), intent(in) :: dt
+      logical, intent(in), optional :: avoid_overlap
+      real(WP) :: Mgoal,Madded
+      integer(I8) :: n_inj,ncap,j
+      type(part), dimension(:), allocatable :: pnew,tmp
+      logical :: avoid_overlap_
+      integer :: ierr
+
+      ! Initialize counters
+      this%np_new=0
+      this%Vp_new=0.0_WP
+
+      ! Nothing to inject
+      if (this%mfr.le.0.0_WP) return
+
+      ! Resolve overlap flag
+      avoid_overlap_=.false.; if (present(avoid_overlap)) avoid_overlap_=avoid_overlap
+
+      ! Compute current injection goal
+      Mgoal =this%mfr*dt+this%inj_residual
+      Madded=0.0_WP
+      n_inj =0
+
+      ! Only root injects
+      if (this%amr%amRoot) then
+         ! Pre-allocate
+         ncap=100; allocate(pnew(ncap))
+         ! Add particles until mass goal is met
+         inject_loop: do while (Madded.lt.Mgoal)
+            ! Increment particle counter
+            n_inj=n_inj+1_I8
+            ! Grow array if capacity exceeded
+            if (n_inj.gt.ncap) then
+               ncap=ncap*2_I8 ;allocate(tmp(ncap))
+               tmp(1:n_inj-1_I8)=pnew(1:n_inj-1_I8)
+               call move_alloc(tmp,pnew)
+            end if
+            ! Create candidate
+            pnew(n_inj)%d  =get_diameter()
+            pnew(n_inj)%pos=get_position()
+            ! Within-batch overlap check
+            if (avoid_overlap_) then
+               do j=1,n_inj-1
+                  if (norm2(pnew(n_inj)%pos-pnew(j)%pos).lt.0.5_WP*(pnew(n_inj)%d+pnew(j)%d)) then
+                     n_inj=n_inj-1; cycle inject_loop
+                  end if
+               end do
+            end if
+            pnew(n_inj)%vel   =this%inj_vel
+            pnew(n_inj)%angVel=0.0_WP
+            pnew(n_inj)%Acol  =0.0_WP
+            pnew(n_inj)%Tcol  =0.0_WP
+            pnew(n_inj)%dt    =0.0_WP
+            pnew(n_inj)%flag  =PART_MOVES+PART_COLLIDES+PART_EXCHANGES
+            ! Increment mass added
+            Madded=Madded+this%rho*Pi/6.0_WP*pnew(n_inj)%d**3
+         end do inject_loop
+         ! Update counters
+         this%np_new=int(n_inj)
+         this%Vp_new=Madded/this%rho
+         this%inj_residual=Mgoal-Madded
+      end if
+
+      ! Collective append and redistribute
+      call this%append(pnew,n_inj)
+      call this%redistribute()
+
+      ! Broadcast monitoring counters from root
+      call MPI_ALLREDUCE(MPI_IN_PLACE,this%np_new,1,MPI_INTEGER,MPI_SUM,this%amr%comm,ierr)
+      call MPI_ALLREDUCE(MPI_IN_PLACE,this%Vp_new,1,MPI_REAL_WP,MPI_SUM,this%amr%comm,ierr)
+
+   contains
+
+      !> Get diameter
+      function get_diameter() result(dp)
+         use random, only: random_lognormal,random_uniform
+         implicit none
+         real(WP) :: dp
+         if (this%inj_dsd.le.epsilon(1.0_WP)) then
+            ! Monodisperse
+            dp=this%inj_dmean
+         else
+            dp=random_lognormal(m=this%inj_dmean-this%inj_dshift,sd=this%inj_dsd)+this%inj_dshift
+            do while (dp.gt.this%inj_dmax+epsilon(1.0_WP).or.dp.lt.this%inj_dmin-epsilon(1.0_WP))
+               dp=random_lognormal(m=this%inj_dmean-this%inj_dshift,sd=this%inj_dsd)+this%inj_dshift
+            end do
+         end if
+      end function get_diameter
+
+      ! Get position
+      function get_position() result(pos)
+         use random,    only: random_uniform
+         use mathtools, only: twoPi
+         implicit none
+         real(WP), dimension(3) :: pos
+         real(WP) :: r,theta
+         ! Set x position
+         pos(1)=this%inj_pos(1)
+         ! Set y and z positions
+         if (this%inj_d.gt.0.0_WP) then
+            ! Circular nozzle of diameter inj_d centered at inj_pos(2:3)
+            if (this%amr%nz.eq.1) then
+               pos(2)=random_uniform(lo=this%inj_pos(2)-0.5_WP*this%inj_d,hi=this%inj_pos(2)+0.5_WP*this%inj_d)
+               pos(3)=0.5_WP*(this%amr%zlo+this%amr%zhi)
+            else
+               r=0.5_WP*this%inj_d*sqrt(random_uniform(lo=0.0_WP,hi=1.0_WP))
+               theta=random_uniform(lo=0.0_WP,hi=twoPi)
+               pos(2)=this%inj_pos(2)+r*sin(theta)
+               pos(3)=this%inj_pos(3)+r*cos(theta)
+            end if
+         else
+            ! Full y-z cross-section
+            pos(2)=random_uniform(lo=this%amr%ylo,hi=this%amr%yhi)
+            if (this%amr%nz.eq.1) then
+               pos(3)=0.5_WP*(this%amr%zlo+this%amr%zhi)
+            else
+               pos(3)=random_uniform(lo=this%amr%zlo,hi=this%amr%zhi)
+            end if
+         end if
+      end function get_position
+
+   end subroutine inject
 
    ! ============================================================================
    ! UTILITIES
@@ -1098,6 +1312,22 @@ contains
       deallocate(Fx,Fy,Fz)
 
    end subroutine filter
+
+   !> Append a Fortran part array to the particle container (collective)
+   subroutine append(this,pnew,n)
+      use messager, only: die
+      implicit none
+      class(amrlpt), intent(inout) :: this
+      type(part), dimension(:), allocatable, target, intent(in) :: pnew
+      integer(I8), intent(in) :: n
+      type(c_ptr) :: raw
+      raw=c_null_ptr
+      if (n.gt.0_I8.and.allocated(pnew)) then
+         if (int(size(pnew),I8).lt.n) call die('[amrlpt append] pnew array smaller than n')
+         raw=c_loc(pnew(1))
+      end if
+      call amrlpt_append_particles(this%pc,raw,int(n,c_int64_t))
+   end subroutine append
 
    ! ============================================================================
    ! SOLVER INFO

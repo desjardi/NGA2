@@ -1,7 +1,7 @@
 !> Module handling standard output to the screen
 !> or to text files for monitoring purposes.
 module monitor_class
-   use precision, only: WP
+   use precision, only: WP,I8
    use string,    only: str_medium,str_long
    implicit none
    private
@@ -23,6 +23,7 @@ module monitor_class
       type(column), pointer :: next
       character(len=str_medium) :: name
       integer , pointer :: iptr
+      integer(I8), pointer :: i8ptr
       real(WP), pointer :: rptr
    end type column
    
@@ -40,8 +41,8 @@ module monitor_class
       ! First dump or not
       logical :: isfirst                                                 !< Is it our first time dumping this file?
    contains
-      generic :: add_column=>add_column_real,add_column_integer          !< Add a column to the monitor file
-      procedure, private :: add_column_real,add_column_integer
+      generic :: add_column=>add_column_real,add_column_integer,add_column_integer8  !< Add a column
+      procedure, private :: add_column_real,add_column_integer,add_column_integer8
       procedure :: write                                                 !< Writes the content of the monitor object to a file
       !procedure :: write_header                                          !< Writes the header of the monitor object to a file
       procedure :: finalize                                              !< Finalize monitor object
@@ -164,8 +165,9 @@ contains
       icol=0
       do while (associated(my_col))
          ! Write that column - integer or real
-         if (associated(my_col%iptr)) write(line(1+icol*col_len:),iformat) my_col%iptr
-         if (associated(my_col%rptr)) write(line(1+icol*col_len:),rformat) my_col%rptr
+         if (associated(my_col%iptr )) write(line(1+icol*col_len:),iformat) my_col%iptr
+         if (associated(my_col%i8ptr)) write(line(1+icol*col_len:),iformat) my_col%i8ptr
+         if (associated(my_col%rptr )) write(line(1+icol*col_len:),rformat) my_col%rptr
          ! Increment column counter
          icol=icol+1
          ! Move to the next column
@@ -192,8 +194,9 @@ contains
       allocate(new_col)
       new_col%next=>NULL()
       new_col%name=trim(adjustl(name))
-      new_col%iptr=>NULL()
-      new_col%rptr=>value
+      new_col%iptr =>NULL()
+      new_col%i8ptr=>NULL()
+      new_col%rptr =>value
       ! Add it to the end of the list
       if (.not.associated(this%first_col)) then
          this%first_col=>new_col
@@ -221,8 +224,9 @@ contains
       allocate(new_col)
       new_col%next=>NULL()
       new_col%name=trim(adjustl(name))
-      new_col%iptr=>value
-      new_col%rptr=>NULL()
+      new_col%iptr =>value
+      new_col%i8ptr=>NULL()
+      new_col%rptr =>NULL()
       ! Add it to the end of the list
       if (.not.associated(this%first_col)) then
          this%first_col=>new_col
@@ -237,6 +241,32 @@ contains
       ! Increment list size
       this%ncol=this%ncol+1
    end subroutine add_column_integer
+
+
+   !> Add a column to the monitor file - 64-bit integer version
+   subroutine add_column_integer8(this,value,name)
+      implicit none
+      class(monitor), intent(inout) :: this
+      integer(I8), target, intent(in) :: value
+      character(len=*), intent(in) :: name
+      type(column), pointer :: new_col,last_col
+      allocate(new_col)
+      new_col%next =>NULL()
+      new_col%name =trim(adjustl(name))
+      new_col%iptr =>NULL()
+      new_col%i8ptr=>value
+      new_col%rptr =>NULL()
+      if (.not.associated(this%first_col)) then
+         this%first_col=>new_col
+      else
+         last_col=>this%first_col
+         do while (associated(last_col%next))
+            last_col=>last_col%next
+         end do
+         last_col%next=>new_col
+      end if
+      this%ncol=this%ncol+1
+   end subroutine add_column_integer8
    
    
    !> Finalize monitor object
