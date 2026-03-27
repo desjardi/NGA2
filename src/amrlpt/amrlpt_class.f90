@@ -257,6 +257,8 @@ module amrlpt_class
       real(WP) :: cflmax=huge(1.0_WP) !< CFL limit for particle sub-stepping
 
    contains
+      ! Lifecycle callback
+      procedure :: get_cost               !< Compute per-box particle cost for load balancing
       ! Type-bound constructor/destructor
       procedure :: initialize
       procedure :: finalize
@@ -302,6 +304,10 @@ module amrlpt_class
 
 contains
 
+   ! ============================================================================
+   ! DISPATCHERS (module-level) - recover concrete amrvof type
+   ! ============================================================================
+
    !> Dispatch post_regrid: calls type-bound method
    subroutine amrlpt_postregrid(ctx,lbase,time)
       use iso_c_binding, only: c_ptr,c_f_pointer
@@ -313,6 +319,71 @@ contains
       call c_f_pointer(ctx,this)
       call this%post_regrid(lbase,time)
    end subroutine amrlpt_postregrid
+
+   !> Dispatch get_cost: calls type-bound method
+   subroutine amrlpt_get_cost(ctx,lvl,nboxes,costs,ba)
+      use amrex_amr_module, only: amrex_boxarray
+      use iso_c_binding, only: c_ptr,c_f_pointer
+      implicit none
+      type(c_ptr), intent(in) :: ctx
+      integer, intent(in) :: lvl,nboxes
+      real(WP), intent(inout) :: costs(nboxes)
+      type(amrex_boxarray), intent(in) :: ba
+      type(amrlpt), pointer :: this
+      call c_f_pointer(ctx,this)
+      call this%get_cost(lvl,nboxes,costs,ba)
+   end subroutine amrlpt_get_cost
+
+   ! ============================================================================
+   ! LIFECYCLE CALLBACKS
+   ! ============================================================================
+
+   !> Estimate per-box cost for load balancing based on particle count
+   !> This assumes that particles don't change level much...
+   subroutine get_cost(this,lvl,nboxes,costs,ba)
+      use amrex_amr_module, only: amrex_boxarray,amrex_box,amrex_mfiter,amrex_mfiter_build,amrex_mfiter_destroy
+      use parallel, only: MPI_REAL_WP
+      use mpi_f08, only: MPI_ALLREDUCE,MPI_SUM,MPI_IN_PLACE
+      implicit none
+      class(amrlpt), intent(inout) :: this
+      integer, intent(in) :: lvl,nboxes
+      real(WP), intent(inout) :: costs(nboxes)
+      type(amrex_boxarray), intent(in) :: ba
+      type(amrex_mfiter) :: mfi
+      type(amrex_box) :: old_bx,new_bx
+      type(part), dimension(:), pointer :: p
+      integer(I8) :: np_
+      integer :: n,m,ierr
+      integer, dimension(3) :: ijk
+      real(WP) :: dxi,dyi,dzi
+      ! Inverse cell size at this level
+      dxi=1.0_WP/this%amr%dx(lvl); dyi=1.0_WP/this%amr%dy(lvl); dzi=1.0_WP/this%amr%dz(lvl)
+      ! Zero costs, then accumulate particle counts
+      costs=0.0_WP
+      call this%amr%mfiter_build(lvl,mfi)
+      do while (mfi%next())
+         old_bx=mfi%tilebox()
+         call this%get_particles(lvl,mfi,p,np_)
+         do m=1,np_
+            if (p(m)%flag.eq.PART_IS_DEAD) cycle
+            ! Compute cell index
+            ijk(1)=floor((p(m)%pos(1)-this%amr%xlo)*dxi)
+            ijk(2)=floor((p(m)%pos(2)-this%amr%ylo)*dyi)
+            ijk(3)=floor((p(m)%pos(3)-this%amr%zlo)*dzi)
+            ! Find which proposed new box owns this particle
+            do n=1,nboxes
+               new_bx=ba%get_box(n-1)
+               if (.not.old_bx%intersects(new_bx)) cycle
+               if (new_bx%contains(ijk)) then
+                  costs(n)=costs(n)+1.0_WP; exit
+               end if
+            end do
+         end do
+      end do
+      call this%amr%mfiter_destroy(mfi)
+      ! Global sum
+      call MPI_ALLREDUCE(MPI_IN_PLACE,costs,nboxes,MPI_REAL_WP,MPI_SUM,this%amr%comm,ierr)
+   end subroutine get_cost
 
    ! ============================================================================
    ! INITIALIZATION / FINALIZATION
@@ -345,6 +416,7 @@ contains
       select type (this)
        type is (amrlpt)
          call this%amr%add_postregrid(amrlpt_postregrid,c_loc(this))
+         call this%amr%set_get_cost  (amrlpt_get_cost,  c_loc(this))
       end select
       ! Print out info
       call this%print()
