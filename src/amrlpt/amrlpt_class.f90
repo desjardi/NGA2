@@ -199,6 +199,9 @@ module amrlpt_class
       !> Solver name
       character(len=str_medium) :: name='UNNAMED_AMRLPT'
 
+      !> User-provided injection callback
+      procedure(lpt_inject_iface), pointer, pass :: inject=>null()
+
       !> Global particle count
       integer(I8) :: np=0
 
@@ -227,6 +230,8 @@ module amrlpt_class
       real(WP) :: VFmin,VFmax,VFmean,VFvar
       integer  :: np_new=0,np_out=0
       real(WP) :: Vp_new=0.0_WP,Vp_out=0.0_WP,Vp_tot=0.0_WP
+      integer  :: np_new_loc=0,np_out_loc=0
+      real(WP) :: Vp_new_loc=0.0_WP,Vp_out_loc=0.0_WP
       integer  :: ncol=0
 
       !> Overlap size
@@ -245,17 +250,11 @@ module amrlpt_class
       integer, dimension(3) :: lo_bc=AMRLPT_OPEN
       integer, dimension(3) :: hi_bc=AMRLPT_OPEN
 
-      !> Injection parameters
-      real(WP) :: mfr=0.0_WP                    !< Particle mass flow rate
-      real(WP), dimension(3) :: inj_vel=0.0_WP  !< Injection velocity
-      real(WP), dimension(3) :: inj_pos=0.0_WP  !< Injection center
-      real(WP) :: inj_d=0.0_WP                  !< Nozzle diameter (0=full y-z domain)
-      real(WP) :: inj_dmean=0.0_WP              !< Mean particle diameter
-      real(WP) :: inj_dsd=0.0_WP                !< Lognormal std dev (0=monodisperse)
-      real(WP) :: inj_dmin=tiny(0.0_WP)         !< Minimum diameter
-      real(WP) :: inj_dmax=huge(0.0_WP)         !< Maximum diameter
-      real(WP) :: inj_dshift=0.0_WP             !< Lognormal shift
-      real(WP) :: inj_residual=0.0_WP           !< Uninjected mass from previous step
+      !> Particle sub-stepping state
+      real(WP) :: t=0.0_WP            !< Current particle time
+      real(WP) :: dt=huge(1.0_WP)     !< Persistent CFL-limited sub-step size
+      real(WP) :: dtmax=huge(1.0_WP)  !< Maximum allowed particle sub-step
+      real(WP) :: cflmax=huge(1.0_WP) !< CFL limit for particle sub-stepping
 
    contains
       ! Type-bound constructor/destructor
@@ -264,10 +263,10 @@ module amrlpt_class
       ! Physics procedures
       procedure :: collide                !< Soft-sphere collision model
       procedure :: advance                !< Advance particle ODEs one timestep
+      procedure :: advance_to             !< CFL-substepped advance to a target time
+      procedure, private :: step          !< Single sub-step: MFIter loop + redistribute
       procedure :: update_VF              !< Compute particle volume fraction field
       procedure :: get_cfl                !< Compute particle CFL numbers
-      ! Particle injection
-      procedure :: inject                 !< Inject particles from mass flow rate target
       ! Utilities
       procedure :: redistribute           !< Call AMReX redistribute
       procedure :: fill_ghosts            !< Fill ghost particle buffer
@@ -291,6 +290,15 @@ module amrlpt_class
       ! Post-regrid callback
       procedure :: post_regrid
    end type amrlpt
+
+   !> Abstract interface for user-provided particle injection callback
+   abstract interface
+      subroutine lpt_inject_iface(this,dt)
+         import :: amrlpt,WP
+         class(amrlpt), intent(inout) :: this
+         real(WP), intent(in) :: dt
+      end subroutine lpt_inject_iface
+   end interface
 
 contains
 
@@ -348,6 +356,7 @@ contains
       class(amrlpt), intent(inout) :: this
       call this%VF%finalize()
       call this%src%finalize()
+      nullify(this%inject)
       call amrlpt_delete_pc(this%pc)
       this%pc=c_null_ptr
       nullify(this%amr)
@@ -558,6 +567,125 @@ contains
    !> rhocomp/visccomp: component to use from rho/visc fields (optional, default 1)
    !> cst_rho/cst_visc: constant scalar alternatives to rho/visc amrdata
    subroutine advance(this,dt,U,Ucomp,V,Vcomp,W,Wcomp,rho,rhocomp,visc,visccomp,cst_rho,cst_visc)
+      implicit none
+      class(amrlpt), intent(inout) :: this
+      real(WP), intent(in) :: dt
+      type(amrdata), intent(in) :: U,V,W
+      type(amrdata), intent(in), optional :: rho,visc
+      real(WP),      intent(in), optional :: cst_rho,cst_visc
+      integer,       intent(in), optional :: Ucomp,Vcomp,Wcomp,rhocomp,visccomp
+
+      ! Reset sources
+      call this%src%setval(0.0_WP)
+
+      ! Perform one step
+      call this%step(dt=dt,U=U,V=V,W=W,rho=rho,visc=visc,cst_rho=cst_rho,cst_visc=cst_visc,Ucomp=Ucomp,Vcomp=Vcomp,Wcomp=Wcomp,rhocomp=rhocomp,visccomp=visccomp)
+
+      ! Process accumulated sources
+      process_sources: block
+         integer :: lvl
+         ! Accumulate ghost→valid, restrict-SUM fine into coarse
+         call this%src%syncsum(); call this%src%sum_down(); call this%src%average_down()
+         ! Divide by cell volume
+         do lvl=0,this%amr%clvl()
+            call this%src%mf(lvl)%mult(1.0_WP/this%amr%cell_vol(lvl),1,3,0)
+         end do
+         ! Fill ghost cells
+         call this%src%fill(time=0.0_WP)
+         ! Filter
+         call this%filter(this%src)
+      end block process_sources
+
+      ! Log particle advance
+      log_particle_advance: block
+         use iso_fortran_env, only: output_unit
+         use string,          only: str_long
+         use param,           only: verbose
+         use messager,        only: log
+         character(len=str_long) :: message
+         if (verbose.gt.0) then
+            write(message,'(" [",a,"] LPT advance | Np=",I0," | dt=",ES9.3)') trim(this%name),this%np,dt
+            if (verbose.gt.1.and.this%amr%amRoot) write(output_unit,'(a)') trim(message)
+            call log(message)
+         end if
+      end block log_particle_advance
+      
+   end subroutine advance
+
+   !> Advance particles to a target time using CFL-limited sub-steps:
+   !> Sub-step size is adapted from this%dt (persistent) using this%cflmax
+   !> On exit, this%t=t_target and this%dt holds the last adapted sub-step
+   subroutine advance_to(this,time,do_collide,U,V,W,rho,visc,cst_rho,cst_visc,Ucomp,Vcomp,Wcomp,rhocomp,visccomp,Gib,Gibcomp)
+      use messager, only: die
+      implicit none
+      class(amrlpt), intent(inout) :: this
+      real(WP), intent(in) :: time
+      logical,  intent(in) :: do_collide
+      type(amrdata), intent(in) :: U,V,W
+      type(amrdata), intent(in), optional :: rho,visc
+      real(WP),      intent(in), optional :: cst_rho,cst_visc
+      integer,       intent(in), optional :: Ucomp,Vcomp,Wcomp,rhocomp,visccomp
+      type(amrdata), intent(in), optional :: Gib
+      integer,       intent(in), optional :: Gibcomp
+      real(WP) :: dt_done,mydt,cfl
+      integer  :: n_sub
+
+      ! Validate time target
+      if (time.le.this%t) return
+
+      ! CFL-adapt the persistent sub-step size
+      call this%get_cfl(this%dt,cflc=cfl,cfl=cfl)
+      if (cfl.gt.0.0_WP) this%dt=min(this%dt*this%cflmax/cfl,this%dtmax)
+
+      ! Reset sources
+      call this%src%setval(0.0_WP)
+
+      ! Sub-step loop: inject, collide, step, accumulate src
+      dt_done=0.0_WP; n_sub=0
+      do while (dt_done.lt.(time-this%t)-epsilon(1.0_WP))
+         mydt=min(this%dt,time-this%t-dt_done)
+         if (associated(this%inject)) call this%inject(dt=mydt)
+         if (do_collide) call this%collide(dt=mydt,Gib=Gib,Gibcomp=Gibcomp)
+         call this%step(dt=mydt,U=U,V=V,W=W,rho=rho,visc=visc,cst_rho=cst_rho,cst_visc=cst_visc,Ucomp=Ucomp,Vcomp=Vcomp,Wcomp=Wcomp,rhocomp=rhocomp,visccomp=visccomp)
+         dt_done=dt_done+mydt; n_sub=n_sub+1
+      end do
+
+      ! Process accumulated sources
+      process_sources: block
+         integer :: lvl
+         ! Accumulate ghost→valid, restrict-SUM fine into coarse
+         call this%src%syncsum(); call this%src%sum_down(); call this%src%average_down()
+         ! Divide by cell volume
+         do lvl=0,this%amr%clvl()
+            call this%src%mf(lvl)%mult(1.0_WP/this%amr%cell_vol(lvl),1,3,0)
+         end do
+         ! Fill ghost cells
+         call this%src%fill(time=0.0_WP)
+         ! Filter
+         call this%filter(this%src)
+      end block process_sources
+
+      ! Advance particle time
+      this%t=time
+
+      ! Log particle advance
+      log_particle_advance: block
+         use iso_fortran_env, only: output_unit
+         use string,          only: str_long
+         use param,           only: verbose
+         use messager,        only: log
+         character(len=str_long) :: message
+         if (verbose.gt.0) then
+            write(message,'(" [",a,"] ",i0," LPT sub-steps | Np=",I0," | dt=",ES9.3," | CFL=",F6.4)') trim(this%name),n_sub,this%np,this%dt,cfl
+            if (verbose.gt.1.and.this%amr%amRoot) write(output_unit,'(a)') trim(message)
+            call log(message)
+         end if
+      end block log_particle_advance
+
+   end subroutine advance_to
+
+   !> Step all particles on all AMR levels by dt, deposit momentum source into this%src redistribute, and update VF
+   subroutine step(this,dt,U,V,W,rho,visc,cst_rho,cst_visc,Ucomp,Vcomp,Wcomp,rhocomp,visccomp)
       use amrex_amr_module, only: amrex_mfiter,amrex_mfiter_build,amrex_mfiter_destroy
       use mathtools, only: Pi
       use messager,  only: die
@@ -581,37 +709,30 @@ contains
       logical :: is_stag
 
       ! Resolve optional component indices
-      uc=1; if (present(Ucomp))    uc=Ucomp
-      vc=1; if (present(Vcomp))    vc=Vcomp
-      wc=1; if (present(Wcomp))    wc=Wcomp
-      rhoc=1; if (present(rhocomp))  rhoc=rhocomp
-      viscc=1;if (present(visccomp)) viscc=visccomp
+      uc=1; if (present(Ucomp)) uc=Ucomp
+      vc=1; if (present(Vcomp)) vc=Vcomp
+      wc=1; if (present(Wcomp)) wc=Wcomp
+      rhoc =1; if (present(rhocomp))  rhoc =rhocomp
+      viscc=1; if (present(visccomp)) viscc=visccomp
 
       ! Validate: each of rho and visc must be provided in exactly one form
-      if (.not.present(rho) .and..not.present(cst_rho))  call die('[amrlpt advance] rho or cst_rho required')
-      if (.not.present(visc).and..not.present(cst_visc)) call die('[amrlpt advance] visc or cst_visc required')
+      if (.not.present(rho) .and..not.present(cst_rho))  call die('[amrlpt step] rho or cst_rho required')
+      if (.not.present(visc).and..not.present(cst_visc)) call die('[amrlpt step] visc or cst_visc required')
 
-      ! Check velocity nodal locations are consistent
+      ! Check velocity nodal locations
       check_velocity: block
          logical, dimension(3) :: nU,nV,nW
          nU=U%nodal; nV=V%nodal; nW=W%nodal
-         if (all(nU.eqv.[.true.,.false.,.false.]).and.&
-         &   all(nV.eqv.[.false.,.true.,.false.]).and.&
+         if (all(nU.eqv.[.true.,.false.,.false.]).and. &
+         &   all(nV.eqv.[.false.,.true.,.false.]).and. &
          &   all(nW.eqv.[.false.,.false.,.true.])) then
             is_stag=.true.
          else if (.not.any(nU).and..not.any(nV).and..not.any(nW)) then
             is_stag=.false.
          else
-            call die('[amrlpt advance] U/V/W must be staggered (face-centered) or collocated (cell-centered)')
+            call die('[amrlpt step] U/V/W must be staggered (face-centered) or collocated (cell-centered)')
          end if
       end block check_velocity
-
-      ! Zero source mfabs
-      call this%src%setval(0.0_WP)
-
-      ! Track number of particles leaving domain
-      this%np_out=0
-      this%Vp_out=0.0_WP
 
       ! Loop over all AMR levels
       do lvl=0,this%amr%clvl()
@@ -636,7 +757,7 @@ contains
 
             ! Get particles on this tile
             call this%get_particles(lvl=lvl,mfi=mfi,p=p,np=np_)
-            
+
             ! Loop over local particles
             do i=1,np_
                ! Skip particles that are not moving or exchanging
@@ -674,11 +795,11 @@ contains
                   dt_done=dt_done+mydt
                end do
                ! Track escape from non-periodic boundaries
-               if ((.not.this%amr%xper.and.(myp%pos(1).lt.this%amr%xlo.or.myp%pos(1).gt.this%amr%xhi)).or.&
-               &   (.not.this%amr%yper.and.(myp%pos(2).lt.this%amr%ylo.or.myp%pos(2).gt.this%amr%yhi)).or.&
+               if ((.not.this%amr%xper.and.(myp%pos(1).lt.this%amr%xlo.or.myp%pos(1).gt.this%amr%xhi)).or. &
+               &   (.not.this%amr%yper.and.(myp%pos(2).lt.this%amr%ylo.or.myp%pos(2).gt.this%amr%yhi)).or. &
                &   (.not.this%amr%zper.and.(myp%pos(3).lt.this%amr%zlo.or.myp%pos(3).gt.this%amr%zhi))) then
-                  this%np_out=this%np_out+1
-                  this%vp_out=this%vp_out+Pi/6.0_WP*myp%d**3
+                  this%np_out_loc=this%np_out_loc+1
+                  this%Vp_out_loc=this%Vp_out_loc+Pi/6.0_WP*myp%d**3
                end if
                ! Write back
                p(i)=myp
@@ -691,27 +812,7 @@ contains
       ! Redistribute particles
       call this%redistribute()
 
-      ! Reduce info on particles leaving domain
-      reduce_leaving_particles: block
-         use mpi_f08,  only: MPI_INTEGER,MPI_IN_PLACE,MPI_SUM,MPI_ALLREDUCE
-         use parallel, only: MPI_REAL_WP
-         integer :: ierr
-         call MPI_ALLREDUCE(MPI_IN_PLACE,this%np_out,1,MPI_INTEGER,MPI_SUM,this%amr%comm,ierr)
-         call MPI_ALLREDUCE(MPI_IN_PLACE,this%Vp_out,1,MPI_REAL_WP,MPI_SUM,this%amr%comm,ierr)
-      end block reduce_leaving_particles
-
-      ! Accumulate ghost→valid, restrict-SUM fine into coarse
-      call this%src%syncsum(); call this%src%sum_down(); call this%src%average_down()
-      ! Divide by cell volume
-      do lvl=0,this%amr%clvl()
-         call this%src%mf(lvl)%mult(1.0_WP/this%amr%cell_vol(lvl),1,3,0)
-      end do
-      ! Fill ghost cells
-      call this%src%fill(time=0.0_WP)
-      ! Filter
-      call this%filter(this%src)
-
-      ! Recompute particle volume fraction
+      ! Recompute particle volume fraction (needed for drag in next sub-step)
       call this%update_VF()
 
    contains
@@ -798,8 +899,7 @@ contains
          pSrc(ic:ic+1,jc:jc+1,kc:kc+1,3)=pSrc(ic:ic+1,jc:jc+1,kc:kc+1,3)+reshape([(1.0_WP-wx)*(1.0_WP-wy)*(1.0_WP-wz),wx*(1.0_WP-wy)*(1.0_WP-wz),(1.0_WP-wx)*wy*(1.0_WP-wz),wx*wy*(1.0_WP-wz),(1.0_WP-wx)*(1.0_WP-wy)*wz,wx*(1.0_WP-wy)*wz,(1.0_WP-wx)*wy*wz,wx*wy*wz],[2,2,2])*val(3)
       end subroutine deposit
 
-   end subroutine advance
-
+   end subroutine step
 
    !> Update particle volume fraction field based on our current particles
    subroutine update_VF(this)
@@ -897,136 +997,6 @@ contains
       cflc=max(this%CFLp_x,this%CFLp_y,this%CFLp_z)
       if (present(cfl)) cfl=max(cflc,this%CFL_col)
    end subroutine get_cfl
-
-   !> Continuously inject particles to match a prescribed mass flow rate
-   subroutine inject(this,dt,avoid_overlap)
-      use mpi_f08,   only: MPI_ALLREDUCE,MPI_SUM,MPI_IN_PLACE,MPI_INTEGER
-      use parallel,  only: MPI_REAL_WP
-      use mathtools, only: Pi
-      implicit none
-      class(amrlpt), intent(inout) :: this
-      real(WP), intent(in) :: dt
-      logical, intent(in), optional :: avoid_overlap
-      real(WP) :: Mgoal,Madded
-      integer(I8) :: n_inj,ncap,j
-      type(part), dimension(:), allocatable :: pnew,tmp
-      logical :: avoid_overlap_
-      integer :: ierr
-
-      ! Initialize counters
-      this%np_new=0
-      this%Vp_new=0.0_WP
-
-      ! Nothing to inject
-      if (this%mfr.le.0.0_WP) return
-
-      ! Resolve overlap flag
-      avoid_overlap_=.false.; if (present(avoid_overlap)) avoid_overlap_=avoid_overlap
-
-      ! Compute current injection goal
-      Mgoal =this%mfr*dt+this%inj_residual
-      Madded=0.0_WP
-      n_inj =0
-
-      ! Only root injects
-      if (this%amr%amRoot) then
-         ! Pre-allocate
-         ncap=100; allocate(pnew(ncap))
-         ! Add particles until mass goal is met
-         inject_loop: do while (Madded.lt.Mgoal)
-            ! Increment particle counter
-            n_inj=n_inj+1_I8
-            ! Grow array if capacity exceeded
-            if (n_inj.gt.ncap) then
-               ncap=ncap*2_I8 ;allocate(tmp(ncap))
-               tmp(1:n_inj-1_I8)=pnew(1:n_inj-1_I8)
-               call move_alloc(tmp,pnew)
-            end if
-            ! Create candidate
-            pnew(n_inj)%d  =get_diameter()
-            pnew(n_inj)%pos=get_position()
-            ! Within-batch overlap check
-            if (avoid_overlap_) then
-               do j=1,n_inj-1
-                  if (norm2(pnew(n_inj)%pos-pnew(j)%pos).lt.0.5_WP*(pnew(n_inj)%d+pnew(j)%d)) then
-                     n_inj=n_inj-1; cycle inject_loop
-                  end if
-               end do
-            end if
-            pnew(n_inj)%vel   =this%inj_vel
-            pnew(n_inj)%angVel=0.0_WP
-            pnew(n_inj)%Acol  =0.0_WP
-            pnew(n_inj)%Tcol  =0.0_WP
-            pnew(n_inj)%dt    =0.0_WP
-            pnew(n_inj)%flag  =PART_MOVES+PART_COLLIDES+PART_EXCHANGES
-            ! Increment mass added
-            Madded=Madded+this%rho*Pi/6.0_WP*pnew(n_inj)%d**3
-         end do inject_loop
-         ! Update counters
-         this%np_new=int(n_inj)
-         this%Vp_new=Madded/this%rho
-         this%inj_residual=Mgoal-Madded
-      end if
-
-      ! Collective append and redistribute
-      call this%append(pnew,n_inj)
-      call this%redistribute()
-
-      ! Broadcast monitoring counters from root
-      call MPI_ALLREDUCE(MPI_IN_PLACE,this%np_new,1,MPI_INTEGER,MPI_SUM,this%amr%comm,ierr)
-      call MPI_ALLREDUCE(MPI_IN_PLACE,this%Vp_new,1,MPI_REAL_WP,MPI_SUM,this%amr%comm,ierr)
-
-   contains
-
-      !> Get diameter
-      function get_diameter() result(dp)
-         use random, only: random_lognormal,random_uniform
-         implicit none
-         real(WP) :: dp
-         if (this%inj_dsd.le.epsilon(1.0_WP)) then
-            ! Monodisperse
-            dp=this%inj_dmean
-         else
-            dp=random_lognormal(m=this%inj_dmean-this%inj_dshift,sd=this%inj_dsd)+this%inj_dshift
-            do while (dp.gt.this%inj_dmax+epsilon(1.0_WP).or.dp.lt.this%inj_dmin-epsilon(1.0_WP))
-               dp=random_lognormal(m=this%inj_dmean-this%inj_dshift,sd=this%inj_dsd)+this%inj_dshift
-            end do
-         end if
-      end function get_diameter
-
-      ! Get position
-      function get_position() result(pos)
-         use random,    only: random_uniform
-         use mathtools, only: twoPi
-         implicit none
-         real(WP), dimension(3) :: pos
-         real(WP) :: r,theta
-         ! Set x position
-         pos(1)=this%inj_pos(1)
-         ! Set y and z positions
-         if (this%inj_d.gt.0.0_WP) then
-            ! Circular nozzle of diameter inj_d centered at inj_pos(2:3)
-            if (this%amr%nz.eq.1) then
-               pos(2)=random_uniform(lo=this%inj_pos(2)-0.5_WP*this%inj_d,hi=this%inj_pos(2)+0.5_WP*this%inj_d)
-               pos(3)=0.5_WP*(this%amr%zlo+this%amr%zhi)
-            else
-               r=0.5_WP*this%inj_d*sqrt(random_uniform(lo=0.0_WP,hi=1.0_WP))
-               theta=random_uniform(lo=0.0_WP,hi=twoPi)
-               pos(2)=this%inj_pos(2)+r*sin(theta)
-               pos(3)=this%inj_pos(3)+r*cos(theta)
-            end if
-         else
-            ! Full y-z cross-section
-            pos(2)=random_uniform(lo=this%amr%ylo,hi=this%amr%yhi)
-            if (this%amr%nz.eq.1) then
-               pos(3)=0.5_WP*(this%amr%zlo+this%amr%zhi)
-            else
-               pos(3)=random_uniform(lo=this%amr%zlo,hi=this%amr%zhi)
-            end if
-         end if
-      end function get_position
-
-   end subroutine inject
 
    ! ============================================================================
    ! UTILITIES
@@ -1336,7 +1306,7 @@ contains
    !> Compute particle statistics: np, d/vel min/max/mean/var, Vp_tot, and VF field stats
    subroutine get_info(this)
       use amrex_amr_module, only: amrex_multifab,amrex_mfiter,amrex_mfiter_build,amrex_mfiter_destroy,amrex_box
-      use mpi_f08,  only: MPI_ALLREDUCE,MPI_SUM,MPI_MIN,MPI_MAX,MPI_IN_PLACE,MPI_INTEGER8
+      use mpi_f08,  only: MPI_ALLREDUCE,MPI_SUM,MPI_MIN,MPI_MAX,MPI_IN_PLACE,MPI_INTEGER8,MPI_INTEGER
       use parallel, only: MPI_REAL_WP
       use mathtools, only: Pi
       implicit none
@@ -1441,7 +1411,18 @@ contains
          call MPI_ALLREDUCE(MPI_IN_PLACE,var_sum,   1,MPI_REAL_WP,MPI_SUM,this%amr%comm,ierr)
          this%VFvar=max(0.0_WP,var_sum/((this%amr%xhi-this%amr%xlo)*(this%amr%yhi-this%amr%ylo)*(this%amr%zhi-this%amr%zlo)))
       end block vf_stats_block
-      
+
+      ! Reduce local accumulators, publish to monitoring fields, then zero for next interval
+      reduce_local_stats: block
+         call MPI_ALLREDUCE(MPI_IN_PLACE,this%np_out_loc,1,MPI_INTEGER,MPI_SUM,this%amr%comm,ierr)
+         call MPI_ALLREDUCE(MPI_IN_PLACE,this%Vp_out_loc,1,MPI_REAL_WP,MPI_SUM,this%amr%comm,ierr)
+         call MPI_ALLREDUCE(MPI_IN_PLACE,this%np_new_loc,1,MPI_INTEGER,MPI_SUM,this%amr%comm,ierr)
+         call MPI_ALLREDUCE(MPI_IN_PLACE,this%Vp_new_loc,1,MPI_REAL_WP,MPI_SUM,this%amr%comm,ierr)
+         this%np_out=this%np_out_loc; this%Vp_out=this%Vp_out_loc
+         this%np_new=this%np_new_loc; this%Vp_new=this%Vp_new_loc
+         this%np_out_loc=0; this%Vp_out_loc=0.0_WP
+         this%np_new_loc=0; this%Vp_new_loc=0.0_WP
+      end block reduce_local_stats
 
    end subroutine get_info
 

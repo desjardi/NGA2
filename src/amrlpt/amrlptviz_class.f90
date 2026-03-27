@@ -237,9 +237,9 @@ contains
          do i = 1, this%ntime
             write(pltdir,'("plt.part.",i6.6)') i
             if (i.lt.this%ntime) then
-               write(n,'(4x,a,a,a,es17.10,a)') '{ "name": "', trim(pltdir), '", "time": ', this%time(i), ' },'
+               write(n,'(4x,a,a,a,es24.17,a)') '{ "name": "', trim(pltdir), '", "time": ', this%time(i), ' },'
             else
-               write(n,'(4x,a,a,a,es17.10,a)') '{ "name": "', trim(pltdir), '", "time": ', this%time(i), ' }'
+               write(n,'(4x,a,a,a,es24.17,a)') '{ "name": "', trim(pltdir), '", "time": ', this%time(i), ' }'
             end if
          end do
          write(n,'(a)') '  ]'

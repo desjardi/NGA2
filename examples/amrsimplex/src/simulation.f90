@@ -422,6 +422,10 @@ contains
          fs%W%hi_bc(1,1)=amrex_bc_foextrap
          ! Read in mass flow rate
          call param_read('Mass flow rate',mfr)
+         ! Read in particle sub-stepping parameters
+         call param_read('Particle dt_max', fs%dtmax, default=huge(1.0_WP))
+         call param_read('Particle CFL max',fs%cflmax,default=huge(1.0_WP))
+         fs%dt=fs%dtmax
       end block create_flow_solver
 
       ! Create workspace array

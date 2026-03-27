@@ -21,10 +21,14 @@ Restitution coeff: 0.5
 Restitution wall:  0.1
 Friction coeff:    0.5
 
-# Time integration
-Max time:    100
-Max dt:      1e-3
-Max CFL:     0.9
+# Fluid time integration
+Max time: 100
+Max dt:   1e-2
+Max CFL:  0.9
+
+# Particle time integration
+Particle max dt:  2e-4
+Particle max CFL: 0.9
 
 # Output
 Output period: 0.5

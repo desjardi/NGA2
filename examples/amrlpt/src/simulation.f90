@@ -47,6 +47,14 @@ module simulation
    ! Physical parameters
    real(WP) :: visc_mol
 
+   ! Injection parameters
+   real(WP) :: inj_mfr=0.0_WP             !< Mass flow rate
+   real(WP) :: inj_dmean=0.0_WP           !< Mean particle diameter
+   real(WP) :: inj_d=0.0_WP               !< Nozzle diameter (0=full y-z domain)
+   real(WP), dimension(3) :: inj_pos=0.0_WP  !< Injection center
+   real(WP), dimension(3) :: inj_vel=0.0_WP  !< Injection velocity
+   real(WP) :: inj_residual=0.0_WP        !< Uninjected mass from previous step
+
 contains
 
    !> Levelset function for sphere
@@ -92,7 +100,7 @@ contains
          bx=mfi%tilebox()
          do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
             ! Tag based on closeness to sphere surface
-            if (pIB(i,j,k,1).lt.5.0_WP*dx.and.pIB(i,j,k,1).gt.-dx) tagarr(i,j,k,1)=SETtag
+            if (pIB(i,j,k,1).lt.2.0_WP*dx.and.pIB(i,j,k,1).gt.-dx) tagarr(i,j,k,1)=SETtag
             ! Tag based on vorticity magnitude
             vort(1)=(pUVW(i,j+1,k,3)-pUVW(i,j-1,k,3))*0.5_WP*dyi-(pUVW(i,j,k+1,2)-pUVW(i,j,k-1,2))*0.5_WP*dzi
             vort(2)=(pUVW(i,j,k+1,1)-pUVW(i,j,k-1,1))*0.5_WP*dzi-(pUVW(i+1,j,k,3)-pUVW(i-1,j,k,3))*0.5_WP*dxi
@@ -131,7 +139,7 @@ contains
             ! Get IB volume fraction
             call initialize_volume_moments(lo=[data%amr%xlo+real(i  ,WP)*dx,data%amr%ylo+real(j  ,WP)*dy,data%amr%zlo+real(k  ,WP)*dz], &
             &                              hi=[data%amr%xlo+real(i+1,WP)*dx,data%amr%ylo+real(j+1,WP)*dy,data%amr%zlo+real(k+1,WP)*dz], &
-            &                              levelset=sphere_levelset,time=time,level=nref,VFlo=VFlo,VF=pIB(i,j,k,1),BL=BL,BG=BG)
+            &                              levelset=sphere_levelset,time=time,level=nref,VFlo=VFlo,VF=pIB(i,j,k,2),BL=BL,BG=BG)
          end do; end do; end do
       end do
       call amrex_mfiter_destroy(mfi)
@@ -180,16 +188,21 @@ contains
          call lpt%initialize(amr)
          ! Set particle parameters
          call param_read('Particle density',lpt%rho)
-         call param_read('Particle mfr',lpt%mfr)
-         call param_read('Particle diameter',lpt%inj_dmean)
-         lpt%inj_d=1.0_WP
-         lpt%inj_pos=[amr%xlo+0.01_WP*(amr%xhi-amr%xlo),0.0_WP,0.0_WP]
-         lpt%inj_vel=[0.0_WP,0.0_WP,0.0_WP]
          lpt%gravity=[1.0_WP,0.0_WP,0.0_WP]
+         call param_read('Particle max dt' ,lpt%dtmax ,default=huge(1.0_WP))
+         call param_read('Particle max CFL',lpt%cflmax,default=time%cflmax)
+         lpt%dt=lpt%dtmax
+         ! Injection parameters
+         call param_read('Particle mfr',inj_mfr)
+         call param_read('Particle diameter',inj_dmean)
+         inj_d=1.0_WP
+         inj_pos=[amr%xlo+0.01_WP*(amr%xhi-amr%xlo),0.0_WP,0.0_WP]
+         inj_vel=[1.0_WP,0.0_WP,0.0_WP]
+         lpt%inject=>my_inject
          ! Filter width
-         lpt%filter_width=7.0_WP*lpt%inj_dmean
+         lpt%filter_width=7.0_WP*inj_dmean
          ! Collision parameters
-         lpt%tau_col=5.0_WP*time%dt
+         lpt%tau_col=5.0_WP*lpt%dtmax
          call param_read('Restitution coeff',lpt%e_n)
          call param_read('Restitution wall' ,lpt%e_w)
          call param_read('Friction coeff'   ,lpt%mu_f)
@@ -277,6 +290,7 @@ contains
          call viz%add_scalar(fs%visc,1,'visc')
          call viz%add_scalar(fs%P,1,'pressure')
          call viz%add_scalar(IB,2,'IB')
+         call viz%add_scalar(lpt%VF,1,'pVF')
          ! Create LPT visualization
          call lptviz%initialize(lpt,'amrlpt')
          ! Create visualization output event
@@ -306,6 +320,7 @@ contains
          call partfile%add_column(lpt%np_out,'Npart removed')
          call partfile%add_column(lpt%ncol,'Particle collisions')
          call partfile%add_column(lpt%VFmax,'Max VF')
+         call partfile%add_column(lpt%VFmean,'Mean VF')
          call partfile%add_column(lpt%Umin,'Particle Umin')
          call partfile%add_column(lpt%Umax,'Particle Umax')
          call partfile%add_column(lpt%Vmin,'Particle Vmin')
@@ -365,18 +380,12 @@ contains
       do while (.not.time%done())
 
          ! Increment time
-         call lpt%get_cfl(dt=time%dt,cflc=time%cfl,cfl=time%cfl)
+         call fs%get_cfl(dt=time%dt,cfl=time%cfl)
          call time%adjust_dt()
          call time%increment()
 
-         ! Add new particles
-         call lpt%inject(dt=time%dt,avoid_overlap=.true.)
-
-         ! Perform collisions
-         !call lpt%collide(dt=time%dt,Gib=IB,Gibcomp=1)
-
-         ! Advance particles
-         call lpt%advance(dt=time%dt,U=fs%U,V=fs%V,W=fs%W,cst_rho=fs%rho,cst_visc=visc_mol)
+         ! Advance particles to current time
+         call lpt%advance_to(time=time%t,do_collide=.true.,U=fs%U,V=fs%V,W=fs%W,cst_rho=fs%rho,cst_visc=visc_mol,Gib=IB,Gibcomp=1)
 
          ! Store old velocities
          call fs%UVWold%copy(src=fs%UVW)
@@ -529,5 +538,79 @@ contains
       call gridfile%finalize()
       call partfile%finalize()
    end subroutine simulation_final
+
+   !> Particle injection at a prescribed MFR from a circular nozzle
+   subroutine my_inject(this,dt)
+      use amrlpt_class, only: amrlpt,part,PART_MOVES,PART_COLLIDES,PART_EXCHANGES
+      use precision,    only: WP,I8
+      use mathtools,    only: Pi,twoPi
+      use random,       only: random_uniform
+      implicit none
+      class(amrlpt), intent(inout) :: this
+      real(WP), intent(in) :: dt
+      real(WP) :: Mgoal,Madded,dp,r,theta
+      real(WP), dimension(3) :: pos
+      integer(I8) :: n_inj,ncap,j
+      type(part), dimension(:), allocatable :: pnew,tmp
+
+      ! No injection if MFR is zero
+      if (inj_mfr.le.0.0_WP) return
+
+      ! Compute current injection goal
+      Mgoal=inj_mfr*dt+inj_residual; Madded=0.0_WP; n_inj=0
+
+      ! Only root injects
+      if (this%amr%amRoot) then
+         ncap=100; allocate(pnew(ncap))
+         inject_loop: do while (Madded.lt.Mgoal)
+            ! Increment counter
+            n_inj=n_inj+1
+            ! Resize if needed
+            if (n_inj.gt.ncap) then
+               ncap=2*ncap; allocate(tmp(ncap))
+               tmp(1:n_inj-1)=pnew(1:n_inj-1)
+               call move_alloc(tmp,pnew)
+            end if
+            ! Diameter
+            dp=inj_dmean
+            ! Position based on circular nozzle (slot in 2D)
+            pos(1)=inj_pos(1)
+            if (this%amr%nz.eq.1) then
+               pos(2)=random_uniform(lo=inj_pos(2)-0.5_WP*inj_d,hi=inj_pos(2)+0.5_WP*inj_d)
+               pos(3)=0.5_WP*(this%amr%zlo+this%amr%zhi)
+            else
+               r=0.5_WP*inj_d*sqrt(random_uniform(lo=0.0_WP,hi=1.0_WP))
+               theta=random_uniform(lo=0.0_WP,hi=twoPi)
+               pos(2)=inj_pos(2)+r*sin(theta); pos(3)=inj_pos(3)+r*cos(theta)
+            end if
+            ! Overlap check
+            do j=1,n_inj-1
+               if (norm2(pos-pnew(j)%pos).lt.0.5_WP*(dp+pnew(j)%d)) then
+                  n_inj=n_inj-1_I8; cycle inject_loop
+               end if
+            end do
+            ! Add new particle
+            pnew(n_inj)%d=dp
+            pnew(n_inj)%pos=pos
+            pnew(n_inj)%vel=inj_vel
+            pnew(n_inj)%angVel=0.0_WP
+            pnew(n_inj)%Acol=0.0_WP
+            pnew(n_inj)%Tcol=0.0_WP
+            pnew(n_inj)%dt=0.0_WP
+            pnew(n_inj)%flag=PART_MOVES+PART_COLLIDES+PART_EXCHANGES
+            ! Increment mass added
+            Madded=Madded+this%rho*Pi/6.0_WP*dp**3
+         end do inject_loop
+         ! Update injection statistics (accumulate into _loc; get_info reduces and publishes)
+         this%np_new_loc=this%np_new_loc+int(n_inj); this%Vp_new_loc=this%Vp_new_loc+Madded/this%rho
+         ! Adjust residual
+         inj_residual=Mgoal-Madded
+      end if
+
+      ! Add particles to LPT
+      call this%append(pnew,n_inj)
+      call this%redistribute()
+
+   end subroutine my_inject
 
 end module simulation
