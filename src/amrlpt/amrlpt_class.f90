@@ -338,6 +338,15 @@ contains
    ! LIFECYCLE CALLBACKS
    ! ============================================================================
 
+   !> Post-regrid callback: redistribute particles
+   subroutine post_regrid(this,lbase,time)
+      implicit none
+      class(amrlpt), intent(inout) :: this
+      integer, intent(in) :: lbase
+      real(WP), intent(in) :: time
+      call this%redistribute()
+   end subroutine post_regrid
+
    !> Estimate per-box cost for load balancing based on particle count
    !> This assumes that particles don't change level much...
    subroutine get_cost(this,lvl,nboxes,costs,ba)
@@ -433,15 +442,6 @@ contains
       this%pc=c_null_ptr
       nullify(this%amr)
    end subroutine finalize
-
-   !> Post-regrid callback: redistribute particles
-   subroutine post_regrid(this,lbase,time)
-      implicit none
-      class(amrlpt), intent(inout) :: this
-      integer, intent(in) :: lbase
-      real(WP), intent(in) :: time
-      call this%redistribute()
-   end subroutine post_regrid
 
    ! ============================================================================
    ! PHYSICS METHODS
@@ -653,6 +653,9 @@ contains
       ! Perform one step
       call this%step(dt=dt,U=U,V=V,W=W,rho=rho,visc=visc,cst_rho=cst_rho,cst_visc=cst_visc,Ucomp=Ucomp,Vcomp=Vcomp,Wcomp=Wcomp,rhocomp=rhocomp,visccomp=visccomp)
 
+      ! Recompute particle volume fraction
+      call this%update_VF()
+
       ! Process accumulated sources
       process_sources: block
          integer :: lvl
@@ -715,12 +718,22 @@ contains
       ! Sub-step loop: inject, collide, step, accumulate src
       dt_done=0.0_WP; n_sub=0
       do while (dt_done.lt.(time-this%t)-epsilon(1.0_WP))
+         ! Select mydt
          mydt=min(this%dt,time-this%t-dt_done)
+         ! Inject if needed
          if (associated(this%inject)) call this%inject(dt=mydt)
+         ! Collide if needed
          if (do_collide) call this%collide(dt=mydt,Gib=Gib,Gibcomp=Gibcomp)
+         ! Step particles
          call this%step(dt=mydt,U=U,V=V,W=W,rho=rho,visc=visc,cst_rho=cst_rho,cst_visc=cst_visc,Ucomp=Ucomp,Vcomp=Vcomp,Wcomp=Wcomp,rhocomp=rhocomp,visccomp=visccomp)
+         ! Increment time and sub-step counter
          dt_done=dt_done+mydt; n_sub=n_sub+1
+         ! Recompute particle volume fraction inside
+         !call this%update_VF()
       end do
+
+      ! Recompute particle volume fraction outside
+      call this%update_VF()
 
       ! Process accumulated sources
       process_sources: block
@@ -756,7 +769,7 @@ contains
 
    end subroutine advance_to
 
-   !> Step all particles on all AMR levels by dt, deposit momentum source into this%src redistribute, and update VF
+   !> Step all particles on all AMR levels by dt, deposit momentum source into this%src redistribute
    subroutine step(this,dt,U,V,W,rho,visc,cst_rho,cst_visc,Ucomp,Vcomp,Wcomp,rhocomp,visccomp)
       use amrex_amr_module, only: amrex_mfiter,amrex_mfiter_build,amrex_mfiter_destroy
       use mathtools, only: Pi
@@ -883,9 +896,6 @@ contains
 
       ! Redistribute particles
       call this%redistribute()
-
-      ! Recompute particle volume fraction (needed for drag in next sub-step)
-      call this%update_VF()
 
    contains
 

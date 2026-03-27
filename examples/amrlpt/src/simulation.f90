@@ -156,9 +156,9 @@ contains
          call param_read('Base nx',amr%nx)
          call param_read('Base ny',amr%ny)
          call param_read('Base nz',amr%nz)
-         amr%xlo=-10.0_WP; amr%xhi=+10.0_WP
-         amr%ylo=-10.0_WP; amr%yhi=+10.0_WP
-         amr%zlo=-10.0_WP; amr%zhi=+10.0_WP
+         amr%xlo=-5.0_WP; amr%xhi=+5.0_WP
+         amr%ylo=-5.0_WP; amr%yhi=+5.0_WP
+         amr%zlo=-5.0_WP; amr%zhi=+5.0_WP
          amr%xper=.false.; amr%yper=.false.; amr%zper=.false.
          call param_read('Max level',amr%maxlvl)
          ! Handle 2D case

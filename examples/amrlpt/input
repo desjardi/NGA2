@@ -1,8 +1,8 @@
 # Mesh parameters
 Base nx:   16
 Base ny:   16
-Base nz:   1
-Max level: 5
+Base nz:   16
+Max level: 4
 
 # Regridding parameters
 Regrid nsteps:    10
@@ -13,8 +13,8 @@ Reynolds number: 1e4
 
 # Particle parameters
 Particle density:  2250
-Particle diameter: 2e-2
-Particle mfr:      1e-1
+Particle diameter: 0.02
+Particle mfr:      1
 
 # Particle collisions
 Restitution coeff: 0.5
@@ -31,4 +31,4 @@ Particle max dt:  2e-4
 Particle max CFL: 0.9
 
 # Output
-Output period: 0.5
+Output period: 0.1
