@@ -18,7 +18,7 @@ Particle mfr:      1e-1
 
 # Particle collisions
 Restitution coeff: 0.5
-Restitution wall:  0.1
+Restitution wall:  0.5
 Friction coeff:    0.5
 
 # Fluid time integration
