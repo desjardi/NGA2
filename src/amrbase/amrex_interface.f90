@@ -86,7 +86,8 @@ module amrex_interface
    public :: amrmfab_average_down_face  ! Face-centered (nodal in 1 dir)
    public :: amrmfab_average_down_edge  ! Edge-centered (nodal in 2 dirs)
    public :: amrmfab_average_down_node  ! Node-centered (nodal in 3 dirs)
-   public :: amrmfab_sum_downto ! Restrict-SUM fine deposits into coarse level (lvl+1 → lvl)
+   public :: amrmfab_sum_downto         ! Restrict-SUM fine deposits into coarse level (lvl+1 → lvl)
+   public :: amrmfab_interp_from_coarse ! PCInterp coarse→fine for deposit processing
    public :: amrmfab_compute_divergence ! Compute div(u) from face velocities
    public :: amrmfab_sum_unique         ! Sum for face/nodal data (no double-counting)
    public :: amrmask_make_fine          ! Create mask for cells covered by finer level
@@ -554,12 +555,21 @@ module amrex_interface
       end subroutine amrmfab_average_down_node_c
 
       !> Restrict-SUM all fine deposits into the coarse level (lvl+1 → lvl)
-      subroutine amrmfab_sum_downto_c(fine_mf, crse_mf, crse_geom, ref_ratio) &
+      subroutine amrmfab_sum_downto_c(fine_mf, crse_mf, crse_geom, fine_geom, ref_ratio) &
          bind(c, name='amrmfab_sum_downto')
          import :: c_ptr, c_int
-         type(c_ptr), value :: fine_mf, crse_mf, crse_geom
+         type(c_ptr), value :: fine_mf, crse_mf, crse_geom, fine_geom
          integer(c_int), intent(in) :: ref_ratio(3)
       end subroutine amrmfab_sum_downto_c
+
+      !> PCInterp coarse→fine for deposit processing (no-op BCs, 0-indexed scomp)
+      subroutine amrmfab_interp_from_coarse_c(fine_mf, crse_mf, crse_geom, fine_geom, scomp, ncomp, ref_ratio) &
+         bind(c, name='amrmfab_interp_from_coarse')
+         import :: c_ptr, c_int
+         type(c_ptr), value :: fine_mf, crse_mf, crse_geom, fine_geom
+         integer(c_int), value :: scomp, ncomp
+         integer(c_int), intent(in) :: ref_ratio(3)
+      end subroutine amrmfab_interp_from_coarse_c
 
       !> Compute divergence of face-centered velocity into cell-centered MultiFab
       subroutine amrmfab_compute_divergence_c(divu, umac_x, umac_y, umac_z, geom) &
@@ -669,17 +679,31 @@ contains
       end if
    end subroutine amrmfab_average_down_node
 
-   !> Restrict-SUM all fine deposits (valid+ghost) into the coarse level.
-   !> Mirrors AMReX's sumFineToCrseNodal pattern for cell-centered data.
-   !> lvl+1 is the fine source level; lvl is the coarse destination.
-   subroutine amrmfab_sum_downto(fmf,cmf,rr,cgeom)
+   !> Restrict-SUM fine deposits (valid+ghost) into the coarse level.
+   !> Delegates to AMReX's sum_fine_to_coarse; requires nGrow % ratio == 0.
+   !> Call after SumBoundary; average_down afterward fixes double-counted cells.
+   subroutine amrmfab_sum_downto(fmf,cmf,rr,cgeom,fgeom)
       use amrex_amr_module, only: amrex_multifab, amrex_geometry
       type(amrex_multifab), intent(in)    :: fmf
       type(amrex_multifab), intent(inout) :: cmf
       integer,              intent(in)    :: rr(3)
       type(amrex_geometry), intent(in)    :: cgeom
-      call amrmfab_sum_downto_c(fmf%p, cmf%p, cgeom%p, rr)
+      type(amrex_geometry), intent(in)    :: fgeom
+      call amrmfab_sum_downto_c(fmf%p, cmf%p, cgeom%p, fgeom%p, rr)
    end subroutine amrmfab_sum_downto
+
+   !> PCInterp coarse→fine interpolation for deposit processing.
+   !> Propagates coarse-level deposits into fine-covered cells (no-op BCs).
+   subroutine amrmfab_interp_from_coarse(fmf,cmf,rr,cgeom,fgeom,scomp,ncomp)
+      use amrex_amr_module, only: amrex_multifab, amrex_geometry
+      type(amrex_multifab), intent(inout) :: fmf
+      type(amrex_multifab), intent(in)    :: cmf
+      integer,              intent(in)    :: rr(3)
+      type(amrex_geometry), intent(in)    :: cgeom
+      type(amrex_geometry), intent(in)    :: fgeom
+      integer,              intent(in)    :: scomp,ncomp
+      call amrmfab_interp_from_coarse_c(fmf%p, cmf%p, cgeom%p, fgeom%p, scomp-1, ncomp, rr)
+   end subroutine amrmfab_interp_from_coarse
 
    !> Compute divergence of face-centered velocity into cell-centered MultiFab
    subroutine amrmfab_compute_divergence(divu, umac_x, umac_y, umac_z, geom)

@@ -662,7 +662,7 @@ contains
       class(amrdata), intent(inout) :: this
       integer, intent(in) :: lvl
       if (lvl.lt.0.or.lvl.ge.this%amr%clvl()) call die('[amrdata sum_downto] invalid level')
-      call amrmfab_sum_downto(this%mf(lvl+1),this%mf(lvl),[this%amr%rrefx(lvl),this%amr%rrefy(lvl),this%amr%rrefz(lvl)],cgeom=this%amr%geom(lvl))
+      call amrmfab_sum_downto(this%mf(lvl+1),this%mf(lvl),[this%amr%rrefx(lvl),this%amr%rrefy(lvl),this%amr%rrefz(lvl)],cgeom=this%amr%geom(lvl),fgeom=this%amr%geom(lvl+1))
    end subroutine sum_downto
 
    !> Restrict-SUM from finest to coarsest, looping lvl=clvl()-1 down to 0

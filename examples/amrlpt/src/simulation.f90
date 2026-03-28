@@ -145,6 +145,80 @@ contains
       call amrex_mfiter_destroy(mfi)
    end subroutine init_IB
 
+      !> Particle injection at a prescribed MFR from a circular nozzle
+   subroutine my_inject(this,dt)
+      use amrlpt_class, only: amrlpt,part,PART_MOVES,PART_COLLIDES,PART_EXCHANGES
+      use precision,    only: WP,I8
+      use mathtools,    only: Pi,twoPi
+      use random,       only: random_uniform
+      implicit none
+      class(amrlpt), intent(inout) :: this
+      real(WP), intent(in) :: dt
+      real(WP) :: Mgoal,Madded,dp,r,theta
+      real(WP), dimension(3) :: pos
+      integer(I8) :: n_inj,ncap,j
+      type(part), dimension(:), allocatable :: pnew,tmp
+
+      ! No injection if MFR is zero
+      if (inj_mfr.le.0.0_WP) return
+
+      ! Compute current injection goal
+      Mgoal=inj_mfr*dt+inj_residual; Madded=0.0_WP; n_inj=0
+
+      ! Only root injects
+      if (this%amr%amRoot) then
+         ncap=100; allocate(pnew(ncap))
+         inject_loop: do while (Madded.lt.Mgoal)
+            ! Increment counter
+            n_inj=n_inj+1
+            ! Resize if needed
+            if (n_inj.gt.ncap) then
+               ncap=2*ncap; allocate(tmp(ncap))
+               tmp(1:n_inj-1)=pnew(1:n_inj-1)
+               call move_alloc(tmp,pnew)
+            end if
+            ! Diameter
+            dp=inj_dmean
+            ! Position based on circular nozzle (slot in 2D)
+            pos(1)=inj_pos(1)
+            if (this%amr%nz.eq.1) then
+               pos(2)=random_uniform(lo=inj_pos(2)-0.5_WP*inj_d,hi=inj_pos(2)+0.5_WP*inj_d)
+               pos(3)=0.5_WP*(this%amr%zlo+this%amr%zhi)
+            else
+               r=0.5_WP*inj_d*sqrt(random_uniform(lo=0.0_WP,hi=1.0_WP))
+               theta=random_uniform(lo=0.0_WP,hi=twoPi)
+               pos(2)=inj_pos(2)+r*sin(theta); pos(3)=inj_pos(3)+r*cos(theta)
+            end if
+            ! Overlap check
+            do j=1,n_inj-1
+               if (norm2(pos-pnew(j)%pos).lt.0.5_WP*(dp+pnew(j)%d)) then
+                  n_inj=n_inj-1_I8; cycle inject_loop
+               end if
+            end do
+            ! Add new particle
+            pnew(n_inj)%d=dp
+            pnew(n_inj)%pos=pos
+            pnew(n_inj)%vel=inj_vel
+            pnew(n_inj)%angVel=0.0_WP
+            pnew(n_inj)%Acol=0.0_WP
+            pnew(n_inj)%Tcol=0.0_WP
+            pnew(n_inj)%dt=0.0_WP
+            pnew(n_inj)%flag=PART_MOVES+PART_COLLIDES+PART_EXCHANGES
+            ! Increment mass added
+            Madded=Madded+this%rho*Pi/6.0_WP*dp**3
+         end do inject_loop
+         ! Update injection statistics (accumulate into _loc; get_info reduces and publishes)
+         this%np_new_loc=this%np_new_loc+int(n_inj); this%Vp_new_loc=this%Vp_new_loc+Madded/this%rho
+         ! Adjust residual
+         inj_residual=Mgoal-Madded
+      end if
+
+      ! Add particles to LPT
+      call this%append(pnew,n_inj)
+      call this%redistribute()
+
+   end subroutine my_inject
+
    !> Initialization hook
    subroutine simulation_init()
       use param, only: param_read
@@ -384,6 +458,9 @@ contains
          call time%adjust_dt()
          call time%increment()
 
+         ! Stop injecting after time of 10
+         if (time%t.gt.10.0_WP) inj_mfr=0.0_WP
+
          ! Advance particles to current time
          call lpt%advance_to(time=time%t,do_collide=.true.,U=fs%U,V=fs%V,W=fs%W,cst_rho=fs%rho,cst_visc=visc_mol,Gib=IB,Gibcomp=1)
 
@@ -538,79 +615,5 @@ contains
       call gridfile%finalize()
       call partfile%finalize()
    end subroutine simulation_final
-
-   !> Particle injection at a prescribed MFR from a circular nozzle
-   subroutine my_inject(this,dt)
-      use amrlpt_class, only: amrlpt,part,PART_MOVES,PART_COLLIDES,PART_EXCHANGES
-      use precision,    only: WP,I8
-      use mathtools,    only: Pi,twoPi
-      use random,       only: random_uniform
-      implicit none
-      class(amrlpt), intent(inout) :: this
-      real(WP), intent(in) :: dt
-      real(WP) :: Mgoal,Madded,dp,r,theta
-      real(WP), dimension(3) :: pos
-      integer(I8) :: n_inj,ncap,j
-      type(part), dimension(:), allocatable :: pnew,tmp
-
-      ! No injection if MFR is zero
-      if (inj_mfr.le.0.0_WP) return
-
-      ! Compute current injection goal
-      Mgoal=inj_mfr*dt+inj_residual; Madded=0.0_WP; n_inj=0
-
-      ! Only root injects
-      if (this%amr%amRoot) then
-         ncap=100; allocate(pnew(ncap))
-         inject_loop: do while (Madded.lt.Mgoal)
-            ! Increment counter
-            n_inj=n_inj+1
-            ! Resize if needed
-            if (n_inj.gt.ncap) then
-               ncap=2*ncap; allocate(tmp(ncap))
-               tmp(1:n_inj-1)=pnew(1:n_inj-1)
-               call move_alloc(tmp,pnew)
-            end if
-            ! Diameter
-            dp=inj_dmean
-            ! Position based on circular nozzle (slot in 2D)
-            pos(1)=inj_pos(1)
-            if (this%amr%nz.eq.1) then
-               pos(2)=random_uniform(lo=inj_pos(2)-0.5_WP*inj_d,hi=inj_pos(2)+0.5_WP*inj_d)
-               pos(3)=0.5_WP*(this%amr%zlo+this%amr%zhi)
-            else
-               r=0.5_WP*inj_d*sqrt(random_uniform(lo=0.0_WP,hi=1.0_WP))
-               theta=random_uniform(lo=0.0_WP,hi=twoPi)
-               pos(2)=inj_pos(2)+r*sin(theta); pos(3)=inj_pos(3)+r*cos(theta)
-            end if
-            ! Overlap check
-            do j=1,n_inj-1
-               if (norm2(pos-pnew(j)%pos).lt.0.5_WP*(dp+pnew(j)%d)) then
-                  n_inj=n_inj-1_I8; cycle inject_loop
-               end if
-            end do
-            ! Add new particle
-            pnew(n_inj)%d=dp
-            pnew(n_inj)%pos=pos
-            pnew(n_inj)%vel=inj_vel
-            pnew(n_inj)%angVel=0.0_WP
-            pnew(n_inj)%Acol=0.0_WP
-            pnew(n_inj)%Tcol=0.0_WP
-            pnew(n_inj)%dt=0.0_WP
-            pnew(n_inj)%flag=PART_MOVES+PART_COLLIDES+PART_EXCHANGES
-            ! Increment mass added
-            Madded=Madded+this%rho*Pi/6.0_WP*dp**3
-         end do inject_loop
-         ! Update injection statistics (accumulate into _loc; get_info reduces and publishes)
-         this%np_new_loc=this%np_new_loc+int(n_inj); this%Vp_new_loc=this%Vp_new_loc+Madded/this%rho
-         ! Adjust residual
-         inj_residual=Mgoal-Madded
-      end if
-
-      ! Add particles to LPT
-      call this%append(pnew,n_inj)
-      call this%redistribute()
-
-   end subroutine my_inject
 
 end module simulation

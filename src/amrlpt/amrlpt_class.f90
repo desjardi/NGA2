@@ -281,6 +281,7 @@ module amrlpt_class
       procedure, private :: get_neighbor_list !< Get CSR neighbor list for MFIter tile
       procedure :: interp                 !< Trilinear cell-centered interpolation
       procedure :: interp_face_velocities !< Trilinear face-centered interpolation
+      procedure, private :: process_deposit   !< Post-process deposit: intensive conversion + F↔C transfers
       procedure, private :: filter        !< Explicit diffusion filter
       procedure :: append                 !< Append a Fortran part array
       ! Print solver info
@@ -658,13 +659,8 @@ contains
 
       ! Process accumulated sources
       process_sources: block
-         integer :: lvl
-         ! Accumulate ghost→valid, restrict-SUM fine into coarse
-         call this%src%syncsum(); call this%src%sum_down(); call this%src%average_down()
-         ! Divide by cell volume
-         do lvl=0,this%amr%clvl()
-            call this%src%mf(lvl)%mult(1.0_WP/this%amr%cell_vol(lvl),1,3,0)
-         end do
+         ! Process deposit
+         call this%process_deposit(this%src)
          ! Fill ghost cells
          call this%src%fill(time=0.0_WP)
          ! Filter
@@ -737,13 +733,8 @@ contains
 
       ! Process accumulated sources
       process_sources: block
-         integer :: lvl
-         ! Accumulate ghost→valid, restrict-SUM fine into coarse
-         call this%src%syncsum(); call this%src%sum_down(); call this%src%average_down()
-         ! Divide by cell volume
-         do lvl=0,this%amr%clvl()
-            call this%src%mf(lvl)%mult(1.0_WP/this%amr%cell_vol(lvl),1,3,0)
-         end do
+         ! Process deposit
+         call this%process_deposit(this%src)
          ! Fill ghost cells
          call this%src%fill(time=0.0_WP)
          ! Filter
@@ -976,6 +967,14 @@ contains
          ic=floor((myp%pos(1)-this%amr%xlo)*dxi-0.5_WP); wx=(myp%pos(1)-this%amr%xlo)*dxi-0.5_WP-real(ic,WP)
          jc=floor((myp%pos(2)-this%amr%ylo)*dyi-0.5_WP); wy=(myp%pos(2)-this%amr%ylo)*dyi-0.5_WP-real(jc,WP)
          kc=floor((myp%pos(3)-this%amr%zlo)*dzi-0.5_WP); wz=(myp%pos(3)-this%amr%zlo)*dzi-0.5_WP-real(kc,WP)
+         ! Clamp stencil at wall boundaries
+         if (this%lo_bc(1).eq.AMRLPT_WALL.and.ic  .lt.this%amr%geom(lvl)%domain%lo(1)) then; ic=this%amr%geom(lvl)%domain%lo(1)  ; wx=0.0_WP; end if
+         if (this%hi_bc(1).eq.AMRLPT_WALL.and.ic+1.gt.this%amr%geom(lvl)%domain%hi(1)) then; ic=this%amr%geom(lvl)%domain%hi(1)-1; wx=1.0_WP; end if
+         if (this%lo_bc(2).eq.AMRLPT_WALL.and.jc  .lt.this%amr%geom(lvl)%domain%lo(2)) then; jc=this%amr%geom(lvl)%domain%lo(2)  ; wy=0.0_WP; end if
+         if (this%hi_bc(2).eq.AMRLPT_WALL.and.jc+1.gt.this%amr%geom(lvl)%domain%hi(2)) then; jc=this%amr%geom(lvl)%domain%hi(2)-1; wy=1.0_WP; end if
+         if (this%lo_bc(3).eq.AMRLPT_WALL.and.kc  .lt.this%amr%geom(lvl)%domain%lo(3)) then; kc=this%amr%geom(lvl)%domain%lo(3)  ; wz=0.0_WP; end if
+         if (this%hi_bc(3).eq.AMRLPT_WALL.and.kc+1.gt.this%amr%geom(lvl)%domain%hi(3)) then; kc=this%amr%geom(lvl)%domain%hi(3)-1; wz=1.0_WP; end if
+         ! Add to source
          pSrc(ic:ic+1,jc:jc+1,kc:kc+1,1)=pSrc(ic:ic+1,jc:jc+1,kc:kc+1,1)+reshape([(1.0_WP-wx)*(1.0_WP-wy)*(1.0_WP-wz),wx*(1.0_WP-wy)*(1.0_WP-wz),(1.0_WP-wx)*wy*(1.0_WP-wz),wx*wy*(1.0_WP-wz),(1.0_WP-wx)*(1.0_WP-wy)*wz,wx*(1.0_WP-wy)*wz,(1.0_WP-wx)*wy*wz,wx*wy*wz],[2,2,2])*val(1)
          pSrc(ic:ic+1,jc:jc+1,kc:kc+1,2)=pSrc(ic:ic+1,jc:jc+1,kc:kc+1,2)+reshape([(1.0_WP-wx)*(1.0_WP-wy)*(1.0_WP-wz),wx*(1.0_WP-wy)*(1.0_WP-wz),(1.0_WP-wx)*wy*(1.0_WP-wz),wx*wy*(1.0_WP-wz),(1.0_WP-wx)*(1.0_WP-wy)*wz,wx*(1.0_WP-wy)*wz,(1.0_WP-wx)*wy*wz,wx*wy*wz],[2,2,2])*val(2)
          pSrc(ic:ic+1,jc:jc+1,kc:kc+1,3)=pSrc(ic:ic+1,jc:jc+1,kc:kc+1,3)+reshape([(1.0_WP-wx)*(1.0_WP-wy)*(1.0_WP-wz),wx*(1.0_WP-wy)*(1.0_WP-wz),(1.0_WP-wx)*wy*(1.0_WP-wz),wx*wy*(1.0_WP-wz),(1.0_WP-wx)*(1.0_WP-wy)*wz,wx*(1.0_WP-wy)*wz,(1.0_WP-wx)*wy*wz,wx*wy*wz],[2,2,2])*val(3)
@@ -1015,21 +1014,25 @@ contains
                if (IAND(p(i)%flag,PART_EXCHANGES).eq.0) cycle
                ! Get particle volume
                Vp=Pi/6.0_WP*p(i)%d**3
-               ! Extrapolate
+               ! Get indices and weights
                ii=floor((p(i)%pos(1)-this%amr%xlo)*dxi-0.5_WP); wx=(p(i)%pos(1)-this%amr%xlo)*dxi-0.5_WP-real(ii,WP)
                jj=floor((p(i)%pos(2)-this%amr%ylo)*dyi-0.5_WP); wy=(p(i)%pos(2)-this%amr%ylo)*dyi-0.5_WP-real(jj,WP)
                kk=floor((p(i)%pos(3)-this%amr%zlo)*dzi-0.5_WP); wz=(p(i)%pos(3)-this%amr%zlo)*dzi-0.5_WP-real(kk,WP)
+               ! Clamp stencil at wall boundaries
+               if (this%lo_bc(1).eq.AMRLPT_WALL.and.ii  .lt.this%amr%geom(lvl)%domain%lo(1)) then; ii=this%amr%geom(lvl)%domain%lo(1)  ; wx=0.0_WP; end if
+               if (this%hi_bc(1).eq.AMRLPT_WALL.and.ii+1.gt.this%amr%geom(lvl)%domain%hi(1)) then; ii=this%amr%geom(lvl)%domain%hi(1)-1; wx=1.0_WP; end if
+               if (this%lo_bc(2).eq.AMRLPT_WALL.and.jj  .lt.this%amr%geom(lvl)%domain%lo(2)) then; jj=this%amr%geom(lvl)%domain%lo(2)  ; wy=0.0_WP; end if
+               if (this%hi_bc(2).eq.AMRLPT_WALL.and.jj+1.gt.this%amr%geom(lvl)%domain%hi(2)) then; jj=this%amr%geom(lvl)%domain%hi(2)-1; wy=1.0_WP; end if
+               if (this%lo_bc(3).eq.AMRLPT_WALL.and.kk  .lt.this%amr%geom(lvl)%domain%lo(3)) then; kk=this%amr%geom(lvl)%domain%lo(3)  ; wz=0.0_WP; end if
+               if (this%hi_bc(3).eq.AMRLPT_WALL.and.kk+1.gt.this%amr%geom(lvl)%domain%hi(3)) then; kk=this%amr%geom(lvl)%domain%hi(3)-1; wz=1.0_WP; end if
+               ! Add to VF
                pVF(ii:ii+1,jj:jj+1,kk:kk+1,1)=pVF(ii:ii+1,jj:jj+1,kk:kk+1,1)+Vp*reshape([(1.0_WP-wx)*(1.0_WP-wy)*(1.0_WP-wz),wx*(1.0_WP-wy)*(1.0_WP-wz),(1.0_WP-wx)*wy*(1.0_WP-wz),wx*wy*(1.0_WP-wz),(1.0_WP-wx)*(1.0_WP-wy)*wz,wx*(1.0_WP-wy)*wz,(1.0_WP-wx)*wy*wz,wx*wy*wz],[2,2,2])
             end do
          end do
          call amrex_mfiter_destroy(mfi)
       end do
-      ! Sum overlap data across boxes and levels
-      call this%VF%syncsum(); call this%VF%sum_down(); call this%VF%average_down()
-      ! Divide by cell volume
-      do lvl=0,this%amr%clvl()
-         call this%VF%mf(lvl)%mult(1.0_WP/this%amr%cell_vol(lvl),1,1,0)
-      end do
+      ! Post-process deposit
+      call this%process_deposit(this%VF)
       ! Fill ghost cells
       call this%VF%fill(time=0.0_WP)
       ! Filter
@@ -1269,6 +1272,50 @@ contains
       &      +(1.0_WP-wx)*(1.0_WP-wy)*        fz *pW(ic  ,jc  ,iz+1,wc)+wx*(1.0_WP-wy)*        fz *pW(ic+1,jc  ,iz+1,wc) &
       &      +(1.0_WP-wx)*        wy *        fz *pW(ic  ,jc+1,iz+1,wc)+wx*        wy *        fz *pW(ic+1,jc+1,iz+1,wc)
    end function interp_face_velocities
+
+   !> Post-process a deposited extensive field into an intensive composite field
+   subroutine process_deposit(this,A)
+      use amrex_amr_module, only: amrex_multifab,amrex_multifab_build,amrex_multifab_destroy
+      use amrex_interface,  only: amrmfab_sum_downto,amrmfab_interp_from_coarse
+      implicit none
+      class(amrlpt), intent(inout) :: this
+      type(amrdata), intent(inout) :: A
+      type(amrex_multifab), dimension(:), allocatable :: tmp
+      integer :: lvl
+      ! Convert extensive deposits to intensive
+      do lvl=0,this%amr%clvl()
+         call A%mf(lvl)%mult(1.0_WP/this%amr%cell_vol(lvl),1,A%ncomp,A%ng)
+      end do
+      ! Allocate scratch MFs for coarse→fine interpolation
+      allocate(tmp(0:this%amr%clvl()))
+      do lvl=0,this%amr%clvl()
+         call this%amr%mfab_build(lvl,tmp(lvl),ncomp=A%ncomp,nover=0); call tmp(lvl)%setval(0.0_WP)
+      end do
+      ! Forward pass (coarse to fine)
+      do lvl=0,this%amr%clvl()
+         ! SumBoundary: ghost→valid at this level
+         call A%syncsum_lvl(lvl)
+         ! InterpFromCoarseLevel: propagate coarse deposit to fine tmp
+         if (lvl.lt.this%amr%clvl()) then
+            call amrmfab_interp_from_coarse(tmp(lvl+1),A%mf(lvl),[this%amr%rrefx(lvl),this%amr%rrefy(lvl),this%amr%rrefz(lvl)],cgeom=this%amr%geom(lvl),fgeom=this%amr%geom(lvl+1),scomp=1,ncomp=A%ncomp)
+         end if
+         ! Sum_fine_to_coarse: fine→coarse ADD
+         if (lvl.gt.0) then
+            call amrmfab_sum_downto(A%mf(lvl),A%mf(lvl-1),[this%amr%rrefx(lvl-1),this%amr%rrefy(lvl-1),this%amr%rrefz(lvl-1)],cgeom=this%amr%geom(lvl-1),fgeom=this%amr%geom(lvl))
+         end if
+         ! Add interpolated coarse contribution to this level
+         call A%mf(lvl)%add(tmp(lvl),1,1,A%ncomp,0)
+      end do
+      ! Backward pass: average_down fixes double-counting in covered cells
+      do lvl=this%amr%clvl()-1,0,-1
+         call A%average_downto(lvl)
+      end do
+      ! Clean up scratch MFs
+      do lvl=0,this%amr%clvl()
+         call amrex_multifab_destroy(tmp(lvl))
+      end do
+      deallocate(tmp)
+   end subroutine process_deposit
 
    !> Explicit diffusion filter for a cell-centered amrdata field
    subroutine filter(this,A)
