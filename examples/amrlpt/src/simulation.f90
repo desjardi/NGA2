@@ -151,19 +151,29 @@ contains
       use precision,    only: WP,I8
       use mathtools,    only: Pi,twoPi
       use random,       only: random_uniform
+      use messager,     only: warn
       implicit none
       class(amrlpt), intent(inout) :: this
       real(WP), intent(in) :: dt
       real(WP) :: Mgoal,Madded,dp,r,theta
-      real(WP), dimension(3) :: pos
-      integer(I8) :: n_inj,ncap,j
-      type(part), dimension(:), allocatable :: pnew,tmp
+      real(WP), dimension(3) :: pos,glo,ghi
+      integer(I8) :: n_inj,ncap,j,ngather,ntries
+      integer(I8), parameter :: max_tries=1000
+      type(part), dimension(:), allocatable :: pnew,tmp,nearby
+      logical :: overlap
 
       ! No injection if MFR is zero
       if (inj_mfr.le.0.0_WP) return
 
       ! Compute current injection goal
       Mgoal=inj_mfr*dt+inj_residual; Madded=0.0_WP; n_inj=0
+
+      ! Gather existing particles near the injector for overlap checking
+      glo(1)=inj_pos(1)-1.2_WP*inj_dmean; ghi(1)=inj_pos(1)+1.2_WP*inj_dmean
+      glo(2)=inj_pos(2)-0.5_WP*inj_d-1.2_WP*inj_dmean; ghi(2)=inj_pos(2)+0.5_WP*inj_d+1.2_WP*inj_dmean
+      glo(3)=inj_pos(3)-0.5_WP*inj_d-1.2_WP*inj_dmean; ghi(3)=inj_pos(3)+0.5_WP*inj_d+1.2_WP*inj_dmean
+      if (this%amr%nz.eq.1) then; glo(3)=this%amr%zlo; ghi(3)=this%amr%zhi; end if
+      call this%gather_region(glo,ghi,nearby,ngather)
 
       ! Only root injects
       if (this%amr%amRoot) then
@@ -180,21 +190,38 @@ contains
             ! Diameter
             dp=inj_dmean
             ! Position based on circular nozzle (slot in 2D)
-            pos(1)=inj_pos(1)
-            if (this%amr%nz.eq.1) then
-               pos(2)=random_uniform(lo=inj_pos(2)-0.5_WP*inj_d,hi=inj_pos(2)+0.5_WP*inj_d)
-               pos(3)=0.5_WP*(this%amr%zlo+this%amr%zhi)
-            else
-               r=0.5_WP*inj_d*sqrt(random_uniform(lo=0.0_WP,hi=1.0_WP))
-               theta=random_uniform(lo=0.0_WP,hi=twoPi)
-               pos(2)=inj_pos(2)+r*sin(theta); pos(3)=inj_pos(3)+r*cos(theta)
-            end if
-            ! Overlap check
-            do j=1,n_inj-1
-               if (norm2(pos-pnew(j)%pos).lt.0.5_WP*(dp+pnew(j)%d)) then
-                  n_inj=n_inj-1_I8; cycle inject_loop
+            ntries=0
+            retry: do
+               ntries=ntries+1
+               pos(1)=inj_pos(1)
+               if (this%amr%nz.eq.1) then
+                  pos(2)=random_uniform(lo=inj_pos(2)-0.5_WP*inj_d,hi=inj_pos(2)+0.5_WP*inj_d)
+                  pos(3)=0.5_WP*(this%amr%zlo+this%amr%zhi)
+               else
+                  r=0.5_WP*inj_d*sqrt(random_uniform(lo=0.0_WP,hi=1.0_WP))
+                  theta=random_uniform(lo=0.0_WP,hi=twoPi)
+                  pos(2)=inj_pos(2)+r*sin(theta); pos(3)=inj_pos(3)+r*cos(theta)
                end if
-            end do
+               ! Overlap check with 20% margin
+               overlap=.false.
+               ! Check against newly injected particles
+               do j=1,n_inj-1
+                  if (norm2(pos-pnew(j)%pos).lt.0.6_WP*(dp+pnew(j)%d)) then; overlap=.true.; exit; end if
+               end do
+               ! Check against existing particles in the region
+               if (.not.overlap) then
+                  do j=1,ngather
+                     if (norm2(pos-nearby(j)%pos).lt.0.6_WP*(dp+nearby(j)%d)) then; overlap=.true.; exit; end if
+                  end do
+               end if
+               if (.not.overlap) exit retry
+               if (ntries.ge.max_tries) exit retry
+            end do retry
+            ! If we exhausted retries, stop injecting this step
+            if (overlap) then
+               call warn('[Particle injection] Injector saturated — max overlap retries reached, deferring remaining mass')
+               n_inj=n_inj-1_I8; exit inject_loop
+            end if
             ! Add new particle
             pnew(n_inj)%d=dp
             pnew(n_inj)%pos=pos
@@ -212,6 +239,9 @@ contains
          ! Adjust residual
          inj_residual=Mgoal-Madded
       end if
+
+      ! Clean up
+      if (allocated(nearby)) deallocate(nearby)
 
       ! Add particles to LPT
       call this%append(pnew,n_inj)

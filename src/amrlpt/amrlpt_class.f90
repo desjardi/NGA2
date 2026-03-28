@@ -283,6 +283,7 @@ module amrlpt_class
       procedure :: interp_face_velocities !< Trilinear face-centered interpolation
       procedure, private :: process_deposit   !< Post-process deposit: intensive conversion + F↔C transfers
       procedure, private :: filter        !< Explicit diffusion filter
+      procedure :: gather_region          !< Allgather particles within a bounding box
       procedure :: append                 !< Append a Fortran part array
       ! Print solver info
       procedure :: get_info
@@ -1411,6 +1412,76 @@ contains
       deallocate(Fx,Fy,Fz)
 
    end subroutine filter
+
+   !> Allgather all particles whose position lies inside [lo,hi] across all processors
+   !> Returns a newly allocated array pgather(1:ngather) containing copies from every rank
+   subroutine gather_region(this,lo,hi,pgather,ngather)
+      use mpi_f08, only: MPI_ALLGATHER,MPI_ALLGATHERV,MPI_BYTE,MPI_INTEGER
+      use amrex_amr_module, only: amrex_mfiter
+      use iso_c_binding, only: c_sizeof
+      implicit none
+      class(amrlpt), intent(inout) :: this
+      real(WP), dimension(3), intent(in) :: lo,hi
+      type(part), dimension(:), allocatable, intent(out) :: pgather
+      integer(I8), intent(out) :: ngather
+      ! Local
+      type(amrex_mfiter) :: mfi
+      type(part), dimension(:), pointer :: p
+      type(part), dimension(:), allocatable :: pbuf
+      type(part) :: dummy
+      integer(I8) :: np_,m
+      integer :: lvl,nlocal,ntotal,part_bytes,ierr,i
+      integer, dimension(:), allocatable :: rcounts,rdisps
+      ! Size of one particle in bytes
+      part_bytes=int(c_sizeof(dummy))
+      ! Pass 1: count local particles in box
+      nlocal=0
+      do lvl=0,this%amr%clvl()
+         call this%amr%mfiter_build(lvl,mfi,tiling=.false.)
+         do while(mfi%next())
+            call this%get_particles(lvl,mfi,p,np_)
+            do m=1,np_
+               if (p(m)%pos(1).ge.lo(1).and.p(m)%pos(1).le.hi(1).and. &
+               &   p(m)%pos(2).ge.lo(2).and.p(m)%pos(2).le.hi(2).and. &
+               &   p(m)%pos(3).ge.lo(3).and.p(m)%pos(3).le.hi(3)) nlocal=nlocal+1
+            end do
+         end do
+         call this%amr%mfiter_destroy(mfi)
+      end do
+      ! Pack local matches
+      allocate(pbuf(max(nlocal,1)))
+      nlocal=0
+      do lvl=0,this%amr%clvl()
+         call this%amr%mfiter_build(lvl,mfi,tiling=.false.)
+         do while(mfi%next())
+            call this%get_particles(lvl,mfi,p,np_)
+            do m=1,np_
+               if (p(m)%pos(1).ge.lo(1).and.p(m)%pos(1).le.hi(1).and. &
+               &   p(m)%pos(2).ge.lo(2).and.p(m)%pos(2).le.hi(2).and. &
+               &   p(m)%pos(3).ge.lo(3).and.p(m)%pos(3).le.hi(3)) then
+                  nlocal=nlocal+1
+                  pbuf(nlocal)=p(m)
+               end if
+            end do
+         end do
+         call this%amr%mfiter_destroy(mfi)
+      end do
+      ! Allgatherv: exchange counts
+      allocate(rcounts(this%amr%nproc),rdisps(this%amr%nproc))
+      call MPI_ALLGATHER(nlocal,1,MPI_INTEGER,rcounts,1,MPI_INTEGER,this%amr%comm,ierr)
+      ntotal=sum(rcounts)
+      ! Convert counts and displacements to bytes
+      rdisps(1)=0
+      do i=2,this%amr%nproc
+         rdisps(i)=rdisps(i-1)+rcounts(i-1)*part_bytes
+      end do
+      rcounts=rcounts*part_bytes
+      ! Allgatherv particles
+      allocate(pgather(max(ntotal,1)))
+      call MPI_ALLGATHERV(pbuf,nlocal*part_bytes,MPI_BYTE,pgather,rcounts,rdisps,MPI_BYTE,this%amr%comm,ierr)
+      ngather=int(ntotal,I8)
+      deallocate(pbuf,rcounts,rdisps)
+   end subroutine gather_region
 
    !> Append a Fortran part array to the particle container (collective)
    subroutine append(this,pnew,n)
