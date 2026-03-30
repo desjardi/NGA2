@@ -2,10 +2,11 @@
 !> Mirrors lpt_class capabilities on an AMReX AMR hierarchy.
 !> Particle communication and sorting handled by NeighborParticleContainer<14,1>.
 module amrlpt_class
-   use precision, only: WP,I8
-   use string, only: str_medium
+   use precision,     only: WP,I8
+   use string,        only: str_medium
    use amrgrid_class, only: amrgrid
    use amrdata_class, only: amrdata
+   use timer_class,   only: timer
    use iso_c_binding
    implicit none
    private
@@ -72,6 +73,12 @@ module amrlpt_class
          import :: c_ptr,c_int
          type(c_ptr), value :: pc
          integer(c_int), value :: ngrow
+      end subroutine
+
+      subroutine amrlpt_fill_neighbors_radius(pc,search_radius) bind(c)
+         import :: c_ptr,c_double
+         type(c_ptr), value :: pc
+         real(c_double), value :: search_radius
       end subroutine
 
       subroutine amrlpt_clear_neighbors(pc) bind(c)
@@ -185,6 +192,34 @@ module amrlpt_class
          integer(c_int64_t), value :: n
       end subroutine
 
+      subroutine amrlpt_get_particle_boxarray(pc,lev,ba) bind(c)
+         import :: c_ptr,c_int
+         type(c_ptr), value :: pc
+         integer(c_int), value :: lev
+         type(c_ptr) :: ba
+      end subroutine
+
+      subroutine amrlpt_get_particle_distromap(pc,lev,dm) bind(c)
+         import :: c_ptr,c_int
+         type(c_ptr), value :: pc
+         integer(c_int), value :: lev
+         type(c_ptr) :: dm
+      end subroutine
+
+      subroutine amrlpt_set_particle_boxarray(pc,lev,ba) bind(c)
+         import :: c_ptr,c_int
+         type(c_ptr), value :: pc
+         integer(c_int), value :: lev
+         type(c_ptr), value :: ba
+      end subroutine
+
+      subroutine amrlpt_set_particle_distromap(pc,lev,dm) bind(c)
+         import :: c_ptr,c_int
+         type(c_ptr), value :: pc
+         integer(c_int), value :: lev
+         type(c_ptr), value :: dm
+      end subroutine
+
    end interface
 
    !> AMR LPT solver type
@@ -200,7 +235,8 @@ module amrlpt_class
       character(len=str_medium) :: name='UNNAMED_AMRLPT'
 
       !> User-provided injection callback
-      procedure(lpt_inject_iface), pointer, pass :: inject=>null()
+      procedure(lpt_inject_iface ), pointer, pass :: inject=>null()
+      procedure(lpt_tagging_iface), pointer, pass :: user_lpt_tagging=>null()
 
       !> Global particle count
       integer(I8) :: np=0
@@ -234,6 +270,12 @@ module amrlpt_class
       real(WP) :: Vp_new_loc=0.0_WP,Vp_out_loc=0.0_WP
       integer  :: ncol=0
 
+      !> Particle distribution across ranks
+      integer(I8) :: np_loc=0           !< This rank's particle count
+      integer(I8) :: np_min=0           !< Min particle count across ranks
+      integer(I8) :: np_max=0           !< Max particle count across ranks
+      real(WP)    :: np_eff=0.0_WP      !< Load efficiency (mean/max)
+
       !> Overlap size
       integer :: nover=2
 
@@ -242,6 +284,9 @@ module amrlpt_class
 
       !> Particle volume fraction
       type(amrdata) :: VF
+
+      !> VF threshold for tagging; disabled if <=0
+      real(WP) :: VF_tag=-1.0_WP
 
       !> Two-way coupling source terms
       type(amrdata) :: src
@@ -256,8 +301,19 @@ module amrlpt_class
       real(WP) :: dtmax=huge(1.0_WP)  !< Maximum allowed particle sub-step
       real(WP) :: cflmax=huge(1.0_WP) !< CFL limit for particle sub-stepping
 
+      !> Per-phase wall-clock timers
+      type(timer) :: tmr_coll         !< Collision phase total
+      type(timer) :: tmr_coll_        !< Collision phase w/o MPI
+      type(timer) :: tmr_fill         !< Ghost fill time
+      type(timer) :: tmr_nbl          !< Neighbor list build time
+      type(timer) :: tmr_step         !< Particle stepping phase
+      type(timer) :: tmr_step_        !< Particle stepping phase w/o MPI
+      type(timer) :: tmr_vf           !< Volume fraction computation
+      type(timer) :: tmr_src          !< Source post-processing
+
    contains
-      ! Lifecycle callback
+      ! Lifecycle callbacks
+      procedure :: tagging                !< Tag cells for refinement based on VF
       procedure :: get_cost               !< Compute per-box particle cost for load balancing
       ! Type-bound constructor/destructor
       procedure :: initialize
@@ -272,6 +328,7 @@ module amrlpt_class
       ! Utilities
       procedure :: redistribute           !< Call AMReX redistribute
       procedure :: fill_ghosts            !< Fill ghost particle buffer
+      procedure :: fill_ghosts_radius     !< Fill ghosts with position-based filtering
       procedure :: clear_ghosts           !< Release ghost particle buffer
       procedure :: build_neighbor_list    !< Build explicit pair list within rcrit
       procedure :: get_np                 !< Update global particle count
@@ -284,6 +341,10 @@ module amrlpt_class
       procedure, private :: process_deposit   !< Post-process deposit: intensive conversion + F↔C transfers
       procedure, private :: filter        !< Explicit diffusion filter
       procedure :: gather_region          !< Allgather particles within a bounding box
+      procedure :: mfiter_build           !< Build MFIter for particle grid
+      procedure :: mfiter_destroy         !< Destroy MFIter
+      procedure :: set_particle_ba        !< Set particle BoxArray for a level
+      procedure :: set_particle_dm        !< Set particle DistributionMapping for a level
       procedure :: append                 !< Append a Fortran part array
       ! Print solver info
       procedure :: get_info
@@ -304,10 +365,21 @@ module amrlpt_class
       end subroutine lpt_inject_iface
    end interface
 
+   !> Abstract interface for user-overridable tagging callback
+   abstract interface
+      subroutine lpt_tagging_iface(solver,lvl,time,tags)
+         import :: amrlpt,c_ptr,WP
+         class(amrlpt), intent(inout) :: solver
+         integer, intent(in) :: lvl
+         real(WP), intent(in) :: time
+         type(c_ptr), intent(in) :: tags
+      end subroutine lpt_tagging_iface
+   end interface
+
 contains
 
    ! ============================================================================
-   ! DISPATCHERS (module-level) - recover concrete amrvof type
+   ! DISPATCHERS (module-level) - recover concrete amrlpt type
    ! ============================================================================
 
    !> Dispatch post_regrid: calls type-bound method
@@ -321,6 +393,20 @@ contains
       call c_f_pointer(ctx,this)
       call this%post_regrid(lbase,time)
    end subroutine amrlpt_postregrid
+
+   !> Dispatch tagging: calls type-bound method then user callback
+   subroutine amrlpt_tagging(ctx,lvl,time,tags)
+      use iso_c_binding, only: c_ptr,c_f_pointer
+      implicit none
+      type(c_ptr), intent(in) :: ctx
+      integer, intent(in) :: lvl
+      real(WP), intent(in) :: time
+      type(c_ptr), intent(in) :: tags
+      type(amrlpt), pointer :: this
+      call c_f_pointer(ctx,this)
+      call this%tagging(lvl,time,tags)
+      if (associated(this%user_lpt_tagging)) call this%user_lpt_tagging(lvl,time,tags)
+   end subroutine amrlpt_tagging
 
    !> Dispatch get_cost: calls type-bound method
    subroutine amrlpt_get_cost(ctx,lvl,nboxes,costs,ba)
@@ -347,7 +433,86 @@ contains
       integer, intent(in) :: lbase
       real(WP), intent(in) :: time
       call this%redistribute()
+      call this%update_VF()
    end subroutine post_regrid
+
+   !> Tag cells for refinement where particle VF exceeds VF_tag
+   subroutine tagging(this,lvl,time,tags)
+      use amrex_amr_module, only: amrex_tagboxarray,amrex_box,amrex_mfiter,amrex_mfiter_build,amrex_mfiter_destroy
+      use amrgrid_class, only: SETtag
+      implicit none
+      class(amrlpt), intent(inout) :: this
+      integer, intent(in) :: lvl
+      real(WP), intent(in) :: time
+      type(c_ptr), intent(in) :: tags
+      type(amrex_tagboxarray) :: tba
+      type(amrex_mfiter) :: mfi
+      type(amrex_box) :: bx
+      character(kind=c_char), dimension(:,:,:,:), contiguous, pointer :: tagarr
+      real(WP), dimension(:,:,:,:), contiguous, pointer :: pVF
+      integer :: i,j,k
+      ! Skip if VF tagging is disabled
+      if (this%VF_tag.le.0.0_WP) return
+      ! Resolve tagboxarray pointer
+      tba=tags
+      ! Loop over tiles and tag
+      call amrex_mfiter_build(mfi,this%VF%mf(lvl))
+      do while (mfi%next())
+         tagarr=>tba%dataPtr(mfi)
+         pVF=>this%VF%mf(lvl)%dataptr(mfi)
+         bx=mfi%tilebox()
+         do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
+            if (pVF(i,j,k,1).gt.this%VF_tag) tagarr(i,j,k,1)=SETtag
+         end do; end do; end do
+      end do
+      call amrex_mfiter_destroy(mfi)
+   end subroutine tagging
+
+   !> Build MFIter from the particle grid's BA/DM
+   subroutine mfiter_build(this,lvl,mfi,tiling)
+      use amrex_amr_module, only: amrex_boxarray,amrex_distromap,amrex_mfiter,amrex_mfiter_build
+      implicit none
+      class(amrlpt), intent(inout) :: this
+      integer, intent(in) :: lvl
+      type(amrex_mfiter), intent(out) :: mfi
+      logical, intent(in), optional :: tiling
+      type(amrex_boxarray) :: ba
+      type(amrex_distromap) :: dm
+      logical :: use_tiling
+      use_tiling=.false.; if (present(tiling)) use_tiling=tiling
+      call amrlpt_get_particle_boxarray (this%pc,lvl,ba%p)
+      call amrlpt_get_particle_distromap(this%pc,lvl,dm%p)
+      call amrex_mfiter_build(mfi,ba,dm,tiling=use_tiling)
+   end subroutine mfiter_build
+
+   !> Destroy MFIter
+   subroutine mfiter_destroy(this,mfi)
+      use amrex_amr_module, only: amrex_mfiter,amrex_mfiter_destroy
+      implicit none
+      class(amrlpt), intent(inout) :: this
+      type(amrex_mfiter), intent(inout) :: mfi
+      call amrex_mfiter_destroy(mfi)
+   end subroutine mfiter_destroy
+
+   !> Set particle-specific BoxArray for a given level
+   subroutine set_particle_ba(this,lvl,ba)
+      use amrex_amr_module, only: amrex_boxarray
+      implicit none
+      class(amrlpt), intent(inout) :: this
+      integer, intent(in) :: lvl
+      type(amrex_boxarray), intent(in) :: ba
+      call amrlpt_set_particle_boxarray(this%pc,lvl,ba%p)
+   end subroutine set_particle_ba
+
+   !> Set particle-specific DistributionMapping for a given level
+   subroutine set_particle_dm(this,lvl,dm)
+      use amrex_amr_module, only: amrex_distromap
+      implicit none
+      class(amrlpt), intent(inout) :: this
+      integer, intent(in) :: lvl
+      type(amrex_distromap), intent(in) :: dm
+      call amrlpt_set_particle_distromap(this%pc,lvl,dm%p)
+   end subroutine set_particle_dm
 
    !> Estimate per-box cost for load balancing based on particle count
    !> This assumes that particles don't change level much...
@@ -371,7 +536,7 @@ contains
       dxi=1.0_WP/this%amr%dx(lvl); dyi=1.0_WP/this%amr%dy(lvl); dzi=1.0_WP/this%amr%dz(lvl)
       ! Zero costs, then accumulate particle counts
       costs=0.0_WP
-      call this%amr%mfiter_build(lvl,mfi)
+      call this%mfiter_build(lvl,mfi)
       do while (mfi%next())
          old_bx=mfi%tilebox()
          call this%get_particles(lvl,mfi,p,np_)
@@ -391,7 +556,7 @@ contains
             end do
          end do
       end do
-      call this%amr%mfiter_destroy(mfi)
+      call this%mfiter_destroy(mfi)
       ! Global sum
       call MPI_ALLREDUCE(MPI_IN_PLACE,costs,nboxes,MPI_REAL_WP,MPI_SUM,this%amr%comm,ierr)
    end subroutine get_cost
@@ -427,8 +592,18 @@ contains
       select type (this)
        type is (amrlpt)
          call this%amr%add_postregrid(amrlpt_postregrid,c_loc(this))
+         call this%amr%add_tagging   (amrlpt_tagging,   c_loc(this))
          call this%amr%set_get_cost  (amrlpt_get_cost,  c_loc(this))
       end select
+      ! Initialize per-phase timers (unsynchronized for imbalance detection)
+      this%tmr_coll =timer(comm=this%amr%comm,name='coll', sync=.false.)
+      this%tmr_coll_=timer(comm=this%amr%comm,name='coll_',sync=.false.)
+      this%tmr_fill =timer(comm=this%amr%comm,name='fill', sync=.false.)
+      this%tmr_nbl  =timer(comm=this%amr%comm,name='nbl',  sync=.false.)
+      this%tmr_step =timer(comm=this%amr%comm,name='step', sync=.false.)
+      this%tmr_step_=timer(comm=this%amr%comm,name='step_',sync=.false.)
+      this%tmr_vf   =timer(comm=this%amr%comm,name='VF',   sync=.false.)
+      this%tmr_src  =timer(comm=this%amr%comm,name='src',  sync=.false.)
       ! Print out info
       call this%print()
    end subroutine initialize
@@ -440,9 +615,18 @@ contains
       call this%VF%finalize()
       call this%src%finalize()
       nullify(this%inject)
+      nullify(this%user_lpt_tagging)
       call amrlpt_delete_pc(this%pc)
       this%pc=c_null_ptr
       nullify(this%amr)
+      call this%tmr_coll%finalize()
+      call this%tmr_coll_%finalize()
+      call this%tmr_fill%finalize()
+      call this%tmr_nbl%finalize()
+      call this%tmr_step%finalize()
+      call this%tmr_step_%finalize()
+      call this%tmr_vf%finalize()
+      call this%tmr_src%finalize()
    end subroutine finalize
 
    ! ============================================================================
@@ -473,6 +657,9 @@ contains
       logical :: hit
       integer :: gc
 
+      ! Start collision timer
+      call this%tmr_coll%start()
+
       ! Precompute spring/damping coefficients
       k_coeff=(Pi**2+log(this%e_n)**2)/this%tau_col**2
       eta_coeff=-2.0_WP*log(this%e_n)/this%tau_col
@@ -486,21 +673,22 @@ contains
       this%ncol=0
 
       ! Ghost fill and neighbor list radius: dmax+r_influ_max=1.2*dmax
-      no=1
-      do lvl=0,this%amr%clvl()
-         no=max(no,ceiling(1.2_WP*this%dmax/this%amr%min_meshsize(lvl)))
-      end do
-      call this%fill_ghosts(no)
+      call this%tmr_fill%start()
+      call this%fill_ghosts_radius(1.2_WP*this%dmax)
+      call this%tmr_fill%stop()
+      call this%tmr_nbl%start()
       call this%build_neighbor_list(rcrit=1.2_WP*this%dmax)
+      call this%tmr_nbl%stop()
 
       ! Loop over levels
+      call this%tmr_coll_%start()
       do lvl=0,this%amr%clvl()
 
          ! Get mesh size
          dx=this%amr%dx(lvl); dy=this%amr%dy(lvl); dz=this%amr%dz(lvl)
 
          ! Loop over tiles
-         call this%amr%mfiter_build(lvl,mfi,tiling=.false.)
+         call this%mfiter_build(lvl,mfi)
          do while (mfi%next())
 
             ! Get combined valid+ghost particle array and neighbor list
@@ -570,8 +758,9 @@ contains
 
             end do ! Valid particles
          end do    ! Tiles
-      call this%amr%mfiter_destroy(mfi)
+      call this%mfiter_destroy(mfi)
       end do       ! Levels
+      call this%tmr_coll_%stop()
 
       ! Clear ghosts
       call this%clear_ghosts()
@@ -583,6 +772,9 @@ contains
          call MPI_ALLREDUCE(MPI_IN_PLACE,this%ncol,1,MPI_INTEGER,MPI_SUM,this%amr%comm,ierr)
          this%ncol=this%ncol/2
       end block reduce_collision_count
+
+      ! Stop collision timer
+      call this%tmr_coll%stop()
 
    contains
 
@@ -659,6 +851,7 @@ contains
       call this%update_VF()
 
       ! Process accumulated sources
+      call this%tmr_src%start()
       process_sources: block
          ! Process deposit
          call this%process_deposit(this%src)
@@ -667,6 +860,7 @@ contains
          ! Filter
          call this%filter(this%src)
       end block process_sources
+      call this%tmr_src%stop()
 
       ! Log particle advance
       log_particle_advance: block
@@ -733,6 +927,7 @@ contains
       call this%update_VF()
 
       ! Process accumulated sources
+      call this%tmr_src%start()
       process_sources: block
          ! Process deposit
          call this%process_deposit(this%src)
@@ -741,6 +936,7 @@ contains
          ! Filter
          call this%filter(this%src)
       end block process_sources
+      call this%tmr_src%stop()
 
       ! Advance particle time
       this%t=time
@@ -785,6 +981,9 @@ contains
       type(part) :: myp,pold
       logical :: is_stag
 
+      ! Start step timer
+      call this%tmr_step%start()
+
       ! Resolve optional component indices
       uc=1; if (present(Ucomp)) uc=Ucomp
       vc=1; if (present(Vcomp)) vc=Vcomp
@@ -812,6 +1011,7 @@ contains
       end block check_velocity
 
       ! Loop over all AMR levels
+      call this%tmr_step_%start()
       do lvl=0,this%amr%clvl()
 
          ! Get mesh size
@@ -820,7 +1020,7 @@ contains
          dz=this%amr%dz(lvl); dzi=1.0_WP/dz
 
          ! MFIter over the level
-         call this%amr%mfiter_build(lvl,mfi,tiling=.false.)
+         call this%mfiter_build(lvl,mfi)
          do while (mfi%next())
 
             ! Get pointers to data
@@ -863,6 +1063,22 @@ contains
                      myp%vel=pold%vel+mydt*(acc+this%gravity+myp%Acol)
                      myp%angVel=pold%angVel+mydt*myp%Tcol/Ip
                   end if
+
+                  ! DEBUG: catch bad deposit
+                  if (floor((myp%pos(1)-this%amr%xlo)*dxi-0.5_WP).lt.lbound(pSrc,1) .or. &
+                  &   floor((myp%pos(1)-this%amr%xlo)*dxi-0.5_WP)+1.gt.ubound(pSrc,1) .or. &
+                  &   myp%pos(1).ne.myp%pos(1)) then
+                     write(*,'(A,I0,A,I0)') 'lvl=',lvl,' i=',i
+                     write(*,'(A,3ES18.10)') 'pold%pos=',pold%pos
+                     write(*,'(A,3ES18.10)') ' myp%pos=',myp%pos
+                     write(*,'(A,3ES18.10)') ' myp%vel=',myp%vel
+                     write(*,'(A,3ES18.10)') '     acc=',acc
+                     write(*,'(A,3ES18.10)') '    Acol=',myp%Acol
+                     write(*,'(A,ES18.10)')  '      dt=',mydt
+                     write(*,'(A,I0,A,I0)')  'pSrc x bounds: ',lbound(pSrc,1),' to ',ubound(pSrc,1)
+                     error stop 'BAD DEPOSIT'
+                  end if
+
                   ! Transfer back to the mesh
                   if (IAND(myp%flag,PART_EXCHANGES).ne.0) then
                      dmom=mydt*acc*this%rho*Pi/6.0_WP*myp%d**3
@@ -882,12 +1098,16 @@ contains
                p(i)=myp
             end do
          end do
-         call this%amr%mfiter_destroy(mfi)
+         call this%mfiter_destroy(mfi)
 
       end do
+      call this%tmr_step_%stop()
 
       ! Redistribute particles
       call this%redistribute()
+
+      ! Stop step timer
+      call this%tmr_step%stop()
 
    contains
 
@@ -929,7 +1149,7 @@ contains
          fvisc=fvisc+epsilon(1.0_WP)
          ! Volume fraction
          pVF=(1.0_WP-wx)*(1.0_WP-wy)*(1.0_WP-wz)*pVolFrac(ic,jc,kc,1)+wx*(1.0_WP-wy)*(1.0_WP-wz)*pVolFrac(ic+1,jc,kc,1)+(1.0_WP-wx)*wy*(1.0_WP-wz)*pVolFrac(ic,jc+1,kc,1)+wx*wy*(1.0_WP-wz)*pVolFrac(ic+1,jc+1,kc,1)+(1.0_WP-wx)*(1.0_WP-wy)*wz*pVolFrac(ic,jc,kc+1,1)+wx*(1.0_WP-wy)*wz*pVolFrac(ic+1,jc,kc+1,1)+(1.0_WP-wx)*wy*wz*pVolFrac(ic,jc+1,kc+1,1)+wx*wy*wz*pVolFrac(ic+1,jc+1,kc+1,1)
-         fVF=1.0_WP-pVF
+         fVF=max(1.0_WP-pVF,epsilon(1.0_WP))
          ! Drag correction factor
          select case(trim(this%drag_model))
          case('None','none')
@@ -995,6 +1215,10 @@ contains
       integer(I8) :: np_
       integer :: lvl,i,ii,jj,kk
       real(WP) :: dxi,dyi,dzi,Vp,wx,wy,wz
+
+      ! Start VF timer
+      call this%tmr_vf%start()
+
       ! Zero VF on all levels
       call this%VF%setval(0.0_WP)
       ! Loop over levels
@@ -1004,7 +1228,7 @@ contains
          dyi=1.0_WP/this%amr%dy(lvl)
          dzi=1.0_WP/this%amr%dz(lvl)
          ! Loop over tiles
-         call this%amr%mfiter_build(lvl,mfi,tiling=.false.)
+         call this%mfiter_build(lvl,mfi)
          do while (mfi%next())
             ! Get pointer to data
             pVF=>this%VF%mf(lvl)%dataptr(mfi)
@@ -1038,6 +1262,10 @@ contains
       call this%VF%fill(time=0.0_WP)
       ! Filter
       call this%filter(this%VF)
+
+      ! Stop VF timer
+      call this%tmr_vf%stop()
+
    end subroutine update_VF
 
    !> CFL based on particle velocities relative to their local cell size
@@ -1058,7 +1286,7 @@ contains
       this%CFLp_x=0.0_WP; this%CFLp_y=0.0_WP; this%CFLp_z=0.0_WP; this%CFL_col=0.0_WP
       ! Loop over levels and tiles
       do lvl=0,this%amr%clvl()
-         call this%amr%mfiter_build(lvl,mfi)
+         call this%mfiter_build(lvl,mfi)
          do while (mfi%next())
             ! Loop over particles
             call this%get_particles(lvl,mfi,p,np_)
@@ -1072,7 +1300,7 @@ contains
                this%CFL_col=max(this%CFL_col,norm2(p(n)%vel)/p(n)%d)
             end do
          end do
-         call this%amr%mfiter_destroy(mfi)
+         call this%mfiter_destroy(mfi)
       end do
       ! Global MPI max, scale by dt (10 dt for collision CFL to ensure max CFL of 0.1)
       call MPI_ALLREDUCE(MPI_IN_PLACE,this%CFLp_x, 1,MPI_REAL_WP,MPI_MAX,this%amr%comm,ierr); this%CFLp_x=this%CFLp_x*dt
@@ -1108,6 +1336,15 @@ contains
       integer, intent(in) :: no
       call amrlpt_fill_neighbors(this%pc,no)
    end subroutine fill_ghosts
+
+   !> Fill ghost particles, but only communicate particles within radius of tile boundaries
+   subroutine fill_ghosts_radius(this,radius)
+      use iso_c_binding, only: c_double
+      implicit none
+      class(amrlpt), intent(inout) :: this
+      real(c_double), intent(in) :: radius
+      call amrlpt_fill_neighbors_radius(this%pc,radius)
+   end subroutine fill_ghosts_radius
 
    !> Release ghost particle buffer
    subroutine clear_ghosts(this)
@@ -1320,7 +1557,7 @@ contains
 
    !> Explicit diffusion filter for a cell-centered amrdata field
    subroutine filter(this,A)
-      use amrex_amr_module, only: amrex_box,amrex_mfiter,amrex_multifab,amrex_multifab_destroy
+      use amrex_amr_module, only: amrex_box,amrex_mfiter,amrex_mfiter_build,amrex_mfiter_destroy,amrex_multifab,amrex_multifab_destroy
       use amrex_interface,  only: amrmfab_average_down_face
       implicit none
       class(amrlpt), intent(inout) :: this
@@ -1356,24 +1593,24 @@ contains
             dxi=1.0_WP/this%amr%dx(lvl)
             dyi=1.0_WP/this%amr%dy(lvl)
             dzi=1.0_WP/this%amr%dz(lvl)
-            call this%amr%mfiter_build(lvl,mfi)
-      do while (mfi%next())
+            call amrex_mfiter_build(mfi,A%mf(lvl),tiling=.false.)
+            do while (mfi%next())
                pA =>A%mf(lvl)%dataptr(mfi)
                pFx=>Fx(lvl)%dataptr(mfi); pFy=>Fy(lvl)%dataptr(mfi); pFz=>Fz(lvl)%dataptr(mfi)
                bx=mfi%nodaltilebox(1)
-      do nc=1,A%ncomp; do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
+               do nc=1,A%ncomp; do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
                   pFx(i,j,k,nc)=alpha_step*(pA(i,j,k,nc)-pA(i-1,j,k,nc))*dxi
-      end do; end do; end do; end do
+               end do; end do; end do; end do
                bx=mfi%nodaltilebox(2)
-      do nc=1,A%ncomp; do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
+               do nc=1,A%ncomp; do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
                   pFy(i,j,k,nc)=alpha_step*(pA(i,j,k,nc)-pA(i,j-1,k,nc))*dyi
-      end do; end do; end do; end do
+               end do; end do; end do; end do
                bx=mfi%nodaltilebox(3)
-      do nc=1,A%ncomp; do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
+               do nc=1,A%ncomp; do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
                   pFz(i,j,k,nc)=alpha_step*(pA(i,j,k,nc)-pA(i,j,k-1,nc))*dzi
-      end do; end do; end do; end do
+               end do; end do; end do; end do
             end do
-      call this%amr%mfiter_destroy(mfi)
+            call amrex_mfiter_destroy(mfi)
          end do
          ! Average down face fluxes for C/F conservation (finest→coarsest)
          do lvl=this%amr%clvl(),1,-1
@@ -1386,16 +1623,16 @@ contains
             dxi=1.0_WP/this%amr%dx(lvl)
             dyi=1.0_WP/this%amr%dy(lvl)
             dzi=1.0_WP/this%amr%dz(lvl)
-            call this%amr%mfiter_build(lvl,mfi)
-      do while (mfi%next())
+            call amrex_mfiter_build(mfi,A%mf(lvl),tiling=.false.)
+            do while (mfi%next())
                pA =>A%mf(lvl)%dataptr(mfi)
                pFx=>Fx(lvl)%dataptr(mfi); pFy=>Fy(lvl)%dataptr(mfi); pFz=>Fz(lvl)%dataptr(mfi)
-      bx=mfi%tilebox()
-      do nc=1,A%ncomp; do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
+               bx=mfi%tilebox()
+               do nc=1,A%ncomp; do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
                   pA(i,j,k,nc)=pA(i,j,k,nc)+dxi*(pFx(i+1,j,k,nc)-pFx(i,j,k,nc))+dyi*(pFy(i,j+1,k,nc)-pFy(i,j,k,nc))+dzi*(pFz(i,j,k+1,nc)-pFz(i,j,k,nc))
-      end do; end do; end do; end do
+               end do; end do; end do; end do
             end do
-      call this%amr%mfiter_destroy(mfi)
+            call amrex_mfiter_destroy(mfi)
          end do
          ! Restore coarse valid cells covered by fine
          call A%average_down()
@@ -1437,7 +1674,7 @@ contains
       ! Pass 1: count local particles in box
       nlocal=0
       do lvl=0,this%amr%clvl()
-         call this%amr%mfiter_build(lvl,mfi,tiling=.false.)
+         call this%mfiter_build(lvl,mfi)
          do while(mfi%next())
             call this%get_particles(lvl,mfi,p,np_)
             do m=1,np_
@@ -1446,13 +1683,13 @@ contains
                &   p(m)%pos(3).ge.lo(3).and.p(m)%pos(3).le.hi(3)) nlocal=nlocal+1
             end do
          end do
-         call this%amr%mfiter_destroy(mfi)
+         call this%mfiter_destroy(mfi)
       end do
       ! Pack local matches
       allocate(pbuf(max(nlocal,1)))
       nlocal=0
       do lvl=0,this%amr%clvl()
-         call this%amr%mfiter_build(lvl,mfi,tiling=.false.)
+         call this%mfiter_build(lvl,mfi)
          do while(mfi%next())
             call this%get_particles(lvl,mfi,p,np_)
             do m=1,np_
@@ -1464,7 +1701,7 @@ contains
                end if
             end do
          end do
-         call this%amr%mfiter_destroy(mfi)
+         call this%mfiter_destroy(mfi)
       end do
       ! Allgatherv: exchange counts
       allocate(rcounts(this%amr%nproc),rdisps(this%amr%nproc))
@@ -1526,7 +1763,7 @@ contains
       this%Wmin=huge(1.0_WP); this%Wmax=-huge(1.0_WP); vz_sum=0.0_WP; vz_sq=0.0_WP
       ! Loop over all AMR levels and tiles
       do lvl=0,this%amr%clvl()
-         call this%amr%mfiter_build(lvl,mfi)
+         call this%mfiter_build(lvl,mfi)
          do while (mfi%next())
             call this%get_particles(lvl,mfi,p,np_)
             do n=1,np_
@@ -1539,10 +1776,15 @@ contains
                this%Wmin=min(this%Wmin,p(n)%vel(3)); this%Wmax=max(this%Wmax,p(n)%vel(3)); vz_sum=vz_sum+p(n)%vel(3); vz_sq=vz_sq+p(n)%vel(3)**2
             end do
          end do
-         call this%amr%mfiter_destroy(mfi)
+         call this%mfiter_destroy(mfi)
       end do
-      ! Global MPI reduce
+      ! Compute per-rank particle distribution stats
+      this%np_loc=this%np; this%np_min=this%np; this%np_max=this%np; this%np_eff=0.0_WP
+      call MPI_ALLREDUCE(MPI_IN_PLACE,this%np_min,1,MPI_INTEGER8,MPI_MIN,this%amr%comm,ierr)
+      call MPI_ALLREDUCE(MPI_IN_PLACE,this%np_max,1,MPI_INTEGER8,MPI_MAX,this%amr%comm,ierr)
       call MPI_ALLREDUCE(MPI_IN_PLACE,this%np,    1,MPI_INTEGER8,MPI_SUM,this%amr%comm,ierr)
+      if (this%np_max.gt.0) this%np_eff=real(this%np,WP)/real(this%np_max,WP)/real(this%amr%nproc,WP)
+      ! Reduce other statistics
       call MPI_ALLREDUCE(MPI_IN_PLACE,this%Vp_tot,1,MPI_REAL_WP ,MPI_SUM,this%amr%comm,ierr)
       call MPI_ALLREDUCE(MPI_IN_PLACE,this%dmin,  1,MPI_REAL_WP ,MPI_MIN,this%amr%comm,ierr)
       call MPI_ALLREDUCE(MPI_IN_PLACE,this%dmax,  1,MPI_REAL_WP ,MPI_MAX,this%amr%comm,ierr)
@@ -1586,7 +1828,7 @@ contains
                call amrmask_make_fine(mask,this%amr%ba(lvl+1),[this%amr%rrefx(lvl),this%amr%rrefy(lvl),this%amr%rrefz(lvl)],0,1)
             end if
             ! Loop over tiles
-            call this%amr%mfiter_build(lvl,mfi)
+            call amrex_mfiter_build(mfi,this%VF%mf(lvl))
             do while (mfi%next())
                ! Get pointer to data
                pVF=>this%VF%mf(lvl)%dataptr(mfi)
@@ -1603,7 +1845,7 @@ contains
                   var_sum=var_sum+(pVF(i,j,k,1)-this%VFmean)**2*this%amr%cell_vol(lvl)
                end do; end do; end do
             end do
-            call this%amr%mfiter_destroy(mfi)
+            call amrex_mfiter_destroy(mfi)
             if (lvl.lt.this%amr%clvl()) call amrex_imultifab_destroy(mask)
          end do
          call MPI_ALLREDUCE(MPI_IN_PLACE,this%VFmin,1,MPI_REAL_WP,MPI_MIN,this%amr%comm,ierr)
@@ -1623,6 +1865,26 @@ contains
          this%np_out_loc=0; this%Vp_out_loc=0.0_WP
          this%np_new_loc=0; this%Vp_new_loc=0.0_WP
       end block reduce_local_stats
+
+      ! Compute timing statistics across ranks
+      call this%tmr_coll%get_stats()
+      call this%tmr_coll_%get_stats()
+      call this%tmr_fill%get_stats()
+      call this%tmr_nbl%get_stats()
+      call this%tmr_step%get_stats()
+      call this%tmr_step_%get_stats()
+      call this%tmr_vf%get_stats()
+      call this%tmr_src%get_stats()
+
+      ! Reset timers
+      call this%tmr_coll%reset()
+      call this%tmr_coll_%reset()
+      call this%tmr_fill%reset()
+      call this%tmr_nbl%reset()
+      call this%tmr_step%reset()
+      call this%tmr_step_%reset()
+      call this%tmr_vf%reset()
+      call this%tmr_src%reset()
 
    end subroutine get_info
 

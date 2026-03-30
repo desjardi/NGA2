@@ -306,6 +306,31 @@ void amrcore_get_distromap(void **dm_ptr, int lev, void *core) {
       const_cast<amrex::DistributionMapping *>(&(amr->DistributionMap(lev)));
 }
 
+//-----------------------------------------------------------------------------
+// Standalone cost-weighted DistributionMapping factories
+//   - amrdm_make_knapsack: KnapSack algorithm (cost vector only)
+//   - amrdm_make_sfc:      Space-filling curve (cost vector + BoxArray)
+//   - amrdm_destroy:       Free a heap-allocated DM
+//-----------------------------------------------------------------------------
+void amrdm_make_knapsack(void **dm_out, double *costs, int nboxes) {
+  amrex::Vector<amrex::Real> rcost(costs, costs + nboxes);
+  auto *dm = new amrex::DistributionMapping(
+      amrex::DistributionMapping::makeKnapSack(rcost));
+  *dm_out = dm;
+}
+
+void amrdm_make_sfc(void **dm_out, double *costs, int nboxes, void *ba_ptr) {
+  amrex::Vector<amrex::Real> rcost(costs, costs + nboxes);
+  auto *ba = static_cast<amrex::BoxArray *>(ba_ptr);
+  auto *dm = new amrex::DistributionMapping(
+      amrex::DistributionMapping::makeSFC(rcost, *ba));
+  *dm_out = dm;
+}
+
+void amrdm_destroy(void *dm) {
+  delete static_cast<amrex::DistributionMapping *>(dm);
+}
+
 //=============================================================================
 // MultiFab Operations - amrmfab_* prefix
 //=============================================================================

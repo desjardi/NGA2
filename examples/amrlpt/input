@@ -5,8 +5,9 @@ Base nz:   16
 Max level: 3
 
 # Regridding parameters
-Regrid nsteps:    10
+Regrid nsteps:     10
 Tagging vorticity: 0.5
+Tagging VF:        0.01
 
 # Flow parameter
 Reynolds number: 100
@@ -14,7 +15,7 @@ Reynolds number: 100
 # Particle parameters
 Particle density:  1000
 Particle diameter: 0.05
-Particle mfr:      10
+Particle mfr:      500
 
 # Particle collisions
 Restitution coeff: 0.5

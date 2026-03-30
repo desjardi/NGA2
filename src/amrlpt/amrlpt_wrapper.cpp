@@ -44,9 +44,10 @@ using namespace amrex;
 namespace {
 
 // -----------------------------------------------------------------------
-// Thin subclass of NeighborParticleContainer to:
-//   1. Accept AmrCore* in constructor (via GetParGDB())
-//   2. Expose m_num_neighbor_cells setter (for ngrow at fill time)
+//   AMRLPTPC: Thin subclass of NeighborParticleContainer
+// Purposes:
+//   1. Forward-declare AmrCore-based constructor (ParGDB pass-through)
+//   2. Expose setNeighborCells to allow per-call ghost radius changes
 //   3. Expose m_neighbor_list per tile (for CSR neighbor list access)
 // -----------------------------------------------------------------------
 class AMRLPTPC : public NeighborParticleContainer<AMRLPT_NREAL, AMRLPT_NINT>
@@ -104,6 +105,8 @@ void amrlpt_redistribute(PC* pc, int lev_min, int lev_max, int ng)
 //
 // fillNeighbors communicates particles within ngrow cells of each tile boundary
 // into the tile's particle array (appended after numRealParticles).
+// fillNeighborsRadius only communicates particles within physical distance
+// search_radius of tile boundaries (much less data when search_radius << dx).
 // clearNeighbors removes them.
 // -----------------------------------------------------------------------
 
@@ -111,6 +114,11 @@ void amrlpt_fill_neighbors(PC* pc, int ngrow)
 {
     pc->setNeighborCells(ngrow);
     pc->fillNeighbors();
+}
+
+void amrlpt_fill_neighbors_radius(PC* pc, double search_radius)
+{
+    pc->fillNeighbors(amrex::Real(search_radius));
 }
 
 void amrlpt_clear_neighbors(PC* pc)
@@ -164,7 +172,7 @@ void amrlpt_build_neighbor_list(PC* pc, double rcrit)
             d2 += (p1.pos(dim) - p2.pos(dim)) * (p1.pos(dim) - p2.pos(dim));
         return d2 < rcrit2;
     };
-    pc->buildNeighborList(check_pair, false);
+    pc->buildNeighborList(check_pair, amrex::Real(rcrit), false);
 }
 
 // Returns CSR offsets and list for the neighbor list per tile.
@@ -232,7 +240,7 @@ void amrlpt_get_all_particles_mfi(PC* pc, int lev, MFIter* mfi,
     if (it != plev.end()) {
         auto& ptile = it->second;
         np_valid = static_cast<long long>(ptile.numRealParticles());
-        np_total = static_cast<long long>(ptile.numParticles());  // real + neighbor
+        np_total = static_cast<long long>(ptile.numTotalParticles());  // real + neighbor
         dp = (np_total > 0) ? ptile.GetArrayOfStructs().data() : nullptr;
     } else {
         np_total = 0;
@@ -249,6 +257,34 @@ void amrlpt_num_particles_mfi(PC* pc, int lev, MFIter* mfi, long long& np)
     auto& plev = pc->GetParticles(lev);
     auto it = plev.find(std::make_pair(grid, tile));
     np = (it != plev.end()) ? static_cast<long long>(it->second.numRealParticles()) : 0;
+}
+
+// -----------------------------------------------------------------------
+// Particle grid access (ParGDB: particle-specific BA/DM)
+// In single-grid mode these fall back to the fluid grid.
+// In dual-grid mode these return the particle-specific grid.
+// -----------------------------------------------------------------------
+
+void amrlpt_get_particle_boxarray(PC* pc, int lev, void** ba_ptr)
+{
+    *ba_ptr = const_cast<amrex::BoxArray*>(&(pc->ParticleBoxArray(lev)));
+}
+
+void amrlpt_get_particle_distromap(PC* pc, int lev, void** dm_ptr)
+{
+    *dm_ptr = const_cast<amrex::DistributionMapping*>(&(pc->ParticleDistributionMap(lev)));
+}
+
+void amrlpt_set_particle_boxarray(PC* pc, int lev, void* ba_ptr)
+{
+    auto* ba = static_cast<amrex::BoxArray*>(ba_ptr);
+    pc->SetParticleBoxArray(lev, *ba);
+}
+
+void amrlpt_set_particle_distromap(PC* pc, int lev, void* dm_ptr)
+{
+    auto* dm = static_cast<amrex::DistributionMapping*>(dm_ptr);
+    pc->SetParticleDistributionMap(lev, *dm);
 }
 
 // -----------------------------------------------------------------------

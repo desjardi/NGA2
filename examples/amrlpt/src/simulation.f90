@@ -42,7 +42,7 @@ module simulation
    real(WP) :: vorticity_tag=huge(1.0_WP)
 
    ! Monitoring
-   type(monitor) :: mfile,cflfile,gridfile,partfile
+   type(monitor) :: mfile,cflfile,gridfile,partfile,lbfile
 
    ! Physical parameters
    real(WP) :: visc_mol
@@ -366,12 +366,15 @@ contains
 
       ! Initialize regridding
       init_regridding: block
+         ! Could set strategy to knapsack
+         !amr%lb_strat=1
          ! Create regridding event
          regrid_evt=event(time=time,name='Regrid')
          call param_read('Regrid nsteps',regrid_evt%nper)
          ! Set case-specific tagging
          fs%user_tagging=>my_tagger
          call param_read('Tagging vorticity',vorticity_tag)
+         call param_read('Tagging VF',lpt%VF_tag)
          ! Create initial grid
          call amr%init_from_scratch(time=time%t)
          ! Initialize face velocities
@@ -460,6 +463,24 @@ contains
          call cflfile%add_column(fs%CFLv_y,'CFLv_y')
          call cflfile%add_column(fs%CFLv_z,'CFLv_z')
          call cflfile%write()
+         ! Create load balance monitor
+         lbfile=monitor(amRoot=amr%amRoot,name='balance')
+         call lbfile%add_column(time%n,'Timestep')
+         call lbfile%add_column(time%t,'Time')
+         call lbfile%add_column(lpt%np_min,'Np min')
+         call lbfile%add_column(lpt%np_max,'Np max')
+         call lbfile%add_column(lpt%np_eff,'Np eff')
+         call lbfile%add_column(lpt%tmr_coll_%efficiency,'Coll eff')
+         call lbfile%add_column(lpt%tmr_step_%efficiency,'Step eff')
+         call lbfile%add_column(lpt%tmr_coll%tmax,'Coll tmax')
+         call lbfile%add_column(lpt%tmr_coll_%tmax,'Coll_ tmax')
+         call lbfile%add_column(lpt%tmr_fill%tmax,'Fill tmax')
+         call lbfile%add_column(lpt%tmr_nbl%tmax,'NBL tmax')
+         call lbfile%add_column(lpt%tmr_step%tmax,'Step tmax')
+         call lbfile%add_column(lpt%tmr_step_%tmax,'Step_ tmax')
+         call lbfile%add_column(lpt%tmr_vf%tmax,'VF tmax')
+         call lbfile%add_column(lpt%tmr_src%tmax,'Src tmax')
+         call lbfile%write()
          ! Create grid monitor
          gridfile=monitor(amRoot=amr%amRoot,name='grid')
          call gridfile%add_column(time%n,'Timestep')
@@ -568,6 +589,7 @@ contains
          call mfile%write()
          call cflfile%write()
          call partfile%write()
+         call lbfile%write()
 
          ! Visualization output
          if (viz_evt%occurs()) then
@@ -644,6 +666,7 @@ contains
       call cflfile%finalize()
       call gridfile%finalize()
       call partfile%finalize()
+      call lbfile%finalize()
    end subroutine simulation_final
 
 end module simulation

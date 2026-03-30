@@ -25,6 +25,7 @@ module amrex_interface
    public :: amrcore_set_on_postregrid_dispatch
    public :: amrcore_set_on_cost_dispatch
    public :: amrcore_set_cost_strategy
+   public :: amrdm_make_knapsack,amrdm_make_sfc
 
    !=====================================================================
    ! AmrCore Grid Operations
@@ -182,6 +183,29 @@ module amrex_interface
          type(c_ptr), value :: core
          integer(c_int), value :: strat
       end subroutine amrcore_set_cost_strategy
+
+      !> Build a KnapSack-optimized DistributionMapping from per-box costs
+      subroutine amrdm_make_knapsack_c(dm,costs,nboxes) bind(c,name='amrdm_make_knapsack')
+         import :: c_ptr,c_int,c_double
+         type(c_ptr) :: dm
+         real(c_double) :: costs(*)
+         integer(c_int), value :: nboxes
+      end subroutine amrdm_make_knapsack_c
+
+      !> Build an SFC-optimized DistributionMapping from per-box costs + BoxArray
+      subroutine amrdm_make_sfc_c(dm,costs,nboxes,ba) bind(c,name='amrdm_make_sfc')
+         import :: c_ptr,c_int,c_double
+         type(c_ptr) :: dm
+         real(c_double) :: costs(*)
+         integer(c_int), value :: nboxes
+         type(c_ptr), value :: ba
+      end subroutine amrdm_make_sfc_c
+
+      !> Destroy a heap-allocated DistributionMapping
+      subroutine amrdm_destroy_c(dm) bind(c,name='amrdm_destroy')
+         import :: c_ptr
+         type(c_ptr), value :: dm
+      end subroutine amrdm_destroy_c
 
       !------------------------------------------------------------------
       ! AmrCore Grid Operations
@@ -897,6 +921,31 @@ contains
       linop%owner = .true.
       call amrabeclap_build_c(linop%p, nlevels, gp, bp, dp, sc, hd)
    end subroutine amrabeclap_build
+
+   !====================================================================
+   ! Cost-weighted DistributionMapping Factories
+   !====================================================================
+
+   !> Build a KnapSack-optimized DM from per-box costs
+   subroutine amrdm_make_knapsack(dm,costs,nboxes)
+      use amrex_amr_module, only: amrex_distromap
+      type(amrex_distromap), intent(out) :: dm
+      integer, intent(in) :: nboxes
+      real(WP), intent(in) :: costs(nboxes)
+      call amrdm_make_knapsack_c(dm%p,costs,nboxes)
+      dm%owner=.true.
+   end subroutine amrdm_make_knapsack
+
+   !> Build an SFC-optimized DM from per-box costs + BoxArray
+   subroutine amrdm_make_sfc(dm,costs,nboxes,ba)
+      use amrex_amr_module, only: amrex_distromap,amrex_boxarray
+      type(amrex_distromap), intent(out) :: dm
+      integer, intent(in) :: nboxes
+      real(WP), intent(in) :: costs(nboxes)
+      type(amrex_boxarray), intent(in) :: ba
+      call amrdm_make_sfc_c(dm%p,costs,nboxes,ba%p)
+      dm%owner=.true.
+   end subroutine amrdm_make_sfc
 
 end module amrex_interface
 
