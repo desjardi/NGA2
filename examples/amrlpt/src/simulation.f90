@@ -375,6 +375,7 @@ contains
          fs%user_tagging=>my_tagger
          call param_read('Tagging vorticity',vorticity_tag)
          call param_read('Tagging VF',lpt%VF_tag)
+         call param_read('Balance particles',lpt%rebalance,default=.false.)
          ! Create initial grid
          call amr%init_from_scratch(time=time%t)
          ! Initialize face velocities

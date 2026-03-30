@@ -1244,4 +1244,18 @@ void amrabeclap_build_c(amrex::MLLinOp *&linop, int nlevels,
   linop = static_cast<amrex::MLLinOp *>(abeclap);
 }
 
+//-----------------------------------------------------------------------------
+// ParallelCopy with ADD semantics (for deposit accumulation across DMs)
+//-----------------------------------------------------------------------------
+
+void amrmfab_parallel_add(void *dst_ptr, void *src_ptr,
+                          int srccomp, int dstcomp, int ncomp,
+                          int srcng, int dstng, void *geom_ptr) {
+  auto *dst  = static_cast<amrex::MultiFab *>(dst_ptr);
+  auto *src  = static_cast<amrex::MultiFab *>(src_ptr);
+  auto *geom = static_cast<amrex::Geometry *>(geom_ptr);
+  dst->ParallelCopy(*src, srccomp, dstcomp, ncomp, srcng, dstng,
+                    geom->periodicity(), amrex::FabArrayBase::ADD);
+}
+
 } // extern "C"

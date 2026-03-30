@@ -301,6 +301,9 @@ module amrlpt_class
       real(WP) :: dtmax=huge(1.0_WP)  !< Maximum allowed particle sub-step
       real(WP) :: cflmax=huge(1.0_WP) !< CFL limit for particle sub-stepping
 
+      !> Knapsack load balancing
+      logical :: rebalance=.false.    !< Enable knapsack DM for particles
+
       !> Per-phase wall-clock timers
       type(timer) :: tmr_coll         !< Collision phase total
       type(timer) :: tmr_coll_        !< Collision phase w/o MPI
@@ -313,6 +316,7 @@ module amrlpt_class
 
    contains
       ! Lifecycle callbacks
+      procedure :: post_regrid            !< Post-regrid callback
       procedure :: tagging                !< Tag cells for refinement based on VF
       procedure :: get_cost               !< Compute per-box particle cost for load balancing
       ! Type-bound constructor/destructor
@@ -341,19 +345,18 @@ module amrlpt_class
       procedure, private :: process_deposit   !< Post-process deposit: intensive conversion + F↔C transfers
       procedure, private :: filter        !< Explicit diffusion filter
       procedure :: gather_region          !< Allgather particles within a bounding box
+      procedure :: append                 !< Append a Fortran part array
       procedure :: mfiter_build           !< Build MFIter for particle grid
       procedure :: mfiter_destroy         !< Destroy MFIter
       procedure :: set_particle_ba        !< Set particle BoxArray for a level
       procedure :: set_particle_dm        !< Set particle DistributionMapping for a level
-      procedure :: append                 !< Append a Fortran part array
+      procedure :: get_particle_dm        !< Get particle DistributionMapping for a level
       ! Print solver info
       procedure :: get_info
       procedure :: print
       ! Checkpoint I/O
       procedure :: read
       procedure :: write
-      ! Post-regrid callback
-      procedure :: post_regrid
    end type amrlpt
 
    !> Abstract interface for user-provided particle injection callback
@@ -432,8 +435,63 @@ contains
       class(amrlpt), intent(inout) :: this
       integer, intent(in) :: lbase
       real(WP), intent(in) :: time
+
+      ! Force resync particle container with new ba/dm
+      resync: block
+         integer :: lvl
+         do lvl=0,this%amr%clvl()
+            call this%set_particle_ba(lvl,this%amr%get_boxarray(lvl))
+            call this%set_particle_dm(lvl,this%amr%get_distromap(lvl))
+         end do
+      end block resync
+
+      ! Redistribute particles onto new grid
       call this%redistribute()
+
+      ! Optionally rebalance particles with knapsack
+      if (this%rebalance) then
+         rebalance_particles: block
+            use amrex_amr_module, only: amrex_distromap,amrex_distromap_destroy,amrex_mfiter,amrex_boxarray
+            use amrex_interface,  only: amrdm_make_knapsack
+            use parallel, only: MPI_REAL_WP
+            use mpi_f08, only: MPI_ALLREDUCE,MPI_SUM,MPI_IN_PLACE
+            integer :: lvl,nboxes,ierr
+            real(WP), dimension(:), allocatable :: costs
+            type(amrex_boxarray) :: ba
+            type(amrex_distromap) :: new_dm
+            type(amrex_mfiter) :: mfi
+            type(part), dimension(:), pointer :: p
+            integer(I8) :: np_
+            ! Loop over levels
+            do lvl=0,this%amr%clvl()
+               ! Count number of boxes at that level and prepare costs array
+               ba=this%amr%get_boxarray(lvl); nboxes=int(ba%nboxes())
+               allocate(costs(nboxes));costs=0.0_WP
+               ! Count particles per box via MFIter
+               call this%mfiter_build(lvl,mfi)
+               do while (mfi%next())
+                  call this%get_particles(lvl,mfi,p,np_)
+                  costs(mfi%grid_index()+1)=real(np_,WP)
+               end do
+               call this%mfiter_destroy(mfi)
+               ! Global sum
+               call MPI_ALLREDUCE(MPI_IN_PLACE,costs,nboxes,MPI_REAL_WP,MPI_SUM,this%amr%comm,ierr)
+               ! Build knapsack DM from costs
+               call amrdm_make_knapsack(new_dm,costs,nboxes)
+               ! Apply to particle container
+               call this%set_particle_dm(lvl,new_dm)
+               ! Clean up
+               call amrex_distromap_destroy(new_dm)
+               deallocate(costs)
+            end do
+            ! Redistribute particles onto new DM
+            call this%redistribute()
+         end block rebalance_particles
+      end if
+
+      ! Recompute VF from particle positions
       call this%update_VF()
+
    end subroutine post_regrid
 
    !> Tag cells for refinement where particle VF exceeds VF_tag
@@ -467,52 +525,6 @@ contains
       end do
       call amrex_mfiter_destroy(mfi)
    end subroutine tagging
-
-   !> Build MFIter from the particle grid's BA/DM
-   subroutine mfiter_build(this,lvl,mfi,tiling)
-      use amrex_amr_module, only: amrex_boxarray,amrex_distromap,amrex_mfiter,amrex_mfiter_build
-      implicit none
-      class(amrlpt), intent(inout) :: this
-      integer, intent(in) :: lvl
-      type(amrex_mfiter), intent(out) :: mfi
-      logical, intent(in), optional :: tiling
-      type(amrex_boxarray) :: ba
-      type(amrex_distromap) :: dm
-      logical :: use_tiling
-      use_tiling=.false.; if (present(tiling)) use_tiling=tiling
-      call amrlpt_get_particle_boxarray (this%pc,lvl,ba%p)
-      call amrlpt_get_particle_distromap(this%pc,lvl,dm%p)
-      call amrex_mfiter_build(mfi,ba,dm,tiling=use_tiling)
-   end subroutine mfiter_build
-
-   !> Destroy MFIter
-   subroutine mfiter_destroy(this,mfi)
-      use amrex_amr_module, only: amrex_mfiter,amrex_mfiter_destroy
-      implicit none
-      class(amrlpt), intent(inout) :: this
-      type(amrex_mfiter), intent(inout) :: mfi
-      call amrex_mfiter_destroy(mfi)
-   end subroutine mfiter_destroy
-
-   !> Set particle-specific BoxArray for a given level
-   subroutine set_particle_ba(this,lvl,ba)
-      use amrex_amr_module, only: amrex_boxarray
-      implicit none
-      class(amrlpt), intent(inout) :: this
-      integer, intent(in) :: lvl
-      type(amrex_boxarray), intent(in) :: ba
-      call amrlpt_set_particle_boxarray(this%pc,lvl,ba%p)
-   end subroutine set_particle_ba
-
-   !> Set particle-specific DistributionMapping for a given level
-   subroutine set_particle_dm(this,lvl,dm)
-      use amrex_amr_module, only: amrex_distromap
-      implicit none
-      class(amrlpt), intent(inout) :: this
-      integer, intent(in) :: lvl
-      type(amrex_distromap), intent(in) :: dm
-      call amrlpt_set_particle_distromap(this%pc,lvl,dm%p)
-   end subroutine set_particle_dm
 
    !> Estimate per-box cost for load balancing based on particle count
    !> This assumes that particles don't change level much...
@@ -635,7 +647,8 @@ contains
 
    !> Soft-sphere collision model: computes Acol, Tcol on every valid particle with flag PART_COLLIDES set
    subroutine collide(this,dt,Gib,Gibcomp)
-      use amrex_amr_module, only: amrex_mfiter
+      use amrex_amr_module, only: amrex_mfiter,amrex_multifab,amrex_multifab_build,amrex_multifab_destroy,amrex_distromap
+      use amrex_distromap_module, only: operator(.eq.)
       use amrdata_class, only: amrdata
       use mathtools, only: Pi,cross_product
       implicit none
@@ -654,8 +667,9 @@ contains
       real(WP), dimension(3) :: r1,v1,w1,r2,v2,w2
       real(WP) :: k_coeff,eta_coeff,k_coeff_w,eta_coeff_w
       real(WP) :: dx,dy,dz
-      logical :: hit
+      logical :: hit,dual_dm
       integer :: gc
+      type(amrex_multifab) :: tmpGib
 
       ! Start collision timer
       call this%tmr_coll%start()
@@ -687,6 +701,15 @@ contains
          ! Get mesh size
          dx=this%amr%dx(lvl); dy=this%amr%dy(lvl); dz=this%amr%dz(lvl)
 
+         ! Check if we need dual-grid bridge for Gib
+         if (present(Gib)) then
+            dual_dm=(.not.(Gib%mf(lvl)%dm.eq.this%get_particle_dm(lvl)))
+            if (dual_dm) then
+               call amrex_multifab_build(mf=tmpGib,ba=this%amr%ba(lvl),dm=this%get_particle_dm(lvl),nc=Gib%mf(lvl)%ncomp(),ng=Gib%mf(lvl)%nghost(),nodal=Gib%nodal)
+               call tmpGib%parallel_copy(Gib%mf(lvl),1,1,Gib%mf(lvl)%ncomp(),Gib%mf(lvl)%nghost(),Gib%mf(lvl)%nghost(),this%amr%geom(lvl))
+            end if
+         end if
+
          ! Loop over tiles
          call this%mfiter_build(lvl,mfi)
          do while (mfi%next())
@@ -696,7 +719,13 @@ contains
             call this%get_neighbor_list(lvl,mfi,nbr_off,nbr_lst)
 
             ! Gib array pointer for IB collision
-            if (present(Gib)) pG=>Gib%mf(lvl)%dataptr(mfi)
+            if (present(Gib)) then
+               if (dual_dm) then
+                  pG=>tmpGib%dataptr(mfi)
+               else
+                  pG=>Gib%mf(lvl)%dataptr(mfi)
+               end if
+            end if
 
             ! Loop over valid particles
             do i1=1,np_v
@@ -756,10 +785,15 @@ contains
                if (this%amr%ny.eq.1) then; p(i1)%Acol(2)=0.0_WP; p(i1)%Tcol(1)=0.0_WP; p(i1)%Tcol(3)=0.0_WP; end if
                if (this%amr%nz.eq.1) then; p(i1)%Acol(3)=0.0_WP; p(i1)%Tcol(1)=0.0_WP; p(i1)%Tcol(2)=0.0_WP; end if
 
-            end do ! Valid particles
-         end do    ! Tiles
-      call this%mfiter_destroy(mfi)
-      end do       ! Levels
+            end do
+
+         end do
+         call this%mfiter_destroy(mfi)
+
+         ! Clean up temporary Gib multifab if used
+         if (dual_dm.and.present(Gib)) call amrex_multifab_destroy(tmpGib)
+
+      end do
       call this%tmr_coll_%stop()
 
       ! Clear ghosts
@@ -833,6 +867,9 @@ contains
    !> rhocomp/visccomp: component to use from rho/visc fields (optional, default 1)
    !> cst_rho/cst_visc: constant scalar alternatives to rho/visc amrdata
    subroutine advance(this,dt,U,Ucomp,V,Vcomp,W,Wcomp,rho,rhocomp,visc,visccomp,cst_rho,cst_visc)
+      use amrex_amr_module, only: amrex_distromap
+      use amrex_distromap_module, only: operator(.eq.)
+      use amrex_interface, only: amrmfab_parallel_add
       implicit none
       class(amrlpt), intent(inout) :: this
       real(WP), intent(in) :: dt
@@ -840,12 +877,63 @@ contains
       type(amrdata), intent(in), optional :: rho,visc
       real(WP),      intent(in), optional :: cst_rho,cst_visc
       integer,       intent(in), optional :: Ucomp,Vcomp,Wcomp,rhocomp,visccomp
+      type(amrex_distromap), dimension(:), allocatable :: pdms
+      logical :: any_dual_dm
+      type(amrdata) :: U_pdm,V_pdm,W_pdm,rho_pdm,visc_pdm,VF_pdm,src_pdm
+      integer :: lvl
+
+      ! Build per-level particle DM array and check for dual-grid
+      allocate(pdms(0:this%amr%clvl()))
+      any_dual_dm=.false.
+      do lvl=0,this%amr%clvl()
+         pdms(lvl)=this%get_particle_dm(lvl)
+         if (.not.(this%amr%dm(lvl).eq.pdms(lvl))) any_dual_dm=.true.
+      end do
+
+      ! Clone fields onto particle DMs if needed
+      if (any_dual_dm) then
+         call U%clone(U_pdm,dm=pdms)
+         call V%clone(V_pdm,dm=pdms)
+         call W%clone(W_pdm,dm=pdms)
+         if (present(rho))  call rho%clone(rho_pdm,dm=pdms)
+         if (present(visc)) call visc%clone(visc_pdm,dm=pdms)
+         call this%VF%clone(VF_pdm,dm=pdms)
+         call this%src%clone(src_pdm,dm=pdms)
+      end if
 
       ! Reset sources
       call this%src%setval(0.0_WP)
+      if (any_dual_dm) call src_pdm%setval(0.0_WP)
 
       ! Perform one step
-      call this%step(dt=dt,U=U,V=V,W=W,rho=rho,visc=visc,cst_rho=cst_rho,cst_visc=cst_visc,Ucomp=Ucomp,Vcomp=Vcomp,Wcomp=Wcomp,rhocomp=rhocomp,visccomp=visccomp)
+      if (any_dual_dm) then
+         if (present(rho).and.present(visc)) then
+            call this%step(dt=dt,U=U_pdm,V=V_pdm,W=W_pdm,VF=VF_pdm,src=src_pdm,rho=rho_pdm,visc=visc_pdm,cst_rho=cst_rho,cst_visc=cst_visc,Ucomp=Ucomp,Vcomp=Vcomp,Wcomp=Wcomp,rhocomp=rhocomp,visccomp=visccomp)
+         else if (present(rho)) then
+            call this%step(dt=dt,U=U_pdm,V=V_pdm,W=W_pdm,VF=VF_pdm,src=src_pdm,rho=rho_pdm,cst_visc=cst_visc,Ucomp=Ucomp,Vcomp=Vcomp,Wcomp=Wcomp,rhocomp=rhocomp)
+         else if (present(visc)) then
+            call this%step(dt=dt,U=U_pdm,V=V_pdm,W=W_pdm,VF=VF_pdm,src=src_pdm,visc=visc_pdm,cst_rho=cst_rho,Ucomp=Ucomp,Vcomp=Vcomp,Wcomp=Wcomp,visccomp=visccomp)
+         else
+            call this%step(dt=dt,U=U_pdm,V=V_pdm,W=W_pdm,VF=VF_pdm,src=src_pdm,cst_rho=cst_rho,cst_visc=cst_visc,Ucomp=Ucomp,Vcomp=Vcomp,Wcomp=Wcomp)
+         end if
+      else
+         call this%step(dt=dt,U=U,V=V,W=W,VF=this%VF,src=this%src,rho=rho,visc=visc,cst_rho=cst_rho,cst_visc=cst_visc,Ucomp=Ucomp,Vcomp=Vcomp,Wcomp=Wcomp,rhocomp=rhocomp,visccomp=visccomp)
+      end if
+
+      ! Writeback src_pdm to src and clean up clones
+      if (any_dual_dm) then
+         do lvl=0,this%amr%clvl()
+            call amrmfab_parallel_add(this%src%mf(lvl),src_pdm%mf(lvl),1,1,this%src%mf(lvl)%ncomp(),0,0,this%amr%geom(lvl))
+         end do
+         call U_pdm%finalize()
+         call V_pdm%finalize()
+         call W_pdm%finalize()
+         if (present(rho))  call rho_pdm%finalize()
+         if (present(visc)) call visc_pdm%finalize()
+         call VF_pdm%finalize()
+         call src_pdm%finalize()
+      end if
+      deallocate(pdms)
 
       ! Recompute particle volume fraction
       call this%update_VF()
@@ -882,6 +970,9 @@ contains
    !> Sub-step size is adapted from this%dt (persistent) using this%cflmax
    !> On exit, this%t=t_target and this%dt holds the last adapted sub-step
    subroutine advance_to(this,time,do_collide,U,V,W,rho,visc,cst_rho,cst_visc,Ucomp,Vcomp,Wcomp,rhocomp,visccomp,Gib,Gibcomp)
+      use amrex_amr_module, only: amrex_distromap
+      use amrex_distromap_module, only: operator(.eq.)
+      use amrex_interface, only: amrmfab_parallel_add
       use messager, only: die
       implicit none
       class(amrlpt), intent(inout) :: this
@@ -894,7 +985,10 @@ contains
       type(amrdata), intent(in), optional :: Gib
       integer,       intent(in), optional :: Gibcomp
       real(WP) :: dt_done,mydt,cfl
-      integer  :: n_sub
+      integer  :: n_sub,lvl
+      type(amrex_distromap), dimension(:), allocatable :: pdms
+      logical :: any_dual_dm
+      type(amrdata) :: U_pdm,V_pdm,W_pdm,rho_pdm,visc_pdm,Gib_pdm,VF_pdm,src_pdm
 
       ! Validate time target
       if (time.le.this%t) return
@@ -903,8 +997,29 @@ contains
       call this%get_cfl(this%dt,cflc=cfl,cfl=cfl)
       if (cfl.gt.0.0_WP) this%dt=min(this%dt*this%cflmax/cfl,this%dtmax)
 
+      ! Build per-level particle DM array and check for dual-grid
+      allocate(pdms(0:this%amr%clvl()))
+      any_dual_dm=.false.
+      do lvl=0,this%amr%clvl()
+         pdms(lvl)=this%get_particle_dm(lvl)
+         if (.not.(this%amr%dm(lvl).eq.pdms(lvl))) any_dual_dm=.true.
+      end do
+
+      ! Clone fields onto particle DMs if needed (ONE TIME before sub-step loop)
+      if (any_dual_dm) then
+         call U%clone(U_pdm,dm=pdms)
+         call V%clone(V_pdm,dm=pdms)
+         call W%clone(W_pdm,dm=pdms)
+         if (present(rho))  call rho%clone(rho_pdm,dm=pdms)
+         if (present(visc)) call visc%clone(visc_pdm,dm=pdms)
+         if (present(Gib))  call Gib%clone(Gib_pdm,dm=pdms)
+         call this%VF%clone(VF_pdm,dm=pdms)
+         call this%src%clone(src_pdm,dm=pdms)
+      end if
+
       ! Reset sources
       call this%src%setval(0.0_WP)
+      if (any_dual_dm) call src_pdm%setval(0.0_WP)
 
       ! Sub-step loop: inject, collide, step, accumulate src
       dt_done=0.0_WP; n_sub=0
@@ -914,16 +1029,48 @@ contains
          ! Inject if needed
          if (associated(this%inject)) call this%inject(dt=mydt)
          ! Collide if needed
-         if (do_collide) call this%collide(dt=mydt,Gib=Gib,Gibcomp=Gibcomp)
+         if (do_collide) then
+            if (any_dual_dm.and.present(Gib)) then
+               call this%collide(dt=mydt,Gib=Gib_pdm,Gibcomp=Gibcomp)
+            else
+               call this%collide(dt=mydt,Gib=Gib,Gibcomp=Gibcomp)
+            end if
+         end if
          ! Step particles
-         call this%step(dt=mydt,U=U,V=V,W=W,rho=rho,visc=visc,cst_rho=cst_rho,cst_visc=cst_visc,Ucomp=Ucomp,Vcomp=Vcomp,Wcomp=Wcomp,rhocomp=rhocomp,visccomp=visccomp)
+         if (any_dual_dm) then
+            if (present(rho).and.present(visc)) then
+               call this%step(dt=mydt,U=U_pdm,V=V_pdm,W=W_pdm,VF=VF_pdm,src=src_pdm,rho=rho_pdm,visc=visc_pdm,cst_rho=cst_rho,cst_visc=cst_visc,Ucomp=Ucomp,Vcomp=Vcomp,Wcomp=Wcomp,rhocomp=rhocomp,visccomp=visccomp)
+            else if (present(rho)) then
+               call this%step(dt=mydt,U=U_pdm,V=V_pdm,W=W_pdm,VF=VF_pdm,src=src_pdm,rho=rho_pdm,cst_visc=cst_visc,Ucomp=Ucomp,Vcomp=Vcomp,Wcomp=Wcomp,rhocomp=rhocomp)
+            else if (present(visc)) then
+               call this%step(dt=mydt,U=U_pdm,V=V_pdm,W=W_pdm,VF=VF_pdm,src=src_pdm,visc=visc_pdm,cst_rho=cst_rho,Ucomp=Ucomp,Vcomp=Vcomp,Wcomp=Wcomp,visccomp=visccomp)
+            else
+               call this%step(dt=mydt,U=U_pdm,V=V_pdm,W=W_pdm,VF=VF_pdm,src=src_pdm,cst_rho=cst_rho,cst_visc=cst_visc,Ucomp=Ucomp,Vcomp=Vcomp,Wcomp=Wcomp)
+            end if
+         else
+            call this%step(dt=mydt,U=U,V=V,W=W,VF=this%VF,src=this%src,rho=rho,visc=visc,cst_rho=cst_rho,cst_visc=cst_visc,Ucomp=Ucomp,Vcomp=Vcomp,Wcomp=Wcomp,rhocomp=rhocomp,visccomp=visccomp)
+         end if
          ! Increment time and sub-step counter
          dt_done=dt_done+mydt; n_sub=n_sub+1
-         ! Recompute particle volume fraction inside
-         !call this%update_VF()
       end do
 
-      ! Recompute particle volume fraction outside
+      ! Writeback src_pdm to src and clean up clones
+      if (any_dual_dm) then
+         do lvl=0,this%amr%clvl()
+            call amrmfab_parallel_add(this%src%mf(lvl),src_pdm%mf(lvl),1,1,this%src%mf(lvl)%ncomp(),0,0,this%amr%geom(lvl))
+         end do
+         call U_pdm%finalize()
+         call V_pdm%finalize()
+         call W_pdm%finalize()
+         if (present(rho))  call rho_pdm%finalize()
+         if (present(visc)) call visc_pdm%finalize()
+         if (present(Gib))  call Gib_pdm%finalize()
+         call VF_pdm%finalize()
+         call src_pdm%finalize()
+      end if
+      deallocate(pdms)
+
+      ! Recompute particle volume fraction
       call this%update_VF()
 
       ! Process accumulated sources
@@ -957,15 +1104,17 @@ contains
 
    end subroutine advance_to
 
-   !> Step all particles on all AMR levels by dt, deposit momentum source into this%src redistribute
-   subroutine step(this,dt,U,V,W,rho,visc,cst_rho,cst_visc,Ucomp,Vcomp,Wcomp,rhocomp,visccomp)
+   !> Step all particles on all AMR levels by dt, deposit momentum source
+   !> All amrdata arguments must be on the particle DM (caller ensures via clone)
+   subroutine step(this,dt,U,V,W,VF,src,rho,visc,cst_rho,cst_visc,Ucomp,Vcomp,Wcomp,rhocomp,visccomp)
       use amrex_amr_module, only: amrex_mfiter,amrex_mfiter_build,amrex_mfiter_destroy
       use mathtools, only: Pi
       use messager,  only: die
       implicit none
       class(amrlpt), intent(inout) :: this
       real(WP), intent(in) :: dt
-      type(amrdata), intent(in) :: U,V,W
+      type(amrdata), intent(in) :: U,V,W,VF
+      type(amrdata), intent(inout) :: src
       type(amrdata), intent(in), optional :: rho,visc
       real(WP),      intent(in), optional :: cst_rho,cst_visc
       integer,       intent(in), optional :: Ucomp,Vcomp,Wcomp,rhocomp,visccomp
@@ -1029,8 +1178,8 @@ contains
             pW      =>W%mf(lvl)%dataptr(mfi)
             if (present(rho))  pRho =>rho%mf(lvl)%dataptr(mfi)
             if (present(visc)) pVisc=>visc%mf(lvl)%dataptr(mfi)
-            pVolFrac=>this%VF%mf(lvl)%dataptr(mfi)
-            pSrc    =>this%src%mf(lvl)%dataptr(mfi)
+            pVolFrac=>VF%mf(lvl)%dataptr(mfi)
+            pSrc    =>src%mf(lvl)%dataptr(mfi)
 
             ! Get particles on this tile
             call this%get_particles(lvl=lvl,mfi=mfi,p=p,np=np_)
@@ -1205,7 +1354,8 @@ contains
 
    !> Update particle volume fraction field based on our current particles
    subroutine update_VF(this)
-      use amrex_amr_module, only: amrex_mfiter,amrex_mfiter_build,amrex_mfiter_destroy
+      use amrex_amr_module, only: amrex_mfiter,amrex_mfiter_build,amrex_mfiter_destroy,amrex_multifab,amrex_multifab_build,amrex_multifab_destroy,amrex_distromap
+      use amrex_distromap_module, only: operator(.eq.)
       use mathtools, only: Pi
       implicit none
       class(amrlpt), intent(inout) :: this
@@ -1215,6 +1365,8 @@ contains
       integer(I8) :: np_
       integer :: lvl,i,ii,jj,kk
       real(WP) :: dxi,dyi,dzi,Vp,wx,wy,wz
+      type(amrex_multifab) :: tmpVF
+      logical :: dual_dm
 
       ! Start VF timer
       call this%tmr_vf%start()
@@ -1227,11 +1379,21 @@ contains
          dxi=1.0_WP/this%amr%dx(lvl)
          dyi=1.0_WP/this%amr%dy(lvl)
          dzi=1.0_WP/this%amr%dz(lvl)
+         ! Check if we need dual-grid parallel_copy bridge
+         dual_dm=(.not.(this%VF%mf(lvl)%dm.eq.this%get_particle_dm(lvl)))
+         if (dual_dm) then
+            call amrex_multifab_build(mf=tmpVF,ba=this%amr%ba(lvl),dm=this%get_particle_dm(lvl),nc=this%VF%mf(lvl)%ncomp(),ng=this%VF%mf(lvl)%nghost(),nodal=this%VF%nodal)
+            call tmpVF%setval(0.0_WP)
+         end if
          ! Loop over tiles
          call this%mfiter_build(lvl,mfi)
          do while (mfi%next())
             ! Get pointer to data
-            pVF=>this%VF%mf(lvl)%dataptr(mfi)
+            if (dual_dm) then
+               pVF=>tmpVF%dataptr(mfi)
+            else
+               pVF=>this%VF%mf(lvl)%dataptr(mfi)
+            end if
             ! Loop over particles
             call this%get_particles(lvl=lvl,mfi=mfi,p=p,np=np_)
             do i=1,np_
@@ -1255,6 +1417,11 @@ contains
             end do
          end do
          call amrex_mfiter_destroy(mfi)
+         ! If dual DM, parallel_copy VF back to Euler DM
+         if (dual_dm) then
+            call this%VF%mf(lvl)%parallel_copy(tmpVF,1,1,this%VF%mf(lvl)%ncomp(),this%VF%mf(lvl)%nghost(),this%VF%mf(lvl)%nghost(),this%amr%geom(lvl))
+            call amrex_multifab_destroy(tmpVF)
+         end if
       end do
       ! Post-process deposit
       call this%process_deposit(this%VF)
@@ -1735,6 +1902,63 @@ contains
       end if
       call amrlpt_append_particles(this%pc,raw,int(n,c_int64_t))
    end subroutine append
+
+   !> Build MFIter from the particle grid's BA/DM
+   subroutine mfiter_build(this,lvl,mfi,tiling)
+      use amrex_amr_module, only: amrex_boxarray,amrex_distromap,amrex_mfiter,amrex_mfiter_build
+      implicit none
+      class(amrlpt), intent(inout) :: this
+      integer, intent(in) :: lvl
+      type(amrex_mfiter), intent(out) :: mfi
+      logical, intent(in), optional :: tiling
+      type(amrex_boxarray) :: ba
+      type(amrex_distromap) :: dm
+      logical :: use_tiling
+      use_tiling=.false.; if (present(tiling)) use_tiling=tiling
+      call amrlpt_get_particle_boxarray (this%pc,lvl,ba%p)
+      call amrlpt_get_particle_distromap(this%pc,lvl,dm%p)
+      call amrex_mfiter_build(mfi,ba,dm,tiling=use_tiling)
+   end subroutine mfiter_build
+
+   !> Destroy MFIter
+   subroutine mfiter_destroy(this,mfi)
+      use amrex_amr_module, only: amrex_mfiter,amrex_mfiter_destroy
+      implicit none
+      class(amrlpt), intent(inout) :: this
+      type(amrex_mfiter), intent(inout) :: mfi
+      call amrex_mfiter_destroy(mfi)
+   end subroutine mfiter_destroy
+
+   !> Set particle-specific BoxArray for a given level
+   subroutine set_particle_ba(this,lvl,ba)
+      use amrex_amr_module, only: amrex_boxarray
+      implicit none
+      class(amrlpt), intent(inout) :: this
+      integer, intent(in) :: lvl
+      type(amrex_boxarray), intent(in) :: ba
+      call amrlpt_set_particle_boxarray(this%pc,lvl,ba%p)
+   end subroutine set_particle_ba
+
+   !> Set particle-specific DistributionMapping for a given level
+   subroutine set_particle_dm(this,lvl,dm)
+      use amrex_amr_module, only: amrex_distromap
+      implicit none
+      class(amrlpt), intent(inout) :: this
+      integer, intent(in) :: lvl
+      type(amrex_distromap), intent(in) :: dm
+      call amrlpt_set_particle_distromap(this%pc,lvl,dm%p)
+   end subroutine set_particle_dm
+
+   !> Get particle-specific DistributionMapping for a given level
+   function get_particle_dm(this,lvl) result(dm)
+      use amrex_amr_module, only: amrex_distromap
+      implicit none
+      class(amrlpt), intent(in) :: this
+      integer, intent(in) :: lvl
+      type(amrex_distromap) :: dm
+      call amrlpt_get_particle_distromap(this%pc,lvl,dm%p)
+      dm%owner=.false.
+   end function get_particle_dm
 
    ! ============================================================================
    ! SOLVER INFO

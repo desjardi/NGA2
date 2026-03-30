@@ -90,6 +90,8 @@ module amrdata_class
       procedure :: get_magnitude    !< M = sqrt(srcX(compX)²+srcY(compY)²+srcZ(compZ)²), comps default to 1
       ! Iteration helper
       procedure :: mfiter_build     !< Build MFIter from this data's MultiFab
+      ! Cloning
+      procedure :: clone            !< Clone amrdata with optional alternate DM per level
    end type amrdata
 
    !> Abstract interface for on_init callback
@@ -1017,6 +1019,52 @@ contains
          call amrex_mfiter_destroy(mfi)
       end do
    end subroutine get_magnitude
+
+   ! ============================================================================
+   ! CLONING
+   ! ============================================================================
+
+   !> Clone this amrdata into dest, optionally using alternate DMs per level
+   !> All class members are fully populated. MultiFabs are built and parallel_copied.
+   subroutine clone(this,dest,dm)
+      use amrex_amr_module, only: amrex_multifab_build
+      use messager, only: die
+      implicit none
+      class(amrdata), intent(in) :: this
+      type(amrdata), intent(inout) :: dest
+      type(amrex_distromap), dimension(0:), intent(in), optional :: dm
+      integer :: lvl
+      ! Copy all metadata
+      dest%amr   =>this%amr
+      dest%parent=>this%parent
+      dest%name  =trim(this%name)//'_clone'
+      dest%ncomp =this%ncomp
+      dest%ng    =this%ng
+      dest%nodal =this%nodal
+      dest%interp=this%interp
+      dest%fill_lvl_cache=this%fill_lvl_cache
+      ! Copy BCs
+      if (allocated(this%lo_bc)) allocate(dest%lo_bc,source=this%lo_bc)
+      if (allocated(this%hi_bc)) allocate(dest%hi_bc,source=this%hi_bc)
+      ! Copy callbacks
+      dest%on_init  =>this%on_init
+      dest%on_coarse=>this%on_coarse
+      dest%on_remake=>this%on_remake
+      dest%on_clear =>this%on_clear
+      dest%fillbc   =>this%fillbc
+      dest%user_init=>this%user_init
+      ! Build MultiFabs on alternate or same DM, parallel_copy data
+      if (present(dm)) then
+         if (size(dm).lt.size(this%mf)) call die('[amrdata clone] dm array too small for number of levels')
+      end if
+      allocate(dest%mf(lbound(this%mf,1):ubound(this%mf,1)))
+      do lvl=lbound(this%mf,1),ubound(this%mf,1)
+         if (present(dm)) then; call amrex_multifab_build(dest%mf(lvl),this%amr%ba(lvl),         dm(lvl),this%ncomp,this%ng,this%nodal)
+         else;                  call amrex_multifab_build(dest%mf(lvl),this%amr%ba(lvl),this%amr%dm(lvl),this%ncomp,this%ng,this%nodal)
+         end if
+         call dest%mf(lvl)%parallel_copy(this%mf(lvl),1,1,this%ncomp,this%ng,this%ng,this%amr%geom(lvl))
+      end do
+   end subroutine clone
 
    ! ============================================================================
    ! HELPER ROUTINES

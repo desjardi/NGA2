@@ -46,6 +46,7 @@ module amrex_interface
    !=====================================================================
    ! FillPatch Operations
    !=====================================================================
+   public :: amrmfab_parallel_add
    public :: amrmfab_fillpatch_single
    public :: amrmfab_fillpatch_two
    public :: amrmfab_fillcoarsepatch
@@ -578,6 +579,14 @@ module amrex_interface
          integer(c_int), value :: ngcrse
       end subroutine amrmfab_average_down_node_c
 
+      !> ParallelCopy with ADD semantics
+      subroutine amrmfab_parallel_add_c(dst,src,srccomp,dstcomp,ncomp,srcng,dstng,geom) &
+      &  bind(c,name='amrmfab_parallel_add')
+         import :: c_ptr,c_int
+         type(c_ptr), value :: dst,src,geom
+         integer(c_int), value :: srccomp,dstcomp,ncomp,srcng,dstng
+      end subroutine amrmfab_parallel_add_c
+
       !> Restrict-SUM all fine deposits into the coarse level (lvl+1 → lvl)
       subroutine amrmfab_sum_downto_c(fine_mf, crse_mf, crse_geom, fine_geom, ref_ratio) &
          bind(c, name='amrmfab_sum_downto')
@@ -702,6 +711,16 @@ contains
          call amrmfab_average_down_node_c(fmf%p, cmf%p, c_null_ptr, rr, ng)
       end if
    end subroutine amrmfab_average_down_node
+
+   !> ParallelCopy with ADD semantics — accumulates src into dst instead of overwriting
+   subroutine amrmfab_parallel_add(dst,src,srccomp,dstcomp,ncomp,srcng,dstng,geom)
+      use amrex_amr_module, only: amrex_multifab,amrex_geometry
+      type(amrex_multifab), intent(inout) :: dst
+      type(amrex_multifab), intent(in) :: src
+      type(amrex_geometry), intent(in) :: geom
+      integer, intent(in) :: srccomp,dstcomp,ncomp,srcng,dstng
+      call amrmfab_parallel_add_c(dst%p,src%p,srccomp-1,dstcomp-1,ncomp,srcng,dstng,geom%p)
+   end subroutine amrmfab_parallel_add
 
    !> Restrict-SUM fine deposits (valid+ghost) into the coarse level.
    !> Delegates to AMReX's sum_fine_to_coarse; requires nGrow % ratio == 0.

@@ -23,7 +23,7 @@ Restitution wall:  0.5
 Friction coeff:    0.5
 
 # Fluid time integration
-Max time: 100
+Max time: 5
 Max dt:   1e-2
 Max CFL:  0.9
 
