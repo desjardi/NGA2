@@ -15,7 +15,7 @@ Reynolds number: 100
 # Particle parameters
 Particle density:  1000
 Particle diameter: 0.05
-Particle mfr:      500
+Particle mfr:      1000
 
 # Particle collisions
 Restitution coeff: 0.5
@@ -23,7 +23,7 @@ Restitution wall:  0.5
 Friction coeff:    0.5
 
 # Fluid time integration
-Max time: 5
+Max time: 50
 Max dt:   1e-2
 Max CFL:  0.9
 

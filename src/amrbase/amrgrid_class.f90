@@ -128,6 +128,8 @@ module amrgrid_class
       integer :: nmax=32
       ! Blocking factor
       integer :: nbloc=8
+      ! Proper nesting buffer
+      integer :: nproper=1
       ! Per direction refinement ratios
       integer, dimension(:), allocatable :: rrefx
       integer, dimension(:), allocatable :: rrefy
@@ -245,6 +247,7 @@ contains
          if (this%nx.eq.1) call pp%add('blocking_factor_x',1)
          if (this%ny.eq.1) call pp%add('blocking_factor_y',1)
          if (this%nz.eq.1) call pp%add('blocking_factor_z',1)
+         call pp%add   ('n_proper'       ,this%nproper)
          call pp%add   ('max_grid_size'  ,this%nmax)
          if (.not.allocated(this%rrefx)) this%rrefx=[2]
          if (.not.allocated(this%rrefy)) this%rrefy=[2]
@@ -257,7 +260,7 @@ contains
             rr_vect(3*i-1)=this%rrefy(min(i,size(this%rrefy)))
             rr_vect(3*i-0)=this%rrefz(min(i,size(this%rrefz)))
          end do
-         call pp%addarr('ref_ratio_vect',rr_vect)
+         call pp%addarr('ref_ratio_vect' ,rr_vect)
          call amrex_parmparse_destroy(pp)
          call amrex_parmparse_build(pp,'geometry')
          call pp%add   ('coord_sys'      ,this%coordsys)

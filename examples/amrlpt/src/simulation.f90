@@ -511,7 +511,7 @@ contains
          call time%increment()
 
          ! Stop injecting after time of 10
-         if (time%t.gt.10.0_WP) inj_mfr=0.0_WP
+         !if (time%t.gt.10.0_WP) inj_mfr=0.0_WP
 
          ! Advance particles to current time
          call lpt%advance_to(time=time%t,do_collide=.true.,U=fs%U,V=fs%V,W=fs%W,cst_rho=fs%rho,cst_visc=visc_mol,Gib=IB,Gibcomp=1)

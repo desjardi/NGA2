@@ -948,6 +948,8 @@ contains
             end if
             ! Undo liquid-gas flip
             if (.not.flip) normal=-normal
+            ! Zero out normal components in degenerate directions
+            where ([this%amr%nx,this%amr%ny,this%amr%nz].eq.1) normal=0.0_WP
             ! Renormalize
             normal=normalize(normal)
             ! Cell bounds
