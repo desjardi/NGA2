@@ -1,0 +1,32 @@
+# Mesh parameters
+Base mesh: 32
+Max level: 3
+
+# Regridding parameters
+Regrid nsteps:    10
+Tagging Reynolds: 10
+
+# Geometry
+Bubble diameter:   2
+Bubble position:  -3
+Orifice length:    1
+Pipe diameter:     10
+Upstream length:   5
+Downstream length: 15
+
+
+# Flow parameters
+Density ratio:   830
+Weber number:    70
+Reynolds number: 5000
+Viscosity ratio: 55
+
+# Time integration
+Max time: 100
+Max dt:   1e-3
+Max CFL:  0.9
+
+# Output
+Output period:     1e-1
+Checkpoint period: 10.0
+Restart from:      !restart/bubble_1.00000E+00
