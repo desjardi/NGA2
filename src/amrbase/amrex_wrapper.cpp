@@ -703,40 +703,68 @@ void amrcore_build_level(void *core, int lev, double time,
 //=============================================================================
 // HDF5 Plotfile Utilities
 //=============================================================================
-#ifdef AMREX_USE_HDF5
-#include <hdf5.h>
+// Read time from a native AMReX plotfile directory (reads Header text file)
+// Header format: version, ncomp, var names (ncomp lines), spacedim, time, ...
+// Returns -1.0 if not found or unreadable
+static double read_time_from_native(const char *dirname) {
+  std::string header_path = std::string(dirname) + "/Header";
+  std::ifstream ifs(header_path);
+  if (!ifs.good()) return -1.0;
 
-// Read the time attribute from an AMReX HDF5 plotfile
-// Returns the time value, or -1.0 if file doesn't exist or can't be read
-double amrplotfile_read_time(const char *filename) {
-  double time = -1.0;
+  // Line 1: version string
+  std::string line;
+  std::getline(ifs, line);
 
-  // Check if file exists
-  hid_t file_id = H5Fopen(filename, H5F_ACC_RDONLY, H5P_DEFAULT);
-  if (file_id < 0) {
-    return -1.0; // File doesn't exist or can't be opened
+  // Line 2: number of components
+  int ncomp = 0;
+  ifs >> ncomp;
+  std::getline(ifs, line); // consume newline
+
+  // Skip ncomp variable name lines
+  for (int i = 0; i < ncomp; ++i) {
+    std::getline(ifs, line);
   }
 
-  // Read the "time" attribute from root group
+  // Next line: spacedim
+  int sdim = 0;
+  ifs >> sdim;
+
+  // Next line: time
+  double time = -1.0;
+  ifs >> time;
+
+  return ifs.good() ? time : -1.0;
+}
+
+// Read the time from an AMReX plotfile (native directory or HDF5 file)
+// Tries native Header first, then HDF5 if available
+// Returns -1.0 if unreadable
+double amrplotfile_read_time(const char *filename) {
+  // Try native format first (plotfile is a directory with Header)
+  double time = read_time_from_native(filename);
+  if (time >= 0.0) return time;
+
+#ifdef AMREX_USE_HDF5
+#include <hdf5.h>
+  // Try HDF5 format
+  hid_t file_id = H5Fopen(filename, H5F_ACC_RDONLY, H5P_DEFAULT);
+  if (file_id < 0) return -1.0;
+
   if (H5Aexists(file_id, "time") > 0) {
     hid_t attr_id = H5Aopen(file_id, "time", H5P_DEFAULT);
     if (attr_id >= 0) {
-      // Read as double (time is stored as array of size 1)
       double time_arr[1];
       H5Aread(attr_id, H5T_NATIVE_DOUBLE, time_arr);
       time = time_arr[0];
       H5Aclose(attr_id);
     }
   }
-
   H5Fclose(file_id);
   return time;
-}
-
 #else
-// Stub when HDF5 not available
-double amrplotfile_read_time(const char *filename) { return -1.0; }
+  return -1.0;
 #endif
+}
 
 //=============================================================================
 // MLMG Utilities (not available in AMReX Fortran interface)

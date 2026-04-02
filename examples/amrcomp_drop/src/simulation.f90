@@ -64,8 +64,8 @@ module simulation
    real(WP) :: L_spg=1.0_WP
 
    !> Tagging parameter
-   real(WP) :: vorticity_tag=huge(1.0_WP)
-   real(WP) :: rho_ratio_tag=huge(1.0_WP)
+   real(WP) :: Re_tag=huge(1.0_WP)
+   real(WP) :: Rho_tag=huge(1.0_WP)
 
 contains
 
@@ -360,7 +360,7 @@ contains
       end select
    end subroutine shock_dirichlet
 
-   !> Tagger based on vorticity and rho ratio
+   !> Tagger based on velocity and density laplacians
    subroutine my_tagger(solver,lvl,time,tags_ptr)
       use iso_c_binding,    only: c_ptr,c_char
       use amrex_amr_module, only: amrex_mfiter,amrex_box,amrex_tagboxarray
@@ -374,15 +374,16 @@ contains
       type(amrex_box) :: bx
       character(kind=c_char), dimension(:,:,:,:), contiguous, pointer :: tagarr
       real(WP), dimension(:,:,:,:), contiguous, pointer :: pQ
-      real(WP) :: dx,dy,dz,dxi,dyi,dzi
+      real(WP) :: dx,dy,dz,dxi2,dyi2,dzi2,delta,delta2
+      real(WP) ::  rho_cc, rho_xp, rho_xm, rho_yp, rho_ym, rho_zp, rho_zm
       real(WP) :: irho_cc,irho_xp,irho_xm,irho_yp,irho_ym,irho_zp,irho_zm
-      real(WP) :: vort_x,vort_y,vort_z,vort_mag
-      real(WP) :: rho_max,rho_min,rho_nb,rho_ratio,r_cyl
-      integer :: i,j,k,ii,jj,kk
+      real(WP) :: lapU,lapV,lapW,u_sgs,Re,lapRHO,avgRHO,r_cyl
+      integer :: i,j,k
       ! Get mesh size
-      dx=solver%amr%dx(lvl); dxi=1.0_WP/dx
-      dy=solver%amr%dy(lvl); dyi=1.0_WP/dy
-      dz=solver%amr%dz(lvl); dzi=1.0_WP/dz
+      dx=solver%amr%dx(lvl); dxi2=1.0_WP/dx**2
+      dy=solver%amr%dy(lvl); dyi2=1.0_WP/dy**2
+      dz=solver%amr%dz(lvl); dzi2=1.0_WP/dz**2
+      delta=solver%amr%min_meshsize(lvl); delta2=delta**2
       ! Recast tags
       tags=tags_ptr
       ! Compute tags
@@ -394,30 +395,30 @@ contains
          ! Loop over tile
          bx=mfi%tilebox()
          do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
-            ! Get local inverse densities
-            irho_cc=1.0_WP/max(sum(pQ(i  ,j,  k,  1:2)),solver%rho_floor)
-            irho_xp=1.0_WP/max(sum(pQ(i+1,j,  k,  1:2)),solver%rho_floor)
-            irho_xm=1.0_WP/max(sum(pQ(i-1,j,  k,  1:2)),solver%rho_floor)
-            irho_yp=1.0_WP/max(sum(pQ(i,  j+1,k,  1:2)),solver%rho_floor)
-            irho_ym=1.0_WP/max(sum(pQ(i,  j-1,k,  1:2)),solver%rho_floor)
-            irho_zp=1.0_WP/max(sum(pQ(i,  j,  k+1,1:2)),solver%rho_floor)
-            irho_zm=1.0_WP/max(sum(pQ(i,  j,  k-1,1:2)),solver%rho_floor)
-            ! Compute vorticity and tag based on it
-            vort_x=(pQ(i,j+1,k,7)*irho_yp-pQ(i,j-1,k,7)*irho_ym)*0.5_WP*dyi-(pQ(i,j,k+1,6)*irho_zp-pQ(i,j,k-1,6)*irho_zm)*0.5_WP*dzi
-            vort_y=(pQ(i,j,k+1,5)*irho_zp-pQ(i,j,k-1,5)*irho_zm)*0.5_WP*dzi-(pQ(i+1,j,k,7)*irho_xp-pQ(i-1,j,k,7)*irho_xm)*0.5_WP*dxi
-            vort_z=(pQ(i+1,j,k,6)*irho_xp-pQ(i-1,j,k,6)*irho_xm)*0.5_WP*dxi-(pQ(i,j+1,k,5)*irho_yp-pQ(i,j-1,k,5)*irho_ym)*0.5_WP*dyi
-            vort_mag=sqrt(vort_x**2+vort_y**2+vort_z**2)
-            if (vort_mag.gt.vorticity_tag) tagarr(i,j,k,1)=SETtag
-            ! Compute density ratio in 3x3x3 stencil and tag based on it
-            rho_max=solver%rho_floor; rho_min=huge(1.0_WP)
-            do kk=-1,1; do jj=-1,1; do ii=-1,1
-               rho_nb=sum(pQ(i+ii,j+jj,k+kk,1:2))
-               rho_max=max(rho_max,rho_nb)
-               rho_min=min(rho_min,max(rho_nb,solver%rho_floor))
-            end do; end do; end do
-            rho_ratio=rho_max/rho_min
+            ! First compute radial location to compare with sponge
             r_cyl=sqrt((solver%amr%ylo+(real(j,WP)+0.5_WP)*dy)**2+(solver%amr%zlo+(real(k,WP)+0.5_WP)*dz)**2)
-            if (rho_ratio.gt.rho_ratio_tag.and.(r_cyl.lt.R_spg+L_spg.or.lvl.lt.solver%amr%maxlvl-1)) tagarr(i,j,k,1)=SETtag
+            ! Get local densities and their inverse
+            rho_cc=max(sum(pQ(i  ,j  ,k  ,1:2)),solver%rho_floor); irho_cc=1.0_WP/rho_cc
+            rho_xp=max(sum(pQ(i+1,j  ,k  ,1:2)),solver%rho_floor); irho_xp=1.0_WP/rho_xp
+            rho_xm=max(sum(pQ(i-1,j  ,k  ,1:2)),solver%rho_floor); irho_xm=1.0_WP/rho_xm
+            rho_yp=max(sum(pQ(i  ,j+1,k  ,1:2)),solver%rho_floor); irho_yp=1.0_WP/rho_yp
+            rho_ym=max(sum(pQ(i  ,j-1,k  ,1:2)),solver%rho_floor); irho_ym=1.0_WP/rho_ym
+            rho_zp=max(sum(pQ(i  ,j  ,k+1,1:2)),solver%rho_floor); irho_zp=1.0_WP/rho_zp
+            rho_zm=max(sum(pQ(i  ,j  ,k-1,1:2)),solver%rho_floor); irho_zm=1.0_WP/rho_zm
+            ! Compute Laplacian of each velocity component
+            lapU=(pQ(i+1,j,k,5)*irho_xp-2.0_WP*pQ(i,j,k,5)*irho_cc+pQ(i-1,j,k,5)*irho_xm)*dxi2+(pQ(i,j+1,k,5)*irho_yp-2.0_WP*pQ(i,j,k,5)*irho_cc+pQ(i,j-1,k,5)*irho_ym)*dyi2+(pQ(i,j,k+1,5)*irho_zp-2.0_WP*pQ(i,j,k,5)*irho_cc+pQ(i,j,k-1,5)*irho_zm)*dzi2
+            lapV=(pQ(i+1,j,k,6)*irho_xp-2.0_WP*pQ(i,j,k,6)*irho_cc+pQ(i-1,j,k,6)*irho_xm)*dxi2+(pQ(i,j+1,k,6)*irho_yp-2.0_WP*pQ(i,j,k,6)*irho_cc+pQ(i,j-1,k,6)*irho_ym)*dyi2+(pQ(i,j,k+1,6)*irho_zp-2.0_WP*pQ(i,j,k,6)*irho_cc+pQ(i,j,k-1,6)*irho_zm)*dzi2
+            lapW=(pQ(i+1,j,k,7)*irho_xp-2.0_WP*pQ(i,j,k,7)*irho_cc+pQ(i-1,j,k,7)*irho_xm)*dxi2+(pQ(i,j+1,k,7)*irho_yp-2.0_WP*pQ(i,j,k,7)*irho_cc+pQ(i,j-1,k,7)*irho_ym)*dyi2+(pQ(i,j,k+1,7)*irho_zp-2.0_WP*pQ(i,j,k,7)*irho_cc+pQ(i,j,k-1,7)*irho_zm)*dzi2
+            ! Estimate sgs velocity from Laplacian
+            u_sgs=0.2_WP*sqrt(lapU**2+lapV**2+lapW**2)*delta2
+            ! Calculate cell Reynolds number and tag if too large
+            Re=Reynolds*u_sgs*delta
+            if (Re.gt.Re_tag.and.(r_cyl.lt.R_spg+L_spg.or.lvl.lt.solver%amr%maxlvl-1)) tagarr(i,j,k,1)=SETtag
+            ! Compute normalized Laplacian of mixture density and tag if too large
+            lapRHO=(rho_xp-2.0_WP*rho_cc+rho_xm)*dxi2+(rho_yp-2.0_WP*rho_cc+rho_ym)*dyi2+(rho_zp-2.0_WP*rho_cc+rho_zm)*dzi2
+            avgRHO=(rho_cc+rho_xp+rho_xm+rho_yp+rho_ym+rho_zp+rho_zm)/7.0_WP
+            lapRHO=abs(lapRHO)*delta2/avgRHO
+            if (lapRHO.gt.Rho_tag.and.(r_cyl.lt.R_spg+L_spg.or.lvl.lt.solver%amr%maxlvl-1)) tagarr(i,j,k,1)=SETtag
          end do; end do; end do
       end do
       call solver%amr%mfiter_destroy(mfi)
@@ -489,20 +490,26 @@ contains
       
       ! Initialize AMR grid
       create_amrgrid: block
+         ! Set name
          amr%name='amrcomp_drop'
+         ! Read in base grid size
          call param_read('Base nx',amr%nx)
          call param_read('Base ny',amr%ny)
          call param_read('Base nz',amr%nz)
+         ! Set domain
          amr%xlo=-05.0_WP; amr%xhi=+15.0_WP
          amr%ylo=-10.0_WP; amr%yhi=+10.0_WP
          amr%zlo=-10.0_WP; amr%zhi=+10.0_WP
+         ! Set periodicity
          amr%xper=.false.; amr%yper=.true.; amr%zper=.true.
+         ! Read in max level
          call param_read('Max level',amr%maxlvl)
          ! Enable quasi-2D
          if (amr%nz.eq.1) then
             amr%zlo=-0.5_WP*(amr%yhi-amr%ylo)/real(amr%ny*2**amr%maxlvl,WP)
             amr%zhi=+0.5_WP*(amr%yhi-amr%ylo)/real(amr%ny*2**amr%maxlvl,WP)
          end if
+         ! Initialize
          call amr%initialize()
       end block create_amrgrid
 
@@ -570,8 +577,8 @@ contains
          call param_read('Regrid nsteps',regrid_evt%nper)
          ! Set case-specific tagging
          fs%user_mpcomp_tagging=>my_tagger
-         call param_read('Tagging vorticity',vorticity_tag)
-         call param_read('Tagging rho ratio',rho_ratio_tag)
+         call param_read('Tagging Re',Re_tag)
+         call param_read('Tagging Rho',Rho_tag)
          ! Build the grid
          if (restarted) then
             ! Restore grid hierarchy from checkpoint

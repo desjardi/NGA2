@@ -2,12 +2,12 @@
 Base nx:   32
 Base ny:   32
 Base nz:   1
-Max level: 7
+Max level: 6
 
 # Regridding parameters
-Regrid nsteps:     10
-Tagging vorticity: 5
-Tagging rho ratio: 1.5
+Regrid nsteps: 10
+Tagging Re:    100
+Tagging Rho:   0.1
 
 # Gammas
 GammaG: 1.3
@@ -30,11 +30,11 @@ Sutherland exponent:    1.5
 Sutherland temperature: 0.4042
 
 # Time integration
-Max dt:   0.5e-3
+Max dt:   1e-3
 Max CFL:  1.0
 Max time: 1e2
 
 # Output
 Output period:     1e-1
 Checkpoint period: 1
-Restart from:      !restart/drop_2.10000E+01
+Restart from:      !restart/drop_1.00000E+01

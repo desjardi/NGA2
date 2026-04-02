@@ -98,11 +98,11 @@ contains
             character(len=8) :: found_centering
             integer :: ic
 
-            ! Find first centering type that has files
+            ! Find first centering type that has files or directories
             found_centering = ''
             find_centering: do ic = 1, 8
-               write(filename,'(a,"/plt.nga2.",a,".",i6.6,".h5")') trim(dirname), trim(centerings(ic)), 1
-               if (isfile(trim(filename))) then
+               write(filename,'(a,"/plt.nga2.",a,".",i6.6)') trim(dirname), trim(centerings(ic)), 1
+               if (isfile(trim(filename)).or.isdir(trim(filename))) then
                   found_centering = centerings(ic)
                   exit find_centering
                end if
@@ -113,8 +113,8 @@ contains
                n = 0
                do
                   n = n + 1
-                  write(filename,'(a,"/plt.nga2.",a,".",i6.6,".h5")') trim(dirname), trim(found_centering), n
-                  if (.not.isfile(trim(filename))) exit
+                  write(filename,'(a,"/plt.nga2.",a,".",i6.6)') trim(dirname), trim(found_centering), n
+                  if (.not.isfile(trim(filename)).and..not.isdir(trim(filename))) exit
                   file_time = amrplotfile_read_time(trim(filename)//c_null_char)
                   if (file_time .lt. 0.0_WP) exit  ! File exists but unreadable
                end do
@@ -124,7 +124,7 @@ contains
                if (this%ntime .gt. 0) then
                   allocate(this%time(this%ntime))
                   do n = 1, this%ntime
-                     write(filename,'(a,"/plt.nga2.",a,".",i6.6,".h5")') trim(dirname), trim(found_centering), n
+                     write(filename,'(a,"/plt.nga2.",a,".",i6.6)') trim(dirname), trim(found_centering), n
                      this%time(n) = amrplotfile_read_time(trim(filename)//c_null_char)
                   end do
                end if

@@ -23,10 +23,10 @@ Viscosity ratio: 55
 
 # Time integration
 Max time: 100
-Max dt:   1e-3
+Max dt:   2.5e-3
 Max CFL:  0.9
 
 # Output
 Output period:     1e-1
-Checkpoint period: 10.0
-Restart from:      !restart/bubble_1.00000E+00
+Checkpoint period: 1.0
+Restart from:      restart/bubble_1.20000E+01
