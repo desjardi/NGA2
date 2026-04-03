@@ -116,7 +116,7 @@ contains
       integer, intent(in) :: face
       type(amrex_box), intent(in) :: bx
       character(len=1), intent(in) :: comp
-      real(WP), dimension(:,:,:,:), intent(inout) :: p
+      real(WP), dimension(:,:,:,:), pointer, intent(inout) :: p
       integer :: i,j,k
       select case (face)
        case (1)  ! Inflow in X-

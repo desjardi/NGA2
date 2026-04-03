@@ -104,7 +104,7 @@ module amrcinc_class
          integer, intent(in) :: face
          type(amrex_box), intent(in) :: bx
          character(len=1), intent(in) :: comp ! Can be 'U','V','W','Q'
-         real(WP), dimension(:,:,:,:), intent(inout) :: p
+         real(WP), dimension(:,:,:,:), pointer, intent(inout) :: p
       end subroutine cinc_bc_iface
    end interface
 
@@ -202,7 +202,7 @@ contains
       character(len=*), intent(in), optional :: name
 
       ! Initialize amrflow parent with 3 conserved components
-      this%nQ=3; call this%amrflow%initialize(amr=amr,name=name)
+      this%nQ=3; call this%amrflow%initialize(amr=amr,name=name); call this%set_parent()
 
       ! Initialize pressure with Neumann BCs
       call this%P%initialize(amr=amr,name='P',ncomp=1,ng=this%nover); this%P%parent=>this
