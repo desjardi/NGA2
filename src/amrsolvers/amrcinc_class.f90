@@ -71,7 +71,7 @@ module amrcinc_class
       procedure :: restore_checkpoint
    end type amrcinc
 
-   !> Abstract interface for user-overridable on_init callback
+   !> Abstract interface for user-provided on_init callback
    abstract interface
       subroutine cinc_init_iface(solver,lvl,time,ba,dm)
          import :: amrcinc,WP,amrex_boxarray,amrex_distromap
@@ -83,7 +83,7 @@ module amrcinc_class
       end subroutine cinc_init_iface
    end interface
 
-   !> Abstract interface for user-overridable tagging callback
+   !> Abstract interface for user-provided tagging callback
    abstract interface
       subroutine cinc_tagging_iface(solver,lvl,time,tags)
          import :: amrcinc,c_ptr,WP
@@ -94,16 +94,17 @@ module amrcinc_class
       end subroutine cinc_tagging_iface
    end interface
 
-   !> Abstract interface for user-overridable BC callback
+   !> Abstract interface for user-provided BC callback
+   !> Called for ext_dir faces; user fills the boundary box with their own values
    abstract interface
       subroutine cinc_bc_iface(solver,lvl,time,face,bx,comp,p)
          import :: amrcinc,WP,amrex_box
          class(amrcinc), intent(inout) :: solver
          integer, intent(in) :: lvl
          real(WP), intent(in) :: time
-         integer, intent(in) :: face
-         type(amrex_box), intent(in) :: bx
-         character(len=1), intent(in) :: comp ! Can be 'U','V','W','Q'
+         integer, intent(in) :: face                       !< 1=xlo,2=xhi,3=ylo,4=yhi,5=zlo,6=zhi
+         type(amrex_box), intent(in) :: bx                 !< Boundary box to fill
+         character(len=1), intent(in) :: comp              !< Can be 'U','V','W','Q'
          real(WP), dimension(:,:,:,:), pointer, intent(inout) :: p
       end subroutine cinc_bc_iface
    end interface
@@ -242,9 +243,9 @@ contains
       call this%P%finalize()
       call this%visc%finalize()
       call this%psolver%finalize()
-      this%user_init=>null()
-      this%user_tagging=>null()
-      this%user_bc=>null()
+      nullify(this%user_init)
+      nullify(this%user_tagging)
+      nullify(this%user_bc)
       call this%amrflow%finalize()
    end subroutine finalize
 
